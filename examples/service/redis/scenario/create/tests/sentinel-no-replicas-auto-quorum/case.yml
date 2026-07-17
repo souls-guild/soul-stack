@@ -1,12 +1,12 @@
-# L0-испытание create в режиме sentinel БЕЗ реплик (replicas_per_master=0 → ровно 1
-# хост, size-guard 1 == 1+0; standalone-эквивалент). quorum АВТО в apply =
-# size(soulprint.hosts)/2+1 = 1/2+1 = 1 (CONFIG MONITOR quorum). В state quorum=0
-# (state_changes не видит soulprint.hosts — input-only; auto вычисляется в apply,
-# см. main.yml). master_name из essence — дефолт master.
+# L0-trial for create in sentinel mode WITHOUT replicas (replicas_per_master=0 → exactly 1
+# host, size-guard 1 == 1+0; standalone-equivalent). quorum is AUTO in apply =
+# size(soulprint.hosts)/2+1 = 1/2+1 = 1 (CONFIG MONITOR quorum). In state quorum=0
+# (state_changes does not see soulprint.hosts — input-only; auto is computed in apply,
+# see main.yml). master_name comes from essence — default master.
 #
-# Покрывает: replicas_per_master=0 граница size-guard (standalone-эквивалент);
-# auto-quorum; default master_name (essence); single-host roster (1 sentinel мониторит
-# сам себя как master).
+# Covers: replicas_per_master=0 boundary of the size-guard (standalone-equivalent);
+# auto-quorum; default master_name (essence); single-host roster (1 sentinel monitors
+# itself as master).
 name: sentinel create no replicas, auto quorum and default master name
 
 fixtures:
@@ -20,10 +20,10 @@ fixtures:
   vault:
     secret/redis/create:
       password: s3cr3t-redis-pass-create
-    # Per-user секреты системных юзеров (secret/redis/<inc>/users/<name>#password) —
-    # их резолвит keeper-side vault() при доливе system_acl_users в apply.input.users.
-    # ★ РЕДИЗАЙН default_admin (2026-06-30): default_admin — системный юзер
-    # внутрикластерного AUTH (auth_pass/PING шаги деплоя читают его по ветке users/<name>).
+    # Per-user secrets of system users (secret/redis/<inc>/users/<name>#password) —
+    # resolved by the keeper-side vault() when topping up system_acl_users into apply.input.users.
+    # ★ REDESIGN default_admin (2026-06-30): default_admin is the system user for
+    # intra-cluster AUTH (auth_pass/PING deploy steps read it via the users/<name> branch).
     secret/redis/create/users/default_admin:
       password: default-admin-secret-pass
     secret/redis/create/users/replica:
@@ -35,12 +35,12 @@ fixtures:
     secret/redis/create/users/haproxy:
       password: haproxy-sys-secret-pass
   essence:
-    # install_method — в essence (author-context, 2026-06-28): способ установки
-    # НЕ operator-input. compute.install читает default(essence.install_method, 'binary').
+    # install_method lives in essence (author-context, 2026-06-28): the install method
+    # is NOT operator-input. compute.install reads default(essence.install_method, 'binary').
     install_method: package
     redis_type: sentinel
     sentinel_master_name: master
-    # ★ Редизайн: подложка per-master sentinel-дефолтов (под input.sentinel_master_settings).
+    # ★ Redesign: per-master sentinel-defaults substrate (under input.sentinel_master_settings).
     sentinel_master_defaults:
       down-after-milliseconds: "5000"
       failover-timeout:        "60000"
@@ -56,10 +56,10 @@ fixtures:
       maxclients:       10000
       timeout:          300
 
-    # Системные ACL-юзеры redis-server + sentinel-демона (1:1 из essence/_default.yaml).
-    # ОБА ОБЯЗАТЕЛЬНЫ: guard create/sentinel.yml (assert 1b) рвёт render при пустом
-    # любом из наборов (тихий fail-open недопустим — без них репликация/sentinel↔redis
-    # AUTH сломались бы).
+    # System ACL users of redis-server + the sentinel daemon (1:1 from essence/_default.yaml).
+    # BOTH ARE REQUIRED: the create/sentinel.yml guard (assert 1b) aborts render if either
+    # set is empty (a silent fail-open is unacceptable — without them replication/sentinel↔redis
+    # AUTH would break).
     system_acl_users:
       default_admin: "~* &* +@all"
       replica:    "+psync +replconf +ping"
@@ -72,40 +72,40 @@ fixtures:
       sentinel:   "allchannels -@all +auth +client|getname +client|id +client|setname +command +hello +ping +sentinel|is-master-down-by-addr +publish +role +sentinel|get-master-addr-by-name +sentinel|master +sentinel|myid +sentinel|replicas +sentinel|sentinels"
       haproxy:    "-@all +auth +client|getname +client|id +client|setname +command +hello +ping +role +sentinel|get-master-addr-by-name +sentinel|master +sentinel|myid +sentinel|replicas +sentinel|sentinels"
   input:
-    # ★ provision выключен (default-on: опущенная секция = ВКЛЮЧЕНО; кейс деплоит на
-    # ГОТОВЫЙ roster, cloud-create не нужен) → include redis-provision.yml group-drop.
+    # ★ provision disabled (default-on: an omitted section = ENABLED; the case deploys onto
+    # a READY roster, cloud-create is not needed) → include redis-provision.yml group-drop.
     provision:
       enabled: false
     redis_type: sentinel
-    # version — фикс-enum выкаченных в Nexus сборок (мажор < 8 → version-gate модулей
-    # не активен). install_method=package ЯВНО (default редизайна — binary): кейс
-    # изолирует sentinel-логику (auto-quorum/master-election) от install-модели.
+    # version is the fixed enum of builds released to Nexus (major < 8 → module
+    # version-gate not active). install_method=package EXPLICITLY (redesign default is
+    # binary): the case isolates sentinel logic (auto-quorum/master-election) from the install model.
     version: "7.4.1"
     replicas_per_master: 0
 
 assert:
-  # sentinel size-guard PASS: 1 == 1+0 → assert: (ADR-009 amendment), в план не
-  # эмитится.
+  # sentinel size-guard PASS: 1 == 1+0 → assert: (ADR-009 amendment), not
+  # emitted into the plan.
   task_present:
-    # REPLICAOF: master_addr = единственный хост (он же master) → плагин no-op
-    # (addr==master_addr guard). Единственная community.redis.replica в плане.
+    # REPLICAOF: master_addr = the only host (which is also master) → plugin no-op
+    # (addr==master_addr guard). The single community.redis.replica in the plan.
     - module: community.redis.replica
       params_subset:
         addr: "127.0.0.1:6379"
         master_addr: "10.0.0.9:6379"
-        # ★ РЕДИЗАЙН default_admin: replica→master AUTH под default_admin.
+        # ★ REDESIGN default_admin: replica→master AUTH under default_admin.
         username: default_admin
         password: default-admin-secret-pass
 
-    # SENTINEL MONITOR: monitor.ip — единственный хост; auto-quorum = 1/2+1 = 1.
-    # master_name из essence — дефолт master. Единственная активная
+    # SENTINEL MONITOR: monitor.ip — the only host; auto-quorum = 1/2+1 = 1.
+    # master_name comes from essence — default master. The single active
     # community.redis.sentinel.
     - module: community.redis.sentinel
       params_subset:
         addr: "127.0.0.1:26379"
         master_name: master
-        # ★ РЕДИЗАЙН default_admin: CONNECTION-AUTH к :26379 под default_admin (username/
-        # password); auth_user/auth_pass — реквизиты мониторинга master. Guard на NOAUTH.
+        # ★ REDESIGN default_admin: CONNECTION-AUTH to :26379 under default_admin (username/
+        # password); auth_user/auth_pass — master monitoring credentials. Guard on NOAUTH.
         username: default_admin
         password: default-admin-secret-pass
         auth_user: default_admin
@@ -121,11 +121,11 @@ assert:
     redis_version: "7.4.1"
     redis_users: []
     redis_hosts: []
-    # auto-quorum НЕ материализуется в state → 0; master_name из essence (master).
-    # ★ Редизайн: тайминги failover теперь в master_settings (эффективный per-master map
-    # essence.sentinel_master_defaults поверх input.sentinel_master_settings; здесь
-    # operator dict не задан → дефолты down-after 5000/failover-timeout 60000). settings —
-    # глобальные sentinel-директивы оператора (не заданы → {}).
+    # auto-quorum does NOT materialize into state → 0; master_name comes from essence (master).
+    # ★ Redesign: failover timings now live in master_settings (an effective per-master map
+    # of essence.sentinel_master_defaults over input.sentinel_master_settings; here the
+    # operator dict is not set → defaults down-after 5000/failover-timeout 60000). settings —
+    # global sentinel directives of the operator (not set → {}).
     redis_sentinel:
       master_name: master
       quorum: 0

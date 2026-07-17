@@ -1,15 +1,16 @@
-# L0-испытание create DragonFly БЕЗ реплик (replicas_per_master=0 → ровно 1 хост, size-
-# guard 1 == 1+0; standalone-эквивалент: один master + sentinel-демон мониторит сам себя).
-# quorum АВТО в apply = size(soulprint.hosts)/2+1 = 1/2+1 = 1. В state quorum=0 (state_changes
-# не видит soulprint.hosts — auto в apply). master_name из essence — дефолт master.
+# L0 test for DragonFly create WITHOUT replicas (replicas_per_master=0 → exactly 1 host, size-
+# guard 1 == 1+0; standalone-equivalent: one master + sentinel daemon monitors itself).
 #
-# Покрывает: replicas_per_master=0 граница size-guard (standalone-эквивалент); auto-quorum;
-# default master_name (essence); single-host roster; DragonFly flagfile-render (vars в
+# quorum is AUTO in apply = size(soulprint.hosts)/2+1 = 1/2+1 = 1. In state quorum=0 (state_changes
+# doesn't see soulprint.hosts - auto happens in apply). master_name comes from essence - default master.
+#
+# Covers: replicas_per_master=0 size-guard boundary (standalone-equivalent); auto-quorum;
+# default master_name (essence); single-host roster; DragonFly flagfile-render (vars in
 # render_context dragonfly.conf).
 #
-# ★ РЕФАКТОР «sentinel из destiny redis»: sentinel-демон ставит ВТОРОЙ apply:destiny:redis
-#   (sentinel_only). Presence-матчер видит redis-destiny sentinel-плоскость (install
-#   redis-server + sentinel.conf /etc/redis) И НЕ видит dragonfly-sentinel-задач.
+# ★ REFACTOR "sentinel from destiny redis": sentinel daemon issues a SECOND apply:destiny:redis
+#   (sentinel_only). The presence matcher sees the redis-destiny sentinel plane (install
+#   redis-server + sentinel.conf /etc/redis) and does NOT see dragonfly-sentinel tasks.
 name: dragonfly create standalone, no replicas, auto quorum
 
 fixtures:
@@ -20,8 +21,8 @@ fixtures:
       soulprint:
         network: { primary_ip: 10.0.0.9 }
         os: { arch: amd64 }
-  # Vault: default_admin (masterauth-долив + внутрикластерный AUTH) + системные. Главного
-  # secret/dragonfly/create#password больше нет (requirepass убран — редизайн default_admin).
+  # Vault: default_admin (masterauth top-up + intra-cluster AUTH) + system users. The primary
+  # secret/dragonfly/create#password no longer exists (requirepass removed - default_admin redesign).
   vault:
     secret/dragonfly/create/users/default_admin:
       password: dfadmin-create-pass
@@ -53,16 +54,16 @@ fixtures:
   input:
     version: "1.39.0"
     replicas_per_master: 0
-    # ★ provision выключен (default-on: опущенная секция = ВКЛЮЧЕНО; кейс деплоит на
-    # ГОТОВЫЙ roster, cloud-create не нужен) → include dragonfly-provision.yml не таргетит
-    # никого. Симметрия redis non-provision create-тестов.
+    # ★ provision disabled (default-on: an omitted section = ENABLED; this case deploys onto
+    # a READY roster, cloud-create is not needed) → include dragonfly-provision.yml targets
+    # nobody. Symmetric with redis non-provision create tests.
     provision:
       enabled: false
 
 assert:
   task_present:
-    # REPLICAOF: addr — ЛОКАЛЬНЫЙ UNIX-сокет; master_addr = единственный хост (он же master,
-    # primary_ip:6379). На реальном standalone INFO role=master → плагин no-op.
+    # REPLICAOF: addr - the LOCAL UNIX socket; master_addr = the single host (which is also the
+    # master, primary_ip:6379). On real standalone INFO role=master → plugin no-op.
     - module: community.redis.replica
       params_subset:
         addr: "unix:/var/run/dragonfly/dragonfly.sock"
@@ -70,15 +71,15 @@ assert:
         username: default_admin
         password: dfadmin-create-pass
 
-    # SENTINEL MONITOR: monitor.ip — единственный хост; auto-quorum = 1.
-    # redis_version — версия sentinel-ДЕМОНА (essence.sentinel_redis_version, дефолт 7.2.4),
-    # НЕ df_version (1.39.0). Гейтит version-aware sentinel-фичи плагина.
+    # SENTINEL MONITOR: monitor.ip - the single host; auto-quorum = 1.
+    # redis_version - the sentinel DAEMON version (essence.sentinel_redis_version, default 7.2.4),
+    # NOT df_version (1.39.0). Gates version-aware sentinel features of the plugin.
     - module: community.redis.sentinel
       params_subset:
         addr: "127.0.0.1:26379"
         master_name: master
-        # ★ CONNECTION-AUTH к sentinel-демону :26379 под default_admin (built-in default off).
-        # auth_pass/auth_user — мониторинг DF-master под default_admin. Guard на NOAUTH.
+        # ★ CONNECTION-AUTH to the sentinel daemon :26379 as default_admin (built-in default off).
+        # auth_pass/auth_user - monitoring the DF master as default_admin. Guard against NOAUTH.
         username: default_admin
         password: dfadmin-create-pass
         auth_user: default_admin
@@ -89,8 +90,8 @@ assert:
           port: 6379
           quorum: 1
 
-    # ── SENTINEL-ПЛОСКОСТЬ через destiny `redis` (sentinel_only, ВТОРОЙ apply) ──
-    # install redis-server (distro-пин R4, несёт redis-sentinel) + sentinel.conf в /etc/redis.
+    # ── SENTINEL PLANE via destiny `redis` (sentinel_only, SECOND apply) ──
+    # install redis-server (distro pin R4, carries redis-sentinel) + sentinel.conf in /etc/redis.
     - module: core.pkg.installed
       params_subset:
         name: redis-server
@@ -104,12 +105,12 @@ assert:
         group: redis
 
   task_absent:
-    # ДУБЛИКАТ СНЯТ: dragonfly-destiny больше НЕ рендерит /etc/dragonfly/sentinel.conf.
+    # DUPLICATE REMOVED: dragonfly-destiny no longer renders /etc/dragonfly/sentinel.conf.
     - module: core.file.rendered
       params_subset:
         path: /etc/dragonfly/sentinel.conf
-    # provision выключен (enabled: false) → dragonfly-provision.yml group-drop: cloud-create
-    # и барьер онбординга ОТСУТСТВУЮТ в плане.
+    # provision disabled (enabled: false) → dragonfly-provision.yml group-drop: cloud-create
+    # and the onboarding barrier are ABSENT from the plan.
     - module: core.cloud.created
     - module: core.soul.registered
 
@@ -124,7 +125,7 @@ assert:
       failover_timeout_ms: 60000
     replicas: 0
     sentinel_quorum: 0
-    # read-model: VM никем не провижены этим прогоном → консервативный default.
+    # read-model: no VMs were provisioned by this run → conservative default.
     provisioned_vm_ids: []
     provisioned_sids: []
     provisioned_provider: ""

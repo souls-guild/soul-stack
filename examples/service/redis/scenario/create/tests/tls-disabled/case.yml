@@ -1,7 +1,7 @@
-# L0-испытание (Trial, ADR-023): TLS ВЫКЛЮЧЕН (default). Guard: при tls_enable=false
-# (essence не задаёт tls_enable) TLS-render-задачи placeholder-skip (не рендерятся,
-# файлы /etc/redis/tls/* НЕ создаются), а merged config НЕ несёт tls-* директив и
-# НЕ ставит port 0 (plain открыт). Это back-compat: инсталляция без TLS не меняется.
+# L0 trial (ADR-023): TLS DISABLED (default). Guard: with tls_enable=false
+# (essence doesn't set tls_enable) TLS-render tasks are placeholder-skipped (not rendered,
+# files /etc/redis/tls/* are NOT created), and the merged config carries NO tls-* directives and
+# does NOT set port 0 (plain open). This is back-compat: an install without TLS is unchanged.
 name: tls disabled keeps plaintext config without tls directives or pem files
 
 fixtures:
@@ -15,10 +15,10 @@ fixtures:
   vault:
     secret/redis/create:
       password: s3cr3t-redis-pass-create
-    # Per-user секреты системных юзеров (secret/redis/<inc>/users/<name>#password) —
-    # их резолвит keeper-side vault() при доливе system_acl_users в apply.input.users.
-    # ★ РЕДИЗАЙН default_admin (2026-06-30): default_admin — системный юзер
-    # внутрикластерного AUTH (auth_pass/PING шаги деплоя читают его по ветке users/<name>).
+    # Per-user secrets of system users (secret/redis/<inc>/users/<name>#password) —
+    # resolved by keeper-side vault() when merging system_acl_users into apply.input.users.
+    # ★ default_admin REDESIGN (2026-06-30): default_admin — the system user for
+    # intra-cluster AUTH (the deploy's auth_pass/PING steps read it via the users/<name> branch).
     secret/redis/create/users/default_admin:
       password: default-admin-secret-pass
     secret/redis/create/users/replica:
@@ -32,14 +32,14 @@ fixtures:
   essence:
     redis_type: sentinel
     sentinel_master_name: master
-    # ★ Редизайн: подложка per-master sentinel-дефолтов (под input.sentinel_master_settings).
+    # ★ Redesign: per-master sentinel defaults substrate (under input.sentinel_master_settings).
     sentinel_master_defaults:
       down-after-milliseconds: "5000"
       failover-timeout:        "60000"
     modules_base_url: "https://artifacts.example.com/redis/modules"
-    # install_method — в essence (author-context, 2026-06-28): способ установки НЕ
-    # operator-input. Кейс про TLS-директивы, не про install → package задан ЯВНО
-    # (distro redis-server, без binary-URL; короче redis.conf-план).
+    # install_method — in essence (author-context, 2026-06-28): install method is NOT
+    # operator input. This case is about TLS directives, not install → package is set EXPLICITLY
+    # (distro redis-server, no binary URL; shorter redis.conf plan).
     install_method: package
     memory_reserve_percent: 75
     persistence_presets:
@@ -51,14 +51,14 @@ fixtures:
       maxmemory-policy: allkeys-lru
       maxclients:       10000
       timeout:          300
-    # tls_enable НЕ задан → default false. tls_*_ref не нужны (vault не вызывается).
+    # tls_enable NOT set → default false. tls_*_ref not needed (vault not called).
 
-    # Системные ACL-юзеры redis-server + sentinel-демона (1:1 из essence/_default.yaml).
-    # ОБА ОБЯЗАТЕЛЬНЫ: guard create/sentinel.yml (assert 1b) рвёт render при пустом
-    # любом из наборов (тихий fail-open недопустим — без них репликация/sentinel↔redis
-    # AUTH сломались бы).
-    # ★ РЕДИЗАЙН default_admin (2026-06-30): default_admin — системный юзер полного
-    # доступа (~* &* +@all) в ОБА набора (заменил прежний requirepass-default).
+    # System ACL users for redis-server + the sentinel daemon (1:1 from essence/_default.yaml).
+    # BOTH ARE REQUIRED: guard create/sentinel.yml (assert 1b) aborts render if either
+    # set is empty (silent fail-open is not acceptable — without them replication/sentinel↔redis
+    # AUTH would break).
+    # ★ default_admin REDESIGN (2026-06-30): default_admin — the system user with full
+    # access (~* &* +@all) in BOTH sets (replaced the former requirepass default).
     system_acl_users:
       default_admin: "~* &* +@all"
       replica:    "+psync +replconf +ping"
@@ -71,46 +71,46 @@ fixtures:
       sentinel:   "allchannels -@all +auth +client|getname +client|id +client|setname +command +hello +ping +sentinel|is-master-down-by-addr +publish +role +sentinel|get-master-addr-by-name +sentinel|master +sentinel|myid +sentinel|replicas +sentinel|sentinels"
       haproxy:    "-@all +auth +client|getname +client|id +client|setname +command +hello +ping +role +sentinel|get-master-addr-by-name +sentinel|master +sentinel|myid +sentinel|replicas +sentinel|sentinels"
   input:
-    # ★ provision выключен (default-on: опущенная секция = ВКЛЮЧЕНО; кейс деплоит на
-    # ГОТОВЫЙ roster, cloud-create не нужен) → include redis-provision.yml group-drop.
+    # ★ provision disabled (default-on: an omitted section = ENABLED; the case deploys onto a
+    # READY roster, cloud-create is not needed) → include redis-provision.yml group-drop.
     provision:
       enabled: false
     redis_type: sentinel
-    # version ОБЯЗАТЕЛЬНА: enum выкаченных в Nexus сборок (мажор < 8 → version-gate
-    # модулей не активен). 7.4.1 — серия 7.x, как прежний distro-пин 7.2.4.
+    # version REQUIRED: enum of builds shipped to Nexus (major < 8 → the version-gate
+    # for modules is not active). 7.4.1 — the 7.x series, like the former distro pin 7.2.4.
     version: "7.4.1"
     persistence: rdb
-    # single-host (1 хост) → 0 реплик (default редизайна 2): size-guard sentinel = 1+0.
+    # single-host (1 host) → 0 replicas (redesign-2 default): size-guard sentinel = 1+0.
     replicas_per_master: 0
 
 assert:
   task_present:
-    # redis.conf: merged config БЕЗ tls-* и БЕЗ port 0 (plain открыт).
-    # Дизамбигуатор от users.acl/hardening (тот же core.file.rendered) — path.
+    # redis.conf: merged config WITHOUT tls-* and WITHOUT port 0 (plain open).
+    # Disambiguator from users.acl/hardening (same core.file.rendered) — path.
     - module: core.file.rendered
       params_subset:
         path: /etc/redis/redis.conf
         render_context:
           vars:
-            # ★ РЕДИЗАЙН default_admin: .vars.password БОЛЬШЕ НЕ передаётся в redis.conf
-            # шаблон (requirepass убран из server.yml). AUTH — под default_admin (users.acl).
+            # ★ default_admin REDESIGN: .vars.password is NO LONGER passed to the redis.conf
+            # template (requirepass removed from server.yml). AUTH is via default_admin (users.acl).
             conf_dir: /etc/redis
             data_dir: /var/lib/redis
             port: 6379
             run_dir: /var/run/redis
             log_dir: /var/log/redis
-            # Ровно дефолтные директивы — НИ ОДНОЙ tls-* и НЕТ ключа port (plain
-            # порт задаёт redis.conf.tmpl статикой `port 6379`, не config-ключом).
+            # Exactly the default directives — NOT A SINGLE tls-* and NO port key (the plain
+            # port is set by redis.conf.tmpl statically as `port 6379`, not via a config key).
             loadmodules:
               - /var/lib/redis/modules/redisbloom.so
               - /var/lib/redis/modules/rejson.so
               - /var/lib/redis/modules/redisearch.so
               - /var/lib/redis/modules/redistimeseries.so
             config:
-              # ★ РЕДИЗАЙН default_admin: replica→master AUTH (masteruser/
-              # masterauth) приходит ОБЫЧНЫМИ директивами config (sentinel
-              # deploy-body доливает их vault()-в-ячейке) → redis.conf range-ит
-              # их как любую директиву → статически переживают рестарт.
+              # ★ default_admin REDESIGN: replica→master AUTH (masteruser/
+              # masterauth) arrives as ORDINARY config directives (the sentinel
+              # deploy body merges them in via a vault()-in-cell) → redis.conf ranges
+              # over them like any directive → they statically survive a restart.
               masteruser:       "default_admin"
               masterauth:       "default-admin-secret-pass"
               maxmemory: "256mb"
@@ -123,7 +123,7 @@ assert:
             sid: node-solo.example.com
             covens: [create]
             choirs: []
-            # traits — registry-проекция (ADR-060), пустой объект без меток.
+            # traits — registry projection (ADR-060), an empty object without labels.
             traits: {}
             role: ""
             network:
@@ -133,10 +133,10 @@ assert:
           role: ""
           essence: {}
 
-    # PING: tls=false (plain, без tls_ca), addr на 6379 (plain открыт). cluster/sentinel
-    # PING — placeholder-skip; дизамбигуатор addr/args.
-    # ★ РЕДИЗАЙН default_admin: AUTH под default_admin (username + его пароль из ветки
-    # users/default_admin), requirepass убран.
+    # PING: tls=false (plain, no tls_ca), addr on 6379 (plain open). cluster/sentinel
+    # PING — placeholder-skip; disambiguator addr/args.
+    # ★ default_admin REDESIGN: AUTH via default_admin (username + its password from the
+    # users/default_admin branch), requirepass removed.
     - module: community.redis.command
       params_subset:
         addr: "127.0.0.1:6379"
@@ -147,8 +147,8 @@ assert:
         args: ["PING"]
 
   task_absent:
-    # TLS выключен (tls_enable=false) → TLS-dir и PEM-cert gated-placeholder-skip
-    # (params_subset path не сматчит placeholder). Guard «без TLS нет PEM-файлов».
+    # TLS disabled (tls_enable=false) → TLS dir and PEM cert are gated-placeholder-skip
+    # (params_subset path won't match a placeholder). Guard "no TLS means no PEM files".
     - module: core.file.directory
       params_subset:
         path: /etc/redis/tls
@@ -159,7 +159,7 @@ assert:
   state_changes:
     redis_type: sentinel
     redis_version: "7.4.1"
-    # БЕЗ tls-* директив — симметрия с apply.input.config (drift-guard).
+    # WITHOUT tls-* directives — symmetry with apply.input.config (drift-guard).
     redis_config:
       maxmemory: "256mb"
       maxmemory-policy: allkeys-lru
@@ -169,8 +169,8 @@ assert:
       appendonly: "no"
     redis_users: []
     redis_hosts: []
-    # ★ Редизайн: тайминги failover в master_settings (essence.sentinel_master_defaults);
-    # settings — глобальные sentinel-директивы (не заданы → {}).
+    # ★ Redesign: failover timings in master_settings (essence.sentinel_master_defaults);
+    # settings — global sentinel directives (not set → {}).
     redis_sentinel:
       master_name: master
       quorum: 0

@@ -1,11 +1,11 @@
-# L0-испытание create в режиме cluster — ОДНОУЗЛОВОЙ кластер (shards=1,
-# replicas_per_shard=0 → 1 хост, size-guard PASS: 1 == 1*(1+0)). Граничный случай:
-# минимальная валидная cluster-топология. Доказывает, что cluster-ветка корректна
-# и при single-host roster (size-guard не требует ≥2 хостов), nodes-MAP содержит
-# ровно одну запись, cluster-директивы рендерятся как обычно.
+# L0 test for create in cluster mode — a SINGLE-NODE cluster (shards=1,
+# replicas_per_shard=0 → 1 host, size-guard PASS: 1 == 1*(1+0)). Edge case:
+# the minimal valid cluster topology. Proves that the cluster branch is correct
+# even with a single-host roster (size-guard doesn't require ≥2 hosts), the nodes MAP contains
+# exactly one entry, cluster directives render as usual.
 #
-# Этот хост одновременно — единственный по SID, поэтому render_context.self ==
-# nodes-MAP-запись (announce-ip в .tmpl из его же .self.network.primary_ip).
+# This host is simultaneously the only one by SID, so render_context.self ==
+# the nodes-MAP entry (announce-ip in the .tmpl comes from its own .self.network.primary_ip).
 name: cluster create single-node (1 shard, 0 replicas)
 
 fixtures:
@@ -19,10 +19,10 @@ fixtures:
   vault:
     secret/redis/create:
       password: s3cr3t-redis-pass-create
-    # Per-user секреты системных юзеров (secret/redis/<inc>/users/<name>#password) —
-    # их резолвит keeper-side vault() при доливе system_acl_users в apply.input.users.
-    # ★ РЕДИЗАЙН default_admin (2026-06-30): default_admin — системный юзер внутрикластерного
-    # AUTH (PING/cluster-build/masterauth деплоя читают его пароль той же ветки users/<name>).
+    # Per-user secrets for system users (secret/redis/<inc>/users/<name>#password) —
+    # resolved by keeper-side vault() when filling system_acl_users into apply.input.users.
+    # ★ default_admin redesign (2026-06-30): default_admin is the system user for intra-cluster
+    # AUTH (deploy's PING/cluster-build/masterauth read its password from the same users/<name> branch).
     secret/redis/create/users/default_admin:
       password: default-admin-secret-pass
     secret/redis/create/users/replica:
@@ -47,11 +47,11 @@ fixtures:
       maxclients:       10000
       timeout:          300
 
-    # Системные ACL-юзеры redis-server (1:1 из essence/_default.yaml). ОБЯЗАТЕЛЬНЫ:
-    # guard create/cluster.yml (assert 1b) рвёт render при пустом system_acl_users
-    # (тихий fail-open недопустим — без них репликация/health-check сломались бы).
-    # ★ РЕДИЗАЙН default_admin (2026-06-30): default_admin — системный юзер полного доступа
-    # (~* &* +@all), под ним внутрикластерный AUTH cluster (заменил requirepass-default).
+    # System redis-server ACL users (1:1 from essence/_default.yaml). REQUIRED:
+    # the guard in create/cluster.yml (assert 1b) aborts render if system_acl_users is empty
+    # (silent fail-open is unacceptable — replication/health-check would break without them).
+    # ★ default_admin redesign (2026-06-30): default_admin is the full-access system user
+    # (~* &* +@all), used for intra-cluster AUTH (replaced the requirepass default).
     system_acl_users:
       default_admin: "~* &* +@all"
       replica:    "+psync +replconf +ping"
@@ -59,24 +59,24 @@ fixtures:
       sentinel:   "allchannels +multi +slaveof +ping +exec +subscribe +config|rewrite +role +publish +info +client|setname +client|kill +script|kill"
       haproxy:    "-@all +auth +client|getname +client|id +client|setname +command +hello +ping +role +info +cluster|info"
   input:
-    # ★ provision выключен (default-on: опущенная секция = ВКЛЮЧЕНО; кейс деплоит на
-    # ГОТОВЫЙ roster, cloud-create не нужен) → include redis-provision.yml group-drop.
+    # ★ provision disabled (default-on: an omitted section = ENABLED; this case deploys onto a
+    # READY roster, no cloud-create needed) → include redis-provision.yml group-drop.
     provision:
       enabled: false
     redis_type: cluster
-    # version ОБЯЗАТЕЛЬНА (директива пользователя 2026-06-23): фиксированный
-    # distro-native пин (мажор < 8 → version-gate модулей не активен).
+    # version is REQUIRED (user directive 2026-06-23): a fixed
+    # distro-native pin (major < 8 → module version-gate not active).
     version: "7.4.1"
     shards: 1
     replicas_per_master: 0
     cluster_node_timeout: 5000
 
 assert:
-  # size-guard PASS: 1 == 1*(1+0) → assert that[0] true (assert:, не задача,
-  # ADR-009 amendment), в план не эмитится.
+  # size-guard PASS: 1 == 1*(1+0) → assert that[0] true (assert:, not a task,
+  # ADR-009 amendment), not emitted into the plan.
   task_present:
-    # redis.conf: cluster-директивы; render_context.self = единственный хост.
-    # Дизамбигуатор от users.acl/hardening — path.
+    # redis.conf: cluster directives; render_context.self = the only host.
+    # Disambiguator from users.acl/hardening — path.
     - module: core.file.rendered
       params_subset:
         path: /etc/redis/redis.conf
@@ -97,9 +97,9 @@ assert:
               - /var/lib/redis/modules/redisearch.so
               - /var/lib/redis/modules/redistimeseries.so
             config:
-              # ★ РЕДИЗАЙН default_admin: replica→master AUTH (masteruser/masterauth)
-              # приходит ОБЫЧНЫМИ директивами config (cluster deploy-body доливает их
-              # vault()-в-ячейке). Доливается ВСЕГДА (failover-safe; single-node: инертна).
+              # ★ default_admin redesign: replica→master AUTH (masteruser/masterauth)
+              # comes as REGULAR config directives (cluster deploy-body fills them in as
+              # vault()-in-cell). Always filled in (failover-safe; single-node: inert).
               masteruser:       "default_admin"
               masterauth:       "default-admin-secret-pass"
               maxmemory:        "256mb"
@@ -115,7 +115,7 @@ assert:
             sid: node-solo.example.com
             covens: [create, redis]
             choirs: []
-            # traits — registry-проекция (ADR-060), пустой объект без меток.
+            # traits — registry projection (ADR-060), an empty object with no labels.
             traits: {}
             role: ""
             network:
@@ -125,14 +125,14 @@ assert:
           role: ""
           essence: {}
 
-    # cluster-build: nodes-MAP с единственной записью. Единственная
-    # community.redis.cluster в плане → дизамбигуатор не нужен.
+    # cluster-build: nodes MAP with a single entry. The only
+    # community.redis.cluster in the plan → no disambiguator needed.
     - module: community.redis.cluster
       params_subset:
         action: create
         replicas_per_shard: 0
-        # ★ РЕДИЗАЙН default_admin: коннект под default_admin (username → AUTH). Прежний
-        # главный секрет ДРОПНУТ — пароль из ветки users/default_admin.
+        # ★ default_admin redesign: connect as default_admin (username → AUTH). The old
+        # top-level secret is DROPPED — password comes from the users/default_admin branch.
         username: default_admin
         password: default-admin-secret-pass
         nodes:

@@ -1,5 +1,5 @@
-# within-destiny include-сосед (destiny/tasks.md §4): подключается из main.yml.
-# Та же структура — top-level список задач, видит только input.* destiny.
+# within-destiny include neighbor (destiny/tasks.md §4): included from main.yml.
+# Same structure — top-level list of tasks, sees only input.* of destiny.
 
 - name: Record the marker placement
   module: core.exec.run

@@ -9,26 +9,26 @@ required_capabilities:
 spec:
   states:
     present:
-      description: Строка line присутствует в файле (с regexp — заменяет первую матчащую); ADR-015.
+      description: The line is present in the file (with regexp — replaces the first matching line); ADR-015.
       input:
-        path:         { type: string, required: true, description: "Целевой файл." }
-        # line обязателен для present, но не для absent — cross-field-инвариант
-        # проверяет Module.Validate (не выражается per-state manifest-required).
-        line:         { type: string, description: "Точная строка, которой управляем (обязательна для present)." }
-        regexp:       { type: string, description: "RE2-паттерн: первая матчащая строка заменяется на line." }
-        insertafter:  { type: string, description: "Литерал-якорь или EOF — куда вставлять (взаимоисключаемо с insertbefore)." }
-        insertbefore: { type: string, description: "Литерал-якорь или BOF — куда вставлять (взаимоисключаемо с insertafter)." }
-        create:       { type: bool,   description: "Создать файл, если отсутствует." }
-        mode:         { type: string, description: "Права при create, восьмеричная форма, напр. \"0644\"." }
-        owner:        { type: string, description: "Владелец при create (имя пользователя)." }
-        group:        { type: string, description: "Группа-владелец при create (имя группы)." }
+        path:         { type: string, required: true, description: "Target file." }
+        # line is required for present, but not for absent — the cross-field invariant
+        # is checked by Module.Validate (not expressible as per-state manifest-required).
+        line:         { type: string, description: "Exact line being managed (required for present)." }
+        regexp:       { type: string, description: "RE2 pattern: the first matching line is replaced with line." }
+        insertafter:  { type: string, description: "Literal anchor or EOF — where to insert (mutually exclusive with insertbefore)." }
+        insertbefore: { type: string, description: "Literal anchor or BOF — where to insert (mutually exclusive with insertafter)." }
+        create:       { type: bool,   description: "Create the file if it doesn't exist." }
+        mode:         { type: string, description: "Permissions on create, octal form, e.g. \"0644\"." }
+        owner:        { type: string, description: "Owner on create (username)." }
+        group:        { type: string, description: "Owner group on create (group name)." }
     absent:
-      description: Удаляет матчащие строки (по regexp — все; иначе по точному line).
+      description: Removes matching lines (by regexp — all; otherwise by exact line).
       input:
-        path:   { type: string, required: true, description: "Целевой файл." }
-        line:   { type: string, description: "Точная строка для удаления (обязателен line или regexp)." }
-        regexp: { type: string, description: "RE2-паттерн: удаляются все матчащие строки." }
-        create: { type: bool,   description: "Создать файл, если отсутствует." }
-        mode:   { type: string, description: "Права при create, восьмеричная форма." }
-        owner:  { type: string, description: "Владелец при create (имя пользователя)." }
-        group:  { type: string, description: "Группа-владелец при create (имя группы)." }
+        path:   { type: string, required: true, description: "Target file." }
+        line:   { type: string, description: "Exact line to remove (either line or regexp is required)." }
+        regexp: { type: string, description: "RE2 pattern: all matching lines are removed." }
+        create: { type: bool,   description: "Create the file if it doesn't exist." }
+        mode:   { type: string, description: "Permissions on create, octal form." }
+        owner:  { type: string, description: "Owner on create (username)." }
+        group:  { type: string, description: "Owner group on create (group name)." }

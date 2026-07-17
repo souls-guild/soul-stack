@@ -1,13 +1,15 @@
-# L0-испытание create в режиме cluster С PERSISTENCE=aof (пробел покрытия qa
-# 2026-06-22). Cluster на проде обычно appendonly (AOF — точная durability при
-# отказе ноды). Доказываем, что итоговый config КАЖДОГО хоста несёт И
-# cluster-директивы (cluster-enabled/cluster-config-file/cluster-node-timeout), И
-# правильные save/appendonly из aof-пресета (appendonly yes, save "") — два слоя
-# merge() сосуществуют, cluster-блок не затирает persistence-пресет.
+# L0 test of create in cluster mode WITH PERSISTENCE=aof (qa coverage gap
+# 2026-06-22). Cluster in prod is usually appendonly (AOF gives precise
+# durability on node failure). Proves that the final config of EVERY host
+# carries BOTH the cluster directives (cluster-enabled/cluster-config-file/
+# cluster-node-timeout) AND the correct save/appendonly from the aof preset
+# (appendonly yes, save "") - two merge() layers coexist, the cluster block
+# doesn't overwrite the persistence preset.
 #
-# Топология: shards=3, replicas_per_shard=0 → 3 хоста (size-guard PASS). persistence
-# aof: пресет даёт appendonly "yes" + save "". cluster-блок (последним в merge)
-# добавляет cluster-* поверх — он НЕ трогает appendonly/save (разные ключи).
+# Topology: shards=3, replicas_per_shard=0 -> 3 hosts (size-guard PASS).
+# persistence aof: the preset gives appendonly "yes" + save "". The cluster
+# block (last in merge) adds cluster-* on top - it does NOT touch
+# appendonly/save (different keys).
 name: cluster create with aof persistence keeps cluster + appendonly directives
 
 fixtures:
@@ -31,10 +33,11 @@ fixtures:
   vault:
     secret/redis/create:
       password: s3cr3t-redis-pass-create
-    # Per-user секреты системных юзеров (secret/redis/<inc>/users/<name>#password) —
-    # их резолвит keeper-side vault() при доливе system_acl_users в apply.input.users.
-    # ★ РЕДИЗАЙН default_admin (2026-06-30): default_admin — системный юзер внутрикластерного
-    # AUTH (PING/cluster-build/masterauth деплоя читают его пароль той же ветки users/<name>).
+    # Per-user secrets of system users (secret/redis/<inc>/users/<name>#password) -
+    # resolved by keeper-side vault() when filling system_acl_users into apply.input.users.
+    # * default_admin REDESIGN (2026-06-30): default_admin is the system user for
+    # in-cluster AUTH (PING/cluster-build/masterauth deploy reads its password
+    # from the same users/<name> branch).
     secret/redis/create/users/default_admin:
       password: default-admin-secret-pass
     secret/redis/create/users/replica:
@@ -68,11 +71,12 @@ fixtures:
       maxclients:       10000
       timeout:          300
 
-    # Системные ACL-юзеры redis-server (1:1 из essence/_default.yaml). ОБЯЗАТЕЛЬНЫ:
-    # guard create/cluster.yml (assert 1b) рвёт render при пустом system_acl_users
-    # (тихий fail-open недопустим — без них репликация/health-check сломались бы).
-    # ★ РЕДИЗАЙН default_admin (2026-06-30): default_admin — системный юзер полного доступа
-    # (~* &* +@all), под ним внутрикластерный AUTH cluster (заменил requirepass-default).
+    # System ACL users of redis-server (1:1 from essence/_default.yaml). REQUIRED:
+    # the create/cluster.yml guard (assert 1b) breaks the render on empty
+    # system_acl_users (a silent fail-open is unacceptable - replication/health
+    # checks would break without them).
+    # * default_admin REDESIGN (2026-06-30): default_admin is the full-access
+    # system user (~* &* +@all), used for in-cluster AUTH (replaced requirepass-default).
     system_acl_users:
       default_admin: "~* &* +@all"
       replica:    "+psync +replconf +ping"
@@ -80,13 +84,14 @@ fixtures:
       sentinel:   "allchannels +multi +slaveof +ping +exec +subscribe +config|rewrite +role +publish +info +client|setname +client|kill +script|kill"
       haproxy:    "-@all +auth +client|getname +client|id +client|setname +command +hello +ping +role +info +cluster|info"
   input:
-    # ★ provision выключен (default-on: опущенная секция = ВКЛЮЧЕНО; кейс деплоит на
-    # ГОТОВЫЙ roster, cloud-create не нужен) → include redis-provision.yml group-drop.
+    # * provision is disabled (default-on: an omitted section means ENABLED;
+    # the case deploys onto a READY roster, cloud-create isn't needed) ->
+    # include redis-provision.yml group-drop.
     provision:
       enabled: false
     redis_type: cluster
-    # version ОБЯЗАТЕЛЬНА (директива пользователя 2026-06-23): фиксированный
-    # distro-native пин (мажор < 8 → version-gate модулей не активен).
+    # version is REQUIRED (user directive 2026-06-23): fixed distro-native pin
+    # (major < 8 -> module version-gate not active).
     version: "7.4.1"
     shards: 3
     replicas_per_master: 0
@@ -94,11 +99,11 @@ fixtures:
     cluster_node_timeout: 5000
 
 assert:
-  # size-guard PASS: 3 == 3*(1+0) → assert: (не задача, в план не эмитится).
+  # size-guard PASS: 3 == 3*(1+0) -> assert: (not a task, not emitted into the plan).
   task_present:
-    # redis.conf: aof-пресет (appendonly yes / save "") СОСУЩЕСТВУЕТ с
-    # cluster-директивами. announce-ip в config НЕТ — per-host из .tmpl.
-    # Дизамбигуатор от users.acl/hardening — path.
+    # redis.conf: aof preset (appendonly yes / save "") COEXISTS with the
+    # cluster directives. No announce-ip in config - it's per-host from .tmpl.
+    # Disambiguator from users.acl/hardening - path.
     - module: core.file.rendered
       params_subset:
         path: /etc/redis/redis.conf
@@ -119,19 +124,19 @@ assert:
               - /var/lib/redis/modules/redisearch.so
               - /var/lib/redis/modules/redistimeseries.so
             config:
-              # ★ РЕДИЗАЙН default_admin: replica→master AUTH (masteruser/masterauth)
-              # приходит ОБЫЧНЫМИ директивами config (cluster deploy-body доливает их
-              # vault()-в-ячейке).
+              # * default_admin REDESIGN: replica->master AUTH (masteruser/masterauth)
+              # arrives as ORDINARY config directives (the cluster deploy body fills
+              # them in via vault()-in-cell).
               masteruser:       "default_admin"
               masterauth:       "default-admin-secret-pass"
               maxmemory:        "256mb"
               maxmemory-policy: allkeys-lru
               maxclients:       10000
               timeout:          300
-              # aof-пресет: AOF включён, RDB-снапшоты выключены.
+              # aof preset: AOF enabled, RDB snapshots disabled.
               save:             ""
               appendonly:       "yes"
-              # cluster-директивы поверх — appendonly/save не затронуты.
+              # cluster directives on top - appendonly/save not affected.
               cluster-enabled:      "yes"
               cluster-config-file:  "nodes.conf"
               cluster-node-timeout: "5000"
@@ -139,7 +144,7 @@ assert:
             sid: node-a.example.com
             covens: [create, redis]
             choirs: []
-            # traits — registry-проекция (ADR-060), пустой объект без меток.
+            # traits - registry projection (ADR-060), empty object with no labels.
             traits: {}
             role: ""
             network:

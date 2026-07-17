@@ -1,13 +1,13 @@
 name: upgrade-demo
 state_schema_version: 1
 description: >-
-  Демо-сервис для ручного теста NIM-34 (upgrade v2, ADR-0068). Тег v1.0.0 —
-  стартовая версия: нет каталога upgrade/, нет create-сценария (создаётся
-  bare-инкарнация без хостов), нет migrations/. Пин v1.0.0 — точка отсчёта, из
-  которой upgrade-paths показывает переходы на v2.0.0 (found) и v2.0.1 (legacy).
+  Demo service for manual testing of NIM-34 (upgrade v2, ADR-0068). Tag v1.0.0 —
+  the starting version: no upgrade/ directory, no create scenario (a bare
+  incarnation is created with no hosts), no migrations/. Pin v1.0.0 is the reference
+  point from which upgrade-paths shows transitions to v2.0.0 (found) and v2.0.1 (legacy).
 
-# state_schema_version = 1 → каталог migrations/ не обязателен (ADR-019).
-# state пустой у bare-инкарнации (нет create-прогона); поле note — заглушка схемы.
+# state_schema_version = 1 → migrations/ directory is not required (ADR-019).
+# state is empty for a bare incarnation (no create run); the note field is a schema placeholder.
 state_schema:
   type: object
   properties:

@@ -1,18 +1,18 @@
 name: create
-description: Создаёт greeting-файл на каждом хосте incarnation и фиксирует путь в incarnation.state.
+description: Creates a greeting file on every host of the incarnation and records the path in incarnation.state.
 
-# Оператор передаёт текст приветствия при запуске сценария (essence.greeting —
-# подложка, но на pilot input.greeting обязателен).
+# The operator passes the greeting text when starting the scenario (essence.greeting —
+# a fallback, but on pilot input.greeting is required).
 input:
   greeting:
     type: string
     required: true
-    description: Текст, который записывается в greeting-файл.
+    description: Text written to the greeting file.
 
-# Реальная мутация state (в отличие от noop): после успешного apply
-# Keeper зафиксирует greeting_file в incarnation.state (ADR-009, orchestration.md
-# §7.1). sets — map поле→CEL-выражение: путь файла берётся литералом (тем же, что
-# в params.path задачи ниже) и попадает в incarnation.state.greeting_file.
+# A real state mutation (unlike noop): after a successful apply
+# Keeper records greeting_file in incarnation.state (ADR-009, orchestration.md
+# §7.1). sets — a field→CEL-expression map: the file path is taken as a literal (the same
+# as in params.path of the task below) and lands in incarnation.state.greeting_file.
 state_changes:
   - set: greeting_file
     value: /tmp/soul-stack-hello

@@ -1,13 +1,14 @@
-# L0-испытание create: input.node_exporter_allow_private=true (SSRF-guard opt-out)
-# доезжает через apply:input до core.url.fetched destiny node-exporter (паттерн
-# redis exporters-base-url-override). Дефолтный кейс (false, guard держится) —
-# render-defaults.
+# L0 create test: input.node_exporter_allow_private=true (SSRF-guard opt-out)
+# propagates through apply:input to core.url.fetched in the node-exporter destiny
+# (same pattern as redis exporters-base-url-override). Default case (false, guard
+# holds) is covered by render-defaults.
 name: create passes node_exporter_allow_private opt-out through to destiny fetch
 
 fixtures:
   default_destiny_source: "file://../../destiny/{name}"
-  # L0-render не применяет default-ы scenario-контракта — дефолты передаются явно
-  # (см. render-defaults); проверяемое отличие — node_exporter_allow_private: true.
+  # L0-render does not apply scenario-contract defaults; defaults are passed
+  # explicitly (see render-defaults). The difference under test here is
+  # node_exporter_allow_private: true.
   input:
     node_exporter_version:    "1.8.2"
     node_exporter_collectors: []
@@ -25,7 +26,7 @@ fixtures:
 
 assert:
   task_present:
-    # Дизамбигуатор от redis_exporter-fetch — url/path. allow_private: true — снятый guard.
+    # Disambiguator from redis_exporter-fetch is url/path. allow_private: true means the guard is lifted.
     - module: core.url.fetched
       params_subset:
         url: https://github.com/prometheus/node_exporter/releases/download/v1.8.2/node_exporter-1.8.2.linux-amd64.tar.gz

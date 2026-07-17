@@ -1,18 +1,18 @@
 name: keeper-register
 state_schema_version: 1
 description: >-
-  E2E-фундамент keeper-side module dispatch (ADR-017). Сервис прогоняет
-  единственный keeper-side шаг `core.soul.registered` с `on: keeper`: он
-  исполняется на самом keeper-инстансе (не на хосте), привязывая указанный SID к
-  набору Coven-меток в реестре `souls`. Доказывает, что keeper-side dispatch
-  работает end-to-end.
+  E2E foundation for keeper-side module dispatch (ADR-017). The service runs
+  a single keeper-side step `core.soul.registered` with `on: keeper`: it
+  executes on the keeper instance itself (not on the host), attaching the given SID to
+  a set of Coven labels in the `souls` registry. Proves that keeper-side dispatch
+  works end-to-end.
 
-# state_schema_version = 1 → каталог migrations/ не обязателен (ADR-019).
-# Структура incarnation.state пустая: keeper-шаг пишет в реестр souls, не в
+# state_schema_version = 1 → the migrations/ directory is not required (ADR-019).
+# incarnation.state structure is empty: the keeper step writes to the souls registry, not to
 # incarnation.state.
 state_schema:
   type: object
   properties: {}
 
-# Зависимостей нет: scenario использует только core-модули (ADR-015),
-# которые не перечисляются в destiny[]/modules[] (ADR-009).
+# No dependencies: the scenario uses only core modules (ADR-015),
+# which are not listed in destiny[]/modules[] (ADR-009).

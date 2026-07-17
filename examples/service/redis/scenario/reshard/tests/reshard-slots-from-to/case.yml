@@ -1,11 +1,11 @@
-# L0-испытание reshard: перенести N слотов с master from на master to. Roster
-# прогона — 3 хоста (3-master cluster); from=node-1, to=node-2, slots=100.
-# Scenario строит ГОТОВУЮ топологию-map (from/to = primary_ip:6379 по SID из
-# roster) и зовёт плагин run_once. ВЫБОР первых N слотов источника и сам перенос
-# (SETSLOT/MIGRATE/SETSLOT NODE) делает ПЛАГИН в рантайме по CLUSTER NODES — на L0
-# не видно (render не исполняет Redis); последовательность/лосслесс доказаны
-# плагин-тестами (cluster_test.go). ★ reshard НЕ идемпотентен — это imperative,
-# L0 это не «доказывает» (см. per-module doc); здесь проверяется render-контракт.
+# L0 trial reshard: move N slots from master `from` to master `to`. Run roster —
+# 3 hosts (3-master cluster); from=node-1, to=node-2, slots=100.
+# The scenario builds a READY topology map (from/to = primary_ip:6379 by SID from the
+# roster) and calls the plugin run_once. The SELECTION of the first N source slots and the
+# actual transfer (SETSLOT/MIGRATE/SETSLOT NODE) is done by the PLUGIN at runtime via
+# CLUSTER NODES — invisible at L0 (render does not execute Redis); ordering/losslessness are
+# proven by plugin tests (cluster_test.go). ★ reshard is NOT idempotent — it's imperative,
+# L0 does not "prove" this (see per-module doc); here we check the render contract.
 name: reshard slots from source to target master
 
 fixtures:
@@ -26,9 +26,10 @@ fixtures:
       soulprint:
         network: { primary_ip: 10.0.0.3 }
         os: { arch: amd64 }
-  # ★ РЕДИЗАЙН default_admin (2026-06-30): коннект к нодам кластера — под системным
-  # default_admin (username → AUTH), его пароль из ветки secret/redis/<inc>/users/
-  # default_admin#password. Прежний главный секрет secret/redis/<inc>#password ДРОПНУТ.
+  # ★ REDESIGN default_admin (2026-06-30): connecting to cluster nodes is done under the
+  # system default_admin (username → AUTH), its password from the
+  # secret/redis/<inc>/users/default_admin#password branch. The previous main secret
+  # secret/redis/<inc>#password is DROPPED.
   vault:
     secret/redis/reshard/users/default_admin:
       password: default-admin-secret-pass
@@ -49,12 +50,12 @@ fixtures:
     slots: 100
 
 assert:
-  # GUARD — assert: (from != to, оба в roster → that[0] true → render проходит,
-  # задача в план не эмитится).
+  # GUARD — assert: (from != to, both in roster → that[0] true → render passes,
+  # task not emitted into the plan).
   task_present:
-    # RESHARD run_once: endpoint-ы из roster по SID. from=node-1, to=node-2,
-    # slots=100 (int() → нативное число). password из vault. Единственная
-    # community.redis.cluster в плане.
+    # RESHARD run_once: endpoints from the roster by SID. from=node-1, to=node-2,
+    # slots=100 (int() → native number). password from vault. The only
+    # community.redis.cluster in the plan.
     - module: community.redis.cluster
       params_subset:
         action: reshard

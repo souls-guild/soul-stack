@@ -1,28 +1,28 @@
-# L0-испытание restart: rolling-restart реплик (probe→where→block+serial:1).
-# Render-only, герметично. Roster прогона — 2 хоста. Probe-роль каждого хоста
-# подаётся как mocks.register (L0-проброс готового register-payload-а probe-шага,
-# без исполнения community.redis.role на хосте): redis_role.role = slave →
-# block-потомки (where slave) рендерятся, master-restart (where master) —
+# L0 test restart: rolling-restart of replicas (probe->where->block+serial:1).
+# Render-only, hermetic. Run roster - 2 hosts. Probe role for each host
+# is supplied as mocks.register (L0 pass-through of a ready register payload for the probe step,
+# without executing community.redis.role on the host): redis_role.role = slave ->
+# block descendants (where slave) render, master-restart (where master) -
 # placeholder-skip.
 #
-# ★ Probe — community.redis.role (go-redis INFO replication), НЕ raw redis-cli:
-# поле register.redis_role.role (Output плагина), НЕ .stdout. Slave-health-gate —
-# community.redis.replica-synced (СТРОГИЙ ресинк-гейт master_link_status:up,
-# решение пользователя 2026-06-23), НЕ pinged/PONG и НЕ core.exec.run redis-cli.
+# star Probe is community.redis.role (go-redis INFO replication), NOT raw redis-cli:
+# field register.redis_role.role (plugin Output), NOT .stdout. Slave-health-gate -
+# community.redis.replica-synced (STRICT resync gate master_link_status:up,
+# user decision 2026-06-23), NOT pinged/PONG and NOT core.exec.run redis-cli.
 #
-# Что ассертим (критерий приёмки переноса shell→плагин):
-#   1. probe-шаг (community.redis.role) рендерит params коннекта (addr localhost,
-#      пароль из vault, plaintext-ветка при отсутствии essence.tls_enable).
-#   2. block fan-out: 2 потомка (Restart + Wait-PONG) разворачиваются в
-#      RenderedTask по сквозным индексам (block fan-out + serial:1 наследование
-#      доказаны render-ассертом TargetSIDs/SerialWidth в block_acceptance_test.go).
-#   3. master-restart (core.service.restarted, where master) — placeholder-skip на
-#      slave-payload-е (Params == nil): на slave-roster-е задача не таргетит никого.
+# What we assert (transfer-acceptance criteria shell->plugin):
+#   1. probe step (community.redis.role) renders connect params (addr localhost,
+#      password from vault, plaintext branch when essence.tls_enable is absent).
+#   2. block fan-out: 2 descendants (Restart + Wait-PONG) expand into
+#      RenderedTask via cross-cutting indices (block fan-out + serial:1 inheritance
+#      proven by the render assert TargetSIDs/SerialWidth in block_acceptance_test.go).
+#   3. master-restart (core.service.restarted, where master) - placeholder-skip on
+#      the slave payload (Params == nil): on the slave roster the task targets nobody.
 #
-# ВНИМАНИЕ L0-ограничение: mocks.register — ЕДИНЫЙ payload, применяется ко всем
-# хостам roster-а одинаково (probe-per-host = dispatch-слой L3, вне пилота). Поэтому
-# where матчит весь roster (все slave) либо никого; раскладку master/slave по разным
-# хостам доказывает render-ассерт TargetSIDs (TestAcceptance_RestartBlockFanOut).
+# L0 LIMITATION NOTICE: mocks.register - a SINGLE payload, applied identically to
+# all hosts in the roster (probe-per-host = the L3 dispatch layer, outside the pilot). So
+# where matches the whole roster (all slave) or nobody; splitting master/slave across different
+# hosts is proven by the render assert TargetSIDs (TestAcceptance_RestartBlockFanOut).
 name: rolling-restart replicas one at a time
 
 fixtures:
@@ -41,12 +41,12 @@ fixtures:
   input:
     reason: "rolling restart for L0"
 
-  # Пароль Redis — probe и health-gate резолвят vault('secret/redis/restart/users/
-  # default_admin#password') (incarnation.name == имя сценария == restart). ★ РЕДИЗАЙН
-  # default_admin (2026-06-30): коннект под системным default_admin (username → AUTH),
-  # пароль из ветки users/default_admin (прежний secret/redis/<inc>#password ДРОПНУТ).
-  # state НЕ задан в fixture → has(incarnation.state) false → tls_on false → plaintext-
-  # ветка коннекта (addr 127.0.0.1:6379, tls=false, tls_ca=''). Дискриминатор v3 читает
+  # Redis password - probe and health-gate resolve vault('secret/redis/restart/users/
+  # default_admin#password') (incarnation.name == scenario name == restart). star REDESIGN
+  # default_admin (2026-06-30): connect as the system default_admin (username -> AUTH),
+  # password from the users/default_admin branch (old secret/redis/<inc>#password DROPPED).
+  # state not set in fixture -> has(incarnation.state) false -> tls_on false -> plaintext
+  # connect branch (addr 127.0.0.1:6379, tls=false, tls_ca=''). v3 discriminator reads
   # state.tls.enable.
   vault:
     secret/redis/restart/users/default_admin:
@@ -59,8 +59,8 @@ mocks:
 
 assert:
   task_present:
-    # ── probe (community.redis.role): go-redis INFO replication, без redis-cli ──
-    # Единственная community.redis.role в плане.
+    # -- probe (community.redis.role): go-redis INFO replication, without redis-cli --
+    # The only community.redis.role in the plan.
     - module: community.redis.role
       params_subset:
         addr: "127.0.0.1:6379"
@@ -69,14 +69,14 @@ assert:
         tls: false
         tls_ca: ""
 
-    # ── slave-health-gate (community.redis.replica-synced) ───────────────────
-    #    СТРОГИЙ ресинк-гейт (master_link_status:up), НЕ pinged/PONG. Единственная
-    #    community.redis.replica-synced в плане. Этот гейт живёт ВНУТРИ slave-block-а
-    #    сразу за `core.service.restarted` (block fan-out where=slave) — его наличие
-    #    доказывает, что slave-block отрендерился, а сам рестарт реплики (bare
-    #    core.service.restarted name=redis-server) presence-неотличим от master-рестарта
-    #    (оба идентичны, дискриминатор — block-`where`/TargetSIDs, presence его не
-    #    видит), поэтому его НЕ ассертим отдельно (см. наблюдение в отчёте).
+    # -- slave-health-gate (community.redis.replica-synced) ----------------------
+    #    STRICT resync gate (master_link_status:up), NOT pinged/PONG. The only
+    #    community.redis.replica-synced in the plan. This gate lives INSIDE the slave block
+    #    right after `core.service.restarted` (block fan-out where=slave) - its presence
+    #    proves the slave block rendered, while the replica restart itself (bare
+    #    core.service.restarted name=redis-server) is presence-indistinguishable from the master restart
+    #    (both identical, discriminator - block `where`/TargetSIDs, presence does not
+    #    see it), so it is NOT asserted separately (see the note in the report).
     - module: community.redis.replica-synced
       params_subset:
         addr: "127.0.0.1:6379"

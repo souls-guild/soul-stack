@@ -1,21 +1,21 @@
 kind: cloud_driver
-protocol_version: 1                    # compat-флаг plugin-протокола (ADR-020(c))
-namespace: cloud                       # пример third-party коллекции CloudDriver
+protocol_version: 1                    # compat flag of the plugin protocol (ADR-020(c))
+namespace: cloud                       # example third-party CloudDriver collection
 name: yc
 
-# Closed enum по ADR-020(f).
-# vault_access НЕ нужен: credentials резолвит Keeper (A-flow, docs/keeper/cloud.md)
-# и передаёт plain в CreateRequest.credentials — драйвер в Vault НЕ ходит.
+# Closed enum per ADR-020(f).
+# vault_access is NOT needed: Keeper resolves credentials (A-flow, docs/keeper/cloud.md)
+# and passes them plain into CreateRequest.credentials — the driver doesn't touch Vault.
 required_capabilities:
-  - network_outbound                   # вызовы Yandex Cloud API
+  - network_outbound                   # calls to Yandex Cloud API
 
-# CloudDriver работает на keeper-стороне и не трогает локальные ресурсы host-а —
-# объявляем пустой список (ADR-020(g), пример из docs/keeper/plugins.md).
+# CloudDriver runs on the keeper side and doesn't touch local host resources —
+# declaring an empty list (ADR-020(g), example from docs/keeper/plugins.md).
 side_effects: []
 
 spec:
-  provider_kind: yc                    # семейство провайдера (Yandex Cloud)
-  # JSON Schema draft 2020-12 (формат для kind: cloud_driver — см.
+  provider_kind: yc                    # provider family (Yandex Cloud)
+  # JSON Schema draft 2020-12 (format for kind: cloud_driver — see
   # docs/keeper/plugins.md → spec.profile_schema).
   profile_schema:
     type: object
@@ -23,13 +23,13 @@ spec:
     properties:
       folder_id:
         type: string
-        description: ID каталога YC, в котором создаётся VM.
+        description: ID of the YC folder where the VM is created.
       zone:
         type: string
         examples: [ru-central1-a, ru-central1-b, ru-central1-d]
       platform_id:
         type: string
-        description: Платформа (Intel Cascade Lake, Ice Lake, ...).
+        description: Platform (Intel Cascade Lake, Ice Lake, ...).
         examples: [standard-v3, standard-v2]
         default: standard-v3
       resources:
@@ -46,10 +46,10 @@ spec:
             type: integer
             minimum: 5
             maximum: 100
-            description: Baseline-производительность ядра, % (5/20/50/100).
+            description: Baseline core performance, % (5/20/50/100).
       image_id:
         type: string
-        description: ID образа загрузочного диска (compute.images).
+        description: ID of the boot disk image (compute.images).
       disk:
         type: object
         properties:
@@ -61,7 +61,7 @@ spec:
             enum: [network-ssd, network-hdd, network-ssd-nonreplicated]
       subnet_id:
         type: string
-        description: ID подсети VPC.
+        description: ID of the VPC subnet.
       security_group_ids:
         type: array
         items:
@@ -69,14 +69,14 @@ spec:
       nat:
         type: boolean
         description: |
-          Выдать VM публичный IPv4 (one-to-one NAT). Default false — VM
-          доступна только из VPC по internal-DNS.
+          Assign a public IPv4 to the VM (one-to-one NAT). Default false — the VM
+          is reachable only from the VPC via internal-DNS.
         default: false
       service_account_id:
         type: string
         description: |
-          Опц. ID сервис-аккаунта, привязанного к VM (для авторизации внутри
-          инстанса).
+          Optional. ID of the service account attached to the VM (for authorizing within
+          the instance).
       labels:
         type: object
         additionalProperties:

@@ -1,8 +1,8 @@
 name: create
 description: >-
-  Инициализация incarnation long-runner: на каждом хосте пишет маркер. Быстрый
-  no-op-ish create, чтобы incarnation существовал и дальше можно было гонять
-  staggered/serial_waves.
+  Initialization of the long-runner incarnation: writes a marker on every host. A quick
+  no-op-ish create so the incarnation exists and staggered/serial_waves can be run
+  against it later.
 
 state_changes:
   - set: last_run

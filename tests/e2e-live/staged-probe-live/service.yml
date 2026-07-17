@@ -1,16 +1,16 @@
 name: staged-probe-live
 state_schema_version: 1
 description: >-
-  L3b staged-render capstone (ADR-056 §S5): реальный soul-флот исполняет probe
-  (core.cmd.shell) → keeper собирает per-host register → задача Passage 1 с
-  where: register.role.stdout == 'master' таргетится ТОЛЬКО на master-хост.
-  Доказывает probe→where end-to-end на ПОДЛИННОМ soul-бинаре (S3 доказал на
-  soul-STUB). Фокус — targeting по свежему register, без redis/cloud/vault.
+  L3b staged-render capstone (ADR-056 §S5): a real soul fleet runs a probe
+  (core.cmd.shell) → keeper collects per-host register → the Passage 1 task with
+  where: register.role.stdout == 'master' targets ONLY the master host.
+  Proves probe→where end-to-end on the REAL soul binary (S3 proved it on a
+  soul STUB). Focus is targeting by a fresh register, without redis/cloud/vault.
 
-# state_schema_version=1 → каталог migrations/ не обязателен (ADR-019).
-# state_changes scenario пуст: фокус-сценарий доказывает targeting Passage 1,
-# а не мутацию incarnation.state (commit state — отдельный инвариант, покрыт
-# другими L3a/L3b-тестами).
+# state_schema_version=1 → the migrations/ directory is not required (ADR-019).
+# scenario state_changes is empty: the focus scenario proves Passage 1 targeting,
+# not incarnation.state mutation (commit state is a separate invariant, covered
+# by other L3a/L3b tests).
 state_schema:
   type: object
   properties: {}

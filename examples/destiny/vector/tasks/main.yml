@@ -1,16 +1,16 @@
-# tasks/main.yml — точка входа destiny vector. Только include-список: логические
-# группы разнесены по соседним файлам, раскрываются inline ДО render (docs/destiny/
-# tasks.md §4 — within-destiny include раскрывается в плоский список).
+# tasks/main.yml - entry point for destiny vector. Only an include list: logical
+# groups are split across neighboring files, expanded inline BEFORE render (docs/destiny/
+# tasks.md §4 - within-destiny include expands into a flat list).
 #
-# Обзор конвейера (клон node-exporter):
-#   install.yml — fetch tarball Vector → extract (подготовка артефакта в /tmp);
-#   account.yml — group + user vector + data_dir (persistent buffer) + config_dir
+# Pipeline overview (clone of node-exporter):
+#   install.yml - fetch Vector tarball -> extract (prepare the artifact in /tmp);
+#   account.yml - group + user vector + data_dir (persistent buffer) + config_dir
 #                 (core.file.directory);
-#   service.yml — install бинаря vector (core.file.present src:) + render vector.yaml
+#   service.yml - install the vector binary (core.file.present src:) + render vector.yaml
 #                 (sources/sinks) + render hardened-unit + core.service.running +
-#                 restarted onchanges на config/unit/binary. install-шаг бинаря здесь,
-#                 а не в install.yml: его register читает onchanges рестарта, а per-file
-#                 линтер отвергает cross-file onchanges.
+#                 restarted onchanges on config/unit/binary. The binary install step is here,
+#                 not in install.yml: its register is read by the restart onchanges, and the
+#                 per-file linter rejects cross-file onchanges.
 
 - include: install.yml
 

@@ -1,127 +1,127 @@
 # ╔══════════════════════════════════════════════════════════════════════════════╗
-# ║ ОБЩЕЕ PROVISION-ТЕЛО (service-level include, переиспользуемое) — ADR-061         ║
+# ║ SHARED PROVISION BODY (service-level include, reusable) — ADR-061         ║
 # ╚══════════════════════════════════════════════════════════════════════════════╝
-# Cloud-provision новых VM под redis-топологию ПЕРЕД деплоем: (а) core.cloud.created
-# создаёт VM, (б) core.bootstrap.delivered доставляет per-VM bootstrap-токен по SSH,
-# (в) core.soul.registered регистрирует созданные SID + БЛОКИРУЮЩЕ ждёт онбординга
-# (await_online) + refresh_soulprint → scenario-runner пере-резолвит roster ПЕРЕД
-# деплой-веткой (live-снимок online-набора). Лежит на service-level (scenario/<file>),
-# а не внутри одного сценария, и инклудится ОБОИМИ потребителями по имени файла:
-# scenario-include резолвит `scenario/<name>/<file>`, затем фоллбэкает на
-# `scenario/<file>` (orchestration.md §6, include.go). Так create и migrate_cluster
-# делят ОДНО provision-тело без дубликата.
+# Cloud-provisions new VMs for the redis topology BEFORE deploy: (a) core.cloud.created
+# creates the VM, (b) core.bootstrap.delivered delivers a per-VM bootstrap token over SSH,
+# (c) core.soul.registered registers the created SIDs + BLOCKS waiting for onboarding
+# (await_online) + refresh_soulprint → the scenario-runner re-resolves the roster BEFORE
+# the deploy branch (a live snapshot of the online set). Lives at service-level (scenario/<file>),
+# not inside a single scenario, and is included by BOTH consumers under the same file name:
+# scenario-include resolves `scenario/<name>/<file>`, then falls back to
+# `scenario/<file>` (orchestration.md §6, include.go). This way create and migrate_cluster
+# share ONE provision body without duplication.
 #
-#   Потребители (на 2026-06-27):
-#     - scenario/create/main.yml          — cloud-create + онбординг ПЕРЕД деплоем;
-#     - scenario/migrate_cluster/main.yml  — то же ПЕРЕД деплой+миграцией.
+#   Consumers (as of 2026-06-27):
+#     - scenario/create/main.yml          — cloud-create + onboarding BEFORE deploy;
+#     - scenario/migrate_cluster/main.yml  — same, BEFORE deploy+migration.
 #
-#   В обоих случаях include gated на `has(input.provision) && input.provision.enabled`
-#   у ИНКЛУДЯЩЕГО (placeholder-skip-форма include-when — object-input не статичен, не
-#   group-drop): при enabled=false / опущенной секции шаги тела не таргетят никого.
+#   In both cases the include is gated on `has(input.provision) && input.provision.enabled`
+#   in the INCLUDING scenario (placeholder-skip form of include-when — object-input isn't static, not
+#   group-drop): with enabled=false / an omitted section, the body's steps target no one.
 #
-# ★★ ИНВАРИАНТ ИНКЛУДЯЩЕГО (drift-guard руками — soul-lint cross-file НЕ ловит) ★★
-#   Этот файл ССЫЛАЕТСЯ на input.*/incarnation.*/essence.*/register.*, но НЕ объявляет
-#   их. Любой сценарий, инклудящий это тело, ОБЯЗАН нести в своём контракте ВЕСЬ набор,
-#   который тело читает, С ТОЙ ЖЕ СЕМАНТИКОЙ:
+# ★★ INVARIANT OF THE INCLUDING SCENARIO (drift-guard by hand — soul-lint cross-file does NOT catch it) ★★
+#   This file REFERENCES input.*/incarnation.*/essence.*/register.*, but doesn't declare
+#   them. Any scenario including this body MUST carry in its own contract the ENTIRE set
+#   the body reads, WITH THE SAME SEMANTICS:
 #       input.provision.{enabled, provider, profile, await_timeout, ssh_provider}
 #       input.redis_type   input.shards   input.replicas_per_master
 #       incarnation.name
 #       essence.provision_{provider, profile, await_timeout, ssh_provider}
-#   provider/profile/await_timeout/ssh_provider читаются как default(input.provision.X,
-#   essence.provision_X) — оператор может опустить их (форма provision скрыта, default-on),
-#   тогда берётся essence-дефолт. Инклудящий ОБЯЗАН нести соответствующие essence.provision_*.
-#   Шаги (б)/(в) читают register.provision.hosts — register ПЕРВОГО шага (а)
-#   core.cloud.created (он создаётся ЗДЕСЬ). Пропуск/переименование любого input-поля в
-#   инклудящем НЕ ловится статически (cross-file дрейф невидим soul-lint) — проявится
-#   падением render. Источник истины набора и схемы input.provision —
+#   provider/profile/await_timeout/ssh_provider are read as default(input.provision.X,
+#   essence.provision_X) — the operator may omit them (provision form is hidden, default-on),
+#   then the essence default is used. The including scenario MUST carry the corresponding essence.provision_*.
+#   Steps (b)/(c) read register.provision.hosts — the register of the FIRST step (a)
+#   core.cloud.created (created HERE). A missing/renamed input field in the
+#   including scenario is NOT caught statically (cross-file drift is invisible to soul-lint) — it will
+#   surface as a render failure. The source of truth for the set and schema of input.provision is
 #   create/main.yml::input.provision.
-#
-# ★ ЧИСЛО VM — ИЗ ТОПОЛОГИИ (единственный источник истины размера кластера):
-#   - cluster:  shards*(1+replicas_per_master) (мастера + реплики на каждый шард);
-#   - sentinel: 1+replicas_per_master           (один master + реплики).
-# Отдельного node_count в input.provision НЕТ намеренно — он рассинхронился бы с
-# size-guard деплой-веток (assert size(soulprint.hosts) == та же формула). Образец флоу —
-# examples/service/example-cloud-bootstrap/scenario/create/main.yml.
-#
-# ★ teardown (destroy) — НЕ здесь (отдельный сценарий).
 
-# NIM-58: incarnation.NamePattern ⊃ vmNameBasePattern — ранний guard до провижна.
+# ★ VM COUNT — FROM TOPOLOGY (the single source of truth for cluster size):
+#   - cluster:  shards*(1+replicas_per_master) (masters + replicas for each shard);
+#   - sentinel: 1+replicas_per_master           (one master + replicas).
+#   There's deliberately no separate node_count in input.provision — it would drift out of sync with the
+#   size-guard of the deploy branches (assert size(soulprint.hosts) == the same formula). Sample flow —
+#   examples/service/example-cloud-bootstrap/scenario/create/main.yml.
+#
+# ★ teardown (destroy) — NOT here (a separate scenario).
+
+# NIM-58: incarnation.NamePattern ⊃ vmNameBasePattern — early guard before provisioning.
 - name: Guard incarnation name is a valid VM-name base for cloud provisioning
   assert:
     that:
       - "incarnation.name.matches('^[a-z][a-z0-9-]{0,48}[a-z0-9]$')"
-    message: "имя инкарнации не подходит как базовое имя VM для провижининга (нужно ^[a-z][a-z0-9-]{0,48}[a-z0-9]$): старт-цифра / хвост-дефис / длина 51-63 проходят create, но падают в CloudDriver — переименуй инкарнацию или создай с provision.enabled=false"
+    message: "the incarnation name doesn't qualify as a base VM name for provisioning (needs ^[a-z][a-z0-9-]{0,48}[a-z0-9]$): a leading digit / trailing dash / length 51-63 pass create but fail in CloudDriver — rename the incarnation or create with provision.enabled=false"
 
-# (а) Создание VM через CloudDriver (on: keeper, ADR-017). count выводится из топологии
-#     по input.redis_type. generate_userdata: false: VM создаётся БЕЗ cloud-init userdata
-#     (часть cloud-провайдеров отвергает ci_user_data) → VM auto-join Teleport, а весь
-#     setup (soul-бинарь + CA + soul.yml + systemd-unit) ставит шаг (б) по Teleport SSH
-#     (install: true, см. ниже). Per-VM bootstrap-токен попадает в
-#     register.provision.hosts[].bootstrap_token (plain one-time, маскируется
-#     audit.MaskSecrets на всех выходах).
+# (a) Create VMs via CloudDriver (on: keeper, ADR-017). count is derived from the topology
+#     based on input.redis_type. generate_userdata: false: the VM is created WITHOUT
+#     cloud-init userdata (some cloud providers reject ci_user_data) → the VM auto-joins Teleport, and the whole
+#     setup (soul binary + CA + soul.yml + systemd unit) is done by step (b) over Teleport SSH
+#     (install: true, see below). The per-VM bootstrap token lands in
+#     register.provision.hosts[].bootstrap_token (plain one-time, masked by
+#     audit.MaskSecrets on all outputs).
 - name: Provision VMs for the redis topology (cloud-init bootstrap)
   on: keeper
   module: core.cloud.created
   register: provision
   params:
-    # provider/profile — input.provision.X с фоллбэком на essence.provision_X (default-on:
-    # форма provision скрыта, оператор обычно НЕ задаёт provider/profile → essence-дефолт).
-    # ★ TODO: prod/dev provider switch (ENV keeper / Coven-overlay) — отдельный ADR. Сейчас
-    # одна статичная essence-пара (прод); переключение окружения НЕ реализовано.
+    # provider/profile — input.provision.X with a fallback to essence.provision_X (default-on:
+    # the provision form is hidden, the operator usually does NOT set provider/profile → essence default).
+    # ★ TODO: prod/dev provider switch (ENV keeper / Coven-overlay) — a separate ADR. Currently
+    # one static essence pair (prod); environment switching is NOT implemented.
     provider: "${ default(input.provision.provider, essence.provision_provider) }"
     profile:  "${ default(input.provision.profile, essence.provision_profile) }"
-    # count = размер кластера по топологии: cluster shards*(1+replicas); sentinel 1+replicas.
-    # int() унифицирует числовой тип (YAML→uint64 в L0, JSON→double в проде). ОДНОСТРОЧНЫЙ
-    # quoted-string (НЕ block-scalar `>-`): goccy парсит block-scalar как LiteralNode, а
-    # CEL-wrapped-skip param-type-check (module_params.go) ловит только StringNode → int-
-    # param `count` ложно реджектился бы как param_type_mismatch на folded-форме.
+    # count = cluster size by topology: cluster shards*(1+replicas); sentinel 1+replicas.
+    # int() unifies the numeric type (YAML→uint64 in L0, JSON→double in prod). SINGLE-LINE
+    # quoted string (NOT block-scalar `>-`): goccy parses a block-scalar as LiteralNode, and
+    # CEL-wrapped-skip param-type-check (module_params.go) only catches StringNode → the int
+    # param `count` would be falsely rejected as param_type_mismatch on the folded form.
     count: "${ (input.redis_type == 'cluster') ? int(input.shards) * (1 + int(input.replicas_per_master)) : 1 + int(input.replicas_per_master) }"
-    # name — RUN-IDENTITY прогона (идемпотентность по инкарнации, NIM-16): драйвер именует
-    # VM <name>-<seq> и штампует label soulstack-run=<name> (nameBase→runLabel,
-    # provisioned.go→soul-cloud-*) → рестарт той же инкарнации переиспользует тот же батч VM
-    # (findByRunLabel, не плодит orphan). Без name create падает `no run identity`.
-    # incarnation.name — корневая Coven-метка (ADR-008), устойчива между прогонами. ОБЫЧНО
-    # матчит vmNameBasePattern, но incarnation.NamePattern ^[a-z0-9][a-z0-9-]{0,62}$ — его
-    # надмножество (старт-цифра / хвост-дефис / длина 51-63 пройдут инкарнацию, но провалят
-    # драйвер) → кросс-доменный guard (домен-mismatch) — отдельный тикет.
+    # name — RUN-IDENTITY of the run (idempotency by incarnation, NIM-16): the driver names
+    # VMs <name>-<seq> and stamps label soulstack-run=<name> (nameBase→runLabel,
+    # provisioned.go→soul-cloud-*) → a restart of the same incarnation reuses the same VM batch
+    # (findByRunLabel, doesn't spawn orphans). Without name, create fails with `no run identity`.
+    # incarnation.name — the root Coven label (ADR-008), stable across runs. USUALLY
+    # matches vmNameBasePattern, but incarnation.NamePattern ^[a-z0-9][a-z0-9-]{0,62}$ is its
+    # superset (a leading digit / trailing dash / length 51-63 will pass the incarnation but fail the
+    # driver) → a cross-domain guard (domain mismatch) — a separate ticket.
     name: "${ incarnation.name }"
     generate_userdata: false
 
-# (б) Установка soul + доставка per-VM bootstrap-токена по SSH (on: keeper,
-#     core.bootstrap.delivered, ADR-063). Берёт hosts из register предыдущего шага
-#     (каждый — {sid, primary_ip, bootstrap_token}). install: true → VM пришла БЕЗ
-#     cloud-init (шаг (а) generate_userdata:false), поэтому весь setup ставится ЗДЕСЬ
-#     по Teleport SSH: soul-бинарь (pinned-CA HTTPS) + keeper-CA + soul.yml + systemd-
-#     unit (тот же install-blueprint, что cloud-init B-flat). Затем кладёт токен в
-#     /etc/soul/token (umask 077, 0400, ★токен в STDIN не в argv), redeem-ит его
-#     (`soul init` — CSR→Bootstrap→SoulSeed; идемпотентно по seed-cert-guard) и
-#     активирует unit: daemon-reload + enable + start (start_soul default true).
-#     ssh_provider — имя SshProvider-плагина (Teleport).
-#     Ошибка любого хоста → шаг failed (B1-strict) → state не коммитится → error_locked.
-#     require: provision — токены приходят из его register.
+# (b) Install soul + deliver the per-VM bootstrap token over SSH (on: keeper,
+#     core.bootstrap.delivered, ADR-063). Takes hosts from the register of the previous step
+#     (each — {sid, primary_ip, bootstrap_token}). install: true → the VM arrived WITHOUT
+#     cloud-init (step (a) generate_userdata:false), so the whole setup is done HERE
+#     over Teleport SSH: soul binary (pinned-CA HTTPS) + keeper CA + soul.yml + systemd
+#     unit (the same install blueprint as cloud-init B-flat). Then places the token in
+#     /etc/soul/token (umask 077, 0400, ★token via STDIN not argv), redeems it
+#     (`soul init` — CSR→Bootstrap→SoulSeed; idempotent via seed-cert-guard) and
+#     activates the unit: daemon-reload + enable + start (start_soul default true).
+#     ssh_provider — the name of the SshProvider plugin (Teleport).
+#     A failure on any host → the step fails (B1-strict) → state isn't committed → error_locked.
+#     require: provision — tokens come from its register.
 - name: Install soul and deliver per-VM bootstrap token over SSH
   on: keeper
   module: core.bootstrap.delivered
   params:
     hosts:        "${ register.provision.hosts }"
-    # ssh_provider — input.provision.ssh_provider с фоллбэком на essence.provision_ssh_provider
-    # (default-on: форма скрыта, оператор обычно НЕ задаёт → essence-дефолт teleport).
+    # ssh_provider — input.provision.ssh_provider with a fallback to essence.provision_ssh_provider
+    # (default-on: the form is hidden, the operator usually does NOT set it → essence default teleport).
     ssh_provider: "${ default(input.provision.ssh_provider, essence.provision_ssh_provider) }"
-    # join_wait_timeout — потолок retry-ожидания join-а свежей VM в Teleport.
+    # join_wait_timeout — the retry-wait ceiling for a fresh VM joining Teleport.
     # input.provision.join_wait_timeout → essence.provision_join_wait_timeout → '15m'
-    # (симметрично await_timeout шага онбординга).
+    # (symmetric with await_timeout of the onboarding step).
     join_wait_timeout: "${ default(input.provision.join_wait_timeout, default(essence.provision_join_wait_timeout, '15m')) }"
     install:      true
   require:
     - provision
 
-# (в) Регистрация созданных SID + БЛОКИРУЮЩИЙ барьер онбординга + refresh_soulprint
-#     (on: keeper, core.soul.registered, ADR-061). sid — СПИСОК из register.provision.hosts
-#     (h.sid каждой созданной VM; список приходит CEL-выражением, list-SID ADR-061). coven —
-#     корневой incarnation.name (роль таргетится по нему). await_online:true → шаг ждёт,
-#     пока созданные Souls станут online (Redis SID-lease), под await_timeout; B1-strict:
-#     недобор кворума → шаг failed → state не коммитится → error_locked. refresh_soulprint:
-#     true → после успеха roster пере-резолвится, деплой-ветка видит online-набор.
+# (c) Register the created SIDs + a BLOCKING onboarding barrier + refresh_soulprint
+#     (on: keeper, core.soul.registered, ADR-061). sid — a LIST from register.provision.hosts
+#     (h.sid of each created VM; the list comes from a CEL expression, list-SID ADR-061). coven —
+#     the root incarnation.name (the role is targeted by it). await_online:true → the step waits
+#     until the created Souls become online (Redis SID-lease), bounded by await_timeout; B1-strict:
+#     insufficient quorum → the step fails → state isn't committed → error_locked. refresh_soulprint:
+#     true → after success the roster is re-resolved, the deploy branch sees the online set.
 #     await_timeout: input.provision.await_timeout → essence.provision_await_timeout → '10m'.
 - name: Register provisioned VMs and await their onboarding
   on: keeper
@@ -136,4 +136,4 @@
     await_timeout:     "${ default(input.provision.await_timeout, default(essence.provision_await_timeout, '10m')) }"
     refresh_soulprint: true
 
-# (г) install community.redis синтезируется Keeper-ом из service.yml::modules[] (ADR-065); явный шаг = takeover.
+# (d) install community.redis is synthesized by Keeper from service.yml::modules[] (ADR-065); an explicit step = takeover.

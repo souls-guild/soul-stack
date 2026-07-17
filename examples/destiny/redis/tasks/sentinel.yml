@@ -1,18 +1,18 @@
-# tasks/sentinel.yml — sentinel-демон (режим sentinel/sentinel_only). ВЕСЬ файл gated
-# на sentinel_enabled НА include (main.yml, conditional-include ADR-009 amendment), НЕ
-# внутри файла. Вне sentinel-режима include дропается целиком (group-drop). master-
-# election делает scenario сервиса run_once и передаёт ГОТОВЫЕ master_ip/master_port —
-# destiny остаётся режим-агностичным «глупым» кирпичом.
-#
-# ★ register'ы redis_sentinel_conf/redis_sentinel_unit и их onchanges-рестарт ОБЯЗАНЫ
-#   жить В ЭТОМ файле: per-file линтер (validateTaskRefs) отвергает cross-file onchanges.
-#   Явного daemon-reload-шага НЕТ: core.service (daemon_reload: auto) сам перечитывает
-#   unit ПЕРЕД restart — поэтому рестарт идёт ЧЕРЕЗ core.service.restarted (не raw exec).
+# tasks/sentinel.yml — sentinel daemon (sentinel/sentinel_only mode). The WHOLE file is gated
+# on sentinel_enabled AT include (main.yml, conditional-include ADR-009 amendment), NOT
+# inside the file. Outside sentinel mode the include is dropped entirely (group-drop). master
+# election is done by the service scenario run_once, which passes READY master_ip/master_port —
+# destiny stays a mode-agnostic "dumb" brick.
 
-# sentinel-users.acl — ВТОРОЙ aclfile, ТОЛЬКО для sentinel-демона (отдельный perms-набор:
-# sentinel-команды). register — рестарт демона при изменении. owner/group redis, mode
-# 0640 (password-хеши). Пустой/не передан → пустой aclfile (back-compat). ДО sentinel.conf:
-# его aclfile-директива ссылается на этот файл, sentinel обязан его найти при старте.
+# ★ registers for redis_sentinel_conf/redis_sentinel_unit and their onchanges-restart MUST
+#   live IN THIS file: the per-file linter (validateTaskRefs) rejects cross-file onchanges.
+#   There is no explicit daemon-reload step: core.service (daemon_reload: auto) re-reads the
+#   unit itself BEFORE restart — hence restart goes THROUGH core.service.restarted (not raw exec).
+
+# sentinel-users.acl — a SECOND aclfile, ONLY for the sentinel daemon (a separate perms set:
+# sentinel commands). register — restart the daemon on change. owner/group redis, mode
+# 0640 (password hashes). Empty/not passed → empty aclfile (back-compat). BEFORE sentinel.conf:
+# its aclfile directive points at this file, sentinel must find it on startup.
 - name: Render sentinel-users.acl
   module: core.file.rendered
   register: redis_sentinel_acl
@@ -25,9 +25,9 @@
     vars:
       users: "${ default(input.sentinel_users, {}) }"
 
-# sentinel.conf из переданных параметров master-а. register — рестартить демон при
-# изменении. announce-ip рендерится в шаблоне per-host из .self (НЕ из vars).
-# aclfile (директива sentinel.conf) указывает на sentinel-users.acl (см. шаблон).
+# sentinel.conf from the passed master parameters. register — restart the daemon on
+# change. announce-ip is rendered in the template per-host from .self (NOT from vars).
+# aclfile (sentinel.conf directive) points at sentinel-users.acl (see template).
 - name: Render sentinel.conf
   module: core.file.rendered
   register: redis_sentinel_conf
@@ -40,26 +40,26 @@
     vars:
       master_name: "${ default(input.sentinel.master_name, 'master') }"
       master_ip:   "${ input.sentinel.master_ip }"
-      # master_port/quorum — has()?string(X):Y: then-ветка вызов string(), НЕ голый
-      # X → default() (select-chain-only) тут неприменим, оставлено тернаром.
+      # master_port/quorum — has()?string(X):Y: the then-branch calls string(), NOT bare
+      # X → default() (select-chain-only) doesn't apply here, left as a ternary.
       master_port: "${ has(input.sentinel.master_port) ? string(input.sentinel.master_port) : '6379' }"
       quorum:      "${ has(input.sentinel.quorum) ? string(input.sentinel.quorum) : '2' }"
       auth_user:   "${ default(input.sentinel.auth_user, '') }"
       auth_pass:   "${ default(input.sentinel.auth_pass, '') }"
       sentinel_config: "${ default(input.sentinel.config, {}) }"
-      # host-layout (директива B): шаблон выводит `dir` из data_dir и `aclfile`
-      # (sentinel-users.acl) из conf_dir.
+      # host-layout (directive B): the template derives `dir` from data_dir and `aclfile`
+      # (sentinel-users.acl) from conf_dir.
       data_dir:    "${ vars.redis_data_dir_eff }"
       conf_dir:    "${ vars.redis_conf_dir_eff }"
       port:        "${ vars.sentinel_port }"
       run_dir:     "${ vars.run_dir }"
       log_dir:     "${ vars.log_dir }"
 
-# Полный systemd-юнит redis-sentinel (пакет не всегда заводит его под наш конфиг).
-# register — рестарт реактивно на изменение юнита (daemon-reload при смене unit
-# core.service делает сам перед рестартом). sentinel_bin/cli_bin — путь бинарей:
-# /usr/bin при install.method=package (distro-пакет), /usr/local/bin при binary
-# (install.yml разложил их туда). Так один юнит-шаблон обслуживает обе ветки.
+# The full redis-sentinel systemd unit (the package doesn't always set it up under our config).
+# register — restart reactively on unit change (daemon-reload on unit change
+# is done by core.service itself before restart). sentinel_bin/cli_bin — binary path:
+# /usr/bin for install.method=package (distro package), /usr/local/bin for binary
+# (install.yml laid them out there). So one unit template serves both branches.
 - name: Render redis-sentinel systemd unit
   module: core.file.rendered
   register: redis_sentinel_unit
@@ -69,10 +69,10 @@
     mode: "${ vars.unit_file_mode }"
     owner: "${ vars.root_owner }"
     group: "${ vars.root_group }"
-    # has()-цепочка (НЕ default(input.install.method, …)): сам input.install может
-    # отсутствовать целиком (корень) → default() упал бы no-such-key. binary →
-    # vars.redis_bin_dir (install.yml разложил туда; тот же layout-каталог), иначе
-    # /usr/bin (distro-пакет — НЕ наш layout, в vars не выносится).
+    # has()-chain (NOT default(input.install.method, …)): input.install itself may be
+    # missing entirely (root) → default() would fail with no-such-key. binary →
+    # vars.redis_bin_dir (install.yml laid it out there; same layout dir), otherwise
+    # /usr/bin (distro package — NOT our layout, not exposed in vars).
     vars:
       sentinel_bin: "${ has(input.install) && has(input.install.method) && input.install.method == 'binary' ? vars.redis_bin_dir : '/usr/bin' }"
       cli_bin:      "${ has(input.install) && has(input.install.method) && input.install.method == 'binary' ? vars.redis_bin_dir : '/usr/bin' }"
@@ -90,10 +90,10 @@
     name: "${ vars.sentinel_service_name }"
     enabled: true
 
-# Рестарт реактивно на изменение sentinel.conf, sentinel-users.acl или юнита.
-# core.service при смене unit сам делает daemon-reload перед рестартом. ACL sentinel-
-# демона перечитывается только рестартом (отдельного hot-reload-сценария для sentinel-
-# aclfile нет — набор служебный, меняется лишь на ротации/create).
+# Restart reactively on change of sentinel.conf, sentinel-users.acl, or the unit.
+# core.service does daemon-reload itself before restart on unit change. The sentinel
+# daemon's ACL is re-read only via restart (there's no separate hot-reload scenario for the
+# sentinel aclfile — the set is service-only, changed only on rotation/create).
 - name: Restart redis-sentinel because config, ACL or unit changed
   module: core.service.restarted
   onchanges: [redis_sentinel_conf, redis_sentinel_acl, redis_sentinel_unit]

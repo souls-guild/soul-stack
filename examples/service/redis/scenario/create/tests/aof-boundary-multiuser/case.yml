@@ -1,12 +1,12 @@
-# L0-испытание create (standalone) — guard на пробелы покрытия QA 2026-06-22:
-#   - persistence: aof  → save="" + appendonly yes (пресет aof, не rdb);
-#   - memory_mb=64 (ГРАНИЦА min) → 64*75/100=48 → maxmemory "48mb" (НЕ "0mb":
-#     именно ради ненулевого результата стоит min:64, см. input.memory_mb);
-#   - maxmemory_policy НЕ задан → берётся из essence (allkeys-lru), has-guard не
-#     материализует пустой ключ;
-#   - ≥2 ACL-юзера с именами, НАРУШАЮЩИМИ порядок вставки (zeta/alpha/mike) →
-#     users рендерится MAP-ом (детерминизм порядка строк users.acl; прямой
-#     order-guard на отрендеренный файл — destiny_redis_tmpl_test.go).
+# L0 test for create (standalone) — guard against QA coverage gaps 2026-06-22:
+#   - persistence: aof  → save="" + appendonly yes (aof preset, not rdb);
+#   - memory_mb=64 (min BOUNDARY) → 64*75/100=48 → maxmemory "48mb" (NOT "0mb":
+#     exactly why min:64 exists, for a nonzero result — see input.memory_mb);
+#   - maxmemory_policy NOT set → falls back to essence (allkeys-lru), has-guard does
+#     not materialize an empty key;
+#   - ≥2 ACL users with names that VIOLATE insertion order (zeta/alpha/mike) →
+#     users renders as a MAP (deterministic line order in users.acl; direct
+#     order-guard on the rendered file — destiny_redis_tmpl_test.go).
 name: aof + memory boundary 64mb + essence policy fallback + multi-user map
 
 fixtures:
@@ -20,10 +20,10 @@ fixtures:
   vault:
     secret/redis/create:
       password: s3cr3t-redis-pass-create
-    # Per-user секреты системных юзеров (secret/redis/<inc>/users/<name>#password) —
-    # их резолвит keeper-side vault() при доливе system_acl_users в apply.input.users.
-    # ★ РЕДИЗАЙН default_admin (2026-06-30): default_admin — системный юзер
-    # внутрикластерного AUTH (auth_pass/PING шаги деплоя читают его по ветке users/<name>).
+    # Per-user secrets of system users (secret/redis/<inc>/users/<name>#password) -
+    # resolved by keeper-side vault() when merging system_acl_users into apply.input.users.
+    # ★ REDESIGN default_admin (2026-06-30): default_admin is the system user
+    # for intra-cluster AUTH (auth_pass/PING deploy steps read it via the users/<name> branch).
     secret/redis/create/users/default_admin:
       password: default-admin-secret-pass
     secret/redis/create/users/replica:
@@ -41,8 +41,8 @@ fixtures:
     secret/redis/create/users/mike:
       password: mike-secret-pass
   essence:
-    # install_method — в essence (author-context, 2026-06-28): способ установки
-    # НЕ operator-input. compute.install читает default(essence.install_method, 'binary').
+    # install_method - in essence (author context, 2026-06-28): the install method is
+    # NOT operator input. compute.install reads default(essence.install_method, 'binary').
     install_method: package
     redis_type: sentinel
     sentinel_master_name: master
@@ -67,10 +67,10 @@ fixtures:
       maxclients:       10000
       timeout:          300
 
-    # Системные ACL-юзеры redis-server + sentinel-демона (1:1 из essence/_default.yaml).
-    # ОБА ОБЯЗАТЕЛЬНЫ: guard create/sentinel.yml (assert 1b) рвёт render при пустом
-    # любом из наборов (тихий fail-open недопустим — без них репликация/sentinel↔redis
-    # AUTH сломались бы).
+    # System ACL users of redis-server + the sentinel daemon (1:1 from essence/_default.yaml).
+    # BOTH ARE MANDATORY: the create/sentinel.yml guard (assert 1b) fails the render if
+    # either set is empty (a silent fail-open is not acceptable - without them
+    # replication/sentinel<->redis AUTH would break).
     system_acl_users:
       default_admin: "~* &* +@all"
       replica:    "+psync +replconf +ping"
@@ -83,19 +83,19 @@ fixtures:
       sentinel:   "allchannels -@all +auth +client|getname +client|id +client|setname +command +hello +ping +sentinel|is-master-down-by-addr +publish +role +sentinel|get-master-addr-by-name +sentinel|master +sentinel|myid +sentinel|replicas +sentinel|sentinels"
       haproxy:    "-@all +auth +client|getname +client|id +client|setname +command +hello +ping +role +sentinel|get-master-addr-by-name +sentinel|master +sentinel|myid +sentinel|replicas +sentinel|sentinels"
   input:
-    # ★ provision выключен (default-on: опущенная секция = ВКЛЮЧЕНО; кейс деплоит на
-    # ГОТОВЫЙ roster, cloud-create не нужен) → include redis-provision.yml group-drop.
+    # ★ provision disabled (default-on: an omitted section = ENABLED; the case deploys onto
+    # a READY roster, cloud-create isn't needed) -> include redis-provision.yml group-drop.
     provision:
       enabled: false
     redis_type: sentinel
-    # version ОБЯЗАТЕЛЬНА (директива пользователя 2026-06-23): фиксированный
-    # distro-native пин (мажор < 8 → version-gate модулей не активен).
+    # version is MANDATORY (user directive 2026-06-23): a fixed
+    # distro-native pin (major < 8 -> the module version gate is not active).
     version: "7.4.1"
-    # single-host roster (1 хост) → реплик нет (sentinel size-guard = 1+0 = 1).
+    # single-host roster (1 host) -> no replicas (sentinel size-guard = 1+0 = 1).
     replicas_per_master: 0
     memory_mb: 64
     persistence: aof_1sec
-    # maxmemory_policy НЕ задан — должен прийти из essence (allkeys-lru).
+    # maxmemory_policy is NOT set - must come from essence (allkeys-lru).
     users:
       - { name: zeta, perms: "~* +@all", state: "on" }
       - { name: alpha, perms: "~app:* +@read", state: "on" }
@@ -108,9 +108,9 @@ assert:
         name: redis-server
         version: "7.4.1"
 
-    # users.acl: MAP трёх юзеров. Порядок строк гарантирует range по map (шаблон);
-    # здесь ассертим лишь СОСТАВ map-а (значения order-independent). Дизамбигуатор от
-    # redis.conf (тот же core.file.rendered) — path в params_subset.
+    # users.acl: a MAP of three users. Line order is guaranteed by ranging over the map (template);
+    # here we assert only the map's COMPOSITION (values are order-independent). The disambiguator from
+    # redis.conf (the same core.file.rendered) is the path in params_subset.
     - module: core.file.rendered
       params_subset:
         path: /etc/redis/users.acl
@@ -120,8 +120,8 @@ assert:
         group: redis
         render_context:
           vars:
-            # СИСТЕМНЫЕ (4, из essence.system_acl_users, доливаются ОБЯЗАТЕЛЬНО — guard 1b)
-            # + operator-extra zeta/alpha/mike (last-wins). Имена не пересекаются с системными.
+            # SYSTEM (4, from essence.system_acl_users, merged in MANDATORILY - guard 1b)
+            # + operator-extra zeta/alpha/mike (last-wins). Names do not collide with system ones.
             users:
               default_admin:
                 perms: "~* &* +@all"
@@ -159,7 +159,7 @@ assert:
             sid: node-solo.example.com
             covens: [create]
             choirs: []
-            # traits — registry-проекция (ADR-060), пустой объект без меток.
+            # traits - a registry projection (ADR-060), an empty object with no labels.
             traits: {}
             role: ""
             network:
@@ -169,7 +169,7 @@ assert:
           role: ""
           essence: {}
 
-    # redis.conf: ИТОГ merge() — главный guard этого кейса.
+    # redis.conf: the RESULT of merge() - the main guard of this case.
     - module: core.file.rendered
       params_subset:
         path: /etc/redis/redis.conf
@@ -190,27 +190,27 @@ assert:
               - /var/lib/redis/modules/redisearch.so
               - /var/lib/redis/modules/redistimeseries.so
             config:
-              # ★ РЕДИЗАЙН default_admin: replica→master AUTH (masteruser/
-              # masterauth) приходит ОБЫЧНЫМИ директивами config (sentinel
-              # deploy-body доливает их vault()-в-ячейке) → redis.conf range-ит
-              # их как любую директиву → статически переживают рестарт.
+              # ★ REDESIGN default_admin: replica->master AUTH (masteruser/
+              # masterauth) arrives as ORDINARY config directives (the sentinel
+              # deploy body merges them in via vault()-in-cell) -> redis.conf ranges
+              # over them like any directive -> they survive a restart statically.
               masteruser:       "default_admin"
               masterauth:       "default-admin-secret-pass"
-              # ГРАНИЦА: 64*75/100=48 → "48mb" (НЕ "0mb"). Перекрыл essence "256mb".
+              # BOUNDARY: 64*75/100=48 -> "48mb" (NOT "0mb"). Overrode essence's "256mb".
               maxmemory: "48mb"
-              # maxmemory_policy НЕ задан в input → из essence (has-guard: пустой
-              # ключ не материализован, дефолт не затёрт).
+              # maxmemory_policy is NOT set in input -> comes from essence (has-guard: an empty
+              # key is not materialized, the default is not overwritten).
               maxmemory-policy: allkeys-lru
               maxclients: 10000
               timeout: 300
-              # persistence-пресет aof: save пуст, appendonly yes.
+              # persistence preset aof: save empty, appendonly yes.
               save: ""
               appendonly: "yes"
           self:
             sid: node-solo.example.com
             covens: [create]
             choirs: []
-            # traits — registry-проекция (ADR-060), пустой объект без меток.
+            # traits - a registry projection (ADR-060), an empty object with no labels.
             traits: {}
             role: ""
             network:
@@ -223,7 +223,7 @@ assert:
   state_changes:
     redis_type: sentinel
     redis_version: "7.4.1"
-    # DRIFT-GUARD: идентичен apply.input.config (index 3).
+    # DRIFT-GUARD: identical to apply.input.config (index 3).
     redis_config:
       maxmemory: "48mb"
       maxmemory-policy: allkeys-lru

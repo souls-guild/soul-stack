@@ -1,7 +1,7 @@
 name: preserves-unrelated
 description: >
-  Миграция трогает ТОЛЬКО redis_users: остальные поля state (redis_type/redis_config/
-  redis_sentinel/namedfields) проходят насквозь без изменений.
+  The migration touches ONLY redis_users: the rest of the state fields (redis_type/redis_config/
+  redis_sentinel/namedfields) pass through unchanged.
 
 state_before:
   redis_type: "sentinel"

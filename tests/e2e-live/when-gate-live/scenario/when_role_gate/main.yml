@@ -1,30 +1,32 @@
 name: when_role_gate
 description: >-
-  FC-5: per-task when-gating по СВЕЖЕМУ register на реальном soul-флоте.
-  probe `redis-cli role` каждого хоста (register: redis_role) + действие БЕЗ
-  where: (уходит на ВСЕ хосты прогона), gated Soul-side
-  `when: register.redis_role.stdout == 'master'`. На master when=true → задача
-  исполняется (changed_when: false → TASK_STATUS_OK), на репликах when=false →
-  Soul эмитит TASK_STATUS_SKIPPED ДО Apply (mod.Apply не зовётся).
+  FC-5: per-task when-gating on a FRESH register on a real soul fleet.
+  probe `redis-cli role` on each host (register: redis_role) + an action WITHOUT
+  where: (goes to ALL hosts of the run), gated Soul-side
+  `when: register.redis_role.stdout == 'master'`. On master when=true → the task
+  executes (changed_when: false → TASK_STATUS_OK), on replicas when=false →
+  Soul emits TASK_STATUS_SKIPPED BEFORE Apply (mod.Apply is not called).
 
-  ОБА шага — в ОДНОМ Passage 0 (ADR-056:85 narrow-fix): register-зависимый
-  `when:` НЕ расщепляет Passage (flow-control НЕ passage-определяющий), поэтому
-  Soul видит register same-passage в своём ApplyRequest и вычисляет when. Это и
-  есть смысл фикса FC-5 (до него when уводил потребителя в Passage 1 → Soul
-  cross-passage register не видел → no such key).
+  BOTH steps are in ONE Passage 0 (ADR-056:85 narrow-fix): a register-dependent
+  `when:` does NOT split the Passage (flow-control is NOT passage-defining), so
+  Soul sees the register in the same passage in its ApplyRequest and evaluates
+  when. This is exactly the point of the FC-5 fix (before it, when pushed the
+  consumer into Passage 1 → Soul didn't see the cross-passage register → no
+  such key).
 
-  Ключевое отличие от where (staged-probe-live / update_acl): where режет хост
-  на уровне Keeper-targeting (apply_runs → no_match, задачи нет вовсе), а when
-  отправляет задачу на хост и решает Soul-side — per-task SKIPPED-событие в
-  audit_log, а не отсутствие apply_runs-строки.
+  Key difference from where (staged-probe-live / update_acl): where cuts the
+  host at the Keeper-targeting level (apply_runs → no_match, the task doesn't
+  exist at all), while when sends the task to the host and decides Soul-side —
+  a per-task SKIPPED event in audit_log, rather than the absence of an
+  apply_runs row.
 
-# Фокус-сценарий: state не меняется (commit state — отдельный инвариант).
+# Focus scenario: state doesn't change (commit state is a separate invariant).
 state_changes: {}
 
 tasks:
-  # ── probe роли per-host РЕАЛЬНЫМ redis (Passage 0) ────────────────────────
-  # `redis-cli role | head -1 | tr -d '\n'` — register.redis_role.stdout без
-  # trailing newline (cmd-модуль stdout НЕ тримит): чистое 'master' / 'slave'.
+  # ── per-host role probe against a REAL redis (Passage 0) ──────────────────
+  # `redis-cli role | head -1 | tr -d '\n'` — register.redis_role.stdout without
+  # a trailing newline (the cmd module does NOT trim stdout): a clean 'master' / 'slave'.
   - name: Detect actual redis role per host
     module: core.cmd.shell
     register: redis_role
@@ -32,15 +34,16 @@ tasks:
     params:
       cmd: "redis-cli role | head -1 | tr -d '\\n'"
 
-  # ── действие на ВСЕ хосты, gated Soul-side по when (ТОТ ЖЕ Passage 0) ─────
-  # БЕЗ where: задача доходит до каждого хоста прогона. `when` ссылается на
-  # register.redis_role, НО flow-control НЕ passage-определяющий (ADR-056:85
-  # narrow-fix) → задача остаётся в Passage 0 ВМЕСТЕ с probe. keeper протягивает
-  # when как CEL-СТРОКУ в RenderedTask.when (не вычисляет Keeper-side — register
-  # известен только Soul-у), Soul видит register same-passage в своём ApplyRequest
-  # и вычисляет when per-host: master → исполняет (changed_when: false → OK),
-  # реплики → SKIPPED. Маркер-файл — независимое доказательство, что Apply реально
-  # шёл на master и НЕ шёл на репликах.
+  # ── action on ALL hosts, gated Soul-side by when (SAME Passage 0) ─────────
+  # WITHOUT where: the task reaches every host of the run. `when` references
+  # register.redis_role, BUT flow-control is NOT passage-defining (ADR-056:85
+  # narrow-fix) → the task stays in Passage 0 TOGETHER with the probe. keeper
+  # passes when through as a CEL STRING in RenderedTask.when (doesn't evaluate
+  # it Keeper-side — the register is known only to Soul), Soul sees the
+  # register in the same passage in its ApplyRequest and evaluates when
+  # per-host: master → executes (changed_when: false → OK), replicas →
+  # SKIPPED. The marker file is independent proof that Apply actually ran on
+  # master and did NOT run on the replicas.
   - name: Act on the current master only (when-gated)
     module: core.cmd.shell
     when: "register.redis_role.stdout == 'master'"

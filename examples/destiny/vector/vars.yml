@@ -1,47 +1,47 @@
-# vars.yml — destiny-локалы vector (docs/destiny/vars.md): инварианты, ОДИНАКОВЫЕ
-# для всех incarnation и НЕ переопределяемые снаружи (не input — граница «контракт vs
-# внутренности»). Резолвятся ОДИН раз на destiny-проход (per-host) до задач; ссылка на
-# input.* разрешена (vars вычисляются ПОСЛЕ валидации input). Файл закоммичен в git
-# destiny-репо — секретов тут нет.
+# vars.yml — vector destiny locals (docs/destiny/vars.md): invariants, the SAME
+# for all incarnations and NOT overridable from outside (not input — the "contract vs
+# internals" boundary). Resolved ONCE per destiny pass (per-host) before tasks; referencing
+# input.* is allowed (vars are computed AFTER input validation). File is committed to the
+# destiny repo git — no secrets here.
 
-# ── Имя systemd-сервиса vector (директива «имя сервиса в vars, ВЕЗДЕ») ──────────
-# ИНВАРИАНТ (vars, не input): имя юнита — контракт между unit-файлом,
-# core.service.running/restarted и SyslogIdentifier шаблона. Совпадение с именем
-# бинаря (vector) случайно.
+# ── vector systemd service name ("service name lives in vars, EVERYWHERE" directive) ──────────────
+# INVARIANT (vars, not input): the unit name is a contract between the unit file,
+# core.service.running/restarted and the template's SyslogIdentifier. Match with the
+# binary name (vector) is coincidental.
 service_name: vector
 
-# ── Rust-триплет arch для URL и пути внутри tarball-а ───────────────────────────
-# ИНВАРИАНТ (vars, не input): Vector публикует релизы с Rust-target-триплетом в имени
-# (vector-<v>-<arch>-unknown-linux-gnu.tar.gz), а не amd64/arm64 как Prometheus-
-# экспортеры. soulprint.self.os.arch отдаёт amd64/arm64 (proto soulprint.proto) —
-# маппим в x86_64/aarch64. Объявлено ОДНИМ var: и URL (install.yml), и путь бинаря
-# внутри распакованного каталога (src_bin ниже) читают одно значение. Неизвестный
-# arch → пустая строка (URL соберётся битым, fetch честно упадёт — не наш кейс:
-# soulprint даёт только amd64/arm64).
+# ── Rust arch triplet for URL and paths inside the tarball ───────────────────────────
+# INVARIANT (vars, not input): Vector publishes releases with a Rust target triplet in the name
+# (vector-<v>-<arch>-unknown-linux-gnu.tar.gz), not amd64/arm64 like Prometheus
+# exporters. soulprint.self.os.arch returns amd64/arm64 (proto soulprint.proto) —
+# we map it to x86_64/aarch64. Declared as ONE var: both the URL (install.yml) and the binary
+# path inside the extracted directory (src_bin below) read the same value. Unknown
+# arch → empty string (URL ends up malformed, fetch fails honestly — not our case:
+# soulprint only gives amd64/arm64).
 arch_triplet: "${ soulprint.self.os.arch == 'arm64' ? 'aarch64-unknown-linux-gnu' : (soulprint.self.os.arch == 'amd64' ? 'x86_64-unknown-linux-gnu' : '') }"
 
-# ── Артефакт-пути во временном каталоге (директива «download path в vars») ───────
-# ИНВАРИАНТ (vars, не input): tarball скачивается в /tmp и распаковывается рядом; /tmp
-# — фиксированный staging, оператору менять незачем. Имена зависят от input.version
-# (vars вычисляются после валидации input). install.yml берёт ${ vars.tarball_path }
-# (fetch.path / extract.path) и ${ vars.extract_dir } (extract.dest).
+# ── Artifact paths in the temp directory ("download path in vars" directive) ───────
+# INVARIANT (vars, not input): the tarball is downloaded to /tmp and extracted next to it; /tmp
+# is a fixed staging area, no need for the operator to change it. Names depend on input.version
+# (vars are computed after input validation). install.yml takes ${ vars.tarball_path }
+# (fetch.path / extract.path) and ${ vars.extract_dir } (extract.dest).
 tarball_path: "${ '/tmp/vector-' + input.version + '.tar.gz' }"
 extract_dir:  "${ '/tmp/vector-' + input.version }"
 
-# ── Путь бинаря vector (один источник правды на ВСЕ ссылки) ──────────────────────
-# Целевой путь установленного бинаря. Задачи берут ${ vars.bin_path }, а unit-шаблон
-# читает file-var НАПРЯМУЮ как `.vars.bin_path` (render_context.vars несёт file-vars,
-# passthrough через params.vars не нужен).
+# ── vector binary path (single source of truth for ALL references) ──────────────────
+# Target path of the installed binary. Tasks take ${ vars.bin_path }, and the unit template
+# reads the file-var DIRECTLY as `.vars.bin_path` (render_context.vars carries file-vars,
+# no need for passthrough via params.vars).
 bin_path: "${ input.bin_dir + '/vector' }"
 
-# src_bin — путь бинаря ВНУТРИ распакованного релиза. Раскладка GitHub Releases Vector:
-# tarball разворачивается в подкаталог vector-<triplet>/bin/vector (Rust-триплет arch,
-# см. arch_triplet). service.yml берёт ${ vars.src_bin } как core.file.present.src.
+# src_bin — the binary path INSIDE the extracted release. Vector's GitHub Releases layout:
+# the tarball unpacks into subdirectory vector-<triplet>/bin/vector (Rust arch triplet,
+# see arch_triplet). service.yml takes ${ vars.src_bin } as core.file.present.src.
 src_bin: "${ vars.extract_dir + '/vector-' + vars.arch_triplet + '/bin/vector' }"
 
-# ── Каталог и путь конфигурации vector.yaml (директива «имя сервиса/пути в vars») ─
-# ИНВАРИАНТ: Vector читает единый config-файл (--config-yaml <path>). config_dir —
-# каталог конфигурации (создаётся account.yml core.file.directory), config_path —
-# сам файл (рендерится service.yml core.file.rendered, читается ExecStart юнита).
+# ── vector.yaml config directory and path ("service name/paths in vars" directive) ─
+# INVARIANT: Vector reads a single config file (--config-yaml <path>). config_dir —
+# config directory (created by account.yml core.file.directory), config_path —
+# the file itself (rendered by service.yml core.file.rendered, read by the unit's ExecStart).
 config_dir:  /etc/vector
 config_path: /etc/vector/vector.yaml

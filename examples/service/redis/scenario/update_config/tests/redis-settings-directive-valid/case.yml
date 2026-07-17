@@ -1,11 +1,11 @@
-# L0-испытание version-aware валидатора имён директив redis_settings в update_config
-# (assert, #6) — ПОЗИТИВ. essence несёт каталог redis_directives с серией 7.2;
-# РАЗВЁРНУТАЯ версия (incarnation.state.redis_version) = 7.2.4 → серия 7.2.
-# redis_settings содержит ВАЛИДНОЕ имя (appendfsync ∈ каталог[7.2]) → assert проходит,
-# директива доезжает до hot-reload (community.redis.config) и итогового redis_config.
+# L0 test of the version-aware validator for redis_settings directive names in update_config
+# (assert, #6) - POSITIVE case. essence carries the redis_directives catalog with the 7.2 series;
+# the DEPLOYED version (incarnation.state.redis_version) = 7.2.4 → series 7.2.
+# redis_settings contains a VALID name (appendfsync ∈ catalog[7.2]) → the assert passes,
+# the directive makes it through to hot-reload (community.redis.config) and the final redis_config.
 #
-# Парный к redis-settings-directive-unknown (там опечатка рвёт render). Покрывает
-# true-ветку assert и доказывает, что валидатор не ложно-блокирует валидную директиву.
+# Paired with redis-settings-directive-unknown (there a typo breaks the render). Covers
+# the assert's true branch and proves the validator doesn't false-block a valid directive.
 name: redis_settings with a valid directive name passes the catalog assert
 
 fixtures:
@@ -16,7 +16,7 @@ fixtures:
 
   essence:
     memory_reserve_percent: 75
-    # host-layout — в essence (v11→v12, Вариант A): вынесен из state, повторный прогон читает отсюда.
+    # host-layout - in essence (v11→v12, Variant A): moved out of state, a repeat run reads it from here.
     conf_dir: /etc/redis
     data_dir: /var/lib/redis
     modules_base_url: "https://artifacts.example.com/redis/modules"
@@ -55,29 +55,29 @@ fixtures:
     redis_users: []
 
   input:
-    # Дельта оператора: ВАЛИДНАЯ passthrough-директива (∈ каталог[7.2]). Перекрывает
-    # appendfsync last-wins; assert пропускает, директива доезжает до hot-reload.
+    # Operator delta: a VALID passthrough directive (∈ catalog[7.2]). Overrides
+    # appendfsync last-wins; the assert lets it through, the directive makes it to hot-reload.
     redis_settings:
       appendfsync: everysec
 
   vault:
     secret/redis/update_config:
       password: upd-redis-pass-16chars
-    # ★ РЕДИЗАЙН default_admin: системный admin-юзер — пароль из ветки users/default_admin
-    # (masterauth-долив в apply.input.config + AUTH community.redis.config).
+    # ★ default_admin REDESIGN: the system admin user - password from the users/default_admin branch
+    # (masterauth top-up in apply.input.config + AUTH community.redis.config).
     secret/redis/update_config/users/default_admin:
       password: default-admin-secret-pass
 
 assert:
   task_present:
-    # hot-reload несёт перевычисленный merged config с долитой passthrough-директивой.
-    # ★ РЕДИЗАЙН default_admin: AUTH под default_admin (username + его Vault-пароль).
+    # hot-reload carries the recomputed merged config with the passthrough directive topped up.
+    # ★ default_admin REDESIGN: AUTH as default_admin (username + its Vault password).
     - module: community.redis.config
       params_subset:
         addr: "127.0.0.1:6379"
         username: default_admin
         password: default-admin-secret-pass
-        # rewrite=false (NIM-53): redis.conf шага 1 — источник истины файла.
+        # rewrite=false (NIM-53): step 1's redis.conf is the file's source of truth.
         rewrite: false
         config:
           maxmemory: "768mb"
@@ -87,7 +87,7 @@ assert:
           appendfsync: everysec
 
   state_changes:
-    # state.redis_config ≡ config hot-reload (один compute): passthrough долился last-wins.
+    # state.redis_config ≡ config hot-reload (a single compute): passthrough was topped up last-wins.
     redis_config:
       maxmemory: "768mb"
       maxmemory-policy: allkeys-lru

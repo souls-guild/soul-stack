@@ -1,24 +1,24 @@
 kind: cloud_driver
-protocol_version: 1                    # compat-флаг plugin-протокола (ADR-020(c))
-namespace: cloud                       # пример third-party коллекции CloudDriver
+protocol_version: 1                    # plugin protocol compat flag (ADR-020(c))
+namespace: cloud                       # example third-party CloudDriver collection
 name: openstack
 
-# Closed enum по ADR-020(f).
-# vault_access НЕ нужен: credentials резолвит Keeper (A-flow, docs/keeper/cloud.md)
-# и передаёт plain в CreateRequest.credentials — драйвер в Vault НЕ ходит.
+# Closed enum per ADR-020(f).
+# vault_access NOT needed: credentials are resolved by Keeper (A-flow, docs/keeper/cloud.md)
+# and passed as plain in CreateRequest.credentials — the driver does not talk to Vault.
 required_capabilities:
-  - network_outbound                   # вызовы OpenStack API (Keystone + Nova)
+  - network_outbound                   # calls to the OpenStack API (Keystone + Nova)
 
-# CloudDriver работает на keeper-стороне и не трогает локальные ресурсы host-а —
-# объявляем пустой список (ADR-020(g), пример из docs/keeper/plugins.md).
+# CloudDriver runs keeper-side and does not touch local host resources —
+# declaring an empty list (ADR-020(g), example from docs/keeper/plugins.md).
 side_effects: []
 
 spec:
-  provider_kind: openstack             # семейство провайдера (OpenStack / Nova compute)
-  # JSON Schema draft 2020-12 (формат для kind: cloud_driver — см.
-  # docs/keeper/plugins.md → spec.profile_schema). Региона нет в required:
-  # некоторые приватные OpenStack-облака запускаются без regions (один Keystone
-  # на одно облако), в таких случаях region остаётся пустым.
+  provider_kind: openstack             # provider family (OpenStack / Nova compute)
+  # JSON Schema draft 2020-12 (format for kind: cloud_driver — see
+  # docs/keeper/plugins.md → spec.profile_schema). Region is not in required:
+  # some private OpenStack clouds run without regions (a single Keystone
+  # per cloud), in which case region stays empty.
   profile_schema:
     type: object
     required: [image_id, flavor_id, network_id]
@@ -26,32 +26,32 @@ spec:
       region:
         type: string
         description: |
-          Имя региона OpenStack (RegionName в Keystone-каталоге). Опционально:
-          приватные облака без regions оставляют поле пустым.
+          OpenStack region name (RegionName in the Keystone catalog). Optional:
+          private clouds without regions leave the field empty.
       availability_zone:
         type: string
-        description: Compute AZ внутри региона (nova:default, nova:az1, ...).
+        description: Compute AZ within the region (nova:default, nova:az1, ...).
       image_id:
         type: string
-        description: ID образа в Glance.
+        description: Image ID in Glance.
       flavor_id:
         type: string
-        description: ID flavor-а (тип VM) в Nova.
+        description: Flavor ID (VM type) in Nova.
       network_id:
         type: string
-        description: ID сети Neutron, к которой подключается основной интерфейс VM.
+        description: Neutron network ID that the VM's primary interface attaches to.
       key_name:
         type: string
-        description: Имя SSH-keypair в Nova (опционально — bootstrap-доступ).
+        description: SSH keypair name in Nova (optional — bootstrap access).
       security_groups:
         type: array
         items:
           type: string
-        description: Имена security-groups Neutron, навешиваемых на VM.
+        description: Names of Neutron security groups attached to the VM.
       labels:
         type: object
         additionalProperties:
           type: string
         description: |
-          Метки VM, складываются в Nova server.metadata. Ключ
-          `soulstack-run` используется драйвером для идемпотентности.
+          VM labels, stored in Nova server.metadata. The `soulstack-run` key
+          is used by the driver for idempotency.

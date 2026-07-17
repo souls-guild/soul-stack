@@ -1,14 +1,16 @@
 name: stagger
 description: >-
-  Staggered cross-host барьер. Один core.cmd.shell-task на ВСЕХ хостах
-  incarnation: каждый хост спит ВРЕМЯ = (номер в SID) * 6 секунд, затем пишет
-  done-маркер с временем. redis-01 ~6s, redis-10 ~60s. params host-инвариантны
-  (длительность вычисляет сам shell из hostname), как требует pilot-ограничение.
+  Staggered cross-host barrier. One core.cmd.shell task on ALL incarnation
+  hosts: each host sleeps for TIME = (number in SID) * 6 seconds, then writes
+  a done marker with the timestamp. redis-01 ~6s, redis-10 ~60s. params are
+  host-invariant (the shell itself computes the duration from hostname), as
+  the pilot constraint requires.
 
-  Валидация (ТЕСТ B): поллингом во время прогона ловим apply_runs, где часть
-  хостов уже success (короткий sleep), часть ещё applying/claimed (длинный
-  sleep). incarnation держится в applying пока не закроются ВСЕ; state
-  коммитится один раз (single-winner) после завершения последнего хоста.
+  Validation (TEST B): polling during the run catches apply_runs where some
+  hosts already succeeded (short sleep) while others are still
+  applying/claimed (long sleep). The incarnation stays in applying until ALL
+  hosts finish; state is committed once (single-winner) after the last host
+  completes.
 
 state_changes:
   - set: last_run
@@ -21,10 +23,10 @@ tasks:
     on: ["${ incarnation.name }"]
     module: core.cmd.shell
     params:
-      # Номер хоста: последние цифры hostname (lr-07 -> 7). Спим num*6 сек.
-      # ВНИМАНИЕ: в cmd НЕЛЬЗЯ использовать shell ${VAR} — маркер ${ } = CEL-
-      # интерполяция (ADR-010), коллизия. Поэтому только $VAR без фигурных скобок
-      # и без ${VAR:-default}; число берётся напрямую, default через ||.
+      # Host number: trailing digits of hostname (lr-07 -> 7). Sleeps num*6 sec.
+      # WARNING: cmd MUST NOT use shell ${VAR} — the ${ } marker means CEL
+      # interpolation (ADR-010), collision. So only $VAR without braces
+      # and no ${VAR:-default}; the number is taken directly, default via ||.
       cmd: >-
         N=$(hostname | grep -oE '[0-9]+' | head -1 | sed 's/^0*//' || echo 1);
         test -n "$N" || N=1;

@@ -1,50 +1,50 @@
-# L0-испытание create в режиме cluster (redis-консолидация, honest hash-slot
-# Redis Cluster). Multi-host roster (fixtures.hosts) из 3 хостов: shards=3,
-# replicas_per_shard=0 → топология ровно 3*(1+0)=3 (size-guard проходит).
+# L0 test for create in cluster mode (redis consolidation, honest hash-slot
+# Redis Cluster). Multi-host roster (fixtures.hosts) of 3 hosts: shards=3,
+# replicas_per_shard=0 → topology exactly 3*(1+0)=3 (size-guard passes).
 #
-# Render-only, герметично. Диспетчер create инклудит standalone.yml + cluster.yml;
-# на cluster-прогоне standalone-ветка гасится placeholder-skip-ом (static-when
-# input.redis_type != 'standalone'), cluster-ветка рендерится. size-guard теперь
-# assert: (keeper-side render-time precondition, ADR-009 amendment 2026-06-23): он
-# НЕ emit RenderedTask. shards-guard (core.cmd.shell, has(input.shards)) УБРАН —
-# обязательность shards теперь декларативна через required_when в main.yml
-# (input.redis_type == 'cluster'): пропуск рвёт прогон на input-валидации ДО render
-# (см. cluster-shards-guard-missing). Обе задачи (assert size-guard + удалённый
-# shards-guard) НЕ занимают позиций в плане → задачи cluster-ветки сдвинуты ещё на −1.
-# Ключевые индексы (актуальные asserted-значения; binary-под-ветка install.yml — три
-# core.file.present вместо одного core.cmd.shell, +2 для всего, что ПОСЛЕ неё):
-#   index 0  — mode-guard диспетчера (core.cmd.shell, no-op на реализованном режиме);
-#   index 2  — cluster destiny: core.pkg.installed (redis-server) — ДО binary-под-ветки,
-#              +2 его не касается;
-#   index 18 — cluster destiny: redis.conf (core.file.rendered, cluster-директивы);
-#   index 33 — cluster-build (community.redis.cluster action create, nodes-MAP).
+# Render-only, hermetic. The create dispatcher includes standalone.yml + cluster.yml;
+# on a cluster run the standalone branch is suppressed by a placeholder-skip (static-when
+# input.redis_type != 'standalone'), the cluster branch is rendered. size-guard is now
+# assert: (keeper-side render-time precondition, ADR-009 amendment 2026-06-23): it
+# does NOT emit a RenderedTask. shards-guard (core.cmd.shell, has(input.shards)) was REMOVED —
+# the requiredness of shards is now declarative via required_when in main.yml
+# (input.redis_type == 'cluster'): omitting it breaks the run at input validation BEFORE render
+# (see cluster-shards-guard-missing). Neither task (assert size-guard nor the removed
+# shards-guard) occupies a slot in the plan → cluster-branch tasks are shifted by another −1.
+# Key indices (current asserted values; the binary sub-branch of install.yml — three
+# core.file.present instead of one core.cmd.shell, +2 for everything AFTER it):
+#   index 0  — dispatcher mode-guard (core.cmd.shell, no-op on the implemented mode);
+#   index 2  — cluster destiny: core.pkg.installed (redis-server) — BEFORE the binary sub-branch,
+#              +2 does not affect it;
+#   index 18 — cluster destiny: redis.conf (core.file.rendered, cluster directives);
+#   index 33 — cluster-build (community.redis.cluster action create, nodes MAP).
 #
-# Что ассертим (критерий приёмки слайса):
+# What we assert (slice acceptance criteria):
 #   1. size-guard PASS: assert that[0] (size(hosts)==shards*(1+replicas), 3==3*(1+0))
-#      → true → render проходит, cluster-build на месте; провал ловит mismatch-кейс.
-#   2. HOST-ИНВАРИАНТНЫЕ cluster-директивы в render_context.vars.config: cluster-enabled
-#      yes / cluster-config-file nodes.conf / cluster-node-timeout (input или 5000).
-#      cluster-announce-ip в config НЕТ — он per-host и рендерится в .tmpl из
-#      .self.network.primary_ip (доказательство per-host announce — отдельный
-#      destiny_redis_tmpl_test.go, см. ниже).
-#   3. nodes-MAP детерминирован: ключ=SID (сортируется в плагине), addr=primary_ip
-#      каждого хоста + ":6379". Форма merge(soulprint.hosts.map(...)).
-#   4. plugin community.redis.cluster в плане (action create, replicas_per_shard).
+#      → true → render succeeds, cluster-build is present; failure is caught by the mismatch case.
+#   2. HOST-INVARIANT cluster directives in render_context.vars.config: cluster-enabled
+#      yes / cluster-config-file nodes.conf / cluster-node-timeout (input or 5000).
+#      There is NO cluster-announce-ip in config — it is per-host and is rendered in the .tmpl from
+#      .self.network.primary_ip (proof of per-host announce is a separate
+#      destiny_redis_tmpl_test.go, see below).
+#   3. nodes MAP is deterministic: key=SID (sorted in the plugin), addr=primary_ip
+#      of each host + ":6379". Form merge(soulprint.hosts.map(...)).
+#   4. plugin community.redis.cluster is in the plan (action create, replicas_per_shard).
 #
-# ВНИМАНИЕ L0-ограничение: apply.input host-инвариантен в пилоте (резолвится на
-# ПЕРВОМ targeted-хосте, resolveApplyInput) → render_context здесь несёт self
-# первого по SID хоста (node-a). Per-host значения (announce-ip) НЕ протаскиваются
-# через apply.input.config, а рендерятся в шаблоне из .self КАЖДОГО хоста (этот
-# слой L0-trial хранит только для первого хоста; per-host корректность доказана
-# прямым tmpl-рендером в keeper/internal/render/destiny_redis_tmpl_test.go).
-# nodes-MAP, наоборот, строится из ВСЕГО roster-а (soulprint.hosts) и несёт адреса
-# всех трёх хостов.
+# NOTE the L0 limitation: apply.input is host-invariant in the pilot (resolved on the
+# FIRST targeted host, resolveApplyInput) → render_context here carries self of the
+# first host by SID (node-a). Per-host values (announce-ip) are NOT threaded
+# through apply.input.config, but are rendered in the template from .self of EACH host (this
+# L0-trial layer only stores the first host; per-host correctness is proven by a
+# direct tmpl render in keeper/internal/render/destiny_redis_tmpl_test.go).
+# The nodes MAP, in contrast, is built from the WHOLE roster (soulprint.hosts) and carries the
+# addresses of all three hosts.
 name: cluster create builds deterministic nodes map and cluster directives
 
 fixtures:
   default_destiny_source: "file://../../destiny/{name}"
-  # Multi-host roster: 3 хоста, порядок в YAML намеренно не отсортирован
-  # (b, c, a) — harness и nodes-MAP обязаны отсортировать по SID.
+  # Multi-host roster: 3 hosts, the order in YAML is deliberately not sorted
+  # (b, c, a) — the harness and the nodes MAP must sort by SID.
   hosts:
     - sid: node-b.example.com
       covens: [create, redis]
@@ -64,10 +64,10 @@ fixtures:
   vault:
     secret/redis/create:
       password: s3cr3t-redis-pass-create
-    # Per-user секреты системных юзеров (secret/redis/<inc>/users/<name>#password) —
-    # их резолвит keeper-side vault() при доливе system_acl_users в apply.input.users.
-    # ★ РЕДИЗАЙН default_admin (2026-06-30): default_admin — системный юзер внутрикластерного
-    # AUTH (PING/cluster-build/masterauth деплоя читают его пароль той же ветки users/<name>).
+    # Per-user secrets of system users (secret/redis/<inc>/users/<name>#password) —
+    # resolved by keeper-side vault() when topping up system_acl_users into apply.input.users.
+    # ★ REDESIGN default_admin (2026-06-30): default_admin — the system user for intra-cluster
+    # AUTH (PING/cluster-build/masterauth of the deploy read its password from the same users/<name> branch).
     secret/redis/create/users/default_admin:
       password: default-admin-secret-pass
     secret/redis/create/users/replica:
@@ -79,8 +79,8 @@ fixtures:
     secret/redis/create/users/haproxy:
       password: haproxy-sys-secret-pass
   essence:
-    # install_method — в essence (author-context, 2026-06-28): способ установки
-    # НЕ operator-input. compute.install читает default(essence.install_method, 'binary').
+    # install_method — in essence (author-context, 2026-06-28): install method is
+    # NOT operator-input. compute.install reads default(essence.install_method, 'binary').
     install_method: package
     redis_type: cluster
     modules_base_url: "https://artifacts.example.com/redis/modules"
@@ -104,11 +104,11 @@ fixtures:
       maxclients:       10000
       timeout:          300
 
-    # Системные ACL-юзеры redis-server (1:1 из essence/_default.yaml). ОБЯЗАТЕЛЬНЫ:
-    # guard create/cluster.yml (assert 1b) рвёт render при пустом system_acl_users
-    # (тихий fail-open недопустим — без них репликация/health-check сломались бы).
-    # ★ РЕДИЗАЙН default_admin (2026-06-30): default_admin — системный юзер полного доступа
-    # (~* &* +@all), под ним внутрикластерный AUTH cluster (заменил requirepass-default).
+    # System ACL users of redis-server (1:1 from essence/_default.yaml). REQUIRED:
+    # the create/cluster.yml guard (assert 1b) breaks the render if system_acl_users is empty
+    # (silent fail-open is unacceptable — without them replication/health-check would break).
+    # ★ REDESIGN default_admin (2026-06-30): default_admin — the full-access system user
+    # (~* &* +@all), used for intra-cluster AUTH of cluster (replaced the requirepass default).
     system_acl_users:
       default_admin: "~* &* +@all"
       replica:    "+psync +replconf +ping"
@@ -116,38 +116,38 @@ fixtures:
       sentinel:   "allchannels +multi +slaveof +ping +exec +subscribe +config|rewrite +role +publish +info +client|setname +client|kill +script|kill"
       haproxy:    "-@all +auth +client|getname +client|id +client|setname +command +hello +ping +role +info +cluster|info"
   input:
-    # ★ provision выключен (default-on: опущенная секция = ВКЛЮЧЕНО; кейс деплоит на
-    # ГОТОВЫЙ roster, cloud-create не нужен) → include redis-provision.yml group-drop.
+    # ★ provision is disabled (default-on: an omitted section = ENABLED; the case deploys onto a
+    # READY roster, cloud-create is not needed) → include redis-provision.yml group-drop.
     provision:
       enabled: false
     redis_type: cluster
-    # version — фикс-enum выкаченных в Nexus сборок (мажор < 8 → version-gate модулей
-    # не активен). install_method=package ЯВНО (default редизайна — binary): кейс
-    # изолирует cluster-раскладку от install-модели, асерт остаётся на core.pkg.installed.
+    # version — a fixed enum of Nexus-published builds (major < 8 → the module version-gate
+    # is not active). install_method=package EXPLICITLY (redesign default is binary): the case
+    # isolates the cluster layout from the install model, the assert stays on core.pkg.installed.
     version: "7.4.1"
     shards: 3
     replicas_per_master: 0
     cluster_node_timeout: 5000
 
 assert:
-  # size-guard — assert: (3 == 3*(1+0) → render проходит, в план НЕ эмитится).
-  # Провал size-guard (mismatch) ловит cluster-size-guard-mismatch через
-  # expect_render_error; пропуск shards — cluster-shards-guard-missing.
+  # size-guard — assert: (3 == 3*(1+0) → render succeeds, not emitted into the plan).
+  # A size-guard failure (mismatch) is caught by cluster-size-guard-mismatch via
+  # expect_render_error; omitting shards — cluster-shards-guard-missing.
   task_present:
-    # ── cluster destiny: пакет (mode-агностичный install ДО ветвления) ──────
+    # ── cluster destiny: package (mode-agnostic install BEFORE branching) ──────
     - module: core.pkg.installed
       params_subset:
         name: redis-server
         version: "7.4.1"
 
-    # ── cluster destiny: redis.conf с cluster-директивами ───────────────────
-    # config-map несёт базовый merge + HOST-ИНВАРИАНТНЫЕ cluster-директивы
-    # (cluster-enabled/cluster-config-file/cluster-node-timeout). cluster-announce-ip
-    # в config НЕТ — это per-host директива, её рендерит redis.conf.tmpl из
-    # .self.network.primary_ip (см. destiny_redis_tmpl_test.go: per-host announce).
-    # render_context.self здесь = первый по SID хост (node-a, host-инвариант
-    # apply.input в пилоте), но СЛОЙ .tmpl на Soul-е возьмёт self КАЖДОГО хоста.
-    # Дизамбигуатор от users.acl/hardening (тот же core.file.rendered) — path.
+    # ── cluster destiny: redis.conf with cluster directives ───────────────────
+    # the config map carries the base merge + HOST-INVARIANT cluster directives
+    # (cluster-enabled/cluster-config-file/cluster-node-timeout). There is NO
+    # cluster-announce-ip in config — it's a per-host directive, rendered by redis.conf.tmpl from
+    # .self.network.primary_ip (see destiny_redis_tmpl_test.go: per-host announce).
+    # render_context.self here = the first host by SID (node-a, apply.input is
+    # host-invariant in the pilot), but the .tmpl LAYER on Soul will take self of EACH host.
+    # Disambiguator from users.acl/hardening (the same core.file.rendered) — path.
     - module: core.file.rendered
       params_subset:
         path: /etc/redis/redis.conf
@@ -168,11 +168,11 @@ assert:
               - /var/lib/redis/modules/redisearch.so
               - /var/lib/redis/modules/redistimeseries.so
             config:
-              # ★ РЕДИЗАЙН default_admin: replica→master AUTH (masteruser/masterauth)
-              # приходит ОБЫЧНЫМИ директивами config (cluster deploy-body доливает их
-              # vault()-в-ячейке) → redis.conf range-ит их как любую директиву → статически
-              # переживают рестарт. Доливаются ВСЕГДА (failover-safe; при replicas=0 инертны,
-              # но рендерятся симметрично — без per-replicas-ветвления).
+              # ★ REDESIGN default_admin: replica→master AUTH (masteruser/masterauth)
+              # arrives as REGULAR config directives (the cluster deploy-body tops them up
+              # via a vault()-in-cell) → redis.conf ranges over them like any directive → they
+              # statically survive a restart. ALWAYS topped up (failover-safe; inert when
+              # replicas=0, but rendered symmetrically — no per-replicas branching).
               masteruser:       "default_admin"
               masterauth:       "default-admin-secret-pass"
               maxmemory:        "256mb"
@@ -188,7 +188,7 @@ assert:
             sid: node-a.example.com
             covens: [create, redis]
             choirs: []
-            # traits — registry-проекция (ADR-060), пустой объект без меток.
+            # traits — a registry projection (ADR-060), an empty object with no labels.
             traits: {}
             role: ""
             network:
@@ -199,15 +199,15 @@ assert:
           essence: {}
 
     # ── cluster-build (community.redis.cluster) ─────────────────────────────
-    # nodes-MAP: ключ=SID, addr=primary_ip+":6379". Детерминирован по SID.
-    # Единственная community.redis.cluster в плане → дизамбигуатор не нужен.
+    # nodes MAP: key=SID, addr=primary_ip+":6379". Deterministic by SID.
+    # The only community.redis.cluster in the plan → no disambiguator needed.
     - module: community.redis.cluster
       params_subset:
         action: create
         replicas_per_shard: 0
-        # ★ РЕДИЗАЙН default_admin: коннект к каждой ноде под ACL-юзером default_admin
-        # (username → AUTH). Прежний главный секрет ДРОПНУТ — пароль из ветки
-        # secret/redis/<inc>/users/default_admin.
+        # ★ REDESIGN default_admin: connect to each node as the ACL user default_admin
+        # (username → AUTH). The former main secret was DROPPED — the password comes from the
+        # secret/redis/<inc>/users/default_admin branch.
         username: default_admin
         password: default-admin-secret-pass
         nodes:
@@ -216,19 +216,19 @@ assert:
           node-c.example.com: { addr: "10.0.0.3:6379" }
 
   task_absent:
-    # ★ redis-sentinel package ОТСУТСТВУЕТ в cluster-режиме: cluster sentinel не
-    # использует → sentinel_enabled НЕ установлен (default false) → inner-гейт
-    # package-ветки install.yml гасит задачу (conditional-include НЕ при чём — это
-    # per-task when внутри блока → placeholder-skip без params). Парный позитив —
-    # install-package (sentinel-режим → пакет ПРИСУТСТВУЕТ). Guard против регресса
-    # «package-ветка тащит redis-sentinel во всех режимах» (лишний пакет в cluster).
+    # ★ the redis-sentinel package is ABSENT in cluster mode: cluster does not use
+    # sentinel → sentinel_enabled is NOT set (default false) → the inner gate of the
+    # package branch of install.yml suppresses the task (conditional-include is not the
+    # cause — it's a per-task when inside the block → placeholder-skip with no params). The
+    # paired positive case — install-package (sentinel mode → package IS PRESENT). Guard against
+    # the regression "the package branch drags in redis-sentinel in every mode" (extra package in cluster).
     - module: core.pkg.installed
       params_subset:
         name: redis-sentinel
 
-  # cluster-факты в state: redis_type cluster + redis_config с cluster-директивами
-  # (без announce-ip — host-вариативен, в state не пишется) + пустые users + пустой
-  # redis_hosts (точные роли раскладывает плагин, в state не фиксируем).
+  # cluster facts in state: redis_type cluster + redis_config with cluster directives
+  # (no announce-ip — host-variable, not written to state) + empty users + empty
+  # redis_hosts (exact roles are laid out by the plugin, not recorded in state).
   state_changes:
     redis_type: cluster
     redis_version: "7.4.1"

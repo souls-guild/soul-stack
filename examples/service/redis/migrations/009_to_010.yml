@@ -2,34 +2,34 @@ from_version: 9
 to_version: 10
 
 description: >-
-  state_schema v9 → v10: seeded_from ДОПОЛНЯЕТСЯ ССЫЛКАМИ на учётку внешнего
-  источника (S1-пилот migrate_cluster, прод-фикс блокера detach под AUTH):
-    - source_password_ref (string) — Vault-ПУТЬ к паролю учётки ВНЕШНЕГО источника;
-    - source_tls_ca_ref   (string) — Vault-ПУТЬ к CA для TLS-коннекта к источнику.
-  Это ССЫЛКИ (Vault-пути), НЕ секреты — в state PEM/пароль не оседает (ИБ, симметрия
-  с tls.*_ref). migrate_cluster ПЕРСИСТИТ их из input.source.password_ref/tls_ca_ref;
-  day-2 detach_source читает их vault()-ом keeper-side для финального offset-gate к
-  источнику. До v10 учётка источника в state НЕ хранилась (только во входном контракте
-  migrate_cluster) → detach под AUTH/TLS-источником падал коннектом → НИКОГДА не
-  проходил (error_locked). Теперь detach аутентифицируется к защищённому источнику.
+  state_schema v9 → v10: seeded_from is EXTENDED WITH REFERENCES to the external
+  source's credentials (S1 pilot migrate_cluster, prod fix for the detach-under-AUTH blocker):
+    - source_password_ref (string) — a Vault PATH to the EXTERNAL source's credential password;
+    - source_tls_ca_ref   (string) — a Vault PATH to the CA for a TLS connection to the source.
+  These are REFERENCES (Vault paths), NOT secrets — no PEM/password lands in state (security, symmetry
+  with tls.*_ref). migrate_cluster PERSISTS them from input.source.password_ref/tls_ca_ref;
+  day-2 detach_source reads them via vault() keeper-side for the final offset-gate to the
+  source. Before v10 the source's credentials were NOT stored in state (only in migrate_cluster's
+  input contract) → detach against an AUTH/TLS source failed to connect → it NEVER
+  passed (error_locked). Now detach authenticates to the protected source.
 
-  Forward-only (down: не поддерживается; восстановление — через state_history).
-  Существующие v9-инкарнации (и обычный create) → консервативный default: пустые
-  ref'ы '' (источник без AUTH/TLS, как было до фикса — detach с пустым ref шлёт
-  source_password='', поведение S1-пилота бит-в-бит).
+  Forward-only (down: not supported; recovery via state_history).
+  Existing v9 incarnations (and a plain create) get a conservative default: empty
+  refs '' (source without AUTH/TLS, as before the fix — detach with an empty ref sends
+  source_password='', matching S1 pilot behavior bit-for-bit).
 
-  ★ DSL-форма: migration-CEL sandbox (ADR-019) — ТОЛЬКО `state` + stdlib (НЕТ merge()/
-  default()). seeded_from пересобирается ОДНИМ плоским set с CEL-тернаром:
-    - внешний guard has(state.seeded_from): объект отсутствует (теоретически невалидный
-      v9-state) → ставим полный дефолт всех 4 полей;
-    - иначе (нормальный v9, seeded_from гарантирован 008_to_009) → map-литерал с
-      СОХРАНЕНИЕМ source_endpoints/detached через has()-guard + два новых ref-листа,
-      тоже под has()-guard (идемпотентность повторного прогона: уже-добавленный ref
-      сохраняется, не перезатирается ''-дефолтом).
-  ★ ЛИСТ-guard (has() на КАЖДОЕ поле), НЕ объект-guard как 008_to_009: там seeded_from
-  ВВОДИЛСЯ целиком (objects-guard); здесь в УЖЕ-существующий seeded_from добавляются
-  ПОЛЯ — перезатереть объект целиком стёрло бы source_endpoints/detached. Зеркало
-  листового паттерна 006_to_007 (has() на каждое новое поле). Остальной state не трогается.
+  ★ DSL form: migration-CEL sandbox (ADR-019) — ONLY `state` + stdlib (NO merge()/
+  default()). seeded_from is rebuilt with ONE flat set using a CEL ternary:
+    - outer guard has(state.seeded_from): the object is absent (theoretically an invalid
+      v9 state) → set the full default for all 4 fields;
+    - otherwise (normal v9, seeded_from guaranteed by 008_to_009) → a map literal
+      PRESERVING source_endpoints/detached via a has() guard + two new ref fields,
+      also under a has() guard (idempotency of a repeated run: an already-added ref
+      is preserved, not overwritten by the ''-default).
+  ★ LEAF guard (has() on EACH field), NOT an object-guard like 008_to_009: there seeded_from
+  was INTRODUCED whole (objects-guard); here FIELDS are being added to an ALREADY-existing
+  seeded_from — overwriting the whole object would wipe source_endpoints/detached. Mirrors
+  the leaf pattern of 006_to_007 (has() on each new field). The rest of state is untouched.
 
 transform:
   - set:

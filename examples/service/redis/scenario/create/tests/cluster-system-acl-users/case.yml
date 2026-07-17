@@ -1,21 +1,22 @@
-# L0-испытание create cluster: СИСТЕМНЫЕ ACL-юзеры (system-ACL-users d2) доливаются
-# в users.acl ПОВЕРХ нижнего слоя из essence.system_acl_users, operator-extra (app)
-# наслаивается сверху. Доказываем:
-#   1. users.acl несёт ВСЕ системные redis-server (default_admin/replica/monitoring/
-#      sentinel/haproxy) из essence.system_acl_users с perms 1:1 из essence + state:'on';
-#   2. operator-extra (app) сосуществует со системными в том же файле;
-#   3. КАЖДЫЙ системный — со СВОИМ vault-паролем secret/redis/<inc>/users/<name>#password
-#      (та же ветка, что operator-extra) — нет cross-leak;
-#   4. ★ РЕДИЗАЙН default_admin (2026-06-30): встроенный default рендерится `off` (его в map
-#      .vars.users НЕТ), а внутрикластерный AUTH идёт под системным default_admin — он ЕСТЬ
-#      в map .vars.users как остальные системные (~* &* +@all, пароль users/default_admin).
-#      Прежняя модель «default из render_context.vars.password = requirepass» убрана
-#      (requirepass дропнут из server.yml);
-#   5. state_changes.redis_users несёт ТОЛЬКО operator-extra (app) — системные НЕ в
-#      state (пункт 7 d2: доливаются из essence на каждом рендере).
+# L0 test of create cluster: SYSTEM ACL users (system-ACL-users d2) are added into
+# users.acl OVER the lower layer from essence.system_acl_users, operator-extra (app)
+# layers on top. This proves:
+#   1. users.acl carries ALL system redis-server users (default_admin/replica/monitoring/
+#      sentinel/haproxy) from essence.system_acl_users with perms 1:1 from essence + state:'on';
+#   2. operator-extra (app) coexists with the system users in the same file;
+#   3. EACH system user has its OWN vault password secret/redis/<inc>/users/<name>#password
+#      (the same branch as operator-extra) — no cross-leak;
+#   4. ★ default_admin REDESIGN (2026-06-30): the built-in default renders as `off` (it's NOT
+#      in the .vars.users map), while intra-cluster AUTH runs under the system default_admin —
+#      it IS present in the .vars.users map like the other system users (~* &* +@all,
+#      password from users/default_admin). The former "default from
+#      render_context.vars.password = requirepass" model is removed
+#      (requirepass dropped from server.yml);
+#   5. state_changes.redis_users carries ONLY operator-extra (app) — the system users are NOT in
+#      state (item 7 d2: added on top from essence on every render).
 #
-# Топология: shards=1, replicas_per_master=0 → 1 хост (size-guard PASS). render_context
-# .self = первый по SID хост (node-a, host-инвариант apply.input).
+# Topology: shards=1, replicas_per_master=0 → 1 host (size-guard PASS). render_context
+# .self = the first host by SID (node-a, host invariant of apply.input).
 name: cluster create merges system ACL users into users.acl above operator extras
 
 fixtures:
@@ -29,9 +30,9 @@ fixtures:
   vault:
     secret/redis/create:
       password: s3cr3t-redis-pass-create
-    # Per-user секреты системных — РАЗНЫЕ значения (cross-leak детектируется ассертом).
-    # ★ РЕДИЗАЙН default_admin (2026-06-30): default_admin — системный юзер внутрикластерного
-    # AUTH (его пароль по той же ветке users/<name>).
+    # Per-user secrets of system users — DIFFERENT values (cross-leak detected by an assert).
+    # ★ default_admin REDESIGN (2026-06-30): default_admin is the system user of intra-cluster
+    # AUTH (its password is under the same users/<name> branch).
     secret/redis/create/users/default_admin:
       password: default-admin-secret-pass
     secret/redis/create/users/replica:
@@ -57,10 +58,10 @@ fixtures:
       maxmemory-policy: allkeys-lru
       maxclients:       10000
       timeout:          300
-    # Системные ACL-юзеры redis-server (perms 1:1 из vars/main.yml роли redis_system_users).
-    # ★ РЕДИЗАЙН default_admin (2026-06-30): default_admin (~* &* +@all) — системный юзер
-    # внутрикластерного AUTH (заменил прежний requirepass-default). Источник истины долива
-    # системных в users.acl.
+    # System ACL users of redis-server (perms 1:1 from vars/main.yml of the redis_system_users role).
+    # ★ default_admin REDESIGN (2026-06-30): default_admin (~* &* +@all) is the system user of
+    # intra-cluster AUTH (replaced the former requirepass-default). Source of truth for adding
+    # system users into users.acl.
     system_acl_users:
       default_admin: "~* &* +@all"
       replica:    "+psync +replconf +ping"
@@ -69,8 +70,8 @@ fixtures:
       haproxy:    "-@all +auth +client|getname +client|id +client|setname +command +hello +ping +role +info +cluster|info"
 
   input:
-    # ★ provision выключен (default-on: опущенная секция = ВКЛЮЧЕНО; кейс деплоит на
-    # ГОТОВЫЙ roster, cloud-create не нужен) → include redis-provision.yml group-drop.
+    # ★ provision disabled (default-on: an omitted section = ENABLED; the case deploys onto a
+    # READY roster, cloud-create isn't needed) → include redis-provision.yml group-drop.
     provision:
       enabled: false
     redis_type: cluster
@@ -83,10 +84,11 @@ fixtures:
 
 assert:
   task_present:
-    # users.acl: системные (default_admin/replica/monitoring/sentinel/haproxy) с perms из
-    # essence + operator-extra (app). КАЖДЫЙ со СВОИМ vault-паролем. ★ РЕДИЗАЙН default_admin:
-    # default_admin В map .vars.users (системный, ~* &* +@all); встроенный default рендерится
-    # `off` шаблоном и в map ОТСУТСТВУЕТ (deep-compare всего map ловит его как лишний).
+    # users.acl: system users (default_admin/replica/monitoring/sentinel/haproxy) with perms from
+    # essence + operator-extra (app). EACH with ITS OWN vault password. ★ default_admin REDESIGN:
+    # default_admin IS in the .vars.users map (system, ~* &* +@all); the built-in default renders
+    # as `off` via the template and is ABSENT from the map (a deep-compare of the whole map catches
+    # it as extraneous).
     - module: core.file.rendered
       id: redis_acl
       params_subset:
@@ -138,9 +140,9 @@ assert:
   state_changes:
     redis_type: cluster
     redis_version: "7.4.1"
-    # ★ GUARD «системные НЕ в state»: redis_users несёт ТОЛЬКО operator-extra (app),
-    # БЕЗ replica/monitoring/sentinel/haproxy (они доливаются из essence, deep-compare
-    # ловит лишний системный элемент как расхождение). wave 1b: МАССИВ AclUser.
+    # ★ GUARD "system users NOT in state": redis_users carries ONLY operator-extra (app),
+    # WITHOUT replica/monitoring/sentinel/haproxy (they're added from essence, deep-compare
+    # catches an extraneous system element as a mismatch). wave 1b: ARRAY of AclUser.
     redis_users:
       - { name: app, perms: "~app:* +@read +@write", state: "on" }
     redis_hosts: []

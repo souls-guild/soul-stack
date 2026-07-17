@@ -1,15 +1,15 @@
-# L0 guard (NIM-53 bug #2): update_config меняет io_threads через dedicated-поле → io-threads
-# долетает в rendered redis.conf И в state.redis_config со значением оператора, а hot-reload
-# идёт с rewrite=false. Регресс (live): io-threads (startup-only) рендерился в redis.conf
-# шагом 1, но task-2 CONFIG REWRITE переписывал файл из ЖИВОГО конфига (io-threads live=1 —
-# плагин пропускает startup-only на CONFIG SET) → redis.conf откатывался к io-threads 1.
-# Фикс: rewrite=false (файл — рендер шага 1) + dedicated io_threads (read-model state.io_threads).
+# L0 guard (NIM-53 bug #2): update_config changes io_threads via the dedicated field -> io-threads
+# reaches both the rendered redis.conf AND state.redis_config with the operator's value, while hot-reload
+# runs with rewrite=false. Regression (live): io-threads (startup-only) was rendered into redis.conf
+# by step 1, but task-2 CONFIG REWRITE overwrote the file from the LIVE config (io-threads live=1 -
+# the plugin skips startup-only on CONFIG SET) -> redis.conf reverted to io-threads 1.
+# Fix: rewrite=false (the file is the step-1 render) + dedicated io_threads (read-model state.io_threads).
 #
-# Ассертим: (1) redis.conf (core.file.rendered) config несёт io-threads:"2"; (2) hot-reload
-# (community.redis.config) rewrite=false + config несёт io-threads:"2" (плагин пропустит его
-# на живом — startup-only, вступит при следующем рестарте); (3) state_changes:
-# redis_config['io-threads']="2" И io_threads:2 (namedfield read-model консистентен).
-# Plaintext, render-only, герметично.
+# Asserting: (1) redis.conf (core.file.rendered) config carries io-threads:"2"; (2) hot-reload
+# (community.redis.config) rewrite=false + config carries io-threads:"2" (the plugin will skip it
+# on the live one - startup-only, it takes effect on the next restart); (3) state_changes:
+# redis_config['io-threads']="2" AND io_threads:2 (namedfield read-model is consistent).
+# Plaintext, render-only, hermetic.
 name: update_config changes io_threads and it reaches redis.conf and state (rewrite=false)
 
 fixtures:
@@ -28,8 +28,8 @@ fixtures:
         save: "900 1 300 10 60 10000"
         appendonly: "no"
 
-  # Развёрнутый state (create): io-threads НЕ в redis_config (io_threads=0 при create —
-  # covenant has-guard >0 не пишет директиву). update_config доливает io-threads=2.
+  # Deployed state (create): io-threads is NOT in redis_config (io_threads=0 on create -
+  # the covenant has-guard >0 does not write the directive). update_config adds io-threads=2.
   state:
     redis_type: sentinel
     redis_version: "7.4.1"
@@ -52,8 +52,8 @@ fixtures:
     redis_users: []
 
   input:
-    # Дельта: ТОЛЬКО io_threads (dedicated) — проверяет и validate «io_threads — изменяемое
-    # поле», и прокидку значения оператора в redis.conf/state.
+    # Delta: ONLY io_threads (dedicated) - checks both validate "io_threads is a mutable
+    # field" and the propagation of the operator's value into redis.conf/state.
     io_threads: 2
 
   vault:
@@ -64,8 +64,8 @@ fixtures:
 
 assert:
   task_present:
-    # 1. redis.conf перерендерен с io-threads:"2" (для следующего рестарта). Прочие директивы
-    #    — подложка state (maxmemory/policy/save/appendonly). masteruser/masterauth доливаются.
+    # 1. redis.conf is re-rendered with io-threads:"2" (for the next restart). The other directives
+    #    are the state substrate (maxmemory/policy/save/appendonly). masteruser/masterauth are added.
     - module: core.file.rendered
       params_subset:
         path: /etc/redis/redis.conf
@@ -102,8 +102,8 @@ assert:
           role: ""
           essence: {}
 
-    # 2. HOT-RELOAD: rewrite=false (файл — рендер шага 1). config несёт io-threads:"2" —
-    #    плагин пропустит его на живом (startup-only денилист), значение вступит при рестарте.
+    # 2. HOT-RELOAD: rewrite=false (the file is the step-1 render). config carries io-threads:"2" -
+    #    the plugin will skip it on the live one (startup-only denylist), the value takes effect on restart.
     - module: community.redis.config
       params_subset:
         addr: "127.0.0.1:6379"
@@ -118,8 +118,8 @@ assert:
           appendonly: "no"
           io-threads: "2"
 
-  # 3. state read-model консистентен: redis_config несёт io-threads:"2" (write-model) И
-  #    io_threads:2 (namedfield). Регресс — io_threads оставался 0, разъезжаясь с redis_config.
+  # 3. state read-model is consistent: redis_config carries io-threads:"2" (write-model) AND
+  #    io_threads:2 (namedfield). Regression - io_threads stayed 0, diverging from redis_config.
   state_changes:
     redis_config:
       maxmemory: "768mb"

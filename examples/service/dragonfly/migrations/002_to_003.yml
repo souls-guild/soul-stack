@@ -2,22 +2,22 @@ from_version: 2
 to_version: 3
 
 description: >-
-  state_schema v2 → v3: cloud-provision read-model (ADR-061, Вариант A — create
-  поднимает VM в том же прогоне). state ДОПОЛНЯЕТСЯ двумя независимыми полями:
-    - provisioned_vm_ids (array string) — provider-vm-id VM, поднятых нашим
-      create-прогоном (day-2 teardown читает их для core.cloud.destroyed);
-    - provisioned_provider (string) — имя cloud-Provider в реестре (тот же
-      destroy-вызов).
+  state_schema v2 → v3: cloud-provision read-model (ADR-061, Variant A — create
+  brings up the VM in the same run). state is EXTENDED with two independent fields:
+    - provisioned_vm_ids (array string) — provider-vm-id of VMs brought up by our
+      create-run (day-2 teardown reads them for core.cloud.destroyed);
+    - provisioned_provider (string) — the cloud-Provider name in the registry (same
+      destroy-call).
 
-  Зеркало redis 006_to_007 (DragonFly cloud-provision по образцу redis, решение
-  пользователя 2026-07-01: provision обязателен в базовом create). Forward-only
-  (down: не поддерживается; восстановление — через state_history). Существующие
-  инкарнации развёрнуты БЕЗ provision (deploy на существующие хосты, provisioned_*
-  в state нет) → консервативный default: provisioned_vm_ids=[] и
-  provisioned_provider=''. ДВА плоских set (поля независимы); has()-guard —
-  back-compat для инкарнаций без этих ключей (идемпотентность повторного прогона:
-  ключ уже есть → сохраняется как есть, иначе ставится default). Остальной state
-  (df_config/df_users/namedfields/топология) НЕ трогается.
+  Mirrors redis 006_to_007 (DragonFly cloud-provision following the redis pattern,
+  user decision 2026-07-01: provision is mandatory in the base create). Forward-only
+  (down: not supported; recovery — via state_history). Existing
+  incarnations were deployed WITHOUT provision (deploy onto existing hosts, provisioned_*
+  absent from state) → conservative default: provisioned_vm_ids=[] and
+  provisioned_provider=''. TWO flat sets (fields are independent); has()-guard —
+  back-compat for incarnations without these keys (idempotency on re-run:
+  key already present → kept as-is, otherwise the default is set). The rest of state
+  (df_config/df_users/namedfields/topology) is NOT touched.
 
 transform:
   - set:

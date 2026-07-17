@@ -1,21 +1,21 @@
-# L0-испытание create: ОБЯЗАТЕЛЬНАЯ observability data-плоскости (Слайс II + V-I, dragonfly).
-# После deploy-ветки (DF + sentinel-плоскость + health-gates) create БЕЗУСЛОВНО (без when-гейта)
-# разворачивает КОМПОЗИЦИЕЙ переиспользуемых standalone-destiny через apply:destiny:
-#   - node-exporter — метрики хоста (version/listen из essence, arch — soulprint.self);
-#     ★ node-exporter-ONLY: DragonFly отдаёт СВОИ метрики нативно → redis_exporter-аналога НЕТ;
-#   - vector        — отгрузка логов (ОБЕ плоскости: DragonFly glog + sentinel-демон redis).
+# L0 test for create: MANDATORY observability of the data plane (Slice II + V-I, dragonfly).
+# After the deploy branch (DF + sentinel plane + health gates) create UNCONDITIONALLY (no when-gate)
+# deploys, as a COMPOSITION of reusable standalone-destiny via apply:destiny:
+#   - node-exporter — host metrics (version/listen from essence, arch — soulprint.self);
+#     ★ node-exporter-ONLY: DragonFly natively exposes ITS OWN metrics → there is no redis_exporter analog;
+#   - vector        — log shipping (BOTH planes: DragonFly glog + sentinel redis daemon).
 #
-# Доказываем:
-#   1. node-exporter развёрнут: install бинаря в /usr/local/bin/node_exporter (маркер
-#      присутствия под-destiny; version/arch → в url/extract, тут не сверяем);
-#   2. vector развёрнут: install бинаря в /usr/local/bin/vector (маркер присутствия под-destiny
+# We prove:
+#   1. node-exporter is deployed: binary installed at /usr/local/bin/node_exporter (presence
+#      marker of the sub-destiny; version/arch → in url/extract, not checked here);
+#   2. vector is deployed: binary installed at /usr/local/bin/vector (presence marker of the sub-destiny
 #      log-shipping);
-#   3. read-model state.monitoring несёт зафиксированную версию/порт node_exporter (симметрия
-#      install/tls read-model), state.logging — версию/sink/источники vector; sink_auth_ref в
-#      state НЕ материализуется (ИБ).
+#   3. read-model state.monitoring carries the recorded node_exporter version/port (symmetric with the
+#      install/tls read-model), state.logging — vector's version/sink/sources; sink_auth_ref is
+#      NOT materialized in state (security).
 #
-# Топология: replicas_per_master=0 → 1 хост (size-guard 1==1+0). provision выключен (деплой на
-# готовый roster). render_context.self = единственный хост (node-solo).
+# Topology: replicas_per_master=0 → 1 host (size-guard 1==1+0). provision is disabled (deploy onto a
+# ready roster). render_context.self = the single host (node-solo).
 name: create deploys mandatory node-exporter and vector after deploy (observability)
 
 fixtures:
@@ -54,8 +54,8 @@ fixtures:
       monitoring: "-@all +@connection -command +client -hello +info -auth +sentinel|masters +sentinel|replicas +sentinel|slaves +sentinel|sentinels +sentinel|ckquorum"
       sentinel:   "allchannels -@all +auth +client|getname +client|id +client|setname +command +hello +ping +sentinel|is-master-down-by-addr +publish +role +sentinel|get-master-addr-by-name +sentinel|master +sentinel|myid +sentinel|replicas +sentinel|sentinels"
       haproxy:    "-@all +auth +client|getname +client|id +client|setname +command +hello +ping +role +sentinel|get-master-addr-by-name +sentinel|master +sentinel|myid +sentinel|replicas +sentinel|sentinels"
-    # ★ essence-ключи observability (Слайс II + V-I): версия/порт node_exporter; версия/checksum/
-    # sink/источники vector. console sink (дефолт) — endpoint/auth не нужны.
+    # ★ essence observability keys (Slice II + V-I): node_exporter version/port; vector version/
+    # checksum/sink/sources. console sink (default) — endpoint/auth not needed.
     node_exporter_version: "1.8.2"
     node_exporter_listen: ":9100"
     vector_version: "0.40.0"
@@ -72,28 +72,28 @@ fixtures:
 
 assert:
   task_present:
-    # 1. node-exporter развёрнут (apply:destiny node-exporter → install бинаря). Маркер
-    #    присутствия под-destiny: core.file.present с path бинаря node_exporter.
+    # 1. node-exporter is deployed (apply:destiny node-exporter → install binary). Presence
+    #    marker of the sub-destiny: core.file.present with path of the node_exporter binary.
     - module: core.file.present
       params_subset:
         path: /usr/local/bin/node_exporter
         mode: "0755"
 
-    # 2. vector развёрнут (apply:destiny vector → install бинаря). Маркер присутствия под-destiny
-    #    log-shipping (Слайс V-I): core.file.present с path бинаря vector.
+    # 2. vector is deployed (apply:destiny vector → install binary). Presence marker of the sub-destiny
+    #    log-shipping (Slice V-I): core.file.present with path of the vector binary.
     - module: core.file.present
       params_subset:
         path: /usr/local/bin/vector
         mode: "0755"
 
   state_changes:
-    # read-model мониторинга: версия/порт node_exporter (симметрия install/tls). ★ node-exporter-
-    # ONLY: redis_exporter-полей нет. Пароль/юзер НЕ в state (ИБ).
+    # monitoring read-model: node_exporter version/port (symmetric with install/tls). ★ node-exporter-
+    # ONLY: no redis_exporter fields. Password/user NOT in state (security).
     monitoring:
       node_exporter_version: "1.8.2"
       node_exporter_listen: ":9100"
-    # read-model log-shipping (Слайс V-I, ADR-067): версия/sink/источники vector. sink_auth_ref (токен) НЕ
-    # в state (ИБ) — намеренно отсутствует. log_sources — ОБЕ плоскости (DragonFly glog + sentinel).
+    # log-shipping read-model (Slice V-I, ADR-067): vector's version/sink/sources. sink_auth_ref (token) is NOT
+    # in state (security) — intentionally absent. log_sources — BOTH planes (DragonFly glog + sentinel).
     logging:
       vector_version: "0.40.0"
       vector_sink_type: console

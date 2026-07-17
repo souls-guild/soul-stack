@@ -1,15 +1,16 @@
-# tasks/extras.yml — host-tuning extras (концепция Ansible-роли): THP-юнит + logrotate +
-# sysctl. Режим-АГНОСТИЧНЫ (одинаково полезны standalone/sentinel). Все три БЕЗУСЛОВНЫ
-# (рекомендация in-memory-store / hardening — не выбор оператора): задачи без when:,
-# рендерятся ВСЕГДА. REUSE из redis-extras (THP/sysctl — те же kernel-рекомендации для
-# in-memory-store; DragonFly так же выигрывает от отключённого THP и сетевого tuning).
+# tasks/extras.yml — host-tuning extras (Ansible-role-style concept): THP unit + logrotate +
+# sysctl. Mode-AGNOSTIC (equally useful for standalone/sentinel). All three are UNCONDITIONAL
+# (recommendation for in-memory-store / hardening — not an operator choice): tasks without
+# when: are ALWAYS rendered. REUSE from redis-extras (THP/sysctl — the same kernel
+# recommendations for an in-memory-store; DragonFly benefits equally from disabled THP and
+# network tuning).
 #
-# disable-thp daemon-reload УБРАН: core.service (daemon_reload: auto) сам перечитывает
-# unit при смене disable-thp.service ПЕРЕД enable/start.
+# disable-thp daemon-reload REMOVED: core.service (daemon_reload: auto) itself re-reads the
+# unit when disable-thp.service changes BEFORE enable/start.
 
-# transparent-hugepages: oneshot-юнит отключения THP до DragonFly. БЕЗУСЛОВНО (THP даёт
-# latency-спайки на fork snapshot — рекомендация in-memory-store). Шаблон REUSE из redis
-# (disable-thp.service.tmpl, юнит-имя disable-thp нейтрально).
+# transparent-hugepages: oneshot unit disabling THP before DragonFly starts. UNCONDITIONAL (THP
+# causes latency spikes on fork snapshot — a recommendation for in-memory-store). Template REUSE
+# from redis (disable-thp.service.tmpl, the unit name disable-thp is neutral).
 - name: Render disable-thp systemd unit
   module: core.file.rendered
   params:
@@ -19,18 +20,19 @@
     owner: "${ vars.root_owner }"
     group: "${ vars.root_group }"
 
-# core.service сам перечитывает unit (daemon_reload: auto) при смене disable-thp.service
-# перед enable/start. disable-thp — oneshot RemainAfterExit, отрабатывает один раз.
+# core.service re-reads the unit itself (daemon_reload: auto) when disable-thp.service changes,
+# before enable/start. disable-thp is oneshot RemainAfterExit, runs once.
 - name: Ensure disable-thp is running and enabled at boot
   module: core.service.running
   params:
     name: disable-thp
     enabled: true
 
-# logrotate: ротация лог-файлов DragonFly в /etc/logrotate.d/dragonfly. БЕЗУСЛОВНО (как
-# THP — host-tuning не выбор оператора). mode 0644 owner/group root — стандарт logrotate.d.
-# ★ Шаблон покрывает ТОЛЬКО DragonFly glog (рефактор «sentinel из destiny redis»: логи
-# sentinel-демона ротирует logrotate destiny `redis`) — см. logrotate.tmpl.
+# logrotate: rotates DragonFly log files in /etc/logrotate.d/dragonfly. UNCONDITIONAL (like
+# THP — host-tuning is not an operator choice). mode 0644 owner/group root — logrotate.d
+# standard.
+# * Template covers ONLY DragonFly glog (refactor "sentinel out of destiny redis": the
+# sentinel-daemon logs are rotated by destiny `redis`'s logrotate) — see logrotate.tmpl.
 - name: Render the dragonfly logrotate config
   module: core.file.rendered
   params:
@@ -40,16 +42,16 @@
     owner: "${ vars.root_owner }"
     group: "${ vars.root_group }"
     vars:
-      # glob лог-файлов DragonFly (glog) из системного лог-каталога.
+      # glob for DragonFly (glog) log files under the system log directory.
       log_dir: "${ vars.log_dir }"
 
-# sysctl: bulk-набор kernel-параметров под in-memory-store ОДНИМ drop-in
-# /etc/sysctl.d/30-dragonfly.conf. БЕЗУСЛОВНО (как THP/logrotate). core.sysctl.applied сам
-# владеет drop-in: пишет детерминированный файл (sorted keys → нет ложного change),
-# реактивно перечитывает его `sysctl -p <file>` точечно при изменении (reload: auto). В
-# контейнерах часть vm.* read-only — ignore_failures даёт `sysctl -e -p` (--ignore глушит
-# read-only/несуществующие ключи). sysctl_settings — map kernel-параметр→значение,
-# scenario сервиса передаёт его через apply.input (дефолты — essence.sysctl_settings).
+# sysctl: a bulk set of kernel parameters for an in-memory-store in a SINGLE drop-in
+# /etc/sysctl.d/30-dragonfly.conf. UNCONDITIONAL (like THP/logrotate). core.sysctl.applied
+# owns the drop-in itself: writes a deterministic file (sorted keys → no false change),
+# reactively re-reads it with `sysctl -p <file>` on change (reload: auto). In containers some
+# vm.* keys are read-only — ignore_failures makes it `sysctl -e -p` (--ignore silences
+# read-only/nonexistent keys). sysctl_settings — a map kernel-parameter→value, passed by the
+# service scenario via apply.input (defaults — essence.sysctl_settings).
 - name: Apply dragonfly sysctl kernel parameters
   module: core.sysctl.applied
   params:

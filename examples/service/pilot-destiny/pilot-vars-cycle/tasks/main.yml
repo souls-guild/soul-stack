@@ -1,5 +1,6 @@
-# Одна задача, читающая один из var-ов цикла. Render не дойдёт до неё: резолв слоя
-# vars.yml оборвётся var_cycle ДО рендера params (eager — граф строится на старте слоя).
+# A single task reading one of the cycle's vars. Render never reaches it: resolving
+# the vars.yml layer aborts with var_cycle BEFORE rendering params (eager — the graph
+# is built at the start of the layer).
 - name: Use cyclic var (render must abort before this)
   module: core.file.present
   params:

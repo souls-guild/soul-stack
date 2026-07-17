@@ -1,8 +1,8 @@
 name: sentinel-gets-failover-timings
 description: >
-  sentinel-инкарнация: redis_sentinel непуст → дополняется down_after_ms/
-  failover_timeout_ms (роль-дефолты 5000/60000, #7 read-model day-2). Существующие
-  master_name/quorum СОХРАНЯЮТСЯ (has-guard). Остальной state — бит-в-бит.
+  sentinel incarnation: redis_sentinel non-empty → down_after_ms/
+  failover_timeout_ms added (role defaults 5000/60000, #7 read-model). Existing
+  master_name/quorum are PRESERVED (has-guard). The rest of state — bit-for-bit.
 
 state_before:
   redis_type: sentinel

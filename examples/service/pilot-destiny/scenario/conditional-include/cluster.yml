@@ -1,6 +1,7 @@
-# Кластерная группа conditional-include: подключается из main.yml под условным
-# `when: input.topology == 'cluster'`. На standalone вся группа дропается из плана
-# (render-phase group-drop), её задачи отсутствуют — индексы не резервируются.
+# The cluster group of conditional-include: included from main.yml under the
+# conditional `when: input.topology == 'cluster'`. On standalone the whole group
+# is dropped from the plan (render-phase group-drop), its tasks are absent —
+# indices aren't reserved.
 - name: cluster replication marker
   module: core.file.present
   params:

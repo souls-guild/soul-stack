@@ -1,8 +1,8 @@
-# Скрипт ответов soul-stub-а для noop::create.
+# Response script for the soul-stub in noop::create.
 #
-# scenario/create/main.yml содержит одну задачу core.exec.run echo hello,
-# `changed_when: "false"` → no-op: state_changes scenario пустой,
-# incarnation.state не мутируется.
+# scenario/create/main.yml contains one task, core.exec.run echo hello,
+# `changed_when: "false"` → no-op: the scenario's state_changes is empty,
+# incarnation.state is not mutated.
 scenarios:
   create:
     apply_responses:

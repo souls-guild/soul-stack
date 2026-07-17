@@ -1,12 +1,13 @@
-# L0-испытание (Trial, ADR-023) destiny vector: sink_type=loki + journald + auth-токен.
+# L0 trial (Trial, ADR-023) for destiny vector: sink_type=loki + journald + auth token.
 #
-# Дополняет render-defaults (console/file-only): доказывает вторую ветку sink-выбора и
-# journald-source. Render-only — content vector.yaml (loki-секция) L0 не исполняет; сигнал
-# доставки — render_context.input (sink_type=loki + endpoint + journald=true) для конфига
-# и render_context.vars.sink_token (зарезолвленный секрет коллектора) для unit.
+# Complements render-defaults (console/file-only): exercises the second sink-selection
+# branch and the journald source. Render-only: L0 does not execute the vector.yaml
+# content (loki section); the delivery signal is render_context.input (sink_type=loki +
+# endpoint + journald=true) for the config and render_context.vars.sink_token (the
+# resolved collector secret) for the unit.
 #
-# ★ Покрывает ветку input.journald=true (render-defaults красит только false) — coverage-
-# gate soul-trial требует обе.
+# ★ Covers the input.journald=true branch (render-defaults only exercises false): the
+# soul-trial coverage gate requires both.
 name: vector destiny renders loki sink with journald source and auth token
 
 fixtures:
@@ -16,7 +17,7 @@ fixtures:
     sha256: "sha256:2222222222222222222222222222222222222222222222222222222222222222"
     sink_type: loki
     sink_endpoint: "https://loki.example.com"
-    # секрет уже зарезолвлен (в проде — vault-ref, резолв Soul-side); L0 передаёт значение.
+    # secret is already resolved (in prod: a vault-ref, resolved Soul-side); L0 passes the value directly.
     sink_auth_ref: "loki-bearer-token-secret"
     log_sources: ["/var/log/redis/*.log"]
     journald: true
@@ -26,7 +27,7 @@ fixtures:
 
 assert:
   task_present:
-    # arch arm64 → Rust-триплет aarch64-unknown-linux-gnu (маппинг vars.arch_triplet).
+    # arch arm64 → Rust triplet aarch64-unknown-linux-gnu (vars.arch_triplet mapping).
     - module: core.url.fetched
       params_subset:
         url: https://github.com/vectordotdev/vector/releases/download/v0.40.0/vector-0.40.0-aarch64-unknown-linux-gnu.tar.gz
@@ -34,14 +35,14 @@ assert:
         checksum: "sha256:2222222222222222222222222222222222222222222222222222222222222222"
         mode: "0644"
 
-    # install-путь бинаря внутри распакованного — тот же aarch64-триплет.
+    # install path for the binary inside the unpacked archive is the same aarch64 triplet.
     - module: core.file.present
       params_subset:
         path: /usr/local/bin/vector
         src: /tmp/vector-0.40.0/vector-aarch64-unknown-linux-gnu/bin/vector
         mode: "0755"
 
-    # vector.yaml: render_context.input несёт loki sink + endpoint + journald=true.
+    # vector.yaml: render_context.input carries loki sink + endpoint + journald=true.
     - module: core.file.rendered
       params_subset:
         path: /etc/vector/vector.yaml
@@ -77,12 +78,12 @@ assert:
           role: ""
           essence: {}
 
-    # unit: render_context.vars.sink_token — зарезолвленный секрет коллектора (проброс в
-    # Environment=VECTOR_SINK_TOKEN). journald=true → шаблон добавит SupplementaryGroups
-    # (в L0 не виден — статический текст .tmpl, но input.journald в контексте есть).
-    # render_context сверяется ЦЕЛИКОМ (deep-compare каждого ключа, как vector.yaml выше):
-    # vars — file-vars + sink_token; input — все поля после defaults (loki + endpoint +
-    # journald=true); self — синтетический arm64-хост; essence пуст (изоляция под-destiny).
+    # unit: render_context.vars.sink_token is the resolved collector secret (passed into
+    # Environment=VECTOR_SINK_TOKEN). journald=true → the template adds SupplementaryGroups
+    # (not visible in L0: static .tmpl text, but input.journald is present in the context).
+    # render_context is checked IN FULL (deep-compare of every key, like vector.yaml above):
+    # vars = file-vars + sink_token; input = all fields after defaults (loki + endpoint +
+    # journald=true); self = synthetic arm64 host; essence is empty (sub-destiny isolation).
     - module: core.file.rendered
       params_subset:
         path: /etc/systemd/system/vector.service

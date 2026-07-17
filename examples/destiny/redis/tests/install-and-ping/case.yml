@@ -1,30 +1,30 @@
-# L2 fixture (docker-стенд), harness MVP не исполняет — ADR-023 post-MVP.
+# L2 fixture (docker stand), harness MVP does not execute — ADR-023 post-MVP.
 name: install-and-ping
 description: |
-  Базовый сценарий жизни режим-агностичного destiny redis (standalone) на чистом
-  хосте:
-    1. apply destiny redis  — установить redis-server и поднять сервис с
-       отрендеренным redis.conf (TCP 6379 + опц. unix-сокет, requirepass).
-    2. ping                 — убедиться, что отвечает PONG (через redis-cli или
-       community.redis.command — последнее в scenario сервиса).
+  Basic scenario of the mode-agnostic destiny redis (standalone) life on a clean
+  host:
+    1. apply destiny redis  — install redis-server and bring up the service with
+       the rendered redis.conf (TCP 6379 + opt. unix socket, requirepass).
+    2. ping                 — make sure it responds PONG (via redis-cli or
+       community.redis.command — the latter in the service scenario).
 
-  Тест прогоняется на эфемерном стенде (см. блок `stand:` ниже), на котором нет
-  ни redis-server-а, ни конфигов. После прохода стенд уничтожается.
+  The test runs on an ephemeral stand (see the `stand:` block below), which has
+  neither a redis-server nor configs. After the run the stand is destroyed.
 
-# ─── Стенд ────────────────────────────────────────────────────────────────────
+# ─── Stand ────────────────────────────────────────────────────────────────────
 stand:
   driver: docker                       # docker | podman | cloud:<provider> — open Q
-  image:  ubuntu:24.04                 # базовый образ sandbox-хоста
-  mode:   push                         # push | pull — как destiny попадает на стенд
+  image:  ubuntu:24.04                 # base image of the sandbox host
+  mode:   push                         # push | pull — how destiny reaches the stand
 
-# ─── Что применяем ────────────────────────────────────────────────────────────
-# Целевой destiny — ../../destiny.yml (режим-агностичный кирпич).
-# Имя берётся из родительского манифеста; в case достаточно указать input.
-# Контракт нового destiny (см. destiny.yml): version? / password (secret) /
-# config (object — ГОТОВЫЙ merged redis.conf, БЕЗ top-level maxmemory/socket:
-# это обычные ключи внутри config) / users? / sentinel_enabled? / sentinel?.
-# В реальном прогоне config мержит scenario сервиса; здесь передаём готовый map.
-# action-DSL удалён в redis-консолидации.
+# ─── What we apply ────────────────────────────────────────────────────────────
+# Target destiny — ../../destiny.yml (mode-agnostic brick).
+# The name is taken from the parent manifest; in case it's enough to specify input.
+# Contract of the new destiny (see destiny.yml): version? / password (secret) /
+# config (object — READY merged redis.conf, WITHOUT top-level maxmemory/socket:
+# those are regular keys inside config) / users? / sentinel_enabled? / sentinel?.
+# In a real run config is merged by the service scenario; here we pass a ready map.
+# action-DSL removed in the redis consolidation.
 input:
   version:  "7.2.4"
   password: "vault:test/redis/password"
@@ -32,16 +32,16 @@ input:
     maxmemory:  256mb
     maxclients: 10000
     timeout:    300
-    # unixsocket — обычный ключ merged-конфига (не отдельное top-level поле). Задан
-    # → destiny создаёт каталог сокета (task gated на config.unixsocket) и redis
-    # слушает сокет; verify ниже пингует именно по нему. Не задан → ping по TCP.
+    # unixsocket — a regular merged-config key (not a separate top-level field). If set
+    # → destiny creates the socket directory (task gated on config.unixsocket) and redis
+    # listens on the socket; the verify below pings exactly through it. If not set → ping over TCP.
     unixsocket: /var/run/redis/redis-server.sock
 
-# Двойной прогон: фреймворк применит destiny с этим input ещё раз и проверит, что
-# во втором применении не было изменений ни в одном шаге (идемпотентность).
+# Double run: the framework will apply destiny with this input once more and check
+# that the second application made no changes in any step (idempotency).
 expect_idempotent: true
 
-# ─── Проверки результата ──────────────────────────────────────────────────────
+# ─── Result checks ──────────────────────────────────────────────────────
 verify:
   - name: redis-binary-installed
     apply:
@@ -51,7 +51,7 @@ verify:
         args: ["--version"]
     expect:
       exit_code: 0
-      stdout_contains: "v=7.2.4"        # точные ключи `expect:` — open Q №8
+      stdout_contains: "v=7.2.4"        # exact `expect:` keys — open Q #8
 
   - name: redis-service-active
     apply:
@@ -65,22 +65,22 @@ verify:
 
   - name: redis-config-deployed
     apply:
-      destiny: core.cmd.shell          # `&&` цепочка test+stat — shell-семантика
+      destiny: core.cmd.shell          # `&&` chain test+stat — shell semantics
       input:
         cmd: "test -f /etc/redis/redis.conf && stat -c '%a %U:%G' /etc/redis/redis.conf"
     expect:
       stdout: "640 redis:redis"
 
   - name: redis-responds-to-ping
-    # Пинг по unix-сокету валиден ТОЛЬКО потому, что config.unixsocket задан в input
-    # выше (destiny создала каталог сокета, redis слушает сокет). Без config.unixsocket
-    # сокет-файла нет → проверять надо по TCP (redis-cli -h 127.0.0.1 -p 6379).
+    # Pinging over the unix socket is valid ONLY because config.unixsocket is set in the input
+    # above (destiny created the socket directory, redis listens on the socket). Without config.unixsocket
+    # there is no socket file → need to check over TCP (redis-cli -h 127.0.0.1 -p 6379).
     apply:
-      destiny: core.cmd.shell          # redis-cli по сокету — самосогласованная проверка
+      destiny: core.cmd.shell          # redis-cli over the socket — a self-consistent check
       input:
         cmd: "redis-cli -s /var/run/redis/redis-server.sock -a vault:test/redis/password PING"
     expect:
       stdout_contains: "PONG"
 
-# ─── Опциональные соседи рядом с этим файлом ─────────────────────────────────
-#   prepare.yml / verify.yml / cleanup.yml — см. docs/destiny/testing.md.
+# ─── Optional neighbors next to this file ─────────────────────────────────
+#   prepare.yml / verify.yml / cleanup.yml — see docs/destiny/testing.md.

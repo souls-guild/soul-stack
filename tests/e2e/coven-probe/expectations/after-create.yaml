@@ -1,9 +1,9 @@
-# Post-apply ожидания coven-probe::create.
+# Post-apply expectations for coven-probe::create.
 #
-# state_changes.sets из scenario/create/main.yml:
+# state_changes.sets from scenario/create/main.yml:
 #   marker_file: /tmp/coven-init.txt
 #   last_target: "create"
-# → проверяем оба поля в incarnation.state.
+# -> check both fields in incarnation.state.
 apply_runs:
   status: success
 
@@ -16,8 +16,8 @@ audit_events:
     payload:
       incarnation: test-coven-probe
 
-# keeper_scenario_runs_total{result="ok"} — реальная метрика успешного прогона
-# scenario (keeper/internal/scenario/metrics.go). Метрики keeper_apply_runs_total
-# в коде нет.
+# keeper_scenario_runs_total{result="ok"} - the real metric for a successful scenario
+# run (keeper/internal/scenario/metrics.go). The metric keeper_apply_runs_total
+# does not exist in the code.
 metrics:
   keeper_scenario_runs_total{result="ok"}: ">= 1"

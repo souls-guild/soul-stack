@@ -1,15 +1,15 @@
 kind: soul_module
-protocol_version: 1                    # compat-флаг SoulModule API; версия самого артефакта — git ref (ADR-007)
-namespace: wb                          # пример third-party коллекции
+protocol_version: 1                    # compat flag of the SoulModule API; the artifact's own version is a git ref (ADR-007)
+namespace: wb                          # example third-party collection
 name: redis-failover
 
-# Closed enum по ADR-020(f) / docs/keeper/plugins.md → required_capabilities.
+# Closed enum per ADR-020(f) / docs/keeper/plugins.md → required_capabilities.
 required_capabilities:
-  - network_outbound                   # redis-cli к master/replica
-  - vault_access                       # резолв password через vault:* ссылку
+  - network_outbound                   # redis-cli to master/replica
+  - vault_access                       # resolving password via a vault:* reference
 
-# Strict-контракт touched ресурсов (ADR-020(g)): ровно одна пара
-# <resource_type>: <value> на запись.
+# Strict contract for touched resources (ADR-020(g)): exactly one pair
+# <resource_type>: <value> per write.
 side_effects:
   - { service: redis-server }
   - { file: /etc/redis/sentinel.conf }
@@ -19,22 +19,22 @@ spec:
     promoted:
       description: |
         Promote a designated Redis replica to master, demoting the current master.
-        Семантически switchover; имя состояния — verb-форма past participle
-        по конвенции core-модулей (installed/running/promoted/restarted).
+        Semantically a switchover; the state name is a verb-form past participle
+        per the core-module convention (installed/running/promoted/restarted).
       input:
         new_master_sid:
           type: string
           required: true
           format: sid
           source: { incarnation_hosts: true }
-          description: SID replica-хоста (существующий хост инкарнации), который должен стать новым master.
+          description: SID of the replica host (an existing incarnation host) that should become the new master.
         password:
           type: string
           required: true
           secret: true
           pattern: "^vault:.*"
-          description: Redis password (vault-ref, резолвится Keeper-ом).
+          description: Redis password (vault-ref, resolved by the Keeper).
         timeout:
           type: integer
           default: 120
-          description: Таймаут на установление новой репликации, секунд.
+          description: Timeout for establishing new replication, seconds.

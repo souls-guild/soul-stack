@@ -1,22 +1,22 @@
 name: example-cloud-bootstrap
 state_schema_version: 1
 description: >-
-  Минимальный demo-сервис под ADR-017(h) amendment 2026-05-27 (B-flat):
-  cloud-init bootstrap новой VM через generate_userdata + доставка per-VM
-  bootstrap-токена отдельным шагом scenario.
+  Minimal demo service for ADR-017(h) amendment 2026-05-27 (B-flat):
+  cloud-init bootstrap of a new VM via generate_userdata + delivery of a per-VM
+  bootstrap token as a separate scenario step.
 
-  Что показывает example:
-    1. Шаг core.cloud.created с generate_userdata: true — Keeper рендерит
-       cloud-config userdata по keeper.yml::cloud_init (CA + soul-binary URL),
-       создаёт `count` VM через CloudDriver-плагин, выписывает per-VM-токены
-       и кладёт их в register.<step>.hosts[].bootstrap_token.
-    2. Шаг keeper.push — берёт per-VM-токены из register предыдущего шага и
-       доставляет на каждую VM по SSH (через настроенный soul-ssh-* провайдер).
-       Без этого Soul на VM не знает, какой токен предъявить на Bootstrap-RPC.
+  What the example shows:
+    1. Step core.cloud.created with generate_userdata: true — Keeper renders
+       cloud-config userdata from keeper.yml::cloud_init (CA + soul-binary URL),
+       creates `count` VMs via the CloudDriver plugin, issues per-VM tokens
+       and puts them into register.<step>.hosts[].bootstrap_token.
+    2. Step keeper.push — takes per-VM tokens from the register of the previous step and
+       delivers them to each VM over SSH (via the configured soul-ssh-* provider).
+       Without this, Soul on the VM doesn't know which token to present to the Bootstrap RPC.
 
-  Cloud-init userdata НЕ несёт токены: cloud-provider API хранит userdata в
-  plaintext metadata (security floor). См. ADR-017(h) amendment и
-  docs/keeper/cloud.md → «Cloud-init bootstrap (MVP)».
+  Cloud-init userdata carries NO tokens: the cloud-provider API stores userdata as
+  plaintext metadata (security floor). See ADR-017(h) amendment and
+  docs/keeper/cloud.md → "Cloud-init bootstrap (MVP)".
 
 state_schema:
   type: object

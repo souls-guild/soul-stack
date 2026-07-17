@@ -1,21 +1,23 @@
-# tasks/main.yml — точка входа destiny redis-exporter (плоский список module-задач).
-# Видит ТОЛЬКО свой input: (изоляция, ADR-009).
+# tasks/main.yml — entry point of destiny redis-exporter (flat list of module tasks).
+# Sees ONLY its own input: (isolation, ADR-009).
 #
-# Установка из релиза — та же «тройка», что у node-exporter (url.fetched →
-# archive.extracted → install). Отличие в раскладке имён tarball-а GitHub Releases
-# redis_exporter: имя файла и каталог внутри несут префикс `v` перед версией
+# Install from release — the same "triple" as node-exporter (url.fetched →
+# archive.extracted → install). The difference is in the tarball name layout of
+# GitHub Releases for redis_exporter: the file name and the directory inside it
+# carry a `v` prefix before the version
 # (redis_exporter-v<v>.linux-<arch>).
 #
-# Подключение к Redis — через UNIX-СОКЕТ (--redis.addr=unix://<socket>), не TCP.
-# Сервис-аккаунт — DynamicUser=yes (прод-конвенция §2, гибрид-правило): redis_exporter
-# stateless, owned data-dir у него нет, ручные core.user/core.group НЕ заводятся.
-# Group-доступ к сокету (unixsocketperm 770, owner redis:redis) даётся transient-
-# юзеру через SupplementaryGroups=redis в unit-е (см. templates/...service.tmpl) —
-# DynamicUser совместим со статически-named supplementary-группами. Прав владельца
-# redis exporter НЕ получает. Группа redis уже существует — её заводит как side-effect
-# ПАКЕТ redis-server (шаг core.pkg.installed в destiny redis-single: postinst пакета
-# создаёт пользователя/группу redis на Debian/Ubuntu/RHEL), а не явный core.group-шаг.
-# Порядок гарантирует caller: apply:destiny redis-single → redis-exporter.
+# Connection to Redis — via a UNIX SOCKET (--redis.addr=unix://<socket>), not TCP.
+# Service account — DynamicUser=yes (production convention §2, hybrid rule): redis_exporter
+# is stateless, has no owned data-dir, manual core.user/core.group steps are not created.
+# Group access to the socket (unixsocketperm 770, owner redis:redis) is given to the
+# transient user via SupplementaryGroups=redis in the unit (see templates/...service.tmpl) —
+# DynamicUser is compatible with statically-named supplementary groups. Ownership rights
+# are NOT given to redis exporter. The redis group already exists — it is created as a
+# side effect of the redis-server PACKAGE (step core.pkg.installed in destiny redis-single:
+# the package's postinst creates the redis user/group on Debian/Ubuntu/RHEL), not an
+# explicit core.group step.
+# Order is guaranteed by the caller: apply:destiny redis-single → redis-exporter.
 
 - name: Fetch redis_exporter tarball
   module: core.url.fetched
@@ -24,7 +26,7 @@
     path: "${ '/tmp/redis_exporter-' + input.version + '.tar.gz' }"
     checksum: "${ input.sha256 }"
     mode: "0644"
-    # SSRF-guard opt-out при private-resolve base_url (паттерн redis destiny.yml install.allow_private).
+    # SSRF-guard opt-out for private-resolve base_url (pattern from redis destiny.yml install.allow_private).
     allow_private: "${ input.allow_private }"
 
 - name: Extract redis_exporter tarball
@@ -33,19 +35,19 @@
     path: "${ '/tmp/redis_exporter-' + input.version + '.tar.gz' }"
     dest: "${ '/tmp/redis_exporter-' + input.version }"
 
-# Разложить бинарь redis_exporter из распакованного каталога в bin_dir.
-# core.file.present умеет src: — копию содержимого regular-файла с хоста
-# (docs/module/core/file: src взаимоисключён с content, абсолютный путь, Lstat-
-# проверка regular-file, атомарная запись). src несёт префикс `v` в имени каталога
-# внутри tarball-а (redis_exporter-v<v>.linux-<arch>) — раскладка GitHub Releases.
+# Place the redis_exporter binary from the extracted directory into bin_dir.
+# core.file.present supports src: — copies the content of a regular file from the host
+# (docs/module/core/file: src is mutually exclusive with content, absolute path, Lstat
+# check for regular-file, atomic write). src carries the `v` prefix in the directory name
+# inside the tarball (redis_exporter-v<v>.linux-<arch>) — GitHub Releases layout.
 #
-# Идемпотентность — нативная, от самого core.file.present: changed=true ТОЛЬКО если
-# целевого файла нет либо его sha256 отличается от sha256 src (либо дрейфит mode/
-# owner). Это строго лучше прежнего creates:-guard прошлого core.cmd.shell: creates:
-# пропускал install при ЛЮБОМ существующем файле → апгрейд версии НЕ переустанавливал
-# бинарь (latent-баг). core.file.present переустанавливает строго при смене байт →
-# честный changed на апгрейде. register — onchanges рестарта ниже реагирует на смену
-# бинаря так же, как на смену unit-файла.
+# Idempotency — native, from core.file.present itself: changed=true ONLY if the
+# target file is missing or its sha256 differs from the sha256 of src (or mode/owner
+# drifts). This is strictly better than the old core.cmd.shell creates:-guard, which
+# skipped install for ANY existing file → a version upgrade did NOT reinstall the
+# binary (latent bug). core.file.present reinstalls strictly on byte changes →
+# an honest changed on upgrade. register — the restart onchanges below reacts to a
+# binary change the same way as to a unit-file change.
 - name: Install redis_exporter binary
   module: core.file.present
   register: redis_exporter_bin
@@ -56,18 +58,19 @@
     owner: root
     group: root
 
-# Выделенного системного пользователя/группы НЕТ намеренно. redis_exporter —
-# stateless-демон без owned data-dir, поэтому по гибрид-правилу прод-конвенции
-# (docs/destiny/production-conventions.md §2) сервис-аккаунт даёт сам systemd через
-# DynamicUser=yes в unit-е. Group-доступ к сокету Redis (770) transient-юзер
-# получает через SupplementaryGroups=redis (см. шаблон) — DynamicUser совместим со
-# статически-named supplementary-группами, ручной core.user не нужен. Сама группа
-# redis заводится как side-effect пакета redis-server (postinst в core.pkg.installed
-# destiny redis-single), не отдельным core.group-шагом.
+# There is deliberately NO dedicated system user/group. redis_exporter is a
+# stateless daemon without an owned data-dir, so by the hybrid rule of the
+# production convention (docs/destiny/production-conventions.md §2) the service
+# account is given by systemd itself via DynamicUser=yes in the unit. Group access
+# to the Redis socket (770) is given to the transient user via
+# SupplementaryGroups=redis (see template) — DynamicUser is compatible with
+# statically-named supplementary groups, no manual core.user is needed. The redis
+# group itself is created as a side effect of the redis-server package (postinst in
+# core.pkg.installed of destiny redis-single), not by a separate core.group step.
 
-# systemd-unit. redis_addr собирается CEL-ом из 'unix://' + input.redis_socket —
-# тот же сокет, что unixsocket в redis.conf. register, чтобы рестартить unit при
-# изменении файла.
+# systemd unit. redis_addr is assembled by CEL from 'unix://' + input.redis_socket —
+# the same socket as unixsocket in redis.conf. register, so the unit restarts on
+# file change.
 - name: Render redis_exporter systemd unit
   module: core.file.rendered
   register: redis_exporter_unit
@@ -82,12 +85,12 @@
       listen:     "${ input.listen }"
       redis_addr: "${ 'unix://' + input.redis_socket }"
       password:   "${ input.redis_password }"
-      # ACL-username (--redis.user): пусто → флаг опущен (requirepass-модель), задан →
-      # AUTH под этим юзером (ACL-инстанс без requirepass, иначе WRONGPASS).
+      # ACL username (--redis.user): empty → flag omitted (requirepass model), set →
+      # AUTH under this user (ACL instance without requirepass, otherwise WRONGPASS).
       redis_user: "${ input.redis_user }"
-      # passthrough-флаги redis_exporter (--check-keys=..., --web.config.file=...
-      # и пр.): уходят в шаблон списком, range дописывает каждый отдельным токеном
-      # ExecStart. Вся ячейка = один ${…} → нативный список (ADR-010).
+      # passthrough flags for redis_exporter (--check-keys=..., --web.config.file=...
+      # etc.): go into the template as a list, range appends each as a separate
+      # ExecStart token. The whole cell = one ${…} → native list (ADR-010).
       extra_args: "${ input.extra_args }"
 
 - name: Ensure redis_exporter is running and enabled at boot

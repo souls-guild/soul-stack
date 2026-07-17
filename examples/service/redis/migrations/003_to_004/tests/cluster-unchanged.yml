@@ -1,8 +1,9 @@
 name: cluster-unchanged
 description: >
-  redis_type cluster — уже валиден в новом enum [sentinel, cluster]. Тождественная
-  ветка тернара: redis_type и весь остальной state (вкл. cluster-директивы redis_config
-  и топологию shards/replicas) переезжают бит-в-бит (миграция no-op для этого режима).
+  redis_type cluster — already valid in the new enum [sentinel, cluster]. Identity
+  branch of the ternary: redis_type and the rest of the state (incl. cluster directives
+  in redis_config and the shards/replicas topology) carry over bit-for-bit (migration is
+  a no-op for this mode).
 
 state_before:
   redis_type: cluster

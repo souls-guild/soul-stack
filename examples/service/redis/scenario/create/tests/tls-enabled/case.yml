@@ -1,24 +1,24 @@
-# L0-испытание (Trial, ADR-023): TLS в режиме sentinel single-host (концепция
-# Ansible-роли redis: redis_tls_*). TLS включён ИЗ ESSENCE (essence.tls_enable=true,
-# оператор input.tls не задал) — back-compat: essence остаётся дефолтом, input.tls — опц.
-# Главный guard слайса — что при включённом TLS:
-#   1. PEM-файлы /etc/redis/tls/{redis.crt,redis.key,ca.crt} раскладываются
+# L0-trial (Trial, ADR-023): TLS in sentinel single-host mode (concept borrowed from the
+# Ansible redis role: redis_tls_*). TLS is turned on FROM ESSENCE (essence.tls_enable=true,
+# the operator didn't set input.tls) — back-compat: essence stays the default, input.tls is opt.
+# The main guard of this slice — when TLS is enabled:
+#   1. PEM files /etc/redis/tls/{redis.crt,redis.key,ca.crt} are laid down by
 #      core.file.present (mode 0600, owner redis), content = vault(tls.<x>_ref) →
-#      ЦЕЛЫЙ PEM в ячейке content задачи destiny (НЕ .tmpl, vault() в ячейке);
-#   2. TLS-директивы (tls-port/tls-cert-file/tls-key-file/tls-ca-cert-file/
-#      tls-replication) попали в merged config (range-ятся в redis.conf);
-#   3. tls_only → `port 0` в config (plain закрыт);
-#   4. health-gate PING несёт tls=true + addr на tls_port + tls_ca (плагин ОБЯЗАН
-#      коннектиться по TLS, т.к. plain закрыт).
-# cert/CA/порт — HOST-ИНВАРИАНТ (один на кластер) → через apply.input. PEM content
-# = vault(ref) в САМОЙ ячейке → seal помечает sealed vault-слоем (маскинг в state/
-# error_summary). Маскинг доказан отдельным кейсом tls-pem-sealed-masking.
+#      the WHOLE PEM in the content cell of the destiny task (NOT .tmpl, vault() in the cell);
+#   2. TLS directives (tls-port/tls-cert-file/tls-key-file/tls-ca-cert-file/
+#      tls-replication) end up in the merged config (ranged into redis.conf);
+#   3. tls_only → `port 0` in config (plain closed);
+#   4. health-gate PING carries tls=true + addr on tls_port + tls_ca (the plugin MUST
+#      connect over TLS, since plain is closed).
+# cert/CA/port — HOST INVARIANT (one per cluster) → via apply.input. PEM content
+# = vault(ref) in the CELL ITSELF → seal marks it sealed with the vault layer (masking in state/
+# error_summary). Masking is proven by a separate case tls-pem-sealed-masking.
 #
-# PRESENCE-форма (миграция с позиционной 2026-06-24): задачи идентифицируются
-# module + params_subset; индексы не сверяются (хрупки). Три PEM-задачи
-# (cert/key/ca) — один и тот же module core.file.present, дизамбигуируются по path
-# (/etc/redis/tls/{redis.crt,redis.key,ca.crt}); каждая несёт СВОЙ content (PEM из
-# vault) + mode 0600 — guard на права и на правильный материал в правильном файле.
+# PRESENCE form (migrated from positional 2026-06-24): tasks are identified by
+# module + params_subset; indexes aren't compared (brittle). The three PEM tasks
+# (cert/key/ca) are the same module core.file.present, disambiguated by path
+# (/etc/redis/tls/{redis.crt,redis.key,ca.crt}); each carries ITS OWN content (PEM from
+# vault) + mode 0600 — a guard on both permissions and having the right material in the right file.
 name: tls enabled renders PEM files and TLS directives, port 0 on tls_only
 
 fixtures:
@@ -29,15 +29,15 @@ fixtures:
       soulprint:
         network: { primary_ip: 10.0.0.5 }
         os: { arch: amd64 }
-  # Мок Vault: requirepass + TLS PEM-материал (cert/key/ca под secret/services/redis/tls).
-  # scenario резолвит их из essence.tls_*_ref (доверенный путь автора).
+  # Vault mock: requirepass + TLS PEM material (cert/key/ca under secret/services/redis/tls).
+  # scenario resolves them from essence.tls_*_ref (the author's trusted path).
   vault:
     secret/redis/create:
       password: s3cr3t-redis-pass-create
-    # Per-user секреты системных юзеров (secret/redis/<inc>/users/<name>#password) —
-    # их резолвит keeper-side vault() при доливе system_acl_users в apply.input.users.
-    # ★ РЕДИЗАЙН default_admin (2026-06-30): default_admin — системный юзер
-    # внутрикластерного AUTH (auth_pass/PING шаги деплоя читают его по ветке users/<name>).
+    # Per-user secrets of system users (secret/redis/<inc>/users/<name>#password) —
+    # resolved keeper-side by vault() when merging system_acl_users into apply.input.users.
+    # ★ default_admin REDESIGN (2026-06-30): default_admin — the system user for
+    # intra-cluster AUTH (auth_pass/PING deploy steps read it via the users/<name> branch).
     secret/redis/create/users/default_admin:
       password: default-admin-secret-pass
     secret/redis/create/users/replica:
@@ -53,12 +53,12 @@ fixtures:
       key:  "-----BEGIN PRIVATE KEY-----\nSERVERKEY\n-----END PRIVATE KEY-----"
       ca:   "-----BEGIN CERTIFICATE-----\nCACERT\n-----END CERTIFICATE-----"
   essence:
-    # install_method — в essence (author-context, 2026-06-28): способ установки
-    # НЕ operator-input. compute.install читает default(essence.install_method, 'binary').
+    # install_method — in essence (author-context, 2026-06-28): the install method is
+    # NOT operator-input. compute.install reads default(essence.install_method, 'binary').
     install_method: package
     redis_type: sentinel
     sentinel_master_name: master
-    # ★ Редизайн: подложка per-master sentinel-дефолтов (под input.sentinel_master_settings).
+    # ★ Redesign: a substrate of per-master sentinel defaults (under input.sentinel_master_settings).
     sentinel_master_defaults:
       down-after-milliseconds: "5000"
       failover-timeout:        "60000"
@@ -73,17 +73,17 @@ fixtures:
       maxmemory-policy: allkeys-lru
       maxclients:       10000
       timeout:          300
-    # ★ #5: TLS-параметры (порт, Vault-пути PEM) — в essence. Режим канала задаёт
-    # операторский enum input.connection_mode (tls = только-TLS, plain закрыт).
+    # ★ #5: TLS parameters (port, Vault PEM paths) — in essence. The channel mode is set by
+    # the operator enum input.connection_mode (tls = TLS-only, plain closed).
     tls_port:   7379
     tls_cert_ref: "secret/services/redis/tls#cert"
     tls_key_ref:  "secret/services/redis/tls#key"
     tls_ca_ref:   "secret/services/redis/tls#ca"
 
-    # Системные ACL-юзеры redis-server + sentinel-демона (1:1 из essence/_default.yaml).
-    # ОБА ОБЯЗАТЕЛЬНЫ: guard create/sentinel.yml (assert 1b) рвёт render при пустом
-    # любом из наборов (тихий fail-open недопустим — без них репликация/sentinel↔redis
-    # AUTH сломались бы).
+    # System ACL users of redis-server + the sentinel daemon (1:1 from essence/_default.yaml).
+    # BOTH ARE MANDATORY: the guard in create/sentinel.yml (assert 1b) aborts render if
+    # either set is empty (silent fail-open is unacceptable — without them replication/sentinel↔redis
+    # AUTH would break).
     system_acl_users:
       default_admin: "~* &* +@all"
       replica:    "+psync +replconf +ping"
@@ -96,26 +96,26 @@ fixtures:
       sentinel:   "allchannels -@all +auth +client|getname +client|id +client|setname +command +hello +ping +sentinel|is-master-down-by-addr +publish +role +sentinel|get-master-addr-by-name +sentinel|master +sentinel|myid +sentinel|replicas +sentinel|sentinels"
       haproxy:    "-@all +auth +client|getname +client|id +client|setname +command +hello +ping +role +sentinel|get-master-addr-by-name +sentinel|master +sentinel|myid +sentinel|replicas +sentinel|sentinels"
   input:
-    # ★ provision выключен (default-on: опущенная секция = ВКЛЮЧЕНО; кейс деплоит на
-    # ГОТОВЫЙ roster, cloud-create не нужен) → include redis-provision.yml group-drop.
+    # ★ provision is disabled (default-on: an omitted section = ENABLED; this case deploys onto
+    # an ALREADY READY roster, cloud-create isn't needed) → include redis-provision.yml group-drop.
     provision:
       enabled: false
     redis_type: sentinel
-    # version ОБЯЗАТЕЛЬНА: enum выкаченных в Nexus сборок (мажор < 8 → version-gate
-    # модулей не активен). 7.4.1 — серия 7.x, как прежний distro-пин 7.2.4.
+    # version is MANDATORY: the enum of builds shipped to Nexus (major < 8 → the version-gate
+    # for modules isn't active). 7.4.1 — the 7.x series, same as the former distro pin 7.2.4.
     version: "7.4.1"
-    # install_method=package ЯВНО: assert ждёт install.method=package и redis.conf без
-    # binary-бинарей (кейс про TLS, не про способ установки).
+    # install_method=package EXPLICITLY: assert expects install.method=package and redis.conf without
+    # binary binaries (this case is about TLS, not about the install method).
     persistence: rdb
-    # single-host (1 хост) → 0 реплик (default редизайна 2): size-guard sentinel = 1+0.
+    # single-host (1 host) → 0 replicas (default of redesign 2): sentinel size-guard = 1+0.
     replicas_per_master: 0
-    # ★ Редизайн: connection_mode=tls — только-TLS (plain закрыт, port 0). Заменяет
-    # прежние tls_enabled=true + tls_keep_plain=false.
+    # ★ Redesign: connection_mode=tls — TLS-only (plain closed, port 0). Replaces
+    # the former tls_enabled=true + tls_keep_plain=false.
     connection_mode: tls
 
 assert:
   task_present:
-    # TLS dir (core.file.directory, when tls.enable → АКТИВЕН): /etc/redis/tls.
+    # TLS dir (core.file.directory, when tls.enable → ACTIVE): /etc/redis/tls.
     - module: core.file.directory
       params_subset:
         path: /etc/redis/tls
@@ -123,9 +123,9 @@ assert:
         group: redis
         mode: "0750"
 
-    # TLS server cert: core.file.present, content = vault(tls.cert_ref) → ЦЕЛЫЙ PEM
-    # в ячейке content (НЕ .tmpl/render_context: PEM через vault() в ячейке,
-    # seal-маскинг vault-слоем). Дизамбигуатор от key/ca — path.
+    # TLS server cert: core.file.present, content = vault(tls.cert_ref) → the WHOLE PEM
+    # in the content cell (NOT .tmpl/render_context: PEM via vault() in the cell,
+    # seal masking with the vault layer). Disambiguator from key/ca — path.
     - module: core.file.present
       params_subset:
         path: /etc/redis/tls/redis.crt
@@ -134,8 +134,8 @@ assert:
         owner: redis
         group: redis
 
-    # TLS private key: core.file.present, content = vault(tls.key_ref) → секрет-PEM
-    # в ячейке (sealed vault-слоем). Дизамбигуатор от cert/ca — path.
+    # TLS private key: core.file.present, content = vault(tls.key_ref) → the secret PEM
+    # in the cell (sealed with the vault layer). Disambiguator from cert/ca — path.
     - module: core.file.present
       params_subset:
         path: /etc/redis/tls/redis.key
@@ -144,8 +144,8 @@ assert:
         owner: redis
         group: redis
 
-    # TLS CA cert: core.file.present, content = vault(tls.ca_ref). Дизамбигуатор
-    # от cert/key — path.
+    # TLS CA cert: core.file.present, content = vault(tls.ca_ref). Disambiguator
+    # from cert/key — path.
     - module: core.file.present
       params_subset:
         path: /etc/redis/tls/ca.crt
@@ -154,8 +154,8 @@ assert:
         owner: redis
         group: redis
 
-    # redis.conf: merged config несёт TLS-директивы + port 0 (tls_only). КРИТИЧНО:
-    # `port: "0"` — гарантия only-TLS (plain закрыт). Дизамбигуатор от users.acl/
+    # redis.conf: the merged config carries the TLS directives + port 0 (tls_only). CRITICAL:
+    # `port: "0"` — the only-TLS guarantee (plain closed). Disambiguator from users.acl/
     # hardening — path.
     - module: core.file.rendered
       params_subset:
@@ -173,13 +173,13 @@ assert:
               - /var/lib/redis/modules/redisearch.so
               - /var/lib/redis/modules/redistimeseries.so
             config:
-              # ★ РЕДИЗАЙН default_admin: replica→master AUTH (masteruser/
-              # masterauth) приходит ОБЫЧНЫМИ директивами config (sentinel
-              # deploy-body доливает их vault()-в-ячейке) → redis.conf range-ит
-              # их как любую директиву → статически переживают рестарт.
+              # ★ default_admin REDESIGN: replica→master AUTH (masteruser/
+              # masterauth) comes in as ORDINARY config directives (the sentinel
+              # deploy-body merges them in via vault()-in-cell) → redis.conf ranges
+              # over them like any other directive → statically survives a restart.
               masteruser:       "default_admin"
               masterauth:       "default-admin-secret-pass"
-              # port 0 — plain закрыт (tls_only). КРИТИЧНО: гарантия only-TLS.
+              # port 0 — plain closed (tls_only). CRITICAL: the only-TLS guarantee.
               port: "0"
               tls-port: "7379"
               tls-cert-file: /etc/redis/tls/redis.crt
@@ -187,7 +187,7 @@ assert:
               tls-ca-cert-file: /etc/redis/tls/ca.crt
               tls-replication: "yes"
               tls-auth-clients: "no"
-              # обычные директивы тоже на месте (TLS не вытеснил их).
+              # ordinary directives are still there too (TLS didn't push them out).
               maxmemory: "256mb"
               maxmemory-policy: allkeys-lru
               maxclients: 10000
@@ -198,7 +198,7 @@ assert:
             sid: node-solo.example.com
             covens: [create]
             choirs: []
-            # traits — registry-проекция (ADR-060), пустой объект без меток.
+            # traits — a registry projection (ADR-060), an empty object without labels.
             traits: {}
             role: ""
             network:
@@ -208,9 +208,9 @@ assert:
           role: ""
           essence: {}
 
-    # PING health-gate: при tls_only плагин по TLS (tls=true, addr на tls_port,
-    # tls_ca = CA-PEM из vault). Доказывает «плагин ОБЯЗАН по TLS». cluster/sentinel
-    # PING — placeholder-skip; дизамбигуатор addr/args.
+    # PING health-gate: under tls_only the plugin goes over TLS (tls=true, addr on tls_port,
+    # tls_ca = CA-PEM from vault). Proves "the plugin MUST use TLS". cluster/sentinel
+    # PING — placeholder-skip; disambiguator addr/args.
     - module: community.redis.command
       params_subset:
         addr: "127.0.0.1:7379"
@@ -220,8 +220,8 @@ assert:
         tls_ca: "-----BEGIN CERTIFICATE-----\nCACERT\n-----END CERTIFICATE-----"
         args: ["PING"]
 
-  # DRIFT-GUARD: redis_config в state ОБЯЗАН быть бит-в-бит равен apply.input.config
-  # (redis.conf выше), включая TLS-директивы + port 0 (host-инвариант → пишутся в state).
+  # DRIFT-GUARD: redis_config in state MUST be bit-for-bit equal to apply.input.config
+  # (redis.conf above), including the TLS directives + port 0 (host invariant → written to state).
   state_changes:
     redis_type: sentinel
     redis_version: "7.4.1"
@@ -242,8 +242,8 @@ assert:
       appendonly: "no"
     redis_users: []
     redis_hosts: []
-    # ★ Редизайн: тайминги failover в master_settings (essence.sentinel_master_defaults);
-    # settings — глобальные sentinel-директивы (не заданы → {}).
+    # ★ Redesign: failover timings live in master_settings (essence.sentinel_master_defaults);
+    # settings — global sentinel directives (not set → {}).
     redis_sentinel:
       master_name: master
       quorum: 0
@@ -251,8 +251,8 @@ assert:
         down-after-milliseconds: "5000"
         failover-timeout: "60000"
       settings: {}
-    # ── namedfields (read-model, v3): из тех же compute.tls_*, что TLS-блок redis_config.
-    # tls включён+only из essence → enable/only true, port 7379, refs из essence.
+    # ── namedfields (read-model, v3): from the same compute.tls_* as the TLS block of redis_config.
+    # tls enabled+only from essence → enable/only true, port 7379, refs from essence.
     tls:
       enable:   true
       only:     true

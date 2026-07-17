@@ -1,27 +1,27 @@
 name: create
-# create: true — стартовый сценарий (Фаза 2: create-набор = РОВНО {scenario с флагом}).
+# create: true — starting scenario (Phase 2: the create set = EXACTLY {scenario with the flag}).
 create: true
 description: >-
-  FC-4 happy-path: задача с РЕАЛЬНО падающим модулем + failed_when:false. На
-  Soul-е core.exec.run несуществующего бинаря провалит fork/exec (file not
-  found → SendFailed → last.failed=true, moduleErr=module.failed). failed_when
-  "false" перекрывает провал → финальный статус задачи OK → прогон SUCCESS.
-  Исходная ошибка НЕ теряется: applyrunner.go кладёт её в register.<name>.
-  ignored_error, keeper персистит в apply_task_register. register: обязателен,
-  иначе register_data не накапливается.
+  FC-4 happy-path: a task with a REALLY failing module + failed_when:false. On the
+  Soul, core.exec.run for a non-existent binary will fail fork/exec (file not
+  found -> SendFailed -> last.failed=true, moduleErr=module.failed). failed_when
+  "false" overrides the failure -> the final task status is OK -> the run is SUCCESS.
+  The original error is NOT lost: applyrunner.go puts it in register.<name>.
+  ignored_error, keeper persists it in apply_task_register. register: is mandatory,
+  otherwise register_data doesn't accumulate.
 
-# Фокус — flow-control-исход и register, state не меняется.
+# Focus — the flow-control outcome and register, state doesn't change.
 state_changes: {}
 
 tasks:
   - name: Deliberately failing task with ignore_errors
     module: core.exec.run
     register: fail_probe
-    # ★ ignore_errors: реальный провал модуля подавляется в OK.
+    # * ignore_errors: a real module failure is suppressed into OK.
     failed_when: "false"
     params:
-      # Несуществующий абсолютный путь → exec не найдёт бинарь → res.Err != nil
-      # → util.SendFailed. Это РЕАЛЬНОЕ падение модуля (не exit-code в output:
-      # core.cmd.shell с `exit 1` НЕ падает — кладёт exit_code в output).
+      # Non-existent absolute path -> exec can't find the binary -> res.Err != nil
+      # -> util.SendFailed. This is a REAL module failure (not an exit code in output:
+      # core.cmd.shell with `exit 1` does NOT fail — puts exit_code in output).
       cmd: /nonexistent/fc4-deliberate-fail
       args: ["arg-that-never-runs"]

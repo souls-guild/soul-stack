@@ -1,6 +1,6 @@
-# Скрипт ответов soul-stub-а для coven-probe::create.
+# Response script for the soul-stub in coven-probe::create.
 #
-# scenario пишет init-маркер /tmp/coven-init.txt через core.file.present.
+# The scenario writes the init marker /tmp/coven-init.txt via core.file.present.
 # state_changes.sets: marker_file=/tmp/coven-init.txt, last_target="create".
 scenarios:
   create:

@@ -1,7 +1,7 @@
 name: tls-absent
 description: >
-  redis_config БЕЗ TLS-директив → tls.enable=false, tls.only=false, tls.port=7379
-  (роль-дефолт). maxmemory_policy=allkeys-lru. Контр-кейс к tls-extracted.
+  redis_config WITHOUT TLS directives → tls.enable=false, tls.only=false, tls.port=7379
+  (role default). maxmemory_policy=allkeys-lru. Counter-case to tls-extracted.
 
 state_before:
   redis_type: standalone

@@ -1,9 +1,9 @@
-# Dependabot Soul Stack. Поднимает PR-ы на обновление зависимостей по
-# расписанию. Репо — go-workspace из 8 модулей (см. go.work); dependabot не
-# понимает go.work напрямую — каждому модулю своя запись с directory:.
+# Dependabot Soul Stack. Raises PRs for dependency updates on a schedule.
+# The repo is a go-workspace of 8 modules (see go.work); dependabot doesn't
+# understand go.work directly - each module gets its own entry with directory:.
 #
-# open-pull-requests-limit: 5 на корневой gomod (proto), у остальных — default
-# (5). При шуме можно понизить до 2-3, но MVP-фаза → лучше видеть всё.
+# open-pull-requests-limit: 5 on the root gomod (proto), the rest use the
+# default (5). If it gets noisy, lower to 2-3, but MVP phase -> better to see everything.
 version: 2
 
 updates:
@@ -53,7 +53,7 @@ updates:
     schedule:
       interval: weekly
 
-  # GitHub Actions sами обновляются — actions/checkout@v4, setup-go@v5 и т.п.
+  # GitHub Actions update themselves - actions/checkout@v4, setup-go@v5, etc.
   - package-ecosystem: github-actions
     directory: /
     schedule:

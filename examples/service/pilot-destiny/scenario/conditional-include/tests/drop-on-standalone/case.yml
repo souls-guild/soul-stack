@@ -1,10 +1,10 @@
-# L0-испытание (Trial, ADR-023): conditional-include group-drop на standalone.
+# L0 trial (Trial, ADR-023): conditional-include group-drop on standalone.
 #
-# Прогон полного прод-пути: config.ExpandIncludes раскрывает оба include (base.yml
-# безусловно, cluster.yml под статическим `when: input.topology == 'cluster'`), затем
-# render с topology=standalone дропает группу cluster.yml ЦЕЛИКОМ (render-phase
-# group-drop). Presence-матчер фиксирует: base присутствует, обе cluster-задачи
-# ОТСУТСТВУЮТ (реальное исключение, не placeholder).
+# Full prod-path run: config.ExpandIncludes expands both includes (base.yml
+# unconditionally, cluster.yml under the static `when: input.topology == 'cluster'`), then
+# render with topology=standalone drops the cluster.yml group ENTIRELY (render-phase
+# group-drop). The presence matcher confirms: base is present, both cluster tasks are
+# ABSENT (a real exclusion, not a placeholder).
 name: conditional-include drops cluster group on standalone
 
 fixtures:
@@ -12,13 +12,13 @@ fixtures:
     topology: standalone
 
 assert:
-  # База — всегда в плане.
+  # Base — always in the plan.
   task_present:
     - module: core.file.present
       params_subset:
         path: /etc/pilot/base.txt
 
-  # Кластерная группа дропнута целиком — обе задачи отсутствуют.
+  # The cluster group is dropped entirely — both tasks are absent.
   task_absent:
     - module: core.file.present
       params_subset:

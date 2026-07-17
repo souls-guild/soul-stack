@@ -1,16 +1,18 @@
-# L0-fail-кейс detach_source: инкарнация НЕ проходила migrate_cluster. seeded_from
-# существует (миграция 008_to_009 даёт его каждой v9-инкарнации), но source_endpoints
-# ПУСТ — отцеплять нечего. detach — обычный сценарий сопровождения (нет runnable:false), оператор может
-# запустить его на create'нутой инкарнации; этот кейс фиксирует, что такой прогон
-# ОБРЫВАЕТСЯ ВНЯТНЫМ assert-отказом ДО probe, а НЕ опаковой ошибкой compute
-# `index out of bounds: 0` (которую дал бы голый source_endpoints[0]; см.
-# detach_source/main.yml compute.source_master fail-soft + assert-guard sentinel.yml).
+# L0 fail case for detach_source: the incarnation has NOT gone through migrate_cluster.
+# seeded_from exists (migration 008_to_009 gives it to every v9 incarnation), but
+# source_endpoints is EMPTY: nothing to detach. detach is a routine operational scenario
+# (no runnable:false), an operator can run it on a freshly created incarnation; this case
+# pins down that such a run ABORTS with a CLEAR assert failure BEFORE the probe, not an
+# opaque compute error `index out of bounds: 0` (which a bare source_endpoints[0] would
+# produce; see detach_source/main.yml compute.source_master fail-soft + the assert-guard
+# in sentinel.yml).
 #
-# Render-only, герметично. Диспетчер инклудит sentinel.yml (state.redis_type=sentinel);
-# первым в ветке — assert-guard `size(seeded_from.source_endpoints) >= 1`, который на
-# пустом списке вычисляется в false → ErrAssertFailed. expect_render_error ловит обрыв
-# рендера по подстроке message (механизм keeper/internal/trial/case.go — НЕ expect_validate:
-# validate: input-only ADR-009, инвариант над incarnation.state выражается assert-таском).
+# Render-only, hermetic. The dispatcher includes sentinel.yml (state.redis_type=sentinel);
+# the first step on that branch is the assert-guard `size(seeded_from.source_endpoints) >= 1`,
+# which evaluates to false on an empty list → ErrAssertFailed. expect_render_error catches
+# the render abort by a substring of message (mechanism in keeper/internal/trial/case.go,
+# NOT expect_validate: validate is input-only per ADR-009, invariants over incarnation.state
+# are expressed as an assert task).
 name: sentinel detach_source on a never-migrated incarnation aborts with a clear message
 
 fixtures:
@@ -19,10 +21,11 @@ fixtures:
     network: { primary_ip: 10.0.0.1 }
     os: { arch: amd64 }
 
-  # incarnation.state v9 sentinel-инкарнации, НИКОГДА не проходившей migrate_cluster:
-  # seeded_from есть (форма от миграции 008_to_009), но source_endpoints ПУСТ.
-  # host-layout (conf_dir/data_dir/modules_base_url) вынесен в essence (v11→v12);
-  # detach_source его НЕ читает (нет deploy-тела) → в state v12 этих ключей нет.
+  # incarnation.state v9 for a sentinel incarnation that has NEVER gone through
+  # migrate_cluster: seeded_from exists (the shape from migration 008_to_009), but
+  # source_endpoints is EMPTY. host-layout (conf_dir/data_dir/modules_base_url) was
+  # moved into essence (v11→v12); detach_source does NOT read it (no deploy body) →
+  # these keys are absent from state v12.
   state:
     redis_type: sentinel
     redis_version: "7.2.4"
@@ -47,6 +50,6 @@ fixtures:
     secret/redis/detach_source:
       password: detach-redis-pass-16ch
 
-# assert-guard sentinel.yml обрывает рендер ДО probe: source_endpoints пуст →
-# size(...) >= 1 == false → ErrAssertFailed с этим message (подстрока).
-expect_render_error: "отцеплять нечего"
+# assert-guard in sentinel.yml aborts the render BEFORE the probe: source_endpoints is
+# empty → size(...) >= 1 == false → ErrAssertFailed with this message (substring match).
+expect_render_error: "nothing to detach"

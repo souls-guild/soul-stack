@@ -1,11 +1,11 @@
-# Post-apply ожидания hello-world::create.
+# Post-apply expectations for hello-world::create.
 #
-# state_changes.sets в scenario:
+# state_changes.sets in scenario:
 #   greeting_file: /tmp/soul-stack-hello
-# → incarnation.state.greeting_file должно стать /tmp/soul-stack-hello.
+# → incarnation.state.greeting_file must become /tmp/soul-stack-hello.
 #
-# apply_runs.status — реальный enum keeper/internal/applyrun/applyrun.go::StatusSuccess.
-# audit_events — incarnation.scenario_started с apply_id (формат событий см.
+# apply_runs.status — the real enum keeper/internal/applyrun/applyrun.go::StatusSuccess.
+# audit_events — incarnation.scenario_started with apply_id (event format see
 # shared/audit/event_types.go::EventIncarnationScenarioStarted).
 apply_runs:
   status: success
@@ -18,8 +18,8 @@ audit_events:
     payload:
       incarnation: test-hello
 
-# keeper_scenario_runs_total{result="ok"} — реальная метрика успешного прогона
-# scenario (keeper/internal/scenario/metrics.go). Метрики keeper_apply_runs_total
-# в коде нет.
+# keeper_scenario_runs_total{result="ok"} — the real metric for a successful scenario
+# run (keeper/internal/scenario/metrics.go). There is no keeper_apply_runs_total
+# metric in the code.
 metrics:
   keeper_scenario_runs_total{result="ok"}: ">= 1"

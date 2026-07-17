@@ -1,32 +1,32 @@
 name: create
-# create: true — стартовый сценарий (Фаза 2: create-набор = РОВНО {scenario с флагом}).
+# create: true — the starting scenario (Phase 2: the create set = EXACTLY {scenario with the flag}).
 create: true
 description: >-
-  FC-3 retry:+until: health-gate против реального тайминга (L3b capstone).
+  FC-3 retry:+until: health-gate against real timing (L3b capstone).
 
-  Passage-плана нет (один Passage): обе задачи без where:/register-зависимости.
+  No Passage plan (a single Passage): both tasks have no where:/register dependencies.
 
-  Задача 0 (prepare gate): пишет НА ХОСТ две метки эпохи — момент старта
-  (/tmp/fc3-start) и ready-эпоху В БУДУЩЕМ (now + GATE_DELAY → /tmp/fc3-ready-at).
-  Детерминированный gate без фонового процесса/гонки: «готов» = настенное время
-  догнало ready-эпоху.
+  Task 0 (prepare gate): writes TO THE HOST two epoch markers — the start moment
+  (/tmp/fc3-start) and a ready epoch IN THE FUTURE (now + GATE_DELAY → /tmp/fc3-ready-at).
+  A deterministic gate with no background process/race: "ready" = wall-clock time
+  has caught up to the ready epoch.
 
-  Задача 1 (probe health-gate): core.cmd.shell с retry:{count,delay,until}.
-  На каждой попытке probe сравнивает now с ready-эпохой: пока now < ready-at →
-  печатает NOTYET (until: == 'READY' ложно → delay → следующая попытка); как
-  только now >= ready-at → печатает READY И записывает СВОЮ done-эпоху в
-  /tmp/fc3-done. until: register.self.stdout == 'READY' матчится ТОЛЬКО на
-  попытке, прошедшей gate. Поскольку gate в будущем относительно prepare, 1-я
-  попытка probe ОБЯЗАНА увидеть NOTYET → реальный retry ≥2 попытки.
+  Task 1 (probe health-gate): core.cmd.shell with retry:{count,delay,until}.
+  On each attempt the probe compares now with the ready epoch: while now < ready-at →
+  it prints NOTYET (until: == 'READY' false → delay → next attempt); as
+  soon as now >= ready-at → it prints READY AND writes ITS OWN done epoch to
+  /tmp/fc3-done. until: register.self.stdout == 'READY' matches ONLY on the
+  attempt that passed the gate. Since the gate is in the future relative to prepare, the 1st
+  probe attempt MUST see NOTYET → a real retry of ≥2 attempts.
 
-# Фокус-сценарий: state не меняется (commit state — отдельный инвариант).
+# Focus scenario: state doesn't change (commit state — a separate invariant).
 state_changes: {}
 
 tasks:
-  # ── Задача 0: установить детерминированный health-gate ───────────────────
-  # printf-метки эпох на ХОСТ. GATE_DELAY=6 c, delay probe=2s → probe не может
-  # сматчиться раньше ~3-й попытки (now>=ready-at недостижимо на 1-2 попытках).
-  # rm чистит метки прошлого прогона (повторный create на той же incarnation).
+  # ── Task 0: set up a deterministic health-gate ───────────────────
+  # printf epoch markers ONTO THE HOST. GATE_DELAY=6s, probe delay=2s → the probe can't
+  # match earlier than the ~3rd attempt (now>=ready-at unreachable on attempts 1-2).
+  # rm clears markers from a previous run (a repeated create on the same incarnation).
   - name: Prepare health-gate epochs
     module: core.cmd.shell
     changed_when: "false"
@@ -37,11 +37,11 @@ tasks:
         printf '%s' "$now" > /tmp/fc3-start
         printf '%s' "$((now + 6))" > /tmp/fc3-ready-at
 
-  # ── Задача 1: probe с retry:+until: бьётся в gate ────────────────────────
-  # changed_when:false — probe чистый health-read, не изменение. retry-бюджет
-  # 20×2s=40s с большим запасом на gate=6s. until: вычисляется ПОСЛЕ каждой
-  # попытки по register.self.stdout (свежий per-attempt register). failed_when
-  # дублирует until-условие как страховка от «исчерпано но OK».
+  # ── Task 1: probe with retry:+until: hammers the gate ────────────────────────
+  # changed_when:false — the probe is a pure health-read, not a change. retry budget
+  # 20×2s=40s with a big margin over gate=6s. until: is evaluated AFTER each
+  # attempt against register.self.stdout (a fresh per-attempt register). failed_when
+  # duplicates the until condition as a safety net against "exhausted but OK".
   - name: Wait until health-gate opens
     module: core.cmd.shell
     register: probe

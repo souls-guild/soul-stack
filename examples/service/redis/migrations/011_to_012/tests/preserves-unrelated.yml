@@ -1,9 +1,9 @@
 name: preserves-unrelated
 description: >
-  Инкарнация без install/conf_dir/data_dir/modules_base_url (напр. уже провиженная
-  без host-layout-override, дефолтные пути). delete no-op по всем четырём путям →
-  остальной state (redis_type/redis_config/redis_users/redis_sentinel/namedfields/
-  топология) проходит насквозь бит-в-бит, лишние ключи delete НЕ создаёт.
+  An incarnation without install/conf_dir/data_dir/modules_base_url (e.g. already
+  provisioned without a host-layout override, default paths). delete is a no-op on all four
+  paths → the rest of the state (redis_type/redis_config/redis_users/redis_sentinel/named
+  fields/topology) passes through byte-for-byte, delete does NOT create extra keys.
 
 state_before:
   redis_type: "sentinel"

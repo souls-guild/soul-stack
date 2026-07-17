@@ -1,23 +1,25 @@
-# L0-испытание create_from_souls в режиме cluster — деплой honest hash-slot Redis Cluster
-# на ГОТОВЫЙ roster (без provision). Multi-host roster (fixtures.hosts) из 3 хостов:
-# shards=3, replicas_per_master=0 → топология ровно 3*(1+0)=3 (size-guard проходит).
+# L0 test for create_from_souls in cluster mode: deploys an honest hash-slot Redis
+# Cluster onto an EXISTING roster (no provisioning). Multi-host roster (fixtures.hosts)
+# of 3 hosts: shards=3, replicas_per_master=0 → topology is exactly 3*(1+0)=3 (size
+# guard passes).
 #
-# ★ КРИТЕРИЙ ПРИЁМКИ (отличие от create): прогон катится по существующему roster-у БЕЗ
-# provision-шагов. task_absent ассертит, что core.cloud.created (создание VM) и
-# core.soul.registered (барьер онбординга) в плане ОТСУТСТВУЮТ — у create_from_souls нет
-# ни include redis-provision.yml, ни секции provision.
+# ★ ACCEPTANCE CRITERION (difference from create): the run proceeds over an existing
+# roster WITHOUT provisioning steps. task_absent asserts that core.cloud.created
+# (VM creation) and core.soul.registered (onboarding barrier) are ABSENT from the
+# plan; create_from_souls has neither an include of redis-provision.yml nor a
+# provision section.
 #
-# Render-only, герметично. На cluster-прогоне sentinel-ветка group-drop, cluster-ветка
-# рендерится. size-guard — assert: (keeper-side render-time precondition, ADR-009),
-# не emit RenderedTask. Деплой-тело (redis-deploy-cluster.yml) — service-level, то же,
-# что у create. Раскладку ролей master/replica и слотов делает ПЛАГИН
-# (community.redis.cluster action create) детерминированно по sort SID; scenario строит
-# топологию-MAP (SID→addr).
+# Render-only, hermetic. On the cluster run, the sentinel branch group-drops and the
+# cluster branch renders. The size guard is an assert: (keeper-side render-time
+# precondition, ADR-009), it does not emit a RenderedTask. The deploy body
+# (redis-deploy-cluster.yml) is service-level, same as for create. The PLUGIN
+# (community.redis.cluster action create) deterministically assigns master/replica
+# roles and slots by sorted SID; the scenario builds the topology MAP (SID -> addr).
 name: cluster deploy on existing roster without provision
 
 fixtures:
   default_destiny_source: "file://../../destiny/{name}"
-  # Multi-host roster: 3 хоста, порядок в YAML намеренно не отсортирован (b, c, a).
+  # Multi-host roster: 3 hosts, the order in YAML is intentionally unsorted (b, c, a).
   hosts:
     - sid: node-b.example.com
       covens: [create_from_souls, redis]
@@ -37,9 +39,10 @@ fixtures:
   vault:
     secret/redis/create_from_souls:
       password: s3cr3t-redis-pass-create-from-souls
-    # ★ РЕДИЗАЙН default_admin (2026-06-30): default_admin — системный юзер внутрикластерного
-    # AUTH; cluster-build (community.redis.cluster username/password) и masteruser/masterauth
-    # деплоя читают его пароль ветки users/default_admin (главный секрет ДРОПНУТ из деплой-тел).
+    # ★ default_admin REDESIGN (2026-06-30): default_admin is the system user for
+    # in-cluster AUTH; cluster-build (community.redis.cluster username/password) and
+    # the deploy's masteruser/masterauth read its password from the users/default_admin
+    # branch (the main secret is DROPPED from the deploy bodies).
     secret/redis/create_from_souls/users/default_admin:
       password: default-admin-secret-pass
     secret/redis/create_from_souls/users/replica:
@@ -87,16 +90,16 @@ fixtures:
 
 assert:
   task_present:
-    # ── cluster destiny: пакет (mode-агностичный install ДО ветвления) ──────
+    # ── cluster destiny: package (mode-agnostic install BEFORE branching) ──────
     - module: core.pkg.installed
       params_subset:
         name: redis-server
         version: "7.4.1"
 
-    # ── cluster destiny: redis.conf с cluster-директивами ───────────────────
-    # config-map несёт базовый merge + HOST-ИНВАРИАНТНЫЕ cluster-директивы. cluster-announce-ip
-    # в config НЕТ — per-host директива, её рендерит redis.conf.tmpl из .self. render_context.self
-    # = первый по SID хост (node-a, host-инвариант apply.input).
+    # ── cluster destiny: redis.conf with cluster directives ───────────────────
+    # config-map carries the base merge + HOST-INVARIANT cluster directives. cluster-announce-ip
+    # is NOT in config: it's a per-host directive rendered by redis.conf.tmpl from .self.
+    # render_context.self = the first host by SID (node-a, the apply.input host invariant).
     - module: core.file.rendered
       params_subset:
         path: /etc/redis/redis.conf
@@ -117,10 +120,10 @@ assert:
               - /var/lib/redis/modules/redisearch.so
               - /var/lib/redis/modules/redistimeseries.so
             config:
-              # ★ РЕДИЗАЙН default_admin: replica→master AUTH (masteruser/masterauth) приходит
-              # ОБЫЧНЫМИ директивами config (cluster deploy-body доливает их vault()-в-ячейке).
-              # Пароль — ветка users/default_admin; в state_changes.redis_config его НЕТ (секрет
-              # в Vault, не в incarnation.state).
+              # ★ default_admin REDESIGN: replica->master AUTH (masteruser/masterauth) arrives as
+              # REGULAR config directives (the cluster deploy body fills them in via vault()-in-cell).
+              # The password comes from the users/default_admin branch; it's NOT in
+              # state_changes.redis_config (the secret lives in Vault, not in incarnation.state).
               masteruser:       "default_admin"
               masterauth:       "default-admin-secret-pass"
               maxmemory:        "256mb"
@@ -146,13 +149,14 @@ assert:
           essence: {}
 
     # ── cluster-build (community.redis.cluster) ─────────────────────────────
-    # nodes-MAP: ключ=SID, addr=primary_ip+":6379". Детерминирован по SID.
+    # nodes MAP: key=SID, addr=primary_ip+":6379". Deterministic by SID.
     - module: community.redis.cluster
       params_subset:
         action: create
         replicas_per_shard: 0
-        # ★ РЕДИЗАЙН default_admin: коннект к каждой ноде под ACL-юзером default_admin
-        # (username → AUTH). Прежний главный секрет ДРОПНУТ — пароль из ветки users/default_admin.
+        # ★ default_admin REDESIGN: connects to each node as the ACL user default_admin
+        # (username -> AUTH). The former main secret is DROPPED; password comes from the
+        # users/default_admin branch.
         username: default_admin
         password: default-admin-secret-pass
         nodes:
@@ -161,11 +165,11 @@ assert:
           node-c.example.com: { addr: "10.0.0.3:6379" }
 
   task_absent:
-    # ★ КРИТЕРИЙ create_from_souls: provision-шаги ОТСУТСТВУЮТ (нет include redis-provision.yml,
-    # нет секции provision). Прогон катится по существующему roster-у.
+    # ★ create_from_souls CRITERION: provisioning steps are ABSENT (no include of
+    # redis-provision.yml, no provision section). The run proceeds over an existing roster.
     - module: core.cloud.created
     - module: core.soul.registered
-    # redis-sentinel package ОТСУТСТВУЕТ в cluster-режиме (sentinel_enabled default false).
+    # redis-sentinel package is ABSENT in cluster mode (sentinel_enabled defaults to false).
     - module: core.pkg.installed
       params_subset:
         name: redis-sentinel
@@ -185,8 +189,8 @@ assert:
       cluster-node-timeout: "5000"
     redis_users: []
     redis_hosts: []
-    # ★ provision read-model: ВСЕГДА консервативный дефолт — create_from_souls не
-    # поднимает VM (отличие от create).
+    # ★ provision read-model: ALWAYS the conservative default; create_from_souls
+    # doesn't spin up VMs (difference from create).
     provisioned_vm_ids: []
     provisioned_sids: []
     provisioned_provider: ""

@@ -1,232 +1,234 @@
-# vars.yml — destiny-локалы redis (docs/destiny/vars.md): инварианты, ОДИНАКОВЫЕ для
-# всех incarnation и НЕ переопределяемые снаружи (не input — это контракт vs внутренности).
-# Один источник правды; задачи берут через ${ vars.* }.
+# vars.yml — redis destiny locals (docs/destiny/vars.md): invariants, IDENTICAL for
+# all incarnations and NOT overridable from outside (not input — this is contract vs internals).
+# Single source of truth; tasks pick these up via ${ vars.* }.
 #
-# Резолвятся ОДИН раз на destiny-проход (per-host) до задач. var→var-ссылка внутри слоя
-# разрешена (eager-topological, vars.md): vars.<other> резолвится на другой file-var того
-# же слоя (root_group → root_owner), цикл/несуществующий ref → ошибка рендера, порядок
-# объявления безразличен. Файл закоммичен в git destiny-репо — секретов тут нет (пароли/
-# PEM приходят через input с secret/vault()).
+# Resolved ONCE per destiny pass (per-host) before tasks. var→var reference within a layer
+# is allowed (eager-topological, vars.md): vars.<other> resolves to another file-var of the
+# same layer (root_group → root_owner), cycle/nonexistent ref → render error, declaration
+# order doesn't matter. The file is committed to the destiny git repo — no secrets here (passwords/
+# PEM come via input with secret/vault()).
 #
-# ── ГРАНИЦА vars (инвариант) vs input (оператор-переопределяемое) ───────────────
-# vars (ЗДЕСЬ) — то, что ОДИНАКОВО для всех incarnation и менять незачем/нельзя:
-#   - identity сервиса: имена systemd-юнитов (redis_service_name/sentinel_service_name)
-#     — контракт с distro-пакетом, сменишь → сломаешь package-ветку;
-#   - фиксированная номенклатура: таблица алиас→.so Redis-модулей (redis_modules);
-#   - file-mode/owner инварианты; каталоги layout-а, привязанные к systemd/пакету
-#     (systemd_dir, tls-/modules-dir выводятся из conf_dir/data_dir).
-# input (destiny.yml input:) — то, что РАЗУМНО переопределить per-incarnation:
-#   - conf_dir/data_dir: оператор может развернуть конфиг/данные под свой storage-
-#     layout (другой mount под /data и т.п.). Дефолт input = vars-значение
-#     (redis_conf_dir/redis_data_dir) — back-compat, дефолтный путь не меняется.
-# Почему НЕ всё в input: переопределяемость без сценария применения раздувает контракт
-# (имя юнит-файла, drop-in-каталог, набор модулей менять незачем) — vars.md «не плодить
-# input ради умозрительной гибкости».
+# ── vars (invariant) vs input (operator-overridable) BOUNDARY ───────────────
+# vars (HERE) — what's IDENTICAL for all incarnations and shouldn't/can't change:
+#   - service identity: systemd unit names (redis_service_name/sentinel_service_name)
+#     — a contract with the distro package, changing it breaks the package branch;
+#   - fixed nomenclature: alias→.so table of Redis modules (redis_modules);
+#   - file-mode/owner invariants; layout directories tied to systemd/package
+#     (systemd_dir, tls-/modules-dir are derived from conf_dir/data_dir).
+# input (destiny.yml input:) — what's REASONABLE to override per-incarnation:
+#   - conf_dir/data_dir: the operator may deploy config/data under their own storage
+#     layout (a different mount under /data, etc.). Default input = vars value
+#     (redis_conf_dir/redis_data_dir) — back-compat, the default path doesn't change.
+# Why NOT everything goes in input: overridability without an application scenario bloats
+# the contract (unit-file name, drop-in dir, module set aren't worth changing) — vars.md "don't
+# multiply input for hypothetical flexibility".
 
-# system-юзер и группа сервиса redis. distro-пакет заводит их сам, binary-ветка
-# install.yml создаёт явно (core.group.present/core.user.present) — оба берут имя отсюда.
+# system user and group for the redis service. The distro package creates them itself,
+# the binary-branch install.yml creates them explicitly (core.group.present/core.user.present) —
+# both take the name from here.
 redis_user:  redis
 redis_group: redis
 
-# ── Имена systemd-сервисов (директива A: имя сервиса в vars, ВЕЗДЕ) ────────────
-# ИНВАРИАНТ (vars, не input): имя юнита — контракт между binary-юнитом, hardening
-# drop-in (.service.d/), core.service running/restart и distro-пакетом. distro-пакет
-# зовёт сервис именно redis-server/redis-sentinel; менять имя НЕЛЬЗЯ, не сломав
-# package-ветку → не operator-переопределяемое. ВНИМАНИЕ: это имя СЕРВИСА (systemd),
-# НЕ имя пакета (core.pkg redis-server) и НЕ имя бинаря (/usr/local/bin/redis-server) —
-# совпадение значений случайно, семантика разная, те токены НЕ из этих vars.
+# ── systemd service names (directive A: service name in vars, EVERYWHERE) ────────────
+# INVARIANT (vars, not input): the unit name is a contract between the binary unit, the hardening
+# drop-in (.service.d/), core.service running/restart and the distro package. The distro package
+# calls the service exactly redis-server/redis-sentinel; the name MUST NOT change without breaking
+# the package branch → not operator-overridable. NOTE: this is the SERVICE (systemd) name,
+# NOT the package name (core.pkg redis-server) and NOT the binary name (/usr/local/bin/redis-server) —
+# value overlap is coincidental, the semantics differ, those tokens are NOT from these vars.
 redis_service_name:    redis-server
 sentinel_service_name: redis-sentinel
 
-# ── Дефолтные порты (директива «хардкод порта → var») ───────────────────────────
-# ИНВАРИАНТ (vars, не input): well-known порт redis-server (6379) и redis-sentinel
-# (26379). redis.conf печатает `port 6379` ПЕРВОЙ строкой (merged config от scenario
-# может переопределить last-wins — напр. `port 0` при tls.only); sentinel.conf —
-# `port 26379`; ExecStop redis-sentinel.service шлёт shutdown на этот же sentinel-порт.
-# Это дефолт кирпича, не operator-input (TLS-порт — отдельно в input.tls.port).
+# ── Default ports (directive "hardcoded port → var") ───────────────────────────
+# INVARIANT (vars, not input): the well-known port of redis-server (6379) and redis-sentinel
+# (26379). redis.conf prints `port 6379` as the FIRST line (a merged config from a scenario
+# may override last-wins — e.g. `port 0` under tls.only); sentinel.conf —
+# `port 26379`; ExecStop of redis-sentinel.service sends shutdown to this same sentinel port.
+# This is the brick's default, not operator-input (the TLS port is separate, in input.tls.port).
 redis_port:    6379
 sentinel_port: 26379
 
-# ── Базовые пути host-layout (директива B) ──────────────────────────────────────
-# data_dir/conf_dir дополнительно ВЫНЕСЕНЫ в input (destiny.yml) — оператор может
-# захотеть другое расположение под свой storage-layout; vars-значения тут — дефолты,
-# на которые ссылается input.default. Задачи берут НЕ эти raw-vars напрямую, а
-# эффективные _eff-vars ниже (резолв input→дефолт).
+# ── Base host-layout paths (directive B) ──────────────────────────────────────
+# data_dir/conf_dir are additionally EXPOSED via input (destiny.yml) — the operator may
+# want a different location for their storage layout; vars values here are the defaults
+# referenced by input.default. Tasks don't take these raw vars directly, but the
+# effective _eff-vars below (input→default resolution).
 
-# conf-dir redis: redis.conf, users.acl, sentinel.conf, tls/. ДЕФОЛТ для input.conf_dir.
+# redis conf-dir: redis.conf, users.acl, sentinel.conf, tls/. DEFAULT for input.conf_dir.
 redis_conf_dir: /etc/redis
 
-# ── Эффективные пути conf/data (резолв input→дефолт ОДИН раз) ────────────────────
-# var→input CEL (eager-topological, vars.md): резолв default(input.X, дефолт) уходит
-# СЮДА, задачи берут готовое ${ vars.redis_conf_dir_eff } вместо повторного inline-
-# default по файлам. _eff-суффикс отделяет «эффективный путь (input или дефолт)» от
-# raw-дефолта redis_conf_dir/redis_data_dir (на который ссылается input.default).
+# ── Effective conf/data paths (input→default resolution, done ONCE) ────────────────
+# var→input CEL (eager-topological, vars.md): the default(input.X, default) resolution goes
+# HERE, tasks take the ready ${ vars.redis_conf_dir_eff } instead of repeating inline
+# default logic per file. The _eff suffix separates "effective path (input or default)" from
+# the raw default redis_conf_dir/redis_data_dir (which input.default references).
 redis_conf_dir_eff: "${ default(input.conf_dir, vars.redis_conf_dir) }"
 redis_data_dir_eff: "${ default(input.data_dir, vars.redis_data_dir) }"
 
-# data-dir redis (RDB/AOF, modules-dir). ДЕФОЛТ для input.data_dir (оператор может
-# переопределить под свой storage). modules-dir выводится из input.data_dir в задачах
-# (${ input.data_dir }/modules) — отдельного modules_dir в input больше нет (директива
-# B: modules_dir убран из input, путь производный от data-dir).
+# redis data-dir (RDB/AOF, modules-dir). DEFAULT for input.data_dir (the operator may
+# override it for their own storage). modules-dir is derived from input.data_dir in tasks
+# (${ input.data_dir }/modules) — there is no separate modules_dir in input anymore (directive
+# B: modules_dir removed from input, path is derived from data-dir).
 redis_data_dir: /var/lib/redis
 
-# Каталог установки бинарей redis (redis-server/redis-cli/redis-sentinel) binary-ветки.
-# ИНВАРИАНТ (vars, не input): фиксированный layout-каталог /usr/local/bin (прецедент
-# node-exporter), менять незачем. Задачи binary-ветки собирают путь как
-# ${ vars.redis_bin_dir }/redis-server (и -cli/-sentinel).
+# Install directory for redis binaries (redis-server/redis-cli/redis-sentinel) of the binary branch.
+# INVARIANT (vars, not input): fixed layout directory /usr/local/bin (precedent
+# node-exporter), no reason to change it. Binary-branch tasks build the path as
+# ${ vars.redis_bin_dir }/redis-server (and -cli/-sentinel).
 redis_bin_dir: /usr/local/bin
 
-# ── arch Nexus-пути: GOARCH-конвенция → uname-m-конвенция ───────────────────────
-# soulprint.self.os.arch несёт GOARCH-имя (amd64/arm64 — Go-конвенция, читается
-# core.pkg/core.service напрямую). Nexus же раскладывает бинари/.so по uname-m-пути
-# (x86_64/aarch64 — ansible_architecture/`uname -m` ансибл-роли-источника): путь
-# .../redis/amd64/... → 404, .../redis/x86_64/... → 200. Маппим ТОЛЬКО для URL Nexus
-# (бинари install.yml + .so modules.yml); soulprint не трогаем. amd64→x86_64,
-# arm64→aarch64, прочее (в т.ч. синтетический arch фикстур) — как есть.
-# ★ has()-guard render-safe в МЁРТВОМ package-проходе (file-var резолвится до skip-
-# проекции). Guard ДВУХступенчатый: CEL has() тестирует только ПОСЛЕДНИЙ компонент
-# пути — одиночный has(soulprint.self.os.arch) при absent os сам вычисляет
-# soulprint.self.os и кидает «no such key: os». Поэтому absent os И absent os.arch
-# оба нормализуются к '' (значение не используется — задачи skip).
+# ── arch Nexus paths: GOARCH convention → uname-m convention ───────────────────────
+# soulprint.self.os.arch carries a GOARCH name (amd64/arm64 — Go convention, read
+# directly by core.pkg/core.service). Nexus, however, lays out binaries/.so under a uname-m path
+# (x86_64/aarch64 — ansible_architecture/`uname -m` convention of the source ansible role): path
+# .../redis/amd64/... → 404, .../redis/x86_64/... → 200. We map ONLY for the Nexus URL
+# (install.yml binaries + .so in modules.yml); soulprint itself is untouched. amd64→x86_64,
+# arm64→aarch64, everything else (incl. the synthetic arch of fixtures) — passed through unchanged.
+# * has()-guard render-safe in a DEAD package pass (file-var resolves before the skip
+# projection). Two-stage guard: CEL has() tests only the LAST path component —
+# a lone has(soulprint.self.os.arch) with absent os would itself evaluate
+# soulprint.self.os and throw "no such key: os". So both absent os AND absent os.arch
+# normalize to '' (value unused — tasks skip).
 redis_arch: >-
   ${ has(soulprint.self.os) && has(soulprint.self.os.arch)
        ? (soulprint.self.os.arch == 'amd64' ? 'x86_64'
           : (soulprint.self.os.arch == 'arm64' ? 'aarch64' : soulprint.self.os.arch))
        : '' }
 
-# ── URL-база бинарей Redis из Nexus (редизайн install-модели) ───────────────────
-# Базовый URL КАТАЛОГА бинарей конкретной (version, arch, distro_ver) сборки —
-# собирается в ОДНОМ месте, install.yll-задачи дописывают лишь имя файла
-# (/redis-server, /redis-cli, /redis-benchmark). Форма ansible redis_url_file_path:
-# <base_url>/<arch>/<distribution>/<distro_major>/<version>. Distribution захардкожен
-# Debian (целевой парк); arch — vars.redis_arch (uname-m-маппинг soulprint.self.os.arch,
-# x86_64/aarch64 — Nexus-путь), distro_ver — per-host из soulprint.self.os.version.
+# ── Redis binaries base URL on Nexus (install-model redesign) ───────────────────
+# Base URL of the DIRECTORY of binaries for a specific (version, arch, distro_ver) build —
+# built in ONE place, install.yml tasks only append the filename
+# (/redis-server, /redis-cli, /redis-benchmark). Form of ansible redis_url_file_path:
+# <base_url>/<arch>/<distribution>/<distro_major>/<version>. Distribution is hardcoded to
+# Debian (target fleet); arch — vars.redis_arch (uname-m mapping of soulprint.self.os.arch,
+# x86_64/aarch64 — Nexus path), distro_ver — per-host from soulprint.self.os.version.
 #
-# ★ render-safety в МЁРТВОМ package-проходе: при install.method=package binary-блок
-# static-skip, НО file-vars резолвятся per-host ДО skip-проекции (eager, до задач) —
-# голый input.install.base_url/version упал бы «no such key: install». Поэтому base_url
-# и version нормализуются has()-цепочкой к '' (значение не используется в package-проходе —
-# задачи skip; в binary-проходе validate/required гарантируют присутствие). arch/version
-# дистрибутива — soulprint.self.os (есть в destiny-CEL, прецедент node-exporter/modules).
-# ★ soulprint.self.os.arch/version — has()-guard render-safe: в МЁРТВОМ package-проходе
-# (binary-блок static-skip) var всё равно резолвится, а fixtures package-кейсов могут не
-# нести os / os.version → голый soulprint.self.os.version упал бы «no such key». Guard
-# двухступенчатый (has(os) && has(os.version)) — см. redis_arch выше: has() тестирует
-# только последний компонент пути. В binary-проходе soulprint несёт оба поля (ADR-018
-# typed). Значение в мёртвом проходе не используется (skip).
+# * render-safety in a DEAD package pass: with install.method=package the binary block is
+# static-skip, BUT file-vars resolve per-host BEFORE the skip projection (eager, before tasks) —
+# a bare input.install.base_url/version would fail with "no such key: install". So base_url
+# and version are normalized via a has() chain to '' (the value is unused in the package pass —
+# tasks skip; in the binary pass validate/required guarantee presence). arch/version
+# of the distribution — soulprint.self.os (available in destiny-CEL, precedent node-exporter/modules).
+# * soulprint.self.os.arch/version — has()-guard render-safe: in a DEAD package pass
+# (binary block static-skip) the var still resolves, and package-case fixtures may not
+# carry os / os.version → a bare soulprint.self.os.version would fail with "no such key". Guard
+# is two-stage (has(os) && has(os.version)) — see redis_arch above: has() tests
+# only the last path component. In the binary pass soulprint carries both fields (ADR-018
+# typed). The value in the dead pass is unused (skip).
 redis_binary_url_base: >-
   ${ (has(input.install) && has(input.install.base_url) ? input.install.base_url : '')
        + '/' + vars.redis_arch
        + '/Debian/' + (has(soulprint.self.os) && has(soulprint.self.os.version) ? soulprint.self.os.version : '')
        + '/' + (has(input.install) && has(input.install.version) ? input.install.version : '') }
 
-# ── SSRF-guard для fetch бинарей Nexus (core.url.fetched allow_private) ─────────
-# Дефолтный binary_base_url сервиса — ВНУТРЕННИЙ Nexus (resolve в RFC1918, напр.
-# 10.16.2.130) → core.url.fetched по умолчанию (allow_private:false) блокит dial
-# SSRF-guard-ом (shared/netguard). Значение приходит из scenario через
+# ── SSRF guard for fetching Nexus binaries (core.url.fetched allow_private) ─────────
+# The service's default binary_base_url is an INTERNAL Nexus (resolves to RFC1918, e.g.
+# 10.16.2.130) → core.url.fetched by default (allow_private:false) blocks the dial via
+# SSRF guard (shared/netguard). The value comes from the scenario via
 # apply.input.install.allow_private (compute.install ← essence.binary_allow_private,
-# дефолт true: дефолтный base = internal Nexus). 4 fetch-задачи binary-ветки берут
-# готовое ${ vars.redis_binary_allow_private }. has()-цепочка render-safe в МЁРТВОМ
-# package-проходе (binary-блок static-skip, но file-var всё равно резолвится до задач):
-# absent install/allow_private → false (строгий дефолт; значение в package-проходе не
-# используется — задачи binary-ветки skip).
+# default true: default base = internal Nexus). The 4 binary-branch fetch tasks take the
+# ready ${ vars.redis_binary_allow_private }. The has() chain is render-safe in a DEAD
+# package pass (binary block static-skip, but the file-var still resolves before tasks):
+# absent install/allow_private → false (strict default; the value in the package pass is
+# unused — binary-branch tasks skip).
 redis_binary_allow_private: >-
   ${ has(input.install) && has(input.install.allow_private) && input.install.allow_private }
 
-# ── SSRF-guard для fetch .so модулей (core.url.fetched allow_private) ────────────
-# Симметрично redis_binary_allow_private: modules_base_url тоже может быть внутренним
-# Nexus (resolve в RFC1918) → 4 .so-fetch (modules.yml) упали бы на SSRF-guard.
-# Значение — из scenario apply.input.modules_allow_private (compute.modules_allow_private
-# ← essence.modules_allow_private, дефолт true). has()-guard render-safe: absent → false.
+# ── SSRF guard for fetching .so modules (core.url.fetched allow_private) ────────────
+# Symmetric to redis_binary_allow_private: modules_base_url can also be an internal
+# Nexus (resolves to RFC1918) → the 4 .so fetches (modules.yml) would fail on the SSRF guard.
+# The value — from the scenario's apply.input.modules_allow_private (compute.modules_allow_private
+# ← essence.modules_allow_private, default true). has()-guard render-safe: absent → false.
 redis_modules_allow_private: >-
   ${ has(input.modules_allow_private) && input.modules_allow_private }
 
-# Каталог systemd drop-in-ов redis-server (override поверх distro-юнита). ИНВАРИАНТ
-# (привязан к имени сервиса + layout systemd): /etc/systemd/system/<unit>.d. Задачи
-# строят путь из vars.redis_service_name.
+# Directory for redis-server's systemd drop-ins (override on top of the distro unit). INVARIANT
+# (tied to the service name + systemd layout): /etc/systemd/system/<unit>.d. Tasks
+# build the path from vars.redis_service_name.
 systemd_dir: /etc/systemd/system
 
-# ── Системные run-/log-каталоги Redis (директива «хардкод пути → var») ──────────
-# ИНВАРИАНТ (vars, не input): системные каталоги runtime-состояния (pidfile/unix-сокет)
-# и логов redis-server/redis-sentinel. Привязаны к host-layout пакета/systemd (не
-# storage-выбор оператора как conf_dir/data_dir) → не operator-переопределяемое. Один
-# источник правды для redis.conf/sentinel.conf, обоих .service-юнитов, logrotate и
-# hardening drop-in.
+# ── System run-/log dirs for Redis (directive "hardcoded path → var") ──────────
+# INVARIANT (vars, not input): system directories for runtime state (pidfile/unix socket)
+# and logs of redis-server/redis-sentinel. Tied to the package/systemd host layout (not
+# an operator storage choice like conf_dir/data_dir) → not operator-overridable. Single
+# source of truth for redis.conf/sentinel.conf, both .service units, logrotate and
+# the hardening drop-in.
 
-# Run-каталог redis: pidfile (redis-server.pid/redis-sentinel.pid) и unix-сокет.
-# RuntimeDirectory=redis у systemd-юнита создаёт именно /var/run/redis. socket_dir
-# ниже ссылается сюда (var→var) — каталог сокета и run-каталог совпадают, один литерал.
+# Redis run-dir: pidfile (redis-server.pid/redis-sentinel.pid) and unix socket.
+# RuntimeDirectory=redis in the systemd unit creates exactly /var/run/redis. socket_dir
+# below references this (var→var) — the socket dir and run dir coincide, one literal.
 run_dir: /var/run/redis
 
-# Лог-каталог redis: logfile redis-server.log/redis-sentinel.log (redis.conf/
-# sentinel.conf), glob *.log в logrotate.d, ReadWritePaths логов в hardening/юнитах.
+# Redis log-dir: logfile redis-server.log/redis-sentinel.log (redis.conf/
+# sentinel.conf), the *.log glob in logrotate.d, ReadWritePaths for logs in hardening/units.
 log_dir: /var/log/redis
 
-# Каталог unix-сокета redis (создаётся, когда в merged-конфиге есть unixsocket — см.
-# install.yml). Совпадает с run-каталогом (pidfile/socket — один системный каталог) →
-# var→var на run_dir.
+# Directory for the redis unix socket (created when the merged config has unixsocket — see
+# install.yml). Matches the run directory (pidfile/socket share one system dir) →
+# var→var on run_dir.
 socket_dir: "${ vars.run_dir }"
 
-# ── Каталог Redis-модулей и полный набор (директива C: модули ВСЕГДА ВСЕ) ───────
-# ИНВАРИАНТ (vars, не input): фиксированная таблица алиас→имя .so-файла (номенклатура
-# Redis, не operator-выбор). Директива «модули ВСЕГДА ВСЕ»: разворачиваем ВЕСЬ набор на
-# Redis < 8, оператор НЕ выбирает подмножество. loadmodules (server.yml) и ЧЕТЫРЕ ЯВНЫЕ
-# fetch-задачи (modules.yml) берут имена .so отсюда; детерминированный порядок задаёт
-# СОРТИРОВАННЫЙ литерал алиасов, а НЕ итерация по map (иначе ложный change/рестарт).
-# REDIS 8+: модули ВСТРОЕНЫ в сервер — version-guard в задачах (см. redis_is_v8plus).
+# ── Redis modules directory and full set (directive C: modules ALWAYS ALL) ───────
+# INVARIANT (vars, not input): fixed alias→.so-filename table (Redis nomenclature,
+# not an operator choice). Directive "modules ALWAYS ALL": deploy the WHOLE set on
+# Redis < 8, the operator does NOT pick a subset. loadmodules (server.yml) and the FOUR EXPLICIT
+# fetch tasks (modules.yml) take the .so names from here; deterministic ordering is given by the
+# SORTED alias literal, NOT map iteration (otherwise a spurious change/restart).
+# REDIS 8+: modules are BUILT INTO the server — version-guard in tasks (see redis_is_v8plus).
 redis_modules:
   bloom:      redisbloom.so
   json:       rejson.so
   search:     redisearch.so
   timeseries: redistimeseries.so
 
-# Каталог .so-модулей под data-dir: <data_dir>/modules. var→var (vars.redis_data_dir_eff).
-# Задачи modules.yml/loadmodules берут готовый путь отсюда — один источник правды.
+# .so-modules directory under data-dir: <data_dir>/modules. var→var (vars.redis_data_dir_eff).
+# modules.yml/loadmodules tasks take the ready path from here — a single source of truth.
 redis_modules_dir: "${ vars.redis_data_dir_eff + '/modules' }"
 
-# ── Version-guard Redis 8+ (директива C) ────────────────────────────────────────
-# ЭФФЕКТИВНАЯ версия redis для version-gate модулей: input.version (distro-пин), когда
-# непуст (`!= ''`), ИНАЧЕ input.install.version (binary-ветка). ★ scenario передаёт ключ
-# `version` ВСЕГДА (как '' при install.method=binary) → голый has() брал бы '' и делал бы
-# install.version мёртвой; поэтому нормализуем пустой version к install.version.
+# ── Redis 8+ version guard (directive C) ────────────────────────────────────────
+# EFFECTIVE redis version for the module version-gate: input.version (distro pin), when
+# non-empty (`!= ''`), OTHERWISE input.install.version (binary branch). * the scenario always passes
+# the `version` key (as '' when install.method=binary) → a bare has() would take '' and make
+# install.version dead; so we normalize an empty version to install.version.
 redis_effective_version: "${ (has(input.version) && input.version != '') ? input.version : (has(input.install) && has(input.install.version) ? input.install.version : '') }"
 
-# Redis 8+? Мажор >= 8 (regex: опц. epoch `N:` + мажор 8/9/двузначный). Единый источник
-# version-gate для loadmodules (server.yml) и include modules.yml (main.yml). Пустая
-# версия (обе absent — невозможно при валидном вводе) regex не матчит → false (< 8).
+# Redis 8+? Major >= 8 (regex: optional epoch `N:` + major 8/9/two-digit). Single source
+# of the version-gate for loadmodules (server.yml) and the modules.yml include (main.yml). An empty
+# version (both absent — impossible with valid input) doesn't match the regex → false (< 8).
 redis_is_v8plus: >-
   ${ vars.redis_effective_version.matches('^([0-9]+:)?(8|9|[1-9][0-9])\\.') }
 
-# ── Гейт загрузки Redis-модулей (ALL-OR-NOTHING) ───────────────────────────────
-# Модули («директива C: модули ВСЕГДА ВСЕ» на Redis < 8) грузятся ТОЛЬКО когда задан
-# непустой modules_base_url. Пустой base_url → vanilla redis (НЕ рендерится loadmodule,
-# НЕ качаются .so) — иначе redis.conf нёс бы loadmodule на .so, которые fetch-группа
-# (group-drop при пустом base_url) не скачала, и redis-server падал бы на старте.
-# modules_base_url — input-поле destiny (default '' через has()-цепочку: absent → vanilla).
+# ── Redis modules load gate (ALL-OR-NOTHING) ───────────────────────────────
+# Modules ("directive C: modules ALWAYS ALL" on Redis < 8) load ONLY when a
+# non-empty modules_base_url is set. An empty base_url → vanilla redis (loadmodule is NOT
+# rendered, .so are NOT fetched) — otherwise redis.conf would carry loadmodule for .so that the
+# fetch group (group-drop on empty base_url) didn't download, and redis-server would
+# fail to start.
+# modules_base_url — a destiny input field (default '' via a has() chain: absent → vanilla).
 redis_modules_enabled: >-
   ${ !vars.redis_is_v8plus
      && (has(input.modules_base_url) ? input.modules_base_url : '') != '' }
 
-# ── file-mode/owner инварианты (вынесены: >2 употреблений по задачам) ──────────
-# Точечные mode на ≤2 задачи (0750 tls-dir/modules-dir, 0755 socket-/drop-in-dir)
-# ОСТАЮТСЯ литералом: общим инвариантом destiny не являются (vars.md — не плодить var
-# ради одной задачи).
+# ── file-mode/owner invariants (extracted: >2 uses across tasks) ──────────
+# One-off modes used by ≤2 tasks (0750 tls-dir/modules-dir, 0755 socket-/drop-in-dir)
+# REMAIN literals: they aren't a common destiny invariant (vars.md — don't multiply vars
+# for a single task).
 
-# mode конфигов с секретами redis (содержат password-хеши / requirepass): redis.conf,
-# users.acl, sentinel.conf. 0640 owner/group redis — читает только сервис.
+# mode of redis config files containing secrets (password hashes / requirepass): redis.conf,
+# users.acl, sentinel.conf. 0640 owner/group redis — only the service can read it.
 redis_secret_file_mode: "0640"
 
-# mode systemd-юнитов и drop-in-ов (root-owned, world-readable стандарт systemd):
+# mode of systemd units and drop-ins (root-owned, world-readable per systemd standard):
 # redis-server/redis-sentinel/disable-thp .service, hardening drop-in, logrotate.d.
 unit_file_mode: "0644"
 
-# mode TLS PEM-материала redis-server (cert/key/CA): 0600 owner redis — приватный
-# ключ и сертификаты читает только сервис.
+# mode of redis-server TLS PEM material (cert/key/CA): 0600 owner redis — only the
+# service reads the private key and certificates.
 redis_pem_mode: "0600"
 
-# owner root-owned артефактов (systemd-юниты/drop-ины/logrotate.d): литерал root.
+# owner of root-owned artifacts (systemd units/drop-ins/logrotate.d): literal root.
 root_owner: root
 
-# group root-owned артефактов. var→var на root_owner: owner и group совпадают,
-# поэтому group выражена через owner — одна точка правды (резолвится в "root").
+# group of root-owned artifacts. var→var on root_owner: owner and group coincide,
+# so group is expressed via owner — one source of truth (resolves to "root").
 root_group: "${ vars.root_owner }"

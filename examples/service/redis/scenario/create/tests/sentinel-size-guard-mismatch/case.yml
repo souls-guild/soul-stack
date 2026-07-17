@@ -1,24 +1,25 @@
-# L0-испытание create в режиме sentinel — FAIL-ветка size-guard (топология != roster).
-# Зеркало sentinel-create-1master-2replica (тот же happy-path вход replicas_per_master=2),
-# но roster СПЕЦИАЛЬНО НЕ совпадает с объявленной топологией: replicas_per_master=2 →
-# ожидается ровно 1+2=3 хоста, а fixtures.hosts несёт 2. size-guard create/sentinel.yml
-# (assert, keeper-side render-time, ADR-009 amendment 2026-06-23) обязан ОБОРВАТЬ render ДО
-# любого dispatch — иначе master-election (первый по SID) и SENTINEL MONITOR/REPLICAOF
-# разъехались бы с declared-топологией: один хост МОЛЧА стал бы незаявленной репликой.
+# L0 test for create in sentinel mode — the FAIL branch of size-guard (topology != roster).
+# Mirror of sentinel-create-1master-2replica (same happy-path input replicas_per_master=2),
+# but the roster DELIBERATELY does not match the declared topology: replicas_per_master=2 →
+# expects exactly 1+2=3 hosts, but fixtures.hosts carries 2. size-guard in create/sentinel.yml
+# (assert, keeper-side render-time, ADR-009 amendment 2026-06-23) must ABORT render BEFORE
+# any dispatch — otherwise master election (first by SID) and SENTINEL MONITOR/REPLICAOF
+# would diverge from the declared topology: one host would SILENTLY become an undeclared replica.
+
 #
-# Парный с sentinel-create-1master-2replica (там roster==топология → render проходит,
-# size-guard PASS) и симметричный cluster-size-guard-mismatch (формула там
+# Paired with sentinel-create-1master-2replica (there roster==topology → render succeeds,
+# size-guard PASS) and symmetric with cluster-size-guard-mismatch (formula there is
 # shards*(1+replicas_per_master)).
 #
-# Render-only, герметично. Диспетчер create инклудит cluster.yml + sentinel.yml; на
-# sentinel-прогоне cluster-ветка group-drop (static-when input.redis_type != 'cluster'),
-# sentinel.yml раскрывается, первой задачей — size-guard assert (НЕ emit RenderedTask).
+# Render-only, hermetic. The create dispatcher includes cluster.yml + sentinel.yml; on a
+# sentinel run the cluster branch is group-dropped (static-when input.redis_type != 'cluster'),
+# sentinel.yml expands, and the first task is the size-guard assert (does NOT emit a RenderedTask).
 name: sentinel create with roster size not matching replicas aborts at render (size-guard)
 
 fixtures:
   default_destiny_source: "file://../../destiny/{name}"
-  # Roster из 2 хостов — НА ОДИН МЕНЬШЕ объявленной топологии (replicas=2 → 1+2=3).
-  # Порядок намеренно не отсортирован: size-guard оперирует size(), не позицией.
+  # A roster of 2 hosts — ONE FEWER than the declared topology (replicas=2 → 1+2=3).
+  # The order is deliberately not sorted: size-guard operates on size(), not position.
   hosts:
     - sid: node-2.example.com
       covens: [create, redis]
@@ -33,8 +34,8 @@ fixtures:
   vault:
     secret/redis/create:
       password: s3cr3t-redis-pass-create
-    # ★ РЕДИЗАЙН default_admin (2026-06-30): default_admin — системный юзер
-    # внутрикластерного AUTH (auth_pass/PING шаги деплоя читают его по ветке users/<name>).
+    # ★ default_admin redesign (2026-06-30): default_admin is the system user for
+    # intra-cluster AUTH (deploy's auth_pass/PING steps read it from the users/<name> branch).
     secret/redis/create/users/default_admin:
       password: default-admin-secret-pass
     secret/redis/create/users/replica:
@@ -71,17 +72,17 @@ fixtures:
       sentinel:   "allchannels -@all +auth +client|getname +client|id +client|setname +command +hello +ping +sentinel|is-master-down-by-addr +publish +role +sentinel|get-master-addr-by-name +sentinel|master +sentinel|myid +sentinel|replicas +sentinel|sentinels"
       haproxy:    "-@all +auth +client|getname +client|id +client|setname +command +hello +ping +role +sentinel|get-master-addr-by-name +sentinel|master +sentinel|myid +sentinel|replicas +sentinel|sentinels"
   input:
-    # ★ provision выключен (default-on: опущенная секция = ВКЛЮЧЕНО; кейс деплоит на
-    # ГОТОВЫЙ roster, cloud-create не нужен) → include redis-provision.yml group-drop.
+    # ★ provision disabled (default-on: an omitted section = ENABLED; this case deploys onto a
+    # READY roster, no cloud-create needed) → include redis-provision.yml group-drop.
     provision:
       enabled: false
     redis_type: sentinel
-    # version из enum (bump с 7.2.4) — чтобы input-валидация прошла и render ДОШЁЛ до
-    # size-guard assert (ОЖИДАЕМАЯ ошибка кейса), а не упал раньше на version-enum.
+    # version from the enum (bump from 7.2.4) — so input validation passes and render REACHES
+    # the size-guard assert (the case's EXPECTED error), instead of failing earlier on version-enum.
     version: "7.4.1"
-    # replicas_per_master=2 → ожидается 1+2=3 хоста, а roster выше = 2 → 2 != 1+2.
+    # replicas_per_master=2 → expects 1+2=3 hosts, but the roster above = 2 → 2 != 1+2.
     replicas_per_master: 2
 
-# Прогон обрывается на render: size-guard assert «Guard sentinel roster size matches
-# replicas» false (2 != 1+2). Подстрока — message assert-правила create/sentinel.yml.
-expect_render_error: "число хостов roster-а прогона должно быть ровно 1+replicas_per_master"
+# The run aborts at render: the size-guard assert "Guard sentinel roster size matches
+# replicas" is false (2 != 1+2). Substring — the message of the create/sentinel.yml assert rule.
+expect_render_error: "the run roster host count must be exactly 1+replicas_per_master"

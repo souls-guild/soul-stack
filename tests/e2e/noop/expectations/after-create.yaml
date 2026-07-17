@@ -1,7 +1,7 @@
-# Post-apply ожидания noop::create.
+# Post-apply expectations for noop::create.
 #
-# state_changes scenario пустой → incarnation.state не проверяем (пустой объект).
-# Остаются apply_runs, audit, metrics — minimal-flow проверка scenario-runner.
+# state_changes scenario is empty → we don't check incarnation.state (empty object).
+# What remains: apply_runs, audit, metrics — minimal-flow check of the scenario-runner.
 apply_runs:
   status: success
 
@@ -10,8 +10,8 @@ audit_events:
     payload:
       incarnation: test-noop
 
-# keeper_scenario_runs_total{result="ok"} — реальная метрика успешного прогона
-# scenario (keeper/internal/scenario/metrics.go). Метрики keeper_apply_runs_total
-# в коде нет.
+# keeper_scenario_runs_total{result="ok"} — the real metric for a successful scenario
+# run (keeper/internal/scenario/metrics.go). There is no keeper_apply_runs_total
+# metric in the code.
 metrics:
   keeper_scenario_runs_total{result="ok"}: ">= 1"

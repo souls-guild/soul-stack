@@ -1,34 +1,34 @@
-# Конфиг OTel-collector для локального dev-стека (см. dev/docker-compose.yml,
-# сервис otel-collector). Минимальный trace-pipeline: приём OTLP gRPC →
-# batch → экспорт в Jaeger + дублирование в stdout-лог коллектора.
+# OTel collector config for the local dev stack (see dev/docker-compose.yml,
+# service otel-collector). Minimal trace pipeline: receive OTLP gRPC →
+# batch → export to Jaeger + duplicate to the collector's stdout log.
 #
-# Это DEV-конфиг: приём по gRPC без TLS (keeper/soul шлют insecure на
-# 127.0.0.1:4317, см. shared/obs SetupOTel WithInsecure). В проде — receiver
-# c TLS и реальный trace-backend, а не all-in-one in-memory Jaeger.
+# This is a DEV config: gRPC receiver without TLS (keeper/soul send insecure to
+# 127.0.0.1:4317, see shared/obs SetupOTel WithInsecure). In prod — receiver
+# with TLS and a real trace backend, not an all-in-one in-memory Jaeger.
 
 receivers:
   otlp:
     protocols:
       grpc:
-        # 0.0.0.0 — слушаем на всех интерфейсах внутри контейнера; наружу
-        # docker пробрасывает только 127.0.0.1:4317 (port-mapping в compose).
+        # 0.0.0.0 — listen on all interfaces inside the container; outward
+        # docker only exposes 127.0.0.1:4317 (port mapping in compose).
         endpoint: 0.0.0.0:4317
 
 processors:
-  # batch — группирует спаны перед экспортом (стандартная рекомендация OTel,
-  # снижает число исходящих запросов). Дефолтных параметров для dev хватает.
+  # batch — groups spans before export (standard OTel recommendation,
+  # reduces the number of outgoing requests). Default params are enough for dev.
   batch: {}
 
 exporters:
-  # Трейсы в Jaeger по OTLP внутри docker-сети (DNS-имя `jaeger`,
-  # COLLECTOR_OTLP_ENABLED=true поднимает там OTLP :4317).
+  # Traces to Jaeger via OTLP inside the docker network (DNS name `jaeger`,
+  # COLLECTOR_OTLP_ENABLED=true brings up OTLP :4317 there).
   otlp/jaeger:
     endpoint: jaeger:4317
     tls:
       insecure: true
-  # debug — печать принятых спанов в лог коллектора
+  # debug — prints received spans to the collector log
   # (`docker compose -f dev/docker-compose.yml logs -f otel-collector`).
-  # Удобно убедиться, что трейсы доезжают, не открывая Jaeger UI.
+  # Convenient to confirm traces are getting through without opening the Jaeger UI.
   debug:
     verbosity: detailed
 

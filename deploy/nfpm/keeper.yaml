@@ -1,12 +1,12 @@
-# nfpm-конфиг пакета `keeper` (deb + rpm). ADR-004 — центральный узел Soul Stack.
+# nfpm config for the `keeper` package (deb + rpm). ADR-004 — central node of Soul Stack.
 #
-# Сборка: `make pkg` (вызывает nfpm package). Версия берётся из переменной
-# окружения VERSION (см. Makefile) через ${VERSION}-подстановку nfpm. Бинарь
-# должен быть собран ДО упаковки (`make build`) — кладётся keeper/bin/keeper.
+# Build: `make pkg` (calls nfpm package). Version comes from the VERSION
+# environment variable (see Makefile) via nfpm's ${VERSION} substitution. The binary
+# must be built BEFORE packaging (`make build`) — laid out at keeper/bin/keeper.
 #
-# Пакет ставит: бинарь в /usr/local/bin, systemd-юнит + env, пример конфига как
-# .yml.example (не перетирает рабочий конфиг оператора при upgrade — pkg-конфиги
-# помечены config-flag-ом, но пример кладём отдельным именем намеренно).
+# The package installs: the binary in /usr/local/bin, a systemd unit + env, an example config as
+# .yml.example (does not overwrite the operator's working config on upgrade — pkg configs
+# are marked with a config-flag, but the example is deliberately shipped under a separate name).
 name: soul-stack-keeper
 arch: ${ARCH}
 platform: linux
@@ -15,8 +15,8 @@ section: admin
 priority: optional
 maintainer: Soul Stack <noreply@soul-stack.dev>
 description: |
-  Soul Stack Keeper — центральный узел управления конфигурациями (ADR-004).
-  gRPC bidi-stream поверх mTLS, OpenAPI/MCP для операторов, Postgres + Redis.
+  Soul Stack Keeper — the central configuration management node (ADR-004).
+  gRPC bidi-stream over mTLS, OpenAPI/MCP for operators, Postgres + Redis.
 vendor: Soul Stack
 homepage: https://github.com/souls-guild/soul-stack
 license: Apache-2.0
@@ -38,18 +38,18 @@ contents:
     file_info:
       mode: 0644
 
-  # Пример конфига — отдельным именем, чтобы upgrade не трогал рабочий
-  # /etc/keeper/keeper.yml оператора. Скопировать руками при первой установке.
+  # Example config — under a separate name, so upgrade doesn't touch the operator's
+  # working /etc/keeper/keeper.yml. Copy it by hand on first install.
   - src: ./examples/keeper/keeper.yml
     dst: /etc/keeper/keeper.yml.example
     file_info:
       mode: 0640
 
-# Maintainer-scripts (deb: postinst/prerm/postrm, rpm: %post/%preun/%postun).
-# Создают системного пользователя soul-stack и рабочие каталоги keeper с
-# правильным владельцем — без этого clean-install не работает (демон под
-# soul-stack не пишет в root-owned /var/lib/soul-stack-keeper). Bootstrap
-# первого Архонта (keeper init) остаётся ручным.
+# Maintainer scripts (deb: postinst/prerm/postrm, rpm: %post/%preun/%postun).
+# Create the soul-stack system user and keeper working directories with the
+# right owner — without this a clean install won't work (the daemon running as
+# soul-stack can't write to root-owned /var/lib/soul-stack-keeper). Bootstrap
+# of the first Archon (keeper init) remains manual.
 scripts:
   postinstall: ./deploy/nfpm/scripts/keeper.postinstall.sh
   preremove:   ./deploy/nfpm/scripts/keeper.preremove.sh
@@ -57,8 +57,8 @@ scripts:
 
 overrides:
   deb:
-    # passwd — пакет с useradd (Essential/base в Debian и Ubuntu); postinst его
-    # вызывает напрямую. Был adduser — он лишь обёртка над тем же passwd.
+    # passwd — the package that provides useradd (Essential/base on Debian and Ubuntu); postinst
+    # calls it directly. There used to be adduser — it's just a wrapper over the same passwd.
     depends:
       - passwd
   rpm:

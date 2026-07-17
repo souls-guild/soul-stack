@@ -1,131 +1,132 @@
 name: redis-exporter
 description: Install Prometheus redis_exporter from a pinned GitHub release tarball and run it as a hardened systemd service under DynamicUser (no manual service account), talking to Redis over a unix socket.
 
-# Версия destiny — git ref (ADR-007). Поля `version:` верхнего уровня нет.
-# Список задач — в tasks/main.yml. Только core-модули → required_modules: не нужен.
+# Destiny version is a git ref (ADR-007). No top-level `version:` field.
+# Task list is in tasks/main.yml. Only core modules -> required_modules: not needed.
 #
-# Извлечено из инлайн-сценариев monitoring / redis-monitored.
-# Ключевая особенность: redis_exporter ходит в Redis через UNIX-СОКЕТ
-# (--redis.addr=unix://<socket>), а не TCP. Из-за этого, в отличие от
-# node-exporter, unit-у нужен AF_UNIX в RestrictAddressFamilies (прод-конвенция
-# §3) и членство в группе redis ради group-доступа к сокету 770 — оно даётся
-# через SupplementaryGroups=redis совместно с DynamicUser=yes (см.
-# tasks/main.yml и templates/redis_exporter.service.tmpl).
+# Extracted from the monitoring / redis-monitored inline scenarios.
+# Key feature: redis_exporter talks to Redis over a UNIX SOCKET
+# (--redis.addr=unix://<socket>), not TCP. Because of this, unlike
+# node-exporter, the unit needs AF_UNIX in RestrictAddressFamilies (prod
+# convention §3) and membership in the redis group for group access to the
+# 770 socket - given via SupplementaryGroups=redis together with
+# DynamicUser=yes (see tasks/main.yml and templates/redis_exporter.service.tmpl).
 
 input:
   version:
     type: string
     default: "1.62.0"
     pattern: "^[0-9]+\\.[0-9]+\\.[0-9]+$"
-    description: Версия redis_exporter (GitHub Releases oliver006/redis_exporter).
+    description: redis_exporter version (GitHub Releases oliver006/redis_exporter).
 
-  # checksum tarball-а redis_exporter (linux-<arch>). core.url.fetched верифицирует
-  # его ДО публикации файла. ОБЯЗАТЕЛЬНЫЙ, без дефолта (fail-closed): нет хэша →
-  # честный отказ, а не fetch с placeholder-ом, который верификация всё равно
-  # отвергнет. Значение берётся из файла sha256sums GitHub-релиза
-  # oliver006/redis_exporter под пару (version, arch), напр. для
+  # Checksum of the redis_exporter tarball (linux-<arch>). core.url.fetched verifies
+  # it BEFORE publishing the file. REQUIRED, no default (fail-closed): no hash ->
+  # an honest refusal instead of a fetch with a placeholder that verification would
+  # reject anyway. The value comes from the sha256sums file of the GitHub release
+  # oliver006/redis_exporter for the pair (version, arch), e.g. for
   # redis_exporter-v<v>.linux-<arch>.tar.gz.
   sha256:
     type: string
     required: true
     pattern: "^sha256:[0-9a-f]{64}$"
     description: >-
-      SHA-256 tarball-а redis_exporter (форма "sha256:<hex>"). Должен
-      соответствовать паре version + arch; берётся из sha256sums GitHub-релиза.
+      SHA-256 of the redis_exporter tarball (form "sha256:<hex>"). Must
+      match the version + arch pair; taken from the GitHub release sha256sums.
 
   arch:
     type: string
     default: amd64
     enum: [amd64, arm64]
-    description: Архитектура GitHub-релизного tarball-а (amd64|arm64).
+    description: Architecture of the GitHub release tarball (amd64|arm64).
 
-  # https-only (core.url отвергнёт http:// на Validate без allow_http). Полный URL
-  # tarball-а собирается CEL-ом в tasks/main.yml из base_url + version + arch.
+  # https-only (core.url rejects http:// on Validate without allow_http). The full
+  # tarball URL is assembled by CEL in tasks/main.yml from base_url + version + arch.
   base_url:
     type: string
     default: "https://github.com/oliver006/redis_exporter/releases/download"
     pattern: "^https://[A-Za-z0-9._/:-]+$"
     description: >-
-      Корень загрузки релизов redis_exporter. По умолчанию GitHub Releases;
-      переопределяется на внутреннее зеркало/nexus-proxy.
+      Root download URL for redis_exporter releases. Defaults to GitHub
+      Releases; can be overridden to an internal mirror/nexus proxy.
 
-  # SSRF-guard opt-out для private-resolve base_url — паттерн redis destiny.yml install.allow_private.
+  # SSRF-guard opt-out for private-resolve base_url - same pattern as redis destiny.yml install.allow_private.
   allow_private:
     type: boolean
     default: false
     description: >-
-      Снять SSRF-guard core.url для fetch tarball-а (разрешить dial в RFC1918/
-      loopback — легитимный internal Nexus). Нужен, когда base_url резолвится в
-      private-адрес. Default false — guard держится (github-public back-compat).
+      Lift the core.url SSRF guard for the tarball fetch (allow dialing
+      RFC1918/loopback - legitimate for an internal Nexus). Needed when
+      base_url resolves to a private address. Default false - guard stays on
+      (github-public back-compat).
 
   bin_dir:
     type: string
     default: /usr/local/bin
     pattern: "^/[A-Za-z0-9._/-]+$"
-    description: Каталог, куда раскладывается бинарник redis_exporter.
+    description: Directory where the redis_exporter binary is placed.
 
   listen:
     type: string
     default: ":9121"
     pattern: "^[A-Za-z0-9._-]*:[0-9]{1,5}$"
-    description: Listen-адрес redis_exporter (--web.listen-address). По умолчанию :9121.
+    description: redis_exporter listen address (--web.listen-address). Defaults to :9121.
 
-  # Путь unix-сокета Redis — точка интеграции с destiny redis-single (тот же путь
-  # идёт в redis.conf::unixsocket). redis_exporter подключается через
-  # --redis.addr=unix://<socket>. Caller (сервис) обязан передать ОДИН И ТОТ ЖЕ
-  # путь в обе destiny.
+  # Path to the Redis unix socket - integration point with destiny redis-single (the
+  # same path goes into redis.conf::unixsocket). redis_exporter connects via
+  # --redis.addr=unix://<socket>. The caller (service) must pass the SAME
+  # path into both destinies.
   redis_socket:
     type: string
     default: /var/run/redis/redis-server.sock
     pattern: "^/[A-Za-z0-9._/-]+$"
     description: >-
-      Путь к unix-сокету Redis, к которому подключается redis_exporter
-      (--redis.addr=unix://...). Совпадает с unixsocket в redis-server.
+      Path to the Redis unix socket that redis_exporter connects to
+      (--redis.addr=unix://...). Matches unixsocket in redis-server.
 
-  # Пароль Redis: redis_exporter авторизуется им (requirepass). Передаётся в unit
-  # через Environment=REDIS_PASSWORD, не в ExecStart (не светится в ps/journalctl).
+  # Redis password: redis_exporter authenticates with it (requirepass). Passed into
+  # the unit via Environment=REDIS_PASSWORD, not ExecStart (doesn't show up in ps/journalctl).
   redis_password:
     type: string
     required: true
     secret: true
     min_length: 16
     description: >-
-      Пароль Redis (requirepass). Маскируется в логах/трейсах/UI. Принимает уже
-      зарезолвленный пароль ИЛИ vault-ref: каскад — сервис передаёт vault-ref,
-      резолв происходит Soul-side.
+      Redis password (requirepass). Masked in logs/traces/UI. Accepts either
+      an already-resolved password OR a vault-ref: cascade - the service passes
+      a vault-ref, resolution happens Soul-side.
 
-  # ACL-username для авторизации redis_exporter (--redis.user=<user>). Требуется, когда
-  # Redis работает на ACL БЕЗ requirepass (default-user убран): без --redis.user exporter
-  # логинится под default-юзером и получает WRONGPASS. Дефолт '' — back-compat requirepass-
-  # модели (default-user + пароль в Environment, без флага --redis.user); пусто → флаг НЕ
-  # добавляется в ExecStart (условный рендер в шаблоне). При заданном значении exporter
-  # передаёт AUTH <user> <password>. Пароль по-прежнему в Environment=REDIS_PASSWORD (юзер
-  # в ExecStart не секретен). Pattern `*` пропускает пустую строку (дефолт) и валидные
-  # Redis-ACL-имена.
+  # ACL username for redis_exporter auth (--redis.user=<user>). Required when
+  # Redis runs on ACL WITHOUT requirepass (default-user removed): without --redis.user the
+  # exporter logs in as the default user and gets WRONGPASS. Default '' - back-compat
+  # requirepass model (default-user + password in Environment, no --redis.user flag);
+  # empty -> the flag is NOT added to ExecStart (conditional render in the template).
+  # When set, the exporter sends AUTH <user> <password>. The password is still in
+  # Environment=REDIS_PASSWORD (the user in ExecStart is not a secret). The pattern `*`
+  # allows both an empty string (default) and valid Redis ACL names.
   redis_user:
     type: string
     default: ""
     pattern: "^[A-Za-z0-9._-]*$"
     description: >-
-      ACL-username для авторизации redis_exporter (--redis.user). Пусто (дефолт) —
-      requirepass-модель (флаг опущен, default-user). Задан — AUTH под этим ACL-юзером
-      (нужно на ACL-инстансе без requirepass, иначе WRONGPASS).
+      ACL username for redis_exporter auth (--redis.user). Empty (default) -
+      requirepass model (flag omitted, default-user). Set - AUTH as this ACL
+      user (needed on an ACL instance without requirepass, otherwise WRONGPASS).
 
-  # Passthrough-канал для ЛЮБЫХ флагов redis_exporter сверх базовых --redis.addr
-  # и --web.listen-address: дополнительные коллекторы (--check-keys=...,
-  # --check-single-keys=...), TLS/basic-auth (--web.config.file=<path>), namespace
-  # и пр. Каждый элемент — отдельный токен ExecStart (не разбивается шаблоном по
-  # пробелам), поэтому значение-с-пробелом передавай одним элементом:
-  # ["--web.config.file=/etc/x.yml"]. Сам web.yml (TLS-сертификаты/basic-auth) —
-  # ответственность оператора (отдельный файл на хосте); эта destiny его НЕ
-  # рендерит, только пробрасывает флаг (прод-конвенция §4).
+  # Passthrough channel for ANY redis_exporter flags beyond the base --redis.addr
+  # and --web.listen-address: extra collectors (--check-keys=...,
+  # --check-single-keys=...), TLS/basic-auth (--web.config.file=<path>), namespace,
+  # etc. Each element is a separate ExecStart token (not split by the template on
+  # whitespace), so a value with a space must be passed as one element:
+  # ["--web.config.file=/etc/x.yml"]. The web.yml file itself (TLS certs/basic-auth) is
+  # the operator's responsibility (separate file on the host); this destiny does NOT
+  # render it, only passes through the flag (prod convention §4).
   extra_args:
     type: array
     default: []
     items:
       type: string
     description: >-
-      Дополнительные флаги redis_exporter (--check-keys=..., --is-tile38,
-      --web.config.file=<path> для TLS/basic-auth и пр.). Каждый элемент —
-      отдельный аргумент ExecStart. web.yml для TLS — отдельный файл, не из этой
-      destiny.
+      Extra redis_exporter flags (--check-keys=..., --is-tile38,
+      --web.config.file=<path> for TLS/basic-auth, etc). Each element is a
+      separate ExecStart argument. web.yml for TLS is a separate file, not
+      from this destiny.

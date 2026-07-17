@@ -1,22 +1,22 @@
-# L0-испытание update_config НА TLS-инстансе. Парный guard к update-maxmemory-policy
-# (plaintext) — покрывает TLS-ветку дискриминатора гейта (compute.tls_on=true).
-# Render-only, герметично.
+# L0 trial update_config OVER a TLS instance. Paired guard to update-maxmemory-policy
+# (plaintext) — covers the TLS branch of the gate discriminator (compute.tls_on=true).
+# Render-only, hermetic.
 #
-# ★ Инвариант (конвенция §7a, ADR-057 amendment): дискриминатор TLS берётся из
-# ИМЕНОВАННОГО incarnation.state.tls (state_schema v3), НЕ из essence/redis_config.
-# При state.tls.enable=true hot-reload-шаг (community.redis.config) обязан коннектиться
-# по TLS: addr на state.tls.port, tls=true, tls_ca = PEM CA из vault(state.tls.ca_ref)
-# (актуальный после rotate_tls, НЕ essence-дефолт). Иначе plaintext-коннект на TLS-only
-# Redis провалит CONFIG SET (а AUTH plaintext при открытом plain — утечка пароля).
+# ★ Invariant (convention §7a, ADR-057 amendment): the TLS discriminator is read from
+# the NAMED incarnation.state.tls (state_schema v3), NOT from essence/redis_config.
+# When state.tls.enable=true, the hot-reload step (community.redis.config) must connect
+# over TLS: addr on state.tls.port, tls=true, tls_ca = PEM CA from vault(state.tls.ca_ref)
+# (current after rotate_tls, NOT the essence default). Otherwise a plaintext connect to a TLS-only
+# Redis fails CONFIG SET (and plaintext AUTH over an open plain port leaks the password).
 #
-# Что ассертим:
-#   1. redis.conf перерендерен с новым merged config (изменён maxmemory; TLS-директивы
-#      СОХРАНЕНЫ из state.redis_config — update_config их не трогает, ротация — rotate_tls).
-#   2. hot-reload (community.redis.config): addr 127.0.0.1:7379 (TLS-порт из state.tls.port),
-#      tls=true, tls_ca = PEM CA, rewrite=false (NIM-53), config несёт TLS-директивы (плагин
-#      пропустит startup-only tls-port по денилисту, применит hot-settable tls-cert-file и
-#      обычные директивы).
-#   3. state_changes: redis_config ≡ переданный config (один compute).
+# What we assert:
+#   1. redis.conf re-rendered with the new merged config (maxmemory changed; TLS directives
+#      PRESERVED from state.redis_config — update_config doesn't touch them, rotation is rotate_tls's job).
+#   2. hot-reload (community.redis.config): addr 127.0.0.1:7379 (TLS port from state.tls.port),
+#      tls=true, tls_ca = PEM CA, rewrite=false (NIM-53), config carries TLS directives (the plugin
+#      skips the startup-only tls-port via the denylist, applies the hot-settable tls-cert-file and
+#      regular directives).
+#   3. state_changes: redis_config ≡ the passed config (single compute).
 name: update_config over TLS hot-reloads on tls-port from incarnation.state
 
 fixtures:
@@ -25,8 +25,8 @@ fixtures:
     network: { primary_ip: 10.0.0.6 }
     os: { arch: amd64 }
 
-  # host-layout (conf_dir/data_dir/modules_base_url) — в essence (v11→v12, Вариант A):
-  # вынесен из state, повторный прогон читает отсюда.
+  # host-layout (conf_dir/data_dir/modules_base_url) — in essence (v11→v12, Option A):
+  # moved out of state, a re-run reads it from here.
   essence:
     memory_reserve_percent: 75
     conf_dir: /etc/redis
@@ -37,8 +37,8 @@ fixtures:
         save: "900 1 300 10 60 10000"
         appendonly: "no"
 
-  # Развёрнутый incarnation.state v3 (от create с TLS): tls.enable=true + port 7379.
-  # state.tls.ca_ref — источник CA коннекта (vault() резолвит путь в PEM).
+  # Deployed incarnation.state v3 (from create with TLS): tls.enable=true + port 7379.
+  # state.tls.ca_ref — the CA source for the connection (vault() resolves the path to PEM).
   state:
     redis_type: sentinel
     redis_version: "7.2.4"
@@ -65,14 +65,14 @@ fixtures:
     redis_users: []
 
   input:
-    # Дельта: новый бюджет памяти (2048*75/100 = 1536mb).
+    # Delta: new memory budget (2048*75/100 = 1536mb).
     memory_mb: 2048
 
   vault:
     secret/redis/update_config:
       password: upd-redis-pass-16chars
-    # ★ РЕДИЗАЙН default_admin: системный admin-юзер — пароль из ветки users/default_admin
-    # (masterauth-долив в config + AUTH community.redis.config по TLS).
+    # ★ default_admin REDESIGN: the system admin user — password from the users/default_admin branch
+    # (masterauth top-up into config + AUTH community.redis.config over TLS).
     secret/redis/update_config/users/default_admin:
       password: default-admin-secret-pass
     secret/services/redis/tls:
@@ -80,8 +80,8 @@ fixtures:
 
 assert:
   task_present:
-    # 1. redis.conf перерендерен: maxmemory 1536mb (новый бюджет), TLS-директивы
-    #    сохранены из state.redis_config (update_config их не трогает).
+    # 1. redis.conf re-rendered: maxmemory 1536mb (new budget), TLS directives
+    #    preserved from state.redis_config (update_config doesn't touch them).
     - module: core.file.rendered
       params_subset:
         path: /etc/redis/redis.conf
@@ -107,15 +107,15 @@ assert:
               tls-key-file: /etc/redis/tls/redis.key
               tls-ca-cert-file: /etc/redis/tls/ca.crt
               tls-replication: "yes"
-              # ★ РЕДИЗАЙН default_admin: статическая replica→master AUTH доливается в
-              # apply.input.config → redis.conf несёт masteruser/masterauth (failover-safe).
+              # ★ default_admin REDESIGN: static replica→master AUTH is topped up into
+              # apply.input.config → redis.conf carries masteruser/masterauth (failover-safe).
               masteruser: default_admin
               masterauth: default-admin-secret-pass
           self:
             sid: trial-host
             covens: [update_config]
             choirs: []
-            # traits — registry-проекция (ADR-060), пустой объект без меток.
+            # traits — registry projection (ADR-060), an empty object with no labels.
             traits: {}
             role: ""
             network:
@@ -125,21 +125,21 @@ assert:
           role: ""
           essence: {}
 
-    # 2. HOT-RELOAD ПО TLS: community.redis.config, addr на tls-порт (7379), tls=true,
-    #    tls_ca = PEM CA, rewrite=false (NIM-53: redis.conf шага 1 — источник истины файла).
-    #    config несёт TLS-директивы — плагин пропустит startup-only tls-port (денилист),
-    #    применит hot-settable.
+    # 2. HOT-RELOAD OVER TLS: community.redis.config, addr on the tls port (7379), tls=true,
+    #    tls_ca = PEM CA, rewrite=false (NIM-53: step 1's redis.conf is the file's source of truth).
+    #    config carries TLS directives — the plugin skips the startup-only tls-port (denylist),
+    #    applies hot-settable ones.
     - module: community.redis.config
       params_subset:
         addr: "127.0.0.1:7379"
-        # ★ РЕДИЗАЙН default_admin: AUTH под default_admin (username + его Vault-пароль).
+        # ★ default_admin REDESIGN: AUTH under default_admin (username + its Vault password).
         username: default_admin
         password: default-admin-secret-pass
         tls: true
         tls_ca: "-----BEGIN CERTIFICATE-----\nCACERT\n-----END CERTIFICATE-----"
         rewrite: false
-        # config — ЧИСТЫЙ compute.redis_config БЕЗ masterauth-долива (hot-reload = только
-        # операторская дельта; masteruser/masterauth — replication-материал, не трогается).
+        # config — the PURE compute.redis_config WITHOUT masterauth top-up (hot-reload is only
+        # the operator delta; masteruser/masterauth are replication material, untouched).
         config:
           maxmemory: "1536mb"
           maxmemory-policy: allkeys-lru

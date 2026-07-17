@@ -1,9 +1,10 @@
-# L0-испытание validate-guard update_users (system-ACL-users d2): ни один элемент
-# input.users НЕ может занять имя СЛУЖЕБНОГО (default/replica/monitoring/sentinel/haproxy).
-# Оператор кладёт в набор юзера с именем monitoring — зарезервировано (доливается из
-# essence ПОВЕРХ operator-extra → молча перекрыл бы monitoring-perms экспортёра).
-# validate-правило update_users/main.yml (.all() над массивом) ловит на INPUT-валидации
-# (422 ДО applying). Правило false → expect_render_error по подстроке message.
+# L0 test for the validate-guard in update_users (system-ACL-users d2): no element of
+# input.users may take the name of a SYSTEM user (default/replica/monitoring/sentinel/
+# haproxy). The operator puts a user named monitoring into the set — reserved (merged in
+# from essence ON TOP OF operator-extra → would silently overwrite the exporter's
+# monitoring perms). The validate rule in update_users/main.yml (.all() over the array)
+# catches this at INPUT validation (422 BEFORE applying). Rule false → expect_render_error
+# matches a substring of message.
 name: update_users with reserved system name in the set aborts at input validation
 
 fixtures:
@@ -21,8 +22,9 @@ fixtures:
       - { name: bob, perms: "~app:* +@read", state: "on" }
 
   essence:
-    # host-layout — в essence (v11→v12, Вариант A). guard рвёт render до deploy-тела,
-    # layout здесь для правдивости fixtures (форма state v12 без layout-ключей).
+    # host-layout — in essence (v11→v12, Variant A). the guard aborts the render before
+    # the deploy body; layout is here for fixture fidelity (state v12 shape without
+    # layout keys).
     conf_dir: /etc/redis
     data_dir: /var/lib/redis
     system_acl_users:
@@ -31,8 +33,8 @@ fixtures:
       sentinel:   "allchannels +multi +slaveof +ping +exec +subscribe +config|rewrite +role +publish +info +client|setname +client|kill +script|kill"
       haproxy:    "-@all +auth +client|getname +client|id +client|setname +command +hello +ping +role +info +cluster|info"
 
-  # Оператор пытается завести в наборе юзера с зарезервированным именем monitoring
-  # (рядом с валидным alice — .all() обязан отбраковать весь набор).
+  # The operator tries to add a user with the reserved name monitoring to the set
+  # (alongside the valid alice — .all() must reject the whole set).
   input:
     users:
       - { name: alice, perms: "~* +@all", state: "on" }
@@ -42,5 +44,5 @@ fixtures:
     secret/redis/update_users:
       password: updusr-redis-pass-16ch
 
-# Прогон обрывается на validate: правило «имя зарезервировано за служебным» false.
-expect_render_error: "зарезервировано за служебным"
+# The run aborts at validate: the "name is reserved for a system user" rule is false.
+expect_render_error: "reserved for a system user"

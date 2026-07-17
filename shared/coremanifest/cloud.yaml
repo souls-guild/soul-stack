@@ -6,25 +6,25 @@ name: cloud
 spec:
   states:
     created:
-      description: Keeper-side (on:keeper). Облачные VM созданы через CloudDriver-плагин (ADR-017).
+      description: Keeper-side (on:keeper). Cloud VMs created through a CloudDriver plugin (ADR-017).
       input:
-        provider:          { type: string, required: true, description: "Имя cloud-Provider в реестре (driver + креды + регион)." }
-        profile:           { type: map,    description: "Параметры VM-профиля (backend-специфично)." }
-        count:             { type: int,    description: "Сколько VM создать (default 1, >= 1)." }
-        userdata:          { type: string, description: "Cloud-init userdata (взаимоисключим с generate_userdata и self_onboard)." }
-        generate_userdata: { type: bool,   description: "Сгенерировать userdata из keeper.yml cloud_init (ADR-017(h))." }
-        name:              { type: string, description: "Базовое имя VM-батча (self-onboard Вариант T): keeper предсказывает FQDN=<name>-<index>.<suffix>. Обязателен при self_onboard." }
-        self_onboard:      { type: bool,   description: "VM онбордится сама из cloud-init (Вариант T, ADR-017(h)): keeper предсказывает FQDN и запекает per-VM токены в userdata. Требует name + providers.fqdn_suffix." }
+        provider:          { type: string, required: true, description: "Name of the cloud Provider in the registry (driver + credentials + region)." }
+        profile:           { type: map,    description: "VM profile parameters (backend-specific)." }
+        count:             { type: int,    description: "How many VMs to create (default 1, >= 1)." }
+        userdata:          { type: string, description: "Cloud-init userdata (mutually exclusive with generate_userdata and self_onboard)." }
+        generate_userdata: { type: bool,   description: "Generate userdata from keeper.yml cloud_init (ADR-017(h))." }
+        name:              { type: string, description: "Base name for the VM batch (self-onboard Variant T): keeper predicts FQDN=<name>-<index>.<suffix>. Required with self_onboard." }
+        self_onboard:      { type: bool,   description: "The VM onboards itself from cloud-init (Variant T, ADR-017(h)): keeper predicts the FQDN and bakes per-VM tokens into userdata. Requires name + providers.fqdn_suffix." }
     destroyed:
-      description: Keeper-side (on:keeper). Облачные VM уничтожены, реестры cascade-обновлены (ADR-017).
+      description: Keeper-side (on:keeper). Cloud VMs destroyed, registries cascade-updated (ADR-017).
       input:
-        provider: { type: string, required: true, description: "Имя cloud-Provider в реестре." }
-        vm_ids:   { type: list,   required: true, items: { type: string }, description: "Список provider-vm-id для уничтожения." }
-        sids:     { type: list,   items: { type: string }, description: "SID-ы для cascade-обновления реестров (souls/seeds/tokens)." }
+        provider: { type: string, required: true, description: "Name of the cloud Provider in the registry." }
+        vm_ids:   { type: list,   required: true, items: { type: string }, description: "List of provider-vm-ids to destroy." }
+        sids:     { type: list,   items: { type: string }, description: "SIDs for cascade-updating registries (souls/seeds/tokens)." }
     resized:
-      description: Keeper-side (on:keeper). Ресурсы облачных VM изменены до абсолютного целевого размера через CloudDriver.Resize (capability Resizable).
+      description: Keeper-side (on:keeper). Cloud VM resources changed to an absolute target size via CloudDriver.Resize (capability Resizable).
       input:
-        provider:       { type: string, required: true, description: "Имя cloud-Provider в реестре." }
-        vm_ids:         { type: list,   required: true, items: { type: string }, description: "provider-vm-id для resize (один target на весь батч)." }
-        desired:        { type: map,    required: true, description: "Целевые ресурсы в наших единицах: cpu_cores (ядра) / ram_mb (МБ) / disk_gb (ГБ). Хотя бы одно > 0; поля с 0 не меняются." }
-        allow_downtime: { type: bool,   description: "Разрешить downtime (stop/start) для cpu/ram-resize. Обязателен при изменении cpu/ram; disk-only online (default false)." }
+        provider:       { type: string, required: true, description: "Name of the cloud Provider in the registry." }
+        vm_ids:         { type: list,   required: true, items: { type: string }, description: "provider-vm-ids to resize (one target for the whole batch)." }
+        desired:        { type: map,    required: true, description: "Target resources in our units: cpu_cores (cores) / ram_mb (MB) / disk_gb (GB). At least one > 0; fields with 0 are unchanged." }
+        allow_downtime: { type: bool,   description: "Allow downtime (stop/start) for cpu/ram resize. Required when changing cpu/ram; disk-only is online (default false)." }

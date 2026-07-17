@@ -10,23 +10,23 @@ required_capabilities:
 spec:
   states:
     fetched:
-      description: Скачать файл по https-url в path с checksum-верификацией (ADR-015/ADR-016, https-only).
+      description: Download a file over https to path with checksum verification (ADR-015/ADR-016, https-only).
       input:
-        url:      { type: string, required: true, description: "Источник (только https://; SSRF-guard на резолвнутый IP)." }
-        path:     { type: string, required: true, description: "Целевой путь файла." }
-        checksum: { type: string, description: "Ожидаемый хэш в форме \"sha256:<hex>\"/\"sha1:<hex>\" (supply-chain)." }
-        mode:     { type: string, description: "Права в восьмеричной форме, напр. \"0644\"." }
-        owner:    { type: string, description: "Владелец (имя пользователя)." }
-        group:    { type: string, description: "Группа-владелец (имя группы)." }
-        # headers — sensitive-by-construction (ADR-010 §7.4): значения никогда не
-        # логируются и не попадают в output. secret-флаг DSL не ставится: он форсит
-        # `^vault:.*`-ref, а headers — произвольная map (маскируется на выходе, а не
-        # vault-ref). Маскинг — runtime-аспект, не выражается урезанным InputParamDef.
-        headers:  { type: map,    items: { type: string }, description: "HTTP-заголовки запроса (значения секретны, в output не попадают). If-None-Match/If-Modified-Since здесь же дают conditional-GET (304 → no-op)." }
-        timeout:  { type: string, description: "Таймаут запроса (Soul Stack duration, напр. \"300s\")." }
-        # opt-out-флаги (secure-by-default): по умолчанию false — максимально
-        # строгий режим. Каждый ослабляет независимый контур, взводится только
-        # явным выбором оператора (снятие guard логируется warn-ом по host).
-        allow_http:           { type: bool, default: false, description: "Разрешить http:// (downgrade-риск). НЕ открывает SSRF — dial-guard держится отдельно (allow_private)." }
-        insecure_skip_verify: { type: bool, default: false, description: "Не проверять TLS-цепочку (self-signed / internal CA). MITM-риск." }
-        allow_private:        { type: bool, default: false, description: "Снять SSRF-guard: разрешить dial в metadata/loopback/RFC1918 (легитимный internal endpoint)." }
+        url:      { type: string, required: true, description: "Source (https:// only; SSRF-guard on the resolved IP)." }
+        path:     { type: string, required: true, description: "Target file path." }
+        checksum: { type: string, description: "Expected hash in the form \"sha256:<hex>\"/\"sha1:<hex>\" (supply-chain)." }
+        mode:     { type: string, description: "Permissions in octal form, e.g. \"0644\"." }
+        owner:    { type: string, description: "Owner (username)." }
+        group:    { type: string, description: "Owning group (group name)." }
+        # headers — sensitive-by-construction (ADR-010 §7.4): values are never
+        # logged and never appear in output. The DSL secret flag is not set: it forces
+        # a `^vault:.*` ref, and headers is a free-form map (masked on output, not
+        # a vault-ref). Masking is a runtime aspect, not expressible by the trimmed InputParamDef.
+        headers:  { type: map,    items: { type: string }, description: "HTTP request headers (values are secret, never appear in output). If-None-Match/If-Modified-Since here give conditional-GET (304 → no-op)." }
+        timeout:  { type: string, description: "Request timeout (Soul Stack duration, e.g. \"300s\")." }
+        # opt-out flags (secure-by-default): false by default — the strictest
+        # mode possible. Each one relaxes an independent security boundary and is only
+        # engaged by an explicit operator choice (dropping the guard is logged as a warn per host).
+        allow_http:           { type: bool, default: false, description: "Allow http:// (downgrade risk). Does NOT open up SSRF — the dial-guard is held separately (allow_private)." }
+        insecure_skip_verify: { type: bool, default: false, description: "Skip TLS chain verification (self-signed / internal CA). MITM risk." }
+        allow_private:        { type: bool, default: false, description: "Drop the SSRF guard: allow dialing metadata/loopback/RFC1918 (legitimate internal endpoint)." }

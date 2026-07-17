@@ -1,13 +1,13 @@
 name: cluster-rdb-aof-plain
 description: >
-  cluster-инкарнация (v10): старый persistence:rdb_aof + tls выключен (enable:false)
-  + redis_sentinel == {} (sentinel-фактов нет). После миграции:
-    - persistence → rdb_aof_1sec (remap снапшоты+AOF everysec);
-    - connection_mode → plain (tls.enable false → обратная свёртка);
-    - io_threads → 0 (best-effort default);
-    - redis_sentinel → {} НЕ ТРОГАЕТСЯ (size==0 ветка тернара — no-op, master_settings/
-      settings НЕ добавляются: у cluster sentinel-фактов нет).
-  Cluster-директивы в redis_config и топология shards/replicas — бит-в-бит.
+  cluster incarnation (v10): old persistence:rdb_aof + tls disabled (enable:false)
+  + redis_sentinel == {} (no sentinel facts). After migration:
+    - persistence -> rdb_aof_1sec (remap snapshots+AOF everysec);
+    - connection_mode -> plain (tls.enable false -> reverse fold);
+    - io_threads -> 0 (best-effort default);
+    - redis_sentinel -> {} is NOT TOUCHED (size==0 ternary branch - no-op, master_settings/
+      settings are NOT added: cluster has no sentinel facts).
+  Cluster directives in redis_config and the shards/replicas topology - bit-for-bit.
 
 state_before:
   redis_type: cluster

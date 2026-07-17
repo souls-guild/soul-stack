@@ -1,39 +1,40 @@
 description: |
-  state_schema v1 → v2 (консолидированный redis):
-  - redis_users из плоского списка ИМЁН превращается в map name → {perms, state}
-    (per-user ACL-строка + enabled-флаг — схема консолидированного redis).
+  state_schema v1 -> v2 (consolidated redis):
+  - redis_users goes from a flat list of NAMES to a map name -> {perms, state}
+    (per-user ACL string + enabled flag - the consolidated redis schema).
   - v1: redis_users: ["app", "monitor"]
   - v2: redis_users: { app: {perms: "off ~* &* +@all", state: "off"},
                        monitor: {perms: "off ~* &* +@all", state: "off"} }
-  Дефолтные perms/state консервативны (off, без прав на ресурсы): после миграции
-  оператор задаёт реальные ACL day-2-сценарием, а не наследует «всё разрешено».
+  Default perms/state are conservative (off, no resource grants): after the
+  migration the operator sets real ACLs via an operational scenario rather than
+  inheriting "everything allowed".
 
-  Демо-цель миграции (ADR-019, docs/migrations.md): грамматика rename + set +
-  foreach + delete. foreach итерирует по СПИСКУ (элемент = имя пользователя,
-  используется как сегмент пути set) — форма, не требующая keys(), которого нет в
-  migration-CEL sandbox (ADR-019: только state + stdlib). Forward-only (down: не
-  поддерживается, восстановление через state_history).
+  Migration's demo goal (ADR-019, docs/migrations.md): the rename + set +
+  foreach + delete grammar. foreach iterates over a LIST (element = user name,
+  used as a set path segment) - a form that does not need keys(), which is
+  absent from the migration-CEL sandbox (ADR-019: only state + stdlib).
+  Forward-only (down: not supported, recovery via state_history).
 
 from_version: 1
 to_version: 2
 
 transform:
-  # rename — снимаем v1-список имён в legacy-ключ, чтобы итерировать по нему и
-  # наполнить целевой redis_users заново (rename падает, если to уже существует —
-  # целевого redis_users_legacy_v1 в state ещё нет).
+  # rename - moves the v1 list of names into a legacy key so we can iterate over
+  # it and refill the target redis_users (rename fails if to already exists -
+  # the target redis_users_legacy_v1 doesn't exist yet in state).
   - rename:
       from: state.redis_users
       to:   state.redis_users_legacy_v1
 
-  # set — материализуем целевой map ДО foreach: пустой список пользователей даёт
-  # пустой map (осмысленный intent «redis_users стал map»), а не отсутствие ключа
-  # после rename.
+  # set - materializes the target map BEFORE foreach: an empty user list gives
+  # an empty map (meaningful intent "redis_users became a map"), not a missing
+  # key after rename.
   - set:
       path:  state.redis_users
       value: {}
 
-  # foreach — по каждому имени пользователя v1: имя биндится к user_name и идёт
-  # сегментом пути set, значение — дефолтный консервативный ACL-объект.
+  # foreach - for each v1 user name: the name is bound to user_name and used as
+  # a set path segment, the value is the default conservative ACL object.
   - foreach: "${ state.redis_users_legacy_v1 }"
     as: user_name
     do:
@@ -43,6 +44,6 @@ transform:
             perms: "off ~* &* +@all"
             state: "off"
 
-  # delete — убираем legacy-снимок (no-op-безопасен, если уже отсутствует).
+  # delete - removes the legacy snapshot (safe no-op if already absent).
   - delete:
       path: state.redis_users_legacy_v1

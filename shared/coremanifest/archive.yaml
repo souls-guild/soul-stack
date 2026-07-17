@@ -9,11 +9,11 @@ required_capabilities:
 spec:
   states:
     extracted:
-      description: Распаковать архив path в каталог dest (tar/tar.gz/tar.bz2/zip); ADR-015.
+      description: Extract the archive at path into the dest directory (tar/tar.gz/tar.bz2/zip); ADR-015.
       input:
-        path:        { type: string, required: true, description: "Путь к архиву-источнику." }
-        dest:        { type: string, required: true, description: "Каталог распаковки." }
-        format:      { type: string, description: "Формат (tar|tar.gz|tar.bz2|zip); опущено — auto-detect по расширению." }
-        max_size:    { type: string, description: "Лимит суммарного распакованного размера (число байт или N[KiB|MiB|GiB]); по умолчанию 1GiB. Защита от zip-bomb." }
-        max_entries: { type: integer, description: "Лимит числа записей в архиве; по умолчанию 100000. Защита от zip-bomb." }
-        max_ratio:   { type: integer, description: "Лимит отношения распакованных байт к сжатым (compression ratio); по умолчанию 100, 0 — отключено. Защита от zip-bomb с маленьким сжатым размером." }
+        path:        { type: string, required: true, description: "Path to the source archive." }
+        dest:        { type: string, required: true, description: "Extraction directory." }
+        format:      { type: string, description: "Format (tar|tar.gz|tar.bz2|zip); omitted — auto-detect by extension." }
+        max_size:    { type: string, description: "Limit on total extracted size (number of bytes or N[KiB|MiB|GiB]); default 1GiB. Zip-bomb protection." }
+        max_entries: { type: integer, description: "Limit on the number of entries in the archive; default 100000. Zip-bomb protection." }
+        max_ratio:   { type: integer, description: "Limit on the ratio of extracted to compressed bytes (compression ratio); default 100, 0 — disabled. Zip-bomb protection for a small compressed size." }

@@ -1,11 +1,11 @@
 name: tls-extracted
 description: >
-  redis_config несёт TLS-директивы (tls-port + port 0) → tls.enable=true,
-  tls.only=true (plain закрыт). tls.port=7379 — НЕ извлечён из redis_config['tls-port']
-  (DSL-лимит: migration-CEL без string→int, см. 002_to_003.yml), а роль-дефолт 7379;
-  совпал с redis_config['tls-port']="7379" случайно (не-дефолтный порт см. в
-  non-default-tls-port). cert/key/ca_ref → '' (Vault-ПУТИ в v2-state не лежали).
-  maxmemory_policy извлечён из redis_config.
+  redis_config carries TLS directives (tls-port + port 0) → tls.enable=true,
+  tls.only=true (plain closed). tls.port=7379 — NOT extracted from redis_config['tls-port']
+  (DSL limit: migration-CEL has no string→int, see 002_to_003.yml), but the role default 7379;
+  it coincidentally matches redis_config['tls-port']="7379" (non-default port, see
+  non-default-tls-port). cert/key/ca_ref → '' (Vault paths were not present in v2-state).
+  maxmemory_policy is extracted from redis_config.
 
 state_before:
   redis_type: standalone

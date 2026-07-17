@@ -1,11 +1,11 @@
-# L0-испытание update_users: ПУСТОЙ input.users убирает ВСЕХ operator-extra. Развёрнутый
-# state.df_users = {alice, bob}; оператор задаёт input.users = [] (пустой массив). bulk-replace
-# заменяет state.df_users ЦЕЛИКОМ пустым набором:
-#   1. users.acl рендерится БЕЗ operator-extra (системные доливались бы из essence — здесь
-#      essence.system_acl_users не задан → vars.users = {} пустой);
-#   2. state_changes.df_users = [] (operator-extra стёрт).
-# Доказывает, что bulk-replace позволяет убрать всех operator-extra пустым массивом (системные
-# вне state — остаются через долив из essence на каждом рендере, см. main.yml).
+# L0 trial for update_users: an EMPTY input.users removes ALL operator-extra users. The deployed
+# state.df_users = {alice, bob}; the operator sets input.users = [] (empty array). bulk-replace
+# replaces state.df_users ENTIRELY with an empty set:
+#   1. users.acl renders WITHOUT operator-extra (system users would be merged in from essence —
+#      here essence.system_acl_users is not set → vars.users = {} empty);
+#   2. state_changes.df_users = [] (operator-extra wiped).
+# Proves that bulk-replace lets you remove all operator-extra users with an empty array (system
+# users outside state — remain via merge-in from essence on every render, see main.yml).
 name: update_users with empty input removes all operator-extra users
 
 fixtures:
@@ -14,7 +14,7 @@ fixtures:
     network: { primary_ip: 10.0.0.5 }
     os: { arch: amd64 }
 
-  # state v2: install/conf_dir/data_dir вынесены в essence (не в state).
+  # state v2: install/conf_dir/data_dir moved out into essence (not state).
   state:
     df_version: "1.39.0"
     tls:
@@ -28,19 +28,19 @@ fixtures:
       - { name: alice, perms: "~* +@all", state: "on" }
       - { name: bob, perms: "~app:* +@read", state: "on" }
 
-  # Пустой набор: убрать всех operator-extra.
+  # Empty set: remove all operator-extra users.
   input:
     users: []
 
-  # Vault: default_admin (masterauth-долив во flagfile + ACL LOAD-AUTH читают его безусловно).
+  # Vault: default_admin (masterauth merged into the flagfile + ACL LOAD-AUTH read it unconditionally).
   vault:
     secret/dragonfly/update_users/users/default_admin:
       password: dfadmin-update-users-pass
 
 assert:
   task_present:
-    # users.acl рендерится с ПУСТЫМ набором (operator-extra стёрты; системных нет — essence
-    # без system_acl_users → vars.users = {}).
+    # users.acl renders with an EMPTY set (operator-extra wiped; no system users — essence
+    # without system_acl_users → vars.users = {}).
     - module: core.file.rendered
       params_subset:
         path: /etc/dragonfly/users.acl
@@ -60,14 +60,14 @@ assert:
           role: ""
           essence: {}
 
-    # HOT-RELOAD ACL: community.redis.acl через ЛОКАЛЬНЫЙ UNIX-сокет (ACL LOAD приводит инстанс
-    # к пустому operator-набору). AUTH под default_admin (requirepass убран).
+    # HOT-RELOAD ACL: community.redis.acl over a LOCAL UNIX socket (ACL LOAD brings the instance
+    # to an empty operator set). AUTH as default_admin (requirepass removed).
     - module: community.redis.acl
       params_subset:
         addr: "unix:/var/run/dragonfly/dragonfly.sock"
         username: default_admin
         password: dfadmin-update-users-pass
 
-  # state_changes: df_users = [] (operator-extra стёрт целиком).
+  # state_changes: df_users = [] (operator-extra wiped entirely).
   state_changes:
     df_users: []

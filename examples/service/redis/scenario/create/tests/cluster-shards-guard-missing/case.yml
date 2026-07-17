@@ -1,20 +1,20 @@
-# L0-испытание cluster-без-shards — FAIL-ветка. shards остаётся required:false без
-# default в input-схеме (min:1 + раскладка ролей по хостам), но несёт
-# required_when: "input.redis_type == 'cluster'" — условную обязательность по режиму
-# (ADR-009 amendment 2026-06-23). Поэтому ОТСУТСТВИЕ shards в режиме cluster =
-# осмысленная ошибка оператора, а не дефолт.
+# L0-trial for cluster-without-shards — the FAIL branch. shards stays required:false
+# without a default in the input schema (min:1 + role layout across hosts), but carries
+# required_when: "input.redis_type == 'cluster'" — conditional requirement by mode
+# (ADR-009 amendment 2026-06-23). So the ABSENCE of shards in cluster mode is a
+# meaningful operator error, not a default.
 #
-# ★ ПОВЕДЕНИЕ: shards-специфичную диагностику даёт required_when на INPUT-ВАЛИДАЦИИ
-# (config.ResolveInputValues → requireInputValues), которая идёт ДО render: предикат
-# input.redis_type == 'cluster' истинен, shards не передан и без default → прогон
-# обрывается понятным сообщением «input "shards" обязателен...» РАНЬШЕ, чем дойдёт до
-# render и size-guard assert (1 != 0*1). В trial-harness эта input-ошибка пробрасывается
-# через renderCase (config.ResolveInputValues) и ловится тем же expect_render_error.
-# Прежде (size-guard shell-задача / без required_when) кейс ассертил отрендеренный
-# guard / обрыв на size-guard "topology mismatch"; теперь required_when отсекает раньше.
+# ★ BEHAVIOR: shards-specific diagnostics come from required_when at INPUT VALIDATION
+# (config.ResolveInputValues → requireInputValues), which runs BEFORE render: the predicate
+# input.redis_type == 'cluster' is true, shards is not passed and has no default → the run
+# aborts with a clear message "input \"shards\" is required..." EARLIER than it would reach
+# render and the size-guard assert (1 != 0*1). In the trial harness this input error is
+# propagated through renderCase (config.ResolveInputValues) and caught by the same expect_render_error.
+# Previously (size-guard shell-task / without required_when) the case asserted the rendered
+# guard / abort at the size-guard "topology mismatch"; now required_when cuts it off earlier.
 #
-# Парный с cluster-single-shard (shards задан): там input-валидация проходит, render
-# идёт, cluster-build на месте.
+# Paired with cluster-single-shard (shards set): there input validation passes, render
+# proceeds, cluster-build is in place.
 name: cluster without shards aborts at input validation (required_when)
 
 fixtures:
@@ -42,20 +42,20 @@ fixtures:
       timeout:          300
 
   input:
-    # ★ provision выключен (default-on: опущенная секция = ВКЛЮЧЕНО; кейс деплоит на
-    # ГОТОВЫЙ roster, cloud-create не нужен) → include redis-provision.yml group-drop.
+    # ★ provision disabled (default-on: an omitted section = ENABLED; the case deploys onto
+    # a READY roster, cloud-create is not needed) → include redis-provision.yml group-drop.
     provision:
       enabled: false
     redis_type: cluster
-    # version ОБЯЗАТЕЛЬНА (директива пользователя 2026-06-23) и теперь ENUM выкаченных
-    # в Nexus сборок — 7.4.1 ∈ enum (мажор < 8 → version-gate модулей не активен).
-    # Берём валидный enum намеренно: required_when shards проверяется requireInputValues
-    # ДО enum-валидации, поэтому невалидный version замаскировал бы shards-ошибку.
+    # version is REQUIRED (user directive 2026-06-23) and is now the ENUM of builds
+    # released to Nexus — 7.4.1 ∈ enum (major < 8 → module version-gate not active).
+    # We take a valid enum deliberately: required_when for shards is checked by requireInputValues
+    # BEFORE enum validation, so an invalid version would mask the shards error.
     version: "7.4.1"
-    # shards НЕ задан намеренно — required_when (input.redis_type == 'cluster')
-    # делает его обязательным в режиме cluster → input-валидация рвёт прогон ДО render.
+    # shards is NOT set deliberately — required_when (input.redis_type == 'cluster')
+    # makes it required in cluster mode → input validation aborts the run BEFORE render.
 
-# Прогон обрывается на input-валидации: required_when shards истинен (режим cluster),
-# значение не передано и без default. Подстрока — узнаваемая форма required-сообщения
-# requireInputValues (input_value.go), включающая сам предикат required_when.
-expect_render_error: "input \"shards\" обязателен, но не передан и не имеет default (required_when: input.redis_type == 'cluster')"
+# The run aborts at input validation: required_when for shards is true (cluster mode),
+# the value was not passed and has no default. The substring is the recognizable form of the
+# required message from requireInputValues (input_value.go), including the required_when predicate itself.
+expect_render_error: "\"shards\" is required"

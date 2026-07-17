@@ -1,22 +1,22 @@
 name: Bug report
-description: Сообщить о баге или неожиданном поведении (закрытая бета)
+description: Report a bug or unexpected behavior (closed beta)
 labels: ["bug"]
 body:
   - type: markdown
     attributes:
       value: |
-        Спасибо за отчёт. Перед заполнением сверьтесь с
+        Thanks for the report. Before filling it out, please check
         [docs/known-limitations.md](https://github.com/co-cy/soul-stack/blob/main/docs/known-limitations.md)
-        — часть ограничений в бету не входит осознанно.
+        — some limitations are deliberately out of scope for the beta.
 
-        **Уязвимость безопасности сюда не пишите.** Канал раскрытия — приватный
-        Security Advisory, см. [SECURITY.md](https://github.com/co-cy/soul-stack/blob/main/SECURITY.md).
+        **Do not report security vulnerabilities here.** The disclosure channel is a private
+        Security Advisory, see [SECURITY.md](https://github.com/co-cy/soul-stack/blob/main/SECURITY.md).
 
   - type: input
     id: version
     attributes:
-      label: Версия
-      description: Вывод команды `keeper version`.
+      label: Version
+      description: Output of `keeper version`.
       placeholder: "v0.1.0-beta.3"
     validations:
       required: true
@@ -24,23 +24,23 @@ body:
   - type: dropdown
     id: component
     attributes:
-      label: Компонент
-      description: Где проявляется баг.
+      label: Component
+      description: Where the bug shows up.
       options:
         - keeper
         - soul
         - soulctl
         - soul-lint
         - web
-        - не уверен / несколько
+        - not sure / several
     validations:
       required: true
 
   - type: textarea
     id: steps
     attributes:
-      label: Шаги воспроизведения
-      description: Минимальная последовательность, приводящая к багу.
+      label: Steps to reproduce
+      description: Minimal sequence that leads to the bug.
       placeholder: |
         1. ...
         2. ...
@@ -51,25 +51,25 @@ body:
   - type: textarea
     id: expected
     attributes:
-      label: Ожидаемое поведение
+      label: Expected behavior
     validations:
       required: true
 
   - type: textarea
     id: actual
     attributes:
-      label: Фактическое поведение
+      label: Actual behavior
     validations:
       required: true
 
   - type: textarea
     id: logs
     attributes:
-      label: Логи / audit
+      label: Logs / audit
       description: >-
-        Релевантный фрагмент логов или audit-журнала.
-        НЕ прикладывайте секреты — JWT-токены, содержимое Vault, приватные ключи
-        SoulSeed, DSN с паролями. Маскируйте чувствительное.
+        Relevant log or audit-journal excerpt.
+        DO NOT attach secrets — JWT tokens, Vault contents, private
+        SoulSeed keys, DSNs with passwords. Mask anything sensitive.
       render: text
     validations:
       required: false
@@ -77,12 +77,12 @@ body:
   - type: textarea
     id: environment
     attributes:
-      label: Окружение
-      description: ОС хостов (Keeper и Soul), как собрано (бинарь из релиза / `make build` / Docker), версии Postgres / Redis / Vault.
+      label: Environment
+      description: Host OS (Keeper and Soul), how it was built (release binary / `make build` / Docker), Postgres / Redis / Vault versions.
       placeholder: |
         Keeper OS: ...
         Soul OS: ...
-        Сборка: ...
+        Build: ...
         Postgres / Redis / Vault: ...
     validations:
       required: true

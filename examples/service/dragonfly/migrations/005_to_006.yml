@@ -2,20 +2,20 @@ from_version: 5
 to_version: 6
 
 description: >-
-  state_schema v5 → v6: обязательный log-shipping data-плоскости (Слайс V-I, ADR-067).
-  state ДОПОЛНЯЕТСЯ read-model-объектом logging — зафиксированные версия/sink/источники агента
-  vector, развёрнутого create-прогоном на каждый хост (симметрия v4→v5 monitoring: экспортер
-  метрик). Секрет доступа к коллектору (sink_auth_ref) в state НЕ хранится (ИБ — он в Vault, как
+  state_schema v5 → v6: mandatory log-shipping of the data plane (Slice V-I, ADR-067).
+  state gets AUGMENTED with a read-model object logging — captured version/sink/sources of the vector
+  agent, deployed by the create run on each host (symmetry with v4→v5 monitoring: metrics
+  exporter). The collector access secret (sink_auth_ref) is NOT stored in state (security — it lives in Vault, like
   tls.*_ref).
 
-  Forward-only (down: не поддерживается; восстановление — через state_history). Существующие
-  v5-инкарнации развёрнуты ДО ввода log-shipping (агента vector ещё нет) → консервативный default:
-  version пустая ('' = «не развёрнуто», best-effort как monitoring в 004_to_005), sink_type console
-  (безопасный дефолт без внешней инфры), sink_endpoint '' , log_sources [] (следующий create
-  перезапишет их значениями из essence.vector_*). ОДИН плоский set с has()-guard на ВЕСЬ объект
-  (CEL-map-литерал-дефолт): logging уже есть → сохраняется как есть (идемпотентность повторного
-  прогона), иначе ставится default. Зеркало redis 013_to_014 (объект-guard). Остальной state
-  (включая monitoring) НЕ трогается.
+  Forward-only (down: not supported; recovery — via state_history). Existing
+  v5 incarnations were deployed BEFORE log-shipping was introduced (no vector agent yet) → conservative default:
+  version empty ('' = "not deployed", best-effort as monitoring in 004_to_005), sink_type console
+  (safe default without external infra), sink_endpoint '' , log_sources [] (the next create
+  will overwrite them with values from essence.vector_*). ONE flat set with a has()-guard on the WHOLE object
+  (CEL map-literal default): logging already present → kept as is (idempotency of a repeat
+  run), otherwise default is set. Mirrors redis 013_to_014 (object-guard). The rest of state
+  (including monitoring) is NOT touched.
 
 transform:
   - set:

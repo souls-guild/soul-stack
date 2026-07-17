@@ -1,14 +1,14 @@
 name: sentinel-aof-tls-plain
 description: >
-  sentinel-инкарнация (v10): старый persistence:aof + tls.enable:true/only:false +
-  redis_sentinel с именованными down_after_ms/failover_timeout_ms. После миграции:
-    - persistence → aof_1sec (remap, fsync everysec бит-в-бит);
-    - connection_mode → tls_plain (tls.enable && !tls.only, обратная свёртка);
+  sentinel incarnation (v10): old persistence:aof + tls.enable:true/only:false +
+  redis_sentinel with named down_after_ms/failover_timeout_ms. After migration:
+    - persistence → aof_1sec (remap, fsync everysec bit-for-bit);
+    - connection_mode → tls_plain (tls.enable && !tls.only, reverse fold);
     - io_threads → 0 (best-effort default);
     - redis_sentinel → master_settings {down-after-milliseconds, failover-timeout}
-      (значения из старых листов, конверсия int→string) + settings {}, master_name/
-      quorum сохранены; старые down_after_ms/failover_timeout_ms отброшены.
-  Остальной state (redis_config/redis_users/install/topology/seeded_from) — бит-в-бит.
+      (values from the old leaves, int→string conversion) + settings {}, master_name/
+      quorum preserved; old down_after_ms/failover_timeout_ms dropped.
+  The rest of the state (redis_config/redis_users/install/topology/seeded_from) — bit-for-bit.
 
 state_before:
   redis_type: sentinel

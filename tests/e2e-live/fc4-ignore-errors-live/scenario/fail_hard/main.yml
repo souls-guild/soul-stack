@@ -1,10 +1,10 @@
 name: fail_hard
 description: >-
-  FC-4 контраст: ТА ЖЕ падающая задача, что в create, но БЕЗ failed_when:false.
-  Реальный провал модуля (core.exec.run несуществующего бинаря) НЕ подавлен →
-  финальный статус задачи FAILED → прогон FAILED → incarnation error_locked.
-  Доказывает, что success в create — заслуга именно failed_when:false
-  (ignore_errors), а не того, что модуль «не падает». Зеркало create без флага.
+  FC-4 contrast: the SAME failing task as in create, but WITHOUT failed_when:false.
+  The module's genuine failure (core.exec.run of a nonexistent binary) is NOT suppressed →
+  the task's final status is FAILED → the run FAILED → incarnation error_locked.
+  Proves that success in create is credited specifically to failed_when:false
+  (ignore_errors), not to the module "not failing". Mirrors create without the flag.
 
 state_changes: {}
 
@@ -12,7 +12,7 @@ tasks:
   - name: Deliberately failing task WITHOUT ignore_errors
     module: core.exec.run
     register: fail_probe
-    # Нет failed_when → реальный провал модуля валит задачу и весь прогон.
+    # No failed_when → a genuine module failure fails the task and the whole run.
     params:
       cmd: /nonexistent/fc4-deliberate-fail
       args: ["arg-that-never-runs"]

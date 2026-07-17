@@ -1,10 +1,10 @@
-# L0-кейс: переопределение base_url на внутреннее зеркало.
+# L0 case: base_url override to an internal mirror.
 #
-# base_url_override=https://nexus.internal/ne → scenario apply:input передаёт его
-# в destiny.base_url → CEL собирает url с этого зеркала вместо GitHub Releases.
-# Доказывает, что зеркало/nexus подменяет корень загрузки (прод-конвенция:
-# base_url переопределяется на внутренний proxy). Ассерт — url шага
-# core.url.fetched начинается с зеркала.
+# base_url_override=https://nexus.internal/ne -> scenario apply:input passes it
+# into destiny.base_url -> CEL builds the url from this mirror instead of GitHub Releases.
+# Proves that the mirror/nexus replaces the download root (prod convention:
+# base_url is overridden to an internal proxy). Assert - the core.url.fetched
+# step's url starts with the mirror.
 name: node-exporter renders download url from base_url mirror override
 
 fixtures:
@@ -21,7 +21,7 @@ fixtures:
 
 assert:
   task_present:
-    # Единственный core.url.fetched в плане.
+    # The only core.url.fetched in the plan.
     - module: core.url.fetched
       params_subset:
         url: https://nexus.internal/ne/v1.11.1/node_exporter-1.11.1.linux-amd64.tar.gz

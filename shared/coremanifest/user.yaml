@@ -10,16 +10,16 @@ required_capabilities:
 spec:
   states:
     present:
-      description: Пользователь существует (present-or-create, без reconcile существующего; ADR-015).
+      description: User exists (present-or-create, no reconcile of an existing user; ADR-015).
       input:
-        name:   { type: string, required: true, description: "Имя пользователя." }
-        uid:    { type: int,    description: "Явный uid (useradd -u). Действует только при создании." }
-        shell:  { type: string, description: "Login shell (useradd -s). Действует только при создании." }
-        home:   { type: string, description: "Домашний каталог (useradd -d). Действует только при создании." }
-        groups: { type: list,   items: { type: string }, description: "Supplementary-группы (useradd -G). Действует только при создании." }
-        system: { type: bool,   description: "Системный аккаунт (useradd -r) для сервис-аккаунтов. Только при создании." }
-        group:  { type: string, description: "Primary-группа (useradd -g); должна уже существовать. Только при создании." }
+        name:   { type: string, required: true, description: "User name." }
+        uid:    { type: int,    description: "Explicit uid (useradd -u). Applies only on creation." }
+        shell:  { type: string, description: "Login shell (useradd -s). Applies only on creation." }
+        home:   { type: string, description: "Home directory (useradd -d). Applies only on creation." }
+        groups: { type: list,   items: { type: string }, description: "Supplementary groups (useradd -G). Applies only on creation." }
+        system: { type: bool,   description: "System account (useradd -r) for service accounts. Only on creation." }
+        group:  { type: string, description: "Primary group (useradd -g); must already exist. Only on creation." }
     absent:
-      description: Пользователь удалён.
+      description: User removed.
       input:
-        name: { type: string, required: true, description: "Имя пользователя." }
+        name: { type: string, required: true, description: "User name." }

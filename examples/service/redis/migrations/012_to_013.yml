@@ -2,22 +2,22 @@ from_version: 12
 to_version: 13
 
 description: >-
-  state_schema v12 → v13: обязательный мониторинг data-плоскости (Слайс I, redis-пилот).
-  state ДОПОЛНЯЕТСЯ read-model-объектом monitoring — зафиксированные версии и listen-порты
-  экспортеров (node_exporter + redis_exporter), развёрнутых create-прогоном (симметрия
-  install/tls read-model). Пароль/юзер ACL-юзера monitoring в state НЕ хранятся (ИБ —
-  они в Vault, как tls.*_ref).
+  state_schema v12 → v13: mandatory data-plane monitoring (Slice I, redis pilot).
+  state is EXTENDED with the read-model object monitoring — pinned versions and listen
+  ports of the exporters (node_exporter + redis_exporter) deployed by the create-run
+  (symmetric with the install/tls read-model). The password/user of the monitoring
+  ACL-user are NOT stored in state (security — they live in Vault, like tls.*_ref).
 
-  Forward-only (down: не поддерживается; восстановление — через state_history).
-  Существующие v12-инкарнации развёрнуты ДО ввода мониторинга (экспортеров ещё нет) →
-  консервативный default: версии пустые (''  = «не развёрнуто», best-effort как memory_mb/
-  io_threads в 002_to_003/010_to_011), порты — конвенциональные дефолты :9100/:9121
-  (стандартные listen node_exporter/redis_exporter, не зависят от факта развёртывания;
-  следующий create перезапишет их значениями из essence). ОДИН плоский set с has()-guard
-  на ВЕСЬ объект (CEL-map-литерал-дефолт): monitoring уже есть → сохраняется как есть
-  (идемпотентность повторного прогона), иначе ставится default. Зеркало объект-guard-а
-  008_to_009 (seeded_from). Остальной state (redis_config/redis_users/tls/namedfields/
-  топология) НЕ трогается.
+  Forward-only (down: not supported; recovery — via state_history).
+  Existing v12-incarnations were deployed BEFORE monitoring was introduced (no exporters
+  yet) → conservative default: empty versions (''  = "not deployed", best-effort like
+  memory_mb/io_threads in 002_to_003/010_to_011), ports — conventional defaults :9100/:9121
+  (standard listen for node_exporter/redis_exporter, independent of whether deployment
+  happened; the next create will overwrite them with values from essence). ONE flat set
+  with a has()-guard on the WHOLE object (CEL-map-literal-default): monitoring already
+  present → kept as is (idempotency of a repeat run), otherwise the default is set.
+  Mirrors the object-guard of 008_to_009 (seeded_from). The rest of state (redis_config/
+  redis_users/tls/namedfields/topology) is NOT touched.
 
 transform:
   - set:

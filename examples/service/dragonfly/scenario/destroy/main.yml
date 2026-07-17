@@ -1,93 +1,94 @@
 name: destroy
 description: >-
-  Teardown DragonFly: снять с КАЖДОГО хоста инкарнации то, что поставил create — systemd-
-  сервисы + конфиг-артефакты — ПЕРЕД удалением инкарнации. Lifecycle-сценарий (НЕ runnable из
-  Run-формы — terminal-флоу DELETE /v1/incarnations/{name}, как create — bootstrap): keeper
-  трактует имя `destroy` как фазу жизненного цикла (scenario.LifecycleScenarioNames),
-  запускается в режиме TerminalDestroy.
+  Teardown DragonFly: remove from EVERY host of the incarnation what create installed — systemd
+  services + config artifacts — BEFORE deleting the incarnation. Lifecycle scenario (NOT runnable from
+  the Run form — a terminal flow DELETE /v1/incarnations/{name}, like create is bootstrap): keeper
+  treats the name `destroy` as a lifecycle phase (scenario.LifecycleScenarioNames),
+  runs in TerminalDestroy mode.
 
-  ★ DragonFly ДВУХРЕЖИМНЫЙ teardown (решение пользователя 2026-07-01: DragonFly cloud-provision
-  ПО ОБРАЗЦУ redis; provision обязателен в базовом create — default-on): destroy несёт ОБЕ ветки.
-    (1) CLOUD-CASCADE (симметрия redis/destroy): когда create ПРОВИЖИЛ VM (provisioned_vm_ids/
-        sids в state — default-on путь), destroy снимает облачные VM (core.cloud.destroyed,
-        on: keeper) + cascade keeper-реестров (souls→destroyed/seeds→orphaned/tokens→burned).
-        Гейт `when: size(provisioned_vm_ids) > 0` (static → group-drop) держит эту задачу ТОЛЬКО
-        на провиженных инкарнациях. assert парности sids↔vm_ids ДО destroy (как redis).
-    (2) SOUL-SIDE teardown (прежний профиль DragonFly): когда create катился на СУЩЕСТВУЮЩИЕ
-        хосты (provision: {enabled: false} — не провижен) — VM не наши, снимать облачно нечего,
-        поэтому чистим Soul-side: остановить сервисы + удалить наши /etc-артефакты. Эти шаги
-        идемпотентны и БЕЗУСЛОВНЫ (нет when-гейта), но ПОРЯДОК относительно cloud-destroy разный
-        по ветке. На ПРОВИЖЕННОЙ инкарнации cloud.destroyed (keeper-задача) по keeper-инварианту
-        «keeper-задачи идут ПЕРВЫМИ в своём Passage» снимает эти хосты каскадом (souls→destroyed)
-        РАНЬШЕ host-fan-out — host-teardown-шаги диспатчатся на уже снятый хост, и keeper трактует
-        их как benign-терминал no_match (NIM-56 reconcile: хост снят СВОИМ destroy-каскадом), а НЕ
-        dispatch_failed/отказ (реальный disconnect/revoked остаётся отказом, fail-closed). На
-        НЕ-провиженной инкарнации cloud.destroyed group-drop-ается → host-teardown единственный и
-        отрабатывает штатно на живых хостах.
-  Обе ветки в одном сценарии: cloud-cascade group-drop-ается на не-провиженных, Soul-side
-  всегда активен. REUSE lifecycle-каркаса redis/destroy (input: {}, terminal, state_changes нет).
+  ★ DragonFly TWO-MODE teardown (user decision 2026-07-01: DragonFly cloud-provision
+  MODELED ON redis; provision is required in the base create — default-on): destroy carries BOTH branches.
+    (1) CLOUD-CASCADE (symmetric with redis/destroy): when create PROVISIONED a VM (provisioned_vm_ids/
+        sids in state — the default-on path), destroy tears down the cloud VMs (core.cloud.destroyed,
+        on: keeper) + cascades keeper registries (souls→destroyed/seeds→orphaned/tokens→burned).
+        Gate `when: size(provisioned_vm_ids) > 0` (static → group-drop) keeps this task ONLY
+        on provisioned incarnations. Assert sids↔vm_ids pairing BEFORE destroy (like redis).
+    (2) SOUL-SIDE teardown (the older DragonFly profile): when create ran against EXISTING
+        hosts (provision: {enabled: false} — not provisioned) — the VM isn't ours, there's nothing
+        to tear down in the cloud, so we clean up Soul-side: stop services + remove our /etc
+        artifacts. These steps are idempotent and UNCONDITIONAL (no when gate), but the ORDER
+        relative to cloud-destroy differs per branch. On a PROVISIONED incarnation, cloud.destroyed
+        (a keeper task), by the keeper invariant "keeper tasks run FIRST in their Passage,"
+        removes these hosts via cascade (souls→destroyed) BEFORE host-fan-out — host-teardown
+        steps then dispatch to an already-removed host, and keeper treats those as a benign
+        terminal no_match (NIM-56 reconcile: the host was removed by its OWN destroy cascade), NOT
+        dispatch_failed/failure (a real disconnect/revocation remains a failure, fail-closed). On a
+        NOT-provisioned incarnation, cloud.destroyed group-drops → host-teardown is the only branch and
+        runs normally on the live hosts.
+  Both branches in one scenario: cloud-cascade group-drops on non-provisioned incarnations, Soul-side
+  is always active. REUSE of the redis/destroy lifecycle skeleton (input: {}, terminal, no state_changes).
 
-  ★ ГРАНИЦА TEARDOWN (консервативный MVP — снять «systemd + файлы», НЕ данные/пакеты-общего-
-  назначения):
-    - сервисы dragonfly + redis-sentinel + disable-thp ОСТАНАВЛИВАЮТСЯ (core.service.stopped,
-      идемпотентно — нет сервиса → no-op). redis-sentinel поднимает destiny `redis` (sentinel
-      из redis-плоскости, рефактор) — но имя systemd-юнита то же, остановка остаётся валидной;
-    - DragonFly УБИРАЕТСЯ по СПОСОБУ установки (essence.install_method, static-гейт → group-drop):
-      binary-ветка удаляет /usr/local/bin/dragonfly + свой unit-файл; package-ветка снимает
-      distro-deb dragonfly (core.pkg.absent — пакет уносит свой systemd-юнит чисто, без отдельного
-      daemon-reload);
-    - НАШИ конфиг-артефакты DragonFly в ${conf_dir} и /etc (users.acl, dragonfly.conf, TLS PEM,
-      logrotate/sysctl drop-in, disable-thp unit) УДАЛЯЮТСЯ — они всегда наши, безопасно в обеих
-      ветках;
-    - ★ SENTINEL-АРТЕФАКТЫ (sentinel.conf/sentinel-users.acl/redis-sentinel unit, пакет
-      redis-server) НЕ снимаются ЗДЕСЬ — их разворачивает destiny `redis` (sentinel_only) в
-      ЕЁ conf_dir (/etc/redis), не /etc/dragonfly. Полный sentinel-teardown — отдельный слайс
-      (apply destiny `redis` teardown / явные /etc/redis-пути). Для PILOT не критично: redis-
-      sentinel юнит гасится (stop выше), осиротевший конфиг безвреден на удаляемом хосте;
-    - data_dir (snapshot-данные DragonFly), пакет redis-tools (redis-cli — общего назначения,
-      ставится БЕЗУСЛОВНО), distro-юзер dragonfly — НЕ ТРОГАЮТСЯ (удаление данных деструктивно и
-      необратимо; снос общих пакетов задел бы соседние сервисы). Это осознанная граница MVP —
-      расширить «глубину» (purge данных, снос пакетов) — отдельным решением.
+  ★ TEARDOWN BOUNDARY (conservative MVP — remove "systemd + files", NOT data/general-purpose
+  packages):
+    - services dragonfly + redis-sentinel + disable-thp are STOPPED (core.service.stopped,
+      idempotent — no service → no-op). redis-sentinel is brought up by destiny `redis` (sentinel
+      from the redis plane, refactor) — but the systemd unit name is the same, stopping it stays valid;
+    - DragonFly is REMOVED by ITS install method (essence.install_method, static gate → group-drop):
+      the binary branch removes /usr/local/bin/dragonfly + its own unit file; the package branch removes
+      the distro deb dragonfly (core.pkg.absent — the package cleanly takes its systemd unit with it, no separate
+      daemon-reload needed);
+    - OUR DragonFly config artifacts in ${conf_dir} and /etc (users.acl, dragonfly.conf, TLS PEM,
+      logrotate/sysctl drop-in, disable-thp unit) are REMOVED — they're always ours, safe in both
+      branches;
+    - ★ SENTINEL ARTIFACTS (sentinel.conf/sentinel-users.acl/redis-sentinel unit, the
+      redis-server package) are NOT removed HERE — they're deployed by destiny `redis` (sentinel_only) in
+      ITS conf_dir (/etc/redis), not /etc/dragonfly. Full sentinel teardown is a separate slice
+      (apply destiny `redis` teardown / explicit /etc/redis paths). Not critical for PILOT: the
+      redis-sentinel unit is stopped (above), an orphaned config is harmless on a host being deleted;
+    - data_dir (DragonFly snapshot data), the redis-tools package (redis-cli — general purpose,
+      installed UNCONDITIONALLY), the distro dragonfly user — are NOT TOUCHED (deleting data is destructive
+      and irreversible; removing shared packages would affect neighboring services). This is a deliberate MVP
+      boundary — extending the "depth" (purging data, removing packages) is a separate decision.
 
-  ★ state_changes ОТСУТСТВУЮТ намеренно: destroy терминальный — инкарнация удаляется
-  (auto_destroy), чистить state бессмысленно (он уходит вместе с инкарнацией). Зеркало create,
-  где state НАПОЛНЯЕТСЯ; здесь не трогаем.
+  ★ state_changes are ABSENT on purpose: destroy is terminal — the incarnation is being deleted
+  (auto_destroy), clearing state is pointless (it goes away with the incarnation). Mirror of create,
+  where state is POPULATED; here we don't touch it.
 
-  Таргетинг — на весь incarnation (on опущен, ADR-008/009): teardown идёт на КАЖДЫЙ хост
-  инкарнации (Soul-side, не keeper — host-операции над systemd/файлами).
+  Targeting — the whole incarnation (on omitted, ADR-008/009): teardown runs on EVERY host of the
+  incarnation (Soul-side, not keeper — host operations over systemd/files).
 
-# ── Входной контракт оператора ────────────────────────────────────────────────
-# Пуст: destroy не принимает операторского ввода. Что снимать — ФАКТ из incarnation.state
-# (provisioned_provider/vm_ids/sids для cloud-cascade) + способ установки и conf_dir из essence
-# (install_method/conf_dir для Soul-side teardown), а не выбор оператора в момент teardown.
-# Operator только инициирует удаление (DELETE /v1/incarnations/{name}).
+# ── Operator input contract ────────────────────────────────────────────────
+# Empty: destroy takes no operator input. What to remove is a FACT from incarnation.state
+# (provisioned_provider/vm_ids/sids for cloud-cascade) + the install method and conf_dir from essence
+# (install_method/conf_dir for Soul-side teardown), not an operator choice at teardown time.
+# The operator only initiates the deletion (DELETE /v1/incarnations/{name}).
 input: {}
 
 tasks:
-  # ── CLOUD-CASCADE ветка (провиженные VM, симметрия redis/destroy, ADR-061) ────
-  # ★ Инвариант парности sids↔vm_ids ДО destroy (architect): provisioned_sids и
-  # provisioned_vm_ids читаются ПАРОЙ — cascade без sids оставил бы осиротевшие
-  # souls/seeds/tokens (vm_ids снимают VM у провайдера, sids чистят реестры;
-  # рассогласование длин = orphan). create пишет оба ОДНИМ guard-ом из
-  # register.provision.hosts (один источник истины размера), поэтому в норме длины
-  # равны; assert ловит порчу state (ручная правка / частичная миграция / баг) ДО
-  # необратимого destroy. RUN-LEVEL precondition (вычисляется keeper-side в render-фазе
-  # ОДИН раз, ДО dispatch destroyed). На не-провиженной инкарнации обе стороны default
-  # [] → 0 == 0 → вакуумно true (assert не мешает Soul-side teardown без provision).
-  # default(...) — поля back-compat-опциональны (инкарнации до v3/v4 без них).
+  # ── CLOUD-CASCADE branch (provisioned VMs, symmetric with redis/destroy, ADR-061) ────
+  # ★ sids↔vm_ids pairing invariant BEFORE destroy (architect): provisioned_sids and
+  # provisioned_vm_ids are read as a PAIR — a cascade without sids would leave orphaned
+  # souls/seeds/tokens (vm_ids tear down VMs at the provider, sids clean up registries;
+  # a length mismatch = orphan). create writes both with ONE guard from
+  # register.provision.hosts (a single source of truth for size), so normally the lengths
+  # match; the assert catches state corruption (manual edit / partial migration / bug) BEFORE
+  # an irreversible destroy. RUN-LEVEL precondition (computed keeper-side during the render phase,
+  # ONCE, BEFORE dispatching destroyed). On a non-provisioned incarnation, both sides default
+  # to [] → 0 == 0 → vacuously true (the assert doesn't block Soul-side teardown without provisioning).
+  # default(...) — the fields are back-compat-optional (incarnations before v3/v4 lack them).
   - name: Assert provisioned sids and vm_ids were captured as a pair before teardown
     assert:
       that:
         - "size(default(incarnation.state.provisioned_sids, [])) == size(default(incarnation.state.provisioned_vm_ids, []))"
-      message: "рассогласование provisioned_sids и provisioned_vm_ids в incarnation.state: cascade-destroy без полного набора SID оставил бы осиротевшие записи souls/seeds/bootstrap_tokens (нарушение anti-replay) — длины обязаны совпадать (оба набора пишет create одним guard-ом из register.provision.hosts)"
+      message: "provisioned_sids and provisioned_vm_ids in incarnation.state are mismatched: a cascade-destroy without the full SID set would leave orphaned souls/seeds/bootstrap_tokens records (anti-replay violation) — the lengths must match (both sets are written by create with a single guard from register.provision.hosts)"
 
-  # Снятие VM + cascade keeper-реестров (core.cloud.destroyed, on: keeper). ★ Адрес
-  # РОВНО core.cloud.destroyed (base core.cloud + state destroyed): applyDestroyed →
-  # PluginHost.Destroy(vm_ids) ПОТОМ cascade(sids). params из incarnation.state (keeper-
-  # задача видит pre-run снимок). GROUP-DROP на не-провиженных: when статичен
-  # (incarnation.* только, isStaticWhen) → пустой provisioned_vm_ids исключает задачу из
-  # плана (render-phase, не placeholder-skip). Инкарнации без provision проходят teardown
-  # без cloud-вызова (только Soul-side ниже).
+  # Removing VMs + cascading keeper registries (core.cloud.destroyed, on: keeper). ★ The address
+  # is EXACTLY core.cloud.destroyed (base core.cloud + state destroyed): applyDestroyed →
+  # PluginHost.Destroy(vm_ids) THEN cascade(sids). params come from incarnation.state (the keeper
+  # task sees a pre-run snapshot). GROUP-DROP on non-provisioned: when is static
+  # (incarnation.* only, isStaticWhen) → an empty provisioned_vm_ids excludes the task from
+  # the plan (render-phase, not placeholder-skip). Incarnations without provisioning go through teardown
+  # without a cloud call (only Soul-side below).
   - name: Destroy provisioned VMs and cascade their keeper registry records
     on: keeper
     module: core.cloud.destroyed
@@ -97,13 +98,14 @@ tasks:
       vm_ids:   "${ incarnation.state.provisioned_vm_ids }"
       sids:     "${ incarnation.state.provisioned_sids }"
 
-  # ── SOUL-SIDE teardown (прежний профиль DragonFly, всегда активен) ────────────
-  # ── 1. Остановить сервисы DragonFly (идемпотентно) ───────────────────────────
-  # core.service.stopped — приводит юнит к «не запущен». Нет сервиса (уже снят / не ставился)
-  # → no-op. Останавливаем ДО удаления файлов/пакета: снять конфиг под работающим демоном —
-  # гонка. Три юнита: dragonfly (data-плоскость), redis-sentinel (sentinel-демон — его ставит
-  # destiny `redis`, но имя юнита то же), disable-thp (oneshot THP — RemainAfterExit, stop
-  # снимает active-маркер).
+  # ── SOUL-SIDE teardown (the older DragonFly profile, always active) ────────────
+  # ── 1. Stop the DragonFly services (idempotent) ───────────────────────────
+  # core.service.stopped brings the unit to "not running": no service (already removed
+  # or never installed) means no-op. Stop BEFORE removing files/package, since pulling
+  # the config out from under a running daemon is a race. Three units: dragonfly (data
+  # plane), redis-sentinel (the sentinel daemon, deployed by destiny `redis`, though the
+  # unit name is the same), disable-thp (oneshot THP, RemainAfterExit; stop clears the
+  # active marker).
   - name: Stop the dragonfly service
     module: core.service.stopped
     params:
@@ -119,12 +121,13 @@ tasks:
     params:
       name: disable-thp
 
-  # ── 2a. Убрать DragonFly — BINARY-ветка (upstream-tarball install) ────────────
-  # Гейт static (essence.install_method только → isStaticWhen) → render-phase GROUP-DROP: на
-  # package-инкарнации эти задачи физически исключены из плана. ★ v1→v2: способ установки
-  # ВЫНЕСЕН из state в essence (install больше не в state) — гейт читает essence.install_method
-  # (тот же источник, что compute.install у create). binary-create положил бинарь в
-  # /usr/local/bin и СВОЙ unit в /etc/systemd/system — оба наши, удаляем.
+  # ── 2a. Remove DragonFly: BINARY branch (upstream-tarball install) ────────────
+  # Gate is static (essence.install_method only → isStaticWhen) → render-phase GROUP-DROP:
+  # on a package incarnation these tasks are physically excluded from the plan. ★ v1→v2:
+  # the install method was MOVED out of state into essence (install is no longer in
+  # state), so the gate reads essence.install_method (the same source as compute.install
+  # in create). binary create put the binary in /usr/local/bin and ITS OWN unit in
+  # /etc/systemd/system: both are ours, remove them.
   - name: Remove the dragonfly binary (binary install)
     module: core.file.absent
     when: "default(essence.install_method, 'package') == 'binary'"
@@ -137,24 +140,26 @@ tasks:
     params:
       path: /etc/systemd/system/dragonfly.service
 
-  # ── 2b. Убрать DragonFly — PACKAGE-ветка (distro-deb dragonfly) ───────────────
-  # Гейт static (group-drop на binary-инкарнации). package-create поставил distro-deb dragonfly
-  # с его собственным systemd-юнитом — снимаем ПАКЕТОМ (core.pkg.absent), пакет уносит свой
-  # юнит чисто (отдельный daemon-reload не нужен — apt/dpkg сам реконсилит systemd). ★ v1→v2:
-  # способ установки из essence.install_method (package — дефолт): «method != binary».
+  # ── 2b. Remove DragonFly: PACKAGE branch (distro deb dragonfly) ───────────────
+  # Gate is static (group-drop on binary incarnations). package create installed the
+  # distro deb dragonfly with its own systemd unit; remove it via the PACKAGE
+  # (core.pkg.absent) so the package cleanly takes its unit with it (no separate
+  # daemon-reload needed, since apt/dpkg reconciles systemd itself). ★ v1→v2: install
+  # method from essence.install_method (package is the default): "method != binary".
   - name: Remove the dragonfly distribution package (package install)
     module: core.pkg.absent
     when: "default(essence.install_method, 'package') != 'binary'"
     params:
       name: dragonfly
 
-  # ── 3. Удалить НАШИ конфиг-артефакты DragonFly (обе ветки, всегда наши) ───────
-  # ${conf_dir}-файлы (users.acl, dragonfly.conf, TLS PEM) + /etc drop-in-ы (logrotate, sysctl,
-  # disable-thp unit). conf_dir из essence (default /etc/dragonfly). core.file.absent идемпотентен
-  # (нет файла → no-op). TLS-PEM удаляем безусловно: на plaintext-инкарнации этих файлов нет →
-  # no-op (гейтить незачем). ★ sentinel.conf/sentinel-users.acl ЗДЕСЬ НЕ УДАЛЯЮТСЯ — их кладёт
-  # destiny `redis` (sentinel_only) в /etc/redis, не /etc/dragonfly (рефактор «sentinel из redis»);
-  # их teardown — отдельный слайс (см. шапку).
+  # ── 3. Remove OUR DragonFly config artifacts (both branches, always ours) ───────
+  # ${conf_dir} files (users.acl, dragonfly.conf, TLS PEM) + /etc drop-ins (logrotate,
+  # sysctl, disable-thp unit). conf_dir from essence (default /etc/dragonfly).
+  # core.file.absent is idempotent (no file → no-op). Remove the TLS PEM unconditionally:
+  # on a plaintext incarnation these files don't exist → no-op (no need to gate it).
+  # ★ sentinel.conf/sentinel-users.acl are NOT REMOVED HERE: they're deployed by destiny
+  # `redis` (sentinel_only) in /etc/redis, not /etc/dragonfly (the "sentinel out of redis"
+  # refactor); their teardown is a separate slice (see the header).
   - name: Remove the dragonfly users.acl
     module: core.file.absent
     params:

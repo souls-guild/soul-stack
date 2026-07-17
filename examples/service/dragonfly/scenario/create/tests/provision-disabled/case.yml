@@ -1,15 +1,15 @@
-# L0-испытание provision (ADR-061, Вариант A) — provision ЯВНО ВЫКЛЮЧЕН
-# (input.provision.enabled=false). ★ С default-on (решение 2026-07-01) ОПУЩЕННАЯ секция
-# означает ВКЛЮЧЕНО (top-level default {enabled: true}) — выключение ТОЛЬКО явным enabled:
-# false. Guard: include dragonfly-provision.yml gated на `has(input.provision) &&
-# input.provision.enabled` (main.yml tasks). enabled=false → весь provision-файл НЕ таргетит
-# никого; его keeper-side шаги (core.cloud.created + core.soul.registered) в плане ОТСУТСТВУЮТ
-# (group-drop по include-when), а read-model provisioned_vm_ids/sids/provider — консервативный
-# default ([] / '') по тернару state_changes (гейт input.provision.enabled).
+# L0 trial for provision (ADR-061, Variant A) — provision EXPLICITLY DISABLED
+# (input.provision.enabled=false). ★ With default-on (decision 2026-07-01) an OMITTED section
+# means ENABLED (top-level default {enabled: true}) — disabling ONLY via explicit enabled:
+# false. Guard: include dragonfly-provision.yml gated on `has(input.provision) &&
+# input.provision.enabled` (main.yml tasks). enabled=false → the whole provision file targets
+# no one; its keeper-side steps (core.cloud.created + core.soul.registered) are ABSENT from the plan
+# (group-drop via include-when), and the read-model provisioned_vm_ids/sids/provider — conservative
+# default ([] / '') per the state_changes ternary (gated on input.provision.enabled).
 #
-# Парный к provision-enabled-sentinel (там enabled: true → cloud-шаги присутствуют). Этот кейс
-# доказывает, что явный enabled: false катит прогон DragonFly по существующему roster-у (прежний
-# профиль deploy-on-existing), лишних cloud-шагов не эмитится (образец redis provision-disabled).
+# Paired with provision-enabled-sentinel (there enabled: true → cloud steps are present). This case
+# proves that an explicit enabled: false runs the DragonFly rollout against the existing roster (the
+# former deploy-on-existing profile), no extra cloud steps are emitted (mirrors redis provision-disabled).
 name: provision explicitly disabled drops cloud-create and onboarding tasks
 
 fixtures:
@@ -50,30 +50,30 @@ fixtures:
       haproxy:    "-@all +auth +client|getname +client|id +client|setname +command +hello +ping +role +sentinel|get-master-addr-by-name +sentinel|master +sentinel|myid +sentinel|replicas +sentinel|sentinels"
   input:
     version: "1.39.0"
-    # replicas_per_master=0 ЯВНО: single-host (node-solo), size-guard sentinel = 1+0 = 1 хост.
+    # replicas_per_master=0 EXPLICITLY: single-host (node-solo), size-guard sentinel = 1+0 = 1 host.
     replicas_per_master: 0
-    # ★ provision ЯВНО выключен (default-on: опущенная секция = ВКЛЮЧЕНО, выключение
-    # только явным enabled: false) → include dragonfly-provision.yml group-drop.
+    # ★ provision EXPLICITLY disabled (default-on: an omitted section = ENABLED, disabling
+    # only via explicit enabled: false) → include dragonfly-provision.yml group-drop.
     provision:
       enabled: false
 
 assert:
   task_present:
-    # Прогон катит обычную sentinel-ветку по существующему roster-у: dragonfly.conf
-    # рендерится. Доказывает, что отсутствие provision не ломает основной деплой.
+    # The run takes the regular sentinel branch against the existing roster: dragonfly.conf
+    # gets rendered. Proves that the absence of provision doesn't break the main deploy.
     - module: core.file.rendered
       params_subset:
         path: /etc/dragonfly/dragonfly.conf
 
   task_absent:
-    # provision-файл шаги ОТСУТСТВУЮТ (include-when input.provision.enabled false → group-drop).
-    # core.cloud.created — создание VM; core.soul.registered — барьер онбординга.
+    # provision-file steps are ABSENT (include-when input.provision.enabled false → group-drop).
+    # core.cloud.created — VM creation; core.soul.registered — onboarding barrier.
     - module: core.cloud.created
     - module: core.soul.registered
 
   state_changes:
     df_version: "1.39.0"
-    # read-model: VM никем не провижены этим прогоном → консервативный default.
+    # read-model: no VMs were provisioned by this run → conservative default.
     provisioned_vm_ids: []
     provisioned_sids: []
     provisioned_provider: ""

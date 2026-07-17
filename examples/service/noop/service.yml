@@ -1,13 +1,13 @@
 name: noop
 state_schema_version: 1
-description: Минимальный no-op service для E2E scenario-runner-а
+description: Minimal no-op service for the E2E scenario-runner
 
-# state_schema_version = 1 → каталог migrations/ не обязателен (ADR-019).
-# Структура incarnation.state пустая: сервис ничего не хранит в БД,
-# scenario/create — только smoke-вызов core.exec.run.
+# state_schema_version = 1 -> the migrations/ directory is optional (ADR-019).
+# The incarnation.state structure is empty: the service stores nothing in the DB,
+# scenario/create — only a smoke call to core.exec.run.
 state_schema:
   type: object
   properties: {}
 
-# Зависимостей нет: scenario использует только core-модули (ADR-015),
-# которые не перечисляются в destiny[]/modules[] (ADR-009).
+# No dependencies: the scenario only uses core modules (ADR-015),
+# which aren't listed in destiny[]/modules[] (ADR-009).

@@ -2,41 +2,43 @@ from_version: 3
 to_version: 4
 
 description: >-
-  state_schema v3 → v4: СУЖЕНИЕ enum redis_type до [sentinel, cluster] (решение
-  пользователя 2026-06-25 — режимы standalone и sentinel_only убраны из СЕРВИСА;
-  sentinel_only остаётся capability в destiny `redis` для переиспользования). Старые
-  инкарнации с redis_type ∈ {standalone, sentinel_only} имеют значение вне нового enum
-  → state стал бы schema-невалиден. Эта миграция forward-only ремапит их в валидный
-  режим, чтобы state остался схема-корректным.
+  state_schema v3 → v4: NARROWING the redis_type enum to [sentinel, cluster] (user
+  decision 2026-06-25 — the standalone and sentinel_only modes are removed from the
+  SERVICE; sentinel_only remains a capability in the `redis` destiny for reuse). Old
+  incarnations with redis_type ∈ {standalone, sentinel_only} have a value outside the
+  new enum → state would become schema-invalid. This forward-only migration remaps
+  them to a valid mode so state stays schema-valid.
 
-  ★ REMAP (forward-only, ADR-019 без down:):
-    - standalone     → sentinel   (один master + sentinel-демон; replicas_per_master=0
-                                    в новом сервисе даёт standalone-эквивалент);
-    - sentinel_only  → sentinel   (нет clean-target: у sentinel_only нет data-плоскости;
-                                    sentinel — ближайший режим, несущий sentinel-демон);
-    - sentinel       → sentinel   (без изменений);
-    - cluster        → cluster    (без изменений).
+  ★ REMAP (forward-only, ADR-019 no down:):
+    - standalone     → sentinel   (one master + sentinel daemon; replicas_per_master=0
+                                    in the new service gives a standalone-equivalent);
+    - sentinel_only  → sentinel   (no clean target: sentinel_only has no data plane;
+                                    sentinel is the closest mode, carrying a sentinel daemon);
+    - sentinel       → sentinel   (unchanged);
+    - cluster        → cluster    (unchanged).
 
-  ★★ ВНИМАНИЕ — СЕМАНТИКА REMAP-А НЕ ОДНОЗНАЧНА (needs_architect):
-  ремап МЕНЯЕТ ЖИВОЙ СМЫСЛ инкарнации. standalone-инсталляция НЕ имела sentinel-демона;
-  после ремапа в sentinel повторный apply create развернёт sentinel-демон, которого там
-  не было. sentinel_only вообще НЕ имела data-плоскости redis-server; ремап в sentinel
-  подразумевает, что master выбирается из roster-а (а не внешний). Это операционно
-  значимое изменение, не чистый структурный rename. Миграция реализована как
-  forward-only по запросу (чтобы state остался валиден), но КОРРЕКТНОСТЬ выбранного
-  target-режима для живых standalone/sentinel_only-инкарнаций должна быть подтверждена
-  архитектором/продуктом до прода. Альтернативы (отвергнуты на этом шаге как требующие
-  решения вне DSL): (а) отказать в upgrade таких инкарнаций; (б) ввести флаг
-  «standalone-эквивалент» в state; (в) сохранить старый режим в отдельном legacy-поле.
+  ★★ WARNING — THE SEMANTICS OF THE REMAP ARE NOT UNAMBIGUOUS (needs_architect):
+  the remap CHANGES THE LIVE MEANING of the incarnation. A standalone install did NOT
+  have a sentinel daemon; after remapping to sentinel, a repeated apply create will
+  deploy a sentinel daemon that wasn't there. sentinel_only never had a redis-server
+  data plane at all; remapping to sentinel implies the master is chosen from the
+  roster (rather than external). This is an operationally significant change, not a
+  pure structural rename. The migration is implemented as forward-only by request (so
+  state stays valid), but the CORRECTNESS of the chosen target mode for live
+  standalone/sentinel_only incarnations must be confirmed by the architect/product
+  before production. Alternatives (rejected at this step as requiring a decision
+  outside the DSL): (a) refuse upgrade for such incarnations; (b) introduce a
+  "standalone-equivalent" flag in state; (c) keep the old mode in a separate legacy
+  field.
 
-  ★ DSL-форма: migration-CEL (ADR-019 sandbox) допускает ?:/==; ремап — один плоский
-  set с тернаром по state.redis_type. Остальной state (redis_config/redis_users/
-  redis_hosts/redis_sentinel/namedfields v3) НЕ трогается. Forward-only (down: нет;
-  восстановление — через state_history).
+  ★ DSL form: migration-CEL (ADR-019 sandbox) allows ?:/==; the remap is one flat set
+  with a ternary over state.redis_type. The rest of state (redis_config/redis_users/
+  redis_hosts/redis_sentinel/namedfields v3) is NOT touched. Forward-only (no down:;
+  restoration via state_history).
 
 transform:
-  # Ремап redis_type в новый enum [sentinel, cluster]. standalone/sentinel_only →
-  # sentinel; sentinel/cluster — без изменений (тождественная ветка тернара).
+  # Remap redis_type into the new enum [sentinel, cluster]. standalone/sentinel_only →
+  # sentinel; sentinel/cluster — unchanged (identity branch of the ternary).
   - set:
       path:  state.redis_type
       value: >-

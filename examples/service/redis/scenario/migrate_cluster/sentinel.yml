@@ -1,52 +1,52 @@
-# Ветка диспетчера migrate_cluster — режим sentinel. Поднимает НОВЫЙ кластер (как
-# create/sentinel) и заливает в него данные с ВНЕШНЕГО источника через нативную
-# репликацию Redis. Подключается из main.yml через CONDITIONAL-INCLUDE
-# (`when: input.redis_type == 'sentinel'` на include) — на cluster-прогоне весь файл
-# group-drop, на sentinel-прогоне раскрывается в плоский список ДО render.
+# migrate_cluster dispatcher branch — sentinel mode. Brings up a NEW cluster (like
+# create/sentinel) and loads data into it from an EXTERNAL source via native
+# Redis replication. Included from main.yml via CONDITIONAL-INCLUDE
+# (`when: input.redis_type == 'sentinel'` on the include) — on a cluster run the whole file
+# is group-dropped, on a sentinel run it expands into a flat list BEFORE render.
 #
 # ★ compute.* (source_master/source_password/source_tls_ca + redis_config/tls_*/…)
-# объявлены в migrate_cluster/main.yml (compute: — top-level scenario-блок, один на
-# сценарий, orchestration.md §2.4) и видны здесь как compute.<name>.
+# are declared in migrate_cluster/main.yml (compute: — a top-level scenario block, one per
+# scenario, orchestration.md §2.4) and are visible here as compute.<name>.
 #
-# Поток:
-#   1. include redis-deploy-sentinel.yml — ПОДНЯТЬ новый кластер с нуля (install +
-#      redis.conf + users.acl + sentinel.conf + units + внутрикластерный REPLICAOF +
-#      SENTINEL MONITOR + health-gates). ТО ЖЕ общее деплой-тело service-level, что
-#      делит create/sentinel.yml (см. scenario/redis-deploy-sentinel.yml; дубликата
-#      нет). Миграция отличается от create ТОЛЬКО заливкой данных извне (шаги 2-3 ниже).
-#   2. свежий master реплицирует ВНЕШНИЙ источник (community.redis.replica,
-#      source_external: true) — нативная репликация Redis тянет dataset из старого
-#      кластера. run_once на hosts[0] (тот же первый-по-SID, что master-election
-#      create/sentinel: master нового кластера).
-#   3. offset-lag gate (community.redis.offset-synced, retry/until) — БЛОКИРУЮЩЕ ждёт,
-#      пока новый master догонит источник по репликационному offset. fail-closed: gate
-#      не прошёл за retry-окно → шаг failed → state НЕ коммитится → error_locked.
+# Flow:
+#   1. include redis-deploy-sentinel.yml — BRING UP a new cluster from scratch (install +
+#      redis.conf + users.acl + sentinel.conf + units + intra-cluster REPLICAOF +
+#      SENTINEL MONITOR + health-gates). THE SAME shared service-level deploy body that
+#      create/sentinel.yml shares (see scenario/redis-deploy-sentinel.yml; no
+#      duplication). Migration differs from create ONLY in loading data from outside (steps 2-3 below).
+#   2. the fresh master replicates the EXTERNAL source (community.redis.replica,
+#      source_external: true) — native Redis replication pulls the dataset from the old
+#      cluster. run_once on hosts[0] (the same first-by-SID as master-election
+#      in create/sentinel: the master of the new cluster).
+#   3. offset-lag gate (community.redis.offset-synced, retry/until) — BLOCKING wait
+#      until the new master catches up with the source by replication offset. fail-closed: if the gate
+#      doesn't pass within the retry window → step failed → state NOT committed → error_locked.
 
-# 1. ПОДНЯТЬ новый кластер целиком — install + render всех конфигов + внутрикластерная
-#    репликация/sentinel + health-gates. ★ ОБЩЕЕ ДЕПЛОЙ-ТЕЛО service-level (S1, 2026-06-27):
-#    тот же scenario/redis-deploy-sentinel.yml, что инклудит create/sentinel.yml —
-#    дубликата нет. scenario-include резолвит имя файла локально (scenario/migrate_cluster/)
-#    → фоллбэкает на service-level (scenario/redis-deploy-sentinel.yml), orchestration.md §6.
-#    Тело ссылается на compute.* (redis_config/tls_*/sentinel_directives/conf_dir/data_dir/
-#    install/modules_base_url/redis_version) — они объявлены в migrate_cluster/main.yml::compute
-#    с теми же именами и семантикой, что в create/main.yml (ИНВАРИАНТ инклудящего, см. шапку
-#    redis-deploy-sentinel.yml; cross-file дрейф soul-lint НЕ ловит).
+# 1. BRING UP the new cluster entirely — install + render all configs + intra-cluster
+#    replication/sentinel + health-gates. ★ SHARED SERVICE-LEVEL DEPLOY BODY (S1, 2026-06-27):
+#    the same scenario/redis-deploy-sentinel.yml that create/sentinel.yml includes —
+#    no duplication. scenario-include resolves the file name locally (scenario/migrate_cluster/)
+#    → falls back to service-level (scenario/redis-deploy-sentinel.yml), orchestration.md §6.
+#    The body references compute.* (redis_config/tls_*/sentinel_directives/conf_dir/data_dir/
+#    install/modules_base_url/redis_version) — they are declared in migrate_cluster/main.yml::compute
+#    with the same names and semantics as in create/main.yml (an INVARIANT of the includer, see the header of
+#    redis-deploy-sentinel.yml; soul-lint does NOT catch cross-file drift).
 - include: redis-deploy-sentinel.yml
 
-# 2. Свежий master реплицирует ВНЕШНИЙ источник (REPLICAOF на старый кластер).
-#    community.redis.replica с source_external: true — НЕ внутрикластерная привязка
-#    (та уже сделана общим деплой-телом redis-deploy-sentinel.yml выше), а подключение к
-#    ЧУЖОМУ master-у для заливки dataset. run_once на hosts[0] (первый по SID = master
-#    нового кластера, та же master-election, что в деплой-теле) — реплицирует источник
-#    ИМЕННО новый master, реплики нового кластера тянут уже с него (каскад внутри кластера).
+# 2. The fresh master replicates the EXTERNAL source (REPLICAOF against the old cluster).
+#    community.redis.replica with source_external: true — NOT the intra-cluster attachment
+#    (that's already done by the shared deploy body redis-deploy-sentinel.yml above), but a connection to a
+#    FOREIGN master to load the dataset. run_once on hosts[0] (first by SID = master
+#    of the new cluster, the same master-election as in the deploy body) — replicates the source
+#    onto exactly the new master; replicas of the new cluster then pull from it (cascade within the cluster).
 #
-#    addr — ЛОКАЛЬНЫЙ инстанс нового master-а (127.0.0.1, на TLS-порту при tls_only —
-#    тот же набор, что внутрикластерный replica деплой-тела, шаг 3). master_addr —
-#    ВНЕШНИЙ источник (compute.source_master = source.hosts[0]). password/tls/tls_ca —
-#    коннект к ЛОКАЛЬНОМУ инстансу (наш secret/redis/<inc>#password + compute.tls_*).
-#    master_password/master_tls/master_tls_ca — коннект к ВНЕШНЕМУ источнику (его учётка
-#    из input.source.* через compute.source_*). Два РАЗНЫХ TLS-контекста: локальный (наш
-#    PKI) и до источника (его CA) — намеренно разведены.
+#    addr — the LOCAL instance of the new master (127.0.0.1, on the TLS port when tls_only —
+#    the same set as the intra-cluster replica in the deploy body, step 3). master_addr —
+#    the EXTERNAL source (compute.source_master = source.hosts[0]). password/tls/tls_ca —
+#    connect to the LOCAL instance (our secret/redis/<inc>#password + compute.tls_*).
+#    master_password/master_tls/master_tls_ca — connect to the EXTERNAL source (its account
+#    from input.source.* via compute.source_*). Two DIFFERENT TLS contexts: local (our
+#    PKI) and toward the source (its CA) — deliberately kept separate.
 - name: Replicate the external source cluster from the fresh master (REPLICAOF external)
   run_once: true
   module: community.redis.replica
@@ -54,10 +54,10 @@
     addr:            "${ compute.tls_on ? '127.0.0.1:' + string(compute.tls_port) : '127.0.0.1:6379' }"
     master_addr:     "${ compute.source_master }"
     source_external: true
-    # ★ РЕДИЗАЙН default_admin: коннект к ЛОКАЛЬНОМУ инстансу под ACL-юзером default_admin
-    # (requirepass убран, локальный инстанс защищён ACL). username/password — наша учётка
-    # secret/redis/<inc>/users/default_admin. master_username/master_password — учётка
-    # ВНЕШНЕГО источника (его requirepass — без ACL-юзера, source_external).
+    # ★ default_admin REDESIGN: connect to the LOCAL instance as ACL user default_admin
+    # (requirepass removed, local instance protected by ACL). username/password — our account
+    # secret/redis/<inc>/users/default_admin. master_username/master_password — account
+    # of the EXTERNAL source (its requirepass — without an ACL user, source_external).
     username:        "${ compute.admin_user }"
     password:        "${ vault('secret/redis/' + incarnation.name + '/users/' + compute.admin_user + '#password') }"
     tls:             "${ compute.tls_on }"
@@ -66,18 +66,18 @@
     master_tls:      "${ input.source.tls }"
     master_tls_ca:   "${ compute.source_tls_ca }"
 
-# 3. OFFSET-LAG GATE — БЛОКИРУЮЩЕ дождаться, пока новый master догонит источник по
-#    репликационному offset (в пределах lag_threshold). community.redis.offset-synced
-#    сравнивает master_repl_offset источника и реплики (опц. checksum dataset).
-#    run_once на hosts[0] (тот же master, что реплицирует источник). changed_when: false
-#    — это PROBE/gate, не изменение (idempotent опрос). retry/until крутит probe, пока
-#    caught_up не станет true (или не истечёт окно). failed_when: caught_up != true —
-#    fail-closed: окно вышло, а реплика не догнала → шаг failed → state не коммитится →
-#    error_locked (миграцию нельзя «закрыть зелёной» с недогнанной репликой).
+# 3. OFFSET-LAG GATE — BLOCKING wait until the new master catches up with the source by
+#    replication offset (within lag_threshold). community.redis.offset-synced
+#    compares master_repl_offset of the source and the replica (optional dataset checksum).
+#    run_once on hosts[0] (the same master that replicates the source). changed_when: false
+#    — this is a PROBE/gate, not a change (idempotent poll). retry/until spins the probe until
+#    caught_up becomes true (or the window expires). failed_when: caught_up != true —
+#    fail-closed: window expired and the replica hasn't caught up → step failed → state not committed →
+#    error_locked (a migration can't be "closed green" with an un-caught-up replica).
 #
-#    addr — ЛОКАЛЬНЫЙ инстанс нового master-а (как шаг 2). source_addr — ВНЕШНИЙ источник
-#    (compute.source_master). password — наш локальный; source_password — учётка источника
-#    (compute.source_password). lag_threshold/skip_checksum — из input.verify (default()).
+#    addr — the LOCAL instance of the new master (as in step 2). source_addr — the EXTERNAL source
+#    (compute.source_master). password — our local one; source_password — the source's account
+#    (compute.source_password). lag_threshold/skip_checksum — from input.verify (default()).
 - name: Wait until the fresh master catches up with the external source (offset gate)
   run_once: true
   module: community.redis.offset-synced
@@ -90,8 +90,8 @@
   params:
     addr:            "${ compute.tls_on ? '127.0.0.1:' + string(compute.tls_port) : '127.0.0.1:6379' }"
     source_addr:     "${ compute.source_master }"
-    # ★ РЕДИЗАЙН default_admin: коннект к ЛОКАЛЬНОМУ инстансу под default_admin (как шаг 2).
-    # username/password — наша учётка users/default_admin; source_password — учётка источника.
+    # ★ default_admin REDESIGN: connect to the LOCAL instance as default_admin (as in step 2).
+    # username/password — our users/default_admin account; source_password — the source's account.
     username:        "${ compute.admin_user }"
     password:        "${ vault('secret/redis/' + incarnation.name + '/users/' + compute.admin_user + '#password') }"
     source_password: "${ compute.source_password }"

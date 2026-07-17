@@ -1,14 +1,14 @@
-# Baseline-essence сервиса monitoring (подложка автора).
-# Оператор переопределяет в spec инкарнации; на pilot ключевые значения всё
-# равно приходят через scenario-input: (см. scenario/create/main.yml).
+# Baseline essence for the monitoring service (author's substrate).
+# The operator overrides it in the incarnation spec; on pilot, key values still
+# arrive through scenario-input: (see scenario/create/main.yml).
 #
-# Версии экспортеров пиннятся на конкретные релизы (ADR-007: версия артефакта —
-# git-ref, но это релизы СТОРОННЕГО ПО, поэтому здесь они — обычные значения,
-# а не ref). Путь redis-сокета — конвенция debian/ubuntu redis-server.
+# Exporter versions are pinned to specific releases (ADR-007: an artifact version is a
+# git-ref, but these are releases of THIRD-PARTY SOFTWARE, so here they are plain values,
+# not a ref). The redis-socket path is the debian/ubuntu redis-server convention.
 node_exporter_version:  "1.8.2"
 redis_exporter_version: "1.62.0"
 redis_socket:           "/var/run/redis/redis-server.sock"
 
-# Textfile-коллекторы железа node-exporter. На VM железа нет — единая политика []:
-# ставится только ядро node_exporter без oneshot-сборщиков.
+# Hardware textfile collectors for node-exporter. There is no hardware on a VM - a single policy []:
+# only the node_exporter core is installed, without oneshot collectors.
 node_exporter_collectors: []

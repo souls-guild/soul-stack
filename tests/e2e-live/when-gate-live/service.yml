@@ -1,16 +1,16 @@
 name: when-gate-live
 state_schema_version: 1
 description: >-
-  FC-5 L3b when-gating capstone: реальный soul-флот исполняет probe
-  (core.cmd.shell `redis-cli role`) → keeper собирает per-host register → задача
-  с `when: register.redis_role.stdout == 'master'` и БЕЗ where: уходит на ВСЕ
-  хосты, а Soul-side per-host gating выполняет её только на master (CHANGED/OK) и
-  скипает (TASK_STATUS_SKIPPED) на репликах. Симметрия со staged-probe-live, но
-  доказывается ДРУГОЙ путь: where = Keeper-side targeting (no_match на уровне
-  apply_runs), when = Soul-side per-task gating (SKIPPED-событие до Apply).
+  FC-5 L3b when-gating capstone: a real soul fleet runs a probe
+  (core.cmd.shell `redis-cli role`) → keeper collects the per-host register → a task
+  with `when: register.redis_role.stdout == 'master'` and WITHOUT where: goes out to ALL
+  hosts, and Soul-side per-host gating executes it only on the master (CHANGED/OK) and
+  skips it (TASK_STATUS_SKIPPED) on replicas. Symmetric with staged-probe-live, but
+  proven via a DIFFERENT path: where = Keeper-side targeting (no_match at the
+  apply_runs level), when = Soul-side per-task gating (SKIPPED event before Apply).
 
-# state_schema_version=1 → каталог migrations/ не обязателен (ADR-019).
-# Фокус — Soul-side when-gating, не мутация incarnation.state: state_changes пуст.
+# state_schema_version=1 → the migrations/ directory is not required (ADR-019).
+# Focus is Soul-side when-gating, not mutating incarnation.state: state_changes is empty.
 state_schema:
   type: object
   properties: {}

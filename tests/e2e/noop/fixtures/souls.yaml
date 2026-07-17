@@ -1,8 +1,8 @@
-# Souls-фикстура для L3a noop::create.
+# Souls fixture for L3a noop::create.
 #
-# scenario вызывает только core.exec.run echo hello — soulprint минимальный
-# (формально для core.exec нужны просто факты ОС, но даём согласованный с
-# другими L3a-тестами набор).
+# The scenario only calls core.exec.run echo hello — soulprint is minimal
+# (formally core.exec just needs OS facts, but we give a set consistent
+# with the other L3a tests).
 - sid: soul-a.example.com
   status: connected
   covens: [noop]

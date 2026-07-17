@@ -1,31 +1,32 @@
-# L0-испытание create DragonFly в режиме sentinel. Multi-host roster из 2 хостов:
-# replicas_per_master=1 → топология 1+1=2 (size-guard проходит). Master-election: первый по
-# SID хост (node-1) = master; node-2 = реплика.
+# L0 trial: create DragonFly in sentinel mode. Multi-host roster of 2 hosts:
+# replicas_per_master=1 → topology 1+1=2 (size-guard passes). Master-election: the SID-first
+# host (node-1) = master; node-2 = replica.
 #
-# ★ РЕФАКТОР «sentinel из destiny redis»: sentinel-демон ставит ВТОРОЙ apply:destiny:redis
-#   (sentinel_only: deploy_redis=false), НЕ destiny `dragonfly`. Presence-матчер раскрывает
-#   ОБА apply:destiny inline → видит redis-destiny sentinel-задачи (install redis-server +
-#   sentinel.conf в /etc/redis) И НЕ видит dragonfly-sentinel-задач (их в кирпиче больше нет).
+# ★ REFACTOR "sentinel from destiny redis": the sentinel daemon is installed by a SECOND
+#   apply:destiny:redis (sentinel_only: deploy_redis=false), NOT destiny `dragonfly`. The
+#   presence matcher expands BOTH apply:destiny inline → sees redis-destiny sentinel tasks
+#   (install redis-server + sentinel.conf in /etc/redis) AND does NOT see dragonfly-sentinel
+#   tasks (no longer in that brick).
 #
-# Render-only, герметично. Что ассертим (критерий приёмки слайса):
-#   1. size-guard PASS-форма: 2 == 1+1.
-#   2. flagfile dragonfly.conf отрендерен (render_context.vars в DF-форме: config, host-
-#      layout, port). render_context.self = первый по SID хост (node-1, host-инвариант
+# Render-only, hermetic. What we assert (slice acceptance criteria):
+#   1. size-guard PASS form: 2 == 1+1.
+#   2. flagfile dragonfly.conf is rendered (render_context.vars in DF form: config, host
+#      layout, port). render_context.self = the SID-first host (node-1, host invariant of
 #      apply.input).
-#   3. ANTI-TILING: master_addr (REPLICAOF) и monitor.ip (SENTINEL MONITOR) — HOST-
-#      ИНВАРИАНТНЫ, оба = primary_ip первого по SID хоста (node-1 = 10.0.0.1).
-#   4. plugin community.redis.replica: addr=unix-сокет (per-host локальный),
-#      master_addr=10.0.0.1:6379 (master-election). where исключает master (только реплика).
-#   5. plugin community.redis.sentinel: monitor.ip=10.0.0.1, quorum=2 (АВТО size(2)/2+1=2).
-#   6. ★ SENTINEL-ПЛОСКОСТЬ через destiny `redis` (sentinel_only): install redis-server
-#      (distro-пин R4) + sentinel.conf в /etc/redis (owner redis) присутствуют в плане.
-#   7. ★ ДУБЛИКАТ СНЯТ: dragonfly-destiny БОЛЬШЕ НЕ рендерит /etc/dragonfly/sentinel.conf
-#      (task_absent) — sentinel-конфиг теперь только в redis-плоскости (/etc/redis).
+#   3. ANTI-TILING: master_addr (REPLICAOF) and monitor.ip (SENTINEL MONITOR) — HOST-
+#      INVARIANT, both = primary_ip of the SID-first host (node-1 = 10.0.0.1).
+#   4. plugin community.redis.replica: addr=unix socket (per-host local),
+#      master_addr=10.0.0.1:6379 (master-election). where excludes master (replica only).
+#   5. plugin community.redis.sentinel: monitor.ip=10.0.0.1, quorum=2 (AUTO size(2)/2+1=2).
+#   6. ★ SENTINEL PLANE via destiny `redis` (sentinel_only): install redis-server
+#      (distro-pin R4) + sentinel.conf in /etc/redis (owner redis) present in the plan.
+#   7. ★ DUPLICATE REMOVED: dragonfly-destiny NO LONGER renders /etc/dragonfly/sentinel.conf
+#      (task_absent) — sentinel config now lives only in the redis plane (/etc/redis).
 name: dragonfly create 1 master + 1 replica with monitor reconcile
 
 fixtures:
   default_destiny_source: "file://../../destiny/{name}"
-  # Порядок в YAML не отсортирован (2, 1) — harness и master-election сортируют по SID
+  # Order in YAML is not sorted (2, 1) — the harness and master-election sort by SID
   # (node-1 = master).
   hosts:
     - sid: node-2.example.com
@@ -38,10 +39,10 @@ fixtures:
       soulprint:
         network: { primary_ip: 10.0.0.1 }
         os: { arch: amd64 }
-  # Vault: default_admin (внутрикластерный AUTH + masterauth) + системные + (нет operator-extra).
-  # Главного secret/dragonfly/create#password больше нет (requirepass убран — редизайн default_admin).
-  # generate-шаг (core.vault.kv-present) в L0 не исполняется (keeper-side write) — секреты
-  # пред-сеются фикстурой, как и было.
+  # Vault: default_admin (in-cluster AUTH + masterauth) + system + (no operator-extra).
+  # The main secret/dragonfly/create#password no longer exists (requirepass removed —
+  # default_admin redesign). The generate step (core.vault.kv-present) does not run in L0
+  # (keeper-side write) — secrets are pre-seeded by the fixture, as before.
   vault:
     secret/dragonfly/create/users/default_admin:
       password: dfadmin-create-pass
@@ -73,19 +74,19 @@ fixtures:
   input:
     version: "1.39.0"
     replicas_per_master: 1
-    # ★ provision выключен (default-on: опущенная секция = ВКЛЮЧЕНО; кейс деплоит на
-    # ГОТОВЫЙ roster из 2 хостов) → include dragonfly-provision.yml не таргетит никого.
+    # ★ provision disabled (default-on: an omitted section = ENABLED; this case deploys
+    # onto a READY roster of 2 hosts) → include dragonfly-provision.yml targets no one.
     provision:
       enabled: false
 
 assert:
   task_present:
-    # ── dragonfly destiny: flagfile dragonfly.conf отрендерен ──
-    # render_context.self = первый по SID хост (node-1, host-инвариант apply.input).
-    # Дизамбигуатор от users.acl/sentinel.conf (тот же core.file.rendered) — path.
-    # template_content presence — факт доставки literal-шаблона Keeper→Soul (точная сверка
-    # flagfile-строк — L2/Real-Linux). render_context целиком сверяется отдельным L1
-    # tmpl-тестом (хрупок к точной форме vars здесь).
+    # ── dragonfly destiny: flagfile dragonfly.conf is rendered ──
+    # render_context.self = the SID-first host (node-1, host invariant of apply.input).
+    # Disambiguator from users.acl/sentinel.conf (same core.file.rendered) — path.
+    # template_content presence — fact of literal-template delivery Keeper→Soul (exact
+    # flagfile line comparison — L2/Real-Linux). render_context is checked in full by a
+    # separate L1 tmpl test (fragile to the exact vars shape here).
     - module: core.file.rendered
       params_subset:
         path: /etc/dragonfly/dragonfly.conf
@@ -94,10 +95,10 @@ assert:
         owner: dragonfly
         group: dragonfly
 
-    # ── REPLICAOF реплик (community.redis.replica) ──
-    # addr — ЛОКАЛЬНЫЙ UNIX-сокет (DF не слушает 127.0.0.1 при --bind=primary_ip); master_addr —
-    # ВНЕШНИЙ адрес master-election (node-1, primary_ip:6379). where исключает master → node-2.
-    # AUTH под default_admin (requirepass убран).
+    # ── REPLICAOF for replicas (community.redis.replica) ──
+    # addr — LOCAL UNIX socket (DF does not listen on 127.0.0.1 with --bind=primary_ip);
+    # master_addr — EXTERNAL master-election address (node-1, primary_ip:6379). where excludes
+    # master → node-2. AUTH under default_admin (requirepass removed).
     - module: community.redis.replica
       params_subset:
         addr: "unix:/var/run/dragonfly/dragonfly.sock"
@@ -106,15 +107,15 @@ assert:
         password: dfadmin-create-pass
 
     # ── SENTINEL MONITOR reconcile (community.redis.sentinel) ──
-    # monitor.ip — HOST-ИНВАРИАНТНЫЙ адрес master-а (node-1). quorum=2 (АВТО size(2)/2+1).
-    # redis_version — версия sentinel-ДЕМОНА (essence.sentinel_redis_version, дефолт 7.2.4),
-    # НЕ df_version (1.39.0). Гейтит version-aware sentinel-фичи плагина.
+    # monitor.ip — HOST-INVARIANT master address (node-1). quorum=2 (AUTO size(2)/2+1).
+    # redis_version — the sentinel DAEMON version (essence.sentinel_redis_version, default
+    # 7.2.4), NOT df_version (1.39.0). Gates version-aware sentinel plugin features.
     - module: community.redis.sentinel
       params_subset:
         addr: "127.0.0.1:26379"
         master_name: master
-        # ★ CONNECTION-AUTH к sentinel-демону :26379 под default_admin (built-in default off).
-        # auth_pass/auth_user — мониторинг DF-master под default_admin. Guard на NOAUTH.
+        # ★ CONNECTION-AUTH to the sentinel daemon :26379 under default_admin (built-in default off).
+        # auth_pass/auth_user — monitoring the DF master under default_admin. Guard on NOAUTH.
         username: default_admin
         password: dfadmin-create-pass
         auth_user: default_admin
@@ -128,16 +129,16 @@ assert:
           port: 6379
           quorum: 2
 
-    # ── 6. SENTINEL-ПЛОСКОСТЬ через destiny `redis` (sentinel_only, ВТОРОЙ apply) ──
-    # install redis-server: distro-пин ПАКЕТА (compute.sentinel_redis_package_version,
-    # дефолт 5:7.0.15-1~deb12u7) — R4 distro-пин, пакет несёт redis-sentinel.
+    # ── 6. SENTINEL PLANE via destiny `redis` (sentinel_only, SECOND apply) ──
+    # install redis-server: PACKAGE distro-pin (compute.sentinel_redis_package_version,
+    # default 5:7.0.15-1~deb12u7) — R4 distro-pin, the package carries redis-sentinel.
     - module: core.pkg.installed
       params_subset:
         name: redis-server
         version: "5:7.0.15-1~deb12u7"
 
-    # sentinel.conf рендерится в /etc/redis (redis-плоскость, owner redis), НЕ /etc/dragonfly.
-    # template_content presence — факт доставки literal-шаблона redis-destiny Keeper→Soul.
+    # sentinel.conf is rendered into /etc/redis (redis plane, owner redis), NOT /etc/dragonfly.
+    # template_content presence — fact of literal-template delivery of redis-destiny Keeper→Soul.
     - module: core.file.rendered
       params_subset:
         path: /etc/redis/sentinel.conf
@@ -147,13 +148,13 @@ assert:
         group: redis
 
   task_absent:
-    # ── 7. ДУБЛИКАТ СНЯТ: dragonfly-destiny больше НЕ рендерит sentinel.conf ──
-    # sentinel-конфиг теперь ТОЛЬКО в redis-плоскости (/etc/redis выше). Раньше dragonfly-
-    # destiny рендерил /etc/dragonfly/sentinel.conf — этой задачи в плане быть НЕ должно.
+    # ── 7. DUPLICATE REMOVED: dragonfly-destiny no longer renders sentinel.conf ──
+    # sentinel config now lives ONLY in the redis plane (/etc/redis above). Previously
+    # dragonfly-destiny rendered /etc/dragonfly/sentinel.conf — that task must NOT be in the plan.
     - module: core.file.rendered
       params_subset:
         path: /etc/dragonfly/sentinel.conf
-    # provision выключен → cloud-create и барьер онбординга ОТСУТСТВУЮТ (group-drop).
+    # provision disabled → cloud-create and the onboarding barrier are ABSENT (group-drop).
     - module: core.cloud.created
     - module: core.soul.registered
 
@@ -177,7 +178,7 @@ assert:
       key_ref:  ""
       ca_ref:   ""
     memory_mb: 0
-    # read-model: VM не провижены этим прогоном → консервативный default.
+    # read-model: no VMs provisioned by this run → conservative default.
     provisioned_vm_ids: []
     provisioned_sids: []
     provisioned_provider: ""

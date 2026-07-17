@@ -1,17 +1,17 @@
 name: create
 description: >-
-  Устанавливает nginx и запускает systemd-юнит. Используется L3a E2E pilot
-  для проверки контракта apply_runs lifecycle (planned→claimed→dispatched→success)
-  + audit + metrics. Реальное apply в L3a не тестируется (soul-stub отвечает
-  scripted RunResult); реальная мутация хоста — в L3b.
+  Installs nginx and starts a systemd unit. Used by the L3a E2E pilot
+  to verify the apply_runs lifecycle contract (planned→claimed→dispatched→success)
+  + audit + metrics. Real apply is not tested in L3a (soul-stub returns a
+  scripted RunResult); real host mutation happens in L3b.
 
-# Минимальный input: только идентификатор хоста, чтобы scenario не падал на
-# обязательном поле и в audit-events можно было сопоставить incarnation/host.
+# Minimal input: only a host identifier, so the scenario doesn't fail on a
+# required field and incarnation/host can be matched in audit-events.
 input:
   hostname:
     type: string
     required: true
-    description: Имя хоста, на котором ожидается выполнение задач scenario.
+    description: Name of the host on which the scenario tasks are expected to run.
 
 state_changes:
   - set: nginx_package

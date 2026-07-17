@@ -1,10 +1,10 @@
-# Конфиг одного инстанса keeper-кластера.
-# Несколько инстансов с разным `kid` стоят за общими Postgres + Redis.
+# Config of a single keeper-cluster instance.
+# Multiple instances with different `kid` sit behind shared Postgres + Redis.
 
-# Идентичность этого keeper-инстанса
+# Identity of this keeper instance
 kid: keeper-eu-west-01
 
-# Сетевые слушатели
+# Network listeners
 listen:
   grpc:
     bootstrap:
@@ -22,7 +22,7 @@ listen:
   mcp:     { addr: "0.0.0.0:8081" }
   metrics: { addr: "0.0.0.0:9090" }
 
-# Хранилища
+# Storage
 postgres:
   dsn_ref: vault:secret/keeper/postgres
   pool: { min: 5, max: 50 }
@@ -31,13 +31,13 @@ redis:
   addr: "redis-cluster.internal:6379"
   password_ref: vault:secret/keeper/redis
 
-# Vault — для PKI (SoulSeed), Essence-секретов, SSH CA, credentials cloud-driver-ов
+# Vault — for PKI (SoulSeed), Essence secrets, SSH CA, cloud-driver credentials
 vault:
   addr: "https://vault.internal:8200"
   auth: { method: approle, role_id: keeper-prod, secret_id_file: /etc/keeper/vault-secret-id }
   pki_mount: "pki/soulstack"
 
-# JWT-аутентификация операторов (ADR-014)
+# Operator JWT authentication (ADR-014)
 auth:
   jwt:
     signing_key_ref: vault:secret/keeper/jwt-signing-key
@@ -59,20 +59,20 @@ logging:
     max_files: 10
     compress: true
 
-# Реестр Service-ов и скаляр default_destiny_source перенесены в Postgres
-# (ADR-029). Источник правды — БД (`service_registry` + `keeper_settings`),
-# управление — через `service.*` OpenAPI/MCP (см. keeper/storage.md +
-# keeper/operator-api.md). Ключей `services:` / `default_destiny_source:` /
-# `default_module_source:` в keeper.yml больше нет — появление любого из них
-# отвергается как unknown_key.
+# The Service registry and the default_destiny_source scalar were moved to
+# Postgres (ADR-029). Source of truth — the DB (`service_registry` +
+# `keeper_settings`), management — via `service.*` OpenAPI/MCP (see
+# keeper/storage.md + keeper/operator-api.md). The keys `services:` /
+# `default_destiny_source:` / `default_module_source:` no longer exist in
+# keeper.yml — any of them appearing is rejected as unknown_key.
 
-# Плагины — каталоги артефактов
+# Plugins — artifact catalogs
 plugins:
-  # Корень кеша артефактов на keeper-host-е. Должен быть абсолютным путём.
-  # Пустое значение / отсутствие ключа — используется встроенный default
+  # Root of the artifact cache on the keeper host. Must be an absolute path.
+  # Empty value / missing key — the built-in default is used
   # (pluginhost.DefaultCacheRoot).
   cache_root: /var/lib/soul-stack-keeper/plugins
-  # Версия плагина — git ref (tag или branch), без semver-range. См. ADR-007.
+  # Plugin version — a git ref (tag or branch), no semver-range. See ADR-007.
   cloud_drivers:
     - { name: aws, source: "git@github.com:soul-stack-ecosystem/soul-cloud-aws.git", ref: v2.0.0 }
     - { name: yc,  source: "git@github.com:our-company/soul-cloud-yc.git",          ref: v0.3.1 }
@@ -81,7 +81,7 @@ plugins:
     - { name: vault-ssh, source: "git@github.com:soul-stack-ecosystem/soul-ssh-vault.git", ref: v1.0.0 }
     - { name: static,    source: "git@github.com:soul-stack-ecosystem/soul-ssh-static.git", ref: v0.1.0 }
 
-# Lifecycle и capabilities плагинов (ADR-020)
+# Plugin lifecycle and capabilities (ADR-020)
 plugin_runtime:
   socket_dir: /var/run/soul-stack-keeper/plugins
   startup_timeout: 10s
@@ -96,7 +96,7 @@ plugin_runtime:
   conflict_policy: warn
   enable_tls: false
 
-# Reaper — фоновая чистка
+# Reaper — background cleanup
 reaper:
   enabled: true
   interval: 1h
@@ -137,133 +137,145 @@ reaper:
       max_age: 30d
       action: delete
     purge_apply_run_plan:
-      # Retention плана задач прогона (apply_run_plan, миграция 096, NIM-37): DELETE
-      # строк плана прогонов старше max_age (по created_at) БЕЗ нетерминальных
-      # apply_runs. FK-каскада нет — без правила план рос бы orphan-ами после сноса
-      # apply_runs. Окно ВЫРОВНЕНО на purge_apply_runs (30d): эндпоинту /tasks план
-      # нужен столько же, сколько живёт сам прогон.
+      # Retention of the run task plan (apply_run_plan, migration 096, NIM-37):
+      # DELETE run-plan rows older than max_age (by created_at) WITHOUT
+      # non-terminal apply_runs. No FK cascade — without this rule the plan
+      # would grow orphans after apply_runs are removed. Window ALIGNED with
+      # purge_apply_runs (30d): the /tasks endpoint needs the plan for as long
+      # as the run itself lives.
       enabled: true
       max_age: 30d
       action: delete
     purge_voyages:
-      # Retention растущей истории Voyage-прогонов (ADR-046 §79). DELETE finished
-      # voyages (succeeded/failed/partial_failed/cancelled) старше max_age;
-      # voyage_targets уносятся ON DELETE CASCADE. scheduled/pending/running НЕ
-      # трогаются. Окно ВЫРОВНЕНО на purge_apply_runs (30d): voyage_targets несут
-      # soft-link apply_id на apply_runs, drill «voyage → apply_runs» обязан видеть
-      # обе стороны до одного момента — менять одно окно без другого = рассинхрон.
+      # Retention of the growing Voyage-run history (ADR-046 §79). DELETE
+      # finished voyages (succeeded/failed/partial_failed/cancelled) older
+      # than max_age; voyage_targets are carried away by ON DELETE CASCADE.
+      # scheduled/pending/running are NOT touched. Window ALIGNED with
+      # purge_apply_runs (30d): voyage_targets carry a soft-link apply_id to
+      # apply_runs, the "voyage → apply_runs" drill must see both sides up to
+      # the same point — changing one window without the other = desync.
       enabled: true
       max_age: 30d
       action: delete
     purge_push_runs:
-      # Retention растущей run-history push-прогонов (миграция 076). DELETE finished
-      # push_runs (success/partial_failed/failed/cancelled) старше max_age. pending/
-      # running НЕ трогаются — это правило purge_orphan_push_runs (терминализация
-      # зомби, 1h). Каскада нет: per-host результаты хранятся inline в
-      # push_runs.summary (jsonb), дочерних FK на push_runs нет. Окно ВЫРОВНЕНО на
-      # purge_apply_runs (30d) — push_runs run-history того же класса.
+      # Retention of the growing push-run run-history (migration 076). DELETE
+      # finished push_runs (success/partial_failed/failed/cancelled) older
+      # than max_age. pending/running are NOT touched — that's the
+      # purge_orphan_push_runs rule (zombie termination, 1h). No cascade:
+      # per-host results are stored inline in push_runs.summary (jsonb), no
+      # child FKs on push_runs. Window ALIGNED with purge_apply_runs (30d) —
+      # push_runs is run-history of the same class.
       enabled: true
       max_age: 30d
       action: delete
     purge_incarnation_archive:
-      # Retention архива снесённых incarnation (incarnation_archive, миграция 039).
-      # DELETE строк с archived_at старше max_age. Архив — историко-compliance
-      # данные снесённых инкарнаций (что было у redis-prod до удаления), поэтому
-      # окно КОНСЕРВАТИВНОЕ — 365d (год удержания под аудит), а НЕ 30d как у
-      # run-history. Оператор настраивает max_age под свои compliance-требования.
-      # Дочерних FK на архив нет (039) — каскада нет.
+      # Retention of the archive of destroyed incarnations
+      # (incarnation_archive, migration 039). DELETE rows with archived_at
+      # older than max_age. The archive is historical/compliance data of
+      # destroyed incarnations (what redis-prod had before deletion), so the
+      # window is CONSERVATIVE — 365d (a year of retention for audit), NOT
+      # 30d like run-history. The operator tunes max_age to their own
+      # compliance requirements. No child FKs on the archive (039) — no cascade.
       enabled: true
-      max_age: 365d    # compliance-окно; оператор настраивает под требования аудита
+      max_age: 365d    # compliance window; operator tunes to audit requirements
       action: delete
     purge_state_history_archive:
-      # Retention архива журнала state_history снесённых incarnation
-      # (state_history_archive, миграция 039). DELETE строк с archived_at старше
-      # max_age. Parity purge_incarnation_archive — то же compliance-окно 365d,
-      # записываются одной транзакцией при destroy.
+      # Retention of the state_history journal archive for destroyed
+      # incarnations (state_history_archive, migration 039). DELETE rows with
+      # archived_at older than max_age. Parity with purge_incarnation_archive
+      # — the same 365d compliance window, written in one transaction on destroy.
       enabled: true
-      max_age: 365d    # compliance-окно; оператор настраивает под требования аудита
+      max_age: 365d    # compliance window; operator tunes to audit requirements
       action: delete
     purge_archived_state_history:
-      # Физический снос soft-deleted-снимков (archived_at IS NOT NULL) из ЖИВОЙ
-      # state_history (миграция 048). НЕ путать с archive_state_history (049),
-      # который ТОЛЬКО проставляет soft-delete-флаг сверх N последних снимков —
-      # это правило сносит уже помеченные строки по истечении compliance-окна,
-      # разгружая живую таблицу. Активные снимки (archived_at IS NULL) НЕ
-      # трогаются. Окно консервативное — 365d, как у архив-таблиц.
+      # Physical removal of soft-deleted snapshots (archived_at IS NOT NULL)
+      # from the LIVE state_history (migration 048). NOT to be confused with
+      # archive_state_history (049), which ONLY sets the soft-delete flag
+      # beyond the last N snapshots — this rule removes already-marked rows
+      # once the compliance window elapses, offloading the live table. Active
+      # snapshots (archived_at IS NULL) are NOT touched. Window is
+      # conservative — 365d, same as the archive tables.
       enabled: true
-      max_age: 365d    # compliance-окно; оператор настраивает под требования аудита
+      max_age: 365d    # compliance window; operator tunes to audit requirements
       action: delete
     purge_apply_task_register:
       enabled: true
-      max_age: 1h       # grace после терминала apply_run; register — транзиентный plaintext (потенц. секреты), нужен только до барьера
+      max_age: 1h       # grace period after the apply_run terminal state; register is transient plaintext (potential secrets), needed only until the barrier
       action: delete
     purge_old_errands:
       # Errand TTL retention (ADR-033). `DELETE FROM errands WHERE ttl_at < NOW()`.
-      # TTL зашит в строку при INSERT-е dispatcher-ом (default 7д через
-      # errand.TTLDefault). `max_age` правила в SQL-предикат НЕ входит, держится
-      # для совместимости с общим duration-runner-ом. Будущая правка TTL-логики —
-      # отдельное поле dispatcher-а, не reaper-конфиг.
+      # TTL is baked into the row at INSERT time by the dispatcher (default 7d
+      # via errand.TTLDefault). `max_age` of the rule is NOT part of the SQL
+      # predicate, kept for compatibility with the generic duration-runner.
+      # Future TTL-logic changes — a separate dispatcher field, not the
+      # reaper config.
       enabled: true
       max_age: 7d
       action: delete
     reclaim_apply_runs:
-      # Recovery-скан протухших Ward (ADR-027 Phase 2): зомби-claim мёртвого
-      # Acolyte (claimed/running с истёкшим claim_expires_at) → planned для
-      # пере-claim живым Acolyte; attempt НЕ сбрасывается (fencing-epoch растёт).
+      # Recovery scan for stale Wards (ADR-027 Phase 2): a zombie claim of a
+      # dead Acolyte (claimed/running with expired claim_expires_at) →
+      # planned for re-claim by a live Acolyte; attempt is NOT reset
+      # (fencing-epoch grows).
       #
-      # ВЫКЛЮЧЕНО ПО ДЕФОЛТУ. Включать (enabled: true) ТОЛЬКО когда Soul-агенты
-      # несут attempt-fencing (Phase 2 complete, S-P2.2) — иначе recovery
-      # задвоит apply: пере-claim отправит второй ApplyRequest на хост, а без
-      # fencing Soul не отсечёт устаревший дубль прежнего владельца.
+      # DISABLED BY DEFAULT. Enable (enabled: true) ONLY when Soul agents
+      # carry attempt-fencing (Phase 2 complete, S-P2.2) — otherwise recovery
+      # would double-apply: re-claim sends a second ApplyRequest to the host,
+      # and without fencing Soul won't cut off the stale duplicate from the
+      # previous owner.
       #
-      # WARN: НЕ включать при `acolytes: 0` — это связанная пара
-      # (reclaim_apply_runs ↔ acolytes > 0). На старом синхронном пути
-      # (acolytes:0) задания пишутся в `running`, reclaim там небезопасен
-      # (двойной apply без epoch-защиты). Гейт recovery-enable (раскатать
-      # fencing-Soul → проверить acolytes>0 и acolyte_lease>max-РЕНДЕР, дефолт
-      # 30s ок → flip enabled) — docs/keeper/reaper.md → «Включение recovery».
+      # WARN: do NOT enable with `acolytes: 0` — this is a linked pair
+      # (reclaim_apply_runs ↔ acolytes > 0). On the old synchronous path
+      # (acolytes:0) jobs are written as `running`, reclaim is unsafe there
+      # (double apply without epoch protection). The recovery-enable gate
+      # (roll out fencing-Soul → verify acolytes>0 and acolyte_lease>max-RENDER,
+      # default 30s ok → flip enabled) — docs/keeper/reaper.md → "Enabling recovery".
       enabled: false
-      stale_after: 1m   # формальный lease-таймаут; в предикат НЕ входит (recovery сравнивает claim_expires_at < NOW())
+      stale_after: 1m   # formal lease timeout; NOT part of the predicate (recovery compares claim_expires_at < NOW())
       action: set_status
       target_status: planned
 
-# Conductor — leader-elected исполнитель Cadence-расписаний (ADR-048): по своему
-# тику спавнит обычный Voyage из созревших Cadence. Lease `conductor:leader`
-# независим от reaper:leader. Шаг опроса адаптивный (ADR-048 «Adaptive interval»):
-# выводится из enabled-реестра и зажимается в коридор poll_floor..poll_ceiling.
-# Блок опционален: при отсутствии — default-ON при настроенном Redis
-# (footgun-guard: Cadence без планировщика молча не спавнит).
-# Полное описание — docs/keeper/conductor.md.
+# Conductor — leader-elected executor of Cadence schedules (ADR-048): on its
+# own tick spawns a regular Voyage from matured Cadences. The
+# `conductor:leader` lease is independent of reaper:leader. The poll step is
+# adaptive (ADR-048 "Adaptive interval"): derived from the enabled registry
+# and clamped into the poll_floor..poll_ceiling corridor. The block is
+# optional: if absent — default-ON when Redis is configured (footgun-guard:
+# Cadence without a scheduler silently does not spawn).
+# Full description — docs/keeper/conductor.md.
 # cadence_scheduler:
-#   enabled: true     # nil/опущено → ON при Redis; false → OFF (читается на старте)
-#   poll_floor: 30s   # нижняя граница адаптивного шага опроса (hot-reload)
-#   poll_ceiling: 60s # верхняя граница адаптивного шага опроса (hot-reload)
-#   poll_idle: 120s   # шаг опроса при пустом enabled-реестре Cadence (hot-reload)
-#   lock_ttl: 5m      # TTL Redis-lease conductor:leader (hot-reload)
-#   # interval: 60s   # backcompat-alias poll_ceiling; новые конфиги пишут poll_*
+#   enabled: true     # nil/omitted → ON when Redis is present; false → OFF (read at startup)
+#   poll_floor: 30s   # lower bound of the adaptive poll step (hot-reload)
+#   poll_ceiling: 60s # upper bound of the adaptive poll step (hot-reload)
+#   poll_idle: 120s   # poll step with an empty enabled Cadence registry (hot-reload)
+#   lock_ttl: 5m      # TTL of the Redis lease conductor:leader (hot-reload)
+#   # interval: 60s   # backcompat alias for poll_ceiling; new configs write poll_*
 
-# Acolyte — пул воркеров исполнения apply (ADR-027). Feature-flag: 0 (default) —
-# пул не поднимается, исполнение идёт прежним run-goroutine-путём; >0 — стартует
-# пул из N воркеров (claim planned-заданий через FOR UPDATE SKIP LOCKED).
+# Acolyte — worker pool for apply execution (ADR-027). Feature flag: 0
+# (default) — the pool does not start, execution goes through the old
+# run-goroutine path; >0 — starts a pool of N workers (claim planned jobs via
+# FOR UPDATE SKIP LOCKED).
 acolytes: 0
-# acolyte_lease: 30s          # TTL Ward-захвата (claim_expires_at = NOW()+lease)
-# acolyte_batch: 10           # макс. заданий за один claim-тик (LIMIT)
-# acolyte_poll_interval: 2s   # период poll-fallback-а к Summons-сигналу
+# acolyte_lease: 30s          # TTL of a Ward claim (claim_expires_at = NOW()+lease)
+# acolyte_batch: 10           # max jobs per single claim tick (LIMIT)
+# acolyte_poll_interval: 2s   # period of the poll-fallback to the Summons signal
 
-# Watchman (изоляция-детект + soul-shedding S2): период probe PG+Redis и порог
-# подряд-провалов до принудительного закрытия локальных EventStream-стримов.
-# Изолированный инстанс уводит свои Souls на живой Keeper по их failback-list-у.
-# watchman_interval: 5s          # период probe PG+Redis (дефолт 5s)
-# watchman_fail_threshold: 3     # подряд-провалов до shedding-а (дефолт 3, debounce)
+# Watchman (isolation detection + soul-shedding S2): probe period for PG+Redis
+# and the threshold of consecutive failures before force-closing local
+# EventStream streams. An isolated instance moves its Souls to a live Keeper
+# via their failback list.
+# watchman_interval: 5s          # PG+Redis probe period (default 5s)
+# watchman_fail_threshold: 3     # consecutive failures before shedding (default 3, debounce)
 
-# Refuse-guard soul-shedding (Finding-A, ADR-027(h)): при `acolytes: 0` (single-
-# keeper-only run-goroutine-путь) И числе живых Keeper-инстансов в Conclave > 1
-# Keeper по дефолту ОТКАЗЫВАЕТСЯ стартовать — иначе apply на одном Keeper-е c
-# Soul-ом на стриме другого навсегда зависнет в applying. Дефолт false (refuse).
-# true — осознанный single-keeper-за-LB opt-out (миграция / rolling-restart):
-# refuse → WARN. Дублируется env KEEPER_ALLOW_UNSAFE_MULTI_KEEPER=true.
+# Refuse-guard soul-shedding (Finding-A, ADR-027(h)): with `acolytes: 0`
+# (single-keeper-only run-goroutine path) AND the number of live Keeper
+# instances in the Conclave > 1, Keeper by default REFUSES to start —
+# otherwise apply on one Keeper with the Soul streaming on another would hang
+# forever in applying. Default false (refuse). true — a deliberate
+# single-keeper-behind-LB opt-out (migration / rolling-restart): refuse →
+# WARN. Duplicated by env KEEPER_ALLOW_UNSAFE_MULTI_KEEPER=true.
 allow_unsafe_single_path_multi_keeper: false
 
-# RBAC-каталог (роли, привязки операторов, permissions) перенесён в Postgres
-# (ADR-028). Конфиг-ключа `rbac:` больше нет — управление через `role.*`
-# API/MCP. Появление `rbac:` в keeper.yml отвергается как unknown_key.
+# The RBAC catalog (roles, operator bindings, permissions) was moved to
+# Postgres (ADR-028). The `rbac:` config key no longer exists — management
+# via `role.*` API/MCP. `rbac:` appearing in keeper.yml is rejected as unknown_key.

@@ -1,324 +1,328 @@
 name: create
-# create: true — сценарий годен как СТАРТОВЫЙ (bootstrap новой incarnation), т.е.
-# выбираем при POST /v1/incarnations (scenario.ResolveCreateScenarios читает флаг,
-# scenario.go::Create). Принадлежность к create-набору — ДЕКЛАРАТИВНАЯ и data-driven:
-# набор стартовых сценариев = РОВНО {scenario с `create: true`}. Прежний хардкод-union
-# в keeper (имя `create` всегда в наборе как default) убран (Фаза 2 принята) — `create`
-# годен как bootstrap не из-за имени, а потому что несёт этот флаг.
+# create: true — the scenario qualifies as the STARTING one (bootstrap of a new incarnation), i.e.
+# it is selected on POST /v1/incarnations (scenario.ResolveCreateScenarios reads the flag,
+# scenario.go::Create). Membership in the create-set is DECLARATIVE and data-driven:
+# the set of starting scenarios = EXACTLY {scenario with `create: true`}. The former hardcoded union
+# in keeper (name `create` always in the set as default) is removed (Phase 2 accepted) — `create`
+# qualifies as bootstrap not because of its name, but because it carries this flag.
 create: true
 description: >-
-  Развернуть Redis с нуля в режиме sentinel или cluster: под нужную топологию поднимаются
-  VM через cloud-provision в том же прогоне. Оператор задаёт простые понятия (режим,
-  память, persistence, eviction, ACL-юзеры, шарды), а сценарий разворачивает их в полный
-  redis.conf.
+  Deploy Redis from scratch in sentinel or cluster mode: VMs are provisioned for the
+  required topology via cloud-provision in the same run. The operator sets simple concepts
+  (mode, memory, persistence, eviction, ACL users, shards), and the scenario expands them
+  into a full redis.conf.
 
-# ── extends: covenant — общий контракт секций (S4 пилот) ───────────────────────────
-# Секции input (КРОМЕ provision-дельты ниже) / compute / state_changes / validate
-# вынесены в covenant.yml (корень service-репо) и наследуются add-only: keeper-side
-# резолвер сливает covenant ПЕРВЫМ, дельта create ДОБАВЛЯЕТ поверх (не переопределяя
-# ключи covenant — иначе section_key_conflict). create несёт ТОЛЬКО свою дельту:
-# input.provision (cloud-create в том же прогоне, ADR-061), form (презентация —
-# НЕ мержится, сугубо локальна) и tasks (тело прогона — диспетчер по redis_type).
+# ── extends: covenant — shared section contract (S4 pilot) ───────────────────────────
+# Sections input (EXCEPT the provision-delta below) / compute / state_changes / validate
+# are factored out into covenant.yml (service-repo root) and inherited add-only: the keeper-side
+# resolver merges covenant FIRST, the create delta ADDS on top (without overriding
+# covenant keys — otherwise section_key_conflict). create carries ONLY its own delta:
+# input.provision (cloud-create in the same run, ADR-061), form (presentation —
+# NOT merged, purely local), and tasks (run body — dispatcher by redis_type).
 extends: covenant
 
-# ── Входной контракт: ДЕЛЬТА create поверх covenant.input ──────────────────────────
-# Общий input-контракт (redis_type/version/memory_mb/persistence/connection_mode/
-# users/… + отсутствие modules*-полей) — в covenant.yml. Здесь — ТОЛЬКО provision,
-# которого covenant НЕ несёт (add-only: covenant.input + это поле = эффективный input).
+# ── Input contract: create's DELTA on top of covenant.input ──────────────────────────
+# The shared input contract (redis_type/version/memory_mb/persistence/connection_mode/
+# users/… + absence of modules*-fields) lives in covenant.yml. Here — ONLY provision,
+# which covenant does NOT carry (add-only: covenant.input + this field = effective input).
 input:
-  # ── cloud-provision: поднять VM под топологию в том же прогоне (ADR-061, Вариант A) ─
-  # ★ provision (FLAG имя секции, propose-and-wait): object-вход «создай машины».
-  # Когда enabled=true (ДЕФОЛТ, см. default-on ниже) — create ОДНИМ прогоном (а) создаёт VM
-  # через core.cloud.created (on: keeper), (б) доставляет per-VM bootstrap-токен
-  # (иллюстративно), (в) регистрирует созданные SID + БЛОКИРУЮЩЕ ждёт онбординга
-  # (core.soul.registered await_online + refresh_soulprint, ADR-061), после чего roster
-  # пере-резолвится и cluster/sentinel-ветка катит redis-роль на уже-online хосты.
-  # enabled=false — provision.yml group-drop, прогон работает по СУЩЕСТВУЮЩЕМУ roster-у.
+  # ── cloud-provision: bring up VMs for the topology in the same run (ADR-061, Option A) ─
+  # ★ provision (FLAG section name, propose-and-wait): object-input "create machines".
+  # When enabled=true (DEFAULT, see default-on below) — create in ONE run (a) creates VMs
+  # via core.cloud.created (on: keeper), (b) delivers a per-VM bootstrap token
+  # (illustrative), (c) registers the created SIDs + BLOCKINGLY awaits onboarding
+  # (core.soul.registered await_online + refresh_soulprint, ADR-061), after which the roster
+  # is re-resolved and the cluster/sentinel branch rolls the redis role onto the now-online hosts.
+  # enabled=false — provision.yml group-drop, the run works against the EXISTING roster.
   #
-  # ★ provider/profile/await_timeout/ssh_provider оператор может НЕ задавать — они
-  # фоллбэкают на essence.provision_* (redis-provision.yml: default(input.provision.X,
-  # essence.provision_X)). По умолчанию оператор НЕ выбирает их вручную (форма скрыта).
+  # ★ provider/profile/await_timeout/ssh_provider — the operator may leave these UNSET; they
+  # fall back to essence.provision_* (redis-provision.yml: default(input.provision.X,
+  # essence.provision_X)). By default the operator does NOT pick them manually (the form is hidden).
   #
-  # ★ FORM: provision НАМЕРЕННО НЕ в form.sections (решение 2026-06-30) — секция скрыта из
-  # Run-формы. soul-lint эмитит form_field_uncovered WARNING на это поле (UI дорисует в
-  # дефолтную секцию) — это ОЖИДАЕМО, не error.
+  # ★ FORM: provision is DELIBERATELY NOT in form.sections (decision 2026-06-30) — the section is
+  # hidden from the Run form. soul-lint emits a form_field_uncovered WARNING for this field (the UI
+  # draws it into the default section) — this is EXPECTED, not an error.
   #
-  # ★ node_count тут НЕТ намеренно: число VM выводится из ТОПОЛОГИИ (cluster: shards*(1+
-  # replicas_per_master); sentinel: 1+replicas_per_master) — единственный источник истины
-  # размера кластера. Отдельное node_count рассинхронилось бы с size-guard веток.
-  # ★ teardown (destroy) — НЕ здесь (отдельный сценарий).
+  # ★ node_count is DELIBERATELY absent here: the VM count is derived from the TOPOLOGY (cluster:
+  # shards*(1+replicas_per_master); sentinel: 1+replicas_per_master) — the single source of truth
+  # for cluster size. A separate node_count would drift out of sync with the size-guard branches.
+  # ★ teardown (destroy) — NOT here (a separate scenario).
   provision:
     type: object
     required: false
-    # ★ DEFAULT-ON (решение пользователя 2026-06-30): provision ВКЛЮЧЁН по умолчанию.
-    # top-level default объекта = {enabled: true} → оператор, НЕ передавший секцию provision,
-    # получает cloud-create (штатный путь create — поднять VM под топологию). Чтобы катить
-    # на ГОТОВЫЙ roster без provision, оператор задаёт provision: {enabled: false} ЯВНО, либо
-    # пользуется сценарием create_from_souls (близнец без provision-секции). default-on —
-    # ТОЛЬКО у create; create_from_souls provision-секцию не несёт. Дефолт продублирован на
-    # вложенном enabled (плоский mergeInputDefaults не спускается в properties частично
-    # заданного объекта — дубль держит семантику «по умолчанию on» читаемой единообразно).
+    # ★ DEFAULT-ON (user decision 2026-06-30): provision is ENABLED by default.
+    # top-level default of the object = {enabled: true} → an operator who does NOT pass the
+    # provision section gets cloud-create (the standard create path — bring up VMs for the
+    # topology). To roll onto a READY roster without provision, the operator sets
+    # provision: {enabled: false} EXPLICITLY, or uses the create_from_souls scenario (a twin
+    # without the provision section). default-on is ONLY on create; create_from_souls does not
+    # carry a provision section. The default is duplicated on the nested enabled (a flat
+    # mergeInputDefaults does not descend into properties of a partially-set object — the
+    # duplicate keeps the "default on" semantics uniformly readable).
     default:
       enabled: true
     description: >-
-      Поднять VM под топологию в том же create-прогоне (ADR-061). enabled=true →
-      сначала cloud-create + онбординг (барьер await_online), потом redis-роль на
-      созданные хосты. Не задан / enabled=false → прогон по существующему roster-у.
+      Bring up VMs for the topology in the same create run (ADR-061). enabled=true →
+      first cloud-create + onboarding (the await_online barrier), then the redis role on
+      the created hosts. Unset / enabled=false → the run works against the existing roster.
     additional_properties: false
     properties:
       enabled:
         type: boolean
         default: true
-        description: Главный гейт provision. ДЕФОЛТ true (default-on). false — provision.yml group-drop.
+        description: Main gate for provision. DEFAULT true (default-on). false — provision.yml group-drop.
       provider:
         type: string
         description: >-
-          Имя cloud-Provider в реестре providers (NOT plugin name → soul-cloud-<provider>).
-          Не задан → essence.provision_provider.
+          Name of the cloud Provider in the providers registry (NOT the plugin name → soul-cloud-<provider>).
+          Unset → essence.provision_provider.
       profile:
         type: string
         description: >-
-          Имя VM-профиля в реестре profiles (ресурсы/образ/сеть VM). Не задан →
+          Name of the VM profile in the profiles registry (VM resources/image/network). Unset →
           essence.provision_profile.
       await_timeout:
         type: string
         pattern: "^[0-9]+[smh]$"
         description: >-
-          Верхняя граница ожидания онбординга созданных VM (барьер await_online,
-          ADR-061; форма <N>{s|m|h}). Не задан → essence.provision_await_timeout (дефолт
-          10m). Ограничен сверху keeper.yml::max_await_timeout.
+          Upper bound on waiting for the created VMs to onboard (the await_online barrier,
+          ADR-061; form <N>{s|m|h}). Unset → essence.provision_await_timeout (default
+          10m). Capped from above by keeper.yml::max_await_timeout.
       join_wait_timeout:
         type: string
         pattern: "^[0-9]+[smh]$"
         description: >-
-          Потолок ожидания появления свежесозданной VM в Teleport перед доставкой
-          токена (core.bootstrap.delivered, retry-до-join; форма <N>{s|m|h}). Не задан →
-          essence.provision_join_wait_timeout (дефолт 15m).
+          Ceiling on waiting for a freshly created VM to appear in Teleport before delivering
+          the token (core.bootstrap.delivered, retry-until-join; form <N>{s|m|h}). Unset →
+          essence.provision_join_wait_timeout (default 15m).
       ssh_provider:
         type: string
         description: >-
-          Имя SshProvider-плагина (keeper.yml::plugins.ssh_providers[].name) для
-          доставки per-VM bootstrap-токена по SSH (core.bootstrap.delivered, ADR-063).
-          Не задан → essence.provision_ssh_provider.
+          Name of the SshProvider plugin (keeper.yml::plugins.ssh_providers[].name) for
+          delivering the per-VM bootstrap token over SSH (core.bootstrap.delivered, ADR-063).
+          Unset → essence.provision_ssh_provider.
 
-# ── Вычисляемые scenario-vars: ДЕЛЬТА create поверх covenant.compute ────────────────
-# Общий compute-контракт (redis_config/install/conf_dir/data_dir/tls_*/sentinel_directives/
-# redis_version/modules_*/…) — в covenant.yml, наследуется add-only (covenant-первым). Здесь —
-# ТОЛЬКО sentinel_monitor_now: covenant его НЕ несёт (расходится с migrate_cluster по значению,
-# section_key_conflict при merge). На create-семантике =true БЕЗУСЛОВНО: node-1 — настоящий
-# master, нет фазы заливки role:slave → sentinel мониторит его сразу (деплой-тело
-# redis-deploy-sentinel.yml проксирует флаг в task-var шага 4). См. шапку redis-deploy-sentinel.yml.
+# ── Computed scenario-vars: create's DELTA on top of covenant.compute ────────────────
+# The shared compute contract (redis_config/install/conf_dir/data_dir/tls_*/sentinel_directives/
+# redis_version/modules_*/…) lives in covenant.yml, inherited add-only (covenant-first). Here —
+# ONLY sentinel_monitor_now: covenant does NOT carry it (it diverges from migrate_cluster in
+# value, section_key_conflict on merge). Under create semantics it's =true UNCONDITIONALLY:
+# node-1 is a real master, there's no role:slave seeding phase → sentinel monitors it right away
+# (the redis-deploy-sentinel.yml deploy body proxies the flag into the step-4 task-var). See the header of redis-deploy-sentinel.yml.
 compute:
   sentinel_monitor_now: "${ true }"
 
-# ── Презентационный слой формы (form:, top-level scenario-ключ) ───────────────────
-# form: — ЧИСТАЯ ПРЕЗЕНТАЦИЯ: как UI группирует и подписывает поля input в Run-форме.
-# Контракт ввода (типы/валидация/обязательность) живёт ИСКЛЮЧИТЕЛЬНО в input: выше —
-# form ссылается на поля по имени, ничего не дублирует и не меняет. Опционален:
-# уберёшь блок → UI рисует input плоско (forward-compat). soul-lint сверяет
-# инварианты (каждое name ∈ input:, имя в одной секции, key уникален); поле input
-# без секции — WARNING (UI дорисует в дефолтную секцию в конце), не error.
+# ── Form presentation layer (form:, top-level scenario key) ───────────────────
+# form: — PURE PRESENTATION: how the UI groups and labels input fields in the Run form.
+# The input contract (types/validation/requiredness) lives EXCLUSIVELY in input: above —
+# form references fields by name, duplicates or changes nothing. Optional:
+# drop the block → the UI renders input flat (forward-compat). soul-lint checks
+# invariants (every name ∈ input:, each name in one section, key is unique); an input field
+# without a section — WARNING (the UI draws it into the default section at the end), not an error.
 form:
   sections:
-    # 1. Параметры Redis — режим, сетевой канал, версия.
-    # install_method убран из формы (2026-06-28): способ установки зафиксирован в
-    # essence (binary), оператор его не задаёт.
+    # 1. Redis parameters — mode, connection channel, version.
+    # install_method removed from the form (2026-06-28): install method is fixed in
+    # essence (binary), the operator doesn't set it.
     - key: redis
-      title: "Параметры Redis"
-      description: "Режим развёртывания, сетевой канал и версия"
+      title: "Redis parameters"
+      description: "Deployment mode, connection channel and version"
       fields:
-        - { name: redis_type, label: "Режим развёртывания" }
-        - { name: connection_mode, label: "Сетевой канал" }
-        - { name: version, label: "Версия Redis" }
+        - { name: redis_type, label: "Deployment mode" }
+        - { name: connection_mode, label: "Connection channel" }
+        - { name: version, label: "Redis version" }
 
-    # 2. Топология — реплики (оба режима) + cluster-специфика.
+    # 2. Topology — replicas (both modes) + cluster specifics.
     - key: topology
-      title: "Топология"
-      description: "Реплики (оба режима) и параметры Cluster"
+      title: "Topology"
+      description: "Replicas (both modes) and Cluster parameters"
       fields:
         - name: replicas_per_master
-          label: "Реплик на master"
+          label: "Replicas per master"
           placeholder: "2"
-          hint: "Реплик на каждый master. По умолчанию 2 (master + 2 реплики). 0 = без реплик."
-        # cluster-специфичные поля: видимы ТОЛЬКО в режиме cluster. show_when —
-        # презентация, не гейт: shards.required_when на input-валидации остаётся
-        # независимо (defence-in-depth).
+          hint: "Replicas per each master. Default 2 (master + 2 replicas). 0 = no replicas."
+        # cluster-specific fields: visible ONLY in cluster mode. show_when —
+        # presentation, not a gate: shards.required_when on input validation still
+        # applies independently (defence-in-depth).
         - name: shards
-          label: "Число master-шардов (cluster)"
+          label: "Number of master shards (cluster)"
           show_when: "input.redis_type == 'cluster'"
           placeholder: "3"
-          hint: "16384 hash-слота делятся поровну между шардами (min 3). Roster прогона обязан быть shards*(1+реплик)."
+          hint: "16384 hash slots are split evenly across shards (min 3). The run's roster must be shards*(1+replicas)."
         - name: cluster_node_timeout
-          label: "Таймаут gossip, мс (cluster)"
+          label: "Gossip timeout, ms (cluster)"
           show_when: "input.redis_type == 'cluster'"
           placeholder: "5000"
-          hint: "Таймаут gossip между нодами кластера (cluster-node-timeout). Не задан → 5000."
+          hint: "Gossip timeout between cluster nodes (cluster-node-timeout). Unset → 5000."
         - name: cluster_topology
-          label: "Явная топология шардов (cluster)"
+          label: "Explicit shard topology (cluster)"
           show_when: "input.redis_type == 'cluster'"
-          hint: "Список шардов; каждый шард — список SID [master, replica, …] (первый = master). Оператор сам распихивает VM по зонам. Не задан → плагин раскладывает роли по sort SID автоматически."
+          hint: "List of shards; each shard is a list of SIDs [master, replica, …] (the first is the master). The operator lays out VMs across zones themselves. Unset → the plugin assigns roles by sorted SID automatically."
 
-    # 3. Ресурсы — память, I/O-потоки, политика вытеснения.
+    # 3. Resources — memory, I/O threads, eviction policy.
     - key: resources
-      title: "Ресурсы"
+      title: "Resources"
       fields:
         - name: memory_mb
-          label: "Объём данных, МБ"
+          label: "Data volume, MB"
           placeholder: "1024"
-          hint: "Бюджет памяти под Redis на хосте. maxmemory вычисляется как доля от него (минус резерв ОС). Не задан → maxmemory из подложки essence."
+          hint: "Memory budget for Redis on the host. maxmemory is computed as a share of it (minus the OS reserve). Unset → maxmemory from the essence substrate."
         - name: io_threads
-          label: "I/O-потоков"
+          label: "I/O threads"
           placeholder: "0"
-          hint: "Число I/O-потоков Redis (io-threads). 0 = однопоточный I/O. >0 — типично число ядер - 1."
-        - { name: maxmemory_policy, label: "Политика вытеснения" }
+          hint: "Number of Redis I/O threads (io-threads). 0 = single-threaded I/O. >0 is typically core count - 1."
+        - { name: maxmemory_policy, label: "Eviction policy" }
 
-    # 4. Персистентность — режим сохранения.
+    # 4. Persistence — save mode.
     - key: persistence
-      title: "Персистентность"
+      title: "Persistence"
       fields:
-        - { name: persistence, label: "Режим persistence" }
+        - { name: persistence, label: "Persistence mode" }
 
-    # 5. Пользователи — ACL.
+    # 5. Users — ACL.
     - key: users
-      title: "Пользователи"
+      title: "Users"
       fields:
-        - { name: users, label: "ACL-пользователи" }
+        - { name: users, label: "ACL users" }
 
-    # 6. Конфигурация — passthrough-директивы redis.conf и sentinel.conf.
+    # 6. Configuration — passthrough directives for redis.conf and sentinel.conf.
     - key: config
-      title: "Конфигурация"
-      description: "Passthrough-директивы redis.conf и sentinel.conf"
+      title: "Configuration"
+      description: "Passthrough directives for redis.conf and sentinel.conf"
       collapsed: true
       fields:
-        - { name: redis_settings, label: "Директивы redis.conf" }
-        # sentinel-специфичные dict-ы: видимы ТОЛЬКО в режиме sentinel.
+        - { name: redis_settings, label: "redis.conf directives" }
+        # sentinel-specific dicts: visible ONLY in sentinel mode.
         - name: sentinel_settings
-          label: "Директивы sentinel.conf (глобальные)"
+          label: "sentinel.conf directives (global)"
           show_when: "input.redis_type == 'sentinel'"
-          hint: "Глобальные директивы sentinel.conf (resolve-hostnames, announce-port, …)."
+          hint: "Global sentinel.conf directives (resolve-hostnames, announce-port, …)."
         - name: sentinel_master_settings
-          label: "Директивы Sentinel (per-master)"
+          label: "Sentinel directives (per-master)"
           show_when: "input.redis_type == 'sentinel'"
-          hint: "Per-master опции (down-after-milliseconds, failover-timeout, parallel-syncs, …). Дефолты: down-after 5000, failover-timeout 60000."
+          hint: "Per-master options (down-after-milliseconds, failover-timeout, parallel-syncs, …). Defaults: down-after 5000, failover-timeout 60000."
 
-    # ★ Секция provision НАМЕРЕННО УБРАНА из формы (решение пользователя 2026-06-30):
-    # provision default-on (input.provision.default {enabled: true}), provider/profile из
-    # essence — оператор НЕ выбирает их в Run-форме. Поле input.provision не покрыто формой
-    # → soul-lint form_field_uncovered WARNING (UI дорисует в дефолтную секцию) — ОЖИДАЕМО,
-    # не error. Если понадобится снова показать (per-Coven/ENV-override provider) — вернуть
-    # секцию сюда. ★ TODO: prod/dev provider switch (ENV keeper / Coven-overlay) — отдельный ADR.
+    # ★ The provision section is DELIBERATELY REMOVED from the form (user decision 2026-06-30):
+    # provision default-on (input.provision.default {enabled: true}), provider/profile come from
+    # essence — the operator does NOT pick them in the Run form. The input.provision field is not
+    # covered by the form → soul-lint form_field_uncovered WARNING (the UI draws it into the
+    # default section) — EXPECTED, not an error. If it's ever needed again (per-Coven/ENV-override
+    # provider) — bring the section back here. ★ TODO: prod/dev provider switch (ENV keeper / Coven-overlay) — a separate ADR.
 
-# Тело прогона — ветки диспетчера, по одной на режим (CONDITIONAL-INCLUDE, orchestration.md §6,
-# Вариант B group-drop). Порядок include — cluster, sentinel; индексы не важны (ветки
-# взаимоисключающие по enum). Отдельного mode-guard нет: неизвестный redis_type
-# отвергает input-валидация Keeper-а по enum ДО рендера.
+# Run body — dispatcher branches, one per mode (CONDITIONAL-INCLUDE, orchestration.md §6,
+# Option B group-drop). include order — cluster, sentinel; indices don't matter (the branches
+# are mutually exclusive by enum). There's no separate mode-guard: an unknown redis_type
+# is rejected by Keeper's input validation on the enum BEFORE render.
 tasks:
-  # ── Генерация паролей в Vault ПЕРЕД любым чтением секретов (core.vault.kv-present) ──
-  # ★ ГЕНЕРАЦИЯ СЕКРЕТОВ СЕРВИСОМ (2026-06-28): оператор больше НЕ пред-сеет пароли в
-  # Vault — create САМ генерит недостающие крипто-случайно (generate-if-absent). Шаг
-  # keeper-side (on: keeper, core.vault.kv-present): для каждого target читает путь и,
-  # если поля нет — пишет crypto/rand-значение по policy; есть — no-op (НЕ перезатирает,
-  # ротация — отдельный сценарий). changed=true только при реальной генерации.
+  # ── Generate passwords in Vault BEFORE any secret reads (core.vault.kv-present) ──
+  # ★ SECRET GENERATION BY THE SERVICE (2026-06-28): the operator no longer pre-seeds passwords
+  # into Vault — create generates missing ones itself, cryptographically at random
+  # (generate-if-absent). The keeper-side step (on: keeper, core.vault.kv-present): for each
+  # target it reads the path and, if the field is missing — writes a crypto/rand value per
+  # policy; if present — no-op (does NOT overwrite; rotation is a separate scenario).
+  # changed=true only on an actual generation.
   #
-  # ★★ PASSAGE-ИНВАРИАНТ (критично): этот шаг ОБЯЗАН исполниться (apply, запись в Vault)
-  # ДО render-фазы задач, читающих те же секреты через ${ vault(...) } (apply redis +
-  # community.redis.* в ветках cluster/sentinel). Модель staged-render (ADR-056): passage
-  # N полностью applies ДО render passage N+1. vault() в render с отсутствующим секретом
-  # РВЁТ render (vault_resolve: «поле отсутствует»), поэтому generate ОБЯЗАН быть в БОЛЕЕ
-  # РАННЕМ passage, чем read.
+  # ★★ PASSAGE INVARIANT (critical): this step MUST execute (apply, write to Vault)
+  # BEFORE the render phase of tasks that read the same secrets via ${ vault(...) } (apply redis +
+  # community.redis.* in the cluster/sentinel branches). The staged-render model (ADR-056): passage
+  # N fully applies BEFORE render of passage N+1. vault() in render with a missing secret
+  # ABORTS render (vault_resolve: "field is missing"), so generate MUST be in an EARLIER
+  # passage than read.
   #
-  # КАК порядок обеспечен (ФАКТ, без декоративных register-рёбер):
-  #   - этот шаг — `on: keeper` БЕЗ roster-зависимости (vault() — НЕ register-ребро,
-  #     soulprint.* в targets НЕ читается) → Stratify держит его в passage 0;
-  #   - read-задачи деплоя (redis-deploy-{sentinel,cluster}.yml) ВСЕ читают roster
-  #     прогона (apply.input/params несут soulprint.hosts / soulprint.self) → они
-  #     roster-ПОТРЕБИТЕЛИ (passage_refresh.go::taskReadsRoster);
-  #   - provision-тело (redis-provision.yml, инклудится ВЫШЕ по program-order) несёт
-  #     `core.soul.registered` с `refresh_soulprint: true` — refresh-ЭМИТТЕР (ADR-0061
-  #     §S2). Он физически в плане ДО group-drop по include-when (Stratify работает на
-  #     ПОЛНОМ плоском списке, дроп ветвей — позже на render-фазе), поэтому roster-refresh
-  #     ребро уводит ВСЕ read-задачи деплоя в passage СТРОГО ПОСЛЕ generate (замер:
-  #     generate=passage 0, любая vault()-читающая задача деплоя=passage 2).
-  # vault() сам passage НЕ определяет (он не register-ссылка и не roster-чтение) — поэтому
-  # ребро generate→read несёт roster-ось (refresh-эмиттер + roster-потребление деплоя), а
-  # НЕ register. Несущий инвариант (generate в passage СТРОГО РАНЬШЕ любой vault()-read)
-  # закреплён guard-тестом keeper/internal/render/redis_create_secrets_passage_test.go.
+  # HOW the order is guaranteed (FACT, without decorative register edges):
+  #   - this step is `on: keeper` WITHOUT a roster dependency (vault() is NOT a register edge,
+  #     soulprint.* in targets is NOT read) → Stratify keeps it in passage 0;
+  #   - the deploy read-tasks (redis-deploy-{sentinel,cluster}.yml) ALL read the run's roster
+  #     (apply.input/params carry soulprint.hosts / soulprint.self) → they are
+  #     roster-CONSUMERS (passage_refresh.go::taskReadsRoster);
+  #   - the provision body (redis-provision.yml, included ABOVE in program order) carries
+  #     `core.soul.registered` with `refresh_soulprint: true` — a refresh-EMITTER (ADR-0061
+  #     §S2). It's physically in the plan BEFORE the group-drop by include-when (Stratify works
+  #     on the FULL flat list, branch-dropping happens later at render phase), so the
+  #     roster-refresh edge pushes ALL deploy read-tasks into a passage STRICTLY AFTER generate
+  #     (measured: generate=passage 0, any vault()-reading deploy task=passage 2).
+  # vault() itself does NOT determine the passage (it's not a register reference or a roster
+  # read) — so the generate→read edge carries the roster axis (refresh-emitter + deploy's
+  # roster consumption), NOT register. The load-bearing invariant (generate in a passage
+  # STRICTLY BEFORE any vault()-read) is pinned by the guard test
+  # keeper/internal/render/redis_create_secrets_passage_test.go.
   #
-  # targets ВЫЧИСЛЯЮТСЯ из ТОГО ЖЕ essence/input, что и read-задачи (drift «что генерим ≡
-  # что читаем» = баг, поэтому список юзеров НЕ хардкодится): главный secret/redis/<inc>
-  # #password + per-user union(system_acl_users, system_acl_users_sentinel) БЕЗ default
-  # (sentinel default → главный секрет) + operator-extra input.users. policy alphanumeric/32
-  # (redis.conf/ACL-safe). register НАМЕРЕННО НЕТ (passage-ребро несёт roster-ось, не register).
+  # targets are COMPUTED from the SAME essence/input as the read-tasks (drift between "what we
+  # generate" and "what we read" = a bug, so the user list is NOT hardcoded): the main
+  # secret/redis/<inc> #password + per-user union(system_acl_users, system_acl_users_sentinel)
+  # WITHOUT default (sentinel default → the main secret) + operator-extra input.users. policy
+  # alphanumeric/32 (redis.conf/ACL-safe). register is DELIBERATELY ABSENT (the passage edge
+  # carries the roster axis, not register).
   - name: Ensure redis passwords exist in Vault (generate if absent)
     on: keeper
     module: core.vault.kv-present
     params:
-      # policy — НАСТОЯЩИЙ YAML-map (не CEL-строка): module.params type-check ждёт
-      # MappingNode под map-param. length/charset заданы явно — «описанные правила».
+      # policy is a REAL YAML map (not a CEL string): module.params type-check expects a
+      # MappingNode under a map-param. length/charset are set explicitly — "spelled-out rules".
       policy:
         length: 32
         charset: alphanumeric
-      # targets — ОДНОСТРОЧНЫЙ quoted-string ${…} (НЕ block-scalar): module.params
-      # type-check пропускает CEL-wrap только для StringNode. union ключей
-      # system_acl_users ∪ system_acl_users_sentinel БЕЗ default + operator-extra input.users.
+      # targets is a SINGLE-LINE quoted-string ${…} (NOT a block-scalar): module.params
+      # type-check only passes the CEL-wrap through for a StringNode. Union of keys
+      # system_acl_users ∪ system_acl_users_sentinel WITHOUT default + operator-extra input.users.
       targets: "${ [{ 'path': 'secret/redis/' + incarnation.name, 'field': 'password' }] + merge(default(essence.system_acl_users, {}).map(n, { n: 0 }) + default(essence.system_acl_users_sentinel, {}).map(n, { n: 0 })).map(name, name).filter(name, name != 'default').map(name, { 'path': 'secret/redis/' + incarnation.name + '/users/' + name, 'field': 'password' }) + (has(input.users) ? input.users.map(u, { 'path': 'secret/redis/' + incarnation.name + '/users/' + u.name, 'field': 'password' }) : []) }"
 
-  # ── Version-aware валидатор имён директив redis_settings (assert, #6) ─────────────
-  # ★ #6 (2026-06-26): redis_settings — passthrough KEY→VALUE: input-схема пропускает
-  # ЛЮБОЙ ключ (additional_properties: {type: string}). Без проверки оператор молча
-  # протащит опечатку (`maxmemoyr 512mb`) или директиву чужой версии → redis-server не
-  # стартует на хосте (поздний, непонятный отказ). Этот assert сверяет КАЖДОЕ ИМЯ
-  # директивы redis_settings против каталога валидных имён ДЛЯ ВЫБРАННОЙ версии
-  # (essence.redis_directives[<серия>], сгенерирован из src/config.c апстрима) — первый
-  # неизвестный ключ рвёт render (422 assert-failed) ДО applying, понятным сообщением.
+  # ── Version-aware validator for redis_settings directive names (assert, #6) ─────────────
+  # ★ #6 (2026-06-26): redis_settings — passthrough KEY→VALUE: the input schema lets
+  # ANY key through (additional_properties: {type: string}). Without a check the operator would
+  # silently drag in a typo (`maxmemoyr 512mb`) or a directive from a different version → the
+  # redis-server fails to start on the host (a late, confusing failure). This assert checks
+  # EVERY redis_settings directive NAME against the catalog of valid names FOR THE SELECTED
+  # version (essence.redis_directives[<series>], generated from the upstream src/config.c) — the
+  # first unknown key aborts render (422 assert-failed) BEFORE applying, with a clear message.
   #
-  # ПОЧЕМУ assert, а не validate: каталог живёт в essence, а validate-контекст INPUT-ONLY
-  # (essence недоступен, структурный CEL-барьер). assert видит essence+input+compute
-  # (полный scenario-контекст) — единственный механизм, дотягивающийся до каталога.
-  # Run-level (один раз на прогон), soulprint.hosts не нужен (проверка host-инвариантна),
-  # но доступен.
+  # WHY assert and not validate: the catalog lives in essence, and the validate context is
+  # INPUT-ONLY (essence is unavailable, a structural CEL barrier). assert sees
+  # essence+input+compute (the full scenario context) — the only mechanism that can reach the
+  # catalog. Run-level (once per run), soulprint.hosts isn't needed (the check is
+  # host-invariant), but it's available.
   #
-  # ВЕРСИЯ — compute.redis_version (= input.version, enum выкаченных в Nexus сборок;
-  # ★ редизайн: ОДНА на оба способа установки — binary качает бинари этой версии, package
-  # ставит =version-пин; прежний каскад «binary → essence.binary_version» убран).
-  # Версия несёт серию major.minor → assert матчит её против ключей каталога.
+  # VERSION — compute.redis_version (= input.version, an enum of Nexus-published builds;
+  # ★ redesign: ONE for both install methods — binary downloads binaries of this version, package
+  # installs a =version pin; the former cascade "binary → essence.binary_version" is removed).
+  # The version carries a major.minor series → assert matches it against the catalog keys.
   #
-  # МЕХАНИКА version→серия БЕЗ split (StdLib CEL не даёт .split/.substring): итерируем
-  # ключи каталога (.all(s, …)) и матчим версию против серии регуляркой
-  # `^([0-9]+:)?<s>[.]` (трейлинг `[.]` — граница серии, чтобы 7.0 не цеплял 7.04;
-  # epoch-префикс `5:` в регэкспе опционален — back-compat со старыми distro-пинами,
-  # хотя input.version теперь чистый enum `8.6.1`). Для серий, которым версия НЕ
-  # принадлежит, предикат вакуумно true (короткое замыкание тернаром) — проверка идёт
-  # только против «своей» серии. Версия, не попавшая НИ в одну серию каталога (серия
-  # отсутствует в каталоге — напр. 8.4 пока не сгенерирована) → assert skip: валидируем
-  # ТОЛЬКО известные серии. default(input.redis_settings, {}) — поле опц.; .all над {} = true.
+  # version→series MECHANICS WITHOUT split (StdLib CEL has no .split/.substring): we iterate
+  # the catalog keys (.all(s, …)) and match the version against the series with a regex
+  # `^([0-9]+:)?<s>[.]` (the trailing `[.]` is the series boundary, so 7.0 doesn't catch 7.04;
+  # the epoch prefix `5:` in the regex is optional — back-compat with old distro pins,
+  # even though input.version is now a clean enum `8.6.1`). For series the version does NOT
+  # belong to, the predicate is vacuously true (short-circuited by the ternary) — the check runs
+  # only against "its own" series. A version that falls into NO catalog series (the series
+  # is absent from the catalog — e.g. 8.4 not generated yet) → assert skip: we validate
+  # ONLY known series. default(input.redis_settings, {}) — the field is optional; .all over {} = true.
   - name: Validate redis_settings directive names against the catalog for the chosen Redis version
     assert:
-      # that[] и message обязаны быть СКАЛЯРНЫМИ строками (не folded `>-`/`|`):
-      # soul-lint требует *ast.StringNode (quoted/plain), block-scalar = type_mismatch.
-      # Предикат — одна строка (CEL-normalize схлопывает пробелы): для каждого ключа
-      # redis_settings k — для каждой серии каталога s, которой принадлежит версия
-      # (regex `^([0-9]+:)?<s>[.]`), k обязан быть в essence.redis_directives[s]; серии
-      # не той версии вакуумно-true (тернар), версия вне каталога → ни одна серия не
-      # матчится → skip.
+      # that[] and message must be SCALAR strings (not folded `>-`/`|`):
+      # soul-lint requires *ast.StringNode (quoted/plain), a block-scalar = type_mismatch.
+      # The predicate is one line (CEL-normalize collapses whitespace): for each redis_settings
+      # key k — for each catalog series s that the version belongs to
+      # (regex `^([0-9]+:)?<s>[.]`), k must be in essence.redis_directives[s]; series
+      # not matching the version are vacuously true (ternary), a version outside the catalog →
+      # no series matches → skip.
       #
-      # `!has(essence.redis_directives) || …` — EMPTY-CATALOG-SKIP: каталог опционален.
-      # Если essence его не несёт (минимальные fixtures L0-кейсов, либо essence оператора
-      # без каталога) — assert skip (нечем валидировать). С каталогом — полная проверка.
+      # `!has(essence.redis_directives) || …` — EMPTY-CATALOG-SKIP: the catalog is optional.
+      # If essence doesn't carry it (minimal L0-case fixtures, or an operator's essence
+      # without a catalog) — assert skip (nothing to validate against). With a catalog — full check.
       that:
         - "!has(essence.redis_directives) || default(input.redis_settings, {}).all(k, essence.redis_directives.all(s, compute.redis_version.matches('^([0-9]+:)?' + s + '[.]') ? (k in essence.redis_directives[s]) : true))"
-      message: "redis_settings содержит неизвестную директиву redis.conf для выбранной версии Redis (input.version): сверь имя с каталогом валидных директив этой версии (essence.redis_directives[<major.minor>]) — опечатка или директива из другой версии Redis. Каталог генерируется scripts/gen-redis-catalog.sh из src/config.c."
+      message: "redis_settings contains an unknown redis.conf directive for the selected Redis version (input.version): check the name against the catalog of valid directives for this version (essence.redis_directives[<major.minor>]) — typo or a directive from a different Redis version. The catalog is generated by scripts/gen-redis-catalog.sh from src/config.c."
 
-  # ── provision (ADR-061, Вариант A): cloud-create + онбординг ПЕРЕД роль-веткой ──────
-  # CONDITIONAL-INCLUDE redis-provision.yml СТРОГО ПЕРЕД cluster/sentinel: при enabled=true
-  # его шаги (а) создают VM, (в) регистрируют+ждут онбординга с refresh_soulprint → roster
-  # пере-резолвится, и ТОЛЬКО потом cluster/sentinel-ветка видит созданные хосты в
-  # soulprint.hosts. ★ ОБЩЕЕ PROVISION-ТЕЛО service-level (scenario/redis-provision.yml, то
-  # же, что инклудит migrate_cluster/main.yml — дубликата нет; scenario-include фоллбэкает
-  # имя файла на service-level, orchestration.md §6). when по input.provision — статический
-  # (только input.*, без register/soulprint) → group-drop include-when: на enabled=false/
-  # опущенной секции всё provision-тело (вкл. NIM-58 name-guard) выброшено из плана. has()-guard
-  # — секция опциональна (no-such-key без неё). ★ teardown НЕ здесь.
+  # ── provision (ADR-061, Option A): cloud-create + onboarding BEFORE the role branch ──────
+  # CONDITIONAL-INCLUDE redis-provision.yml STRICTLY BEFORE cluster/sentinel: when enabled=true
+  # its steps (a) create VMs, (c) register+await onboarding with refresh_soulprint → the roster
+  # is re-resolved, and ONLY THEN does the cluster/sentinel branch see the created hosts in
+  # soulprint.hosts. ★ SHARED PROVISION BODY at service-level (scenario/redis-provision.yml, the
+  # same one migrate_cluster/main.yml includes — no duplicate; scenario-include falls back to
+  # the file name at service-level, orchestration.md §6). when on input.provision is static
+  # (only input.*, no register/soulprint) → group-drop include-when: on enabled=false / an
+  # omitted section, the whole provision body (incl. the NIM-58 name-guard) is dropped from the
+  # plan. has()-guard — the section is optional (no-such-key without it). ★ teardown is NOT here.
   - include: redis-provision.yml
     when: "has(input.provision) && input.provision.enabled"
 
@@ -327,39 +331,40 @@ tasks:
   - include: sentinel.yml
     when: "input.redis_type == 'sentinel'"
 
-  # ── ОБЯЗАТЕЛЬНЫЙ мониторинг data-плоскости (Слайс I) ──────────────────────────────
-  # ПОСЛЕ deploy-ветки (cluster/sentinel) create БЕЗУСЛОВНО (без when-гейта) разворачивает
-  # два экспортера метрик на КАЖДЫЙ хост incarnation КОМПОЗИЦИЕЙ переиспользуемых
-  # standalone-destiny через apply:destiny (изолированный render каждой, ADR-009). Мониторинг
-  # — не операторский выбор, а инвариант data-сервиса (контракт=A: версии/порты/checksum в
-  # essence, covenant.input/form НЕ трогаются).
+  # ── MANDATORY data-plane monitoring (Slice I) ──────────────────────────────
+  # AFTER the deploy branch (cluster/sentinel), create UNCONDITIONALLY (no when-gate) deploys
+  # two metrics exporters onto EVERY incarnation host by COMPOSING reusable
+  # standalone destinies via apply:destiny (isolated render for each, ADR-009). Monitoring
+  # is not an operator choice but a data-service invariant (contract=A: versions/ports/checksum in
+  # essence, covenant.input/form are NOT touched).
   #
-  # ★ ПОРЯДОК (staged-render Passage сам стратифицирует): обе задачи читают roster прогона
-  # (arch/пароль резолвятся per-host, apply.input несёт soulprint.self) → они roster-ПОТРЕБИТЕЛИ
-  # и попадают в passage СТРОГО ПОСЛЕ deploy (redis-server поднят, ACL-юзер monitoring залит,
-  # unix-сокет слушается). Отдельного register-ребра не нужно — roster-ось (refresh-эмиттер
-  # provision + roster-чтение deploy) уводит их в поздний passage, как vault()-read деплоя.
+  # ★ ORDER (staged-render Passage stratifies this itself): both tasks read the run's roster
+  # (arch/password resolve per-host, apply.input carries soulprint.self) → they are
+  # roster-CONSUMERS and land in a passage STRICTLY AFTER deploy (redis-server is up, the
+  # monitoring ACL user is seeded, the unix socket is listening). No separate register edge is
+  # needed — the roster axis (provision's refresh-emitter + deploy's roster-read) pushes them
+  # into a later passage, same as deploy's vault()-read.
   - name: Apply node-exporter destiny (host metrics)
     apply:
       destiny: node-exporter
       input:
         version: "${ default(essence.node_exporter_version, '1.8.2') }"
-        # arch НЕ передаём: destiny берёт его напрямую из soulprint.self.os.arch (доступен
-        # в destiny-CEL) — incarnation может смешивать amd64/arm64-хосты.
+        # arch is NOT passed: the destiny takes it directly from soulprint.self.os.arch (available
+        # in destiny-CEL) — an incarnation may mix amd64/arm64 hosts.
         listen: "${ default(essence.node_exporter_listen, ':9100') }"
-        # Корень загрузки: essence-override на внутреннее зеркало/nexus-proxy (хосты без
-        # доступа к github.com); default — GitHub Releases (back-compat).
+        # Download root: an essence-override for an internal mirror/nexus-proxy (hosts without
+        # access to github.com); default is GitHub Releases (back-compat).
         base_url: "${ default(essence.node_exporter_base_url, 'https://github.com/prometheus/node_exporter/releases/download') }"
-        # SSRF-guard opt-out при private-resolve base_url (паттерн binary_allow_private); default false — guard держится.
+        # SSRF-guard opt-out for private-resolve base_url (the binary_allow_private pattern); default false — the guard stays on.
         allow_private: "${ default(essence.node_exporter_allow_private, false) }"
 
-  # redis-exporter: метрики Redis через unix-сокет (--redis.addr=unix://<socket>). ★ Находка B:
-  # redis на ACL БЕЗ requirepass (default_admin-редизайн убрал requirepass) → exporter ОБЯЗАН
-  # авторизоваться ACL-юзером monitoring (redis_user), иначе WRONGPASS. Пароль резолвится
-  # keeper-side vault() из secret/redis/<inc>/users/monitoring#password (тот же ACL-юзер, что
-  # essence.system_acl_users.monitoring, пароль генерится kv-present ВЫШЕ) — на хост доезжает
-  # уже ЗНАЧЕНИЕ (ADR-012). redis_socket НЕ передаём — дефолт destiny (/var/run/redis/
-  # redis-server.sock) совпадает с unixsocket redis.conf.
+  # redis-exporter: Redis metrics over a unix socket (--redis.addr=unix://<socket>). ★ Finding B:
+  # redis on ACL WITHOUT requirepass (the default_admin redesign removed requirepass) → the
+  # exporter MUST authenticate as the monitoring ACL user (redis_user), otherwise WRONGPASS. The
+  # password resolves via keeper-side vault() from secret/redis/<inc>/users/monitoring#password
+  # (the same ACL user as essence.system_acl_users.monitoring, password generated by kv-present
+  # ABOVE) — only the VALUE reaches the host (ADR-012). redis_socket is NOT passed — the
+  # destiny's default (/var/run/redis/redis-server.sock) matches redis.conf's unixsocket.
   - name: Apply redis-exporter destiny (redis metrics)
     apply:
       destiny: redis-exporter
@@ -368,21 +373,22 @@ tasks:
         sha256:  "${ default(essence.redis_exporter_sha256, '') }"
         listen:  "${ default(essence.redis_exporter_listen, ':9121') }"
         base_url: "${ default(essence.redis_exporter_base_url, 'https://github.com/oliver006/redis_exporter/releases/download') }"
-        # SSRF-guard opt-out при private-resolve base_url (паттерн binary_allow_private); default false — guard держится.
+        # SSRF-guard opt-out for private-resolve base_url (the binary_allow_private pattern); default false — the guard stays on.
         allow_private: "${ default(essence.redis_exporter_allow_private, false) }"
         redis_user:     monitoring
         redis_password: "${ vault('secret/redis/' + incarnation.name + '/users/monitoring#password') }"
 
-  # ── ОБЯЗАТЕЛЬНЫЙ log-shipping data-плоскости (Слайс V-I, ADR-067) ──────────────────
-  # ПОСЛЕ экспортеров create БЕЗУСЛОВНО (без when-гейта) разворачивает vector (агент отгрузки
-  # логов) на КАЖДЫЙ хост incarnation КОМПОЗИЦИЕЙ переиспользуемой standalone-destiny через
-  # apply:destiny (изолированный render, ADR-009). vector ДОПОЛНЯЕТ node/redis-exporter
-  # (метрики, pull) лог-плоскостью (логи redis, push) — не операторский выбор, а инвариант
-  # data-сервиса (контракт=A: версии/checksum/sink в essence). arch destiny берёт сама из
-  # soulprint.self.os.arch. sink_auth_ref — Vault-ref ИЛИ значение: caller (essence) передаёт
-  # ref, резолв Soul-side (secret в state НЕ оседает, ИБ). log_sources — redis-логи из essence
-  # (/var/log/redis/*.log). Порядок: roster не читает (arch — soulprint-факт destiny), но
-  # apply.input несёт soulprint.self → roster-потребитель → passage ПОСЛЕ deploy, как экспортеры.
+  # ── MANDATORY data-plane log shipping (Slice V-I, ADR-067) ──────────────────
+  # AFTER the exporters, create UNCONDITIONALLY (no when-gate) deploys vector (a log-shipping
+  # agent) onto EVERY incarnation host by COMPOSING a reusable standalone destiny via
+  # apply:destiny (isolated render, ADR-009). vector COMPLEMENTS node/redis-exporter
+  # (metrics, pull) with the log plane (redis logs, push) — not an operator choice but a
+  # data-service invariant (contract=A: versions/checksum/sink in essence). arch is taken by the
+  # destiny itself from soulprint.self.os.arch. sink_auth_ref is a Vault ref OR a value: the
+  # caller (essence) passes a ref, resolved Soul-side (the secret doesn't land in state, InfoSec).
+  # log_sources — redis logs from essence (/var/log/redis/*.log). Order: doesn't read the roster
+  # (arch is a soulprint destiny-fact), but apply.input carries soulprint.self → roster-consumer
+  # → passage AFTER deploy, same as the exporters.
   - name: Apply vector destiny (log shipping)
     apply:
       destiny: vector
@@ -390,7 +396,7 @@ tasks:
         version:       "${ default(essence.vector_version, '0.40.0') }"
         sha256:        "${ default(essence.vector_sha256, '') }"
         base_url:      "${ default(essence.vector_base_url, 'https://github.com/vectordotdev/vector/releases/download') }"
-        # SSRF-guard opt-out при private-resolve base_url (паттерн binary_allow_private); default false — guard держится.
+        # SSRF-guard opt-out for private-resolve base_url (the binary_allow_private pattern); default false — the guard stays on.
         allow_private: "${ default(essence.vector_allow_private, false) }"
         sink_type:     "${ default(essence.vector_sink_type, 'console') }"
         sink_endpoint: "${ default(essence.vector_sink_endpoint, '') }"

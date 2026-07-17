@@ -1,9 +1,9 @@
 name: preserves-existing-sids
 description: >
-  Идемпотентность: инкарнация, у которой provisioned_sids УЖЕ есть (повторный
-  прогон миграции / inline-seed), сохраняет значение как есть (has()-guard
-  возвращает текущее, не перезатирает default-ом []). Зеркало redis
-  007_to_008 preserves-existing-sids.
+  Idempotency: an incarnation whose provisioned_sids is ALREADY set (a repeat
+  migration run / inline-seed) keeps the value as-is (the has()-guard
+  returns the current value, it does not overwrite it with the [] default).
+  Mirrors redis 007_to_008 preserves-existing-sids.
 
 state_before:
   df_version: "1.39.0"

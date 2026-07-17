@@ -1,10 +1,10 @@
 name: preserves-existing-refs
 description: >
-  Идемпотентность: инкарнация, у которой ref'ы УЖЕ заполнены (повторный прогон
-  миграции / inline-seed migrate_cluster v10), сохраняет их как есть —
-  лист-guard has() возвращает текущее значение, не перезатирает ''-дефолтом.
-  source_endpoints/detached (включая detached:true после day-2 detach) тоже
-  проходят насквозь.
+  Idempotency: an incarnation whose refs are ALREADY populated (a repeat run
+  of the migration / inline-seed migrate_cluster v10) keeps them as-is -
+  the leaf guard has() returns the current value instead of overwriting it
+  with the ''-default. source_endpoints/detached (including detached:true
+  after a later operational detach) also pass through unchanged.
 
 state_before:
   redis_type: "sentinel"

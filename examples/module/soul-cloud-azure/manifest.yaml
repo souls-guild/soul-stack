@@ -1,26 +1,26 @@
 kind: cloud_driver
-protocol_version: 1                    # compat-флаг plugin-протокола (ADR-020(c))
-namespace: cloud                       # пример third-party коллекции CloudDriver
+protocol_version: 1                    # plugin protocol compat flag (ADR-020(c))
+namespace: cloud                       # example of a third-party CloudDriver collection
 name: azure
 
-# Closed enum по ADR-020(f).
-# vault_access НЕ нужен: credentials резолвит Keeper (A-flow, docs/keeper/cloud.md)
-# и передаёт plain в CreateRequest.credentials — драйвер в Vault НЕ ходит.
+# Closed enum per ADR-020(f).
+# vault_access is NOT needed: Keeper resolves credentials (A-flow, docs/keeper/cloud.md)
+# and passes them plain into CreateRequest.credentials — the driver does NOT touch Vault.
 required_capabilities:
-  - network_outbound                   # вызовы Azure ARM API
+  - network_outbound                   # calls to the Azure ARM API
 
-# CloudDriver работает на keeper-стороне и не трогает локальные ресурсы host-а —
-# объявляем пустой список (ADR-020(g), пример из docs/keeper/plugins.md).
+# CloudDriver runs on the keeper side and doesn't touch local host resources —
+# we declare an empty list (ADR-020(g), example from docs/keeper/plugins.md).
 side_effects: []
 
 spec:
-  provider_kind: azure                 # информативное поле семейства провайдера
-  # JSON Schema draft 2020-12 (формат для kind: cloud_driver — см.
+  provider_kind: azure                 # informational field for the provider family
+  # JSON Schema draft 2020-12 (format for kind: cloud_driver — see
   # docs/keeper/plugins.md → spec.profile_schema).
   #
-  # Azure VM в отличие от EC2 — multi-resource (VM + NIC + PublicIP). Профиль
-  # описывает требуемый шейп; драйвер сам создаёт под-ресурсы с детерминированными
-  # производными именами от vm_name (см. main.go → resourceNames).
+  # Unlike EC2, an Azure VM is multi-resource (VM + NIC + PublicIP). The profile
+  # describes the required shape; the driver creates the sub-resources itself with
+  # deterministic names derived from vm_name (see main.go → resourceNames).
   profile_schema:
     type: object
     required: [location, vm_size, image, subnet_id]
@@ -41,8 +41,8 @@ spec:
           version:
             type: string
             default: latest
-      # ARM-resource-id подсети — полностью квалифицированный, чтобы драйвер не
-      # городил собственный join subscription/rg/vnet/subnet.
+      # Subnet ARM resource id — fully qualified, so the driver doesn't need to
+      # build its own subscription/rg/vnet/subnet join.
       subnet_id:
         type: string
         pattern: "^/subscriptions/[^/]+/resourceGroups/[^/]+/providers/Microsoft\\.Network/virtualNetworks/[^/]+/subnets/[^/]+$"
@@ -61,9 +61,9 @@ spec:
             type: string
             enum: [Basic, Standard]
             default: Standard
-          # DNS-label для PublicIP: при наличии fqdn будет
-          # `<dns_label>.<location>.cloudapp.azure.com`; без него драйвер вернёт
-          # primary_ip как identifier.
+          # DNS label for PublicIP: if fqdn is present it will be
+          # `<dns_label>.<location>.cloudapp.azure.com`; without it the driver returns
+          # primary_ip as identifier.
           dns_label:
             type: string
       disk:

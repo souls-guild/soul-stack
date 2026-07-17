@@ -1,23 +1,23 @@
-# L0-испытание create_from_souls в режиме sentinel — деплой на ГОТОВЫЙ roster (без
-# provision). Multi-host roster (fixtures.hosts) из 3 хостов: replicas_per_master=2 →
-# топология 1+2=3 (size-guard проходит). Master-election: первый по SID хост (node-1) =
-# master; node-2/node-3 = реплики.
+# L0 test of create_from_souls in sentinel mode — deploy onto an EXISTING roster (without
+# provisioning). Multi-host roster (fixtures.hosts) of 3 hosts: replicas_per_master=2 →
+# topology 1+2=3 (size-guard passes). Master election: the host first by SID (node-1) =
+# master; node-2/node-3 = replicas.
 #
-# ★ КРИТЕРИЙ ПРИЁМКИ (отличие от create): прогон катится по существующему roster-у БЕЗ
-# provision-шагов. task_absent ассертит, что core.cloud.created (создание VM) и
-# core.soul.registered (барьер онбординга) в плане ОТСУТСТВУЮТ — у create_from_souls
-# нет ни include redis-provision.yml, ни секции provision. state-read-model
-# provisioned_vm_ids/sids/provider — константные дефолты ([] / '').
+# ★ ACCEPTANCE CRITERION (difference from create): the run rolls over an existing roster WITHOUT
+# provisioning steps. task_absent asserts that core.cloud.created (VM creation) and
+# core.soul.registered (onboarding barrier) are ABSENT from the plan — create_from_souls
+# has neither an include of redis-provision.yml nor a provision section. The state-read-model
+# provisioned_vm_ids/sids/provider — constant defaults ([] / '').
 #
-# Render-only, герметично. Диспетчер инклудит cluster.yml + sentinel.yml через
-# CONDITIONAL-INCLUDE (when: на include, orchestration.md §6 Вариант B): на sentinel-
-# прогоне cluster-ветка DROP-ается (group-drop), sentinel-ветка раскрывается. Деплой-тело
-# (redis-deploy-sentinel.yml) — service-level, то же, что у create.
+# Render-only, hermetic. The dispatcher includes cluster.yml + sentinel.yml via
+# CONDITIONAL-INCLUDE (when: on include, orchestration.md §6 Option B): on a sentinel
+# run the cluster branch is DROPPED (group-drop), the sentinel branch is expanded. The deploy body
+# (redis-deploy-sentinel.yml) — service-level, same as for create.
 name: sentinel deploy on existing roster without provision
 
 fixtures:
   default_destiny_source: "file://../../destiny/{name}"
-  # Порядок в YAML намеренно не отсортирован (3, 1, 2) — master-election сортирует по SID.
+  # Order in YAML is deliberately unsorted (3, 1, 2) — master election sorts by SID.
   hosts:
     - sid: node-3.example.com
       covens: [create_from_souls, redis]
@@ -37,8 +37,8 @@ fixtures:
   vault:
     secret/redis/create_from_souls:
       password: s3cr3t-redis-pass-create-from-souls
-    # ★ РЕДИЗАЙН default_admin (2026-06-30): default_admin — системный юзер
-    # внутрикластерного AUTH (auth_pass/PING шаги деплоя читают его по ветке users/<name>).
+    # ★ default_admin REDESIGN (2026-06-30): default_admin — system user for
+    # intra-cluster AUTH (auth_pass/PING deploy steps read it via the users/<name> branch).
     secret/redis/create_from_souls/users/default_admin:
       password: default-admin-secret-pass
     secret/redis/create_from_souls/users/replica:
@@ -85,8 +85,8 @@ fixtures:
 
 assert:
   task_present:
-    # ── sentinel destiny: redis.conf (sentinel-режим: НЕТ cluster-директив) ──
-    # render_context.self = первый по SID хост (node-1, host-инвариант apply.input).
+    # -- sentinel destiny: redis.conf (sentinel mode: NO cluster directives) --
+    # render_context.self = host first by SID (node-1, host invariant apply.input).
     - module: core.file.rendered
       params_subset:
         path: /etc/redis/redis.conf
@@ -107,10 +107,10 @@ assert:
               - /var/lib/redis/modules/redisearch.so
               - /var/lib/redis/modules/redistimeseries.so
             config:
-              # ★ РЕДИЗАЙН default_admin: replica→master AUTH (masteruser/
-              # masterauth) приходит ОБЫЧНЫМИ директивами config (sentinel
-              # deploy-body доливает их vault()-в-ячейке) → redis.conf range-ит
-              # их как любую директиву → статически переживают рестарт.
+              # ★ default_admin REDESIGN: replica->master AUTH (masteruser/
+              # masterauth) arrives as REGULAR config directives (the sentinel
+              # deploy-body fills them via vault()-in-cell) → redis.conf ranges over
+              # them like any directive → statically survives a restart.
               masteruser:       "default_admin"
               masterauth:       "default-admin-secret-pass"
               maxmemory:        "256mb"
@@ -132,27 +132,27 @@ assert:
           role: ""
           essence: {}
 
-    # ── REPLICAOF реплик (community.redis.replica) ──────────────────────────
-    # addr=127.0.0.1:6379 (per-host локальный инвариант), master_addr — master-election
-    # (первый по SID = node-1 = 10.0.0.1). Задача несёт where (рендерится только на
-    # репликах, master её НЕ несёт).
+    # -- REPLICAOF for replicas (community.redis.replica) --------------------
+    # addr=127.0.0.1:6379 (per-host local invariant), master_addr — master election
+    # (first by SID = node-1 = 10.0.0.1). The task carries where (renders only on
+    # replicas, master does NOT carry it).
     - module: community.redis.replica
       params_subset:
         addr: "127.0.0.1:6379"
         master_addr: "10.0.0.1:6379"
-        # ★ РЕДИЗАЙН default_admin: replica→master AUTH под default_admin.
+        # ★ default_admin REDESIGN: replica->master AUTH as default_admin.
         username: default_admin
         password: default-admin-secret-pass
 
-    # ── SENTINEL MONITOR reconcile (community.redis.sentinel) ───────────────
-    # monitor.ip — HOST-ИНВАРИАНТНЫЙ адрес master-а (master-election node-1). quorum=2
-    # (АВТО: size(3)/2+1). master_name=master (essence-дефолт).
+    # -- SENTINEL MONITOR reconcile (community.redis.sentinel) ---------------
+    # monitor.ip — HOST-INVARIANT master address (master election node-1). quorum=2
+    # (AUTO: size(3)/2+1). master_name=master (essence default).
     - module: community.redis.sentinel
       params_subset:
         addr: "127.0.0.1:26379"
         master_name: master
-        # ★ РЕДИЗАЙН default_admin: CONNECTION-AUTH (username/password) + мониторинг
-        # master (auth_user/auth_pass) под default_admin.
+        # ★ default_admin REDESIGN: CONNECTION-AUTH (username/password) + master
+        # monitoring (auth_user/auth_pass) as default_admin.
         username: default_admin
         password: default-admin-secret-pass
         auth_user: default_admin
@@ -167,10 +167,10 @@ assert:
           quorum: 2
 
   task_absent:
-    # ★ КРИТЕРИЙ create_from_souls: provision-шаги ОТСУТСТВУЮТ в плане. create_from_souls
-    # не инклудит redis-provision.yml и не несёт секции provision → ни создание VM
-    # (core.cloud.created), ни барьер онбординга (core.soul.registered) не эмитятся.
-    # Прогон катится по существующему roster-у. Это и есть отличие от create.
+    # ★ create_from_souls CRITERION: provisioning steps are ABSENT from the plan. create_from_souls
+    # doesn't include redis-provision.yml and doesn't carry a provision section → neither VM creation
+    # (core.cloud.created) nor the onboarding barrier (core.soul.registered) are emitted.
+    # The run rolls over an existing roster. That's exactly the difference from create.
     - module: core.cloud.created
     - module: core.soul.registered
 
@@ -208,8 +208,8 @@ assert:
     memory_mb: 0
     modules: [bloom, json, search, timeseries]
     sysctl_settings: {}
-    # ★ provision read-model: ВСЕГДА консервативный дефолт — create_from_souls не
-    # поднимает VM (отличие от create, где при enabled читается register.provision).
+    # ★ provision read-model: ALWAYS the conservative default — create_from_souls doesn't
+    # spin up a VM (unlike create, where register.provision is read when enabled).
     provisioned_vm_ids: []
     provisioned_sids: []
     provisioned_provider: ""

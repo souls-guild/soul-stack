@@ -1,45 +1,45 @@
-# tasks/main.yml — точка входа destiny dragonfly. Только include-список: логические
-# группы разнесены по соседним файлам, раскрываются inline ДО render (docs/destiny/
-# tasks.md §4 — within-destiny include раскрывается в плоский список). Видит ТОЛЬКО свой
-# input: (изоляция, ADR-009).
+# tasks/main.yml - destiny dragonfly entry point. Include-list only: logical
+# groups are split into sibling files, expanded inline BEFORE render (docs/destiny/
+# tasks.md §4 - within-destiny include is expanded into a flat list). Sees ONLY its own
+# input: (isolation, ADR-009).
 #
-# Per-host кирпич DragonFly (data-плоскость одного инстанса): install DragonFly + render
-# flagfile/users.acl/PEM + сервис + host-tuning. Конфиг приходит ГОТОВЫМ merged map-ом через
-# apply: input: config: — destiny ничего не сливает (merge делает scenario).
+# Per-host brick for DragonFly (data plane of a single instance): install DragonFly + render
+# flagfile/users.acl/PEM + service + host-tuning. Config arrives as a READY merged map via
+# apply: input: config: - destiny does not merge anything (merge is done by scenario).
 #
-# ★ DragonFly vs redis: структура копирует redis-main БЕЗ data-плоскостных излишеств —
-#   без modules.yml (DragonFly не грузит redis-модули .so) и без version-guard Redis 8+.
+# * DragonFly vs redis: structure mirrors redis-main WITHOUT data-plane extras -
+#   no modules.yml (DragonFly does not load redis .so modules) and no Redis 8+ version-guard.
 #
-# ★ SENTINEL — НЕ ЗДЕСЬ (рефактор «sentinel из destiny redis»): DragonFly не несёт
-#   redis-sentinel, а распределённый sentinel-демон полностью разворачивает destiny `redis`
-#   в режиме sentinel_only (deploy_redis=false). scenario сервиса dragonfly делает ВТОРОЙ
-#   apply:destiny:redis рядом с этим (две apply:destiny в одном сценарии, ADR-009). Поэтому
-#   sentinel.yml/sentinel-шаблоны/sentinel-input из ЭТОГО destiny УБРАНЫ (дубликат снят) —
-#   кирпич `dragonfly` отвечает строго за data-плоскость DragonFly.
+# * SENTINEL - NOT HERE (refactor "sentinel out of destiny redis"): DragonFly does not carry
+#   redis-sentinel; instead a distributed sentinel daemon deploys destiny `redis` in full
+#   in sentinel_only mode (deploy_redis=false). The dragonfly service scenario makes a SECOND
+#   apply:destiny:redis alongside this one (two apply:destiny in one scenario, ADR-009). Hence
+#   sentinel.yml/sentinel-templates/sentinel-input from THIS destiny are REMOVED (duplicate dropped) -
+#   the `dragonfly` brick is strictly responsible for the DragonFly data plane.
 #
-# Обзор конвейера (порядок include = порядок задач). Режим-гейт стоит НА include
-# (conditional-include, ADR-009 amendment): статический input-предикат на include-задаче
-# РЕАЛЬНО исключает группу из плана (render-phase group-drop), а не гасит её placeholder-
-# skip-ом. Поэтому выключенный include (server при deploy_dragonfly=false) ФИЗИЧЕСКИ
-# отсутствует. L0-кейсы ассертят presence-матчером (task_present/task_absent), которому
-# group-drop безопасен (позиционные индексы не важны).
+# Pipeline overview (include order = task order). The mode-gate sits ON the include
+# (conditional-include, ADR-009 amendment): a static input-predicate on the include-task
+# REALLY excludes the group from the plan (render-phase group-drop), rather than a placeholder
+# skip. So a disabled include (server when deploy_dragonfly=false) is PHYSICALLY
+# absent. L0-cases assert via presence matcher (task_present/task_absent), for which
+# group-drop is safe (positional indices don't matter).
 #
-#   install.yml  — установка DragonFly (диспетч по install.method: package distro-deb
-#                  dragonfly / binary upstream-tarball) + redis-tools (redis-cli для
-#                  health-gate / REPLICAOF плагином, DragonFly его не несёт). binary-ветка
-#                  несёт СВОЙ рестарт здесь (per-file линтер onchanges запрещает cross-file
-#                  register);
-#   server.yml   — data-плоскость dragonfly (gated deploy_dragonfly НА include): PEM →
-#                  users.acl → dragonfly.conf (flagfile) → core.service. deploy_dragonfly=false
-#                  → group-drop;
-#   extras.yml   — host-tuning (THP-юнит / logrotate / sysctl), все БЕЗУСЛОВНЫ;
+#   install.yml  - DragonFly install (dispatched by install.method: package distro-deb
+#                  dragonfly / binary upstream-tarball) + redis-tools (redis-cli for
+#                  health-gate / REPLICAOF plugin, DragonFly doesn't carry it). The binary branch
+#                  carries ITS OWN restart here (per-file linter forbids cross-file
+#                  register onchanges);
+#   server.yml   - dragonfly data plane (gated deploy_dragonfly ON include): PEM ->
+#                  users.acl -> dragonfly.conf (flagfile) -> core.service. deploy_dragonfly=false
+#                  -> group-drop;
+#   extras.yml   - host-tuning (THP-unit / logrotate / sysctl), all UNCONDITIONAL;
 #
-# Гейты include — статические input-предикаты (conditional-include требует input./essence./
-# incarnation./vars.; register./soulprint. на include запрещены). has()-guard в каждом —
-# render-safety при absent dict (tls в plaintext-режиме).
+# Include gates are static input-predicates (conditional-include requires input./essence./
+# incarnation./vars.; register./soulprint. on include is forbidden). has()-guard in each one -
+# render-safety for an absent dict (tls in plaintext mode).
 #
-# Явных daemon-reload-шагов НЕТ: core.service (daemon_reload: auto, default) сам перечитывает
-# конфигурацию systemd при смене unit-файла ПЕРЕД start/restart.
+# No explicit daemon-reload steps: core.service (daemon_reload: auto, default) itself rereads
+# the systemd configuration when the unit file changes BEFORE start/restart.
 
 - include: install.yml
 

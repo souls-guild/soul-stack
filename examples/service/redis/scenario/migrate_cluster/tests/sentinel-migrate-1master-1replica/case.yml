@@ -1,40 +1,47 @@
-# L0-испытание migrate_cluster в режиме sentinel (S1-пилот, happy-path, existing-таргет).
-# Multi-host roster из 2 хостов (replicas_per_master=1 → топология 1+1=2). Master-election:
-# первый по SID (node-1) = master нового кластера; node-2 = реплика. Внешний источник —
-# старый кластер по адресу 10.9.0.1:6379 (source.hosts[0]).
+# L0 test of migrate_cluster in sentinel mode (S1 pilot, happy-path, existing target).
+# Multi-host roster of 2 hosts (replicas_per_master=1 -> topology 1+1=2). Master
+# election: first by SID (node-1) = master of the new cluster; node-2 = replica.
+# External source is the old cluster at 10.9.0.1:6379 (source.hosts[0]).
 #
-# Render-only, герметично. Диспетчер migrate_cluster инклудит cluster.yml + sentinel.yml
-# через CONDITIONAL-INCLUDE (when: на include): на sentinel-прогоне cluster-ветка
-# group-drop (статически-ложный when), sentinel.yml раскрывается. sentinel.yml инклудит
-# ОБЩЕЕ деплой-тело service-level (scenario/redis-deploy-sentinel.yml, то же, что делит
-# create/sentinel.yml) + добавляет 2 шага миграции.
+# Render-only, hermetic. The migrate_cluster dispatcher includes cluster.yml +
+# sentinel.yml via CONDITIONAL-INCLUDE (when: on include): on the sentinel run
+# the cluster branch is a group-drop (statically-false when), sentinel.yml
+# expands. sentinel.yml includes the SHARED service-level deploy body
+# (scenario/redis-deploy-sentinel.yml, the same one create/sentinel.yml shares)
+# + adds 2 migration steps.
 #
-# Что ассертим (критерий приёмки слайса):
-#   1. deploy-задачи (из redis-deploy-sentinel.yml = деплой нового кластера): redis.conf
-#      render, ВНУТРИ-кластерный community.redis.replica (where master-excluded) — кластер
-#      реально поднимается (миграция = create + заливка извне).
-#   1b. ★ SPLIT-BRAIN-ФИКС: SENTINEL MONITOR (community.redis.sentinel) НЕ исполняется в
-#       миграции (task_absent). Деплой-тело проксирует compute.sentinel_monitor_now в task-var
-#       и гейтит шаг 4 на when: vars.sentinel_monitor_now; у migrate_cluster=false → static-when
-#       placeholder-skip (Params=nil) → presence-матчер по нему НЕ срабатывает (skip ≠
-#       присутствие). sentinel-демоны при этом поднимаются (шаг 1), но команду MONITOR НЕ дают:
-#       пока новый master реплицирует внешний источник, он в role:slave — ранний MONITOR
-#       инициировал бы failover. Фактический MONITOR делает detach_source ПОСЛЕ
-#       REPLICAOF NO ONE (см. detach-кейс sentinel-detach-source).
-#   2. ★ МИГРАЦИЯ: community.redis.replica с source_external:true, master_addr=внешний
-#      источник (10.9.0.1:6379), master_password = vault(source.password_ref). ОТЛИЧАЕТСЯ
-#      от внутрикластерного replica по master_addr/source_external (presence дизамбигуирует).
-#   3. ★ offset-gate: community.redis.offset-synced, source_addr=внешний источник,
-#      lag_threshold=0 (default verify).
-#   4. state_changes: create-набор + seeded_from {source_endpoints:[источник], detached:false}.
+# What we assert (slice acceptance criterion):
+#   1. deploy tasks (from redis-deploy-sentinel.yml = deploying the new
+#      cluster): redis.conf render, IN-cluster community.redis.replica (where
+#      master-excluded) - the cluster is actually raised (migration = create +
+#      seeding from outside).
+#   1b. * SPLIT-BRAIN FIX: SENTINEL MONITOR (community.redis.sentinel) does NOT
+#       execute during migration (task_absent). The deploy body proxies
+#       compute.sentinel_monitor_now into a task-var and gates step 4 on
+#       when: vars.sentinel_monitor_now; for migrate_cluster=false ->
+#       static-when placeholder-skip (Params=nil) -> the presence matcher does
+#       NOT fire on it (skip != present). sentinel daemons still come up
+#       (step 1), but the MONITOR command isn't issued: while the new master
+#       replicates the external source, it's in role:slave - an early MONITOR
+#       would trigger a failover. The actual MONITOR is issued by
+#       detach_source AFTER REPLICAOF NO ONE (see the detach case
+#       sentinel-detach-source).
+#   2. * MIGRATION: community.redis.replica with source_external:true,
+#      master_addr=external source (10.9.0.1:6379), master_password =
+#      vault(source.password_ref). DIFFERS from the in-cluster replica by
+#      master_addr/source_external (presence disambiguates).
+#   3. * offset-gate: community.redis.offset-synced, source_addr=external
+#      source, lag_threshold=0 (default verify).
+#   4. state_changes: create set + seeded_from {source_endpoints:[source], detached:false}.
 #
-# ВНИМАНИЕ L0-ограничение (как sentinel-create): apply.input host-инвариантен в пилоте
-# (резолвится на ПЕРВОМ targeted-хосте) → render_context.self в destiny = node-1 (master).
+# NOTE L0 limitation (like sentinel-create): apply.input is host-invariant in
+# the pilot (resolved on the FIRST targeted host) -> render_context.self in
+# destiny = node-1 (master).
 name: sentinel migrate raises a new cluster and seeds it from an external source
 
 fixtures:
   default_destiny_source: "file://../../destiny/{name}"
-  # Порядок намеренно не отсортирован (2, 1) — harness и master-election сортируют по SID.
+  # Order deliberately unsorted (2, 1) - the harness and master-election sort by SID.
   hosts:
     - sid: node-2.example.com
       covens: [migrate_cluster, redis]
@@ -49,8 +56,8 @@ fixtures:
   vault:
     secret/redis/migrate_cluster:
       password: s3cr3t-redis-pass-migrate
-    # ★ РЕДИЗАЙН default_admin (2026-06-30): default_admin — системный юзер
-    # внутрикластерного AUTH (auth_pass/PING шаги деплоя читают его по ветке users/<name>).
+    # * default_admin REDESIGN (2026-06-30): default_admin is the system user
+    # for in-cluster AUTH (auth_pass/PING deploy steps read it via the users/<name> branch).
     secret/redis/migrate_cluster/users/default_admin:
       password: default-admin-secret-pass
     secret/redis/migrate_cluster/users/replica:
@@ -61,23 +68,27 @@ fixtures:
       password: sentinel-sys-secret-pass
     secret/redis/migrate_cluster/users/haproxy:
       password: haproxy-sys-secret-pass
-    # ★ Учётка ВНЕШНЕГО источника под pattern-guard secret/redis/migrate/*. Читается
-    # авторским каналом vault(input.source.password_ref) — password_ref = ниже в input.
+    # * Credentials of the EXTERNAL source under the pattern-guard
+    # secret/redis/migrate/*. Read via the author channel
+    # vault(input.source.password_ref) - password_ref = below in input.
     secret/redis/migrate/oldcluster:
       password: old-cluster-source-pass
   essence:
-    # install_method — в essence (author-context): способ установки НЕ operator-input
-    # (covenant.compute.install читает default(essence.install_method, 'binary')). package
-    # явно — distro-пин =version, как проверял кейс до тиража covenant (поле переехало
-    # input→essence вместе с migrate, догоняя редизайн create 2026-06-28).
+    # install_method is in essence (author-context): install method is NOT
+    # operator-input (covenant.compute.install reads
+    # default(essence.install_method, 'binary')). package explicitly - distro
+    # pin =version, as the case checked before the covenant rollout (the field
+    # moved input->essence together with migrate, catching up with the
+    # create redesign 2026-06-28).
     install_method: package
     redis_type: sentinel
     sentinel_master_name: master
     modules_base_url: "https://artifacts.example.com/redis/modules"
     memory_reserve_percent: 75
-    # ★ Редизайн: подложка per-master sentinel-директив (compute.sentinel_directives /
-    # state.redis_sentinel.master_settings). Сюда переехали дефолты удалённых полей
-    # sentinel_down_after_ms=5000 / sentinel_failover_timeout_ms=60000.
+    # * Redesign: substrate for per-master sentinel directives
+    # (compute.sentinel_directives / state.redis_sentinel.master_settings).
+    # Defaults for the removed fields sentinel_down_after_ms=5000 /
+    # sentinel_failover_timeout_ms=60000 moved here.
     sentinel_master_defaults:
       down-after-milliseconds: "5000"
       failover-timeout: "60000"
@@ -103,28 +114,29 @@ fixtures:
       haproxy:    "-@all +auth +client|getname +client|id +client|setname +command +hello +ping +role +sentinel|get-master-addr-by-name +sentinel|master +sentinel|myid +sentinel|replicas +sentinel|sentinels"
   input:
     redis_type: sentinel
-    # ★ version — enum выкаченных в Nexus сборок (редизайн). 7.4.1 (мажор 7 < 8 →
-    # version-gate модулей не активен, .so грузятся). install_method переехал в essence
-    # (выше) — НЕ operator-input после тиража covenant.
+    # * version - enum of builds rolled out to Nexus (redesign). 7.4.1 (major
+    # 7 < 8 -> module version-gate not active, .so's load). install_method
+    # moved to essence (above) - NOT operator-input after the covenant rollout.
     version: "7.4.1"
     replicas_per_master: 1
-    # connection_mode опущен → plain (дефолт): TLS off, plain-порт. sentinel_settings/
-    # sentinel_master_settings опущены → compute.sentinel_directives = essence-дефолты
+    # connection_mode omitted -> plain (default): TLS off, plain port.
+    # sentinel_settings/sentinel_master_settings omitted ->
+    # compute.sentinel_directives = essence defaults
     # (down-after-milliseconds=5000/failover-timeout=60000).
-    # ★ Внешний источник: координаты + Vault-ПУТЬ к паролю (под pattern-guard).
+    # * External source: coordinates + Vault PATH to the password (under pattern-guard).
     source:
       hosts:
         - "10.9.0.1:6379"
         - "10.9.0.2:6379"
       password_ref: "secret/redis/migrate/oldcluster#password"
       tls: false
-    # verify опущен → lag_threshold default 0, skip_checksum default false.
+    # verify omitted -> lag_threshold default 0, skip_checksum default false.
 
 assert:
   task_present:
-    # ── redis-deploy-sentinel.yml (деплой нового кластера): redis.conf render ─────
-    # render_context.self = node-1 (master, host-инвариант apply.input). Дизамбигуатор
-    # от users.acl/sentinel.conf/hardening (тот же core.file.rendered) — path.
+    # -- redis-deploy-sentinel.yml (deploying the new cluster): redis.conf render --
+    # render_context.self = node-1 (master, apply.input host-invariant).
+    # Disambiguator from users.acl/sentinel.conf/hardening (same core.file.rendered) - path.
     - module: core.file.rendered
       params_subset:
         path: /etc/redis/redis.conf
@@ -145,10 +157,11 @@ assert:
               - /var/lib/redis/modules/redisearch.so
               - /var/lib/redis/modules/redistimeseries.so
             config:
-              # ★ РЕДИЗАЙН default_admin: replica→master AUTH (masteruser/
-              # masterauth) приходит ОБЫЧНЫМИ директивами config (sentinel
-              # deploy-body доливает их vault()-в-ячейке) → redis.conf range-ит
-              # их как любую директиву → статически переживают рестарт.
+              # * default_admin REDESIGN: replica->master AUTH (masteruser/
+              # masterauth) arrives as ORDINARY config directives (the
+              # sentinel deploy body fills them in via vault()-in-cell) ->
+              # redis.conf ranges over them like any directive -> statically
+              # survives restart.
               masteruser:       "default_admin"
               masterauth:       "default-admin-secret-pass"
               maxmemory:        "256mb"
@@ -170,61 +183,68 @@ assert:
           role: ""
           essence: {}
 
-    # ── deploy-тело: ВНУТРИ-кластерный REPLICAOF (community.redis.replica) ───────
-    # addr=127.0.0.1:6379 (per-host локальный), master_addr=10.0.0.1:6379 (master-
-    # election node-1). where: master-excluded → только на node-2 (реплике). ОТЛИЧАЕТСЯ
-    # от source-replica (шаг ниже) по master_addr (10.0.0.1 ВНУТРИ vs 10.9.0.1 ВНЕШНИЙ)
-    # и отсутствию source_external — presence дизамбигуирует обе по params_subset.
+    # -- deploy body: IN-cluster REPLICAOF (community.redis.replica) --------------
+    # addr=127.0.0.1:6379 (per-host local), master_addr=10.0.0.1:6379
+    # (master-election node-1). where: master-excluded -> only on node-2 (the
+    # replica). DIFFERS from source-replica (step below) by master_addr
+    # (10.0.0.1 INTERNAL vs 10.9.0.1 EXTERNAL) and lack of source_external -
+    # presence disambiguates both by params_subset.
     - module: community.redis.replica
       params_subset:
         addr: "127.0.0.1:6379"
         master_addr: "10.0.0.1:6379"
-        # ★ РЕДИЗАЙН default_admin: внутрикластерная replica→master AUTH под default_admin.
+        # * default_admin REDESIGN: in-cluster replica->master AUTH under default_admin.
         username: default_admin
         password: default-admin-secret-pass
 
-    # ── МИГРАЦИЯ: REPLICAOF на ВНЕШНИЙ источник (community.redis.replica, source_external) ──
-    # run_once на node-1 (master нового кластера). master_addr=10.9.0.1:6379 (source.hosts[0]),
-    # source_external:true, master_password = vault(source.password_ref). Дизамбигуатор от
-    # внутрикластерного replica — source_external:true + master_addr=внешний.
+    # -- MIGRATION: REPLICAOF to the EXTERNAL source (community.redis.replica, source_external) --
+    # run_once on node-1 (master of the new cluster). master_addr=10.9.0.1:6379
+    # (source.hosts[0]), source_external:true, master_password =
+    # vault(source.password_ref). Disambiguator from the in-cluster replica -
+    # source_external:true + master_addr=external.
     - module: community.redis.replica
       params_subset:
         addr: "127.0.0.1:6379"
         master_addr: "10.9.0.1:6379"
         source_external: true
-        # ★ РЕДИЗАЙН default_admin: LOCAL-коннект под default_admin (username/password);
-        # master_username/master_password — учётка ВНЕШНЕГО источника (его requirepass).
+        # * default_admin REDESIGN: LOCAL connection under default_admin
+        # (username/password); master_username/master_password are the
+        # credentials of the EXTERNAL source (its requirepass).
         username: default_admin
         password: default-admin-secret-pass
         master_password: old-cluster-source-pass
         master_tls: false
 
-    # ── МИГРАЦИЯ: offset-gate (community.redis.offset-synced) ────────────────────
-    # run_once на node-1. source_addr=10.9.0.1:6379 (внешний), lag_threshold=0 (default
-    # verify), skip_checksum=false. source_password = vault(source.password_ref).
+    # -- MIGRATION: offset-gate (community.redis.offset-synced) -------------------
+    # run_once on node-1. source_addr=10.9.0.1:6379 (external),
+    # lag_threshold=0 (default verify), skip_checksum=false.
+    # source_password = vault(source.password_ref).
     - module: community.redis.offset-synced
       params_subset:
         addr: "127.0.0.1:6379"
         source_addr: "10.9.0.1:6379"
-        # ★ РЕДИЗАЙН default_admin: LOCAL-коннект под default_admin; source_password — источник.
+        # * default_admin REDESIGN: LOCAL connection under default_admin; source_password is the source.
         username: default_admin
         password: default-admin-secret-pass
         source_password: old-cluster-source-pass
         lag_threshold: 0
         skip_checksum: false
 
-  # ★ SPLIT-BRAIN-ФИКС (1b): SENTINEL MONITOR НЕ исполняется в миграции. Деплой-тело гейтит
-  # шаг 4 на when: vars.sentinel_monitor_now (=compute.sentinel_monitor_now=false у
-  # migrate_cluster) → static-when placeholder-skip (Params=nil) → presence-матчер по нему НЕ
-  # срабатывает (skip ≠ присутствие). Доказывает, что новый master НЕ мониторится sentinel,
-  # пока реплицирует внешний источник (иначе failover → split-brain). MONITOR переехал в
-  # detach_source (sentinel-detach-source кейс).
+  # * SPLIT-BRAIN FIX (1b): SENTINEL MONITOR does NOT execute during
+  # migration. The deploy body gates step 4 on when:
+  # vars.sentinel_monitor_now (=compute.sentinel_monitor_now=false for
+  # migrate_cluster) -> static-when placeholder-skip (Params=nil) -> the
+  # presence matcher does NOT fire on it (skip != present). Proves that the
+  # new master is NOT monitored by sentinel while it replicates the external
+  # source (otherwise failover -> split-brain). MONITOR moved to
+  # detach_source (sentinel-detach-source case).
   task_absent:
     - module: community.redis.sentinel
 
-  # create-набор state + seed-source read-model. redis_config БЕЗ cluster-директив
-  # (sentinel). seeded_from: source_endpoints = source.hosts ЦЕЛИКОМ, detached:false
-  # (источник ещё жив — отцепит detach_source). БЕЗ timestamp (детерминизм L0).
+  # create set state + seed-source read-model. redis_config WITHOUT cluster
+  # directives (sentinel). seeded_from: source_endpoints = source.hosts IN
+  # FULL, detached:false (source still alive - detach_source will detach it).
+  # WITHOUT timestamp (L0 determinism).
   state_changes:
     redis_type: sentinel
     redis_version: "7.4.1"
@@ -237,10 +257,11 @@ assert:
       appendonly:       "no"
     redis_users: []
     redis_hosts: []
-    # ★ Редизайн: redis_sentinel несёт ОБОБЩЁННЫЕ map-ы (master_settings/settings) вместо
-    # именованных down_after_ms/failover_timeout_ms. master_settings = essence-дефолты
-    # (input.sentinel_master_settings не задан) → down-after-milliseconds=5000/
-    # failover-timeout=60000; settings={} (sentinel_settings не задан). quorum=0 (АВТО).
+    # * Redesign: redis_sentinel carries GENERALIZED maps (master_settings/settings)
+    # instead of named down_after_ms/failover_timeout_ms. master_settings =
+    # essence defaults (input.sentinel_master_settings not set) ->
+    # down-after-milliseconds=5000/failover-timeout=60000; settings={}
+    # (sentinel_settings not set). quorum=0 (AUTO).
     redis_sentinel:
       master_name: master
       quorum: 0
@@ -253,7 +274,7 @@ assert:
     shards: 0
     persistence: rdb
     maxmemory_policy: ""
-    # connection_mode=plain (default, TLS off); io_threads=0 (default, директива не пишется).
+    # connection_mode=plain (default, TLS off); io_threads=0 (default, directive not written).
     connection_mode: plain
     io_threads: 0
     tls:
@@ -266,9 +287,10 @@ assert:
     memory_mb: 0
     modules: [bloom, json, search, timeseries]
     sysctl_settings: {}
-    # ★ seed-source read-model (v10): откуда мигрировали + detached:false + ССЫЛКИ на
-    # учётку источника. source_password_ref = input.source.password_ref (персист для
-    # detach-gate); source_tls_ca_ref='' (input.source.tls_ca_ref не задан, tls:false).
+    # * seed-source read-model (v10): where migrated from + detached:false +
+    # REFS to the source credentials. source_password_ref =
+    # input.source.password_ref (persisted for detach-gate);
+    # source_tls_ca_ref='' (input.source.tls_ca_ref not set, tls:false).
     seeded_from:
       source_endpoints:
         - "10.9.0.1:6379"

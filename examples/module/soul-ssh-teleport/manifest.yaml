@@ -1,26 +1,26 @@
 kind: ssh_provider
-protocol_version: 1                    # compat-флаг plugin-протокола (ADR-020(c))
-namespace: ssh                         # коллекция SshProvider в этом репо
+protocol_version: 1                    # plugin-protocol compat flag (ADR-020(c))
+namespace: ssh                         # SshProvider collection in this repo
 name: teleport
 
-# Closed enum по ADR-020(f). Teleport-провайдер:
-#   network_outbound — gRPC-вызовы Teleport Auth API (через Teleport-proxy).
-# vault_access НЕ нужен — Teleport не Vault. Аутентификация плагина в Teleport
-# идёт через identity-file (либо tbot-сокет; PM-decision creds-flow=B: плагин
-# сам аутентифицируется в Teleport через identity-file/profile/credentials в
-# env). Эти артефакты резолвятся вне Vault-канала.
+# Closed enum per ADR-020(f). Teleport provider:
+#   network_outbound — gRPC calls to the Teleport Auth API (via Teleport proxy).
+# vault_access is NOT needed — Teleport is not Vault. The plugin authenticates
+# to Teleport via identity-file (or tbot socket; PM decision creds-flow=B: the
+# plugin authenticates to Teleport itself via identity-file/profile/credentials
+# in env). These artifacts are resolved outside the Vault channel.
 required_capabilities:
   - network_outbound
 
-# SshProvider не трогает локальные ресурсы host-а (cert живёт в памяти
-# keeper.push на время сессии — Keeper-ephemeral режим, см. docs/keeper/push.md).
+# SshProvider doesn't touch local host resources (the cert lives in memory
+# during the keeper.push session — Keeper-ephemeral mode, see docs/keeper/push.md).
 side_effects: []
 
 spec:
-  # provider_kind — открытая строка (ADR-020(e)); convention из docs/keeper/plugins.md.
+  # provider_kind — open string (ADR-020(e)); convention from docs/keeper/plugins.md.
   provider_kind: teleport
-  # JSON Schema draft 2020-12 (формат для kind: ssh_provider — см.
-  # docs/keeper/plugins.md → spec.params_schema). Embedded из schema.json.
+  # JSON Schema draft 2020-12 (format for kind: ssh_provider — see
+  # docs/keeper/plugins.md → spec.params_schema). Embedded from schema.json.
   params_schema:
     type: object
     required: [proxy_addr]
@@ -28,48 +28,48 @@ spec:
       proxy_addr:
         type: string
         description: >-
-          Teleport proxy endpoint (`host:port`, обычно :3023 для SSH-proxy).
-          Едет в SignReply.proxy_jump для последующего использования
-          keeper.push (dispatcher proxy_jump support — S3, см. docs/keeper/push.md).
+          Teleport proxy endpoint (`host:port`, usually :3023 for SSH proxy).
+          Goes into SignReply.proxy_jump for later use by
+          keeper.push (dispatcher proxy_jump support — S3, see docs/keeper/push.md).
         examples: ["teleport.example.com:3023", "tp-proxy.internal:3023"]
       cluster_name:
         type: string
         description: >-
-          Имя Teleport-кластера (опц.). Используется при multi-cluster
-          конфигурации Teleport (trust между root и leaf cluster-ами).
+          Teleport cluster name (opt.). Used with a multi-cluster
+          Teleport configuration (trust between root and leaf clusters).
       identity_file:
         type: string
         description: >-
-          Путь к Teleport identity-file (обычно выпускается `tctl auth sign`
-          или `tbot`). Альтернатива — tbot_socket. Один из двух источников
-          обязателен.
+          Path to the Teleport identity-file (usually issued by `tctl auth sign`
+          or `tbot`). Alternative — tbot_socket. One of the two sources is
+          required.
       tbot_socket:
         type: string
         description: >-
-          Путь к Unix-сокету `tbot`-демона, если используется (renewable
-          credentials без identity-file на диске). Взаимоисключающе с
+          Path to the `tbot` daemon's Unix socket, if used (renewable
+          credentials without an identity-file on disk). Mutually exclusive with
           identity_file (oneOf).
       roles:
         type: array
         description: >-
-          Список Teleport-ролей, под которыми запрашиваются сертификаты для
-          конечного пользователя. Пустой список = роли по умолчанию,
-          назначенные identity-file/tbot-bot-у.
+          List of Teleport roles under which certificates for the end user
+          are requested. Empty list = default roles assigned to the
+          identity-file/tbot-bot.
         items: { type: string }
       valid_principals:
         type: array
         description: >-
-          Allowlist principal-ов (Linux-пользователей), которые плагин
-          разрешает класть в подписанный cert. Пустой список = принимать
-          любой `req.user` (если Teleport-роль это разрешает). Жёсткое
-          ограничение для production.
+          Allowlist of principals (Linux users) that the plugin allows
+          to place in the signed cert. Empty list = accept any
+          `req.user` (if the Teleport role allows it). Hard
+          restriction for production.
         items: { type: string }
       deny:
         type: array
         description: >-
-          Deny-list пар (host, user); по умолчанию провайдер allow-all
-          (dev/test). Каждая запись — `{host?, user?}`; пустое поле = wildcard
-          по этому измерению (симметрично soul-ssh-static / soul-ssh-vault).
+          Deny-list of (host, user) pairs; the provider is allow-all by
+          default (dev/test). Each entry — `{host?, user?}`; an empty field = wildcard
+          on that dimension (symmetric with soul-ssh-static / soul-ssh-vault).
         items:
           type: object
           properties:

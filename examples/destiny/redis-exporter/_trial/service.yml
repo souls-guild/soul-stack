@@ -1,15 +1,15 @@
-# service.yml L0-обёртки destiny redis-exporter (Trial, ADR-023).
+# service.yml of the L0 wrapper for destiny redis-exporter (Trial, ADR-023).
 #
-# Обёртка не настоящий сервис: единственная роль — дать standalone destiny
-# redis-exporter render-only L0-проверку через scenario apply:destiny. Резолв
-# apply:destiny зеркалит ПРОД (slice A): name → service.yml::destiny[] + URL из
-# default_destiny_source (case.yml). Поэтому даже обёртке нужен service.yml с
-# объявленной зависимостью.
+# The wrapper is not a real service: its only role is to give standalone destiny
+# redis-exporter a render-only L0 check via scenario apply:destiny. The
+# apply:destiny resolve mirrors PROD (slice A): name -> service.yml::destiny[] + URL from
+# default_destiny_source (case.yml). So even the wrapper needs a service.yml with
+# a declared dependency.
 name: trial-redis-exporter
 state_schema_version: 1
 description: >-
-  L0-харнесс destiny redis-exporter (ADR-023). Не сервис — scenario-обёртка под
-  render-only Trial. state_schema здесь номинальный (Trial L0 его не ассертит).
+  L0 harness for destiny redis-exporter (ADR-023). Not a service - a scenario wrapper for
+  render-only Trial. state_schema here is nominal (Trial L0 does not assert it).
 
 state_schema:
   type: object

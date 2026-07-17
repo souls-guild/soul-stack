@@ -1,9 +1,9 @@
 name: seeded-from-default-back-compat
 description: >
-  Инкарнация без seeded_from (обычный create, не миграция с внешнего кластера) →
-  консервативный default {source_endpoints: [], detached: false}. has()-guard
-  back-compat для отсутствующего ключа (зеркало 007_to_008 provisioned_sids,
-  но guard на ВЕСЬ вложенный объект).
+  An incarnation without seeded_from (a plain create, not a migration from an
+  external cluster) -> conservative default {source_endpoints: [], detached:
+  false}. has()-guard back-compat for a missing key (mirrors 007_to_008
+  provisioned_sids, but the guard covers the WHOLE nested object).
 
 state_before:
   redis_type: "sentinel"

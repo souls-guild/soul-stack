@@ -1,184 +1,184 @@
-# Baseline-essence сервиса dragonfly (подложка автора, концепция defaults роли). Оператор
-# переопределяет в spec инкарнации; на L0-прогоне ключевые значения дублируются в fixtures
-# кейса.
+# Baseline essence of the dragonfly service (author substrate, role-defaults concept). Operator
+# overrides in incarnation spec; on the L0 run key values are duplicated in fixtures
+# of the case.
 #
-# Это СЛОЙ ТРАНСЛЯЦИИ простого ввода оператора: данные-таблицы (memory_reserve_percent) и
-# merge-подложка df_config живут здесь, scenario create сливает их с вводом через merge()
-# (templating §2.3). НИЧЕГО из трансляции не уходит в плагин — она нужна только render-у
-# dragonfly.conf at-create (источник истины).
+# This is a TRANSLATION LAYER of simple operator input: data tables (memory_reserve_percent) and
+# the df_config merge-substrate live here, scenario create merges them with input via merge()
+# (templating §2.3). NOTHING from the translation leaks into the plugin — it's only needed for the
+# dragonfly.conf render at-create (source of truth).
 
-# Логическое имя monitored master в Sentinel (директива sentinel.conf SENTINEL MONITOR +
-# community.redis.sentinel master_name). author-context, оператор переопределяет в
-# spec.essence. Дефолт `master`.
+# Logical name of the monitored master in Sentinel (directive sentinel.conf SENTINEL MONITOR +
+# community.redis.sentinel master_name). author-context, operator overrides in
+# spec.essence. Default `master`.
 sentinel_master_name: master
 
-# ── cloud-provision defaults (ADR-061, Вариант A) ───────────────────────────────
-# Фоллбэки для input.provision.* — provision-тело (dragonfly-provision.yml) читает их как
-# default(input.provision.X, essence.provision_X). provision ВКЛЮЧЁН по умолчанию (default-on,
-# решение пользователя 2026-07-01: DragonFly cloud-provision по образцу redis) — оператор
-# обычно НЕ задаёт provider/profile в Run-форме (секция provision скрыта), берутся эти дефолты.
-# ★ TODO: prod/dev provider switch (ENV keeper / Coven-overlay) — отдельный ADR. Пока ОДНА
-# статичная пара provider/profile (прод), переключение окружения НЕ реализовано (заглушка под
-# будущую развилку, симметрия redis essence).
+# ── cloud-provision defaults (ADR-061, Option A) ───────────────────────────────
+# Fallbacks for input.provision.* — the provision body (dragonfly-provision.yml) reads them as
+# default(input.provision.X, essence.provision_X). provision is ENABLED by default (default-on,
+# user decision 2026-07-01: DragonFly cloud-provision modeled on redis) — operator
+# usually does NOT set provider/profile in the Run form (provision section hidden), these defaults are used.
+# ★ TODO: prod/dev provider switch (ENV keeper / Coven-overlay) — separate ADR. For now ONE
+# static provider/profile pair (prod), environment switching is NOT implemented (a stub for a
+# future fork, symmetric to redis essence).
 #
-# ★ profile = redis-debian-12 (ПЕРЕИСПОЛЬЗОВАН из redis, НЕ отдельный dragonfly-профиль):
-# VM-профиль — это ресурсы/образ/сеть VM в реестре profiles (managed в Postgres), НЕ
-# сервис-специфичный конфиг. DragonFly — тот же класс in-memory-store на том же Debian 12,
-# что redis → generic debian-12-профиль подходит без адаптации. Заведение отдельной
-# dragonfly-debian-12-записи в реестре не оправдано (дубль профиля без отличий). Оператор
-# переопределяет profile в spec.essence, если под DragonFly нужен иной sizing/образ.
+# ★ profile = redis-debian-12 (REUSED from redis, NOT a separate dragonfly profile):
+# a VM profile is the resources/image/network of a VM in the profiles registry (managed in Postgres), NOT
+# service-specific config. DragonFly is the same class of in-memory-store on the same Debian 12
+# as redis → the generic debian-12 profile fits without adaptation. Creating a separate
+# dragonfly-debian-12 entry in the registry is not justified (a profile duplicate with no differences). Operator
+# overrides profile in spec.essence if DragonFly needs a different sizing/image.
 provision_provider: wb-prod
 provision_profile:  redis-debian-12
-# Верхняя граница ожидания онбординга созданных VM (барьер await_online, core.soul.registered
-# refresh_soulprint; форма <N>{s|m|h}). Фоллбэк для input.provision.await_timeout.
+# Upper bound on waiting for onboarding of created VMs (await_online barrier, core.soul.registered
+# refresh_soulprint; form <N>{s|m|h}). Fallback for input.provision.await_timeout.
 provision_await_timeout: "8m"
-# Имя SshProvider-плагина для доставки per-VM bootstrap-токена по SSH (core.bootstrap.delivered).
+# Name of the SshProvider plugin for delivering the per-VM bootstrap token over SSH (core.bootstrap.delivered).
 provision_ssh_provider: teleport
-# Потолок ожидания появления свежесозданной VM в Teleport перед доставкой токена
-# (core.bootstrap.delivered, transport=teleport, retry-до-join; форма <N>{s|m|h}).
-# fail-fast: VM обычно online ~5m (запас x2), большой timeout маскирует провал enroll.
-# Фоллбэк для input.provision.join_wait_timeout.
+# Ceiling for waiting for a freshly created VM to appear in Teleport before delivering the token
+# (core.bootstrap.delivered, transport=teleport, retry-until-join; form <N>{s|m|h}).
+# fail-fast: a VM is usually online in ~5m (x2 margin), a large timeout masks an enroll failure.
+# Fallback for input.provision.join_wait_timeout.
 provision_join_wait_timeout: "10m"
 
-# ── Обязательный мониторинг data-плоскости: node_exporter (Слайс II, ADR-024) ────
-# create БЕЗУСЛОВНО ставит node_exporter (метрики хоста) на КАЖДЫЙ хост incarnation
-# (ПОСЛЕ deploy-ветки). ★ node-exporter-ONLY: DragonFly отдаёт СВОИ метрики нативно
-# (встроенный prometheus-эндпоинт) → data-plane exporter (аналог redis_exporter) НЕ нужен.
-# Версия/порт — author-context (НЕ operator-input): оператор переопределяет в spec.essence.
-# compute гонит их в apply.input destiny node-exporter; arch destiny берёт сама из
+# ── Mandatory data-plane monitoring: node_exporter (Slice II, ADR-024) ────
+# create UNCONDITIONALLY installs node_exporter (host metrics) on EVERY incarnation host
+# (AFTER the deploy branch). ★ node-exporter-ONLY: DragonFly exposes ITS OWN metrics natively
+# (built-in prometheus endpoint) → a data-plane exporter (analog of redis_exporter) is NOT needed.
+# Version/port — author-context (NOT operator-input): operator overrides in spec.essence.
+# compute pushes them into apply.input of destiny node-exporter; arch destiny takes it itself from
 # soulprint.self.os.arch.
 node_exporter_version: "1.8.2"
 node_exporter_listen:  ":9100"
-# Корень загрузки релизов node_exporter — WB Nexus raw-proxy (зеркалит github-путь 1:1).
-# Не-WB оператор переопределяет в spec.essence (или убирает ключ — default destiny = GitHub).
+# Root for downloading node_exporter releases — WB Nexus raw-proxy (mirrors the github path 1:1).
+# Non-WB operator overrides in spec.essence (or removes the key — default destiny = GitHub).
 node_exporter_base_url: "https://nexus-proxy.wb.ru/repository/raw-proxy-github/prometheus/node_exporter/releases/download"
-# SSRF-guard opt-out: base_url выше — WB Nexus, резолвится в private-IP. Публичный-mirror — false.
+# SSRF-guard opt-out: base_url above is WB Nexus, resolves to a private IP. Public mirror — false.
 node_exporter_allow_private: true
 
-# ── Обязательный log-shipping data-плоскости: Vector (Слайс V-I, ADR-067) ─────────
-# create БЕЗУСЛОВНО ставит vector (агент отгрузки логов) на КАЖДЫЙ хост (ПОСЛЕ deploy и
-# экспортера). ДОПОЛНЯЕТ node_exporter (метрики, pull) лог-плоскостью (логи, push). Версии/
-# checksum/sink — author-context: оператор переопределяет в spec.essence. compute гонит их в
-# apply.input destiny vector; arch destiny берёт сама из soulprint.self.os.arch.
+# ── Mandatory data-plane log shipping: Vector (Slice V-I, ADR-067) ─────────
+# create UNCONDITIONALLY installs vector (log-shipping agent) on EVERY host (AFTER deploy and
+# the exporter). SUPPLEMENTS node_exporter (metrics, pull) with the log plane (logs, push). Version/
+# checksum/sink — author-context: operator overrides in spec.essence. compute pushes them into
+# apply.input of destiny vector; arch destiny takes it itself from soulprint.self.os.arch.
 vector_version:  "0.40.0"
-# checksum tarball-а Vector (<arch>-unknown-linux-gnu, "sha256:<hex>"). Дефолт — реальный pinned
-# sha256 под пару (vector_version, arch); при смене версии/arch оператор ОБЯЗАН обновить checksum
-# под свою пару из sha256sums.txt релиза vectordotdev/vector в spec.essence — иначе fail-closed (честный отказ fetch).
+# checksum of the Vector tarball (<arch>-unknown-linux-gnu, "sha256:<hex>"). Default — the real pinned
+# sha256 for the (vector_version, arch) pair; on version/arch change the operator MUST update the checksum
+# for their pair from sha256sums.txt of the vectordotdev/vector release in spec.essence — otherwise fail-closed (an honest fetch refusal).
 vector_sha256:   "sha256:112b047df17df46feb22fc69234e8fc2ad5a411cd2e7d369f3b70c00617a4e90"
-# Корень загрузки релизов Vector — WB Nexus raw-proxy (см. node_exporter_base_url).
+# Root for downloading Vector releases — WB Nexus raw-proxy (see node_exporter_base_url).
 vector_base_url: "https://nexus-proxy.wb.ru/repository/raw-proxy-github/vectordotdev/vector/releases/download"
-# SSRF-guard opt-out для private-resolve WB Nexus (см. node_exporter_allow_private).
+# SSRF-guard opt-out for private-resolve of WB Nexus (see node_exporter_allow_private).
 vector_allow_private: true
-# sink_type — куда шлём логи (loki/elasticsearch/vector/console). Дефолт console (безопасно,
-# без внешней инфры). sink_endpoint — адрес коллектора (форма зависит от sink_type; console —
-# не используется). sink_auth_ref — токен доступа (Vault-ref ИЛИ значение); резолвится Soul-side,
-# в state НЕ оседает (ИБ, как tls.*_ref). Пусто → sink без auth. Оператор задаёт при живом коллекторе.
+# sink_type — where we ship logs (loki/elasticsearch/vector/console). Default console (safe,
+# no external infra). sink_endpoint — collector address (form depends on sink_type; for console —
+# not used). sink_auth_ref — access token (Vault-ref OR value); resolved Soul-side,
+# not persisted in state (security, like tls.*_ref). Empty → sink without auth. Operator sets it when a live collector exists.
 vector_sink_type:      console
 vector_sink_endpoint:  ""
 vector_sink_auth_ref:  ""
-# Пути/glob-ы лог-файлов, которые vector читает (source type file). ДВЕ плоскости: сам DragonFly
-# логирует через glog в /var/log/dragonfly/*.log (destiny dragonfly --log_dir), а sentinel-демон
-# (distro redis-server) — в /var/log/redis/*.log (destiny redis). Оператор расширяет в spec.essence.
+# Paths/globs of log files that vector reads (source type file). TWO planes: DragonFly itself
+# logs via glog into /var/log/dragonfly/*.log (destiny dragonfly --log_dir), while the sentinel daemon
+# (distro redis-server) — into /var/log/redis/*.log (destiny redis). Operator extends in spec.essence.
 vector_log_sources:  ["/var/log/dragonfly/*.log", "/var/log/redis/*.log"]
 
-# ── Способ установки binary: источник upstream-tarball ──────────────────────────
-# install_method=binary тянет DragonFly из upstream-tarball. URL и версия бинаря — author-
-# context (оператор переопределяет в spec.essence под свой mirror). destiny строит имя
-# файла per-host из binary_base_url + soulprint.self.os.arch (dragonfly-<arch>.tar.gz);
-# binary_version уходит в путь распакованного каталога. Дефолты "" — заполнить под реальную
-# инсталляцию (при install_method=binary).
+# ── Binary install method: upstream tarball source ──────────────────────────
+# install_method=binary pulls DragonFly from an upstream tarball. Binary URL and version — author
+# context (operator overrides in spec.essence for their mirror). destiny builds the file
+# name per host from binary_base_url + soulprint.self.os.arch (dragonfly-<arch>.tar.gz);
+# binary_version goes into the unpacked directory path. Defaults "" — fill in for a real
+# installation (when install_method=binary).
 #
-# ★ Реальный upstream DragonFly: github.com/dragonflydb/dragonfly/releases/download/v<ver>
-# (asset dragonfly-x86_64.tar.gz / dragonfly-aarch64.tar.gz). base_url задаёт оператор.
+# ★ Real DragonFly upstream: github.com/dragonflydb/dragonfly/releases/download/v<ver>
+# (asset dragonfly-x86_64.tar.gz / dragonfly-aarch64.tar.gz). base_url is set by the operator.
 binary_base_url: ""
 binary_version:  ""
 
-# ── Host-layout: базовые каталоги конфигурации и данных DragonFly ────────────────
-# conf_dir/data_dir — author-context (оператор переопределяет раскладку в spec.essence под
-# свой storage-layout). compute читает их отсюда, гонит в destiny (apply.input) + персистит
-# в state. Дефолт = официальный layout DragonFly.
+# ── Host layout: base DragonFly configuration and data directories ────────────────
+# conf_dir/data_dir — author-context (operator overrides the layout in spec.essence for
+# their storage layout). compute reads them from here, pushes them into destiny (apply.input) + persists
+# in state. Default = official DragonFly layout.
 conf_dir: /etc/dragonfly
 data_dir: /var/lib/dragonfly
 
-# Run-каталог DragonFly: pidfile + UNIX-СОКЕТ локального доступа (${run_dir}/dragonfly.sock).
-# Должен совпадать с destiny-vars run_dir (там флаг --unixsocket в flagfile). compute строит
-# из него compute.local_addr (unix:<run_dir>/dragonfly.sock) для локальных вызовов плагина.
-# Дефолт = официальный layout DF (RuntimeDirectory=dragonfly юнита создаёт /var/run/dragonfly).
+# DragonFly run directory: pidfile + UNIX SOCKET for local access (${run_dir}/dragonfly.sock).
+# Must match the destiny-vars run_dir (the --unixsocket flag lives there in the flagfile). compute builds
+# compute.local_addr from it (unix:<run_dir>/dragonfly.sock) for local plugin calls.
+# Default = official DF layout (RuntimeDirectory=dragonfly of the unit creates /var/run/dragonfly).
 run_dir: /var/run/dragonfly
 
-# Доля бюджета памяти (input.memory_mb), отдаваемая DragonFly под maxmemory; остаток —
-# резерв под ОС/накладные. scenario вычисляет maxmemory = memory_mb*pct/100 (МБ).
+# Share of the memory budget (input.memory_mb) given to DragonFly for maxmemory; the remainder is
+# reserved for OS/overhead. scenario computes maxmemory = memory_mb*pct/100 (MB).
 memory_reserve_percent: 75
 
-# TLS (defaults). Источник PEM — Vault-ПУТИ (не сам PEM): scenario резолвит их через
-# ${ vault(<ref>) } в render-фазе и передаёт ЦЕЛЫЕ PEM в destiny. Пути — доверенный
-# контекст автора (essence). Форма ref — "<mount>/<path>#<field>". ★ DragonFly vs redis: TLS
-# встаёт на ОСНОВНОЙ порт 6379 (флаг --tls; tls_port у DF НЕТ — absl FATAL на неизвестном),
-# поэтому tls_port/tls_only ОТСУТСТВУЮТ (нет второго порта, нет «только-TLS»). tls_enable по
-# умолчанию false (plaintext).
+# TLS (defaults). PEM source is a Vault PATH (not the PEM itself): scenario resolves it via
+# ${ vault(<ref>) } in the render phase and passes the FULL PEM into destiny. Paths — trusted
+# author context (essence). Ref form — "<mount>/<path>#<field>". ★ DragonFly vs redis: TLS
+# goes on the MAIN port 6379 (flag --tls; DF has NO tls_port — absl FATAL on unknown flag),
+# so tls_port/tls_only are ABSENT (no second port, no "TLS-only"). tls_enable defaults to
+# false (plaintext).
 tls_enable: false
-# Vault-пути источника PEM (заполнить под реальную инсталляцию). Дефолт — конвенция
+# Vault paths for the PEM source (fill in for a real installation). Default — convention
 # secret/services/dragonfly/tls.
 tls_cert_ref: "secret/services/dragonfly/tls#cert"
 tls_key_ref:  "secret/services/dragonfly/tls#key"
 tls_ca_ref:   "secret/services/dragonfly/tls#ca"
 
-# ── Тайминги failover sentinel (defaults) ───────────────────────────────────────
-# Транслируются в per-master директивы sentinel.conf `sentinel down-after-milliseconds
-# <master>` и `sentinel failover-timeout <master>` И в community.redis.sentinel config.
-# Оператор может переопределить во входе create (sentinel_down_after_ms/
+# ── Sentinel failover timings (defaults) ───────────────────────────────────────
+# Translated into per-master sentinel.conf directives `sentinel down-after-milliseconds
+# <master>` and `sentinel failover-timeout <master>` AND into the community.redis.sentinel config.
+# Operator may override in the create input (sentinel_down_after_ms/
 # sentinel_failover_timeout_ms).
 sentinel_down_after_ms:       5000
 sentinel_failover_timeout_ms: 60000
 
-# Версия sentinel-ДЕМОНА (distro redis-sentinel — ОТДЕЛЬНЫЙ продукт от DragonFly). Гейтит
-# version-aware sentinel-фичи плагина community.redis.sentinel (param redis_version →
-# versionGE 7.0.0 для глобальных SENTINEL-директив). ★ Это НЕ версия DragonFly: DF —
-# data-плоскость, sentinel-демон — distro redis-server. ★ И НЕ distro-пин пакета: это
-# SEMVER (X.Y.Z) для version-gate плагина, не apt-форма с epoch/ревизией. Дефолт — distro-
-# актуальная серия redis-sentinel; оператор пинит под свой distro в spec.essence.
+# Version of the sentinel DAEMON (distro redis-sentinel — a SEPARATE product from DragonFly). Gates
+# version-aware sentinel features of the community.redis.sentinel plugin (param redis_version →
+# versionGE 7.0.0 for global SENTINEL directives). ★ This is NOT the DragonFly version: DF is
+# the data plane, the sentinel daemon is distro redis-server. ★ And NOT a distro package pin: this is
+# SEMVER (X.Y.Z) for the plugin version-gate, not the apt form with epoch/revision. Default — the distro-
+# current redis-sentinel series; operator pins it for their distro in spec.essence.
 sentinel_redis_version: "7.2.4"
 
-# ── Distro-пин ПАКЕТА redis-server (sentinel-демон ставит destiny `redis`) ───────
-# ★ ОТДЕЛЬНО от sentinel_redis_version (выше): это DISTRO-NATIVE ПИН ПАКЕТА (apt-форма с
-# опциональным epoch и ревизией, напр. 5:7.0.15-1~deb12u7), уезжающий в apply.input.version
-# второго apply:destiny:redis (sentinel_only: deploy_redis=false). destiny `redis` ставит
-# distro-пакет redis-server (несущий redis-sentinel) с этим =version-пином (core.pkg всегда
-# пинит при install.method=package). sentinel_redis_version — SEMVER для version-gate плагина
-# (X.Y.Z, без epoch/ревизии); этот ключ — distro-ревизия для apt. Два РАЗНЫХ формата →
-# два РАЗНЫХ ключа. Оператор пинит под свой distro в spec.essence (формат
-# ^([0-9]+:)?[0-9][A-Za-z0-9.~+-]*$ — тот же pattern, что input.version destiny `redis`).
+# ── Distro pin of the redis-server PACKAGE (sentinel daemon installs destiny `redis`) ───────
+# ★ SEPARATE from sentinel_redis_version (above): this is the DISTRO-NATIVE PACKAGE PIN (apt form with
+# optional epoch and revision, e.g. 5:7.0.15-1~deb12u7), going into apply.input.version
+# of the second apply:destiny:redis (sentinel_only: deploy_redis=false). destiny `redis` installs
+# the distro redis-server package (carrying redis-sentinel) with this =version pin (core.pkg always
+# pins on install.method=package). sentinel_redis_version — SEMVER for the plugin version-gate
+# (X.Y.Z, no epoch/revision); this key — the distro revision for apt. Two DIFFERENT formats →
+# two DIFFERENT keys. Operator pins it for their distro in spec.essence (format
+# ^([0-9]+:)?[0-9][A-Za-z0-9.~+-]*$ — the same pattern as input.version of destiny `redis`).
 sentinel_redis_package_version: "5:7.0.15-1~deb12u7"
 
-# ── Системные ACL-юзеры DragonFly + sentinel-демона ─────────────────────────────
-# Имя→ACL-perms-строка СЛУЖЕБНЫХ юзеров: default_admin (полные права — внутрикластерный
-# AUTH: репликация masterauth, sentinel monitor, health-PING; заменил requirepass-юзера
-# default), replica (репликация PSYNC), monitoring (метрики), sentinel (sentinel↔df AUTH),
-# haproxy (health-check балансировщика). DragonFly redis-совместим → те же perms-наборы,
-# что у redis-сервиса (скопированы 1:1 из service redis essence). Два набора (redis-server-
-# команды vs sentinel-команды) → ДВА aclfile: users.acl (DragonFly, system_acl_users) и
-# sentinel-users.acl (sentinel-демон, system_acl_users_sentinel).
+# ── System ACL users of DragonFly + the sentinel daemon ─────────────────────────
+# Name→ACL-perms string of SYSTEM users: default_admin (full rights — intra-cluster
+# AUTH: replication masterauth, sentinel monitor, health-PING; replaced the requirepass user
+# default), replica (replication PSYNC), monitoring (metrics), sentinel (sentinel↔df AUTH),
+# haproxy (load-balancer health-check). DragonFly is redis-compatible → the same perms sets
+# as the redis service (copied 1:1 from service redis essence). Two sets (redis-server
+# commands vs sentinel commands) → TWO aclfiles: users.acl (DragonFly, system_acl_users) and
+# sentinel-users.acl (sentinel daemon, system_acl_users_sentinel).
 #
-# Пароль КАЖДОГО системного юзера (вкл. default_admin) — в Vault по ЕДИНОЙ ветке:
-# secret/dragonfly/<incarnation>/users/<name>#password. scenario резолвит keeper-side через
-# vault() и доливает системных в apply.input.users/sentinel_users.
+# Password of EVERY system user (incl. default_admin) — in Vault under a SINGLE branch:
+# secret/dragonfly/<incarnation>/users/<name>#password. scenario resolves it keeper-side via
+# vault() and adds the system ones into apply.input.users/sentinel_users.
 #
-# ★ default_admin (РЕДИЗАЙН default_admin, симметрия redis 2026-06-30): СИСТЕМНЫЙ юзер с
-# полными правами `~* &* +@all`, доливается ВСЕГДА (как replica/monitoring) — в ОБА набора.
-# Заменил прежнюю модель «default в requirepass»: requirepass УСТАРЕЛ и убран из flagfile,
-# вся аутентификация (вкл. внутреннюю: репликация/sentinel/health-PING) идёт под default_admin.
-# Плагин community.redis коннектится username=default_admin (см. create/day-2 деплой-тела).
-# DragonFly несёт полный redis-совместимый ACL (SETUSER/aclfile с #<sha256>/masteruser/
-# masterauth — acl/user.cc, tls_helpers.cc), поэтому модель переносится без адаптации.
+# ★ default_admin (default_admin REDESIGN, symmetric to redis 2026-06-30): a SYSTEM user with
+# full rights `~* &* +@all`, added ALWAYS (like replica/monitoring) — into BOTH sets.
+# Replaced the former "default under requirepass" model: requirepass is DEPRECATED and removed from the flagfile,
+# all authentication (incl. internal: replication/sentinel/health-PING) goes under default_admin.
+# The community.redis plugin connects with username=default_admin (see create/day-2 deploy bodies).
+# DragonFly carries a full redis-compatible ACL (SETUSER/aclfile with #<sha256>/masteruser/
+# masterauth — acl/user.cc, tls_helpers.cc), so the model transfers without adaptation.
 #
-# ★ default (встроенный DragonFly-юзер): в system_acl_users[_sentinel] его НЕТ — он
-# рендерится `off` в users.acl/sentinel-users.acl (users.acl.tmpl добавляет `user default
-# off`, когда default не задан), ЕСЛИ оператор не объявил его в input.users. Имена системных
-# = default_admin/replica/monitoring/sentinel/haproxy — validate-guard create отвергает
-# operator-extra с любым из этих имён. `default` из reserved УБРАН (оператор может объявить
-# встроенного default в input.users).
-#
-# Набор DragonFly (redis-server-команды + default_admin):
+# ★ default (built-in DragonFly user): it is NOT in system_acl_users[_sentinel] — it
+# renders as `off` in users.acl/sentinel-users.acl (users.acl.tmpl adds `user default
+# off` when default is not set), UNLESS the operator declared it in input.users. System names
+# = default_admin/replica/monitoring/sentinel/haproxy — the create validate-guard rejects
+# operator-extra with any of these names. `default` was REMOVED from reserved (operator may declare
+# the built-in default in input.users).
+
+# DragonFly set (redis-server commands + default_admin):
 system_acl_users:
   default_admin: "~* &* +@all"
   replica:    "+psync +replconf +ping"
@@ -186,29 +186,29 @@ system_acl_users:
   sentinel:   "allchannels +multi +slaveof +ping +exec +subscribe +config|rewrite +role +publish +info +client|setname +client|kill +script|kill"
   haproxy:    "-@all +auth +client|getname +client|id +client|setname +command +hello +ping +role +info +cluster|info"
 
-# Набор sentinel-демона (sentinel-команды + default_admin для sentinel-демон auth):
+# Sentinel daemon set (sentinel commands + default_admin for sentinel-daemon auth):
 system_acl_users_sentinel:
   default_admin: "allchannels allkeys +@all"
   monitoring: "-@all +@connection -command +client -hello +info -auth +sentinel|masters +sentinel|replicas +sentinel|slaves +sentinel|sentinels +sentinel|ckquorum"
   sentinel:   "allchannels -@all +auth +client|getname +client|id +client|setname +command +hello +ping +sentinel|is-master-down-by-addr +publish +role +sentinel|get-master-addr-by-name +sentinel|master +sentinel|myid +sentinel|replicas +sentinel|sentinels"
   haproxy:    "-@all +auth +client|getname +client|id +client|setname +command +hello +ping +role +sentinel|get-master-addr-by-name +sentinel|master +sentinel|myid +sentinel|replicas +sentinel|sentinels"
 
-# ── Merge-подложка dragonfly.conf flagfile (defaults роли) ──────────────────────
-# НИЖНИЙ слой merge(): вычисленный maxmemory и passthrough оператора наслаиваются поверх.
-# Merged итог рендерится во flagfile (destiny `dragonfly`). ★ Ключи — РЕАЛЬНЫЕ DF-ФЛАГИ
-# (underscore-форма, парсятся absl без --undefok; неизвестный флаг = FATAL при старте DF).
-# maxmemory — флаг main_service.cc; maxclients — флаг. ★ maxmemory_policy НЕ кладём: у DF
-# НЕТ такого флага (нет ABSL_FLAG; имя живёт только в INFO/CONFIG GET как производное от
-# cache_mode). Eviction-рычаг DF — bool --cache_mode; per-policy выбор (redis-имена lru/lfu/
-# …) DF не понимает → eviction вне скоупа PILOT, флаг во flagfile не транслируется.
+# ── dragonfly.conf flagfile merge-substrate (role defaults) ──────────────────────
+# BOTTOM layer of merge(): the computed maxmemory and operator passthrough are layered on top.
+# The merged result is rendered into the flagfile (destiny `dragonfly`). ★ Keys are REAL DF FLAGS
+# (underscore form, parsed by absl without --undefok; an unknown flag = FATAL at DF startup).
+# maxmemory — flag in main_service.cc; maxclients — flag. ★ maxmemory_policy is NOT included: DF
+# has NO such flag (no ABSL_FLAG; the name only exists in INFO/CONFIG GET as derived from
+# cache_mode). DF's eviction lever is the bool --cache_mode; per-policy selection (redis names lru/lfu/
+# …) is not understood by DF → eviction is out of PILOT's scope, the flag is not translated into the flagfile.
 df_config:
   maxmemory:        "256mb"
   maxclients:       10000
 
-# Данные-таблица kernel-параметров под DragonFly (host-tuning). scenario передаёт этот map
-# в destiny `dragonfly` через apply.input.sysctl_settings → core.sysctl.applied строит
-# drop-in /etc/sysctl.d/30-dragonfly.conf. Значения — СТРОКИ. REUSE из service redis
-# (те же in-memory-store kernel-рекомендации: overcommit/swappiness/сетевые буферы/бэклоги).
+# Data table of kernel parameters for DragonFly (host tuning). scenario passes this map
+# into destiny `dragonfly` via apply.input.sysctl_settings → core.sysctl.applied builds
+# the drop-in /etc/sysctl.d/30-dragonfly.conf. Values are STRINGS. REUSE from service redis
+# (same in-memory-store kernel recommendations: overcommit/swappiness/network buffers/backlogs).
 sysctl_settings:
   vm.overcommit_memory:  "1"
   vm.swappiness:         "1"

@@ -1,52 +1,52 @@
-# L2-кейс (docker-стенд, Trial ADR-023, дизайн «Вариант A»). Исполняется ТОЛЬКО
-# под build-tag integration: `go test -tags integration -run TestL2 ./internal/trial/...`
-# (требует docker). Дефолтный harness (make test) помечает его Skipped (маркер
-# stand:/verify:), как и прочие L2-fixtures.
+# L2 case (docker stand, Trial ADR-023, "Variant A" design). Runs ONLY
+# under build-tag integration: `go test -tags integration -run TestL2 ./internal/trial/...`
+# (requires docker). Default harness (make test) marks it Skipped (marker
+# stand:/verify:), like other L2 fixtures.
 #
-# End-to-end на реальном Linux реальными core-модулями:
-#   1. render in-process (Keeper-side render-пайплайн, как L0) → ApplyRequest;
-#   2. soul apply (push-oneshot, ADR-004) в стенде применяет план: рендер launch-
-#      скрипта (core.file.rendered) + раскладка config (core.file.present);
-#   3. verify: запустить листенер напрямую (БЕЗ systemctl), пробить порт :9100,
-#      проверить разложенные артефакты;
-#   4. expect_idempotent: повторный apply того же плана → все register.changed==false.
+# End-to-end on real Linux with real core modules:
+#   1. render in-process (Keeper-side render pipeline, like L0) → ApplyRequest;
+#   2. soul apply (push-oneshot, ADR-004) on the stand applies the plan: renders the launch
+#      script (core.file.rendered) + lays down config (core.file.present);
+#   3. verify: start the listener directly (WITHOUT systemctl), probe port :9100,
+#      check the deployed artifacts;
+#   4. expect_idempotent: a repeat apply of the same plan → all register.changed==false.
 name: run-and-probe
 description: |
-  E2E node-exporter L2-харнесс (Вариант A): core.file применяется на docker-стенде,
-  mock-листенер стартует напрямую и отвечает на :9100. systemd НЕ используется —
-  листенер запускается процессом в verify (ТЗ §6).
+  E2E node-exporter L2 harness (Variant A): core.file is applied on a docker stand,
+  the mock listener starts directly and answers on :9100. systemd is NOT used —
+  the listener is started as a process in verify (spec §6).
 
-# ─── Стенд ──────────────────────────────────────────────────────────────────
-# mode: push — push-oneshot soul apply (ADR-004): Keeper рендерит план, доставляет
-# soul + ApplyRequest на хост, исполняет. Никаких новых stand-значений (reuse
-# семантики L2-fixtures destiny-redis). Образ python:3.12-slim — python3 нужен
-# launch-скрипту листенера и verify-пробе порта (герметично, без сети к GitHub).
+# ─── Stand ──────────────────────────────────────────────────────────────────
+# mode: push — push-oneshot soul apply (ADR-004): Keeper renders the plan, delivers
+# soul + ApplyRequest to the host, executes. No new stand values (reuse
+# L2-fixtures destiny-redis semantics). Image python:3.12-slim — python3 is needed
+# for the listener's launch script and the verify port probe (hermetic, no network to GitHub).
 stand:
   driver: docker
   image:  python:3.12-slim
   mode:   push
 
-# input харнесс-scenario (L2 берёт input как L0-Fixtures.Input — render не
-# подставляет scenario-default, дублируем явно нужные значения). version —
-# passthrough контракта (в L2 fetch/systemd не исполняются); listen :9100
-# (стандартный порт node_exporter); collectors=[] — на VM-стенде коллекторы
-# железа gate-ятся.
+# input for the harness scenario (L2 takes input as L0-Fixtures.Input — render doesn't
+# substitute the scenario default, so we duplicate the values that are explicitly needed). version —
+# contract passthrough (in L2 fetch/systemd are not executed); listen :9100
+# (standard node_exporter port); collectors=[] — hardware collectors are gated
+# on the VM stand.
 input:
   version: "1.11.1"
   listen: ":9100"
   collectors: []
   bin_dir: /usr/local/bin
 
-# Двойной прогон того же ApplyRequest: второе применение обязано не менять state
-# (все register.changed==false). Идемпотентность core.file — по контенту/режиму.
+# Double run of the same ApplyRequest: the second application must not change state
+# (all register.changed==false). core.file idempotency — by content/mode.
 expect_idempotent: true
 
-# ─── Проверки результата ─────────────────────────────────────────────────────
-# Каждая verify-задача — однозадачный ApplyRequest на том же стенде (соответствует
-# дизайну: «verify исполнять тем же docker exec soul apply»). Module — полное имя
-# со state-суффиксом; expect сверяет register-output (exit_code/stdout/stdout_contains).
+# ─── Result checks ─────────────────────────────────────────────────────
+# Each verify task is a single-task ApplyRequest on the same stand (matches
+# the design: "run verify with the same docker exec soul apply"). Module — full name
+# with state suffix; expect checks register output (exit_code/stdout/stdout_contains).
 verify:
-  # 1. launch-скрипт доставлен и исполняем (core.file.rendered отработал).
+  # 1. Launch script delivered and executable (core.file.rendered worked).
   - name: launch-script-installed
     apply:
       module: core.cmd.shell
@@ -56,7 +56,7 @@ verify:
       exit_code: 0
       stdout: "OK"
 
-  # 2. config разложен с верным content (core.file.present отработал).
+  # 2. Config deployed with the correct content (core.file.present worked).
   - name: config-deployed
     apply:
       module: core.cmd.shell
@@ -66,11 +66,11 @@ verify:
       exit_code: 0
       stdout_contains: "listen=:9100"
 
-  # 3. Запустить листенер напрямую (БЕЗ systemctl), дождаться порта, пробить
-  #    /metrics python-клиентом, остановить. Проба порта/процесса по ТЗ §6.
-  #    Листенер стартует с полным отсоединением stdout/stderr (>/dev/null 2>&1 </dev/null),
-  #    иначе docker-exec-stream остаётся открытым из-за наследования fd фоновым
-  #    процессом и сессия не завершается. PID убивается явно по $!.
+  # 3. Start the listener directly (WITHOUT systemctl), wait for the port, probe
+  #    /metrics with a python client, stop it. Port/process probe per spec §6.
+  #    The listener starts with a full detach of stdout/stderr (>/dev/null 2>&1 </dev/null),
+  #    otherwise the docker-exec-stream stays open because the background process
+  #    inherits the fd and the session never finishes. PID is killed explicitly via $!.
   - name: listener-serves-metrics
     apply:
       module: core.cmd.shell

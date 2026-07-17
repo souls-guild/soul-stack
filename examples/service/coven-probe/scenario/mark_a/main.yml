@@ -1,8 +1,8 @@
 name: mark_a
 description: >-
-  Таргет ОДНОГО ковена (on: [cluster-a]). Ставит redis и пишет coven-маркер
-  только на хосты cluster-a. Валидация: apply_runs появляются ТОЛЬКО для SID
-  cluster-a, хосты cluster-b/cluster-c не тронуты (0 apply_runs, нет файла).
+  Targets a SINGLE coven (on: [cluster-a]). Installs redis and writes a coven marker
+  only on cluster-a hosts. Validation: apply_runs appear ONLY for the cluster-a
+  SID, cluster-b/cluster-c hosts are untouched (0 apply_runs, no file).
 
 state_changes:
   - set: marker_file

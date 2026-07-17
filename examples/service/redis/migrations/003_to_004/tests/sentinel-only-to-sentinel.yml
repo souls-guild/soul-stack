@@ -1,10 +1,11 @@
 name: sentinel-only-to-sentinel
 description: >
-  Ремап redis_type sentinel_only → sentinel (режим убран из сервиса 2026-06-25).
-  sentinel_only-state нёс redis_sentinel.master_ip (внешний master) — он переезжает
-  бит-в-бит (миграция не чистит data-плоскость, лишь ремапит режим). Остальной state
-  без изменений; меняется ТОЛЬКО redis_type. ★ Семантика ремапа (нет data-плоскости →
-  sentinel с roster-master) требует архитектурного подтверждения — см. 003_to_004.yml.
+  Remap redis_type sentinel_only → sentinel (the mode was removed from the service on
+  2026-06-25). The sentinel_only state carried redis_sentinel.master_ip (external master) —
+  it moves over byte-for-byte (the migration does not clean the data plane, only remaps the
+  mode). The rest of the state is unchanged; ONLY redis_type changes. ★ Remap semantics (no
+  data plane → sentinel with a roster master) requires architectural confirmation — see
+  003_to_004.yml.
 
 state_before:
   redis_type: sentinel_only

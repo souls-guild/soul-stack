@@ -1,26 +1,29 @@
 name: converge
 description: |
-  Scry-сценарий drift-детекта (ADR-031 Slice B). Объявляет ЖЕЛАЕМОЕ конечное
-  состояние сервиса noop — для smoke-проверки сам факт наличия маркер-файла
-  /var/lib/soul-stack/noop-converged. Keeper прогоняет этот сценарий в
-  dry_run-режиме при check-drift; Soul зовёт core.file.Plan (read-safe) вместо
-  Apply, сравнивает желаемое vs фактическое и возвращает per-task changed.
+  Scry scenario for drift detection (ADR-031 Slice B). Declares the DESIRED
+  final state of the noop service - for a smoke check, the mere fact that the
+  marker file /var/lib/soul-stack/noop-converged exists. Keeper runs this
+  scenario in dry_run mode during check-drift; Soul calls core.file.Plan
+  (read-safe) instead of Apply, compares desired vs actual, and returns
+  per-task changed.
 
-  service-author кладёт `scenario/converge/main.yml` ТОЛЬКО когда хочет
-  поддержать Scry-проверку — это специализированный scenario-kind (auto-discover
-  по имени). Конвенция input-резолва: каждое поле input по имени берётся из
-  `incarnation.state.<имя>` либо overrid-ится оператором в body запроса.
+  A service author drops `scenario/converge/main.yml` ONLY when they want to
+  support the Scry check - this is a specialized scenario-kind (auto-discovered
+  by name). Input-resolution convention: each input field is looked up by name
+  from `incarnation.state.<name>`, or overridden by the operator in the
+  request body.
 
-# state_changes не задаётся: converge — read-only declaration, drift-проверка
-# ничего не коммитит в state (Soul вообще mod.Apply не вызывает на dry_run,
-# а Keeper не запускает фазу state_changes для DryRun-прогонов).
+# state_changes is not set: converge is a read-only declaration, the drift
+# check does not commit anything to state (Soul does not call mod.Apply at
+# all on dry_run, and Keeper does not run the state_changes phase for
+# DryRun runs).
 state_changes: {}
 
 tasks:
-  # Маркер сходимости: ожидаем, что файл существует с фиксированным
-  # содержимым. На clean-системе file ещё нет → Plan вернёт changed=true
-  # (drift). После реального apply (scenario create / fix) файл появляется →
-  # Plan вернёт changed=false (clean).
+  # Convergence marker: we expect the file to exist with fixed content. On a
+  # clean system the file does not exist yet -> Plan returns changed=true
+  # (drift). After a real apply (scenario create / fix) the file appears ->
+  # Plan returns changed=false (clean).
   - name: Ensure converged marker file
     module: core.file.present
     params:

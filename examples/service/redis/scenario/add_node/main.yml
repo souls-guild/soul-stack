@@ -1,27 +1,27 @@
 name: add_node
 description: >-
-  Присоединить одну новую ноду к сформированному Redis-кластеру. Нода должна быть уже
-  онборжена как Soul; master добавляется пустым — перенос слотов делает отдельный reshard.
+  Attach a single new node to an already-formed Redis cluster. The node must already be
+  onboarded as a Soul; a master is added empty — slot migration is a separate reshard.
 
-# ── Входной контракт оператора (docs/input.md) ────────────────────────────────
-# Простые типизированные понятия оператора: какой SID добавить, какой ролью, с какой
-# существующей нодой контактировать (seed), к какому master привязать реплику.
+# ── Operator input contract (docs/input.md) ────────────────────────────────
+# Simple typed operator concepts: which SID to add, with which role, which existing
+# node to contact (seed), which master to attach a replica to.
 input:
   new_node_sid:
     type: string
     required: true
     format: fqdn
     description: >-
-      SID (FQDN) новой ноды — уже привязанного к incarnation Soul-а, который надо
-      ввести в кластер. Должен присутствовать в roster прогона (soulprint.hosts).
+      SID (FQDN) of the new node — a Soul already bound to the incarnation, that needs
+      to be brought into the cluster. Must be present in the run roster (soulprint.hosts).
 
   seed_sid:
     type: string
     required: true
     format: fqdn
     description: >-
-      SID любой СУЩЕСТВУЮЩЕЙ ноды кластера — контакт для CLUSTER MEET и источник
-      CLUSTER NODES (идемпотентность). Должен отличаться от new_node_sid.
+      SID of any EXISTING node of the cluster — the contact for CLUSTER MEET and the
+      source of CLUSTER NODES (idempotency). Must differ from new_node_sid.
 
   role:
     type: string
@@ -29,55 +29,57 @@ input:
     default: replica
     enum: [replica, master]
     description: >-
-      Роль новой ноды. replica — стать репликой master-а (master_sid или, если не
-      задан, наименее загруженного — выбор делает плагин). master — пустой master
-      без слотов (слоты переносит отдельный reshard).
+      Role of the new node. replica — become a replica of a master (master_sid or, if not
+      set, the least loaded one — the plugin chooses). master — an empty master
+      with no slots (slots migrated by a separate reshard).
 
   master_sid:
     type: string
     required: false
     format: fqdn
     description: >-
-      SID master-ноды (role=replica), чьей репликой станет новичок. Не задан →
-      плагин выбирает master с наименьшим числом реплик (балансировка).
+      SID of the master node (role=replica) that the newcomer becomes a replica of. Not
+      set → the plugin picks the master with the fewest replicas (load balancing).
 
-# incarnation.state НЕ мутируется этим сценарием в текущем срезе: точная роль
-# каждого SID в state не пишется (redis_hosts наполнение — follow-up, см. brief
-# «Топология pilot»). add_node меняет живую топологию кластера, не декларацию.
+# incarnation.state is NOT mutated by this scenario in the current slice: the exact role
+# of each SID isn't written to state (redis_hosts population is a follow-up, see the brief
+# "pilot topology"). add_node changes the live cluster topology, not the declaration.
 
 tasks:
-  # 1. GUARD — new_node_sid и seed_sid обязаны быть в roster и различаться (assert:,
-  #    ADR-009 amendment 2026-06-23; тот же механизм, что size-guard create). Предикат
-  #    вычисляется KEEPER-SIDE на РЕНДЕРЕ (там доступен soulprint.hosts; на Soul-е его
-  #    НЕТ). false ОБРЫВАЕТ render с message ДО любого dispatch — раньше и понятнее,
-  #    чем shell-test на хосте. assert НЕ emit RenderedTask.
+  # 1. GUARD — new_node_sid and seed_sid must be in the roster and distinct (assert:,
+  #    ADR-009 amendment 2026-06-23; the same mechanism as create's size-guard). The
+  #    predicate is evaluated KEEPER-SIDE at RENDER TIME (soulprint.hosts is available
+  #    there; it's NOT on the Soul). false ABORTS the render with a message BEFORE any
+  #    dispatch — earlier and clearer than a shell-test on the host. assert does NOT emit
+  #    a RenderedTask.
   - name: Guard new_node and seed are distinct members of the run roster
     assert:
       that:
         - 'input.new_node_sid != input.seed_sid && size(soulprint.hosts.where("sid == input.new_node_sid")) == 1 && size(soulprint.hosts.where("sid == input.seed_sid")) == 1'
       message: "add_node guard: new_node_sid/seed_sid must be distinct hosts of the run roster"
 
-  # 2. Per-host install + render redis.conf (cluster-директивы) + systemd на НОВОЙ
-  #    ноде (таргет по стабильному SID). Та же режим-агностичная destiny `redis`,
-  #    что и create/cluster: cluster-enabled/cluster-config-file/cluster-node-timeout
-  #    — host-инвариантные ключи merged config (из incarnation.state.redis_config —
-  #    ИСТОЧНИК ИСТИНЫ, зафиксированный create, НЕ перевычисляем → нет drift).
-  #    cluster-announce-ip ЗДЕСЬ НЕТ: per-host, рендерится destiny `redis` в
-  #    redis.conf.tmpl из {{ .self.network.primary_ip }} под гейтом cluster-enabled
-  #    (TILING-урок). Пароль — keeper-side vault()-резолв.
+  # 2. Per-host install + render redis.conf (cluster directives) + systemd on the NEW
+  #    node (targeted by stable SID). The same mode-agnostic `redis` destiny as create/
+  #    cluster: cluster-enabled/cluster-config-file/cluster-node-timeout — host-invariant
+  #    keys of the merged config (from incarnation.state.redis_config — the SOURCE OF
+  #    TRUTH fixed by create, we do NOT recompute → no drift). cluster-announce-ip is NOT
+  #    HERE: per-host, rendered by the `redis` destiny in redis.conf.tmpl from
+  #    {{ .self.network.primary_ip }} gated on cluster-enabled (the TILING lesson).
+  #    Password — keeper-side vault() resolve.
   - name: Apply redis destiny on the new cluster node (install + render + systemd)
     where: soulprint.self.sid == input.new_node_sid
     apply:
       destiny: redis
       input:
         version:  "${ default(incarnation.state.redis_version, '') }"
-        # ★ install: ОБЯЗАТЕЛЕН на повторном прогоне (регресс live E2E 2026-07-01). Новая нода
-        # приходит БЕЗ redis — install.yml ставит его. Без install-структуры диспетчер
-        # по !has(input.install) скатывается в package-ветку → core.pkg `apt install
-        # redis-server=<version>` (версия из Nexus-binary в apt ОТСУТСТВУЕТ → env exited
-        # 100). Собираем ТУ ЖЕ binary-структуру, что create (deploy-body → compute.install
-        # из essence.install_method) — новая нода ставится тем же способом, что кластер.
-        # version — из РАЗВЁРНУТОГО state (redis_version кластера), не input.version.
+        # ★ install: REQUIRED on a repeat run (regression from live E2E 2026-07-01). A new
+        # node arrives WITHOUT redis — install.yml installs it. Without an install
+        # structure the dispatcher falls into the package branch via !has(input.install) →
+        # core.pkg `apt install redis-server=<version>` (the version from the Nexus binary
+        # is ABSENT in apt → env exited 100). We assemble the SAME binary structure as
+        # create (deploy-body → compute.install from essence.install_method) — the new
+        # node is installed the same way as the cluster. version — from the DEPLOYED state
+        # (the cluster's redis_version), not input.version.
         install: >-
           ${ (default(essence.install_method, 'binary') == 'binary')
                ? {
@@ -87,45 +89,50 @@ tasks:
                    'allow_private': default(essence.binary_allow_private, true)
                  }
                : { 'method': 'package' } }
-        # conf_dir/data_dir: host-layout новой ноды (директива B) — ТЕ ЖЕ пути, что у
-        # кластера. Читаем из essence (v11→v12, Вариант A): layout — author-context, тот
-        # же источник, что compute.conf_dir/data_dir у create. Новая нода обязана знать
-        # тот же layout, иначе redis.conf/.so/tls легли бы в дефолтные пути, разойдясь с
-        # кластером. default(...,'/etc/redis'|'/var/lib/redis') — has()-safe, если essence
-        # не переопределяет layout (дефолтные пути). Desync-риск принят: если оператор
-        # сменил essence.conf_dir/data_dir после create — новая нода получит НОВЫЙ layout.
+        # conf_dir/data_dir: host-layout of the new node (directive B) — the SAME paths as
+        # the cluster. Read from essence (v11→v12, Variant A): layout is author-context,
+        # the same source as create's compute.conf_dir/data_dir. The new node must know
+        # the same layout, otherwise redis.conf/.so/tls would land in default paths,
+        # diverging from the cluster. default(...,'/etc/redis'|'/var/lib/redis') — has()-safe,
+        # if essence doesn't override the layout (default paths). Desync risk accepted: if
+        # the operator changed essence.conf_dir/data_dir after create — the new node gets
+        # the NEW layout.
         conf_dir: "${ default(essence.conf_dir, '/etc/redis') }"
         data_dir: "${ default(essence.data_dir, '/var/lib/redis') }"
-        # ★ РЕДИЗАЙН default_admin (2026-06-30): apply.input.password УДАЛЁН (requirepass
-        # убран — destiny больше не принимает password). Аутентификация — под системным
-        # default_admin, его пароль приходит в users ниже (системные доливаются из essence).
+        # ★ default_admin REDESIGN (2026-06-30): apply.input.password REMOVED (requirepass
+        # dropped — the destiny no longer accepts password). Authentication is under the
+        # system default_admin, its password arrives in users below (system users are
+        # added from essence).
         #
-        # ★ СТАТИЧЕСКАЯ replica→master AUTH в redis.conf — masteruser/masterauth ДОЛИВАЮТСЯ
-        # поверх incarnation.state.redis_config (источник истины с create) ОБЫЧНЫМИ директивами
-        # (как эталон cluster deploy). КРИТИЧНО, если новая нода входит репликой: cluster-
-        # реплика при FULLSYNC проходит AUTH ТОЛЬКО по статической masterauth в redis.conf
-        # (плагин шлёт лишь REPLICATE master-id, masterauth не выставляет) — без неё PSYNC
-        # упёрся бы в NOAUTH → master_link_status:DOWN. Доливается на новой ноде host-инвариантно
-        # (один default_admin на кластер). Failover-safe: на role=master инертны. Тело сценария
-        # (вне covenant) хардкодит 'default_admin' напрямую. masterauth — vault()-В-ЯЧЕЙКЕ
-        # (seal-маскинг, ADR-010 §7.4); путь — secret/redis/<inc>/users/default_admin#password.
+        # ★ STATIC replica→master AUTH in redis.conf — masteruser/masterauth are ADDED on
+        # top of incarnation.state.redis_config (the source of truth from create) as
+        # ORDINARY directives (same as the cluster deploy reference). CRITICAL if the new
+        # node joins as a replica: a cluster replica on FULLSYNC passes AUTH ONLY via the
+        # static masterauth in redis.conf (the plugin only sends REPLICATE master-id,
+        # doesn't set masterauth) — without it PSYNC would hit NOAUTH →
+        # master_link_status:DOWN. Added on the new node host-invariantly (one
+        # default_admin per cluster). Failover-safe: inert on role=master. The scenario
+        # body (outside covenant) hardcodes 'default_admin' directly. masterauth — vault()-
+        # IN-CELL (seal-masking, ADR-010 §7.4); path —
+        # secret/redis/<inc>/users/default_admin#password.
         config: >-
           ${ merge(incarnation.state.redis_config, {
                'masteruser': 'default_admin',
                'masterauth': vault('secret/redis/' + incarnation.name + '/users/default_admin#password')
              }) }
-        # Источник .so Redis-модулей — из essence (директива «модули ВСЕГДА ВСЕ»): новая
-        # нода кластера тянет тот же набор модулей из того же источника, что и кластер.
-        # essence.modules_base_url — author-context (v11→v12); default '' если не задан
-        # (Redis 8+ — модули встроены, base_url не используется).
+        # Source of Redis module .so files — from essence (the "modules ALWAYS ALL"
+        # directive): the new cluster node pulls the same module set from the same source
+        # as the cluster. essence.modules_base_url — author-context (v11→v12); default ''
+        # if not set (Redis 8+ — modules are built-in, base_url unused).
         modules_base_url: "${ default(essence.modules_base_url, '') }"
-        # ★★ КРИТИЧНО (system-ACL-users d2): новая нода ОБЯЗАНА получить тот же users.acl,
-        # что и кластер — СИСТЕМНЫЕ (из essence, ПЕРВЫМИ: replica/monitoring/sentinel/
-        # haproxy) + operator-extra (state.redis_users — МАССИВ AclUser, wave 1b, ПОВЕРХ).
-        # БЕЗ системного replica новая нода НЕ сможет реплицировать (PSYNC) — кластер не
-        # примет её как реплику. Системные НЕ в state (пункт 7 d2) — доливаются из essence.
-        # Vault-пароль той же ветки secret/redis/<inc>/users/<name>#password. operator-extra:
-        # .map(u, {u.name: …}) (имя из поля u.name, раньше map-ключ).
+        # ★★ CRITICAL (system-ACL-users d2): the new node MUST get the same users.acl as
+        # the cluster — SYSTEM users (from essence, FIRST: replica/monitoring/sentinel/
+        # haproxy) + operator-extra (state.redis_users — an ARRAY of AclUser, wave 1b, ON
+        # TOP). WITHOUT the system replica user the new node CANNOT replicate (PSYNC) —
+        # the cluster won't accept it as a replica. System users are NOT in state (item 7
+        # d2) — added from essence. Vault password from the same
+        # secret/redis/<inc>/users/<name>#password branch. operator-extra:
+        # .map(u, {u.name: …}) (name from field u.name, previously the map key).
         users: >-
           ${ merge(
                merge(default(essence.system_acl_users, {}).map(name, {
@@ -146,11 +153,12 @@ tasks:
                  : {}
              ) }
 
-  # 3. Health-gate: новая нода обязана ответить PING ДО ввода в кластер.
-  #    community.redis.command, retry/until через retry. addr localhost (плагин на
-  #    самой ноде). ★ РЕДИЗАЙН default_admin (2026-06-30): PING-коннект — под системным
-  #    default_admin (username → AUTH, requirepass убран); пароль из новой Vault-ветки
-  #    users/default_admin. Тело сценария (вне covenant) хардкодит 'default_admin'.
+  # 3. Health-gate: the new node must answer PING BEFORE being added to the cluster.
+  #    community.redis.command, retry/until via retry. addr localhost (plugin on the node
+  #    itself). ★ default_admin REDESIGN (2026-06-30): the PING connect is under the
+  #    system default_admin (username → AUTH, requirepass dropped); password from the new
+  #    Vault path users/default_admin. The scenario body (outside covenant) hardcodes
+  #    'default_admin'.
   - name: Wait for the new node to answer PING
     where: soulprint.self.sid == input.new_node_sid
     module: community.redis.command
@@ -161,29 +169,31 @@ tasks:
       password: "${ vault('secret/redis/' + incarnation.name + '/users/default_admin#password') }"
       args:     ["PING"]
 
-  # 4. ADD-NODE — run_once. Endpoint-ы строятся из roster (soulprint.hosts) по SID:
-  #    new_node/seed/master = {addr: "<primary_ip>:6379"}. Это ГОТОВАЯ топология —
-  #    плагин ничего не транслирует, шлёт CLUSTER MEET/REPLICATE/NODES по go-redis.
-  #    .where("sid == ...")[0] детерминирован (single-host roster-фильтр; прецедент
-  #    redis-cluster/create replication.yml). master передаём ТОЛЬКО при role=replica
-  #    и заданном master_sid; иначе плагин выбирает master сам.
+  # 4. ADD-NODE — run_once. Endpoints are built from the roster (soulprint.hosts) by SID:
+  #    new_node/seed/master = {addr: "<primary_ip>:6379"}. This is READY topology — the
+  #    plugin translates nothing, it sends CLUSTER MEET/REPLICATE/NODES via go-redis.
+  #    .where("sid == ...")[0] is deterministic (single-host roster filter; precedent from
+  #    redis-cluster/create replication.yml). master is passed ONLY when role=replica and
+  #    master_sid is set; otherwise the plugin picks the master itself.
   - name: Add the new node to the cluster (CLUSTER MEET + REPLICATE/empty-master)
     run_once: true
     module: community.redis.cluster
     params:
       action:   add-node
       role:     "${ default(input.role, 'replica') }"
-      # ★ РЕДИЗАЙН default_admin (2026-06-30): коннект к нодам — под системным default_admin
-      # (username → AUTH, requirepass убран); пароль из новой Vault-ветки users/default_admin.
+      # ★ default_admin REDESIGN (2026-06-30): connection to the nodes is under the system
+      # default_admin (username → AUTH, requirepass dropped); password from the new Vault
+      # path users/default_admin.
       username: default_admin
       password: "${ vault('secret/redis/' + incarnation.name + '/users/default_admin#password') }"
       new_node:
         addr: "${ soulprint.hosts.where(\"sid == input.new_node_sid\")[0].network.primary_ip + ':6379' }"
       seed:
         addr: "${ soulprint.hosts.where(\"sid == input.seed_sid\")[0].network.primary_ip + ':6379' }"
-      # master.addr пуст, если master_sid не задан → плагин трактует это как
-      # «не указан» и выбирает master сам (балансировка). .where внутри строкового
-      # ${…}-cell, НЕ внутри CEL-map-литерала (rewrite не заходит в {…}-литералы).
+      # master.addr is empty if master_sid isn't set → the plugin treats this as
+      # "unspecified" and picks the master itself (load balancing). .where is inside the
+      # string ${…}-cell, NOT inside a CEL-map literal (rewrite doesn't reach into
+      # {…}-literals).
       master:
         addr: >-
           ${ has(input.master_sid)

@@ -1,75 +1,75 @@
 name: create
-# create: true — сценарий годен как СТАРТОВЫЙ (bootstrap новой incarnation), т.е.
-# eligible при POST /v1/incarnations (scenario.ResolveCreateScenarios читает флаг).
-# Без него POST падает 422 create_scenario_invalid: набор стартовых сценариев =
-# РОВНО {scenario с `create: true`}, имя `create` привилегий не даёт (эталон —
+# create: true — the scenario is eligible as a STARTING scenario (bootstrap of a new incarnation), i.e.
+# eligible for POST /v1/incarnations (scenario.ResolveCreateScenarios reads the flag).
+# Without it, POST fails with 422 create_scenario_invalid: the set of starting scenarios =
+# EXACTLY {scenario with `create: true`}, the name `create` grants no privileges (reference —
 # redis/scenario/create/main.yml).
 create: true
 description: >-
-  Cloud-init bootstrap новой VM. Два режима онбординга под гейтом
+  Cloud-init bootstrap of a new VM. Two onboarding modes gated by
   input.self_onboard:
 
-    self_onboard: true — «Вариант T» (ADR-017(h) amendment):
-      1. provision — core.cloud.created с self_onboard: true + name.
-                     Keeper ПРЕДСКАЗЫВАЕТ FQDN каждой VM (<name>-<index>.<suffix>,
-                     suffix из providers.fqdn_suffix), выписывает per-VM токены и
-                     ЗАПЕКАЕТ их в cloud-init userdata (map FQDN->token). VM выбирает
-                     свой токен по hostname и делает soul init в один цикл cloud-init.
-      2. onboarded — core.soul.registered await_online. БЕЗ core.bootstrap.delivered
-                     (VM онбордится сама из cloud-init, доставки токена не нужно).
+    self_onboard: true — "Variant T" (ADR-017(h) amendment):
+      1. provision — core.cloud.created with self_onboard: true + name.
+                     Keeper PREDICTS the FQDN of each VM (<name>-<index>.<suffix>,
+                     suffix from providers.fqdn_suffix), issues per-VM tokens and
+                     BAKES them into the cloud-init userdata (FQDN->token map). The VM picks
+                     its own token by hostname and runs soul init in a single cloud-init cycle.
+      2. onboarded — core.soul.registered await_online. WITHOUT core.bootstrap.delivered
+                     (the VM onboards itself from cloud-init, no need to deliver a token).
 
     self_onboard: false (default) — B-flat (ADR-017(h)/ADR-063):
-      1. provision — core.cloud.created (generate_userdata, БЕЗ токенов в userdata).
-      2. deliver   — core.bootstrap.delivered доставляет per-VM токен по SSH.
+      1. provision — core.cloud.created (generate_userdata, WITHOUT tokens in userdata).
+      2. deliver   — core.bootstrap.delivered delivers the per-VM token over SSH.
       3. onboarded — core.soul.registered await_online.
 
-  ★ self_onboard кладёт per-VM токены в userdata (cloud-provider хранит его в
-  plaintext metadata) — осознанный компромисс ТЕСТ-СТЕНДА. TODO(prod): вернуть
-  B-flat (deliver) или late-binding claim.
+  * self_onboard puts per-VM tokens into userdata (the cloud provider stores it in
+  plaintext metadata) — a deliberate tradeoff for the TEST STAND. TODO(prod): revert to
+  B-flat (deliver) or late-binding claim.
 
 input:
   provider:
     type: string
     required: true
-    description: Имя строки в реестре providers (NOT plugin name).
+    description: Registry string name of the provider (NOT the plugin name).
   profile:
     type: string
     required: false
-    description: Имя строки в реестре profiles.
+    description: Registry string name of the profile.
   count:
     type: integer
     required: false
-    description: Количество VM в батче (default 1).
+    description: Number of VMs in the batch (default 1).
   self_onboard:
     type: boolean
     required: false
     description: >-
-      true → VM онбордится сама из cloud-init (Вариант T): keeper предсказывает
-      FQDN и запекает токены в userdata; требует name + providers.fqdn_suffix.
-      false (default) → B-flat: токен доставляется отдельным шагом по SSH.
+      true -> the VM onboards itself from cloud-init (Variant T): keeper predicts
+      the FQDN and bakes tokens into userdata; requires name + providers.fqdn_suffix.
+      false (default) -> B-flat: the token is delivered in a separate step over SSH.
   name:
     type: string
     required: false
     description: >-
-      Базовое имя VM-батча (self_onboard=true): keeper передаёт его в
-      CreateRequest.name, драйвер именует <name>-<index>, FQDN предсказуем.
-      Обязателен при self_onboard: true.
+      Base name of the VM batch (self_onboard=true): keeper passes it into
+      CreateRequest.name, the driver names them <name>-<index>, the FQDN is predictable.
+      Required when self_onboard: true.
   ssh_provider:
     type: string
     required: false
     description: >-
-      Имя SshProvider-плагина для доставки bootstrap-токена по SSH (шаг deliver,
-      только при self_onboard: false). Обязателен в B-flat-режиме.
+      Name of the SshProvider plugin for delivering the bootstrap token over SSH (deliver step,
+      only when self_onboard: false). Required in B-flat mode.
 
 tasks:
-  # Шаг 1: создаём count VM через CloudDriver (on: keeper, ADR-017). Ветка зависит
-  # от self_onboard:
-  #   - self_onboard=true:  self_onboard+name → keeper предсказывает FQDN и запекает
-  #     per-VM токены в userdata (VM онбордится сама). generate_userdata НЕ нужен.
-  #   - self_onboard=false: generate_userdata: true (B-flat) — userdata БЕЗ токенов,
-  #     токен доставит шаг deliver.
-  # Один шаг с обеими опциями: модуль сам выбирает путь по self_onboard (userdata/
-  # generate_userdata mutually-exclusive с self_onboard — validate ловит).
+  # Step 1: create count VMs via CloudDriver (on: keeper, ADR-017). The branch depends
+  # on self_onboard:
+  #   - self_onboard=true:  self_onboard+name -> keeper predicts the FQDN and bakes
+  #     per-VM tokens into userdata (the VM onboards itself). generate_userdata is not needed.
+  #   - self_onboard=false: generate_userdata: true (B-flat) — userdata WITHOUT tokens,
+  #     the token is delivered by the deliver step.
+  # A single step with both options: the module itself picks the path based on self_onboard (userdata/
+  # generate_userdata mutually-exclusive with self_onboard — validate catches it).
   - name: Provision VMs (cloud-init bootstrap)
     on: keeper
     module: core.cloud.created
@@ -82,9 +82,9 @@ tasks:
       self_onboard:      "${ has(input.self_onboard) && input.self_onboard }"
       generate_userdata: "${ !(has(input.self_onboard) && input.self_onboard) }"
 
-  # Шаг 2 (ТОЛЬКО B-flat): доставка per-VM токена по SSH (core.bootstrap.delivered,
-  # ADR-063). Пропускается при self_onboard=true (VM уже онбордилась из cloud-init).
-  # when — STATIC (чистый input) → pre-flight placeholder-skip-ает шаг при self_onboard.
+  # Step 2 (B-flat ONLY): delivers the per-VM token over SSH (core.bootstrap.delivered,
+  # ADR-063). Skipped when self_onboard=true (the VM already onboarded from cloud-init).
+  # when — STATIC (pure input) -> pre-flight placeholder-skips the step when self_onboard.
   - name: Deliver per-VM bootstrap token over SSH
     on: keeper
     module: core.bootstrap.delivered
@@ -95,9 +95,9 @@ tasks:
     require:
       - provision
 
-  # Шаг 3: регистрация созданных SID + БЛОКИРУЮЩИЙ барьер онбординга (core.soul.registered,
-  # ADR-061). Общий для обоих режимов: в self_onboard VM онбордится из cloud-init, в
-  # B-flat — после deliver; в обоих случаях await_online ждёт presence созданных Souls.
+  # Step 3: registration of the created SIDs + BLOCKING onboarding barrier (core.soul.registered,
+  # ADR-061). Shared by both modes: in self_onboard the VM onboards from cloud-init, in
+  # B-flat — after deliver; in both cases await_online waits for presence of the created Souls.
   - name: Register provisioned VMs and await their onboarding
     on: keeper
     module: core.soul.registered

@@ -1,18 +1,19 @@
-# L0-испытание restart: рестарт master-а (probe→where master, run_once). Парный к
-# rolling-restart-replicas — покрывает master-ветку where probe→role. Roster — 2 хоста;
-# mocks.register.df_role.role = master → block-потомки (where slave) placeholder-skip,
-# master-restart (where master, run_once) рендерится. Render-only, герметично.
+# L0 test for restart: master restart (probe→where master, run_once). Paired with
+# rolling-restart-replicas — covers the master branch of where probe→role. Roster is 2 hosts;
+# mocks.register.df_role.role = master → replica descendant blocks (where slave) are
+# placeholder-skip, master-restart (where master, run_once) renders. Render-only, hermetic.
 #
-# Что ассертим:
-#   1. probe (community.redis.role) рендерит params коннекта (plaintext-ветка).
+# What we assert:
+#   1. probe (community.redis.role) renders connect params (plaintext branch).
 #   2. master-restart (core.service.restarted name=dragonfly, where master, run_once)
-#      рендерится. ★ имя юнита — dragonfly (DF data-плоскость), НЕ redis-server.
+#      renders. ★ the unit name is dragonfly (DF data plane), NOT redis-server.
 #
-# ВНИМАНИЕ L0-ограничение: mocks.register — ЕДИНЫЙ payload на весь roster. На master-
-# payload-е оба хоста «master» → master-restart run_once таргетит ОДИН детерминированный.
-# block-потомки (where slave) на master-payload-е — placeholder-skip (Params==nil), но в
-# плане ПРИСУТСТВУЮТ как placeholder → presence-матчер task_absent их «нашёл бы» (placeholder
-# в плане ≠ отсутствие узла), поэтому slave-block в task_absent НЕ ассертим (как redis-аналог).
+# L0 LIMITATION WARNING: mocks.register is a SINGLE payload for the whole roster. On the
+# master payload both hosts are "master" → master-restart run_once targets ONE deterministic
+# host. Replica descendant blocks (where slave) on the master payload are placeholder-skip
+# (Params==nil), but they ARE PRESENT in the plan as a placeholder → the presence matcher
+# task_absent would "find" them (placeholder in the plan ≠ node absence), so the slave block
+# is NOT asserted in task_absent (same as the redis counterpart).
 name: restart the current master last (run_once, dragonfly unit)
 
 fixtures:
@@ -41,7 +42,7 @@ fixtures:
     df_config:
       maxmemory:        "256mb"
 
-  # Vault: probe коннектится под default_admin (requirepass убран).
+  # Vault: probe connects as default_admin (requirepass removed).
   vault:
     secret/dragonfly/restart/users/default_admin:
       password: dfadmin-restart-pass
@@ -53,19 +54,20 @@ mocks:
 
 assert:
   task_present:
-    # probe community.redis.role (ЛОКАЛЬНЫЙ UNIX-сокет, БЕЗ tls/tls_ca). AUTH под default_admin.
+    # probe community.redis.role (LOCAL UNIX socket, NO tls/tls_ca). AUTH as default_admin.
     - module: community.redis.role
       params_subset:
         addr: "unix:/var/run/dragonfly/dragonfly.sock"
         username: default_admin
         password: dfadmin-restart-pass
 
-  # ── master-restart НЕВЫРАЗИМ в presence (как redis-аналог) ──────────────────
-  # В плане ДВЕ идентичных core.service.restarted name=dragonfly (block-рестарт реплики +
-  # master-рестарт), обе с пустым when/id и теми же params; дискриминатор — block/task-`where`
-  # (TargetSIDs), который presence-матчер task_present НЕ видит → сматчил бы ОБЕ (collision).
-  # Поэтому master-restart ассертим позиционно: index 4 (синтез-install[0] (ADR-065,
-  # service.yml::modules[]) + probe[1] + block Restart[2] + replica-synced[3] +
+  # ── master-restart is NOT EXPRESSIBLE in presence (same as the redis counterpart) ──
+  # The plan has TWO identical core.service.restarted name=dragonfly entries (replica
+  # restart block + master restart), both with an empty when/id and the same params; the
+  # discriminator is the block/task `where` (TargetSIDs), which the task_present presence
+  # matcher does NOT see → it would match BOTH (collision).
+  # So master-restart is asserted positionally: index 4 (synth-install[0] (ADR-065,
+  # service.yml::modules[]) + probe[1] + Restart block[2] + replica-synced[3] +
   # master-restart[4]).
   rendered_tasks:
     - index: 4

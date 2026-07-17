@@ -10,16 +10,16 @@ required_capabilities:
 spec:
   states:
     cloned:
-      description: Путь содержит git-репо (клонируется при отсутствии); ADR-015.
+      description: Path contains a git repo (cloned if absent); ADR-015.
       input:
-        repo:   { type: string, required: true, description: "URL репозитория." }
-        path:   { type: string, required: true, description: "Целевой каталог клона." }
-        branch: { type: string, description: "Ветка (default main)." }
-        depth:  { type: int,    description: "Глубина shallow-клона (--depth)." }
+        repo:   { type: string, required: true, description: "Repository URL." }
+        path:   { type: string, required: true, description: "Target clone directory." }
+        branch: { type: string, description: "Branch (default main)." }
+        depth:  { type: int,    description: "Shallow clone depth (--depth)." }
     pulled:
-      description: Клон-if-missing + git pull --ff-only. Changed только при смене HEAD.
+      description: Clone-if-missing + git pull --ff-only. Changed only when HEAD changes.
       input:
-        repo:   { type: string, required: true, description: "URL репозитория." }
-        path:   { type: string, required: true, description: "Целевой каталог клона." }
-        branch: { type: string, description: "Ветка (default main)." }
-        depth:  { type: int,    description: "Глубина shallow-клона (--depth)." }
+        repo:   { type: string, required: true, description: "Repository URL." }
+        path:   { type: string, required: true, description: "Target clone directory." }
+        branch: { type: string, description: "Branch (default main)." }
+        depth:  { type: int,    description: "Shallow clone depth (--depth)." }

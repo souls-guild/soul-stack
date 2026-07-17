@@ -1,10 +1,10 @@
 name: tls-on-plain-open
 description: >
-  redis_config несёт tls-port НО port != '0' (plain-порт 6379 ОТКРЫТ) →
-  tls.enable=true, tls.only=false. Реальный prod-state «TLS включён, plaintext не
-  закрыт» (clients мигрируют постепенно) — контр-кейс к tls-extracted (там only=true).
-  tls.only ← port == '0' даёт false. tls.port=7379 (роль-дефолт, DSL-лимит, см.
-  002_to_003.yml). cert/key/ca_ref → '' (Vault-ПУТИ в v2-state не лежали).
+  redis_config carries a tls-port BUT port != '0' (plaintext port 6379 is OPEN) →
+  tls.enable=true, tls.only=false. A real prod state "TLS enabled, plaintext not
+  closed" (clients migrate gradually) — a counter-case to tls-extracted (where only=true).
+  tls.only ← port == '0' gives false. tls.port=7379 (role default, DSL limit, see
+  002_to_003.yml). cert/key/ca_ref → '' (Vault paths weren't stored in v2 state).
 
 state_before:
   redis_type: standalone

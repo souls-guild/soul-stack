@@ -1,22 +1,22 @@
-# Состояние, которое harness проверяет после получения Portent Keeper-ом и
-# завершения Oracle-loop-а (match → enqueue → record fire → audit).
+# State that the harness verifies after Keeper receives the Portent and the
+# Oracle loop completes (match → enqueue → record fire → audit).
 #
-# Все проверки идут прямыми PG-queries (harness.AssertOracleFired и т.п.),
-# никаких моков — реальная БД, реальные state-transitions.
+# All checks go through direct PG queries (harness.AssertOracleFired and similar),
+# no mocks: a real DB, real state transitions.
 
-# 1. apply_runs: одна запись со статусом planned (scenario noop, hosts=[sid]).
+# 1. apply_runs: one record with status planned (scenario noop, hosts=[sid]).
 apply_runs:
   - sid: soul-oracle-0.example.com
     scenario: noop
     incarnation_name: web-app
     status: planned
 
-# 2. oracle_fires: cooldown-state зафиксирован для (decree, subject).
+# 2. oracle_fires: cooldown state recorded for (decree, subject).
 oracle_fires:
   - decree: react-file-changed-etc
     subject: soul-oracle-0.example.com
 
-# 3. audit_log: событие oracle.fired записано с payload(decree, scenario, sid).
+# 3. audit_log: event oracle.fired recorded with payload(decree, scenario, sid).
 audit_events:
   - event_type: oracle.fired
     payload_contains:

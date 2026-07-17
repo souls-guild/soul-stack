@@ -1,28 +1,29 @@
 name: coven-assign
 description: Bind a Soul to a set of stable Coven labels in the keeper registry
 
-# Версия destiny — git ref, под которым закоммичен файл (см. ADR-007 в
-# docs/architecture.md). Поле `version:` верхнего уровня намеренно отсутствует.
+# Destiny version — git ref that the file is committed under (see ADR-007 in
+# docs/architecture.md). The top-level `version:` field is deliberately absent.
 #
-# Список задач — НЕ в этом файле. Он живёт в tasks/main.yml; здесь только
-# манифест: input-контракт и (если бы были) required_modules.
+# The task list is NOT in this file. It lives in tasks/main.yml; here we only
+# have the manifest: the input contract and (if any) required_modules.
 #
-# coven-assign — core-destiny с keeper-side операцией над реестром souls/coven
-# (см. docs/keeper/cloud.md: cloud-provision «назначает coven по
-# role_distribution» тем же путём — запись в реестре souls). Использует только
-# core-модули, поэтому required_modules: не нужен.
+# coven-assign — core-destiny with a keeper-side operation over the souls/coven
+# registry (see docs/keeper/cloud.md: cloud-provision "assigns coven by
+# role_distribution" through the same path — a write to the souls registry).
+# Uses only core modules, so required_modules: is not needed.
 #
-# Контракт coven-assign declared-роль НЕ пишет (см. docs/scenario/orchestration.md
-# §4.1: declared-роль живёт в incarnation.spec.hosts[].role, фактическая привязка
-# хоста вне spec — в incarnation.state через scenario state_changes, не здесь).
-# Поэтому в input: только sid + coven, поля role нет осознанно.
+# The coven-assign contract does NOT write the declared role (see
+# docs/scenario/orchestration.md §4.1: the declared role lives in
+# incarnation.spec.hosts[].role, actual host binding outside spec — in
+# incarnation.state via scenario state_changes, not here). So input: only has
+# sid + coven, deliberately no role field.
 
 input:
   sid:
     type: string
     required: true
-    format: fqdn                 # SID = FQDN (см. ADR «Идентичность Soul»)
-    description: SID (FQDN) Soul-а, которому назначаются coven-метки.
+    format: fqdn                 # SID = FQDN (see ADR "Soul Identity")
+    description: SID (FQDN) of the Soul that coven labels are being assigned to.
 
   coven:
     type: array
@@ -32,4 +33,4 @@ input:
       pattern: "^[a-z][a-z0-9-]*$"
     min_items: 1
     unique: true
-    description: Набор стабильных Coven-меток для привязки к Soul-у.
+    description: Set of stable Coven labels to bind to the Soul.

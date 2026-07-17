@@ -1,15 +1,16 @@
 name: persistence-identity-tls-only-defaults
 description: >
-  Три инварианта в одном кейсе (sentinel, v10):
-    - persistence:off → ТОЖДЕСТВО (off сохранился в новом enum, remap его НЕ трогает:
-      ветка тернара возвращает state.persistence как есть). redis_config off-консистентен
-      (save:"" appendonly:"no") — миграция его не меняет, но фикстура честна к режиму;
-    - tls.enable:true + tls.only:true → connection_mode → tls (только TLS, plain закрыт);
-    - redis_sentinel БЕЗ старых down_after_ms/failover_timeout_ms (теоретический v10 до
-      004_to_005-таймингов либо ремап) → master_settings собирается из РОЛЬ-ДЕФОЛТОВ
-      5000/60000 (has-guard на отсутствующие листы), master_name/quorum сохранены.
-  Доказывает: remap идемпотентен для off (тождественная ветка), обратная свёртка tls→tls,
-  default-ветка таймингов master_settings.
+  Three invariants in one case (sentinel, v10):
+    - persistence:off → IDENTITY (off is preserved in the new enum, remap does NOT touch it:
+      the ternary branch returns state.persistence as-is). redis_config is off-consistent
+      (save:"" appendonly:"no") — the migration does not change it, but the fixture is honest
+      about the mode;
+    - tls.enable:true + tls.only:true → connection_mode → tls (TLS only, plain closed);
+    - redis_sentinel WITHOUT the old down_after_ms/failover_timeout_ms (a theoretical v10
+      before 004_to_005 timings, or a remap) → master_settings is assembled from
+      ROLE DEFAULTS 5000/60000 (has-guard for missing leaves), master_name/quorum preserved.
+  Proves: remap is idempotent for off (identity branch), the reverse fold tls→tls,
+  the default branch of master_settings timings.
 
 state_before:
   redis_type: sentinel

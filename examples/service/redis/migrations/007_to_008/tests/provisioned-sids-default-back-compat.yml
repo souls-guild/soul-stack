@@ -1,8 +1,8 @@
 name: provisioned-sids-default-back-compat
 description: >
-  Инкарнация без provisioned_sids (развёрнута до v8) → консервативный default:
-  provisioned_sids=[]. has()-guard back-compat для отсутствующего ключа (копия
-  паттерна 006_to_007 provisioned_vm_ids).
+  An incarnation without provisioned_sids (deployed before v8) → conservative default:
+  provisioned_sids=[]. has()-guard back-compat for the missing key (a copy of
+  the 006_to_007 provisioned_vm_ids pattern).
 
 state_before:
   redis_type: "sentinel"

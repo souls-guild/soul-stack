@@ -1,33 +1,33 @@
-# tasks/install.yml — установка бинарей redis. Диспетч по install.method (block per
-# method): package (default, поведение-сохраняющее) ИЛИ binary (upstream-tarball).
-# Гейт method — static (только input.*) → Keeper гасит неактивную ветку placeholder-
-# skip-ом per-потомок (block static-skip, ADR-009): индексы не сдвигаются, register
-# потомков виден снаружи и при погашенной ветке (flat-register-scope инвариантен).
+# tasks/install.yml — installs the redis binaries. Dispatches on install.method (block per
+# method): package (default, behavior-preserving) OR binary (upstream tarball).
+# The method gate is static (input.* only) → Keeper disables the inactive branch with a
+# placeholder-skip per-child (block static-skip, ADR-009): indices don't shift, the register
+# of the children is visible from outside even for a disabled branch (flat-register-scope invariant).
 #
-# ★ register'ы binary-ветки (redis_server_bin/redis_cli_bin/redis_benchmark_bin/
-#   redis_server_links/redis_server_unit) и их рестарт-onchanges живут В ЭТОМ файле: ЗАГРУЗОЧНЫЙ per-file
-#   линтер (validateTaskRefs, shared/config/destiny_tasks.go) валидирует register-ссылки
-#   в onchanges на уровне ОДНОГО файла — cross-file onchanges отвергается как
-#   unknown_register_reference (тот же инвариант, что у node-exporter). Поэтому binary-
-#   ветка несёт СВОЙ рестарт redis-server здесь, а не дёргает рестарт server.yml.
+# ★ The binary-branch registers (redis_server_bin/redis_cli_bin/redis_benchmark_bin/
+#   redis_server_links/redis_server_unit) and their restart-onchanges live IN THIS file: the
+#   per-file loader linter (validateTaskRefs, shared/config/destiny_tasks.go) validates register
+#   references in onchanges at the level of a SINGLE file — cross-file onchanges is rejected as
+#   unknown_register_reference (the same invariant as node-exporter). That's why the binary
+#   branch carries ITS OWN redis-server restart here, instead of triggering server.yml's restart.
 
-# ── package-ветка (default, ПОВЕДЕНИЕ-СОХРАНЯЮЩАЯ) ──────────────────────────────
-# distro-пакет redis-server + каталог unix-сокета. Один gate install.method==package
-# на всю ветку (block static-skip): не передан install / method=='package' → активна.
-# Пакет несёт И redis-server, И redis-sentinel-демон → ставится во ВСЕХ режимах,
-# включая sentinel_only (deploy_redis=false). version читается голым input.version
-# (required_when=package гарантирует присутствие в этой ветке).
+# ── package branch (default, BEHAVIOR-PRESERVING) ──────────────────────────────
+# distro package redis-server + the unix socket directory. One gate install.method==package
+# on the whole branch (block static-skip): install not passed / method=='package' → active.
+# The package carries BOTH redis-server AND the redis-sentinel daemon → installed in ALL modes,
+# including sentinel_only (deploy_redis=false). version is read straight off input.version
+# (required_when=package guarantees presence in this branch).
 #
-# Предикат — has()-цепочка, НЕ default(input.install.method, …): default() ловит
-# no-such-key только в ПЕРВОМ аргументе на ЛИСТЕ существующего map (отсутствие листа
-# method), а сам input.install может отсутствовать ЦЕЛИКОМ (корень) → default() упал
-# бы «no such key: install». «package» истинно: install не передан / method не задан /
+# The predicate is a has()-chain, NOT default(input.install.method, …): default() only catches
+# no-such-key on the FIRST argument on a LEAF of an existing map (absence of the leaf
+# method), while input.install itself may be missing ENTIRELY (the root) → default() would
+# fail with "no such key: install". "package" is true when: install not passed / method not set /
 # method == 'package'.
 - name: Install redis from the distribution package
   when: "!has(input.install) || !has(input.install.method) || input.install.method == 'package'"
   block:
-    # Пакет из репозитория дистрибутива. retry — против флапающего apt/dnf-зеркала.
-    # core.pkg всегда ставит distro-native =version-пин (воспроизводимая инсталляция).
+    # Package from the distro repository. retry — against a flapping apt/dnf mirror.
+    # core.pkg always installs distro-native =version-pinned (reproducible install).
     - name: Install redis-server package
       module: core.pkg.installed
       retry: { count: 3, delay: 10s }
@@ -35,13 +35,13 @@
         name: redis-server
         version: "${ input.version }"
 
-    # redis-sentinel — ОТДЕЛЬНЫЙ distro-пакет: на Debian/Ubuntu пакет redis-server НЕ
-    # кладёт исполняемый redis-sentinel под отдельный юнит → redis-sentinel.service падает
-    # 203/EXEC (дефект пойман live на Debian 12). Ставим его ТОЛЬКО в sentinel-режиме
-    # (sentinel_enabled): cluster/standalone без sentinel-демона пакет не тянут (парный
-    # негатив cluster-create-3shards). version — ТОТ ЖЕ distro-пин (версионируются вместе).
-    # has(input.sentinel_enabled)-guard НЕ нужен: default() ловит отсутствие листа (поле
-    # объявлено в destiny.yml input с дефолтом false).
+    # redis-sentinel — a SEPARATE distro package: on Debian/Ubuntu the redis-server package does
+    # NOT place an executable redis-sentinel under its own unit → redis-sentinel.service fails
+    # with 203/EXEC (defect caught live on Debian 12). Installed ONLY in sentinel mode
+    # (sentinel_enabled): cluster/standalone without a sentinel daemon don't pull the package (paired
+    # negative cluster-create-3shards). version — the SAME distro pin (versioned together).
+    # A has(input.sentinel_enabled) guard is NOT needed: default() catches the absent leaf (the field
+    # is declared in destiny.yml input with a default of false).
     - name: Install redis-sentinel package
       module: core.pkg.installed
       when: "default(input.sentinel_enabled, false)"
@@ -50,48 +50,48 @@
         name: redis-sentinel
         version: "${ input.version }"
 
-# ── binary-ветка (default, Nexus — ОТДЕЛЬНЫЕ бинари, НЕ tarball) ────────────────
-# ★ Редизайн install-модели: вместо tarball+extract качаем ТРИ отдельных бинаря
-# (redis-server/redis-cli/redis-benchmark) прямо в bin_dir (схема ansible-роли redis
-# installation.yml). Один gate install.method==binary на всю ветку (block static-skip).
-# binary НЕ несёт distro-пакета → САМА ставит то, что пакет даёт даром: бинари в
-# /usr/local/bin, distro-юзер/группу redis, свой systemd-юнит redis-server.service,
-# симлинки redis-check-aof/redis-check-rdb/redis-sentinel → redis-server. redis-sentinel —
-# СИМЛИНК на redis-server (НЕ отдельный fetch): redis-server в Nexus — multi-call бинарь,
-# запущенный как redis-sentinel (по argv[0]) работает в sentinel-режиме; отдельного
-# redis-sentinel в Nexus нет (404). Это поведение ansible-роли (installation.yml: качает
-# только server/cli/benchmark, sentinel вообще не упоминается в install). arch И версия
-# дистрибутива для URL — soulprint.self.os.arch / soulprint.self.os.version (soulprint в
-# destiny-CEL, прецедент node-exporter).
+# ── binary branch (default, Nexus — SEPARATE binaries, NOT a tarball) ────────────────
+# ★ Install-model redesign: instead of tarball+extract, fetch THREE separate binaries
+# (redis-server/redis-cli/redis-benchmark) straight into bin_dir (matches the ansible role redis
+# installation.yml scheme). One gate install.method==binary on the whole branch (block static-skip).
+# binary carries NO distro package → it MUST set up itself what the package gives for free: binaries in
+# /usr/local/bin, the distro redis user/group, its own systemd unit redis-server.service,
+# symlinks redis-check-aof/redis-check-rdb/redis-sentinel → redis-server. redis-sentinel is a
+# SYMLINK to redis-server (NOT a separate fetch): redis-server in Nexus is a multi-call binary,
+# started as redis-sentinel (by argv[0]) it runs in sentinel mode; there is no separate
+# redis-sentinel in Nexus (404). This mirrors the ansible role's behavior (installation.yml only fetches
+# server/cli/benchmark, sentinel isn't mentioned in install at all). arch AND the distro
+# version for the URL are soulprint.self.os.arch / soulprint.self.os.version (soulprint in
+# destiny-CEL, node-exporter precedent).
 #
-# URL per-host: <base_url>/<arch>/Debian/<distro_ver>/<version>/redis-{server,cli,benchmark}
-# (форма ansible redis_url_file_path: base/arch/distribution/distro_major/version/file).
-# Distribution захардкожен Debian (целевой парк); distro_ver — soulprint.self.os.version.
-# checksum НЕ передаётся → core.url.fetched качает по content-идемпотентности (SHA-256
-# содержимого), без integrity-verify — доверяем HTTPS + источнику (директива «попроще»).
+# URL per host: <base_url>/<arch>/Debian/<distro_ver>/<version>/redis-{server,cli,benchmark}
+# (matches the ansible redis_url_file_path form: base/arch/distribution/distro_major/version/file).
+# Distribution is hardcoded Debian (target fleet); distro_ver — soulprint.self.os.version.
+# checksum is NOT passed → core.url.fetched relies on content idempotency (SHA-256 of the
+# content), without an integrity verify — trusting HTTPS + the source (the "keep it simple" directive).
 #
-# ★ SSRF-guard (allow_private): дефолтный binary_base_url сервиса — ВНУТРЕННИЙ Nexus,
-# который резолвится в RFC1918-адрес (напр. 10.16.2.130). core.url.fetched по умолчанию
-# (allow_private:false) блокит dial в private-IP SSRF-guard-ом (shared/netguard) → fetch
-# бинарей падал бы. allow_private: ${ vars.redis_binary_allow_private } снимает guard для
-# этих fetch — ИМЕННО для доверенного internal Nexus (vars нормализует флаг из
-# apply.input.install.allow_private ← essence.binary_allow_private, дефолт true; публичный-
-# mirror-деплой с external-resolvable base ставит false). Это ослабление ОГРАНИЧЕНО binary-
-# веткой и взводится осознанно (essence), не глобальный opt-out.
+# ★ SSRF guard (allow_private): the service's default binary_base_url is an INTERNAL Nexus,
+# which resolves to an RFC1918 address (e.g. 10.16.2.130). core.url.fetched by default
+# (allow_private:false) blocks a dial to a private IP via the SSRF guard (shared/netguard) → fetching
+# binaries would fail. allow_private: ${ vars.redis_binary_allow_private } lifts the guard for
+# these fetches — SPECIFICALLY for a trusted internal Nexus (vars normalizes the flag from
+# apply.input.install.allow_private ← essence.binary_allow_private, default true; a public
+# mirror deployment with an externally resolvable base sets false). This relaxation is SCOPED to the binary
+# branch and is enabled deliberately (essence), not a global opt-out.
 #
-# ★ render-safety: задачи binary-блока несут has()-guard на input.install.version/base_url,
-#   хотя при method=binary эти поля присутствуют. Причина: при method=package весь блок
-#   static-skip, но CEL ячеек binary-задач Keeper ВСЁ РАВНО вычисляет (vars/params
-#   рендерятся до skip-проекции) — голый input.install.version упал бы «no such key:
-#   install». Guard даёт пустую строку в мёртвом проходе (значение не используется — skip).
+# ★ render-safety: tasks in the binary block carry a has() guard on input.install.version/base_url,
+#   even though at method=binary these fields are present. Reason: at method=package the whole block
+#   is static-skip, but Keeper STILL evaluates the CEL cells of binary tasks (vars/params
+#   are rendered before the skip projection) — a bare input.install.version would fail with "no such key:
+#   install". The guard yields an empty string in the dead pass (the value is unused — skip).
 - name: Install redis from upstream Nexus binaries
   when: "has(input.install) && has(input.install.method) && input.install.method == 'binary'"
   block:
-    # 1. distro-юзер/группа redis (binary НЕ создаёт их — это делает distro-пакет).
-    #    Группа ПЕРЕД юзером (primary group юзера). system-аккаунт без login-shell:
-    #    redis — сервис, не интерактивный логин. Стабильный uid/gid (stateful data-dir
-    #    /var/lib/redis требует стабильного владельца между рестартами — см. hardening.
-    #    conf.tmpl: DynamicUser непригоден). uid/gid НЕ пинуем (распределяет ОС).
+    # 1. distro redis user/group (binary does NOT create them — the distro package does).
+    #    Group BEFORE user (user's primary group). system account with no login shell:
+    #    redis is a service, not an interactive login. Stable uid/gid (the stateful data dir
+    #    /var/lib/redis needs a stable owner across restarts — see hardening.
+    #    conf.tmpl: DynamicUser is unsuitable). uid/gid are NOT pinned (the OS assigns them).
     - name: Ensure the redis group exists
       module: core.group.present
       params:
@@ -107,13 +107,13 @@
         shell: /usr/sbin/nologin
         home: "${ vars.redis_data_dir_eff }"
 
-    # 2. Скачать ТРИ бинаря (redis-server/redis-cli/redis-benchmark) per-host из Nexus в
-    #    bin_dir. Идемпотентность нативная по SHA-256 содержимого (аналог If-None-Match
-    #    ansible-роли): скачать во temp → сравнить хэш → запись только при diff. mode 0755
-    #    owner/group root. register'ы → рестарт redis-server (шаг ниже, В ЭТОМ файле)
-    #    реагирует на смену любого; cross-file onchanges отверг бы per-file линтер.
-    #    URL-база (vars.redis_binary_url_base) — has()-guard render-safe в мёртвом
-    #    package-проходе (см. шапку); собирается в vars.yml из install.base_url/version +
+    # 2. Fetch the THREE binaries (redis-server/redis-cli/redis-benchmark) per-host from Nexus into
+    #    bin_dir. Idempotency is native via content SHA-256 (an analog of the ansible role's
+    #    If-None-Match): download into temp → compare hash → write only on diff. mode 0755
+    #    owner/group root. registers → the redis-server restart (step below, IN THIS file)
+    #    reacts to any change; a cross-file onchanges would be rejected by the per-file linter.
+    #    URL base (vars.redis_binary_url_base) — has() guard render-safe in the dead
+    #    package pass (see the header); assembled in vars.yml from install.base_url/version +
     #    soulprint.self.os.arch/version.
     - name: Fetch the redis-server binary into the local bin directory
       module: core.url.fetched
@@ -148,36 +148,36 @@
         group: "${ vars.root_group }"
         allow_private: "${ vars.redis_binary_allow_private }"
 
-    # 3. Симлинки redis-check-aof/redis-check-rdb/redis-sentinel → redis-server. redis-server —
-    #    multi-call бинарь: запущенный как redis-sentinel (по argv[0]) работает в sentinel-
-    #    режиме, поэтому отдельный redis-sentinel в Nexus не нужен (его там и нет — 404).
-    #    check-aof/check-rdb — maintenance-тулзы того же бинаря. ansible-роль симлинит
-    #    check-aof/check-rdb императивно и sentinel-бинарь не качает вовсе. sentinel.yml
-    #    ждёт ${ vars.redis_bin_dir }/redis-sentinel при sentinel_enabled — этот симлинк его и даёт.
+    # 3. Symlinks redis-check-aof/redis-check-rdb/redis-sentinel → redis-server. redis-server is a
+    #    multi-call binary: started as redis-sentinel (by argv[0]) it runs in sentinel
+    #    mode, so a separate redis-sentinel in Nexus isn't needed (and it isn't there — 404).
+    #    check-aof/check-rdb are maintenance tools of the same binary. The ansible role symlinks
+    #    check-aof/check-rdb imperatively and doesn't fetch a sentinel binary at all. sentinel.yml
+    #    expects ${ vars.redis_bin_dir }/redis-sentinel when sentinel_enabled — this symlink provides it.
     #
-    #    ★★ ВРЕМЕННО (PILOT): симлинк через core.cmd.shell `ln -sfn` — у core.file НЕТ
-    #    декларативного symlink-state (только present/absent/rendered/directory).
-    #    Декларативный core.file.symlink — в backlog (architect отдельно). `ln -sfn`
-    #    атомарно переписывает симлинк (force + no-deref → не залезает В каталог-цель при
-    #    повторном прогоне); идемпотентность не строгая (всегда changed), но безопасна.
-    #    register общий → рестарт redis-server на смену (тулзы/sentinel — на переустановке).
+    #    ★★ TEMPORARY (PILOT): symlink via core.cmd.shell `ln -sfn` — core.file has NO
+    #    declarative symlink state (only present/absent/rendered/directory).
+    #    A declarative core.file.symlink is in the backlog (separate architect task). `ln -sfn`
+    #    atomically rewrites the symlink (force + no-deref → doesn't descend INTO the target directory on a
+    #    repeat run); idempotency is not strict (always changed), but safe.
+    #    shared register → redis-server restart on any change (tools/sentinel — on reinstall).
     - name: Symlink redis-check-aof, redis-check-rdb and redis-sentinel to redis-server
       module: core.cmd.shell
       register: redis_server_links
       params:
         cmd: "${ 'ln -sfn ' + vars.redis_bin_dir + '/redis-server ' + vars.redis_bin_dir + '/redis-check-aof && ln -sfn ' + vars.redis_bin_dir + '/redis-server ' + vars.redis_bin_dir + '/redis-check-rdb && ln -sfn ' + vars.redis_bin_dir + '/redis-server ' + vars.redis_bin_dir + '/redis-sentinel' }"
 
-    # 4. Свой systemd-юнит redis-server.service (binary НЕ несёт distro-юнита).
-    #    ★ Имя юнита redis-server — чтобы server.yml hardening drop-in
-    #    (/etc/systemd/system/redis-server.service.d/) и core.service redis-server
-    #    рестарт работали В ОБЕИХ ветках без ветвления. ExecStart=/usr/local/bin/
-    #    redis-server (binary-путь). register — рестарт при смене юнита.
+    # 4. Its own systemd unit redis-server.service (binary carries no distro unit).
+    #    ★ Unit name redis-server — so server.yml's hardening drop-in
+    #    (/etc/systemd/system/redis-server.service.d/) and the core.service redis-server
+    #    restart work in BOTH branches with no branching. ExecStart=/usr/local/bin/
+    #    redis-server (binary path). register — restart when the unit changes.
     - name: Render redis-server systemd unit (binary install)
       module: core.file.rendered
       register: redis_server_unit
       params:
-        # Путь юнита из vars.systemd_dir + имени СЕРВИСА (НЕ путь бинаря — тот в ExecStart
-        # шаблона фиксированный).
+        # Unit path from vars.systemd_dir + the SERVICE name (NOT the binary path — that's fixed
+        # in the template's ExecStart).
         path: "${ vars.systemd_dir + '/' + vars.redis_service_name + '.service' }"
         template: templates/redis-server.service.tmpl
         mode: "${ vars.unit_file_mode }"
@@ -189,24 +189,24 @@
           redis_user:  "${ vars.redis_user }"
           redis_group: "${ vars.redis_group }"
 
-    # 5. Рестарт redis-server на смену бинаря/юнита вынесен НИЖЕ top-level: он обязан
-    #    идти ПОСЛЕ создания каталога unix-сокета (нужен сервису при старте), а сокет —
-    #    top-level (обе ветки). Внутри binary-блока рестарт оказался бы ВЫШЕ сокета.
+    # 5. The redis-server restart on binary/unit change is moved BELOW to top level: it must
+    #    run AFTER creating the unix socket directory (needed by the service on start), and the socket is
+    #    top level (both branches). Inside the binary block the restart would end up ABOVE the socket.
 
-# ── conf-dir, data-dir и log-dir (обе ветки, БЕЗУСЛОВНО) ────────────────────────
-# Каталог конфигурации (/etc/redis: redis.conf, users.acl, sentinel.conf, sentinel-
-# users.acl, tls/) ОБЯЗАН существовать ДО первого рендера любого из этих файлов
-# (server.yml/sentinel.yml идут ПОСЛЕ этого include). package-ветка: distro-пакет
-# заводит /etc/redis сам — idempotent core.file.directory = no-op/чинит дрейф. binary-
-# ветка: пакета НЕТ, создать НЕКОМУ → рендер users.acl/redis.conf падал бы «open
-# .../.users.acl.tmp-…: no such file or directory» (caught live 2026-06-29). Потому
-# БЕЗУСЛОВНО (НЕ gated на install.method и НЕ на deploy_redis): conf-dir нужен ОБЕИМ
-# плоскостям — и redis-server (redis.conf/users.acl/tls), и sentinel-демону (sentinel.conf/
-# sentinel-users.acl в том же conf_dir, sentinel_only без deploy_redis тоже сюда пишет).
-# owner/group redis (пакет или binary-ветка их завели — задача ПОСЛЕ обоих установочных
-# блоков). mode 0750: владелец redis читает конфиг (secret-файлы 0640/0600), остальные не
-# входят. parents:true — conf_dir переопределяем оператором (input.conf_dir, может быть
-# глубоким путём с несуществующим родителем; default parents:false упал бы на нём).
+# ── conf-dir, data-dir and log-dir (both branches, UNCONDITIONALLY) ────────────────────────
+# The config directory (/etc/redis: redis.conf, users.acl, sentinel.conf, sentinel-
+# users.acl, tls/) MUST exist BEFORE the first render of any of these files
+# (server.yml/sentinel.yml run AFTER this include). package branch: the distro package
+# sets up /etc/redis itself — idempotent core.file.directory = no-op/fixes drift. binary
+# branch: there's no package, no one to create it → rendering users.acl/redis.conf would fail with "open
+# .../.users.acl.tmp-…: no such file or directory" (caught live 2026-06-29). Hence
+# UNCONDITIONAL (NOT gated on install.method and NOT on deploy_redis): the conf dir is needed by BOTH
+# planes — redis-server (redis.conf/users.acl/tls), and the sentinel daemon (sentinel.conf/
+# sentinel-users.acl in the same conf_dir, sentinel_only without deploy_redis also writes here).
+# owner/group redis (the package or the binary branch set them up — this task runs AFTER both install
+# blocks). mode 0750: the redis owner reads the config (secret files 0640/0600), others don't
+# get in. parents:true — the operator can override conf_dir (input.conf_dir may be a
+# deep path with a nonexistent parent; default parents:false would fail on it).
 - name: Ensure the redis configuration directory exists
   module: core.file.directory
   params:
@@ -216,16 +216,16 @@
     mode: "0750"
     parents: true
 
-# Каталоги данных (/var/lib/redis: RDB/AOF, modules) и логов (/var/log/redis:
-# redis-server.log/redis-sentinel.log) ОБЯЗАНЫ существовать ДО первого старта
-# redis-server (server.yml) И sentinel-демона. package-ветка: distro-пакет обычно
-# заводит data-dir, но НЕ всегда log-dir под наш logfile — idempotent core.file.directory
-# в пакетной инсталляции = no-op/чинит дрейф. binary-ветка: пакета нет, создать НЕКОМУ
-# (systemd RuntimeDirectory покрывает только run-dir, не stateful data/log). Потому
-# БЕЗУСЛОВНО (НЕ gated на install.method и НЕ на deploy_redis): оба каталога нужны и
-# redis-server, и sentinel-демону (sentinel_only без deploy_redis всё равно логирует).
-# owner/group redis (пакет или binary-ветка их завели — задачи идут ПОСЛЕ обоих
-# установочных блоков). mode 0750: владелец redis читает/пишет, остальные не входят.
+# The data (/var/lib/redis: RDB/AOF, modules) and log (/var/log/redis:
+# redis-server.log/redis-sentinel.log) directories MUST exist BEFORE the first start of
+# redis-server (server.yml) AND the sentinel daemon. package branch: the distro package usually
+# sets up the data dir, but NOT always the log dir for our logfile — idempotent core.file.directory
+# in a package install = no-op/fixes drift. binary branch: there's no package, no one to create it
+# (systemd RuntimeDirectory only covers the run dir, not stateful data/log). Hence
+# UNCONDITIONAL (NOT gated on install.method and NOT on deploy_redis): both directories are needed by
+# redis-server and the sentinel daemon (sentinel_only without deploy_redis still logs).
+# owner/group redis (the package or the binary branch set them up — these tasks run AFTER both
+# install blocks). mode 0750: the redis owner reads/writes, others don't get in.
 - name: Ensure the redis data directory exists
   module: core.file.directory
   params:
@@ -244,35 +244,35 @@
     mode: "0750"
     parents: true
 
-# ── Каталог unix-сокета (обе ветки) ─────────────────────────────────────────────
-# ТОЛЬКО если в merged-конфиге есть директива unixsocket. Пакетный systemd создаёт
-# каталог через RuntimeDirectory лишь при старте юнита (хрупко); создаём явно ДО старта/
-# рестарта redis-server, но ПОСЛЕ установки (нужен пользователь/группа redis — пакет или
-# binary-ветка их завели; поэтому задача идёт после обоих установочных блоков).
-# Декларативное core.file.directory: idempotent по mode/owner/group, чинит дрейф,
-# dry-run. mode 0755: владелец redis пишет сокет, остальные обходят каталог; доступ к
-# сокету режет unixsocketperm (директива конфига). НЕ gated на install.method (нужен в
-# обеих ветках), gated на deploy_redis + наличие unixsocket в config.
+# ── unix socket directory (both branches) ─────────────────────────────────────────────
+# ONLY if the merged config has a unixsocket directive. The packaged systemd unit creates
+# the directory via RuntimeDirectory only on unit start (fragile); we create it explicitly BEFORE the
+# redis-server start/restart, but AFTER install (needs the redis user/group — the package or
+# binary branch set them up; hence the task runs after both install blocks).
+# Declarative core.file.directory: idempotent on mode/owner/group, fixes drift,
+# dry-run. mode 0755: the redis owner writes the socket, others traverse the directory; access to
+# the socket is cut by unixsocketperm (a config directive). NOT gated on install.method (needed in
+# both branches), gated on deploy_redis + presence of unixsocket in config.
 - name: Ensure the redis socket directory exists
   module: core.file.directory
   when: "default(input.deploy_redis, true) && has(input.config) && has(input.config.unixsocket)"
   params:
-    # mode 0755 — литералом (точечный, нужен только этой задаче): владелец redis пишет
-    # сокет, остальные обходят каталог.
+    # mode 0755 — as a literal (a one-off, needed only by this task): the redis owner writes
+    # the socket, others traverse the directory.
     path: "${ vars.socket_dir }"
     owner: "${ vars.redis_user }"
     group: "${ vars.redis_group }"
     mode: "0755"
 
-# ── Первичный старт redis-server — ЕДИНСТВЕННЫЙ, в server.yml (НЕ здесь) ─────────
-# Преждевременный рестарт redis-server на смену бинаря/юнита УБРАН: на day-1 он
-# стартовал redis-server ДО рендера redis.conf/users.acl/data-dir (следующий include
-# server.yml) → restart-loop. Первичный старт остаётся единственным —
-# server.yml `core.service.running redis-server`, который идёт ПОСЛЕ рендера конфига +
-# ACL + каталогов (data/log/socket); daemon_reload:auto подхватывает свежий binary-юнит.
-# register'ы binary-ветки (redis_server_bin/redis_server_links/redis_server_unit) остаются
-# объявленными (захват результата fetch/links/unit), потребителя-onchanges у них теперь нет.
+# ── Primary redis-server start — the ONLY one, in server.yml (NOT here) ─────────
+# The premature redis-server restart on binary/unit change was REMOVED: on day-1 it
+# started redis-server BEFORE the render of redis.conf/users.acl/data-dir (the next include
+# server.yml) → restart-loop. The primary start remains the single one —
+# server.yml's `core.service.running redis-server`, which runs AFTER the config render +
+# ACL + directories (data/log/socket); daemon_reload:auto picks up the fresh binary unit.
+# The binary branch's registers (redis_server_bin/redis_server_links/redis_server_unit) remain
+# declared (capturing the fetch/links/unit result), but no longer have an onchanges consumer.
 #
-# ★ day-2 binary-upgrade рестарт вынесен в upgrade-сценарий/ручной — ВРЕМЕННО, см.
-# architect-аудит 2026-06-29: апгрейд бинаря на ЖИВОМ инстансе НЕ авто-рестартит
-# (core.service.running видит active → no-op), пока нет day-2 upgrade-сценария.
+# ★ The day-2 binary-upgrade restart is moved to an upgrade scenario/manual — TEMPORARILY, see
+# the architect audit 2026-06-29: upgrading the binary on a LIVE instance does NOT auto-restart
+# (core.service.running sees active → no-op) until there's a day-2 upgrade scenario.

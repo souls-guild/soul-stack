@@ -1,9 +1,9 @@
 name: preserves-unrelated
 description: >
-  Миграция трогает ТОЛЬКО provisioned_vm_ids/provisioned_provider: остальной state
-  (redis_type/redis_config/redis_users/redis_sentinel/namedfields/топология)
-  проходит насквозь без изменений. Без provision-полей до миграции → они доливаются
-  default-ом ([], ''), всё прочее — бит-в-бит.
+  The migration touches ONLY provisioned_vm_ids/provisioned_provider: the rest of the state
+  (redis_type/redis_config/redis_users/redis_sentinel/namedfields/topology)
+  passes through unchanged. Without provision fields before the migration -> they get
+  filled with a default ([], ''), everything else is bit-for-bit.
 
 state_before:
   redis_type: "sentinel"

@@ -1,7 +1,7 @@
 name: users-list-to-map
 description: >
-  Базовый случай: список имён пользователей переходит в map с per-user perms.
-  Несколько пользователей — foreach по элементам списка.
+  Base case: a list of usernames turns into a map with per-user perms.
+  Multiple users — foreach over list elements.
 
 state_before:
   redis_users: ["app", "monitor"]

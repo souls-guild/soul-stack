@@ -1,8 +1,8 @@
 # L3a E2E fixture — Oracle typed-PortentPayload full-loop (V5-1, ADR-030).
 #
-# Один Soul-stub, привязанный к web-coven. После открытия EventStream-а stub
-# эмитит PortentEvent с typed file_changed → Oracle матчит Decree → ставит
-# named-scenario в work-queue → apply_runs(planned).
+# A single Soul-stub bound to the web-coven. After opening the EventStream, the stub
+# emits a PortentEvent with typed file_changed → Oracle matches a Decree → queues
+# the named-scenario in the work-queue → apply_runs(planned).
 souls:
   - sid: soul-oracle-0.example.com
     coven:

@@ -1,17 +1,17 @@
-# Конфиг soul-агента на управляемом хосте.
+# Config of the soul agent on a managed host.
 
-# SID = FQDN хоста; автоматически определяется, можно переопределить вручную.
+# SID = host FQDN; auto-detected, can be overridden manually.
 # sid: redis1.cache-test-dev.example
 
-# Где живут артефакты на этом хосте
+# Where artifacts live on this host
 paths:
-  modules: /var/lib/soul-stack/modules   # кеш custom-модулей soul-mod-<имя>-<sha>
-  seed:    /var/lib/soul-stack/seed      # SoulSeed-cert + private key (выпускается через `soul init`)
+  modules: /var/lib/soul-stack/modules   # cache of custom modules soul-mod-<name>-<sha>
+  seed:    /var/lib/soul-stack/seed      # SoulSeed cert + private key (issued via `soul init`)
 
-# Подключение к Keeper-кластеру.
-# host — общий для обеих фаз; event_stream_port (mTLS, `soul run`) и
-# bootstrap_port (server-only TLS, `soul init`) — оба обязательны.
-# priority упорядочивает обе фазы (см. docs/soul/config.md → keeper.endpoints).
+# Connection to the Keeper cluster.
+# host is shared across both phases; event_stream_port (mTLS, `soul run`) and
+# bootstrap_port (server-only TLS, `soul init`) are both required.
+# priority orders both phases (see docs/soul/config.md → keeper.endpoints).
 keeper:
   endpoints:
     - host: k1.dc1.example
@@ -46,20 +46,20 @@ keeper:
     interval: 1h
     spray: 10m
 
-  # mTLS-материалы выпускаются keeper-ом (через Vault PKI) при первом CSR
+  # mTLS materials are issued by keeper (via Vault PKI) on the first CSR
   tls:
     ca: /var/lib/soul-stack/seed/ca.crt
 
-# Soulprint — что собираем как факты о хосте
+# Soulprint — what we collect as facts about the host
 soulprint:
   refresh_interval: 5m
 
-# Cleanup кеша модулей на хосте
+# Cleanup of the module cache on the host
 cleanup:
   modules_ttl_days: 30
   run_interval: 24h
 
-# Логи и метрики
+# Logs and metrics
 logging:
   level: info
   format: json
@@ -73,9 +73,9 @@ otel:
   enabled: true
   endpoint: "k1.dc1.example:4317"
 
-# Lifecycle и capabilities плагинов (ADR-020) — симметрично keeper-side
+# Plugin lifecycle and capabilities (ADR-020) — symmetric with keeper-side
 plugin_runtime:
-  socket_dir: /var/run/soul-stack/plugins        # для Soul-host (без -keeper-суффикса)
+  socket_dir: /var/run/soul-stack/plugins        # for a Soul host (without the -keeper suffix)
   startup_timeout: 10s
   shutdown_grace: 10s
   allowed_capabilities:

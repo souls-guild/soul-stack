@@ -1,12 +1,12 @@
-# L0-испытание create: essence-override корня загрузки ВСЕХ трёх observability-агентов
-# (node-exporter / redis-exporter / vector) на внутреннее зеркало/nexus-proxy.
+# L0 test for create: essence override of the download root for ALL three observability agents
+# (node-exporter / redis-exporter / vector) to an internal mirror/nexus-proxy.
 #
-# Хосты без доступа к github.com (WB-стенд) качают релизы через raw-proxy Nexus,
-# зеркалящий github-путь 1:1. Доказываем: essence.{node_exporter,redis_exporter,vector}_base_url
-# доезжают через apply:input до core.url.fetched каждой под-destiny; без override
-# default остаётся GitHub Releases (back-compat, см. остальные кейсы).
+# Hosts without access to github.com (WB stand) pull releases through the Nexus raw-proxy,
+# mirroring the github path 1:1. We prove: essence.{node_exporter,redis_exporter,vector}_base_url
+# make it through apply:input to core.url.fetched of each sub-destiny; without an override
+# the default remains GitHub Releases (back-compat, see the other cases).
 #
-# Подложка — monitoring-exporters (sentinel, 1 хост, provision off).
+# Substrate — monitoring-exporters (sentinel, 1 host, provision off).
 name: create fetches all exporters from essence base_url mirror override
 
 fixtures:
@@ -55,8 +55,8 @@ fixtures:
     vector_sink_endpoint: ""
     vector_sink_auth_ref: ""
     vector_log_sources: ["/var/log/redis/*.log"]
-    # ★ Проверяемое: корни загрузки трёх агентов → внутреннее зеркало (github-путь 1:1)
-    # + allow_private (снятый SSRF-guard для private-resolve зеркала, паттерн redis
+    # ★ Under test: download roots of the three agents → internal mirror (github path 1:1)
+    # + allow_private (SSRF-guard lifted for private-resolve mirror, pattern from redis
     # destiny.yml install.allow_private).
     node_exporter_base_url: "https://nexus.internal/raw-proxy-github/prometheus/node_exporter/releases/download"
     node_exporter_allow_private: true
@@ -82,7 +82,7 @@ fixtures:
 
 assert:
   task_present:
-    # Дизамбигуатор между тремя core.url.fetched — path (уникален у каждого агента).
+    # Disambiguator between the three core.url.fetched — path (unique for each agent).
     - module: core.url.fetched
       params_subset:
         url: https://nexus.internal/raw-proxy-github/prometheus/node_exporter/releases/download/v1.8.2/node_exporter-1.8.2.linux-amd64.tar.gz

@@ -1,13 +1,13 @@
-# ★★ КРИТИЧНЫЙ guard-инвариант (system-ACL-users d2): add_user НЕ СТИРАЕТ системных.
-# add_user перерендеривает ПОЛНЫЙ users.acl из state.redis_users (только operator-extra).
-# БЕЗ долива системных из essence этот рендер СТЁР БЫ replica/monitoring/sentinel/haproxy
-# → сломал бы репликацию/sentinel/health-check на повторном прогоне. Этот кейс ДОКАЗЫВАЕТ, что
-# add_user доливает системных из essence.system_acl_users на КАЖДОМ рендере:
-#   users.acl несёт СИСТЕМНЫЕ (replica/monitoring/sentinel/haproxy) + operator-extra
-#   (новый alice + сохранённый bob), КАЖДЫЙ со своим vault-паролем.
-# state_changes.redis_users несёт ТОЛЬКО operator-extra (alice+bob) — системные НЕ в
-# state (пункт 7 d2). Регресс «add_user стёр системных» = расхождение vars.users
-# (нет replica/monitoring/sentinel/haproxy) → ассерт красный.
+# ★★ CRITICAL guard invariant (system-ACL-users d2): add_user does NOT WIPE system users.
+# add_user re-renders the FULL users.acl from state.redis_users (operator-extra only).
+# WITHOUT topping up system users from essence, this render WOULD WIPE replica/monitoring/sentinel/haproxy
+# → would break replication/sentinel/health-check on the next run. This case PROVES that
+# add_user tops up system users from essence.system_acl_users on EVERY render:
+#   users.acl carries SYSTEM (replica/monitoring/sentinel/haproxy) + operator-extra
+#   (new alice + preserved bob), EACH with its own vault password.
+# state_changes.redis_users carries ONLY operator-extra (alice+bob) — system users are NOT in
+# state (item 7 d2). A regression where "add_user wiped system users" = a mismatch in vars.users
+# (missing replica/monitoring/sentinel/haproxy) → assert fails.
 name: add_user re-renders full acl WITHOUT wiping system users (preserve guard)
 
 fixtures:
@@ -16,7 +16,7 @@ fixtures:
     network: { primary_ip: 10.0.0.5 }
     os: { arch: amd64 }
 
-  # Развёрнутый state: operator-extra bob. Системные НЕ в state (доливаются из essence).
+  # Expanded state: operator-extra bob. System users are NOT in state (topped up from essence).
   state:
     redis_type: sentinel
     redis_version: "7.2.4"
@@ -36,12 +36,12 @@ fixtures:
       - { name: bob, perms: "~app:* +@read", state: "on" }
 
   essence:
-    # host-layout (conf_dir/data_dir/modules_base_url) — в essence (v11→v12, Вариант A).
+    # host-layout (conf_dir/data_dir/modules_base_url) — in essence (v11->v12, Option A).
     conf_dir: /etc/redis
     data_dir: /var/lib/redis
     modules_base_url: "https://artifacts.example.com/redis/modules"
-    # Системные ACL redis-server (perms 1:1 из роли, БЕЗ default). add_user ОБЯЗАН их
-    # долить, иначе rerender стирает служебных.
+    # System redis-server ACLs (perms 1:1 from the role, WITHOUT default). add_user MUST
+    # top them up, otherwise rerender wipes the service accounts.
     system_acl_users:
       default_admin: "~* &* +@all"
       replica:    "+psync +replconf +ping"
@@ -75,8 +75,8 @@ fixtures:
 
 assert:
   task_present:
-    # users.acl несёт СИСТЕМНЫЕ + operator-extra (alice+bob). deep-compare ловит
-    # ЛЮБОЕ исчезновение системного (регресс стирания).
+    # users.acl carries SYSTEM + operator-extra (alice+bob). deep-compare catches
+    # ANY disappearance of a system user (wipe regression).
     - module: core.file.rendered
       params_subset:
         path: /etc/redis/users.acl
@@ -124,7 +124,7 @@ assert:
           role: ""
           essence: {}
 
-    # hot-reload ACL LOAD — plain-инстанс. ★ РЕДИЗАЙН default_admin: AUTH под default_admin.
+    # hot-reload ACL LOAD — plain instance. ★ default_admin REDESIGN: AUTH as default_admin.
     - module: community.redis.acl
       params_subset:
         addr: "127.0.0.1:6379"
@@ -132,9 +132,9 @@ assert:
         password: default-admin-secret-pass
         tls: false
 
-  # state_changes: redis_users несёт bob+alice БЕЗ системных (write-model = operator-
-  # extra, МАССИВ AclUser wave 1b). Порядок array-upsert: сохранённый bob ПЕРВЫМ,
-  # новый alice ДОПИСАН (filter(name != alice) + [alice]).
+  # state_changes: redis_users carries bob+alice WITHOUT system users (write-model = operator-
+  # extra, AclUser ARRAY wave 1b). Order of array-upsert: preserved bob FIRST,
+  # new alice APPENDED (filter(name != alice) + [alice]).
   state_changes:
     redis_users:
       - { name: bob, perms: "~app:* +@read", state: "on" }

@@ -1,11 +1,11 @@
 name: monitoring
 state_schema_version: 1
-description: Ставит Prometheus-экспортеры (node_exporter + redis_exporter) на VM с Linux/systemd
+description: Installs Prometheus exporters (node_exporter + redis_exporter) on a VM with Linux/systemd
 
-# state_schema_version = 1 → каталог migrations/ не обязателен (ADR-019).
-# incarnation.state хранит зафиксированные версии экспортеров и адрес
-# redis-сокета, против которого подключается redis_exporter — этого достаточно,
-# чтобы оператор видел, что развёрнуто, и чтобы повторный create был idempotent.
+# state_schema_version = 1 → the migrations/ directory is not required (ADR-019).
+# incarnation.state stores the recorded exporter versions and the address
+# of the redis socket that redis_exporter connects to — that's enough
+# for the operator to see what's deployed and for a repeated create to stay idempotent.
 state_schema:
   type: object
   required: [node_exporter_version, redis_exporter_version, redis_socket]
@@ -14,23 +14,23 @@ state_schema:
     redis_exporter_version: { type: string }
     redis_socket:           { type: string }
 
-# Зависимости-destiny (ADR-007: версия зависимости = git ref, не semver-range).
-# Резолв git-URL — гибрид (docs/keeper/config.md::default_destiny_source):
-#  - запись без git: → git-URL = default_destiny_source + {name} (keeper.yml);
-#  - запись c git:    → override, git-URL берётся напрямую.
-# apply:destiny ссылается ТОЛЬКО на имена, объявленные здесь (иначе резолвер
-# отвергает зависимость).
+# Destiny dependencies (ADR-007: dependency version = git ref, not a semver range).
+# git-URL resolution is a hybrid (docs/keeper/config.md::default_destiny_source):
+#  - entry without git: → git-URL = default_destiny_source + {name} (keeper.yml);
+#  - entry with git:    → override, git-URL is taken directly.
+# apply:destiny refers ONLY to names declared here (otherwise the resolver
+# rejects the dependency).
 #
-# node-exporter — переиспользуемая standalone-destiny в examples/destiny/ (НЕ
-# внутри этого сервиса): scenario её не рендерит, только оркеструет apply:destiny
-# и прокидывает её input. Прод-grade вариант (стабильный сервис-аккаунт
-# node_exporter + hardening + arch из soulprint) живёт в destiny, дрейф с
-# инлайн-копией устранён.
+# node-exporter — reusable standalone destiny in examples/destiny/ (NOT
+# inside this service): the scenario doesn't render it, it only orchestrates apply:destiny
+# and passes through its input. The prod-grade variant (stable service account
+# node_exporter + hardening + arch from soulprint) lives in destiny; drift with
+# the inline copy has been eliminated.
 #
-# redis-exporter здесь НЕ через apply:destiny (остаётся инлайн в scenario/create):
-# прод-destiny redis-exporter требует redis_password (required) и несёт
-# Requires=redis-server.service, а назначение этого сервиса — экспортеры на хосте,
-# где Redis уже работает (возможно, без auth) и сервис сам Redis НЕ ставит. См.
-# scenario/create/main.yml (комментарий у redis_exporter-блока) и README.
+# redis-exporter here is NOT via apply:destiny (stays inline in scenario/create):
+# the prod-destiny redis-exporter requires redis_password (required) and carries
+# Requires=redis-server.service, while this service's purpose is exporters on a host
+# where Redis is already running (possibly without auth), and the service does NOT install Redis itself. See
+# scenario/create/main.yml (comment on the redis_exporter block) and the README.
 destiny:
   - { name: node-exporter, ref: v1.0.0 }

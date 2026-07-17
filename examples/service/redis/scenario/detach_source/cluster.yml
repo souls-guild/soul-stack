@@ -1,23 +1,24 @@
-# Ветка диспетчера detach_source — режим cluster. ★ NO-OP (B3, S4-3b): в cluster-режиме
-# отцеплять НЕЧЕГО — миграция cluster АТОМАРНА. B3-поток migrate_cluster/cluster.yml уже
-# выкинул старые ноды из кластера шагом forget-external (CLUSTER FORGET) в migrate-фазе
-# ТОГО прогона, и выставил seeded_from.detached := true сразу (main.yml ветвит detached
-# по redis_type). К моменту detach у cluster-инкарнации источник УЖЕ отцеплён — отдельного
-# REPLICAOF NO ONE, как в sentinel (где источник остаётся жив до ручного detach), нет.
+# detach_source dispatcher branch - cluster mode. * NO-OP (B3, S4-3b): in cluster mode
+# there is NOTHING to detach - cluster migration is ATOMIC. The B3 flow migrate_cluster/cluster.yml
+# already kicked the old nodes out of the cluster via the forget-external step (CLUSTER FORGET)
+# in the migrate phase of THAT run, and set seeded_from.detached := true right away (main.yml
+# branches detached by redis_type). By the time detach runs on a cluster incarnation, the source
+# is ALREADY detached - there's no separate REPLICAOF NO ONE like in sentinel (where the source
+# stays alive until manual detach).
 #
-# Это ОТЛИЧАЕТ cluster от sentinel-ветки: sentinel.yml делает финальный offset-gate +
-# REPLICAOF NO ONE (источник живёт до detach), cluster — ничего (forget атомарен в
-# migrate). Подключается из main.yml через CONDITIONAL-INCLUDE (`when: incarnation.state
-# .redis_type == 'cluster'`). state_changes main.yml безусловно мержит detached:true —
-# для cluster-инкарнации это идемпотентно (B3 уже выставил true).
+# This is what DIFFERS cluster from the sentinel branch: sentinel.yml does a final offset-gate +
+# REPLICAOF NO ONE (source lives until detach), cluster does nothing (forget is atomic in
+# migrate). Included from main.yml via CONDITIONAL-INCLUDE (`when: incarnation.state
+# .redis_type == 'cluster'`). state_changes in main.yml unconditionally merges detached:true -
+# for a cluster incarnation this is idempotent (B3 already set true).
 #
-# assert ниже — render-фазный keeper-side guard (НЕ emit RenderedTask), он ПРОХОДИТ на
-# нормально-мигрированной cluster-инкарнации (detached уже true) и даёт ВНЯТНОЕ сообщение
-# лишь в аномалии: cluster-инкарнация с detached==false означала бы прерванную/не
-# завершённую B3-миграцию (forget не отработал) — её НЕ чинит detach_source (cluster
-# отцепляется атомарно в migrate_cluster, не здесь), нужен повторный прогон migrate_cluster.
+# The assert below is a render-phase keeper-side guard (does NOT emit RenderedTask); it PASSES
+# on a normally-migrated cluster incarnation (detached already true) and gives a CLEAR message
+# only in an anomaly: a cluster incarnation with detached==false would mean an interrupted/
+# unfinished B3 migration (forget did not complete) - detach_source does NOT fix that (cluster
+# detaches atomically in migrate_cluster, not here); it needs a re-run of migrate_cluster.
 - name: Cluster source is already detached by migrate_cluster (B3 forget is atomic)
   assert:
     that:
       - "default(incarnation.state.seeded_from.detached, false)"
-    message: "detach_source в режиме cluster: отцеплять нечего — B3-миграция cluster атомарна, forget старых нод выполнен в migrate_cluster (CLUSTER FORGET в migrate-фазе), seeded_from.detached уже true. detached==false означает прерванную миграцию — её чинит повторный прогон migrate_cluster, не detach_source."
+    message: "detach_source in cluster mode: nothing to detach - B3 cluster migration is atomic, forget of old nodes was done in migrate_cluster (CLUSTER FORGET in the migrate phase), seeded_from.detached is already true. detached==false means an interrupted migration - fixed by re-running migrate_cluster, not detach_source."

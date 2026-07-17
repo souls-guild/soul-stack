@@ -1,9 +1,9 @@
-# L0-испытание (Trial, ADR-023): install.method=package (ЯВНО). Зеркало install-binary.
-# Режим sentinel single-host (1 master + 0 реплик = standalone-эквивалент) — install-
-# ветка install.yml режим-агностична. Guard: при method=package активна package-ветка
-# install.yml (core.pkg.installed redis-server на index 0), а binary-ветка
-# (url.fetched/archive/user/group/три core.file.present-бинаря/unit/restart) —
-# placeholder-skip (params пусты). Явный method=package = дефолт.
+# L0-trial (Trial, ADR-023): install.method=package (EXPLICIT). Mirrors install-binary.
+# sentinel single-host mode (1 master + 0 replicas = standalone-equivalent) — the install
+# branch of install.yml is mode-agnostic. Guard: with method=package the package branch
+# of install.yml is active (core.pkg.installed redis-server on index 0), while the binary
+# branch (url.fetched/archive/user/group/three core.file.present binaries/unit/restart) is
+# placeholder-skip (params empty). Explicit method=package = the default.
 name: install method package installs the distro redis-server package
 
 fixtures:
@@ -17,10 +17,10 @@ fixtures:
   vault:
     secret/redis/create:
       password: s3cr3t-redis-pass-create
-    # Per-user секреты системных юзеров (secret/redis/<inc>/users/<name>#password) —
-    # их резолвит keeper-side vault() при доливе system_acl_users в apply.input.users.
-    # ★ РЕДИЗАЙН default_admin (2026-06-30): default_admin — системный юзер
-    # внутрикластерного AUTH (auth_pass/PING шаги деплоя читают его по ветке users/<name>).
+    # Per-user secrets of system users (secret/redis/<inc>/users/<name>#password) —
+    # resolved by keeper-side vault() when topping up system_acl_users into apply.input.users.
+    # ★ default_admin REDESIGN (2026-06-30): default_admin is the system user for
+    # intra-cluster AUTH (the deploy's auth_pass/PING steps read it via the users/<name> branch).
     secret/redis/create/users/default_admin:
       password: default-admin-secret-pass
     secret/redis/create/users/replica:
@@ -32,12 +32,12 @@ fixtures:
     secret/redis/create/users/haproxy:
       password: haproxy-sys-secret-pass
   essence:
-    # install_method — в essence (author-context, 2026-06-28): способ установки
-    # НЕ operator-input. compute.install читает default(essence.install_method, 'binary').
+    # install_method — in essence (author-context, 2026-06-28): the install method
+    # is NOT operator-input. compute.install reads default(essence.install_method, 'binary').
     install_method: package
     redis_type: sentinel
     sentinel_master_name: master
-    # ★ Редизайн: подложка per-master sentinel-дефолтов (под input.sentinel_master_settings).
+    # ★ Redesign: per-master sentinel-defaults substrate (backing input.sentinel_master_settings).
     sentinel_master_defaults:
       down-after-milliseconds: "5000"
       failover-timeout:        "60000"
@@ -50,10 +50,10 @@ fixtures:
     redis_config:
       maxmemory: "256mb"
 
-    # Системные ACL-юзеры redis-server + sentinel-демона (1:1 из essence/_default.yaml).
-    # ОБА ОБЯЗАТЕЛЬНЫ: guard create/sentinel.yml (assert 1b) рвёт render при пустом
-    # любом из наборов (тихий fail-open недопустим — без них репликация/sentinel↔redis
-    # AUTH сломались бы).
+    # System ACL users for redis-server + the sentinel daemon (1:1 from essence/_default.yaml).
+    # BOTH ARE REQUIRED: the create/sentinel.yml guard (assert 1b) breaks render if either
+    # set is empty (a silent fail-open is unacceptable — without them replication/sentinel↔redis
+    # AUTH would break).
     system_acl_users:
       default_admin: "~* &* +@all"
       replica:    "+psync +replconf +ping"
@@ -66,45 +66,45 @@ fixtures:
       sentinel:   "allchannels -@all +auth +client|getname +client|id +client|setname +command +hello +ping +sentinel|is-master-down-by-addr +publish +role +sentinel|get-master-addr-by-name +sentinel|master +sentinel|myid +sentinel|replicas +sentinel|sentinels"
       haproxy:    "-@all +auth +client|getname +client|id +client|setname +command +hello +ping +role +sentinel|get-master-addr-by-name +sentinel|master +sentinel|myid +sentinel|replicas +sentinel|sentinels"
   input:
-    # ★ provision выключен (default-on: опущенная секция = ВКЛЮЧЕНО; кейс деплоит на
-    # ГОТОВЫЙ roster, cloud-create не нужен) → include redis-provision.yml group-drop.
+    # ★ provision disabled (default-on: an omitted section = ENABLED; the case deploys to a
+    # READY roster, cloud-create not needed) → include redis-provision.yml group-drop.
     provision:
       enabled: false
     redis_type: sentinel
     version: "7.4.1"
     persistence: rdb
-    # single-host sentinel roster (1 хост) → реплик нет (size-guard 1+0).
+    # single-host sentinel roster (1 host) → no replicas (size-guard 1+0).
     replicas_per_master: 0
 
 assert:
   task_present:
-    # distro-пакет: core.pkg.installed с distro-пином (package-ветка активна).
+    # distro package: core.pkg.installed with a distro-pin (package branch active).
     - module: core.pkg.installed
       params_subset:
         name: redis-server
         version: "7.4.1"
 
-    # ★ redis-sentinel — ОТДЕЛЬНЫЙ distro-пакет (redis-server его НЕ тянет), нужен
-    # на хосте для sentinel-демона (иначе redis-sentinel.service → 203/EXEC, дефект
-    # пойман live на Debian 12). Режим sentinel → sentinel_enabled=true → пакет в плане.
-    # version — ТОТ ЖЕ distro-пин, что у redis-server (версионируются вместе). Guard
-    # против регресса «package-ветка ставит только redis-server». Парный негатив —
-    # cluster-create-3shards (cluster + package → redis-sentinel ОТСУТСТВУЕТ).
+    # ★ redis-sentinel is a SEPARATE distro package (redis-server does NOT pull it), needed
+    # on the host for the sentinel daemon (otherwise redis-sentinel.service → 203/EXEC, a defect
+    # caught live on Debian 12). sentinel mode → sentinel_enabled=true → package in the plan.
+    # version — the SAME distro-pin as redis-server (versioned together). Guard
+    # against the regression "package branch installs only redis-server". The paired negative is
+    # cluster-create-3shards (cluster + package → redis-sentinel ABSENT).
     - module: core.pkg.installed
       params_subset:
         name: redis-sentinel
         version: "7.4.1"
 
-    # redis.conf на месте. Полную сверку merged config даёт full-stack; здесь — что
-    # data-плоскость поведение-сохранна (тот же модуль/путь, что в default-режиме).
+    # redis.conf is in place. A full merged-config check is provided by full-stack; here we only
+    # verify data-plane behavior is preserved (same module/path as in default mode).
     - module: core.file.rendered
       params_subset:
         path: /etc/redis/redis.conf
 
   task_absent:
-    # binary-ветка install.yml выключена (method=package → static-skip): tarball-fetch
-    # и раскладка бинаря — placeholder-skip без params. params_subset не сматчит
-    # placeholder (Params nil) → guard «package НЕ запускает binary-install».
+    # the binary branch of install.yml is disabled (method=package → static-skip): tarball-fetch
+    # and binary layout are placeholder-skip without params. params_subset won't match
+    # the placeholder (Params nil) → guard "package does NOT trigger binary-install".
     - module: core.url.fetched
       params_subset:
         path: "/tmp/redis-7.2.4.tar.gz"
@@ -121,8 +121,8 @@ assert:
       appendonly: "no"
     redis_users: []
     redis_hosts: []
-    # ★ Редизайн: тайминги failover в master_settings (дефолты essence.sentinel_master_defaults;
-    # operator dict не задан). settings — глобальные sentinel-директивы (не заданы → {}).
+    # ★ Redesign: failover timings in master_settings (defaults from essence.sentinel_master_defaults;
+    # operator dict not set). settings — global sentinel directives (not set → {}).
     redis_sentinel:
       master_name: master
       quorum: 0

@@ -9,32 +9,32 @@ required_capabilities:
 spec:
   states:
     present:
-      description: Файл существует с заданным content/mode/owner/group (ADR-015).
+      description: File exists with the given content/mode/owner/group (ADR-015).
       input:
-        path:    { type: string, required: true, description: "Целевой путь файла." }
-        content: { type: string, description: "Содержимое файла (inline). Взаимоисключается с src; ни одного — пустой файл." }
-        src:     { type: string, description: "Абсолютный путь regular-файла на хосте, содержимое копируется в path (типично результат core.archive.extracted). Задаёт только содержимое, не атрибуты источника. Взаимоисключается с content." }
-        mode:    { type: string, description: "Права в восьмеричной форме, напр. \"0640\"." }
-        owner:   { type: string, description: "Владелец (имя пользователя)." }
-        group:   { type: string, description: "Группа-владелец (имя группы)." }
+        path:    { type: string, required: true, description: "Target file path." }
+        content: { type: string, description: "File content (inline). Mutually exclusive with src; if neither is given, an empty file." }
+        src:     { type: string, description: "Absolute path of a regular file on the host, its content is copied to path (typically the result of core.archive.extracted). Sets only the content, not the source's attributes. Mutually exclusive with content." }
+        mode:    { type: string, description: "Permissions in octal form, e.g. \"0640\"." }
+        owner:   { type: string, description: "Owner (username)." }
+        group:   { type: string, description: "Owning group (group name)." }
     absent:
-      description: Файл удалён.
+      description: File is removed.
       input:
-        path: { type: string, required: true, description: "Путь удаляемого файла." }
+        path: { type: string, required: true, description: "Path of the file to remove." }
     directory:
-      description: Каталог существует с заданным owner/group/mode (замена `core.exec.run install -d`, ADR-015).
+      description: Directory exists with the given owner/group/mode (replacement for `core.exec.run install -d`, ADR-015).
       input:
-        path:    { type: string, required: true, description: "Целевой путь каталога." }
-        mode:    { type: string, description: "Права в восьмеричной форме, напр. \"0755\"." }
-        owner:   { type: string, description: "Владелец (имя пользователя)." }
-        group:   { type: string, description: "Группа-владелец (имя группы)." }
-        parents: { type: bool,   description: "Создавать промежуточные каталоги (семантика mkdir -p). Default false." }
+        path:    { type: string, required: true, description: "Target directory path." }
+        mode:    { type: string, description: "Permissions in octal form, e.g. \"0755\"." }
+        owner:   { type: string, description: "Owner (username)." }
+        group:   { type: string, description: "Owning group (group name)." }
+        parents: { type: bool,   description: "Create intermediate directories (mkdir -p semantics). Default false." }
     rendered:
-      description: Файл = результат рендера text/template-шаблона (ADR-010).
+      description: File = result of rendering a text/template template (ADR-010).
       input:
-        path:     { type: string, required: true, description: "Целевой путь рендеренного файла." }
-        template: { type: string, required: true, description: "Путь к .tmpl-шаблону (резолвится локально, потом service-level)." }
-        vars:     { type: map,    items: { type: string }, description: "Переменные рендера (видны шаблону как .vars.*)." }
-        mode:     { type: string, description: "Права в восьмеричной форме, напр. \"0644\"." }
-        owner:    { type: string, description: "Владелец (имя пользователя)." }
-        group:    { type: string, description: "Группа-владелец (имя группы)." }
+        path:     { type: string, required: true, description: "Target path of the rendered file." }
+        template: { type: string, required: true, description: "Path to the .tmpl template (resolved locally, then service-level)." }
+        vars:     { type: map,    items: { type: string }, description: "Render variables (visible to the template as .vars.*)." }
+        mode:     { type: string, description: "Permissions in octal form, e.g. \"0644\"." }
+        owner:    { type: string, description: "Owner (username)." }
+        group:    { type: string, description: "Owning group (group name)." }

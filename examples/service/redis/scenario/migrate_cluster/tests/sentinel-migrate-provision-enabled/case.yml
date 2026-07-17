@@ -1,35 +1,35 @@
-# L0-испытание migrate_cluster в режиме sentinel С provision (ADR-061, Вариант A).
-# Парный к sentinel-migrate-1master-1replica (existing-таргет, provision опущен) и к
-# create/provision-enabled-sentinel: проверяет, что migrate_cluster ТЕМ ЖЕ общим
-# provision-телом (service-level scenario/redis-provision.yml) поднимает VM ПЕРЕД
-# деплоем+миграцией. Поток: (а) core.cloud.created поднимает VM (count = 1 + replicas =
-# 2, топология sentinel), (б) core.bootstrap.delivered доставляет токен, (в)
-# core.soul.registered регистрирует созданные SID + барьер await_online +
-# refresh_soulprint, ПОТОМ деплой нового кластера (redis-deploy-sentinel.yml) + заливка
-# с внешнего источника (community.redis.replica source_external + offset-synced).
+# L0 trial for migrate_cluster in sentinel mode WITH provision (ADR-061, Variant A).
+# Paired with sentinel-migrate-1master-1replica (existing target, provision omitted) and with
+# create/provision-enabled-sentinel: verifies that migrate_cluster uses the SAME shared
+# provision body (service-level scenario/redis-provision.yml) to bring up VMs BEFORE
+# deploy+migration. Flow: (a) core.cloud.created brings up VMs (count = 1 + replicas =
+# 2, sentinel topology), (b) core.bootstrap.delivered delivers the token, (c)
+# core.soul.registered registers the created SIDs + the await_online barrier +
+# refresh_soulprint, THEN deploys the new cluster (redis-deploy-sentinel.yml) + seeds
+# from an external source (community.redis.replica source_external + offset-synced).
 #
-# include redis-provision.yml gated на has(input.provision) && input.provision.enabled
-# у main.yml (placeholder-skip-форма include-when — object-input не статичен): здесь
-# enabled=true → шаги тела таргетят roster. Provision-include СТРОГО ПЕРЕД cluster/
-# sentinel-веткой (main.yml::tasks) — VM поднимаются до деплоя.
+# The redis-provision.yml include is gated on has(input.provision) && input.provision.enabled
+# in main.yml (placeholder-skip form of include-when — object-input isn't static): here
+# enabled=true -> the body steps target the roster. The provision-include is STRICTLY BEFORE the
+# cluster/sentinel branch (main.yml::tasks) — VMs come up before the deploy.
 #
-# ★ register.provision в L0 — из mocks.register (probe не исполняется, ADR-023): шаги
-# (б)/(в) provision-тела и state_changes (provisioned_*) читают register.provision.
-# {vm_ids,hosts} отсюда. Roster — 2 хоста (vm-1 master, vm-2 реплика); в проде их даёт
-# refresh_soulprint после онбординга, в L0 mid-run re-resolve — stub, roster = статичный
-# fixture, поэтому задаём 2 хоста руками. sid-ы созданных VM = SID-ы roster-а.
+# * register.provision in L0 comes from mocks.register (the probe isn't executed, ADR-023): steps
+# (b)/(c) of the provision body and state_changes (provisioned_*) read register.provision.
+# {vm_ids,hosts} come from it. The roster is 2 hosts (vm-1 master, vm-2 replica); in prod it's
+# provided by refresh_soulprint after onboarding, in L0 mid-run re-resolve is stubbed, roster is a
+# static fixture, so the 2 hosts are supplied by hand. The created VM sids = the roster's sids.
 #
-# ВНИМАНИЕ L0-ограничение (как sentinel-migrate/sentinel-create): apply.input
-# host-инвариантен в пилоте (резолвится на ПЕРВОМ targeted-хосте) → render_context.self
-# в destiny = vm-1 (master).
+# NOTE the L0 limitation (like sentinel-migrate/sentinel-create): apply.input
+# is host-invariant in the pilot (resolved on the FIRST targeted host) -> render_context.self
+# in destiny = vm-1 (master).
 name: sentinel migrate provisions VMs first then deploys and seeds from external source
 
 fixtures:
   default_destiny_source: "file://../../destiny/{name}"
-  # NIM-58: incarnation.name L0 по умолчанию = имя сценария ("migrate_cluster"),
-  # но подчёркивание — НЕвалидная VM-база; provision-guard требует реалистичное имя.
+  # NIM-58: incarnation.name in L0 defaults to the scenario name ("migrate_cluster"),
+  # but an underscore is an INvalid VM base name; the provision-guard requires a realistic name.
   incarnation_name: "redis-prod"
-  # Порядок намеренно не отсортирован (2, 1) — harness и master-election сортируют по SID.
+  # Order deliberately unsorted (2, 1) — the harness and master-election sort by SID.
   hosts:
     - sid: vm-2.example.com
       covens: [redis-prod, redis]
@@ -44,8 +44,8 @@ fixtures:
   vault:
     secret/redis/redis-prod:
       password: s3cr3t-redis-pass-migrate
-    # ★ РЕДИЗАЙН default_admin (2026-06-30): default_admin — системный юзер
-    # внутрикластерного AUTH (auth_pass/PING шаги деплоя читают его по ветке users/<name>).
+    # * default_admin REDESIGN (2026-06-30): default_admin — the system user for
+    # in-cluster AUTH (auth_pass/PING deploy steps read it via the users/<name> branch).
     secret/redis/redis-prod/users/default_admin:
       password: default-admin-secret-pass
     secret/redis/redis-prod/users/replica:
@@ -56,14 +56,14 @@ fixtures:
       password: sentinel-sys-secret-pass
     secret/redis/redis-prod/users/haproxy:
       password: haproxy-sys-secret-pass
-    # ★ Учётка ВНЕШНЕГО источника под pattern-guard secret/redis/migrate/*. Читается
-    # авторским каналом vault(input.source.password_ref) — password_ref = ниже в input.
+    # * External source account under the pattern-guard secret/redis/migrate/*. Read via
+    # the authored channel vault(input.source.password_ref) — password_ref is set below in input.
     secret/redis/migrate/oldcluster:
       password: old-cluster-source-pass
   essence:
-    # install_method — в essence (author-context): способ установки НЕ operator-input
-    # (covenant.compute.install читает default(essence.install_method, 'binary')). package
-    # явно (поле переехало input→essence вместе с migrate, тираж covenant).
+    # install_method — in essence (author-context): install method is NOT operator-input
+    # (covenant.compute.install reads default(essence.install_method, 'binary')). package
+    # explicitly (the field moved input->essence together with migrate, covenant rollout).
     install_method: package
     redis_type: sentinel
     sentinel_master_name: master
@@ -75,8 +75,8 @@ fixtures:
       rdb:
         save: "900 1 300 10 60 10000"
         appendonly: "no"
-    # ★ Редизайн: подложка per-master sentinel-директив (compute.sentinel_directives /
-    # state.redis_sentinel.master_settings). Дефолты удалённых полей 5000/60000.
+    # * Redesign: per-master sentinel directive substrate (compute.sentinel_directives /
+    # state.redis_sentinel.master_settings). Defaults for removed fields 5000/60000.
     sentinel_master_defaults:
       down-after-milliseconds: "5000"
       failover-timeout: "60000"
@@ -98,33 +98,33 @@ fixtures:
       haproxy:    "-@all +auth +client|getname +client|id +client|setname +command +hello +ping +role +sentinel|get-master-addr-by-name +sentinel|master +sentinel|myid +sentinel|replicas +sentinel|sentinels"
   input:
     redis_type: sentinel
-    # ★ version — enum выкаченных в Nexus сборок (редизайн). install_method переехал в
-    # essence (выше) — НЕ operator-input после тиража covenant. connection_mode/
-    # sentinel_settings опущены → дефолты.
+    # * version — enum of builds shipped to Nexus (redesign). install_method moved into
+    # essence (above) — NOT operator-input after the covenant rollout. connection_mode/
+    # sentinel_settings omitted -> defaults.
     version: "7.4.1"
     replicas_per_master: 1
-    # ★ provision ВКЛЮЧЁН: поднять VM под топологию sentinel (count = 1 + replicas = 2)
-    # ПЕРЕД деплоем+миграцией. await_timeout=5m перекрывает essence-дефолт (10m).
+    # * provision ENABLED: bring up VMs for the sentinel topology (count = 1 + replicas = 2)
+    # BEFORE deploy+migration. await_timeout=5m overrides the essence default (10m).
     provision:
       enabled: true
       provider: wb-dev
       profile: redis-small
       await_timeout: "5m"
       ssh_provider: ssh-wb
-    # ★ Внешний источник: координаты + Vault-ПУТЬ к паролю (под pattern-guard).
+    # * External source: coordinates + Vault PATH to the password (under the pattern-guard).
     source:
       hosts:
         - "10.9.0.1:6379"
         - "10.9.0.2:6379"
       password_ref: "secret/redis/migrate/oldcluster#password"
       tls: false
-    # verify опущен → lag_threshold default 0, skip_checksum default false.
+    # verify omitted -> lag_threshold default 0, skip_checksum default false.
 
-# register.provision — готовый payload core.cloud.created (L0-проброс, шаг (а) не
-# исполняется): vm_ids созданных VM + hosts[{sid,...,bootstrap_token}]. Шаги (б)/(в) и
-# state_changes читают его. sid-ы созданных VM = SID-ы roster-а (в проде refresh_soulprint
-# их и добавил бы; здесь roster уже несёт их). 2 VM под sentinel-топологию (1 master + 1
-# реплика).
+# register.provision — the ready-made core.cloud.created payload (L0-passthrough, step (a) is not
+# executed): vm_ids of the created VMs + hosts[{sid,...,bootstrap_token}]. Steps (b)/(c) and
+# state_changes read it. The created VM sids = the roster's sids (in prod refresh_soulprint
+# would add them; here the roster already carries them). 2 VMs for the sentinel topology (1 master + 1
+# replica).
 mocks:
   register:
     provision:
@@ -135,39 +135,39 @@ mocks:
 
 assert:
   task_present:
-    # ── provision-тело (redis-provision.yml), ПЕРЕД деплоем ──────────────────────
-    # (а) core.cloud.created: count = 1 + replicas_per_master = 2 (sentinel-топология,
-    # НЕ shards*(1+replicas)), generate_userdata: false (VM без cloud-init, setup ставит
-    # шаг (б) install: true). Единственная core.cloud.created в плане.
+    # -- provision body (redis-provision.yml), BEFORE the deploy ---------------------
+    # (a) core.cloud.created: count = 1 + replicas_per_master = 2 (sentinel topology,
+    # NOT shards*(1+replicas)), generate_userdata: false (VM without cloud-init, setup uses
+    # step (b) install: true). The only core.cloud.created in the plan.
     - module: core.cloud.created
       params_subset:
         provider: wb-dev
         profile: redis-small
         count: 2
-        # name — run-identity батча = incarnation.name (здесь "redis-prod"): драйвер
-        # именует VM <name>-<seq> + label soulstack-run=<name> (идемпотентность, NIM-16).
+        # name — the batch run-identity = incarnation.name (here "redis-prod"): the driver
+        # names the VMs <name>-<seq> + label soulstack-run=<name> (idempotency, NIM-16).
         name: redis-prod
         generate_userdata: false
 
-    # (б) core.bootstrap.delivered: install + доставка per-VM bootstrap-токена по SSH
-    # (ADR-063). install: true (VM без cloud-init, setup ставится по SSH); hosts =
-    # ${ register.provision.hosts } (весь payload, 2 VM с bootstrap_token); ssh_provider
-    # из input.provision. Единственная core.bootstrap.delivered в плане.
+    # (b) core.bootstrap.delivered: install + delivery of the per-VM bootstrap token over SSH
+    # (ADR-063). install: true (VM without cloud-init, setup delivered over SSH); hosts =
+    # ${ register.provision.hosts } (the whole payload, 2 VMs with bootstrap_token); ssh_provider
+    # from input.provision. The only core.bootstrap.delivered in the plan.
     - module: core.bootstrap.delivered
       params_subset:
         ssh_provider: ssh-wb
         install: true
-        # join_wait_timeout — из essence.provision_join_wait_timeout (input.provision его
-        # не задаёт). Guard: essence-дефолт доходит до шага (не хардкод), duration-строка.
+        # join_wait_timeout — from essence.provision_join_wait_timeout (input.provision doesn't
+        # set it). Guard: the essence default reaches the step (not hardcoded), a duration string.
         join_wait_timeout: "55m"
         hosts:
           - { sid: vm-1.example.com, vm_id: i-aaa111, primary_ip: 10.0.0.1, bootstrap_token: tok-vm1 }
           - { sid: vm-2.example.com, vm_id: i-bbb222, primary_ip: 10.0.0.2, bootstrap_token: tok-vm2 }
 
-    # (в) core.soul.registered: sid — список SID созданных VM (register.provision.hosts
-    # .map(h, h.sid)); coven — корневой incarnation.name (redis-prod); барьер
-    # онбординга await_online + refresh_soulprint; await_timeout из input.provision (5m,
-    # перекрывает essence 10m). Единственная core.soul.registered в плане.
+    # (c) core.soul.registered: sid — the list of created VM SIDs (register.provision.hosts
+    # .map(h, h.sid)); coven — the root incarnation.name (redis-prod); the onboarding
+    # barrier await_online + refresh_soulprint; await_timeout from input.provision (5m,
+    # overrides essence's 10m). The only core.soul.registered in the plan.
     - module: core.soul.registered
       params_subset:
         sid: [vm-1.example.com, vm-2.example.com]
@@ -176,65 +176,65 @@ assert:
         refresh_soulprint: true
         await_timeout: "5m"
 
-    # ── redis-deploy-sentinel.yml (деплой нового кластера) катится ПОСЛЕ provision ──
-    # render_context.self = vm-1 (master, host-инвариант apply.input). Дизамбигуатор от
-    # users.acl/sentinel.conf/hardening (тот же core.file.rendered) — path.
+    # -- redis-deploy-sentinel.yml (new cluster deploy) runs AFTER provision --------
+    # render_context.self = vm-1 (master, host-invariant of apply.input). Disambiguator from
+    # users.acl/sentinel.conf/hardening (same core.file.rendered) — path.
     - module: core.file.rendered
       params_subset:
         path: /etc/redis/redis.conf
 
-    # ── deploy-тело: ВНУТРИ-кластерный REPLICAOF (community.redis.replica) ───────
-    # addr=127.0.0.1:6379 (per-host локальный), master_addr=10.0.0.1:6379 (master-
-    # election vm-1). ОТЛИЧАЕТСЯ от source-replica (шаг ниже) по master_addr (10.0.0.1
-    # ВНУТРИ vs 10.9.0.1 ВНЕШНИЙ) и отсутствию source_external.
+    # -- deploy body: IN-CLUSTER REPLICAOF (community.redis.replica) ---------------
+    # addr=127.0.0.1:6379 (per-host local), master_addr=10.0.0.1:6379 (master
+    # election vm-1). DIFFERS from the source-replica step below by master_addr (10.0.0.1
+    # INSIDE vs 10.9.0.1 EXTERNAL) and by the absence of source_external.
     - module: community.redis.replica
       params_subset:
         addr: "127.0.0.1:6379"
         master_addr: "10.0.0.1:6379"
-        # ★ РЕДИЗАЙН default_admin: внутрикластерная replica→master AUTH под default_admin.
+        # * default_admin REDESIGN: in-cluster replica->master AUTH under default_admin.
         username: default_admin
         password: default-admin-secret-pass
 
-    # ── МИГРАЦИЯ: REPLICAOF на ВНЕШНИЙ источник (community.redis.replica, source_external) ──
-    # run_once на vm-1 (master нового кластера). master_addr=10.9.0.1:6379 (source.hosts[0]),
-    # source_external:true, master_password = vault(source.password_ref). Дизамбигуатор от
-    # внутрикластерного replica — source_external:true + master_addr=внешний.
+    # -- MIGRATION: REPLICAOF to the EXTERNAL source (community.redis.replica, source_external) --
+    # run_once on vm-1 (master of the new cluster). master_addr=10.9.0.1:6379 (source.hosts[0]),
+    # source_external:true, master_password = vault(source.password_ref). Disambiguator from the
+    # in-cluster replica — source_external:true + external master_addr.
     - module: community.redis.replica
       params_subset:
         addr: "127.0.0.1:6379"
         master_addr: "10.9.0.1:6379"
         source_external: true
-        # ★ РЕДИЗАЙН default_admin: LOCAL-коннект под default_admin; master_password — источник.
+        # * default_admin REDESIGN: LOCAL connection under default_admin; master_password — the source.
         username: default_admin
         password: default-admin-secret-pass
         master_password: old-cluster-source-pass
         master_tls: false
 
-    # ── МИГРАЦИЯ: offset-gate (community.redis.offset-synced) ────────────────────
-    # run_once на vm-1. source_addr=10.9.0.1:6379 (внешний), lag_threshold=0 (default
+    # -- MIGRATION: offset gate (community.redis.offset-synced) --------------------
+    # run_once on vm-1. source_addr=10.9.0.1:6379 (external), lag_threshold=0 (default
     # verify), skip_checksum=false. source_password = vault(source.password_ref).
     - module: community.redis.offset-synced
       params_subset:
         addr: "127.0.0.1:6379"
         source_addr: "10.9.0.1:6379"
-        # ★ РЕДИЗАЙН default_admin: LOCAL-коннект под default_admin; source_password — источник.
+        # * default_admin REDESIGN: LOCAL connection under default_admin; source_password — the source.
         username: default_admin
         password: default-admin-secret-pass
         source_password: old-cluster-source-pass
         lag_threshold: 0
         skip_checksum: false
 
-  # ★ SPLIT-BRAIN-ФИКС: SENTINEL MONITOR НЕ исполняется в миграции (как sentinel-migrate-
-  # 1master-1replica). when: vars.sentinel_monitor_now (=false) → static-when placeholder-skip
-  # шага 4 деплой-тела (Params=nil, presence task_absent проходит). MONITOR делает
-  # detach_source ПОСЛЕ REPLICAOF NO ONE.
+  # * SPLIT-BRAIN FIX: SENTINEL MONITOR is NOT executed during migration (like sentinel-migrate-
+  # 1master-1replica). when: vars.sentinel_monitor_now (=false) -> static-when placeholder-skips
+  # step 4 of the deploy body (Params=nil, presence task_absent passes). MONITOR runs
+  # detach_source AFTER REPLICAOF NO ONE.
   task_absent:
     - module: community.redis.sentinel
 
-  # create-набор state + cloud-provision read-model + seed-source read-model. redis_config
-  # БЕЗ cluster-директив (sentinel). provisioned_* — ФАКТ «эти VM подняты этим migrate-
-  # прогоном» (для cascade-destroy teardown); тот же guard+форма, что create.
-  # seeded_from: source_endpoints = source.hosts ЦЕЛИКОМ, detached:false (источник ещё жив).
+  # create-set of state + cloud-provision read-model + seed-source read-model. redis_config
+  # WITHOUT cluster directives (sentinel). provisioned_* — the FACT "these VMs were brought up by this migrate
+  # run" (for cascade-destroy teardown); same guard+shape as create.
+  # seeded_from: source_endpoints = source.hosts ENTIRELY, detached:false (source still alive).
   state_changes:
     redis_type: sentinel
     redis_version: "7.4.1"
@@ -247,8 +247,8 @@ assert:
       appendonly:       "no"
     redis_users: []
     redis_hosts: []
-    # ★ Редизайн: redis_sentinel несёт обобщённые map-ы (master_settings/settings).
-    # master_settings = essence-дефолты; settings={} (sentinel_settings не задан).
+    # * Redesign: redis_sentinel carries generalized maps (master_settings/settings).
+    # master_settings = essence defaults; settings={} (sentinel_settings not set).
     redis_sentinel:
       master_name: master
       quorum: 0
@@ -274,14 +274,14 @@ assert:
     memory_mb: 0
     modules: [bloom, json, search, timeseries]
     sysctl_settings: {}
-    # ★ cloud-provision read-model: vm_ids из register.provision, provider из
-    # input.provision, sids из register.provision.hosts[].sid (гейт input.provision.enabled).
+    # * cloud-provision read-model: vm_ids from register.provision, provider from
+    # input.provision, sids from register.provision.hosts[].sid (gated on input.provision.enabled).
     provisioned_vm_ids: [i-aaa111, i-bbb222]
     provisioned_sids: [vm-1.example.com, vm-2.example.com]
     provisioned_provider: wb-dev
-    # ★ seed-source read-model (v10): откуда мигрировали + detached:false + ССЫЛКИ на
-    # учётку источника. source_password_ref = input.source.password_ref; source_tls_ca_ref=''
-    # (tls:false, tls_ca_ref не задан).
+    # * seed-source read-model (v10): where migrated from + detached:false + REFERENCES to
+    # the source account. source_password_ref = input.source.password_ref; source_tls_ca_ref=''
+    # (tls:false, tls_ca_ref not set).
     seeded_from:
       source_endpoints:
         - "10.9.0.1:6379"

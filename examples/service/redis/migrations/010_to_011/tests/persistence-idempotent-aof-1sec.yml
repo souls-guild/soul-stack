@@ -1,15 +1,15 @@
 name: persistence-idempotent-aof-1sec
 description: >
-  ИДЕМПОТЕНТНОСТЬ remap: state УЖЕ в НОВОМ enum (persistence:aof_1sec) — как будто
-  010_to_011 уже отработала раз. Повторный прогон НЕ должен ничего менять:
-    - persistence:aof_1sec → тождество (ни 'aof', ни 'rdb_aof' → ветка тернара
-      возвращает state.persistence как есть; НЕ ремапится повторно в что-то иное);
-    - connection_mode/io_threads уже присутствуют → set перезаписывает тем же значением
-      (plain / 0), state стабилен;
+  IDEMPOTENCY of remap: state is ALREADY in the NEW enum (persistence:aof_1sec) — as if
+  010_to_011 already ran once. A repeat run must NOT change anything:
+    - persistence:aof_1sec → identity (neither 'aof' nor 'rdb_aof' → the ternary branch
+      returns state.persistence as is; NOT remapped again into something else);
+    - connection_mode/io_threads already present → set overwrites with the same value
+      (plain / 0), state is stable;
     - cluster (redis_sentinel == {}) → size==0 no-op.
-  Доказывает forward-стабильность: re-apply миграции на уже-мигрированном state —
-  фикс-точка (важно при ручном повторе/восстановлении из state_history). aof_always —
-  parный кейс persistence-idempotent-aof-always.
+  Proves forward-stability: re-applying the migration on an already-migrated state is a
+  fixed point (important for manual re-run/recovery from state_history). aof_always is the
+  paired case persistence-idempotent-aof-always.
 
 state_before:
   redis_type: cluster

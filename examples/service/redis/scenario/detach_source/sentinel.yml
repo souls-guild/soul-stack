@@ -1,65 +1,74 @@
-# Ветка диспетчера detach_source — режим sentinel. Финальный offset-gate (fail-closed)
-# + отцепление нового master-а от внешнего источника (REPLICAOF NO ONE). Подключается из
-# main.yml через CONDITIONAL-INCLUDE (`when: incarnation.state.redis_type == 'sentinel'`).
+# detach_source dispatcher branch — sentinel mode. Final offset-gate (fail-closed)
+# + detaching the new master from the external source (REPLICAOF NO ONE). Included
+# from main.yml via CONDITIONAL-INCLUDE (`when: incarnation.state.redis_type == 'sentinel'`).
 #
-# ★ compute.* (source_master/tls_*) объявлены в detach_source/main.yml (top-level
-# scenario-блок) и видны здесь как compute.<name>.
+# ★ compute.* (source_master/tls_*) are declared in detach_source/main.yml
+# (top-level scenario block) and are visible here as compute.<name>.
 #
-# Поток:
-#   0. PRECONDITION-GUARD: инкарнация ДОЛЖНА быть залита migrate_cluster (seeded_from
-#      .source_endpoints непуст). detach — обычный сценарий сопровождения (нет runnable:false), оператор
-#      может запустить его на create'нутой инкарнации, которая никогда не мигрировала —
-#      у такой source_endpoints ПУСТ (миграция 008_to_009 даёт каждой v9 пустой
-#      seeded_from). assert ОТСЕКАЕТ её ВНЯТНЫМ отказом ДО probe (render-фазный
-#      fail-closed, симметрично cluster.yml-заглушке), вместо опаковой ошибки compute
-#      `index out of bounds`. Стоит ПЕРВЫМ — раньше любого коннекта к Redis.
-#   1. ФИНАЛЬНЫЙ offset-gate ПЕРЕД detach (повторно, как migrate_cluster шаг 3, но на
-#      этом прогоне источник из state): убедиться, что новый master ВСЁ ЕЩЁ синхронен с
-#      источником НЕПОСРЕДСТВЕННО перед разрывом. fail-closed: не синхронен за окно →
-#      шаг failed → state НЕ коммитится → error_locked (detached НЕ выставится, источник
-#      останется привязан — безопаснее, чем отцепить недогнанную реплику и потерять хвост).
-#   2. REPLICAOF NO ONE (community.redis.detached) — перевести новый master в
-#      самостоятельный режим. ПОСЛЕ этого источник можно гасить (на стороне оператора).
-#   3. SENTINEL MONITOR (community.redis.sentinel) — ★ ПЕРЕНЕСЁН СЮДА из общего деплой-тела
-#      (redis-deploy-sentinel.yml шаг 4) prod-фиксом split-brain. При миграции sentinel НЕ
-#      мониторит master, пока тот реплицирует внешний источник (на синке role:slave > down-
-#      after → sentinel инициировал бы failover → split-brain/разрыв заливки; деплой-тело
-#      гейтит шаг 4 на compute.sentinel_monitor_now=false у migrate_cluster). detach снимает
-#      эту привязку шагом 2 (REPLICAOF NO ONE) — master СНОВА АВТОНОМЕН, и ТОЛЬКО ТЕПЕРЬ
-#      sentinel-демоны получают команду мониторить реального master. Форма задачи —
-#      1:1 копия шага 4 деплой-тела (community.redis.sentinel, monitor.ip=master-election,
-#      quorum=большинство, тайминги из compute.sentinel_directives); источники адаптированы
-#      на state (master_name/тайминги/версия из incarnation.state, см. compute main.yml).
-#      Стоит ПОСЛЕ шага 2 — мониторим уже автономный master, не реплику.
+# Flow:
+#   0. PRECONDITION-GUARD: the incarnation MUST have been seeded by migrate_cluster
+#      (seeded_from.source_endpoints is non-empty). detach is a regular operational
+#      scenario (no runnable:false), the operator can run it on a create'd
+#      incarnation that never migrated — for that one source_endpoints is EMPTY
+#      (migration 008_to_009 gives every v9 an empty seeded_from). assert REJECTS
+#      it with a CLEAR failure BEFORE probe (render-phase fail-closed, symmetric to
+#      the cluster.yml stub), instead of an opaque compute `index out of bounds`
+#      error. Runs FIRST — before any connection to Redis.
+#   1. FINAL offset-gate BEFORE detach (again, like migrate_cluster step 3, but on
+#      this run the source comes from state): make sure the new master is STILL in
+#      sync with the source RIGHT BEFORE the split. fail-closed: not in sync within
+#      the window → step fails → state is NOT committed → error_locked (detached is
+#      NOT set, the source stays attached — safer than detaching a lagging replica
+#      and losing the tail).
+#   2. REPLICAOF NO ONE (community.redis.detached) — switch the new master into
+#      standalone mode. AFTER this the source can be decommissioned (operator side).
+#   3. SENTINEL MONITOR (community.redis.sentinel) — ★ MOVED HERE from the shared
+#      deploy body (redis-deploy-sentinel.yml step 4) as a split-brain prod fix.
+#      During migration sentinel does NOT monitor the master while it replicates
+#      from the external source (on the replica role:slave > down-after →
+#      sentinel would trigger a failover → split-brain/broken seeding; the deploy
+#      body gates step 4 on compute.sentinel_monitor_now=false for migrate_cluster).
+#      detach removes that gate via step 2 (REPLICAOF NO ONE) — the master is
+#      AUTONOMOUS AGAIN, and ONLY NOW do the sentinel daemons get told to monitor
+#      the real master. The task shape is a 1:1 copy of deploy-body step 4
+#      (community.redis.sentinel, monitor.ip=master-election, quorum=majority,
+#      timings from compute.sentinel_directives); sources are adapted to state
+#      (master_name/timings/version from incarnation.state, see compute main.yml).
+#      Runs AFTER step 2 — we monitor the now-autonomous master, not a replica.
 
-# 0. PRECONDITION-GUARD: seeded_from.source_endpoints непуст (инкарнация прошла
-#    migrate_cluster). assert — render-фазный keeper-side, видит incarnation.state в
-#    ПОЛНОМ scenario-CEL-контексте (как when:/cluster.yml-заглушка). false → ErrAssertFailed
-#    ДО dispatch (state не мутируется, error_locked не ставится — отказ на модели).
-#    Проверяем ИСХОДНЫЙ source_endpoints, НЕ compute.source_master (тот fail-soft отдаёт
-#    '' на пустом — по нему «пусто ли» уже не отличить; см. compute detach_source/main.yml).
+# 0. PRECONDITION-GUARD: seeded_from.source_endpoints is non-empty (the incarnation
+#    went through migrate_cluster). assert is render-phase keeper-side, it sees
+#    incarnation.state in the FULL scenario-CEL context (like when:/the cluster.yml
+#    stub). false → ErrAssertFailed BEFORE dispatch (state is not mutated,
+#    error_locked is not set — the failure is at the model level).
+#    We check the RAW source_endpoints, NOT compute.source_master (that one
+#    fail-soft returns '' when empty — you can no longer tell it apart from
+#    "empty"; see compute in detach_source/main.yml).
 - name: Source must be seeded by migrate_cluster before detach
   assert:
     that:
       - "size(default(incarnation.state.seeded_from.source_endpoints, [])) >= 1"
-    message: "инкарнация не была залита migrate_cluster — seeded_from пуст, отцеплять нечего"
+    message: "incarnation was never seeded by migrate_cluster — seeded_from is empty, nothing to detach"
 
-# 1. ФИНАЛЬНЫЙ offset-lag gate ПЕРЕД detach. Тот же community.redis.offset-synced, что
-#    migrate_cluster шаг 3, но источник — из incarnation.state.seeded_from (compute
-#    .source_master), а не из input. run_once на hosts[0] (новый master). changed_when:
-#    false (probe/gate). retry/until крутит, пока caught_up; failed_when: caught_up !=
-#    true — fail-closed (окно вышло, реплика отстала → НЕ отцепляем).
-#    ★ lag_threshold ЖЁСТКО 0: detach — точка невозврата (после REPLICAOF NO ONE хвост
-#    источника не подтянуть), поэтому финальная проверка требует ПОЛНОЙ синхронизации
-#    (offset совпал бит-в-бит), без допуска отставания. addr — локальный новый master
-#    (compute.tls_*); source_addr — внешний источник.
-#    ★ source_password/source_tls/source_tls_ca (v10 прод-фикс) — учётка ВНЕШНЕГО источника
-#    из ССЫЛОК в state (compute.source_password/source_tls_ca = vault() по seeded_from
-#    .source_password_ref/source_tls_ca_ref, персистнуты migrate_cluster). Теперь gate
-#    АУТЕНТИФИЦИРУЕТСЯ к AUTH/TLS-источнику (до v10 source_password='' → коннект к
-#    защищённому источнику падал → detach НИКОГДА не проходил). source_tls включается ровно
-#    когда есть CA (compute.source_tls_ca != '' — migrate резолвит CA только при source.tls).
-#    Источник без AUTH/TLS (ref пуст) → source_password=''/source_tls=false, как было.
+# 1. FINAL offset-lag gate BEFORE detach. Same community.redis.offset-synced as
+#    migrate_cluster step 3, but the source comes from incarnation.state.seeded_from
+#    (compute.source_master), not from input. run_once on hosts[0] (the new master).
+#    changed_when: false (probe/gate). retry/until spins until caught_up;
+#    failed_when: caught_up != true — fail-closed (window elapsed, replica lagged
+#    → we do NOT detach).
+#    ★ lag_threshold is HARD 0: detach is a point of no return (after REPLICAOF NO
+#    ONE the source's tail can no longer be caught up), so the final check requires
+#    FULL sync (offset matches bit-for-bit), with no lag tolerance. addr is the
+#    local new master (compute.tls_*); source_addr is the external source.
+#    ★ source_password/source_tls/source_tls_ca (v10 prod fix) — credentials for
+#    the EXTERNAL source from REFERENCES in state (compute.source_password/source_tls_ca
+#    = vault() over seeded_from.source_password_ref/source_tls_ca_ref, persisted by
+#    migrate_cluster). The gate now AUTHENTICATES against an AUTH/TLS source
+#    (before v10, source_password='' → connecting to a protected source failed →
+#    detach NEVER went through). source_tls turns on exactly when there's a CA
+#    (compute.source_tls_ca != '' — migrate only resolves the CA when source.tls).
+#    A source without AUTH/TLS (empty ref) → source_password=''/source_tls=false,
+#    as before.
 - name: Final offset gate before detach (master must be fully in sync with the source)
   run_once: true
   module: community.redis.offset-synced
@@ -72,9 +81,10 @@
   params:
     addr:            "${ compute.tls_on ? '127.0.0.1:' + compute.tls_port : '127.0.0.1:6379' }"
     source_addr:     "${ compute.source_master }"
-    # ★ РЕДИЗАЙН default_admin: LOCAL-коннект под default_admin (requirepass убран). Тело сценария
-    # ВНЕ covenant → имя admin-юзера хардкодим 'default_admin' (нет compute.admin_user).
-    # source_password — учётка ВНЕШНЕГО источника (из state-ссылок).
+    # ★ default_admin REDESIGN: LOCAL connection as default_admin (requirepass removed). The
+    # scenario body is OUTSIDE the covenant → hardcode the admin username as 'default_admin'
+    # (no compute.admin_user). source_password is the credential for the EXTERNAL source
+    # (from state references).
     username:        "${ 'default_admin' }"
     password:        "${ vault('secret/redis/' + incarnation.name + '/users/default_admin#password') }"
     source_password: "${ compute.source_password }"
@@ -83,46 +93,51 @@
     lag_threshold:   "${ 0 }"
     skip_checksum:   false
 
-# 2. REPLICAOF NO ONE — отцепить новый master от источника (community.redis.detached).
-#    run_once на hosts[0] (тот же новый master, что реплицировал источник в migrate_cluster).
-#    Идемпотентен: уже самостоятельный master (role:master, без master_host) → no-op.
-#    addr — локальный новый master (compute.tls_*); password — наш secret/redis/<inc>
-#    #password. ПОСЛЕ успеха state_changes выставит seeded_from.detached=true (main.yml).
+# 2. REPLICAOF NO ONE — detach the new master from the source (community.redis.detached).
+#    run_once on hosts[0] (the same new master that replicated the source in
+#    migrate_cluster). Idempotent: already a standalone master (role:master, no
+#    master_host) → no-op. addr is the local new master (compute.tls_*); password
+#    is our secret/redis/<inc>#password. AFTER success, state_changes sets
+#    seeded_from.detached=true (main.yml).
 - name: Detach the fresh master from the external source (REPLICAOF NO ONE)
   run_once: true
   module: community.redis.detached
   params:
     addr:     "${ compute.tls_on ? '127.0.0.1:' + compute.tls_port : '127.0.0.1:6379' }"
-    # ★ РЕДИЗАЙН default_admin: LOCAL-коннект под default_admin (хардкод имени — вне covenant).
+    # ★ default_admin REDESIGN: LOCAL connection as default_admin (hardcoded name — outside the covenant).
     username: "${ 'default_admin' }"
     password: "${ vault('secret/redis/' + incarnation.name + '/users/default_admin#password') }"
     tls:      "${ compute.tls_on }"
     tls_ca:   "${ compute.tls_ca }"
 
-# 3. SENTINEL MONITOR reconcile — ★ ПЕРЕНЕСЁН СЮДА из деплой-тела (redis-deploy-sentinel.yml
-#    шаг 4) prod-фиксом split-brain. Выполняется ТОЛЬКО ПОСЛЕ REPLICAOF NO ONE (шаг 2):
-#    новый master снова автономен (role:master), и sentinel-демоны (поднятые деплой-телом
-#    migrate_cluster, но БЕЗ MONITOR — sentinel_monitor_now=false) ТЕПЕРЬ получают команду
-#    мониторить реального master. Если бы MONITOR дали во время заливки (master в role:slave
-#    на синке > down-after 5с), sentinel инициировал бы failover → split-brain.
+# 3. SENTINEL MONITOR reconcile — ★ MOVED HERE from the deploy body
+#    (redis-deploy-sentinel.yml step 4) as a split-brain prod fix. Runs ONLY AFTER
+#    REPLICAOF NO ONE (step 2): the new master is autonomous again (role:master),
+#    and the sentinel daemons (brought up by the migrate_cluster deploy body, but
+#    WITHOUT MONITOR — sentinel_monitor_now=false) NOW get told to monitor the real
+#    master. If MONITOR had been given during seeding (master in role:slave on the
+#    replica > down-after 5s), sentinel would have triggered a failover → split-brain.
 #
-#    Форма — 1:1 копия шага 4 redis-deploy-sentinel.yml (community.redis.sentinel на КАЖДОМ
-#    хосте; addr — локальный sentinel 127.0.0.1:26379; monitor.ip — HOST-ИНВАРИАНТНЫЙ master
-#    из master-election soulprint.hosts[0]; quorum — большинство size/2+1; auth_pass — keeper-
-#    side vault()-резолв). Отличие — ИСТОЧНИКИ берутся из incarnation.state (входного
-#    контракта у detach нет): master_name/тайминги/версия — compute.sentinel_master_name/
-#    sentinel_directives/redis_version (собраны из state.redis_sentinel/redis_version, см.
-#    compute main.yml), а не из essence/input. На detach roster = новый master (soulprint
-#    .hosts[0] = он сам), MONITOR настраивает мониторинг автономного master.
+#    The shape is a 1:1 copy of redis-deploy-sentinel.yml step 4 (community.redis.sentinel
+#    on EVERY host; addr — local sentinel 127.0.0.1:26379; monitor.ip — the
+#    HOST-INVARIANT master from master-election soulprint.hosts[0]; quorum —
+#    majority size/2+1; auth_pass — keeper-side vault() resolve). The difference —
+#    SOURCES come from incarnation.state (detach has no input contract):
+#    master_name/timings/version are compute.sentinel_master_name/
+#    sentinel_directives/redis_version (assembled from state.redis_sentinel/redis_version,
+#    see compute main.yml), not from essence/input. On detach the roster is the new
+#    master (soulprint.hosts[0] = itself), MONITOR sets up monitoring of the
+#    now-autonomous master.
 - name: Configure each sentinel to monitor the now-standalone master (SENTINEL MONITOR)
   module: community.redis.sentinel
   params:
     addr:        "127.0.0.1:26379"
     master_name: "${ compute.sentinel_master_name }"
-    # ★ РЕДИЗАЙН default_admin: CONNECTION-AUTH к :26379 под default_admin (built-in default →
-    # off, коннект под системным default_admin sentinel-набора). username/password — пара
-    # коннекта; auth_user/auth_pass — реквизиты мониторинга master. Тело сценария ВНЕ covenant →
-    # имя admin-юзера хардкодим 'default_admin'. Без них коннект к ACL-демону → NOAUTH.
+    # ★ default_admin REDESIGN: CONNECTION-AUTH to :26379 as default_admin (built-in
+    # default → off, connect as the sentinel set's system default_admin). username/password
+    # are the connection pair; auth_user/auth_pass are the master-monitoring credentials.
+    # The scenario body is OUTSIDE the covenant → hardcode the admin username as
+    # 'default_admin'. Without them, connecting to the ACL daemon → NOAUTH.
     username:    "${ 'default_admin' }"
     password:    "${ vault('secret/redis/' + incarnation.name + '/users/default_admin#password') }"
     auth_user:   "${ 'default_admin' }"
@@ -130,8 +145,8 @@
     redis_version: "${ compute.redis_version }"
     config:      "${ compute.sentinel_directives }"
     monitor:
-      # HOST-ИНВАРИАНТНЫЙ адрес master-а (master-election: soulprint.hosts[0]).
+      # HOST-INVARIANT address of the master (master-election: soulprint.hosts[0]).
       ip:     "${ soulprint.hosts[0].network.primary_ip }"
       port:   6379
-      # quorum — АВТО (большинство): size(soulprint.hosts)/2+1.
+      # quorum — AUTO (majority): size(soulprint.hosts)/2+1.
       quorum: "${ int(size(soulprint.hosts)) / 2 + 1 }"

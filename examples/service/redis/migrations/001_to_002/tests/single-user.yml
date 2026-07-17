@@ -1,6 +1,6 @@
 name: single-user
 description: >
-  Один пользователь: foreach по списку из одного элемента, имя → ключ map-а.
+  Single user: foreach over a one-element list, name becomes the map key.
 
 state_before:
   redis_users: ["app"]

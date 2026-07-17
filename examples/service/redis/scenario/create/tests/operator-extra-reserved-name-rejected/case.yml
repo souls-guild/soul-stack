@@ -1,10 +1,11 @@
-# L0-испытание validate-guard (system-ACL-users d2): operator-extra (input.users) НЕ
-# может занять имя СЛУЖЕБНОГО юзера. Оператор задаёт input.users.replica — имя
-# зарезервировано за служебным (доливается из essence.system_acl_users с last-wins
-# ПОВЕРХ системного → operator `replica` молча перекрыл бы replica-perms репликации).
-# validate-правило create/main.yml ловит это на INPUT-валидации (422 ДО applying) —
-# понятным отказом. INPUT-ONLY (essence в validate недоступен): список имён захардкожен.
-# Правило false → expect_render_error по подстроке message.
+# L0-test for the validate-guard (system-ACL-users d2): operator-extra (input.users) is
+# NOT allowed to take a SYSTEM user's name. The operator sets input.users.replica — this
+# name is reserved for the system user (topped up from essence.system_acl_users with
+# last-wins OVER the system one → an operator `replica` would silently override the
+# replication replica-perms). The validate-rule in create/main.yml catches this at
+# INPUT-validation (422 BEFORE applying) with a clear rejection. INPUT-ONLY (essence is
+# not available in validate): the list of names is hardcoded. Rule false →
+# expect_render_error by a substring of the message.
 name: operator extra user with reserved system name aborts at input validation
 
 fixtures:
@@ -35,10 +36,10 @@ fixtures:
       sentinel:   "allchannels +multi +slaveof +ping +exec +subscribe +config|rewrite +role +publish +info +client|setname +client|kill +script|kill"
       haproxy:    "-@all +auth +client|getname +client|id +client|setname +command +hello +ping +role +info +cluster|info"
 
-  # Оператор пытается завести юзера с зарезервированным именем replica.
+  # The operator tries to create a user with the reserved name replica.
   input:
-    # ★ provision выключен (default-on: опущенная секция = ВКЛЮЧЕНО; кейс деплоит на
-    # ГОТОВЫЙ roster, cloud-create не нужен) → include redis-provision.yml group-drop.
+    # ★ provision is off (default-on: an omitted section = ON; the case deploys onto a
+    # READY roster, cloud-create is not needed) → include redis-provision.yml group-drop.
     provision:
       enabled: false
     redis_type: sentinel
@@ -47,6 +48,6 @@ fixtures:
     users:
       - { name: replica, perms: "~* +@all", state: "on" }
 
-# Прогон обрывается на validate: правило «имя зарезервировано за служебным» false.
-# Подстрока — message правила (create/main.yml validate).
-expect_render_error: "зарезервировано за служебным"
+# The run aborts on validate: rule "name is reserved for a system user" is false.
+# Substring — the rule's message (create/main.yml validate).
+expect_render_error: "reserved for a system user"

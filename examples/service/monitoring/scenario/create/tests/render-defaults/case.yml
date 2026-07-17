@@ -1,71 +1,72 @@
-# L0-испытание (Trial, ADR-023) сценария create сервиса monitoring.
+# L0-trial (Trial, ADR-023) for the create scenario of the monitoring service.
 #
-# Render-only, герметично: проверяет, что при дефолтных input-ах render-пайплайн
-# (CEL-фаза) даёт ожидаемые rendered_tasks. После унификации дрейфа план — это
-# КОМПОЗИЦИЯ destiny node-exporter (apply:destiny, изолированный render) + инлайн
-# redis_exporter (остаётся инлайн осознанно, см. scenario/create/main.yml):
-#   - node-exporter (apply:destiny, индексы 0..): destiny node-exporter (бинарь
-#     node_exporter, version-aware install, стабильный сервис-аккаунт node_exporter,
-#     hardened-unit, textfile-коллекторы железа). collectors=[] (input) → ставится
-#     только ядро;
-#   - redis_exporter (инлайн, индексы 30..37): тройка (url.fetched → archive.extracted
-#     → core.file.present install бинаря) + core.user.present + unit с
-#     User=redis-exporter (без пароля и без Requires=redis-server.service — сервис
-#     Redis не ставит, подключается к уже работающему).
+# Render-only, hermetic: checks that with default inputs the render pipeline
+# (CEL phase) produces the expected rendered_tasks. After drift unification, the
+# plan is a COMPOSITION of destiny node-exporter (apply:destiny, isolated render) +
+# inline redis_exporter (stays inline deliberately, see scenario/create/main.yml):
+#   - node-exporter (apply:destiny, indices 0..): destiny node-exporter (binary
+#     node_exporter, version-aware install, stable node_exporter service account,
+#     hardened-unit, hardware textfile collectors). collectors=[] (input) → only
+#     the core is installed;
+#   - redis_exporter (inline, indices 30..37): the triple (url.fetched → archive.extracted
+#     → core.file.present install of the binary) + core.user.present + unit with
+#     User=redis-exporter (no password and no Requires=redis-server.service — it
+#     doesn't install the Redis service, connects to an already running one).
 #
-# ВАЖНО про индексы: L0-render НЕ вычисляет when: (предикаты — Soul-side). Шаги
-# коллекторов node-exporter (when: '<c>' in input.collectors) при collectors=[]
-# всё равно присутствуют в плане (idx 9..29) — отбракует их хост. Ассертим только
-# ядро node-exporter (idx 0..8) и инлайн redis_exporter (idx 30..36).
+# IMPORTANT about indices: L0-render does NOT evaluate when: (predicates are Soul-side).
+# node-exporter collector steps (when: '<c>' in input.collectors) with collectors=[]
+# are still present in the plan (idx 9..29) — the host will reject them. We only assert
+# the node-exporter core (idx 0..8) and the inline redis_exporter (idx 30..36).
 #
-# Раскладка node-exporter (include раскрыт inline): install.yml 0 fetch / 1 extract;
-# account.yml 2 group / 3 user / 4 directory; service.yml 5 install-бинаря / 6 unit /
-# 7 running / 8 restarted. Коллекторы: smartmon 9..14, nvme 15..21, ipmi 22..29.
+# node-exporter layout (include expanded inline): install.yml 0 fetch / 1 extract;
+# account.yml 2 group / 3 user / 4 directory; service.yml 5 binary install / 6 unit /
+# 7 running / 8 restarted. Collectors: smartmon 9..14, nvme 15..21, ipmi 22..29.
 #
-# L0 не качает tarball/не ставит пакет — только CEL-render YAML-выражений. Реальная
-# установка требует Linux+systemd (см. README).
+# L0 does not download the tarball / does not install the package — only CEL-render
+# of YAML expressions. A real install requires Linux+systemd (see README).
 name: create renders exporter install tasks with defaults
 
-# L0-источник destiny (герметичный file://): каталог node-exporter лежит в
-# examples/destiny/ относительно service-root (examples/service/monitoring/).
+# L0 destiny source (hermetic file://): the node-exporter directory lives in
+# examples/destiny/ relative to service-root (examples/service/monitoring/).
 fixtures:
   default_destiny_source: "file://../../destiny/{name}"
-  # L0-render берёт input как есть и НЕ применяет default-ы scenario-контракта
-  # (defaults подставляет Keeper при инвокации, до render-фазы). Поэтому передаём
-  # те же значения, что объявлены дефолтами в scenario/create/main.yml.
+  # L0-render takes input as-is and does NOT apply the scenario-contract defaults
+  # (defaults are substituted by Keeper at invocation, before the render phase). So
+  # we pass the same values declared as defaults in scenario/create/main.yml.
   input:
     node_exporter_version:    "1.8.2"
     node_exporter_collectors: []
     node_exporter_allow_private: false
     redis_exporter_version:   "1.62.0"
-    # redis_exporter_sha256 ОБЯЗАТЕЛЕН (required:true): redis_exporter — инлайн-fetch
-    # со своим checksum (node_exporter качается через destiny node-exporter, у которой
-    # checksum убран). L0 render-only — хэш не верифицируется; валидный тестовый 64-hex.
+    # redis_exporter_sha256 is REQUIRED (required:true): redis_exporter is an inline
+    # fetch with its own checksum (node_exporter is downloaded via destiny node-exporter,
+    # whose checksum was removed). L0 is render-only — the hash isn't verified; a valid
+    # test 64-hex.
     redis_exporter_sha256:    "sha256:2222222222222222222222222222222222222222222222222222222222222222"
     bin_dir:                  /usr/local/bin
     redis_socket:             /var/run/redis/redis-server.sock
     node_exporter_listen:     ":9100"
     redis_exporter_listen:    ":9121"
-    # passthrough-флаги инлайн-redis_exporter: дефолт [] (оператор расширяет точечно).
+    # passthrough flags for inline-redis_exporter: default [] (operator extends pointwise).
     redis_exporter_extra_args: []
-  # soulprint синтетического L0-хоста: node-exporter destiny берёт arch напрямую из
-  # soulprint.self.os.arch. Без этого факта CEL-render шага упал бы на no-such-key.
+  # soulprint of the synthetic L0 host: node-exporter destiny takes arch directly from
+  # soulprint.self.os.arch. Without this fact the CEL-render step would fail with no-such-key.
   soulprint:
     os:
       arch: amd64
 
-# Presence-форма (миграция 2026-06-24): тест проверяет НАЛИЧИЕ вызовов в плане, не
-# их позицию. План — композиция node-exporter (apply:destiny) + инлайн
-# redis_exporter; дубли модулей между блоками (url.fetched / archive.extracted /
-# file.present / file.rendered / user.present / service.running) разводятся
-# params_subset (path/name/url — уникальны на задачу). Сверка params_subset по-ключно
-# частична (лишние ключи рендера кейс не валят); render_context unit-ов фиксируем.
+# Presence form (migration 2026-06-24): the test checks the PRESENCE of calls in the plan,
+# not their position. The plan is a composition of node-exporter (apply:destiny) + inline
+# redis_exporter; duplicate modules between blocks (url.fetched / archive.extracted /
+# file.present / file.rendered / user.present / service.running) are disambiguated by
+# params_subset (path/name/url are unique per task). params_subset comparison is per-key
+# partial (extra render keys don't fail the case); render_context of units is pinned.
 assert:
   task_present:
-    # ── node-exporter (apply:destiny, ядро) ─────────────────────────────────────
-    # node_exporter tarball: url собран CEL-ом из base_url+version+arch (arch из
-    # soulprint). checksum НЕ задаётся (destiny node-exporter качает без verification —
-    # idempotency по SHA-256 содержимого). Дизамбигуатор от redis-tarball — url/path.
+    # ── node-exporter (apply:destiny, core) ─────────────────────────────────────
+    # node_exporter tarball: url assembled by CEL from base_url+version+arch (arch from
+    # soulprint). checksum is NOT set (destiny node-exporter downloads without verification —
+    # idempotency by content SHA-256). Disambiguator from the redis tarball — url/path.
     - module: core.url.fetched
       params_subset:
         url: https://github.com/prometheus/node_exporter/releases/download/v1.8.2/node_exporter-1.8.2.linux-amd64.tar.gz
@@ -77,16 +78,16 @@ assert:
         path: /tmp/node_exporter-1.8.2.tar.gz
         dest: /tmp/node_exporter-1.8.2
 
-    # Стабильный сервис-аккаунт node_exporter (НЕ DynamicUser — textfile-каталог
-    # переживает рестарты): группа ДО пользователя. Единственный core.group.present.
+    # Stable node_exporter service account (NOT DynamicUser — the textfile directory
+    # survives restarts): group BEFORE user. The only core.group.present.
     - module: core.group.present
       params_subset:
         name: node_exporter
         system: true
 
-    # Дизамбигуатор от redis-exporter user — name. home НЕ задаётся: account.yml
-    # больше не прописывает home (system-аккаунт без домашней директории, useradd
-    # -M; см. tasks/account.yml) — у задачи ключа home нет.
+    # Disambiguator from redis-exporter user — name. home is NOT set: account.yml
+    # no longer sets home (system account without a home directory, useradd
+    # -M; see tasks/account.yml) — the task has no home key.
     - module: core.user.present
       params_subset:
         name: node_exporter
@@ -94,7 +95,7 @@ assert:
         group: node_exporter
         shell: /usr/sbin/nologin
 
-    # textfile-каталог через декларативное core.file.directory. Единственный.
+    # textfile directory via declarative core.file.directory. The only one.
     - module: core.file.directory
       params_subset:
         path: /var/lib/node_exporter
@@ -102,10 +103,10 @@ assert:
         group: node_exporter
         mode: "0755"
 
-    # install бинаря node_exporter (service.yml): core.file.present с src: — копия
-    # node_exporter из распакованного /tmp. Идемпотентность нативная по sha256(src),
-    # честный changed строго при смене байт; version-aware unless-guard не нужен.
-    # Дизамбигуатор от redis-exporter install — path.
+    # install of the node_exporter binary (service.yml): core.file.present with src: — a copy
+    # of node_exporter from the unpacked /tmp. Idempotency native by sha256(src),
+    # honest changed strictly on byte change; no version-aware unless-guard needed.
+    # Disambiguator from redis-exporter install — path.
     - module: core.file.present
       params_subset:
         path: /usr/local/bin/node_exporter
@@ -114,8 +115,8 @@ assert:
         owner: root
         group: root
 
-    # Unit-path — /etc/systemd/system/node_exporter.service, listen :9100.
-    # literal-содержимое .tmpl доставлено Keeper-ом (A1). Дизамбигуатор — path.
+    # Unit path — /etc/systemd/system/node_exporter.service, listen :9100.
+    # literal content of .tmpl delivered by Keeper (A1). Disambiguator — path.
     - module: core.file.rendered
       params_subset:
         path: /etc/systemd/system/node_exporter.service
@@ -123,22 +124,23 @@ assert:
         mode: "0644"
         owner: root
         group: root
-        # Вариант B (ADR-010 §3.2 amendment): operator-input destiny едет в
-        # render_context.input напрямую (user/group/listen/textfile_dir +
-        # прод-параметры демона), без passthrough params.vars. vars несёт РЕФЕРЕНСНЫЙ
-        # file-var bin_path (шаблон читает `.vars.bin_path` напрямую, passthrough
-        # exporter_bin убран) — прочие file-vars vars.yml шаблон не читает.
+        # Variant B (ADR-010 §3.2 amendment): destiny operator-input goes into
+        # render_context.input directly (user/group/listen/textfile_dir +
+        # daemon production parameters), without passthrough params.vars. vars carries
+        # the REFERENCE file-var bin_path (the template reads `.vars.bin_path` directly,
+        # passthrough exporter_bin removed) — the template doesn't read the other
+        # vars.yml file-vars.
         render_context:
           vars:
             bin_path: /usr/local/bin/node_exporter
           input:
-            # apply:input от monitoring + дефолты destiny node-exporter (scenario
-            # их не переопределяет → значения из destiny.yml). gomaxprocs:0 и пустые
-            # list/string → флаг в ExecStart НЕ добавляется (условный рендер).
+            # apply:input from monitoring + defaults of destiny node-exporter (the scenario
+            # doesn't override them → values from destiny.yml). gomaxprocs:0 and empty
+            # list/string → the flag is NOT added in ExecStart (conditional render).
             version: "1.8.2"
             base_url: "https://github.com/prometheus/node_exporter/releases/download"
-            # allow_private прокинут monitoring-ом (input-дефолт false) → guard держится;
-            # opt-out true — кейс allow-private-override.
+            # allow_private passed through by monitoring (input default false) → the guard
+            # holds; opt-out true — the allow-private-override case.
             allow_private: false
             listen: ":9100"
             collectors: []
@@ -149,11 +151,11 @@ assert:
             gomaxprocs: 0
             disabled_collectors: []
             enabled_collectors: []
-            # под-опции коллекторов (имя→{ключ:значение}); дефолт пустой map →
-            # двойной range в .tmpl ничего не рендерит.
+            # collector sub-options (name→{key:value}); default empty map →
+            # the double range in .tmpl renders nothing.
             collector_options: {}
-            # путь HTTP-эндпоинта метрик (--web.telemetry-path); дефолт непустой →
-            # флаг рендерится всегда (в отличие от fs/netdev-exclude).
+            # HTTP metrics endpoint path (--web.telemetry-path); default non-empty →
+            # the flag is always rendered (unlike fs/netdev-exclude).
             web_telemetry_path: "/metrics"
             log_level: "info"
             log_format: "logfmt"
@@ -161,14 +163,15 @@ assert:
             netdev_device_exclude: ""
           self:
             sid: trial-host
-            # single-host сахар (fixtures.soulprint) несёт корневую
-            # incarnation.name-метку в covens (имя сценария = create) —
-            # зеркало прод-roster `WHERE $1 = ANY(coven)`. Это поведение harness
-            # с самого начала (см. fixtureHosts), а не артефакт multi-host-enabler-а.
+            # single-host sugar (fixtures.soulprint) carries the root
+            # incarnation.name label in covens (scenario name = create) —
+            # mirrors the production roster `WHERE $1 = ANY(coven)`. This is harness
+            # behavior from the start (see fixtureHosts), not an artifact of the
+            # multi-host enabler.
             covens: [create]
             choirs: []
-            # traits — operator-set key-value метки (ADR-060), registry-проекция
-            # как covens/choirs; нет traits на хосте → пустой объект.
+            # traits — operator-set key-value labels (ADR-060), a registry projection
+            # like covens/choirs; no traits on the host → empty object.
             traits: {}
             role: ""
             os:
@@ -176,23 +179,23 @@ assert:
           role: ""
           essence: {}
 
-    # running + restart — по имени юнита node_exporter (ловит регресс имени).
-    # daemon-reload-шага НЕТ: core.service сам reload-ит при смене unit (auto).
-    # Дизамбигуатор от redis-exporter/коллектор-таймеров — name.
+    # running + restart — by the node_exporter unit name (catches a name regression).
+    # There is NO daemon-reload step: core.service reloads on its own when the unit
+    # changes (auto). Disambiguator from redis-exporter/collector-timers — name.
     - module: core.service.running
       params_subset:
         name: node_exporter
         enabled: true
 
-    # Единственный core.service.restarted в плане.
+    # The only core.service.restarted in the plan.
     - module: core.service.restarted
       params_subset:
         name: node_exporter
 
-    # ── redis_exporter (инлайн) ─────────────────────────────────────────────────
-    # redis_exporter tarball: имя файла несёт префикс `v` перед версией
-    # (redis_exporter-v<v>.linux-<arch>) — отличие раскладки от node_exporter.
-    # Дизамбигуатор от node-tarball — url/path.
+    # ── redis_exporter (inline) ─────────────────────────────────────────────────
+    # redis_exporter tarball: the file name carries a `v` prefix before the version
+    # (redis_exporter-v<v>.linux-<arch>) — a layout difference from node_exporter.
+    # Disambiguator from the node tarball — url/path.
     - module: core.url.fetched
       params_subset:
         url: https://github.com/oliver006/redis_exporter/releases/download/v1.62.0/redis_exporter-v1.62.0.linux-amd64.tar.gz
@@ -205,12 +208,12 @@ assert:
         path: /tmp/redis_exporter-1.62.0.tar.gz
         dest: /tmp/redis_exporter-1.62.0
 
-    # install бинаря redis_exporter (инлайн): core.file.present с src: — копия
-    # redis_exporter из распакованного /tmp в bin_dir. Имя каталога/файла внутри
-    # tarball-а несёт префикс `v` (redis_exporter-v<v>.linux-<arch>). Идемпотентность
-    # нативная по sha256(src) — честный changed строго при смене байт; прежний
-    # core.cmd.shell + creates: пропускал апгрейд (latent-баг устранён).
-    # Дизамбигуатор от node-install — path.
+    # install of the redis_exporter binary (inline): core.file.present with src: — a copy
+    # of redis_exporter from the unpacked /tmp into bin_dir. The directory/file name inside
+    # the tarball carries a `v` prefix (redis_exporter-v<v>.linux-<arch>). Idempotency
+    # native by sha256(src) — honest changed strictly on byte change; the old
+    # core.cmd.shell + creates: skipped upgrades (latent bug fixed).
+    # Disambiguator from the node install — path.
     - module: core.file.present
       params_subset:
         path: /usr/local/bin/redis_exporter
@@ -219,44 +222,44 @@ assert:
         owner: root
         group: root
 
-    # Выделенный системный пользователь redis-exporter в группе redis (доступ к
-    # unix-сокету по членству в группе, least-privilege). Инлайн оставлен осознанно:
-    # сервис подключается к уже работающему Redis (без DynamicUser-нюансов destiny).
-    # Дизамбигуатор от node-exporter user — name.
+    # Dedicated system user redis-exporter in the redis group (socket access via
+    # group membership, least-privilege). Kept inline deliberately: the service
+    # connects to an already running Redis (without destiny's DynamicUser nuances).
+    # Disambiguator from the node-exporter user — name.
     - module: core.user.present
       params_subset:
         name: redis-exporter
         groups: [redis]
         shell: /usr/sbin/nologin
 
-    # redis_exporter unit (инлайн): redis_addr собран CEL-ом из 'unix://' + redis_socket
-    # — ключевая проверка «подключение к Redis через unix-сокет». Без пароля.
-    # Дизамбигуатор от node-exporter unit — path.
+    # redis_exporter unit (inline): redis_addr assembled by CEL from 'unix://' + redis_socket
+    # — the key check for "connection to Redis via unix socket". No password.
+    # Disambiguator from the node-exporter unit — path.
     - module: core.file.rendered
       params_subset:
         path: /etc/systemd/system/redis_exporter.service
-        # template-путь заменён на доставленное Keeper-ом literal-содержимое (A1, ADR-012(d)).
+        # template path replaced with literal content delivered by Keeper (A1, ADR-012(d)).
         template_content: "<present>"
         mode: "0644"
         owner: root
         group: root
-        # Шаблон redis_exporter читает ТОЛЬКО .vars.* (поднятые этим scenario-шагом
-        # значения). Вариант B (ADR-010 §3.2) инъектит render_context.input УСЛОВНО —
-        # только в шаблоны, реально обращающиеся к .input; redis_exporter к нему не
-        # обращается → render_context остаётся {vars,self,role,essence} без input.
+        # The redis_exporter template reads ONLY .vars.* (values raised by this scenario
+        # step). Variant B (ADR-010 §3.2) injects render_context.input CONDITIONALLY —
+        # only into templates that actually reference .input; redis_exporter doesn't
+        # reference it → render_context stays {vars,self,role,essence} without input.
         render_context:
           vars:
             bin_dir: /usr/local/bin
             listen: ":9121"
             redis_addr: unix:///var/run/redis/redis-server.sock
-            # passthrough-флаги не переданы оператором → default [] сценария.
+            # passthrough flags not passed by the operator → scenario default [].
             extra_args: []
           self:
             sid: trial-host
-            # см. node_exporter unit выше: covens несёт incarnation.name-метку.
+            # see node_exporter unit above: covens carries the incarnation.name label.
             covens: [create]
             choirs: []
-            # traits — registry-проекция (ADR-060), пустой объект без меток.
+            # traits — registry projection (ADR-060), empty object without labels.
             traits: {}
             role: ""
             os:
@@ -264,12 +267,12 @@ assert:
           role: ""
           essence: {}
 
-    # Единственный core.service.enabled в плане.
+    # The only core.service.enabled in the plan.
     - module: core.service.enabled
       params_subset:
         name: redis_exporter
 
-    # Дизамбигуатор от node_exporter/коллектор-таймеров running — name.
+    # Disambiguator from node_exporter/collector-timers running — name.
     - module: core.service.running
       params_subset:
         name: redis_exporter

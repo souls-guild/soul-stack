@@ -1,14 +1,14 @@
-# dev/upgrade-demo/keeper-demo.yml — ИЗОЛИРОВАННЫЙ демо-keeper для UI-стенда NIM-34.
+# dev/upgrade-demo/keeper-demo.yml — ISOLATED demo-keeper for the UI stand NIM-34.
 #
-# Отличия от dev/keeper.dev.yml (чтобы жить РЯДОМ с общим стендом, не мешая):
-#   - выделенные порты (openapi 8090 / mcp 8091 / metrics 9091 / grpc 9452-9453) —
-#     не конфликтует с keeper другой сессии на 8080/9090/9442/9443;
-#   - kid keeper-demo-nim34 (свой identity/lease);
-#   - БЕЗ `push:`-блока (teleport-identity нет в dev → штатный конфиг падает на старте);
-#   - acolytes:0 + allow_unsafe_single_path_multi_keeper:true — НЕ участвует в
-#     acolyte work-queue (не claim-ит чужие apply_runs); reaper/voyage OFF —
-#     не purge-ит и не трогает данные соседней сессии на общем PG.
-# Общие PG/Redis/Vault/TLS (HA-модель это допускает). Под удаление вне UI-демо.
+# Differences from dev/keeper.dev.yml (to live ALONGSIDE the shared stand without conflicts):
+#   - dedicated ports (openapi 8090 / mcp 8091 / metrics 9091 / grpc 9452-9453) —
+#     no conflict with the keeper of another session on 8080/9090/9442/9443;
+#   - kid keeper-demo-nim34 (own identity/lease);
+#   - WITHOUT the `push:` block (no teleport-identity in dev → the regular config fails on startup);
+#   - acolytes:0 + allow_unsafe_single_path_multi_keeper:true — does NOT participate in
+#     the acolyte work-queue (doesn't claim other sessions' apply_runs); reaper/voyage OFF —
+#     doesn't purge or touch the neighboring session's data on the shared PG.
+# Shared PG/Redis/Vault/TLS (the HA model allows this). To be removed outside the UI demo.
 
 kid: keeper-demo-nim34
 
@@ -48,7 +48,7 @@ vault:
 auth:
   jwt:
     signing_key_ref: vault:secret/keeper/jwt-signing-key
-    # issuer совпадает со стандартным dev (dev/mint-jwt.sh выпускает токен с этим iss).
+    # issuer matches the standard dev (dev/mint-jwt.sh issues a token with this iss).
     issuer: keeper-dev-01
     ttl_default: 24h
     ttl_bootstrap: 720h
@@ -63,8 +63,8 @@ logging:
   format: text
   rotation: { max_size_mb: 100, max_files: 5, compress: false }
 
-# Sigil — подпись бинарей плагинов (ADR-026). Ключ засеян dev-провижином/стендом
-# (secret/keeper/sigil-signing-key). Демо upgrade-paths плагины не спавнит.
+# Sigil — plugin binary signing (ADR-026). The key is seeded by the dev-provisioning/stand
+# (secret/keeper/sigil-signing-key). The demo upgrade-paths doesn't spawn plugins.
 sigil:
   signing_key_ref: vault:secret/keeper/sigil-signing-key
 
@@ -102,22 +102,22 @@ audit:
 watchman_interval: 5s
 watchman_fail_threshold: 3
 
-# acolytes:0 — демо-keeper НЕ участвует в acolyte work-queue (не claim-ит apply_runs
-# соседней сессии). Требует allow_unsafe (иначе refuse-guard откажет старт при живом
-# втором keeper). Для upgrade-paths (READ) и legacy-upgrade (in-tx, без хостов)
-# acolyte не нужен.
+# acolytes:0 — the demo-keeper does NOT participate in the acolyte work-queue (doesn't claim
+# apply_runs of the neighboring session). Requires allow_unsafe (otherwise the refuse-guard
+# would deny startup with a second keeper alive). For upgrade-paths (READ) and legacy-upgrade
+# (in-tx, no hosts) acolyte is not needed.
 allow_unsafe_single_path_multi_keeper: true
 acolytes: 0
 
 max_await_timeout: 10m
 
-# Voyage-воркеры OFF — демо массовый апгрейд не гоняет; не трогаем чужую очередь.
+# Voyage workers OFF — the demo doesn't run mass upgrades; don't touch someone else's queue.
 voyage:
   workers: 0
   max_scope: 10000
   max_batch_size: 10000
 
-# Reaper OFF — демо-keeper НЕ purge-ит общий PG (данные соседней сессии целы).
+# Reaper OFF — the demo-keeper does NOT purge the shared PG (the neighboring session's data stays intact).
 reaper:
   enabled: false
   interval: 1h

@@ -1,20 +1,20 @@
-# Post-apply ожидания smoke-nginx-live::create (ADR-039 § Часть D, L3b).
+# Post-apply expectations for smoke-nginx-live::create (ADR-039 § Part D, L3b).
 #
-# apply_runs.status — РЕАЛЬНОЕ значение enum keeper/internal/applyrun/applyrun.go
-# (StatusSuccess = "success"). harness валидирует expectations fail-early через
-# harness.CheckApplyRunsStatusValid (см. asserts.go).
+# apply_runs.status — the REAL enum value from keeper/internal/applyrun/applyrun.go
+# (StatusSuccess = "success"). The harness validates expectations fail-early via
+# harness.CheckApplyRunsStatusValid (see asserts.go).
 #
-# incarnation_state — deep-subset; здесь точное совпадение state_changes.sets
-# из examples/service/smoke-nginx-live/scenario/create/main.yml.
+# incarnation_state — deep-subset; here an exact match of state_changes.sets
+# from examples/service/smoke-nginx-live/scenario/create/main.yml.
 #
-# audit_events — минимум одна строка `incarnation.scenario_started` с
-# apply_id-матчем. Точное число событий не фиксируется (apply_runs lifecycle
-# пишет несколько audit-строк, контракт-тест проверяет presence ключевой).
+# audit_events — at least one `incarnation.scenario_started` row matching the
+# apply_id. The exact event count isn't fixed (the apply_runs lifecycle writes
+# several audit rows, the contract test only checks presence of the key one).
 #
-# metrics — Prometheus-expression → constraint-строка ('>= 1' / '== 0' / ...).
+# metrics — a Prometheus expression → a constraint string ('>= 1' / '== 0' / ...).
 #
-# host_state — container-side ассерты (L3b-4). Читается фикстурным YAML
-# loader-ом (L3b-5, harness/expectations.go), применяется Stack.AssertExpectations:
+# host_state — container-side asserts (L3b-4). Read by the fixture YAML
+# loader (L3b-5, harness/expectations.go), applied via Stack.AssertExpectations:
 # packages → AssertHostPkgInstalled, services → AssertHostServiceActive,
 # files[].contains → AssertHostFileExists + AssertHostFileContent.
 apply_runs:
@@ -25,15 +25,15 @@ incarnation_state:
   nginx_service: active
   nginx_config_managed: true
 
-# POST /v1/incarnations авто-запускает create-scenario и пишет
-# `incarnation.created` (НЕ scenario_started — то только при явном RunScenario).
+# POST /v1/incarnations auto-runs the create scenario and writes
+# `incarnation.created` (NOT scenario_started — that's only on an explicit RunScenario).
 audit_events:
   - type: incarnation.created
 
-# keeper_scenario_runs_total{result="ok"} — реальная метрика успешного прогона
-# (keeper/internal/scenario/metrics.go, closed enum ok/failed/locked). Параллель
-# с L3a (tests/e2e/smoke_nginx_test.go::AssertMetricGE). Метрики
-# keeper_apply_runs_total в коде нет.
+# keeper_scenario_runs_total{result="ok"} — the real metric of a successful run
+# (keeper/internal/scenario/metrics.go, closed enum ok/failed/locked). Parallel
+# to L3a (tests/e2e/smoke_nginx_test.go::AssertMetricGE). There is no
+# keeper_apply_runs_total metric in the code.
 metrics:
   keeper_scenario_runs_total{result="ok"}: ">= 1"
 

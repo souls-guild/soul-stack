@@ -1,15 +1,15 @@
-# L0-испытание provision (ADR-061, Вариант A) — provision ЯВНО ВЫКЛЮЧЕН
-# (input.provision.enabled=false). ★ С default-on (решение 2026-06-30) ОПУЩЕННАЯ секция
-# означает ВКЛЮЧЕНО (top-level default {enabled: true}) — выключение теперь ТОЛЬКО явным
-# enabled: false. Guard: include provision.yml gated на `has(input.provision) &&
-# input.provision.enabled` (main.yml tasks). enabled=false → весь provision.yml НЕ таргетит
-# никого; его keeper-side шаги (core.cloud.created + core.soul.registered) в плане
-# ОТСУТСТВУЮТ (group-drop по include-when), а read-model provisioned_vm_ids/provisioned_provider —
-# консервативный default ([] / '') по тернару state_changes (гейт input.provision.enabled).
+# L0 test for provision (ADR-061, Variant A) — provision is EXPLICITLY DISABLED
+# (input.provision.enabled=false). ★ With default-on (decision 2026-06-30) an OMITTED section
+# means ENABLED (top-level default {enabled: true}) — disabling is now ONLY via explicit
+# enabled: false. Guard: include provision.yml is gated on `has(input.provision) &&
+# input.provision.enabled` (main.yml tasks). enabled=false → the whole provision.yml targets
+# no one; its keeper-side steps (core.cloud.created + core.soul.registered) are
+# ABSENT from the plan (group-drop via include-when), and the read-model provisioned_vm_ids/provisioned_provider
+# get the conservative default ([] / '') via the state_changes ternary (gated on input.provision.enabled).
 #
-# Парный к provision-default-on (там секция опущена → default-on → cloud-шаги присутствуют)
-# и provision-enabled-sentinel/cluster (явный enabled: true). Этот кейс доказывает, что
-# явный enabled: false катит прогон по существующему roster-у, лишних cloud-шагов не эмитится.
+# Paired with provision-default-on (section omitted there → default-on → cloud steps present)
+# and provision-enabled-sentinel/cluster (explicit enabled: true). This case proves that
+# an explicit enabled: false runs the deploy on the existing roster, with no extra cloud steps emitted.
 name: provision explicitly disabled drops cloud-create and onboarding tasks
 
 fixtures:
@@ -23,8 +23,8 @@ fixtures:
   vault:
     secret/redis/create:
       password: s3cr3t-redis-pass-create
-    # ★ РЕДИЗАЙН default_admin (2026-06-30): default_admin — системный юзер
-    # внутрикластерного AUTH (auth_pass/PING шаги деплоя читают его по ветке users/<name>).
+    # ★ default_admin REDESIGN (2026-06-30): default_admin is the system user
+    # for intra-cluster AUTH (deploy's auth_pass/PING steps read it via the users/<name> branch).
     secret/redis/create/users/default_admin:
       password: default-admin-secret-pass
     secret/redis/create/users/replica:
@@ -36,8 +36,8 @@ fixtures:
     secret/redis/create/users/haproxy:
       password: haproxy-sys-secret-pass
   essence:
-    # install_method — в essence (author-context, 2026-06-28): способ установки
-    # НЕ operator-input. compute.install читает default(essence.install_method, 'binary').
+    # install_method is in essence (author-context, 2026-06-28): the install method
+    # is NOT operator-input. compute.install reads default(essence.install_method, 'binary').
     install_method: package
     redis_type: sentinel
     sentinel_master_name: master
@@ -66,46 +66,46 @@ fixtures:
   input:
     redis_type: sentinel
     version: "7.4.1"
-    # install_method=package ЯВНО: кейс про provision-gate, не про install. default
-    # редизайна binary → package-ветка (assert не сверяет install — важна provision-ветка).
-    # replicas_per_master=0 ЯВНО (default редизайна 2): single-host (node-solo), size-guard
-    # sentinel = 1+0 = 1 хост.
+    # install_method=package EXPLICITLY: this case is about the provision-gate, not install. The default
+    # redesign's binary → package branch (assert doesn't check install — the provision branch matters).
+    # replicas_per_master=0 EXPLICITLY (default of redesign 2): single-host (node-solo), size-guard
+    # sentinel = 1+0 = 1 host.
     replicas_per_master: 0
     persistence: rdb
-    # ★ provision ЯВНО выключен (default-on: опущенная секция = ВКЛЮЧЕНО, выключение
-    # только явным enabled: false) → include provision.yml group-drop.
+    # ★ provision is EXPLICITLY disabled (default-on: an omitted section = ENABLED, disabling
+    # only via explicit enabled: false) → include provision.yml group-drop.
     provision:
       enabled: false
 
 assert:
   task_present:
-    # Прогон катит обычную sentinel-ветку по существующему roster-у: redis.conf
-    # рендерится (дизамбигуатор — path). Доказывает, что отсутствие provision не
-    # ломает основной деплой.
+    # The run rolls the usual sentinel branch on the existing roster: redis.conf
+    # renders (disambiguator — path). Proves that a missing provision doesn't
+    # break the main deploy.
     - module: core.file.rendered
       params_subset:
         path: /etc/redis/redis.conf
 
-    # ★ Синтез из service.yml::modules[] присутствует и без provision (ADR-065);
-    # ref — из записи манифеста.
+    # ★ Synthesis from service.yml::modules[] is present even without provision (ADR-065);
+    # ref comes from the manifest record.
     - module: core.module.installed
       params_subset:
         name: community.redis
         ref: v1.0.0
 
   task_absent:
-    # provision.yml шаги ОТСУТСТВУЮТ (include-when has(input.provision) false →
-    # group-drop). core.cloud.created — создание VM; core.soul.registered — барьер
-    # онбординга. Никто не эмитится без provision.
+    # provision.yml steps are ABSENT (include-when has(input.provision) false →
+    # group-drop). core.cloud.created — VM creation; core.soul.registered — the
+    # onboarding barrier. Neither is emitted without provision.
     - module: core.cloud.created
     - module: core.soul.registered
 
   state_changes:
     redis_type: sentinel
     redis_version: "7.4.1"
-    # read-model: VM никем не провижены этим прогоном → консервативный default.
-    # provisioned_sids=[] покрывает non-provision-ветку guard-а (register.provision
-    # не существует на group-drop → тернар короткозамыкает, sids не читаются).
+    # read-model: no VMs were provisioned by this run → conservative default.
+    # provisioned_sids=[] covers the non-provision branch of the guard (register.provision
+    # doesn't exist on group-drop → the ternary short-circuits, sids are not read).
     provisioned_vm_ids: []
     provisioned_sids: []
     provisioned_provider: ""

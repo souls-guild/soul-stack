@@ -2,21 +2,21 @@ from_version: 13
 to_version: 14
 
 description: >-
-  state_schema v13 → v14: обязательный log-shipping data-плоскости (Слайс V-I, redis-пилот,
-  ADR-067). state ДОПОЛНЯЕТСЯ read-model-объектом logging — зафиксированные версия/sink/
-  источники агента vector, развёрнутого create-прогоном на каждый хост (симметрия v12→v13
-  monitoring: экспортеры метрик). Секрет доступа к коллектору (sink_auth_ref) в state НЕ
-  хранится (ИБ — он в Vault, как tls.*_ref и пароль ACL-юзера monitoring).
+  state_schema v13 → v14: mandatory log-shipping of the data plane (Slice V-I, redis pilot,
+  ADR-067). state is EXTENDED with a read-model object logging — the fixed version/sink/
+  sources of the vector agent deployed by the create run on every host (symmetric to v12→v13
+  monitoring: metrics exporters). The collector access secret (sink_auth_ref) is NOT
+  stored in state (security — it lives in Vault, like tls.*_ref and the monitoring ACL user password).
 
-  Forward-only (down: не поддерживается; восстановление — через state_history). Существующие
-  v13-инкарнации развёрнуты ДО ввода log-shipping (агента vector ещё нет) → консервативный
-  default: version пустая ('' = «не развёрнуто», best-effort как monitoring в 012_to_013),
-  sink_type console (безопасный дефолт без внешней инфры), sink_endpoint '' , log_sources []
-  (следующий create перезапишет их значениями из essence.vector_*). ОДИН плоский set с
-  has()-guard на ВЕСЬ объект (CEL-map-литерал-дефолт): logging уже есть → сохраняется как есть
-  (идемпотентность повторного прогона), иначе ставится default. Зеркало объект-guard-а v12→v13
-  (monitoring) и 008_to_009 (seeded_from). Остальной state (redis_config/redis_users/tls/
-  monitoring/namedfields/топология) НЕ трогается.
+  Forward-only (down: not supported; recovery is via state_history). Existing
+  v13 incarnations were deployed BEFORE log-shipping was introduced (no vector agent yet) → conservative
+  default: version empty ('' = "not deployed", best-effort like monitoring in 012_to_013),
+  sink_type console (safe default with no external infra), sink_endpoint '' , log_sources []
+  (the next create will overwrite them with values from essence.vector_*). ONE flat set with
+  a has()-guard on the WHOLE object (CEL map-literal-default): logging already present → kept as is
+  (idempotency of a repeat run), otherwise the default is set. Mirrors the v12→v13 object-guard
+  (monitoring) and 008_to_009 (seeded_from). The rest of the state (redis_config/redis_users/tls/
+  monitoring/namedfields/topology) is NOT touched.
 
 transform:
   - set:

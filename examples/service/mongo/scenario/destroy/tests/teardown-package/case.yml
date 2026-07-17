@@ -1,12 +1,12 @@
-# L0-испытание destroy: teardown инкарнации, развёрнутой PACKAGE-способом (distro-пакет
-# mongodb-org). Render-only, герметично.
+# L0 test for destroy: teardown of an incarnation deployed the PACKAGE way (distro package
+# mongodb-org). Render-only, hermetic.
 #
-# Что ассертим:
-#   1. mongod остановлен (core.service.stopped).
-#   2. MongoDB снят ПАКЕТОМ (core.pkg.absent name=mongodb-org) — package-ветка активна
-#      (essence.install_method=package → static-гейт group-keep).
-#   3. Наши конфиг-артефакты удалены (core.file.absent mongod.conf + sysctl drop-in).
-#   4. BINARY-ветка дропнута (group-drop): core.file.absent бинаря/binary-юнита ОТСУТСТВУЮТ.
+# What we assert:
+#   1. mongod is stopped (core.service.stopped).
+#   2. MongoDB is removed via PACKAGE (core.pkg.absent name=mongodb-org) — package branch active
+#      (essence.install_method=package -> static gate group-keep).
+#   3. Our config artifacts are removed (core.file.absent mongod.conf + sysctl drop-in).
+#   4. BINARY branch is dropped (group-drop): core.file.absent for the binary/binary-unit are ABSENT.
 name: destroy tears down a package-installed mongo (stop + pkg.absent + remove configs)
 
 fixtures:
@@ -28,15 +28,15 @@ fixtures:
 
 assert:
   task_present:
-    # 1. Стоп mongod.
+    # 1. Stop mongod.
     - module: core.service.stopped
       params_subset:
         name: mongod
-    # 2. MongoDB снят пакетом (package-ветка).
+    # 2. MongoDB is removed via package (package branch).
     - module: core.pkg.absent
       params_subset:
         name: mongodb-org
-    # 3. Наши конфиг-артефакты удалены.
+    # 3. Our config artifacts are removed.
     - module: core.file.absent
       params_subset:
         path: /etc/mongodb/mongod.conf
@@ -45,7 +45,7 @@ assert:
         path: /etc/sysctl.d/30-mongodb.conf
 
   task_absent:
-    # 4. BINARY-ветка group-drop на package-инкарнации: бинарь и binary-unit НЕ трогаются.
+    # 4. BINARY branch group-drop on a package incarnation: binary and binary-unit are NOT touched.
     - module: core.file.absent
       params_subset:
         path: /usr/local/bin/mongod

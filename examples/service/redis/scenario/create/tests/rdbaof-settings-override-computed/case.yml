@@ -1,9 +1,9 @@
-# L0-испытание create (standalone) — guard на пробелы покрытия QA 2026-06-22:
-#   - persistence: rdb_aof_1sec → save непустой + appendonly yes (пресет rdb_aof_1sec);
-#   - memory_mb=512 → computed maxmemory 512*75/100=384 → "384mb";
-#   - redis_settings.maxmemory="1gb" ПЕРЕКРЫВАЕТ computed "384mb" (last-wins на
-#     COMPUTED-слое, не только на essence-дефолте): redis_settings — самый правый
-#     слой merge, бьёт и вычисленные ключи. Это и есть guard.
+# L0 create trial (standalone) - a guard for the QA coverage gap 2026-06-22:
+#   - persistence: rdb_aof_1sec -> save non-empty + appendonly yes (preset rdb_aof_1sec);
+#   - memory_mb=512 -> computed maxmemory 512*75/100=384 -> "384mb";
+#   - redis_settings.maxmemory="1gb" OVERRIDES computed "384mb" (last-wins on the
+#     COMPUTED layer, not just on the essence default): redis_settings is the rightmost
+#     merge layer, and it beats even computed keys. That's exactly what this guard checks.
 name: rdb_aof_1sec + redis_settings overrides COMPUTED maxmemory (last-wins)
 
 fixtures:
@@ -17,10 +17,10 @@ fixtures:
   vault:
     secret/redis/create:
       password: s3cr3t-redis-pass-create
-    # Per-user секреты системных юзеров (secret/redis/<inc>/users/<name>#password) —
-    # их резолвит keeper-side vault() при доливе system_acl_users в apply.input.users.
-    # ★ РЕДИЗАЙН default_admin (2026-06-30): default_admin — системный юзер
-    # внутрикластерного AUTH (auth_pass/PING шаги деплоя читают его по ветке users/<name>).
+    # Per-user secrets for system users (secret/redis/<inc>/users/<name>#password) -
+    # resolved keeper-side by vault() when system_acl_users are merged into apply.input.users.
+    # * default_admin REDESIGN (2026-06-30): default_admin is the system user for
+    # in-cluster AUTH (the deploy body's auth_pass/PING steps read it via the users/<name> branch).
     secret/redis/create/users/default_admin:
       password: default-admin-secret-pass
     secret/redis/create/users/replica:
@@ -32,8 +32,8 @@ fixtures:
     secret/redis/create/users/haproxy:
       password: haproxy-sys-secret-pass
   essence:
-    # install_method — в essence (author-context, 2026-06-28): способ установки
-    # НЕ operator-input. compute.install читает default(essence.install_method, 'binary').
+    # install_method is in essence (author-context, 2026-06-28): the install method is
+    # NOT operator-input. compute.install reads default(essence.install_method, 'binary').
     install_method: package
     redis_type: sentinel
     sentinel_master_name: master
@@ -58,10 +58,10 @@ fixtures:
       maxclients:       10000
       timeout:          300
 
-    # Системные ACL-юзеры redis-server + sentinel-демона (1:1 из essence/_default.yaml).
-    # ОБА ОБЯЗАТЕЛЬНЫ: guard create/sentinel.yml (assert 1b) рвёт render при пустом
-    # любом из наборов (тихий fail-open недопустим — без них репликация/sentinel↔redis
-    # AUTH сломались бы).
+    # System ACL users for redis-server + the sentinel daemon (1:1 from essence/_default.yaml).
+    # BOTH ARE REQUIRED: the create/sentinel.yml guard (assert 1b) fails the render if either
+    # set is empty (silent fail-open is not acceptable - without them replication/sentinel<->redis
+    # AUTH would break).
     system_acl_users:
       default_admin: "~* &* +@all"
       replica:    "+psync +replconf +ping"
@@ -74,25 +74,25 @@ fixtures:
       sentinel:   "allchannels -@all +auth +client|getname +client|id +client|setname +command +hello +ping +sentinel|is-master-down-by-addr +publish +role +sentinel|get-master-addr-by-name +sentinel|master +sentinel|myid +sentinel|replicas +sentinel|sentinels"
       haproxy:    "-@all +auth +client|getname +client|id +client|setname +command +hello +ping +role +sentinel|get-master-addr-by-name +sentinel|master +sentinel|myid +sentinel|replicas +sentinel|sentinels"
   input:
-    # ★ provision выключен (default-on: опущенная секция = ВКЛЮЧЕНО; кейс деплоит на
-    # ГОТОВЫЙ roster, cloud-create не нужен) → include redis-provision.yml group-drop.
+    # * provision is off (default-on: an omitted section = ENABLED; this case deploys onto
+    # a READY roster, no cloud-create needed) -> include redis-provision.yml group-drop.
     provision:
       enabled: false
     redis_type: sentinel
-    # version ОБЯЗАТЕЛЬНА и теперь ENUM выкаченных в Nexus сборок (7.4.1 ∈ enum;
-    # мажор < 8 → version-gate модулей не активен).
+    # version is REQUIRED and now an ENUM of builds published to Nexus (7.4.1 is in the enum;
+    # major < 8 -> the modules version-gate is not active).
     version: "7.4.1"
-    # single-host sentinel (1 хост в roster) → 0 реплик (default редизайна 2):
+    # single-host sentinel (1 host in the roster) -> 0 replicas (redesign-2 default):
     # size-guard sentinel = 1+0 = 1.
     replicas_per_master: 0
-    # install_method=package ЯВНО (default редизайна — binary): кейс про last-wins
-    # maxmemory, не про install — package-ветка даёт core.pkg.installed redis-server.
+    # install_method=package EXPLICITLY (redesign default is binary): this case is about
+    # last-wins maxmemory, not about install - the package branch yields core.pkg.installed redis-server.
     memory_mb: 512
     # persistence rdb_aof_1sec (enum [off, aof_1sec, aof_always, rdb, rdb_aof_1sec,
-    # rdb_aof_always]): RDB-снапшоты + AOF c fsync everysec. Пресет несёт save+appendonly.
+    # rdb_aof_always]): RDB snapshots + AOF with fsync everysec. The preset carries save+appendonly.
     persistence: rdb_aof_1sec
     redis_settings:
-      # Перекрывает COMPUTED maxmemory (384mb), не только essence-дефолт.
+      # Overrides the COMPUTED maxmemory (384mb), not just the essence default.
       maxmemory: "1gb"
 
 assert:
@@ -102,7 +102,7 @@ assert:
         name: redis-server
         version: "7.4.1"
 
-    # redis.conf — единственная core.file.rendered с этим path (дизамбигуатор от
+    # redis.conf is the only core.file.rendered with this path (disambiguator from
     # users.acl/hardening).
     - module: core.file.rendered
       params_subset:
@@ -124,26 +124,26 @@ assert:
               - /var/lib/redis/modules/redisearch.so
               - /var/lib/redis/modules/redistimeseries.so
             config:
-              # ★ РЕДИЗАЙН default_admin: replica→master AUTH (masteruser/
-              # masterauth) приходит ОБЫЧНЫМИ директивами config (sentinel
-              # deploy-body доливает их vault()-в-ячейке) → redis.conf range-ит
-              # их как любую директиву → статически переживают рестарт.
+              # * default_admin REDESIGN: replica->master AUTH (masteruser/
+              # masterauth) arrives as ORDINARY config directives (the sentinel
+              # deploy body merges them in via a vault()-in-cell) -> redis.conf ranges
+              # over them like any other directive -> they statically survive a restart.
               masteruser:       "default_admin"
               masterauth:       "default-admin-secret-pass"
-              # COMPUTED был "384mb" (512*75/100), но redis_settings (самый правый
-              # слой merge) перекрыл его на "1gb". LAST-WINS на computed-слое.
+              # COMPUTED was "384mb" (512*75/100), but redis_settings (the rightmost
+              # merge layer) overrode it to "1gb". LAST-WINS on the computed layer.
               maxmemory: "1gb"
               maxmemory-policy: allkeys-lru
               maxclients: 10000
               timeout: 300
-              # persistence-пресет rdb_aof_1sec.
+              # persistence preset rdb_aof_1sec.
               save: "900 1 300 10 60 10000"
               appendonly: "yes"
           self:
             sid: node-solo.example.com
             covens: [create]
             choirs: []
-            # traits — registry-проекция (ADR-060), пустой объект без меток.
+            # traits is a registry projection (ADR-060), an empty object with no labels.
             traits: {}
             role: ""
             network:
@@ -156,7 +156,7 @@ assert:
   state_changes:
     redis_type: sentinel
     redis_version: "7.4.1"
-    # DRIFT-GUARD: идентичен apply.input.config (index 3).
+    # DRIFT-GUARD: identical to apply.input.config (index 3).
     redis_config:
       maxmemory: "1gb"
       maxmemory-policy: allkeys-lru

@@ -1,31 +1,31 @@
-# L0-испытание (Trial, ADR-023): GUARD install-ветки — update_config ОБЯЗАН
-# ре-ensure'ить redis тем же способом установки (binary), что зафиксировал create,
-# а НЕ скатываться в package. РЕГРЕСС (пойман live E2E 2026-07-01): apply.input на повторном прогоне
-# НЕ передавал install → destiny `redis` диспетчер install.yml по !has(input.install)
-# уходил в package-ветку → core.pkg `apt install redis-server=<version>`. Версия
-# (напр. 8.6.1) выкачена ТОЛЬКО в Nexus (binary), в apt её НЕТ → env exited 100
-# (E: Version '8.6.1' for 'redis-server' was not found). CONFIG-часть при этом
-# применялась, install-ensure падал.
+# L0-trial (Trial, ADR-023): GUARD for the install branch — update_config MUST
+# re-ensure redis with the same install method (binary) that create fixed,
+# and NOT fall back to package. REGRESSION (caught live E2E 2026-07-01): on re-run apply.input
+# did not pass install → the `redis` destiny's install.yml dispatcher, via !has(input.install),
+# fell into the package branch → core.pkg `apt install redis-server=<version>`. The version
+# (e.g. 8.6.1) was published ONLY to Nexus (binary), not present in apt → env exited 100
+# (E: Version '8.6.1' for 'redis-server' was not found). The CONFIG part still
+# applied, install-ensure failed.
 #
-# Что ассертим (критерий приёмки):
-#   1. binary-ветка install.yml АКТИВНА: ТРИ core.url.fetched тянут redis-server/
-#      redis-cli/redis-benchmark из Nexus по РАЗВЁРНУТОЙ версии (incarnation.state.
-#      redis_version = 8.6.1), НЕ по input.version (его на повторном прогоне нет). URL per-host:
+# What we assert (acceptance criteria):
+#   1. binary branch of install.yml is ACTIVE: THREE core.url.fetched pull redis-server/
+#      redis-cli/redis-benchmark from Nexus by the DEPLOYED version (incarnation.state.
+#      redis_version = 8.6.1), NOT by input.version (absent on re-run). URL per-host:
 #      <base_url>/<arch>/Debian/<distro_ver>/<version>/redis-*. allow_private
-#      прокинут из essence.binary_allow_private.
-#   2. package-ветка ВЫКЛЮЧЕНА: core.pkg.installed redis-server ОТСУТСТВУЕТ в плане.
+#      is passed through from essence.binary_allow_private.
+#   2. package branch is DISABLED: core.pkg.installed redis-server ABSENT from the plan.
 #
-# Источник install-структуры — тот же, что create (deploy-body redis-deploy-*.yml
-# передаёт compute.install из essence.install_method): author-context essence, единый
-# способ установки для create и сопровождения. version на повторном прогоне берётся из state (развёрнутая),
-# а не input (повторный прогон версию не переустанавливает).
+# The install-structure source is the same as create (deploy-body redis-deploy-*.yml
+# passes compute.install from essence.install_method): author-context essence, a single
+# install method for both create and maintenance. version on re-run is taken from state (deployed),
+# not from input (re-run doesn't reinstall the version).
 name: update_config honors the deployed binary install method (no package fallback)
 
 fixtures:
   default_destiny_source: "file://../../destiny/{name}"
   soulprint:
     network: { primary_ip: 10.0.0.5 }
-    # os.version нужен binary-URL (.../Debian/<distro_ver>/...) — Debian 12.
+    # os.version is needed for the binary-URL (.../Debian/<distro_ver>/...) — Debian 12.
     os: { arch: amd64, version: "12" }
 
   essence:
@@ -33,26 +33,26 @@ fixtures:
     conf_dir: /etc/redis
     data_dir: /var/lib/redis
     modules_base_url: "https://artifacts.example.com/redis/modules"
-    # ★ install_method — author-context (essence, не operator-input). binary — дефолт;
-    # на повторном прогоне apply.input.install собирает binary-структуру из этого поля (симметрия
-    # covenant.install / deploy-body). Кейс — guard binary-ветки, поэтому задан
-    # явно (хотя дефолт binary — сделать регресс наглядным).
+    # ★ install_method — author-context (essence, not operator-input). binary is the default;
+    # on re-run apply.input.install builds the binary structure from this field (symmetry with
+    # covenant.install / deploy-body). This case guards the binary branch, so it's set
+    # explicitly (even though binary is the default — to make the regression obvious).
     install_method: binary
-    # base_url бинарей — Nexus-mirror (author-context). Повторный прогон берёт его в install.base_url,
-    # destiny собирает URL <base_url>/<arch>/Debian/<distro_ver>/<version>/redis-*.
+    # binary_base_url — the Nexus-mirror (author-context). Re-run takes it into install.base_url,
+    # destiny builds the URL <base_url>/<arch>/Debian/<distro_ver>/<version>/redis-*.
     binary_base_url: "https://downloads.example.com/redis"
-    # binary_allow_private=true → снят SSRF-guard core.url (дефолтный base = внутренний
-    # Nexus в RFC1918). Повторный прогон обязан прокинуть его в install.allow_private (иначе fetch
-    # на реальном хосте упёрся бы в SSRF-block private-IP).
+    # binary_allow_private=true → lifts the core.url SSRF-guard (default base = internal
+    # Nexus in RFC1918). Re-run must pass it through into install.allow_private (otherwise fetch
+    # on a real host would hit the SSRF-block for the private IP).
     binary_allow_private: true
     persistence_presets:
       rdb:
         save: "900 1 300 10 60 10000"
         appendonly: "no"
 
-  # Развёрнутый incarnation.state (от create с install_method=binary): версия 8.6.1 —
-  # выкачена ТОЛЬКО в Nexus (binary), в apt её НЕТ (тот самый live-регресс). update_config
-  # ре-ensure'ит install по этой развёрнутой версии.
+  # Deployed incarnation.state (from create with install_method=binary): version 8.6.1 —
+  # published ONLY to Nexus (binary), not present in apt (the very live regression). update_config
+  # re-ensures install by this deployed version.
   state:
     redis_type: cluster
     redis_version: "8.6.1"
@@ -74,7 +74,7 @@ fixtures:
     redis_users: []
 
   input:
-    # Дельта оператора: только новая политика вытеснения.
+    # Operator delta: only the new eviction policy.
     maxmemory_policy: volatile-lru
 
   vault:
@@ -85,11 +85,11 @@ fixtures:
 
 assert:
   task_present:
-    # ★ binary-ветка АКТИВНА: ТРИ core.url.fetched тянут бинари из Nexus по РАЗВЁРНУТОЙ
-    # версии (incarnation.state.redis_version = 8.6.1) — НЕ input.version (повторный прогон его не
-    # несёт). URL per-host: <base_url>/x86_64/Debian/12/8.6.1/redis-* (amd64→x86_64).
-    # allow_private:true — прокинут из essence.binary_allow_private. Регресс «повторный прогон в
-    # package» → эти задачи отсутствуют (placeholder-skip), core.pkg ниже присутствует.
+    # ★ binary branch is ACTIVE: THREE core.url.fetched pull binaries from Nexus by the DEPLOYED
+    # version (incarnation.state.redis_version = 8.6.1) — NOT input.version (re-run doesn't
+    # carry it). URL per-host: <base_url>/x86_64/Debian/12/8.6.1/redis-* (amd64→x86_64).
+    # allow_private:true — passed through from essence.binary_allow_private. Regression "re-run falls
+    # into package" → these tasks would be absent (placeholder-skip), core.pkg below present.
     - module: core.url.fetched
       params_subset:
         url: "https://downloads.example.com/redis/x86_64/Debian/12/8.6.1/redis-server"
@@ -118,10 +118,10 @@ assert:
         allow_private: true
 
   task_absent:
-    # ★ package-ветка ВЫКЛЮЧЕНА (method=binary → static-skip диспетчера install.yml):
-    # core.pkg.installed redis-server — placeholder-skip без params. params_subset не
-    # сматчит placeholder (Params nil) → guard «повторный прогон НЕ падает в package `apt install
-    # redis-server=<version>`». Это и есть корень live-регресса.
+    # ★ package branch is DISABLED (method=binary → install.yml dispatcher static-skip):
+    # core.pkg.installed redis-server — placeholder-skip without params. params_subset won't
+    # match the placeholder (Params nil) → guard "re-run does NOT fall into package `apt install
+    # redis-server=<version>`". This is the root of the live regression.
     - module: core.pkg.installed
       params_subset:
         name: redis-server

@@ -1,15 +1,15 @@
 name: persistence-idempotent-aof-always
 description: >
-  ИДЕМПОТЕНТНОСТЬ remap для НОВОГО значения aof_always (fsync на каждую запись):
-  state УЖЕ несёт persistence:aof_always (оператор выбрал его на create v11). Повторный
-  прогон 010_to_011 (ручной повтор / восстановление) НЕ должен его ломать:
-    - persistence:aof_always → тождество (ни 'aof', ни 'rdb_aof' → ветка тернара
-      возвращает значение как есть). КОММЕНТАРИЙ миграции прямо отмечает aof_always/
-      rdb_aof_always как «теоретически отсутствуют в v10, тождественная ветка не ломает» —
-      этот кейс ловит регресс, если remap-тернар когда-нибудь начнёт их трогать;
-    - connection_mode/io_threads уже присутствуют → перезапись тем же значением;
+  IDEMPOTENCY of the remap for the NEW aof_always value (fsync on every write):
+  state ALREADY carries persistence:aof_always (the operator chose it on create v11). A repeat
+  run of 010_to_011 (manual re-run / restore) must NOT break it:
+    - persistence:aof_always → identity (neither 'aof' nor 'rdb_aof' → the ternary branch
+      returns the value as-is). The migration's COMMENT explicitly notes aof_always/
+      rdb_aof_always as "theoretically absent in v10, identity branch doesn't break anything" —
+      this case catches a regression if the remap ternary ever starts touching them;
+    - connection_mode/io_threads already present → overwrite with the same value;
     - cluster (redis_sentinel == {}) → no-op.
-  Парный кейс persistence-idempotent-aof-1sec.
+  Paired case: persistence-idempotent-aof-1sec.
 
 state_before:
   redis_type: cluster

@@ -1,18 +1,19 @@
-# tasks/main.yml — точка входа destiny node-exporter. Только include-список:
-# логические группы разнесены по соседним файлам, раскрываются inline ДО render
-# (docs/destiny/tasks.md §4 — within-destiny include раскрывается в плоский список).
+# tasks/main.yml — entry point of the node-exporter destiny. Just an
+# include-list: logical groups are split across sibling files, expanded
+# inline BEFORE render (docs/destiny/tasks.md §4 — within-destiny include
+# expands to a flat list).
 #
-# Обзор конвейера:
-#   install.yml    — fetch tarball → extract (подготовка артефакта в /tmp);
-#   account.yml    — group + user node_exporter + textfile-каталог
+# Pipeline overview:
+#   install.yml    — fetch tarball → extract (prepares the artifact in /tmp);
+#   account.yml    — group + user node_exporter + textfile directory
 #                    (core.file.directory);
-#   service.yml    — install бинаря node_exporter (core.file.present src:) + render
+#   service.yml    — install the node_exporter binary (core.file.present src:) + render
 #                    hardened-unit + core.service.running + restarted (auto daemon-reload
-#                    встроен в core.service). install-шаг бинаря здесь, а не в install.yml:
-#                    его register читает onchanges рестарта, а per-file линтер отвергает
-#                    cross-file onchanges;
-#   collectors.yml — textfile-коллекторы железа smartmon/nvme/ipmi
-#                    (when: членство в input.collectors).
+#                    built into core.service). The binary install step is here, not in
+#                    install.yml: its register is read by the restart onchanges, and the
+#                    per-file linter rejects cross-file onchanges;
+#   collectors.yml — hardware textfile collectors smartmon/nvme/ipmi
+#                    (when: membership in input.collectors).
 
 - include: install.yml
 

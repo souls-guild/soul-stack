@@ -1,9 +1,9 @@
 name: preserves-unrelated
 description: >
-  Инкарнация без install/conf_dir/data_dir (напр. дефолтные пути, host-layout не
-  переопределялся). delete no-op по всем трём путям → остальной state
-  (df_config/df_users/df_sentinel/tls/топология/sysctl_settings) проходит насквозь
-  бит-в-бит, лишние ключи delete НЕ создаёт.
+  Incarnation without install/conf_dir/data_dir (e.g. default paths, host-layout not
+  overridden). delete is a no-op along all three paths -> the rest of the state
+  (df_config/df_users/df_sentinel/tls/topology/sysctl_settings) passes through
+  bit-for-bit, delete does NOT create extra keys.
 
 state_before:
   df_version: "1.39.0"

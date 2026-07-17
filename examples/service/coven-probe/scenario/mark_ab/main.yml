@@ -1,7 +1,7 @@
 name: mark_ab
 description: >-
-  Таргет ДВУХ ковенов (on: [cluster-a, cluster-b]). Валидация: apply_runs ровно
-  для 6 хостов (cluster-a + cluster-b), cluster-c чист.
+  Targets TWO covens (on: [cluster-a, cluster-b]). Validation: apply_runs exactly
+  for 6 hosts (cluster-a + cluster-b), cluster-c is clean.
 
 state_changes:
   - set: marker_file

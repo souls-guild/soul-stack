@@ -1,9 +1,9 @@
-# Souls-фикстура для L3a coven-probe::create.
+# Souls fixture for L3a coven-probe::create.
 #
-# scenario create пишет init-маркер на каждом хосте incarnation (on: опущен →
-# весь incarnation), сам по себе coven-таргетинг проверяется в сценариях
-# mark_a/mark_ab/mark_where — здесь covens задаём, чтобы фикстура была
-# готова к будущим тестам других сценариев. Для create ковены роли не играют.
+# scenario create writes an init marker on every host of the incarnation (on: omitted →
+# the whole incarnation), coven-targeting itself is checked in the scenarios
+# mark_a/mark_ab/mark_where — here we set covens so the fixture is
+# ready for future tests of other scenarios. For create, covens play no role.
 - sid: soul-a.example.com
   status: connected
   covens: [coven-a]

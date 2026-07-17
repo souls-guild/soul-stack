@@ -1,14 +1,14 @@
-# L0-испытание version-aware валидатора имён директив redis_settings (assert, #6) —
-# НЕГАТИВ для серии Redis 8.6. essence несёт каталог redis_directives с серией 8.6.
-# input.version = 8.6.1 (enum выкаченных в Nexus сборок) → серия 8.6. redis_settings
-# содержит НЕИЗВЕСТНОЕ имя (опечатка `maxmemoyr` — нет в каталоге) → assert false →
-# render рвётся на KEEPER-SIDE (422 assert-failed) ДО любого dispatch.
+# L0 test for the version-aware validator of redis_settings directive names (assert, #6) —
+# NEGATIVE case for the Redis 8.6 series. essence carries a redis_directives catalog for series 8.6.
+# input.version = 8.6.1 (enum of shipped Nexus builds) → series 8.6. redis_settings
+# contains an UNKNOWN name (typo `maxmemoyr` — not in the catalog) → assert false →
+# render aborts on the KEEPER SIDE (422 assert-failed) BEFORE any dispatch.
 #
-# ★ GUARD на регрессию каталога: серии 8.4/8.6 ДОБАВЛЕНЫ в каталог поздно (version-enum
-# уже включал 8.6.1/8.4.0, а каталог обрывался на 8.2 → version-aware assert был
-# вакуумно-true для 8.x → опечатка в redis_settings МОЛЧА проходила → redis-server падал
-# на старте). Этот кейс держит инвариант «серия 8.6 присутствует в каталоге и
-# валидируется так же, как 7.4». Парный к redis-settings-directive-unknown (серия 7.4).
+# ★ GUARD against catalog regression: series 8.4/8.6 were ADDED to the catalog late (the
+# version-enum already included 8.6.1/8.4.0, but the catalog stopped at 8.2 → the version-aware
+# assert was vacuously true for 8.x → a typo in redis_settings SILENTLY passed through →
+# redis-server crashed at startup). This case holds the invariant "series 8.6 is present in
+# the catalog and validated the same way as 7.4". Paired with redis-settings-directive-unknown (series 7.4).
 name: redis_settings with an unknown directive name aborts at render for Redis 8.6 (catalog assert)
 
 fixtures:
@@ -22,8 +22,8 @@ fixtures:
   vault:
     secret/redis/create:
       password: s3cr3t-redis-pass-create
-    # ★ РЕДИЗАЙН default_admin (2026-06-30): default_admin — системный юзер
-    # внутрикластерного AUTH (auth_pass/PING шаги деплоя читают его по ветке users/<name>).
+    # ★ default_admin REDESIGN (2026-06-30): default_admin is the system user
+    # for intra-cluster AUTH (deploy's auth_pass/PING steps read it via the users/<name> branch).
     secret/redis/create/users/default_admin:
       password: default-admin-secret-pass
     secret/redis/create/users/replica:
@@ -35,8 +35,8 @@ fixtures:
     secret/redis/create/users/haproxy:
       password: haproxy-sys-secret-pass
   essence:
-    # install_method — в essence (author-context, 2026-06-28): способ установки
-    # НЕ operator-input. compute.install читает default(essence.install_method, 'binary').
+    # install_method — in essence (author-context, 2026-06-28): install method is
+    # NOT operator-input. compute.install reads default(essence.install_method, 'binary').
     install_method: package
     redis_type: sentinel
     sentinel_master_name: master
@@ -63,9 +63,9 @@ fixtures:
       sentinel:   "allchannels -@all +auth +client|getname +client|id +client|setname +command +hello +ping +sentinel|is-master-down-by-addr +publish +role +sentinel|get-master-addr-by-name +sentinel|master +sentinel|myid +sentinel|replicas +sentinel|sentinels"
       haproxy:    "-@all +auth +client|getname +client|id +client|setname +command +hello +ping +role +sentinel|get-master-addr-by-name +sentinel|master +sentinel|myid +sentinel|replicas +sentinel|sentinels"
 
-    # Каталог директив с серией 8.6 — активирует assert-валидатор для version 8.6.1.
-    # Подмножество реальных директив серии 8.6 (включая 8.x-only bgsave-cpulist) —
-    # достаточно для проверки членства опечатки.
+    # Directive catalog with series 8.6 — activates the assert validator for version 8.6.1.
+    # A subset of real series 8.6 directives (including 8.x-only bgsave-cpulist) —
+    # enough to test membership of the typo.
     redis_directives:
       "8.6":
         - maxmemory
@@ -78,8 +78,8 @@ fixtures:
         - bgsave-cpulist
 
   input:
-    # ★ provision выключен (default-on: опущенная секция = ВКЛЮЧЕНО; кейс деплоит на
-    # ГОТОВЫЙ roster, cloud-create не нужен) → include redis-provision.yml group-drop.
+    # ★ provision disabled (default-on: an omitted section = ENABLED; this case deploys onto
+    # a READY roster, cloud-create is not needed) → include redis-provision.yml group-drop.
     provision:
       enabled: false
     redis_type: sentinel
@@ -87,10 +87,10 @@ fixtures:
     replicas_per_master: 0
     persistence: rdb
     redis_settings:
-      # ОПЕЧАТКА: должно быть maxmemory. Имя НЕТ в каталоге серии 8.6 → assert false.
-      # До добавления серии 8.6 в каталог assert был вакуумно-true → опечатка проходила.
+      # TYPO: should be maxmemory. The name is NOT in the series 8.6 catalog → assert false.
+      # Before series 8.6 was added to the catalog, the assert was vacuously true → the typo passed.
       maxmemoyr: "512mb"
 
-# Прогон обрывается на render: assert «Validate redis_settings directive names…» false.
-# Подстрока — message assert-правила (create/main.yml).
-expect_render_error: "redis_settings содержит неизвестную директиву redis.conf для выбранной версии Redis"
+# The run aborts at render: assert "Validate redis_settings directive names..." false.
+# Substring — the assert rule's message (create/main.yml).
+expect_render_error: "unknown redis_settings directive"

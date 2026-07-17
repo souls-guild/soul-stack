@@ -1,9 +1,9 @@
-# L0-испытание create — io_threads > 0 (директива io-threads). ВЕТКА int(io_threads)>0
-# в compute.redis_config: при io_threads>0 в redis_config доливается io-threads=<N>
-# (has-guard, как memory_mb — io_threads 0 не пишется, чтобы не шуметь в diff). Кейс
-# держит инвариант «io_threads:4 → io-threads:"4" в redis.conf И в state.redis_config».
-# Контр-точка — любой кейс с io_threads опущенным (default 0 → ветка false → директивы
-# нет). Режим sentinel single-host (1 master + 0 реплик), persistence rdb.
+# L0 test for create — io_threads > 0 (io-threads directive). The BRANCH int(io_threads)>0
+# in compute.redis_config: when io_threads>0, redis_config gets io-threads=<N> added
+# (has-guard, like memory_mb — io_threads 0 is not written, to avoid diff noise). The case
+# holds the invariant "io_threads:4 → io-threads:"4" in redis.conf AND in state.redis_config".
+# Counter-point — any case with io_threads omitted (default 0 → branch false → no directive
+# emitted). sentinel single-host mode (1 master + 0 replicas), rdb persistence.
 name: io_threads greater than zero writes the io-threads directive to redis.conf and state
 
 fixtures:
@@ -17,8 +17,8 @@ fixtures:
   vault:
     secret/redis/create:
       password: s3cr3t-redis-pass-create
-    # ★ РЕДИЗАЙН default_admin (2026-06-30): default_admin — системный юзер
-    # внутрикластерного AUTH (auth_pass/PING шаги деплоя читают его по ветке users/<name>).
+    # * default_admin REDESIGN (2026-06-30): default_admin is the system user
+    # for intra-cluster AUTH (auth_pass/PING deploy steps read it via the users/<name> branch).
     secret/redis/create/users/default_admin:
       password: default-admin-secret-pass
     secret/redis/create/users/replica:
@@ -30,8 +30,8 @@ fixtures:
     secret/redis/create/users/haproxy:
       password: haproxy-sys-secret-pass
   essence:
-    # install_method — в essence (author-context, 2026-06-28): способ установки
-    # НЕ operator-input. compute.install читает default(essence.install_method, 'binary').
+    # install_method — lives in essence (author-context, 2026-06-28): the install method
+    # is NOT operator-input. compute.install reads default(essence.install_method, 'binary').
     install_method: package
     redis_type: sentinel
     sentinel_master_name: master
@@ -58,23 +58,23 @@ fixtures:
       sentinel:   "allchannels -@all +auth +client|getname +client|id +client|setname +command +hello +ping +sentinel|is-master-down-by-addr +publish +role +sentinel|get-master-addr-by-name +sentinel|master +sentinel|myid +sentinel|replicas +sentinel|sentinels"
       haproxy:    "-@all +auth +client|getname +client|id +client|setname +command +hello +ping +role +sentinel|get-master-addr-by-name +sentinel|master +sentinel|myid +sentinel|replicas +sentinel|sentinels"
   input:
-    # ★ provision выключен (default-on: опущенная секция = ВКЛЮЧЕНО; кейс деплоит на
-    # ГОТОВЫЙ roster, cloud-create не нужен) → include redis-provision.yml group-drop.
+    # * provision disabled (default-on: an omitted section = ENABLED; the case deploys onto
+    # a READY roster, no cloud-create needed) → include redis-provision.yml group-drop.
     provision:
       enabled: false
     redis_type: sentinel
     version: "7.4.1"
     persistence: rdb
     replicas_per_master: 0
-    # io_threads > 0 → ветка int(io_threads)>0 истинна → io-threads:"4" в redis_config.
+    # io_threads > 0 → branch int(io_threads)>0 is true → io-threads:"4" in redis_config.
     io_threads: 4
 
 assert:
   task_present:
-    # redis.conf на месте (data-плоскость). io-threads сверяется через state_changes
-    # ниже: render_context.vars.config — вложенный объект, params_subset сравнивает
-    # его deepEqual (полным), а не по-ключно (compareParams: top-level subset, вложенное
-    # равенство) → точечную проверку одной директивы несёт read-model state.
+    # redis.conf in place (data plane). io-threads is verified via state_changes
+    # below: render_context.vars.config — a nested object, params_subset compares
+    # it deepEqual (fully), not key-by-key (compareParams: top-level subset, nested
+    # equality) → the pointed check of a single directive is carried by the read-model state.
     - module: core.file.rendered
       params_subset:
         path: /etc/redis/redis.conf
@@ -82,7 +82,7 @@ assert:
   state_changes:
     redis_type: sentinel
     redis_version: "7.4.1"
-    # io-threads материализован в read-model redis_config (state) — повторный прогон видит выбор.
+    # io-threads is materialized in the read-model redis_config (state) — a repeated run sees the choice.
     redis_config:
       maxmemory: "256mb"
       save: "900 1 300 10 60 10000"

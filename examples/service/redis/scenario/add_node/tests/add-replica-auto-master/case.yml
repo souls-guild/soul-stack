@@ -1,14 +1,14 @@
-# L0-испытание add_node: присоединить новую ноду как РЕПЛИКУ с АВТО-выбором
-# master (master_sid не задан → master.addr пуст → плагин балансирует сам).
-# Roster прогона — 3 хоста (две существующие ноды + новичок node-9). Таргет
-# destiny-задачи — ТОЛЬКО новичок (where soulprint.self.sid == new_node_sid):
-# render_context.self = node-9, cluster-announce-ip в .tmpl возьмётся из ЕГО
-# primary_ip (TILING-урок: per-host через .self, не apply.input).
+# L0 test for add_node: join a new node as a REPLICA with AUTO-selected
+# master (master_sid not set → master.addr empty → the plugin balances on its own).
+# Run roster is 3 hosts (two existing nodes + newcomer node-9). The destiny task's
+# target is ONLY the newcomer (where soulprint.self.sid == new_node_sid):
+# render_context.self = node-9, the cluster-announce-ip in .tmpl comes from ITS
+# primary_ip (TILING lesson: per-host via .self, not apply.input).
 #
-# Конфиг redis.conf берётся из incarnation.state.redis_config (источник истины,
-# зафиксированный create) — НЕ перевычисляется → нет drift render↔state.
-# nodes-endpoint-ы add-node строятся из roster (soulprint.hosts) по SID:
-# new_node=node-9, seed=node-1; master.addr пуст (авто-выбор).
+# redis.conf config comes from incarnation.state.redis_config (source of truth,
+# fixed at create) — NOT recomputed → no render↔state drift.
+# add-node nodes-endpoints are built from the roster (soulprint.hosts) by SID:
+# new_node=node-9, seed=node-1; master.addr empty (auto-select).
 name: add replica node (auto-pick master)
 
 fixtures:
@@ -29,14 +29,14 @@ fixtures:
       soulprint:
         network: { primary_ip: 10.0.0.9 }
         os: { arch: amd64 }
-  # ★ РЕДИЗАЙН default_admin (2026-06-30): коннект к нодам — под системным default_admin
-  # (PING-gate + CLUSTER MEET + masterauth деплоя читают его пароль). Прежний главный
-  # секрет secret/redis/<inc>#password ДРОПНУТ — ветка users/default_admin.
+  # ★ default_admin REDESIGN (2026-06-30): connecting to nodes as the system default_admin
+  # (PING-gate + CLUSTER MEET + masterauth deploy read its password). The old main
+  # secret secret/redis/<inc>#password is DROPPED — the users/default_admin branch.
   vault:
     secret/redis/add_node/users/default_admin:
       password: default-admin-secret-pass
-  # host-layout — в essence (v11→v12, Вариант A): modules_base_url вынесен из state,
-  # add_node читает его отсюда (новая нода тянет .so из того же источника).
+  # host-layout — in essence (v11→v12, Option A): modules_base_url moved out of state,
+  # add_node reads it from there (the new node pulls .so from the same source).
   essence:
     modules_base_url: "https://artifacts.example.com/redis/modules"
   state:
@@ -56,12 +56,12 @@ fixtures:
     role: replica
 
 assert:
-  # GUARD — assert: (new_node != seed, оба в roster → that[0] true → render проходит,
-  # задача в план не эмитится).
+  # GUARD — assert: (new_node != seed, both in roster → that[0] true → render passes,
+  # the task is not omitted from the plan).
   task_present:
-    # redis.conf рендерится на НОВОЙ ноде (render_context.self = node-9).
-    # config = incarnation.state.redis_config (cluster-директивы), не перевычислен.
-    # Дизамбигуатор от users.acl/hardening (тот же core.file.rendered) — path.
+    # redis.conf renders on the NEW node (render_context.self = node-9).
+    # config = incarnation.state.redis_config (cluster directives), not recomputed.
+    # Disambiguator from users.acl/hardening (same core.file.rendered) — path.
     - module: core.file.rendered
       params_subset:
         path: /etc/redis/redis.conf
@@ -71,9 +71,9 @@ assert:
         group: redis
         render_context:
           vars:
-            # host-layout (директива B): новая нода берёт layout из essence (v11→v12,
-            # Вариант A; default /etc/redis ÷ /var/lib/redis, essence без override → дефолт),
-            # шаблон выводит dir/aclfile из них — тот же layout, что у создавшей кластер ноды.
+            # host-layout (directive B): the new node takes its layout from essence (v11→v12,
+            # Option A; default /etc/redis ÷ /var/lib/redis, essence without override → default),
+            # the template derives dir/aclfile from them — the same layout as the node that created the cluster.
             conf_dir: /etc/redis
             data_dir: /var/lib/redis
             port: 6379
@@ -85,10 +85,10 @@ assert:
               - /var/lib/redis/modules/redisearch.so
               - /var/lib/redis/modules/redistimeseries.so
             config:
-              # ★ РЕДИЗАЙН default_admin: masteruser/masterauth ДОЛИВАЮТСЯ поверх
-              # incarnation.state.redis_config обычными директивами (config-merge add_node) —
-              # статическая replica→master AUTH (нода может войти репликой). masterauth —
-              # пароль системного default_admin из Vault (users/default_admin#password).
+              # ★ default_admin REDESIGN: masteruser/masterauth are LAYERED on top of
+              # incarnation.state.redis_config as regular directives (config-merge add_node) —
+              # static replica→master AUTH (the node may join as a replica). masterauth is
+              # the system default_admin's password from Vault (users/default_admin#password).
               masteruser: "default_admin"
               masterauth: "default-admin-secret-pass"
               maxmemory: "256mb"
@@ -99,7 +99,7 @@ assert:
             sid: node-9.example.com
             covens: [add_node, redis]
             choirs: []
-            # traits — registry-проекция (ADR-060), пустой объект без меток.
+            # traits — registry projection (ADR-060), an empty object with no labels.
             traits: {}
             role: ""
             network:
@@ -109,8 +109,8 @@ assert:
           role: ""
           essence: {}
 
-    # health-gate на новой ноде: PING живого Redis перед вводом в кластер.
-    # cluster/sentinel PING — placeholder-skip; дизамбигуатор addr/args.
+    # health-gate on the new node: PING a live Redis before adding it to the cluster.
+    # cluster/sentinel PING — placeholder-skip; disambiguator addr/args.
     - module: community.redis.command
       params_subset:
         addr: "127.0.0.1:6379"
@@ -118,9 +118,9 @@ assert:
         password: default-admin-secret-pass
         args: ["PING"]
 
-    # ADD-NODE run_once: endpoint-ы из roster по SID. master.addr пуст (авто-выбор
-    # наименее загруженного master-а делает плагин — scenario не транслирует).
-    # Единственная community.redis.cluster в плане.
+    # ADD-NODE run_once: endpoints from the roster by SID. master.addr is empty
+    # (auto-selecting the least loaded master is done by the plugin — the scenario doesn't relay it).
+    # The single community.redis.cluster in the plan.
     - module: community.redis.cluster
       params_subset:
         action: add-node

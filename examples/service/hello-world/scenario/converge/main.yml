@@ -1,29 +1,29 @@
 name: converge
 description: |
-  Scry-сценарий drift-детекта (ADR-031 Slice B) для hello-world. Объявляет
-  ЖЕЛАЕМОЕ конечное состояние greeting-файла: тот же path и тот же content, что
-  пишет scenario/create. Keeper прогоняет converge в dry_run-режиме при
-  check-drift; Soul зовёт core.file.Plan (read-safe) вместо Apply, сравнивает
-  желаемое vs фактическое и возвращает per-task changed.
+  Scry drift-detection scenario (ADR-031 Slice B) for hello-world. Declares
+  the DESIRED final state of the greeting file: the same path and the same content
+  written by scenario/create. Keeper runs converge in dry_run mode on
+  check-drift; Soul calls core.file.Plan (read-safe) instead of Apply, compares
+  desired vs actual, and returns per-task changed.
 
-  Содержимое сверяется по input.greeting. В отличие от noop (там
-  converge хардкодит marker-content), hello-world держит drift-детект честным:
-  тот же greeting, что был применён, оператор передаёт в body check-drift —
-  и Plan core.file.present увидит расхождение, если файл изменили на хосте.
+  Content is checked against input.greeting. Unlike noop (where
+  converge hardcodes marker-content), hello-world keeps drift detection honest:
+  the same greeting that was applied is passed by the operator in the check-drift body —
+  and Plan core.file.present will see the discrepancy if the file was changed on the host.
 
-# converge.input.greeting обязателен: путь файла зафиксирован в
-# incarnation.state.greeting_file, но сам текст приветствия в state не хранится
-# (state_schema несёт только greeting_file). Поэтому ожидаемый content
-# приходит из operator-override в body check-drift (InputOverride, ADR-031).
+# converge.input.greeting is required: the file path is fixed in
+# incarnation.state.greeting_file, but the greeting text itself isn't stored in state
+# (state_schema only carries greeting_file). So the expected content
+# comes from an operator override in the check-drift body (InputOverride, ADR-031).
 input:
   greeting:
     type: string
     required: true
-    description: Ожидаемый текст greeting-файла (тот же, что был применён в create).
+    description: Expected greeting-file text (the same one applied in create).
 
-# converge — read-only declaration: drift-проверка ничего не коммитит в state
-# (Soul не вызывает mod.Apply на dry_run, Keeper не запускает фазу state_changes
-# для DryRun-прогонов).
+# converge — read-only declaration: the drift check doesn't commit anything to state
+# (Soul doesn't call mod.Apply on dry_run, Keeper doesn't run the state_changes phase
+# for DryRun runs).
 state_changes: {}
 
 tasks:

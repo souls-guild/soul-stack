@@ -1,8 +1,8 @@
 name: provisioned-defaults-back-compat
 description: >
-  Инкарнация без provision-полей (развёрнута до v7, БЕЗ cloud-create) →
-  консервативный default: provisioned_vm_ids=[] и provisioned_provider=''.
-  has()-guard back-compat для отсутствующих ключей.
+  An incarnation without provision fields (deployed before v7, WITHOUT cloud-create) →
+  conservative default: provisioned_vm_ids=[] and provisioned_provider=''.
+  has()-guard back-compat for missing keys.
 
 state_before:
   redis_type: "sentinel"

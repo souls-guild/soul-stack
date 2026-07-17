@@ -1,18 +1,18 @@
 name: verify_live
 description: >-
-  Day-2: единственная задача-потребитель community.redis.command (PING). Keeper
-  синтезирует core.module.installed (install community.redis) ПЕРЕД ней из
-  manifest-декларации modules[] (ADR-065(e)); Soul в ЭТОМ прогоне
-  fetch→verify→atomic-rename→hot-register плагин и ТУТ ЖЕ исполняет потребителя
-  (без рестарта демона, ADR-065(d)).
+  Operational scenario: a single consumer task for community.redis.command (PING).
+  Keeper synthesizes core.module.installed (install community.redis) BEFORE it from
+  the manifest's modules[] declaration (ADR-065(e)); Soul in THIS run
+  fetch->verify->atomic-rename->hot-registers the plugin and RIGHT THERE runs the
+  consumer (without restarting the daemon, ADR-065(d)).
 
-# state_changes пуст: сценарий доказывает доставку модуля, не мутацию state.
+# state_changes is empty: the scenario proves module delivery, not a state mutation.
 state_changes: {}
 
 tasks:
-  # Потребитель community.redis.* → триггер авто-синтеза install-шага перед ним.
-  # register+failed_when: успех задачи ⇒ Redis ответил PONG (Output.result,
-  # impl.go). changed=false по умолчанию (probe-семантика command-state).
+  # Consumer of community.redis.* -> triggers auto-synthesis of the install step before it.
+  # register+failed_when: task success means Redis answered PONG (Output.result,
+  # impl.go). changed=false by default (probe semantics of command-state).
   - name: Ping redis through the community.redis plugin
     module: community.redis.command
     register: ping

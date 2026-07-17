@@ -2,64 +2,64 @@ from_version: 10
 to_version: 11
 
 description: >-
-  state_schema v10 → v11: редизайн input-контракта create (connection_mode enum +
-  io-threads + расширение persistence + restruct sentinel-таймингов). Четыре
-  независимых преобразования state; остальной state (redis_config/redis_users/
-  redis_hosts/install/topology/provisioned_*/seeded_from) НЕ трогается.
+  state_schema v10 → v11: redesign of the create input contract (connection_mode enum +
+  io-threads + persistence expansion + sentinel timing restruct). Four
+  independent state transforms; the rest of the state (redis_config/redis_users/
+  redis_hosts/install/topology/provisioned_*/seeded_from) is NOT touched.
 
-  ★ BEST-EFFORT (честно): миграция — чистая функция от старого state (ADR-019:
-  essence/input/vault в migration-CEL ЗАПРЕЩЕНЫ). Поля, которых в v10-state нет,
-  заполняются обратной свёрткой существующих или роль-дефолтом — точное значение
-  восстанавливается на следующем create-override.
+  ★ BEST-EFFORT (honestly): a migration is a pure function of the old state (ADR-019:
+  essence/input/vault in migration-CEL are FORBIDDEN). Fields not present in v10-state
+  are filled by back-deriving them from existing ones or with a role default — the exact
+  value is restored on the next create-override.
 
-  1. persistence REMAP (старый enum [off,aof,rdb,rdb_aof] → новый [off,aof_1sec,
+  1. persistence REMAP (old enum [off,aof,rdb,rdb_aof] → new [off,aof_1sec,
      aof_always,rdb,rdb_aof_1sec,rdb_aof_always]):
-       - aof      → aof_1sec      (старый aof = fsync everysec бит-в-бит);
-       - rdb_aof  → rdb_aof_1sec  (старый rdb_aof = снапшоты + AOF everysec);
-       - off/rdb  → тождество (значения сохранились в новом enum);
-       - aof_always/rdb_aof_always — теоретически отсутствуют в v10-state (новые
-         значения), тождественная ветка их не ломает (idempotent повторный прогон).
-     Один плоский set с CEL-тернаром по state.persistence. v10-state ГАРАНТИРУЕТ
-     persistence (002_to_003 ввёл его всем) → голый state.persistence без has-guard.
+       - aof      → aof_1sec      (old aof = fsync everysec, bit-for-bit);
+       - rdb_aof  → rdb_aof_1sec  (old rdb_aof = snapshots + AOF everysec);
+       - off/rdb  → identity (values carried over unchanged into the new enum);
+       - aof_always/rdb_aof_always — theoretically absent from v10-state (new
+         values), the identity branch does not break them (idempotent re-run).
+     One flat set with a CEL ternary over state.persistence. v10-state GUARANTEES
+     persistence (002_to_003 introduced it for everyone) → bare state.persistence with no has-guard.
 
-  2. connection_mode (НОВОЕ, enum tls/tls_plain/plain) — обратная свёртка из
-     существующего tls-namedfield (best-effort, как 002_to_003 namedfields):
-       - tls.enable == false → plain     (TLS выключен — только plain-порт);
-       - tls.enable && tls.only → tls    (только TLS, plain закрыт);
-       - tls.enable && !tls.only → tls_plain (TLS и plain одновременно).
-     v10-state ГАРАНТИРУЕТ tls.enable/only (002_to_003) → has-guard на лист для
-     запаса (теоретически частичный tls): отсутствует → трактуем как false.
+  2. connection_mode (NEW, enum tls/tls_plain/plain) — back-derived from the
+     existing tls namedfield (best-effort, like the 002_to_003 namedfields):
+       - tls.enable == false → plain     (TLS disabled — plain port only);
+       - tls.enable && tls.only → tls    (TLS only, plain closed);
+       - tls.enable && !tls.only → tls_plain (both TLS and plain at once).
+     v10-state GUARANTEES tls.enable/only (002_to_003) → has-guard on the leaf as a
+     safety margin (theoretically partial tls): absent → treated as false.
 
-  3. io_threads (НОВОЕ, int) — best-effort default 0 (директива io-threads в v10
-     redis_config была опциональна, исходное число I/O-потоков в namedfields НЕ
-     лежало — симметрия memory_mb в 002_to_003: НЕОБРАТИМО из redis_config, ставим 0).
+  3. io_threads (NEW, int) — best-effort default 0 (the io-threads directive in v10
+     redis_config was optional, the original I/O-thread count was NOT stored in
+     namedfields — symmetric with memory_mb in 002_to_003: UNRECOVERABLE from redis_config, set to 0).
 
-  4. redis_sentinel RESTRUCT (ТОЛЬКО для sentinel-инкарнаций): именованные
-     down_after_ms/failover_timeout_ms СВЁРНУТЫ в master_settings (map<string,string>
-     эффективных per-master директив — зеркало input.sentinel_master_settings) +
-     settings={} (глобальные sentinel — зеркало input.sentinel_settings). cluster
-     (redis_sentinel == {}) → NO-OP (sentinel-фактов нет; size==0 ветка тернара
-     возвращает {} как есть). Пересборка ОДНИМ set с CEL-тернаром (паттерн 004_to_005/
-     009_to_010 — migration-CEL sandbox без merge()/default(); map-литерал НЕ умеет
-     conditional-ключ → пересобираем целиком):
-       - master_name/quorum СОХРАНЯЮТСЯ через has-guard;
+  4. redis_sentinel RESTRUCT (ONLY for sentinel incarnations): the named
+     down_after_ms/failover_timeout_ms are FOLDED into master_settings (a map<string,string>
+     of effective per-master directives — mirroring input.sentinel_master_settings) +
+     settings={} (global sentinel settings — mirroring input.sentinel_settings). cluster
+     (redis_sentinel == {}) → NO-OP (no sentinel facts; the size==0 ternary branch
+     returns {} as-is). Rebuilt with ONE set using a CEL ternary (pattern from 004_to_005/
+     009_to_010 — migration-CEL sandbox has no merge()/default(); a map literal cannot
+     have a conditional key → we rebuild it wholesale):
+       - master_name/quorum are PRESERVED via has-guard;
        - master_settings = {'down-after-milliseconds': string(<down_after_ms|5000>),
                             'failover-timeout': string(<failover_timeout_ms|60000>)}
-         (значения из старых листов через has-guard; отсутствуют → роль-дефолты
-         5000/60000, как 004_to_005). string() конвертит int-листы в строки (форма
-         map<string,string>, симметрия compute.sentinel_directives значений-строк);
-       - settings = {} (глобальных sentinel в v10-state не было → пустой map).
-     Старые down_after_ms/failover_timeout_ms в новый map НЕ попадают (пересборка их
-     отбрасывает) — отдельный delete не нужен (set перезаписывает redis_sentinel
-     целиком, удалённые ключи не остаются). best-effort master_ip: редкий
-     ремапнутый sentinel_only (003_to_004) мог нести master_ip — пересборка его НЕ
-     переносит (как 004_to_005; master выбирается из roster-а, read-model day-2 его
-     не использует; восстановится на следующем create-override).
+         (values from the old leaves via has-guard; absent → role defaults
+         5000/60000, as in 004_to_005). string() converts int leaves to strings (the
+         map<string,string> form, symmetric with compute.sentinel_directives string values);
+       - settings = {} (there were no global sentinel settings in v10-state → empty map).
+     The old down_after_ms/failover_timeout_ms do NOT end up in the new map (the rebuild
+     drops them) — a separate delete is not needed (set overwrites redis_sentinel
+     wholesale, removed keys do not remain). best-effort master_ip: a rare
+     remapped sentinel_only (003_to_004) may have carried master_ip — the rebuild does NOT
+     carry it over (as in 004_to_005; the master is chosen from the roster, the day-2
+     read-model does not use it; it is restored on the next create-override).
 
-  Forward-only (down: не поддерживается; восстановление — через state_history).
+  Forward-only (down: is not supported; recovery — via state_history).
 
 transform:
-  # 1. persistence REMAP старых значений в _1sec-варианты (off/rdb/_always — тождество).
+  # 1. persistence REMAP of old values into _1sec variants (off/rdb/_always — identity).
   - set:
       path:  state.persistence
       value: >-
@@ -67,7 +67,7 @@ transform:
              ? 'aof_1sec'
              : (state.persistence == 'rdb_aof' ? 'rdb_aof_1sec' : state.persistence) }
 
-  # 2. connection_mode (НОВОЕ) — обратная свёртка из tls.enable/only (best-effort).
+  # 2. connection_mode (NEW) — back-derived from tls.enable/only (best-effort).
   - set:
       path:  state.connection_mode
       value: >-
@@ -75,13 +75,13 @@ transform:
              ? 'plain'
              : ((has(state.tls.only) && state.tls.only) ? 'tls' : 'tls_plain') }
 
-  # 3. io_threads (НОВОЕ) — best-effort default 0 (исходное число потоков необратимо).
+  # 3. io_threads (NEW) — best-effort default 0 (original thread count is unrecoverable).
   - set:
       path:  state.io_threads
       value: 0
 
   # 4. redis_sentinel RESTRUCT: down_after_ms/failover_timeout_ms → master_settings +
-  # settings={} (только sentinel; cluster {} — no-op). Пересборка одним set.
+  # settings={} (sentinel only; cluster {} — no-op). Rebuilt with a single set.
   - set:
       path:  state.redis_sentinel
       value: >-

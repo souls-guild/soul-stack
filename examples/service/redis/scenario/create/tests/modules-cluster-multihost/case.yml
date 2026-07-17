@@ -1,12 +1,12 @@
-# L0-испытание create (cluster, multi-host) — Redis-МОДУЛИ на кластере (директива
-# «модули ВСЕГДА ВСЕ»). Guard на то, что в cluster-режиме (3 хоста, shards=3)
-# разворачивается ПОЛНЫЙ набор модулей (.so всех четырёх качаются, loadmodule-директивы
-# всех четырёх приходят в redis.conf наравне с cluster-директивами). Per-host arch в
-# URL: все хосты amd64 (homogeneous), arch из soulprint.self.os.arch — render_context
-# L0 несёт self первого по SID хоста (node-a), но СЛОЙ .tmpl на Soul-е возьмёт arch
-# КАЖДОГО хоста (mixed-arch корректен — URL строит destiny per-host, не apply.input).
-# input.modules больше НЕ задаётся (набор-инвариант в destiny vars.redis_modules).
-# .so качаются БЕЗ checksum (content-идемпотентность, sha256-инпуты вырезаны 2026-06-25).
+# L0 trial for create (cluster, multi-host) — Redis MODULES on a cluster (the
+# "modules ALWAYS ALL" directive). Guard that in cluster mode (3 hosts, shards=3)
+# the FULL module set is deployed (.so of all four are fetched, loadmodule directives
+# for all four go into redis.conf alongside the cluster directives). Per-host arch in
+# URL: all hosts amd64 (homogeneous), arch from soulprint.self.os.arch — render_context
+# L0 carries the self of the first host by SID (node-a), but the .tmpl LAYER on Soul takes
+# the arch of EACH host (mixed-arch is correct — URL builds destiny per-host, not apply.input).
+# input.modules is no longer set (set-invariant in destiny vars.redis_modules).
+# .so are fetched WITHOUT checksum (content idempotency, sha256 inputs removed 2026-06-25).
 name: cluster modules fetch every .so and add loadmodule alongside cluster directives
 
 fixtures:
@@ -30,10 +30,10 @@ fixtures:
   vault:
     secret/redis/create:
       password: s3cr3t-redis-pass-create
-    # Per-user секреты системных юзеров (secret/redis/<inc>/users/<name>#password) —
-    # их резолвит keeper-side vault() при доливе system_acl_users в apply.input.users.
-    # ★ РЕДИЗАЙН default_admin (2026-06-30): default_admin — системный юзер внутрикластерного
-    # AUTH (PING/cluster-build/masterauth деплоя читают его пароль той же ветки users/<name>).
+    # Per-user secrets of system users (secret/redis/<inc>/users/<name>#password) —
+    # resolved by keeper-side vault() when topping up system_acl_users into apply.input.users.
+    # ★ default_admin REDESIGN (2026-06-30): default_admin — system user for intra-cluster
+    # AUTH (PING/cluster-build/masterauth of the deploy read its password from the same users/<name> branch).
     secret/redis/create/users/default_admin:
       password: default-admin-secret-pass
     secret/redis/create/users/replica:
@@ -45,8 +45,8 @@ fixtures:
     secret/redis/create/users/haproxy:
       password: haproxy-sys-secret-pass
   essence:
-    # install_method — в essence (author-context, 2026-06-28): способ установки
-    # НЕ operator-input. compute.install читает default(essence.install_method, 'binary').
+    # install_method — in essence (author-context, 2026-06-28): install method
+    # is NOT operator-input. compute.install reads default(essence.install_method, 'binary').
     install_method: package
     redis_type: cluster
     modules_base_url: "https://artifacts.example.com/redis/modules/6.2"
@@ -70,11 +70,11 @@ fixtures:
       maxclients:       10000
       timeout:          300
 
-    # Системные ACL-юзеры redis-server (1:1 из essence/_default.yaml). ОБЯЗАТЕЛЬНЫ:
-    # guard create/cluster.yml (assert 1b) рвёт render при пустом system_acl_users
-    # (тихий fail-open недопустим — без них репликация/health-check сломались бы).
-    # ★ РЕДИЗАЙН default_admin (2026-06-30): default_admin — системный юзер полного доступа
-    # (~* &* +@all), под ним внутрикластерный AUTH cluster (заменил requirepass-default).
+    # System ACL users of redis-server (1:1 from essence/_default.yaml). REQUIRED:
+    # guard create/cluster.yml (assert 1b) breaks the render on empty system_acl_users
+    # (silent fail-open is unacceptable — without them replication/health-check would break).
+    # ★ default_admin REDESIGN (2026-06-30): default_admin — full-access system user
+    # (~* &* +@all), under it intra-cluster AUTH cluster (replaced requirepass-default).
     system_acl_users:
       default_admin: "~* &* +@all"
       replica:    "+psync +replconf +ping"
@@ -82,24 +82,24 @@ fixtures:
       sentinel:   "allchannels +multi +slaveof +ping +exec +subscribe +config|rewrite +role +publish +info +client|setname +client|kill +script|kill"
       haproxy:    "-@all +auth +client|getname +client|id +client|setname +command +hello +ping +role +info +cluster|info"
   input:
-    # ★ provision выключен (default-on: опущенная секция = ВКЛЮЧЕНО; кейс деплоит на
-    # ГОТОВЫЙ roster, cloud-create не нужен) → include redis-provision.yml group-drop.
+    # ★ provision disabled (default-on: an omitted section = ENABLED; the case deploys onto a
+    # READY roster, cloud-create isn't needed) → include redis-provision.yml group-drop.
     provision:
       enabled: false
     redis_type: cluster
     version: "7.4.1"
-    # install_method=package ЯВНО (default редизайна — binary): кейс про модули
-    # (фетч .so), а не про install-модель; package-ветка активна, но не ассертится.
+    # install_method=package EXPLICITLY (redesign default is binary): the case is about modules
+    # (fetching .so), not about the install model; the package branch is active but not asserted.
     shards: 3
     replicas_per_master: 0
     cluster_node_timeout: 5000
-    # input.modules НЕ задаётся (набор-инвариант). .so качаются по content-
-    # идемпотентности (без checksum).
+    # input.modules is not set (set-invariant). .so are fetched via content
+    # idempotency (without checksum).
 
 assert:
   task_present:
-    # redis.conf несёт cluster-директивы + vars.loadmodules ([rejson.so]).
-    # Дизамбигуатор от users.acl/hardening (тот же core.file.rendered) — path.
+    # redis.conf carries cluster directives + vars.loadmodules ([rejson.so]).
+    # Disambiguator from users.acl/hardening (same core.file.rendered) — path.
     - module: core.file.rendered
       params_subset:
         path: /etc/redis/redis.conf
@@ -120,9 +120,9 @@ assert:
               - /var/lib/redis/modules/redisearch.so
               - /var/lib/redis/modules/redistimeseries.so
             config:
-              # ★ РЕДИЗАЙН default_admin: replica→master AUTH (masteruser/masterauth)
-              # приходит ОБЫЧНЫМИ директивами config (cluster deploy-body доливает их
-              # vault()-в-ячейке).
+              # ★ default_admin REDESIGN: replica→master AUTH (masteruser/masterauth)
+              # arrives as REGULAR config directives (cluster deploy-body tops them up
+              # via vault()-in-cell).
               masteruser:       "default_admin"
               masterauth:       "default-admin-secret-pass"
               maxmemory:        "256mb"
@@ -138,7 +138,7 @@ assert:
             sid: node-a.example.com
             covens: [create, redis]
             choirs: []
-            # traits — registry-проекция (ADR-060), пустой объект без меток.
+            # traits — registry projection (ADR-060), empty object without labels.
             traits: {}
             role: ""
             network:
@@ -148,8 +148,8 @@ assert:
           role: ""
           essence: {}
 
-    # modules-dir каталог — gated-include на deploy_redis && !redis8, активна.
-    # Дизамбигуатор от systemd-dropin-dir (тот же core.file.directory) — path.
+    # modules-dir directory — gated-include on deploy_redis && !redis8, active.
+    # Disambiguator from systemd-dropin-dir (same core.file.directory) — path.
     - module: core.file.directory
       params_subset:
         path: /var/lib/redis/modules
@@ -157,9 +157,9 @@ assert:
         group: redis
         mode: "0750"
 
-    # fetch .so — ВСЕ четыре (Go-сорт: bloom, json, search, timeseries). URL арх-
-    # специфичен (x86_64 — uname-m-маппинг soulprint amd64 первого хоста в L0). checksum НЕ передаётся —
-    # content-идемпотентность. tarball-fetch (binary install) — placeholder.
+    # fetch .so — ALL four (Go-sort: bloom, json, search, timeseries). URL is arch-
+    # specific (x86_64 — uname-m mapping of soulprint amd64 of the first host in L0). checksum is NOT passed —
+    # content idempotency. tarball-fetch (binary install) — placeholder.
     - module: core.url.fetched
       params_subset:
         url: "https://artifacts.example.com/redis/modules/6.2/x86_64/redisbloom.so"
@@ -192,13 +192,13 @@ assert:
         owner: redis
         group: redis
 
-    # cluster-build: единственная community.redis.cluster в плане.
+    # cluster-build: the only community.redis.cluster in the plan.
     - module: community.redis.cluster
       params_subset:
         action: create
         replicas_per_shard: 0
-        # ★ РЕДИЗАЙН default_admin: коннект под default_admin (username → AUTH). Прежний
-        # главный секрет ДРОПНУТ — пароль из ветки users/default_admin.
+        # ★ default_admin REDESIGN: connect as default_admin (username → AUTH). The previous
+        # master secret is DROPPED — password comes from the users/default_admin branch.
         username: default_admin
         password: default-admin-secret-pass
         nodes:
@@ -221,5 +221,5 @@ assert:
       cluster-node-timeout: "5000"
     redis_users: []
     redis_hosts: []
-    # Redis 6 (< 8) → полный набор развёрнут (модули всегда все).
+    # Redis 6 (< 8) → the full set is deployed (modules always all).
     modules: [bloom, json, search, timeseries]

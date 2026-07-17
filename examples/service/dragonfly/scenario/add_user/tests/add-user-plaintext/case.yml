@@ -1,18 +1,18 @@
-# L0-испытание add_user: day-2 добавление ACL-пользователя БЕЗ рестарта (ACL LOAD).
-# Оператор добавляет юзера alice; сценарий мержит его в РАЗВЁРНУТЫЙ state.df_users, рендерит
-# ПОЛНЫЙ users.acl (alice + ранее развёрнутый bob) через destiny `dragonfly` и ОЖИВЛЯЕТ через
-# community.redis.acl (ACL LOAD). Render-only, герметично. Plaintext (addr 6379).
+# L0 trial for add_user: operational addition of an ACL user WITHOUT a restart (ACL LOAD).
+# The operator adds user alice; the scenario merges it into the DEPLOYED state.df_users, renders
+# the FULL users.acl (alice + previously deployed bob) through the `dragonfly` destiny and RELOADS via
+# community.redis.acl (ACL LOAD). Render-only, hermetic. Plaintext (addr 6379).
 #
-# essence.system_acl_users НЕ задаётся → долив системных = default({}) → vars.users несёт
-# ТОЛЬКО operator-extra (alice+bob) — чистый ассерт операторского слоя. (Долив системных
-# проверяется отдельным кейсом по образцу redis/add_user, здесь фокус на merge alice+bob.)
+# essence.system_acl_users is NOT set → system top-up = default({}) → vars.users carries
+# ONLY operator-extra (alice+bob) — a clean assert of the operator layer. (System top-up
+# is checked by a separate case modeled on redis/add_user, here the focus is on the merge of alice+bob.)
 #
-# Что ассертим:
-#   1. users.acl (core.file.rendered, path /etc/dragonfly/users.acl): vars.users несёт ОБА
-#      юзера (alice новый + bob сохранённый) с per-user паролями из Vault (конвенция
-#      secret/dragonfly/<inc>/users/<name>#password). Пароль в .tmpl хешируется (вне L0).
-#   2. hot-reload (community.redis.acl): addr 127.0.0.1:6379 (plain), tls=false, пароль из vault.
-#   3. state_changes: df_users несёт bob+alice (массив AclUser, БЕЗ пароля — write-model).
+# What we assert:
+#   1. users.acl (core.file.rendered, path /etc/dragonfly/users.acl): vars.users carries BOTH
+#      users (alice new + bob preserved) with per-user passwords from Vault (convention
+#      secret/dragonfly/<inc>/users/<name>#password). The password is hashed in .tmpl (outside L0).
+#   2. hot-reload (community.redis.acl): addr 127.0.0.1:6379 (plain), tls=false, password from vault.
+#   3. state_changes: df_users carries bob+alice (AclUser array, WITHOUT the password — write-model).
 name: add_user merges new ACL user and hot-reloads via ACL LOAD (plaintext)
 
 fixtures:
@@ -21,8 +21,8 @@ fixtures:
     network: { primary_ip: 10.0.0.5 }
     os: { arch: amd64 }
 
-  # Развёрнутый incarnation.state (v2: install/conf_dir/data_dir вынесены в essence): уже есть
-  # юзер bob; add_user добавляет alice.
+  # Deployed incarnation.state (v2: install/conf_dir/data_dir moved to essence): already has
+  # user bob; add_user adds alice.
   state:
     df_version: "1.39.0"
     tls:
@@ -41,9 +41,9 @@ fixtures:
       perms: "~* +@all"
       state: "on"
 
-  # Vault: default_admin (masterauth-долив во flagfile + ACL LOAD-AUTH читают его безусловно) +
-  # per-user пароли operator-extra. Главного secret/dragonfly/add_user#password больше нет
-  # (requirepass убран — редизайн default_admin).
+  # Vault: default_admin (masterauth top-up into flagfile + ACL LOAD-AUTH read it unconditionally) +
+  # per-user passwords for operator-extra. The main secret/dragonfly/add_user#password no longer exists
+  # (requirepass removed — default_admin redesign).
   vault:
     secret/dragonfly/add_user/users/default_admin:
       password: dfadmin-add-user-pass
@@ -54,8 +54,8 @@ fixtures:
 
 assert:
   task_present:
-    # 1. users.acl перерендерен с ОБОИМИ юзерами (alice новый + bob сохранённый), каждый со
-    #    СВОИМ vault-паролем (нет cross-leak). vars.users — deep-compare.
+    # 1. users.acl is re-rendered with BOTH users (alice new + bob preserved), each with its
+    #    OWN vault password (no cross-leak). vars.users — deep-compare.
     - module: core.file.rendered
       params_subset:
         path: /etc/dragonfly/users.acl
@@ -83,16 +83,16 @@ assert:
           role: ""
           essence: {}
 
-    # 2. HOT-RELOAD ACL: community.redis.acl к живому инстансу через ЛОКАЛЬНЫЙ UNIX-сокет
-    #    (БЕЗ tls/tls_ca — UDS не сетевой путь). AUTH под default_admin (requirepass убран).
+    # 2. HOT-RELOAD ACL: community.redis.acl to the live instance over a LOCAL UNIX socket
+    #    (WITHOUT tls/tls_ca — UDS is not a network path). AUTH as default_admin (requirepass removed).
     - module: community.redis.acl
       params_subset:
         addr: "unix:/var/run/dragonfly/dragonfly.sock"
         username: default_admin
         password: dfadmin-add-user-pass
 
-  # state_changes: df_users несёт bob+alice БЕЗ пароля (массив AclUser). Порядок = array-upsert:
-  # сохранённый bob ПЕРВЫМ (filter оставил), новый alice ДОПИСАН в конец.
+  # state_changes: df_users carries bob+alice WITHOUT password (AclUser array). Order = array-upsert:
+  # preserved bob FIRST (filter kept it), new alice APPENDED at the end.
   state_changes:
     df_users:
       - { name: bob, perms: "~app:* +@read", state: "on" }

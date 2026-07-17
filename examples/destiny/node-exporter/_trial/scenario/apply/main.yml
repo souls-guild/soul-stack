@@ -1,19 +1,19 @@
-# L0-харнесс destiny node-exporter (Trial, ADR-023).
+# L0 harness for destiny node-exporter (Trial, ADR-023).
 #
-# soul-trial L0 рендерит scenario, а не standalone destiny напрямую (harness
-# завязан на scenario/<name>/main.yml). Эта обёртка — минимальный scenario,
-# единственная задача которого — apply:destiny node-exporter, чтобы дать destiny
-# render-only L0-проверку. Каноническая раскладка обёртки (ADR-023): подкаталог
-# самой destiny — `node-exporter/_trial/scenario/apply/`.
+# soul-trial L0 renders a scenario, not a standalone destiny directly (the
+# harness is tied to scenario/<name>/main.yml). This wrapper is a minimal
+# scenario whose only task is apply:destiny node-exporter, to give the destiny
+# a render-only L0 check. Canonical wrapper layout (ADR-023): subdirectory
+# of the destiny itself — `node-exporter/_trial/scenario/apply/`.
 #
-# Резолвер L0 зеркалит прод (slice A, ADR-023): apply: { destiny: node-exporter }
-# резолвится по имени из `_trial/service.yml::destiny[]`, а URL берётся из
-# `default_destiny_source` тест-кейса (file://, относительно service-root =
-# `_trial/`). Целевая destiny лежит уровнем выше — `examples/destiny/node-exporter/`.
+# The L0 resolver mirrors prod (slice A, ADR-023): apply: { destiny: node-exporter }
+# resolves by name from `_trial/service.yml::destiny[]`, and the URL comes from
+# `default_destiny_source` of the test case (file://, relative to service-root =
+# `_trial/`). The target destiny lives one level up — `examples/destiny/node-exporter/`.
 name: apply
 description: >-
-  Trial-харнесс: делегирует установку node_exporter в destiny node-exporter
-  через apply:destiny. Не сервис — обёртка под L0-render destiny.
+  Trial harness: delegates node_exporter installation to destiny node-exporter
+  via apply:destiny. Not a service — a wrapper for L0-render of the destiny.
 
 input:
   version:
@@ -26,15 +26,15 @@ input:
     items:
       type: string
       enum: [smartmon, nvme, ipmi]
-  # base_url_override — опциональный проброс зеркала/nexus в destiny.base_url.
-  # Пуст (default "") → destiny берёт свой default (GitHub Releases); непуст →
-  # apply:input передаёт его в destiny. Нужен L0-кейсу base-url-override.
+  # base_url_override — optional passthrough of a mirror/nexus into destiny.base_url.
+  # Empty (default "") → destiny takes its own default (GitHub Releases); non-empty →
+  # apply:input passes it to destiny. Needed for L0 case base-url-override.
   base_url_override:
     type: string
     default: ""
-  # collector_options — passthrough под-опций коллекторов в destiny.collector_options
-  # (формат B1, map<string,map<string,string>>). Дефолт {} → destiny применит свой.
-  # Нужен L0-кейсу collector-options.
+  # collector_options — passthrough of collector sub-options into destiny.collector_options
+  # (format B1, map<string,map<string,string>>). Default {} → destiny applies its own.
+  # Needed for L0 case collector-options.
   collector_options:
     type: object
     default: {}
@@ -44,8 +44,8 @@ input:
       properties: {}
       additional_properties:
         type: string
-  # web_telemetry_path — passthrough пути метрик в destiny.web_telemetry_path.
-  # Дефолт /metrics (совпадает с destiny-дефолтом). Нужен L0-кейсу telemetry-path-override.
+  # web_telemetry_path — passthrough of the metrics path into destiny.web_telemetry_path.
+  # Default /metrics (matches the destiny default). Needed for L0 case telemetry-path-override.
   web_telemetry_path:
     type: string
     default: "/metrics"
@@ -56,25 +56,25 @@ tasks:
     apply:
       destiny: node-exporter
       input:
-        # CEL по scenario-scope: значения резолвятся в scenario-env, в destiny
-        # уходит уже результат (destiny scenario-input не видит, изоляция ADR-009).
+        # CEL at scenario-scope: values resolve in scenario-env, and destiny
+        # receives the already-computed result (destiny doesn't see scenario-input, ADR-009 isolation).
         version:    "${ input.version }"
-        # arch НЕ передаём: destiny берёт его напрямую из soulprint.self.os.arch
-        # (soulprint доступен в destiny-CEL). L0-кейс arch-arm64 варьирует
-        # soulprint.os.arch фикстуры — он доезжает в URL через destiny, не через
-        # этот apply:input.
-        # listen привязан к internal-сети: primary_ip из 10.0.0.0/8 → bind на него,
-        # иначе bind на все интерфейсы (пустой host) + стандартный порт :9100.
-        # L0-кейс listen-non10 варьирует primary_ip.
+        # arch is NOT passed: destiny takes it directly from soulprint.self.os.arch
+        # (soulprint is available in destiny-CEL). L0 case arch-arm64 varies
+        # the soulprint.os.arch fixture — it reaches the URL through destiny, not through
+        # this apply:input.
+        # listen is bound to the internal network: primary_ip from 10.0.0.0/8 → bind to it,
+        # otherwise bind to all interfaces (empty host) + standard port :9100.
+        # L0 case listen-non10 varies primary_ip.
         listen:     "${ (soulprint.self.network.primary_ip.startsWith('10.') ? soulprint.self.network.primary_ip : '') + ':9100' }"
         collectors: "${ input.collectors }"
-        # base_url передаём в destiny ТОЛЬКО при непустом override; иначе ключ
-        # опускаем условным merge — destiny применит свой default GitHub Releases.
-        # CEL-тернарник: непустой override → его значение; пустой → тот же
-        # destiny-default (idempotent passthrough, не ломает render-defaults).
+        # base_url is passed to destiny ONLY when override is non-empty; otherwise the key
+        # is dropped via conditional merge — destiny applies its own default GitHub Releases.
+        # CEL ternary: non-empty override → its value; empty → the same
+        # destiny default (idempotent passthrough, doesn't break render-defaults).
         base_url:   "${ input.base_url_override != '' ? input.base_url_override : 'https://github.com/prometheus/node_exporter/releases/download' }"
-        # collector_options / web_telemetry_path — passthrough новых полей destiny
-        # нативным типом (вся ячейка = один ${…}). Дефолты обёртки совпадают с
-        # destiny-дефолтами, поэтому существующие кейсы рендерятся как раньше.
+        # collector_options / web_telemetry_path — passthrough of new destiny fields
+        # as native types (whole cell = one ${…}). Wrapper defaults match the
+        # destiny defaults, so existing cases render the same as before.
         collector_options:  "${ input.collector_options }"
         web_telemetry_path: "${ input.web_telemetry_path }"

@@ -1,26 +1,27 @@
-# tasks/install.yml — скачивание и распаковка релизного tarball-а node_exporter.
-# Тройка установки разнесена по границе include из-за ЗАГРУЗОЧНОГО per-file линтера
-# (validateTaskRefs, shared/config/destiny_tasks.go): cross-file onchanges отвергается
-# как unknown_register_reference, поэтому раскладка бинаря (register node_exporter_bin)
-# живёт в service.yml рядом с рестартом. Здесь — только fetch + распаковка, без register-ов.
+# tasks/install.yml — download and extraction of the node_exporter release tarball.
+# The install trio is split across the include boundary because of the per-file
+# LOADING linter (validateTaskRefs, shared/config/destiny_tasks.go): cross-file
+# onchanges are rejected as unknown_register_reference, so laying out the binary
+# (register node_exporter_bin) lives in service.yml next to the restart. Here —
+# only fetch + extraction, no registers.
 #
-# arch для URL берётся из soulprint.self.os.arch (доступен в destiny-CEL).
+# arch for the URL comes from soulprint.self.os.arch (available in destiny-CEL).
 
-# 1. Скачать tarball во временный путь. URL собирается CEL-ом из base_url + version +
-#    arch (soulprint.self.os.arch); путь — vars.tarball_path. checksum не задаём → core.url
-#    идёт idempotency по SHA-256 содержимого (fetched.go: ветка checksum == "").
+# 1. Download the tarball to a temp path. The URL is assembled by CEL from base_url +
+#    version + arch (soulprint.self.os.arch); path — vars.tarball_path. checksum is not
+#    set → core.url does idempotency by SHA-256 of the content (fetched.go: branch checksum == "").
 - name: Fetch node_exporter tarball
   module: core.url.fetched
   params:
     url: "${ input.base_url + '/v' + input.version + '/node_exporter-' + input.version + '.linux-' + soulprint.self.os.arch + '.tar.gz' }"
     path: "${ vars.tarball_path }"
     mode: "0644"
-    # SSRF-guard opt-out при private-resolve base_url (паттерн redis destiny.yml install.allow_private).
+    # SSRF-guard opt-out for private-resolve base_url (pattern from redis destiny.yml install.allow_private).
     allow_private: "${ input.allow_private }"
 
-# 2. Распаковать tarball в каталог. format auto-detect по .tar.gz. Идемпотентно:
-#    core.archive пишет marker и повторно не распаковывает тот же архив. Пути —
-#    из vars (tarball_path / extract_dir), один источник правды.
+# 2. Extract the tarball into the directory. format auto-detect by .tar.gz. Idempotent:
+#    core.archive writes a marker and does not re-extract the same archive. Paths —
+#    from vars (tarball_path / extract_dir), a single source of truth.
 - name: Extract node_exporter tarball
   module: core.archive.extracted
   params:

@@ -1,8 +1,8 @@
-# L0-испытание (Trial, ADR-023) сценария create сервиса hello-world.
+# L0 test (Trial, ADR-023) of the hello-world service's create scenario.
 #
-# Проверяет, что render-пайплайн при input.greeting="hi" даёт единственную
-# задачу core.file.present с path=/tmp/soul-stack-hello и content="hi"
-# (CEL-интерполяция ${ input.greeting }).
+# Verifies that the render pipeline for input.greeting="hi" produces a single
+# core.file.present task with path=/tmp/soul-stack-hello and content="hi"
+# (CEL interpolation ${ input.greeting }).
 name: create writes greeting file with input.greeting
 
 fixtures:
@@ -11,7 +11,7 @@ fixtures:
 
 assert:
   task_present:
-    # Единственная задача плана.
+    # The only task in the plan.
     - module: core.file.present
       params_subset:
         path: /tmp/soul-stack-hello

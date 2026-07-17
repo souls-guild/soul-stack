@@ -1,23 +1,25 @@
-# L0-испытание create (standalone) — VERSION-GUARD Redis 8+ на binary-install.
-# РЕГРЕСС-КЕЙС к BLOCKER-у redis8-гейта: на Redis 8 модули ВСТРОЕНЫ в сервер, поэтому
-# .so качать и loadmodule писать НЕЛЬЗЯ — иначе redis-server 8 получил бы 4 НЕСОВМЕСТИМЫХ
-# .so + loadmodule → не стартовал бы (а state писал бы modules:[] — рассинхрон с фактом).
-# Гейт по ЭФФЕКТИВНОЙ версии: vars.redis_effective_version = input.version (когда непуст)
-# ИНАЧЕ input.install.version; 8.x-regex (redis_is_v8plus) применяется к ней.
+# L0 test for create (standalone) - VERSION GUARD for Redis 8+ on binary install.
+# REGRESSION CASE for the redis8-gate BLOCKER: on Redis 8 modules are BUILT INTO the
+# server, so .so must NOT be downloaded and loadmodule must NOT be written - otherwise
+# redis-server 8 would get 4 INCOMPATIBLE .so + loadmodule entries and fail to start
+# (while state would write modules:[] - out of sync with reality).
+# Gated on the EFFECTIVE version: vars.redis_effective_version = input.version (when
+# non-empty) OTHERWISE input.install.version; the 8.x regex (redis_is_v8plus) applies to it.
 #
-# ★ Редизайн input-контракта: version теперь REQUIRED enum выкаченных в Nexus сборок
-# (передаётся ВСЕГДА, не '') — эффективная версия = input.version напрямую. URL/версия
-# бинаря: base_url из essence (author-context), версия из input.version 8.0.3.
+# * Input contract redesign: version is now a REQUIRED enum of builds published to
+# Nexus (ALWAYS passed, never ''), so the effective version = input.version directly.
+# Binary URL/version: base_url from essence (author-context), version from input.version
+# 8.0.3.
 #
-# Контр-кейс к install-binary (version 7.4.1 → модули ВКЛЮЧЕНЫ). Здесь version=8.0.3
-# (мажор 8 → redis8) → version-guard ГАСИТ модули (встроены в Redis 8):
-#   - include modules.yml gated на deploy_redis && !redis8 → redis8 истинно по
-#     эффективной версии (input.version 8.0.3) → group-drop: modules-dir + fetch-loop
-#     ФИЗИЧЕСКИ отсутствуют в плане;
-#   - loadmodules-ячейка redis.conf: redis8 → [] → секции loadmodule нет;
-#   - state.modules = [] (compute.redis_modules_deployed: redis8 → []).
-# Регресс «version-guard не сработал на 8.x» = модули протекли бы (modules-dir + .so +
-# непустой loadmodules + state.modules≠[]).
+# Counter-case to install-binary (version 7.4.1 -> modules ENABLED). Here version=8.0.3
+# (major 8 -> redis8) -> version-guard SUPPRESSES modules (built into Redis 8):
+#   - the modules.yml include is gated on deploy_redis && !redis8 -> redis8 is true by
+#     the effective version (input.version 8.0.3) -> group-drop: modules-dir +
+#     fetch-loop are PHYSICALLY absent from the plan;
+#   - the loadmodules cell in redis.conf: redis8 -> [] -> no loadmodule section;
+#   - state.modules = [] (compute.redis_modules_deployed: redis8 -> []).
+# Regression "version-guard didn't fire on 8.x" = modules would leak (modules-dir + .so +
+# non-empty loadmodules + state.modules != []).
 name: redis 8 version guard skips modules on binary install
 
 fixtures:
@@ -27,15 +29,15 @@ fixtures:
       covens: [create]
       soulprint:
         network: { primary_ip: 10.0.0.5 }
-        # os.version нужен binary-URL (.../Debian/<distro_ver>/...) — Debian 12.
+        # os.version is needed for the binary URL (.../Debian/<distro_ver>/...) - Debian 12.
         os: { arch: amd64, version: "12" }
   vault:
     secret/redis/create:
       password: s3cr3t-redis-pass-create
-    # Per-user секреты системных юзеров (secret/redis/<inc>/users/<name>#password) —
-    # их резолвит keeper-side vault() при доливе system_acl_users в apply.input.users.
-    # ★ РЕДИЗАЙН default_admin (2026-06-30): default_admin — системный юзер
-    # внутрикластерного AUTH (auth_pass/PING шаги деплоя читают его по ветке users/<name>).
+    # Per-user secrets for system users (secret/redis/<inc>/users/<name>#password) -
+    # resolved by keeper-side vault() when merging system_acl_users into apply.input.users.
+    # * default_admin REDESIGN (2026-06-30): default_admin is the system user for
+    # intra-cluster AUTH (deploy's auth_pass/PING steps read it via the users/<name> branch).
     secret/redis/create/users/default_admin:
       password: default-admin-secret-pass
     secret/redis/create/users/replica:
@@ -47,12 +49,12 @@ fixtures:
     secret/redis/create/users/haproxy:
       password: haproxy-sys-secret-pass
   essence:
-    # install_method — в essence (author-context, 2026-06-28): способ установки
-    # НЕ operator-input. compute.install читает default(essence.install_method, 'binary').
+    # install_method - in essence (author-context, 2026-06-28): the install method is
+    # NOT operator input. compute.install reads default(essence.install_method, 'binary').
     install_method: binary
     redis_type: sentinel
     sentinel_master_name: master
-    # ★ Редизайн: подложка per-master sentinel-дефолтов (под input.sentinel_master_settings).
+    # * Redesign: substrate of per-master sentinel defaults (under input.sentinel_master_settings).
     sentinel_master_defaults:
       down-after-milliseconds: "5000"
       failover-timeout:        "60000"
@@ -64,15 +66,15 @@ fixtures:
     redis_config:
       maxmemory: "256mb"
 
-    # ★ Редизайн (#1): URL бинаря — в essence (author-context, Nexus-mirror). Версия —
-    # операторский input.version (enum выкаченных сборок 8.0.3), НЕ essence.binary_version.
-    # version=8.0.3 (мажор 8 → redis8) → version-guard гасит модули (встроены в Redis 8).
+    # * Redesign (#1): binary URL is in essence (author-context, Nexus mirror). Version
+    # is the operator's input.version (enum of published builds, 8.0.3), NOT essence.binary_version.
+    # version=8.0.3 (major 8 -> redis8) -> version-guard suppresses modules (built into Redis 8).
     binary_base_url: "https://downloads.example.com/redis"
 
-    # Системные ACL-юзеры redis-server + sentinel-демона (1:1 из essence/_default.yaml).
-    # ОБА ОБЯЗАТЕЛЬНЫ: guard create/sentinel.yml (assert 1b) рвёт render при пустом
-    # любом из наборов (тихий fail-open недопустим — без них репликация/sentinel↔redis
-    # AUTH сломались бы).
+    # System ACL users for redis-server + the sentinel daemon (1:1 from essence/_default.yaml).
+    # BOTH ARE REQUIRED: the guard in create/sentinel.yml (assert 1b) breaks rendering if
+    # either set is empty (a silent fail-open is unacceptable - without them replication/
+    # sentinel<->redis AUTH would break).
     system_acl_users:
       default_admin: "~* &* +@all"
       replica:    "+psync +replconf +ping"
@@ -85,24 +87,25 @@ fixtures:
       sentinel:   "allchannels -@all +auth +client|getname +client|id +client|setname +command +hello +ping +sentinel|is-master-down-by-addr +publish +role +sentinel|get-master-addr-by-name +sentinel|master +sentinel|myid +sentinel|replicas +sentinel|sentinels"
       haproxy:    "-@all +auth +client|getname +client|id +client|setname +command +hello +ping +role +sentinel|get-master-addr-by-name +sentinel|master +sentinel|myid +sentinel|replicas +sentinel|sentinels"
   input:
-    # ★ provision выключен (default-on: опущенная секция = ВКЛЮЧЕНО; кейс деплоит на
-    # ГОТОВЫЙ roster, cloud-create не нужен) → include redis-provision.yml group-drop.
+    # * provision disabled (default-on: an omitted section = ENABLED; this case deploys
+    # onto an EXISTING roster, no cloud-create needed) -> redis-provision.yml include group-drop.
     provision:
       enabled: false
     redis_type: sentinel
     persistence: rdb
-    # version — REQUIRED enum выкаченных в Nexus сборок; 8.0.3 ∈ enum (мажор 8 → redis8
-    # version-guard ГАСИТ модули: встроены в сервер). binary качает бинари этой версии.
+    # version - REQUIRED enum of builds published to Nexus; 8.0.3 is in the enum (major 8
+    # -> redis8 version-guard SUPPRESSES modules: built into the server). binary downloads
+    # this version's binaries.
     version: "8.0.3"
-    # single-host sentinel (1 хост) → 0 реплик (default редизайна 2): size-guard 1+0.
+    # single-host sentinel (1 host) -> 0 replicas (default from redesign 2): size-guard 1+0.
     replicas_per_master: 0
 
 assert:
   task_present:
-    # ★ Редизайн install-модели: бинари качаются ЧЕТЫРЬМЯ отдельными core.url.fetched
-    # прямо в /usr/local/bin (НЕ tarball). URL per-host: <base_url>/<arch>/Debian/
-    # <distro_ver>/<version>/redis-* (x86_64/Debian/12/8.0.3). Бинари ставятся ВСЕГДА —
-    # version-guard гасит только .so модулей, не сам redis. Дизамбигуатор — url/path.
+    # * Install model redesign: binaries are downloaded via FOUR separate core.url.fetched
+    # steps directly into /usr/local/bin (NOT a tarball). Per-host URL: <base_url>/<arch>/Debian/
+    # <distro_ver>/<version>/redis-* (x86_64/Debian/12/8.0.3). Binaries are ALWAYS installed -
+    # version-guard only suppresses module .so files, not redis itself. Disambiguator - url/path.
     - module: core.url.fetched
       params_subset:
         url: "https://downloads.example.com/redis/x86_64/Debian/12/8.0.3/redis-server"
@@ -111,9 +114,10 @@ assert:
         owner: root
         group: root
 
-    # data/log-dir (обе ветки, БЕЗУСЛОВНО): binary-ветка пакета не несёт → создаём явно
-    # ДО старта redis-server (иначе redis-server на binary-инсталляции не находит data-dir).
-    # owner redis, parents:true. Дизамбигуатор от socket/modules/tls-dir — path.
+    # data/log-dir (both branches, UNCONDITIONALLY): the binary branch has no package to
+    # carry them -> create explicitly BEFORE redis-server starts (otherwise redis-server
+    # on a binary install can't find the data dir). owner redis, parents:true.
+    # Disambiguator from socket/modules/tls-dir - path.
     - module: core.file.directory
       params_subset:
         path: /var/lib/redis
@@ -129,9 +133,9 @@ assert:
         mode: "0750"
         parents: true
 
-    # redis.conf БЕЗ loadmodules (version-gate Redis 8+ → пустой список): vars.loadmodules:
-    # []. Регресс «version-guard не сработал» = непустой loadmodules + .so в плане.
-    # Дизамбигуатор от users.acl/hardening/unit — path.
+    # redis.conf WITHOUT loadmodules (version-gate Redis 8+ -> empty list): vars.loadmodules:
+    # []. Regression "version-guard didn't fire" = non-empty loadmodules + .so in the plan.
+    # Disambiguator from users.acl/hardening/unit - path.
     - module: core.file.rendered
       params_subset:
         path: /etc/redis/redis.conf
@@ -148,10 +152,10 @@ assert:
             log_dir: /var/log/redis
             loadmodules: []
             config:
-              # ★ РЕДИЗАЙН default_admin: replica→master AUTH (masteruser/
-              # masterauth) приходит ОБЫЧНЫМИ директивами config (sentinel
-              # deploy-body доливает их vault()-в-ячейке) → redis.conf range-ит
-              # их как любую директиву → статически переживают рестарт.
+              # * default_admin REDESIGN: replica->master AUTH (masteruser/
+              # masterauth) arrives as ORDINARY config directives (sentinel
+              # deploy-body fills them via a vault() cell) -> redis.conf ranges
+              # over them like any directive -> they statically survive a restart.
               masteruser:       "default_admin"
               masterauth:       "default-admin-secret-pass"
               maxmemory: "256mb"
@@ -161,7 +165,7 @@ assert:
             sid: node-solo.example.com
             covens: [create]
             choirs: []
-            # traits — registry-проекция (ADR-060), пустой объект без меток.
+            # traits - registry projection (ADR-060), empty object with no labels.
             traits: {}
             role: ""
             network:
@@ -172,7 +176,7 @@ assert:
           role: ""
           essence: {}
 
-    # standalone-PING: cluster/sentinel ветки — placeholder-skip; дизамбигуатор addr/args.
+    # standalone-PING: cluster/sentinel branches - placeholder-skip; disambiguator addr/args.
     - module: community.redis.command
       params_subset:
         addr: "127.0.0.1:6379"
@@ -181,25 +185,25 @@ assert:
         args: ["PING"]
 
   task_absent:
-    # VERSION-GATE Redis 8+ (по эффективной версии = input.version 8.0.3): include
-    # modules.yml gated на deploy_redis && !redis8 → group-drop (modules-dir отсутствует
-    # в плане). Регресс «version-guard не сработал на 8.x» = modules-dir протёк.
+    # VERSION-GATE Redis 8+ (by effective version = input.version 8.0.3): the
+    # modules.yml include is gated on deploy_redis && !redis8 -> group-drop (modules-dir
+    # is absent from the plan). Regression "version-guard didn't fire on 8.x" = modules-dir leaked.
     - module: core.file.directory
       params_subset:
         path: /var/lib/redis/modules
-    # .so fetch: include modules.yml group-dropped → fetch-loop отсутствует.
-    # Дизамбигуатор от binary-fetch (redis-* в плане) — path .so.
+    # .so fetch: modules.yml include group-dropped -> fetch-loop is absent.
+    # Disambiguator from binary-fetch (redis-* in the plan) - path .so.
     - module: core.url.fetched
       params_subset:
         path: /var/lib/redis/modules/redisearch.so
-    # GUARD «method=binary НЕ активирует package-ветку»: core.pkg.installed static-skip.
+    # GUARD "method=binary does NOT activate the package branch": core.pkg.installed static-skip.
     - module: core.pkg.installed
       params_subset:
         name: redis-server
 
   state_changes:
     redis_type: sentinel
-    # redis_version = input.version (enum выкаченных в Nexus сборок; binary качает её бинари).
+    # redis_version = input.version (enum of builds published to Nexus; binary downloads its binaries).
     redis_version: "8.0.3"
-    # Redis 8+ → модули встроены, .so не качаются → развёрнутый набор пуст.
+    # Redis 8+ -> modules are built in, no .so downloaded -> the deployed set is empty.
     modules: []

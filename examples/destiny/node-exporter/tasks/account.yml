@@ -1,12 +1,12 @@
-# tasks/account.yml — стабильный сервис-аккаунт node_exporter + textfile-каталог.
+# tasks/account.yml — stable service account for node_exporter + textfile directory.
 #
-# В отличие от stateless-ветки прод-конвенции §2 (DynamicUser=yes, аккаунт даёт
-# сам systemd), держим ручной system-аккаунт (stateful-ветка §2): textfile-каталог
-# переживает рестарты и читается root-сборщиками — нужен стабильный uid-владелец.
-# Группа создаётся ДО пользователя (core.user -g требует существующую primary-группу).
-# Имя группы — input.group (по умолчанию совпадает с input.user, но задаётся
-# независимо), чтобы primary-группа и владелец каталога не были жёстко прибиты к
-# имени аккаунта.
+# Unlike the stateless branch of prod convention §2 (DynamicUser=yes, systemd
+# itself provides the account), we keep a manual system account (stateful branch §2):
+# the textfile directory survives restarts and is read by root collectors — a stable
+# uid owner is required. The group is created BEFORE the user (core.user -g requires
+# an existing primary group). The group name is input.group (defaults to matching
+# input.user, but can be set independently) so the primary group and directory
+# owner aren't hard-pinned to the account name.
 
 - name: Ensure the node_exporter system group exists
   module: core.group.present
@@ -14,9 +14,9 @@
     name: "${ input.group }"
     system: true
 
-# home НЕ задаём: core.user.present ВСЕГДА вызывает useradd с -M (каталог не создаётся),
-# поэтому отсутствие `home:` = system-аккаунт без домашней директории (паритет ansible
-# create_home: no). Явный `home: /` лишь прописал бы / в /etc/passwd, каталог не создаётся.
+# home is NOT set: core.user.present ALWAYS calls useradd with -M (no directory created),
+# so omitting `home:` means a system account with no home directory (parity with ansible's
+# create_home: no). An explicit `home: /` would only set / in /etc/passwd, no directory created.
 - name: Ensure the node_exporter system user exists
   module: core.user.present
   params:
@@ -25,10 +25,10 @@
     group: "${ input.group }"
     shell: /usr/sbin/nologin
 
-# textfile-каталог. Декларативное состояние core.file.directory: idempotent по
-# mode/owner/group, чинит дрейф, поддерживает dry-run (в отличие от императивного
-# core.exec.run install -d). owner/group — сервис-аккаунт (oneshot-сборчики пишут
-# туда от root, основной демон читает).
+# textfile directory. Declarative state core.file.directory: idempotent on
+# mode/owner/group, fixes drift, supports dry-run (unlike the imperative
+# core.exec.run install -d). owner/group — the service account (oneshot collectors
+# write there as root, the main daemon reads).
 - name: Ensure textfile collector directory exists
   module: core.file.directory
   params:

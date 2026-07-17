@@ -1,12 +1,12 @@
 name: pilot-destiny
 state_schema_version: 1
 description: >
-  Пилот apply:destiny (слайс A): сервис из одного сценария create, который
-  делегирует работу в плоскую destiny pilot-flat через apply: { destiny, input }.
-  Демонстрирует изолированный render-проход destiny (V2, ADR-009): destiny видит
-  только свой input:, не scenario-scope.
+  Pilot apply:destiny (slice A): a service built from a single create scenario that
+  delegates work into the flat destiny pilot-flat via apply: { destiny, input }.
+  Demonstrates the isolated destiny render pass (V2, ADR-009): destiny sees
+  only its own input:, not the scenario-scope.
 
-# incarnation.state — что зафиксировано после apply.
+# incarnation.state — what is fixed after apply.
 state_schema:
   type: object
   required: [marker_path, marker_content]
@@ -14,14 +14,14 @@ state_schema:
     marker_path:    { type: string }
     marker_content: { type: string }
 
-# Зависимость-destiny. Гибрид источника:
-#  - запись без git: → git-URL = default_destiny_source + {name} (keeper.yml);
-#  - запись c git:    → override, git-URL берётся напрямую (шаблон не нужен).
-# ref берётся из записи в обоих случаях (ADR-007: version = git ref).
-# В L0-фикстуре destiny лежит рядом (pilot-flat/), git не используется.
-# Пример per-entry override (закомментирован — отдельного destiny-репо в L0 нет):
+# The destiny dependency. Hybrid source:
+#  - an entry without git: → git-URL = default_destiny_source + {name} (keeper.yml);
+#  - an entry with git:    → override, the git-URL is taken directly (no template needed).
+# ref is taken from the entry in both cases (ADR-007: version = git ref).
+# In the L0 fixture destiny sits right next to it (pilot-flat/), git is not used.
+# Example of a per-entry override (commented out — there's no separate destiny repo in L0):
 #   - { name: pilot-special, ref: v2.0.0, git: "git@github.com:custom/destiny-special.git" }
 destiny:
   - { name: pilot-flat, ref: v1.0.0 }
-  # Негативная destiny для L0-проверки var→var-цикла (vars-cycle сценарий).
+  # Negative destiny for the L0 check of a var→var cycle (vars-cycle scenario).
   - { name: pilot-vars-cycle, ref: v1.0.0 }

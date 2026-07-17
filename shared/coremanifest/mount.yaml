@@ -11,24 +11,24 @@ required_capabilities:
 spec:
   states:
     present:
-      description: Запись в /etc/fstab + смонтировано (ADR-015).
+      description: Entry in /etc/fstab + mounted (ADR-015).
       input:
-        path:   { type: string, required: true, description: "Точка монтирования (target)." }
-        source: { type: string, required: true, description: "Источник (device/UUID/сетевой ресурс)." }
-        fstype: { type: string, required: true, description: "Тип ФС (ext4/nfs/…)." }
-        opts:   { type: string, description: "Опции монтирования (default \"defaults\")." }
+        path:   { type: string, required: true, description: "Mount point (target)." }
+        source: { type: string, required: true, description: "Source (device/UUID/network resource)." }
+        fstype: { type: string, required: true, description: "Filesystem type (ext4/nfs/...)." }
+        opts:   { type: string, description: "Mount options (default \"defaults\")." }
     absent:
-      description: Размонтировано + удалено из /etc/fstab.
+      description: Unmounted + removed from /etc/fstab.
       input:
-        path: { type: string, required: true, description: "Точка монтирования (target)." }
+        path: { type: string, required: true, description: "Mount point (target)." }
     mounted:
-      description: Только смонтировано «как есть» (без правки fstab) — runtime-mount.
+      description: Only mounted "as is" (without editing fstab) - runtime-mount.
       input:
-        path:   { type: string, required: true, description: "Точка монтирования (target)." }
-        source: { type: string, required: true, description: "Источник (device/UUID/сетевой ресурс)." }
-        fstype: { type: string, required: true, description: "Тип ФС (ext4/nfs/…)." }
-        opts:   { type: string, description: "Опции монтирования (default \"defaults\")." }
+        path:   { type: string, required: true, description: "Mount point (target)." }
+        source: { type: string, required: true, description: "Source (device/UUID/network resource)." }
+        fstype: { type: string, required: true, description: "Filesystem type (ext4/nfs/...)." }
+        opts:   { type: string, description: "Mount options (default \"defaults\")." }
     unmounted:
-      description: Только размонтировано (запись в fstab остаётся).
+      description: Only unmounted (entry in fstab remains).
       input:
-        path: { type: string, required: true, description: "Точка монтирования (target)." }
+        path: { type: string, required: true, description: "Mount point (target)." }

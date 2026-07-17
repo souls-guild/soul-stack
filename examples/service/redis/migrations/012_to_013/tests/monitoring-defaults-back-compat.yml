@@ -1,9 +1,9 @@
 name: monitoring-defaults-back-compat
 description: >
-  Инкарнация v12 развёрнута ДО ввода мониторинга — поля monitoring в state нет. Миграция
-  ДОБАВЛЯЕТ read-model monitoring с консервативным default: версии пустые ('' = не
-  развёрнуто), порты — конвенциональные :9100/:9121. Остальной state (redis_type/
-  redis_config/redis_users/tls/persistence/топология) проходит насквозь бит-в-бит.
+  The v12 incarnation was deployed BEFORE monitoring was introduced — there is no monitoring
+  field in state. The migration ADDS a monitoring read-model with a conservative default: versions
+  empty ('' = not deployed), ports — conventional :9100/:9121. The rest of the state (redis_type/
+  redis_config/redis_users/tls/persistence/topology) passes through bit-for-bit.
 
 state_before:
   redis_type: "sentinel"

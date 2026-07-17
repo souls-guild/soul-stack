@@ -1,6 +1,6 @@
-# Portent, который Soul-stub эмитит после открытия EventStream-а.
-# В V5-1 typed-payload-режиме stub шлёт ОБЕ ветки (legacy data + typed
-# file_changed) — backward-compat в hand-off-период.
+# Portent that the Soul-stub emits after opening the EventStream.
+# In V5-1 typed-payload mode, the stub sends BOTH branches (legacy data + typed
+# file_changed) — backward-compat during the hand-off period.
 portent:
   beacon_name: file-watch-etc
   sid: soul-oracle-0.example.com

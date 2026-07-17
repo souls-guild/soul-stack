@@ -1,32 +1,34 @@
-# tasks/collectors.yml — textfile-коллекторы железа (smartmon / nvme / ipmi).
+# tasks/collectors.yml — textfile hardware collectors (smartmon / nvme / ipmi).
 #
-# Каждый шаг коллектора несёт when: членство в input.collectors (голый CEL,
-# top-level expression-ключ — без ${…}). systemd-Condition в .service/.timer
-# дополнительно не даёт коллектору стартовать там, где железа нет.
+# Each collector step carries when: membership in input.collectors (bare CEL,
+# top-level expression key — without ${…}). systemd Condition in .service/.timer
+# additionally prevents a collector from starting where the hardware is absent.
 #
-# Явных daemon-reload-шагов НЕТ: core.service.running таймера (daemon_reload:
-# auto, default) сам перечитывает systemd при смене .timer-файла перед start.
-# udev-reload (ipmi) остаётся — это udevadm, не systemctl.
+# There are NO explicit daemon-reload steps: core.service.running of the timer
+# (daemon_reload: auto, default) re-reads systemd itself when the .timer file
+# changes before start. udev-reload (ipmi) stays — that's udevadm, not systemctl.
 #
-# Реактивный рестарт таймера: running лишь поднимает остановленный .timer и делает
-# daemon-reload, но НЕ перезапускает УЖЕ ЗАПУЩЕННЫЙ таймер. Поэтому смена .service
-# или .timer коллектора (расписание OnCalendar, sandbox-директивы, пути из input)
-# должна реактивно рестартить таймер — иначе старое расписание/окружение остаётся
-# жить до ручного перезапуска. Симметрия с основным unit (tasks/service.yml:
-# core.service.restarted onchanges:[node_exporter_unit, node_exporter_bin]): на
-# каждый коллектор — свой restarted onchanges:[<c>_unit, <c>_timer].
+# Reactive timer restart: running above only starts a stopped .timer and does
+# a daemon-reload, but does NOT restart an ALREADY RUNNING timer. So a change
+# to the collector's .service or .timer (OnCalendar schedule, sandbox directives,
+# paths from input) must reactively restart the timer — otherwise the old
+# schedule/environment stays alive until a manual restart. Symmetry with the
+# main unit (tasks/service.yml: core.service.restarted onchanges:
+# [node_exporter_unit, node_exporter_bin]): each collector gets its own
+# restarted onchanges:[<c>_unit, <c>_timer].
 
-# ── Коллектор smartmon (SMART-метрики дисков) ───────────────────────────────
+# ── smartmon collector (disk SMART metrics) ─────────────────────────────────
 - name: Install smartmontools for smartmon collector
   module: core.pkg.installed
   when: "'smartmon' in input.collectors"
   params:
     name: smartmontools
 
-# Скрипт-сборщик статичен (Go-переменных нет), но кладётся через
-# core.file.rendered: .tmpl-расширение обязательно для rendered, vars пуст —
-# text/template strict отдаёт тело as-is. Альтернатива (inline-content в
-# core.file.present) потребовала бы зашить весь bash в YAML — менее читаемо.
+# The collector script is static (no Go variables), but is deployed via
+# core.file.rendered: the .tmpl extension is mandatory for rendered, vars is
+# empty — text/template strict returns the body as-is. The alternative
+# (inline-content in core.file.present) would require embedding the whole
+# bash script in YAML — less readable.
 - name: Deploy smartmon collector script
   module: core.file.rendered
   when: "'smartmon' in input.collectors"
@@ -71,10 +73,10 @@
     name: node-exporter-smartmon.timer
     enabled: true
 
-# Рестарт таймера реактивно на смену его .service (smartmon_unit) ИЛИ .timer
-# (smartmon_timer): running выше не перезапускает уже запущенный таймер, поэтому
-# новое расписание/sandbox подхватываются только этим шагом. daemon-reload перед
-# рестартом core.service делает сам (daemon_reload: auto).
+# Restart the timer reactively on a change to its .service (smartmon_unit) OR
+# .timer (smartmon_timer): running above does not restart an already running
+# timer, so the new schedule/sandbox is picked up only by this step. daemon-reload
+# before restarting core.service happens automatically (daemon_reload: auto).
 - name: Restart smartmon timer because its unit or timer changed
   module: core.service.restarted
   when: "'smartmon' in input.collectors"
@@ -89,15 +91,16 @@
   params:
     path: /etc/cron.d/node_exporter_smartmon
 
-# ── Коллектор nvme (NVMe SMART-метрики) ─────────────────────────────────────
+# ── nvme collector (NVMe SMART metrics) ──────────────────────────────────────
 - name: Install nvme-cli for nvme collector
   module: core.pkg.installed
   when: "'nvme' in input.collectors"
   params:
     name: nvme-cli
 
-# nvme_metrics.sh парсит nvme-cli JSON через jq (~16 вызовов) — отдельная
-# зависимость, ставится так же, как smartmontools/ipmitool у своих коллекторов.
+# nvme_metrics.sh parses nvme-cli JSON via jq (~16 calls) — a separate
+# dependency, installed the same way as smartmontools/ipmitool for their
+# collectors.
 - name: Install jq for nvme collector
   module: core.pkg.installed
   when: "'nvme' in input.collectors"
@@ -162,9 +165,9 @@
   params:
     path: /etc/cron.d/node_exporter_nvme
 
-# ── Коллектор ipmi (IPMI-сенсоры) ───────────────────────────────────────────
-# В дополнение к скрипту/таймеру ipmi требует udev-правило (доступ группы
-# node_exporter к /dev/ipmi*) + перечитку udev на изменение правила.
+# ── ipmi collector (IPMI sensors) ────────────────────────────────────────────
+# In addition to the script/timer, ipmi requires a udev rule (grants the
+# node_exporter group access to /dev/ipmi*) + a udev re-read on rule change.
 - name: Install ipmitool for ipmi collector
   module: core.pkg.installed
   when: "'ipmi' in input.collectors"
@@ -175,8 +178,8 @@
   module: core.file.rendered
   when: "'ipmi' in input.collectors"
   params:
-    # ipmitool — awk-скрипт в textfile_dir; mode 0755 (паритет со скриптами
-    # smartmon/nvme: исполнимый, без group-write).
+    # ipmitool — an awk script in textfile_dir; mode 0755 (parity with the
+    # smartmon/nvme scripts: executable, no group-write).
     path: "${ input.textfile_dir + '/ipmitool' }"
     template: templates/ipmitool.tmpl
     mode: "0755"
@@ -197,10 +200,10 @@
     vars:
       user: "${ input.user }"
 
-# Udev-правило перечитывается через udevadm (НЕ systemctl) — это udev, не systemd,
-# auto-reload core.service сюда не относится. onchanges на правило: reload только
-# при его изменении (идемпотентно). argv без shell не годится — нужен && между
-# двумя udevadm-вызовами, поэтому sh -c.
+# The udev rule is re-read via udevadm (NOT systemctl) — this is udev, not
+# systemd, core.service auto-reload doesn't apply here. onchanges on the rule:
+# reload only on its change (idempotent). argv without a shell doesn't work —
+# we need && between the two udevadm calls, hence sh -c.
 - name: Reload udev rules for ipmi
   module: core.exec.run
   when: "'ipmi' in input.collectors"

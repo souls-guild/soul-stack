@@ -1,19 +1,20 @@
-# L0-испытание provision (ADR-061, Вариант A) — DragonFly sentinel, provision ВКЛЮЧЁН.
-# input.provision.enabled=true → include dragonfly-provision.yml раскрывается (placeholder-
-# skip-форма include-when снимается: when has(input.provision) && input.provision.enabled
-# истинно → шаги таргетят roster). Поток: (а) core.cloud.created поднимает VM, (в)
-# core.soul.registered регистрирует созданные SID + барьер await_online + refresh_soulprint.
+# L0-trial for provision (ADR-061, Variant A) — DragonFly sentinel, provision ENABLED.
+# input.provision.enabled=true → include dragonfly-provision.yml expands (the placeholder-
+# skip form of include-when is lifted: when has(input.provision) && input.provision.enabled
+# is true → steps target the roster). Flow: (a) core.cloud.created spins up VMs, (c)
+# core.soul.registered registers the created SIDs + await_online barrier + refresh_soulprint.
 #
-# ★ register.provision в L0 — из mocks.register (probe/cloud не исполняются, ADR-023): шаги
-# provision.yml (б)/(в) и state_changes читают register.provision.{vm_ids,hosts} отсюда. Это
-# L0-проброс готового register-payload-а core.cloud.created.
+# * register.provision in L0 — from mocks.register (probe/cloud are not executed, ADR-023):
+# steps (b)/(c) of provision.yml and state_changes read register.provision.{vm_ids,hosts}
+# from here. This is the L0 pass-through of the ready register-payload of core.cloud.created.
 #
-# ЧИСЛО VM из топологии sentinel = 1 + replicas_per_master. replicas_per_master=2 → count=3
-# (один master + 2 реплики). Roster прогона — 3 хоста (в проде их даёт refresh_soulprint после
-# онбординга; в L0 mid-run re-resolve — stub, roster = статичный fixture → задаём 3 хоста руками).
+# The NUMBER of VMs from the sentinel topology = 1 + replicas_per_master. replicas_per_master=2
+# → count=3 (one master + 2 replicas). The run's roster — 3 hosts (in production refresh_soulprint
+# provides them after onboarding; in L0 mid-run re-resolve is a stub, roster = a static fixture →
+# set the 3 hosts manually).
 #
-# Парный к provision-disabled (там enabled:false → cloud-шаги group-drop). Доказывает основной
-# provision-флоу DragonFly (образец redis provision-enabled-sentinel, решение 2026-07-01).
+# Paired with provision-disabled (there enabled:false → cloud steps group-drop). Proves the
+# main DragonFly provision flow (mirrors redis provision-enabled-sentinel, decision 2026-07-01).
 name: provision enabled in sentinel mode emits cloud-create and onboarding (count = 1 + replicas)
 
 fixtures:
@@ -34,7 +35,7 @@ fixtures:
       soulprint:
         network: { primary_ip: 10.0.0.3 }
         os: { arch: amd64 }
-  # Vault: default_admin (внутрикластерный AUTH) + системные (редизайн default_admin).
+  # Vault: default_admin (intra-cluster AUTH) + system users (default_admin redesign).
   vault:
     secret/dragonfly/create/users/default_admin:
       password: dfadmin-create-pass
@@ -73,10 +74,10 @@ fixtures:
       profile: dragonfly-small
       ssh_provider: ssh-wb
 
-# register.provision — готовый payload core.cloud.created (L0-проброс, шаг (а) не
-# исполняется): vm_ids созданных VM + hosts[{sid,...,bootstrap_token}]. Шаги (б)/(в) и
-# state_changes читают его. sid-ы созданных VM = SID-ы roster-а (в проде refresh_soulprint
-# их и добавил бы; здесь roster уже несёт их).
+# register.provision — the ready payload of core.cloud.created (L0 pass-through, step (a) is
+# not executed): vm_ids of created VMs + hosts[{sid,...,bootstrap_token}]. Steps (b)/(c) and
+# state_changes read it. sids of the created VMs = the roster's SIDs (in production
+# refresh_soulprint would add them; here the roster already carries them).
 mocks:
   register:
     provision:
@@ -88,22 +89,22 @@ mocks:
 
 assert:
   task_present:
-    # (а) core.cloud.created: count = 1 + replicas_per_master = 3, generate_userdata: false
-    # (VM без cloud-init, setup ставит шаг (б) install: true). Единственная в плане.
+    # (a) core.cloud.created: count = 1 + replicas_per_master = 3, generate_userdata: false
+    # (VM without cloud-init, setup does step (b) install: true). The only one in the plan.
     - module: core.cloud.created
       params_subset:
         provider: wb-dev
         profile: dragonfly-small
         count: 3
-        # name — run-identity батча = incarnation.name (здесь "create"): драйвер именует VM
-        # <name>-<seq> + label soulstack-run=<name> (идемпотентность прогона, NIM-16).
+        # name — the batch run-identity = incarnation.name (here "create"): the driver names
+        # VMs <name>-<seq> + label soulstack-run=<name> (run idempotency, NIM-16).
         name: create
         generate_userdata: false
 
-    # (в) core.soul.registered: sid — список SID созданных VM (register.provision.hosts
-    # .map(h, h.sid)); coven — корневой incarnation.name (create); барьер онбординга
-    # await_online + refresh_soulprint; await_timeout из essence (10m, input.provision
-    # .await_timeout не задан). Единственная в плане.
+    # (c) core.soul.registered: sid — the list of SIDs of the created VMs (register.provision.hosts
+    # .map(h, h.sid)); coven — the root incarnation.name (create); the onboarding barrier
+    # await_online + refresh_soulprint; await_timeout from essence (10m, input.provision
+    # .await_timeout not set). The only one in the plan.
     - module: core.soul.registered
       params_subset:
         sid: [vm-1.example.com, vm-2.example.com, vm-3.example.com]
@@ -112,17 +113,17 @@ assert:
         refresh_soulprint: true
         await_timeout: "10m"
 
-    # Основной деплой sentinel-тела катится после provision (dragonfly.conf рендерится).
+    # The main sentinel-body deploy rolls out after provision (dragonfly.conf is rendered).
     - module: core.file.rendered
       params_subset:
         path: /etc/dragonfly/dragonfly.conf
 
   state_changes:
     df_version: "1.39.0"
-    # read-model: ФАКТ «эти VM подняты этим прогоном» — vm_ids из register.provision,
-    # provider из input.provision (гейт input.provision.enabled, тернар state_changes).
+    # read-model: the FACT "these VMs were raised by this run" — vm_ids from register.provision,
+    # provider from input.provision (gated by input.provision.enabled, ternary in state_changes).
     provisioned_vm_ids: [i-aaa111, i-bbb222, i-ccc333]
-    # provisioned_sids: SID каждой созданной VM (register.provision.hosts[].sid) — для
-    # cascade-destroy day-2 teardown. Тот же guard+форма, что provisioned_vm_ids.
+    # provisioned_sids: SID of each created VM (register.provision.hosts[].sid) — for
+    # cascade-destroy teardown. The same guard+shape as provisioned_vm_ids.
     provisioned_sids: [vm-1.example.com, vm-2.example.com, vm-3.example.com]
     provisioned_provider: wb-dev

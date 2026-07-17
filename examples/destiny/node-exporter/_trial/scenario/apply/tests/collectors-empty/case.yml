@@ -1,13 +1,14 @@
-# L0-кейс: пустой список коллекторов (collectors: []).
+# L0 case: empty collectors list (collectors: []).
 #
-# Доказывает, что destiny валидна без коллекторов: CEL-предикаты `'<c>' in
-# input.collectors` на каждом коллектор-шаге резолвятся в false БЕЗ падения
-# рендера (пустой массив — легальный аргумент `in`). Сам факт PASS этого кейса =
-# доказательство: harness падает, если CEL-рендер плана падает. На L0 when:
-# протягивается в RenderedTask как строка (Soul вычисляет на хосте), поэтому
-# коллектор-задачи остаются в плане с index — но их when будет ложным, ни одна
-# коллектор-ветка не активируется. Ассертим установочное ядро (fetch/install/
-# unit) — оно от collectors не зависит и всегда в плане.
+# Proves that destiny is valid without collectors: the CEL predicate `'<c>' in
+# input.collectors` on each collector step resolves to false WITHOUT a render
+# failure (an empty array is a legal `in` argument). The fact that this case
+# PASSES is proof that the harness fails if the CEL plan render fails. At L0,
+# when: is passed through into RenderedTask as a string (Soul evaluates it on
+# the host), so collector tasks remain in the plan with their index; their
+# when will be false, so no collector branch activates. We assert the install
+# core (fetch/install/unit): it doesn't depend on collectors and is always in
+# the plan.
 name: node-exporter renders with empty collectors list (no plan failure)
 
 fixtures:
@@ -23,7 +24,7 @@ fixtures:
 
 assert:
   task_present:
-    # Установочное ядро не зависит от collectors — присутствует при пустом списке.
+    # The install core doesn't depend on collectors: present even with an empty list.
     - module: core.url.fetched
       params_subset:
         url: https://github.com/prometheus/node_exporter/releases/download/v1.11.1/node_exporter-1.11.1.linux-amd64.tar.gz
@@ -34,14 +35,15 @@ assert:
       params_subset:
         path: /etc/systemd/system/node_exporter.service
 
-  # ── smartmon-pkg НЕВЫРАЗИМ в presence (см. отчёт) ─────────────────────────────
-  # При collectors: [] коллектор-шаги — STATIC-when:false skip-placeholder
-  # (`'smartmon' in input.collectors` вычислим на render по fixture-input → задача
-  # эмитится с Params==nil). taskMatches отвергает Params==nil И как present, И как
-  # absent (skip ≠ «вызвано»). Здесь намеренно проверяется именно сохранение
-  # index-слота скипнутого шага (пустой список не вырезал и не сдвинул план), что —
-  # позиционное свойство. Оставлено в rendered_tasks (формы сосуществуют): index 9 —
-  # smartmon-pkg (ядро 0..8, коллекторы с 9).
+  # ── smartmon-pkg CANNOT BE EXPRESSED in presence (see report) ─────────────────
+  # With collectors: [], collector steps are STATIC when:false skip-placeholders
+  # (`'smartmon' in input.collectors` is computable at render time from the
+  # fixture input → the task is emitted with Params==nil). taskMatches rejects
+  # Params==nil as BOTH present AND absent (skip != "invoked"). This deliberately
+  # checks that the skipped step's index slot is preserved (an empty list neither
+  # cut out nor shifted the plan): a positional property. Kept in rendered_tasks
+  # (both forms coexist): index 9 is smartmon-pkg (core is 0..8, collectors start
+  # at 9).
   rendered_tasks:
     - index: 9
       module: core.pkg.installed

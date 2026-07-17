@@ -1,10 +1,10 @@
 name: refs-default-back-compat
 description: >
-  v9-инкарнация с seeded_from БЕЗ ref-полей (обычный create или migrate до
-  v10-фикса: 008_to_009 ввёл seeded_from {source_endpoints, detached}, ref'ов
-  ещё не было) → миграция доливает source_password_ref/source_tls_ca_ref
-  консервативным default '' (источник без AUTH/TLS, поведение до фикса).
-  source_endpoints/detached проходят насквозь (лист-guard их сохраняет).
+  A v9 incarnation with seeded_from WITHOUT ref fields (a regular create, or migrated before
+  the v10 fix: 008_to_009 introduced seeded_from {source_endpoints, detached}, refs didn't
+  exist yet) -> the migration backfills source_password_ref/source_tls_ca_ref with a
+  conservative default of '' (source without AUTH/TLS, the pre-fix behavior).
+  source_endpoints/detached pass through untouched (the leaf guard preserves them).
 
 state_before:
   redis_type: "sentinel"

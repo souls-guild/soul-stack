@@ -1,8 +1,8 @@
 name: sentinel-unchanged
 description: >
-  redis_type sentinel — уже валиден в новом enum [sentinel, cluster]. Тождественная
-  ветка тернара: redis_type и весь остальной state переезжают бит-в-бит (миграция
-  no-op для этого режима).
+  redis_type sentinel — already valid in the new enum [sentinel, cluster]. Identity
+  branch of the ternary: redis_type and the rest of the state carry over bit-for-bit (the migration
+  is a no-op for this mode).
 
 state_before:
   redis_type: sentinel

@@ -1,61 +1,62 @@
 name: reshard
 description: >-
-  Перенести N hash-слотов с одного master-а на другой в сформированном Redis-кластере.
-  Императивная неидемпотентная операция: повторный вызов двигает ещё слоты — запускать
-  осознанно.
+  Move N hash slots from one master to another in an already-formed Redis cluster.
+  An imperative, non-idempotent operation: a repeated call moves further slots —
+  run it deliberately.
 
-# ── Входной контракт оператора (docs/input.md) ────────────────────────────────
-# Простые типизированные понятия оператора: с какого master-а, на какой и сколько
-# слотов перенести.
+# ── Operator input contract (docs/input.md) ────────────────────────────────────
+# Simple typed operator-facing concepts: which master to move from, which to, and
+# how many slots to transfer.
 input:
   from_sid:
     type: string
     required: true
     format: fqdn
     description: >-
-      SID (FQDN) master-а ИСТОЧНИКА — с него снимаются слоты. Должен присутствовать
-      в roster прогона (soulprint.hosts) и быть master-ом со слотами в кластере.
+      SID (FQDN) of the SOURCE master — slots are taken from it. Must be present
+      in the run roster (soulprint.hosts) and be a master with slots in the cluster.
 
   to_sid:
     type: string
     required: true
     format: fqdn
     description: >-
-      SID (FQDN) master-а ПОЛУЧАТЕЛЯ слотов. Должен присутствовать в roster прогона
-      и отличаться от from_sid.
+      SID (FQDN) of the RECIPIENT master of the slots. Must be present in the run
+      roster and differ from from_sid.
 
   slots:
     type: integer
     required: true
     min: 1
     description: >-
-      Сколько слотов перенести с from на to (>= 1). Берутся ПЕРВЫЕ slots слотов
-      источника по возрастанию. ★ НЕ идемпотентно: повторный apply перенесёт ещё
-      slots слотов.
+      How many slots to move from from to to (>= 1). The FIRST slots slots of the
+      source are taken in ascending order. ★ NOT idempotent: a repeated apply will
+      move further slots slots.
 
 tasks:
-  # 1. GUARD — from_sid и to_sid обязаны быть в roster и различаться (assert:,
-  #    ADR-009 amendment 2026-06-23; тот же механизм, что guard remove_node). Предикат
-  #    вычисляется KEEPER-SIDE на РЕНДЕРЕ (там доступен soulprint.hosts; на Soul-е его
-  #    НЕТ). false ОБРЫВАЕТ render с message ДО любого dispatch — раньше и понятнее,
-  #    чем shell-test на хосте. assert НЕ emit RenderedTask.
+  # 1. GUARD — from_sid and to_sid must be in the roster and differ (assert:,
+  #    ADR-009 amendment 2026-06-23; the same mechanism as the remove_node guard). The
+  #    predicate is computed KEEPER-SIDE at RENDER time (soulprint.hosts is available
+  #    there; it's NOT available on Soul). false ABORTS the render with a message BEFORE
+  #    any dispatch — earlier and clearer than a shell-test on the host. assert does NOT
+  #    emit a RenderedTask.
   - name: Guard from and to are distinct masters of the run roster
     assert:
       that:
         - 'input.from_sid != input.to_sid && size(soulprint.hosts.where("sid == input.from_sid")) == 1 && size(soulprint.hosts.where("sid == input.to_sid")) == 1'
       message: "reshard guard: from_sid/to_sid must be distinct hosts of the run roster"
 
-  # 2. RESHARD — run_once. Endpoint-ы строятся из roster (soulprint.hosts) по SID:
-  #    from/to = {addr: "<primary_ip>:6379"}. Это ГОТОВАЯ топология — плагин ничего
-  #    не транслирует: сам читает CLUSTER NODES с from, выбирает первые `slots`
-  #    слотов источника и переносит каждый (go-redis SETSLOT/MIGRATE/SETSLOT NODE).
-  #    ★ НЕ идемпотентен (без unless): повторный прогон сдвинет ещё `slots` слотов.
-  #    .where("sid == ...")[0] детерминирован (single-host roster-фильтр; прецедент
-  #    add_node/remove_node). ★ РЕДИЗАЙН default_admin (2026-06-30): коннект к нодам —
-  #    под системным default_admin (username → AUTH, requirepass убран). password из
-  #    новой Vault-ветки secret/redis/<inc>/users/default_admin#password; плагин коннектится
-  #    к нодам под этой парой (password маскируется). Тело сценария (вне covenant) хардкодит
-  #    'default_admin' напрямую (нет extends: covenant compute.admin_user).
+  # 2. RESHARD — run_once. Endpoints are built from the roster (soulprint.hosts) by SID:
+  #    from/to = {addr: "<primary_ip>:6379"}. This is a READY topology — the plugin doesn't
+  #    translate anything: it reads CLUSTER NODES from `from` itself, picks the first `slots`
+  #    slots of the source and moves each one (go-redis SETSLOT/MIGRATE/SETSLOT NODE).
+  #    ★ NOT idempotent (no unless): a repeated run will shift further `slots` slots.
+  #    .where("sid == ...")[0] is deterministic (single-host roster filter; a precedent from
+  #    add_node/remove_node). ★ default_admin REDESIGN (2026-06-30): connects to nodes as the
+  #    system default_admin (username → AUTH, requirepass removed). password comes from the
+  #    new Vault branch secret/redis/<inc>/users/default_admin#password; the plugin connects
+  #    to nodes with this pair (password is masked). The scenario body (outside covenant)
+  #    hardcodes 'default_admin' directly (no extends: covenant compute.admin_user).
   - name: Reshard N slots from source master to target master
     run_once: true
     module: community.redis.cluster
@@ -63,8 +64,8 @@ tasks:
       action:   reshard
       username: default_admin
       password: "${ vault('secret/redis/' + incarnation.name + '/users/default_admin#password') }"
-      # int() унифицирует uint64-операнд input.slots в числовой тип (тот же приём,
-      # что replicas_per_shard в create/cluster.yml); whole-cell ${…} → нативный int.
+      # int() unifies the uint64 operand input.slots into a numeric type (the same trick
+      # as replicas_per_shard in create/cluster.yml); whole-cell ${…} → native int.
       slots:    "${ int(input.slots) }"
       from:
         addr: "${ soulprint.hosts.where(\"sid == input.from_sid\")[0].network.primary_ip + ':6379' }"

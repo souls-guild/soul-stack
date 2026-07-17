@@ -1,23 +1,23 @@
-# L0-испытание update_config: hot-reload директив redis.conf БЕЗ рестарта.
-# Оператор меняет maxmemory_policy (allkeys-lru → volatile-lru); сценарий
-# перевычисляет merged redis_config (на базе РАЗВЁРНУТОГО incarnation.state.redis_config),
-# рендерит новый redis.conf и ОЖИВЛЯЕТ через community.redis.config (CONFIG SET,
-# rewrite=false — файл держит рендер шага 1). Render-only, герметично. Plaintext (addr 6379).
+# L0-trial update_config: hot-reload of redis.conf directives WITHOUT a restart.
+# The operator changes maxmemory_policy (allkeys-lru → volatile-lru); the scenario
+# recomputes the merged redis_config (on top of the EXPANDED incarnation.state.redis_config),
+# renders a new redis.conf and ACTIVATES via community.redis.config (CONFIG SET,
+# rewrite=false — the file from step 1 keeps the render). Render-only, hermetic. Plaintext (addr 6379).
 #
-# Что ассертим (критерий приёмки):
-#   1. redis.conf (core.file.rendered): новый merged config несёт изменённую директиву
-#      maxmemory-policy: volatile-lru + сохранённые из state (maxmemory/save/appendonly).
-#   2. hot-reload-шаг (community.redis.config): addr 127.0.0.1:6379 (plain), tls=false,
-#      password из vault (маскируется на выводе, в плане — резолвленное значение),
-#      rewrite=false (redis.conf шага 1 — источник истины файла; NIM-53), config несёт
-#      перевычисленный merged config.
-#   3. state_changes: redis_config ≡ переданный в hot-reload config (один compute,
-#      без drift); maxmemory_policy = volatile-lru (namedfield read-model).
+# What we assert (acceptance criteria):
+#   1. redis.conf (core.file.rendered): the new merged config carries the changed directive
+#      maxmemory-policy: volatile-lru + the ones preserved from state (maxmemory/save/appendonly).
+#   2. hot-reload step (community.redis.config): addr 127.0.0.1:6379 (plain), tls=false,
+#      password from vault (masked on output, resolved value in the plan),
+#      rewrite=false (redis.conf from step 1 is the source of truth for the file; NIM-53), config carries
+#      the recomputed merged config.
+#   3. state_changes: redis_config ≡ the config passed into hot-reload (one compute,
+#      no drift); maxmemory_policy = volatile-lru (namedfield read-model).
 #
-# Идемпотентность (рендер-уровень): merge детерминирован (отсортированные ключи в
-# шаблоне) — повторный прогон с тем же вводом даёт бит-в-бит тот же redis.conf и тот
-# же config в hot-reload-шаге; CONFIG GET-diff плагина даёт no-op (changed=false) на
-# уровне live-инстанса (L1+, вне L0-render).
+# Idempotency (render level): the merge is deterministic (sorted keys in the
+# template) — a repeat run with the same input gives bit-for-bit the same redis.conf and the
+# same config in the hot-reload step; the plugin's CONFIG GET-diff yields no-op (changed=false) at
+# the live-instance level (L1+, outside L0-render).
 name: update_config hot-reloads changed directive without restart (plaintext)
 
 fixtures:
@@ -26,9 +26,9 @@ fixtures:
     network: { primary_ip: 10.0.0.5 }
     os: { arch: amd64 }
 
-  # essence-подложка: persistence_presets + memory_reserve (для перевычисления maxmemory
-  # из сохранённого state.memory_mb) + host-layout (v11→v12: conf_dir/data_dir/
-  # modules_base_url вынесены из state в essence, Вариант A; повторный прогон читает их отсюда).
+  # essence substrate: persistence_presets + memory_reserve (to recompute maxmemory
+  # from the saved state.memory_mb) + host-layout (v11→v12: conf_dir/data_dir/
+  # modules_base_url moved from state into essence, Variant A; a repeat run reads them from here).
   essence:
     memory_reserve_percent: 75
     conf_dir: /etc/redis
@@ -39,8 +39,8 @@ fixtures:
         save: "900 1 300 10 60 10000"
         appendonly: "no"
 
-  # Развёрнутый incarnation.state v3 (от create): plaintext (tls.enable=false), уже
-  # развёрнутый redis_config + namedfields. update_config мержит дельту ПОВЕРХ него.
+  # Expanded incarnation.state v3 (from create): plaintext (tls.enable=false), already
+  # expanded redis_config + namedfields. update_config merges the delta ON TOP of it.
   state:
     redis_type: sentinel
     redis_version: "7.2.4"
@@ -62,24 +62,24 @@ fixtures:
     redis_users: []
 
   input:
-    # Дельта оператора: только новая политика вытеснения.
+    # Operator delta: only the new eviction policy.
     maxmemory_policy: volatile-lru
 
   vault:
     secret/redis/update_config:
       password: upd-redis-pass-16chars
-    # ★ РЕДИЗАЙН default_admin: системный admin-юзер — пароль из ветки users/default_admin.
-    # Читается masterauth-доливом в apply.input.config (redis.conf) И коннектом
-    # community.redis.config (AUTH под default_admin вместо прежнего requirepass-секрета).
+    # ★ default_admin REDESIGN: the system admin user — password from the users/default_admin branch.
+    # Read via the masterauth merge into apply.input.config (redis.conf) AND the connection of
+    # community.redis.config (AUTH as default_admin instead of the former requirepass secret).
     secret/redis/update_config/users/default_admin:
       password: default-admin-secret-pass
 
 assert:
   task_present:
-    # 1. redis.conf перерендерен с новым merged config. maxmemory-policy сменилась на
-    #    volatile-lru; maxmemory перевычислен из state.memory_mb (1024*75/100=768mb);
-    #    save/appendonly сохранены из state.redis_config (подложка). Дизамбигуатор —
-    #    path (от users.acl/hardening).
+    # 1. redis.conf re-rendered with the new merged config. maxmemory-policy changed to
+    #    volatile-lru; maxmemory recomputed from state.memory_mb (1024*75/100=768mb);
+    #    save/appendonly preserved from state.redis_config (the substrate). Disambiguator —
+    #    path (from users.acl/hardening).
     - module: core.file.rendered
       params_subset:
         path: /etc/redis/redis.conf
@@ -100,16 +100,16 @@ assert:
               maxmemory-policy: volatile-lru
               save: "900 1 300 10 60 10000"
               appendonly: "no"
-              # ★ РЕДИЗАЙН default_admin: статическая replica→master AUTH доливается в
-              # apply.input.config → redis.conf несёт masteruser/masterauth (на master-нодах
-              # инертны, failover-safe). masterauth — резолвленный пароль default_admin.
+              # ★ default_admin REDESIGN: the static replica→master AUTH is merged into
+              # apply.input.config → redis.conf carries masteruser/masterauth (on master nodes
+              # they're inert, failover-safe). masterauth — the resolved default_admin password.
               masteruser: default_admin
               masterauth: default-admin-secret-pass
           self:
             sid: trial-host
             covens: [update_config]
             choirs: []
-            # traits — registry-проекция (ADR-060), пустой объект без меток.
+            # traits — a registry projection (ADR-060), an empty object without labels.
             traits: {}
             role: ""
             network:
@@ -119,27 +119,27 @@ assert:
           role: ""
           essence: {}
 
-    # 2. HOT-RELOAD: community.redis.config к живому plain-инстансу. addr 6379 (plain),
-    #    tls=false, rewrite=false (NIM-53: файл — рендер шага 1), config = перевычисленный
-    #    merged. Денилист startup-only отрабатывает на стороне плагина (здесь hot-settable).
+    # 2. HOT-RELOAD: community.redis.config to the live plain instance. addr 6379 (plain),
+    #    tls=false, rewrite=false (NIM-53: the file is the render from step 1), config = recomputed
+    #    merged. The startup-only denylist is handled on the plugin side (here it's hot-settable).
     - module: community.redis.config
       params_subset:
         addr: "127.0.0.1:6379"
-        # ★ РЕДИЗАЙН default_admin: AUTH под default_admin (username + его Vault-пароль).
+        # ★ default_admin REDESIGN: AUTH as default_admin (username + its Vault password).
         username: default_admin
         password: default-admin-secret-pass
         tls: false
         rewrite: false
-        # config — ЧИСТЫЙ compute.redis_config БЕЗ masterauth-долива (hot-reload шлёт CONFIG
-        # SET только операторской дельты; masteruser/masterauth — replication-материал,
-        # update_config его не трогает на живом инстансе).
+        # config — a PURE compute.redis_config WITHOUT the masterauth merge (hot-reload sends CONFIG
+        # SET for the operator delta only; masteruser/masterauth are replication material,
+        # update_config doesn't touch it on a live instance).
         config:
           maxmemory: "768mb"
           maxmemory-policy: volatile-lru
           save: "900 1 300 10 60 10000"
           appendonly: "no"
 
-  # DRIFT-GUARD: state.redis_config ≡ config переданный в hot-reload (один compute).
+  # DRIFT-GUARD: state.redis_config ≡ the config passed into hot-reload (one compute).
   state_changes:
     redis_config:
       maxmemory: "768mb"

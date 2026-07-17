@@ -1,12 +1,12 @@
-# L0-испытание NIM-58 (домен-mismatch guard) для DragonFly: provision ВКЛЮЧЁН, имя
-# инкарнации "9redis" — валидное имя инкарнации, но НЕвалидная VM-база (старт-цифра).
-# Guard-assert ПЕРВЫМ шагом dragonfly-provision.yml обрывает render pre-persist (в
-# проде — 422 БЕЗ записи инкарнации), не давая имени дойти до CloudDriver.Validate
-# после создания инкарнации. Образец 1:1 — redis provision-badname-rejected.
+# L0 test NIM-58 (domain-mismatch guard) for DragonFly: provision ENABLED, incarnation
+# name "9redis" - a valid incarnation name, but an INVALID VM-base name (leading digit).
+# The guard-assert as the FIRST step of dragonfly-provision.yml aborts render pre-persist (in
+# prod - 422 WITHOUT recording the incarnation), keeping the name from reaching CloudDriver.Validate
+# after the incarnation is created. Mirror 1:1 of redis provision-badname-rejected.
 #
-# ★ expect_render_error (взаимоисключим с assert.*): подстрока message guard-ассерта
-# dragonfly-provision.yml. vault/covens под "9redis": БЕЗ guard-ассерта (RED-фаза)
-# render катит весь план — deploy читает secret/dragonfly/9redis/*, coven=incarnation.name.
+# star expect_render_error (mutually exclusive with assert.*): substring of the message from the guard-assert of
+# dragonfly-provision.yml. vault/covens under "9redis": WITHOUT the guard-assert (RED phase)
+# render pushes through the whole plan - deploy reads secret/dragonfly/9redis/*, coven=incarnation.name.
 name: dragonfly provision with a bad VM-base incarnation name is rejected before persist
 
 fixtures:
@@ -75,4 +75,4 @@ mocks:
         - { sid: vm-2.example.com, vm_id: i-bbb222, primary_ip: 10.0.0.2, bootstrap_token: tok-vm2 }
         - { sid: vm-3.example.com, vm_id: i-ccc333, primary_ip: 10.0.0.3, bootstrap_token: tok-vm3 }
 
-expect_render_error: "имя инкарнации не подходит как базовое имя VM"
+expect_render_error: "incarnation name is not valid as a VM base name"

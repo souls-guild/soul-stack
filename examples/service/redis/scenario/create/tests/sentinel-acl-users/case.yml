@@ -1,30 +1,30 @@
-# L0-испытание create в режиме sentinel С operator-extra ACL-ЮЗЕРАМИ — зеркало
-# cluster-acl-users (qa 2026-06-28, drift-guard «генерим ≡ читаем»). Закрывает
-# постоянным кейсом комбинацию sentinel-режим + input.users: targets шага
-# core.vault.kv-present (generate) собираются из union
-# system_acl_users ∪ system_acl_users_sentinel (БЕЗ встроенного default) ∪ input.users;
-# те же пути читаются keeper-side vault() в redis-deploy-sentinel.yml. Drift sentinel +
-# operator-extra (Go-guard TestRedisCreate_GeneratedSecretsCoverVaultReads_*)
-# опирается на этот кейс как на источник fixtures/плана.
+# L0 test for create in sentinel mode WITH operator-extra ACL USERS — a mirror of
+# cluster-acl-users (qa 2026-06-28, drift-guard "generate ≡ read"). Locks in with a
+# permanent case the combination sentinel mode + input.users: targets of the
+# core.vault.kv-present (generate) step are assembled from the union
+# system_acl_users ∪ system_acl_users_sentinel (WITHOUT a built-in default) ∪ input.users;
+# the same paths are read by keeper-side vault() in redis-deploy-sentinel.yml. The drift
+# sentinel + operator-extra guard (Go-guard TestRedisCreate_GeneratedSecretsCoverVaultReads_*)
+# relies on this case as the source of fixtures/plan.
 #
-# Что доказываем (зеркало cluster-acl-users, режим sentinel):
-#   1. users.acl рендерится из MAP имя→{perms,state,password}: СИСТЕМНЫЕ
+# What we prove (mirroring cluster-acl-users, sentinel mode):
+#   1. users.acl is rendered from a MAP name→{perms,state,password}: SYSTEM
 #      (system_acl_users default_admin/replica/monitoring/sentinel/haproxy) + operator-extra
-#      zeta/alpha. Имена operator-extra не пересекаются с системными.
-#   2. sentinel-режим: НЕТ cluster-директив в redis.conf; sentinel-демон и
-#      sentinel.conf ПРИСУТСТВУЮТ (в отличие от cluster, где они отсутствуют).
-#   3. per-user пароль резолвится keeper-side vault() по конвенции
-#      secret/redis/<inc>/users/<name>#password. ★ РЕДИЗАЙН default_admin: системный
-#      default_admin — внутрикластерный AUTH (~* &* +@all), его пароль по той же ветке
-#      users/default_admin (прежняя модель «default → главный секрет» убрана). Два
-#      operator-юзера (zeta/alpha) с РАЗНЫМИ паролями: ассерт ловит резолв и cross-leak.
+#      zeta/alpha. operator-extra names do not overlap with the system ones.
+#   2. sentinel mode: NO cluster directives in redis.conf; the sentinel daemon and
+#      sentinel.conf ARE PRESENT (unlike cluster, where they are absent).
+#   3. per-user password is resolved by keeper-side vault() using the convention
+#      secret/redis/<inc>/users/<name>#password. ★ REDESIGN default_admin: the system
+#      default_admin — intra-cluster AUTH (~* &* +@all), its password comes from the same
+#      users/default_admin branch (the old "default → main secret" model was removed). Two
+#      operator users (zeta/alpha) with DIFFERENT passwords: the assert catches resolution and cross-leak.
 #
-# PRESENCE-форма: задачи идентифицируются module + params_subset (path-
-# дизамбигуатор users.acl↔redis.conf); индексы не сверяются. render_context.vars.users
-# сверяется целиком (deep-compare по map): per-user пароли изолированы.
+# PRESENCE form: tasks are identified by module + params_subset (the path
+# disambiguates users.acl↔redis.conf); indices are not compared. render_context.vars.users
+# is compared wholesale (deep-compare over the map): per-user passwords are isolated.
 #
-# Топология: replicas_per_master=2 → 1+2=3 хоста (size-guard PASS). master-election:
-# первый по SID хост (node-1). render_context.self = node-1 (host-инвариант apply.input).
+# Topology: replicas_per_master=2 → 1+2=3 hosts (size-guard PASS). master election:
+# the first host by SID (node-1). render_context.self = node-1 (apply.input is host-invariant).
 name: sentinel create renders per-user acl with operator-extra users
 
 fixtures:
@@ -48,10 +48,10 @@ fixtures:
   vault:
     secret/redis/create:
       password: s3cr3t-redis-pass-create
-    # Per-user секреты системных юзеров (union system_acl_users ∪
-    # system_acl_users_sentinel, БЕЗ встроенного default).
-    # ★ РЕДИЗАЙН default_admin (2026-06-30): default_admin — системный юзер
-    # внутрикластерного AUTH (auth_pass/PING шаги деплоя читают его по ветке users/<name>).
+    # Per-user secrets of system users (union system_acl_users ∪
+    # system_acl_users_sentinel, WITHOUT a built-in default).
+    # ★ REDESIGN default_admin (2026-06-30): default_admin — the system user for
+    # intra-cluster AUTH (auth_pass/PING deploy steps read it via the users/<name> branch).
     secret/redis/create/users/default_admin:
       password: default-admin-secret-pass
     secret/redis/create/users/replica:
@@ -62,18 +62,18 @@ fixtures:
       password: sentinel-sys-secret-pass
     secret/redis/create/users/haproxy:
       password: haproxy-sys-secret-pass
-    # Operator-extra секреты — РАЗНЫЕ значения: cross-leak детектируется ассертом.
+    # Operator-extra secrets — DIFFERENT values: cross-leak is detected by the assert.
     secret/redis/create/users/zeta:
       password: zeta-user-secret-pass
     secret/redis/create/users/alpha:
       password: alpha-user-secret-pass
   essence:
-    # install_method — в essence (author-context, 2026-06-28): способ установки
-    # НЕ operator-input. compute.install читает default(essence.install_method, 'binary').
+    # install_method — in essence (author-context, 2026-06-28): install method is
+    # NOT operator-input. compute.install reads default(essence.install_method, 'binary').
     install_method: package
     redis_type: sentinel
     sentinel_master_name: master
-    # ★ Редизайн: подложка per-master sentinel-дефолтов (под input.sentinel_master_settings).
+    # ★ Redesign: backing per-master sentinel defaults (under input.sentinel_master_settings).
     sentinel_master_defaults:
       down-after-milliseconds: "5000"
       failover-timeout:        "60000"
@@ -89,10 +89,10 @@ fixtures:
       maxclients:       10000
       timeout:          300
 
-    # Системные ACL-юзеры redis-server + sentinel-демона (1:1 из essence/_default.yaml).
-    # ОБА ОБЯЗАТЕЛЬНЫ: guard create/sentinel.yml рвёт render при пустом любом наборе.
-    # ★ РЕДИЗАЙН default_admin (2026-06-30): default_admin — системный юзер полного
-    # доступа (~* &* +@all) в ОБА набора (заменил прежний requirepass-default).
+    # System ACL users of redis-server + the sentinel daemon (1:1 from essence/_default.yaml).
+    # BOTH ARE REQUIRED: the create/sentinel.yml guard breaks the render if either set is empty.
+    # ★ REDESIGN default_admin (2026-06-30): default_admin — the full-access system
+    # user (~* &* +@all) in BOTH sets (replaced the old requirepass default).
     system_acl_users:
       default_admin: "~* &* +@all"
       replica:    "+psync +replconf +ping"
@@ -105,8 +105,8 @@ fixtures:
       sentinel:   "allchannels -@all +auth +client|getname +client|id +client|setname +command +hello +ping +sentinel|is-master-down-by-addr +publish +role +sentinel|get-master-addr-by-name +sentinel|master +sentinel|myid +sentinel|replicas +sentinel|sentinels"
       haproxy:    "-@all +auth +client|getname +client|id +client|setname +command +hello +ping +role +sentinel|get-master-addr-by-name +sentinel|master +sentinel|myid +sentinel|replicas +sentinel|sentinels"
   input:
-    # ★ provision выключен (default-on: опущенная секция = ВКЛЮЧЕНО; кейс деплоит на
-    # ГОТОВЫЙ roster, cloud-create не нужен) → include redis-provision.yml group-drop.
+    # ★ provision is disabled (default-on: an omitted section = ENABLED; the case deploys onto a
+    # READY roster, cloud-create is not needed) → include redis-provision.yml group-drop.
     provision:
       enabled: false
     redis_type: sentinel
@@ -118,14 +118,14 @@ fixtures:
 
 assert:
   task_present:
-    # redis-server users.acl: MAP имя→{perms,state,password} с per-user vault-
-    # паролями. СИСТЕМНЫЕ из system_acl_users (default_admin/replica/monitoring/sentinel/
-    # haproxy — redis-server-набор) + operator-extra zeta/alpha.
-    # ★ РЕДИЗАЙН default_admin (2026-06-30): .vars.password БОЛЬШЕ НЕ передаётся (requirepass
-    # убран из server.yml). default_admin — системный юзер полного доступа (~* &* +@all),
-    # приходит в map `users` range-ом, как остальные системные (Vault-пароль по ветке
-    # users/default_admin). Встроенный default рендерится `off` шаблоном (его в map нет).
-    # sentinel-набор (system_acl_users_sentinel) идёт в ОТДЕЛЬНЫЙ sentinel-users.acl, не сюда.
+    # redis-server users.acl: MAP name→{perms,state,password} with per-user vault
+    # passwords. SYSTEM ones from system_acl_users (default_admin/replica/monitoring/sentinel/
+    # haproxy — the redis-server set) + operator-extra zeta/alpha.
+    # ★ REDESIGN default_admin (2026-06-30): .vars.password is NO LONGER passed (requirepass
+    # was removed from server.yml). default_admin — the full-access system user (~* &* +@all),
+    # arrives in the `users` map via range, like the other system users (Vault password from the
+    # users/default_admin branch). The built-in default is rendered `off` by the template (it's not in the map).
+    # the sentinel set (system_acl_users_sentinel) goes into a SEPARATE sentinel-users.acl, not here.
     - module: core.file.rendered
       id: redis_acl
       params_subset:
@@ -188,8 +188,8 @@ assert:
       timeout:          300
       save:             "900 1 300 10 60 10000"
       appendonly:       "no"
-    # operator-extra ACL-юзеры в state — МАССИВ AclUser [{name,perms,state}] (БЕЗ
-    # пароля; он keeper-side vault). Системные доливаются keeper-side в apply, НЕ в state.
+    # operator-extra ACL users in state — an ARRAY of AclUser [{name,perms,state}] (WITHOUT
+    # the password; it's keeper-side vault). System users are topped up keeper-side in apply, NOT in state.
     redis_users:
       - { name: zeta, perms: "~* +@all", state: "on" }
       - { name: alpha, perms: "~app:* +@read +@write", state: "on" }

@@ -1,14 +1,14 @@
-# tasks/extras.yml — host-tuning extras (концепция Ansible-роли): THP-юнит +
-# logrotate + sysctl. Режим-АГНОСТИЧНЫ (одинаково полезны standalone/cluster/
-# sentinel). Все три БЕЗУСЛОВНЫ (рекомендация Redis / hardening — не выбор оператора):
-# задачи без when:, рендерятся ВСЕГДА. Операторских флагов logrotate_enable/
-# sysctl_enable в контракте больше НЕТ.
+# tasks/extras.yml — host-tuning extras (concept of an Ansible role): THP unit +
+# logrotate + sysctl. Mode-AGNOSTIC (equally useful for standalone/cluster/
+# sentinel). All three are UNCONDITIONAL (Redis recommendation / hardening — not an operator choice):
+# tasks without when:, ALWAYS rendered. Operator flags logrotate_enable/
+# sysctl_enable are no longer in the contract.
 #
-# disable-thp daemon-reload УБРАН: core.service (daemon_reload: auto) сам
-# перечитывает unit при смене disable-thp.service ПЕРЕД enable/start.
+# disable-thp daemon-reload REMOVED: core.service (daemon_reload: auto) itself
+# rereads the unit when disable-thp.service changes BEFORE enable/start.
 
-# transparent-hugepages: oneshot-юнит отключения THP до Redis. БЕЗУСЛОВНО (THP даёт
-# latency-спайки на fork RDB/AOF — рекомендация Redis, hardening для всех режимов).
+# transparent-hugepages: oneshot unit disabling THP before Redis. UNCONDITIONAL (THP causes
+# latency spikes on fork RDB/AOF — Redis recommendation, hardening for all modes).
 - name: Render disable-thp systemd unit
   module: core.file.rendered
   params:
@@ -18,17 +18,17 @@
     owner: "${ vars.root_owner }"
     group: "${ vars.root_group }"
 
-# core.service сам перечитывает unit (daemon_reload: auto) при смене disable-thp.service
-# перед enable/start. disable-thp — oneshot RemainAfterExit, отрабатывает один раз.
+# core.service itself rereads the unit (daemon_reload: auto) when disable-thp.service changes
+# before enable/start. disable-thp is a oneshot RemainAfterExit, runs once.
 - name: Ensure disable-thp is running and enabled at boot
   module: core.service.running
   params:
     name: disable-thp
     enabled: true
 
-# logrotate: ротация лог-файлов redis в /etc/logrotate.d/redis. БЕЗУСЛОВНО (как
-# THP — host-tuning не выбор оператора). mode 0644 owner/group root — стандарт
-# logrotate.d.
+# logrotate: rotation of redis log files in /etc/logrotate.d/redis. UNCONDITIONAL (like
+# THP — host-tuning is not an operator choice). mode 0644 owner/group root is the
+# logrotate.d standard.
 - name: Render redis logrotate config
   module: core.file.rendered
   params:
@@ -38,18 +38,18 @@
     owner: "${ vars.root_owner }"
     group: "${ vars.root_group }"
     vars:
-      # glob лог-файлов из системного лог-каталога (директива «хардкод пути → var»).
+      # glob of log files from the system log directory (directive "hardcode path → var").
       log_dir: "${ vars.log_dir }"
 
-# sysctl: bulk-набор kernel-параметров под Redis ОДНИМ drop-in
-# /etc/sysctl.d/30-redis.conf. БЕЗУСЛОВНО (как THP/logrotate). core.sysctl.applied
-# сам владеет drop-in: пишет детерминированный файл (sorted keys → нет ложного
-# change), реактивно перечитывает его `sysctl -p <file>` точечно при изменении
-# (reload: auto), сам change не помечает. В контейнерах часть vm.* read-only —
-# ignore_failures даёт `sysctl -e -p` (--ignore глушит read-only/несуществующие
-# ключи, не валя прогон; поведение ignoreerrors Ansible-роли).
-# sysctl_settings — map kernel-параметр→значение, scenario сервиса передаёт его
-# через apply.input (дефолты — essence.sysctl_settings).
+# sysctl: bulk set of kernel parameters for Redis in ONE drop-in
+# /etc/sysctl.d/30-redis.conf. UNCONDITIONAL (like THP/logrotate). core.sysctl.applied
+# owns the drop-in itself: writes a deterministic file (sorted keys → no false
+# change), reactively rereads it via `sysctl -p <file>` targeted on change
+# (reload: auto), does not mark change itself. In containers part of vm.* is read-only —
+# ignore_failures gives `sysctl -e -p` (--ignore suppresses read-only/nonexistent
+# keys, without failing the run; behavior of Ansible role's ignoreerrors).
+# sysctl_settings — map kernel-parameter→value, the service scenario passes it
+# through apply.input (defaults — essence.sysctl_settings).
 - name: Apply redis sysctl kernel parameters
   module: core.sysctl.applied
   params:

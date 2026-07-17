@@ -9,16 +9,16 @@ required_capabilities:
 spec:
   states:
     present:
-      description: Пакетный репозиторий объявлен (файл-описание + GPG-ключ); apt/dnf/yum/apk. ADR-015/ADR-016.
+      description: Package repository declared (description file + GPG key); apt/dnf/yum/apk. ADR-015/ADR-016.
       input:
-        name:       { type: string, required: true, description: "Имя репозитория (= имя файла-описания, [A-Za-z0-9._-])." }
-        uri:        { type: string, required: true, description: "URL репозитория (http/https; http даёт обязательный warning)." }
-        gpg_key:    { type: string, description: "URL или armored GPG-ключ для supply-chain-проверки." }
-        gpg_check:  { type: bool,   description: "Проверять подпись пакетов (default true; opt-out даёт warning)." }
-        suite:      { type: string, description: "apt suite/дистрибутив (напр. stable)." }
-        components: { type: list,   items: { type: string }, description: "apt components (напр. [main, contrib])." }
-        enabled:    { type: bool,   description: "Репозиторий включён (default true)." }
+        name:       { type: string, required: true, description: "Repository name (= description file name, [A-Za-z0-9._-])." }
+        uri:        { type: string, required: true, description: "Repository URL (http/https; http produces a mandatory warning)." }
+        gpg_key:    { type: string, description: "URL or armored GPG key for supply-chain verification." }
+        gpg_check:  { type: bool,   description: "Verify package signatures (default true; opt-out produces a warning)." }
+        suite:      { type: string, description: "apt suite/distribution (e.g. stable)." }
+        components: { type: list,   items: { type: string }, description: "apt components (e.g. [main, contrib])." }
+        enabled:    { type: bool,   description: "Repository is enabled (default true)." }
     absent:
-      description: Описание репозитория удалено (GPG-ключ не трогается).
+      description: Repository description removed (GPG key is not touched).
       input:
-        name: { type: string, required: true, description: "Имя репозитория (= имя файла-описания)." }
+        name: { type: string, required: true, description: "Repository name (= description file name)." }

@@ -1,10 +1,10 @@
 name: logging-defaults-back-compat
 description: >
-  Инкарнация v5 развёрнута ДО ввода log-shipping — поля logging в state нет (monitoring уже есть,
-  добавлен 004_to_005). Миграция ДОБАВЛЯЕТ read-model logging с консервативным default: version
-  пустая ('' = не развёрнуто), sink_type console (безопасный дефолт без инфры), endpoint пустой,
-  log_sources пустой. Остальной state (df_config/df_users/tls/monitoring/топология) проходит
-  насквозь бит-в-бит. Зеркало redis 013_to_014 logging-defaults-back-compat.
+  Incarnation v5 was deployed BEFORE log-shipping was introduced — there's no logging field in state (monitoring is already
+  there, added by 004_to_005). The migration ADDS a logging read-model with a conservative default: version
+  empty ('' = not deployed), sink_type console (safe default with no infra), endpoint empty,
+  log_sources empty. The rest of the state (df_config/df_users/tls/monitoring/topology) passes
+  through bit-for-bit. Mirrors redis 013_to_014 logging-defaults-back-compat.
 
 state_before:
   df_version: "1.39.0"

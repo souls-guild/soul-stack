@@ -1,7 +1,7 @@
 name: preserves-unrelated-fields
 description: >
-  Поля state вне redis_users (redis_config / redis_hosts / redis_sentinel) не
-  трогаются миграцией — переезжают как есть.
+  State fields outside redis_users (redis_config / redis_hosts / redis_sentinel)
+  are untouched by the migration; they carry over as-is.
 
 state_before:
   redis_users: ["app"]

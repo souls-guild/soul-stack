@@ -1,17 +1,18 @@
-# L0-кейс: под-опции коллекторов (collector_options, формат B1).
+# L0 case: collector sub-options (collector_options, format B1).
 #
-# Доказывает CEL-проброс input.collector_options нативным типом (map<string,
-# map<string,string>>) в render_context.input основного unit-шага (Вариант B,
-# ADR-010 §3.2 amendment: operator-input едет в render_context.input напрямую).
-# Сам двойной range по ОТСОРТИРОВАННЫМ ключам (детерминизм флагов ExecStart)
-# исполняется text/template-фазой и покрыт unit-тестом keeper/internal/render
-# (TestNodeExporterService_CollectorOptionsDeterministic) — L0 text/template не
-# гоняет, поэтому здесь фиксируется только корректная доставка map в render_context.
+# Proves CEL passthrough of input.collector_options as a native type (map<string,
+# map<string,string>>) into render_context.input of the main unit step (Variant B,
+# ADR-010 §3.2 amendment: operator-input goes straight into render_context.input).
+# The actual double-range over SORTED keys (determinism of ExecStart flags) is
+# performed by the text/template phase and is covered by a keeper/internal/render
+# unit test (TestNodeExporterService_CollectorOptionsDeterministic) — L0 doesn't
+# run text/template, so this fixture only pins down correct map delivery into
+# render_context.
 #
-# render_context сверяется deep-equal целиком (harness), поэтому input перечислен
-# полностью (как listen-non10); ключевая величина — collector_options. Insertion-
-# порядок ключей намеренно не-лексикографичен — детерминизм рендера обеспечивается
-# range-фазой, не порядком в этом фикстуре.
+# render_context is checked deep-equal wholesale (harness), so input is listed
+# in full (like listen-non10); the key value is collector_options. Insertion
+# order of keys is intentionally non-lexicographic — render determinism is
+# guaranteed by the range phase, not by the order in this fixture.
 name: node-exporter renders collector sub-options (collector_options map)
 
 fixtures:
@@ -33,8 +34,8 @@ fixtures:
 
 assert:
   task_present:
-    # Основной unit-шаг (дизамбигуатор — path). collector_options доехал в
-    # render_context.input нативным map'ом, ключ-в-ключ.
+    # Main unit step (disambiguator — path). collector_options arrived in
+    # render_context.input as a native map, key-for-key.
     - module: core.file.rendered
       params_subset:
         path: /etc/systemd/system/node_exporter.service

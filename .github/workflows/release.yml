@@ -1,27 +1,28 @@
-# Release Soul Stack. Автоматизирует ручной релиз-флоу (P0 release-инженерия,
-# docs/prod-readiness.md): `make build` + `make pkg` + `make sbom` и публикация
-# артефактов в GitHub Release. Вся build-логика остаётся в Makefile — workflow её
-# только воспроизводит на раннере, не дублирует.
+# Release Soul Stack. Automates the manual release flow (P0 release
+# engineering, docs/prod-readiness.md): `make build` + `make pkg` + `make sbom`
+# and publishing artifacts to GitHub Release. All build logic stays in the
+# Makefile — the workflow only reproduces it on the runner, no duplication.
 #
-# ЭКОНОМИЯ GH-минут (лимит 2k/мес): workflow гонится ИСКЛЮЧИТЕЛЬНО на push тега
-# `v*` — релизы редки. На обычный push в ветку/PR он не запускается (это зона
-# ci.yml). Один тег = один прогон.
+# GH-MINUTE SAVINGS (2k/month limit): the workflow runs EXCLUSIVELY on push of
+# a `v*` tag — releases are rare. On a regular push to a branch/PR it does not
+# run (that's ci.yml's job). One tag = one run.
 name: Release
 
-# Только tag-push `v*`. Не реагирует на ветки/PR. На уже существующий тег
-# (например v0.1.0-beta.1) НЕ сработает — триггер ловит push НОВОГО тега.
+# Only tag-push `v*`. Does not react to branches/PRs. Will NOT fire on an
+# already-existing tag (e.g. v0.1.0-beta.1) — the trigger catches a push of a
+# NEW tag.
 on:
   push:
     tags:
       - "v*"
 
-# Нужны права на запись в Releases (создание релиза + загрузка ассетов).
-# Остальное — read.
+# Needs write permission for Releases (create release + upload assets).
+# Everything else — read.
 permissions:
   contents: write
 
 env:
-  # Версия Go из go.work (toolchain 1.26.4), синхронно с ci.yml.
+  # Go version from go.work (toolchain 1.26.4), synced with ci.yml.
   GO_VERSION: "1.26.4"
 
 jobs:
@@ -32,9 +33,9 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v6
         with:
-          # Полная история + теги: VERSION в Makefile берётся из
-          # `git describe --tags`. Без fetch-depth: 0 и тегов describe вернёт
-          # короткий sha вместо имени тега.
+          # Full history + tags: VERSION in the Makefile comes from
+          # `git describe --tags`. Without fetch-depth: 0 and tags, describe
+          # would return the short sha instead of the tag name.
           fetch-depth: 0
 
       - name: Setup Go
@@ -51,8 +52,8 @@ jobs:
             soul-lint/go.sum
             soulctl/go.sum
 
-      # Упаковщики, которых нет в PATH раннера. Те же команды, что печатает
-      # Makefile в подсказке при их отсутствии (pkg/sbom-таргеты).
+      # Packagers not present in the runner's PATH. Same commands the
+      # Makefile prints as a hint when they're missing (pkg/sbom targets).
       - name: Install nfpm + cyclonedx-gomod
         run: |
           set -euo pipefail
@@ -60,9 +61,9 @@ jobs:
           go install github.com/CycloneDX/cyclonedx-gomod/cmd/cyclonedx-gomod@latest
           echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
 
-      # Бинари (нативно linux-amd64 на ubuntu-latest), затем deb+rpm и SBOM.
-      # VERSION внутри каждого таргета выводится из git describe (тег) — как при
-      # ручном релизе, отдельно прокидывать не нужно.
+      # Binaries (natively linux-amd64 on ubuntu-latest), then deb+rpm and SBOM.
+      # VERSION inside each target is derived from git describe (tag) — same
+      # as in a manual release, no need to pass it separately.
       - name: make build
         run: make build
 
@@ -72,10 +73,11 @@ jobs:
       - name: make sbom
         run: make sbom
 
-      # `make build` кладёт бинари в <module>/bin/<name> без arch-суффикса.
-      # Раскладываем их в dist/release-assets/ с *-linux-amd64-именами для
-      # релиза (раннер = linux-amd64, бинари из `make build` именно такие).
-      # soul-trial из build НЕ публикуется (внутренний trial-харнесс).
+      # `make build` puts binaries into <module>/bin/<name> without an
+      # arch suffix. We lay them out into dist/release-assets/ with
+      # *-linux-amd64 names for the release (runner = linux-amd64, and
+      # binaries from `make build` are exactly that). soul-trial from build
+      # is NOT published (internal trial harness).
       - name: Stage release binaries
         run: |
           set -euo pipefail
@@ -86,9 +88,9 @@ jobs:
           cp soulctl/bin/soulctl      dist/release-assets/soulctl-linux-amd64
           ls -l dist/release-assets dist/pkg dist/sbom
 
-      # Prerelease для пред-релизных тегов: имя содержит `-beta` или `-rc`
-      # (например v0.1.0-beta.1, v1.2.0-rc.1). Стабильный тег (v1.2.0) → обычный
-      # релиз. softprops/action-gh-release принимает prerelease как boolean-строку.
+      # Prerelease for pre-release tags: the name contains `-beta` or `-rc`
+      # (e.g. v0.1.0-beta.1, v1.2.0-rc.1). A stable tag (v1.2.0) → a regular
+      # release. softprops/action-gh-release accepts prerelease as a boolean string.
       - name: Determine prerelease flag
         id: prerelease
         run: |
@@ -103,8 +105,8 @@ jobs:
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          # Тег и имя релиза = пушнутый тег. Тело генерируется автоматически из
-          # коммитов между тегами.
+          # Tag and release name = the pushed tag. Body is generated
+          # automatically from commits between tags.
           generate_release_notes: true
           prerelease: ${{ steps.prerelease.outputs.value }}
           files: |
@@ -116,7 +118,7 @@ jobs:
             dist/pkg/*.rpm
             dist/sbom/*.cdx.json
 
-# TODO (P0-остаток): docker build+push в registry + cosign keyless-подпись
-# образов — после выбора registry; см. docs/prod-readiness.md. Здесь добавятся
-# шаги docker/login-action + docker/build-push-action + sigstore/cosign-installer
-# (cosign sign --yes <image>@<digest>, keyless через OIDC-токен этого workflow).
+# TODO (P0 remainder): docker build+push to registry + cosign keyless signing
+# of images — after choosing a registry; see docs/prod-readiness.md. Steps to
+# add here: docker/login-action + docker/build-push-action + sigstore/cosign-installer
+# (cosign sign --yes <image>@<digest>, keyless via this workflow's OIDC token).

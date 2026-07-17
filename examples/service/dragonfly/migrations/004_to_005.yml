@@ -2,20 +2,20 @@ from_version: 4
 to_version: 5
 
 description: >-
-  state_schema v4 → v5: обязательный мониторинг data-плоскости (Слайс II, ADR-024).
-  state ДОПОЛНЯЕТСЯ read-model-объектом monitoring — зафиксированные версия и listen-порт
-  экспортера метрик хоста (node_exporter), развёрнутого create-прогоном (симметрия install/tls
-  read-model). ★ node-exporter-ONLY: DragonFly отдаёт СВОИ метрики нативно (встроенный
-  prometheus-эндпоинт) → data-plane exporter (аналог redis_exporter) НЕ ставится, поля под него
-  в monitoring нет.
+  state_schema v4 -> v5: mandatory data-plane monitoring (Slice II, ADR-024).
+  state is AUGMENTED with the monitoring read-model object — the pinned version and
+  listen port of the host metrics exporter (node_exporter), deployed by the create run (mirrors
+  the install/tls read-model). * node-exporter-ONLY: DragonFly exposes ITS OWN metrics natively
+  (built-in prometheus endpoint) -> a data-plane exporter (analogous to redis_exporter) is NOT
+  installed, so there's no field for it in monitoring.
 
-  Forward-only (down: не поддерживается; восстановление — через state_history). Существующие
-  v4-инкарнации развёрнуты ДО ввода мониторинга (экспортера ещё нет) → консервативный default:
-  версия пустая ('' = «не развёрнуто», best-effort как memory_mb), порт — конвенциональный :9100
-  (стандартный listen node_exporter; следующий create перезапишет значением из essence). ОДИН
-  плоский set с has()-guard на ВЕСЬ объект (CEL-map-литерал-дефолт): monitoring уже есть →
-  сохраняется как есть (идемпотентность повторного прогона), иначе ставится default. Зеркало
-  redis 012_to_013 (объект-guard). Остальной state НЕ трогается.
+  Forward-only (down: not supported; recovery — via state_history). Existing
+  v4 incarnations were deployed BEFORE monitoring was introduced (no exporter yet) -> conservative
+  default: an empty version ('' = "not deployed", best-effort like memory_mb), the port — the
+  conventional :9100 (node_exporter's standard listen; the next create will overwrite it with the
+  value from essence). ONE flat set with a has()-guard on the WHOLE object (CEL map-literal
+  default): monitoring already present -> kept as-is (idempotent on reruns), otherwise the
+  default is set. Mirrors redis 012_to_013 (object-guard). The rest of state is untouched.
 
 transform:
   - set:

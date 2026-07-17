@@ -1,23 +1,23 @@
 name: create
-# create: true — стартовый сценарий (Фаза 2: create-набор = РОВНО {scenario с флагом}).
+# create: true — starting scenario (Phase 2: create-set = EXACTLY {scenario with the flag}).
 create: true
 description: >-
-  Staged-render probe→where на реальном soul-флоте (ADR-056 §S5, L3b capstone).
-  Passage 0: probe роли каждого хоста (core.cmd.shell printf master|slave по
-  hostname) → register: role. Passage 1: core.file.present создаёт маркер-файл
-  ТОЛЬКО там, где register.role.stdout == 'master' — keeper стратифицирует
-  потребителя в Passage строго ПОСЛЕ probe (N=2) и резолвит where свежим
-  per-host register, собранным барьером Passage 0.
+  Staged-render probe→where on a real soul fleet (ADR-056 §S5, L3b capstone).
+  Passage 0: probe each host's role (core.cmd.shell printf master|slave based on
+  hostname) → register: role. Passage 1: core.file.present creates a marker file
+  ONLY where register.role.stdout == 'master' — keeper stratifies the
+  consumer into a Passage strictly AFTER probe (N=2) and resolves where with a fresh
+  per-host register, collected by the Passage 0 barrier.
 
-# Фокус-сценарий: state не меняется (commit state — отдельный инвариант).
+# Focus scenario: state does not change (commit state is a separate invariant).
 state_changes: {}
 
 tasks:
-  # ── Passage 0: probe роли per-host ───────────────────────────────────────
-  # printf (НЕ echo) — без trailing newline, иначе register.role.stdout был бы
-  # "master\n" и where: == 'master' не сматчился бы (cmd-модуль stdout НЕ тримит).
-  # Hostname контейнера = SID (SpawnSoulContainer Hostname:sid), поэтому роль
-  # детерминирована по хосту: soul-live-a → master, остальные → slave.
+  # ── Passage 0: probe per-host role ───────────────────────────────────────
+  # printf (NOT echo) — no trailing newline, otherwise register.role.stdout would be
+  # "master\n" and where: == 'master' would not match (the cmd module stdout is NOT trimmed).
+  # Container hostname = SID (SpawnSoulContainer Hostname:sid), so the role is
+  # deterministic by host: soul-live-a → master, the rest → slave.
   - name: Probe role per host
     module: core.cmd.shell
     register: role
@@ -26,11 +26,11 @@ tasks:
       cmd: |
         if [ "$(hostname)" = "soul-live-a.example.com" ]; then printf master; else printf slave; fi
 
-  # ── Passage 1: действие ТОЛЬКО на master по СВЕЖЕМУ register ──────────────
-  # where: register.role.stdout — keeper стратифицирует эту задачу в Passage 1
-  # (строго после probe Passage 0) и резолвит where собранным per-host register.
-  # Маркер-файл — наблюдаемое доказательство targeting-а (AssertHostFileExists
-  # на master, отсутствие на slave).
+  # ── Passage 1: action ONLY on master via the FRESH register ──────────────
+  # where: register.role.stdout — keeper stratifies this task into Passage 1
+  # (strictly after probe Passage 0) and resolves where with the collected per-host register.
+  # Marker file — observable proof of targeting (AssertHostFileExists
+  # on master, absence on slave).
   - name: Mark the master host
     module: core.file.present
     where: "register.role.stdout == 'master'"

@@ -1,41 +1,41 @@
-# L0-испытание (Trial, ADR-023) сценария create сервиса pilot-destiny.
+# L0 trial (Trial, ADR-023) of the create scenario of the pilot-destiny service.
 #
-# Render-only, герметично. Демонстрирует слайс A (apply:destiny, V2 ADR-009):
-#   - apply:destiny раскрывается изолированным render-проходом destiny pilot-flat;
-#   - две задачи destiny вклеиваются в общий план со сквозными индексами 0,1;
-#   - destiny видит ТОЛЬКО свой input: (marker_file/marker_payload приходят из
-#     apply.input; scenario input.path/content в destiny-env НЕ попадают);
-#   - marker_mode не передан в apply.input → добран из default destiny (0644).
+# Render-only, hermetic. Demonstrates slice A (apply:destiny, V2 ADR-009):
+#   - apply:destiny expands into an isolated render pass of the pilot-flat destiny;
+#   - two destiny tasks are spliced into the shared plan with through-indices 0,1;
+#   - destiny sees ONLY its own input: (marker_file/marker_payload come from
+#     apply.input; scenario input.path/content don't make it into the destiny-env);
+#   - marker_mode isn't passed in apply.input → picked up from the destiny default (0644).
 #
-# destiny pilot-flat лежит ВНУТРИ сервиса (pilot-flat/). apply:destiny
-# резолвится зеркалом прода (slice A, ADR-023): pilot-flat объявлена в
-# service.yml::destiny[], URL — из default_destiny_source ниже. Здесь destiny
-# в том же каталоге, что сервис, поэтому шаблон без `../` (file://{name}
-# относительно service-root).
+# The pilot-flat destiny lives INSIDE the service (pilot-flat/). apply:destiny
+# resolves via a mirror of the production path (slice A, ADR-023): pilot-flat is declared
+# in service.yml::destiny[], the URL is from default_destiny_source below. Here the destiny
+# is in the same directory as the service, so the template has no `../` (file://{name}
+# relative to service-root).
 name: create delegates marker placement to pilot-flat destiny
 
-# scenario-input оператора. apply.input резолвит из него marker_file/marker_payload.
+# operator's scenario-input. apply.input resolves marker_file/marker_payload from it.
 fixtures:
   default_destiny_source: "file://{name}"
   input:
     path:    /etc/pilot/marker.txt
     content: "pilot ok"
 
-# Presence-форма (миграция 2026-06-24): две задачи destiny, оба модуля уникальны
-# в плане. Изоляция видна по тому, что params собраны из apply.input (marker_*), а
-# scenario input.path попал туда только потому, что scenario явно прокинул его
-# через apply.input.
+# Presence form (migration 2026-06-24): two destiny tasks, both modules unique
+# in the plan. Isolation is visible from params being assembled from apply.input (marker_*), while
+# scenario input.path made it there only because the scenario explicitly passed it through
+# apply.input.
 assert:
   task_present:
-    # core.file.present: content из apply.input (scenario input.content),
-    # mode добран из default destiny (0644) — apply.input его не передавал.
+    # core.file.present: content from apply.input (scenario input.content),
+    # mode picked up from the destiny default (0644) — apply.input didn't pass it.
     - module: core.file.present
       params_subset:
         path:    /etc/pilot/marker.txt
         content: "pilot ok"
         mode:    "0644"
 
-    # core.exec.run: argv несёт marker_file из apply.input в последнем элементе.
+    # core.exec.run: argv carries marker_file from apply.input in the last element.
     - module: core.exec.run
       params_subset:
         cmd: echo

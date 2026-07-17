@@ -1,9 +1,9 @@
-# L0-испытание create — persistence: rdb_aof_always. Пресет essence.persistence_presets
+# L0 test for create — persistence: rdb_aof_always. Preset essence.persistence_presets
 # [rdb_aof_always] = {save:"900 1 300 10 60 10000", appendonly:"yes", appendfsync:"always"}
-# — RDB-снапшоты + AOF с fsync на КАЖДУЮ запись (максимум durability обоих движков).
-# Кейс держит инвариант «rdb_aof_always → appendfsync:always + appendonly:yes + НЕпустой
-# save в redis.conf И state». Отличие от aof_always — НЕпустой save (RDB остаётся).
-# Режим sentinel single-host (1 master + 0 реплик).
+# — RDB snapshots + AOF with fsync on EVERY write (maximum durability of both engines).
+# The case holds the invariant "rdb_aof_always → appendfsync:always + appendonly:yes + non-empty
+# save in redis.conf AND state". Difference from aof_always — non-empty save (RDB stays).
+# Sentinel single-host mode (1 master + 0 replicas).
 name: persistence rdb_aof_always merges appendfsync always plus rdb save into config and state
 
 fixtures:
@@ -17,8 +17,8 @@ fixtures:
   vault:
     secret/redis/create:
       password: s3cr3t-redis-pass-create
-    # ★ РЕДИЗАЙН default_admin (2026-06-30): default_admin — системный юзер
-    # внутрикластерного AUTH (auth_pass/PING шаги деплоя читают его по ветке users/<name>).
+    # ★ REDESIGN default_admin (2026-06-30): default_admin is the system user
+    # for intra-cluster AUTH (auth_pass/PING deploy steps read it via the users/<name> branch).
     secret/redis/create/users/default_admin:
       password: default-admin-secret-pass
     secret/redis/create/users/replica:
@@ -30,8 +30,8 @@ fixtures:
     secret/redis/create/users/haproxy:
       password: haproxy-sys-secret-pass
   essence:
-    # install_method — в essence (author-context, 2026-06-28): способ установки
-    # НЕ operator-input. compute.install читает default(essence.install_method, 'binary').
+    # install_method — in essence (author-context, 2026-06-28): the install method
+    # is NOT operator-input. compute.install reads default(essence.install_method, 'binary').
     install_method: package
     redis_type: sentinel
     sentinel_master_name: master
@@ -59,14 +59,14 @@ fixtures:
       sentinel:   "allchannels -@all +auth +client|getname +client|id +client|setname +command +hello +ping +sentinel|is-master-down-by-addr +publish +role +sentinel|get-master-addr-by-name +sentinel|master +sentinel|myid +sentinel|replicas +sentinel|sentinels"
       haproxy:    "-@all +auth +client|getname +client|id +client|setname +command +hello +ping +role +sentinel|get-master-addr-by-name +sentinel|master +sentinel|myid +sentinel|replicas +sentinel|sentinels"
   input:
-    # ★ provision выключен (default-on: опущенная секция = ВКЛЮЧЕНО; кейс деплоит на
-    # ГОТОВЫЙ roster, cloud-create не нужен) → include redis-provision.yml group-drop.
+    # ★ provision disabled (default-on: an omitted section = ENABLED; the case deploys onto a
+    # READY roster, cloud-create is not needed) → include redis-provision.yml group-drop.
     provision:
       enabled: false
     redis_type: sentinel
     version: "7.4.1"
     replicas_per_master: 0
-    # rdb_aof_always: RDB-снапшоты + AOF с appendfsync:always.
+    # rdb_aof_always: RDB snapshots + AOF with appendfsync:always.
     persistence: rdb_aof_always
 
 assert:
@@ -78,7 +78,7 @@ assert:
   state_changes:
     redis_type: sentinel
     redis_version: "7.4.1"
-    # Пресет rdb_aof_always влит ЦЕЛИКОМ: НЕпустой save (RDB), appendonly:yes,
+    # Preset rdb_aof_always is merged IN FULL: non-empty save (RDB), appendonly:yes,
     # appendfsync:always.
     redis_config:
       maxmemory: "256mb"

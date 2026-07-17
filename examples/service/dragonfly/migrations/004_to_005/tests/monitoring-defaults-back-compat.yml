@@ -1,10 +1,10 @@
 name: monitoring-defaults-back-compat
 description: >
-  Инкарнация v4 развёрнута ДО ввода мониторинга — поля monitoring в state нет. Миграция
-  ДОБАВЛЯЕТ read-model monitoring с консервативным default: версия пустая ('' = не развёрнуто),
-  порт — конвенциональный :9100. ★ node-exporter-ONLY: redis_exporter-полей нет (DragonFly отдаёт
-  метрики нативно). Остальной state (df_version/df_config/df_users/tls/топология/provision)
-  проходит насквозь бит-в-бит. Зеркало redis 012_to_013 monitoring-defaults-back-compat.
+  Incarnation v4 was deployed BEFORE monitoring was introduced — there is no monitoring field
+  in state. The migration ADDS a monitoring read-model with a conservative default: empty version
+  ('' = not deployed), port — the conventional :9100. ★ node-exporter-ONLY: no redis_exporter
+  fields (DragonFly reports metrics natively). The rest of the state (df_version/df_config/df_users/
+  tls/topology/provision) passes through bit-for-bit. Mirrors redis 012_to_013 monitoring-defaults-back-compat.
 
 state_before:
   df_version: "1.39.0"

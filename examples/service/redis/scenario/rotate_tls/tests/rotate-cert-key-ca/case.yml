@@ -1,40 +1,44 @@
-# L0-испытание rotate_tls: ротация TLS-материала БЕЗ рестарта. Оператор задаёт
-# НОВЫЕ Vault-refs cert/key/ca; сценарий перерендеривает PEM в ${conf_dir}/tls/ из
-# новых refs и шлёт три CONFIG SET tls-*-file через community.redis.command под
-# onchanges-гейтом (Redis 6.2+ пересоздаёт SSL_CTX и перечитывает live). Render-only,
-# герметично. Инстанс УЖЕ на TLS (state.tls.enable=true; rotate только для TLS).
+# L0 test for rotate_tls: TLS material rotation WITHOUT a restart. The operator supplies
+# NEW Vault refs cert/key/ca; the scenario re-renders PEM into ${conf_dir}/tls/ from the
+# new refs and sends three CONFIG SET tls-*-file via community.redis.command under an
+# onchanges gate (Redis 6.2+ recreates SSL_CTX and re-reads live). Render-only,
+# hermetic. The instance is ALREADY on TLS (state.tls.enable=true; rotate is TLS-only).
 #
-# Что ассертим:
-#   1. PEM перерендерены (core.file.present, path-дизамбигуатор): redis.crt/redis.key/
-#      ca.crt в /etc/redis/tls/, content = vault(НОВЫЙ ref), mode 0600 owner redis.
-#   1b. ★ users.acl ре-рендерен с долитыми системными (core.file.rendered): тот же
-#      destiny redis кирпич рендерит и users.acl → системные из essence.system_acl_users
-#      (default_admin/replica/monitoring/sentinel/haproxy) долиты ПЕРВЫМИ; без доливки
-#      rotate_tls СТЁР БЫ их (apply.input.password убран — requirepass больше нет).
-#   2. applier-register tls_certs МАТЕРИАЛИЗОВАН: движок эмитит терминальную
-#      core.noop.run(register=tls_certs) после дочерних destiny-задач (id-дизамбигуатор
-#      tls_certs). Это якорь onchanges-гейта — без него onchanges:[tls_certs] падал бы
-#      ErrOnChangesUnknownRegister (был обход force changed:true до 52b16ed).
-#   3. reload re-read (три community.redis.command): addr 127.0.0.1:7379 (TLS-порт),
-#      ★ username=default_admin + его пароль (коннект под системным default_admin,
-#      requirepass убран), tls=true, tls_ca = BUNDLE старого+нового CA (CA-rollover), args = CONFIG SET tls-cert-file/
-#      tls-key-file/tls-ca-cert-file на пути в ${conf_dir}/tls/. Args-дизамбигуатор
-#      присутствует; changed=true (force) БОЛЬШЕ НЕ должен стоять — task_absent ловит
-#      регресс обратно на force-форму (см. ниже).
-#   4. state_changes: state.tls несёт НОВЫЕ refs (cert/key/ca), enable/only/port
-#      сохранены.
+# What we assert:
+#   1. PEM re-rendered (core.file.present, path disambiguator): redis.crt/redis.key/
+#      ca.crt in /etc/redis/tls/, content = vault(NEW ref), mode 0600 owner redis.
+#   1b. ★ users.acl re-rendered with the system users merged in (core.file.rendered): the
+#      same destiny redis brick renders users.acl too → system users from
+#      essence.system_acl_users (default_admin/replica/monitoring/sentinel/haproxy) are
+#      merged in FIRST; without merging them in rotate_tls would WIPE THEM OUT
+#      (apply.input.password removed: requirepass no longer exists).
+#   2. the applier-register tls_certs is MATERIALIZED: the engine emits a terminal
+#      core.noop.run(register=tls_certs) after the child destiny tasks (id disambiguator
+#      tls_certs). This is the onchanges-gate anchor; without it onchanges:[tls_certs]
+#      would fail with ErrOnChangesUnknownRegister (there was a force changed:true
+#      workaround before 52b16ed).
+#   3. the reload re-read (three community.redis.command): addr 127.0.0.1:7379 (TLS port),
+#      ★ username=default_admin + its password (connect as the system default_admin,
+#      requirepass dropped), tls=true, tls_ca = a BUNDLE of the old+new CA (CA rollover),
+#      args = CONFIG SET tls-cert-file/tls-key-file/tls-ca-cert-file on paths under
+#      ${conf_dir}/tls/. The args disambiguator is present; changed=true (force) must NO
+#      LONGER be set: task_absent catches a regression back to the force form (see
+#      below).
+#   4. state_changes: state.tls carries the NEW refs (cert/key/ca), enable/only/port
+#      are preserved.
 #
-# ★ ИДЕМПОТЕНТНОСТЬ (guard-инвариант). reload гейтится onchanges:[tls_certs] вместо
-# force changed:true: re-read SSL_CTX срабатывает ТОЛЬКО когда PEM реально сменился
-# (новый ref → новый content → core.file.present changed → агрегат tls_certs.changed →
-# onchanges satisfied), повторный прогон с тем же материалом → агрегат changed=false →
-# три CONFIG SET skipped → no-op. L0 (render-only) НЕ исполняет onchanges-gating — это
-# Soul-side runtime (агрегат OR + skip по onchanges_idx покрыт guard-тестами в 52b16ed:
-# soul/internal/runtime/applier_register_test.go). На render-уровне L0 доказывает
-# СТРУКТУРНУЮ предпосылку идемпотентности: (а) якорь tls_certs существует как
-# core.noop.run, (б) force changed:true с reload-задач УБРАН (task_absent). Сам факт
-# «changed→reload / без смены→skipped» от связки onchanges_idx + register-агрегат на
-# Soul, который L0-харнесс не симулирует (probe-per-host = dispatch-слой L3).
+# ★ IDEMPOTENCY (guard invariant). reload is gated by onchanges:[tls_certs] instead of
+# force changed:true: the SSL_CTX re-read fires ONLY when the PEM actually changed (a
+# new ref → new content → core.file.present changed → the tls_certs aggregate changed
+# → onchanges satisfied); a re-run with the same material → the aggregate changed=false
+# → all three CONFIG SET are skipped → no-op. L0 (render-only) does NOT exercise
+# onchanges-gating: that's Soul-side runtime (the OR aggregate + skip by onchanges_idx
+# is covered by guard tests in 52b16ed: soul/internal/runtime/applier_register_test.go).
+# At the render level, L0 proves the STRUCTURAL precondition for idempotency: (a) the
+# tls_certs anchor exists as core.noop.run, (b) force changed:true was REMOVED from the
+# reload tasks (task_absent). The actual "changed→reload / unchanged→skipped" behavior
+# comes from the onchanges_idx + register-aggregate pairing on Soul, which the L0
+# harness does not simulate (per-host probing = the L3 dispatch layer).
 name: rotate_tls re-renders PEM from new refs and re-reads via onchanges-gated CONFIG SET
 
 fixtures:
@@ -43,11 +47,13 @@ fixtures:
     network: { primary_ip: 10.0.0.5 }
     os: { arch: amd64 }
 
-  # ★ РЕДИЗАЙН default_admin: системные ACL-юзера доливаются в users.acl при ре-рендере
-  # (destiny redis перерендеривает и users.acl). rotate_tls долит их из essence ПЕРВЫМИ
-  # (как деплой-тело) — без них ре-рендер СТЁР БЫ системных из users.acl.
-  # host-layout (conf_dir/data_dir/modules_base_url) — в essence (v11→v12, Вариант A):
-  # вынесен из state, rotate_tls читает отсюда (conf_dir задаёт путь PEM/tls-*-file).
+  # ★ default_admin REDESIGN: system ACL users are merged into users.acl on re-render
+  # (destiny redis re-renders users.acl too). rotate_tls merges them in from essence
+  # FIRST (like the deploy bodies); without them the re-render would WIPE OUT the
+  # system users from users.acl.
+  # host-layout (conf_dir/data_dir/modules_base_url) lives in essence (v11→v12,
+  # Variant A): moved out of state, rotate_tls reads it from there (conf_dir sets the
+  # PEM/tls-*-file path).
   essence:
     conf_dir: /etc/redis
     data_dir: /var/lib/redis
@@ -59,16 +65,17 @@ fixtures:
       sentinel:   "allchannels +multi +slaveof +ping +exec +subscribe +config|rewrite +role +publish +info +client|setname +client|kill +script|kill"
       haproxy:    "-@all +auth +client|getname +client|id +client|setname +command +hello +ping +role +info +cluster|info"
 
-  # Развёрнутый incarnation.state v3 с ВКЛЮЧЁННЫМ TLS (rotate-предусловие). Текущие refs
-  # — СТАРЫЕ (state.tls.*_ref); input даёт новые.
+  # Expanded incarnation.state v3 with TLS ENABLED (rotate precondition). The current
+  # refs are the OLD ones (state.tls.*_ref); input supplies the new ones.
   #
-  # ★ Кейс CA-ROLLOVER: input.ca_ref (tls-v2#ca → NEWCA) ≠ state.tls.ca_ref (tls#ca →
-  # CACERT), поэтому compute.tls_ca = BUNDLE старого+нового CA (CACERT-блок + '\n' +
-  # NEWCA-блок). Три CONFIG SET tls-*-file = три ОТДЕЛЬНЫХ реконнекта, straddle-ящих
-  # подмену серверного cert (tls-cert-file заставит redis отдать новый cert со следующего
-  # реконнекта) → trust-store обязан доверять ОБОИМ CA, иначе реконнект после подмены
-  # упрётся в unknown authority. Новый ca_ref рендерится в файл для Redis и фиксируется в
-  # state_changes (на СЛЕДУЮЩИХ прогонах rollover завершён → одиночный новый CA).
+  # ★ CA-ROLLOVER case: input.ca_ref (tls-v2#ca → NEWCA) ≠ state.tls.ca_ref (tls#ca →
+  # CACERT), so compute.tls_ca = a BUNDLE of the old+new CA (the CACERT block + '\n' +
+  # the NEWCA block). The three CONFIG SET tls-*-file calls are three SEPARATE
+  # reconnects straddling the server cert swap (tls-cert-file makes redis hand out the
+  # new cert starting with the next reconnect) → the trust store must trust BOTH CAs,
+  # otherwise a reconnect after the swap hits unknown authority. The new ca_ref is
+  # rendered to the file for Redis and recorded in state_changes (on SUBSEQUENT runs
+  # the rollover is complete → a single new CA).
   state:
     redis_type: sentinel
     redis_version: "7.2.4"
@@ -92,7 +99,7 @@ fixtures:
     redis_users: []
 
   input:
-    # Новые refs (ротация всех трёх).
+    # New refs (rotating all three).
     cert_ref: "secret/services/redis/tls-v2#cert"
     key_ref:  "secret/services/redis/tls-v2#key"
     ca_ref:   "secret/services/redis/tls-v2#ca"
@@ -100,9 +107,9 @@ fixtures:
   vault:
     secret/redis/rotate_tls:
       password: rot-redis-pass-16chars
-    # ★ РЕДИЗАЙН default_admin: коннект CONFIG SET идёт под default_admin (requirepass убран);
-    # системные юзера доливаются в users.acl при ре-рендере → их пароли в Vault той же ветки
-    # secret/redis/<inc>/users/<name>#password.
+    # ★ default_admin REDESIGN: the CONFIG SET connect runs as default_admin (requirepass
+    # dropped); system users are merged into users.acl on re-render → their passwords
+    # live in Vault under the same secret/redis/<inc>/users/<name>#password branch.
     secret/redis/rotate_tls/users/default_admin:
       password: default-admin-secret-pass
     secret/redis/rotate_tls/users/replica:
@@ -113,10 +120,10 @@ fixtures:
       password: sentinel-sys-secret-pass
     secret/redis/rotate_tls/users/haproxy:
       password: haproxy-sys-secret-pass
-    # CA коннекта (state.tls.ca_ref pre-run, tls#ca) — текущее доверие на этом прогоне.
+    # Connect CA (state.tls.ca_ref pre-run, tls#ca): the current trust on this run.
     secret/services/redis/tls:
       ca: "-----BEGIN CERTIFICATE-----\nCACERT\n-----END CERTIFICATE-----"
-    # НОВЫЙ TLS-материал (по input refs) — рендерится в файлы для Redis.
+    # NEW TLS material (per the input refs), rendered into files for Redis.
     secret/services/redis/tls-v2:
       cert: "-----BEGIN CERTIFICATE-----\nNEWCERT\n-----END CERTIFICATE-----"
       key:  "-----BEGIN PRIVATE KEY-----\nNEWKEY\n-----END PRIVATE KEY-----"
@@ -124,7 +131,7 @@ fixtures:
 
 assert:
   task_present:
-    # 1. PEM перерендерены из НОВЫХ refs (content = новый PEM). Дизамбигуатор — path.
+    # 1. PEM re-rendered from the NEW refs (content = new PEM). Disambiguator: path.
     - module: core.file.present
       params_subset:
         path: /etc/redis/tls/redis.crt
@@ -147,11 +154,13 @@ assert:
         owner: redis
         group: redis
 
-    # 1b. ★ РЕДИЗАЙН default_admin: ре-рендер ОБЯЗАН долить системных в users.acl (тот же
-    #     destiny redis кирпич, что рендерит PEM). Системные из essence.system_acl_users
-    #     ПЕРВЫМИ (default_admin/replica/monitoring/sentinel/haproxy), operator-extra из
-    #     state.redis_users ПОВЕРХ (здесь пуст → только системные). Пароли — vault() ветки
-    #     users/<name>. Без доливки rotate_tls СТЁР БЫ системных. Дизамбигуатор — path.
+    # 1b. ★ default_admin REDESIGN: the re-render MUST merge in the system users into
+    #     users.acl (the same destiny redis brick that renders the PEM). System users
+    #     from essence.system_acl_users go FIRST (default_admin/replica/monitoring/
+    #     sentinel/haproxy), operator-extra from state.redis_users ON TOP (empty here
+    #     → system users only). Passwords come from the vault() users/<name> branch.
+    #     Without merging them in, rotate_tls would WIPE OUT the system users.
+    #     Disambiguator: path.
     - module: core.file.rendered
       params_subset:
         path: /etc/redis/users.acl
@@ -195,14 +204,16 @@ assert:
           role: ""
           essence: {}
 
-    # 1c. ★ GUARD replica→master AUTH: rotate_tls перерендеривает ВЕСЬ кирпич destiny redis
-    #     (вкл. redis.conf), поэтому config-map ОБЯЗАН нести masteruser/masterauth — иначе
-    #     redis.conf на диске потерял бы статическую replica→master AUTH и после рестарта
-    #     реплики PSYNC упёрся бы в NOAUTH (master_link_status:DOWN). Долив симметричен
-    #     add_user/update_users (merge(state.redis_config, {masteruser, masterauth})).
-    #     БЕЗ долива этот assert РВЁТСЯ (config-map не содержал бы masteruser/masterauth) —
-    #     ловит регресс «rotate теряет masterauth». render_context сверяется целиком
-    #     (reflect.DeepEqual): config = state.redis_config + долитая AUTH-пара.
+    # 1c. ★ GUARD for replica→master AUTH: rotate_tls re-renders the ENTIRE destiny
+    #     redis brick (incl. redis.conf), so the config map MUST carry
+    #     masteruser/masterauth, otherwise redis.conf on disk would lose the static
+    #     replica→master AUTH and after a restart replica PSYNC would hit NOAUTH
+    #     (master_link_status:DOWN). The merge is symmetric with add_user/update_users
+    #     (merge(state.redis_config, {masteruser, masterauth})). WITHOUT the merge this
+    #     assert BREAKS (the config map wouldn't contain masteruser/masterauth):
+    #     catching a "rotate loses masterauth" regression. render_context is compared
+    #     as a whole (reflect.DeepEqual): config = state.redis_config + the merged-in
+    #     AUTH pair.
     - module: core.file.rendered
       params_subset:
         path: /etc/redis/redis.conf
@@ -243,18 +254,21 @@ assert:
           role: ""
           essence: {}
 
-    # 2. APPLIER-REGISTER МАТЕРИАЛИЗОВАН: терминальная core.noop.run(register=tls_certs)
-    #    — якорь onchanges-гейта (id-дизамбигуатор; register∪id, см. ExpectedTask.ID).
-    #    Эмитится движком ПОСЛЕ дочерних destiny-задач apply-шага, агрегирует OR(changed).
-    #    Без этого узла onchanges:[tls_certs] не резолвился бы (ErrOnChangesUnknownRegister)
-    #    — это и был мотив старого force-обхода (52b16ed снял ограничение).
+    # 2. APPLIER-REGISTER MATERIALIZED: a terminal core.noop.run(register=tls_certs):
+    #    the onchanges-gate anchor (id disambiguator; register∪id, see
+    #    ExpectedTask.ID). Emitted by the engine AFTER the child destiny tasks of the
+    #    apply step, aggregating OR(changed). Without this node, onchanges:[tls_certs]
+    #    would not resolve (ErrOnChangesUnknownRegister); this was the motive for the
+    #    old force-workaround (52b16ed lifted the restriction).
     - module: core.noop.run
       id: tls_certs
 
-    # 3. RE-READ ПОД onchanges-ГЕЙТОМ: три community.redis.command (CONFIG SET tls-*-file),
-    #    addr на tls-порт, tls=true, tls_ca = BUNDLE старого+нового CA (rollover), args на пути в /etc/redis/tls/.
-    #    changed=true (force) УБРАН — гейтинг теперь onchanges:[tls_certs] (см. task_absent
-    #    ниже: регресс обратно на force ловится). Args — дизамбигуатор трёх вызовов.
+    # 3. RE-READ UNDER THE onchanges GATE: three community.redis.command calls (CONFIG
+    #    SET tls-*-file), addr on the tls port, tls=true, tls_ca = a BUNDLE of the
+    #    old+new CA (rollover), args on paths under /etc/redis/tls/. changed=true
+    #    (force) REMOVED; gating is now onchanges:[tls_certs] (see task_absent below:
+    #    a regression back to force is caught). Args is the disambiguator across the
+    #    three calls.
     - module: community.redis.command
       params_subset:
         addr: "127.0.0.1:7379"
@@ -280,11 +294,12 @@ assert:
         tls_ca: "-----BEGIN CERTIFICATE-----\nCACERT\n-----END CERTIFICATE-----\n-----BEGIN CERTIFICATE-----\nNEWCA\n-----END CERTIFICATE-----"
         args: ["CONFIG", "SET", "tls-ca-cert-file", "/etc/redis/tls/ca.crt"]
 
-  # ★ GUARD идемпотентности (render-уровень): force changed:true с reload-задач УБРАН.
-  #    Любая community.redis.command CONFIG SET-tls с changed:true → регресс обратно на
-  #    неидемпотентный force-путь (re-read на КАЖДЫЙ прогон, минуя onchanges). task_absent
-  #    ловит его: ≥1 совпадение → fail. Покрыты ВСЕ ТРИ reload-задачи (cert/key/ca) — иначе
-  #    частичный регресс force на одной из них прошёл бы незамеченным. Args-дизамбигуатор.
+  # ★ Idempotency GUARD (render level): force changed:true was REMOVED from the reload
+  #    tasks. Any community.redis.command CONFIG SET-tls with changed:true → a
+  #    regression back to the non-idempotent force path (re-read on EVERY run,
+  #    bypassing onchanges). task_absent catches it: ≥1 match → fail. ALL THREE reload
+  #    tasks are covered (cert/key/ca); otherwise a partial force regression on one of
+  #    them would slip through unnoticed. Args disambiguator.
   task_absent:
     - module: community.redis.command
       params_subset:
@@ -299,7 +314,7 @@ assert:
         changed: true
         args: ["CONFIG", "SET", "tls-ca-cert-file", "/etc/redis/tls/ca.crt"]
 
-  # state_changes: state.tls несёт НОВЫЕ refs; enable/only/port сохранены.
+  # state_changes: state.tls carries the NEW refs; enable/only/port are preserved.
   state_changes:
     tls:
       enable:   true

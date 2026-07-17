@@ -1,16 +1,16 @@
-# L0-испытание restart: rolling-restart реплик НА TLS-инстансе. Парный к
-# rolling-restart-replicas (plaintext). Render-only, герметично. Roster — 2 хоста, probe-роль = slave.
+# L0 test for restart: rolling-restart of replicas ON a TLS instance. Paired with
+# rolling-restart-replicas (plaintext). Render-only, hermetic. Roster — 2 hosts, probe role = slave.
 #
-# ★ DragonFly vs redis: локальные probe/health-gate коннектятся к СВОЕМУ инстансу через
-# UNIX-СОКЕТ независимо от того, на TLS инстанс или нет (DF при --bind=primary_ip НЕ слушает
-# loopback; сокет — отдельный UDS-listener; UDS не сетевой путь → TLS на нём не нужен). Поэтому
-# на TLS-инстансе локальные params коннекта ТЕ ЖЕ, что в plaintext-кейсе (addr=сокет, БЕЗ
-# tls/tls_ca). state.tls.enable=true тут лишь read-model (TLS на ОСНОВНОМ порту для внешних
-# клиентов). ★ state.tls БЕЗ only/port, df_config БЕЗ tls_port (у DragonFly нет такого флага).
+# ★ DragonFly vs redis: local probe/health-gate connect to THEIR OWN instance via
+# a UNIX SOCKET regardless of whether the instance is on TLS or not (DF with --bind=primary_ip does NOT
+# listen on loopback; the socket is a separate UDS listener; UDS is not a network path → TLS on it is not needed). So
+# on a TLS instance the local connect params are THE SAME as in the plaintext case (addr=socket, WITHOUT
+# tls/tls_ca). state.tls.enable=true here is only a read-model (TLS on the MAIN port for external
+# clients). ★ state.tls WITHOUT only/port, df_config WITHOUT tls_port (DragonFly has no such flag).
 #
-# Что ассертим:
-#   1. probe (community.redis.role): addr = ЛОКАЛЬНЫЙ UNIX-сокет (НЕ 127.0.0.1:port), БЕЗ tls/tls_ca.
-#   2. block-потомок health-gate (community.redis.replica-synced) с теми же socket-params.
+# What we assert:
+#   1. probe (community.redis.role): addr = LOCAL UNIX socket (NOT 127.0.0.1:port), WITHOUT tls/tls_ca.
+#   2. block-child health-gate (community.redis.replica-synced) with the same socket params.
 name: rolling-restart replicas over TLS connects locally via unix socket
 
 fixtures:
@@ -29,8 +29,8 @@ fixtures:
   input:
     reason: "rolling restart over TLS for L0"
 
-  # Развёрнутый incarnation.state с включённым TLS: state.tls несёт enable=true (TLS на основном
-  # порту 6379). ★ БЕЗ only/port; df_config БЕЗ tls_port (у DragonFly нет такого флага).
+  # Expanded incarnation.state with TLS enabled: state.tls carries enable=true (TLS on the main
+  # port 6379). ★ WITHOUT only/port; df_config WITHOUT tls_port (DragonFly has no such flag).
   state:
     df_version: "1.39.0"
     tls:
@@ -46,8 +46,8 @@ fixtures:
       tls_ca_cert_file: /etc/dragonfly/tls/ca.crt
       tls_replication:  "true"
 
-  # Vault: probe/health-gate под default_admin (requirepass убран). ★ PEM CA локальному коннекту
-  # НЕ нужен — probe/health-gate идут по UNIX-сокету (UDS без TLS), vault(ca_ref) не вызывается.
+  # Vault: probe/health-gate run under default_admin (requirepass removed). ★ The PEM CA is
+  # NOT needed for the local connect — probe/health-gate go over a UNIX socket (UDS without TLS), vault(ca_ref) isn't called.
   vault:
     secret/dragonfly/restart/users/default_admin:
       password: dfadmin-restart-pass
@@ -59,15 +59,15 @@ mocks:
 
 assert:
   task_present:
-    # probe (community.redis.role): ЛОКАЛЬНЫЙ UNIX-сокет (БЕЗ tls/tls_ca, даже на TLS-инстансе).
-    # AUTH под default_admin.
+    # probe (community.redis.role): LOCAL UNIX socket (WITHOUT tls/tls_ca, even on a TLS instance).
+    # AUTH under default_admin.
     - module: community.redis.role
       params_subset:
         addr: "unix:/var/run/dragonfly/dragonfly.sock"
         username: default_admin
         password: dfadmin-restart-pass
 
-    # slave-health-gate (community.redis.replica-synced): тот же socket-коннект.
+    # slave-health-gate (community.redis.replica-synced): same socket connect.
     - module: community.redis.replica-synced
       params_subset:
         addr: "unix:/var/run/dragonfly/dragonfly.sock"

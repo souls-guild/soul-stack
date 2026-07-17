@@ -1,13 +1,13 @@
 name: copy-config
 description: >
-  Демонстрирует core.file.present с src: содержимое целевого файла копируется из
-  уже лежащего на хосте regular-файла (типично — результат core.archive.extracted),
-  а не задаётся inline через content. src и content взаимоисключаются (ADR-015).
-  Render-only L0-кейс проверяет, что src проходит render-пайплайн как абсолютный
-  путь без изменения (вся ячейка — литерал, CEL-интерполяция только в content-пути).
+  Demonstrates core.file.present with src: the target file's content is copied from
+  a regular file already on the host (typically — the result of core.archive.extracted),
+  rather than being set inline via content. src and content are mutually exclusive (ADR-015).
+  The render-only L0-case verifies that src passes through the render pipeline as an
+  absolute path unchanged (the whole cell is a literal, CEL interpolation only in the content path).
 
-# state_changes не задаётся: сценарий ничего не коммитит в incarnation.state,
-# это демонстрация копирования содержимого файла.
+# state_changes is not set: the scenario does not commit anything to incarnation.state,
+# this is a demonstration of copying file content.
 state_changes: {}
 
 input:
@@ -15,7 +15,7 @@ input:
     type: string
     required: true
     pattern: "^/[A-Za-z0-9._/-]+$"
-    description: Абсолютный путь файла-источника на хосте.
+    description: Absolute path of the source file on the host.
 
 tasks:
   - name: Copy config from a host-local source file

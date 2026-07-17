@@ -1,13 +1,15 @@
-# L0-испытание NIM-58 (ACCEPT при выключенном provision): имя инкарнации "9redis"
-# — НЕвалидная VM-база (старт-цифра), НО provision.enabled=false → include
-# redis-provision.yml (и guard-assert внутри него) group-drop по include-when
-# `has(input.provision) && input.provision.enabled` → guard НЕ вычисляется. Прогон
-# катит обычную sentinel-ветку по существующему roster-у: render УСПЕШЕН, cloud-шаги
-# отсутствуют. Доказывает, что guard гейтит ТОЛЬКО provision-путь (домен-mismatch
-# критичен лишь когда имя реально идёт в CloudDriver).
+# L0 test NIM-58 (ACCEPT when provision is disabled): incarnation name "9redis"
+# is an INVALID VM base name (leading digit), BUT provision.enabled=false, so
+# the include redis-provision.yml (and the guard-assert inside it) gets
+# group-dropped via include-when `has(input.provision) &&
+# input.provision.enabled`, so the guard is NOT evaluated. The run takes the
+# regular sentinel branch over the existing roster: render SUCCEEDS, no cloud
+# steps. Proves the guard gates ONLY the provision path (name-domain mismatch
+# only matters when the name actually reaches CloudDriver).
 #
-# ★ Парный к provision-badname-rejected (там enabled → guard рубит render). vault/
-# covens под "9redis": deploy читает secret/redis/9redis/*, coven=incarnation.name.
+# * Paired with provision-badname-rejected (there enabled means the guard
+# blocks the render). vault/covens under "9redis": deploy reads
+# secret/redis/9redis/*, coven=incarnation.name.
 name: bad VM-base incarnation name is accepted when provision is disabled
 
 fixtures:
@@ -68,12 +70,12 @@ fixtures:
 
 assert:
   task_present:
-    # Обычная sentinel-ветка катится по существующему roster-у — redis.conf рендерится.
+    # The regular sentinel branch runs over the existing roster: redis.conf is rendered.
     - module: core.file.rendered
       params_subset:
         path: /etc/redis/redis.conf
   task_absent:
-    # guard-assert group-dropped вместе со всем redis-provision.yml → cloud-шаги отсутствуют.
+    # guard-assert is group-dropped along with all of redis-provision.yml, so no cloud steps.
     - module: core.cloud.created
     - module: core.soul.registered
   state_changes:

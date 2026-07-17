@@ -1,45 +1,45 @@
 kind: ssh_provider
-protocol_version: 1                    # compat-флаг plugin-протокола (ADR-020(c))
-namespace: ssh                         # пример third-party коллекции SshProvider
+protocol_version: 1                    # plugin-protocol compat flag (ADR-020(c))
+namespace: ssh                         # example third-party SshProvider collection
 name: static
 
-# Closed enum по ADR-020(f).
-# Static-key читает приватный ключ из файла на keeper-host-е (или из Vault KV,
-# если params.vault_ref задан). vault_access нужен только для второго случая;
-# объявляем его, так как провайдер УМЕЕТ ходить в Vault (декларация, не runtime —
-# docs/keeper/plugins.md → required_capabilities).
+# Closed enum per ADR-020(f).
+# Static-key reads the private key from a file on the keeper host (or from Vault
+# KV, if params.vault_ref is set). vault_access is only needed for the second
+# case; we declare it because the provider IS ABLE to reach Vault (declaration,
+# not runtime — docs/keeper/plugins.md → required_capabilities).
 required_capabilities:
-  - vault_access                       # опциональный резолв ключа из Vault KV
+  - vault_access                       # optional key resolution from Vault KV
 
-# SshProvider не трогает локальные ресурсы host-а (ключ живёт в памяти
-# keeper.push на время сессии), пример из docs/keeper/plugins.md.
+# SshProvider does not touch local host resources (the key lives in
+# keeper.push memory for the session's duration), example from docs/keeper/plugins.md.
 side_effects: []
 
 spec:
-  # provider_kind — открытая строка (ADR-020(e)); convention из docs/keeper/plugins.md.
+  # provider_kind — open string (ADR-020(e)); convention from docs/keeper/plugins.md.
   provider_kind: static_key
-  # JSON Schema draft 2020-12 (формат для kind: ssh_provider — см.
-  # docs/keeper/plugins.md → spec.params_schema). Embedded из schema.json.
+  # JSON Schema draft 2020-12 (format for kind: ssh_provider — see
+  # docs/keeper/plugins.md → spec.params_schema). Embedded from schema.json.
   params_schema:
     type: object
-    # ровно один из источников ключа: путь к файлу ЛИБО Vault KV-ссылка
+    # exactly one of the key sources: file path OR Vault KV reference
     oneOf:
       - required: [key_path]
       - required: [vault_ref]
     properties:
       key_path:
         type: string
-        description: Абсолютный путь к приватному SSH-ключу на keeper-host-е.
+        description: Absolute path to the private SSH key on the keeper host.
         examples: [/etc/soul-stack-keeper/ssh/id_ed25519]
       vault_ref:
         type: string
-        description: Ссылка на Vault KV-секрет с приватным ключом (поле `private_key`).
+        description: Reference to a Vault KV secret containing the private key (field `private_key`).
         examples: ["secret/keeper/push/static-key"]
       deny:
         type: array
         description: >-
-          Deny-list пар (host, user); по умолчанию провайдер allow-all (dev/test).
-          Каждая запись — `{host?, user?}`; пустое поле = wildcard по этому измерению.
+          Deny-list of (host, user) pairs; by default the provider is allow-all (dev/test).
+          Each entry is `{host?, user?}`; an empty field means wildcard on that dimension.
         items:
           type: object
           properties:

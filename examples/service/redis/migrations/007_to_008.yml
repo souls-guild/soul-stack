@@ -2,25 +2,27 @@ from_version: 7
 to_version: 8
 
 description: >-
-  state_schema v7 → v8: cascade-destroy read-model (ADR-061, дополнение к v7
-  cloud-provision). state ДОПОЛНЯЕТСЯ полем:
-    - provisioned_sids (array string) — SID (FQDN) каждой VM, поднятой нашим
-      create-прогоном. day-2 teardown (cascade destroy) читает их, чтобы добить
-      осиротевшие souls (→destroyed), seeds (→orphaned) и bootstrap-токены
-      (→burned): Reaper НЕ снимает pending-VM-souls (mark_disconnected только
-      connected→disconnected), без sids они повисли бы (нарушение anti-replay).
+  state_schema v7 → v8: cascade-destroy read-model (ADR-061, an addition to v7
+  cloud-provision). state gains the field:
+    - provisioned_sids (array string) — SID (FQDN) of each VM raised by our
+      create run. day-2 teardown (cascade destroy) reads them to finish off
+      orphaned souls (→destroyed), seeds (→orphaned), and bootstrap tokens
+      (→burned): the Reaper does NOT remove pending-VM-souls (mark_disconnected
+      only does connected→disconnected), without sids they would be left hanging
+      (an anti-replay violation).
 
-  Зачем рядом с provisioned_vm_ids: vm_ids — provider-side идентификатор (для
-  core.cloud.destroyed), sids — Keeper-side идентичность Soul (для cascade-destroy
-  реестров souls/seeds/tokens). Это разные ключи разных подсистем, оба нужны.
+  Why keep it alongside provisioned_vm_ids: vm_ids is the provider-side
+  identifier (for core.cloud.destroyed), sids is the Keeper-side identity of a
+  Soul (for cascade-destroy of the souls/seeds/tokens registries). These are
+  different keys for different subsystems, both are needed.
 
-  Forward-only (down: не поддерживается; восстановление — через state_history).
-  Существующие инкарнации развёрнуты до v8 (без sids в state) → консервативный
-  default: provisioned_sids=[] (хосты не провиженные сервисом, либо v7-провижен
-  без записанных sids). ОДИН плоский set; has()-guard — back-compat для инкарнаций
-  без ключа (идемпотентность повторного прогона: ключ есть → сохраняется как есть,
-  иначе ставится []). Остальной state (включая provisioned_vm_ids/provisioned_provider)
-  НЕ трогается. Зеркало паттерна 006_to_007.
+  Forward-only (down: not supported; recovery is via state_history).
+  Existing incarnations deployed before v8 (without sids in state) → conservative
+  default: provisioned_sids=[] (hosts not provisioned by the service, or
+  v7-provisioned without recorded sids). A SINGLE flat set; has() guard is
+  back-compat for incarnations without the key (idempotency of a repeat run: key
+  present → kept as-is, otherwise set to []). The rest of state (including
+  provisioned_vm_ids/provisioned_provider) is NOT touched. Mirrors the 006_to_007 pattern.
 
 transform:
   - set:

@@ -5,54 +5,54 @@ description: >-
   optional textfile collectors (smartmon / nvme / ipmi) shipped as privileged
   oneshot timers.
 
-# Версия destiny — git ref (ADR-007). Поля `version:` верхнего уровня нет. Список задач
-# — в tasks/main.yml. Только core-модули → required_modules: не нужен.
+# Destiny version — git ref (ADR-007). There is no top-level `version:` field. The task list
+# is in tasks/main.yml. Only core modules → required_modules: not needed.
 #
-# Стабильный сервис-аккаунт node_exporter (НЕ DynamicUser — textfile-каталог должен
-# пережить рестарт и быть доступен root-сборщикам), textfile-коллекторы железа крутятся
-# отдельными oneshot-таймерами под жёстким systemd-sandbox.
+# Stable node_exporter service account (NOT DynamicUser — the textfile directory must
+# survive a restart and be accessible to root collectors), hardware textfile collectors run as
+# separate oneshot timers under a strict systemd sandbox.
 #
-# arch НЕ во input: tarball-архитектура читается напрямую из soulprint.self.os.arch
-# (доступен в destiny-CEL). soulprint отдаёт amd64/arm64 (proto soulprint.proto),
-# маппинг не нужен.
+# arch is NOT in input: the tarball architecture is read directly from soulprint.self.os.arch
+# (available in destiny-CEL). soulprint reports amd64/arm64 (proto soulprint.proto),
+# no mapping needed.
 
 input:
-  # REQUIRED без дефолта: версия артефакта — осознанный выбор оператора, не «какая-нибудь».
+  # REQUIRED with no default: the artifact version is a deliberate operator choice, not "whatever".
   version:
     type: string
     required: true
     format: semver
-    description: Версия node_exporter (GitHub Releases prometheus/node_exporter).
+    description: node_exporter version (GitHub Releases prometheus/node_exporter).
 
-  # https-only (core.url отвергнёт http:// на Validate без allow_http). Полный URL
-  # tarball-а собирается CEL-ом в tasks/main.yml из base_url + version + arch.
+  # https-only (core.url rejects http:// on Validate without allow_http). The full tarball
+  # URL is built by CEL in tasks/main.yml from base_url + version + arch.
   base_url:
     type: string
     default: "https://github.com/prometheus/node_exporter/releases/download"
     pattern: "^https://[A-Za-z0-9._/:-]+$"
     description: >-
-      Корень загрузки релизов node_exporter. По умолчанию GitHub Releases;
-      переопределяется на внутреннее зеркало/nexus-proxy.
+      Root URL for node_exporter release downloads. Defaults to GitHub Releases;
+      override for an internal mirror/nexus-proxy.
 
-  # SSRF-guard opt-out для private-resolve base_url — паттерн redis destiny.yml install.allow_private.
+  # SSRF-guard opt-out for private-resolve base_url — same pattern as redis destiny.yml install.allow_private.
   allow_private:
     type: boolean
     default: false
     description: >-
-      Снять SSRF-guard core.url для fetch tarball-а (разрешить dial в RFC1918/
-      loopback — легитимный internal Nexus). Нужен, когда base_url резолвится в
-      private-адрес. Default false — guard держится (github-public back-compat).
+      Disable the core.url SSRF guard for the tarball fetch (allow dialing RFC1918/
+      loopback — legitimate for an internal Nexus). Needed when base_url resolves to a
+      private address. Default false — guard stays on (github-public back-compat).
 
-  # Caller обычно передаёт адрес, привязанный к internal-сети (см. _trial/scenario).
+  # Caller usually passes an address bound to the internal network (see _trial/scenario).
   listen:
     type: string
     default: ":9100"
     pattern: "^[A-Za-z0-9._-]*:[0-9]{1,5}$"
-    description: Listen-адрес node_exporter (--web.listen-address). По умолчанию :9100.
+    description: node_exporter listen address (--web.listen-address). Defaults to :9100.
 
-  # systemd-Condition в юнитах не даёт коллектору стартовать без железа (smartmon —
-  # ConditionVirtualization=no, nvme — /dev/nvme*, ipmi — /dev/ipmi0), поэтому установка
-  # коллектора безопасна и там, где железа нет.
+  # systemd Condition in the units prevents a collector from starting without the hardware
+  # (smartmon — ConditionVirtualization=no, nvme — /dev/nvme*, ipmi — /dev/ipmi0), so installing
+  # the collector is safe even where the hardware is absent.
   collectors:
     type: array
     default: [smartmon, nvme, ipmi]
@@ -60,58 +60,58 @@ input:
       type: string
       enum: [smartmon, nvme, ipmi]
     description: >-
-      Textfile-коллекторы железа для установки (smartmon|nvme|ipmi). Каждый —
-      пакет + скрипт + oneshot .timer; systemd-Condition не даёт стартовать без
-      железа.
+      Hardware textfile collectors to install (smartmon|nvme|ipmi). Each one is a
+      package + script + oneshot .timer; a systemd Condition prevents it from starting
+      without the hardware.
 
-  # ── Passthrough-константы роли (прод-конвенция §1): вынесены в input с
-  #    дефолтами, чтобы оператор мог переопределить без правки destiny. ─────────
+  # ── Passthrough constants for the role (prod convention §1): pulled into input with
+  #    defaults so the operator can override without editing destiny. ─────────
 
   bin_dir:
     type: string
     default: /usr/local/bin
     pattern: "^/[A-Za-z0-9._/-]+$"
-    description: Каталог, куда раскладываются бинарь node_exporter и скрипты-сборщики.
+    description: Directory where the node_exporter binary and collector scripts are laid out.
 
   user:
     type: string
     default: node_exporter
     pattern: "^[a-z_][a-z0-9_-]*$"
     description: >-
-      Системный сервис-аккаунт node_exporter. Стабильный uid нужен, т.к.
-      textfile-каталог переживает рестарты (прод-конвенция §2, stateful-ветка).
+      System service account for node_exporter. A stable uid is needed because
+      the textfile directory survives restarts (prod convention §2, stateful branch).
 
   group:
     type: string
     default: node_exporter
     pattern: "^[a-z_][a-z0-9_-]*$"
     description: >-
-      Primary-группа сервис-аккаунта node_exporter и владелец textfile-каталога.
-      Задаётся независимо от user (по умолчанию совпадает с именем аккаунта).
+      Primary group of the node_exporter service account and owner of the textfile
+      directory. Set independently of user (defaults to the same name as the account).
 
   textfile_dir:
     type: string
     default: /var/lib/node_exporter
     pattern: "^/[A-Za-z0-9._/-]+$"
     description: >-
-      Каталог textfile-метрик (--collector.textfile.directory). node_exporter
-      читает .prom из него; oneshot-сборщики туда пишут.
+      Textfile metrics directory (--collector.textfile.directory). node_exporter
+      reads .prom files from it; oneshot collectors write there.
 
-  # ── Прод-параметры демона node_exporter (анализ wb-роли + node_exporter --help).
-  #    Все ОПЦИОНАЛЬНЫЕ с дефолтами; пустое/0 → флаг в ExecStart НЕ добавляется
-  #    (условный рендер в templates/node_exporter.service.tmpl). Web-config-TLS
-  #    сознательно НЕ включён — отдельная сущность. ──────────────────────────────
+  # ── Production node_exporter daemon parameters (based on the wb role + node_exporter --help).
+  #    All OPTIONAL with defaults; empty/0 → the flag is NOT added to ExecStart
+  #    (conditional rendering in templates/node_exporter.service.tmpl). Web-config-TLS
+  #    is deliberately NOT included — a separate concern. ──────────────────────────────
 
-  # Рендер: 0 → флаг опущен (Go сам по числу CPU); >0 → --runtime.gomaxprocs=N.
+  # Render: 0 → flag omitted (Go picks it by CPU count); >0 → --runtime.gomaxprocs=N.
   gomaxprocs:
     type: integer
     default: 0
     min: 0
     description: >-
-      GOMAXPROCS демона (--runtime.gomaxprocs). 0 — не задавать (Go сам по числу
-      CPU); >0 — закрепить лимит горутин-планировщика (wb пинит 4).
+      Daemon GOMAXPROCS (--runtime.gomaxprocs). 0 — leave unset (Go picks it by
+      CPU count); >0 — pin the goroutine scheduler limit (wb pins 4).
 
-  # Точечно гасить шумные/дорогие коллекторы, не отключая остальное.
+  # Selectively disable noisy/expensive collectors without turning off everything else.
   disabled_collectors:
     type: array
     default: []
@@ -119,8 +119,8 @@ input:
       type: string
       pattern: "^[a-z0-9_]+$"
     description: >-
-      Коллекторы для отключения (--no-collector.<name> на элемент). Имена без
-      префикса collector. (например: mdadm, arp). Гасит шумные/дорогие коллекторы.
+      Collectors to disable (--no-collector.<name> per element). Names without the
+      collector. prefix (e.g. mdadm, arp). Disables noisy/expensive collectors.
 
   enabled_collectors:
     type: array
@@ -129,20 +129,20 @@ input:
       type: string
       pattern: "^[a-z0-9_]+$"
     description: >-
-      Коллекторы для явного включения (--collector.<name> на элемент). Имена без
-      префикса collector. (например: systemd, processes) — disabled-by-default.
+      Collectors to explicitly enable (--collector.<name> per element). Names without the
+      collector. prefix (e.g. systemd, processes) — disabled-by-default.
 
-  # Формат B1: map имя-коллектора→{ключ: значение} (map<string, map<string, string>>).
-  # Рендерится двойным range по ОТСОРТИРОВАННЫМ ключам (детерминизм ExecStart). Runtime-
-  # валидация вглубь map не идёт (MVP); схема описывает структуру для формы.
+  # Format B1: map of collector name → {key: value} (map<string, map<string, string>>).
+  # Rendered by a double range over SORTED keys (deterministic ExecStart). Runtime
+  # validation does not descend into the map (MVP); the schema describes the shape for the form.
   collector_options:
     type: object
     default: {}
     required: false
     description: >-
-      Под-опции коллекторов node_exporter (имя коллектора → {ключ: значение}), рендерятся в
-      --collector.<name>.<key>=<value>. НЕ дублировать fs_mount_points_exclude/netdev_device_exclude
-      (повтор флага сломает запуск).
+      Sub-options for node_exporter collectors (collector name → {key: value}), rendered into
+      --collector.<name>.<key>=<value>. Do NOT duplicate fs_mount_points_exclude/netdev_device_exclude
+      here (a repeated flag breaks startup).
     properties: {}
     additional_properties:
       type: object
@@ -150,36 +150,36 @@ input:
       additional_properties:
         type: string
 
-  # Дефолт непустой → флаг в ExecStart рендерится ВСЕГДА (в отличие от fs/netdev-exclude).
+  # Non-empty default → the flag is ALWAYS rendered into ExecStart (unlike fs/netdev-exclude).
   web_telemetry_path:
     type: string
     default: "/metrics"
     pattern: "^/.*"
-    description: Путь HTTP-эндпоинта метрик (--web.telemetry-path). По умолчанию /metrics.
+    description: HTTP metrics endpoint path (--web.telemetry-path). Defaults to /metrics.
 
   log_level:
     type: string
     default: info
     enum: [debug, info, warn, error]
-    description: Уровень логирования node_exporter (--log.level). По умолчанию info.
+    description: node_exporter log level (--log.level). Defaults to info.
 
   log_format:
     type: string
     default: logfmt
     enum: [logfmt, json]
-    description: Формат логов node_exporter (--log.format). По умолчанию logfmt.
+    description: node_exporter log format (--log.format). Defaults to logfmt.
 
-  # Пусто → флаг опущен (node_exporter применит свой встроенный дефолт-regex).
+  # Empty → flag omitted (node_exporter falls back to its built-in default regex).
   fs_mount_points_exclude:
     type: string
     default: ""
     description: >-
-      Regex точек монтирования для исключения из filesystem-коллектора
-      (--collector.filesystem.mount-points-exclude). Пусто — не задавать.
+      Regex of mount points to exclude from the filesystem collector
+      (--collector.filesystem.mount-points-exclude). Empty — leave unset.
 
   netdev_device_exclude:
     type: string
     default: ""
     description: >-
-      Regex сетевых интерфейсов для исключения из netdev-коллектора
-      (--collector.netdev.device-exclude). Пусто — не задавать.
+      Regex of network interfaces to exclude from the netdev collector
+      (--collector.netdev.device-exclude). Empty — leave unset.

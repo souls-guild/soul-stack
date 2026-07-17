@@ -1,22 +1,22 @@
-# Post-apply ожидания smoke-nginx::create (ADR-039 § Часть D).
+# Post-apply expectations for smoke-nginx::create (ADR-039 § Part D).
 #
-# apply_runs.status — РЕАЛЬНОЕ значение enum keeper/internal/applyrun/applyrun.go
-# (StatusSuccess = "success"). НЕ "succeeded", НЕ "done", НЕ "ok" — harness
-# валидирует expectations fail-early через harness.CheckApplyRunsStatusValid.
+# apply_runs.status - the REAL enum value from keeper/internal/applyrun/applyrun.go
+# (StatusSuccess = "success"). NOT "succeeded", NOT "done", NOT "ok" - the harness
+# validates expectations fail-early via harness.CheckApplyRunsStatusValid.
 #
-# incarnation_state — deep-subset проверки; здесь точное совпадение
-# scenario.state_changes.sets из examples/service/smoke-nginx/scenario/create/main.yml.
+# incarnation_state - deep-subset check; here an exact match of
+# scenario.state_changes.sets from examples/service/smoke-nginx/scenario/create/main.yml.
 #
-# audit_events — минимум одна строка `incarnation.scenario_started` с
-# incarnation=test-nginx. Имя event-type — shared/audit/event_types.go
-# (EventIncarnationScenarioStarted). Точное число — не фиксируется (apply_runs
-# lifecycle пишет несколько audit-строк, контракт-тест проверяет presence
-# ключевой, не cardinality).
+# audit_events - at least one `incarnation.scenario_started` line with
+# incarnation=test-nginx. The event-type name - shared/audit/event_types.go
+# (EventIncarnationScenarioStarted). The exact count isn't pinned (the apply_runs
+# lifecycle writes several audit lines, the contract test checks for presence
+# of the key one, not cardinality).
 #
-# metrics — Prometheus-expression → constraint-строка ('>= 1' / '== 0' / ...).
-# keeper_scenario_runs_total{result="ok"} — реальная метрика успешного прогона
-# scenario (keeper/internal/scenario/metrics.go). Метрики keeper_apply_runs_total
-# в коде нет.
+# metrics - Prometheus expression → constraint string ('>= 1' / '== 0' / ...).
+# keeper_scenario_runs_total{result="ok"} - the real metric for a successful
+# scenario run (keeper/internal/scenario/metrics.go). The metric keeper_apply_runs_total
+# doesn't exist in the code.
 apply_runs:
   status: success
 

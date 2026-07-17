@@ -1,10 +1,11 @@
 name: preserves-unrelated
 description: >
-  Миграция трогает ТОЛЬКО seeded_from (доливает ref-поля): остальной state
-  (redis_type/redis_config/redis_users/redis_sentinel/namedfields/топология/
-  provisioned_*) проходит насквозь без изменений. seeded_from с ПУСТЫМ
-  source_endpoints (never-migrated v9-инкарнация) → ref'ы доливаются ''-дефолтом,
-  source_endpoints []/detached false сохраняются, всё прочее бит-в-бит.
+  The migration touches ONLY seeded_from (fills in ref fields): the rest of
+  the state (redis_type/redis_config/redis_users/redis_sentinel/named
+  fields/topology/provisioned_*) passes through unchanged. seeded_from with
+  EMPTY source_endpoints (never-migrated v9 incarnation) -> refs get filled
+  with the ''-default, source_endpoints []/detached false are preserved,
+  everything else bit-for-bit.
 
 state_before:
   redis_type: "sentinel"

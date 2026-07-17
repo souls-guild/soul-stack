@@ -6,148 +6,152 @@ description: >-
   tailing service log files and forwarding them to a central collector
   (loki / elasticsearch / vector / console sink).
 
-# Версия destiny — git ref (ADR-007). Поля `version:` верхнего уровня нет. Список
-# задач — в tasks/main.yml. Только core-модули → required_modules: не нужен.
+# Destiny version is a git ref (ADR-007). No top-level `version:` field. Task
+# list is in tasks/main.yml. Core modules only -> required_modules: not needed.
 #
-# ★ Наблюдаемость: Vector — лог-плоскость (sources→transforms→sinks, PUSH логов),
-# ДОПОЛНЯЕТ node-exporter (метрики хоста, pull) и redis-exporter (метрики Redis),
-# НЕ заменяет их. Три разных observability-слоя (ADR-067 amends ADR-024).
+# * Observability: Vector is the log plane (sources->transforms->sinks, PUSH of
+# logs), it COMPLEMENTS node-exporter (host metrics, pull) and redis-exporter
+# (Redis metrics), does NOT replace them. Three distinct observability layers
+# (ADR-067 amends ADR-024).
 #
-# Раскладка клонирует node-exporter (install tarball GitHub + sha256 → extract →
-# file.present бинарь + стабильный system-аккаунт + hardened systemd unit +
-# service.running + restarted onchanges). Отличие от node-exporter/redis-exporter:
-# arch tarball-а Vector кодируется как <arch>-unknown-linux-gnu (Rust-триплет),
-# поэтому soulprint.self.os.arch (amd64/arm64) маппится в x86_64/aarch64 CEL-ом.
+# The layout clones node-exporter (install tarball from GitHub + sha256 ->
+# extract -> file.present binary + stable system account + hardened systemd
+# unit + service.running + restarted onchanges). Difference from
+# node-exporter/redis-exporter: Vector's tarball arch is encoded as
+# <arch>-unknown-linux-gnu (Rust triplet), so soulprint.self.os.arch
+# (amd64/arm64) is mapped to x86_64/aarch64 via CEL.
 #
-# ★ Стабильный сервис-аккаунт (НЕ DynamicUser): у Vector persistent disk-buffer
-# (data_dir) — очередь на диске переживает рестарт и требует фиксированного
-# uid-владельца (прод-конвенция §2, stateful-ветка — как textfile-каталог
-# node-exporter). DynamicUser тут непригоден.
+# * Stable service account (NOT DynamicUser): Vector's persistent disk buffer
+# (data_dir) - the on-disk queue survives restarts and requires a fixed
+# owner uid (prod convention §2, stateful branch - like node-exporter's
+# textfile directory). DynamicUser doesn't fit here.
 
 input:
-  # REQUIRED без дефолта: версия артефакта — осознанный выбор оператора, не «какая-нибудь».
+  # REQUIRED with no default: artifact version is a deliberate operator choice, not "any".
   version:
     type: string
     required: true
     pattern: "^[0-9]+\\.[0-9]+\\.[0-9]+$"
     description: >-
-      Версия Vector (GitHub Releases vectordotdev/vector, без префикса v).
+      Vector version (GitHub Releases vectordotdev/vector, no v prefix).
 
-  # checksum tarball-а Vector (<arch>-unknown-linux-gnu). core.url.fetched
-  # верифицирует его ДО публикации файла. ОБЯЗАТЕЛЬНЫЙ, без дефолта (fail-closed):
-  # нет хэша → честный отказ, а не fetch с placeholder-ом, который верификация всё
-  # равно отвергнет. Значение — из sha256sums.txt GitHub-релиза vectordotdev/vector
-  # под пару (version, arch) для vector-<v>-<triplet>.tar.gz.
+  # Checksum of the Vector tarball (<arch>-unknown-linux-gnu). core.url.fetched
+  # verifies it BEFORE publishing the file. REQUIRED, no default (fail-closed):
+  # no hash -> a clean refusal rather than a fetch with a placeholder that
+  # verification would reject anyway. Value comes from sha256sums.txt of the
+  # vectordotdev/vector GitHub release for the (version, arch) pair for
+  # vector-<v>-<triplet>.tar.gz.
   sha256:
     type: string
     required: true
     pattern: "^sha256:[0-9a-f]{64}$"
     description: >-
-      SHA-256 tarball-а Vector (форма "sha256:<hex>"). Должен соответствовать паре
-      version + arch; берётся из sha256sums.txt GitHub-релиза vectordotdev/vector.
+      SHA-256 of the Vector tarball (form "sha256:<hex>"). Must match the
+      version + arch pair; taken from sha256sums.txt of the vectordotdev/vector
+      GitHub release.
 
-  # https-only (core.url отвергнёт http:// на Validate без allow_http). Полный URL
-  # tarball-а собирается CEL-ом в tasks/install.yml из base_url + version + triplet.
+  # https-only (core.url rejects http:// at Validate without allow_http). Full
+  # tarball URL is assembled via CEL in tasks/install.yml from base_url + version + triplet.
   base_url:
     type: string
     default: "https://github.com/vectordotdev/vector/releases/download"
     pattern: "^https://[A-Za-z0-9._/:-]+$"
     description: >-
-      Корень загрузки релизов Vector. По умолчанию GitHub Releases;
-      переопределяется на внутреннее зеркало/nexus-proxy.
+      Root of Vector release downloads. Defaults to GitHub Releases;
+      override for an internal mirror/nexus proxy.
 
-  # SSRF-guard opt-out для private-resolve base_url — паттерн redis destiny.yml install.allow_private.
+  # SSRF-guard opt-out for private-resolve base_url - the pattern from redis destiny.yml install.allow_private.
   allow_private:
     type: boolean
     default: false
     description: >-
-      Снять SSRF-guard core.url для fetch tarball-а (разрешить dial в RFC1918/
-      loopback — легитимный internal Nexus). Нужен, когда base_url резолвится в
-      private-адрес. Default false — guard держится (github-public back-compat).
+      Lift the core.url SSRF guard for the tarball fetch (allow dial to RFC1918/
+      loopback - legitimate for an internal Nexus). Needed when base_url resolves
+      to a private address. Default false - guard stays on (github-public back-compat).
 
   bin_dir:
     type: string
     default: /usr/local/bin
     pattern: "^/[A-Za-z0-9._/-]+$"
-    description: Каталог, куда раскладывается бинарь vector.
+    description: Directory where the vector binary is placed.
 
   user:
     type: string
     default: vector
     pattern: "^[a-z_][a-z0-9_-]*$"
     description: >-
-      Системный сервис-аккаунт vector. Стабильный uid нужен: persistent disk-buffer
-      (data_dir) переживает рестарты (прод-конвенция §2, stateful-ветка).
+      System service account for vector. A stable uid is needed: the persistent
+      disk buffer (data_dir) survives restarts (prod convention §2, stateful branch).
 
   group:
     type: string
     default: vector
     pattern: "^[a-z_][a-z0-9_-]*$"
     description: >-
-      Primary-группа сервис-аккаунта vector и владелец data_dir. Задаётся независимо
-      от user (по умолчанию совпадает с именем аккаунта).
+      Primary group of the vector service account and owner of data_dir. Set
+      independently of user (defaults to matching the account name).
 
   data_dir:
     type: string
     default: /var/lib/vector
     pattern: "^/[A-Za-z0-9._/-]+$"
     description: >-
-      Каталог данных Vector (global data_dir): persistent disk-buffer сдвигов
-      прочитанных файлов и очередь sink-а. Переживает рестарт → владелец = сервис-
-      аккаунт (стабильный uid).
+      Vector data directory (global data_dir): persistent disk buffer of file
+      read offsets and the sink queue. Survives restart -> owned by the service
+      account (stable uid).
 
   log_level:
     type: string
     default: info
     enum: [trace, debug, info, warn, error]
-    description: Уровень логирования самого Vector (env VECTOR_LOG). По умолчанию info.
+    description: Log level of Vector itself (env VECTOR_LOG). Defaults to info.
 
-  # ── sink: центральный коллектор логов ────────────────────────────────────────
-  # Единственный sink агента. Тип выбирает секцию рендера vector.yaml (условный range
-  # по sink_type в templates/vector.yaml.tmpl): loki (Grafana Loki push API) /
-  # elasticsearch (bulk API) / vector (vector-to-vector gRPC на агрегатор) / console
-  # (stdout, для отладки — endpoint не нужен).
+  # -- sink: central log collector -----------------------------------------------
+  # The agent's only sink. The type selects the render section of vector.yaml
+  # (conditional range over sink_type in templates/vector.yaml.tmpl): loki
+  # (Grafana Loki push API) / elasticsearch (bulk API) / vector (vector-to-vector
+  # gRPC to an aggregator) / console (stdout, for debugging - no endpoint needed).
   sink_type:
     type: string
     default: console
     enum: [loki, elasticsearch, vector, console]
     description: >-
-      Тип sink-а (куда шлём логи). loki — Grafana Loki (endpoint = URL push API);
-      elasticsearch — ES bulk (endpoint = URL); vector — vector-to-vector gRPC на
-      центральный агрегатор (endpoint = host:port); console — stdout для отладки
-      (endpoint игнорируется). Дефолт console (безопасно, без внешней инфры).
+      Sink type (where logs are sent). loki - Grafana Loki (endpoint = push API
+      URL); elasticsearch - ES bulk (endpoint = URL); vector - vector-to-vector
+      gRPC to a central aggregator (endpoint = host:port); console - stdout for
+      debugging (endpoint ignored). Default console (safe, no external infra).
 
-  # Пусто → допустимо только для sink_type=console (отладка). Для loki/elasticsearch/
-  # vector — адрес центрального коллектора. Валидность (сетевой vs URL) не проверяем
-  # схемой: разные sink-типы принимают разные формы (URL / host:port).
+  # Empty -> only valid for sink_type=console (debugging). For loki/elasticsearch/
+  # vector - address of the central collector. Validity (network vs URL) is not
+  # checked by the schema: different sink types accept different forms (URL / host:port).
   sink_endpoint:
     type: string
     default: ""
     description: >-
-      Адрес центрального коллектора логов. Форма зависит от sink_type: loki/
-      elasticsearch — URL (https://...); vector — host:port gRPC-агрегатора;
-      console — не используется. Пусто допустимо только для console.
+      Address of the central log collector. Form depends on sink_type: loki/
+      elasticsearch - URL (https://...); vector - host:port of the gRPC aggregator;
+      console - unused. Empty is only valid for console.
 
-  # ACL/токен доступа к коллектору. Секрет: маскируется в логах/трейсах/UI.
-  # Передаётся в vector.yaml через Environment=VECTOR_SINK_TOKEN (не в самом
-  # конфиг-файле в открытом виде, симметрия REDIS_PASSWORD redis-exporter). Пусто →
-  # sink без аутентификации (console / открытый внутренний коллектор). Принимает уже
-  # зарезолвленный секрет ИЛИ vault-ref (каскад: сервис передаёт vault-ref, резолв
-  # Soul-side).
+  # ACL/access token for the collector. Secret: masked in logs/traces/UI.
+  # Passed to vector.yaml via Environment=VECTOR_SINK_TOKEN (not in the config
+  # file itself in the open, symmetric with REDIS_PASSWORD in redis-exporter).
+  # Empty -> sink without authentication (console / open internal collector).
+  # Accepts either an already-resolved secret OR a vault-ref (cascade: the
+  # service passes a vault-ref, resolved Soul-side).
   sink_auth_ref:
     type: string
     default: ""
     secret: true
     description: >-
-      Токен/пароль доступа к коллектору логов (Bearer/basic). Маскируется в логах/
-      трейсах/UI. Пробрасывается в unit через Environment=VECTOR_SINK_TOKEN. Пусто —
-      sink без аутентификации.
+      Token/password for accessing the log collector (Bearer/basic). Masked in
+      logs/traces/UI. Passed to the unit via Environment=VECTOR_SINK_TOKEN.
+      Empty means no sink authentication.
 
-  # ── источники логов ──────────────────────────────────────────────────────────
-  # Список путей/glob-ов лог-файлов сервиса, которые Vector читает (source type file,
-  # read_from end). Каждый элемент — путь или glob (/var/log/redis/*.log). Собираются
-  # в ОДИН file-source `service_logs` (include: [...]). Пусто → source не рендерится
-  # (агент стартует, но ничего не читает — валидный degenerate-конфиг).
+  # -- log sources ----------------------------------------------------------------
+  # List of service log file paths/globs that Vector reads (source type file,
+  # read_from end). Each item is a path or glob (/var/log/redis/*.log). Combined
+  # into a SINGLE file-source `service_logs` (include: [...]). Empty -> the
+  # source doesn't render (agent starts but reads nothing - a valid degenerate config).
   log_sources:
     type: array
     default: []
@@ -155,16 +159,17 @@ input:
       type: string
       pattern: "^/[A-Za-z0-9._/*-]+$"
     description: >-
-      Пути/glob-ы лог-файлов сервиса для чтения (source type file, read_from end).
-      Каждый элемент — абсолютный путь или glob (/var/log/redis/*.log). Пусто —
-      Vector стартует без file-source.
+      Service log file paths/globs to read (source type file, read_from end).
+      Each item is an absolute path or glob (/var/log/redis/*.log). Empty -
+      Vector starts without a file-source.
 
-  # Дополнительно тянуть системный журнал (source type journald). Отдельный флаг:
-  # journald-source не требует путей (читает systemd-journal), включается независимо
-  # от файловых log_sources. false → journald-source не рендерится.
+  # Additionally pull the system journal (source type journald). A separate
+  # flag: journald-source doesn't require paths (reads systemd-journal),
+  # enabled independently of the file-based log_sources. false -> the
+  # journald-source isn't rendered.
   journald:
     type: boolean
     default: false
     description: >-
-      Читать системный журнал systemd (source type journald) в дополнение к файловым
-      log_sources. По умолчанию выключено (только файлы).
+      Read the systemd journal (source type journald) in addition to file-based
+      log_sources. Disabled by default (files only).

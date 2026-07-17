@@ -1,6 +1,6 @@
-# L0-испытание (Trial, ADR-023): outer='yes', inner='yes' → обе группы остаются.
-# Положительный край матрицы: конъюнктивный include-when inner истинен на обоих
-# операндах, обе задачи рендерятся обычным путём (не placeholder).
+# L0 trial (ADR-023): outer='yes', inner='yes' -> both groups remain.
+# Positive edge of the matrix: conjunctive include-when inner is true on both
+# operands, both tasks render the normal way (not a placeholder).
 name: nested conditional-include keeps both when outer and inner are yes
 
 fixtures:

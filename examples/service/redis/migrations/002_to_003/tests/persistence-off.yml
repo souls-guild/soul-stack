@@ -1,8 +1,8 @@
 name: persistence-off
 description: >
-  Обратная свёртка persistence: НЕТ ключей save/appendonly в redis_config (либо
-  save='' и appendonly='no') → off. Здесь ключи отсутствуют целиком — покрывает
-  in-guard ветку «ключа нет». maxmemory-policy тоже отсутствует → maxmemory_policy=''.
+  Reverse folding of persistence: NO save/appendonly keys in redis_config (or
+  save='' and appendonly='no') -> off. Here the keys are absent entirely — covers the
+  in-guard branch "key is missing". maxmemory-policy is also absent -> maxmemory_policy=''.
 
 state_before:
   redis_type: standalone

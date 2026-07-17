@@ -1,111 +1,111 @@
 name: update_users
 description: >-
-  ★ Перед запуском засей в Vault пароль КАЖДОГО юзера набора по пути
-  secret/redis/<incarnation>/users/<name>#password — пароли НЕ во входной форме
-  (Vault-конвенция), иначе прогон упадёт с ошибкой «секрет … не найден в Vault»
-  (тогда засей недостающие секреты и запусти снова).
+  ★ Before running, seed Vault with the password of EVERY user in the set at path
+  secret/redis/<incarnation>/users/<name>#password - passwords are NOT in the input form
+  (Vault convention), otherwise the run fails with an error like "secret ... not found in Vault"
+  (then seed the missing secrets and run again).
 
 
-  Заменить целиком набор operator-ACL-пользователей на работающем Redis без рестарта.
-  Пользователь, которого нет в новом наборе, удаляется; системные служебные юзеры не
-  трогаются.
+  Replace the entire set of operator ACL users on a live Redis without a restart.
+  A user missing from the new set is removed; system service users are not
+  touched.
 
-# ── Входной контракт оператора (docs/input.md) ────────────────────────────────
-# ПОЛНЫЙ НОВЫЙ набор operator-extra ACL-юзеров (массив AclUser, types.yml/ADR-062 $type)
-# — тот же тип, что элемент create input.users. Массив целиком заменяет state.redis_users
-# (bulk-replace). Пустой/опущенный массив = удалить ВСЕХ operator-extra (системные
-# остаются, доливаются из essence). Пароль — НЕ во входе (Vault-конвенция, см. description).
+# ── Operator input contract (docs/input.md) ────────────────────────────────
+# The FULL NEW set of operator-extra ACL users (AclUser array, types.yml/ADR-062 $type)
+# - the same type as the create input.users element. The array entirely replaces state.redis_users
+# (bulk-replace). Empty/omitted array = remove ALL operator-extra (system users
+# stay, merged in from essence). Password is NOT in the input (Vault convention, see description).
 #
-# ★ Почему массив, а не один user (как add_user): update_users — про НАБОР («правим всех»),
-# а не про точечную добавку. perms каждого элемента валидируется re2-паттерном AclUser
-# (token-shape-фильтр), как в create — невалидная ACL-строка отсекается на input-валидации.
+# ★ Why an array, not a single user (like add_user): update_users is about the SET ("fix them all"),
+# not a targeted addition. Each element's perms is validated against the AclUser re2 pattern
+# (token-shape filter), same as in create - an invalid ACL string is rejected at input validation.
 input:
   users:
     type: array
     required: true
-    # ★ form-prefill (docs/input.md → «Pre-fill из state»): «правим ВСЕХ» =
-    # форма открывается с УЖЕ показанным текущим набором operator-extra (оператор
-    # правит дельту, не вводит набор с нуля и не стирает его молча). Источник —
-    # incarnation.state.redis_users (тот же массив AclUser, что state_changes пишет
-    # ниже: set redis_users <- input.users), поэтому имя поля (users) и state-ключ
-    # (redis_users) расходятся — prefill идёт явным аксессором, не по совпадению
-    # имён. Резолвит form-prefill-эндпоинт (path-whitelist + secret-исключение);
-    # redis_users НЕ secret (пароля в нём нет — он keeper-side Vault), массив
-    # отдаётся целиком. Это лишь UI-подсказка: в эффективный input state НЕ течёт
-    # (bulk-replace применяет ровно то, что оператор оставил в форме).
+    # ★ form-prefill (docs/input.md -> "Pre-fill from state"): "fix them ALL" =
+    # the form opens ALREADY showing the current operator-extra set (the operator
+    # edits the delta instead of typing the set from scratch or silently wiping it). The source is
+    # incarnation.state.redis_users (the same AclUser array that state_changes writes
+    # below: set redis_users <- input.users), so the field name (users) and the state key
+    # (redis_users) diverge - prefill goes through an explicit accessor, not by matching
+    # names. Resolved by the form-prefill endpoint (path-whitelist + secret exclusion);
+    # redis_users is NOT a secret (it holds no password - that's keeper-side Vault), the array
+    # is returned in full. This is only a UI hint: it does NOT flow into the effective input state
+    # (bulk-replace applies exactly what the operator left in the form).
     prefill_from_state: state.redis_users
     items:
       $type: AclUser
     description: >-
-      ПОЛНЫЙ новый набор operator-extra ACL-юзеров (массив AclUser: {name, perms, state}).
-      ЦЕЛИКОМ заменяет incarnation.state.redis_users (bulk-replace): юзера, которого нет
-      в массиве, удаляет из ACL. perms — ПОЛНАЯ ACL-строка (директивы Redis ACL как есть),
-      валидируется паттерном AclUser. Системные служебные юзеры сюда НЕ входят (доливаются
-      из essence). Пустой массив = убрать всех operator-extra. Форма открывается
-      преднаполненной текущим набором (prefill_from_state: state.redis_users).
+      The FULL new set of operator-extra ACL users (AclUser array: {name, perms, state}).
+      ENTIRELY replaces incarnation.state.redis_users (bulk-replace): a user missing
+      from the array is removed from the ACL. perms is the FULL ACL string (Redis ACL directives as-is),
+      validated against the AclUser pattern. System service users are NOT included here (merged in
+      from essence). Empty array = remove all operator-extra. The form opens
+      pre-filled with the current set (prefill_from_state: state.redis_users).
 
-# ── Декларативные input-инварианты (validate:) ───────────────────────────────────
-# ★ system-ACL-users guard (дизайн d2): ни один элемент input.users НЕ может занять имя
-# СЛУЖЕБНОГО (default/replica/monitoring/sentinel/haproxy). Системные доливаются в
-# users.acl из essence ПОВЕРХ operator-extra (last-wins) — operator `replica` молча
-# перекрыл бы replica-perms репликации. Ловим на INPUT-валидации (422 ДО applying), как
-# create/add_user. INPUT-ONLY (essence недоступен): список имён захардкожен (= create).
-# .all() над МАССИВОМ итерирует элементы AclUser; имя — поле u.name. input.users required
-# → has()-обвязка не нужна (всегда присутствует в эффективном input).
+# ── Declarative input invariants (validate:) ───────────────────────────────────
+# ★ system-ACL-users guard (design d2): no element of input.users may take the name
+# of a SYSTEM user (default/replica/monitoring/sentinel/haproxy). System users are merged
+# into users.acl from essence ON TOP of operator-extra (last-wins) - an operator `replica`
+# would silently override replication's replica-perms. Caught at INPUT validation (422 BEFORE applying), same as
+# create/add_user. INPUT-ONLY (essence not available): the name list is hardcoded (= create).
+# .all() over the ARRAY iterates AclUser elements; the name is field u.name. input.users is required
+# -> no has() wrapper needed (always present in the effective input).
 validate:
   - that: "input.users.all(u, !(u.name in ['default', 'replica', 'monitoring', 'sentinel', 'haproxy']))"
-    message: "имя ACL-пользователя зарезервировано за служебным (default/replica/monitoring/sentinel/haproxy): выбери другое имя — служебные юзеры заводятся автоматически из essence"
+    message: "ACL user name is reserved for a system user (default/replica/monitoring/sentinel/haproxy): choose a different name - system users are created automatically from essence"
 
-# ── Вычисляемые scenario-vars (compute:) ─────────────────────────────────────────
-# Рун-уровневый контекст (input/essence/incarnation — без soulprint). tls_* —
-# дискриминатор коннекта плагина из state.tls (state_schema v3), идентично add_user/
-# restart/update_config: ACL LOAD идёт через TLS-коннект, если Redis на TLS.
+# ── Computed scenario vars (compute:) ─────────────────────────────────────────
+# Run-level context (input/essence/incarnation - no soulprint). tls_* is the
+# plugin connection discriminator from state.tls (state_schema v3), identical to add_user/
+# restart/update_config: ACL LOAD connects over TLS if Redis is on TLS.
 compute:
-  # ── admin_user: имя СИСТЕМНОГО ACL-юзера внутрикластерного AUTH (default_admin) ──
-  # ★ РЕДИЗАЙН default_admin (2026-06-30): тело сценария БЕЗ extends: covenant (нет общего
-  # compute), поэтому имя системного admin-юзера объявляется ЛОКАЛЬНЫМ литералом — единый
-  # источник внутри сценария (плагин-коннект community.redis.acl + masterauth-долив в
-  # config + Vault-путь пароля читают compute.admin_user, не хардкодят 'default_admin' в
-  # каждом месте). Симметрия с covenant.compute.admin_user деплой-тел.
+  # ── admin_user: name of the SYSTEM ACL user for intra-cluster AUTH (default_admin) ──
+  # ★ REDESIGN default_admin (2026-06-30): the scenario body has NO extends: covenant (no shared
+  # compute), so the system admin-user name is declared as a LOCAL literal - a single
+  # source within the scenario (the community.redis.acl plugin connection + the masterauth merge into
+  # config + the password Vault path all read compute.admin_user, instead of hardcoding 'default_admin' in
+  # every spot). Mirrors covenant.compute.admin_user in deploy bodies.
   admin_user: "${ 'default_admin' }"
   tls_on:   "${ has(incarnation.state) && has(incarnation.state.tls) && default(incarnation.state.tls.enable, false) }"
   tls_port: "${ compute.tls_on ? string(incarnation.state.tls.port) : '' }"
-  # tls_ca — PEM CA-СОДЕРЖИМОЕ коннекта из ИМЕНОВАННОГО state.tls.ca_ref (vault() резолвит
-  # Vault-ПУТЬ в PEM), симметрично tls_port из state.tls.port. После rotate_tls (меняет
-  # state.tls.ca_ref на новый путь) коннект берёт АКТУАЛЬНЫЙ CA — не устаревший
-  # essence-дефолт.
+  # tls_ca - the PEM CA CONTENT for the connection from the NAMED state.tls.ca_ref (vault() resolves
+  # the Vault PATH to PEM), symmetric to tls_port from state.tls.port. After rotate_tls (changes
+  # state.tls.ca_ref to a new path) the connection picks up the CURRENT CA - not a stale
+  # essence default.
   tls_ca:   "${ compute.tls_on ? vault(incarnation.state.tls.ca_ref) : '' }"
 
-# ── Мутация incarnation.state ─────────────────────────────────────────────────
-# ★ BULK-REPLACE: state.redis_users ЗАМЕНЯЕТСЯ input.users ЦЕЛИКОМ (массив AclUser
-# [{name,perms,state}], wave 1b, БЕЗ пароля — он keeper-side vault, ADR-012). НЕ upsert,
-# НЕ merge: то, чего нет в input.users, выпадает из state (= удаление юзера). Тот же
-# набор, что ушёл в render users.acl operator-extra-слоем. required → input.users всегда
-# присутствует; пустой массив фиксирует «operator-extra нет» (системные остаются вне state).
+# ── Mutating incarnation.state ─────────────────────────────────────────────────
+# ★ BULK-REPLACE: state.redis_users is REPLACED by input.users ENTIRELY (an AclUser array
+# [{name,perms,state}], wave 1b, WITHOUT the password - that's keeper-side vault, ADR-012). NOT an upsert,
+# NOT a merge: anything missing from input.users drops out of state (= the user is deleted). The same
+# set that went into rendering users.acl's operator-extra layer. required -> input.users is always
+# present; an empty array records "no operator-extra" (system users stay outside state).
 state_changes:
   - set: redis_users
     value: "${ input.users }"
 
 tasks:
-  # 1. Перерендерить users.acl на диск с НОВЫМ набором юзеров (тот же режим-агностичный
-  #    destiny redis, что create/add_user/add_node). vars.users — merged набор с per-user
-  #    паролями из Vault (keeper-side vault(), .tmpl хеширует, plaintext не пишет).
-  #    redis.conf/TLS НЕ трогаем — update_users меняет ТОЛЬКО ACL (apply destiny рендерит
-  #    весь кирпич, но оживляем мы лишь ACL шагом 2; redis.conf на диске не изменится при
-  #    тех же config — idempotent рендер). version — из state; conf_dir/data_dir — из
-  #    essence (v11→v12, host-layout вынесен в essence, Вариант A).
+  # 1. Re-render users.acl on disk with the NEW user set (the same mode-agnostic
+  #    destiny redis as create/add_user/add_node). vars.users is the merged set with per-user
+  #    passwords from Vault (keeper-side vault(), .tmpl hashes them, no plaintext is written).
+  #    redis.conf/TLS are NOT touched - update_users changes ONLY the ACL (apply destiny renders
+  #    the whole brick, but we only bring the ACL to life in step 2; redis.conf on disk won't change with
+  #    the same config - idempotent render). version comes from state; conf_dir/data_dir come from
+  #    essence (v11->v12, host-layout moved into essence, Option A).
   - name: Re-render users.acl with the new ACL user set (full file on disk)
     apply:
       destiny: redis
       input:
         version:  "${ default(incarnation.state.redis_version, '') }"
-        # ★ install: ОБЯЗАТЕЛЕН на повторном прогоне (регресс live E2E 2026-07-01). Без него
-        # диспетчер install.yml по !has(input.install) скатывается в package-ветку →
-        # core.pkg `apt install redis-server=<version>` (версия из Nexus-binary в apt
-        # ОТСУТСТВУЕТ → env exited 100). Собираем ТУ ЖЕ binary-структуру, что create
-        # (deploy-body → compute.install из essence.install_method) — единый способ
-        # установки. Отличие от covenant.install: version из РАЗВЁРНУТОГО state
-        # (redis_version), а не input.version (повторный прогон версию не переустанавливает).
+        # ★ install: MANDATORY on a repeat run (live E2E regression 2026-07-01). Without it
+        # the install.yml dispatcher falls through !has(input.install) into the package branch ->
+        # core.pkg `apt install redis-server=<version>` (the version from Nexus binary is
+        # MISSING from apt -> env exited 100). We assemble the SAME binary structure as create
+        # (deploy-body -> compute.install from essence.install_method) - a single install
+        # method. Difference from covenant.install: version comes from the DEPLOYED state
+        # (redis_version), not input.version (a repeat run doesn't reinstall the version).
         install: >-
           ${ (default(essence.install_method, 'binary') == 'binary')
                ? {
@@ -117,34 +117,34 @@ tasks:
                : { 'method': 'package' } }
         conf_dir: "${ default(essence.conf_dir, '/etc/redis') }"
         data_dir: "${ default(essence.data_dir, '/var/lib/redis') }"
-        # ★ РЕДИЗАЙН default_admin (2026-06-30): apply.input.password УДАЛЁН (destiny redis
-        # его больше не принимает — requirepass убран). masteruser/masterauth ДОЛИВАЮТСЯ в
-        # config обычными директивами ПОВЕРХ развёрнутого state.redis_config (он хранится
-        # БЕЗ masterauth — секрет в Vault, ADR-061). update_users перерендеривает весь кирпич
-        # destiny `redis` (вкл. redis.conf), поэтому статическая replica→master AUTH обязана
-        # доливаться и здесь — иначе redis.conf на диске потерял бы masteruser/masterauth и
-        # cluster/sentinel-реплики после рестарта упёрлись бы в NOAUTH при PSYNC. На master-
-        # нодах директива инертна (failover-safe). masterauth — vault()-в-ячейке (seal-маскинг
-        # ADR-010 §7.4); admin_user = compute.admin_user; путь — secret/redis/<inc>/users/
-        # default_admin#password (та же ветка, что users-блок ниже).
+        # ★ REDESIGN default_admin (2026-06-30): apply.input.password is REMOVED (destiny redis
+        # no longer accepts it - requirepass was dropped). masteruser/masterauth are MERGED into
+        # config as ordinary directives ON TOP of the deployed state.redis_config (it's stored
+        # WITHOUT masterauth - the secret lives in Vault, ADR-061). update_users re-renders the whole
+        # destiny `redis` brick (incl. redis.conf), so the static replica->master AUTH must
+        # be merged in here too - otherwise redis.conf on disk would lose masteruser/masterauth and
+        # cluster/sentinel replicas would hit NOAUTH on PSYNC after a restart. On master
+        # nodes the directive is inert (failover-safe). masterauth - vault()-in-cell (seal masking,
+        # ADR-010 section 7.4); admin_user = compute.admin_user; path - secret/redis/<inc>/users/
+        # default_admin#password (the same branch as the users block below).
         config: >-
           ${ merge(incarnation.state.redis_config, {
                'masteruser': compute.admin_user,
                'masterauth': vault('secret/redis/' + incarnation.name + '/users/' + compute.admin_user + '#password')
              }) }
         modules_base_url: "${ default(essence.modules_base_url, '') }"
-        # ★★ КРИТИЧНО (system-ACL-users d2): ПОЛНЫЙ users.acl = СИСТЕМНЫЕ (из essence,
-        # ПЕРВЫМИ) + operator-extra (НОВЫЙ input.users — МАССИВ AclUser, ПОВЕРХ). update_users
-        # перерендеривает ВЕСЬ файл (не append) → БЕЗ долива системных этот рендер СТЁР БЫ
-        # replica/monitoring/sentinel/haproxy → сломал бы репликацию/sentinel/health-check
-        # на повторном прогоне. Системные доливаются на КАЖДОМ рендере из essence.system_acl_users (они
-        # НЕ в state — state хранит только operator-extra, пункт 7 d2). last-wins: operator-
-        # extra перекрывает одноимённого системного (но имена системных закрыты validate-guard
-        # — коллизии быть не должно). Vault-пароль каждого — secret/redis/<inc>/users/<name>
-        # #password (та же ветка). ★ bulk-replace: operator-extra-слой = input.users ЦЕЛИКОМ
-        # (то, чего в нём нет, в файл не попадёт = удаление юзера). Идентичен render-у create
-        # (там operator-extra = input.users), отличие лишь в источнике: create — при развёртке,
-        # update_users — сопровождение уже работающего инстанса.
+        # ★★ CRITICAL (system-ACL-users d2): the FULL users.acl = SYSTEM users (from essence,
+        # FIRST) + operator-extra (the NEW input.users - an AclUser ARRAY, ON TOP). update_users
+        # re-renders the WHOLE file (not an append) -> WITHOUT merging in system users this render would WIPE OUT
+        # replica/monitoring/sentinel/haproxy -> breaking replication/sentinel/health-check
+        # on a repeat run. System users are merged in on EVERY render from essence.system_acl_users (they
+        # are NOT in state - state holds only operator-extra, item 7 of d2). last-wins: operator-
+        # extra overrides a same-named system user (but system names are locked out by the validate-guard
+        # - there should be no collision). Each one's Vault password is secret/redis/<inc>/users/<name>
+        # #password (the same branch). ★ bulk-replace: the operator-extra layer = input.users ENTIRELY
+        # (anything missing from it doesn't make it into the file = the user is deleted). Identical to create's
+        # render (there operator-extra = input.users), the only difference is the source: create - at deploy time,
+        # update_users - maintenance of an already-running instance.
         users: >-
           ${ merge(
                merge(default(essence.system_acl_users, {}).map(name, {
@@ -163,18 +163,18 @@ tasks:
                }))
              ) }
 
-  # 2. HOT-RELOAD ACL: community.redis.acl шлёт ACL LOAD — живой инстанс перечитывает
-  #    aclfile (отрендеренный шагом 1) целиком. Удалённые из набора юзеры исчезают из
-  #    ACL LIST при перезагрузке файла (ACL LOAD приводит инстанс к файлу). Идемпотентно
-  #    по конструкции; плагин делает diff ACL LIST до/после (changed=false при совпадении).
-  #    addr/TLS-дискриминатор — из state.tls (compute.tls_*), как add_user/restart.
+  # 2. HOT-RELOAD ACL: community.redis.acl sends ACL LOAD - the live instance re-reads
+  #    the aclfile (rendered in step 1) in full. Users dropped from the set disappear from
+  #    ACL LIST once the file reloads (ACL LOAD brings the instance in line with the file). Idempotent
+  #    by construction; the plugin diffs ACL LIST before/after (changed=false when they match).
+  #    addr/TLS discriminator - from state.tls (compute.tls_*), same as add_user/restart.
   - name: Hot-reload ACL on the live instance (ACL LOAD)
     module: community.redis.acl
     params:
       addr:     "${ compute.tls_on ? '127.0.0.1:' + compute.tls_port : '127.0.0.1:6379' }"
-      # ★ РЕДИЗАЙН default_admin (2026-06-30): AUTH под системным default_admin (requirepass
-      # убран). username + его пароль из ветки secret/redis/<inc>/users/default_admin#password.
-      # Плагин community.redis передаёт username в AUTH (parseConnConfig).
+      # ★ REDESIGN default_admin (2026-06-30): AUTH as the system default_admin (requirepass
+      # was dropped). username + its password come from the secret/redis/<inc>/users/default_admin#password branch.
+      # The community.redis plugin passes username in AUTH (parseConnConfig).
       username: "${ compute.admin_user }"
       password: "${ vault('secret/redis/' + incarnation.name + '/users/' + compute.admin_user + '#password') }"
       tls:      "${ compute.tls_on }"

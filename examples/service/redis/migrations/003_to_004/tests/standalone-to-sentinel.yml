@@ -1,8 +1,8 @@
 name: standalone-to-sentinel
 description: >
-  Ремап redis_type standalone → sentinel (режим убран из сервиса 2026-06-25). Весь
-  остальной state (redis_config/redis_users/redis_hosts/redis_sentinel + namedfields v3)
-  переезжает бит-в-бит — меняется ТОЛЬКО redis_type.
+  Remap redis_type standalone → sentinel (mode removed from the service 2026-06-25). All the
+  rest of the state (redis_config/redis_users/redis_hosts/redis_sentinel + namedfields v3)
+  carries over bit-for-bit — ONLY redis_type changes.
 
 state_before:
   redis_type: standalone

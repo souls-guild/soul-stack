@@ -1,12 +1,12 @@
-# L0-испытание (#7, 2026-06-26): оператор задаёт НЕСТАНДАРТНЫЕ тайминги failover
-# sentinel (sentinel_down_after_ms / sentinel_failover_timeout_ms). FALSIFICATION:
-# значения 12000/70000 (≠ дефолты 5000/60000) ОБЯЗАНЫ доехать:
-#   1. в плагин community.redis.sentinel params.config ключами
+# L0 test (#7, 2026-06-26): the operator sets NON-DEFAULT sentinel failover
+# timings (sentinel_down_after_ms / sentinel_failover_timeout_ms). FALSIFICATION:
+# values 12000/70000 (≠ defaults 5000/60000) MUST reach:
+#   1. the community.redis.sentinel plugin params.config with keys
 #      `sentinel down-after-milliseconds master` / `sentinel failover-timeout master`
-#      (per-master SENTINEL SET reconcile — классифицируется плагином);
-#   2. в state.redis_sentinel.down_after_ms / failover_timeout_ms (read-model).
-# Регресс «тайминги захардкожены/не читаются из input» = плагин/state получили бы
-# дефолты 5000/60000. Single-host sentinel (1 master + 0 реплик = standalone-эквивалент).
+#      (per-master SENTINEL SET reconcile — classified by the plugin);
+#   2. state.redis_sentinel.down_after_ms / failover_timeout_ms (read-model).
+# A regression "timings hardcoded/not read from input" would mean the plugin/state got
+# the defaults 5000/60000. Single-host sentinel (1 master + 0 replicas = standalone-equivalent).
 name: operator sentinel failover timings flow to plugin config and state
 
 fixtures:
@@ -20,8 +20,8 @@ fixtures:
   vault:
     secret/redis/create:
       password: s3cr3t-redis-pass-create
-    # ★ РЕДИЗАЙН default_admin (2026-06-30): default_admin — системный юзер
-    # внутрикластерного AUTH (auth_pass/PING шаги деплоя читают его по ветке users/<name>).
+    # ★ REDESIGN default_admin (2026-06-30): default_admin is the system user for
+    # intra-cluster AUTH (the deploy's auth_pass/PING steps read it from the users/<name> branch).
     secret/redis/create/users/default_admin:
       password: default-admin-secret-pass
     secret/redis/create/users/replica:
@@ -33,8 +33,8 @@ fixtures:
     secret/redis/create/users/haproxy:
       password: haproxy-sys-secret-pass
   essence:
-    # install_method — в essence (author-context, 2026-06-28): способ установки
-    # НЕ operator-input. compute.install читает default(essence.install_method, 'binary').
+    # install_method is in essence (author-context, 2026-06-28): the installation method
+    # is NOT operator-input. compute.install reads default(essence.install_method, 'binary').
     install_method: package
     redis_type: sentinel
     sentinel_master_name: master
@@ -58,16 +58,16 @@ fixtures:
       sentinel:   "allchannels -@all +auth +client|getname +client|id +client|setname +command +hello +ping +sentinel|is-master-down-by-addr +publish +role +sentinel|get-master-addr-by-name +sentinel|master +sentinel|myid +sentinel|replicas +sentinel|sentinels"
       haproxy:    "-@all +auth +client|getname +client|id +client|setname +command +hello +ping +role +sentinel|get-master-addr-by-name +sentinel|master +sentinel|myid +sentinel|replicas +sentinel|sentinels"
   input:
-    # ★ provision выключен (default-on: опущенная секция = ВКЛЮЧЕНО; кейс деплоит на
-    # ГОТОВЫЙ roster, cloud-create не нужен) → include redis-provision.yml group-drop.
+    # ★ provision disabled (default-on: an omitted section = ENABLED; the case deploys onto a
+    # READY roster, cloud-create not needed) → include redis-provision.yml group-drop.
     provision:
       enabled: false
     redis_type: sentinel
     version: "7.4.1"
     replicas_per_master: 0
-    # ★ #7 (редизайн): нестандартные тайминги failover через per-master dict
-    # sentinel_master_settings (≠ дефолты 5000/60000). Ключи — имена опции SENTINEL SET
-    # без префикса/master-name; значения строки. Поглотили прежние именованные поля
+    # ★ #7 (redesign): non-default failover timings via a per-master dict
+    # sentinel_master_settings (≠ defaults 5000/60000). Keys are SENTINEL SET option names
+    # without prefix/master-name; values are strings. Absorbed the former named fields
     # sentinel_down_after_ms / sentinel_failover_timeout_ms.
     sentinel_master_settings:
       down-after-milliseconds: "12000"
@@ -75,14 +75,14 @@ fixtures:
 
 assert:
   task_present:
-    # ★ Плагин получает per-master тайминги ключами `sentinel <opt> <master>` со
-    # значениями ОПЕРАТОРА (12000/70000) — доказывает чтение input, не хардкод.
+    # ★ The plugin receives per-master timings via keys `sentinel <opt> <master>` with
+    # the OPERATOR's values (12000/70000) — proves reading from input, not hardcoded.
     - module: community.redis.sentinel
       params_subset:
         addr: "127.0.0.1:26379"
         master_name: master
-        # ★ РЕДИЗАЙН default_admin: CONNECTION-AUTH к :26379 под default_admin (username/
-        # password). Guard на NOAUTH — отдельно от auth_pass (мониторинг master).
+        # ★ REDESIGN default_admin: CONNECTION-AUTH to :26379 as default_admin (username/
+        # password). The NOAUTH guard is separate from auth_pass (monitoring the master).
         username: default_admin
         password: default-admin-secret-pass
         config:
@@ -98,8 +98,8 @@ assert:
     redis_version: "7.4.1"
     redis_users: []
     redis_hosts: []
-    # ★ read-model (редизайн): тайминги оператора в master_settings (эффективный
-    # per-master dict = essence-дефолты поверх operator); settings — глобальные (не заданы).
+    # ★ read-model (redesign): operator timings in master_settings (effective
+    # per-master dict = essence defaults overlaid by operator); settings are global (not set).
     redis_sentinel:
       master_name: master
       quorum: 0

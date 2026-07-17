@@ -1,6 +1,6 @@
-# L0-испытание create MongoDB standalone С operator-юзерами. Покрывает: loop по input.users
-# (community.mongo.user на каждого), разведение паролей (коннект под default_admin, createUser
-# с паролем нового юзера — user_password), MongoUser $type ($type-резолв roles массив {role, db}
+# L0 test for create MongoDB standalone WITH operator users. Covers: loop over input.users
+# (community.mongo.user for each), password split (connect as default_admin, createUser
+# with the new user's password - user_password), MongoUser $type ($type-resolve roles array {role, db}
 # + default database/state), state_changes.mongo_users.
 name: mongo create standalone with operator users (loop + user_password split)
 
@@ -12,7 +12,7 @@ fixtures:
         network: { primary_ip: 10.0.0.7 }
         os: { arch: amd64, version: "12" }
 
-  # Vault: default_admin (bootstrap + admin-коннект) + appuser (operator-юзер, свой пароль).
+  # Vault: default_admin (bootstrap + admin connect) + appuser (operator user, own password).
   vault:
     secret/mongo/create/users/default_admin:
       password: mongoadmin-create-pass
@@ -47,7 +47,7 @@ fixtures:
 
 assert:
   task_present:
-    # gen паролей: default_admin + appuser (operator-юзер попал в targets).
+    # gen passwords: default_admin + appuser (operator user made it into targets).
     - module: core.vault.kv-present
 
     # bootstrap default_admin (localhost-exception).
@@ -57,8 +57,8 @@ assert:
         username: default_admin
         state: present
 
-    # ★ operator-юзер appuser (loop): коннект под default_admin (username/password =
-    # admin-креды), createUser с паролем appuser (user_password), роли из MongoUser.
+    # * operator user appuser (loop): connect as default_admin (username/password =
+    # admin creds), createUser with appuser's password (user_password), roles from MongoUser.
     - module: community.mongo.user
       params_subset:
         name: appuser
@@ -70,8 +70,8 @@ assert:
 
   state_changes:
     mongo_version: "7.0.15"
-    # mongo_users: массив MongoUser с долитыми default (database/state из $type). roles — массив
-    # {role, db}. ★ default state=present долит $type MongoUser (types.yml).
+    # mongo_users: array of MongoUser with defaults filled in (database/state from $type). roles - an array
+    # {role, db}. * default state=present fills in $type MongoUser (types.yml).
     mongo_users:
       - name: appuser
         database: appdb

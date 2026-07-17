@@ -3,11 +3,11 @@ protocol_version: 1
 namespace: core
 name: noop
 
-# No-op не выполняет действий — capabilities не требуются.
+# No-op performs no actions - capabilities are not required.
 required_capabilities: []
 
 spec:
   states:
     run:
-      description: No-op. Ничего не делает, всегда успех без change (changed=false). barrier-якорь / placeholder; ADR-015.
+      description: No-op. Does nothing, always succeeds with no change (changed=false). barrier anchor / placeholder; ADR-015.
       input: {}

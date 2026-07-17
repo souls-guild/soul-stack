@@ -1,33 +1,33 @@
-# L0-испытание (Trial, ADR-023): install.method=binary (Nexus, ОТДЕЛЬНЫЕ бинари).
-# Guard: binary-ветка install.yml активна (group → user → ТРИ core.url.fetched
-# (redis-server/redis-cli/redis-benchmark) → symlink-shell check-aof/rdb/sentinel →
-# свой redis-server.service), а package-ветка (core.pkg.installed) — placeholder-skip
-# (params пусты). Прецедент binary-install — node-exporter/modules. URL собирается per-host
-# из base_url (essence) + arch/Debian/distro_ver (soulprint.self.os) + version
-# (input.version, enum). Первичный старт redis-server — ЕДИНСТВЕННЫЙ, в server.yml
-# (core.service.running), ПОСЛЕ рендера redis.conf/ACL + data/log/socket-каталогов;
-# преждевременный binary-restart УБРАН (см. architect-аудит 2026-06-29: вызывал
-# restart-loop на старте; binary-upgrade-рестарт вынесен в upgrade-сценарий/ручной).
+# L0 trial (ADR-023): install.method=binary (Nexus, SEPARATE binaries).
+# Guard: binary branch of install.yml is active (group -> user -> THREE core.url.fetched
+# (redis-server/redis-cli/redis-benchmark) -> symlink-shell check-aof/rdb/sentinel ->
+# own redis-server.service), while the package branch (core.pkg.installed) is a placeholder-skip
+# (params empty). Precedent for binary-install is node-exporter/modules. URL is assembled per-host
+# from base_url (essence) + arch/Debian/distro_ver (soulprint.self.os) + version
+# (input.version, enum). The initial redis-server start is the SOLE one, in server.yml
+# (core.service.running), AFTER rendering redis.conf/ACL + data/log/socket directories;
+# the premature binary-restart was REMOVED (see architect audit 2026-06-29: caused a
+# restart-loop on startup; binary-upgrade-restart moved to the upgrade scenario/manual).
 #
-# ★ Редизайн install-модели: вместо tarball+extract — ТРИ отдельных core.url.fetched
-# прямо в bin_dir (схема ansible redis installation.yml). Идемпотентность нативная по
-# SHA-256 содержимого (аналог If-None-Match). redis-sentinel — СИМЛИНК на redis-server
-# (multi-call бинарь: redis-server по argv[0] redis-sentinel = sentinel-режим; отдельного
-# redis-sentinel в Nexus нет — 404). redis-check-aof/redis-check-rdb — тоже симлинки на
-# redis-server (maintenance-тулзы). ansible-роль качает только server/cli/benchmark и
-# симлинит остальное.
+# * Install-model redesign: instead of tarball+extract - THREE separate core.url.fetched
+# straight into bin_dir (scheme from ansible redis installation.yml). Idempotency native via
+# SHA-256 of content (analog of If-None-Match). redis-sentinel is a SYMLINK to redis-server
+# (multi-call binary: redis-server by argv[0] redis-sentinel = sentinel mode; a separate
+# redis-sentinel isn't in Nexus - 404). redis-check-aof/redis-check-rdb are also symlinks to
+# redis-server (maintenance tools). The ansible role downloads only server/cli/benchmark and
+# symlinks the rest.
 #
-# ★ Cross-file register guard: register'ы binary-ветки redis_server_bin/redis_cli_bin/
-# redis_benchmark_bin/redis_server_links/redis_server_unit (install.yml) остаются
-# объявленными для захвата результата fetch/links/unit (onchanges-потребителя у них теперь
-# нет — binary-restart убран). Кейс рендерится без unknown_register_reference, фиксируя что
-# orphan-register (без onchanges-потребителя) валиден per-file линтером validateTaskRefs.
+# * Cross-file register guard: the binary-branch registers redis_server_bin/redis_cli_bin/
+# redis_benchmark_bin/redis_server_links/redis_server_unit (install.yml) remain
+# declared to capture the fetch/links/unit result (there's no onchanges consumer for them now -
+# binary-restart removed). The case renders without unknown_register_reference, confirming that
+# an orphan register (without an onchanges consumer) is valid per the per-file linter validateTaskRefs.
 #
-# PRESENCE-форма (миграция с позиционной 2026-06-24): задачи идентифицируются
-# module + params_subset; индексы не сверяются. Три бинаря (redis-server/redis-cli/
-# redis-benchmark) — один и тот же core.url.fetched, дизамбигуируются по url/path. GUARD
-# «package-ветка НЕ активна при method=binary» — task_absent ниже: package-шаг при binary —
-# static-skip (Params==nil), его core.pkg.installed несёт пустые params → name не матчится.
+# PRESENCE form (migrated from positional 2026-06-24): tasks are identified by
+# module + params_subset; indexes are not compared. The three binaries (redis-server/redis-cli/
+# redis-benchmark) are the same core.url.fetched, disambiguated by url/path. GUARD
+# "package branch NOT active when method=binary" - task_absent below: the package step under binary is
+# a static-skip (Params==nil), its core.pkg.installed carries empty params -> name doesn't match.
 name: install method binary fetches redis binaries from nexus and lays out binaries with own unit
 
 fixtures:
@@ -37,15 +37,15 @@ fixtures:
       covens: [create]
       soulprint:
         network: { primary_ip: 10.0.0.5 }
-        # os.version нужен binary-URL (.../Debian/<distro_ver>/...) — Debian 12.
+        # os.version is needed for the binary-URL (.../Debian/<distro_ver>/...) - Debian 12.
         os: { arch: amd64, version: "12" }
   vault:
     secret/redis/create:
       password: s3cr3t-redis-pass-create
-    # Per-user секреты системных юзеров (secret/redis/<inc>/users/<name>#password) —
-    # их резолвит keeper-side vault() при доливе system_acl_users в apply.input.users.
-    # ★ РЕДИЗАЙН default_admin (2026-06-30): default_admin — системный юзер
-    # внутрикластерного AUTH (auth_pass/PING шаги деплоя читают его по ветке users/<name>).
+    # Per-user secrets of system users (secret/redis/<inc>/users/<name>#password) -
+    # resolved by keeper-side vault() when topping up system_acl_users into apply.input.users.
+    # * default_admin REDESIGN (2026-06-30): default_admin is the system user
+    # for intra-cluster AUTH (deploy's auth_pass/PING steps read it via the users/<name> branch).
     secret/redis/create/users/default_admin:
       password: default-admin-secret-pass
     secret/redis/create/users/replica:
@@ -59,7 +59,7 @@ fixtures:
   essence:
     redis_type: sentinel
     sentinel_master_name: master
-    # ★ Редизайн: подложка per-master sentinel-дефолтов (под input.sentinel_master_settings).
+    # * Redesign: per-master sentinel-defaults substrate (under input.sentinel_master_settings).
     sentinel_master_defaults:
       down-after-milliseconds: "5000"
       failover-timeout:        "60000"
@@ -72,18 +72,18 @@ fixtures:
     redis_config:
       maxmemory: "256mb"
 
-    # ★ install_method — в essence (author-context, 2026-06-28): способ установки НЕ
-    # operator-input. binary — дефолт; compute.install читает default(essence.install_method,
-    # 'binary'). Кейс — guard binary-ветки, поэтому install_method: binary задан ЯВНО.
+    # * install_method is in essence (author-context, 2026-06-28): the install method is NOT
+    # operator-input. binary is the default; compute.install reads default(essence.install_method,
+    # 'binary'). This case guards the binary branch, so install_method: binary is set EXPLICITLY.
     install_method: binary
-    # ★ Редизайн: base_url бинарей — в essence (author-context, Nexus-mirror). Версия —
-    # операторский input.version (enum выкаченных сборок), НЕ essence.binary_version.
+    # * Redesign: the binaries' base_url is in essence (author-context, Nexus-mirror). The version is
+    # the operator's input.version (enum of published builds), NOT essence.binary_version.
     binary_base_url: "https://downloads.example.com/redis"
 
-    # Системные ACL-юзеры redis-server + sentinel-демона (1:1 из essence/_default.yaml).
-    # ОБА ОБЯЗАТЕЛЬНЫ: guard create/sentinel.yml (assert 1b) рвёт render при пустом
-    # любом из наборов (тихий fail-open недопустим — без них репликация/sentinel↔redis
-    # AUTH сломались бы).
+    # System ACL users for redis-server + the sentinel daemon (1:1 from essence/_default.yaml).
+    # BOTH ARE REQUIRED: the create/sentinel.yml guard (assert 1b) breaks the render if either
+    # set is empty (silent fail-open is unacceptable - without them replication/sentinel<->redis
+    # AUTH would break).
     system_acl_users:
       default_admin: "~* &* +@all"
       replica:    "+psync +replconf +ping"
@@ -96,27 +96,27 @@ fixtures:
       sentinel:   "allchannels -@all +auth +client|getname +client|id +client|setname +command +hello +ping +sentinel|is-master-down-by-addr +publish +role +sentinel|get-master-addr-by-name +sentinel|master +sentinel|myid +sentinel|replicas +sentinel|sentinels"
       haproxy:    "-@all +auth +client|getname +client|id +client|setname +command +hello +ping +role +sentinel|get-master-addr-by-name +sentinel|master +sentinel|myid +sentinel|replicas +sentinel|sentinels"
   input:
-    # ★ provision выключен (default-on: опущенная секция = ВКЛЮЧЕНО; кейс деплоит на
-    # ГОТОВЫЙ roster, cloud-create не нужен) → include redis-provision.yml group-drop.
+    # * provision is disabled (default-on: an omitted section = ENABLED; the case deploys onto a
+    # READY roster, cloud-create not needed) -> include redis-provision.yml group-drop.
     provision:
       enabled: false
     redis_type: sentinel
     persistence: rdb
-    # version — enum выкаченных в Nexus сборок; определяет путь к бинарю (.../<version>/).
+    # version - enum of builds published to Nexus; determines the binary path (.../<version>/).
     version: "7.4.1"
-    # replicas_per_master=0 ЯВНО (default редизайна — 2): single-host install-кейс,
-    # size-guard sentinel = 1+0 = 1 хост.
+    # replicas_per_master=0 EXPLICITLY (redesign default is 2): single-host install case,
+    # sentinel size-guard = 1+0 = 1 host.
     replicas_per_master: 0
 
 assert:
   task_present:
-    # distro-группа redis (system). Единственный core.group.present.
+    # distro group redis (system). The single core.group.present.
     - module: core.group.present
       params_subset:
         name: redis
         system: true
 
-    # distro-юзер redis (system, nologin). Единственный core.user.present.
+    # distro user redis (system, nologin). The single core.user.present.
     - module: core.user.present
       params_subset:
         name: redis
@@ -125,16 +125,16 @@ assert:
         shell: /usr/sbin/nologin
         home: /var/lib/redis
 
-    # ★ Редизайн: ТРИ core.url.fetched качают redis-server/redis-cli/redis-benchmark
-    # ОТДЕЛЬНЫМИ файлами в /usr/local/bin (mode 0755, owner/group root). URL per-host:
+    # * Redesign: THREE core.url.fetched download redis-server/redis-cli/redis-benchmark
+    # as SEPARATE files into /usr/local/bin (mode 0755, owner/group root). URL per-host:
     # <base_url>/<arch>/Debian/<distro_ver>/<version>/redis-* (x86_64/Debian/12/7.4.1).
-    # checksum НЕ передаётся (content-идемпотентность SHA-256). register
-    # redis_server_bin/redis_cli_bin/redis_benchmark_bin. Дизамбигуатор — url/path.
-    # redis-sentinel — СИМЛИНК на redis-server (НЕ fetch): отдельного redis-sentinel в Nexus
-    # нет (404), redis-server по argv[0] redis-sentinel работает в sentinel-режиме.
-    # allow_private: true — GUARD на снятый SSRF-guard core.url (essence.binary_allow_private
-    # дефолт true: дефолтный binary_base_url = внутренний Nexus в RFC1918). Регресс «guard
-    # не снят» (флаг false/отсутствует) → fetch падает на реальном хосте (SSRF-block private-IP).
+    # checksum is NOT passed (content-idempotency via SHA-256). register
+    # redis_server_bin/redis_cli_bin/redis_benchmark_bin. Disambiguator - url/path.
+    # redis-sentinel is a SYMLINK to redis-server (NOT a fetch): a separate redis-sentinel isn't
+    # in Nexus (404), redis-server by argv[0] redis-sentinel runs in sentinel mode.
+    # allow_private: true - GUARD for the lifted SSRF-guard on core.url (essence.binary_allow_private
+    # defaults to true: the default binary_base_url = internal Nexus on RFC1918). Regression "guard
+    # not lifted" (flag false/absent) -> fetch fails on a real host (SSRF-block private-IP).
     - module: core.url.fetched
       params_subset:
         url: "https://downloads.example.com/redis/x86_64/Debian/12/7.4.1/redis-server"
@@ -162,18 +162,18 @@ assert:
         group: root
         allow_private: true
 
-    # ★ Симлинки redis-check-aof/redis-check-rdb/redis-sentinel → redis-server. redis-sentinel —
-    # симлинк (НЕ отдельный fetch): redis-server multi-call работает в sentinel-режиме по
-    # argv[0]. check-aof/check-rdb — maintenance-тулзы того же бинаря. ВРЕМЕННО (PILOT) через
-    # core.cmd.shell `ln -sfn` (у core.file нет symlink-state — core.file.symlink в backlog).
-    # Единственный core.cmd.shell в binary-плане; матчим по полной cmd-строке.
+    # * Symlinks redis-check-aof/redis-check-rdb/redis-sentinel -> redis-server. redis-sentinel is a
+    # symlink (NOT a separate fetch): redis-server multi-call runs in sentinel mode by
+    # argv[0]. check-aof/check-rdb are maintenance tools of the same binary. TEMPORARY (PILOT) via
+    # core.cmd.shell `ln -sfn` (core.file has no symlink-state - core.file.symlink is in backlog).
+    # The only core.cmd.shell in the binary plan; matched by the full cmd string.
     - module: core.cmd.shell
       params_subset:
         cmd: "ln -sfn /usr/local/bin/redis-server /usr/local/bin/redis-check-aof && ln -sfn /usr/local/bin/redis-server /usr/local/bin/redis-check-rdb && ln -sfn /usr/local/bin/redis-server /usr/local/bin/redis-sentinel"
 
-    # Свой systemd-юнит redis-server.service (binary install). register
-    # redis_server_unit. Имя юнита redis-server → hardening drop-in/core.service в обеих
-    # ветках работают. Дизамбигуатор от redis.conf — path + register-якорь.
+    # Own systemd unit redis-server.service (binary install). register
+    # redis_server_unit. The unit name redis-server -> hardening drop-in/core.service works in both
+    # branches. Disambiguator from redis.conf - path + register anchor.
     - module: core.file.rendered
       id: redis_server_unit
       params_subset:
@@ -183,18 +183,18 @@ assert:
         owner: root
         group: root
 
-    # redis.conf на месте: data-плоскость одинакова в обеих ветках (install.method
-    # меняет только установку бинарей, не render redis.conf). Дизамбигуатор от
-    # redis-server.service unit — path.
+    # redis.conf in place: the data plane is identical in both branches (install.method
+    # only changes binary installation, not the redis.conf render). Disambiguator from the
+    # redis-server.service unit - path.
     - module: core.file.rendered
       params_subset:
         path: /etc/redis/redis.conf
 
-    # conf-dir (обе ветки, БЕЗУСЛОВНО): binary-ветка пакета не несёт → создаём явно ДО
-    # рендера redis.conf/users.acl (server.yml). owner redis, mode 0750, parents:true.
-    # Регресс «binary не создаёт conf-dir» = рендер users.acl/redis.conf падает «open
-    # .../.users.acl.tmp-…: no such file or directory» (caught live 2026-06-29).
-    # Дизамбигуатор от data/log/socket/tls/modules-dir — path /etc/redis (conf-каталог).
+    # conf-dir (both branches, UNCONDITIONALLY): the binary branch carries no package -> create it explicitly BEFORE
+    # rendering redis.conf/users.acl (server.yml). owner redis, mode 0750, parents:true.
+    # Regression "binary doesn't create conf-dir" = users.acl/redis.conf render fails with "open
+    # .../.users.acl.tmp-...: no such file or directory" (caught live 2026-06-29).
+    # Disambiguator from data/log/socket/tls/modules-dir - path /etc/redis (conf directory).
     - module: core.file.directory
       params_subset:
         path: /etc/redis
@@ -203,11 +203,11 @@ assert:
         mode: "0750"
         parents: true
 
-    # data/log-dir (обе ветки, БЕЗУСЛОВНО): binary-ветка пакета не несёт → создаём явно
-    # ДО первого старта redis-server (server.yml). owner redis, mode 0750, parents:true.
-    # Регресс «binary не создаёт data/log-dir» = redis-server на binary-инсталляции
-    # падает (нет каталога RDB/AOF или logfile). Дизамбигуатор от socket/tls/modules-dir —
-    # path /var/lib/redis и /var/log/redis (точные каталоги данных/логов).
+    # data/log-dir (both branches, UNCONDITIONALLY): the binary branch carries no package -> create it explicitly
+    # BEFORE the first redis-server start (server.yml). owner redis, mode 0750, parents:true.
+    # Regression "binary doesn't create data/log-dir" = redis-server on a binary install
+    # fails (no RDB/AOF directory or logfile). Disambiguator from socket/tls/modules-dir -
+    # path /var/lib/redis and /var/log/redis (exact data/log directories).
     - module: core.file.directory
       params_subset:
         path: /var/lib/redis
@@ -224,16 +224,16 @@ assert:
         parents: true
 
   task_absent:
-    # GUARD «method=binary НЕ активирует package-ветку»: core.pkg.installed gated на
-    # install.method==package (binary → static-skip, Params==nil) → name не матчится.
-    # Регресс «package протёк в binary» = задача с реальным name redis-server.
+    # GUARD "method=binary does NOT activate the package branch": core.pkg.installed is gated on
+    # install.method==package (binary -> static-skip, Params==nil) -> name doesn't match.
+    # Regression "package leaked into binary" = a task with a real name redis-server.
     - module: core.pkg.installed
       params_subset:
         name: redis-server
 
   state_changes:
     redis_type: sentinel
-    # redis_version = input.version (enum выкаченных в Nexus сборок).
+    # redis_version = input.version (enum of builds published to Nexus).
     redis_version: "7.4.1"
     redis_config:
       maxmemory: "256mb"
@@ -241,8 +241,8 @@ assert:
       appendonly: "no"
     redis_users: []
     redis_hosts: []
-    # ★ Редизайн: тайминги failover в master_settings (дефолты essence.sentinel_master_defaults;
-    # operator dict не задан). settings — глобальные sentinel-директивы (не заданы → {}).
+    # * Redesign: failover timings in master_settings (defaults from essence.sentinel_master_defaults;
+    # operator dict not set). settings - global sentinel directives (not set -> {}).
     redis_sentinel:
       master_name: master
       quorum: 0
@@ -250,11 +250,11 @@ assert:
         down-after-milliseconds: "5000"
         failover-timeout: "60000"
       settings: {}
-    # ── namedfields (read-model). install вынесен из state в essence (v11→v12,
-    # Вариант A): в state_changes его больше нет (поле не в state_schema). Способ
-    # установки binary покрыт destiny-задачами fetch-бинарей выше (не через state).
-    # TLS off (essence без tls_*): enable/only false, port 7379 (essence-дефолт),
-    # refs пусты (essence.tls_*_ref не заданы → has()-цепочка даёт '').
+    # -- namedfields (read-model). install was moved out of state into essence (v11->v12,
+    # Option A): it's no longer in state_changes (field not in state_schema). The binary
+    # install method is covered by the destiny fetch-binary tasks above (not via state).
+    # TLS off (essence without tls_*): enable/only false, port 7379 (essence default),
+    # refs empty (essence.tls_*_ref not set -> the has() chain yields '').
     tls:
       enable:   false
       only:     false

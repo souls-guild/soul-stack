@@ -1,10 +1,10 @@
-# L0-guard pattern на AclUser.perms (positive): валидная насыщенная ACL-строка
-# ПРОХОДИТ input-валидацию и долетает до state. Оператор задаёт двух юзеров с
-# валидными, но «широкими» perms: `allkeys +@all` (полные права) и `~app:* +@read
-# -@dangerous` (точечные). Оба — корректный Redis-ACL-синтаксис → pattern пропускает,
-# юзеры попадают в state_changes.redis_users (write-model: name/perms/state, без пароля).
-# Доказывает, что pattern НЕ ложно-срабатывает на легитимных правах (включая allkeys/+@all).
-# Топология cluster shards=3 replicas=0 → 3 хоста (size-guard PASS).
+# L0-guard pattern on AclUser.perms (positive): a valid rich ACL string
+# PASSES input validation and reaches state. Operator sets two users with
+# valid but "broad" perms: `allkeys +@all` (full rights) and `~app:* +@read
+# -@dangerous` (fine-grained). Both are correct Redis-ACL syntax → the pattern lets them through,
+# users end up in state_changes.redis_users (write-model: name/perms/state, without password).
+# Proves that the pattern does NOT false-positive on legitimate rights (including allkeys/+@all).
+# Topology cluster shards=3 replicas=0 → 3 hosts (size-guard PASS).
 name: valid wide acl perms pass input validation and reach state
 
 fixtures:
@@ -28,8 +28,8 @@ fixtures:
   vault:
     secret/redis/create:
       password: s3cr3t-redis-pass-create
-    # ★ РЕДИЗАЙН default_admin (2026-06-30): default_admin — системный юзер внутрикластерного
-    # AUTH; masteruser/masterauth cluster-деплоя читают его пароль ветки users/default_admin.
+    # ★ default_admin REDESIGN (2026-06-30): default_admin is the system user for intra-cluster
+    # AUTH; masteruser/masterauth of the cluster deploy read its password from the users/default_admin branch.
     secret/redis/create/users/default_admin:
       password: default-admin-secret-pass
     secret/redis/create/users/replica:
@@ -63,8 +63,8 @@ fixtures:
       sentinel:   "allchannels +multi +slaveof +ping +exec +subscribe +config|rewrite +role +publish +info +client|setname +client|kill +script|kill"
       haproxy:    "-@all +auth +client|getname +client|id +client|setname +command +hello +ping +role +info +cluster|info"
   input:
-    # ★ provision выключен (default-on: опущенная секция = ВКЛЮЧЕНО; кейс деплоит на
-    # ГОТОВЫЙ roster, cloud-create не нужен) → include redis-provision.yml group-drop.
+    # ★ provision disabled (default-on: an omitted section = ENABLED; the case deploys onto a
+    # READY roster, cloud-create is not needed) → include redis-provision.yml group-drop.
     provision:
       enabled: false
     redis_type: cluster
@@ -77,10 +77,10 @@ fixtures:
       - { name: app, perms: "~app:* +@read -@dangerous", state: "on" }
 
 assert:
-  # users.acl: системные (4, из essence) + admin (allkeys +@all) + app (точечные).
-  # Прямое доказательство, что валидные «широкие» perms прошли pattern и долетели в
-  # render_context.vars.users (deep-compare map) с per-user vault-паролями. Дизамбигуатор
-  # от redis.conf — path + register-якорь.
+  # users.acl: system (4, from essence) + admin (allkeys +@all) + app (fine-grained).
+  # Direct proof that valid "broad" perms passed the pattern and reached
+  # render_context.vars.users (deep-compare map) with per-user vault passwords. Disambiguator
+  # from redis.conf is path + register anchor.
   task_present:
     - module: core.file.rendered
       id: redis_acl
@@ -126,8 +126,8 @@ assert:
           role: ""
           essence: {}
 
-  # Оба юзера прошли pattern на input-валидации и попали в write-model state.
-  # redis_users — МАССИВ AclUser [{name,perms,state}] БЕЗ пароля (keeper-side vault).
+  # Both users passed the pattern in input validation and ended up in write-model state.
+  # redis_users is an ARRAY of AclUser [{name,perms,state}] WITHOUT password (keeper-side vault).
   state_changes:
     redis_type: cluster
     redis_version: "7.4.1"

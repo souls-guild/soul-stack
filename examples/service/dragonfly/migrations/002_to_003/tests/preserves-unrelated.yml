@@ -1,7 +1,7 @@
 name: preserves-unrelated
 description: >
-  Миграция трогает ТОЛЬКО provisioned_vm_ids/provisioned_provider — остальной
-  state (df_config/df_users/топология/tls) сохраняется дословно. Зеркало redis
+  The migration touches ONLY provisioned_vm_ids/provisioned_provider — the rest of
+  state (df_config/df_users/topology/tls) is preserved verbatim. Mirrors redis
   006_to_007 preserves-unrelated.
 
 state_before:

@@ -1,15 +1,15 @@
-# L0-кейс: переопределённый web_telemetry_path (!= /metrics).
+# L0 case: overridden web_telemetry_path (!= /metrics).
 #
-# web_telemetry_path=/node/metrics → apply:input передаёт его в destiny →
-# render_context.input.web_telemetry_path основного unit-шага (Вариант B,
-# ADR-010 §3.2 amendment: operator-input едет в render_context.input напрямую).
-# Контраст с render-defaults (дефолт /metrics). Флаг --web.telemetry-path
-# рендерится ВСЕГДА (дефолт непустой); сам text/template-рендер флага покрыт
-# unit-тестом keeper/internal/render (TestNodeExporterService_TelemetryPathOverride)
-# — L0 фиксирует только CEL-проброс значения в render_context.
+# web_telemetry_path=/node/metrics -> apply:input passes it to destiny ->
+# render_context.input.web_telemetry_path of the main unit step (Variant B,
+# ADR-010 §3.2 amendment: operator-input goes directly into render_context.input).
+# Contrast with render-defaults (default /metrics). The --web.telemetry-path flag
+# is ALWAYS rendered (default is non-empty); the actual text/template render of the
+# flag is covered by the unit test keeper/internal/render (TestNodeExporterService_TelemetryPathOverride)
+# - L0 only fixes the CEL passthrough of the value into render_context.
 #
-# render_context сверяется deep-equal целиком (harness), поэтому input перечислен
-# полностью (как listen-non10); ключевая величина — web_telemetry_path.
+# render_context is compared deep-equal wholesale (harness), so input is listed
+# in full (like listen-non10); the key value is web_telemetry_path.
 name: node-exporter renders overridden web telemetry path
 
 fixtures:
@@ -26,8 +26,8 @@ fixtures:
 
 assert:
   task_present:
-    # Основной unit-шаг (дизамбигуатор — path). web_telemetry_path доехал в
-    # render_context.input override-значением, collector_options — дефолт {}.
+    # Main unit step (disambiguator - path). web_telemetry_path arrived in
+    # render_context.input as an override value, collector_options - default {}.
     - module: core.file.rendered
       params_subset:
         path: /etc/systemd/system/node_exporter.service

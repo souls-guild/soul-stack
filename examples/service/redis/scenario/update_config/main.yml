@@ -1,23 +1,23 @@
 name: update_config
 description: >-
-  Изменить директивы redis.conf на работающем Redis без рестарта (hot-reload). Оператор
-  задаёт изменённые простые понятия (память, eviction, persistence), сценарий
-  перевычисляет конфиг и применяет hot-settable директивы на живом инстансе.
+  Change redis.conf directives on a running Redis without a restart (hot-reload). The operator
+  sets changed simple concepts (memory, eviction, persistence), the scenario
+  recomputes the config and applies hot-settable directives on the live instance.
 
-# ── Входной контракт оператора (docs/input.md) ────────────────────────────────
-# Простые типизированные понятия — изменяемое подмножество create-контракта. Не
-# заданное оператором → берётся из incarnation.state (подложка), чтобы повторный
-# update_config не сбрасывал ранее развёрнутые директивы к essence-дефолту.
+# -- Operator input contract (docs/input.md) ────────────────────────────────
+# Simple typed concepts - a mutable subset of the create contract. Not
+# set by the operator -> taken from incarnation.state (substrate), so that a repeat
+# update_config doesn't reset previously deployed directives to the essence default.
 input:
   memory_mb:
     type: integer
     required: false
     min: 64
     description: >-
-      Новый бюджет памяти под Redis, МБ. maxmemory = int(memory_mb)*reserve/100+"mb"
-      (та же трансляция, что create). Не задан → берётся ранее развёрнутый
-      incarnation.state.memory_mb (подложка). min:64 — как create (усечение не даёт
-      "0mb" = безлимит).
+      New memory budget for Redis, MB. maxmemory = int(memory_mb)*reserve/100+"mb"
+      (same translation as create). Not set -> takes the previously deployed
+      incarnation.state.memory_mb (substrate). min:64 - same as create (truncation doesn't give
+      "0mb" = unlimited).
 
   maxmemory_policy:
     type: string
@@ -32,103 +32,103 @@ input:
       - volatile-random
       - volatile-ttl
     description: >-
-      Новая политика вытеснения. Не задана → берётся ранее развёрнутая
-      incarnation.state.maxmemory_policy (подложка).
+      New eviction policy. Not set -> takes the previously deployed
+      incarnation.state.maxmemory_policy (substrate).
 
   io_threads:
     type: integer
     required: false
     min: 0
-    # dedicated io_threads (симметрия covenant.yml create): io-threads — startup-only
-    # директива (плагин пропускает CONFIG SET), значение вступит при следующем рестарте
-    # процесса из redis.conf шага 1. БЕЗ default (как memory_mb/maxmemory_policy day-2):
-    # не задан или 0 → сохраняется ранее развёрнутое из state.redis_config (подложка).
+    # dedicated io_threads (symmetric with covenant.yml create): io-threads is a startup-only
+    # directive (the plugin skips it on CONFIG SET), the value takes effect on the next process
+    # restart from redis.conf of step 1. WITHOUT default (like memory_mb/maxmemory_policy day-2):
+    # not set or 0 -> keeps the previously deployed value from state.redis_config (substrate).
     description: >-
-      Новое число I/O-потоков Redis (директива io-threads, startup-only — вступит при
-      следующем рестарте процесса). Не задан или 0 → ранее развёрнутое
-      (incarnation.state, подложка).
+      New number of Redis I/O threads (io-threads directive, startup-only - takes effect on
+      the next process restart). Not set or 0 -> the previously deployed value
+      (incarnation.state, substrate).
 
   persistence:
     type: string
     required: false
-    # ★ enum синхронизирован с essence.persistence_presets / covenant.yml (aof/rdb_aof
-    # разбиты на _1sec/_always): старые aof/rdb_aof — НЕ ключи presets → рвали render
-    # `no such key` в essence.persistence_presets[persistence] → incarnation error_locked.
+    # * enum synchronized with essence.persistence_presets / covenant.yml (aof/rdb_aof
+    # split into _1sec/_always): the old aof/rdb_aof are NOT preset keys -> broke the render with
+    # `no such key` in essence.persistence_presets[persistence] -> incarnation error_locked.
     enum: [off, aof_1sec, aof_always, rdb, rdb_aof_1sec, rdb_aof_always]
     description: >-
-      Новый режим persistence (транслируется в save/appendonly/appendfsync через
-      essence.persistence_presets). off — без сохранения; aof_1sec/aof_always — только AOF
-      (fsync everysec/always); rdb — только снапшоты; rdb_aof_1sec/rdb_aof_always — снапшоты
-      + AOF. Не задан → ранее развёрнутый incarnation.state.persistence (подложка).
+      New persistence mode (translated to save/appendonly/appendfsync via
+      essence.persistence_presets). off - no saving; aof_1sec/aof_always - AOF only
+      (fsync everysec/always); rdb - snapshots only; rdb_aof_1sec/rdb_aof_always - snapshots
+      + AOF. Not set -> the previously deployed incarnation.state.persistence (substrate).
 
   redis_settings:
     type: object
     required: false
-    # x-directives: redis — валидировать ключи против каталога директив сервиса
-    # (essence.redis_directives). Долетает в DTO input_schema сырым (NIM-76).
+    # x-directives: redis - validate keys against the service's directive catalog
+    # (essence.redis_directives). Passed through to the DTO input_schema raw (NIM-76).
     x-directives: redis
     description: >-
-      Passthrough-директивы redis.conf (key→value, строки), перекрывают дефолты/пресет
-      в merge (last-wins). Для директив, не покрытых простыми полями. Сливаются ПОВЕРХ
-      ранее развёрнутого incarnation.state.redis_config (накопительно: не заданное
-      здесь сохраняет прежнее значение). UI — KEY→VALUE-редактор.
-    # ★ #6-симметрия create (qa-gap): additional_properties сужен до {type: string} —
-    # директивы redis.conf плоский map имя→строка (`maxmemory 512mb`), value-тип string
-    # точен (ADR-045: object + скалярный value-тип → key→value-виджет, не сырой JSON).
-    # Раньше тут было additional_properties: true (произвольный JSON) — UI рисовал
-    # сырой JSON, а опечатка директивы протаскивалась молча (assert ниже её ловит).
+      Passthrough redis.conf directives (key->value, strings), override defaults/preset
+      in the merge (last-wins). For directives not covered by simple fields. Merged ON TOP
+      of the previously deployed incarnation.state.redis_config (cumulative: what's not
+      set here keeps its previous value). UI - a KEY->VALUE editor.
+    # * #6 symmetry with create (qa-gap): additional_properties narrowed to {type: string} -
+    # redis.conf directives are a flat name->string map (`maxmemory 512mb`), the string
+    # value-type is exact (ADR-045: object + scalar value-type -> key->value widget, not raw JSON).
+    # Previously this was additional_properties: true (arbitrary JSON) - the UI rendered
+    # raw JSON, and a directive typo passed through silently (the assert below catches it).
     properties: {}
     additional_properties:
       type: string
 
-# ── Декларативные input-инварианты (validate:) ───────────────────────────────────
-# Сценарий обязан иметь, что апдейтить: хотя бы одно изменяемое поле. INPUT-ONLY
-# (has()-цепочка, default()/essence недоступны в validate).
+# -- Declarative input invariants (validate:) ───────────────────────────────────
+# The scenario must have something to update: at least one mutable field. INPUT-ONLY
+# (has() chain, default()/essence unavailable in validate).
 validate:
   - that: "has(input.memory_mb) || has(input.maxmemory_policy) || has(input.persistence) || has(input.io_threads) || has(input.redis_settings)"
-    message: "update_config требует хотя бы одно изменяемое поле (memory_mb/maxmemory_policy/persistence/io_threads/redis_settings)"
+    message: "update_config requires at least one mutable field (memory_mb/maxmemory_policy/persistence/io_threads/redis_settings)"
 
-# ── Вычисляемые scenario-vars (compute:, ADR-009 amendment) ──────────────────────
-# Рун-уровневый контекст (input/essence/incarnation — без soulprint, host-инвариант).
-# Источник истины — incarnation.state (что РАЗВЁРНУТО), вход — ДЕЛЬТА оператора.
+# -- Computed scenario-vars (compute:, ADR-009 amendment) ──────────────────────
+# Run-level context (input/essence/incarnation - without soulprint, host-invariant).
+# Source of truth is incarnation.state (what's DEPLOYED), input is the operator's DELTA.
 #
-# tls_* — дискриминатор коннекта плагина из ИМЕНОВАННОГО state.tls (state_schema v3,
-# конвенция §7a), идентично restart: плагин обязан коннектиться по TLS, если
-# Redis на TLS (иначе plaintext на TLS-only провалит шаг; AUTH plaintext при открытом
-# plain-порту — утечка пароля). tls_ca — PEM CA из vault(incarnation.state.tls.ca_ref)
-# (плагин ждёт PEM, не путь; в state лежит Vault-ПУТЬ, vault() резолвит в PEM).
+# tls_* - the plugin's connection discriminator from the NAMED state.tls (state_schema v3,
+# convention §7a), identical to restart: the plugin must connect over TLS if
+# Redis is on TLS (otherwise plaintext on a TLS-only setup would fail the step; AUTH plaintext on an
+# open plain port - password leak). tls_ca - PEM CA from vault(incarnation.state.tls.ca_ref)
+# (the plugin expects PEM, not a path; state holds a Vault PATH, vault() resolves it to PEM).
 compute:
-  # ── admin_user: имя СИСТЕМНОГО ACL-юзера внутрикластерного AUTH (default_admin) ──
-  # ★ РЕДИЗАЙН default_admin (2026-06-30): тело сценария БЕЗ extends: covenant (нет общего
-  # compute), поэтому имя системного admin-юзера объявляется ЛОКАЛЬНЫМ литералом — единый
-  # источник внутри сценария (плагин-коннект community.redis.config + masterauth-долив в
-  # apply.input.config + Vault-путь пароля читают compute.admin_user, не хардкодят
-  # 'default_admin' в каждом месте). Симметрия с covenant.compute.admin_user деплой-тел.
+  # -- admin_user: name of the SYSTEM ACL user for intra-cluster AUTH (default_admin) --
+  # * default_admin REDESIGN (2026-06-30): the scenario body has NO extends: covenant (no shared
+  # compute), so the system admin username is declared as a LOCAL literal - a single
+  # source within the scenario (the plugin connect community.redis.config + masterauth topup in
+  # apply.input.config + the Vault password path all read compute.admin_user, not hardcoding
+  # 'default_admin' in each place). Symmetric with covenant.compute.admin_user of deploy bodies.
   admin_user: "${ 'default_admin' }"
   tls_on:   "${ has(incarnation.state) && has(incarnation.state.tls) && default(incarnation.state.tls.enable, false) }"
   tls_port: "${ compute.tls_on ? string(incarnation.state.tls.port) : '' }"
-  # tls_ca из ИМЕНОВАННОГО state.tls.ca_ref, симметрично tls_port из state.tls.port. После
-  # rotate_tls (меняет state.tls.ca_ref) коннект берёт АКТУАЛЬНЫЙ CA, не essence-дефолт.
+  # tls_ca from the NAMED state.tls.ca_ref, symmetric with tls_port from state.tls.port. After
+  # rotate_tls (changes state.tls.ca_ref) the connect uses the CURRENT CA, not the essence default.
   tls_ca:   "${ compute.tls_on ? vault(incarnation.state.tls.ca_ref) : '' }"
 
-  # ── Эффективная версия redis (для version-aware валидатора redis_settings, #6) ──
-  # Повторный прогон версию НЕ переустанавливает — берём РАЗВЁРНУТУЮ из incarnation.state
-  # (зафиксирована create). Серия major.minor этой версии выбирает набор валидных
-  # директив в каталоге (assert ниже). Старые инкарнации без поля → '' (assert skip:
-  # не-каталожную версию не блокируем). Симметрия с compute.redis_version create.
+  # -- Effective redis version (for the version-aware redis_settings validator, #6) --
+  # A repeat run does NOT reinstall the version - we take the DEPLOYED one from incarnation.state
+  # (fixed at create). The major.minor series of this version picks the set of valid
+  # directives in the catalog (assert below). Older incarnations without the field -> '' (assert skip:
+  # a non-catalog version is not blocked). Symmetric with compute.redis_version at create.
   redis_version: "${ default(incarnation.state.redis_version, '') }"
 
-  # Эффективное persistence: вход бьёт развёрнутое state (подложка), default rdb для
-  # совсем старых инкарнаций без поля.
+  # Effective persistence: input beats deployed state (substrate), default rdb for
+  # very old incarnations without the field.
   persistence: "${ default(input.persistence, default(incarnation.state.persistence, 'rdb')) }"
 
-  # ── Перевычисленный redis_config (тот же merge-перевод, что create) ──────────
-  # Слои (SHALLOW last-wins): РАЗВЁРНУТЫЙ incarnation.state.redis_config (база повторного прогона —
-  # сохраняет TLS/cluster/прочие директивы, которые оператор сейчас не трогает) →
-  # persistence-пресет → вычисленные maxmemory/policy/io-threads (вход ИЛИ state-подложка) →
-  # input.redis_settings (passthrough дельта). TLS-директивы УЖЕ в базовом
-  # state.redis_config (create их туда положил) — здесь НЕ перевычисляются (TLS-материал
-  # update_config не трогает; ротация — rotate_tls). Аналогично cluster-директивы.
+  # -- Recomputed redis_config (the same merge translation as create) ──────────
+  # Layers (SHALLOW last-wins): the DEPLOYED incarnation.state.redis_config (base of the repeat run -
+  # keeps TLS/cluster/other directives the operator isn't touching right now) ->
+  # persistence preset -> computed maxmemory/policy/io-threads (input OR state substrate) ->
+  # input.redis_settings (passthrough delta). TLS directives are ALREADY in the base
+  # state.redis_config (create put them there) - not recomputed here (update_config doesn't
+  # touch TLS material; rotation is rotate_tls). Same for cluster directives.
   redis_config: >-
     ${ merge(
          incarnation.state.redis_config,
@@ -151,10 +151,10 @@ compute:
          default(input.redis_settings, {})
        ) }
 
-# ── Мутация incarnation.state ─────────────────────────────────────────────────
-# Сценарий фиксирует НОВЫЙ развёрнутый redis_config + изменённые namedfields (read-model
-# из тех же compute/input, что redis_config — без drift, как create). Не заданные
-# оператором namedfields сохраняют прежнее значение (подложка из state).
+# -- incarnation.state mutation ─────────────────────────────────────────────────
+# The scenario records the NEW deployed redis_config + changed namedfields (read-model
+# from the same compute/input as redis_config - no drift, like create). Namedfields not
+# set by the operator keep their prior value (substrate from state).
 state_changes:
   - set: redis_config
     value: "${ compute.redis_config }"
@@ -164,59 +164,59 @@ state_changes:
     value: "${ int(default(input.memory_mb, default(incarnation.state.memory_mb, 0))) }"
   - set: maxmemory_policy
     value: "${ default(input.maxmemory_policy, default(incarnation.state.maxmemory_policy, '')) }"
-  # io_threads read-model (подложка как memory_mb): задан → новый; иначе ранее
-  # развёрнутый state.io_threads; иначе 0. Держит state.io_threads ≡ redis_config['io-threads'].
+  # io_threads read-model (substrate like memory_mb): set -> new; else the previously
+  # deployed state.io_threads; else 0. Keeps state.io_threads == redis_config['io-threads'].
   - set: io_threads
     value: "${ int(default(input.io_threads, default(incarnation.state.io_threads, 0))) }"
 
 tasks:
-  # ── Version-aware валидатор имён директив redis_settings (assert, #6) ─────────────
-  # ★ qa-gap: update_config принимает redis_settings (passthrough KEY→VALUE) —
-  # без проверки оператор молча протащит опечатку (`maxmemoyr 512mb`) или директиву
-  # чужой версии → CONFIG SET отвергнет / redis-server не перезапустится (поздний,
-  # непонятный отказ). Тот же assert-валидатор, что в create/main.yml: сверяет КАЖДОЕ
-  # ИМЯ директивы input.redis_settings против каталога валидных имён ДЛЯ РАЗВЁРНУТОЙ
-  # версии (essence.redis_directives[<серия compute.redis_version>], где
-  # compute.redis_version = incarnation.state.redis_version) — первый неизвестный ключ
-  # рвёт render (422 assert-failed) ДО applying, понятным сообщением.
+  # -- Version-aware validator for redis_settings directive names (assert, #6) ─────────────
+  # * qa-gap: update_config accepts redis_settings (passthrough KEY->VALUE) -
+  # without a check the operator would silently pass a typo (`maxmemoyr 512mb`) or a directive
+  # from another version -> CONFIG SET rejects it / redis-server fails to restart (a late,
+  # confusing failure). The same assert-validator as in create/main.yml: checks EVERY
+  # directive NAME of input.redis_settings against the catalog of valid names FOR THE DEPLOYED
+  # version (essence.redis_directives[<series of compute.redis_version>], where
+  # compute.redis_version = incarnation.state.redis_version) - the first unknown key
+  # breaks the render (422 assert-failed) BEFORE applying, with a clear message.
   #
-  # ПОЧЕМУ assert, а не validate: каталог живёт в essence, а validate-контекст
-  # INPUT-ONLY (essence недоступен, структурный CEL-барьер). essence.redis_directives
-  # доступен ТОЛЬКО assert-у (полный scenario-контекст). Run-level, host-инвариантно.
+  # WHY assert and not validate: the catalog lives in essence, and the validate context is
+  # INPUT-ONLY (essence unavailable, a structural CEL barrier). essence.redis_directives
+  # is available ONLY to assert (full scenario context). Run-level, host-invariant.
   #
-  # ВЕРСИЯ — compute.redis_version (РАЗВЁРНУТАЯ, из incarnation.state). Повторный прогон версию не
-  # меняет → валидируем против той же серии, что задеплоена. EMPTY-CATALOG-SKIP
-  # (!has(essence.redis_directives)) — каталог опционален (минимальные fixtures);
-  # версия вне каталога (compute.redis_version == '' или серия отсутствует) → skip.
-  # Механика version→серия (без split) идентична create/main.yml.
+  # VERSION - compute.redis_version (DEPLOYED, from incarnation.state). A repeat run doesn't
+  # change the version -> we validate against the same series that's deployed. EMPTY-CATALOG-SKIP
+  # (!has(essence.redis_directives)) - the catalog is optional (minimal fixtures);
+  # a version outside the catalog (compute.redis_version == '' or the series is missing) -> skip.
+  # The version->series mechanics (no split) are identical to create/main.yml.
   - name: Validate redis_settings directive names against the catalog for the deployed Redis version
     assert:
-      # that[] и message — СКАЛЯРНЫЕ строки (не block-scalar): soul-lint требует
-      # *ast.StringNode, block-scalar = type_mismatch. Предикат идентичен create/main.yml
-      # (источник — incarnation.state.redis_version вместо input.version).
+      # that[] and message are SCALAR strings (not block-scalar): soul-lint requires
+      # *ast.StringNode, block-scalar = type_mismatch. Predicate identical to create/main.yml
+      # (source is incarnation.state.redis_version instead of input.version).
       that:
         - "!has(essence.redis_directives) || default(input.redis_settings, {}).all(k, essence.redis_directives.all(s, compute.redis_version.matches('^([0-9]+:)?' + s + '[.]') ? (k in essence.redis_directives[s]) : true))"
-      message: "redis_settings содержит неизвестную директиву redis.conf для развёрнутой версии Redis (incarnation.state.redis_version): сверь имя с каталогом валидных директив этой версии (essence.redis_directives[<major.minor>]) — опечатка или директива из другой версии Redis. Каталог генерируется scripts/gen-redis-catalog.sh из src/config.c."
+      message: "redis_settings contains an unknown redis.conf directive for the deployed Redis version (incarnation.state.redis_version): check the name against the catalog of valid directives for this version (essence.redis_directives[<major.minor>]) - a typo or a directive from a different Redis version. The catalog is generated by scripts/gen-redis-catalog.sh from src/config.c."
 
-  # 1. Перерендерить redis.conf на диск с новым merged config (тот же режим-агностичный
-  #    destiny redis, что create/add_node). Это desired state на диске — для следующего
-  #    рестарта процесса (startup-only-директивы из state.redis_config + новые). version —
-  #    из state; conf_dir/data_dir — из essence (host-layout кластера, директива B, вынесен
-  #    в essence v11→v12, Вариант A); пароль/users — keeper-side vault(), сохраняются
-  #    неизменными (update_config их не трогает, но redis.conf рендерится целиком).
-  #    config — ПЕРЕВЫЧИСЛЕННЫЙ compute.redis_config.
+  # 1. Re-render redis.conf on disk with the new merged config (the same mode-agnostic
+  #    destiny redis as create/add_node). This is the desired state on disk - for the next
+  #    process restart (startup-only directives from state.redis_config + new ones). version -
+  #    from state; conf_dir/data_dir - from essence (cluster host-layout, directive B, moved
+  #    into essence v11->v12, Option A); password/users - keeper-side vault(), kept
+  #    unchanged (update_config doesn't touch them, but redis.conf is rendered whole).
+  #    config - the RECOMPUTED compute.redis_config.
   - name: Re-render redis.conf with the updated config (full file on disk)
     apply:
       destiny: redis
       input:
         version:  "${ default(incarnation.state.redis_version, '') }"
-        # ★ install: ОБЯЗАТЕЛЕН на повторном прогоне (регресс live E2E 2026-07-01). Без него
-        # диспетчер install.yml по !has(input.install) скатывается в package-ветку →
-        # core.pkg `apt install redis-server=<version>` (версия из Nexus-binary в apt
-        # ОТСУТСТВУЕТ → env exited 100). Собираем ТУ ЖЕ binary-структуру, что create
-        # (deploy-body → compute.install из essence.install_method) — единый способ
-        # установки. Отличие от covenant.install: version из РАЗВЁРНУТОГО state
-        # (redis_version), а не input.version (повторный прогон версию не переустанавливает).
+        # * install: REQUIRED on a repeat run (regression from live E2E 2026-07-01). Without it
+        # the install.yml dispatcher falls back to the package branch on !has(input.install) ->
+        # core.pkg `apt install redis-server=<version>` (the version from Nexus-binary is
+        # ABSENT in apt -> env exited 100). We assemble the SAME binary structure as create
+        # (deploy-body -> compute.install from essence.install_method) - a single install
+        # method. Differs from covenant.install: version comes from the DEPLOYED state
+        # (redis_version), not input.version (a repeat run doesn't reinstall the version).
         install: >-
           ${ (default(essence.install_method, 'binary') == 'binary')
                ? {
@@ -228,16 +228,16 @@ tasks:
                : { 'method': 'package' } }
         conf_dir: "${ default(essence.conf_dir, '/etc/redis') }"
         data_dir: "${ default(essence.data_dir, '/var/lib/redis') }"
-        # ★ РЕДИЗАЙН default_admin (2026-06-30): apply.input.password УДАЛЁН (destiny redis
-        # его больше не принимает — requirepass убран). masteruser/masterauth ДОЛИВАЮТСЯ в
-        # config обычными директивами ПОВЕРХ перевычисленного compute.redis_config. КРИТИЧНО:
-        # эта задача перерендеривает redis.conf целиком (тот же кирпич destiny `redis`) →
-        # без долива статической replica→master AUTH redis.conf на диске потерял бы masteruser/
-        # masterauth → cluster/sentinel-реплики после рестарта упёрлись бы в NOAUTH при PSYNC.
-        # На master-нодах директива инертна (failover-safe). ★ ОТЛИЧНО от state_changes.redis_config
-        # ниже: туда уходит ЧИСТЫЙ compute.redis_config БЕЗ masterauth — пароль НЕ уезжает в
-        # incarnation.state (секрет в Vault, ADR-061). masterauth — vault()-в-ячейке (seal-маскинг
-        # ADR-010 §7.4); admin_user = compute.admin_user; путь — secret/redis/<inc>/users/
+        # * default_admin REDESIGN (2026-06-30): apply.input.password REMOVED (destiny redis
+        # no longer accepts it - requirepass dropped). masteruser/masterauth are TOPPED UP into
+        # config as plain directives ON TOP of the recomputed compute.redis_config. CRITICAL:
+        # this task re-renders redis.conf whole (the same destiny `redis` brick) ->
+        # without topping up the static replica->master AUTH, redis.conf on disk would lose masteruser/
+        # masterauth -> cluster/sentinel replicas would hit NOAUTH on PSYNC after a restart.
+        # The directive is inert on master nodes (failover-safe). * DIFFERS from state_changes.redis_config
+        # below: that one carries the CLEAN compute.redis_config WITHOUT masterauth - the password does NOT
+        # end up in incarnation.state (secret stays in Vault, ADR-061). masterauth is a vault()-in-cell (seal-masking
+        # ADR-010 §7.4); admin_user = compute.admin_user; path - secret/redis/<inc>/users/
         # default_admin#password.
         config: >-
           ${ merge(compute.redis_config, {
@@ -245,14 +245,14 @@ tasks:
                'masterauth': vault('secret/redis/' + incarnation.name + '/users/' + compute.admin_user + '#password')
              }) }
         modules_base_url: "${ default(essence.modules_base_url, '') }"
-        # ★★ КРИТИЧНО (system-ACL-users d2): redis.conf-рендер этой задачи перерендеривает
-        # и users.acl (тот же destiny `redis` кирпич) → ОБЯЗАН долить системные из essence,
-        # иначе update_config СТЁР БЫ replica/monitoring/sentinel/haproxy (как add_user).
-        # Системные ПЕРВЫМИ, operator-extra (state.redis_users — МАССИВ AclUser, wave 1b)
-        # ПОВЕРХ (last-wins). Системные НЕ в state (пункт 7 d2) — доливаются из essence на
-        # каждом рендере. has()-guard на state.redis_users — back-compat (инкарнации без
-        # operator-extra). Vault-пароль той же ветки secret/redis/<inc>/users/<name>#password.
-        # operator-extra: .map(u, {u.name: …}) (имя из поля u.name, раньше map-ключ).
+        # ** CRITICAL (system-ACL-users d2): this task's redis.conf render also re-renders
+        # users.acl (the same destiny `redis` brick) -> MUST top up the system ones from essence,
+        # otherwise update_config WOULD WIPE OUT replica/monitoring/sentinel/haproxy (like add_user).
+        # System ones FIRST, operator-extra (state.redis_users - an ARRAY of AclUser, wave 1b)
+        # ON TOP (last-wins). System ones are NOT in state (item 7 d2) - topped up from essence on
+        # every render. The has() guard on state.redis_users is back-compat (incarnations without
+        # operator-extra). Vault password from the same branch secret/redis/<inc>/users/<name>#password.
+        # operator-extra: .map(u, {u.name: ...}) (name from field u.name, previously the map key).
         users: >-
           ${ merge(
                merge(default(essence.system_acl_users, {}).map(name, {
@@ -273,34 +273,34 @@ tasks:
                  : {}
              ) }
 
-  # 2. HOT-RELOAD: применить hot-settable директивы к живому инстансу (CONFIG SET).
-  #    ★ rewrite=false НАМЕРЕННО (NIM-53): redis.conf уже отрендерен ЦЕЛИКОМ шагом 1 — он
-  #    источник истины файла. CONFIG REWRITE перезаписал бы файл из ЖИВОГО in-memory конфига
-  #    и ОТКАТИЛ БЫ startup-only-директивы (io-threads/…) к их live-значению (плагин
-  #    пропускает их на CONFIG SET — процесс не рестартовал), стерев новое значение шага 1
-  #    «для следующего рестарта». Симметрия rotate_tls (рендер + hot-reload без rewrite).
-  #    Передаём ВЕСЬ compute.redis_config — плагин сам пропускает startup-only по денилисту
-  #    (port/dir/io-threads/aclfile/cluster-enabled/loadmodule/…), применяет только
-  #    hot-settable. changed=false при no-op (честный CONFIG GET-diff в плагине →
-  #    идемпотентность повторного прогона). addr/TLS-дискриминатор — из state.tls
-  #    (compute.tls_*), как restart. changed_when здесь НЕ давим: реальный change
-  #    (применённая директива) обязан отразиться в RunResult.
+  # 2. HOT-RELOAD: apply hot-settable directives to the live instance (CONFIG SET).
+  #    * rewrite=false INTENTIONALLY (NIM-53): redis.conf is already fully re-rendered by step 1 - it's
+  #    the source of truth for the file. CONFIG REWRITE would overwrite the file from the LIVE in-memory config
+  #    and ROLL BACK startup-only directives (io-threads/...) to their live value (the plugin
+  #    skips them on CONFIG SET - the process didn't restart), erasing step 1's new value
+  #    "for the next restart". Symmetric with rotate_tls (render + hot-reload without rewrite).
+  #    We pass the WHOLE compute.redis_config - the plugin itself skips startup-only via a denylist
+  #    (port/dir/io-threads/aclfile/cluster-enabled/loadmodule/...), applies only
+  #    hot-settable ones. changed=false on no-op (honest CONFIG GET-diff in the plugin ->
+  #    idempotency of a repeat run). addr/TLS discriminator - from state.tls
+  #    (compute.tls_*), same as restart. changed_when is NOT suppressed here: a real change
+  #    (an applied directive) must be reflected in RunResult.
   - name: Hot-reload changed config directives on the live instance (CONFIG SET)
     module: community.redis.config
     params:
       addr:     "${ compute.tls_on ? '127.0.0.1:' + compute.tls_port : '127.0.0.1:6379' }"
-      # ★ РЕДИЗАЙН default_admin (2026-06-30): AUTH под системным default_admin (requirepass
-      # убран). username + его пароль из ветки secret/redis/<inc>/users/default_admin#password.
-      # Плагин community.redis передаёт username в AUTH (parseConnConfig).
+      # * default_admin REDESIGN (2026-06-30): AUTH under the system default_admin (requirepass
+      # dropped). username + its password come from the branch secret/redis/<inc>/users/default_admin#password.
+      # The community.redis plugin passes username in AUTH (parseConnConfig).
       username: "${ compute.admin_user }"
       password: "${ vault('secret/redis/' + incarnation.name + '/users/' + compute.admin_user + '#password') }"
       tls:      "${ compute.tls_on }"
       tls_ca:   "${ compute.tls_ca }"
-      # config — ЧИСТЫЙ compute.redis_config (БЕЗ masterauth-долива): hot-reload шлёт CONFIG
-      # SET только операторской дельты директив; masteruser/masterauth — replication-материал
-      # (на живом инстансе уже выставлен create-ом), update_config его НЕ трогает. Плагин
-      # итерирует ТОЛЬКО переданные ключи (директивы вне config не сбрасываются).
+      # config - the CLEAN compute.redis_config (WITHOUT the masterauth topup): hot-reload sends CONFIG
+      # SET only for the operator's directive delta; masteruser/masterauth are replication material
+      # (already set on the live instance by create), update_config does NOT touch it. The plugin
+      # iterates ONLY the passed keys (directives outside config aren't reset).
       config:   "${ compute.redis_config }"
-      # ★ rewrite=false (NIM-53): файл — источник истины шага 1 (см. коммент задачи).
-      # REWRITE откатил бы startup-only (io-threads) к live-значению — регресс NIM-53.
+      # * rewrite=false (NIM-53): the file is the source of truth from step 1 (see the task comment).
+      # REWRITE would roll back startup-only (io-threads) to the live value - NIM-53 regression.
       rewrite:  false

@@ -2,9 +2,9 @@ from_version: 1
 to_version: 2
 
 description: >-
-  Демо-миграция NIM-34: state_schema v1 -> v2 (ADR-019). Идентична миграции из
-  v2.0.0 (каталог migrations/ наследуется вниз по git-дереву патчей, ADR-0068 §5).
-  Плоский set с has()-guard: помечаем факт перехода полем schema_v2. Forward-only.
+  Demo migration NIM-34: state_schema v1 -> v2 (ADR-019). Identical to the v2.0.0
+  migration (the migrations/ catalog is inherited down the git patch tree, ADR-0068 §5).
+  Flat set with a has() guard: marks the transition fact with the schema_v2 field. Forward-only.
 
 transform:
   - set:

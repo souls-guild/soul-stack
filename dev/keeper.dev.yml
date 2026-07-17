@@ -1,9 +1,9 @@
 kid: keeper-dev-01
 
 listen:
-  # bootstrap/event_stream на 0.0.0.0 — доступ docker/remote-душ (host-gateway/host-IP;
-  # на 127.0.0.1 контейнер keeper не видит). host-флот цел (0.0.0.0 ⊇ loopback), cert SAN
-  # покрывает localhost/127/host.docker.internal/host-IP. NIM-26, прецедент e2e-live config_builder.go.
+  # bootstrap/event_stream on 0.0.0.0 — access for docker/remote souls (host-gateway/host-IP;
+  # keeper container can't see 127.0.0.1). host-souls stay intact (0.0.0.0 ⊇ loopback), cert SAN
+  # covers localhost/127/host.docker.internal/host-IP. NIM-26, precedent e2e-live config_builder.go.
   grpc:
     bootstrap:
       addr: "0.0.0.0:9442"
@@ -15,8 +15,8 @@ listen:
       tls:
         cert: /tmp/keeper-dev/tls/keeper.crt
         key:  /tmp/keeper-dev/tls/keeper.key
-        # ClientCAs для mTLS: Vault PKI root (CN=soul-stack) — тот же корень,
-        # что подписывает SoulSeed-сертификаты. См. dev/provision.sh шаг 7.
+        # ClientCAs for mTLS: Vault PKI root (CN=soul-stack) — the same root
+        # that signs SoulSeed certificates. See dev/provision.sh step 7.
         ca:   /tmp/keeper-dev/tls/vault-ca.crt
   openapi: { addr: "127.0.0.1:8080" }
   mcp:     { addr: "127.0.0.1:8081" }
@@ -46,8 +46,8 @@ auth:
     ttl_bootstrap: 720h
 
 otel:
-  # Трейсы уходят в dev-стек: otel-collector (docker-compose) на :4317 →
-  # Jaeger UI http://127.0.0.1:16686. Insecure-gRPC (dev-collector без TLS).
+  # Traces go to the dev stack: otel-collector (docker-compose) on :4317 →
+  # Jaeger UI http://127.0.0.1:16686. Insecure-gRPC (dev-collector without TLS).
   enabled: true
   exporter: otlp
   endpoint: "127.0.0.1:4317"
@@ -57,57 +57,57 @@ logging:
   format: text
   rotation: { max_size_mb: 100, max_files: 5, compress: false }
 
-# Реестр Service-ов и скаляр default_destiny_source перенесены в Postgres
-# (service_registry + keeper_settings, ADR-029). Эти ключи (`services:` /
-# `default_destiny_source:` / `default_module_source:`) в keeper.yml больше не
-# принимаются — резолв (serviceregistry.Holder) читает только БД. Для dev/E2E
-# реестр сеет шаг 10 в dev/provision.sh (прямой psql INSERT, идемпотентный;
-# вне dev — управление через `service.*` API, см. keeper/operator-api.md):
+# The Service registry and the default_destiny_source scalar moved to Postgres
+# (service_registry + keeper_settings, ADR-029). These keys (`services:` /
+# `default_destiny_source:` / `default_module_source:`) are no longer accepted
+# in keeper.yml — resolution (serviceregistry.Holder) reads only the DB. For dev/E2E
+# the registry is seeded by step 10 in dev/provision.sh (direct psql INSERT, idempotent;
+# outside dev — managed via the `service.*` API, see keeper/operator-api.md):
 #   - keeper_settings[default_destiny_source] = file:///tmp/keeper-dev/destiny/{name}
 #   - service hello-world → file:///tmp/keeper-dev/repos/hello-world @ main
 #   - service redis       → file:///tmp/keeper-dev/repos/redis @ main
-#     (консолидированный redis, ADR-029/redis-консолидация: один режим-агностичный
-#      destiny `redis` на все redis_type; резолвится по default_destiny_source:
-#      {name} = redis, ref v1.0.0 из redis/service.yml::destiny[]={redis}).
-# Seed требует уже применённой схемы (миграции 034/035); на свежей БД он
-# отложен до запуска после `keeper init` — повторить `make dev-provision`.
+#     (consolidated redis, ADR-029/redis-consolidation: one mode-agnostic
+#      destiny `redis` for all redis_type; resolved via default_destiny_source:
+#      {name} = redis, ref v1.0.0 from redis/service.yml::destiny[]={redis}).
+# Seed requires the schema already applied (migrations 034/035); on a fresh DB it
+# is deferred until after `keeper init` runs — rerun `make dev-provision`.
 
-# Sigil — подпись бинарей плагинов + реестр допусков (ADR-026). Без этого блока
-# spawn ЛЮБОГО keeper-side плагина (CloudDriver soul-cloud-wb / SshProvider)
-# fail-closed (no_trust_anchor). signing_key_ref → Vault KV с ed25519-приватником
-# (поле signing_key, PEM PKCS#8). После добавления — рестарт keeper (hot-reload
-# Sigil-блок НЕ поднимает) + допуск бинаря через POST /v1/plugins/sigils.
+# Sigil — plugin binary signing + registry of admissions (ADR-026). Without this block
+# spawning ANY keeper-side plugin (CloudDriver soul-cloud-wb / SshProvider)
+# fails closed (no_trust_anchor). signing_key_ref → Vault KV with an ed25519 private key
+# (field signing_key, PEM PKCS#8). After adding it — restart keeper (hot-reload
+# does NOT pick up the Sigil block) + admit the binary via POST /v1/plugins/sigils.
 sigil:
   signing_key_ref: vault:secret/keeper/sigil-signing-key
 
 plugins:
   cache_root: /tmp/keeper-dev/plugins
-  # work_root — writable корень git-клонов резолвера (ADR-026 F-fetch). Дефолт
-  # /var/lib/soul-stack-keeper/plugin-src не писабелен под dev-юзером → clone падал
-  # бы, слот оставался пуст. СТРОГО вне cache_root (schema-guard). Каталог создаёт
-  # dev/provision.sh.
+  # work_root — writable root for the resolver's git clones (ADR-026 F-fetch). The default
+  # /var/lib/soul-stack-keeper/plugin-src is not writable under the dev user → clone would
+  # fail, the slot would stay empty. STRICTLY outside cache_root (schema-guard). Directory
+  # is created by dev/provision.sh.
   work_root: /tmp/keeper-dev/plugin-work
-  # CloudDriver-каталог. FilterByCatalog оставляет в discovery только плагины,
-  # чьё manifest.name упомянуто здесь (поле `name`); без записи `wb` найденный
-  # ручной кеш-слот wb-wb был бы отброшен.
+  # CloudDriver catalog. FilterByCatalog keeps only plugins in discovery
+  # whose manifest.name is listed here (the `name` field); without the `wb` entry the
+  # manually found cache slot wb-wb would be dropped.
   #
-  # DEV-shortcut (без публичного git-репо драйвера): кеш-слот
-  # /tmp/keeper-dev/plugins/wb-wb/{manual-0001,current} наполнен ВРУЧНУЮ
-  # (manifest.yaml + бинарь soul-cloud-wb из /home/co-cy/vscode/soulstack/wb-plugins).
-  # source — file:// без выставленного SOUL_STACK_ALLOW_FILE_REPOS=1: git-резолвер
-  # отбракует схему (validateGitScheme → ErrSourceUnavailable), превратит в warning
-  # и НЕ тронет ручной current-symlink (per-entry fail-closed в ResolveCatalog).
-  # Запись нужна ТОЛЬКО для FilterByCatalog.
-  # ВРЕМЕННО, под удаление: с реальным git-репо заменить на
+  # DEV shortcut (no public git repo for the driver): cache slot
+  # /tmp/keeper-dev/plugins/wb-wb/{manual-0001,current} is filled MANUALLY
+  # (manifest.yaml + soul-cloud-wb binary from /home/co-cy/vscode/soulstack/wb-plugins).
+  # source is file:// without SOUL_STACK_ALLOW_FILE_REPOS=1 set: the git resolver
+  # rejects the scheme (validateGitScheme → ErrSourceUnavailable), turns it into a warning
+  # and does NOT touch the manual current symlink (per-entry fail-closed in ResolveCatalog).
+  # The entry is needed ONLY for FilterByCatalog.
+  # TEMPORARY, to be removed: replace with a real git repo:
   # { name: wb, source: "ssh://...wb-plugins", ref: "<tag>" }.
   cloud_drivers:
     - { name: wb, source: "file:///dev/null/soul-cloud-wb-manual-slot", ref: "manual-0001" }
-  # SoulModule-каталог (эпик core.module.installed, S1). source — git-репо со
-  # СОБРАННЫМ бинарём (dist/soul-mod-redis + manifest.yaml), которое материализует
-  # dev/provision.sh (шаг 9b). plugingit клонирует его (file://-scheme под
-  # SOUL_STACK_ALLOW_FILE_REPOS=1 — keeper-run.sh выставляет), кеширует слот
-  # community-redis/<sha> → current: плагин доступен для Sigil-allow (POST
-  # /v1/plugins/sigils) и day-2 redis. `name` = manifest.name (redis) для FilterByCatalog.
+  # SoulModule catalog (epic core.module.installed, S1). source — git repo with the
+  # BUILT binary (dist/soul-mod-redis + manifest.yaml), materialized by
+  # dev/provision.sh (step 9b). plugingit clones it (file:// scheme under
+  # SOUL_STACK_ALLOW_FILE_REPOS=1 — set by keeper-run.sh), caches the slot
+  # community-redis/<sha> → current: the plugin becomes available for Sigil-allow (POST
+  # /v1/plugins/sigils) and redis maintenance. `name` = manifest.name (redis) for FilterByCatalog.
   soul_modules:
     - { name: redis, source: "file:///tmp/keeper-dev/plugin-repos/community-redis", ref: "v1.0.0" }
 
@@ -135,43 +135,43 @@ audit:
   otel_export: false
   retention_days: 365
 
-# Watchman (изоляция-детект + soul-shedding S2): период probe PG+Redis и порог
-# подряд-провалов до принудительного закрытия локальных EventStream-стримов.
-# Дефолты (5s / 3) совпадают с config.DefaultWatchman*; вынесены явно для dev-
-# наглядности. На локальном single-instance smoke shedding в норме не срабатывает
-# (PG/Redis из docker-compose доступны).
+# Watchman (isolation detection + soul-shedding S2): PG+Redis probe period and threshold
+# of consecutive failures before forcibly closing local EventStream streams.
+# Defaults (5s / 3) match config.DefaultWatchman*; spelled out explicitly for dev
+# clarity. On local single-instance smoke, shedding normally doesn't trigger
+# (PG/Redis from docker-compose are reachable).
 watchman_interval: 5s
 watchman_fail_threshold: 3
 
-# Refuse-guard soul-shedding (Finding-A, ADR-027(h)): при acolytes=0 + другие
-# живые Keeper-инстансы в Conclave Keeper отказывается стартовать. Дефолт false
-# (refuse). На single-instance dev-smoke не срабатывает (Conclave.CountLive<=1).
+# Refuse-guard soul-shedding (Finding-A, ADR-027(h)): with acolytes=0 + other
+# live Keeper instances in the Conclave, Keeper refuses to start. Default false
+# (refuse). Doesn't trigger on single-instance dev-smoke (Conclave.CountLive<=1).
 allow_unsafe_single_path_multi_keeper: false
 
-# Acolyte work-queue pool (ADR-027). >0 — keeper полноценный HA-участник:
-# apply исполняется через Ward-claim, cross-keeper-dispatch работает. Нужен
-# для two-keeper soul-failover демо (см. docs/dev/local-setup.md): keeper-a и
-# keeper-b симметричны (оба acolytes>0), refuse-guard не срабатывает ни на
-# initial-старте, ни на рестарте keeper-a при живом keeper-b (фаза 4). Значение
-# совпадает с keeper-b.dev.yml и стендом мега-теста (3×acolytes:2).
+# Acolyte work-queue pool (ADR-027). >0 — keeper is a full HA participant:
+# apply runs through Ward-claim, cross-keeper-dispatch works. Needed
+# for the two-keeper soul-failover demo (see docs/dev/local-setup.md): keeper-a and
+# keeper-b are symmetric (both acolytes>0), the refuse-guard doesn't trigger on
+# initial start, nor on restart of keeper-a while keeper-b is alive (phase 4). Value
+# matches keeper-b.dev.yml and the mega-test stand (3×acolytes:2).
 acolytes: 2
 
-# Потолок await_timeout онбординг-барьера (ADR-061): run-бюджет provision = max_await_timeout + 10m deploy → 20m. fail-fast: VM обычно online ~5m, большой timeout маскирует провал enroll (essence redis: join_wait 10m + await 8m укладываются).
+# Ceiling of the onboarding-barrier await_timeout (ADR-061): run budget provision = max_await_timeout + 10m deploy → 20m. fail-fast: VM is usually online ~5m, a large timeout masks an enroll failure (essence redis: join_wait 10m + await 8m fit within it).
 max_await_timeout: 10m
 
-# VoyageWorker-пул (ADR-043): claim+execute унифицированных Voyage-прогонов
-# (kind=scenario|command). Config-gated OFF по умолчанию (workers:0); включён
-# для runtime-валидации пилота. poll_interval/lease_* опущены — берутся дефолты
+# VoyageWorker pool (ADR-043): claim+execute of unified Voyage runs
+# (kind=scenario|command). Config-gated OFF by default (workers:0); enabled
+# for pilot runtime validation. poll_interval/lease_* omitted — defaults apply
 # (DefaultVoyagePollInterval / DefaultVoyageLeaseTTL / DefaultVoyageLeaseRenewInterval).
 voyage:
   workers: 2
-  # max_scope — потолок размера резолвнутого scope одного Voyage (DoS-guard
-  # S-med-3). Не задано → дефолт 10000; 0 → безлимит. Превышение → 422
+  # max_scope — ceiling on the resolved scope size of one Voyage (DoS guard
+  # S-med-3). Unset → default 10000; 0 → unlimited. Exceeding → 422
   # voyage_scope_too_large.
   max_scope: 10000
-  # max_batch_size — потолок размера батча/окна (DoS-guard S-W4): эффективный
-  # batch_size для barrier, concurrency для window. Не задано → дефолт 10000;
-  # 0 → без предела. Превышение → 422 voyage_batch_size_too_large.
+  # max_batch_size — ceiling on batch/window size (DoS guard S-W4): effective
+  # batch_size for barrier, concurrency for window. Unset → default 10000;
+  # 0 → unlimited. Exceeding → 422 voyage_batch_size_too_large.
   max_batch_size: 10000
 
 reaper:
@@ -192,66 +192,66 @@ reaper:
     purge_apply_task_register: { enabled: true, max_age: 1h, action: delete }
     reclaim_voyages:      { enabled: true, stale_after: 1m }
 
-# Conductor — leader-elected исполнитель Cadence-расписаний (ADR-048). Свой
-# lease `conductor:leader`, независимый от reaper.interval (1h). Спавн due-Cadence
-# переехал сюда из Reaper-правила spawn_due_cadence.
+# Conductor — leader-elected executor of Cadence schedules (ADR-048). Its own
+# lease `conductor:leader`, independent from reaper.interval (1h). Spawning due-Cadence
+# moved here from the Reaper rule spawn_due_cadence.
 #
-# Адаптивный шаг опроса (ADR-048 «Adaptive interval»): шаг не фиксированный, а
-# clamp(derivedMinPeriod, poll_floor, poll_ceiling); пустой реестр → poll_idle.
-# derivedMinPeriod = MIN(interval_seconds) enabled-правил + 60s-вклад при наличии
-# cron. Профиль «Спокойный» (floor=30s/ceiling=60s/idle=120s): Cadence с частым
-# interval опрашивается у floor, редкие — у ceiling, пустой реестр — idle.
-# floor=30s — абсолютный минимум (DB-CHECK floor interval_seconds ≥ 30 — Pass B).
-# enabled опущено → default-ON при наличии Redis (footgun-guard ADR-048 §5);
-# выключение отдельной Cadence — per-Cadence через её enabled: false, не тут.
+# Adaptive poll step (ADR-048 "Adaptive interval"): the step is not fixed, but
+# clamp(derivedMinPeriod, poll_floor, poll_ceiling); an empty registry → poll_idle.
+# derivedMinPeriod = MIN(interval_seconds) of enabled rules + a 60s contribution when
+# cron is present. "Calm" profile (floor=30s/ceiling=60s/idle=120s): a Cadence with a frequent
+# interval is polled at floor, rare ones — at ceiling, an empty registry — idle.
+# floor=30s — absolute minimum (DB-CHECK floor interval_seconds ≥ 30 — Pass B).
+# enabled omitted → default-ON when Redis is present (footgun-guard ADR-048 §5);
+# disabling a specific Cadence — per-Cadence via its enabled: false, not here.
 cadence_scheduler:
   poll_floor: 30s
   poll_ceiling: 60s
   poll_idle: 120s
   lock_ttl: 5m
 
-# RBAC-каталог — в Postgres (ADR-028), управление через role.* API/MCP;
-# ключ `rbac:` в keeper.yml больше не принимается.
+# RBAC catalog — in Postgres (ADR-028), managed via the role.* API/MCP;
+# the `rbac:` key is no longer accepted in keeper.yml.
 
-# push — bootstrap-доставка токена `core.bootstrap.delivered` (ADR-063) и
-# push-прогон Destiny (ADR-032). Блок целиком опционален.
+# push — bootstrap delivery of the `core.bootstrap.delivered` token (ADR-063) and
+# push-run of Destiny (ADR-032). The whole block is optional.
 #
-# transport (ADR-063 amendment) — режим bootstrap-доставки токена:
-#   direct (default): generic SSH по primary_ip (Authorize/Sign плагина +
-#     CA-signed host-cert verify через host_ca_refs[]).
-#   teleport: by-name через Teleport Proxy (target = SID/FQDN, НЕ IP).
-#     Транспорт+auth+host-verify целиком через Teleport identity-file;
-#     Authorize/Sign плагина и Vault host-CA НЕ используются. Свежая VM
-#     появляется в Teleport через ~3-5мин → модуль ретраит connect
+# transport (ADR-063 amendment) — bootstrap token delivery mode:
+#   direct (default): generic SSH by primary_ip (plugin Authorize/Sign +
+#     CA-signed host-cert verify via host_ca_refs[]).
+#   teleport: by-name via Teleport Proxy (target = SID/FQDN, NOT IP).
+#     Transport+auth+host-verify entirely via the Teleport identity file;
+#     plugin Authorize/Sign and Vault host-CA are NOT used. A fresh VM
+#     appears in Teleport after ~3-5min → the module retries connect
 #     (scenario-param join_wait_timeout, default 360s).
 #
-# Пример teleport-режима (закомментирован — dev-стенд без Teleport):
+# Example of teleport mode (commented out — dev stand without Teleport):
 # push:
 #   transport: teleport
 #   teleport:
-#     proxy_addr: proxy.example.com:443     # gRPC sshgrpc-listener Teleport Proxy
-#     identity_file: /etc/soul/teleport-identity   # tctl auth sign, доступ к нодам
-#     cluster: example.com                  # имя кластера, где резолвятся node-name (SID)
+#     proxy_addr: proxy.example.com:443     # gRPC sshgrpc-listener of Teleport Proxy
+#     identity_file: /etc/soul/teleport-identity   # tctl auth sign, node access
+#     cluster: example.com                  # cluster name where node-names (SID) resolve
 
 push:
   transport: teleport
   teleport:
     proxy_addr: tp.rwb.ru:443
-    # dedicated: identity_file захардкожен в default dev-dir — параметризовать под STAND_DEV_DIR при полной изоляции (NIM-25).
+    # dedicated: identity_file is hardcoded to the default dev-dir — parametrize under STAND_DEV_DIR for full isolation (NIM-25).
     identity_file: /tmp/keeper-dev/keeper-push.identity
     cluster: teleport-rwb
-    # proxy за публичным L7-TLS-балансировщиком (*.tp.rwb.ru), ADR-063 amendment;
-    # use_system_trust — страховка при alpn off (при alpn_upgrade=true no-op)
+    # proxy behind a public L7-TLS load balancer (*.tp.rwb.ru), ADR-063 amendment;
+    # use_system_trust — a safety net when alpn is off (no-op when alpn_upgrade=true)
     use_system_trust: true
     alpn_upgrade: true
 
-# cloud-init userdata для core.cloud.provisioned (ADR-017(h));
-# dev-стенд: bastion-туннель 192.168.2.3, CA в Vault (поле ca), artifact-хост :8443.
-# dedicated: bootstrap_endpoint/soul_binary_url захардкожены на default dev — параметризовать при полной изоляции (NIM-25).
+# cloud-init userdata for core.cloud.provisioned (ADR-017(h));
+# dev stand: bastion tunnel 192.168.2.3, CA in Vault (field ca), artifact host :8443.
+# dedicated: bootstrap_endpoint/soul_binary_url are hardcoded to default dev — parametrize for full isolation (NIM-25).
 cloud_init:
   bootstrap_endpoint: "192.168.2.3:9442"
-  # EventStream (mTLS) живёт на 9443 — без этого blueprint выводил оба порта
-  # soul.yml из bootstrap_endpoint и soul dial-ил EventStream на 9442 (ADR-063).
+  # EventStream (mTLS) lives on 9443 — without this the blueprint would derive both ports
+  # of soul.yml from bootstrap_endpoint and soul would dial EventStream on 9442 (ADR-063).
   event_stream_port: 9443
   tls_ca_ref: "vault:secret/keeper/bootstrap-ca"
   soul_binary_url: "https://192.168.2.3:8443/soul"

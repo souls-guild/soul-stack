@@ -1,11 +1,12 @@
-# nfpm-конфиг пакета `soul` (deb + rpm). ADR-004 — управляемый агент-демон.
+# nfpm config for the `soul` package (deb + rpm). ADR-004 — managed agent daemon.
 #
-# Сборка: `make pkg`. Версия из переменной окружения VERSION (см. Makefile).
-# Бинарь собирается ДО упаковки (`make build`) с ldflags-инъекцией версии —
-# кладётся soul/bin/soul.
+# Build: `make pkg`. Version from the VERSION environment variable (see Makefile).
+# The binary is built BEFORE packaging (`make build`) with ldflags version
+# injection — lands at soul/bin/soul.
 #
-# Hardening soul-юнита мягче keeper-а: Soul применяет Destiny (ставит пакеты,
-# правит файлы) и требует реальных привилегий на хосте (см. soul.service).
+# Hardening of the soul unit is softer than keeper's: Soul applies Destiny
+# (installs packages, edits files) and requires real privileges on the host
+# (see soul.service).
 name: soul-stack-soul
 arch: ${ARCH}
 platform: linux
@@ -14,8 +15,8 @@ section: admin
 priority: optional
 maintainer: Soul Stack <noreply@soul-stack.dev>
 description: |
-  Soul Stack Soul — управляемый агент-демон (ADR-004). Инициирует gRPC-стрим к
-  Keeper поверх mTLS, применяет Destiny через core-модули.
+  Soul Stack Soul — managed agent daemon (ADR-004). Initiates a gRPC stream to
+  Keeper over mTLS, applies Destiny via core modules.
 vendor: Soul Stack
 homepage: https://github.com/souls-guild/soul-stack
 license: Apache-2.0
@@ -37,17 +38,17 @@ contents:
     file_info:
       mode: 0644
 
-  # Пример конфига — отдельным именем, рабочий /etc/soul/soul.yml оператор
-  # создаёт сам (см. soul.service: установка, soul init).
+  # Example config — under a separate name; the operator creates the working
+  # /etc/soul/soul.yml themselves (see soul.service: install, soul init).
   - src: ./examples/soul/soul.yml
     dst: /etc/soul/soul.yml.example
     file_info:
       mode: 0640
 
-# Maintainer-scripts (deb: postinst/prerm/postrm, rpm: %post/%preun/%postun).
-# Создают системного пользователя soul-stack и стейт-каталоги с правильным
-# владельцем — без этого clean-install не работает (soul init падает на MkdirAll
-# в root-owned каталогах). Онбординг (soul init --token) остаётся ручным.
+# Maintainer scripts (deb: postinst/prerm/postrm, rpm: %post/%preun/%postun).
+# Create the soul-stack system user and state directories with the right
+# owner — without this clean-install doesn't work (soul init fails on MkdirAll
+# in root-owned directories). Onboarding (soul init --token) stays manual.
 scripts:
   postinstall: ./deploy/nfpm/scripts/soul.postinstall.sh
   preremove:   ./deploy/nfpm/scripts/soul.preremove.sh
@@ -55,8 +56,8 @@ scripts:
 
 overrides:
   deb:
-    # passwd — пакет с useradd (Essential/base в Debian и Ubuntu); postinst его
-    # вызывает напрямую. Был adduser — он лишь обёртка над тем же passwd.
+    # passwd — the package with useradd (Essential/base on Debian and Ubuntu);
+    # postinst calls it directly. Used to be adduser — just a wrapper over the same passwd.
     depends:
       - passwd
   rpm:

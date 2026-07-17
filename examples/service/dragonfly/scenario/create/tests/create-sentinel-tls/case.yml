@@ -1,21 +1,21 @@
-# L0-испытание create DragonFly в режиме sentinel С ВКЛЮЧЁННЫМ TLS (tls_enabled=true). Парный
-# к create-sentinel-1master-1replica (plaintext) — покрывает TLS-ON ветку compute (df_config
-# несёт --tls/--tls_cert_file/.../--tls_replication, state.tls.enable=true). Multi-host roster
-# из 2 хостов: replicas_per_master=1 → топология 1+1=2. Master-election: node-1 = master.
+# L0 trial: create DragonFly in sentinel mode WITH TLS ENABLED (tls_enabled=true). Paired
+# with create-sentinel-1master-1replica (plaintext) — covers the TLS-ON branch of compute (df_config
+# carries --tls/--tls_cert_file/.../--tls_replication, state.tls.enable=true). Multi-host roster
+# of 2 hosts: replicas_per_master=1 → topology 1+1=2. Master election: node-1 = master.
 #
-# Render-only, герметично. Что ассертим (БЛОКЕР-фикс TLS + unix-socket):
-#   1. ★ БЛОКЕР #1: state.df_config НЕ несёт tls_port (у DragonFly нет такого флага — absl
-#      FATAL); TLS встаёт на ОСНОВНОЙ --port. df_config несёт tls/tls_cert_file/tls_key_file/
-#      tls_ca_cert_file/tls_replication (underscore, пути из conf_dir).
-#   2. ★ БЛОКЕР #2: health-gate PING addr = ЛОКАЛЬНЫЙ UNIX-сокет (НЕ 127.0.0.1:7379) — DF при
-#      --bind=primary_ip НЕ слушает loopback; локальный коннект идёт на сокет (БЕЗ tls/tls_ca).
-#   3. ★ REPLICAOF реплики: свой addr = unix-сокет; master_addr = primary_ip:6379 (ВНЕШНИЙ
-#      линк к master на ОСНОВНОМ порту 6379, НЕ 7379 — отдельного tls-порта нет).
-#   4. state_changes.tls = {enable:true, cert_ref/key_ref/ca_ref} БЕЗ only/port.
-#   5. ★ РЕФАКТОР «sentinel из destiny redis»: sentinel-плоскость через ВТОРОЙ apply:destiny:
-#      redis (sentinel_only) — install redis-server + sentinel.conf /etc/redis присутствуют;
-#      dragonfly-destiny /etc/dragonfly/sentinel.conf отсутствует (дубликат снят). Второй
-#      apply tls НЕ передаёт (sentinel.conf без TLS — sentinel↔DF AUTH по паролю, PILOT).
+# Render-only, hermetic. What we assert (TLS + unix-socket BLOCKER fix):
+#   1. ★ BLOCKER #1: state.df_config does NOT carry tls_port (DragonFly has no such flag — absl
+#      FATAL); TLS lands on the MAIN --port. df_config carries tls/tls_cert_file/tls_key_file/
+#      tls_ca_cert_file/tls_replication (underscore, paths from conf_dir).
+#   2. ★ BLOCKER #2: health-gate PING addr = LOCAL UNIX socket (NOT 127.0.0.1:7379) — DF with
+#      --bind=primary_ip does NOT listen on loopback; the local connect goes to the socket (WITHOUT tls/tls_ca).
+#   3. ★ REPLICAOF of the replica: its own addr = unix socket; master_addr = primary_ip:6379 (EXTERNAL
+#      link to master on the MAIN port 6379, NOT 7379 — there's no separate tls port).
+#   4. state_changes.tls = {enable:true, cert_ref/key_ref/ca_ref} WITHOUT only/port.
+#   5. ★ REFACTOR "sentinel from destiny redis": the sentinel plane runs through a SECOND apply:destiny:
+#      redis (sentinel_only) — install redis-server + sentinel.conf are present in /etc/redis;
+#      the dragonfly-destiny /etc/dragonfly/sentinel.conf is absent (duplicate removed). The second
+#      apply does NOT pass tls (sentinel.conf without TLS — sentinel↔DF AUTH by password, PILOT).
 name: dragonfly create sentinel over TLS (TLS on main port, local access via unix socket)
 
 fixtures:
@@ -31,8 +31,8 @@ fixtures:
       soulprint:
         network: { primary_ip: 10.0.0.1 }
         os: { arch: amd64 }
-  # Vault: default_admin (внутрикластерный AUTH + masterauth) + системные + TLS PEM. Главного
-  # secret/dragonfly/create#password больше нет (requirepass убран — редизайн default_admin).
+  # Vault: default_admin (in-cluster AUTH + masterauth) + system + TLS PEM. The main
+  # secret/dragonfly/create#password is gone (requirepass removed — default_admin redesign).
   vault:
     secret/dragonfly/create/users/default_admin:
       password: dfadmin-create-pass
@@ -44,7 +44,7 @@ fixtures:
       password: sentinel-sys-secret-pass
     secret/dragonfly/create/users/haproxy:
       password: haproxy-sys-secret-pass
-    # TLS PEM-материал (по essence.tls_*_ref) — destiny читает его vault()-ом в ячейке content.
+    # TLS PEM material (via essence.tls_*_ref) — destiny reads it with vault() in the content cell.
     secret/services/dragonfly/tls:
       cert: "-----BEGIN CERTIFICATE-----\nDFCERT\n-----END CERTIFICATE-----"
       key:  "-----BEGIN PRIVATE KEY-----\nDFKEY\n-----END PRIVATE KEY-----"
@@ -52,7 +52,7 @@ fixtures:
   essence:
     sentinel_master_name: master
     memory_reserve_percent: 75
-    # TLS включён (галочка input.tls_enabled), Vault-refs — author-context essence.
+    # TLS is enabled (input.tls_enabled flag), Vault refs — author-context essence.
     tls_cert_ref: "secret/services/dragonfly/tls#cert"
     tls_key_ref:  "secret/services/dragonfly/tls#key"
     tls_ca_ref:   "secret/services/dragonfly/tls#ca"
@@ -74,18 +74,18 @@ fixtures:
     version: "1.39.0"
     replicas_per_master: 1
     tls_enabled: true
-    # ★ provision выключен (default-on: опущенная секция = ВКЛЮЧЕНО; кейс про TLS на
-    # ГОТОВОМ roster из 2 хостов) → include dragonfly-provision.yml не таргетит никого.
+    # ★ provision is disabled (default-on: an omitted section = ENABLED; the case is about TLS on
+    # an ALREADY-READY roster of 2 hosts) → include dragonfly-provision.yml targets no one.
     provision:
       enabled: false
 
 assert:
   task_present:
-    # ── dragonfly destiny: conf-dir создаётся ДО рендера dragonfly.conf/users.acl (обе ветки,
-    #    БЕЗУСЛОВНО). owner dragonfly, mode 0750, parents:true. Регресс «binary/package не
-    #    создаёт conf-dir» = рендер dragonfly.conf падает «open .../.dragonfly.conf.tmp-…: no
-    #    such file or directory» (тот же класс, что redis conf-dir, caught live 2026-06-29).
-    #    Дизамбигуатор от redis sentinel_only conf-dir (/etc/redis, owner redis) — path /etc/dragonfly. ──
+    # ── dragonfly destiny: conf-dir is created BEFORE rendering dragonfly.conf/users.acl (both branches,
+    #    UNCONDITIONALLY). owner dragonfly, mode 0750, parents:true. Regression "binary/package doesn't
+    #    create conf-dir" = rendering dragonfly.conf fails with "open .../.dragonfly.conf.tmp-…: no
+    #    such file or directory" (same class as the redis conf-dir issue, caught live 2026-06-29).
+    #    Disambiguator from redis sentinel_only conf-dir (/etc/redis, owner redis) — path /etc/dragonfly. ──
     - module: core.file.directory
       params_subset:
         path: /etc/dragonfly
@@ -94,7 +94,7 @@ assert:
         mode: "0750"
         parents: true
 
-    # ── dragonfly destiny: flagfile dragonfly.conf отрендерен (render_context.self = node-1) ──
+    # ── dragonfly destiny: flagfile dragonfly.conf rendered (render_context.self = node-1) ──
     - module: core.file.rendered
       params_subset:
         path: /etc/dragonfly/dragonfly.conf
@@ -103,8 +103,8 @@ assert:
         owner: dragonfly
         group: dragonfly
 
-    # ── 2 (БЛОКЕР #2): health-gate PING — addr ЛОКАЛЬНЫЙ UNIX-сокет (НЕ 127.0.0.1:7379) ──
-    # AUTH под default_admin (requirepass убран). UDS без tls/tls_ca.
+    # ── 2 (BLOCKER #2): health-gate PING — addr is the LOCAL UNIX socket (NOT 127.0.0.1:7379) ──
+    # AUTH under default_admin (requirepass removed). UDS without tls/tls_ca.
     - module: community.redis.command
       params_subset:
         addr: "unix:/var/run/dragonfly/dragonfly.sock"
@@ -112,8 +112,8 @@ assert:
         password: dfadmin-create-pass
         args: ["PING"]
 
-    # ── 3 (БЛОКЕР #1+#2): REPLICAOF реплик — свой addr unix-сокет; master_addr на ОСНОВНОЙ
-    #    порт 6379 (НЕ tls-порт 7379, его нет). where исключает master → node-2. AUTH под default_admin. ──
+    # ── 3 (BLOCKER #1+#2): REPLICAOF of the replica — its own addr is a unix socket; master_addr is on the MAIN
+    #    port 6379 (NOT the tls port 7379, it doesn't exist). where excludes master → node-2. AUTH under default_admin. ──
     - module: community.redis.replica
       params_subset:
         addr: "unix:/var/run/dragonfly/dragonfly.sock"
@@ -121,9 +121,9 @@ assert:
         username: default_admin
         password: dfadmin-create-pass
 
-    # ── 5. SENTINEL-ПЛОСКОСТЬ через destiny `redis` (sentinel_only, ВТОРОЙ apply) ──
-    # install redis-server (distro-пин R4, несёт redis-sentinel) + sentinel.conf в /etc/redis.
-    # Второй apply tls НЕ передаёт → sentinel.conf без TLS-директив (PILOT).
+    # ── 5. SENTINEL PLANE via destiny `redis` (sentinel_only, SECOND apply) ──
+    # install redis-server (distro pin R4, carries redis-sentinel) + sentinel.conf in /etc/redis.
+    # The second apply does NOT pass tls → sentinel.conf without TLS directives (PILOT).
     - module: core.pkg.installed
       params_subset:
         name: redis-server
@@ -137,17 +137,17 @@ assert:
         group: redis
 
   task_absent:
-    # ДУБЛИКАТ СНЯТ: dragonfly-destiny больше НЕ рендерит /etc/dragonfly/sentinel.conf.
+    # DUPLICATE REMOVED: dragonfly-destiny no longer renders /etc/dragonfly/sentinel.conf.
     - module: core.file.rendered
       params_subset:
         path: /etc/dragonfly/sentinel.conf
-    # provision выключен → cloud-create и барьер онбординга ОТСУТСТВУЮТ (group-drop).
+    # provision is disabled → cloud-create and the onboarding barrier are ABSENT (group-drop).
     - module: core.cloud.created
     - module: core.soul.registered
 
   state_changes:
     df_version: "1.39.0"
-    # ★ БЛОКЕР #1: df_config несёт TLS-флаги БЕЗ tls_port; TLS на основном --port.
+    # ★ BLOCKER #1: df_config carries TLS flags WITHOUT tls_port; TLS is on the main --port.
     df_config:
       maxmemory:        "256mb"
       maxclients:       10000
@@ -165,14 +165,14 @@ assert:
       failover_timeout_ms: 60000
     replicas: 1
     sentinel_quorum: 0
-    # ★ state.tls: enable + refs, БЕЗ only/port (у DragonFly TLS на основном порту).
+    # ★ state.tls: enable + refs, WITHOUT only/port (DragonFly has TLS on the main port).
     tls:
       enable:   true
       cert_ref: "secret/services/dragonfly/tls#cert"
       key_ref:  "secret/services/dragonfly/tls#key"
       ca_ref:   "secret/services/dragonfly/tls#ca"
     memory_mb: 0
-    # read-model: VM не провижены этим прогоном → консервативный default.
+    # read-model: no VMs were provisioned by this run → conservative default.
     provisioned_vm_ids: []
     provisioned_sids: []
     provisioned_provider: ""

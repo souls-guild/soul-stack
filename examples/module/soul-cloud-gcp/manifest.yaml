@@ -1,22 +1,22 @@
 kind: cloud_driver
-protocol_version: 1                    # compat-флаг plugin-протокола (ADR-020(c))
-namespace: cloud                       # пример third-party коллекции CloudDriver
+protocol_version: 1                    # plugin protocol compat flag (ADR-020(c))
+namespace: cloud                       # example third-party CloudDriver collection
 name: gcp
 
-# Closed enum по ADR-020(f).
-# vault_access НЕ нужен: credentials резолвит Keeper (A-flow, docs/keeper/cloud.md)
-# и передаёт plain (service-account JSON) в CreateRequest.credentials — драйвер
-# в Vault НЕ ходит.
+# Closed enum per ADR-020(f).
+# vault_access is NOT needed: Keeper resolves credentials (A-flow, docs/keeper/cloud.md)
+# and passes them plain (service-account JSON) in CreateRequest.credentials — the
+# driver does NOT talk to Vault.
 required_capabilities:
-  - network_outbound                   # вызовы Compute Engine API
+  - network_outbound                   # Compute Engine API calls
 
-# CloudDriver работает на keeper-стороне и не трогает локальные ресурсы host-а —
-# объявляем пустой список (ADR-020(g), пример из docs/keeper/plugins.md).
+# CloudDriver runs on the keeper side and doesn't touch local host resources —
+# declaring an empty list (ADR-020(g), example from docs/keeper/plugins.md).
 side_effects: []
 
 spec:
-  provider_kind: gcp                   # информативное поле семейства провайдера
-  # JSON Schema draft 2020-12 (формат для kind: cloud_driver — см.
+  provider_kind: gcp                   # informational provider-family field
+  # JSON Schema draft 2020-12 (format for kind: cloud_driver — see
   # docs/keeper/plugins.md → spec.profile_schema).
   profile_schema:
     type: object
@@ -24,8 +24,8 @@ spec:
     properties:
       project:
         type: string
-        # GCP project-id: 6–30 символов, lowercase letters/digits/hyphens,
-        # не начинается/заканчивается hyphen-ом.
+        # GCP project-id: 6-30 characters, lowercase letters/digits/hyphens,
+        # doesn't start/end with a hyphen.
         pattern: "^[a-z][-a-z0-9]{4,28}[a-z0-9]$"
       zone:
         type: string
@@ -36,8 +36,8 @@ spec:
         examples: [e2-medium, n2-standard-2, c2-standard-4]
       source_image:
         type: string
-        # Полная ссылка или короткий путь: projects/<p>/global/images/<i>
-        # или projects/<p>/global/images/family/<f>.
+        # Full URL or short path: projects/<p>/global/images/<i>
+        # or projects/<p>/global/images/family/<f>.
         pattern: "^(projects/[a-z][-a-z0-9]+/global/images/(family/)?[a-z][-a-z0-9.]+|https://www\\.googleapis\\.com/compute/v1/.+)$"
       disk:
         type: object
@@ -51,7 +51,7 @@ spec:
       network:
         type: object
         properties:
-          # Короткое имя или selfLink сети/подсети. Default — `default`.
+          # Short name or selfLink of the network/subnet. Default — `default`.
           network:
             type: string
           subnet:

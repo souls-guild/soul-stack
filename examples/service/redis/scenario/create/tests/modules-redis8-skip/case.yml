@@ -1,21 +1,23 @@
-# L0-испытание create (standalone) — VERSION-GUARD Redis 8+: модули ВСТРОЕНЫ в
-# сервер → .so НЕ качаем и loadmodule НЕ пишем. Контр-кейс к modules-no-checksum-standalone
-# (Redis 6 → полный набор активен). Директива «модули ВСЕГДА ВСЕ» = для Redis < 8;
-# на Redis 8+ — builtin-skip.
+# L0 test for create (standalone) — VERSION-GUARD Redis 8+: modules are BUILT INTO the
+# server → we do NOT fetch .so files and do NOT write loadmodule. Counter-case to
+# modules-no-checksum-standalone (Redis 6 → the full set is active). The "modules ALWAYS
+# ALL" directive applies to Redis < 8; on Redis 8+ — builtin-skip.
 #
-# Корень гейта (ПЕРЕЕХАЛ В DESTINY): version-guard теперь в самой destiny (раньше
-# scenario обнулял modules). redis8 истинно, когда эффективная версия (input.version
-# distro-пин ИЛИ input.install.version upstream) мажором >= 8: regex
-# ^([0-9]+:)?(8|9|двузначный мажор)\. На version=8.0.0:
-#   - include modules.yml gated на deploy_redis && !redis8 → redis8 истинно → conditional-
-#     include group-drop: ВЕСЬ файл (modules-dir + fetch-loop) ФИЗИЧЕСКИ отсутствует в
-#     плане (не placeholder — задачи не рендерятся, indices не резервируются);
-#   - loadmodules-ячейка redis.conf: redis8 → [] → секции loadmodule нет;
+# Root of the gate (MOVED INTO DESTINY): the version-guard now lives in destiny itself
+# (previously scenario zeroed out modules). redis8 is true when the effective version
+# (input.version distro-pin OR input.install.version upstream) has a major >= 8: regex
+# ^([0-9]+:)?(8|9|two-digit major)\. At version=8.0.0:
+#   - the modules.yml include is gated on deploy_redis && !redis8 → redis8 is true →
+#     conditional-include group-drop: the WHOLE file (modules-dir + fetch-loop) is
+#     PHYSICALLY absent from the plan (not a placeholder — the tasks are not rendered,
+#     no indices are reserved);
+#   - the redis.conf loadmodules cell: redis8 → [] → no loadmodule section;
 #   - state.modules = [] (compute.redis_modules_deployed: redis8 → []).
-# План идентичен modules-empty (presence-форма — позиционные индексы не сверяются).
+# The plan is identical to modules-empty (presence form — positional indices are not
+# compared).
 #
-# Упрощение (brief): version-guard по версии (мажор), полную version-matrix
-# совместимости модулей НЕ тащим. version не задан → НЕ гейтим (fail-closed на Redis).
+# Simplification (brief): version-guard by version (major), we do NOT pull in the full
+# module compatibility version matrix. version unset → NOT gated (fail-closed on Redis).
 name: redis 8 version guard skips module download (modules builtin)
 
 fixtures:
@@ -29,10 +31,11 @@ fixtures:
   vault:
     secret/redis/create:
       password: s3cr3t-redis-pass-create
-    # Per-user секреты системных юзеров (secret/redis/<inc>/users/<name>#password) —
-    # их резолвит keeper-side vault() при доливе system_acl_users в apply.input.users.
-    # ★ РЕДИЗАЙН default_admin (2026-06-30): default_admin — системный юзер
-    # внутрикластерного AUTH (auth_pass/PING шаги деплоя читают его по ветке users/<name>).
+    # Per-user secrets for system users (secret/redis/<inc>/users/<name>#password) —
+    # resolved keeper-side by vault() when merging system_acl_users into apply.input.users.
+    # ★ REDESIGN default_admin (2026-06-30): default_admin is the system user for
+    # intra-cluster AUTH (the auth_pass/PING deploy steps read it via the users/<name>
+    # branch).
     secret/redis/create/users/default_admin:
       password: default-admin-secret-pass
     secret/redis/create/users/replica:
@@ -44,12 +47,13 @@ fixtures:
     secret/redis/create/users/haproxy:
       password: haproxy-sys-secret-pass
   essence:
-    # install_method — в essence (author-context, 2026-06-28): способ установки
-    # НЕ operator-input. compute.install читает default(essence.install_method, 'binary').
+    # install_method — in essence (author-context, 2026-06-28): the install method is
+    # NOT operator-input. compute.install reads default(essence.install_method, 'binary').
     install_method: package
     redis_type: sentinel
     sentinel_master_name: master
-    # ★ Редизайн: подложка per-master sentinel-дефолтов (под input.sentinel_master_settings).
+    # ★ Redesign: per-master sentinel defaults substrate (backing
+    # input.sentinel_master_settings).
     sentinel_master_defaults:
       down-after-milliseconds: "5000"
       failover-timeout:        "60000"
@@ -74,10 +78,10 @@ fixtures:
       maxclients:       10000
       timeout:          300
 
-    # Системные ACL-юзеры redis-server + sentinel-демона (1:1 из essence/_default.yaml).
-    # ОБА ОБЯЗАТЕЛЬНЫ: guard create/sentinel.yml (assert 1b) рвёт render при пустом
-    # любом из наборов (тихий fail-open недопустим — без них репликация/sentinel↔redis
-    # AUTH сломались бы).
+    # System ACL users for redis-server + the sentinel daemon (1:1 from
+    # essence/_default.yaml). BOTH ARE MANDATORY: the create/sentinel.yml guard
+    # (assert 1b) aborts the render if either set is empty (a silent fail-open is not
+    # acceptable — without them replication/sentinel↔redis AUTH would break).
     system_acl_users:
       default_admin: "~* &* +@all"
       replica:    "+psync +replconf +ping"
@@ -90,21 +94,23 @@ fixtures:
       sentinel:   "allchannels -@all +auth +client|getname +client|id +client|setname +command +hello +ping +sentinel|is-master-down-by-addr +publish +role +sentinel|get-master-addr-by-name +sentinel|master +sentinel|myid +sentinel|replicas +sentinel|sentinels"
       haproxy:    "-@all +auth +client|getname +client|id +client|setname +command +hello +ping +role +sentinel|get-master-addr-by-name +sentinel|master +sentinel|myid +sentinel|replicas +sentinel|sentinels"
   input:
-    # ★ provision выключен (default-on: опущенная секция = ВКЛЮЧЕНО; кейс деплоит на
-    # ГОТОВЫЙ roster, cloud-create не нужен) → include redis-provision.yml group-drop.
+    # ★ provision is disabled (default-on: an omitted section = ENABLED; this case
+    # deploys onto a READY roster, cloud-create is not needed) → include
+    # redis-provision.yml group-drop.
     provision:
       enabled: false
     redis_type: sentinel
     version: "8.0.3"
-    # single-host (1 хост) → 0 реплик (default редизайна 2): size-guard sentinel = 1+0.
+    # single-host (1 host) → 0 replicas (redesign-2 default): size-guard sentinel = 1+0.
     replicas_per_master: 0
-    # Redis 8+ → version-guard гасит модули (встроены в сервер). modules_base_url задан,
-    # но на 8+ не используется (URL не строится — include modules.yml group-drop).
+    # Redis 8+ → version-guard suppresses modules (built into the server).
+    # modules_base_url is set, but unused on 8+ (the URL is not built — include
+    # modules.yml group-drop).
 
 assert:
   task_present:
-    # redis.conf БЕЗ loadmodules (version-gate → пустой список): vars.loadmodules: [].
-    # Дизамбигуатор от users.acl/hardening — path.
+    # redis.conf WITHOUT loadmodules (version-gate → empty list): vars.loadmodules: [].
+    # Disambiguator from users.acl/hardening — path.
     - module: core.file.rendered
       params_subset:
         path: /etc/redis/redis.conf
@@ -121,10 +127,10 @@ assert:
             log_dir: /var/log/redis
             loadmodules: []
             config:
-              # ★ РЕДИЗАЙН default_admin: replica→master AUTH (masteruser/
-              # masterauth) приходит ОБЫЧНЫМИ директивами config (sentinel
-              # deploy-body доливает их vault()-в-ячейке) → redis.conf range-ит
-              # их как любую директиву → статически переживают рестарт.
+              # ★ REDESIGN default_admin: replica→master AUTH (masteruser/
+              # masterauth) arrives as ORDINARY config directives (the sentinel
+              # deploy-body merges them in via a vault() cell) → redis.conf ranges
+              # over them like any other directive → they statically survive a restart.
               masteruser:       "default_admin"
               masterauth:       "default-admin-secret-pass"
               maxmemory: "256mb"
@@ -137,7 +143,7 @@ assert:
             sid: node-solo.example.com
             covens: [create]
             choirs: []
-            # traits — registry-проекция (ADR-060), пустой объект без меток.
+            # traits — registry projection (ADR-060), empty object with no labels.
             traits: {}
             role: ""
             network:
@@ -147,7 +153,7 @@ assert:
           role: ""
           essence: {}
 
-    # standalone-PING: cluster/sentinel ветки — placeholder-skip; дизамбигуатор
+    # standalone-PING: cluster/sentinel branches — placeholder-skip; disambiguator
     # addr/args.
     - module: community.redis.command
       params_subset:
@@ -157,14 +163,16 @@ assert:
         args: ["PING"]
 
   task_absent:
-    # VERSION-GATE Redis 8+: include modules.yml gated на deploy_redis && !redis8 →
-    # group-drop (modules-dir отсутствует в плане). Guard «Redis 8 НЕ создаёт modules-dir».
-    # Дизамбигуатор от активного systemd-dropin-dir (тот же core.file.directory) — path.
+    # VERSION-GATE Redis 8+: the modules.yml include is gated on deploy_redis && !redis8
+    # → group-drop (modules-dir is absent from the plan). Guard "Redis 8 does NOT create
+    # modules-dir". Disambiguator from the active systemd-dropin-dir (same
+    # core.file.directory) — path.
     - module: core.file.directory
       params_subset:
         path: /var/lib/redis/modules
-    # .so fetch: include modules.yml group-dropped → fetch-loop в плане отсутствует.
-    # Guard «Redis 8 НЕ качает .so». Дизамбигуатор от tarball-fetch placeholder — path.
+    # .so fetch: modules.yml include group-dropped → fetch-loop is absent from the plan.
+    # Guard "Redis 8 does NOT fetch .so". Disambiguator from the tarball-fetch
+    # placeholder — path.
     - module: core.url.fetched
       params_subset:
         path: /var/lib/redis/modules/redisearch.so
@@ -188,5 +196,5 @@ assert:
         down-after-milliseconds: "5000"
         failover-timeout: "60000"
       settings: {}
-    # Redis 8+ → модули встроены, .so не качаются → развёрнутый набор пуст.
+    # Redis 8+ → modules are built in, .so files are not fetched → the resolved set is empty.
     modules: []

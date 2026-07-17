@@ -1,9 +1,9 @@
-# L0-испытание add_node: GUARD-провал. new_node_sid == seed_sid → assert-guard
-# (ADR-009 amendment 2026-06-23) вычисляет предикат that[0] в FALSE на РЕНДЕРЕ
-# Keeper-side → render ОБРЫВАЕТСЯ ошибкой с message ДО любого dispatch (ни одной
-# задачи на Soul). Покрывает FALSE-ветку guard-предиката (парный с happy-кейсами,
-# где TRUE). Соответствие вычисляется KEEPER-SIDE при render (soulprint.hosts
-# доступен); harness ассертит обрыв через expect_render_error (ADR-023 amendment).
+# L0-trial add_node: GUARD failure. new_node_sid == seed_sid → the assert-guard
+# (ADR-009 amendment 2026-06-23) evaluates the predicate that[0] as FALSE at RENDER
+# time keeper-side → render ABORTS with an error message BEFORE any dispatch (not a single
+# task reaches Soul). Covers the FALSE branch of the guard predicate (paired with the happy cases
+# where it's TRUE). The match is evaluated KEEPER-SIDE at render (soulprint.hosts
+# is available); the harness asserts the abort via expect_render_error (ADR-023 amendment).
 name: add_node guard fails when new_node equals seed
 
 fixtures:
@@ -19,14 +19,14 @@ fixtures:
       soulprint:
         network: { primary_ip: 10.0.0.9 }
         os: { arch: amd64 }
-  # ★ РЕДИЗАЙН default_admin (2026-06-30): vault-ветка default_admin (коннект под
-  # системным admin-юзером). Guard рвёт render ДО destiny/ADD-NODE — пароль здесь не
-  # резолвится, но ветка приведена к новой форме для консистентности с happy-кейсами.
+  # ★ default_admin REDESIGN (2026-06-30): the default_admin vault branch (connecting as the
+  # system admin user). The guard aborts render BEFORE destiny/ADD-NODE — the password isn't
+  # resolved here, but the branch is brought to the new form for consistency with the happy cases.
   vault:
     secret/redis/add_node/users/default_admin:
       password: default-admin-secret-pass
-  # modules_base_url — в essence (v11→v12, Вариант A). Guard рвёт render (same-sid),
-  # layout для правдивости fixtures (форма state v12 без layout-ключей).
+  # modules_base_url — in essence (v11→v12, Variant A). The guard aborts render (same-sid),
+  # the layout is here for fixture fidelity (state v12 form without layout keys).
   essence:
     modules_base_url: "https://artifacts.example.com/redis/modules"
   state:
@@ -45,7 +45,7 @@ fixtures:
     seed_sid: node-9.example.com
     role: replica
 
-# Render ОБРЫВАЕТСЯ assert-провалом guard-а: ожидаем ошибку рендера с message из
-# assert. expect_render_error взаимоисключим с assert.rendered_tasks (плана нет —
-# прогон не стартовал).
+# Render ABORTS with the guard's assert failure: we expect a render error with the message from
+# assert. expect_render_error is mutually exclusive with assert.rendered_tasks (there's no plan —
+# the run never started).
 expect_render_error: "add_node guard: new_node_sid/seed_sid must be distinct hosts of the run roster"

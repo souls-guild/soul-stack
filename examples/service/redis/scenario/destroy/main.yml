@@ -1,47 +1,54 @@
 name: destroy
 description: >-
-  Снять VM, поднятые сценарием create, и каскадно вычистить keeper-реестры этих хостов.
-  Lifecycle-сценарий (флоу DELETE /v1/incarnations/{name}, не из Run-формы); на
-  инкарнациях без provision — no-op.
+  Tear down the VMs raised by the create scenario, and cascade-clean the
+  keeper registries for those hosts. Lifecycle scenario (DELETE
+  /v1/incarnations/{name} flow, not from the Run form); no-op on
+  incarnations without provision.
 
-# ── Входной контракт оператора ────────────────────────────────────────────────
-# Пуст: destroy не принимает операторского ввода. Что снимать (provider, vm_ids,
-# sids) — ФАКТ из incarnation.state, записанный create-прогоном, а не выбор
-# оператора в момент teardown. Operator только инициирует удаление (DELETE
-# /v1/incarnations/{name}); адреса VM детерминированы фактом провижена.
+# ── Operator input contract ────────────────────────────────────────────────
+# Empty: destroy does not accept operator input. What to tear down (provider,
+# vm_ids, sids) is a FACT from incarnation.state, written by the create run,
+# not an operator choice at teardown time. Operator only initiates the
+# deletion (DELETE /v1/incarnations/{name}); VM addresses are determined by
+# the provisioning fact.
 input: {}
 
 tasks:
-  # ── Инвариант парности sids↔vm_ids ДО destroy (architect) ───────────────────
-  # ★ КРИТИЧНО: provisioned_sids и provisioned_vm_ids читаются ПАРОЙ — cascade
-  # без sids оставил бы осиротевшие souls/seeds/tokens (vm_ids снимают VM у
-  # провайдера, sids чистят реестры; рассогласование длин = orphan). create
-  # пишет оба ОДНИМ guard-ом из register.provision.hosts (один источник истины
-  # размера), поэтому в норме длины равны; assert ловит порчу state (ручная
-  # правка / частичная миграция / баг) ДО необратимого destroy.
+  # ── sids↔vm_ids pairing invariant BEFORE destroy (architect) ───────────────
+  # * CRITICAL: provisioned_sids and provisioned_vm_ids are read as a PAIR —
+  # cascade without sids would leave orphaned souls/seeds/tokens (vm_ids tear
+  # down VMs at the provider, sids clean registries; length mismatch = orphan).
+  # create writes both with ONE guard from register.provision.hosts (single
+  # source of truth for size), so normally lengths are equal; assert catches
+  # state corruption (manual edit / partial migration / bug) BEFORE
+  # irreversible destroy.
   #
-  # RUN-LEVEL precondition (assert, ADR-009 amendment): вычисляется keeper-side в
-  # render-фазе ОДИН раз, ДО dispatch задачи destroyed — провал рвёт прогон
-  # (422 assert-failed) ДО любого cloud-вызова. На не-провиженной инкарнации обе
-  # стороны default []  → 0 == 0 → вакуумно true (assert не мешает teardown без
-  # provision; гейт when на самой destroyed-задаче дропает её отдельно).
-  # default(...) — поля back-compat-опциональны (инкарнации до v7/v8 без них).
+  # RUN-LEVEL precondition (assert, ADR-009 amendment): computed keeper-side in
+  # the render phase ONCE, BEFORE dispatching the destroyed task — a failure
+  # aborts the run (422 assert-failed) BEFORE any cloud call. On a
+  # non-provisioned incarnation both sides default to [] → 0 == 0 → vacuously
+  # true (assert doesn't block teardown without provision; the when-gate on
+  # the destroyed task itself drops it separately).
+  # default(...) — fields are back-compat-optional (incarnations before v7/v8
+  # lack them).
   - name: Assert provisioned sids and vm_ids were captured as a pair before teardown
     assert:
       that:
         - "size(default(incarnation.state.provisioned_sids, [])) == size(default(incarnation.state.provisioned_vm_ids, []))"
-      message: "рассогласование provisioned_sids и provisioned_vm_ids в incarnation.state: cascade-destroy без полного набора SID оставил бы осиротевшие записи souls/seeds/bootstrap_tokens (нарушение anti-replay) — длины обязаны совпадать (оба набора пишет create одним guard-ом из register.provision.hosts)"
+      message: "mismatch between provisioned_sids and provisioned_vm_ids in incarnation.state: cascade-destroy without the full SID set would leave orphaned souls/seeds/bootstrap_tokens records (anti-replay violation) — lengths must match (both sets are written by create with one guard from register.provision.hosts)"
 
-  # ── Снятие VM + cascade keeper-реестров (core.cloud.destroyed, on: keeper) ───
-  # ★ Адрес РОВНО core.cloud.destroyed (НЕ provisioned): base core.cloud +
-  # state destroyed (SplitModuleAddr), applyDestroyed → PluginHost.Destroy(vm_ids)
-  # ПОТОМ cascade(sids). params читаются из incarnation.state (keeper-задача видит
-  # pre-run снимок). provider — имя Provider в реестре (резолвится keeper-side в
-  # driver+credentials, A-flow); vm_ids — provider-side id для cloud-destroy;
-  # sids — Keeper-side SID для cascade (souls→destroyed/seeds→orphaned/tokens→burned).
+  # ── Tear down VMs + cascade keeper registries (core.cloud.destroyed, on: keeper) ───
+  # * Address is EXACTLY core.cloud.destroyed (NOT provisioned): base
+  # core.cloud + state destroyed (SplitModuleAddr), applyDestroyed →
+  # PluginHost.Destroy(vm_ids) THEN cascade(sids). params are read from
+  # incarnation.state (keeper task sees the pre-run snapshot). provider — the
+  # Provider name in the registry (resolved keeper-side into
+  # driver+credentials, A-flow); vm_ids — provider-side id for cloud-destroy;
+  # sids — Keeper-side SID for cascade (souls→destroyed/seeds→orphaned/tokens→burned).
   #
-  # GROUP-DROP на не-провиженных: when статичен (incarnation.* только) → пустой
-  # provisioned_vm_ids исключает задачу из плана (render-phase, не placeholder).
+  # GROUP-DROP on non-provisioned: when is static (incarnation.* only) → an
+  # empty provisioned_vm_ids excludes the task from the plan (render-phase,
+  # not a placeholder).
   - name: Destroy provisioned VMs and cascade their keeper registry records
     on: keeper
     module: core.cloud.destroyed

@@ -10,12 +10,12 @@ required_capabilities:
 spec:
   states:
     present:
-      description: Группа существует (present-or-create; ADR-015).
+      description: Group exists (present-or-create; ADR-015).
       input:
-        name:   { type: string, required: true, description: "Имя группы." }
-        gid:    { type: int,    description: "Явный gid (groupadd -g). Действует только при создании." }
-        system: { type: bool,   description: "Системная группа (groupadd -r), gid из системного диапазона. Только при создании." }
+        name:   { type: string, required: true, description: "Group name." }
+        gid:    { type: int,    description: "Explicit gid (groupadd -g). Only takes effect on creation." }
+        system: { type: bool,   description: "System group (groupadd -r), gid from the system range. Only on creation." }
     absent:
-      description: Группа удалена.
+      description: Group is removed.
       input:
-        name: { type: string, required: true, description: "Имя группы." }
+        name: { type: string, required: true, description: "Group name." }

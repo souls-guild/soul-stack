@@ -1,6 +1,6 @@
 name: persistence-aof
 description: >
-  Обратная свёртка persistence: save пустой + appendonly=yes → aof.
+  Reverse fold of persistence: save empty + appendonly=yes -> aof.
 
 state_before:
   redis_type: standalone

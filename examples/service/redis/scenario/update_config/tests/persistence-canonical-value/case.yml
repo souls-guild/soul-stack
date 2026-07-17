@@ -1,13 +1,13 @@
-# L0 guard (NIM-53 bug #1, позитив): update_config с CANONICAL persistence-значением
-# (rdb_aof_1sec) — render НЕ падает, preset save/appendonly/appendfsync доезжают в redis_config.
-# Регресс (live): update_config enum содержал старые [off,aof,rdb,rdb_aof]; значение rdb_aof
-# ∉ essence.persistence_presets → essence.persistence_presets[compute.persistence] no-such-key
-# → render crash → incarnation error_locked. Фикс: enum синхронизирован с presets/covenant
-# (6 значений off/aof_1sec/aof_always/rdb/rdb_aof_1sec/rdb_aof_always).
+# L0 guard (NIM-53 bug #1, positive): update_config with a CANONICAL persistence value
+# (rdb_aof_1sec) — render does NOT fail, the save/appendonly/appendfsync preset makes it into redis_config.
+# Regression (live): update_config's enum contained the old [off,aof,rdb,rdb_aof]; the value rdb_aof
+# was ∉ essence.persistence_presets → essence.persistence_presets[compute.persistence] no-such-key
+# → render crash → incarnation error_locked. Fix: the enum was synced with presets/covenant
+# (6 values off/aof_1sec/aof_always/rdb/rdb_aof_1sec/rdb_aof_always).
 #
-# Ассертим: (1) render успешен; (2) preset rdb_aof_1sec доезжает в config (save + appendonly:yes
-# + appendfsync:everysec) — и в redis.conf, и в hot-reload; (3) state.persistence=rdb_aof_1sec.
-# Plaintext, render-only, герметично.
+# Asserting: (1) render succeeds; (2) the rdb_aof_1sec preset makes it into config (save + appendonly:yes
+# + appendfsync:everysec) — in both redis.conf and the hot-reload; (3) state.persistence=rdb_aof_1sec.
+# Plaintext, render-only, hermetic.
 name: update_config with a canonical persistence value (rdb_aof_1sec) renders and applies preset
 
 fixtures:
@@ -52,7 +52,7 @@ fixtures:
     redis_users: []
 
   input:
-    # Дельта: CANONICAL persistence из нового enum (был бы no-such-key в старом presets).
+    # Delta: a CANONICAL persistence value from the new enum (would have been no-such-key in the old presets).
     persistence: rdb_aof_1sec
 
   vault:
@@ -63,8 +63,8 @@ fixtures:
 
 assert:
   task_present:
-    # redis.conf перерендерен: preset rdb_aof_1sec доезжает (appendonly:yes, appendfsync:everysec
-    # долит поверх подложки appendonly:no). save/maxmemory/policy — подложка state.
+    # redis.conf is re-rendered: the rdb_aof_1sec preset makes it in (appendonly:yes, appendfsync:everysec
+    # is merged on top of the appendonly:no baseline). save/maxmemory/policy — the state baseline.
     - module: core.file.rendered
       params_subset:
         path: /etc/redis/redis.conf

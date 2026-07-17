@@ -1,26 +1,27 @@
-# L0-испытание detach_source в режиме sentinel под ЗАЩИЩЁННЫМ источником (v10 прод-фикс).
-# Сценарий сопровождения для инкарнации, залитой migrate_cluster с AUTH+TLS-источником: state.seeded_from
-# несёт ССЫЛКИ на учётку источника (source_password_ref/source_tls_ca_ref — Vault-ПУТИ,
-# персистнуты migrate_cluster). Финальный offset-gate теперь АУТЕНТИФИЦИРУЕТСЯ к источнику:
-# compute.source_password = vault(seeded_from.source_password_ref), source_tls включается
-# по наличию CA. ДО v10 detach под AUTH-источником падал коннектом (source_password='') →
-# error_locked → полный цикл migrate→detach с защищённым источником был сломан.
+# L0 test for detach_source in sentinel mode under a PROTECTED source (v10 prod fix).
+# Operational scenario for an incarnation filled in by migrate_cluster with an AUTH+TLS
+# source: state.seeded_from carries REFERENCES to the source's account (source_password_ref/
+# source_tls_ca_ref - Vault PATHS, persisted by migrate_cluster). The final offset gate now
+# AUTHENTICATES to the source: compute.source_password = vault(seeded_from.source_password_ref),
+# source_tls is enabled based on the presence of a CA. BEFORE v10, detach under an AUTH source
+# failed to connect (source_password='') -> error_locked -> the full migrate->detach cycle
+# with a protected source was broken.
 #
-# ★ Парный кейс sentinel-detach-source — back-compat ветка (seeded_from БЕЗ ref-полей →
-# source_password=''). Этот кейс фиксирует НЕПУСТУЮ ветку (ref задан → vault(ref)).
+# * Companion case to sentinel-detach-source - the back-compat branch (seeded_from WITHOUT
+# ref fields -> source_password=''). This case covers the NON-EMPTY branch (ref set -> vault(ref)).
 #
-# Render-only, герметично. Roster из 1 хоста (новый master). Диспетчер по
-# incarnation.state.redis_type → sentinel-ветка раскрывается, cluster group-drop.
+# Render-only, hermetic. Roster of 1 host (new master). Dispatched by
+# incarnation.state.redis_type -> the sentinel branch unfolds, cluster group-drop.
 #
-# Что ассертим (дельта к sentinel-detach-source):
-#   1. ФИНАЛЬНЫЙ offset-gate: source_password = old-cluster-source-pass (vault по
-#      seeded_from.source_password_ref), source_tls=true + source_tls_ca = PEM источника
-#      (vault по seeded_from.source_tls_ca_ref). Источник реально под AUTH+TLS — gate
-#      коннектится с учёткой, а не падает.
-#   2. REPLICAOF NO ONE (community.redis.detached): локальный addr, наш password.
-#   3. SENTINEL MONITOR (community.redis.sentinel) ПОСЛЕ detach (split-brain-фикс).
-#   4. state_changes: seeded_from.detached := true, ref'ы СОХРАНЯЮТСЯ (merge старого
-#      объекта с {detached:true} — source_endpoints/ref'ы проходят насквозь).
+# What we assert (delta vs sentinel-detach-source):
+#   1. FINAL offset gate: source_password = old-cluster-source-pass (via vault on
+#      seeded_from.source_password_ref), source_tls=true + source_tls_ca = the source's PEM
+#      (via vault on seeded_from.source_tls_ca_ref). The source is really under AUTH+TLS -
+#      the gate connects with the account instead of failing.
+#   2. REPLICAOF NO ONE (community.redis.detached): local addr, our password.
+#   3. SENTINEL MONITOR (community.redis.sentinel) AFTER detach (split-brain fix).
+#   4. state_changes: seeded_from.detached := true, refs are PRESERVED (merge of the old
+#      object with {detached:true} - source_endpoints/refs pass through).
 name: sentinel detach_source authenticates the final offset gate to an AUTH+TLS source
 
 fixtures:
@@ -29,10 +30,11 @@ fixtures:
     network: { primary_ip: 10.0.0.1 }
     os: { arch: amd64 }
 
-  # incarnation.state v10: sentinel-инкарнация, залитая migrate_cluster с ЗАЩИЩЁННЫМ
-  # источником. seeded_from несёт ССЫЛКИ на учётку источника (Vault-ПУТИ, не секреты).
-  # detached=false (источник ещё привязан) — detach_source выставит true.
-  # host-layout вынесен в essence (v11→v12); detach_source его НЕ читает → в state нет.
+  # incarnation.state v10: sentinel incarnation filled in by migrate_cluster with a
+  # PROTECTED source. seeded_from carries REFERENCES to the source's account (Vault
+  # PATHS, not secrets). detached=false (source still attached) - detach_source will
+  # set it to true.
+  # host-layout was moved to essence (v11->v12); detach_source does NOT read it -> not in state.
   state:
     redis_type: sentinel
     redis_version: "7.2.4"
@@ -54,8 +56,9 @@ fixtures:
       quorum: 0
       down_after_ms: 5000
       failover_timeout_ms: 60000
-    # ★ seeded_from v10: ref'ы на учётку ВНЕШНЕГО источника (Vault-ПУТИ под pattern-guard
-    # secret/redis/migrate/*, как персистит migrate_cluster). detach читает их vault()-ом.
+    # * seeded_from v10: refs to the EXTERNAL source's account (Vault PATHS under the
+    # pattern-guard secret/redis/migrate/*, as persisted by migrate_cluster). detach reads
+    # them via vault().
     seeded_from:
       source_endpoints:
         - "10.9.0.1:6379"
@@ -67,10 +70,10 @@ fixtures:
   vault:
     secret/redis/detach_source:
       password: detach-redis-pass-16ch
-    # ★ РЕДИЗАЙН default_admin: локальные коннекты detach под ACL-юзером default_admin.
+    # * default_admin REDESIGN: detach's local connections use the default_admin ACL user.
     secret/redis/detach_source/users/default_admin:
       password: default-admin-secret-pass
-    # ★ Учётка ВНЕШНЕГО источника: значения за ref'ами из state.seeded_from.
+    # * The EXTERNAL source's account: values behind the refs from state.seeded_from.
     secret/redis/migrate/oldcluster:
       password: old-cluster-source-pass
       ca: |
@@ -80,14 +83,14 @@ fixtures:
 
 assert:
   task_present:
-    # ── ФИНАЛЬНЫЙ offset-gate ПЕРЕД detach — АУТЕНТИФИЦИРОВАН к AUTH+TLS-источнику ──
+    # -- FINAL offset gate BEFORE detach - AUTHENTICATED to the AUTH+TLS source --
     # source_password = vault(seeded_from.source_password_ref) = old-cluster-source-pass.
-    # source_tls=true (CA-ref непуст), source_tls_ca = vault(seeded_from.source_tls_ca_ref).
+    # source_tls=true (CA ref non-empty), source_tls_ca = vault(seeded_from.source_tls_ca_ref).
     - module: community.redis.offset-synced
       params_subset:
         addr: "127.0.0.1:6379"
         source_addr: "10.9.0.1:6379"
-        # ★ РЕДИЗАЙН default_admin: LOCAL-коннект под default_admin; source_password — источник.
+        # * default_admin REDESIGN: LOCAL connection uses default_admin; source_password - the source.
         username: default_admin
         password: default-admin-secret-pass
         source_password: old-cluster-source-pass
@@ -99,22 +102,22 @@ assert:
         lag_threshold: 0
         skip_checksum: false
 
-    # ── REPLICAOF NO ONE (community.redis.detached) ─────────────────────────────
+    # -- REPLICAOF NO ONE (community.redis.detached) -----------------------------
     - module: community.redis.detached
       params_subset:
         addr: "127.0.0.1:6379"
-        # ★ РЕДИЗАЙН default_admin: LOCAL-коннект под default_admin.
+        # * default_admin REDESIGN: LOCAL connection uses default_admin.
         username: default_admin
         password: default-admin-secret-pass
         tls: false
 
-    # ── SENTINEL MONITOR (community.redis.sentinel) ПОСЛЕ detach (split-brain-фикс) ──
+    # -- SENTINEL MONITOR (community.redis.sentinel) AFTER detach (split-brain fix) --
     - module: community.redis.sentinel
       params_subset:
         addr: "127.0.0.1:26379"
         master_name: master
-        # ★ РЕДИЗАЙН default_admin: CONNECTION-AUTH (username/password) + мониторинг master
-        # (auth_user/auth_pass) под default_admin.
+        # * default_admin REDESIGN: CONNECTION-AUTH (username/password) + monitoring master
+        # (auth_user/auth_pass) use default_admin.
         username: default_admin
         password: default-admin-secret-pass
         auth_user: default_admin
@@ -128,8 +131,8 @@ assert:
           port: 6379
           quorum: 1
 
-  # seeded_from.detached := true; source_endpoints И ref'ы СОХРАНЯЮТСЯ (merge старого
-  # объекта с {detached:true} — историческая запись «откуда + чем» мигрировали).
+  # seeded_from.detached := true; source_endpoints AND refs are PRESERVED (merge of the
+  # old object with {detached:true} - a historical record of "from where + with what" migrated).
   state_changes:
     seeded_from:
       source_endpoints:

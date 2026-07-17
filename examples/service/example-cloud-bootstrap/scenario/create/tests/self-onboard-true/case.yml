@@ -1,11 +1,11 @@
-# L0-испытание self-onboard «Вариант T» (ADR-017(h) amendment): input.self_onboard=true.
-# Поток: (1) core.cloud.created с self_onboard: true + name (keeper предсказывает FQDN и
-# запекает per-VM токены в userdata), (3) core.soul.registered await_online. Шаг (2)
-# core.bootstrap.delivered ПРОПУСКАЕТСЯ (when: !self_onboard — STATIC false при
-# self_onboard=true → placeholder-skip), т.к. VM онбордится сама из cloud-init.
+# L0 test for self-onboard "Variant T" (ADR-017(h) amendment): input.self_onboard=true.
+# Flow: (1) core.cloud.created with self_onboard: true + name (keeper predicts the FQDN and
+# bakes per-VM tokens into userdata), (3) core.soul.registered await_online. Step (2)
+# core.bootstrap.delivered is SKIPPED (when: !self_onboard - STATIC false when
+# self_onboard=true -> placeholder-skip), since the VM onboards itself from cloud-init.
 #
-# Парный к self-onboard-false (там deliver присутствует, self_onboard/generate_userdata
-# инвертированы).
+# Paired with self-onboard-false (there deliver is present, self_onboard/generate_userdata
+# are inverted).
 name: self-onboard true emits cloud-create with name+self_onboard and skips deliver
 
 fixtures:
@@ -27,8 +27,8 @@ fixtures:
     self_onboard: true
     name: redis
 
-# register.provision — L0-проброс payload core.cloud.created (шаг (а) не исполняется).
-# В self-onboard hosts БЕЗ bootstrap_token (токены доставлены через userdata, не register).
+# register.provision - L0 passthrough of the core.cloud.created payload (step (a) is not executed).
+# In self-onboard, hosts have NO bootstrap_token (tokens are delivered via userdata, not register).
 mocks:
   register:
     provision:
@@ -40,7 +40,7 @@ mocks:
 assert:
   task_present:
     # (1) core.cloud.created: self_onboard=true + name=redis; generate_userdata=false
-    # (self-onboard рендерит userdata с токенами сам, generate_userdata-путь не нужен).
+    # (self-onboard renders userdata with tokens itself, the generate_userdata path is not needed).
     - module: core.cloud.created
       params_subset:
         provider: wb-prod
@@ -50,13 +50,13 @@ assert:
         self_onboard: true
         generate_userdata: false
 
-    # (3) core.soul.registered: SID созданных VM + барьер await_online. coven —
-    # корневой incarnation.name (self-onboard-inc).
+    # (3) core.soul.registered: SID of created VMs + await_online barrier. coven -
+    # root incarnation.name (self-onboard-inc).
     - module: core.soul.registered
       params_subset:
         sid: [redis-0.ns.vm.clv3, redis-1.ns.vm.clv3]
         await_online: true
 
   task_absent:
-    # (2) core.bootstrap.delivered ПРОПУЩЕН при self_onboard=true (VM онбордится сама).
+    # (2) core.bootstrap.delivered is SKIPPED when self_onboard=true (VM onboards itself).
     - module: core.bootstrap.delivered

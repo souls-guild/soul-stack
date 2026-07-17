@@ -1,20 +1,20 @@
-# L0-испытание add_user: добавление ACL-пользователя БЕЗ рестарта (ACL LOAD).
-# Оператор добавляет юзера alice; сценарий мержит его в РАЗВЁРНУТЫЙ state.redis_users,
-# рендерит ПОЛНЫЙ users.acl (alice + ранее развёрнутый bob) и ОЖИВЛЯЕТ через
-# community.redis.acl (ACL LOAD). Render-only, герметично. Plaintext (addr 6379).
+# L0 trial of add_user: adding an ACL user WITHOUT restarting (ACL LOAD).
+# The operator adds user alice; the scenario merges her into the DEPLOYED state.redis_users,
+# renders the FULL users.acl (alice + previously deployed bob) and RELOADS it via
+# community.redis.acl (ACL LOAD). Render-only, hermetic. Plaintext (addr 6379).
 #
-# Что ассертим:
-#   1. users.acl (core.file.rendered, path-дизамбигуатор): vars.users несёт ОБА юзера
-#      (новый alice + сохранённый bob) с per-user паролями из Vault (конвенция
-#      secret/redis/<inc>/users/<name>#password). Пароль в .tmpl хешируется (вне L0).
+# What we assert:
+#   1. users.acl (core.file.rendered, path disambiguator): vars.users carries BOTH users
+#      (new alice + preserved bob) with per-user passwords from Vault (convention
+#      secret/redis/<inc>/users/<name>#password). The password is hashed in the .tmpl (out of scope for L0).
 #   2. hot-reload (community.redis.acl): addr 127.0.0.1:6379 (plain), tls=false,
-#      password из vault. ACL LOAD аргументов не несёт (params — только коннект).
-#   3. state_changes: redis_users несёт alice+bob (имя→{perms,state}, БЕЗ пароля —
-#      write-model хранит только perms/state).
+#      password from vault. ACL LOAD carries no args (params — connection only).
+#   3. state_changes: redis_users carries alice+bob (name→{perms,state}, WITHOUT the password —
+#      the write-model stores only perms/state).
 #
-# Идемпотентность (рендер-уровень): merge детерминирован; повторный прогон с тем же
-# вводом → тот же users.acl. ACL LOAD идемпотентен по конструкции (diff ACL LIST в
-# плагине даёт changed=false при совпадении live↔файл, L1+).
+# Idempotency (render level): merge is deterministic; a repeat run with the same
+# input → the same users.acl. ACL LOAD is idempotent by construction (diff of ACL LIST in
+# the plugin gives changed=false when live↔file match, L1+).
 name: add_user merges new ACL user and hot-reloads via ACL LOAD (plaintext)
 
 fixtures:
@@ -23,13 +23,13 @@ fixtures:
     network: { primary_ip: 10.0.0.5 }
     os: { arch: amd64 }
 
-  # host-layout — в essence (v11→v12, Вариант A): вынесен из state, повторный прогон читает отсюда.
+  # host layout — in essence (v11→v12, Option A): moved out of state, a repeat run reads it from here.
   essence:
     conf_dir: /etc/redis
     data_dir: /var/lib/redis
     modules_base_url: "https://artifacts.example.com/redis/modules"
 
-  # Развёрнутый incarnation.state v6: уже есть юзер bob; add_user добавляет alice.
+  # Deployed incarnation.state v6: user bob already exists; add_user adds alice.
   state:
     redis_type: sentinel
     redis_version: "7.2.4"
@@ -57,9 +57,9 @@ fixtures:
   vault:
     secret/redis/add_user:
       password: addusr-redis-pass-16ch
-    # ★ РЕДИЗАЙН default_admin: системный admin-юзер — пароль из новой Vault-ветки
-    # users/default_admin. Читается masterauth-доливом в apply.input.config И коннектом
-    # community.redis.acl (AUTH под default_admin вместо прежнего requirepass-секрета).
+    # ★ default_admin REDESIGN: the system admin user — password from the new Vault branch
+    # users/default_admin. Read via masterauth top-up in apply.input.config AND the
+    # community.redis.acl connection (AUTH as default_admin instead of the former requirepass secret).
     secret/redis/add_user/users/default_admin:
       password: default-admin-secret-pass
     secret/redis/add_user/users/alice:
@@ -69,8 +69,8 @@ fixtures:
 
 assert:
   task_present:
-    # 1. users.acl перерендерен с ОБОИМИ юзерами (alice новый + bob сохранённый),
-    #    каждый со СВОИМ vault-паролем (нет cross-leak). vars.users — deep-compare.
+    # 1. users.acl re-rendered with BOTH users (new alice + preserved bob),
+    #    each with ITS OWN vault password (no cross-leak). vars.users — deep-compare.
     - module: core.file.rendered
       params_subset:
         path: /etc/redis/users.acl
@@ -89,7 +89,7 @@ assert:
             sid: trial-host
             covens: [add_user]
             choirs: []
-            # traits — registry-проекция (ADR-060), пустой объект без меток.
+            # traits — registry projection (ADR-060), an empty object without labels.
             traits: {}
             role: ""
             network:
@@ -99,19 +99,19 @@ assert:
           role: ""
           essence: {}
 
-    # 2. HOT-RELOAD ACL: community.redis.acl к живому plain-инстансу. ACL LOAD —
-    #    только коннект-params (addr/password/tls), без args.
+    # 2. HOT-RELOAD ACL: community.redis.acl to the live plain instance. ACL LOAD —
+    #    connection params only (addr/password/tls), no args.
     - module: community.redis.acl
       params_subset:
         addr: "127.0.0.1:6379"
-        # ★ РЕДИЗАЙН default_admin: AUTH под default_admin (username + его Vault-пароль).
+        # ★ default_admin REDESIGN: AUTH as default_admin (username + its Vault password).
         username: default_admin
         password: default-admin-secret-pass
         tls: false
 
-  # state_changes: redis_users несёт bob+alice БЕЗ пароля (write-model, МАССИВ AclUser
-  # wave 1b). Порядок = array-upsert: сохранённый bob (filter оставил) ПЕРВЫМ, новый
-  # alice ДОПИСАН в конец (compute.users_new = filter(name != alice) + [alice]).
+  # state_changes: redis_users carries bob+alice WITHOUT a password (write-model, an ARRAY of AclUser
+  # wave 1b). Order = array-upsert: preserved bob (filter kept it) FIRST, new
+  # alice APPENDED at the end (compute.users_new = filter(name != alice) + [alice]).
   state_changes:
     redis_users:
       - { name: bob, perms: "~app:* +@read", state: "on" }

@@ -1,8 +1,8 @@
-# L0 guard (NIM-53 bug #1, негатив): старое persistence-значение (rdb_aof) больше НЕ в enum
-# update_config → отвергается на INPUT-валидации (ResolveInputValues) ДО render. Держит
-# инвариант «старые aof/rdb_aof не принимаются»: они не ключи essence.persistence_presets,
-# их приём рвал бы render no-such-key → incarnation error_locked (см. позитив
-# persistence-canonical-value). Enum обязан отвергнуть их ДО applying, понятным отказом.
+# L0 guard (NIM-53 bug #1, negative): the old persistence value (rdb_aof) is no longer in the enum
+# update_config → rejected at INPUT validation (ResolveInputValues) BEFORE render. Enforces
+# the invariant "old aof/rdb_aof are not accepted": they aren't keys of essence.persistence_presets,
+# accepting them would break render with no-such-key → incarnation error_locked (see the positive
+# persistence-canonical-value). The enum must reject them BEFORE applying, with a clear rejection.
 name: update_config rejects a legacy persistence value (rdb_aof) at input validation
 
 fixtures:
@@ -42,13 +42,13 @@ fixtures:
     redis_users: []
 
   input:
-    # Старое значение из до-редизайн enum [off,aof,rdb,rdb_aof] — теперь НЕ в enum.
+    # Old value from the pre-redesign enum [off,aof,rdb,rdb_aof] — now NOT in the enum.
     persistence: rdb_aof
 
   vault:
     secret/redis/update_config/users/default_admin:
       password: default-admin-secret-pass
 
-# Прогон обрывается на input-валидации: persistence ∉ enum. Подстрока — маркер enum-отказа
-# ResolveInputValues (shared/config/input_value.go).
-expect_render_error: "не входит в enum"
+# The run aborts at input validation: persistence ∉ enum. The substring is the marker for the
+# enum rejection from ResolveInputValues (shared/config/input_value.go).
+expect_render_error: "is not in enum"

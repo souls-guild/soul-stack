@@ -1,11 +1,11 @@
-# L0-испытание B-flat (self_onboard опущен = false): input без self_onboard.
-# Поток: (1) core.cloud.created с generate_userdata: true (userdata БЕЗ токенов),
-# (2) core.bootstrap.delivered доставляет per-VM токен по SSH, (3) core.soul.registered
-# await_online. Шаг (2) ПРИСУТСТВУЕТ (when: !self_onboard — STATIC true при
-# опущенном self_onboard). self_onboard=false / name опущен.
+# L0 test B-flat (self_onboard omitted = false): input without self_onboard.
+# Flow: (1) core.cloud.created with generate_userdata: true (userdata WITHOUT tokens),
+# (2) core.bootstrap.delivered delivers a per-VM token over SSH, (3) core.soul.registered
+# await_online. Step (2) IS PRESENT (when: !self_onboard — STATIC true when
+# self_onboard is omitted). self_onboard=false / name omitted.
 #
-# Парный к self-onboard-true (там deliver пропущен, self_onboard/generate_userdata
-# инвертированы). Покрывает ветку when=true шага deliver.
+# Paired with self-onboard-true (there deliver is skipped, self_onboard/generate_userdata
+# are inverted). Covers the when=true branch of the deliver step.
 name: b-flat (self_onboard omitted) emits generate_userdata cloud-create and deliver
 
 fixtures:
@@ -30,8 +30,8 @@ mocks:
 
 assert:
   task_present:
-    # (1) core.cloud.created: generate_userdata=true (B-flat, userdata без токенов);
-    # self_onboard=false (self_onboard опущен → CEL даёт false).
+    # (1) core.cloud.created: generate_userdata=true (B-flat, userdata without tokens);
+    # self_onboard=false (self_onboard omitted → CEL yields false).
     - module: core.cloud.created
       params_subset:
         provider: wb-prod
@@ -39,7 +39,7 @@ assert:
         self_onboard: false
         generate_userdata: true
 
-    # (2) core.bootstrap.delivered ПРИСУТСТВУЕТ (B-flat доставка токена по SSH).
+    # (2) core.bootstrap.delivered IS PRESENT (B-flat token delivery over SSH).
     - module: core.bootstrap.delivered
       params_subset:
         ssh_provider: ssh-wb

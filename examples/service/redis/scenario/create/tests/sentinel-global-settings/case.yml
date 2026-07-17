@@ -1,10 +1,10 @@
-# L0-испытание create — input.sentinel_settings (ГЛОБАЛЬНЫЕ директивы sentinel.conf,
-# НЕ per-master). default(input.sentinel_settings, {}) сливается в read-model
-# redis_sentinel.settings (state) И в sentinel_directives (plugin config: plain-ключ →
-# globals у classifyConfig). Кейс держит инвариант «sentinel_settings:{resolve-hostnames}
-# → settings в state.redis_sentinel несёт эти директивы» (контр-точка — кейсы без поля,
-# settings:{}). per-master тайминги (sentinel_master_settings → master_settings) — другой
-# data-path, тут не задействован. Режим sentinel single-host (1 master + 0 реплик).
+# L0 test of create — input.sentinel_settings (GLOBAL sentinel.conf directives,
+# NOT per-master). default(input.sentinel_settings, {}) merges into the read-model
+# redis_sentinel.settings (state) AND into sentinel_directives (plugin config: plain key →
+# globals in classifyConfig). This case holds the invariant "sentinel_settings:{resolve-hostnames}
+# → settings in state.redis_sentinel carries these directives" (counter-point — cases without the field,
+# settings:{}). Per-master timings (sentinel_master_settings → master_settings) are a different
+# data path, not involved here. Sentinel mode single-host (1 master + 0 replicas).
 name: sentinel_settings global directives land in state redis_sentinel.settings
 
 fixtures:
@@ -18,8 +18,8 @@ fixtures:
   vault:
     secret/redis/create:
       password: s3cr3t-redis-pass-create
-    # ★ РЕДИЗАЙН default_admin (2026-06-30): default_admin — системный юзер
-    # внутрикластерного AUTH (auth_pass/PING шаги деплоя читают его по ветке users/<name>).
+    # ★ default_admin REDESIGN (2026-06-30): default_admin is the system user for
+    # intra-cluster AUTH (the deploy's auth_pass/PING steps read it from the users/<name> branch).
     secret/redis/create/users/default_admin:
       password: default-admin-secret-pass
     secret/redis/create/users/replica:
@@ -31,8 +31,8 @@ fixtures:
     secret/redis/create/users/haproxy:
       password: haproxy-sys-secret-pass
   essence:
-    # install_method — в essence (author-context, 2026-06-28): способ установки
-    # НЕ operator-input. compute.install читает default(essence.install_method, 'binary').
+    # install_method — lives in essence (author-context, 2026-06-28): the install method
+    # is NOT operator-input. compute.install reads default(essence.install_method, 'binary').
     install_method: package
     redis_type: sentinel
     sentinel_master_name: master
@@ -59,15 +59,15 @@ fixtures:
       sentinel:   "allchannels -@all +auth +client|getname +client|id +client|setname +command +hello +ping +sentinel|is-master-down-by-addr +publish +role +sentinel|get-master-addr-by-name +sentinel|master +sentinel|myid +sentinel|replicas +sentinel|sentinels"
       haproxy:    "-@all +auth +client|getname +client|id +client|setname +command +hello +ping +role +sentinel|get-master-addr-by-name +sentinel|master +sentinel|myid +sentinel|replicas +sentinel|sentinels"
   input:
-    # ★ provision выключен (default-on: опущенная секция = ВКЛЮЧЕНО; кейс деплоит на
-    # ГОТОВЫЙ roster, cloud-create не нужен) → include redis-provision.yml group-drop.
+    # ★ provision disabled (default-on: an omitted section = ENABLED; this case deploys onto
+    # a READY roster, cloud-create not needed) → include redis-provision.yml group-drop.
     provision:
       enabled: false
     redis_type: sentinel
     version: "7.4.1"
     replicas_per_master: 0
     persistence: rdb
-    # ГЛОБАЛЬНЫЕ sentinel-директивы (НЕ per-master): plain-ключи sentinel.conf.
+    # GLOBAL sentinel directives (NOT per-master): plain keys of sentinel.conf.
     sentinel_settings:
       resolve-hostnames: "yes"
       announce-hostnames: "yes"
@@ -93,7 +93,7 @@ assert:
       master_settings:
         down-after-milliseconds: "5000"
         failover-timeout: "60000"
-      # ГЛОБАЛЬНЫЕ директивы материализованы в read-model — повторный прогон читает их именованно.
+      # GLOBAL directives are materialized in the read-model — a repeat run reads them by name.
       settings:
         resolve-hostnames: "yes"
         announce-hostnames: "yes"

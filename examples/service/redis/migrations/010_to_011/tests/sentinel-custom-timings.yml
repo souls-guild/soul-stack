@@ -1,15 +1,15 @@
 name: sentinel-custom-timings
 description: >
-  ГЛАВНЫЙ data-path redis_sentinel RESTRUCT для v9+ sentinel: state несёт КАСТОМНЫЕ
-  down_after_ms/failover_timeout_ms (≠ роль-дефолтов 5000/60000). has-guard ВЕТКА
-  «лист присутствует» → master_settings собирается ИЗ СТАРЫХ ЗНАЧЕНИЙ (НЕ из дефолтов),
-  int→string-конверсия:
+  MAIN data path of redis_sentinel RESTRUCT for v9+ sentinel: state carries CUSTOM
+  down_after_ms/failover_timeout_ms (≠ role defaults 5000/60000). has-guard BRANCH
+  "leaf is present" → master_settings is built FROM OLD VALUES (NOT from defaults),
+  int→string conversion:
     - down_after_ms:2000  → master_settings['down-after-milliseconds']:"2000";
     - failover_timeout_ms:30000 → master_settings['failover-timeout']:"30000";
-    - master_name/quorum сохранены; старые именованные листы отброшены (пересборка).
-  Изолирует именно эту ветку (plain + persistence:rdb — без шума tls/aof-remap): пара к
-  persistence-identity-tls-only-defaults (там ОТСУТСТВУЮЩИЕ листы → ДЕФОЛТНАЯ ветка
-  5000/60000). Покрывает обе стороны has-guard на тайминги.
+    - master_name/quorum preserved; old named leaves discarded (rebuild).
+  Isolates exactly this branch (plain + persistence:rdb — without tls/aof-remap noise): pairs with
+  persistence-identity-tls-only-defaults (there the leaves are ABSENT → DEFAULT branch
+  5000/60000). Covers both sides of the has-guard on timings.
 
 state_before:
   redis_type: sentinel

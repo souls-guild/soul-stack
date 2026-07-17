@@ -1,8 +1,8 @@
 name: create
 description: |
-  Тривиальный auto-create scenario (POST /v1/incarnations авто-запускает create).
-  Один шаг без register/where — staged-render тут не задействован (N=1). Реальный
-  2-passage proof — в scenario/failover, запускаемом отдельным RunScenario.
+  A trivial auto-create scenario (POST /v1/incarnations auto-runs create).
+  One step without register/where — staged-render is not exercised here (N=1). The real
+  2-passage proof is in scenario/failover, launched by a separate RunScenario.
 state_changes: {}
 tasks:
   - name: Init marker

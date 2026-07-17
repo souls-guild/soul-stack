@@ -1,8 +1,8 @@
 name: create
 description: >-
-  Инициализатор incarnation для coven-probe: на каждом хосте incarnation пишет
-  init-маркер (core.file.present, on: опущен = весь incarnation). Даёт
-  incarnation существование и базовую точку отсчёта перед coven-таргет-сценариями
+  Initializer incarnation for coven-probe: on every host the incarnation writes
+  an init marker (core.file.present, on: omitted = whole incarnation). Gives
+  the incarnation existence and a baseline before the coven-target scenarios
   mark_a / mark_ab / mark_where.
 
 state_changes:

@@ -1,6 +1,6 @@
 name: empty-users-map
 description: >
-  Пустой map redis_users (юзеров нет) → пустой массив [] (явная size==0 ветка).
+  Empty redis_users map (no users) → empty array [] (explicit size==0 branch).
 
 state_before:
   redis_users: {}

@@ -1,6 +1,6 @@
-# Post-apply ожидания long-runner::create.
+# Post-apply expectations for long-runner::create.
 #
-# state_changes.sets из scenario/create/main.yml:
+# state_changes.sets from scenario/create/main.yml:
 #   last_run: "create"
 #   runner_marker: /tmp/long-runner-init.txt
 apply_runs:
@@ -15,8 +15,8 @@ audit_events:
     payload:
       incarnation: test-long-runner
 
-# keeper_scenario_runs_total{result="ok"} — реальная метрика успешного прогона
-# scenario (keeper/internal/scenario/metrics.go). Метрики keeper_apply_runs_total
-# в коде нет.
+# keeper_scenario_runs_total{result="ok"} - the real metric of a successful scenario
+# run (keeper/internal/scenario/metrics.go). There is no keeper_apply_runs_total
+# metric in the code.
 metrics:
   keeper_scenario_runs_total{result="ok"}: ">= 1"

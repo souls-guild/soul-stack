@@ -1,14 +1,14 @@
-# L0-испытание destroy: teardown инкарнации, развёрнутой BINARY-способом (upstream-tarball).
-# Render-only, герметично. Парный к teardown-package — покрывает binary-ветку гейта по
-# essence.install_method (v1→v2: способ установки вынесен из state в essence).
+# L0 test destroy: teardown of an incarnation deployed the BINARY way (upstream-tarball).
+# Render-only, hermetic. Paired with teardown-package — covers the binary branch of the gate on
+# essence.install_method (v1→v2: install method moved out of state into essence).
 #
-# Что ассертим:
-#   1. Сервисы остановлены (core.service.stopped): dragonfly, redis-sentinel, disable-thp.
-#   2. BINARY-артефакты удалены (core.file.absent): /usr/local/bin/dragonfly + наш unit
-#      /etc/systemd/system/dragonfly.service (binary-ветка активна — state.install.method=binary).
-#   3. Наши конфиг-артефакты удалены (выборка).
-#   4. PACKAGE-ветка дропнута (group-drop): core.pkg.absent name=dragonfly ОТСУТСТВУЕТ в плане
-#      (на binary-инкарнации distro-deb dragonfly не ставился — снимать пакетом нечего).
+# What we assert:
+#   1. Services stopped (core.service.stopped): dragonfly, redis-sentinel, disable-thp.
+#   2. BINARY artifacts removed (core.file.absent): /usr/local/bin/dragonfly + our unit
+#      /etc/systemd/system/dragonfly.service (binary branch active — state.install.method=binary).
+#   3. Our config artifacts removed (sample).
+#   4. PACKAGE branch dropped (group-drop): core.pkg.absent name=dragonfly IS ABSENT from the plan
+#      (on a binary incarnation the distro-deb dragonfly was never installed — nothing to remove via package).
 name: destroy tears down a binary-installed dragonfly (stop services + remove binary/unit + configs)
 
 fixtures:
@@ -20,15 +20,15 @@ fixtures:
         network: { primary_ip: 10.0.0.5 }
         os: { arch: amd64 }
 
-  # ★ v1→v2: способ установки и conf_dir читаются из essence (install/conf_dir вынесены из
-  # state). binary-ветка гейта — essence.install_method=binary.
+  # ★ v1→v2: install method and conf_dir are read from essence (install/conf_dir moved out of
+  # state). binary branch of the gate — essence.install_method=binary.
   essence:
     install_method: binary
     binary_base_url: "https://artifacts.example.com/dragonfly"
     binary_version: "1.39.0"
     conf_dir: /etc/dragonfly
 
-  # incarnation.state v2 (install/conf_dir/data_dir больше не в state).
+  # incarnation.state v2 (install/conf_dir/data_dir is no longer in state).
   state:
     df_version: "1.39.0"
     df_config:
@@ -36,7 +36,7 @@ fixtures:
 
 assert:
   task_present:
-    # 1. Стоп трёх сервисов.
+    # 1. Stop three services.
     - module: core.service.stopped
       params_subset:
         name: dragonfly
@@ -47,7 +47,7 @@ assert:
       params_subset:
         name: disable-thp
 
-    # 2. BINARY-артефакты удалены (binary-ветка активна).
+    # 2. BINARY artifacts removed (binary branch active).
     - module: core.file.absent
       params_subset:
         path: /usr/local/bin/dragonfly
@@ -55,7 +55,7 @@ assert:
       params_subset:
         path: /etc/systemd/system/dragonfly.service
 
-    # 3. Наши конфиг-артефакты удалены (выборка).
+    # 3. Our config artifacts removed (sample).
     - module: core.file.absent
       params_subset:
         path: /etc/dragonfly/users.acl
@@ -67,7 +67,7 @@ assert:
         path: /etc/sysctl.d/30-dragonfly.conf
 
   task_absent:
-    # 4. PACKAGE-ветка group-drop на binary-инкарнации: пакет не снимается.
+    # 4. PACKAGE branch group-drop on a binary incarnation: package is not removed.
     - module: core.pkg.absent
       params_subset:
         name: dragonfly

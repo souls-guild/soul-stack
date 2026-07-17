@@ -1,20 +1,20 @@
-# L0-испытание create (standalone) — host-tuning extras БЕЗУСЛОВНЫ (концепция
-# Ansible-роли: transparent-hugepages + logrotate + sysctl, БЕЗ tcp_bbr). Все три
-# extras — рекомендация Redis / hardening, НЕ выбор оператора: операторских флагов
-# нет, задачи в хвосте destiny `redis` рендерятся ВСЕГДА (никакого toggle, поэтому
-# контр-кейса на «отключено» больше нет). Guard на то, что THP + logrotate + sysctl
-# рендерятся при дефолтном входе.
+# L0 test create (standalone) - host-tuning extras are UNCONDITIONAL (concept
+# borrowed from the Ansible role: transparent-hugepages + logrotate + sysctl, WITHOUT tcp_bbr). All three
+# extras are a Redis / hardening recommendation, NOT an operator choice: there are no operator
+# flags, tasks at the tail of destiny `redis` render ALWAYS (no toggle, so there is
+# no longer a counter-case for "disabled"). Guards that THP + logrotate + sysctl
+# render on default input.
 #
-# Extras — режим-агностичны и host-инвариантны; sysctl_settings — данные-таблица
-# essence (не во входе оператора), доезжает в destiny через apply.input.
+# Extras are mode-agnostic and host-invariant; sysctl_settings is an essence
+# data table (not in operator input), reaching destiny via apply.input.
 #
-# Индексы хвоста destiny (standalone-прогон: mode-guard 0, destiny 1..21, PING 22;
-# ручные daemon-reload убраны — core.service делает reload сам; sysctl — ОДНА
-# задача core.sysctl.applied, модуль сам пишет drop-in + reload):
-#   16 — render disable-thp.service (core.file.rendered);
-#   17 — disable-thp service.running;
-#   18 — render logrotate (/etc/logrotate.d/redis);
-#   19 — sysctl bulk drop-in (core.sysctl.applied, /etc/sysctl.d/30-redis.conf).
+# Tail indices of destiny (standalone run: mode-guard 0, destiny 1..21, PING 22;
+# manual daemon-reloads removed - core.service does the reload itself; sysctl is ONE
+# task core.sysctl.applied, the module writes the drop-in + reload itself):
+#   16 - render disable-thp.service (core.file.rendered);
+#   17 - disable-thp service.running;
+#   18 - render logrotate (/etc/logrotate.d/redis);
+#   19 - sysctl bulk drop-in (core.sysctl.applied, /etc/sysctl.d/30-redis.conf).
 name: host-tuning extras always render (thp + logrotate + sysctl)
 
 fixtures:
@@ -28,10 +28,10 @@ fixtures:
   vault:
     secret/redis/create:
       password: s3cr3t-redis-pass-create
-    # Per-user секреты системных юзеров (secret/redis/<inc>/users/<name>#password) —
-    # их резолвит keeper-side vault() при доливе system_acl_users в apply.input.users.
-    # ★ РЕДИЗАЙН default_admin (2026-06-30): default_admin — системный юзер
-    # внутрикластерного AUTH (auth_pass/PING шаги деплоя читают его по ветке users/<name>).
+    # Per-user secrets for system users (secret/redis/<inc>/users/<name>#password) -
+    # resolved by keeper-side vault() when topping up system_acl_users into apply.input.users.
+    # star REDESIGN default_admin (2026-06-30): default_admin is the system user
+    # for in-cluster AUTH (auth_pass/PING deploy steps read it via the users/<name> branch).
     secret/redis/create/users/default_admin:
       password: default-admin-secret-pass
     secret/redis/create/users/replica:
@@ -65,17 +65,17 @@ fixtures:
       maxmemory-policy: allkeys-lru
       maxclients:       10000
       timeout:          300
-    # Данные-таблица sysctl (усечённая для теста, детерминизм порядка строк
-    # проверяет render_context.vars.sysctl_settings ниже).
+    # sysctl data table (trimmed down for the test; determinism of row order
+    # is checked by render_context.vars.sysctl_settings below).
     sysctl_settings:
       vm.overcommit_memory: "1"
       vm.swappiness:        "1"
       net.core.somaxconn:   "65535"
 
-    # Системные ACL-юзеры redis-server + sentinel-демона (1:1 из essence/_default.yaml).
-    # ОБА ОБЯЗАТЕЛЬНЫ: guard create/sentinel.yml (assert 1b) рвёт render при пустом
-    # любом из наборов (тихий fail-open недопустим — без них репликация/sentinel↔redis
-    # AUTH сломались бы).
+    # System ACL users for redis-server + the sentinel daemon (1:1 with essence/_default.yaml).
+    # BOTH ARE REQUIRED: the create/sentinel.yml guard (assert 1b) breaks the render if
+    # either set is empty (silent fail-open is unacceptable - without them replication/sentinel<->redis
+    # AUTH would break).
     system_acl_users:
       default_admin: "~* &* +@all"
       replica:    "+psync +replconf +ping"
@@ -88,23 +88,23 @@ fixtures:
       sentinel:   "allchannels -@all +auth +client|getname +client|id +client|setname +command +hello +ping +sentinel|is-master-down-by-addr +publish +role +sentinel|get-master-addr-by-name +sentinel|master +sentinel|myid +sentinel|replicas +sentinel|sentinels"
       haproxy:    "-@all +auth +client|getname +client|id +client|setname +command +hello +ping +role +sentinel|get-master-addr-by-name +sentinel|master +sentinel|myid +sentinel|replicas +sentinel|sentinels"
   input:
-    # ★ provision выключен (default-on: опущенная секция = ВКЛЮЧЕНО; кейс деплоит на
-    # ГОТОВЫЙ roster, cloud-create не нужен) → include redis-provision.yml group-drop.
+    # star provision disabled (default-on: an omitted section = ENABLED; the case deploys onto
+    # a READY roster, cloud-create is not needed) -> include redis-provision.yml group-drop.
     provision:
       enabled: false
     redis_type: sentinel
-    # version ОБЯЗАТЕЛЬНА (директива пользователя 2026-06-23): фиксированный
-    # distro-native пин (мажор < 8 → version-gate модулей не активен).
+    # version is REQUIRED (user directive 2026-06-23): a fixed
+    # distro-native pin (major < 8 -> module version-gate not active).
     version: "7.4.1"
-    # single-host sentinel roster (1 хост) → реплик нет (size-guard 1+0).
+    # single-host sentinel roster (1 host) -> no replicas (size-guard 1+0).
     replicas_per_master: 0
-    # Флагов extras в контракте больше НЕТ: THP/logrotate/sysctl безусловны.
+    # No more extras flags in the contract: THP/logrotate/sysctl are unconditional.
 
 assert:
   task_present:
-    # ── transparent-hugepages ───────────────────────────────────────────────
-    # Дизамбигуатор от redis.conf/users.acl/logrotate/hardening (тот же
-    # core.file.rendered) — path.
+    # -- transparent-hugepages --------------------------------------------------
+    # Disambiguator from redis.conf/users.acl/logrotate/hardening (same
+    # core.file.rendered) - path.
     - module: core.file.rendered
       params_subset:
         path: /etc/systemd/system/disable-thp.service
@@ -113,14 +113,14 @@ assert:
         owner: root
         group: root
 
-    # daemon-reload убран: core.service (daemon_reload: auto) сам перечитывает unit
-    # перед enable/start. Дизамбигуатор от redis-server service.running — name.
+    # daemon-reload removed: core.service (daemon_reload: auto) re-reads the unit itself
+    # before enable/start. Disambiguator from redis-server service.running - name.
     - module: core.service.running
       params_subset:
         name: disable-thp
         enabled: true
 
-    # ── logrotate (безусловно) ──────────────────────────────────────────────
+    # -- logrotate (unconditional) -----------------------------------------------
     - module: core.file.rendered
       params_subset:
         path: /etc/logrotate.d/redis
@@ -129,11 +129,11 @@ assert:
         owner: root
         group: root
 
-    # ── sysctl bulk drop-in (безусловно) ────────────────────────────────────
-    # core.sysctl.applied: модуль сам пишет детерминированный drop-in из map
-    # (sorted keys) + точечный sysctl -p при изменении (reload: auto), сам change
-    # не помечает. settings — из essence (передан через apply.input). ignore_failures
-    # → `sysctl -e -p` (контейнерный режим). Единственная core.sysctl.applied в плане.
+    # -- sysctl bulk drop-in (unconditional) --------------------------------------
+    # core.sysctl.applied: the module itself writes a deterministic drop-in from a map
+    # (sorted keys) + a targeted sysctl -p on change (reload: auto), it does not mark
+    # the change itself. settings come from essence (passed via apply.input). ignore_failures
+    # -> `sysctl -e -p` (container mode). The only core.sysctl.applied in the plan.
     - module: core.sysctl.applied
       params_subset:
         filename: 30-redis
@@ -144,8 +144,8 @@ assert:
           vm.swappiness:        "1"
           net.core.somaxconn:   "65535"
 
-    # standalone-PING: cluster/sentinel PING-ветки — placeholder-skip (без params);
-    # дизамбигуатор — addr/args в params_subset.
+    # standalone PING: cluster/sentinel PING branches are placeholder-skip (without params);
+    # disambiguator - addr/args in params_subset.
     - module: community.redis.command
       params_subset:
         addr: "127.0.0.1:6379"

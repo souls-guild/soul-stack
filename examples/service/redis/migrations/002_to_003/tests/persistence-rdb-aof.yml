@@ -1,7 +1,7 @@
 name: persistence-rdb-aof
 description: >
-  Обратная свёртка persistence: save непустой + appendonly=yes → rdb_aof
-  (двойная durability).
+  Back-derived persistence: non-empty save + appendonly=yes → rdb_aof
+  (dual durability).
 
 state_before:
   redis_type: standalone

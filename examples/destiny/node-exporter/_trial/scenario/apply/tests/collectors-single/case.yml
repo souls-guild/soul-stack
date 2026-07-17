@@ -1,13 +1,14 @@
-# L0-кейс: один коллектор (collectors: ["smartmon"]).
+# L0 case: a single collector (collectors: ["smartmon"]).
 #
-# Доказывает, что одиночный список валиден и проброшен в destiny: план
-# рендерится без падения, smartmon-задачи на месте. На L0 when: каждого
-# коллектор-шага — строка, вычисляемая Soul-ом; здесь ассертим, что when:
-# smartmon-ветки буквально несёт `'smartmon' in input.collectors`, а nvme/ipmi —
-# свои предикаты (Soul вычислит их false на этом списке). Точная фиксация when:
-# через rendered_tasks недоступна (ExpectedTask не ассертит when:), поэтому
-# кейс фиксирует module-состав плана: установочное ядро + smartmon/nvme/ipmi
-# задачи все присутствуют (when: разруливает их на хосте).
+# Proves that a single-item list is valid and passed through to destiny: the
+# plan renders without failing, smartmon tasks are present. At L0 the when:
+# of each collector step is a string evaluated by the Soul; here we assert
+# that the smartmon branch's when: literally carries `'smartmon' in input.collectors`,
+# while nvme/ipmi have their own predicates (Soul evaluates them false on this
+# list). Exact assertion of when: via rendered_tasks isn't available
+# (ExpectedTask doesn't assert when:), so the case fixes the module composition
+# of the plan: install core + smartmon/nvme/ipmi tasks are all present
+# (when: resolves them on the host).
 name: node-exporter renders with single collector (smartmon only)
 
 fixtures:
@@ -23,10 +24,10 @@ fixtures:
 
 assert:
   task_present:
-    # Единственный core.url.fetched в плане.
+    # The only core.url.fetched in the plan.
     - module: core.url.fetched
-    # smartmon-ветка АКТИВНА (collectors=[smartmon]) → задачи реально рендерятся
-    # (Params!=nil), presence их матчит. Дубли разводятся name/path.
+    # smartmon branch is ACTIVE (collectors=[smartmon]) -> tasks actually render
+    # (Params!=nil), presence matches them. Duplicates disambiguated by name/path.
     - module: core.pkg.installed
       params_subset:
         name: smartmontools
@@ -37,18 +38,19 @@ assert:
       params_subset:
         name: node-exporter-smartmon.timer
         enabled: true
-    # smartmon активен → его реактивный рестарт таймера тоже рендерится (Params!=nil).
+    # smartmon is active -> its reactive timer restart also renders (Params!=nil).
     - module: core.service.restarted
       params_subset:
         name: node-exporter-smartmon.timer
 
-  # ── nvme/ipmi-pkg НЕВЫРАЗИМЫ в presence (см. отчёт) ───────────────────────────
-  # nvme/ipmi не в списке → их шаги — STATIC-when:false skip-placeholder
-  # (Params==nil): taskMatches их НЕ матчит ни present, ни absent. Кейс намеренно
-  # фиксирует сохранение их index-слотов (одиночный список не вырезал план) —
-  # позиционное свойство. Оставлено в rendered_tasks (формы сосуществуют): nvme-cli
-  # на index 16, ipmitool на 24 (раскладка коллекторов smartmon 9.. nvme 16.. ipmi 24..;
-  # +1 restarted-шаг на smartmon сдвинул nvme/ipmi на 1 против прежних 15/22).
+  # -- nvme/ipmi-pkg are NOT EXPRESSIBLE in presence (see report) ----------------
+  # nvme/ipmi not in the list -> their steps are STATIC-when:false skip-placeholders
+  # (Params==nil): taskMatches does NOT match them as present or absent. The case
+  # deliberately fixes that their index slots are preserved (a single-item list
+  # didn't cut the plan) - a positional property. Left in rendered_tasks (forms
+  # coexist): nvme-cli at index 16, ipmitool at 24 (collector layout smartmon 9..
+  # nvme 16.. ipmi 24..; +1 restarted step on smartmon shifted nvme/ipmi by 1
+  # vs the previous 15/22).
   rendered_tasks:
     - index: 16
       module: core.pkg.installed

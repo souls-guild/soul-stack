@@ -1,24 +1,27 @@
-# L0-испытание create (sentinel, Redis < 8) — ПУСТОЙ modules_base_url = VANILLA REDIS.
-# Guard на ЖИВОЙ дефект (исправлен 2026-06-28): при пустом modules_base_url на Redis < 8
-# loadmodule-директивы НЕ пишутся в redis.conf и .so НЕ качаются — иначе redis-server
-# падал бы на старте (redis.conf получал бы loadmodule, но .so негде скачать → abort).
+# L0-trial for create (sentinel, Redis < 8) — EMPTY modules_base_url = VANILLA REDIS.
+# Guard for a LIVE defect (fixed 2026-06-28): with an empty modules_base_url on Redis < 8,
+# loadmodule directives are NOT written into redis.conf and .so files are NOT fetched —
+# otherwise redis-server would fail at startup (redis.conf would get loadmodule, but with
+# nowhere to fetch the .so from → abort).
 #
-# Директива «модули ВСЕГДА ВСЕ» сохранена как ALL-OR-NOTHING: modules_base_url пуст →
-# НИ ОДНОГО модуля (vanilla), задан → ВЕСЬ набор (парный кейс with-modules-base-url).
-# version < 8 (7.4.1) → version-guard модули НЕ гасит — гасит ИМЕННО пустой base_url.
+# The "modules are ALWAYS ALL" directive is preserved as ALL-OR-NOTHING: modules_base_url
+# empty → NO modules at all (vanilla), set → the WHOLE set (paired case with-modules-base-url).
+# version < 8 (7.4.1) → the version-guard does NOT disable modules — it's specifically the
+# empty base_url that disables them.
 #
-# Корень гейта (DESTINY): vars.redis_modules_enabled = !redis8 && modules_base_url != ''
-#   - include modules.yml gated на deploy_redis && redis_modules_enabled → пустой base_url
-#     → group-drop: ВЕСЬ modules.yml (modules-dir + 4 fetch) ФИЗИЧЕСКИ отсутствует в плане;
-#   - loadmodules-ячейка redis.conf: !redis_modules_enabled → [] → секции loadmodule нет.
+# Root of the gate (DESTINY): vars.redis_modules_enabled = !redis8 && modules_base_url != ''
+#   - include modules.yml gated on deploy_redis && redis_modules_enabled → empty base_url
+#     → group-drop: the ENTIRE modules.yml (modules-dir + 4 fetch) is PHYSICALLY absent from the plan;
+#   - loadmodules cell of redis.conf: !redis_modules_enabled → [] → no loadmodule section.
 #
-# ★ ЭТО live-only дефект: render-only L0 ловит его только presence-матчером task_absent
-#   (loadmodule/fetch отсутствуют) — на живом хосте отсутствие .so = redis abort на старте.
+# * THIS is a live-only defect: render-only L0 catches it only via the task_absent presence
+#   matcher (loadmodule/fetch missing) — on a live host, absent .so files = redis abort at startup.
 #
-# ★ ВНИМАНИЕ (read-model расходится с фактом деплоя — НЕ скоуп этого guard): state.modules
-#   по-прежнему [bloom,json,search,timeseries] (compute.redis_modules_deployed гейтит ТОЛЬКО
-#   по версии, не по base_url). Инвариант ЭТОГО кейса — ОТСУТСТВИЕ loadmodule/fetch в рендере
-#   (vanilla старт), а не read-model. Расхождение read-model — отдельный backlog.
+# * NOTE (read-model diverges from the actual deploy — NOT the scope of this guard): state.modules
+#   still lists [bloom,json,search,timeseries] (compute.redis_modules_deployed gates ONLY by
+#   version, not by base_url). The invariant of THIS case is the ABSENCE of loadmodule/fetch in
+#   the render (vanilla startup), not the read-model. The read-model divergence is a separate
+#   backlog item.
 name: empty modules_base_url deploys vanilla redis without loadmodule or .so fetch
 
 fixtures:
@@ -42,8 +45,8 @@ fixtures:
   vault:
     secret/redis/create:
       password: s3cr3t-redis-pass-create
-    # ★ РЕДИЗАЙН default_admin (2026-06-30): default_admin — системный юзер
-    # внутрикластерного AUTH (auth_pass/PING шаги деплоя читают его по ветке users/<name>).
+    # * default_admin REDESIGN (2026-06-30): default_admin is a system user for
+    # intra-cluster AUTH (auth_pass/PING deploy steps read it via the users/<name> branch).
     secret/redis/create/users/default_admin:
       password: default-admin-secret-pass
     secret/redis/create/users/replica:
@@ -55,18 +58,18 @@ fixtures:
     secret/redis/create/users/haproxy:
       password: haproxy-sys-secret-pass
   essence:
-    # install_method — в essence (author-context, 2026-06-28): способ установки
-    # НЕ operator-input. compute.install читает default(essence.install_method, 'binary').
+    # install_method — in essence (author-context, 2026-06-28): the install method is
+    # NOT operator-input. compute.install reads default(essence.install_method, 'binary').
     install_method: package
     redis_type: sentinel
     sentinel_master_name: master
-    # ★ Редизайн: подложка per-master sentinel-дефолтов (под input.sentinel_master_settings).
+    # * Redesign: substrate of per-master sentinel defaults (under input.sentinel_master_settings).
     sentinel_master_defaults:
       down-after-milliseconds: "5000"
       failover-timeout:        "60000"
-    # ★ ИСТОЧНИК ДЕФЕКТА: modules_base_url ПУСТ (дефолт essence/_default.yaml). Это
-    # vanilla-сигнал: ни одного модуля. Без base_url-гейта Redis 7 получил бы loadmodule
-    # без скачанных .so → abort на старте.
+    # * SOURCE OF THE DEFECT: modules_base_url is EMPTY (default from essence/_default.yaml). This
+    # is a vanilla signal: no modules at all. Without the base_url gate, Redis 7 would get
+    # loadmodule without downloaded .so files → abort at startup.
     modules_base_url: ""
     memory_reserve_percent: 75
     persistence_presets:
@@ -91,25 +94,27 @@ fixtures:
       sentinel:   "allchannels -@all +auth +client|getname +client|id +client|setname +command +hello +ping +sentinel|is-master-down-by-addr +publish +role +sentinel|get-master-addr-by-name +sentinel|master +sentinel|myid +sentinel|replicas +sentinel|sentinels"
       haproxy:    "-@all +auth +client|getname +client|id +client|setname +command +hello +ping +role +sentinel|get-master-addr-by-name +sentinel|master +sentinel|myid +sentinel|replicas +sentinel|sentinels"
   input:
-    # ★ provision выключен (default-on: опущенная секция = ВКЛЮЧЕНО; кейс деплоит на
-    # ГОТОВЫЙ roster, cloud-create не нужен) → include redis-provision.yml group-drop.
+    # * provision disabled (default-on: an omitted section = ENABLED; the case deploys
+    # onto a READY roster, cloud-create not needed) → include redis-provision.yml group-drop.
     provision:
       enabled: false
     redis_type: sentinel
-    # version — ENUM выкаченных в Nexus сборок; 7.4.1 ∈ enum. Redis < 8 (version-guard
-    # модулей НЕ активен) — гасит модули ИМЕННО ПУСТОЙ base_url.
+    # version — an ENUM of builds published to Nexus; 7.4.1 ∈ enum. Redis < 8 (the
+    # version-guard for modules is NOT active) — it's specifically the EMPTY base_url
+    # that disables modules.
     version: "7.4.1"
-    # install_method=package ЯВНО (default редизайна — binary): кейс про modules-gate,
-    # не про install — package-ветка даёт compute.install.method=package и не плодит
-    # binary-modules-dir/.so (иначе task_absent на modules-dir ловит binary-задачи).
+    # install_method=package EXPLICITLY (redesign default is binary): the case is about
+    # the modules-gate, not about install — the package branch gives
+    # compute.install.method=package and doesn't produce a binary-modules-dir/.so (otherwise
+    # task_absent on modules-dir would catch binary tasks).
     replicas_per_master: 2
 
 assert:
   task_present:
-    # ── redis.conf БЕЗ loadmodules (vanilla: пустой base_url → []) ──
-    # Контр-точка к sentinel-create-1master-2replica (там base_url задан → loadmodules
-    # из четырёх .so). render_context.self = первый по SID хост (node-1).
-    # Дизамбигуатор от users.acl/hardening (тот же core.file.rendered) — path.
+    # ── redis.conf WITHOUT loadmodules (vanilla: empty base_url → []) ──
+    # Counterpoint to sentinel-create-1master-2replica (there base_url is set → loadmodules
+    # for four .so files). render_context.self = the first host by SID (node-1).
+    # Disambiguator from users.acl/hardening (the same core.file.rendered) — path.
     - module: core.file.rendered
       params_subset:
         path: /etc/redis/redis.conf
@@ -124,15 +129,15 @@ assert:
             port: 6379
             run_dir: /var/run/redis
             log_dir: /var/log/redis
-            # ★ ГЛАВНЫЙ assert дефекта: пустой modules_base_url → loadmodules пуст
-            # (vanilla redis, без loadmodule-директив). Version-only гейт здесь дал бы
-            # четыре .so-пути и redis упал бы на старте без скачанных модулей.
+            # * THE MAIN assert of the defect: empty modules_base_url → loadmodules empty
+            # (vanilla redis, no loadmodule directives). A version-only gate here would have
+            # given four .so paths and redis would have failed at startup without downloaded modules.
             loadmodules: []
             config:
-              # ★ РЕДИЗАЙН default_admin: replica→master AUTH (masteruser/
-              # masterauth) приходит ОБЫЧНЫМИ директивами config (sentinel
-              # deploy-body доливает их vault()-в-ячейке) → redis.conf range-ит
-              # их как любую директиву → статически переживают рестарт.
+              # * default_admin REDESIGN: replica→master AUTH (masteruser/
+              # masterauth) arrives as ORDINARY config directives (the sentinel
+              # deploy-body fills them via a vault()-in-cell) → redis.conf ranges
+              # over them like any other directive → statically survive a restart.
               masteruser:       "default_admin"
               masterauth:       "default-admin-secret-pass"
               maxmemory:        "256mb"
@@ -155,13 +160,13 @@ assert:
           essence: {}
 
   task_absent:
-    # ── modules-dir НЕ создаётся (include modules.yml group-drop при пустом base_url) ──
-    # Дизамбигуатор от активного systemd-dropin-dir (тот же core.file.directory) — path.
+    # ── modules-dir is NOT created (include modules.yml group-drop with empty base_url) ──
+    # Disambiguator from the active systemd-dropin-dir (the same core.file.directory) — path.
     - module: core.file.directory
       params_subset:
         path: /var/lib/redis/modules
-    # ── .so НЕ качаются (вся fetch-группа group-dropped) — каждый из четырёх отсутствует.
-    # Дизамбигуатор от tarball-fetch placeholder (тот же core.url.fetched) — path.
+    # ── .so files are NOT downloaded (the whole fetch group is group-dropped) — each of the four is absent.
+    # Disambiguator from the tarball-fetch placeholder (the same core.url.fetched) — path.
     - module: core.url.fetched
       params_subset:
         path: /var/lib/redis/modules/redisbloom.so
@@ -187,9 +192,9 @@ assert:
       appendonly:       "no"
     redis_users: []
     redis_hosts: []
-    # ★ read-model (редизайн): тайминги в master_settings (эффективный per-master
-    # dict = essence.sentinel_master_defaults поверх operator-dict, не задан → дефолты);
-    # settings — глобальные sentinel-директивы (не заданы → {}).
+    # * read-model (redesign): timings in master_settings (the effective per-master
+    # dict = essence.sentinel_master_defaults layered over the operator-dict, not set → defaults);
+    # settings — global sentinel directives (not set → {}).
     redis_sentinel:
       master_name: master
       quorum: 0
@@ -210,10 +215,10 @@ assert:
       key_ref:  ""
       ca_ref:   ""
     memory_mb: 0
-    # ★ read-model: state.modules перечисляет полный набор (compute гейтит ТОЛЬКО по
-    # версии, Redis 7 → не пуст) — НЕСМОТРЯ на то, что .so при пустом base_url НЕ
-    # развёрнуты (vanilla). Расхождение read-model↔факт-деплоя — отдельный backlog
-    # (compute.redis_modules_deployed не учитывает modules_base_url). Инвариант ЭТОГО
-    # guard — отсутствие loadmodule/fetch в рендере (task_absent выше), не это поле.
+    # * read-model: state.modules lists the full set (compute gates ONLY by
+    # version, Redis 7 → not empty) — DESPITE the .so files NOT being deployed with an
+    # empty base_url (vanilla). The read-model↔actual-deploy divergence is a separate backlog
+    # item (compute.redis_modules_deployed doesn't account for modules_base_url). The invariant
+    # of THIS guard is the absence of loadmodule/fetch in the render (task_absent above), not this field.
     modules: [bloom, json, search, timeseries]
     sysctl_settings: {}

@@ -1,9 +1,9 @@
 name: preserves-unrelated
 description: >
-  Write-model (redis_config/redis_users/redis_hosts/redis_sentinel) и
-  redis_type/redis_version НЕ трогаются миграцией — переезжают бит-в-бит.
-  Миграция только ДОБАВЛЯЕТ namedfields рядом. redis_users — уже v2-map-форма
-  (после 001_to_002): проверяем, что её структура сохранена.
+  Write-model (redis_config/redis_users/redis_hosts/redis_sentinel) and
+  redis_type/redis_version are NOT touched by the migration — carried over bit-for-bit.
+  The migration only ADDS namedfields alongside. redis_users is already in v2-map form
+  (after 001_to_002): we check that its structure is preserved.
 
 state_before:
   redis_type: cluster

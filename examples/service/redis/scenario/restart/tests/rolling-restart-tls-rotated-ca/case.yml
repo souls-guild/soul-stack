@@ -1,18 +1,18 @@
-# L0-GUARD фикса latent-бага «CA из essence вместо state» (аудит 2026-06-26).
-# Сценарий-после-rotate_tls: state.tls.ca_ref УЖЕ переписан на НОВЫЙ Vault-путь
-# (rotate_tls сменил CA-материал и зафиксировал новый ref в state). essence.tls_ca_ref
-# при этом остался author-дефолтом (rotate его НЕ трогает) — он указывает на СТАРЫЙ CA.
+# L0-GUARD for the fix of a latent bug "CA from essence instead of state" (audit 2026-06-26).
+# Scenario-after-rotate_tls: state.tls.ca_ref has ALREADY been rewritten to the NEW Vault path
+# (rotate_tls changed the CA material and recorded the new ref in state). essence.tls_ca_ref
+# meanwhile stayed at the author default (rotate does NOT touch it) — it points at the OLD CA.
 #
-# ★ ПРОВЕРЯЕМЫЙ ИНВАРИАНТ: коннект (compute.tls_ca) обязан резолвить CA из
-# ИМЕНОВАННОГО incarnation.state.tls.ca_ref (АКТУАЛЬНЫЙ, новый), НЕ из essence.tls_ca_ref
-# (устаревший). До фикса tls_ca = vault(essence.tls_ca_ref) → коннект СТАРЫМ CA к серверу
-# с НОВЫМ cert → TLS verify падает → шаг failed → error_locked. Этот кейс ловит регресс:
-# state-ref и essence-ref СОЗНАТЕЛЬНО указывают на РАЗНЫЕ Vault-пути с РАЗНЫМ PEM.
+# ★ VERIFIED INVARIANT: the connect (compute.tls_ca) must resolve the CA from the
+# NAMED incarnation.state.tls.ca_ref (CURRENT, new), NOT from essence.tls_ca_ref
+# (stale). Before the fix tls_ca = vault(essence.tls_ca_ref) → connect with the OLD CA to a server
+# with a NEW cert → TLS verify fails → step failed → error_locked. This case catches the regression:
+# the state-ref and essence-ref DELIBERATELY point at DIFFERENT Vault paths with DIFFERENT PEM.
 #
-# state.tls.ca_ref → secret/services/redis/tls-v2#ca → NEW-CA (актуальный).
-# essence.tls_ca_ref → secret/services/redis/tls#ca   → OLD-CA (устаревший).
-# Ассерт probe/health-gate: tls_ca == NEW-CA. Если код вернётся на essence → ассерт
-# увидит OLD-CA → FAIL. Render-only, герметично. Roster — 2 хоста, probe-роль = slave.
+# state.tls.ca_ref → secret/services/redis/tls-v2#ca → NEW-CA (current).
+# essence.tls_ca_ref → secret/services/redis/tls#ca   → OLD-CA (stale).
+# The probe/health-gate assert: tls_ca == NEW-CA. If the code reverts to essence → the assert
+# would see OLD-CA → FAIL. Render-only, hermetic. Roster — 2 hosts, probe-role = slave.
 name: rolling-restart over TLS after rotate reads CA from state.tls.ca_ref not essence
 
 fixtures:
@@ -31,8 +31,8 @@ fixtures:
   input:
     reason: "rolling restart after CA rotation for L0 guard"
 
-  # Развёрнутый incarnation.state v3 ПОСЛЕ rotate_tls: state.tls.ca_ref — НОВЫЙ путь
-  # (tls-v2). Это источник истины коннекта (read-model v3). port=7379 INTEGER.
+  # Deployed incarnation.state v3 AFTER rotate_tls: state.tls.ca_ref — the NEW path
+  # (tls-v2). This is the connect's source of truth (read-model v3). port=7379 INTEGER.
   state:
     redis_type: sentinel
     redis_version: "7.2.4"
@@ -52,17 +52,17 @@ fixtures:
       tls-ca-cert-file: /etc/redis/tls/ca.crt
       tls-replication:  "yes"
 
-  # essence.tls_ca_ref — author-дефолт, УКАЗЫВАЕТ НА СТАРЫЙ CA (tls#ca). После фикса
-  # повторный прогон его НЕ читает; присутствует здесь РОВНО чтобы доказать, что коннект НЕ берёт
-  # его (regress-ловушка: вернись код на essence — увидел бы OLD-CA, ассерт упал бы).
+  # essence.tls_ca_ref — the author default, POINTS AT THE OLD CA (tls#ca). After the fix
+  # a repeat run does NOT read it; it's present here PRECISELY to prove that the connect does NOT
+  # pick it up (regress-trap: if the code reverted to essence — it would see OLD-CA, the assert would fail).
   essence:
     tls_ca_ref: "secret/services/redis/tls#ca"
 
-  # Пароль (incarnation.name == restart; ★ РЕДИЗАЙН default_admin — коннект под системным
-  # default_admin, ветка users/default_admin; прежний secret/redis/<inc>#password ДРОПНУТ)
-  # + ДВА РАЗНЫХ CA-PEM:
-  #   secret/services/redis/tls-v2#ca → NEW-CA (актуальный, по state.tls.ca_ref);
-  #   secret/services/redis/tls#ca    → OLD-CA (устаревший, по essence.tls_ca_ref).
+  # Password (incarnation.name == restart; ★ default_admin REDESIGN — connect under the system
+  # default_admin, users/default_admin branch; the old secret/redis/<inc>#password is DROPPED)
+  # + TWO DIFFERENT CA-PEMs:
+  #   secret/services/redis/tls-v2#ca → NEW-CA (current, per state.tls.ca_ref);
+  #   secret/services/redis/tls#ca    → OLD-CA (stale, per essence.tls_ca_ref).
   vault:
     secret/redis/restart/users/default_admin:
       password: default-admin-secret-pass
@@ -79,8 +79,8 @@ mocks:
 assert:
   task_present:
     # ── probe (community.redis.role): tls_ca = NEW-CA (state.tls.ca_ref) ──
-    # ГЛАВНЫЙ guard: коннект резолвит CA из state-ref (актуальный), НЕ из essence-ref.
-    # NEW-CA доказывает, что после rotate restart верифицирует сервер новым CA.
+    # MAIN guard: the connect resolves the CA from the state-ref (current), NOT from the essence-ref.
+    # NEW-CA proves that after rotate, restart verifies the server with the new CA.
     - module: community.redis.role
       params_subset:
         addr: "127.0.0.1:7379"
@@ -89,8 +89,8 @@ assert:
         tls: true
         tls_ca: "-----BEGIN CERTIFICATE-----\nNEW-CA\n-----END CERTIFICATE-----"
 
-    # ── slave-health-gate (community.redis.replica-synced): тот же NEW-CA ──
-    # Ресинк-гейт внутри slave-block коннектится тем же актуальным CA из state-ref.
+    # ── slave-health-gate (community.redis.replica-synced): the same NEW-CA ──
+    # The resync gate inside the slave-block connects with the same current CA from the state-ref.
     - module: community.redis.replica-synced
       params_subset:
         addr: "127.0.0.1:7379"
@@ -99,9 +99,9 @@ assert:
         tls: true
         tls_ca: "-----BEGIN CERTIFICATE-----\nNEW-CA\n-----END CERTIFICATE-----"
 
-  # ── REGRESS-ЛОВУШКА: OLD-CA (essence.tls_ca_ref) НЕ должен попасть в коннект ──
-  # Вернись compute.tls_ca на vault(essence.tls_ca_ref) — probe/health-gate несли бы
-  # OLD-CA. task_absent ловит ЛЮБУЮ task с OLD-CA: ≥1 совпадение → FAIL.
+  # ── REGRESS-TRAP: OLD-CA (essence.tls_ca_ref) must NOT make it into the connect ──
+  # If compute.tls_ca reverted to vault(essence.tls_ca_ref) — probe/health-gate would carry
+  # OLD-CA. task_absent catches ANY task with OLD-CA: ≥1 match → FAIL.
   task_absent:
     - module: community.redis.role
       params_subset:

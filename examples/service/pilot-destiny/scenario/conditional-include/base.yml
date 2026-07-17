@@ -1,4 +1,4 @@
-# Безусловная база conditional-include: подключается всегда из main.yml.
+# Unconditional base of conditional-include: always included from main.yml.
 - name: base marker
   module: core.file.present
   params:

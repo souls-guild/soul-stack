@@ -1,44 +1,44 @@
-# L2-харнесс destiny node-exporter (Trial, ADR-023, дизайн «Вариант A»).
+# L2 harness for destiny node-exporter (Trial, ADR-023, "Variant A" design).
 #
-# Назначение — дать destiny node-exporter ГЕРМЕТИЧНУЮ E2E-проверку на реальном
-# Linux-стенде (docker) реальными core-модулями, БЕЗ двух непреодолимых для
-# герметичного пилота зависимостей продовой destiny:
-#   - core.url.fetched тянет tarball с GitHub (https-only, сеть) — supply-chain,
-#     не герметично в эфемерном контейнере без интернета;
-#   - core.service.* требует systemd-PID1 (is-active/enable) — нет в ванильном
-#     ubuntu-контейнере без --privileged systemd-образа.
-# (см. docs/destiny/testing.md §L2 / open Q №3.)
+# Purpose — give destiny node-exporter a HERMETIC E2E check on a real
+# Linux stand (docker) with real core modules, WITHOUT the two dependencies of the
+# production destiny that are impossible to satisfy hermetically for a pilot:
+#   - core.url.fetched pulls a tarball from GitHub (https-only, network) — supply-chain,
+#     not hermetic in an ephemeral container without internet;
+#   - core.service.* requires systemd-PID1 (is-active/enable) — not present in a vanilla
+#     ubuntu container without a --privileged systemd image.
+# (see docs/destiny/testing.md §L2 / open Q #3.)
 #
-# Поэтому L2-пилот применяет ПОДМНОЖЕСТВО конвейера node-exporter, исполнимое
-# герметично: рендер launch-скрипта из .tmpl (core.file.rendered — демонстрирует
-# Keeper→Soul handoff template_content + text/template на хосте, ровно как
-# systemd-unit node_exporter.service в проде) + раскладку конфигурации
-# (core.file.present, inline-content, идемпотентность по контенту). Запуск самого
-# листенера и проба порта :9100 — в verify-блоке кейса (бинарь стартует напрямую,
-# БЕЗ systemctl, ТЗ §6).
+# So the L2 pilot applies a SUBSET of the node-exporter pipeline that's executable
+# hermetically: rendering the launch script from .tmpl (core.file.rendered — demonstrates
+# the Keeper→Soul handoff template_content + text/template on the host, exactly like
+# the systemd-unit node_exporter.service in production) + laying out the configuration
+# (core.file.present, inline-content, content-based idempotency). Running the actual
+# listener and probing port :9100 happens in the case's verify block (the binary starts directly,
+# WITHOUT systemctl, spec §6).
 #
-# Это НЕ новая destiny-сущность и НЕ новый сервис: harness-обёртка в _trial/-дереве
-# самой destiny, симметрично существующему _trial/scenario/apply (L0-render).
+# This is NOT a new destiny entity and NOT a new service: a harness wrapper in the _trial/
+# tree of destiny itself, symmetric to the existing _trial/scenario/apply (L0-render).
 name: verify-l2
 description: >-
-  L2-харнесс node-exporter (ADR-023, Вариант A): герметичная E2E-проверка core.file
-  на docker-стенде. Запуск листенера и проба порта — в verify кейса (без systemd).
+  L2 harness for node-exporter (ADR-023, Variant A): hermetic E2E check of core.file
+  on a docker stand. Starting the listener and probing the port — in the case's verify (no systemd).
 
-# input харнесс-scenario. Подмножество контракта продовой destiny node-exporter
-# (version/listen/collectors/bin_dir), исполнимое герметично. Реальный
-# fetch/systemd НЕ задействуются — берутся только те поля, что нужны core.file-
-# подмножеству (listen → launch-скрипт + config, bin_dir → путь скрипта).
+# input of the harness scenario. Subset of the production destiny node-exporter contract
+# (version/listen/collectors/bin_dir), executable hermetically. Real
+# fetch/systemd are NOT engaged — only the fields needed by the core.file
+# subset are taken (listen → launch script + config, bin_dir → script path).
 input:
   version:
     type: string
     default: "1.11.1"
     pattern: "^[0-9]+\\.[0-9]+\\.[0-9]+$"
-    description: Версия node_exporter (passthrough контракта; в L2 не качается).
+    description: Version of node_exporter (contract passthrough; not downloaded in L2).
   listen:
     type: string
     default: ":9100"
     pattern: "^[A-Za-z0-9._-]*:[0-9]{1,5}$"
-    description: Listen-адрес mock-листенера node_exporter (host:port, дефолт :9100).
+    description: Listen address of the node_exporter mock listener (host:port, default :9100).
   collectors:
     type: array
     default: []
@@ -46,19 +46,19 @@ input:
       type: string
       enum: [smartmon, nvme, ipmi]
     description: >-
-      Textfile-коллекторы железа. На L2-контейнере (VM, без железа) — пусто:
-      коллекторы gate-ятся systemd-Condition, их установка тут не проверяется.
+      Hardware textfile collectors. On the L2 container (a VM, no hardware) — empty:
+      collectors are gated by a systemd Condition, their setup is not checked here.
   bin_dir:
     type: string
     default: /usr/local/bin
     pattern: "^/[A-Za-z0-9._/-]+$"
-    description: Каталог launch-скрипта листенера.
+    description: Directory for the listener's launch script.
 
 tasks:
-  # 1. Launch-скрипт листенера из .tmpl. core.file.rendered: Keeper доставляет
+  # 1. Listener launch script from .tmpl. core.file.rendered: Keeper delivers
   #    literal template_content + render_context {vars,self,role,essence},
-  #    Soul-сторона рендерит text/template на хосте (ADR-010) — тот же путь, что
-  #    systemd-unit node_exporter.service в проде. listen приходит из input → vars.
+  #    the Soul side renders text/template on the host (ADR-010) — the same path as
+  #    the systemd-unit node_exporter.service in production. listen comes from input → vars.
   - name: Render node_exporter launch script
     module: core.file.rendered
     register: launch_script
@@ -69,8 +69,8 @@ tasks:
       vars:
         listen: "${ input.listen }"
 
-  # 2. Раскладка config-файла листенера. core.file.present с inline-content:
-  #    идемпотентность по контенту (повторный apply того же контента → changed=false).
+  # 2. Laying out the listener's config file. core.file.present with inline-content:
+  #    content-based idempotency (re-applying the same content → changed=false).
   - name: Deploy node_exporter mock config
     module: core.file.present
     params:

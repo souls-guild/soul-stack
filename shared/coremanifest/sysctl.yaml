@@ -11,15 +11,15 @@ required_capabilities:
 spec:
   states:
     present:
-      description: Kernel-параметр name=value (runtime через sysctl -w + persist в /etc/sysctl.d); ADR-015.
+      description: Kernel parameter name=value (runtime via sysctl -w + persist in /etc/sysctl.d); ADR-015.
       input:
-        name:     { type: string, required: true, description: "Имя kernel-параметра (напр. net.ipv4.ip_forward)." }
-        value:    { type: string, required: true, description: "Желаемое значение." }
-        filename: { type: string, description: "Имя persist-файла в /etc/sysctl.d (default — name с '.'→'-' + .conf)." }
+        name:     { type: string, required: true, description: "Kernel parameter name (e.g. net.ipv4.ip_forward)." }
+        value:    { type: string, required: true, description: "Desired value." }
+        filename: { type: string, description: "Persist-file name in /etc/sysctl.d (default — name with '.'→'-' + .conf)." }
     applied:
-      description: Bulk-набор kernel-параметров одним детерминированным drop-in в /etc/sysctl.d (sorted keys) + точечный sysctl -p <file> при изменении; ADR-015 amend (модуль сам владеет drop-in+reload+idempotency, Ansible-модель).
+      description: Bulk set of kernel parameters as one deterministic drop-in in /etc/sysctl.d (sorted keys) + a targeted sysctl -p <file> on change; ADR-015 amend (the module itself owns drop-in+reload+idempotency, Ansible model).
       input:
-        settings:        { type: map, items: { type: string }, required: true, description: "Map kernel-параметр→значение. Ключи сортируются → контент drop-in детерминирован." }
-        filename:        { type: string, required: true, description: "Имя drop-in в /etc/sysctl.d (напр. 30-redis); суффикс .conf добавляется автоматически." }
-        reload:          { type: string, enum: [auto, always, never], default: auto, description: "sysctl -p <file> после записи: auto = только при изменении файла, always = безусловно, never = opt-out. Сам reload changed не помечает (реюз словаря core.service daemon_reload)." }
-        ignore_failures: { type: bool, default: false, description: "sysctl -e -p (--ignore): глушит read-only/несуществующие ключи в контейнерах. Явный opt-in." }
+        settings:        { type: map, items: { type: string }, required: true, description: "Map of kernel parameter→value. Keys are sorted → drop-in content is deterministic." }
+        filename:        { type: string, required: true, description: "Drop-in file name in /etc/sysctl.d (e.g. 30-redis); the .conf suffix is added automatically." }
+        reload:          { type: string, enum: [auto, always, never], default: auto, description: "sysctl -p <file> after writing: auto = only when the file changed, always = unconditionally, never = opt-out. reload itself does not mark changed (reuses the core.service daemon_reload dictionary)." }
+        ignore_failures: { type: bool, default: false, description: "sysctl -e -p (--ignore): suppresses read-only/nonexistent keys in containers. Explicit opt-in." }

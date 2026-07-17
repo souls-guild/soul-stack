@@ -1,16 +1,17 @@
-# L0-кейс: primary_ip вне 10.0.0.0/8.
+# L0 case: primary_ip outside 10.0.0.0/8.
 #
-# soulprint.self.network.primary_ip=192.168.1.5 (не 10.*) → apply:input
-# CEL-тернарник даёт пустой host → listen = ":9100" (bind на все интерфейсы +
-# порт). Контраст с render-defaults (primary_ip 10.0.0.5 → listen "10.0.0.5:9100").
-# Доказывает internal-bind-логику: вне 10/8 host пуст.
+# soulprint.self.network.primary_ip=192.168.1.5 (not 10.*) -> apply:input
+# CEL ternary yields an empty host -> listen = ":9100" (bind on all interfaces +
+# port). Contrast with render-defaults (primary_ip 10.0.0.5 -> listen "10.0.0.5:9100").
+# Proves the internal-bind logic: outside 10/8 the host is empty.
 #
-# listen попадает в render_context.input.listen основного unit-шага (Вариант B,
-# ADR-010 §3.2 amendment: operator-input доезжает в render_context.input
-# напрямую, без passthrough params.vars). Ассертим render_context unit-задачи
-# целиком — он детерминирован для синтетического L0-хоста; ключевая величина —
-# input.listen = ":9100". vars несёт РЕФЕРЕНСНЫЙ file-var bin_path (шаблон читает
-# его как `.vars.bin_path` напрямую) — прочие file-vars vars.yml не читаются.
+# listen ends up in render_context.input.listen of the main unit step (Variant B,
+# ADR-010 §3.2 amendment: operator-input flows into render_context.input
+# directly, without passthrough via params.vars). We assert the whole
+# render_context of the unit task — it's deterministic for the synthetic L0 host; the
+# key value is input.listen = ":9100". vars carries the REFERENCE file-var bin_path
+# (the template reads it as `.vars.bin_path` directly) — other file-vars from vars.yml
+# are not read.
 name: node-exporter binds to all interfaces when primary_ip is non-10
 
 fixtures:
@@ -26,24 +27,24 @@ fixtures:
 
 assert:
   task_present:
-    # Дизамбигуатор от коллектор-rendered — path основного unit-а.
+    # Disambiguator from the collector-rendered task — path of the main unit.
     - module: core.file.rendered
       params_subset:
         path: /etc/systemd/system/node_exporter.service
-        # template_content присутствует (literal .tmpl доставлен Keeper→Soul);
-        # точную посимвольную сверку шаблона не делаем (хрупко), см. presentMarker.
+        # template_content is present (the literal .tmpl was delivered Keeper->Soul);
+        # exact character-for-character template comparison is skipped (fragile), see presentMarker.
         template_content: "<present>"
-        # render_context.input.listen = ":9100" — пустой host (primary_ip не 10.*).
-        # Вариант B: operator-input (резолвнутый destiny-input + defaults) едет в
-        # render_context.input целиком; vars несёт РЕФЕРЕНСНЫЙ file-var bin_path
-        # (шаблон читает `.vars.bin_path` напрямую) — прочие file-vars vars.yml
-        # шаблон не читает, в render_context.vars их нет (точечная инъекция).
+        # render_context.input.listen = ":9100" — empty host (primary_ip is not 10.*).
+        # Variant B: operator-input (resolved destiny-input + defaults) goes into
+        # render_context.input as a whole; vars carries the REFERENCE file-var bin_path
+        # (the template reads `.vars.bin_path` directly) — other file-vars from vars.yml
+        # aren't read by the template, and aren't in render_context.vars (pointwise injection).
         render_context:
           vars:
             bin_path: /usr/local/bin/node_exporter
           input:
             # apply:input passthrough (version/listen/collectors/base_url/
-            # collector_options/web_telemetry_path) + дефолты destiny-схемы.
+            # collector_options/web_telemetry_path) + destiny-schema defaults.
             version: "1.11.1"
             base_url: "https://github.com/prometheus/node_exporter/releases/download"
             allow_private: false
@@ -53,8 +54,8 @@ assert:
             textfile_dir: /var/lib/node_exporter
             user: node_exporter
             group: node_exporter
-            # Прод-параметры демона — дефолты destiny (флаг в ExecStart НЕ добавят:
-            # gomaxprocs 0, пустые list/string опускают флаг условным рендером .tmpl).
+            # Daemon prod parameters — destiny defaults (the flag in ExecStart will NOT be added:
+            # gomaxprocs 0, empty list/string values omit the flag via conditional .tmpl rendering).
             gomaxprocs: 0
             disabled_collectors: []
             enabled_collectors: []
@@ -66,10 +67,10 @@ assert:
             netdev_device_exclude: ""
           self:
             choirs: []
-            # traits — registry-проекция (ADR-060), пустой объект без меток.
+            # traits — registry projection (ADR-060), an empty object without labels.
             traits: {}
-            # covens несёт incarnation.name-метку (имя scenario = apply) —
-            # зеркало прод-roster `WHERE $1 = ANY(coven)` (harness single-host сахар).
+            # covens carries the incarnation.name label (scenario name = apply) —
+            # mirrors the prod roster `WHERE $1 = ANY(coven)` (harness single-host sugar).
             covens: [apply]
             network:
               primary_ip: "192.168.1.5"

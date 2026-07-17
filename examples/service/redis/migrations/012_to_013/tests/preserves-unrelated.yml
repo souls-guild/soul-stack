@@ -1,10 +1,10 @@
 name: preserves-unrelated
 description: >
-  Инкарнация, у которой monitoring в state УЖЕ есть (напр. повторный прогон миграции или
-  state, где мониторинг развёрнут). has()-guard объекта СОХРАНЯЕТ существующие значения
-  monitoring как есть (идемпотентность, НЕ перезатирает дефолтами), остальной state
-  (redis_type/redis_config/redis_users/redis_sentinel/namedfields/топология) проходит
-  насквозь бит-в-бит. Зеркало объект-guard-а 008_to_009 (seeded_from).
+  An incarnation whose state ALREADY has monitoring (e.g. a repeated migration run or
+  state where monitoring is already deployed). The has()-guard on the object PRESERVES existing
+  monitoring values as-is (idempotency, does NOT overwrite with defaults), the rest of the state
+  (redis_type/redis_config/redis_users/redis_sentinel/namedfields/topology) passes through
+  bit-for-bit. Mirrors the object-guard of 008_to_009 (seeded_from).
 
 state_before:
   redis_type: "cluster"

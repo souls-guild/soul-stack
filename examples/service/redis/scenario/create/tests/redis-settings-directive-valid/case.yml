@@ -1,12 +1,14 @@
-# L0-испытание version-aware валидатора имён директив redis_settings (assert, #6) —
-# ПОЗИТИВ. essence несёт каталог redis_directives с серией 7.4 (подмножество реальных
-# директив). input.version = 7.4.1 (enum выкаченных в Nexus сборок) → серия 7.4.
-# redis_settings содержит ВАЛИДНОЕ имя директивы (appendfsync ∈ каталог[7.4]) → assert
-# проходит, прогон рендерится штатно. Парный к redis-settings-directive-unknown (там
-# неизвестное имя рвёт render).
+# L0 test of the version-aware validator for redis_settings directive names
+# (assert, #6) - POSITIVE case. essence carries a redis_directives catalog for
+# the 7.4 series (subset of real directives). input.version = 7.4.1 (enum of
+# builds rolled out to Nexus) -> series 7.4. redis_settings contains a VALID
+# directive name (appendfsync in catalog[7.4]) -> assert passes, the run
+# renders normally. Paired with redis-settings-directive-unknown (there an
+# unknown name breaks the render).
 #
-# Каталог в fixture — ПОДМНОЖЕСТВО (не полный essence/_default.yaml): assert проверяет
-# членство ключа, для позитива достаточно, чтобы переданное имя БЫЛО в наборе серии.
+# The catalog in the fixture is a SUBSET (not the full essence/_default.yaml):
+# the assert checks key membership, for a positive case it's enough that the
+# passed name IS in the series set.
 name: redis_settings with a valid directive name for the chosen version passes the catalog assert
 
 fixtures:
@@ -20,8 +22,8 @@ fixtures:
   vault:
     secret/redis/create:
       password: s3cr3t-redis-pass-create
-    # ★ РЕДИЗАЙН default_admin (2026-06-30): default_admin — системный юзер
-    # внутрикластерного AUTH (auth_pass/PING шаги деплоя читают его по ветке users/<name>).
+    # * default_admin REDESIGN (2026-06-30): default_admin is the system user
+    # for in-cluster AUTH (auth_pass/PING deploy steps read it via the users/<name> branch).
     secret/redis/create/users/default_admin:
       password: default-admin-secret-pass
     secret/redis/create/users/replica:
@@ -33,8 +35,8 @@ fixtures:
     secret/redis/create/users/haproxy:
       password: haproxy-sys-secret-pass
   essence:
-    # install_method — в essence (author-context, 2026-06-28): способ установки
-    # НЕ operator-input. compute.install читает default(essence.install_method, 'binary').
+    # install_method is in essence (author-context, 2026-06-28): install method
+    # is NOT operator-input. compute.install reads default(essence.install_method, 'binary').
     install_method: package
     redis_type: sentinel
     sentinel_master_name: master
@@ -61,7 +63,7 @@ fixtures:
       sentinel:   "allchannels -@all +auth +client|getname +client|id +client|setname +command +hello +ping +sentinel|is-master-down-by-addr +publish +role +sentinel|get-master-addr-by-name +sentinel|master +sentinel|myid +sentinel|replicas +sentinel|sentinels"
       haproxy:    "-@all +auth +client|getname +client|id +client|setname +command +hello +ping +role +sentinel|get-master-addr-by-name +sentinel|master +sentinel|myid +sentinel|replicas +sentinel|sentinels"
 
-    # Каталог директив (подмножество серии 7.4) — активирует assert-валидатор.
+    # Directive catalog (subset of series 7.4) - activates the assert validator.
     redis_directives:
       "7.4":
         - maxmemory
@@ -73,22 +75,25 @@ fixtures:
         - save
 
   input:
-    # ★ provision выключен (default-on: опущенная секция = ВКЛЮЧЕНО; кейс деплоит на
-    # ГОТОВЫЙ roster, cloud-create не нужен) → include redis-provision.yml group-drop.
+    # * provision is disabled (default-on: an omitted section means ENABLED;
+    # the case deploys onto a READY roster, cloud-create isn't needed) ->
+    # include redis-provision.yml group-drop.
     provision:
       enabled: false
     redis_type: sentinel
     version: "7.4.1"
-    # install_method=package ЯВНО: кейс про директивы, не про install. default редизайна
-    # binary (качал бы бинари из Nexus) → package-ветка ставит distro-пакет с version-пином,
-    # что и ассертит core.pkg.installed ниже.
-    # replicas_per_master=0 ЯВНО (default редизайна 2): single-host (node-solo), size-guard
-    # sentinel = 1+0 = 1 хост.
+    # install_method=package EXPLICITLY: the case is about directives, not
+    # install. The redesign default is binary (would download binaries from
+    # Nexus) -> the package branch installs the distro package with a version
+    # pin, which is what core.pkg.installed asserts below.
+    # replicas_per_master=0 EXPLICITLY (redesign 2 default): single-host
+    # (node-solo), sentinel size-guard = 1+0 = 1 host.
     replicas_per_master: 0
     persistence: rdb
     redis_settings:
-      # ВАЛИДНОЕ имя директивы серии 7.4 (∈ каталог). Значение не валидируется (MVP —
-      # только имена). Перекрывает дефолт appendfsync (если бы был) last-wins.
+      # VALID directive name for series 7.4 (in catalog). The value isn't
+      # validated (MVP - names only). Overrides the appendfsync default (if
+      # any existed) last-wins.
       appendfsync: everysec
 
 assert:
@@ -104,7 +109,7 @@ assert:
   state_changes:
     redis_type: sentinel
     redis_version: "7.4.1"
-    # redis_settings (passthrough) долился в итоговый redis_config last-wins.
+    # redis_settings (passthrough) merged into the final redis_config last-wins.
     redis_config:
       maxmemory: "256mb"
       maxmemory-policy: allkeys-lru

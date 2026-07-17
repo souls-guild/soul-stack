@@ -3,14 +3,14 @@ protocol_version: 1
 namespace: core
 name: module
 
-# Fetch идёт по существующей mTLS EventStream-ClientConn к Keeper (ADR-065(a)).
+# Fetch travels over the existing mTLS EventStream ClientConn to Keeper (ADR-065(a)).
 required_capabilities:
   - network_outbound
 
 spec:
   states:
     installed:
-      description: SoulModule-плагин из активного Sigil-допуска стянут с Keeper (FetchModule), верифицирован и атомарно установлен в каталожный слот кеша модулей. Идемпотентно по sha256 бинаря (ADR-065).
+      description: The SoulModule plugin from the active Sigil grant is pulled from Keeper (FetchModule), verified, and atomically installed into a catalog slot of the module cache. Idempotent by the binary's sha256 (ADR-065).
       input:
-        name: { type: string, required: true, description: "Полное имя плагина \"<namespace>.<name>\" (например community.redis)." }
-        ref:  { type: string, description: "Pin-сверка (НЕ выбор версии): активный Sigil-допуск обязан быть на этом ref, иначе module_not_allowed." }
+        name: { type: string, required: true, description: "Full plugin name \"<namespace>.<name>\" (e.g. community.redis)." }
+        ref:  { type: string, description: "Pin check (NOT a version selector): the active Sigil grant must be on this ref, otherwise module_not_allowed." }

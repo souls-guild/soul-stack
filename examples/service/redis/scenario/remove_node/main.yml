@@ -1,53 +1,53 @@
 name: remove_node
 description: >-
-  Вывести одну ноду из сформированного Redis-кластера: CLUSTER FORGET и, если нода была
-  master-ом, миграция её слотов. Меняет живую топологию кластера; decommission самого
-  хоста — вне сценария.
+  Remove a single node from a formed Redis cluster: CLUSTER FORGET and, if the node was
+  a master, migration of its slots. Changes the live cluster topology; decommissioning the
+  host itself is outside the scenario.
 
-# ── Входной контракт оператора (docs/input.md) ────────────────────────────────
-# Простые типизированные понятия оператора: какой SID вывести и через какую
-# существующую ноду контактировать (seed для CLUSTER NODES/FORGET).
+# ── Operator input contract (docs/input.md) ────────────────────────────────
+# Simple typed operator concepts: which SID to remove and through which
+# existing node to contact (seed for CLUSTER NODES/FORGET).
 input:
   remove_node_sid:
     type: string
     required: true
     format: fqdn
     description: >-
-      SID (FQDN) выводимой из кластера ноды. Должен присутствовать в roster
-      прогона (soulprint.hosts). Если это master СО слотами — плагин сперва
-      мигрирует его слоты на оставшиеся masters, затем CLUSTER FORGET.
+      SID (FQDN) of the node being removed from the cluster. Must be present in the run
+      roster (soulprint.hosts). If it is a master WITH slots — the plugin first migrates
+      its slots to the remaining masters, then CLUSTER FORGET.
 
   seed_sid:
     type: string
     required: true
     format: fqdn
     description: >-
-      SID любой ДРУГОЙ существующей ноды кластера — контакт для CLUSTER NODES
-      (топология + идемпотентность) и FORGET. Должен отличаться от remove_node_sid.
+      SID of any OTHER existing cluster node — the contact for CLUSTER NODES
+      (topology + idempotency) and FORGET. Must differ from remove_node_sid.
 
 tasks:
-  # 1. GUARD — remove_node_sid и seed_sid обязаны быть в roster и различаться (assert:,
-  #    ADR-009 amendment 2026-06-23; тот же механизм, что guard add_node). Предикат
-  #    вычисляется KEEPER-SIDE на РЕНДЕРЕ (там доступен soulprint.hosts; на Soul-е его
-  #    НЕТ). false ОБРЫВАЕТ render с message ДО любого dispatch — раньше и понятнее,
-  #    чем shell-test на хосте. assert НЕ emit RenderedTask.
+  # 1. GUARD — remove_node_sid and seed_sid must be in the roster and must differ (assert:,
+  #    ADR-009 amendment 2026-06-23; same mechanism as the add_node guard). The predicate
+  #    is computed KEEPER-SIDE at RENDER time (soulprint.hosts is available there; on Soul it
+  #    is NOT). false ABORTS render with a message BEFORE any dispatch — earlier and clearer
+  #    than a shell-test on the host. assert does NOT emit a RenderedTask.
   - name: Guard remove_node and seed are distinct members of the run roster
     assert:
       that:
         - 'input.remove_node_sid != input.seed_sid && size(soulprint.hosts.where("sid == input.remove_node_sid")) == 1 && size(soulprint.hosts.where("sid == input.seed_sid")) == 1'
       message: "remove_node guard: remove_node_sid/seed_sid must be distinct hosts of the run roster"
 
-  # 2. REMOVE-NODE — run_once. Endpoint-ы строятся из roster (soulprint.hosts) по
-  #    SID: node (удаляемая) и seed = {addr: "<primary_ip>:6379"}. Это ГОТОВАЯ
-  #    топология — плагин ничего не транслирует: сам читает CLUSTER NODES с seed-а,
-  #    при master-е со слотами мигрирует слоты на оставшиеся masters (go-redis
-  #    SETSLOT/MIGRATE), затем CLUSTER FORGET на всех оставшихся. Идемпотентен
-  #    (ноды уже нет → no-op). .where("sid == ...")[0] детерминирован (single-host
-  #    roster-фильтр; прецедент create/cluster.yml и add_node). ★ РЕДИЗАЙН default_admin
-  #    (2026-06-30): коннект к нодам — под системным default_admin (username → AUTH,
-  #    requirepass убран). password из новой Vault-ветки secret/redis/<inc>/users/
-  #    default_admin#password; плагин коннектится к нодам под этой парой (password
-  #    маскируется). Тело сценария (вне covenant) хардкодит 'default_admin' напрямую.
+  # 2. REMOVE-NODE — run_once. Endpoints are built from the roster (soulprint.hosts) by
+  #    SID: node (being removed) and seed = {addr: "<primary_ip>:6379"}. This is a READY
+  #    topology — the plugin does not translate anything: it reads CLUSTER NODES from the
+  #    seed itself, and for a master with slots migrates the slots to the remaining masters
+  #    (go-redis SETSLOT/MIGRATE), then CLUSTER FORGET on all remaining ones. Idempotent
+  #    (node already gone → no-op). .where("sid == ...")[0] is deterministic (single-host
+  #    roster filter; precedent in create/cluster.yml and add_node). ★ REDESIGN default_admin
+  #    (2026-06-30): connecting to nodes — under the system default_admin (username → AUTH,
+  #    requirepass removed). password comes from the new Vault branch secret/redis/<inc>/users/
+  #    default_admin#password; the plugin connects to nodes with this pair (password
+  #    is masked). The scenario body (outside covenant) hardcodes 'default_admin' directly.
   - name: Remove the node from the cluster (slot-migration + CLUSTER FORGET)
     run_once: true
     module: community.redis.cluster

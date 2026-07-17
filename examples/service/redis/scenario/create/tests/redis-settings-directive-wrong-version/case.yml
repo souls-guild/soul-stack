@@ -1,15 +1,15 @@
-# L0-испытание version-aware валидатора (assert, #6) — НЕГАТИВ «правильная директива,
-# ЧУЖАЯ версия». Это guard на САМУЮ суть version-awareness: directive bgsave-cpulist —
-# РЕАЛЬНАЯ директива redis.conf, но появилась в Redis 8.x (есть в каталоге[8.2], НЕТ в
-# каталоге[7.4]). Оператор выбрал version 7.4.1 (серия 7.4, enum выкаченных в Nexus
-# сборок) → assert обязан отвергнуть bgsave-cpulist: на redis 7.4 такой директивы нет,
-# redis-server упал бы с ошибкой конфига. Проверяет, что валидатор сверяет имя именно с
-# НАБОРОМ ВЫБРАННОЙ серии, а не с «любой версией Redis» (иначе опечатки ловились бы, а
-# version-drift — нет).
+# L0 trial for the version-aware validator (assert, #6) — NEGATIVE "correct directive,
+# WRONG version". This is a guard on the very essence of version-awareness: directive bgsave-cpulist —
+# a REAL redis.conf directive, but it appeared in Redis 8.x (present in the catalog[8.2], NOT in
+# catalog[7.4]). The operator chose version 7.4.1 (7.4 series, enum of builds shipped to Nexus)
+# -> the assert must reject bgsave-cpulist: on redis 7.4 no such directive exists,
+# redis-server would fail to start with a config error. Verifies that the validator matches the name against
+# the SET OF THE CHOSEN SERIES, not against "any Redis version" (otherwise typos would be caught, but
+# version drift wouldn't be).
 #
-# В каталоге fixture несём ОБЕ серии (7.4 и 8.2): bgsave-cpulist ∈ 8.2, ∉ 7.4. Версия
-# 7.4.1 матчит только серию 7.4 (regex `^([0-9]+:)?7.4[.]`), членство проверяется
-# против 7.4 → false. Серия 8.2 для этой версии вакуумно-true (тернар) и НЕ спасает.
+# The catalog fixture carries BOTH series (7.4 and 8.2): bgsave-cpulist is in 8.2, not in 7.4. Version
+# 7.4.1 matches only the 7.4 series (regex `^([0-9]+:)?7.4[.]`), membership is checked
+# against 7.4 -> false. The 8.2 series is vacuously-true for this version (ternary) and does NOT save it.
 name: redis_settings with a directive from a newer Redis series aborts at render (version mismatch)
 
 fixtures:
@@ -23,8 +23,8 @@ fixtures:
   vault:
     secret/redis/create:
       password: s3cr3t-redis-pass-create
-    # ★ РЕДИЗАЙН default_admin (2026-06-30): default_admin — системный юзер
-    # внутрикластерного AUTH (auth_pass/PING шаги деплоя читают его по ветке users/<name>).
+    # * default_admin REDESIGN (2026-06-30): default_admin — the system user for
+    # in-cluster AUTH (auth_pass/PING deploy steps read it via the users/<name> branch).
     secret/redis/create/users/default_admin:
       password: default-admin-secret-pass
     secret/redis/create/users/replica:
@@ -61,7 +61,7 @@ fixtures:
       sentinel:   "allchannels -@all +auth +client|getname +client|id +client|setname +command +hello +ping +sentinel|is-master-down-by-addr +publish +role +sentinel|get-master-addr-by-name +sentinel|master +sentinel|myid +sentinel|replicas +sentinel|sentinels"
       haproxy:    "-@all +auth +client|getname +client|id +client|setname +command +hello +ping +role +sentinel|get-master-addr-by-name +sentinel|master +sentinel|myid +sentinel|replicas +sentinel|sentinels"
 
-    # Каталог с ДВУМЯ сериями: bgsave-cpulist есть только в 8.2 (введена в Redis 8.x).
+    # Catalog with TWO series: bgsave-cpulist exists only in 8.2 (introduced in Redis 8.x).
     redis_directives:
       "7.4":
         - maxmemory
@@ -80,17 +80,17 @@ fixtures:
         - bgsave-cpulist
 
   input:
-    # ★ provision выключен (default-on: опущенная секция = ВКЛЮЧЕНО; кейс деплоит на
-    # ГОТОВЫЙ roster, cloud-create не нужен) → include redis-provision.yml group-drop.
+    # * provision is disabled (default-on: an omitted section = ENABLED; the case deploys to a
+    # READY roster, no cloud-create needed) -> include the redis-provision.yml group-drop.
     provision:
       enabled: false
     redis_type: sentinel
     version: "7.4.1"
     persistence: rdb
     redis_settings:
-      # Реальная директива, но из Redis 8.x — на серии 7.4 её НЕТ → assert false.
+      # A real directive, but from Redis 8.x — NOT present on the 7.4 series -> assert false.
       bgsave-cpulist: "0-3"
 
-# Прогон обрывается на render: assert «Validate redis_settings directive names…» false
-# (bgsave-cpulist ∉ каталог[7.4]). Подстрока — message assert-правила.
-expect_render_error: "redis_settings содержит неизвестную директиву redis.conf для выбранной версии Redis"
+# The run aborts at render: assert "Validate redis_settings directive names..." false
+# (bgsave-cpulist not in catalog[7.4]). The substring is the assert rule's message.
+expect_render_error: "redis_settings contains an unknown redis.conf directive for the selected Redis version"

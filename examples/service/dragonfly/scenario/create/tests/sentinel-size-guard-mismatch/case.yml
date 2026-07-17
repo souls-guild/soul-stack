@@ -1,21 +1,21 @@
-# L0-испытание create DragonFly в режиме sentinel — FAIL-ветка size-guard (топология != roster).
-# Зеркало create-sentinel-1master-1replica по форме, но replicas_per_master=2 (топология 1+2=3),
-# а roster СПЕЦИАЛЬНО несёт 2 хоста: 2 != 1+2. size-guard main.yml («Guard sentinel roster size
-# matches replicas», assert, keeper-side render-time, ADR-009 amendment) обязан ОБОРВАТЬ render ДО
-# любого dispatch — иначе master-election (первый по SID) и SENTINEL MONITOR/REPLICAOF разъехались
-# бы с declared-топологией: один хост МОЛЧА стал бы незаявленной репликой.
+# L0 trial for create DragonFly in sentinel mode - FAIL branch of size-guard (topology != roster).
+# Mirrors create-sentinel-1master-1replica in shape, but replicas_per_master=2 (topology 1+2=3),
+# and the roster DELIBERATELY carries 2 hosts: 2 != 1+2. size-guard main.yml ("Guard sentinel roster size
+# matches replicas", assert, keeper-side render-time, ADR-009 amendment) must ABORT render BEFORE
+# any dispatch - otherwise master-election (first by SID) and SENTINEL MONITOR/REPLICAOF would diverge
+# from the declared topology: one host would SILENTLY become an undeclared replica.
 #
-# Парный с create-sentinel-1master-1replica (там roster==топология → render проходит, size-guard
-# PASS) и зеркало redis create/tests/sentinel-size-guard-mismatch.
+# Paired with create-sentinel-1master-1replica (there roster==topology → render passes, size-guard
+# PASS) and mirrors redis create/tests/sentinel-size-guard-mismatch.
 #
-# Render-only, герметично. Диспетчер create инклудит provision (group-drop на enabled=false),
-# первой изменяющей задачей — size-guard assert (НЕ emit RenderedTask), который здесь падает.
+# Render-only, hermetic. The create dispatcher includes provision (group-drop on enabled=false),
+# with the first changing task being the size-guard assert (does NOT emit RenderedTask), which fails here.
 name: sentinel create with roster size not matching replicas aborts at render (size-guard)
 
 fixtures:
   default_destiny_source: "file://../../destiny/{name}"
-  # Roster из 2 хостов — НА ОДИН МЕНЬШЕ объявленной топологии (replicas=2 → 1+2=3).
-  # Порядок намеренно не отсортирован: size-guard оперирует size(), не позицией.
+  # Roster of 2 hosts - ONE LESS than the declared topology (replicas=2 → 1+2=3).
+  # Order deliberately not sorted: size-guard operates on size(), not position.
   hosts:
     - sid: node-2.example.com
       covens: [create, dragonfly]
@@ -27,8 +27,8 @@ fixtures:
       soulprint:
         network: { primary_ip: 10.0.0.1 }
         os: { arch: amd64 }
-  # Vault: default_admin (внутрикластерный AUTH + masterauth) + системные. Пред-сеются фикстурой
-  # (generate-шаг core.vault.kv-present — keeper-side write, в L0 не исполняется).
+  # Vault: default_admin (in-cluster AUTH + masterauth) + system users. Pre-seeded by the fixture
+  # (generate step core.vault.kv-present - keeper-side write, not executed in L0).
   vault:
     secret/dragonfly/create/users/default_admin:
       password: dfadmin-create-pass
@@ -58,14 +58,14 @@ fixtures:
       sentinel:   "allchannels -@all +auth +client|getname +client|id +client|setname +command +hello +ping +sentinel|is-master-down-by-addr +publish +role +sentinel|get-master-addr-by-name +sentinel|master +sentinel|myid +sentinel|replicas +sentinel|sentinels"
       haproxy:    "-@all +auth +client|getname +client|id +client|setname +command +hello +ping +role +sentinel|get-master-addr-by-name +sentinel|master +sentinel|myid +sentinel|replicas +sentinel|sentinels"
   input:
-    # ★ provision выключен (default-on: опущенная секция = ВКЛЮЧЕНО; кейс деплоит на
-    # ГОТОВЫЙ roster, cloud-create не нужен) → include dragonfly-provision.yml group-drop.
+    # ★ provision disabled (default-on: omitted section = ENABLED; the case deploys onto
+    # a READY roster, cloud-create not needed) → include dragonfly-provision.yml group-drop.
     provision:
       enabled: false
     version: "1.39.0"
-    # replicas_per_master=2 → ожидается 1+2=3 хоста, а roster выше = 2 → 2 != 1+2.
+    # replicas_per_master=2 → expects 1+2=3 hosts, but the roster above = 2 → 2 != 1+2.
     replicas_per_master: 2
 
-# Прогон обрывается на render: size-guard assert «Guard sentinel roster size matches replicas»
-# false (2 != 1+2). Подстрока — message assert-правила main.yml.
-expect_render_error: "число хостов roster-а прогона должно быть ровно 1+replicas_per_master"
+# The run aborts at render: size-guard assert "Guard sentinel roster size matches replicas"
+# false (2 != 1+2). Substring - message of the assert rule in main.yml.
+expect_render_error: "roster host count must be exactly 1+replicas_per_master"

@@ -1,26 +1,26 @@
-# covenant.yml — переиспользуемый общий контракт секций сценариев redis (S4 пилот).
+# covenant.yml - a reusable shared contract for redis scenario sections (S4 pilot).
 #
-# Несёт ТОЛЬКО общий контракт ЧЕТЫРЁХ секций: input / compute / state_changes /
-# validate (shared/config ScenarioFragment). name/tasks/create/form/extends —
-# НЕ здесь (covenant — контракт, а не исполняемый сценарий; лишний ключ →
-# covenant_unexpected_key). Сценарий подключает фрагмент через `extends: covenant`
-# и ДОБАВЛЯЕТ свою дельту add-only (covenant — БАЗА, дельта НЕ переопределяет ключи
-# covenant, иначе section_key_conflict). keeper-side резолвер (LoadScenarioManifest
-# Resolved) сливает covenant ПЕРВЫМ: эффективный манифест = covenant ++ дельта,
-# поэтому порядок compute-объявлений и state_changes-Ops сохраняется как здесь.
+# Carries ONLY the shared contract of the FOUR sections: input / compute / state_changes /
+# validate (shared/config ScenarioFragment). name/tasks/create/form/extends are
+# NOT here (covenant is a contract, not an executable scenario; an extra key ->
+# covenant_unexpected_key). A scenario pulls in the fragment via `extends: covenant`
+# and ADDS its own delta add-only (covenant is the BASE, the delta does NOT override
+# covenant's keys, otherwise section_key_conflict). The keeper-side resolver (LoadScenarioManifest
+# Resolved) merges covenant FIRST: the effective manifest = covenant ++ delta,
+# so the order of compute declarations and state_changes Ops is preserved as it is here.
 #
-# ★ provision-секция input ОТСУТСТВУЕТ намеренно: это дельта `create` (cloud-create
-# в том же прогоне, ADR-061), не общий контракт. provisioned_*-set-ы state_changes
-# ниже provision-aware (тернар по input.provision) — БЕЗ provision вырождаются в []
-# (нулевая дельта state), потому covenant самодостаточен для сценариев без provision.
+# * The provision section of input is DELIBERATELY ABSENT: it's a `create` delta (cloud-create
+# in the same run, ADR-061), not part of the shared contract. The provisioned_* state_changes
+# sets below are provision-aware (a ternary on input.provision) - WITHOUT provision they
+# degenerate to [] (a zero state delta), so covenant is self-sufficient for scenarios without provision.
 
-# ── Входной контракт оператора (docs/input.md) ────────────────────────────────
-# Простые типизированные понятия. Трансляция в redis.conf — в ветках диспетчера.
-# Режимы сервиса: sentinel (sentinel.yml) и cluster (cluster.yml). standalone-
-# развёртывание покрывается sentinel с replicas_per_master=0 (один master + sentinel-
-# демон). Неизвестный режим отвергается input-валидацией Keeper-а (enum redis_type
-# ниже) ДО рендера — понятным отказом, а не молчаливым зелёным no-op (обе ветки
-# gated на свой redis_type).
+# ── Operator input contract (docs/input.md) ────────────────────────────────
+# Simple typed concepts. Translation into redis.conf happens in the dispatcher branches.
+# Service modes: sentinel (sentinel.yml) and cluster (cluster.yml). standalone
+# deployment is covered by sentinel with replicas_per_master=0 (a single master +
+# sentinel daemon). An unknown mode is rejected by Keeper's input validation (enum
+# redis_type below) BEFORE render - a clear refusal, not a silent green no-op (both
+# branches are gated on their own redis_type).
 input:
   redis_type:
     type: string
@@ -28,69 +28,73 @@ input:
     default: sentinel
     enum: [sentinel, cluster]
     description: >-
-      Режим развёртывания (концепция роли). Два режима: sentinel (master-replica +
-      sentinel-демон; replicas_per_master=0 даёт standalone-эквивалент) и cluster
-      (honest hash-slot Redis Cluster). redis_type выбирает ветку диспетчера
-      (conditional-include cluster.yml / sentinel.yml + when: по redis_type на include).
+      Deployment mode (a role concept). Two modes: sentinel (master-replica +
+      sentinel daemon; replicas_per_master=0 gives a standalone-equivalent) and cluster
+      (honest hash-slot Redis Cluster). redis_type selects the dispatcher branch
+      (conditional-include cluster.yml / sentinel.yml + when: on redis_type on the include).
 
-  # ── version: фикс-enum БИНАРНЫХ версий Redis (Nexus) ──────────────────────────
-  # ★ Редизайн input-контракта: version — теперь ENUM фиксированных upstream-версий
-  # из Nexus (essence.install_method=binary по умолчанию качает ИМЕННО эти бинари —
-  # см. install.yml binary-ветку). Прежний свободный pattern distro-пина заменён
-  # закрытым списком: оператор выбирает версию из выкаченных в Nexus, а не пишет
-  # произвольную строку. required (нужна ВСЕГДА: binary — дефолтный способ установки,
-  # версия определяет путь к бинарю; package-ветка ставит =version-пин тем же enum).
+  # ── version: a fixed enum of Redis BINARY versions (Nexus) ──────────────────────
+  # ★ Input-contract redesign: version is now a fixed ENUM of upstream versions
+  # published to Nexus (essence.install_method=binary by default pulls EXACTLY these
+  # binaries - see the install.yml binary branch). The former free-form distro-pin
+  # pattern is replaced by a closed list: the operator picks a version from what's
+  # published to Nexus instead of writing an arbitrary string. required (ALWAYS
+  # needed: binary is the default install method, and the version determines the
+  # binary path; the package branch pins =version with the same enum).
   version:
     type: string
     required: true
     enum: ["8.6.1", "8.4.0", "8.2.2", "8.0.3", "7.4.1", "6.2.21"]
     description: >-
-      Версия Redis (фиксированный набор бинарей из Nexus). Выбери одну из выкаченных
-      версий: способ установки binary (essence.install_method, default) качает бинари
-      redis-server/redis-cli/redis-benchmark этой версии из Nexus; способ package ставит
-      =version-пин. Список закрыт — произвольная версия не принимается (доступны только
-      выкаченные в Nexus сборки).
+      Redis version (a fixed set of binaries published to Nexus). Pick one of the
+      published versions: install method binary (essence.install_method, default)
+      pulls the redis-server/redis-cli/redis-benchmark binaries of this version from
+      Nexus; install method package pins =version. The list is closed - an arbitrary
+      version is not accepted (only builds published to Nexus are available).
 
-  # ── install_method УБРАН из operator-input (2026-06-28) ──────────────────────
-  # Способ установки redis — НЕ операторский выбор в Run-форме: он зафиксирован в
-  # essence.install_method (дефолт binary, author-context). compute.install читает
-  # default(essence.install_method, 'binary') — оператор больше не видит/не задаёт это
-  # поле. Внутренний оператор переопределяет способ в spec.essence (install_method:
-  # package), обычный — нет. Симметрия с modules_base_url/binary_base_url (тоже essence).
+  # ── install_method REMOVED from operator-input (2026-06-28) ──────────────────────
+  # The redis install method is NOT an operator choice in the Run form: it's fixed in
+  # essence.install_method (default binary, author-context). compute.install reads
+  # default(essence.install_method, 'binary') - the operator no longer sees/sets this
+  # field. An internal operator overrides the method in spec.essence (install_method:
+  # package), a regular one doesn't. Symmetric with modules_base_url/binary_base_url
+  # (also essence).
   #
-  # ★ Раскладка conf_dir/data_dir тоже НЕ операторский input (#2): дефолты переехали
-  # в essence (conf_dir/data_dir), compute читает их оттуда. Override — в spec.essence
-  # инкарнации, не в Run-форме. В state conf_dir/data_dir НЕ персистятся (state_changes
-  # их не пишет, см. ниже) — layout живёт в essence, day-2 add_node читает
-  # essence.conf_dir/data_dir (has()-safe default). Источник правки — только essence.
+  # ★ The conf_dir/data_dir layout is also NOT operator input (#2): the defaults moved
+  # to essence (conf_dir/data_dir), compute reads them from there. Override is in the
+  # incarnation's spec.essence, not the Run form. conf_dir/data_dir are NOT persisted
+  # in state (state_changes doesn't write them, see below) - layout lives in essence,
+  # day-2 add_node reads essence.conf_dir/data_dir (has()-safe default). The only
+  # place to change it is essence.
 
   memory_mb:
     type: integer
     required: false
     min: 64
     description: >-
-      Бюджет памяти под Redis на хосте, МБ. maxmemory вычисляется как доля от него
-      (essence.memory_reserve_percent — резерв под ОС) с ЦЕЛОЧИСЛЕННЫМ усечением:
-      maxmemory = int(memory_mb)*int(reserve)/100 + "mb". Нижний пол min:64 не
-      случаен: при слишком малом memory_mb усечение даёт "0mb", а в Redis
-      maxmemory 0 = БЕЗ лимита (обратное намерению ограничить память). 64 МБ при
-      reserve=75 → 48mb — безопасно ненулевой результат. Не задан → директива
-      maxmemory берётся из merge-подложки essence.redis_config.
+      Memory budget for Redis on the host, MB. maxmemory is computed as a share of it
+      (essence.memory_reserve_percent - the OS reserve) with INTEGER truncation:
+      maxmemory = int(memory_mb)*int(reserve)/100 + "mb". The min:64 floor isn't
+      arbitrary: too small a memory_mb truncates to "0mb", and in Redis maxmemory 0
+      means NO limit (the opposite of the intent to cap memory). 64 MB at reserve=75
+      -> 48mb - a safely non-zero result. Not set -> the maxmemory directive comes
+      from the essence.redis_config merge substrate.
 
-  # io_threads: число I/O-потоков redis (директива io-threads). default 0 = одно-
-  # поточный I/O (поведение Redis по умолчанию). >0 — Redis раскидывает чтение/запись
-  # сокетов по N потокам. compute.redis_config пишет io-threads ТОЛЬКО при >0 (has-guard,
-  # как memory_mb) — чтобы io-threads 0 не шумел в diff. Директива есть во всех сериях
-  # каталога (essence.redis_directives).
+  # io_threads: number of redis I/O threads (the io-threads directive). default 0 =
+  # single-threaded I/O (Redis's default behavior). >0 - Redis spreads socket
+  # read/write across N threads. compute.redis_config writes io-threads ONLY when >0
+  # (has-guard, like memory_mb) - so io-threads 0 doesn't add diff noise. The
+  # directive exists across every catalog series (essence.redis_directives).
   io_threads:
     type: integer
     required: false
     default: 0
     min: 0
     description: >-
-      Число I/O-потоков Redis (директива io-threads). 0 (дефолт) — однопоточный I/O
-      (директива не пишется). >0 — Redis распараллеливает обработку сокетов по N потокам
-      (типично = числу ядер - 1). Пишется в redis.conf только при >0.
+      Number of Redis I/O threads (the io-threads directive). 0 (default) -
+      single-threaded I/O (the directive isn't written). >0 - Redis parallelizes
+      socket handling across N threads (typically = core count - 1). Written to
+      redis.conf only when >0.
 
   persistence:
     type: string
@@ -98,10 +102,10 @@ input:
     default: rdb
     enum: [off, aof_1sec, aof_always, rdb, rdb_aof_1sec, rdb_aof_always]
     description: >-
-      Режим persistence. Транслируется в save/appendonly/appendfsync через
-      essence.persistence_presets[persistence] (данные-таблица). off — без сохранения;
-      aof_1sec/aof_always — только AOF (fsync everysec / always); rdb — только
-      снапшоты; rdb_aof_1sec/rdb_aof_always — снапшоты + AOF (двойная durability).
+      Persistence mode. Translated into save/appendonly/appendfsync via
+      essence.persistence_presets[persistence] (a data table). off - no persistence;
+      aof_1sec/aof_always - AOF only (fsync everysec / always); rdb - snapshots only;
+      rdb_aof_1sec/rdb_aof_always - snapshots + AOF (double durability).
 
   maxmemory_policy:
     type: string
@@ -116,15 +120,15 @@ input:
       - volatile-random
       - volatile-ttl
     description: >-
-      Политика вытеснения при достижении maxmemory. Не задана → берётся из
-      merge-подложки essence.redis_config.
+      Eviction policy when maxmemory is reached. Not set -> comes from the
+      essence.redis_config merge substrate.
 
-  # ── Реплики на master (UNIFIED, оба режима) ──────────────────────────────────
-  # ОДНО поле replicas_per_master на оба режима (унификация 2026-06-25): реплик на
-  # каждый master. cluster — реплик на шард (состав roster-а: shards мастеров +
-  # shards*replicas_per_master реплик); sentinel — реплик master-а (состав roster-а:
-  # 1 master + replicas_per_master реплик). default:0 → size-guard читает
-  # int(input.replicas_per_master) без has()-обвязки.
+  # ── Replicas per master (UNIFIED, both modes) ──────────────────────────────────
+  # A SINGLE replicas_per_master field for both modes (unified 2026-06-25): replicas
+  # per master. cluster - replicas per shard (roster composition: shards masters +
+  # shards*replicas_per_master replicas); sentinel - replicas of the master (roster
+  # composition: 1 master + replicas_per_master replicas). default:0 -> the
+  # size-guard reads int(input.replicas_per_master) without a has() wrapper.
   replicas_per_master:
     type: integer
     required: false
@@ -132,29 +136,32 @@ input:
     min: 0
     max: 8
     description: >-
-      Реплик на каждый master. cluster — реплик на шард (roster =
-      shards*(1+replicas_per_master)); sentinel — реплик master-а (roster =
-      1+replicas_per_master). default 2 (HA-набор по умолчанию: master + 2 реплики).
-      0 — без реплик (cluster: только мастера; sentinel: только master, standalone-
-      эквивалент). Потолок max:8. size-guard каждой ветки сверяет состав roster-а.
+      Replicas per master. cluster - replicas per shard (roster =
+      shards*(1+replicas_per_master)); sentinel - replicas of the master (roster =
+      1+replicas_per_master). default 2 (the default HA set: master + 2 replicas).
+      0 - no replicas (cluster: masters only; sentinel: master only, a
+      standalone-equivalent). Cap max:8. Each branch's size-guard checks the roster
+      composition.
 
-  # ── Топология cluster (режим redis_type=cluster) ─────────────────────────────
-  # Counts задают РАСКЛАДКУ ролей по таргетированным souls (pull-native, Вариант A):
-  # оператор объявляет shards и replicas_per_master, а сценарий проверяет, что число
-  # хостов roster-а ровно shards*(1+replicas_per_master) (size-guard cluster.yml), и
-  # строит nodes-MAP для плагина. cloud-создание машин — post-бета.
+  # ── cluster topology (mode redis_type=cluster) ─────────────────────────────
+  # Counts define the role LAYOUT across targeted souls (pull-native, Variant A):
+  # the operator declares shards and replicas_per_master, and the scenario checks
+  # that the roster host count is exactly shards*(1+replicas_per_master) (size-guard
+  # in cluster.yml), and builds a nodes MAP for the plugin. Cloud VM creation is
+  # post-beta.
   shards:
     type: integer
     required: false
     required_when: "input.redis_type == 'cluster'"
     min: 3
     description: >-
-      Число master-шардов Redis Cluster (режим cluster). 16384 hash-слота делятся
-      поровну между shards мастерами (раскладку делает плагин community.redis.cluster
-      детерминированно). min:3 — нижний предел honest Redis Cluster (кластер из <3
-      мастеров не собирается). Размер roster-а прогона обязан быть shards*(1+
-      replicas_per_master) — иначе size-guard рвёт прогон fail-fast. Обязателен при
-      redis_type=cluster (required_when) — пропуск рвёт прогон на input-валидации.
+      Number of Redis Cluster master shards (mode cluster). 16384 hash slots are
+      split evenly across the shards masters (the community.redis.cluster plugin
+      does the layout deterministically). min:3 - the lower bound for an honest
+      Redis Cluster (a cluster of <3 masters doesn't form). The run's roster size
+      must be shards*(1+replicas_per_master) - otherwise the size-guard fails the
+      run fast. Required when redis_type=cluster (required_when) - omitting it fails
+      the run at input validation.
 
   cluster_node_timeout:
     type: integer
@@ -162,28 +169,32 @@ input:
     default: 5000
     min: 1
     description: >-
-      Таймаут gossip между нодами кластера, мс (директива cluster-node-timeout
-      redis.conf, режим cluster). Не задан → 5000.
+      Gossip timeout between cluster nodes, ms (the redis.conf directive
+      cluster-node-timeout, mode cluster). Not set -> 5000.
 
-  # ── cluster_topology: ЯВНАЯ раскладка шардов (опц., режим cluster) ────────────
-  # ★ ЯВНАЯ ТОПОЛОГИЯ (propose-and-wait, имя cluster_topology — нет коллизии с
-  # input.shards): оператор САМ задаёт список шардов вместо авто-раскладки плагина по
-  # sort SID. Каждый элемент = ОДИН шард — список SID [master_sid, replica_sid, ...],
-  # ПЕРВЫЙ SID шарда = master, остальные = его реплики. Так оператор распихивает VM по
-  # зонам и кодирует anti-affinity прямо в списке (master и реплика шарда — в разных
-  # зонах). Плагин community.redis.cluster (action create) собирает кластер ПО НЕМУ
-  # (buildClusterPlanExplicit — зеркало авто-раскладки: те же 16384 слота поровну между
-  # мастерами, та же сборка CLUSTER MEET/ADDSLOTS/REPLICATE).
+  # ── cluster_topology: EXPLICIT shard layout (opt., mode cluster) ────────────
+  # ★ EXPLICIT TOPOLOGY (propose-and-wait, name cluster_topology - no collision with
+  # input.shards): the operator sets the shard list themselves instead of the plugin's
+  # auto-layout by sort SID. Each element = ONE shard - a list of SIDs
+  # [master_sid, replica_sid, ...], the FIRST SID of a shard is the master, the rest
+  # are its replicas. This lets the operator spread VMs across zones and encode
+  # anti-affinity directly in the list (a shard's master and replica in different
+  # zones). The community.redis.cluster plugin (action create) assembles the cluster
+  # FROM IT (buildClusterPlanExplicit - a mirror of the auto-layout: the same 16384
+  # slots split evenly across masters, the same CLUSTER MEET/ADDSLOTS/REPLICATE
+  # sequence).
   #
-  # ★ ОПЦИОНАЛЬНО (backward-compat): не задан → плагин раскладывает роли сам по sort SID
-  # (поведение до фичи бит-в-бит). Задан → ВЫТЕСНЯЕТ авто-раскладку; replicas_per_master
-  # при этом задаёт лишь размер VM-roster-а (size-guard ниже сверяет sum(len шардов)).
-  # Если задан И cluster_topology, И replicas_per_master, и размер шарда не совпадает с
-  # 1+replicas_per_master — плагин рвёт прогон fail-fast (валидация плагина).
+  # ★ OPTIONAL (backward-compat): not set -> the plugin lays out roles itself by sort
+  # SID (the pre-feature behavior, bit-for-bit). Set -> OVERRIDES the auto-layout;
+  # replicas_per_master then only sets the VM roster size (the size-guard below checks
+  # sum(shard lengths)). If BOTH cluster_topology AND replicas_per_master are set and a
+  # shard's size doesn't match 1+replicas_per_master, the plugin fails the run fast
+  # (plugin validation).
   #
-  # ★ SID-инвариант: каждый SID обязан быть среди таргетированных souls прогона
-  # (soulprint.hosts) и встречаться РОВНО один раз; все хосты roster-а обязаны попасть в
-  # топологию (плагин отвергает несуществующий/дублированный SID и непокрытую ноду).
+  # ★ SID invariant: every SID must be among the run's targeted souls
+  # (soulprint.hosts) and appear EXACTLY once; every roster host must be covered by
+  # the topology (the plugin rejects a non-existent/duplicated SID and an uncovered
+  # node).
   cluster_topology:
     type: array
     required: false
@@ -192,302 +203,334 @@ input:
       items:
         type: string
     description: >-
-      Явная раскладка шардов Redis Cluster (опционально, режим cluster). Список шардов;
-      каждый шард — список SID [master, replica, ...] (первый = master). Оператор сам
-      распихивает VM по зонам / кодирует anti-affinity. Не задан → плагин раскладывает
-      роли автоматически по sort SID. Каждый SID обязан быть среди таргетированных souls
-      и ровно один раз; все хосты roster-а покрыты.
+      Explicit Redis Cluster shard layout (optional, mode cluster). A list of shards;
+      each shard is a list of SIDs [master, replica, ...] (the first is the master).
+      The operator spreads VMs across zones / encodes anti-affinity themselves. Not
+      set -> the plugin lays out roles automatically by sort SID. Every SID must be
+      among the targeted souls and appear exactly once; every roster host is covered.
 
-  # ── Топология sentinel (режим redis_type=sentinel) ───────────────────────────
-  # Counts задают РАСКЛАДКУ ролей по таргетированным souls (pull-native, Вариант A):
-  # 1 master + replicas_per_master реплик. size-guard create/sentinel.yml проверяет,
-  # что число хостов roster-а ровно 1+replicas_per_master. master-election (кто master)
-  # — run_once по sort soulprint.hosts (первый по SID); на create роль declared (probe
-  # невозможен, redis ещё не поднят). sentinel-демон поднимается на КАЖДОМ хосте.
-  # Реплик master-а задаёт UNIFIED-поле replicas_per_master (см. выше).
-  # sentinel_quorum — АВТО (size(soulprint.hosts)/2+1, большинство): операторского
-  # поля нет (убрано 2026-06-25). sentinel_master_name — в essence (дефолт `master`),
-  # не в input.
+  # ── sentinel topology (mode redis_type=sentinel) ───────────────────────────
+  # Counts define the role LAYOUT across targeted souls (pull-native, Variant A):
+  # 1 master + replicas_per_master replicas. The size-guard in create/sentinel.yml
+  # checks that the roster host count is exactly 1+replicas_per_master.
+  # master-election (who's master) is run_once by sort soulprint.hosts (first by
+  # SID); on create the role is declared (probing is impossible - redis isn't up
+  # yet). The sentinel daemon comes up on EVERY host. Replicas of the master are set
+  # by the UNIFIED field replicas_per_master (see above). sentinel_quorum is AUTO
+  # (size(soulprint.hosts)/2+1, majority): there's no operator field for it (removed
+  # 2026-06-25). sentinel_master_name lives in essence (default `master`), not in
+  # input.
   #
-  # ★ sentinel_master_settings: per-master директивы sentinel (dict, режим sentinel).
-  # ПОГЛОЩАЕТ прежние именованные поля sentinel_down_after_ms/sentinel_failover_timeout_ms
-  # (их дефолты down-after-milliseconds=5000 / failover-timeout=60000 перенесены в
-  # essence.sentinel_master_defaults — подложку под этот dict). KEY → VALUE: ключ — имя
-  # per-master sentinel-опции БЕЗ префикса `sentinel ` и БЕЗ master-name (их добавляет
-  # compute), напр. `down-after-milliseconds`/`failover-timeout`/`parallel-syncs`;
-  # значение — строка. compute.sentinel_directives мержит essence-дефолты + этот dict и
-  # разворачивает в директивы `sentinel <opt> <master>` (sentinel.conf + плагин
-  # community.redis.sentinel SENTINEL SET). UI — KEY→VALUE-редактор. Без version-валидации
-  # (sentinel-каталога нет — passthrough).
+  # ★ sentinel_master_settings: per-master sentinel directives (dict, mode
+  # sentinel). SUBSUMES the former named fields
+  # sentinel_down_after_ms/sentinel_failover_timeout_ms (their defaults
+  # down-after-milliseconds=5000 / failover-timeout=60000 moved into
+  # essence.sentinel_master_defaults - the substrate under this dict). KEY -> VALUE:
+  # the key is the per-master sentinel option name WITHOUT the `sentinel ` prefix and
+  # WITHOUT the master name (compute adds those), e.g.
+  # `down-after-milliseconds`/`failover-timeout`/`parallel-syncs`; the value is a
+  # string. compute.sentinel_directives merges the essence defaults + this dict and
+  # expands them into `sentinel <opt> <master>` directives (sentinel.conf + the
+  # community.redis.sentinel plugin's SENTINEL SET). UI - a KEY->VALUE editor. No
+  # version validation (there's no sentinel catalog - passthrough).
   sentinel_master_settings:
     type: object
     required: false
     description: >-
-      Per-master директивы Sentinel (key→value, строки; режим sentinel). Ключ — имя
-      опции SENTINEL SET без префикса и master-name (down-after-milliseconds,
-      failover-timeout, parallel-syncs, …). Перекрывают дефолты essence.sentinel_master_defaults
-      (down-after-milliseconds=5000, failover-timeout=60000). UI — KEY→VALUE-редактор.
+      Per-master Sentinel directives (key->value, strings; mode sentinel). The key is
+      the SENTINEL SET option name without the prefix and master name
+      (down-after-milliseconds, failover-timeout, parallel-syncs, ...). Overrides the
+      essence.sentinel_master_defaults defaults (down-after-milliseconds=5000,
+      failover-timeout=60000). UI - a KEY->VALUE editor.
     properties: {}
     additional_properties:
       type: string
 
-  # ★ sentinel_settings: глобальные (НЕ per-master) директивы sentinel.conf (dict,
-  # режим sentinel). KEY → VALUE passthrough, сливается в apply.input.sentinel.config
-  # ВМЕСТЕ с per-master директивами (sentinel.conf.tmpl range-ит произвольный map).
-  # Используй для глобальных sentinel-директив (resolve-hostnames, announce-port, …),
-  # не покрытых per-master sentinel_master_settings. Без version-валидации (sentinel-
-  # каталога нет — passthrough). UI — KEY→VALUE-редактор.
+  # ★ sentinel_settings: global (NOT per-master) sentinel.conf directives (dict,
+  # mode sentinel). KEY -> VALUE passthrough, merged into apply.input.sentinel.config
+  # TOGETHER WITH the per-master directives (sentinel.conf.tmpl ranges over an
+  # arbitrary map). Use it for global sentinel directives (resolve-hostnames,
+  # announce-port, ...) not covered by per-master sentinel_master_settings. No
+  # version validation (there's no sentinel catalog - passthrough). UI - a
+  # KEY->VALUE editor.
   sentinel_settings:
     type: object
     required: false
     description: >-
-      Глобальные passthrough-директивы sentinel.conf от оператора (key→value, строки;
-      режим sentinel). Сливаются в sentinel.conf вместе с per-master директивами.
-      Используй для директив не покрытых sentinel_master_settings. UI — KEY→VALUE-редактор.
+      Global passthrough sentinel.conf directives from the operator (key->value,
+      strings; mode sentinel). Merged into sentinel.conf together with the per-master
+      directives. Use it for directives not covered by sentinel_master_settings. UI -
+      a KEY->VALUE editor.
     properties: {}
     additional_properties:
       type: string
 
-  # ★ wave 1b types-эпик (2026-06-26): operator-extra ACL — ТИПИЗИРОВАННЫЙ массив
-  # элементов AclUser (types.yml, ADR-062 $type). Прежний нетипизированный map
-  # username→{perms,state} заменён массивом [{name, perms, state}]: имя юзера переехало
-  # в поле name элемента (раньше было map-ключом). Форма AclUser объявлена ОДИН раз в
-  # types.yml (источник правды), add_user/update_users ссылаются на тот же тип.
-  # Ветки cluster/sentinel итерируют массив (.map(u, {u.name: …})) → собирают тот же
-  # destiny-map имя→{perms,state,password}, что и прежде (destiny-контракт не менялся).
+  # ★ wave 1b types epic (2026-06-26): operator-extra ACL is a TYPED array of
+  # AclUser elements (types.yml, ADR-062 $type). The former untyped map
+  # username->{perms,state} is replaced by an array [{name, perms, state}]: the
+  # username moved into the element's name field (formerly a map key). The AclUser
+  # shape is declared ONCE in types.yml (the source of truth), add_user/update_users
+  # reference the same type. The cluster/sentinel branches iterate the array
+  # (.map(u, {u.name: ...})) -> assembling the same destiny map name->{perms,state,
+  # password} as before (the destiny contract hasn't changed).
   users:
     type: array
     required: false
     items:
       $type: AclUser
     description: >-
-      ACL-пользователи Redis (массив AclUser: {name, perms, state}). perms — ПОЛНАЯ
-      ACL-строка (не алиас): директивы Redis ACL как есть, напр. "~* +@all" или
-      "~app:* +@read +@write -@dangerous". Рендерятся в users.acl (destiny `redis`);
-      пароль каждого юзера резолвится keeper-side из Vault по конвенции
+      Redis ACL users (an array of AclUser: {name, perms, state}). perms is the FULL
+      ACL string (not an alias): Redis ACL directives as-is, e.g. "~* +@all" or
+      "~app:* +@read +@write -@dangerous". Rendered into users.acl (destiny `redis`);
+      each user's password is resolved keeper-side from Vault by the convention
       secret/redis/<incarnation>/users/<name>#password.
 
-  # ── redis_settings: passthrough-директивы redis.conf (KEY→VALUE, #6) ─────────
-  # ★ #6 (2026-06-26): additional_properties: true (произвольный JSON) сужено до
-  # additional_properties: {type: string} — UI рисует KEY→VALUE-редактор (ADR-045:
-  # object + скалярный value-тип → key→value-виджет, а не сырой JSON). Директивы
-  # redis.conf — это плоский map имя→строковое значение (`maxmemory 512mb`), поэтому
-  # value-тип string точен. compute мержит этот map поверх дефолтов/пресета (last-wins)
-  # со СТРОКОВЫМИ значениями — формы редактора достаточно.
+  # ── redis_settings: passthrough redis.conf directives (KEY→VALUE, #6) ─────────
+  # ★ #6 (2026-06-26): additional_properties: true (arbitrary JSON) narrowed to
+  # additional_properties: {type: string} - the UI renders a KEY->VALUE editor
+  # (ADR-045: object + scalar value type -> a key->value widget, not raw JSON).
+  # redis.conf directives are a flat map name->string value (`maxmemory 512mb`), so
+  # value type string is exact. compute merges this map over the defaults/preset
+  # (last-wins) with STRING values - the editor form is sufficient.
   redis_settings:
     type: object
     required: false
-    # x-directives: redis — валидировать ключи против каталога директив сервиса
-    # (essence.redis_directives). Долетает в DTO input_schema сырым (NIM-76).
+    # x-directives: redis - validate keys against the service directive catalog
+    # (essence.redis_directives). Passed through raw into the input_schema DTO
+    # (NIM-76).
     x-directives: redis
     description: >-
-      Passthrough-директивы redis.conf от оператора (key→value, строки). Перекрывают
-      дефолты/пресет в итоговом merge (last-wins). Используй для директив, не
-      покрытых простыми полями выше. UI — KEY→VALUE-редактор.
+      Passthrough redis.conf directives from the operator (key->value, strings).
+      Override the defaults/preset in the final merge (last-wins). Use it for
+      directives not covered by the plain fields above. UI - a KEY->VALUE editor.
     properties: {}
     additional_properties:
       type: string
 
-  # ── connection_mode: режим сетевого канала Redis (enum, ЗАМЕНЯЕТ 2 галочки TLS) ──
-  # ★ Редизайн: прежние tls_enabled+tls_keep_plain сведены к ОДНОМУ enum-полю:
-  #   - plain     — только plain-порт 6379 (TLS off), DEFAULT;
-  #   - tls_plain — TLS И plain слушаются одновременно (TLS on, plain открыт);
-  #   - tls       — только TLS (plain закрыт, `port 0`).
-  # Маппинг в compute: tls_on = connection_mode != 'plain'; tls_only_on =
-  # connection_mode == 'tls'. down-stream TLS-блок redis_config читает
-  # compute.tls_on/tls_only_on — НЕ меняется. enum СТРУКТУРНО исключает «нет ни одного
-  # listener-а» (нельзя выбрать «TLS off + plain закрыт») → прежнее validate-правило
-  # «хотя бы один listener» удалено. Технические параметры TLS (порт, Vault-пути
-  # cert/key/ca) — НЕ операторский ввод, они в essence (tls_port/tls_cert_ref/
-  # tls_key_ref/tls_ca_ref, author-context). cert/key/ca — Vault-ПУТИ (НЕ PEM): destiny
-  # читает PEM через vault(ref) в ячейке content (seal-маскинг).
+  # ── connection_mode: Redis network channel mode (enum, REPLACES the 2 TLS toggles) ──
+  # ★ Redesign: the former tls_enabled+tls_keep_plain are collapsed into ONE enum
+  # field:
+  #   - plain     — plain port 6379 only (TLS off), DEFAULT;
+  #   - tls_plain — TLS AND plain listen simultaneously (TLS on, plain open);
+  #   - tls       — TLS only (plain closed, `port 0`).
+  # Mapped in compute: tls_on = connection_mode != 'plain'; tls_only_on =
+  # connection_mode == 'tls'. The downstream TLS block in redis_config reads
+  # compute.tls_on/tls_only_on - unchanged. The enum STRUCTURALLY rules out "no
+  # listener at all" (you can't pick "TLS off + plain closed") -> the former validate
+  # rule "at least one listener" was removed. The TLS technical parameters (port,
+  # Vault paths for cert/key/ca) are NOT operator input, they live in essence
+  # (tls_port/tls_cert_ref/tls_key_ref/tls_ca_ref, author-context). cert/key/ca are
+  # Vault PATHS (NOT PEM): destiny reads the PEM via vault(ref) in a content cell
+  # (seal masking).
   connection_mode:
     type: string
     required: false
     default: plain
     enum: [tls, tls_plain, plain]
     description: >-
-      Режим сетевого канала Redis. plain (дефолт) — только plain-порт 6379 (TLS off);
-      tls_plain — TLS и plain одновременно; tls — только TLS (plain-порт закрыт, port 0).
-      Порт TLS и Vault-пути cert/key/ca берутся из essence (tls_port/tls_cert_ref/
-      tls_key_ref/tls_ca_ref).
-  # ── Redis-модули (концепция Ansible-роли redis: redis_module_*) ──────────────
-  # ★ ДИРЕКТИВА «модули ВСЕГДА ВСЕ» (2026-06-25): НАБОР модулей больше НЕ operator-
-  # выбор — destiny разворачивает ПОЛНЫЙ набор из своего vars.redis_modules (Redis < 8).
-  # Поэтому поля input.modules здесь НЕТ (оператор не выбирает подмножество). На Redis
-  # 8+ модули ВСТРОЕНЫ — version-guard (по compute.redis_version) гасит .so и в destiny
-  # (include modules.yml group-drop), и в read-model (state.modules=[]).
+      Redis network channel mode. plain (default) - plain port 6379 only (TLS off);
+      tls_plain - TLS and plain simultaneously; tls - TLS only (plain port closed,
+      port 0). The TLS port and the Vault paths for cert/key/ca come from essence
+      (tls_port/tls_cert_ref/tls_key_ref/tls_ca_ref).
+  # ── Redis modules (concept borrowed from the Ansible redis role: redis_module_*) ──
+  # ★ THE "modules are ALWAYS ALL" DIRECTIVE (2026-06-25): the module SET is no
+  # longer an operator choice - destiny deploys the FULL set from its own
+  # vars.redis_modules (Redis < 8). That's why there's no input.modules field here
+  # (the operator doesn't pick a subset). On Redis 8+ the modules are BUILT IN - a
+  # version-guard (on compute.redis_version) drops the .so both in destiny (include
+  # modules.yml group-drop) and in the read-model (state.modules=[]).
   #
-  # ★ ИСТОЧНИК .so — essence-плейсхолдер (2026-06-25): modules_base_url убран из
-  # операторского input. Это author-context-параметр (essence.modules_base_url, дефолт
-  # ""), который оператор переопределяет в spec.essence инкарнации, а не в Run-форме
-  # каждого прогона. На Redis < 8 без источника .so destiny не построит URL — мягкая
-  # проверка в validate: (см. ниже). .so качаются по content-идемпотентности (SHA-256
-  # содержимого), без integrity-verify (как node-exporter).
+  # ★ THE .so SOURCE is an essence placeholder (2026-06-25): modules_base_url was
+  # removed from operator input. It's an author-context parameter
+  # (essence.modules_base_url, default ""), which the operator overrides in the
+  # incarnation's spec.essence, not in each run's Run form. On Redis < 8 without a
+  # .so source, destiny can't build the URL - a soft check in validate: (see below).
+  # The .so files are fetched by content idempotency (SHA-256 of the content),
+  # without integrity verification (like node-exporter).
 
-# ── Декларативные input-инварианты (validate:, ADR-009 amendment 2026-06-23) ──────
-# validate: — кросс-полевые предусловия ВВОДА, не выразимые одним schema-ключом и
-# не покрываемые required_when (присутствие) или enum/min/max (одно поле). Контекст
-# правила — INPUT-ONLY (только input.*; essence/soulprint/roster недоступны —
-# структурный CEL-барьер). Первый провал → 422 validation_failed ДО коммита
-# incarnation и ДО applying (как required_when), оператору с message правила.
+# ── Declarative input invariants (validate:, ADR-009 amendment 2026-06-23) ──────
+# validate: — cross-field preconditions on the INPUT that can't be expressed by a
+# single schema key and aren't covered by required_when (presence) or
+# enum/min/max (a single field). The rule context is INPUT-ONLY (only input.*;
+# essence/soulprint/roster are unavailable - a structural CEL barrier). The first
+# failure -> 422 validation_failed BEFORE the incarnation commit and BEFORE
+# applying (like required_when), with the rule's message to the operator.
 #
-# Граница с assert: (ниже, в ветках): assert — про ТОПОЛОГИЮ прогона (size-guard
-# сверяет size(soulprint.hosts) с 1+replicas / shards*(1+replicas_per_shard)),
-# нужен полный scenario-контекст с soulprint.hosts. validate здесь — про САМ ВВОД
-# (соотношение чисел), вычислимо ДО резолва roster.
+# The boundary with assert: (below, in the branches): assert is about the run's
+# TOPOLOGY (the size-guard checks size(soulprint.hosts) against 1+replicas /
+# shards*(1+replicas_per_shard)), and needs the full scenario context with
+# soulprint.hosts. validate here is about the INPUT ITSELF (a relation between
+# numbers), computable BEFORE the roster is resolved.
 validate:
-  # ★ Редизайн: правило «хотя бы один listener» УДАЛЕНО. Прежде на 2 булевых галочках
-  # (tls_enabled/tls_keep_plain) была возможна комбинация «TLS off + plain закрыт» — без
-  # listener-а; ловилась этим validate. Теперь connection_mode — enum [tls, tls_plain,
-  # plain]: КАЖДОЕ значение оставляет ≥1 listener (plain → plain; tls_plain → оба; tls →
-  # TLS). «Нет listener-а» СТРУКТУРНО невыразимо → отдельное правило не нужно.
+  # ★ Redesign: the rule "at least one listener" is REMOVED. Previously, with 2
+  # boolean toggles (tls_enabled/tls_keep_plain), the combination "TLS off + plain
+  # closed" was possible - no listener at all; this validate rule caught it. Now
+  # connection_mode is an enum [tls, tls_plain, plain]: EVERY value leaves >=1
+  # listener (plain -> plain; tls_plain -> both; tls -> TLS). "No listener" is now
+  # STRUCTURALLY inexpressible -> a separate rule isn't needed.
 
-  # ★ #1 (2026-06-26): правило «install.method=binary требует base_url+version» УБРАНО.
-  # URL и версия бинаря переехали из operator-input в essence (binary_base_url/
-  # binary_version, author-context), а validate-контекст INPUT-ONLY — essence в нём
-  # недоступен (структурный CEL-барьер). Подложка essence задаёт источник; пустой
-  # binary_base_url при essence.install_method=binary проявится при render-е destiny
-  # (URL бинаря), а не на input-валидации. Сам install_method тоже в essence (2026-06-28)
-  # — НЕ operator-input → отдельного input-правила под него нет.
+  # ★ #1 (2026-06-26): the rule "install.method=binary requires base_url+version" is
+  # REMOVED. The binary URL and version moved from operator-input into essence
+  # (binary_base_url/binary_version, author-context), and the validate context is
+  # INPUT-ONLY - essence is unavailable there (a structural CEL barrier). The essence
+  # substrate supplies the source; an empty binary_base_url with
+  # essence.install_method=binary will surface at destiny render time (the binary
+  # URL), not at input validation. install_method itself is also in essence
+  # (2026-06-28) - NOT operator-input -> there's no separate input rule for it.
 
-  # ★ system-ACL-users guard (дизайн d2 + редизайн default_admin 2026-06-30): operator-extra
-  # (input.users) НЕ может занять имя СЛУЖЕБНОГО юзера. Системные (default_admin/replica/
-  # monitoring/sentinel/haproxy) доливаются в users.acl из essence.system_acl_users[_sentinel]
-  # с last-wins ПОВЕРХ системных — операторский юзер с тем же именем МОЛЧА перекрыл бы
-  # служебные perms (напр. operator `replica` с `~* +@all` сломал бы replica-perms
-  # репликации; operator `default_admin` подменил бы admin-учётку внутрикластерного AUTH).
-  # Ловим коллизию на INPUT-валидации (422 ДО applying) понятным отказом, а не молчаливым
-  # переопределением. INPUT-ONLY (essence в validate недоступен — структурный CEL-барьер):
-  # список зарезервированных имён захардкожен здесь (= essence.system_acl_users[_sentinel]
-  # keys). ★ `default` из reserved УБРАН (редизайн): встроенный Redis-юзер default больше НЕ
-  # системный (его роль занял default_admin) — оператор может объявить default в input.users
-  # (тогда он рендерится range-ом, иначе шаблон ставит `user default off`). +default_admin.
-  # has()-guard — input.users опционален; .all() над МАССИВОМ итерирует элементы
-  # AclUser (wave 1b), имя — поле u.name (раньше map-ключ name).
+  # ★ system-ACL-users guard (design d2 + default_admin redesign 2026-06-30):
+  # operator-extra (input.users) CANNOT claim a SYSTEM user's name. System users
+  # (default_admin/replica/monitoring/sentinel/haproxy) are merged into users.acl
+  # from essence.system_acl_users[_sentinel] with last-wins OVER the system ones - an
+  # operator user with the same name would SILENTLY shadow the system perms (e.g. an
+  # operator `replica` with `~* +@all` would break replication's replica perms; an
+  # operator `default_admin` would displace the admin account used for in-cluster
+  # AUTH). We catch the collision at INPUT validation (422 BEFORE applying) with a
+  # clear refusal, not a silent override. INPUT-ONLY (essence is unavailable in
+  # validate - a structural CEL barrier): the reserved-name list is hardcoded here (=
+  # essence.system_acl_users[_sentinel] keys). ★ `default` was REMOVED from the
+  # reserved list (redesign): the built-in Redis user default is no longer a system
+  # user (default_admin took over its role) - the operator can declare default in
+  # input.users (then it's rendered by the range, otherwise the template sets `user
+  # default off`). +default_admin. has()-guard - input.users is optional; .all() over
+  # the ARRAY iterates AclUser elements (wave 1b), the name is field u.name (formerly
+  # a map key name).
   - that: "!has(input.users) || input.users.all(u, !(u.name in ['default_admin', 'replica', 'monitoring', 'sentinel', 'haproxy']))"
-    message: "имя ACL-пользователя зарезервировано за служебным (default_admin/replica/monitoring/sentinel/haproxy): выбери другое имя — служебные юзеры заводятся автоматически из essence"
+    message: "ACL username is reserved for a system user (default_admin/replica/monitoring/sentinel/haproxy): pick another name - system users are provisioned automatically from essence"
 
-  # ★ Правило «modules_base_url обязателен на Redis < 8» УБРАНО (2026-06-25): источник
-  # .so переехал из operator-input в essence.modules_base_url (author-context, дефолт ""),
-  # а validate-контекст INPUT-ONLY — essence в нём недоступен (структурный CEL-барьер).
-  # Проверить заполненность essence.modules_base_url тут нельзя. Подложка essence по
-  # умолчанию задаёт источник, оператор переопределяет в spec.essence; пустой источник
-  # на Redis < 8 проявится при render-е destiny (URL .so), а не на input-валидации.
+  # ★ The rule "modules_base_url is required on Redis < 8" is REMOVED (2026-06-25):
+  # the .so source moved from operator-input into essence.modules_base_url
+  # (author-context, default ""), and the validate context is INPUT-ONLY - essence is
+  # unavailable there (a structural CEL barrier). Checking whether
+  # essence.modules_base_url is filled in can't be done here. The essence substrate
+  # supplies a default source, the operator overrides it in spec.essence; an empty
+  # source on Redis < 8 will surface at destiny render time (the .so URL), not at
+  # input validation.
 
 
-# ── Host-tuning extras (концепция Ansible-роли) ──────────────────────────────────
-# Режим-агностичные per-host добавки — THP-отключение, logrotate, sysctl — БЕЗУСЛОВНЫ
-# (рекомендация Redis / hardening, не выбор оператора): флагов в операторском
-# контракте НЕТ, задачи всегда активны. Значения sysctl-параметров — данные-таблица
-# essence.sysctl_settings (не во входе оператора), транслируются в destiny `redis`
-# через apply.input (host-инвариантны).
+# ── Host-tuning extras (a concept borrowed from the Ansible role) ──────────────────────────────────
+# Mode-agnostic per-host extras - THP disabling, logrotate, sysctl - are
+# UNCONDITIONAL (a Redis recommendation / hardening, not an operator choice): there
+# are no flags for them in the operator contract, the tasks are always active.
+# sysctl parameter values are a data table, essence.sysctl_settings (not in operator
+# input), passed through to destiny `redis` via apply.input (host-invariant).
 
-# ── Вычисляемые scenario-vars (compute:, ADR-009 amendment 2026-06-23) ────────────
-# `compute:` резолвится KEEPER-SIDE ОДИН раз на прогон в рун-уровневом контексте
-# (input/essence/incarnation — БЕЗ soulprint, барьер host-инвариантности) и виден
-# как `compute.<name>` И в apply.input веток, И в state_changes ниже. Это снимает
-# дублирование большого merge()-перевода: он объявлен ЗДЕСЬ ОДИН раз, ветки и state
-# ссылаются `${ compute.redis_config }` — drift «state ≡ live config» снят самим
-# compute (одно значение, не два синхронизируемых выражения).
+# ── Computed scenario vars (compute:, ADR-009 amendment 2026-06-23) ────────────
+# `compute:` is resolved KEEPER-SIDE ONCE per run in the run-level context
+# (input/essence/incarnation - WITHOUT soulprint, the host-invariance barrier) and is
+# visible as `compute.<name>` BOTH in the branches' apply.input AND in state_changes
+# below. This removes the duplication of the large merge() translation: it's declared
+# HERE ONCE, and the branches and state reference `${ compute.redis_config }` - the
+# "state == live config" drift is removed by compute itself (one value, not two
+# expressions to keep in sync).
 #
-# compute.redis_config — ИТОГ трансляции простого ввода в redis.conf-map. Ветвится
-# по input.redis_type:
-#   - cluster → базовый merge + cluster-директивы (cluster-enabled/config-file/
-#     node-timeout) + tls-cluster yes при TLS;
-#   - sentinel → базовый merge (без cluster-директив).
-# Слои merge (SHALLOW last-wins, слева направо): essence.redis_config (дефолты) →
-# persistence-пресет → вычисленные maxmemory/policy/io-threads (guard) → input.redis_settings
-# (passthrough оператора) → TLS-блок (после redis_settings, оператор не ломает TLS).
-# TLS-гейт — compute.tls_on/tls_only_on/tls_port (enum connection_mode + порт/refs из
-# essence; объявлены выше). ★ FIX (qa): TLS-директивы
-# tls-cert-file/tls-key-file/tls-ca-cert-file
-# выводятся из compute.conf_dir (НЕ хардкод /etc/redis/tls) — destiny кладёт PEM в
-# ${conf_dir}/tls/ (server.yml), и redis.conf обязан смотреть ТУДА ЖЕ, иначе при
-# override conf_dir + TLS redis-server не находит cert и не стартует (при tls.only узел
-# недоступен по сети). cluster-announce-ip в config НЕ материализуется (per-host →
-# шаблон .self), TLS cert/порт host-инвариантны.
+# compute.redis_config is the RESULT of translating the simple input into a
+# redis.conf map. Branches on input.redis_type:
+#   - cluster -> base merge + cluster directives (cluster-enabled/config-file/
+#     node-timeout) + tls-cluster yes under TLS;
+#   - sentinel -> base merge (no cluster directives).
+# Merge layers (SHALLOW last-wins, left to right): essence.redis_config (defaults) ->
+# persistence preset -> computed maxmemory/policy/io-threads (guard) ->
+# input.redis_settings (operator passthrough) -> TLS block (after redis_settings, so
+# the operator can't break TLS). The TLS gate is
+# compute.tls_on/tls_only_on/tls_port (enum connection_mode + port/refs from essence;
+# declared above). ★ FIX (qa): the TLS directives
+# tls-cert-file/tls-key-file/tls-ca-cert-file are derived from compute.conf_dir (NOT
+# hardcoded /etc/redis/tls) - destiny puts the PEM under ${conf_dir}/tls/
+# (server.yml), and redis.conf must point at the SAME place, otherwise with an
+# overridden conf_dir + TLS redis-server can't find the cert and won't start (under
+# tls.only the node becomes unreachable over the network). cluster-announce-ip isn't
+# materialized in config (per-host -> the .self template), TLS cert/port are
+# host-invariant.
 #
-# ★ ГРАНИЦА КОНФИГА: host-layout-директивы dir (рабочий каталог RDB/AOF, → data_dir) и
-# aclfile (→ conf_dir) задаёт destiny-ШАБЛОН redis.conf.tmpl ИЗ vars (dir {{.vars.data_dir}},
-# aclfile {{.vars.conf_dir}}/users.acl), НЕ этот compute. Прежний хардкод (/var/lib/redis,
-# /etc/redis/users.acl) убран — override conf_dir/data_dir теперь доезжает до redis.conf
-# (apply.input.conf_dir/data_dir → destiny vars). Эти директивы здесь не дублируем: layout
-# выводится из vars в шаблоне (один источник), их добавление в compute.redis_config
-# продублировало бы ту же логику. logfile/pidfile (/var/log/redis, /var/run/redis) —
-# системные каталоги вне input-схемы conf_dir/data_dir; unixsocket/dbfilename в шаблоне
-# не задаются.
+# ★ CONFIG BOUNDARY: the host-layout directives dir (the RDB/AOF working directory,
+# -> data_dir) and aclfile (-> conf_dir) are set by the destiny TEMPLATE
+# redis.conf.tmpl FROM vars (dir {{.vars.data_dir}}, aclfile
+# {{.vars.conf_dir}}/users.acl), NOT this compute. The former hardcoding
+# (/var/lib/redis, /etc/redis/users.acl) is gone - overriding conf_dir/data_dir now
+# reaches redis.conf (apply.input.conf_dir/data_dir -> destiny vars). We don't
+# duplicate these directives here: the layout is derived from vars in the template
+# (a single source), adding them to compute.redis_config would duplicate that same
+# logic. logfile/pidfile (/var/log/redis, /var/run/redis) are system directories
+# outside the conf_dir/data_dir input schema; unixsocket/dbfilename aren't set in the
+# template.
 compute:
-  # ── admin_user: имя СИСТЕМНОГО ACL-юзера внутрикластерного AUTH (default_admin) ──
-  # ★ РЕДИЗАЙН default_admin (2026-06-30): ЕДИНЫЙ источник имени admin-юзера, под которым
-  # идёт ВСЯ внутрикластерная аутентификация (репликация masterauth, cluster MEET, sentinel
-  # monitor/auth, health-PING) — заменил прежний requirepass-юзер default. Все деплой-тела
-  # (redis-deploy-{sentinel,cluster,cluster-joinable}.yml) читают compute.admin_user в
-  # плагин-вызовах community.redis.* (params.username/master_username/auth_user) и в Vault-
-  # пути его пароля — НЕ хардкодят 'default_admin' в десятках мест. Литерал (не из input/
-  # essence): имя системного юзера — инвариант сервиса, не операторский выбор. Пароль
-  # default_admin — secret/redis/<inc>/users/<admin_user>#password. ★ day-2-тела
-  # (вне covenant) хардкодят 'default_admin' напрямую (у них нет extends: covenant compute).
+  # ── admin_user: the name of the SYSTEM ACL user for in-cluster AUTH (default_admin) ──
+  # ★ default_admin REDESIGN (2026-06-30): the SINGLE source for the admin user's
+  # name, used for ALL in-cluster authentication (masterauth replication, cluster
+  # MEET, sentinel monitor/auth, health-PING) - replacing the former requirepass user
+  # default. Every deploy body (redis-deploy-{sentinel,cluster,
+  # cluster-joinable}.yml) reads compute.admin_user in the community.redis.* plugin
+  # calls (params.username/master_username/auth_user) and in its password's Vault
+  # path - they DON'T hardcode 'default_admin' in dozens of places. A literal (not
+  # from input/essence): the system user's name is a service invariant, not an
+  # operator choice. default_admin's password is
+  # secret/redis/<inc>/users/<admin_user>#password. ★ day-2 bodies (outside covenant)
+  # hardcode 'default_admin' directly (they don't have extends: covenant compute).
   admin_user: "${ 'default_admin' }"
-  # ── TLS-флаги: enum connection_mode + essence-параметры (редизайн) ────────────
-  # TLS-намерение — connection_mode (input enum с default → всегда есть); порт/refs —
-  # из essence (см. tls_on/tls_only_on/tls_port/tls_*_ref ниже). Объявлены ОТДЕЛЬНЫМИ
-  # compute-vars, чтобы и redis_config (ниже), и ветки (apply.input.tls + health-gate)
-  # читали ОДНО разрешённое значение — а не повторяли его. compute контекст рун-уровневый:
-  # input/essence доступны, soulprint — нет (host-инвариантность TLS).
+  # ── TLS flags: connection_mode enum + essence parameters (redesign) ────────────
+  # TLS intent is connection_mode (an input enum with a default -> always present);
+  # port/refs come from essence (see tls_on/tls_only_on/tls_port/tls_*_ref below).
+  # Declared as SEPARATE compute vars so that both redis_config (below) and the
+  # branches (apply.input.tls + health-gate) read ONE resolved value - instead of
+  # repeating it. The compute context is run-level: input/essence are available,
+  # soulprint isn't (TLS host-invariance).
   #
-  # ── Эффективная версия redis: input.version (enum выкаченных в Nexus сборок) ──────
-  # ★ Редизайн: version — required enum, ОДИН для обоих способов установки (binary качает
-  # бинари этой версии из Nexus; package ставит =version-пин). Прежний каскад «binary →
-  # essence.binary_version» убран — версия всегда операторская input.version. Объявлена
-  # ОДИН раз: state_changes.redis_version, param redis_version плагина и binary-URL destiny
-  # читают её. required:true гарантирует присутствие → голый input.version без has()-обвязки.
+  # ── Effective redis version: input.version (enum of builds published to Nexus) ──────
+  # ★ Redesign: version is a required enum, ONE for both install methods (binary
+  # pulls binaries of this version from Nexus; package pins =version). The former
+  # "binary -> essence.binary_version" cascade is gone - the version is always
+  # operator input.version. Declared ONCE: state_changes.redis_version, the plugin's
+  # redis_version param, and destiny's binary URL all read it. required:true
+  # guarantees presence -> plain input.version without a has() wrapper.
   redis_version: "${ input.version }"
-  # ── Развёрнутые Redis-модули (read-model state.modules) ──────────────────────
-  # ★ ДИРЕКТИВА «модули ВСЕГДА ВСЕ» (2026-06-25): набор больше НЕ operator-выбор.
-  # destiny разворачивает ПОЛНЫЙ набор из своего vars.redis_modules (Redis < 8). state-
-  # read-model отражает ФАКТИЧЕСКИ развёрнутое: Redis < 8 → полный набор алиасов;
-  # Redis 8+ → [] (модули встроены, .so не качаются — version-guard). Список алиасов
-  # тут — ЗЕРКАЛО ключей destiny vars.redis_modules (destiny маппит alias→.so для
-  # деплоя; scenario знает только алиасы для read-model — разные слои, дублируются
-  # только ИМЕНА; при добавлении модуля синхронизировать оба места). Отсортирован (как
-  # Go-сорт ключей map в destiny) — детерминизм state.
+  # ── Deployed Redis modules (read-model state.modules) ──────────────────────
+  # ★ THE "modules are ALWAYS ALL" DIRECTIVE (2026-06-25): the set is no longer an
+  # operator choice. destiny deploys the FULL set from its own vars.redis_modules
+  # (Redis < 8). The state read-model reflects what's ACTUALLY deployed: Redis < 8 ->
+  # the full alias set; Redis 8+ -> [] (modules are built in, .so files aren't
+  # fetched - version-guard). The alias list here is a MIRROR of the destiny
+  # vars.redis_modules keys (destiny maps alias->.so for deployment; the scenario
+  # only knows the aliases for the read-model - different layers, only the NAMES are
+  # duplicated; keep both places in sync when adding a module). Sorted (like the
+  # Go map-key sort in destiny) for state determinism.
   redis_modules_deployed: >-
     ${ compute.redis_version.matches('^([0-9]+:)?(8|9|[1-9][0-9])\\.')
          ? []
          : ['bloom', 'json', 'search', 'timeseries'] }
-  # ── Источник .so Redis-модулей (essence-плейсхолдер, 2026-06-25) ─────────────
-  # modules_base_url переехал из operator-input в essence.modules_base_url (author-
-  # context, дефолт ""; оператор переопределяет в spec.essence). Объявлен ОДНИМ compute-
-  # var, чтобы ветки (apply.input.modules_base_url) и state_changes читали одно значение.
-  # default() ловит отсутствие листа на существующем essence-map; дефолт "" симметричен
-  # прежнему default(input.modules_base_url, '').
+  # ── Source of the Redis modules' .so files (essence placeholder, 2026-06-25) ─────────────
+  # modules_base_url moved from operator-input into essence.modules_base_url
+  # (author-context, default ""; the operator overrides it in spec.essence). Declared
+  # as ONE compute var so that the branches (apply.input.modules_base_url) and
+  # state_changes read the same value. default() catches a missing key on an
+  # existing essence map; default "" mirrors the former
+  # default(input.modules_base_url, '').
   modules_base_url: "${ default(essence.modules_base_url, '') }"
-  # ── SSRF-guard для fetch .so модулей (essence-плейсхолдер, 2026-06-28) ────────
-  # Симметрично install.allow_private: modules_base_url тоже может быть внутренним Nexus
-  # (resolve в RFC1918) → 4 .so-fetch destiny упали бы на SSRF-guard core.url. Берётся из
-  # essence.modules_allow_private (дефолт true). Объявлен ОДНИМ compute-var, ветки гонят его
-  # в apply.input.modules_allow_private. default() ловит отсутствие листа на existing essence.
+  # ── SSRF guard for fetching .so modules (essence placeholder, 2026-06-28) ────────
+  # Symmetric with install.allow_private: modules_base_url can also be an internal Nexus
+  # (resolves to RFC1918) → the 4 .so-fetch destiny would trip the SSRF guard core.url. Read from
+  # essence.modules_allow_private (default true). Declared as ONE compute var, branches feed it
+  # into apply.input.modules_allow_private. default() catches a missing key on an existing essence.
   modules_allow_private: "${ default(essence.modules_allow_private, true) }"
-  # ── Per-master sentinel-директивы (обобщённый dict, редизайн) ────────────────
-  # ★ Прежде хардкодило ровно 2 директивы (down-after-milliseconds/failover-timeout) из
-  # именованных полей. Теперь ОБОБЩЕНО: per-master опции — dict input.sentinel_master_settings
-  # ПОВЕРХ дефолтов essence.sentinel_master_defaults (down-after-milliseconds=5000,
-  # failover-timeout=60000 — туда переехали дефолты удалённых полей). merge() даёт
-  # эффективный map опций (last-wins, operator поверх essence), затем .map() разворачивает
-  # КАЖДУЮ пару `k:v` в директиву `sentinel <k> <master> → string(v)` (форма, которую
-  # печатает sentinel.conf.tmpl И классифицирует плагин community.redis.sentinel
-  # classifyConfig → SENTINEL SET). master_name — из essence (дефолт 'master'). ОДИН
-  # source-of-truth: и стартовый sentinel.conf, и live-reconcile читают этот map.
-  # value уже строка (additional_properties:{type:string}) + essence-дефолты — строки;
-  # string() нормализует на случай нестрокового essence-значения.
-  # .map над map даёт LIST of maps — оборачиваем merge(), чтобы свернуть в ОДИН map
-  # (тот же паттерн, что cluster-nodes merge(soulprint.hosts.map(...)) в cluster.yml).
-  # ★ ГЛОБАЛЬНЫЕ sentinel-директивы (input.sentinel_settings) сливаются СЮДА ЖЕ: их
-  # plain-ключи (resolve-hostnames, announce-port, …) шаблон sentinel.conf.tmpl печатает
-  # как есть, а плагин classifyConfig раскладывает plain-ключ → globals (per-master ключи
-  # `sentinel <opt> <master>` → perMaster). Один config-map несёт оба класса — деплой-тело
-  # передаёт его в apply.input.sentinel.config без изменений (shared body не трогаем).
+  # ── Per-master sentinel directives (generalized dict, redesign) ────────────────
+  # ★ Previously hardcoded exactly 2 directives (down-after-milliseconds/failover-timeout) from
+  # named fields. Now GENERALIZED: per-master options - dict input.sentinel_master_settings
+  # OVER the defaults essence.sentinel_master_defaults (down-after-milliseconds=5000,
+  # failover-timeout=60000 - the removed fields' defaults moved there). merge() gives
+  # the effective options map (last-wins, operator over essence), then .map() expands
+  # EVERY `k:v` pair into a directive `sentinel <k> <master> → string(v)` (the form
+  # sentinel.conf.tmpl prints AND the community.redis.sentinel plugin's
+  # classifyConfig classifies → SENTINEL SET). master_name - from essence (default 'master'). ONE
+  # source of truth: both the initial sentinel.conf and live-reconcile read this same map.
+  # value is already a string (additional_properties:{type:string}) + essence defaults are strings;
+  # string() normalizes in case an essence value isn't a string.
+  # .map over a map gives a LIST of maps - wrap it in merge() to fold into ONE map
+  # (the same pattern as cluster-nodes merge(soulprint.hosts.map(...)) in cluster.yml).
+  # ★ GLOBAL sentinel directives (input.sentinel_settings) are merged in RIGHT HERE: their
+  # plain keys (resolve-hostnames, announce-port, …) sentinel.conf.tmpl prints
+  # as-is, while the classifyConfig plugin splits a plain key → globals (per-master keys
+  # `sentinel <opt> <master>` → perMaster). One config map carries both classes - the deploy body
+  # passes it into apply.input.sentinel.config unchanged (we don't touch the shared body).
   sentinel_directives: >-
     ${ merge(
          merge(
@@ -503,29 +546,29 @@ compute:
          ),
          default(input.sentinel_settings, {})
        ) }
-  # ── sentinel_monitor_now: НЕ в covenant (расходится между наследниками) ──────
-  # Контракт-флаг шага 4 деплой-тела (SENTINEL MONITOR ПРЯМО в деплое) — НЕ общий: на
-  # create-семантике (create/create_from_souls) =true (node-1 — настоящий master,
-  # sentinel мониторит сразу), у migrate_cluster =false (новый master во время заливки в
-  # role:slave, ранний MONITOR → split-brain; MONITOR переносится в detach_source).
-  # Расхождение по ЗНАЧЕНИЮ → covenant его не несёт (иначе section_key_conflict при merge),
-  # каждый наследник объявляет sentinel_monitor_now в СВОЕЙ дельте compute. См. шапку
+  # ── sentinel_monitor_now: NOT in covenant (diverges between inheritors) ──────
+  # Contract flag for deploy-body step 4 (SENTINEL MONITOR RIGHT in the deploy) - NOT shared: on
+  # create semantics (create/create_from_souls) =true (node-1 is a real master,
+  # sentinel monitors it immediately), migrate_cluster has =false (the new master is still in
+  # role:slave during the fill; an early MONITOR → split-brain; MONITOR moves to detach_source).
+  # A divergence by VALUE → covenant doesn't carry it (otherwise section_key_conflict on merge),
+  # each inheritor declares sentinel_monitor_now in ITS OWN compute delta. See the header of
   # redis-deploy-sentinel.yml.
-  # ── install: destiny-структура {method, base_url, version, allow_private} (редизайн) ─
-  # Собирается из essence.install_method (дефолт binary, author-context — НЕ operator-
-  # input, 2026-06-28) + essence.binary_base_url (URL) + input.version (версия —
-  # операторский enum выкаченных в Nexus сборок). method всегда присутствует; base_url/
-  # version/allow_private материализуются ТОЛЬКО при method=binary. destiny строит per-host
-  # путь как <base_url>/<arch>/Debian/<distro_ver>/<version>/redis-* (arch/distro_ver —
-  # soulprint.self.os; см. install.yml binary-ветку). Та же структура уходит в destiny
-  # `redis` (apply.input.install) и в state_changes.install. default(essence.install_method,
-  # 'binary') ловит отсутствие листа на existing essence-map (симметрия modules_base_url).
+  # ── install: destiny struct {method, base_url, version, allow_private} (redesign) ─
+  # Assembled from essence.install_method (default binary, author-context - NOT operator
+  # input, 2026-06-28) + essence.binary_base_url (URL) + input.version (the version -
+  # an operator enum of builds published to Nexus). method is always present; base_url/
+  # version/allow_private materialize ONLY when method=binary. destiny builds the per-host
+  # path as <base_url>/<arch>/Debian/<distro_ver>/<version>/redis-* (arch/distro_ver -
+  # soulprint.self.os; see the install.yml binary branch). The same struct goes into destiny
+  # `redis` (apply.input.install) and into state_changes.install. default(essence.install_method,
+  # 'binary') catches a missing key on an existing essence map (symmetric with modules_base_url).
   #
-  # ★ allow_private (2026-06-28): SSRF-guard core.url для fetch бинарей. Дефолтный
-  # binary_base_url — ВНУТРЕННИЙ Nexus (resolve в RFC1918) → core.url.fetched по умолчанию
-  # блокит dial в private-IP. Берётся из essence.binary_allow_private (дефолт true: дефолтный
-  # base = internal Nexus → legit). Публичный-mirror-деплой (external-resolvable base) задаёт
-  # false в spec.essence. default() ловит отсутствие листа на existing essence-map.
+  # ★ allow_private (2026-06-28): SSRF guard core.url for fetching binaries. The default
+  # binary_base_url is an INTERNAL Nexus (resolves to RFC1918) → core.url.fetched by default
+  # blocks dialing a private IP. Read from essence.binary_allow_private (default true: the default
+  # base = internal Nexus → legit). A public-mirror deploy (external-resolvable base) sets
+  # false in spec.essence. default() catches a missing key on an existing essence map.
   install: >-
     ${ (default(essence.install_method, 'binary') == 'binary')
          ? {
@@ -535,43 +578,43 @@ compute:
              'allow_private': default(essence.binary_allow_private, true)
            }
          : { 'method': 'package' } }
-  # ── Эффективный host-layout: conf_dir/data_dir из essence (#2) ───────────────
-  # ★ #2 (2026-06-26): conf_dir/data_dir больше НЕ операторский input — дефолты
-  # переехали в essence (conf_dir/data_dir; оператор переопределяет в spec.essence).
-  # Объявлены ОТДЕЛЬНЫМИ compute-vars, чтобы redis_config (TLS-пути ниже), ветки
-  # (apply.input.conf_dir/data_dir) и state_changes читали ОДНО разрешённое значение.
-  # default(essence.<x>, …) — author-context-дефолт = текущий путь (back-compat). host-
-  # инвариант (один layout на кластер) — soulprint в compute недоступен. ★ TLS-директивы
-  # redis.conf (tls-cert-file/...) следуют conf_dir: destiny кладёт PEM в ${conf_dir}/tls/
-  # (server.yml) — redis.conf обязан смотреть туда же (иначе redis не находит cert).
+  # ── Effective host layout: conf_dir/data_dir from essence (#2) ───────────────
+  # ★ #2 (2026-06-26): conf_dir/data_dir are NO LONGER operator input - the defaults
+  # moved into essence (conf_dir/data_dir; the operator overrides them in spec.essence).
+  # Declared as SEPARATE compute vars so that redis_config (TLS paths below), the branches
+  # (apply.input.conf_dir/data_dir), and state_changes all read ONE resolved value.
+  # default(essence.<x>, …) - the author-context default = the current path (back-compat). host
+  # invariant (one layout per cluster) - soulprint isn't available in compute. ★ The TLS directives
+  # in redis.conf (tls-cert-file/...) follow conf_dir: destiny puts the PEM under ${conf_dir}/tls/
+  # (server.yml) - redis.conf must point at the same place (otherwise redis can't find the cert).
   conf_dir: "${ default(essence.conf_dir, '/etc/redis') }"
   data_dir: "${ default(essence.data_dir, '/var/lib/redis') }"
-  # ── TLS-флаги: из connection_mode enum + essence (редизайн) ──────────────────
-  # ★ TLS-намерение — ОДНО enum-поле connection_mode (default → ВСЕГДА присутствует),
-  # технические параметры — из essence. tls_on = connection_mode != 'plain' (главный
-  # гейт: TLS включён в режимах tls/tls_plain). tls_only_on = connection_mode == 'tls'
-  # (закрыть plain-порт, режим только-TLS). Порт/refs — из essence (default() ловит
-  # отсутствие листа; L0-кейсы без TLS их не задают). Объявлены ОТДЕЛЬНЫМИ compute-vars,
-  # чтобы redis_config/ветки/health-gate читали ОДНО значение. down-stream redis_config
-  # TLS-блок читает compute.tls_on/tls_only_on без изменений.
+  # ── TLS flags: from the connection_mode enum + essence (redesign) ──────────────────
+  # ★ TLS intent is ONE enum field connection_mode (has a default → ALWAYS present),
+  # the technical parameters come from essence. tls_on = connection_mode != 'plain' (the main
+  # gate: TLS is on in modes tls/tls_plain). tls_only_on = connection_mode == 'tls'
+  # (close the plain port, TLS-only mode). Port/refs - from essence (default() catches
+  # a missing key; L0 cases without TLS don't set them). Declared as SEPARATE compute vars,
+  # so that redis_config/branches/health-gate all read ONE value. The downstream redis_config
+  # TLS block reads compute.tls_on/tls_only_on unchanged.
   tls_on:      "${ input.connection_mode != 'plain' }"
   tls_only_on: "${ input.connection_mode == 'tls' }"
   tls_port:    "${ int(default(essence.tls_port, 7379)) }"
-  # Vault-ПУТИ PEM — из essence (author-context). has()-цепочка (default() ловит no-such-
-  # key только в ПЕРВОМ аргументе): L0-кейсы без TLS essence.tls_*_ref не задают → ''.
+  # Vault PATHS for the PEM - from essence (author-context). A has() chain (default() catches no-such-
+  # key only in the FIRST argument): L0 cases without TLS don't set essence.tls_*_ref → ''.
   tls_cert_ref: "${ has(essence.tls_cert_ref) ? essence.tls_cert_ref : '' }"
   tls_key_ref:  "${ has(essence.tls_key_ref)  ? essence.tls_key_ref  : '' }"
   tls_ca_ref:   "${ has(essence.tls_ca_ref)   ? essence.tls_ca_ref   : '' }"
-  # ── redis_config_base: ОБЩАЯ база redis.conf-map обеих веток (R3, dedup) ──────
-  # ★ R3 (compute[i]→compute[j], j<i): mode-АГНОСТИЧНЫЕ слои merge, идентичные в cluster
-  # и sentinel-ветках, вынесены сюда ОДНИМ объявлением — раньше дублировались в обеих
-  # ветках тернара redis_config (~50 строк копии maxmemory/io-threads/persistence/
-  # redis_settings + TLS). Ветки redis_config ниже наследуют эту базу и ДОБАВЛЯЮТ свою
-  # дельту (cluster — cluster-директивы; обе — TLS-блок redis_config_tls). Слои (SHALLOW
-  # last-wins, слева направо): essence.redis_config (дефолты) → persistence-пресет →
-  # вычисленные maxmemory/policy/io-threads (has-guard) → input.redis_settings (passthrough
-  # оператора). ★ ПОРЯДОК last-wins СОХРАНЁН: cluster-директивы и TLS добавляются ветками
-  # ПОСЛЕ этой базы (как было), потому redis_settings оператора не перетирает TLS/cluster.
+  # ── redis_config_base: the SHARED base of the redis.conf map for both branches (R3, dedup) ──────
+  # ★ R3 (compute[i]→compute[j], j<i): mode-AGNOSTIC merge layers, identical in the cluster
+  # and sentinel branches, are factored out here as ONE declaration - previously duplicated in both
+  # branches of the redis_config ternary (~50 lines of copied maxmemory/io-threads/persistence/
+  # redis_settings + TLS). The redis_config branches below inherit this base and ADD their own
+  # delta (cluster - cluster directives; both - the TLS block redis_config_tls). Layers (SHALLOW
+  # last-wins, left to right): essence.redis_config (defaults) → persistence preset →
+  # computed maxmemory/policy/io-threads (has-guard) → input.redis_settings (operator
+  # passthrough). ★ last-wins ORDER PRESERVED: cluster directives and TLS are added by the branches
+  # AFTER this base (as before), so the operator's redis_settings doesn't overwrite TLS/cluster.
   redis_config_base: >-
     ${ merge(
          essence.redis_config,
@@ -585,15 +628,15 @@ compute:
          ),
          default(input.redis_settings, {})
        ) }
-  # ── redis_config_tls: ОБЩИЙ TLS-блок redis.conf обеих веток (R3, dedup) ───────
-  # tls-auth-clients:no — server-only TLS: community.redis коннектится без client-cert
-  # (mTLS не выписываем, NIM-53 находка #3; иначе redis default `yes` → certificate required).
-  # ★ R3: общие 6 TLS-директив + port-guard, идентичные в cluster и sentinel-ветках
-  # (раньше дублировались). cluster-ветка ДОЛИВАЕТ свою tls-cluster:yes поверх (см.
-  # redis_config ниже) — эта база её НЕ несёт (mode-агностична). tls_off → {} (тернар).
-  # TLS-директивы выводятся из compute.conf_dir (destiny кладёт PEM в ${conf_dir}/tls/ —
-  # redis.conf обязан смотреть туда же). compute.tls_on/tls_only_on/tls_port/conf_dir
-  # объявлены ВЫШЕ (j<i, грамматика compute допускает ссылку на предыдущие compute-vars).
+  # ── redis_config_tls: the SHARED TLS block of redis.conf for both branches (R3, dedup) ───────
+  # tls-auth-clients:no - server-only TLS: community.redis connects without a client cert
+  # (we don't issue mTLS, NIM-53 finding #3; otherwise redis's default `yes` → certificate required).
+  # ★ R3: 6 shared TLS directives + the port guard, identical in the cluster and sentinel branches
+  # (previously duplicated). The cluster branch ADDS its own tls-cluster:yes on top (see
+  # redis_config below) - this base does NOT carry it (mode-agnostic). tls_off → {} (ternary).
+  # The TLS directives are derived from compute.conf_dir (destiny puts the PEM under ${conf_dir}/tls/ -
+  # redis.conf must point at the same place). compute.tls_on/tls_only_on/tls_port/conf_dir
+  # are declared ABOVE (j<i, the compute grammar allows referencing earlier compute vars).
   redis_config_tls: >-
     ${ compute.tls_on
          ? merge(
@@ -608,13 +651,13 @@ compute:
              compute.tls_only_on ? { 'port': '0' } : {}
            )
          : {} }
-  # ── redis_config: redis_config_base + per-mode дельта (R3) ────────────────────
-  # ★ Тернар по input.redis_type теперь ТОНКИЙ: общая база (redis_config_base) + TLS-блок
-  # (redis_config_tls) наследуются обеими ветками, cluster-ветка ДОБАВЛЯЕТ cluster-
-  # директивы (cluster-enabled/config-file/node-timeout) + tls-cluster:yes поверх TLS-блока
-  # (последний merge-слой → перекрывает при коллизии, last-wins). sentinel-ветка = база +
-  # TLS-блок без cluster-дельты. Порядок слоёв merge СОХРАНЁН бит-в-бит относительно
-  # прежнего inline-тернара (base → [cluster-директивы] → TLS [→ tls-cluster]).
+  # ── redis_config: redis_config_base + per-mode delta (R3) ────────────────────
+  # ★ The ternary on input.redis_type is now THIN: the shared base (redis_config_base) + the TLS
+  # block (redis_config_tls) are inherited by both branches, the cluster branch ADDS the cluster
+  # directives (cluster-enabled/config-file/node-timeout) + tls-cluster:yes on top of the TLS block
+  # (the last merge layer → wins on collision, last-wins). The sentinel branch = base +
+  # the TLS block without the cluster delta. The merge layer order is PRESERVED bit-for-bit relative
+  # to the former inline ternary (base → [cluster directives] → TLS [→ tls-cluster]).
   redis_config: >-
     ${ (input.redis_type == 'cluster')
          ? merge(
@@ -632,28 +675,28 @@ compute:
              compute.redis_config_tls
            ) }
 
-# ── Мутация incarnation.state ─────────────────────────────────────────────────
-# После успешного apply Keeper фиксирует развёрнутое (ADR-009 §7.1, ADR-057
-# list-форма). redis_config — ИТОГ трансляции (тот же compute.redis_config, что ушёл
-# в render redis.conf веток cluster/sentinel): повторный apply и day-2-сценарии видят
-# один источник истины. Раньше выражение merge() ДУБЛИРОВАЛОСЬ здесь и в
-# apply.input.config веток (DRIFT-GUARD руками); теперь оно объявлено ОДИН раз в
-# compute: выше — drift снят самим compute.
+# ── incarnation.state mutation ─────────────────────────────────────────────────
+# After a successful apply, Keeper records what was deployed (ADR-009 §7.1, ADR-057
+# list form). redis_config - the RESULT of the translation (the same compute.redis_config that went
+# into rendering redis.conf in the cluster/sentinel branches): a repeat apply and day-2 scenarios see
+# one source of truth. Previously the merge() expression was DUPLICATED here and in
+# the branches' apply.input.config (a manual DRIFT-GUARD); now it's declared ONCE in
+# compute: above - drift is removed by compute itself.
 state_changes:
   - set: redis_type
     value: "${ input.redis_type }"
   - set: redis_version
     value: "${ compute.redis_version }"
-  # redis_config ≡ apply.input.config веток: единый compute.redis_config (см. выше).
+  # redis_config ≡ the branches' apply.input.config: a single compute.redis_config (see above).
   - set: redis_config
     value: "${ compute.redis_config }"
 
-  # ── Именованные поля намерения (read-model, v3) ─────────────────────────────
-  # ★ КРИТИЧНО (architect a9e1c2c6): значения берутся из ТЕХ ЖЕ compute.*/input, что
-  # и redis_config — не из сырого input отдельно. Так namedfields (намерение) и
-  # redis_config (вычисленный итог) согласованы по построению (один compute-проход).
-  # tls: тот же compute.tls_on/tls_only_on/tls_port/tls_*_ref, что дал TLS-блок
-  # redis_config (cert/key/ca — Vault-ПУТИ, не PEM: секрет в state не лежит).
+  # ── Named intent fields (read-model, v3) ─────────────────────────────
+  # ★ CRITICAL (architect a9e1c2c6): values are taken from the SAME compute.*/input as
+  # redis_config - not from raw input separately. So namedfields (intent) and
+  # redis_config (the computed result) are consistent by construction (a single compute pass).
+  # tls: the same compute.tls_on/tls_only_on/tls_port/tls_*_ref that produced the TLS block in
+  # redis_config (cert/key/ca - Vault PATHS, not PEM: the secret doesn't live in state).
   - set: tls
     value: >-
       ${ {
@@ -664,45 +707,45 @@ state_changes:
            'key_ref':  compute.tls_key_ref,
            'ca_ref':   compute.tls_ca_ref
          } }
-  # connection_mode: явный режим сетевого канала оператора (enum tls/tls_plain/plain).
-  # read-model дублирует выбор; tls-namedfield выше несёт производные enable/only/port.
+  # connection_mode: the operator's explicit network channel mode (enum tls/tls_plain/plain).
+  # the read-model duplicates the choice; the tls namedfield above carries the derived enable/only/port.
   - set: connection_mode
     value: "${ input.connection_mode }"
-  # persistence: input.persistence (default rdb) — тот же ключ, по которому выбран
-  # essence.persistence_presets в redis_config (read-model дублирует выбор оператора).
+  # persistence: input.persistence (default rdb) - the same key used to select
+  # essence.persistence_presets in redis_config (the read-model duplicates the operator's choice).
   - set: persistence
     value: "${ input.persistence }"
-  # memory_mb: бюджет памяти оператора (int). Не задан → 0 (плоский set всегда
-  # создаёт ключ; 0 = «оператор не зафиксировал бюджет», maxmemory взят из essence).
+  # memory_mb: the operator's memory budget (int). Not set → 0 (a flat set always
+  # creates the key; 0 = "the operator didn't pin a budget", maxmemory comes from essence).
   - set: memory_mb
     value: "${ int(default(input.memory_mb, 0)) }"
-  # maxmemory_policy: явный выбор оператора; не задан → '' (директива из essence-
-  # подложки, см. redis_config). namedfield маркирует ОТСУТСТВИЕ явного выбора пустой
-  # строкой (не лезем в redis_config за фактическим значением — это write-model).
+  # maxmemory_policy: the operator's explicit choice; not set → '' (the directive comes from the essence
+  # substrate, see redis_config). The namedfield marks the ABSENCE of an explicit choice with an empty
+  # string (we don't reach into redis_config for the actual value - this is a write-model).
   - set: maxmemory_policy
     value: "${ default(input.maxmemory_policy, '') }"
-  # io_threads: число I/O-потоков оператора (int, default 0). 0 = однопоточный I/O
-  # (директива io-threads не пишется в redis.conf). read-model дублирует выбор.
+  # io_threads: the operator's number of I/O threads (int, default 0). 0 = single-threaded I/O
+  # (the io-threads directive isn't written to redis.conf). the read-model duplicates the choice.
   - set: io_threads
     value: "${ int(input.io_threads) }"
-  # modules: ФАКТИЧЕСКИ развёрнутые Redis-модули (директива «модули ВСЕГДА ВСЕ»). Redis
-  # < 8 → полный набор (destiny грузит все из vars.redis_modules); Redis 8+ → [] (модули
-  # встроены). НЕ operator-выбор (input.modules удалён) — compute.redis_modules_deployed.
+  # modules: the Redis modules ACTUALLY deployed (the "modules are ALWAYS ALL" directive). Redis
+  # < 8 → the full set (destiny loads all of them from vars.redis_modules); Redis 8+ → [] (modules
+  # are built in). NOT an operator choice (input.modules was removed) - compute.redis_modules_deployed.
   - set: modules
     value: "${ compute.redis_modules_deployed }"
-  # ★ install + host-layout (conf_dir/data_dir/modules_base_url) вынесены в essence
-  # (v11→v12, Вариант A): install — read-model без читателей, layout — day-2 читают
-  # essence напрямую (default(essence.<x>, '<деф>')). Здесь их set-ов больше нет —
-  # ключей нет в state_schema, set писал бы поле вне схемы → валидация state упала бы.
-  # sysctl_settings: применённый host-tuning (тот же essence.sysctl_settings, что
-  # уходит в destiny apply.input). Из essence (host-инвариант, не операторский ввод).
+  # ★ install + host-layout (conf_dir/data_dir/modules_base_url) moved into essence
+  # (v11→v12, Variant A): install - a read-model with no readers, layout - day-2 reads
+  # essence directly (default(essence.<x>, '<default>')). There are no more sets for them here -
+  # the keys aren't in state_schema, a set would write a field outside the schema → state validation would fail.
+  # sysctl_settings: the applied host tuning (the same essence.sysctl_settings that
+  # goes into destiny apply.input). From essence (host-invariant, not operator input).
   - set: sysctl_settings
     value: "${ default(essence.sysctl_settings, {}) }"
-  # monitoring: read-model ФАКТА развёрнутых экспортеров (Слайс I, симметрия install/tls
-  # read-model). Версии/порты — из essence.node_exporter_*/redis_exporter_* (те же значения,
-  # что уходят в apply.input двух destiny в create/main.yml). Пароль/юзер ACL-юзера monitoring
-  # в state НЕ хранятся (ИБ — они в Vault, как tls.*_ref). Дефолты дублируют essence/миграцию
-  # 012_to_013 (порты :9100/:9121 конвенциональны; версии — из essence-подложки).
+  # monitoring: a read-model of the FACT of deployed exporters (Slice I, symmetric with the install/tls
+  # read-model). Versions/ports - from essence.node_exporter_*/redis_exporter_* (the same values
+  # that go into apply.input of the two destinies in create/main.yml). The password/user of the ACL
+  # monitoring user are NOT stored in state (security - they're in Vault, like tls.*_ref). The defaults
+  # duplicate essence/migration 012_to_013 (ports :9100/:9121 are conventional; versions - from the essence substrate).
   - set: monitoring
     value: >-
       ${ {
@@ -711,12 +754,12 @@ state_changes:
            'node_exporter_listen':   default(essence.node_exporter_listen, ':9100'),
            'redis_exporter_listen':  default(essence.redis_exporter_listen, ':9121')
          } }
-  # logging: read-model ФАКТА развёрнутого log-shipping (Слайс V-I, ADR-067; симметрия
-  # monitoring). Версия/sink_type/endpoint/log_sources — из essence.vector_* (те же значения,
-  # что уходят в apply.input destiny vector в create/main.yml). ★ vector_sink_auth_ref СЮДА НЕ
-  # пишется — это секрет (Vault-ref/токен), в state не оседает (ИБ, как tls.*_ref и пароль
-  # monitoring). Дефолты дублируют essence/миграцию 013_to_014 (console — безопасный дефолт без
-  # инфры; version из essence-подложки). Оператор видит, что развёрнуто; повторный apply идемпотентен.
+  # logging: a read-model of the FACT of deployed log-shipping (Slice V-I, ADR-067; symmetric with
+  # monitoring). Version/sink_type/endpoint/log_sources - from essence.vector_* (the same values
+  # that go into the destiny vector apply.input in create/main.yml). ★ vector_sink_auth_ref is NOT
+  # written HERE - it's a secret (Vault ref/token), it doesn't land in state (security, like tls.*_ref and the
+  # monitoring password). The defaults duplicate essence/migration 013_to_014 (console - a safe default with no
+  # infra required; version from the essence substrate). The operator sees what's deployed; a repeat apply is idempotent.
   - set: logging
     value: >-
       ${ {
@@ -725,13 +768,13 @@ state_changes:
            'vector_sink_endpoint': default(essence.vector_sink_endpoint, ''),
            'vector_log_sources':   default(essence.vector_log_sources, [])
          } }
-  # ── Топология (counts) ──────────────────────────────────────────────────────
-  # shards/replicas/sentinel_quorum — из тех же input.*, что size-guard/cluster-build/
-  # sentinel-ветки. shards — только cluster (не задан → 0). replicas — UNIFIED
-  # int(default(input.replicas_per_master, 0)) в обоих режимах (реплик на каждый master;
-  # cluster — на шард, sentinel — master-а). sentinel_quorum — ВСЕГДА 0 (операторского
-  # поля больше нет, кворум АВТО size/2+1 вычисляется в apply, в state не материализуется;
-  # 0 = «auto»).
+  # ── Topology (counts) ──────────────────────────────────────────────────────
+  # shards/replicas/sentinel_quorum - from the same input.* that the size-guard/cluster-build/
+  # sentinel branches use. shards - cluster only (not set → 0). replicas - UNIFIED
+  # int(default(input.replicas_per_master, 0)) in both modes (replicas per master;
+  # cluster - per shard, sentinel - of the master). sentinel_quorum - ALWAYS 0 (there's no
+  # more operator field for it, the quorum is AUTO size/2+1 computed in apply, it isn't materialized in state;
+  # 0 = "auto").
   - set: shards
     value: "${ int(default(input.shards, 0)) }"
   - set: replicas
@@ -739,65 +782,65 @@ state_changes:
   - set: sentinel_quorum
     value: "${ 0 }"
 
-  # ── cloud-provision read-model (ADR-061, Вариант A) ─────────────────────────
-  # ФАКТ «эти VM подняты ЭТИМ create-прогоном». ★ GUARD по input.provision (НЕ
-  # has(register.provision)!): на non-provision-прогоне provision.yml group-drop →
-  # шага core.cloud.created нет → register.provision не существует → has(register.provision)
-  # дал бы no-such-key В САМОМ предикате (CEL вычисляет аргумент has() — он есть в env,
-  # но обращение register.provision.vm_ids вне guard рвануло бы). Гейт — input.provision
-  # (object-вход, has()-safe): задан И enabled → читаем register.provision (создан шагом
-  # (а)); иначе [] / '' (хосты не провиженные сервисом). Тернар короткозамыкает —
-  # register.provision.* не трогается на non-provision-пути.
+  # ── cloud-provision read-model (ADR-061, Variant A) ─────────────────────────
+  # The FACT that "these VMs were provisioned by THIS create run". ★ GUARD on input.provision (NOT
+  # has(register.provision)!): on a non-provision run, provision.yml group-drop →
+  # there's no core.cloud.created step → register.provision doesn't exist → has(register.provision)
+  # would give no-such-key IN THE PREDICATE ITSELF (CEL evaluates has()'s argument - it's present in env,
+  # but touching register.provision.vm_ids outside the guard would blow up). The gate is input.provision
+  # (an object input, has()-safe): set AND enabled → read register.provision (created by step
+  # (a)); otherwise [] / '' (hosts not provisioned by the service). The ternary short-circuits -
+  # register.provision.* isn't touched on the non-provision path.
   - set: provisioned_vm_ids
     value: >-
       ${ (has(input.provision) && input.provision.enabled)
            ? register.provision.vm_ids
            : [] }
-  # provisioned_sids: SID (FQDN) созданных VM — для cascade-destroy day-2 teardown
-  # (souls→destroyed/seeds→orphaned/tokens→burned; Reaper НЕ снимает pending-VM-souls).
-  # Тот же GUARD по input.provision, что vm_ids/provider (на non-provision-прогоне
-  # register.provision не существует → тернар короткозамыкает, register.* не трогается).
-  # sids собираются из register.provision.hosts[].sid (.map — то же выражение, что
-  # params.sid шага (в) core.soul.registered в provision.yml); отдельного register
-  # .provision.sids нет. Иначе [] (хосты не провиженные сервисом).
+  # provisioned_sids: the SID (FQDN) of created VMs - for cascade-destroy day-2 teardown
+  # (souls→destroyed/seeds→orphaned/tokens→burned; the Reaper does NOT reap pending-VM souls).
+  # The same GUARD on input.provision as vm_ids/provider (on a non-provision run
+  # register.provision doesn't exist → the ternary short-circuits, register.* isn't touched).
+  # sids are gathered from register.provision.hosts[].sid (.map - the same expression as
+  # params.sid in step (c) core.soul.registered in provision.yml); there's no separate register
+  # .provision.sids. Otherwise [] (hosts not provisioned by the service).
   - set: provisioned_sids
     value: >-
       ${ (has(input.provision) && input.provision.enabled)
            ? register.provision.hosts.map(h, h.sid)
            : [] }
-  # provisioned_provider — ФАКТ-провайдер созданных VM. provider читается как
-  # default(input.provision.provider, essence.provision_provider): оператор обычно НЕ задаёт
-  # provider (форма provision скрыта, default-on) → фоллбэк на essence.provision_provider
-  # (симметрия с redis-provision.yml::core.cloud.created.params.provider). Гейт input.provision
-  # (has()-safe) держит non-provision-путь: enabled=false / create_from_souls → '' (VM не
-  # провижены этим прогоном). ★ TODO: prod/dev provider switch (ENV keeper / Coven-overlay) — отдельный ADR.
+  # provisioned_provider - the FACT provider of created VMs. provider is read as
+  # default(input.provision.provider, essence.provision_provider): the operator usually does NOT set
+  # provider (the provision form is hidden, default-on) → falls back to essence.provision_provider
+  # (symmetric with redis-provision.yml::core.cloud.created.params.provider). The input.provision gate
+  # (has()-safe) holds the non-provision path: enabled=false / create_from_souls → '' (VMs weren't
+  # provisioned by this run). ★ TODO: prod/dev provider switch (ENV keeper / Coven overlay) - a separate ADR.
   - set: provisioned_provider
     value: >-
       ${ (has(input.provision) && input.provision.enabled)
            ? default(input.provision.provider, essence.provision_provider)
            : '' }
 
-  # redis_users — ТИПИЗИРОВАННЫЙ массив AclUser (wave 1b, map→array). state хранит
-  # input.users как есть (массив [{name,perms,state}]); пароли НЕ в state (Vault).
+  # redis_users - a TYPED array of AclUser (wave 1b, map→array). state stores
+  # input.users as-is (an array [{name,perms,state}]); passwords are NOT in state (Vault).
   - set: redis_users
     value: "${ default(input.users, []) }"
-  # redis_hosts пустой во ВСЕХ режимах: state_changes рендерятся per-host с
-  # soulprint.SELF (AllowHosts=false, orchestration.md §7.1) — roster soulprint.hosts
-  # тут НЕДОСТУПЕН (граница: state — per-run, роли раскладывает apply-сторона).
-  # Точные declared-роли sentinel (master-election) живут в apply.input.sentinel,
-  # не в state (симметрично cluster, где роли раскладывает плагин).
+  # redis_hosts is empty in ALL modes: state_changes render per-host with
+  # soulprint.SELF (AllowHosts=false, orchestration.md §7.1) - the roster soulprint.hosts
+  # is NOT AVAILABLE here (boundary: state is per-run, roles are laid out on the apply side).
+  # The exact declared sentinel roles (master-election) live in apply.input.sentinel,
+  # not in state (symmetric with cluster, where the plugin lays out the roles).
   - set: redis_hosts
     value: "${ [] }"
-  # redis_sentinel: факты monitored master (режим sentinel). master_name — из essence
-  # (essence.sentinel_master_name, дефолт 'master'; операторского поля больше нет).
-  # quorum в state НЕ материализуется (auto-quorum size/2+1 вычисляется в apply,
-  # size(soulprint.hosts) в state_changes недоступен) → 0. master_ip больше не пишется
-  # (режим sentinel_only убран: master выбирается из roster-а, host-вариативен).
-  # ★ Редизайн: прежние именованные тайминги down_after_ms/failover_timeout_ms поглощены
-  # обобщённым per-master dict. read-model хранит ЭФФЕКТИВНЫЙ map per-master опций
-  # (master_settings = essence.sentinel_master_defaults поверх input.sentinel_master_settings,
-  # last-wins) и глобальные settings (input.sentinel_settings) — day-2 читает их именованно
-  # (как install/tls). Вне режима sentinel — пустой объект (только cluster остаётся).
+  # redis_sentinel: facts about the monitored master (sentinel mode). master_name - from essence
+  # (essence.sentinel_master_name, default 'master'; there's no more operator field for it).
+  # quorum isn't materialized in state (the auto-quorum size/2+1 is computed in apply,
+  # size(soulprint.hosts) isn't available in state_changes) → 0. master_ip is no longer written
+  # (the sentinel_only mode was removed: the master is picked from the roster, host-variant).
+  # ★ Redesign: the former named timings down_after_ms/failover_timeout_ms are absorbed into
+  # the generalized per-master dict. The read-model stores the EFFECTIVE map of per-master options
+  # (master_settings = essence.sentinel_master_defaults over input.sentinel_master_settings,
+  # last-wins) and the global settings (input.sentinel_settings) - day-2 reads them by name
+  # (like install/tls). Outside sentinel mode - an empty object (only cluster remains).
   - set: redis_sentinel
     value: >-
       ${ (input.redis_type == 'sentinel')

@@ -1,26 +1,26 @@
-# L0-испытание create в режиме cluster — GUARD на ПОРЯДОК merge (пробел покрытия
-# qa 2026-06-22). НАМЕРЕНИЕ: cluster-директивы (особенно cluster-enabled) ОБЯЗАНЫ
-# побеждать operator-овский redis_settings — оператор НЕ может случайно/намеренно
-# сломать cluster-режим через passthrough redis_settings.
+# L0 test of create in cluster mode — GUARD on merge ORDER (coverage gap
+# qa 2026-06-22). INTENT: cluster directives (especially cluster-enabled) MUST
+# win over the operator's redis_settings — the operator canNOT accidentally/intentionally
+# break cluster mode via redis_settings passthrough.
 #
-# Механизм: в merge() ветки cluster.yml порядок слоёв (СЛЕВА НАПРАВО, SHALLOW
+# Mechanism: in the merge() of the cluster.yml branch, layer order (LEFT TO RIGHT, SHALLOW
 # last-wins):
 #   1. essence.redis_config
 #   2. persistence_presets[persistence]
 #   3. computed maxmemory/policy
 #   4. input.redis_settings          ← operator passthrough
-#   5. { cluster-enabled, cluster-config-file, cluster-node-timeout }  ← ПОСЛЕДНИМ
-# cluster-блок (слой 5) идёт ПОСЛЕ redis_settings (слой 4) → last-wins: даже если
-# оператор подал cluster-enabled: "no" в redis_settings, итоговый merged несёт
-# cluster-enabled: "yes". Этот кейс подаёт ВРАЖДЕБНЫЙ redis_settings (cluster-enabled
-# no / cluster-node-timeout 99 / cluster-config-file evil.conf) и ассертит, что в
-# итоге все три cluster-директивы — КАНОНИЧЕСКИЕ, а не operator-овские.
+#   5. { cluster-enabled, cluster-config-file, cluster-node-timeout }  ← LAST
+# the cluster block (layer 5) comes AFTER redis_settings (layer 4) → last-wins: even if
+# the operator supplied cluster-enabled: "no" in redis_settings, the final merged carries
+# cluster-enabled: "yes". This case supplies a HOSTILE redis_settings (cluster-enabled
+# no / cluster-node-timeout 99 / cluster-config-file evil.conf) and asserts that in
+# the end all three cluster directives are CANONICAL, not the operator's.
 #
-# Заодно: безвредный passthrough оператора (tcp-backlog) долетает (не cluster-ключ
-# → не перезатёрт), доказывая что guard режет ТОЛЬКО cluster-директивы, а не весь
+# Also: a harmless operator passthrough (tcp-backlog) makes it through (not a cluster key
+# → not overwritten), proving the guard cuts ONLY cluster directives, not the whole
 # redis_settings.
 #
-# Топология: shards=3, replicas_per_shard=0 → 3 хоста (size-guard PASS).
+# Topology: shards=3, replicas_per_shard=0 → 3 hosts (size-guard PASS).
 name: cluster directives beat operator redis_settings (cannot break cluster)
 
 fixtures:
@@ -44,10 +44,10 @@ fixtures:
   vault:
     secret/redis/create:
       password: s3cr3t-redis-pass-create
-    # Per-user секреты системных юзеров (secret/redis/<inc>/users/<name>#password) —
-    # их резолвит keeper-side vault() при доливе system_acl_users в apply.input.users.
-    # ★ РЕДИЗАЙН default_admin (2026-06-30): default_admin — системный юзер внутрикластерного
-    # AUTH (PING/cluster-build/masterauth деплоя читают его пароль той же ветки users/<name>).
+    # Per-user secrets of system users (secret/redis/<inc>/users/<name>#password) —
+    # resolved by keeper-side vault() when injecting system_acl_users into apply.input.users.
+    # ★ default_admin REDESIGN (2026-06-30): default_admin is the system user for intra-cluster
+    # AUTH (deploy's PING/cluster-build/masterauth read its password from the same users/<name> branch).
     secret/redis/create/users/default_admin:
       password: default-admin-secret-pass
     secret/redis/create/users/replica:
@@ -72,11 +72,11 @@ fixtures:
       maxclients:       10000
       timeout:          300
 
-    # Системные ACL-юзеры redis-server (1:1 из essence/_default.yaml). ОБЯЗАТЕЛЬНЫ:
-    # guard create/cluster.yml (assert 1b) рвёт render при пустом system_acl_users
-    # (тихий fail-open недопустим — без них репликация/health-check сломались бы).
-    # ★ РЕДИЗАЙН default_admin (2026-06-30): default_admin — системный юзер полного доступа
-    # (~* &* +@all), под ним внутрикластерный AUTH cluster (заменил requirepass-default).
+    # System ACL users of redis-server (1:1 from essence/_default.yaml). REQUIRED:
+    # the create/cluster.yml guard (assert 1b) aborts render on an empty system_acl_users
+    # (a silent fail-open is unacceptable — without them replication/health-check would break).
+    # ★ default_admin REDESIGN (2026-06-30): default_admin is the full-access system user
+    # (~* &* +@all), under it the cluster's intra-cluster AUTH (replaced requirepass-default).
     system_acl_users:
       default_admin: "~* &* +@all"
       replica:    "+psync +replconf +ping"
@@ -84,20 +84,20 @@ fixtures:
       sentinel:   "allchannels +multi +slaveof +ping +exec +subscribe +config|rewrite +role +publish +info +client|setname +client|kill +script|kill"
       haproxy:    "-@all +auth +client|getname +client|id +client|setname +command +hello +ping +role +info +cluster|info"
   input:
-    # ★ provision выключен (default-on: опущенная секция = ВКЛЮЧЕНО; кейс деплоит на
-    # ГОТОВЫЙ roster, cloud-create не нужен) → include redis-provision.yml group-drop.
+    # ★ provision disabled (default-on: an omitted section = ENABLED; this case deploys onto
+    # a READY roster, cloud-create not needed) → include redis-provision.yml group-drop.
     provision:
       enabled: false
     redis_type: cluster
-    # version ОБЯЗАТЕЛЬНА (директива пользователя 2026-06-23): фиксированный
-    # distro-native пин (мажор < 8 → version-gate модулей не активен).
+    # version is REQUIRED (user directive 2026-06-23): a fixed
+    # distro-native pin (major < 8 → module version-gate not active).
     version: "7.4.1"
     shards: 3
     replicas_per_master: 0
     cluster_node_timeout: 7000
-    # ВРАЖДЕБНЫЙ passthrough: оператор пытается сломать cluster-режим. cluster-блок
-    # merge() идёт ПОСЛЕ → last-wins канонические значения. tcp-backlog (не
-    # cluster-ключ) долетает нетронутым.
+    # HOSTILE passthrough: the operator tries to break cluster mode. The cluster block's
+    # merge() comes AFTER → last-wins canonical values. tcp-backlog (not a
+    # cluster key) makes it through untouched.
     redis_settings:
       cluster-enabled: "no"
       cluster-config-file: "evil.conf"
@@ -105,10 +105,10 @@ fixtures:
       tcp-backlog: 511
 
 assert:
-  # size-guard PASS — assert: (ADR-009 amendment) НЕ задача.
+  # size-guard PASS — assert: (ADR-009 amendment) is NOT a task.
   task_present:
-    # redis.conf: cluster-блок ПОБЕДИЛ враждебный redis_settings (last-wins).
-    # Дизамбигуатор от users.acl/hardening (тот же core.file.rendered) — path.
+    # redis.conf: the cluster block WON over the hostile redis_settings (last-wins).
+    # Disambiguator from users.acl/hardening (same core.file.rendered) — path.
     - module: core.file.rendered
       params_subset:
         path: /etc/redis/redis.conf
@@ -129,9 +129,9 @@ assert:
               - /var/lib/redis/modules/redisearch.so
               - /var/lib/redis/modules/redistimeseries.so
             config:
-              # ★ РЕДИЗАЙН default_admin: replica→master AUTH (masteruser/masterauth) приходит
-              # ОБЫЧНЫМИ директивами config (cluster deploy-body доливает их vault()-в-ячейке,
-              # пароль ветки users/default_admin). В state_changes.redis_config их НЕТ.
+              # ★ default_admin REDESIGN: replica→master AUTH (masteruser/masterauth) comes as
+              # REGULAR config directives (the cluster deploy body injects them via vault()-in-cell,
+              # password from the users/default_admin branch). They're NOT in state_changes.redis_config.
               masteruser:       "default_admin"
               masterauth:       "default-admin-secret-pass"
               maxmemory:        "256mb"
@@ -140,18 +140,18 @@ assert:
               timeout:          300
               save:             "900 1 300 10 60 10000"
               appendonly:       "no"
-              # КАНОНИЧЕСКИЕ cluster-директивы — НЕ operator-овские "no"/"evil.conf"/"99".
-              # cluster-node-timeout = 7000 из input.cluster_node_timeout (не 99 из settings).
+              # CANONICAL cluster directives — NOT the operator's "no"/"evil.conf"/"99".
+              # cluster-node-timeout = 7000 from input.cluster_node_timeout (not 99 from settings).
               cluster-enabled:      "yes"
               cluster-config-file:  "nodes.conf"
               cluster-node-timeout: "7000"
-              # Безвредный passthrough (не cluster-ключ) долетел.
+              # Harmless passthrough (not a cluster key) made it through.
               tcp-backlog: 511
           self:
             sid: node-a.example.com
             covens: [create, redis]
             choirs: []
-            # traits — registry-проекция (ADR-060), пустой объект без меток.
+            # traits — registry projection (ADR-060), empty object with no labels.
             traits: {}
             role: ""
             network:

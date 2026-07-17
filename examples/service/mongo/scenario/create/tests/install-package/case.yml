@@ -1,6 +1,6 @@
-# L0-испытание create MongoDB standalone — PACKAGE-способ (distro-пакет mongodb-org).
-# Покрывает: package-ветку (core.pkg.installed mongodb-org =version-пин) + group-drop binary-
-# ветки (нет url.fetched/mongod-бинаря/binary-юнита). Пакет несёт свой systemd-юнит.
+# L0 test for create MongoDB standalone — PACKAGE method (distro package mongodb-org).
+# Covers: the package branch (core.pkg.installed mongodb-org =version-pin) + group-drop of the
+# binary branch (no url.fetched/mongod binary/binary unit). The package carries its own systemd unit.
 name: mongo create standalone via distribution package (mongodb-org)
 
 fixtures:
@@ -34,12 +34,12 @@ fixtures:
 
 assert:
   task_present:
-    # PACKAGE-ветка: distro-пакет mongodb-org с =version-пином.
+    # PACKAGE branch: distro package mongodb-org with =version-pin.
     - module: core.pkg.installed
       params_subset:
         name: mongodb-org
         version: "6.0.19"
-    # render mongod.conf + старт + bootstrap — общие для обеих веток.
+    # render mongod.conf + start + bootstrap — common to both branches.
     - module: core.file.rendered
       params_subset:
         path: /etc/mongodb/mongod.conf
@@ -49,7 +49,7 @@ assert:
         state: present
 
   task_absent:
-    # BINARY-ветка group-drop на package-инкарнации: бинарь/tarball/binary-юнит НЕ трогаются.
+    # BINARY branch group-drop on the package incarnation: binary/tarball/binary unit are NOT touched.
     - module: core.url.fetched
     - module: core.file.present
       params_subset:
@@ -57,7 +57,7 @@ assert:
     - module: core.file.rendered
       params_subset:
         path: /etc/systemd/system/mongod.service
-    # ★ Рестарт mongod (binary-only onchanges) на package-инкарнации отсутствует.
+    # * Restarting mongod (binary-only onchanges) is absent on the package incarnation.
     - module: core.service.restarted
       params_subset:
         name: mongod

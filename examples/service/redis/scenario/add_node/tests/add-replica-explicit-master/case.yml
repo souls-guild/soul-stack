@@ -1,7 +1,7 @@
-# L0-испытание add_node: РЕПЛИКА с ЯВНЫМ master (master_sid задан → master.addr
-# = primary_ip соответствующего хоста). Парный с add-replica-auto-master:
-# подтверждает, что master_sid протаскивается в master.addr (ветка has(master_sid)
-# тернара), а не пустую строку. Плагин по этому addr резолвит node-id master-а.
+# L0 test for add_node: REPLICA with an EXPLICIT master (master_sid is set → master.addr
+# = the primary_ip of the corresponding host). Paired with add-replica-auto-master:
+# confirms that master_sid is threaded through into master.addr (the has(master_sid)
+# branch of the ternary), not an empty string. The plugin resolves the master's node-id from this addr.
 name: add replica node (explicit master)
 
 fixtures:
@@ -22,14 +22,14 @@ fixtures:
       soulprint:
         network: { primary_ip: 10.0.0.9 }
         os: { arch: amd64 }
-  # ★ РЕДИЗАЙН default_admin (2026-06-30): коннект к нодам — под системным default_admin
-  # (PING-gate + CLUSTER MEET + masterauth деплоя читают его пароль). Прежний главный
-  # секрет secret/redis/<inc>#password ДРОПНУТ — ветка users/default_admin.
+  # ★ default_admin REDESIGN (2026-06-30): connecting to nodes is done as the system default_admin
+  # (PING-gate + CLUSTER MEET + deploy masterauth read its password). The former primary
+  # secret secret/redis/<inc>#password is DROPPED - users/default_admin branch.
   vault:
     secret/redis/add_node/users/default_admin:
       password: default-admin-secret-pass
-  # modules_base_url — в essence (v11→v12, Вариант A): вынесен из state, повторный прогон читает
-  # отсюда (новая нода тянет .so из того же источника, что кластер).
+  # modules_base_url - in essence (v11→v12, Option A): moved out of state, a repeat run reads
+  # from here (the new node pulls .so from the same source as the cluster).
   essence:
     modules_base_url: "https://artifacts.example.com/redis/modules"
   state:
@@ -50,10 +50,10 @@ fixtures:
     master_sid: node-2.example.com
 
 assert:
-  # GUARD — assert: (в план не эмитится).
+  # GUARD - assert: (not emitted into the plan).
   task_present:
-    # ADD-NODE: master.addr = primary_ip хоста node-2 (явный master_sid).
-    # Единственная community.redis.cluster в плане.
+    # ADD-NODE: master.addr = primary_ip of host node-2 (explicit master_sid).
+    # The only community.redis.cluster in the plan.
     - module: community.redis.cluster
       params_subset:
         action: add-node

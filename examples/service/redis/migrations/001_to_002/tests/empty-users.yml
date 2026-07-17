@@ -1,7 +1,7 @@
 name: empty-users
 description: >
-  Пустой список пользователей: rename + set {} материализуют целевой redis_users
-  как пустой map (intent «список стал map»), foreach по [] — no-op.
+  Empty user list: rename + set {} materialize the target redis_users
+  as an empty map (intent "the list became a map"), foreach over [] is a no-op.
 
 state_before:
   redis_users: []

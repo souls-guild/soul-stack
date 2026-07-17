@@ -1,8 +1,8 @@
 name: preserves-existing-provision
 description: >
-  Идемпотентность: инкарнация, у которой provision-поля УЖЕ есть (повторный
-  прогон миграции / inline-seed), сохраняет их значения как есть (has()-guard
-  возвращает текущее значение, не перезатирает default-ом).
+  Idempotency: an incarnation whose provision fields ALREADY exist (a repeat
+  migration run / inline-seed) keeps their values as is (the has()-guard
+  returns the current value, does not overwrite it with the default).
 
 state_before:
   redis_type: "cluster"

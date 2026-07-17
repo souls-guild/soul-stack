@@ -1,37 +1,37 @@
-# Ветка диспетчера create_from_souls — режим sentinel (master-replica + sentinel-демон).
-# Подключается из main.yml через CONDITIONAL-INCLUDE: `when: input.redis_type ==
-# 'sentinel'` стоит НА include — на cluster-прогоне весь файл group-drop (задачи
-# физически не рендерятся), на sentinel-прогоне раскрывается в плоский список ДО render.
+# create_from_souls dispatcher branch — sentinel mode (master-replica + sentinel daemon).
+# Included from main.yml via CONDITIONAL-INCLUDE: `when: input.redis_type ==
+# 'sentinel'` sits ON the include — on a cluster run the whole file is a group-drop (tasks
+# are not physically rendered), on a sentinel run it expands into a flat list BEFORE render.
 #
-# ★ sentinel — БАЗОВАЯ ветка деплоя: replicas_per_master=0 даёт standalone-эквивалент
-# (один master + sentinel-демон).
+# ★ sentinel — the BASE deployment branch: replicas_per_master=0 gives a standalone equivalent
+# (one master + sentinel daemon).
 #
-# ★ ТОНКИЙ ДИСПЕТЧЕР: тело деплоя service-level. size-guard ниже + include общего
-# scenario/redis-deploy-sentinel.yml. Этот файл — КОПИЯ create/sentinel.yml (без provision
-# size-guard не отличается): scenario.include резолвит `scenario/<name>/<file>`, поэтому
-# create_from_souls нужна СВОЯ локальная ветка. Реальное деплой-тело (redis-deploy-sentinel.yml)
-# — service-level, делится без дубликата. drift-risk копии — отмечен в main.yml::description.
+# ★ THIN DISPATCHER: the deployment body is service-level. size-guard below + include of the shared
+# scenario/redis-deploy-sentinel.yml. This file is a COPY of create/sentinel.yml (without provision
+# the size-guard doesn't differ): scenario.include resolves `scenario/<name>/<file>`, so
+# create_from_souls needs ITS OWN local branch. The real deployment body (redis-deploy-sentinel.yml)
+# is service-level, shared without duplication. The copy's drift risk is noted in main.yml::description.
 #
-# ★ ИНВАРИАНТ (см. шапку redis-deploy-sentinel.yml): инклудящий ОБЯЗАН объявить в своём
-# compute: набор, который тело читает (redis_config/conf_dir/data_dir/install/
-# modules_base_url/sentinel_directives/redis_version/tls_*). Все они объявлены в
-# create_from_souls/main.yml::compute (инлайн-копия create). cross-file дрейф soul-lint НЕ ловит.
+# ★ INVARIANT (see the header of redis-deploy-sentinel.yml): the includer MUST declare in its own
+# compute: the set that the body reads (redis_config/conf_dir/data_dir/install/
+# modules_base_url/sentinel_directives/redis_version/tls_*). All of them are declared in
+# create_from_souls/main.yml::compute (inline copy of create). soul-lint does NOT catch cross-file drift.
 
-# ── 0. SIZE-GUARD (топология) — keeper-side render-time assert ─────────────────────
-# Размер roster-а ОБЯЗАН быть ровно 1+replicas_per_master (один master + реплики master-а;
-# sentinel-демон на КАЖДОМ хосте) — иначе master-election (run_once по sort soulprint.hosts)
-# и SENTINEL MONITOR/REPLICAOF разъедутся с declared-топологией. Предикат вычисляется
-# KEEPER-SIDE на РЕНДЕРЕ — там доступен soulprint.hosts. false ОБРЫВАЕТ render с message ДО
-# любого dispatch. assert НЕ emit RenderedTask. Стоит ПЕРЕД include деплой-тела — mismatch
-# рвёт прогон fail-fast. replicas_per_master имеет default:0 → int(input.replicas_per_master)
-# без has()-обвязки.
-# ★ ПОЧЕМУ assert, а не validate: size-guard нужен soulprint.hosts (roster), а validate-
-# контекст INPUT-ONLY (структурный CEL-барьер) — число узлов прогона на input-валидации
-# неизвестно. Идентично create/sentinel.yml:30-33 (см. там же про ПОЧЕМУ assert).
+# ── 0. SIZE-GUARD (topology) — keeper-side render-time assert ─────────────────────
+# The roster size MUST be exactly 1+replicas_per_master (one master + master replicas;
+# a sentinel daemon on EVERY host) — otherwise master election (run_once by sort soulprint.hosts)
+# and SENTINEL MONITOR/REPLICAOF would diverge from the declared topology. The predicate is evaluated
+# KEEPER-SIDE at RENDER TIME — soulprint.hosts is available there. false BREAKS the render with a message BEFORE
+# any dispatch. assert does NOT emit RenderedTask. Placed BEFORE the deployment body include — a mismatch
+# breaks the run fail-fast. replicas_per_master has default:0 → int(input.replicas_per_master)
+# without a has() wrapper.
+# ★ WHY assert, not validate: the size-guard needs soulprint.hosts (the roster), while the validate
+# context is INPUT-ONLY (a structural CEL barrier) — the number of run nodes is
+# unknown at input-validation time. Identical to create/sentinel.yml:30-33 (see there for WHY assert).
 - name: Guard sentinel roster size matches replicas
   assert:
     that:
       - "size(soulprint.hosts) == 1 + int(input.replicas_per_master)"
-    message: "число хостов roster-а прогона должно быть ровно 1+replicas_per_master (один master + реплики master-а; sentinel-демон на каждом хосте) — задай столько же таргетированных souls, сколько узлов в объявленной топологии, иначе лишние хосты стали бы незаявленными репликами, а нехватка — недобором реплик"
+    message: "the run roster host count must be exactly 1+replicas_per_master (one master + master replicas; a sentinel daemon on every host) — target as many souls as there are nodes in the declared topology, otherwise extra hosts would become undeclared replicas, and a shortfall would mean missing replicas"
 
 - include: redis-deploy-sentinel.yml

@@ -1,15 +1,15 @@
-# L0-испытание NIM-58 (домен-mismatch guard): provision ВКЛЮЧЁН, имя инкарнации
-# "9redis" — валидное имя инкарнации (^[a-z0-9][a-z0-9-]{0,62}$), но НЕвалидная
-# VM-база (^[a-z][a-z0-9-]{0,48}[a-z0-9]$: старт-цифра). Guard-assert ПЕРВЫМ шагом
-# redis-provision.yml обрывает render pre-persist (в проде — 422 БЕЗ записи
-# инкарнации), не давая имени дойти до CloudDriver.Validate уже после создания
-# инкарнации (сирота). Доказывает REJECT при provision.enabled + pre-persist.
+# L0 test NIM-58 (domain-mismatch guard): provision is ENABLED, and the incarnation name
+# "9redis" is a valid incarnation name (^[a-z0-9][a-z0-9-]{0,62}$), but an invalid
+# VM base (^[a-z][a-z0-9-]{0,48}[a-z0-9]$: leading digit). The guard-assert, as the first step of
+# redis-provision.yml, aborts the pre-persist render (in production: 422 WITHOUT writing the
+# incarnation), so the name never reaches CloudDriver.Validate after the incarnation has
+# already been created (orphan). Proves REJECT under provision.enabled + pre-persist.
 #
-# ★ expect_render_error (взаимоисключим с assert.*): подстрока message guard-ассерта
-# redis-provision.yml. incarnation_name override (NIM-58 harness) — scn.Name="create"
-# валиден как VM-база, поэтому «плохое» имя задаётся явно.
-# ★ vault/covens под "9redis" (не "create"): БЕЗ guard-ассерта (RED-фаза) render
-# катит весь план — deploy читает secret/redis/9redis/*, coven=incarnation.name.
+# ★ expect_render_error (mutually exclusive with assert.*): a substring of the guard-assert
+# message in redis-provision.yml. incarnation_name override (NIM-58 harness): scn.Name="create"
+# is valid as a VM base, so the "bad" name is set explicitly here.
+# ★ vault/covens are under "9redis" (not "create"): WITHOUT the guard-assert (RED phase) the render
+# pushes the whole plan through - deploy reads secret/redis/9redis/*, coven=incarnation.name.
 name: provision with a bad VM-base incarnation name is rejected before persist
 
 fixtures:
@@ -91,4 +91,4 @@ mocks:
         - { sid: vm-2.example.com, vm_id: i-bbb222, primary_ip: 10.0.0.2, bootstrap_token: tok-vm2 }
         - { sid: vm-3.example.com, vm_id: i-ccc333, primary_ip: 10.0.0.3, bootstrap_token: tok-vm3 }
 
-expect_render_error: "имя инкарнации не подходит как базовое имя VM"
+expect_render_error: "the incarnation name doesn't qualify as a base VM name"

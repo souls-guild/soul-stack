@@ -1,82 +1,82 @@
-# Manifest плагина soul-mod-community-mongo (ADR-020 plugin-инфраструктура).
+# Manifest of the soul-mod-community-mongo plugin (ADR-020 plugin infrastructure).
 #
-# ОСНОВНОЙ интерфейс к живому MongoDB (PILOT-срез, концепция Ansible-роли mongodb):
-# scenario сервиса оркеструет порядок/таргетинг, плагин исполняет ОДНУ операцию над
-# одним mongod-инстансом ЧЕРЕЗ go-mongo-driver (НЕ core.exec+mongosh — пароль в argv
-# = ИБ-риск, хрупкий парсинг; параллель с community.redis: redis тоже прошёл путь
-# shell→плагин). Реализованы 3 state: pinged (health) + user (createUser/dropUser
-# upsert, imperative — юзеры mongo живут в admin.system.users, НЕ в конфиг-файле) +
+# MAIN interface to a live MongoDB (PILOT slice, concept from the Ansible mongodb role):
+# the service scenario orchestrates order/targeting, the plugin executes ONE operation on
+# a single mongod instance VIA go-mongo-driver (NOT core.exec+mongosh — password in argv
+# = a security risk, fragile parsing; parallel with community.redis: redis also went
+# shell→plugin). 3 states implemented: pinged (health) + user (createUser/dropUser
+# upsert, imperative — mongo users live in admin.system.users, NOT in a config file) +
 # command (raw db.runCommand).
 #
-# ★ localhost-exception bootstrap (mongo-механика, аналог redis default_admin):
-# первый admin создаётся БЕЗ auth через loopback, пока admin-БД пуста (mongod с
-# authorization:enabled это разрешает). Плагин детектит auth-fail и делает fallback
-# на no-auth localhost-коннект для первого createUser — см. user.go. render передаёт
-# addr+username+password, плагин решает auth-путь ПО ФАКТУ live-состояния.
+# ★ localhost-exception bootstrap (mongo mechanics, analog of redis default_admin):
+# the first admin is created WITHOUT auth via loopback, while the admin DB is empty (mongod with
+# authorization:enabled allows this). The plugin detects an auth-fail and falls back
+# to a no-auth localhost connection for the first createUser — see user.go. render passes
+# addr+username+password, the plugin decides the auth path BASED ON the live state.
 #
-# СОЗНАТЕЛЬНО БЕЗ dry-run preview: плагин НЕ реализует PlanReadSafe — на dry_run host
-# (Soul) применяет default-deny (задача получает честный «drift не поддержан», а не
-# ложное «нет дрифта»). Параллель community.redis.
+# DELIBERATELY WITHOUT dry-run preview: the plugin does NOT implement PlanReadSafe — on a dry_run host
+# (Soul) default-deny applies (the task gets an honest "drift not supported" rather than a
+# false "no drift"). Parallel with community.redis.
 #
-# ★ PILOT-скоуп: replica-set (replSetInitiate/add-member/member-synced), sharded,
-# keyFile, TLS — СЛЕД. слайсы. Сейчас — только 3 state под standalone create+destroy.
+# ★ PILOT scope: replica-set (replSetInitiate/add-member/member-synced), sharded,
+# keyFile, TLS — NEXT slices. For now — only 3 states for standalone create+destroy.
 kind: soul_module
-protocol_version: 1                    # compat-флаг SoulModule API; версия артефакта — git ref (ADR-007)
+protocol_version: 1                    # compat flag of the SoulModule API; artifact version is a git ref (ADR-007)
 namespace: community
 name: mongo
 
-# Коннект-параметры (общие для всех states, см. шапки states ниже):
-#   - addr            (string, required) — host:port mongod (обычно 127.0.0.1:27017);
-#   - username        (string) — ACL-username для AUTH (default_admin у системного);
-#   - password        (string, secret, PEM/пароль) — vault-ref в operator-input;
-#                     keeper резолвит до Apply, плагин получает plaintext (ADR-012).
-#                     Маскируется в логах/трейсах/UI (secret);
+# Connection parameters (common to all states, see the state headers below):
+#   - addr            (string, required) — mongod host:port (usually 127.0.0.1:27017);
+#   - username        (string) — ACL username for AUTH (default_admin for the system one);
+#   - password        (string, secret, PEM/password) — vault ref in operator-input;
+#                     keeper resolves it before Apply, the plugin receives plaintext (ADR-012).
+#                     Masked in logs/traces/UI (secret);
 #   - auth_db         (string) — authenticationDatabase (default admin);
-#   - tls/tls_ca/tls_cert/tls_key/tls_skip_verify — TLS-коннект (PILOT: mongo в plain,
-#                     параметры для forward-compat, в pilot-сценарии не задаются).
-# password/PEM держатся отдельно от всего, что попадает в события (ИБ-инвариант
-# ADR-010): коннект/команд-ошибки санитизируются redactError по паролю.
+#   - tls/tls_ca/tls_cert/tls_key/tls_skip_verify — TLS connection (PILOT: mongo in plain,
+#                     parameters kept for forward-compat, not set in the pilot scenario).
+# password/PEM are kept separate from anything that ends up in events (security invariant
+# ADR-010): connection/command errors are sanitized by redactError over the password.
 #
-# Closed enum (ADR-020(f) / docs/keeper/plugins.md → required_capabilities). ТОЛЬКО
-# network_outbound: плагин коннектится к mongod по TCP (вкл. TLS). БЕЗ vault_access —
-# пароль приходит УЖЕ зарезолвленным от Keeper (render-фаза vault() в scenario), свой
-# Vault-доступ плагину не нужен (ADR-012).
+# Closed enum (ADR-020(f) / docs/keeper/plugins.md → required_capabilities). ONLY
+# network_outbound: the plugin connects to mongod over TCP (incl. TLS). WITHOUT vault_access —
+# the password arrives ALREADY resolved from Keeper (render-phase vault() in the scenario), the plugin
+# does not need its own Vault access (ADR-012).
 required_capabilities:
   - network_outbound
 
-# Strict-контракт touched-ресурсов (ADR-020(g)): ровно одна пара
-# <resource-type>: <value> на запись. Все state работают над живым сервисом mongod.
+# Strict contract for touched resources (ADR-020(g)): exactly one
+# <resource-type>: <value> pair per record. All states operate on a live mongod service.
 side_effects:
   - { service: mongod }
 
 spec:
   states:
-    # pinged — health-probe через go-mongo-driver Ping (primary). Read-only,
-    # changed=false КОНСТРУКТИВНО (прецедент core.http.probe / community.redis.pinged):
-    # это проверка, не изменение. Output.ok несёт факт живости для health-gate
-    # (retry/until/failed_when по register.self.ok).
+    # pinged — health probe via go-mongo-driver Ping (primary). Read-only,
+    # changed=false BY DESIGN (precedent core.http.probe / community.redis.pinged):
+    # this is a check, not a mutation. Output.ok carries the liveness fact for the health gate
+    # (retry/until/failed_when over register.self.ok).
     pinged:
       description: |
-        Health-probe MongoDB через go-mongo-driver Ping (primary). Read-only,
-        changed=false конструктивно (probe, не изменение). Output.ok — условие для
-        health-gate (until: register.self.ok == true). Без dry-run preview.
+        MongoDB health probe via go-mongo-driver Ping (primary). Read-only,
+        changed=false by design (probe, not a mutation). Output.ok — condition for the
+        health gate (until: register.self.ok == true). No dry-run preview.
       input:
         addr:
           type: string
           required: true
-          description: "Адрес mongod: host:port (обычно 127.0.0.1:27017)."
+          description: "mongod address: host:port (usually 127.0.0.1:27017)."
         username:
           type: string
           required: false
-          description: ACL-username для AUTH (если не anonymous).
+          description: ACL username for AUTH (if not anonymous).
         password:
           type: string
           required: false
           secret: true
           pattern: "^vault:.*"
           description: >-
-            Пароль MongoDB (vault-ref в operator-input; keeper резолвит до Apply).
-            Маскируется — не попадает в события/логи. В Ping не передаётся (уходит в коннект).
+            MongoDB password (vault ref in operator-input; keeper resolves before Apply).
+            Masked — does not end up in events/logs. Not passed to Ping (goes into the connection).
         auth_db:
           type: string
           required: false
@@ -86,183 +86,183 @@ spec:
           required: false
           default: false
           description: >-
-            Коннектиться к mongod по TLS. По умолчанию false (plaintext). PILOT: mongo
-            в plain-режиме — не задаётся.
+            Connect to mongod over TLS. Defaults to false (plaintext). PILOT: mongo
+            in plain mode — not set.
         tls_ca:
           type: string
           required: false
           secret: true
           pattern: "^vault:.*"
           description: >-
-            PEM CA-сертификата для проверки серверного сертификата (RootCAs).
-            Маскируется (secret). Резолвится keeper-side из Vault (render-фаза).
+            PEM of the CA certificate for verifying the server certificate (RootCAs).
+            Masked (secret). Resolved keeper-side from Vault (render phase).
         tls_cert:
           type: string
           required: false
           secret: true
           pattern: "^vault:.*"
           description: >-
-            PEM client-сертификата для mTLS (опц., только вместе с tls_key).
-            Маскируется (secret).
+            PEM of the client certificate for mTLS (optional, only together with tls_key).
+            Masked (secret).
         tls_key:
           type: string
           required: false
           secret: true
           pattern: "^vault:.*"
           description: >-
-            PEM client-ключа для mTLS (опц., только вместе с tls_cert).
-            Маскируется (secret); в события/ошибки не попадает.
+            PEM of the client key for mTLS (optional, only together with tls_cert).
+            Masked (secret); does not end up in events/errors.
         tls_skip_verify:
           type: bool
           required: false
           default: false
           description: >-
-            ЯВНЫЙ opt-out проверки серверного сертификата. По умолчанию false
-            (проверка включена — default secure).
-    # user — createUser/dropUser (upsert, imperative). Юзеры mongo живут в
-    # admin.system.users (НЕ в конфиг-файле, в отличие от redis users.acl) — поэтому
-    # verb-state, а не рендер. Идемпотентен по usersInfo (present + юзер есть → no-op;
-    # absent + нет → no-op). changed=true при реальном create/drop.
+            EXPLICIT opt-out of server certificate verification. Defaults to false
+            (verification enabled — default secure).
+    # user — createUser/dropUser (upsert, imperative). Mongo users live in
+    # admin.system.users (NOT in a config file, unlike redis users.acl) — hence a
+    # verb-state, not a render. Idempotent via usersInfo (present + user exists → no-op;
+    # absent + doesn't exist → no-op). changed=true on an actual create/drop.
     #
-    # ★★ LOCALHOST-EXCEPTION BOOTSTRAP: первый admin (default_admin) создаётся БЕЗ auth
-    # через loopback (mongod разрешает пока admin-БД пуста). Плагин при auth-fail на
-    # usersInfo-пробе делает fallback на no-auth localhost-коннект → createUser первого
-    # admin. Как только admin создан — коннекты идут с auth (fallback не нужен). Output
-    # несёт used_localhost/bootstrap_admin (сработал ли no-auth путь).
+    # ★★ LOCALHOST-EXCEPTION BOOTSTRAP: the first admin (default_admin) is created WITHOUT auth
+    # via loopback (mongod allows this while the admin DB is empty). On auth-fail on the
+    # usersInfo probe, the plugin falls back to a no-auth localhost connection → createUser for the first
+    # admin. Once the admin is created — connections go through with auth (fallback no longer needed). Output
+    # carries used_localhost/bootstrap_admin (whether the no-auth path was taken).
     user:
       description: |
-        Управление MongoDB-юзером (createUser/dropUser upsert) через go-mongo-driver.
-        state present — создать юзера (если нет), absent — удалить (если есть).
-        Идемпотентен по usersInfo (уже в нужном состоянии → changed=false). ★ первый
-        admin создаётся через localhost-exception (no-auth loopback-коннект, пока
-        admin-БД пуста). Смена пароля/ролей существующего юзера — day-2 (вне PILOT).
-        Без dry-run preview.
+        Manage a MongoDB user (createUser/dropUser upsert) via go-mongo-driver.
+        state present — create the user (if missing), absent — remove it (if present).
+        Idempotent via usersInfo (already in the desired state → changed=false). ★ the first
+        admin is created via the localhost-exception (no-auth loopback connection, while the
+        admin DB is empty). Changing the password/roles of an existing user — day-2 (out of PILOT scope).
+        No dry-run preview.
       input:
         addr:
           type: string
           required: true
-          description: "Адрес mongod: host:port (обычно 127.0.0.1:27017)."
+          description: "mongod address: host:port (usually 127.0.0.1:27017)."
         name:
           type: string
           required: true
-          description: Имя MongoDB-юзера (createUser/dropUser).
+          description: MongoDB username (createUser/dropUser).
         state:
           type: string
           required: false
           default: present
-          description: "present (создать, если нет) / absent (удалить, если есть). Default present."
+          description: "present (create if missing) / absent (remove if present). Default present."
         database:
           type: string
           required: false
           description: >-
-            БД, в которой заводится юзер (login/roles-контекст). Default admin
-            (системные юзеры). Роли без явного db наследуют эту БД.
+            The DB in which the user is created (login/roles context). Default admin
+            (system users). Roles without an explicit db inherit this DB.
         password:
           type: string
           required: false
           secret: true
           pattern: "^vault:.*"
           description: >-
-            Пароль АДМИН-КОННЕКТА (под username создаётся юзер; vault-ref, keeper резолвит до
-            Apply). Уходит в коннект-кредлы; в события/логи не попадает. ★ Это НЕ пароль
-            создаваемого юзера (см. user_password) — кроме bootstrap первого admin, где admin
-            создаёт САМ СЕБЯ (password служит обоим при отсутствии user_password).
+            Password of the ADMIN CONNECTION (the user is created under username; vault ref, keeper resolves before
+            Apply). Goes into the connection credentials; does not end up in events/logs. ★ This is NOT the password
+            of the user being created (see user_password) — except for bootstrapping the first admin, where the admin
+            creates ITSELF (password serves both roles when user_password is not set).
         user_password:
           type: string
           required: false
           secret: true
           pattern: "^vault:.*"
           description: >-
-            Пароль СОЗДАВАЕМОГО юзера (pwd createUser-документа; vault-ref, keeper резолвит до
-            Apply). Отделён от password (коннект-auth admin): для operator-юзеров коннект под
-            admin-паролем, а createUser — с этим паролем. Не задан → fallback на password
-            (bootstrap первого admin: admin создаёт сам себя под тем же паролем). Маскируется.
+            Password of the CREATED user (pwd of the createUser document; vault ref, keeper resolves before
+            Apply). Separate from password (admin connection auth): for operator users the connection is under the
+            admin password, while createUser uses this password. Not set → falls back to password
+            (bootstrap of the first admin: the admin creates itself under the same password). Masked.
         roles:
           type: list
           required: false
           description: >-
-            Роли юзера (массив {role, db}) для state=present. Каждый элемент —
-            {role: "readWrite", db: "appdb"}. db без значения наследует database.
-            Обязателен непустым при present (юзер без ролей бессмыслен).
+            User roles (array of {role, db}) for state=present. Each element —
+            {role: "readWrite", db: "appdb"}. db with no value inherits database.
+            Required to be non-empty when present (a user without roles is meaningless).
         username:
           type: string
           required: false
           description: >-
-            ACL-username для AUTH-коннекта (админ, под которым создаётся юзер). При
-            bootstrap первого admin auth ещё невозможен → localhost-exception no-auth.
+            ACL username for the AUTH connection (the admin under which the user is created). During
+            bootstrap of the first admin, auth is not yet possible → localhost-exception no-auth.
         auth_db:
           type: string
           required: false
-          description: authenticationDatabase коннекта (default admin).
+          description: authenticationDatabase of the connection (default admin).
         tls:
           type: bool
           required: false
           default: false
-          description: "Коннектиться по TLS. По умолчанию false. PILOT: mongo в plain — не задаётся."
+          description: "Connect over TLS. Defaults to false. PILOT: mongo in plain — not set."
         tls_ca:
           type: string
           required: false
           secret: true
           pattern: "^vault:.*"
-          description: PEM CA для проверки серверного сертификата. Маскируется (secret).
+          description: CA PEM for verifying the server certificate. Masked (secret).
         tls_cert:
           type: string
           required: false
           secret: true
           pattern: "^vault:.*"
-          description: PEM client-cert для mTLS (опц., с tls_key). Маскируется (secret).
+          description: Client-cert PEM for mTLS (optional, with tls_key). Masked (secret).
         tls_key:
           type: string
           required: false
           secret: true
           pattern: "^vault:.*"
-          description: PEM client-key для mTLS (опц., с tls_cert). Маскируется (secret).
+          description: Client-key PEM for mTLS (optional, with tls_cert). Masked (secret).
         tls_skip_verify:
           type: bool
           required: false
           default: false
-          description: ЯВНЫЙ opt-out проверки сертификата. По умолчанию false (default secure).
-    # command — raw db.runCommand к MongoDB. Imperative verb-state (прецедент
-    # community.redis.command / core.exec.run): changed=false по умолчанию (probe);
-    # оператор отвечает за идемпотентность.
+          description: EXPLICIT opt-out of certificate verification. Defaults to false (default secure).
+    # command — raw db.runCommand to MongoDB. Imperative verb-state (precedent
+    # community.redis.command / core.exec.run): changed=false by default (probe);
+    # the operator is responsible for idempotency.
     #
-    # WARNING (ИБ): вывод команды — это ответ mongo, не управляемый плагином секрет,
-    # масками ADR-010 он НЕ покрыт (Output несёт только флаг ok). НЕ запускайте через
-    # command read-команды, возвращающие секреты (usersInfo с showCredentials) — их
-    # результат ушёл бы открытым текстом; для такого — no_log/специализированный state.
-    # Сам params.password при этом маскируется и в аргументы команды не попадает.
+    # WARNING (security): the command output is mongo's response, not a secret managed by the plugin,
+    # it is NOT covered by the ADR-010 masks (Output only carries the ok flag). DO NOT run
+    # via command read-commands that return secrets (usersInfo with showCredentials) — their
+    # result would end up in plaintext; use no_log/a specialized state for that instead.
+    # params.password itself is masked and does not end up in the command arguments.
     command:
       description: |
-        Выполнить raw-команду к MongoDB через db.runCommand (imperative verb-state).
-        По умолчанию changed=false (probe); оператор отвечает за идемпотентность.
-        Output.ok — флаг успеха ответа. Без dry-run preview.
+        Run a raw command against MongoDB via db.runCommand (imperative verb-state).
+        Defaults to changed=false (probe); the operator is responsible for idempotency.
+        Output.ok — success flag of the response. No dry-run preview.
       input:
         addr:
           type: string
           required: true
-          description: "Адрес mongod: host:port (обычно 127.0.0.1:27017)."
+          description: "mongod address: host:port (usually 127.0.0.1:27017)."
         db:
           type: string
           required: false
-          description: Целевая БД для runCommand (default admin).
+          description: Target DB for runCommand (default admin).
         command:
           type: map
           required: true
           description: >-
-            bson-документ команды (первый/единственный ключ — имя команды), напр.
-            { serverStatus: 1 } или { collStats: "events" }. Для PILOT — single-field команды.
+            bson document of the command (first/only key — the command name), e.g.
+            { serverStatus: 1 } or { collStats: "events" }. For PILOT — single-field commands.
         username:
           type: string
           required: false
-          description: ACL-username для AUTH.
+          description: ACL username for AUTH.
         password:
           type: string
           required: false
           secret: true
           pattern: "^vault:.*"
           description: >-
-            Пароль MongoDB (vault-ref; keeper резолвит до Apply). Маскируется — в
-            аргументы команды не передаётся (уходит в коннект).
+            MongoDB password (vault ref; keeper resolves before Apply). Masked — is not
+            passed into the command arguments (goes into the connection).
         auth_db:
           type: string
           required: false
@@ -272,33 +272,33 @@ spec:
           required: false
           default: false
           description: >-
-            Пометить результат как changed=true (для команд, реально мутирующих
-            состояние). По умолчанию false (probe-семантика).
+            Mark the result as changed=true (for commands that actually mutate
+            state). Defaults to false (probe semantics).
         tls:
           type: bool
           required: false
           default: false
-          description: "Коннектиться по TLS. По умолчанию false. PILOT: mongo в plain — не задаётся."
+          description: "Connect over TLS. Defaults to false. PILOT: mongo in plain — not set."
         tls_ca:
           type: string
           required: false
           secret: true
           pattern: "^vault:.*"
-          description: PEM CA для проверки серверного сертификата. Маскируется (secret).
+          description: CA PEM for verifying the server certificate. Masked (secret).
         tls_cert:
           type: string
           required: false
           secret: true
           pattern: "^vault:.*"
-          description: PEM client-cert для mTLS (опц., с tls_key). Маскируется (secret).
+          description: Client-cert PEM for mTLS (optional, with tls_key). Masked (secret).
         tls_key:
           type: string
           required: false
           secret: true
           pattern: "^vault:.*"
-          description: PEM client-key для mTLS (опц., с tls_cert). Маскируется (secret).
+          description: Client-key PEM for mTLS (optional, with tls_cert). Masked (secret).
         tls_skip_verify:
           type: bool
           required: false
           default: false
-          description: ЯВНЫЙ opt-out проверки сертификата. По умолчанию false (default secure).
+          description: EXPLICIT opt-out of certificate verification. Defaults to false (default secure).

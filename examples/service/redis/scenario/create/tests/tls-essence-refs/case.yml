@@ -1,11 +1,11 @@
-# L0-испытание (Trial, ADR-023): TLS через 2 галочки + essence-параметры (#5). Оператор
-# включает only-TLS галочками (tls_enabled=true, tls_keep_plain=false), а технические
-# параметры — НЕстандартный tls_port 7400 (бьёт дефолт 7379) и Vault-пути PEM под
-# operator-конвенцией secret/ops/redis/tls — живут в essence (author-context, оператор
-# переопределяет в spec.essence под свою инсталляцию). Guard: tls_port из essence даёт
-# tls-port 7400 в redis.conf; refs из essence идут в vault(ref) → PEM в content
-# (seal-маскинг). Доказывает разделение: включение TLS — операторские галочки, порт/
-# пути — essence-подложка.
+# L0 test (Trial, ADR-023): TLS via 2 checkboxes + essence parameters (#5). The operator
+# enables only-TLS via checkboxes (tls_enabled=true, tls_keep_plain=false), while the technical
+# parameters — a NON-standard tls_port 7400 (overriding the default 7379) and Vault paths for PEM under
+# the operator convention secret/ops/redis/tls — live in essence (author-context, the operator
+# overrides it in spec.essence for their own install). Guard: tls_port from essence yields
+# tls-port 7400 in redis.conf; refs from essence go through vault(ref) → PEM in content
+# (seal masking). Proves the separation: enabling TLS is operator checkboxes, port/
+# paths are essence substrate.
 name: tls enabled by checkboxes uses essence port and vault refs
 
 fixtures:
@@ -19,10 +19,10 @@ fixtures:
   vault:
     secret/redis/create:
       password: s3cr3t-redis-pass-create
-    # Per-user секреты системных юзеров (secret/redis/<inc>/users/<name>#password) —
-    # их резолвит keeper-side vault() при доливе system_acl_users в apply.input.users.
-    # ★ РЕДИЗАЙН default_admin (2026-06-30): default_admin — системный юзер
-    # внутрикластерного AUTH (auth_pass/PING шаги деплоя читают его по ветке users/<name>).
+    # Per-user secrets of system users (secret/redis/<inc>/users/<name>#password) —
+    # resolved by keeper-side vault() when merging system_acl_users into apply.input.users.
+    # ★ REDESIGN default_admin (2026-06-30): default_admin — the system user
+    # for intra-cluster AUTH (auth_pass/PING deploy steps read it via the users/<name> branch).
     secret/redis/create/users/default_admin:
       password: default-admin-secret-pass
     secret/redis/create/users/replica:
@@ -33,18 +33,18 @@ fixtures:
       password: sentinel-sys-secret-pass
     secret/redis/create/users/haproxy:
       password: haproxy-sys-secret-pass
-    # PEM по essence.tls_*_ref (operator-конвенция secret/ops/redis/tls).
+    # PEM via essence.tls_*_ref (operator convention secret/ops/redis/tls).
     secret/ops/redis/tls:
       cert: "-----BEGIN CERTIFICATE-----\nOPCERT\n-----END CERTIFICATE-----"
       key:  "-----BEGIN PRIVATE KEY-----\nOPKEY\n-----END PRIVATE KEY-----"
       ca:   "-----BEGIN CERTIFICATE-----\nOPCA\n-----END CERTIFICATE-----"
   essence:
-    # install_method — в essence (author-context, 2026-06-28): способ установки
-    # НЕ operator-input. compute.install читает default(essence.install_method, 'binary').
+    # install_method — in essence (author-context, 2026-06-28): install method is
+    # NOT operator-input. compute.install reads default(essence.install_method, 'binary').
     install_method: package
     redis_type: sentinel
     sentinel_master_name: master
-    # ★ Редизайн: подложка per-master sentinel-дефолтов (под input.sentinel_master_settings).
+    # ★ Redesign: substrate for per-master sentinel defaults (backing input.sentinel_master_settings).
     sentinel_master_defaults:
       down-after-milliseconds: "5000"
       failover-timeout:        "60000"
@@ -59,17 +59,17 @@ fixtures:
       maxmemory-policy: allkeys-lru
       maxclients:       10000
       timeout:          300
-    # ★ #5: TLS-параметры в essence: НЕстандартный порт 7400 (бьёт дефолт 7379) +
-    # operator-конвенция Vault-путей PEM. Режим канала — input.connection_mode.
+    # ★ #5: TLS parameters in essence: NON-standard port 7400 (overriding the default 7379) +
+    # operator convention for Vault PEM paths. Channel mode — input.connection_mode.
     tls_port:     7400
     tls_cert_ref: "secret/ops/redis/tls#cert"
     tls_key_ref:  "secret/ops/redis/tls#key"
     tls_ca_ref:   "secret/ops/redis/tls#ca"
 
-    # Системные ACL-юзеры redis-server + sentinel-демона (1:1 из essence/_default.yaml).
-    # ОБА ОБЯЗАТЕЛЬНЫ: guard create/sentinel.yml (assert 1b) рвёт render при пустом
-    # любом из наборов (тихий fail-open недопустим — без них репликация/sentinel↔redis
-    # AUTH сломались бы).
+    # System ACL users of redis-server + the sentinel daemon (1:1 from essence/_default.yaml).
+    # BOTH REQUIRED: the create/sentinel.yml guard (assert 1b) breaks the render if either
+    # set is empty (a silent fail-open is unacceptable — without them replication/sentinel↔redis
+    # AUTH would break).
     system_acl_users:
       default_admin: "~* &* +@all"
       replica:    "+psync +replconf +ping"
@@ -82,23 +82,23 @@ fixtures:
       sentinel:   "allchannels -@all +auth +client|getname +client|id +client|setname +command +hello +ping +sentinel|is-master-down-by-addr +publish +role +sentinel|get-master-addr-by-name +sentinel|master +sentinel|myid +sentinel|replicas +sentinel|sentinels"
       haproxy:    "-@all +auth +client|getname +client|id +client|setname +command +hello +ping +role +sentinel|get-master-addr-by-name +sentinel|master +sentinel|myid +sentinel|replicas +sentinel|sentinels"
   input:
-    # ★ provision выключен (default-on: опущенная секция = ВКЛЮЧЕНО; кейс деплоит на
-    # ГОТОВЫЙ roster, cloud-create не нужен) → include redis-provision.yml group-drop.
+    # ★ provision disabled (default-on: an omitted section = ENABLED; the case deploys onto
+    # a READY roster, cloud-create not needed) → include redis-provision.yml group-drop.
     provision:
       enabled: false
     redis_type: sentinel
     version: "7.4.1"
     persistence: rdb
-    # single-host (1 хост) → 0 реплик (default редизайна 2): size-guard sentinel = 1+0.
+    # single-host (1 host) → 0 replicas (redesign-2 default): size-guard sentinel = 1+0.
     replicas_per_master: 0
-    # ★ Редизайн: connection_mode=tls — только-TLS (plain закрыт, port 0). Заменяет
-    # прежние tls_enabled=true + tls_keep_plain=false.
+    # ★ Redesign: connection_mode=tls — TLS-only (plain closed, port 0). Replaces
+    # the former tls_enabled=true + tls_keep_plain=false.
     connection_mode: tls
 
 assert:
   task_present:
     # TLS server cert: content = vault(essence.tls_cert_ref) → operator-PEM.
-    # Дизамбигуатор PEM (тот же core.file.present) — path.
+    # PEM disambiguator (same core.file.present) — path.
     - module: core.file.present
       params_subset:
         path: /etc/redis/tls/redis.crt
@@ -116,9 +116,9 @@ assert:
         owner: redis
         group: redis
 
-    # redis.conf: TLS-директивы на порту 7400 из essence (бьёт дефолт 7379) + port 0
-    # (only). КРИТИЧНО: tls-port 7400 доказывает, что essence.tls_port победил.
-    # Дизамбигуатор от users.acl/hardening — path.
+    # redis.conf: TLS directives on port 7400 from essence (overrides default 7379) + port 0
+    # (only). CRITICAL: tls-port 7400 proves essence.tls_port won.
+    # Disambiguator from users.acl/hardening — path.
     - module: core.file.rendered
       params_subset:
         path: /etc/redis/redis.conf
@@ -135,10 +135,10 @@ assert:
               - /var/lib/redis/modules/redisearch.so
               - /var/lib/redis/modules/redistimeseries.so
             config:
-              # ★ РЕДИЗАЙН default_admin: replica→master AUTH (masteruser/
-              # masterauth) приходит ОБЫЧНЫМИ директивами config (sentinel
-              # deploy-body доливает их vault()-в-ячейке) → redis.conf range-ит
-              # их как любую директиву → статически переживают рестарт.
+              # ★ REDESIGN default_admin: replica→master AUTH (masteruser/
+              # masterauth) arrives as ORDINARY config directives (the sentinel
+              # deploy-body merges them via vault()-in-cell) → redis.conf ranges
+              # over them like any directive → they statically survive a restart.
               masteruser:       "default_admin"
               masterauth:       "default-admin-secret-pass"
               port: "0"
@@ -158,7 +158,7 @@ assert:
             sid: node-solo.example.com
             covens: [create]
             choirs: []
-            # traits — registry-проекция (ADR-060), пустой объект без меток.
+            # traits — registry projection (ADR-060), empty object with no labels.
             traits: {}
             role: ""
             network:
@@ -168,8 +168,8 @@ assert:
           role: ""
           essence: {}
 
-    # PING: tls=true, addr на tls_port 7400 (essence), tls_ca = operator-CA-PEM.
-    # cluster/sentinel PING — placeholder-skip; дизамбигуатор addr/args.
+    # PING: tls=true, addr on tls_port 7400 (essence), tls_ca = operator-CA-PEM.
+    # cluster/sentinel PING — placeholder-skip; disambiguator addr/args.
     - module: community.redis.command
       params_subset:
         addr: "127.0.0.1:7400"

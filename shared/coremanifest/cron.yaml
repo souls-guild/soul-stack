@@ -10,13 +10,13 @@ required_capabilities:
 spec:
   states:
     present:
-      description: Job-файл /etc/cron.d/<name> с заданным расписанием и командой (ADR-015).
+      description: Job file /etc/cron.d/<name> with the given schedule and command (ADR-015).
       input:
-        name:     { type: string, required: true, description: "Имя job (= имя файла в /etc/cron.d, [A-Za-z0-9_-])." }
-        schedule: { type: string, required: true, description: "Cron-расписание (5 полей), напр. \"0 3 * * *\"." }
-        command:  { type: string, required: true, description: "Команда, запускаемая по расписанию." }
-        user:     { type: string, description: "Пользователь запуска (default root)." }
+        name:     { type: string, required: true, description: "Job name (= file name in /etc/cron.d, [A-Za-z0-9_-])." }
+        schedule: { type: string, required: true, description: "Cron schedule (5 fields), e.g. \"0 3 * * *\"." }
+        command:  { type: string, required: true, description: "Command run on schedule." }
+        user:     { type: string, description: "User to run as (default root)." }
     absent:
-      description: Job-файл удалён.
+      description: Job file removed.
       input:
-        name: { type: string, required: true, description: "Имя job (= имя файла в /etc/cron.d)." }
+        name: { type: string, required: true, description: "Job name (= file name in /etc/cron.d)." }

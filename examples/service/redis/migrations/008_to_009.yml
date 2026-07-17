@@ -2,23 +2,25 @@ from_version: 8
 to_version: 9
 
 description: >-
-  state_schema v8 → v9: seed-source read-model (S1-пилот migrate_cluster). state
-  ДОПОЛНЯЕТСЯ вложенным объектом:
-    - seeded_from {source_endpoints: array string, detached: bool} — ОТКУДА залиты
-      данные при миграции с внешнего Redis-кластера. source_endpoints — адреса
-      источника; detached — отцеплён ли источник (false после migrate, источник ещё
-      жив; true после day-2 detach_source). Время в state НЕ кладём — детерминизм L0
-      (now() в migration-CEL запрещён ADR-019); момент берётся из state_history
-      (snapshot per-change несёт время). Timestamps в самом state — отложенный S-batch.
+  state_schema v8 → v9: seed-source read-model (S1 pilot for migrate_cluster). state
+  gains a nested object:
+    - seeded_from {source_endpoints: array string, detached: bool} — WHERE the data
+      came from when migrating from an external Redis cluster. source_endpoints —
+      the source addresses; detached — whether the source has been detached (false
+      after migrate, source still alive; true after a later detach_source run). We
+      do NOT store time in state — L0 determinism (now() is forbidden in
+      migration-CEL by ADR-019); the moment is taken from state_history (each
+      change's snapshot carries the time). Timestamps in state itself are a
+      deferred S-batch.
 
-  Forward-only (down: не поддерживается; восстановление — через state_history).
-  Существующие инкарнации развёрнуты обычным create (БЕЗ миграции с внешнего
-  кластера) → консервативный default: {source_endpoints: [], detached: false}.
-  ОДИН плоский set; has()-guard на ВЕСЬ объект (CEL-map-литерал-дефолт): seeded_from
-  уже есть → сохраняется как есть, иначе ставится дефолт целиком. Зеркало паттерна
-  006_to_007/007_to_008, но guard на объекте (не на отдельных листьях), т.к.
-  seeded_from — единый вложенный объект, а не набор независимых скаляров. Остальной
-  state НЕ трогается.
+  Forward-only (down: not supported; recovery — via state_history). Existing
+  incarnations were deployed via a plain create (WITHOUT migrating from an
+  external cluster) → conservative default: {source_endpoints: [], detached:
+  false}. ONE flat set; has()-guard on the WHOLE object (CEL map-literal
+  default): if seeded_from already exists — kept as is, otherwise the default is
+  set as a whole. Mirrors the 006_to_007/007_to_008 pattern, but the guard is on
+  the object (not on individual leaves), since seeded_from is a single nested
+  object, not a set of independent scalars. The rest of state is left untouched.
 
 transform:
   - set:

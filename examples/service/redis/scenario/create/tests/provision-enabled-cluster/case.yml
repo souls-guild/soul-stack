@@ -1,14 +1,14 @@
-# L0-испытание provision (ADR-061, Вариант A) — режим cluster, provision ВКЛЮЧЁН.
-# Парный к provision-enabled-sentinel: проверяет, что ЧИСЛО VM выводится из
-# cluster-топологии = shards*(1+replicas_per_master), а не из 1+replicas (sentinel).
-# shards=2, replicas_per_master=1 → count = 2*(1+1) = 4. Это главный guard: count
-# ветвится по input.redis_type (provision.yml шаг (а)), для cluster берётся формула
-# шардов.
+# L0 provision trial (ADR-061, Option A) — cluster mode, provision ENABLED.
+# Paired with provision-enabled-sentinel: verifies that the VM COUNT is derived from the
+# cluster topology = shards*(1+replicas_per_master), not from 1+replicas (sentinel).
+# shards=2, replicas_per_master=1 → count = 2*(1+1) = 4. This is the main guard: count
+# branches on input.redis_type (provision.yml step (a)); for cluster the shard formula
+# is used.
 #
-# ★ register.provision — из mocks.register (L0-проброс core.cloud.created, шаг (а) не
-# исполняется): шаги (б)/(в) и state_changes читают vm_ids/hosts отсюда. Roster — 4
-# хоста (в проде их даёт refresh_soulprint; в L0 mid-run re-resolve — stub, roster =
-# статичный fixture).
+# ★ register.provision — from mocks.register (L0 stand-in for core.cloud.created, step (a)
+# is not executed): steps (b)/(c) and state_changes read vm_ids/hosts from here. The roster
+# is 4 hosts (in production refresh_soulprint provides them; in an L0 mid-run re-resolve is
+# stubbed, so the roster is a static fixture).
 name: provision enabled in cluster mode sizes VM count from shards (count = shards * (1 + replicas))
 
 fixtures:
@@ -37,9 +37,10 @@ fixtures:
   vault:
     secret/redis/create:
       password: s3cr3t-redis-pass-create
-    # ★ РЕДИЗАЙН default_admin (2026-06-30): default_admin — системный юзер внутрикластерного
-    # AUTH; cluster-build (community.redis.cluster) и masteruser/masterauth деплоя читают его
-    # пароль ветки users/default_admin (главный секрет ДРОПНУТ из деплой-тел).
+    # ★ default_admin REDESIGN (2026-06-30): default_admin is the system user for
+    # intra-cluster AUTH; cluster-build (community.redis.cluster) and the deploy's
+    # masteruser/masterauth read its password from the users/default_admin branch (the main
+    # secret is DROPPED from the deploy body).
     secret/redis/create/users/default_admin:
       password: default-admin-secret-pass
     secret/redis/create/users/replica:
@@ -51,8 +52,8 @@ fixtures:
     secret/redis/create/users/haproxy:
       password: haproxy-sys-secret-pass
   essence:
-    # install_method — в essence (author-context, 2026-06-28): способ установки
-    # НЕ operator-input. compute.install читает default(essence.install_method, 'binary').
+    # install_method — in essence (author-context, 2026-06-28): the install method is
+    # NOT operator input. compute.install reads default(essence.install_method, 'binary').
     install_method: package
     redis_type: cluster
     modules_base_url: "https://artifacts.example.com/redis/modules"
@@ -76,8 +77,9 @@ fixtures:
   input:
     redis_type: cluster
     version: "7.4.1"
-    # install_method=package ЯВНО: кейс про provision-поток (count из cluster-топологии),
-    # не про install. default редизайна binary → package-ветка (assert сверяет cloud/cluster).
+    # install_method=package EXPLICITLY: this case is about the provision flow (count from
+    # the cluster topology), not about install. The redesign's default is binary → the
+    # package branch here (the assert checks cloud/cluster).
     shards: 2
     replicas_per_master: 1
     provision:
@@ -87,10 +89,11 @@ fixtures:
       await_timeout: "5m"
       ssh_provider: ssh-wb
 
-# register.provision — готовый payload core.cloud.created (L0-проброс). 4 VM под
-# cluster-топологию (2 шарда * 2). sid-ы = SID-ы roster-а. bootstrap_token — per-VM
-# one-time (в проде маскируется audit.MaskSecrets на всех выходах; здесь нужен, т.к.
-# core.bootstrap.delivered шаг (б) читает register.provision.hosts[].bootstrap_token).
+# register.provision — the ready-made core.cloud.created payload (L0 stand-in). 4 VMs for
+# the cluster topology (2 shards * 2). sids = the roster's SIDs. bootstrap_token is per-VM
+# one-time (in production it's masked by audit.MaskSecrets on every output; needed here
+# because core.bootstrap.delivered step (b) reads
+# register.provision.hosts[].bootstrap_token).
 mocks:
   register:
     provision:
@@ -103,32 +106,33 @@ mocks:
 
 assert:
   task_present:
-    # (а) core.cloud.created: count = shards*(1+replicas) = 2*(1+1) = 4 (НЕ 1+replicas).
-    # generate_userdata: false — VM без cloud-init, setup ставит шаг (б) install: true.
+    # (a) core.cloud.created: count = shards*(1+replicas) = 2*(1+1) = 4 (NOT 1+replicas).
+    # generate_userdata: false — VMs without cloud-init; step (b) install: true handles setup.
     - module: core.cloud.created
       params_subset:
         provider: wb-dev
         profile: redis-small
         count: 4
-        # name — run-identity батча = incarnation.name (здесь "create"): драйвер именует VM
-        # <name>-<seq> + label soulstack-run=<name> (идемпотентность прогона, NIM-16).
+        # name — the batch run-identity = incarnation.name (here "create"): the driver names
+        # VMs <name>-<seq> + label soulstack-run=<name> (run idempotency, NIM-16).
         name: create
         generate_userdata: false
 
-    # (б) core.bootstrap.delivered: install + доставка per-VM bootstrap-токена по SSH
-    # (ADR-063, provision.yml шаг (б)). Guard на ПРИСУТСТВИЕ шага + install: true (VM
-    # без cloud-init, setup ставится по SSH) + форму hosts: ${ register.provision.hosts }
-    # (весь payload register, 4 VM с bootstrap_token) + ssh_provider из input.provision.
-    # При смене контракта доставки (имя модуля / install / форма hosts / ssh_provider)
-    # этот ассерт упадёт — без него регресс прошёл бы молча (шаг не сверялся ни одним
-    # provision-тестом). Единственный core.bootstrap.delivered в плане → дизамбигуатор
-    # не нужен.
+    # (b) core.bootstrap.delivered: install + per-VM bootstrap-token delivery over SSH
+    # (ADR-063, provision.yml step (b)). Guards the PRESENCE of the step + install: true
+    # (VMs without cloud-init, setup is delivered over SSH) + the shape of hosts:
+    # ${ register.provision.hosts } (the whole register payload, 4 VMs with bootstrap_token)
+    # + ssh_provider from input.provision. If the delivery contract changes (module name /
+    # install / hosts shape / ssh_provider) this assert breaks — without it a regression
+    # would pass silently (no provision test checked this step). The only
+    # core.bootstrap.delivered in the plan → no disambiguator needed.
     - module: core.bootstrap.delivered
       params_subset:
         ssh_provider: ssh-wb
         install: true
-        # join_wait_timeout — из essence.provision_join_wait_timeout (input.provision его
-        # не задаёт). Guard: essence-дефолт доходит до шага (не хардкод), duration-строка.
+        # join_wait_timeout — from essence.provision_join_wait_timeout (input.provision
+        # doesn't set it). Guard: the essence default reaches the step (not hardcoded), a
+        # duration string.
         join_wait_timeout: "55m"
         hosts:
           - { sid: vm-1.example.com, vm_id: i-aaa111, primary_ip: 10.0.0.1, bootstrap_token: tok-vm1 }
@@ -136,8 +140,9 @@ assert:
           - { sid: vm-3.example.com, vm_id: i-ccc333, primary_ip: 10.0.0.3, bootstrap_token: tok-vm3 }
           - { sid: vm-4.example.com, vm_id: i-ddd444, primary_ip: 10.0.0.4, bootstrap_token: tok-vm4 }
 
-    # (в) core.soul.registered: sid — список SID созданных VM; await_online +
-    # refresh_soulprint; await_timeout из input.provision (5m, перекрывает essence-дефолт).
+    # (c) core.soul.registered: sid — the list of SIDs of the created VMs; await_online +
+    # refresh_soulprint; await_timeout from input.provision (5m, overrides the essence
+    # default).
     - module: core.soul.registered
       params_subset:
         sid: [vm-1.example.com, vm-2.example.com, vm-3.example.com, vm-4.example.com]
@@ -146,13 +151,13 @@ assert:
         refresh_soulprint: true
         await_timeout: "5m"
 
-    # (г) core.module.installed: доставка SoulModule-плагина community.redis на созданные
-    # хосты ДО первой community.redis.*-задачи деплой-ветки (ADR-065).
+    # (d) core.module.installed: delivers the community.redis SoulModule plugin to the
+    # created hosts BEFORE the first community.redis.* task of the deploy branch (ADR-065).
     - module: core.module.installed
       params_subset:
         name: community.redis
 
-    # cluster-build катится после provision (nodes-MAP всех 4 хостов).
+    # cluster-build rolls out after provision (nodes-MAP of all 4 hosts).
     - module: community.redis.cluster
       params_subset:
         action: create
@@ -162,8 +167,8 @@ assert:
     redis_type: cluster
     redis_version: "7.4.1"
     provisioned_vm_ids: [i-aaa111, i-bbb222, i-ccc333, i-ddd444]
-    # provisioned_sids: SID каждой созданной VM (register.provision.hosts[].sid) — для
+    # provisioned_sids: the SID of each created VM (register.provision.hosts[].sid) — for
     # cascade-destroy teardown (souls→destroyed/seeds→orphaned/tokens→burned).
-    # Тот же guard+форма, что provisioned_vm_ids (input.provision.enabled → .map(h, h.sid)).
+    # Same guard+shape as provisioned_vm_ids (input.provision.enabled → .map(h, h.sid)).
     provisioned_sids: [vm-1.example.com, vm-2.example.com, vm-3.example.com, vm-4.example.com]
     provisioned_provider: wb-dev

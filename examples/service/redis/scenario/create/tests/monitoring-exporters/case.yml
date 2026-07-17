@@ -1,21 +1,22 @@
-# L0-испытание create: ОБЯЗАТЕЛЬНЫЙ мониторинг data-плоскости (Слайс I, redis-пилот).
-# После deploy-ветки (sentinel/cluster) create БЕЗУСЛОВНО (без when-гейта) разворачивает
-# два экспортера КОМПОЗИЦИЕЙ переиспользуемых standalone-destiny через apply:destiny:
-#   - node-exporter  — метрики хоста (version/listen из essence, arch — soulprint.self);
-#   - redis-exporter — метрики Redis через unix-сокет, авторизуется ACL-юзером monitoring.
+# L0 test for create: MANDATORY data-plane monitoring (Slice I, redis pilot).
+# After the deploy branch (sentinel/cluster), create UNCONDITIONALLY (no when-gate) deploys
+# two exporters via COMPOSITION of reusable standalone destinies through apply:destiny:
+#   - node-exporter  — host metrics (version/listen from essence, arch — soulprint.self);
+#   - redis-exporter — Redis metrics via unix socket, authorizes with the monitoring ACL user.
 #
-# Доказываем:
-#   1. node-exporter развёрнут: install бинаря в /usr/local/bin/node_exporter (маркер
-#      присутствия под-destiny; version/arch → в url/extract, тут не сверяем);
-#   2. redis-exporter развёрнут: его systemd-unit собран из vars, где
-#      redis_user=monitoring (★ находка B: ACL-инстанс без requirepass → без --redis.user
-#      exporter получит WRONGPASS), redis_addr=unix://<socket> и password — зарезолвленный
-#      keeper-side пароль ACL-юзера monitoring (secret/redis/<inc>/users/monitoring#password);
-#   3. read-model state.monitoring несёт зафиксированные версии/порты экспортеров (симметрия
-#      install/tls read-model); пароль/юзер в state НЕ материализуются (ИБ).
+# What we prove:
+#   1. node-exporter is deployed: binary install to /usr/local/bin/node_exporter (marker
+#      of sub-destiny presence; version/arch → in url/extract, not checked here);
+#   2. redis-exporter is deployed: its systemd unit is built from vars, where
+#      redis_user=monitoring (* finding B: an ACL instance without requirepass → without
+#      --redis.user the exporter would get WRONGPASS), redis_addr=unix://<socket> and
+#      password — the resolved keeper-side password of the monitoring ACL user
+#      (secret/redis/<inc>/users/monitoring#password);
+#   3. the read-model state.monitoring carries recorded exporter versions/ports (symmetric
+#      with the install/tls read-model); password/user are NOT materialized in state (security).
 #
-# Топология: sentinel, replicas_per_master=0 → 1 хост (size-guard PASS). provision выключен
-# (кейс деплоит на готовый roster). render_context.self = единственный хост (node-a).
+# Topology: sentinel, replicas_per_master=0 → 1 host (size-guard PASS). provision is disabled
+# (the case deploys onto a ready roster). render_context.self = the single host (node-a).
 name: create deploys mandatory node and redis exporters after deploy with monitoring ACL user
 
 fixtures:
@@ -33,7 +34,7 @@ fixtures:
       password: default-admin-secret-pass
     secret/redis/create/users/replica:
       password: replica-sys-secret-pass
-    # ★ пароль ACL-юзера monitoring — им авторизуется redis-exporter (проброс в unit).
+    # * password of the monitoring ACL user — redis-exporter authorizes with it (passed into the unit).
     secret/redis/create/users/monitoring:
       password: monitoring-sys-secret-pass
     secret/redis/create/users/sentinel:
@@ -54,14 +55,14 @@ fixtures:
       maxmemory-policy: allkeys-lru
       maxclients:       10000
       timeout:          300
-    # ★ Новые essence-ключи мониторинга (Слайс I): версии/порты/sha экспортеров.
+    # * New monitoring essence keys (Slice I): exporter versions/ports/sha.
     node_exporter_version: "1.8.2"
     node_exporter_listen: ":9100"
     redis_exporter_version: "1.62.0"
     redis_exporter_sha256: "sha256:0000000000000000000000000000000000000000000000000000000000000000"
     redis_exporter_listen: ":9121"
-    # ★ essence-ключи log-shipping (Слайс V-I, ADR-067): версия/checksum/sink агента vector.
-    # console sink (дефолт) — endpoint/auth не нужны; log_sources = redis-логи.
+    # * log-shipping essence keys (Slice V-I, ADR-067): version/checksum/sink of the vector agent.
+    # console sink (default) — endpoint/auth not needed; log_sources = redis logs.
     vector_version: "0.40.0"
     vector_sha256: "sha256:0000000000000000000000000000000000000000000000000000000000000000"
     vector_sink_type: console
@@ -86,19 +87,19 @@ fixtures:
 
 assert:
   task_present:
-    # 1. node-exporter развёрнут (apply:destiny node-exporter → install бинаря). Маркер
-    #    присутствия под-destiny: единственный core.file.present с path бинаря node_exporter.
+    # 1. node-exporter is deployed (apply:destiny node-exporter → binary install). Marker
+    #    of sub-destiny presence: the single core.file.present with the node_exporter binary path.
     - module: core.file.present
       params_subset:
         path: /usr/local/bin/node_exporter
         mode: "0755"
 
-    # 2. redis-exporter развёрнут (apply:destiny redis-exporter → render systemd-unit).
-    #    ★ redis_user=monitoring — ключевой assert находки B (без него WRONGPASS на ACL).
-    #    redis_addr — unix-сокет (дефолт destiny), password — зарезолвленный keeper-side
-    #    пароль ACL-юзера monitoring. render_context сверяется ПОЛНОСТЬЮ (deep-compare
-    #    вложенного map): vars несёт все 6 файл-vars, self — единственный хост, essence
-    #    пуст (изоляция под-destiny, ADR-009). Дизамбигуатор от node_exporter unit — path.
+    # 2. redis-exporter is deployed (apply:destiny redis-exporter → render systemd unit).
+    #    * redis_user=monitoring — the key assert for finding B (without it, WRONGPASS on the ACL).
+    #    redis_addr — unix socket (destiny default), password — the resolved keeper-side
+    #    password of the monitoring ACL user. render_context is checked FULLY (deep-compare
+    #    of the nested map): vars carries all 6 file vars, self is the single host, essence
+    #    is empty (sub-destiny isolation, ADR-009). Disambiguator from the node_exporter unit — path.
     - module: core.file.rendered
       params_subset:
         path: /etc/systemd/system/redis_exporter.service
@@ -127,9 +128,9 @@ assert:
           role: ""
           essence: {}
 
-    # 3. vector развёрнут (apply:destiny vector → install бинаря). Маркер присутствия
-    #    под-destiny log-shipping (Слайс V-I): единственный core.file.present с path бинаря
-    #    vector. version/arch → в url/extract, sink console (дефолт) — тут не сверяем.
+    # 3. vector is deployed (apply:destiny vector → binary install). Marker of presence of
+    #    the log-shipping sub-destiny (Slice V-I): the single core.file.present with the
+    #    vector binary path. version/arch → in url/extract, sink console (default) — not checked here.
     - module: core.file.present
       params_subset:
         path: /usr/local/bin/vector
@@ -138,15 +139,15 @@ assert:
   state_changes:
     redis_type: sentinel
     redis_version: "7.4.1"
-    # read-model мониторинга: версии/порты экспортеров (симметрия install/tls). Пароль/юзер
-    # НЕ в state (ИБ) — их тут нет намеренно.
+    # monitoring read-model: exporter versions/ports (symmetric with install/tls). Password/user
+    # are NOT in state (security) — intentionally absent here.
     monitoring:
       node_exporter_version: "1.8.2"
       redis_exporter_version: "1.62.0"
       node_exporter_listen: ":9100"
       redis_exporter_listen: ":9121"
-    # read-model log-shipping (Слайс V-I, ADR-067): версия/sink/источники агента vector.
-    # sink_auth_ref (токен коллектора) НЕ в state (ИБ) — намеренно отсутствует.
+    # log-shipping read-model (Slice V-I, ADR-067): vector agent version/sink/sources.
+    # sink_auth_ref (collector token) is NOT in state (security) — intentionally absent.
     logging:
       vector_version: "0.40.0"
       vector_sink_type: console

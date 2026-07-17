@@ -1,9 +1,9 @@
-# L0-испытание (Trial, ADR-023) сценария copy-config сервиса hello-world.
+# L0 test (Trial, ADR-023) for the copy-config scenario of the hello-world service.
 #
-# Render-only, герметично. Проверяет, что core.file.present с src проходит
-# render-пайплайн: src приходит из input.src (CEL ${ input.src }) как абсолютный
-# путь, content в задаче НЕ появляется (взаимоисключение src/content, ADR-015),
-# mode — литерал 0640.
+# Render-only, hermetic. Verifies that core.file.present with src passes through the
+# render pipeline: src comes from input.src (CEL ${ input.src }) as an absolute
+# path, content does NOT appear in the task (src/content are mutually exclusive, ADR-015),
+# mode is the literal 0640.
 name: copy-config renders core.file.present with src from input
 
 fixtures:
@@ -12,7 +12,7 @@ fixtures:
 
 assert:
   task_present:
-    # Единственная задача плана.
+    # The only task in the plan.
     - module: core.file.present
       params_subset:
         path: /etc/soul-stack/app.conf

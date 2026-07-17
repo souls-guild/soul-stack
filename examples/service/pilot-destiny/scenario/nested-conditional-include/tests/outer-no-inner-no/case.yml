@@ -1,6 +1,6 @@
-# L0-испытание (Trial, ADR-023): outer='no', inner='no' → план пуст (внешняя группа
-# дропнута, вложенная — каскадом). Симметрия outer-no-inner-yes без зависимости от
-# inner-значения: ложный outer достаточен для дропа обеих задач.
+# L0 test level (Trial, ADR-023): outer='no', inner='no' → the plan is empty (the outer
+# group is dropped, the nested one cascades). Symmetric with outer-no-inner-yes without
+# depending on the inner value: a false outer alone is enough to drop both tasks.
 name: nested conditional-include drops everything when outer is no (inner no)
 
 fixtures:

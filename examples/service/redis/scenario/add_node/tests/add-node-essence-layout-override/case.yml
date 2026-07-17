@@ -1,16 +1,16 @@
-# L0-испытание add_node — host-layout ИЗ ESSENCE читается (v11→v12, Вариант A, парный
-# с add-node-legacy-state-defaults). Guard: когда essence ПЕРЕОПРЕДЕЛЯЕТ conf_dir/
-# data_dir/modules_base_url, add_node кладёт redis.conf/.so под ЭТИ пути (не дефолтные) —
-# новая нода получает ТОТ ЖЕ layout, что кластер. Регресс «add_node игнорирует essence-
-# override layout» (читает дефолт или state вместо essence) = redis.conf/.so разойдутся
-# с кластером → нода недоступна/без модулей.
+# L0 test for add_node — host-layout is read FROM ESSENCE (v11→v12, Option A, paired
+# with add-node-legacy-state-defaults). Guard: when essence OVERRIDES conf_dir/
+# data_dir/modules_base_url, add_node places redis.conf/.so under THOSE paths (not the
+# defaults) — the new node gets the SAME layout as the cluster. Regression "add_node
+# ignores the essence override layout" (reads default or state instead of essence) =
+# redis.conf/.so diverge from the cluster → node unreachable/missing modules.
 #
-# essence с override: conf_dir=/opt/redis, data_dir=/srv/redis-data, непустой
-# modules_base_url (redis_version="" < 8 → модули активны, .so под data_dir override).
-# Ожидаем:
-#   - redis.conf → /opt/redis/redis.conf (conf_dir override из essence);
-#   - modules-dir → /srv/redis-data/modules (data_dir override из essence);
-#   - add-node плагин строит endpoint-ы из roster как обычно.
+# essence with override: conf_dir=/opt/redis, data_dir=/srv/redis-data, non-empty
+# modules_base_url (redis_version="" < 8 → modules active, .so under the data_dir override).
+# Expected:
+#   - redis.conf → /opt/redis/redis.conf (conf_dir override from essence);
+#   - modules-dir → /srv/redis-data/modules (data_dir override from essence);
+#   - the add-node plugin builds endpoints from the roster as usual.
 name: add_node reads host-layout override from essence
 
 fixtures:
@@ -29,8 +29,8 @@ fixtures:
   vault:
     secret/redis/add_node/users/default_admin:
       password: default-admin-secret-pass
-  # ★ host-layout ПЕРЕОПРЕДЕЛЁН оператором в essence (v11→v12): повторный прогон обязан читать
-  # ИМЕННО эти пути (не дефолтные), чтобы новая нода легла в тот же layout, что кластер.
+  # ★ host-layout is OVERRIDDEN by the operator in essence (v11→v12): a repeat run must read
+  # EXACTLY these paths (not the defaults), so the new node lands in the same layout as the cluster.
   essence:
     conf_dir: /opt/redis
     data_dir: /srv/redis-data
@@ -53,21 +53,21 @@ fixtures:
 
 assert:
   task_present:
-    # redis.conf под conf_dir OVERRIDE из essence (/opt/redis, НЕ дефолт /etc/redis):
-    # доказывает, что default(essence.conf_dir, '/etc/redis') вернул essence-override.
-    # Дизамбигуатор — path.
+    # redis.conf under the conf_dir OVERRIDE from essence (/opt/redis, NOT the /etc/redis
+    # default): proves default(essence.conf_dir, '/etc/redis') returned the essence override.
+    # Disambiguator — path.
     - module: core.file.rendered
       params_subset:
         path: /opt/redis/redis.conf
-    # modules-dir под data_dir OVERRIDE из essence (/srv/redis-data/modules): непустой
-    # essence.modules_base_url активирует modules-группу (redis < 8), .so под data_dir
-    # override — доказывает, что default(essence.data_dir,...) + default(essence.
-    # modules_base_url,...) прочитаны из essence. Дизамбигуатор — path.
+    # modules-dir under the data_dir OVERRIDE from essence (/srv/redis-data/modules): a
+    # non-empty essence.modules_base_url activates the modules group (redis < 8), .so under
+    # the data_dir override — proves default(essence.data_dir,...) + default(essence.
+    # modules_base_url,...) were read from essence. Disambiguator — path.
     - module: core.file.directory
       params_subset:
         path: /srv/redis-data/modules
-    # ADD-NODE плагин: пустой master_sid → master.addr пуст (role=master). Endpoint-ы
-    # из roster. Доказывает, что повторный прогон дошёл до конца (render не сорвался).
+    # ADD-NODE plugin: empty master_sid → master.addr empty (role=master). Endpoints
+    # from the roster. Proves a repeat run reached the end (render did not fail).
     - module: community.redis.cluster
       params_subset:
         action: add-node

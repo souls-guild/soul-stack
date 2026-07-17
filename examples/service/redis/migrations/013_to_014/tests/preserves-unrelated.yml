@@ -1,10 +1,10 @@
 name: preserves-unrelated
 description: >
-  Инкарнация, у которой logging в state УЖЕ есть (напр. повторный прогон миграции или state,
-  где log-shipping развёрнут с непустым sink). has()-guard объекта СОХРАНЯЕТ существующие
-  значения logging как есть (идемпотентность, НЕ перезатирает дефолтами), остальной state
-  (redis_type/redis_config/redis_users/redis_sentinel/monitoring/топология) проходит насквозь
-  бит-в-бит. Зеркало объект-guard-а v12→v13 (monitoring) и 008_to_009 (seeded_from).
+  Incarnation whose logging in state ALREADY exists (e.g. a repeated migration run or state
+  where log-shipping is deployed with a non-empty sink). The object has()-guard PRESERVES existing
+  logging values as-is (idempotency, does NOT overwrite with defaults), the rest of the state
+  (redis_type/redis_config/redis_users/redis_sentinel/monitoring/topology) passes through
+  bit-for-bit. Mirrors the object-guard of v12→v13 (monitoring) and 008_to_009 (seeded_from).
 
 state_before:
   redis_type: "cluster"

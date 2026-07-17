@@ -1,14 +1,14 @@
-# Внешняя условная группа (подключается из main.yml под `when: input.outer == 'yes'`).
-# Несёт прямую задачу (outer-direct) + ВЛОЖЕННЫЙ условный include inner.yml.
-# Эффективный include-when inner-группы — конъюнкция `(input.outer == 'yes') &&
-# (input.inner == 'yes')`: дроп этой внешней группы каскадит на inner.
+# Outer conditional group (included from main.yml under `when: input.outer == 'yes'`).
+# Carries a direct task (outer-direct) + a NESTED conditional include of inner.yml.
+# The effective include-when of the inner group is the conjunction `(input.outer == 'yes') &&
+# (input.inner == 'yes')`: a drop of this outer group cascades to inner.
 - name: outer direct marker
   module: core.file.present
   params:
     path:    /etc/pilot/outer.txt
     content: "outer"
 
-# Вложенная условная группа: подключается только при inner == 'yes', но дополнительно
-# гасится при дропе внешней группы (каскад через конъюнкцию include-when).
+# Nested conditional group: included only when inner == 'yes', but is additionally
+# suppressed when the outer group is dropped (cascade via the include-when conjunction).
 - include: inner.yml
   when: input.inner == 'yes'

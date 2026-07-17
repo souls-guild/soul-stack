@@ -1,20 +1,20 @@
-# L0-испытание restart: rolling-restart реплик (probe→where slave, serial:1, plaintext).
-# Roster — 2 хоста; mocks.register.df_role.role = slave → block-потомки (where slave)
-# рендерятся, master-restart (where master, run_once) — placeholder-skip. Render-only,
-# герметично.
+# L0-trial restart: rolling-restart of replicas (probe→where slave, serial:1, plaintext).
+# Roster — 2 hosts; mocks.register.df_role.role = slave → block-children (where slave)
+# render, master-restart (where master, run_once) — placeholder-skip. Render-only,
+# hermetic.
 #
-# ★ Probe — community.redis.role (go-redis INFO replication, DragonFly redis-совместим),
-# НЕ raw redis-cli: поле register.df_role.role, НЕ .stdout.
+# ★ Probe — community.redis.role (go-redis INFO replication, DragonFly is redis-compatible),
+# NOT raw redis-cli: field register.df_role.role, NOT .stdout.
 #
-# Что ассертим:
-#   1. probe (community.redis.role) рендерит params коннекта (addr — ЛОКАЛЬНЫЙ UNIX-сокет,
-#      пароль из vault; БЕЗ tls/tls_ca — UDS не сетевой путь).
-#   2. block-потомок (community.redis.replica-synced health-gate) рендерится с теми же
-#      socket-params — доказывает fan-out slave-block-а. Bare core.service.restarted
-#      (block-рестарт) presence-неотличим от master-рестарта → отдельно НЕ ассертим.
+# What we assert:
+#   1. probe (community.redis.role) renders the connection params (addr — LOCAL UNIX socket,
+#      password from vault; WITHOUT tls/tls_ca — UDS is not a network path).
+#   2. block-child (community.redis.replica-synced health-gate) renders with the same
+#      socket-params — proves fan-out of the slave block. Bare core.service.restarted
+#      (block-restart) is presence-indistinguishable from a master restart → not asserted separately.
 #
-# ВНИМАНИЕ L0-ограничение: mocks.register — ЕДИНЫЙ payload на весь roster. df_role.role =
-# slave → block-потомки (where slave) рендерятся, master-restart (where master) skip.
+# WARNING L0 LIMITATION: mocks.register — a SINGLE payload for the whole roster. df_role.role =
+# slave → block-children (where slave) render, master-restart (where master) is skipped.
 name: rolling-restart replicas one at a time (plaintext)
 
 fixtures:
@@ -33,9 +33,9 @@ fixtures:
   input:
     reason: "rolling restart for L0"
 
-  # Развёрнутый incarnation.state без TLS. ★ Локальные probe/health-gate коннектятся к своему
-  # инстансу через UNIX-сокет независимо от TLS (UDS не сетевой путь) — state.tls.enable тут
-  # лишь read-model. ★ tls БЕЗ only/port (у DragonFly TLS на основном порту).
+  # Expanded incarnation.state without TLS. ★ Local probe/health-gate connect to their own
+  # instance via a UNIX socket regardless of TLS (UDS is not a network path) — state.tls.enable here
+  # is only a read-model. ★ tls WITHOUT only/port (DragonFly has TLS on the main port).
   state:
     df_version: "1.39.0"
     tls:
@@ -46,7 +46,7 @@ fixtures:
     df_config:
       maxmemory:        "256mb"
 
-  # Vault: probe/health-gate коннектятся под default_admin (requirepass убран).
+  # Vault: probe/health-gate connect as default_admin (requirepass removed).
   vault:
     secret/dragonfly/restart/users/default_admin:
       password: dfadmin-restart-pass
@@ -58,15 +58,15 @@ mocks:
 
 assert:
   task_present:
-    # probe community.redis.role: ЛОКАЛЬНЫЙ UNIX-сокет (БЕЗ tls/tls_ca). AUTH под default_admin.
+    # probe community.redis.role: LOCAL UNIX socket (WITHOUT tls/tls_ca). AUTH as default_admin.
     - module: community.redis.role
       params_subset:
         addr: "unix:/var/run/dragonfly/dragonfly.sock"
         username: default_admin
         password: dfadmin-restart-pass
 
-    # slave-health-gate community.redis.replica-synced (block-потомок, where slave): тот же
-    # socket-коннект. Наличие гейта внутри slave-block-а доказывает рендер block fan-out.
+    # slave-health-gate community.redis.replica-synced (block-child, where slave): the same
+    # socket connection. The presence of the gate inside the slave block proves the block fan-out renders.
     - module: community.redis.replica-synced
       params_subset:
         addr: "unix:/var/run/dragonfly/dragonfly.sock"

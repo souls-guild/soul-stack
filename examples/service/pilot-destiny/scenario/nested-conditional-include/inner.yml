@@ -1,6 +1,6 @@
-# Вложенная условная группа: подключается из outer.yml под `when: input.inner == 'yes'`.
-# Её эффективный include-when — конъюнкция `(input.outer == 'yes') && (input.inner ==
-# 'yes')`, поэтому inner-task ОТСУТСТВУЕТ, если ложен outer ИЛИ inner.
+# Nested conditional group: included from outer.yml under `when: input.inner == 'yes'`.
+# Its effective include-when is the conjunction `(input.outer == 'yes') && (input.inner ==
+# 'yes')`, so the inner task is ABSENT if outer OR inner is false.
 - name: inner marker
   module: core.file.present
   params:

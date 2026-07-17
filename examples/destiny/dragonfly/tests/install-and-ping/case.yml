@@ -1,46 +1,46 @@
-# L2 fixture (docker-стенд), harness MVP не исполняет — ADR-023 post-MVP.
+# L2 fixture (docker stand), harness MVP does not execute it — ADR-023 post-MVP.
 name: install-and-ping
 description: |
-  Базовый сценарий жизни режим-агностичного destiny dragonfly (standalone) на чистом
-  хосте:
-    1. apply destiny dragonfly — установить DragonFly и поднять сервис с отрендеренным
-       dragonfly.conf (FLAGFILE, TCP 6379). Аутентификация под ACL-юзером default_admin
-       (requirepass убран — редизайн default_admin); users.acl несёт default_admin.
-    2. ping                    — убедиться, что отвечает PONG (DragonFly redis-совместим,
-       redis-cli из distro-пакета redis-tools; AUTH под default_admin).
+  Basic life scenario of the mode-agnostic destiny dragonfly (standalone) on a clean
+  host:
+    1. apply destiny dragonfly — install DragonFly and bring up the service with a rendered
+       dragonfly.conf (FLAGFILE, TCP 6379). Authentication under the ACL user default_admin
+       (requirepass removed — default_admin redesign); users.acl carries default_admin.
+    2. ping                    — make sure it responds PONG (DragonFly is redis-compatible,
+       redis-cli from the distro package redis-tools; AUTH under default_admin).
 
-  Тест прогоняется на эфемерном стенде (см. блок `stand:`), на котором нет ни DragonFly,
-  ни конфигов. После прохода стенд уничтожается.
+  The test runs on an ephemeral stand (see the `stand:` block), which has neither DragonFly
+  nor configs. After the run the stand is destroyed.
 
-# ─── Стенд ────────────────────────────────────────────────────────────────────
+# ─── Stand ────────────────────────────────────────────────────────────────────
 stand:
   driver: docker
   image:  ubuntu:24.04
   mode:   push
 
-# ─── Что применяем ────────────────────────────────────────────────────────────
-# Целевой destiny — ../../destiny.yml (режим-агностичный кирпич). config — ГОТОВЫЙ merged
-# flagfile-map (БЕЗ top-level maxmemory: это обычный ключ внутри config, DF-форма underscore).
-# В реальном прогоне config мержит scenario сервиса; здесь передаём готовый map.
+# ─── What we apply ────────────────────────────────────────────────────────────
+# Target destiny — ../../destiny.yml (mode-agnostic brick). config — a READY merged
+# flagfile-map (WITHOUT top-level maxmemory: it's a regular key inside config, DF underscore form).
+# In a real run config is merged by the service scenario; here we pass a ready-made map.
 input:
   version:  "1.39.0"
   config:
     maxmemory:  256mb
     maxclients: 10000
-  # ★ РЕДИЗАЙН default_admin: password УДАЛЁН (requirepass убран). Аутентификация под ACL-юзером
-  # default_admin — приходит в users с per-user паролем (в реальном прогоне scenario доливает
-  # системных из essence). Пароль здесь — зарезолвленное значение (vault: в L2-стенде).
+  # ★ default_admin REDESIGN: password REMOVED (requirepass dropped). Authentication under the ACL user
+  # default_admin — comes in users with a per-user password (in a real run the scenario tops up
+  # system users from essence). The password here is a resolved value (vault: in the L2 stand).
   users:
     default_admin:
       perms:    "~* &* +@all"
       state:    "on"
       password: "vault:test/dragonfly/password"
 
-# Двойной прогон: фреймворк применит destiny с этим input ещё раз и проверит, что во втором
-# применении не было изменений ни в одном шаге (идемпотентность).
+# Double run: the framework will apply destiny with this input again and check that in the
+# second application there were no changes in any step (idempotency).
 expect_idempotent: true
 
-# ─── Проверки результата ──────────────────────────────────────────────────────
+# ─── Result checks ──────────────────────────────────────────────────────
 verify:
   - name: dragonfly-binary-installed
     apply:
@@ -70,9 +70,9 @@ verify:
       stdout: "640 dragonfly:dragonfly"
 
   - name: dragonfly-responds-to-ping
-    # DragonFly redis-совместим: redis-cli PING по TCP (DF слушает 6379). redis-cli — из
-    # distro-пакета redis-tools (install.yml ставит его БЕЗУСЛОВНО, DF своего cli не несёт).
-    # ★ AUTH под default_admin (requirepass убран) — redis-cli --user/-a.
+    # DragonFly is redis-compatible: redis-cli PING over TCP (DF listens on 6379). redis-cli — from
+    # the distro package redis-tools (install.yml installs it UNCONDITIONALLY, DF doesn't ship its own cli).
+    # ★ AUTH under default_admin (requirepass dropped) — redis-cli --user/-a.
     apply:
       destiny: core.cmd.shell
       input:
@@ -80,5 +80,5 @@ verify:
     expect:
       stdout_contains: "PONG"
 
-# ─── Опциональные соседи рядом с этим файлом ─────────────────────────────────
-#   prepare.yml / verify.yml / cleanup.yml — см. docs/destiny/testing.md.
+# ─── Optional siblings next to this file ─────────────────────────────────
+#   prepare.yml / verify.yml / cleanup.yml — see docs/destiny/testing.md.

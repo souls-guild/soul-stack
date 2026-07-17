@@ -10,15 +10,15 @@ required_capabilities:
 spec:
   states:
     installed:
-      description: Пакет установлен (опционально точной версии). Идемпотентно (ADR-015).
+      description: Package installed (optionally at an exact version). Idempotent (ADR-015).
       input:
-        name:    { type: string, required: true, description: "Имя пакета." }
-        version: { type: string, description: "Точная версия пакета (если опущено — любая)." }
+        name:    { type: string, required: true, description: "Package name." }
+        version: { type: string, description: "Exact package version (any if omitted)." }
     latest:
-      description: Пакет установлен и обновлён до последней доступной версии.
+      description: Package installed and updated to the latest available version.
       input:
-        name: { type: string, required: true, description: "Имя пакета." }
+        name: { type: string, required: true, description: "Package name." }
     absent:
-      description: Пакет удалён.
+      description: Package removed.
       input:
-        name: { type: string, required: true, description: "Имя пакета." }
+        name: { type: string, required: true, description: "Package name." }

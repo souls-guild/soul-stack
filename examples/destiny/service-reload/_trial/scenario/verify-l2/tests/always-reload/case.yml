@@ -1,14 +1,14 @@
-# L2-кейс (docker systemd-PID1 стенд, Trial ADR-023). Build-tag integration.
+# L2 case (docker systemd-PID1 stand, Trial ADR-023). Build-tag integration.
 #
-# Доказывает путь reload→новое-определение ДЕТЕРМИНИРОВАННО, независимо от
-# NeedDaemonReload-флага: daemon_reload=always делает безусловный daemon-reload
-# перед restart. Если фикс работает — применяется НОВОЕ определение (ExecStart=…2000).
-# Дополняет auto-reload (на случай env-артефактов с flag-flip), сам флаг тут не
-# участвует.
+# Proves the reload→new-definition path is DETERMINISTIC, regardless of the
+# NeedDaemonReload flag: daemon_reload=always does an unconditional daemon-reload
+# before restart. If the fix works — the NEW definition is applied (ExecStart=…2000).
+# Complements auto-reload (for env artifacts with flag-flip); this flag itself
+# is not involved.
 name: always-reload
 description: |
-  E2E daemon-reload (always): core.service.restarted(daemon_reload=always) делает
-  безусловный reload → применяется v2 независимо от NeedDaemonReload.
+  E2E daemon-reload (always): core.service.restarted(daemon_reload=always) does an
+  unconditional reload → v2 applies regardless of NeedDaemonReload.
 
 stand:
   driver: docker
@@ -20,7 +20,7 @@ input:
   unit:        reload-probe
   reload_mode: always
 
-# restarted всегда changed=true → повторный apply не идемпотентен.
+# restarted is always changed=true → a repeat apply is not idempotent.
 expect_idempotent: false
 
 verify:

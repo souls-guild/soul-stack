@@ -2,13 +2,14 @@ from_version: 1
 to_version: 2
 
 description: >-
-  v1→v2: вынос install + host-layout (conf_dir/data_dir) из incarnation.state в
-  essence (симметрия redis 011_to_012, Вариант A). install — read-model без
-  читателей; conf_dir/data_dir — day-2 переведены на essence-чтение
-  (default(essence.<x>, '<деф>')). Forward-only, delete no-op на инкарнациях без
-  полей. ★ DragonFly vs redis: у DragonFly НЕТ modules_base_url (redis-модули .so к
-  DF неприменимы) — вырезаются ТОЛЬКО три поля. sysctl_settings ОСТАЁТСЯ в state
-  (read-model, как у redis) — не выносится.
+  v1->v2: moves install + host-layout (conf_dir/data_dir) out of incarnation.state
+  into essence (symmetric with redis 011_to_012, Option A). install is a
+  read-model with no readers; conf_dir/data_dir - operational scenarios switched
+  to essence reads (default(essence.<x>, '<default>')). Forward-only, delete is
+  a no-op on incarnations without the fields. * DragonFly vs redis: DragonFly has
+  NO modules_base_url (redis .so modules don't apply to DF) - only three fields
+  are removed. sysctl_settings STAYS in state (read-model, same as redis) - not
+  moved out.
 
 transform:
   - delete: { path: state.install }

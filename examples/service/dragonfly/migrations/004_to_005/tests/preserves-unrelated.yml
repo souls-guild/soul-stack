@@ -1,10 +1,10 @@
 name: preserves-unrelated
 description: >
-  Инкарнация, у которой monitoring в state УЖЕ есть (напр. повторный прогон миграции или state,
-  где мониторинг развёрнут). has()-guard объекта СОХРАНЯЕТ существующие значения monitoring как
-  есть (идемпотентность, НЕ перезатирает дефолтами), остальной state (df_config/df_users/
-  df_sentinel/tls/топология/provision) проходит насквозь бит-в-бит. Зеркало redis 012_to_013
-  preserves-unrelated.
+  An incarnation whose state ALREADY has monitoring (e.g. a repeat migration run, or a state
+  where monitoring is already deployed). The object's has()-guard PRESERVES the existing
+  monitoring values as-is (idempotency, does NOT overwrite with defaults); the rest of the state
+  (df_config/df_users/df_sentinel/tls/topology/provision) passes through bit-for-bit. Mirrors
+  redis 012_to_013 preserves-unrelated.
 
 state_before:
   df_version: "1.39.0"

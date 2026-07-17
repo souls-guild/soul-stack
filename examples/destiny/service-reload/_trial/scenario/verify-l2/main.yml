@@ -1,50 +1,49 @@
-# L2-харнесс daemon-reload (Trial, ADR-023, дизайн «Вариант A»).
+# L2 harness for daemon-reload (Trial, ADR-023, design "Variant A").
 #
-# Назначение — дать E2E-доказательство фикса централизованного daemon-reload в
-# core.service (ADR-015 amendment, util.EnsureDaemonReloaded): после перезаписи
-# unit-файла без daemon-reload systemd тихо рестартует со СТАРЫМ определением
-# (exit 0, лишь warning). core.service с daemon_reload=auto|always обязан перед
-# мутирующим action выполнить `systemctl daemon-reload`, чтобы применилось новое
-# определение.
+# Purpose — provide E2E proof of the fix for centralized daemon-reload in
+# core.service (ADR-015 amendment, util.EnsureDaemonReloaded): after overwriting a
+# unit file without daemon-reload, systemd silently restarts with the OLD definition
+# (exit 0, only a warning). core.service with daemon_reload=auto|always must run
+# `systemctl daemon-reload` before a mutating action so the new definition applies.
 #
-# План (рендерится в ApplyRequest):
-#   1. core.file.present — положить unit /etc/systemd/system/reload-probe.service
-#      с ExecStart=/bin/sleep 1000 (версия «v1»);
-#   2. core.service.running name=reload-probe (daemon_reload из input) — стартуем v1;
-#   3. core.file.present — перезаписать тот же unit, ExecStart=/bin/sleep 2000 («v2»).
-#      core.file.present — in-place os.WriteFile: эмпирически на debian-12 (systemd
-#      252) это надёжно выставляет NeedDaemonReload=yes;
-#   4. core.service.restarted name=reload-probe (daemon_reload из input) — рестарт
-#      БЕЗ ручного daemon-reload. Если фикс работает — модуль сам сделает reload и
-#      systemd подхватит v2; если reload не делается — рестартует со старым v1.
+# Plan (rendered into ApplyRequest):
+#   1. core.file.present — deploy the unit /etc/systemd/system/reload-probe.service
+#      with ExecStart=/bin/sleep 1000 (version "v1");
+#   2. core.service.running name=reload-probe (daemon_reload from input) — start v1;
+#   3. core.file.present — overwrite the same unit, ExecStart=/bin/sleep 2000 ("v2").
+#      core.file.present — in-place os.WriteFile: empirically on debian-12 (systemd
+#      252) this reliably sets NeedDaemonReload=yes;
+#   4. core.service.restarted name=reload-probe (daemon_reload from input) — restart
+#      WITHOUT a manual daemon-reload. If the fix works, the module does the reload
+#      itself and systemd picks up v2; if the reload doesn't happen, it restarts with old v1.
 #
-# Доказательство — в verify кейса: `systemctl show reload-probe -p ExecStart --value`
-# должен содержать `2000` (применилось НОВОЕ определение). С daemon_reload=never
-# (негативный прогон) останется `1000` → кейс FAIL.
+# Proof — in the case's verify: `systemctl show reload-probe -p ExecStart --value`
+# must contain `2000` (the NEW definition applied). With daemon_reload=never
+# (negative run) it stays `1000` → case FAILs.
 #
-# /bin/sleep заведомо есть в debian-12 — герметично, без сети.
+# /bin/sleep is guaranteed present on debian-12 — hermetic, no network.
 #
-# Это НЕ новая destiny-сущность и НЕ новый сервис: harness-обёртка в _trial/-дереве,
-# симметрично node-exporter/_trial/scenario/verify-l2.
+# This is NOT a new destiny entity and NOT a new service: a harness wrapper in the
+# _trial/ tree, symmetric to node-exporter/_trial/scenario/verify-l2.
 name: verify-l2
 description: >-
-  L2-харнесс daemon-reload (ADR-023, Вариант A): доказывает, что core.service с
-  daemon_reload=auto|always применяет НОВОЕ unit-определение после перезаписи
-  unit-файла, без ручного systemctl daemon-reload.
+  L2 harness for daemon-reload (ADR-023, Variant A): proves that core.service with
+  daemon_reload=auto|always applies the NEW unit definition after overwriting the
+  unit file, without a manual systemctl daemon-reload.
 
 input:
   unit:
     type: string
     default: reload-probe
     pattern: "^[A-Za-z0-9._-]+$"
-    description: Имя unit-а (заведомо тестовый, без коллизий).
+    description: Unit name (deliberately test-only, no collisions).
   reload_mode:
     type: string
     default: auto
     enum: [auto, always, never]
     description: >-
-      Режим daemon_reload для core.service-шагов. auto|always доказывают фикс
-      (PASS), never — негативный прогон (FAIL: рестарт со старым определением).
+      daemon_reload mode for the core.service steps. auto|always prove the fix
+      (PASS), never — negative run (FAIL: restart with the old definition).
 
 tasks:
   # 1. unit v1: ExecStart=/bin/sleep 1000.
@@ -55,16 +54,16 @@ tasks:
       content: "[Unit]\nDescription=soul-stack daemon-reload L2 probe\n[Service]\nExecStart=/bin/sleep 1000\n[Install]\nWantedBy=multi-user.target\n"
       mode: "0644"
 
-  # 2. Старт v1. daemon_reload из input (на первом install флаг = no → reload
-  #    не нужен, systemd подхватит определение на start).
+  # 2. Start v1. daemon_reload from input (on the first install the flag = no →
+  #    reload isn't needed, systemd picks up the definition on start).
   - name: Start unit (v1)
     module: core.service.running
     params:
       name: "${ input.unit }"
       daemon_reload: "${ input.reload_mode }"
 
-  # 3. unit v2: ExecStart=/bin/sleep 2000 (перезапись того же файла, in-place).
-  #    После этого NeedDaemonReload=yes (эмпирически на debian-12).
+  # 3. unit v2: ExecStart=/bin/sleep 2000 (in-place overwrite of the same file).
+  #    After this, NeedDaemonReload=yes (empirically on debian-12).
   - name: Deploy unit v2
     module: core.file.present
     params:
@@ -72,8 +71,8 @@ tasks:
       content: "[Unit]\nDescription=soul-stack daemon-reload L2 probe\n[Service]\nExecStart=/bin/sleep 2000\n[Install]\nWantedBy=multi-user.target\n"
       mode: "0644"
 
-  # 4. Рестарт БЕЗ ручного daemon-reload: фикс должен сам сделать reload (auto/always)
-  #    и применить v2. restarted всегда changed=true (не идемпотентен).
+  # 4. Restart WITHOUT a manual daemon-reload: the fix must do the reload itself
+  #    (auto/always) and apply v2. restarted is always changed=true (not idempotent).
   - name: Restart unit (expect v2 applied via daemon-reload)
     module: core.service.restarted
     params:

@@ -1,9 +1,9 @@
 name: preserves-unrelated
 description: >
-  Миграция трогает ТОЛЬКО seeded_from: остальной state (redis_type/redis_config/
-  redis_users/redis_sentinel/namedfields/топология/provisioned_*) проходит насквозь
-  без изменений. Без seeded_from до миграции → оно доливается default-ом
-  ({source_endpoints: [], detached: false}), всё прочее — бит-в-бит.
+  The migration touches ONLY seeded_from: the rest of state (redis_type/redis_config/
+  redis_users/redis_sentinel/namedfields/topology/provisioned_*) passes through
+  unchanged. Without seeded_from before the migration → it gets filled in with the
+  default ({source_endpoints: [], detached: false}); everything else stays bit-for-bit.
 
 state_before:
   redis_type: "sentinel"

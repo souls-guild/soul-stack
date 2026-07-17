@@ -2,52 +2,52 @@ from_version: 2
 to_version: 3
 
 description: >-
-  state_schema v2 → v3 (richer state, architect a9e1c2c6): opaque redis_config
-  ДОПОЛНЯЕТСЯ именованными полями НАМЕРЕНИЯ (read-model day-2) — tls/install/
-  persistence/memory_mb/maxmemory_policy/modules/sysctl_settings + топология
+  state_schema v2 → v3 (richer state, architect a9e1c2c6): the opaque redis_config
+  is SUPPLEMENTED with named INTENT fields (day-2 read-model) — tls/install/
+  persistence/memory_mb/maxmemory_policy/modules/sysctl_settings + topology
   (shards/replicas/sentinel_quorum). redis_config/redis_users/redis_hosts/
-  redis_sentinel НЕ трогаются (write-model сохраняется как есть).
+  redis_sentinel are NOT touched (write-model stays as is).
 
-  ★ BEST-EFFORT (честно): миграция — чистая функция от старого state (ADR-019:
-  essence/input/vault в migration-CEL ЗАПРЕЩЕНЫ). Поэтому намеренные поля
-  заполняются так:
+  ★ BEST-EFFORT (to be honest): the migration is a pure function of the old state (ADR-019:
+  essence/input/vault are FORBIDDEN in migration-CEL). So the intent
+  fields are filled in like this:
 
-    ИЗВЛЕКАЕМО из redis_config (обратная свёртка вычисленного итога):
-      - tls.enable  ← факт наличия директивы 'tls-port' в redis_config;
-      - tls.port    ← int(redis_config['tls-port']) если есть, иначе 7379 (роль-дефолт);
-      - tls.only    ← redis_config['port'] == '0' (plain-порт закрыт);
-      - persistence ← обратная свёртка save/appendonly → off/aof/rdb/rdb_aof;
-      - maxmemory_policy ← redis_config['maxmemory-policy'] если есть, иначе '';
+    DERIVABLE from redis_config (reverse-folding the computed result):
+      - tls.enable  ← the fact that the 'tls-port' directive is present in redis_config;
+      - tls.port    ← int(redis_config['tls-port']) if present, otherwise 7379 (role default);
+      - tls.only    ← redis_config['port'] == '0' (plain port closed);
+      - persistence ← reverse-folding save/appendonly → off/aof/rdb/rdb_aof;
+      - maxmemory_policy ← redis_config['maxmemory-policy'] if present, otherwise '';
 
-    ИЗВЛЕКАЕМО из топологии state:
-      - sentinel_quorum ← redis_sentinel.quorum если есть, иначе 0;
-      - replicas        ← число redis_hosts с role==replica (если roster в state есть);
+    DERIVABLE from state topology:
+      - sentinel_quorum ← redis_sentinel.quorum if present, otherwise 0;
+      - replicas        ← number of redis_hosts with role==replica (if the roster is present in state);
 
-    DEFAULT (в v2-state принципиально НЕТ, а essence в migration-CEL недоступен):
-      - tls.cert_ref/key_ref/ca_ref ← '' (Vault-ПУТИ PEM в state не лежали; на day-2
-        restart ca_ref берётся из essence.tls_ca_ref — стабильный author-context);
-      - install ← {method: package} (способ установки v2 не фиксировал);
-      - modules ← [] (Redis-модули v2 не фиксировал);
-      - sysctl_settings ← {} (host-tuning v2 не фиксировал; реально применён на хостах,
-        но в state его не было);
-      - memory_mb ← 0 (НЕОБРАТИМ: в redis_config лежит вычисленный maxmemory "768mb",
-        а не исходный бюджет оператора — деление с усечением необратимо);
-      - shards ← 0 (число master-шардов cluster по redis_config/redis_hosts
-        достоверно не восстановимо — declared-роли в v2-state не материализовались).
+    DEFAULT (fundamentally absent from v2-state, and essence is unavailable in migration-CEL):
+      - tls.cert_ref/key_ref/ca_ref ← '' (PEM Vault PATHS were not stored in state; on day-2
+        restart ca_ref is taken from essence.tls_ca_ref — a stable author-context);
+      - install ← {method: package} (v2 did not record the install method);
+      - modules ← [] (v2 did not record Redis modules);
+      - sysctl_settings ← {} (v2 did not record host tuning; it was actually applied on hosts,
+        but wasn't in state);
+      - memory_mb ← 0 (IRREVERSIBLE: redis_config holds the computed maxmemory "768mb",
+        not the operator's original budget — truncating division is irreversible);
+      - shards ← 0 (the number of cluster master shards is not reliably recoverable from
+        redis_config/redis_hosts — declared roles in v2-state were not materialized).
 
-  ПОЛНАЯ ТОЧНОСТЬ namedfields достигается на следующем create-override (оператор
-  заново задаёт простой ввод → create перезаписывает namedfields из своего compute).
-  Forward-only (down: не поддерживается; восстановление — через state_history).
+  FULL ACCURACY of namedfields is achieved on the next create-override (the operator
+  supplies simple input again → create rewrites namedfields from its own compute).
+  Forward-only (down: is not supported; recovery — via state_history).
 
-  Идиома optional-полей (maxmemory_policy): плоский set БЕЗ if: всегда создаёт ключ,
-  поэтому «optional» выражается ЗНАЧЕНИЕМ, а не присутствием — ставим всегда, при
-  отсутствии источника пишем '' (пустую строку), симметрично namedfield-конвенции
-  create (пусто = «оператор явно не выбрал», директива из essence-подложки).
+  Optional-field idiom (maxmemory_policy): a flat set WITHOUT if: always creates the key,
+  so "optional" is expressed by its VALUE, not by presence — we always set it, and when
+  the source is missing write '' (empty string), symmetric to the namedfield convention
+  in create (empty = "operator didn't explicitly choose", directive comes from the essence substrate).
 
 transform:
-  # ── TLS-намерение из redis_config (обратная свёртка) ───────────────────────
-  # Сначала материализуем tls как map, затем наполняем подполя отдельными set —
-  # каждое со своей CEL-обратной-свёрткой (плоский DSL: вложенные set по сегментам).
+  # ── TLS intent from redis_config (reverse-folding) ───────────────────────
+  # First materialize tls as a map, then fill its subfields with separate sets —
+  # each with its own CEL reverse-fold (flat DSL: nested set by segments).
   - set:
       path:  state.tls
       value: {}
@@ -57,20 +57,20 @@ transform:
   - set:
       path:  state.tls.only
       value: "${ 'port' in state.redis_config && state.redis_config['port'] == '0' }"
-  # ★ BEST-EFFORT (DSL-лимит): tls.port → роль-дефолт 7379, НЕ извлекается из
-  # redis_config['tls-port']. Причина: redis_config['tls-port'] — СТРОКА ("7379"),
-  # а migration-CEL sandbox (ADR-019) НЕ имеет конверсии string→int (нет overload
-  # int(string)/uint(string)/double(string); custom-функций нет, strings-ext нет).
-  # tls.port в namedfield типизирован integer (симметрично create compute.tls_port),
-  # положить сюда строку — нарушить схему и разойтись с create. Расширение sandbox
-  # int(string) требует отдельного ADR (ADR-019 fixed surface). Точный порт
-  # восстанавливается на следующем create-override. На НЕ-дефолтном TLS-порту это
-  # потеря — оператор перезадаёт create (best-effort, см. description). Важный day-2-
-  # сигнал — tls.enable (bool, восстановим точно); restart на нём дискриминирует.
+  # ★ BEST-EFFORT (DSL limit): tls.port → role default 7379, NOT extracted from
+  # redis_config['tls-port']. Reason: redis_config['tls-port'] is a STRING ("7379"),
+  # and the migration-CEL sandbox (ADR-019) has NO string→int conversion (no
+  # int(string)/uint(string)/double(string) overload; no custom functions, no strings-ext).
+  # tls.port is typed integer in the namedfield (symmetric to create compute.tls_port),
+  # putting a string here would break the schema and diverge from create. Extending the sandbox
+  # for int(string) requires a separate ADR (ADR-019 fixed surface). The exact port
+  # is recovered on the next create-override. On a NON-default TLS port this is a
+  # loss (best-effort, see description). The important day-2
+  # signal is tls.enable (bool, recovered exactly); restart hinges on it.
   - set:
       path:  state.tls.port
       value: 7379
-  # Vault-ПУТИ PEM в v2-state не лежали (только on-host пути tls-*-file) → '' (default).
+  # PEM Vault PATHS were not stored in v2-state (only on-host paths tls-*-file) → '' (default).
   - set:
       path:  state.tls.cert_ref
       value: ""
@@ -81,10 +81,10 @@ transform:
       path:  state.tls.ca_ref
       value: ""
 
-  # ── persistence (обратная свёртка save/appendonly) ─────────────────────────
+  # ── persistence (reverse-fold save/appendonly) ─────────────────────────
   # appendonly=='yes' && save!='' → rdb_aof; appendonly=='yes' && save=='' → aof;
-  # appendonly!='yes' && save!='' → rdb; иначе → off. Ключи save/appendonly могут
-  # отсутствовать (in-guard); 'save' непустой ⇔ ключ есть И значение != ''.
+  # appendonly!='yes' && save!='' → rdb; otherwise → off. The keys save/appendonly may
+  # be absent (in-guard); 'save' is non-empty ⇔ the key is present AND value != ''.
   - set:
       path:  state.persistence
       value: >-
@@ -92,12 +92,12 @@ transform:
              ? (('save' in state.redis_config && state.redis_config['save'] != '') ? 'rdb_aof' : 'aof')
              : (('save' in state.redis_config && state.redis_config['save'] != '') ? 'rdb' : 'off') }
 
-  # ── maxmemory_policy (optional: ставим всегда, '' при отсутствии) ───────────
+  # ── maxmemory_policy (optional: always set, '' if absent) ───────────
   - set:
       path:  state.maxmemory_policy
       value: "${ 'maxmemory-policy' in state.redis_config ? state.redis_config['maxmemory-policy'] : '' }"
 
-  # ── DEFAULT-поля (в v2-state нет, essence недоступен) ──────────────────────
+  # ── DEFAULT fields (absent in v2-state, essence unavailable) ──────────────────────
   - set:
       path:  state.install
       value:
@@ -108,26 +108,26 @@ transform:
   - set:
       path:  state.sysctl_settings
       value: {}
-  # memory_mb необратим (redis_config несёт вычисленный maxmemory, не исходный бюджет).
+  # memory_mb is irreversible (redis_config carries the computed maxmemory, not the original budget).
   - set:
       path:  state.memory_mb
       value: 0
 
-  # ── Топология ──────────────────────────────────────────────────────────────
-  # shards достоверно не восстановим из v2-state → 0.
+  # ── Topology ──────────────────────────────────────────────────────────────
+  # shards is not reliably recoverable from v2-state → 0.
   - set:
       path:  state.shards
       value: 0
-  # sentinel_quorum ← redis_sentinel.quorum если зафиксирован, иначе 0. redis_sentinel
-  # может отсутствовать целиком (standalone/cluster v2) → has-guard на корень + лист.
-  # ★ DSL-грабли: int() работает на field-selection (state.x.q), но НЕ на bracket-
-  # индексе (state.x['q'] → no-overload int(double)). quorum без дефиса → field-access
-  # (state.redis_sentinel.quorum), has() принимает field-selection как аргумент.
+  # sentinel_quorum ← redis_sentinel.quorum if recorded, otherwise 0. redis_sentinel
+  # may be entirely absent (standalone/cluster v2) → has-guard on the root + leaf.
+  # ★ DSL gotcha: int() works on field-selection (state.x.q), but NOT on bracket
+  # indexing (state.x['q'] → no int(double) overload). quorum without a hyphen → field access
+  # (state.redis_sentinel.quorum), has() accepts field-selection as its argument.
   - set:
       path:  state.sentinel_quorum
       value: "${ (has(state.redis_sentinel) && has(state.redis_sentinel.quorum)) ? int(state.redis_sentinel.quorum) : 0 }"
-  # replicas ← число redis_hosts с role==replica (sentinel-roster v2 материализовал
-  # роли). redis_hosts может отсутствовать/быть пустым → has-guard + filter-comprehension.
+  # replicas ← number of redis_hosts with role==replica (the sentinel roster in v2 materialized
+  # roles). redis_hosts may be absent/empty → has-guard + filter-comprehension.
   - set:
       path:  state.replicas
       value: "${ has(state.redis_hosts) ? size(state.redis_hosts.filter(h, h.role == 'replica')) : 0 }"

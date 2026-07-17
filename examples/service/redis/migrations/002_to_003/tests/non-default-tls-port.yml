@@ -1,13 +1,13 @@
 name: non-default-tls-port
 description: >
-  GUARD: redis_config['tls-port']="9999" (НЕ-дефолтный TLS-порт) → state.tls.port=7379
-  (роль-дефолт), НЕ 9999. Закрепляет документированное best-effort-поведение как регресс-
-  guard: migration-CEL sandbox (ADR-019) не имеет string→int, поэтому tls.port НЕ
-  извлекается из строкового redis_config['tls-port'], а ставится роль-дефолтом 7379
-  (см. 002_to_003.yml, set state.tls.port: 7379). Точный порт восстанавливается на
-  следующем create-override. ★ Если кто-то добавит int(string) в sandbox и начнёт
-  извлекать tls-port — этот тест УПАДЁТ (state_after ждёт 7379, а не 9999), сигналя об
-  изменении контракта. tls.enable=true (есть tls-port), tls.only=true (port == '0').
+  GUARD: redis_config['tls-port']="9999" (non-default TLS port) → state.tls.port=7379
+  (role default), NOT 9999. Locks in the documented best-effort behavior as a regression
+  guard: the migration-CEL sandbox (ADR-019) has no string->int, so tls.port is NOT
+  extracted from the string redis_config['tls-port'], but is set to the role default 7379
+  (see 002_to_003.yml, set state.tls.port: 7379). The exact port is restored on the
+  next create-override. ★ If someone adds int(string) to the sandbox and starts
+  extracting tls-port — this test WILL FAIL (state_after expects 7379, not 9999), signaling a
+  contract change. tls.enable=true (tls-port is present), tls.only=true (port == '0').
 
 state_before:
   redis_type: standalone

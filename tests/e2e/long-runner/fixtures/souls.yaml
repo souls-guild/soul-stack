@@ -1,8 +1,8 @@
-# Souls-фикстура для L3a long-runner::create.
+# Souls fixture for L3a long-runner::create.
 #
-# scenario create — простой write маркер; сами «длинные прогоны» (staggered,
-# serial_waves) — отдельные сценарии, проверяются отдельным slice-ом. Здесь
-# минимальный happy-path init.
+# scenario create — a simple write marker; the actual "long runs" (staggered,
+# serial_waves) are separate scenarios, checked by a separate slice. Here it's
+# just a minimal happy-path init.
 - sid: soul-a.example.com
   status: connected
   covens: [runner]

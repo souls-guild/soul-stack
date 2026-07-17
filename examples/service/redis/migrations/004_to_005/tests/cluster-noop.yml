@@ -1,8 +1,8 @@
 name: cluster-noop
 description: >
-  cluster-инкарнация: redis_sentinel == {} (sentinel-фактов нет) → миграция NO-OP
-  (size==0 ветка тернара возвращает {} как есть, тайминги НЕ добавляются). Весь
-  остальной state (вкл. cluster-директивы и топологию shards/replicas) — бит-в-бит.
+  cluster incarnation: redis_sentinel == {} (no sentinel facts) → migration is NO-OP
+  (size==0 ternary branch returns {} as is, no timings are added). The rest
+  of the state (incl. cluster directives and the shards/replicas topology) is bit-for-bit.
 
 state_before:
   redis_type: cluster

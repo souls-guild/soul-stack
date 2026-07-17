@@ -1,6 +1,6 @@
 name: single-user
 description: >
-  Один пользователь: map с одним ключом → массив из одного элемента.
+  Single user: map with one key → array with one element.
 
 state_before:
   redis_users:

@@ -1,8 +1,8 @@
 name: preserves-existing-sids
 description: >
-  Идемпотентность: инкарнация, у которой provisioned_sids УЖЕ есть (повторный
-  прогон миграции / inline-seed), сохраняет значение как есть (has()-guard
-  возвращает текущее, не перезатирает default-ом []).
+  Idempotency: an incarnation whose provisioned_sids ALREADY exist (repeat
+  migration run / inline-seed) preserves the value as-is (has()-guard
+  returns the current value, does not overwrite it with the default []).
 
 state_before:
   redis_type: "cluster"

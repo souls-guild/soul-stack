@@ -1,7 +1,8 @@
 name: absent-users-back-compat
 description: >
-  Back-compat: инкарнация БЕЗ ключа redis_users (старый state без operator-extra
-  ACL) → ключ создаётся пустым массивом (has()-guard в тернаре). Прочий state цел.
+  Back-compat: incarnation WITHOUT the redis_users key (old state without
+  operator-extra ACL) -> the key is created as an empty array (has()-guard in
+  ternary). Rest of state stays intact.
 
 state_before:
   redis_type: "cluster"

@@ -1,8 +1,8 @@
 name: topology-sentinel
 description: >
-  Извлечение топологии из v2-state: sentinel_quorum ← redis_sentinel.quorum,
-  replicas ← число redis_hosts с role==replica (2 из 3 — один primary + две
-  реплики). shards=0 (не восстановим). redis_sentinel/redis_hosts НЕ трогаются.
+  Extracting topology from v2 state: sentinel_quorum ← redis_sentinel.quorum,
+  replicas ← number of redis_hosts with role==replica (2 of 3 — one primary + two
+  replicas). shards=0 (not recoverable). redis_sentinel/redis_hosts are NOT touched.
 
 state_before:
   redis_type: sentinel

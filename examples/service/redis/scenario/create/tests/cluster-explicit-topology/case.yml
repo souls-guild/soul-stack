@@ -1,19 +1,19 @@
-# L0-испытание create в режиме cluster с ЯВНОЙ ТОПОЛОГИЕЙ (input.cluster_topology):
-# оператор САМ задаёт раскладку шардов вместо авто-формы плагина по sort SID. 4 хоста,
-# replicas_per_master=1 → 2 шарда по 2 ноды (master+replica). Топология намеренно делает
-# мастерами node-2/node-4 (НЕ первые по sort node-1/node-2) — доказывает, что declared-
-# раскладка реально доезжает до плагина параметром topology, а не совпадает со sort.
+# L0 test of create in cluster mode with an EXPLICIT TOPOLOGY (input.cluster_topology):
+# the operator sets the shard layout THEMSELVES instead of the plugin's auto-layout by sort SID. 4 hosts,
+# replicas_per_master=1 → 2 shards of 2 nodes (master+replica). The topology deliberately makes
+# node-2/node-4 masters (NOT the sort-first node-1/node-2) — proves that the declared
+# layout actually reaches the plugin via the topology parameter, rather than coinciding with sort.
 #
-# size-guard ВЕТКА (cluster.yml): при заданной cluster_topology сверяет roster с СУММОЙ
-# размеров шардов (2+2=4), а не со старой формулой shards*(1+replicas). Здесь 4 == 4 →
-# render проходит. Парный негативный кейс (несовпадение суммы) — отдельный
-# cluster-explicit-topology-size-mismatch через expect_render_error.
+# size-guard BRANCH (cluster.yml): when cluster_topology is given, checks the roster against the SUM
+# of shard sizes (2+2=4), not against the old formula shards*(1+replicas). Here 4 == 4 →
+# render passes. The paired negative case (sum mismatch) is a separate
+# cluster-explicit-topology-size-mismatch via expect_render_error.
 #
-# Что ассертим (критерий приёмки слайса):
-#   1. size-guard PASS на sum-форме (4 хоста == sum(len шардов)) → cluster-build на месте.
-#   2. cluster-build (community.redis.cluster action create) несёт param `topology` =
-#      ИМЕННО переданный список списков SID (deepEqual, не подмножество) + nodes-MAP всех
-#      4 хостов (детерминирован по SID) + replicas_per_shard=1 (size-проверка состава).
+# What we assert (slice acceptance criterion):
+#   1. size-guard PASS on the sum form (4 hosts == sum(len of shards)) → cluster-build is in place.
+#   2. cluster-build (community.redis.cluster action create) carries the param `topology` =
+#      EXACTLY the passed list of lists of SIDs (deepEqual, not a subset) + a nodes-MAP of all
+#      4 hosts (deterministic by SID) + replicas_per_shard=1 (size check of composition).
 name: cluster create with explicit topology forwards declared shard layout to the plugin
 
 fixtures:
@@ -42,8 +42,8 @@ fixtures:
   vault:
     secret/redis/create:
       password: s3cr3t-redis-pass-create
-    # ★ РЕДИЗАЙН default_admin (2026-06-30): default_admin — системный юзер внутрикластерного
-    # AUTH (cluster-build деплоя читает его пароль той же ветки users/<name>).
+    # ★ REDESIGN default_admin (2026-06-30): default_admin is the system user for intra-cluster
+    # AUTH (the cluster-build of the deploy reads its password from the same users/<name> branch).
     secret/redis/create/users/default_admin:
       password: default-admin-secret-pass
     secret/redis/create/users/replica:
@@ -55,8 +55,8 @@ fixtures:
     secret/redis/create/users/haproxy:
       password: haproxy-sys-secret-pass
   essence:
-    # install_method — в essence (author-context, 2026-06-28): способ установки
-    # НЕ operator-input. compute.install читает default(essence.install_method, 'binary').
+    # install_method is in essence (author-context, 2026-06-28): the installation method
+    # is NOT operator-input. compute.install reads default(essence.install_method, 'binary').
     install_method: package
     redis_type: cluster
     modules_base_url: "https://artifacts.example.com/redis/modules"
@@ -70,8 +70,8 @@ fixtures:
       maxmemory-policy: allkeys-lru
       maxclients:       10000
       timeout:          300
-    # ★ РЕДИЗАЙН default_admin (2026-06-30): default_admin — системный юзер полного доступа
-    # (~* &* +@all), под ним внутрикластерный AUTH cluster (заменил requirepass-default).
+    # ★ REDESIGN default_admin (2026-06-30): default_admin is the full-access system user
+    # (~* &* +@all), the intra-cluster AUTH cluster runs under it (replaced requirepass-default).
     system_acl_users:
       default_admin: "~* &* +@all"
       replica:    "+psync +replconf +ping"
@@ -79,8 +79,8 @@ fixtures:
       sentinel:   "allchannels +multi +slaveof +ping +exec +subscribe +config|rewrite +role +publish +info +client|setname +client|kill +script|kill"
       haproxy:    "-@all +auth +client|getname +client|id +client|setname +command +hello +ping +role +info +cluster|info"
   input:
-    # ★ provision выключен (default-on: опущенная секция = ВКЛЮЧЕНО; кейс деплоит на
-    # ГОТОВЫЙ roster, cloud-create не нужен) → include redis-provision.yml group-drop.
+    # ★ provision disabled (default-on: an omitted section = ENABLED; the case deploys onto a
+    # READY roster, cloud-create not needed) → include redis-provision.yml group-drop.
     provision:
       enabled: false
     redis_type: cluster
@@ -88,24 +88,24 @@ fixtures:
     shards: 2
     replicas_per_master: 1
     cluster_node_timeout: 5000
-    # Явная раскладка: мастера node-2/node-4 (первые SID шардов), реплики node-1/node-3.
-    # Намеренно НЕ совпадает с авто-sort (которая дала бы мастерами node-1/node-2).
+    # Explicit layout: masters node-2/node-4 (first SID of each shard), replicas node-1/node-3.
+    # Deliberately does NOT match auto-sort (which would have made node-1/node-2 masters).
     cluster_topology:
       - [node-2.example.com, node-1.example.com]
       - [node-4.example.com, node-3.example.com]
 
 assert:
-  # size-guard PASS (sum-форма): 4 == sum(2+2). Провал ловит size-mismatch-кейс.
+  # size-guard PASS (sum form): 4 == sum(2+2). Failure is caught by the size-mismatch case.
   task_present:
-    # cluster-build: топология доезжает param-ом `topology` (deepEqual всего списка),
-    # nodes-MAP всех 4 хостов, replicas_per_shard=1 (size-проверка состава). Единственная
-    # community.redis.cluster в плане → дизамбигуатор не нужен.
+    # cluster-build: the topology arrives via param `topology` (deepEqual of the whole list),
+    # nodes-MAP of all 4 hosts, replicas_per_shard=1 (size check of composition). The only
+    # community.redis.cluster in the plan → no disambiguator needed.
     - module: community.redis.cluster
       params_subset:
         action: create
         replicas_per_shard: 1
-        # ★ РЕДИЗАЙН default_admin: коннект под default_admin (username → AUTH). Прежний
-        # главный секрет ДРОПНУТ — пароль из ветки users/default_admin.
+        # ★ REDESIGN default_admin: connects as default_admin (username → AUTH). The former
+        # main secret is DROPPED — password comes from the users/default_admin branch.
         username: default_admin
         password: default-admin-secret-pass
         topology:

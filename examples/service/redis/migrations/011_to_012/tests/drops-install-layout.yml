@@ -1,9 +1,9 @@
 name: drops-install-layout
 description: >
-  Инкарнация v11 несёт install + host-layout (conf_dir/data_dir/modules_base_url) в
-  state. Миграция ВЫРЕЗАЕТ все четыре поля (вынесены в essence, Вариант A). Остальной
-  state (redis_type/redis_config/redis_users/tls/persistence/топология) проходит
-  насквозь бит-в-бит.
+  The v11 incarnation carries install + host-layout (conf_dir/data_dir/modules_base_url) in
+  state. The migration REMOVES all four fields (moved to essence, Variant A). The rest of the
+  state (redis_type/redis_config/redis_users/tls/persistence/topology) passes
+  through bit-for-bit.
 
 state_before:
   redis_type: "cluster"

@@ -1,15 +1,15 @@
-# L0-испытание create (standalone) — Redis-МОДУЛИ (директива «модули ВСЕГДА ВСЕ»).
-# Все четыре .so (RedisBloom/RedisJSON/RediSearch/RedisTimeSeries) fetch-ятся
-# core.url.fetched БЕЗ checksum → загрузка по СОДЕРЖИМОМУ (content-идемпотентность по
-# SHA-256, без integrity-verify), как node-exporter (директива «попроще» 2026-06-25:
-# sha256-инпуты вырезаны целиком).
+# L0-test for create (standalone) - Redis MODULES (directive "modules ALWAYS ALL").
+# All four .so files (RedisBloom/RedisJSON/RediSearch/RedisTimeSeries) are fetched by
+# core.url.fetched WITHOUT checksum -> download by CONTENT (content idempotency via
+# SHA-256, without integrity-verify), like node-exporter (directive "simplify" 2026-06-25:
+# sha256 inputs cut entirely).
 #
-# Guard (директива «модули ВСЕГДА ВСЕ»): набор-инвариант в destiny vars.redis_modules:
-#   1. КАЖДЫЙ из ЧЕТЫРЁХ алиасов → core.url.fetched (modules-dir, loadmodules всех
-#      четырёх, URL из arch);
-#   2. version=5:6.2.7 — мажор 6 (< 8), version-guard модули НЕ гасит.
+# Guard (directive "modules ALWAYS ALL"): a set-invariant in destiny vars.redis_modules:
+#   1. EACH of the FOUR aliases -> core.url.fetched (modules-dir, loadmodules for all
+#      four, URL from arch);
+#   2. version=5:6.2.7 - major 6 (< 8), the version guard does NOT drop modules.
 #
-# input.modules НЕ задаётся (набор-инвариант в destiny vars.redis_modules).
+# input.modules is NOT set (set-invariant in destiny vars.redis_modules).
 name: modules fetch all four shared objects by content idempotency without checksum
 
 fixtures:
@@ -23,10 +23,10 @@ fixtures:
   vault:
     secret/redis/create:
       password: s3cr3t-redis-pass-create
-    # Per-user секреты системных юзеров (secret/redis/<inc>/users/<name>#password) —
-    # их резолвит keeper-side vault() при доливе system_acl_users в apply.input.users.
-    # ★ РЕДИЗАЙН default_admin (2026-06-30): default_admin — системный юзер
-    # внутрикластерного AUTH (auth_pass/PING шаги деплоя читают его по ветке users/<name>).
+    # Per-user secrets for system users (secret/redis/<inc>/users/<name>#password) -
+    # resolved keeper-side by vault() when merging system_acl_users into apply.input.users.
+    # * default_admin REDESIGN (2026-06-30): default_admin is the system user
+    # for intra-cluster AUTH (the deploy's auth_pass/PING steps read it via the users/<name> branch).
     secret/redis/create/users/default_admin:
       password: default-admin-secret-pass
     secret/redis/create/users/replica:
@@ -38,12 +38,12 @@ fixtures:
     secret/redis/create/users/haproxy:
       password: haproxy-sys-secret-pass
   essence:
-    # install_method — в essence (author-context, 2026-06-28): способ установки
-    # НЕ operator-input. compute.install читает default(essence.install_method, 'binary').
+    # install_method - in essence (author-context, 2026-06-28): the install method
+    # is NOT operator-input. compute.install reads default(essence.install_method, 'binary').
     install_method: package
     redis_type: sentinel
     sentinel_master_name: master
-    # ★ Редизайн: подложка per-master sentinel-дефолтов (под input.sentinel_master_settings).
+    # * Redesign: per-master sentinel-defaults substrate (for input.sentinel_master_settings).
     sentinel_master_defaults:
       down-after-milliseconds: "5000"
       failover-timeout:        "60000"
@@ -68,10 +68,10 @@ fixtures:
       maxclients:       10000
       timeout:          300
 
-    # Системные ACL-юзеры redis-server + sentinel-демона (1:1 из essence/_default.yaml).
-    # ОБА ОБЯЗАТЕЛЬНЫ: guard create/sentinel.yml (assert 1b) рвёт render при пустом
-    # любом из наборов (тихий fail-open недопустим — без них репликация/sentinel↔redis
-    # AUTH сломались бы).
+    # System ACL users for redis-server + the sentinel daemon (1:1 from essence/_default.yaml).
+    # BOTH ARE REQUIRED: the create/sentinel.yml guard (assert 1b) breaks render if either
+    # set is empty (a silent fail-open is unacceptable - without them replication/sentinel<->redis
+    # AUTH would break).
     system_acl_users:
       default_admin: "~* &* +@all"
       replica:    "+psync +replconf +ping"
@@ -84,23 +84,23 @@ fixtures:
       sentinel:   "allchannels -@all +auth +client|getname +client|id +client|setname +command +hello +ping +sentinel|is-master-down-by-addr +publish +role +sentinel|get-master-addr-by-name +sentinel|master +sentinel|myid +sentinel|replicas +sentinel|sentinels"
       haproxy:    "-@all +auth +client|getname +client|id +client|setname +command +hello +ping +role +sentinel|get-master-addr-by-name +sentinel|master +sentinel|myid +sentinel|replicas +sentinel|sentinels"
   input:
-    # ★ provision выключен (default-on: опущенная секция = ВКЛЮЧЕНО; кейс деплоит на
-    # ГОТОВЫЙ roster, cloud-create не нужен) → include redis-provision.yml group-drop.
+    # * provision is disabled (default-on: an omitted section = ENABLED; this case deploys onto
+    # a READY roster, cloud-create isn't needed) -> include redis-provision.yml group-drop.
     provision:
       enabled: false
     redis_type: sentinel
     version: "7.4.1"
-    # install_method=package ЯВНО (default редизайна — binary): кейс про модули
-    # (фетч .so), а не про install-модель.
-    # single-host sentinel roster (1 хост) → реплик нет (size-guard 1+0).
+    # install_method=package EXPLICITLY (redesign default is binary): this case is about modules
+    # (fetching .so files), not the install model.
+    # single-host sentinel roster (1 host) -> no replicas (size-guard 1+0).
     replicas_per_master: 0
-    # input.modules НЕ задаётся (набор-инвариант). ВСЕ четыре модуля fetch-ятся по
-    # content-идемпотентности (без checksum).
+    # input.modules is NOT set (set-invariant). ALL four modules are fetched by
+    # content idempotency (no checksum).
 
 assert:
   task_present:
-    # redis.conf несёт vars.loadmodules — пути .so ВСЕХ четырёх (Go-сорт: bloom, json,
-    # search, timeseries). Дизамбигуатор от users.acl/hardening — path.
+    # redis.conf carries vars.loadmodules - .so paths for ALL four (Go sort: bloom, json,
+    # search, timeseries). Disambiguator from users.acl/hardening - path.
     - module: core.file.rendered
       params_subset:
         path: /etc/redis/redis.conf
@@ -121,10 +121,10 @@ assert:
               - /var/lib/redis/modules/redisearch.so
               - /var/lib/redis/modules/redistimeseries.so
             config:
-              # ★ РЕДИЗАЙН default_admin: replica→master AUTH (masteruser/
-              # masterauth) приходит ОБЫЧНЫМИ директивами config (sentinel
-              # deploy-body доливает их vault()-в-ячейке) → redis.conf range-ит
-              # их как любую директиву → статически переживают рестарт.
+              # * default_admin REDESIGN: replica->master AUTH (masteruser/
+              # masterauth) comes in as REGULAR config directives (the sentinel
+              # deploy-body fills them in via a vault()-in-cell) -> redis.conf ranges
+              # over them like any other directive -> they statically survive a restart.
               masteruser:       "default_admin"
               masterauth:       "default-admin-secret-pass"
               maxmemory: "256mb"
@@ -137,7 +137,7 @@ assert:
             sid: node-solo.example.com
             covens: [create]
             choirs: []
-            # traits — registry-проекция (ADR-060), пустой объект без меток.
+            # traits - a registry projection (ADR-060), an empty object with no labels.
             traits: {}
             role: ""
             network:
@@ -147,8 +147,8 @@ assert:
           role: ""
           essence: {}
 
-    # modules-dir каталог — gated-include на deploy_redis && !redis8, здесь АКТИВНА.
-    # Дизамбигуатор от systemd-dropin-dir — path.
+    # modules-dir directory - gated-include on deploy_redis && !redis8, ACTIVE here.
+    # Disambiguator from systemd-dropin-dir - path.
     - module: core.file.directory
       params_subset:
         path: /var/lib/redis/modules
@@ -156,9 +156,9 @@ assert:
         group: redis
         mode: "0750"
 
-    # fetch .so — четыре явные задачи (Go-сорт: bloom, json, search, timeseries).
-    # URL арх-специфичен (x86_64 — uname-m-маппинг soulprint amd64). checksum НЕ передаётся: core.url.fetched качает по
-    # content-идемпотентности. Дизамбигуатор .so — path/url; tarball-fetch — placeholder-skip.
+    # fetch .so - four explicit tasks (Go sort: bloom, json, search, timeseries).
+    # The URL is arch-specific (x86_64 - uname-m mapping of soulprint amd64). checksum is NOT passed: core.url.fetched downloads by
+    # content idempotency. Disambiguator for .so - path/url; tarball-fetch - placeholder-skip.
     - module: core.url.fetched
       params_subset:
         url: "https://artifacts.example.com/redis/modules/6.2/x86_64/redisbloom.so"
@@ -191,7 +191,7 @@ assert:
         owner: redis
         group: redis
 
-    # standalone-PING: cluster/sentinel ветки — placeholder-skip; дизамбигуатор
+    # standalone-PING: cluster/sentinel branches - placeholder-skip; disambiguator
     # addr/args.
     - module: community.redis.command
       params_subset:
@@ -212,8 +212,8 @@ assert:
       appendonly: "no"
     redis_users: []
     redis_hosts: []
-    # ★ Редизайн: тайминги failover в master_settings (дефолты essence.sentinel_master_defaults;
-    # operator dict не задан). settings — глобальные sentinel-директивы (не заданы → {}).
+    # * Redesign: failover timings in master_settings (defaults from essence.sentinel_master_defaults;
+    # the operator dict is not set). settings are global sentinel directives (not set -> {}).
     redis_sentinel:
       master_name: master
       quorum: 0
@@ -221,5 +221,5 @@ assert:
         down-after-milliseconds: "5000"
         failover-timeout: "60000"
       settings: {}
-    # Redis 6 (< 8) → полный набор развёрнут (модули всегда все).
+    # Redis 6 (< 8) -> the full set is expanded (modules always all).
     modules: [bloom, json, search, timeseries]

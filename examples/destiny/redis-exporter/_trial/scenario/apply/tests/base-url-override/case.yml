@@ -1,10 +1,10 @@
-# L0-кейс: переопределение base_url на внутреннее зеркало (зеркало кейса
-# node-exporter base-url-override).
+# L0 case: overriding base_url to an internal mirror (mirrors the
+# node-exporter base-url-override case).
 #
-# base_url_override=https://nexus.internal/re → харнесс передаёт его в
-# destiny.base_url → CEL собирает url с зеркала вместо GitHub Releases.
-# Ассерт — url шага core.url.fetched начинается с зеркала; раскладка имени
-# tarball-а (префикс `v`) не меняется.
+# base_url_override=https://nexus.internal/re → the harness passes it to
+# destiny.base_url → CEL assembles the url from the mirror instead of GitHub Releases.
+# Assert — the url of the core.url.fetched step starts with the mirror; the tarball
+# name layout (prefix `v`) doesn't change.
 name: redis-exporter renders download url from base_url mirror override
 
 fixtures:

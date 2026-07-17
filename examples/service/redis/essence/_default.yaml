@@ -1,190 +1,190 @@
-# Baseline-essence сервиса redis (подложка автора, концепция defaults роли).
-# Оператор переопределяет в spec инкарнации; на L0-прогоне ключевые значения
-# дублируются в fixtures кейса.
+# Baseline essence of the redis service (author's fallback, the defaults-of-a-role concept).
+# The operator overrides it in the incarnation spec; on an L0 run key values
+# are duplicated in the case fixtures.
 #
-# Это СЛОЙ ТРАНСЛЯЦИИ простого ввода оператора (architect 2026-06-22): данные-
-# таблицы (persistence_presets, memory_reserve_percent) и merge-подложка
-# redis_config живут здесь, scenario сливает их с вводом через merge() (templating
-# §2.3). НИЧЕГО из этой трансляции не уходит в плагин — она нужна только render-у
-# redis.conf at-create (источник истины).
+# This is the TRANSLATION LAYER for simple operator input (architect 2026-06-22): data
+# tables (persistence_presets, memory_reserve_percent) and the merge fallback
+# redis_config live here, the scenario merges them with the input via merge() (templating
+# §2.3). NONE of this translation goes into the plugin — it's only needed for the
+# redis.conf render at-create (source of truth).
 
-# Режим развёртывания по умолчанию. Режимы сервиса — sentinel/cluster (2026-06-25);
-# sentinel с replicas_per_master=0 даёт standalone-эквивалент.
+# Default deployment mode. Service modes — sentinel/cluster (2026-06-25);
+# sentinel with replicas_per_master=0 gives a standalone equivalent.
 redis_type: sentinel
 
-# Логическое имя monitored master в Sentinel (директива sentinel.conf SENTINEL
-# MONITOR + community.redis.sentinel master_name). Переехало из operator-input в
-# essence (2026-06-25): author-context, оператор переопределяет в spec.essence.
-# Дефолт `master` (раньше operator-default был `mymaster`).
+# Logical name of the monitored master in Sentinel (sentinel.conf directive SENTINEL
+# MONITOR + community.redis.sentinel master_name). Moved from operator-input to
+# essence (2026-06-25): author-context, the operator overrides it in spec.essence.
+# Default `master` (the former operator-default was `mymaster`).
 sentinel_master_name: master
 
-# Базовый URL источника .so Redis-модулей (без арх-сегмента). destiny `redis` строит
-# полный URL per-host как <base_url>/<arch>/<имя.so> (Redis < 8: модули разворачиваются
-# всегда все). Переехало из operator-input в essence (2026-06-25): author-context,
-# оператор переопределяет в spec.essence под свой mirror. Дефолт "" — не задан (Redis
-# 8+ — модули встроены, источник не нужен; на Redis < 8 оператор обязан переопределить).
+# Base URL of the .so Redis modules source (without the arch segment). destiny `redis` builds
+# the full per-host URL as <base_url>/<arch>/<name.so> (Redis < 8: modules are always
+# all deployed). Moved from operator-input to essence (2026-06-25): author-context,
+# the operator overrides it in spec.essence for their own mirror. Default "" — unset (Redis
+# 8+ — modules are built in, no source needed; on Redis < 8 the operator must override).
 modules_base_url: ""
 
-# ── SSRF-guard для fetch .so модулей (allow_private, 2026-06-28) ─────────────────
-# Симметрично binary_allow_private: modules_base_url тоже может быть внутренним Nexus
-# (resolve в RFC1918) → 4 .so-fetch destiny упали бы на SSRF-guard core.url. Дефолт TRUE
-# (доверенный internal Nexus). compute.modules_allow_private прокидывает его в
-# apply.input.modules_allow_private → destiny modules.yml. Публичный-mirror — false в spec.essence.
+# ── SSRF guard for .so module fetches (allow_private, 2026-06-28) ─────────────────
+# Symmetric to binary_allow_private: modules_base_url can also be an internal Nexus
+# (resolves to RFC1918) → 4 .so-fetch destinies would fail on the core.url SSRF guard. Default TRUE
+# (trusted internal Nexus). compute.modules_allow_private forwards it into
+# apply.input.modules_allow_private → destiny modules.yml. Public-mirror — false in spec.essence.
 modules_allow_private: true
 
-# ── Способ установки redis: ФИКСИРОВАН в essence, НЕ operator-input (2026-06-28) ──
-# install_method убран из операторского контракта create: способ установки — НЕ
-# операторский выбор в Run-форме, а author-context. Дефолт binary (штатный способ:
-# отдельные бинари из Nexus). compute.install читает это значение
-# (default(essence.install_method, 'binary')), симметрично modules_base_url/binary_base_url.
-# Ветка package остаётся vars-driven: внутренний оператор переопределяет в spec.essence
-# (install_method: package) под distro-инсталляцию, обычный оператор её не видит.
+# ── Redis install method: FIXED in essence, NOT operator-input (2026-06-28) ──
+# install_method was removed from the operator create contract: the install method is NOT
+# an operator choice in the Run form, but author-context. Default binary (the standard way:
+# separate binaries from Nexus). compute.install reads this value
+# (default(essence.install_method, 'binary')), symmetric to modules_base_url/binary_base_url.
+# The package branch remains vars-driven: an internal operator overrides it in spec.essence
+# (install_method: package) for a distro install, a regular operator doesn't see it.
 install_method: binary
 
-# ── Способ установки binary: источник бинарей Redis из Nexus (редизайн) ──────────
-# install_method=binary (DEFAULT) тянет ОТДЕЛЬНЫЕ бинари redis-server/redis-cli/
-# redis-benchmark из Nexus. base_url — author-context (оператор переопределяет в
-# spec.essence под свой mirror). destiny строит путь per-host как
+# ── Binary install method: source of Redis binaries from Nexus (redesign) ──────────
+# install_method=binary (DEFAULT) pulls SEPARATE binaries redis-server/redis-cli/
+# redis-benchmark from Nexus. base_url — author-context (the operator overrides it in
+# spec.essence for their own mirror). destiny builds the per-host path as
 # <binary_base_url>/<arch>/Debian/<distro_ver>/<version>/redis-{server,cli,benchmark}
-# из soulprint.self.os (arch, version) + input.version (cluster.yml/sentinel.yml binary-ветка).
-# ★ binary_version в СЦЕНАРИИ create НЕ читается (версия — операторский input.version,
-# enum выкаченных в Nexus сборок). НО он ЖИВ для других сценариев сервиса: migrate_cluster
-# (df_version-каскад binary → essence.binary_version) — поэтому НЕ удалён, оставлен "" как
-# author-context-подложка (оператор переопределяет в spec.essence под binary-инсталляцию).
+# from soulprint.self.os (arch, version) + input.version (cluster.yml/sentinel.yml binary branch).
+# ★ binary_version is NOT read in the create SCENARIO (the version is operator input.version,
+# an enum of published Nexus builds). BUT it is ALIVE for other service scenarios: migrate_cluster
+# (df_version cascade binary → essence.binary_version) — so it's NOT removed, left as "" as an
+# author-context fallback (the operator overrides it in spec.essence for a binary install).
 binary_base_url: "https://nexus-hosted.wb.ru/repository/raw/devops/dba/prod/redis"
 binary_version:  ""
 
-# ── SSRF-guard для fetch бинарей Nexus (allow_private, 2026-06-28) ───────────────
-# Дефолтный binary_base_url выше — ВНУТРЕННИЙ Nexus, который резолвится в RFC1918-адрес
-# (напр. 10.16.2.130). core.url.fetched по умолчанию (allow_private:false) блокит dial в
-# private-IP SSRF-guard-ом (shared/netguard) → fetch redis-бинарей падает на реальном
-# хосте. Дефолт TRUE: дефолтный base = доверенный internal Nexus → ослабление легитимно.
-# compute.install (create/main.yml) прокидывает значение в apply.input.install.allow_private
-# → destiny install.yml 4 fetch-задачи. Публичный-mirror-деплой (binary_base_url с external-
-# resolvable хостом) ставит false в spec.essence инкарнации — guard восстанавливается.
+# ── SSRF guard for Nexus binary fetches (allow_private, 2026-06-28) ───────────────
+# The default binary_base_url above is an INTERNAL Nexus that resolves to an RFC1918 address
+# (e.g. 10.16.2.130). core.url.fetched by default (allow_private:false) blocks dialing a
+# private IP via the SSRF guard (shared/netguard) → fetching redis binaries fails on a real
+# host. Default TRUE: the default base = a trusted internal Nexus → relaxing it is legitimate.
+# compute.install (create/main.yml) forwards the value into apply.input.install.allow_private
+# → destiny install.yml's 4 fetch tasks. A public-mirror deployment (binary_base_url with an externally
+# resolvable host) sets false in the incarnation's spec.essence — the guard is restored.
 binary_allow_private: true
 
-# ── Cloud-provision дефолты: provider/profile/timeout/ssh для create default-on ──
-# create поднимает VM по умолчанию (input.provision default-on, решение 2026-06-30).
-# Оператор НЕ выбирает provider/profile в Run-форме (она скрыта) — они приходят ОТСЮДА:
-# redis-provision.yml читает default(input.provision.X, essence.provision_X), covenant
-# state_changes provisioned_provider — то же. Author-context: оператор переопределяет в
-# spec.essence инкарнации (другой провайдер/профиль/таймаут), но дефолт — прод-окружение.
+# ── Cloud-provision defaults: provider/profile/timeout/ssh for create default-on ──
+# create brings up a VM by default (input.provision default-on, decision 2026-06-30).
+# The operator does NOT choose provider/profile in the Run form (it's hidden) — they come FROM HERE:
+# redis-provision.yml reads default(input.provision.X, essence.provision_X), the covenant
+# state_changes provisioned_provider — the same. Author-context: the operator overrides it in the
+# incarnation's spec.essence (a different provider/profile/timeout), but the default is the prod environment.
 #
-# ★ TODO: prod/dev provider switch (ENV keeper / Coven-overlay) — отдельный ADR. Пока
-# ОДНА статичная пара provider/profile (прод). Переключение prod/dev по окружению Keeper-а
-# или по Coven-overlay инкарнации НЕ реализовано — это заглушка под будущую развилку.
+# ★ TODO: prod/dev provider switch (ENV keeper / Coven-overlay) — a separate ADR. For now
+# ONE static provider/profile pair (prod). Switching prod/dev by Keeper environment
+# or by the incarnation's Coven-overlay is NOT implemented — this is a stub for a future fork.
 provision_provider: wb-prod
 provision_profile:  redis-debian-12
-# Верхняя граница ожидания онбординга созданных VM (барьер await_online, core.soul.registered
-# refresh_soulprint; форма <N>{s|m|h}). Фоллбэк для input.provision.await_timeout.
+# Upper bound for waiting on onboarding of created VMs (the await_online barrier, core.soul.registered
+# refresh_soulprint; form <N>{s|m|h}). Fallback for input.provision.await_timeout.
 provision_await_timeout: "8m"
-# Имя SshProvider-плагина для доставки per-VM bootstrap-токена по SSH (core.bootstrap.delivered).
+# Name of the SshProvider plugin for delivering the per-VM bootstrap token over SSH (core.bootstrap.delivered).
 provision_ssh_provider: teleport
-# Потолок ожидания появления свежесозданной VM в Teleport перед доставкой токена
-# (core.bootstrap.delivered, transport=teleport, retry-до-join; форма <N>{s|m|h}).
-# fail-fast: VM обычно online ~5m (запас x2), большой timeout маскирует провал enroll.
-# Фоллбэк для input.provision.join_wait_timeout.
+# Ceiling on waiting for a freshly created VM to appear in Teleport before delivering the token
+# (core.bootstrap.delivered, transport=teleport, retry-until-join; form <N>{s|m|h}).
+# fail-fast: a VM is usually online in ~5m (2x margin), a large timeout would mask an enroll failure.
+# Fallback for input.provision.join_wait_timeout.
 provision_join_wait_timeout: "10m"
 
-# ── Обязательный мониторинг data-плоскости: экспортеры метрик (Слайс I) ───────────
-# create БЕЗУСЛОВНО ставит node_exporter (метрики хоста) + redis_exporter (метрики Redis)
-# на КАЖДЫЙ хост incarnation (ПОСЛЕ deploy-ветки). Версии/порты/checksum — author-context
-# (НЕ operator-input, форма скрыта, контракт=A): оператор переопределяет в spec.essence.
-# compute гонит их в apply.input двух destiny (node-exporter/redis-exporter); arch каждая
-# destiny берёт сама из soulprint.self.os.arch. redis_exporter авторизуется ACL-юзером
-# monitoring (system_acl_users.monitoring, пароль генерится kv-present) — на ACL-инстансе
-# без requirepass без --redis.user был бы WRONGPASS (см. create/main.yml).
+# ── Mandatory data-plane monitoring: metric exporters (Slice I) ───────────
+# create UNCONDITIONALLY installs node_exporter (host metrics) + redis_exporter (Redis metrics)
+# on EVERY incarnation host (AFTER the deploy branch). Versions/ports/checksum — author-context
+# (NOT operator-input, the form is hidden, contract=A): the operator overrides it in spec.essence.
+# compute drives them into apply.input of two destinies (node-exporter/redis-exporter); each
+# destiny takes arch itself from soulprint.self.os.arch. redis_exporter authenticates as the ACL user
+# monitoring (system_acl_users.monitoring, password generated by kv-present) — on an ACL instance
+# without requirepass, without --redis.user it would be WRONGPASS (see create/main.yml).
 node_exporter_version:  "1.8.2"
 node_exporter_listen:   ":9100"
-# Корень загрузки релизов node_exporter. WB-стенд закрыт к github.com напрямую →
-# WB Nexus raw-proxy (зеркалит github-путь 1:1 после raw-proxy-github/). destiny-default
-# остаётся GitHub Releases (back-compat не-WB окружений); не-WB оператор переопределяет
-# в spec.essence или убирает ключ.
+# Download root for node_exporter releases. The WB stand has no direct access to github.com →
+# WB Nexus raw-proxy (mirrors the github path 1:1 behind raw-proxy-github/). The destiny default
+# remains GitHub Releases (back-compat for non-WB environments); a non-WB operator overrides it
+# in spec.essence or removes the key.
 node_exporter_base_url: "https://nexus-proxy.wb.ru/repository/raw-proxy-github/prometheus/node_exporter/releases/download"
-# SSRF-guard opt-out: base_url выше — WB Nexus, резолвится в private-IP (симметрия
-# binary_allow_private). Публичный-mirror-деплой — false (или убрать ключ) в spec.essence.
+# SSRF guard opt-out: the base_url above is a WB Nexus that resolves to a private IP (symmetric to
+# binary_allow_private). A public-mirror deployment — false (or remove the key) in spec.essence.
 node_exporter_allow_private: true
 redis_exporter_version: "1.62.0"
-# checksum tarball-а redis_exporter (linux-<arch>, форма "sha256:<hex>", 64 hex).
-# core.url.fetched верифицирует его ДО публикации бинаря. Дефолт — реальный pinned
-# sha256 под указанную пару (redis_exporter_version, arch). При смене версии/arch оператор
-# ОБЯЗАН обновить checksum под свою пару из sha256sums GitHub-релиза
-# oliver006/redis_exporter в spec.essence — иначе fail-closed (несовпадение/pattern → честный отказ fetch).
+# Checksum of the redis_exporter tarball (linux-<arch>, form "sha256:<hex>", 64 hex).
+# core.url.fetched verifies it BEFORE publishing the binary. The default is a real pinned
+# sha256 for the given pair (redis_exporter_version, arch). When changing version/arch the operator
+# MUST update the checksum for their pair from the sha256sums of the GitHub release
+# oliver006/redis_exporter in spec.essence — otherwise fail-closed (mismatch/pattern → an honest fetch refusal).
 redis_exporter_sha256:  "sha256:a09f92a6b366e37c654e50522c7b80e4a625396b2499fd42cf17e1aa91e56d5e"
 redis_exporter_listen:  ":9121"
-# Корень загрузки релизов redis_exporter — WB Nexus raw-proxy (см. node_exporter_base_url).
+# Download root for redis_exporter releases — WB Nexus raw-proxy (see node_exporter_base_url).
 redis_exporter_base_url: "https://nexus-proxy.wb.ru/repository/raw-proxy-github/oliver006/redis_exporter/releases/download"
-# SSRF-guard opt-out для private-resolve WB Nexus (см. node_exporter_allow_private).
+# SSRF guard opt-out for the WB Nexus private-resolve (see node_exporter_allow_private).
 redis_exporter_allow_private: true
 
-# ── Обязательный log-shipping data-плоскости: Vector (Слайс V-I, ADR-067) ─────────
-# create БЕЗУСЛОВНО ставит vector (агент отгрузки логов) на КАЖДЫЙ хост incarnation
-# (ПОСЛЕ deploy-ветки и экспортеров). ДОПОЛНЯЕТ node_exporter/redis_exporter (метрики,
-# pull) лог-плоскостью (логи, push) — три разных observability-слоя, НЕ пересекаются.
-# Версии/checksum/sink — author-context (НЕ operator-input, форма скрыта, контракт=A):
-# оператор переопределяет в spec.essence. compute гонит их в apply.input destiny vector
-# (create/main.yml); arch destiny берёт сама из soulprint.self.os.arch.
+# ── Mandatory data-plane log shipping: Vector (Slice V-I, ADR-067) ─────────
+# create UNCONDITIONALLY installs vector (log shipping agent) on EVERY incarnation host
+# (AFTER the deploy branch and the exporters). SUPPLEMENTS node_exporter/redis_exporter (metrics,
+# pull) with a log plane (logs, push) — three different observability layers that do NOT overlap.
+# Versions/checksum/sink — author-context (NOT operator-input, the form is hidden, contract=A):
+# the operator overrides it in spec.essence. compute drives them into apply.input of the destiny vector
+# (create/main.yml); the destiny takes arch itself from soulprint.self.os.arch.
 vector_version:  "0.40.0"
-# checksum tarball-а Vector (<arch>-unknown-linux-gnu, форма "sha256:<hex>", 64 hex).
-# core.url.fetched верифицирует его ДО публикации бинаря. Дефолт — реальный pinned
-# sha256 под указанную пару (vector_version, arch). При смене версии/arch оператор
-# ОБЯЗАН обновить checksum под свою пару из sha256sums.txt GitHub-релиза
-# vectordotdev/vector в spec.essence — иначе fail-closed (несовпадение/pattern → честный отказ fetch).
+# Checksum of the Vector tarball (<arch>-unknown-linux-gnu, form "sha256:<hex>", 64 hex).
+# core.url.fetched verifies it BEFORE publishing the binary. The default is a real pinned
+# sha256 for the given pair (vector_version, arch). When changing version/arch the operator
+# MUST update the checksum for their pair from the sha256sums.txt of the GitHub release
+# vectordotdev/vector in spec.essence — otherwise fail-closed (mismatch/pattern → an honest fetch refusal).
 vector_sha256:   "sha256:112b047df17df46feb22fc69234e8fc2ad5a411cd2e7d369f3b70c00617a4e90"
-# Корень загрузки релизов Vector — WB Nexus raw-proxy (см. node_exporter_base_url).
+# Download root for Vector releases — WB Nexus raw-proxy (see node_exporter_base_url).
 vector_base_url: "https://nexus-proxy.wb.ru/repository/raw-proxy-github/vectordotdev/vector/releases/download"
-# SSRF-guard opt-out для private-resolve WB Nexus (см. node_exporter_allow_private).
+# SSRF guard opt-out for the WB Nexus private-resolve (see node_exporter_allow_private).
 vector_allow_private: true
-# sink_type — куда шлём логи (loki/elasticsearch/vector/console). Дефолт console (безопасно,
-# без внешней инфры: логи в stdout самого vector). sink_endpoint — адрес центрального
-# коллектора (форма зависит от sink_type: loki/elasticsearch — URL, vector — host:port;
-# console — не используется). Пусто (default) допустимо только для console. sink_auth_ref —
-# токен доступа к коллектору (Vault-ref ИЛИ значение); резолвится Soul-side, в state НЕ
-# оседает (ИБ, как tls.*_ref). Пусто → sink без auth. Оператор задаёт sink_type/endpoint/
-# auth_ref в spec.essence при живом коллекторе (Grafana Loki и т.п.).
+# sink_type — where we ship logs (loki/elasticsearch/vector/console). Default console (safe,
+# no external infra: logs go to vector's own stdout). sink_endpoint — address of the central
+# collector (form depends on sink_type: loki/elasticsearch — URL, vector — host:port;
+# console — unused). Empty (default) is only valid for console. sink_auth_ref —
+# access token for the collector (a Vault ref OR a value); resolved Soul-side, does NOT
+# land in state (security, like tls.*_ref). Empty → sink without auth. The operator sets sink_type/endpoint/
+# auth_ref in spec.essence when a live collector is available (Grafana Loki etc.).
 vector_sink_type:      console
 vector_sink_endpoint:  ""
 vector_sink_auth_ref:  ""
-# Пути/glob-ы лог-файлов redis, которые vector читает (source type file). redis-server и
-# redis-sentinel пишут в /var/log/redis/*.log (logfile redis.conf/sentinel.conf, glob
-# покрывает оба демона — синхронно с logrotate destiny redis). journald по умолчанию off
-# (только файлы). Оператор расширяет список в spec.essence при необходимости.
+# Paths/globs of redis log files that vector reads (source type file). redis-server and
+# redis-sentinel write to /var/log/redis/*.log (logfile redis.conf/sentinel.conf, the glob
+# covers both daemons — in sync with logrotate destiny redis). journald is off by default
+# (files only). The operator extends the list in spec.essence as needed.
 vector_log_sources:  ["/var/log/redis/*.log"]
 
-# ── Дефолты per-master директив Sentinel (подложка sentinel_master_settings) ─────
-# Нижний слой merge() для input.sentinel_master_settings (compute.sentinel_directives):
-# ключ — имя опции SENTINEL SET без префикса/master-name, значение — строка. Сюда
-# переехали дефолты удалённых именованных полей sentinel_down_after_ms (=5000) и
-# sentinel_failover_timeout_ms (=60000). Оператор перекрывает их в Run-форме
-# (input.sentinel_master_settings, last-wins) или в spec.essence.
+# ── Sentinel per-master directive defaults (sentinel_master_settings fallback) ─────
+# Bottom merge() layer for input.sentinel_master_settings (compute.sentinel_directives):
+# key — the SENTINEL SET option name without the prefix/master-name, value — a string. The
+# defaults of the removed named fields sentinel_down_after_ms (=5000) and
+# sentinel_failover_timeout_ms (=60000) moved here. The operator overrides them in the Run form
+# (input.sentinel_master_settings, last-wins) or in spec.essence.
 sentinel_master_defaults:
   down-after-milliseconds: "5000"
   failover-timeout:        "60000"
 
-# ── Host-layout: базовые каталоги конфигурации и данных Redis (#2, 2026-06-26) ───
-# conf_dir/data_dir переехали из operator-input в essence (author-context): оператор
-# переопределяет раскладку в spec.essence под свой storage-layout, а не в Run-форме
-# каждого прогона. compute читает их отсюда и гонит в destiny (apply.input); в state
-# они не персистятся — day-2 add_node читает layout из essence.conf_dir/data_dir
-# (has()-safe default). Дефолт = текущий путь.
+# ── Host layout: base Redis configuration and data directories (#2, 2026-06-26) ───
+# conf_dir/data_dir moved from operator-input to essence (author-context): the operator
+# overrides the layout in spec.essence for their own storage layout, not in the Run form
+# of every run. compute reads them from here and drives them into destiny (apply.input); they
+# are not persisted in state — day-2 add_node reads the layout from essence.conf_dir/data_dir
+# (has()-safe default). Default = the current path.
 conf_dir: /etc/redis
 data_dir: /var/lib/redis
 
-# Доля бюджета памяти (input.memory_mb), отдаваемая Redis под maxmemory; остаток —
-# резерв под ОС/накладные. scenario вычисляет maxmemory = memory_mb*pct/100 (МБ).
+# Share of the memory budget (input.memory_mb) given to Redis under maxmemory; the remainder —
+# reserved for OS/overhead. scenario computes maxmemory = memory_mb*pct/100 (MB).
 memory_reserve_percent: 75
 
-# Данные-таблица persistence: enum оператора (off/aof_1sec/aof_always/rdb/
-# rdb_aof_1sec/rdb_aof_always) → директивы redis.conf. scenario берёт
-# presets[input.persistence] и мержит ЦЕЛИКОМ в redis_config (appendfsync доезжает
-# автоматически). Значения — строки (range-ятся в redis.conf как `<key> <value>`):
-#   - save: "" отключает RDB-снапшоты; непустая — politica save точек.
-#   - appendonly: yes/no включает AOF.
-#   - appendfsync: everysec/always — частота fsync AOF (для AOF-режимов).
-# rdb_aof_* = и снапшоты, и AOF (двойная durability). aof_1sec/rdb_aof_1sec — fsync
-# раз в секунду (баланс durability/throughput); aof_always/rdb_aof_always — fsync на
-# каждую запись (максимальная durability, дороже).
+# Data table for persistence: operator enum (off/aof_1sec/aof_always/rdb/
+# rdb_aof_1sec/rdb_aof_always) → redis.conf directives. scenario takes
+# presets[input.persistence] and merges it WHOLE into redis_config (appendfsync comes
+# along automatically). Values are strings (rendered into redis.conf as `<key> <value>`):
+#   - save: "" disables RDB snapshots; non-empty — a save-points policy.
+#   - appendonly: yes/no enables AOF.
+#   - appendfsync: everysec/always — the AOF fsync frequency (for AOF modes).
+# rdb_aof_* = both snapshots and AOF (double durability). aof_1sec/rdb_aof_1sec — fsync
+# once per second (durability/throughput balance); aof_always/rdb_aof_always — fsync on
+# every write (maximum durability, more expensive).
 persistence_presets:
   off:
     save:       ""
@@ -209,60 +209,60 @@ persistence_presets:
     appendonly:  "yes"
     appendfsync: "always"
 
-# TLS (концепция Ansible-роли redis: defaults redis_tls_*). Источник PEM —
-# Vault-ПУТИ (не сам PEM): scenario резолвит их через ${ vault(<ref>) } в render-
-# фазе и передаёт ЦЕЛЫЕ PEM в destiny/плагин. Пути — доверенный контекст автора
-# (essence), не operator-input → vault() принимает их динамическим аргументом
-# (templating.md §2.3). Форма ref — "<mount>/<path>#<field>" (как requirepass).
-# ★ Редизайн (connection_mode): TLS-НАМЕРЕНИЕ переехало в operator-input
-# input.connection_mode (enum tls/tls_plain/plain) — прежние essence-флаги
-# tls_enable/tls_only УДАЛЕНЫ (compute.tls_on/tls_only_on выводятся из enum, не из
-# essence). В essence остаются лишь ТЕХНИЧЕСКИЕ параметры: tls_port (7379, как роль)
-# и Vault-пути PEM ниже.
+# TLS (concept from the Ansible redis role: defaults redis_tls_*). PEM source —
+# Vault PATHS (not the PEM itself): scenario resolves them via ${ vault(<ref>) } in the
+# render phase and passes the WHOLE PEM to destiny/plugin. Paths are the author's trusted
+# context (essence), not operator-input → vault() accepts them as a dynamic argument
+# (templating.md §2.3). Ref form — "<mount>/<path>#<field>" (like requirepass).
+# ★ Redesign (connection_mode): TLS INTENT moved to operator-input
+# input.connection_mode (enum tls/tls_plain/plain) — the former essence flags
+# tls_enable/tls_only were REMOVED (compute.tls_on/tls_only_on are derived from the enum, not
+# from essence). Only the TECHNICAL parameters remain in essence: tls_port (7379, as in the role)
+# and the PEM Vault paths below.
 tls_port:   7379
-# Vault-пути источника PEM (заполнить под реальную инсталляцию). Дефолт —
-# конвенция secret/services/redis/tls (отдельная ветка TLS-материала, не путается с
-# secret/redis/<inc>/users/* паролями ACL-юзеров).
+# Vault paths to the PEM source (fill in for the real install). Default —
+# the secret/services/redis/tls convention (a separate branch for TLS material, not to be confused with
+# secret/redis/<inc>/users/* ACL user passwords).
 tls_cert_ref: "secret/services/redis/tls#cert"
 tls_key_ref:  "secret/services/redis/tls#key"
 tls_ca_ref:   "secret/services/redis/tls#ca"
 
-# ── Системные ACL-юзеры Redis (концепция Ansible-роли redis: redis_system_users /
+# ── System ACL users for Redis (concept from the Ansible redis role: redis_system_users /
 #    redis_sentinel_system_users) ────────────────────────────────────────────────
-# Имя→ACL-perms-строка СЛУЖЕБНЫХ юзеров, без которых кластер не работает: default_admin
-# (полные права — внутрикластерный AUTH: репликация masterauth, cluster MEET, sentinel
-# monitor, health-PING; заменил requirepass-юзера default), replica (репликация PSYNC),
-# monitoring (экспортёр метрик), sentinel (sentinel↔redis AUTH), haproxy (health-check
-# балансировщика). perms replica/monitoring/sentinel/haproxy скопированы 1:1 из
-# vars/main.yml роли (redis_system_users / redis_sentinel_system_users) — НЕ выдумывать,
-# источник истины.
+# Name→ACL-perms string for the SERVICE users without which the cluster doesn't work: default_admin
+# (full permissions — intra-cluster AUTH: masterauth replication, cluster MEET, sentinel
+# monitor, health-PING; replaced the requirepass user default), replica (PSYNC replication),
+# monitoring (metrics exporter), sentinel (sentinel↔redis AUTH), haproxy (load balancer
+# health-check). perms replica/monitoring/sentinel/haproxy copied 1:1 from
+# vars/main.yml of the role (redis_system_users / redis_sentinel_system_users) — do NOT make up,
+# it's the source of truth.
 #
-# Два набора, потому что у redis-server и sentinel-демона РАЗНЫЕ требования к командам
-# (sentinel-команды vs обычные redis-команды) → ДВА aclfile: users.acl (redis-server,
-# system_acl_users) и sentinel-users.acl (sentinel-демон, system_acl_users_sentinel).
+# Two sets, because redis-server and the sentinel daemon have DIFFERENT command requirements
+# (sentinel commands vs regular redis commands) → TWO aclfiles: users.acl (redis-server,
+# system_acl_users) and sentinel-users.acl (sentinel daemon, system_acl_users_sentinel).
 #
-# Пароль КАЖДОГО системного юзера — в Vault по той же ветке, что operator-extra:
-# secret/redis/<incarnation>/users/<name>#password. scenario резолвит keeper-
-# side через vault() в render-фазе и доливает системных в apply.input.users ПОВЕРХ
-# operator-extra (last-wins; см. redis-deploy-*.yml, add_user).
+# The password for EACH system user — in Vault on the same branch as operator-extra:
+# secret/redis/<incarnation>/users/<name>#password. scenario resolves it keeper-
+# side via vault() in the render phase and adds the system users into apply.input.users ON TOP OF
+# operator-extra (last-wins; see redis-deploy-*.yml, add_user).
 #
-# ★ default_admin (РЕДИЗАЙН 2026-06-30): СИСТЕМНЫЙ юзер с полными правами `~* &* +@all`,
-# доливается ВСЕГДА (как replica/monitoring) — в ОБА набора. Заменил прежнюю модель
-# «default в requirepass»: requirepass УСТАРЕЛ и убран из redis.conf, вся аутентификация
-# (вкл. внутреннюю: репликация/cluster/sentinel/health-PING) идёт под default_admin.
-# Плагин community.redis коннектится username=default_admin (см. деплой-тела). Пароль
-# default_admin — secret/redis/<inc>/users/default_admin#password (общая ветка
-# системных, НЕ прежний главный secret/redis/<inc>#password — тот ДРОПНУТ).
+# ★ default_admin (REDESIGN 2026-06-30): a SYSTEM user with full permissions `~* &* +@all`,
+# always added (like replica/monitoring) — in BOTH sets. Replaced the former model
+# "default in requirepass": requirepass is DEPRECATED and removed from redis.conf, all authentication
+# (incl. internal: replication/cluster/sentinel/health-PING) goes through default_admin.
+# The community.redis plugin connects with username=default_admin (see deployment bodies). The password for
+# default_admin — secret/redis/<inc>/users/default_admin#password (the shared branch for
+# system users, NOT the former main secret/redis/<inc>#password — that one is DROPPED).
 #
-# ★ default (встроенный Redis-юзер): в system_acl_users[_sentinel] его НЕТ — он
-# рендерится `off` (выключен) в users.acl/sentinel-users.acl, ЕСЛИ оператор не объявил
-# его в operator-input input.users (тогда on с его perms). compute.admin_user
-# (covenant.yml) — единый источник имени системного admin-юзера (default_admin), его
-# читают все деплой-тела. Имена системных = default_admin/replica/monitoring/sentinel/
-# haproxy — validate-guard отвергает operator-extra с любым из них (коллизия). `default`
-# из reserved УБРАН: оператор может объявить встроенного default в input.users.
+# ★ default (built-in Redis user): it's NOT in system_acl_users[_sentinel] — it's
+# rendered `off` (disabled) in users.acl/sentinel-users.acl, UNLESS the operator declared
+# it in operator-input input.users (then on with its perms). compute.admin_user
+# (covenant.yml) — the single source for the system admin user's name (default_admin), read by
+# all deployment bodies. System names = default_admin/replica/monitoring/sentinel/
+# haproxy — the validate-guard rejects operator-extra with any of them (collision). `default`
+# was REMOVED from reserved: the operator may declare the built-in default in input.users.
 #
-# Набор redis-server (redis_system_users роли + default_admin):
+# redis-server set (redis_system_users of the role + default_admin):
 system_acl_users:
   default_admin: "~* &* +@all"
   replica:    "+psync +replconf +ping"
@@ -270,58 +270,58 @@ system_acl_users:
   sentinel:   "allchannels +multi +slaveof +ping +exec +subscribe +config|rewrite +role +publish +info +client|setname +client|kill +script|kill"
   haproxy:    "-@all +auth +client|getname +client|id +client|setname +command +hello +ping +role +info +cluster|info"
 
-# Набор sentinel-демона (redis_sentinel_system_users роли; default→default_admin для
-# sentinel-демон auth — auth_user default_admin в sentinel.conf, full-perms на :26379):
+# sentinel daemon set (redis_sentinel_system_users of the role; default→default_admin for
+# sentinel daemon auth — auth_user default_admin in sentinel.conf, full perms on :26379):
 system_acl_users_sentinel:
   default_admin: "allchannels allkeys +@all"
   monitoring: "-@all +@connection -command +client -hello +info -auth +sentinel|masters +sentinel|replicas +sentinel|slaves +sentinel|sentinels +sentinel|ckquorum"
   sentinel:   "allchannels -@all +auth +client|getname +client|id +client|setname +command +hello +ping +sentinel|is-master-down-by-addr +publish +role +sentinel|get-master-addr-by-name +sentinel|master +sentinel|myid +sentinel|replicas +sentinel|sentinels"
   haproxy:    "-@all +auth +client|getname +client|id +client|setname +command +hello +ping +role +sentinel|get-master-addr-by-name +sentinel|master +sentinel|myid +sentinel|replicas +sentinel|sentinels"
 
-# Merge-подложка redis.conf (defaults роли) — НИЖНИЙ слой merge(): persistence-
-# пресет, вычисленные maxmemory/policy и passthrough оператора наслаиваются
-# поверх. Этот merged итог рендерится в полный redis.conf (destiny `redis`).
+# Merge fallback for redis.conf (role defaults) — the BOTTOM merge() layer: the persistence
+# preset, computed maxmemory/policy and operator passthrough are layered
+# on top. This merged result is rendered into the full redis.conf (destiny `redis`).
 redis_config:
   maxmemory:        "256mb"
   maxmemory-policy: allkeys-lru
   maxclients:       10000
   timeout:          300
 
-# Данные-таблица kernel-параметров под Redis. scenario передаёт этот map в destiny
-# `redis` через apply.input.sysctl_settings → core.sysctl.applied строит drop-in
-# /etc/sysctl.d/30-redis.conf и применяет его `sysctl -e -p <file>` БЕЗУСЛОВНО
-# (host-tuning — рекомендация Redis, не выбор оператора; операторского флага
-# sysctl_enable нет). Значения — СТРОКИ (multi-value параметры через пробел); модуль
-# сортирует ключи при построении drop-in (детерминизм → нет ложного reload). Не во
-# входе оператора: tuning под Redis, не операционный выбор.
+# Data table of kernel parameters for Redis. scenario passes this map into destiny
+# `redis` via apply.input.sysctl_settings → core.sysctl.applied builds the drop-in
+# /etc/sysctl.d/30-redis.conf and applies it with `sysctl -e -p <file>` UNCONDITIONALLY
+# (host-tuning — a Redis recommendation, not an operator choice; there is no operator
+# sysctl_enable flag). Values are STRINGS (multi-value parameters space-separated); the module
+# sorts keys when building the drop-in (determinism → no spurious reload). Not part of the
+# operator's input: tuning for Redis, not an operational choice.
 #
-# ИСТОЧНИК (выровнено 2026-06-23): набор и значения 1:1 повторяют sysctl-блок
-# Ansible-роли redis (roles/redis/tasks/installation.yml «Настройка параметров
-# ядра»), который ссылается на Redis admin-docs (background-save fork-error +
-# kernel-network-stack tuning). БЕЗ блока tcp_bbr (net.core.default_qdisc=fq +
-# net.ipv4.tcp_congestion_control=bbr) — он зависит от загрузки модуля ядра tcp_bbr
-# (на Debian не загружен по умолчанию) → отложен отдельным шагом загрузки модуля.
+# SOURCE (aligned 2026-06-23): the set and values mirror 1:1 the sysctl block
+# of the Ansible redis role (roles/redis/tasks/installation.yml "Kernel parameter
+# tuning"), which refers to the Redis admin docs (background-save fork-error +
+# kernel-network-stack tuning). WITHOUT the tcp_bbr block (net.core.default_qdisc=fq +
+# net.ipv4.tcp_congestion_control=bbr) — it depends on loading the tcp_bbr kernel module
+# (not loaded by default on Debian) → deferred to a separate module-loading step.
 sysctl_settings:
-  # >>> Память и процессы (КРИТИЧНО для fork RDB/AOF и больших инстансов) <<<
-  # overcommit_memory=1 — Redis-рекомендация: иначе background save падает с
-  # fork-error (redis-docs FAQ background-saving-fails). swappiness=1 — исключаем
-  # вытеснение в swap кроме крайней ситуации.
+  # >>> Memory and processes (CRITICAL for RDB/AOF fork and large instances) <<<
+  # overcommit_memory=1 — a Redis recommendation: otherwise background save fails with a
+  # fork-error (redis-docs FAQ background-saving-fails). swappiness=1 — we avoid
+  # swapping except as a last resort.
   vm.overcommit_memory:  "1"
   vm.swappiness:         "1"
   vm.max_map_count:      "262144"
   vm.vfs_cache_pressure: "200"
-  # >>> Сетевые буферы (производительность под нагрузкой, Redis kernel-stack tuning) <<<
+  # >>> Network buffers (performance under load, Redis kernel-stack tuning) <<<
   net.core.rmem_max:     "134217728"
   net.core.wmem_max:     "134217728"
   net.core.rmem_default: "212992"
   net.core.wmem_default: "212992"
   net.ipv4.tcp_rmem:     "4096 212992 134217728"
   net.ipv4.tcp_wmem:     "4096 212992 134217728"
-  # >>> Очереди и бэклоги <<<
+  # >>> Queues and backlogs <<<
   net.core.somaxconn:           "65535"
   net.core.netdev_max_backlog:  "20000"
   net.ipv4.tcp_max_syn_backlog: "65535"
-  # >>> TCP-стек (Redis kernel-network-stack tuning) <<<
+  # >>> TCP stack (Redis kernel-network-stack tuning) <<<
   net.ipv4.tcp_sack:           "1"
   net.ipv4.tcp_timestamps:     "1"
   net.ipv4.tcp_window_scaling: "1"
@@ -330,24 +330,24 @@ sysctl_settings:
   net.ipv4.tcp_fin_timeout:    "30"
   net.ipv4.ip_local_port_range: "30000 65535"
 
-# ── Каталог валидных директив redis.conf по версиям (version-aware validation, #6) ──
-# ★ #6 (2026-06-26): version-aware валидатор имён директив для input.redis_settings.
-# redis_settings — passthrough KEY→VALUE: без проверки оператор молча протащит опечатку
-# (`maxmemoyr 512mb`) или директиву из чужой версии → redis-server не стартует на хосте.
-# Каталог = плоское множество ВАЛИДНЫХ ИМЁН директив для серии Redis (major.minor).
-# scenario/create assert-ит, что КАЖДЫЙ ключ redis_settings ∈ каталог[серия input.version]
-# → неизвестное имя рвёт прогон на render (422 assert-failed) ДО applying, понятным
-# сообщением. MVP: только ИМЕНА (значения не валидируются).
+# ── Catalog of valid redis.conf directives by version (version-aware validation, #6) ──
+# ★ #6 (2026-06-26): version-aware validator of directive names for input.redis_settings.
+# redis_settings — passthrough KEY→VALUE: without validation the operator would silently drag in a typo
+# (`maxmemoyr 512mb`) or a directive from another version → redis-server fails to start on the host.
+# Catalog = a flat set of VALID directive NAMES per Redis series (major.minor).
+# scenario/create asserts that EVERY redis_settings key ∈ catalog[series of input.version]
+# → an unknown name breaks the run at render (422 assert-failed) BEFORE applying, with a clear
+# message. MVP: NAMES only (values are not validated).
 #
-# Ключ — серия major.minor (директивы стабильны внутри патч-серии). input.version —
-# distro-пин (5:7.0.15-1~deb12u7); assert извлекает X.Y регуляркой. Серии нет в каталоге
-# → assert skip (валидируем только известные версии; не-каталожная версия не блокируется).
+# Key — major.minor series (directives are stable within a patch series). input.version —
+# a distro pin (5:7.0.15-1~deb12u7); assert extracts X.Y via regex. A series missing from the catalog
+# → assert skip (only known versions are validated; a non-cataloged version isn't blocked).
 #
-# ИСТОЧНИК — src/config.c апстрима Redis (НЕ redis.conf: прозаические комментарии
-# неотличимы от commented-примеров директив). Генерируется scripts/gen-redis-catalog.sh
-# (curl config.c + extract имён макросов createXConfig + alias + специальные директивы),
-# результат COMMITTED здесь — на render-пути сети нет. Перегенерировать при добавлении
-# версии: `scripts/gen-redis-catalog.sh > /tmp/x && вклеить redis_directives:` сюда.
+# SOURCE — the Redis upstream src/config.c (NOT redis.conf: prose comments are
+# indistinguishable from commented-out directive examples). Generated by scripts/gen-redis-catalog.sh
+# (curl config.c + extract createXConfig macro names + alias + special directives),
+# the result is COMMITTED here — no network on the render path. Regenerate when adding a
+# version: `scripts/gen-redis-catalog.sh > /tmp/x && paste it into redis_directives:` here.
 redis_directives:
   "6.2":
     - acl-pubsub-default

@@ -9,11 +9,11 @@ required_capabilities:
 spec:
   states:
     shell:
-      description: Запустить shell-строку через `sh -c` (pipes/redirects/glob). TRUSTED-ONLY (ADR-015).
+      description: Run a shell string via `sh -c` (pipes/redirects/glob). TRUSTED-ONLY (ADR-015).
       input:
-        cmd:     { type: string, required: true, multiline: true, example: "systemctl daemon-reload\nsystemctl restart nginx", description: "Shell-строка, исполняется `sh -c`." }
-        cwd:     { type: string, description: "Рабочий каталог процесса." }
-        env:     { type: map,    items: { type: string }, description: "Дополнительные переменные окружения (KEY: VALUE)." }
-        creates: { type: string, description: "Idempotency: если файл существует — шаг пропускается (changed=false)." }
-        unless:  { type: string, description: "Idempotency: shell-команда; exit=0 → пропуск." }
-        onlyif:  { type: string, description: "Idempotency: shell-команда; exit≠0 → пропуск." }
+        cmd:     { type: string, required: true, multiline: true, example: "systemctl daemon-reload\nsystemctl restart nginx", description: "Shell string, executed via `sh -c`." }
+        cwd:     { type: string, description: "Process working directory." }
+        env:     { type: map,    items: { type: string }, description: "Additional environment variables (KEY: VALUE)." }
+        creates: { type: string, description: "Idempotency: if the file exists — the step is skipped (changed=false)." }
+        unless:  { type: string, description: "Idempotency: shell command; exit=0 → skip." }
+        onlyif:  { type: string, description: "Idempotency: shell command; exit≠0 → skip." }

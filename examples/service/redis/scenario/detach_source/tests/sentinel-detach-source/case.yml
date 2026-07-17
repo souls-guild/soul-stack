@@ -1,28 +1,28 @@
-# L0-испытание detach_source в режиме sentinel (S1-пилот, happy-path). Сценарий сопровождения для
-# инкарнации, ранее залитой migrate_cluster (incarnation.state.seeded_from с detached:false,
-# источник 10.9.0.1:6379). Roster из 1 хоста (новый master). Диспетчер по
-# incarnation.state.redis_type (detach знает режим из state).
+# L0 test for detach_source in sentinel mode (S1 pilot, happy path). A maintenance scenario for
+# an incarnation previously seeded by migrate_cluster (incarnation.state.seeded_from with detached:false,
+# source 10.9.0.1:6379). Roster of 1 host (the new master). Dispatched by
+# incarnation.state.redis_type (detach reads the mode from state).
 #
-# Render-only, герметично. Диспетчер инклудит cluster.yml + sentinel.yml через
-# CONDITIONAL-INCLUDE (when: на include по state.redis_type): sentinel-инкарнация →
-# cluster-ветка group-drop, sentinel.yml раскрывается.
+# Render-only, hermetic. The dispatcher includes cluster.yml + sentinel.yml via
+# CONDITIONAL-INCLUDE (when: on the include based on state.redis_type): a sentinel incarnation →
+# the cluster branch is group-dropped, sentinel.yml expands.
 #
-# Что ассертим:
-#   1. ФИНАЛЬНЫЙ offset-gate ПЕРЕД detach (community.redis.offset-synced): source_addr=
-#      внешний источник из state (seeded_from.source_endpoints[0]=10.9.0.1:6379),
-#      lag_threshold=0 (жёстко — detach точка невозврата). ★ source_password='' здесь —
-#      back-compat ветка (v10): у этой инкарнации seeded_from БЕЗ ref-полей (форма до
-#      v10-фикса) → compute.source_password резолвится в '' (источник без AUTH). Кейс с
-#      НЕПУСТЫМ ref (gate аутентифицируется к AUTH-источнику) — sentinel-detach-source-auth.
-#   2. REPLICAOF NO ONE (community.redis.detached): addr локальный, password наш.
-#   3. ★ SPLIT-BRAIN-ФИКС: SENTINEL MONITOR (community.redis.sentinel) ПРИСУТСТВУЕТ — он
-#      ПЕРЕНЕСЁН СЮДА из деплой-тела migrate_cluster (там был placeholder-skip, чтобы не
-#      мониторить master во время заливки → не словить failover). Выполняется ПОСЛЕ
-#      REPLICAOF NO ONE (master автономен): monitor.ip=10.0.0.1 (master-election, roster
-#      = новый master), quorum=1 (size(1)/2+1), master_name/тайминги/версия из state
-#      (compute.sentinel_master_name/sentinel_directives/redis_version). Симметрия с
-#      migrate-кейсами, где этот же модуль в task_absent.
-#   4. state_changes: seeded_from.detached := true (source_endpoints СОХРАНЯЕТСЯ).
+# What we assert:
+#   1. FINAL offset gate BEFORE detach (community.redis.offset-synced): source_addr=
+#      the external source from state (seeded_from.source_endpoints[0]=10.9.0.1:6379),
+#      lag_threshold=0 (hard — detach is a point of no return). * source_password='' here is a
+#      back-compat branch (v10): this incarnation's seeded_from has NO ref fields (the form before
+#      the v10 fix) → compute.source_password resolves to '' (source without AUTH). The case with a
+#      NON-EMPTY ref (the gate authenticates to an AUTH source) is sentinel-detach-source-auth.
+#   2. REPLICAOF NO ONE (community.redis.detached): local addr, our password.
+#   3. * SPLIT-BRAIN FIX: SENTINEL MONITOR (community.redis.sentinel) IS PRESENT — it was
+#      MOVED HERE from the migrate_cluster deploy body (there it was a placeholder-skip, to avoid
+#      monitoring the master during seeding → to avoid triggering a failover). Runs AFTER
+#      REPLICAOF NO ONE (master is autonomous): monitor.ip=10.0.0.1 (master election, roster
+#      = the new master), quorum=1 (size(1)/2+1), master_name/timings/version from state
+#      (compute.sentinel_master_name/sentinel_directives/redis_version). Symmetric with
+#      migrate cases, where this same module is in task_absent.
+#   4. state_changes: seeded_from.detached := true (source_endpoints ARE PRESERVED).
 name: sentinel detach_source runs final offset gate then detaches the external source
 
 fixtures:
@@ -31,9 +31,9 @@ fixtures:
     network: { primary_ip: 10.0.0.1 }
     os: { arch: amd64 }
 
-  # Развёрнутый incarnation.state v9: sentinel-инкарнация, залитая migrate_cluster.
-  # seeded_from.detached=false (источник ещё привязан) — detach_source выставит true.
-  # host-layout вынесен в essence (v11→v12); detach_source его НЕ читает → в state нет.
+  # Deployed incarnation.state v9: a sentinel incarnation seeded by migrate_cluster.
+  # seeded_from.detached=false (source still attached) — detach_source will set it to true.
+  # host-layout moved into essence (v11→v12); detach_source does NOT read it → absent from state.
   state:
     redis_type: sentinel
     redis_version: "7.2.4"
@@ -50,9 +50,9 @@ fixtures:
       save:             "900 1 300 10 60 10000"
       appendonly:       "no"
     redis_users: []
-    # ★ redis_sentinel (state_schema v9): тайминги/master_name sentinel. ОБЯЗАТЕЛЕН для
-    # перенесённого сюда SENTINEL MONITOR (split-brain-фикс): compute.sentinel_directives/
-    # sentinel_master_name собираются ИЗ НЕГО (входного контракта у detach нет).
+    # * redis_sentinel (state_schema v9): sentinel timings/master_name. REQUIRED for the
+    # SENTINEL MONITOR that was moved here (split-brain fix): compute.sentinel_directives/
+    # sentinel_master_name are assembled FROM IT (detach has no input contract).
     redis_sentinel:
       master_name: master
       quorum: 0
@@ -67,22 +67,22 @@ fixtures:
   vault:
     secret/redis/detach_source:
       password: detach-redis-pass-16ch
-    # ★ РЕДИЗАЙН default_admin (2026-06-30): локальные коннекты detach_source (offset-gate/
-    # detached/SENTINEL MONITOR) идут под ACL-юзером default_admin, его пароль — этой ветки.
+    # * default_admin REDESIGN (2026-06-30): local connections in detach_source (offset-gate/
+    # detached/SENTINEL MONITOR) run under the ACL user default_admin, its password is this entry.
     secret/redis/detach_source/users/default_admin:
       password: default-admin-secret-pass
 
 assert:
   task_present:
-    # ── ФИНАЛЬНЫЙ offset-gate ПЕРЕД detach ──────────────────────────────────────
-    # source_addr из state (seeded_from.source_endpoints[0]). lag_threshold=0 (жёстко).
-    # source_password='' — back-compat (seeded_from без ref-полей → compute.source_password=''
-    # → источник без AUTH). source_tls=false (нет CA-ref). password — наш локальный.
+    # ── FINAL offset gate BEFORE detach ──────────────────────────────────────
+    # source_addr from state (seeded_from.source_endpoints[0]). lag_threshold=0 (hard).
+    # source_password='' — back-compat (seeded_from without ref fields → compute.source_password=''
+    # → source without AUTH). source_tls=false (no CA ref). password — our local one.
     - module: community.redis.offset-synced
       params_subset:
         addr: "127.0.0.1:6379"
         source_addr: "10.9.0.1:6379"
-        # ★ РЕДИЗАЙН default_admin: LOCAL-коннект под default_admin; source_password — источник.
+        # * default_admin REDESIGN: LOCAL connection under default_admin; source_password — the source.
         username: default_admin
         password: default-admin-secret-pass
         source_password: ""
@@ -94,23 +94,23 @@ assert:
     - module: community.redis.detached
       params_subset:
         addr: "127.0.0.1:6379"
-        # ★ РЕДИЗАЙН default_admin: LOCAL-коннект под default_admin.
+        # * default_admin REDESIGN: LOCAL connection under default_admin.
         username: default_admin
         password: default-admin-secret-pass
         tls: false
 
-    # ── SENTINEL MONITOR (community.redis.sentinel) — ★ ПЕРЕНЕСЁН СЮДА (split-brain-фикс) ──
-    # Выполняется ПОСЛЕ REPLICAOF NO ONE (master снова автономен). monitor.ip=10.0.0.1
-    # (master-election: roster = новый master), quorum=1 (size(1)/2+1=1). master_name=master,
-    # redis_version=7.2.4, config (тайминги 5000/60000) — всё из incarnation.state (compute
-    # .sentinel_master_name/redis_version/sentinel_directives, у detach нет input). auth_pass —
-    # наш secret/redis/<inc>#password. Единственная community.redis.sentinel в плане.
+    # ── SENTINEL MONITOR (community.redis.sentinel) — * MOVED HERE (split-brain fix) ──
+    # Runs AFTER REPLICAOF NO ONE (master is autonomous again). monitor.ip=10.0.0.1
+    # (master election: roster = the new master), quorum=1 (size(1)/2+1=1). master_name=master,
+    # redis_version=7.2.4, config (timings 5000/60000) — all from incarnation.state (compute
+    # .sentinel_master_name/redis_version/sentinel_directives, detach has no input). auth_pass —
+    # our secret/redis/<inc>#password. The only community.redis.sentinel in the plan.
     - module: community.redis.sentinel
       params_subset:
         addr: "127.0.0.1:26379"
         master_name: master
-        # ★ РЕДИЗАЙН default_admin: CONNECTION-AUTH (username/password) + мониторинг master
-        # (auth_user/auth_pass) под default_admin.
+        # * default_admin REDESIGN: CONNECTION-AUTH (username/password) + monitoring the master
+        # (auth_user/auth_pass) under default_admin.
         username: default_admin
         password: default-admin-secret-pass
         auth_user: default_admin
@@ -124,8 +124,8 @@ assert:
           port: 6379
           quorum: 1
 
-  # seeded_from.detached := true (source_endpoints СОХРАНЯЕТСЯ — merge старого объекта
-  # с {detached:true}). Остальной state detach_source не трогает.
+  # seeded_from.detached := true (source_endpoints PRESERVED — merge of the old object
+  # with {detached:true}). detach_source does not touch the rest of state.
   state_changes:
     seeded_from:
       source_endpoints:

@@ -9,16 +9,16 @@ required_capabilities:
 spec:
   states:
     probe:
-      description: Read-probe HTTP-эндпоинта (GET/HEAD); read-only, changed всегда false. ADR-015/ADR-016, https-only.
+      description: Read-probe of an HTTP endpoint (GET/HEAD); read-only, changed is always false. ADR-015/ADR-016, https-only.
       input:
-        url:           { type: string, required: true, description: "Целевой URL (только https://; SSRF-guard на резолвнутый IP)." }
-        method:        { type: string, enum: [GET, HEAD], default: GET, description: "HTTP-метод GET|HEAD (default GET); мутирующие методы запрещены." }
-        # headers — sensitive-by-construction (ADR-010 §7.4): значения не логируются,
-        # в output отдаётся только список ключей. secret-флаг DSL не ставится (он форсит
-        # `^vault:.*`-ref, а headers — произвольная map). Маскинг — runtime-аспект.
-        headers:       { type: map,    items: { type: string }, description: "HTTP-заголовки (значения секретны, в output не попадают)." }
-        status_codes:  { type: list,   items: { type: int }, description: "Ожидаемые коды ответа (список int); по умолчанию 2xx." }
-        allow_private: { type: bool,   description: "Снять SSRF-guard для internal health-check (default false)." }
-        allow_http:    { type: bool,   description: "Разрешить http:// (снять https-only); file:// остаётся запрещён. Не открывает SSRF (default false)." }
-        insecure_skip_verify: { type: bool, description: "Отключить TLS-верификацию (self-signed / internal CA); MITM-риск (default false)." }
-        timeout:       { type: string, format: duration, description: "Таймаут probe (Soul Stack duration, напр. \"30s\")." }
+        url:           { type: string, required: true, description: "Target URL (https:// only; SSRF-guard on the resolved IP)." }
+        method:        { type: string, enum: [GET, HEAD], default: GET, description: "HTTP method GET|HEAD (default GET); mutating methods are forbidden." }
+        # headers is sensitive-by-construction (ADR-010 §7.4): values are not logged,
+        # only the list of keys is returned in output. The secret DSL flag is not set (it
+        # forces a `^vault:.*` ref, but headers is an arbitrary map). Masking is a runtime aspect.
+        headers:       { type: map,    items: { type: string }, description: "HTTP headers (values are secret, excluded from output)." }
+        status_codes:  { type: list,   items: { type: int }, description: "Expected response codes (list of int); defaults to 2xx." }
+        allow_private: { type: bool,   description: "Lift the SSRF-guard for internal health-checks (default false)." }
+        allow_http:    { type: bool,   description: "Allow http:// (lift https-only); file:// remains forbidden. Does not open up SSRF (default false)." }
+        insecure_skip_verify: { type: bool, description: "Disable TLS verification (self-signed / internal CA); MITM risk (default false)." }
+        timeout:       { type: string, format: duration, description: "Probe timeout (Soul Stack duration, e.g. \"30s\")." }

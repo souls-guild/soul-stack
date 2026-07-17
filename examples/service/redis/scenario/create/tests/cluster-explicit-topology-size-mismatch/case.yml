@@ -1,18 +1,18 @@
-# L0-испытание create cluster — FAIL-ветка size-guard на SUM-форме (явная топология).
-# Зеркало cluster-explicit-topology (happy), но roster СПЕЦИАЛЬНО на один меньше суммы
-# размеров объявленных шардов: cluster_topology несёт 2 шарда по 2 ноды (sum=4), а
-# fixtures.hosts — только 3. size-guard create/cluster.yml на ВЕТКЕ cluster_topology
-# сверяет size(roster) с СУММОЙ размеров шардов (а не shards*(1+replicas)); 3 != 4 →
-# обрыв render ДО dispatch. Доказывает, что sum-форма size-guard реально вычисляется и
-# рвёт fail-fast (а не молча падает позже в плагине на непокрытой/несуществующей ноде).
+# L0 test for create cluster - FAIL branch of the size-guard on the SUM form (explicit topology).
+# Mirrors cluster-explicit-topology (happy path), but the roster is DELIBERATELY one less than
+# the sum of declared shard sizes: cluster_topology carries 2 shards of 2 nodes each (sum=4), while
+# fixtures.hosts has only 3. The size-guard in create/cluster.yml, on the cluster_topology BRANCH,
+# checks size(roster) against the SUM of shard sizes (not shards*(1+replicas)); 3 != 4 ->
+# render aborts BEFORE dispatch. Proves that the sum-form size-guard is actually computed and
+# fails fast (rather than silently failing later in the plugin on an uncovered/nonexistent node).
 #
-# Парный с cluster-explicit-topology (roster == sum → render проходит). Симметричен
-# cluster-size-guard-mismatch (там старая формула shards*(1+replicas)).
+# Paired with cluster-explicit-topology (roster == sum -> render succeeds). Symmetric to
+# cluster-size-guard-mismatch (which uses the old formula shards*(1+replicas)).
 name: cluster create with explicit topology and roster smaller than declared sum aborts at render
 
 fixtures:
   default_destiny_source: "file://../../destiny/{name}"
-  # Roster из 3 хостов — НА ОДИН МЕНЬШЕ суммы размеров шардов топологии (2+2=4).
+  # Roster of 3 hosts - ONE LESS than the sum of the topology's shard sizes (2+2=4).
   hosts:
     - sid: node-2.example.com
       covens: [create, redis]
@@ -59,8 +59,8 @@ fixtures:
       sentinel:   "allchannels +multi +slaveof +ping +exec +subscribe +config|rewrite +role +publish +info +client|setname +client|kill +script|kill"
       haproxy:    "-@all +auth +client|getname +client|id +client|setname +command +hello +ping +role +info +cluster|info"
   input:
-    # ★ provision выключен (default-on: опущенная секция = ВКЛЮЧЕНО; кейс деплоит на
-    # ГОТОВЫЙ roster, cloud-create не нужен) → include redis-provision.yml group-drop.
+    # * provision is disabled (default-on: an omitted section = ENABLED; the case deploys onto
+    # a READY roster, cloud-create isn't needed) -> include redis-provision.yml group-drop.
     provision:
       enabled: false
     redis_type: cluster
@@ -68,11 +68,11 @@ fixtures:
     shards: 2
     replicas_per_master: 1
     cluster_node_timeout: 5000
-    # Топология sum=4 (2 шарда по 2), а roster выше = 3 → 3 != 4.
+    # Topology sum=4 (2 shards of 2), while the roster above = 3 -> 3 != 4.
     cluster_topology:
       - [node-2.example.com, node-1.example.com]
       - [node-4.example.com, node-3.example.com]
 
-# Обрыв на render: size-guard sum-форма false (3 != sum(2+2)). Подстрока — общий message
-# assert-правила create/cluster.yml (он один на обе формулы).
-expect_render_error: "число хостов roster-а прогона должно быть ровно"
+# Abort at render: size-guard sum-form false (3 != sum(2+2)). The substring is the shared message
+# of the create/cluster.yml assert rule (it's a single one for both forms).
+expect_render_error: "the number of hosts in the run roster must be exactly"

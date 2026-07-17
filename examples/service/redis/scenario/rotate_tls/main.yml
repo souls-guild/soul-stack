@@ -1,94 +1,94 @@
 name: rotate_tls
 description: >-
-  Ротация серверного TLS-материала Redis (cert/key/CA) без рестарта — Redis 6.2+
-  перечитывает PEM на лету. Отдельный сценарий ради явной аудит-семантики «сменился TLS»;
-  предусловие — TLS на инстансе уже включён.
+  Rotation of Redis's server-side TLS material (cert/key/CA) without a restart - Redis 6.2+
+  rereads the PEM on the fly. A separate scenario for explicit "TLS changed" audit semantics;
+  precondition - TLS is already enabled on the instance.
 
-# ── Входной контракт оператора (docs/input.md) ────────────────────────────────
-# НОВЫЕ Vault-ПУТИ серверного cert/key/CA (форма "<mount>/<path>#<field>"), НЕ сам
-# PEM. Каждый опционален — оператор ротирует лишь часть (напр. только cert+key, CA
-# тот же); не заданный ref берёт ТЕКУЩИЙ из incarnation.state.tls (подложка).
+# -- Operator input contract (docs/input.md) ------------------------------------
+# NEW Vault PATHS for the server cert/key/CA (form "<mount>/<path>#<field>"), NOT the
+# PEM itself. Each is optional - the operator rotates only part (e.g. only cert+key, CA
+# stays the same); an unset ref takes the CURRENT one from incarnation.state.tls (substrate).
 input:
   cert_ref:
     type: string
     required: false
     description: >-
-      Новый Vault-путь серверного TLS-сертификата (redis.crt). Не задан → текущий
-      state.tls.cert_ref (CA/key ротируются независимо).
+      New Vault path for the server TLS certificate (redis.crt). Unset -> current
+      state.tls.cert_ref (CA/key rotate independently).
 
   key_ref:
     type: string
     required: false
     description: >-
-      Новый Vault-путь серверного приватного ключа (redis.key). Не задан → текущий
+      New Vault path for the server private key (redis.key). Unset -> current
       state.tls.key_ref.
 
   ca_ref:
     type: string
     required: false
     description: >-
-      Новый Vault-путь CA-сертификата кластера (ca.crt). Не задан → текущий
+      New Vault path for the cluster CA certificate (ca.crt). Unset -> current
       state.tls.ca_ref.
 
-# ── Декларативные input-инварианты (validate:) ───────────────────────────────────
-# (1) хотя бы один ref задан (иначе нечего ротировать); (2) TLS включён (state.tls.
-# enable=true) — ротация на plaintext бессмысленна. INPUT-ONLY: TLS-предусловие НЕ
-# выразимо через input (state недоступен в validate-контексте) — оно вынесено в
-# первый assert-шаг ниже (полный scenario-контекст с incarnation.state). Здесь —
-# только «хотя бы один ref».
+# -- Declarative input invariants (validate:) --------------------------------------
+# (1) at least one ref is set (otherwise nothing to rotate); (2) TLS is enabled (state.tls.
+# enable=true) - rotating on plaintext is meaningless. INPUT-ONLY: the TLS precondition is NOT
+# expressible via input (state is unavailable in the validate context) - it's moved to the
+# first assert step below (full scenario context with incarnation.state). Here -
+# only "at least one ref".
 validate:
   - that: "has(input.cert_ref) || has(input.key_ref) || has(input.ca_ref)"
-    message: "rotate_tls требует хотя бы один новый ref (cert_ref/key_ref/ca_ref)"
+    message: "rotate_tls requires at least one new ref (cert_ref/key_ref/ca_ref)"
 
-# ── Вычисляемые scenario-vars (compute:) ─────────────────────────────────────────
-# Рун-уровневый контекст (input/essence/incarnation — без soulprint). tls_* —
-# дискриминатор коннекта плагина из state.tls (как restart/update_config). Здесь TLS
-# заведомо включён (assert-guard ниже), но дискриминатор оставлен симметричным
-# остальным сценариям сопровождения (единый паттерн).
+# -- Computed scenario vars (compute:) ---------------------------------------------
+# Run-level context (input/essence/incarnation - no soulprint). tls_* is the
+# plugin connect discriminator from state.tls (like restart/update_config). Here TLS
+# is guaranteed to be enabled (assert guard below), but the discriminator is kept symmetric
+# with the other maintenance scenarios (a uniform pattern).
 compute:
-  # ── admin_user: имя системного ACL-юзера внутрикластерного AUTH (default_admin) ──
-  # ★ РЕДИЗАЙН default_admin (2026-06-30): коннект CONFIG SET к live-Redis идёт под
-  # системным default_admin (requirepass убран). rotate_tls НЕ extends covenant, поэтому
-  # имя хардкодится здесь литералом (как covenant.compute.admin_user, тела сценариев вне
-  # covenant — см. covenant.yml). Пароль — secret/redis/<inc>/users/default_admin#password.
+  # -- admin_user: name of the system ACL user for intra-cluster AUTH (default_admin) --
+  # * default_admin REDESIGN (2026-06-30): the CONFIG SET connect to live Redis runs as the
+  # system default_admin (requirepass was removed). rotate_tls does NOT extend covenant, so
+  # the name is hardcoded here as a literal (like covenant.compute.admin_user, scenario bodies outside
+  # covenant - see covenant.yml). Password - secret/redis/<inc>/users/default_admin#password.
   admin_user: "${ 'default_admin' }"
   tls_on:   "${ has(incarnation.state) && has(incarnation.state.tls) && default(incarnation.state.tls.enable, false) }"
   tls_port: "${ compute.tls_on ? string(incarnation.state.tls.port) : '' }"
-  # tls_ca — trust-store TLS-реконнектов шага 3. CA-rollover (input.ca_ref ≠ state.tls.
-  # ca_ref) → BUNDLE старого+нового CA (склейка PEM через '\n'): три CONFIG SET tls-*-file =
-  # три ОТДЕЛЬНЫХ реконнекта, STRADDLE-ящих подмену серверного cert (CONFIG SET tls-cert-file
-  # сам заставляет redis отдать новый cert со следующего реконнекта), поэтому единый
-  # trust-store обязан доверять ОБОИМ CA — иначе реконнект после подмены упрётся в unknown
-  # authority. x509-пул плагина (AppendCertsFromPEM) принимает склейку → плагин не трогаем.
-  # Без rollover (ca_ref не задан / == state) — одиночный текущий CA (state — PRE-RUN снимок,
-  # мутация ca_ref ПОСЛЕ apply). plaintext → пусто.
+  # tls_ca - trust store for step 3's TLS reconnects. CA rollover (input.ca_ref != state.tls.
+  # ca_ref) -> BUNDLE of old+new CA (PEM concatenated via '\n'): three CONFIG SET tls-*-file =
+  # three SEPARATE reconnects that STRADDLE the server-cert swap (CONFIG SET tls-cert-file
+  # itself makes redis serve the new cert starting with the next reconnect), so a single
+  # trust store must trust BOTH CAs - otherwise the reconnect after the swap hits an unknown
+  # authority. The plugin's x509 pool (AppendCertsFromPEM) accepts the concatenation -> no plugin changes needed.
+  # Without a rollover (ca_ref unset / == state) - the single current CA (state is a PRE-RUN snapshot,
+  # ca_ref mutates AFTER apply). plaintext -> empty.
   tls_ca: >-
     ${ compute.tls_on
          ? (has(input.ca_ref) && input.ca_ref != incarnation.state.tls.ca_ref
               ? vault(incarnation.state.tls.ca_ref) + '\n' + vault(input.ca_ref)
               : vault(incarnation.state.tls.ca_ref))
          : '' }
-  # ★ ИБ-КРИТИЧНО host-layout (v11→v12, Вариант A): conf_dir из essence (единый источник
-  # с data_dir/modules_base_url ниже; прежний drift «conf_dir из compute, data_dir/
-  # modules_base_url из state» устранён). conf_dir задаёт, КУДА destiny кладёт PEM
-  # (${conf_dir}/tls/*) и куда CONFIG SET tls-*-file указывает redis-серверу — оба
-  # плеча ОБЯЗАНЫ читать ОДИН источник, иначе cert ляжет не туда, где redis ищет.
-  # DESYNC-РИСК ПРИНЯТ: если оператор сменил essence.conf_dir ПОСЛЕ create, cert ляжет
-  # по НОВОМУ пути, а работающий redis-server ещё ищет по СТАРОМУ (перечитывается лишь на
-  # рестарте) → при connection_mode=tls (plain закрыт) узел станет недоступен по сети.
+  # * SECURITY-CRITICAL host-layout (v11->v12, Variant A): conf_dir from essence (single source
+  # with data_dir/modules_base_url below; the previous drift "conf_dir from compute, data_dir/
+  # modules_base_url from state" is eliminated). conf_dir sets WHERE destiny puts the PEM
+  # (${conf_dir}/tls/*) and where CONFIG SET tls-*-file points the redis server - both
+  # sides MUST read the SAME source, otherwise the cert lands somewhere redis isn't looking.
+  # DESYNC RISK ACCEPTED: if the operator changed essence.conf_dir AFTER create, the cert lands
+  # at the NEW path while the running redis-server still looks at the OLD one (reread only on
+  # restart) -> with connection_mode=tls (plain closed) the node becomes unreachable over the network.
   conf_dir: "${ default(essence.conf_dir, '/etc/redis') }"
 
-  # Эффективные refs: новый из input бьёт текущий из state (подложка — частичная
-  # ротация). has()-цепочка (default(input, state) упал бы no-such-key, если input.*_ref
-  # отсутствует целиком — default ловит лист, не корень аргумента).
+  # Effective refs: a new one from input beats the current one from state (substrate - partial
+  # rotation). has() chain (default(input, state) would blow up with no-such-key if input.*_ref
+  # is missing entirely - default catches the leaf, not the root of the argument).
   cert_ref: "${ has(input.cert_ref) ? input.cert_ref : incarnation.state.tls.cert_ref }"
   key_ref:  "${ has(input.key_ref)  ? input.key_ref  : incarnation.state.tls.key_ref }"
   ca_ref:   "${ has(input.ca_ref)   ? input.ca_ref   : incarnation.state.tls.ca_ref }"
 
-# ── Мутация incarnation.state ─────────────────────────────────────────────────
-# Сценарий фиксирует НОВЫЕ Vault-refs cert/key/ca (read-model state.tls.*_ref). enable/
-# only/port НЕ меняются (rotate только материал). Тот же compute.*_ref, что ушёл в
-# render PEM destiny. add/modify по namedfield state.tls (ADR-057): обновляем refs.
+# -- incarnation.state mutation --------------------------------------------------
+# The scenario records the NEW Vault refs cert/key/ca (read-model state.tls.*_ref). enable/
+# only/port are NOT changed (rotate only touches the material). The same compute.*_ref that went into
+# rendering the destiny PEM. add/modify on namedfield state.tls (ADR-057): update the refs.
 state_changes:
   - set: tls
     value: >-
@@ -102,38 +102,38 @@ state_changes:
          } }
 
 tasks:
-  # 1. GUARD — TLS обязан быть включён (state.tls.enable=true). Предикат вычисляется
-  #    KEEPER-SIDE на рендере (incarnation.state доступен). false ОБРЫВАЕТ render с
-  #    message ДО dispatch — раньше и понятнее, чем падение коннекта на хосте. assert
-  #    НЕ emit RenderedTask.
+  # 1. GUARD - TLS must be enabled (state.tls.enable=true). The predicate is evaluated
+  #    KEEPER-SIDE at render time (incarnation.state is available). false ABORTS render with a
+  #    message BEFORE dispatch - earlier and clearer than a connect failure on the host. assert
+  #    does NOT emit a RenderedTask.
   - name: Guard TLS is enabled on the instance before rotating its material
     assert:
       that:
         - "has(incarnation.state) && has(incarnation.state.tls) && default(incarnation.state.tls.enable, false)"
       message: "rotate_tls guard: TLS must be enabled (state.tls.enable=true); rotating material on a plaintext instance is meaningless"
 
-  # 2. Перерендерить PEM в ${conf_dir}/tls/ из НОВЫХ refs (тот же destiny redis, что
-  #    create). apply.input.tls несёт enable + НОВЫЕ cert_ref/key_ref/ca_ref → destiny
-  #    server.yml кладёт cert/key/ca через core.file.present + vault(ref) в ячейке
-  #    (seal-маскинг). config — текущий state.redis_config (redis.conf не меняется при
-  #    ротации; tls-*-file пути те же). version/users — из state; conf_dir/data_dir/
-  #    modules_base_url — из essence (host-layout, v11→v12, Вариант A; см. vars-шапку).
-  #    register: tls_certs — applier-register, гейтящий reload ниже.
-  #    ★ РЕДИЗАЙН default_admin: apply.input.password УДАЛЁН (destiny его не принимает —
-  #    requirepass убран); аутентификация — под системным default_admin из users ниже.
+  # 2. Re-render the PEM in ${conf_dir}/tls/ from the NEW refs (the same destiny redis as
+  #    create). apply.input.tls carries enable + the NEW cert_ref/key_ref/ca_ref -> destiny
+  #    server.yml lays down cert/key/ca via core.file.present + vault(ref) inline in the cell
+  #    (seal masking). config - the current state.redis_config (redis.conf doesn't change during
+  #    rotation; the tls-*-file paths stay the same). version/users - from state; conf_dir/data_dir/
+  #    modules_base_url - from essence (host-layout, v11->v12, Variant A; see the vars header).
+  #    register: tls_certs - the applier register that gates the reload below.
+  #    * default_admin REDESIGN: apply.input.password REMOVED (destiny no longer accepts it -
+  #    requirepass was removed); authentication - via the system default_admin from users below.
   - name: Re-render TLS PEM material from the new Vault refs
     register: tls_certs
     apply:
       destiny: redis
       input:
         version:  "${ default(incarnation.state.redis_version, '') }"
-        # ★ install: ОБЯЗАТЕЛЕН на повторном прогоне (регресс live E2E 2026-07-01). Без него
-        # диспетчер install.yml по !has(input.install) скатывается в package-ветку →
-        # core.pkg `apt install redis-server=<version>` (версия из Nexus-binary в apt
-        # ОТСУТСТВУЕТ → env exited 100). Собираем ТУ ЖЕ binary-структуру, что create
-        # (deploy-body → compute.install из essence.install_method) — единый способ
-        # установки. Отличие от covenant.install: version из РАЗВЁРНУТОГО state
-        # (redis_version), а не input.version (повторный прогон версию не переустанавливает).
+        # * install: REQUIRED on a repeat run (live E2E regression 2026-07-01). Without it,
+        # install.yml's dispatcher falls into the package branch on !has(input.install) ->
+        # core.pkg `apt install redis-server=<version>` (the version from Nexus-binary is
+        # ABSENT in apt -> env exited 100). We build the SAME binary structure as create
+        # (deploy-body -> compute.install from essence.install_method) - a single install
+        # method. Difference from covenant.install: version comes from the DEPLOYED state
+        # (redis_version), not input.version (a repeat run doesn't reinstall the version).
         install: >-
           ${ (default(essence.install_method, 'binary') == 'binary')
                ? {
@@ -143,16 +143,16 @@ tasks:
                    'allow_private': default(essence.binary_allow_private, true)
                  }
                : { 'method': 'package' } }
-        # host-layout — единый источник essence (v11→v12): conf_dir=compute.conf_dir (сам
-        # из essence.conf_dir, см. vars-шапку), data_dir/modules_base_url прямо из essence.
+        # host-layout - a single essence source (v11->v12): conf_dir=compute.conf_dir (itself
+        # from essence.conf_dir, see the vars header), data_dir/modules_base_url straight from essence.
         conf_dir: "${ compute.conf_dir }"
         data_dir: "${ default(essence.data_dir, '/var/lib/redis') }"
-        # ★ РЕДИЗАЙН default_admin: rotate_tls перерендеривает ВЕСЬ кирпич destiny redis
-        # (вкл. redis.conf), поэтому статическая replica→master AUTH обязана доливаться и
-        # здесь — иначе redis.conf на диске потерял бы masteruser/masterauth и cluster/
-        # sentinel-реплики после рестарта упёрлись бы в NOAUTH при PSYNC (симметрично
-        # add_user/update_users). На master-нодах директива инертна (failover-safe).
-        # masterauth — vault()-в-ячейке (seal-маскинг); admin_user = compute.admin_user.
+        # * default_admin REDESIGN: rotate_tls re-renders the WHOLE destiny redis brick
+        # (incl. redis.conf), so the static replica->master AUTH must be filled in here
+        # too - otherwise redis.conf on disk would lose masteruser/masterauth and cluster/
+        # sentinel replicas would hit NOAUTH on PSYNC after a restart (symmetric with
+        # add_user/update_users). On master nodes the directive is inert (failover-safe).
+        # masterauth - vault()-inline in the cell (seal masking); admin_user = compute.admin_user.
         config: >-
           ${ merge(incarnation.state.redis_config, {
                'masteruser': compute.admin_user,
@@ -166,12 +166,12 @@ tasks:
           cert_ref: "${ compute.cert_ref }"
           key_ref:  "${ compute.key_ref }"
           ca_ref:   "${ compute.ca_ref }"
-        # ★ СИСТЕМНЫЕ + operator-extra (как деплой-тело): destiny redis перерендеривает и
-        # users.acl (тот же кирпич) → ОБЯЗАН долить системных из essence.system_acl_users
-        # ПЕРВЫМИ (default_admin/replica/monitoring/sentinel/haproxy), иначе rotate_tls СТЁР
-        # БЫ их из users.acl. operator-extra (state.redis_users — МАССИВ AclUser) ПОВЕРХ
-        # (last-wins). Системные НЕ в state — доливаются из essence на каждом рендере.
-        # Vault-пароль той же ветки secret/redis/<inc>/users/<name>#password.
+        # * SYSTEM + operator-extra (like the deploy body): destiny redis re-renders
+        # users.acl too (the same brick) -> it MUST fill in the system ones from essence.system_acl_users
+        # FIRST (default_admin/replica/monitoring/sentinel/haproxy), otherwise rotate_tls WOULD WIPE
+        # them from users.acl. operator-extra (state.redis_users - an ARRAY of AclUser) goes ON TOP
+        # (last-wins). System users aren't in state - they're filled in from essence on every render.
+        # Vault password from the same branch secret/redis/<inc>/users/<name>#password.
         users: >-
           ${ merge(
                merge(default(essence.system_acl_users, {}).map(name, {
@@ -192,16 +192,16 @@ tasks:
                  : {}
              ) }
 
-  # 3. HOT-RELOAD CERT: три community.redis.command (CONFIG SET tls-cert-file /
-  #    tls-key-file / tls-ca-cert-file) пересоздают SSL_CTX на live-инстансе. Redis 6.2+
-  #    ПЕРЕСОЗДАЁТ SSL_CTX по CONFIG SET tls-*-file даже при неизменном пути → читает
-  #    свежий PEM с диска. command (raw verb-state) бьёт МИМО diff-skip
-  #    community.redis.config (тот сравнил бы значения CONFIG GET, счёл no-op при том же
-  #    пути и не дёрнул бы CONFIG SET) — нужен raw CONFIG SET, чтобы re-read сработал.
-  #    Гейт — onchanges:[tls_certs] (идемпотентность по onchanges, orchestration.md §2.1.1): один command = один
-  #    verb → три шага, все на одном гейте. Пути PEM — из conf_dir (туда destiny положил
-  #    материал шагом 2). addr/TLS-дискриминатор/пароль — из state.tls (compute.tls_*) +
-  #    vault(), коннект по TLS (rotate только на TLS-инстансе).
+  # 3. HOT-RELOAD CERT: three community.redis.command steps (CONFIG SET tls-cert-file /
+  #    tls-key-file / tls-ca-cert-file) recreate the SSL_CTX on the live instance. Redis 6.2+
+  #    RECREATES the SSL_CTX on CONFIG SET tls-*-file even when the path is unchanged -> it reads
+  #    a fresh PEM from disk. command (raw verb-state) bypasses the diff-skip of
+  #    community.redis.config (which would compare CONFIG GET values, treat it as a no-op with the same
+  #    path, and never fire CONFIG SET) - a raw CONFIG SET is needed to make the re-read happen.
+  #    Gate - onchanges:[tls_certs] (idempotency via onchanges, orchestration.md §2.1.1): one command = one
+  #    verb -> three steps, all on the same gate. PEM paths - from conf_dir (that's where destiny put
+  #    the material in step 2). addr/TLS-discriminator/password - from state.tls (compute.tls_*) +
+  #    vault(), connect over TLS (rotate only on a TLS instance).
   - name: Re-read the rotated TLS cert when it changed (CONFIG SET tls-cert-file)
     module: community.redis.command
     onchanges: [tls_certs]

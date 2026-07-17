@@ -1,9 +1,9 @@
-# L0-испытание remove_node: GUARD-провал. remove_node_sid == seed_sid → assert-guard
-# (ADR-009 amendment 2026-06-23) вычисляет предикат that[0] в FALSE на РЕНДЕРЕ
-# Keeper-side → render ОБРЫВАЕТСЯ ошибкой с message ДО любого dispatch (ни одной
-# задачи на Soul). Покрывает FALSE-ветку guard-предиката (парный с happy-кейсом).
-# Соответствие вычисляется KEEPER-SIDE при render (soulprint.hosts доступен);
-# harness ассертит обрыв через expect_render_error (ADR-023 amendment).
+# L0 test for remove_node: GUARD failure. remove_node_sid == seed_sid → the assert guard
+# (ADR-009 amendment 2026-06-23) evaluates predicate that[0] to FALSE at RENDER time
+# Keeper-side → render ABORTS with a message BEFORE any dispatch (no task
+# reaches Soul). Covers the FALSE branch of the guard predicate (paired with the happy-path case).
+# The check is evaluated KEEPER-SIDE at render (soulprint.hosts is available);
+# the harness asserts the abort via expect_render_error (ADR-023 amendment).
 name: remove_node guard fails when remove_node equals seed
 
 fixtures:
@@ -19,9 +19,9 @@ fixtures:
       soulprint:
         network: { primary_ip: 10.0.0.3 }
         os: { arch: amd64 }
-  # ★ РЕДИЗАЙН default_admin (2026-06-30): vault-ветка default_admin (коннект под
-  # системным admin-юзером). Guard рвёт render ДО REMOVE-задачи — пароль здесь не
-  # резолвится, но ветка приведена к новой форме для консистентности с happy-кейсом.
+  # ★ default_admin redesign (2026-06-30): default_admin vault branch (connect as the
+  # system admin user). The guard aborts render BEFORE the REMOVE task — the password isn't
+  # resolved here, but the branch is updated to the new form for consistency with the happy-path case.
   vault:
     secret/redis/remove_node/users/default_admin:
       password: default-admin-secret-pass
@@ -40,7 +40,7 @@ fixtures:
     remove_node_sid: node-3.example.com
     seed_sid: node-3.example.com
 
-# Render ОБРЫВАЕТСЯ assert-провалом guard-а: ожидаем ошибку рендера с message из
-# assert. expect_render_error взаимоисключим с assert.rendered_tasks (плана нет —
-# прогон не стартовал).
+# Render ABORTS on the guard assert failure: we expect a render error with the message from
+# the assert. expect_render_error is mutually exclusive with assert.rendered_tasks (there's no plan —
+# the run never started).
 expect_render_error: "remove_node guard: remove_node_sid/seed_sid must be distinct hosts of the run roster"

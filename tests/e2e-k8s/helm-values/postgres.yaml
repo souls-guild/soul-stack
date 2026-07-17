@@ -1,10 +1,10 @@
-# Values для bitnami/postgresql Helm-чарта (L3c-2). Ephemeral PG для kind-
-# cluster: без PVC (kind-узлы не имеют storage-class по дефолту), single replica,
-# фиксированный пароль/база для воспроизводимости.
+# Values for the bitnami/postgresql Helm chart (L3c-2). Ephemeral PG for a kind
+# cluster: no PVC (kind nodes have no storage-class by default), single replica,
+# a fixed password/database for reproducibility.
 #
-# Service-имя в кластере: `postgres-postgresql.default.svc.cluster.local:5432`
-# (стандарт bitnami: `<release>-postgresql`, см. fullnameOverride/nameOverride
-# опционально).
+# Service name in the cluster: `postgres-postgresql.default.svc.cluster.local:5432`
+# (bitnami standard: `<release>-postgresql`, see fullnameOverride/nameOverride
+# optionally).
 
 auth:
   postgresPassword: testpass

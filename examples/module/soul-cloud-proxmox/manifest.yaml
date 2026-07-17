@@ -1,27 +1,28 @@
 kind: cloud_driver
-protocol_version: 1                    # compat-флаг plugin-протокола (ADR-020(c))
-namespace: cloud                       # пример third-party коллекции CloudDriver
+protocol_version: 1                    # plugin-protocol compat flag (ADR-020(c))
+namespace: cloud                       # example third-party CloudDriver collection
 name: proxmox
 
-# Closed enum по ADR-020(f).
-# vault_access НЕ нужен: credentials резолвит Keeper (A-flow, docs/keeper/cloud.md)
-# и передаёт plain в CreateRequest.credentials — драйвер в Vault НЕ ходит.
+# Closed enum per ADR-020(f).
+# vault_access NOT needed: Keeper resolves credentials (A-flow, docs/keeper/cloud.md)
+# and passes plain into CreateRequest.credentials — the driver does NOT talk to Vault.
 required_capabilities:
-  - network_outbound                   # вызовы Proxmox VE REST API (https://<host>:8006)
+  - network_outbound                   # calls to Proxmox VE REST API (https://<host>:8006)
 
-# CloudDriver работает на keeper-стороне и не трогает локальные ресурсы host-а —
-# объявляем пустой список (ADR-020(g), пример из docs/keeper/plugins.md).
+# CloudDriver runs on the keeper side and does not touch local host resources —
+# declaring an empty list (ADR-020(g), example from docs/keeper/plugins.md).
 side_effects: []
 
 spec:
-  provider_kind: proxmox               # семейство провайдера (Proxmox VE)
-  # JSON Schema draft 2020-12 (формат для kind: cloud_driver — см.
+  provider_kind: proxmox               # provider family (Proxmox VE)
+  # JSON Schema draft 2020-12 (format for kind: cloud_driver — see
   # docs/keeper/plugins.md → spec.profile_schema).
   #
-  # Proxmox — гипервизор, не облако: НЕТ regions; VM живёт на конкретной node
-  # кластера PVE. create = CLONE из VMID-шаблона (НЕ image). VMID — целое число,
-  # уникальное в рамках кластера; в нашем proto.VmInfo он стрингифицируется
-  # как `<node>/<vmid>` (см. main.go doc-комментарий, обоснование composite-ID).
+  # Proxmox is a hypervisor, not a cloud: NO regions; a VM lives on a specific
+  # node of the PVE cluster. create = CLONE from a VMID template (NOT an image).
+  # VMID is an integer, unique within the cluster; in our proto.VmInfo it is
+  # stringified as `<node>/<vmid>` (see the main.go doc comment for the
+  # composite-ID rationale).
   profile_schema:
     type: object
     required: [target_node, template_vmid]
@@ -29,34 +30,35 @@ spec:
       target_node:
         type: string
         description: |
-          Имя node PVE, на которой создаётся VM (cluster.nodes[].name). Если
-          template живёт на другой node — Proxmox сам сделает live-clone в
-          target_node, если задано full_clone=true и shared-storage есть.
+          Name of the PVE node the VM is created on (cluster.nodes[].name). If
+          the template lives on a different node — Proxmox will do a live
+          clone into target_node, provided full_clone=true and shared storage
+          is present.
       template_vmid:
         type: integer
         minimum: 100
-        description: VMID шаблона PVE для clone (qm-шаблон с подготовленным cloud-init).
+        description: VMID of the PVE template to clone (qm template with prepared cloud-init).
       new_vmid_start:
         type: integer
         minimum: 100
         description: |
-          Стартовый VMID для назначения новым VM. Если 0/опущен — драйвер
-          выбирает next-id через `/cluster/nextid`. По convention Proxmox VMID
-          ≥ 100 (1–99 зарезервированы под cluster-internal).
+          Starting VMID for new VM assignment. If 0/omitted — the driver picks
+          the next id via `/cluster/nextid`. By Proxmox convention VMID
+          ≥ 100 (1-99 are reserved for cluster-internal).
         default: 0
       name_prefix:
         type: string
         pattern: "^[a-zA-Z0-9][a-zA-Z0-9-]*$"
         description: |
-          Префикс DNS-имени VM (`<prefix>-<vmid>`). По default = `soul`. Чисто
-          DNS-имена — кириллица/спецсимволы запрещены QEMU/cloud-init.
+          VM DNS-name prefix (`<prefix>-<vmid>`). Default = `soul`. ASCII-only
+          DNS names — Cyrillic/special characters are forbidden by QEMU/cloud-init.
         default: soul
       full_clone:
         type: boolean
         description: |
-          true → полный clone (копия диска, независимая VM); false → linked
-          clone (cow-snapshot, требует не-LVM storage и зависимость от
-          template). Default true — оператору обычно нужна независимая VM.
+          true → full clone (disk copy, independent VM); false → linked
+          clone (cow-snapshot, requires non-LVM storage and a dependency on
+          the template). Default true — operators usually need an independent VM.
         default: true
       cores:
         type: integer
@@ -65,29 +67,29 @@ spec:
       memory:
         type: integer
         minimum: 256
-        description: Память VM в МБ (Proxmox-конвенция).
+        description: VM memory in MB (Proxmox convention).
         default: 2048
       storage:
         type: string
         description: |
-          Имя storage-пула PVE для clone-диска (см. /storage). При full_clone
-          может отличаться от template-storage — Proxmox перенесёт.
+          Name of the PVE storage pool for the clone disk (see /storage). With
+          full_clone it can differ from template-storage — Proxmox will migrate it.
       bridge:
         type: string
         description: |
-          Linux-bridge для net0 (vmbr0/vmbr1/…). Если не задан — наследуется
-          из шаблона.
+          Linux bridge for net0 (vmbr0/vmbr1/...). If not set — inherited
+          from the template.
       tags:
         type: object
         description: |
-          Произвольные теги VM (Proxmox tag-list, semicolon-separated). Ключ
-          `soulstack-run` зарезервирован для идемпотентности create.
+          Arbitrary VM tags (Proxmox tag-list, semicolon-separated). The key
+          `soulstack-run` is reserved for create idempotency.
         additionalProperties:
           type: string
       cicustom:
         type: string
         description: |
-          Опц. cicustom-строка Proxmox (snippet-path для user/network/meta).
-          Если задана, она используется как есть; иначе userdata из
-          CreateRequest.userdata кладётся в `ciuser`/`cipassword`/`sshkeys`
-          через стандартные cloud-init поля. См. docs Proxmox cloud-init.
+          Optional Proxmox cicustom string (snippet path for user/network/meta).
+          If set, it is used as-is; otherwise userdata from
+          CreateRequest.userdata is placed into `ciuser`/`cipassword`/`sshkeys`
+          via standard cloud-init fields. See Proxmox cloud-init docs.

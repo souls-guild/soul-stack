@@ -1,19 +1,19 @@
 kid: keeper-dev-b
 
-# Второй keeper-инстанс dev-стека для soul-failover демо (S4). Делит с
-# keeper.dev.yml общие PG/Redis/Vault и тот же TLS-материал из
-# /tmp/keeper-dev/tls/ (выпущен dev/provision.sh). Отличается только `kid` и
-# непересекающимися listen-портами (см. ниже).
+# Second keeper instance of the dev stack for soul-failover demo (S4). Shares
+# common PG/Redis/Vault with keeper.dev.yml and the same TLS material from
+# /tmp/keeper-dev/tls/ (issued by dev/provision.sh). Differs only in `kid` and
+# non-overlapping listen ports (see below).
 #
-# acolytes: 2 — HA work-queue (ADR-027). При двух живых Keeper-инстансах в
+# acolytes: 2 — HA work-queue (ADR-027). With two live Keeper instances the
 # Conclave refuse-guard soul-shedding (S3, allow_unsafe_single_path_multi_keeper:
-# false) НЕ даст стартовать инстансу с acolytes=0 на single-path. acolytes>0 на
-# обоих → пул исполнения активен, guard не срабатывает.
+# false) will NOT let an instance with acolytes=0 start on a single path.
+# acolytes>0 on both → execution pool active, guard does not trigger.
 #
-# Зачем второй keeper: dev/soul.dev.yml перечисляет ОБА keeper в
-# keeper.endpoints с приоритетами (priority 1 = keeper-a, 2 = keeper-b). При
-# падении keeper-a soul уходит на keeper-b; при восстановлении возвращается
-# (failback.enabled: true). Процедура — docs/dev/local-setup.md → soul-failover.
+# Why a second keeper: dev/soul.dev.yml lists BOTH keepers in
+# keeper.endpoints with priorities (priority 1 = keeper-a, 2 = keeper-b). When
+# keeper-a goes down, soul moves to keeper-b; on recovery it returns
+# (failback.enabled: true). Procedure — docs/dev/local-setup.md → soul-failover.
 
 listen:
   grpc:
@@ -27,9 +27,9 @@ listen:
       tls:
         cert: /tmp/keeper-dev/tls/keeper.crt
         key:  /tmp/keeper-dev/tls/keeper.key
-        # ClientCAs для mTLS: тот же Vault PKI root (CN=soul-stack), что и у
-        # keeper-a — SoulSeed-сертификаты подписаны им же, soul верифицирует
-        # оба keeper одним CA. См. dev/provision.sh шаг 7.
+        # ClientCAs for mTLS: same Vault PKI root (CN=soul-stack) as
+        # keeper-a — SoulSeed certs are signed by it too, soul verifies
+        # both keepers with the same CA. See dev/provision.sh step 7.
         ca:   /tmp/keeper-dev/tls/vault-ca.crt
   openapi: { addr: "127.0.0.1:8082" }
   mcp:     { addr: "127.0.0.1:8083" }
@@ -54,16 +54,17 @@ vault:
 auth:
   jwt:
     signing_key_ref: vault:secret/keeper/jwt-signing-key
-    # issuer совпадает с kid инстанса — токены, выпущенные keeper-b, отличимы
-    # в аудите от keeper-a по claim `iss`.
+    # issuer matches the instance kid — tokens issued by keeper-b are
+    # distinguishable from keeper-a in the audit trail by claim `iss`.
     issuer: keeper-dev-b
     ttl_default: 24h
     ttl_bootstrap: 720h
 
 otel:
-  # Те же dev-трейсы: otel-collector (docker-compose) :4317 → Jaeger
-  # http://127.0.0.1:16686. Insecure-gRPC (dev-collector без TLS). service в
-  # Jaeger у обоих keeper один (`keeper`) — различай инстансы по kid в спанах.
+  # Same dev traces: otel-collector (docker-compose) :4317 → Jaeger
+  # http://127.0.0.1:16686. Insecure gRPC (dev-collector without TLS). The
+  # service in Jaeger is the same for both keepers (`keeper`) — tell
+  # instances apart by kid in spans.
   enabled: true
   exporter: otlp
   endpoint: "127.0.0.1:4317"
@@ -100,20 +101,21 @@ audit:
   otel_export: false
   retention_days: 365
 
-# Watchman (изоляция-детект + soul-shedding S2): при потере PG/Redis инстанс
-# сам закрывает локальные EventStream-стримы. На двух-keeper failover-демо это
-# даёт второй сценарий ухода soul — БЕЗ kill keeper-a: достаточно изолировать
-# его от PG/Redis, Watchman сбросит стрим, soul уйдёт на keeper-b. Дефолты
-# (5s / 3) совпадают с config.DefaultWatchman*; вынесены явно.
+# Watchman (isolation detection + soul-shedding S2): on losing PG/Redis the
+# instance closes its own local EventStream streams. On the two-keeper
+# failover demo this gives a second soul-departure scenario — WITHOUT killing
+# keeper-a: just isolate it from PG/Redis, Watchman drops the stream, soul
+# moves to keeper-b. Defaults (5s / 3) match config.DefaultWatchman*; spelled
+# out explicitly here.
 watchman_interval: 5s
 watchman_fail_threshold: 3
 
-# HA work-queue: acolytes>0 на обоих инстансах. См. шапку про refuse-guard S3.
+# HA work-queue: acolytes>0 on both instances. See top comment on refuse-guard S3.
 acolytes: 2
 
 # Refuse-guard soul-shedding (Finding-A, ADR-027(h)): default false (refuse).
-# При acolytes=2 не релевантен (single-path guard срабатывает только при
-# acolytes=0 + живой Conclave); оставлен явно для симметрии с keeper.dev.yml.
+# Not relevant at acolytes=2 (single-path guard only triggers at
+# acolytes=0 + live Conclave); kept explicit for symmetry with keeper.dev.yml.
 allow_unsafe_single_path_multi_keeper: false
 
 reaper:
@@ -133,10 +135,11 @@ reaper:
     purge_apply_run_plan: { enabled: true, max_age: 30d, action: delete }
     purge_apply_task_register: { enabled: true, max_age: 1h, action: delete }
 
-# Conductor (ADR-048) — симметрично keeper-a: оба инстанса поднимают планировщик,
-# лидерство по lease conductor:leader выбирается независимо от reaper:leader
-# (могут быть разные держатели). Адаптивный шаг опроса (ADR-048 «Adaptive
-# interval»), профиль «Спокойный» floor=30s/ceiling=60s/idle=120s — см. keeper.dev.yml.
+# Conductor (ADR-048) — symmetric with keeper-a: both instances spin up the
+# scheduler, leadership over lease conductor:leader is elected independently
+# from reaper:leader (can be different holders). Adaptive polling step
+# (ADR-048 "Adaptive interval"), "Calm" profile floor=30s/ceiling=60s/idle=120s
+# — see keeper.dev.yml.
 cadence_scheduler:
   poll_floor: 30s
   poll_ceiling: 60s

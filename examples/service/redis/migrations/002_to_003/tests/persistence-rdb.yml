@@ -1,6 +1,6 @@
 name: persistence-rdb
 description: >
-  Обратная свёртка persistence: save непустой + appendonly=no → rdb.
+  Reverse fold of persistence: save non-empty + appendonly=no -> rdb.
 
 state_before:
   redis_type: standalone

@@ -1,8 +1,8 @@
-# L0-испытание (Trial, ADR-023): conditional-include keep на cluster.
+# L0 trial (ADR-023): conditional-include keep on cluster.
 #
-# Реверс drop-on-standalone: при topology=cluster статический include-when:true →
-# группа cluster.yml ОСТАЁТСЯ, её задачи рендерятся обычным путём (не placeholder).
-# Presence-матчер фиксирует наличие всех трёх задач (base + 2 cluster).
+# Reverse of drop-on-standalone: with topology=cluster a static include-when:true →
+# the cluster.yml group STAYS, its tasks render the normal way (not as a placeholder).
+# The presence matcher checks that all three tasks are present (base + 2 cluster).
 name: conditional-include keeps cluster group on cluster
 
 fixtures:

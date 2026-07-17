@@ -1,10 +1,10 @@
 name: logging-defaults-back-compat
 description: >
-  Инкарнация v13 развёрнута ДО ввода log-shipping — поля logging в state нет. Миграция
-  ДОБАВЛЯЕТ read-model logging с консервативным default: version пустая ('' = не развёрнуто),
-  sink_type console (безопасный дефолт без инфры), endpoint пустой, log_sources пустой.
-  Остальной state (redis_type/redis_config/redis_users/tls/monitoring/персистенс/топология)
-  проходит насквозь бит-в-бит.
+  A v13 incarnation deployed BEFORE log-shipping was introduced -- there is no logging field
+  in state. The migration ADDS a logging read-model with a conservative default: empty version
+  ('' = not deployed), sink_type console (a safe default with no infra), empty endpoint, empty
+  log_sources. The rest of state (redis_type/redis_config/redis_users/tls/monitoring/persistence/
+  topology) passes through bit-for-bit.
 
 state_before:
   redis_type: "sentinel"

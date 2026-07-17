@@ -1,17 +1,17 @@
-# L0-испытание create sentinel: ДВА aclfile (system-ACL-users d2 + редизайн default_admin).
-#   1. users.acl (redis-server): системные default_admin/replica/monitoring/sentinel/haproxy
-#      из essence.system_acl_users, perms 1:1, каждый со СВОИМ vault-паролем users/<name>.
-#   2. sentinel-users.acl (sentinel-демон, ВТОРОЙ aclfile): системные default_admin/monitoring/
-#      sentinel/haproxy из essence.system_acl_users_sentinel (ОТЛИЧНЫЙ perms-набор —
-#      sentinel-команды). ★ РЕДИЗАЙН default_admin: все системные (вкл. default_admin) по
-#      ЕДИНОЙ ветке users/<name>#password (прежняя «default → главный секрет» убрана);
-#      встроенный default рендерится `off`.
-#   3. оба файла рендерятся в одном sentinel-прогоне; redis.conf указывает aclfile
-#      users.acl, sentinel.conf — aclfile sentinel-users.acl (per-host announce-ip в
-#      отдельном tmpl-тесте, тут проверяем vars-долив).
+# L0 trial for create sentinel: TWO aclfiles (system-ACL-users d2 + default_admin redesign).
+#   1. users.acl (redis-server): system default_admin/replica/monitoring/sentinel/haproxy
+#      from essence.system_acl_users, perms 1:1, each with its OWN vault password users/<name>.
+#   2. sentinel-users.acl (sentinel daemon, SECOND aclfile): system default_admin/monitoring/
+#      sentinel/haproxy from essence.system_acl_users_sentinel (a DIFFERENT perms set —
+#      sentinel commands). ★ default_admin REDESIGN: all system users (incl. default_admin) go through
+#      a SINGLE users/<name>#password branch (the old "default → main secret" is removed);
+#      the built-in default is rendered `off`.
+#   3. both files are rendered in a single sentinel run; redis.conf points to aclfile
+#      users.acl, sentinel.conf — aclfile sentinel-users.acl (per-host announce-ip in
+#      a separate tmpl test, here we check the vars top-up).
 #
-# Топология: 1 хост (replicas_per_master=0, size-guard 1==1+0 PASS). render_context.self
-# = node-1 (host-инвариант apply.input).
+# Topology: 1 host (replicas_per_master=0, size-guard 1==1+0 PASS). render_context.self
+# = node-1 (host invariant of apply.input).
 name: sentinel create renders two aclfiles with distinct system user sets
 
 fixtures:
@@ -25,8 +25,8 @@ fixtures:
   vault:
     secret/redis/create:
       password: s3cr3t-redis-pass-create
-    # ★ РЕДИЗАЙН default_admin (2026-06-30): default_admin — системный юзер
-    # внутрикластерного AUTH (auth_pass/PING шаги деплоя читают его по ветке users/<name>).
+    # ★ default_admin REDESIGN (2026-06-30): default_admin — the system user for
+    # intra-cluster AUTH (deploy's auth_pass/PING steps read it via the users/<name> branch).
     secret/redis/create/users/default_admin:
       password: default-admin-secret-pass
     secret/redis/create/users/replica:
@@ -38,12 +38,12 @@ fixtures:
     secret/redis/create/users/haproxy:
       password: haproxy-sys-secret-pass
   essence:
-    # install_method — в essence (author-context, 2026-06-28): способ установки
-    # НЕ operator-input. compute.install читает default(essence.install_method, 'binary').
+    # install_method — in essence (author-context, 2026-06-28): the install method
+    # is NOT operator-input. compute.install reads default(essence.install_method, 'binary').
     install_method: package
     redis_type: sentinel
     sentinel_master_name: master
-    # ★ Редизайн: подложка per-master sentinel-дефолтов (под input.sentinel_master_settings).
+    # ★ Redesign: fallback for per-master sentinel defaults (backing input.sentinel_master_settings).
     sentinel_master_defaults:
       down-after-milliseconds: "5000"
       failover-timeout:        "60000"
@@ -58,14 +58,14 @@ fixtures:
       maxmemory-policy: allkeys-lru
       maxclients:       10000
       timeout:          300
-    # Системные redis-server (★ редизайн: + default_admin полного доступа, requirepass убран).
+    # System redis-server users (★ redesign: + default_admin with full access, requirepass removed).
     system_acl_users:
       default_admin: "~* &* +@all"
       replica:    "+psync +replconf +ping"
       monitoring: "-@all +@connection +client +ping +info +config|get +cluster|info +slowlog +latency +memory +select +command|count +command|docs"
       sentinel:   "allchannels +multi +slaveof +ping +exec +subscribe +config|rewrite +role +publish +info +client|setname +client|kill +script|kill"
       haproxy:    "-@all +auth +client|getname +client|id +client|setname +command +hello +ping +role +info +cluster|info"
-    # Системные sentinel-демона (★ редизайн: default_admin вместо default; sentinel-команды).
+    # System sentinel-daemon users (★ redesign: default_admin instead of default; sentinel commands).
     system_acl_users_sentinel:
       default_admin: "allchannels allkeys +@all"
       monitoring: "-@all +@connection -command +client -hello +info -auth +sentinel|masters +sentinel|replicas +sentinel|slaves +sentinel|sentinels +sentinel|ckquorum"
@@ -73,8 +73,8 @@ fixtures:
       haproxy:    "-@all +auth +client|getname +client|id +client|setname +command +hello +ping +role +sentinel|get-master-addr-by-name +sentinel|master +sentinel|myid +sentinel|replicas +sentinel|sentinels"
 
   input:
-    # ★ provision выключен (default-on: опущенная секция = ВКЛЮЧЕНО; кейс деплоит на
-    # ГОТОВЫЙ roster, cloud-create не нужен) → include redis-provision.yml group-drop.
+    # ★ provision is off (default-on: an omitted section = ENABLED; the case deploys onto
+    # a READY roster, cloud-create not needed) → include redis-provision.yml group-drop.
     provision:
       enabled: false
     redis_type: sentinel
@@ -83,9 +83,9 @@ fixtures:
 
 assert:
   task_present:
-    # users.acl (redis-server): системные redis-server (5, вкл. default_admin) в map.
-    # ★ РЕДИЗАЙН default_admin: .vars.password больше не передаётся (requirepass убран);
-    # встроенный default рендерится `off` шаблоном (его в map нет).
+    # users.acl (redis-server): system redis-server users (5, incl. default_admin) in the map.
+    # ★ default_admin REDESIGN: .vars.password is no longer passed (requirepass removed);
+    # the built-in default is rendered `off` by the template (not present in the map).
     - module: core.file.rendered
       id: redis_acl
       params_subset:
@@ -126,10 +126,10 @@ assert:
           role: ""
           essence: {}
 
-    # sentinel-users.acl (sentinel-демон, ВТОРОЙ aclfile): системные sentinel (4, С
-    # default_admin). ★ РЕДИЗАЙН default_admin: все системные (вкл. default_admin) по
-    # ЕДИНОЙ ветке users/<name>#password (прежняя «default → главный секрет» убрана).
-    # Встроенный default рендерится `off` шаблоном (его в map нет).
+    # sentinel-users.acl (sentinel daemon, SECOND aclfile): system sentinel users (4, WITH
+    # default_admin). ★ default_admin REDESIGN: all system users (incl. default_admin) go through
+    # a SINGLE users/<name>#password branch (the old "default → main secret" is removed).
+    # The built-in default is rendered `off` by the template (not present in the map).
     - module: core.file.rendered
       id: redis_sentinel_acl
       params_subset:
@@ -173,7 +173,7 @@ assert:
   state_changes:
     redis_type: sentinel
     redis_version: "7.4.1"
-    # operator-extra нет → системные не в state → redis_users пуст.
+    # no operator-extra → system users not in state → redis_users empty.
     redis_users: []
     redis_hosts: []
     redis_sentinel:

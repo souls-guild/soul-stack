@@ -1,15 +1,15 @@
-# L0-испытание destroy: teardown инкарнации, развёрнутой PACKAGE-способом (distro-deb dragonfly).
-# Render-only, герметично. Lifecycle terminal-флоу (destroy — фаза ЖЦ).
+# L0 trial destroy: teardown of an incarnation deployed the PACKAGE way (distro-deb dragonfly).
+# Render-only, hermetic. Lifecycle terminal flow (destroy — lifecycle phase).
 #
-# Что ассертим:
-#   1. Сервисы остановлены (core.service.stopped): dragonfly, redis-sentinel, disable-thp.
-#   2. DragonFly снят ПАКЕТОМ (core.pkg.absent name=dragonfly) — package-ветка активна
-#      (essence.install_method=package → static-гейт group-keep; v1→v2 способ из essence).
-#   3. Наши конфиг-артефакты DragonFly удалены (core.file.absent): users.acl/dragonfly.conf/
-#      TLS PEM в /etc/dragonfly + logrotate/sysctl/disable-thp drop-in. (sentinel.conf/
-#      sentinel-users.acl ЗДЕСЬ НЕ удаляются — их кладёт destiny `redis` в /etc/redis, рефактор.)
-#   4. BINARY-ветка дропнута (group-drop): core.file.absent /usr/local/bin/dragonfly И
-#      /etc/systemd/system/dragonfly.service ОТСУТСТВУЮТ в плане (на package-инкарнации не наши).
+# What we assert:
+#   1. Services stopped (core.service.stopped): dragonfly, redis-sentinel, disable-thp.
+#   2. DragonFly removed via PACKAGE (core.pkg.absent name=dragonfly) — package branch active
+#      (essence.install_method=package → static gate group-keep; v1→v2 method comes from essence).
+#   3. Our DragonFly config artifacts are removed (core.file.absent): users.acl/dragonfly.conf/
+#      TLS PEM in /etc/dragonfly + logrotate/sysctl/disable-thp drop-in. (sentinel.conf/
+#      sentinel-users.acl are NOT removed HERE — they're placed by the `redis` destiny in /etc/redis, a refactor artifact.)
+#   4. BINARY branch is dropped (group-drop): core.file.absent /usr/local/bin/dragonfly AND
+#      /etc/systemd/system/dragonfly.service are ABSENT from the plan (not ours on a package incarnation).
 name: destroy tears down a package-installed dragonfly (stop services + pkg.absent + remove configs)
 
 fixtures:
@@ -21,12 +21,12 @@ fixtures:
         network: { primary_ip: 10.0.0.5 }
         os: { arch: amd64 }
 
-  # ★ v1→v2: способ установки и conf_dir из essence (install_method=package, conf_dir дефолтный).
+  # ★ v1→v2: install method and conf_dir come from essence (install_method=package, conf_dir default).
   essence:
     install_method: package
     conf_dir: /etc/dragonfly
 
-  # incarnation.state v2 (install/conf_dir/data_dir больше не в state).
+  # incarnation.state v2 (install/conf_dir/data_dir no longer live in state).
   state:
     df_version: "1.39.0"
     df_config:
@@ -34,7 +34,7 @@ fixtures:
 
 assert:
   task_present:
-    # 1. Стоп трёх сервисов.
+    # 1. Stop the three services.
     - module: core.service.stopped
       params_subset:
         name: dragonfly
@@ -45,12 +45,12 @@ assert:
       params_subset:
         name: disable-thp
 
-    # 2. DragonFly снят пакетом (package-ветка).
+    # 2. DragonFly removed via package (package branch).
     - module: core.pkg.absent
       params_subset:
         name: dragonfly
 
-    # 3. Наши конфиг-артефакты удалены (выборка ключевых).
+    # 3. Our config artifacts are removed (a selection of the key ones).
     - module: core.file.absent
       params_subset:
         path: /etc/dragonfly/users.acl
@@ -68,7 +68,7 @@ assert:
         path: /etc/sysctl.d/30-dragonfly.conf
 
   task_absent:
-    # 4. BINARY-ветка group-drop на package-инкарнации: бинарь и binary-unit НЕ трогаются.
+    # 4. BINARY branch group-drop on a package incarnation: binary and binary-unit are NOT touched.
     - module: core.file.absent
       params_subset:
         path: /usr/local/bin/dragonfly

@@ -1,8 +1,8 @@
-# L0-испытание create MongoDB standalone (базовый, БЕЗ operator-юзеров). Render-only,
-# герметично. Покрывает: binary-install (Nexus tarball + mongod + свой systemd-юнит),
-# render mongod.conf (toYaml — security.authorization enabled + dbPath/port), sysctl drop-in,
-# health-gate (community.mongo.pinged без auth), bootstrap default_admin через localhost-
-# exception (community.mongo.user под default_admin из essence.system_users).
+# L0 test for create MongoDB standalone (base case, WITHOUT operator users). Render-only,
+# hermetic. Covers: binary-install (Nexus tarball + mongod + its own systemd unit),
+# rendering mongod.conf (toYaml — security.authorization enabled + dbPath/port), sysctl drop-in,
+# health-gate (community.mongo.pinged without auth), bootstrap default_admin via the localhost
+# exception (community.mongo.user for default_admin from essence.system_users).
 name: mongo create standalone (binary install + mongod.conf + bootstrap default_admin)
 
 fixtures:
@@ -13,8 +13,8 @@ fixtures:
         network: { primary_ip: 10.0.0.7 }
         os: { arch: amd64, version: "12" }
 
-  # Vault: default_admin (bootstrap первого admin через localhost-exception). Главного
-  # secret/mongo/create#password нет (аутентификация под default_admin — редизайн симметрия redis).
+  # Vault: default_admin (bootstrap of the first admin via the localhost exception). There is no
+  # main secret/mongo/create#password (auth is via default_admin — redesign symmetric with redis).
   vault:
     secret/mongo/create/users/default_admin:
       password: mongoadmin-create-pass
@@ -47,10 +47,10 @@ fixtures:
 
 assert:
   task_present:
-    # 1. gen паролей в Vault (keeper-side) — default_admin.
+    # 1. password generation in Vault (keeper-side) — default_admin.
     - module: core.vault.kv-present
 
-    # 2. binary-install: юзер/группа mongodb + fetch tarball + mongod + systemd-юнит.
+    # 2. binary-install: mongodb user/group + fetch tarball + mongod + systemd unit.
     - module: core.group.present
       params_subset:
         name: mongodb
@@ -67,7 +67,7 @@ assert:
       params_subset:
         path: /etc/systemd/system/mongod.service
 
-    # 3. Каталоги + render mongod.conf + sysctl.
+    # 3. Directories + render mongod.conf + sysctl.
     - module: core.file.directory
       params_subset:
         path: /var/lib/mongodb
@@ -82,7 +82,7 @@ assert:
       params_subset:
         filename: 30-mongodb
 
-    # 4. Старт + health-gate + bootstrap default_admin.
+    # 4. Start + health-gate + bootstrap default_admin.
     - module: core.service.running
       params_subset:
         name: mongod
@@ -90,7 +90,7 @@ assert:
       params_subset:
         addr: "127.0.0.1:27017"
     # ★★ BOOTSTRAP default_admin: localhost-exception. username/name = default_admin,
-    # пароль из Vault-ветки, роли root@admin из essence.system_users.
+    # password from the Vault branch, roles root@admin from essence.system_users.
     - module: community.mongo.user
       params_subset:
         addr: "127.0.0.1:27017"
@@ -101,7 +101,7 @@ assert:
         state: present
 
   task_absent:
-    # package-ветка group-drop на binary-инкарнации.
+    # package branch group-drop on a binary incarnation.
     - module: core.pkg.installed
       params_subset:
         name: mongodb-org

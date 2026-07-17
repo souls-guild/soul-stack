@@ -1,11 +1,11 @@
-# ★★ ЦЕНТРАЛЬНЫЙ guard update_users: BULK-REPLACE удаляет юзера, выпавшего из набора.
-# Развёрнутый state.redis_users = {alice, bob}; оператор задаёт НОВЫЙ полный набор
-# input.users = {alice (с ИЗМЕНЁННЫМИ perms)} — bob в наборе НЕТ. update_users заменяет
-# state.redis_users ЦЕЛИКОМ:
-#   1. users.acl рендерится с alice (новые perms) — БЕЗ bob (удалён из ACL);
-#   2. state_changes.redis_users = [alice] (bob выпал — bulk-replace, не upsert).
-# Регресс «update_users мержит/апсертит вместо replace» = bob остался бы в users.acl
-# и/или в state_changes → ассерт красный. Render-only, герметично. Plaintext (addr 6379).
+# ** CENTRAL guard for update_users: BULK-REPLACE removes a user dropped from the set.
+# Deployed state.redis_users = {alice, bob}; the operator sets a NEW full set
+# input.users = {alice (with CHANGED perms)} — bob is NOT in the set. update_users replaces
+# state.redis_users ENTIRELY:
+#   1. users.acl renders with alice (new perms) — WITHOUT bob (removed from the ACL);
+#   2. state_changes.redis_users = [alice] (bob dropped out — bulk-replace, not upsert).
+# A regression where "update_users merges/upserts instead of replacing" = bob would remain
+# in users.acl and/or in state_changes → assert fails. Render-only, hermetic. Plaintext (addr 6379).
 name: update_users bulk-replaces the set and drops a user absent from input (plaintext)
 
 fixtures:
@@ -14,13 +14,13 @@ fixtures:
     network: { primary_ip: 10.0.0.5 }
     os: { arch: amd64 }
 
-  # host-layout — в essence (v11→v12, Вариант A): вынесен из state, повторный прогон читает отсюда.
+  # host-layout — in essence (v11→v12, Variant A): moved out of state, a re-run reads it from here.
   essence:
     conf_dir: /etc/redis
     data_dir: /var/lib/redis
     modules_base_url: "https://artifacts.example.com/redis/modules"
 
-  # Развёрнутый incarnation.state v6: operator-extra alice + bob.
+  # Deployed incarnation.state v6: operator-extra alice + bob.
   state:
     redis_type: sentinel
     redis_version: "7.2.4"
@@ -40,7 +40,7 @@ fixtures:
       - { name: alice, perms: "~* +@all", state: "on" }
       - { name: bob, perms: "~app:* +@read", state: "on" }
 
-  # Новый полный набор: только alice (с НОВЫМИ perms). bob удаляется.
+  # New full set: only alice (with NEW perms). bob is removed.
   input:
     users:
       - { name: alice, perms: "~app:* +@read +@write", state: "on" }
@@ -48,8 +48,8 @@ fixtures:
   vault:
     secret/redis/update_users:
       password: updusr-redis-pass-16ch
-    # ★ РЕДИЗАЙН default_admin: системный admin-юзер — пароль из ветки users/default_admin
-    # (masterauth-долив в apply.input.config + AUTH community.redis.acl).
+    # * default_admin REDESIGN: a system admin user — password from the users/default_admin branch
+    # (masterauth fill-in in apply.input.config + AUTH community.redis.acl).
     secret/redis/update_users/users/default_admin:
       password: default-admin-secret-pass
     secret/redis/update_users/users/alice:
@@ -57,8 +57,8 @@ fixtures:
 
 assert:
   task_present:
-    # 1. users.acl несёт ТОЛЬКО alice с НОВЫМИ perms — bob отсутствует (bulk-replace).
-    #    deep-compare: лишний bob = красный ассерт.
+    # 1. users.acl carries ONLY alice with NEW perms — bob is absent (bulk-replace).
+    #    deep-compare: an extra bob = a failed assert.
     - module: core.file.rendered
       params_subset:
         path: /etc/redis/users.acl
@@ -82,8 +82,8 @@ assert:
           role: ""
           essence: {}
 
-    # 2. HOT-RELOAD ACL: community.redis.acl к живому plain-инстансу.
-    #    ★ РЕДИЗАЙН default_admin: AUTH под default_admin (username + его Vault-пароль).
+    # 2. HOT-RELOAD ACL: community.redis.acl against a live plain instance.
+    #    * default_admin REDESIGN: AUTH under default_admin (username + its Vault password).
     - module: community.redis.acl
       params_subset:
         addr: "127.0.0.1:6379"
@@ -91,8 +91,8 @@ assert:
         password: default-admin-secret-pass
         tls: false
 
-  # state_changes: redis_users = НОВЫЙ набор ЦЕЛИКОМ (только alice, bob выпал — bulk-
-  # replace, БЕЗ пароля). Регресс upsert/merge = bob остался бы → красный.
+  # state_changes: redis_users = the NEW set ENTIRELY (only alice, bob dropped — bulk-
+  # replace, WITHOUT the password). An upsert/merge regression = bob would remain → fails.
   state_changes:
     redis_users:
       - { name: alice, perms: "~app:* +@read +@write", state: "on" }

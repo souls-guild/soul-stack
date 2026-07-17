@@ -1,89 +1,89 @@
 name: restart
 description: >-
-  Rolling-restart Redis без изменения конфига (sentinel/cluster). Роль каждого хоста
-  определяется живым probe: реплики перезапускаются по одной со строгим ресинк-гейтом,
-  master — последним.
+  Rolling-restart Redis without changing the config (sentinel/cluster). Each host's role
+  is determined by a live probe: replicas are restarted one at a time with a strict resync gate,
+  master — last.
 
-# Формат блока — docs/input.md.
+# Block format — docs/input.md.
 input:
   reason:
     type: string
     default: "manual restart"
 
-# state не меняется — только лог в state_history с пометкой.
+# state doesn't change — only a log entry in state_history with a note.
 state_changes: {}
 
-# ── Вычисляемые scenario-vars (compute:, ADR-009 amendment 2026-06-23) ────────────
-# `compute:` резолвится KEEPER-SIDE ОДИН раз на прогон в рун-уровневом контексте
-# (input/essence/incarnation — БЕЗ soulprint, барьер host-инвариантности) и виден
-# как `compute.<name>` в params задач ниже. Снимает дублирование TLS-дискриминатора:
-# дискриминатор TLS повторялся 4× (probe.addr/tls/tls_ca + health-gate.addr/tls/tls_ca
-# = по 3 на двух задачах). Объявлен ОДИН раз здесь, задачи ссылаются
-# compute.tls_on/tls_port/tls_ca. Render бит-в-бит: compute сворачивает то же
-# выражение, результат тот же.
+# ── Computed scenario-vars (compute:, ADR-009 amendment 2026-06-23) ────────────
+# `compute:` is resolved KEEPER-SIDE ONCE per run in the run-level context
+# (input/essence/incarnation — WITHOUT soulprint, the host-invariance barrier) and is visible
+# as `compute.<name>` in the task params below. Removes duplication of the TLS discriminator:
+# the TLS discriminator was repeated 4× (probe.addr/tls/tls_ca + health-gate.addr/tls/tls_ca
+# = 3 each on two tasks). Declared ONCE here, tasks reference
+# compute.tls_on/tls_port/tls_ca. Bit-for-bit render: compute folds the same
+# expression, same result.
 #
-# ★ Источник истины — incarnation.state.tls (ИМЕНОВАННОЕ поле намерения, state_schema
-# v3, конвенция docs/destiny/production-conventions.md §7a, ADR-057 amendment),
-# НЕ essence и НЕ парсинг redis_config: create транслирует operator-ввод TLS
-# (tls_enabled/tls_keep_plain) → named-field state.tls (тот же compute.tls_*, что дал
-# TLS-блок redis_config); на повторном прогоне essence
-# НЕПОЛНА (не видит operator-override). Раньше дискриминатор парсил opaque write-model
-# (`'tls-port' in incarnation.state.redis_config`); v3 даёт ИМЕНОВАННЫЙ read-model
-# state.tls.enable — читаемее и без bracket-нотации дефисного ключа.
-# Цепочка has(incarnation.state) && has(incarnation.state.tls) защищает от no-such-key,
-# когда State отсутствует (push/trial без State) или tls не материализован (v2-state до
-# миграции — но v3-сервис гарантирует tls присутствие через create/миграцию).
+# ★ The source of truth is incarnation.state.tls (a NAMED intent field, state_schema
+# v3, convention docs/destiny/production-conventions.md §7a, ADR-057 amendment),
+# NOT essence and NOT parsing redis_config: create translates the operator's TLS input
+# (tls_enabled/tls_keep_plain) → named-field state.tls (the same compute.tls_* that
+# populated the TLS block of redis_config); on a repeat run, essence
+# is INCOMPLETE (it doesn't see operator overrides). The discriminator used to parse the opaque write-model
+# (`'tls-port' in incarnation.state.redis_config`); v3 gives a NAMED read-model
+# state.tls.enable — more readable and without bracket-notation for the hyphenated key.
+# The chain has(incarnation.state) && has(incarnation.state.tls) guards against no-such-key
+# when State is absent (push/trial without State) or tls isn't materialized (v2-state before
+# migration — but the v3 service guarantees tls's presence via create/migration).
 compute:
-  # TLS включён по факту развёрнутого state.tls.enable (см. ★ выше). default() ловит
-  # отсутствие листа enable на существующем state.tls; has()-цепочка — отсутствие
-  # корня state/state.tls. tls_port — ИМЕНОВАННОЕ поле state.tls.port (INTEGER в v3,
-  # симметрично create compute.tls_port), в addr конкатенируется через string(...).
-  # tls_ca — PEM CA-СОДЕРЖИМОЕ (плагин ждёт PEM, не путь: tls.go AppendCertsFromPEM),
-  # резолвится vault(incarnation.state.tls.ca_ref) — секрет в state не лежит (ИБ), там
-  # стабильный Vault-ПУТЬ (read-model v3), симметрично tls_port из state.tls.port. После
-  # rotate_tls (меняет state.tls.ca_ref на новый путь) restart коннектится АКТУАЛЬНЫМ CA;
-  # essence.tls_ca_ref устарел бы (rotate его не трогает) → verify нового cert провалился бы.
+  # TLS is enabled based on the deployed state.tls.enable (see ★ above). default() catches
+  # the absence of the enable leaf on an existing state.tls; the has() chain — absence of
+  # the state/state.tls root. tls_port — the NAMED field state.tls.port (INTEGER in v3,
+  # symmetric with create's compute.tls_port), concatenated into addr via string(...).
+  # tls_ca — PEM CA CONTENT (the plugin expects PEM, not a path: tls.go AppendCertsFromPEM),
+  # resolved via vault(incarnation.state.tls.ca_ref) — the secret doesn't live in state (security), what's there is
+  # a stable Vault PATH (read-model v3), symmetric with tls_port from state.tls.port. After
+  # rotate_tls (changes state.tls.ca_ref to a new path), restart connects with the CURRENT CA;
+  # essence.tls_ca_ref would be stale (rotate doesn't touch it) → verifying the new cert would fail.
   tls_on:   "${ has(incarnation.state) && has(incarnation.state.tls) && default(incarnation.state.tls.enable, false) }"
   tls_port: "${ compute.tls_on ? string(incarnation.state.tls.port) : '' }"
   tls_ca:   "${ compute.tls_on ? vault(incarnation.state.tls.ca_ref) : '' }"
 
 tasks:
-  # Probe: фактическая роль каждого хоста через плагин community.redis.role
-  # (go-redis INFO replication, без redis-cli). actual-роль волатильна, берётся
-  # живым probe непосредственно перед таргетингом (concept.md, ADR-008). Полнота
-  # probe гарантируется fail-stop барьером (ADR-056 §5): упавший probe на любом
-  # хосте → barrier → error_locked, where-Passage не стартует. register.self.role
-  # — фактическая роль ("master"/"slave"), where сравнивает == 'slave'/'master'
-  # БЕЗ ручного trim (плагин отдаёт типизированную строку, не stdout с newline).
-  # addr — localhost (плагин исполняется на redis-хосте).
+  # Probe: the actual role of each host via the community.redis.role plugin
+  # (go-redis INFO replication, without redis-cli). The actual role is volatile, taken by a
+  # live probe right before targeting (concept.md, ADR-008). Probe
+  # completeness is guaranteed by the fail-stop barrier (ADR-056 §5): a failed probe on any
+  # host → barrier → error_locked, the where-Passage doesn't start. register.self.role
+  # — the actual role ("master"/"slave"), where compares == 'slave'/'master'
+  # WITHOUT manual trim (the plugin returns a typed string, not stdout with a newline).
+  # addr — localhost (the plugin runs on the redis host).
   #
-  # ★ TLS-дискриминатор вынесен в scenario-level compute: (см. блок compute выше):
-  # tls_on/tls_port/tls_ca объявлены ОДИН раз, задачи ссылаются compute.<name>. Источник
-  # истины — incarnation.state.tls (ИМЕНОВАННОЕ поле v3, конвенция §7a). ca_ref на
-  # create записан в state.tls.ca_ref как Vault-ПУТЬ (не PEM), а плагину нужно PEM-
-  # СОДЕРЖИМОЕ → повторный прогон берёт CA через vault(incarnation.state.tls.ca_ref): актуальный путь
-  # после rotate_tls, а не устаревший essence-дефолт. addr на
-  # compute.tls_on/tls_port: TLS включён → '127.0.0.1:' + tls-порт (string(state.tls.port),
-  # INTEGER в v3), иначе plaintext 6379.
+  # ★ The TLS discriminator has been moved to scenario-level compute: (see the compute block
+  # above): tls_on/tls_port/tls_ca are declared ONCE, tasks reference compute.<name>. The source
+  # of truth is incarnation.state.tls (a NAMED v3 field, convention §7a). ca_ref was written
+  # to state.tls.ca_ref on create as a Vault PATH (not PEM), and the plugin needs the PEM
+  # CONTENT → a repeat run gets the CA via vault(incarnation.state.tls.ca_ref): the current path
+  # after rotate_tls, not a stale essence default. addr on
+  # compute.tls_on/tls_port: TLS enabled → '127.0.0.1:' + tls-port (string(state.tls.port),
+  # INTEGER in v3), otherwise plaintext 6379.
   - name: Detect actual redis role per host
     module: community.redis.role
     register: redis_role
     changed_when: false
     params:
       addr:     "${ compute.tls_on ? '127.0.0.1:' + compute.tls_port : '127.0.0.1:6379' }"
-      # ★ РЕДИЗАЙН default_admin (2026-06-30): probe-коннект — под системным default_admin
-      # (username → AUTH, requirepass убран). password из новой Vault-ветки secret/redis/
-      # <inc>/users/default_admin#password. Тело сценария (вне covenant) хардкодит 'default_admin'.
+      # ★ default_admin REDESIGN (2026-06-30): the probe connection — under the system default_admin
+      # (username → AUTH, requirepass removed). password from the new Vault branch secret/redis/
+      # <inc>/users/default_admin#password. The scenario body (outside covenant) hardcodes 'default_admin'.
       username: default_admin
       password: "${ vault('secret/redis/' + incarnation.name + '/users/default_admin#password') }"
       tls:      "${ compute.tls_on }"
       tls_ca:   "${ compute.tls_ca }"
 
-  # Rolling-restart реплик по одному хосту (serial: 1). serial: на block: катит
-  # весь блок целиком по одному набору хостов перед следующей волной
-  # (orchestration.md §2, Вариант A: волна = {изменить, проверить здоровье}).
-  # block.where (slave) наследуется обоими потомками — рендерятся ТОЛЬКО на
-  # репликах, master в этой волне не трогается.
+  # Rolling-restart of replicas one host at a time (serial: 1). serial: on block: rolls
+  # the whole block through one set of hosts before the next wave
+  # (orchestration.md §2, Option A: wave = {change, check health}).
+  # block.where (slave) is inherited by both children — they render ONLY on
+  # replicas, master isn't touched in this wave.
   - name: Rolling-restart replicas one at a time
     where: register.redis_role.role == 'slave'
     serial: 1
@@ -92,13 +92,13 @@ tasks:
         module: core.service.restarted
         params:
           name: redis-server
-      # Health-gate: дождаться, пока рестартнутая реплика РЕСИНКНУЛАСЬ с master-ом
-      # (master_link_status:up), а не просто подняла демон. community.redis.replica-synced
-      # (INFO replication), НЕ raw redis-cli и НЕ pinged (PONG слаб — демон жив, но
-      # мог ещё не догнать master после рестарта; rolling не должен идти к следующей
-      # реплике, пока текущая не догнала). Бюджет времени и условие — унаследованный
-      # retry:+until: (count × delay = бюджет, until: = условие). register.self.synced
-      # — собственный результат шага (bool).
+      # Health-gate: wait until the restarted replica has RESYNCED with the master
+      # (master_link_status:up), not just brought the daemon up. community.redis.replica-synced
+      # (INFO replication), NOT raw redis-cli and NOT pinged (PONG is weak — the daemon is alive, but
+      # may not yet have caught up with master after a restart; rolling must not move to the next
+      # replica until the current one has caught up). Time budget and condition — the standard
+      # retry:+until: (count × delay = budget, until: = condition). register.self.synced
+      # — the step's own result (bool).
       - name: Wait until replica resynced with master
         module: community.redis.replica-synced
         changed_when: false
@@ -107,10 +107,10 @@ tasks:
           delay: 5s
           until: "register.self.synced == true"
         failed_when: "register.self.synced != true"
-        # TLS-гейт — scenario-level compute.tls_on/tls_port/tls_ca (см. блок compute
-        # выше): то же значение, что у probe-задачи, без повтора дискриминатора.
-        # ★ РЕДИЗАЙН default_admin: коннект ресинк-гейта — под системным default_admin
-        # (username → AUTH), та же Vault-ветка users/default_admin, что у probe.
+        # TLS gate — scenario-level compute.tls_on/tls_port/tls_ca (see the compute block
+        # above): the same value as the probe task's, without repeating the discriminator.
+        # ★ default_admin REDESIGN: the resync-gate connection — under the system default_admin
+        # (username → AUTH), the same Vault branch users/default_admin as the probe.
         params:
           addr:     "${ compute.tls_on ? '127.0.0.1:' + compute.tls_port : '127.0.0.1:6379' }"
           username: default_admin
@@ -118,11 +118,11 @@ tasks:
           tls:      "${ compute.tls_on }"
           tls_ca:   "${ compute.tls_ca }"
 
-  # Рестарт master-а ПОСЛЕ всех реплик (rolling-инвариант «master последним»).
-  # run_once: — ровно один хост (первый по SID) из резолва on:+where:
-  # (orchestration.md §2). >1 «текущих master» по probe — норма (cluster
-  # multi-master), шаг идёт на одном детерминированном за прогон; на multi-master
-  # cluster полный rolling по мастерам — follow-up вместе с failover-verb.
+  # Restart the master AFTER all replicas (the rolling invariant "master last").
+  # run_once: — exactly one host (first by SID) from the on:+where: resolve
+  # (orchestration.md §2). >1 "current masters" per probe is normal (cluster
+  # multi-master), the step runs on one deterministic host per run; a full rolling
+  # restart across masters on a multi-master cluster is a follow-up along with the failover verb.
   - name: Restart the current master last
     module: core.service.restarted
     where: register.redis_role.role == 'master'

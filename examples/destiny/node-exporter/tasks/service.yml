@@ -1,20 +1,20 @@
-# tasks/service.yml — раскладка бинаря node_exporter + основной systemd-unit.
+# tasks/service.yml — lays out the node_exporter binary + the main systemd unit.
 #
-# Install-шаг бинаря живёт ЗДЕСЬ (а не в install.yml) намеренно: его register
-# node_exporter_bin читает onchanges рестарта ниже, а per-file линтер (validateTaskRefs,
-# shared/config/destiny_tasks.go) отвергает cross-file onchanges. install.yml готовит
-# артефакт в /tmp (fetch+extract), service.yml ставит бинарь и поднимает сервис.
+# The binary install step lives HERE (not in install.yml) intentionally: its register
+# node_exporter_bin is read by the restart onchanges below, and the per-file linter (validateTaskRefs,
+# shared/config/destiny_tasks.go) rejects cross-file onchanges. install.yml prepares
+# the artifact in /tmp (fetch+extract), service.yml installs the binary and brings up the service.
 #
-# Явного daemon-reload-шага НЕТ: core.service (daemon_reload: auto) сам перечитывает
-# systemd при смене unit-файла ПЕРЕД start/restart.
+# There's no explicit daemon-reload step: core.service (daemon_reload: auto) itself re-reads
+# systemd on a unit-file change BEFORE start/restart.
 
-# Разложить бинарь из распакованного каталога в bin_dir через core.file.present src:
-# (копия содержимого regular-файла с хоста; docs/module/core/file).
+# Lay out the binary from the unpacked directory into bin_dir via core.file.present src:
+# (copies the content of a regular file from the host; docs/module/core/file).
 #
-# ИДЕМПОТЕНТНОСТЬ нативная: желаемый хэш = sha256(содержимое src), changed строго при
-# смене байт бинаря (или дрейфе mode/owner) — version-aware unless-guard прежнего
-# core.cmd.shell не нужен, и это строже его (ловит ЛЮБУЮ смену байт). register — апгрейд
-# версии (changed=true) рестартит сервис так же, как изменение unit-файла.
+# Native IDEMPOTENCY: the desired hash = sha256(content of src), changed strictly when
+# the binary's bytes change (or mode/owner drifts) — the version-aware unless-guard of the old
+# core.cmd.shell isn't needed, and this is stricter than it (catches ANY byte change). register — a version
+# upgrade (changed=true) restarts the service the same way a unit-file change does.
 - name: Install node_exporter binary
   module: core.file.present
   register: node_exporter_bin
@@ -25,12 +25,12 @@
     owner: root
     group: root
 
-# Основной systemd-unit (.tmpl, ADR-010). register — рестарт при изменении файла.
+# Main systemd unit (.tmpl, ADR-010). register — restart when the file changes.
 #
-# ★ Вариант B (ADR-010 §3.2 amendment): params.vars здесь НЕ нужен вовсе. operator-input
-# шаблон читает `.input.<name>` напрямую (render_context.input), прод-параметры — нативным
-# типом (list/int/map). Путь бинаря шаблон читает как `.vars.bin_path` (file-var из vars.yml,
-# render_context.vars несёт file-vars без passthrough).
+# ★ Option B (ADR-010 §3.2 amendment): params.vars is NOT needed here at all. The
+# template reads operator-input `.input.<name>` directly (render_context.input), prod params — with
+# a native type (list/int/map). The template reads the binary path as `.vars.bin_path` (a file-var from vars.yml,
+# render_context.vars carries file-vars without passthrough).
 - name: Render node_exporter systemd unit
   module: core.file.rendered
   register: node_exporter_unit
@@ -47,9 +47,9 @@
     name: "${ vars.service_name }"
     enabled: true
 
-# Рестарт основного демона — реактивно на ЛЮБОЕ из двух: unit-файл (node_exporter_unit)
-# ИЛИ переустановленный бинарь (node_exporter_bin, changed при апгрейде версии — смена
-# байт). daemon-reload при смене unit core.service делает сам перед рестартом.
+# Restarting the main daemon — reacts to EITHER of two: the unit file (node_exporter_unit)
+# OR the reinstalled binary (node_exporter_bin, changed on a version upgrade — byte
+# change). daemon-reload on a unit change is done by core.service itself before the restart.
 - name: Restart node_exporter because unit or binary changed
   module: core.service.restarted
   onchanges: [node_exporter_unit, node_exporter_bin]
