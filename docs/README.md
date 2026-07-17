@@ -44,7 +44,7 @@ Production installation operational runbook. Reference, not a tutorial. All file
 
 | Document | What is it / purpose |
 |---|---|
-| [guides/day-2.md](guides/day-2.md) | **Operator work cycle (Day-2).** Step-by-step practices: drift-check and reconcile, Service and Soul upgrades, fleet scaling, incidents and recovery, automation of regular operations. A bridge between initial deployments and day-to-day operations. |
+| [guides/operator-workflow.md](guides/operator-workflow.md) | **Operator work cycle.** Step-by-step practices: drift-check and reconcile, Service and Soul upgrades, souls scaling, incidents and recovery, automation of regular operations. A bridge between initial deployments and day-to-day operations. |
 | [operations/monitoring.md](operations/monitoring.md) | Cluster monitoring: Prometheus, OTel metrics, what and how to monitor. |
 | [operations/scaling.md](operations/scaling.md) | Horizontal scaling of a stateless-Keeper cluster for a large fleet. |
 | [operations/upgrade.md](operations/upgrade.md) | Updating the cluster and services: order, compatibility, migrations. |
