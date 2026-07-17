@@ -1,9 +1,9 @@
 -- 027_seed_cluster_admin.down.sql
 --
--- Откат seed-роли cluster-admin. Permission снимается ON DELETE CASCADE при
--- удалении роли, но дропаем явно для симметрии. Membership-строки
--- (rbac_role_operators) при наличии тоже уйдут каскадом — на down это ожидаемо
--- (таблицы дропаются миграцией 026.down полностью).
+-- Rollback of the seeded cluster-admin role. The permission is removed via ON DELETE
+-- CASCADE when the role is deleted, but we drop it explicitly for symmetry.
+-- Membership rows (rbac_role_operators), if any, will also cascade away - expected
+-- on down (the tables are fully dropped by migration 026.down).
 
 DELETE FROM rbac_role_permissions WHERE role_name = 'cluster-admin' AND permission = '*';
 DELETE FROM rbac_roles WHERE name = 'cluster-admin' AND builtin = true;

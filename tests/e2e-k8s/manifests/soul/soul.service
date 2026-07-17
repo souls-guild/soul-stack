@@ -5,13 +5,14 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-# Запуск daemon-режима. `soul run --config /etc/soul/soul.yml` читает SoulSeed
-# из cfg.Paths.Seed (default /var/lib/soul-stack/seed); SoulSeed должен
-# существовать до старта unit-а (harness вызывает `soul init` отдельным
-# `kubectl exec` до `systemctl start soul.service`).
+# Starts daemon mode. `soul run --config /etc/soul/soul.yml` reads SoulSeed
+# from cfg.Paths.Seed (default /var/lib/soul-stack/seed); SoulSeed must
+# exist before the unit starts (the harness invokes `soul init` via a
+# separate `kubectl exec` before `systemctl start soul.service`).
 ExecStart=/usr/local/bin/soul run --config /etc/soul/soul.yml
-# on-failure: при разрыве EventStream без reconnect-loop unit рестартует
-# (Soul сам имеет reconnect-loop, fallback на systemd-restart — safety-net).
+# on-failure: if the EventStream drops without a reconnect-loop the unit
+# restarts (Soul itself has a reconnect-loop; systemd-restart is the
+# fallback safety net).
 Restart=on-failure
 RestartSec=5s
 

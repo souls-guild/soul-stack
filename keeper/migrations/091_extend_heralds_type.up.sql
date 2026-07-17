@@ -1,20 +1,21 @@
 -- 091_extend_heralds_type.up.sql
 --
--- ADR-052 amendment (расширяемые channel-типы Herald): расширение closed-enum
--- `heralds.type` типами telegram/slack/mattermost/discord/custom (HTTP-класс) и
--- email (SMTP-класс). Only-add — прежнее значение `webhook` остаётся валидным,
--- существующие строки не затрагиваются.
+-- ADR-052 amendment (extensible Herald channel types): extends the closed-enum
+-- `heralds.type` with the types telegram/slack/mattermost/discord/custom (HTTP
+-- class) and email (SMTP class). Only-add -- the previous value `webhook`
+-- remains valid, existing rows are not affected.
 --
--- CHECK `heralds_type_enum` создан миграцией 071 (forward-only, не правится):
--- DROP + ADD с расширенным набором.
+-- CHECK `heralds_type_enum` was created by migration 071 (forward-only, not
+-- edited in place): DROP + ADD with the extended set.
 --
--- Единый источник набора типов — реестр драйверов herald.channelDrivers (+ email),
--- herald.AllHeraldTypes; guard-тест сверяет эту CHECK-константу с ним и с huma-enum,
--- чтобы три места не разъехались.
+-- Single source of truth for the type set -- the herald.channelDrivers driver
+-- registry (+ email), herald.AllHeraldTypes; a guard test checks this CHECK
+-- constant against it and against the huma-enum, so the three places don't
+-- drift apart.
 
 ALTER TABLE heralds DROP CONSTRAINT heralds_type_enum;
 ALTER TABLE heralds ADD CONSTRAINT heralds_type_enum
     CHECK (type IN ('webhook', 'telegram', 'slack', 'mattermost', 'discord', 'custom', 'email'));
 
 COMMENT ON COLUMN heralds.type IS
-    'Тип канала доставки (closed-enum, heralds_type_enum): webhook/custom — HTTP с телом webhookPayload; telegram/slack/mattermost/discord — HTTP-мессенджеры; email — SMTP. Единый источник — herald.AllHeraldTypes.';
+    'Delivery channel type (closed-enum, heralds_type_enum): webhook/custom -- HTTP with a webhookPayload body; telegram/slack/mattermost/discord -- HTTP messengers; email -- SMTP. Single source of truth -- herald.AllHeraldTypes.';

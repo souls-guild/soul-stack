@@ -1,14 +1,14 @@
 -- 045_add_apply_runs_no_match_status.down.sql
 --
--- Откат терминала `no_match` из enum `apply_runs.status` (FINDING-01 вариант (б)).
--- Перед сужением CHECK-а переводим существующие no_match-строки в `success` — это
--- ровно дореформенное поведение нецелевого хоста (до FINDING-01 Acolyte закрывал
--- такой no-op-хост как success), иначе ADD CONSTRAINT провалился бы на них. Так
--- down не теряет строки и не падает (паттерн 040/044: предварительный UPDATE
--- перед drop+recreate).
+-- Rolls back the `no_match` terminal from the `apply_runs.status` enum (FINDING-01 option (b)).
+-- Before narrowing the CHECK, we convert existing no_match rows to `success` - this is
+-- exactly the pre-reform behavior for a non-target host (before FINDING-01, Acolyte closed
+-- such a no-op host as success), otherwise ADD CONSTRAINT would fail on them. This way
+-- down doesn't lose rows and doesn't fail (pattern from 040/044: a preliminary UPDATE
+-- before drop+recreate).
 --
--- Возвращает CHECK к форме 044 (planned/claimed/running/dispatched/success/failed/
--- cancelled/orphaned) и сужает purge_apply_runs обратно (без no_match).
+-- Returns the CHECK to the 044 form (planned/claimed/running/dispatched/success/failed/
+-- cancelled/orphaned) and narrows purge_apply_runs back (without no_match).
 
 UPDATE apply_runs SET status = 'success' WHERE status = 'no_match';
 
@@ -42,4 +42,4 @@ END;
 $$ LANGUAGE plpgsql;
 
 COMMENT ON FUNCTION purge_apply_runs(interval, integer) IS
-    'Удаляет batch finished apply_runs (success/failed/cancelled/orphaned) с finished_at старше max_age. running/dispatched не трогает. Возвращает количество удалённых строк.';
+    'Deletes a batch of finished apply_runs (success/failed/cancelled/orphaned) with finished_at older than max_age. Does not touch running/dispatched. Returns the number of deleted rows.';

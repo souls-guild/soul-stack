@@ -253,7 +253,7 @@ func TestIntegration_Apply_Created(t *testing.T) {
 		cloud.NewSoulPG(integrationPool),
 		cloud.NewTokenPG(integrationPool, cloud.DefaultBootstrapTokenTTL),
 		cloud.NewCascadePG(integrationPool),
-		nil, // audit опционален — не тестируем audit-pipeline здесь
+		nil, // audit is optional -- we don't test the audit pipeline here
 	)
 
 	stream := internaltest.NewApplyStream()
@@ -389,7 +389,7 @@ func TestIntegration_Apply_Destroyed_Cascade(t *testing.T) {
 		t.Fatalf("seed insert host-2: %v", err)
 	}
 
-	// Apply(destroyed) с обоими SID.
+	// Apply(destroyed) with both SIDs.
 	destroyStream := internaltest.NewApplyStream()
 	if err := m.Apply(&pluginv1.ApplyRequest{
 		State: cloud.StateDestroyed,
@@ -406,7 +406,7 @@ func TestIntegration_Apply_Destroyed_Cascade(t *testing.T) {
 		t.Fatalf("destroyed final event = %+v", ev)
 	}
 
-	// souls: оба → destroyed.
+	// souls: both -> destroyed.
 	rows, err := integrationPool.Query(ctx, `SELECT sid, status FROM souls ORDER BY sid`)
 	if err != nil {
 		t.Fatalf("query souls: %v", err)
@@ -448,7 +448,7 @@ func TestIntegration_Apply_Destroyed_Cascade(t *testing.T) {
 		t.Errorf("seed host-2.status = %q, want revoked (precedence over orphaned)", gotSeeds["host-2.example.com"])
 	}
 
-	// bootstrap_tokens: оба → burned (used_at != NULL, used_by_kid = system-cloud-destroy).
+	// bootstrap_tokens: both -> burned (used_at != NULL, used_by_kid = system-cloud-destroy).
 	tokRows, err := integrationPool.Query(ctx,
 		`SELECT sid, used_at IS NOT NULL AS used, used_by_kid FROM bootstrap_tokens ORDER BY sid`)
 	if err != nil {
@@ -475,7 +475,7 @@ func TestIntegration_Apply_Destroyed_Cascade(t *testing.T) {
 		t.Errorf("burned tokens = %d, want 2", burned)
 	}
 
-	// Output модуля — содержит cascade-counts.
+	// Module output -- contains cascade-counts.
 	out := ev.Output.AsMap()
 	for _, k := range []string{"souls_updated", "seeds_orphaned", "tokens_burned"} {
 		if _, has := out[k]; !has {
@@ -485,7 +485,7 @@ func TestIntegration_Apply_Destroyed_Cascade(t *testing.T) {
 	if out["souls_updated"] != float64(2) {
 		t.Errorf("souls_updated = %v, want 2", out["souls_updated"])
 	}
-	// seeds_orphaned = 1 (только active host-1; revoked host-2 пропущен).
+	// seeds_orphaned = 1 (only active host-1; revoked host-2 is skipped).
 	if out["seeds_orphaned"] != float64(1) {
 		t.Errorf("seeds_orphaned = %v, want 1", out["seeds_orphaned"])
 	}
@@ -494,9 +494,9 @@ func TestIntegration_Apply_Destroyed_Cascade(t *testing.T) {
 	}
 }
 
-// TestIntegration_Apply_Destroyed_Atomicity — если PluginHost.Destroy
-// возвращает ошибку, реестры остаются нетронутыми (souls.status НЕ
-// меняется на destroyed). Проверяет «cascade ПОСЛЕ Destroy» инвариант.
+// TestIntegration_Apply_Destroyed_Atomicity -- if PluginHost.Destroy
+// returns an error, the registries stay untouched (souls.status is NOT
+// changed to destroyed). Verifies the "cascade AFTER Destroy" invariant.
 func TestIntegration_Apply_Destroyed_Atomicity(t *testing.T) {
 	resetCloud(t)
 	ctx := context.Background()
@@ -508,7 +508,7 @@ func TestIntegration_Apply_Destroyed_Atomicity(t *testing.T) {
 		cloud.NewTokenPG(integrationPool, cloud.DefaultBootstrapTokenTTL),
 		cloud.NewCascadePG(integrationPool), nil)
 
-	// Создаём один хост.
+	// Create a single host.
 	createStream := internaltest.NewApplyStream()
 	if err := m.Apply(&pluginv1.ApplyRequest{
 		State: cloud.StateCreated,
@@ -520,7 +520,7 @@ func TestIntegration_Apply_Destroyed_Atomicity(t *testing.T) {
 		t.Fatalf("Apply(created): %v", err)
 	}
 
-	// Destroy с unknown provider → PluginHost.Destroy ошибётся.
+	// Destroy with unknown provider -> PluginHost.Destroy errors out.
 	destroyStream := internaltest.NewApplyStream()
 	if err := m.Apply(&pluginv1.ApplyRequest{
 		State: cloud.StateDestroyed,
@@ -536,7 +536,7 @@ func TestIntegration_Apply_Destroyed_Atomicity(t *testing.T) {
 		t.Fatal("expected failed=true on unknown provider")
 	}
 
-	// souls.status должен остаться pending (cascade не выполнялся).
+	// souls.status must stay pending (cascade did not run).
 	var status string
 	if err := integrationPool.QueryRow(ctx,
 		`SELECT status FROM souls WHERE sid = $1`, "host-1.example.com").Scan(&status); err != nil {

@@ -1,26 +1,26 @@
 -- 055_create_tides.up.sql
 --
--- ADR-040 amendment 2026-05-27 → W-1 schema: Tide PG-таблица + back-link на apply_runs.
+-- ADR-040 amendment 2026-05-27 -> W-1 schema: Tide PG table + back-link to apply_runs.
 --
--- Tide — top-level entity для invocation-time scope chunking: один Tide
--- описывает массовый прогон scenario по большому target-у, разбитому на N
--- последовательных Surge-волн фиксированного размера surge_size. Каждый Surge —
--- один apply_run (back-link apply_runs.tide_id + surge_index).
+-- Tide - a top-level entity for invocation-time scope chunking: a single Tide
+-- describes a mass rollout of a scenario over a large target, split into N
+-- sequential Surge waves of fixed size surge_size. Each Surge is
+-- one apply_run (back-link apply_runs.tide_id + surge_index).
 --
--- Failover-resilient через PG-based claim+lease (parity Ward-claim из
--- ADR-027): pending → claimed_by_kid + claim_expires_at → running; протухший
--- claim возвращается Reaper-правилом `reclaim_tides` обратно в pending для
--- пере-claim другим Keeper-инстансом.
+-- Failover-resilient via PG-based claim+lease (parity with the Ward-claim from
+-- ADR-027): pending -> claimed_by_kid + claim_expires_at -> running; a stale
+-- claim is returned by the Reaper rule `reclaim_tides` back to pending for
+-- re-claim by another Keeper instance.
 --
--- CHECK-инварианты:
---   * tides_running_claim_consistency: running ⇒ claim-поля NOT NULL.
---   * tides_surge_index_within_total:  current_surge_index ≤ total_surges
---     (=total — все Surge-и отработали, прогон финализирован).
+-- CHECK invariants:
+--   * tides_running_claim_consistency: running => claim fields NOT NULL.
+--   * tides_surge_index_within_total:  current_surge_index <= total_surges
+--     (=total - all Surges completed, the run is finalized).
 --
 -- FK:
---   * started_by_aid → operators(aid) (NOT NULL, без ON DELETE — Tide
---     всегда инициируется конкретным Архонтом; парность apply_runs.started_by_aid
---     с ON DELETE SET NULL не подходит: NOT NULL запрещает SET NULL).
+--   * started_by_aid -> operators(aid) (NOT NULL, without ON DELETE - a Tide
+--     is always initiated by a specific Archon; parity with apply_runs.started_by_aid
+--     using ON DELETE SET NULL doesn't fit: NOT NULL forbids SET NULL).
 
 CREATE TABLE tides (
     tide_id                TEXT PRIMARY KEY,
@@ -68,23 +68,23 @@ CREATE TABLE tides (
         FOREIGN KEY (started_by_aid) REFERENCES operators (aid)
 );
 
--- Recovery-скан: только активные running с истёкшим claim (Reaper `reclaim_tides`).
+-- Recovery scan: only active running rows with an expired claim (Reaper `reclaim_tides`).
 CREATE INDEX tides_claim_scan_idx
     ON tides (claim_expires_at)
     WHERE status = 'running' AND claim_expires_at IS NOT NULL;
 
--- Pickup pending Tides по FIFO started_at (TideWorker.ClaimNext, FOR UPDATE SKIP LOCKED).
+-- Pickup pending Tides by FIFO started_at (TideWorker.ClaimNext, FOR UPDATE SKIP LOCKED).
 CREATE INDEX tides_pending_pickup_idx
     ON tides (started_at)
     WHERE status = 'pending';
 
--- Back-link apply_runs → tides. nullable: single-run apply_runs (без Tide)
--- остаются с tide_id=NULL; Tide-Surge — (tide_id, surge_index). FK не ставим
--- здесь (ADR-040 amendment 2026-05-27, soft-link parity incarnation_name):
--- удаление Tide не каскадит на apply_runs.
+-- Back-link apply_runs -> tides. nullable: single-run apply_runs (without a Tide)
+-- stay with tide_id=NULL; Tide-Surge - (tide_id, surge_index). We don't add an FK
+-- here (ADR-040 amendment 2026-05-27, soft-link parity with incarnation_name):
+-- deleting a Tide does not cascade to apply_runs.
 ALTER TABLE apply_runs ADD COLUMN IF NOT EXISTS tide_id TEXT;
 ALTER TABLE apply_runs ADD COLUMN IF NOT EXISTS surge_index INT;
 CREATE INDEX IF NOT EXISTS apply_runs_tide_idx ON apply_runs (tide_id) WHERE tide_id IS NOT NULL;
 
 COMMENT ON TABLE tides IS
-    'Реестр Tide-прогонов (top-level invocation-time chunking, ADR-040 amendment 2026-05-27, W-1). PG-based claim+lease для failover-resilience: pending→running→terminal; протухший claim возвращается Reaper-правилом reclaim_tides в pending.';
+    'Registry of Tide runs (top-level invocation-time chunking, ADR-040 amendment 2026-05-27, W-1). PG-based claim+lease for failover resilience: pending->running->terminal; a stale claim is returned to pending by the reclaim_tides Reaper rule.';

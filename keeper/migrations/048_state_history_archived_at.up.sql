@@ -1,29 +1,29 @@
 -- 048_state_history_archived_at.up.sql
 --
--- ADR-Q19 retention (PM-решение, 2026-05): записи `state_history` НЕ удаляются
--- физически — старые снимки помечаются soft-delete-флагом `archived_at` и
--- хранятся дальше (опц. внешнего bulk-выгрузчика). Default-политика —
--- последние N=50 на incarnation + всегда snapshot шагов state_schema
--- миграции (scenario='migration'); см. docs/keeper/reaper.md, правило
+-- ADR-Q19 retention (PM decision, 2026-05): `state_history` rows are NOT deleted
+-- physically - old snapshots are marked with the soft-delete flag `archived_at`
+-- and kept around (optionally for an external bulk exporter). Default policy -
+-- the last N=50 per incarnation, plus always a snapshot of state_schema migration
+-- steps (scenario='migration'); see docs/keeper/reaper.md, rule
 -- `archive_state_history`.
 --
--- Поведение колонки:
---   * archived_at IS NULL      — активный снимок: видим в Operator API /
---     MCP / Soul-resolver; учитывается фильтром «active» при пагинации.
---   * archived_at IS NOT NULL  — soft-deleted: момент пометки правилом
---     Reaper-а. По дефолту скрыт от чтения; читается отдельным флагом
---     `include_archived=true` (Operator API) при необходимости разбора.
+-- Column behavior:
+--   * archived_at IS NULL      - active snapshot: visible in the Operator API /
+--     MCP / Soul-resolver; counted by the "active" filter during pagination.
+--   * archived_at IS NOT NULL  - soft-deleted: the moment the Reaper rule
+--     marked it. Hidden from reads by default; read via the separate flag
+--     `include_archived=true` (Operator API) when a deeper look is needed.
 --
--- Запись новых снимков (INSERT в state_history) поведение не меняет:
--- свежие записи попадают с archived_at = NULL по DEFAULT, никаких правок
--- INSERT-ов не требуется.
+-- Writing new snapshots (INSERT into state_history) doesn't change behavior:
+-- fresh rows land with archived_at = NULL via DEFAULT, no INSERT changes
+-- are needed.
 --
--- Index `state_history_active_idx` — partial по WHERE archived_at IS NULL,
--- покрывает типовой запрос ленты истории (HistorySelectByName + Operator
--- API GET /v1/incarnations/{name}/history). Без него фильтр active
--- упирался бы в существующий `state_history_incarnation_at_idx` с лишним
--- проходом по soft-deleted-строкам — при retention 50 живых / 1000+ soft-
--- deleted это растёт линейно.
+-- Index `state_history_active_idx` - partial on WHERE archived_at IS NULL,
+-- covers the typical history-feed query (HistorySelectByName + Operator
+-- API GET /v1/incarnations/{name}/history). Without it, the active filter
+-- would fall back to the existing `state_history_incarnation_at_idx` with an
+-- extra scan over soft-deleted rows - at a retention of 50 live / 1000+ soft-
+-- deleted, that grows linearly.
 
 ALTER TABLE state_history
     ADD COLUMN archived_at TIMESTAMPTZ;
@@ -33,4 +33,4 @@ CREATE INDEX state_history_active_idx
     WHERE archived_at IS NULL;
 
 COMMENT ON COLUMN state_history.archived_at IS
-    'Soft-delete-флаг (ADR-Q19 retention). NULL = активный снимок; NOT NULL = soft-deleted-time правилом Reaper archive_state_history.';
+    'Soft-delete flag (ADR-Q19 retention). NULL = active snapshot; NOT NULL = soft-deleted time set by the Reaper rule archive_state_history.';

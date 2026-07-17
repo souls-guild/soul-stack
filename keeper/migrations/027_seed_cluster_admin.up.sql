@@ -1,19 +1,19 @@
 -- 027_seed_cluster_admin.up.sql
 --
--- Seed-миграция E1 (ADR-028(b), docs/keeper/rbac.md → § Встроенные роли).
--- Встроенная роль cluster-admin с единственным permission `*` существует в БД
--- ДО любого keeper init. keeper init в своей advisory-lock-транзакции лишь
--- добавляет membership-строку (cluster-admin, <aid>) в rbac_role_operators —
--- это фикс BUG-1.
+-- Seed migration E1 (ADR-028(b), docs/keeper/rbac.md -> the "Built-in roles" section).
+-- The built-in cluster-admin role with the single permission `*` exists in the DB
+-- BEFORE any keeper init. keeper init, inside its advisory-lock transaction, only
+-- adds a membership row (cluster-admin, <aid>) to rbac_role_operators -
+-- this is the BUG-1 fix.
 --
--- builtin=true защищает роль от role.delete / role.update (Фаза 2).
--- created_by_aid = NULL — seed-роль без инициатора-Архонта.
+-- builtin=true protects the role from role.delete / role.update (Phase 2).
+-- created_by_aid = NULL - a seed role has no initiating Archon.
 --
--- ON CONFLICT DO NOTHING делает миграцию идемпотентной и безопасной при любом
--- порядке относительно keeper init (роль уже могла быть вставлена).
+-- ON CONFLICT DO NOTHING makes the migration idempotent and safe regardless of
+-- ordering relative to keeper init (the role may already have been inserted).
 
 INSERT INTO rbac_roles (name, description, builtin, created_by_aid)
-VALUES ('cluster-admin', 'Встроенная роль полного доступа (permissions: *)', true, NULL)
+VALUES ('cluster-admin', 'Built-in role with full access (permissions: *)', true, NULL)
 ON CONFLICT (name) DO NOTHING;
 
 INSERT INTO rbac_role_permissions (role_name, permission)

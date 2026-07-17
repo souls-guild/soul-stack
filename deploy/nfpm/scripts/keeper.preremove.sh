@@ -1,9 +1,9 @@
 #!/bin/sh
-# preremove пакета soul-stack-keeper. Останавливает и снимает с автозапуска
-# демон до удаления бинаря/юнита. `|| true` — remove не падает без systemd.
+# preremove for the soul-stack-keeper package. Stops and disables the
+# daemon before removing the binary/unit. `|| true` -- remove doesn't fail without systemd.
 #
-# Только при ПОЛНОМ удалении, не при upgrade (см. soul.preremove.sh). Первый
-# аргумент: deb даёт remove/purge/..., rpm — число (0 = remove, 1 = upgrade).
+# Only on FULL removal, not on upgrade (see soul.preremove.sh). First
+# argument: deb gives remove/purge/..., rpm -- a number (0 = remove, 1 = upgrade).
 set -e
 
 case "$1" in

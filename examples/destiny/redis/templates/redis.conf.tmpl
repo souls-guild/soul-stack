@@ -1,107 +1,112 @@
 {{/*
-  redis.conf для режим-агностичного standalone-кирпича Redis (Go text/template strict,
-  ADR-010). Контекст: .vars (password, config + host-layout), .self (primary_ip для bind).
+  redis.conf for the mode-agnostic standalone Redis brick (Go text/template strict,
+  ADR-010). Context: .vars (password, config + host-layout), .self (primary_ip for bind).
 
-  Bind на primary_ip + 127.0.0.1: внешние клиенты — по IP хоста, локальные — по
-  loopback.
+  Bind on primary_ip + 127.0.0.1: external clients connect via the host IP, local ones
+  via loopback.
 
-  ВАЖНО: этот файл ЦЕЛИКОМ заменяет дистрибутивный /etc/redis/redis.conf,
-  поэтому он обязан САМ задавать все критичные для systemd-managed Redis директивы —
-  иначе вступают встроенные дефолты бинаря redis-server, а не дистрибутивные.
-  Конкретно:
-    - `dir {{ "{{" }} .vars.data_dir {{ "}}" }}` — рабочий каталог под RDB/AOF, выводится из
-      data_dir (директива B: data-dir переопределяем оператором, дефолт /var/lib/redis).
-      Встроенный дефолт `dir /` read-only для пользователя redis; при SIGTERM-рестарте
-      Redis пишет финальный RDB-снапшот, падает «Read-only file system» и НЕ выходит →
-      рестарт висит вечно. КРИТИЧНО: при override data_dir RDB/AOF обязаны писаться в
-      ФАКТИЧЕСКИЙ каталог данных, иначе тот же read-only-инцидент на чужом пути.
-      Каталог создаёт пакет redis (owner redis:redis, mode 0750).
-    - `aclfile {{ "{{" }} .vars.conf_dir {{ "}}" }}/users.acl` — внешний ACL-файл, выводится из
-      conf_dir (директива B: conf-dir переопределяем, дефолт /etc/redis). destiny кладёт
-      users.acl в ${conf_dir}/users.acl (server.yml) — redis.conf обязан смотреть ТУДА ЖЕ,
-      иначе при override conf_dir aclfile разъезжается с реальным путём.
-    - daemonize/supervised/pidfile/logfile — под управление systemd-юнитом
-      redis-server (Type=notify, supervised systemd). pidfile/logfile — СИСТЕМНЫЕ
-      run-/log-каталоги (.vars.run_dir/.vars.log_dir, дефолт /var/run/redis,
-      /var/log/redis); каталоги вынесены в vars (vars.run_dir/vars.log_dir), basename
-      файла (redis-server.pid/.log) — имя демона, литерал.
-    - `port {{ "{{" }} .vars.port {{ "}}" }}` — well-known порт redis-server
-      (vars.redis_port, дефолт 6379). merged .vars.config ниже может переопределить
-      last-wins (напр. `port 0` при tls.only).
+  IMPORTANT: this file ENTIRELY replaces the distro's /etc/redis/redis.conf,
+  so it MUST itself set every directive that's critical for a systemd-managed Redis -
+  otherwise the redis-server binary's built-in defaults kick in instead of the distro's.
+  Specifically:
+    - `dir {{ "{{" }} .vars.data_dir {{ "}}" }}` - working directory for RDB/AOF, derived from
+      data_dir (directive B: data-dir is operator-overridable, default /var/lib/redis).
+      The built-in default `dir /` is read-only for the redis user; on a SIGTERM restart
+      Redis writes the final RDB snapshot, hits "Read-only file system" and does NOT exit ->
+      the restart hangs forever. CRITICAL: when data_dir is overridden, RDB/AOF must write
+      to the ACTUAL data directory, otherwise the same read-only incident happens on a
+      different path. The directory is created by the redis package (owner redis:redis,
+      mode 0750).
+    - `aclfile {{ "{{" }} .vars.conf_dir {{ "}}" }}/users.acl` - external ACL file, derived from
+      conf_dir (directive B: conf-dir is overridable, default /etc/redis). destiny places
+      users.acl at ${conf_dir}/users.acl (server.yml) - redis.conf must point at the SAME
+      location, otherwise aclfile drifts from the real path when conf_dir is overridden.
+    - daemonize/supervised/pidfile/logfile - managed by the redis-server systemd unit
+      (Type=notify, supervised systemd). pidfile/logfile - SYSTEM run-/log directories
+      (.vars.run_dir/.vars.log_dir, default /var/run/redis, /var/log/redis); the
+      directories come from vars (vars.run_dir/vars.log_dir), the file basename
+      (redis-server.pid/.log) is the daemon's name, a literal.
+    - `port {{ "{{" }} .vars.port {{ "}}" }}` - the well-known redis-server port
+      (vars.redis_port, default 6379). The merged .vars.config below can override it,
+      last-wins (e.g. `port 0` under tls.only).
 
-  Persistence (save/appendonly) НЕ зашита здесь: она приходит в .vars.config от
-  persistence-пресета scenario (essence.persistence_presets[input.persistence]) и
-  range-ится ниже вместе с остальным merged-конфигом.
+  Persistence (save/appendonly) is NOT hardcoded here: it arrives in .vars.config from the
+  scenario's persistence preset (essence.persistence_presets[input.persistence]) and is
+  ranged over below along with the rest of the merged config.
 
-  .vars.config — merged-конфиг от scenario сервиса (default→preset→вычисления→
-  passthrough, слит через merge() в render-фазе). Идёт ПОСЛЕ базовых директив,
-  поэтому caller может осознанно переопределить любую (last-wins в redis.conf).
-  Пусто → секция пуста. unixsocket/unixsocketperm/maxmemory/maxmemory-policy/save/
-  appendonly — обычные ключи этого map-а (их вычислил scenario).
+  .vars.config - merged config from the scenario's service (default->preset->computed->
+  passthrough, merged via merge() in the render phase). It comes AFTER the base
+  directives, so the caller can deliberately override any of them (last-wins in
+  redis.conf). Empty -> the section is empty. unixsocket/unixsocketperm/maxmemory/
+  maxmemory-policy/save/appendonly - ordinary keys of this map (computed by the scenario).
 
-  cluster-announce-ip — ПЕР-ХОСТ-директива (режим cluster): IP, который ЭТА нода
-  анонсирует в gossip cluster-bus. Берётся из .self.network.primary_ip (адрес
-  ИМЕННО этого хоста, render_context.self пер-хост — симметрично bind), а НЕ из
-  .vars.config: apply.input резолвится host-ИНВАРИАНТНО (на первом по SID хосте),
-  поэтому протаскивать announce-ip через config-map нельзя — все ноды получили бы
-  IP первой ноды и cluster-bus за NAT/в облаке сломался бы. Остальные
-  cluster-директивы (cluster-enabled/cluster-config-file/cluster-node-timeout)
-  host-инвариантны → приходят обычными ключами .vars.config. Гейт по
-  `cluster-enabled` в config: вне cluster-режима строки announce-ip нет.
+  cluster-announce-ip - a PER-HOST directive (cluster mode): the IP that THIS node
+  announces on the gossip cluster bus. Taken from .self.network.primary_ip (the address
+  of THIS specific host, render_context.self is per-host - symmetric with bind), and NOT
+  from .vars.config: apply.input is resolved host-INVARIANTLY (on the first host by SID),
+  so threading announce-ip through the config map would be wrong - every node would get
+  the first node's IP and the cluster bus would break across NAT/in the cloud. The other
+  cluster directives (cluster-enabled/cluster-config-file/cluster-node-timeout) are
+  host-invariant -> they arrive as ordinary .vars.config keys. Gated on
+  `cluster-enabled` in config: outside cluster mode there is no announce-ip line.
 */}}
 bind {{ .self.network.primary_ip }} 127.0.0.1
 port {{ .vars.port }}
 protected-mode yes
 
-# Управление через systemd-юнит redis-server (пакет дистрибутива).
-# daemonize no + supervised systemd: redis-server остаётся foreground-процессом и
-# сам уведомляет systemd о готовности (Type=notify в юните).
+# Managed via the redis-server systemd unit (distro package).
+# daemonize no + supervised systemd: redis-server stays a foreground process and
+# notifies systemd of readiness itself (Type=notify in the unit).
 daemonize no
 supervised systemd
 pidfile {{ .vars.run_dir }}/redis-server.pid
 logfile {{ .vars.log_dir }}/redis-server.log
 
-# Рабочий каталог под RDB/AOF (КРИТИЧНО, см. шапку: без него дамп в read-only `/` →
-# зависание рестарта).
+# Working directory for RDB/AOF (CRITICAL, see header: without it the dump goes to
+# read-only `/` -> restart hangs).
 dir {{ .vars.data_dir }}
 
-# ★ РЕДИЗАЙН default_admin (2026-06-30): requirepass УСТАРЕЛ и УБРАН. Аутентификация
-# (вкл. внутреннюю: репликация masterauth, cluster MEET, sentinel monitor, health-PING)
-# идёт под СИСТЕМНЫМ ACL-юзером default_admin (users.acl, ~* &* +@all). protected-mode yes
-# ВЫШЕ остаётся: при заданном aclfile встроенный default рендерится `off` (users.acl.tmpl),
-# поэтому безпарольного built-in default-доступа нет — внешние коннекты идут под
-# default_admin (плагин community.redis передаёт username=default_admin). requirepass +
-# aclfile одновременно избыточны (Redis при aclfile берёт авторитет default из файла); под
-# выключенным default requirepass-строка не несла бы смысла. Стартовать redis-server без
-# requirepass + с aclfile (default off + default_admin on) — валидно.
+# ★ default_admin REDESIGN (2026-06-30): requirepass is DEPRECATED and REMOVED.
+# Authentication (including internal: masterauth replication, cluster MEET, sentinel
+# monitor, health-PING) goes through the SYSTEM ACL user default_admin (users.acl,
+# ~* &* +@all). protected-mode yes ABOVE stays: with aclfile set, the built-in default
+# user renders `off` (users.acl.tmpl), so there is no passwordless built-in default
+# access - external connections go under default_admin (the community.redis plugin
+# passes username=default_admin). requirepass + aclfile together are redundant (with
+# aclfile set, Redis takes default's authority from the file); with default disabled,
+# a requirepass line would carry no meaning. Starting redis-server without requirepass
+# but with aclfile (default off + default_admin on) is valid.
 
-# ACL-юзеры в отдельном файле (см. шапку про aclfile/conf_dir).
+# ACL users live in a separate file (see the header on aclfile/conf_dir).
 aclfile {{ .vars.conf_dir }}/users.acl
 
 {{/*
-  ★ РЕДИЗАЙН default_admin (2026-06-30): replica→master AUTH (masteruser/masterauth) —
-  ОБЫЧНЫЕ директивы redis.conf, приходят КЛЮЧАМИ .vars.config (sentinel deploy-body кладёт
-  их в config-map через vault()-в-ячейке, seal-маскинг) и печатаются range-ом config ниже,
-  как любая директива. ОТДЕЛЬНОЙ секции под них тут НЕТ намеренно (destiny «глупая» — один
-  config-канал). КРИТИЧНО для персистентности через рестарт: статическая masterauth в
-  redis.conf переживает рестарт, в отличие от CONFIG SET плагина community.redis.replica
-  (без CONFIG REWRITE он не сохраняется → sentinel restart поднял бы replica без masterauth →
-  master_link_status:DOWN). Передаётся на всех узлах (failover-safe: Redis применяет
-  masteruser/masterauth, лишь когда узел становится репликой — на текущем master инертны).
+  ★ default_admin REDESIGN (2026-06-30): replica->master AUTH (masteruser/masterauth) -
+  these are ORDINARY redis.conf directives, arriving as KEYS of .vars.config (the
+  sentinel deploy-body puts them in the config map via a vault()-in-cell, seal-masked)
+  and are printed by the config range below like any other directive. There is NO
+  separate section for them here on purpose (destiny is "dumb" - a single config
+  channel). CRITICAL for persistence across a restart: a static masterauth in
+  redis.conf survives a restart, unlike a CONFIG SET from the community.redis.replica
+  plugin (without CONFIG REWRITE it is not persisted -> a sentinel restart would bring
+  the replica up without masterauth -> master_link_status:DOWN). Sent to all nodes
+  (failover-safe: Redis applies masteruser/masterauth only when a node becomes a
+  replica - inert on the current master).
 */}}
 {{- if (index .vars.config "cluster-enabled") }}
-# Режим cluster: эта нода анонсирует СВОЙ primary_ip в gossip (per-host, см. шапку).
+# Cluster mode: this node announces ITS OWN primary_ip on the gossip bus (per-host, see header).
 cluster-announce-ip {{ .self.network.primary_ip }}
 {{- end }}
 
 {{/*
-  Redis-модули: директивы loadmodule идут ОТДЕЛЬНОЙ секцией, а НЕ ключами
-  .vars.config — у loadmodule нет значения, а range config-а печатает `{{key}} {{value}}`
-  (с пустым value → хвостовой пробел). .vars.loadmodules — готовый список путей .so,
-  вычислен в server.yml (тернар по vars.redis_modules_enabled; пуст на Redis 8+ —
-  встроены — ИЛИ при пустом modules_base_url — vanilla redis без модулей; ALL-OR-NOTHING).
-  `index .vars "loadmodules"` (built-in, как cluster-enabled выше): на отсутствующем
-  ключе возвращает nil без ошибки в strict-mode (в отличие от `.vars.loadmodules`).
+  Redis modules: loadmodule directives go in a SEPARATE section, not as .vars.config
+  keys - loadmodule has no value, and the config range prints `{{key}} {{value}}`
+  (with an empty value -> trailing space). .vars.loadmodules - a ready-made list of
+  .so paths, computed in server.yml (a ternary on vars.redis_modules_enabled; empty on
+  Redis 8+ - built in - OR when modules_base_url is empty - vanilla redis without
+  modules; ALL-OR-NOTHING).
+  `index .vars "loadmodules"` (built-in, like cluster-enabled above): on a missing key
+  it returns nil without an error in strict-mode (unlike `.vars.loadmodules`).
 */}}
 {{- range (index .vars "loadmodules") }}
 loadmodule {{ . }}

@@ -1,19 +1,19 @@
 -- 031_incarnation_status_destroying.up.sql
 --
--- S-D1 (incarnation.destroy): добавляем статус `destroying` к enum
--- `incarnation.status`. Оператор инициирует destroy → строка переводится в
--- `destroying` → запускается teardown (scenario `destroy`, S-D2) → при успехе
--- DELETE строки (S-D3).
+-- S-D1 (incarnation.destroy): adds the `destroying` status to the
+-- `incarnation.status` enum. An operator initiates destroy -> the row moves to
+-- `destroying` -> teardown starts (scenario `destroy`, S-D2) -> on success
+-- the row is DELETEd (S-D3).
 --
--- Семантика статусов после миграции:
---   * `ready`            — incarnation в рабочем состоянии, прогоны разрешены.
---   * `applying`         — идёт прогон scenario (lock на дальнейшие операции).
---   * `error_locked`     — сценарий упал частично, нужен unlock.
---   * `migration_failed` — state_schema-миграция упала, нужен unlock (ADR-019).
---   * `destroying`       — инициирован destroy: идёт teardown с последующим
---     DELETE строки. НЕ терминальный для строки (при успехе строка исчезает,
---     при фейле teardown → error_locked в S-D2). Из этого статуса run /
---     upgrade / повторный destroy отвергаются.
+-- Status semantics after the migration:
+--   * `ready`            -- incarnation is operational, runs are allowed.
+--   * `applying`         -- a scenario run is in progress (locks further operations).
+--   * `error_locked`     -- the scenario failed partway, needs unlock.
+--   * `migration_failed` -- a state_schema migration failed, needs unlock (ADR-019).
+--   * `destroying`       -- destroy initiated: teardown is running, followed by
+--     a row DELETE. NOT terminal for the row (on success the row disappears,
+--     on teardown failure -> error_locked in S-D2). From this status run /
+--     upgrade / a repeat destroy are all rejected.
 
 ALTER TABLE incarnation
     DROP CONSTRAINT incarnation_status_valid;

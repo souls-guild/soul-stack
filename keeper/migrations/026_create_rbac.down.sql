@@ -1,8 +1,8 @@
 -- 026_create_rbac.down.sql
 --
--- Откат RBAC-storage. Порядок DROP-ов значения не имеет — ON DELETE CASCADE
--- и сами DROP TABLE снимают зависимости; но дочерние таблицы дропаем первыми
--- для явности.
+-- Revert of RBAC storage. The order of DROPs does not matter - ON DELETE CASCADE
+-- and the DROP TABLE statements themselves remove dependencies; but we drop child tables first
+-- for clarity.
 
 DROP TABLE IF EXISTS rbac_role_operators;
 DROP TABLE IF EXISTS rbac_role_permissions;

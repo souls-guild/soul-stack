@@ -20,8 +20,8 @@ require (
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20260615183401-62b3387ff324 // indirect
 )
 
-// Proto-генерация лежит в proto/-модуле; soul-legion тащит из него типы
-// FromSoul/FromKeeper/KeeperClient для fake-Soul-стрима — ровно как
-// tests/e2e/internal/soulstub. Единственный проектный модуль, импортируемый
-// напрямую (без keeper/internal/* — Go-internal-rules).
+// Proto generation lives in the proto/ module; soul-legion pulls
+// FromSoul/FromKeeper/KeeperClient types from it for the fake-Soul stream - exactly like
+// tests/e2e/internal/soulstub. The only project module imported
+// directly (without keeper/internal/* - Go internal rules).
 replace github.com/souls-guild/soul-stack/proto => ../../proto

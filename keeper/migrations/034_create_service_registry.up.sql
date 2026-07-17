@@ -1,33 +1,33 @@
 -- 034_create_service_registry.up.sql
 --
--- Реестр Service-ов в Postgres (ADR-028-style managed-через-API registry,
--- симметрично RBAC). Переносит каталог `services[]` из статического keeper.yml
--- в managed-через-OpenAPI/MCP таблицу: запись Service-а появляется/меняется
--- только через явную операцию Архонта, видна всем нодам кластера и переживает
--- рестарт без правки конфига.
+-- Registry of Services in Postgres (ADR-028-style managed-via-API registry,
+-- symmetric with RBAC). Moves the `services[]` catalog out of the static keeper.yml
+-- into a managed-via-OpenAPI/MCP table: a Service record appears/changes
+-- only through an explicit Archon operation, is visible to every cluster node, and
+-- survives a restart without editing the config.
 --
--- Колонки 1:1 с прежней config.ServiceRegistryEntry:
---   - name    — PK (kebab-case), уникальное имя Service-а в кластере;
---   - git     — git-источник Service-репо (непустой);
---   - ref     — git ref (tag/branch) по ADR-007 (непустой; semver-range нет);
---   - refresh — duration-строка авто-refresh ("5m"); NULL = без авто-refresh.
---               Формат CHECK-ом НЕ ловится — это делает service-слой через
---               config.ParseDuration (как augur token_ttl).
+-- Columns map 1:1 to the former config.ServiceRegistryEntry:
+--   - name    - PK (kebab-case), unique Service name within the cluster;
+--   - git     - git source of the Service repo (non-empty);
+--   - ref     - git ref (tag/branch) per ADR-007 (non-empty; no semver ranges);
+--   - refresh - auto-refresh duration string ("5m"); NULL = no auto-refresh.
+--               The format is NOT caught by a CHECK - the service layer does it via
+--               config.ParseDuration (same as augur token_ttl).
 --
--- FK на operators(aid) для created_by_aid / updated_by_aid — ON DELETE SET NULL:
--- запись Service-а переживает offboarding оператора-автора, audit-поле
--- обнуляется (симметрично omens/providers/incarnation). RESTRICT оставлен
--- только у security-critical rbac_roles.
+-- FK to operators(aid) for created_by_aid / updated_by_aid - ON DELETE SET NULL:
+-- a Service record survives the authoring operator's offboarding, the audit field
+-- is nulled out (symmetric with omens/providers/incarnation). RESTRICT is kept
+-- only for the security-critical rbac_roles.
 
 CREATE TABLE service_registry (
     name           TEXT        PRIMARY KEY,
     git            TEXT        NOT NULL,
     ref            TEXT        NOT NULL,
-    refresh        TEXT,                                            -- duration-строка ("5m"); NULL = без авто-refresh
+    refresh        TEXT,                                            -- auto-refresh duration string ("5m"); NULL = no auto-refresh
     created_at     TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at     TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    created_by_aid TEXT,                                            -- FK на operators(aid); NULL у seed/без инициатора-Архонта
-    updated_by_aid TEXT,                                            -- FK на operators(aid); NULL до первого update
+    created_by_aid TEXT,                                            -- FK to operators(aid); NULL for seed/no Archon initiator
+    updated_by_aid TEXT,                                            -- FK to operators(aid); NULL until the first update
 
     CONSTRAINT service_registry_name_format
         CHECK (name ~ '^[a-z][a-z0-9-]*$'),
@@ -42,4 +42,4 @@ CREATE TABLE service_registry (
 );
 
 COMMENT ON TABLE service_registry IS
-    'Managed-через-API реестр Service-ов (перенос services[] из keeper.yml). PK = name (kebab-case), ref = git ref по ADR-007.';
+    'Managed-via-API registry of Services (moved from services[] in keeper.yml). PK = name (kebab-case), ref = git ref per ADR-007.';

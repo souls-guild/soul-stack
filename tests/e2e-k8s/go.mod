@@ -67,10 +67,10 @@ require (
 	sigs.k8s.io/yaml v1.6.0 // indirect
 )
 
-// NB: НЕТ replace для keeper/internal/* — Go-internal-rules запрещают
-// (как в tests/e2e/ и tests/e2e-live/). L3c-2+ доступ к keeper-стороне
-// делается через k8s API (kubectl exec / port-forward) и direct PG/Redis
-// внутри cluster, не импортом internal-пакетов.
+// NB: there is NO replace for keeper/internal/* - Go internal rules forbid it
+// (same as in tests/e2e/ and tests/e2e-live/). L3c-2+ access to the keeper side
+// is done via the k8s API (kubectl exec / port-forward) and direct PG/Redis
+// inside the cluster, not by importing internal packages.
 //
-// Proto-replace для L3c-1 не нужен (нет gRPC-клиента к Keeper); добавится
-// в L3c-3, когда harness начнёт открывать bidi-stream от soul-stub-а.
+// A proto-replace is not needed for L3c-1 (no gRPC client to the Keeper); it will be added
+// in L3c-3, once the harness starts opening a bidi-stream from the soul-stub.

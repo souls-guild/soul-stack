@@ -1,38 +1,39 @@
 #!/usr/bin/env bash
 #
-# dev/souls-docker-up.sh — поднять локальный флот souls как docker-контейнеры (NIM-26).
+# dev/souls-docker-up.sh - bring up local souls as docker containers (NIM-26).
 #
-# Зачем: day-2 сценарии и UI-тесты без облака требуют душ с изолированной ФС/
-# пакетами/сервисами. Host-флот (dev/souls-up.sh) для этого не годится — все души
-# делят ФС хоста. Здесь каждая душа = privileged Debian-12 systemd-контейнер с
-# примонтированным свежим soul-бинарём; онбординг к keeper-процессу на хосте.
+# Why: day-2 scenarios and UI tests without a cloud need souls with an isolated FS/
+# packages/services. Host souls (dev/souls-up.sh) aren't suitable for this - all souls
+# share the host FS. Here each soul is a privileged Debian-12 systemd container with
+# a freshly mounted soul binary; onboards to the keeper process on the host.
 #
-# Имена предсказуемые: soul-docker-1..N (для стенда — soul-docker-<stand>-1..N; sid ==
-# имя контейнера). Идемпотентно: существующий контейнер пересоздаётся (docker rm -f перед run).
+# Names are predictable: soul-docker-1..N (per-stand - soul-docker-<stand>-1..N; sid ==
+# container name). Idempotent: an existing container is recreated (docker rm -f before run).
 #
-# Образ переиспользует базовый Dockerfile e2e-live (tests/e2e-live/dockerfiles/),
-# контекст самодостаточен. Свежий soul-бинарь bind-mount-ится ro (ребилд образа
-# не нужен) — нужен `make build-linux` (soul/bin/soul-linux-amd64).
+# The image reuses the base e2e-live Dockerfile (tests/e2e-live/dockerfiles/),
+# the context is self-contained. The fresh soul binary is bind-mounted ro (no image
+# rebuild needed) - requires `make build-linux` (soul/bin/soul-linux-amd64).
 #
-# WSL2: из Docker-Desktop-VM `host.docker.internal` резолвится в DD-VM-шлюз, где
-# keeper НЕ слушает → bootstrap падает. На WSL2 запускать с KEEPER_HOST=host-IP:
+# WSL2: from the Docker-Desktop VM, `host.docker.internal` resolves to the DD-VM
+# gateway, where the keeper does NOT listen -> bootstrap fails. On WSL2 run with
+# KEEPER_HOST=host-IP:
 #   KEEPER_HOST=$(hostname -I | awk '{print $1}') bash dev/souls-docker-up.sh 3
-# и переиздать keeper-cert с этим IP в SAN (DEV_KEEPER_EXTRA_IP=<ip> make dev-provision).
+# and reissue the keeper cert with this IP in the SAN (DEV_KEEPER_EXTRA_IP=<ip> make dev-provision).
 #
-# Параметры через env / позиционный:
-#   $1 / SOULS_COUNT   — сколько душ поднять (default 3)
-#   KEEPER_HOST        — host keeper-эндпоинта из контейнера (default host.docker.internal)
-#   SOUL_DOCKER_IMAGE  — тег dev-образа (default soul-stack-dev-soul:debian12)
-#   DEV_STAND          — идентификатор стенда (пусто=default; префикс/БД/порты/dev-dir — dev/stand-env.sh)
-#   REPO_ROOT          — корень репо soul-stack (по умолчанию из пути скрипта)
-#   VAULT_TOKEN        — root-token dev-Vault для mint-jwt (default root)
+# Parameters via env / positional:
+#   $1 / SOULS_COUNT   - how many souls to bring up (default 3)
+#   KEEPER_HOST        - keeper endpoint host as seen from the container (default host.docker.internal)
+#   SOUL_DOCKER_IMAGE  - dev image tag (default soul-stack-dev-soul:debian12)
+#   DEV_STAND          - stand identifier (empty=default; prefix/DB/ports/dev-dir - dev/stand-env.sh)
+#   REPO_ROOT          - soul-stack repo root (defaults from the script path)
+#   VAULT_TOKEN        - dev-Vault root token for mint-jwt (default root)
 
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="${REPO_ROOT:-$(cd "${SCRIPT_DIR}/.." && pwd)}"
 
-# Профиль стенда: STAND_DEV_DIR / OPENAPI_PORT / BOOTSTRAP_PORT / ES_PORT / STACK_PREFIX / PG_DB / STAND_SLUG. NIM-25.
+# Stand profile: STAND_DEV_DIR / OPENAPI_PORT / BOOTSTRAP_PORT / ES_PORT / STACK_PREFIX / PG_DB / STAND_SLUG. NIM-25.
 source "${SCRIPT_DIR}/stand-env.sh"
 
 COUNT="${1:-${SOULS_COUNT:-3}}"
@@ -52,37 +53,37 @@ log()  { printf '[souls-docker-up] %s\n' "$*" >&2; }
 fail() { printf '[souls-docker-up] [fail] %s\n' "$*" >&2; exit 1; }
 
 # 1. Preflight.
-command -v docker >/dev/null 2>&1 || fail "docker не найден в PATH"
-[ -x "${SOUL_BIN}" ] || fail "нет linux-бинаря soul (${SOUL_BIN}) — собери: make build-linux"
-[ -s "${VAULT_CA}" ] || fail "нет Vault-CA (${VAULT_CA}) — запусти '${STAND_ENV_HINT}make dev-provision'"
-[ -f "${DOCKERFILE}" ] || fail "нет базового Dockerfile (${DOCKERFILE})"
+command -v docker >/dev/null 2>&1 || fail "docker not found in PATH"
+[ -x "${SOUL_BIN}" ] || fail "no linux soul binary (${SOUL_BIN}) - build it: make build-linux"
+[ -s "${VAULT_CA}" ] || fail "no Vault CA (${VAULT_CA}) - run '${STAND_ENV_HINT}make dev-provision'"
+[ -f "${DOCKERFILE}" ] || fail "no base Dockerfile (${DOCKERFILE})"
 
 code="$(curl -s -o /dev/null -w '%{http_code}' "${API_BASE}/healthz" 2>/dev/null || true)"
-[ "${code}" = "200" ] || fail "keeper не отвечает на ${API_BASE}/healthz (code=${code:-none}) — запусти '${STAND_ENV_HINT}make dev-keeper'"
+[ "${code}" = "200" ] || fail "keeper is not responding on ${API_BASE}/healthz (code=${code:-none}) - run '${STAND_ENV_HINT}make dev-keeper'"
 
-case "${COUNT}" in ''|*[!0-9]*) fail "COUNT должен быть числом (получено: ${COUNT})" ;; esac
-[ "${COUNT}" -ge 1 ] || fail "COUNT должен быть >= 1"
+case "${COUNT}" in ''|*[!0-9]*) fail "COUNT must be a number (got: ${COUNT})" ;; esac
+[ "${COUNT}" -ge 1 ] || fail "COUNT must be >= 1"
 
-# WSL2 + дефолтный host.docker.internal — почти гарантированный bootstrap-фейл. NIM-26.
+# WSL2 + default host.docker.internal - an almost guaranteed bootstrap failure. NIM-26.
 if [ "${KEEPER_HOST}" = "host.docker.internal" ] && grep -qi microsoft /proc/version 2>/dev/null; then
     host_ip="$(hostname -I 2>/dev/null | awk '{print $1}')"
-    log "[warn] WSL2 обнаружен, а KEEPER_HOST=host.docker.internal — из DD-VM keeper недостижим."
-    log "[warn] перезапусти с KEEPER_HOST=${host_ip:-<host-IP>} и переиздай cert:"
+    log "[warn] WSL2 detected, and KEEPER_HOST=host.docker.internal - the keeper is unreachable from the DD-VM."
+    log "[warn] restart with KEEPER_HOST=${host_ip:-<host-IP>} and reissue the cert:"
     log "[warn]   ${STAND_ENV_HINT}DEV_KEEPER_EXTRA_IP=${host_ip:-<host-IP>} make dev-provision && ${STAND_ENV_HINT}make dev-keeper"
 fi
 
-# 2. Образ (идемпотентно: docker кеширует слои; подхватит правку Dockerfile).
-log "собираю dev-образ ${IMAGE} (контекст ${DOCKERFILE_DIR})"
+# 2. Image (idempotent: docker caches layers; picks up Dockerfile edits).
+log "building dev image ${IMAGE} (context ${DOCKERFILE_DIR})"
 docker build -t "${IMAGE}" -f "${DOCKERFILE}" "${DOCKERFILE_DIR}" >&2 \
-    || fail "docker build образа ${IMAGE} не удался"
+    || fail "docker build of image ${IMAGE} failed"
 
-# 3. Admin-JWT для Operator API.
-log "минчу admin-JWT (issue-token/create)"
+# 3. Admin-JWT for the Operator API.
+log "minting admin-JWT (issue-token/create)"
 ADMIN_JWT="$(AID=archon-alice ROLES='["cluster-admin"]' TTL=3600 bash "${MINT_JWT}")" \
-    || fail "не удалось выпустить admin-JWT (см. mint-jwt вывод выше)"
+    || fail "failed to issue admin-JWT (see mint-jwt output above)"
 
-# write_soul_yml CFG SID — soul.yml для docker-души. Большой max_attempts +
-# failback:true → душа переживает рестарт keeper (reconnect по retry). NIM-26.
+# write_soul_yml CFG SID -- soul.yml for the docker soul. A large max_attempts +
+# failback:true -> the soul survives a keeper restart (reconnect via retry). NIM-26.
 write_soul_yml() {
     local cfg="$1" sid="$2"
     cat > "${cfg}" <<YAML
@@ -113,7 +114,7 @@ logging:
 YAML
 }
 
-# json_field FIELD — вынуть строковое поле верхнего уровня из JSON на stdin.
+# json_field FIELD -- extract a top-level string field from JSON on stdin.
 json_field() {
     python3 -c '
 import sys, json
@@ -124,8 +125,8 @@ except Exception:
 ' 2>/dev/null
 }
 
-# issue_bootstrap_token SID — зарегистрировать душу (transport=agent → токен сразу
-# в ответе); при уже существующей — fallback на issue-token?force=true. NIM-26.
+# issue_bootstrap_token SID -- register the soul (transport=agent -> token comes
+# right in the response); if it already exists -- fallback to issue-token?force=true. NIM-26.
 issue_bootstrap_token() {
     local sid="$1" resp bt
     resp="$(curl -s -X POST \
@@ -144,8 +145,8 @@ issue_bootstrap_token() {
     printf '%s' "${bt}"
 }
 
-# wait_systemd_ready NAME — дождаться готовности systemd-PID-1 внутри контейнера
-# (running или degraded — degraded нормально для slim-Debian без unit-ов). NIM-26.
+# wait_systemd_ready NAME -- wait for systemd-PID-1 readiness inside the container
+# (running or degraded -- degraded is normal for slim-Debian without units). NIM-26.
 wait_systemd_ready() {
     local name="$1" i st
     for i in $(seq 1 60); do
@@ -158,7 +159,7 @@ wait_systemd_ready() {
     return 1
 }
 
-# spawn_soul I — поднять одну docker-душу soul-docker-$I целиком.
+# spawn_soul I -- bring up a single docker soul soul-docker-$I end to end.
 spawn_soul() {
     local i="$1"
     local sid="${PREFIX}-${i}" name="${PREFIX}-${i}"
@@ -169,17 +170,17 @@ spawn_soul() {
 
     local bt
     if ! bt="$(issue_bootstrap_token "${sid}")"; then
-        log "  [warn] не получил bootstrap_token для ${sid} — пропуск"
+        log "  [warn] didn't get a bootstrap_token for ${sid} -- skipping"
         return 1
     fi
 
     write_soul_yml "${cfg}" "${sid}"
 
-    # Идемпотентность: снести прежний контейнер этого имени.
+    # Idempotency: remove any previous container with this name.
     docker rm -f "${name}" >/dev/null 2>&1 || true
 
-    # Флаги — паритет с e2e-live harness (privileged systemd-PID-1, cgroup хоста,
-    # tmpfs /run). Bind: свежий бинарь + soul.yml + Vault-CA (все ro). NIM-26.
+    # Flags -- parity with the e2e-live harness (privileged systemd-PID-1, host cgroup,
+    # tmpfs /run). Bind: fresh binary + soul.yml + Vault-CA (all ro). NIM-26.
     if ! docker run -d \
         --name "${name}" \
         --hostname "${sid}" \
@@ -193,37 +194,37 @@ spawn_soul() {
         -v "${cfg}:/etc/soul/soul.yml:ro" \
         -v "${VAULT_CA}:/etc/soul/ca.pem:ro" \
         "${IMAGE}" >/dev/null; then
-        log "  [warn] docker run ${name} не удался — пропуск"
+        log "  [warn] docker run ${name} failed -- skipping"
         return 1
     fi
 
     if ! wait_systemd_ready "${name}"; then
-        log "  [warn] systemd в ${name} не поднялся за 60s — пропуск"
+        log "  [warn] systemd in ${name} didn't come up within 60s -- skipping"
         return 1
     fi
 
-    # soul init — CSR Bootstrap-flow. Токен пробрасываем БЕЗ значения в argv
-    # (docker берёт из своего окружения) → не виден в host ps/proc cmdline. NIM-26.
+    # soul init -- CSR bootstrap flow. We pass the token WITHOUT a value in argv
+    # (docker takes it from its own environment) -> not visible in host ps/proc cmdline. NIM-26.
     if ! SOUL_BOOTSTRAP_TOKEN="${bt}" docker exec -e SOUL_BOOTSTRAP_TOKEN "${name}" \
         soul init --config /etc/soul/soul.yml --sid "${sid}" >/dev/null 2>&1; then
-        log "  [warn] soul init не удался в ${name} (docker logs / journalctl) — пропуск"
+        log "  [warn] soul init failed in ${name} (docker logs / journalctl) -- skipping"
         return 1
     fi
 
-    # soul run — фоновый демон внутри контейнера.
+    # soul run -- background daemon inside the container.
     docker exec -d "${name}" \
         sh -c "nohup soul run --config /etc/soul/soul.yml >/var/log/soul.log 2>&1 </dev/null &"
-    log "  ${sid} онбордён, soul run запущен"
+    log "  ${sid} onboarded, soul run started"
 }
 
-# 4. Поднять флот.
+# 4. Bring up the souls.
 failed=0
 for i in $(seq 1 "${COUNT}"); do
     spawn_soul "${i}" || failed=$((failed + 1))
 done
 
-# 5. Дождаться connected (до 60s) и показать сводку.
-log "жду connected для ${COUNT} душ (до 60s)"
+# 5. Wait for connected (up to 60s) and print a summary.
+log "waiting for connected for ${COUNT} souls (up to 60s)"
 connected=0
 for _ in $(seq 1 60); do
     connected="$(docker exec "${STACK_PREFIX}-postgres" psql -U keeper -d "${PG_DB}" -tA -c \
@@ -232,13 +233,13 @@ for _ in $(seq 1 60); do
     sleep 1
 done
 
-log "статусы docker-душ:"
+log "docker soul statuses:"
 docker exec "${STACK_PREFIX}-postgres" psql -U keeper -d "${PG_DB}" -c \
     "SELECT sid, status FROM souls WHERE sid ~ '^${PREFIX}-[0-9]+$' ORDER BY sid" >&2 \
-    || log "[warn] не удалось прочитать статусы из БД"
+    || log "[warn] failed to read statuses from the DB"
 
-log "итог: connected=${connected}/${COUNT}, ошибок онбординга=${failed}"
+log "summary: connected=${connected}/${COUNT}, onboarding errors=${failed}"
 if [ "${connected:-0}" -lt "${COUNT}" ] || [ "${failed}" -gt 0 ]; then
-    fail "не все docker-души в connected (см. сводку выше; логи: docker logs ${PREFIX}-1 / docker exec ${PREFIX}-1 cat /var/log/soul.log)"
+    fail "not all docker souls are connected (see summary above; logs: docker logs ${PREFIX}-1 / docker exec ${PREFIX}-1 cat /var/log/soul.log)"
 fi
-log "готово: ${COUNT} docker-душ в connected"
+log "done: ${COUNT} docker souls connected"

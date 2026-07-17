@@ -1,33 +1,34 @@
 -- 082_add_incarnation_applying_epoch.up.sql
 --
--- ADR-027 amend (m), слайс S0 (фундамент): epoch для applying-флага инкарнации
--- под Reaper-правило reconcile_orphan_applying (standalone-orphan reconcile).
+-- ADR-027 amend (m), slice S0 (foundation): epoch for the incarnation's applying flag
+-- for the Reaper rule reconcile_orphan_applying (standalone-orphan reconcile).
 --
--- ПРОБЛЕМА. Прямой incarnation.run (standalone, не под Voyage) ставит
--- incarnation.status='applying' в lockRun; если Keeper-владелец прогона умирает
--- до терминала — lock виснет НАВСЕГДА. Voyage-путь закрыт amend (l)
--- (orphan-release по back-link voyage_targets.apply_id), но прямой run строки
--- voyage_targets НЕ имеет — back-link структурно недостижим. reclaim_apply_runs
--- сюда тоже не достаёт (реклеймит protухший claimed-Ward в apply_runs, а
--- applying-lock — отдельный флаг на строке incarnation). Корень: applying-флаг —
--- бесхозный bool без epoch / владельца / lease.
+-- PROBLEM. A direct incarnation.run (standalone, not under a Voyage) sets
+-- incarnation.status='applying' in lockRun; if the Keeper owning the run dies
+-- before reaching a terminal state - the lock hangs FOREVER. The Voyage path is
+-- covered by amend (l) (orphan release via the voyage_targets.apply_id back-link),
+-- but a direct run has no voyage_targets row - the back-link is structurally
+-- unreachable. reclaim_apply_runs doesn't reach this either (it reclaims a stale
+-- claimed Ward in apply_runs, while the applying lock is a separate flag on the
+-- incarnation row). Root cause: the applying flag is an ownerless bool without an
+-- epoch / owner / lease.
 --
--- РЕШЕНИЕ S0 — ТОЛЬКО схема: четыре NULLABLE-колонки дают applying-флагу epoch.
--- Запись epoch в lockRun + очистка на терминале + само Reaper-правило — слайс
--- S1. После S0 эти колонки НИКЕМ не пишутся и не читаются.
+-- S0 SOLUTION - SCHEMA ONLY: four NULLABLE columns give the applying flag an epoch.
+-- Writing the epoch in lockRun + clearing it on terminal + the Reaper rule itself
+-- are slice S1. After S0, these columns are neither written nor read by anyone.
 --
---   - applying_apply_id — apply_id прогона, держащего lock; NULL пока не applying.
---   - applying_attempt  — fencing-epoch прогона (parity apply_runs.attempt).
---   - applying_by_kid   — KID Keeper-владельца прогона; presence-чек в Conclave
---                         (InstanceAlive) различает «прогон идёт» vs «владелец
---                         мёртв, lock осиротел».
---   - applying_since    — момент взятия lock; правило ищет stale-кандидатов по
---                         age (applying_since < NOW() - stale_after, 90s parity
---                         mark_disconnected).
+--   - applying_apply_id - the apply_id of the run holding the lock; NULL while not applying.
+--   - applying_attempt  - the fencing epoch of the run (parity with apply_runs.attempt).
+--   - applying_by_kid   - the KID of the Keeper owning the run; a presence check in the
+--                         Conclave (InstanceAlive) distinguishes "the run is in progress"
+--                         from "the owner is dead, the lock is orphaned".
+--   - applying_since    - the moment the lock was taken; the rule looks for stale
+--                         candidates by age (applying_since < NOW() - stale_after, 90s
+--                         parity with mark_disconnected).
 --
--- АДДИТИВНОСТЬ / forward-only (ADR-007). Все колонки nullable, без backfill: у
--- существующих applying-строк epoch неизвестен (NULL applying_by_kid) — правило
--- такие НЕ реклеймит (fail-safe, чтобы не сорвать прогон с неизвестным epoch).
+-- ADDITIVITY / forward-only (ADR-007). All columns are nullable, with no backfill: for
+-- existing applying rows the epoch is unknown (NULL applying_by_kid) - the rule does
+-- NOT reclaim those (fail-safe, so as not to disrupt a run with an unknown epoch).
 
 ALTER TABLE incarnation
     ADD COLUMN applying_apply_id TEXT,
@@ -35,20 +36,21 @@ ALTER TABLE incarnation
     ADD COLUMN applying_by_kid   TEXT,
     ADD COLUMN applying_since    TIMESTAMPTZ;
 
--- Partial-индекс под Reaper-scan stale-кандидатов (parity apply_runs_claim_scan_idx,
--- миграция 025): правило сканирует ровно applying-строки по applying_since-age.
--- WHERE-предикат держит индекс узким (только applying — единицы/десятки строк
--- на кластер), терминальные/ready исключены. Заложен в S0 — на текущем пути
--- applying_since NULL, индекс корректен и безвреден.
+-- Partial index for the Reaper stale-candidate scan (parity with
+-- apply_runs_claim_scan_idx, migration 025): the rule scans exactly the applying
+-- rows by applying_since age. The WHERE predicate keeps the index narrow (only
+-- applying rows - units/tens of rows per cluster), terminal/ready rows excluded.
+-- Introduced in S0 - on the current path applying_since is NULL, the index is
+-- correct and harmless.
 CREATE INDEX incarnation_applying_scan_idx
     ON incarnation (status, applying_since)
     WHERE status = 'applying';
 
 COMMENT ON COLUMN incarnation.applying_apply_id IS
-    'standalone-orphan epoch (ADR-027(m)): apply_id прогона, держащего applying-lock; NULL пока не applying. S0 — не пишется.';
+    'standalone-orphan epoch (ADR-027(m)): apply_id of the run holding the applying lock; NULL while not applying. S0 - not written.';
 COMMENT ON COLUMN incarnation.applying_attempt IS
-    'standalone-orphan epoch (ADR-027(m)): fencing-epoch прогона (parity apply_runs.attempt). S0 — не пишется.';
+    'standalone-orphan epoch (ADR-027(m)): fencing epoch of the run (parity with apply_runs.attempt). S0 - not written.';
 COMMENT ON COLUMN incarnation.applying_by_kid IS
-    'standalone-orphan epoch (ADR-027(m)): KID Keeper-владельца прогона; presence-чек в Conclave (InstanceAlive) отличает живой прогон от осиротевшего lock-а. S0 — не пишется.';
+    'standalone-orphan epoch (ADR-027(m)): KID of the Keeper owning the run; a presence check in the Conclave (InstanceAlive) distinguishes a live run from an orphaned lock. S0 - not written.';
 COMMENT ON COLUMN incarnation.applying_since IS
-    'standalone-orphan epoch (ADR-027(m)): момент взятия applying-lock; reconcile_orphan_applying ищет stale-кандидатов по age (stale_after=90s). S0 — не пишется.';
+    'standalone-orphan epoch (ADR-027(m)): the moment the applying lock was taken; reconcile_orphan_applying looks for stale candidates by age (stale_after=90s). S0 - not written.';

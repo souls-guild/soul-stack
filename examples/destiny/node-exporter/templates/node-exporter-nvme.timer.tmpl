@@ -1,7 +1,7 @@
 {{/*
-  Таймер NVMe-сборщика. Статичен (vars: {}), .tmpl обязателен для core.file.rendered.
-  Та же ConditionPathExistsGlob=/dev/nvme[0-9]*, что и в .service: защита от ручного start
-  без NVMe-устройства.
+  Timer for the NVMe collector. Static (vars: {}), .tmpl is required for core.file.rendered.
+  Same ConditionPathExistsGlob=/dev/nvme[0-9]* as in .service: guards against a manual start
+  without an NVMe device.
 */}}
 [Unit]
 Description=Run NVMe metrics collection every 1 minute

@@ -1,25 +1,25 @@
 -- 069_create_synods.up.sql
 --
--- Synod — группа архонов (ADR-049, docs/architecture.md → ADR-049).
--- Промежуточный уровень между «оператор» и «роль»: модель Архон → Synod → Роли.
--- Три таблицы тем же паттерном rbac_* (ADR-028, миграция 026):
---   - synods           — каталог групп (симметрия rbac_roles: каталог + builtin);
---   - synod_operators  — membership «Synod ↔ архон» (симметрия rbac_role_operators);
---   - synod_roles      — bundle «Synod ↔ роль» (новый уровень — набор ролей группы).
+-- Synod is a group of archons (ADR-049, docs/architecture.md -> ADR-049).
+-- An intermediate level between "operator" and "role": the model is Archon -> Synod -> Roles.
+-- Three tables follow the same rbac_* pattern (ADR-028, migration 026):
+--   - synods           - catalog of groups (symmetric to rbac_roles: catalog + builtin);
+--   - synod_operators  - "Synod <-> archon" membership (symmetric to rbac_role_operators);
+--   - synod_roles      - "Synod <-> role" bundle (a new level - the group's set of roles).
 --
--- Эффективные роли архона = прямые (rbac_role_operators) ∪ роли через все его
--- Synod-ы — объединение собирается в snapshot-сборке enforcer-а (ADR-049(e)).
+-- An archon's effective roles = direct (rbac_role_operators) ∪ roles via all of their
+-- Synods - the union is assembled in the enforcer's snapshot build (ADR-049(e)).
 --
--- ВАЖНО (ADR-049(f)): least-privilege subset и self-lockout ОБЯЗАНЫ учитывать
--- роли через Synod. Это слайс S2 (security-SQL) — на момент этой миграции
--- subset/self-lockout ещё считают только прямые роли (известный gap).
+-- IMPORTANT (ADR-049(f)): the least-privilege subset and self-lockout checks MUST account
+-- for roles via Synod. This is slice S2 (security-SQL) - at the time of this migration
+-- subset/self-lockout still only count direct roles (a known gap).
 
 CREATE TABLE synods (
     name           TEXT        PRIMARY KEY,
     description    TEXT        NOT NULL DEFAULT '',
-    builtin        BOOLEAN     NOT NULL DEFAULT false,                -- builtin=true запрещает synod.delete (симметрия rbac_roles.builtin)
+    builtin        BOOLEAN     NOT NULL DEFAULT false,                -- builtin=true forbids synod.delete (symmetric to rbac_roles.builtin)
     created_at     TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    created_by_aid TEXT,                                             -- FK на operators(aid); NULL у seed-групп без инициатора-Архонта
+    created_by_aid TEXT,                                             -- FK to operators(aid); NULL for seed groups with no initiating Archon
 
     CONSTRAINT synods_name_format CHECK (name ~ '^[a-z][a-z0-9-]*$'),
     CONSTRAINT synods_created_by_aid_fk
@@ -27,23 +27,23 @@ CREATE TABLE synods (
 );
 
 COMMENT ON TABLE synods IS
-    'Каталог Synod-групп — ADR-049. PK = name (kebab-case). builtin=true защищает от synod.delete.';
+    'Catalog of Synod groups -- ADR-049. PK = name (kebab-case). builtin=true protects against synod.delete.';
 
 CREATE TABLE synod_operators (
     synod_name   TEXT        NOT NULL,
     aid          TEXT        NOT NULL,
     added_at     TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    added_by_aid TEXT,                                               -- FK на operators(aid); NULL у seed-/bootstrap-membership-а
+    added_by_aid TEXT,                                               -- FK to operators(aid); NULL for seed/bootstrap membership
 
     PRIMARY KEY (synod_name, aid),
     CONSTRAINT synod_operators_synod_fk
         FOREIGN KEY (synod_name) REFERENCES synods (name) ON DELETE CASCADE,
-    -- CASCADE сознательно (отличается от rbac_role_operators_aid_fk БЕЗ CASCADE):
-    -- удаление operator-а авто-чистит его Synod-membership. Operators реально не
-    -- удаляются (revoke = revoked_at, ADR-014), но при hard-delete (тесты/cleanup)
-    -- осиротевшие synod_operators-строки недопустимы — FK без CASCADE заблокировал
-    -- бы DELETE operator-а. rbac_role_operators такого не имеет, поэтому различие
-    -- явное, не случайное.
+    -- CASCADE is deliberate (unlike rbac_role_operators_aid_fk, which has NO CASCADE):
+    -- deleting an operator auto-cleans up their Synod membership. Operators aren't actually
+    -- deleted (revoke = revoked_at, ADR-014), but on a hard delete (tests/cleanup),
+    -- orphaned synod_operators rows are not allowed - an FK without CASCADE would have
+    -- blocked DELETE on the operator. rbac_role_operators has no such case, so the
+    -- difference is deliberate, not accidental.
     CONSTRAINT synod_operators_aid_fk
         FOREIGN KEY (aid) REFERENCES operators (aid) ON DELETE CASCADE,
     CONSTRAINT synod_operators_added_by_aid_fk
@@ -51,10 +51,10 @@ CREATE TABLE synod_operators (
 );
 
 COMMENT ON TABLE synod_operators IS
-    'Membership «Synod ↔ архон» — ADR-049. ON DELETE CASCADE с synods и operators.';
+    'Membership "Synod <-> archon" -- ADR-049. ON DELETE CASCADE with synods and operators.';
 
--- Индекс «AID → Synod-ы» для построения снимка enforcer-а: разворот membership-а
--- архона в его группы идёт по aid, не по PK-порядку (synod_name, aid).
+-- The "AID -> Synods" index is for building the enforcer's snapshot: expanding an
+-- archon's membership into their groups is done by aid, not by PK order (synod_name, aid).
 CREATE INDEX synod_operators_aid_idx
     ON synod_operators (aid);
 
@@ -62,7 +62,7 @@ CREATE TABLE synod_roles (
     synod_name     TEXT        NOT NULL,
     role_name      TEXT        NOT NULL,
     granted_at     TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    granted_by_aid TEXT,                                             -- FK на operators(aid); NULL у seed-/bootstrap-bundle-а
+    granted_by_aid TEXT,                                             -- FK to operators(aid); NULL for seed/bootstrap bundles
 
     PRIMARY KEY (synod_name, role_name),
     CONSTRAINT synod_roles_synod_fk
@@ -74,4 +74,4 @@ CREATE TABLE synod_roles (
 );
 
 COMMENT ON TABLE synod_roles IS
-    'Bundle «Synod ↔ роль» — ADR-049. CASCADE с обеих сторон: DELETE synod чистит bundle, DELETE роли снимает её из всех Synod-ов.';
+    'Bundle "Synod <-> role" -- ADR-049. CASCADE on both sides: DELETE synod cleans up the bundle, DELETE role removes it from all Synods.';

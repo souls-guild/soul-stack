@@ -1,54 +1,54 @@
-# keeper-prod — least-privilege Vault-policy для прод-инстанса Keeper-а.
+# keeper-prod - least-privilege Vault policy for a prod Keeper instance.
 #
-# Привязывается к AppRole, которым Keeper логинится в Vault
+# Bound to the AppRole that Keeper uses to log in to Vault
 # (keeper.yml::vault.auth.method=approle, role_id=keeper-prod —
-# см. docs/keeper/prod-setup.md и shared/config.AuthMethodAppRole).
+# see docs/keeper/prod-setup.md and shared/config.AuthMethodAppRole).
 #
-# Принцип: каждый path выдаёт РОВНО те capabilities, что нужны конкретной
-# подсистеме Keeper-а, и ни на одну больше. Никаких `*`-capabilities,
-# никаких широких mount-уровневых грантов. Менять под свою инсталляцию
-# нужно только конкретные пути (mount KV / PKI), не набор capabilities.
+# Principle: each path grants EXACTLY the capabilities a given Keeper
+# subsystem needs, and not one more. No `*` capabilities,
+# no broad mount-level grants. Adjust only the concrete
+# paths (KV / PKI mount) for your installation, not the capability set.
 #
-# Применение (после `vault policy write keeper-prod vault-policy.hcl`):
+# Apply (after `vault policy write keeper-prod vault-policy.hcl`):
 #   vault write auth/approle/role/keeper-prod \
 #       token_policies=keeper-prod \
 #       secret_id_ttl=... token_ttl=... token_max_ttl=...
 #
-# ВАЖНО: пути ниже соответствуют дефолтам dev-провижининга
+# IMPORTANT: the paths below match the dev-provisioning defaults
 # (dev/provision.sh): KV mount `secret/`, PKI mount `pki/` + role `soul-seed`.
-# В проде KV-mount и PKI-mount могут отличаться (в examples/keeper/keeper.yml
-# показан pki_mount: "pki/soulstack") — поправьте префиксы путей под
-# фактические keeper.yml::vault.kv_mount / pki_mount / pki_role.
+# In prod the KV mount and PKI mount may differ (examples/keeper/keeper.yml
+# shows pki_mount: "pki/soulstack") - adjust the path prefixes to match
+# your actual keeper.yml::vault.kv_mount / pki_mount / pki_role.
 
-# --- KV v2: чтение секретов Keeper-а ----------------------------------------
+# --- KV v2: reading Keeper's secrets ----------------------------------------
 #
-# Все runtime-секреты Keeper-а живут под secret/keeper/* (KV v2). Read-only:
-# Keeper их только читает (резолв `vault:`-ref на старте и при hot-reload),
-# никогда не пишет. KV v2 хранит ЗНАЧЕНИЯ под data-путём `secret/data/...`.
-# Сюда входят:
-#   - secret/keeper/jwt-signing-key  (auth.jwt.signing_key_ref, HS256-ключ, ADR-014)
-#   - secret/keeper/postgres         (postgres.dsn_ref, поле `dsn`)
+# All of Keeper's runtime secrets live under secret/keeper/* (KV v2). Read-only:
+# Keeper only reads them (resolving `vault:`-refs at startup and on hot-reload),
+# it never writes. KV v2 stores VALUES under the data path `secret/data/...`.
+# This includes:
+#   - secret/keeper/jwt-signing-key  (auth.jwt.signing_key_ref, HS256 key, ADR-014)
+#   - secret/keeper/postgres         (postgres.dsn_ref, field `dsn`)
 #   - secret/keeper/redis            (redis.password_ref)
-#   - secret/keeper/providers/*      (credentials cloud-driver-ов, ADR-017)
-#   - essence-секреты под secret/keeper/* (резолв `${ vault(...) }` в CEL)
+#   - secret/keeper/providers/*      (cloud driver credentials, ADR-017)
+#   - essence secrets under secret/keeper/* (resolving `${ vault(...) }` in CEL)
 #
-# `read` достаточно: для чтения значения KV v2 list/data-write не нужны.
+# `read` is enough: reading a KV v2 value doesn't need list/data-write.
 path "secret/data/keeper/*" {
   capabilities = ["read"]
 }
 
-# --- KV v2: dual-mode приём секрета оператора (ADR-064, NIM-11) ---------------
+# --- KV v2: dual-mode operator secret intake (ADR-064, NIM-11) ---------------
 #
-# При plaintext-приёме секрета (Herald signing/channel-token, Provider cloud-
-# credentials) Keeper САМ пишет значение в Vault по детерминированному пути
-# secret/<domain>/<entity>/<field> и хранит в Postgres только ref. KV v2 держит
-# ЗНАЧЕНИЯ под data-путём. Нужны create+update (idempotent-write при update
-# перезаписывает по тому же пути) + read (резолв на потреблении: herald-доставка
-# читает signing/channel-token, cloud-flow читает credentials).
+# On plaintext secret intake (Herald signing/channel token, Provider cloud
+# credentials) Keeper ITSELF writes the value to Vault at a deterministic path
+# secret/<domain>/<entity>/<field> and stores only the ref in Postgres. KV v2 keeps
+# VALUES under the data path. Needs create+update (idempotent-write on update
+# overwrites at the same path) + read (resolve on consumption: herald delivery
+# reads the signing/channel token, cloud flow reads credentials).
 #
-# Скоуп узкий (herald/*, provider/*), НЕ весь mount: keeper пишет ТОЛЬКО в свои
-# детерминированные префиксы. При кастомном kv_mount (keeper.yml::vault.kv_mount)
-# замените `secret/` на фактический mount.
+# Narrow scope (herald/*, provider/*), NOT the whole mount: keeper writes ONLY to its
+# own deterministic prefixes. With a custom kv_mount (keeper.yml::vault.kv_mount),
+# replace `secret/` with the actual mount.
 path "secret/data/herald/*" {
   capabilities = ["create", "update", "read"]
 }
@@ -56,54 +56,54 @@ path "secret/data/provider/*" {
   capabilities = ["create", "update", "read"]
 }
 
-# --- KV v2: reveal-раскрытие секретов инкарнации (NIM-74) --------------------
+# --- KV v2: reveal for incarnation secrets (NIM-74) --------------------------
 #
-# Оператор с правом incarnation.view-secrets раскрывает plaintext секрета,
-# объявленного `revealable_secrets` сервиса (POST .../secrets/reveal). Keeper
-# резолвит значение keeper-side по vault_ref сервиса. Для redis-сервиса
-# vault_ref = secret/redis/<incarnation>/users/<key>#password → нужен read на
-# префикс, объявляемый манифестом. Read-only (значение только читается).
-# Скоуп узкий (redis/*), не весь mount; при кастомном kv_mount/пути в
-# revealable_secrets — поправьте префикс под свой манифест.
+# An operator with the incarnation.view-secrets right reveals the plaintext of a secret
+# declared in the service's `revealable_secrets` (POST .../secrets/reveal). Keeper
+# resolves the value keeper-side via the service's vault_ref. For the redis service
+# vault_ref = secret/redis/<incarnation>/users/<key>#password → needs read on
+# the prefix declared by the manifest. Read-only (the value is only ever read).
+# Narrow scope (redis/*), not the whole mount; with a custom kv_mount/path in
+# revealable_secrets - adjust the prefix to match your manifest.
 path "secret/data/redis/*" {
   capabilities = ["read"]
 }
 
-# --- PKI: подпись CSR SoulSeed при онбординге -------------------------------
+# --- PKI: signing the SoulSeed CSR during onboarding -------------------------
 #
-# При Bootstrap-RPC (ADR-012(b)) Keeper выписывает SoulSeed-сертификат
-# через PKI issue-role `soul-seed` (dev/provision.sh: `pki/issue/soul-seed`).
-# `update` (== POST) — единственная нужная capability для issue/sign-эндпоинта;
-# Keeper не управляет ролями/корнем PKI, только выписывает leaf по готовой роли.
-# Замените `pki/` + `soul-seed` на ваши keeper.yml::vault.pki_mount / pki_role.
+# On the Bootstrap RPC (ADR-012(b)) Keeper issues the SoulSeed certificate
+# via the PKI issue role `soul-seed` (dev/provision.sh: `pki/issue/soul-seed`).
+# `update` (== POST) is the only capability needed for the issue/sign endpoint;
+# Keeper does not manage PKI roles/root, it only issues a leaf against a ready-made role.
+# Replace `pki/` + `soul-seed` with your keeper.yml::vault.pki_mount / pki_role.
 path "pki/issue/soul-seed" {
   capabilities = ["update"]
 }
 
-# --- Reaper: report-only reconcile осиротевших ключей подписи Sigil ----------
+# --- Reaper: report-only reconcile of orphaned Sigil signing keys ----------
 #
-# Правило reap_orphan_vault_keys (ADR-026(h), reaper.md → Правила) находит
-# приватники подписи Sigil в Vault, для которых нет строки в реестре
-# sigil_signing_keys. Оно ТОЛЬКО считает/метрит/логирует находку:
-#   - `list` — перечислить key_id под набором ключей подписи Sigil;
-#   - `read` — прочитать `created_time` из METADATA-слоя (для grace по возрасту).
+# The reap_orphan_vault_keys rule (ADR-026(h), reaper.md -> Rules) finds
+# Sigil signing private keys in Vault that have no matching row in the
+# sigil_signing_keys registry. It ONLY counts/measures/logs the finding:
+#   - `list` - enumerate key_ids under the set of Sigil signing keys;
+#   - `read` - read `created_time` from the METADATA layer (for age-based grace).
 #
-# Намеренно НЕТ:
-#   - `delete` — Reaper НИЧЕГО не удаляет из Vault (report-only);
-#   - доступа к data-пути `secret/data/keeper/sigil-keys/*` — Reaper НЕ читает
-#     ЗНАЧЕНИЯ приватников, только metadata (имена + created_time).
-# Это держит blast radius Жнеца минимальным: он не может ни прочитать
-# приватный ключ подписи, ни удалить его.
+# Deliberately NOT included:
+#   - `delete` - Reaper deletes NOTHING from Vault (report-only);
+#   - access to the data path `secret/data/keeper/sigil-keys/*` - Reaper does NOT read
+#     private key VALUES, only metadata (names + created_time).
+# This keeps the Reaper's blast radius minimal: it can neither read a
+# signing private key nor delete it.
 path "secret/metadata/keeper/sigil-keys/*" {
   capabilities = ["list", "read"]
 }
 
-# --- Self-renew client-token ------------------------------------------------
+# --- Self-renew client token ------------------------------------------------
 #
-# Keeper логинится через AppRole и получает renewable client-token; TokenRenewer
-# (keeper renewer.go) продлевает его до token_max_ttl, чтобы Keeper не терял
-# доступ к Vault на длинном uptime. Нужна ровно одна capability на renew-self
-# собственного токена — без права создавать/ревокать чужие токены.
+# Keeper logs in via AppRole and gets a renewable client token; TokenRenewer
+# (keeper renewer.go) renews it up to token_max_ttl, so Keeper doesn't lose
+# access to Vault over a long uptime. Needs exactly one capability for renew-self
+# of its own token - without the right to create/revoke other tokens.
 path "auth/token/renew-self" {
   capabilities = ["update"]
 }

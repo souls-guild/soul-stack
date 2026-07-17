@@ -1,28 +1,28 @@
 -- 024_add_apply_runs_cancel_requested.up.sql
 --
--- Cluster-wide Cancel прогона (HA-фикс G1). Проблема: run-goroutine прогона
--- живёт в памяти ОДНОГО Keeper-инстанса (ADR-002, stateless-кластер), а
--- Runner.Cancel отменяет только локальный runCtx. Если оператор вызвал Cancel
--- на Keeper-B, а run-goroutine на Keeper-A — отмена не доходит.
+-- Cluster-wide Cancel for a run (HA fix G1). Problem: the run's run-goroutine
+-- lives in the memory of a SINGLE Keeper instance (ADR-002, stateless cluster),
+-- while Runner.Cancel only cancels the local runCtx. If the operator calls Cancel
+-- on Keeper-B while the run-goroutine is on Keeper-A - the cancellation never arrives.
 --
--- Механизм — PG-флаг (multi-instance-safe), ложится на существующий
--- barrier-поллинг: run-goroutine уже поллит apply_runs в waitBarrier
--- (SelectStatusesByApplyID, dispatch.go), теперь дополнительно читает
--- cancel_requested. Любой Keeper при Cancel ставит флаг
--- (UPDATE ... SET cancel_requested=true), инстанс-владелец goroutine видит его
--- на ближайшем тике барьера и отменяет себя — через тот же abort-путь, что и
--- локальный Cancel. Не нужен новый Redis-канал; переживает cross-Keeper;
--- консистентно с PG-fan-in модели прогона.
+-- Mechanism - a PG flag (multi-instance-safe) that piggybacks on the existing
+-- barrier polling: the run-goroutine already polls apply_runs in waitBarrier
+-- (SelectStatusesByApplyID, dispatch.go), and now also reads
+-- cancel_requested. Any Keeper sets the flag on Cancel
+-- (UPDATE ... SET cancel_requested=true); the goroutine-owning instance sees it
+-- on the next barrier tick and cancels itself - through the same abort path as
+-- a local Cancel. No new Redis channel needed; survives cross-Keeper; consistent
+-- with the PG fan-in model of a run.
 --
--- Флаг ставится только на running-строки (терминальные не трогаются → Cancel
--- уже завершённого прогона = no-op). Период поллинга (defaultPollInterval =
--- 200ms) = верхняя граница задержки отмены — приемлемо.
+-- The flag is only set on running rows (terminal rows are untouched -> cancelling
+-- an already-finished run is a no-op). The polling period (defaultPollInterval =
+-- 200ms) is the upper bound on cancellation latency - acceptable.
 --
--- NOT NULL DEFAULT false: существующие строки получают false, новые dispatch-ы
--- стартуют без запрошенной отмены. Forward-only (ADR-007 миграции).
+-- NOT NULL DEFAULT false: existing rows get false, new dispatches
+-- start without a requested cancellation. Forward-only (ADR-007 migrations).
 
 ALTER TABLE apply_runs
     ADD COLUMN cancel_requested BOOLEAN NOT NULL DEFAULT false;
 
 COMMENT ON COLUMN apply_runs.cancel_requested IS
-    'Cluster-wide Cancel (G1): любой Keeper ставит true; run-goroutine-владелец видит флаг в barrier-поллинге и отменяет прогон. Только running-строки.';
+    'Cluster-wide Cancel (G1): any Keeper sets true; the run-goroutine owner sees the flag in barrier polling and cancels the run. Running rows only.';

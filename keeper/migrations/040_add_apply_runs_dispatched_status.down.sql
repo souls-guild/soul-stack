@@ -1,12 +1,12 @@
 -- 040_add_apply_runs_dispatched_status.down.sql
 --
--- Откат фазы `dispatched` из enum `apply_runs.status`. Перед сужением CHECK-а
--- переводим существующие dispatched-строки обратно в `running` — иначе
--- ADD CONSTRAINT провалился бы на них. `running` — ближайший по семантике
--- статус «отдано/исполняется» в дореформенной схеме (vestigial, но валидный),
--- так down не теряет строки и не падает (симметрично 036, но с предварительным
--- UPDATE — у `incarnation.status` down-строк не ожидалось, тут страхуемся).
--- Возвращает CHECK к форме 025 (planned/claimed/running/success/failed/cancelled).
+-- Rolling back the `dispatched` phase from the `apply_runs.status` enum. Before narrowing the CHECK,
+-- we move existing dispatched rows back to `running` - otherwise
+-- ADD CONSTRAINT would fail on them. `running` is the closest in semantics
+-- to a "dispatched/in progress" status in the pre-reform schema (vestigial, but valid),
+-- so down doesn't lose rows or fail (symmetric with 036, but with a preceding
+-- UPDATE - `incarnation.status` wasn't expected to have down-rows, here we're being cautious).
+-- Restores the CHECK to the form from 025 (planned/claimed/running/success/failed/cancelled).
 
 UPDATE apply_runs SET status = 'running' WHERE status = 'dispatched';
 

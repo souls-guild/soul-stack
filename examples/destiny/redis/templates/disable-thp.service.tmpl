@@ -1,23 +1,26 @@
 {{/*
-  systemd-юнит отключения Transparent Huge Pages (THP) для Redis. Статический юнит (.vars
-  пуст). Go text/template strict (ADR-010).
+  systemd unit that disables Transparent Huge Pages (THP) for Redis. Static unit (.vars
+  is empty). Go text/template strict (ADR-010).
 
-  ПОЧЕМУ. Redis официально рекомендует отключать THP: при включённом THP
-  copy-on-write fork (RDB-снапшот / AOF-rewrite) трогает большие страницы целиком,
-  что даёт latency-спайки и раздувает память. Отключение — на уровне хоста, до
-  старта redis-server, поэтому ставится отдельным oneshot-юнитом до сервиса.
+  WHY. Redis officially recommends disabling THP: with THP enabled, the
+  copy-on-write fork (RDB snapshot / AOF rewrite) touches large pages whole,
+  causing latency spikes and inflating memory usage. Disabling happens at the
+  host level, before redis-server starts, so it ships as a separate oneshot
+  unit ahead of the service.
 
-  Type=oneshot + RemainAfterExit=yes: юнит однократно пишет `never` в sysfs и
-  считается «активным» после выхода. ExecStart с ведущим `-` (`ExecStart=-…`):
-  на ядрах без THP файлов sysfs нет — минус глушит ошибку, юнит не валит загрузку
-  (поведение Ansible-роли: на таких ядрах THP и так отключён). DefaultDependencies=no
-  + After=sysinit.target/local-fs.target: применяем максимально рано, до redis.
+  Type=oneshot + RemainAfterExit=yes: the unit writes `never` to sysfs once and
+  is considered "active" after it exits. ExecStart with a leading `-` (`ExecStart=-...`):
+  on kernels without THP sysfs files, the leading minus swallows the error so
+  the unit does not fail the boot (matches the Ansible role's behavior: on
+  such kernels THP is already disabled anyway). DefaultDependencies=no
+  + After=sysinit.target/local-fs.target: apply as early as possible, before redis.
 
-  Гейт Before/RequiredBy redis-server намеренно НЕ ставим. destiny режим-агностична
-  и не знает имени основного сервиса в каждом режиме; порядок «THP до Redis»
-  обеспечивается позицией задач в tasks/main.yml (юнит enable+start стоит ДО
-  основного service.running основного кирпича по факту хвостового размещения,
-  а сам oneshot WantedBy=multi-user.target доезжает на загрузке).
+  We deliberately do NOT add a Before/RequiredBy redis-server gate. destiny is
+  mode-agnostic and does not know the main service's name in every mode; the
+  "THP before Redis" ordering is guaranteed by task position in tasks/main.yml
+  (the unit's enable+start sits BEFORE the main brick's main service.running,
+  by virtue of tail placement, while the oneshot's own
+  WantedBy=multi-user.target catches up at boot).
 */}}
 [Unit]
 Description=Disable Transparent Huge Pages (THP) for Redis

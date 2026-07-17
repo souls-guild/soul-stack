@@ -1,30 +1,30 @@
 -- 074_tiding_created_from_cadence.up.sql
 --
--- ADR-052 §m (постоянный Tiding из формы Cadence) + ADR-046 §9 (каскад-снос
--- автоправил при удалении Cadence).
+-- ADR-052 §m (persistent Tiding from the Cadence form) + ADR-046 §9 (cascade
+-- teardown of auto-rules when a Cadence is deleted).
 --
--- Расширяет реестр `tidings` одной additive-колонкой (ни одно существующее поле/
--- контракт не меняет семантику):
---   - created_from_cadence_id — маркер ПРОИСХОЖДЕНИЯ: «правило создано из блока
---     notify[] формы ЭТОГО расписания» (POST /v1/cadences). NULL = правило
---     заведено иным путём (CRUD Tiding вручную / ephemeral от Voyage). Непустое
---     значение → FK на cadences(id) ON DELETE CASCADE: снос Cadence атомарно
---     уносит порождённые ею правила.
+-- Extends the `tidings` registry with one additive column (no existing field/
+-- contract changes semantics):
+--   - created_from_cadence_id - an ORIGIN marker: "this rule was created from the
+--     notify[] block of THIS schedule's form" (POST /v1/cadences). NULL = the rule
+--     was set up some other way (manual Tiding CRUD / ephemeral from a Voyage). A non-empty
+--     value -> FK to cadences(id) ON DELETE CASCADE: tearing down the Cadence atomically
+--     takes with it the rules it spawned.
 --
--- Зачем отдельный маркер, а НЕ переиспользование селектора `cadence`: колонка
--- `cadence` — это СЕЛЕКТОР подписки («слать только про прогоны этого расписания»,
--- может стоять и на вручную созданном Tiding-е). Каскад-удаление обязано сносить
--- ТОЛЬКО правила, рождённые формой, и НЕ трогать руками заведённые с тем же
--- cadence-селектором. Поэтому происхождение — отдельная колонка с FK CASCADE,
--- ортогональная фильтр-селектору `cadence` (ADR-046 §9, ADR-052 §m).
+-- Why a separate marker instead of reusing the `cadence` selector: the
+-- `cadence` column is a subscription SELECTOR ("only send about runs of this schedule",
+-- which can also be set on a manually created Tiding). Cascade delete must tear down
+-- ONLY rules born from the form, and must NOT touch ones manually set up with the same
+-- cadence selector. Hence origin is a separate column with FK CASCADE,
+-- orthogonal to the `cadence` filter selector (ADR-046 §9, ADR-052 §m).
 --
--- Привязка по cadences.id (ULID-PK, rename-safe), НЕ по имени расписания: имя
--- Cadence мутабельно (PATCH), а ULID — стабильный идентификатор.
+-- Bound by cadences.id (ULID-PK, rename-safe), NOT by the schedule's name: the
+-- Cadence name is mutable (PATCH), while the ULID is a stable identifier.
 --
--- cadences.id — TEXT PRIMARY KEY (миграция 066) → корректная цель FK для TEXT-
--- колонки. ON DELETE CASCADE (а не SET NULL, как voyages.cadence_id): осиротевшее
--- автоправило без расписания бессмысленно (его создавала форма расписания), его
--- надо снести вместе с Cadence.
+-- cadences.id - TEXT PRIMARY KEY (migration 066) -> a valid FK target for a TEXT
+-- column. ON DELETE CASCADE (not SET NULL, like voyages.cadence_id): an orphaned
+-- auto-rule with no schedule is meaningless (it was created by the schedule's form), it
+-- needs to be torn down together with the Cadence.
 
 ALTER TABLE tidings
     ADD COLUMN created_from_cadence_id TEXT;
@@ -33,12 +33,12 @@ ALTER TABLE tidings
     ADD CONSTRAINT tidings_created_from_cadence_fk
         FOREIGN KEY (created_from_cadence_id) REFERENCES cadences (id) ON DELETE CASCADE;
 
--- Каскад-снос (DELETE cadence) скан-ит правила по этому back-link. Partial-индекс
--- среди непустых — горячий путь FK-каскада не сканирует основную массу правил с
--- NULL-маркером.
+-- Cascade teardown (DELETE cadence) scans rules via this back-link. A partial index
+-- over non-empty values - the hot path of the FK cascade doesn't scan the bulk of rules with
+-- a NULL marker.
 CREATE INDEX tidings_created_from_cadence_idx
     ON tidings (created_from_cadence_id)
     WHERE created_from_cadence_id IS NOT NULL;
 
 COMMENT ON COLUMN tidings.created_from_cadence_id IS
-    'Маркер происхождения: правило создано из блока notify[] формы Cadence (POST /v1/cadences), ADR-052 §m. NULL = заведено иначе. FK cadences(id) ON DELETE CASCADE — снос Cadence уносит порождённые правила (ADR-046 §9). Ортогонально селектору cadence (фильтр подписки).';
+    'Origin marker: the rule was created from the notify[] block of a Cadence form (POST /v1/cadences), ADR-052 §m. NULL = set up otherwise. FK cadences(id) ON DELETE CASCADE - tearing down the Cadence takes with it the rules it spawned (ADR-046 §9). Orthogonal to the cadence selector (subscription filter).';

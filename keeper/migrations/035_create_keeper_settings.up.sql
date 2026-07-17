@@ -1,27 +1,27 @@
 -- 035_create_keeper_settings.up.sql
 --
--- Cluster-wide key-value скаляры Keeper-а — managed-через-API настройки,
--- которые раньше жили top-level скалярами в keeper.yml. Один источник правды на
--- весь кластер (вместо per-node конфига), видимый всем нодам и переживающий
--- рестарт.
+-- Cluster-wide key-value scalars for the Keeper - settings managed through the API,
+-- which used to live as top-level scalars in keeper.yml. A single source of truth
+-- for the whole cluster (instead of per-node config), visible to all nodes and
+-- surviving a restart.
 --
--- Хранилище плоское: key (PK, snake_case) → value (TEXT). Семантика value и
--- набор well-known ключей живут в Go-слое (serviceregistry), не в схеме —
--- таблица намеренно untyped, чтобы добавление новой настройки не требовало
--- миграции.
+-- Storage is flat: key (PK, snake_case) → value (TEXT). The semantics of value and
+-- the set of well-known keys live in the Go layer (serviceregistry), not in the
+-- schema - the table is deliberately untyped, so adding a new setting doesn't
+-- require a migration.
 --
--- Well-known ключи MVP:
---   - `default_destiny_source` — дефолтный git-источник Destiny.
--- `default_module_source` НЕ заводится: у него нет потребителя в keeper-коде
--- (мёртвое поле прежнего конфига).
+-- Well-known keys for MVP:
+--   - `default_destiny_source` - the default git source for Destiny.
+-- `default_module_source` is NOT introduced: it has no consumer in the keeper code
+-- (a dead field from the old config).
 --
--- Сами строки настроек — runtime-данные (пишутся через API), поэтому миграция
--- НЕ вставляет ни одного well-known ключа: только создаёт таблицу.
+-- The setting rows themselves are runtime data (written through the API), so the
+-- migration does NOT insert a single well-known key: it only creates the table.
 --
--- FK updated_by_aid → operators(aid) ON DELETE SET NULL: запись настройки
--- переживает удаление оператора, последний её менявший — обнуляется
--- (симметрично omens/providers; здесь SET NULL уместен, т.к. колонка NULL-able
--- и значение настройки важнее автора).
+-- FK updated_by_aid → operators(aid) ON DELETE SET NULL: a setting record
+-- survives deletion of the operator who last changed it - the field is nulled out
+-- (symmetric with omens/providers; SET NULL is appropriate here since the column
+-- is nullable and the setting's value matters more than its author).
 
 CREATE TABLE keeper_settings (
     key            TEXT        PRIMARY KEY,
@@ -34,4 +34,4 @@ CREATE TABLE keeper_settings (
 );
 
 COMMENT ON TABLE keeper_settings IS
-    'Cluster-wide key-value скаляры Keeper-а (managed-через-API). key = snake_case, value = TEXT; well-known ключи живут в Go-слое.';
+    'Cluster-wide key-value scalars for the Keeper (managed through the API). key = snake_case, value = TEXT; well-known keys live in the Go layer.';

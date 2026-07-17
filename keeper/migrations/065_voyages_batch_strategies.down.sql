@@ -1,6 +1,6 @@
 -- 065_voyages_batch_strategies.down.sql
 --
--- Down: снять колонки батч-стратегий и их CHECK-и.
+-- Down: drop the batch-strategy columns and their CHECKs.
 ALTER TABLE voyages
     DROP CONSTRAINT IF EXISTS voyages_fail_threshold_positive;
 

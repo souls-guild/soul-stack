@@ -1,12 +1,12 @@
 -- 011_create_purge_used_tokens.up.sql
 --
--- Reaper-правило `purge_used_tokens` (docs/keeper/reaper.md):
--- удаляет batch использованных bootstrap-токенов старше max_age от `used_at`.
--- Использованный токен (`used_at IS NOT NULL`) уже не несёт защитной
--- функции; долговременный аудит создания/использования хранится в
--- `audit_log` под своим retention-ом (ADR-022).
+-- Reaper rule `purge_used_tokens` (docs/keeper/reaper.md):
+-- deletes a batch of used bootstrap tokens older than max_age by `used_at`.
+-- A used token (`used_at IS NOT NULL`) no longer serves a protective
+-- function; long-term audit of creation/use is stored in
+-- `audit_log` under its own retention (ADR-022).
 --
--- Default `max_age` в конфиге — 90d (docs/keeper/reaper.md).
+-- Default `max_age` in the config is 90d (docs/keeper/reaper.md).
 
 CREATE OR REPLACE FUNCTION purge_used_tokens(max_age interval, batch_size integer DEFAULT 1000)
 RETURNS BIGINT AS $$
@@ -30,4 +30,4 @@ END;
 $$ LANGUAGE plpgsql;
 
 COMMENT ON FUNCTION purge_used_tokens(interval, integer) IS
-    'Удаляет batch использованных bootstrap_tokens с used_at старше max_age. Возвращает количество удалённых строк. Reaper-loop вызывает в цикле до возврата 0 (drain-pattern).';
+    'Deletes a batch of used bootstrap_tokens with used_at older than max_age. Returns the number of deleted rows. The Reaper loop calls it in a cycle until 0 is returned (drain pattern).';

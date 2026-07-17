@@ -1,7 +1,7 @@
 -- 069_create_synods.down.sql
 --
--- Откат Synod-storage (ADR-049). Дочерние таблицы дропаем первыми для явности —
--- ON DELETE CASCADE и сами DROP TABLE сняли бы зависимости в любом порядке.
+-- Rollback of Synod storage (ADR-049). Child tables are dropped first for clarity --
+-- ON DELETE CASCADE plus the DROP TABLE statements would resolve dependencies in any order anyway.
 
 DROP TABLE IF EXISTS synod_roles;
 DROP TABLE IF EXISTS synod_operators;

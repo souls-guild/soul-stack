@@ -1,32 +1,34 @@
 -- 078_add_apply_runs_passage.down.sql
 --
--- Откат staged-render Passage-схемы (ADR-056, S1): возврат к composite PK
--- `apply_runs (apply_id, sid)` и FK apply_task_register на пару.
+-- Rollback of the staged-render Passage schema (ADR-056, S1): revert to the
+-- composite PK `apply_runs (apply_id, sid)` and the FK apply_task_register on
+-- the pair.
 --
--- ПРЕДУСЛОВИЕ корректного отката: passage везде 0 (N=1, ни одного multi-passage
--- прогона). Если в таблице есть строки с passage>0 (стратификация S2/S3 уже
--- писала их), DROP старого/восстановление PK по (apply_id, sid) упрётся в
--- дубликаты — это корректно: откат после раскатанного staged-render невозможен
--- без потери данных, миграция forward-only по сути (как ADR-019). На S1 (passage
--- везде 0) откат чист.
+-- PRECONDITION for a correct rollback: passage is 0 everywhere (N=1, not a
+-- single multi-passage run). If the table has rows with passage>0 (S2/S3
+-- stratification has already written them), the DROP of the old PK /
+-- restoring the PK on (apply_id, sid) will hit duplicates - which is
+-- correct: rolling back after a rolled-out staged-render is impossible
+-- without data loss, the migration is forward-only in essence (like
+-- ADR-019). On S1 (passage 0 everywhere) the rollback is clean.
 
--- 1. Снять тройную FK перед восстановлением парной PK.
+-- 1. Drop the triple FK before restoring the paired PK.
 ALTER TABLE apply_task_register
     DROP CONSTRAINT apply_task_register_apply_run_fk;
 
--- 2. Вернуть PK apply_runs на (apply_id, sid).
+-- 2. Restore PK apply_runs to (apply_id, sid).
 ALTER TABLE apply_runs
     DROP CONSTRAINT apply_runs_pkey;
 
 ALTER TABLE apply_runs
     ADD CONSTRAINT apply_runs_pkey PRIMARY KEY (apply_id, sid);
 
--- 3. Восстановить FK apply_task_register на пару (apply_id, sid).
+-- 3. Restore FK apply_task_register on the pair (apply_id, sid).
 ALTER TABLE apply_task_register
     ADD CONSTRAINT apply_task_register_apply_run_fk
         FOREIGN KEY (apply_id, sid) REFERENCES apply_runs (apply_id, sid) ON DELETE CASCADE;
 
--- 4. Снять колонки passage.
+-- 4. Drop the passage columns.
 ALTER TABLE apply_task_register
     DROP COLUMN passage;
 

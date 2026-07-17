@@ -1,25 +1,25 @@
 -- 007_create_souls.up.sql
 --
--- Реестр Soul-агентов под ADR-002 / ADR-012 + docs/soul/identity.md.
--- PK — `sid` (= FQDN хоста), `transport` — enum (`agent` | `ssh`),
--- `status` — узкий MVP-enum (`pending` | `connected` | `disconnected` |
--- `revoked` | `expired`). Расширяется значением `destroyed` в миграции 016
--- (ADR-017 cascade от `core.cloud.provisioned destroyed`).
+-- Registry of Soul agents under ADR-002 / ADR-012 + docs/soul/identity.md.
+-- PK is `sid` (= host FQDN), `transport` is an enum (`agent` | `ssh`),
+-- `status` is a narrow MVP enum (`pending` | `connected` | `disconnected` |
+-- `revoked` | `expired`). Extended with the `destroyed` value in migration 016
+-- (ADR-017 cascade from `core.cloud.provisioned destroyed`).
 --
--- Реальный pull/push-флоу:
---   * `pending` — оператор выписал bootstrap-токен, Soul ещё не пришёл.
---   * `connected` — стрим жив, Keeper держит lease в Redis.
---   * `disconnected` — стрим закрыт, lease истёк.
---   * `revoked` — оператор отозвал, новые подключения отвергаются на mTLS-уровне.
---   * `expired` — Жнец передвинул pending → expired после TTL bootstrap-токена.
---   * `destroyed` — добавлен миграцией 016: terminal-state после cloud-destroy.
+-- Real pull/push flow:
+--   * `pending` - operator issued a bootstrap token, Soul hasn't connected yet.
+--   * `connected` - stream is alive, Keeper holds a lease in Redis.
+--   * `disconnected` - stream closed, lease expired.
+--   * `revoked` - operator revoked it, new connections are rejected at the mTLS level.
+--   * `expired` - Reaper moved pending -> expired after the bootstrap token TTL.
+--   * `destroyed` - added by migration 016: terminal state after cloud-destroy.
 --
--- FK `created_by_aid` → operators(aid) (ADR-014). ON DELETE SET NULL —
--- история Soul-а важнее ссылочной целостности (revoke оператора не должен
--- сносить реестр Souls).
+-- FK `created_by_aid` -> operators(aid) (ADR-014). ON DELETE SET NULL -
+-- Soul history matters more than referential integrity (revoking an operator
+-- must not wipe out the Souls registry).
 --
--- `coven` — `text[]` (множественные стабильные метки, ADR-008).
--- `last_seen_at` в PG — flush из Redis (актуальное значение в Redis-кэше).
+-- `coven` is `text[]` (multiple stable labels, ADR-008).
+-- `last_seen_at` in PG is a flush from Redis (the live value lives in the Redis cache).
 
 CREATE TABLE souls (
     sid                TEXT        PRIMARY KEY,
@@ -43,20 +43,20 @@ CREATE TABLE souls (
         FOREIGN KEY (created_by_aid) REFERENCES operators (aid) ON DELETE SET NULL
 );
 
--- Типовой запрос Reaper-а и Operator API — «все pending старше X» или
--- «все connected для health-overview».
+-- Typical Reaper / Operator API query - "all pending older than X" or
+-- "all connected for the health overview".
 CREATE INDEX souls_status_idx
     ON souls (status);
 
--- Поддержка таргетинга по coven-меткам (ADR-008, scenario `on:`).
--- GIN-индекс по text[] — стандартный путь для `coven && ARRAY['db','prod']`.
+-- Supports targeting by coven labels (ADR-008, scenario `on:`).
+-- GIN index on text[] - the standard path for `coven && ARRAY['db','prod']`.
 CREATE INDEX souls_coven_idx
     ON souls USING GIN (coven);
 
--- Для Жнеца: pending Souls старше TTL bootstrap-токена → expired.
+-- For Reaper: pending Souls older than the bootstrap token TTL -> expired.
 CREATE INDEX souls_pending_requested_at_idx
     ON souls (requested_at)
     WHERE status = 'pending';
 
 COMMENT ON TABLE souls IS
-    'Реестр Soul-агентов (ADR-002 / ADR-012). PK = sid (FQDN), coven — text[]-метки.';
+    'Registry of Soul agents (ADR-002 / ADR-012). PK = sid (FQDN), coven - text[] labels.';

@@ -1,31 +1,31 @@
 {{/*
-  vector.yaml — конфигурация Vector log-shipping агента. Go text/template strict
-  (ADR-010, Вариант B): input читается напрямую (.input.data_dir / .input.log_sources /
-  .input.journald / .input.sink_type / .input.sink_endpoint). File-vars (.vars) конфиг НЕ
-  использует — все значения из input.
+  vector.yaml - config for the Vector log-shipping agent. Go text/template strict
+  (ADR-010, Variant B): input is read directly (.input.data_dir / .input.log_sources /
+  .input.journald / .input.sink_type / .input.sink_endpoint). File-vars (.vars) is NOT
+  used by the config - all values come from input.
 
-  Структура заимствована из ansible-роли vector (идея, НЕ копия): sources (type file с
-  include-списком путей + read_from end; опц. type journald) → sinks (один sink,
-  выбранный по sink_type). Transforms в MVP не выделяются (source→sink напрямую).
+  Structure borrowed from the ansible vector role (idea, NOT a copy): sources (type file with
+  an include list of paths + read_from end; opt. type journald) → sinks (one sink,
+  selected by sink_type). Transforms are not broken out in the MVP (source→sink directly).
 
-  ★ Секрет доступа к коллектору (sink_auth_ref) в этот файл НЕ пишется: он уходит в
-  systemd-unit через Environment=VECTOR_SINK_TOKEN, а sink-секции ниже ссылаются на
-  него как "${VECTOR_SINK_TOKEN}" — Vector подставляет env при старте (нет секрета на
-  диске в конфиге). Литерал "${...}" здесь — синтаксис env-подстановки САМОГО Vector,
-  а не наш CEL/text-template маркер (шаблон отдаёт его как есть).
+  ★ The collector access secret (sink_auth_ref) is NOT written to this file: it goes into
+  the systemd unit via Environment=VECTOR_SINK_TOKEN, and the sink sections below reference
+  it as "${VECTOR_SINK_TOKEN}" - Vector substitutes the env var at startup (no secret on
+  disk in the config). The literal "${...}" here is Vector's OWN env-substitution syntax,
+  not our CEL/text-template marker (the template passes it through as-is).
 
-  data_dir (global) — persistent disk-buffer: checkpoint-сдвиги прочитанных файлов и
-  очередь sink-а. Владелец — сервис-аккаунт (account.yml).
+  data_dir (global) - persistent disk buffer: checkpoint offsets of read files and
+  the sink's queue. Owner - the service account (account.yml).
 
-  ★ inputs sink-а перечисляют ФАКТИЧЕСКИ отрендеренные source-ключи: file-source
-  service_logs (если log_sources непуст) и/или journald-source journald_logs (если
-  journald). При пустом наборе источников sink НЕ рендерится (Vector стартует пустым —
-  валидный degenerate-конфиг, деплой не падает). Sprig list/append вне allowlist
-  (templating.md §3.3) — inputs собираются условными строками, не промежуточным списком.
+  ★ The sink's inputs list the ACTUALLY rendered source keys: file-source
+  service_logs (if log_sources is non-empty) and/or journald-source journald_logs (if
+  journald). With an empty set of sources the sink is NOT rendered (Vector starts empty -
+  a valid degenerate config, deploy does not fail). Sprig list/append is outside the allowlist
+  (templating.md §3.3) - inputs are assembled as conditional lines, not an intermediate list.
 */}}
 data_dir: {{ .input.data_dir }}
 
-# Внутренние логи самого Vector (уровень — input.log_level, через env VECTOR_LOG в unit).
+# Internal logs of Vector itself (level - input.log_level, via env VECTOR_LOG in the unit).
 healthchecks:
   enabled: false
 

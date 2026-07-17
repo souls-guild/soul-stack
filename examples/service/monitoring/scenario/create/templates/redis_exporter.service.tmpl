@@ -1,38 +1,38 @@
 {{/*
-  systemd-unit redis_exporter. Контекст рендера (docs/templating.md §3.2):
-    .vars  — явно переданные core.file.rendered (bin_dir, listen, redis_addr,
+  systemd unit for redis_exporter. Render context (docs/templating.md §3.2):
+    .vars  - explicitly passed into core.file.rendered (bin_dir, listen, redis_addr,
              extra_args);
-    .self  — стабильные факты хоста (здесь не используются).
+    .self  - stable host facts (unused here).
 
-  Подключение к Redis — через unix-сокет: --redis.addr=unix:///<path>
-  (.vars.redis_addr уже содержит префикс unix://, собран в scenario из
+  Connecting to Redis - via a unix socket: --redis.addr=unix:///<path>
+  (.vars.redis_addr already includes the unix:// prefix, assembled in the scenario from
    input.redis_socket).
 
-  СЕРВИС-АККАУНТ. Выделенный системный пользователь redis-exporter (User/Group),
-  НЕ DynamicUser — осознанно, в отличие от эталонной destiny redis-exporter. Этот
-  сервис подключается к УЖЕ работающему Redis (возможно, чужому/без auth), сам
-  Redis НЕ ставит (см. README §«Допущения»), поэтому остаётся на инлайн-модели с
-  ручным core.user. redis-exporter состоит в supplementary-группе redis (заводится
-  шагом core.user в scenario, до старта) ради group-доступа к unix-сокету (типично
-  unixsocketperm 770, owner redis:redis). DynamicUser тут не подходит: эфемерный
-  UID systemd не входил бы в группу redis → сокет 770 недоступен (EACCES).
-  Least-privilege: только членство в группе, не права владельца. Допущение: группа
-  redis уже существует на хосте (её создаёт пакет redis-server).
+  SERVICE ACCOUNT. A dedicated system user redis-exporter (User/Group),
+  NOT DynamicUser - deliberately, unlike the reference destiny redis-exporter. This
+  service connects to an ALREADY running Redis (possibly someone else's/without auth), and
+  does NOT install Redis itself (see README §"Assumptions"), so it stays on the inline model with
+  a manual core.user. redis-exporter is a member of the supplementary redis group (created
+  by the core.user step in the scenario, before startup) for group access to the unix socket (typically
+  unixsocketperm 770, owner redis:redis). DynamicUser doesn't fit here: an ephemeral
+  systemd UID would not be a member of the redis group -> the 770 socket would be inaccessible (EACCES).
+  Least-privilege: only group membership, not owner rights. Assumption: the redis
+  group already exists on the host (created by the redis-server package).
 
-  systemd-hardening (прод-конвенция §3, «безопасность на первом месте»,
-  requirements.md): NoNewPrivileges + ProtectSystem=strict (весь / только-чтение)
-  + изоляция home/tmp/ядра/cgroups + RestrictAddressFamilies с AF_UNIX (exporter
-  ходит в Redis через unix-сокет — без AF_UNIX connect() упрётся в блокировку
-  семейства адресов; прод-конвенция §3 — AF_UNIX только реально использующим сокет
-  демонам) + пустой CapabilityBoundingSet. Расширенный блок (MemoryDenyWriteExecute,
-  SystemCallFilter=@system-service, RestrictNamespaces, LockPersonality) — как у
-  эталонной destiny: exporter — статический Go-бинарь без JIT и работы с namespaces.
+  systemd-hardening (prod convention §3, "security first",
+  requirements.md): NoNewPrivileges + ProtectSystem=strict (entire / read-only)
+  + isolation of home/tmp/kernel/cgroups + RestrictAddressFamilies with AF_UNIX (exporter
+  reaches Redis via a unix socket - without AF_UNIX connect() would hit the address
+  family block; prod convention §3 - AF_UNIX only for daemons that actually use a
+  socket) + empty CapabilityBoundingSet. The extended block (MemoryDenyWriteExecute,
+  SystemCallFilter=@system-service, RestrictNamespaces, LockPersonality) - same as the
+  reference destiny: exporter is a static Go binary with no JIT and no namespace use.
 
-  .vars.extra_args — passthrough-канал (прод-конвенция §1) для любых флагов
-  redis_exporter сверх --redis.addr/--web.listen-address: дополнительные коллекторы
-  (--check-keys=...), TLS/basic-auth (--web.config.file=<path>; сам web.yml —
-  отдельный файл, не из этого сценария, §4). range дописывает каждый элемент
-  отдельным аргументом ExecStart (не разбивается по пробелам).
+  .vars.extra_args - a passthrough channel (prod convention §1) for any
+  redis_exporter flags beyond --redis.addr/--web.listen-address: extra collectors
+  (--check-keys=...), TLS/basic-auth (--web.config.file=<path>; web.yml itself is
+  a separate file, not from this scenario, §4). range appends each element as
+  a separate ExecStart argument (not split on whitespace).
 */}}
 [Unit]
 Description=Prometheus Redis Exporter
@@ -48,8 +48,8 @@ ExecStart={{ .vars.bin_dir }}/redis_exporter --redis.addr={{ .vars.redis_addr }}
 Restart=on-failure
 RestartSec=5
 
-# systemd-hardening (прод-конвенция §3). AF_UNIX добавлен к AF_INET/AF_INET6 —
-# redis_exporter подключается к Redis через unix-сокет (--redis.addr=unix://...).
+# systemd-hardening (prod convention §3). AF_UNIX added alongside AF_INET/AF_INET6 -
+# redis_exporter connects to Redis via a unix socket (--redis.addr=unix://...).
 NoNewPrivileges=yes
 ProtectSystem=strict
 ProtectHome=yes

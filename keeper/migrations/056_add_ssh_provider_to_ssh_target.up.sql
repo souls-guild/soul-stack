@@ -1,25 +1,25 @@
 -- 056_add_ssh_provider_to_ssh_target.up.sql
 --
--- ADR-032 amendment 2026-05-27 → P2 Multi-provider routing (W-1 schema).
+-- ADR-032 amendment 2026-05-27 -> P2 Multi-provider routing (W-1 schema).
 --
--- Расширяет shape-CHECK `souls_ssh_target_shape` (миграция 053): к трём
--- обязательным полям `{ssh_port, ssh_user, soul_path}` добавляется optional
--- `ssh_provider` — per-SID explicit-выбор SshProvider-плагина. Тот же
--- regex-формат, что у `push_providers.name` (миграция 054): kebab-case,
--- env-var-name-safe.
+-- Extends the shape CHECK `souls_ssh_target_shape` (migration 053): alongside
+-- the three required fields `{ssh_port, ssh_user, soul_path}`, an optional
+-- `ssh_provider` is added - a per-SID explicit choice of the SshProvider
+-- plugin. Same regex format as `push_providers.name` (migration 054):
+-- kebab-case, env-var-name-safe.
 --
 -- Selector 3-tier R1 (architect-decisions 2026-05-27):
---   1. souls.ssh_target.ssh_provider  (per-SID explicit; здесь);
+--   1. souls.ssh_target.ssh_provider  (per-SID explicit; here);
 --   2. push.coven_default_providers   (per-coven; keeper.yml);
 --   3. push.cluster_default_provider  (cluster fallback; keeper.yml).
 --
--- Все три пустые → ErrProviderNotRouted → fail per-host (audit-summary,
--- БЕЗ provider-chain — security-инвариант, auth-perimeter разных providers
--- разный).
+-- If all three are empty -> ErrProviderNotRouted -> fail per-host
+-- (audit-summary, WITHOUT a provider chain - a security invariant, since the
+-- auth perimeter differs between providers).
 --
--- Совместимость: старые ssh_target-записи (без `ssh_provider`) проходят
--- расширенный CHECK без изменений — optional-поле проверяется только при
--- наличии. NULL/missing → routing идёт по Level 2/3.
+-- Compatibility: old ssh_target rows (without `ssh_provider`) pass the
+-- extended CHECK unchanged - the optional field is validated only when
+-- present. NULL/missing -> routing falls through to Level 2/3.
 
 ALTER TABLE souls DROP CONSTRAINT IF EXISTS souls_ssh_target_shape;
 
@@ -39,4 +39,4 @@ ALTER TABLE souls ADD CONSTRAINT souls_ssh_target_shape CHECK (
 );
 
 COMMENT ON COLUMN souls.ssh_target IS
-    'Per-host SSH-реквизиты push-flow (ADR-032 amendment 2026-05-26, S7-1 + 2026-05-27 P2): {ssh_port, ssh_user, soul_path, ssh_provider?}. Optional `ssh_provider` — Level 1 multi-provider routing (3-tier R1); NULL → fallback на coven_default → cluster_default → fail per-host.';
+    'Per-host SSH credentials for the push flow (ADR-032 amendment 2026-05-26, S7-1 + 2026-05-27 P2): {ssh_port, ssh_user, soul_path, ssh_provider?}. Optional `ssh_provider` - Level 1 multi-provider routing (3-tier R1); NULL -> fallback to coven_default -> cluster_default -> fail per-host.';

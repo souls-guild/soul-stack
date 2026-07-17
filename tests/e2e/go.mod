@@ -77,21 +77,21 @@ require (
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 )
 
-// Proto-генерация лежит в proto/-модуле; harness тащит из него типы
-// FromSoul/FromKeeper/KeeperClient для soul-stub-а. Из shared/ тащит только
-// config (канон-список Soul-capabilities — тот же, что шлёт реальный Soul в
-// Hello; рассинхрон литералов = молчаливый fail-closed на staged-прогоне).
-// Это единственные проектные модули, которые harness импортирует напрямую
-// (без keeper/internal-зависимостей).
+// Proto generation lives in the proto/ module; the harness pulls the
+// FromSoul/FromKeeper/KeeperClient types from it for the soul-stub. From
+// shared/ it pulls only config (the canonical Soul-capabilities list - the
+// same one a real Soul sends in Hello; a literal mismatch means a silent
+// fail-closed on a staged run). These are the only project modules the
+// harness imports directly (without keeper/internal dependencies).
 replace github.com/souls-guild/soul-stack/proto => ../../proto
 
-// shared/ и его транзитивная проектная зависимость proto/plugin — приватные
-// модули без прокси-публикации, поэтому каждый нужен явным replace на локальный
-// путь, иначе `go mod tidy` уходит в 404 на sum.golang.org.
+// shared/ and its transitive project dependency proto/plugin are private
+// modules with no proxy publication, so each needs an explicit replace to a
+// local path, otherwise `go mod tidy` hits a 404 on sum.golang.org.
 replace github.com/souls-guild/soul-stack/shared => ../../shared
 
 replace github.com/souls-guild/soul-stack/proto/plugin => ../../proto/plugin
 
-// NB: НЕТ replace для keeper/internal/* — Go-internal-rules запрещают.
-// harness работает с keeper-стороной через direct PG SQL и direct Vault
-// HTTP API; drift с keeper/migrations синхронизируется вручную.
+// NB: there is NO replace for keeper/internal/* - Go internal-package rules
+// forbid it. The harness talks to the keeper side via direct PG SQL and
+// direct Vault HTTP API; drift with keeper/migrations is synced manually.

@@ -1,15 +1,16 @@
 -- 095_rename_permission_rerun_last.up.sql
 --
--- Data-фикс rename permission `incarnation.create-rerun` → `incarnation.rerun-last`
--- (rbac-каталог, catalog.go). Старое имя удалено из каталога БЕЗ deprecated-alias
--- (в отличие от `incarnation.update` → `incarnation.update-hosts`), поэтому
--- кастомная роль со старой строкой после апгрейда молча получала 403 на
--- rerun-last: мёртвая строка в rbac_role_permissions, пересоздать через API
--- нельзя — каталог отвергает удалённое имя.
+-- Data fix: rename permission `incarnation.create-rerun` -> `incarnation.rerun-last`
+-- (rbac catalog, catalog.go). The old name was removed from the catalog WITHOUT a
+-- deprecated alias (unlike `incarnation.update` -> `incarnation.update-hosts`), so
+-- a custom role with the old string silently got a 403 on rerun-last after the
+-- upgrade: a dead row in rbac_role_permissions that can't be recreated via the
+-- API - the catalog rejects the removed name.
 --
--- Идемпотентно: повторный прогон не находит строк со старым именем.
--- NOT EXISTS-guard закрывает кейс «у роли уже оба имени» (ручной SQL): иначе
--- UPDATE упал бы на PK (role_name, permission); DELETE добирает остаток.
+-- Idempotent: a re-run finds no rows with the old name.
+-- The NOT EXISTS guard covers the case "the role already has both names" (manual
+-- SQL): otherwise UPDATE would fail on the PK (role_name, permission); DELETE
+-- cleans up the rest.
 
 UPDATE rbac_role_permissions AS rp
 SET permission = 'incarnation.rerun-last'

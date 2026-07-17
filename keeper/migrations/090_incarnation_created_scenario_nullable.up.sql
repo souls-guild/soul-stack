@@ -1,26 +1,26 @@
 -- 090_incarnation_created_scenario_nullable.up.sql
 --
--- Bare-инкарнация через NULL (Фаза 2 create-вариантов). Миграция 089 ввела
--- created_scenario как TEXT NOT NULL DEFAULT 'create' (back-compat union, когда
--- дефолтный `create` был привилегирован и всегда годен). Фаза 2 убрала
--- хардкод-union: набор стартовых сценариев = РОВНО {scenario с `create: true`},
--- имя `create` больше не привилегировано. Появился новый класс инкарнаций —
--- BARE: сервис без единого create-сценария создаётся StatusReady БЕЗ прогона
--- (готов к day-2). Для bare колонка должна нести NULL (нет bootstrap-сценария),
--- а не выдуманное 'create'.
+-- Bare incarnation via NULL (create-variant Phase 2). Migration 089 introduced
+-- created_scenario as TEXT NOT NULL DEFAULT 'create' (a back-compat union, when
+-- the default `create` was privileged and always valid). Phase 2 removed the
+-- hardcoded union: the set of starting scenarios is EXACTLY {scenarios with `create: true`},
+-- the name `create` is no longer privileged. A new incarnation class appeared --
+-- BARE: a service with no create scenario at all is created as StatusReady WITHOUT a run
+-- (ready for operational use). For bare, the column must carry NULL (no bootstrap scenario),
+-- not a made-up 'create'.
 --
--- DROP NOT NULL + DROP DEFAULT: NULL = bare (нет создавшего сценария), непустое =
--- имя bootstrap-сценария. rerun-create по NULL отказывает (incarnation.UnlockForRerun
--- → ErrRerunScenarioNotCreate → 409): перезапускать нечего.
+-- DROP NOT NULL + DROP DEFAULT: NULL = bare (no creating scenario), non-empty =
+-- the bootstrap scenario's name. rerun-create on NULL is rejected (incarnation.UnlockForRerun
+-- -> ErrRerunScenarioNotCreate -> 409): there's nothing to rerun.
 --
--- Existing-инкарнации не трогаем: строки со значением 'create' (вставленные до
--- этой миграции дефолтом 089) остаются корректными — у redis-сервиса scenario/
--- create/main.yml теперь несёт `create: true` (Фаза 1), поэтому 'create' для них
--- по-прежнему валидный bootstrap, а не legacy-артефакт. Backfill не нужен.
+-- We don't touch existing incarnations: rows with the value 'create' (inserted before
+-- this migration by the 089 default) remain correct -- the redis service's scenario/
+-- create/main.yml now carries `create: true` (Phase 1), so 'create' is still a
+-- valid bootstrap for them, not a legacy artifact. No backfill needed.
 
 ALTER TABLE incarnation
     ALTER COLUMN created_scenario DROP NOT NULL,
     ALTER COLUMN created_scenario DROP DEFAULT;
 
 COMMENT ON COLUMN incarnation.created_scenario IS
-    'Имя стартового сценария, которым создана инкарнация (механизм нескольких create-сценариев, Вариант A). NULL = bare-инкарнация (создана без bootstrap-сценария, StatusReady без прогона). rerun-create перезапускает именно его (по NULL — отказ 409).';
+    'Name of the starting scenario that created the incarnation (the multiple create-scenarios mechanism, Variant A). NULL = bare incarnation (created without a bootstrap scenario, StatusReady with no run). rerun-create restarts exactly this one (rejects with 409 on NULL).';

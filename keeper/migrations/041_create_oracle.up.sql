@@ -1,37 +1,37 @@
 -- 041_create_oracle.up.sql
 --
--- Реестры Oracle-контура (ADR-030, beacons + reactor, срез S2): `vigils`
--- (Soul-side проверки, раздаются хосту через VigilSnapshot) + `decrees`
--- (правила reactor «событие → scenario», default-deny) + `oracle_fires`
--- (per-(decree, subject) cooldown-state, loop-prevention).
+-- Registries of the Oracle circuit (ADR-030, beacons + reactor, slice S2): `vigils`
+-- (Soul-side checks, handed to the host via VigilSnapshot) + `decrees`
+-- (reactor rules "event -> scenario", default-deny) + `oracle_fires`
+-- (per-(decree, subject) cooldown state, loop prevention).
 --
--- Паттерн storage перенят у Augur (миграции 032 omens / 033 rites, ADR-025):
--- managed-через-API записи, субъект `coven` XOR `sid` (как Rite), FK
--- created_by_aid → operators ON DELETE SET NULL (запись переживает удаление
--- оператора). OpenAPI/MCP CRUD + RBAC-perms — отдельный срез S3, здесь только
--- схема + repository.
+-- The storage pattern is borrowed from Augur (migrations 032 omens / 033 rites, ADR-025):
+-- records managed via API, subject `coven` XOR `sid` (like Rite), FK
+-- created_by_aid -> operators ON DELETE SET NULL (the record survives deletion
+-- of the operator). OpenAPI/MCP CRUD + RBAC perms are a separate slice S3, here only
+-- the schema + repository.
 
 -- ---------------------------------------------------------------------------
--- vigils — реестр Soul-side проверок (beacon-определений).
+-- vigils - registry of Soul-side checks (beacon definitions).
 --
--- PK — `name` (kebab-case, уникальное в кластере; едет обратно в
--- PortentEvent.beacon_name). `check_addr` — адрес core-beacon
--- (`core.beacon.file_changed` / `core.beacon.service_down` / …; маппится на
--- VigilDef.check; колонка НЕ названа `check` — это reserved keyword PG).
--- `interval_spec` — duration-конвенция (config.ParseDuration), валидируется на
--- service-слое (колонка НЕ названа `interval` — это имя типа PG, требует
--- цитирования; маппится на VigilDef.interval). `params` — JSONB-параметры
--- проверки (path / service-name / порог), форма зависит от check_addr,
--- валидируется на service-слое (как rites.allow к source_type).
+-- PK - `name` (kebab-case, unique cluster-wide; travels back in
+-- PortentEvent.beacon_name). `check_addr` - the core-beacon address
+-- (`core.beacon.file_changed` / `core.beacon.service_down` / ...; maps to
+-- VigilDef.check; the column is NOT named `check` - that's a reserved PG keyword).
+-- `interval_spec` - duration convention (config.ParseDuration), validated at the
+-- service layer (the column is NOT named `interval` - that's a PG type name, requiring
+-- quoting; maps to VigilDef.interval). `params` - JSONB parameters
+-- of the check (path / service-name / threshold), shape depends on check_addr,
+-- validated at the service layer (like rites.allow against source_type).
 --
--- Субъект — строго XOR (как Rite): ровно одно из coven / sid непусто. coven —
--- text[] меток (Vigil раздаётся всем Soul-ам с любой из этих меток); sid —
--- один конкретный хост. coven-метки в формате kebab-case проверяются на
--- service-слое (per-element CHECK для text[] без триггера декларативно не
--- выразить).
+-- Subject - strictly XOR (like Rite): exactly one of coven / sid is non-empty. coven -
+-- a text[] of labels (the Vigil is handed to every Soul with any of these labels); sid -
+-- one specific host. coven labels in kebab-case are validated at the
+-- service layer (a per-element CHECK for text[] without a trigger can't be
+-- expressed declaratively).
 --
--- enabled — toggle (managed через API, S3); дефолт true. Read-only по
--- конструкции Vigil-а гарантируется на Soul-стороне (S1), не схемой.
+-- enabled - toggle (managed via API, S3); default true. Read-only by
+-- Vigil's construction is guaranteed on the Soul side (S1), not by the schema.
 CREATE TABLE vigils (
     name           TEXT        PRIMARY KEY,
     coven          TEXT[],
@@ -46,55 +46,55 @@ CREATE TABLE vigils (
 
     CONSTRAINT vigils_name_format
         CHECK (name ~ '^[a-z0-9-]{1,63}$'),
-    -- Субъект — строго XOR: ровно одно из coven / sid непусто. coven=NULL и
-    -- coven='{}' оба считаются «не задан» (пустой массив бессмысленен как
-    -- субъект): требуем непустой массив, когда coven задан.
+    -- Subject - strictly XOR: exactly one of coven / sid is non-empty. coven=NULL and
+    -- coven='{}' are both treated as "not set" (an empty array is meaningless as a
+    -- subject): require a non-empty array when coven is set.
     CONSTRAINT vigils_subject_xor
         CHECK ((coven IS NOT NULL AND array_length(coven, 1) > 0) <> (sid IS NOT NULL)),
     CONSTRAINT vigils_created_by_aid_fk
         FOREIGN KEY (created_by_aid) REFERENCES operators (aid) ON DELETE SET NULL
 );
 
--- Lookup активных Vigil по SID-субъекту (резолв VigilSnapshot на connect).
+-- Lookup active Vigils by SID subject (VigilSnapshot resolution on connect).
 CREATE INDEX vigils_sid_idx
     ON vigils (sid) WHERE sid IS NOT NULL;
 
--- Lookup активных Vigil по coven-меткам (GIN по text[] для оператора &&).
+-- Lookup active Vigils by coven labels (GIN over text[] for the && operator).
 CREATE INDEX vigils_coven_idx
     ON vigils USING GIN (coven) WHERE coven IS NOT NULL;
 
 COMMENT ON TABLE vigils IS
-    'Реестр Soul-side проверок Oracle-контура (ADR-030). Субъект coven XOR sid; активный набор едет хосту через VigilSnapshot (ReplaceAll).';
+    'Registry of Soul-side checks for the Oracle circuit (ADR-030). Subject coven XOR sid; the active set travels to the host via VigilSnapshot (ReplaceAll).';
 
 -- ---------------------------------------------------------------------------
--- decrees — реестр правил reactor (Decree). Default-deny: нет матчащего
--- Decree → событие не вызывает действия.
+-- decrees - registry of reactor rules (Decree). Default-deny: no matching
+-- Decree -> the event triggers no action.
 --
--- PK — `name` (kebab-case). `on_beacon` — имя Vigil-а, на чей Portent правило
--- реагирует (матчится с PortentEvent.beacon_name). `where_cel` — опц.
--- предикат над payload события (event.data); пустой → всегда match (субъект
--- уже отфильтровал).
+-- PK - `name` (kebab-case). `on_beacon` - the name of the Vigil whose Portent the rule
+-- reacts to (matched against PortentEvent.beacon_name). `where_cel` - an optional
+-- predicate over the event payload (event.data); empty -> always matches (the subject
+-- has already filtered).
 --
--- Субъект — строго XOR (как Rite): subject_coven (text[]) ИЛИ subject_sid.
--- Ограничивает, какие хосты вообще могут триггерить правило (security-слой
+-- Subject - strictly XOR (like Rite): subject_coven (text[]) OR subject_sid.
+-- Restricts which hosts can trigger the rule at all (security layer,
 -- ADR-030(b)).
 --
--- incarnation_name — таргет-incarnation реакции (РЕШЕНИЕ #1, вариант b):
--- ServiceRef сценария резолвится ИЗ неё на enqueue-е (incarnation.service →
--- реестр сервисов), а НЕ дублируется в Decree. Тот же формат, что
--- incarnation.name (миграция 005, CHECK incarnation_name_format) — оно же
--- корневая Coven-метка (ADR-008): membership-проверка субъекта на enqueue-е
--- сводится к incarnation_name ∈ covens отправителя. БЕЗ FK на incarnation —
--- Decree managed-реестр, может пережить пересоздание incarnation; существование
--- проверяется при enqueue fail-closed (incarnation не найдена → skip + warn).
--- Индекс не нужен: горячий путь идёт по on_beacon, incarnation_name читается
--- только у уже сматчивших Decree-ов.
+-- incarnation_name - the target incarnation of the reaction (DECISION #1, variant b):
+-- the scenario's ServiceRef is resolved FROM it at enqueue time (incarnation.service ->
+-- service registry), instead of being duplicated in the Decree. Same format as
+-- incarnation.name (migration 005, CHECK incarnation_name_format) - it's also
+-- the root Coven label (ADR-008): the subject membership check at enqueue time
+-- boils down to incarnation_name being a member of the sender's covens. WITHOUT an FK to incarnation -
+-- Decree is a managed registry that can outlive incarnation recreation; existence
+-- is checked at enqueue fail-closed (incarnation not found -> skip + warn).
+-- No index needed: the hot path goes by on_beacon, incarnation_name is only read
+-- for Decrees that have already matched.
 --
--- action_scenario — named scenario (whitelist; raw-команда отвергнута как
--- RCE-вектор, ADR-030(b)). action_input — JSONB-вход сценария (vault-ref КАК
--- ЕСТЬ, инвариант A ADR-027). cooldown — duration-конвенция, минимальный
--- интервал между срабатываниями per-(decree, subject); валидируется на
--- service-слое.
+-- action_scenario - a named scenario (whitelist; a raw command was rejected as an
+-- RCE vector, ADR-030(b)). action_input - the JSONB input to the scenario (vault-ref AS
+-- IS, invariant A ADR-027). cooldown - duration convention, the minimum
+-- interval between firings per-(decree, subject); validated at the
+-- service layer.
 CREATE TABLE decrees (
     name             TEXT        PRIMARY KEY,
     on_beacon        TEXT        NOT NULL,
@@ -116,39 +116,39 @@ CREATE TABLE decrees (
         CHECK (incarnation_name ~ '^[a-z0-9][a-z0-9-]{0,62}$'),
     CONSTRAINT decrees_scenario_format
         CHECK (action_scenario ~ '^[a-z][a-z0-9_]*$'),
-    -- Субъект — строго XOR (как Rite): ровно одно из subject_coven /
-    -- subject_sid непусто.
+    -- Subject - strictly XOR (like Rite): exactly one of subject_coven /
+    -- subject_sid is non-empty.
     CONSTRAINT decrees_subject_xor
         CHECK ((subject_coven IS NOT NULL AND array_length(subject_coven, 1) > 0) <> (subject_sid IS NOT NULL)),
     CONSTRAINT decrees_created_by_aid_fk
         FOREIGN KEY (created_by_aid) REFERENCES operators (aid) ON DELETE SET NULL
 );
 
--- Lookup Decree по on_beacon (горячий путь match-флоу: Oracle на каждый
--- Portent делает SELECT … WHERE on_beacon = $1 AND enabled).
+-- Lookup Decree by on_beacon (hot path of the match flow: Oracle does a
+-- SELECT ... WHERE on_beacon = $1 AND enabled for every Portent).
 CREATE INDEX decrees_on_beacon_idx
     ON decrees (on_beacon) WHERE enabled;
 
 COMMENT ON TABLE decrees IS
-    'Реестр правил reactor Oracle (ADR-030). Default-deny; субъект coven XOR sid; таргет incarnation_name (ServiceRef резолвится из неё); action = named scenario (whitelist).';
+    'Registry of Oracle reactor rules (ADR-030). Default-deny; subject coven XOR sid; target incarnation_name (ServiceRef is resolved from it); action = named scenario (whitelist).';
 
 -- ---------------------------------------------------------------------------
--- oracle_fires — cooldown-state per-(decree, subject), loop-prevention
+-- oracle_fires - cooldown state per-(decree, subject), loop prevention
 -- (ADR-030(a)).
 --
--- Колонка last_fired_at на decrees НЕ годится: один Decree срабатывает для
--- МНОГИХ субъектов (coven-Decree покрывает десятки хостов), cooldown нужен
--- per-(decree, subject), а не per-decree. Отдельная таблица с PK
--- (decree, subject) — минимальная структура: ровно одна строка на пару
--- (UPSERT ON CONFLICT, НЕ append-only), читается match-флоу перед enqueue,
--- пишется после fire.
+-- A last_fired_at column on decrees doesn't fit: a single Decree fires for
+-- MANY subjects (a coven-Decree covers dozens of hosts), cooldown is needed
+-- per-(decree, subject), not per-decree. A separate table with PK
+-- (decree, subject) - minimal structure: exactly one row per pair
+-- (UPSERT ON CONFLICT, NOT append-only), read by the match flow before enqueue,
+-- written after firing.
 --
--- subject здесь — авторитетный SID хоста-отправителя (из mTLS peer cert, НЕ
--- payload-echo): cooldown привязан к конкретному хосту, для которого ставится
--- scenario.
+-- subject here - the authoritative SID of the sending host (from the mTLS peer cert, NOT
+-- a payload echo): cooldown is tied to the specific host the
+-- scenario is being applied to.
 --
--- decree → decrees(name) ON DELETE CASCADE: cooldown-state без Decree-а
--- бессмыслен, удаление Decree-а атомарно чистит его историю срабатываний.
+-- decree -> decrees(name) ON DELETE CASCADE: cooldown state without a Decree
+-- is meaningless; deleting a Decree atomically clears its firing history.
 CREATE TABLE oracle_fires (
     decree     TEXT        NOT NULL,
     subject    TEXT        NOT NULL,
@@ -161,4 +161,4 @@ CREATE TABLE oracle_fires (
 );
 
 COMMENT ON TABLE oracle_fires IS
-    'Cooldown-state Oracle per-(decree, subject) (ADR-030(a), loop-prevention). UPSERT, одна строка на пару; decree ON DELETE CASCADE.';
+    'Oracle cooldown state per-(decree, subject) (ADR-030(a), loop-prevention). UPSERT, one row per pair; decree ON DELETE CASCADE.';

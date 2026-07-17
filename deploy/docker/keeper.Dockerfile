@@ -1,37 +1,41 @@
-# Прод-образ бинаря `keeper` (ADR-004). Multi-stage: builder на полном
-# Go-тулчейне, runtime — distroless static-nonroot (только бинарь, без
-# shell/libc/пакетного менеджера → минимальная поверхность атаки, «безопасность
-# на первом месте»).
+# Prod image for the `keeper` binary (ADR-004). Multi-stage: builder on the
+# full Go toolchain, runtime is distroless static-nonroot (binary only, no
+# shell/libc/package manager -> minimal attack surface, "security first").
 #
-# Образ самодостаточен: собирается из ОДНОГО `docker build` без предварительного
-# `make build-linux` на хосте — builder-стадия пинит golang-тулчейн, поэтому
-# сборка воспроизводима в любом окружении (CI / чужой registry) и не зависит от
-# состояния `keeper/bin/` или версии локального Go. Готовый образ оператор
-# перекладывает в свой registry и катает своим Helm-чартом (см. deploy/README.md).
+# The image is self-contained: it builds from a SINGLE `docker build` without a
+# prior `make build-linux` on the host - the builder stage pins the golang
+# toolchain, so the build is reproducible in any environment (CI / a third-party
+# registry) and does not depend on the state of `keeper/bin/` or the local Go
+# version. The operator pushes the finished image to their own registry and
+# rolls it out with their own Helm chart (see deploy/README.md).
 #
-# Build-контекст — КОРЕНЬ моно-репо (там go.work + все 7 модулей). Собрать с
-# версионным тегом из git (так делает `make docker-keeper`):
+# The build context is the ROOT of the mono-repo (that's where go.work + all 7
+# modules live). Build with a version tag from git (this is what
+# `make docker-keeper` does):
 #   docker build -f deploy/docker/keeper.Dockerfile \
 #       --build-arg VERSION="$(git describe --tags --always --dirty)" \
 #       -t soul-stack/keeper:<version> .
 #
-# Версия прокидывается ldflags-ом (--build-arg VERSION, по умолчанию 0.0.0-dev) в
-# main.version. Форма `-X main.<var>` обязательна: entrypoint — package main, и
-# линкер молча игнорирует `-X` с полным import-path (бинарь остался бы
-# 0.0.0-dev → `keeper version` врал бы версию).
+# The version is passed through via ldflags (--build-arg VERSION, defaults to
+# 0.0.0-dev) into main.version. The form `-X main.<var>` is mandatory: the
+# entrypoint is package main, and the linker silently ignores `-X` with a full
+# import path (the binary would stay at 0.0.0-dev -> `keeper version` would
+# report the wrong version).
 #
-# Bootstrap первого Архонта (ADR-013) — ОТДЕЛЬНОЙ командой, НЕ в этом образе по
-# умолчанию: `keeper init --archon=<aid>` (one-shot Job/exec), затем `keeper run`.
-# CMD здесь — только `run`, БЕЗ `--initialize`: авто-bootstrap в проде опасен.
+# Bootstrap of the first Archon (ADR-013) is a SEPARATE command, NOT part of
+# this image by default: `keeper init --archon=<aid>` (one-shot Job/exec),
+# then `keeper run`. The CMD here is only `run`, WITHOUT `--initialize`:
+# auto-bootstrap in prod is dangerous.
 
-# Go-версия синхронизирована с go.mod / go.work (go 1.26.4). При апгрейде Go —
-# править здесь и в go.work одновременно.
+# The Go version is synced with go.mod / go.work (go 1.26.4). When upgrading
+# Go, update here and in go.work at the same time.
 FROM golang:1.26.4 AS builder
 
 WORKDIR /src
 
-# Сначала только манифесты модулей — слой кешируется, пока не менялись deps.
-# go.work связывает локальные модули, поэтому копируем все go.mod/go.sum дерева.
+# Module manifests only, first - the layer stays cached as long as deps
+# haven't changed. go.work links the local modules, so we copy all go.mod/go.sum
+# files across the tree.
 COPY go.work go.work.sum ./
 COPY proto/go.mod proto/go.sum ./proto/
 COPY proto/plugin/go.mod proto/plugin/go.sum ./proto/plugin/
@@ -42,11 +46,11 @@ COPY soul/go.mod soul/go.sum ./soul/
 COPY soul-lint/go.mod soul-lint/go.sum ./soul-lint/
 RUN go mod download
 
-# Остальные исходники.
+# The rest of the sources.
 COPY . .
 
-# Статическая сборка без cgo — обязательна для distroless static (нет libc).
-# Версия инжектится линкером в main.version (cmd/keeper/main.go).
+# Static build without cgo - required for distroless static (no libc).
+# The version is injected by the linker into main.version (cmd/keeper/main.go).
 ARG VERSION=0.0.0-dev
 RUN CGO_ENABLED=0 GOOS=linux go build \
         -trimpath \
@@ -54,11 +58,12 @@ RUN CGO_ENABLED=0 GOOS=linux go build \
         -o /out/keeper \
         ./keeper/cmd/keeper
 
-# Runtime: distroless static с непривилегированным пользователем (uid 65532).
+# Runtime: distroless static with an unprivileged user (uid 65532).
 FROM gcr.io/distroless/static:nonroot
 
-# OCI-метки — образ публикуется в registry оператора; org.opencontainers.* —
-# стандартный канал происхождения/версии для сканеров и UI registry.
+# OCI labels - the image is published to the operator's registry;
+# org.opencontainers.* is the standard channel for provenance/version info
+# for scanners and registry UIs.
 ARG VERSION=0.0.0-dev
 LABEL org.opencontainers.image.title="soul-stack-keeper" \
       org.opencontainers.image.description="Soul Stack Keeper (ADR-004) — central node" \
@@ -68,15 +73,17 @@ LABEL org.opencontainers.image.title="soul-stack-keeper" \
 
 COPY --from=builder /out/keeper /usr/local/bin/keeper
 
-# Конфиг ожидается смонтированным в /etc/keeper/keeper.yml — дефолтный путь
-# keeper-бинаря (defaultConfigPath в cmd/keeper). Поэтому CMD не передаёт
-# --config: оператор монтирует ConfigMap в /etc/keeper/keeper.yml, остальные
-# секреты (PG-DSN, Redis, Vault, JWT signing key) keeper резолвит из Vault по
-# *_ref из конфига (см. deploy/README.md → «Keeper в проде»).
+# The config is expected to be mounted at /etc/keeper/keeper.yml - the default
+# path for the keeper binary (defaultConfigPath in cmd/keeper). That's why the
+# CMD does not pass --config: the operator mounts the ConfigMap at
+# /etc/keeper/keeper.yml, and keeper resolves the remaining secrets (PG-DSN,
+# Redis, Vault, JWT signing key) from Vault via the *_ref fields in the config
+# (see deploy/README.md -> "Keeper in production").
 USER nonroot:nonroot
 ENTRYPOINT ["/usr/local/bin/keeper"]
-# Прод-дефолт: только daemon, БЕЗ --initialize. Пустой реестр operators без
-# --initialize → keeper run отказывается стартовать (ADR-013) — это barrier
-# против тихого авто-bootstrap. Первый Архонт заводится отдельной командой
-# `keeper init --archon=<aid>` (one-shot), см. шапку файла и deploy/README.md.
+# Prod default: daemon only, WITHOUT --initialize. An empty operators registry
+# without --initialize -> keeper run refuses to start (ADR-013) - this is a
+# barrier against silent auto-bootstrap. The first Archon is created via a
+# separate command `keeper init --archon=<aid>` (one-shot), see the file
+# header and deploy/README.md.
 CMD ["run"]

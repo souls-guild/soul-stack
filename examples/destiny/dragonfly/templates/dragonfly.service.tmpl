@@ -1,32 +1,36 @@
 {{/*
-  systemd-юнит DragonFly (binary-установка — единственный путь к собственному юниту:
-  package-ветка DragonFly ставит distro-deb dragonfly со СВОИМ юнитом, мы его не трогаем;
-  binary-ветка несёт ЭТОТ юнит). Go text/template strict (ADR-010). Контекст:
-  .vars.bin_dir/conf_dir + dragonfly_user/dragonfly_group + run_dir/data_dir/log_dir.
+  systemd unit for DragonFly (binary install -- the only path to owning a unit:
+  the DragonFly package branch installs the distro deb dragonfly with ITS OWN
+  unit, which we don't touch; the binary branch ships THIS unit). Go text/template
+  strict (ADR-010). Context: .vars.bin_dir/conf_dir + dragonfly_user/dragonfly_group
+  + run_dir/data_dir/log_dir.
 
-  ★ Type=simple (НЕ notify): DragonFly — foreground-процесс БЕЗ sd_notify-готовности
-  (подтверждено: dfly_main.cc не вызывает sd_notify; официальный deb-юнит DF —
-  Type=simple). Это ОТЛИЧИЕ от redis-server (Type=notify): DF не уведомляет systemd о
-  READY, systemd считает старт успешным сразу после fork+exec. Health-gate сервиса (PING)
-  закрывает «готов ли реально» — на уровне systemd notify для DF нет.
+  ★ Type=simple (NOT notify): DragonFly is a foreground process WITHOUT sd_notify
+  readiness (confirmed: dfly_main.cc never calls sd_notify; the official DF deb
+  unit uses Type=simple). This is DIFFERENT from redis-server (Type=notify): DF
+  does not notify systemd about READY, so systemd considers the start successful
+  right after fork+exec. The service health-gate (PING) is what actually confirms
+  "is it really ready" -- there is no systemd-notify signal for DF.
 
-  ★ HARDENING ВНУТРИ юнита (НЕ drop-in, в отличие от redis). У redis hardening доезжает
-  drop-in-ом поверх ДИСТРИБУТИВНОГО юнита (его нельзя заменить целиком). Здесь юнит наш
-  (binary), distro-юнита DF в этом потоке нет → hardening кладём прямо в [Service], как
-  делает ОФИЦИАЛЬНЫЙ deb-юнит DragonFly. Поэтому отдельного hardening.conf.tmpl + drop-in-
-  задачи для DragonFly нет (минус один артефакт против redis-структуры).
+  ★ HARDENING LIVES INSIDE the unit (NOT a drop-in, unlike redis). For redis,
+  hardening arrives as a drop-in on top of the DISTRO unit (which can't be
+  replaced wholesale). Here the unit is ours (binary), there is no distro DF
+  unit in this flow -> hardening goes directly into [Service], the same way the
+  OFFICIAL DragonFly deb unit does it. So there's no separate hardening.conf.tmpl
+  + drop-in task for DragonFly (one fewer artifact than the redis structure).
 
-  Набор hardening — из официального deb-юнита DragonFly (tools/packaging/debian/
-  dragonfly.service), адаптирован под stateful-сервис:
-    - ProtectSystem=full + ReadWritePaths под фактические каталоги записи (data/log/run);
-    - MemoryDenyWriteExecute=true — у DF официальный юнит ЕГО НЕСЁТ (в отличие от redis,
-      где MDWE снят из-за loadable-модулей: у DF их нет, MDWE безопасен);
-    - CapabilityBoundingSet=CAP_SETGID CAP_SETUID CAP_SYS_RESOURCE — SETGID/SETUID для
-      privilege-drop, SYS_RESOURCE для подъёма memlock/NOFILE (DF mlock-ает память);
-    - LimitNOFILE=262144 — DF держит много соединений (официальный дефолт юнита).
+  The hardening set comes from the official DragonFly deb unit (tools/packaging/debian/
+  dragonfly.service), adapted for a stateful service:
+    - ProtectSystem=full + ReadWritePaths for the actual write directories (data/log/run);
+    - MemoryDenyWriteExecute=true -- the official DF unit CARRIES IT (unlike redis,
+      where MDWE is dropped because of loadable modules: DF has none, so MDWE is safe);
+    - CapabilityBoundingSet=CAP_SETGID CAP_SETUID CAP_SYS_RESOURCE -- SETGID/SETUID for
+      privilege drop, SYS_RESOURCE for raising memlock/NOFILE (DF mlocks memory);
+    - LimitNOFILE=262144 -- DF holds many connections (the unit's official default).
 
-  ExecStart=--flagfile (официальная форма запуска DF): все директивы в flagfile
-  ${conf_dir}/dragonfly.conf, аргументов в командной строке нет (кроме flagfile).
+  ExecStart=--flagfile (the official way to launch DF): all directives live in the
+  flagfile ${conf_dir}/dragonfly.conf, no arguments on the command line (besides
+  flagfile).
 */}}
 [Unit]
 Description=DragonflyDB In-Memory Data Store
@@ -45,7 +49,7 @@ RuntimeDirectory=dragonfly
 RuntimeDirectoryMode=0755
 LimitNOFILE=262144
 
-# systemd-hardening (из официального deb-юнита DragonFly, stateful-вариант).
+# systemd hardening (from the official DragonFly deb unit, stateful variant).
 NoNewPrivileges=yes
 ProtectSystem=full
 ReadWritePaths={{ .vars.data_dir }} {{ .vars.log_dir }} {{ .vars.run_dir }}

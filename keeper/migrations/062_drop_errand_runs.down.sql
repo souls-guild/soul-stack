@@ -1,9 +1,9 @@
 -- 062_drop_errand_runs.down.sql
 --
--- Откат удаления ErrandRun (Wave 5 Pass 2): пересоздаёт реестр `errand_runs` и
--- back-link errands.errand_run_id ровно в форме миграции 057 (образец recreate).
--- Данные не восстанавливаются (forward-drop их удалил) — down лишь возвращает
--- схему.
+-- Rollback of the ErrandRun removal (Wave 5 Pass 2): recreates the `errand_runs`
+-- registry and the errands.errand_run_id back-link exactly in the shape of
+-- migration 057 (recreate template). Data is not restored (the forward drop
+-- deleted it) - down only restores the schema.
 
 CREATE TABLE errand_runs (
     errand_run_id          TEXT        PRIMARY KEY,

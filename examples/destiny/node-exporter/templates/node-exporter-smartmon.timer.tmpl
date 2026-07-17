@@ -1,6 +1,6 @@
 {{/*
-  Таймер SMART-сборщика. Статичен (vars: {}), .tmpl обязателен для core.file.rendered.
-  Та же ConditionVirtualization=no, что и в .service: защита от ручного start без железа.
+  SMART-collector timer. Static (vars: {}), .tmpl is required for core.file.rendered.
+  Same ConditionVirtualization=no as in .service: guards against a manual start without real hardware.
 */}}
 [Unit]
 Description=Run SMART metrics collection every 1 minute

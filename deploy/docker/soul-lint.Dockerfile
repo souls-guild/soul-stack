@@ -1,11 +1,11 @@
-# Dockerfile бинаря `soul-lint` (ADR-004) — офлайн-линтер, CLI-утилита.
-# Multi-stage: builder на полном Go-тулчейне, runtime — distroless static-nonroot.
-# Тонкий образ (один статический бинарь) — то, что и нужно для CLI в CI.
+# Dockerfile for the `soul-lint` binary (ADR-004) - offline linter, CLI utility.
+# Multi-stage: builder on the full Go toolchain, runtime - distroless static-nonroot.
+# Thin image (a single static binary) - exactly what's needed for CLI in CI.
 #
-# Build-контекст — КОРЕНЬ моно-репо. Собирать так:
+# Build context - ROOT of the mono-repo. Build like this:
 #   docker build -f deploy/docker/soul-lint.Dockerfile -t soul-stack/soul-lint .
 #
-# Типовое использование в CI — смонтировать репо и линтить конфиги:
+# Typical use in CI - mount the repo and lint configs:
 #   docker run --rm -v "$PWD:/work" -w /work soul-stack/soul-lint validate-destiny destiny.yml
 
 FROM golang:1.26.4 AS builder
@@ -24,7 +24,7 @@ RUN go mod download
 
 COPY . .
 
-# soul-lint version-переменной пока не имеет — ARG зарезервирован под будущую инъекцию.
+# soul-lint doesn't have a version variable yet - ARG is reserved for future injection.
 ARG VERSION=0.0.0-dev
 RUN CGO_ENABLED=0 GOOS=linux go build \
         -trimpath \

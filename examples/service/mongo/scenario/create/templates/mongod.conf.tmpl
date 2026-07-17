@@ -1,23 +1,26 @@
 {{/*
-  mongod.conf для standalone MongoDB (Go text/template strict, ADR-010). Контекст:
-  .vars.config — ПОЛНЫЙ merged mongod-объект (net/storage/security/systemLog + вычисления/
-  passthrough), собран в scenario compute.mongo_config. Рендерится ЦЕЛИКОМ через toYaml
-  (собственная функция Soul Stack, docs/templating.md §3.3 «Собственные функции»).
+  mongod.conf for standalone MongoDB (Go text/template strict, ADR-010). Context:
+  .vars.config - the FULL merged mongod object (net/storage/security/systemLog +
+  computed/passthrough values), assembled in scenario compute.mongo_config. Rendered AS A
+  WHOLE via toYaml (a Soul Stack custom function, docs/templating.md §3.3 "Custom
+  functions").
 
-  ★ MongoDB vs redis: mongod.conf — вложенный YAML (поддеревья), а не плоский key-value.
-  Поэтому весь объект сериализуется toYaml одним блоком, а не range по ключам. Host-layout
-  (dbPath/port/authorization/systemLog.path) уже ВЛИТ в .vars.config (scenario), bindIp=0.0.0.0
-  host-инвариантен (Ansible-роль mongodb дефолт) — поэтому per-host логики в шаблоне нет (в
-  отличие от redis.conf.tmpl bind .self.network.primary_ip).
+  ★ MongoDB vs redis: mongod.conf is nested YAML (subtrees), not flat key-value.
+  So the whole object is serialized via toYaml as one block, not ranged key by key.
+  Host-layout (dbPath/port/authorization/systemLog.path) is already MERGED into
+  .vars.config (scenario), bindIp=0.0.0.0 is host-invariant (Ansible mongodb role
+  default) - so there is no per-host logic in the template (unlike redis.conf.tmpl's
+  bind .self.network.primary_ip).
 
-  КРИТИЧНЫЕ директивы, задаваемые compute.mongo_config (см. covenant.yml):
-    - net.bindIp/port          — слушатель (0.0.0.0 + net_port);
-    - storage.dbPath/engine    — рабочий каталог данных WiredTiger (data_dir);
-    - storage.wiredTiger…cacheSizeGB — размер кэша (из memory_mb/wiredtiger_cache_gb);
-    - security.authorization: enabled — ВКЛЮЧЕНА аутентификация (доступ под default_admin;
-      первый admin через localhost-exception, плагин community.mongo.user);
-    - systemLog.destination/path/logAppend — лог в log_dir/mongod.log.
-  processManagement.fork НЕ задаём: mongod под systemd (Type=forking с --config без fork —
-  systemd-юнит несёт fork/pidfile при необходимости; для PILOT foreground под systemd).
+  CRITICAL directives set by compute.mongo_config (see covenant.yml):
+    - net.bindIp/port - the listener (0.0.0.0 + net_port);
+    - storage.dbPath/engine - the WiredTiger data working directory (data_dir);
+    - storage.wiredTiger...cacheSizeGB - cache size (from memory_mb/wiredtiger_cache_gb);
+    - security.authorization: enabled - authentication ENABLED (access under
+      default_admin; first admin via localhost-exception, community.mongo.user plugin);
+    - systemLog.destination/path/logAppend - log into log_dir/mongod.log.
+  We do NOT set processManagement.fork: mongod runs under systemd (Type=forking with
+  --config without fork - the systemd unit carries fork/pidfile if needed; for PILOT,
+  foreground under systemd).
 */}}
 {{ toYaml .vars.config }}

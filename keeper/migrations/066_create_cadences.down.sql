@@ -1,7 +1,7 @@
 -- 066_create_cadences.down.sql
 --
--- Down: снять back-link voyages.cadence_id (индекс/FK/колонка) и дропнуть
--- таблицу cadences с её индексом.
+-- Down: remove the voyages.cadence_id back-link (index/FK/column) and drop
+-- the cadences table along with its index.
 
 DROP INDEX IF EXISTS voyages_cadence_id_idx;
 

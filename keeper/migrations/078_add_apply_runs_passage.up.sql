@@ -1,74 +1,74 @@
 -- 078_add_apply_runs_passage.up.sql
 --
--- Staged-render (Passage, ADR-056, S1): прогон сценария исполняется как N≥1
--- упорядоченных Passage (render → dispatch → barrier → сбор register). На один
--- хост прогона теперь приходится N заданий — по одному на Passage. Прежний
--- composite PK `apply_runs (apply_id, sid)` (миграция 018) больше не уникален
--- per-host.
+-- Staged render (Passage, ADR-056, S1): a scenario run is now executed as N>=1
+-- ordered Passages (render -> dispatch -> barrier -> register collection). One
+-- run host now gets N tasks - one per Passage. The former
+-- composite PK `apply_runs (apply_id, sid)` (migration 018) is no longer unique
+-- per host.
 --
--- ВЫБОР ПОДХОДА (ADR-056 оставил I vs II на S1): Variant I — расширить PK до
--- `(apply_id, sid, passage)`, N строк на хост в той же таблице. Обоснование
--- «меньший регресс-риск»:
---   - Барьер (waitBarrier/classify), Ward-claim (ClaimNext/MarkDispatched),
---     recovery-reclaim (ReclaimApplyRuns), Soul-reconcile (OrphanDispatched) и
---     RunResult-correlation ВСЕ работают с per-host(-per-passage) строками
---     ИМЕННО этой таблицы. Variant II (отдельная apply_run_passages) потребовал
---     бы переуказать все эти чтения/записи на новую таблицу + изобрести
---     write-path агрегата apply_runs — шире зона касания, не уже.
---   - passage DEFAULT 0: на S1 НИКТО не пишет passage>0 (стратификация — S2/S3),
---     поэтому каждый существующий запрос `WHERE apply_id=$1 AND sid=$2` хитит
---     ровно одну строку (passage 0) — поведение БИТ-В-БИТ как сейчас.
---   - Единственная FK, ссылавшаяся на apply_runs(apply_id, sid) — это
---     apply_task_register (миграция 022). Переуказываем её на тройку
---     (apply_id, sid, passage). NB: на ЭТОЙ миграции PK apply_task_register ещё
---     по task_idx; миграция 079 (ADR-056 §S1 fix Variant B) затем перетягивает
---     register-ключ на ГЛОБАЛЬНЫЙ plan_index — task_idx ЛОКАЛЕН для Passage/host
---     (неуникален между Passage и между хостами под per-host where:), сквозным
---     по Passage он НЕ является (исходное допущение здесь оказалось неверным).
+-- APPROACH CHOICE (ADR-056 left I vs II open for S1): Variant I - extend the PK to
+-- `(apply_id, sid, passage)`, N rows per host in the same table. Rationale
+-- "smaller regression risk":
+--   - The barrier (waitBarrier/classify), Ward-claim (ClaimNext/MarkDispatched),
+--     recovery reclaim (ReclaimApplyRuns), Soul-reconcile (OrphanDispatched), and
+--     RunResult correlation ALL work with per-host(-per-passage) rows of
+--     THIS EXACT table. Variant II (a separate apply_run_passages) would have
+--     required repointing all these reads/writes at the new table plus inventing a
+--     write path for the apply_runs aggregate - a wider surface, not a narrower one.
+--   - passage DEFAULT 0: on S1 NOBODY writes passage>0 (stratification is S2/S3),
+--     so every existing `WHERE apply_id=$1 AND sid=$2` query hits
+--     exactly one row (passage 0) - behavior BIT-FOR-BIT as it is now.
+--   - The only FK referencing apply_runs(apply_id, sid) is
+--     apply_task_register (migration 022). We repoint it at the triple
+--     (apply_id, sid, passage). NB: at THIS migration the PK of apply_task_register is still
+--     by task_idx; migration 079 (ADR-056 S1 fix Variant B) later pulls the
+--     register key onto the GLOBAL plan_index - task_idx is LOCAL to Passage/host
+--     (not unique across Passages or across hosts under per-host where:), it is NOT
+--     a cross-Passage key (the original assumption here turned out to be wrong).
 --
--- АДДИТИВНОСТЬ: passage NOT NULL DEFAULT 0 — существующие строки получают 0,
--- новый PK (apply_id, sid, 0) совпадает по селективности со старым на текущих
--- данных. Backward-compat (passage везде 0 = как до staged-render) — инвариант
--- S1.
+-- ADDITIVITY: passage NOT NULL DEFAULT 0 - existing rows get 0,
+-- the new PK (apply_id, sid, 0) matches the old one in selectivity on the current
+-- data. Backward compat (passage is 0 everywhere = as before staged-render) is an
+-- S1 invariant.
 
--- 1. Колонка passage на apply_runs. NOT NULL DEFAULT 0: backfill существующих
---    строк нулём, новый PK-компонент детерминирован для текущего write-path-а
---    (Insert/InsertPlanned не пишут passage явно → 0).
+-- 1. The passage column on apply_runs. NOT NULL DEFAULT 0: backfill existing
+--    rows with zero, the new PK component is deterministic for the current write path
+--    (Insert/InsertPlanned don't write passage explicitly -> 0).
 ALTER TABLE apply_runs
     ADD COLUMN passage INT NOT NULL DEFAULT 0;
 
--- 2. apply_task_register: симметрично несёт passage (NOT NULL DEFAULT 0).
---    Нужно ДО переуказания FK — referencing-колонки должны существовать.
---    PK apply_task_register (apply_id, sid, task_idx) на этой миграции НЕ
---    меняется; passage — данные строки + компонент FK-цели. NB: task_idx
---    ЛОКАЛЕН для Passage/host (не сквозной) — миграция 079 перетянет register-PK
---    на глобальный plan_index (ADR-056 §S1 fix Variant B).
+-- 2. apply_task_register: symmetrically carries passage (NOT NULL DEFAULT 0).
+--    Needed BEFORE repointing the FK - the referencing columns must exist.
+--    The PK of apply_task_register (apply_id, sid, task_idx) is NOT
+--    changed by this migration; passage is row data + a component of the FK target. NB: task_idx
+--    is LOCAL to Passage/host (not cross-cutting) - migration 079 will pull the register PK
+--    onto the global plan_index (ADR-056 S1 fix Variant B).
 ALTER TABLE apply_task_register
     ADD COLUMN passage INT NOT NULL DEFAULT 0;
 
--- 3. Переуказание FK apply_task_register → apply_runs на тройку. Старая FK
---    ссылалась на (apply_id, sid); после смены PK apply_runs этот префикс уже
---    не уникален — FK обязана включить passage. ON DELETE CASCADE сохраняется
---    (register-данные умирают вместе со строкой Passage; каскад от incarnation
---    через apply_runs остаётся в силе).
+-- 3. Repointing the FK apply_task_register -> apply_runs to the triple. The old FK
+--    referenced (apply_id, sid); after the PK change on apply_runs that prefix is
+--    no longer unique - the FK must include passage. ON DELETE CASCADE is preserved
+--    (register data dies together with the Passage row; the cascade from incarnation
+--    through apply_runs remains in effect).
 ALTER TABLE apply_task_register
     DROP CONSTRAINT apply_task_register_apply_run_fk;
 
--- 4. Смена PK apply_runs: (apply_id, sid) → (apply_id, sid, passage). Имя
---    PK-constraint в PG по умолчанию apply_runs_pkey.
+-- 4. Changing the apply_runs PK: (apply_id, sid) -> (apply_id, sid, passage). The
+--    PK constraint name in PG defaults to apply_runs_pkey.
 ALTER TABLE apply_runs
     DROP CONSTRAINT apply_runs_pkey;
 
 ALTER TABLE apply_runs
     ADD CONSTRAINT apply_runs_pkey PRIMARY KEY (apply_id, sid, passage);
 
--- 5. Восстановление FK apply_task_register на новый тройной ключ.
+-- 5. Restoring the apply_task_register FK to point at the new triple key.
 ALTER TABLE apply_task_register
     ADD CONSTRAINT apply_task_register_apply_run_fk
         FOREIGN KEY (apply_id, sid, passage) REFERENCES apply_runs (apply_id, sid, passage) ON DELETE CASCADE;
 
 COMMENT ON COLUMN apply_runs.passage IS
-    'Индекс Passage (0-based) staged-render (ADR-056). 0 = единственный Passage (поведение как до staged-render). Часть PK (apply_id, sid, passage).';
+    'Passage index (0-based) for staged render (ADR-056). 0 = the only Passage (behavior as before staged-render). Part of the PK (apply_id, sid, passage).';
 
 COMMENT ON COLUMN apply_task_register.passage IS
-    'Passage задачи (ADR-056), компонент FK на apply_runs(apply_id, sid, passage). task_idx ЛОКАЛЕН для Passage/host (не сквозной) — register-ключ перетянут на глобальный plan_index миграцией 079.';
+    'Task Passage (ADR-056), component of the FK to apply_runs(apply_id, sid, passage). task_idx is LOCAL to Passage/host (not cross-cutting) - the register key was pulled onto the global plan_index by migration 079.';

@@ -23,23 +23,23 @@ nimbalyst-local/
 coverage.txt
 coverage.html
 
-# Каталог собранных бинарей внутри каждого модуля с `main` (см. Makefile, BIN_DIR).
+# Directory of built binaries inside each module with `main` (see Makefile, BIN_DIR).
 */bin/
 
-# Каталог временных бинарей soul-trial / soul-lint (keeper/.bin, soul-lint/.bin) —
-# `*/bin/` его не покрывает (.bin != bin).
+# Directory of temporary binaries soul-trial / soul-lint (keeper/.bin, soul-lint/.bin) -
+# `*/bin/` doesn't cover it (.bin != bin).
 */.bin/
 
-# Каталог release-артефактов (SBOM, deb/rpm) — см. Makefile, DIST_DIR (make sbom/pkg).
+# Directory of release artifacts (SBOM, deb/rpm) - see Makefile, DIST_DIR (make sbom/pkg).
 dist/
 
-# Defensive: бинарики в корнях модулей с main (если кто-то делает `go build .` вне Makefile).
+# Defensive: stray binaries in module roots with main (if someone runs `go build .` outside the Makefile).
 /keeper/keeper
 /soul/soul
 /soul-lint/soul-lint
 /soulctl/soulctl
 
-# Defensive: stray plugin-бинари из `go build .` в корне example-модуля (конвенция — dist/<binary>).
+# Defensive: stray plugin binaries from `go build .` in an example-module root (convention - dist/<binary>).
 /examples/module/soul-cloud-aws/soul-cloud-aws
 /examples/module/soul-cloud-proxmox/soul-cloud-proxmox
 /examples/module/soul-ssh-static/soul-ssh-static
@@ -47,7 +47,7 @@ dist/
 # Vendor / dependency directories are not used in this repo
 vendor/
 
-# Python bytecode cache (от scripts/check-doc-links.py)
+# Python bytecode cache (from scripts/check-doc-links.py)
 __pycache__/
 
 # Editor / IDE
@@ -58,10 +58,10 @@ __pycache__/
 .DS_Store
 
 # compiled example plugin binaries (ADR-011: examples = non-Go only).
-# Конвенция: бинарь лежит как examples/module/<plugin>/<plugin> (имя == каталог).
-# Паттерн `*/soul-…-*` требует ровно один уровень каталога ПЕРЕД именем бинаря →
-# матчит сам бинарь внутри каталога плагина, но НЕ каталог плагина целиком
-# (иначе `**` скрыл бы ИСХОДНИКИ плагина — main.go/impl.go/manifest.yaml).
+# Convention: the binary sits at examples/module/<plugin>/<plugin> (name == directory).
+# The pattern `*/soul-...-*` requires exactly one directory level BEFORE the binary name ->
+# it matches the binary itself inside the plugin directory, but NOT the whole plugin directory
+# (otherwise `**` would hide the plugin SOURCES - main.go/impl.go/manifest.yaml).
 examples/module/*/soul-cloud-*
 examples/module/*/soul-ssh-*
 examples/module/*/soul-mod-*

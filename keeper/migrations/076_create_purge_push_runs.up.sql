@@ -1,42 +1,42 @@
 -- 076_create_purge_push_runs.up.sql
 --
--- Reaper-правило `purge_push_runs` (docs/keeper/reaper.md): удаляет batch
--- завершённых push-прогонов из реестра `push_runs` (миграция 051) старше
--- `max_age`. Retention растущей истории push-прогонов (default 30d, считается
--- от `finished_at`). Зеркало `purge_apply_runs` (021) / `purge_voyages` (075)
--- для push-стороны.
+-- Reaper rule `purge_push_runs` (docs/keeper/reaper.md): deletes a batch of
+-- finished push runs from the `push_runs` registry (migration 051) older than
+-- `max_age`. Retention for the growing push-run history (default 30d, measured
+-- from `finished_at`). Mirror of `purge_apply_runs` (021) / `purge_voyages` (075)
+-- for the push side.
 --
--- ПОЧЕМУ правило нужно: `push_runs` — run-history таблица (одна строка =
--- один `POST /v1/push/apply`), растёт без потолка, и до сих пор НЕ имела
--- retention завершённых записей. Существующее правило `purge_orphan_push_runs`
--- (Go-side, push_orphan.go) — про ДРУГОЕ: терминализация in-flight зомби
--- (pending/running старше 1h → cancelled), оно НЕ удаляет завершённые строки.
--- Это правило закрывает оставшийся хвост — DELETE финишированных.
+-- WHY the rule is needed: `push_runs` is a run-history table (one row =
+-- one `POST /v1/push/apply`), grows without a ceiling, and until now had NO
+-- retention for finished records. The existing rule `purge_orphan_push_runs`
+-- (Go-side, push_orphan.go) is about SOMETHING ELSE: terminalizing in-flight zombies
+-- (pending/running older than 1h -> cancelled), it does NOT delete finished rows.
+-- This rule closes the remaining gap - DELETE of finished ones.
 --
--- Удаляются ТОЛЬКО finished-записи (`status` ∈ `success` / `partial_failed` /
--- `failed` / `cancelled` и `finished_at IS NOT NULL`). Записи `pending` /
--- `running` НИКОГДА не purge — это идущие/висящие прогоны; их триаж и
--- терминализация — правило `purge_orphan_push_runs`, не это. Терминальный
--- `cancelled` ставится тем же orphan-правилом — такие записи это правило
--- подбирает по истечении своего окна (parity: orphan терминалит за 1h,
--- финальный DELETE — за 30d, как у apply_runs).
+-- ONLY finished records are deleted (`status` in `success` / `partial_failed` /
+-- `failed` / `cancelled` and `finished_at IS NOT NULL`). `pending` /
+-- `running` records are NEVER purged - those are in-flight/hung runs; their triage and
+-- terminalization is the `purge_orphan_push_runs` rule's job, not this one's. The terminal
+-- `cancelled` state is set by that same orphan rule - this rule picks up such records
+-- once its own window has elapsed (parity: orphan terminalizes at 1h,
+-- the final DELETE at 30d, same as apply_runs).
 --
--- Возраст считается от `finished_at`: история измеряется временем с момента
--- завершения, а не старта (долгий прогон, завершившийся недавно, не должен
--- удаляться раньше короткого, завершившегося давно). Parity purge_apply_runs.
+-- Age is measured from `finished_at`: history is measured by time since
+-- completion, not start (a long run that finished recently shouldn't
+-- be deleted before a short one that finished long ago). Parity with purge_apply_runs.
 --
--- КАСКАДЫ / ЗАВИСИМОСТИ: дочерних таблиц с FK на `push_runs` НЕТ — per-host
--- результаты хранятся inline в `push_runs.summary` (jsonb), а НЕ в отдельной
--- таблице (push синхронный oneshot, не идёт через apply_runs-барьер; см.
--- 051). FK `push_runs.started_by_aid → operators` направлен ОТ push_run к
--- operators (ON DELETE SET NULL) — DELETE push_run его не задевает. Битых
--- ссылок DELETE не создаёт.
+-- CASCADES / DEPENDENCIES: there are NO child tables with an FK to `push_runs` - per-host
+-- results are stored inline in `push_runs.summary` (jsonb), NOT in a separate
+-- table (push is a synchronous oneshot, it doesn't go through the apply_runs barrier; see
+-- 051). The FK `push_runs.started_by_aid -> operators` points FROM push_run TO
+-- operators (ON DELETE SET NULL) - DELETE push_run doesn't affect it. The DELETE
+-- doesn't create dangling references.
 --
--- PK `apply_id` (051) → DELETE по single-column WHERE apply_id IN (...);
--- CTE с LIMIT batch_size ограничивает размер транзакции, как в остальных
--- Reaper-правилах. Отдельный индекс по finished_at не заводим до появления
--- реального объёма (history-purge — холодный фон, не hot-path; parity
--- purge_apply_runs / purge_voyages, где выделенного finished_at-индекса нет).
+-- PK `apply_id` (051) -> a single-column DELETE WHERE apply_id IN (...);
+-- a CTE with LIMIT batch_size caps the transaction size, same as the other
+-- Reaper rules. We don't add a dedicated finished_at index until there's
+-- real volume (history-purge is a cold background job, not a hot path; parity with
+-- purge_apply_runs / purge_voyages, which have no dedicated finished_at index either).
 
 CREATE OR REPLACE FUNCTION purge_push_runs(max_age interval, batch_size integer DEFAULT 1000)
 RETURNS BIGINT AS $$
@@ -61,4 +61,4 @@ END;
 $$ LANGUAGE plpgsql;
 
 COMMENT ON FUNCTION purge_push_runs(interval, integer) IS
-    'Удаляет batch finished push_runs (success/partial_failed/failed/cancelled) с finished_at старше max_age. pending/running не трогает (это правило purge_orphan_push_runs). Дочерних FK-таблиц нет (per-host результаты inline в summary). Возвращает количество удалённых строк (parity purge_apply_runs).';
+    'Deletes a batch of finished push_runs (success/partial_failed/failed/cancelled) with finished_at older than max_age. Does not touch pending/running (that is the purge_orphan_push_runs rule). No child FK tables (per-host results are inline in summary). Returns the number of deleted rows (parity purge_apply_runs).';

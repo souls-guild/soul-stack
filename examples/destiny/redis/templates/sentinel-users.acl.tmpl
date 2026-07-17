@@ -1,26 +1,27 @@
 {{/*
-  sentinel-users.acl — ВТОРОЙ ACL-файл Redis, для sentinel-демона (aclfile в sentinel.conf,
-  ОТДЕЛЬНЫЙ от users.acl redis-server). Go text/template strict (ADR-010). .vars.users —
-  MAP имя→{perms, state, password} служебных юзеров sentinel-демона, собран scenario;
-  password зарезолвлен keeper-side из Vault (ADR-012).
+  sentinel-users.acl - the SECOND Redis ACL file, for the sentinel daemon (aclfile in
+  sentinel.conf, SEPARATE from redis-server's users.acl). Go text/template strict (ADR-010).
+  .vars.users - a MAP name→{perms, state, password} of the sentinel daemon's system users,
+  assembled by the scenario; password is resolved keeper-side from Vault (ADR-012).
 
-  ЗАЧЕМ ОТДЕЛЬНЫЙ ФАЙЛ: у sentinel-демона и redis-server РАЗНЫЕ требования к командам
-  (sentinel|* vs обычные redis-команды) → role/perms служебных юзеров не совпадают → два
-  aclfile. Детерминизм порядка (range по MAP сортирует ключи) — как в users.acl.tmpl.
+  WHY A SEPARATE FILE: the sentinel daemon and redis-server have DIFFERENT command
+  requirements (sentinel|* vs regular redis commands) → system-user role/perms don't match →
+  two aclfiles. Order determinism (range over a MAP sorts keys) - same as in users.acl.tmpl.
 
-  Формат строки (конвенция Redis ACL): user <name> <state> #<sha256(password)> <perms>.
-  Пароль — ХЕШЕМ (sprig sha256sum), НЕ plaintext-ом.
+  Line format (Redis ACL convention): user <name> <state> #<sha256(password)> <perms>.
+  The password is a HASH (sprig sha256sum), NOT plaintext.
 
-  ★ РЕДИЗАЙН default_admin (2026-06-30): прежний default-юзер (allchannels allkeys +@all)
-  ЗАМЕНЁН на СИСТЕМНЫЙ default_admin (тот же perms-набор) — он приходит в .vars.users от
-  scenario (essence.system_acl_users_sentinel) и рендерится range-ом, как остальные
-  системные. sentinel-демон коннектится к :26379 под default_admin (его пароль —
-  secret/redis/<inc>/users/default_admin#password), а к master — под
-  auth_user default_admin (sentinel.conf). Встроенный `default` рендерится `off` (симметрия
-  с users.acl): иначе при заданном aclfile без default-строки sentinel-демон оставил бы
-  built-in `default on nopass` → безпарольный доступ к :26379. sentinel-aclfile несёт только
-  СИСТЕМНЫЕ (operator-extra сюда НЕ доливается) → `default` тут никогда не в map → off-строка
-  добавляется всегда (`index`-гейт как users.acl.tmpl; hasKey не в sprig-allowlist).
+  ★ default_admin REDESIGN (2026-06-30): the previous default user (allchannels allkeys
+  +@all) was REPLACED with the SYSTEM default_admin (same perms set) - it comes into
+  .vars.users from the scenario (essence.system_acl_users_sentinel) and is rendered by
+  range, like the other system users. The sentinel daemon connects to :26379 as
+  default_admin (its password is secret/redis/<inc>/users/default_admin#password), and to
+  the master as auth_user default_admin (sentinel.conf). The built-in `default` is rendered
+  as `off` (symmetric with users.acl): otherwise, with an aclfile set but no default line,
+  the sentinel daemon would leave the built-in `default on nopass` active → passwordless
+  access to :26379. The sentinel aclfile carries only SYSTEM users (operator-extra is NOT
+  merged in here) → `default` is never in the map here → the off line is always added
+  (`index` gate same as users.acl.tmpl; hasKey is not in the sprig allowlist).
 */}}
 {{- if not (index .vars.users "default") }}
 user default off

@@ -1,34 +1,34 @@
 -- 060_create_choirs.up.sql
 --
--- ADR-044 → S-T2 schema: Choir (именованная топология хостов внутри
--- инкарнации) + Voice (членство SID в Choir-е). Источник правды declared-
--- топологии — отдельные PG-таблицы + CRUD (НЕ `incarnation.state`, который
--- коммитится только под cross-host barrier — ADR-044 пункт 4).
+-- ADR-044 → S-T2 schema: Choir (a named host topology within an
+-- incarnation) + Voice (SID membership in a Choir). The source of truth for the
+-- declared topology is separate PG tables + CRUD (NOT `incarnation.state`, which
+-- is committed only under the cross-host barrier - ADR-044 item 4).
 --
--- Три РАЗНЫХ слоя (ADR-044 пункт 1, не дублировать):
---   * membership = `incarnation.name` в `souls.coven[]` (как было; не трогаем);
---   * coven      = стабильные логические теги (ADR-008);
---   * Choir      = именованная позиция хоста ВНУТРИ инкарнации.
+-- Three DIFFERENT layers (ADR-044 item 1, do not conflate):
+--   * membership = `incarnation.name` in `souls.coven[]` (as before; untouched);
+--   * coven      = stable logical tags (ADR-008);
+--   * Choir      = a host's named position WITHIN an incarnation.
 --
--- Choir поглощает declared-роль (`incarnation.spec.hosts[].role` → `voice.role`,
--- ADR-044 пункт 2): `voice.role` — единственный источник declared-топологии
--- (питает `soulprint.hosts[].role` на S-T4).
+-- Choir absorbs the declared role (`incarnation.spec.hosts[].role` → `voice.role`,
+-- ADR-044 item 2): `voice.role` is the sole source of the declared topology
+-- (feeds `soulprint.hosts[].role` at S-T4).
 --
--- Мультиинкарнационность (ADR-044 пункт 3): один SID легально является Voice в
--- Choir-ах РАЗНЫХ инкарнаций — PK включает incarnation_name, поэтому никакой
--- глобальной sid-уникальности НЕТ намеренно.
+-- Multi-incarnation membership (ADR-044 item 3): a single SID can legally be a Voice in
+-- Choirs of DIFFERENT incarnations - the PK includes incarnation_name, so there is
+-- deliberately NO global sid uniqueness.
 --
 -- FK:
 --   * incarnation_choirs.incarnation_name → incarnation(name) ON DELETE CASCADE
---     (снос инкарнации сносит её Choir-ы и каскадом их Voice-ы).
+--     (removing an incarnation removes its Choirs and cascades to their Voices).
 --   * incarnation_choirs.created_by_aid   → operators(aid) ON DELETE SET NULL
---     (Архонт-создатель; удаление оператора не теряет Choir).
+--     (the creating Archon; deleting the operator doesn't lose the Choir).
 --   * incarnation_choir_voices (incarnation_name, choir_name)
 --       → incarnation_choirs (incarnation_name, choir_name) ON DELETE CASCADE.
 --   * incarnation_choir_voices.sid          → souls(sid) ON DELETE CASCADE
---     (снос Soul-а из реестра убирает его Voice-ы; членство = souls.coven —
---     инвариант «Voice только для члена инкарнации» проверяется в CRUD-слое,
---     не FK-ом, т.к. членство — это значение элемента массива coven, не FK).
+--     (removing a Soul from the registry removes its Voices; membership = souls.coven -
+--     the invariant "a Voice only for an incarnation member" is checked at the CRUD
+--     layer, not via FK, since membership is the value of a coven array element, not an FK).
 --   * incarnation_choir_voices.added_by_aid → operators(aid) ON DELETE SET NULL.
 
 CREATE TABLE incarnation_choirs (
@@ -78,13 +78,13 @@ CREATE TABLE incarnation_choir_voices (
         FOREIGN KEY (added_by_aid) REFERENCES operators (aid) ON DELETE SET NULL
 );
 
--- Lookup всех Voice-ов одного хоста (для виртуальной проекции
--- `soulprint.self.choirs` — S-T4 Keeper-side join per-SID).
+-- Lookup of all Voices for a single host (for the virtual projection
+-- `soulprint.self.choirs` - S-T4 Keeper-side join per-SID).
 CREATE INDEX incarnation_choir_voices_sid_idx
     ON incarnation_choir_voices (sid);
 
 COMMENT ON TABLE incarnation_choirs IS
-    'Choir — именованная топология хостов внутри инкарнации (ADR-044, S-T2). Declared-группа («партия хора»); источник правды declared-топологии, НЕ incarnation.state. Choir != coven (ADR-008) и != membership (souls.coven).';
+    'Choir - a named host topology within an incarnation (ADR-044, S-T2). A declared group (a "choir part"); source of truth for the declared topology, NOT incarnation.state. Choir != coven (ADR-008) and != membership (souls.coven).';
 
 COMMENT ON TABLE incarnation_choir_voices IS
-    'Voice — членство SID в Choir-е (ADR-044, S-T2). role — поглощённая declared-роль (spec.hosts[].role, ADR-044 пункт 2); position — порядковый индекс внутри партии. Инвариант: SID уже член инкарнации (souls.coven содержит incarnation.name) — проверяется в CRUD-слое. Один SID легально является Voice в разных инкарнациях (PK включает incarnation_name; глобальной sid-уникальности нет намеренно).';
+    'Voice - SID membership in a Choir (ADR-044, S-T2). role - the absorbed declared role (spec.hosts[].role, ADR-044 item 2); position - ordinal index within the part. Invariant: the SID is already an incarnation member (souls.coven contains incarnation.name) - checked at the CRUD layer. A single SID can legally be a Voice in different incarnations (the PK includes incarnation_name; deliberately no global sid uniqueness).';

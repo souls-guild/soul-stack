@@ -1,18 +1,18 @@
-# Makefile для Soul Stack. POSIX-совместимые таргеты для macOS-dev и Linux-CI.
+# Makefile for Soul Stack. POSIX-compatible targets for macOS-dev and Linux-CI.
 #
-# protoc-плагины ставятся через `go install` и попадают в $(go env GOPATH)/bin,
-# которого может не быть в PATH. Прокидываем явно, чтобы `protoc --go_out`
-# нашёл `protoc-gen-go` и `protoc-gen-go-grpc`.
+# protoc plugins are installed via `go install` and land in $(go env GOPATH)/bin,
+# which may not be in PATH. We propagate it explicitly so `protoc --go_out`
+# finds `protoc-gen-go` and `protoc-gen-go-grpc`.
 
 SHELL := /bin/sh
 
 GOPATH_BIN := $(shell go env GOPATH)/bin
 export PATH := $(GOPATH_BIN):$(PATH)
 
-# Keeper-протоколы и plugin-протоколы.
-# Keeper живёт в общем модуле proto/ (ADR-011) → один вызов protoc с
-# proto_path=proto и output=proto/gen/go/. Plugin — отдельный вложенный
-# go.mod-подмодуль → второй вызов protoc, свой proto_path/output.
+# Keeper protocols and plugin protocols.
+# Keeper lives in the shared proto/ module (ADR-011) -> one protoc invocation with
+# proto_path=proto and output=proto/gen/go/. Plugin is a separate nested
+# go.mod submodule -> a second protoc invocation, its own proto_path/output.
 KEEPER_PROTO_ROOT := proto
 KEEPER_PROTO_OUT  := proto/gen/go
 KEEPER_PROTO_FILES := $(shell find $(KEEPER_PROTO_ROOT)/keeper -name '*.proto')
@@ -21,73 +21,73 @@ PLUGIN_PROTO_ROOT := proto/plugin
 PLUGIN_PROTO_OUT  := proto/plugin/gen/go
 PLUGIN_PROTO_FILES := $(shell find $(PLUGIN_PROTO_ROOT)/v1 -name '*.proto')
 
-# govulncheck — supply-chain CI-гейт (орг-рекомендация ИБ-аудита до беты).
-# Бинарь ставится через `go install` в $(GOPATH)/bin (паттерн protoc-плагинов).
-# Версия pinned — float версии всплыл бы как нестабильность гейта. Полный путь к
-# бинарю (macOS-make минует exported PATH для простых recipe-строк).
+# govulncheck - supply-chain CI gate (org security-audit recommendation before beta).
+# The binary is installed via `go install` into $(GOPATH)/bin (same pattern as protoc plugins).
+# Version is pinned - a floating version would surface as gate instability. Full path to
+# the binary (macOS-make bypasses exported PATH for plain recipe lines).
 GOVULNCHECK_VERSION := v1.3.0
 GOVULNCHECK := $(GOPATH_BIN)/govulncheck
 
 MODULES := proto proto/plugin shared sdk keeper soul soul-lint soulctl
 
-# Каталог для собранных бинарей относительно корня каждого модуля с `main`.
-# Покрывается `.gitignore` (`*/bin/`).
+# Directory for built binaries relative to the root of each module with `main`.
+# Covered by `.gitignore` (`*/bin/`).
 BIN_DIR := bin
 
-# Путь к собранному офлайн-линтеру (используется таргетом `lint`).
+# Path to the built offline linter (used by the `lint` target).
 LINT_BIN := soul-lint/$(BIN_DIR)/soul-lint
 
-# Путь к собранному L0-runner-у (используется таргетом `trial`). Бинарь собирается
-# в рамках `build`, как и soul-lint.
+# Path to the built L0 runner (used by the `trial` target). The binary is built
+# as part of `build`, same as soul-lint.
 TRIAL_BIN := keeper/$(BIN_DIR)/soul-trial
 
-# Сервисы, ИСКЛЮЧЁННЫЕ из гейтового прогона `trial` (см. таргет). Это НЕ «зелёный
-# по умолчанию» — список явный и громкий: каждый skip печатается с причиной, чтобы
-# исключение было видно в логе CI и не маскировало новый регресс. Сейчас пуст:
-# единственный обитатель (redis-monitored) удалён вместе с сервисом при
-# redis-консолидации.
+# Services EXCLUDED from the gate run of `trial` (see target). This is NOT "green
+# by default" - the list is explicit and loud: every skip prints its reason so the
+# exclusion is visible in the CI log and doesn't mask a new regression. Currently empty:
+# the sole former entry (redis-monitored) was removed along with the service during
+# the redis consolidation.
 TRIAL_SKIP :=
 
-# Версия сборки. По умолчанию выводится из git: ближайший тег + короткий хеш,
-# суффикс `-dirty` при незакоммиченных правках (`git describe`). На голом
-# чекауте без тегов выпадет короткий хеш (`--always`). Переопределяется снаружи:
-# `make build VERSION=v1.2.3` (так делает release-pipeline).
+# Build version. Defaults to git-derived: nearest tag + short hash,
+# `-dirty` suffix for uncommitted changes (`git describe`). On a bare
+# checkout without tags it falls back to a short hash (`--always`). Overridden externally:
+# `make build VERSION=v1.2.3` (this is what the release pipeline does).
 VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo 0.0.0-dev)
 
-# ldflags-инъекция версии. `-X <pkg>.<var>=<value>` перезаписывает package-level
-# string-переменную на этапе линковки — без правки исходника. ВАЖНО: внутри
-# собираемого бинаря entrypoint-пакет адресуется как `main`, а НЕ как его
-# import-path — поэтому путь к переменной `main.<var>`, а не полный
-# `github.com/.../cmd/<x>.<var>` (последний линкер молча игнорирует — строка
-# попадает в data-секцию, но к символу не привязывается). Каждый бинарь
-# собирается отдельной `go build ./cmd/<x>`, в каждой ровно один `main` — `-X
-# main.<var>` однозначен. Один git-тег = версия всех модулей (ADR-011), поэтому
-# $(VERSION) общий. Имя version-переменной у каждого своё (исторически):
-# `soul` → soulVersion, `keeper` → version, `soulctl` → soulctlVersion.
-# `soul-lint` version-переменной не имеет (офлайн-линтер, версию нигде не печатает).
+# ldflags version injection. `-X <pkg>.<var>=<value>` overwrites a package-level
+# string variable at link time - without touching the source. IMPORTANT: inside
+# the binary being built, the entrypoint package is addressed as `main`, NOT as its
+# import path - so the variable path is `main.<var>`, not the full
+# `github.com/.../cmd/<x>.<var>` (the linker silently ignores the latter - the string
+# lands in the data section but isn't bound to the symbol). Each binary is
+# built with a separate `go build ./cmd/<x>`, and each has exactly one `main` - `-X
+# main.<var>` is unambiguous. One git tag = the version of all modules (ADR-011), so
+# $(VERSION) is shared. The version variable's name differs per binary (historically):
+# `soul` -> soulVersion, `keeper` -> version, `soulctl` -> soulctlVersion.
+# `soul-lint` has no version variable (offline linter, never prints a version).
 SOUL_LDFLAGS := -X main.soulVersion=$(VERSION)
 KEEPER_LDFLAGS := -X main.version=$(VERSION)
 SOULCTL_LDFLAGS := -X main.soulctlVersion=$(VERSION)
 
 # --- Release/packaging ---
-# Корень build-артефактов (SBOM, нативные пакеты). Целиком в .gitignore (dist/) —
-# артефакты сборки не коммитим.
+# Root of build artifacts (SBOM, native packages). Entirely in .gitignore (dist/) -
+# build artifacts are not committed.
 DIST_DIR := dist
 SBOM_DIR := $(DIST_DIR)/sbom
 PKG_DIR  := $(DIST_DIR)/pkg
 
-# Целевая Linux-архитектура нативных пакетов (deb/rpm всегда под Linux).
-# Переопределяется снаружи: `make pkg PKG_ARCH=arm64`. nfpm читает ${ARCH} из
-# окружения для ${ARCH}-подстановки в deploy/nfpm/*.yaml.
+# Target Linux architecture for native packages (deb/rpm are always Linux).
+# Overridden externally: `make pkg PKG_ARCH=arm64`. nfpm reads ${ARCH} from
+# the environment for ${ARCH}-substitution in deploy/nfpm/*.yaml.
 PKG_ARCH ?= amd64
 
-# Имена прод-образов (таргеты docker-keeper / docker-soul). Локальные теги по
-# умолчанию — `soul-stack/keeper` и `soul-stack/soul`; оператор перетегирует под
-# свой registry перед push (`docker tag soul-stack/keeper:$(VERSION)
-# <registry>/keeper:$(VERSION)`) либо собирает сразу под него:
-# `make docker-keeper KEEPER_IMAGE=<registry>/keeper`. Тег версии — общий
-# $(VERSION) (git describe / release-override), он же уходит в ldflags бинаря и
-# OCI-метку образа. soul-lint прод-образа НЕ имеет (офлайн-линтер, не прод-рантайм).
+# Prod-image names (docker-keeper / docker-soul targets). Local tags default to
+# `soul-stack/keeper` and `soul-stack/soul`; the operator retags them for their
+# own registry before push (`docker tag soul-stack/keeper:$(VERSION)
+# <registry>/keeper:$(VERSION)`) or builds directly against it:
+# `make docker-keeper KEEPER_IMAGE=<registry>/keeper`. The version tag is the shared
+# $(VERSION) (git describe / release-override), which also lands in the binary's
+# ldflags and the image's OCI label. soul-lint has no prod image (offline linter, not a prod runtime).
 KEEPER_IMAGE ?= soul-stack/keeper
 SOUL_IMAGE   ?= soul-stack/soul
 
@@ -120,22 +120,22 @@ gen: gen-openapi
 			$(PLUGIN_PROTO_FILES); \
 	fi
 
-# gen-openapi — committed docs/keeper/openapi.yaml как ПРОИЗВОДНЫЙ huma-генерат
-# (OpenAPI 3.1, для UI-vendor + git-ревью). Источник правды — huma-агрегатор в
-# коде (HumaFullSpecYAML); рукописи openapi.yaml больше нет. Запись делает
-# generate-тест в пакете api под GEN_OPENAPI=1 (без отдельного cmd-бинаря).
-# `-count=1` отключает кеш (тест пишет файл — кешировать нечего).
+# gen-openapi - commits docs/keeper/openapi.yaml as a DERIVED huma-generated file
+# (OpenAPI 3.1, for UI-vendor + git-review). Source of truth is the huma aggregator in
+# the code (HumaFullSpecYAML); there's no hand-written openapi.yaml anymore. The write is done by
+# a generate-test in the api package under GEN_OPENAPI=1 (no separate cmd-binary).
+# `-count=1` disables the cache (the test writes a file - nothing to cache).
 gen-openapi:
 	@echo "huma-dump -> $(OPENAPI_COMMITTED)"
 	@GEN_OPENAPI=1 go test ./keeper/internal/api/ -run TestCommittedOpenAPI_NoDrift -count=1 >/dev/null
 
-# Сборка трёх бинарей (`keeper`, `soul`, `soul-lint`) с явным `-o <module>/bin/<name>`,
-# чтобы артефакты не падали в корень модуля и не цеплялись git-ом.
-# Library-модули (`proto`, `proto/plugin`, `shared`, `sdk`) собираются без
-# `-o` через `go build ./...` для верификации компиляции; они не порождают
-# исполняемых файлов. Модули без go-пакетов (например, `proto/plugin/` до
-# появления первых .proto под него) пропускаются по `go list ./...`, иначе
-# `go build ./...` падает с "matched no packages".
+# Builds the three binaries (`keeper`, `soul`, `soul-lint`) with an explicit `-o <module>/bin/<name>`,
+# so artifacts don't land in the module root and get picked up by git.
+# Library modules (`proto`, `proto/plugin`, `shared`, `sdk`) are built without
+# `-o` via `go build ./...` to verify compilation; they don't produce
+# executables. Modules without go packages (e.g. `proto/plugin/` before
+# its first .proto appears) are skipped via `go list ./...`, otherwise
+# `go build ./...` fails with "matched no packages".
 build:
 	@for m in proto proto/plugin shared sdk; do \
 		if [ -z "$$(cd $$m && go list ./... 2>/dev/null)" ]; then \
@@ -155,24 +155,24 @@ build:
 	@cd soul-lint && go build -o $(BIN_DIR)/soul-lint ./cmd/soul-lint
 	@$(MAKE) build-soulctl
 
-# Сборка клиентского CLI оператора (см. docs/naming-rules.md → soulctl).
-# Каркас на cobra без реализованных тел команд — отдельный таргет, чтобы можно
-# было собирать независимо от keeper/soul (другой жизненный цикл, без depend-инфры).
+# Builds the operator's client CLI (see docs/naming-rules.md -> soulctl).
+# Cobra scaffold with no command bodies implemented yet - a separate target so it
+# can be built independently of keeper/soul (different lifecycle, no depend-infra).
 build-soulctl:
 	@echo "go build -o soulctl/$(BIN_DIR)/soulctl ./cmd/soulctl in soulctl (VERSION=$(VERSION))"
 	@cd soulctl && go build -ldflags '$(SOULCTL_LDFLAGS)' -o $(BIN_DIR)/soulctl ./cmd/soulctl
 
-# Модули без go-пакетов пропускаются по `go list ./...` — то же правило,
-# что и в `build`. На текущем этапе под фильтр попадает `proto/plugin/`.
+# Modules without go packages are skipped via `go list ./...` - same rule
+# as in `build`. At this stage `proto/plugin/` falls under the filter.
 #
-# `-count=1` отключает go-test-кеш. КРИТИЧНО для гейта, не оптимизация: go кеширует
-# результат пакета по хешу его `.go`-исходников (+ объявленных входов), но НЕ по
-# содержимому произвольных файлов, прочитанных в рантайме через `os.ReadFile` по
-# пути (напр. keeper/internal/render рендерит examples/destiny/*/templates/*.tmpl).
-# Без `-count=1` правка такого .tmpl (без правки .go-теста) оставляет результат
-# `(cached) ok` — красный тест проходит гейт молча (так сломанный redis-render
-# проехал в f40da00: conf_dir/data_dir-волна сменила .tmpl, не тронув .go-тест).
-# Тот же приём уже стоит в test-plugins / test-integration / gen-openapi.
+# `-count=1` disables the go-test cache. CRITICAL for the gate, not an optimization: go caches
+# a package's result by the hash of its `.go` sources (+ declared inputs), but NOT by
+# the content of arbitrary files read at runtime via `os.ReadFile` by
+# path (e.g. keeper/internal/render renders examples/destiny/*/templates/*.tmpl).
+# Without `-count=1`, editing such a .tmpl (without touching the .go test) leaves the result
+# `(cached) ok` - a broken test passes the gate silently (this is how the broken redis-render
+# slipped through in f40da00: a conf_dir/data_dir wave changed the .tmpl without touching the .go test).
+# The same trick is already in place in test-plugins / test-integration / gen-openapi.
 test:
 	@for m in $(MODULES); do \
 		if [ -z "$$(cd $$m && go list ./... 2>/dev/null)" ]; then \
@@ -183,36 +183,37 @@ test:
 		(cd $$m && go test -count=1 ./...) || exit 1; \
 	done
 
-# Тесты community-плагинов examples/module/* — каждый ОТДЕЛЬНЫЙ go.mod ВНЕ go.work
-# (ADR-016: community-плагины тянут ядро как обычную зависимость, не workspace-member).
-# Поэтому гоняются с `GOWORK=off` per-module, а НЕ через MODULES-список `make test`
-# (тот их вообще не видит). Покрывает в т.ч. security-guard на маскинг секретов
-# плагина community.redis (59 тест-функций), которые иначе остались бы вне гейта.
+# Tests for community plugins examples/module/* - each is a SEPARATE go.mod OUTSIDE go.work
+# (ADR-016: community plugins pull the core as a regular dependency, not a workspace member).
+# So they run with `GOWORK=off` per-module, and NOT via the MODULES list in `make test`
+# (which doesn't see them at all). This also covers the security guard on secret
+# masking in the community.redis plugin (59 test functions), which would otherwise
+# stay outside the gate.
 #
-# Skip-on-unresolvable: cloud/ssh-плагины (soul-cloud-*/soul-ssh-*) standalone-offline
-# не резолвятся (workspace-пины go.mod расходятся со standalone-tidy, нужна сеть).
-# `go list ./...` под GOWORK=off у них падает → пропускаем ГРОМКО с warning (тот же
-# приём, что `go list` empty → skip в `test`/`vet`). Это НЕ молчаливое прощение: skip
-# печатается, а резолвящийся offline плагин (community.redis) под него не попадает —
-# его регресс гейт ловит. Merge()-тесты НЕ здесь: они в shared/cel (workspace,
-# покрыты `make test`), дублировать не нужно.
-# `-count=1` — без кеша (плагин может зависеть от внешнего fake-состояния).
+# Skip-on-unresolvable: cloud/ssh plugins (soul-cloud-*/soul-ssh-*) don't resolve
+# standalone-offline (workspace go.mod pins diverge from standalone-tidy, needs network).
+# `go list ./...` under GOWORK=off fails for them -> we skip LOUDLY with a warning (the same
+# trick as `go list` empty -> skip in `test`/`vet`). This is NOT a silent pass: the skip
+# is printed, and a plugin that *does* resolve offline (community.redis) isn't covered by it -
+# its regressions are caught by the gate. Merge() tests are NOT here: they live in shared/cel
+# (workspace, covered by `make test`), no need to duplicate.
+# `-count=1` - no cache (the plugin may depend on external fake state).
 test-plugins:
 	@for d in examples/module/*/go.mod; do \
 		[ -e "$$d" ] || continue; \
 		m=$$(dirname "$$d"); \
 		if ! (cd "$$m" && GOWORK=off go list ./... >/dev/null 2>&1); then \
-			echo "skip $$m (standalone-offline не резолвится — GOWORK=off go list упал; cloud/ssh-плагин или go.mod-drift)"; \
+			echo "skip $$m (standalone-offline doesn't resolve - GOWORK=off go list failed; cloud/ssh plugin or go.mod drift)"; \
 			continue; \
 		fi; \
 		echo "GOWORK=off go test -count=1 ./... in $$m"; \
 		(cd "$$m" && GOWORK=off go test -count=1 ./...) || exit 1; \
 	done
-	@echo "test-plugins: community-плагины (resolvable offline) зелёные"
+	@echo "test-plugins: community plugins (resolvable offline) green"
 
-# Прогон тестов с race detector — отдельным таргетом, чтобы обычный `make test`
-# оставался быстрым. CI должен гонять оба: `test` (быстро, на каждый push) и
-# `test-race` (отдельным шагом перед merge).
+# Runs tests with the race detector - a separate target so the plain `make test`
+# stays fast. CI should run both: `test` (fast, on every push) and
+# `test-race` (a separate step before merge).
 test-race:
 	@for m in $(MODULES); do \
 		if [ -z "$$(cd $$m && go list ./... 2>/dev/null)" ]; then \
@@ -223,11 +224,11 @@ test-race:
 		(cd $$m && go test -race ./...) || exit 1; \
 	done
 
-# Интеграционные тесты под build-tag `integration` (testcontainers-go).
-# Отдельный таргет — `make test` не требует docker, остаётся быстрым.
-# Файлы с тегом `integration` НЕ собираются обычным `go test ./...`, поэтому
-# тут передаём `-tags=integration` явно. `-count=1` отключает кеш Go-тестов
-# (поднятый контейнер каждый раз новый — кешировать нечего).
+# Integration tests under the `integration` build tag (testcontainers-go).
+# A separate target - `make test` doesn't need docker and stays fast.
+# Files tagged `integration` are NOT built by a plain `go test ./...`, so
+# we pass `-tags=integration` explicitly here. `-count=1` disables the Go test cache
+# (the container spun up is new every time - nothing to cache).
 test-integration:
 	@for m in $(MODULES); do \
 		if [ -z "$$(cd $$m && go list ./... 2>/dev/null)" ]; then \
@@ -238,10 +239,10 @@ test-integration:
 		(cd $$m && go test -tags=integration -race -count=1 ./...) || exit 1; \
 	done
 
-# L3a fast-loop E2E (ADR-039): рабочий harness — testcontainers (PG+Redis+Vault) +
-# реальный Keeper-процесс + soul-stub с live gRPC-mTLS. Отдельный go-модуль
-# tests/e2e/ под build-tag `e2e` (deps testcontainers не утекают в основные
-# keeper/soul). НЕ входит в `check` (требует docker); деталь — tests/e2e/README.md.
+# L3a fast-loop E2E (ADR-039): the working harness - testcontainers (PG+Redis+Vault) +
+# a real Keeper process + a soul-stub with live gRPC-mTLS. A separate go module
+# tests/e2e/ under the `e2e` build tag (testcontainers deps don't leak into the main
+# keeper/soul). NOT part of `check` (requires docker); details in tests/e2e/README.md.
 e2e:
 	@if [ -z "$$(cd tests/e2e && go list -tags=e2e ./... 2>/dev/null)" ]; then \
 		echo "skip tests/e2e (no Go packages under build-tag e2e)"; \
@@ -250,20 +251,20 @@ e2e:
 		(cd tests/e2e && go test -tags=e2e -timeout=10m ./...) || exit 1; \
 	fi
 
-# Cross-compile одного бинаря под Linux amd64 в его `bin/` с суффиксом
-# `-linux-amd64`. Общий рецепт per-компонент bin-целей и агрегата build-linux.
-# $(1) — модуль/каталог (keeper|soul|soul-lint), $(2) — имя cmd-пакета (=имя
-# бинаря: keeper|soul|soul-lint), $(3) — ldflags (у soul-lint пусто — нет
-# version-переменной). CGO_ENABLED=0 — статика, без зависимости на libc внутри
-# контейнера (Debian-12 совместим, но статика проще). Нативный `make build` не
-# задеваем (macOS-разработчик собирает host-arch).
+# Cross-compiles a single binary for Linux amd64 into its `bin/` with the
+# `-linux-amd64` suffix. Shared recipe for the per-component bin-targets and the
+# build-linux aggregate. $(1) - module/directory (keeper|soul|soul-lint), $(2) - the
+# cmd-package name (= binary name: keeper|soul|soul-lint), $(3) - ldflags (empty for
+# soul-lint - no version variable). CGO_ENABLED=0 - static, no dependency on libc inside
+# the container (Debian-12 compatible, but static is simpler). Doesn't touch the
+# native `make build` (macOS developers build host-arch).
 define bin-one
 	@echo "GOOS=linux GOARCH=amd64 go build -o $(1)/$(BIN_DIR)/$(2)-linux-amd64 ./cmd/$(2) in $(1) (VERSION=$(VERSION))"
 	@cd $(1) && CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -ldflags '$(3)' -o $(BIN_DIR)/$(2)-linux-amd64 ./cmd/$(2)
 endef
 
-# Per-компонент cross-compile (linux-amd64). bin-keeper / bin-soul — артефакты для
-# L3b real-soul-container и ad-hoc прогонов; build-linux — агрегат всех трёх.
+# Per-component cross-compile (linux-amd64). bin-keeper / bin-soul - artifacts for
+# L3b real-soul-container and ad-hoc runs; build-linux - the aggregate of all three.
 bin-keeper:
 	$(call bin-one,keeper,keeper,$(KEEPER_LDFLAGS))
 
@@ -273,18 +274,18 @@ bin-soul:
 bin-soul-lint:
 	$(call bin-one,soul-lint,soul-lint,)
 
-# build-linux — агрегат: keeper+soul под Linux amd64 (для L3b real-soul-container,
-# ADR-039). Состав не меняем (soul-lint в L3b не нужен) — для соло-сборок есть
+# build-linux - the aggregate: keeper+soul for Linux amd64 (for L3b real-soul-container,
+# ADR-039). Not changing the set (soul-lint isn't needed in L3b) - for solo builds there's
 # bin-keeper / bin-soul / bin-soul-lint.
 build-linux: bin-keeper bin-soul
 
-# L3b smoke-loop E2E (ADR-039): real-soul-binary в privileged Debian-12
-# контейнере + Keeper-процесс на хосте. Требует docker и `make build-linux`
-# (cross-compile linux-amd64 binary для mount в контейнер). НЕ входит в `check`
-# (длительный — 5-15 мин на тест; runs nightly/on-demand).
+# L3b smoke-loop E2E (ADR-039): a real-soul-binary in a privileged Debian-12
+# container + a Keeper process on the host. Requires docker and `make build-linux`
+# (cross-compile the linux-amd64 binary for mounting into the container). NOT part of `check`
+# (long-running - 5-15 min per test; runs nightly/on-demand).
 #
-# `-p 1` — serial (RAM-heavy: privileged-контейнеры с systemd + apt-install
-# одновременно убьют ноутбук разработчика). Architect-рекомендация.
+# `-p 1` - serial (RAM-heavy: privileged containers with systemd + apt-install
+# running concurrently would kill a developer's laptop). Architect recommendation.
 e2e-live: build-linux
 	@if [ -z "$$(cd tests/e2e-live && go list -tags=e2e_live ./... 2>/dev/null)" ]; then \
 		echo "skip tests/e2e-live (no Go packages under build-tag e2e_live)"; \
@@ -293,35 +294,35 @@ e2e-live: build-linux
 		(cd tests/e2e-live && go test -tags=e2e_live -count=1 -timeout=30m -p 1 ./...) || exit 1; \
 	fi
 
-# e2e-live-gate — ОБЯЗАТЕЛЬНЫЙ локальный live-гейт перед батч-коммитом крупной
-# фичи (~15-25 мин, docker). L3b-подмножество: механика доставки SoulModule
-# (TestL3bModuleDeliveryLive — ADR-065 install-synthesis → FetchModule → Sigil-verify
-# → hot-register → живое apply против redis) + apply-смок nginx (TestL3bSmokeNginxLive)
-# + smoke plugin-канала (TestL3bPluginChannel) + day-2 add_user на живом redis
-# (TestL3bRedisLive_Day2AddUser — весь плагин-канал ADR-065 против реального redis+sentinel)
-# + day-2 update_config/restart/update_users/destroy/rotate_tls (CA-rollover) на том же канале.
-# Полный `make e2e-live` остаётся nightly/pre-release.
+# e2e-live-gate - the MANDATORY local live gate before a batch-commit of a large
+# feature (~15-25 min, docker). L3b subset: SoulModule delivery mechanics
+# (TestL3bModuleDeliveryLive - ADR-065 install-synthesis -> FetchModule -> Sigil-verify
+# -> hot-register -> live apply against redis) + nginx apply smoke (TestL3bSmokeNginxLive)
+# + plugin-channel smoke (TestL3bPluginChannel) + operational add_user against live redis
+# (TestL3bRedisLive_Day2AddUser - the full ADR-065 plugin channel against real redis+sentinel)
+# + operational update_config/restart/update_users/destroy/rotate_tls (CA rollover) on the same channel.
+# The full `make e2e-live` remains nightly/pre-release.
 #
-# Deps ОТЛИЧАЮТСЯ от e2e-live: нужен ещё нативный `build` — harness запускает
-# Keeper НА ХОСТЕ (host-arch keeper/bin/keeper, см. locateKeeperBinary), а не в
-# контейнере. Плагин community.redis собирает сам тест (harness.BuildCommunityRedisPlugin),
-# в Makefile его сборка не нужна.
+# Deps DIFFER from e2e-live: also needs the native `build` - the harness runs
+# Keeper ON THE HOST (host-arch keeper/bin/keeper, see locateKeeperBinary), not in a
+# container. The community.redis plugin is built by the test itself (harness.BuildCommunityRedisPlugin),
+# no need to build it in the Makefile.
 #
-# E2E_KEEPER_HOST — IP, по которому soul-контейнер дозванивается до Keeper-на-хосте;
-# на WSL2 нужен явный LAN-IP (localhost из контейнера не виден). Не задан снаружи —
-# автодетект первого IP через `hostname -I`.
+# E2E_KEEPER_HOST - the IP the soul container uses to reach Keeper on the host;
+# on WSL2 an explicit LAN IP is needed (localhost isn't visible from the container). If not set
+# externally - auto-detects the first IP via `hostname -I`.
 #
-# NIM-45 anti-false-green (гейт обязан либо реально прогнать, либо честно упасть):
-#  - `build` — нативный keeper на дефолтный путь harness-а `keeper/bin/keeper`;
-#    без него `build-linux` даёт лишь keeper-linux-amd64, NewStack ТИХО скипает.
-#  - `-count=1` — иначе go-test-кеш отдаёт `ok (cached)` за секунды (false-green).
-#  - guard: fail при `(cached)` в summary или если любой gate-тест не дал `--- PASS`.
-# SHELL=bash — для `set -o pipefail` (сохранить exit go test через tee).
+# NIM-45 anti-false-green (the gate must either actually run, or fail honestly):
+#  - `build` - the native keeper at the harness's default path `keeper/bin/keeper`;
+#    without it `build-linux` only gives keeper-linux-amd64, and NewStack SILENTLY skips.
+#  - `-count=1` - otherwise the go-test cache returns `ok (cached)` in seconds (false-green).
+#  - guard: fails on `(cached)` in the summary, or if any gate test didn't give `--- PASS`.
+# SHELL=bash - for `set -o pipefail` (preserve go test's exit code through tee).
 e2e-live-gate: SHELL := /bin/bash
 e2e-live-gate: build build-linux
-	@echo "e2e-live-gate: harness unit-guard (docker-free) — WaitApplySuccess apply-брекет NIM-46"
+	@echo "e2e-live-gate: harness unit-guard (docker-free) - WaitApplySuccess apply bracket NIM-46"
 	@(cd tests/e2e-live && go test -run '^TestApplySettled$$' -count=1 ./harness/) \
-		|| { echo "e2e-live-gate: FALSE-GREEN — harness unit-guard TestApplySettled упал" >&2; exit 1; }
+		|| { echo "e2e-live-gate: FALSE-GREEN - harness unit-guard TestApplySettled failed" >&2; exit 1; }
 	@if [ -z "$$(cd tests/e2e-live && go list -tags=e2e_live ./... 2>/dev/null)" ]; then \
 		echo "skip tests/e2e-live (no Go packages under build-tag e2e_live)"; \
 	else \
@@ -333,85 +334,85 @@ e2e-live-gate: build build-linux
 		(cd tests/e2e-live && E2E_KEEPER_HOST=$$host go test -tags=e2e_live -v -count=1 -timeout 45m -p 1 -run "$$mask" .) 2>&1 | tee "$$log"; \
 		rc=$$?; \
 		if grep -qE '^ok[[:space:]].*\(cached\)' "$$log"; then \
-			echo "e2e-live-gate: FALSE-GREEN — '(cached)' в summary (кеш не отключён, -count=1 потерян)" >&2; exit 1; \
+			echo "e2e-live-gate: FALSE-GREEN - '(cached)' in summary (cache not disabled, -count=1 lost)" >&2; exit 1; \
 		fi; \
 		for tc in TestL3bModuleDeliveryLive TestL3bSmokeNginxLive TestL3bPluginChannel TestL3bRedisLive_Day2AddUser TestL3bRedisLive_Day2UpdateConfig TestL3bRedisLive_Day2Restart TestL3bRedisLive_Day2UpdateUsers TestL3bRedisLive_Day2Destroy TestL3bRedisLive_Day2RotateTls; do \
 			grep -q "^--- PASS: $$tc" "$$log" || { \
-				echo "e2e-live-gate: FALSE-GREEN — $$tc не дал '--- PASS' (skip/fail/не запущен)" >&2; exit 1; }; \
+				echo "e2e-live-gate: FALSE-GREEN - $$tc didn't give '--- PASS' (skip/fail/not run)" >&2; exit 1; }; \
 		done; \
-		[ $$rc -eq 0 ] && echo "e2e-live-gate: OK — все gate-тесты реально прогнаны (не cached, не skip)"; \
+		[ $$rc -eq 0 ] && echo "e2e-live-gate: OK - all gate tests actually ran (not cached, not skipped)"; \
 		exit $$rc; \
 	fi
 
-# docker-build-keeper — собирает образ `keeper:e2e-k8s` для L3c kind-cluster.
-# Переиспользует артефакт `make build-linux` (cross-compiled keeper-linux-amd64);
-# single-stage Dockerfile поверх distroless-runtime. PM-decision: образ
-# одноразовый, грузится в kind через `kind load docker-image`, в registry НЕ
-# публикуется. Контекст сборки — корень репо (Dockerfile COPY-ит из
+# docker-build-keeper - builds the `keeper:e2e-k8s` image for the L3c kind cluster.
+# Reuses the `make build-linux` artifact (cross-compiled keeper-linux-amd64);
+# single-stage Dockerfile on top of the distroless runtime. PM decision: the image
+# is disposable, loaded into kind via `kind load docker-image`, NOT
+# published to a registry. Build context - repo root (the Dockerfile COPYs from
 # `keeper/bin/keeper-linux-amd64`).
 #
-# Зависимость: `make build-linux` собирает linux-amd64 бинарь.
+# Dependency: `make build-linux` builds the linux-amd64 binary.
 docker-build-keeper: build-linux
 	@echo "docker build -t keeper:e2e-k8s -f tests/e2e-k8s/dockerfiles/keeper.Dockerfile ."
 	@docker build -t keeper:e2e-k8s -f tests/e2e-k8s/dockerfiles/keeper.Dockerfile .
 
-# docker-keeper — ПРОД-образ keeper для публикации в registry оператора. В
-# отличие от docker-build-keeper (одноразовый kind-образ, single-stage от
-# артефакта build-linux) — multi-stage самодостаточный билд из
-# deploy/docker/keeper.Dockerfile: пинит golang-тулчейн, не зависит от состояния
-# keeper/bin/, версия инжектится в бинарь (ldflags) и в OCI-метку
-# (--build-arg VERSION). Тег — $(KEEPER_IMAGE):$(VERSION) (versioned, не latest:
-# воспроизводимый rollback). Контекст сборки — корень репо.
+# docker-keeper - the PROD image of keeper for publishing to the operator's registry. Unlike
+# docker-build-keeper (a disposable kind image, single-stage from the
+# build-linux artifact) - a multi-stage self-contained build from
+# deploy/docker/keeper.Dockerfile: pins the golang toolchain, doesn't depend on the state of
+# keeper/bin/, the version is injected into the binary (ldflags) and the OCI label
+# (--build-arg VERSION). Tag - $(KEEPER_IMAGE):$(VERSION) (versioned, not latest:
+# reproducible rollback). Build context - repo root.
 #
-# Дальше оператор сам: `docker tag $(KEEPER_IMAGE):$(VERSION) <registry>/keeper:$(VERSION)`
-# → `docker push <registry>/keeper:$(VERSION)`. Bootstrap первого Архонта и
-# прод-конфиг — deploy/README.md → «Keeper в проде».
+# From there it's on the operator: `docker tag $(KEEPER_IMAGE):$(VERSION) <registry>/keeper:$(VERSION)`
+# -> `docker push <registry>/keeper:$(VERSION)`. Bootstrapping the first Archon and
+# prod config - deploy/README.md -> "Keeper in production".
 #
-# Требует docker в PATH (в отличие от build-linux/pkg). НЕ входит в `check`.
+# Requires docker in PATH (unlike build-linux/pkg). NOT part of `check`.
 docker-keeper:
 	@echo "docker build -t $(KEEPER_IMAGE):$(VERSION) --build-arg VERSION=$(VERSION) -f deploy/docker/keeper.Dockerfile ."
 	@docker build -t $(KEEPER_IMAGE):$(VERSION) --build-arg VERSION='$(VERSION)' -f deploy/docker/keeper.Dockerfile .
-	@echo "built $(KEEPER_IMAGE):$(VERSION) — перетегируйте под свой registry и push (см. deploy/README.md)"
+	@echo "built $(KEEPER_IMAGE):$(VERSION) - retag it for your registry and push (see deploy/README.md)"
 
-# docker-soul — ПРОД-образ soul (демон-агент) для публикации в registry оператора.
-# Симметрия с docker-keeper: multi-stage самодостаточный билд из
-# deploy/docker/soul.Dockerfile (distroless static-nonroot), версия инжектится в
-# бинарь (ldflags main.soulVersion) и в OCI-метку (--build-arg VERSION). Тег —
-# $(SOUL_IMAGE):$(VERSION). Контекст сборки — корень репо.
+# docker-soul - the PROD image of soul (the daemon agent) for publishing to the operator's registry.
+# Symmetric with docker-keeper: a multi-stage self-contained build from
+# deploy/docker/soul.Dockerfile (distroless static-nonroot), the version is injected into the
+# binary (ldflags main.soulVersion) and the OCI label (--build-arg VERSION). Tag -
+# $(SOUL_IMAGE):$(VERSION). Build context - repo root.
 #
-# В отличие от docker-build-soul (одноразовый privileged systemd-образ для L3c
-# kind, от артефакта build-linux) — этот образ самодостаточен и предназначен для
-# registry. soul-lint прод-образа не имеет (офлайн-линтер).
+# Unlike docker-build-soul (a disposable privileged systemd image for L3c
+# kind, from the build-linux artifact) - this image is self-contained and intended for the
+# registry. soul-lint has no prod image (offline linter).
 #
-# Требует docker в PATH (как docker-keeper). НЕ входит в `check`.
+# Requires docker in PATH (like docker-keeper). NOT part of `check`.
 docker-soul:
 	@echo "docker build -t $(SOUL_IMAGE):$(VERSION) --build-arg VERSION=$(VERSION) -f deploy/docker/soul.Dockerfile ."
 	@docker build -t $(SOUL_IMAGE):$(VERSION) --build-arg VERSION='$(VERSION)' -f deploy/docker/soul.Dockerfile .
-	@echo "built $(SOUL_IMAGE):$(VERSION) — перетегируйте под свой registry и push (см. deploy/README.md)"
+	@echo "built $(SOUL_IMAGE):$(VERSION) - retag it for your registry and push (see deploy/README.md)"
 
-# docker-build-soul — собирает образ `soul:e2e-k8s` для L3c kind-cluster
-# (L3c-3+). Privileged systemd-PID-1 Debian-12 base (parity с L3b), bake-ит
-# cross-compiled soul-linux-amd64 из артефакта `make build-linux`. Загружается
-# в kind через `kind load docker-image soul:e2e-k8s` (harness DeploySoul).
+# docker-build-soul - builds the `soul:e2e-k8s` image for the L3c kind cluster
+# (L3c-3+). Privileged systemd-PID-1 Debian-12 base (parity with L3b), bakes in the
+# cross-compiled soul-linux-amd64 from the `make build-linux` artifact. Loaded
+# into kind via `kind load docker-image soul:e2e-k8s` (harness DeploySoul).
 #
-# Контекст сборки — корень репо (Dockerfile COPY-ит из soul/bin/ и
+# Build context - repo root (the Dockerfile COPYs from soul/bin/ and
 # tests/e2e-k8s/manifests/soul/soul.service).
 docker-build-soul: build-linux
 	@echo "docker build -t soul:e2e-k8s -f tests/e2e-k8s/dockerfiles/soul.Dockerfile ."
 	@docker build -t soul:e2e-k8s -f tests/e2e-k8s/dockerfiles/soul.Dockerfile .
 
-# L3c k8s-loop E2E (ADR-039): kind-cluster + bitnami Helm (PG/Redis/Vault) +
-# raw YAML Keeper/Soul. Требует docker и kind CLI в PATH; без них тесты
-# скипаются (см. tests/e2e-k8s/harness/cluster.go::NewCluster pre-flight).
-# НЕ входит в `check` (длительный: kind spin-up + helm-install + image-load,
-# 5-15 мин на тест; runs weekly / pre-release).
+# L3c k8s-loop E2E (ADR-039): kind cluster + bitnami Helm (PG/Redis/Vault) +
+# raw YAML Keeper/Soul. Requires docker and kind CLI in PATH; without them the tests
+# are skipped (see tests/e2e-k8s/harness/cluster.go::NewCluster pre-flight).
+# NOT part of `check` (long-running: kind spin-up + helm-install + image-load,
+# 5-15 min per test; runs weekly / pre-release).
 #
-# Зависимость: `make docker-build-keeper` + `make docker-build-soul` собирают
-# образы keeper:e2e-k8s / soul:e2e-k8s, которые тесты L3c-2+ грузят в kind
-# через `kind load docker-image`.
+# Dependency: `make docker-build-keeper` + `make docker-build-soul` build the
+# keeper:e2e-k8s / soul:e2e-k8s images that the L3c-2+ tests load into kind
+# via `kind load docker-image`.
 #
-# `-p 1` — serial (RAM-heavy: каждый тест поднимает свой kind-cluster со
-# своими PG/Redis/Vault через bitnami Helm; параллель убьёт ноутбук).
+# `-p 1` - serial (RAM-heavy: each test spins up its own kind cluster with
+# its own PG/Redis/Vault via bitnami Helm; running in parallel would kill a laptop).
 e2e-k8s: docker-build-keeper docker-build-soul
 	@if [ -z "$$(cd tests/e2e-k8s && go list -tags=e2e_k8s ./... 2>/dev/null)" ]; then \
 		echo "skip tests/e2e-k8s (no Go packages under build-tag e2e_k8s)"; \
@@ -420,27 +421,27 @@ e2e-k8s: docker-build-keeper docker-build-soul
 		(cd tests/e2e-k8s && go test -tags=e2e_k8s -timeout=30m -p 1 ./...) || exit 1; \
 	fi
 
-# --- Облачный live-E2E оркестратор (NIM-31) ---
-# e2e-cloud — прогон облачного live-E2E поверх Operator API keeper'а через teleport
-# (EXEC_MODE=tsh) или прямой curl (EXEC_MODE=local). НЕ входит в `check` (требует
-# облака/teleport + пред-собранные артефакты; симметрично e2e / e2e-live). Bring-up-
-# скрипты (WB-специфика) живут локально в $$SCRIPTS_DIR и в git НЕ коммитятся — раннер
-# зовёт их рантайм. Suite — переменная SUITE (create|create-destroy|day2). Примеры:
+# --- Cloud live-E2E orchestrator (NIM-31) ---
+# e2e-cloud - runs the cloud live-E2E against the keeper's Operator API via teleport
+# (EXEC_MODE=tsh) or direct curl (EXEC_MODE=local). NOT part of `check` (requires
+# a cloud/teleport + pre-built artifacts; symmetric with e2e / e2e-live). Bring-up
+# scripts (WB-specific) live locally in $$SCRIPTS_DIR and are NOT committed to git - the runner
+# invokes them at runtime. Suite - the SUITE variable (create|create-destroy|day2). Examples:
 #   make e2e-cloud SUITE=create-destroy
-#   DRY_RUN=1 make e2e-cloud SUITE=day2 SCENARIO=add_user   # печать вызовов без сети
+#   DRY_RUN=1 make e2e-cloud SUITE=day2 SCENARIO=add_user   # print calls without network
 SUITE ?= create-destroy
 e2e-cloud:
 	@bash scripts/e2e-cloud/runbook.sh $(SUITE)
 
-# check-e2e-cloud — docker-free guard несущей логики оркестратора: classify/poll/
-# assert/run_scenario со стабом keeper_api на JSON-фикстурах (testdata/), мутац-пары
-# RED/GREEN. Входит в `check` рядом с прочими guard-шагами. Требует jq (как и dev-
-# скрипты репо: dev/provision.sh и др.); jq-less окружение падёт громко с подсказкой.
+# check-e2e-cloud - a docker-free guard for the orchestrator's core logic: classify/poll/
+# assert/run_scenario against a keeper_api stub on JSON fixtures (testdata/), RED/GREEN
+# mutation pairs. Part of `check` alongside the other guard steps. Requires jq (like the repo's
+# other dev scripts: dev/provision.sh etc.); a jq-less environment fails loudly with a hint.
 check-e2e-cloud:
 	@bash scripts/e2e-cloud/test/guard.sh
 
-# `go mod tidy` на модуле без go-файлов выдаёт "no Go files" и фейлится,
-# поэтому модули с пустым `go list ./...` так же пропускаются.
+# `go mod tidy` on a module with no go files prints "no Go files" and fails,
+# so modules with an empty `go list ./...` are skipped here too.
 tidy:
 	@for m in $(MODULES); do \
 		if [ -z "$$(cd $$m && go list ./... 2>/dev/null)" ]; then \
@@ -451,61 +452,61 @@ tidy:
 		(cd $$m && go mod tidy) || exit 1; \
 	done
 
-# Локальный dev-стек (docker-compose). См. `docs/dev/local-setup.md`.
-# `dev/docker-compose.yml` поднимает весь обязательный контур: Postgres, Redis,
-# Vault (dev-mode), OTel-collector и Jaeger.
+# Local dev stack (docker-compose). See `docs/dev/local-setup.md`.
+# `dev/docker-compose.yml` brings up the full required stack: Postgres, Redis,
+# Vault (dev-mode), OTel collector and Jaeger.
 #
-# `dev-down` НЕ удаляет volume — данные `postgres_data` сохраняются между
-# циклами `up/down`. Для полного сброса (миграция изменилась, БД в
-# inconsistent state) — `make dev-reset`.
+# `dev-down` does NOT remove the volume - `postgres_data` persists across
+# `up/down` cycles. For a full reset (migration changed, DB in an
+# inconsistent state) - `make dev-reset`.
 #
-# Стенд-aware (NIM-25): DEDICATED_INFRA=1 → свой docker-проект (COMPOSE_PROJECT_NAME=
-# ${STACK_PREFIX} = soul-stack-<slug>) + offset-порты, down/reset бьют ИМЕННО его.
-# Лёгкий режим (пустой DEV_STAND или DEDICATED_INFRA=0) — общая инфра, проект как раньше.
+# Stand-aware (NIM-25): DEDICATED_INFRA=1 -> its own docker project (COMPOSE_PROJECT_NAME=
+# ${STACK_PREFIX} = soul-stack-<slug>) + offset ports, down/reset hit ONLY that project.
+# Lightweight mode (empty DEV_STAND or DEDICATED_INFRA=0) - shared infra, project as before.
 dev-up:
 	@bash -c '. dev/stand-env.sh && stand_summary'
 	@bash -c 'set -e; . dev/stand-env.sh >/dev/null; if [ "$${DEDICATED_INFRA}" = "1" ]; then export COMPOSE_PROJECT_NAME="$${STACK_PREFIX}"; fi; cd dev && docker compose up -d'
 
-# `dev-down` сначала гасит локальные keeper/soul-демоны dev-воркфлоу
-# (см. `dev-stop`), потом инфру docker-compose. Иначе orphan-`keeper run`
-# от прошлой сессии висит и держит порты (8080/8081/9090/9442/9443) —
-# свежий запуск падает на `bind: address already in use`.
+# `dev-down` first kills the local keeper/soul dev-workflow daemons
+# (see `dev-stop`), then the docker-compose infra. Otherwise an orphan `keeper run`
+# from a previous session lingers and holds the ports (8080/8081/9090/9442/9443) -
+# a fresh start fails with `bind: address already in use`.
 dev-down: dev-stop
 	@bash -c 'set -e; . dev/stand-env.sh >/dev/null; if [ "$${DEDICATED_INFRA}" = "1" ]; then export COMPOSE_PROJECT_NAME="$${STACK_PREFIX}"; fi; cd dev && docker compose down'
 
-# Гасит демоны ЭТОГО стенда (DEV_STAND): keeper/web по pidfile в ${STAND_DEV_DIR}
-# (keeper-run/web-run их пишут), souls — по stand-scoped паттерну (--config под
-# ${STAND_DEV_DIR}/). Пустой DEV_STAND = только default-стенд; соседние стенды НЕ
-# задеваются (было: широкий pkill по имени, убивавший все стенды). NIM-25.
+# Kills THIS stand's daemons (DEV_STAND): keeper/web by pidfile in ${STAND_DEV_DIR}
+# (written by keeper-run/web-run), souls - by a stand-scoped pattern (--config under
+# ${STAND_DEV_DIR}/). Empty DEV_STAND = default stand only; neighboring stands are NOT
+# touched (previously: a broad pkill by name that killed every stand). NIM-25.
 dev-stop:
-	@bash -c 'set -e; . dev/stand-env.sh; stand_summary; d="$${STAND_DEV_DIR}"; kp="$$(cat "$$d/keeper.pid" 2>/dev/null || true)"; if [ -n "$$kp" ] && kill -0 "$$kp" 2>/dev/null && grep -qa keeper "/proc/$$kp/cmdline" 2>/dev/null; then kill -9 "$$kp" 2>/dev/null || true; fi; rm -f "$$d/keeper.pid"; wp="$$(cat "$$d/web.pid" 2>/dev/null || true)"; if [ -n "$$wp" ] && kill -0 "$$wp" 2>/dev/null && grep -qaE 'vite|node|npm' "/proc/$$wp/cmdline" 2>/dev/null; then pkill -9 -P "$$wp" 2>/dev/null || true; kill -9 "$$wp" 2>/dev/null || true; fi; rm -f "$$d/web.pid"; pkill -f "soul run.*$$d/" 2>/dev/null || true; echo "dev-stop: стенд $${STAND_SLUG:-<default>} остановлен (keeper/web по pidfile, souls по stand-паттерну)"'
+	@bash -c 'set -e; . dev/stand-env.sh; stand_summary; d="$${STAND_DEV_DIR}"; kp="$$(cat "$$d/keeper.pid" 2>/dev/null || true)"; if [ -n "$$kp" ] && kill -0 "$$kp" 2>/dev/null && grep -qa keeper "/proc/$$kp/cmdline" 2>/dev/null; then kill -9 "$$kp" 2>/dev/null || true; fi; rm -f "$$d/keeper.pid"; wp="$$(cat "$$d/web.pid" 2>/dev/null || true)"; if [ -n "$$wp" ] && kill -0 "$$wp" 2>/dev/null && grep -qaE 'vite|node|npm' "/proc/$$wp/cmdline" 2>/dev/null; then pkill -9 -P "$$wp" 2>/dev/null || true; kill -9 "$$wp" 2>/dev/null || true; fi; rm -f "$$d/web.pid"; pkill -f "soul run.*$$d/" 2>/dev/null || true; echo "dev-stop: stand $${STAND_SLUG:-<default>} stopped (keeper/web by pidfile, souls by stand-pattern)"'
 
 dev-reset:
 	@bash -c '. dev/stand-env.sh && stand_summary'
 	@bash -c 'set -e; . dev/stand-env.sh >/dev/null; if [ "$${DEDICATED_INFRA}" = "1" ]; then export COMPOSE_PROJECT_NAME="$${STACK_PREFIX}"; fi; cd dev && docker compose down -v && docker compose up -d'
 
-# Idempotent bootstrap-провижининг секретов и TLS-материала для local-dev.
-# Скрипт безопасен к повторному запуску: каждый шаг проверяет своё состояние.
-# Подробности — `docs/dev/local-setup.md`.
+# Idempotent bootstrap provisioning of secrets and TLS material for local-dev.
+# The script is safe to re-run: each step checks its own state.
+# Details - `docs/dev/local-setup.md`.
 dev-provision:
 	@bash -c '. dev/stand-env.sh && stand_summary'
 	@bash dev/provision.sh
 
-# Полный smoke-цикл: поднять стек → провижининг Vault/TLS → `keeper init` →
-# seed service-реестра. Собирает keeper-бинарь перед запуском (зависим от
-# Go-кода, поэтому не делаем shortcut через `keeper/bin/keeper`-as-is). Стенд-aware
-# (DEV_STAND): init идёт по отрендеренному ${STAND_DEV_DIR}/keeper.dev.yml, JWT-файл
-# оператора — ${STAND_DEV_DIR}/archon-alice.jwt (default /tmp/keeper-dev/…). Следующий
-# запуск smoke упадёт на `keeper init` (operators registry уже не пуст) — для
-# повторного прогона делать `make dev-reset && make dev-smoke`.
+# Full smoke cycle: bring up the stack -> provision Vault/TLS -> `keeper init` ->
+# seed the service registry. Builds the keeper binary before running (depends on the
+# Go code, so we don't shortcut via `keeper/bin/keeper`-as-is). Stand-aware
+# (DEV_STAND): init runs against the rendered ${STAND_DEV_DIR}/keeper.dev.yml, the operator's
+# JWT file is ${STAND_DEV_DIR}/archon-alice.jwt (default /tmp/keeper-dev/...). The next
+# smoke run will fail on `keeper init` (the operators registry is no longer empty) - to
+# re-run, do `make dev-reset && make dev-smoke`.
 #
-# Второй `dev-provision` — ПОСЛЕ `keeper init`: на свежей БД (dev-reset) схемы
-# (service_registry / keeper_settings) ещё нет, первый provision-проход их seed
-# пропускает (см. dev/provision.sh::seed_service_registry, шаг 10). Схему
-# создаёт `keeper init` (migrate.Apply), поэтому реестр сервисов сеется только
-# повторным provision-проходом. provision идемпотентен — двойной вызов безопасен;
-# без этого шага single-pass `make dev-smoke` оставил бы пустой service-реестр
-# (config-S4 убрал services[] из keeper.dev.yml — резолв читает только БД).
+# The second `dev-provision` - AFTER `keeper init`: on a fresh DB (dev-reset) the schema
+# (service_registry / keeper_settings) doesn't exist yet, so the first provision pass
+# skips seeding it (see dev/provision.sh::seed_service_registry, step 10). `keeper init`
+# creates the schema (migrate.Apply), so the service registry is only seeded by the
+# repeated provision pass. provision is idempotent - calling it twice is safe;
+# without this step a single-pass `make dev-smoke` would leave an empty service registry
+# (config-S4 removed services[] from keeper.dev.yml - resolution now reads only the DB).
 dev-smoke:
 	@$(MAKE) dev-up
 	@$(MAKE) dev-provision
@@ -519,17 +520,17 @@ dev-smoke:
 			--credential-out="$${STAND_DEV_DIR}/archon-alice.jwt"'
 	@$(MAKE) dev-provision
 
-# Рестарт keeper с ПОЛНЫМ dev-env (SOUL_STACK_ALLOW_FILE_REPOS=1 + writable
-# cache-dirs): без него file://-резолв сервисов падает (502). Гасит старый
-# keeper, чистит leader-leases, ждёт healthz 200. Если нет TLS-материала —
-# подсказывает `make dev-provision`. Скрипт — dev/keeper-run.sh.
+# Restarts keeper with the FULL dev-env (SOUL_STACK_ALLOW_FILE_REPOS=1 + writable
+# cache-dirs): without it, file:// service resolution fails (502). Kills the old
+# keeper, clears leader leases, waits for healthz 200. If there's no TLS material -
+# hints at `make dev-provision`. Script - dev/keeper-run.sh.
 dev-keeper:
 	@bash -c '. dev/stand-env.sh && stand_summary'
 	@bash dev/keeper-run.sh
 
-# Выпустить Archon-JWT для ad-hoc dev-API-вызовов (без `keeper init`). Ключ
-# берётся из того же Vault KV, что и у keeper (НЕ хардкодится). Печатает ТОЛЬКО
-# токен в stdout → `TOKEN=$$(make dev-jwt)`. Параметры — через переменные:
+# Issues an Archon JWT for ad-hoc dev API calls (without `keeper init`). The key
+# comes from the same Vault KV as keeper's (NOT hardcoded). Prints ONLY the
+# token to stdout -> `TOKEN=$$(make dev-jwt)`. Parameters - via variables:
 # `make dev-jwt AID=archon-keyset ROLES='["keyset-demo"]' TTL=3600`.
 AID ?= archon-alice
 ROLES ?= ["cluster-admin"]
@@ -538,38 +539,38 @@ dev-jwt:
 	@bash -c '. dev/stand-env.sh && stand_summary' >&2
 	@AID='$(AID)' ROLES='$(ROLES)' TTL='$(TTL)' bash dev/mint-jwt.sh
 
-# Переподнять локальный флот souls по реестру БД: на каждый sid пишет soul.yml
-# (если нет), онбордит при отсутствии seed, (пере)запускает `soul run`. Covens
-# в БД сохраняются (заново НЕ регистрируем). Скрипт — dev/souls-up.sh.
+# Brings the local souls back up from the DB registry: writes soul.yml for each sid
+# (if missing), onboards it if there's no seed, (re)starts `soul run`. Covens
+# in the DB are preserved (NOT re-registered). Script - dev/souls-up.sh.
 dev-souls:
 	@bash -c '. dev/stand-env.sh && stand_summary'
 	@bash dev/souls-up.sh
 
-# Поднять локальный флот souls как docker-контейнеры (soul-docker-1..N) для day-2
-# сценариев и UI-тестов без облака (NIM-26). N — переменная SOULS_COUNT. WSL2:
-# KEEPER_HOST=host-IP (см. docs/dev/local-setup.md). Скрипт — dev/souls-docker-up.sh.
+# Brings up the local souls as docker containers (soul-docker-1..N) for operational
+# scenarios and UI tests without a cloud (NIM-26). N - the SOULS_COUNT variable. WSL2:
+# KEEPER_HOST=host-IP (see docs/dev/local-setup.md). Script - dev/souls-docker-up.sh.
 SOULS_COUNT ?= 3
 dev-souls-docker:
 	@bash -c '. dev/stand-env.sh && stand_summary'
 	@bash dev/souls-docker-up.sh $(SOULS_COUNT)
 
-# Снести docker-флот souls: контейнеры soul-docker-* + записи реестра + dev-каталоги.
-# Скрипт — dev/souls-docker-down.sh.
+# Tears down the docker souls: soul-docker-* containers + registry entries + dev directories.
+# Script - dev/souls-docker-down.sh.
 dev-souls-docker-down:
 	@bash -c '. dev/stand-env.sh && stand_summary'
 	@bash dev/souls-docker-down.sh
 
-# Vite dev-сервер web-репо (companion ../soul-stack-web). `--host` обязателен,
-# иначе vite слушает только [::1] и 127.0.0.1:5173 отказывает. Путь web —
-# переменная WEB_DIR. Скрипт — dev/web-run.sh.
+# Vite dev server for the web repo (companion ../soul-stack-web). `--host` is required,
+# otherwise vite only listens on [::1] and 127.0.0.1:5173 refuses connections. The web path -
+# the WEB_DIR variable. Script - dev/web-run.sh.
 WEB_DIR ?= ../soul-stack-web
 dev-web:
 	@bash -c '. dev/stand-env.sh && stand_summary'
 	@WEB_DIR='$(WEB_DIR)' bash dev/web-run.sh
 
-# Полный подъём dev-стенда одной командой: provision → keeper → souls → web.
-# Удобно после рестарта / смены суток (чистка /tmp). В конце — сводка + напоминание
-# про `make dev-jwt` для токена.
+# Full dev-stand bring-up in one command: provision -> keeper -> souls -> web.
+# Convenient after a restart / day change (/tmp gets cleared). At the end - a summary + a
+# reminder about `make dev-jwt` for the token.
 dev-stand:
 	@$(MAKE) dev-provision
 	@$(MAKE) dev-keeper
@@ -577,52 +578,52 @@ dev-stand:
 	@$(MAKE) dev-web
 	@bash -c 'set -e; . dev/stand-env.sh >/dev/null; \
 		echo ""; \
-		echo "=== dev-стенд поднят ($${STAND_SLUG:-<default>}) ==="; \
+		echo "=== dev-stand is up ($${STAND_SLUG:-<default>}) ==="; \
 		echo "keeper:  healthz http://127.0.0.1:$${OPENAPI_PORT}/healthz | openapi :$${OPENAPI_PORT} | mcp :$${MCP_PORT} | metrics :$${METRICS_PORT}"; \
-		echo "souls:   статусы — docker exec $${STACK_PREFIX}-postgres psql -U keeper -d $${PG_DB} -c '\''SELECT status, count(*) FROM souls GROUP BY status'\''"; \
+		echo "souls:   statuses - docker exec $${STACK_PREFIX}-postgres psql -U keeper -d $${PG_DB} -c '\''SELECT status, count(*) FROM souls GROUP BY status'\''"; \
 		echo "web:     http://127.0.0.1:$${WEB_PORT}"; \
-		echo "токен:   TOKEN=\$$(make dev-jwt)   (параметры: AID=... ROLES='\''[...]'\'' TTL=...)"'
+		echo "token:   TOKEN=\$$(make dev-jwt)   (parameters: AID=... ROLES='\''[...]'\'' TTL=...)"'
 
-# Освободить слот стенда: убрать строку slug из реестра слотов (идемпотентно —
-# нет строки = no-op). Порты слота снова доступны следующему стенду. NIM-25.
+# Frees a stand's slot: removes the slug row from the slot registry (idempotent -
+# no row = no-op). The slot's ports become available to the next stand again. NIM-25.
 dev-stand-free:
-	@test -n "$(DEV_STAND)" || { echo "dev-stand-free: укажи DEV_STAND=<slug>"; exit 1; }
+	@test -n "$(DEV_STAND)" || { echo "dev-stand-free: specify DEV_STAND=<slug>"; exit 1; }
 	@DEV_STAND='' bash -c '. dev/stand-env.sh >/dev/null && _stand_free_slot "$(DEV_STAND)"'
-	@echo "dev-stand-free: слот слага '$(DEV_STAND)' освобождён (реестр обновлён)"
+	@echo "dev-stand-free: slug slot '$(DEV_STAND)' freed (registry updated)"
 
-# OpenAPI committed-снимок: источник правды — huma-агрегатор в коде
-# (HumaFullSpecYAML, served на GET /openapi.yaml). docs/keeper/openapi.yaml —
-# ПРОИЗВОДНЫЙ дамп (для UI-vendor + git-ревью), а НЕ рукопись. Два таргета:
+# OpenAPI committed snapshot: source of truth is the huma aggregator in the code
+# (HumaFullSpecYAML, served on GET /openapi.yaml). docs/keeper/openapi.yaml is a
+# DERIVED dump (for UI-vendor + git-review), not a hand-written file. Two targets:
 #
-#   gen-openapi   — перезаписать committed-файл текущим huma-дампом (после правки
-#                   huma-домена). Определён выше рядом с gen.
-#   check-openapi — drift-guard (CI): committed-файл == huma-дамп байт-в-байт;
-#                   ошибка означает «забыли make gen-openapi». Делегирует тому же
-#                   generate-тесту (без GEN_OPENAPI он сверяет, не пишет).
+#   gen-openapi   - overwrites the committed file with the current huma dump (after editing
+#                   the huma domain). Defined above, next to gen.
+#   check-openapi - drift guard (CI): committed file == huma dump byte-for-byte;
+#                   a failure means "forgot make gen-openapi". Delegates to the same
+#                   generate-test (without GEN_OPENAPI it compares instead of writing).
 OPENAPI_COMMITTED := docs/keeper/openapi.yaml
 
 check-openapi:
 	@echo "openapi drift-guard: $(OPENAPI_COMMITTED) == huma-dump"
 	@go test ./keeper/internal/api/ -run TestCommittedOpenAPI_NoDrift -count=1 >/dev/null || { \
 		echo ""; \
-		echo "openapi.yaml drift: committed $(OPENAPI_COMMITTED) расходится с huma-дампом"; \
+		echo "openapi.yaml drift: committed $(OPENAPI_COMMITTED) diverges from the huma dump"; \
 		echo "run 'make gen-openapi' to regenerate the committed snapshot"; \
 		exit 1; \
 	}
-	@echo "openapi.yaml: committed-снимок совпадает с huma-дампом"
+	@echo "openapi.yaml: committed snapshot matches the huma dump"
 
-# Plugin-template self-serve: дерево шаблона plugin-авторов живёт source-of-truth
-# в companion-repo ../soul-stack-plugins/soul-mod-template/, а core embed-ит копию
-# через soul-lint/internal/plugininit/template/ (go:embed). Drift между деревьями
-# отлавливается так же, как openapi:
+# Plugin-template self-serve: the plugin-author template tree's source of truth lives
+# in the companion repo ../soul-stack-plugins/soul-mod-template/, and core embeds a copy
+# via soul-lint/internal/plugininit/template/ (go:embed). Drift between the trees
+# is caught the same way as openapi:
 #
-#   sync-template.sh — обновить копию из companion (rsync --delete зеркалит всё дерево).
-#   check-template   — CI-guard на расхождение; ошибка означает «забыли sync после
-#                      правки template в companion».
+#   sync-template.sh - updates the copy from the companion (rsync --delete mirrors the whole tree).
+#   check-template   - CI guard for divergence; a failure means "forgot to sync after
+#                      editing the template in the companion".
 #
-# Companion — ОТДЕЛЬНЫЙ репозиторий: на чужой машине/CI его может не быть. Если SRC
-# отсутствует — гейт не падает (иначе сломал бы `make check` без companion), а
-# пропускается с warning. Drift ловится только когда companion доступен рядом.
+# Companion is a SEPARATE repository: it may not exist on someone else's machine/CI. If SRC
+# is missing - the gate doesn't fail (otherwise it would break `make check` without the companion),
+# it's skipped with a warning. Drift is only caught when the companion is available alongside.
 TEMPLATE_SRC := ../soul-stack-plugins/soul-mod-template
 TEMPLATE_DST := soul-lint/internal/plugininit/template
 
@@ -639,19 +640,19 @@ check-template:
 		echo "plugin-template: copy in sync"; \
 	fi
 
-# Embed-UI vendoring: собранный build-снапшот UI живёт source-of-truth в
-# companion-repo ../soul-stack-web/dist/, а core embed-ит копию через
-# keeper/internal/webui/assets/ (go:embed, раздаётся keeper-ом на /ui, ADR-055).
-# Drift между ними отлавливается так же, как plugin-template:
+# Embed-UI vendoring: the built UI snapshot's source of truth lives in the
+# companion repo ../soul-stack-web/dist/, and core embeds a copy via
+# keeper/internal/webui/assets/ (go:embed, served by keeper at /ui, ADR-055).
+# Drift between them is caught the same way as plugin-template:
 #
-#   sync-webui.sh — обновить копию из companion (rsync --delete зеркалит dist/,
-#                   при отсутствии dist/ — собирает companion `npm run build`).
-#   check-webui   — CI-guard на расхождение; ошибка означает «забыли sync после
-#                   пересборки UI в companion».
+#   sync-webui.sh - updates the copy from the companion (rsync --delete mirrors dist/,
+#                   builds the companion via `npm run build` if dist/ is missing).
+#   check-webui   - CI guard for divergence; a failure means "forgot to sync after
+#                   rebuilding the UI in the companion".
 #
-# Companion — ОТДЕЛЬНЫЙ репозиторий: на чужой машине/CI его может не быть. Если SRC
-# отсутствует — гейт не падает (иначе сломал бы `make check` без companion), а
-# пропускается с warning. Drift ловится только когда companion доступен рядом.
+# Companion is a SEPARATE repository: it may not exist on someone else's machine/CI. If SRC
+# is missing - the gate doesn't fail (otherwise it would break `make check` without the companion),
+# it's skipped with a warning. Drift is only caught when the companion is available alongside.
 WEBUI_SRC := ../soul-stack-web/dist
 WEBUI_DST := keeper/internal/webui/assets
 
@@ -671,81 +672,81 @@ check-webui:
 		echo "embed-UI: copy in sync"; \
 	fi
 
-# keeper.dev.yml: committed-копия (dev/keeper.dev.yml) — golden, её читают dev-smoke
-# и docs; keeper-run/dev-smoke рендерят конфиг из keeper.dev.yml.tmpl. check-stand-template
-# держит их сведёнными: рендер шаблона с ПУСТЫМ DEV_STAND (default-стенд) обязан быть
-# байт-в-байт committed. Расхождение = правку .tmpl забыли перенести в committed. NIM-25.
+# keeper.dev.yml: the committed copy (dev/keeper.dev.yml) - golden, read by dev-smoke
+# and docs; keeper-run/dev-smoke render the config from keeper.dev.yml.tmpl. check-stand-template
+# keeps them in sync: rendering the template with an EMPTY DEV_STAND (default stand) must be
+# byte-for-byte identical to the committed file. A mismatch means a .tmpl edit wasn't ported to committed. NIM-25.
 STAND_TMPL := dev/keeper.dev.yml.tmpl
 STAND_GOLDEN := dev/keeper.dev.yml
 
 check-stand-template:
-	@command -v envsubst >/dev/null 2>&1 || { echo "check-stand-template: envsubst не найден (пакет gettext)"; exit 1; }
+	@command -v envsubst >/dev/null 2>&1 || { echo "check-stand-template: envsubst not found (gettext package)"; exit 1; }
 	@out=$$(mktemp); \
 	DEV_STAND='' bash -c '. dev/stand-env.sh >/dev/null && envsubst "$${KEEPER_RENDER_WHITELIST}" < $(STAND_TMPL)' > "$$out"; \
 	if diff -q $(STAND_GOLDEN) "$$out" >/dev/null; then \
-		echo "keeper.dev.yml: committed совпадает с рендером .tmpl (default-стенд)"; \
+		echo "keeper.dev.yml: committed matches the .tmpl render (default stand)"; \
 		rm -f "$$out"; \
 	else \
-		echo "keeper.dev.yml drift: .tmpl и committed keeper.dev.yml разошлись:"; \
+		echo "keeper.dev.yml drift: .tmpl and committed keeper.dev.yml diverged:"; \
 		diff $(STAND_GOLDEN) "$$out" || true; \
 		rm -f "$$out"; \
 		echo ""; \
-		echo "пересобери committed: bash -c '. dev/stand-env.sh && envsubst \"\$$KEEPER_RENDER_WHITELIST\" < $(STAND_TMPL)' > $(STAND_GOLDEN)"; \
+		echo "rebuild committed: bash -c '. dev/stand-env.sh && envsubst \"\$$KEEPER_RENDER_WHITELIST\" < $(STAND_TMPL)' > $(STAND_GOLDEN)"; \
 		exit 1; \
 	fi
 
-# soul.dev.yml: committed-копия (dev/soul.dev.yml) — golden; keeper-run/souls-up рендерят
-# soul-конфиг из soul.dev.yml.tmpl. check-soul-template держит их сведёнными: рендер с
-# ПУСТЫМ DEV_STAND (default-стенд) обязан быть байт-в-байт committed. Симметрия с
-# check-stand-template, whitelist SOUL_RENDER_WHITELIST — из dev/stand-env.sh. NIM-25.
-# Пока dev/soul.dev.yml.tmpl не смержен (зона soul.dev-developer) — цель тихо пропускается,
-# чтобы не рушить `make check` до merge (так же, как check-template/check-webui без companion).
+# soul.dev.yml: the committed copy (dev/soul.dev.yml) - golden; keeper-run/souls-up render the
+# soul config from soul.dev.yml.tmpl. check-soul-template keeps them in sync: rendering with an
+# EMPTY DEV_STAND (default stand) must be byte-for-byte identical to the committed file. Symmetric with
+# check-stand-template, whitelist SOUL_RENDER_WHITELIST - from dev/stand-env.sh. NIM-25.
+# While dev/soul.dev.yml.tmpl isn't merged yet (soul.dev-developer zone) - the target quietly
+# skips, so it doesn't break `make check` before the merge (same as check-template/check-webui without a companion).
 SOUL_TMPL := dev/soul.dev.yml.tmpl
 SOUL_GOLDEN := dev/soul.dev.yml
 
 check-soul-template:
-	@command -v envsubst >/dev/null 2>&1 || { echo "check-soul-template: envsubst не найден (пакет gettext)"; exit 1; }
+	@command -v envsubst >/dev/null 2>&1 || { echo "check-soul-template: envsubst not found (gettext package)"; exit 1; }
 	@if [ ! -f "$(SOUL_TMPL)" ]; then \
-		echo "check-soul-template: $(SOUL_TMPL) отсутствует (soul.dev-зона не смержена) — пропуск"; \
+		echo "check-soul-template: $(SOUL_TMPL) is missing (soul.dev zone not merged) - skipping"; \
 	else \
 		out=$$(mktemp); \
 		DEV_STAND='' bash -c '. dev/stand-env.sh >/dev/null && envsubst "$${SOUL_RENDER_WHITELIST}" < $(SOUL_TMPL)' > "$$out"; \
 		if diff -q "$(SOUL_GOLDEN)" "$$out" >/dev/null; then \
-			echo "soul.dev.yml: committed совпадает с рендером .tmpl (default-стенд)"; \
+			echo "soul.dev.yml: committed matches the .tmpl render (default stand)"; \
 			rm -f "$$out"; \
 		else \
-			echo "soul.dev.yml drift: .tmpl и committed $(SOUL_GOLDEN) разошлись:"; \
+			echo "soul.dev.yml drift: .tmpl and committed $(SOUL_GOLDEN) diverged:"; \
 			diff "$(SOUL_GOLDEN)" "$$out" || true; \
 			rm -f "$$out"; \
 			echo ""; \
-			echo "пересобери committed через envsubst SOUL_RENDER_WHITELIST < $(SOUL_TMPL) > $(SOUL_GOLDEN)"; \
+			echo "rebuild committed via envsubst SOUL_RENDER_WHITELIST < $(SOUL_TMPL) > $(SOUL_GOLDEN)"; \
 			exit 1; \
 		fi; \
 	fi
 
 # --- Release/packaging ---
-# Эти таргеты аддитивны: в `check` НЕ входят (требуют внешний tooling, который в
-# dev-окружении может быть не установлен). Артефакты пишутся в dist/ (gitignored).
+# These targets are additive: NOT part of `check` (require external tooling that may
+# not be installed in the dev environment). Artifacts are written to dist/ (gitignored).
 
-# CycloneDX SBOM по трём релизным бинарям через cyclonedx-gomod (go-tool), режим
-# `app` — SBOM именно того, что слинковано в бинарь (точнее для prod-readiness,
-# чем граф всего модуля). Файл на бинарь в dist/sbom/. Инструмент в PATH не входит
-# автоматически; если не найден — печатаем go install-подсказку и выходим с ошибкой
-# (не silently). `-licenses` подтягивает лицензии зависимостей, `-json` —
-# машиночитаемый CycloneDX, `-main` указывает main-пакет внутри модуля.
+# CycloneDX SBOM for the three release binaries via cyclonedx-gomod (go-tool), `app`
+# mode - the SBOM of exactly what's linked into the binary (more accurate for prod-readiness
+# than the whole module's graph). One file per binary in dist/sbom/. The tool isn't
+# in PATH automatically; if not found - we print a go install hint and exit with an error
+# (not silently). `-licenses` pulls in dependency licenses, `-json` -
+# machine-readable CycloneDX, `-main` points at the main package inside the module.
 #
-# Почему `app`, а не `mod`: репо — go.work. Режим `mod` с активным workspace для
-# ЛЮБОГО модуля строит SBOM корневого (component.name всегда первый модуль), а с
-# GOWORK=off модули с локальными cross-module-зависимостями (keeper/soul/shared)
-# не резолвятся (go тянет pseudo-version из сети). Режим `app` понимает workspace
-# и резолвит локальные replace корректно. SBOM трёх бинарей покрывает граф всех
-# library-модулей (proto/sdk/shared) транзитивно.
+# Why `app` and not `mod`: the repo is a go.work. `mod` mode with an active workspace builds
+# the root module's SBOM for ANY module (component.name is always the first module), and with
+# GOWORK=off modules with local cross-module dependencies (keeper/soul/shared)
+# don't resolve (go pulls a pseudo-version from the network). `app` mode understands the workspace
+# and resolves local replaces correctly. The SBOM of the three binaries covers the graph of all
+# library modules (proto/sdk/shared) transitively.
 SBOM_APPS := keeper:./cmd/keeper soul:./cmd/soul soul-lint:./cmd/soul-lint
 
 sbom:
 	@if ! command -v cyclonedx-gomod >/dev/null 2>&1; then \
-		echo "cyclonedx-gomod не найден в PATH."; \
-		echo "установить: go install github.com/CycloneDX/cyclonedx-gomod/cmd/cyclonedx-gomod@latest"; \
+		echo "cyclonedx-gomod not found in PATH."; \
+		echo "install: go install github.com/CycloneDX/cyclonedx-gomod/cmd/cyclonedx-gomod@latest"; \
 		exit 1; \
 	fi
 	@mkdir -p $(SBOM_DIR)
@@ -755,30 +756,30 @@ sbom:
 		echo "cyclonedx-gomod app -main $$main ./$$mod -> $$out"; \
 		cyclonedx-gomod app -licenses -json -main "$$main" -output "$$out" "./$$mod" || exit 1; \
 	done
-	@echo "sbom: CycloneDX SBOM записан в $(SBOM_DIR)/"
+	@echo "sbom: CycloneDX SBOM written to $(SBOM_DIR)/"
 
-# Нативные пакеты deb + rpm через nfpm. Бинари пересобираются под Linux/$(PKG_ARCH)
-# (deb/rpm всегда Linux, а dev-машина может быть darwin) с теми же ldflags, что в
-# `build` (+ `-s -w -trimpath` для урезанного прод-бинаря). Конфиги nfpm —
-# deploy/nfpm/*.yaml; ${VERSION}/${ARCH} подставляются из окружения. Инструмент в
-# PATH не входит автоматически; если не найден — печатаем go install-подсказку и
-# выходим с ошибкой (не silently).
+# Native deb + rpm packages via nfpm. Binaries are rebuilt for Linux/$(PKG_ARCH)
+# (deb/rpm are always Linux, while the dev machine may be darwin) with the same ldflags as
+# `build` (+ `-s -w -trimpath` for a trimmed-down prod binary). nfpm configs -
+# deploy/nfpm/*.yaml; ${VERSION}/${ARCH} are substituted from the environment. The tool isn't
+# in PATH automatically; if not found - we print a go install hint and exit
+# with an error (not silently).
 #
-# Три canned-recipe переиспользуются per-компонент pkg-целями и агрегатом pkg:
-#   ensure-nfpm    — guard на наличие nfpm в PATH.
-#   pkg-build-one  — cross-build одного бинаря под linux/$(PKG_ARCH) (прод-ldflags).
-#                    $(1) модуль, $(2) cmd-пакет/имя, $(3) version-ldflags (soul-lint пусто).
-#   pkg-nfpm-one   — deb+rpm одного nfpm-конфига. $(1) — имя конфига (=deploy/nfpm/$(1).yaml).
+# Three canned recipes are reused by the per-component pkg-targets and the pkg aggregate:
+#   ensure-nfpm    - guard on nfpm being present in PATH.
+#   pkg-build-one  - cross-builds a single binary for linux/$(PKG_ARCH) (prod ldflags).
+#                    $(1) module, $(2) cmd-package/name, $(3) version-ldflags (empty for soul-lint).
+#   pkg-nfpm-one   - deb+rpm for a single nfpm config. $(1) - config name (=deploy/nfpm/$(1).yaml).
 define ensure-nfpm
 	@if ! command -v nfpm >/dev/null 2>&1; then \
-		echo "nfpm не найден в PATH."; \
-		echo "установить: go install github.com/goreleaser/nfpm/v2/cmd/nfpm@latest"; \
+		echo "nfpm not found in PATH."; \
+		echo "install: go install github.com/goreleaser/nfpm/v2/cmd/nfpm@latest"; \
 		exit 1; \
 	fi
 endef
 
 define pkg-build-one
-	@echo "build linux/$(PKG_ARCH) $(2) под упаковку (VERSION=$(VERSION))"
+	@echo "build linux/$(PKG_ARCH) $(2) for packaging (VERSION=$(VERSION))"
 	@cd $(1) && CGO_ENABLED=0 GOOS=linux GOARCH=$(PKG_ARCH) go build -trimpath -ldflags '-s -w $(3)' -o $(BIN_DIR)/$(2) ./cmd/$(2)
 endef
 
@@ -792,31 +793,31 @@ define pkg-nfpm-one
 	done
 endef
 
-# Per-компонент нативные пакеты: собрать ТОЛЬКО свой бинарь и упаковать его deb+rpm.
-# pkg-keeper / pkg-soul / pkg-soul-lint. Агрегат всех трёх — pkg.
+# Per-component native packages: build ONLY its own binary and package it as deb+rpm.
+# pkg-keeper / pkg-soul / pkg-soul-lint. The aggregate of all three is pkg.
 pkg-keeper:
 	$(call ensure-nfpm)
 	@mkdir -p $(PKG_DIR)
 	$(call pkg-build-one,keeper,keeper,$(KEEPER_LDFLAGS))
 	$(call pkg-nfpm-one,keeper)
-	@echo "pkg-keeper: deb+rpm записаны в $(PKG_DIR)/"
+	@echo "pkg-keeper: deb+rpm written to $(PKG_DIR)/"
 
 pkg-soul:
 	$(call ensure-nfpm)
 	@mkdir -p $(PKG_DIR)
 	$(call pkg-build-one,soul,soul,$(SOUL_LDFLAGS))
 	$(call pkg-nfpm-one,soul)
-	@echo "pkg-soul: deb+rpm записаны в $(PKG_DIR)/"
+	@echo "pkg-soul: deb+rpm written to $(PKG_DIR)/"
 
 pkg-soul-lint:
 	$(call ensure-nfpm)
 	@mkdir -p $(PKG_DIR)
 	$(call pkg-build-one,soul-lint,soul-lint,)
 	$(call pkg-nfpm-one,soul-lint)
-	@echo "pkg-soul-lint: deb+rpm записаны в $(PKG_DIR)/"
+	@echo "pkg-soul-lint: deb+rpm written to $(PKG_DIR)/"
 
-# pkg — агрегат: deb+rpm всех трёх компонентов скопом. Переиспользует те же
-# canned-recipe, что и per-компонент цели (логика не дублируется).
+# pkg - the aggregate: deb+rpm for all three components at once. Reuses the same
+# canned recipes as the per-component targets (no duplicated logic).
 pkg:
 	$(call ensure-nfpm)
 	@mkdir -p $(PKG_DIR)
@@ -826,47 +827,47 @@ pkg:
 	$(call pkg-nfpm-one,keeper)
 	$(call pkg-nfpm-one,soul)
 	$(call pkg-nfpm-one,soul-lint)
-	@echo "pkg: deb+rpm записаны в $(PKG_DIR)/"
+	@echo "pkg: deb+rpm written to $(PKG_DIR)/"
 
-# Подпись образов (cosign) — DOCUMENTED STUB. Реальная подпись требует registry +
-# OIDC/keyless-identity (или приватного ключа), которых в локальном репо без
-# CI/публикации нет. См. docs/deploy README, раздел «Подпись образов».
+# Image signing (cosign) - DOCUMENTED STUB. Real signing requires a registry +
+# OIDC/keyless-identity (or a private key), which a local repo without
+# CI/publishing doesn't have. See docs/deploy README, "Image Signing" section.
 sign:
-	@echo "make sign: подпись образов отложена (post-publish)."
-	@echo "Требует registry + cosign keyless-identity (OIDC) или приватный ключ."
-	@echo "Подробности и план — раздел «Подпись образов (cosign)» в deploy/README.md."
+	@echo "make sign: image signing deferred (post-publish)."
+	@echo "Requires a registry + cosign keyless-identity (OIDC) or a private key."
+	@echo "Details and plan - the \"Image Signing (cosign)\" section in deploy/README.md."
 	@exit 0
 
-# Единый локальный CI-гейт. Порядок: дешёвые статические проверки → сборка →
-# тесты (workspace + community-плагины) → drift-проверки → supply-chain-скан →
-# lint корпуса examples/ → L0-испытания (soul-trial).
-# `test-integration` сюда НЕ входит — он требует docker (см. комментарий к
-# `test`); гонять отдельно. Release/packaging-таргеты (sbom/pkg/sign) сюда НЕ
-# входят — внешний tooling. `check-vuln` требует доступ к vuln.go.dev — offline
-# пропускается через SKIP_VULNCHECK=1 (см. таргет), в CI гонит реально.
-# `test-plugins` — go.mod-плагины вне go.work (GOWORK=off). `trial` — L0-render
-# по корпусу examples/service/ (ловит сломанные case.yml-ассерты).
+# The single local CI gate. Order: cheap static checks -> build ->
+# tests (workspace + community plugins) -> drift checks -> supply-chain scan ->
+# lint the examples/ corpus -> L0 trials (soul-trial).
+# `test-integration` is NOT part of this - it requires docker (see the comment on
+# `test`); run it separately. Release/packaging targets (sbom/pkg/sign) are NOT
+# part of this - external tooling. `check-vuln` requires access to vuln.go.dev - offline
+# it's skipped via SKIP_VULNCHECK=1 (see the target), in CI it runs for real.
+# `test-plugins` - go.mod plugins outside go.work (GOWORK=off). `trial` - L0-render
+# over the examples/service/ corpus (catches broken case.yml assertions).
 check: check-fmt vet build test test-plugins check-gen check-openapi check-template check-stand-template check-soul-template check-webui check-doc-links check-vuln lint trial check-e2e-cloud
-	@echo "check: все проверки пройдены"
+	@echo "check: all checks passed"
 
-# gofmt-форматирование по всем модулям. `gofmt -l` печатает только файлы,
-# отличающиеся от канонического формата; непустой список — это ошибка гейта.
-# Скоупим по корням модулей (gofmt сам рекурсивно обходит каталоги), вывод
-# одного `gofmt -l` агрегируем и фейлим, если хоть что-то нашлось.
+# gofmt formatting across all modules. `gofmt -l` only prints files that
+# differ from the canonical format; a non-empty list is a gate failure.
+# Scoped by module roots (gofmt recurses into directories itself), we aggregate
+# the output of a single `gofmt -l` and fail if anything was found.
 check-fmt:
 	@out=$$(gofmt -l $(MODULES) 2>/dev/null); \
 	if [ -n "$$out" ]; then \
-		echo "gofmt: следующие файлы не отформатированы:"; \
+		echo "gofmt: the following files are not formatted:"; \
 		echo "$$out"; \
 		echo ""; \
 		echo "run 'gofmt -w' on listed files"; \
 		exit 1; \
 	fi; \
-	echo "gofmt: все файлы отформатированы"
+	echo "gofmt: all files are formatted"
 
-# `go vet ./...` по каждому модулю. Тот же skip-empty-module паттерн, что в
-# `test`/`build` (`go list ./...` пуст → модуль без go-пакетов, пропускаем),
-# иначе `go vet ./...` падает с "matched no packages".
+# `go vet ./...` for each module. The same skip-empty-module pattern as in
+# `test`/`build` (`go list ./...` empty -> a module with no go packages, skip),
+# otherwise `go vet ./...` fails with "matched no packages".
 vet:
 	@for m in $(MODULES); do \
 		if [ -z "$$(cd $$m && go list ./... 2>/dev/null)" ]; then \
@@ -877,52 +878,52 @@ vet:
 		(cd $$m && go vet ./...) || exit 1; \
 	done
 
-# Проверка идемпотентности протогена (gen-drift): прогоняем `make gen` и
-# смотрим, не изменился ли committed generated Go. Скоупим diff именно по двум
-# каталогам сгенерённого кода — гейт не должен падать на несвязанных правках
-# рабочего дерева. Непустой diff означает «забыли закоммитить `make gen`» либо
-# «протоген не идемпотентен» (тогда вопрос к toolchain/версиям protoc-плагинов).
+# Checks protogen idempotency (gen-drift): runs `make gen` and
+# checks whether the committed generated Go changed. Scopes the diff to exactly the two
+# generated-code directories - the gate shouldn't fail on unrelated working-tree
+# changes. A non-empty diff means either "forgot to commit `make gen`" or
+# "protogen isn't idempotent" (then it's a question for the toolchain/protoc-plugin versions).
 check-gen:
 	@$(MAKE) gen
 	@if ! git diff --exit-code -- $(KEEPER_PROTO_OUT) $(PLUGIN_PROTO_OUT); then \
 		echo ""; \
-		echo "gen-drift: сгенерённый Go отличается от committed"; \
-		echo "закоммить результат 'make gen' (или протоген не идемпотентен)"; \
+		echo "gen-drift: generated Go differs from committed"; \
+		echo "commit the result of 'make gen' (or protogen isn't idempotent)"; \
 		exit 1; \
 	fi
-	@echo "check-gen: протоген идемпотентен"
+	@echo "check-gen: protogen is idempotent"
 
-# Проверка целостности внутренних doc-ссылок (markdown [..](file.md#anchor) во
-# всех *.md, включая CLAUDE.md и examples/, + docs/...#anchor в Go-комментариях).
-# Целевой файл должен существовать, якорь — генериться GitHub-slug-ом из заголовка.
-# PRE-EXISTING битые ссылки (усечённые Go-якоря, устаревшие slug-и) занесены в
-# scripts/doc-links-allowlist.txt и выгребаются батчами миграции ADR в docs/adr/.
+# Checks the integrity of internal doc links (markdown [..](file.md#anchor) across
+# all *.md, including CLAUDE.md and examples/, + docs/...#anchor in Go comments).
+# The target file must exist, the anchor is generated as a GitHub slug from the heading.
+# PRE-EXISTING broken links (truncated Go anchors, stale slugs) are tracked in
+# scripts/doc-links-allowlist.txt and cleared out in batches during the ADR migration to docs/adr/.
 check-doc-links:
 	@python3 scripts/check-doc-links.py
 
-# govulncheck — supply-chain CI-гейт по всем go.work-модулям (ИБ-аудит, до беты).
-# Symbol-scan: падает (exit 3) ТОЛЬКО когда уязвимость реально достижима по графу
-# вызовов кода/зависимостей — не просто «есть в go.sum». Тот же skip-empty-module
-# паттерн, что у vet/test (модуль без go-пакетов пропускается).
+# govulncheck - the supply-chain CI gate across all go.work modules (security audit, pre-beta).
+# Symbol-scan: fails (exit 3) ONLY when a vulnerability is actually reachable through the
+# code/dependency call graph - not just "present in go.sum". Same skip-empty-module
+# pattern as vet/test (a module with no go packages is skipped).
 #
-# Бинарь — `go install` в $(GOPATH)/bin (паттерн protoc-плагинов). Если не
-# найден — ставим pinned-версию (идемпотентно).
+# The binary - `go install` into $(GOPATH)/bin (the protoc-plugins pattern). If not
+# found - installs the pinned version (idempotent).
 #
-# Offline-graceful: govulncheck тянет vuln-DB (vuln.go.dev). Без сети прогон
-# невозможен — `SKIP_VULNCHECK=1` пропускает гейт с warning (dev-машина без
-# доступа не блокируется). В CI переменная НЕ ставится → гейт гонит реально и
-# обязан быть зелёным. Не silently-skip-by-default: пропуск только по явному
-# opt-out, иначе supply-chain-регресс прошёл бы незамеченным.
-# Весь рецепт — ОДНА shell-инвокация (`if ...; then ...; fi` в одной логической
-# строке): иначе `exit 0` в первой recipe-строке завершил бы только её sub-shell,
-# а следующие строки таргета всё равно выполнились бы (make гонит каждую строку
-# отдельным shell-ом). SKIP-ветка обязана пропустить весь скан целиком.
+# Offline-graceful: govulncheck pulls the vuln DB (vuln.go.dev). Without network the run
+# is impossible - `SKIP_VULNCHECK=1` skips the gate with a warning (a dev machine without
+# access isn't blocked). In CI the variable is NOT set -> the gate actually runs and
+# must be green. Not silently-skip-by-default: skipping only via an explicit
+# opt-out, otherwise a supply-chain regression would go unnoticed.
+# The whole recipe is ONE shell invocation (`if ...; then ...; fi` on one logical
+# line): otherwise `exit 0` in the first recipe line would only end its own sub-shell,
+# and the target's following lines would still run (make runs each line in its
+# own separate shell). The SKIP branch must skip the entire scan.
 check-vuln:
 	@if [ -n "$(SKIP_VULNCHECK)" ]; then \
-		echo "check-vuln: SKIP_VULNCHECK задан — supply-chain-скан пропущен (offline opt-out)"; \
+		echo "check-vuln: SKIP_VULNCHECK is set - supply-chain scan skipped (offline opt-out)"; \
 	else \
 		if [ ! -x "$(GOVULNCHECK)" ]; then \
-			echo "govulncheck не найден — go install @$(GOVULNCHECK_VERSION)"; \
+			echo "govulncheck not found - go install @$(GOVULNCHECK_VERSION)"; \
 			go install golang.org/x/vuln/cmd/govulncheck@$(GOVULNCHECK_VERSION) || exit 1; \
 		fi; \
 		for m in $(MODULES); do \
@@ -933,15 +934,15 @@ check-vuln:
 			echo "govulncheck ./... in $$m"; \
 			(cd $$m && $(GOVULNCHECK) ./...) || exit 1; \
 		done; \
-		echo "check-vuln: govulncheck чист по всем модулям"; \
+		echo "check-vuln: govulncheck is clean across all modules"; \
 	fi
 
-# Офлайн-валидация корпуса examples/ линтером soul-lint. Бинарь собирается в
-# рамках `build` (зависимость). Категории: destiny / service / manifest /
-# scenario. validate-scenario принимает путь к scenario/<name>/main.yml
-# (точку входа сценария; вторичные файлы резолвятся через include: из main.yml).
-# Пустая категория (нет файлов под glob) пропускается без ошибки. Любой
-# не-нулевой выход soul-lint на committed-примере фейлит гейт.
+# Offline validation of the examples/ corpus with the soul-lint linter. The binary is built
+# as part of `build` (dependency). Categories: destiny / service / manifest /
+# scenario. validate-scenario takes a path to scenario/<name>/main.yml
+# (the scenario's entry point; secondary files are resolved via include: from main.yml).
+# An empty category (no files under the glob) is skipped without error. Any
+# non-zero exit from soul-lint on a committed example fails the gate.
 lint: build
 	@for f in examples/destiny/*/destiny.yml; do \
 		[ -e "$$f" ] || continue; \
@@ -963,23 +964,23 @@ lint: build
 		echo "validate-scenario $$f"; \
 		$(LINT_BIN) validate-scenario "$$f" || exit 1; \
 	done
-	@echo "lint: корпус examples/ валиден"
+	@echo "lint: examples/ corpus is valid"
 
-# L0-испытания (soul-trial, ADR-023): render-only, герметичные. Гоняем рекурсивно
-# по КАЖДОМУ корпус-каталогу examples/service/<svc> И examples/destiny/<svc> с хотя
-# бы одним tests/<case>/case.yml (soul-trial сам ищет case.yml рекурсивно, в т.ч.
-# под _trial/scenario/.../tests/). Бинарь soul-trial собирается в рамках `build`
-# (зависимость). Раньше эти кейсы жили ВНЕ гейта (`make lint` = только soul-lint-
-# схема, `make test` = go test) — поэтому сломанные ассерты (напр. off-by-5 индексы
-# add_node после sentinel-слайса) оставались зелёными. Теперь гейт реально исполняет
-# L0. До 2026-06-26 обходились ТОЛЬКО examples/service/ — destiny-корпус (node-exporter
-# и др. с _trial-кейсами) выпадал из гейта; теперь покрыт.
+# L0 trials (soul-trial, ADR-023): render-only, hermetic. Run recursively over
+# EVERY corpus directory examples/service/<svc> AND examples/destiny/<svc> with at
+# least one tests/<case>/case.yml (soul-trial itself searches for case.yml recursively, including
+# under _trial/scenario/.../tests/). The soul-trial binary is built as part of `build`
+# (dependency). These cases used to live OUTSIDE the gate (`make lint` = soul-lint schema
+# only, `make test` = go test) - so broken assertions (e.g. off-by-5 indices for
+# add_node after a sentinel slice) stayed green. Now the gate actually runs
+# L0. Before 2026-06-26 only examples/service/ was covered - the destiny corpus (node-exporter
+# and others with _trial cases) fell outside the gate; now it's covered.
 #
-# L2 (stand-based, требуют поднятый стенд) harness пропускает сам — в гейт не
-# тащим; ценность гейта — L0 render-инварианты.
+# The L2 harness (stand-based, requires a running stand) skips itself - we don't
+# pull it into the gate; the gate's value is L0 render invariants.
 #
-# Skip-list ($(TRIAL_SKIP)) печатается ГРОМКО per-каталог: исключение видно в логе,
-# не маскирует регресс. Каталог без case.yml тихо пропускается (нечего гонять).
+# The skip list ($(TRIAL_SKIP)) is printed LOUDLY per directory: the exclusion is visible in the
+# log, doesn't mask a regression. A directory without case.yml is silently skipped (nothing to run).
 trial: build
 	@for root in examples/service examples/destiny; do \
 		for svc in "$$root"/*/; do \
@@ -988,7 +989,7 @@ trial: build
 			skip=""; \
 			for s in $(TRIAL_SKIP); do [ "$$s" = "$$name" ] && skip=1; done; \
 			if [ -n "$$skip" ]; then \
-				echo "SKIP trial $$name (в TRIAL_SKIP — pre-existing L0-drift, см. Makefile-комментарий)"; \
+				echo "SKIP trial $$name (in TRIAL_SKIP - pre-existing L0-drift, see the Makefile comment)"; \
 				continue; \
 			fi; \
 			if ! find "$$svc" -name case.yml | grep -q .; then \
@@ -998,31 +999,31 @@ trial: build
 			$(TRIAL_BIN) run "$$svc" || exit 1; \
 		done; \
 	done
-	@echo "trial: L0-испытания корпуса examples/service/ + examples/destiny/ пройдены"
+	@echo "trial: L0 trials of the examples/service/ + examples/destiny/ corpus passed"
 
-# --- Нагрузочное тестирование (soul-legion) ---
-# Однокнопочный прогон нагрузочного генератора soul-legion (tests/load/, ADR-004:
-# test-only, НЕ поставочный бинарь; вне MODULES — `make check` его не трогает).
-# Полный план/методика/измеренные числа — docs/testing/load-testing.md.
+# --- Load testing (soul-legion) ---
+# One-button run of the soul-legion load generator (tests/load/, ADR-004:
+# test-only, NOT a shipped binary; outside MODULES -- `make check` doesn't touch it).
+# Full plan/methodology/measured numbers -- docs/testing/load-testing.md.
 #
-# Предусловие: поднятый dev-стенд (keeper event-stream :9443 / metrics :9090 /
-# openapi :8080 + dev-PKI). healthz-guard ниже проверяет это до сборки/минта и
-# при недоступности подсказывает `make dev-stand` (или `make dev-keeper`).
+# Precondition: a running dev stand (keeper event-stream :9443 / metrics :9090 /
+# openapi :8080 + dev-PKI). The healthz-guard below checks this before build/mint and
+# suggests `make dev-stand` (or `make dev-keeper`) if unavailable.
 #
-# Профиль нагрузки задаётся ENV-переменными (ниже дефолты). Примеры:
-#   make stress                          # 1000 коннектов (ось A), cleanup
-#   make stress COUNT=500 API=1 VOYAGE=1 # + ось B (API) + ось C (один Voyage)
-#   make stress WRITE=1                  # + ось write: create→delete циклы (write+audit-путь)
+# Load profile is set via ENV variables (defaults below). Examples:
+#   make stress                          # 1000 connections (axis A), cleanup
+#   make stress COUNT=500 API=1 VOYAGE=1 # + axis B (API) + axis C (single Voyage)
+#   make stress WRITE=1                  # + write axis: create->delete cycles (write+audit path)
 #   make stress COUNT=2000 RAMP=500 DURATION=60s
 #   make stress COUNT=10000 VOYAGE=1 VOYAGE_CONCURRENCY=100 VOYAGE_POLL=600s
-#                                        # disambiguating Voyage-cliff: явный concurrency + длинный poll
+#                                        # disambiguating Voyage-cliff: explicit concurrency + long poll
 #   make stress COUNT=25000 ISSUE_CONCURRENCY=128
-#                                        # большой N: поднять параллелизм cert-минтинга в setup-фазе
+#                                        # large N: raise cert-minting parallelism in the setup phase
 #
-# Ось A (стримы) гонится всегда. Оси B/C/write опциональны (API=1 / VOYAGE=1 /
-# WRITE=1) и требуют admin-JWT — он минтится тем же механизмом, что `make dev-jwt`
-# (dev/mint-jwt.sh, ключ из Vault), и прокидывается в --jwt. Без них токен не
-# нужен (не минтим).
+# Axis A (streams) always runs. Axes B/C/write are optional (API=1 / VOYAGE=1 /
+# WRITE=1) and require admin-JWT -- it's minted by the same mechanism as `make dev-jwt`
+# (dev/mint-jwt.sh, key from Vault), and passed into --jwt. Without them the token isn't
+# needed (not minted).
 COUNT         ?= 1000
 RAMP          ?= 250
 RAMP_INTERVAL ?= 300ms
@@ -1030,56 +1031,56 @@ DURATION      ?= 30s
 COVEN         ?= legion
 API           ?= 0
 VOYAGE        ?= 0
-# Ось write (write+audit-путь): create→delete циклы безопасных самоочищающихся
-# сущностей (synod/role/push-provider/herald). Требует admin-JWT (как оси B/C).
+# Write axis (write+audit path): create->delete cycles of safe self-cleaning
+# entities (synod/role/push-provider/herald). Requires admin-JWT (like axes B/C).
 WRITE          ?= 0
 WRITE_DURATION ?= 15s
 API_DURATION  ?= 15s
-# Ось C tuning (disambiguating-эксперимент Voyage-cliff): VOYAGE_CONCURRENCY пусто/0
-# → поле concurrency НЕ слать (keeper-дефолт=1, последовательно); >0 → top-level
-# voyage.concurrency в теле create. VOYAGE_POLL — бюджет ожидания терминала.
+# Axis C tuning (disambiguating experiment for Voyage-cliff): VOYAGE_CONCURRENCY empty/0
+# -> concurrency field is NOT sent (keeper default=1, sequential); >0 -> top-level
+# voyage.concurrency in the create body. VOYAGE_POLL -- terminal-wait budget.
 VOYAGE_CONCURRENCY ?=
 VOYAGE_POLL        ?= 120s
-# Параллелизм Vault-issue в setup-фазе (cert-минтинг). На больших N (25k/50k)
-# поднимать до ~96-128, чтобы setup-фаза не тянулась. Совпадает с дефолтом флага
-# --issue-concurrency (32); ENV только переопределяет, дефолт флага не трогаем.
+# Vault-issue parallelism in the setup phase (cert minting). On large N (25k/50k)
+# raise it to ~96-128 so the setup phase doesn't drag. Matches the default of the flag
+# --issue-concurrency (32); ENV only overrides, we don't touch the flag default.
 ISSUE_CONCURRENCY  ?= 32
 
-# Эндпоинты dev-стенда (сверены с dev/keeper.dev.yml: event_stream :9443 /
-# openapi :8080 / metrics :9090) и dev-PKI/инфра (provision.sh / docker-compose).
+# Dev-stand endpoints (checked against dev/keeper.dev.yml: event_stream :9443 /
+# openapi :8080 / metrics :9090) and dev-PKI/infra (provision.sh / docker-compose).
 KEEPER_ENDPOINT ?= 127.0.0.1:9443
 OPENAPI         ?= http://127.0.0.1:8080
 METRICS         ?= http://127.0.0.1:9090
 PG              ?= postgres://keeper:keeper@localhost:5434/keeper?sslmode=disable
 VAULT           ?= http://127.0.0.1:8200
-# root CA Keeper-server-cert-а — тот же путь, что listen.event_stream.tls.ca в
+# root CA of the Keeper server cert -- same path as listen.event_stream.tls.ca in
 # dev/keeper.dev.yml (Vault PKI root, CN=soul-stack).
 STRESS_CA       ?= /tmp/keeper-dev/tls/vault-ca.crt
-# Здоровье API-listener-а keeper-а (тот же /healthz, что ждёт dev/keeper-run.sh).
+# Health of the keeper API listener (same /healthz that dev/keeper-run.sh waits for).
 STRESS_HEALTHZ  ?= http://127.0.0.1:8080/healthz
 
-# stress — собрать soul-legion → (при API/VOYAGE) минтить admin-JWT → прогнать →
-# почистить (--cleanup). load-test — алиас.
+# stress -- build soul-legion -> (if API/VOYAGE) mint admin-JWT -> run ->
+# clean up (--cleanup). load-test -- alias.
 stress:
 	@code="$$(curl -s -o /dev/null -w '%{http_code}' '$(STRESS_HEALTHZ)' 2>/dev/null || true)"; \
 	if [ "$$code" != "200" ]; then \
-		echo "stress: dev-стенд недоступен ($(STRESS_HEALTHZ) → $$code, ожидался 200)."; \
-		echo "  подними стенд: 'make dev-stand' (полный) или 'make dev-keeper' (только keeper)."; \
+		echo "stress: dev stand unreachable ($(STRESS_HEALTHZ) -> $$code, expected 200)."; \
+		echo "  bring up the stand: 'make dev-stand' (full) or 'make dev-keeper' (keeper only)."; \
 		exit 1; \
 	fi
 	@if [ ! -s "$(STRESS_CA)" ]; then \
-		echo "stress: нет dev-CA ($(STRESS_CA)) — запусти 'make dev-provision' и повтори."; \
+		echo "stress: no dev-CA ($(STRESS_CA)) -- run 'make dev-provision' and retry."; \
 		exit 1; \
 	fi
 	@echo "go build -o tests/load/bin/soul-legion ./cmd/soul-legion in tests/load"
 	@cd tests/load && go build -o bin/soul-legion ./cmd/soul-legion
 	@JWT=""; \
 	if [ "$(API)" = "1" ] || [ "$(VOYAGE)" = "1" ] || [ "$(WRITE)" = "1" ]; then \
-		echo "stress: минчу admin-JWT (механизм make dev-jwt) для осей B/C/write"; \
+		echo "stress: minting admin-JWT (make dev-jwt mechanism) for axes B/C/write"; \
 		JWT="$$(AID='$(AID)' ROLES='$(ROLES)' TTL='$(TTL)' bash dev/mint-jwt.sh)" \
-			|| { echo "stress: не удалось выпустить JWT (Vault поднят? 'make dev-up' + 'make dev-provision')"; exit 1; }; \
+			|| { echo "stress: failed to issue JWT (is Vault up? 'make dev-up' + 'make dev-provision')"; exit 1; }; \
 	fi; \
-	echo "stress: гоню soul-legion (count=$(COUNT) ramp=$(RAMP)/$(RAMP_INTERVAL) duration=$(DURATION) coven=$(COVEN) api=$(API) voyage=$(VOYAGE) write=$(WRITE))"; \
+	echo "stress: running soul-legion (count=$(COUNT) ramp=$(RAMP)/$(RAMP_INTERVAL) duration=$(DURATION) coven=$(COVEN) api=$(API) voyage=$(VOYAGE) write=$(WRITE))"; \
 	./tests/load/bin/soul-legion \
 		--keeper-endpoint='$(KEEPER_ENDPOINT)' \
 		--metrics='$(METRICS)' \
@@ -1105,72 +1106,72 @@ stress:
 
 load-test: stress
 
-# Шпаргалка по таргетам. Подробности dev-стека — `docs/dev/local-setup.md`.
+# Target cheat sheet. Dev-stack details -- `docs/dev/local-setup.md`.
 help:
-	@echo "Сборка и тесты:"
+	@echo "Build and tests:"
 	@echo "  gen               protoc keeper+plugin + gen-openapi → committed gen"
-	@echo "  gen-openapi       huma-dump → committed docs/keeper/openapi.yaml (производный, для UI)"
-	@echo "  build             собрать keeper / soul-trial / soul / soul-lint / soulctl"
-	@echo "  build-soulctl     собрать только soulctl (клиентский CLI оператора)"
-	@echo "  test              go test ./... по всем модулям (без docker)"
-	@echo "  test-plugins      GOWORK=off go test по go.mod-плагинам examples/module/* (community.redis)"
+	@echo "  gen-openapi       huma-dump -> committed docs/keeper/openapi.yaml (derived, for UI)"
+	@echo "  build             build keeper / soul-trial / soul / soul-lint / soulctl"
+	@echo "  build-soulctl     build only soulctl (operator client CLI)"
+	@echo "  test              go test ./... across all modules (no docker)"
+	@echo "  test-plugins      GOWORK=off go test over go.mod plugins examples/module/* (community.redis)"
 	@echo "  test-race         go test -race ./..."
-	@echo "  test-integration  go test -tags=integration (testcontainers, нужен docker)"
-	@echo "  e2e               L3a E2E pilot (tests/e2e, -tags=e2e, нужен docker для имп-slice)"
-	@echo "  build-linux       cross-compile keeper+soul под Linux amd64 (агрегат bin-keeper+bin-soul)"
-	@echo "  bin-keeper        cross-compile только keeper (linux-amd64) → keeper/bin/keeper-linux-amd64"
-	@echo "  bin-soul          cross-compile только soul (linux-amd64) → soul/bin/soul-linux-amd64"
-	@echo "  bin-soul-lint     cross-compile только soul-lint (linux-amd64) → soul-lint/bin/soul-lint-linux-amd64"
+	@echo "  test-integration  go test -tags=integration (testcontainers, needs docker)"
+	@echo "  e2e               L3a E2E pilot (tests/e2e, -tags=e2e, needs docker for the imp-slice)"
+	@echo "  build-linux       cross-compile keeper+soul for Linux amd64 (aggregate of bin-keeper+bin-soul)"
+	@echo "  bin-keeper        cross-compile only keeper (linux-amd64) -> keeper/bin/keeper-linux-amd64"
+	@echo "  bin-soul          cross-compile only soul (linux-amd64) -> soul/bin/soul-linux-amd64"
+	@echo "  bin-soul-lint     cross-compile only soul-lint (linux-amd64) -> soul-lint/bin/soul-lint-linux-amd64"
 	@echo "  e2e-live          L3b smoke-loop (tests/e2e-live, -tags=e2e_live, privileged docker, nightly)"
 	@echo "  e2e-k8s           L3c k8s-loop (tests/e2e-k8s, -tags=e2e_k8s, kind + bitnami Helm, weekly)"
-	@echo "  docker-build-keeper  собрать образ keeper:e2e-k8s (для L3c kind load docker-image)"
-	@echo "  docker-build-soul    собрать образ soul:e2e-k8s (privileged systemd Debian-12 для L3c-3+)"
-	@echo "  tidy              go mod tidy по всем модулям"
+	@echo "  docker-build-keeper  build the keeper:e2e-k8s image (for L3c kind load docker-image)"
+	@echo "  docker-build-soul    build the soul:e2e-k8s image (privileged systemd Debian-12 for L3c-3+)"
+	@echo "  tidy              go mod tidy across all modules"
 	@echo ""
-	@echo "Проверки/гейт:"
-	@echo "  check             единый локальный CI-гейт (fmt+vet+build+test+test-plugins+openapi+gen+lint+trial)"
-	@echo "  check-fmt         gofmt -l по всем модулям (fail на неотформатированных)"
-	@echo "  vet               go vet ./... по всем модулям"
-	@echo "  check-gen         идемпотентность протогена (gen-drift в proto/gen/go)"
-	@echo "  check-doc-links   целостность внутренних doc-ссылок (markdown + Go-комментарии)"
-	@echo "  check-vuln        govulncheck supply-chain по всем модулям (offline: SKIP_VULNCHECK=1)"
-	@echo "  lint              soul-lint по корпусу examples/ (destiny/service/manifest/scenario)"
-	@echo "  trial             soul-trial L0-испытания по корпусу examples/service/ (render-инварианты)"
+	@echo "Checks/gate:"
+	@echo "  check             single local CI gate (fmt+vet+build+test+test-plugins+openapi+gen+lint+trial)"
+	@echo "  check-fmt         gofmt -l across all modules (fails on unformatted)"
+	@echo "  vet               go vet ./... across all modules"
+	@echo "  check-gen         protogen idempotency (gen-drift in proto/gen/go)"
+	@echo "  check-doc-links   internal doc-link integrity (markdown + Go comments)"
+	@echo "  check-vuln        govulncheck supply-chain across all modules (offline: SKIP_VULNCHECK=1)"
+	@echo "  lint              soul-lint over the examples/ corpus (destiny/service/manifest/scenario)"
+	@echo "  trial             soul-trial L0 trials over the examples/service/ corpus (render invariants)"
 	@echo ""
-	@echo "Локальный dev-стек:"
+	@echo "Local dev stack:"
 	@echo "  dev-up            docker compose up -d (PG / Vault / Redis)"
-	@echo "  dev-stop          остановить локальные keeper/soul-демоны dev-воркфлоу"
-	@echo "  dev-down          dev-stop + docker compose down (данные persist)"
-	@echo "  dev-reset         docker compose down -v && up -d (полный сброс БД)"
-	@echo "  dev-provision     idempotent bootstrap: Vault KV/PKI + TLS + git-репо артефактов"
-	@echo "  dev-smoke         dev-up → dev-provision → keeper init → dev-provision (seed реестра)"
-	@echo "  dev-keeper        рестарт keeper с полным dev-env (file://-резолв) + ждёт healthz"
-	@echo "  dev-jwt           выпустить Archon-JWT из Vault-ключа (AID/ROLES/TTL); токен в stdout"
-	@echo "  dev-souls         переподнять локальный флот souls по реестру БД"
-	@echo "  dev-web           vite dev-сервер web-репо (--host; WEB_DIR=<путь>)"
-	@echo "  dev-stand         полный подъём стенда: provision → keeper → souls → web"
-	@echo "  dev-stand-free    освободить слот стенда (DEV_STAND=<slug>): убрать строку из реестра"
-	@echo "  (все dev-* стенд-aware: DEV_STAND=<slug> — второй+ стенд рядом; DEDICATED_INFRA=1 — свой docker-проект)"
+	@echo "  dev-stop          stop the local keeper/soul daemons of the dev workflow"
+	@echo "  dev-down          dev-stop + docker compose down (data persists)"
+	@echo "  dev-reset         docker compose down -v && up -d (full DB reset)"
+	@echo "  dev-provision     idempotent bootstrap: Vault KV/PKI + TLS + git repo of artifacts"
+	@echo "  dev-smoke         dev-up -> dev-provision -> keeper init -> dev-provision (registry seed)"
+	@echo "  dev-keeper        restart keeper with a full dev-env (file:// resolve) + waits for healthz"
+	@echo "  dev-jwt           issue an Archon-JWT from a Vault key (AID/ROLES/TTL); token to stdout"
+	@echo "  dev-souls         re-raise local souls per the DB registry"
+	@echo "  dev-web           vite dev server for the web repo (--host; WEB_DIR=<path>)"
+	@echo "  dev-stand         full stand bring-up: provision -> keeper -> souls -> web"
+	@echo "  dev-stand-free    free up a stand slot (DEV_STAND=<slug>): remove the row from the registry"
+	@echo "  (all dev-* are stand-aware: DEV_STAND=<slug> -- a second+ stand alongside; DEDICATED_INFRA=1 -- its own docker project)"
 	@echo ""
-	@echo "Нагрузочное тестирование (soul-legion, нужен поднятый стенд):"
-	@echo "  stress            one-button нагрузка: build+mint-JWT+gon+cleanup (ENV: COUNT/RAMP/API/VOYAGE/WRITE/WRITE_DURATION/VOYAGE_CONCURRENCY/VOYAGE_POLL/ISSUE_CONCURRENCY/...)"
-	@echo "  load-test         алиас stress"
+	@echo "Load testing (soul-legion, needs a running stand):"
+	@echo "  stress            one-button load: build+mint-JWT+gon+cleanup (ENV: COUNT/RAMP/API/VOYAGE/WRITE/WRITE_DURATION/VOYAGE_CONCURRENCY/VOYAGE_POLL/ISSUE_CONCURRENCY/...)"
+	@echo "  load-test         alias for stress"
 	@echo ""
 	@echo "OpenAPI:"
-	@echo "  gen-openapi       перегенерировать committed openapi.yaml из huma-агрегатора"
-	@echo "  check-openapi     CI-guard на drift committed openapi.yaml vs huma-dump"
-	@echo "  check-template    CI-guard на drift embedded plugin-template (skip без companion)"
-	@echo "  sync-webui        вендоринг dist/ companion soul-stack-web → keeper/internal/webui/assets/"
-	@echo "  check-webui       CI-guard на drift embedded UI (skip без companion)"
-	@echo "  check-stand-template  CI-guard на drift keeper.dev.yml.tmpl ↔ committed keeper.dev.yml"
-	@echo "  check-soul-template   CI-guard на drift soul.dev.yml.tmpl ↔ committed soul.dev.yml (skip без .tmpl)"
+	@echo "  gen-openapi       regenerate committed openapi.yaml from the huma aggregator"
+	@echo "  check-openapi     CI guard on drift between committed openapi.yaml and huma-dump"
+	@echo "  check-template    CI guard on drift of the embedded plugin template (skip without companion)"
+	@echo "  sync-webui        vendor dist/ from companion soul-stack-web -> keeper/internal/webui/assets/"
+	@echo "  check-webui       CI guard on drift of the embedded UI (skip without companion)"
+	@echo "  check-stand-template  CI guard on drift keeper.dev.yml.tmpl <-> committed keeper.dev.yml"
+	@echo "  check-soul-template   CI guard on drift soul.dev.yml.tmpl <-> committed soul.dev.yml (skip without .tmpl)"
 	@echo ""
-	@echo "Release/packaging (аддитивно, НЕ входят в check):"
-	@echo "  docker-keeper     ПРОД-образ keeper (multi-stage distroless) → \$$(KEEPER_IMAGE):\$$(VERSION); push в свой registry"
-	@echo "  docker-soul       ПРОД-образ soul (multi-stage distroless) → \$$(SOUL_IMAGE):\$$(VERSION); push в свой registry"
-	@echo "  sbom              CycloneDX SBOM по go-модулям (cyclonedx-gomod) → dist/sbom/"
-	@echo "  pkg               нативные пакеты deb+rpm всех трёх компонентов (nfpm) → dist/pkg/"
-	@echo "  pkg-keeper        deb+rpm только keeper (nfpm) → dist/pkg/"
-	@echo "  pkg-soul          deb+rpm только soul (nfpm) → dist/pkg/"
-	@echo "  pkg-soul-lint     deb+rpm только soul-lint (nfpm) → dist/pkg/"
-	@echo "  sign              подпись образов (cosign) — отложено, documented-stub"
+	@echo "Release/packaging (additive, NOT part of check):"
+	@echo "  docker-keeper     PROD image of keeper (multi-stage distroless) -> \$$(KEEPER_IMAGE):\$$(VERSION); push to your own registry"
+	@echo "  docker-soul       PROD image of soul (multi-stage distroless) -> \$$(SOUL_IMAGE):\$$(VERSION); push to your own registry"
+	@echo "  sbom              CycloneDX SBOM over go modules (cyclonedx-gomod) -> dist/sbom/"
+	@echo "  pkg               native deb+rpm packages for all three components (nfpm) -> dist/pkg/"
+	@echo "  pkg-keeper        deb+rpm only keeper (nfpm) -> dist/pkg/"
+	@echo "  pkg-soul          deb+rpm only soul (nfpm) -> dist/pkg/"
+	@echo "  pkg-soul-lint     deb+rpm only soul-lint (nfpm) -> dist/pkg/"
+	@echo "  sign              image signing (cosign) -- deferred, documented-stub"

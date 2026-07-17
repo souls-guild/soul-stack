@@ -1,6 +1,6 @@
 -- 064_voyages_batch_mode.down.sql
 --
--- Down: снять batch_mode-колонку и её CHECK.
+-- Down: drop the batch_mode column and its CHECK.
 ALTER TABLE voyages
     DROP CONSTRAINT IF EXISTS voyages_batch_mode_valid;
 

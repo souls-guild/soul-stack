@@ -1,17 +1,17 @@
 -- 013_create_purge_old_seeds.up.sql
 --
--- Reaper-правило `purge_old_seeds` (docs/keeper/reaper.md): удаляет
--- batch записей `soul_seeds` в указанных `statuses[]` (default
--- `[superseded, expired, revoked]`) с `issued_at` старше `max_age`.
+-- Reaper rule `purge_old_seeds` (docs/keeper/reaper.md): deletes a
+-- batch of `soul_seeds` records in the given `statuses[]` (default
+-- `[superseded, expired, revoked]`) with `issued_at` older than `max_age`.
 --
--- Active-seed-ы НЕ удаляются под этим правилом (statuses-фильтр их
--- исключает, см. reaper.md). Active-seed может «умереть» только через
--- ротацию (status → superseded) или revoke (status → revoked) — оба
--- сценария регулируются soul-side / Operator API, не Жнецом.
+-- Active seeds are NOT deleted by this rule (the statuses filter
+-- excludes them, see reaper.md). An active seed can only "die" via
+-- rotation (status -> superseded) or revoke (status -> revoked) - both
+-- scenarios are governed by the soul-side / Operator API, not the Reaper.
 --
--- Возраст считается от `issued_at`, а не от перехода в текущий статус.
--- Это сознательное решение: история сертификата измеряется временем
--- существования, а не остаточным сроком после ротации/отзыва.
+-- Age is counted from `issued_at`, not from the transition into the
+-- current status. This is a deliberate choice: certificate history is
+-- measured by lifetime, not by the remaining term after rotation/revocation.
 
 CREATE OR REPLACE FUNCTION purge_old_seeds(
     target_statuses text[],
@@ -39,4 +39,4 @@ END;
 $$ LANGUAGE plpgsql;
 
 COMMENT ON FUNCTION purge_old_seeds(text[], interval, integer) IS
-    'Удаляет batch soul_seeds в указанных статусах с issued_at старше max_age. Возвращает количество удалённых строк.';
+    'Deletes a batch of soul_seeds in the specified statuses with issued_at older than max_age. Returns the number of deleted rows.';

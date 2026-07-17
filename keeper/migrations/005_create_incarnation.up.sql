@@ -1,18 +1,18 @@
 -- 005_create_incarnation.up.sql
 --
--- Реестр incarnation-ов (runtime-инстансов сервисов) под ADR-009.
--- Каждая incarnation — runtime-проекция Service (git) в Postgres со
--- spec (декларированное оператором) + state (актуальное представление
--- после прогонов) + status (узкий MVP-enum: ready/applying/error_locked/
--- migration_failed; provisioning/drift/destroying — пост-MVP).
+-- Registry of incarnations (runtime instances of services) under ADR-009.
+-- Each incarnation is a runtime projection of a Service (git) into Postgres with
+-- spec (declared by the operator) + state (the actual representation
+-- after runs) + status (a narrow MVP enum: ready/applying/error_locked/
+-- migration_failed; provisioning/drift/destroying are post-MVP).
 --
--- PK = `name` (kebab-case, оно же корневая Coven-метка по ADR-008).
--- service_version — git-ref (tag/branch) Service-репо по ADR-007.
--- state_schema_version — версия структуры `state` для миграций по ADR-019.
+-- PK = `name` (kebab-case, also the root Coven label per ADR-008).
+-- service_version is the git ref (tag/branch) of the Service repo per ADR-007.
+-- state_schema_version is the version of the `state` structure for migrations per ADR-019.
 --
--- FK `created_by_aid` ссылается на `operators(aid)` (ADR-014). При
--- удалении оператора — ON DELETE SET NULL (история incarnation важнее
--- ссылочной целостности; revoke — обычный путь, удаление — редкое).
+-- FK `created_by_aid` references `operators(aid)` (ADR-014). On operator
+-- deletion - ON DELETE SET NULL (incarnation history matters more than
+-- referential integrity; revoke is the normal path, deletion is rare).
 
 CREATE TABLE incarnation (
     name                  TEXT        PRIMARY KEY,
@@ -35,15 +35,15 @@ CREATE TABLE incarnation (
         FOREIGN KEY (created_by_aid) REFERENCES operators (aid) ON DELETE SET NULL
 );
 
--- Partial индекс для фильтрации списка по сервису (типовой запрос
--- `GET /v1/incarnations?service=...`).
+-- Partial index for filtering the list by service (a typical
+-- `GET /v1/incarnations?service=...` query).
 CREATE INDEX incarnation_service_idx
     ON incarnation (service);
 
--- Partial индекс для фильтрации по статусу — короткий enum, типичный
--- запрос — «все error_locked / migration_failed для триажа».
+-- Partial index for filtering by status - a short enum, a typical
+-- query is "all error_locked / migration_failed for triage".
 CREATE INDEX incarnation_status_idx
     ON incarnation (status);
 
 COMMENT ON TABLE incarnation IS
-    'Реестр runtime-инстансов Service (ADR-009). PK = name (Coven-метка).';
+    'Registry of runtime instances of Service (ADR-009). PK = name (Coven label).';

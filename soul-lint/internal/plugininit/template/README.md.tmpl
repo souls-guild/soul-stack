@@ -2,47 +2,47 @@
 
 {{.Description}}
 
-SoulModule-плагин Soul Stack ({{.Namespace}}.{{.Name}}). Реализован через `sdk/module` поверх gRPC-stdio-handshake ([ADR-020](https://github.com/co-cy/soul-stack/blob/main/docs/architecture.md#adr-020-plugin-инфраструктура-формат-manifest-handshake-lifecycle)).
+SoulModule plugin for Soul Stack ({{.Namespace}}.{{.Name}}). Implemented via `sdk/module` on top of the gRPC-stdio handshake ([ADR-020](https://github.com/co-cy/soul-stack/blob/main/docs/architecture.md#adr-020-plugin-infrastructure-manifest-handshake-lifecycle-format)).
 
-## Состояния
+## States
 
-- `present` — ресурс существует с запрошенными параметрами.
-- `absent` — ресурс отсутствует.
+- `present` - the resource exists with the requested parameters.
+- `absent` - the resource is absent.
 
-Параметры — см. `manifest.yaml::spec.states.<state>.input`.
+Parameters - see `manifest.yaml::spec.states.<state>.input`.
 
-Любой `secret: true`-параметр обязан иметь `pattern: "^vault:.*"` — иначе `soul-lint validate-manifest` падает с error (semantic rule `input_secret_without_vault_pattern`).
+Any `secret: true` parameter must have `pattern: "^vault:.*"` - otherwise `soul-lint validate-manifest` fails with an error (semantic rule `input_secret_without_vault_pattern`).
 
-## Использование в destiny
+## Usage in destiny
 
 ```yaml
 - module: {{.Namespace}}.{{.Name}}
   state: present
   name: example
-  # TODO: остальные params
+  # TODO: remaining params
 ```
 
-## Сборка
+## Build
 
 ```
-make build       # → bin/{{.BinaryName}}
+make build       # -> bin/{{.BinaryName}}
 make test
 make check       # fmt + vet + test + build
 ```
 
 ## Sigil-trust
 
-Перед публикацией official-плагина в продакшен — Архонт подписывает digest
-бинаря через Keeper ([ADR-026](https://github.com/co-cy/soul-stack/blob/main/docs/architecture.md#adr-026-sigil--целостность-плагинов-keeper-signed-digest-индекс)).
+Before publishing an official plugin to production, an Archon signs the binary's
+digest through Keeper ([ADR-026](https://github.com/co-cy/soul-stack/blob/main/docs/architecture.md#adr-026-sigil---plugin-integrity-keeper-signed-digest-index)).
 
-## Тесты
+## Tests
 
-- **L0** — unit с моком `pluginv1.SoulModule_ApplyServer` (см. `internal/{{.NamePackage}}/handler_test.go`).
-- **L1** — интеграция через testcontainers с реальным backend-ресурсом.
-- **L3b** — real-soul-container (privileged Debian-12 + установленный модуль).
+- **L0** - unit tests with a mock `pluginv1.SoulModule_ApplyServer` (see `internal/{{.NamePackage}}/handler_test.go`).
+- **L1** - integration via testcontainers against a real backend resource.
+- **L3b** - real-soul-container (privileged Debian-12 + the module installed).
 
-Подробнее — [Plugin author guide](https://github.com/co-cy/soul-stack-plugins/blob/main/docs/module-author-guide.md).
+More details - [Plugin author guide](https://github.com/co-cy/soul-stack-plugins/blob/main/docs/module-author-guide.md).
 
-## Автор
+## Author
 
 {{.AuthorName}}

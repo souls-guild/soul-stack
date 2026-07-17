@@ -1,16 +1,16 @@
 {{/*
-  oneshot-сборщик IPMI-сенсоров для node_exporter. Go text/template strict (ADR-010).
-  .vars.textfile_dir — каталог awk-скрипта ipmitool И выходного ipmitool.prom.
+  oneshot collector of IPMI sensors for node_exporter. Go text/template strict (ADR-010).
+  .vars.textfile_dir - directory of the ipmitool awk script AND the output ipmitool.prom.
 
-  Pipeline: `ipmitool sensor` → awk-скрипт ipmitool (в prometheus-форму) → ipmitool.prom.
-  ★ User=root: /usr/bin/ipmitool требует доступа к /dev/ipmi0 (char-ipmidev).
+  Pipeline: `ipmitool sensor` → ipmitool awk script (into prometheus form) → ipmitool.prom.
+  ★ User=root: /usr/bin/ipmitool requires access to /dev/ipmi0 (char-ipmidev).
 
-  ★ ProtectKernelModules=no (ТЗ): драйвер ipmi_si / ipmi_devintf может подгружаться лениво
-  при первом обращении к /dev/ipmi0 — запрет загрузки модулей сломал бы сбор на хостах, где
-  драйвер ещё не загружен. Остальной sandbox жёсткий.
+  ★ ProtectKernelModules=no (per spec): the ipmi_si / ipmi_devintf driver may load lazily
+  on first access to /dev/ipmi0 - disallowing module loading would break collection on hosts
+  where the driver is not yet loaded. The rest of the sandbox is strict.
 
-  ConditionPathExists=/dev/ipmi0 — без BMC-устройства коллектор не стартует (та же Condition
-  в .timer).
+  ConditionPathExists=/dev/ipmi0 - without a BMC device the collector does not start (same
+  Condition in .timer).
 */}}
 [Unit]
 Description=Collect IPMI metrics for node_exporter
@@ -21,7 +21,7 @@ Type=oneshot
 User=root
 ExecStart=/usr/bin/env bash -c 'set -euo pipefail; tmp="$(mktemp {{ .vars.textfile_dir }}/ipmitool.prom.XXXXXX)"; /usr/bin/ipmitool sensor | {{ .vars.textfile_dir }}/ipmitool > "$tmp"; mv "$tmp" "{{ .vars.textfile_dir }}/ipmitool.prom"'
 
-# systemd-hardening привилегированного oneshot (ТЗ §коллекторы).
+# systemd hardening for a privileged oneshot (per spec, collectors section).
 ReadWritePaths={{ .vars.textfile_dir }}
 ProtectSystem=strict
 ProtectHome=yes

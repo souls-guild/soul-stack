@@ -1,45 +1,45 @@
 -- 057_create_errand_runs.up.sql
 --
--- ADR-041 → E6-1 schema: ErrandRun PG-таблица + back-link на errands.
+-- ADR-041 → E6-1 schema: ErrandRun PG table + back-link to errands.
 --
--- ErrandRun — top-level multi-target invocation-time entity для массового
--- pull-ad-hoc exec одиночного модуля (`POST /v1/errand-runs`, MCP
--- `keeper.errand-run.start`). Один ErrandRun = N единичных Errand-ов (parity
--- ADR-033 single-host), запускаемых параллельно с семафор-cap `concurrency`
--- по resolved-снапшоту таргета. Отличие от Tide (ADR-040): нет scenario /
--- incarnation / surge-волн — это плоский fan-out одиночного модуля.
+-- ErrandRun - top-level multi-target invocation-time entity for mass
+-- pull-ad-hoc exec of a single module (`POST /v1/errand-runs`, MCP
+-- `keeper.errand-run.start`). One ErrandRun = N individual Errands (parity
+-- ADR-033 single-host), run in parallel with a semaphore-cap `concurrency`
+-- over a resolved snapshot of the target. Difference from Tide (ADR-040): no scenario /
+-- incarnation / surge waves - this is a flat fan-out of a single module.
 --
--- Failover-resilient через PG-based claim+lease (parity Tide / Ward-claim
--- ADR-027): pending → claimed_by_kid + claim_expires_at → running; протухший
--- claim возвращается Reaper-правилом (тираж в E6-x) обратно в pending для
--- пере-claim другим Keeper-инстансом.
+-- Failover-resilient via PG-based claim+lease (parity Tide / Ward-claim
+-- ADR-027): pending → claimed_by_kid + claim_expires_at → running; a stale
+-- claim is returned by a Reaper rule (rolled out in E6-x) back to pending for
+-- re-claim by another Keeper instance.
 --
--- CHECK-инварианты:
---   * errand_runs_status_valid: closed-set 6 терминалов
+-- CHECK invariants:
+--   * errand_runs_status_valid: closed-set of 6 terminals
 --     (pending/running/succeeded/failed/partial_failed/cancelled).
 --   * errand_runs_on_failure_valid: abort | continue.
 --   * errand_runs_concurrency_positive: 1 ≤ concurrency ≤ 500
---     (верхний cap — защита от исчерпания semaphore-ёмкости Keeper-а).
+--     (the upper cap - protection against exhausting the Keeper's semaphore capacity).
 --   * errand_runs_total_positive: total_errands ≥ 1
---     (пустой target отвергается на этапе resolve до INSERT).
+--     (an empty target is rejected at the resolve stage before INSERT).
 --   * errand_runs_done_bounds: 0 ≤ current_done ≤ total_errands
---     (счётчик терминальных Errand-ов в рамках прогона).
+--     (counter of terminal Errands within the run).
 --   * errand_runs_attempt_positive: attempt ≥ 0.
 --   * errand_runs_running_claim_consistency:
 --     running ⇒ claimed_by_kid IS NOT NULL AND claim_expires_at IS NOT NULL.
 --   * errand_runs_terminal_finished_at:
---     terminal-статус ⇒ finished_at IS NOT NULL.
+--     terminal status ⇒ finished_at IS NOT NULL.
 --
 -- FK:
---   * started_by_aid → operators(aid) (NOT NULL, без ON DELETE — парность
---     tides; ErrandRun всегда инициируется конкретным Архонтом, revoked
---     остаётся в реестре).
+--   * started_by_aid → operators(aid) (NOT NULL, without ON DELETE - parity
+--     with tides; ErrandRun is always initiated by a specific Archon, revoked
+--     stays in the registry).
 --
 -- Back-link errands.errand_run_id (NULLABLE, FK CASCADE):
 --   * single-host pull-ad-hoc `POST /v1/souls/{sid}/exec` (ADR-033)
---     сохраняет errand_run_id IS NULL — Errand живёт сам по себе.
---   * multi-target ErrandRun создаёт N Errand-ов с errand_run_id =
---     <run_id>; удаление ErrandRun каскадно сносит свои Errand-ы.
+--     keeps errand_run_id IS NULL - the Errand lives on its own.
+--   * multi-target ErrandRun creates N Errands with errand_run_id =
+--     <run_id>; deleting the ErrandRun cascades to remove its Errands.
 
 CREATE TABLE errand_runs (
     errand_run_id          TEXT        PRIMARY KEY,
@@ -87,21 +87,21 @@ CREATE TABLE errand_runs (
         FOREIGN KEY (started_by_aid) REFERENCES operators (aid)
 );
 
--- Pickup pending ErrandRun-ов по FIFO started_at
+-- Pick up pending ErrandRuns by FIFO started_at
 -- (ErrandRunWorker.ClaimNext, FOR UPDATE SKIP LOCKED — E6-x).
 CREATE INDEX errand_runs_pending_pickup_idx
     ON errand_runs (started_at)
     WHERE status = 'pending';
 
--- Recovery-скан: только активные running с истёкшим claim
--- (Reaper-правило reclaim_errand_runs — E6-x).
+-- Recovery scan: only active running rows with an expired claim
+-- (Reaper rule reclaim_errand_runs - E6-x).
 CREATE INDEX errand_runs_claim_scan_idx
     ON errand_runs (claim_expires_at)
     WHERE status = 'running';
 
 -- Back-link errands → errand_runs. NULLABLE: single-host pull-ad-hoc
--- (POST /v1/souls/{sid}/exec, ADR-033) остаётся с errand_run_id=NULL.
--- FK CASCADE: удаление ErrandRun сносит ассоциированные Errand-ы.
+-- (POST /v1/souls/{sid}/exec, ADR-033) stays with errand_run_id=NULL.
+-- FK CASCADE: deleting the ErrandRun removes associated Errands.
 ALTER TABLE errands ADD COLUMN errand_run_id TEXT;
 ALTER TABLE errands ADD CONSTRAINT errands_errand_run_id_fkey
     FOREIGN KEY (errand_run_id) REFERENCES errand_runs (errand_run_id) ON DELETE CASCADE;
@@ -111,4 +111,4 @@ CREATE INDEX errands_errand_run_id_idx
     WHERE errand_run_id IS NOT NULL;
 
 COMMENT ON TABLE errand_runs IS
-    'Реестр ErrandRun-прогонов (top-level multi-target pull-ad-hoc invocation, ADR-041). PG-based claim+lease для failover-resilience: pending→running→terminal; протухший claim возвращается Reaper в pending.';
+    'Registry of ErrandRun runs (top-level multi-target pull-ad-hoc invocation, ADR-041). PG-based claim+lease for failover-resilience: pending->running->terminal; a stale claim is returned to pending by the Reaper.';

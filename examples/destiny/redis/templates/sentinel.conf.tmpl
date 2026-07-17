@@ -1,44 +1,44 @@
 {{/*
-  sentinel.conf для redis-sentinel-демона (режим sentinel). Go text/template strict
-  (ADR-010). Контекст: .vars (sentinel_config, monitor, auth, каталоги/порт), .self
-  (primary_ip для announce-ip).
+  sentinel.conf for the redis-sentinel daemon (sentinel mode). Go text/template strict
+  (ADR-010). Context: .vars (sentinel_config, monitor, auth, directories/port), .self
+  (primary_ip for announce-ip).
 
-  ПЕР-ХОСТ vs HOST-ИНВАРИАНТ (TILING-урок qa 2026-06-22):
-    - sentinel announce-ip — ПЕР-ХОСТ (IP ИМЕННО этого sentinel-а в gossip), берётся
-      из .self.network.primary_ip, НЕ из apply.input (тот резолвится host-инвариантно на
-      первом по SID хосте → все sentinel-ы получили бы один IP → анонс сломан за NAT).
-    - sentinel monitor <master>: адрес HOST-ИНВАРИАНТНЫЙ (ОДИН master), приходит .vars.
+  PER-HOST vs HOST-INVARIANT (TILING lesson from qa 2026-06-22):
+    - sentinel announce-ip is PER-HOST (the IP of THIS specific sentinel in gossip), taken
+      from .self.network.primary_ip, NOT from apply.input (that resolves host-invariantly on
+      the first host by SID -> all sentinels would get the same IP -> announce broken across NAT).
+    - sentinel monitor <master>: HOST-INVARIANT address (ONE master), comes from .vars.
 
-  .vars.sentinel_config — отсортированный map стартовых директив (range по MAP сортирует
-  ключи → нет ложного change). monitor/auth — ОТДЕЛЬНЫМИ строками ниже (нужны master + quorum).
+  .vars.sentinel_config - sorted map of startup directives (range over a MAP sorts
+  keys -> no false change). monitor/auth are SEPARATE lines below (need master + quorum).
 */}}
 port {{ .vars.port }}
 
-# Под управление systemd-юнитом redis-sentinel (Type=notify, supervised systemd).
+# Managed by the redis-sentinel systemd unit (Type=notify, supervised systemd).
 daemonize no
 supervised systemd
 pidfile {{ .vars.run_dir }}/redis-sentinel.pid
 logfile {{ .vars.log_dir }}/redis-sentinel.log
-# Рабочий каталог: sentinel пишет сюда свой state.
+# Working directory: sentinel writes its state here.
 dir {{ .vars.data_dir }}
 
-# ВТОРОЙ aclfile — ТОЛЬКО для sentinel-демона (отдельный набор от users.acl redis-server).
-# Пустой файл валиден (back-compat).
+# SECOND aclfile - ONLY for the sentinel daemon (separate set from redis-server's users.acl).
+# An empty file is valid (back-compat).
 aclfile {{ .vars.conf_dir }}/sentinel-users.acl
 
-# Стартовые директивы из переданного map (отсортированы range-ом по ключам).
+# Startup directives from the passed map (sorted by range over keys).
 {{- range $key, $value := .vars.sentinel_config }}
 {{ $key }} {{ $value }}
 {{- end }}
 
-# ПЕР-ХОСТ: этот sentinel анонсирует СВОЙ primary_ip в gossip (симметрично bind redis.conf).
+# PER-HOST: this sentinel announces its OWN primary_ip in gossip (symmetric to bind in redis.conf).
 sentinel announce-ip {{ .self.network.primary_ip }}
 
-# Monitored master (HOST-ИНВАРИАНТНЫЙ адрес: один master на кластер).
-# auth-user/auth-pass — для AUTH sentinel-а на master. ★ РЕДИЗАЙН default_admin (2026-06-30):
-# requirepass убран, master защищён ACL → sentinel ОБЯЗАН ходить под ACL-юзером. Деплой-тело
-# передаёт auth_user = default_admin (compute.admin_user) + auth_pass — пароль default_admin.
-# Без auth_user sentinel пошёл бы под built-in default (теперь off в users.acl) → NOAUTH.
+# Monitored master (HOST-INVARIANT address: one master per cluster).
+# auth-user/auth-pass - for sentinel's AUTH against the master. ★ REDESIGN of default_admin (2026-06-30):
+# requirepass removed, master protected by ACL -> sentinel MUST authenticate as an ACL user. The deploy body
+# passes auth_user = default_admin (compute.admin_user) + auth_pass - the default_admin password.
+# Without auth_user, sentinel would fall back to the built-in default (now off in users.acl) -> NOAUTH.
 sentinel monitor {{ .vars.master_name }} {{ .vars.master_ip }} {{ .vars.master_port }} {{ .vars.quorum }}
 {{- if .vars.auth_user }}
 sentinel auth-user {{ .vars.master_name }} {{ .vars.auth_user }}

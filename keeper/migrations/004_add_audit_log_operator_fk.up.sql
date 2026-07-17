@@ -1,14 +1,14 @@
 -- 004_add_audit_log_operator_fk.up.sql
 --
--- Доставляет FK `audit_log.archon_aid → operators(aid)`. В 001 поле было
--- объявлено как TEXT nullable без FK (operators ещё не существовала); в
--- 003 таблица operators создана — теперь можно навесить constraint.
+-- Adds the FK `audit_log.archon_aid -> operators(aid)`. In 001 the field was
+-- declared as TEXT nullable without an FK (operators didn't exist yet); in
+-- 003 the operators table was created -- now the constraint can be attached.
 --
--- ON DELETE SET NULL: при удалении operator-а audit-записи сохраняются с
--- NULL в archon_aid (история не теряется, но привязка к удалённому
--- Архонту обрывается). Удаление operator-а — редкая операция (обычно
--- используется `revoked_at`), но если случилось — audit-trail важнее
--- ссылочной целостности.
+-- ON DELETE SET NULL: when an operator is deleted, audit records keep
+-- NULL in archon_aid (history isn't lost, but the link to the deleted
+-- Archon is severed). Deleting an operator is a rare operation (usually
+-- `revoked_at` is used instead), but if it happens -- the audit trail
+-- matters more than referential integrity.
 
 ALTER TABLE audit_log
     ADD CONSTRAINT audit_log_archon_aid_fk

@@ -1,7 +1,7 @@
 -- 095_rename_permission_rerun_last.down.sql
 --
--- Зеркальный rename: rollback на бинарь до переименования каталога, который
--- знает только `incarnation.create-rerun`.
+-- Mirror rename: rollback for a binary predating the catalog rename, which
+-- only knows `incarnation.create-rerun`.
 
 UPDATE rbac_role_permissions AS rp
 SET permission = 'incarnation.create-rerun'

@@ -1,8 +1,9 @@
 -- 061_drop_tides.down.sql
 --
--- Откат удаления Tide (Wave 5 Pass 1): пересоздаёт реестр `tides` и back-link-
--- колонки apply_runs ровно в форме миграции 055 (образец recreate). Данные не
--- восстанавливаются (forward-drop их удалил) — down лишь возвращает схему.
+-- Revert of the Tide removal (Wave 5 Pass 1): recreates the `tides` registry and the
+-- apply_runs back-link columns exactly in the shape of migration 055 (the recreate
+-- template). Data is not restored (the forward drop deleted it) - down only restores
+-- the schema.
 
 CREATE TABLE tides (
     tide_id                TEXT PRIMARY KEY,

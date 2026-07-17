@@ -1,65 +1,77 @@
 -- 075_create_purge_voyages.up.sql
 --
--- Reaper-правило `purge_voyages` (docs/keeper/reaper.md): удаляет batch
--- завершённых Voyage-прогонов из реестра `voyages` (миграция 059) старше
--- `max_age`. Retention растущей истории прогонов — реализация отложенного
--- `purge_voyages` из ADR-046 §79 (там значился «если будет введён»; на пути
--- к бете рост `voyages` на бета-флоте сделал правило обязательным).
+-- Reaper rule `purge_voyages` (docs/keeper/reaper.md): deletes a batch of
+-- finished Voyage runs from the `voyages` registry (migration 059) older than
+-- `max_age`. Retention for the growing run history - the deferred
+-- implementation of `purge_voyages` from ADR-046 §79 (it was listed there as
+-- "if introduced"; on the way to beta, `voyages` growth on the beta fleet made
+-- the rule mandatory).
 --
--- ПОЧЕМУ именно `voyages` (а не cadences/choirs/errands):
---   * `voyages` — ИСТОРИЯ прогонов, растёт без потолка (каждый ручной запуск,
---     каждый спавн Cadence = новая строка). Единственная run-history таблица
---     БЕЗ retention (apply_runs/audit/errands/seeds/souls/state_history уже
---     покрыты своими правилами; tides/errand_runs дропнуты миграциями 061/062;
---     отдельной таблицы `cadence_runs`/`surges` нет — история спавнов = сами
---     `voyages` с populated `cadence_id`, surge поглощён `voyage_targets.batch_index`).
---   * `cadences` — АКТИВНЫЕ расписания (enabled, переживают прогоны), НЕ история.
---     Их retention был бы порчей данных (см. ADR-046 §9: удаление Cadence — это
---     операторское действие, а не возрастная гигиена). НЕ purge.
---   * `incarnation_choirs`/`incarnation_choir_voices` — активная declared-топология,
---     НЕ история. НЕ purge.
+-- WHY `voyages` specifically (and not cadences/choirs/errands):
+--   * `voyages` is a run HISTORY, growing without a ceiling (every manual run,
+--     every Cadence spawn = a new row). The only run-history table WITHOUT
+--     retention (apply_runs/audit/errands/seeds/souls/state_history are already
+--     covered by their own rules; tides/errand_runs were dropped by migrations
+--     061/062; there is no separate `cadence_runs`/`surges` table - the spawn
+--     history IS the `voyages` rows with a populated `cadence_id`, and surges
+--     are absorbed by `voyage_targets.batch_index`).
+--   * `cadences` are ACTIVE schedules (enabled, outlive runs), NOT history.
+--     Retention on them would corrupt data (see ADR-046 §9: deleting a Cadence
+--     is an operator action, not age-based hygiene). NOT purged.
+--   * `incarnation_choirs`/`incarnation_choir_voices` are the active declared
+--     topology, NOT history. NOT purged.
 --
--- Удаляются ТОЛЬКО finished-записи (`succeeded`/`failed`/`partial_failed`/
--- `cancelled` с `finished_at IS NOT NULL`). `scheduled`/`pending`/`running`
--- НИКОГДА не purge — это незавершённые/идущие прогоны (терминал им проставит
--- VoyageWorker.Finalize или reclaim_voyages, не Жнец). Зеркало `purge_apply_runs`
--- (021): только терминал, возраст от `finished_at`.
+-- ONLY finished records are deleted (`succeeded`/`failed`/`partial_failed`/
+-- `cancelled` with `finished_at IS NOT NULL`). `scheduled`/`pending`/`running`
+-- are NEVER purged - these are unfinished/in-progress runs (the terminal state
+-- is set for them by VoyageWorker.Finalize or reclaim_voyages, not the Reaper).
+-- Mirrors `purge_apply_runs` (021): terminal-only, age measured from
+-- `finished_at`.
 --
--- Возраст считается от `finished_at`: история измеряется временем с момента
--- завершения, а не старта (долгий прогон, завершившийся недавно, не должен
--- удаляться раньше короткого, завершившегося давно). Parity purge_apply_runs.
+-- Age is measured from `finished_at`: history is measured by time since
+-- completion, not start (a long run that finished recently should not be
+-- deleted before a short one that finished long ago). Parity with
+-- purge_apply_runs.
 --
--- КАСКАДЫ / ЗАВИСИМОСТИ (инварианты «не оставить битых ссылок»):
---   * `voyage_targets.voyage_id` → voyages ON DELETE CASCADE (миграция 059):
---     Leg-строки прогона уносятся каскадом. Корректно — это части того же прогона.
---   * `voyage_targets.apply_id`/`errand_id` — soft-link БЕЗ FK на apply_runs/errands.
---     Purge voyage их НЕ трогает: apply_runs чистится `purge_apply_runs` по СВОЕМУ
---     окну, errands — `purge_old_errands`. ИНВАРИАНТ КОРРЕЛЯЦИИ: окно purge_voyages
---     по умолчанию = окно purge_apply_runs (30d), чтобы drill «voyage → его
---     apply_runs» не терял одну из сторон (voyage удалён, а apply_runs ещё нужны
---     для correlation — или наоборот). Выравнивание дефолтов — в keeper.yml/коде.
---   * `tidings.voyage_id` — ephemeral-Tiding, soft-link БЕЗ FK (миграция 072,
---     намеренно: очистка через терминал + `purge_orphan_ephemeral_tidings` grace 5m).
---     На момент purge_voyages (30d) ephemeral-Tiding-и давно снесены тем правилом;
---     если же остался осиротевший — его подберёт `purge_orphan_ephemeral_tidings`
---     по предикату `NOT EXISTS voyages`. Битых ссылок DELETE voyage НЕ создаёт.
---   * `voyages.cadence_id` → cadences ON DELETE SET NULL (миграция 066): purge
---     ДЕТЕЙ не трогает РАСПИСАНИЕ (FK направлен от voyage к cadence, не наоборот).
+-- CASCADES / DEPENDENCIES (invariant: "leave no dangling references"):
+--   * `voyage_targets.voyage_id` -> voyages ON DELETE CASCADE (migration 059):
+--     Leg rows of a run are carried away by the cascade. Correct - they are
+--     part of the same run.
+--   * `voyage_targets.apply_id`/`errand_id` - soft link WITHOUT an FK to
+--     apply_runs/errands. Purging a voyage does NOT touch them: apply_runs is
+--     cleaned by `purge_apply_runs` on its OWN window, errands by
+--     `purge_old_errands`. CORRELATION INVARIANT: the purge_voyages window
+--     defaults to the same window as purge_apply_runs (30d), so a "voyage ->
+--     its apply_runs" drill does not lose either side (voyage deleted while
+--     apply_runs are still needed for correlation - or vice versa). Default
+--     alignment lives in keeper.yml/code.
+--   * `tidings.voyage_id` - an ephemeral Tiding, soft link WITHOUT an FK
+--     (migration 072, intentional: cleanup via the terminal state +
+--     `purge_orphan_ephemeral_tidings` with a 5m grace period). By the time
+--     purge_voyages runs (30d), ephemeral Tidings have long since been removed
+--     by that rule; if an orphan remains, `purge_orphan_ephemeral_tidings`
+--     picks it up via the `NOT EXISTS voyages` predicate. DELETE voyage
+--     creates no dangling references.
+--   * `voyages.cadence_id` -> cadences ON DELETE SET NULL (migration 066):
+--     purging the CHILDREN does not touch the SCHEDULE (the FK points from
+--     voyage to cadence, not the other way around).
 --
--- PK `voyage_id` (059) → DELETE по single-column WHERE voyage_id IN (...);
--- CTE с LIMIT batch_size ограничивает размер транзакции, как в остальных
--- Reaper-правилах. Используется индекс `voyages_pending_pickup_idx`? — нет, тот
--- partial по pending; для покрытия finished-скана достаточно последовательного
--- прохода с LIMIT (history-purge — холодный фон, не hot-path), отдельный индекс
--- по finished_at не заводим до появления реального объёма (parity purge_apply_runs,
--- где тоже нет выделенного finished_at-индекса).
+-- PK `voyage_id` (059) -> DELETE via single-column WHERE voyage_id IN (...);
+-- a CTE with LIMIT batch_size caps the transaction size, as in the other
+-- Reaper rules. Is the `voyages_pending_pickup_idx` index used? No, that one
+-- is partial on pending; for covering the finished scan, a sequential pass
+-- with LIMIT is enough (history purge is a cold background job, not a
+-- hot path) - a dedicated finished_at index is not added until real volume
+-- shows up (parity with purge_apply_runs, which also has no dedicated
+-- finished_at index).
 
--- ВНИМАНИЕ: параметр LIMIT назван `batch_limit`, а НЕ `batch_size` (в отличие от
--- purge_apply_runs 021): таблица `voyages` НЕСЁТ колонку `batch_size` (миграция
--- 059, размер батча прогона), и одноимённый параметр функции в `LIMIT batch_size`
--- даёт `column reference "batch_size" is ambiguous` (SQLSTATE 42702) — PG
--- предпочитает колонку из FROM. У apply_runs такой колонки нет, поэтому 021 не
--- страдает. Имя параметра — единственное отличие от шаблона 021.
+-- NOTE: the LIMIT parameter is named `batch_limit`, NOT `batch_size` (unlike
+-- purge_apply_runs 021): the `voyages` table CARRIES a `batch_size` column
+-- (migration 059, the run's batch size), and a same-named function parameter
+-- in `LIMIT batch_size` produces `column reference "batch_size" is ambiguous`
+-- (SQLSTATE 42702) - PG prefers the column from FROM. apply_runs has no such
+-- column, so 021 is unaffected. The parameter name is the only difference from
+-- the 021 template.
 CREATE OR REPLACE FUNCTION purge_voyages(max_age interval, batch_limit integer DEFAULT 1000)
 RETURNS BIGINT AS $$
 DECLARE
@@ -83,4 +95,4 @@ END;
 $$ LANGUAGE plpgsql;
 
 COMMENT ON FUNCTION purge_voyages(interval, integer) IS
-    'Удаляет batch finished voyages (succeeded/failed/partial_failed/cancelled) с finished_at старше max_age. scheduled/pending/running не трогает. voyage_targets уносятся ON DELETE CASCADE. Возвращает количество удалённых строк (ADR-046 §79, parity purge_apply_runs).';
+    'Deletes a batch of finished voyages (succeeded/failed/partial_failed/cancelled) with finished_at older than max_age. Does not touch scheduled/pending/running. voyage_targets are carried away via ON DELETE CASCADE. Returns the number of deleted rows (ADR-046 §79, parity with purge_apply_runs).';

@@ -1,8 +1,8 @@
 -- 047_incarnation_status_drift.down.sql
 --
--- Откат ADR-031 (Scry): удаляем `drift` из enum `incarnation.status`. Down
--- ассумит отсутствие строк со status='drift' (миграция down вызывается
--- only после ручной проверки/восстановления).
+-- Revert of ADR-031 (Scry): removes `drift` from the `incarnation.status` enum. The down
+-- migration assumes there are no rows with status='drift' (a down migration is only
+-- invoked after manual verification/recovery).
 
 ALTER TABLE incarnation
     DROP CONSTRAINT incarnation_status_valid;

@@ -1,29 +1,29 @@
 -- 018_create_apply_runs.up.sql
 --
--- Реестр apply-прогонов (correlation `apply_id` ↔ incarnation/scenario) под
--- M2.x scenario-runner. Каждая строка — один Soul-хост в рамках одного
--- прогона; composite PK `(apply_id, sid)` (apply_id-model A: один apply_id
--- на scenario, разный sid на каждый хост fan-out-а).
+-- Registry of apply runs (correlation `apply_id` <-> incarnation/scenario) for
+-- the M2.x scenario-runner. Each row is one Soul host within a single
+-- run; composite PK `(apply_id, sid)` (apply_id model A: one apply_id
+-- per scenario, a different sid for each fan-out host).
 --
--- Назначение: при получении `RunResult` от Soul-а Keeper не знает из proto,
--- к какой incarnation относится прогон (RunResult несёт только
--- apply_id/status/state_changes). Эта таблица закрывает correlation:
--- scenario-runner пишет строку при dispatch-е `ApplyRequest`, RunResult-
--- handler читает её по `(apply_id, sid)` и коммитит state в нужную
+-- Purpose: when Keeper receives a `RunResult` from a Soul, it doesn't know from the proto
+-- which incarnation the run belongs to (RunResult only carries
+-- apply_id/status/state_changes). This table closes the correlation:
+-- scenario-runner writes a row when dispatching `ApplyRequest`, the RunResult
+-- handler reads it by `(apply_id, sid)` and commits the state into the right
 -- incarnation.
 --
--- task_idx — nullable (PM-decision 2): on dispatch неизвестен; заполняется
--- при per-task прогрессе (пост-MVP) либо остаётся NULL для агрегированного
+-- task_idx is nullable (PM-decision 2): unknown at dispatch time; filled in
+-- on per-task progress (post-MVP), or stays NULL for an aggregated
 -- RunResult.
 --
 -- FK:
---   - incarnation_name → incarnation(name) ON DELETE CASCADE (прогоны
---     умирают вместе с incarnation, симметрично state_history).
---   - started_by_aid   → operators(aid)   ON DELETE SET NULL (история
---     прогона переживает удаление оператора; PM-decision 3).
+--   - incarnation_name -> incarnation(name) ON DELETE CASCADE (runs
+--     die together with the incarnation, symmetric to state_history).
+--   - started_by_aid   -> operators(aid)   ON DELETE SET NULL (a run's
+--     history survives operator deletion; PM-decision 3).
 --
--- status — closed CHECK (PM-decision 1): running/success/failed/cancelled.
--- Retention (Reaper-правило `purge_apply_runs`) — backlog (PM-decision 4).
+-- status is a closed CHECK (PM-decision 1): running/success/failed/cancelled.
+-- Retention (Reaper rule `purge_apply_runs`) is backlog (PM-decision 4).
 
 CREATE TABLE apply_runs (
     apply_id          TEXT        NOT NULL,
@@ -47,19 +47,19 @@ CREATE TABLE apply_runs (
         FOREIGN KEY (started_by_aid) REFERENCES operators (aid) ON DELETE SET NULL
 );
 
--- Лента прогонов конкретной incarnation (триаж, history-эндпоинт).
+-- Feed of runs for a specific incarnation (triage, history endpoint).
 CREATE INDEX apply_runs_incarnation_idx
     ON apply_runs (incarnation_name);
 
--- Резолв по apply_id всех хостов прогона (scenario-runner fan-in,
--- RunResult-correlation).
+-- Resolves all hosts of a run by apply_id (scenario-runner fan-in,
+-- RunResult correlation).
 CREATE INDEX apply_runs_apply_idx
     ON apply_runs (apply_id);
 
--- Partial-индекс для «висящих» прогонов: запрос Reaper-а / триажа «всё, что
--- ещё running» (терминальные статусы из индекса исключены).
+-- Partial index for "hanging" runs: the Reaper / triage query "everything that's
+-- still running" (terminal statuses are excluded from the index).
 CREATE INDEX apply_runs_status_idx
     ON apply_runs (status) WHERE status = 'running';
 
 COMMENT ON TABLE apply_runs IS
-    'Correlation apply_id ↔ incarnation/scenario для scenario-runner (M2.x). PK (apply_id, sid).';
+    'Correlation apply_id <-> incarnation/scenario for the scenario-runner (M2.x). PK (apply_id, sid).';

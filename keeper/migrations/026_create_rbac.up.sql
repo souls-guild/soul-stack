@@ -1,22 +1,22 @@
 -- 026_create_rbac.up.sql
 --
--- RBAC-storage в Postgres (ADR-028, docs/keeper/rbac.md → § Storage).
--- Три таблицы материализуют trio «операторы (Архонты) ↔ роли ↔ permissions»:
---   - rbac_roles            — каталог ролей;
---   - rbac_role_permissions — permissions роли (RAW-строкой, парсятся ParsePermission в Go);
---   - rbac_role_operators   — membership «роль ↔ оператор» (тот слой, отсутствие
---                             которого было причиной BUG-1: membership-у негде было
---                             персистентно жить так, чтобы его видели и keeper init,
---                             и enforcer на всех нодах кластера).
+-- RBAC storage in Postgres (ADR-028, docs/keeper/rbac.md → § Storage).
+-- Three tables materialize the trio "operators (Archons) ↔ roles ↔ permissions":
+--   - rbac_roles            - role catalog;
+--   - rbac_role_permissions - role permissions (as a RAW string, parsed by ParsePermission in Go);
+--   - rbac_role_operators   - "role ↔ operator" membership (the layer whose
+--                             absence was the cause of BUG-1: membership had nowhere
+--                             to live persistently in a way visible to both keeper init
+--                             and the enforcer on every node in the cluster).
 --
--- Seed роли cluster-admin (E1) — отдельная миграция 027 (идемпотентный INSERT).
+-- Seeding the cluster-admin role (E1) - separate migration 027 (idempotent INSERT).
 
 CREATE TABLE rbac_roles (
     name           TEXT        PRIMARY KEY,
     description    TEXT        NOT NULL DEFAULT '',
-    builtin        BOOLEAN     NOT NULL DEFAULT false,                -- builtin=true запрещает role.delete / role.update (Фаза 2)
+    builtin        BOOLEAN     NOT NULL DEFAULT false,                -- builtin=true forbids role.delete / role.update (Phase 2)
     created_at     TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    created_by_aid TEXT,                                             -- FK на operators(aid); NULL у seed-ролей без инициатора-Архонта
+    created_by_aid TEXT,                                             -- FK to operators(aid); NULL for seed roles with no initiating Archon
 
     CONSTRAINT rbac_roles_name_format CHECK (name ~ '^[a-z][a-z0-9-]*$'),
     CONSTRAINT rbac_roles_created_by_aid_fk
@@ -24,11 +24,11 @@ CREATE TABLE rbac_roles (
 );
 
 COMMENT ON TABLE rbac_roles IS
-    'Каталог RBAC-ролей — ADR-028. PK = name (kebab-case). builtin=true защищает от role.delete/update.';
+    'RBAC role catalog - ADR-028. PK = name (kebab-case). builtin=true protects against role.delete/update.';
 
 CREATE TABLE rbac_role_permissions (
     role_name  TEXT NOT NULL,
-    permission TEXT NOT NULL,                                        -- хранится RAW-строкой; матчинг делает ParsePermission в Go
+    permission TEXT NOT NULL,                                        -- stored as a RAW string; matching is done by ParsePermission in Go
 
     PRIMARY KEY (role_name, permission),
     CONSTRAINT rbac_role_permissions_role_fk
@@ -36,13 +36,13 @@ CREATE TABLE rbac_role_permissions (
 );
 
 COMMENT ON TABLE rbac_role_permissions IS
-    'Permissions роли (RAW-строкой) — ADR-028. ON DELETE CASCADE с rbac_roles.';
+    'Role permissions (as a RAW string) - ADR-028. ON DELETE CASCADE with rbac_roles.';
 
 CREATE TABLE rbac_role_operators (
     role_name      TEXT        NOT NULL,
     aid            TEXT        NOT NULL,
     granted_at     TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    granted_by_aid TEXT,                                             -- FK на operators(aid); NULL у seed-/bootstrap-membership-а
+    granted_by_aid TEXT,                                             -- FK to operators(aid); NULL for seed/bootstrap membership
 
     PRIMARY KEY (role_name, aid),
     CONSTRAINT rbac_role_operators_role_fk
@@ -54,9 +54,9 @@ CREATE TABLE rbac_role_operators (
 );
 
 COMMENT ON TABLE rbac_role_operators IS
-    'Membership «роль ↔ оператор» — ADR-028. Отсутствие этого слоя было причиной BUG-1.';
+    'Membership "role ↔ operator" - ADR-028. The absence of this layer was the cause of BUG-1.';
 
--- Индекс «AID → роли» для построения снимка enforcer-а тремя SELECT-ами:
--- основной запрос membership-а идёт по aid, не по PK-порядку (role_name, aid).
+-- The "AID -> roles" index for building the enforcer snapshot with three SELECTs:
+-- the main membership query goes by aid, not by PK order (role_name, aid).
 CREATE INDEX rbac_role_operators_aid_idx
     ON rbac_role_operators (aid);

@@ -1,7 +1,8 @@
 -- 072_tiding_ephemeral_payload.down.sql
 --
--- Откат N1: снос partial-индекса, CHECK-инварианта и четырёх additive-колонок
--- ephemeral/voyage_id/annotations/projection. Возвращает `tidings` к форме 071.
+-- Rollback of N1: drops the partial index, the CHECK invariant, and the four
+-- additive columns ephemeral/voyage_id/annotations/projection. Returns `tidings`
+-- to the shape of 071.
 
 DROP INDEX IF EXISTS tidings_ephemeral_voyage_idx;
 

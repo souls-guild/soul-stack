@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
-# Suite create: [bring-up] → create (engine=POST /v1/incarnations, либо
-# E2E_CREATE_MODE=script — создание делают bring-up-скрипты, движок подхватывает
-# последний apply_id через GET /runs) → poll → assert_run_success → вторичный ассерт
-# incarnation.status==ready (единственный здоровый терминал, huma_enums.go).
+# Suite create: [bring-up] -> create (engine=POST /v1/incarnations, or
+# E2E_CREATE_MODE=script - creation is done by the bring-up scripts, the engine picks up
+# the last apply_id via GET /runs) -> poll -> assert_run_success -> secondary assert of
+# incarnation.status==ready (the only healthy terminal, huma_enums.go).
 
-# _create_body — тело POST /v1/incarnations из параметров.
+# _create_body - builds the POST /v1/incarnations body from parameters.
 _create_body() {
 	local covens_json="[]" input_json="null"
 	[[ -n "${COVENS:-}" ]] && covens_json="$(printf '%s' "${COVENS}" | jq -Rc 'split(",")')"
@@ -21,7 +21,7 @@ _create_body() {
 		+ (if $input == null then {} else {input: $input} end)'
 }
 
-# _assert_incarnation_ready <name> — вторичный ассерт статуса (ready).
+# _assert_incarnation_ready <name> - secondary status assert (ready).
 _assert_incarnation_ready() {
 	local name="$1" resp code inc start
 	start="$(_utc_now)"
@@ -35,10 +35,10 @@ _assert_incarnation_ready() {
 	return 1
 }
 
-# suite_create → 0 всё PASS / 1 провал ассерта|прогона.
+# suite_create -> 0 everything PASSed / 1 assert or run failure.
 suite_create() {
 	local name="${INCARNATION:-redis-auto}"
-	run_bringup || { _e2e_log "create: bring-up упал — стоп"; return 1; }
+	run_bringup || { _e2e_log "create: bring-up failed - stopping"; return 1; }
 
 	local apply_id start rc t0
 	start="$(_utc_now)"; t0=$SECONDS
@@ -46,7 +46,7 @@ suite_create() {
 	if [[ "${E2E_CREATE_MODE:-engine}" == script ]]; then
 		apply_id="$(http_body "$(keeper_api GET "/v1/incarnations/${name}/runs?limit=1")" | jq -r '.items[0].apply_id // empty' 2>/dev/null)"
 		if [[ -z "$apply_id" ]]; then
-			report_step "create (script): подхват apply_id" - "$start" "$((SECONDS - t0))" - - "нет прогонов в /runs" FAIL
+			report_step "create (script): pick up apply_id" - "$start" "$((SECONDS - t0))" - - "no runs in /runs" FAIL
 			return 1
 		fi
 	else
@@ -54,13 +54,13 @@ suite_create() {
 		resp="$(keeper_api POST /v1/incarnations "$(_create_body)")"
 		code="$(http_code "$resp")"
 		if [[ "$code" != 202 ]]; then
-			report_step "create (engine): POST /incarnations" - "$start" "$((SECONDS - t0))" "$code" - "ожидал 202" FAIL
+			report_step "create (engine): POST /incarnations" - "$start" "$((SECONDS - t0))" "$code" - "expected 202" FAIL
 			return 1
 		fi
 		apply_id="$(http_body "$resp" | jq -r '.apply_id // empty' 2>/dev/null)"
 		if [[ -z "$apply_id" ]]; then
-			# lifecycle.auto_create:false → bare-инкарнация (ready без прогона).
-			report_step "create (engine): POST /incarnations" - "$start" "$((SECONDS - t0))" "$code" - "202 без apply_id (bare)" SKIP
+			# lifecycle.auto_create:false -> bare incarnation (ready without a run).
+			report_step "create (engine): POST /incarnations" - "$start" "$((SECONDS - t0))" "$code" - "202 without apply_id (bare)" SKIP
 			_assert_incarnation_ready "$name"; return $?
 		fi
 	fi

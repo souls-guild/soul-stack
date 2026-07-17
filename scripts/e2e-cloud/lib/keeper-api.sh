@@ -1,29 +1,31 @@
 #!/usr/bin/env bash
-# Единственная сетевая граница оркестратора: весь HTTP к Operator API идёт ТОЛЬКО
-# через keeper_api. classify/poll/assert/report чисты и тестируются подменой этой
-# функции стабом (test/guard.sh). Инвариант: никакой другой код сети не делает.
+# The orchestrator's only network boundary: all HTTP to the Operator API goes
+# ONLY through keeper_api. classify/poll/assert/report are pure and are tested
+# by stubbing this function (test/guard.sh). Invariant: no other code touches
+# the network.
 
-# _e2e_log — трейс в stderr (не загрязняет stdout-тело ответа).
+# _e2e_log - trace to stderr (doesn't pollute the response's stdout body).
 _e2e_log() { printf '%s\n' "$*" >&2; }
 
-# _utc_now — RFC3339Nano UTC (форма date-time reply-структур keeper).
+# _utc_now - RFC3339Nano UTC (the form of keeper's date-time reply structs).
 _utc_now() { date -u +%Y-%m-%dT%H:%M:%S.000000000Z; }
 
-# http_code/http_body — split ответа keeper_api («тело\nHTTP-код», код = последняя
-# строка). Чистые, без сети.
+# http_code/http_body - split keeper_api's response ("body\nHTTP-code", the
+# code is the last line). Pure, no network.
 http_code() { local r="$1"; printf '%s' "${r##*$'\n'}"; }
 http_body() { local r="$1"; if [[ "$r" == *$'\n'* ]]; then printf '%s' "${r%$'\n'*}"; else printf '%s' ""; fi; }
 
-# keeper_api <method> <path> [body_json] — печатает тело, последняя строка = HTTP-код.
-# EXEC_MODE=local: прямой curl. EXEC_MODE=tsh: curl на VM через teleport (тело POST —
-# base64 в env, чтобы не тонуть во вложенном квотинге). DRY_RUN=1: синтетический ответ
-# без сети (печатает намеренный вызов в stderr).
+# keeper_api <method> <path> [body_json] - prints the body, last line = HTTP code.
+# EXEC_MODE=local: direct curl. EXEC_MODE=tsh: curl on the VM via teleport (the
+# POST body goes as base64 in an env var, to avoid drowning in nested quoting).
+# DRY_RUN=1: synthetic response without network access (prints the intended
+# call to stderr).
 keeper_api() {
 	local method="$1" path="$2" body="${3:-}"
-	_e2e_log "  → ${method} ${path}${body:+  body=${body}}"
+	_e2e_log "  -> ${method} ${path}${body:+  body=${body}}"
 
 	if [[ "${DRY_RUN:-0}" == 1 ]]; then
-		_e2e_log "    [dry-run] сеть не тронута, синтетический ответ"
+		_e2e_log "    [dry-run] network untouched, synthetic response"
 		_dryrun_synth "$method" "$path"
 		return 0
 	fi
@@ -32,13 +34,13 @@ keeper_api() {
 	local) _keeper_api_local "$method" "$path" "$body" ;;
 	tsh) _keeper_api_tsh "$method" "$path" "$body" ;;
 	*)
-		_e2e_log "keeper_api: неизвестный EXEC_MODE='${EXEC_MODE}'"
+		_e2e_log "keeper_api: unknown EXEC_MODE='${EXEC_MODE}'"
 		printf '%s\n%s' '{"error":"bad EXEC_MODE"}' 000
 		;;
 	esac
 }
 
-# _keeper_api_local — curl напрямую на $KEEPER_API, JWT из $JWT_FILE.
+# _keeper_api_local - curl directly to $KEEPER_API, JWT from $JWT_FILE.
 _keeper_api_local() {
 	local method="$1" path="$2" body="$3"
 	local url="${KEEPER_API:-http://127.0.0.1:8080}${path}"
@@ -48,9 +50,9 @@ _keeper_api_local() {
 	curl "${args[@]}" -w $'\n%{http_code}'
 }
 
-# _keeper_api_tsh — curl на localhost:8080 внутри VM через `tsh ssh`. Тело — base64
-# в env-переменной BODY_B64 (урок autoprov-run2.sh: вложенный квотинг тонет).
-# Teleport-шум фильтруется grep-ом.
+# _keeper_api_tsh - curl to localhost:8080 inside the VM via `tsh ssh`. The
+# body goes as base64 in the env var BODY_B64 (lesson from autoprov-run2.sh:
+# nested quoting drowns). Teleport noise is filtered out with grep.
 _keeper_api_tsh() {
 	local method="$1" path="$2" body="$3"
 	local b64=""
@@ -59,7 +61,7 @@ _keeper_api_tsh() {
 	[[ "${INSECURE_TLS:-0}" == 1 ]] && insecure="-k"
 	TELEPORT_HOME="${TELEPORT_HOME:-/mnt/c/Users/stf20/.tsh}" \
 		SSL_CERT_FILE="${SSL_CERT_FILE:-}" \
-		tsh ssh "${TSH_NODE:?TSH_NODE не задан}" \
+		tsh ssh "${TSH_NODE:?TSH_NODE not set}" \
 		M="$method" P="$path" BODY_B64="$b64" \
 		JWTF="${REMOTE_JWT:-/opt/soul-stack/archon-cloud.jwt}" \
 		KAPI="${REMOTE_KEEPER_API:-http://localhost:8080}" INSECURE="$insecure" \
@@ -74,10 +76,11 @@ fi
 REMOTE
 }
 
-# _dryrun_synth — синтетический успешный ответ по (method,path), моделируя reply-DTO
-# keeper (huma_incarnation_reply.go). Порядок веток важен: /runs/{id} до /runs.
-# Матч по пути БЕЗ query (${path%%\?*}), иначе `?limit=1` (script-create-mode) уходит
-# в catch-all и `.items` пуст → ложный «нет прогонов».
+# _dryrun_synth - synthetic successful response by (method,path), modeling
+# keeper's reply-DTO (huma_incarnation_reply.go). Branch order matters:
+# /runs/{id} before /runs. Matched on the path WITHOUT the query
+# (${path%%\?*}), otherwise `?limit=1` (script-create-mode) falls into the
+# catch-all and `.items` is empty -> a false "no runs".
 _dryrun_synth() {
 	local method="$1" path="$2"
 	local aid="dryrun00000000000000000000" now

@@ -1,8 +1,8 @@
 #!/bin/sh
-# postremove пакета soul-stack-soul. После снятия юнита перечитываем systemd,
-# чтобы он забыл удалённый soul.service. Пользователь soul-stack и стейт-каталоги
-# (/var/lib/soul-stack с SoulSeed) НАМЕРЕННО не трогаем — purge данных оператор
-# делает руками.
+# postremove for the soul-stack-soul package. After the unit is removed, reload
+# systemd so it forgets the deleted soul.service. The soul-stack user and state
+# directories (/var/lib/soul-stack with SoulSeed) are INTENTIONALLY left alone --
+# purging data is a manual operator action.
 set -e
 
 if [ -d /run/systemd/system ]; then

@@ -1,27 +1,27 @@
 -- 047_incarnation_status_drift.up.sql
 --
--- ADR-031 (Scry): добавляем информационный статус `drift` в enum
--- `incarnation.status`. Семантика — Scry-проверка обнаружила расхождение
--- декларированного состояния с фактом хотя бы на одном хосте; статус НЕ
--- блокирует remediation (в отличие от `error_locked`/`destroy_failed`),
--- remediation drift-а = обычный apply из `drift` → `ready`.
+-- ADR-031 (Scry): adds the informational status `drift` to the enum
+-- `incarnation.status`. Semantics - a Scry check found a discrepancy between
+-- the declared state and the actual state on at least one host; the status does NOT
+-- block remediation (unlike `error_locked`/`destroy_failed`),
+-- remediating drift = a normal apply from `drift` -> `ready`.
 --
--- Сам переход в `drift` выставляется check-drift-handler-ом после успешной
--- сборки `DriftReport` (если есть расхождения); эта миграция вводит только
--- допустимое значение enum. Расширение CHECK через drop+recreate — паттерн
--- 016/017/031/036 (status — CHECK-constraint, не PG-enum, значит обратим).
+-- The transition into `drift` itself is set by the check-drift-handler after successfully
+-- building a `DriftReport` (if there are discrepancies); this migration only introduces
+-- the allowed enum value. Extending the CHECK via drop+recreate is the pattern from
+-- 016/017/031/036 (status is a CHECK constraint, not a PG enum, so it's reversible).
 --
--- Семантика статусов после миграции:
---   * `ready`            — incarnation в рабочем состоянии, прогоны разрешены.
---   * `applying`         — идёт прогон scenario (lock на дальнейшие операции).
---   * `error_locked`     — сценарий упал частично, нужен unlock.
---   * `migration_failed` — state_schema-миграция упала, нужен unlock (ADR-019).
---   * `destroying`       — инициирован destroy: идёт teardown с последующим
---     DELETE строки (S-D1/S-D2b/S-D3).
---   * `destroy_failed`   — teardown упал: инстанс НЕ удалён, нужно вмешательство
---     оператора. Терминальный для строки до явного действия оператора.
---   * `drift`            — Scry-check обнаружил расхождение реального состояния
---     с декларацией (ADR-031, информационный, НЕ блокирующий).
+-- Status semantics after the migration:
+--   * `ready`            - incarnation is in a working state, runs are allowed.
+--   * `applying`         - a scenario run is in progress (locks further operations).
+--   * `error_locked`     - the scenario failed partway through, needs unlock.
+--   * `migration_failed` - the state_schema migration failed, needs unlock (ADR-019).
+--   * `destroying`       - destroy has been initiated: teardown is in progress, followed by
+--     row DELETE (S-D1/S-D2b/S-D3).
+--   * `destroy_failed`   - teardown failed: the instance was NOT deleted, needs operator
+--     intervention. Terminal for the row until an explicit operator action.
+--   * `drift`            - a Scry check found a discrepancy between the actual state
+--     and the declaration (ADR-031, informational, NOT blocking).
 
 ALTER TABLE incarnation
     DROP CONSTRAINT incarnation_status_valid;

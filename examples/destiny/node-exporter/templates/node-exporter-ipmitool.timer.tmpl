@@ -1,7 +1,7 @@
 {{/*
-  Таймер IPMI-сборщика. Статичен (vars: {}), .tmpl обязателен для core.file.rendered.
-  Та же ConditionPathExists=/dev/ipmi0, что и в .service: защита от ручного start без
-  BMC-устройства.
+  IPMI collector timer. Static (vars: {}), .tmpl is required for core.file.rendered.
+  Same ConditionPathExists=/dev/ipmi0 as in .service: guards against a manual start without
+  a BMC device.
 */}}
 [Unit]
 Description=Run IPMI metrics collection every 1 minute

@@ -1,17 +1,17 @@
 #!/usr/bin/env bash
-# sync-webui.sh — вендоринг собранного build-снапшота UI из companion-репо
-# (source of truth) в core-repo embed (ADR-055, single-binary keeper с UI).
+# sync-webui.sh - vendors the built UI build snapshot from the companion repo
+# (source of truth) into the core-repo embed (ADR-055, single-binary keeper with UI).
 #
-# Источник правды: ../soul-stack-web/dist/   (vite-build, base:'/ui/')
-# Зеркало:          keeper/internal/webui/assets/   (go:embed, раздаётся на /ui)
+# Source of truth: ../soul-stack-web/dist/   (vite-build, base:'/ui/')
+# Mirror:           keeper/internal/webui/assets/   (go:embed, served at /ui)
 #
-# Папка зеркала — assets/ (НЕ dist/): gitignore-правило `dist/` молча съело бы
-# дерево и embed получил бы пустую FS (ADR-055 §а). assets/ нейтрально к gitignore.
+# The mirror folder is assets/ (NOT dist/): the gitignore rule `dist/` would silently
+# swallow the tree and embed would get an empty FS (ADR-055 §a). assets/ is neutral to gitignore.
 #
-# Запускать после правки/сборки UI в companion-репо. После запуска — `make check`
-# в core-repo (включая check-webui), затем коммит обоих репозиториев.
+# Run after editing/building the UI in the companion repo. After running - `make check`
+# in the core repo (including check-webui), then commit both repositories.
 #
-# Использование:
+# Usage:
 #   scripts/sync-webui.sh                 # default: ../soul-stack-web
 #   scripts/sync-webui.sh /path/to/soul-stack-web
 set -euo pipefail
@@ -27,24 +27,24 @@ if [[ ! -d "${WEB_REPO}" ]]; then
   exit 2
 fi
 
-# dist/ может отсутствовать (свежий чекаут companion) или устареть. Собираем,
-# если dist/index.html нет; в остальных случаях доверяем готовому build-у
-# (пересборку при правке исходников делает оператор сам — `npm run build`).
+# dist/ may be missing (a fresh companion checkout) or stale. We build
+# if dist/index.html is absent; otherwise we trust the existing build
+# (rebuilding after source edits is on the operator - `npm run build`).
 if [[ ! -f "${SRC}/index.html" ]]; then
-  echo "sync-webui.sh: dist отсутствует — собираю companion (npm run build)"
+  echo "sync-webui.sh: dist missing - building companion (npm run build)"
   (cd "${WEB_REPO}" && npm run build)
 fi
 
 if [[ ! -f "${SRC}/index.html" ]]; then
-  echo "sync-webui.sh: build не дал ${SRC}/index.html — проверь сборку companion" >&2
+  echo "sync-webui.sh: build did not produce ${SRC}/index.html - check the companion build" >&2
   exit 2
 fi
 
-echo "sync-webui.sh: ${SRC} → ${DST}"
+echo "sync-webui.sh: ${SRC} -> ${DST}"
 
-# Полное зеркало: --delete, чтобы переименованные хеш-чанки и удалённые файлы
-# (включая стаб app.js/index.html пилота) подхватились. Если rsync недоступен —
-# fallback на rm+cp.
+# Full mirror: --delete so renamed hash chunks and removed files
+# (including the pilot's stub app.js/index.html) get picked up. If rsync is
+# unavailable - fall back to rm+cp.
 mkdir -p "${DST}"
 if command -v rsync >/dev/null 2>&1; then
   rsync -a --delete "${SRC}/" "${DST}/"

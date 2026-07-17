@@ -1,3 +1,3 @@
-{{/* udev-правило: даёт группе .vars.user (node_exporter) доступ к /dev/ipmi*.
-     Движок — Go text/template strict (ADR-010); единственная переменная — user. */ -}}
+{{/* udev rule: grants the .vars.user group (node_exporter) access to /dev/ipmi*.
+     Engine is Go text/template strict (ADR-010); the only variable is user. */ -}}
 KERNEL=="ipmi*", MODE="664", GROUP="{{ .vars.user }}"

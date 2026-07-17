@@ -1,21 +1,21 @@
 -- 010_create_expire_pending_seeds.up.sql
 --
--- Reaper-правило `expire_pending_seeds` (docs/keeper/reaper.md).
--- Семантика — DELETE: bootstrap-токен с `used_at IS NULL` и истёкшим
--- `expires_at` не может быть использован (проверка на Burn-стороне
--- отвергает истёкшие токены), хранить его дальше смысла нет.
+-- Reaper rule `expire_pending_seeds` (docs/keeper/reaper.md).
+-- Semantics - DELETE: a bootstrap token with `used_at IS NULL` and an expired
+-- `expires_at` can no longer be used (the check on the Burn side
+-- rejects expired tokens), so there's no point keeping it any longer.
 --
--- ПРИМЕЧАНИЕ: на момент имплементации Reaper.b принято PM-решение
--- переинтерпретировать правило как DELETE (а не UPDATE-with-status):
--- таблица `bootstrap_tokens` не имеет колонки `status`, а отдельной
--- семантики «expired token, но ещё хранится» в MVP нет. Аудит создания
--- токена живёт в `audit_log` под своим retention-ом (ADR-022).
+-- NOTE: at the time Reaper.b was implemented, a PM decision was made
+-- to reinterpret the rule as DELETE (rather than UPDATE-with-status):
+-- the `bootstrap_tokens` table has no `status` column, and a separate
+-- "expired token, but still stored" semantics doesn't exist in the MVP. The audit of
+-- token creation lives in `audit_log` under its own retention (ADR-022).
 --
--- Параметр `max_age` сейчас не используется: критерий — `expires_at < NOW()`,
--- порог TTL зафиксирован при создании токена. Параметр оставлен в сигнатуре
--- для симметрии с остальными правилами и hot-reload-конвенцией (если в
--- будущем оператор захочет ввести grace-period «не удалять сразу истёкшие
--- N часов» — это станет `expires_at < NOW() - max_age`).
+-- The `max_age` parameter is currently unused: the criterion is `expires_at < NOW()`,
+-- the TTL threshold was fixed at token creation. The parameter is kept in the signature
+-- for symmetry with the other rules and the hot-reload convention (if in the
+-- future an operator wants to introduce a grace period of "don't delete expired ones
+-- immediately, keep them N hours" - that would become `expires_at < NOW() - max_age`).
 
 CREATE OR REPLACE FUNCTION expire_pending_seeds(max_age interval, batch_size integer DEFAULT 1000)
 RETURNS BIGINT AS $$
@@ -39,4 +39,4 @@ END;
 $$ LANGUAGE plpgsql;
 
 COMMENT ON FUNCTION expire_pending_seeds(interval, integer) IS
-    'Удаляет batch неиспользованных bootstrap_tokens с истёкшим expires_at (older than max_age beyond expiry). Возвращает количество удалённых строк. Reaper-loop вызывает в цикле до возврата 0 (drain-pattern).';
+    'Deletes a batch of unused bootstrap_tokens with an expired expires_at (older than max_age beyond expiry). Returns the number of deleted rows. The Reaper loop calls this repeatedly until it returns 0 (drain pattern).';

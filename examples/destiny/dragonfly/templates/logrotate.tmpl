@@ -1,19 +1,20 @@
 {{/*
-  logrotate-конфиг для лог-файлов DragonFly (/etc/logrotate.d/dragonfly).
-  Go text/template strict (ADR-010). Контекст: .vars.log_dir (DragonFly, glog → /var/log/
+  logrotate config for DragonFly log files (/etc/logrotate.d/dragonfly).
+  Go text/template strict (ADR-010). Context: .vars.log_dir (DragonFly, glog -> /var/log/
   dragonfly).
 
-  ★ ТОЛЬКО DragonFly-каталог (рефактор «sentinel из destiny redis»): sentinel-демон теперь
-  разворачивает destiny `redis` (sentinel_only), и ЕГО логи ротирует logrotate destiny
-  `redis` (/var/log/redis). Этот блок покрывает строго DragonFly glog. (DF логирует через
-  glog с собственной ротацией по --max_log_size — logrotate здесь подчищает накопленное.)
+  ★ DragonFly directory ONLY (refactor "sentinel out of destiny redis"): the sentinel
+  daemon now deploys destiny `redis` (sentinel_only), and ITS logs are rotated by the
+  destiny `redis` logrotate (/var/log/redis). This block covers strictly DragonFly glog.
+  (DF logs via glog with its own rotation via --max_log_size - logrotate here cleans up
+  what accumulates.)
 
-  copytruncate: DF держит лог-файл открытым и не реагирует на сигнал пере-открытия лога,
-  поэтому ротация копированием+усечением (а не rename+создание) — безопасный вариант без
-  рестарта/HUP. daily + rotate 7: суточная ротация, хранение недели. compress +
-  delaycompress: сжатие со сдвигом на одну ротацию (свежий .1 несжат для оперативного
-  просмотра). missingok + notifempty: лог может отсутствовать (сервис не стартовал) или
-  быть пустым — не ошибка.
+  copytruncate: DF keeps the log file open and does not react to a log-reopen signal,
+  so rotation via copy+truncate (rather than rename+create) is the safe option without
+  a restart/HUP. daily + rotate 7: daily rotation, one week retention. compress +
+  delaycompress: compression offset by one rotation (the fresh .1 stays uncompressed for
+  quick viewing). missingok + notifempty: the log may be absent (service not started) or
+  empty - not an error.
 */}}
 {{ .vars.log_dir }}/*.log {
   daily

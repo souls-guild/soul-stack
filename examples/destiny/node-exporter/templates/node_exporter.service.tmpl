@@ -1,20 +1,20 @@
 {{/*
-  systemd-unit node_exporter. Go text/template strict (ADR-010), Вариант B: operator-input
-  читается `.input.<name>` напрямую (без passthrough через params.vars), путь бинаря —
-  `.vars.bin_path` (file-var). Перечень полей — destiny.yml input:.
+  systemd unit for node_exporter. Go text/template strict (ADR-010), Variant B: operator-input
+  is read directly via `.input.<name>` (no passthrough via params.vars), the binary path is
+  `.vars.bin_path` (file-var). The field list lives in destiny.yml input:.
 
-  ExecStart собирается условно (флаг-конвенция node_exporter --help): list → per-item
-  --no-collector.<name> / --collector.<name>; gomaxprocs>0 → --runtime.gomaxprocs=N;
-  пустые string-параметры (fs/netdev-exclude) флаг НЕ добавляют. Перенос строк через `\`.
+  ExecStart is assembled conditionally (the node_exporter --help flag convention): list -> per-item
+  --no-collector.<name> / --collector.<name>; gomaxprocs>0 -> --runtime.gomaxprocs=N;
+  empty string parameters (fs/netdev-exclude) do NOT add the flag. Line continuation via `\`.
 
-  ★ Сервис-аккаунт — стабильный system-user (прод-конвенция §2, stateful): textfile-каталог
-  переживает рестарты и читается root-сборщиками → нужен фиксированный uid (DynamicUser тут
-  непригоден). Под root основной демон НЕ работает.
+  ★ Service account - a stable system-user (prod convention §2, stateful): the textfile directory
+  survives restarts and is read by root-owned collectors -> needs a fixed uid (DynamicUser is
+  unsuitable here). The main daemon does NOT run as root.
 
-  ★ systemd-hardening (прод-конвенция §3, «безопасность на первом месте»): полный блок
-  беспривилегированного Go-демона. ReadOnlyPaths=.input.textfile_dir — демон только ЧИТАЕТ
-  .prom (пишут oneshot-сборщики). MemoryDenyWriteExecute уместен (Go-бинарь без W+X-страниц).
-  CapabilityBoundingSet пуст — публичные метрики привилегий не требуют.
+  ★ systemd-hardening (prod convention §3, "security first"): the full hardening block for an
+  unprivileged Go daemon. ReadOnlyPaths=.input.textfile_dir - the daemon only READS
+  .prom files (written by oneshot collectors). MemoryDenyWriteExecute is appropriate (a Go binary has no W+X pages).
+  CapabilityBoundingSet is empty - publishing metrics requires no privileges.
 */}}
 [Unit]
 Description=Prometheus Node Exporter
@@ -42,7 +42,7 @@ SyslogIdentifier=node_exporter
 Restart=on-failure
 RestartSec=5
 
-# systemd-hardening (прод-конвенция §3).
+# systemd-hardening (prod convention §3).
 NoNewPrivileges=yes
 ProtectSystem=strict
 ProtectHome=yes

@@ -1,32 +1,32 @@
 -- 071_create_heralds_tidings.up.sql
 --
--- ADR-052 (Herald + Tiding — уведомления о событиях прогонов), слайс S1.
+-- ADR-052 (Herald + Tiding - notifications about run events), slice S1.
 --
--- Две managed-через-API/MCP сущности (паттерн Omen/Rite, миграции 032/033):
---   - heralds — реестр КАНАЛОВ доставки уведомлений («куда слать»).
---   - tidings — реестр ПРАВИЛ подписки («на что реагировать → каким Herald-ом»).
+-- Two entities managed via API/MCP (Omen/Rite pattern, migrations 032/033):
+--   - heralds - registry of notification delivery CHANNELS ("where to send").
+--   - tidings - registry of subscription RULES ("what to react to -> with which Herald").
 --
--- Доставка/tap/notification-dispatcher — следующие слайсы (S2-S4); здесь только
--- хранилище + CRUD-слой (keeper/internal/herald).
+-- Delivery/tap/notification-dispatcher are the following slices (S2-S4); here it's only
+-- storage + the CRUD layer (keeper/internal/herald).
 
--- heralds — канал доставки. PK name (kebab-case). type — closed enum (webhook в
--- MVP; slack/email — additive post-MVP без breaking change, новые значения CHECK).
+-- heralds - a delivery channel. PK name (kebab-case). type - closed enum (webhook in
+-- MVP; slack/email - additive post-MVP without a breaking change, new CHECK values).
 --
--- config (JSONB) — per-type конфигурация канала: для webhook — `url` (обязателен)
--- + опц. `headers` + опц. флаги безопасности `http_allowed`/`allow_private`
--- (явный opt-out SSRF-контура, паттерн core.url, ADR-052(e)). Shape валидируется
--- на service-слое (herald.validateConfig) — JSONB нельзя сопоставить с type
--- декларативным CHECK-ом без триггера, как omens.auth_ref / push_providers.params.
+-- config (JSONB) - per-type channel configuration: for webhook - `url` (required)
+-- + optional `headers` + optional security flags `http_allowed`/`allow_private`
+-- (an explicit opt-out of the SSRF guard, the core.url pattern, ADR-052(e)). The shape is validated
+-- at the service layer (herald.validateConfig) - JSONB can't be matched against type
+-- with a declarative CHECK without a trigger, same as omens.auth_ref / push_providers.params.
 --
--- secret_ref (vault-ref, nullable) — секрет канала (signing-token webhook-а). НЕ
--- каждому webhook нужна подпись, поэтому NULL-able (отличие от omens.auth_ref
--- NOT NULL: там credential к внешней системе обязателен всегда). Master-cred в БД
--- НЕ хранится — только vault-ref (ADR-052(e), паттерн omens.auth_ref / core.url).
--- Формат vault-ref CHECK-ом НЕ ловится — это делает service-слой (vault.ParseRef).
+-- secret_ref (vault-ref, nullable) - the channel's secret (webhook signing token). NOT
+-- every webhook needs a signature, hence NULL-able (unlike omens.auth_ref
+-- NOT NULL: there a credential to an external system is always required). The master credential is
+-- NOT stored in the DB - only a vault-ref (ADR-052(e), the omens.auth_ref / core.url pattern).
+-- The vault-ref format is NOT caught by the CHECK - that's done by the service layer (vault.ParseRef).
 --
 -- FK:
---   - created_by_aid → operators(aid) ON DELETE SET NULL (запись Herald-а
---     переживает удаление оператора; симметрично omens/providers). NULL-able.
+--   - created_by_aid -> operators(aid) ON DELETE SET NULL (a Herald record
+--     survives operator deletion; symmetric to omens/providers). NULL-able.
 
 CREATE TABLE heralds (
     name           TEXT        PRIMARY KEY,
@@ -47,23 +47,23 @@ CREATE TABLE heralds (
 );
 
 COMMENT ON TABLE heralds IS
-    'Реестр каналов доставки уведомлений Herald (ADR-052). type closed-enum (webhook MVP), config JSONB (webhook: url+headers+opt-out флаги), secret_ref = vault-ref (секрет канала в БД не хранится).';
+    'Registry of Herald notification delivery channels (ADR-052). type closed-enum (webhook MVP), config JSONB (webhook: url+headers+opt-out flags), secret_ref = vault-ref (channel secret not stored in the DB).';
 
--- tidings — правило подписки. PK name (kebab-case). event_types — непустой
--- TEXT[] audit event-types с поддержкой area-glob (`scenario_run.*`); shape
--- (известный тип ИЛИ glob области прогона) валидируется на service-слое — каталог
--- EventType-констант эволюционирует, БД-CHECK по нему был бы хрупким (как
--- omens.auth_ref / rites.allow). CHECK здесь ловит только инвариант «список
--- непустой» (cardinality, доступно декларативно).
+-- tidings - a subscription rule. PK name (kebab-case). event_types - non-empty
+-- TEXT[] of audit event-types with area-glob support (`scenario_run.*`); the shape
+-- (a known type OR a run-area glob) is validated at the service layer - the
+-- EventType constant catalog evolves, a DB CHECK against it would be fragile (like
+-- omens.auth_ref / rites.allow). The CHECK here only catches the invariant "list
+-- non-empty" (cardinality, available declaratively).
 --
--- only_failures / only_changes — фильтры события (ADR-052(c)). incarnation /
--- cadence — опц. селекторы привязки к источнику прогона (NULL = без фильтра).
+-- only_failures / only_changes - event filters (ADR-052(c)). incarnation /
+-- cadence - optional selectors binding to the run source (NULL = no filter).
 --
 -- FK:
---   - herald → heralds(name) ON DELETE CASCADE: Tiding без Herald-а
---     бессмыслен, снос канала атомарно уносит его подписки (ADR-052(a),
---     naming-rules.md; симметрично rites.omen ON DELETE CASCADE).
---   - created_by_aid → operators(aid) ON DELETE SET NULL (как heralds).
+--   - herald -> heralds(name) ON DELETE CASCADE: a Tiding without a Herald
+--     makes no sense, removing the channel atomically takes its subscriptions with it (ADR-052(a),
+--     naming-rules.md; symmetric to rites.omen ON DELETE CASCADE).
+--   - created_by_aid -> operators(aid) ON DELETE SET NULL (same as heralds).
 
 CREATE TABLE tidings (
     name           TEXT        PRIMARY KEY,
@@ -88,14 +88,14 @@ CREATE TABLE tidings (
         FOREIGN KEY (created_by_aid) REFERENCES operators (aid) ON DELETE SET NULL
 );
 
--- Lookup всех Tiding-правил одного Herald-а (CRUD list-by-herald + каскад-аудит).
+-- Lookup of all Tiding rules for one Herald (CRUD list-by-herald + cascade audit).
 CREATE INDEX tidings_herald_idx
     ON tidings (herald);
 
--- Dispatcher (S2) матчит событие только против ВКЛЮЧЁННЫХ правил. Partial-индекс
--- по enabled=true — горячий путь матча не сканирует выключенные подписки.
+-- Dispatcher (S2) matches an event only against ENABLED rules. A partial index
+-- on enabled=true - the hot match path doesn't scan disabled subscriptions.
 CREATE INDEX tidings_enabled_idx
     ON tidings (enabled) WHERE enabled = true;
 
 COMMENT ON TABLE tidings IS
-    'Реестр правил подписки на уведомления Tiding (ADR-052). event_types area-glob + фильтры only_failures/only_changes + селекторы incarnation/cadence. herald ON DELETE CASCADE.';
+    'Registry of Tiding notification subscription rules (ADR-052). event_types area-glob + only_failures/only_changes filters + incarnation/cadence selectors. herald ON DELETE CASCADE.';

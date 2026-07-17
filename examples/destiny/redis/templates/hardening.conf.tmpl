@@ -1,43 +1,43 @@
 {{/*
-  systemd drop-in hardening для redis-server (Go text/template strict, ADR-010). Контекст:
-  .vars.data_dir/run_dir/log_dir/conf_dir — фактические каталоги записи redis под
+  systemd drop-in hardening for redis-server (Go text/template strict, ADR-010). Context:
+  .vars.data_dir/run_dir/log_dir/conf_dir - actual redis write directories under
   ReadWritePaths.
 
-  conf_dir В RW-путях ОБЯЗАТЕЛЕН (day-2): сценарий update_config делает CONFIG REWRITE
-  (community.redis.config с rewrite:true) — redis-server переписывает redis.conf, чтобы
-  персистить применённые директивы. Без conf_dir ProtectSystem=strict держит /etc только-
-  чтение → CONFIG REWRITE падает («Read-only file system») при первой же реально
-  изменившейся директиве. На create redis-server конфиг не переписывает (старт с готового
-  файла), но drop-in один на весь жизненный цикл — conf_dir нужен под day-2.
+  conf_dir in the RW paths is REQUIRED (day-2): the update_config scenario does CONFIG
+  REWRITE (community.redis.config with rewrite:true) - redis-server rewrites redis.conf to
+  persist applied directives. Without conf_dir, ProtectSystem=strict keeps /etc read-only,
+  so CONFIG REWRITE fails ("Read-only file system") on the first directive that actually
+  changed. On create, redis-server does not rewrite the config (starts from a ready-made
+  file), but the drop-in is one for the whole lifecycle - conf_dir is needed for day-2.
 
-  ПОЧЕМУ drop-in, а не свой unit. Redis ставится дистрибутивным пакетом вместе с его
-  systemd-юнитом redis-server.service. Дистрибутивный unit заменять целиком нельзя — он
-  несёт ExecStart/Type=notify/RuntimeDirectory и обновляется вместе с пакетом. Поэтому
-  hardening доезжает override-ом: /etc/systemd/system/redis-server.service.d/hardening.conf
-  поверх дистрибутивного unit-а (директивы [Service] мержатся, наши имеют приоритет).
+  WHY a drop-in and not our own unit. Redis is installed by the distro package together
+  with its systemd unit redis-server.service. The distro unit cannot be replaced wholesale -
+  it carries ExecStart/Type=notify/RuntimeDirectory and is updated together with the package.
+  So hardening arrives as an override: /etc/systemd/system/redis-server.service.d/hardening.conf
+  on top of the distro unit ([Service] directives are merged, ours take priority).
 
-  СЕРВИС-АККАУНТ. User/Group в drop-in НЕ задаём намеренно. redis — stateful-сервис
-  (прод-конвенция §2/§3): owned data-dir /var/lib/redis (RDB/AOF) требует стабильного
-  uid-владельца файлов между рестартами/апгрейдами. Дистрибутивный пакет уже заводит
-  system-аккаунт redis:redis (стабильный uid) и дистрибутивный unit уже запускается
-  под ним. DynamicUser тут непригоден: файлы под transient-uid одного запуска на
-  следующем будут принадлежать «чужому» uid. Аккаунт — от пакета, ручные
-  core.user/core.group не нужны.
+  SERVICE ACCOUNT. We deliberately do NOT set User/Group in the drop-in. redis is a
+  stateful service (prod convention §2/§3): the owned data-dir /var/lib/redis (RDB/AOF)
+  requires a stable file-owner uid across restarts/upgrades. The distro package already
+  creates the system account redis:redis (stable uid) and the distro unit already runs
+  under it. DynamicUser is unsuitable here: files under one run's transient uid would
+  belong to a "foreign" uid on the next run. The account comes from the package, manual
+  core.user/core.group are not needed.
 
-  HARDENING (прод-конвенция §3, «безопасность на первом месте», requirements.md).
-  Stateful-вариант: ProtectSystem=strict + ReadWritePaths под фактические каталоги записи
-  redis (data-dir/log/pidfile/socket + conf-dir для day-2 CONFIG REWRITE, см. выше). БЕЗ
-  ReadWritePaths strict делает весь / только-чтение и redis не сможет писать
-  RDB/AOF/socket/pid/log/redis.conf — прод-инцидент.
+  HARDENING (prod convention §3, "security first", requirements.md). Stateful variant:
+  ProtectSystem=strict + ReadWritePaths under the actual redis write directories
+  (data-dir/log/pidfile/socket + conf-dir for day-2 CONFIG REWRITE, see above). WITHOUT
+  ReadWritePaths, strict makes all of / read-only and redis would be unable to write
+  RDB/AOF/socket/pid/log/redis.conf - a prod incident.
 
-  MemoryDenyWriteExecute НЕ ставим намеренно (в отличие от Go-бинарей exporter-ов).
-  redis — на C, использует jemalloc и поддерживает loadable-модули; MDWE запрещает
-  W+X-маппинги и способен ломать аллокатор/JIT-страницы модулей. Для stateful redis
-  безопаснее MDWE не включать.
+  We deliberately do NOT set MemoryDenyWriteExecute (unlike the Go binaries of exporters).
+  redis is written in C, uses jemalloc, and supports loadable modules; MDWE forbids W+X
+  mappings and can break the allocator/JIT pages of modules. For stateful redis it is
+  safer not to enable MDWE.
 
-  RestrictAddressFamilies несёт AF_UNIX: redis слушает И TCP (:6379, redis.conf.tmpl),
-  И способен слушать unix-сокет. CapabilityBoundingSet= пуст: :6379 (>1024) и сокет
-  привилегий не требуют, CAP_NET_BIND_SERVICE не нужен.
+  RestrictAddressFamilies carries AF_UNIX: redis listens on BOTH TCP (:6379, redis.conf.tmpl)
+  AND can listen on a unix socket. CapabilityBoundingSet= is empty: :6379 (>1024) and the
+  socket require no privileges, CAP_NET_BIND_SERVICE is not needed.
 */}}
 [Service]
 NoNewPrivileges=yes

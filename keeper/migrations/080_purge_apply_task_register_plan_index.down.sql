@@ -1,11 +1,10 @@
 -- 080_purge_apply_task_register_plan_index.down.sql
 --
--- Откат forward-фикса 080: возвращаем тело purge_apply_task_register к форме 023
--- (DELETE-join по task_idx). Down 080 выполняется ПЕРЕД down 079 (порядок отката
--- обратный), а 079.down снимает колонку plan_index — поэтому функция обязана
--- перестать ссылаться на plan_index, иначе следующий purge упал бы на
--- несуществующей колонке. Восстановленная форма идентична 023 (N=1: task_idx
--- уникален, поведение корректно).
+-- Rollback of forward-fix 080: restores the body of purge_apply_task_register to the
+-- 023 form (DELETE-join over task_idx). Down 080 runs BEFORE down 079 (rollback order
+-- is reversed), and 079.down drops the plan_index column - so the function must stop
+-- referencing plan_index, otherwise the next purge would fail on a nonexistent column.
+-- The restored form is identical to 023 (N=1: task_idx is unique, behavior is correct).
 
 CREATE OR REPLACE FUNCTION purge_apply_task_register(grace_period interval, batch_size integer DEFAULT 1000)
 RETURNS BIGINT AS $$
@@ -33,4 +32,4 @@ END;
 $$ LANGUAGE plpgsql;
 
 COMMENT ON FUNCTION purge_apply_task_register(interval, integer) IS
-    'Удаляет batch apply_task_register-строк прогонов в терминальном статусе (success/failed/cancelled) с finished_at старше grace_period. register активного (running) прогона не трогает. Возвращает количество удалённых строк.';
+    'Deletes a batch of apply_task_register rows for runs in a terminal status (success/failed/cancelled) with finished_at older than grace_period. Does not touch the register of an active (running) run. Returns the number of deleted rows.';

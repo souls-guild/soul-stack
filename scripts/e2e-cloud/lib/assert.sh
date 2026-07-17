@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
-# Ассерты успеха прогона и полей state. Чисто (jq над JSON-телом, без сети).
-# assert_run_success — источник истины: успех ⟺ агрегат .status==success И каждый
-# .hosts[].status ∈ {success, no_match}. no_match — benign-терминал (таргетинг
-# подмножества: add_user на master → реплики no_match), считается успехом и
-# бэкендом (applyrun.AggregateRunStatus, runsview.go). На фейле — форензика из
-# failed_task_idx / error_summary реально упавших хостов (no_match не листится).
+# Asserts for run success and state fields. Pure (jq over the JSON body, no network).
+# assert_run_success - the source of truth: success iff the aggregate .status==success AND every
+# .hosts[].status is in {success, no_match}. no_match is a benign terminal state (targeting
+# a subset: add_user on master -> replicas get no_match), counted as success by the
+# backend too (applyrun.AggregateRunStatus, runsview.go). On failure - forensics come from
+# failed_task_idx / error_summary of the actually-failed hosts (no_match isn't listed).
 
-# assert_run_success <run_json> → 0 при полном успехе, иначе 1 + форензика в stderr.
+# assert_run_success <run_json> -> 0 on full success, otherwise 1 + forensics on stderr.
 assert_run_success() {
 	local json="$1"
 	if printf '%s' "$json" | jq -e '.status=="success" and all((.hosts // [])[]; .status=="success" or .status=="no_match")' >/dev/null 2>&1; then
@@ -14,16 +14,16 @@ assert_run_success() {
 	fi
 	local agg
 	agg="$(printf '%s' "$json" | jq -r '.status // "?"' 2>/dev/null)"
-	_e2e_log "    ✗ прогон НЕ success: агрегат .status=${agg}"
+	_e2e_log "    ✗ run is NOT success: aggregate .status=${agg}"
 	printf '%s' "$json" | jq -r '
 		.hosts[]? | select(.status != "success" and .status != "no_match")
 		| "    ✗ host=\(.sid) status=\(.status) failed_task_idx=\(.failed_task_idx // "-") plan_index=\(.failed_plan_index // "-") error=\(.error_summary // "-")"' 2>/dev/null >&2
 	return 1
 }
 
-# assert_state_field <inc_json> <jq-path> <expected> → 0 если хоть одно извлечённое
-# jq-значение равно expected (contains-семантика для стримов вроде
-# .state.users[]?.name), иначе 1. Пример: assert_state_field "$inc" '.state.users[]?.name' alice
+# assert_state_field <inc_json> <jq-path> <expected> -> 0 if at least one extracted
+# jq value equals expected (contains semantics for streams like
+# .state.users[]?.name), otherwise 1. Example: assert_state_field "$inc" '.state.users[]?.name' alice
 assert_state_field() {
 	local json="$1" path="$2" expected="$3" v found=1
 	while IFS= read -r v; do
@@ -34,6 +34,6 @@ assert_state_field() {
 	fi
 	local got
 	got="$(printf '%s' "$json" | jq -rc "[$path]" 2>/dev/null)"
-	_e2e_log "    ✗ state-поле '${path}': ожидал '${expected}', среди значений ${got:-[]} не найдено"
+	_e2e_log "    ✗ state field '${path}': expected '${expected}', not found among values ${got:-[]}"
 	return 1
 }

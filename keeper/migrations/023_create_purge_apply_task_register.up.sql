@@ -1,38 +1,42 @@
 -- 023_create_purge_apply_task_register.up.sql
 --
--- Reaper-правило `purge_apply_task_register` (docs/keeper/reaper.md): удаляет
--- batch register-строк (`apply_task_register`, миграция 022) тех прогонов,
--- чей `apply_runs` уже в ТЕРМИНАЛЬНОМ статусе (`success` / `failed` /
--- `cancelled`) и завершился (`finished_at`) старше `grace_period`.
+-- Reaper rule `purge_apply_task_register` (docs/keeper/reaper.md): deletes a
+-- batch of register rows (`apply_task_register`, migration 022) for runs
+-- whose `apply_runs` is already in a TERMINAL status (`success` / `failed` /
+-- `cancelled`) and finished (`finished_at`) older than `grace_period`.
 --
--- Зачем отдельное правило, если FK `ON DELETE CASCADE` уже чистит register
--- вместе со строкой apply_runs (правило `purge_apply_runs`, default 30d)?
---   - `apply_task_register.register_data` — plaintext-JSONB результатов
---     probe-задач, потенциально с секретами (`register: X` + вывод команды).
---     Это ТРАНЗИЕНТНЫЙ run-state: scenario-runner читает его ровно один раз
---     после cross-host barrier-а для рендера `state_changes.sets`, дальше он
---     не нужен. Хранить его все 30d ретеншена apply-истории — лишнее окно
---     plaintext-хранения. Правило снимает register агрессивнее (default 1h
---     после терминала), оставляя сам apply_run для истории/триажа.
+-- Why a separate rule, when the FK `ON DELETE CASCADE` already cleans up the
+-- register together with the apply_runs row (rule `purge_apply_runs`, default 30d)?
+--   - `apply_task_register.register_data` is plaintext JSONB of probe task
+--     results, potentially containing secrets (`register: X` + command output).
+--     This is TRANSIENT run-state: the scenario-runner reads it exactly once
+--     after the cross-host barrier to render `state_changes.sets`, and after
+--     that it is no longer needed. Keeping it for the full 30d apply-history
+--     retention is an unnecessary plaintext-storage window. The rule reaps
+--     register more aggressively (default 1h after terminal), leaving
+--     apply_run itself intact for history/triage.
 --
--- Критерий «терминальный статус + grace» (а НЕ чистый TTL по created_at):
---   - терминальный фильтр гарантирует, что register АКТИВНОГО (`running`)
---     прогона не удаляется НИКОГДА — независимо от его длительности. TTL по
---     created_at снёс бы register долгого running-прогона, чей created_at уже
---     в прошлом, что испортило бы рендер state_changes после барьера.
---   - grace от `finished_at` — запас на edge-case cross-Keeper-роутинга
---     (ADR-002 stateless): RunResult пришёл и apply_run стал терминальным,
---     но run-goroutine на другом инстансе ещё дочитывает register. Default
---     grace заведомо больше времени «барьер → чтение register».
+-- Criterion "terminal status + grace" (and NOT a plain TTL on created_at):
+--   - the terminal filter guarantees that the register of an ACTIVE
+--     (`running`) run is NEVER deleted, regardless of its duration. A TTL on
+--     created_at would reap the register of a long-running run whose
+--     created_at is already in the past, corrupting the state_changes render
+--     after the barrier.
+--   - grace from `finished_at` is a buffer for the cross-Keeper-routing edge
+--     case (ADR-002 stateless): RunResult arrived and apply_run became
+--     terminal, but the run-goroutine on another instance is still reading
+--     the register. The default grace is deliberately larger than the
+--     "barrier → register read" time.
 --
--- Возраст считается от `apply_runs.finished_at` (а не от
--- `apply_task_register.created_at`): «прогон завершён N назад» — корректная
--- мера готовности register к удалению. created_at register-строки сдвигается
--- при каждом retry-upsert той же задачи и не отражает завершённость прогона.
+-- Age is measured from `apply_runs.finished_at` (not from
+-- `apply_task_register.created_at`): "run finished N ago" is the correct
+-- measure of the register's readiness for deletion. The register row's
+-- created_at shifts on every retry-upsert of the same task and does not
+-- reflect run completion.
 --
--- DELETE ... USING join по composite ключу `(apply_id, sid)` к apply_runs;
--- CTE с LIMIT batch_size ограничивает размер транзакции, как и в остальных
--- Reaper-правилах.
+-- DELETE ... USING joins on the composite key `(apply_id, sid)` against
+-- apply_runs; the CTE with LIMIT batch_size caps the transaction size, as in
+-- the other Reaper rules.
 
 CREATE OR REPLACE FUNCTION purge_apply_task_register(grace_period interval, batch_size integer DEFAULT 1000)
 RETURNS BIGINT AS $$
@@ -60,4 +64,4 @@ END;
 $$ LANGUAGE plpgsql;
 
 COMMENT ON FUNCTION purge_apply_task_register(interval, integer) IS
-    'Удаляет batch apply_task_register-строк прогонов в терминальном статусе (success/failed/cancelled) с finished_at старше grace_period. register активного (running) прогона не трогает. Возвращает количество удалённых строк.';
+    'Deletes a batch of apply_task_register rows for runs in a terminal status (success/failed/cancelled) with finished_at older than grace_period. Does not touch the register of an active (running) run. Returns the number of deleted rows.';

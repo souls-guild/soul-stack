@@ -1,20 +1,20 @@
 -- 016_souls_status_destroyed.up.sql
 --
--- ADR-017 cascade: добавляем терминальный статус `destroyed` к enum
--- `souls.status`. Используется keeper-side core-модулем
--- `core.cloud.provisioned destroyed` после успешного CloudDriver.Destroy
--- для VM, выпущенной той же связкой (cloud-create → cloud-destroy).
+-- ADR-017 cascade: adds the terminal status `destroyed` to the enum
+-- `souls.status`. Used by the keeper-side core module
+-- `core.cloud.provisioned destroyed` after a successful CloudDriver.Destroy
+-- for a VM released by the same pairing (cloud-create -> cloud-destroy).
 --
--- Семантика статусов после миграции:
---   * `pending` — оператор выписал bootstrap-токен, Soul ещё не пришёл.
---   * `connected` — стрим жив, Keeper держит lease в Redis.
---   * `disconnected` — стрим закрыт, lease истёк (Soul может вернуться).
---   * `revoked` — оператор отозвал, новые подключения отвергаются.
---   * `expired` — Жнец передвинул `pending` после TTL bootstrap-токена.
---   * `destroyed` — Soul-side хост физически удалён через
---     `core.cloud.provisioned destroyed`. Терминальный (no transitions out).
---     Forensic-state: НЕ включается в default-set `purge_souls.statuses`,
---     чтобы строка пережила инцидент-разбор. Оператор может удалить вручную.
+-- Status semantics after the migration:
+--   * `pending` - the operator issued a bootstrap token, the Soul has not connected yet.
+--   * `connected` - the stream is alive, Keeper holds the lease in Redis.
+--   * `disconnected` - the stream is closed, the lease expired (the Soul may return).
+--   * `revoked` - the operator revoked it, new connections are rejected.
+--   * `expired` - the Reaper moved `pending` here after the bootstrap token TTL.
+--   * `destroyed` - the Soul-side host was physically removed via
+--     `core.cloud.provisioned destroyed`. Terminal (no transitions out).
+--     Forensic state: NOT included in the default `purge_souls.statuses` set,
+--     so the row survives incident review. The operator can delete it manually.
 
 ALTER TABLE souls
     DROP CONSTRAINT souls_status_valid;

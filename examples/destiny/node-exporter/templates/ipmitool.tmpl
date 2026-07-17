@@ -2,8 +2,8 @@
 
 #
 # Converts output of `ipmitool sensor` to prometheus format.
-# Статичный awk-скрипт: text/template strict отдаёт тело as-is (действий шаблонизатора нет;
-# одинарные awk-фигурные скобки движок не трогает).
+# Static awk script: text/template strict renders the body as-is (no templating actions;
+# the engine leaves single awk curly braces untouched).
 #
 # With GNU awk:
 #   ipmitool sensor | ./ipmitool > ipmitool.prom

@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
-# Инкрементальный отчёт прогона в $REPORT_DIR/<дата>-<suite>.md: каждая строка
-# пишется сразу (при аборте отчёт не пустой). Шапка «Окружение» + таблица шагов +
-# сводка. Счётчики PASS/FAIL/SKIP ведёт report_step по вердикту.
+# Incremental run report into $REPORT_DIR/<date>-<suite>.md: each line is
+# written immediately (so the report is not empty on abort). "Environment"
+# header + steps table + summary. report_step tracks the PASS/FAIL/SKIP
+# counters by verdict.
 
 E2E_STEP_NO=0
 E2E_PASS=0
@@ -9,7 +10,7 @@ E2E_FAIL=0
 E2E_SKIP=0
 E2E_REPORT_FILE=""
 
-# report_init <suite> — открыть отчёт (truncate), записать шапку и заголовок таблицы.
+# report_init <suite> - open the report (truncate), write the header and the table header.
 report_init() {
 	local suite="$1"
 	local dir="${REPORT_DIR:-.pm/e2e-reports}"
@@ -19,27 +20,27 @@ report_init() {
 	local canon
 	canon="$(git -C "$(dirname "${BASH_SOURCE[0]}")" rev-parse --short HEAD 2>/dev/null || echo "${CANON:-unknown}")"
 	{
-		echo "# E2E-cloud прогон: ${suite}"
+		echo "# E2E-cloud run: ${suite}"
 		echo
-		echo "## Окружение"
+		echo "## Environment"
 		echo
 		echo "- **suite**: ${suite}"
-		echo "- **запуск (UTC)**: $(_utc_now)"
+		echo "- **started (UTC)**: $(_utc_now)"
 		echo "- **exec_mode**: ${EXEC_MODE:-tsh}${DRY_RUN:+ (DRY_RUN=${DRY_RUN})}"
-		[[ "${DRY_RUN:-0}" == 1 ]] && echo "- **РЕЖИМ**: DRY-RUN — сеть не тронута, ответы синтетические"
+		[[ "${DRY_RUN:-0}" == 1 ]] && echo "- **MODE**: DRY-RUN - network untouched, responses are synthetic"
 		echo "- **endpoint**: $([[ "${EXEC_MODE:-tsh}" == tsh ]] && echo "tsh ${TSH_NODE:-?} → ${REMOTE_KEEPER_API:-http://localhost:8080}" || echo "${KEEPER_API:-http://127.0.0.1:8080}")"
 		echo "- **incarnation / service**: ${INCARNATION:-redis-auto} / ${SERVICE:-example-cloud-bootstrap}"
 		echo "- **provider / profile**: ${PROVIDER:-wb-prod} / ${PROFILE:-redis-debian-12}"
 		echo "- **canon (core)**: ${canon}"
 		echo "- **operator (aid)**: ${AID:-archon-alice}"
-		echo "- **bring-up steps**: ${E2E_BRINGUP_STEPS:-（нет）}"
+		echo "- **bring-up steps**: ${E2E_BRINGUP_STEPS:-(none)}"
 		echo
-		echo "## Шаги"
+		echo "## Steps"
 		echo
-		echo "| # | шаг / сценарий | apply_id | старт (UTC) | длит,с | http | run_status | assert | итог |"
+		echo "| # | step / scenario | apply_id | start (UTC) | dur,s | http | run_status | assert | verdict |"
 		echo "|---|---|---|---|---|---|---|---|---|"
 	} >"$E2E_REPORT_FILE"
-	_e2e_log "отчёт: ${E2E_REPORT_FILE}"
+	_e2e_log "report: ${E2E_REPORT_FILE}"
 }
 
 # report_step <step> <apply_id> <start_utc> <dur_s> <http> <run_status> <assert> <verdict>
@@ -54,15 +55,15 @@ report_step() {
 	printf '| %d | %s | %s | %s | %s | %s | %s | %s | %s |\n' \
 		"$E2E_STEP_NO" "$step" "${apply_id:--}" "$start" "$dur" "$http" "$rstatus" "$assert" "$verdict" \
 		>>"$E2E_REPORT_FILE"
-	_e2e_log "  [$verdict] шаг ${E2E_STEP_NO}: ${step} (http=${http} run_status=${rstatus})"
+	_e2e_log "  [$verdict] step ${E2E_STEP_NO}: ${step} (http=${http} run_status=${rstatus})"
 }
 
-# report_summary <result> <exit_code> — дописать сводку.
+# report_summary <result> <exit_code> - append the summary.
 report_summary() {
 	local result="$1" exit_code="$2"
 	{
 		echo
-		echo "## Сводка"
+		echo "## Summary"
 		echo
 		echo "- **PASS**: ${E2E_PASS}"
 		echo "- **FAIL**: ${E2E_FAIL}"
@@ -70,5 +71,5 @@ report_summary() {
 		echo "- **RESULT**: ${result}"
 		echo "- **exit-code**: ${exit_code}"
 	} >>"$E2E_REPORT_FILE"
-	_e2e_log "итог: ${result} (PASS=${E2E_PASS} FAIL=${E2E_FAIL} SKIP=${E2E_SKIP}, exit=${exit_code})"
+	_e2e_log "result: ${result} (PASS=${E2E_PASS} FAIL=${E2E_FAIL} SKIP=${E2E_SKIP}, exit=${exit_code})"
 }

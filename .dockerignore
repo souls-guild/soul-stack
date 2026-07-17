@@ -1,5 +1,5 @@
-# Исключения build-контекста для docker build (deploy/docker/*.Dockerfile).
-# Контекст — корень моно-репо; тащить .git/локальные артефакты не нужно.
+# Build-context exclusions for docker build (deploy/docker/*.Dockerfile).
+# Context is the monorepo root; no need to drag in .git/local artifacts.
 .git
 .gitignore
 .pm

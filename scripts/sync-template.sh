@@ -1,14 +1,14 @@
 #!/usr/bin/env bash
-# sync-template.sh — синхронизация template-дерева плагина между companion-repo
-# (source of truth) и core-repo embed.
+# sync-template.sh - syncs the plugin template tree between the companion repo
+# (source of truth) and the core-repo embed.
 #
-# Источник правды: ../soul-stack-plugins/soul-mod-template/
-# Зеркало:          soul-lint/internal/plugininit/template/ (go:embed)
+# Source of truth: ../soul-stack-plugins/soul-mod-template/
+# Mirror:           soul-lint/internal/plugininit/template/ (go:embed)
 #
-# Запускать после правки template в companion-repo. После запуска — `make check`
-# в core-repo, затем коммит обоих репозиториев.
+# Run after editing the template in the companion repo. After running, `make check`
+# in the core repo, then commit both repositories.
 #
-# Использование:
+# Usage:
 #   scripts/sync-template.sh              # default: ../soul-stack-plugins
 #   scripts/sync-template.sh /path/to/soul-stack-plugins
 set -euo pipefail
@@ -26,8 +26,8 @@ fi
 
 echo "sync-template.sh: ${SRC} → ${DST}"
 
-# Полное зеркало: --delete, чтобы переименования/удаления подхватились.
-# Если rsync недоступен — fallback на rm+cp.
+# Full mirror: --delete, so renames/deletions are picked up.
+# If rsync is unavailable - fallback to rm+cp.
 if command -v rsync >/dev/null 2>&1; then
   rsync -a --delete "${SRC}/" "${DST}/"
 else

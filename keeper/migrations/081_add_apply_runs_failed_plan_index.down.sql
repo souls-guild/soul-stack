@@ -1,10 +1,10 @@
 -- 081_add_apply_runs_failed_plan_index.down.sql
 --
--- Откат failure-канального фикса (ADR-056 §S1 fix Variant B): снимаем колонку
--- failed_plan_index. На N=1 (failed_plan_index == task_idx) откат чист — данные
--- упавшей задачи остаются в task_idx, корреляция возвращается к нему (как до
--- фикса; для N=1 task_idx == глобальный индекс, поведение корректно). На
--- раскатанном staged-render (N>1) после отката failure-корреляция снова стала
--- бы локальной (mislabel) — forward-only по сути, как 079/080.
+-- Rolls back the failure-channel fix (ADR-056 section S1 fix Variant B): drops the
+-- failed_plan_index column. For N=1 (failed_plan_index == task_idx) the rollback is clean -
+-- the failed task's data stays in task_idx, correlation reverts to it (as before the
+-- fix; for N=1, task_idx == the global index, so behavior is correct). On a
+-- rolled-out staged render (N>1), after the rollback failure correlation would again become
+-- local (mislabel) - forward-only in practice, like 079/080.
 ALTER TABLE apply_runs
     DROP COLUMN IF EXISTS failed_plan_index;

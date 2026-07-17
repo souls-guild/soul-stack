@@ -1,18 +1,18 @@
 {{/*
-  systemd-юнит redis-server для binary-установки (install.method=binary). Distro-пакет
-  несёт свой redis-server.service; при upstream-tarball-е его нет → install.yml рендерит
-  ЭТОТ полный юнит. Go text/template strict (ADR-010). Контекст: .vars.bin_dir/conf_dir +
-  redis_user/redis_group.
+  systemd unit for redis-server for a binary install (install.method=binary). The
+  distro package ships its own redis-server.service; with an upstream tarball there
+  is none -> install.yml renders THIS full unit. Go text/template strict (ADR-010).
+  Context: .vars.bin_dir/conf_dir + redis_user/redis_group.
 
-  ★ Имя файла — redis-server.service (НЕ redis.service): так server.yml hardening drop-in
-  (redis-server.service.d/hardening.conf) ложится поверх ЭТОГО юнита, и core.service
-  рестарт работает В ОБЕИХ install-ветках без ветвления.
+  ★ File name is redis-server.service (NOT redis.service): this way the server.yml
+  hardening drop-in (redis-server.service.d/hardening.conf) lands on top of THIS
+  unit, and core.service restart works in BOTH install branches without branching.
 
-  Type=notify + supervised systemd (симметрично дистрибутивному юниту).
+  Type=notify + supervised systemd (symmetric with the distro unit).
 
-  HARDENING тут НЕ дублируется: ProtectSystem/ReadWritePaths/Capability… доезжают
-  отдельным drop-in (hardening.conf.tmpl, server.yml) — общий для обеих веток источник
-  истины. Здесь — только базовый запуск + User/Group/RuntimeDirectory.
+  HARDENING is NOT duplicated here: ProtectSystem/ReadWritePaths/Capability... arrive
+  via a separate drop-in (hardening.conf.tmpl, server.yml) -- a single source of truth
+  shared by both branches. Here -- only the base launch + User/Group/RuntimeDirectory.
 */}}
 [Unit]
 Description=Redis In-Memory Data Store

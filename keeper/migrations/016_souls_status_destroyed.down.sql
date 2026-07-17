@@ -1,10 +1,10 @@
 -- 016_souls_status_destroyed.down.sql
 --
--- Откат расширения enum `souls.status`. Перед DROP-ом старого CHECK-а
--- надо убедиться, что в таблице нет строк со статусом `destroyed` —
--- иначе ADD CONSTRAINT провалится. В down-миграции это не fail-safe
--- (forward-only по ADR-019), поэтому каста к `revoked` нет: down
--- предполагается только на свежей БД, где `destroyed`-строк ещё нет.
+-- Rollback of the `souls.status` enum extension. Before DROPping the old CHECK,
+-- make sure there are no rows with status `destroyed` in the table -
+-- otherwise ADD CONSTRAINT will fail. This is not fail-safe in the down-migration
+-- (forward-only per ADR-019), so there is no cast to `revoked`: down
+-- is only expected on a fresh DB, where there are no `destroyed` rows yet.
 
 ALTER TABLE souls
     DROP CONSTRAINT souls_status_valid;

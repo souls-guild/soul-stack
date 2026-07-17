@@ -1,18 +1,18 @@
 {{/*
-  systemd-юнит mongod для binary-установки (essence.install_method=binary). Distro-пакет
-  mongodb-org несёт свой mongod.service; при upstream-tarball-е его нет → create рендерит
-  ЭТОТ полный юнит. Go text/template strict (ADR-010). Контекст: .vars.bin_dir/conf_dir +
+  systemd unit for mongod for a binary install (essence.install_method=binary). The distro package
+  mongodb-org ships its own mongod.service; with an upstream tarball there isn't one -> create renders
+  THIS full unit. Go text/template strict (ADR-010). Context: .vars.bin_dir/conf_dir +
   mongo_user/mongo_group.
 
-  Type=simple + foreground (mongod без processManagement.fork под управлением systemd —
-  не форкается, systemd следит за PID напрямую). ExecStart с --config указывает на
-  отрендеренный mongod.conf (conf_dir/mongod.conf).
+  Type=simple + foreground (mongod without processManagement.fork under systemd's control -
+  it doesn't fork, systemd tracks the PID directly). ExecStart's --config points to
+  the rendered mongod.conf (conf_dir/mongod.conf).
 
-  HARDENING (базовый, PILOT): NoNewPrivileges + ProtectSystem=strict + ReadWritePaths под
-  фактические каталоги записи mongod (data_dir/log_dir) + ограничения home/tmp. LimitNOFILE/
-  LimitNPROC — MongoDB production notes (64000, Ansible-роль mongodb_systemd_unit_limit_*).
-  Расширенный hardening (SystemCallFilter/MemoryDenyWriteExecute) — след. слайс (mongod —
-  сложнее статического Go-бинаря, нужна аккуратная сверка сисколлов).
+  HARDENING (baseline, PILOT): NoNewPrivileges + ProtectSystem=strict + ReadWritePaths for
+  the actual mongod write directories (data_dir/log_dir) + home/tmp restrictions. LimitNOFILE/
+  LimitNPROC - MongoDB production notes (64000, Ansible role mongodb_systemd_unit_limit_*).
+  Extended hardening (SystemCallFilter/MemoryDenyWriteExecute) - next slice (mongod is
+  more complex than a static Go binary, needs a careful syscall audit).
 */}}
 [Unit]
 Description=MongoDB Database Server
@@ -28,12 +28,12 @@ Group={{ .vars.mongo_group }}
 Restart=on-failure
 RestartSec=5
 
-# Лимиты ресурсов (MongoDB production notes).
+# Resource limits (MongoDB production notes).
 LimitNOFILE=64000
 LimitNPROC=64000
 LimitMEMLOCK=infinity
 
-# systemd-hardening (базовый, PILOT).
+# systemd hardening (baseline, PILOT).
 NoNewPrivileges=yes
 ProtectSystem=strict
 ReadWritePaths={{ .vars.data_dir }} {{ .vars.log_dir }}

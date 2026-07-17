@@ -1,11 +1,11 @@
 #!/bin/sh
-# preremove пакета soul-stack-soul. Останавливает и снимает с автозапуска демон
-# до удаления бинаря/юнита. `|| true` — remove не должен падать, если systemd
-# отсутствует (контейнер) или юнит уже снят.
+# preremove script for the soul-stack-soul package. Stops the daemon and disables
+# its autostart before the binary/unit is removed. `|| true` - remove must not
+# fail if systemd is absent (container) or the unit is already disabled.
 #
-# Только при ПОЛНОМ удалении, не при upgrade: иначе апгрейд пакета отключил бы
-# автозапуск юнита. Первый аргумент: deb даёт remove/purge/upgrade/..., rpm —
-# число (0 = последний remove, 1 = upgrade). Останавливаем на remove/purge/0.
+# Only on FULL removal, not on upgrade: otherwise a package upgrade would disable
+# the unit's autostart. First argument: deb gives remove/purge/upgrade/..., rpm -
+# a number (0 = final remove, 1 = upgrade). We stop on remove/purge/0.
 set -e
 
 case "$1" in

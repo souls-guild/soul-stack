@@ -1,7 +1,7 @@
 -- 087_add_souls_traits.down.sql
 --
--- Reversible откат ADR-060 read/target пилота: снимаем GIN-индекс и колонку
--- `souls.traits`. `souls.coven` не затрагивается (миграция его и не трогала).
+-- Reversible rollback of the ADR-060 read/target pilot: drops the GIN index and the
+-- `souls.traits` column. `souls.coven` isn't affected (the migration didn't touch it either).
 
 DROP INDEX IF EXISTS souls_traits_idx;
 

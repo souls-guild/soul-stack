@@ -1,21 +1,21 @@
 -- 001_create_audit_log.up.sql
 --
--- Audit-log таблица под ADR-022. Source of truth для всех write-path
--- инициаторов Keeper-а (HTTP-middleware Operator API, MCP-handler, Reaper,
+-- Audit-log table per ADR-022. Source of truth for all write-path
+-- initiators of the Keeper (HTTP middleware Operator API, MCP handler, Reaper,
 -- hot-reload pipeline, keeper.cloud, keeper.push, bootstrap, Soul gRPC
--- event forwarder) через общий helper shared/audit.
+-- event forwarder) via the shared helper shared/audit.
 --
--- FK audit_log.archon_aid → operators(aid) НЕ создаётся в M0.4.0 — таблица
--- operators появится в M0.4.x; отдельная миграция добавит constraint без
--- перезаписи этой схемы.
+-- FK audit_log.archon_aid -> operators(aid) is NOT created in M0.4.0 - the
+-- operators table will appear in M0.4.x; a separate migration will add the constraint without
+-- rewriting this schema.
 
 CREATE TABLE audit_log (
     audit_id        TEXT        PRIMARY KEY,                       -- ULID (26 chars, sortable timestamp prefix)
     created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    event_type      TEXT        NOT NULL,                          -- <area>.<action>, см. docs/naming-rules.md → Audit-events
+    event_type      TEXT        NOT NULL,                          -- <area>.<action>, see docs/naming-rules.md -> Audit-events
     source          TEXT        NOT NULL,                          -- closed enum: signal | api | mcp | keeper_internal | soul_grpc
-    archon_aid      TEXT,                                          -- nullable; FK на operators(aid) добавится отдельной миграцией
-    correlation_id  TEXT,                                          -- ULID, nullable; reuse apply_id для source='soul_grpc'
+    archon_aid      TEXT,                                          -- nullable; FK to operators(aid) will be added by a separate migration
+    correlation_id  TEXT,                                          -- ULID, nullable; reuse apply_id for source='soul_grpc'
     payload         JSONB       NOT NULL DEFAULT '{}'::jsonb
 );
 

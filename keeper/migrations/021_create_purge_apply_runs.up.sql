@@ -1,22 +1,22 @@
 -- 021_create_purge_apply_runs.up.sql
 --
--- Reaper-правило `purge_apply_runs` (docs/keeper/reaper.md): удаляет batch
--- завершённых apply-прогонов из реестра `apply_runs` (миграция 018) старше
--- `max_age`. Retention apply-истории (default 30d, считается от
+-- Reaper rule `purge_apply_runs` (docs/keeper/reaper.md): deletes a batch
+-- of finished apply runs from the `apply_runs` registry (migration 018) older than
+-- `max_age`. Apply-history retention (default 30d, counted from
 -- `finished_at`).
 --
--- Удаляются ТОЛЬКО finished-записи (`success` / `failed` / `cancelled` с
--- `finished_at IS NOT NULL`). Записи `running` НИКОГДА не purge — это
--- висящие/идущие прогоны; их триаж и завершение — отдельный механизм
--- scenario-runner-а, не Жнеца.
+-- ONLY finished records are deleted (`success` / `failed` / `cancelled` with
+-- `finished_at IS NOT NULL`). `running` records are NEVER purged - these are
+-- hanging/in-progress runs; their triage and completion are a separate
+-- mechanism of the scenario runner, not the Reaper.
 --
--- Возраст считается от `finished_at`: история прогона измеряется временем,
--- прошедшим с момента завершения, а не старта (долгий прогон, завершившийся
--- недавно, не должен удаляться раньше короткого, завершившегося давно).
+-- Age is counted from `finished_at`: a run's history is measured by the time
+-- elapsed since completion, not since start (a long run that finished
+-- recently should not be deleted before a short run that finished long ago).
 --
--- composite PK `(apply_id, sid)` (018) → DELETE ... USING expired по обоим
--- ключам; CTE с LIMIT batch_size ограничивает размер транзакции, как и в
--- остальных Reaper-правилах.
+-- composite PK `(apply_id, sid)` (018) → DELETE ... USING expired on both
+-- keys; a CTE with LIMIT batch_size bounds the transaction size, as in
+-- the other Reaper rules.
 
 CREATE OR REPLACE FUNCTION purge_apply_runs(max_age interval, batch_size integer DEFAULT 1000)
 RETURNS BIGINT AS $$
@@ -41,4 +41,4 @@ END;
 $$ LANGUAGE plpgsql;
 
 COMMENT ON FUNCTION purge_apply_runs(interval, integer) IS
-    'Удаляет batch finished apply_runs (success/failed/cancelled) с finished_at старше max_age. running не трогает. Возвращает количество удалённых строк.';
+    'Deletes a batch of finished apply_runs (success/failed/cancelled) with finished_at older than max_age. Does not touch running. Returns the number of deleted rows.';

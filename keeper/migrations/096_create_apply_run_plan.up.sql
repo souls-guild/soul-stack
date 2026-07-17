@@ -1,29 +1,29 @@
 -- 096_create_apply_run_plan.up.sql
 --
--- Персист host-инвариантного «плана задач прогона» (NIM-37): по одной строке на
--- (apply_id, plan_index) с метаданными отрендеренной задачи — name/module/no_log/
--- passage. Читается read-эндпоинтом GET /v1/incarnations/{name}/runs/{apply_id}/
--- tasks, который джойнит план с per-host результатами из audit_log (task.executed)
--- по plan_index.
+-- Persistence of the host-invariant "run task plan" (NIM-37): one row per
+-- (apply_id, plan_index) with metadata of the rendered task - name/module/no_log/
+-- passage. Read by the GET /v1/incarnations/{name}/runs/{apply_id}/
+-- tasks read endpoint, which joins the plan with per-host results from audit_log (task.executed)
+-- by plan_index.
 --
--- Зачем отдельная таблица, а не re-render YAML сценария: единственный надёжный
--- источник name/module/no_log — рендеренный план на момент dispatch. Re-render
--- отвергнут (loop/CEL-экспансия ломает соответствие plan_index; ref снапшота есть
--- не у всех прогонов). Метаданные host-инвариантны (одинаковы на всех хостах),
--- поэтому храним их РАЗ на прогон по plan_index, а НЕ per-host — per-host статус/
--- output берётся из audit_log (ADR-012: per-task не в apply_runs).
+-- Why a separate table instead of re-rendering the scenario YAML: the only reliable
+-- source of name/module/no_log is the rendered plan at dispatch time. Re-render
+-- was rejected (loop/CEL expansion breaks plan_index correspondence; a snapshot ref exists
+-- for not all runs). The metadata is host-invariant (the same on all hosts),
+-- so we store it ONCE per run by plan_index, and NOT per-host - per-host status/
+-- output is taken from audit_log (ADR-012: per-task is not in apply_runs).
 --
--- name/module/no_log — НЕ секрет (это адрес и тип задачи, не значения params),
--- поэтому маскинг не нужен. params задачи (могут нести секреты) в S1a НЕ хранятся —
--- отложены в S1b с secret-маскингом.
+-- name/module/no_log - NOT a secret (this is the task's address and type, not param values),
+-- so masking is not needed. Task params (which may carry secrets) are NOT stored in S1a -
+-- deferred to S1b with secret masking.
 --
--- PK (apply_id, plan_index): plan_index — ГЛОБАЛЬНЫЙ сквозной индекс задачи по
--- всему плану (все Passage) = RenderedTask.Index (ADR-056 §S1 Variant B), тот же
--- ключ, по которому task.executed коррелирует задачу в audit_log.
+-- PK (apply_id, plan_index): plan_index is a GLOBAL cross-cutting task index across
+-- the entire plan (all Passages) = RenderedTask.Index (ADR-056 §S1 Variant B), the same
+-- key by which task.executed correlates the task in audit_log.
 --
--- FK НЕТ: apply_id сам по себе не PK ни в одной таблице (apply_runs ключуется по
--- (apply_id, sid) — много строк на apply_id). Ретеншн — отдельным Reaper-правилом
--- purge_apply_run_plan (миграция 097), т.к. каскадного FK для очистки нет.
+-- NO FK: apply_id by itself is not a PK in any table (apply_runs is keyed by
+-- (apply_id, sid) - many rows per apply_id). Retention is handled by a separate Reaper rule
+-- purge_apply_run_plan (migration 097), since there is no cascading FK for cleanup.
 
 CREATE TABLE apply_run_plan (
     apply_id   TEXT        NOT NULL,
@@ -37,9 +37,9 @@ CREATE TABLE apply_run_plan (
     PRIMARY KEY (apply_id, plan_index)
 );
 
--- Загрузка всего плана прогона эндпоинтом /tasks (per apply_id → все plan_index).
+-- Loading the entire run plan by the /tasks endpoint (per apply_id → all plan_index).
 CREATE INDEX apply_run_plan_apply_idx
     ON apply_run_plan (apply_id);
 
 COMMENT ON TABLE apply_run_plan IS
-    'Host-инвариантный план задач прогона (name/module/no_log/passage per plan_index) для read-эндпоинта /tasks (NIM-37). PK (apply_id, plan_index); FK нет — ретеншн через purge_apply_run_plan.';
+    'Host-invariant run task plan (name/module/no_log/passage per plan_index) for the /tasks read endpoint (NIM-37). PK (apply_id, plan_index); no FK - retention via purge_apply_run_plan.';

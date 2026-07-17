@@ -1,14 +1,14 @@
 -- 044_add_apply_runs_orphaned_status.down.sql
 --
--- Откат терминала `orphaned` из enum `apply_runs.status` (Soul-reconcile,
--- ADR-027(g), S6). Перед сужением CHECK-а переводим существующие orphaned-строки
--- в `failed` — ближайший по семантике терминал-фейл дореформенной схемы (RunResult
--- не пришёл, хост не завершил прогон успешно), иначе ADD CONSTRAINT провалился бы
--- на них. Так down не теряет строки и не падает (паттерн 040: предварительный
--- UPDATE перед drop+recreate).
+-- Rollback of the `orphaned` terminal from the `apply_runs.status` enum (Soul-reconcile,
+-- ADR-027(g), S6). Before narrowing the CHECK, we convert existing orphaned rows to
+-- `failed` - the closest terminal-fail match in semantics for the pre-reform schema
+-- (RunResult never arrived, the host did not finish the run successfully), otherwise
+-- ADD CONSTRAINT would fail on them. This way down does not lose rows and does not fail
+-- (pattern from 040: a preliminary UPDATE before drop+recreate).
 --
--- Возвращает CHECK к форме 040 (planned/claimed/running/dispatched/success/failed/
--- cancelled) и сужает purge_apply_runs обратно (без orphaned).
+-- Returns the CHECK to the 040 form (planned/claimed/running/dispatched/success/failed/
+-- cancelled) and narrows purge_apply_runs back (without orphaned).
 
 UPDATE apply_runs SET status = 'failed' WHERE status = 'orphaned';
 
@@ -42,4 +42,4 @@ END;
 $$ LANGUAGE plpgsql;
 
 COMMENT ON FUNCTION purge_apply_runs(interval, integer) IS
-    'Удаляет batch finished apply_runs (success/failed/cancelled) с finished_at старше max_age. running не трогает. Возвращает количество удалённых строк.';
+    'Deletes a batch of finished apply_runs (success/failed/cancelled) with finished_at older than max_age. Does not touch running. Returns the number of deleted rows.';

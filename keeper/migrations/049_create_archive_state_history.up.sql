@@ -1,40 +1,40 @@
 -- 049_create_archive_state_history.up.sql
 --
--- SQL-функция Reaper-правила `archive_state_history` (ADR-Q19 retention).
--- Soft-deletes (`archived_at = NOW()`) старые активные снимки `state_history`
--- сверх N последних на incarnation, ИСКЛЮЧАЯ снимки шагов state_schema
--- миграции (`scenario = 'migration'`, см. migrationScenarioLabel в
--- keeper/internal/incarnation/crud.go::writeMigrationHistory / Unlock —
--- последний пишет scenario='unlock'; миграция-снимок единственный, кто
--- идёт под scenario='migration', что делает критерий устойчивым).
+-- SQL function for the Reaper rule `archive_state_history` (ADR-Q19 retention).
+-- Soft-deletes (`archived_at = NOW()`) old active snapshots of `state_history`
+-- beyond the N most recent per incarnation, EXCLUDING snapshots of state_schema
+-- migration steps (`scenario = 'migration'`, see migrationScenarioLabel in
+-- keeper/internal/incarnation/crud.go::writeMigrationHistory / Unlock -
+-- the latter writes scenario='unlock'; a migration snapshot is the only one that
+-- goes under scenario='migration', which makes the criterion robust).
 --
--- Параметры:
---   * keep_last_n      — сколько новейших активных снимков оставлять на
---                        incarnation (по at DESC). default semantics
---                        задаёт runner (default 50).
---   * keep_version_bump — true: снимки шагов миграции НЕ архивируются
---                        никогда, независимо от keep_last_n. false:
---                        правило архивирует их наравне с обычными.
---   * batch             — лимит soft-deleted за один прогон (защита от
---                        длинных UPDATE при первом включении правила на
---                        накопленной истории).
+-- Parameters:
+--   * keep_last_n      - how many newest active snapshots to keep per
+--                        incarnation (by at DESC). default semantics
+--                        is set by the runner (default 50).
+--   * keep_version_bump - true: migration-step snapshots are NEVER archived,
+--                        regardless of keep_last_n. false:
+--                        the rule archives them on par with regular ones.
+--   * batch             - limit of soft-deleted rows per run (protection against
+--                        long UPDATEs when the rule is first enabled on
+--                        accumulated history).
 --
--- Алгоритм:
---   1. Window-функция `row_number() OVER (PARTITION BY incarnation_name
---      ORDER BY at DESC, history_id ASC)` нумерует активные снимки
---      внутри каждой incarnation от 1 (новейший) и далее. ORDER BY
---      history_id ASC — стабильный tie-breaker при равных `at` (ULID
---      монотонен — старший = свежее, ASC = старший по at-tie остаётся
---      «выше», т.е. ближе к keep-окну; компромисс ради детерминизма).
---   2. Фильтр rn > keep_last_n — это снимки «сверх N», кандидаты на
---      архив.
---   3. Если keep_version_bump = true — дополнительно исключаем строки
---      со scenario='migration' (version-bump snapshots; restorable
---      anchor для миграций ADR-019).
---   4. LIMIT batch в подзапросе — батч-cap, чтобы первый прогон не
---      положил БД одним долгим UPDATE.
---   5. UPDATE по подзапросу-PK устанавливает archived_at = NOW().
---      Возвращаемое count(*) — affected rows за этот батч.
+-- Algorithm:
+--   1. The window function `row_number() OVER (PARTITION BY incarnation_name
+--      ORDER BY at DESC, history_id ASC)` numbers the active snapshots
+--      within each incarnation from 1 (newest) onward. ORDER BY
+--      history_id ASC - a stable tie-breaker for equal `at` values (ULID
+--      is monotonic - higher = newer, ASC = the higher one on an at-tie stays
+--      "higher", i.e. closer to the keep window; a trade-off for determinism).
+--   2. The filter rn > keep_last_n - these are the "beyond N" snapshots, candidates for
+--      archiving.
+--   3. If keep_version_bump = true - additionally exclude rows
+--      with scenario='migration' (version-bump snapshots; restorable
+--      anchor for ADR-019 migrations).
+--   4. LIMIT batch in the subquery - a batch cap so the first run does not
+--      take down the DB with one long UPDATE.
+--   5. The UPDATE over the subquery PK sets archived_at = NOW().
+--      The returned count(*) - affected rows for this batch.
 
 CREATE OR REPLACE FUNCTION archive_state_history(
     keep_last_n        integer,
@@ -69,4 +69,4 @@ LANGUAGE sql AS $$
 $$;
 
 COMMENT ON FUNCTION archive_state_history(integer, boolean, integer) IS
-    'Reaper archive_state_history (ADR-Q19): soft-delete активных снимков сверх N последних на incarnation, опц. с защитой version-bump (scenario=migration).';
+    'Reaper archive_state_history (ADR-Q19): soft-delete of active snapshots beyond the N most recent per incarnation, optionally protecting version-bump snapshots (scenario=migration).';

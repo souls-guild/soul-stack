@@ -1,16 +1,16 @@
 -- 020_create_profiles.up.sql
 --
--- Реестр Cloud-Profile-ей (ADR-017, docs/keeper/cloud.md). Profile — VM-spec
--- поверх конкретного Provider-а: `params` (jsonb, произвольный VM-spec,
--- валидируется против CloudDriver.Schema на service-слое — Cloud.CRUD.b) +
--- optional `cloud_init` (сырая userdata).
+-- Registry of Cloud Profiles (ADR-017, docs/keeper/cloud.md). Profile - a VM spec
+-- layered on top of a specific Provider: `params` (jsonb, an arbitrary VM spec,
+-- validated against CloudDriver.Schema at the service layer - Cloud.CRUD.b) +
+-- optional `cloud_init` (raw userdata).
 --
 -- FK:
---   - provider → providers(name) ON DELETE RESTRICT (PM-decision: не
---     CASCADE — защита от потери данных; удаление Provider-а с
---     зависимыми Profile-ями требует явного удаления профилей).
---   - created_by_aid → operators(aid) ON DELETE SET NULL (запись переживает
---     удаление оператора).
+--   - provider → providers(name) ON DELETE RESTRICT (PM decision: not
+--     CASCADE - protects against data loss; deleting a Provider with
+--     dependent Profiles requires explicitly deleting the profiles first).
+--   - created_by_aid → operators(aid) ON DELETE SET NULL (the record survives
+--     the operator being removed).
 
 CREATE TABLE profiles (
     name           TEXT        PRIMARY KEY,
@@ -28,14 +28,14 @@ CREATE TABLE profiles (
         FOREIGN KEY (created_by_aid) REFERENCES operators (aid) ON DELETE SET NULL
 );
 
--- Резолв Profile-ей конкретного Provider-а (SelectByProvider, проверка
--- зависимостей перед удалением Provider-а).
+-- Resolves Profiles belonging to a given Provider (SelectByProvider, dependency
+-- check before deleting a Provider).
 CREATE INDEX profiles_provider_idx
     ON profiles (provider);
 
--- Лента Profile-ей конкретного оператора (audit / триаж).
+-- Feed of Profiles created by a given operator (audit / triage).
 CREATE INDEX profiles_created_by_aid_idx
     ON profiles (created_by_aid);
 
 COMMENT ON TABLE profiles IS
-    'Реестр Cloud-Profile-ей (ADR-017). provider FK ON DELETE RESTRICT, params jsonb (VM-spec).';
+    'Registry of Cloud Profiles (ADR-017). provider FK ON DELETE RESTRICT, params jsonb (VM spec).';

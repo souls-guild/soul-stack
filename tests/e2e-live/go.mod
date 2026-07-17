@@ -70,15 +70,15 @@ require (
 	golang.org/x/text v0.37.0 // indirect
 )
 
-// Proto-генерация лежит в proto/-модуле; harness тащит из него типы
-// FromSoul/FromKeeper/KeeperClient для real-soul-container (L3b-2+).
-// Это единственный проектный модуль, который harness импортирует напрямую.
+// Proto generation lives in the proto/ module; the harness pulls types from it -
+// FromSoul/FromKeeper/KeeperClient for the real-soul-container (L3b-2+).
+// This is the only project module the harness imports directly.
 replace github.com/souls-guild/soul-stack/proto => ../../proto
 
-// NB: НЕТ replace для keeper/internal/* — Go-internal-rules запрещают.
-// L3b-harness работает с keeper-стороной через direct PG SQL и direct Vault
-// HTTP API; drift с keeper/migrations синхронизируется вручную (как в L3a).
+// NB: NO replace for keeper/internal/* - Go internal-rules forbid it.
+// The L3b harness talks to the keeper side via direct PG SQL and direct Vault
+// HTTP API; drift with keeper/migrations is synchronized manually (as in L3a).
 //
-// NB: код harness в L3b-1 КОПИРУЕТСЯ из tests/e2e/harness/ (а не imported) —
-// Go internal-rules + независимость уровней по контракту. После стабилизации
-// обоих L3a/L3b — экстракция в tests/e2e-shared/ отдельным slice-ом.
+// NB: the L3b-1 harness code is COPIED from tests/e2e/harness/ (not imported) -
+// Go internal-rules + level independence by contract. After stabilizing
+// both L3a/L3b - extraction into tests/e2e-shared/ as a separate slice.

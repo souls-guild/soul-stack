@@ -1,41 +1,41 @@
 {{/*
-  users.acl — внешний ACL-файл Redis (aclfile в redis.conf). Go text/template strict
-  (ADR-010). .vars.users — MAP имя→{perms, state, password}, собран scenario; password
-  зарезолвлен keeper-side из Vault (ADR-012).
+  users.acl - external Redis ACL file (aclfile in redis.conf). Go text/template strict
+  (ADR-010). .vars.users - MAP name→{perms, state, password}, assembled by scenario; password
+  is resolved keeper-side from Vault (ADR-012).
 
-  ДЕТЕРМИНИЗМ ПОРЯДКА (templating.md §6): range по MAP обходит ключи ОТСОРТИРОВАННО →
-  строки стабильны между прогонами (нет ложного change → нет лишнего onchanges-рестарта,
-  на rolling-restart флоте каскадного). Передача list-ом наследовала бы недетерминированный
-  порядок итерации Go-map (это и был tiling-критичный баг).
+  ORDER DETERMINISM (templating.md §6): range over a MAP walks keys SORTED →
+  lines are stable across runs (no false change → no extra onchanges restart,
+  cascading across a rolling-restart fleet). Passing a list would inherit the non-deterministic
+  iteration order of a Go map (this was exactly the tiling-critical bug).
 
-  Формат строки (конвенция Redis ACL):
+  Line format (Redis ACL convention):
     user <name> <state> #<sha256(password)> <perms>
-  Пароль пишется ХЕШЕМ (#<sha256hex>, sprig sha256sum), НЕ plaintext-ом: даже при утечке
-  файла исходный пароль не восстанавливается, Redis принимает #<hash> наравне с >password.
+  The password is written as a HASH (#<sha256hex>, sprig sha256sum), NOT plaintext: even if the
+  file leaks, the original password cannot be recovered; Redis accepts #<hash> the same as >password.
 
-  ★ РЕДИЗАЙН default_admin (2026-06-30): requirepass УСТАРЕЛ и убран из redis.conf — вся
-  аутентификация (вкл. внутреннюю: репликация/cluster/sentinel/health-PING) идёт под
-  СИСТЕМНЫМ юзером default_admin (`~* &* +@all`). default_admin приходит из MAP .vars.users
-  range-ом, как остальные системные (replica/monitoring/sentinel/haproxy) — он добавлен в
-  essence.system_acl_users, scenario доливает его в users со СВОИМ Vault-паролем. Прежняя
-  безусловная строка `user default on #<requirepass-hash> ~* &* +@all` УДАЛЕНА (вместе с
-  .vars.password, который её питал — он больше не передаётся).
+  ★ default_admin REDESIGN (2026-06-30): requirepass is DEPRECATED and removed from redis.conf -
+  all authentication (incl. internal: replication/cluster/sentinel/health-PING) goes through the
+  SYSTEM user default_admin (`~* &* +@all`). default_admin comes from the MAP .vars.users via
+  range, like the other system users (replica/monitoring/sentinel/haproxy) - it is added to
+  essence.system_acl_users, scenario merges it into users with its OWN Vault password. The former
+  unconditional line `user default on #<requirepass-hash> ~* &* +@all` is REMOVED (along with
+  .vars.password, which fed it - it is no longer passed).
 
-  ★ default (встроенный Redis-юзер) → `off`, ЕСЛИ оператор НЕ объявил его в input.users:
-  встроенный default нам больше не нужен (его роль занял default_admin), но при заданном
-  `aclfile` Redis иначе поставил бы built-in `user default on nopass ~* &* +@all` (когда в
-  aclfile default-строки нет) → при `protected-mode yes` это открытый безпарольный доступ.
-  Поэтому если `default` НЕ пришёл в .vars.users (оператор его не объявил) — рендерим ЯВНУЮ
-  `user default off` (выключенный default, безопасный дефолт). Если оператор ОБЪЯВИЛ default
-  в input.users — он попал в .vars.users (operator-extra) и рендерится range-ом ниже как
-  обычный юзер (его state/perms), а явная off-строка НЕ добавляется (`index`-гейт: `index
-  .vars.users "default"` на отсутствующем ключе MAP даёт nil без ошибки в strict-mode,
-  built-in text/template, как `index .vars.config "cluster-enabled"` в redis.conf.tmpl;
-  hasKey в sprig-allowlist НЕ входит — shared/tmpl/sprig.go).
+  ★ default (built-in Redis user) → `off`, IF the operator did NOT declare it in input.users:
+  we no longer need the built-in default (its role is now taken by default_admin), but with
+  `aclfile` set, Redis would otherwise fall back to the built-in `user default on nopass ~* &*
+  +@all` (when there is no default line in the aclfile) → with `protected-mode yes` this is open
+  passwordless access. So if `default` did NOT arrive in .vars.users (the operator did not
+  declare it) - we render an EXPLICIT `user default off` (default disabled, safe default). If the
+  operator DID declare default in input.users - it landed in .vars.users (operator-extra) and is
+  rendered below via range as a regular user (its state/perms), and the explicit off-line is NOT
+  added (`index` gate: `index .vars.users "default"` on a missing MAP key gives nil with no error
+  in strict-mode, built-in text/template, same as `index .vars.config "cluster-enabled"` in
+  redis.conf.tmpl; hasKey is NOT in the sprig allowlist - shared/tmpl/sprig.go).
 
-  Прочие юзеры — из MAP .vars.users (системные default_admin/replica/monitoring/sentinel/
-  haproxy + operator-extra, собран scenario). Минимальный валидный файл — default_admin
-  (системный, всегда) + `user default off`.
+  Other users - from the MAP .vars.users (system default_admin/replica/monitoring/sentinel/
+  haproxy + operator-extra, assembled by scenario). The minimal valid file is default_admin
+  (system, always present) + `user default off`.
 */}}
 {{- if not (index .vars.users "default") }}
 user default off

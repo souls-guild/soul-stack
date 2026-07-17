@@ -1,33 +1,37 @@
 -- 039_create_incarnation_archive.up.sql
 --
--- S-D3 (incarnation.destroy, каскад V3): archive-таблицы под физический снос
--- строки incarnation. Решение пользователя — НЕ хранить tombstone в live-реестре,
--- а копировать compliance-минимум в отдельные archive-таблицы ДО DELETE, после
--- чего DELETE FROM incarnation каскадом сносит live state_history / apply_runs /
--- apply_task_register. Архив переживает каскад, потому что у него НЕТ FK на live
--- incarnation.
+-- S-D3 (incarnation.destroy, cascade V3): archive tables for the physical removal
+-- of an incarnation row. User decision - do NOT keep a tombstone in the live
+-- registry, instead copy the compliance-minimum into separate archive tables
+-- BEFORE DELETE, after which DELETE FROM incarnation cascades to remove live
+-- state_history / apply_runs / apply_task_register. The archive survives the
+-- cascade because it has NO FK to the live incarnation.
 --
--- Две таблицы:
---   * incarnation_archive    — снимок ключевых колонок incarnation на момент
---     destroy (name / service / version / spec / state / status + временные метки)
---     + archived_at.
---   * state_history_archive   — снимок журнала state_history удаляемой
---     incarnation (история переходов важна для compliance) + archived_at.
+-- Two tables:
+--   * incarnation_archive    - a snapshot of the key incarnation columns at the
+--     moment of destroy (name / service / version / spec / state / status +
+--     timestamps) + archived_at.
+--   * state_history_archive   - a snapshot of the state_history log of the
+--     removed incarnation (the transition history matters for compliance) +
+--     archived_at.
 --
--- Зачем archive-таблицы, а не tombstone-флаг в incarnation: live-реестр остаётся
--- чистым (status-enum не разрастается «удалённым» значением, FK-целостность
--- apply_runs/state_history не висит на мёртвой строке), а compliance-данные
--- сохраняются неограниченно (отдельное Reaper-правило ретеншена архива — backlog).
+-- Why archive tables instead of a tombstone flag on incarnation: the live
+-- registry stays clean (the status enum does not grow a "deleted" value, FK
+-- integrity of apply_runs/state_history does not hang off a dead row), while
+-- compliance data is retained indefinitely (a separate Reaper retention rule
+-- for the archive is backlog).
 --
--- FK-инвариант: archive-таблицы НЕ ссылаются на incarnation(name) — иначе DELETE
--- родителя либо упал бы (RESTRICT), либо снёс бы только что записанный архив
--- (CASCADE). created_by_aid / changed_by_aid тоже НЕ FK на operators: архив —
--- замороженный снимок, он не обязан переживать ссылочную целостность реестра
--- операторов (AID хранится как строка-значение для аудита, не как живая ссылка).
+-- FK invariant: archive tables do NOT reference incarnation(name) - otherwise
+-- deleting the parent would either fail (RESTRICT) or wipe out the archive row
+-- just written (CASCADE). created_by_aid / changed_by_aid are also NOT FKs to
+-- operators: the archive is a frozen snapshot, it is not obligated to outlive
+-- the referential integrity of the operator registry (AID is stored as a plain
+-- string value for audit purposes, not as a live reference).
 --
--- name НЕ PK: одно и то же имя incarnation может быть пере-создано и снова
--- снесено (повторный destroy того же имени) — архив накапливает все инкарнации
--- этого имени. PK — суррогатный IDENTITY (archive_id), уникальный на запись.
+-- name is NOT a PK: the same incarnation name can be re-created and destroyed
+-- again (repeated destroy of the same name) - the archive accumulates all
+-- incarnations of that name. The PK is a surrogate IDENTITY (archive_id),
+-- unique per row.
 
 CREATE TABLE incarnation_archive (
     archive_id            BIGINT      GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
@@ -45,13 +49,13 @@ CREATE TABLE incarnation_archive (
     archived_at           TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
--- Поиск архива по имени снесённой incarnation (compliance-запрос «что было у
--- redis-prod до удаления»).
+-- Lookup of the archive by the name of a removed incarnation (compliance query
+-- "what did redis-prod look like before deletion").
 CREATE INDEX incarnation_archive_name_idx
     ON incarnation_archive (name);
 
 COMMENT ON TABLE incarnation_archive IS
-    'Архив снесённых incarnation (S-D3, каскад V3). БЕЗ FK на live incarnation — переживает DELETE.';
+    'Archive of removed incarnations (S-D3, cascade V3). NO FK to the live incarnation - survives DELETE.';
 
 CREATE TABLE state_history_archive (
     archive_id         BIGINT      GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
@@ -66,9 +70,9 @@ CREATE TABLE state_history_archive (
     archived_at        TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
--- Лента архивной истории конкретной снесённой incarnation.
+-- Archived history feed of state_history for a specific removed incarnation.
 CREATE INDEX state_history_archive_incarnation_idx
     ON state_history_archive (incarnation_name);
 
 COMMENT ON TABLE state_history_archive IS
-    'Архив журнала state_history снесённых incarnation (S-D3). БЕЗ FK на live incarnation.';
+    'Archive of the state_history log for removed incarnations (S-D3). NO FK to the live incarnation.';

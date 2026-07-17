@@ -1,11 +1,11 @@
 -- 086_seed_archon_system.down.sql
 --
--- Откат 086: удаление системного оператора. Фильтр по created_via='system'
--- защищает от случайного удаления одноимённой строки иной природы.
+-- Rollback of 086: deletes the system operator. The created_via='system' filter
+-- guards against accidentally deleting a same-named row of a different nature.
 --
--- ВНИМАНИЕ: FK push_providers.created_by_aid → operators(aid) может удерживать
--- строку, если auto-import уже импортировал провайдеры под этим AID. В чистой
--- down-цепочке порядок миграций снимет зависимые таблицы раньше; прод down не
--- выполняется (forward-only), оставляем DELETE как есть.
+-- WARNING: FK push_providers.created_by_aid → operators(aid) may hold on to
+-- the row if auto-import has already imported providers under this AID. In a clean
+-- down chain, migration order tears down the dependent tables first; prod down is
+-- never run (forward-only), so we leave the DELETE as-is.
 
 DELETE FROM operators WHERE aid = 'archon-system' AND created_via = 'system';

@@ -1,40 +1,40 @@
 -- 022_create_apply_task_register.up.sql
 --
--- Накопитель register-данных задач прогона (state_changes полная грамматика,
--- слайс 2 «register-в-sets»). Каждая строка — register-результат одной
--- probe-задачи (`register: X`) на одном Soul-хосте в рамках одного прогона.
+-- Accumulator of task register data for a run (state_changes full grammar,
+-- slice 2 "register-into-sets"). Each row is the register result of one
+-- probe task (`register: X`) on one Soul host within a single run.
 --
--- Назначение: TaskEvent.register_data доходит до Keeper (events_taskevent.go),
--- но раньше оседал только в audit/SSE и не агрегировался для CEL. Теперь он
--- накапливается тут, а scenario-runner после cross-host barrier-а читает
--- register-map per-host и пробрасывает в RenderStateChanges → `sets:
--- ${ register.<task>.<поле> }` рендерится.
+-- Purpose: TaskEvent.register_data reaches Keeper (events_taskevent.go),
+-- but previously it only landed in audit/SSE and was not aggregated for CEL. Now it
+-- accumulates here, and after the cross-host barrier scenario-runner reads
+-- the per-host register map and passes it into RenderStateChanges -> `sets:
+-- ${ register.<task>.<field> }` gets rendered.
 --
--- Хранилище — Postgres (НЕ in-memory): на multi-Keeper (ADR-002 stateless)
--- TaskEvent может прийти на другой инстанс, чем держит run-goroutine. In-memory
--- map собрал бы неполную картину → неверный commit incarnation.state. Общая
--- таблица переживает cross-Keeper-роутинг.
+-- Storage is Postgres (NOT in-memory): on multi-Keeper (ADR-002 stateless)
+-- a TaskEvent can arrive on a different instance than the one holding the run-goroutine. An in-memory
+-- map would collect an incomplete picture -> incorrect incarnation.state commit. The shared
+-- table survives cross-Keeper routing.
 --
--- register_name тут НЕ хранится: handler в момент TaskEvent знает только
--- task_idx (proto register-имя не несёт, ADR-012(d) — orchestrator-only).
--- Резолв task_idx → register_name делает scenario-runner при чтении: он держит
--- []RenderedTask с полем Register на инстансе, инициировавшем прогон.
+-- register_name is NOT stored here: at TaskEvent time the handler only knows
+-- task_idx (the proto does not carry the register name, ADR-012(d) - orchestrator-only).
+-- Resolving task_idx -> register_name is done by scenario-runner on read: it holds
+-- []RenderedTask with the Register field on the instance that initiated the run.
 --
--- PK `(apply_id, sid, task_idx)` — одна строка на (прогон, хост, задача).
--- Повторный TaskEvent той же задачи (retry на Soul-стороне) перезаписывает
--- register_data (upsert ON CONFLICT в store) — побеждает последний результат.
+-- PK `(apply_id, sid, task_idx)` - one row per (run, host, task).
+-- A repeated TaskEvent for the same task (retry on the Soul side) overwrites
+-- register_data (upsert ON CONFLICT in the store) - the last result wins.
 --
--- FK на `apply_runs(apply_id, sid)` ON DELETE CASCADE: register-данные умирают
--- вместе со строкой прогона (Reaper-правило purge_apply_runs чистит их
--- каскадом, default 30d).
+-- FK to `apply_runs(apply_id, sid)` ON DELETE CASCADE: register data dies
+-- together with the run row (the Reaper rule purge_apply_runs cleans it up
+-- via cascade, default 30d).
 --
--- Дополнительно register чистится АГРЕССИВНЕЕ отдельным Reaper-правилом
--- purge_apply_task_register (миграция 023, default grace 1h после терминала
--- apply_run): register_data — plaintext-JSONB с потенциальными секретами,
--- транзиентный run-state, нужный scenario-runner-у только до cross-host
--- barrier-а. Хранить его все 30d ретеншена apply-истории — лишнее окно
--- plaintext-хранения; правило снимает register раньше, оставляя apply_run
--- для истории/триажа.
+-- register is additionally cleaned up MORE AGGRESSIVELY by a separate Reaper rule
+-- purge_apply_task_register (migration 023, default grace 1h after the apply_run
+-- reaches a terminal state): register_data is plaintext JSONB with potential secrets,
+-- transient run-state needed by scenario-runner only up to the cross-host
+-- barrier. Keeping it for the full 30d apply-history retention would be an unnecessary window
+-- of plaintext storage; the rule clears register earlier, leaving apply_run
+-- for history/triage.
 
 CREATE TABLE apply_task_register (
     apply_id      TEXT        NOT NULL,
@@ -49,10 +49,10 @@ CREATE TABLE apply_task_register (
         FOREIGN KEY (apply_id, sid) REFERENCES apply_runs (apply_id, sid) ON DELETE CASCADE
 );
 
--- Загрузка register-map всего прогона scenario-runner-ом после барьера
--- (per (apply_id) → все хосты и задачи).
+-- Loading the full run's register map by scenario-runner after the barrier
+-- (per (apply_id) -> all hosts and tasks).
 CREATE INDEX apply_task_register_apply_idx
     ON apply_task_register (apply_id);
 
 COMMENT ON TABLE apply_task_register IS
-    'Накопитель register-данных задач прогона для state_changes.sets (слайс 2). PK (apply_id, sid, task_idx); FK на apply_runs ON DELETE CASCADE.';
+    'Accumulator of task register data for a run, feeding state_changes.sets (slice 2). PK (apply_id, sid, task_idx); FK to apply_runs ON DELETE CASCADE.';

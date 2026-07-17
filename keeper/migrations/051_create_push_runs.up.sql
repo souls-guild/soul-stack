@@ -1,42 +1,42 @@
 -- 051_create_push_runs.up.sql
 --
--- Реестр push-прогонов (`POST /v1/push/apply`, MCP `keeper.push.apply`):
--- одна строка = один async-прогон Variant C orchestrator-а (keeper/internal/
--- pushorch). Отдельная таблица от `apply_runs` — там per-(apply_id, sid) с
--- pull-семантикой Soul EventStream-а; здесь — per-apply_id с inventory[] и
--- per-host summary в jsonb (push синхронный oneshot, не идёт через
--- apply_runs-барьер).
+-- Registry of push runs (`POST /v1/push/apply`, MCP `keeper.push.apply`):
+-- one row = one async run of the Variant C orchestrator (keeper/internal/
+-- pushorch). A separate table from `apply_runs` - that one is per-(apply_id, sid) with
+-- the pull semantics of the Soul EventStream; here - per-apply_id with inventory[] and
+-- a per-host summary in jsonb (push is a synchronous oneshot, it doesn't go through the
+-- apply_runs barrier).
 --
--- Поля:
---   - `apply_id`         — ULID, PK.
---   - `inventory_sids`   — массив SID push-хостов (resolved из request).
---   - `destiny_ref`      — "<name>@<git-ref>" (как в request).
---   - `ssh_provider`     — имя SshProvider из keeper.yml::plugins.ssh_providers[]
---                          ("" — registry-default).
---   - `input`            — input destiny для рендера (jsonb).
---   - `cleanup_stale`    — флаг доп. cleanup на хостах после успеха.
---   - `status`           — терминал прогона (см. CHECK ниже).
---   - `started_at`       — когда orchestrator принял запрос.
---   - `finished_at`      — когда все per-host задачи отработали (NULL пока running).
---   - `started_by_aid`   — Архонт-инициатор (FK на operators).
---   - `started_by_kid`   — KID Keeper-инстанса (для Reaper purge_orphan_push_runs).
---   - `summary`          — per-host map sid → {status, error?, run_status?} (jsonb).
+-- Fields:
+--   - `apply_id`         - ULID, PK.
+--   - `inventory_sids`   - array of push-host SIDs (resolved from the request).
+--   - `destiny_ref`      - "<name>@<git-ref>" (as in the request).
+--   - `ssh_provider`     - SshProvider name from keeper.yml::plugins.ssh_providers[]
+--                          ("" - registry default).
+--   - `input`            - destiny input for rendering (jsonb).
+--   - `cleanup_stale`    - flag for extra cleanup on hosts after success.
+--   - `status`           - run terminal state (see CHECK below).
+--   - `started_at`       - when the orchestrator accepted the request.
+--   - `finished_at`      - when all per-host tasks finished (NULL while running).
+--   - `started_by_aid`   - initiating Archon (FK to operators).
+--   - `started_by_kid`   - KID of the Keeper instance (for Reaper purge_orphan_push_runs).
+--   - `summary`          - per-host map sid -> {status, error?, run_status?} (jsonb).
 --
--- Статусы (CHECK):
---   pending           — записан, ещё не подхвачен goroutine-ой
---   running           — goroutine начала per-host dispatch
---   success           — все per-host прогоны success
---   failed            — все per-host прогоны failed
---   partial_failed    — часть success, часть failed
---   cancelled         — Reaper purge_orphan_push_runs терминалил (Keeper умер во время прогона)
+-- Statuses (CHECK):
+--   pending           - recorded, not yet picked up by a goroutine
+--   running           - a goroutine has started per-host dispatch
+--   success           - all per-host runs succeeded
+--   failed            - all per-host runs failed
+--   partial_failed    - some succeeded, some failed
+--   cancelled         - terminated by Reaper purge_orphan_push_runs (Keeper died mid-run)
 --
--- Индексы:
---   - status partial-индексы (только in-flight): дёшево по WHERE status IN
---     ('pending','running') — purge_orphan_push_runs и просмотр активных.
---   - started_by_kid — Reaper фильтрует по kid (свой ли инстанс жив).
+-- Indexes:
+--   - status partial indexes (in-flight only): cheap for WHERE status IN
+--     ('pending','running') - purge_orphan_push_runs and viewing active runs.
+--   - started_by_kid - Reaper filters by kid (whether its own instance is alive).
 --
--- FK на operators: ON DELETE SET NULL — историю прогона не теряем при revoke
--- архонта; archon_aid остаётся NULL (audit-trail в audit_log сохранён).
+-- FK to operators: ON DELETE SET NULL - we don't lose the run history when an
+-- Archon is revoked; archon_aid stays NULL (the audit trail in audit_log is preserved).
 
 CREATE TABLE push_runs (
     apply_id          TEXT        PRIMARY KEY,
@@ -66,4 +66,4 @@ CREATE INDEX push_runs_started_by_kid_idx
     WHERE status IN ('pending', 'running');
 
 COMMENT ON TABLE push_runs IS
-    'Реестр async-прогонов keeper.push (Variant C orchestrator). Одна строка = один POST /v1/push/apply.';
+    'Registry of keeper.push async runs (Variant C orchestrator). One row = one POST /v1/push/apply.';

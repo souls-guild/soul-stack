@@ -1,20 +1,20 @@
-# Keeper-image для L3c kind-cluster E2E. Single-stage: переиспользует артефакт
-# `make build-linux` (статический keeper-linux-amd64 из `keeper/bin/`),
-# COPY-им бинарь в distroless-runtime. PM-decision: `gcr.io/distroless/static`
-# — минимальный attack-surface (без shell / без libc).
+# Keeper image for L3c kind-cluster E2E. Single-stage: reuses the
+# `make build-linux` artifact (static keeper-linux-amd64 from `keeper/bin/`),
+# COPY the binary into the distroless runtime. PM decision: `gcr.io/distroless/static`
+# - minimal attack surface (no shell / no libc).
 #
-# Контекст сборки — корень репозитория (`docker build -f
-# tests/e2e-k8s/dockerfiles/keeper.Dockerfile .`); ENTRYPOINT-аргументы и
-# config-file берём из ConfigMap, mount-ить который будет K8s-Deployment.
+# Build context is the repository root (`docker build -f
+# tests/e2e-k8s/dockerfiles/keeper.Dockerfile .`); ENTRYPOINT args and the
+# config file come from a ConfigMap, mounted by the K8s Deployment.
 #
-# Образ ОДНОРАЗОВЫЙ — собирается локально, грузится в kind через `kind load
-# docker-image`, в registry не публикуется (см. Makefile::docker-build-keeper).
+# The image is DISPOSABLE - built locally, loaded into kind via `kind load
+# docker-image`, not published to a registry (see Makefile::docker-build-keeper).
 
 FROM gcr.io/distroless/static:nonroot
 
-# nonroot UID/GID (65532). distroless по умолчанию выставляет USER=nonroot,
-# но дублируем явно — keeper.yml ожидает писать в каталоги, владельцем
-# которых должен быть тот же UID.
+# nonroot UID/GID (65532). distroless sets USER=nonroot by default,
+# but we duplicate it explicitly - keeper.yml expects to write into
+# directories owned by that same UID.
 USER nonroot:nonroot
 
 COPY keeper/bin/keeper-linux-amd64 /keeper

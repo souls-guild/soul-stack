@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
-# Микро-harness guard-тестов (bats в репо нет — свой ~30 строк): it/assert_eq/fail.
+# Micro-harness for guard tests (bats isn't in the repo - a homegrown ~30 lines): it/assert_eq/fail.
 
 _T_PASS=0
 _T_FAIL=0
 _T_NAME=""
 
-# it <name> — назвать текущий кейс.
+# it <name> - name the current test case.
 it() { _T_NAME="$1"; }
 
 # assert_eq <expected> <actual> [msg]
@@ -19,13 +19,13 @@ assert_eq() {
 	fi
 }
 
-# fail <msg> — безусловный провал текущего кейса.
+# fail <msg> - unconditional failure of the current test case.
 fail() {
 	_T_FAIL=$((_T_FAIL + 1))
 	printf '  FAIL %s — %s\n' "$_T_NAME" "$1"
 }
 
-# harness_summary — печать итога, exit-status 0 только если провалов нет.
+# harness_summary - print the summary; exit status 0 only if there are no failures.
 harness_summary() {
 	printf '\n== guard: %d passed, %d failed ==\n' "$_T_PASS" "$_T_FAIL"
 	[[ "$_T_FAIL" -eq 0 ]]

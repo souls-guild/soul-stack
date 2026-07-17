@@ -1,21 +1,21 @@
 -- 058_relax_aid_format.up.sql
 --
--- ADR-014 amendment (2026-05-29): ослабление формата AID. Обязательный
--- префикс `archon-` снят; charset расширен до `[a-z0-9._@-]` для
--- email-подобных внешних имён (LDAP/Keycloak auto-provision). Первый
--- символ обязан быть строчной ASCII-буквой или цифрой, общая длина 2..128.
+-- ADR-014 amendment (2026-05-29): relaxes the AID format. The mandatory
+-- `archon-` prefix is dropped; the charset is widened to `[a-z0-9._@-]` for
+-- email-like external names (LDAP/Keycloak auto-provision). The first
+-- character must be a lowercase ASCII letter or digit, total length 2..128.
 --
--- Charset намеренно узкий и безопасный: нет `/`/`\` (path-traversal),
--- только ASCII-lowercase (нет unicode-двойников и регистра), нет
--- управляющих/кавычек (нет инъекций).
+-- The charset is deliberately narrow and safe: no `/`/`\` (path traversal),
+-- ASCII-lowercase only (no unicode look-alikes or case folding), no
+-- control characters/quotes (no injection).
 --
--- Forward-only: миграция 003 (CONSTRAINT aid_format `^archon-[a-z0-9-]{1,62}$`)
--- уже применена в проде, не правится. Старые AID вида `archon-<...>`
--- остаются валидными под новым паттерном (начинаются с буквы, charset —
--- надмножество прежнего).
+-- Forward-only: migration 003 (CONSTRAINT aid_format `^archon-[a-z0-9-]{1,62}$`)
+-- is already applied in production and is not being edited. Old AIDs of the form
+-- `archon-<...>` remain valid under the new pattern (they start with a letter, and the
+-- charset is a superset of the previous one).
 --
--- PG `~` — POSIX ERE. В классе `[a-z0-9._@-]` дефис в конце литерален,
--- точка внутри класса литеральна — экранирование не требуется.
+-- PG `~` is POSIX ERE. In the class `[a-z0-9._@-]` the trailing dash is literal,
+-- and the dot inside the class is literal - no escaping is required.
 
 ALTER TABLE operators DROP CONSTRAINT aid_format;
 ALTER TABLE operators ADD CONSTRAINT aid_format

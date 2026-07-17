@@ -1,12 +1,12 @@
 -- 063_voyage_targets_dispatch_idx.up.sql
 --
--- C1 (ADR-043): partial-UNIQUE индексы на dispatch-ссылках voyage_targets для
--- back-link history → Voyage. soul.SelectHistory LEFT JOIN-ит voyage_targets по
--- apply_id (scenario) и errand_id (errand); без индекса — seq scan на каждой
--- странице per-host timeline. Partial WHERE отсекает NULL-строки (target до
--- dispatch), индекс покрывает только заполненные ссылки. UNIQUE одновременно
--- гарантирует на уровне БД инвариант «один apply_id/errand_id → максимум одна
--- строка voyage_targets» (а не только логикой записи MarkTargetRunning).
+-- C1 (ADR-043): partial UNIQUE indexes on the dispatch references of voyage_targets for
+-- back-link history -> Voyage. soul.SelectHistory LEFT JOINs voyage_targets on
+-- apply_id (scenario) and errand_id (errand); without the index - a seq scan on every
+-- per-host timeline page. The partial WHERE excludes NULL rows (target before
+-- dispatch), the index covers only populated references. UNIQUE also
+-- enforces at the DB level the invariant "one apply_id/errand_id -> at most one
+-- voyage_targets row" (not just via the MarkTargetRunning write logic).
 CREATE UNIQUE INDEX voyage_targets_apply_id_idx
     ON voyage_targets (apply_id) WHERE apply_id IS NOT NULL;
 

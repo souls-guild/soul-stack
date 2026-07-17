@@ -1,19 +1,19 @@
 -- 008_create_bootstrap_tokens.up.sql
 --
--- Реестр одноразовых SoulSeed-токенов под docs/soul/onboarding.md.
--- На один SID — один активный (`used_at IS NULL`) токен одновременно
--- (partial unique index). После использования запись остаётся в таблице
--- для аудита; Жнец позже подбирает по правилу `purge_used_tokens` с
--- `max_age: 90d` от `used_at`.
+-- Registry of one-time SoulSeed tokens per docs/soul/onboarding.md.
+-- One SID has one active (`used_at IS NULL`) token at a time
+-- (partial unique index). After use the record stays in the table
+-- for audit purposes; the Reaper later picks it up via the `purge_used_tokens`
+-- rule with `max_age: 90d` from `used_at`.
 --
--- Сам plain-токен в БД не хранится — только `token_hash` (SHA-256, hex,
--- без соли — токен сам high-entropy). Plain живёт только в выводе
--- bootstrap-API оператору и в файле на хосте Soul-а.
+-- The plain token itself is not stored in the DB - only `token_hash` (SHA-256, hex,
+-- no salt - the token is itself high-entropy). The plain value lives only in the
+-- bootstrap API response to the operator and in a file on the Soul's host.
 --
--- Push-хостам (`transport: ssh`) записи в bootstrap_tokens не создаются.
+-- For push hosts (`transport: ssh`) no records are created in bootstrap_tokens.
 --
--- FK на souls(sid) — ON DELETE CASCADE: удаление Soul-а удаляет связанные
--- токены (история токенов умирает с Soul-ом, как и в state_history vs
+-- FK to souls(sid) - ON DELETE CASCADE: deleting a Soul deletes its related
+-- tokens (token history dies with the Soul, same as state_history vs
 -- incarnation).
 
 CREATE TABLE bootstrap_tokens (
@@ -37,26 +37,26 @@ CREATE TABLE bootstrap_tokens (
         CHECK (token_hash ~ '^[0-9a-f]{64}$')
 );
 
--- Инвариант: на один sid — один активный (неиспользованный) токен.
+-- Invariant: one sid has one active (unused) token.
 CREATE UNIQUE INDEX bootstrap_tokens_active_by_sid_idx
     ON bootstrap_tokens (sid)
     WHERE used_at IS NULL;
 
--- Lookup по token_hash при предъявлении (UNIQUE — гарантия, что один
--- хеш не висит на разных SID; high-entropy исключает коллизию де-факто,
--- но constraint держит инвариант явно).
+-- Lookup by token_hash on presentation (UNIQUE - guarantee that one
+-- hash is not attached to more than one SID; high-entropy rules out collision
+-- de facto, but the constraint enforces the invariant explicitly).
 CREATE UNIQUE INDEX bootstrap_tokens_token_hash_idx
     ON bootstrap_tokens (token_hash);
 
--- Жнец: использованные токены старше max_age → DELETE.
+-- Reaper: used tokens older than max_age → DELETE.
 CREATE INDEX bootstrap_tokens_used_at_idx
     ON bootstrap_tokens (used_at)
     WHERE used_at IS NOT NULL;
 
--- Жнец: pending токены старше expires_at → DELETE + souls.status = expired.
+-- Reaper: pending tokens older than expires_at → DELETE + souls.status = expired.
 CREATE INDEX bootstrap_tokens_expires_at_idx
     ON bootstrap_tokens (expires_at)
     WHERE used_at IS NULL;
 
 COMMENT ON TABLE bootstrap_tokens IS
-    'Одноразовые SoulSeed-токены (docs/soul/onboarding.md). Активный = used_at IS NULL.';
+    'One-time SoulSeed tokens (docs/soul/onboarding.md). Active = used_at IS NULL.';

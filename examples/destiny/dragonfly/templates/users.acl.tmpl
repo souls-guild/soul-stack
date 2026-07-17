@@ -1,36 +1,39 @@
 {{/*
-  users.acl — внешний ACL-файл DragonFly (--aclfile во flagfile). Go text/template strict
-  (ADR-010). .vars.users — MAP имя→{perms, state, password}, собран scenario; password
-  зарезолвлен keeper-side из Vault (ADR-012). DF принимает redis-формат aclfile, включая
-  хешированный пароль `#<sha256hex>` (DF acl/user.cc SetPasswordHash is_hashed).
+  users.acl - the external DragonFly ACL file (--aclfile in the flagfile). Go text/template
+  strict (ADR-010). .vars.users - a MAP name→{perms, state, password}, assembled by the
+  scenario; password is resolved keeper-side from Vault (ADR-012). DF accepts the redis
+  aclfile format, including a hashed password `#<sha256hex>` (DF acl/user.cc
+  SetPasswordHash is_hashed).
 
-  ДЕТЕРМИНИЗМ ПОРЯДКА (templating.md §6): range по MAP обходит ключи ОТСОРТИРОВАННО →
-  строки стабильны между прогонами (нет ложного change → нет лишнего onchanges-рестарта,
-  на rolling-restart флоте каскадного). Передача list-ом наследовала бы недетерминированный
-  порядок итерации Go-map (это и был tiling-критичный баг).
+  ORDER DETERMINISM (templating.md §6): range over a MAP walks keys SORTED →
+  lines are stable across runs (no false change → no extra onchanges restart, which
+  would cascade across a rolling-restart fleet). Passing a list would inherit the
+  non-deterministic order of Go map iteration (that was exactly the tiling-critical bug).
 
-  Формат строки (конвенция Redis ACL, DF-совместим):
+  Line format (Redis ACL convention, DF-compatible):
     user <name> <state> #<sha256(password)> <perms>
-  Пароль пишется ХЕШЕМ (#<sha256hex>, sprig sha256sum), НЕ plaintext-ом: даже при утечке
-  файла исходный пароль не восстанавливается, DF принимает #<hash> наравне с >password.
+  The password is written as a HASH (#<sha256hex>, sprig sha256sum), NOT plaintext: even if
+  the file leaks, the original password cannot be recovered, and DF accepts #<hash> on par
+  with >password.
 
-  ★ РЕДИЗАЙН default_admin: --requirepass УБРАН из flagfile — вся аутентификация (вкл.
-  внутреннюю: репликация/sentinel/health-PING) идёт под СИСТЕМНЫМ юзером default_admin
-  (`~* &* +@all`). default_admin приходит из MAP .vars.users range-ом, как остальные
-  системные (replica/monitoring/sentinel/haproxy) — он добавлен в essence.system_acl_users,
-  scenario доливает его в users со СВОИМ Vault-паролем.
+  ★ default_admin REDESIGN: --requirepass is REMOVED from the flagfile - all authentication
+  (including internal: replication/sentinel/health-PING) goes through the SYSTEM user
+  default_admin (`~* &* +@all`). default_admin comes from the .vars.users MAP via range,
+  like the other system users (replica/monitoring/sentinel/haproxy) - it's added to
+  essence.system_acl_users, and the scenario adds it to users with its OWN Vault password.
 
-  ★ default (встроенный DragonFly-юзер) → `off`, ЕСЛИ оператор НЕ объявил его в input.users:
-  встроенный default нам больше не нужен (его роль занял default_admin), но при заданном
-  --aclfile DF иначе оставил бы built-in default доступным без пароля. Поэтому если `default`
-  НЕ пришёл в .vars.users (оператор его не объявил) — рендерим ЯВНУЮ `user default off`
-  (выключенный default, безопасный дефолт). Если оператор ОБЪЯВИЛ default в input.users — он
-  попал в .vars.users (operator-extra) и рендерится range-ом ниже как обычный юзер (его
-  state/perms), а явная off-строка НЕ добавляется (`index .vars.users "default"` на
-  отсутствующем ключе MAP даёт nil без ошибки в strict-mode, built-in text/template; hasKey в
-  sprig-allowlist НЕ входит — shared/tmpl/sprig.go).
+  ★ The built-in DragonFly `default` user → `off`, IF the operator did NOT declare it in
+  input.users: the built-in default is no longer needed (its role is taken by default_admin),
+  but with --aclfile set, DF would otherwise leave the built-in default reachable without a
+  password. So if `default` is NOT present in .vars.users (the operator didn't declare it) -
+  we render an EXPLICIT `user default off` (a disabled default, a safe default). If the
+  operator DID declare default in input.users - it ends up in .vars.users (operator-extra)
+  and is rendered by the range below like a regular user (its state/perms), and the explicit
+  off line is NOT added (`index .vars.users "default"` on a missing MAP key returns nil
+  without an error in strict-mode, built-in text/template; hasKey is NOT in the sprig
+  allowlist - shared/tmpl/sprig.go).
 
-  Минимальный валидный файл — default_admin (системный, всегда) + `user default off`.
+  Minimum valid file - default_admin (system, always) + `user default off`.
 */}}
 {{- if not (index .vars.users "default") }}
 user default off

@@ -1,41 +1,45 @@
 -- 033_create_rites.up.sql
 --
--- Реестр Rite-ов — grant-ов Augur-а (ADR-025, docs/keeper/augur.md → §4.2).
--- Rite связывает субъект (Coven XOR конкретный SID) с Omen-ом, allow-list-ом
--- и режимом доставки (`delegate`): «такой-то субъект может через Augur получить
--- из такого-то Omen-а такие-то значения, в таком-то режиме».
+-- Registry of Rites -- Augur grants (ADR-025, docs/keeper/augur.md -> §4.2).
+-- A Rite links a subject (Coven XOR a specific SID) to an Omen, an allow-list,
+-- and a delivery mode (`delegate`): "such-and-such subject can, through Augur,
+-- fetch such-and-such values from such-and-such Omen, in such-and-such mode."
 --
--- Суррогатный PK (`id`, GENERATED ALWAYS AS IDENTITY) — у одного субъекта на
--- один Omen может быть несколько Rite-ов (разные allow-list-ы / режимы), пары
--- (omen, subject) не уникальны. Прецедент IDENTITY-PK — plugin_sigils (028).
+-- Surrogate PK (`id`, GENERATED ALWAYS AS IDENTITY) -- a single subject can
+-- have several Rites for one Omen (different allow-lists / modes), so pairs
+-- (omen, subject) are not unique. Precedent for an IDENTITY PK -- plugin_sigils (028).
 --
--- Субъект — строго XOR: ровно одно из coven / sid непусто (CHECK
--- rites_subject_xor). coven-Rite применяется ко всем Soul-ам с этой меткой;
--- sid-Rite — к одному хосту. coven-формат проверяется только когда coven
--- задан (NULL-tolerant CHECK).
+-- Subject is strictly XOR: exactly one of coven / sid is non-empty (CHECK
+-- rites_subject_xor). A coven-Rite applies to all Souls with that label;
+-- a sid-Rite -- to a single host. The coven format is only checked when
+-- coven is set (NULL-tolerant CHECK).
 --
--- allow (JSONB) — allow-list разрешённых значений; форма зависит от
--- source_type Omen-а (vault: paths/policies, prometheus: queries, elk:
--- indices, augur.md §4.2). Shape валидируется на service-слое (JSONB нельзя
--- сопоставить с source_type другого Omen-а декларативным CHECK-ом без триггера).
+-- allow (JSONB) -- the allow-list of permitted values; its shape depends on
+-- the Omen's source_type (vault: paths/policies, prometheus: queries, elk:
+-- indices, augur.md §4.2). The shape is validated at the service layer
+-- (JSONB can't be matched against another Omen's source_type with a
+-- declarative CHECK without a trigger).
 --
--- delegate — граница MVP-фаз: false (брокер, MVP-1, данные через Keeper) /
--- true (делегация, MVP-2, Soul ходит сам с эфемерным scoped-credential).
--- Дефолт false — «безопасность на первом месте», делегация — явный opt-in.
+-- delegate -- the boundary between MVP phases: false (broker, MVP-1, data
+-- flows through Keeper) / true (delegation, MVP-2, Soul reaches out itself
+-- with an ephemeral scoped credential). Default false -- "security first",
+-- delegation is an explicit opt-in.
 --
--- token_ttl / token_num_uses — параметры минтуемого scoped Vault-токена,
--- осмысленны ТОЛЬКО для vault-Omen с delegate=true. CHECK
--- rites_token_fields_vault_only ловит только импликацию «token-поля заданы ⇒
--- delegate=true» (доступно в строке rites). Вторая половина инварианта —
--- «⇒ source_type=vault» — требует join к omens и проверяется на service-слое
--- (augur.md §4.2). token_ttl — duration-строка (config.ParseDuration),
--- валидируется на service-слое, не CHECK-ом.
+-- token_ttl / token_num_uses -- parameters of the minted scoped Vault token,
+-- meaningful ONLY for a vault-Omen with delegate=true. CHECK
+-- rites_token_fields_vault_only only catches the implication "token fields
+-- set => delegate=true" (available within the rites row). The other half of
+-- the invariant -- "=> source_type=vault" -- requires a join to omens and is
+-- validated at the service layer (augur.md §4.2). token_ttl is a duration
+-- string (config.ParseDuration), validated at the service layer, not by a
+-- CHECK.
 --
 -- FK:
---   - omen → omens(name) ON DELETE CASCADE: Rite без Omen-а бессмыслен,
---     удаление Omen-а атомарно убирает все его grant-ы (augur.md §9 форк).
---   - created_by_aid → operators(aid) ON DELETE SET NULL (запись Rite-а
---     переживает удаление оператора; симметрично omens/providers).
+--   - omen -> omens(name) ON DELETE CASCADE: a Rite without an Omen is
+--     meaningless, deleting an Omen atomically removes all of its grants
+--     (augur.md §9 fork).
+--   - created_by_aid -> operators(aid) ON DELETE SET NULL (the Rite record
+--     survives the operator's deletion; symmetric with omens/providers).
 
 CREATE TABLE rites (
     id             BIGINT      GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
@@ -51,31 +55,31 @@ CREATE TABLE rites (
 
     CONSTRAINT rites_omen_fk
         FOREIGN KEY (omen) REFERENCES omens (name) ON DELETE CASCADE,
-    -- Субъект — строго XOR: ровно одно из coven / sid непусто.
+    -- Subject is strictly XOR: exactly one of coven / sid is non-empty.
     CONSTRAINT rites_subject_xor
         CHECK ((coven IS NOT NULL) <> (sid IS NOT NULL)),
     CONSTRAINT rites_coven_format
         CHECK (coven IS NULL OR coven ~ '^[a-z0-9][a-z0-9-]*$'),
-    -- token-поля разрешены только при delegate=true (⇒vault — service-слой).
+    -- token fields are allowed only when delegate=true (=>vault checked at the service layer).
     CONSTRAINT rites_token_fields_vault_only
         CHECK ((token_ttl IS NULL AND token_num_uses IS NULL) OR delegate = true),
     CONSTRAINT rites_created_by_aid_fk
         FOREIGN KEY (created_by_aid) REFERENCES operators (aid) ON DELETE SET NULL
 );
 
--- Lookup всех Rite-ов одного Omen-а (авторизация §6, list-by-omen).
+-- Lookup of all Rites for a single Omen (authorization §6, list-by-omen).
 CREATE INDEX rites_omen_idx
     ON rites (omen);
 
--- Lookup sid-Rite-ов по конкретному SID (авторизация §6.3). Partial:
--- индексируем только заполненные sid (XOR ⇒ половина строк с sid=NULL).
+-- Lookup of sid-Rites by a specific SID (authorization §6.3). Partial:
+-- we index only the populated sid values (XOR => half the rows have sid=NULL).
 CREATE INDEX rites_sid_idx
     ON rites (sid) WHERE sid IS NOT NULL;
 
--- Lookup coven-Rite-ов по Coven-метке (авторизация §6.3). Partial по той же
--- причине, что rites_sid_idx.
+-- Lookup of coven-Rites by Coven label (authorization §6.3). Partial for the
+-- same reason as rites_sid_idx.
 CREATE INDEX rites_coven_idx
     ON rites (coven) WHERE coven IS NOT NULL;
 
 COMMENT ON TABLE rites IS
-    'Grant-ы Augur (ADR-025): субъект (coven XOR sid) × omen → allow + delegate + token-параметры. omen ON DELETE CASCADE.';
+    'Augur grants (ADR-025): subject (coven XOR sid) x omen -> allow + delegate + token parameters. omen ON DELETE CASCADE.';

@@ -1,40 +1,42 @@
 -- 059_create_voyages.up.sql
 --
--- ADR-043 → S1 schema: Voyage PG-таблицы фундамента (рядом со старыми
--- tides / errand_runs / apply_runs, которые продолжают работать до S7).
+-- ADR-043 -> S1 schema: foundation PG tables for Voyage (alongside the old
+-- tides / errand_runs / apply_runs, which keep working until S7).
 --
--- Voyage — унифицированный батчевый прогон, поглощающий Tide (kind=scenario) +
--- ErrandRun (kind=command). Единица батча — Leg (один «отрезок пути»),
--- идентифицируется voyage_targets.batch_index. Имена таблиц — производные от
--- locked-сущности Voyage/Leg (эскиз ADR-043 `runs`/`run_targets` уточнён до
--- `voyages`/`voyage_targets`, чтобы имя несло сущность, а не было общим `runs`).
+-- Voyage is a unified batch run absorbing Tide (kind=scenario) +
+-- ErrandRun (kind=command). The unit of a batch is a Leg (one "leg of the
+-- journey"), identified by voyage_targets.batch_index. Table names are
+-- derived from the locked Voyage/Leg entity (the ADR-043 sketch
+-- `runs`/`run_targets` was refined to `voyages`/`voyage_targets`, so the
+-- name carries the entity instead of being the generic `runs`).
 --
--- Failover-resilient через PG-based claim+lease (parity Tide / ErrandRun /
--- Ward-claim ADR-027(d)): pending → claimed_by_kid + claim_expires_at →
--- running; протухший claim возвращается Reaper-правилом обратно в pending для
--- пере-claim другим Keeper-инстансом (тираж — пост-S1). attempt++ на каждый
--- claim — fencing-epoch.
+-- Failover-resilient via PG-based claim+lease (parity with Tide / ErrandRun /
+-- Ward-claim ADR-027(d)): pending -> claimed_by_kid + claim_expires_at ->
+-- running; a stale claim is returned to pending by the Reaper rule for
+-- re-claim by another Keeper instance (fan-out is post-S1). attempt++ on
+-- every claim -- a fencing epoch.
 --
--- На S1 воркер НЕ исполняет реальную работу (config-gated OFF по умолчанию):
--- таблицы и claim-loop существуют как фундамент, реальное исполнение
--- scenario/command подключается в S2/S3.
+-- In S1 the worker does NOT execute real work (config-gated OFF by default):
+-- the tables and the claim-loop exist as a foundation, real execution of
+-- scenario/command is wired up in S2/S3.
 --
--- CHECK-инварианты voyages:
+-- CHECK invariants for voyages:
 --   * voyages_kind_valid:           scenario | command.
---   * voyages_status_valid:         closed-set 7 статусов (+ scheduled для
---                                   отложенного старта, S4).
+--   * voyages_status_valid:         closed-set of 7 statuses (+ scheduled for
+--                                   deferred start, S4).
 --   * voyages_on_failure_valid:     abort | continue.
---   * voyages_kind_payload_consistency: kind=scenario ⇒ scenario_name NOT NULL;
---                                   kind=command ⇒ module NOT NULL.
---   * voyages_running_claim_consistency: running ⇒ claim-поля NOT NULL.
---   * voyages_terminal_finished_at: terminal-статус ⇒ finished_at NOT NULL.
---   * voyages_batch_index_within_total: 0 ≤ current_batch_index ≤ total_batches.
+--   * voyages_kind_payload_consistency: kind=scenario => scenario_name NOT NULL;
+--                                   kind=command => module NOT NULL.
+--   * voyages_running_claim_consistency: running => claim fields NOT NULL.
+--   * voyages_terminal_finished_at: terminal status => finished_at NOT NULL.
+--   * voyages_batch_index_within_total: 0 <= current_batch_index <= total_batches.
 --   * voyages_attempt_non_negative / voyages_batch_size_positive /
---     voyages_concurrency_positive — sane-bounds.
+--     voyages_concurrency_positive -- sane bounds.
 --
 -- FK:
---   * started_by_aid → operators(aid) (NOT NULL, без ON DELETE — парность
---     tides/errand_runs; Voyage всегда инициируется конкретным Архонтом).
+--   * started_by_aid -> operators(aid) (NOT NULL, no ON DELETE -- parity
+--     with tides/errand_runs; a Voyage is always initiated by a specific
+--     Archon).
 
 CREATE TABLE voyages (
     voyage_id              TEXT        PRIMARY KEY,
@@ -98,31 +100,31 @@ CREATE TABLE voyages (
         FOREIGN KEY (started_by_aid) REFERENCES operators (aid)
 );
 
--- Pickup pending Voyage-ов по FIFO created_at
+-- Picking up pending Voyages by FIFO created_at
 -- (VoyageWorker.ClaimNext, FOR UPDATE SKIP LOCKED).
 CREATE INDEX voyages_pending_pickup_idx
     ON voyages (created_at)
     WHERE status = 'pending';
 
--- Recovery-скан: только активные running с истёкшим claim
--- (Reaper-правило reclaim_voyages — пост-S1).
+-- Recovery scan: only active running rows with an expired claim
+-- (Reaper rule reclaim_voyages -- post-S1).
 CREATE INDEX voyages_claim_scan_idx
     ON voyages (claim_expires_at)
     WHERE status = 'running';
 
--- voyage_targets — единицы прогона (Leg-разбиение). Для kind=scenario
--- target_kind='incarnation' + back-link apply_id на apply_runs (per-incarnation
--- scenario-run); для kind=command target_kind='sid' + back-link errand_id на
--- errands (per-host exec). Даёт единый All-runs вид с two-level drill (S5).
+-- voyage_targets -- the units of a run (Leg split). For kind=scenario
+-- target_kind='incarnation' + back-link apply_id to apply_runs (per-incarnation
+-- scenario-run); for kind=command target_kind='sid' + back-link errand_id to
+-- errands (per-host exec). Gives a unified All-runs view with two-level drill (S5).
 --
--- CHECK-инварианты voyage_targets:
+-- CHECK invariants for voyage_targets:
 --   * voyage_targets_target_kind_valid: incarnation | sid.
 --   * voyage_targets_status_valid: closed-set (awaiting/running/succeeded/
---     failed/cancelled/no_match — последний для целей, не попавших под match).
---   * voyage_targets_batch_index_non_negative: batch_index ≥ 0.
+--     failed/cancelled/no_match -- the last one for targets that didn't match).
+--   * voyage_targets_batch_index_non_negative: batch_index >= 0.
 --
--- PK (voyage_id, target_kind, target_id) — одна цель уникальна в рамках прогона.
--- FK voyage_id → voyages ON DELETE CASCADE: снос Voyage сносит его targets.
+-- PK (voyage_id, target_kind, target_id) -- one target is unique within a run.
+-- FK voyage_id -> voyages ON DELETE CASCADE: deleting a Voyage removes its targets.
 CREATE TABLE voyage_targets (
     voyage_id     TEXT        NOT NULL,
     target_kind   TEXT        NOT NULL,
@@ -145,12 +147,12 @@ CREATE TABLE voyage_targets (
         FOREIGN KEY (voyage_id) REFERENCES voyages (voyage_id) ON DELETE CASCADE
 );
 
--- Drill по Leg-у: единицы одного batch_index в порядке исполнения.
+-- Drill by Leg: units of a single batch_index in execution order.
 CREATE INDEX voyage_targets_batch_idx
     ON voyage_targets (voyage_id, batch_index);
 
 COMMENT ON TABLE voyages IS
-    'Реестр Voyage-прогонов (унифицированный батчевый прогон, ADR-043, S1). Дискриминатор kind=scenario|command поглощает Tide+ErrandRun. PG-based claim+lease для failover-resilience: pending→running→terminal; протухший claim возвращается Reaper в pending. На S1 воркер config-gated OFF (фундамент без реального исполнения).';
+    'Registry of Voyage runs (unified batch run, ADR-043, S1). Discriminator kind=scenario|command absorbs Tide+ErrandRun. PG-based claim+lease for failover resilience: pending->running->terminal; a stale claim is returned to pending by the Reaper. In S1 the worker is config-gated OFF (foundation without real execution).';
 
 COMMENT ON TABLE voyage_targets IS
-    'Единицы Voyage-прогона (Leg-разбиение по batch_index, ADR-043, S1). target_kind=incarnation (kind=scenario, back-link apply_id) | sid (kind=command, back-link errand_id). Two-level drill для All-runs вида (S5).';
+    'Units of a Voyage run (Leg split by batch_index, ADR-043, S1). target_kind=incarnation (kind=scenario, back-link apply_id) | sid (kind=command, back-link errand_id). Two-level drill for the All-runs view (S5).';

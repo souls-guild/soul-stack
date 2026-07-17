@@ -1,13 +1,13 @@
-# Dockerfile бинаря `soul` (ADR-004) — демон-агент. Multi-stage: builder на
-# полном Go-тулчейне, runtime — distroless static-nonroot (только бинарь).
+# Dockerfile for the `soul` binary (ADR-004) - daemon agent. Multi-stage: builder on
+# the full Go toolchain, runtime - distroless static-nonroot (binary only).
 #
-# Build-контекст — КОРЕНЬ моно-репо. Собирать так:
+# Build context - the ROOT of the mono-repo. Build like this:
 #   docker build -f deploy/docker/soul.Dockerfile -t soul-stack/soul .
 #
-# Версия инжектится ldflags-ом в main.soulVersion (см. Makefile). Форма `-X
-# main.<var>` обязательна: entrypoint — package main, и линкер молча игнорирует
-# `-X` с полным import-path (бинарь остался бы 0.0.0-dev → неверная версия в
-# Hello/BootstrapRequest → искажённый аудит).
+# Version is injected via ldflags into main.soulVersion (see Makefile). The form `-X
+# main.<var>` is mandatory: entrypoint is package main, and the linker silently ignores
+# `-X` with a full import path (the binary would stay 0.0.0-dev -> wrong version in
+# Hello/BootstrapRequest -> corrupted audit).
 
 FROM golang:1.26.4 AS builder
 
@@ -25,7 +25,7 @@ RUN go mod download
 
 COPY . .
 
-# soulVersion печатается в Hello/BootstrapRequest для аудита — инжектим версию.
+# soulVersion is printed in Hello/BootstrapRequest for audit - injecting the version.
 ARG VERSION=0.0.0-dev
 RUN CGO_ENABLED=0 GOOS=linux go build \
         -trimpath \
@@ -37,7 +37,7 @@ FROM gcr.io/distroless/static:nonroot
 
 COPY --from=builder /out/soul /usr/local/bin/soul
 
-# Конфиг ожидается в /etc/soul/soul.yml (дефолтный путь soul-бинаря).
+# Config is expected at /etc/soul/soul.yml (default path for the soul binary).
 USER nonroot:nonroot
 ENTRYPOINT ["/usr/local/bin/soul"]
 CMD ["run"]

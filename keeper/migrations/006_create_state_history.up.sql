@@ -1,15 +1,15 @@
 -- 006_create_state_history.up.sql
 --
--- Журнал изменений `incarnation.state` под ADR-009 / ADR-019. Snapshot
--- per-change: при каждом изменении state пишется state_before / state_after
+-- Change log for `incarnation.state` under ADR-009 / ADR-019. Snapshot
+-- per-change: every state change writes state_before / state_after
 -- + scenario / apply_id / changed_by_aid / at.
 --
--- PK = history_id (ULID, тот же формат, что audit_log.audit_id и apply_id).
+-- PK = history_id (ULID, same format as audit_log.audit_id and apply_id).
 -- Foreign keys:
---   - incarnation_name → incarnation(name) ON DELETE CASCADE (журнал
---     умирает вместе с incarnation; recovery из неструктурного backup-а).
---   - changed_by_aid   → operators(aid)   ON DELETE SET NULL (история
---     сохраняется при удалении оператора).
+--   - incarnation_name -> incarnation(name) ON DELETE CASCADE (the log
+--     dies together with the incarnation; recovery from an unstructured backup).
+--   - changed_by_aid   -> operators(aid)   ON DELETE SET NULL (history
+--     survives operator deletion).
 
 CREATE TABLE state_history (
     history_id         TEXT        PRIMARY KEY,
@@ -27,15 +27,15 @@ CREATE TABLE state_history (
         FOREIGN KEY (changed_by_aid) REFERENCES operators (aid) ON DELETE SET NULL
 );
 
--- Типовой запрос — лента истории конкретной incarnation в обратном
--- хронологическом порядке (GET /v1/incarnations/{name}/history).
+-- Typical query - history feed of a specific incarnation in reverse
+-- chronological order (GET /v1/incarnations/{name}/history).
 CREATE INDEX state_history_incarnation_at_idx
     ON state_history (incarnation_name, at DESC);
 
--- Поиск записи по apply_id (опрос статуса async-операции из
+-- Lookup a record by apply_id (polling the status of an async operation from
 -- POST /v1/incarnations).
 CREATE INDEX state_history_apply_id_idx
     ON state_history (apply_id);
 
 COMMENT ON TABLE state_history IS
-    'Snapshot per-change журнал incarnation.state (ADR-009 / ADR-019).';
+    'Snapshot per-change log of incarnation.state (ADR-009 / ADR-019).';

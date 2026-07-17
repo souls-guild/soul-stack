@@ -1,13 +1,14 @@
 -- 083_operators_auth_method_ldap_oidc.up.sql
 --
--- ADR-058 (LDAP-часть принята): расширение enum `auth_method` реестра
--- operators значениями федеративной аутентификации `ldap` и `oidc`.
--- Only-add — прежний набор (`jwt`/`mtls`/`combined`) остаётся валидным,
--- существующие строки не затрагиваются.
+-- ADR-058 (LDAP part accepted): extends the `auth_method` enum of the
+-- operators registry with the federated authentication values `ldap` and
+-- `oidc`. Only-add - the previous set (`jwt`/`mtls`/`combined`) remains
+-- valid, existing rows are not affected.
 --
--- CHECK `auth_method_valid` создан миграцией 003 (forward-only, не правится):
--- DROP + ADD с расширенным набором. `oidc` заводится сразу (стадия 2 ADR-058),
--- чтобы дальнейшая имплементация OIDC не требовала повторной миграции CHECK.
+-- The CHECK `auth_method_valid` was created by migration 003 (forward-only,
+-- not edited in place): DROP + ADD with the extended set. `oidc` is added
+-- now (ADR-058 stage 2) so that the later OIDC implementation does not
+-- require another CHECK migration.
 
 ALTER TABLE operators DROP CONSTRAINT auth_method_valid;
 ALTER TABLE operators ADD CONSTRAINT auth_method_valid

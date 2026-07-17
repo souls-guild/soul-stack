@@ -1,14 +1,14 @@
-# systemd-юнит Keeper (ADR-004) — центральный узел Soul Stack.
+# systemd unit for Keeper (ADR-004) - the central node of Soul Stack.
 #
-# Установка из пакета soul-stack-keeper (deb/rpm) — пользователь soul-stack,
-# /etc/keeper и /var/lib/soul-stack-keeper создаёт postinstall. Ручные шаги
-# оператора после установки:
+# Installed from the soul-stack-keeper package (deb/rpm) - user soul-stack,
+# postinstall creates /etc/keeper and /var/lib/soul-stack-keeper. Manual steps
+# for the operator after installation:
 #   install -m0640 keeper.yml /etc/keeper/keeper.yml
-#   keeper init --archon=<aid>            # bootstrap первого Архонта (ADR-013)
+#   keeper init --archon=<aid>            # bootstrap the first Archon (ADR-013)
 #   systemctl enable --now keeper
 #
-# Ручная установка без пакета (для справки):
-#   useradd --system --no-create-home --shell /usr/sbin/nologin soul-stack   # один раз на хост
+# Manual installation without a package (for reference):
+#   useradd --system --no-create-home --shell /usr/sbin/nologin soul-stack   # once per host
 #   install -m0755 keeper/bin/keeper /usr/local/bin/keeper
 #   install -d -o soul-stack -g soul-stack /etc/keeper /var/lib/soul-stack-keeper
 #   install -m0640 keeper.yml /etc/keeper/keeper.yml
@@ -19,7 +19,7 @@
 [Unit]
 Description=Soul Stack Keeper
 Documentation=https://github.com/souls-guild/soul-stack
-# Keeper слушает gRPC/HTTP и ходит в Postgres/Redis — нужна поднятая сеть.
+# Keeper listens on gRPC/HTTP and talks to Postgres/Redis - needs the network up.
 After=network-online.target
 Wants=network-online.target
 
@@ -28,17 +28,17 @@ Type=exec
 User=soul-stack
 Group=soul-stack
 
-# Путь к конфигу вынесен в EnvironmentFile — оператор меняет его без правки юнита.
+# Config path is factored out into EnvironmentFile - the operator changes it without touching the unit.
 EnvironmentFile=/etc/keeper/keeper.env
 ExecStart=/usr/local/bin/keeper run --config=${KEEPER_CONFIG}
 
-# Падение демона — перезапуск; не зацикливаемся при битом конфиге (StartLimit).
+# Daemon crash - restart; avoid looping on a broken config (StartLimit).
 Restart=on-failure
 RestartSec=5s
 StartLimitIntervalSec=60s
 StartLimitBurst=5
 
-# --- hardening (безопасность на первом месте) ---
+# --- hardening (security first) ---
 NoNewPrivileges=true
 ProtectSystem=strict
 ProtectHome=true
@@ -51,10 +51,10 @@ RestrictSUIDSGID=true
 RestrictNamespaces=true
 LockPersonality=true
 MemoryDenyWriteExecute=true
-# Единственный writable-путь — рантайм-корень keeper (кеши plugins/services/
-# destiny/plugin-src; см. keeper main.go defaults). Должен совпадать с каталогом,
-# который создаёт postinstall с владельцем soul-stack, иначе strict-hardening
-# заблокирует запись и демон упадёт.
+# The only writable path - keeper's runtime root (plugins/services/
+# destiny/plugin-src caches; see keeper main.go defaults). Must match the directory
+# created by postinstall owned by soul-stack, otherwise strict-hardening
+# will block the write and the daemon will crash.
 ReadWritePaths=/var/lib/soul-stack-keeper
 
 [Install]

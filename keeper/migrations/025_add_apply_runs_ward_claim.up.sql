@@ -1,31 +1,31 @@
 -- 025_add_apply_runs_ward_claim.up.sql
 --
--- ADR-027 Phase 0: аддитивная подготовка схемы `apply_runs` под work-queue +
--- claim модель исполнения (Ward-claim). Phase 0 — ТОЛЬКО схема: код исполнения
--- не меняется, старый in-memory run-goroutine-путь (прямой `running` →
--- терминал) продолжает работать без изменений. Новые колонки/статусы после
--- Phase 0 НИКЕМ не пишутся и не читаются (claim-логика, Acolyte-пул, Summons,
--- recovery-скан — Phase 1+).
+-- ADR-027 Phase 0: additive schema prep for `apply_runs` for the work-queue +
+-- claim execution model (Ward-claim). Phase 0 is schema ONLY: execution code
+-- doesn't change, the old in-memory run-goroutine path (direct `running` ->
+-- terminal) keeps working unchanged. The new columns/statuses added after
+-- Phase 0 are written and read by NO ONE yet (claim logic, Acolyte pool, Summons,
+-- recovery scan - Phase 1+).
 --
--- Ward (под-опека задания, naming-rules.md): claim задания исполнения —
--- колонки `claim_by_kid` / `claim_at` / `claim_expires_at` / `attempt` +
--- статусы `planned` / `claimed` на `apply_runs`. «Взять Ward» = атомарно
--- захватить planned-задание (`attempt++` — fencing-epoch). Целевая форма
--- задокументирована в storage.md (закоммичено с ADR-027).
+-- Ward (task sub-custody, naming-rules.md): claiming an execution task -
+-- columns `claim_by_kid` / `claim_at` / `claim_expires_at` / `attempt` +
+-- statuses `planned` / `claimed` on `apply_runs`. "Taking a Ward" = atomically
+-- capturing a planned task (`attempt++` - fencing epoch). The target form
+-- is documented in storage.md (committed together with ADR-027).
 --
--- Колонки — все nullable / DEFAULT, чтобы существующие apply_runs-строки
--- мигрировали без ошибок (forward-only, ADR-007):
---   - claim_by_kid     — KID Acolyte-владельца Ward; NULL пока не заклеймлено.
---   - claim_at         — момент захвата Ward; NULL пока не заклеймлено.
---   - claim_expires_at — lease-дедлайн Ward; протухший (< NOW) возвращается
---                        recovery-сканом Reaper-лидера в `planned` (Phase 2).
---   - attempt          — fencing-epoch: инкремент на каждом claim; 0 для строк,
---                        вставленных старым путём (прямой `running`).
+-- The columns are all nullable / DEFAULT, so existing apply_runs rows
+-- migrate without errors (forward-only, ADR-007):
+--   - claim_by_kid     - KID of the Acolyte that owns the Ward; NULL until claimed.
+--   - claim_at         - moment the Ward was captured; NULL until claimed.
+--   - claim_expires_at - the Ward's lease deadline; once stale (< NOW) it's returned
+--                        to `planned` by the Reaper leader's recovery scan (Phase 2).
+--   - attempt          - fencing epoch: incremented on every claim; 0 for rows
+--                        inserted via the old path (direct `running`).
 --
--- status — CHECK-constraint (НЕ PG-enum, НЕ голый TEXT): расширяется
--- drop+recreate constraint-а (паттерн миграций 016/017). Существующие значения
--- running/success/failed/cancelled (018) + cancel_requested-семантика (024)
--- СОХРАНЕНЫ; добавлены planned/claimed.
+-- status - a CHECK constraint (NOT a PG enum, NOT bare TEXT): extended by
+-- drop+recreate of the constraint (the pattern from migrations 016/017). The existing values
+-- running/success/failed/cancelled (018) + cancel_requested semantics (024)
+-- are PRESERVED; planned/claimed are added.
 
 ALTER TABLE apply_runs
     ADD COLUMN claim_by_kid     TEXT,
@@ -40,21 +40,21 @@ ALTER TABLE apply_runs
     ADD CONSTRAINT apply_runs_status_valid
         CHECK (status IN ('planned', 'claimed', 'running', 'success', 'failed', 'cancelled'));
 
--- Partial-индекс под claim-скан / recovery-скан (Phase 1+): захват planned
--- (`FOR UPDATE SKIP LOCKED`) и поиск протухших Ward
--- (`status IN ('claimed','running') AND claim_expires_at < NOW`). Заложен в
--- Phase 0 — на текущем пути активные строки только `running` (planned/claimed
--- никем не пишутся), индекс корректен и безвреден, держит схему в целевой
--- форме без отдельной миграции в Phase 1. Терминальные статусы исключены.
+-- Partial index for the claim scan / recovery scan (Phase 1+): capturing planned
+-- rows (`FOR UPDATE SKIP LOCKED`) and finding stale Wards
+-- (`status IN ('claimed','running') AND claim_expires_at < NOW`). Added in
+-- Phase 0 - on the current path active rows are only `running` (planned/claimed
+-- are written by no one), so the index is correct and harmless, and keeps the schema in its
+-- target form without a separate migration in Phase 1. Terminal statuses are excluded.
 CREATE INDEX apply_runs_claim_scan_idx
     ON apply_runs (status, claim_expires_at)
     WHERE status IN ('planned', 'claimed', 'running');
 
 COMMENT ON COLUMN apply_runs.claim_by_kid IS
-    'Ward-claim (ADR-027): KID Acolyte-владельца задания; NULL пока не заклеймлено. Phase 0 — не пишется.';
+    'Ward-claim (ADR-027): KID of the Acolyte that owns the task; NULL until claimed. Phase 0 - not written.';
 COMMENT ON COLUMN apply_runs.claim_at IS
-    'Ward-claim (ADR-027): момент захвата задания; NULL пока не заклеймлено. Phase 0 — не пишется.';
+    'Ward-claim (ADR-027): moment the task was captured; NULL until claimed. Phase 0 - not written.';
 COMMENT ON COLUMN apply_runs.claim_expires_at IS
-    'Ward-claim (ADR-027): lease-дедлайн; протухший возвращается recovery-сканом Reaper в planned. Phase 0 — не пишется.';
+    'Ward-claim (ADR-027): lease deadline; once stale, returned to planned by the Reaper recovery scan. Phase 0 - not written.';
 COMMENT ON COLUMN apply_runs.attempt IS
-    'Ward-claim (ADR-027): fencing-epoch, инкремент на каждом claim. 0 для строк старого пути. Phase 0 — не инкрементится.';
+    'Ward-claim (ADR-027): fencing epoch, incremented on every claim. 0 for rows from the old path. Phase 0 - not incremented.';

@@ -1,18 +1,19 @@
 -- 019_create_providers.up.sql
 --
--- Реестр Cloud-Provider-ов (ADR-017, docs/keeper/cloud.md). Provider —
--- managed-через-API запись: какой CloudDriver-плагин (`type`), в каком
--- регионе и где брать credentials. Сам secret в БД НЕ хранится — только
--- vault-ref (`credentials_ref` = `vault:<path>`).
+-- Registry of Cloud Providers (ADR-017, docs/keeper/cloud.md). A Provider is
+-- a managed-via-API record: which CloudDriver plugin (`type`), which
+-- region, and where to fetch credentials. The secret itself is NOT stored
+-- in the DB -- only a vault-ref (`credentials_ref` = `vault:<path>`).
 --
--- PK — `name` (kebab-case, уникальное в кластере). `type` — имя
--- CloudDriver-плагина из keeper.yml::plugins.cloud_drivers[].name;
--- соответствие проверяется на service-слое (Cloud.CRUD.b), здесь — только
--- формат kebab.
+-- PK is `name` (kebab-case, unique in the cluster). `type` is the name
+-- of the CloudDriver plugin from keeper.yml::plugins.cloud_drivers[].name;
+-- the match is validated at the service layer (Cloud.CRUD.b), here it's
+-- only the kebab format.
 --
 -- FK:
---   - created_by_aid → operators(aid) ON DELETE SET NULL (запись Provider-а
---     переживает удаление оператора; симметрично incarnation/apply_runs).
+--   - created_by_aid -> operators(aid) ON DELETE SET NULL (the Provider
+--     record survives the operator's deletion; symmetric with
+--     incarnation/apply_runs).
 
 CREATE TABLE providers (
     name            TEXT        PRIMARY KEY,
@@ -30,9 +31,9 @@ CREATE TABLE providers (
         FOREIGN KEY (created_by_aid) REFERENCES operators (aid) ON DELETE SET NULL
 );
 
--- Лента Provider-ов конкретного оператора (audit / триаж).
+-- Feed of Providers for a specific operator (audit / triage).
 CREATE INDEX providers_created_by_aid_idx
     ON providers (created_by_aid);
 
 COMMENT ON TABLE providers IS
-    'Реестр Cloud-Provider-ов (ADR-017). credentials_ref = vault:<path>, secret в БД не пишется.';
+    'Registry of Cloud Providers (ADR-017). credentials_ref = vault:<path>, secret is not written to the DB.';

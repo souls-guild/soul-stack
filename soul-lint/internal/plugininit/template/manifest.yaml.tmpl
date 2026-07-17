@@ -1,107 +1,107 @@
-# Manifest плагина (ADR-020 + ADR-026 Sigil-trust).
-# Полная спека: docs/keeper/plugins.md → Manifest.
+# Plugin manifest (ADR-020 + ADR-026 Sigil-trust).
+# Full spec: docs/keeper/plugins.md -> Manifest.
 kind: soul_module
 protocol_version: {{.ProtocolVersion}}
 namespace: {{.Namespace}}
 name: {{.Name}}
 
-# capabilities, которые модуль декларирует к запросу у host-а (closed enum:
+# capabilities that the module declares it needs to request from the host (closed enum:
 # run_as_root / network_outbound / network_inbound / vault_access /
-# fs_write_root / exec_subprocess). soul-lint сверяет с plugin_runtime
-# host-а; недекларированные capabilities блокируют запуск (default-deny).
+# fs_write_root / exec_subprocess). soul-lint checks this against the host's
+# plugin_runtime; undeclared capabilities block startup (default-deny).
 required_capabilities: []
 
-# Декларация наблюдаемых эффектов (closed enum типов: service / file /
-# package / port / user / group / directory / cron / mount). Используется
-# Augur-RBAC и аудитом. TODO: заполнить по реальным ресурсам модуля.
+# Declaration of observable effects (closed enum of types: service / file /
+# package / port / user / group / directory / cron / mount). Used by
+# Augur-RBAC and by the audit. TODO: fill in with the module's real resources.
 side_effects: []
 
 spec:
-  # spec.states.<state>.input — описание input-параметров модуля для каждого
-  # state. Используется soul-lint при валидации `params:` шага destiny против
-  # манифеста И backend-ом для построения формы модуля в UI (ADR-045).
-  # type ∈ {string, int, bool, list, map}. required/secret/default — опц. флаги.
-  # См. docs/keeper/plugins.md → spec.soul_module, docs/input.md → param-DSL.
+  # spec.states.<state>.input - description of the module's input parameters for each
+  # state. Used by soul-lint when validating a destiny step's `params:` against
+  # the manifest AND by the backend to build the module's form in the UI (ADR-045).
+  # type in {string, int, bool, list, map}. required/secret/default - optional flags.
+  # See docs/keeper/plugins.md -> spec.soul_module, docs/input.md -> param-DSL.
   #
-  # ВАЖНО (semantic rule input_secret_without_vault_pattern,
-  # shared/plugin/manifest.go): любой secret-параметр ОБЯЗАН иметь
-  # pattern: "^vault:.*" — без него validate-manifest падает с error.
-  # Единственный допустимый pattern для secret — ровно `^vault:.*`.
+  # IMPORTANT (semantic rule input_secret_without_vault_pattern,
+  # shared/plugin/manifest.go): any secret parameter MUST have
+  # pattern: "^vault:.*" - without it, validate-manifest fails with an error.
+  # The only allowed pattern for secret is exactly `^vault:.*`.
   states:
     present:
-      description: "Ресурс существует с запрошенными параметрами"
+      description: "Resource exists with the requested parameters"
       input:
         name:
           type: string
           required: true
-          description: "Имя ресурса"
+          description: "Resource name"
 
-        # --- Образцы param-DSL формы модуля (ADR-045) ---
-        # Ниже — живые примеры всех form-полей. backend строит из них форму:
-        # dropdown / cluster-picker / typed-list / textarea. Удалите ненужное,
-        # подставьте свои параметры. Закомментированные блоки см. в конце.
+        # --- Sample param-DSL for the module's form (ADR-045) ---
+        # Below are live examples of all form fields. The backend builds the form from them:
+        # dropdown / cluster-picker / typed-list / textarea. Delete what you do not need,
+        # substitute your own parameters. See the commented-out blocks at the end.
 
-        # enum — closed-set: UI рисует dropdown, валидатор бьёт значения вне списка.
+        # enum - closed-set: the UI renders a dropdown, the validator rejects values outside the list.
         mode:
           type: string
           enum: [strict, relaxed]
           default: strict
-          description: "Режим применения (closed-set: strict|relaxed)."
+          description: "Application mode (closed-set: strict|relaxed)."
 
-        # pattern — regex-валидация свободной строки.
+        # pattern - regex validation of a free-form string.
         owner:
           type: string
           pattern: "^[a-z_][a-z0-9_-]*$"
-          description: "Владелец ресурса (unix-username-like)."
+          description: "Resource owner (unix-username-like)."
 
-        # format + source — cluster-aware picker. format: sid даёт FQDN-валидацию,
-        # source указывает каталог значений (incarnation_hosts — все SID инкарнации;
-        # альтернатива — choir: <name>, см. закомментированный пример ниже).
+        # format + source - cluster-aware picker. format: sid gives FQDN validation,
+        # source points to the catalog of values (incarnation_hosts - all SIDs of the incarnation;
+        # alternative - choir: <name>, see the commented-out example below).
         target_host:
           type: string
           format: sid
           source: { incarnation_hosts: true }
-          description: "SID (FQDN) хоста-цели; UI отдаёт picker по хостам инкарнации."
+          description: "SID (FQDN) of the target host; the UI provides a picker over the incarnation's hosts."
 
-        # items — типизированный список (list[int]): UI рисует список int-полей,
-        # а не свободный список строк. Для list/array items — тип ЭЛЕМЕНТА.
+        # items - typed list (list[int]): the UI renders a list of int fields,
+        # not a free-form list of strings. For list/array, items is the type of the ELEMENT.
         ports:
           type: list
           items: { type: int }
-          description: "Список портов (типизированный list[int])."
+          description: "List of ports (typed list[int])."
 
-        # items на map — тип ЗНАЧЕНИЯ (map[string]string): KEY→VALUE-пары.
+        # items on a map - the type of the VALUE (map[string]string): KEY->VALUE pairs.
         labels:
           type: map
           items: { type: string }
-          description: "Произвольные метки (KEY: VALUE)."
+          description: "Arbitrary labels (KEY: VALUE)."
 
-        # multiline + example — большое textarea с placeholder-подсказкой.
-        # Чисто UI-hints (валидатором не проверяются), но помогают оператору.
+        # multiline + example - a large textarea with a placeholder hint.
+        # Purely UI hints (not checked by the validator), but they help the operator.
         script:
           type: string
           multiline: true
           example: "set -euo pipefail\necho hello"
-          description: "Скрипт применения (многострочный)."
+          description: "Apply script (multiline)."
 
-        # Пример secret-параметра (vault-ref обязателен, pattern ровно ^vault:.*):
+        # Example of a secret parameter (vault-ref is mandatory, pattern exactly ^vault:.*):
         # password:
         #   type: string
         #   required: true
         #   secret: true
         #   pattern: "^vault:.*"
-        #   description: "Vault-ref на password (формат: vault:secret/<path>#<key>)"
+        #   description: "Vault-ref for password (format: vault:secret/<path>#<key>)"
         #
-        # Альтернативный source — конкретная Choir-партия инкарнации (ADR-044):
+        # Alternative source - a specific Choir party of the incarnation (ADR-044):
         # primary:
         #   type: string
         #   format: sid
         #   source: { choir: writers }
-        #   description: "SID из Choir-партии 'writers' (cluster-aware picker)."
+        #   description: "SID from the Choir party 'writers' (cluster-aware picker)."
     absent:
-      description: "Ресурс отсутствует"
+      description: "Resource is absent"
       input:
         name:
           type: string
           required: true
-          description: "Имя ресурса"
+          description: "Resource name"

@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
-# Классификация статуса прогона и опрос до терминала. Чисто (сеть — только через
-# keeper_api). Источник истины по статусам apply-прогона —
-# keeper/internal/applyrun/applyrun.go (агрегат RunDetailReply.status:
-# applying|success|failed|cancelled). Множества data-driven, засеяны из enum.
+# Classification of the run status and polling until terminal. Pure (network only via
+# keeper_api). Source of truth for apply-run statuses is
+# keeper/internal/applyrun/applyrun.go (the RunDetailReply.status aggregate:
+# applying|success|failed|cancelled). Sets are data-driven, seeded from the enum.
 
-# Множества классификации (override для мутац-тестов guard).
+# Classification sets (override for mutation-test guards).
 : "${E2E_STATUS_SUCCESS:=success}"
 : "${E2E_STATUS_FAIL:=failed cancelled}"
 : "${E2E_STATUS_TRANSIENT:=applying}"
@@ -16,8 +16,8 @@ _in_set() {
 	return 1
 }
 
-# classify_status <run_status> → PASS|FAIL|CONTINUE. Неизвестный статус → CONTINUE
-# (безопасно: опрос дойдёт до timeout, а не ложно засчитает успех).
+# classify_status <run_status> -> PASS|FAIL|CONTINUE. An unknown status -> CONTINUE
+# (safe: polling will run to timeout instead of falsely counting as success).
 classify_status() {
 	local s="${1:-}"
 	if _in_set "$s" "${E2E_STATUS_SUCCESS}"; then echo PASS
@@ -27,8 +27,8 @@ classify_status() {
 }
 
 # poll_until_terminal <name> <apply_id> → 0 success / 1 failed|cancelled / 2 timeout.
-# Каждые $POLL_INTERVAL сек тянет GET /runs/{apply_id}, максимум $POLL_MAX итераций.
-# Побочно выставляет POLL_LAST_JSON / POLL_LAST_STATUS / POLL_LAST_HTTP.
+# Every $POLL_INTERVAL sec pulls GET /runs/{apply_id}, up to $POLL_MAX iterations.
+# As a side effect sets POLL_LAST_JSON / POLL_LAST_STATUS / POLL_LAST_HTTP.
 poll_until_terminal() {
 	local name="$1" apply_id="$2"
 	local interval="${POLL_INTERVAL:-30}" maxp="${POLL_MAX:-40}"
@@ -39,7 +39,7 @@ poll_until_terminal() {
 		code="$(http_code "$resp")"; body="$(http_body "$resp")"
 		POLL_LAST_JSON="$body"; POLL_LAST_HTTP="$code"
 		if [[ "$code" != 200 ]]; then
-			_e2e_log "    [$(date -u +%H:%M:%S) #${i}] http=${code} (прогон ещё не виден / транзиент) — жду"
+			_e2e_log "    [$(date -u +%H:%M:%S) #${i}] http=${code} (run not visible yet / transient) - waiting"
 			[[ $i -lt $maxp ]] && sleep "$interval"
 			continue
 		fi

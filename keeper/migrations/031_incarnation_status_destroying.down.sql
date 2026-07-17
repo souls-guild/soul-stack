@@ -1,10 +1,10 @@
 -- 031_incarnation_status_destroying.down.sql
 --
--- Откат расширения enum `incarnation.status`. Перед DROP-ом старого CHECK-а
--- надо убедиться, что в таблице нет строк со статусом `destroying` — иначе
--- ADD CONSTRAINT провалится. В down-миграции это не fail-safe (forward-only по
--- ADR-019): down предполагается только на свежей БД, где `destroying`-строк
--- ещё нет.
+-- Rollback of the `incarnation.status` enum extension. Before dropping the old CHECK
+-- we need to make sure there are no rows with status `destroying` in the table -
+-- otherwise ADD CONSTRAINT would fail. This down migration is not fail-safe for that
+-- (forward-only per ADR-019): down is only expected to run on a fresh DB where there
+-- are no `destroying` rows yet.
 
 ALTER TABLE incarnation
     DROP CONSTRAINT incarnation_status_valid;

@@ -1,5 +1,5 @@
 {
-  "_comment": "POST /v1/incarnation/create — создание Redis Cluster (консолидированный service redis, redis_type=cluster)",
+  "_comment": "POST /v1/incarnation/create - create a Redis Cluster (consolidated service redis, redis_type=cluster)",
 
   "name": "test-cache-redis-cl-dev",
   "service": "redis",

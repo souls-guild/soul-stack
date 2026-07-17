@@ -1,11 +1,12 @@
 -- 090_incarnation_created_scenario_nullable.down.sql
 --
--- Reversible откат: возвращаем created_scenario к NOT NULL DEFAULT 'create'
--- (состояние миграции 089). Перед восстановлением NOT NULL обязан пройти backfill
--- NULL → 'create' — иначе ALTER ... SET NOT NULL упадёт на bare-строках (NULL).
--- Backfill корректен как откат: при возврате к union-семантике 089 дефолтный
--- `create` снова привилегирован, поэтому bare-инкарнации схлопываются в 'create'
--- (rerun-create для них опять станет возможен — это и есть прежнее поведение).
+-- Reversible rollback: restores created_scenario to NOT NULL DEFAULT 'create'
+-- (the state as of migration 089). Before restoring NOT NULL, a backfill of
+-- NULL → 'create' must run first - otherwise ALTER ... SET NOT NULL would fail on
+-- bare rows (NULL). The backfill is correct as a rollback: returning to the 089
+-- union semantics makes the default `create` privileged again, so bare incarnations
+-- collapse into 'create' (rerun-create becomes possible for them again - this is
+-- exactly the previous behavior).
 
 UPDATE incarnation
     SET created_scenario = 'create'
@@ -16,4 +17,4 @@ ALTER TABLE incarnation
     ALTER COLUMN created_scenario SET NOT NULL;
 
 COMMENT ON COLUMN incarnation.created_scenario IS
-    'Имя стартового сценария, которым создана инкарнация (механизм нескольких create-сценариев, Вариант A). rerun-create перезапускает именно его. DEFAULT create — back-compat.';
+    'Name of the starting scenario that created the incarnation (mechanism for multiple create scenarios, Variant A). rerun-create restarts exactly this one. DEFAULT create -- back-compat.';

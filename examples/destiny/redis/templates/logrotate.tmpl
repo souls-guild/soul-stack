@@ -1,17 +1,17 @@
 {{/*
-  logrotate-конфиг для лог-файлов Redis (/etc/logrotate.d/redis). Go text/template strict
-  (ADR-010). .vars.log_dir — системный лог-каталог redis.
+  logrotate config for Redis log files (/etc/logrotate.d/redis). Go text/template strict
+  (ADR-010). .vars.log_dir -- redis's system log directory.
 
-  Glob {{ .vars.log_dir }}/*.log синхронен logfile в redis.conf.tmpl и sentinel.conf.tmpl
-  (оба демона пишут в один log_dir, glob покрывает оба).
+  The glob {{ .vars.log_dir }}/*.log matches the logfile setting in redis.conf.tmpl and sentinel.conf.tmpl
+  (both daemons write to the same log_dir, so the glob covers both).
 
-  copytruncate: Redis держит лог-файл открытым и не умеет реагировать на сигнал
-  пере-открытия лога, поэтому ротация копированием+усечением (а не rename+создание)
-  — единственный безопасный вариант без рестарта/HUP сервиса. daily + rotate 7:
-  суточная ротация, хранение недели. compress + delaycompress: сжатие со сдвигом на
-  одну ротацию (свежий .1 остаётся несжатым для оперативного просмотра). missingok +
-  notifempty: лог может отсутствовать (сервис не стартовал) или быть пустым —
-  не ошибка.
+  copytruncate: Redis keeps the log file open and can't react to a log-reopen
+  signal, so rotation via copy+truncate (rather than rename+create)
+  is the only safe option without a service restart/HUP. daily + rotate 7:
+  daily rotation, one week of retention. compress + delaycompress: compression offset by
+  one rotation (the fresh .1 stays uncompressed for quick review). missingok +
+  notifempty: the log may be absent (service hasn't started) or empty --
+  not an error.
 */}}
 {{ .vars.log_dir }}/*.log {
   daily

@@ -1,21 +1,21 @@
 #!/usr/bin/env bash
-# Entrypoint облачного live-E2E оркестратора Soul Stack (NIM-31): параметры → preflight
-# → suite → инкрементальный отчёт → exit-code. Единственная сетевая граница —
-# lib/keeper-api.sh::keeper_api; classify/poll/assert/report чисты (guard-тесты офлайн).
+# Entrypoint of the Soul Stack cloud live-E2E orchestrator (NIM-31): parameters → preflight
+# → suite → incremental report → exit-code. The only network boundary is
+# lib/keeper-api.sh::keeper_api; classify/poll/assert/report are pure (guard tests run offline).
 #
-# ⚠️ Это НЕ `make e2e-live` (локальный docker-гейт), а облачный путь через teleport.
-# Bring-up-скрипты (WB-специфика) живут локально в $SCRIPTS_DIR, в git НЕ коммитятся —
-# раннер зовёт их рантайм. Креды — только из env/VM, НИКОГДА из ~/.zsh_wb.
+# ⚠️ This is NOT `make e2e-live` (the local docker gate), but the cloud path via teleport.
+# Bring-up scripts (WB-specific) live locally in $SCRIPTS_DIR and are NOT committed to git -
+# the runner invokes them at runtime. Credentials come only from env/VM, NEVER from ~/.zsh_wb.
 #
 # Usage: [ENV...] runbook.sh <create|create-destroy|day2>
-#   DRY_RUN=1 — печать последовательности вызовов + отчёт-скелет без сети.
-#   Полный список параметров — docs/testing (docs-writer) и delegation NIM-31.
+#   DRY_RUN=1 - print the call sequence + a report skeleton without network access.
+#   Full parameter list - docs/testing (docs-writer) and delegation NIM-31.
 
 set -uo pipefail
 
 SELF_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-# --- параметры (env, дефолты) ---
+# --- parameters (env, defaults) ---
 : "${EXEC_MODE:=tsh}"
 : "${KEEPER_API:=http://127.0.0.1:8080}"
 : "${FQDN_SUFFIX:=fedorovstepan2-dev.vm.xc.clv3}"
@@ -40,7 +40,7 @@ SELF_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 : "${ALLOW_DESTROY:=true}"
 : "${DRY_RUN:=0}"
 : "${INSECURE_TLS:=0}"
-# опциональные (объявляем для set -u безопасности).
+# optional (declared for set -u safety).
 : "${E2E_BRINGUP_STEPS:=}"
 : "${COVENS:=}"
 : "${E2E_CREATE_INPUT:=}"
@@ -73,7 +73,7 @@ report_init "$SUITE"
 
 preflight
 if [[ $? -ne 0 ]]; then
-	report_step "preflight" - "$(_utc_now)" - - - "внешние предусловия не выполнены" FAIL
+	report_step "preflight" - "$(_utc_now)" - - - "external preconditions not met" FAIL
 	report_summary "FAIL (preflight)" 2
 	exit 2
 fi
@@ -83,7 +83,7 @@ create) suite_create; rc=$? ;;
 create-destroy) suite_create_destroy; rc=$? ;;
 day2) suite_day2; rc=$? ;;
 *)
-	_e2e_log "неизвестный suite: ${SUITE} (create|create-destroy|day2)"
+	_e2e_log "unknown suite: ${SUITE} (create|create-destroy|day2)"
 	report_summary "FAIL (bad suite)" 2
 	exit 2
 	;;

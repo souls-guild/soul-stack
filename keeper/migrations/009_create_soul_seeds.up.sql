@@ -1,20 +1,20 @@
 -- 009_create_soul_seeds.up.sql
 --
--- Реестр выпущенных SoulSeed-сертификатов под docs/soul/identity.md.
--- На один SID — много seed-ов (история ротаций); один активный
--- (`status='active'`) одновременно — гарантировано partial unique index.
+-- Registry of issued SoulSeed certificates, per docs/soul/identity.md.
+-- One SID can have many seeds (rotation history); exactly one active
+-- (`status='active'`) at a time is guaranteed by a partial unique index.
 --
--- Enum `status` расширяется значением `orphaned` в миграции 017
--- (ADR-017 cascade от `core.cloud.provisioned destroyed`: хост удалён,
--- но revoked-семантику перетирать нельзя).
+-- The `status` enum is extended with the `orphaned` value in migration 017
+-- (ADR-017 cascade from `core.cloud.provisioned destroyed`: host removed,
+-- but revoked semantics must not be overwritten).
 --
--- В БД не хранятся PEM, приватный ключ, отдельный публичный ключ — только
--- fingerprint (SHA-256 публичного ключа сертификата, hex). Главная защита —
--- приватный ключ CA в Vault PKI.
+-- The DB stores no PEM, no private key, no separate public key - only the
+-- fingerprint (SHA-256 of the certificate's public key, hex). The primary defense is
+-- the CA private key in Vault PKI.
 --
--- Push-хостам (`transport: ssh`) soul_seeds не используется (нет mTLS).
+-- Push hosts (`transport: ssh`) don't use soul_seeds (no mTLS).
 --
--- FK на souls(sid) — ON DELETE CASCADE (история seed-ов умирает с Soul-ом).
+-- FK to souls(sid) - ON DELETE CASCADE (seed history dies with the Soul).
 
 CREATE TABLE soul_seeds (
     seed_id            UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -38,30 +38,30 @@ CREATE TABLE soul_seeds (
         CHECK (expires_at > issued_at)
 );
 
--- Инвариант: на один sid — ровно один active-seed одновременно.
+-- Invariant: exactly one active seed per sid at a time.
 CREATE UNIQUE INDEX soul_seeds_active_by_sid_idx
     ON soul_seeds (sid)
     WHERE status = 'active';
 
--- mTLS handshake: lookup сертификата по fingerprint (для CRL-проверки
--- статуса). UNIQUE — fingerprint должен быть глобально уникален (collision
--- = криптокатастрофа; constraint держит инвариант явно).
+-- mTLS handshake: certificate lookup by fingerprint (for CRL status
+-- checks). UNIQUE - the fingerprint must be globally unique (a collision
+-- would be a crypto catastrophe; the constraint enforces the invariant explicitly).
 CREATE UNIQUE INDEX soul_seeds_fingerprint_idx
     ON soul_seeds (fingerprint);
 
--- Serial-number unique (CA не должен выпускать два сертификата с одинаковым
--- серийником — invariant Vault PKI; держим constraint явно для defense-in-depth).
+-- Serial number unique (a CA must never issue two certificates with the same
+-- serial - a Vault PKI invariant; we keep the constraint explicit for defense-in-depth).
 CREATE UNIQUE INDEX soul_seeds_serial_number_idx
     ON soul_seeds (serial_number);
 
--- Жнец: superseded/expired seed-ы старше max_age → DELETE.
+-- Reaper: superseded/expired seeds older than max_age -> DELETE.
 CREATE INDEX soul_seeds_status_idx
     ON soul_seeds (status);
 
--- Soul-side ротация просит новый seed за `expires_at - 24h`; Жнец
--- двигает active → expired при достижении expires_at.
+-- Soul-side rotation requests a new seed at `expires_at - 24h`; Reaper
+-- moves active -> expired once expires_at is reached.
 CREATE INDEX soul_seeds_expires_at_idx
     ON soul_seeds (expires_at);
 
 COMMENT ON TABLE soul_seeds IS
-    'История выпущенных SoulSeed-сертификатов (docs/soul/identity.md). Один active per sid.';
+    'History of issued SoulSeed certificates (docs/soul/identity.md). One active per sid.';

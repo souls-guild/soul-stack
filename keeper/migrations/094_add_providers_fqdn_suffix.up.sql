@@ -1,40 +1,40 @@
 -- 094_add_providers_fqdn_suffix.up.sql
 --
--- FQDN-суффикс провайдера для self-onboard «Вариант T» (ADR-017(h) amendment:
--- keeper задаёт имя VM → FQDN предсказуем → per-VM токен запекается в userdata
--- ДО create).
+-- Provider FQDN suffix for self-onboard "Variant T" (ADR-017(h) amendment:
+-- keeper assigns the VM name -> FQDN is predictable -> per-VM token gets baked into userdata
+-- BEFORE create).
 --
--- Chicken-egg онбординга: SID = FQDN присваивается провайдером ПОСЛЕ create, а
--- userdata формируется ДО. В «Варианте T» Keeper задаёт базовое имя VM-батча
--- (CreateRequest.name) и знает суффикс FQDN провайдера, поэтому предсказывает
--- полный FQDN каждой VM: `<name>-<index>.<fqdn_suffix>` (напр.
--- `redis-0.fedorovstepan2-dev.vm.xc.clv3`). Зная FQDN заранее, keeper выписывает
--- per-VM bootstrap-токены и кладёт их в userdata (общий blob, cloud-init выбирает
--- свой по hostname) — до create, без claim-callback.
+-- Onboarding chicken-egg: SID = FQDN is assigned by the provider AFTER create, but
+-- userdata is built BEFORE. In "Variant T" Keeper sets the base name of the VM batch
+-- (CreateRequest.name) and knows the provider's FQDN suffix, so it predicts
+-- the full FQDN of each VM: `<name>-<index>.<fqdn_suffix>` (e.g.
+-- `redis-0.fedorovstepan2-dev.vm.xc.clv3`). Knowing the FQDN in advance, keeper issues
+-- per-VM bootstrap tokens and puts them into userdata (a shared blob, cloud-init picks
+-- its own by hostname) - before create, without a claim-callback.
 --
--- Суффикс — функция namespace+cluster провайдера (WB: `<namespace>.vm.<cluster>`),
--- стабильная для всех VM провайдера, поэтому живёт в Provider-реестре рядом с
--- region/credentials_ref, а не в profile/essence (Provider — authority над тем,
--- где и как называются VM этого провайдера).
+-- The suffix is a function of the provider's namespace+cluster (WB: `<namespace>.vm.<cluster>`),
+-- stable across all VMs of the provider, so it lives in the Provider registry next to
+-- region/credentials_ref, rather than in profile/essence (Provider is the authority over
+-- where and how this provider's VMs are named).
 --
--- Nullable: не все драйверы формируют FQDN по схеме `<name>.<suffix>` (AWS даёт
--- instance-private-dns, GCP — internal DNS). NULL/пусто → keeper не может
--- предсказать FQDN → self-onboard для этого провайдера недоступен (шаг
--- core.cloud.created с self_onboard: true отдаст понятную ошибку). Ведущая точка
--- — суффикс БЕЗ ведущей точки (keeper склеивает через '.').
+-- Nullable: not all drivers form the FQDN by the `<name>.<suffix>` scheme (AWS gives
+-- instance-private-dns, GCP - internal DNS). NULL/empty -> keeper cannot
+-- predict the FQDN -> self-onboard is unavailable for this provider (the
+-- core.cloud.created step with self_onboard: true will return a clear error). Leading dot
+-- - the suffix is WITHOUT a leading dot (keeper joins the pieces via '.').
 
 ALTER TABLE providers
     ADD COLUMN fqdn_suffix TEXT;
 
--- Формат суффикса: DNS-labels через точку, без ведущей/замыкающей точки, без
--- underscore (RFC-1035-совместимо, keeper склеит `<name>.<suffix>` в валидный
--- FQDN). NULL допустим (провайдер без предсказуемого FQDN). Пустая строка НЕ
--- допускается (используй NULL — «суффикса нет»), иначе получился бы FQDN с
--- висящей точкой.
+-- Suffix format: dot-separated DNS labels, no leading/trailing dot, no
+-- underscore (RFC-1035-compatible, keeper will join `<name>.<suffix>` into a valid
+-- FQDN). NULL is allowed (a provider without a predictable FQDN). An empty string is NOT
+-- allowed (use NULL - "no suffix"), otherwise the FQDN would end up with a
+-- trailing dot.
 ALTER TABLE providers
     ADD CONSTRAINT providers_fqdn_suffix_format
         CHECK (fqdn_suffix IS NULL OR
                fqdn_suffix ~ '^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)*$');
 
 COMMENT ON COLUMN providers.fqdn_suffix IS
-    'FQDN-суффикс провайдера (self-onboard Вариант T, ADR-017(h)): keeper предсказывает FQDN VM как <name>-<index>.<fqdn_suffix>. NULL → self-onboard недоступен для провайдера.';
+    'Provider FQDN suffix (self-onboard Variant T, ADR-017(h)): keeper predicts the VM FQDN as <name>-<index>.<fqdn_suffix>. NULL -> self-onboard unavailable for the provider.';

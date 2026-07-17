@@ -1,13 +1,13 @@
 -- 061_drop_tides.up.sql
 --
--- Wave 5 Pass 1: полное удаление Tide (ADR-040). Tide вплавлен в incarnation.run
--- (Voyage / ErrandRun покрывают батчевые сценарии), отдельная сущность снята без
--- обратной совместимости — реестр `tides` и back-link-колонки apply_runs больше
--- не используются ни одним потребителем.
+-- Wave 5 Pass 1: complete removal of Tide (ADR-040). Tide has been folded into incarnation.run
+-- (Voyage / ErrandRun cover batch scenarios), the separate entity is dropped without
+-- backward compatibility - the `tides` registry and the apply_runs back-link columns are
+-- no longer used by any consumer.
 --
--- apply_runs.tide_id / surge_index — soft-link БЕЗ FK (миграция 055): drop
--- колонок безопасен, на них нет внешних ссылок. partial-индекс apply_runs_tide_idx
--- снимаем вместе с колонкой.
+-- apply_runs.tide_id / surge_index are soft-links WITHOUT an FK (migration 055): dropping
+-- the columns is safe, there are no external references to them. The partial index apply_runs_tide_idx
+-- is removed together with the column.
 
 DROP INDEX IF EXISTS apply_runs_tide_idx;
 ALTER TABLE apply_runs DROP COLUMN IF EXISTS surge_index;

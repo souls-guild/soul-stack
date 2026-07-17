@@ -1,7 +1,7 @@
 -- 002_create_purge_audit_old.down.sql
 --
--- Откат функции `purge_audit_old` (см. up-миграцию). Подпись
--- `(interval, integer)` должна совпадать с CREATE — иначе DROP
--- не найдёт целевую функцию.
+-- Rollback of the `purge_audit_old` function (see up-migration). The signature
+-- `(interval, integer)` must match CREATE - otherwise DROP
+-- will not find the target function.
 
 DROP FUNCTION IF EXISTS purge_audit_old(interval, integer);

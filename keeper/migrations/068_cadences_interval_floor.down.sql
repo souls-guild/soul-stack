@@ -1,7 +1,8 @@
 -- 068_cadences_interval_floor.down.sql
 --
--- Down: снять floor-CHECK и MIN-индекс. positive-CHECK (066) и due-scan-индекс
--- (066) НЕ трогаются — это объекты предыдущей миграции.
+-- Down: remove the floor CHECK and the MIN index. The positive CHECK (066)
+-- and the due-scan index (066) are NOT touched - they belong to the previous
+-- migration.
 
 DROP INDEX IF EXISTS cadences_enabled_interval_idx;
 
