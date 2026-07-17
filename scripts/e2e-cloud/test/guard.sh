@@ -16,7 +16,7 @@ command -v jq >/dev/null 2>&1 || { echo "guard: jq is required in PATH"; exit 2;
 . "${ROOT}/lib/keeper-api.sh" # http_body/http_code + seam declaration (we override it with the stub)
 . "${ROOT}/lib/poll.sh"
 . "${ROOT}/lib/assert.sh"
-. "${ROOT}/suites/day2.sh" # run_scenario
+. "${ROOT}/suites/operations.sh" # run_scenario
 
 # --- keeper_api stub: a "code:fixture" queue (fixture without .json; '-' = empty body).
 # keeper_api is called inside $() substitution (a subshell) → we keep the index in a FILE,
