@@ -31,7 +31,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
         with:
           # Full history + tags: VERSION in the Makefile comes from
           # `git describe --tags`. Without fetch-depth: 0 and tags, describe
@@ -103,7 +103,7 @@ jobs:
           fi
 
       - name: Create GitHub Release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           # Tag and release name = the pushed tag. Body is generated
           # automatically from commits between tags.

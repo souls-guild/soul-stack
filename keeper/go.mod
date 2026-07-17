@@ -4,33 +4,33 @@ go 1.26.4
 
 require (
 	github.com/alicebob/miniredis/v2 v2.38.0
-	github.com/cyphar/filepath-securejoin v0.6.1
+	github.com/cyphar/filepath-securejoin v0.7.0
 	github.com/danielgtaylor/huma/v2 v2.38.0
 	github.com/go-chi/chi/v5 v5.3.0
 	github.com/go-git/go-git/v5 v5.19.1
 	github.com/goccy/go-yaml v1.19.2
 	github.com/golang-jwt/jwt/v5 v5.3.1
 	github.com/golang-migrate/migrate/v4 v4.19.1
-	github.com/google/cel-go v0.28.1
+	github.com/google/cel-go v0.29.2
 	github.com/gravitational/teleport/api v0.0.0-20260526093338-eadd0803064f
 	github.com/hashicorp/vault/api v1.23.0
 	github.com/jackc/pgx/v5 v5.10.0
 	github.com/oapi-codegen/runtime v1.4.1
 	github.com/prometheus/client_golang v1.23.2
 	github.com/prometheus/client_model v0.6.2
-	github.com/redis/go-redis/v9 v9.20.1
+	github.com/redis/go-redis/v9 v9.21.0
 	github.com/robfig/cron/v3 v3.0.1
 	github.com/souls-guild/soul-stack/proto/plugin v0.0.0
 	github.com/souls-guild/soul-stack/sdk v0.0.0
 	github.com/souls-guild/soul-stack/shared v0.0.0
-	github.com/testcontainers/testcontainers-go v0.42.0
-	github.com/testcontainers/testcontainers-go/modules/postgres v0.42.0
-	github.com/testcontainers/testcontainers-go/modules/vault v0.42.0
+	github.com/testcontainers/testcontainers-go v0.43.0
+	github.com/testcontainers/testcontainers-go/modules/postgres v0.43.0
+	github.com/testcontainers/testcontainers-go/modules/vault v0.43.0
 	go.opentelemetry.io/otel v1.44.0
 	go.opentelemetry.io/otel/sdk v1.44.0
 	go.opentelemetry.io/otel/trace v1.44.0
 	golang.org/x/crypto v0.53.0
-	google.golang.org/grpc v1.81.1
+	google.golang.org/grpc v1.82.0
 	google.golang.org/protobuf v1.36.11
 	gopkg.in/yaml.v3 v3.0.1
 )

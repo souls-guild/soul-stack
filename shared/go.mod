@@ -10,8 +10,8 @@ require (
 
 require (
 	github.com/Masterminds/sprig/v3 v3.3.0
-	github.com/cyphar/filepath-securejoin v0.6.1
-	github.com/google/cel-go v0.28.1
+	github.com/cyphar/filepath-securejoin v0.7.0
+	github.com/google/cel-go v0.29.2
 	github.com/oklog/ulid/v2 v2.1.1
 	go.opentelemetry.io/otel v1.44.0
 	go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracegrpc v1.44.0
@@ -61,7 +61,7 @@ require (
 	github.com/prometheus/common v0.69.0 // indirect
 	github.com/prometheus/procfs v0.20.1 // indirect
 	golang.org/x/sys v0.46.0 // indirect
-	google.golang.org/grpc v1.81.1
+	google.golang.org/grpc v1.82.0
 	google.golang.org/protobuf v1.36.11
 )
 
