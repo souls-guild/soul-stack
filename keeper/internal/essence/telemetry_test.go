@@ -25,7 +25,7 @@ func TestResolveEffectiveTelemetry(t *testing.T) {
 		wantCollect []string
 	}{
 		{
-			name:        "manifest nil → дефолты (enabled, 30s, все 5)",
+			name:        "manifest nil -> defaults (enabled, 30s, all 5)",
 			manifest:    nil,
 			essence:     nil,
 			wantEnabled: true,
@@ -33,7 +33,7 @@ func TestResolveEffectiveTelemetry(t *testing.T) {
 			wantCollect: allFive,
 		},
 		{
-			name:        "пустой essence → значения манифеста",
+			name:        "empty essence -> manifest values",
 			manifest:    tel(ptrBool(false), ptrStr("45s"), []string{"cpu", "mem"}),
 			essence:     map[string]any{},
 			wantEnabled: false,
@@ -41,7 +41,7 @@ func TestResolveEffectiveTelemetry(t *testing.T) {
 			wantCollect: []string{"cpu", "mem"},
 		},
 		{
-			name:        "essence переопределяет interval и collectors",
+			name:        "essence overrides interval and collectors",
 			manifest:    tel(nil, ptrStr("60s"), []string{"cpu"}),
 			essence:     map[string]any{"telemetry_interval": "120s", "telemetry_collectors": []string{"mem", "disk"}},
 			wantEnabled: true,
@@ -49,7 +49,7 @@ func TestResolveEffectiveTelemetry(t *testing.T) {
 			wantCollect: []string{"mem", "disk"},
 		},
 		{
-			name:        "essence collectors как []any (YAML-форма)",
+			name:        "essence collectors as []any (YAML form)",
 			manifest:    nil,
 			essence:     map[string]any{"telemetry_collectors": []any{"cpu", "load"}},
 			wantEnabled: true,
@@ -73,7 +73,7 @@ func TestResolveEffectiveTelemetry(t *testing.T) {
 			wantCollect: allFive,
 		},
 		{
-			name:        "неизвестный collector отфильтрован (REPLACE)",
+			name:        "unknown collector filtered out (REPLACE)",
 			manifest:    nil,
 			essence:     map[string]any{"telemetry_collectors": []string{"cpu", "bogus", "mem"}},
 			wantEnabled: true,
@@ -81,15 +81,15 @@ func TestResolveEffectiveTelemetry(t *testing.T) {
 			wantCollect: []string{"cpu", "mem"},
 		},
 		{
-			name:        "битый essence-interval → default 30s (не floor)",
+			name:        "broken essence-interval -> default 30s (not floor)",
 			manifest:    tel(nil, ptrStr("60s"), nil),
-			essence:     map[string]any{"telemetry_interval": "не-длительность"},
+			essence:     map[string]any{"telemetry_interval": "not-a-duration"},
 			wantEnabled: true,
 			wantSec:     30,
 			wantCollect: allFive,
 		},
 		{
-			name:        "essence НЕ переопределяет enabled (manifest false остаётся)",
+			name:        "essence does NOT override enabled (manifest false stays)",
 			manifest:    tel(ptrBool(false), nil, nil),
 			essence:     map[string]any{"telemetry_interval": "20s"},
 			wantEnabled: false,
@@ -97,7 +97,7 @@ func TestResolveEffectiveTelemetry(t *testing.T) {
 			wantCollect: allFive,
 		},
 		{
-			name:        "essence collectors не-строковый список → fallback на манифест",
+			name:        "essence collectors not a string list -> fallback to manifest",
 			manifest:    tel(nil, nil, []string{"cpu"}),
 			essence:     map[string]any{"telemetry_collectors": []any{"cpu", 42}},
 			wantEnabled: true,
@@ -105,7 +105,7 @@ func TestResolveEffectiveTelemetry(t *testing.T) {
 			wantCollect: []string{"cpu"},
 		},
 		{
-			name:        "все essence-collectors неизвестны + manifest nil → откат на дефолт (все 5, НЕ пусто)",
+			name:        "all essence-collectors unknown + manifest nil -> fallback to default (all 5, NOT empty)",
 			manifest:    nil,
 			essence:     map[string]any{"telemetry_collectors": []string{"bogus", "nope"}},
 			wantEnabled: true,
@@ -113,7 +113,7 @@ func TestResolveEffectiveTelemetry(t *testing.T) {
 			wantCollect: allFive,
 		},
 		{
-			name:        "все essence-collectors неизвестны + manifest задан → откат на манифест",
+			name:        "all essence-collectors unknown + manifest set -> fallback to manifest",
 			manifest:    tel(nil, nil, []string{"cpu", "mem"}),
 			essence:     map[string]any{"telemetry_collectors": []string{"bogus"}},
 			wantEnabled: true,
@@ -121,7 +121,7 @@ func TestResolveEffectiveTelemetry(t *testing.T) {
 			wantCollect: []string{"cpu", "mem"},
 		},
 		{
-			name:        "manifest interval на границе floor (10s) проходит",
+			name:        "manifest interval at floor boundary (10s) passes",
 			manifest:    tel(nil, ptrStr("10s"), nil),
 			essence:     nil,
 			wantEnabled: true,
@@ -146,30 +146,30 @@ func TestResolveEffectiveTelemetry(t *testing.T) {
 	}
 }
 
-// TestResolveEffectiveTelemetry_NoManifestMutation — CollectorsOrDefault отдаёт
-// слайс манифеста напрямую; фильтр не должен мутировать исходный список.
+// TestResolveEffectiveTelemetry_NoManifestMutation — CollectorsOrDefault returns
+// the manifest slice directly; the filter must not mutate the source list.
 func TestResolveEffectiveTelemetry_NoManifestMutation(t *testing.T) {
 	m := tel(nil, nil, []string{"cpu", "mem"})
 	_ = ResolveEffectiveTelemetry(m, nil)
 	if !reflect.DeepEqual(m.Collectors, []string{"cpu", "mem"}) {
-		t.Errorf("манифест мутирован: %v", m.Collectors)
+		t.Errorf("manifest mutated: %v", m.Collectors)
 	}
 }
 
-// TestUnknownTelemetryCollectors — observability-хелпер: возвращает только
-// неизвестные имена; ключ отсутствует / не-список / всё известно → nil.
+// TestUnknownTelemetryCollectors — observability helper: returns only
+// unknown names; key absent / not a list / all known -> nil.
 func TestUnknownTelemetryCollectors(t *testing.T) {
 	cases := []struct {
 		name    string
 		essence map[string]any
 		want    []string
 	}{
-		{"ключ отсутствует", map[string]any{}, nil},
+		{"key absent", map[string]any{}, nil},
 		{"nil essence", nil, nil},
-		{"все известны", map[string]any{"telemetry_collectors": []string{"cpu", "mem"}}, nil},
-		{"часть неизвестна", map[string]any{"telemetry_collectors": []string{"cpu", "bogus", "nope"}}, []string{"bogus", "nope"}},
-		{"все неизвестны ([]any)", map[string]any{"telemetry_collectors": []any{"x", "y"}}, []string{"x", "y"}},
-		{"не список строк → nil", map[string]any{"telemetry_collectors": []any{"cpu", 42}}, nil},
+		{"all known", map[string]any{"telemetry_collectors": []string{"cpu", "mem"}}, nil},
+		{"some unknown", map[string]any{"telemetry_collectors": []string{"cpu", "bogus", "nope"}}, []string{"bogus", "nope"}},
+		{"all unknown ([]any)", map[string]any{"telemetry_collectors": []any{"x", "y"}}, []string{"x", "y"}},
+		{"not a string list -> nil", map[string]any{"telemetry_collectors": []any{"cpu", 42}}, nil},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

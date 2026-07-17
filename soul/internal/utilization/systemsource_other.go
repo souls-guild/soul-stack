@@ -4,11 +4,11 @@ package utilization
 
 import "context"
 
-// systemSource вне Linux/macOS (windows и пр.) — заглушка (ADR-072:
-// production-target — Linux). Все методы zero-value.
+// systemSource outside Linux/macOS (windows and others) — a stub (ADR-072:
+// production-target is Linux). All methods are zero-value.
 type systemSource struct{}
 
-// NewSystemSource — заглушка не-Linux (см. doc systemSource).
+// NewSystemSource — non-Linux stub (see doc systemSource).
 func NewSystemSource() Source { return systemSource{} }
 
 func (systemSource) Load(context.Context) LoadAvg        { return LoadAvg{} }

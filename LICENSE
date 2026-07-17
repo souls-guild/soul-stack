@@ -8,7 +8,7 @@ License text copyright (c) 2017 MariaDB Corporation Ab, All Rights Reserved.
 Parameters
 
 Licensor:             Soul Stack Authors
-                      [TODO(юрист): уточнить точное юрлицо / держателя прав.]
+                      [TODO(legal): clarify the exact legal entity / rights holder.]
 
 Licensed Work:        Soul Stack — the Keeper, Soul, soulctl and soul-lint
                       binaries and the built-in core.* modules contained in
@@ -48,10 +48,10 @@ Additional Use Grant: You may make production use of the Licensed Work,
                       Additional Use Grant and requires a separate commercial
                       license from the Licensor.
 
-                      [TODO(юрист): embedding / OEM (встраивание Licensed Work
-                      в сторонний продукт) в стартовый грант НЕ включён —
-                      требует отдельной коммерческой лицензии; расширить
-                      позже при необходимости.]
+                      [TODO(legal): embedding / OEM (bundling the Licensed Work
+                      into a third-party product) is NOT included in the
+                      starting grant — requires a separate commercial license;
+                      extend later if needed.]
 
 Change Date:          The date two years after a given version of the Licensed
                       Work is first made publicly available. Each version of
@@ -61,7 +61,7 @@ Change Date:          The date two years after a given version of the Licensed
 Change License:       Apache License, Version 2.0
 
 For information about alternative licensing arrangements for the Licensed
-Work, please contact [TODO(юрист): контакт для коммерческих лицензий].
+Work, please contact [TODO(legal): contact for commercial licenses].
 
 -----------------------------------------------------------------------------
 

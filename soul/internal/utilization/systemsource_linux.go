@@ -10,11 +10,11 @@ import (
 	"syscall"
 )
 
-// systemSource — production [Source] на Linux: /proc/{loadavg,stat,meminfo,
-// uptime,mounts} + statfs(2). Best-effort: любой сбой чтения → zero-value.
+// systemSource — production [Source] on Linux: /proc/{loadavg,stat,meminfo,
+// uptime,mounts} + statfs(2). Best-effort: any read failure → zero-value.
 type systemSource struct{}
 
-// NewSystemSource собирает production-Source поверх реальной /proc + statfs.
+// NewSystemSource builds a production Source over the real /proc + statfs.
 func NewSystemSource() Source { return systemSource{} }
 
 func (systemSource) Load(context.Context) LoadAvg {
@@ -25,7 +25,7 @@ func (systemSource) Load(context.Context) LoadAvg {
 	return LoadAvg{One: parseFloat(f[0]), Five: parseFloat(f[1]), Fifteen: parseFloat(f[2])}
 }
 
-// CPUSample — агрегатная строка `cpu ` /proc/stat, распарсенная [parseCPUStatLine].
+// CPUSample — the aggregate `cpu ` line of /proc/stat, parsed by [parseCPUStatLine].
 func (systemSource) CPUSample(context.Context) CPUSample {
 	for _, line := range strings.Split(readFile("/proc/stat"), "\n") {
 		if strings.HasPrefix(line, "cpu ") {
@@ -65,8 +65,8 @@ func (systemSource) Uptime(context.Context) int64 {
 	return int64(parseFloat(f[0]))
 }
 
-// Disks — точки монтирования из /proc/mounts, минус виртуальные fstype, дедуп по
-// mountpoint; занятость через statfs(2). total==0 → пропуск.
+// Disks — mount points from /proc/mounts, minus virtual fstypes, deduped by
+// mountpoint; usage via statfs(2). total==0 → skip.
 func (systemSource) Disks(context.Context) []Disk {
 	var out []Disk
 	seen := make(map[string]bool)
@@ -84,8 +84,8 @@ func (systemSource) Disks(context.Context) []Disk {
 		if syscall.Statfs(mount, &st) != nil {
 			continue
 		}
-		// f_blocks/f_bfree выражены в единицах f_frsize (как df); Bsize — fallback,
-		// если Frsize не заполнен.
+		// f_blocks/f_bfree are expressed in f_frsize units (like df); Bsize is the
+		// fallback if Frsize is not populated.
 		frsize := int64(st.Frsize)
 		if frsize == 0 {
 			frsize = int64(st.Bsize)
@@ -105,8 +105,8 @@ func (systemSource) Disks(context.Context) []Disk {
 
 const bytesPerMB = 1024 * 1024
 
-// virtualFSTypes — псевдо-ФС, не занимающие физический носитель (плюс все fuse.*
-// через префикс-проверку).
+// virtualFSTypes — pseudo-filesystems that don't occupy physical storage (plus all
+// fuse.* via a prefix check).
 var virtualFSTypes = map[string]bool{
 	"tmpfs": true, "devtmpfs": true, "proc": true, "sysfs": true, "cgroup": true,
 	"cgroup2": true, "overlay": true, "squashfs": true, "devpts": true, "mqueue": true,
@@ -119,7 +119,7 @@ func virtualFS(fstype string) bool {
 	return strings.HasPrefix(fstype, "fuse.") || virtualFSTypes[fstype]
 }
 
-// readFile — os.ReadFile, "" при любой ошибке (best-effort).
+// readFile — os.ReadFile, "" on any error (best-effort).
 func readFile(path string) string {
 	raw, err := os.ReadFile(path)
 	if err != nil {
@@ -136,7 +136,7 @@ func parseFloat(s string) float64 {
 	return f
 }
 
-// parseFirstInt — первое число из строки "  16384 kB". 0 при мусоре.
+// parseFirstInt — the first number from a string like "  16384 kB". 0 on garbage.
 func parseFirstInt(s string) int64 {
 	fields := strings.Fields(s)
 	if len(fields) == 0 {

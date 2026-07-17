@@ -17,8 +17,8 @@ import (
 	pluginv1 "github.com/souls-guild/soul-stack/proto/plugin/gen/go/v1"
 )
 
-// --- fakes для state `issued` (fakeStore/fakeAudit/mustStruct/makeCertPEM
-// переиспользуются из registered_test.go) ---
+// --- fakes for state `issued` (fakeStore/fakeAudit/mustStruct/makeCertPEM
+// are reused from registered_test.go) ---
 
 type fakeSigner struct {
 	certPEM  string
@@ -78,7 +78,7 @@ func keysOf(m map[string]map[string]any) []string {
 	return out
 }
 
-// newIssuedModule собирает полностью сконфигурированный модуль под state `issued`.
+// newIssuedModule builds a fully configured module for state `issued`.
 func newIssuedModule(fs *fakeStore, fa *fakeAudit, signer certissue.Signer, vw certissue.KVWriter, pol coremodcert.IssuePolicyResolver) *coremodcert.Module {
 	m := coremodcert.New(nil, fs, fa, "kid-1")
 	m.Signer = signer
@@ -106,14 +106,14 @@ func TestValidate_Issued(t *testing.T) {
 		State:  "issued",
 		Params: mustStruct(t, map[string]any{}),
 	}); rep.Ok {
-		t.Error("issued без incarnation должен быть невалиден")
+		t.Error("issued without incarnation should be invalid")
 	}
-	// issued требует только incarnation (certs НЕ обязателен, в отличие от registered).
+	// issued only requires incarnation (certs is NOT required, unlike registered).
 	if rep, _ := m.Validate(context.Background(), &pluginv1.ValidateRequest{
 		State:  "issued",
 		Params: mustStruct(t, map[string]any{"incarnation": "redis-prod"}),
 	}); !rep.Ok {
-		t.Errorf("issued с incarnation должен быть валиден, errors=%v", rep.Errors)
+		t.Errorf("issued with incarnation should be valid, errors=%v", rep.Errors)
 	}
 }
 
@@ -124,15 +124,15 @@ func TestValidate_TrulyUnknownState(t *testing.T) {
 		Params: mustStruct(t, map[string]any{}),
 	})
 	if rep.Ok {
-		t.Fatal("ожидалась ошибка для неизвестного state")
+		t.Fatal("expected an error for unknown state")
 	}
 }
 
 // --- Apply: issued ---
 
-// TestApplyIssued_EnrollByDefault — GUARD: без param auto_rotate cert enroll-ится
-// в авто-ротацию (AutoRotate=true), PKIMount/PKIRole берутся ИЗ ПОЛИТИКИ (не из
-// params), key-спутник AutoRotate=false, пути Vault = certissue.VaultPath(service).
+// TestApplyIssued_EnrollByDefault — GUARD: without param auto_rotate cert enrolls
+// into auto-rotation (AutoRotate=true), PKIMount/PKIRole come FROM THE POLICY (not
+// from params), companion key AutoRotate=false, Vault paths = certissue.VaultPath(service).
 func TestApplyIssued_EnrollByDefault(t *testing.T) {
 	notAfter := time.Now().Add(90 * 24 * time.Hour).Truncate(time.Second)
 	certPEM, wantFP := makeCertPEM(t, "redis-prod.tls", notAfter)
@@ -161,13 +161,13 @@ func TestApplyIssued_EnrollByDefault(t *testing.T) {
 		t.Errorf("registered[0].Kind = %q, want cert", certW.Kind)
 	}
 	if !certW.AutoRotate {
-		t.Error("cert AutoRotate должен быть true по умолчанию (enroll)")
+		t.Error("cert AutoRotate should be true by default (enroll)")
 	}
 	if certW.PKIMount == nil || *certW.PKIMount != "pki-int" {
-		t.Errorf("cert PKIMount = %v, want pki-int (из PKIMount())", certW.PKIMount)
+		t.Errorf("cert PKIMount = %v, want pki-int (from PKIMount())", certW.PKIMount)
 	}
 	if certW.PKIRole == nil || *certW.PKIRole != "redis-tls" {
-		t.Errorf("cert PKIRole = %v, want redis-tls (из политики, НЕ из params)", certW.PKIRole)
+		t.Errorf("cert PKIRole = %v, want redis-tls (from policy, NOT from params)", certW.PKIRole)
 	}
 	if certW.VaultRef != "secret/redis/redis-prod/tls/cert#cert" {
 		t.Errorf("cert VaultRef = %q", certW.VaultRef)
@@ -176,7 +176,7 @@ func TestApplyIssued_EnrollByDefault(t *testing.T) {
 		t.Errorf("cert Fingerprint = %q, want %q", certW.Fingerprint, wantFP)
 	}
 	if certW.SerialNumber != "0A0B0C" {
-		t.Errorf("cert SerialNumber = %q, want 0A0B0C (из signer)", certW.SerialNumber)
+		t.Errorf("cert SerialNumber = %q, want 0A0B0C (from signer)", certW.SerialNumber)
 	}
 	if !certW.NotAfter.Equal(notAfter.UTC()) {
 		t.Errorf("cert NotAfter = %v, want %v", certW.NotAfter, notAfter.UTC())
@@ -190,27 +190,27 @@ func TestApplyIssued_EnrollByDefault(t *testing.T) {
 		t.Errorf("registered[1].Kind = %q, want key", keyW.Kind)
 	}
 	if keyW.AutoRotate {
-		t.Error("key AutoRotate обязан быть false (спутник, не драйвер ротации)")
+		t.Error("key AutoRotate must be false (companion, not a rotation driver)")
 	}
 	if keyW.VaultRef != "secret/redis/redis-prod/tls/key#key" {
 		t.Errorf("key VaultRef = %q", keyW.VaultRef)
 	}
 	if keyW.Fingerprint != wantFP || keyW.SerialNumber != "0A0B0C" || !keyW.NotAfter.Equal(notAfter.UTC()) {
-		t.Errorf("key должен зеркалить cert fingerprint/serial/not_after: %+v", keyW)
+		t.Errorf("key should mirror cert fingerprint/serial/not_after: %+v", keyW)
 	}
 
 	if _, ok := vw.writes["secret/redis/redis-prod/tls/cert"]; !ok {
-		t.Errorf("ожидалась запись cert в secret/redis/redis-prod/tls/cert, got %v", keysOf(vw.writes))
+		t.Errorf("expected cert write to secret/redis/redis-prod/tls/cert, got %v", keysOf(vw.writes))
 	}
 	if _, ok := vw.writes["secret/redis/redis-prod/tls/key"]; !ok {
-		t.Errorf("ожидалась запись key в secret/redis/redis-prod/tls/key, got %v", keysOf(vw.writes))
+		t.Errorf("expected key write to secret/redis/redis-prod/tls/key, got %v", keysOf(vw.writes))
 	}
 
 	if len(fa.events) != 1 || fa.events[0].EventType != audit.EventCertIssued {
 		t.Fatalf("expected 1 cert.issued event, got %v", fa.events)
 	}
 	if _, leaked := fa.events[0].Payload["key"]; leaked {
-		t.Error("audit payload не должен нести приватный ключ")
+		t.Error("audit payload should not carry the private key")
 	}
 
 	if signer.gotRole != "redis-tls" || signer.gotMount != "pki-int" {
@@ -218,7 +218,7 @@ func TestApplyIssued_EnrollByDefault(t *testing.T) {
 	}
 }
 
-// TestApplyIssued_AutoRotateFalse — auto_rotate:false → cert-строка AutoRotate=false.
+// TestApplyIssued_AutoRotateFalse — auto_rotate:false → cert row AutoRotate=false.
 func TestApplyIssued_AutoRotateFalse(t *testing.T) {
 	notAfter := time.Now().Add(90 * 24 * time.Hour).Truncate(time.Second)
 	certPEM, _ := makeCertPEM(t, "redis-prod.tls", notAfter)
@@ -236,12 +236,12 @@ func TestApplyIssued_AutoRotateFalse(t *testing.T) {
 		t.Fatalf("expected 2 RegisterActive, got %d", len(fs.registered))
 	}
 	if fs.registered[0].w.AutoRotate {
-		t.Error("cert AutoRotate обязан быть false при auto_rotate:false")
+		t.Error("cert AutoRotate must be false when auto_rotate:false")
 	}
 }
 
-// TestApplyIssued_PolicyResolveError — policy.Resolve вернул ошибку → SendFailed,
-// RegisterActive НЕ вызывается.
+// TestApplyIssued_PolicyResolveError — policy.Resolve returned an error → SendFailed,
+// RegisterActive is NOT called.
 func TestApplyIssued_PolicyResolveError(t *testing.T) {
 	fs := &fakeStore{}
 	m := newIssuedModule(fs, &fakeAudit{}, &fakeSigner{}, &fakeVaultWriter{}, &fakePolicyResolver{err: errors.New("boom")})
@@ -249,14 +249,14 @@ func TestApplyIssued_PolicyResolveError(t *testing.T) {
 	stream := runIssued(t, m, map[string]any{"incarnation": "redis-prod"})
 
 	if !stream.Last().Failed {
-		t.Fatal("ожидался failed при ошибке резолва политики")
+		t.Fatal("expected failed on policy resolve error")
 	}
 	if len(fs.registered) != 0 {
-		t.Errorf("RegisterActive не должен вызываться при ошибке политики, got %d", len(fs.registered))
+		t.Errorf("RegisterActive should not be called on policy error, got %d", len(fs.registered))
 	}
 }
 
-// TestApplyIssued_PolicyDisabled — !pol.Enabled → SendFailed (выпуск невозможен).
+// TestApplyIssued_PolicyDisabled — !pol.Enabled → SendFailed (issuance not possible).
 func TestApplyIssued_PolicyDisabled(t *testing.T) {
 	fs := &fakeStore{}
 	pol := certpolicy.Policy{Service: "redis", Present: true, Enabled: false, PKIRole: "redis-tls"}
@@ -265,25 +265,26 @@ func TestApplyIssued_PolicyDisabled(t *testing.T) {
 	stream := runIssued(t, m, map[string]any{"incarnation": "redis-prod"})
 
 	if !stream.Last().Failed {
-		t.Fatal("ожидался failed при выключенном certificate_rotation")
+		t.Fatal("expected failed when certificate_rotation is disabled")
 	}
 	if len(fs.registered) != 0 {
-		t.Errorf("нет RegisterActive при disabled, got %d", len(fs.registered))
+		t.Errorf("no RegisterActive expected when disabled, got %d", len(fs.registered))
 	}
 }
 
-// validIssueSigner — signer с валидным cert-PEM: без него certissue.Issue упал бы
-// на пустом PEM и тест «зеленел» бы по НЕ той причине. Так фейл может прийти только
-// от гейта, который проверяем.
+// validIssueSigner — signer with a valid cert-PEM: without it certissue.Issue would
+// fail on an empty PEM and the test would "pass" for the WRONG reason. This way a
+// failure can only come from the gate we're testing.
 func validIssueSigner(t *testing.T) *fakeSigner {
 	notAfter := time.Now().Add(90 * 24 * time.Hour).Truncate(time.Second)
 	certPEM, _ := makeCertPEM(t, "redis-prod.tls", notAfter)
 	return &fakeSigner{certPEM: certPEM, serial: "S1", notAfter: notAfter}
 }
 
-// TestApplyIssued_UnknownScenario_FailsFast — GUARD (NIM-99 review MAJOR): манифест
-// объявил scenario, которого нет среди scenario/ сервиса → SendFailed ДО энролла
-// (иначе серт с auto_rotate=true молча скипается ротатором → тихое истечение).
+// TestApplyIssued_UnknownScenario_FailsFast — GUARD (NIM-99 review MAJOR): manifest
+// declared a scenario that isn't among the service's scenario/ → SendFailed BEFORE
+// enroll (otherwise a cert with auto_rotate=true is silently skipped by the rotator
+// → silent expiration).
 func TestApplyIssued_UnknownScenario_FailsFast(t *testing.T) {
 	fs := &fakeStore{}
 	pol := certpolicy.Policy{Service: "redis", Present: true, Enabled: true, PKIRole: "redis-tls",
@@ -292,16 +293,16 @@ func TestApplyIssued_UnknownScenario_FailsFast(t *testing.T) {
 
 	ev := runIssued(t, m, map[string]any{"incarnation": "redis-prod"}).Last()
 
-	if !ev.Failed || !strings.Contains(ev.Message, "сценарий ротации") {
-		t.Fatalf("ожидался failed про сценарий ротации, got failed=%v msg=%q", ev.Failed, ev.Message)
+	if !ev.Failed || !strings.Contains(ev.Message, "rotation scenario") {
+		t.Fatalf("expected failed about rotation scenario, got failed=%v msg=%q", ev.Failed, ev.Message)
 	}
 	if len(fs.registered) != 0 {
-		t.Errorf("RegisterActive не должен вызываться при неизвестном сценарии, got %d", len(fs.registered))
+		t.Errorf("RegisterActive should not be called for unknown scenario, got %d", len(fs.registered))
 	}
 }
 
-// TestApplyIssued_EmptyScenario_FailsFast — GUARD: enable:true, но scenario пуст →
-// SendFailed, RegisterActive НЕ вызван.
+// TestApplyIssued_EmptyScenario_FailsFast — GUARD: enable:true, but scenario is empty →
+// SendFailed, RegisterActive NOT called.
 func TestApplyIssued_EmptyScenario_FailsFast(t *testing.T) {
 	fs := &fakeStore{}
 	pol := certpolicy.Policy{Service: "redis", Present: true, Enabled: true, PKIRole: "redis-tls",
@@ -310,16 +311,16 @@ func TestApplyIssued_EmptyScenario_FailsFast(t *testing.T) {
 
 	ev := runIssued(t, m, map[string]any{"incarnation": "redis-prod"}).Last()
 
-	if !ev.Failed || !strings.Contains(ev.Message, "сценарий ротации") {
-		t.Fatalf("ожидался failed про сценарий ротации, got failed=%v msg=%q", ev.Failed, ev.Message)
+	if !ev.Failed || !strings.Contains(ev.Message, "rotation scenario") {
+		t.Fatalf("expected failed about rotation scenario, got failed=%v msg=%q", ev.Failed, ev.Message)
 	}
 	if len(fs.registered) != 0 {
-		t.Errorf("RegisterActive не должен вызываться при пустом сценарии, got %d", len(fs.registered))
+		t.Errorf("RegisterActive should not be called for empty scenario, got %d", len(fs.registered))
 	}
 }
 
-// TestApplyIssued_EmptyPKIRole_FailsFast — GUARD (NIM-99 QA G2): enable:true, сценарий
-// валиден, но pki_role пуст → SendFailed, RegisterActive НЕ вызван.
+// TestApplyIssued_EmptyPKIRole_FailsFast — GUARD (NIM-99 QA G2): enable:true, scenario
+// valid, but pki_role is empty → SendFailed, RegisterActive NOT called.
 func TestApplyIssued_EmptyPKIRole_FailsFast(t *testing.T) {
 	fs := &fakeStore{}
 	pol := certpolicy.Policy{Service: "redis", Present: true, Enabled: true, PKIRole: "",
@@ -329,15 +330,15 @@ func TestApplyIssued_EmptyPKIRole_FailsFast(t *testing.T) {
 	ev := runIssued(t, m, map[string]any{"incarnation": "redis-prod"}).Last()
 
 	if !ev.Failed || !strings.Contains(ev.Message, "pki_role") {
-		t.Fatalf("ожидался failed про pki_role, got failed=%v msg=%q", ev.Failed, ev.Message)
+		t.Fatalf("expected failed about pki_role, got failed=%v msg=%q", ev.Failed, ev.Message)
 	}
 	if len(fs.registered) != 0 {
-		t.Errorf("RegisterActive не должен вызываться при пустом pki_role, got %d", len(fs.registered))
+		t.Errorf("RegisterActive should not be called for empty pki_role, got %d", len(fs.registered))
 	}
 }
 
-// TestApplyIssued_PKIRoleFromPolicyNotParams — pki_role в params ИГНОРИРУЕТСЯ,
-// подпись и warrant используют pol.PKIRole (роль из манифеста).
+// TestApplyIssued_PKIRoleFromPolicyNotParams — pki_role in params is IGNORED,
+// signing and the warrant use pol.PKIRole (the role from the manifest).
 func TestApplyIssued_PKIRoleFromPolicyNotParams(t *testing.T) {
 	notAfter := time.Now().Add(90 * 24 * time.Hour).Truncate(time.Second)
 	certPEM, _ := makeCertPEM(t, "redis-prod.tls", notAfter)
@@ -352,18 +353,18 @@ func TestApplyIssued_PKIRoleFromPolicyNotParams(t *testing.T) {
 		t.Fatalf("unexpected failure: %s", stream.Last().Message)
 	}
 	if signer.gotRole != "policy-role" {
-		t.Errorf("signer подписал ролью %q, want policy-role (params.pki_role обязан игнорироваться)", signer.gotRole)
+		t.Errorf("signer signed with role %q, want policy-role (params.pki_role must be ignored)", signer.gotRole)
 	}
 	if got := fs.registered[0].w.PKIRole; got == nil || *got != "policy-role" {
 		t.Errorf("warrant PKIRole = %v, want policy-role", got)
 	}
 }
 
-// TestApplyIssued_GateNotConfigured — Signer=nil (модуль не сконфигурирован) →
-// SendFailed «не сконфигурирован», RegisterActive НЕ вызывается.
+// TestApplyIssued_GateNotConfigured — Signer=nil (module not configured) →
+// SendFailed "not configured", RegisterActive is NOT called.
 func TestApplyIssued_GateNotConfigured(t *testing.T) {
 	fs := &fakeStore{}
-	m := coremodcert.New(nil, fs, &fakeAudit{}, "kid-1") // Signer намеренно не выставлен
+	m := coremodcert.New(nil, fs, &fakeAudit{}, "kid-1") // Signer intentionally not set
 	m.VaultWriter = &fakeVaultWriter{}
 	m.Policy = &fakePolicyResolver{pol: certpolicy.Policy{Service: "redis", Enabled: true, PKIRole: "r"}}
 	m.CSRGen = issuedCSRGen
@@ -373,12 +374,12 @@ func TestApplyIssued_GateNotConfigured(t *testing.T) {
 
 	ev := stream.Last()
 	if !ev.Failed {
-		t.Fatal("ожидался failed при nil Signer (не сконфигурирован)")
+		t.Fatal("expected failed on nil Signer (not configured)")
 	}
-	if !strings.Contains(ev.Message, "не сконфигурирован") {
-		t.Errorf("message = %q, ожидалось упоминание «не сконфигурирован»", ev.Message)
+	if !strings.Contains(ev.Message, "not configured") {
+		t.Errorf("message = %q, expected mention of \"not configured\"", ev.Message)
 	}
 	if len(fs.registered) != 0 {
-		t.Errorf("нет RegisterActive при неконфигурированном модуле, got %d", len(fs.registered))
+		t.Errorf("no RegisterActive expected for unconfigured module, got %d", len(fs.registered))
 	}
 }

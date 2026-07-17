@@ -466,7 +466,7 @@ func TestApply_NoPkgMgr_Fails(t *testing.T) {
 
 // --- apt: arch (ADR-071 multi-arch) ---
 
-// TestApt_Present_EmitsArch: arch задан без gpg_key → опции `[arch=...]`.
+// TestApt_Present_EmitsArch: arch set without gpg_key → options `[arch=...]`.
 func TestApt_Present_EmitsArch(t *testing.T) {
 	m, _ := newModule(t, util.PkgMgrApt)
 	applyTo(t, m, "present", map[string]any{
@@ -483,7 +483,7 @@ func TestApt_Present_EmitsArch(t *testing.T) {
 	}
 }
 
-// TestApt_Present_ArchMultiValue: несколько архитектур → arch=amd64,arm64.
+// TestApt_Present_ArchMultiValue: multiple architectures → arch=amd64,arm64.
 func TestApt_Present_ArchMultiValue(t *testing.T) {
 	m, _ := newModule(t, util.PkgMgrApt)
 	applyTo(t, m, "present", map[string]any{
@@ -494,12 +494,12 @@ func TestApt_Present_ArchMultiValue(t *testing.T) {
 	})
 	got := read(t, filepath.Join(m.AptSourcesDir, "multi.list"))
 	if !strings.Contains(got, "[arch=amd64,arm64]") {
-		t.Fatalf("multi-arch не склеен через запятую: %q", got)
+		t.Fatalf("multi-arch not joined by comma: %q", got)
 	}
 }
 
-// TestApt_Present_ArchWithSignedByOrder: при заданном ключе порядок опций —
-// signed-by затем arch (как в примере ADR-071).
+// TestApt_Present_ArchWithSignedByOrder: with a key set, the option order is
+// signed-by then arch (as in the ADR-071 example).
 func TestApt_Present_ArchWithSignedByOrder(t *testing.T) {
 	m, _ := newModule(t, util.PkgMgrApt)
 	applyTo(t, m, "present", map[string]any{
@@ -514,33 +514,34 @@ func TestApt_Present_ArchWithSignedByOrder(t *testing.T) {
 	}
 }
 
-// TestApt_Present_ArchIdempotent: тот же arch → повтор changed=false.
+// TestApt_Present_ArchIdempotent: same arch → repeat changed=false.
 func TestApt_Present_ArchIdempotent(t *testing.T) {
 	m, _ := newModule(t, util.PkgMgrApt)
 	params := map[string]any{
 		"name": "nexus", "uri": "https://m/deb", "suite": "bookworm", "arch": []any{"amd64"},
 	}
 	if !applyTo(t, m, "present", params).Last().Changed {
-		t.Fatal("первый прогон: changed=false")
+		t.Fatal("first run: changed=false")
 	}
 	if applyTo(t, m, "present", params).Last().Changed {
-		t.Fatal("повторный прогон с тем же arch: changed=true (не идемпотентно)")
+		t.Fatal("repeat run with the same arch: changed=true (not idempotent)")
 	}
 }
 
-// TestApt_Present_ArchChangeTriggersChanged: смена arch → drift (changed=true).
+// TestApt_Present_ArchChangeTriggersChanged: changing arch → drift (changed=true).
 func TestApt_Present_ArchChangeTriggersChanged(t *testing.T) {
 	m, _ := newModule(t, util.PkgMgrApt)
 	base := map[string]any{"name": "nexus", "uri": "https://m/deb", "suite": "x", "arch": []any{"amd64"}}
 	applyTo(t, m, "present", base)
 	base["arch"] = []any{"arm64"}
 	if !applyTo(t, m, "present", base).Last().Changed {
-		t.Fatal("смена arch должна дать changed=true")
+		t.Fatal("changing arch should produce changed=true")
 	}
 }
 
-// TestValidate_RejectsBadArch: токен архитектуры с недопустимыми символами
-// (пробел/скобка/`=`/пусто/upper) отклоняется — защита от инъекции в apt-опции.
+// TestValidate_RejectsBadArch: an architecture token with disallowed
+// characters (space/bracket/`=`/empty/upper) is rejected — protection
+// against injection into apt options.
 func TestValidate_RejectsBadArch(t *testing.T) {
 	for _, bad := range [][]any{
 		{"amd64 evil"}, {"a]b"}, {"arch=x"}, {""}, {"AMD64"},
@@ -550,15 +551,16 @@ func TestValidate_RejectsBadArch(t *testing.T) {
 			Params: mustStruct(t, map[string]any{"name": "x", "uri": "https://m", "arch": bad}),
 		})
 		if reply.Ok {
-			t.Fatalf("Validate ok=true для небезопасного arch %v", bad)
+			t.Fatalf("Validate ok=true for unsafe arch %v", bad)
 		}
 	}
 }
 
-// TestApt_Present_RedisMirrorRecipe — приёмочный сценарий NIM-104/ADR-071:
-// зеркало redis.io в Nexus объявляется одним core.repo.present (uri=Nexus,
-// arch=amd64, inline gpg-ключ — вариант B: ключ приносит core.url.fetched →
-// ${ file() }). Проверяем точную apt-строку, keyring и идемпотентность.
+// TestApt_Present_RedisMirrorRecipe — the acceptance scenario for
+// NIM-104/ADR-071: mirroring redis.io in Nexus is declared with a single
+// core.repo.present (uri=Nexus, arch=amd64, inline gpg key — variant B: the
+// key is brought in by core.url.fetched → ${ file() }). Checks the exact apt
+// string, the keyring, and idempotency.
 func TestApt_Present_RedisMirrorRecipe(t *testing.T) {
 	m, _ := newModule(t, util.PkgMgrApt)
 	const key = "-----BEGIN PGP PUBLIC KEY BLOCK-----\nREDISKEY\n-----END PGP PUBLIC KEY BLOCK-----\n"
@@ -584,7 +586,7 @@ func TestApt_Present_RedisMirrorRecipe(t *testing.T) {
 		t.Fatalf("keyring bytes mismatch: %q", k)
 	}
 	if applyTo(t, m, "present", params).Last().Changed {
-		t.Fatal("recipe повтор: changed=true (не идемпотентно)")
+		t.Fatal("recipe repeat: changed=true (not idempotent)")
 	}
 }
 

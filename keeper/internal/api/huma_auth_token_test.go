@@ -1,9 +1,10 @@
 package api
 
-// Guard-тесты обмена session-cookie→Bearer (NIM-77, POST /auth/token) и
-// публичного GET /auth/methods. Ключевой инвариант периметра: cookie НЕ даёт
-// доступа к /v1 (RequireJWT читает только Authorization) — регресс здесь ловит
-// возврат чтения cookie на /v1.
+// Guard tests for the session-cookie→Bearer exchange (NIM-77, POST
+// /auth/token) and the public GET /auth/methods. Key perimeter invariant:
+// the cookie does NOT grant access to /v1 (RequireJWT reads only
+// Authorization) — a regression here catches any cookie-read regression on
+// /v1.
 
 import (
 	"encoding/json"
@@ -19,14 +20,15 @@ import (
 	"github.com/souls-guild/soul-stack/keeper/internal/rbac"
 )
 
-// exchangeSigningKey — фикс 32-байтовый HS256-ключ (RFC 7518 минимум) для
-// verifier+issuer теста (один ключ = round-trip).
+// exchangeSigningKey — a fixed 32-byte HS256 key (RFC 7518 minimum) for the
+// verifier+issuer of the test (one key = round-trip).
 var exchangeSigningKey = []byte("nim77-exchange-signing-key-32byte")
 
 const exchangeIssuer = "keeper.test"
 
-// exchangeCrypto собирает shared verifier+issuer на одном ключе (session-cookie
-// и выданный Bearer верифицируются одним verifier — суть Варианта B).
+// exchangeCrypto builds a shared verifier+issuer on one key (session-cookie
+// and the issued Bearer are verified by the same verifier — the point of
+// Variant B).
 func exchangeCrypto(t *testing.T) (*jwt.Verifier, *jwt.Issuer) {
 	t.Helper()
 	v, err := jwt.NewVerifier(exchangeSigningKey, exchangeIssuer)
@@ -40,14 +42,15 @@ func exchangeCrypto(t *testing.T) (*jwt.Verifier, *jwt.Issuer) {
 	return v, iss
 }
 
-// fakeRevoked — revocationChecker для теста revoked-ветки.
+// fakeRevoked — a revocationChecker for the revoked-branch test.
 type fakeRevoked map[string]bool
 
 func (f fakeRevoked) IsRevoked(aid string) bool { return f[aid] }
 
-// authTokenRouter собирает РЕАЛЬНЫЙ Operator API-роутер (buildRouter) со stub-
-// хендлерами (как collectRoutes), но с боевыми verifier/enforcer/authToken —
-// чтобы проверить и /auth/token, и периметр /v1 в одном дереве.
+// authTokenRouter assembles the REAL Operator API router (buildRouter) with
+// stub handlers (like collectRoutes), but with live verifier/enforcer/
+// authToken — so both /auth/token and the /v1 perimeter can be checked in
+// one tree.
 func authTokenRouter(t *testing.T, verifier *jwt.Verifier, enforcer RBACProvider, authToken *AuthTokenDeps, authMethods AuthMethodsDeps) http.Handler {
 	t.Helper()
 	return buildRouter(
@@ -87,9 +90,9 @@ func authTokenRouter(t *testing.T, verifier *jwt.Verifier, enforcer RBACProvider
 	)
 }
 
-// emptyEnforcer — боевой default-deny enforcer (пустой снимок): любой /v1
-// RequireAction/RequirePermission → 403 (не 401). Достаточно для «Bearer принят
-// на уровне JWT» (403≠401).
+// emptyEnforcer — a live default-deny enforcer (empty snapshot): any /v1
+// RequireAction/RequirePermission → 403 (not 401). Enough to confirm "Bearer
+// accepted at the JWT level" (403≠401).
 func emptyEnforcer(t *testing.T) *rbac.Enforcer {
 	t.Helper()
 	e, err := rbac.NewEnforcerFromSnapshot(nil)
@@ -99,8 +102,8 @@ func emptyEnforcer(t *testing.T) *rbac.Enforcer {
 	return e
 }
 
-// postExchange шлёт POST /auth/token с cookie soul_session=session (пустой session
-// → cookie не ставится) и опц. заголовками.
+// postExchange sends POST /auth/token with cookie soul_session=session (empty
+// session → cookie is not set) and optional headers.
 func postExchange(h http.Handler, session string, headers map[string]string) *httptest.ResponseRecorder {
 	req := httptest.NewRequest(http.MethodPost, "/auth/token", http.NoBody)
 	if session != "" {
@@ -114,7 +117,7 @@ func postExchange(h http.Handler, session string, headers map[string]string) *ht
 	return rec
 }
 
-// decodeReply парсит тело успешного обмена.
+// decodeReply parses the body of a successful exchange.
 func decodeReply(t *testing.T, rec *httptest.ResponseRecorder) AuthTokenReply {
 	t.Helper()
 	var r AuthTokenReply
@@ -124,10 +127,11 @@ func decodeReply(t *testing.T, rec *httptest.ResponseRecorder) AuthTokenReply {
 	return r
 }
 
-// --- 1. Инвариант периметра: cookie НЕ даёт доступа к /v1 ---
+// --- 1. Perimeter invariant: cookie does NOT grant access to /v1 ---
 
-// TestAuthPerimeter_V1CookieOnly_401 — запрос на /v1 с ТОЛЬКО валидной session-
-// cookie и БЕЗ Authorization → 401. Cookie не читается на /v1 (RequireJWT).
+// TestAuthPerimeter_V1CookieOnly_401 — a request to /v1 with ONLY a valid
+// session cookie and WITHOUT Authorization → 401. The cookie is not read on
+// /v1 (RequireJWT).
 func TestAuthPerimeter_V1CookieOnly_401(t *testing.T) {
 	verifier, issuer := exchangeCrypto(t)
 	session, err := issuer.Issue("archon-alice", []string{"cluster-admin"}, time.Hour, false)
@@ -138,21 +142,21 @@ func TestAuthPerimeter_V1CookieOnly_401(t *testing.T) {
 	h := authTokenRouter(t, verifier, emptyEnforcer(t), td, AuthMethodsDeps{})
 
 	req := httptest.NewRequest(http.MethodGet, "/v1/souls", http.NoBody)
-	req.AddCookie(&http.Cookie{Name: sessionCookieName, Value: session}) // ТОЛЬКО cookie, без Authorization
+	req.AddCookie(&http.Cookie{Name: sessionCookieName, Value: session}) // ONLY the cookie, no Authorization
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusUnauthorized {
-		t.Fatalf("GET /v1/souls с cookie-only = %d, want 401 (cookie НЕ даёт доступа к /v1); body=%s",
+		t.Fatalf("GET /v1/souls with cookie-only = %d, want 401 (cookie must NOT grant /v1 access); body=%s",
 			rec.Code, rec.Body.String())
 	}
 }
 
-// --- 2. Round-trip: обмен → Verify + принятие на /v1 ---
+// --- 2. Round-trip: exchange → Verify + acceptance on /v1 ---
 
-// TestAuthTokenExchange_ValidCookie_RoundTrip — валидная cookie → 200, token
-// непустой, expires_at≈now+ttl; выданный token принимается Verify И проходит
-// RequireJWT на /v1 (403≠401 от RBAC = «Bearer принят»).
+// TestAuthTokenExchange_ValidCookie_RoundTrip — a valid cookie → 200, token
+// non-empty, expires_at≈now+ttl; the issued token passes Verify AND
+// RequireJWT on /v1 (403≠401 from RBAC means "Bearer accepted").
 func TestAuthTokenExchange_ValidCookie_RoundTrip(t *testing.T) {
 	verifier, issuer := exchangeCrypto(t)
 	session, _ := issuer.Issue("archon-alice", []string{"cluster-admin"}, time.Hour, false)
@@ -161,49 +165,51 @@ func TestAuthTokenExchange_ValidCookie_RoundTrip(t *testing.T) {
 
 	rec := postExchange(h, session, nil)
 	if rec.Code != http.StatusOK {
-		t.Fatalf("POST /auth/token валидная cookie = %d, want 200; body=%s", rec.Code, rec.Body.String())
+		t.Fatalf("POST /auth/token valid cookie = %d, want 200; body=%s", rec.Code, rec.Body.String())
 	}
 	reply := decodeReply(t, rec)
 	if reply.Token == "" {
-		t.Fatal("token пуст")
+		t.Fatal("token is empty")
 	}
 	if d := time.Until(reply.ExpiresAt); d < 9*time.Minute || d > 11*time.Minute {
-		t.Errorf("expires_at через %s, want ≈10m", d)
+		t.Errorf("expires_at in %s, want ≈10m", d)
 	}
 
-	// Round-trip: выданный token верифицируется тем же verifier.
+	// Round-trip: the issued token is verified by the same verifier.
 	claims, err := verifier.Verify(reply.Token)
 	if err != nil {
-		t.Fatalf("выданный Bearer не проходит Verify: %v", err)
+		t.Fatalf("issued Bearer does not pass Verify: %v", err)
 	}
 	if claims.Subject != "archon-alice" {
-		t.Errorf("sub выданного токена = %q, want archon-alice", claims.Subject)
+		t.Errorf("sub of issued token = %q, want archon-alice", claims.Subject)
 	}
-	// F2: expires_at ТОЧНО совпадает с exp внутри токена (выведен self-verify, не
-	// вторым time.Now().Add(ttl)) — клиент планирует re-exchange по верному дедлайну.
+	// F2: expires_at EXACTLY matches exp inside the token (derived from
+	// self-verify, not a second time.Now().Add(ttl)) — the client plans the
+	// re-exchange against the correct deadline.
 	if !reply.ExpiresAt.Equal(claims.ExpiresAt) {
-		t.Errorf("expires_at=%s != exp токена=%s (должны совпадать точно)", reply.ExpiresAt, claims.ExpiresAt)
+		t.Errorf("expires_at=%s != token exp=%s (must match exactly)", reply.ExpiresAt, claims.ExpiresAt)
 	}
 
-	// И принимается на реальном /v1-роуте как Bearer (403 от RBAC ≠ 401).
+	// And it is accepted on a real /v1 route as Bearer (403 from RBAC ≠ 401).
 	req := httptest.NewRequest(http.MethodGet, "/v1/souls", http.NoBody)
 	req.Header.Set("Authorization", "Bearer "+reply.Token)
 	vrec := httptest.NewRecorder()
 	h.ServeHTTP(vrec, req)
 	if vrec.Code == http.StatusUnauthorized {
-		t.Errorf("Bearer из обмена → 401 на /v1 (должен пройти RequireJWT); body=%s", vrec.Body.String())
+		t.Errorf("Bearer from exchange → 401 on /v1 (must pass RequireJWT); body=%s", vrec.Body.String())
 	}
 }
 
-// --- 3. Плохие/отсутствующие cookie → 401 ---
+// --- 3. Bad/missing cookies → 401 ---
 
 func TestAuthTokenExchange_BadCookies_401(t *testing.T) {
 	verifier, issuer := exchangeCrypto(t)
 	td := &AuthTokenDeps{Verifier: verifier, Issuer: issuer, TTL: 10 * time.Minute}
 	h := authTokenRouter(t, verifier, emptyEnforcer(t), td, AuthMethodsDeps{})
 
-	// Протухшая cookie отбивается на ШАГЕ 3 (Verify → ErrExpiredToken), а НЕ на
-	// ttl≤0-guard шага 5 (тот defensive/недостижим без leeway в Verify).
+	// An expired cookie is rejected at STEP 3 (Verify → ErrExpiredToken), NOT
+	// at the ttl≤0 guard of step 5 (that one is defensive/unreachable without
+	// leeway in Verify).
 	expired, _ := issuer.Issue("archon-alice", nil, time.Millisecond, false)
 	time.Sleep(5 * time.Millisecond)
 
@@ -211,10 +217,10 @@ func TestAuthTokenExchange_BadCookies_401(t *testing.T) {
 		name    string
 		session string
 	}{
-		{"нет cookie", ""},
-		{"битая cookie", "not-a-jwt"},
-		{"чужая подпись", strings.Repeat("a", 20) + ".b.c"},
-		{"протухшая cookie (Verify-expired, шаг 3)", expired},
+		{"no cookie", ""},
+		{"malformed cookie", "not-a-jwt"},
+		{"foreign signature", strings.Repeat("a", 20) + ".b.c"},
+		{"expired cookie (Verify-expired, step 3)", expired},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -222,18 +228,19 @@ func TestAuthTokenExchange_BadCookies_401(t *testing.T) {
 			if rec.Code != http.StatusUnauthorized {
 				t.Fatalf("%s: status = %d, want 401; body=%s", tc.name, rec.Code, rec.Body.String())
 			}
-			// raw jwt-library-текст не утекает (anti-oracle).
+			// The raw jwt-library text must not leak (anti-oracle).
 			if strings.Contains(rec.Body.String(), "golang-jwt") || strings.Contains(rec.Body.String(), "token contains") {
-				t.Errorf("%s: тело содержит raw-причину: %s", tc.name, rec.Body.String())
+				t.Errorf("%s: body contains raw cause: %s", tc.name, rec.Body.String())
 			}
 		})
 	}
 }
 
-// --- 4. Субъект ТОЛЬКО из claims cookie ---
+// --- 4. Subject ONLY from cookie claims ---
 
-// TestAuthTokenExchange_SubjectFromClaimsOnly — попытка навязать иной aid через
-// body/query/header НЕ меняет sub выданного токена (нет privilege-escalation).
+// TestAuthTokenExchange_SubjectFromClaimsOnly — an attempt to force a
+// different aid via body/query/header does NOT change the sub of the issued
+// token (no privilege escalation).
 func TestAuthTokenExchange_SubjectFromClaimsOnly(t *testing.T) {
 	verifier, issuer := exchangeCrypto(t)
 	session, _ := issuer.Issue("archon-real", []string{"read-only"}, time.Hour, false)
@@ -256,19 +263,20 @@ func TestAuthTokenExchange_SubjectFromClaimsOnly(t *testing.T) {
 		t.Fatalf("Verify: %v", err)
 	}
 	if claims.Subject != "archon-real" {
-		t.Errorf("sub = %q, want archon-real (не должен браться из body/query/header)", claims.Subject)
+		t.Errorf("sub = %q, want archon-real (must not be taken from body/query/header)", claims.Subject)
 	}
 	if len(claims.Roles) != 1 || claims.Roles[0] != "read-only" {
-		t.Errorf("roles = %v, want [read-only] (из claims cookie, не из body)", claims.Roles)
+		t.Errorf("roles = %v, want [read-only] (from cookie claims, not from body)", claims.Roles)
 	}
 }
 
-// --- 4b. bootstrap_initial переживает обмен ---
+// --- 4b. bootstrap_initial survives the exchange ---
 
-// TestAuthTokenExchange_BootstrapInitialRoundTrip — флаг bootstrap_initial из
-// cookie переносится в выданный токен как есть (true→true, false→false): он держит
-// инвариант «нельзя удалить последнего bootstrap-оператора» (ADR-013), сброс/
-// подъём при обмене сломал бы его.
+// TestAuthTokenExchange_BootstrapInitialRoundTrip — the bootstrap_initial
+// flag from the cookie carries over into the issued token as-is
+// (true→true, false→false): it upholds the invariant "the last bootstrap
+// operator cannot be removed" (ADR-013); resetting/raising it during the
+// exchange would break that.
 func TestAuthTokenExchange_BootstrapInitialRoundTrip(t *testing.T) {
 	verifier, issuer := exchangeCrypto(t)
 	td := &AuthTokenDeps{Verifier: verifier, Issuer: issuer, TTL: 10 * time.Minute}
@@ -285,7 +293,7 @@ func TestAuthTokenExchange_BootstrapInitialRoundTrip(t *testing.T) {
 			t.Fatalf("bootstrap=%v: Verify: %v", bootstrap, err)
 		}
 		if claims.BootstrapInitial != bootstrap {
-			t.Errorf("bootstrap_initial выданного токена = %v, want %v (флаг из claims cookie)",
+			t.Errorf("issued token bootstrap_initial = %v, want %v (flag from cookie claims)",
 				claims.BootstrapInitial, bootstrap)
 		}
 	}
@@ -293,8 +301,8 @@ func TestAuthTokenExchange_BootstrapInitialRoundTrip(t *testing.T) {
 
 // --- 5. Revoked ---
 
-// TestAuthTokenExchange_Revoked_401 — cookie ревокнутого AID → 401, issuer НЕ
-// вызван (токен не выдан).
+// TestAuthTokenExchange_Revoked_401 — a cookie of a revoked AID → 401, the
+// issuer is NOT called (no token issued).
 func TestAuthTokenExchange_Revoked_401(t *testing.T) {
 	verifier, issuer := exchangeCrypto(t)
 	session, _ := issuer.Issue("archon-fired", []string{"cluster-admin"}, time.Hour, false)
@@ -312,16 +320,17 @@ func TestAuthTokenExchange_Revoked_401(t *testing.T) {
 		t.Fatalf("revoked AID: status = %d, want 401; body=%s", rec.Code, rec.Body.String())
 	}
 	if spy.gotAID != "" {
-		t.Errorf("revoked → issuer вызван с %q (токен не должен выдаваться)", spy.gotAID)
+		t.Errorf("revoked → issuer called with %q (no token should be issued)", spy.gotAID)
 	}
 }
 
-// --- 6. Sec-Fetch allowlist (режем ТОЛЬКО cross-site) ---
+// --- 6. Sec-Fetch allowlist (block ONLY cross-site) ---
 
 // TestAuthTokenExchange_SecFetchAllowlist — Sec-Fetch-Site defense-in-depth
-// пиннит, что отсекается РОВНО cross-site (403); same-origin/same-site/none и
-// отсутствие заголовка — пропуск (200 при валидной cookie). Origin намеренно НЕ
-// валидируем: защиту несут SameSite=Strict + Path=/auth + HttpOnly на самой cookie.
+// pins that EXACTLY cross-site is rejected (403); same-origin/same-site/none
+// and an absent header — pass through (200 with a valid cookie). Origin is
+// deliberately NOT validated: protection comes from SameSite=Strict +
+// Path=/auth + HttpOnly on the cookie itself.
 func TestAuthTokenExchange_SecFetchAllowlist(t *testing.T) {
 	verifier, issuer := exchangeCrypto(t)
 	session, _ := issuer.Issue("archon-alice", nil, time.Hour, false)
@@ -330,7 +339,7 @@ func TestAuthTokenExchange_SecFetchAllowlist(t *testing.T) {
 
 	cases := []struct {
 		name       string
-		secFetch   string // "" → заголовок не выставляется
+		secFetch   string // "" → the header is not set
 		setHeader  bool
 		wantStatus int
 	}{
@@ -338,7 +347,7 @@ func TestAuthTokenExchange_SecFetchAllowlist(t *testing.T) {
 		{"same-origin → 200", "same-origin", true, http.StatusOK},
 		{"same-site → 200", "same-site", true, http.StatusOK},
 		{"none → 200", "none", true, http.StatusOK},
-		{"нет заголовка → 200", "", false, http.StatusOK},
+		{"no header → 200", "", false, http.StatusOK},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -355,13 +364,13 @@ func TestAuthTokenExchange_SecFetchAllowlist(t *testing.T) {
 	}
 }
 
-// --- 7. TTL-cap на cookie.exp ---
+// --- 7. TTL cap on cookie.exp ---
 
-// TestAuthTokenExchange_TTLCap — cookie с remaining < exchange_ttl → exp
-// выданного токена ≈ cookie.exp (капнут, не 10m).
+// TestAuthTokenExchange_TTLCap — a cookie with remaining < exchange_ttl →
+// the issued token's exp ≈ cookie.exp (capped, not 10m).
 func TestAuthTokenExchange_TTLCap(t *testing.T) {
 	verifier, issuer := exchangeCrypto(t)
-	// Cookie живёт 30s; exchange_ttl = 10m → выданный exp ≈ 30s.
+	// Cookie lives 30s; exchange_ttl = 10m → issued exp ≈ 30s.
 	session, _ := issuer.Issue("archon-alice", nil, 30*time.Second, false)
 	td := &AuthTokenDeps{Verifier: verifier, Issuer: issuer, TTL: 10 * time.Minute}
 	h := authTokenRouter(t, verifier, emptyEnforcer(t), td, AuthMethodsDeps{})
@@ -371,23 +380,23 @@ func TestAuthTokenExchange_TTLCap(t *testing.T) {
 		t.Fatalf("status = %d, want 200; body=%s", rec.Code, rec.Body.String())
 	}
 	if d := time.Until(decodeReply(t, rec).ExpiresAt); d > time.Minute {
-		t.Errorf("expires_at через %s — не капнут на cookie.exp (~30s), want <1m", d)
+		t.Errorf("expires_at in %s — not capped to cookie.exp (~30s), want <1m", d)
 	}
-	// remaining<=0 (протухшая cookie) → 401 покрыт TestAuthTokenExchange_BadCookies_401.
+	// remaining<=0 (expired cookie) → 401 is covered by TestAuthTokenExchange_BadCookies_401.
 }
 
-// --- 8. GET /auth/methods (публичный) ---
+// --- 8. GET /auth/methods (public) ---
 
-// TestAuthMethods_PublicBooleans — /auth/methods без Authorization → 200 с
-// booleans по deps.
+// TestAuthMethods_PublicBooleans — /auth/methods without Authorization → 200
+// with booleans from deps.
 func TestAuthMethods_PublicBooleans(t *testing.T) {
 	h := authTokenRouter(t, nil, emptyEnforcer(t), nil, AuthMethodsDeps{Password: true, LDAP: true, OIDC: false})
 
-	req := httptest.NewRequest(http.MethodGet, "/auth/methods", http.NoBody) // без Authorization
+	req := httptest.NewRequest(http.MethodGet, "/auth/methods", http.NoBody) // no Authorization
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, req)
 	if rec.Code != http.StatusOK {
-		t.Fatalf("GET /auth/methods = %d, want 200 (публичный); body=%s", rec.Code, rec.Body.String())
+		t.Fatalf("GET /auth/methods = %d, want 200 (public); body=%s", rec.Code, rec.Body.String())
 	}
 	var r AuthMethodsReply
 	if err := json.Unmarshal(rec.Body.Bytes(), &r); err != nil {
@@ -398,9 +407,9 @@ func TestAuthMethods_PublicBooleans(t *testing.T) {
 	}
 }
 
-// TestAuthMethods_PasswordAlwaysTrue — F1 (контракт Q4/ADR-058): password=true при
-// ЛЮБЫХ ldap/oidc (вставка operator-JWT в localStorage доступна всегда, не привязана
-// к endpoint). ldap/oidc отражают deps как есть.
+// TestAuthMethods_PasswordAlwaysTrue — F1 (Q4/ADR-058 contract): password=true
+// for ANY ldap/oidc combo (pasting the operator JWT into localStorage is
+// always available, not tied to the endpoint). ldap/oidc reflect deps as-is.
 func TestAuthMethods_PasswordAlwaysTrue(t *testing.T) {
 	combos := []struct{ ldap, oidc bool }{
 		{false, false}, {true, false}, {false, true}, {true, true},
@@ -419,24 +428,24 @@ func TestAuthMethods_PasswordAlwaysTrue(t *testing.T) {
 			t.Fatalf("ldap=%v oidc=%v: decode: %v", c.ldap, c.oidc, err)
 		}
 		if !r.Password {
-			t.Errorf("ldap=%v oidc=%v: password=false, want ВСЕГДА true (Q4/ADR-058)", c.ldap, c.oidc)
+			t.Errorf("ldap=%v oidc=%v: password=false, want ALWAYS true (Q4/ADR-058)", c.ldap, c.oidc)
 		}
 		if r.LDAP != c.ldap || r.OIDC != c.oidc {
-			t.Errorf("ldap=%v oidc=%v: methods не отражают deps: got {ldap:%v, oidc:%v}", c.ldap, c.oidc, r.LDAP, r.OIDC)
+			t.Errorf("ldap=%v oidc=%v: methods do not reflect deps: got {ldap:%v, oidc:%v}", c.ldap, c.oidc, r.LDAP, r.OIDC)
 		}
 	}
 }
 
-// --- 9. Path=/auth на session-cookie (гард атрибута) ---
+// --- 9. Path=/auth on the session cookie (attribute guard) ---
 
-// TestNewSessionCookie_PathScopedToAuth — cookie сужена до Path=/auth (NIM-77):
-// браузер не шлёт её на /v1//mcp//docs.
+// TestNewSessionCookie_PathScopedToAuth — the cookie is scoped to Path=/auth
+// (NIM-77): the browser does not send it on /v1//mcp//docs.
 func TestNewSessionCookie_PathScopedToAuth(t *testing.T) {
 	c := newSessionCookie("ey.tok.jwt", time.Hour)
 	if c.Path != "/auth" {
-		t.Errorf("session-cookie Path = %q, want /auth (сужение с /)", c.Path)
+		t.Errorf("session-cookie Path = %q, want /auth (narrowed from /)", c.Path)
 	}
 	if !c.HttpOnly || !c.Secure || c.SameSite != http.SameSiteStrictMode {
-		t.Errorf("session-cookie ослабила атрибуты: HttpOnly=%v Secure=%v SameSite=%v", c.HttpOnly, c.Secure, c.SameSite)
+		t.Errorf("session-cookie weakened attributes: HttpOnly=%v Secure=%v SameSite=%v", c.HttpOnly, c.Secure, c.SameSite)
 	}
 }

@@ -659,30 +659,30 @@ mystery: 42
 	}
 }
 
-// TestLoadServiceManifest_TelemetryAbsent — без блока telemetry геттеры дают
-// дефолты (nil-safe), манифест парсится без ошибок (backcompat, NIM-87).
+// TestLoadServiceManifest_TelemetryAbsent — without a telemetry block the getters give
+// defaults (nil-safe), the manifest parses without errors (backcompat, NIM-87).
 func TestLoadServiceManifest_TelemetryAbsent(t *testing.T) {
 	src := "name: svc-golden\nstate_schema_version: 1\nstate_schema:\n  type: object\n"
 	cfg, _, diags, _ := LoadServiceManifestFromBytes("service.yml", []byte(src), ValidateOptions{})
 	if diag.HasErrors(diags) {
 		dump(t, diags)
-		t.Fatal("неожиданные ошибки без блока telemetry")
+		t.Fatal("unexpected errors without a telemetry block")
 	}
 	if cfg.Telemetry != nil {
-		t.Error("Telemetry должен быть nil без блока")
+		t.Error("Telemetry must be nil without a block")
 	}
 	if !cfg.Telemetry.EnabledOrDefault() {
-		t.Error("nil-блок → EnabledOrDefault()=true")
+		t.Error("nil block → EnabledOrDefault()=true")
 	}
 	if got := cfg.Telemetry.IntervalOrDefault(); got != "30s" {
-		t.Errorf("nil-блок → IntervalOrDefault()=30s, got %q", got)
+		t.Errorf("nil block → IntervalOrDefault()=30s, got %q", got)
 	}
 	if got := cfg.Telemetry.CollectorsOrDefault(); len(got) != 5 {
-		t.Errorf("nil-блок → CollectorsOrDefault()=все 5, got %v", got)
+		t.Errorf("nil block → CollectorsOrDefault()=all 5, got %v", got)
 	}
 }
 
-// TestLoadServiceManifest_Telemetry — заданные значения читаются в *bool/*string/[]string.
+// TestLoadServiceManifest_Telemetry — set values are read into *bool/*string/[]string.
 func TestLoadServiceManifest_Telemetry(t *testing.T) {
 	src := `name: svc-golden
 state_schema_version: 1
@@ -696,10 +696,10 @@ telemetry:
 	cfg, _, diags, _ := LoadServiceManifestFromBytes("service.yml", []byte(src), ValidateOptions{})
 	if diag.HasErrors(diags) {
 		dump(t, diags)
-		t.Fatal("валидный блок telemetry дал ошибки")
+		t.Fatal("a valid telemetry block produced errors")
 	}
 	if cfg.Telemetry == nil {
-		t.Fatal("Telemetry nil, ожидался разобранный блок")
+		t.Fatal("Telemetry nil, expected a parsed block")
 	}
 	if cfg.Telemetry.EnabledOrDefault() {
 		t.Error("enabled=false → EnabledOrDefault()=false")
@@ -712,7 +712,7 @@ telemetry:
 	}
 }
 
-// TestLoadServiceManifest_TelemetryBadCollector — неизвестный collector → unknown_collector.
+// TestLoadServiceManifest_TelemetryBadCollector — unknown collector → unknown_collector.
 func TestLoadServiceManifest_TelemetryBadCollector(t *testing.T) {
 	src := `name: svc-golden
 state_schema_version: 1
@@ -724,7 +724,7 @@ telemetry:
 	_, _, diags, _ := LoadServiceManifestFromBytes("service.yml", []byte(src), ValidateOptions{})
 	if !hasCodeAt(diags, "unknown_collector", "$.telemetry.collectors") {
 		dump(t, diags)
-		t.Fatal("ожидался unknown_collector для foobar")
+		t.Fatal("expected unknown_collector for foobar")
 	}
 }
 
@@ -740,11 +740,11 @@ telemetry:
 	_, _, diags, _ := LoadServiceManifestFromBytes("service.yml", []byte(src), ValidateOptions{})
 	if !hasCodeAt(diags, "value_out_of_range", "$.telemetry.interval") {
 		dump(t, diags)
-		t.Fatal("ожидался value_out_of_range для interval 3s (< floor)")
+		t.Fatal("expected value_out_of_range for interval 3s (< floor)")
 	}
 }
 
-// TestLoadServiceManifest_TelemetryIntervalInvalid — interval не парсится → duration_invalid.
+// TestLoadServiceManifest_TelemetryIntervalInvalid — interval fails to parse → duration_invalid.
 func TestLoadServiceManifest_TelemetryIntervalInvalid(t *testing.T) {
 	src := `name: svc-golden
 state_schema_version: 1
@@ -756,12 +756,12 @@ telemetry:
 	_, _, diags, _ := LoadServiceManifestFromBytes("service.yml", []byte(src), ValidateOptions{})
 	if !hasCodeAt(diags, "duration_invalid", "$.telemetry.interval") {
 		dump(t, diags)
-		t.Fatal("ожидался duration_invalid для interval nonsense")
+		t.Fatal("expected duration_invalid for interval nonsense")
 	}
 }
 
-// TestLoadServiceManifest_TelemetryUnknownKey — опечатка под telemetry: ловится
-// reflect-walker-ом как unknown_key (авто, TelemetryConfig не в stop-типах).
+// TestLoadServiceManifest_TelemetryUnknownKey — a typo under telemetry is caught
+// by the reflect-walker as unknown_key (auto, TelemetryConfig is not in the stop types).
 func TestLoadServiceManifest_TelemetryUnknownKey(t *testing.T) {
 	src := `name: svc-golden
 state_schema_version: 1
@@ -773,6 +773,6 @@ telemetry:
 	_, _, diags, _ := LoadServiceManifestFromBytes("service.yml", []byte(src), ValidateOptions{})
 	if !hasCodeAt(diags, "unknown_key", "$.telemetry.bogus") {
 		dump(t, diags)
-		t.Fatal("ожидался unknown_key для опечатки bogus под telemetry")
+		t.Fatal("expected unknown_key for the bogus typo under telemetry")
 	}
 }

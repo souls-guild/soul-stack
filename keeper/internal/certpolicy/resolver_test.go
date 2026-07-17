@@ -13,8 +13,8 @@ import (
 	"github.com/souls-guild/soul-stack/shared/config"
 )
 
-// fakeDB — IncarnationReader-stub: QueryRow отдаёт заданный row (Exec/Query не
-// используются SelectByName, но нужны для method-set-а).
+// fakeDB — IncarnationReader-stub: QueryRow returns the given row (Exec/Query are
+// unused by SelectByName, but are needed for the method set).
 type fakeDB struct{ row pgx.Row }
 
 func (f *fakeDB) Exec(context.Context, string, ...any) (pgconn.CommandTag, error) {
@@ -29,7 +29,7 @@ type errRow struct{ err error }
 
 func (r errRow) Scan(...any) error { return r.err }
 
-// staticRow — pgx.Row-stub, раздаёт заданные значения по scanIncarnation-порядку.
+// staticRow — a pgx.Row stub handing out given values in scanIncarnation order.
 type staticRow struct{ values []any }
 
 func (r staticRow) Scan(dest ...any) error {
@@ -81,8 +81,8 @@ func assign(dest, src any) {
 	}
 }
 
-// incRow строит staticRow с 17 колонками scanIncarnation; важны только
-// service/service_version, прочее — валидные заглушки.
+// incRow builds a staticRow with the 17 scanIncarnation columns; only
+// service/service_version matter, the rest are valid placeholders.
 func incRow(service, serviceVersion string) staticRow {
 	now := time.Now()
 	return staticRow{values: []any{
@@ -150,9 +150,9 @@ func TestResolve_EnabledSection(t *testing.T) {
 	if p.Threshold != 30*24*time.Hour {
 		t.Errorf("Threshold = %v, want 720h", p.Threshold)
 	}
-	// ★ пиновость: lister зван с ref = inc.ServiceVersion, НЕ реестровым ref-ом.
+	// ★ pinning: the lister is called with ref = inc.ServiceVersion, NOT the registry ref.
 	if lister.gotRef != "v9-pinned" {
-		t.Errorf("lister ref = %q, want pinned \"v9-pinned\" (НЕ registry-ref)", lister.gotRef)
+		t.Errorf("lister ref = %q, want pinned \"v9-pinned\" (NOT registry-ref)", lister.gotRef)
 	}
 	if lister.gotName != "redis" || lister.gotGit != "git://redis" {
 		t.Errorf("lister name/git = %q/%q", lister.gotName, lister.gotGit)
@@ -167,13 +167,13 @@ func TestResolve_NoRotationSection(t *testing.T) {
 
 	p, err := r.Resolve(context.Background(), "redis-prod")
 	if err != nil {
-		t.Fatalf("Resolve: %v (nil-секция — не ошибка)", err)
+		t.Fatalf("Resolve: %v (nil section — not an error)", err)
 	}
 	if p.Present || p.Enabled {
 		t.Errorf("Present/Enabled = %v/%v, want false/false", p.Present, p.Enabled)
 	}
 	if len(p.KnownScenarios) != 1 {
-		t.Errorf("KnownScenarios = %v (должны заполняться и без секции)", p.KnownScenarios)
+		t.Errorf("KnownScenarios = %v (must be populated even without the section)", p.KnownScenarios)
 	}
 }
 
@@ -190,7 +190,7 @@ func TestResolve_SectionDisabled(t *testing.T) {
 		t.Fatalf("Resolve: %v", err)
 	}
 	if !p.Present {
-		t.Errorf("Present = false, want true (секция есть)")
+		t.Errorf("Present = false, want true (section exists)")
 	}
 	if p.Enabled {
 		t.Errorf("Enabled = true, want false (enable:false)")
@@ -207,10 +207,10 @@ func TestResolve_IncarnationNotFound(t *testing.T) {
 		t.Fatal("expected error on missing incarnation")
 	}
 	if services.gotService != "" {
-		t.Errorf("services.Resolve не должен вызываться при ошибке SelectByName")
+		t.Errorf("services.Resolve should not be called on a SelectByName error")
 	}
 	if lister.calls != 0 {
-		t.Errorf("lister не должен вызываться при ошибке SelectByName")
+		t.Errorf("lister should not be called on a SelectByName error")
 	}
 }
 
@@ -224,7 +224,7 @@ func TestResolve_ServiceNotRegistered(t *testing.T) {
 		t.Fatal("expected error when service not registered")
 	}
 	if lister.calls != 0 {
-		t.Errorf("lister не должен вызываться при !ok services.Resolve")
+		t.Errorf("lister should not be called when services.Resolve returns !ok")
 	}
 }
 

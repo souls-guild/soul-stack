@@ -52,13 +52,13 @@ type ServiceManifest struct {
 	// flag are treated as true).
 	Lifecycle *LifecycleConfig `yaml:"lifecycle,omitempty"`
 
-	// CertificateRotation — опц. политика авто-ротации TLS-сертов сервиса
-	// (NIM-99). nil = ротация выкл; enable:false/опущен = секция инертна.
+	// CertificateRotation — optional auto-rotation policy for the service's TLS certs
+	// (NIM-99). nil = rotation off; enable:false/omitted = the section is inert.
 	CertificateRotation *CertificateRotationConfig `yaml:"certificate_rotation,omitempty"`
 
-	// Telemetry — опциональная политика host-vitals телеметрии (ADR-072, NIM-87).
-	// Отсутствие блока (nil) = дефолт: enabled, interval 30s, все коллекторы.
-	// Разыменование — через nil-safe геттеры [TelemetryConfig.EnabledOrDefault] /
+	// Telemetry — optional host-vitals telemetry policy (ADR-072, NIM-87).
+	// Absence of the block (nil) = default: enabled, interval 30s, all collectors.
+	// Dereference via the nil-safe getters [TelemetryConfig.EnabledOrDefault] /
 	// [TelemetryConfig.IntervalOrDefault] / [TelemetryConfig.CollectorsOrDefault].
 	Telemetry *TelemetryConfig `yaml:"telemetry,omitempty"`
 }
@@ -96,37 +96,37 @@ func (l *LifecycleConfig) AutoDestroyEnabled() bool {
 	return *l.AutoDestroy
 }
 
-// CertificateRotationConfig — блок `certificate_rotation:` манифеста (NIM-99):
-// поддерживает ли сервис авто-ротацию TLS-сертов, каким операционным сценарием и
-// какой Vault PKI-ролью. Нет секции (nil) → ротация выкл. `enable:false`/опущен →
-// секция инертна (явный opt-in, security-first).
+// CertificateRotationConfig — the `certificate_rotation:` manifest block (NIM-99):
+// whether the service supports auto-rotation of TLS certs, with which operational
+// scenario, and which Vault PKI role. No section (nil) → rotation off. `enable:false`/omitted →
+// the section is inert (explicit opt-in, security-first).
 type CertificateRotationConfig struct {
-	Enable    bool   `yaml:"enable"`              // включает авто-ротацию сертов сервиса
-	Scenario  string `yaml:"scenario,omitempty"`  // сценарий ротации; обязателен при enable:true
-	Threshold string `yaml:"threshold,omitempty"` // запас до истечения (`30d`); дефолт, пока информативен
-	PKIRole   string `yaml:"pki_role,omitempty"`  // Vault PKI-role подписи; обязателен при enable:true
+	Enable    bool   `yaml:"enable"`              // enables auto-rotation of the service's certs
+	Scenario  string `yaml:"scenario,omitempty"`  // rotation scenario; required when enable:true
+	Threshold string `yaml:"threshold,omitempty"` // margin before expiry (`30d`); default, currently informational
+	PKIRole   string `yaml:"pki_role,omitempty"`  // Vault PKI role for signing; required when enable:true
 }
 
-// KnownCollectors — закрытый набор host-vitals коллекторов (ADR-072, NIM-87).
+// KnownCollectors — the closed set of host-vitals collectors (ADR-072, NIM-87).
 var KnownCollectors = []string{"cpu", "mem", "disk", "load", "uptime"}
 
-// TelemetryIntervalFloor — нижняя граница telemetry.interval (anti-DoS floor).
+// TelemetryIntervalFloor — the lower bound of telemetry.interval (anti-DoS floor).
 const TelemetryIntervalFloor = 10 * time.Second
 
-// IsKnownCollector — принадлежит ли name закрытому набору KnownCollectors.
+// IsKnownCollector — whether name belongs to the closed KnownCollectors set.
 func IsKnownCollector(name string) bool {
 	return contains(KnownCollectors, name)
 }
 
-// TelemetryConfig — блок `telemetry:` манифеста сервиса (ADR-072, NIM-87).
-// Enabled — `*bool` (nil → дефолт true): отличает «не задано» от «явно false».
+// TelemetryConfig — the `telemetry:` block of the service manifest (ADR-072, NIM-87).
+// Enabled — `*bool` (nil → default true): distinguishes "not set" from "explicitly false".
 type TelemetryConfig struct {
 	Enabled    *bool    `yaml:"enabled,omitempty"`
 	Interval   *string  `yaml:"interval,omitempty"`
 	Collectors []string `yaml:"collectors,omitempty"`
 }
 
-// EnabledOrDefault — nil-safe: nil-блок ИЛИ nil-флаг → true (backcompat).
+// EnabledOrDefault — nil-safe: a nil block OR a nil flag → true (backcompat).
 func (t *TelemetryConfig) EnabledOrDefault() bool {
 	if t == nil || t.Enabled == nil {
 		return true
@@ -134,7 +134,7 @@ func (t *TelemetryConfig) EnabledOrDefault() bool {
 	return *t.Enabled
 }
 
-// IntervalOrDefault — nil-safe: nil-блок ИЛИ nil/пустой Interval → "30s".
+// IntervalOrDefault — nil-safe: a nil block OR a nil/empty Interval → "30s".
 func (t *TelemetryConfig) IntervalOrDefault() string {
 	if t == nil || t.Interval == nil || *t.Interval == "" {
 		return "30s"
@@ -142,7 +142,7 @@ func (t *TelemetryConfig) IntervalOrDefault() string {
 	return *t.Interval
 }
 
-// CollectorsOrDefault — nil-safe: nil-блок ИЛИ пустой список → копия KnownCollectors.
+// CollectorsOrDefault — nil-safe: a nil block OR an empty list → a copy of KnownCollectors.
 func (t *TelemetryConfig) CollectorsOrDefault() []string {
 	if t == nil || len(t.Collectors) == 0 {
 		out := make([]string, len(KnownCollectors))
@@ -340,11 +340,11 @@ func schemaValidateService(path string, root *ast.MappingNode, m *ServiceManifes
 		out = append(out, validateRevealableSecret(root, i, rs, seenRevealIDs)...)
 	}
 
-	// 7) certificate_rotation — опц. политика ротации (NIM-99).
+	// 7) certificate_rotation — optional rotation policy (NIM-99).
 	out = append(out, validateCertificateRotation(root, m.CertificateRotation)...)
 
-	// 8) telemetry — опц. host-vitals политика (ADR-072, NIM-87). nil-блок
-	// пропускаем (backcompat). Enabled не валидируем; cross-field инвариантов нет.
+	// 8) telemetry — optional host-vitals policy (ADR-072, NIM-87). A nil block
+	// is skipped (backcompat). Enabled is not validated; there are no cross-field invariants.
 	if m.Telemetry != nil {
 		for _, c := range m.Telemetry.Collectors {
 			if !IsKnownCollector(c) {
@@ -377,10 +377,10 @@ func schemaValidateService(path string, root *ast.MappingNode, m *ServiceManifes
 	return out
 }
 
-// validateCertificateRotation — проверка опц. секции `certificate_rotation:`
-// (NIM-99): при enable:true обязательны scenario (snake/kebab, папка
-// scenario/<name>/) и pki_role; threshold — по convention `duration`. nil-секция
-// = ротация выкл, валидно.
+// validateCertificateRotation — validation of the optional `certificate_rotation:` section
+// (NIM-99): when enable:true, scenario (snake/kebab, folder
+// scenario/<name>/) and pki_role are required; threshold — per the `duration` convention. A nil
+// section = rotation off, valid.
 func validateCertificateRotation(root *ast.MappingNode, crt *CertificateRotationConfig) []diag.Diagnostic {
 	if crt == nil {
 		return nil

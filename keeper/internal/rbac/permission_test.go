@@ -2,22 +2,22 @@ package rbac
 
 import "testing"
 
-// TestMatches_ResourceWildcard_NoCrossResourceLeak — guard (NIM-79): action-
-// wildcard `<resource>.*` покрывает ВСЕ действия своего ресурса (в т.ч.
-// чувствительные), но НЕ течёт на другие ресурсы. Matches точно сравнивает
-// Resource (permission.go), поэтому `incarnation.*` не даёт прав на
-// service/role/operator даже при чувствительном action.
+// TestMatches_ResourceWildcard_NoCrossResourceLeak — guard (NIM-79): the action
+// wildcard `<resource>.*` covers ALL actions of its own resource (including
+// sensitive ones), but does NOT leak to other resources. Matches compares
+// Resource exactly (permission.go), so `incarnation.*` grants no rights on
+// service/role/operator even for a sensitive action.
 func TestMatches_ResourceWildcard_NoCrossResourceLeak(t *testing.T) {
 	p := mustParse(t, "incarnation.*")[0]
 
-	// Тот же resource — любой action матчит, включая destroy / view-secrets.
+	// Same resource — any action matches, including destroy / view-secrets.
 	for _, action := range []string{"run", "get", "destroy", "view-secrets"} {
 		if !p.Matches("incarnation", action, nil) {
-			t.Errorf("incarnation.* должна матчить incarnation.%s", action)
+			t.Errorf("incarnation.* should match incarnation.%s", action)
 		}
 	}
 
-	// Другой resource — не матчит ни при каком (в т.ч. чувствительном) action.
+	// Different resource — does not match for any action (including sensitive ones).
 	for _, tc := range []struct{ resource, action string }{
 		{"service", "register"},
 		{"service", "deregister"},
@@ -26,18 +26,18 @@ func TestMatches_ResourceWildcard_NoCrossResourceLeak(t *testing.T) {
 		{"operator", "revoke"},
 	} {
 		if p.Matches(tc.resource, tc.action, nil) {
-			t.Errorf("incarnation.* НЕ должна матчить %s.%s (cross-resource leak)", tc.resource, tc.action)
+			t.Errorf("incarnation.* should NOT match %s.%s (cross-resource leak)", tc.resource, tc.action)
 		}
 	}
 }
 
-// TestMatches_FullWildcard_MatchesEverything — guard (NIM-79): полный `*` =
-// cluster-admin, матчит любой resource/action/context. Отграничивает full-`*`
-// от action-wildcard `<resource>.*` (тот скоупится своим ресурсом).
+// TestMatches_FullWildcard_MatchesEverything — guard (NIM-79): full `*` =
+// cluster-admin, matches any resource/action/context. Distinguishes full-`*`
+// from the action-wildcard `<resource>.*` (which is scoped to its resource).
 func TestMatches_FullWildcard_MatchesEverything(t *testing.T) {
 	star := mustParse(t, "*")[0]
 	if !star.IsWildcard {
-		t.Fatal("`*` должна парситься в IsWildcard=true")
+		t.Fatal("`*` should parse to IsWildcard=true")
 	}
 	for _, tc := range []struct{ resource, action string }{
 		{"incarnation", "run"},
@@ -47,7 +47,7 @@ func TestMatches_FullWildcard_MatchesEverything(t *testing.T) {
 		{"operator", "revoke"},
 	} {
 		if !star.Matches(tc.resource, tc.action, map[string]string{"coven": "prod"}) {
-			t.Errorf("`*` должна матчить %s.%s", tc.resource, tc.action)
+			t.Errorf("`*` should match %s.%s", tc.resource, tc.action)
 		}
 	}
 }

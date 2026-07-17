@@ -5,10 +5,10 @@ import (
 	"strings"
 )
 
-// parseCPUStatLine парсит агрегатную строку `cpu ...` /proc/stat в CPUSample.
-// Total суммирует только user..steal (idx 0..7); guest/guest_nice (8,9) ядро уже
-// учло в user/nice — повторный счёт завысил бы Total на KVM-хостах и занизил cpu%.
-// Idle = idle+iowait (idx 3,4). Мусор/короткая строка → zero-value (best-effort).
+// parseCPUStatLine parses the aggregate `cpu ...` line of /proc/stat into a CPUSample.
+// Total sums only user..steal (idx 0..7); guest/guest_nice (8,9) are already
+// accounted for by the kernel in user/nice — double-counting would inflate Total on
+// KVM hosts and understate cpu%. Idle = idle+iowait (idx 3,4). Garbage/short line → zero-value (best-effort).
 func parseCPUStatLine(line string) CPUSample {
 	fields := strings.Fields(line)
 	if len(fields) < 2 || fields[0] != "cpu" {

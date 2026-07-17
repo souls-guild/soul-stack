@@ -1,11 +1,11 @@
-// Package utilization — Soul-side сбор живой утилизации хоста (CPU%/load/mem/
-// disk/uptime) и заполнение [keeperv1.HostUtilization] для периодической
-// отправки Keeper-у по presence-каналу (ADR-072).
+// Package utilization — Soul-side collection of live host utilization (CPU%/load/mem/
+// disk/uptime) and filling in [keeperv1.HostUtilization] for periodic
+// sending to Keeper over the presence channel (ADR-072).
 //
-// Волатильный слой, отдельный от статического soulprint (ADR-018): свой каденс
-// (~30s), не targeting-факт, хранится в Redis (горячее, не PG). Best-effort как
-// soulprint — недоступный факт остаётся zero-value, Collect не паникует и не
-// возвращает error.
+// A volatile layer, separate from the static soulprint (ADR-018): its own cadence
+// (~30s), not a targeting fact, stored in Redis (hot, not PG). Best-effort like
+// soulprint — an unavailable fact stays zero-value, Collect does not panic and does not
+// return an error.
 package utilization
 
 import (
@@ -16,27 +16,27 @@ import (
 	keeperv1 "github.com/souls-guild/soul-stack/proto/gen/go/keeper/v1"
 )
 
-// Collector собирает снимок утилизации. В отличие от soulprint.Collector —
-// stateful: хранит предыдущий CPUSample, т.к. cpu% считается дельтой тиков
-// между двумя сборами. Вызывается из единственного writer-а сессии (select-loop
-// handleSession) — конкурентных Collect нет, синхронизация не нужна.
+// Collector gathers a utilization snapshot. Unlike soulprint.Collector, it is
+// stateful: it keeps the previous CPUSample, since cpu% is computed as the tick delta
+// between two collections. Called from the session's single writer (select-loop
+// handleSession) — no concurrent Collect calls, no synchronization needed.
 type Collector struct {
 	src  Source
 	prev CPUSample
-	seen bool // был ли уже сэмпл (первый Collect → cpu%=0)
+	seen bool // whether a sample has already been taken (first Collect → cpu%=0)
 }
 
-// NewCollector собирает Collector над переданным Source. Для production —
+// NewCollector builds a Collector over the given Source. For production —
 // utilization.NewCollector(utilization.NewSystemSource()).
 func NewCollector(src Source) *Collector {
 	return &Collector{src: src}
 }
 
-// CollectorSet — набор включённых host-vitals коллекторов (ADR-072, NIM-87):
-// имя → включён. Выключенный коллектор не собирается, его поля в снимке нулевые
-// (для disk — пропускается дорогой statfs). nil-набор = «все включены» (дефолт).
-// Валидные имена — cpu/mem/disk/load/uptime (config.KnownCollectors); неизвестные
-// в наборе игнорируются (Collect читает лишь эти пять ключей).
+// CollectorSet — the set of enabled host-vitals collectors (ADR-072, NIM-87):
+// name → enabled. A disabled collector is not gathered, its fields in the snapshot are zero
+// (for disk — the expensive statfs is skipped). A nil set = "all enabled" (default).
+// Valid names are cpu/mem/disk/load/uptime (config.KnownCollectors); unknown names
+// in the set are ignored (Collect only reads these five keys).
 type CollectorSet map[string]bool
 
 func (s CollectorSet) on(name string) bool {
@@ -46,10 +46,10 @@ func (s CollectorSet) on(name string) bool {
 	return s[name]
 }
 
-// Collect делает один снимок утилизации с collected_at = now, собирая лишь
-// включённые в enabled коллекторы (выключенные → нулевые поля). sid в message нет
-// (authority — mTLS peer cert на Keeper-е, ADR-072); принимается ради симметрии с
-// soulprint.Collect. Ошибок не возвращает.
+// Collect takes a single utilization snapshot with collected_at = now, gathering only
+// the collectors enabled in `enabled` (disabled → zero fields). There is no sid in the message
+// (authority is the mTLS peer cert on Keeper, ADR-072); it is accepted for symmetry with
+// soulprint.Collect. Does not return errors.
 func (c *Collector) Collect(ctx context.Context, _ string, enabled CollectorSet) *keeperv1.HostUtilization {
 	u := &keeperv1.HostUtilization{CollectedAt: timestamppb.Now()}
 	if enabled.on("cpu") {
@@ -72,9 +72,9 @@ func (c *Collector) Collect(ctx context.Context, _ string, enabled CollectorSet)
 	return u
 }
 
-// cpuPct — 100*(busyΔ/totalΔ), busy = Total-Idle, дельта относительно прошлого
-// сэмпла. Первый сэмпл и невозрастающий totalΔ (счётчик не двинулся / reset) →
-// 0; результат зажат 0..100.
+// cpuPct — 100*(busyDelta/totalDelta), busy = Total-Idle, delta relative to the previous
+// sample. The first sample and a non-increasing totalDelta (counter did not move / reset) →
+// 0; the result is clamped to 0..100.
 func (c *Collector) cpuPct(cur CPUSample) float64 {
 	prev, seen := c.prev, c.seen
 	c.prev, c.seen = cur, true

@@ -7,30 +7,32 @@ import (
 	"github.com/souls-guild/soul-stack/shared/config"
 )
 
-// telemetryIntervalCeilSec — верхний sanity-потолок интервала (bound на
-// Redis-TTL, ADR-072/NIM-87). Нижняя граница — config.TelemetryIntervalFloor.
+// telemetryIntervalCeilSec — the upper sanity ceiling for the interval
+// (bound on the Redis TTL, ADR-072/NIM-87). Lower bound —
+// config.TelemetryIntervalFloor.
 const telemetryIntervalCeilSec = 3600
 
-// essence-ключи override-а телеметрии (плоские, как node_exporter_*).
+// essence override keys for telemetry (flat, like node_exporter_*).
 const (
 	essenceKeyTelemetryInterval   = "telemetry_interval"
 	essenceKeyTelemetryCollectors = "telemetry_collectors"
 )
 
-// ResolveEffectiveTelemetry сливает манифест-политику `telemetry:` с
-// essence-override-ом в эффективный конфиг host-vitals (ADR-072, NIM-87). Чистая
-// функция: PG/IO не трогает — тестируется изолированно.
+// ResolveEffectiveTelemetry merges the manifest `telemetry:` policy with the
+// essence override into the effective host-vitals config (ADR-072, NIM-87). A
+// pure function: does not touch PG/IO — tested in isolation.
 //
-//   - enabled  = m.EnabledOrDefault() (essence НЕ переопределяет enabled);
-//   - interval = essence[telemetry_interval] (string) иначе m.IntervalOrDefault();
-//     ParseDuration + clamp [floor, ceil]; непарсибельный override → default 30s;
-//   - collectors = essence[telemetry_collectors] ([]string|[]any) иначе
-//     m.CollectorsOrDefault(); список REPLACE (не union), отфильтрован по
-//     config.IsKnownCollector. Пустой после фильтра (essence целиком из
-//     неизвестных имён) → откат на манифест/дефолт: на провод ВСЕГДА уходит
-//     непустой явный набор (Soul трактует [] как fail-open «все 5» ≠ намерение).
+//   - enabled  = m.EnabledOrDefault() (essence does NOT override enabled);
+//   - interval = essence[telemetry_interval] (string) else m.IntervalOrDefault();
+//     ParseDuration + clamp [floor, ceil]; an unparsable override → default 30s;
+//   - collectors = essence[telemetry_collectors] ([]string|[]any) else
+//     m.CollectorsOrDefault(); the list is REPLACE (not union), filtered by
+//     config.IsKnownCollector. An empty result after filtering (essence made
+//     entirely of unknown names) → falls back to the manifest/default: a
+//     non-empty explicit set ALWAYS goes on the wire (Soul treats [] as
+//     fail-open "all 5", which is not the intent).
 //
-// m == nil (нет блока `telemetry:`) — валиден: nil-safe геттеры дают дефолты.
+// m == nil (no `telemetry:` block) — valid: nil-safe getters return defaults.
 func ResolveEffectiveTelemetry(m *config.TelemetryConfig, essence map[string]any) *keeperv1.TelemetryConfig {
 	interval := m.IntervalOrDefault()
 	if ov, ok := essenceString(essence, essenceKeyTelemetryInterval); ok {
@@ -49,10 +51,10 @@ func ResolveEffectiveTelemetry(m *config.TelemetryConfig, essence map[string]any
 	}
 }
 
-// clampIntervalSec парсит duration-строку и клампит секунды в [floor, ceil].
-// Непарсибельная строка (essence на load НЕ валидируется, в отличие от манифеста)
-// → откат на built-in default 30s: опечатка в essence не должна разгонять весь
-// флот до 10s-флора.
+// clampIntervalSec parses a duration string and clamps seconds to
+// [floor, ceil]. An unparsable string (essence is NOT validated on load,
+// unlike the manifest) → falls back to the built-in default 30s: a typo in
+// essence must not push the whole soul population down to the 10s floor.
 func clampIntervalSec(s string) int32 {
 	floor := int64(config.TelemetryIntervalFloor / time.Second)
 	d, err := config.ParseDuration(s)
@@ -69,10 +71,11 @@ func clampIntervalSec(s string) int32 {
 	return int32(sec)
 }
 
-// filterKnownCollectors оставляет только коллекторы из закрытого набора
-// (config.IsKnownCollector), сохраняя порядок. Всегда новый слайс (не мутирует
-// вход). Пустой результат возможен (список из одних неизвестных) — caller
-// (ResolveEffectiveTelemetry) откатывается на дефолт, на провод пусто не уходит.
+// filterKnownCollectors keeps only collectors from the closed set
+// (config.IsKnownCollector), preserving order. Always a new slice (does not
+// mutate the input). An empty result is possible (a list made entirely of
+// unknowns) — the caller (ResolveEffectiveTelemetry) falls back to the
+// default; empty never goes on the wire.
 func filterKnownCollectors(in []string) []string {
 	out := make([]string, 0, len(in))
 	for _, c := range in {
@@ -83,9 +86,10 @@ func filterKnownCollectors(in []string) []string {
 	return out
 }
 
-// UnknownTelemetryCollectors возвращает essence-collectors, не входящие в
-// закрытый набор (observability: опечатка оператора видна в логах keeper). nil,
-// если ключа нет / он не список строк / все имена известны.
+// UnknownTelemetryCollectors returns essence collectors that are not part of
+// the closed set (observability: an operator typo is visible in keeper logs).
+// nil if the key is missing / it is not a list of strings / all names are
+// known.
 func UnknownTelemetryCollectors(essence map[string]any) []string {
 	ov, ok := essenceStringSlice(essence, essenceKeyTelemetryCollectors)
 	if !ok {
@@ -100,8 +104,9 @@ func UnknownTelemetryCollectors(essence map[string]any) []string {
 	return unknown
 }
 
-// essenceString читает строковый essence-override: (v, true) только если ключ
-// есть И это непустая строка (пустая/не-строка → fallback на манифест).
+// essenceString reads a string essence override: (v, true) only if the key is
+// present AND it is a non-empty string (empty/non-string → fallback to the
+// manifest).
 func essenceString(essence map[string]any, key string) (string, bool) {
 	raw, ok := essence[key]
 	if !ok {
@@ -114,9 +119,10 @@ func essenceString(essence map[string]any, key string) (string, bool) {
 	return s, true
 }
 
-// essenceStringSlice читает списочный essence-override collectors: []string либо
-// []any строк (YAML-unmarshal даёт []any). (nil, false) если ключ отсутствует
-// или не распознан как список строк — тогда fallback на манифест.
+// essenceStringSlice reads the list-shaped essence override for collectors:
+// []string or []any of strings (YAML-unmarshal gives []any). Returns
+// (nil, false) if the key is absent or not recognized as a list of strings —
+// then fallback to the manifest.
 func essenceStringSlice(essence map[string]any, key string) ([]string, bool) {
 	raw, ok := essence[key]
 	if !ok {

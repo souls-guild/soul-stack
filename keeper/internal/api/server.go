@@ -136,13 +136,13 @@ type Deps struct {
 	// *artifact.ServiceLoader.Load → artifact.LoadDirectiveCatalog.
 	ServiceDirectives handlers.ServiceDirectivesLister
 
-	// ServiceTelemetry — TTL-кеш дефолтного (per-service, без essence) host-vitals
-	// telemetry-конфига (манифест `telemetry:` → эффективные дефолты) + допустимый
-	// набор коллекторов для `GET /v1/services/{name}/telemetry` (UI-редактор,
-	// ADR-042/072). Опционален: при nil /telemetry-эндпоинт отвечает 500 (фича не
-	// сконфигурирована); сам service-CRUD остаётся работоспособным. Production-wire-up
-	// в `keeper run` передаёт *serviceregistry.TelemetryCache поверх TelemetryListerFunc,
-	// разрешающего `(name,gitURL,ref)` через *artifact.ServiceLoader.Load →
+	// ServiceTelemetry — TTL cache of the default (per-service, no essence) host-vitals
+	// telemetry config (manifest `telemetry:` -> effective defaults) + the allowed
+	// set of collectors for `GET /v1/services/{name}/telemetry` (UI editor,
+	// ADR-042/072). Optional: when nil the /telemetry endpoint responds 500 (feature not
+	// configured); service-CRUD itself stays operational. Production wire-up
+	// in `keeper run` passes *serviceregistry.TelemetryCache over TelemetryListerFunc,
+	// resolving `(name,gitURL,ref)` via *artifact.ServiceLoader.Load →
 	// essence.ResolveEffectiveTelemetry.
 	ServiceTelemetry handlers.ServiceTelemetryLister
 
@@ -186,12 +186,12 @@ type Deps struct {
 	// the same Redis client as the topology resolver (keeperredis.SoulsStreamAlive).
 	SoulPresence handlers.SoulPresence
 
-	// UtilizationReader — Redis-слой host-vitals для telemetry-эндпоинтов
-	// (NIM-86, ADR-006): GET /v1/souls/{sid}/telemetry и
-	// /v1/incarnations/{name}/telemetry читают снимок утилизации из Redis, НЕ
-	// из PG. Опционален: при nil (single-instance dev / unit без Redis) ридер
-	// no-op (stale/empty). Production-wire-up в `keeper run` передаёт обёртку
-	// над тем же Redis-клиентом (keeperredis.ReadUtilization).
+	// UtilizationReader — Redis layer of host-vitals for the telemetry endpoints
+	// (NIM-86, ADR-006): GET /v1/souls/{sid}/telemetry and
+	// /v1/incarnations/{name}/telemetry read the utilization snapshot from Redis, NOT
+	// from PG. Optional: when nil (single-instance dev / unit without Redis) the reader
+	// is a no-op (stale/empty). Production wire-up in `keeper run` passes a wrapper
+	// over the same Redis client (keeperredis.ReadUtilization).
 	UtilizationReader handlers.UtilizationReader
 
 	// SoulStatsStaleFn — the provider of the "stale" last_seen_at threshold for
@@ -399,21 +399,21 @@ type Deps struct {
 	// AND Redis is live (the flow-state store is cluster-shared): without Redis OIDC is unavailable.
 	OIDCAuth *OIDCAuthDeps
 
-	// AuthToken — обмен session-cookie на короткий Bearer (POST /auth/token,
-	// NIM-77/ADR-058 Вариант B). При nil эндпоинт не монтируется (opt-in, паттерн
-	// LDAPAuth); production-wire-up даёт shared verifier+issuer+rbacHolder.
+	// AuthToken — exchange of session-cookie for a short-lived Bearer (POST /auth/token,
+	// NIM-77/ADR-058 Variant B). When nil the endpoint is not mounted (opt-in, same
+	// pattern as LDAPAuth); production wire-up supplies shared verifier+issuer+rbacHolder.
 	AuthToken *AuthTokenDeps
 
-	// AuthMethods — booleans доступных способов логина для публичного
-	// GET /auth/methods (форма входа UI). Значение: /auth/methods монтируется
-	// безусловно (password всегда доступен).
+	// AuthMethods — booleans of the available login methods for the public
+	// GET /auth/methods (UI login form). Meaning: /auth/methods is mounted
+	// unconditionally (password is always available).
 	AuthMethods AuthMethodsDeps
 
-	// LoginGuard — anti-bruteforce-примитив публичных login-эндпоинтов (ADR-058(g),
-	// HIGH-3): per-IP+per-username throttle + lockout. Реализуется *redis.LoginGuard.
-	// nil (нет Redis) → login-эндпоинты без throttle (passthrough, как Tempo при
-	// nil-limiter). daemon собирает при живом Redis. Используется только при
-	// смонтированных /auth-роутах (non-nil LDAPAuth/OIDCAuth).
+	// LoginGuard — anti-bruteforce primitive for public login endpoints (ADR-058(g),
+	// HIGH-3): per-IP+per-username throttle + lockout. Implemented by *redis.LoginGuard.
+	// nil (no Redis) -> login endpoints without throttle (passthrough, same as Tempo with
+	// a nil limiter). The daemon assembles it when Redis is live. Used only when
+	// /auth routes are mounted (non-nil LDAPAuth/OIDCAuth).
 	LoginGuard apimiddleware.LoginGuard
 
 	// LoginLimitCfg — the static parameters of the anti-bruteforce limit (resolved from
@@ -586,8 +586,8 @@ func NewServer(cfg config.KeeperListenSimple, deps Deps, logger *slog.Logger) (*
 	}
 	soulH := handlers.NewSoulHandler(deps.SoulDB, deps.RBAC, deps.SoulPresence, logger)
 
-	// telemetryH — host-vitals read-эндпоинты (NIM-86). Переиспользует soulH
-	// (scope-гейт + coven-листинг); reader nil (dev/unit без Redis) → no-op.
+	// telemetryH — host-vitals read endpoints (NIM-86). Reuses soulH
+	// (scope gate + coven listing); reader nil (dev/unit without Redis) -> no-op.
 	telemetryH := handlers.NewTelemetryHandler(deps.UtilizationReader, soulH, logger)
 
 	// clusterH is optional: when nil ClusterRegistry `GET /v1/cluster` isn't mounted

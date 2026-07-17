@@ -1,9 +1,9 @@
 package api
 
-// Guard-тесты GET /v1/services/{name}/telemetry (NIM-87): доставка дефолтного
-// (per-service, без essence) host-vitals telemetry-конфига + known_collectors для UI
-// + ETag/Cache-Control immutable + 304. Полная huma-навеска (RequirePermission
-// service.list + huma-операция), injectClaims заменяет RequireJWT.
+// Guard tests for GET /v1/services/{name}/telemetry (NIM-87): delivery of the default
+// (per-service, without essence) host-vitals telemetry config + known_collectors for the UI
+// + ETag/Cache-Control immutable + 304. Full huma wiring (RequirePermission
+// service.list + huma operation), injectClaims replaces RequireJWT.
 
 import (
 	"context"
@@ -24,11 +24,11 @@ import (
 
 const hTelSHA1 = "b2c3d4e5f6a700112233445566778899aabbccde"
 
-// hTelSHARef — ref в immutable-форме (полный 40-hex commit SHA) для теста
-// Cache-Control immutable (parity hDirSHARef).
+// hTelSHARef — a ref in immutable form (full 40-hex commit SHA) for the
+// Cache-Control immutable test (parity with hDirSHARef).
 const hTelSHARef = "89abcdef0123456789abcdef0123456789abcdef"
 
-// hTelLister — стаб ServiceTelemetryLister, отдающий фиксированный каталог.
+// hTelLister — a ServiceTelemetryLister stub returning a fixed catalog.
 type hTelLister struct {
 	catalog *serviceregistry.TelemetryCatalog
 }
@@ -37,7 +37,7 @@ func (l hTelLister) ListServiceTelemetry(context.Context, string, string, string
 	return l.catalog, nil
 }
 
-// hTelErrLister — стаб, возвращающий ошибку git-loader-а (502-tier).
+// hTelErrLister — a stub returning a git-loader error (502-tier).
 type hTelErrLister struct{}
 
 func (hTelErrLister) ListServiceTelemetry(context.Context, string, string, string) (*serviceregistry.TelemetryCatalog, error) {
@@ -51,8 +51,8 @@ func hTelCatalog(collectors []string) *serviceregistry.TelemetryCatalog {
 	}
 }
 
-// telemetryTestRouter — минимальный роутер с /telemetry-роутом (parity
-// directivesTestRouter). lister=nil → 500 «not configured».
+// telemetryTestRouter — a minimal router with the /telemetry route (parity with
+// directivesTestRouter). lister=nil → 500 "not configured".
 func telemetryTestRouter(t *testing.T, lister handlers.ServiceTelemetryLister) *chi.Mux {
 	t.Helper()
 	installHumaErrorOverride()
@@ -87,8 +87,8 @@ type hTelBody struct {
 	KnownCollectors []string `json:"known_collectors"`
 }
 
-// TestServiceTelemetry_FullConfig_ETag — 200 + конфиг + known_collectors; ETag ==
-// "<sha1>"; тег-ref v1.0.0 mutable → Cache-Control no-cache.
+// TestServiceTelemetry_FullConfig_ETag — 200 + config + known_collectors; ETag ==
+// "<sha1>"; tag-ref v1.0.0 mutable → Cache-Control no-cache.
 func TestServiceTelemetry_FullConfig_ETag(t *testing.T) {
 	r := telemetryTestRouter(t, hTelLister{catalog: hTelCatalog([]string{"cpu", "mem"})})
 	rec := httptest.NewRecorder()
@@ -101,7 +101,7 @@ func TestServiceTelemetry_FullConfig_ETag(t *testing.T) {
 		t.Errorf("ETag = %q, want %q (snapshot SHA1)", got, want)
 	}
 	if got, want := rec.Header().Get("Cache-Control"), "no-cache"; got != want {
-		t.Errorf("Cache-Control = %q, want %q (тег-ref v1.0.0 mutable)", got, want)
+		t.Errorf("Cache-Control = %q, want %q (tag-ref v1.0.0 mutable)", got, want)
 	}
 	var body hTelBody
 	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
@@ -117,11 +117,11 @@ func TestServiceTelemetry_FullConfig_ETag(t *testing.T) {
 		t.Errorf("collectors = %v, want [cpu mem]", body.Collectors)
 	}
 	if len(body.KnownCollectors) != len(config.KnownCollectors) {
-		t.Errorf("known_collectors = %v, want %v (полный набор)", body.KnownCollectors, config.KnownCollectors)
+		t.Errorf("known_collectors = %v, want %v (full set)", body.KnownCollectors, config.KnownCollectors)
 	}
 }
 
-// TestServiceTelemetry_CacheControl_ImmutableForSHARef — pinned commit-SHA ref → immutable+год.
+// TestServiceTelemetry_CacheControl_ImmutableForSHARef — pinned commit-SHA ref → immutable+year.
 func TestServiceTelemetry_CacheControl_ImmutableForSHARef(t *testing.T) {
 	r := telemetryTestRouter(t, hTelLister{catalog: hTelCatalog([]string{"cpu"})})
 	rec := httptest.NewRecorder()
@@ -135,7 +135,7 @@ func TestServiceTelemetry_CacheControl_ImmutableForSHARef(t *testing.T) {
 	}
 }
 
-// TestServiceTelemetry_EmptyCollectors_200 — collectors пусто → `[]` (не null) + 200.
+// TestServiceTelemetry_EmptyCollectors_200 — collectors empty → `[]` (not null) + 200.
 func TestServiceTelemetry_EmptyCollectors_200(t *testing.T) {
 	r := telemetryTestRouter(t, hTelLister{catalog: hTelCatalog(nil)})
 	rec := httptest.NewRecorder()
@@ -149,12 +149,12 @@ func TestServiceTelemetry_EmptyCollectors_200(t *testing.T) {
 		t.Fatalf("unmarshal: %v", err)
 	}
 	if string(raw["collectors"]) != "[]" {
-		t.Errorf("collectors = %s, want [] (не null)", raw["collectors"])
+		t.Errorf("collectors = %s, want [] (not null)", raw["collectors"])
 	}
 }
 
-// TestServiceTelemetry_IfNoneMatch_304 — conditional GET: If-None-Match совпал с ETag
-// → 304 без тела.
+// TestServiceTelemetry_IfNoneMatch_304 — conditional GET: If-None-Match matched the ETag
+// → 304 without a body.
 func TestServiceTelemetry_IfNoneMatch_304(t *testing.T) {
 	r := telemetryTestRouter(t, hTelLister{catalog: hTelCatalog([]string{"cpu", "mem"})})
 	rec := httptest.NewRecorder()
@@ -166,14 +166,14 @@ func TestServiceTelemetry_IfNoneMatch_304(t *testing.T) {
 		t.Fatalf("status = %d, want 304; body=%s", rec.Code, rec.Body.String())
 	}
 	if rec.Body.Len() != 0 {
-		t.Errorf("304 тело непустое: %q", rec.Body.String())
+		t.Errorf("304 body not empty: %q", rec.Body.String())
 	}
 	if got := rec.Header().Get("ETag"); got != `"`+hTelSHA1+`"` {
-		t.Errorf("ETag на 304 = %q, want snapshot SHA1", got)
+		t.Errorf("ETag on 304 = %q, want snapshot SHA1", got)
 	}
 }
 
-// TestServiceTelemetry_NilLister_500 — lister не сконфигурирован → 500 «not configured».
+// TestServiceTelemetry_NilLister_500 — lister not configured → 500 "not configured".
 func TestServiceTelemetry_NilLister_500(t *testing.T) {
 	r := telemetryTestRouter(t, nil)
 	rec := httptest.NewRecorder()
@@ -183,7 +183,7 @@ func TestServiceTelemetry_NilLister_500(t *testing.T) {
 	}
 }
 
-// TestServiceTelemetry_LoaderError_502 — ошибка git-loader-а → 502 Bad Gateway.
+// TestServiceTelemetry_LoaderError_502 — a git-loader error → 502 Bad Gateway.
 func TestServiceTelemetry_LoaderError_502(t *testing.T) {
 	r := telemetryTestRouter(t, hTelErrLister{})
 	rec := httptest.NewRecorder()

@@ -138,8 +138,8 @@ func newServiceHandlerWithDirectives(t *testing.T, pool *svcFakePool, directives
 	return NewServiceHandler(svc, nil, nil, nil, nil, directives, nil, nil)
 }
 
-// newServiceHandlerWithTelemetry собирает ServiceHandler поверх pool + telemetry-
-// lister-а (остальные listers nil) для тестов /telemetry-домена.
+// newServiceHandlerWithTelemetry assembles a ServiceHandler on top of pool + the
+// telemetry lister (other listers nil) for /telemetry-domain tests.
 func newServiceHandlerWithTelemetry(t *testing.T, pool *svcFakePool, telemetry ServiceTelemetryLister) *ServiceHandler {
 	t.Helper()
 	svc, err := serviceregistry.NewService(serviceregistry.ServiceDeps{Pool: pool})

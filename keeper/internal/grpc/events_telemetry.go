@@ -16,16 +16,16 @@ import (
 	keeperv1 "github.com/souls-guild/soul-stack/proto/gen/go/keeper/v1"
 )
 
-// serviceArtifactLoader — узкая поверхность загрузчика Service-артефакта
-// (материализация git-снапшота + parse манифеста), нужная [telemetrySource].
-// Реализация — *artifact.ServiceLoader; интерфейс держит источник unit-fake-абельным.
+// serviceArtifactLoader is the narrow surface of the Service artifact loader
+// (git snapshot materialization + manifest parse) needed by [telemetrySource].
+// Implementation - *artifact.ServiceLoader; the interface keeps the source unit-fakeable.
 type serviceArtifactLoader interface {
 	Load(ctx context.Context, ref artifact.ServiceRef) (*artifact.ServiceArtifact, error)
 }
 
-// telemetrySource — реализация [TelemetrySource] (ADR-072, NIM-87) над PG
-// (souls + incarnation + soulprint) + реестром сервисов (git-координаты) +
-// Service-загрузчиком + essence-резолвером. Wire-up в daemon: общий pool +
+// telemetrySource is an implementation of [TelemetrySource] (ADR-072, NIM-87) over PG
+// (souls + incarnation + soulprint) + a service registry (git coordinates) +
+// a Service loader + an essence resolver. Wired up in the daemon: shared pool +
 // d.serviceRegistry + d.serviceLoader + d.essenceResolver.
 type telemetrySource struct {
 	db       soul.ExecQueryRower
@@ -35,15 +35,15 @@ type telemetrySource struct {
 	logger   *slog.Logger
 }
 
-// NewTelemetrySource собирает [TelemetrySource]. db — общий pool (souls +
-// incarnation + soulprint). resolver — реестр сервисов (git-координаты по имени,
-// d.serviceRegistry). loader — Service-загрузчик (d.serviceLoader). ess —
-// essence-резолвер (d.essenceResolver). logger nil → slog.Default().
+// NewTelemetrySource assembles a [TelemetrySource]. db - shared pool (souls +
+// incarnation + soulprint). resolver - service registry (git coordinates by name,
+// d.serviceRegistry). loader - Service loader (d.serviceLoader). ess -
+// essence resolver (d.essenceResolver). logger nil -> slog.Default().
 //
-// resolver обязателен помимо loader-а: [artifact.ServiceLoader.Load] требует
-// git-URL в ServiceRef (пустой Git — hard error), а инкарнация несёт только имя
-// сервиса + версию — URL резолвится реестром (калька oracle_enqueuer / incarnation
-// handlers).
+// resolver is required in addition to the loader: [artifact.ServiceLoader.Load] requires
+// a git URL in ServiceRef (empty Git is a hard error), while an incarnation only carries the
+// service name + version - the URL is resolved by the registry (mirrors oracle_enqueuer /
+// incarnation handlers).
 func NewTelemetrySource(db soul.ExecQueryRower, resolver incarnation.ServiceResolver, loader serviceArtifactLoader, ess *essence.Resolver, logger *slog.Logger) TelemetrySource {
 	if logger == nil {
 		logger = slog.Default()
@@ -51,9 +51,9 @@ func NewTelemetrySource(db soul.ExecQueryRower, resolver incarnation.ServiceReso
 	return &telemetrySource{db: db, resolver: resolver, loader: loader, essence: ess, logger: logger}
 }
 
-// selectIncarnationByCovensSQL — инкарнации, чьё имя (корневая Coven-метка,
-// ADR-008) присутствует в covens хоста. ORDER BY name — детерминизм v1-политики
-// «первая по имени».
+// selectIncarnationByCovensSQL - incarnations whose name (root Coven label,
+// ADR-008) is present in the host's covens. ORDER BY name - determinism of the v1
+// "first by name" policy.
 const selectIncarnationByCovensSQL = `
 SELECT name, service, service_version, spec
 FROM incarnation
@@ -61,21 +61,21 @@ WHERE name = ANY($1)
 ORDER BY name
 `
 
-// ResolveForSID резолвит эффективный telemetry-конфиг хоста (ADR-072, NIM-87):
+// ResolveForSID resolves the host's effective telemetry config (ADR-072, NIM-87):
 //
-//	souls.SelectBySID → covens/soulprint → incarnation по covens (первая по имени)
-//	  → serviceRegistry.Resolve(inc.Service) (ref = inc.ServiceVersion)
-//	  → loader.Load → art.Manifest.Telemetry + essence.Resolve(override)
-//	  → ResolveEffectiveTelemetry(merge+clamp).
+//	souls.SelectBySID -> covens/soulprint -> incarnation by covens (first by name)
+//	  -> serviceRegistry.Resolve(inc.Service) (ref = inc.ServiceVersion)
+//	  -> loader.Load -> art.Manifest.Telemetry + essence.Resolve(override)
+//	  -> ResolveEffectiveTelemetry(merge+clamp).
 //
-// (nil, nil) — «конфига нет»: хост не в реестре / без covens / без инкарнации.
-// broadcast скипается, Soul остаётся на soul-local каденсе. Любой сбой резолва —
-// (nil, err): broadcast проглотит warn-ом, стрим жив.
+// (nil, nil) - "no config": host not in the registry / no covens / no incarnation.
+// broadcast is skipped, Soul stays on the soul-local cadence. Any resolve failure -
+// (nil, err): broadcast swallows it as a warning, the stream stays alive.
 func (s *telemetrySource) ResolveForSID(ctx context.Context, sid string) (*keeperv1.TelemetryConfig, error) {
 	su, err := soul.SelectBySID(ctx, s.db, sid)
 	if err != nil {
 		if errors.Is(err, soul.ErrSoulNotFound) {
-			return nil, nil // хост ещё не в реестре — конфига нет
+			return nil, nil // host not yet in the registry - no config
 		}
 		return nil, fmt.Errorf("telemetry: soul select %q: %w", sid, err)
 	}
@@ -85,7 +85,7 @@ func (s *telemetrySource) ResolveForSID(ctx context.Context, sid string) (*keepe
 		return nil, err
 	}
 	if inc == nil {
-		return nil, nil // нет инкарнации по covens — Soul на soul-local
+		return nil, nil // no incarnation by covens - Soul stays soul-local
 	}
 
 	ref, ok := s.resolver.Resolve(inc.Service)
@@ -93,7 +93,7 @@ func (s *telemetrySource) ResolveForSID(ctx context.Context, sid string) (*keepe
 		return nil, fmt.Errorf("telemetry: service %q of incarnation %q not registered", inc.Service, inc.Name)
 	}
 	if inc.ServiceVersion != "" {
-		// Катим развёрнутой версией сервиса, а не tip-ом ветки (калька
+		// Roll out with the deployed service version, not the branch tip (mirrors
 		// oracle_enqueuer.go / incarnation-handlers).
 		ref.Ref = inc.ServiceVersion
 	}
@@ -113,8 +113,8 @@ func (s *telemetrySource) ResolveForSID(ctx context.Context, sid string) (*keepe
 		return nil, fmt.Errorf("telemetry: essence resolve (%q): %w", inc.Name, err)
 	}
 
-	// Опечатка оператора в essence-collectors (неизвестные имена молча
-	// отфильтровываются) — видима в логах, иначе диагностировать её нечем.
+	// An operator typo in essence-collectors (unknown names are silently
+	// filtered out) - made visible in the logs, otherwise there is nothing to diagnose it with.
 	if unknown := essence.UnknownTelemetryCollectors(essenceMap); len(unknown) > 0 {
 		s.logger.Warn("telemetry: ignored unknown telemetry collectors in essence",
 			slog.String("incarnation", inc.Name),
@@ -122,15 +122,15 @@ func (s *telemetrySource) ResolveForSID(ctx context.Context, sid string) (*keepe
 		)
 	}
 
-	// art.Manifest гарантированно non-nil после успешного Load (иначе Load
-	// вернул бы ошибку); Telemetry может быть nil — ResolveEffectiveTelemetry
-	// nil-safe.
+	// art.Manifest is guaranteed non-nil after a successful Load (otherwise Load
+	// would have returned an error); Telemetry can be nil - ResolveEffectiveTelemetry
+	// is nil-safe.
 	return essence.ResolveEffectiveTelemetry(art.Manifest.Telemetry, essenceMap), nil
 }
 
-// incarnationForCovens возвращает первую по имени инкарнацию, чьё имя есть в
-// covens хоста (v1-политика). Пусто → (nil, nil). >1 совпадений — debug-лог
-// (развилка координатору: хост-член нескольких инкарнаций).
+// incarnationForCovens returns the first-by-name incarnation whose name is in the
+// host's covens (v1 policy). Empty -> (nil, nil). >1 matches -> debug log
+// (a signal to an operator: host member of several incarnations).
 func (s *telemetrySource) incarnationForCovens(ctx context.Context, covens []string) (*incarnation.Incarnation, error) {
 	if len(covens) == 0 {
 		return nil, nil
@@ -170,15 +170,15 @@ func (s *telemetrySource) incarnationForCovens(ctx context.Context, covens []str
 		for i, m := range matches {
 			names[i] = m.Name
 		}
-		s.logger.Debug("telemetry: SID матчит несколько инкарнаций — берём первую по имени (v1)",
+		s.logger.Debug("telemetry: SID matches several incarnations - taking the first by name (v1)",
 			slog.Any("incarnations", names))
 	}
 	return matches[0], nil
 }
 
-// osFamilyForSID best-effort извлекает soulprint.os.family для os-слоя essence.
-// Свежий хост без soulprint (ErrSoulprintNotReceived) / любой сбой → "" (os-слой
-// просто пропускается, не роняет резолв).
+// osFamilyForSID is a best-effort extraction of soulprint.os.family for the essence os layer.
+// A fresh host without soulprint (ErrSoulprintNotReceived) / any failure -> "" (the os layer
+// is simply skipped, does not fail the resolve).
 func (s *telemetrySource) osFamilyForSID(ctx context.Context, sid string) string {
 	rec, err := soul.SelectSoulprint(ctx, s.db, sid)
 	if err != nil {
@@ -191,9 +191,9 @@ func (s *telemetrySource) osFamilyForSID(ctx context.Context, sid string) string
 	return osFamilyOf(facts)
 }
 
-// osFamilyOf извлекает soulprint.os.family из last-reported фактов. Тривиальный
-// дубль scenario-хелпера (сигнатура над map, а не над *topology.HostFacts —
-// экспорт ради 3 строк избыточен).
+// osFamilyOf extracts soulprint.os.family from last-reported facts. A trivial
+// duplicate of the scenario helper (signature over a map, not over *topology.HostFacts -
+// exporting it just for 3 lines would be excessive).
 func osFamilyOf(soulprint map[string]any) string {
 	os, ok := soulprint["os"].(map[string]any)
 	if !ok {
@@ -203,8 +203,8 @@ func osFamilyOf(soulprint map[string]any) string {
 	return family
 }
 
-// specEssence возвращает incarnation.spec.essence (override оператора) или nil.
-// Тривиальный дубль scenario-хелпера (экспорт ради 3 строк избыточен).
+// specEssence returns incarnation.spec.essence (the operator's override) or nil.
+// A trivial duplicate of the scenario helper (exporting it just for 3 lines would be excessive).
 func specEssence(inc *incarnation.Incarnation) map[string]any {
 	if inc.Spec == nil {
 		return nil
@@ -213,21 +213,21 @@ func specEssence(inc *incarnation.Incarnation) map[string]any {
 	return e
 }
 
-// broadcastTelemetryConfig раздаёт Soul-у эффективный telemetry-конфиг host-vitals
-// одним [keeperv1.FromKeeper_TelemetryConfig] (ADR-072, NIM-87). Вызывается из
-// [EventStream] в той же горутине после [broadcastVigils] и до старта send-loop-а
-// — отправка напрямую stream.Send (порядок гарантирован, буфер не задействован).
+// broadcastTelemetryConfig hands the Soul its effective host-vitals telemetry config
+// in a single [keeperv1.FromKeeper_TelemetryConfig] (ADR-072, NIM-87). Called from
+// [EventStream] in the same goroutine after [broadcastVigils] and before the send-loop starts
+// - the send goes directly via stream.Send (order is guaranteed, the buffer is not used).
 //
-// В отличие от snapshot-broadcast-ов (Sigil/Vigil, ReplaceAll даже пустым
-// набором), «нет конфига» (хост без инкарнации) — это НЕ пустой конфиг, а
-// НЕотправка: Soul держит soul-local каденс. Поэтому (nil, nil) от ResolveForSID
-// → тихий скип.
+// Unlike the snapshot broadcasts (Sigil/Vigil, ReplaceAll even with an empty
+// set), "no config" (a host without an incarnation) is NOT an empty config but a
+// non-send: Soul keeps its soul-local cadence. So (nil, nil) from ResolveForSID
+// -> a silent skip.
 //
 // Best-effort:
-//   - TelemetrySource=nil → no-op (dev/unit/push-обвязка);
-//   - ResolveForSID вернул ошибку → warn, скип, стрим жив;
-//   - (nil, nil) → тихий скип (конфига нет);
-//   - stream.Send упал → warn (стрим уже сломан, receive-loop встретит EOF).
+//   - TelemetrySource=nil -> no-op (dev/unit/push wiring);
+//   - ResolveForSID returned an error -> warn, skip, stream stays alive;
+//   - (nil, nil) -> silent skip (no config);
+//   - stream.Send failed -> warn (the stream is already broken, receive-loop will hit EOF).
 func (h *eventStreamHandler) broadcastTelemetryConfig(
 	ctx context.Context,
 	stream grpclib.BidiStreamingServer[keeperv1.FromSoul, keeperv1.FromKeeper],

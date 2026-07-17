@@ -197,10 +197,10 @@ type EventStreamDeps struct {
 	// pool as OracleDeps.DB).
 	VigilSource VigilSource
 
-	// TelemetrySource — резолвер эффективного telemetry-конфига host-vitals
-	// per-SID для connect-time broadcast-а каденса/коллекторов (ADR-072, NIM-87).
-	// nil → broadcast no-op (dev / unit / push-обвязка). Production wire-up
-	// (`keeper run`) передаёт telemetrySource над общим pool + serviceRegistry +
+	// TelemetrySource — resolver of the effective per-SID host-vitals telemetry
+	// config for the connect-time cadence/collectors broadcast (ADR-072, NIM-87).
+	// nil → broadcast no-op (dev / unit / push harness). Production wire-up
+	// (`keeper run`) passes telemetrySource over the shared pool + serviceRegistry +
 	// serviceLoader + essenceResolver.
 	TelemetrySource TelemetrySource
 
@@ -251,14 +251,14 @@ type VigilSource interface {
 	ActiveVigilsForSID(ctx context.Context, sid string) ([]*keeperv1.VigilDef, error)
 }
 
-// TelemetrySource — узкая поверхность резолва эффективного telemetry-конфига
-// хоста (манифест `telemetry:` + essence-override), нужная connect-time
-// broadcast-у ([broadcastTelemetryConfig], ADR-072, NIM-87). Сужение до одного
-// метода изолирует EventStream-handler от цепочки soul→incarnation→service-
-// artifact→essence и допускает fake в unit-тестах. Реализация — [telemetrySource]
-// (events_telemetry.go). (nil, nil) = «конфига нет» (хост без инкарнации):
-// broadcast скипается, Soul держит soul-local каденс (в отличие от Vigil/Sigil
-// ReplaceAll, где пустой набор всё равно шлётся).
+// TelemetrySource — the narrow surface for resolving a host's effective
+// telemetry config (manifest `telemetry:` + essence-override), needed by the
+// connect-time broadcast ([broadcastTelemetryConfig], ADR-072, NIM-87). Narrowing
+// to one method isolates the EventStream handler from the soul->incarnation->
+// service-artifact->essence chain and allows a fake in unit tests. Implementation
+// — [telemetrySource] (events_telemetry.go). (nil, nil) = "no config" (host
+// without an incarnation): the broadcast is skipped, Soul keeps its soul-local
+// cadence (unlike Vigil/Sigil ReplaceAll, where an empty set is still sent).
 type TelemetrySource interface {
 	ResolveForSID(ctx context.Context, sid string) (*keeperv1.TelemetryConfig, error)
 }
@@ -666,11 +666,11 @@ func (h *eventStreamHandler) EventStream(stream grpclib.BidiStreamingServer[keep
 	// [broadcastVigils].
 	h.broadcastVigils(ctx, stream, sid, sessionID)
 
-	// Connect-time broadcast эффективного telemetry-конфига host-vitals (ADR-072,
-	// NIM-87): в той же горутине после VigilSnapshot, ДО старта send-loop-а —
-	// напрямую stream.Send (порядок гарантирован). Резолв per-SID (манифест
-	// `telemetry:` + essence-override). Нет инкарнации → скип (Soul на soul-local
-	// каденсе, не пустой конфиг). Best-effort — см. [broadcastTelemetryConfig].
+	// Connect-time broadcast of the effective host-vitals telemetry config (ADR-072,
+	// NIM-87): in the same goroutine after VigilSnapshot, BEFORE the send-loop
+	// starts — direct stream.Send (order guaranteed). Resolve per-SID (manifest
+	// `telemetry:` + essence-override). No incarnation -> skip (Soul stays on its
+	// soul-local cadence, not an empty config). Best-effort — see [broadcastTelemetryConfig].
 	h.broadcastTelemetryConfig(ctx, stream, sid, sessionID)
 
 	// The stream counts as open after a successful handshake (HelloReply

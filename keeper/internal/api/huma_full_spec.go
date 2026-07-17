@@ -354,9 +354,9 @@ func fullSpecGroups() []specGroup {
 			registerHumaOIDCLogin(api, oidcAuthSpecStub())
 			return nil
 		}},
-		// NIM-77: публичный GET /auth/methods (всегда) + POST /auth/token (обмен
-		// session-cookie→Bearer, Вариант B). Отдельная группа — пути не пересекаются
-		// с ldap/oidc; prefix "/auth" (Operation.Path относителен: /methods, /token).
+		// NIM-77: public GET /auth/methods (always) + POST /auth/token (session-cookie->Bearer
+		// exchange, Option B). Separate group - paths do not overlap
+		// with ldap/oidc; prefix "/auth" (Operation.Path is relative: /methods, /token).
 		{"/auth", func(api huma.API) error {
 			registerHumaAuthMethods(api, authMethodsSpecStub())
 			registerHumaAuthTokenExchange(api, authTokenSpecStub())

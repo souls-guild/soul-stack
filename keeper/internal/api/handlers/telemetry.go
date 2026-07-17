@@ -1,11 +1,11 @@
 package handlers
 
-// Read-path host-vitals (NIM-86, ADR-006): два эндпоинта отдают снимок утилизации
-// Soul-агентов из Redis-слоя (keeperredis), НЕ из PG — телеметрия волатильна и
-// живёт под TTL. GET /v1/souls/{sid}/telemetry — latest+window+freshness одного
-// хоста; GET /v1/incarnations/{name}/telemetry — агрегат latest по хостам
-// инкарнации. RBAC переиспользует soul-read-scope (тот же Purview soul.list +
-// soulpurview.InScope, что soulprint/get).
+// Read-path host-vitals (NIM-86, ADR-006): two endpoints hand back a utilization
+// snapshot of Soul agents from the Redis layer (keeperredis), NOT from PG — telemetry
+// is volatile and lives under a TTL. GET /v1/souls/{sid}/telemetry — latest+window+freshness
+// of one host; GET /v1/incarnations/{name}/telemetry — latest aggregate across the
+// incarnation's hosts. RBAC reuses the soul-read-scope (the same Purview soul.list +
+// soulpurview.InScope as soulprint/get).
 
 import (
 	"context"
@@ -21,32 +21,32 @@ import (
 	"github.com/souls-guild/soul-stack/keeper/internal/soulpurview"
 )
 
-// telemetryAggregateHostCap — потолок хостов в агрегате инкарнации. Флот сверх
-// него усекается (агрегат — обзорный glance здоровья, latest-only на хост).
+// telemetryAggregateHostCap — the host ceiling in an incarnation aggregate. The souls
+// beyond it are truncated (the aggregate is an overview health glance, latest-only per host).
 const telemetryAggregateHostCap = 2000
 
-// UtilizationReader — узкая поверхность Redis-слоя host-vitals, нужная telemetry-
-// handler-у (симметрично [SoulPresence]). Реальная реализация — обёртка над
-// keeperredis.ReadUtilization/ReadUtilizationWindow, собранная в cmd/keeper;
-// nil-Redis (dev/unit) → stale/empty без паники. ok==false → ключа нет (хост не
-// слал утилизацию) — это НЕ ошибка.
+// UtilizationReader — the narrow surface of the Redis host-vitals layer needed by the
+// telemetry handler (symmetric with [SoulPresence]). The real implementation is a wrapper over
+// keeperredis.ReadUtilization/ReadUtilizationWindow, assembled in cmd/keeper;
+// nil-Redis (dev/unit) → stale/empty without a panic. ok==false → no key (the host
+// never sent utilization) — this is NOT an error.
 type UtilizationReader interface {
 	ReadUtilization(ctx context.Context, sid string) (keeperredis.UtilizationSnapshot, bool, error)
 	ReadUtilizationWindow(ctx context.Context, sid string, limit int) ([]keeperredis.UtilizationPoint, error)
 }
 
-// SoulTelemetryReply — 200-тело GET /v1/souls/{sid}/telemetry: latest-снимок +
-// окно для спарклайнов + честная свежесть.
+// SoulTelemetryReply — 200-body of GET /v1/souls/{sid}/telemetry: latest snapshot +
+// a window for sparklines + honest freshness.
 type SoulTelemetryReply struct {
-	SID         string                   `json:"sid" doc:"SID (FQDN) Soul-а"`
-	Stale       bool                     `json:"stale" doc:"true если снимок протух (возраст > TTL) или данных нет"`
-	CollectedAt *time.Time               `json:"collected_at,omitempty" doc:"Soul-side момент сбора"`
-	ReceivedAt  *time.Time               `json:"received_at,omitempty" doc:"Keeper-side момент приёма"`
-	Latest      *UtilizationLatest       `json:"latest,omitempty" doc:"последний снимок (nil если данных нет)"`
-	Window      []UtilizationWindowPoint `json:"window,omitempty" doc:"окно точек для спарклайнов, newest-first"`
+	SID         string                   `json:"sid" doc:"SID (FQDN) of the Soul"`
+	Stale       bool                     `json:"stale" doc:"true if the snapshot is stale (age > TTL) or there is no data"`
+	CollectedAt *time.Time               `json:"collected_at,omitempty" doc:"Soul-side collection moment"`
+	ReceivedAt  *time.Time               `json:"received_at,omitempty" doc:"Keeper-side receive moment"`
+	Latest      *UtilizationLatest       `json:"latest,omitempty" doc:"the latest snapshot (nil if there is no data)"`
+	Window      []UtilizationWindowPoint `json:"window,omitempty" doc:"a window of points for sparklines, newest-first"`
 }
 
-// UtilizationLatest — развёрнутый последний снимок host-vitals.
+// UtilizationLatest — the expanded latest host-vitals snapshot.
 type UtilizationLatest struct {
 	CpuPct     float64         `json:"cpu_pct"`
 	Load1      float64         `json:"load1"`
@@ -59,14 +59,14 @@ type UtilizationLatest struct {
 	Disks      []TelemetryDisk `json:"disks,omitempty"`
 }
 
-// TelemetryDisk — использование одного примонтированного тома.
+// TelemetryDisk — usage of one mounted volume.
 type TelemetryDisk struct {
 	Mount   string `json:"mount"`
 	UsedMb  int64  `json:"used_mb"`
 	TotalMb int64  `json:"total_mb"`
 }
 
-// UtilizationWindowPoint — компактная точка окна (спарклайн).
+// UtilizationWindowPoint — a compact window point (sparkline).
 type UtilizationWindowPoint struct {
 	CollectedAt time.Time `json:"collected_at"`
 	CpuPct      float64   `json:"cpu_pct"`
@@ -75,15 +75,15 @@ type UtilizationWindowPoint struct {
 	MemTotalMb  int64     `json:"mem_total_mb"`
 }
 
-// IncarnationTelemetryReply — 200-тело GET /v1/incarnations/{name}/telemetry:
-// latest+stale на хост (без окна — payload ограничен).
+// IncarnationTelemetryReply — 200-body of GET /v1/incarnations/{name}/telemetry:
+// latest+stale per host (no window — the payload is limited).
 type IncarnationTelemetryReply struct {
 	Incarnation string          `json:"incarnation"`
-	Truncated   bool            `json:"truncated" doc:"true если флот ковена превысил cap и список хостов усечён (обзорный glance)"`
+	Truncated   bool            `json:"truncated" doc:"true if the coven's souls exceeded the cap and the host list is truncated (overview glance)"`
 	Hosts       []HostTelemetry `json:"hosts"`
 }
 
-// HostTelemetry — latest-снимок одного хоста в агрегате инкарнации.
+// HostTelemetry — the latest snapshot of one host in the incarnation aggregate.
 type HostTelemetry struct {
 	SID         string             `json:"sid"`
 	Stale       bool               `json:"stale"`
@@ -91,8 +91,8 @@ type HostTelemetry struct {
 	Latest      *UtilizationLatest `json:"latest,omitempty"`
 }
 
-// TelemetryHandler — read-эндпоинты host-vitals. reader — Redis-слой; souls —
-// переиспользуемый scope-гейт (RBAC single-read + coven-листинг). Все зависимости
+// TelemetryHandler — the read endpoints for host-vitals. reader — the Redis layer; souls —
+// the reusable scope gate (RBAC single-read + coven listing). All dependencies are
 // immutable; safe for concurrent use.
 type TelemetryHandler struct {
 	reader UtilizationReader
@@ -100,9 +100,9 @@ type TelemetryHandler struct {
 	logger *slog.Logger
 }
 
-// NewTelemetryHandler создаёт handler. reader nil (dev/unit без Redis) → no-op
-// (stale/empty). souls — тот же *SoulHandler, что обслуживает /v1/souls (scope-
-// гейт и coven-листинг); nil допустим только в spec-dump.
+// NewTelemetryHandler creates the handler. reader nil (dev/unit without Redis) → no-op
+// (stale/empty). souls — the same *SoulHandler that serves /v1/souls (the scope
+// gate and coven listing); nil is only acceptable in spec-dump.
 func NewTelemetryHandler(reader UtilizationReader, souls *SoulHandler, logger *slog.Logger) *TelemetryHandler {
 	if logger == nil {
 		logger = slog.New(slog.NewJSONHandler(io.Discard, nil))
@@ -113,14 +113,14 @@ func NewTelemetryHandler(reader UtilizationReader, souls *SoulHandler, logger *s
 	return &TelemetryHandler{reader: reader, souls: souls, logger: logger}
 }
 
-// TelemetrySpecStub — непустой *TelemetryHandler для huma-OpenAPI-эмиссии (parity
-// [SoulSpecStub]): при dump доменный handler не вызывается.
+// TelemetrySpecStub — a non-empty *TelemetryHandler for huma-OpenAPI emission (parity
+// with [SoulSpecStub]): during dump the domain handler is not invoked.
 func TelemetrySpecStub() *TelemetryHandler {
 	return &TelemetryHandler{reader: noopUtilizationReader{}, logger: slog.New(slog.NewJSONHandler(io.Discard, nil))}
 }
 
-// noopUtilizationReader — nil-Redis-заглушка: любой хост читается как «данных нет»
-// (stale). Держит handler nil-safe в dev/unit без Redis.
+// noopUtilizationReader — a nil-Redis stub: any host reads as "no data"
+// (stale). Keeps the handler nil-safe in dev/unit without Redis.
 type noopUtilizationReader struct{}
 
 func (noopUtilizationReader) ReadUtilization(context.Context, string) (keeperredis.UtilizationSnapshot, bool, error) {
@@ -131,10 +131,10 @@ func (noopUtilizationReader) ReadUtilizationWindow(context.Context, string, int)
 	return nil, nil
 }
 
-// GetTelemetry — GET /v1/souls/{sid}/telemetry: latest+window+freshness одного
-// хоста. RBAC — тот же scope-гейт, что soulprint/get (вне scope / нет хоста → 404,
-// не палим чужой хост). Отсутствие/протухание утилизации → Stale=true, Latest=nil,
-// БЕЗ ошибки (старый агент → graceful, не 500). Ошибки — *problemError.
+// GetTelemetry — GET /v1/souls/{sid}/telemetry: latest+window+freshness of one
+// host. RBAC — the same scope gate as soulprint/get (out of scope / no host → 404,
+// don't leak someone else's host). Missing/stale utilization → Stale=true, Latest=nil,
+// WITHOUT an error (an old agent → graceful, not 500). Errors — *problemError.
 func (h *TelemetryHandler) GetTelemetry(ctx context.Context, claims *jwt.Claims, sid string) (SoulTelemetryReply, error) {
 	var zero SoulTelemetryReply
 	if h.souls == nil {
@@ -146,10 +146,10 @@ func (h *TelemetryHandler) GetTelemetry(ctx context.Context, claims *jwt.Claims,
 	return h.readSoulTelemetry(ctx, sid, true), nil
 }
 
-// AggregateByIncarnation — GET /v1/incarnations/{name}/telemetry: latest+stale по
-// хостам инкарнации (name — корневой Coven-label). Хосты — soul-read-scoped
-// coven-листинг ([SoulHandler.SIDsInCovenInScope]); пустой флот / нет прав →
-// hosts:[] (НЕ ошибка). Без окна (payload ограничен).
+// AggregateByIncarnation — GET /v1/incarnations/{name}/telemetry: latest+stale across
+// the incarnation's hosts (name — the root Coven label). Hosts — the soul-read-scoped
+// coven listing ([SoulHandler.SIDsInCovenInScope]); an empty coven / no permissions →
+// hosts:[] (NOT an error). No window (the payload is limited).
 func (h *TelemetryHandler) AggregateByIncarnation(ctx context.Context, claims *jwt.Claims, name string) (IncarnationTelemetryReply, error) {
 	reply := IncarnationTelemetryReply{Incarnation: name, Hosts: []HostTelemetry{}}
 	if h.souls == nil {
@@ -157,11 +157,11 @@ func (h *TelemetryHandler) AggregateByIncarnation(ctx context.Context, claims *j
 	}
 	sids, truncated, err := h.souls.SIDsInCovenInScope(ctx, claims, name, telemetryAggregateHostCap)
 	if err != nil {
-		h.logger.Error("telemetry.aggregate: список хостов упал", slog.String("incarnation", name), slog.Any("error", err))
+		h.logger.Error("telemetry.aggregate: host list lookup failed", slog.String("incarnation", name), slog.Any("error", err))
 		return IncarnationTelemetryReply{}, &problemError{problem.New(problem.TypeInternalError, "", "aggregate telemetry failed")}
 	}
 	if truncated {
-		h.logger.Warn("telemetry.aggregate: флот ковена превысил cap — список усечён",
+		h.logger.Warn("telemetry.aggregate: coven's souls exceeded the cap — list truncated",
 			slog.String("incarnation", name), slog.Int("cap", telemetryAggregateHostCap))
 		reply.Truncated = true
 	}
@@ -170,7 +170,7 @@ func (h *TelemetryHandler) AggregateByIncarnation(ctx context.Context, claims *j
 		snap, ok, rerr := h.reader.ReadUtilization(ctx, sid)
 		switch {
 		case rerr != nil:
-			h.logger.Warn("telemetry.aggregate: чтение хоста упало — stale", slog.String("sid", sid), slog.Any("error", rerr))
+			h.logger.Warn("telemetry.aggregate: host read failed — stale", slog.String("sid", sid), slog.Any("error", rerr))
 		case ok:
 			host.Stale = staleByAge(snap.ReceivedAt)
 			host.CollectedAt = nonZeroTime(snap.CollectedAt)
@@ -181,13 +181,13 @@ func (h *TelemetryHandler) AggregateByIncarnation(ctx context.Context, claims *j
 	return reply, nil
 }
 
-// readSoulTelemetry собирает reply одного хоста. Ошибка чтения Redis → stale-пустой
-// reply (телеметрия best-effort, не 500). withWindow=false — только latest.
+// readSoulTelemetry assembles the reply for one host. A Redis read error → a stale-empty
+// reply (telemetry is best-effort, not 500). withWindow=false — latest only.
 func (h *TelemetryHandler) readSoulTelemetry(ctx context.Context, sid string, withWindow bool) SoulTelemetryReply {
 	reply := SoulTelemetryReply{SID: sid, Stale: true}
 	snap, ok, err := h.reader.ReadUtilization(ctx, sid)
 	if err != nil {
-		h.logger.Warn("telemetry: чтение утилизации упало — отдаём stale", slog.String("sid", sid), slog.Any("error", err))
+		h.logger.Warn("telemetry: utilization read failed — returning stale", slog.String("sid", sid), slog.Any("error", err))
 		return reply
 	}
 	if !ok {
@@ -200,7 +200,7 @@ func (h *TelemetryHandler) readSoulTelemetry(ctx context.Context, sid string, wi
 	if withWindow {
 		pts, werr := h.reader.ReadUtilizationWindow(ctx, sid, keeperredis.UtilizationWindowSize)
 		if werr != nil {
-			h.logger.Warn("telemetry: чтение окна упало — окно опущено", slog.String("sid", sid), slog.Any("error", werr))
+			h.logger.Warn("telemetry: window read failed — window omitted", slog.String("sid", sid), slog.Any("error", werr))
 		} else {
 			reply.Window = windowFromPoints(pts)
 		}
@@ -208,12 +208,12 @@ func (h *TelemetryHandler) readSoulTelemetry(ctx context.Context, sid string, wi
 	return reply
 }
 
-// staleByAge — снимок протух, если с приёма прошло больше TTL.
+// staleByAge — the snapshot is stale if more than the TTL has passed since receipt.
 func staleByAge(received time.Time) bool {
 	return time.Since(received) > keeperredis.UtilizationTTL
 }
 
-// nonZeroTime — указатель на непустое время (zero → nil → omitempty).
+// nonZeroTime — a pointer to a non-empty time (zero → nil → omitempty).
 func nonZeroTime(t time.Time) *time.Time {
 	if t.IsZero() {
 		return nil
@@ -250,10 +250,10 @@ func windowFromPoints(pts []keeperredis.UtilizationPoint) []UtilizationWindowPoi
 	return out
 }
 
-// AuthorizeReadScope — RBAC-гейт single-host read host-vitals: тот же scope, что
-// GetTyped/GetSoulprintTyped (валидный sid → есть в реестре → в soul-read-scope
-// оператора). nil → авторизован; *problemError 422/404/500 иначе. Вне scope и
-// not-found дают один 404 (не палим чужой хост).
+// AuthorizeReadScope — the RBAC gate for single-host read host-vitals: the same scope as
+// GetTyped/GetSoulprintTyped (a valid sid → present in the registry → in the operator's
+// soul-read-scope). nil → authorized; *problemError 422/404/500 otherwise. Out-of-scope and
+// not-found both give a single 404 (don't leak someone else's host).
 func (h *SoulHandler) AuthorizeReadScope(ctx context.Context, claims *jwt.Claims, sid string) error {
 	if !soul.ValidSID(sid) {
 		return &problemError{problem.New(problem.TypeValidationFailed, "", "path 'sid' must match "+soul.SIDPattern)}
@@ -272,14 +272,14 @@ func (h *SoulHandler) AuthorizeReadScope(ctx context.Context, claims *jwt.Claims
 	return nil
 }
 
-// SIDsInCovenInScope — SID-ы хостов ковена coven в границах soul-read-scope
-// оператора (тот же Purview soul.list + soulpurview.InScope, что single-read).
-// Перечисляет флот ковена (SelectAll, predicate `$1 = ANY(coven)`) до capN, затем
-// фильтрует InScope (coven+regex-измерения) — под-показ безопасен (fail-closed).
-// truncated=true, когда флот ковена упёрся в capN (список может быть неполным).
-// Пустой scope → nil. ⚠️ cap применяется ДО scope-фильтра: на ковене > capN
-// scoped-оператор, чьи in-scope хосты в хвосте, увидит меньше — приемлемо для
-// обзорного агрегата (fail-closed); полный scope-pushdown — кандидат на NIM-87+.
+// SIDsInCovenInScope — the SIDs of hosts in coven `coven` within the bounds of the
+// operator's soul-read-scope (the same Purview soul.list + soulpurview.InScope as
+// single-read). Lists the coven's souls (SelectAll, predicate `$1 = ANY(coven)`) up to
+// capN, then filters InScope (coven+regex dimensions) — under-showing is safe (fail-closed).
+// truncated=true when the coven's souls hit capN (the list may be incomplete).
+// An empty scope → nil. ⚠️ the cap is applied BEFORE the scope filter: on a coven > capN a
+// scoped operator whose in-scope hosts are in the tail will see fewer — acceptable for an
+// overview aggregate (fail-closed); a full scope-pushdown is a candidate for NIM-87+.
 func (h *SoulHandler) SIDsInCovenInScope(ctx context.Context, claims *jwt.Claims, coven string, capN int) (sids []string, truncated bool, err error) {
 	scope := h.readScopeForClaims(claims)
 	if scope.Empty {

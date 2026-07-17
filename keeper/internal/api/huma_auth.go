@@ -28,21 +28,24 @@ import (
 // delivery, no JSON token in the body). `soul_session` — our own session name.
 const sessionCookieName = "soul_session"
 
-// newSessionCookie собирает Set-Cookie с внутренним JWT — ЕДИНАЯ точка для LDAP и
-// OIDC (ADR-058(g)/(№4): симметрия способов логина обязательна). HttpOnly+Secure+
-// `SameSite=Strict`+`Path=/auth`.
+// newSessionCookie builds the Set-Cookie with the internal JWT — the SINGLE
+// point shared by LDAP and OIDC (ADR-058(g)/(#4): symmetry of login methods is
+// mandatory). HttpOnly+Secure+`SameSite=Strict`+`Path=/auth`.
 //
-// Path=/auth (сужен с `/`, NIM-77): единственный серверный читатель cookie — POST
-// /auth/token (обмен на короткий Bearer, Вариант B). Браузер шлёт cookie ТОЛЬКО на
-// `/auth/*`, не на /v1//mcp//docs — сужение поверхности утечки 24h-credential
-// (cookie не приклеивается к каждому API-запросу).
+// Path=/auth (narrowed from `/`, NIM-77): the only server-side reader of the
+// cookie is POST /auth/token (exchange for a short-lived Bearer, Option B). The
+// browser sends the cookie ONLY to `/auth/*`, not to /v1//mcp//docs — narrowing
+// the leak surface of the 24h credential (the cookie doesn't get attached to
+// every API request).
 //
-// SameSite=Strict безопасен и для OIDC-callback (MED-фикс рассинхрона Lax↔Strict,
-// 2026-06-24): SameSite ограничивает ОТПРАВКУ cookie на cross-site-запрос, а не её
-// УСТАНОВКУ. На cross-site top-level redirect от IdP мы cookie СТАВИМ (Set-Cookie на
-// ответе callback-а), а не читаем; следующий шаг — same-site top-level навигация на
-// `/ui` (302 Location). Эта навигация НЕ шлёт /auth-cookie (Path не совпал), но она
-// и не требуется: сессию UI поднимает через POST /auth/token (обмен на Bearer).
+// SameSite=Strict is safe for the OIDC callback too (MED fix for the Lax↔Strict
+// desync, 2026-06-24): SameSite restricts SENDING the cookie on a cross-site
+// request, not SETTING it. On a cross-site top-level redirect from the IdP we
+// SET the cookie (Set-Cookie on the callback response), we don't read it; the
+// next step is a same-site top-level navigation to `/ui` (302 Location). That
+// navigation does NOT send the /auth-cookie (Path doesn't match), but it doesn't
+// need to: the UI session is bootstrapped via POST /auth/token (exchange for a
+// Bearer).
 func newSessionCookie(token string, ttl time.Duration) *http.Cookie {
 	return &http.Cookie{
 		Name:     sessionCookieName,

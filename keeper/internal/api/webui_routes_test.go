@@ -65,11 +65,11 @@ func webUIRouter(t *testing.T, verifier *keeperjwt.Verifier, webUIEnabled bool) 
 		nil, // tempoVoyageCreateLimits
 		nil, // tempoVoyagePreviewLimits
 		webUIEnabled,
-		nil,                                  // ldapAuth (LDAP не сконфигурирован в тесте)
-		nil,                                  // oidcAuth (OIDC не сконфигурирован в тесте)
-		nil,                                  // authToken (обмен /auth/token не тестируется здесь)
-		AuthMethodsDeps{},                    // authMethods (/auth/methods монтируется, но не проверяется)
-		nil,                                  // loginGuard (anti-bruteforce off в тесте)
+		nil,                                  // ldapAuth (LDAP not configured in the test)
+		nil,                                  // oidcAuth (OIDC not configured in the test)
+		nil,                                  // authToken (the /auth/token exchange is not tested here)
+		AuthMethodsDeps{},                    // authMethods (/auth/methods is mounted but not checked)
+		nil,                                  // loginGuard (anti-bruteforce off in the test)
 		apimiddleware.AuthLoginLimitConfig{}, // loginLimitCfg
 		nil,                                  // soulStatsStaleFn (default 90s in the test)
 		nil,                                  // clusterH (cluster-view not mounted in the test)

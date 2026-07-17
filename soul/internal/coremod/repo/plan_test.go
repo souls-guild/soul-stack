@@ -214,7 +214,7 @@ func TestPlan_Absent_Apt_Exists_Drift(t *testing.T) {
 	assertRootUnchanged(t, root, before)
 }
 
-// TestPlan_Apt_ArchDrift — .list без arch=, желаемый arch → drift, без мутаций.
+// TestPlan_Apt_ArchDrift — .list without arch=, desired arch → drift, no mutations.
 func TestPlan_Apt_ArchDrift(t *testing.T) {
 	m, root := newModule(t, util.PkgMgrApt)
 	if err := os.MkdirAll(m.AptSourcesDir, 0o755); err != nil {
@@ -242,7 +242,7 @@ func TestPlan_Apt_ArchDrift(t *testing.T) {
 	assertRootUnchanged(t, root, before)
 }
 
-// TestPlan_Apt_ArchMatch_Clean — .list с точным arch= совпадает → clean.
+// TestPlan_Apt_ArchMatch_Clean — .list with an exact arch= match → clean.
 func TestPlan_Apt_ArchMatch_Clean(t *testing.T) {
 	m, root := newModule(t, util.PkgMgrApt)
 	if err := os.MkdirAll(m.AptSourcesDir, 0o755); err != nil {

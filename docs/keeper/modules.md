@@ -306,37 +306,37 @@ Generate-if-absent for Vault KV secrets on the keeper side ([ADR-017 amendment 2
 
 ## `core.cert.registered` / `core.cert.issued`
 
-Учёт сервисных TLS-сертов инкарнации в реестре **Warrant** ([ADR-017 amendment 2026-07-01/2026-07-09](../adr/0017-keeper-side-core.md), [naming-rules.md → Warrant](../naming-rules.md#сущности-предметной-области)) — основа авто-ротации Reaper-ом. **Keeper-side**, диспетчер `on: keeper`. Registry-ключ — base `core.cert`; state (`registered` / `issued`) приходит из суффикса адреса через `SplitModuleAddr`. Регистрация в `coremod` условна при заданном `CertStore` (паттерн `core.choir`/`core.vault`) — иначе шаг падает «unknown keeper-side module». Речь про **сервисный** серт (напр. серверный TLS Redis), а не про identity-серт Soul-агента ([SoulSeed](../soul/identity.md), ротируется отдельно).
+Tracking of the incarnation's service TLS certs in the **Warrant** registry ([ADR-017 amendment 2026-07-01/2026-07-09](../adr/0017-keeper-side-core.md), [naming-rules.md → Warrant](../naming-rules.md#domain-entities)) — the basis for auto-rotation by the Reaper. **Keeper-side**, dispatcher `on: keeper`. Registry key — base `core.cert`; state (`registered` / `issued`) comes from the address suffix via `SplitModuleAddr`. Registration in `coremod` is conditional on a configured `CertStore` (same pattern as `core.choir`/`core.vault`) — otherwise the step fails with "unknown keeper-side module". This is about the **service** cert (e.g. Redis server TLS), not the Soul agent's identity cert ([SoulSeed](../soul/identity.md), rotated separately).
 
-Два state — по источнику серта:
+Two states — by cert source:
 
-| State | Что делает | Приватник |
+| State | What it does | Secret handling |
 |---|---|---|
-| `registered` | Заносит **уже выпущенный** серт(ы) в Warrant: читает PEM из Vault по `vault_ref`, извлекает `serial`/`fingerprint`/`not_after` из самого x509. Для сертов, выпущенных вне модуля (напр. первичный `rotate_tls`, уже положивший материал в Vault). | Модуль его не трогает (читает только cert-PEM). |
-| `issued` | **Mint+enroll**: Keeper генерит keypair+CSR → подписывает через Vault PKI → пишет cert+key в Vault (`secret/<service>/<incarnation>/tls/<kind>`) → заносит в Warrant. Один шаг «выпустить и учесть». | Генерится keeper-side, пишется в Vault, **наружу не идёт** (R2-инвариант [ADR-017](../adr/0017-keeper-side-core.md)). |
+| `registered` | Records an **already issued** cert(s) into Warrant: reads the PEM from Vault by `vault_ref`, extracts `serial`/`fingerprint`/`not_after` from the x509 itself. For certs issued outside the module (e.g. the initial `rotate_tls`, which already placed material in Vault). | The module never touches it (only reads the cert PEM). |
+| `issued` | **Mint+enroll**: Keeper generates a keypair+CSR → signs via Vault PKI → writes cert+key to Vault (`secret/<service>/<incarnation>/tls/<kind>`) → records into Warrant. One step "issue and record". | Generated keeper-side, written to Vault, **never leaves** (R2 invariant [ADR-017](../adr/0017-keeper-side-core.md)). |
 
-Без учёта в Warrant Reaper **слеп к сертам** — шаг (`registered` или `issued`) обязан присутствовать в create/`rotate_tls`-сценариях сервиса. Оба идемпотентны (тот же fingerprint → no-op); output/audit несут только несекретные метаданные (`kind`/`serial`/`fingerprint`/`not_after`), не PEM и не приватник.
+Without tracking in Warrant the Reaper is **blind to certs** — the step (`registered` or `issued`) must be present in the service's create/`rotate_tls` scenarios. Both are idempotent (same fingerprint → no-op); output/audit carries only non-secret metadata (`kind`/`serial`/`fingerprint`/`not_after`), never the PEM or the secret material.
 
-### Адресация и сторона
+### Addressing and side
 
 - Namespace `core`, module `cert`, state `registered` / `issued`.
-- Полное имя задачи: `module: core.cert.registered` / `module: core.cert.issued`.
-- Сторона: **Keeper-side**. Шаг **обязан** нести `on: keeper`.
+- Full task name: `module: core.cert.registered` / `module: core.cert.issued`.
+- Side: **Keeper-side**. The step **must** carry `on: keeper`.
 
-### Параметры (`params:`)
+### Parameters (`params:`)
 
-| Параметр | Тип | Обязательность | Default | Описание |
+| Parameter | Type | Required | Default | Description |
 |---|---|---|---|---|
-| `incarnation` | string | required | — | Имя инкарнации, которой принадлежат серты (FK Warrant → `incarnation`). |
-| `auto_rotate` | bool | optional | `true` | Пер-серт флаг авто-ротации (пишется в `warrant.auto_rotate`). `true` = Reaper вправе ротировать серт (при `certificate_rotation.enable` сервиса — это и есть «default да»); `false` = серт учтён, но не ротируется. |
-| `certs` | array of object `{kind, vault_ref}` | **только `registered`** | — | Список уже выпущенных сертов для учёта. `kind` ∈ `cert`/`key`/`ca`; `vault_ref` — путь материала в Vault. |
-| `kind` | string | **только `issued`** | — | Тип выпускаемого TLS-материала; определяет путь записи `secret/<service>/<incarnation>/tls/<kind>`. |
+| `incarnation` | string | required | — | Name of the incarnation the certs belong to (FK Warrant → `incarnation`). |
+| `auto_rotate` | bool | optional | `true` | Per-cert auto-rotate flag (written to `warrant.auto_rotate`). `true` = the Reaper may rotate the cert (with the service's `certificate_rotation.enable` — this is the "default yes"); `false` = the cert is tracked but not rotated. |
+| `certs` | array of object `{kind, vault_ref}` | **`registered` only** | — | List of already issued certs to record. `kind` ∈ `cert`/`key`/`ca`; `vault_ref` — path to the material in Vault. |
+| `kind` | string | **`issued` only** | — | Type of the TLS material being issued; determines the write path `secret/<service>/<incarnation>/tls/<kind>`. |
 
-**★ `pki_role` и `scenario` — НЕ params.** Роль подписи Vault PKI (для `issued`) и имя ротационного сценария (для Reaper) берутся из манифеста сервиса `service.yml::certificate_rotation` ([service/manifest.md → Секция `certificate_rotation`](../service/manifest.md#секция-certificate_rotation)), а **не** из `params` шага. Автор сценария не выбирает произвольную PKI-роль: `pki_role` — из git-reviewed манифеста, mount PKI-engine — из `keeper.yml::vault.pki_mount` ([config.md → `vault`](config.md#vault)). Причина — blast-radius ([ADR-017 amendment 2026-07-09](../adr/0017-keeper-side-core.md)).
+**★ `pki_role` and `scenario` are NOT params.** The Vault PKI signing role (for `issued`) and the rotation scenario name (for the Reaper) are taken from the service manifest `service.yml::certificate_rotation` ([service/manifest.md → Section `certificate_rotation`](../service/manifest.md#certificate_rotation-section)), **not** from the step's `params`. The scenario author does not choose an arbitrary PKI role: `pki_role` comes from the git-reviewed manifest, the PKI-engine mount from `keeper.yml::vault.pki_mount` ([config.md → `vault`](config.md#vault)). Reason — blast-radius ([ADR-017 amendment 2026-07-09](../adr/0017-keeper-side-core.md)).
 
-### Связь с Reaper-правилом `rotate_due_certs`
+### Relation to the Reaper rule `rotate_due_certs`
 
-`core.cert.*` только **заносит** серты в Warrant; авто-ротацию просроченных ведёт Reaper-правило **`rotate_due_certs`** (Reaper-лидер, [ADR-017 amendment 2026-07-01](../adr/0017-keeper-side-core.md)): скан `not_after < NOW()+threshold` → CAS `active→rotating` → keeper-side re-sign (Vault PKI ролью `pki_role` из манифеста) → `WriteKV` → спавн ротационного сценария (`certificate_rotation.scenario`) **на всю инкарнацию сразу**. Три гейта ротации — сервис `certificate_rotation.enable` × пер-серт `auto_rotate` × кластер `keeper.yml::reaper.rules.rotate_due_certs.enabled` (default OFF+dry_run); config-driven источник `scenario`/`pki_role` (Path B, кэш ~60s по пиновой `service_version`) — [ADR-017 amendment 2026-07-09](../adr/0017-keeper-side-core.md). Retention снятых сертов — Reaper-правило `purge_old_certs`.
+`core.cert.*` only **records** certs into Warrant; auto-rotation of expiring ones is driven by the Reaper rule **`rotate_due_certs`** (Reaper leader, [ADR-017 amendment 2026-07-01](../adr/0017-keeper-side-core.md)): scan `not_after < NOW()+threshold` → CAS `active→rotating` → keeper-side re-sign (Vault PKI role `pki_role` from the manifest) → `WriteKV` → spawn the rotation scenario (`certificate_rotation.scenario`) **for the whole incarnation at once**. Three rotation gates — service `certificate_rotation.enable` × per-cert `auto_rotate` × cluster `keeper.yml::reaper.rules.rotate_due_certs.enabled` (default OFF+dry_run); config-driven source of `scenario`/`pki_role` (Path B, ~60s cache pinned by `service_version`) — [ADR-017 amendment 2026-07-09](../adr/0017-keeper-side-core.md). Retention of removed certs — Reaper rule `purge_old_certs`.
 
 ## Auto-synthesis of `core.module.installed` from `service.yml::modules[]`
 

@@ -8,40 +8,40 @@ import (
 	keeperv1 "github.com/souls-guild/soul-stack/proto/gen/go/keeper/v1"
 )
 
-// TelemetryTTL — окно валидности кешированного telemetry-конфига одного
-// `(name, ref)`. Конфиг immutable на git-ref снапшота, но git-URL сервиса может
-// смениться под тем же ref-именем (Update); 60s — парный DirectivesTTL баланс.
+// TelemetryTTL - validity window of the cached telemetry config for one
+// `(name, ref)`. The config is immutable at a git-ref snapshot, but the service's git URL can
+// change under the same ref name (Update); 60s balances the paired DirectivesTTL.
 const TelemetryTTL = 60 * time.Second
 
-// TelemetryCatalog — снапшот-результат lister-а /telemetry: SHA1 материализованного
-// снапшота (служит ETag-ом) + эффективный per-service telemetry-конфиг (манифест-
-// дефолты, без essence). Форма результата lister-а /telemetry (parity DirectiveCatalog).
+// TelemetryCatalog - snapshot result of the /telemetry lister: SHA1 of the materialized
+// snapshot (serves as an ETag) + the effective per-service telemetry config (manifest
+// defaults, without essence). Shape of the /telemetry lister result (parity DirectiveCatalog).
 type TelemetryCatalog struct {
 	SHA1      string
 	Telemetry *keeperv1.TelemetryConfig
 }
 
-// TelemetryLister — поверхность чтения дефолтного (per-service, без essence)
-// telemetry-конфига сервиса + SHA1 снапшота (для ETag) из материализованного
-// снапшота Service-репо для `(name, ref)`. Parity [DirectiveLister]. При nil
-// `GET /v1/services/{name}/telemetry` отвечает 500 «not configured».
+// TelemetryLister - a read surface for the default (per-service, without essence)
+// telemetry config of a service + a snapshot SHA1 (for ETag) from the materialized
+// Service repo snapshot for `(name, ref)`. Parity [DirectiveLister]. When nil,
+// `GET /v1/services/{name}/telemetry` responds 500 "not configured".
 type TelemetryLister interface {
 	ListServiceTelemetry(ctx context.Context, name, gitURL, ref string) (*TelemetryCatalog, error)
 }
 
-// TelemetryListerFunc — функциональная реализация [TelemetryLister] (parity
-// DirectiveListerFunc для wire-up без именованного типа).
+// TelemetryListerFunc - a functional implementation of [TelemetryLister] (parity
+// DirectiveListerFunc for wire-up without a named type).
 type TelemetryListerFunc func(ctx context.Context, name, gitURL, ref string) (*TelemetryCatalog, error)
 
-// ListServiceTelemetry делает функцию реализующей [TelemetryLister].
+// ListServiceTelemetry makes the function implement [TelemetryLister].
 func (f TelemetryListerFunc) ListServiceTelemetry(ctx context.Context, name, gitURL, ref string) (*TelemetryCatalog, error) {
 	return f(ctx, name, gitURL, ref)
 }
 
-// TelemetryCache — in-process TTL-кеш ответа [TelemetryLister.ListServiceTelemetry]
-// по ключу `(name, ref)`. Per-Keeper, не cluster-wide (read-only каталог). Безопасен
-// для конкурентного использования; per-ключ Mutex сериализует «один in-flight loader
-// на ключ» (parity DirectivesCache).
+// TelemetryCache - an in-process TTL cache of the [TelemetryLister.ListServiceTelemetry]
+// response keyed by `(name, ref)`. Per-Keeper, not cluster-wide (read-only catalog). Safe
+// for concurrent use; a per-key Mutex serializes "one in-flight loader
+// per key" (parity DirectivesCache).
 type TelemetryCache struct {
 	lister TelemetryLister
 	ttl    time.Duration
@@ -51,22 +51,22 @@ type TelemetryCache struct {
 	entries map[telemetryKey]*telemetryEntry
 }
 
-// telemetryKey — композитный ключ кеша (name+ref раздельно для инвалидации по name).
+// telemetryKey - a composite cache key (name+ref separate for invalidation by name).
 type telemetryKey struct {
 	name string
 	ref  string
 }
 
-// telemetryEntry — одна запись кеша: lock сериализует concurrent loader одного
-// ключа; catalog/expires — закешированный ответ.
+// telemetryEntry - one cache entry: lock serializes the concurrent loader for one
+// key; catalog/expires is the cached response.
 type telemetryEntry struct {
 	lock    sync.Mutex
 	catalog *TelemetryCatalog
 	expires time.Time
 }
 
-// NewTelemetryCache собирает кеш поверх lister-а. lister обязателен (паника при
-// nil — симметрично NewDirectivesCache); ttl ≤ 0 нормализуется в [TelemetryTTL].
+// NewTelemetryCache assembles a cache on top of a lister. lister is required (panics on
+// nil - symmetric with NewDirectivesCache); ttl <= 0 is normalized to [TelemetryTTL].
 func NewTelemetryCache(lister TelemetryLister, ttl time.Duration) *TelemetryCache {
 	if lister == nil {
 		panic("serviceregistry.NewTelemetryCache: lister is nil")
@@ -82,9 +82,9 @@ func NewTelemetryCache(lister TelemetryLister, ttl time.Duration) *TelemetryCach
 	}
 }
 
-// ListServiceTelemetry возвращает telemetry-конфиг для (name, gitURL, ref). Hit — из
-// кеша; miss/истёкший TTL — один loader-call под per-ключ lock-ом. Кешируется только
-// success (ошибка не кешируется; parity DirectivesCache).
+// ListServiceTelemetry returns the telemetry config for (name, gitURL, ref). A hit comes from
+// the cache; a miss/expired TTL triggers one loader call under the per-key lock. Only
+// success is cached (errors are not cached; parity DirectivesCache).
 func (c *TelemetryCache) ListServiceTelemetry(ctx context.Context, name, gitURL, ref string) (*TelemetryCatalog, error) {
 	entry := c.entryFor(telemetryKey{name: name, ref: ref})
 
@@ -104,9 +104,9 @@ func (c *TelemetryCache) ListServiceTelemetry(ctx context.Context, name, gitURL,
 	return cloneTelemetryCatalog(catalog), nil
 }
 
-// Invalidate сбрасывает все записи кеша для name (все варианты ref). Парная
-// семантика с DirectivesCache.Invalidate: после Update/Deregister Service-а
-// устаревший конфиг исчезает, следующий запрос вернёт конфиг нового git-источника.
+// Invalidate clears all cache entries for name (all ref variants). Paired
+// semantics with DirectivesCache.Invalidate: after a Service Update/Deregister,
+// the stale config disappears and the next request returns the config from the new git source.
 func (c *TelemetryCache) Invalidate(name string) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -117,7 +117,7 @@ func (c *TelemetryCache) Invalidate(name string) {
 	}
 }
 
-// entryFor возвращает (создавая при необходимости) telemetryEntry для key.
+// entryFor returns (creating if needed) the telemetryEntry for key.
 func (c *TelemetryCache) entryFor(key telemetryKey) *telemetryEntry {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -129,8 +129,8 @@ func (c *TelemetryCache) entryFor(key telemetryKey) *telemetryEntry {
 	return e
 }
 
-// cloneTelemetryCatalog — глубокая копия каталога (новый proto-message + копия среза
-// Collectors): защищает кеш от мутации caller-ом. Скалярные поля — по значению.
+// cloneTelemetryCatalog - a deep copy of the catalog (new proto-message + copy of the
+// Collectors slice): protects the cache from caller mutation. Scalar fields are by value.
 func cloneTelemetryCatalog(in *TelemetryCatalog) *TelemetryCatalog {
 	if in == nil {
 		return nil

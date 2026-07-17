@@ -17,8 +17,8 @@ import (
 	keepercert "github.com/souls-guild/soul-stack/keeper/internal/cert"
 )
 
-// genCertPEM выпускает self-signed серт и возвращает его PEM + распарсенный
-// *x509.Certificate (для сверки fingerprint через keepercert.FingerprintFromCert).
+// genCertPEM issues a self-signed cert and returns its PEM + the parsed
+// *x509.Certificate (for fingerprint verification via keepercert.FingerprintFromCert).
 func genCertPEM(t *testing.T) ([]byte, *x509.Certificate) {
 	t.Helper()
 	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
@@ -62,7 +62,7 @@ type kvCall struct {
 
 type fakeKV struct {
 	calls   []kvCall
-	errPath string // WriteKV(path==errPath) вернёт errFor
+	errPath string // WriteKV(path==errPath) returns errFor
 	errFor  error
 }
 
@@ -83,9 +83,9 @@ func TestVaultPath(t *testing.T) {
 	}
 }
 
-// TestVaultPath_RejectsUnsafeSegment — ★ defense-in-depth (NIM-99 review M4): небезопасный
-// service/incarnation (traversal `..` / разделитель `/` / пустой) не даёт пути вне
-// secret/<service>/<incarnation>/ — инвариант вызывающего, панику видно сразу.
+// TestVaultPath_RejectsUnsafeSegment — * defense-in-depth (NIM-99 review M4): an unsafe
+// service/incarnation (traversal `..` / `/` separator / empty) must not yield a path outside
+// secret/<service>/<incarnation>/ — a caller invariant, the panic is immediately visible.
 func TestVaultPath_RejectsUnsafeSegment(t *testing.T) {
 	cases := []struct{ service, incarnation string }{
 		{"a/../b", "inc"},
@@ -98,7 +98,7 @@ func TestVaultPath_RejectsUnsafeSegment(t *testing.T) {
 		func() {
 			defer func() {
 				if recover() == nil {
-					t.Errorf("VaultPath(%q,%q) должен паниковать (небезопасный сегмент)", tc.service, tc.incarnation)
+					t.Errorf("VaultPath(%q,%q) should panic (unsafe segment)", tc.service, tc.incarnation)
 				}
 			}()
 			_ = VaultPath(tc.service, tc.incarnation, keepercert.KindCert)
@@ -138,21 +138,21 @@ func TestIssue_HappyPath(t *testing.T) {
 		t.Fatalf("Issue: %v", err)
 	}
 
-	// csrgen получил CN/DNS.
+	// csrgen received CN/DNS.
 	if gotCN != "redis-prod.tls" {
 		t.Errorf("csrgen CN = %q", gotCN)
 	}
 	if len(gotDNS) != 2 || gotDNS[0] != "redis-prod.tls" || gotDNS[1] != "redis-prod" {
 		t.Errorf("csrgen DNS = %v", gotDNS)
 	}
-	// signer получил mount/role/csr.
+	// signer received mount/role/csr.
 	if signer.gotMount != "pki" || signer.gotRole != "redis-server" {
 		t.Errorf("signer mount/role = %q/%q", signer.gotMount, signer.gotRole)
 	}
 	if signer.gotCSR != "CSR-BYTES" {
 		t.Errorf("signer csr = %q", signer.gotCSR)
 	}
-	// WriteKV позван 2× с правильными путями и полями.
+	// WriteKV called 2x with the right paths and fields.
 	if len(kv.calls) != 2 {
 		t.Fatalf("WriteKV calls = %d, want 2", len(kv.calls))
 	}
@@ -192,8 +192,8 @@ func TestIssue_HappyPath(t *testing.T) {
 	}
 }
 
-// TestIssue_SignerError_NoPrivLeak — ★ R2: при ошибке signer приватник не в тексте
-// ошибки; WriteKV не вызван (sign упал раньше записи).
+// TestIssue_SignerError_NoPrivLeak — * R2: on a signer error, the private material must not be
+// in the error text; WriteKV is not called (sign fails before the write).
 func TestIssue_SignerError_NoPrivLeak(t *testing.T) {
 	const privMarker = "TOP-SECRET-PRIVATE-KEY-DO-NOT-LEAK"
 	signer := &fakeSigner{err: errors.New("vault pki unreachable")}
@@ -210,15 +210,15 @@ func TestIssue_SignerError_NoPrivLeak(t *testing.T) {
 		t.Fatal("expected error from signer")
 	}
 	if strings.Contains(err.Error(), privMarker) {
-		t.Errorf("приватник утёк в текст ошибки: %v", err)
+		t.Errorf("private material leaked into the error text: %v", err)
 	}
 	if len(kv.calls) != 0 {
-		t.Errorf("WriteKV вызван %d раз при упавшем signer (материал не должен писаться)", len(kv.calls))
+		t.Errorf("WriteKV called %d times with a failed signer (material must not be written)", len(kv.calls))
 	}
 }
 
-// TestIssue_KeyWriteError_NoPrivLeak — ★ R2: даже когда падает запись key-строки,
-// приватник не попадает в текст ошибки (WriteKV значения не логирует).
+// TestIssue_KeyWriteError_NoPrivLeak — * R2: even when the key-record write fails,
+// the private material must not appear in the error text (WriteKV does not log values).
 func TestIssue_KeyWriteError_NoPrivLeak(t *testing.T) {
 	const privMarker = "TOP-SECRET-PRIVATE-KEY-DO-NOT-LEAK"
 	keyPath := "secret/x/tls/key"
@@ -236,6 +236,6 @@ func TestIssue_KeyWriteError_NoPrivLeak(t *testing.T) {
 		t.Fatal("expected error from WriteKV(key)")
 	}
 	if strings.Contains(err.Error(), privMarker) {
-		t.Errorf("приватник утёк в текст ошибки при WriteKV(key)-фейле: %v", err)
+		t.Errorf("private material leaked into the error text on a WriteKV(key) failure: %v", err)
 	}
 }

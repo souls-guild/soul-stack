@@ -22,25 +22,25 @@ const (
 	_ = protoimpl.EnforceVersion(protoimpl.MaxVersion - 20)
 )
 
-// HostUtilization — снимок живой утилизации ресурсов хоста (CPU%/load/mem/disk/uptime),
-// лёгкий периодический pulse Soul→Keeper по presence-каналу (ADR-072). Слой отдельный от
-// SoulprintFacts (статические grains, ADR-018): утилизация волатильна, не targeting-факт,
-// свой каденс (~30s). Хранится в Redis (горячее, не PG). only-add по ADR-012(c).
+// HostUtilization — a snapshot of live host resource utilization (CPU%/load/mem/disk/uptime),
+// a lightweight periodic Soul→Keeper pulse over the presence channel (ADR-072). A separate layer
+// from SoulprintFacts (static grains, ADR-018): utilization is volatile, not a targeting fact,
+// with its own cadence (~30s). Stored in Redis (hot, not PG). only-add per ADR-012(c).
 type HostUtilization struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
-	// Soul-side момент сбора; Keeper-side received_at хранится отдельно (freshness).
+	// Soul-side collection moment; Keeper-side received_at is stored separately (freshness).
 	CollectedAt *timestamppb.Timestamp `protobuf:"bytes,1,opt,name=collected_at,json=collectedAt,proto3" json:"collected_at,omitempty"`
-	CpuPct      float64                `protobuf:"fixed64,2,opt,name=cpu_pct,json=cpuPct,proto3" json:"cpu_pct,omitempty"` // 0..100, весь хост, дельта загрузки с прошлого сбора
+	CpuPct      float64                `protobuf:"fixed64,2,opt,name=cpu_pct,json=cpuPct,proto3" json:"cpu_pct,omitempty"` // 0..100, whole host, load delta since the previous collection
 	Load1       float64                `protobuf:"fixed64,3,opt,name=load1,proto3" json:"load1,omitempty"`
 	Load5       float64                `protobuf:"fixed64,4,opt,name=load5,proto3" json:"load5,omitempty"`
 	Load15      float64                `protobuf:"fixed64,5,opt,name=load15,proto3" json:"load15,omitempty"`
 	MemUsedMb   int64                  `protobuf:"varint,6,opt,name=mem_used_mb,json=memUsedMb,proto3" json:"mem_used_mb,omitempty"` // used = total - available
 	MemTotalMb  int64                  `protobuf:"varint,7,opt,name=mem_total_mb,json=memTotalMb,proto3" json:"mem_total_mb,omitempty"`
 	SwapUsedMb  int64                  `protobuf:"varint,8,opt,name=swap_used_mb,json=swapUsedMb,proto3" json:"swap_used_mb,omitempty"`
-	// Утилизация не-виртуальных точек монтирования (tmpfs/proc/sys/cgroup отфильтрованы).
+	// Utilization of non-virtual mount points (tmpfs/proc/sys/cgroup filtered out).
 	Disks     []*DiskUtilization `protobuf:"bytes,9,rep,name=disks,proto3" json:"disks,omitempty"`
 	UptimeSec int64              `protobuf:"varint,10,opt,name=uptime_sec,json=uptimeSec,proto3" json:"uptime_sec,omitempty"`
-	// Эффективный каденс pulse; по нему Keeper масштабирует TTL Redis-ключей (ADR-072, NIM-87).
+	// Effective pulse cadence; Keeper scales Redis key TTLs by it (ADR-072, NIM-87).
 	IntervalSec   int32 `protobuf:"varint,11,opt,name=interval_sec,json=intervalSec,proto3" json:"interval_sec,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -153,7 +153,7 @@ func (x *HostUtilization) GetIntervalSec() int32 {
 	return 0
 }
 
-// DiskUtilization — занятость одной точки монтирования. Объёмы в МБ (как MemoryFacts).
+// DiskUtilization — usage of a single mount point. Volumes in MB (like MemoryFacts).
 type DiskUtilization struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Mount         string                 `protobuf:"bytes,1,opt,name=mount,proto3" json:"mount,omitempty"`
@@ -214,14 +214,14 @@ func (x *DiskUtilization) GetTotalMb() int64 {
 	return 0
 }
 
-// TelemetryConfig — эффективный конфиг сбора host-vitals, резолвится Keeper-ом
-// (манифест telemetry: + essence-override) и доставляется Soul-у через FromKeeper
-// для hot-reload каденса/коллекторов без рестарта (ADR-072, NIM-87).
+// TelemetryConfig — the effective host-vitals collection config, resolved by Keeper
+// (manifest telemetry: + essence-override) and delivered to Soul via FromKeeper
+// for hot-reload of cadence/collectors without a restart (ADR-072, NIM-87).
 type TelemetryConfig struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Enabled       bool                   `protobuf:"varint,1,opt,name=enabled,proto3" json:"enabled,omitempty"`
 	IntervalSec   int32                  `protobuf:"varint,2,opt,name=interval_sec,json=intervalSec,proto3" json:"interval_sec,omitempty"`
-	Collectors    []string               `protobuf:"bytes,3,rep,name=collectors,proto3" json:"collectors,omitempty"` // подмножество {cpu,mem,disk,load,uptime}
+	Collectors    []string               `protobuf:"bytes,3,rep,name=collectors,proto3" json:"collectors,omitempty"` // subset of {cpu,mem,disk,load,uptime}
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }

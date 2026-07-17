@@ -20,7 +20,7 @@ import (
 
 func telStrPtr(s string) *string { return &s }
 
-// --- broadcastTelemetryConfig (fake source + fakeBidiStream из sigil_broadcast_test.go) ---
+// --- broadcastTelemetryConfig (fake source + fakeBidiStream from sigil_broadcast_test.go) ---
 
 type fakeTelemetrySource struct {
 	cfg *keeperv1.TelemetryConfig
@@ -53,7 +53,7 @@ func TestBroadcastTelemetryConfig_SendsConfig(t *testing.T) {
 	h.broadcastTelemetryConfig(context.Background(), stream, "sid", "sess")
 
 	if len(stream.sent) != 1 {
-		t.Fatalf("sent = %d, want 1 (один TelemetryConfig)", len(stream.sent))
+		t.Fatalf("sent = %d, want 1 (one TelemetryConfig)", len(stream.sent))
 	}
 	got := stream.sent[0].GetTelemetryConfig()
 	if got == nil {
@@ -73,9 +73,9 @@ func TestBroadcastTelemetryConfig_NilSourceNoOp(t *testing.T) {
 	}
 }
 
-// TestBroadcastTelemetryConfig_NilConfigSkips — (nil,nil) = «конфига нет» (хост
-// без инкарнации) → НЕотправка (Soul на soul-local каденсе), в отличие от
-// snapshot-broadcast-ов (пустой ReplaceAll всё равно шлётся).
+// TestBroadcastTelemetryConfig_NilConfigSkips — (nil,nil) = "no config" (host
+// without an incarnation) → NO send (Soul stays on its soul-local cadence), unlike
+// snapshot-broadcasts (an empty ReplaceAll is sent regardless).
 func TestBroadcastTelemetryConfig_NilConfigSkips(t *testing.T) {
 	h := newTelemetryBroadcastHandler(t, &fakeTelemetrySource{cfg: nil})
 	stream := &fakeBidiStream{}
@@ -90,7 +90,7 @@ func TestBroadcastTelemetryConfig_ErrorSkips(t *testing.T) {
 	stream := &fakeBidiStream{}
 	h.broadcastTelemetryConfig(context.Background(), stream, "sid", "sess")
 	if len(stream.sent) != 0 {
-		t.Fatalf("sent = %d, want 0 (resolve error → skip, стрим жив)", len(stream.sent))
+		t.Fatalf("sent = %d, want 0 (resolve error → skip, stream stays alive)", len(stream.sent))
 	}
 }
 
@@ -98,14 +98,14 @@ func TestBroadcastTelemetryConfig_SendFailNoPanic(t *testing.T) {
 	cfg := &keeperv1.TelemetryConfig{Enabled: true, IntervalSec: 30}
 	h := newTelemetryBroadcastHandler(t, &fakeTelemetrySource{cfg: cfg})
 	stream := &fakeBidiStream{failAt: 1}
-	// Единственный Send падает → метод не паникует и не всплывает наружу.
+	// The single Send fails → the method must not panic or bubble the error up.
 	h.broadcastTelemetryConfig(context.Background(), stream, "sid", "sess")
 	if len(stream.sent) != 1 {
-		t.Fatalf("sent = %d, want 1 (одна попытка Send, упавшая)", len(stream.sent))
+		t.Fatalf("sent = %d, want 1 (one Send attempt, which failed)", len(stream.sent))
 	}
 }
 
-// --- telemetrySource.ResolveForSID (fake DB precedent из events_oracle_test.go) ---
+// --- telemetrySource.ResolveForSID (fake DB precedent from events_oracle_test.go) ---
 
 type telemetryFakeDB struct {
 	soulCoven []string
@@ -122,7 +122,7 @@ func (f *telemetryFakeDB) QueryRow(_ context.Context, sql string, _ ...any) pgx.
 		// SelectSoulprint: facts NULL → ErrSoulprintNotReceived (osFamily "").
 		return oracleValRow{vals: []any{"host-a.example.com", nil, nil, nil}}
 	}
-	// selectBySIDSQL (soul.SelectBySID): 11 колонок.
+	// selectBySIDSQL (soul.SelectBySID): 11 columns.
 	if f.soulErr != nil {
 		return oracleErrRow{err: f.soulErr}
 	}
@@ -157,16 +157,16 @@ func (f *telemetryFakeLoader) Load(_ context.Context, ref artifact.ServiceRef) (
 	return f.art, f.err
 }
 
-// TestResolveForSID_MergesManifestAndEssence — сквозная цепочка резолва: soul
-// covens → incarnation по covens → ServiceRef(git из реестра, ref=ServiceVersion)
-// → load → манифест `telemetry:` смёржен с essence-override из `_default.yaml`.
+// TestResolveForSID_MergesManifestAndEssence — end-to-end resolve chain: soul
+// covens → incarnation by covens → ServiceRef(git from the registry, ref=ServiceVersion)
+// → load → manifest `telemetry:` merged with the essence-override from `_default.yaml`.
 func TestResolveForSID_MergesManifestAndEssence(t *testing.T) {
 	tmp := t.TempDir()
 	essDir := filepath.Join(tmp, "essence")
 	if err := os.MkdirAll(essDir, 0o755); err != nil {
 		t.Fatalf("mkdir essence: %v", err)
 	}
-	// essence override интервала (collectors не трогаем — берутся из манифеста).
+	// essence override of the interval (collectors untouched — taken from the manifest).
 	if err := os.WriteFile(filepath.Join(essDir, "_default.yaml"), []byte("telemetry_interval: 90s\n"), 0o644); err != nil {
 		t.Fatalf("write _default.yaml: %v", err)
 	}
@@ -191,21 +191,21 @@ func TestResolveForSID_MergesManifestAndEssence(t *testing.T) {
 		t.Fatalf("ResolveForSID: %v", err)
 	}
 	if cfg == nil {
-		t.Fatal("cfg == nil, want эффективный конфиг")
+		t.Fatal("cfg == nil, want an effective config")
 	}
 	if cfg.GetIntervalSec() != 90 {
 		t.Errorf("interval_sec = %d, want 90 (essence override)", cfg.GetIntervalSec())
 	}
 	if len(cfg.GetCollectors()) != 1 || cfg.GetCollectors()[0] != "cpu" {
-		t.Errorf("collectors = %v, want [cpu] (манифест)", cfg.GetCollectors())
+		t.Errorf("collectors = %v, want [cpu] (manifest)", cfg.GetCollectors())
 	}
-	// ServiceVersion override дошёл до загрузчика, git — из реестра.
+	// ServiceVersion override reached the loader, git — from the registry.
 	if loader.gotRef.Ref != "v2.0.0" || loader.gotRef.Git != "file:///repo" || loader.gotRef.Name != "web" {
 		t.Errorf("loader ref = %+v, want {web, file:///repo, v2.0.0}", loader.gotRef)
 	}
 }
 
-// TestResolveForSID_SoulNotFound — хост не в реестре → (nil,nil) (broadcast скип).
+// TestResolveForSID_SoulNotFound — host not in the registry → (nil,nil) (broadcast skipped).
 func TestResolveForSID_SoulNotFound(t *testing.T) {
 	db := &telemetryFakeDB{soulErr: soul.ErrSoulNotFound}
 	src := NewTelemetrySource(db, telemetryFakeResolver{}, &telemetryFakeLoader{}, essence.NewResolver(discardLogger(t)), discardLogger(t))
@@ -215,7 +215,7 @@ func TestResolveForSID_SoulNotFound(t *testing.T) {
 	}
 }
 
-// TestResolveForSID_NoIncarnation — covens есть, но инкарнации нет → (nil,nil).
+// TestResolveForSID_NoIncarnation — covens exist, but there is no incarnation → (nil,nil).
 func TestResolveForSID_NoIncarnation(t *testing.T) {
 	db := &telemetryFakeDB{soulCoven: []string{"web-app"}, incRows: nil}
 	src := NewTelemetrySource(db, telemetryFakeResolver{}, &telemetryFakeLoader{}, essence.NewResolver(discardLogger(t)), discardLogger(t))
@@ -225,19 +225,19 @@ func TestResolveForSID_NoIncarnation(t *testing.T) {
 	}
 }
 
-// TestIncarnationForCovens — v1-политика выбора инкарнации по covens: ≥2 матчей →
-// первая, 1 матч → она, 0 → (nil,nil). Детерминизм «первой» в проде задаёт
-// ORDER BY name в selectIncarnationByCovensSQL; fake отдаёт строки в порядке
-// вставки, поэтому multi-match подаём уже отсортированным по имени (как вернул бы
-// live-PG) — fake сам не сортирует.
+// TestIncarnationForCovens — v1 policy for selecting an incarnation by covens: ≥2 matches →
+// the first, 1 match → that one, 0 → (nil,nil). Determinism of "the first" in prod is set by
+// ORDER BY name in selectIncarnationByCovensSQL; the fake returns rows in insertion
+// order, so multi-match test data is already sorted by name (as live-PG would
+// return it) — the fake itself does not sort.
 func TestIncarnationForCovens(t *testing.T) {
 	cases := []struct {
 		name     string
 		rows     [][]any
-		wantName string // "" → ждём nil
+		wantName string // "" → expect nil
 	}{
 		{
-			name: "≥2 матчей → первая по имени",
+			name: "≥2 matches → the first by name",
 			rows: [][]any{
 				{"alpha", "web", "v1.0.0", []byte(`{}`)},
 				{"beta", "db", "v2.0.0", []byte(`{}`)},
@@ -245,12 +245,12 @@ func TestIncarnationForCovens(t *testing.T) {
 			wantName: "alpha",
 		},
 		{
-			name:     "ровно 1 матч → он",
+			name:     "exactly 1 match → it",
 			rows:     [][]any{{"solo", "web", "v1.0.0", []byte(`{}`)}},
 			wantName: "solo",
 		},
 		{
-			name:     "0 матчей → nil",
+			name:     "0 matches → nil",
 			rows:     nil,
 			wantName: "",
 		},

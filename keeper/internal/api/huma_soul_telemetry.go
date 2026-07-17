@@ -1,8 +1,8 @@
 package api
 
-// GET /v1/souls/{sid}/telemetry — host-vitals одного Soul-а (NIM-86, ADR-006).
-// READ-with-path, БЕЗ audit (эталон soulprint). Reply-типы — handlers.*
-// (handler возвращает их напрямую, huma эмитит схемы по имени Go-типа).
+// GET /v1/souls/{sid}/telemetry - host-vitals of one Soul (NIM-86, ADR-006).
+// READ-with-path, NO audit (soulprint pattern). Reply types are handlers.*
+// (the handler returns them directly, huma emits schemas by Go type name).
 
 import (
 	"context"
@@ -15,7 +15,7 @@ import (
 
 // soulTelemetryInput — huma-input GET /v1/souls/{sid}/telemetry. SID — path.
 type soulTelemetryInput struct {
-	SID string `path:"sid" doc:"SID (FQDN) Soul-а"`
+	SID string `path:"sid" doc:"SID (FQDN) of the Soul"`
 }
 
 // soulTelemetryOutput — huma-output: Body — [handlers.SoulTelemetryReply]
@@ -24,24 +24,24 @@ type soulTelemetryOutput struct {
 	Body handlers.SoulTelemetryReply
 }
 
-// soulTelemetryOperation — метаданные GET /v1/souls/{sid}/telemetry. DefaultStatus=
-// 200. READ-роут: audit НЕ навешан. Permission soul.list (тот же read-tier, что
-// get/soulprint). Errors: 403, 404 (нет soul / вне scope), 422 bad sid, 500.
+// soulTelemetryOperation - metadata for GET /v1/souls/{sid}/telemetry. DefaultStatus=
+// 200. READ route: audit is NOT attached. Permission soul.list (same read-tier as
+// get/soulprint). Errors: 403, 404 (no soul / out of scope), 422 bad sid, 500.
 func soulTelemetryOperation() huma.Operation {
 	return huma.Operation{
 		OperationID:   "getSoulTelemetry",
 		Method:        http.MethodGet,
 		Path:          "/{sid}/telemetry",
-		Summary:       "Host-vitals Soul-а",
-		Description:   "Последний снимок утилизации хоста (CPU/load/mem/disk) + окно для спарклайнов из Redis (NIM-86, ADR-006), со scope-гейтом. Permission soul.list. stale=true если снимок протух или данных нет (старый агент → graceful). Read-only, без audit.",
+		Summary:       "Host-vitals of a Soul",
+		Description:   "Latest host utilization snapshot (CPU/load/mem/disk) + a window for sparklines from Redis (NIM-86, ADR-006), with a scope gate. Permission soul.list. stale=true if the snapshot is stale or there is no data (old agent -> graceful). Read-only, no audit.",
 		Tags:          []string{"soul"},
 		DefaultStatus: http.StatusOK,
 		Errors:        []int{http.StatusForbidden, http.StatusNotFound, http.StatusUnprocessableEntity, http.StatusInternalServerError},
 	}
 }
 
-// registerHumaSoulTelemetry монтирует GET /v1/souls/{sid}/telemetry через huma
-// (READ-with-path, БЕЗ audit). nil telemetryH → не подключается.
+// registerHumaSoulTelemetry mounts GET /v1/souls/{sid}/telemetry via huma
+// (READ-with-path, NO audit). nil telemetryH -> not registered.
 func registerHumaSoulTelemetry(humaAPI huma.API, telemetryH *handlers.TelemetryHandler) {
 	if telemetryH == nil {
 		return

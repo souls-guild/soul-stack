@@ -492,11 +492,11 @@ func parseTTL(raw, fieldName string, def time.Duration) (time.Duration, error) {
 	return d, nil
 }
 
-// minExchangeTTL — floor на auth.jwt.exchange_ttl: значение ниже поднимается до
-// него (защита от мисконфига, при котором обмен cookie→Bearer стал бы бессмысленным).
+// minExchangeTTL is a floor on auth.jwt.exchange_ttl: a lower value is raised
+// to it (protection from a misconfig that would make the cookie->Bearer exchange pointless).
 const minExchangeTTL = 1 * time.Minute
 
-// clampExchangeTTL поднимает d до minExchangeTTL, если он ниже floor.
+// clampExchangeTTL raises d to minExchangeTTL if it is below the floor.
 func clampExchangeTTL(d time.Duration) time.Duration {
 	if d < minExchangeTTL {
 		return minExchangeTTL
@@ -504,9 +504,9 @@ func clampExchangeTTL(d time.Duration) time.Duration {
 	return d
 }
 
-// envTruthy читает env-переменную как boolean-флаг через [strconv.ParseBool]
-// (принимает 1/t/T/true/TRUE и т.п.). Пустая или невалидная строка → false:
-// env-override не должен «случайно» включать режим из-за опечатки/мусора.
+// envTruthy reads an env variable as a boolean flag via [strconv.ParseBool]
+// (accepts 1/t/T/true/TRUE etc). An empty or invalid string -> false:
+// an env-override must not "accidentally" enable a mode due to a typo/garbage.
 func envTruthy(name string) bool {
 	v := os.Getenv(name)
 	if v == "" {

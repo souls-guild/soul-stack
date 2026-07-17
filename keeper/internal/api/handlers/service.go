@@ -78,13 +78,13 @@ type ServiceDirectivesLister interface {
 	ListDirectives(ctx context.Context, name, gitURL, ref string) (*artifact.DirectiveCatalog, error)
 }
 
-// ServiceTelemetryLister — поверхность чтения дефолтного (per-service, без essence)
-// host-vitals telemetry-конфига сервиса + SHA1 снапшота (для ETag) из
-// материализованного снапшота Service-репо для `(name, ref)`. Симметрично
-// [ServiceDirectivesLister]: handler принимает минимальную зависимость, реальный
-// git-clone + чтение манифеста (`telemetry:`) + резолв эффективных дефолтов —
-// внутри реализации (TTL-кеш + ServiceLoader). При nil
-// `GET /v1/services/{name}/telemetry` отвечает 500 «not configured».
+// ServiceTelemetryLister — read surface for the default (per-service, without essence)
+// host-vitals telemetry config of the service + SHA1 snapshot (for ETag) from the
+// materialized Service repo snapshot for `(name, ref)`. Symmetric to
+// [ServiceDirectivesLister]: the handler takes a minimal dependency, the real
+// git-clone + manifest read (`telemetry:`) + effective-defaults resolution live
+// inside the implementation (TTL cache + ServiceLoader). With nil,
+// `GET /v1/services/{name}/telemetry` returns 500 "not configured".
 type ServiceTelemetryLister interface {
 	ListServiceTelemetry(ctx context.Context, name, gitURL, ref string) (*serviceregistry.TelemetryCatalog, error)
 }
@@ -411,10 +411,10 @@ func (h *ServiceHandler) invalidateDirectives(name string) {
 	}
 }
 
-// invalidateTelemetry — best-effort инвалидация telemetry-кеша по name (парная
-// семантика с [invalidateDirectives]). После смены git-URL или удаления записи
-// закешированный telemetry-конфиг должен исчезнуть, чтобы UI подтянул дефолты
-// нового источника.
+// invalidateTelemetry — best-effort telemetry-cache invalidation by name (paired
+// semantics with [invalidateDirectives]). After a git-URL change or record deletion,
+// the cached telemetry config must disappear so the UI picks up the defaults of
+// the new source.
 func (h *ServiceHandler) invalidateTelemetry(name string) {
 	if h.telemetry == nil {
 		return
@@ -865,13 +865,13 @@ func (h *ServiceHandler) ListDirectivesTyped(ctx context.Context, name, ref, ver
 	}, nil
 }
 
-// ServiceTelemetryReply — GET /v1/services/{name}/telemetry body. Самодостаточный
-// JSON (как ServiceDirectivesReply): service + ref эхо-дубли, sha1 снапшота (== ETag),
-// эффективный дефолтный (per-service, без essence/инкарнации) host-vitals-конфиг
-// (enabled/interval_sec/collectors) + known_collectors — полный допустимый набор
-// коллекторов для UI (ADR-042 backend-driven, ADR-072). Collectors пусто → `[]`
-// (не null); KnownCollectors всегда полный набор. json-теги фиксируют wire; huma-
-// регистратор читает SHA1 для ETag/If-None-Match (см. huma_service.go).
+// ServiceTelemetryReply — GET /v1/services/{name}/telemetry body. Self-contained
+// JSON (like ServiceDirectivesReply): service + ref echo-duplicates, snapshot sha1 (== ETag),
+// the effective default (per-service, without essence/incarnation) host-vitals config
+// (enabled/interval_sec/collectors) + known_collectors — the full allowed set of
+// collectors for the UI (ADR-042 backend-driven, ADR-072). Empty Collectors → `[]`
+// (not null); KnownCollectors is always the full set. json tags fix the wire; the huma
+// registrar reads SHA1 for ETag/If-None-Match (see huma_service.go).
 type ServiceTelemetryReply struct {
 	Service         string   `json:"service"`
 	Ref             string   `json:"ref"`
@@ -882,11 +882,11 @@ type ServiceTelemetryReply struct {
 	KnownCollectors []string `json:"known_collectors"`
 }
 
-// ListServiceTelemetryTyped — GET /v1/services/{name}/telemetry (READ без audit):
-// резолв записи + чтение дефолтного telemetry-конфига из снапшота манифеста + полный
-// набор допустимых коллекторов (config.KnownCollectors) для UI. name/ref приходят
-// аргументами (ref="" → дефолт из реестра). Ошибки — *problemError (500 нет lister-а/
-// сбой реестра, 404 not-found, 502 loader упал), успех — [ServiceTelemetryReply].
+// ListServiceTelemetryTyped — GET /v1/services/{name}/telemetry (READ without audit):
+// record resolution + reading the default telemetry config from the manifest snapshot + the full
+// set of allowed collectors (config.KnownCollectors) for the UI. name/ref come in
+// as arguments (ref="" → registry default). Errors — *problemError (500 no lister/
+// registry failure, 404 not-found, 502 loader failed), success — [ServiceTelemetryReply].
 func (h *ServiceHandler) ListServiceTelemetryTyped(ctx context.Context, name, ref string) (ServiceTelemetryReply, error) {
 	var zero ServiceTelemetryReply
 	if h.telemetry == nil {
@@ -921,14 +921,14 @@ func (h *ServiceHandler) ListServiceTelemetryTyped(ctx context.Context, name, re
 		return zero, &problemError{problem.New(problem.TypeBadGateway, "", "telemetry loader failed for service "+name+": "+err.Error())}
 	}
 	if catalog == nil || catalog.Telemetry == nil {
-		// Defensive: lister обязан вернуть non-nil при err=nil (паттерн ListStateSchema).
+		// Defensive: the lister must return non-nil when err=nil (ListStateSchema pattern).
 		h.logger.Error("service.telemetry: loader returned nil without error",
 			slog.String("name", name))
 		return zero, &problemError{problem.New(problem.TypeBadGateway, "", "telemetry loader returned empty result")}
 	}
 
-	// Collectors пусто → `[]` (не null) для мягкой деградации фронта; known_collectors —
-	// всегда полный допустимый набор (копия — не отдаём наружу пакетную переменную).
+	// Empty Collectors → `[]` (not null) for graceful frontend degradation; known_collectors is
+	// always the full allowed set (a copy — never expose the package variable directly).
 	collectors := catalog.Telemetry.GetCollectors()
 	if collectors == nil {
 		collectors = []string{}

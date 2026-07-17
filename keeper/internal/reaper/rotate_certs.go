@@ -24,29 +24,31 @@ import (
 // need to pull the push package for one identifier.
 const rotateCertsSystemAID = "archon-system"
 
-// rotateTLSScenario — дефолтное имя сценария доставки TLS-материала. Источник
-// имени теперь манифест (certpolicy.Policy.Scenario); const остаётся якорем
-// контрактного теста, что имя сценария не переименовано.
+// rotateTLSScenario — default name of the TLS material delivery scenario. The
+// source of the name is now the manifest (certpolicy.Policy.Scenario); the
+// const remains an anchor for the contract test that the scenario name has
+// not been renamed.
 const rotateTLSScenario = "rotate_tls"
 
 // defaultMaxRotationsPerTick — maximum rotations per tick by default (anti-thundering-herd
 // when certificates expire in bulk).
 const defaultMaxRotationsPerTick = 20
 
-// CertVaultWriter — узкая поверхность vault.Client.WriteKV, нужная ротатору
-// (совпадает с certissue.KVWriter — r.vault проходит как KVWriter).
+// CertVaultWriter — a narrow surface of vault.Client.WriteKV needed by the
+// rotator (matches certissue.KVWriter — r.vault is passed as a KVWriter).
 type CertVaultWriter interface {
 	WriteKV(ctx context.Context, path string, data map[string]any) error
 }
 
-// certPolicyResolver — резолвер эффективной cert-rotation-политики инкарнации
-// (certpolicy.Resolver). Узкий интерфейс — fake без БД в unit-тестах.
+// certPolicyResolver — resolver of the effective cert-rotation policy of an
+// incarnation (certpolicy.Resolver). A narrow interface — a DB-free fake in
+// unit tests.
 type certPolicyResolver interface {
 	Resolve(ctx context.Context, incarnationName string) (certpolicy.Policy, error)
 }
 
-// certRotatorDB — узкое подмножество pgxpool.Pool: открыть tx, в которой
-// due-серты берутся FOR UPDATE SKIP LOCKED и ротируются атомарно.
+// certRotatorDB — a narrow subset of pgxpool.Pool: open a tx in which due
+// certs are picked up with FOR UPDATE SKIP LOCKED and rotated atomically.
 type certRotatorDB interface {
 	BeginTx(ctx context.Context, opts pgx.TxOptions) (pgx.Tx, error)
 }
@@ -64,8 +66,9 @@ type CertRotatorConfig struct {
 	JitterWindow time.Duration
 	// MaxRotationsPerTick — cap of rotations per tick. <=0 → defaultMaxRotationsPerTick.
 	MaxRotationsPerTick int
-	// DefaultPKIMount — PKI mount для SignCSR, если у warrant-строки не задан свой
-	// pki_mount. PKI role приходит из манифеста (certpolicy.Policy.PKIRole), не из config.
+	// DefaultPKIMount — PKI mount for SignCSR, if the warrant row does not
+	// have its own pki_mount set. The PKI role comes from the manifest
+	// (certpolicy.Policy.PKIRole), not from config.
 	DefaultPKIMount string
 }
 
@@ -77,19 +80,21 @@ type CertRotatorDeps struct {
 	// vault.GenerateServiceCSR. Separate field (not hard dependency on
 	// vault package) so unit tests can provide deterministic fake.
 	CSRGen func(commonName string, dnsNames []string) (privateKeyPEM, csrPEM []byte, err error)
-	// Cfg — провайдер политики (hot-reload: читается на каждом Run).
+	// Cfg — policy provider (hot-reload: read on every Run).
 	Cfg func() CertRotatorConfig
-	// Policy — резолвер cert-rotation-политики инкарнации из манифеста сервиса.
+	// Policy — resolver of the incarnation's cert-rotation policy from the
+	// service manifest.
 	Policy certPolicyResolver
 	Audit  audit.Writer
 	Logger *slog.Logger
 	KID    string
 }
 
-// CertRotator — реализация правила `rotate_due_certs` (cert-rotation Вар1).
-// Скан истекающих active-сертов (`not_after` с jitter) → per-cert цепочка
-// ротации (резолв политики манифеста → CAS active→rotating → certissue.Issue →
-// supersede+insert warrant → спавн Voyage(<scenario>)) → audit.
+// CertRotator — implementation of the `rotate_due_certs` rule (cert-rotation
+// Variant 1). Scans expiring active certs (`not_after` with jitter) →
+// per-cert rotation chain (resolve manifest policy → CAS active→rotating →
+// certissue.Issue → supersede+insert warrant → spawn Voyage(<scenario>)) →
+// audit.
 //
 // Run signature is compatible with runDurationRule call of Runner. Default OFF +
 // mandatory dry_run — at dispatch level (rule is map-driven, requires explicit
@@ -107,8 +112,9 @@ type CertRotator struct {
 	nowFunc func() time.Time
 }
 
-// NewCertRotator конструирует ротатор. signer/vault/csrgen/cfg/policy обязательны
-// (без них ротация невозможна — Run вернёт ошибку). audit/logger nil-safe.
+// NewCertRotator constructs the rotator. signer/vault/csrgen/cfg/policy are
+// required (without them rotation is impossible — Run returns an error).
+// audit/logger are nil-safe.
 func NewCertRotator(pool *pgxpool.Pool, d CertRotatorDeps) *CertRotator {
 	return &CertRotator{
 		pool:   pool,
@@ -312,17 +318,19 @@ func (r *CertRotator) now() time.Time {
 
 // rotateOne conducts one server cert rotation. Returns (spawn-was, err).
 //
-// Резолв политики манифеста идёт ДО CAS: транзиент-ошибка резолва / выключенная
-// секция / неизвестный сценарий / пустой pki_role → серт остаётся active БЕЗ
-// markFailed (следующий тик повторит либо корректно пропустит). Только после
-// захвата single-winner (CAS active→rotating) внешние фейлы (issue/commit) ведут
-// к CAS rotating→failed (серт не возвращается в active, тик не зациклится).
+// Resolving the manifest policy happens BEFORE CAS: a transient resolve
+// error / disabled section / unknown scenario / empty pki_role → the cert
+// stays active WITHOUT markFailed (the next tick will retry or correctly
+// skip it). Only after capturing single-winner (CAS active→rotating) do
+// external failures (issue/commit) lead to CAS rotating→failed (the cert is
+// not returned to active, the tick does not loop).
 func (r *CertRotator) rotateOne(ctx context.Context, c dueCert, cfg CertRotatorConfig) (bool, error) {
 	pol, perr := r.policy.Resolve(ctx, c.incarnationID)
 	if perr != nil {
-		// Транзиент (git/PG): серт остаётся active, БЕЗ markFailed — retry на след. тик.
+		// Transient (git/PG): the cert stays active, WITHOUT markFailed — retry
+		// on the next tick.
 		if r.logger != nil {
-			r.logger.Warn("reaper.rotate_due_certs: резолв политики провален, серт остаётся active",
+			r.logger.Warn("reaper.rotate_due_certs: policy resolve failed, cert stays active",
 				slog.String("cert_id", c.certID),
 				slog.String("incarnation", c.incarnationID),
 				slog.Any("error", perr))
@@ -330,7 +338,7 @@ func (r *CertRotator) rotateOne(ctx context.Context, c dueCert, cfg CertRotatorC
 		return false, nil
 	}
 	if !pol.Enabled {
-		return false, nil // нет секции / enable:false — авто-ротация выключена
+		return false, nil // no section / enable:false — auto-rotation disabled
 	}
 	scenarioOK := false
 	for _, s := range pol.KnownScenarios {
@@ -341,7 +349,7 @@ func (r *CertRotator) rotateOne(ctx context.Context, c dueCert, cfg CertRotatorC
 	}
 	if !scenarioOK {
 		if r.logger != nil {
-			r.logger.Warn("reaper.rotate_due_certs: сценарий ротации не найден в сервисе, спавн пропущен",
+			r.logger.Warn("reaper.rotate_due_certs: rotation scenario not found in the service, spawn skipped",
 				slog.String("incarnation", c.incarnationID),
 				slog.String("scenario", pol.Scenario))
 		}
@@ -350,7 +358,7 @@ func (r *CertRotator) rotateOne(ctx context.Context, c dueCert, cfg CertRotatorC
 	mount, role := r.resolvePKI(c, cfg, pol)
 	if role == "" {
 		if r.logger != nil {
-			r.logger.Warn("reaper.rotate_due_certs: пустой pki_role (manifest-drift), серт пропущен",
+			r.logger.Warn("reaper.rotate_due_certs: empty pki_role (manifest-drift), cert skipped",
 				slog.String("incarnation", c.incarnationID))
 		}
 		return false, nil
@@ -367,14 +375,14 @@ func (r *CertRotator) rotateOne(ctx context.Context, c dueCert, cfg CertRotatorC
 		return false, nil
 	}
 
-	// (2) Внешние I/O вне tx. Любой фейл → failed + err.
+	// (2) External I/O outside the tx. Any failure → failed + err.
 	material, ierr := r.issueMaterial(ctx, c, pol.Service, mount, role)
 	if ierr != nil {
 		r.markFailed(ctx, c.certID)
 		return false, ierr
 	}
 
-	// (3) Атомарно: supersede+insert warrant (cert+key) + спавн Voyage.
+	// (3) Atomically: supersede+insert warrant (cert+key) + spawn Voyage.
 	voyageID, cerr := r.commitRotation(ctx, c, material, pol.Scenario, role)
 	if cerr != nil {
 		r.markFailed(ctx, c.certID)
@@ -386,8 +394,9 @@ func (r *CertRotator) rotateOne(ctx context.Context, c dueCert, cfg CertRotatorC
 	return true, nil
 }
 
-// resolvePKI выбирает mount/role: role — из манифеста (pol.PKIRole, обязателен);
-// mount — config-дефолт с warrant-override (c.pkiMount бьёт cfg.DefaultPKIMount).
+// resolvePKI picks mount/role: role — from the manifest (pol.PKIRole,
+// required); mount — the config default with a warrant override (c.pkiMount
+// beats cfg.DefaultPKIMount).
 func (r *CertRotator) resolvePKI(c dueCert, cfg CertRotatorConfig, pol certpolicy.Policy) (mount, role string) {
 	mount, role = cfg.DefaultPKIMount, pol.PKIRole
 	if c.pkiMount != nil && *c.pkiMount != "" {
@@ -434,11 +443,12 @@ func (r *CertRotator) markFailed(ctx context.Context, certID string) {
 	_ = tx.Commit(ctx)
 }
 
-// issueMaterial выпускает новый cert+key через certissue.Issue (csrgen → SignCSR
-// → WriteKV cert+key по service-scoped E3-путям secret/<service>/<inc>/tls/{cert,key}).
+// issueMaterial issues a new cert+key via certissue.Issue (csrgen → SignCSR →
+// WriteKV cert+key at service-scoped E3 paths
+// secret/<service>/<inc>/tls/{cert,key}).
 //
-// ★ R2: приватник генерится Keeper-ом и пишется только в Vault — он НИКОГДА не
-// логируется / не кладётся в audit / не попадает в текст ошибки (см. certissue).
+// R2: the private key is generated by Keeper and written only to Vault — it
+// is NEVER logged / put into audit / included in error text (see certissue).
 func (r *CertRotator) issueMaterial(ctx context.Context, c dueCert, service, mount, role string) (*certissue.Material, error) {
 	cn := c.incarnationID + ".tls"
 	return certissue.Issue(ctx, r.signer, r.vault, r.csrgen, certissue.Params{
@@ -451,9 +461,10 @@ func (r *CertRotator) issueMaterial(ctx context.Context, c dueCert, service, mou
 	})
 }
 
-// commitRotation в одной tx: supersede старых active cert+key + insert новых +
-// спавн Voyage(<scenario>). Возвращает voyage_id. role пишется в PKIRole нового
-// cert (выравнивание записи с манифестом), scenario — имя спавнимого сценария.
+// commitRotation in a single tx: supersede the old active cert+key + insert
+// new ones + spawn Voyage(<scenario>). Returns voyage_id. role is written to
+// the PKIRole of the new cert (aligning the record with the manifest),
+// scenario — the name of the spawned scenario.
 func (r *CertRotator) commitRotation(ctx context.Context, c dueCert, m *certissue.Material, scenario, role string) (string, error) {
 	tx, err := r.pool.BeginTx(ctx, pgx.TxOptions{})
 	if err != nil {
@@ -484,7 +495,7 @@ func (r *CertRotator) commitRotation(ctx context.Context, c dueCert, m *certissu
 		Status:               keepercert.StatusActive,
 		AutoRotate:           true,
 		LastRotationVoyageID: &voyageID,
-		PKIRole:              &role, // из манифеста (certpolicy.Policy.PKIRole)
+		PKIRole:              &role, // from the manifest (certpolicy.Policy.PKIRole)
 	}
 	if c.pkiMount != nil {
 		newCert.PKIMount = c.pkiMount
@@ -498,10 +509,11 @@ func (r *CertRotator) commitRotation(ctx context.Context, c dueCert, m *certissu
 		return "", fmt.Errorf("insert new active cert: %w", ierr)
 	}
 
-	// Спутник key: приватник обновился вместе с cert. Supersede прежней active
-	// key-строки (если была) + insert новой с тем же not_after. fingerprint =
-	// SHA-256(SubjectPublicKeyInfo) пары — публичный ключ у cert и key один и тот
-	// же, поэтому берём уже посчитанный m.Fingerprint (второй parse PEM излишен).
+	// The key satellite: the private key was updated together with the cert.
+	// Supersede the previous active key row (if any) + insert a new one with
+	// the same not_after. fingerprint = SHA-256(SubjectPublicKeyInfo) of the
+	// pair — the cert and key share the same public key, so we reuse the
+	// already-computed m.Fingerprint (a second PEM parse is unnecessary).
 	if serr := keepercert.SupersedeActive(ctx, tx, c.incarnationID, keepercert.KindKey); serr != nil {
 		return "", fmt.Errorf("supersede key: %w", serr)
 	}
@@ -523,7 +535,7 @@ func (r *CertRotator) commitRotation(ctx context.Context, c dueCert, m *certissu
 		return "", fmt.Errorf("insert new active key: %w", ierr)
 	}
 
-	// Voyage(<scenario>) — доставка нового PEM на хосты инкарнации.
+	// Voyage(<scenario>) — delivers the new PEM to the incarnation's hosts.
 	v, targets := buildRotateTLSVoyage(voyageID, c.incarnationID, m, scenario)
 	if ierr := voyage.Insert(ctx, tx, v); ierr != nil {
 		return "", fmt.Errorf("insert voyage: %w", ierr)
@@ -539,10 +551,10 @@ func (r *CertRotator) commitRotation(ctx context.Context, c dueCert, m *certissu
 	return voyageID, nil
 }
 
-// buildRotateTLSVoyage собирает Voyage kind=scenario (имя из scenario) для
-// инкарнации + один target (incarnation-name → вся инкарнация целиком). Input
-// несёт новые cert_ref/key_ref (ca_ref сценарий возьмёт из state.tls.ca_ref — CA
-// здесь не ротируется).
+// buildRotateTLSVoyage builds a Voyage kind=scenario (name from scenario) for
+// the incarnation + one target (incarnation-name → the whole incarnation).
+// Input carries the new cert_ref/key_ref (ca_ref will be taken by the
+// scenario from state.tls.ca_ref — the CA is not rotated here).
 func buildRotateTLSVoyage(voyageID, incarnation string, m *certissue.Material, scenario string) (*voyage.Voyage, []voyage.VoyageTarget) {
 	input, _ := json.Marshal(map[string]any{
 		"cert_ref": m.CertRef,
@@ -569,8 +581,9 @@ func buildRotateTLSVoyage(voyageID, incarnation string, m *certissue.Material, s
 	return v, targets
 }
 
-// emitRotated пишет cert.rotated (best-effort, nil-safe). source=keeper_internal,
-// correlation_id=voyage_id. Секреты (PEM/приватник) в payload НЕ кладутся.
+// emitRotated writes cert.rotated (best-effort, nil-safe).
+// source=keeper_internal, correlation_id=voyage_id. Secrets (PEM/private key)
+// are NOT put into the payload.
 func (r *CertRotator) emitRotated(ctx context.Context, c dueCert, m *certissue.Material, voyageID string) {
 	if r.audit == nil {
 		return

@@ -389,20 +389,20 @@ func serviceDirectivesOperation() huma.Operation {
 	}
 }
 
-// === GET /v1/services/{name}/telemetry (get-telemetry) — READ-with-path+query (БЕЗ audit) ===
+// === GET /v1/services/{name}/telemetry (get-telemetry) — READ-with-path+query (no audit) ===
 
 // serviceTelemetryInput — huma-input GET /v1/services/{name}/telemetry. Name — path;
-// Ref — опц. query-override; If-None-Match — conditional-GET (304 при совпадении с
+// Ref — optional query-override; If-None-Match — conditional-GET (304 on match with
 // ETag=snapshot SHA1).
 type serviceTelemetryInput struct {
-	Name        string `path:"name" doc:"имя Service-а"`
-	Ref         string `query:"ref" doc:"опц. git-ref override (опущено → ref из реестра)"`
-	IfNoneMatch string `header:"If-None-Match" doc:"conditional GET: 304, если совпало с ETag (snapshot SHA1)"`
+	Name        string `path:"name" doc:"Service name"`
+	Ref         string `query:"ref" doc:"optional git-ref override (omitted -> ref from registry)"`
+	IfNoneMatch string `header:"If-None-Match" doc:"conditional GET: 304 if it matches ETag (snapshot SHA1)"`
 }
 
 // serviceTelemetryOutput — huma-output GET /v1/services/{name}/telemetry (FULL-TYPED).
-// Body — handlers.ServiceTelemetryReply. ETag/Cache-Control — response-заголовки
-// (header-теги; json:"-"). Status=304 → huma не пишет тело (conditional-GET без payload-а).
+// Body — handlers.ServiceTelemetryReply. ETag/Cache-Control — response headers
+// (header tags; json:"-"). Status=304 -> huma does not write a body (conditional-GET without a payload).
 type serviceTelemetryOutput struct {
 	Status       int    `json:"-"`
 	ETag         string `header:"ETag" json:"-"`
@@ -410,16 +410,16 @@ type serviceTelemetryOutput struct {
 	Body         handlers.ServiceTelemetryReply
 }
 
-// serviceTelemetryOperation — метаданные GET /v1/services/{name}/telemetry.
-// DefaultStatus=200. READ-роут: audit НЕ навешан. Permission service.list. Errors:
-// 403 RBAC, 404 not-found, 500 (нет lister-а/сбой реестра), 502 loader упал.
+// serviceTelemetryOperation — metadata for GET /v1/services/{name}/telemetry.
+// DefaultStatus=200. READ route: audit is NOT attached. Permission service.list. Errors:
+// 403 RBAC, 404 not-found, 500 (no lister / registry failure), 502 loader failed.
 func serviceTelemetryOperation() huma.Operation {
 	return huma.Operation{
 		OperationID:   "getServiceTelemetry",
 		Method:        http.MethodGet,
 		Path:          "/{name}/telemetry",
-		Summary:       "дефолтный host-vitals telemetry-конфиг Service-а + допустимые коллекторы",
-		Description:   "Эффективный дефолтный (per-service, без essence/инкарнации) host-vitals-конфиг сервиса (enabled/interval_sec/collectors) из манифеста `telemetry:` + known_collectors (полный допустимый набор для UI, ADR-042 backend-driven, ADR-072). Permission service.list. Read-only, без audit. ETag=snapshot SHA1; If-None-Match → 304. Cache-Control: immutable+год для pinned commit-SHA ref, иначе no-cache (ветка/тег mutable). Сервис без блока telemetry → манифест-дефолты (enabled=true, interval_sec=30, все коллекторы) + 200. 502 — loader упал. Не путать с /v1/incarnations/{name}/telemetry (runtime host-vitals из Redis, NIM-86).",
+		Summary:       "default host-vitals telemetry config of a Service + allowed collectors",
+		Description:   "Effective default (per-service, without essence/incarnation) host-vitals config of the service (enabled/interval_sec/collectors) from the manifest `telemetry:` + known_collectors (full allowed set for the UI, ADR-042 backend-driven, ADR-072). Permission service.list. Read-only, no audit. ETag=snapshot SHA1; If-None-Match -> 304. Cache-Control: immutable+year for pinned commit-SHA ref, otherwise no-cache (mutable branch/tag). A service without a telemetry block -> manifest defaults (enabled=true, interval_sec=30, all collectors) + 200. 502 - loader failed. Not to be confused with /v1/incarnations/{name}/telemetry (runtime host-vitals from Redis, NIM-86).",
 		Tags:          []string{"service"},
 		DefaultStatus: http.StatusOK,
 		Errors:        []int{http.StatusForbidden, http.StatusNotFound, http.StatusInternalServerError, http.StatusBadGateway},

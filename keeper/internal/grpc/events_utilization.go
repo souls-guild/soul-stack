@@ -9,15 +9,15 @@ import (
 	keeperv1 "github.com/souls-guild/soul-stack/proto/gen/go/keeper/v1"
 )
 
-// handleHostUtilization — обработчик payload-а [keeperv1.HostUtilization]
-// (NIM-86). Кладёт снимок host-vitals в Redis (latest Hash + окно точек);
-// Postgres не трогает — телеметрия волатильна и живёт под TTL.
+// handleHostUtilization — handler for the [keeperv1.HostUtilization] payload
+// (NIM-86). Stores a host-vitals snapshot into Redis (latest Hash + a window of points);
+// does not touch Postgres — telemetry is volatile and lives under TTL.
 //
-// SID — аутентифицированный peer (параметр dispatch из mTLS), НИКОГДА не из
-// payload (у HostUtilization поля sid нет — инвариант структурный).
+// SID — the authenticated peer (a dispatch parameter from mTLS), NEVER from the
+// payload (HostUtilization has no sid field — a structural invariant).
 //
-// Ошибки Redis-уровня логируются warn-ом и не рвут стрим: Soul шлёт
-// утилизацию периодически, следующий такт перезапишет снимок.
+// Redis-level errors are logged as warn and don't kill the stream: Soul sends
+// utilization periodically, the next tick overwrites the snapshot.
 func (h *eventStreamHandler) handleHostUtilization(ctx context.Context, sid, sessionID string, ev *keeperv1.HostUtilization) {
 	if ev == nil {
 		h.logger.Debug("eventstream: HostUtilization payload is nil",
@@ -25,7 +25,7 @@ func (h *eventStreamHandler) handleHostUtilization(ctx context.Context, sid, ses
 		return
 	}
 	if h.deps.Redis == nil {
-		// dev / unit-сборка без Redis — vitals некуда писать, тихо выходим.
+		// dev / unit build without Redis — nowhere to write vitals, quietly return.
 		return
 	}
 	if err := keeperredis.WriteUtilization(ctx, h.deps.Redis, sid, ev, time.Now()); err != nil {

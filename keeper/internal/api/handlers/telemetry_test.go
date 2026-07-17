@@ -1,9 +1,9 @@
 package handlers
 
-// Guard-тесты host-vitals read-path (NIM-86). Инварианты: stale/missing (ok=false
-// → graceful, не 500), stale по возрасту, честная свежесть, RBAC (вне scope /
-// not-found → 404 как soulprint), агрегат (пустой флот → hosts:[], multi-host
-// маппинг). Реюз fakeSoulPool/fakeScoper из soul_test.go.
+// Guard tests for the host-vitals read-path (NIM-86). Invariants: stale/missing (ok=false
+// -> graceful, not 500), stale by age, honest freshness, RBAC (out of scope /
+// not-found -> 404 like soulprint), aggregate (empty soul set -> hosts:[], multi-host
+// mapping). Reuses fakeSoulPool/fakeScoper from soul_test.go.
 
 import (
 	"context"
@@ -16,8 +16,8 @@ import (
 	"github.com/souls-guild/soul-stack/keeper/internal/soul"
 )
 
-// fakeUtilReader — стенд [UtilizationReader]. Одиночный режим (snap/ok/err на любой
-// sid) + per-sid overrides для агрегата.
+// fakeUtilReader - stand-in for [UtilizationReader]. Single mode (snap/ok/err for any
+// sid) + per-sid overrides for the aggregate.
 type fakeUtilReader struct {
 	snap      keeperredis.UtilizationSnapshot
 	ok        bool
@@ -61,11 +61,11 @@ func newTelemetryHandler(pool *fakeSoulPool, scoper fakeScoper, reader Utilizati
 func assertTelemetryProblemErr(t *testing.T, err error, want string) {
 	t.Helper()
 	if err == nil {
-		t.Fatalf("ждали problem %s, получили nil", want)
+		t.Fatalf("expected problem %s, got nil", want)
 	}
 	d, ok := AsProblemDetails(err)
 	if !ok {
-		t.Fatalf("err не *problemError: %v", err)
+		t.Fatalf("err is not *problemError: %v", err)
 	}
 	if d.Type != want {
 		t.Errorf("problem type=%q, want %q", d.Type, want)
@@ -80,7 +80,7 @@ func TestGetTelemetry_Missing_Stale(t *testing.T) {
 	)
 	reply, err := th.GetTelemetry(context.Background(), claimsFor("archon-alice"), "host-1.example.com")
 	if err != nil {
-		t.Fatalf("ok=false → graceful, не ошибка: %v", err)
+		t.Fatalf("ok=false -> graceful, not an error: %v", err)
 	}
 	if !reply.Stale {
 		t.Error("ok=false → Stale=true")
@@ -89,7 +89,7 @@ func TestGetTelemetry_Missing_Stale(t *testing.T) {
 		t.Error("ok=false → Latest=nil")
 	}
 	if len(reply.Window) != 0 {
-		t.Error("ok=false → Window пуст")
+		t.Error("ok=false -> Window empty")
 	}
 	if reply.SID != "host-1.example.com" {
 		t.Errorf("SID=%q", reply.SID)
@@ -104,10 +104,10 @@ func TestGetTelemetry_ReaderError_GracefulStale(t *testing.T) {
 	)
 	reply, err := th.GetTelemetry(context.Background(), claimsFor("archon-alice"), "host-1.example.com")
 	if err != nil {
-		t.Fatalf("ошибка ридера → деградация в stale, не 500: %v", err)
+		t.Fatalf("reader error -> degrades to stale, not 500: %v", err)
 	}
 	if !reply.Stale || reply.Latest != nil {
-		t.Error("ошибка ридера → Stale=true, Latest=nil")
+		t.Error("reader error -> Stale=true, Latest=nil")
 	}
 }
 
@@ -123,10 +123,10 @@ func TestGetTelemetry_StaleByAge(t *testing.T) {
 		t.Fatalf("unexpected err: %v", err)
 	}
 	if !reply.Stale {
-		t.Error("возраст > TTL → Stale=true")
+		t.Error("age > TTL -> Stale=true")
 	}
 	if reply.Latest == nil || reply.Latest.CpuPct != 10 {
-		t.Errorf("данные есть (пусть старые) → Latest проброшен: %+v", reply.Latest)
+		t.Errorf("data present (even if stale) -> Latest passed through: %+v", reply.Latest)
 	}
 }
 
@@ -149,22 +149,22 @@ func TestGetTelemetry_Fresh(t *testing.T) {
 		t.Fatalf("unexpected err: %v", err)
 	}
 	if reply.Stale {
-		t.Error("свежий снимок → Stale=false")
+		t.Error("fresh snapshot -> Stale=false")
 	}
 	if reply.Latest == nil {
 		t.Fatal("Latest nil")
 	}
 	if reply.Latest.CpuPct != 12.5 || reply.Latest.MemUsedMb != 1024 || reply.Latest.UptimeSec != 3600 {
-		t.Errorf("поля latest не проброшены: %+v", reply.Latest)
+		t.Errorf("latest fields not passed through: %+v", reply.Latest)
 	}
 	if len(reply.Latest.Disks) != 1 || reply.Latest.Disks[0].Mount != "/" || reply.Latest.Disks[0].UsedMb != 10 {
-		t.Errorf("disks не проброшены: %+v", reply.Latest.Disks)
+		t.Errorf("disks not passed through: %+v", reply.Latest.Disks)
 	}
 	if reply.CollectedAt == nil || reply.ReceivedAt == nil {
-		t.Error("collected_at/received_at должны присутствовать")
+		t.Error("collected_at/received_at must be present")
 	}
 	if len(reply.Window) != 1 || reply.Window[0].CpuPct != 12.5 {
-		t.Errorf("window не проброшено: %+v", reply.Window)
+		t.Errorf("window not passed through: %+v", reply.Window)
 	}
 }
 
@@ -181,8 +181,8 @@ func TestGetTelemetry_NotFound_404(t *testing.T) {
 }
 
 func TestGetTelemetry_OutOfScope_404(t *testing.T) {
-	// host в ковене prod, scope оператора — только dev → InScope false → 404
-	// (как soulprint: не палим существование чужого хоста).
+	// host is in coven prod, operator scope is only dev -> InScope false -> 404
+	// (like soulprint: don't leak existence of a host outside scope).
 	th := newTelemetryHandler(
 		&fakeSoulPool{existingSoul: telemetrySoul("host-1.example.com", "prod")},
 		fakeScoper{covens: []string{"dev"}},
@@ -202,7 +202,7 @@ func TestAggregate_Empty_HostsSlice(t *testing.T) {
 		t.Errorf("incarnation=%q", reply.Incarnation)
 	}
 	if reply.Hosts == nil {
-		t.Error("Hosts non-nil ([] не null)")
+		t.Error("Hosts non-nil ([] not null)")
 	}
 	if len(reply.Hosts) != 0 {
 		t.Errorf("hosts len=%d, want 0", len(reply.Hosts))
@@ -235,13 +235,13 @@ func TestAggregate_MultiHost(t *testing.T) {
 		byID[h.SID] = h
 	}
 	if byID["h1.example.com"].Stale || byID["h1.example.com"].Latest == nil {
-		t.Error("h1 свежий → Stale=false, Latest есть")
+		t.Error("h1 fresh -> Stale=false, Latest present")
 	}
 	if !byID["h2.example.com"].Stale || byID["h2.example.com"].Latest == nil {
-		t.Error("h2 stale-by-age → Stale=true, но Latest (старый) есть")
+		t.Error("h2 stale-by-age -> Stale=true, but Latest (stale) present")
 	}
 	if !byID["h3.example.com"].Stale || byID["h3.example.com"].Latest != nil {
-		t.Error("h3 нет данных → Stale=true, Latest=nil")
+		t.Error("h3 no data -> Stale=true, Latest=nil")
 	}
 }
 
@@ -257,8 +257,8 @@ func TestAggregate_OutOfScope_Empty(t *testing.T) {
 	}
 }
 
-// TestGetTelemetry_StaleBoundary — граница свежести вокруг TTL (тикет: тест на
-// границу возраста). received = now-(TTL∓1s).
+// TestGetTelemetry_StaleBoundary - freshness boundary around TTL (ticket: test the
+// age boundary). received = now-(TTL+-1s).
 func TestGetTelemetry_StaleBoundary(t *testing.T) {
 	now := time.Now()
 	cases := []struct {
@@ -266,8 +266,8 @@ func TestGetTelemetry_StaleBoundary(t *testing.T) {
 		recv  time.Time
 		stale bool
 	}{
-		{"свежий_TTL-1s", now.Add(-(keeperredis.UtilizationTTL - time.Second)), false},
-		{"протух_TTL+1s", now.Add(-(keeperredis.UtilizationTTL + time.Second)), true},
+		{"fresh_TTL-1s", now.Add(-(keeperredis.UtilizationTTL - time.Second)), false},
+		{"stale_TTL+1s", now.Add(-(keeperredis.UtilizationTTL + time.Second)), true},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -287,8 +287,8 @@ func TestGetTelemetry_StaleBoundary(t *testing.T) {
 	}
 }
 
-// TestAggregate_HostReadError_StaleNotDropped — ошибка чтения одного хоста не
-// роняет агрегат: хост остаётся в списке как stale, Latest=nil.
+// TestAggregate_HostReadError_StaleNotDropped - a read error for one host does not
+// drop the aggregate: the host stays in the list as stale, Latest=nil.
 func TestAggregate_HostReadError_StaleNotDropped(t *testing.T) {
 	now := time.Now().UTC()
 	pool := &fakeSoulPool{listSouls: []*soul.Soul{
@@ -302,25 +302,25 @@ func TestAggregate_HostReadError_StaleNotDropped(t *testing.T) {
 	th := newTelemetryHandler(pool, fakeScoper{unrestricted: true}, reader)
 	reply, err := th.AggregateByIncarnation(context.Background(), claimsFor("archon-alice"), "redis-prod")
 	if err != nil {
-		t.Fatalf("ошибка одного хоста не роняет агрегат: %v", err)
+		t.Fatalf("error on one host does not drop the aggregate: %v", err)
 	}
 	if len(reply.Hosts) != 2 {
-		t.Fatalf("hosts=%d, want 2 (хост с ошибкой не выпадает)", len(reply.Hosts))
+		t.Fatalf("hosts=%d, want 2 (host with error is not dropped)", len(reply.Hosts))
 	}
 	byID := map[string]HostTelemetry{}
 	for _, h := range reply.Hosts {
 		byID[h.SID] = h
 	}
 	if !byID["h2.example.com"].Stale || byID["h2.example.com"].Latest != nil {
-		t.Error("h2 ошибка чтения → Stale=true, Latest=nil, но хост в списке")
+		t.Error("h2 read error -> Stale=true, Latest=nil, but host stays in the list")
 	}
 	if byID["h1.example.com"].Stale {
-		t.Error("h1 свежий → Stale=false")
+		t.Error("h1 fresh -> Stale=false")
 	}
 }
 
-// TestSIDsInCovenInScope_TruncatedFlag — cap усекает список, флаг truncated не
-// «молчит»: len(флот) >= cap → true, cap > флот → false.
+// TestSIDsInCovenInScope_TruncatedFlag - cap truncates the list, the truncated flag
+// is not silent: len(soul set) >= cap -> true, cap > soul set -> false.
 func TestSIDsInCovenInScope_TruncatedFlag(t *testing.T) {
 	pool := &fakeSoulPool{listSouls: []*soul.Soul{
 		telemetrySoul("h1.example.com", "redis-prod"),
@@ -333,7 +333,7 @@ func TestSIDsInCovenInScope_TruncatedFlag(t *testing.T) {
 		t.Fatalf("unexpected err: %v", err)
 	}
 	if !truncated {
-		t.Error("len(флот) >= cap → truncated=true")
+		t.Error("len(soul set) >= cap -> truncated=true")
 	}
 	if len(sids) != 3 {
 		t.Errorf("sids=%d, want 3", len(sids))
@@ -341,6 +341,6 @@ func TestSIDsInCovenInScope_TruncatedFlag(t *testing.T) {
 	if _, truncated2, err := sh.SIDsInCovenInScope(context.Background(), claimsFor("archon-alice"), "redis-prod", 4); err != nil {
 		t.Fatalf("unexpected err: %v", err)
 	} else if truncated2 {
-		t.Error("cap > флот → truncated=false")
+		t.Error("cap > soul set -> truncated=false")
 	}
 }

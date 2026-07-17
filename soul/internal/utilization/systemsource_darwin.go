@@ -4,11 +4,11 @@ package utilization
 
 import "context"
 
-// systemSource на macOS (dev-машина) — заглушка: живая утилизация не собирается
-// (ADR-072: production-target — Linux). Все методы zero-value.
+// systemSource on macOS (dev machine) - a stub: live utilization is not collected
+// (ADR-072: production target is Linux). All methods return zero-value.
 type systemSource struct{}
 
-// NewSystemSource — заглушка не-Linux (см. doc systemSource).
+// NewSystemSource - non-Linux stub (see doc systemSource).
 func NewSystemSource() Source { return systemSource{} }
 
 func (systemSource) Load(context.Context) LoadAvg        { return LoadAvg{} }

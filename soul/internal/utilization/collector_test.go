@@ -5,7 +5,7 @@ import (
 	"testing"
 )
 
-// fakeSource — детерминированный Source для проверки Collector без касания /proc.
+// fakeSource — a deterministic Source for testing Collector without touching /proc.
 type fakeSource struct {
 	load   LoadAvg
 	mem    MemInfo
@@ -37,7 +37,7 @@ func TestCollect_FillsAllFields(t *testing.T) {
 	if err := u.GetCollectedAt().CheckValid(); err != nil {
 		t.Fatalf("collected_at invalid: %v", err)
 	}
-	// Первый сбор — прошлого сэмпла нет, cpu% обязан быть 0 (не bogus из tot-0).
+	// First collect — there is no previous sample, cpu% must be 0 (not bogus from tot-0).
 	if u.GetCpuPct() != 0 {
 		t.Errorf("first-sample cpu_pct=%v want 0", u.GetCpuPct())
 	}
@@ -59,23 +59,23 @@ func TestCollect_FillsAllFields(t *testing.T) {
 	}
 }
 
-// cpu% — дельта busy/total между двумя последовательными сэмплами.
+// cpu% — delta busy/total between two consecutive samples.
 func TestCpuPct_Delta(t *testing.T) {
 	cases := []struct {
 		name       string
 		prev, cur  CPUSample
-		wantFirst  float64 // результат для первого (одиночного) вызова
+		wantFirst  float64 // result for the first (single) call
 		wantSecond float64
 	}{
 		// busyΔ=60, totalΔ=100 → 60%.
 		{"normal 60pct", CPUSample{Total: 100, Idle: 50}, CPUSample{Total: 200, Idle: 90}, 0, 60},
-		// idle упал (аномалия счётчика) busy>total → clamp 100.
+		// idle dropped (counter anomaly) busy>total → clamp 100.
 		{"clamp high", CPUSample{Total: 100, Idle: 50}, CPUSample{Total: 200, Idle: 40}, 0, 100},
-		// счётчик не двинулся totalΔ=0 → 0.
+		// counter did not move totalΔ=0 → 0.
 		{"no movement", CPUSample{Total: 200, Idle: 90}, CPUSample{Total: 200, Idle: 90}, 0, 0},
-		// reset счётчика totalΔ<0 → 0 (без отрицательного %).
+		// counter reset totalΔ<0 → 0 (no negative %).
 		{"counter reset", CPUSample{Total: 500, Idle: 100}, CPUSample{Total: 10, Idle: 5}, 0, 0},
-		// полностью idle busyΔ=0 → 0.
+		// fully idle busyΔ=0 → 0.
 		{"fully idle", CPUSample{Total: 100, Idle: 50}, CPUSample{Total: 200, Idle: 150}, 0, 0},
 	}
 	for _, tc := range cases {
@@ -91,7 +91,7 @@ func TestCpuPct_Delta(t *testing.T) {
 	}
 }
 
-// cpu% через полный Collect: два сбора на одном Collector дают дельту.
+// cpu% via full Collect: two collects on one Collector give a delta.
 func TestCollect_CpuDeltaAcrossCollects(t *testing.T) {
 	c := NewCollector(fakeSource{cpu: CPUSample{Total: 100, Idle: 50}})
 	if got := c.Collect(context.Background(), "h", nil).GetCpuPct(); got != 0 {
@@ -103,8 +103,8 @@ func TestCollect_CpuDeltaAcrossCollects(t *testing.T) {
 	}
 }
 
-// Collectors gating (NIM-87): выключенный коллектор → его поля нулевые, disk
-// пропускает statfs; включённый — собирается. Неизвестное имя в наборе — no-op.
+// Collectors gating (NIM-87): a disabled collector → its fields are zero, disk
+// skips statfs; an enabled one — is collected. An unknown name in the set — no-op.
 func TestCollect_CollectorsGating(t *testing.T) {
 	src := fakeSource{
 		load:   LoadAvg{One: 0.5, Five: 1.5, Fifteen: 2.5},
@@ -114,7 +114,7 @@ func TestCollect_CollectorsGating(t *testing.T) {
 		cpu:    CPUSample{Total: 1000, Idle: 900},
 	}
 
-	// Только cpu → load/mem/disk/uptime зануляются, statfs (Disks) не зовётся.
+	// Only cpu → load/mem/disk/uptime are zeroed, statfs (Disks) is not called.
 	only := NewCollector(src).Collect(context.Background(), "h", CollectorSet{"cpu": true})
 	if only.GetLoad1() != 0 || only.GetLoad5() != 0 || only.GetLoad15() != 0 {
 		t.Errorf("load must be zero when disabled: %v/%v/%v", only.GetLoad1(), only.GetLoad5(), only.GetLoad15())
@@ -129,8 +129,8 @@ func TestCollect_CollectorsGating(t *testing.T) {
 		t.Errorf("uptime must be zero when disabled: %d", only.GetUptimeSec())
 	}
 
-	// Обратное направление + неизвестное имя игнорируется: mem включён (собран),
-	// disk выключен (nil), "bogus" не влияет.
+	// Reverse direction + unknown name is ignored: mem enabled (collected),
+	// disk disabled (nil), "bogus" has no effect.
 	memOnly := NewCollector(src).Collect(context.Background(), "h", CollectorSet{"mem": true, "bogus": true})
 	if memOnly.GetMemTotalMb() != 16000 || memOnly.GetMemUsedMb() != 8000 {
 		t.Errorf("mem must be collected when enabled: %+v", memOnly)
@@ -143,7 +143,7 @@ func TestCollect_CollectorsGating(t *testing.T) {
 	}
 }
 
-// Пустой/sparse Source → нули и nil-disks, без паники.
+// Empty/sparse Source → zeros and nil-disks, no panic.
 func TestCollect_EmptySourceNoPanic(t *testing.T) {
 	u := NewCollector(fakeSource{}).Collect(context.Background(), "h", nil)
 	if u == nil {

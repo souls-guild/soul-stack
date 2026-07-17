@@ -57,13 +57,13 @@ components:
       additionalProperties: false
       properties:
         ldap:
-          description: федеративный LDAP-логин сконфигурирован
+          description: federated LDAP login is configured
           type: boolean
         oidc:
-          description: федеративный OIDC-логин сконфигурирован
+          description: federated OIDC login is configured
           type: boolean
         password:
-          description: локальный логин (всегда доступен)
+          description: local login (always available)
           type: boolean
       required:
         - password
@@ -74,11 +74,11 @@ components:
       additionalProperties: false
       properties:
         expires_at:
-          description: момент истечения выданного Bearer
+          description: expiry moment of the issued Bearer
           format: date-time
           type: string
         token:
-          description: короткий Bearer-JWT для Authorization на /v1
+          description: short-lived Bearer-JWT for Authorization on /v1
           type: string
       required:
         - token
@@ -1570,7 +1570,7 @@ components:
         incarnation:
           type: string
         truncated:
-          description: true если флот ковена превысил cap и список хостов усечён (обзорный glance)
+          description: true if the coven's fleet exceeded the cap and the host list is truncated (overview glance)
           type: boolean
       required:
         - incarnation
@@ -3828,24 +3828,24 @@ components:
       additionalProperties: false
       properties:
         collected_at:
-          description: Soul-side момент сбора
+          description: Soul-side collection moment
           format: date-time
           type: string
         latest:
           $ref: "#/components/schemas/UtilizationLatest"
-          description: последний снимок (nil если данных нет)
+          description: latest snapshot (nil if there is no data)
         received_at:
-          description: Keeper-side момент приёма
+          description: Keeper-side receipt moment
           format: date-time
           type: string
         sid:
-          description: SID (FQDN) Soul-а
+          description: SID (FQDN) of the Soul
           type: string
         stale:
-          description: true если снимок протух (возраст > TTL) или данных нет
+          description: true if the snapshot is stale (age > TTL) or there is no data
           type: boolean
         window:
-          description: окно точек для спарклайнов, newest-first
+          description: window of points for sparklines, newest-first
           items:
             $ref: "#/components/schemas/UtilizationWindowPoint"
           type:
@@ -5088,7 +5088,7 @@ paths:
         - auth
   /auth/methods:
     get:
-      description: Публичный список способов входа для формы логина UI (password всегда true; ldap/oidc — по конфигурации keeper). Только booleans, без IdP-URL/доменов.
+      description: Public list of login methods for the UI login form (password is always true; ldap/oidc - per keeper config). Only booleans, no IdP URLs/domains.
       operationId: authMethods
       responses:
         "200":
@@ -5103,7 +5103,7 @@ paths:
               schema:
                 $ref: "#/components/schemas/HumaProblemError"
           description: Error
-      summary: Доступные способы логина
+      summary: Available login methods
       tags:
         - auth
   /auth/oidc/callback:
@@ -5203,7 +5203,7 @@ paths:
         - auth
   /auth/token:
     post:
-      description: "NIM-77/ADR-058 (Вариант B): читает HttpOnly-cookie soul_session (внутренний JWT), верифицирует тем же verifier, что и Bearer на /v1, и выпускает короткоживущий Bearer в JSON-теле. Субъект/роли — строго из проверенных claims cookie. В audit не пишется."
+      description: "NIM-77/ADR-058 (Option B): reads the HttpOnly cookie soul_session (internal JWT), verifies it with the same verifier as Bearer on /v1, and issues a short-lived Bearer in the JSON body. Subject/roles are taken strictly from the verified cookie claims. Not written to audit."
       operationId: authTokenExchange
       parameters:
         - in: cookie
@@ -5251,7 +5251,7 @@ paths:
               schema:
                 $ref: "#/components/schemas/HumaProblemError"
           description: Internal Server Error
-      summary: Обмен session-cookie на короткий Bearer
+      summary: Exchange session-cookie for a short-lived Bearer
       tags:
         - auth
   /v1/audit:
@@ -8174,15 +8174,15 @@ paths:
         - incarnation
   /v1/incarnations/{name}/telemetry:
     get:
-      description: Агрегат последних снимков утилизации по хостам инкарнации (latest+stale на хост, без окна) из Redis (NIM-86). Permission incarnation.get; видимость хостов — soul-read-scope. Пустой флот / вне scope → hosts:[]. Read-only, без audit.
+      description: Aggregate of the latest utilization snapshots by incarnation hosts (latest+stale per host, no window) from Redis (NIM-86). Permission incarnation.get; host visibility - soul-read-scope. Empty fleet / out of scope -> hosts:[]. Read-only, no audit.
       operationId: getIncarnationTelemetry
       parameters:
-        - description: имя инкарнации (корневой Coven-label хостов)
+        - description: incarnation name (root Coven label of the hosts)
           in: path
           name: name
           required: true
           schema:
-            description: имя инкарнации (корневой Coven-label хостов)
+            description: incarnation name (root Coven label of the hosts)
             type: string
       responses:
         "200":
@@ -8209,7 +8209,7 @@ paths:
               schema:
                 $ref: "#/components/schemas/HumaProblemError"
           description: Internal Server Error
-      summary: Host-vitals хостов инкарнации
+      summary: Host-vitals of the incarnation's hosts
       tags:
         - incarnation
   /v1/incarnations/{name}/traits:
@@ -10936,28 +10936,28 @@ paths:
         - service
   /v1/services/{name}/telemetry:
     get:
-      description: "Эффективный дефолтный (per-service, без essence/инкарнации) host-vitals-конфиг сервиса (enabled/interval_sec/collectors) из манифеста `telemetry:` + known_collectors (полный допустимый набор для UI, ADR-042 backend-driven, ADR-072). Permission service.list. Read-only, без audit. ETag=snapshot SHA1; If-None-Match → 304. Cache-Control: immutable+год для pinned commit-SHA ref, иначе no-cache (ветка/тег mutable). Сервис без блока telemetry → манифест-дефолты (enabled=true, interval_sec=30, все коллекторы) + 200. 502 — loader упал. Не путать с /v1/incarnations/{name}/telemetry (runtime host-vitals из Redis, NIM-86)."
+      description: "Effective default (per-service, without essence/incarnation) host-vitals config of the service (enabled/interval_sec/collectors) from the `telemetry:` manifest block + known_collectors (the full allowed set for the UI, ADR-042 backend-driven, ADR-072). Permission service.list. Read-only, no audit. ETag=snapshot SHA1; If-None-Match -> 304. Cache-Control: immutable+1 year for a pinned commit-SHA ref, otherwise no-cache (mutable branch/tag). A service without a telemetry block -> manifest defaults (enabled=true, interval_sec=30, all collectors) + 200. 502 - the loader failed. Not to be confused with /v1/incarnations/{name}/telemetry (runtime host-vitals from Redis, NIM-86)."
       operationId: getServiceTelemetry
       parameters:
-        - description: имя Service-а
+        - description: Service name
           in: path
           name: name
           required: true
           schema:
-            description: имя Service-а
+            description: Service name
             type: string
-        - description: опц. git-ref override (опущено → ref из реестра)
+        - description: optional git-ref override (omitted -> ref from the registry)
           explode: false
           in: query
           name: ref
           schema:
-            description: опц. git-ref override (опущено → ref из реестра)
+            description: optional git-ref override (omitted -> ref from the registry)
             type: string
-        - description: "conditional GET: 304, если совпало с ETag (snapshot SHA1)"
+        - description: "conditional GET: 304 if it matched the ETag (snapshot SHA1)"
           in: header
           name: If-None-Match
           schema:
-            description: "conditional GET: 304, если совпало с ETag (snapshot SHA1)"
+            description: "conditional GET: 304 if it matched the ETag (snapshot SHA1)"
             type: string
       responses:
         "200":
@@ -11003,7 +11003,7 @@ paths:
               schema:
                 $ref: "#/components/schemas/HumaProblemError"
           description: Bad Gateway
-      summary: дефолтный host-vitals telemetry-конфиг Service-а + допустимые коллекторы
+      summary: default host-vitals telemetry config of the Service + allowed collectors
       tags:
         - service
   /v1/sigil/keys:
@@ -11828,15 +11828,15 @@ paths:
         - soul
   /v1/souls/{sid}/telemetry:
     get:
-      description: Последний снимок утилизации хоста (CPU/load/mem/disk) + окно для спарклайнов из Redis (NIM-86, ADR-006), со scope-гейтом. Permission soul.list. stale=true если снимок протух или данных нет (старый агент → graceful). Read-only, без audit.
+      description: Latest host utilization snapshot (CPU/load/mem/disk) + a window for sparklines from Redis (NIM-86, ADR-006), with a scope gate. Permission soul.list. stale=true if the snapshot is stale or there is no data (an old agent -> graceful). Read-only, no audit.
       operationId: getSoulTelemetry
       parameters:
-        - description: SID (FQDN) Soul-а
+        - description: SID (FQDN) of the Soul
           in: path
           name: sid
           required: true
           schema:
-            description: SID (FQDN) Soul-а
+            description: SID (FQDN) of the Soul
             type: string
       responses:
         "200":
@@ -11869,7 +11869,7 @@ paths:
               schema:
                 $ref: "#/components/schemas/HumaProblemError"
           description: Internal Server Error
-      summary: Host-vitals Soul-а
+      summary: Host-vitals of the Soul
       tags:
         - soul
   /v1/synods:

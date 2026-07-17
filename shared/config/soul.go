@@ -118,8 +118,8 @@ type SoulSoulprint struct {
 	RefreshInterval string `yaml:"refresh_interval,omitempty"`
 }
 
-// SoulUtilization — параметры периодической отправки живой утилизации хоста
-// (ADR-072). `interval` — каденс pulse (default 30s, floor 10s в cmd/soul).
+// SoulUtilization — parameters for periodically sending live host utilization
+// (ADR-072). `interval` — pulse cadence (default 30s, floor 10s in cmd/soul).
 type SoulUtilization struct {
 	Interval string `yaml:"interval,omitempty"`
 }

@@ -128,19 +128,19 @@ func (l *ServiceLoader) ListUpgrades(art *ServiceArtifact) ([]Scenario, error) {
 	return ListUpgrades(art.LocalDir, l.snap.logger)
 }
 
-// CertPolicyInfo — проекция cert-rotation-политики снапшота Service-репо (NIM-99):
-// секция `certificate_rotation:` манифеста (nil = ротация не задекларирована) +
-// имена scenario/ снапшота (для валидации Rotation.Scenario резолвером/UI) + SHA1
-// снапшота (диагностика «какой commit»).
+// CertPolicyInfo — projection of the cert-rotation policy of a Service-repo snapshot (NIM-99):
+// the manifest's `certificate_rotation:` section (nil = rotation not declared) +
+// the snapshot's scenario/ names (for validating Rotation.Scenario via resolver/UI) + snapshot
+// SHA1 (diagnostics for "which commit").
 type CertPolicyInfo struct {
 	Rotation  *config.CertificateRotationConfig
 	Scenarios []string
 	SHA1      string
 }
 
-// LoadCertPolicy материализует снапшот сервиса ref и извлекает cert-rotation-
-// секцию манифеста + имена scenario/. Паттерн — [ListUpgrades]: делегирует скан в
-// пакетную [ListScenarios] с localDir снапшота и логгером загрузчика.
+// LoadCertPolicy materializes the service ref snapshot and extracts the cert-rotation
+// section of the manifest + the scenario/ names. Pattern — [ListUpgrades]: delegates the
+// scan to the batch [ListScenarios] with the snapshot's localDir and the loader's logger.
 func (l *ServiceLoader) LoadCertPolicy(ctx context.Context, ref ServiceRef) (*CertPolicyInfo, error) {
 	art, err := l.Load(ctx, ref)
 	if err != nil {

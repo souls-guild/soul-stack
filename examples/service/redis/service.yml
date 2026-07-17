@@ -395,8 +395,8 @@ revealable_secrets:
     enumerate: state.redis_users
     vault_ref: "secret/{service}/{incarnation}/users/{key}#password"
 
-# Авто-ротация серверного TLS (NIM-99): Reaper ротирует истекающие серты сценарием
-# rotate_tls Vault-ролью redis-server. Нет секции → ротация выкл.
+# Auto-rotation of server TLS (NIM-99): the Reaper rotates expiring certs via the
+# rotate_tls scenario with the redis-server Vault role. No section → rotation off.
 certificate_rotation:
   enable: true
   scenario: rotate_tls

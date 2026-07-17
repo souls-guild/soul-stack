@@ -22,8 +22,8 @@ func utilPusherWith(sid string, interval time.Duration, ts *telemetryState) util
 	}
 }
 
-// applyTelemetryConfig клампит доставленный interval в [floor 10s, ceiling 3600s]
-// (defense-in-depth поверх keeper-клампа) и выставляет delivered/enabled (NIM-87).
+// applyTelemetryConfig clamps the delivered interval to [floor 10s, ceiling 3600s]
+// (defense-in-depth on top of the keeper-side clamp) and sets delivered/enabled (NIM-87).
 func TestApplyTelemetryConfig_IntervalClampAndFlags(t *testing.T) {
 	cases := []struct {
 		name         string
@@ -54,7 +54,7 @@ func TestApplyTelemetryConfig_IntervalClampAndFlags(t *testing.T) {
 	}
 }
 
-// nil-cfg — no-op (defensive): delivered остаётся false.
+// nil-cfg - no-op (defensive): delivered stays false.
 func TestApplyTelemetryConfig_NilCfgNoop(t *testing.T) {
 	ts := &telemetryState{collectors: allCollectorsSet()}
 	ts.applyTelemetryConfig(nil)
@@ -63,8 +63,8 @@ func TestApplyTelemetryConfig_NilCfgNoop(t *testing.T) {
 	}
 }
 
-// collectorSetFromNames: пустой список → все 5; список → только валидные;
-// неизвестные имена игнорируются (валиден лишь config.KnownCollectors).
+// collectorSetFromNames: empty list -> all 5; a list -> only valid ones;
+// unknown names are ignored (only config.KnownCollectors is valid).
 func TestCollectorSetFromNames(t *testing.T) {
 	all := collectorSetFromNames(nil)
 	if len(all) != len(config.KnownCollectors) {
@@ -106,8 +106,8 @@ func TestClampUtilizationInterval(t *testing.T) {
 	}
 }
 
-// pulseEnabled: nil-holder / без директивы → pulse включён; delivered управляет
-// enable-тогглом (enabled=false → стоп, повторный enabled=true → возобновление).
+// pulseEnabled: nil-holder / no directive -> pulse enabled; delivered controls the
+// enable toggle (enabled=false -> stop, re-enabled=true -> resume).
 func TestPulseEnabled_Toggle(t *testing.T) {
 	var nilTs *telemetryState
 	if !nilTs.pulseEnabled() {
@@ -130,30 +130,30 @@ func TestPulseEnabled_Toggle(t *testing.T) {
 	}
 }
 
-// Durable across reconnect: delivered-конфиг (durable holder) перебивает
-// soul-local utilization.interval при старте новой сессии. Симулирует reconnect —
-// повторный effectiveStartInterval на том же holder-е (переживает сессию).
+// Durable across reconnect: the delivered config (durable holder) overrides
+// soul-local utilization.interval at the start of a new session. Simulates a reconnect -
+// a repeat effectiveStartInterval on the same holder (survives the session).
 func TestEffectiveStartInterval_DeliveredWinsOverSoulLocal(t *testing.T) {
-	store, _ := soulFixtureStore(t) // фикстура без блока utilization → soul-local default 30s
+	store, _ := soulFixtureStore(t) // fixture with no utilization block -> soul-local default 30s
 	logger := slog.New(slog.NewTextHandler(os.Stderr, nil))
 
 	ts := &telemetryState{collectors: allCollectorsSet()}
-	// Сессия 1: директивы ещё не было → soul-local (30s).
+	// Session 1: no directive yet -> soul-local (30s).
 	if d := effectiveStartInterval(ts, store, logger); d != 30*time.Second {
 		t.Fatalf("pre-directive interval=%v want 30s (soul-local)", d)
 	}
 
-	// Пришла директива 60s.
+	// Directive of 60s arrived.
 	ts.applyTelemetryConfig(&keeperv1.TelemetryConfig{Enabled: true, IntervalSec: 60})
 
-	// Сессия 2 (после «reconnect»): тот же holder → delivered 60s, не soul-local.
+	// Session 2 (after "reconnect"): same holder -> delivered 60s, not soul-local.
 	if d := effectiveStartInterval(ts, store, logger); d != 60*time.Second {
 		t.Errorf("post-reconnect interval=%v want 60s (delivered wins)", d)
 	}
 }
 
-// Живое применение директивы: каденс меняется на 60s (holder+payload), gating
-// коллекторов уважается — процесс не рестартует (in-place мутация holder-а).
+// Live application of a directive: cadence changes to 60s (holder+payload), collector
+// gating is respected - the process does not restart (in-place holder mutation).
 func TestTelemetryDirective_LiveRecadenceAndGating(t *testing.T) {
 	ts := &telemetryState{collectors: allCollectorsSet()}
 	ts.applyTelemetryConfig(&keeperv1.TelemetryConfig{Enabled: true, IntervalSec: 60, Collectors: []string{"cpu"}})
@@ -167,19 +167,19 @@ func TestTelemetryDirective_LiveRecadenceAndGating(t *testing.T) {
 		t.Fatalf("pushOnce: %v", err)
 	}
 	rep := sink.reports[0]
-	// interval_sec несёт эффективный каденс (Keeper масштабирует TTL).
+	// interval_sec carries the effective cadence (Keeper scales the TTL).
 	if rep.GetIntervalSec() != 60 {
 		t.Errorf("payload interval_sec=%d want 60", rep.GetIntervalSec())
 	}
-	// collectors=[cpu] → mem/load/uptime нулевые, disk пропущен.
+	// collectors=[cpu] -> mem/load/uptime are zero, disk is skipped.
 	if rep.GetMemTotalMb() != 0 || rep.GetLoad1() != 0 || rep.GetUptimeSec() != 0 || rep.GetDisks() != nil {
 		t.Errorf("only cpu expected, got mem/load/uptime/disks: %d/%v/%d/%v",
 			rep.GetMemTotalMb(), rep.GetLoad1(), rep.GetUptimeSec(), rep.GetDisks())
 	}
 }
 
-// pushOnce всегда проставляет interval_sec = эффективный каденс, даже без
-// доставленной директивы (soul-local/дефолтный интервал).
+// pushOnce always sets interval_sec = the effective cadence, even without a
+// delivered directive (soul-local/default interval).
 func TestUtilPusher_IntervalSecFromInterval(t *testing.T) {
 	sink := &captureUtilSink{}
 	up := utilPusherWith("h", 25*time.Second, &telemetryState{collectors: allCollectorsSet()})

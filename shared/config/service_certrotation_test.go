@@ -7,18 +7,18 @@ import (
 	"github.com/souls-guild/soul-stack/shared/diag"
 )
 
-// TestLoadServiceManifest_CertificateRotation — секция certificate_rotation
-// (NIM-99): opt-in политика авто-ротации TLS-сертов и её валидация. Формат/
-// duration проверяются структурно (независимо от enable); обязательность
-// scenario/pki_role — только при enable:true (инертный opt-in).
+// TestLoadServiceManifest_CertificateRotation — the certificate_rotation section
+// (NIM-99): opt-in TLS-cert auto-rotation policy and its validation. Format/
+// duration are checked structurally (independent of enable); scenario/pki_role
+// are required only when enable:true (inert opt-in).
 func TestLoadServiceManifest_CertificateRotation(t *testing.T) {
 	const base = "name: svc-golden\nstate_schema_version: 1\nstate_schema:\n  type: object\n"
 
 	cases := []struct {
 		name     string
-		section  string // YAML секции (пусто = секции нет вовсе)
-		wantCode string // ожидаемый code; пусто = ожидаем 0 ошибок
-		wantAt   string // ожидаемый YAMLPath; пусто = путь не проверяем
+		section  string // YAML of the section (empty = no section at all)
+		wantCode string // expected code; empty = expect 0 errors
+		wantAt   string // expected YAMLPath; empty = path not checked
 	}{
 		{
 			name: "enable with scenario+pki_role is valid",
@@ -77,14 +77,14 @@ func TestLoadServiceManifest_CertificateRotation(t *testing.T) {
 			wantAt:   "$.certificate_rotation.scenario",
 		},
 		{
-			// enable:false → required-поля не нужны, секция инертна (opt-in).
+			// enable:false → required fields not needed, section is inert (opt-in).
 			name: "disabled section requires nothing",
 			section: `certificate_rotation:
   enable: false
 `,
 		},
 		{
-			// enable опущен = false по zero-value → тоже инертна.
+			// enable omitted = false by zero-value → also inert.
 			name: "enable omitted is inert",
 			section: `certificate_rotation:
   threshold: 30d
@@ -114,7 +114,7 @@ func TestLoadServiceManifest_CertificateRotation(t *testing.T) {
 			if tc.wantCode == "" {
 				if diag.HasErrors(diags) {
 					dump(t, diags)
-					t.Fatalf("ожидалось 0 ошибок")
+					t.Fatalf("expected 0 errors")
 				}
 				return
 			}
@@ -124,14 +124,14 @@ func TestLoadServiceManifest_CertificateRotation(t *testing.T) {
 			}
 			if !ok {
 				dump(t, diags)
-				t.Fatalf("ожидался %s @ %s", tc.wantCode, tc.wantAt)
+				t.Fatalf("expected %s @ %s", tc.wantCode, tc.wantAt)
 			}
 		})
 	}
 }
 
-// TestLoadServiceManifest_CertificateRotationDecode — yaml-теги секции декодятся
-// в типизированный блок (в т.ч. pki_role → PKIRole).
+// TestLoadServiceManifest_CertificateRotationDecode — the section's yaml tags decode
+// into a typed block (including pki_role → PKIRole).
 func TestLoadServiceManifest_CertificateRotationDecode(t *testing.T) {
 	src := "name: svc-golden\nstate_schema_version: 1\nstate_schema:\n  type: object\n" + `certificate_rotation:
   enable: true
@@ -142,19 +142,19 @@ func TestLoadServiceManifest_CertificateRotationDecode(t *testing.T) {
 	cfg, _, diags, _ := LoadServiceManifestFromBytes("service.yml", []byte(src), ValidateOptions{})
 	if diag.HasErrors(diags) {
 		dump(t, diags)
-		t.Fatal("неожиданные ошибки")
+		t.Fatal("unexpected errors")
 	}
 	crt := cfg.CertificateRotation
 	if crt == nil {
-		t.Fatal("CertificateRotation nil, ожидался разобранный блок")
+		t.Fatal("CertificateRotation nil, expected a parsed block")
 	}
 	if !crt.Enable || crt.Scenario != "rotate_tls" || crt.Threshold != "30d" || crt.PKIRole != "redis-server" {
 		t.Errorf("decode mismatch: %#v", crt)
 	}
 }
 
-// TestLoadServiceManifest_CertificateRotationExamples — golden-примеры redis и
-// dragonfly с секцией certificate_rotation загружаются без ошибок.
+// TestLoadServiceManifest_CertificateRotationExamples — golden examples of redis and
+// dragonfly with the certificate_rotation section load without errors.
 func TestLoadServiceManifest_CertificateRotationExamples(t *testing.T) {
 	for _, svc := range []string{"redis", "dragonfly"} {
 		svc := svc
@@ -166,10 +166,10 @@ func TestLoadServiceManifest_CertificateRotationExamples(t *testing.T) {
 			}
 			if diag.HasErrors(diags) {
 				dump(t, diags)
-				t.Fatalf("ожидалось 0 ошибок на golden %s", svc)
+				t.Fatalf("expected 0 errors on golden %s", svc)
 			}
 			if cfg.CertificateRotation == nil {
-				t.Fatalf("%s: секция certificate_rotation не разобрана", svc)
+				t.Fatalf("%s: certificate_rotation section not parsed", svc)
 			}
 			if !cfg.CertificateRotation.Enable || cfg.CertificateRotation.Scenario != "rotate_tls" {
 				t.Errorf("%s: certificate_rotation = %#v", svc, cfg.CertificateRotation)

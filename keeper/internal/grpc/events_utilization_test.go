@@ -13,7 +13,7 @@ import (
 	"github.com/alicebob/miniredis/v2"
 )
 
-// newUtilHandler — handler с miniredis-Redis-ом (unit-харнесс) и capture-audit-ом.
+// newUtilHandler — handler with a miniredis Redis (unit harness) and a capture audit writer.
 func newUtilHandler(t *testing.T) (*eventStreamHandler, *keeperredis.Client) {
 	t.Helper()
 	mr := miniredis.RunT(t)
@@ -44,10 +44,10 @@ func utilizationEvent() *keeperv1.HostUtilization {
 	}
 }
 
-// TestHandleHostUtilization_WritesUnderAuthenticatedSID — снимок ложится в Redis
-// под SID из параметра dispatch (аутентифицированный peer), не из payload:
-// у HostUtilization поля sid нет вовсе, так что маршрут может идти только по
-// переданному sid. Read под другим SID пуст.
+// TestHandleHostUtilization_WritesUnderAuthenticatedSID — the snapshot lands in Redis
+// under the SID from the dispatch parameter (authenticated peer), not from the payload:
+// HostUtilization has no sid field at all, so routing can only go by the
+// passed-in sid. Read under a different SID is empty.
 func TestHandleHostUtilization_WritesUnderAuthenticatedSID(t *testing.T) {
 	h, rc := newUtilHandler(t)
 	ctx := context.Background()
@@ -60,13 +60,13 @@ func TestHandleHostUtilization_WritesUnderAuthenticatedSID(t *testing.T) {
 		t.Fatalf("ReadUtilization: %v", err)
 	}
 	if !ok {
-		t.Fatal("ok=false — снимок не записан под аутентифицированным SID")
+		t.Fatal("ok=false — snapshot not written under the authenticated SID")
 	}
 	if snap.CPUPct != 12.5 || snap.MemUsedMB != 1024 {
 		t.Errorf("snapshot mismatch: %+v", snap)
 	}
 	if _, okOther, _ := keeperredis.ReadUtilization(ctx, rc, "other.example.com"); okOther {
-		t.Error("снимок виден под чужим SID — маршрут не по аутентифицированному sid")
+		t.Error("snapshot visible under someone else's SID — routing is not by authenticated sid")
 	}
 
 	pts, err := keeperredis.ReadUtilizationWindow(ctx, rc, sid, 10)
@@ -78,30 +78,30 @@ func TestHandleHostUtilization_WritesUnderAuthenticatedSID(t *testing.T) {
 	}
 }
 
-// TestHandleHostUtilization_NilPayloadNoWrite — nil ev → тихий выход, ничего не пишется.
+// TestHandleHostUtilization_NilPayloadNoWrite — nil ev → silent exit, nothing is written.
 func TestHandleHostUtilization_NilPayloadNoWrite(t *testing.T) {
 	h, rc := newUtilHandler(t)
 	ctx := context.Background()
 	h.handleHostUtilization(ctx, "host.example.com", "session-1", nil)
 	if _, ok, _ := keeperredis.ReadUtilization(ctx, rc, "host.example.com"); ok {
-		t.Error("nil payload что-то записал")
+		t.Error("nil payload wrote something")
 	}
 }
 
-// TestHandleHostUtilization_NilRedisNoPanic — Redis=nil (dev/unit) → no-op без паники.
+// TestHandleHostUtilization_NilRedisNoPanic — Redis=nil (dev/unit) → no-op without a panic.
 func TestHandleHostUtilization_NilRedisNoPanic(t *testing.T) {
 	h := newTestHandler(t, &recordingAudit{}) // deps.Redis == nil
 	h.handleHostUtilization(context.Background(), "host.example.com", "session-1", utilizationEvent())
 }
 
-// TestHandleHostUtilization_WriteFailure_GracefulNoPanic — сбой записи в Redis
-// (закрытый клиент) НЕ паникует и НЕ всплывает наверх (handler void → warn), и НЕ
-// трогает lease/presence: авторитет живости независим от vitals (ADR-072(e)).
+// TestHandleHostUtilization_WriteFailure_GracefulNoPanic — a Redis write failure
+// (closed client) does NOT panic and does NOT bubble up (handler void → warn), and does NOT
+// touch lease/presence: liveness authority is independent of vitals (ADR-072(e)).
 func TestHandleHostUtilization_WriteFailure_GracefulNoPanic(t *testing.T) {
 	h, rc := newUtilHandler(t)
 	if err := rc.Close(); err != nil {
 		t.Fatalf("close: %v", err)
 	}
-	// закрытый клиент → WriteUtilization падает внутри; сбой глотается, без паники.
+	// closed client → WriteUtilization fails internally; the failure is swallowed, no panic.
 	h.handleHostUtilization(context.Background(), "host.example.com", "session-1", utilizationEvent())
 }

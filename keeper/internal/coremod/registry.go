@@ -109,13 +109,13 @@ type Deps struct {
 	// `core.cert.registered` (warrant.issued_by_kid). Empty → NULL in registry.
 	KID string
 
-	// Cert* — зависимости state `core.cert.issued` (NIM-99): Keeper САМ выпускает
-	// серт. Выставляются в cert.Module после cert.New; nil любого → issued вернёт
-	// failed («не сконфигурирован»), registered от них не зависит.
+	// Cert* — dependencies of state `core.cert.issued` (NIM-99): Keeper ITSELF
+	// issues the cert. Set on cert.Module after cert.New; nil in any of them →
+	// issued returns failed ("not configured"), registered does not depend on them.
 	CertSigner      certissue.Signer         // Vault PKI sign CSR
-	CertVaultWriter certissue.KVWriter       // запись cert/key в Vault
-	CertPolicy      cert.IssuePolicyResolver // резолвер политики ротации из манифеста
-	CertCSRGen      certissue.CSRGenFunc     // генерация keypair+CSR (keeper-side, R2)
+	CertVaultWriter certissue.KVWriter       // writes cert/key into Vault
+	CertPolicy      cert.IssuePolicyResolver // resolves the rotation policy from the manifest
+	CertCSRGen      certissue.CSRGenFunc     // generates keypair+CSR (keeper-side, R2)
 	CertPKIMount    func() string            // hot-reload keeper.yml Vault.PKIMount
 
 	// BootstrapTransport is token delivery mode for `core.bootstrap.delivered`

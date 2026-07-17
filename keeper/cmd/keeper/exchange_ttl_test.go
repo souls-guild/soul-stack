@@ -5,18 +5,18 @@ import (
 	"time"
 )
 
-// TestClampExchangeTTL — floor auth.jwt.exchange_ttl: значение ниже минимума
-// поднимается до 1m, на/выше — без изменений (NIM-77).
+// TestClampExchangeTTL — floor auth.jwt.exchange_ttl: a value below the minimum
+// is raised to 1m, at/above stays unchanged (NIM-77).
 func TestClampExchangeTTL(t *testing.T) {
 	cases := []struct {
 		name string
 		in   time.Duration
 		want time.Duration
 	}{
-		{"ниже floor", 5 * time.Second, minExchangeTTL},
-		{"ровно floor", 1 * time.Minute, 1 * time.Minute},
-		{"дефолт выше floor", 10 * time.Minute, 10 * time.Minute},
-		{"ноль поднимается", 0, minExchangeTTL},
+		{"below floor", 5 * time.Second, minExchangeTTL},
+		{"exactly floor", 1 * time.Minute, 1 * time.Minute},
+		{"default above floor", 10 * time.Minute, 10 * time.Minute},
+		{"zero raised", 0, minExchangeTTL},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

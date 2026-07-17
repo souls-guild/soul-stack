@@ -1,10 +1,10 @@
 package redis
 
-// Host-vitals кэш Soul-агентов в Redis (NIM-86): последний снимок утилизации
-// (Hash `soul:<sid>:util`) + короткое окно точек (list-ring
-// `soul:<sid>:util:win`) для спарклайнов. Только Redis, без PG — телеметрия
-// волатильна и живёт под TTL (рестарт Redis → данные теряются, это норма).
-// Ключуется по аутентифицированному SID (mTLS peer), не по payload.
+// Host-vitals cache of Soul agents in Redis (NIM-86): the latest utilization
+// snapshot (Hash `soul:<sid>:util`) + a short window of points (list-ring
+// `soul:<sid>:util:win`) for sparklines. Redis only, no PG — telemetry is
+// volatile and lives under TTL (Redis restart → data lost, this is normal).
+// Keyed by the authenticated SID (mTLS peer), not by payload.
 
 import (
 	"context"
@@ -18,21 +18,21 @@ import (
 )
 
 const (
-	// UtilizationWindowSize — длина окна точек (cap для LTRIM).
+	// UtilizationWindowSize — length of the point window (cap for LTRIM).
 	UtilizationWindowSize = 60
-	// UtilizationTTL — ФЛОР времени жизни latest/окна (NIM-87). Эффективный TTL
-	// масштабируется [utilizationTTL] под каденс Soul-а (3× interval_sec из
-	// payload), но не опускается ниже этого флора: при 0/старом soul (нет
-	// interval_sec) ключ живёт ≥3 pulse-а на дефолтном каденсе 30s.
+	// UtilizationTTL — FLOOR of the latest/window lifetime (NIM-87). Effective TTL
+	// is scaled by [utilizationTTL] to the Soul's cadence (3x interval_sec from
+	// the payload), but never drops below this floor: at 0/old soul (no
+	// interval_sec) the key lives ≥3 pulses on the default 30s cadence.
 	UtilizationTTL = 90 * time.Second
-	// utilizationIntervalSecCeil — верхний кламп interval_sec из payload (3×3600) против «бессмертного» TTL от rogue/старого Soul (безопасность на первом месте).
+	// utilizationIntervalSecCeil — upper clamp on interval_sec from the payload (3x3600) against an "immortal" TTL from a rogue/old Soul (safety first).
 	utilizationIntervalSecCeil = 3 * 3600
 )
 
-// utilizationTTL масштабирует TTL vitals-ключей под эффективный каденс Soul-а
-// (NIM-87): 3× interval_sec, кламп в [UtilizationTTL, 3×utilizationIntervalSecCeil].
-// intervalSec ≤0 (старый soul без поля / сбой) → флор; аномально большой (rogue/
-// забагованный Soul) капается потолком — иначе TTL-ключ стал бы «бессмертным».
+// utilizationTTL scales the TTL of vitals keys to the effective cadence of the
+// Soul (NIM-87): 3x interval_sec, clamped to [UtilizationTTL, 3xutilizationIntervalSecCeil].
+// intervalSec ≤0 (old soul without the field / failure) → floor; anomalously large (rogue/
+// buggy Soul) is capped by the ceiling — otherwise the TTL key would become "immortal".
 func utilizationTTL(intervalSec int32) time.Duration {
 	if intervalSec < 0 {
 		intervalSec = 0
@@ -47,20 +47,20 @@ func utilizationTTL(intervalSec int32) time.Duration {
 	return ttl
 }
 
-// UtilizationKey — Hash последнего снимка утилизации SID-а.
+// UtilizationKey — Hash of the latest utilization snapshot of a SID.
 func UtilizationKey(sid string) string { return "soul:" + sid + ":util" }
 
-// UtilizationWindowKey — list-ring окна точек утилизации SID-а.
+// UtilizationWindowKey — list-ring of the utilization point window of a SID.
 func UtilizationWindowKey(sid string) string { return "soul:" + sid + ":util:win" }
 
-// DiskUsage — использование одного примонтированного тома.
+// DiskUsage — usage of one mounted volume.
 type DiskUsage struct {
 	Mount   string `json:"mount"`
 	UsedMB  int64  `json:"used_mb"`
 	TotalMB int64  `json:"total_mb"`
 }
 
-// UtilizationSnapshot — последний снимок host-vitals хоста.
+// UtilizationSnapshot — the latest host-vitals snapshot of a host.
 type UtilizationSnapshot struct {
 	CollectedAt time.Time
 	ReceivedAt  time.Time
@@ -73,12 +73,12 @@ type UtilizationSnapshot struct {
 	SwapUsedMB  int64
 	UptimeSec   int64
 	Disks       []DiskUsage
-	// IntervalSec — эффективный каденс, на котором Soul прислал снимок (NIM-87);
-	// 0 для старого soul без поля. Отражает решённый Keeper-ом telemetry-интервал.
+	// IntervalSec — the effective cadence on which the Soul sent the snapshot (NIM-87);
+	// 0 for an old soul without the field. Reflects the telemetry interval resolved by Keeper.
 	IntervalSec int32
 }
 
-// UtilizationPoint — компактная точка окна для спарклайнов.
+// UtilizationPoint — a compact window point for sparklines.
 type UtilizationPoint struct {
 	CollectedAt time.Time `json:"collected_at"`
 	CPUPct      float64   `json:"cpu_pct"`
@@ -87,11 +87,11 @@ type UtilizationPoint struct {
 	MemTotalMB  int64     `json:"mem_total_mb"`
 }
 
-// WriteUtilization кладёт снимок утилизации SID-а в Redis одним pipeline: latest
-// Hash (все поля + received_at=now, disks — JSON-строкой) с TTL + окно (LPUSH
-// компактной точки + LTRIM cap + Expire). НЕ транзакция: latest и окно независимы
-// (readers их не сверяют), а plain Pipeline роутит по-ключу и не даёт CROSSSLOT на
-// Redis Cluster — как heartbeat/soullease.
+// WriteUtilization writes a SID's utilization snapshot to Redis in one pipeline: latest
+// Hash (all fields + received_at=now, disks — as a JSON string) with TTL + window (LPUSH
+// of the compact point + LTRIM cap + Expire). NOT a transaction: latest and window are independent
+// (readers do not cross-check them), and a plain Pipeline routes per-key and avoids CROSSSLOT on
+// Redis Cluster — same as heartbeat/soullease.
 func WriteUtilization(ctx context.Context, c *Client, sid string, ev *keeperv1.HostUtilization, now time.Time) error {
 	if c == nil {
 		return errors.New("redis.WriteUtilization: nil client")
@@ -131,8 +131,8 @@ func WriteUtilization(ctx context.Context, c *Client, sid string, ev *keeperv1.H
 	key := UtilizationKey(sid)
 	winKey := UtilizationWindowKey(sid)
 
-	// TTL масштабируется под эффективный каденс Soul-а (NIM-87): больший интервал
-	// → больший TTL (≥3 pulse-а), с флором UtilizationTTL для 0/старого soul.
+	// TTL is scaled to the effective cadence of the Soul (NIM-87): a larger interval
+	// → a larger TTL (≥3 pulses), with a floor of UtilizationTTL for 0/old soul.
 	ttl := utilizationTTL(ev.GetIntervalSec())
 
 	pipe := c.underlying().Pipeline()
@@ -160,9 +160,9 @@ func WriteUtilization(ctx context.Context, c *Client, sid string, ev *keeperv1.H
 	return nil
 }
 
-// ReadUtilization возвращает последний снимок SID-а. На отсутствие ключа —
-// (zero, false, nil), не ошибка (stale/never-reported трактуется как «нет
-// данных»).
+// ReadUtilization returns the latest snapshot of a SID. If the key is absent —
+// (zero, false, nil), not an error (stale/never-reported is treated as "no
+// data").
 func ReadUtilization(ctx context.Context, c *Client, sid string) (UtilizationSnapshot, bool, error) {
 	var snap UtilizationSnapshot
 	if c == nil {
@@ -197,8 +197,8 @@ func ReadUtilization(ctx context.Context, c *Client, sid string) (UtilizationSna
 	return snap, true, nil
 }
 
-// ReadUtilizationWindow возвращает до limit последних точек окна (newest-first,
-// как их сложил LPUSH). limit вне (0, UtilizationWindowSize] капается к окну.
+// ReadUtilizationWindow returns up to limit of the latest window points (newest-first,
+// as LPUSH laid them out). limit outside (0, UtilizationWindowSize] is capped to the window.
 func ReadUtilizationWindow(ctx context.Context, c *Client, sid string, limit int) ([]UtilizationPoint, error) {
 	if c == nil {
 		return nil, errors.New("redis.ReadUtilizationWindow: nil client")
@@ -238,8 +238,8 @@ func disksFromProto(in []*keeperv1.DiskUtilization) []DiskUsage {
 	return out
 }
 
-// parseUtilTime — best-effort парс RFC3339Nano; пустая/битая строка → zero-time
-// (телеметрия волатильна, полу-битую запись трактуем мягко).
+// parseUtilTime — best-effort parse of RFC3339Nano; an empty/broken string → zero-time
+// (telemetry is volatile, we treat a half-broken record leniently).
 func parseUtilTime(s string) time.Time {
 	if s == "" {
 		return time.Time{}

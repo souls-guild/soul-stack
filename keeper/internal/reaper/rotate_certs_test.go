@@ -209,7 +209,7 @@ func (r certErrRow) Scan(_ ...any) error { return r.err }
 type fakeSigner struct {
 	err      error
 	cert     []byte
-	gotMount string // захват аргументов последнего SignCSR (для ассерта mount/role)
+	gotMount string // captures the args of the last SignCSR call (for asserting mount/role)
 	gotRole  string
 }
 
@@ -275,7 +275,7 @@ func testRotatorCfg() CertRotatorConfig {
 	}
 }
 
-// fakePolicyResolver отдаёт заданную политику/ошибку (замена certpolicy.Resolver).
+// fakePolicyResolver returns a given policy/error (a stand-in for certpolicy.Resolver).
 type fakePolicyResolver struct {
 	pol certpolicy.Policy
 	err error
@@ -285,8 +285,8 @@ func (f *fakePolicyResolver) Resolve(_ context.Context, _ string) (certpolicy.Po
 	return f.pol, f.err
 }
 
-// enabledCertPolicy — включённая политика по умолчанию: сценарий = rotateTLSScenario
-// (и он в KnownScenarios), pki_role задан. Happy-путь ротатора проходит все скипы.
+// enabledCertPolicy is the default enabled policy: scenario = rotateTLSScenario
+// (and it is in KnownScenarios), pki_role is set. The rotator's happy path passes all skips.
 func enabledCertPolicy() certpolicy.Policy {
 	return certpolicy.Policy{
 		Service:        "redis",
@@ -298,7 +298,7 @@ func enabledCertPolicy() certpolicy.Policy {
 	}
 }
 
-// buildRotator собирает CertRotator поверх fake-ов с включённой политикой.
+// buildRotator assembles a CertRotator on top of fakes with an enabled policy.
 func buildRotator(db *fakeCertDB, signer certissue.Signer, vw CertVaultWriter, cfg CertRotatorConfig) *CertRotator {
 	return newCertRotatorFromDB(db, CertRotatorDeps{
 		Signer: signer,
@@ -348,10 +348,10 @@ func TestCertRotator_HappyRotation(t *testing.T) {
 	}
 }
 
-// TestCertRotator_EmitsRotatedAudit_NoSecretLeak — GUARD (NIM-99 QA G3): happy-путь
-// ротации эмитит cert.rotated с НЕ-секретной нагрузкой (incarnation/fingerprint/
-// serial/not_after/voyage/superseded), но БЕЗ приватника или PEM (симметрия с
-// issued-аудитом).
+// TestCertRotator_EmitsRotatedAudit_NoSecretLeak - GUARD (NIM-99 QA G3): the happy path
+// of rotation emits cert.rotated with a NON-secret payload (incarnation/fingerprint/
+// serial/not_after/voyage/superseded), but WITHOUT the private key or PEM (symmetric with
+// the issued-audit).
 func TestCertRotator_EmitsRotatedAudit_NoSecretLeak(t *testing.T) {
 	db := &fakeCertDB{
 		dueRows:    [][]any{dueRow("cert-1", "redis-prod", time.Now().Add(24*time.Hour))},
@@ -372,7 +372,7 @@ func TestCertRotator_EmitsRotatedAudit_NoSecretLeak(t *testing.T) {
 		t.Fatalf("Run: %v", err)
 	}
 	if len(fa.events) != 1 {
-		t.Fatalf("ожидалось 1 cert.rotated событие, got %d", len(fa.events))
+		t.Fatalf("expected 1 cert.rotated event, got %d", len(fa.events))
 	}
 	ev := fa.events[0]
 	if ev.EventType != audit.EventCertRotated {
@@ -383,21 +383,21 @@ func TestCertRotator_EmitsRotatedAudit_NoSecretLeak(t *testing.T) {
 	}
 	for _, k := range []string{"incarnation", "fingerprint", "serial_number", "not_after", "voyage_id", "superseded_cert_id"} {
 		if _, ok := ev.Payload[k]; !ok {
-			t.Errorf("payload не содержит не-секретный ключ %q", k)
+			t.Errorf("payload does not contain non-secret key %q", k)
 		}
 	}
-	// Приватник/PEM в payload течь не должны.
+	// The private key/PEM must not leak into the payload.
 	for _, k := range []string{"key", "key_pem", "KeyPEM", "cert_pem", "cert", "private_key", "pem"} {
 		if _, leaked := ev.Payload[k]; leaked {
-			t.Errorf("payload не должен нести секрет %q", k)
+			t.Errorf("payload must not carry secret %q", k)
 		}
 	}
 }
 
-// TestCertRotator_SingleWinner_LostCAS — GUARD single-winner (design.md): если
-// CAS active→rotating вернул 0 (другой тик/инстанс перехватил), ротация НЕ
-// происходит — ни Voyage, ни Vault-записи, ни insert-ов. Два тика на один
-// due-cert не спавнят две ротации.
+// TestCertRotator_SingleWinner_LostCAS - GUARD single-winner (design.md): if
+// the active->rotating CAS returned 0 (another tick/instance grabbed it), rotation does NOT
+// happen - no Voyage, no Vault writes, no inserts. Two ticks on one
+// due-cert do not spawn two rotations.
 func TestCertRotator_SingleWinner_LostCAS(t *testing.T) {
 	certPEM := makeTestCertPEM(t)
 	db := &fakeCertDB{

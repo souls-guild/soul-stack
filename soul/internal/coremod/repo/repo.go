@@ -450,9 +450,9 @@ func validateName(name string) error {
 	return nil
 }
 
-// validateArch санитизирует токены архитектур: значение попадает внутрь
-// apt-опций `deb [... arch=<v>]`, поэтому пробел/скобка/`=` сломали бы синтаксис
-// опций (инъекция). apt-архитектуры — строчные alnum (amd64/arm64/i386/all/…).
+// validateArch sanitizes architecture tokens: the value goes inside the
+// apt options `deb [... arch=<v>]`, so a space/bracket/`=` would break the
+// option syntax (injection). apt architectures are lowercase alnum (amd64/arm64/i386/all/...).
 func validateArch(arch []string) error {
 	for _, a := range arch {
 		if a == "" {

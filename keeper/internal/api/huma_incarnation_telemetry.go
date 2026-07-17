@@ -1,8 +1,8 @@
 package api
 
-// GET /v1/incarnations/{name}/telemetry — агрегат host-vitals по хостам инкарнации
-// (NIM-86). READ, БЕЗ audit. Existence-gate incarnation.get (как incarnation-read);
-// видимость хостов сужает soul-read-scope. Reply — [handlers.IncarnationTelemetryReply].
+// GET /v1/incarnations/{name}/telemetry — aggregate host-vitals across incarnation hosts
+// (NIM-86). READ, WITHOUT audit. Existence-gate incarnation.get (like incarnation-read);
+// host visibility is narrowed by soul-read-scope. Reply — [handlers.IncarnationTelemetryReply].
 
 import (
 	"context"
@@ -15,33 +15,33 @@ import (
 
 // incarnationTelemetryInput — huma-input GET /v1/incarnations/{name}/telemetry.
 type incarnationTelemetryInput struct {
-	Name string `path:"name" doc:"имя инкарнации (корневой Coven-label хостов)"`
+	Name string `path:"name" doc:"incarnation name (root Coven-label of hosts)"`
 }
 
 // incarnationTelemetryOutput — huma-output: Body — [handlers.IncarnationTelemetryReply]
-// (latest+stale на хост, без окна).
+// (latest+stale per host, without a window).
 type incarnationTelemetryOutput struct {
 	Body handlers.IncarnationTelemetryReply
 }
 
-// incarnationTelemetryOperation — метаданные GET /v1/incarnations/{name}/telemetry.
-// DefaultStatus=200. READ-роут: audit НЕ навешан. Permission incarnation.get.
-// Пустой флот / вне scope → hosts:[] (не ошибка). Errors: 403, 422 bad name, 500.
+// incarnationTelemetryOperation — metadata for GET /v1/incarnations/{name}/telemetry.
+// DefaultStatus=200. READ-route: audit is NOT attached. Permission incarnation.get.
+// Empty souls / out of scope → hosts:[] (not an error). Errors: 403, 422 bad name, 500.
 func incarnationTelemetryOperation() huma.Operation {
 	return huma.Operation{
 		OperationID:   "getIncarnationTelemetry",
 		Method:        http.MethodGet,
 		Path:          "/{name}/telemetry",
-		Summary:       "Host-vitals хостов инкарнации",
-		Description:   "Агрегат последних снимков утилизации по хостам инкарнации (latest+stale на хост, без окна) из Redis (NIM-86). Permission incarnation.get; видимость хостов — soul-read-scope. Пустой флот / вне scope → hosts:[]. Read-only, без audit.",
+		Summary:       "Host-vitals of incarnation hosts",
+		Description:   "Aggregate of the latest utilization snapshots across incarnation hosts (latest+stale per host, without a window) from Redis (NIM-86). Permission incarnation.get; host visibility - soul-read-scope. Empty souls / out of scope -> hosts:[]. Read-only, without audit.",
 		Tags:          []string{"incarnation"},
 		DefaultStatus: http.StatusOK,
 		Errors:        []int{http.StatusForbidden, http.StatusUnprocessableEntity, http.StatusInternalServerError},
 	}
 }
 
-// registerHumaIncarnationTelemetry монтирует GET /v1/incarnations/{name}/telemetry
-// через huma (READ, БЕЗ audit). nil telemetryH → не подключается.
+// registerHumaIncarnationTelemetry mounts GET /v1/incarnations/{name}/telemetry
+// via huma (READ, WITHOUT audit). nil telemetryH → not registered.
 func registerHumaIncarnationTelemetry(humaAPI huma.API, telemetryH *handlers.TelemetryHandler) {
 	if telemetryH == nil {
 		return

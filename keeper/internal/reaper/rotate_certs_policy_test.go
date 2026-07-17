@@ -11,7 +11,7 @@ import (
 	"github.com/souls-guild/soul-stack/keeper/internal/voyage"
 )
 
-// newPolicyRotator — ротатор поверх fake-ов с ЗАДАННЫМ резолвером политики.
+// newPolicyRotator — rotator on top of fakes with a GIVEN policy resolver.
 func newPolicyRotator(db *fakeCertDB, signer certissue.Signer, vw CertVaultWriter, res *fakePolicyResolver) *CertRotator {
 	return newCertRotatorFromDB(db, CertRotatorDeps{
 		Signer: signer,
@@ -32,10 +32,10 @@ func dueCertFor(certID, incarnation string) dueCert {
 	}
 }
 
-// TestCertRotator_Policy_Disabled_SkipsNoFail — GUARD (NIM-99 Slice B): нет секции
-// certificate_rotation / enable:false → rotateOne скипает БЕЗ fallback на
-// rotate_tls: Voyage не вставлен, markFailed НЕ вызван, серт остаётся active
-// (casCalls==0 ⟺ ни CAS active→rotating, ни CAS rotating→failed не было).
+// TestCertRotator_Policy_Disabled_SkipsNoFail — GUARD (NIM-99 Slice B): no
+// certificate_rotation section / enable:false → rotateOne skips WITHOUT fallback to
+// rotate_tls: Voyage is not inserted, markFailed is NOT called, the cert stays active
+// (casCalls==0 <=> neither CAS active->rotating nor CAS rotating->failed happened).
 func TestCertRotator_Policy_Disabled_SkipsNoFail(t *testing.T) {
 	db := &fakeCertDB{casResults: []int64{1}}
 	vw := &fakeVaultWriter{}
@@ -48,28 +48,28 @@ func TestCertRotator_Policy_Disabled_SkipsNoFail(t *testing.T) {
 		t.Fatalf("rotateOne: %v", err)
 	}
 	if did {
-		t.Fatal("policy disabled → ротации быть не должно")
+		t.Fatal("policy disabled -> should not rotate")
 	}
 	if db.insertedVoyages != 0 {
 		t.Errorf("no Voyage when disabled, got %d", db.insertedVoyages)
 	}
 	if db.casCalls != 0 {
-		t.Errorf("серт остаётся active, markFailed НЕ вызван: casCalls=%d, want 0", db.casCalls)
+		t.Errorf("cert stays active, markFailed NOT called: casCalls=%d, want 0", db.casCalls)
 	}
 	if len(vw.writes) != 0 {
 		t.Errorf("no Vault writes when disabled, got %d", len(vw.writes))
 	}
 }
 
-// TestCertRotator_Policy_UnknownScenario_SkipsNoFail — GUARD: сценарий из манифеста
-// отсутствует среди scenario/ сервиса → НЕ спавним Voyage и НЕ помечаем failed
-// (casCalls==0: строка не тронута, статус не failed).
+// TestCertRotator_Policy_UnknownScenario_SkipsNoFail — GUARD: the scenario from the
+// manifest is absent from the service's scenario/ dir -> do NOT spawn Voyage and do NOT
+// mark failed (casCalls==0: row untouched, status not failed).
 func TestCertRotator_Policy_UnknownScenario_SkipsNoFail(t *testing.T) {
 	db := &fakeCertDB{casResults: []int64{1}}
 	vw := &fakeVaultWriter{}
 	pol := enabledCertPolicy()
 	pol.Scenario = "rotate_tls"
-	pol.KnownScenarios = []string{"some_other_scenario"} // сценарий ротации НЕ найден в сервисе
+	pol.KnownScenarios = []string{"some_other_scenario"} // rotation scenario NOT found in the service
 	r := newPolicyRotator(db, &fakeSigner{cert: makeTestCertPEM(t)}, vw, &fakePolicyResolver{pol: pol})
 
 	did, err := r.rotateOne(context.Background(), dueCertFor("cert-1", "redis-prod"), testRotatorCfg())
@@ -77,24 +77,24 @@ func TestCertRotator_Policy_UnknownScenario_SkipsNoFail(t *testing.T) {
 		t.Fatalf("rotateOne: %v", err)
 	}
 	if did {
-		t.Fatal("сценарий не найден → ротации быть не должно")
+		t.Fatal("scenario not found -> should not rotate")
 	}
 	if db.insertedVoyages != 0 {
 		t.Errorf("no Voyage on unknown scenario, got %d", db.insertedVoyages)
 	}
 	if db.casCalls != 0 {
-		t.Errorf("статус НЕ failed (строка не тронута): casCalls=%d, want 0", db.casCalls)
+		t.Errorf("status NOT failed (row untouched): casCalls=%d, want 0", db.casCalls)
 	}
 }
 
 // TestCertRotator_Policy_EmptyPKIRole_SkipsNoFail — GUARD (NIM-99 QA G2): enable:true,
-// сценарий валиден, но pki_role пуст (manifest-drift) → rotateOne (false,nil): Voyage
-// не спавнится, casCalls==0 (ни CAS, ни markFailed), серт остаётся active.
+// scenario is valid, but pki_role is empty (manifest-drift) -> rotateOne (false,nil): Voyage
+// is not spawned, casCalls==0 (neither CAS nor markFailed), cert stays active.
 func TestCertRotator_Policy_EmptyPKIRole_SkipsNoFail(t *testing.T) {
 	db := &fakeCertDB{casResults: []int64{1}}
 	vw := &fakeVaultWriter{}
 	pol := enabledCertPolicy()
-	pol.PKIRole = "" // роль подписи не задана в манифесте
+	pol.PKIRole = "" // signing role not set in the manifest
 	r := newPolicyRotator(db, &fakeSigner{cert: makeTestCertPEM(t)}, vw, &fakePolicyResolver{pol: pol})
 
 	did, err := r.rotateOne(context.Background(), dueCertFor("cert-1", "redis-prod"), testRotatorCfg())
@@ -102,22 +102,22 @@ func TestCertRotator_Policy_EmptyPKIRole_SkipsNoFail(t *testing.T) {
 		t.Fatalf("rotateOne: %v", err)
 	}
 	if did {
-		t.Fatal("пустой pki_role → ротации быть не должно")
+		t.Fatal("empty pki_role -> should not rotate")
 	}
 	if db.insertedVoyages != 0 {
 		t.Errorf("no Voyage on empty pki_role, got %d", db.insertedVoyages)
 	}
 	if db.casCalls != 0 {
-		t.Errorf("серт остаётся active, markFailed НЕ вызван: casCalls=%d, want 0", db.casCalls)
+		t.Errorf("cert stays active, markFailed NOT called: casCalls=%d, want 0", db.casCalls)
 	}
 	if len(vw.writes) != 0 {
 		t.Errorf("no Vault writes on empty pki_role, got %d", len(vw.writes))
 	}
 }
 
-// TestCertRotator_Policy_ResolveError_CertStaysActive — GUARD: транзиент-ошибка
-// резолва политики (git/PG недоступны) → серт остаётся active, markFailed НЕ
-// вызван, тик не падает (rotateOne вернул nil-ошибку → retry на следующий тик).
+// TestCertRotator_Policy_ResolveError_CertStaysActive — GUARD: a transient policy
+// resolve error (git/PG unavailable) -> cert stays active, markFailed is NOT
+// called, tick doesn't fail (rotateOne returned a nil error -> retry on next tick).
 func TestCertRotator_Policy_ResolveError_CertStaysActive(t *testing.T) {
 	db := &fakeCertDB{casResults: []int64{1}}
 	vw := &fakeVaultWriter{}
@@ -126,23 +126,23 @@ func TestCertRotator_Policy_ResolveError_CertStaysActive(t *testing.T) {
 
 	did, err := r.rotateOne(context.Background(), dueCertFor("cert-1", "redis-prod"), testRotatorCfg())
 	if err != nil {
-		t.Fatalf("транзиент резолва не должен ронять ротацию: %v", err)
+		t.Fatalf("transient resolve error must not fail rotation: %v", err)
 	}
 	if did {
-		t.Fatal("resolve error → ротации быть не должно")
+		t.Fatal("resolve error -> should not rotate")
 	}
 	if db.casCalls != 0 {
-		t.Errorf("серт остаётся active, markFailed НЕ вызван: casCalls=%d, want 0", db.casCalls)
+		t.Errorf("cert stays active, markFailed NOT called: casCalls=%d, want 0", db.casCalls)
 	}
 	if db.insertedVoyages != 0 {
 		t.Errorf("no Voyage on resolve error, got %d", db.insertedVoyages)
 	}
 }
 
-// TestCertRotator_Policy_HappyPath_UsesManifest — GUARD: включённая политика с
-// валидным сценарием и pki_role → полная ротация. SignCSR получает mount из config
-// + pki_role ИЗ МАНИФЕСТА; WriteKV пишет по service-scoped E3-пути
-// secret/<service>/<inc>/tls/cert; Voyage+target вставлены; cert+key warrant вписаны.
+// TestCertRotator_Policy_HappyPath_UsesManifest — GUARD: an enabled policy with a
+// valid scenario and pki_role -> full rotation. SignCSR gets mount from config
+// + pki_role FROM THE MANIFEST; WriteKV writes to the service-scoped E3 path
+// secret/<service>/<inc>/tls/cert; Voyage+target are inserted; cert+key warrant recorded.
 func TestCertRotator_Policy_HappyPath_UsesManifest(t *testing.T) {
 	db := &fakeCertDB{casResults: []int64{1}}
 	vw := &fakeVaultWriter{}
@@ -155,7 +155,7 @@ func TestCertRotator_Policy_HappyPath_UsesManifest(t *testing.T) {
 		t.Fatalf("rotateOne: %v", err)
 	}
 	if !did {
-		t.Fatal("happy-path обязан ротировать")
+		t.Fatal("happy-path must rotate")
 	}
 	if signer.gotMount != "pki" || signer.gotRole != "service-tls" {
 		t.Errorf("SignCSR args = mount=%q role=%q, want pki/service-tls (mount=config, role=manifest)",
@@ -163,19 +163,19 @@ func TestCertRotator_Policy_HappyPath_UsesManifest(t *testing.T) {
 	}
 	wantCertPath := "secret/redis/redis-prod/tls/cert"
 	if len(vw.writes) != 2 || vw.writes[0] != wantCertPath {
-		t.Errorf("Vault writes = %v, want [cert,key] с первым = %q (service-scoped)", vw.writes, wantCertPath)
+		t.Errorf("Vault writes = %v, want [cert,key] with the first = %q (service-scoped)", vw.writes, wantCertPath)
 	}
 	if db.insertedVoyages != 1 || db.insertedTargets != 1 {
-		t.Errorf("Voyage+target вставляются один раз: voyages=%d targets=%d", db.insertedVoyages, db.insertedTargets)
+		t.Errorf("Voyage+target inserted exactly once: voyages=%d targets=%d", db.insertedVoyages, db.insertedTargets)
 	}
 	if db.insertedWarrants != 2 {
 		t.Errorf("cert+key warrant inserts want 2, got %d", db.insertedWarrants)
 	}
 }
 
-// TestBuildRotateTLSVoyage_WholeIncarnation_ScenarioFromArg — GUARD: имя сценария
-// берётся из АРГУМЕНТА (не из const rotateTLSScenario), и target = вся инкарнация
-// целиком (ровно один target kind=incarnation) — инвариант «вся инкарнация».
+// TestBuildRotateTLSVoyage_WholeIncarnation_ScenarioFromArg — GUARD: the scenario name
+// comes from the ARGUMENT (not from const rotateTLSScenario), and target = the whole
+// incarnation (exactly one target kind=incarnation) - the "whole incarnation" invariant.
 func TestBuildRotateTLSVoyage_WholeIncarnation_ScenarioFromArg(t *testing.T) {
 	m := &certissue.Material{
 		CertRef: "secret/redis/redis-prod/tls/cert#cert",
@@ -184,13 +184,13 @@ func TestBuildRotateTLSVoyage_WholeIncarnation_ScenarioFromArg(t *testing.T) {
 	v, targets := buildRotateTLSVoyage("voyage-1", "redis-prod", m, "custom_rotate")
 
 	if v.ScenarioName == nil || *v.ScenarioName != "custom_rotate" {
-		t.Errorf("ScenarioName обязан прийти из аргумента, got %v", v.ScenarioName)
+		t.Errorf("ScenarioName must come from the argument, got %v", v.ScenarioName)
 	}
 	if v.Kind != voyage.KindScenario {
 		t.Errorf("Kind = %v, want scenario", v.Kind)
 	}
 	if len(targets) != 1 {
-		t.Fatalf("targets = %d, want ровно 1 (вся инкарнация)", len(targets))
+		t.Fatalf("targets = %d, want exactly 1 (whole incarnation)", len(targets))
 	}
 	if targets[0].TargetKind != voyage.TargetKindIncarnation || targets[0].TargetID != "redis-prod" {
 		t.Errorf("target = {kind=%v id=%q}, want {incarnation, redis-prod}", targets[0].TargetKind, targets[0].TargetID)
@@ -200,10 +200,10 @@ func TestBuildRotateTLSVoyage_WholeIncarnation_ScenarioFromArg(t *testing.T) {
 	}
 }
 
-// TestRotateTLSScenario_ContractAnchor — контрактный якорь: имя дефолтного сценария
-// НЕ переименовано (examples/service/redis/scenario/rotate_tls).
+// TestRotateTLSScenario_ContractAnchor — contract anchor: the default scenario name
+// is NOT renamed (examples/service/redis/scenario/rotate_tls).
 func TestRotateTLSScenario_ContractAnchor(t *testing.T) {
 	if rotateTLSScenario != "rotate_tls" {
-		t.Fatalf("контрактное имя сценария переименовано: %q != rotate_tls", rotateTLSScenario)
+		t.Fatalf("contract scenario name renamed: %q != rotate_tls", rotateTLSScenario)
 	}
 }

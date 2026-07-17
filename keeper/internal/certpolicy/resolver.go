@@ -1,7 +1,7 @@
-// Package certpolicy резолвит эффективную политику авто-ротации TLS-сертов
-// инкарнации (NIM-99): читает incarnation → её пиновый снапшот сервиса → секцию
-// `certificate_rotation:` манифеста. Общий вход для reaper (кого ротировать) и
-// UI/coremod (виден ли и включён ли triangle-ротатор у сервиса).
+// Package certpolicy resolves the effective TLS-cert auto-rotation policy of an
+// incarnation (NIM-99): reads incarnation -> its pinned service snapshot -> the
+// manifest's `certificate_rotation:` section. Common input for the reaper (who to
+// rotate) and the UI/coremod (whether the service's rotator is visible and enabled).
 package certpolicy
 
 import (
@@ -17,9 +17,10 @@ import (
 	"github.com/souls-guild/soul-stack/shared/config"
 )
 
-// Policy — эффективная cert-rotation-политика инкарнации. Present — есть ли
-// секция `certificate_rotation:` в манифесте; Enabled — включена ли (enable:true).
-// KnownScenarios — имена scenario/ снапшота (для валидации Scenario резолвером/UI).
+// Policy — the effective cert-rotation policy of an incarnation. Present — whether
+// the manifest has a `certificate_rotation:` section; Enabled — whether it's on
+// (enable:true). KnownScenarios — the scenario/ names of the snapshot (for
+// validating Scenario by the resolver/UI).
 type Policy struct {
 	Service        string
 	Present        bool
@@ -30,45 +31,45 @@ type Policy struct {
 	KnownScenarios []string
 }
 
-// IncarnationReader — поверхность чтения incarnation для [incarnation.SelectByName].
-// Совпадает с [incarnation.ExecQueryRower] (тот требует Exec/QueryRow/Query, а не
-// один QueryRow); production даёт pgxpool.Pool, тесты — fake.
+// IncarnationReader — the read surface of incarnation for [incarnation.SelectByName].
+// Matches [incarnation.ExecQueryRower] (that one requires Exec/QueryRow/Query, not
+// just QueryRow); production supplies pgxpool.Pool, tests — a fake.
 type IncarnationReader interface {
 	Exec(ctx context.Context, sql string, args ...any) (pgconn.CommandTag, error)
 	QueryRow(ctx context.Context, sql string, args ...any) pgx.Row
 	Query(ctx context.Context, sql string, args ...any) (pgx.Rows, error)
 }
 
-// ServiceRefResolver резолвит git-координаты сервиса по имени.
-// [scenario.ServiceRegistry] её удовлетворяет.
+// ServiceRefResolver resolves the git coordinates of a service by name.
+// [scenario.ServiceRegistry] satisfies it.
 type ServiceRefResolver interface {
 	Resolve(service string) (artifact.ServiceRef, bool)
 }
 
-// PolicyLister листингует cert-policy снапшота сервиса.
-// [serviceregistry.CertPolicyCache] её удовлетворяет.
+// PolicyLister lists the cert-policy of a service snapshot.
+// [serviceregistry.CertPolicyCache] satisfies it.
 type PolicyLister interface {
 	ListCertPolicy(ctx context.Context, name, gitURL, ref string) (*artifact.CertPolicyInfo, error)
 }
 
-// Resolver собирает [Policy] из БД-инкарнации + снапшота её пиновой версии.
+// Resolver assembles [Policy] from the incarnation DB + its pinned version's snapshot.
 type Resolver struct {
 	db       IncarnationReader
 	services ServiceRefResolver
 	lister   PolicyLister
 }
 
-// NewResolver конструирует резолвер поверх БД, реестра сервисов и cert-policy-кеша.
+// NewResolver builds a resolver on top of the DB, service registry, and cert-policy cache.
 func NewResolver(db IncarnationReader, services ServiceRefResolver, lister PolicyLister) *Resolver {
 	return &Resolver{db: db, services: services, lister: lister}
 }
 
-// Resolve возвращает cert-rotation-политику инкарнации incarnationName.
+// Resolve returns the cert-rotation policy of incarnationName.
 //
-// SelectByName → services.Resolve → ★ пин ref на inc.ServiceVersion (не
-// реестровый ref) → ListCertPolicy. Нет секции (Rotation==nil) → Present/Enabled
-// false без ошибки. Ошибка парса Threshold — проглатывается в 0 (порог пока
-// информативен, не критичен).
+// SelectByName -> services.Resolve -> pin ref to inc.ServiceVersion (not the
+// registry ref) -> ListCertPolicy. No section (Rotation==nil) -> Present/Enabled
+// false, no error. A Threshold parse error is swallowed as 0 (the threshold is
+// currently informational, not critical).
 func (r *Resolver) Resolve(ctx context.Context, incarnationName string) (Policy, error) {
 	inc, err := incarnation.SelectByName(ctx, r.db, incarnationName)
 	if err != nil {
@@ -79,7 +80,7 @@ func (r *Resolver) Resolve(ctx context.Context, incarnationName string) (Policy,
 	if !ok {
 		return Policy{}, fmt.Errorf("certpolicy: service %q not registered", inc.Service)
 	}
-	ref.Ref = inc.ServiceVersion // ★ пиновая версия инкарнации, НЕ реестровый ref
+	ref.Ref = inc.ServiceVersion // pinned incarnation version, NOT the registry ref
 
 	info, err := r.lister.ListCertPolicy(ctx, inc.Service, ref.Git, ref.Ref)
 	if err != nil {

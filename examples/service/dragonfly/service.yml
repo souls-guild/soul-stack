@@ -222,8 +222,8 @@ destiny:
 modules:
   - { name: community.redis, ref: v1.0.0 }
 
-# Авто-ротация серверного TLS (NIM-99): Reaper ротирует истекающие серты сценарием
-# rotate_tls Vault-ролью dragonfly-server. Нет секции → ротация выкл.
+# Auto-rotation of server TLS (NIM-99): Reaper rotates expiring certs via the
+# rotate_tls scenario using the Vault dragonfly-server role. No section → rotation off.
 certificate_rotation:
   enable: true
   scenario: rotate_tls

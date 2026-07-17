@@ -200,7 +200,7 @@ func collectRoutes(t *testing.T) map[route]struct{} {
 		stubOperatorHandler(t),
 		handlers.NewIncarnationHandler(nil, nil, nil, nil, nil, nil, nil, nil, nil),
 		handlers.NewSoulHandler(nil, nil, nil, nil),
-		handlers.TelemetrySpecStub(), // telemetryH — telemetry-роуты non-opt-in; non-nil stub → появляются в chi.Walk (совпадение со спекой)
+		handlers.TelemetrySpecStub(), // telemetryH — telemetry routes are non-opt-in; a non-nil stub makes them appear in chi.Walk (matches the spec)
 		stubRoleHandler(t),
 		stubSynodHandler(t),
 		stubSigilHandler(t),
@@ -231,14 +231,14 @@ func collectRoutes(t *testing.T) map[route]struct{} {
 		nil,                                  // tollDegradedReader — DegradedMiddleware skips when nil (router.go)
 		nil,                                  // tempoLimiter — nil → RateLimit middleware passthrough (router.go)
 		nil,                                  // tempoMetrics — nil → emit no-op (router.go)
-		nil,                                  // tempoVoyageCreateLimits — nil допустим (RateLimit при nil-limiter не вызывает provider)
-		nil,                                  // tempoVoyagePreviewLimits — nil допустим (RateLimit при nil-limiter не вызывает provider)
-		false,                                // webUIEnabled — /ui вне /v1, drift-walker его не видит; держим выключенным для чистоты периметра
-		nil,                                  // ldapAuth (LDAP не сконфигурирован в тесте)
-		nil,                                  // oidcAuth (OIDC не сконфигурирован в тесте)
-		authTokenSpecStub(),                  // authToken — /auth/token монтируется (NIM-77); в спеке И роутере → без allowlist
-		AuthMethodsDeps{Password: true},      // authMethods — /auth/methods монтируется безусловно
-		nil,                                  // loginGuard (anti-bruteforce off в тесте)
+		nil,                                  // tempoVoyageCreateLimits — nil is fine (RateLimit does not call the provider on a nil limiter)
+		nil,                                  // tempoVoyagePreviewLimits — nil is fine (RateLimit does not call the provider on a nil limiter)
+		false,                                // webUIEnabled — /ui is outside /v1, the drift-walker doesn't see it; keep it off for perimeter cleanliness
+		nil,                                  // ldapAuth (LDAP is not configured in the test)
+		nil,                                  // oidcAuth (OIDC is not configured in the test)
+		authTokenSpecStub(),                  // authToken — /auth/token is mounted (NIM-77); in both the spec AND the router → no allowlist entry needed
+		AuthMethodsDeps{Password: true},      // authMethods — /auth/methods is mounted unconditionally
+		nil,                                  // loginGuard (anti-bruteforce off in the test)
 		apimiddleware.AuthLoginLimitConfig{}, // loginLimitCfg
 		nil,                                  // soulStatsStaleFn (default 90s in the test)
 		nil,                                  // clusterH (cluster-view isn't mounted in the test)

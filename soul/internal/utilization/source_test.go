@@ -40,8 +40,8 @@ func TestParseHelpers(t *testing.T) {
 	}
 }
 
-// Реальный источник на linux-хосте: не паникует, возвращает вменяемые значения.
-// Значения не детерминированы — проверяем только инварианты (uptime>0, total>0).
+// The real source on a linux host: does not panic, returns sane values.
+// Values are not deterministic — we only check invariants (uptime>0, total>0).
 func TestSystemSource_Smoke(t *testing.T) {
 	src := NewSystemSource()
 	ctx := context.Background()
@@ -59,11 +59,11 @@ func TestSystemSource_Smoke(t *testing.T) {
 	if s.Idle > s.Total {
 		t.Errorf("cpu idle=%d > total=%d (invariant)", s.Idle, s.Total)
 	}
-	// Load / Disks — best-effort, лишь на отсутствие паники.
+	// Load / Disks — best-effort, only checking for the absence of a panic.
 	_ = src.Load(ctx)
 	for _, d := range src.Disks(ctx) {
 		if d.TotalMB <= 0 {
-			t.Errorf("disk %q total=%d must be >0 (zero-total отфильтрован)", d.Mount, d.TotalMB)
+			t.Errorf("disk %q total=%d must be >0 (zero-total filtered out)", d.Mount, d.TotalMB)
 		}
 	}
 }

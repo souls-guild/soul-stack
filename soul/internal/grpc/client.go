@@ -556,8 +556,8 @@ func (s *StreamSession) SendSoulprintReport(rep *keeperv1.SoulprintReport) error
 	return s.stream.Send(&keeperv1.FromSoul{Payload: &keeperv1.FromSoul_SoulprintReport{SoulprintReport: rep}})
 }
 
-// SendHostUtilization — снимок живой утилизации хоста (ADR-072). Зеркало
-// SendSoulprintReport: `received_at` — Keeper-only, здесь не выставляется.
+// SendHostUtilization — a live host utilization snapshot (ADR-072). Mirrors
+// SendSoulprintReport: `received_at` is Keeper-only, not set here.
 func (s *StreamSession) SendHostUtilization(u *keeperv1.HostUtilization) error {
 	if u.GetCollectedAt() == nil {
 		u.CollectedAt = timestamppb.Now()

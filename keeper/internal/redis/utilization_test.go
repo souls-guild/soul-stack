@@ -72,7 +72,7 @@ func TestWriteReadUtilization_RoundTrip(t *testing.T) {
 	}
 }
 
-// TestReadUtilization_Missing — несуществующий sid → ok=false, без ошибки.
+// TestReadUtilization_Missing — nonexistent sid → ok=false, no error.
 func TestReadUtilization_Missing(t *testing.T) {
 	c, _ := newClientMR(t)
 	_, ok, err := ReadUtilization(context.Background(), c, "ghost.example.com")
@@ -84,7 +84,7 @@ func TestReadUtilization_Missing(t *testing.T) {
 	}
 }
 
-// TestWriteUtilization_SetsTTL — после записи TTL latest и окна ∈ (0, UtilizationTTL].
+// TestWriteUtilization_SetsTTL — after a write, TTL of latest and the window ∈ (0, UtilizationTTL].
 func TestWriteUtilization_SetsTTL(t *testing.T) {
 	c, mr := newClientMR(t)
 	ctx := context.Background()
@@ -100,7 +100,7 @@ func TestWriteUtilization_SetsTTL(t *testing.T) {
 	}
 }
 
-// TestWriteUtilization_WindowCaps — LPUSH N+10 записей → длина окна == UtilizationWindowSize.
+// TestWriteUtilization_WindowCaps — LPUSH N+10 records → window length == UtilizationWindowSize.
 func TestWriteUtilization_WindowCaps(t *testing.T) {
 	c, _ := newClientMR(t)
 	ctx := context.Background()
@@ -123,7 +123,7 @@ func TestWriteUtilization_WindowCaps(t *testing.T) {
 	}
 }
 
-// TestReadUtilizationWindow_NewestFirst — окно отдаётся newest-first (как сложил LPUSH).
+// TestReadUtilizationWindow_NewestFirst — the window is returned newest-first (as LPUSH stacked it).
 func TestReadUtilizationWindow_NewestFirst(t *testing.T) {
 	c, _ := newClientMR(t)
 	ctx := context.Background()
@@ -158,7 +158,7 @@ func TestReadUtilizationWindow_Empty(t *testing.T) {
 	}
 }
 
-// TestWriteUtilization_NilCollectedAt — nil CollectedAt → zero-time, без паники.
+// TestWriteUtilization_NilCollectedAt — nil CollectedAt → zero-time, no panic.
 func TestWriteUtilization_NilCollectedAt(t *testing.T) {
 	c, _ := newClientMR(t)
 	ctx := context.Background()
@@ -177,22 +177,22 @@ func TestWriteUtilization_NilCollectedAt(t *testing.T) {
 	}
 }
 
-// TestUtilizationTTL — чистая функция масштабирования TTL под каденс (NIM-87):
-// 3×interval с флором UtilizationTTL (90s) и потолком (кламп interval_sec на
-// 10800 → TTL 32400s); 0/малый/отрицательный interval → флор.
+// TestUtilizationTTL — pure function scaling TTL to the cadence (NIM-87):
+// 3×interval with a UtilizationTTL floor (90s) and a ceiling (clamp interval_sec at
+// 10800 → TTL 32400s); 0/small/negative interval → floor.
 func TestUtilizationTTL(t *testing.T) {
 	cases := []struct {
 		intervalSec int32
 		want        time.Duration
 	}{
-		{0, 90 * time.Second},             // старый soul без поля → флор
-		{-5, 90 * time.Second},            // отрицательный (сбой) → 0 → флор
-		{30, 90 * time.Second},            // 3×30=90 == флор
-		{10, 90 * time.Second},            // 3×10=30 < флор → 90
+		{0, 90 * time.Second},             // old soul without the field → floor
+		{-5, 90 * time.Second},            // negative (failure) → 0 → floor
+		{30, 90 * time.Second},            // 3×30=90 == floor
+		{10, 90 * time.Second},            // 3×10=30 < floor → 90
 		{60, 180 * time.Second},           // 3×60=180
 		{600, 1800 * time.Second},         // 3×600=1800
-		{10800, 32400 * time.Second},      // 3×10800=32400 == потолок
-		{2147483647, 32400 * time.Second}, // int32-max → кламп → потолок 32400
+		{10800, 32400 * time.Second},      // 3×10800=32400 == ceiling
+		{2147483647, 32400 * time.Second}, // int32-max → clamp → ceiling 32400
 	}
 	for _, tc := range cases {
 		if got := utilizationTTL(tc.intervalSec); got != tc.want {
@@ -201,8 +201,8 @@ func TestUtilizationTTL(t *testing.T) {
 	}
 }
 
-// TestWriteUtilization_TTLScalesWithInterval — больший interval_sec → TTL выше
-// флора; interval_sec персистится и читается назад.
+// TestWriteUtilization_TTLScalesWithInterval — a larger interval_sec → higher TTL
+// than the floor; interval_sec is persisted and read back.
 func TestWriteUtilization_TTLScalesWithInterval(t *testing.T) {
 	c, mr := newClientMR(t)
 	ctx := context.Background()

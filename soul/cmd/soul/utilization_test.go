@@ -14,7 +14,7 @@ import (
 	keeperv1 "github.com/souls-guild/soul-stack/proto/gen/go/keeper/v1"
 )
 
-// captureUtilSink — fake utilizationReportSink: запоминает отправленные снимки.
+// captureUtilSink — fake utilizationReportSink: remembers the sent snapshots.
 type captureUtilSink struct {
 	reports []*keeperv1.HostUtilization
 	err     error
@@ -72,8 +72,8 @@ func TestUtilizationPusher_StartTicker(t *testing.T) {
 	}
 }
 
-// Floor 10s + ceiling 30s + default 30s (ADR-072): значение зажимается в
-// [10s,30s], отсутствие блока → дефолт, кривая строка → error.
+// Floor 10s + ceiling 30s + default 30s (ADR-072): the value is clamped into
+// [10s,30s], no block → default, a bad string → error.
 func TestLoadUtilizationInterval(t *testing.T) {
 	cases := []struct {
 		name    string
@@ -111,7 +111,7 @@ func TestLoadUtilizationInterval(t *testing.T) {
 	}
 }
 
-// resolveUtilizationInterval: фикстура без блока → default 30s; после инъекции
+// resolveUtilizationInterval: fixture without a block → default 30s; after injecting
 // utilization.interval=3s + Reload → floor 10s (hot-reload, ADR-021 + floor).
 func TestResolveUtilizationInterval_DefaultAndFloorReload(t *testing.T) {
 	t.Parallel()

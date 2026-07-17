@@ -211,11 +211,11 @@ func registerHumaServiceDirectives(humaAPI huma.API, serviceH *handlers.ServiceH
 	})
 }
 
-// registerHumaServiceTelemetry монтирует GET /v1/services/{name}/telemetry через huma
-// (READ-with-path+query, БЕЗ audit). serviceH nil → no-op. Handler:
-// ListServiceTelemetryTyped (name + опц. ref) → typed output (404/502 через problem) +
-// ETag/Cache-Control (конфиг immutable на git-ref); If-None-Match совпал с SHA1 → 304
-// без тела. RBAC service.list — на группе.
+// registerHumaServiceTelemetry mounts GET /v1/services/{name}/telemetry via huma
+// (READ-with-path+query, NO audit). serviceH nil → no-op. Handler:
+// ListServiceTelemetryTyped (name + optional ref) → typed output (404/502 via problem) +
+// ETag/Cache-Control (config immutable on git-ref); If-None-Match matches SHA1 → 304
+// with no body. RBAC service.list — on the group.
 func registerHumaServiceTelemetry(humaAPI huma.API, serviceH *handlers.ServiceHandler) {
 	if serviceH == nil {
 		return
@@ -227,7 +227,7 @@ func registerHumaServiceTelemetry(humaAPI huma.API, serviceH *handlers.ServiceHa
 		}
 		out := &serviceTelemetryOutput{ETag: etagQuote(reply.SHA1), CacheControl: directivesCacheControlFor(reply.Ref)}
 		if etagMatchesSHA1(in.IfNoneMatch, reply.SHA1) {
-			out.Status = http.StatusNotModified // huma пропускает тело на 304
+			out.Status = http.StatusNotModified // huma skips the body on 304
 			return out, nil
 		}
 		out.Status = http.StatusOK

@@ -12,8 +12,8 @@ import (
 	"github.com/souls-guild/soul-stack/shared/config"
 )
 
-// fakeCertPolicyLister — программируемый CertPolicyLister: считает вызовы, отдаёт
-// заданный info/ошибку, опц. с задержкой для проверки per-ключ lock-а (parity с
+// fakeCertPolicyLister — a programmable CertPolicyLister: counts calls, returns
+// a given info/error, optionally with a delay for checking the per-key lock (parity with
 // fakeStateSchemaLister).
 type fakeCertPolicyLister struct {
 	mu       sync.Mutex
@@ -71,14 +71,14 @@ func TestCertPolicyCache_HitMiss(t *testing.T) {
 		t.Fatalf("SHA1 = %q", got.SHA1)
 	}
 	if n := lister.calls.Load(); n != 1 {
-		t.Errorf("calls после miss = %d, want 1", n)
+		t.Errorf("calls after miss = %d, want 1", n)
 	}
 
 	if _, err := c.ListCertPolicy(context.Background(), "redis", "g", "v1"); err != nil {
 		t.Fatalf("#2: %v", err)
 	}
 	if n := lister.calls.Load(); n != 1 {
-		t.Errorf("calls после hit = %d, want 1 (кеш не сработал)", n)
+		t.Errorf("calls after hit = %d, want 1 (cache did not work)", n)
 	}
 }
 
@@ -94,7 +94,7 @@ func TestCertPolicyCache_KeyByNameAndRef(t *testing.T) {
 		t.Fatalf("#v2: %v", err)
 	}
 	if n := lister.calls.Load(); n != 2 {
-		t.Errorf("calls = %d, want 2 (per-(name,ref) ключи)", n)
+		t.Errorf("calls = %d, want 2 (per-(name,ref) keys)", n)
 	}
 }
 
@@ -111,7 +111,7 @@ func TestCertPolicyCache_Expiry(t *testing.T) {
 		t.Fatalf("#2: %v", err)
 	}
 	if n := lister.calls.Load(); n != 2 {
-		t.Errorf("calls после TTL = %d, want 2", n)
+		t.Errorf("calls after TTL = %d, want 2", n)
 	}
 }
 
@@ -143,7 +143,7 @@ func TestCertPolicyCache_Invalidate_DropsAllRefs(t *testing.T) {
 		t.Fatalf("post-inv api@v1: %v", err)
 	}
 	if n := lister.calls.Load() - preInvalidate; n != 2 {
-		t.Errorf("calls после Invalidate(\"redis\") = %d, want 2 (api должен остаться в кеше)", n)
+		t.Errorf("calls after Invalidate(\"redis\") = %d, want 2 (api should stay cached)", n)
 	}
 }
 
@@ -160,7 +160,7 @@ func TestCertPolicyCache_ErrorNotCached(t *testing.T) {
 		t.Fatalf("#2 err = %v", err)
 	}
 	if n := lister.calls.Load(); n != 2 {
-		t.Errorf("calls = %d, want 2 (ошибки не кешируются)", n)
+		t.Errorf("calls = %d, want 2 (errors are not cached)", n)
 	}
 }
 
@@ -187,7 +187,7 @@ func TestCertPolicyCache_PerKeyLock(t *testing.T) {
 		}
 	}
 	if n := lister.calls.Load(); n != 1 {
-		t.Errorf("calls = %d, want 1 (per-key lock не сработал)", n)
+		t.Errorf("calls = %d, want 1 (per-key lock did not work)", n)
 	}
 }
 
@@ -200,19 +200,19 @@ func TestCertPolicyCache_ClonesOnReturn(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ListCertPolicy: %v", err)
 	}
-	// Mutate возвращённый Scenarios slice; повтор должен отдать нетронутый snapshot.
+	// Mutate the returned Scenarios slice; a repeat call should return an untouched snapshot.
 	got.Scenarios[0] = "MUTATED"
 	got2, err := c.ListCertPolicy(context.Background(), "redis", "g", "v1")
 	if err != nil {
 		t.Fatalf("ListCertPolicy #2: %v", err)
 	}
 	if got2.Scenarios[0] == "MUTATED" {
-		t.Errorf("кеш не клонирует Scenarios: повтор вернул %q", got2.Scenarios[0])
+		t.Errorf("cache does not clone Scenarios: repeat returned %q", got2.Scenarios[0])
 	}
 }
 
-// TestCertPolicyCache_ClonesRotation — review M5: мутация возвращённого .Rotation не
-// должна течь в закешированную запись (deep-copy указателя, а не общий *Rotation).
+// TestCertPolicyCache_ClonesRotation — review M5: mutating the returned .Rotation must
+// not leak into the cached entry (deep-copy the pointer, not a shared *Rotation).
 func TestCertPolicyCache_ClonesRotation(t *testing.T) {
 	lister := newFakeCertPolicyLister()
 	lister.info = sampleCertPolicy()
@@ -223,7 +223,7 @@ func TestCertPolicyCache_ClonesRotation(t *testing.T) {
 		t.Fatalf("ListCertPolicy: %v", err)
 	}
 	if got.Rotation == nil {
-		t.Fatal("Rotation не должен быть nil в sample")
+		t.Fatal("Rotation should not be nil in the sample")
 	}
 	got.Rotation.Scenario = "MUTATED"
 
@@ -232,17 +232,17 @@ func TestCertPolicyCache_ClonesRotation(t *testing.T) {
 		t.Fatalf("ListCertPolicy #2: %v", err)
 	}
 	if got2.Rotation == got.Rotation {
-		t.Error("каждый возврат обязан отдавать отдельный *Rotation")
+		t.Error("every return must hand back a separate *Rotation")
 	}
 	if got2.Rotation.Scenario == "MUTATED" {
-		t.Errorf("кеш не клонирует Rotation: повтор вернул %q", got2.Rotation.Scenario)
+		t.Errorf("cache does not clone Rotation: repeat returned %q", got2.Rotation.Scenario)
 	}
 }
 
 func TestCertPolicyCache_NilLister_Panics(t *testing.T) {
 	defer func() {
 		if r := recover(); r == nil {
-			t.Fatalf("ожидалась паника при nil lister")
+			t.Fatalf("expected a panic on nil lister")
 		}
 	}()
 	_ = NewCertPolicyCache(nil, time.Hour)

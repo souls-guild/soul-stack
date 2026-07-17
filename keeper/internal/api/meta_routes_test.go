@@ -99,12 +99,12 @@ func metaRouter(t *testing.T, verifier *keeperjwt.Verifier) http.Handler {
 		nil,                                  // tempoMetrics
 		nil,                                  // tempoVoyageCreateLimits
 		nil,                                  // tempoVoyagePreviewLimits
-		false,                                // webUIEnabled — meta-тесты /ui не проверяют (guard в webui_routes_test.go)
-		nil,                                  // ldapAuth (LDAP не сконфигурирован в тесте)
-		nil,                                  // oidcAuth (OIDC не сконфигурирован в тесте)
-		nil,                                  // authToken (обмен /auth/token не тестируется здесь)
-		AuthMethodsDeps{},                    // authMethods (/auth/methods монтируется, но не проверяется)
-		nil,                                  // loginGuard (anti-bruteforce off в тесте)
+		false,                                // webUIEnabled — meta tests don't check /ui (guard in webui_routes_test.go)
+		nil,                                  // ldapAuth (LDAP not configured in the test)
+		nil,                                  // oidcAuth (OIDC not configured in the test)
+		nil,                                  // authToken (/auth/token exchange not tested here)
+		AuthMethodsDeps{},                    // authMethods (/auth/methods is mounted but not checked)
+		nil,                                  // loginGuard (anti-bruteforce off in the test)
 		apimiddleware.AuthLoginLimitConfig{}, // loginLimitCfg
 		nil,                                  // soulStatsStaleFn (default 90s in the test)
 		nil,                                  // clusterH (cluster-view not mounted in the test)

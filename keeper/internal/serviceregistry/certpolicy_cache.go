@@ -8,37 +8,37 @@ import (
 	"github.com/souls-guild/soul-stack/keeper/internal/artifact"
 )
 
-// CertPolicyTTL — окно валидности кешированного cert-policy-ответа одного
-// Service-а (парный [StateSchemaTTL]-выбор: тот же баланс «дёрганий remote репо»
-// vs. свежести секции certificate_rotation, положенной в манифест минуту назад).
+// CertPolicyTTL — the validity window of a cached cert-policy response for one
+// Service (paired with the [StateSchemaTTL] choice: the same balance between
+// "hammering the remote repo" vs. freshness of a certificate_rotation section
+// that landed in the manifest a minute ago).
 const CertPolicyTTL = 60 * time.Second
 
-// CertPolicyLister — поверхность listing-а cert-rotation-политики
-// (`certificate_rotation:` + имена scenario/) из локально-материализованного
-// снапшота Service-репо. Интерфейс — для подмены fake-ом в тестах; production —
-// [artifact.ServiceLoader.LoadCertPolicy].
+// CertPolicyLister — the listing surface for cert-rotation policy
+// (`certificate_rotation:` + scenario/ names) from a locally materialized
+// snapshot of the Service repo. Interface — for swapping with a fake in tests;
+// production — [artifact.ServiceLoader.LoadCertPolicy].
 //
-// Контракт: дёргается под per-(name+ref) lock-ом; ref явный, потому что разные
-// версии сервиса могут иметь разную политику ротации.
+// Contract: invoked under a per-(name+ref) lock; ref is explicit because
+// different service versions can have different rotation policies.
 type CertPolicyLister interface {
 	ListCertPolicy(ctx context.Context, name, gitURL, ref string) (*artifact.CertPolicyInfo, error)
 }
 
-// CertPolicyListerFunc — функциональная реализация [CertPolicyLister] (парный
-// [StateSchemaListerFunc] для handler-side wire-up).
+// CertPolicyListerFunc — a functional implementation of [CertPolicyLister]
+// (paired with [StateSchemaListerFunc] for handler-side wire-up).
 type CertPolicyListerFunc func(ctx context.Context, name, gitURL, ref string) (*artifact.CertPolicyInfo, error)
 
-// ListCertPolicy делает функцию реализующей [CertPolicyLister].
+// ListCertPolicy makes the function satisfy [CertPolicyLister].
 func (f CertPolicyListerFunc) ListCertPolicy(ctx context.Context, name, gitURL, ref string) (*artifact.CertPolicyInfo, error) {
 	return f(ctx, name, gitURL, ref)
 }
 
-// CertPolicyCache — in-process TTL-кеш ответа [CertPolicyLister.ListCertPolicy]
-// по ключу `(name, ref)`. Per-Keeper (parity с [StateSchemaCache]): cert-policy —
-// read-only представление, отставание между инстансами консистентность не рушит.
+// CertPolicyCache — an in-process TTL cache of [CertPolicyLister.ListCertPolicy]
+// responses keyed by `(name, ref)`. Per-Keeper (parity with [StateSchemaCache]):
+// cert-policy is a read-only view, lag between instances doesn't break consistency.
 //
-// Безопасен для конкурентного использования. Per-ключ Mutex сериализует «один
-// in-flight loader на ключ».
+// Safe for concurrent use. A per-key Mutex serializes "one in-flight loader per key".
 type CertPolicyCache struct {
 	lister CertPolicyLister
 	ttl    time.Duration
@@ -48,23 +48,24 @@ type CertPolicyCache struct {
 	entries map[certPolicyKey]*certPolicyEntry
 }
 
-// certPolicyKey — композитный ключ кеша (name+ref раздельно для инвалидации по
-// name; parity со [stateSchemaKey]).
+// certPolicyKey — a composite cache key (name+ref kept separate to allow
+// invalidation by name; parity with [stateSchemaKey]).
 type certPolicyKey struct {
 	name string
 	ref  string
 }
 
-// certPolicyEntry — одна запись кеша: lock сериализует concurrent loader-вызовы
-// одного ключа; info/expires — закешированный ответ.
+// certPolicyEntry — one cache entry: the lock serializes concurrent loader
+// calls for the same key; info/expires — the cached response.
 type certPolicyEntry struct {
 	lock    sync.Mutex
 	info    *artifact.CertPolicyInfo
 	expires time.Time
 }
 
-// NewCertPolicyCache собирает кеш поверх lister-а. lister обязателен (паника при
-// nil; parity с [NewStateSchemaCache]); ttl ≤ 0 нормализуется в [CertPolicyTTL].
+// NewCertPolicyCache builds a cache on top of a lister. lister is required
+// (panics on nil; parity with [NewStateSchemaCache]); ttl <= 0 is normalized to
+// [CertPolicyTTL].
 func NewCertPolicyCache(lister CertPolicyLister, ttl time.Duration) *CertPolicyCache {
 	if lister == nil {
 		panic("serviceregistry.NewCertPolicyCache: lister is nil")
@@ -80,10 +81,10 @@ func NewCertPolicyCache(lister CertPolicyLister, ttl time.Duration) *CertPolicyC
 	}
 }
 
-// ListCertPolicy возвращает cert-policy info для (name, gitURL, ref). Hit — из
-// кеша; miss/истекший TTL — один loader-call под per-ключ lock-ом.
+// ListCertPolicy returns cert-policy info for (name, gitURL, ref). Hit — served
+// from the cache; miss/expired TTL — a single loader call under the per-key lock.
 //
-// Кешируется ТОЛЬКО success-ответ (parity с [StateSchemaCache.ListStateSchema]).
+// Only a success response is cached (parity with [StateSchemaCache.ListStateSchema]).
 func (c *CertPolicyCache) ListCertPolicy(ctx context.Context, name, gitURL, ref string) (*artifact.CertPolicyInfo, error) {
 	entry := c.entryFor(certPolicyKey{name: name, ref: ref})
 
@@ -103,8 +104,8 @@ func (c *CertPolicyCache) ListCertPolicy(ctx context.Context, name, gitURL, ref 
 	return cloneCertPolicyInfo(info), nil
 }
 
-// Invalidate сбрасывает все записи кеша для данного name (все варианты ref).
-// Идемпотентен; parity с [StateSchemaCache.Invalidate].
+// Invalidate drops all cache entries for the given name (all ref variants).
+// Idempotent; parity with [StateSchemaCache.Invalidate].
 func (c *CertPolicyCache) Invalidate(name string) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -115,7 +116,7 @@ func (c *CertPolicyCache) Invalidate(name string) {
 	}
 }
 
-// entryFor возвращает (создавая при необходимости) certPolicyEntry для key.
+// entryFor returns (creating if necessary) the certPolicyEntry for key.
 func (c *CertPolicyCache) entryFor(key certPolicyKey) *certPolicyEntry {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -127,9 +128,9 @@ func (c *CertPolicyCache) entryFor(key certPolicyKey) *certPolicyEntry {
 	return e
 }
 
-// cloneCertPolicyInfo — копия, чтобы caller не мог изменить кешированную запись:
-// Scenarios — копия slice, Rotation — deep-copy указателя (иначе общий *Rotation —
-// латентная гонка, если появится писатель).
+// cloneCertPolicyInfo — a copy so the caller can't mutate the cached entry:
+// Scenarios — a slice copy, Rotation — a deep copy of the pointer (otherwise a
+// shared *Rotation is a latent race if a writer ever appears).
 func cloneCertPolicyInfo(in *artifact.CertPolicyInfo) *artifact.CertPolicyInfo {
 	if in == nil {
 		return nil

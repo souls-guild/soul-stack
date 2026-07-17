@@ -10,8 +10,8 @@ import (
 	"github.com/souls-guild/soul-stack/shared/config"
 )
 
-// fakeSvcTelemetryLister — стаб ServiceTelemetryLister, отдающий фиксированный
-// каталог или ошибку git-loader-а.
+// fakeSvcTelemetryLister — stub ServiceTelemetryLister that returns a fixed
+// catalog or a git-loader error.
 type fakeSvcTelemetryLister struct {
 	catalog *serviceregistry.TelemetryCatalog
 	err     error
@@ -28,8 +28,8 @@ func telCatalog(sha string, enabled bool, interval int32, collectors []string) *
 	}
 }
 
-// TestServiceTelemetry_Defaults — happy-path: дефолтный конфиг + ref из реестра +
-// полный known_collectors (== config.KnownCollectors).
+// TestServiceTelemetry_Defaults — happy path: default config + ref from the registry +
+// full known_collectors (== config.KnownCollectors).
 func TestServiceTelemetry_Defaults(t *testing.T) {
 	lister := fakeSvcTelemetryLister{catalog: telCatalog("sha-tel", true, 30, []string{"cpu", "mem", "disk", "load", "uptime"})}
 	h := newServiceHandlerWithTelemetry(t, &svcFakePool{getValues: serviceRow("redis", "g", "v1")}, lister)
@@ -54,8 +54,8 @@ func TestServiceTelemetry_Defaults(t *testing.T) {
 	}
 }
 
-// TestServiceTelemetry_EmptyCollectors_NonNil — collectors пусто → `[]` (не nil);
-// known_collectors остаётся полным набором.
+// TestServiceTelemetry_EmptyCollectors_NonNil — collectors empty → `[]` (not nil);
+// known_collectors stays the full set.
 func TestServiceTelemetry_EmptyCollectors_NonNil(t *testing.T) {
 	lister := fakeSvcTelemetryLister{catalog: telCatalog("sha", false, 60, nil)}
 	h := newServiceHandlerWithTelemetry(t, &svcFakePool{getValues: serviceRow("redis", "g", "v1")}, lister)
@@ -68,17 +68,17 @@ func TestServiceTelemetry_EmptyCollectors_NonNil(t *testing.T) {
 		t.Errorf("collectors = nil, want [] (non-nil)")
 	}
 	if len(reply.Collectors) != 0 {
-		t.Errorf("collectors = %v, want пусто", reply.Collectors)
+		t.Errorf("collectors = %v, want empty", reply.Collectors)
 	}
 	if reply.Enabled {
-		t.Errorf("enabled = true, want false (явный enabled=false)")
+		t.Errorf("enabled = true, want false (explicit enabled=false)")
 	}
 	if len(reply.KnownCollectors) != len(config.KnownCollectors) {
-		t.Errorf("known_collectors = %v, want полный набор", reply.KnownCollectors)
+		t.Errorf("known_collectors = %v, want the full set", reply.KnownCollectors)
 	}
 }
 
-// TestServiceTelemetry_RefOverride — ?ref override пробрасывается в reply.
+// TestServiceTelemetry_RefOverride — ?ref override is forwarded into the reply.
 func TestServiceTelemetry_RefOverride(t *testing.T) {
 	lister := fakeSvcTelemetryLister{catalog: telCatalog("sha", true, 30, []string{"cpu"})}
 	h := newServiceHandlerWithTelemetry(t, &svcFakePool{getValues: serviceRow("redis", "g", "v1")}, lister)
@@ -92,7 +92,7 @@ func TestServiceTelemetry_RefOverride(t *testing.T) {
 	}
 }
 
-// TestServiceTelemetry_NotFound_404 — сервиса нет в реестре → 404.
+// TestServiceTelemetry_NotFound_404 — service not in the registry → 404.
 func TestServiceTelemetry_NotFound_404(t *testing.T) {
 	lister := fakeSvcTelemetryLister{catalog: telCatalog("sha", true, 30, nil)}
 	h := newServiceHandlerWithTelemetry(t, &svcFakePool{getValues: nil}, lister)
@@ -100,14 +100,14 @@ func TestServiceTelemetry_NotFound_404(t *testing.T) {
 	wantProblem(t, err, problem.TypeNotFound)
 }
 
-// TestServiceTelemetry_NilLister_500 — lister не сконфигурирован → 500.
+// TestServiceTelemetry_NilLister_500 — lister not configured → 500.
 func TestServiceTelemetry_NilLister_500(t *testing.T) {
 	h := newServiceHandler(t, &svcFakePool{getValues: serviceRow("redis", "g", "v1")})
 	_, err := h.ListServiceTelemetryTyped(context.Background(), "redis", "")
 	wantProblem(t, err, problem.TypeInternalError)
 }
 
-// TestServiceTelemetry_LoaderError_502 — ошибка git-loader-а → 502.
+// TestServiceTelemetry_LoaderError_502 — git-loader error → 502.
 func TestServiceTelemetry_LoaderError_502(t *testing.T) {
 	lister := fakeSvcTelemetryLister{err: &svcErr{"git clone failed"}}
 	h := newServiceHandlerWithTelemetry(t, &svcFakePool{getValues: serviceRow("redis", "g", "v1")}, lister)

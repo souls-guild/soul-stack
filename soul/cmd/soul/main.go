@@ -532,16 +532,16 @@ func runDaemon(args []string) int {
 		// interval isn't fixed here: handleSession reads the current
 		// soulprint.refresh_interval from the store at the start of each session (hot-reload).
 	}
-	// up — pulse утилизации (ADR-072). Collector один на процесс: stateful (cpu%
-	// считается дельтой тиков), непрерывность дельты переживает reconnect.
+	// up — the utilization pulse (ADR-072). One collector per process: stateful (cpu%
+	// is computed as a tick delta), the delta's continuity survives a reconnect.
 	up := utilizationPusher{
 		collector: utilization.NewCollector(utilization.NewSystemSource()),
 		sid:       sid,
-		// telemetry — durable holder доставленного Keeper-ом конфига (NIM-87):
-		// pointer шарится между копиями up при reconnect → директива переживает
-		// reconnect. Дефолт до первой директивы: все коллекторы, pulse включён.
+		// telemetry — a durable holder for the config delivered by Keeper (NIM-87):
+		// the pointer is shared between copies of up across reconnects → the directive
+		// survives a reconnect. Default before the first directive: all collectors, pulse on.
 		telemetry: &telemetryState{collectors: allCollectorsSet()},
-		// interval читается из store/holder на старте каждой сессии (hot-reload).
+		// interval is read from the store/holder at the start of each session (hot-reload).
 	}
 
 	// Soulprint facts → core modules (Variant A, ADR-018(b)): collect a host
@@ -948,7 +948,7 @@ func handleSession(ctx context.Context, store *config.Store[config.SoulConfig], 
 	// latency isn't needed here).
 	fb := resolveFailback(store, logger)
 	sp.interval = resolveSoulprintInterval(store, logger)
-	// Прецеденс каденса utilization: delivered (durable-директива, переживает
+	// Cadence precedence for utilization: delivered (a durable directive, survives a
 	// reconnect) > soul-local utilization.interval > built-in (NIM-87).
 	up.interval = effectiveStartInterval(up.telemetry, store, logger)
 
@@ -990,13 +990,13 @@ func handleSession(ctx context.Context, store *config.Store[config.SoulConfig], 
 	stopSoulprint := sp.startTicker(ctx, soulprintTick)
 	defer stopSoulprint()
 
-	// HostUtilization (ADR-072): pulse под текущий эффективный конфиг. Каденс/
-	// enable/коллекторы могут смениться живьём приходом FromKeeper.TelemetryConfig
-	// (NIM-87) — тикер пере-создаётся БЕЗ рестарта процесса. startUtilPulse
-	// (пере)поднимает тикер под up.interval и делает немедленный pushOnce;
-	// enabled=false → тикер остановлен, не шлём. Все Send идут из select-loop-а
-	// (writer один); ошибка push НЕ разрывает сессию (волатильный факт, следующий
-	// тик/директива повторит) — в отличие от WardRoster.
+	// HostUtilization (ADR-072): pulse under the current effective config. The cadence/
+	// enable/collectors can change live via an incoming FromKeeper.TelemetryConfig
+	// (NIM-87) — the ticker is re-created WITHOUT restarting the process. startUtilPulse
+	// (re)raises the ticker under up.interval and does an immediate pushOnce;
+	// enabled=false → the ticker is stopped, we don't send. All Sends come from the
+	// select-loop (a single writer); a push error does NOT break the session (a volatile
+	// fact, the next tick/directive repeats it) — unlike WardRoster.
 	utilizationTick := make(chan struct{}, 1)
 	stopUtil := func() {}
 	startUtilPulse := func() {
@@ -1086,8 +1086,8 @@ func handleSession(ctx context.Context, store *config.Store[config.SoulConfig], 
 				return
 			}
 		case <-utilizationTick:
-			// Тик pulse утилизации: собираем и шлём из этого loop-а (writer один).
-			// Ошибка отправки = разрыв стрима — выходим, reconnect поднимет заново.
+			// A utilization pulse tick: gather and send from this loop (a single writer).
+			// A send error = a stream break — we exit, reconnect will raise it again.
 			if err := up.pushOnce(ctx, sess); err != nil {
 				logger.Warn("utilization: report send failed (stream broken)", slog.Any("error", err))
 				return
@@ -1292,12 +1292,12 @@ func handleSession(ctx context.Context, store *config.Store[config.SoulConfig], 
 					slog.Int("count", len(vigils)),
 				)
 			case *keeperv1.FromKeeper_TelemetryConfig:
-				// Живая директива host-vitals (ADR-072, NIM-87): обновляем durable
-				// holder (переживёт reconnect) и пере-создаём util-тикер под новый
-				// каденс/коллекторы/enable БЕЗ рестарта процесса. Образец —
-				// FromKeeper_VigilSnapshot выше. Тот же select-loop-goroutine, что
-				// tick-обработчик и pushOnce → чтение/запись holder сериализованы,
-				// мьютекс не нужен (ticker-goroutine holder не читает, лишь сигналит).
+				// A live host-vitals directive (ADR-072, NIM-87): update the durable
+				// holder (survives a reconnect) and re-create the util ticker under the new
+				// cadence/collectors/enable WITHOUT restarting the process. Modeled on
+				// FromKeeper_VigilSnapshot above. The same select-loop goroutine as the
+				// tick handler and pushOnce → holder reads/writes are serialized,
+				// no mutex needed (the ticker goroutine doesn't read the holder, only signals).
 				cfg := payload.TelemetryConfig
 				up.telemetry.applyTelemetryConfig(cfg)
 				up.interval = up.telemetry.interval
@@ -1428,10 +1428,10 @@ func (p soulprintPusher) startTicker(ctx context.Context, tick chan<- struct{}) 
 	return startIntervalTicker(ctx, p.interval, tick)
 }
 
-// startIntervalTicker запускает горутину, которая каждые interval шлёт сигнал в
-// tick. Канал tick должен быть буферизован на 1 — если select-loop занят (apply
-// in-flight), тик не теряется, но и не копится (coalescing: один отложенный тик
-// достаточен). Возвращает stop-функцию для остановки горутины.
+// startIntervalTicker starts a goroutine that sends a signal to tick every
+// interval. The tick channel must be buffered to 1 — if the select-loop is busy (an
+// apply in-flight), the tick is not lost, but also not piled up (coalescing: one pending
+// tick is enough). Returns a stop function to stop the goroutine.
 func startIntervalTicker(ctx context.Context, interval time.Duration, tick chan<- struct{}) func() {
 	tickerCtx, cancel := context.WithCancel(ctx)
 	go func() {
@@ -1452,28 +1452,28 @@ func startIntervalTicker(ctx context.Context, interval time.Duration, tick chan<
 	return cancel
 }
 
-// utilizationReportSink — узкая поверхность StreamSession для отправки
-// HostUtilization. Выделена ради тестируемости utilizationPusher без живого gRPC.
+// utilizationReportSink — the narrow surface of StreamSession for sending
+// HostUtilization. Carved out for testability of utilizationPusher without a live gRPC.
 type utilizationReportSink interface {
 	SendHostUtilization(*keeperv1.HostUtilization) error
 }
 
-// utilizationPusher — сбор + периодическая отправка HostUtilization (ADR-072),
-// зеркало soulprintPusher. Collector stateful (cpu% — дельта тиков), поэтому
-// живёт один на процесс; тикер только сигналит select-loop-у handleSession
-// (он же единственный writer сессии).
+// utilizationPusher — gathers + periodically sends HostUtilization (ADR-072),
+// a mirror of soulprintPusher. The collector is stateful (cpu% — a tick delta), so
+// it lives one per process; the ticker only signals handleSession's select-loop
+// (which is also the session's sole writer).
 type utilizationPusher struct {
 	collector *utilization.Collector
 	sid       string
 	interval  time.Duration
-	// telemetry — durable holder доставленного конфига (pointer → переживает
-	// reconnect). nil в тестовой обвязке = дефолт: собираем всё, pulse включён.
+	// telemetry — a durable holder for the delivered config (pointer → survives a
+	// reconnect). nil in the test harness = default: gather everything, pulse on.
 	telemetry *telemetryState
 }
 
-// pushOnce собирает утилизацию (лишь включённые коллекторы из holder) и
-// отправляет один HostUtilization в sink, проставив эффективный каденс в
-// interval_sec — Keeper по нему масштабирует UtilizationTTL (NIM-87).
+// pushOnce gathers utilization (only the collectors enabled in the holder) and
+// sends one HostUtilization to the sink, stamping the effective cadence into
+// interval_sec — Keeper uses it to scale UtilizationTTL (NIM-87).
 func (p utilizationPusher) pushOnce(ctx context.Context, sink utilizationReportSink) error {
 	var set utilization.CollectorSet
 	if p.telemetry != nil {
@@ -1484,7 +1484,7 @@ func (p utilizationPusher) pushOnce(ctx context.Context, sink utilizationReportS
 	return sink.SendHostUtilization(snap)
 }
 
-// startTicker см. [startIntervalTicker].
+// startTicker see [startIntervalTicker].
 func (p utilizationPusher) startTicker(ctx context.Context, tick chan<- struct{}) func() {
 	return startIntervalTicker(ctx, p.interval, tick)
 }
@@ -1503,19 +1503,19 @@ func loadSoulprintInterval(cfg *config.SoulConfig) (time.Duration, error) {
 	return d, nil
 }
 
-// utilizationInterval* — каденс pulse утилизации (ADR-072). Диапазон [floor,
-// ceiling]: слишком частый pulse греет presence-канал, а редкий (> ceiling)
-// пережил бы Keeper-side UtilizationTTL (90s = 3× ceiling) → здоровый хост
-// протух бы. Бо́льший интервал станет возможен, когда NIM-87 научит нести/
-// масштабировать TTL.
+// utilizationInterval* — the utilization pulse cadence (ADR-072). The range [floor,
+// ceiling]: too frequent a pulse warms up the presence channel, and a rarer one (> ceiling)
+// would outlive the Keeper-side UtilizationTTL (90s = 3× ceiling) → a healthy host
+// would go stale. A larger interval will become possible once NIM-87 learns to carry/
+// scale the TTL.
 const (
 	utilizationDefaultInterval = 30 * time.Second
 	utilizationFloorInterval   = 10 * time.Second
 	utilizationCeilingInterval = 30 * time.Second
 )
 
-// loadUtilizationInterval — soul.yml::utilization.interval. Default 30s; значение
-// зажимается в [floor 10s, ceiling 30s]. Отсутствие блока → дефолт.
+// loadUtilizationInterval — soul.yml::utilization.interval. Default 30s; the value
+// is clamped into [floor 10s, ceiling 30s]. Missing block → default.
 func loadUtilizationInterval(cfg *config.SoulConfig) (time.Duration, error) {
 	if cfg.Utilization == nil || cfg.Utilization.Interval == "" {
 		return utilizationDefaultInterval, nil
@@ -1533,27 +1533,27 @@ func loadUtilizationInterval(cfg *config.SoulConfig) (time.Duration, error) {
 	return d, nil
 }
 
-// utilizationDeliveredCeiling — потолок интервала, доставленного директивой
-// FromKeeper.TelemetryConfig (NIM-87). Отличается от soul-local ceiling (30s,
-// loadUtilizationInterval): keeper вправе задать больший каденс, т.к. soul несёт
-// interval_sec в payload и keeper масштабирует TTL. Sanity-bound на TTL (ADR-072).
+// utilizationDeliveredCeiling — the ceiling for the interval delivered via the
+// FromKeeper.TelemetryConfig directive (NIM-87). Differs from the soul-local ceiling (30s,
+// loadUtilizationInterval): keeper is allowed to set a larger cadence, since soul carries
+// interval_sec in the payload and keeper scales the TTL. A sanity bound on the TTL (ADR-072).
 const utilizationDeliveredCeiling = 3600 * time.Second
 
-// telemetryState — durable снимок доставленной Keeper-ом telemetry-директивы
-// (FromKeeper.TelemetryConfig, ADR-072/NIM-87). Живёт один на процесс (pointer-
-// поле utilizationPusher, шаренное между копиями up при reconnect) → доставленный
-// конфиг переживает reconnect. Читается/пишется только из select-loop-а
-// handleSession (единственный writer/reader сессии), синхронизация не нужна.
+// telemetryState — a durable snapshot of the telemetry directive delivered by Keeper
+// (FromKeeper.TelemetryConfig, ADR-072/NIM-87). Lives one per process (a pointer
+// field of utilizationPusher, shared between copies of up across reconnects) → the delivered
+// config survives a reconnect. Read/written only from handleSession's select-loop
+// (the session's sole writer/reader), no synchronization needed.
 type telemetryState struct {
-	delivered  bool // была ли доставлена хотя бы одна директива
+	delivered  bool // whether at least one directive has been delivered
 	enabled    bool
-	interval   time.Duration // клампнутый [floor,ceiling]
+	interval   time.Duration // clamped to [floor,ceiling]
 	collectors utilization.CollectorSet
 }
 
-// applyTelemetryConfig мержит директиву в durable-состояние. interval клампится
-// в [floor 10s, ceiling 3600s] (defense-in-depth: keeper уже клампит); пустой
-// Collectors → все 5; неизвестные имена игнорируются.
+// applyTelemetryConfig merges the directive into the durable state. interval is clamped
+// to [floor 10s, ceiling 3600s] (defense-in-depth: keeper already clamps it); an empty
+// Collectors → all 5; unknown names are ignored.
 func (s *telemetryState) applyTelemetryConfig(cfg *keeperv1.TelemetryConfig) {
 	if cfg == nil {
 		return
@@ -1564,13 +1564,13 @@ func (s *telemetryState) applyTelemetryConfig(cfg *keeperv1.TelemetryConfig) {
 	s.collectors = collectorSetFromNames(cfg.GetCollectors())
 }
 
-// pulseEnabled — слать ли pulse. nil-holder / нет доставки → да (дефолт); иначе
-// по delivered enabled.
+// pulseEnabled — whether to send the pulse. nil-holder / nothing delivered → yes (default);
+// otherwise by the delivered enabled flag.
 func (s *telemetryState) pulseEnabled() bool {
 	return s == nil || !s.delivered || s.enabled
 }
 
-// clampUtilizationInterval зажимает доставленный интервал в [floor 10s, ceiling
+// clampUtilizationInterval clamps the delivered interval into [floor 10s, ceiling
 // 3600s] (NIM-87).
 func clampUtilizationInterval(d time.Duration) time.Duration {
 	switch {
@@ -1583,8 +1583,8 @@ func clampUtilizationInterval(d time.Duration) time.Duration {
 	}
 }
 
-// collectorSetFromNames строит CollectorSet из имён директивы: пустой список →
-// все 5 (config.KnownCollectors), иначе только валидные (config.IsKnownCollector).
+// collectorSetFromNames builds a CollectorSet from the directive's names: an empty
+// list → all 5 (config.KnownCollectors), otherwise only the valid ones (config.IsKnownCollector).
 func collectorSetFromNames(names []string) utilization.CollectorSet {
 	if len(names) == 0 {
 		return allCollectorsSet()
@@ -1598,7 +1598,7 @@ func collectorSetFromNames(names []string) utilization.CollectorSet {
 	return set
 }
 
-// allCollectorsSet — набор со всеми известными коллекторами (дефолт без директивы).
+// allCollectorsSet — a set with all known collectors (the default without a directive).
 func allCollectorsSet() utilization.CollectorSet {
 	set := make(utilization.CollectorSet, len(config.KnownCollectors))
 	for _, n := range config.KnownCollectors {
@@ -1607,8 +1607,8 @@ func allCollectorsSet() utilization.CollectorSet {
 	return set
 }
 
-// effectiveStartInterval — прецеденс каденса на старте сессии: delivered
-// (durable-директива, переживает reconnect) > soul-local utilization.interval >
+// effectiveStartInterval — cadence precedence at session start: delivered
+// (a durable directive, survives a reconnect) > soul-local utilization.interval >
 // built-in 30s.
 func effectiveStartInterval(ts *telemetryState, store *config.Store[config.SoulConfig], logger *slog.Logger) time.Duration {
 	if ts != nil && ts.delivered {

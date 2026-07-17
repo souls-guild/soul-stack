@@ -52,15 +52,15 @@ import (
 // keeper-side core modules); state `registered` arrives in pluginv1.ApplyRequest.state.
 const Name = "core.cert"
 
-// StateRegistered — регистрация уже существующего серта в реестре Warrant.
+// StateRegistered — registration of an already-existing cert in the Warrant registry.
 const StateRegistered = "registered"
 
-// StateIssued — Keeper САМ выпускает серт: keypair+CSR → подпись Vault PKI ролью
-// из манифеста → запись cert/key в Vault → регистрация в Warrant (NIM-99 Slice C).
+// StateIssued — Keeper ITSELF issues the cert: keypair+CSR → sign with the Vault PKI
+// role from the manifest → write cert/key to Vault → register in Warrant (NIM-99 Slice C).
 const StateIssued = "issued"
 
-// VaultReader — узкая поверхность vault.Client, нужная модулю: чтение KV-пути
-// для извлечения PEM серта. Сужение упрощает unit-тест (fake без HTTP).
+// VaultReader — narrow surface of vault.Client that the module needs: reading a
+// KV path to extract the cert's PEM. Narrowing simplifies unit tests (fake without HTTP).
 type VaultReader interface {
 	ReadKV(ctx context.Context, path string) (map[string]any, error)
 }
@@ -78,14 +78,14 @@ type AuditWriter interface {
 	Write(ctx context.Context, event *audit.Event) error
 }
 
-// IssuePolicyResolver резолвит cert-rotation-политику инкарнации из её манифеста
-// (certpolicy.Resolver его удовлетворяет). Для state `issued` роль PKI-подписи и
-// имя сервиса берутся ОТСЮДА, а не из params.
+// IssuePolicyResolver resolves the incarnation's cert-rotation policy from its
+// manifest (certpolicy.Resolver satisfies it). For state `issued` the PKI-signing
+// role and service name are taken FROM HERE, not from params.
 type IssuePolicyResolver interface {
 	Resolve(ctx context.Context, incarnationName string) (certpolicy.Policy, error)
 }
 
-// Module — реализация sdk/module.SoulModule. Один модуль на base-имя `core.cert`.
+// Module — implementation of sdk/module.SoulModule. One module for base-name `core.cert`.
 type Module struct {
 	Vault VaultReader
 	Store Store
@@ -94,18 +94,18 @@ type Module struct {
 	// (audit: "which instance registered the cert"). Empty → NULL.
 	KID string
 
-	// Зависимости state `issued` (NIM-99 Slice C). Выставляются wire-up-слайсом в
-	// registry.go ПОСЛЕ New; nil любого из них → issued вернёт failed (не
-	// сконфигурирован). state `registered` от них не зависит.
-	Signer      certissue.Signer     // PKI-подпись CSR
-	VaultWriter certissue.KVWriter   // запись cert/key в Vault
-	Policy      IssuePolicyResolver  // резолвер политики ротации из манифеста
-	CSRGen      certissue.CSRGenFunc // генерация keypair+CSR (keeper-side, R2)
+	// Dependencies for state `issued` (NIM-99 Slice C). Set by the wire-up slice
+	// in registry.go AFTER New; nil for any of them → issued returns failed (not
+	// configured). state `registered` does not depend on them.
+	Signer      certissue.Signer     // PKI signing of the CSR
+	VaultWriter certissue.KVWriter   // writing cert/key to Vault
+	Policy      IssuePolicyResolver  // rotation policy resolver from the manifest
+	CSRGen      certissue.CSRGenFunc // keypair+CSR generation (keeper-side, R2)
 	PKIMount    func() string        // hot-reload keeper.yml Vault.PKIMount
 }
 
-// New — wire-helper. issued-зависимости (Signer/VaultWriter/Policy/CSRGen/
-// PKIMount) выставляются отдельно после конструктора.
+// New — wire-helper. issued-dependencies (Signer/VaultWriter/Policy/CSRGen/
+// PKIMount) are set separately after the constructor.
 func New(v VaultReader, s Store, a AuditWriter, kid string) *Module {
 	return &Module{Vault: v, Store: s, Audit: a, KID: kid}
 }
@@ -183,8 +183,8 @@ func parseCertTargetsFromStruct(params *structpb.Struct) ([]certTarget, error) {
 	return out, nil
 }
 
-// Apply диспетчеризует по req.State: `registered` — регистрация уже
-// существующего серта; `issued` — Keeper сам выпускает серт (applyIssued в
+// Apply dispatches on req.State: `registered` — registration of an already
+// existing cert; `issued` — Keeper issues the cert itself (applyIssued in
 // issued.go).
 func (m *Module) Apply(req *pluginv1.ApplyRequest, stream grpc.ServerStreamingServer[pluginv1.ApplyEvent]) error {
 	switch req.State {
@@ -197,9 +197,9 @@ func (m *Module) Apply(req *pluginv1.ApplyRequest, stream grpc.ServerStreamingSe
 	}
 }
 
-// applyRegistered читает PEM каждого cert из Vault, извлекает метаданные и
-// регистрирует active-строку Warrant (idempotent по fingerprint). changed=true
-// если хотя бы один серт был вписан (новый / сменившийся fingerprint).
+// applyRegistered reads the PEM of each cert from Vault, extracts metadata, and
+// registers the active Warrant row (idempotent by fingerprint). changed=true
+// if at least one cert was written (new / changed fingerprint).
 func (m *Module) applyRegistered(req *pluginv1.ApplyRequest, stream grpc.ServerStreamingServer[pluginv1.ApplyEvent]) error {
 	ctx := stream.Context()
 

@@ -11,8 +11,8 @@ import (
 	keeperv1 "github.com/souls-guild/soul-stack/proto/gen/go/keeper/v1"
 )
 
-// fakeTelemetryLister — программируемый TelemetryLister: считает вызовы, отдаёт
-// заданный каталог или ошибку, опционально с задержкой для проверки per-ключ lock-а.
+// fakeTelemetryLister — a programmable TelemetryLister: counts calls, returns a
+// given catalog or error, optionally with a delay to test the per-key lock.
 type fakeTelemetryLister struct {
 	calls   atomic.Int64
 	catalog *TelemetryCatalog
@@ -54,21 +54,21 @@ func TestTelemetryCache_HitMiss(t *testing.T) {
 		t.Fatalf("catalog = %+v", got)
 	}
 	if n := lister.calls.Load(); n != 1 {
-		t.Errorf("calls после miss = %d, want 1", n)
+		t.Errorf("calls after miss = %d, want 1", n)
 	}
 
-	// Hit: тот же ключ — loader не дёргается.
+	// Hit: same key — loader is not invoked.
 	if _, err := c.ListServiceTelemetry(context.Background(), "redis", "g", "v1"); err != nil {
 		t.Fatalf("#2: %v", err)
 	}
 	if n := lister.calls.Load(); n != 1 {
-		t.Errorf("calls после hit = %d, want 1 (кеш не сработал)", n)
+		t.Errorf("calls after hit = %d, want 1 (cache did not work)", n)
 	}
 }
 
 func TestTelemetryCache_ReturnedCatalogIsClone(t *testing.T) {
-	// Мутация возвращённого caller-ом каталога не портит кешированный (proto-message
-	// + срез Collectors клонируются на чтение).
+	// Mutating the catalog returned to the caller doesn't corrupt the cached one
+	// (the proto-message + the Collectors slice are cloned on read).
 	lister := &fakeTelemetryLister{catalog: sampleTelemetryCatalog()}
 	c := NewTelemetryCache(lister, time.Hour)
 
@@ -84,7 +84,7 @@ func TestTelemetryCache_ReturnedCatalogIsClone(t *testing.T) {
 		t.Fatalf("#2: %v", err)
 	}
 	if len(second.Telemetry.GetCollectors()) != 2 || second.Telemetry.GetIntervalSec() != 30 {
-		t.Errorf("кеш повреждён мутацией caller-а: %+v", second.Telemetry)
+		t.Errorf("cache corrupted by caller mutation: %+v", second.Telemetry)
 	}
 }
 
@@ -98,9 +98,9 @@ func TestTelemetryCache_KeyByNameAndRef(t *testing.T) {
 	if _, err := c.ListServiceTelemetry(context.Background(), "redis", "g", "v2"); err != nil {
 		t.Fatalf("#v2: %v", err)
 	}
-	// Тот же name, разные ref → две независимые записи.
+	// Same name, different refs → two independent entries.
 	if n := lister.calls.Load(); n != 2 {
-		t.Errorf("calls = %d, want 2 (per-(name,ref) ключи)", n)
+		t.Errorf("calls = %d, want 2 (per-(name,ref) keys)", n)
 	}
 }
 
@@ -116,7 +116,7 @@ func TestTelemetryCache_Expiry(t *testing.T) {
 		t.Fatalf("#2: %v", err)
 	}
 	if n := lister.calls.Load(); n != 2 {
-		t.Errorf("calls после TTL = %d, want 2", n)
+		t.Errorf("calls after TTL = %d, want 2", n)
 	}
 }
 
@@ -124,7 +124,7 @@ func TestTelemetryCache_Invalidate_DropsAllRefs(t *testing.T) {
 	lister := &fakeTelemetryLister{catalog: sampleTelemetryCatalog()}
 	c := NewTelemetryCache(lister, time.Hour)
 
-	// Прогреваем три ключа: redis@v1, redis@v2, mongo@v1.
+	// Warm up three keys: redis@v1, redis@v2, mongo@v1.
 	if _, err := c.ListServiceTelemetry(context.Background(), "redis", "g", "v1"); err != nil {
 		t.Fatalf("warm redis@v1: %v", err)
 	}
@@ -138,7 +138,7 @@ func TestTelemetryCache_Invalidate_DropsAllRefs(t *testing.T) {
 
 	c.Invalidate("redis")
 
-	// Оба ref для redis выкинуты, mongo остаётся в кеше.
+	// Both refs for redis are evicted, mongo stays in the cache.
 	if _, err := c.ListServiceTelemetry(context.Background(), "redis", "g", "v1"); err != nil {
 		t.Fatalf("post-inv redis@v1: %v", err)
 	}
@@ -148,9 +148,9 @@ func TestTelemetryCache_Invalidate_DropsAllRefs(t *testing.T) {
 	if _, err := c.ListServiceTelemetry(context.Background(), "mongo", "g", "v1"); err != nil {
 		t.Fatalf("post-inv mongo@v1: %v", err)
 	}
-	// redis@v1 + redis@v2 пересчитаны (2), mongo@v1 — из кеша (0).
+	// redis@v1 + redis@v2 recomputed (2), mongo@v1 — from cache (0).
 	if n := lister.calls.Load() - preInvalidate; n != 2 {
-		t.Errorf("calls после Invalidate(\"redis\") = %d, want 2 (mongo должен остаться в кеше)", n)
+		t.Errorf("calls after Invalidate(\"redis\") = %d, want 2 (mongo should remain cached)", n)
 	}
 }
 
@@ -166,7 +166,7 @@ func TestTelemetryCache_ErrorNotCached(t *testing.T) {
 		t.Fatalf("#2 err = %v", err)
 	}
 	if n := lister.calls.Load(); n != 2 {
-		t.Errorf("calls = %d, want 2 (ошибки не кешируются)", n)
+		t.Errorf("calls = %d, want 2 (errors are not cached)", n)
 	}
 }
 
@@ -191,14 +191,14 @@ func TestTelemetryCache_PerKeyLock(t *testing.T) {
 		}
 	}
 	if n := lister.calls.Load(); n != 1 {
-		t.Errorf("calls = %d, want 1 (per-key lock не сработал)", n)
+		t.Errorf("calls = %d, want 1 (per-key lock did not work)", n)
 	}
 }
 
 func TestTelemetryCache_NilLister_Panics(t *testing.T) {
 	defer func() {
 		if r := recover(); r == nil {
-			t.Fatalf("ожидалась паника при nil lister")
+			t.Fatalf("expected a panic on nil lister")
 		}
 	}()
 	_ = NewTelemetryCache(nil, time.Hour)
