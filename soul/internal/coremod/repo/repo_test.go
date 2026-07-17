@@ -464,6 +464,130 @@ func TestApply_NoPkgMgr_Fails(t *testing.T) {
 	}
 }
 
+// --- apt: arch (ADR-071 multi-arch) ---
+
+// TestApt_Present_EmitsArch: arch задан без gpg_key → опции `[arch=...]`.
+func TestApt_Present_EmitsArch(t *testing.T) {
+	m, _ := newModule(t, util.PkgMgrApt)
+	applyTo(t, m, "present", map[string]any{
+		"name":       "nexus",
+		"uri":        "https://nexus/deb",
+		"suite":      "bookworm",
+		"components": []any{"main"},
+		"arch":       []any{"amd64"},
+	})
+	got := read(t, filepath.Join(m.AptSourcesDir, "nexus.list"))
+	want := "deb [arch=amd64] https://nexus/deb bookworm main\n"
+	if got != want {
+		t.Fatalf(".list=%q want %q", got, want)
+	}
+}
+
+// TestApt_Present_ArchMultiValue: несколько архитектур → arch=amd64,arm64.
+func TestApt_Present_ArchMultiValue(t *testing.T) {
+	m, _ := newModule(t, util.PkgMgrApt)
+	applyTo(t, m, "present", map[string]any{
+		"name":  "multi",
+		"uri":   "https://m/deb",
+		"suite": "stable",
+		"arch":  []any{"amd64", "arm64"},
+	})
+	got := read(t, filepath.Join(m.AptSourcesDir, "multi.list"))
+	if !strings.Contains(got, "[arch=amd64,arm64]") {
+		t.Fatalf("multi-arch не склеен через запятую: %q", got)
+	}
+}
+
+// TestApt_Present_ArchWithSignedByOrder: при заданном ключе порядок опций —
+// signed-by затем arch (как в примере ADR-071).
+func TestApt_Present_ArchWithSignedByOrder(t *testing.T) {
+	m, _ := newModule(t, util.PkgMgrApt)
+	applyTo(t, m, "present", map[string]any{
+		"name": "ord", "uri": "https://m/deb", "suite": "x",
+		"arch": []any{"amd64"}, "gpg_key": "K",
+	})
+	keyPath := filepath.Join(m.AptKeyringsDir, "ord.gpg")
+	got := read(t, filepath.Join(m.AptSourcesDir, "ord.list"))
+	want := "deb [signed-by=" + keyPath + " arch=amd64] https://m/deb x\n"
+	if got != want {
+		t.Fatalf(".list=%q want %q", got, want)
+	}
+}
+
+// TestApt_Present_ArchIdempotent: тот же arch → повтор changed=false.
+func TestApt_Present_ArchIdempotent(t *testing.T) {
+	m, _ := newModule(t, util.PkgMgrApt)
+	params := map[string]any{
+		"name": "nexus", "uri": "https://m/deb", "suite": "bookworm", "arch": []any{"amd64"},
+	}
+	if !applyTo(t, m, "present", params).Last().Changed {
+		t.Fatal("первый прогон: changed=false")
+	}
+	if applyTo(t, m, "present", params).Last().Changed {
+		t.Fatal("повторный прогон с тем же arch: changed=true (не идемпотентно)")
+	}
+}
+
+// TestApt_Present_ArchChangeTriggersChanged: смена arch → drift (changed=true).
+func TestApt_Present_ArchChangeTriggersChanged(t *testing.T) {
+	m, _ := newModule(t, util.PkgMgrApt)
+	base := map[string]any{"name": "nexus", "uri": "https://m/deb", "suite": "x", "arch": []any{"amd64"}}
+	applyTo(t, m, "present", base)
+	base["arch"] = []any{"arm64"}
+	if !applyTo(t, m, "present", base).Last().Changed {
+		t.Fatal("смена arch должна дать changed=true")
+	}
+}
+
+// TestValidate_RejectsBadArch: токен архитектуры с недопустимыми символами
+// (пробел/скобка/`=`/пусто/upper) отклоняется — защита от инъекции в apt-опции.
+func TestValidate_RejectsBadArch(t *testing.T) {
+	for _, bad := range [][]any{
+		{"amd64 evil"}, {"a]b"}, {"arch=x"}, {""}, {"AMD64"},
+	} {
+		reply, _ := repo.New().Validate(context.Background(), &pluginv1.ValidateRequest{
+			State:  "present",
+			Params: mustStruct(t, map[string]any{"name": "x", "uri": "https://m", "arch": bad}),
+		})
+		if reply.Ok {
+			t.Fatalf("Validate ok=true для небезопасного arch %v", bad)
+		}
+	}
+}
+
+// TestApt_Present_RedisMirrorRecipe — приёмочный сценарий NIM-104/ADR-071:
+// зеркало redis.io в Nexus объявляется одним core.repo.present (uri=Nexus,
+// arch=amd64, inline gpg-ключ — вариант B: ключ приносит core.url.fetched →
+// ${ file() }). Проверяем точную apt-строку, keyring и идемпотентность.
+func TestApt_Present_RedisMirrorRecipe(t *testing.T) {
+	m, _ := newModule(t, util.PkgMgrApt)
+	const key = "-----BEGIN PGP PUBLIC KEY BLOCK-----\nREDISKEY\n-----END PGP PUBLIC KEY BLOCK-----\n"
+	params := map[string]any{
+		"name":       "redis",
+		"uri":        "https://nexus.internal/repository/redis-apt",
+		"suite":      "bookworm",
+		"components": []any{"main"},
+		"arch":       []any{"amd64"},
+		"gpg_key":    key,
+	}
+	first := applyTo(t, m, "present", params)
+	if !first.Last().Changed || first.Last().Failed {
+		t.Fatalf("recipe apply: changed=%v failed=%v", first.Last().Changed, first.Last().Failed)
+	}
+	keyPath := filepath.Join(m.AptKeyringsDir, "redis.gpg")
+	got := read(t, filepath.Join(m.AptSourcesDir, "redis.list"))
+	want := "deb [signed-by=" + keyPath + " arch=amd64] https://nexus.internal/repository/redis-apt bookworm main\n"
+	if got != want {
+		t.Fatalf(".list=%q\nwant %q", got, want)
+	}
+	if k := read(t, keyPath); k != key {
+		t.Fatalf("keyring bytes mismatch: %q", k)
+	}
+	if applyTo(t, m, "present", params).Last().Changed {
+		t.Fatal("recipe повтор: changed=true (не идемпотентно)")
+	}
+}
+
 func hasSubstr(items []string, sub string) bool {
 	for _, it := range items {
 		if strings.Contains(it, sub) {
