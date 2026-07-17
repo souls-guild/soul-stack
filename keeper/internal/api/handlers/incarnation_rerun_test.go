@@ -405,7 +405,7 @@ func TestRerunLast_ReasonMultibyteAtMax_202(t *testing.T) {
 	starter := &fakeStarter{}
 	h := newRerunHandler(db, starter, &fakeAuditWriter{})
 
-	reason := strings.Repeat("y", incarnation.ReasonMaxLen) // ReasonMaxLen runes, 2*ReasonMaxLen bytes
+	reason := strings.Repeat("я", incarnation.ReasonMaxLen) // ReasonMaxLen runes, 2*ReasonMaxLen bytes
 	if len(reason) <= incarnation.ReasonMaxLen {
 		t.Fatalf("test precondition violated: %d bytes does not exceed limit %d - case does not distinguish bytes/runes",
 			len(reason), incarnation.ReasonMaxLen)
@@ -429,7 +429,7 @@ func TestRerunLast_ReasonMultibyteOverMax_422(t *testing.T) {
 	starter := &fakeStarter{}
 	h := newRerunHandler(db, starter, &fakeAuditWriter{})
 
-	reason := strings.Repeat("y", incarnation.ReasonMaxLen+1)
+	reason := strings.Repeat("я", incarnation.ReasonMaxLen+1)
 	_, err := h.RerunLastTyped(context.Background(), claims("archon-alice"), "redis-prod", reason)
 	wantProblem(t, err, problem.TypeValidationFailed)
 	if starter.calls != 0 {

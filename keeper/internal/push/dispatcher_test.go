@@ -230,7 +230,7 @@ func TestSendApply_AuthorizeDeny(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected an error on Authorize deny")
 	}
-	if !strings.Contains(err.Error(), "Authorize denied") {
+	if !strings.Contains(err.Error(), "Authorize refused") {
 		t.Errorf("error is not about deny: %v", err)
 	}
 	if dialed {
