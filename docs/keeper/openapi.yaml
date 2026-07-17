@@ -3243,6 +3243,41 @@ components:
         - service
         - state_schema_version
       type: object
+    ServiceTelemetryReply:
+      additionalProperties: false
+      properties:
+        collectors:
+          items:
+            type: string
+          type:
+            - array
+            - "null"
+        enabled:
+          type: boolean
+        interval_sec:
+          format: int32
+          type: integer
+        known_collectors:
+          items:
+            type: string
+          type:
+            - array
+            - "null"
+        ref:
+          type: string
+        service:
+          type: string
+        sha1:
+          type: string
+      required:
+        - service
+        - ref
+        - sha1
+        - enabled
+        - interval_sec
+        - collectors
+        - known_collectors
+      type: object
     ServiceUpdateRequest:
       additionalProperties: false
       properties:
@@ -10793,6 +10828,78 @@ paths:
                 $ref: "#/components/schemas/HumaProblemError"
           description: Bad Gateway
       summary: state_schema metadata of a Service
+      tags:
+        - service
+  /v1/services/{name}/telemetry:
+    get:
+      description: "Эффективный дефолтный (per-service, без essence/инкарнации) host-vitals-конфиг сервиса (enabled/interval_sec/collectors) из манифеста `telemetry:` + known_collectors (полный допустимый набор для UI, ADR-042 backend-driven, ADR-072). Permission service.list. Read-only, без audit. ETag=snapshot SHA1; If-None-Match → 304. Cache-Control: immutable+год для pinned commit-SHA ref, иначе no-cache (ветка/тег mutable). Сервис без блока telemetry → манифест-дефолты (enabled=true, interval_sec=30, все коллекторы) + 200. 502 — loader упал. Не путать с /v1/incarnations/{name}/telemetry (runtime host-vitals из Redis, NIM-86)."
+      operationId: getServiceTelemetry
+      parameters:
+        - description: имя Service-а
+          in: path
+          name: name
+          required: true
+          schema:
+            description: имя Service-а
+            type: string
+        - description: опц. git-ref override (опущено → ref из реестра)
+          explode: false
+          in: query
+          name: ref
+          schema:
+            description: опц. git-ref override (опущено → ref из реестра)
+            type: string
+        - description: "conditional GET: 304, если совпало с ETag (snapshot SHA1)"
+          in: header
+          name: If-None-Match
+          schema:
+            description: "conditional GET: 304, если совпало с ETag (snapshot SHA1)"
+            type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ServiceTelemetryReply"
+          description: OK
+          headers:
+            Cache-Control:
+              schema:
+                type: string
+            ETag:
+              schema:
+                type: string
+        "403":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/HumaProblemError"
+          description: Forbidden
+        "404":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/HumaProblemError"
+          description: Not Found
+        "422":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/HumaProblemError"
+          description: Unprocessable Entity
+        "500":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/HumaProblemError"
+          description: Internal Server Error
+        "502":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/HumaProblemError"
+          description: Bad Gateway
+      summary: дефолтный host-vitals telemetry-конфиг Service-а + допустимые коллекторы
       tags:
         - service
   /v1/sigil/keys:

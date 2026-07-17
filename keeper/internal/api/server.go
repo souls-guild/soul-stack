@@ -136,6 +136,16 @@ type Deps struct {
 	// *artifact.ServiceLoader.Load → artifact.LoadDirectiveCatalog.
 	ServiceDirectives handlers.ServiceDirectivesLister
 
+	// ServiceTelemetry — TTL-кеш дефолтного (per-service, без essence) host-vitals
+	// telemetry-конфига (манифест `telemetry:` → эффективные дефолты) + допустимый
+	// набор коллекторов для `GET /v1/services/{name}/telemetry` (UI-редактор,
+	// ADR-042/072). Опционален: при nil /telemetry-эндпоинт отвечает 500 (фича не
+	// сконфигурирована); сам service-CRUD остаётся работоспособным. Production-wire-up
+	// в `keeper run` передаёт *serviceregistry.TelemetryCache поверх TelemetryListerFunc,
+	// разрешающего `(name,gitURL,ref)` через *artifact.ServiceLoader.Load →
+	// essence.ResolveEffectiveTelemetry.
+	ServiceTelemetry handlers.ServiceTelemetryLister
+
 	// AugurSvc — the Augur registry management logic (omen.create/list/delete +
 	// rite.create/list/delete, ADR-025). When nil the augur.* routes aren't wired
 	// (the production wire-up in `keeper run` passes the same *augur.Service as MCP).
@@ -618,7 +628,7 @@ func NewServer(cfg config.KeeperListenSimple, deps Deps, logger *slog.Logger) (*
 	// Symmetric to roleH / sigilH.
 	var serviceH *handlers.ServiceHandler
 	if deps.ServiceSvc != nil {
-		serviceH = handlers.NewServiceHandler(deps.ServiceSvc, deps.ServiceRefs, deps.ServiceScenarios, deps.ServiceStateSchema, deps.ServiceDependencies, deps.ServiceDirectives, logger)
+		serviceH = handlers.NewServiceHandler(deps.ServiceSvc, deps.ServiceRefs, deps.ServiceScenarios, deps.ServiceStateSchema, deps.ServiceDependencies, deps.ServiceDirectives, deps.ServiceTelemetry, logger)
 	}
 
 	// provisioningPolicyH is optional: GET reads the policy snapshot (Holder), PUT

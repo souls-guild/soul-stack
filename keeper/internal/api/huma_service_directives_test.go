@@ -62,7 +62,7 @@ func directivesTestRouter(t *testing.T, lister handlers.ServiceDirectivesLister)
 	if err != nil {
 		t.Fatalf("serviceregistry.NewService: %v", err)
 	}
-	serviceH := handlers.NewServiceHandler(svc, nil, nil, nil, nil, lister, nil)
+	serviceH := handlers.NewServiceHandler(svc, nil, nil, nil, nil, lister, nil, nil)
 
 	r := chi.NewRouter()
 	injectClaims := func(next http.Handler) http.Handler {

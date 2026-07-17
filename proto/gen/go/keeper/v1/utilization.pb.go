@@ -38,8 +38,10 @@ type HostUtilization struct {
 	MemTotalMb  int64                  `protobuf:"varint,7,opt,name=mem_total_mb,json=memTotalMb,proto3" json:"mem_total_mb,omitempty"`
 	SwapUsedMb  int64                  `protobuf:"varint,8,opt,name=swap_used_mb,json=swapUsedMb,proto3" json:"swap_used_mb,omitempty"`
 	// Утилизация не-виртуальных точек монтирования (tmpfs/proc/sys/cgroup отфильтрованы).
-	Disks         []*DiskUtilization `protobuf:"bytes,9,rep,name=disks,proto3" json:"disks,omitempty"`
-	UptimeSec     int64              `protobuf:"varint,10,opt,name=uptime_sec,json=uptimeSec,proto3" json:"uptime_sec,omitempty"`
+	Disks     []*DiskUtilization `protobuf:"bytes,9,rep,name=disks,proto3" json:"disks,omitempty"`
+	UptimeSec int64              `protobuf:"varint,10,opt,name=uptime_sec,json=uptimeSec,proto3" json:"uptime_sec,omitempty"`
+	// Эффективный каденс pulse; по нему Keeper масштабирует TTL Redis-ключей (ADR-072, NIM-87).
+	IntervalSec   int32 `protobuf:"varint,11,opt,name=interval_sec,json=intervalSec,proto3" json:"interval_sec,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -144,6 +146,13 @@ func (x *HostUtilization) GetUptimeSec() int64 {
 	return 0
 }
 
+func (x *HostUtilization) GetIntervalSec() int32 {
+	if x != nil {
+		return x.IntervalSec
+	}
+	return 0
+}
+
 // DiskUtilization — занятость одной точки монтирования. Объёмы в МБ (как MemoryFacts).
 type DiskUtilization struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
@@ -205,11 +214,74 @@ func (x *DiskUtilization) GetTotalMb() int64 {
 	return 0
 }
 
+// TelemetryConfig — эффективный конфиг сбора host-vitals, резолвится Keeper-ом
+// (манифест telemetry: + essence-override) и доставляется Soul-у через FromKeeper
+// для hot-reload каденса/коллекторов без рестарта (ADR-072, NIM-87).
+type TelemetryConfig struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Enabled       bool                   `protobuf:"varint,1,opt,name=enabled,proto3" json:"enabled,omitempty"`
+	IntervalSec   int32                  `protobuf:"varint,2,opt,name=interval_sec,json=intervalSec,proto3" json:"interval_sec,omitempty"`
+	Collectors    []string               `protobuf:"bytes,3,rep,name=collectors,proto3" json:"collectors,omitempty"` // подмножество {cpu,mem,disk,load,uptime}
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *TelemetryConfig) Reset() {
+	*x = TelemetryConfig{}
+	mi := &file_keeper_v1_utilization_proto_msgTypes[2]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *TelemetryConfig) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*TelemetryConfig) ProtoMessage() {}
+
+func (x *TelemetryConfig) ProtoReflect() protoreflect.Message {
+	mi := &file_keeper_v1_utilization_proto_msgTypes[2]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use TelemetryConfig.ProtoReflect.Descriptor instead.
+func (*TelemetryConfig) Descriptor() ([]byte, []int) {
+	return file_keeper_v1_utilization_proto_rawDescGZIP(), []int{2}
+}
+
+func (x *TelemetryConfig) GetEnabled() bool {
+	if x != nil {
+		return x.Enabled
+	}
+	return false
+}
+
+func (x *TelemetryConfig) GetIntervalSec() int32 {
+	if x != nil {
+		return x.IntervalSec
+	}
+	return 0
+}
+
+func (x *TelemetryConfig) GetCollectors() []string {
+	if x != nil {
+		return x.Collectors
+	}
+	return nil
+}
+
 var File_keeper_v1_utilization_proto protoreflect.FileDescriptor
 
 const file_keeper_v1_utilization_proto_rawDesc = "" +
 	"\n" +
-	"\x1bkeeper/v1/utilization.proto\x12\x13soulstack.keeper.v1\x1a\x1fgoogle/protobuf/timestamp.proto\"\xec\x02\n" +
+	"\x1bkeeper/v1/utilization.proto\x12\x13soulstack.keeper.v1\x1a\x1fgoogle/protobuf/timestamp.proto\"\x8f\x03\n" +
 	"\x0fHostUtilization\x12=\n" +
 	"\fcollected_at\x18\x01 \x01(\v2\x1a.google.protobuf.TimestampR\vcollectedAt\x12\x17\n" +
 	"\acpu_pct\x18\x02 \x01(\x01R\x06cpuPct\x12\x14\n" +
@@ -224,11 +296,18 @@ const file_keeper_v1_utilization_proto_rawDesc = "" +
 	"\x05disks\x18\t \x03(\v2$.soulstack.keeper.v1.DiskUtilizationR\x05disks\x12\x1d\n" +
 	"\n" +
 	"uptime_sec\x18\n" +
-	" \x01(\x03R\tuptimeSec\"[\n" +
+	" \x01(\x03R\tuptimeSec\x12!\n" +
+	"\finterval_sec\x18\v \x01(\x05R\vintervalSec\"[\n" +
 	"\x0fDiskUtilization\x12\x14\n" +
 	"\x05mount\x18\x01 \x01(\tR\x05mount\x12\x17\n" +
 	"\aused_mb\x18\x02 \x01(\x03R\x06usedMb\x12\x19\n" +
-	"\btotal_mb\x18\x03 \x01(\x03R\atotalMbBCZAgithub.com/souls-guild/soul-stack/proto/gen/go/keeper/v1;keeperv1b\x06proto3"
+	"\btotal_mb\x18\x03 \x01(\x03R\atotalMb\"n\n" +
+	"\x0fTelemetryConfig\x12\x18\n" +
+	"\aenabled\x18\x01 \x01(\bR\aenabled\x12!\n" +
+	"\finterval_sec\x18\x02 \x01(\x05R\vintervalSec\x12\x1e\n" +
+	"\n" +
+	"collectors\x18\x03 \x03(\tR\n" +
+	"collectorsBCZAgithub.com/souls-guild/soul-stack/proto/gen/go/keeper/v1;keeperv1b\x06proto3"
 
 var (
 	file_keeper_v1_utilization_proto_rawDescOnce sync.Once
@@ -242,14 +321,15 @@ func file_keeper_v1_utilization_proto_rawDescGZIP() []byte {
 	return file_keeper_v1_utilization_proto_rawDescData
 }
 
-var file_keeper_v1_utilization_proto_msgTypes = make([]protoimpl.MessageInfo, 2)
+var file_keeper_v1_utilization_proto_msgTypes = make([]protoimpl.MessageInfo, 3)
 var file_keeper_v1_utilization_proto_goTypes = []any{
 	(*HostUtilization)(nil),       // 0: soulstack.keeper.v1.HostUtilization
 	(*DiskUtilization)(nil),       // 1: soulstack.keeper.v1.DiskUtilization
-	(*timestamppb.Timestamp)(nil), // 2: google.protobuf.Timestamp
+	(*TelemetryConfig)(nil),       // 2: soulstack.keeper.v1.TelemetryConfig
+	(*timestamppb.Timestamp)(nil), // 3: google.protobuf.Timestamp
 }
 var file_keeper_v1_utilization_proto_depIdxs = []int32{
-	2, // 0: soulstack.keeper.v1.HostUtilization.collected_at:type_name -> google.protobuf.Timestamp
+	3, // 0: soulstack.keeper.v1.HostUtilization.collected_at:type_name -> google.protobuf.Timestamp
 	1, // 1: soulstack.keeper.v1.HostUtilization.disks:type_name -> soulstack.keeper.v1.DiskUtilization
 	2, // [2:2] is the sub-list for method output_type
 	2, // [2:2] is the sub-list for method input_type
@@ -269,7 +349,7 @@ func file_keeper_v1_utilization_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_keeper_v1_utilization_proto_rawDesc), len(file_keeper_v1_utilization_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   2,
+			NumMessages:   3,
 			NumExtensions: 0,
 			NumServices:   0,
 		},

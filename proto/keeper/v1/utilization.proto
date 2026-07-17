@@ -27,6 +27,9 @@ message HostUtilization {
   repeated DiskUtilization disks = 9;
 
   int64 uptime_sec = 10;
+
+  // Эффективный каденс pulse; по нему Keeper масштабирует TTL Redis-ключей (ADR-072, NIM-87).
+  int32 interval_sec = 11;
 }
 
 // DiskUtilization — занятость одной точки монтирования. Объёмы в МБ (как MemoryFacts).
@@ -34,4 +37,13 @@ message DiskUtilization {
   string mount    = 1;
   int64  used_mb  = 2;
   int64  total_mb = 3;
+}
+
+// TelemetryConfig — эффективный конфиг сбора host-vitals, резолвится Keeper-ом
+// (манифест telemetry: + essence-override) и доставляется Soul-у через FromKeeper
+// для hot-reload каденса/коллекторов без рестарта (ADR-072, NIM-87).
+message TelemetryConfig {
+  bool enabled = 1;
+  int32 interval_sec = 2;
+  repeated string collectors = 3;   // подмножество {cpu,mem,disk,load,uptime}
 }

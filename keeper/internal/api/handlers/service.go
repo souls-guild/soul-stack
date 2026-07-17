@@ -25,6 +25,7 @@ import (
 	"github.com/souls-guild/soul-stack/keeper/internal/jwt"
 	"github.com/souls-guild/soul-stack/keeper/internal/scenario"
 	"github.com/souls-guild/soul-stack/keeper/internal/serviceregistry"
+	"github.com/souls-guild/soul-stack/shared/config"
 )
 
 // ServiceRefsLister — the listing surface for git refs of a single Service.
@@ -77,6 +78,17 @@ type ServiceDirectivesLister interface {
 	ListDirectives(ctx context.Context, name, gitURL, ref string) (*artifact.DirectiveCatalog, error)
 }
 
+// ServiceTelemetryLister — поверхность чтения дефолтного (per-service, без essence)
+// host-vitals telemetry-конфига сервиса + SHA1 снапшота (для ETag) из
+// материализованного снапшота Service-репо для `(name, ref)`. Симметрично
+// [ServiceDirectivesLister]: handler принимает минимальную зависимость, реальный
+// git-clone + чтение манифеста (`telemetry:`) + резолв эффективных дефолтов —
+// внутри реализации (TTL-кеш + ServiceLoader). При nil
+// `GET /v1/services/{name}/telemetry` отвечает 500 «not configured».
+type ServiceTelemetryLister interface {
+	ListServiceTelemetry(ctx context.Context, name, gitURL, ref string) (*serviceregistry.TelemetryCatalog, error)
+}
+
 // ServiceHandler — the Service registry endpoints (register / list / get /
 // update / deregister / list-refs / list-scenarios / list-state-schema).
 // Delegates business logic to [serviceregistry.Service]; /refs / /scenarios /
@@ -92,21 +104,22 @@ type ServiceHandler struct {
 	stateSchema  ServiceStateSchemaLister
 	dependencies ServiceDependenciesLister
 	directives   ServiceDirectivesLister
+	telemetry    ServiceTelemetryLister
 	logger       *slog.Logger
 }
 
 // NewServiceHandler creates the handler. svc is required (panics on nil —
 // the single misconfiguration point, the caller must pass non-nil). refs /
-// scenarios / stateSchema / dependencies / directives are optional: when nil,
-// the corresponding endpoint responds 500 (feature not configured).
-func NewServiceHandler(svc *serviceregistry.Service, refs ServiceRefsLister, scenarios ServiceScenarioLister, stateSchema ServiceStateSchemaLister, dependencies ServiceDependenciesLister, directives ServiceDirectivesLister, logger *slog.Logger) *ServiceHandler {
+// scenarios / stateSchema / dependencies / directives / telemetry are optional: when
+// nil, the corresponding endpoint responds 500 (feature not configured).
+func NewServiceHandler(svc *serviceregistry.Service, refs ServiceRefsLister, scenarios ServiceScenarioLister, stateSchema ServiceStateSchemaLister, dependencies ServiceDependenciesLister, directives ServiceDirectivesLister, telemetry ServiceTelemetryLister, logger *slog.Logger) *ServiceHandler {
 	if svc == nil {
 		panic("handlers.NewServiceHandler: serviceregistry.Service is nil")
 	}
 	if logger == nil {
 		logger = slog.New(slog.NewJSONHandler(io.Discard, nil))
 	}
-	return &ServiceHandler{svc: svc, refs: refs, scenarios: scenarios, stateSchema: stateSchema, dependencies: dependencies, directives: directives, logger: logger}
+	return &ServiceHandler{svc: svc, refs: refs, scenarios: scenarios, stateSchema: stateSchema, dependencies: dependencies, directives: directives, telemetry: telemetry, logger: logger}
 }
 
 // ServiceSpecStub — a non-empty *ServiceHandler stub for generating the huma OpenAPI
@@ -284,6 +297,7 @@ func (h *ServiceHandler) UpdateTyped(ctx context.Context, claims *jwt.Claims, na
 	h.invalidateStateSchema(entry.Name)
 	h.invalidateDependencies(entry.Name)
 	h.invalidateDirectives(entry.Name)
+	h.invalidateTelemetry(entry.Name)
 
 	return ServiceUpdateReply{
 		Body: toServiceResponse(entry),
@@ -325,6 +339,7 @@ func (h *ServiceHandler) DeregisterTyped(ctx context.Context, name string) (Serv
 	h.invalidateStateSchema(name)
 	h.invalidateDependencies(name)
 	h.invalidateDirectives(name)
+	h.invalidateTelemetry(name)
 	return ServiceNameReply{Name: name}, nil
 }
 
@@ -392,6 +407,19 @@ func (h *ServiceHandler) invalidateDirectives(name string) {
 		return
 	}
 	if inv, ok := h.directives.(interface{ Invalidate(string) }); ok {
+		inv.Invalidate(name)
+	}
+}
+
+// invalidateTelemetry — best-effort инвалидация telemetry-кеша по name (парная
+// семантика с [invalidateDirectives]). После смены git-URL или удаления записи
+// закешированный telemetry-конфиг должен исчезнуть, чтобы UI подтянул дефолты
+// нового источника.
+func (h *ServiceHandler) invalidateTelemetry(name string) {
+	if h.telemetry == nil {
+		return
+	}
+	if inv, ok := h.telemetry.(interface{ Invalidate(string) }); ok {
 		inv.Invalidate(name)
 	}
 }
@@ -834,6 +862,88 @@ func (h *ServiceHandler) ListDirectivesTyped(ctx context.Context, name, ref, ver
 		Ref:        ref,
 		SHA1:       catalog.SHA1,
 		Directives: dirs,
+	}, nil
+}
+
+// ServiceTelemetryReply — GET /v1/services/{name}/telemetry body. Самодостаточный
+// JSON (как ServiceDirectivesReply): service + ref эхо-дубли, sha1 снапшота (== ETag),
+// эффективный дефолтный (per-service, без essence/инкарнации) host-vitals-конфиг
+// (enabled/interval_sec/collectors) + known_collectors — полный допустимый набор
+// коллекторов для UI (ADR-042 backend-driven, ADR-072). Collectors пусто → `[]`
+// (не null); KnownCollectors всегда полный набор. json-теги фиксируют wire; huma-
+// регистратор читает SHA1 для ETag/If-None-Match (см. huma_service.go).
+type ServiceTelemetryReply struct {
+	Service         string   `json:"service"`
+	Ref             string   `json:"ref"`
+	SHA1            string   `json:"sha1"`
+	Enabled         bool     `json:"enabled"`
+	IntervalSec     int32    `json:"interval_sec"`
+	Collectors      []string `json:"collectors"`
+	KnownCollectors []string `json:"known_collectors"`
+}
+
+// ListServiceTelemetryTyped — GET /v1/services/{name}/telemetry (READ без audit):
+// резолв записи + чтение дефолтного telemetry-конфига из снапшота манифеста + полный
+// набор допустимых коллекторов (config.KnownCollectors) для UI. name/ref приходят
+// аргументами (ref="" → дефолт из реестра). Ошибки — *problemError (500 нет lister-а/
+// сбой реестра, 404 not-found, 502 loader упал), успех — [ServiceTelemetryReply].
+func (h *ServiceHandler) ListServiceTelemetryTyped(ctx context.Context, name, ref string) (ServiceTelemetryReply, error) {
+	var zero ServiceTelemetryReply
+	if h.telemetry == nil {
+		return zero, &problemError{problem.New(problem.TypeInternalError, "", "service telemetry lister not configured")}
+	}
+
+	entry, err := h.svc.GetService(ctx, name)
+	switch {
+	case err == nil:
+	case errors.Is(err, serviceregistry.ErrNotFound):
+		return zero, &problemError{problem.New(problem.TypeNotFound, "", "service "+name+" not found")}
+	default:
+		h.logger.Error("service.telemetry: get service failed",
+			slog.String("name", name),
+			slog.Any("error", err),
+		)
+		return zero, &problemError{problem.New(problem.TypeInternalError, "", "get service failed")}
+	}
+
+	if ref == "" {
+		ref = entry.Ref
+	}
+
+	catalog, err := h.telemetry.ListServiceTelemetry(ctx, entry.Name, entry.Git, ref)
+	if err != nil {
+		h.logger.Warn("service.telemetry: loader failed",
+			slog.String("name", name),
+			slog.String("git", entry.Git),
+			slog.String("ref", ref),
+			slog.Any("error", err),
+		)
+		return zero, &problemError{problem.New(problem.TypeBadGateway, "", "telemetry loader failed for service "+name+": "+err.Error())}
+	}
+	if catalog == nil || catalog.Telemetry == nil {
+		// Defensive: lister обязан вернуть non-nil при err=nil (паттерн ListStateSchema).
+		h.logger.Error("service.telemetry: loader returned nil without error",
+			slog.String("name", name))
+		return zero, &problemError{problem.New(problem.TypeBadGateway, "", "telemetry loader returned empty result")}
+	}
+
+	// Collectors пусто → `[]` (не null) для мягкой деградации фронта; known_collectors —
+	// всегда полный допустимый набор (копия — не отдаём наружу пакетную переменную).
+	collectors := catalog.Telemetry.GetCollectors()
+	if collectors == nil {
+		collectors = []string{}
+	}
+	known := make([]string, len(config.KnownCollectors))
+	copy(known, config.KnownCollectors)
+
+	return ServiceTelemetryReply{
+		Service:         entry.Name,
+		Ref:             ref,
+		SHA1:            catalog.SHA1,
+		Enabled:         catalog.Telemetry.GetEnabled(),
+		IntervalSec:     catalog.Telemetry.GetIntervalSec(),
+		Collectors:      collectors,
+		KnownCollectors: known,
 	}, nil
 }
 

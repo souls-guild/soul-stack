@@ -29,7 +29,7 @@ func TestCollect_FillsAllFields(t *testing.T) {
 		cpu:    CPUSample{Total: 1000, Idle: 900},
 	}
 
-	u := NewCollector(src).Collect(context.Background(), "redis1.example")
+	u := NewCollector(src).Collect(context.Background(), "redis1.example", nil)
 
 	if u.GetCollectedAt() == nil {
 		t.Fatal("collected_at must be set (Soul-side timestamp)")
@@ -94,18 +94,58 @@ func TestCpuPct_Delta(t *testing.T) {
 // cpu% через полный Collect: два сбора на одном Collector дают дельту.
 func TestCollect_CpuDeltaAcrossCollects(t *testing.T) {
 	c := NewCollector(fakeSource{cpu: CPUSample{Total: 100, Idle: 50}})
-	if got := c.Collect(context.Background(), "h").GetCpuPct(); got != 0 {
+	if got := c.Collect(context.Background(), "h", nil).GetCpuPct(); got != 0 {
 		t.Fatalf("first Collect cpu_pct=%v want 0", got)
 	}
 	c.src = fakeSource{cpu: CPUSample{Total: 200, Idle: 90}}
-	if got := c.Collect(context.Background(), "h").GetCpuPct(); got != 60 {
+	if got := c.Collect(context.Background(), "h", nil).GetCpuPct(); got != 60 {
 		t.Errorf("second Collect cpu_pct=%v want 60", got)
+	}
+}
+
+// Collectors gating (NIM-87): выключенный коллектор → его поля нулевые, disk
+// пропускает statfs; включённый — собирается. Неизвестное имя в наборе — no-op.
+func TestCollect_CollectorsGating(t *testing.T) {
+	src := fakeSource{
+		load:   LoadAvg{One: 0.5, Five: 1.5, Fifteen: 2.5},
+		mem:    MemInfo{UsedMB: 8000, TotalMB: 16000, SwapUsedMB: 512},
+		disks:  []Disk{{Mount: "/", UsedMB: 20000, TotalMB: 50000}},
+		uptime: 98765,
+		cpu:    CPUSample{Total: 1000, Idle: 900},
+	}
+
+	// Только cpu → load/mem/disk/uptime зануляются, statfs (Disks) не зовётся.
+	only := NewCollector(src).Collect(context.Background(), "h", CollectorSet{"cpu": true})
+	if only.GetLoad1() != 0 || only.GetLoad5() != 0 || only.GetLoad15() != 0 {
+		t.Errorf("load must be zero when disabled: %v/%v/%v", only.GetLoad1(), only.GetLoad5(), only.GetLoad15())
+	}
+	if only.GetMemUsedMb() != 0 || only.GetMemTotalMb() != 0 || only.GetSwapUsedMb() != 0 {
+		t.Errorf("mem must be zero when disabled: %+v", only)
+	}
+	if only.GetDisks() != nil {
+		t.Errorf("disks must be skipped when disabled, got %v", only.GetDisks())
+	}
+	if only.GetUptimeSec() != 0 {
+		t.Errorf("uptime must be zero when disabled: %d", only.GetUptimeSec())
+	}
+
+	// Обратное направление + неизвестное имя игнорируется: mem включён (собран),
+	// disk выключен (nil), "bogus" не влияет.
+	memOnly := NewCollector(src).Collect(context.Background(), "h", CollectorSet{"mem": true, "bogus": true})
+	if memOnly.GetMemTotalMb() != 16000 || memOnly.GetMemUsedMb() != 8000 {
+		t.Errorf("mem must be collected when enabled: %+v", memOnly)
+	}
+	if memOnly.GetDisks() != nil {
+		t.Errorf("disks must be nil when disabled, got %v", memOnly.GetDisks())
+	}
+	if memOnly.GetUptimeSec() != 0 {
+		t.Errorf("uptime must be zero when disabled: %d", memOnly.GetUptimeSec())
 	}
 }
 
 // Пустой/sparse Source → нули и nil-disks, без паники.
 func TestCollect_EmptySourceNoPanic(t *testing.T) {
-	u := NewCollector(fakeSource{}).Collect(context.Background(), "h")
+	u := NewCollector(fakeSource{}).Collect(context.Background(), "h", nil)
 	if u == nil {
 		t.Fatal("Collect must return non-nil")
 	}

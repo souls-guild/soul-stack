@@ -658,3 +658,121 @@ mystery: 42
 		t.Fatalf("expected unknown_key for non-deprecated unknown top-level field")
 	}
 }
+
+// TestLoadServiceManifest_TelemetryAbsent — без блока telemetry геттеры дают
+// дефолты (nil-safe), манифест парсится без ошибок (backcompat, NIM-87).
+func TestLoadServiceManifest_TelemetryAbsent(t *testing.T) {
+	src := "name: svc-golden\nstate_schema_version: 1\nstate_schema:\n  type: object\n"
+	cfg, _, diags, _ := LoadServiceManifestFromBytes("service.yml", []byte(src), ValidateOptions{})
+	if diag.HasErrors(diags) {
+		dump(t, diags)
+		t.Fatal("неожиданные ошибки без блока telemetry")
+	}
+	if cfg.Telemetry != nil {
+		t.Error("Telemetry должен быть nil без блока")
+	}
+	if !cfg.Telemetry.EnabledOrDefault() {
+		t.Error("nil-блок → EnabledOrDefault()=true")
+	}
+	if got := cfg.Telemetry.IntervalOrDefault(); got != "30s" {
+		t.Errorf("nil-блок → IntervalOrDefault()=30s, got %q", got)
+	}
+	if got := cfg.Telemetry.CollectorsOrDefault(); len(got) != 5 {
+		t.Errorf("nil-блок → CollectorsOrDefault()=все 5, got %v", got)
+	}
+}
+
+// TestLoadServiceManifest_Telemetry — заданные значения читаются в *bool/*string/[]string.
+func TestLoadServiceManifest_Telemetry(t *testing.T) {
+	src := `name: svc-golden
+state_schema_version: 1
+state_schema:
+  type: object
+telemetry:
+  enabled: false
+  interval: "45s"
+  collectors: [cpu, mem]
+`
+	cfg, _, diags, _ := LoadServiceManifestFromBytes("service.yml", []byte(src), ValidateOptions{})
+	if diag.HasErrors(diags) {
+		dump(t, diags)
+		t.Fatal("валидный блок telemetry дал ошибки")
+	}
+	if cfg.Telemetry == nil {
+		t.Fatal("Telemetry nil, ожидался разобранный блок")
+	}
+	if cfg.Telemetry.EnabledOrDefault() {
+		t.Error("enabled=false → EnabledOrDefault()=false")
+	}
+	if got := cfg.Telemetry.IntervalOrDefault(); got != "45s" {
+		t.Errorf("IntervalOrDefault()=45s, got %q", got)
+	}
+	if got := cfg.Telemetry.CollectorsOrDefault(); len(got) != 2 || got[0] != "cpu" || got[1] != "mem" {
+		t.Errorf("CollectorsOrDefault()=[cpu mem], got %v", got)
+	}
+}
+
+// TestLoadServiceManifest_TelemetryBadCollector — неизвестный collector → unknown_collector.
+func TestLoadServiceManifest_TelemetryBadCollector(t *testing.T) {
+	src := `name: svc-golden
+state_schema_version: 1
+state_schema:
+  type: object
+telemetry:
+  collectors: [cpu, foobar]
+`
+	_, _, diags, _ := LoadServiceManifestFromBytes("service.yml", []byte(src), ValidateOptions{})
+	if !hasCodeAt(diags, "unknown_collector", "$.telemetry.collectors") {
+		dump(t, diags)
+		t.Fatal("ожидался unknown_collector для foobar")
+	}
+}
+
+// TestLoadServiceManifest_TelemetryIntervalFloor — interval < 10s → value_out_of_range.
+func TestLoadServiceManifest_TelemetryIntervalFloor(t *testing.T) {
+	src := `name: svc-golden
+state_schema_version: 1
+state_schema:
+  type: object
+telemetry:
+  interval: "3s"
+`
+	_, _, diags, _ := LoadServiceManifestFromBytes("service.yml", []byte(src), ValidateOptions{})
+	if !hasCodeAt(diags, "value_out_of_range", "$.telemetry.interval") {
+		dump(t, diags)
+		t.Fatal("ожидался value_out_of_range для interval 3s (< floor)")
+	}
+}
+
+// TestLoadServiceManifest_TelemetryIntervalInvalid — interval не парсится → duration_invalid.
+func TestLoadServiceManifest_TelemetryIntervalInvalid(t *testing.T) {
+	src := `name: svc-golden
+state_schema_version: 1
+state_schema:
+  type: object
+telemetry:
+  interval: "nonsense"
+`
+	_, _, diags, _ := LoadServiceManifestFromBytes("service.yml", []byte(src), ValidateOptions{})
+	if !hasCodeAt(diags, "duration_invalid", "$.telemetry.interval") {
+		dump(t, diags)
+		t.Fatal("ожидался duration_invalid для interval nonsense")
+	}
+}
+
+// TestLoadServiceManifest_TelemetryUnknownKey — опечатка под telemetry: ловится
+// reflect-walker-ом как unknown_key (авто, TelemetryConfig не в stop-типах).
+func TestLoadServiceManifest_TelemetryUnknownKey(t *testing.T) {
+	src := `name: svc-golden
+state_schema_version: 1
+state_schema:
+  type: object
+telemetry:
+  bogus: 1
+`
+	_, _, diags, _ := LoadServiceManifestFromBytes("service.yml", []byte(src), ValidateOptions{})
+	if !hasCodeAt(diags, "unknown_key", "$.telemetry.bogus") {
+		dump(t, diags)
+		t.Fatal("ожидался unknown_key для опечатки bogus под telemetry")
+	}
+}

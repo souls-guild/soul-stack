@@ -189,6 +189,12 @@ type daemon struct {
 	// вход reaper.CertRotator (кого ротировать) и core.cert.issued (роль подписи).
 	certPolicyResolver *certpolicy.Resolver
 
+	// serviceTelemetry — TTL-кеш дефолтного (per-service, без essence) host-vitals
+	// telemetry-конфига из манифеста снапшота git-репо Service-а для
+	// `GET /v1/services/{name}/telemetry` (UI-редактор, ADR-042/072). Per-keeper,
+	// не cluster-wide — read-only конфиг (parity с serviceDirectives).
+	serviceTelemetry *serviceregistry.TelemetryCache
+
 	// --- augur (ADR-025) ---
 	// augurSvc -- management CRUD for the Omen / Rite registries (OpenAPI/MCP).
 	// DIFFERS from the Augur broker (keepergrpc.AugurDeps in EventStream): that
@@ -1433,6 +1439,32 @@ func (d *daemon) setupScenarioDeps(_ context.Context) error {
 	// Keeper daemon runtime wiring note.
 	// Keeper daemon runtime wiring note.
 	// Keeper daemon runtime wiring note.
+
+	// TTL-кеш дефолтного host-vitals telemetry-конфига для
+	// `GET /v1/services/{name}/telemetry` (ADR-042/072). Lister грузит снапшот через
+	// d.serviceLoader.Load → эффективные манифест-дефолты `telemetry:` (essence=nil →
+	// чистый per-service дефолт) + SHA1 снапшота (ETag). Parity с serviceDirectives.
+	d.serviceTelemetry = serviceregistry.NewTelemetryCache(
+		serviceregistry.TelemetryListerFunc(func(ctx context.Context, name, gitURL, ref string) (*serviceregistry.TelemetryCatalog, error) {
+			art, err := d.serviceLoader.Load(ctx, artifact.ServiceRef{Name: name, Git: gitURL, Ref: ref})
+			if err != nil {
+				return nil, err
+			}
+			var mt *config.TelemetryConfig
+			if art.Manifest != nil {
+				mt = art.Manifest.Telemetry
+			}
+			return &serviceregistry.TelemetryCatalog{
+				SHA1:      art.SHA1,
+				Telemetry: essence.ResolveEffectiveTelemetry(mt, nil),
+			}, nil
+		}),
+		0, // 0 → дефолтный TelemetryTTL
+	)
+
+	// topologyResolver собирается ниже, в setupGRPCEventStream: его presence-фаза
+	// (Variant A, ADR-006(a)) деривирует «Soul online» из живого Redis SID-lease,
+	// а d.redisClient поднимается только в setupRedis (после этого шага).
 	d.essenceResolver = essence.NewResolver(logger)
 	celEngine, err := cel.New(cel.WithVault(d.vc))
 	if err != nil {
@@ -2942,6 +2974,16 @@ func (d *daemon) setupGRPCEventStream(ctx context.Context) error {
 		// Keeper daemon runtime wiring note.
 		// Keeper daemon runtime wiring note.
 		// Keeper daemon runtime wiring note.
+		// Connect-time broadcast эффективного telemetry-конфига host-vitals
+		// (ADR-072, NIM-87): резолв per-SID (souls→incarnation→service-artifact-
+		// манифест `telemetry:` + essence-override) поверх общего pool + реестра
+		// сервисов (git-координаты по имени) + Service-загрузчика + essence-
+		// резолвера. Нет инкарнации → broadcast скип (Soul на soul-local каденсе).
+		TelemetrySource: keepergrpc.NewTelemetrySource(d.pool, d.serviceRegistry, d.serviceLoader, d.essenceResolver, logger),
+		// Toll cluster-detector hook (ADR-038): на каждом выходе EventStream-
+		// handler-а (Recv-error / ctx-cancel) вызывается NotifyDisconnect. При
+		// выключенном Toll d.tollWatcher = nil → handler-side hook no-op (см.
+		// notifyTollDisconnect в eventstream.go).
 		TollNotifier: tollNotifierOrNil(d.tollWatcher),
 		// Keeper daemon runtime wiring note.
 		// Keeper daemon runtime wiring note.
@@ -4112,6 +4154,7 @@ func (d *daemon) setupAPIServer(ctx context.Context) error {
 		ServiceStateSchema:  d.serviceStateSchema,
 		ServiceDependencies: d.serviceDependencies,
 		ServiceDirectives:   d.serviceDirectives,
+		ServiceTelemetry:    d.serviceTelemetry,
 		AugurSvc:            d.augurSvc,
 		OracleSvc:           d.oracleSvc,
 		OperatorDB:          d.pool,

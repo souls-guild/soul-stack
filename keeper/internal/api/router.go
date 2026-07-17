@@ -1088,6 +1088,17 @@ func buildRouter(verifier *jwt.Verifier, healthH *health.Handler, opH *handlers.
 				).Group(func(r chi.Router) {
 					registerHumaServiceDirectives(newHumaCadenceAPI(r), serviceH)
 				})
+
+				// /telemetry — дефолтный (per-service, без essence) host-vitals
+				// telemetry-конфиг + допустимый набор коллекторов (known_collectors)
+				// для UI (ADR-042 backend-driven, ADR-072). permission service.list.
+				// ETag=snapshot SHA1. 502 → loader упал. Не путать с
+				// /v1/incarnations/{name}/telemetry (runtime host-vitals, NIM-86).
+				r.With(
+					apimiddleware.RequirePermission(enforcer, "service", "list", apimiddleware.NoSelector),
+				).Group(func(r chi.Router) {
+					registerHumaServiceTelemetry(newHumaCadenceAPI(r), serviceH)
+				})
 			})
 		}
 

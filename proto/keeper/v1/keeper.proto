@@ -70,5 +70,6 @@ message FromKeeper {
     VigilSnapshot vigil_snapshot = 9;
     ErrandRequest errand_request = 10;
     CancelErrand cancel_errand = 11;
+    TelemetryConfig telemetry_config = 12;
   }
 }

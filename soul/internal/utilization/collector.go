@@ -32,24 +32,44 @@ func NewCollector(src Source) *Collector {
 	return &Collector{src: src}
 }
 
-// Collect делает один снимок утилизации с collected_at = now. sid в message нет
-// (authority — mTLS peer cert на Keeper-е, ADR-072); принимается лишь ради
-// симметрии сигнатуры с soulprint.Collect. Ошибок не возвращает.
-func (c *Collector) Collect(ctx context.Context, _ string) *keeperv1.HostUtilization {
-	load := c.src.Load(ctx)
-	mem := c.src.Memory(ctx)
-	return &keeperv1.HostUtilization{
-		CollectedAt: timestamppb.Now(),
-		CpuPct:      c.cpuPct(c.src.CPUSample(ctx)),
-		Load1:       load.One,
-		Load5:       load.Five,
-		Load15:      load.Fifteen,
-		MemUsedMb:   mem.UsedMB,
-		MemTotalMb:  mem.TotalMB,
-		SwapUsedMb:  mem.SwapUsedMB,
-		Disks:       c.disks(ctx),
-		UptimeSec:   c.src.Uptime(ctx),
+// CollectorSet — набор включённых host-vitals коллекторов (ADR-072, NIM-87):
+// имя → включён. Выключенный коллектор не собирается, его поля в снимке нулевые
+// (для disk — пропускается дорогой statfs). nil-набор = «все включены» (дефолт).
+// Валидные имена — cpu/mem/disk/load/uptime (config.KnownCollectors); неизвестные
+// в наборе игнорируются (Collect читает лишь эти пять ключей).
+type CollectorSet map[string]bool
+
+func (s CollectorSet) on(name string) bool {
+	if s == nil {
+		return true
 	}
+	return s[name]
+}
+
+// Collect делает один снимок утилизации с collected_at = now, собирая лишь
+// включённые в enabled коллекторы (выключенные → нулевые поля). sid в message нет
+// (authority — mTLS peer cert на Keeper-е, ADR-072); принимается ради симметрии с
+// soulprint.Collect. Ошибок не возвращает.
+func (c *Collector) Collect(ctx context.Context, _ string, enabled CollectorSet) *keeperv1.HostUtilization {
+	u := &keeperv1.HostUtilization{CollectedAt: timestamppb.Now()}
+	if enabled.on("cpu") {
+		u.CpuPct = c.cpuPct(c.src.CPUSample(ctx))
+	}
+	if enabled.on("load") {
+		load := c.src.Load(ctx)
+		u.Load1, u.Load5, u.Load15 = load.One, load.Five, load.Fifteen
+	}
+	if enabled.on("mem") {
+		mem := c.src.Memory(ctx)
+		u.MemUsedMb, u.MemTotalMb, u.SwapUsedMb = mem.UsedMB, mem.TotalMB, mem.SwapUsedMB
+	}
+	if enabled.on("disk") {
+		u.Disks = c.disks(ctx)
+	}
+	if enabled.on("uptime") {
+		u.UptimeSec = c.src.Uptime(ctx)
+	}
+	return u
 }
 
 // cpuPct — 100*(busyΔ/totalΔ), busy = Total-Idle, дельта относительно прошлого
