@@ -1,65 +1,66 @@
-# dragonfly — per-host кирпич DragonFly (data-плоскость)
+# dragonfly — per-host DragonFly building block (data plane)
 
-Destiny `dragonfly` — per-host кирпич [DragonflyDB](https://www.dragonflydb.io/)
-(концепция Ansible-роли, B-гибрид [ADR-009](../../../docs/adr/0009-scenario-dsl.md)).
-Идемпотентно ставит DragonFly (distro-deb **или** upstream-tarball), рендерит
-**flagfile** `dragonfly.conf` / `users.acl` / TLS-PEM, применяет host-tuning extras
-(THP/logrotate/sysctl) и поднимает сервис **одного инстанса**. Конкретную форму destiny
-**сама не знает** — её выбирает scenario сервиса флагами `deploy_dragonfly` /
-`install.method` и готовым merged-конфигом через `apply: input:`.
+Destiny `dragonfly` is a per-host building block for [DragonflyDB](https://www.dragonflydb.io/)
+(the Ansible-role concept, B-hybrid [ADR-009](../../../docs/adr/0009-scenario-dsl.md)).
+It idempotently installs DragonFly (distro-deb **or** upstream tarball), renders the
+**flagfile** `dragonfly.conf` / `users.acl` / TLS-PEM, applies host-tuning extras
+(THP/logrotate/sysctl), and brings up a **single-instance** service. The destiny itself
+**does not know** the concrete install form — that's chosen by the service scenario via the
+flags `deploy_dragonfly` / `install.method` and a ready merged config through `apply: input:`.
 
-DragonFly **redis-совместим** на проводе, поэтому весь живой рантайм (PING / REPLICAOF)
-идёт через тот же плагин `community.redis` **без правок**.
+DragonFly is **wire-compatible with redis**, so the entire live runtime path (PING / REPLICAOF)
+goes through the same `community.redis` plugin **with no changes**.
 
-## Sentinel — НЕ в этом кирпиче (sentinel из destiny `redis`)
+## Sentinel — NOT in this building block (sentinel comes from destiny `redis`)
 
-DragonFly не несёт `redis-sentinel`, а sentinel-демон над DragonFly-master-ом полностью
-разворачивает destiny [`redis`](../redis/README.md) в режиме **sentinel_only**
-(`deploy_redis: false` → data-плоскость redis-server не разворачивается, поднимается только
-sentinel-демон над внешним master-ом). scenario сервиса `dragonfly` делает **второй**
-`apply: destiny: redis` рядом с `apply: destiny: dragonfly` (две `apply:destiny` в одном
-сценарии, [ADR-009](../../../docs/adr/0009-scenario-dsl.md)). Поэтому в этом кирпиче
-**нет** ни `sentinel.yml`, ни sentinel-шаблонов, ни sentinel-input — он отвечает строго за
-data-плоскость DragonFly.
+DragonFly does not carry `redis-sentinel`, so the sentinel daemon over a DragonFly master
+fully deploys the [`redis`](../redis/README.md) destiny in **sentinel_only** mode
+(`deploy_redis: false` → the redis-server data plane is not deployed, only the
+sentinel daemon over the external master goes up). The `dragonfly` service scenario makes a
+**second** `apply: destiny: redis` alongside `apply: destiny: dragonfly` (two `apply:destiny`
+in one scenario, [ADR-009](../../../docs/adr/0009-scenario-dsl.md)). That's why this building
+block has **no** `sentinel.yml`, no sentinel templates, and no sentinel input — it's strictly
+responsible for the DragonFly data plane.
 
-## DragonFly vs `redis` (зачем отдельный кирпич)
+## DragonFly vs `redis` (why a separate building block)
 
-Структура копирует destiny [`redis`](../redis/README.md) с подменой трёх вещей:
+The structure copies the [`redis`](../redis/README.md) destiny with three things swapped:
 
-- **config = flagfile** (`--flag=value`, absl-флаги), **не** `redis.conf`. Имена
-  флагов — через подчёркивание (`tls_cert_file`, `snapshot_cron`), значения без кавычек
-  (DragonFly явно отвергает их). Bool-флаги — `--tls=true`. Шаблон
+- **config = flagfile** (`--flag=value`, absl flags), **not** `redis.conf`. Flag
+  names use underscores (`tls_cert_file`, `snapshot_cron`), values without quotes
+  (DragonFly explicitly rejects them). Bool flags are `--tls=true`. Template:
   [`dragonfly.flags.tmpl`](templates/dragonfly.flags.tmpl).
-- **unit = `Type=simple`** (DragonFly — foreground без `sd_notify`, в отличие от
-  `Type=notify` redis-server), `ExecStart … --flagfile`, hardening **внутри** юнита
-  (binary-ветка), не drop-in. Шаблон [`dragonfly.service.tmpl`](templates/dragonfly.service.tmpl).
-- **install = один бинарь `dragonfly`** (tarball `dragonfly-<arch>.tar.gz`, arch
-  `x86_64`/`aarch64`) + **отдельно** distro-пакет `redis-tools` (`redis-cli` для
-  health-gate / REPLICAOF) — DragonFly его не поставляет.
+- **unit = `Type=simple`** (DragonFly runs foreground without `sd_notify`, unlike
+  `Type=notify` for redis-server), `ExecStart … --flagfile`, hardening **inside**
+  the unit (binary branch), not a drop-in. Template:
+  [`dragonfly.service.tmpl`](templates/dragonfly.service.tmpl).
+- **install = a single `dragonfly` binary** (tarball `dragonfly-<arch>.tar.gz`, arch
+  `x86_64`/`aarch64`) **plus** a **separate** distro package `redis-tools` (`redis-cli` for
+  health-gate / REPLICAOF) — DragonFly doesn't ship it.
 
-**Вне скоупа** (PILOT): cluster (DragonFly cluster — emulated), redis-модули `.so`,
-version-guard Redis 8+.
+**Out of scope** (PILOT): cluster (DragonFly cluster — emulated), redis modules `.so`,
+version-guard for Redis 8+.
 
-Логирование — **glog** (`--log_dir`, DragonFly именует файлы сам), не redis-style
-`logfile <path>`. Snapshot — `--snapshot_cron` / `--dbfilename` (redis `save`/`appendonly`
-к DragonFly неприменимы).
+Logging uses **glog** (`--log_dir`, DragonFly names the files itself), not the redis-style
+`logfile <path>`. Snapshots use `--snapshot_cron` / `--dbfilename` (redis's `save`/`appendonly`
+don't apply to DragonFly).
 
-Версия destiny — git ref ([ADR-007](../../../docs/adr/0007-versioning-git-ref.md)). Манифест
-и список задач — [`destiny.yml`](destiny.yml) и [`tasks/main.yml`](tasks/main.yml).
+Destiny version is a git ref ([ADR-007](../../../docs/adr/0007-versioning-git-ref.md)). Manifest
+and task list — [`destiny.yml`](destiny.yml) and [`tasks/main.yml`](tasks/main.yml).
 
-## Состав (tasks-split)
+## Layout (tasks-split)
 
-[`tasks/main.yml`](tasks/main.yml) — только include-список; группы раскрываются inline в
-плоский план ДО render. Порядок include = порядок задач.
+[`tasks/main.yml`](tasks/main.yml) is just an include list; groups are expanded inline into
+a flat plan BEFORE render. Include order = task order.
 
-| Файл | Задачи | Используемые модули |
+| File | Tasks | Modules used |
 |---|---|---|
-| [`install.yml`](tasks/install.yml) | `redis-tools` (`redis-cli`, **безусловно**) + DragonFly — диспетчер по `install.method`: **package** (distro-deb `dragonfly`) **или** **binary** (upstream-tarball: fetch → extract → distro-юзер/группа → `core.file.present` (`src:`) разложение `dragonfly` в `/usr/local/bin` → свой systemd-юнит + СВОЙ рестарт) | `core.pkg`, `core.url`, `core.archive`, `core.group`, `core.user`, `core.file`, `core.service` |
-| [`server.yml`](tasks/server.yml) | data-плоскость `dragonfly` (gated `deploy_dragonfly`): TLS-PEM (cert/key/ca) → `users.acl` → `dragonfly.conf` (flagfile) → `core.service running`. Без hardening drop-in (hardening в самом юните) | `core.file`, `core.service` |
-| [`extras.yml`](tasks/extras.yml) | host-tuning, **безусловно**: отключение THP (oneshot-юнит) / logrotate / sysctl kernel-параметры | `core.file`, `core.service`, `core.sysctl` |
+| [`install.yml`](tasks/install.yml) | `redis-tools` (`redis-cli`, **unconditional**) + DragonFly — dispatched by `install.method`: **package** (distro-deb `dragonfly`) **or** **binary** (upstream tarball: fetch → extract → distro user/group → `core.file.present` (`src:`) laying out `dragonfly` into `/usr/local/bin` → its own systemd unit + ITS OWN restart) | `core.pkg`, `core.url`, `core.archive`, `core.group`, `core.user`, `core.file`, `core.service` |
+| [`server.yml`](tasks/server.yml) | `dragonfly` data plane (gated by `deploy_dragonfly`): TLS-PEM (cert/key/ca) → `users.acl` → `dragonfly.conf` (flagfile) → `core.service running`. No hardening drop-in (hardening lives inside the unit itself) | `core.file`, `core.service` |
+| [`extras.yml`](tasks/extras.yml) | host tuning, **unconditional**: disabling THP (oneshot unit) / logrotate / sysctl kernel parameters | `core.file`, `core.service`, `core.sysctl` |
 
-## Переиспользование из `redis`
+## Reuse from `redis`
 
-1:1 копии (ACL-формат у DragonFly идентичен redis): `users.acl.tmpl`,
-`disable-thp.service.tmpl`. `logrotate.tmpl` — DragonFly glog (логи sentinel-демона
-ротирует destiny `redis`).
+1:1 copies (DragonFly's ACL format is identical to redis's): `users.acl.tmpl`,
+`disable-thp.service.tmpl`. `logrotate.tmpl` — DragonFly glog (sentinel daemon logs
+are rotated by the `redis` destiny).

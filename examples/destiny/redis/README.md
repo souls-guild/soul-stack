@@ -1,153 +1,163 @@
-# redis — режим-агностичный per-host кирпич Redis
+# redis — mode-agnostic per-host Redis brick
 
-Destiny `redis` — **один** per-host кирпич Redis на все режимы развёртывания
-(концепция Ansible-роли Redis, B-гибрид [ADR-009](../../../docs/adr/0009-scenario-dsl.md)).
-Идемпотентно ставит `redis-server`, рендерит `redis.conf` / `users.acl` / TLS-PEM /
-systemd-hardening drop-in, применяет host-tuning extras (THP/logrotate/sysctl) и
-поднимает сервис **одного инстанса**. Конкретную форму инстанса destiny **сама не
-знает** — её выбирает scenario сервиса флагами `deploy_redis` / `sentinel_enabled` /
-`install.method` и готовым merged-конфигом через `apply: input:`. Комбинации флагов
-покрывают и cluster, и sentinel (master-replica + sentinel-демон), и **тонкий
-sentinel-слой над внешним master** (`deploy_redis: false`) — последний остаётся
-**capability кирпича** для переиспользования другими сервисами (например DragonFly),
-хотя сервис [`redis`](../../service/redis/README.md) разворачивает только режимы
-`redis_type ∈ [sentinel, cluster]` (`standalone`/`sentinel_only` из сервиса убраны
-2026-06-25).
+Destiny `redis` is a **single** per-host Redis brick for all deployment modes
+(the concept of the Ansible Redis role, B-hybrid [ADR-009](../../../docs/adr/0009-scenario-dsl.md)).
+It idempotently installs `redis-server`, renders `redis.conf` / `users.acl` / TLS-PEM /
+the systemd-hardening drop-in, applies host-tuning extras (THP/logrotate/sysctl), and
+brings up **a single instance** of the service. The destiny itself **does not know**
+the specific shape of the instance — that is chosen by the service scenario via the
+`deploy_redis` / `sentinel_enabled` / `install.method` flags and a ready-made merged
+config passed through `apply: input:`. Combinations of flags cover both cluster and
+sentinel (master-replica + sentinel daemon), and a **thin sentinel layer over an
+external master** (`deploy_redis: false`) — the latter remains a **brick capability**
+for reuse by other services (e.g. DragonFly), even though the [`redis`](../../service/redis/README.md)
+service deploys only `redis_type ∈ [sentinel, cluster]` modes (`standalone`/`sentinel_only`
+were removed from the service on 2026-06-25).
 
-Кирпич остаётся **«глупым»**: вся оркестрация — топология, master-election,
-rolling-restart, failover, sentinel reconcile, health-gate, merge `redis.conf` —
-живёт в scenario сервиса [`examples/service/redis/`](../../service/redis/README.md).
-Destiny получает значения уже зарезолвленными (config — готовым merged-map-ом,
-секреты — через `vault()` в render-фазе Keeper-а) и только материализует их на хосте.
+The brick stays **"dumb"**: all orchestration — topology, master election,
+rolling restart, failover, sentinel reconcile, health-gate, merging `redis.conf` —
+lives in the service scenario [`examples/service/redis/`](../../service/redis/README.md).
+The destiny receives values already resolved (config as a ready-made merged map,
+secrets via `vault()` in Keeper's render phase) and only materializes them on the host.
 
-Версия destiny — git ref ([ADR-007](../../../docs/adr/0007-versioning-git-ref.md)),
-поля `version:` верхнего уровня нет. Манифест и список задач — [`destiny.yml`](destiny.yml)
-и [`tasks/main.yml`](tasks/main.yml).
+The destiny version is a git ref ([ADR-007](../../../docs/adr/0007-versioning-git-ref.md));
+there is no top-level `version:` field. The manifest and task list are
+[`destiny.yml`](destiny.yml) and [`tasks/main.yml`](tasks/main.yml).
 
-## Состав (tasks-split)
+## Composition (tasks-split)
 
-[`tasks/main.yml`](tasks/main.yml) — только include-список; логические группы разнесены
-по соседним файлам и раскрываются inline в плоский план ДО render ([tasks.md §4](../../../docs/destiny/tasks.md)).
-Порядок include = порядок задач (от него зависят финальные индексы плоского плана, на
-которые ассертят L0-тесты):
+[`tasks/main.yml`](tasks/main.yml) is include-list only; logical groups are split
+across neighboring files and expanded inline into a flat plan BEFORE render ([tasks.md §4](../../../docs/destiny/tasks.md)).
+Include order = task order (the final flat-plan indices depend on it, and L0 tests
+assert against them):
 
-| Файл | Задачи | Используемые модули |
+| File | Tasks | Modules used |
 |---|---|---|
-| [`install.yml`](tasks/install.yml) | установка бинарей redis — диспетчер по `install.method`: **package** (default-пакет distro) **или** **binary** (default — отдельные бинари из Nexus: distro-юзер/группа → **четыре** `core.url.fetched` качают `redis-server`/`redis-cli`/`redis-benchmark`/`redis-sentinel` в `/usr/local/bin` (URL `<base_url>/<arch>/Debian/<distro_ver>/<version>/…`) → симлинки `redis-check-aof`/`redis-check-rdb` → свой systemd-юнит + СВОЙ рестарт) + каталог unix-сокета (обе ветки) | [`core.pkg`](../../../docs/module/core/pkg/README.md), [`core.url`](../../../docs/module/core/url/README.md), [`core.cmd`](../../../docs/module/core/cmd/README.md), [`core.group`](../../../docs/module/core/group/README.md), [`core.user`](../../../docs/module/core/user/README.md), [`core.file`](../../../docs/module/core/file/README.md), [`core.service`](../../../docs/module/core/service/README.md) |
-| [`server.yml`](tasks/server.yml) | data-плоскость `redis-server` (gated `deploy_redis`): TLS-PEM (cert/key/ca) → `users.acl` → `redis.conf` → systemd-hardening drop-in → `core.service running/restarted` | [`core.file`](../../../docs/module/core/file/README.md), [`core.service`](../../../docs/module/core/service/README.md) |
-| [`sentinel.yml`](tasks/sentinel.yml) | sentinel-демон (gated `sentinel_enabled`): `sentinel-users.acl` (2-й aclfile) → `sentinel.conf` → systemd-юнит → `core.service running/restarted` | [`core.file`](../../../docs/module/core/file/README.md), [`core.service`](../../../docs/module/core/service/README.md) |
-| [`extras.yml`](tasks/extras.yml) | host-tuning, **безусловно** (рекомендация Redis / hardening, не выбор оператора): отключение THP (oneshot-юнит) / logrotate / sysctl kernel-параметры | [`core.file`](../../../docs/module/core/file/README.md), [`core.service`](../../../docs/module/core/service/README.md), [`core.sysctl`](../../../docs/module/core/sysctl/README.md) |
-| [`modules.yml`](tasks/modules.yml) | каталог `.so` + fetch Redis-модулей (RediSearch/RedisJSON/RedisTimeSeries/RedisBloom). Весь файл gated (`vars.redis_modules_enabled`): включён при data-плоскости **И** Redis < 8 **И** НЕПУСТОМ `modules_base_url`; иначе group-drop — пустой `modules_base_url` даёт **vanilla** redis (без `loadmodule`/fetch) | [`core.file`](../../../docs/module/core/file/README.md), [`core.url`](../../../docs/module/core/url/README.md) |
+| [`install.yml`](tasks/install.yml) | installing redis binaries — dispatched by `install.method`: **package** (distro default package) **or** **binary** (default — separate binaries fetched from Nexus: distro user/group → **four** `core.url.fetched` fetch `redis-server`/`redis-cli`/`redis-benchmark`/`redis-sentinel` into `/usr/local/bin` (URL `<base_url>/<arch>/Debian/<distro_ver>/<version>/…`) → symlinks `redis-check-aof`/`redis-check-rdb` → its own systemd unit + its OWN restart) + unix-socket directory (both branches) | [`core.pkg`](../../../docs/module/core/pkg/README.md), [`core.url`](../../../docs/module/core/url/README.md), [`core.cmd`](../../../docs/module/core/cmd/README.md), [`core.group`](../../../docs/module/core/group/README.md), [`core.user`](../../../docs/module/core/user/README.md), [`core.file`](../../../docs/module/core/file/README.md), [`core.service`](../../../docs/module/core/service/README.md) |
+| [`server.yml`](tasks/server.yml) | data plane `redis-server` (gated by `deploy_redis`): TLS-PEM (cert/key/ca) → `users.acl` → `redis.conf` → systemd-hardening drop-in → `core.service running/restarted` | [`core.file`](../../../docs/module/core/file/README.md), [`core.service`](../../../docs/module/core/service/README.md) |
+| [`sentinel.yml`](tasks/sentinel.yml) | sentinel daemon (gated by `sentinel_enabled`): `sentinel-users.acl` (2nd aclfile) → `sentinel.conf` → systemd unit → `core.service running/restarted` | [`core.file`](../../../docs/module/core/file/README.md), [`core.service`](../../../docs/module/core/service/README.md) |
+| [`extras.yml`](tasks/extras.yml) | host-tuning, **unconditional** (a Redis recommendation / hardening, not an operator choice): disabling THP (oneshot unit) / logrotate / sysctl kernel parameters | [`core.file`](../../../docs/module/core/file/README.md), [`core.service`](../../../docs/module/core/service/README.md), [`core.sysctl`](../../../docs/module/core/sysctl/README.md) |
+| [`modules.yml`](tasks/modules.yml) | `.so` directory + fetching Redis modules (RediSearch/RedisJSON/RedisTimeSeries/RedisBloom). The whole file is gated (`vars.redis_modules_enabled`): enabled when the data plane is on **AND** Redis < 8 **AND** `modules_base_url` is NON-EMPTY; otherwise a group-drop — an empty `modules_base_url` gives **vanilla** redis (no `loadmodule`/fetch) | [`core.file`](../../../docs/module/core/file/README.md), [`core.url`](../../../docs/module/core/url/README.md) |
 
-Все core-модули — никакого `required_modules:` ([`community.redis`](../../../docs/module/community/redis/README.md)
-вызывается из scenario сервиса, не из этой destiny).
+All core modules — no `required_modules:` at all ([`community.redis`](../../../docs/module/community/redis/README.md)
+is called from the service scenario, not from this destiny).
 
-Гейты режимов реализованы static-skip-ом ([ADR-009](../../../docs/adr/0009-scenario-dsl.md)
-block-static-skip): предикаты `deploy_redis` / `sentinel_enabled` / `install.method`
-зависят только от `input.*` → Keeper гасит неактивные ветки placeholder-ом, **не сдвигая
-индексы** (skip занимает слот, flat-register-scope инвариантен). register-ссылки в
-`onchanges` (ротация cert → рестарт redis и т.п.) **обязаны жить в одном файле** со своим
-потребителем: загрузочный per-file линтер отвергает cross-file `onchanges`. Поэтому
-binary-ветка несёт собственный рестарт `redis-server` прямо в [`install.yml`](tasks/install.yml).
+Mode gates are implemented via static-skip ([ADR-009](../../../docs/adr/0009-scenario-dsl.md)
+block-static-skip): predicates `deploy_redis` / `sentinel_enabled` / `install.method`
+depend only on `input.*`, so Keeper mutes inactive branches with a placeholder **without
+shifting indices** (a skip still occupies a slot; the flat-register-scope is invariant).
+Register references in `onchanges` (cert rotation → redis restart, etc.) **must live in
+the same file** as their consumer: the load-time per-file linter rejects cross-file
+`onchanges`. That's why the binary branch carries its own `redis-server` restart right
+inside [`install.yml`](tasks/install.yml).
 
-## Входной контракт (обзор)
+## Input contract (overview)
 
-destiny видит **только свой** `input:` (изоляция, [ADR-009](../../../docs/adr/0009-scenario-dsl.md)).
-Полная типизированная схема с описаниями каждого поля — [`destiny.yml → input:`](destiny.yml);
-как scenario сервиса формирует и передаёт эти значения оператору — в
-[service-README → Входной контракт](../../service/redis/README.md). Ключевые группы:
+The destiny sees **only its own** `input:` (isolation, [ADR-009](../../../docs/adr/0009-scenario-dsl.md)).
+The full typed schema with a description of every field is [`destiny.yml → input:`](destiny.yml);
+how the service scenario builds and passes these values to the operator is in
+[service-README → Input contract](../../service/redis/README.md). Key groups:
 
-- **Гейт data-плоскости.** `deploy_redis` (bool, default `true`) — разворачивать ли
-  `redis-server`. `false` (режим `sentinel_only`) гасит всю data-плоскость
-  ([`server.yml`](tasks/server.yml)), пакет redis при этом ставится всё равно (он же
-  несёт sentinel-демон).
-- **`install`** — способ доставки бинарей: `{method, base_url, version}`.
-  `method=package` — distro-пакет; `method=binary` — **отдельные бинари из Nexus**
-  (`redis-server`/`redis-cli`/`redis-benchmark`/`redis-sentinel` качаются per-host из
-  `<base_url>/<arch>/Debian/<distro_ver>/<version>/…` по content-идемпотентности
-  SHA-256, без integrity-verify — `redis-sentinel` отдельный бинарь, `redis-check-aof`/
-  `redis-check-rdb` симлинки на `redis-server`). `version` верхнего уровня (distro-пин) —
-  для package-ветки; `install.version` — для binary-ветки. **Способ установки на уровне
-  сервиса задаёт `install_method` (default `binary`), а `base_url`/`version` бинаря —
-  `essence`** (см. [service-README](../../service/redis/README.md)); destiny собирает из
-  них структуру `install`.
-- **TLS.** `tls: {enable, only, port, cert_ref, key_ref, ca_ref}` — единый dict
-  (host-инвариант). PEM-материал рендерится **через `core.file.present` + `${ vault(ref) }`
-  в ячейке `content`** (seal-маскинг, [templating.md §7.4](../../../docs/templating.md)),
-  **не** `.tmpl` и **не** уже-резолвленный PEM через `apply.input`: destiny получает
-  Vault-**пути** (`cert_ref`/`key_ref`/`ca_ref`) и читает значение сама в render-фазе
-  Keeper-а; vault-клиент на Soul не тянется ([ADR-012](../../../docs/adr/0012-keeper-soul-grpc.md)).
-- **Секреты.** `password` (`requirepass`) и `users` (ACL-map `имя → {perms, state, password}`,
-  redis-server) приходят уже зарезолвленными keeper-side; в `users.acl` пишется sha256-хеш
-  пароля, plaintext не материализуется. Маскируются в логах/трейсах/UI. `users`-набор
-  scenario сервиса формирует как **системные + operator-extra** (см.
-  [«Системные ACL-юзеры и второй aclfile»](#системные-acl-юзеры-и-второй-aclfile)).
-- **`sentinel_users`** (опц., additive) — ACL-map того же вида для **sentinel-демона**,
-  рендерится в **отдельный** `sentinel-users.acl` (см. ниже). Передаётся только в
-  sentinel-режиме; пустой/не передан → пустой aclfile (back-compat).
-- **Конфиг.** `config` — **готовый merged-map** директив `redis.conf` (default → preset →
-  вычисления → passthrough делает scenario сервиса). Сюда же scenario кладёт
-  persistence/`maxmemory`/`maxmemory-policy`/`unixsocket`/TLS- и cluster-директивы.
-  destiny повторно **не мержит**.
-- **Host-tuning.** `sysctl_settings` (map kernel-параметр → значение, строки) → drop-in
-  `/etc/sysctl.d/30-redis.conf` через [`core.sysctl.applied`](../../../docs/module/core/sysctl/README.md).
-- **Redis-модули.** `modules_base_url` — единственное поле модулей (поля `modules`/
-  `modules_dir` удалены: набор — инвариант кирпича `vars.redis_modules`, `modules_dir`
-  выводится из `data_dir`). Директива «модули **всегда все**» = all-or-nothing: непустой
-  `modules_base_url` на Redis < 8 → качается **весь** набор (RediSearch/RedisJSON/
-  RedisTimeSeries/RedisBloom); **пустой** `modules_base_url` → **vanilla** redis (группа
-  `modules.yml` group-drop, ни одного `.so`). `.so` качаются по content-идемпотентности
-  (SHA-256), URL арх-специфичен (`soulprint.self.os.arch` per-host).
+- **Data-plane gate.** `deploy_redis` (bool, default `true`) — whether to deploy
+  `redis-server`. `false` (the `sentinel_only` mode) mutes the whole data plane
+  ([`server.yml`](tasks/server.yml)); the redis package is still installed
+  regardless (it also carries the sentinel daemon).
+- **`install`** — how binaries are delivered: `{method, base_url, version}`.
+  `method=package` — a distro package; `method=binary` — **separate binaries fetched
+  from Nexus** (`redis-server`/`redis-cli`/`redis-benchmark`/`redis-sentinel` are fetched
+  per-host from `<base_url>/<arch>/Debian/<distro_ver>/<version>/…` by content-idempotency
+  SHA-256, without integrity-verify — `redis-sentinel` is a separate binary,
+  `redis-check-aof`/`redis-check-rdb` are symlinks to `redis-server`). The top-level
+  `version` (distro pin) is for the package branch; `install.version` is for the binary
+  branch. **The service-level `install_method` (default `binary`) sets the installation
+  method, while `base_url`/`version` of the binary come from `essence`** (see
+  [service-README](../../service/redis/README.md)); the destiny assembles the `install`
+  struct from them.
+- **TLS.** `tls: {enable, only, port, cert_ref, key_ref, ca_ref}` — a single dict
+  (host-invariant). PEM material is rendered **through `core.file.present` +
+  `${ vault(ref) }` in the `content` cell** (seal-masking, [templating.md §7.4](../../../docs/templating.md)),
+  **not** via `.tmpl` and **not** as an already-resolved PEM through `apply.input`: the
+  destiny receives Vault **paths** (`cert_ref`/`key_ref`/`ca_ref`) and reads the value
+  itself during Keeper's render phase; no Vault client is pulled into Soul
+  ([ADR-012](../../../docs/adr/0012-keeper-soul-grpc.md)).
+- **Secrets.** `password` (`requirepass`) and `users` (an ACL map `name → {perms,
+  state, password}` for redis-server) arrive already resolved keeper-side; `users.acl`
+  is written with a sha256 hash of the password, plaintext is never materialized.
+  They are masked in logs/traces/UI. The `users` set is assembled by the service
+  scenario as **system + operator-extra** (see
+  ["System ACL users and the second aclfile"](#system-acl-users-and-the-second-aclfile)).
+- **`sentinel_users`** (optional, additive) — an ACL map of the same shape for the
+  **sentinel daemon**, rendered into a **separate** `sentinel-users.acl` (see below).
+  Passed only in sentinel mode; empty/absent → empty aclfile (back-compat).
+- **Config.** `config` — a **ready-made merged map** of `redis.conf` directives
+  (default → preset → computations → passthrough is done by the service scenario).
+  The service scenario also places persistence/`maxmemory`/`maxmemory-policy`/
+  `unixsocket`/TLS- and cluster-directives here. The destiny does **not** re-merge them.
+- **Host-tuning.** `sysctl_settings` (map kernel-parameter → value, strings) → a
+  `/etc/sysctl.d/30-redis.conf` drop-in via [`core.sysctl.applied`](../../../docs/module/core/sysctl/README.md).
+- **Redis modules.** `modules_base_url` — the only modules-related field (`modules`/
+  `modules_dir` fields were removed: the set is a brick invariant `vars.redis_modules`,
+  `modules_dir` is derived from `data_dir`). The "modules are **always all**"
+  directive is all-or-nothing: a non-empty `modules_base_url` on Redis < 8 fetches the
+  **whole** set (RediSearch/RedisJSON/RedisTimeSeries/RedisBloom); an **empty**
+  `modules_base_url` → **vanilla** redis (the `modules.yml` group group-drops, not a
+  single `.so`). `.so` files are fetched by content-idempotency (SHA-256), the URL is
+  arch-specific (`soulprint.self.os.arch` per host).
 - **Sentinel.** `sentinel_enabled` (bool) + `sentinel: {master_name, master_ip,
-  master_port, quorum, auth_user, auth_pass, config}` — задействованы только в
-  sentinel-режимах; `master_ip` обязателен, когда dict передан.
+  master_port, quorum, auth_user, auth_pass, config}` — used only in sentinel modes;
+  `master_ip` is required whenever the dict is passed.
 
-## Системные ACL-юзеры и второй aclfile
+## System ACL users and the second aclfile
 
-Кирпич рендерит **два** ACL-файла, оба `core.file.rendered`, оба `mode 0640` owner/group
-`redis`, оба пишут пароль **хешем** (`#<sha256>`, sprig `sha256sum`), не plaintext-ом:
+The brick renders **two** ACL files, both `core.file.rendered`, both `mode 0640`
+owner/group `redis`, both writing the password as a **hash** (`#<sha256>`, sprig
+`sha256sum`), never plaintext:
 
-| Файл | Шаблон | Источник `vars.users` | aclfile-директива |
+| File | Template | Source of `vars.users` | aclfile directive |
 |---|---|---|---|
-| `${conf_dir}/users.acl` | [`users.acl.tmpl`](templates/users.acl.tmpl) | `input.users` (системные redis-server + operator-extra) | `aclfile` в `redis.conf` |
-| `${conf_dir}/sentinel-users.acl` | [`sentinel-users.acl.tmpl`](templates/sentinel-users.acl.tmpl) | `input.sentinel_users` (системные sentinel-демона) | `aclfile` в `sentinel.conf` |
+| `${conf_dir}/users.acl` | [`users.acl.tmpl`](templates/users.acl.tmpl) | `input.users` (system redis-server + operator-extra) | `aclfile` in `redis.conf` |
+| `${conf_dir}/sentinel-users.acl` | [`sentinel-users.acl.tmpl`](templates/sentinel-users.acl.tmpl) | `input.sentinel_users` (system sentinel-daemon) | `aclfile` in `sentinel.conf` |
 
-**Два файла, потому что у redis-server и sentinel-демона разные perms** — sentinel-демону
-нужны `sentinel|*`-команды, а не обычные redis-команды, поэтому их служебные наборы не
-совпадают (в Ansible-роли — `redis_system_users` vs `redis_sentinel_system_users`). Какой
-набор кладётся (`replica`/`monitoring`/`sentinel`/`haproxy`, плюс `default` только в
-sentinel-aclfile) и откуда берутся пароли — решает **scenario сервиса**; destiny получает
-готовый map и только рендерит. См.
-[service-README → «Системные ACL-юзеры»](../../service/redis/README.md#системные-acl-юзеры).
+**Two files, because redis-server and the sentinel daemon have different perms** —
+the sentinel daemon needs `sentinel|*` commands rather than ordinary redis commands,
+so their system user sets don't overlap (in the Ansible role: `redis_system_users` vs
+`redis_sentinel_system_users`). Which set is placed (`replica`/`monitoring`/`sentinel`/
+`haproxy`, plus `default` only in the sentinel-aclfile) and where the passwords come
+from is decided by the **service scenario**; the destiny receives the ready-made map
+and only renders it. See
+[service-README → "System ACL users"](../../service/redis/README.md#system-acl-users).
 
-`sentinel-users.acl` рендерится **первой** задачей [`sentinel.yml`](tasks/sentinel.yml)
-(ДО `sentinel.conf` — его `aclfile`-директива должна указывать на уже существующий файл),
-под `register: redis_sentinel_acl`. ACL sentinel-демона перечитывается только **рестартом**
-демона (`onchanges: [redis_sentinel_conf, redis_sentinel_acl, redis_sentinel_unit]`) —
-отдельного hot-reload-сценария для sentinel-aclfile нет: набор служебный, меняется лишь на
-create/ротации. Пустой map → валидный пустой aclfile (back-compat: destiny старого ref без
-поля `sentinel_users` рендерит пустой файл, директива безвредна).
+`sentinel-users.acl` is rendered as the **first** task of [`sentinel.yml`](tasks/sentinel.yml)
+(BEFORE `sentinel.conf` — its `aclfile` directive must point to an already-existing
+file), under `register: redis_sentinel_acl`. The sentinel daemon's ACL is reread only
+via a **restart** of the daemon (`onchanges: [redis_sentinel_conf, redis_sentinel_acl,
+redis_sentinel_unit]`) — there is no separate hot-reload path for the sentinel-aclfile:
+the set is a system one, changed only on create/rotation. An empty map → a valid empty
+aclfile (back-compat: a destiny at an old ref without the `sentinel_users` field
+renders an empty file, the directive is harmless).
 
-> **`default`-юзер: в `users.acl` его нет, в `sentinel-users.acl` есть.** redis-server
-> авторизует `default` через `requirepass` в `redis.conf` (`users.acl` его не дублирует).
-> У sentinel-демона `requirepass`-эквивалента для aclfile-доступа нет, поэтому `default`
-> объявляется прямо в `sentinel-users.acl`.
+> **The `default` user: absent from `users.acl`, present in `sentinel-users.acl`.**
+> redis-server authorizes `default` via `requirepass` in `redis.conf` (`users.acl`
+> does not duplicate it). The sentinel daemon has no `requirepass` equivalent for
+> aclfile access, so `default` is declared directly in `sentinel-users.acl`.
 
-## Чем НЕ является
+## What this is NOT
 
-Это **destiny-кирпич** (пакет per-host задач для одного инстанса), а **не сервис**.
-Здесь нет `state_schema`, миграций, оператора простого ввода (`memory_mb` / `persistence` /
-`shards` / `redis_type`), трансляции в `redis_config`, оркестрации и day-2-операций —
-всё это сервис-обёртка [`examples/service/redis/`](../../service/redis/README.md).
-Destiny не решает, какой режим разворачивается, и не вызывает плагин
-[`community.redis`](../../../docs/module/community/redis/README.md) (живой Redis —
-зона scenario сервиса).
+This is a **destiny brick** (a per-host task package for a single instance), **not a
+service**. There is no `state_schema`, no migrations, no simple-input operator
+(`memory_mb` / `persistence` / `shards` / `redis_type`), no translation into
+`redis_config`, no orchestration and no operational scenarios — all of that lives in
+the service wrapper [`examples/service/redis/`](../../service/redis/README.md).
+The destiny does not decide which mode is deployed and does not call the
+[`community.redis`](../../../docs/module/community/redis/README.md) plugin (a live
+Redis is the service scenario's territory).
 
-## Ссылки
+## References
 
-- [`examples/service/redis/`](../../service/redis/README.md) — сервис-обёртка: входной
-  контракт оператора, `state_schema`, трансляция, оркестрация, режимы и day-2.
-- [`destiny.yml`](destiny.yml) — манифест и полная схема `input:`.
-- [docs/destiny/](../../../docs/destiny/README.md) — формат destiny и механика `tasks/`/`include:`.
-- [docs/templating.md](../../../docs/templating.md) — CEL + text/template, `${ vault(ref) }`, seal-маскинг.
-- Per-module README используемых модулей — см. колонку «модули» в таблице состава выше.
+- [`examples/service/redis/`](../../service/redis/README.md) — service wrapper:
+  operator input contract, `state_schema`, translation, orchestration, modes, and
+  operational scenarios.
+- [`destiny.yml`](destiny.yml) — manifest and the full `input:` schema.
+- [docs/destiny/](../../../docs/destiny/README.md) — destiny format and `tasks:`/`include:` mechanics.
+- [docs/templating.md](../../../docs/templating.md) — CEL + text/template, `${ vault(ref) }`, seal-masking.
+- Per-module README for the modules used — see the "modules" column in the composition table above.

@@ -1,48 +1,49 @@
 # manifests/keeper
 
-Raw YAML manifests для Keeper в L3c kind-cluster.
+Raw YAML manifests for Keeper in the L3c kind-cluster.
 
-| Файл | Содержит | Slice |
+| File | Contains | Slice |
 |---|---|---|
-| `deployment.yaml` | `Deployment` (replicas: 3, multi-keeper HA по дефолту) + `Service` (ClusterIP, openapi/mcp/metrics/grpc-bootstrap/grpc-stream). | L3c-2/3 |
+| `deployment.yaml` | `Deployment` (replicas: 3, multi-keeper HA by default) + `Service` (ClusterIP, openapi/mcp/metrics/grpc-bootstrap/grpc-stream). | L3c-2/3 |
 
-## Объекты, которые НЕ в файле
+## Objects NOT in this file
 
-`ConfigMap keeper-config` и `Secret keeper-tls` создаются harness-ом (см.
-`tests/e2e-k8s/harness/stack.go::DeployKeeper`) ДО `kubectl apply -f
+`ConfigMap keeper-config` and `Secret keeper-tls` are created by the harness (see
+`tests/e2e-k8s/harness/stack.go::DeployKeeper`) BEFORE `kubectl apply -f
 deployment.yaml`:
 
-- `keeper-config.data["keeper.yml"]` — рендеренный
-  `tests/e2e-k8s/harness/keeperyml.go::renderKeeperYAML` с in-cluster service-DNS
-  адресами (PG/Redis/Vault) и портами.
-- `keeper-tls.data` — `keeper.crt`/`keeper.key`/`vault-ca.crt`, выданные через
-  Vault PKI `pki/issue/soul-seed` (см. `harness/vault.go::seedVaultSecrets`).
+- `keeper-config.data["keeper.yml"]` — rendered by
+  `tests/e2e-k8s/harness/keeperyml.go::renderKeeperYAML` with in-cluster
+  service-DNS addresses (PG/Redis/Vault) and ports.
+- `keeper-tls.data` — `keeper.crt`/`keeper.key`/`vault-ca.crt`, issued via
+  Vault PKI `pki/issue/soul-seed` (see `harness/vault.go::seedVaultSecrets`).
 
-Без них pod падает на `CreateContainerConfigError` — это видно в `t.Log`
-по `dumpKeeperPodDiagnostics` (вызывается на timeout-е `waitDeploymentReady`).
+Without them the pod fails with `CreateContainerConfigError` — visible in `t.Log`
+via `dumpKeeperPodDiagnostics` (called on the `waitDeploymentReady` timeout).
 
 ## Replicas
 
-Manifest коммитится с `replicas: 3` (L3c-3 multi-keeper HA по дефолту).
-`DeployKeeper(t, replicas)` патчит `spec.replicas` через `kubectl patch
-deployment`, если запрошено отличающееся значение (например, legacy
-single-keeper `TestL3cKeeperPing_Single` патчит в 1).
+The manifest is committed with `replicas: 3` (L3c-3 multi-keeper HA by default).
+`DeployKeeper(t, replicas)` patches `spec.replicas` via `kubectl patch
+deployment` if a different value is requested (e.g. the legacy
+single-keeper `TestL3cKeeperPing_Single` patches it to 1).
 
 ## Probes
 
 - `readinessProbe: /readyz` (initialDelay 30s, period 5s, failureThreshold 12 =
-  до 60s ожидания) — `/readyz` пингует PG+Vault+Redis. Миграции PG применяются
-  на старте, поэтому первая успешная проба не раньше 5–10s.
-- `livenessProbe: /healthz` (initialDelay 60s, period 10s) — static 200, ловит
-  только полный hang процесса.
+  up to 60s of waiting) — `/readyz` pings PG+Vault+Redis. PG migrations are
+  applied at startup, so the first successful probe is no earlier than 5-10s.
+- `livenessProbe: /healthz` (initialDelay 60s, period 10s) — static 200, only
+  catches a full process hang.
 
-## `--initialize` для L3c-2
+## `--initialize` for L3c-2
 
-`Dockerfile::CMD` запускает `keeper run --config /etc/keeper/keeper.yml
---initialize` — bootstrap-pending mode (ADR-013(d)): keeper стартует с пустым
-operators-registry, OperatorAPI отвечает 503 `operator-bootstrap-pending`, но
-`/readyz` и `/healthz` отвечают штатно. Для smoke-теста `TestL3cKeeperPing_Single`
-этого достаточно. L3c-3 заменит на полный bootstrap (kubectl-job с `keeper
-init` + retry-Deployment без `--initialize`).
+`Dockerfile::CMD` runs `keeper run --config /etc/keeper/keeper.yml
+--initialize` — bootstrap-pending mode (ADR-013(d)): keeper starts with an empty
+operators registry, OperatorAPI responds 503 `operator-bootstrap-pending`, but
+`/readyz` and `/healthz` respond normally. For the smoke test
+`TestL3cKeeperPing_Single` this is enough. L3c-3 will replace this with a full
+bootstrap (kubectl job with `keeper init` + retry-Deployment without
+`--initialize`).
 
-См. [`tests/e2e-k8s/README.md`](../../README.md) → slice L3c-2.
+See [`tests/e2e-k8s/README.md`](../../README.md) -> slice L3c-2.

@@ -1,23 +1,23 @@
-# Примеры Soul Stack
+# Soul Stack examples
 
-Конкретные иллюстрации того, как выглядят артефакты Soul Stack в реальности. Эти примеры — **не работающий код**, а образцы структуры файлов и YAML-форматов под текущую архитектуру (см. [docs/architecture.md](../docs/architecture.md)).
+Concrete illustrations of what Soul Stack artifacts look like in reality. These examples are **not working code**, but samples of file structure and YAML formats for the current architecture (see [docs/architecture.md](../docs/architecture.md)).
 
-Цель — чтобы при чтении архитектуры был под рукой «вот как это выглядит на практике».
+The goal is to have "here's what this looks like in practice" on hand while reading the architecture.
 
-## Содержимое
+## Contents
 
-| Папка | Что |
+| Folder | What |
 |---|---|
-| [`destiny/redis/`](destiny/redis/) | Атомарный destiny-кирпичик «как поставить и настроить Redis на хосте». Отдельный git-репо в реальной жизни. Включает `tasks/main.yml` (top-level список задач без обёртки) и [`tests/install-and-ping/case.yml`](destiny/redis/tests/install-and-ping/case.yml) — иллюстрация формата molecule-style тестов destiny. Полный разбор формата — в [docs/destiny/](../docs/destiny/README.md). |
-| [`service/redis/`](service/redis/) | Полный пример service-репо: `service.yml`, иерархический `essence/`, набор сценариев, миграции, тесты. |
-| [`keeper/keeper.yml`](keeper/keeper.yml) | Конфиг центрального инстанса `keeper` (HA-кластерный, поверх Postgres+Redis+Vault). |
-| [`soul/soul.yml`](soul/soul.yml) | Конфиг агента `soul` на управляемом хосте: fallback-list endpoints, retry, failback. |
-| [`incarnation/`](incarnation/) | Примеры API-вызовов оператора: создание incarnation, запуск сценария, upgrade. |
-| [`module/soul-mod-redis-failover/`](module/soul-mod-redis-failover/) | Скелет custom-модуля для Destiny: манифест и интерфейс (без полной реализации). |
+| [`destiny/redis/`](destiny/redis/) | An atomic destiny brick for "how to install and configure Redis on a host." A separate git repo in real life. Includes `tasks/main.yml` (top-level task list without a wrapper) and [`tests/install-and-ping/case.yml`](destiny/redis/tests/install-and-ping/case.yml) — an illustration of the molecule-style destiny test format. Full format breakdown — in [docs/destiny/](../docs/destiny/README.md). |
+| [`service/redis/`](service/redis/) | A full example of a service repo: `service.yml`, hierarchical `essence/`, a set of scenarios, migrations, tests. |
+| [`keeper/keeper.yml`](keeper/keeper.yml) | Config for the central `keeper` instance (HA-clustered, on top of Postgres+Redis+Vault). |
+| [`soul/soul.yml`](soul/soul.yml) | Config for the `soul` agent on a managed host: fallback endpoint list, retry, failback. |
+| [`incarnation/`](incarnation/) | Examples of operator API calls: creating an incarnation, running a scenario, upgrade. |
+| [`module/soul-mod-redis-failover/`](module/soul-mod-redis-failover/) | A skeleton of a custom module for Destiny: manifest and interface (no full implementation). |
 
-## Поведение примеров
+## Behavior of the examples
 
-- **YAML без секретов.** Все пароли/токены — через `vault:secret/...` ссылки.
-- **Имена хостов** — `*.example`, чтобы не путаться с реальными.
-- **Версии** — git-tag-и в `ref:` фиктивные, иллюстративные (см. [ADR-007](../docs/adr/0007-versioning-git-ref.md#adr-007-artifact-versioning--via-git-ref-not-a-manifest-field) — поля `version:` в манифестах нет).
-- Если что-то в архитектуре поменяется — примеры обновляются вместе с ней.
+- **YAML without secrets.** All passwords/tokens are `vault:secret/...` references.
+- **Hostnames** — `*.example`, to avoid confusion with real hosts.
+- **Versions** — git tags in `ref:` are fictitious, illustrative (see [ADR-007](../docs/adr/0007-versioning-git-ref.md#adr-007-artifact-versioning--via-git-ref-not-a-manifest-field) — there is no `version:` field in manifests).
+- If something in the architecture changes, the examples are updated alongside it.

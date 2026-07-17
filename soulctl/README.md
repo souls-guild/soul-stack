@@ -1,136 +1,136 @@
 # soulctl
 
-Клиентский CLI оператора Soul Stack — тонкая обёртка над Operator API Keeper-а
-(парный к агенту `soul`, как `kubectl` ↔ `kubelet`). По
+The Soul Stack operator client CLI — a thin wrapper over the Keeper's Operator API
+(paired with the `soul` agent, like `kubectl` ↔ `kubelet`). Per
 [ADR-004](../docs/adr/0004-binaries.md#adr-004-binary-layout--keeper-soul-soul-lint-push-mode-as-a-module-inside-keeper)
-первичный интерфейс оператора — OpenAPI и MCP; CLI допустим как тонкая
-обёртка над OpenAPI, не как отдельный поведенческий контракт.
+the primary operator interface is OpenAPI and MCP; the CLI is acceptable as a thin
+wrapper over OpenAPI, not as a separate behavioral contract.
 
-Контракт API — [docs/keeper/operator-api.md](../docs/keeper/operator-api.md) и
+API contract — [docs/keeper/operator-api.md](../docs/keeper/operator-api.md) and
 [docs/keeper/openapi.yaml](../docs/keeper/openapi.yaml).
 
-## Команды
+## Commands
 
-Дерево команд — семь верхних групп. Каждая команда — тонкая обёртка над
-Operator API; ссылки на эндпоинты — [operator-api.md](../docs/keeper/operator-api.md).
+Command tree — seven top-level groups. Each command is a thin wrapper over the
+Operator API; links to endpoints — [operator-api.md](../docs/keeper/operator-api.md).
 
-### `incarnation` — runtime-инстансы сервисов
+### `incarnation` — runtime instances of services
 
-| Команда | Назначение | Флаги |
+| Command | Purpose | Flags |
 |---|---|---|
-| `incarnation list` | перечислить incarnation | `--service`, `--status`, `--coven` (client-side), `--limit`, `--offset` |
-| `incarnation get <name>` | показать incarnation (spec/state/status/covens), всегда JSON | — |
-| `incarnation run <name> <scenario>` | запустить scenario на incarnation | `--input <json>`, `--dry-run`, `--wait`, `--wait-timeout` (default `5m`) |
-| `incarnation history <name>` | записи `state_history` | `--limit`, `--offset` |
-| `incarnation check-drift <name>` | Scry-проверка drift (ADR-031) | `--input <json>` (override converge-input) |
+| `incarnation list` | list incarnations | `--service`, `--status`, `--coven` (client-side), `--limit`, `--offset` |
+| `incarnation get <name>` | show an incarnation (spec/state/status/covens), always JSON | — |
+| `incarnation run <name> <scenario>` | run a scenario on an incarnation | `--input <json>`, `--dry-run`, `--wait`, `--wait-timeout` (default `5m`) |
+| `incarnation history <name>` | `state_history` entries | `--limit`, `--offset` |
+| `incarnation check-drift <name>` | Scry drift check (ADR-031) | `--input <json>` (override converge-input) |
 
-`--wait` у `run` поллит `history` + `status` incarnation (отдельного
-`/v1/applies/{apply_id}` в MVP нет), fail-fast при `error_locked` /
+`--wait` on `run` polls the incarnation's `history` + `status` (there's no separate
+`/v1/applies/{apply_id}` in MVP), fail-fast on `error_locked` /
 `migration_failed` / `destroy_failed`.
 
-### `souls` — реестр управляемых агентов (множественное)
+### `souls` — registry of managed agents (plural)
 
-| Команда | Назначение | Флаги |
+| Command | Purpose | Flags |
 |---|---|---|
-| `souls list` | перечислить зарегистрированные Souls | `--coven` (повторяемый), `--status`, `--transport` (`agent\|ssh`), `--limit`, `--offset` |
-| `souls get <sid>` | показать Soul по SID (фоллбэк через list — `soul.get` не выставлен в MVP), JSON | — |
-| `souls ssh-target set <sid>` | задать per-host `ssh_target` push-flow ↔ `PUT /v1/souls/{sid}/ssh-target` | `--port` (default `22`), `--user` (default `root`), `--soul-path` (default `/usr/local/bin/soul`), `--ssh-provider` |
-| `souls ssh-target bulk-set` | массово задать `ssh_provider` всем Souls в Coven (client-side list→per-SID PUT) | `--coven` (обяз.), `--ssh-provider` (обяз.), `--port`, `--user`, `--soul-path` |
+| `souls list` | list registered Souls | `--coven` (repeatable), `--status`, `--transport` (`agent\|ssh`), `--limit`, `--offset` |
+| `souls get <sid>` | show a Soul by SID (fallback via list — `soul.get` isn't exposed in MVP), JSON | — |
+| `souls ssh-target set <sid>` | set per-host `ssh_target` push flow ↔ `PUT /v1/souls/{sid}/ssh-target` | `--port` (default `22`), `--user` (default `root`), `--soul-path` (default `/usr/local/bin/soul`), `--ssh-provider` |
+| `souls ssh-target bulk-set` | bulk-set `ssh_provider` for all Souls in a Coven (client-side list→per-SID PUT) | `--coven` (required), `--ssh-provider` (required), `--port`, `--user`, `--soul-path` |
 
-### `soul` — одиночные действия на конкретном хосте (единственное)
+### `soul` — single actions on one specific host (singular)
 
-Отделён от `souls` намеренно: `souls` — реестр (list/get), `soul` — действие на одном хосте.
+Deliberately separate from `souls`: `souls` is the registry (list/get), `soul` is an action on one host.
 
-| Команда | Назначение | Флаги |
+| Command | Purpose | Flags |
 |---|---|---|
-| `soul exec <sid>` | ad-hoc одиночный модуль на Soul (Errand, ADR-033) ↔ `POST /v1/souls/{sid}/exec` | `--module` (обяз.), `--input <json>` (default `{}`), `--timeout` (сек, default `30`, 1..300), `--dry-run`, `--poll` (default `true`) |
+| `soul exec <sid>` | ad-hoc single module on a Soul (Errand, ADR-033) ↔ `POST /v1/souls/{sid}/exec` | `--module` (required), `--input <json>` (default `{}`), `--timeout` (sec, default `30`, 1..300), `--dry-run`, `--poll` (default `true`) |
 
-Whitelist модулей и cap stdout/stderr применяет Soul-side errand-runner.
-`--poll` дожимает async-результат (при превышении server-cap) через
-`errand get` до терминала.
+The module whitelist and stdout/stderr caps are enforced by the Soul-side errand runner.
+`--poll` drives the async result to completion (when the server-side cap is exceeded) via
+`errand get` until it reaches a terminal state.
 
-### `errand` — реестр Errand-ов (ADR-033)
+### `errand` — Errand registry (ADR-033)
 
-| Команда | Назначение | Флаги |
+| Command | Purpose | Flags |
 |---|---|---|
-| `errand list` | перечислить Errand-ы | `--sid`, `--status`, `--started-after <RFC3339>`, `--limit`, `--offset` |
-| `errand get <errand_id>` | показать состояние Errand-а | `--poll` (default `false`) — дожать running до терминала |
-| `errand cancel <errand_id>` | отменить in-flight Errand (permission `errand.cancel`) | — |
+| `errand list` | list Errands | `--sid`, `--status`, `--started-after <RFC3339>`, `--limit`, `--offset` |
+| `errand get <errand_id>` | show an Errand's state | `--poll` (default `false`) — drive running to a terminal state |
+| `errand cancel <errand_id>` | cancel an in-flight Errand (permission `errand.cancel`) | — |
 
-### `archon` — аутентификация и идентичность оператора
+### `archon` — operator authentication and identity
 
-| Команда | Назначение | Флаги |
+| Command | Purpose | Flags |
 |---|---|---|
-| `archon login` | сохранить keeper_url + JWT в credentials.yaml (валидируется ping-ом) | `--keeper-url` (обяз.), `--jwt-file` (обяз.) |
-| `archon whoami` | показать текущего Архонта (AID + claims из JWT) | — |
-| `archon logout` | удалить credentials.yaml | — |
+| `archon login` | save keeper_url + JWT into credentials.yaml (validated with a ping) | `--keeper-url` (required), `--jwt-file` (required) |
+| `archon whoami` | show the current Archon (AID + claims from the JWT) | — |
+| `archon logout` | delete credentials.yaml | — |
 
-Подробности — раздел «Аутентификация» ниже.
+Details — the "Authentication" section below.
 
-### `push-providers` (алиас `push-provider`) — params SSH-плагинов push-flow
+### `push-providers` (alias `push-provider`) — push-flow SSH plugin params
 
-Замещает inline-форму `keeper.yml::push.providers[]` (ADR-032 amendment).
-Sensitive params (`secret_id`/`token`/`password`/`private_key`) обязаны быть
-vault-refs (`vault:<path>`).
+Replaces the inline form `keeper.yml::push.providers[]` (ADR-032 amendment).
+Sensitive params (`secret_id`/`token`/`password`/`private_key`) must be
+vault refs (`vault:<path>`).
 
-| Команда | Назначение | Флаги |
+| Command | Purpose | Flags |
 |---|---|---|
-| `push-providers create <name>` | создать запись (permission `push-provider.create`) | `--params <json>` |
-| `push-providers update <name>` | заменить params (replace-семантика) | `--params <json>` (обяз.) |
-| `push-providers delete <name>` | удалить запись | — |
-| `push-providers list` | перечислить, JSON | `--name-pattern` (LIKE-форма, напр. `vault%`), `--limit` (default `100`), `--offset` |
-| `push-providers get <name>` | прочитать запись, JSON | — |
+| `push-providers create <name>` | create an entry (permission `push-provider.create`) | `--params <json>` |
+| `push-providers update <name>` | replace params (replace semantics) | `--params <json>` (required) |
+| `push-providers delete <name>` | delete an entry | — |
+| `push-providers list` | list, JSON | `--name-pattern` (LIKE form, e.g. `vault%`), `--limit` (default `100`), `--offset` |
+| `push-providers get <name>` | read an entry, JSON | — |
 
-### `run` — высокоуровневый UX-зонтик (Salt-parity)
+### `run` — high-level UX umbrella (Salt-parity)
 
-Сосуществует с `incarnation run` / `soul exec` без deprecation: `run` —
-оператор-frontend, low-level прямые команды остаются для CI/скриптов.
+Coexists with `incarnation run` / `soul exec` with no deprecation: `run` is the
+operator-facing frontend, the low-level direct commands remain for CI/scripts.
 
-| Команда | Назначение | Backend |
+| Command | Purpose | Backend |
 |---|---|---|
-| `run scenario <service>/<scenario>` | батчевый scenario через Voyage | `POST /v1/voyages` (`kind=scenario`, ADR-043) |
-| `run cmd '<команда>'` | ad-hoc shell-команда на N хостов | `POST /v1/voyages` (`kind=command`, ADR-043) |
-| `run push <destiny@ref>` | push-применение destiny через SSH-провайдер | `POST /v1/push/apply` |
+| `run scenario <service>/<scenario>` | batched scenario via Voyage | `POST /v1/voyages` (`kind=scenario`, ADR-043) |
+| `run cmd '<command>'` | ad-hoc shell command on N hosts | `POST /v1/voyages` (`kind=command`, ADR-043) |
+| `run push <destiny@ref>` | push-apply a destiny via an SSH provider | `POST /v1/push/apply` |
 
-Per-команда флаги:
+Per-command flags:
 
-- `run scenario`: `--incarnation` (если не задано — auto-detect: ровно одна
-  incarnation на сервис), `--input <json>`, `--batch-size`, `--batch N|N%`,
+- `run scenario`: `--incarnation` (if not set — auto-detect: exactly one
+  incarnation per service), `--input <json>`, `--batch-size`, `--batch N|N%`,
   `--max-failures N|N%`, `--concurrency` (0→default 50, max 500),
   `--on-failure` (`continue`\|`abort`), `--wait`, `--wait-timeout` (default `10m`).
-  Target-флаги к scenario неприменимы (цель — инкарнация, не хост) — передача
-  `--target-*` сюда даёт ошибку.
-- `run cmd`: target обязателен; `--module` (default `core.cmd.shell`),
+  Target flags don't apply to a scenario (the target is an incarnation, not a host) —
+  passing `--target-*` here is an error.
+- `run cmd`: target is required; `--module` (default `core.cmd.shell`),
   `--concurrency`, `--on-failure`, `--batch-size`, `--batch N|N%`,
   `--max-failures N|N%`, `--wait`, `--wait-timeout` (default `10m`).
-- `run push`: `--ssh-provider` (пусто → server-default), `--input <json>`,
-  `--cleanup-stale-versions`. Target ограничен `--target-sids` (inventory
-  exact-match); `coven`/`glob`/`regex`/`where` для push недоступны — ошибка
-  валидации на CLI.
+- `run push`: `--ssh-provider` (empty → server default), `--input <json>`,
+  `--cleanup-stale-versions`. Target is limited to `--target-sids` (inventory
+  exact-match); `coven`/`glob`/`regex`/`where` aren't available for push — a
+  CLI validation error.
 
-Универсальные `--target-*` флаги (`run cmd`/`run push`):
+Universal `--target-*` flags (`run cmd`/`run push`):
 
-| Флаг | Семантика |
+| Flag | Semantics |
 |---|---|
-| `--target-sids host1,host2` | CSV exact-match SID-ов |
-| `--target-coven prod-eu,dc1` | CSV Coven-меток (AND по `souls.coven`) |
-| `--target-glob 'web-*'` | shell-glob → CEL `sid.glob("X")` |
+| `--target-sids host1,host2` | CSV of exact-match SIDs |
+| `--target-coven prod-eu,dc1` | CSV of Coven labels (AND over `souls.coven`) |
+| `--target-glob 'web-*'` | shell glob → CEL `sid.glob("X")` |
 | `--target-regex 'host-[0-9]+'` | regex → CEL `sid.matches("X")` |
-| `--target-where '<CEL>'` | raw CEL-предикат; AND-merge с glob/regex |
+| `--target-where '<CEL>'` | raw CEL predicate; AND-merged with glob/regex |
 
-`glob`/`regex`/`where` склеиваются в один итоговый `where` через `&&`; `sids`
-и `coven` остаются отдельными полями (backend делает AND-пересечение —
-invocation сужает scope, не расширяет).
+`glob`/`regex`/`where` are joined into one final `where` via `&&`; `sids`
+and `coven` remain separate fields (the backend does an AND intersection —
+invocation narrows the scope, never widens it).
 
-## Глобальные флаги
+## Global flags
 
-| Флаг | Назначение |
+| Flag | Purpose |
 |---|---|
-| `--output / -o table\|json\|yaml` | Формат вывода. `table` (default) — kubectl-стиль через `text/tabwriter`. `json` — pretty-JSON. `yaml` зарезервировано, пока совпадает с `json`. Часть команд (`get`-формы, `push-providers list`) всегда печатают JSON. |
-| `--config <path>` | Путь к credentials.yaml вместо `~/.config/soul-stack/credentials.yaml`. |
-| `--version` | Версия бинаря (инжектится через `-ldflags`, см. [RELEASING.md](../RELEASING.md)). |
+| `--output / -o table\|json\|yaml` | Output format. `table` (default) — kubectl-style via `text/tabwriter`. `json` — pretty-JSON. `yaml` is reserved, currently matches `json`. Some commands (`get` forms, `push-providers list`) always print JSON. |
+| `--config <path>` | Path to credentials.yaml instead of `~/.config/soul-stack/credentials.yaml`. |
+| `--version` | Binary version (injected via `-ldflags`, see [RELEASING.md](../RELEASING.md)). |
 
-## Аутентификация
+## Authentication
 
 ```yaml
 # ~/.config/soul-stack/credentials.yaml — mode 0600
@@ -138,76 +138,76 @@ keeper_url: https://keeper.example.com:8443
 archon_jwt: <JWT>
 ```
 
-- `soulctl archon login --keeper-url <url> --jwt-file <path>` — читает JWT из
-  файла, валидирует через `GET /v1/incarnations?limit=1` (любой авторизованный
-  endpoint), сохраняет credentials.
-- `soulctl archon whoami` — печатает AID + claims из локального JWT
-  (signature не перепроверяется — keeper уже принял JWT при login).
-- `soulctl archon logout` — удаляет credentials.yaml.
+- `soulctl archon login --keeper-url <url> --jwt-file <path>` — reads the JWT from
+  a file, validates it via `GET /v1/incarnations?limit=1` (any authorized
+  endpoint), saves credentials.
+- `soulctl archon whoami` — prints the AID + claims from the local JWT
+  (signature isn't re-checked — Keeper already accepted the JWT at login).
+- `soulctl archon logout` — deletes credentials.yaml.
 
-## Ошибки
+## Errors
 
-| HTTP | Сообщение CLI |
+| HTTP | CLI message |
 |---|---|
 | 401 | `not authenticated. Run `soulctl archon login`` |
-| 403 | `forbidden: <detail из RFC 7807>` |
+| 403 | `forbidden: <detail from RFC 7807>` |
 | 404 | `not found: <detail>` |
 | 5xx | `keeper error: <detail>` |
 
-`--output json` для list-команд при ошибке возвращает non-zero exit и стандартное
-ProblemDetails в stderr (не пустой JSON), чтобы скрипты не путались.
+`--output json` for list commands on error returns a non-zero exit code and standard
+ProblemDetails on stderr (not empty JSON), so scripts don't get confused.
 
-## Сборка
+## Build
 
 ```sh
 make build-soulctl   # → soulctl/bin/soulctl
-make build           # включает soulctl
-make test            # юнит-тесты
+make build           # includes soulctl
+make test            # unit tests
 ```
 
-## Известные ограничения (TODO)
+## Known limitations (TODO)
 
-Эти разрывы — между openapi MVP и нуждами CLI. Не обходятся костылями;
-поднимаются PM-у при появлении ADR / расширении контракта.
+These are gaps between the openapi MVP and CLI needs. They're not worked around with
+hacks; they get raised with the PM when a relevant ADR / contract extension appears.
 
-- **`/v1/whoami` отсутствует.** В Operator API MVP нет отдельного whoami; AID
-  и роли извлекаются из JWT claims. signature локально не проверяется (Keeper
-  уже валидировал JWT при login через ping).
-- **`/v1/applies/{apply_id}` отсутствует** ([operator-api.md → Async operations](../docs/keeper/operator-api.md)).
-  `incarnation run --wait` поллит `GET /v1/incarnations/{name}/history` (запись с
-  apply_id появляется после успешного commit) и `GET /v1/incarnations/{name}`
-  (status incarnation, fail-fast при error_locked/migration_failed/destroy_failed).
-- **`GET /v1/souls/{sid}` отсутствует** в MVP (нет permission `soul.get`,
-  [operator-api.md → ID в path](../docs/keeper/operator-api.md)). `soulctl souls
-  get <sid>` использует фоллбэк через list + client-side фильтр. Большие кластеры
-  (≥10⁴ хостов) — кандидат на отдельный endpoint, когда появится permission.
-- **`coven`-фильтр у incarnation list — client-side.** В openapi у
-  `/v1/incarnations` нет query-параметра `coven` (есть только у `/v1/souls`).
-  Поле `total` в ответе соответствует фильтру service/status сервера, не client-
-  side фильтру по coven. При необходимости — расширение openapi.
-- **history-команда: STATUS/DURATION пустые.** Записи `state_history`
-  существуют только при успешном commit, поэтому в таблице две колонки пустые.
-  Если в openapi появится `apply_runs`-эндпоинт с full lifecycle — заполнятся.
+- **`/v1/whoami` is missing.** The Operator API MVP has no separate whoami; AID
+  and roles are extracted from JWT claims. The signature isn't verified locally (Keeper
+  already validated the JWT at login via the ping).
+- **`/v1/applies/{apply_id}` is missing** ([operator-api.md → Async operations](../docs/keeper/operator-api.md)).
+  `incarnation run --wait` polls `GET /v1/incarnations/{name}/history` (an entry with
+  apply_id appears after a successful commit) and `GET /v1/incarnations/{name}`
+  (incarnation status, fail-fast on error_locked/migration_failed/destroy_failed).
+- **`GET /v1/souls/{sid}` is missing** in MVP (no `soul.get` permission,
+  [operator-api.md → ID in path](../docs/keeper/operator-api.md)). `soulctl souls
+  get <sid>` uses a list fallback + client-side filter. Large clusters
+  (≥10⁴ hosts) are a candidate for a dedicated endpoint once the permission exists.
+- **The `coven` filter on incarnation list is client-side.** In openapi,
+  `/v1/incarnations` has no `coven` query parameter (only `/v1/souls` does).
+  The `total` field in the response reflects the server's service/status filter, not the
+  client-side coven filter. An openapi extension if this becomes necessary.
+- **history command: STATUS/DURATION are empty.** `state_history` entries
+  only exist on a successful commit, so two columns in the table are empty.
+  If an `apply_runs` endpoint with the full lifecycle shows up in openapi, they'll be filled in.
 
-## Структура пакета
+## Package structure
 
 ```
 soulctl/
   cmd/soulctl/main.go               # entry, version-bind
   internal/
-    cmd/                            # cobra-команды (root + семь групп)
-      root.go                       # глобальные флаги, loadClient, renderAPIError
+    cmd/                            # cobra commands (root + seven groups)
+      root.go                       # global flags, loadClient, renderAPIError
       archon.go                     # archon login / whoami / logout
       incarnation.go                # incarnation list / get / run / history / check-drift
       souls.go                      # souls list / get / ssh-target + soul exec
       errand.go                     # errand list / get / cancel
       pushprovider.go               # push-providers create / update / delete / list / get
-      run.go                        # run-зонтик (root)
+      run.go                        # run umbrella (root)
       run_scenario.go               # run scenario
       run_cmd.go                    # run cmd
       run_push.go                   # run push
-      run_target.go                 # общие --target-* флаги
-    client/                         # типизированный HTTP-клиент
+      run_target.go                 # shared --target-* flags
+    client/                         # typed HTTP client
     config/config.go                # credentials.yaml loader
     output/output.go                # table / json renderers
 ```

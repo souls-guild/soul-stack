@@ -1,17 +1,17 @@
-# deploy/ — упаковка и развёртывание Soul Stack
+# deploy/ — packaging and deployment of Soul Stack
 
-Build/ops-артефакты для запуска трёх бинарей (`keeper`, `soul`, `soul-lint`) в
-контейнере и под systemd. Не domain-сущности — здесь нет бизнес-логики, только
-обёртки сборки и запуска.
+Build/ops artifacts for running the three binaries (`keeper`, `soul`, `soul-lint`) in
+a container and under systemd. Not domain entities — no business logic here, only
+build and run wrappers.
 
 ## docker/
 
-Три multi-stage Dockerfile-а. Builder — `golang:1.26.3` (синхронизирован с
-`go.work` / `go.mod`), runtime — `gcr.io/distroless/static:nonroot`: статический
-бинарь без shell/libc/пакетного менеджера, непривилегированный пользователь
-(uid 65532). Сборка статическая (`CGO_ENABLED=0`), `-trimpath`, `-ldflags "-s -w"`.
+Three multi-stage Dockerfiles. Builder — `golang:1.26.3` (synchronized with
+`go.work` / `go.mod`), runtime — `gcr.io/distroless/static:nonroot`: a static
+binary without shell/libc/package manager, unprivileged user
+(uid 65532). Static build (`CGO_ENABLED=0`), `-trimpath`, `-ldflags "-s -w"`.
 
-Build-контекст — **корень моно-репо** (там `go.work` + все модули). Примеры:
+Build context — **repo root** (that's where `go.work` + all modules live). Examples:
 
 ```sh
 docker build -f deploy/docker/keeper.Dockerfile    -t soul-stack/keeper    --build-arg VERSION=$(git describe --tags --always --dirty) .
@@ -19,131 +19,132 @@ docker build -f deploy/docker/soul.Dockerfile      -t soul-stack/soul      --bui
 docker build -f deploy/docker/soul-lint.Dockerfile -t soul-stack/soul-lint .
 ```
 
-`VERSION` инжектится ldflags-ом в форме `-X main.<var>` (entrypoint — package
-`main`; форма с полным import-path линкером молча игнорируется). Версионируются
-`soul` (`main.soulVersion`, печатается в Hello/BootstrapRequest для аудита),
-`keeper` (`main.version`, печатает `keeper version`) и `soulctl`
-(`main.soulctlVersion`, через `make build`). У `soul-lint` package-level
-version-переменной ещё нет — `--build-arg VERSION` для него зарезервирован, в
-`-X` не передаётся.
+`VERSION` is injected via ldflags in the form `-X main.<var>` (entrypoint — package
+`main`; the full import-path form is silently ignored by the linker). Versioned:
+`soul` (`main.soulVersion`, printed in Hello/BootstrapRequest for audit),
+`keeper` (`main.version`, prints `keeper version`) and `soulctl`
+(`main.soulctlVersion`, via `make build`). `soul-lint` doesn't yet have a
+package-level version variable — `--build-arg VERSION` is reserved for it but not
+passed to `-X`.
 
-`.dockerignore` в корне репо отсекает `.git`, локальные `bin/`, `dev/`, `docs/`,
-`.pm/` из контекста.
+`.dockerignore` at the repo root excludes `.git`, local `bin/`, `dev/`, `docs/`,
+`.pm/` from the context.
 
-## Keeper в проде — образ + конфиг
+## Keeper in production — image + config
 
-Прод-сценарий: собрать образ `keeper`, переложить в **свой** registry, катать
-**своим** Helm-чартом (k8s-манифесты Soul Stack не поставляет — нужен образ/бинарь).
+Production scenario: build the `keeper` image, push it to **your own** registry, roll it
+with **your own** Helm chart (Soul Stack does not ship k8s manifests — you need an
+image/binary).
 
-### Собрать и опубликовать образ
+### Build and publish the image
 
-`make docker-keeper` собирает прод-образ из `deploy/docker/keeper.Dockerfile`
-(multi-stage, distroless-nonroot, версия в бинаре и OCI-метке) с тегом
-`$(KEEPER_IMAGE):$(VERSION)`. `VERSION` — `git describe` (или release-override),
-`KEEPER_IMAGE` — имя образа (по умолчанию `soul-stack/keeper`):
+`make docker-keeper` builds the production image from `deploy/docker/keeper.Dockerfile`
+(multi-stage, distroless-nonroot, version baked into the binary and OCI label) with tag
+`$(KEEPER_IMAGE):$(VERSION)`. `VERSION` — `git describe` (or a release override),
+`KEEPER_IMAGE` — image name (default `soul-stack/keeper`):
 
 ```sh
 make docker-keeper                                   # soul-stack/keeper:<git-describe>
-make docker-keeper VERSION=v0.2.0                    # фиксированный тег релиза
+make docker-keeper VERSION=v0.2.0                    # fixed release tag
 make docker-keeper KEEPER_IMAGE=registry.example.com/soul-stack/keeper VERSION=v0.2.0
 ```
 
-Образ самодостаточен (тулчейн пинится в builder-стадии) — `make build-linux`
-заранее не нужен. Перетегировать под свой registry и запушить:
+The image is self-contained (toolchain pinned in the builder stage) — `make build-linux`
+is not needed beforehand. Retag for your registry and push:
 
 ```sh
 docker tag  soul-stack/keeper:v0.2.0 registry.example.com/soul-stack/keeper:v0.2.0
 docker push registry.example.com/soul-stack/keeper:v0.2.0
 ```
 
-ENTRYPOINT — `keeper`, CMD — `run` (демон, **без** `--initialize`). Версионный
-тег вместо `latest` — воспроизводимый откат и точный аудит в `keeper version`.
+ENTRYPOINT — `keeper`, CMD — `run` (daemon, **without** `--initialize`). A versioned
+tag instead of `latest` — reproducible rollback and precise audit via `keeper version`.
 
-### Что keeper ждёт в проде
+### What keeper expects in production
 
-Образ несёт только бинарь. Всё остальное — оператор подаёт через mount/env;
-пример полного конфига — `examples/keeper/keeper.yml`.
+The image carries only the binary. Everything else — the operator supplies via mount/env;
+a complete config example — `examples/keeper/keeper.yml`.
 
-- **Конфиг** — `keeper.yml`, смонтированный в `/etc/keeper/keeper.yml`
-  (дефолтный путь бинаря; CMD не передаёт `--config`). В k8s — ConfigMap →
-  volumeMount. Несекретные настройки: `kid`, `listen`, `pool`, `otel`, `logging`,
+- **Config** — `keeper.yml`, mounted at `/etc/keeper/keeper.yml`
+  (default binary path; CMD does not pass `--config`). In k8s — ConfigMap →
+  volumeMount. Non-secret settings: `kid`, `listen`, `pool`, `otel`, `logging`,
   `reaper`, `acolytes`.
-- **Vault — hard-required** (без него keeper не стартует): `vault.addr` + auth
-  (approle `role_id` + `secret_id_file`, либо token). Из Vault keeper резолвит
-  PKI (SoulSeed), JWT signing key, Essence-секреты, SSH CA, cloud-credential-ы.
-  `secret_id` подавать через k8s Secret → файл, путь — в `vault.auth.secret_id_file`.
-- **Postgres** — `postgres.dsn_ref` (vault-ref, напр. `vault:secret/keeper/postgres`,
-  чтобы DSN с паролем не лежал в ConfigMap). Холодное хранилище кластера.
+- **Vault — hard-required** (keeper won't start without it): `vault.addr` + auth
+  (approle `role_id` + `secret_id_file`, or token). Keeper resolves from Vault
+  PKI (SoulSeed), the JWT signing key, Essence secrets, SSH CA, cloud credentials.
+  Supply `secret_id` via a k8s Secret → file, path in `vault.auth.secret_id_file`.
+- **Postgres** — `postgres.dsn_ref` (vault-ref, e.g. `vault:secret/keeper/postgres`,
+  so the DSN with password doesn't sit in a ConfigMap). Cold storage of cluster state.
 - **Redis** — `redis.addr` + `redis.password_ref` (vault-ref). Heartbeat/lease/
-  pub-sub/лидер Reaper; для HA-кластера (`acolytes > 0`) обязателен.
-- **JWT** — `auth.jwt.signing_key_ref` (vault-ref) + `issuer` + TTL. Без блока
-  `auth.jwt` падает и `keeper init`, и `keeper run`.
-- **Порты** (`listen`): gRPC bootstrap (`9442`, server-only TLS, отдельный
+  pub-sub/Reaper leader; required for HA clusters (`acolytes > 0`).
+- **JWT** — `auth.jwt.signing_key_ref` (vault-ref) + `issuer` + TTL. Without the
+  `auth.jwt` block, both `keeper init` and `keeper run` fail.
+- **Ports** (`listen`): gRPC bootstrap (`9442`, server-only TLS, separate
   listener), gRPC event_stream (`9443`, mTLS), OpenAPI (`8080`), MCP (`8081`),
-  metrics (`9090`). TLS-материал (`server.crt/key`, `ca.crt`) — mount в
-  `/etc/keeper/tls/` из Secret.
+  metrics (`9090`). TLS material (`server.crt/key`, `ca.crt`) — mounted into
+  `/etc/keeper/tls/` from a Secret.
 
-### Первый bootstrap (ОДИН раз на кластер)
+### First bootstrap (ONCE per cluster)
 
-`keeper run` при пустом реестре `operators` и **без** `--initialize` сознательно
-отказывается стартовать (ADR-013) — защита от тихого авто-bootstrap. Первого
-Архонта заводят отдельной командой с тем же образом и конфигом (one-shot
+`keeper run` deliberately refuses to start when the `operators` registry is empty and
+`--initialize` is **not** passed (ADR-013) — protection against silent auto-bootstrap. The
+first Archon is created with a separate command using the same image and config (one-shot
 Job / `kubectl run` / `docker run --rm`):
 
 ```sh
 keeper init --archon=archon-ops-01 --config /etc/keeper/keeper.yml
 ```
 
-Команда под PG advisory-lock проверяет, что реестр пуст, создаёт первого Архонта
-(`cluster-admin`, `permissions: ["*"]`), выпускает bootstrap-JWT (TTL из
-`auth.jwt.ttl_bootstrap`) и пишет его файлом `mode 0400`. Дальше Deployment с
-`keeper run` стартует штатно (реестр уже не пуст).
+The command, under a PG advisory lock, verifies the registry is empty, creates the first Archon
+(`cluster-admin`, `permissions: ["*"]`), issues a bootstrap JWT (TTL from
+`auth.jwt.ttl_bootstrap`) and writes it to a `mode 0400` file. Afterwards, the Deployment with
+`keeper run` starts normally (the registry is no longer empty).
 
 ## systemd/
 
-Юниты для `keeper` и `soul` (у `soul-lint` юнита нет — это CLI). Запускаются от
-системного пользователя `soul-stack`, `Restart=on-failure`, `After=network-online`,
-путь конфига вынесен в `EnvironmentFile` (`keeper.env` / `soul.env`).
+Units for `keeper` and `soul` (`soul-lint` has no unit — it's a CLI). Run under the
+system user `soul-stack`, `Restart=on-failure`, `After=network-online`,
+config path passed via `EnvironmentFile` (`keeper.env` / `soul.env`).
 
-Hardening различается по роли:
+Hardening differs by role:
 
-- **keeper** — жёсткий профиль (`ProtectSystem=strict`, `MemoryDenyWriteExecute`,
-  `PrivateDevices` и т.д.): Keeper не меняет хост, ему изоляция не мешает.
-- **soul** — мягкий профиль: Soul применяет Destiny (ставит пакеты, правит файлы,
-  управляет сервисами), поэтому запись в систему НЕ запрещена. Не ужесточать без
-  проверки apply-цикла.
+- **keeper** — strict profile (`ProtectSystem=strict`, `MemoryDenyWriteExecute`,
+  `PrivateDevices` etc.): Keeper doesn't touch the host, so isolation doesn't get in the way.
+- **soul** — relaxed profile: Soul applies Destiny (installs packages, edits files,
+  manages services), so writing to the system is NOT forbidden. Don't tighten this without
+  checking the apply cycle.
 
-Инструкции по установке (создание пользователя, каталоги, права) — в шапке
-каждого `.service`-файла.
+Installation instructions (creating the user, directories, permissions) — in the header of
+each `.service` file.
 
 ## nfpm/
 
-Конфиги нативных пакетов deb/rpm — `keeper.yaml`, `soul.yaml`, `soul-lint.yaml`.
-Каждый пакует собранный бинарь (`*/bin/<name>`) и, для демонов, systemd-юнит +
-env-файл из `systemd/` + пример конфига из `examples/`. `soul-lint` — CLI, без
-юнита и конфига, только бинарь.
+Native package configs for deb/rpm — `keeper.yaml`, `soul.yaml`, `soul-lint.yaml`.
+Each packages the built binary (`*/bin/<name>`) and, for daemons, the systemd unit +
+env file from `systemd/` + a sample config from `examples/`. `soul-lint` — a CLI, no
+unit or config, just the binary.
 
-Версия и архитектура подставляются из окружения (`${VERSION}` / `${ARCH}`),
-которое прокидывает `make pkg`. Конфиг оператора (`/etc/keeper/keeper.env`,
-`/etc/soul/soul.env`) помечен `config|noreplace` — upgrade его не перетирает.
-Пример основного конфига кладётся отдельным именем (`keeper.yml.example` /
-`soul.yml.example`), рабочий `*.yml` оператор создаёт сам.
+Version and architecture are substituted from the environment (`${VERSION}` / `${ARCH}`),
+which `make pkg` provides. The operator config (`/etc/keeper/keeper.env`,
+`/etc/soul/soul.env`) is marked `config|noreplace` — upgrades won't overwrite it.
+The main config sample is shipped under a separate name (`keeper.yml.example` /
+`soul.yml.example`); the operator creates the working `*.yml` themselves.
 
-## Packaging — как собрать
+## Packaging — how to build
 
-Все release-артефакты пишутся в `dist/` (в `.gitignore`, не коммитятся).
-Таргеты аддитивны: в `make check` НЕ входят и его не ломают.
+All release artifacts are written to `dist/` (in `.gitignore`, not committed).
+Targets are additive: not part of `make check`, and don't break it.
 
 ### SBOM (`make sbom`)
 
-CycloneDX SBOM по трём релизным бинарям через `cyclonedx-gomod` в режиме `app`
-(SBOM того, что реально слинковано в бинарь, по файлу на бинарь в `dist/sbom/`:
-`keeper.cdx.json` / `soul.cdx.json` / `soul-lint.cdx.json`). Режим `app` (а не
-`mod`) — потому что репо на `go.work`: `mod` под workspace для любого модуля
-выдаёт SBOM корневого, а с `GOWORK=off` модули с локальными cross-module-зависимостями
-не резолвятся. SBOM трёх бинарей покрывает library-модули (`proto`/`sdk`/`shared`)
-транзитивно. Если инструмента нет в PATH — таргет печатает подсказку и выходит с
-ошибкой (не молча):
+CycloneDX SBOM for the three release binaries via `cyclonedx-gomod` in `app` mode
+(SBOM of what's actually linked into the binary, one file per binary in `dist/sbom/`:
+`keeper.cdx.json` / `soul.cdx.json` / `soul-lint.cdx.json`). `app` mode (not
+`mod`) — because the repo uses `go.work`: `mod` under the workspace for any module
+produces the SBOM of the root module, and with `GOWORK=off` modules with local
+cross-module dependencies don't resolve. The SBOM of the three binaries transitively
+covers the library modules (`proto`/`sdk`/`shared`). If the tool isn't in PATH, the
+target prints a hint and exits with an error (not silently):
 
 ```sh
 go install github.com/CycloneDX/cyclonedx-gomod/cmd/cyclonedx-gomod@latest
@@ -152,45 +153,45 @@ make sbom
 
 ### deb/rpm (`make pkg`)
 
-Нативные пакеты через `nfpm` (deb + rpm для каждого из трёх бинарей в
-`dist/pkg/`). Бинари пересобираются под `linux/$(PKG_ARCH)` (deb/rpm — всегда
-Linux, dev-машина может быть darwin), архитектура переопределяется
-`make pkg PKG_ARCH=arm64`. Если `nfpm` нет в PATH — подсказка и выход с ошибкой:
+Native packages via `nfpm` (deb + rpm for each of the three binaries in
+`dist/pkg/`). Binaries are rebuilt for `linux/$(PKG_ARCH)` (deb/rpm are always
+Linux, the dev machine may be darwin); architecture overridden via
+`make pkg PKG_ARCH=arm64`. If `nfpm` isn't in PATH — a hint and error exit:
 
 ```sh
 go install github.com/goreleaser/nfpm/v2/cmd/nfpm@latest
 make pkg
 ```
 
-Установка собранного пакета:
+Installing the built package:
 
 ```sh
-sudo dpkg -i dist/pkg/soul-stack-keeper_<version>_amd64.deb     # deb-дистрибутивы
-sudo rpm  -i dist/pkg/soul-stack-keeper-<version>.x86_64.rpm    # rpm-дистрибутивы
-# затем: cp /etc/keeper/keeper.yml.example /etc/keeper/keeper.yml — правки конфига
+sudo dpkg -i dist/pkg/soul-stack-keeper_<version>_amd64.deb     # deb distros
+sudo rpm  -i dist/pkg/soul-stack-keeper-<version>.x86_64.rpm    # rpm distros
+# then: cp /etc/keeper/keeper.yml.example /etc/keeper/keeper.yml — edit the config
 ```
 
-### Подпись образов (cosign) — post-publish, когда появится registry
+### Image signing (cosign) — post-publish, once a registry exists
 
-Подпись образов и пакетов через cosign/sigstore **отложена**: реальная подпись
-требует registry для публикации образов + keyless-identity через OIDC (или
-приватного ключа подписи). Локальный репозиторий без CI/registry этого не имеет.
+Signing images and packages via cosign/sigstore is **deferred**: real signing
+requires a registry to publish images to + keyless identity via OIDC (or a
+private signing key). A local repo without CI/registry has neither.
 
-`make sign` — documented-stub: печатает причину отложенности и ссылку сюда,
-завершается успешно (не блокирует пайплайн). Когда появятся CI + registry, план
-такой:
+`make sign` — a documented stub: prints the reason it's deferred and a link to this
+section, and exits successfully (doesn't block the pipeline). Once CI + registry exist,
+the plan is:
 
-- keyless-подпись образов в CI: `cosign sign <registry>/soul-stack/keeper:<tag>`
-  под OIDC-identity workflow-а (Fulcio выдаёт эфемерный сертификат, Rekor
-  логирует прозрачность);
-- проверка на деплое: `cosign verify --certificate-identity=<workflow>
+- keyless image signing in CI: `cosign sign <registry>/soul-stack/keeper:<tag>`
+  under the workflow's OIDC identity (Fulcio issues an ephemeral certificate, Rekor
+  logs transparency);
+- verification at deploy time: `cosign verify --certificate-identity=<workflow>
   --certificate-oidc-issuer=<issuer> <image>`;
-- опционально — attach SBOM из `make sbom` к образу через `cosign attach sbom`.
+- optionally — attach the SBOM from `make sbom` to the image via `cosign attach sbom`.
 
-## Отложено (следующий заход)
+## Deferred (next pass)
 
-- **Подпись образов и пакетов** (cosign / sigstore) — см. раздел выше, ждёт
-  CI + registry.
-- **version-переменная** в `soul-lint` main-е (тогда ldflags `-X` и
-  `--build-arg VERSION` начнут инжектить версию и в него — как уже сделано для
+- **Signing images and packages** (cosign / sigstore) — see the section above, waiting
+  on CI + registry.
+- **Version variable** in `soul-lint`'s main package (then the ldflags `-X` and
+  `--build-arg VERSION` will start injecting a version into it too — as already done for
   `soul`/`keeper`/`soulctl`).

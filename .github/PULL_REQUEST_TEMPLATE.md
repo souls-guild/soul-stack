@@ -1,32 +1,32 @@
-## Что изменено
+## What changed
 
-<краткое описание PR-а: зачем, что именно меняется, в каких файлах ключевая правка>
+<brief description of the PR: why, what exactly is changing, key files touched>
 
-## Тип изменения
+## Type of change
 
 - [ ] Bug fix (non-breaking)
 - [ ] Feature (non-breaking)
-- [ ] Breaking change (контракт / схема БД / RBAC / proto)
+- [ ] Breaking change (contract / DB schema / RBAC / proto)
 - [ ] Documentation only
-- [ ] Refactor (поведение не меняется)
+- [ ] Refactor (no behavior change)
 
-## Локальные проверки
+## Local checks
 
-- [ ] `make check` зелёный
-- [ ] `make e2e` зелёный (если задеты apply-pipeline / keeper-side modules)
-- [ ] `make test-race` зелёный (если задеты pubsub / lease / hot-path)
+- [ ] `make check` green
+- [ ] `make e2e` green (if apply-pipeline / keeper-side modules touched)
+- [ ] `make test-race` green (if pubsub / lease / hot-path touched)
 
-## Архитектура
+## Architecture
 
-- [ ] Не задеты публичные контракты (OpenAPI / proto / RBAC / configs) — пропустить раздел.
-- [ ] Задеты — `docs/keeper/openapi.yaml` / `proto/*.proto` / `docs/keeper/rbac.md` обновлены.
-- [ ] Затронут ADR — соответствующий раздел `docs/architecture.md` обновлён или заведён новый ADR.
-- [ ] Новые сущности (имена) — зафиксированы в `docs/naming-rules.md`.
+- [ ] Public contracts (OpenAPI / proto / RBAC / configs) not touched — skip this section.
+- [ ] Touched — `docs/keeper/openapi.yaml` / `proto/*.proto` / `docs/keeper/rbac.md` updated.
+- [ ] ADR affected — corresponding section of `docs/architecture.md` updated or a new ADR filed.
+- [ ] New entities (names) — recorded in `docs/naming-rules.md`.
 
-## Связанные ADR / документы
+## Related ADR / documents
 
-<ссылки на разделы docs/architecture.md или другие docs/>
+<links to sections of docs/architecture.md or other docs/>
 
-## Прочее
+## Other
 
-<скриншоты, output команд, ссылки на issues, заметки для ревьюера>
+<screenshots, command output, links to issues, notes for the reviewer>

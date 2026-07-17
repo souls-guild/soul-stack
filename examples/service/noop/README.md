@@ -1,53 +1,54 @@
 # noop
 
-Минимальный пример сервиса для **E2E scenario-runner-а** (`M2.x.scenario-runner`).
-Состоит из одного сценария `create`, который запускает `core.exec.run` с
-`echo hello` на каждом хосте incarnation. Не пишет ничего в `incarnation.state`,
-не зависит от cloud-провайдеров, шаблонизатора и custom-модулей.
+A minimal example service for the **E2E scenario-runner** (`M2.x.scenario-runner`).
+Consists of a single `create` scenario that runs `core.exec.run` with
+`echo hello` on every host in the incarnation. Writes nothing to
+`incarnation.state`, and has no dependency on cloud providers, the templating engine,
+or custom modules.
 
-## Раскладка
+## Layout
 
 ```
 noop/
-├── service.yml                       # манифест: state_schema_version=1, пустой state_schema
+├── service.yml                       # manifest: state_schema_version=1, empty state_schema
 ├── essence/
-│   └── _default.yaml                 # baseline-essence: одно demo-поле `greeting`
+│   └── _default.yaml                 # baseline essence: one demo field `greeting`
 └── scenario/
     └── create/
         └── main.yml                  # task: core.exec.run "echo hello"
 ```
 
-Каталога `migrations/` нет: `state_schema_version = 1`, миграции не нужны
+No `migrations/` directory: `state_schema_version = 1`, no migrations needed
 ([ADR-019](../../../docs/adr/0019-state-migration-dsl.md#adr-019-state_schema-migration-dsl)).
 
-## Назначение
+## Purpose
 
-- **E2E-фикстура для scenario-runner.** Минимально достаточный пример: один
-  core-модуль, никакого cross-host coordination, никакого Vault/Cloud.
-  Подходит для smoke-теста «runner поднялся, проиграл сценарий, вернул
-  RunResult без ошибок».
-- **Соответствие spec-ам.**
-  - `service.yml` — по [docs/service/manifest.md](../../../docs/service/manifest.md).
-  - `scenario/create/main.yml` — по [docs/scenario/orchestration.md](../../../docs/scenario/orchestration.md)
-    и DSL-ядру задач [docs/destiny/tasks.md](../../../docs/destiny/tasks.md).
-  - Параметры модуля `core.exec.run` — `cmd:` (имя бинаря) + `args:` (argv-список,
-    без shell), см. [ADR-015](../../../docs/adr/0015-core-modules-mvp.md#adr-015-core-modules-mvp-exact-list).
+- **E2E fixture for scenario-runner.** A minimally sufficient example: one
+  core module, no cross-host coordination, no Vault/Cloud.
+  Suits a smoke test "the runner came up, played the scenario, returned
+  a RunResult with no errors."
+- **Spec compliance.**
+  - `service.yml` — per [docs/service/manifest.md](../../../docs/service/manifest.md).
+  - `scenario/create/main.yml` — per [docs/scenario/orchestration.md](../../../docs/scenario/orchestration.md)
+    and the task DSL core [docs/destiny/tasks.md](../../../docs/destiny/tasks.md).
+  - `core.exec.run` module parameters — `cmd:` (binary name) + `args:` (argv list,
+    no shell), see [ADR-015](../../../docs/adr/0015-core-modules-mvp.md#adr-015-core-modules-mvp-exact-list).
 
-## Валидация
+## Validation
 
 ```bash
 ./soul-lint/bin/soul-lint validate-service  examples/service/noop/service.yml
 ./soul-lint/bin/soul-lint validate-scenario examples/service/noop/scenario/create/main.yml
 ```
 
-Оба должны давать exit 0 и `OK: <path>`.
+Both should return exit 0 and `OK: <path>`.
 
-## Чего здесь специально нет
+## What's deliberately not here
 
-- `migrations/` — `state_schema_version = 1`, миграции не нужны.
-- `destiny[]` / `modules[]` в `service.yml` — используются только core-модули.
-- `input:` в `scenario/create/main.yml` — сценарий не принимает входов.
-- `templates/` / `vars.yml` / `tests/` — не требуются для smoke-фикстуры.
-- `on:` / `where:` — отсутствуют сознательно: опущенный `on:` означает «весь
-  incarnation» ([orchestration.md §3](../../../docs/scenario/orchestration.md)),
-  что и нужно для smoke-теста.
+- `migrations/` — `state_schema_version = 1`, no migrations needed.
+- `destiny[]` / `modules[]` in `service.yml` — only core modules are used.
+- `input:` in `scenario/create/main.yml` — the scenario takes no inputs.
+- `templates/` / `vars.yml` / `tests/` — not required for a smoke fixture.
+- `on:` / `where:` — deliberately absent: an omitted `on:` means "the whole
+  incarnation" ([orchestration.md §3](../../../docs/scenario/orchestration.md)),
+  which is exactly what's needed for the smoke test.

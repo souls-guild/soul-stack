@@ -1,54 +1,59 @@
-# Политика безопасности
+# Security Policy
 
-Soul Stack — система управления конфигурациями (Keeper + флот Souls). Компрометация
-Keeper-кластера означает потенциальное исполнение кода на всём управляемом флоте,
-поэтому уязвимости мы разбираем приоритетно. Спасибо, что сообщаете ответственно.
+Soul Stack is a configuration management system (Keeper + a fleet of Souls). A
+compromised Keeper cluster means potential code execution across the entire managed
+fleet, so we treat vulnerabilities with priority. Thank you for reporting responsibly.
 
-## Поддерживаемые версии
+## Supported versions
 
-Проект — **закрытая малая бета**. Защищена только текущая бета-линия:
+The project is a **closed small beta**. Only the current beta line is protected:
 
-| Версия            | Поддержка        |
+| Version           | Supported        |
 |-------------------|------------------|
-| `v0.1.0-beta.x`   | да (актуальная)  |
-| всё, что старее   | нет              |
+| `v0.1.0-beta.x`   | yes (current)    |
+| anything older    | no               |
 
-Стабильного релиза ещё нет. Фиксы безопасности выходят только в следующем
-beta-выпуске; бэкпортов на более ранние beta-сборки не делаем.
+There is no stable release yet. Security fixes ship only in the next beta release;
+we do not backport to earlier beta builds.
 
-## Как сообщить об уязвимости
+## How to report a vulnerability
 
-**Не открывайте публичный issue и не описывайте уязвимость в pull request.** Канал
-раскрытия — приватный **GitHub Security Advisory** этого репозитория:
+**Do not open a public issue and do not describe the vulnerability in a pull
+request.** The disclosure channel is this repository's private **GitHub Security
+Advisory**:
 
-1. Откройте вкладку **Security** репозитория → **Advisories** → **Report a vulnerability**
-   (кнопка «Report a vulnerability»).
-2. Заполните черновик advisory. Переписка по нему видна только вам и мейнтейнерам.
+1. Open the repository's **Security** tab → **Advisories** → **Report a vulnerability**
+   (the "Report a vulnerability" button).
+2. Fill in the advisory draft. The conversation there is visible only to you and the
+   maintainers.
 
-Так детали уязвимости не утекают в публичное поле до выпуска фикса.
+This keeps vulnerability details from leaking into the public sphere before a fix
+ships.
 
-### Что приложить
+### What to include
 
-Чем конкретнее отчёт, тем быстрее воспроизведение:
+The more specific the report, the faster we can reproduce it:
 
-- Затронутый компонент и версия (вывод `keeper version`).
-- Тип уязвимости и поверхность (Operator API / EventStream Keeper↔Soul / plugin / web / CLI).
-- Шаги воспроизведения или PoC — по возможности минимальный.
-- Оценка влияния: что атакующий получает (обход RBAC, RCE на флоте, утечка секретов, …).
-- Релевантный фрагмент логов или audit-журнала.
+- Affected component and version (output of `keeper version`).
+- Type of vulnerability and surface (Operator API / EventStream Keeper<->Soul /
+  plugin / web / CLI).
+- Reproduction steps or a PoC — as minimal as possible.
+- Impact assessment: what the attacker gains (RBAC bypass, RCE on the fleet, secret
+  leakage, ...).
+- Relevant log or audit-trail excerpt.
 
-**Не прикладывайте реальные секреты:** JWT-токены, содержимое Vault, приватные ключи
-SoulSeed, DSN с паролями. Маскируйте чувствительное перед отправкой.
+**Do not attach real secrets:** JWT tokens, Vault contents, SoulSeed private keys,
+DSNs with passwords. Mask anything sensitive before submitting.
 
-## Ожидания по срокам
+## Timeline expectations
 
-Бета — **best-effort, без SLA**. Реагируем по мере возможности; гарантированного
-времени ответа или фикса на этапе закрытой беты нет. По принятым advisory держим вас
-в курсе статуса через тот же приватный тред.
+The beta is **best-effort, no SLA**. We respond as capacity allows; there is no
+guaranteed response or fix time during the closed-beta stage. For accepted advisories
+we keep you updated on status through the same private thread.
 
-## Модель угроз
+## Threat model
 
-Зафиксированные активы, актёры, поверхности и остаточные риски кластера —
-[docs/security/threat-model.md](docs/security/threat-model.md). Расхождение между этой
-моделью и фактическим поведением кода считается багом безопасности (заводить через
-Security Advisory, а не как обычный issue).
+The recorded assets, actors, surfaces, and residual risks of the cluster are in
+[docs/security/threat-model.md](docs/security/threat-model.md). Any discrepancy
+between that model and actual code behavior is considered a security bug (file it
+via Security Advisory, not as a regular issue).

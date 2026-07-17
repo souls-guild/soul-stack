@@ -1,23 +1,23 @@
 # dockerfiles
 
-L3c kind-cluster Dockerfile-ы для образов, грузящихся в kind через
-`kind load docker-image` (без push в registry).
+L3c kind-cluster Dockerfiles for images loaded into kind via
+`kind load docker-image` (no registry push).
 
-| Файл | Назначение | Slice |
+| File | Purpose | Slice |
 |---|---|---|
-| `keeper.Dockerfile` | `keeper:e2e-k8s` — distroless-runtime поверх `make build-linux` артефакта. Build-context — корень репо. | L3c-2 |
+| `keeper.Dockerfile` | `keeper:e2e-k8s` - distroless runtime on top of the `make build-linux` artifact. Build context is the repo root. | L3c-2 |
 
-L3c-3 переиспользует [`tests/e2e-live/dockerfiles/debian-12.Dockerfile`](../../e2e-live/dockerfiles/debian-12.Dockerfile)
-для Soul-pod (privileged systemd-PID-1, PM-decision: parity с L3b).
+L3c-3 reuses [`tests/e2e-live/dockerfiles/debian-12.Dockerfile`](../../e2e-live/dockerfiles/debian-12.Dockerfile)
+for the Soul pod (privileged systemd-PID-1, PM-decision: parity with L3b).
 
-## Сборка
+## Build
 
 ```sh
 make docker-build-keeper        # = make build-linux + docker build -f .../keeper.Dockerfile -t keeper:e2e-k8s .
 ```
 
-Harness (`Cluster.LoadDockerImage`) затем грузит образ в kind-cluster
-(`kind load docker-image keeper:e2e-k8s --name <cluster>`), Deployment ссылается
-через `imagePullPolicy: Never` — registry не нужен.
+The harness (`Cluster.LoadDockerImage`) then loads the image into the kind cluster
+(`kind load docker-image keeper:e2e-k8s --name <cluster>`), and the Deployment references
+it via `imagePullPolicy: Never` - no registry needed.
 
-См. [tests/e2e-k8s/README.md](../README.md) → slice L3c-2/L3c-3.
+See [tests/e2e-k8s/README.md](../README.md) -> slice L3c-2/L3c-3.

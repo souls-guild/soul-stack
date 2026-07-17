@@ -1,52 +1,52 @@
 # Soul Stack
 
-Система управления конфигурациями в духе SaltStack, но со своим словарём имён в «душевной» метафоре. Центральный сервер (**Keeper**) держит долгоживущие защищённые соединения с агентами на хостах (**Souls**) и приводит каждый хост к описанному желаемому состоянию (**Destiny**).
+A configuration management system in the spirit of SaltStack, but with its own naming dictionary in a "soul" metaphor. The central server (**Keeper**) holds long-lived secured connections to agents on hosts (**Souls**) and brings each host to its declared desired state (**Destiny**).
 
-> Статус: закрытая малая бета. Подходит для единиц операторов и флота до сотен хостов. Что в бету **не** входит — [docs/known-limitations.md](docs/known-limitations.md).
+> Status: closed small beta. Suitable for a handful of operators and a fleet of up to a few hundred hosts. What's **not** included in the beta — [docs/known-limitations.md](docs/known-limitations.md).
 
-## Словарь
+## Dictionary
 
-Если знакомы с SaltStack — соответствие терминов:
+If you're familiar with SaltStack, here's the term mapping:
 
-| Soul Stack | SaltStack | Смысл |
+| Soul Stack | SaltStack | Meaning |
 |---|---|---|
-| **Keeper** | master | Хранитель, центральный узел. |
-| **Souls** | minions | Управляемые агенты на хостах. |
-| **Destiny** | states | Желаемое состояние хоста после прогона. |
-| **Soulprint** | grains | Факты о системе хоста (ОС, ядро, CPU, сеть). |
-| **Essence** | pillars | Параметры/значения, подставляемые в Destiny. |
+| **Keeper** | master | Guardian, central node. |
+| **Souls** | minions | Managed agents on hosts. |
+| **Destiny** | states | Desired host state after a run. |
+| **Soulprint** | grains | Facts about the host system (OS, kernel, CPU, network). |
+| **Essence** | pillars | Parameters/values substituted into Destiny. |
 
-Полный словарь имён — [docs/naming-rules.md](docs/naming-rules.md).
+Full naming dictionary — [docs/naming-rules.md](docs/naming-rules.md).
 
-## Ключевые свойства
+## Key properties
 
-- **HA из коробки.** Keeper — горизонтально масштабируемый stateless-кластер поверх общей Postgres и Redis. Любой инстанс обслуживает любой запрос; падение одного не роняет управление флотом.
-- **mTLS-идентичность флота.** Связь Keeper↔Soul — gRPC bidirectional stream поверх mTLS. Каждый Soul онбордится через CSR (приватный ключ никогда не покидает хост), получает короткоживущий сертификат (**SoulSeed**), который автоматически ротируется.
-- **Встроенный RBAC.** Доступ операторов (**Archon**) — через JWT и permission-строки с scope по coven / service / incarnation. По умолчанию — deny.
-- **Vault как единый secret-store.** Все секреты (DSN Postgres, JWT signing-key, PKI для SoulSeed) живут в Vault; на диск Keeper-кластера секреты не материализуются.
-- **OpenAPI + MCP.** Первичный интерфейс оператора — REST (OpenAPI) и MCP-сервер для AI-агентов. CLI — тонкая обёртка, не основной путь.
-- **Observability из коробки.** Prometheus-метрики и OpenTelemetry-трейсы во всех бинарях, встроенная ротация логов, hot-reload конфигурации.
+- **HA out of the box.** Keeper is a horizontally scalable stateless cluster on top of shared Postgres and Redis. Any instance serves any request; the failure of one does not bring down fleet management.
+- **mTLS fleet identity.** Keeper↔Soul communication is a bidirectional gRPC stream over mTLS. Each Soul onboards via CSR (the private key never leaves the host) and receives a short-lived certificate (**SoulSeed**), which is rotated automatically.
+- **Built-in RBAC.** Operator access (**Archon**) is via JWT and permission strings scoped by coven / service / incarnation. Default is deny.
+- **Vault as the single secret store.** All secrets (Postgres DSN, JWT signing key, PKI for SoulSeed) live in Vault; secrets are never materialized on the Keeper cluster's disk.
+- **OpenAPI + MCP.** The primary operator interface is REST (OpenAPI) and an MCP server for AI agents. The CLI is a thin wrapper, not the main path.
+- **Observability out of the box.** Prometheus metrics and OpenTelemetry traces in every binary, built-in log rotation, config hot-reload.
 
-## Архитектура одним абзацем
+## Architecture in one paragraph
 
-Три бинаря (ADR-004): `keeper` (центральный сервер — gRPC, OpenAPI, MCP, фоновый Reaper), `soul` (демон-агент на управляемом хосте) и `soul-lint` (офлайн-линтер артефактов). Стрим всегда инициирует Soul — на управляемых хостах нет открытых входящих портов. Холодное состояние кластера — в Postgres, горячий слой (presence, lease, лидер-выборы) — в Redis. Обязательный инфра-контур — **Postgres + Redis + Vault** ([ADR-053](docs/adr/0053-dependency-tiers.md)).
+Three binaries (ADR-004): `keeper` (central server — gRPC, OpenAPI, MCP, background Reaper), `soul` (agent daemon on the managed host), and `soul-lint` (offline artifact linter). The stream is always initiated by Soul — managed hosts have no open inbound ports. Cold cluster state lives in Postgres, the hot layer (presence, lease, leader election) lives in Redis. The required infrastructure tier is **Postgres + Redis + Vault** ([ADR-053](docs/adr/0053-dependency-tiers.md)).
 
-## С чего начать
+## Where to start
 
-- **[docs/getting-started.md](docs/getting-started.md)** — поднять single-keeper + инфру, забутстрапить первого Архонта, онбордить один Soul и применить простой сценарий. ~30 минут.
-- **[docs/known-limitations.md](docs/known-limitations.md)** — что не входит в бету.
-- **[docs/operations/](docs/operations/README.md)** — операционный runbook для прод-инсталляции (deployment / HA / backup / disaster recovery).
-- **[docs/README.md](docs/README.md)** — индекс всей документации.
-- **[docs/architecture.md](docs/architecture.md)** — обзор архитектуры и ссылки на ADR (источник правды по дизайну).
+- **[docs/getting-started.md](docs/getting-started.md)** — bring up a single-keeper instance plus infra, bootstrap the first Archon, onboard one Soul, and apply a simple scenario. ~30 minutes.
+- **[docs/known-limitations.md](docs/known-limitations.md)** — what's not included in the beta.
+- **[docs/operations/](docs/operations/README.md)** — operations runbook for a production install (deployment / HA / backup / disaster recovery).
+- **[docs/README.md](docs/README.md)** — index of all documentation.
+- **[docs/architecture.md](docs/architecture.md)** — architecture overview and links to ADRs (the source of truth for design).
 
-## Безопасность и обратная связь
+## Security and feedback
 
-Закрытая бета, поддержка best-effort (без SLA).
+Closed beta, best-effort support (no SLA).
 
-- **Баги и неожиданное поведение** — [GitHub Issues](https://github.com/co-cy/soul-stack/issues) (шаблон «Bug report»). Версию берите из `keeper version`.
-- **Уязвимости безопасности** — приватный Security Advisory, **не** публичный issue: [SECURITY.md](SECURITY.md).
-- **Куда обращаться и уровень поддержки** — [SUPPORT.md](SUPPORT.md).
+- **Bugs and unexpected behavior** — [GitHub Issues](https://github.com/co-cy/soul-stack/issues) ("Bug report" template). Get the version from `keeper version`.
+- **Security vulnerabilities** — private Security Advisory, **not** a public issue: [SECURITY.md](SECURITY.md).
+- **Where to reach out and support level** — [SUPPORT.md](SUPPORT.md).
 
-## Лицензия
+## License
 
-[Apache License 2.0](LICENSE). Открытое ядро (open core): enterprise-фичи — в отдельных репозиториях под отдельной коммерческой лицензией, тянут это ядро как зависимость ([ADR-016](docs/adr/0016-parity-license.md)).
+[Apache License 2.0](LICENSE). Open core: enterprise features live in separate repositories under a separate commercial license, pulling this core in as a dependency ([ADR-016](docs/adr/0016-parity-license.md)).

@@ -1,63 +1,64 @@
 # hello-world
 
-Минимальный пример сервиса для **E2E с реальным commit-ом в `incarnation.state`**.
-В отличие от [`noop`](../noop/README.md) (там `core.exec.run echo`,
-`state_changes: {}` — state не меняется), здесь сценарий `create`:
+A minimal example service for **E2E with a real commit to `incarnation.state`**.
+Unlike [`noop`](../noop/README.md) (there `core.exec.run echo`,
+`state_changes: {}` — state doesn't change), here the `create` scenario:
 
-1. пишет greeting-файл на каждом хосте incarnation через `core.file.present`;
-2. фиксирует путь к файлу в `incarnation.state.greeting_file` (`state_changes.sets`).
+1. writes a greeting file on every host of the incarnation via `core.file.present`;
+2. records the file path in `incarnation.state.greeting_file` (`state_changes.sets`).
 
-Это даёт smoke-проверку всей цепочки: input → CEL-интерполяция → apply на хосте →
-cross-host барьер → commit state в Postgres.
+This gives a smoke check of the whole chain: input -> CEL interpolation -> apply on
+host -> cross-host barrier -> commit state to Postgres.
 
-## Раскладка
+## Layout
 
 ```
 hello-world/
-├── service.yml                       # манифест: state_schema_version=1, state_schema с полем greeting_file
+├── service.yml                       # manifest: state_schema_version=1, state_schema with the greeting_file field
 ├── essence/
-│   └── _default.yaml                 # baseline-essence: greeting (подложка)
+│   └── _default.yaml                 # baseline essence: greeting (fallback)
 └── scenario/
     └── create/
-        └── main.yml                  # input.greeting → core.file.present → state_changes.sets.greeting_file
+        └── main.yml                  # input.greeting -> core.file.present -> state_changes.sets.greeting_file
 ```
 
-Каталога `migrations/` нет: `state_schema_version = 1`, миграции не нужны
+No `migrations/` directory: `state_schema_version = 1`, no migrations needed
 ([ADR-019](../../../docs/adr/0019-state-migration-dsl.md#adr-019-state_schema-migration-dsl)).
 
-## Назначение
+## Purpose
 
-- **E2E-фикстура с реальным state-change.** Самый простой service, доводящий
-  цепочку до записи в `incarnation.state`. Подходит для проверки «runner проиграл
-  сценарий, файл на хосте создан, Keeper зафиксировал greeting_file в Postgres».
-- **Демонстрация CEL-интерполяции input.** `content: "${ input.greeting }"` —
-  значение приходит из scenario-`input:` и подставляется на CEL-фазе рендера
+- **E2E fixture with a real state change.** The simplest service that carries the
+  chain through to a write in `incarnation.state`. Good for verifying "runner played
+  the scenario, file created on host, Keeper committed greeting_file to Postgres".
+- **Demonstrates CEL interpolation of input.** `content: "${ input.greeting }"` —
+  the value comes from the scenario `input:` and is substituted during the CEL
+  rendering phase
   ([ADR-010](../../../docs/adr/0010-templating.md#adr-010-templating-engine-cel-for-yaml-expressions-go-texttemplate-for-files)).
-- **Соответствие spec-ам.**
-  - `service.yml` — по [docs/service/manifest.md](../../../docs/service/manifest.md).
-  - `scenario/create/main.yml` — по [docs/scenario/orchestration.md](../../../docs/scenario/orchestration.md)
-    и DSL-ядру задач [docs/destiny/tasks.md](../../../docs/destiny/tasks.md).
-  - `input:` — общий стандарт [docs/input.md](../../../docs/input.md).
-  - `core.file.present` с inline-`content` — [ADR-015](../../../docs/adr/0015-core-modules-mvp.md#adr-015-core-modules-mvp-exact-list)
-    (`core.copy` сознательно не выделяется — покрывается `core.file.present`).
-  - `state_changes.sets` — формат [ADR-009](../../../docs/adr/0009-scenario-dsl.md#adr-009-scenario--the-full-destiny-task-dsl-the-boundary-with-destiny-is-a-recommendation) /
+- **Spec compliance.**
+  - `service.yml` — per [docs/service/manifest.md](../../../docs/service/manifest.md).
+  - `scenario/create/main.yml` — per [docs/scenario/orchestration.md](../../../docs/scenario/orchestration.md)
+    and the task DSL core [docs/destiny/tasks.md](../../../docs/destiny/tasks.md).
+  - `input:` — the general standard [docs/input.md](../../../docs/input.md).
+  - `core.file.present` with inline `content` — [ADR-015](../../../docs/adr/0015-core-modules-mvp.md#adr-015-core-modules-mvp-exact-list)
+    (`core.copy` is deliberately not a separate module — covered by `core.file.present`).
+  - `state_changes.sets` — format [ADR-009](../../../docs/adr/0009-scenario-dsl.md#adr-009-scenario--the-full-destiny-task-dsl-the-boundary-with-destiny-is-a-recommendation) /
     [ADR-019](../../../docs/adr/0019-state-migration-dsl.md#adr-019-state_schema-migration-dsl).
 
-## Валидация
+## Validation
 
 ```bash
 ./soul-lint/bin/soul-lint validate-service  examples/service/hello-world/service.yml
 ./soul-lint/bin/soul-lint validate-scenario examples/service/hello-world/scenario/create/main.yml
 ```
 
-Оба должны давать exit 0 и `OK: <path>`.
+Both should give exit 0 and `OK: <path>`.
 
-## Чего здесь специально нет
+## What's deliberately not here
 
-- `migrations/` — `state_schema_version = 1`, миграции не нужны.
-- `destiny[]` / `modules[]` в `service.yml` — используются только core-модули.
-- `templates/` — `content` передаётся inline через `${ input.greeting }`, без `.tmpl`-файла.
-- `on:` / `where:` — отсутствуют сознательно: опущенный `on:` означает «весь
-  incarnation» ([orchestration.md §3](../../../docs/scenario/orchestration.md)).
-- `essence.greeting` как fallback — на pilot `input.greeting` обязателен
-  (`required: true`); essence остаётся подложкой для будущих сценариев.
+- `migrations/` — `state_schema_version = 1`, no migrations needed.
+- `destiny[]` / `modules[]` in `service.yml` — only core modules are used.
+- `templates/` — `content` is passed inline via `${ input.greeting }`, no `.tmpl` file.
+- `on:` / `where:` — deliberately absent: an omitted `on:` means "the whole
+  incarnation" ([orchestration.md §3](../../../docs/scenario/orchestration.md)).
+- `essence.greeting` as a fallback — for the pilot `input.greeting` is required
+  (`required: true`); essence remains a substrate for future scenarios.

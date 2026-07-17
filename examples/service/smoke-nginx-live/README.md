@@ -1,58 +1,58 @@
-# smoke-nginx-live — L3b flagship-smoke
+# smoke-nginx-live — L3b flagship smoke
 
 L3b real-soul-in-container smoke ([ADR-039](../../../docs/adr/0039-e2e-testing.md#adr-039-e2e-testing--three-levels-without-a-new-dictionary-entity)).
 
-Параллель с [smoke-nginx](../smoke-nginx/README.md) (L3a): тот же end-to-end
-сценарий «install nginx → render config → start service», но идущий через
-РЕАЛЬНЫЙ apt-install в Debian-12-soul-container, а не через scripted
+Parallel to [smoke-nginx](../smoke-nginx/README.md) (L3a): same end-to-end
+scenario "install nginx → render config → start service", but going through a
+REAL apt-install in a Debian-12 soul container, rather than through a scripted
 soul-stub.
 
-## Что демонстрирует
+## What it demonstrates
 
-- `core.pkg.installed name=nginx` — реальная установка пакета (`apt-get
-  install nginx`) внутри контейнера.
-- `core.file.rendered` — рендер `/etc/nginx/sites-available/default` из
-  шаблона `templates/nginx-default.conf.tmpl` с переменными из
-  `input.hostname` и `essence.nginx_listen_port`.
-- `core.service.running name=nginx enabled=true` — поднятие systemd-юнита.
-- `core.service.restarted onchanges: [nginx_default_conf]` — реактивный
-  рестарт только при изменении конфига (идемпотентность повторного apply).
+- `core.pkg.installed name=nginx` — a real package install (`apt-get
+  install nginx`) inside the container.
+- `core.file.rendered` — rendering `/etc/nginx/sites-available/default` from
+  the template `templates/nginx-default.conf.tmpl` with variables from
+  `input.hostname` and `essence.nginx_listen_port`.
+- `core.service.running name=nginx enabled=true` — bringing up the systemd unit.
+- `core.service.restarted onchanges: [nginx_default_conf]` — a reactive
+  restart only when the config changes (idempotency of a repeated apply).
 
-Все четыре шага инлайн в scenario (без выделенной destiny): smoke не
-переиспользуется в других сценариях, выделять destiny под него — оверхед
-(см. [docs/scenario/concept.md → граница — рекомендация](../../../docs/scenario/concept.md)).
+All four steps are inlined in the scenario (no dedicated destiny): the smoke test
+isn't reused in other scenarios, so extracting a destiny for it would be
+overhead (see [docs/scenario/concept.md → boundary — recommendation](../../../docs/scenario/concept.md)).
 
-## Где используется
+## Where it's used
 
-- `tests/e2e-live/smoke_nginx_live_test.go` — Go-test L3b flagship,
-  прогоняет scenario `create` через harness, валидирует:
-  - `apply_runs.status = success` (все строки);
-  - `incarnation.state` содержит `nginx_package=installed`,
+- `tests/e2e-live/smoke_nginx_live_test.go` — the L3b flagship Go test,
+  runs the `create` scenario through the harness, validates:
+  - `apply_runs.status = success` (all rows);
+  - `incarnation.state` contains `nginx_package=installed`,
     `nginx_service=active`, `nginx_config_managed=true`;
-  - audit-event `incarnation.scenario_started` с матчем incarnation/apply_id;
-  - метрика `keeper_apply_runs_total >= 1`.
+  - the `incarnation.scenario_started` audit event matches incarnation/apply_id;
+  - metric `keeper_apply_runs_total >= 1`.
 
-Container-side ассерты (`AssertHostPkgInstalled`, `AssertHostServiceActive`,
-`AssertHostFileExists`) появляются в L3b-4 — здесь только Keeper-side
-наблюдаемые свойства.
+Container-side assertions (`AssertHostPkgInstalled`, `AssertHostServiceActive`,
+`AssertHostFileExists`) appear in L3b-4 — here it's only Keeper-side
+observable properties.
 
-## Чего здесь нет
+## What's NOT here
 
-- Идемпотентного destroy-сценария — flagship фокусируется на happy-path
-  create (повторный create на том же контейнере — идемпотентен, см.
-  комментарии в scenario/create/main.yml, но отдельным тестом не покрыт).
-- Multi-host прогона — добавится в L3b-5.
-- HTTPS/upstream — минимальный server-block без TLS, для smoke достаточно.
+- An idempotent destroy scenario — the flagship focuses on the happy-path
+  create (a repeated create on the same container is idempotent, see
+  comments in scenario/create/main.yml, but not covered by a separate test).
+- Multi-host runs — will be added in L3b-5.
+- HTTPS/upstream — a minimal server block without TLS is enough for smoke testing.
 
-## Trial-проверки
+## Trial checks
 
-L0/L1 (`soul-trial`) для этого example пока не добавлены — flagship целит
-в L3b. Trial-фикстура (`_trial/`) появится отдельным slice-ом, если
-потребуется hermetic-render assertion (например для рендера nginx-конфига
-без поднятия контейнера).
+L0/L1 (`soul-trial`) for this example haven't been added yet — the flagship targets
+L3b. A trial fixture (`_trial/`) will appear as a separate slice if
+a hermetic render assertion is needed (e.g. for rendering the nginx config
+without bringing up a container).
 
-## Ожидаемое время прогона
+## Expected run time
 
-~3–5 минут на нагруженной CI-машине: `apt-get update` (~30 c) + установка
-nginx (~30 c) + старт systemd-юнита (~5 c) + поллинг apply_runs до success.
-Тест ставит timeout 300 c (`WaitApplySuccess(t, applyID, 300)`).
+~3–5 minutes on a loaded CI machine: `apt-get update` (~30 s) + installing
+nginx (~30 s) + starting the systemd unit (~5 s) + polling apply_runs until success.
+The test sets a timeout of 300 s (`WaitApplySuccess(t, applyID, 300)`).

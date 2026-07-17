@@ -1,33 +1,33 @@
 # smoke-nginx
 
-Минимальный service для L3a E2E pilot ([ADR-039](../../../docs/adr/0039-e2e-testing.md#adr-039-e2e-testing--three-levels-without-a-new-dictionary-entity)).
+A minimal service for the L3a E2E pilot ([ADR-039](../../../docs/adr/0039-e2e-testing.md#adr-039-e2e-testing--three-levels-without-a-new-dictionary-entity)).
 
-## Что демонстрирует
+## What it demonstrates
 
-- Service с непустым `state_schema` и двумя scenario-полями (`nginx_package`,
-  `nginx_service`), которые фиксируются в `incarnation.state` после успешного
-  apply (через `state_changes.sets`).
-- Scenario `create` из двух последовательных core-задач:
-  - `core.pkg.installed name=nginx` — установка пакета;
-  - `core.service.running name=nginx enabled=true` — запуск и enable systemd-юнита.
-- Минимальный `input:` (только `hostname` — обязательный) — пример обязательного
-  поля без shape-проверки на конкретном значении (любой непустой string).
+- A service with a non-empty `state_schema` and two scenario fields
+  (`nginx_package`, `nginx_service`) that are committed to `incarnation.state`
+  after a successful apply (via `state_changes.sets`).
+- A `create` scenario made of two sequential core tasks:
+  - `core.pkg.installed name=nginx` — installs the package;
+  - `core.service.running name=nginx enabled=true` — starts and enables the systemd unit.
+- A minimal `input:` (only `hostname`, required) — an example of a required
+  field without shape validation on a concrete value (any non-empty string).
 
-## Где используется
+## Where it's used
 
-- `tests/e2e/smoke_nginx_test.go` — Go-test L3a pilot, прогоняет scenario
-  `create` через harness, soul-stub отвечает scripted `RunResult: success`,
-  тест валидирует apply_runs / incarnation.state / audit / metrics.
+- `tests/e2e/smoke_nginx_test.go` — the Go test for the L3a pilot, runs the
+  `create` scenario through the harness, the soul stub responds with a scripted
+  `RunResult: success`, the test validates apply_runs / incarnation.state / audit / metrics.
 
-## Чего здесь нет
+## What's not here
 
-- Реального шаблона `nginx.conf` — pilot тестирует контракт scenario-runner ↔
-  apply_runs ↔ audit, не реальное apply. L3b (real soul-binary в контейнере)
-  получит свой fixture с реальным render-ом конфига.
-- Идемпотентного destroy-scenario — pilot фокусируется на happy-path create.
+- A real `nginx.conf` template — the pilot tests the scenario-runner ↔
+  apply_runs ↔ audit contract, not a real apply. L3b (real soul binary in a
+  container) will get its own fixture with a real config render.
+- An idempotent destroy scenario — the pilot focuses on the happy-path create.
 
-## Trial-проверки
+## Trial checks
 
-L0/L1 (`soul-trial`) для этого example пока не добавлены — pilot целит в L3a.
-Trial-фикстура (`_trial/`) появится отдельным slice-ом, если потребуется
-purely-hermetic-render assertion для smoke-nginx.
+L0/L1 (`soul-trial`) for this example haven't been added yet — the pilot targets
+L3a. A trial fixture (`_trial/`) will appear as a separate slice if a
+purely-hermetic-render assertion is needed for smoke-nginx.

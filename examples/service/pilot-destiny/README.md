@@ -1,40 +1,39 @@
-# pilot-destiny — пилот `apply:destiny` (слайс A) + `include:` (слайс B)
+# pilot-destiny — `apply:destiny` pilot (slice A) + `include:` (slice B)
 
-Минимальный сервис, демонстрирующий **`apply:destiny`** — делегирование работы
-сценария в переиспользуемую destiny с изолированным render-проходом (V2, ADR-009)
-— и **`include:`** (раскрытие соседних файлов в плоский список до render).
+A minimal service demonstrating **`apply:destiny`** — delegating scenario work to a
+reusable destiny with an isolated render pass (V2, ADR-009) — and **`include:`**
+(expanding neighboring files into a flat list before render).
 
-## Что показывает
+## What it demonstrates
 
-- **scenario-include:** `scenario/create/main.yml` подключает соседний
-  `marker.yml` через `include:` — он раскрывается ДО render (двухуровневый резолв
-  scenario-локально → service-level, [orchestration.md §6](../../../docs/scenario/orchestration.md#6-two-level-resource-resolution)).
-  Внутри `marker.yml` — задача `apply: { destiny: pilot-flat, input: {…} }`.
-- **apply:destiny:** apply-задача раскрывается в задачи destiny (вклеиваются в
-  общий план со сквозными индексами).
-- **within-destiny include:** `pilot-flat/tasks/main.yml` подключает
-  `record.yml` через `include:` — within-destiny include раскрывается при загрузке
-  destiny ([destiny/tasks.md §4](../../../docs/destiny/tasks.md#4-basic-blocks)).
-  Итоговый плоский список — `core.file.present` (0) + `core.exec.run` (1).
-- **Изоляция:** destiny видит ТОЛЬКО свой `input:` (`marker_file`/`marker_payload`),
-  переданный через `apply.input`. scenario-scope (`input.path`/`input.content`,
-  vars, register, soulprint) в destiny-env НЕ попадает — структурная граница.
-- **Добор defaults:** `marker_mode` не передаётся в `apply.input` → добирается из
-  `default` контракта destiny (`0644`).
+- **scenario-include:** `scenario/create/main.yml` includes the neighboring
+  `marker.yml` via `include:` — expanded BEFORE render (two-level resolution
+  scenario-local → service-level, [orchestration.md §6](../../../docs/scenario/orchestration.md#6-two-level-resource-resolution)).
+  Inside `marker.yml` is a task `apply: { destiny: pilot-flat, input: {…} }`.
+- **apply:destiny:** the apply task expands into destiny tasks (spliced into the
+  overall plan with through-indices).
+- **within-destiny include:** `pilot-flat/tasks/main.yml` includes
+  `record.yml` via `include:` — within-destiny include is expanded when the
+  destiny loads ([destiny/tasks.md §4](../../../docs/destiny/tasks.md#4-basic-blocks)).
+  The resulting flat list is `core.file.present` (0) + `core.exec.run` (1).
+- **Isolation:** the destiny sees ONLY its own `input:` (`marker_file`/`marker_payload`)
+  passed via `apply.input`. Scenario scope (`input.path`/`input.content`, vars,
+  register, soulprint) does NOT reach the destiny env — a structural boundary.
+- **Default fallback:** `marker_mode` is not passed in `apply.input` → it falls back
+  to the destiny contract's `default` (`0644`).
 
-## Раскладка destiny
+## Destiny layout
 
-В этой фикстуре destiny `pilot-flat` лежит рядом с сервисом
-(`pilot-flat/`) — герметичный L0-прогон грузит её из локального дерева,
-git не нужен. В проде git-URL destiny выводится из
-`keeper.yml::default_destiny_source` + `{name}`, а `ref` — из `service.yml →
-destiny[]` (ADR-007).
+In this fixture the `pilot-flat` destiny lives next to the service (`pilot-flat/`) —
+the hermetic L0 run loads it from the local tree, git is not needed. In production the
+destiny git URL is derived from `keeper.yml::default_destiny_source` + `{name}`, and
+`ref` from `service.yml → destiny[]` (ADR-007).
 
-## Прогон L0
+## Running L0
 
 ```sh
 cd keeper
 go run ./cmd/soul-trial run ../examples/service/pilot-destiny/scenario/create/tests/render-flat/case.yml
 ```
 
-Ожидаемо: `PASS` — две задачи destiny с резолвнутым input.
+Expected: `PASS` — two destiny tasks with resolved input.

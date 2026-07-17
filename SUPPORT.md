@@ -1,34 +1,35 @@
-# Поддержка
+# Support
 
-Soul Stack находится в стадии **закрытой малой беты**. Этот документ — куда обращаться
-участнику беты с вопросами и проблемами.
+Soul Stack is in **closed small beta**. This document explains where beta
+participants should go with questions and issues.
 
-## Уровень поддержки
+## Support level
 
-**Best-effort, без SLA.** Мы отвечаем по мере возможности; гарантированного времени
-ответа на этапе закрытой беты нет. Цель беты — собрать обратную связь и поймать баги
-до стабильного релиза, а не предоставлять прод-поддержку.
+**Best-effort, no SLA.** We respond as we're able; there's no guaranteed
+response time during the closed beta. The goal of the beta is to gather
+feedback and catch bugs before the stable release, not to provide production
+support.
 
-## Куда обращаться
+## Where to go
 
-| Что у вас                                   | Куда                                                                 |
-|---------------------------------------------|----------------------------------------------------------------------|
-| Баг, неожиданное поведение, упавший прогон  | **GitHub Issues** этого репозитория (шаблон «Bug report»)            |
-| Идея / запрос фичи                          | **GitHub Issues** (опишите свободным текстом)                        |
-| Уязвимость безопасности                     | **GitHub Security Advisory** — см. [SECURITY.md](SECURITY.md). НЕ публичный issue. |
+| What you have                                | Where                                                                 |
+|-----------------------------------------------|------------------------------------------------------------------------|
+| Bug, unexpected behavior, failed run          | **GitHub Issues** in this repository ("Bug report" template)          |
+| Idea / feature request                        | **GitHub Issues** (describe it in free text)                          |
+| Security vulnerability                        | **GitHub Security Advisory** — see [SECURITY.md](SECURITY.md). NOT a public issue. |
 
-Перед заведением бага загляните в [docs/known-limitations.md](docs/known-limitations.md):
-часть ограничений в бету **не входит** осознанно.
+Before filing a bug, check [docs/known-limitations.md](docs/known-limitations.md):
+some limitations are intentionally **out of scope** for the beta.
 
-## Прежде чем завести issue
+## Before filing an issue
 
-- Сверьте версию: `keeper version`. Воспроизводится ли на актуальной `v0.1.0-beta.x`?
-- Приложите шаги воспроизведения и релевантный фрагмент логов/audit.
-- **Не вставляйте секреты** (JWT, содержимое Vault, приватные ключи, DSN с паролями) —
-  маскируйте чувствительное.
+- Check the version: `keeper version`. Does it reproduce on the current `v0.1.0-beta.x`?
+- Attach reproduction steps and a relevant log/audit excerpt.
+- **Do not paste secrets** (JWTs, Vault contents, private keys, DSNs with
+  passwords) — mask anything sensitive.
 
-## С чего начать
+## Where to start
 
-- [docs/getting-started.md](docs/getting-started.md) — поднять кластер и применить первый сценарий.
-- [docs/README.md](docs/README.md) — индекс всей документации.
-- [docs/operations/](docs/operations/README.md) — операционный runbook.
+- [docs/getting-started.md](docs/getting-started.md) — bring up a cluster and apply your first scenario.
+- [docs/README.md](docs/README.md) — index of all documentation.
+- [docs/operations/](docs/operations/README.md) — operations runbook.

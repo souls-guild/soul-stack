@@ -1,19 +1,19 @@
 # example-cloud-bootstrap
 
-Demo-сервис под ADR-017(h) amendment 2026-05-27 (B-flat): cloud-init bootstrap новой VM.
+Demo service under ADR-017(h) amendment 2026-05-27 (B-flat): cloud-init bootstrap of a new VM.
 
-## Что показывает
+## What it demonstrates
 
-Двухшаговый scenario `create`:
+A two-step `create` scenario:
 
-1. **`provision`** — `core.cloud.provisioned` (`state: created`) с `generate_userdata: true`. Keeper рендерит cloud-config userdata из `keeper.yml::cloud_init` (PEM CA из Vault + URL soul-бинаря), CloudDriver-плагин создаёт `count` VM с этой userdata. После Create — Keeper выписывает per-VM bootstrap-токен и кладёт в `register.provision.hosts[].bootstrap_token`.
-2. **`push_token`** — `keeper.push.bootstrap_token` (через SSH-провайдера `soul-ssh-*`) доставляет per-VM-токен на каждую VM. Без этого Soul на VM не знает, какой токен предъявить на Bootstrap-RPC.
+1. **`provision`** — `core.cloud.provisioned` (`state: created`) with `generate_userdata: true`. Keeper renders cloud-config userdata from `keeper.yml::cloud_init` (PEM CA from Vault + soul binary URL); the CloudDriver plugin creates `count` VMs with this userdata. After Create — Keeper issues a per-VM bootstrap token and puts it into `register.provision.hosts[].bootstrap_token`.
+2. **`push_token`** — `keeper.push.bootstrap_token` (via the SSH provider `soul-ssh-*`) delivers the per-VM token to each VM. Without this, Soul on the VM doesn't know which token to present to the Bootstrap RPC.
 
-Cloud-init userdata **НЕ несёт токены** — cloud-provider API хранит userdata в plaintext metadata (security floor).
+Cloud-init userdata **does NOT carry tokens** — the cloud provider API stores userdata in plaintext metadata (security floor).
 
 ## Prerequisites
 
-В `keeper.yml`:
+In `keeper.yml`:
 
 ```yaml
 cloud_init:
@@ -23,15 +23,15 @@ cloud_init:
   soul_version:       v1.0.0
 
 push:
-  # ... настройки SSH-доставки токенов (см. docs/keeper/push.md)
+  # ... SSH token-delivery settings (see docs/keeper/push.md)
 ```
 
-В Postgres:
-- Provider `aws-prod` создан через OpenAPI/MCP (`POST /v1/providers`).
-- Profile `example-tiny` создан через `POST /v1/profiles`.
+In Postgres:
+- Provider `aws-prod` created via OpenAPI/MCP (`POST /v1/providers`).
+- Profile `example-tiny` created via `POST /v1/profiles`.
 
-## См. также
+## See also
 
-- [ADR-017(h) amendment 2026-05-27](../../../docs/adr/0017-keeper-side-core.md#adr-017-keeper-side-core-modules-extended-corecloudprovisioned-corevaultkv-read) — нормативное решение.
-- [docs/keeper/cloud.md → Cloud-init bootstrap (MVP)](../../../docs/keeper/cloud.md#cloud-init-bootstrap-mvp) — оператор-документация.
-- [keeper/internal/cloudinit/](../../../keeper/internal/cloudinit/) — реализация рендера.
+- [ADR-017(h) amendment 2026-05-27](../../../docs/adr/0017-keeper-side-core.md#adr-017-keeper-side-core-modules-extended-corecloudprovisioned-corevaultkv-read) — normative decision.
+- [docs/keeper/cloud.md → Cloud-init bootstrap (MVP)](../../../docs/keeper/cloud.md#cloud-init-bootstrap-mvp) — operator documentation.
+- [keeper/internal/cloudinit/](../../../keeper/internal/cloudinit/) — render implementation.

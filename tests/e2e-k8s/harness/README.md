@@ -1,49 +1,48 @@
 # tests/e2e-k8s/harness
 
-L3c kind-cluster harness. Архитектурный контракт симметричен L3a (`tests/e2e/harness/`)
-и L3b (`tests/e2e-live/harness/`): высокоуровневый `Stack` поднимает изолированный
-стенд под один тест, регистрирует teardown через `t.Cleanup`.
+L3c kind-cluster harness. The architectural contract is symmetric to L3a (`tests/e2e/harness/`)
+and L3b (`tests/e2e-live/harness/`): a high-level `Stack` spins up an isolated
+stand for a single test, registers teardown via `t.Cleanup`.
 
-## Файлы
+## Files
 
-| Файл | Назначение |
+| File | Purpose |
 |---|---|
-| `cluster.go` | `Cluster` — обёртка `sigs.k8s.io/kind/pkg/cluster.Provider`. Create/Delete kind-кластера, per-test name + temp kubeconfig. |
-| `kubectl.go` | `Cluster.KubectlApply` / `Cluster.LoadDockerImage` — subprocess-обёртки над `kubectl` и `kind` CLI. |
+| `cluster.go` | `Cluster` — a wrapper around `sigs.k8s.io/kind/pkg/cluster.Provider`. Create/Delete of a kind cluster, per-test name + temp kubeconfig. |
+| `kubectl.go` | `Cluster.KubectlApply` / `Cluster.LoadDockerImage` — subprocess wrappers over the `kubectl` and `kind` CLI. |
 | `helm.go` | `Cluster.helmRepoEnsure` + `helmInstall` — bitnami repo runtime + `helm install --wait`. |
-| `vault.go` | `seedVaultSecrets` (PKI mount + role soul-seed + JWT signing-key + PG DSN) + `IssueKeeperServerCert` для in-cluster DNS-имени. |
-| `portforward.go` | `Cluster.PortForward(target, remotePort)` — `kubectl port-forward` subprocess, parsed-local-port. |
-| `keeperyml.go` | `renderKeeperYAML(inputs)` — статический шаблон keeper.yml для ConfigMap (in-cluster service-DNS + TLS-paths). |
-| `stack.go` | `Stack` — высокоуровневый harness; `NewStack` → `DeployInfra` → `DeployKeeper` (L3c-2 single replica). L3c-3 расширит на multi-replica + `DeploySoul`. |
+| `vault.go` | `seedVaultSecrets` (PKI mount + soul-seed role + JWT signing key + PG DSN) + `IssueKeeperServerCert` for the in-cluster DNS name. |
+| `portforward.go` | `Cluster.PortForward(target, remotePort)` — a `kubectl port-forward` subprocess, parsed local port. |
+| `keeperyml.go` | `renderKeeperYAML(inputs)` — a static keeper.yml template for the ConfigMap (in-cluster service DNS + TLS paths). |
+| `stack.go` | `Stack` — the high-level harness; `NewStack` → `DeployInfra` → `DeployKeeper` (L3c-2 single replica). L3c-3 will extend to multi-replica + `DeploySoul`. |
 
 ## Pre-flight
 
-`NewCluster` скипает тест (`t.Skip`), если в PATH нет `docker` или `kind` CLI.
-`docker` нужен kind-у внутри для node-контейнеров; `kind` CLI нужен помимо
-Go-API для `kind load docker-image` — Go-API kind-а для load-image
-экспериментальный, надёжный путь — CLI.
+`NewCluster` skips the test (`t.Skip`) if `docker` or the `kind` CLI aren't in PATH.
+`docker` is needed by kind internally for the node containers; the `kind` CLI is needed alongside
+the Go API for `kind load docker-image` — kind's Go API for load-image
+is experimental, the reliable path is the CLI.
 
-## Изоляция между тестами
+## Isolation between tests
 
-- Имя кластера: `soul-stack-e2e-<sanitized-test-name>-<unix-nanos>` (PM-decision).
-  Per-test, не shared — параллельные прогоны в CI не конфликтуют.
-- Kubeconfig: `t.TempDir()/kubeconfig-<name>` — автоматически удаляется
-  test-harness-ом.
-- `t.Cleanup` (LIFO) гарантирует delete-cluster даже при `t.Fatal` в середине
-  теста.
+- Cluster name: `soul-stack-e2e-<sanitized-test-name>-<unix-nanos>` (PM decision).
+  Per-test, not shared — parallel CI runs don't conflict.
+- Kubeconfig: `t.TempDir()/kubeconfig-<name>` — automatically removed by the
+  test harness.
+- `t.Cleanup` (LIFO) guarantees cluster deletion even on `t.Fatal` mid-test.
 
-## Почему дублирование с L3a/L3b harness
+## Why duplicate the L3a/L3b harness
 
-Architect-вердикт `a241beb181086d7a7`: `tests/e2e/harness/` и
-`tests/e2e-live/harness/` под Go-internal-rules недоступны из
-`tests/e2e-k8s/` (другой module-root). L3a/L3b/L3c — независимые
-test-frequencies (PR / nightly / weekly) с разными контрактами; общий
-код экстрактится в `tests/e2e-shared/` отдельным slice-ом после
-стабилизации всех трёх уровней.
+Architect verdict `a241beb181086d7a7`: `tests/e2e/harness/` and
+`tests/e2e-live/harness/` are unreachable from `tests/e2e-k8s/` under Go's
+internal-package rules (a different module root). L3a/L3b/L3c are independent
+test frequencies (PR / nightly / weekly) with different contracts; shared
+code will be extracted into `tests/e2e-shared/` as a separate slice once
+all three levels stabilize.
 
-## См. также
+## See also
 
-- [`tests/e2e-k8s/README.md`](../README.md) — quickstart + L3c slice-карта.
-- [docs/testing/e2e.md](../../../docs/testing/e2e.md) — L3a-канон формата
-  fixtures/expectations (L3c будет читать формат L3b с расширениями под k8s
-  ресурсы, начиная с L3c-3).
+- [`tests/e2e-k8s/README.md`](../README.md) — quickstart + L3c slice map.
+- [docs/testing/e2e.md](../../../docs/testing/e2e.md) — the L3a canonical
+  fixtures/expectations format (L3c will read the L3b format with extensions for k8s
+  resources, starting with L3c-3).
