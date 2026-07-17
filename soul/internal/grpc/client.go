@@ -556,6 +556,17 @@ func (s *StreamSession) SendSoulprintReport(rep *keeperv1.SoulprintReport) error
 	return s.stream.Send(&keeperv1.FromSoul{Payload: &keeperv1.FromSoul_SoulprintReport{SoulprintReport: rep}})
 }
 
+// SendHostUtilization — снимок живой утилизации хоста (ADR-072). Зеркало
+// SendSoulprintReport: `received_at` — Keeper-only, здесь не выставляется.
+func (s *StreamSession) SendHostUtilization(u *keeperv1.HostUtilization) error {
+	if u.GetCollectedAt() == nil {
+		u.CollectedAt = timestamppb.Now()
+	}
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+	return s.stream.Send(&keeperv1.FromSoul{Payload: &keeperv1.FromSoul_HostUtilization{HostUtilization: u}})
+}
+
 // SendErrandResult sends the final ErrandResult to Keeper (ADR-033, slice E3).
 // The Errand goroutine (recv-handler in cmd/soul) calls this in parallel with
 // the apply goroutine, so writeMu is mandatory — concurrent Send on a gRPC

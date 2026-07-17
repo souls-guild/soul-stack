@@ -115,6 +115,7 @@ type FromSoul struct {
 	//	*FromSoul_PortentEvent
 	//	*FromSoul_WardRoster
 	//	*FromSoul_ErrandResult
+	//	*FromSoul_HostUtilization
 	Payload       isFromSoul_Payload `protobuf_oneof:"payload"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -238,6 +239,15 @@ func (x *FromSoul) GetErrandResult() *ErrandResult {
 	return nil
 }
 
+func (x *FromSoul) GetHostUtilization() *HostUtilization {
+	if x != nil {
+		if x, ok := x.Payload.(*FromSoul_HostUtilization); ok {
+			return x.HostUtilization
+		}
+	}
+	return nil
+}
+
 type isFromSoul_Payload interface {
 	isFromSoul_Payload()
 }
@@ -278,6 +288,10 @@ type FromSoul_ErrandResult struct {
 	ErrandResult *ErrandResult `protobuf:"bytes,9,opt,name=errand_result,json=errandResult,proto3,oneof"`
 }
 
+type FromSoul_HostUtilization struct {
+	HostUtilization *HostUtilization `protobuf:"bytes,10,opt,name=host_utilization,json=hostUtilization,proto3,oneof"`
+}
+
 func (*FromSoul_Hello) isFromSoul_Payload() {}
 
 func (*FromSoul_TaskEvent) isFromSoul_Payload() {}
@@ -295,6 +309,8 @@ func (*FromSoul_PortentEvent) isFromSoul_Payload() {}
 func (*FromSoul_WardRoster) isFromSoul_Payload() {}
 
 func (*FromSoul_ErrandResult) isFromSoul_Payload() {}
+
+func (*FromSoul_HostUtilization) isFromSoul_Payload() {}
 
 // FromKeeper is the wrapper message for Keeper -> Soul messages on EventStream.
 type FromKeeper struct {
@@ -527,10 +543,10 @@ var File_keeper_v1_keeper_proto protoreflect.FileDescriptor
 
 const file_keeper_v1_keeper_proto_rawDesc = "" +
 	"\n" +
-	"\x16keeper/v1/keeper.proto\x12\x13soulstack.keeper.v1\x1a\x1akeeper/v1/onboarding.proto\x1a\x19keeper/v1/lifecycle.proto\x1a\x15keeper/v1/apply.proto\x1a\x19keeper/v1/soulprint.proto\x1a\x15keeper/v1/sigil.proto\x1a\x15keeper/v1/augur.proto\x1a\x16keeper/v1/beacon.proto\x1a\x16keeper/v1/errand.proto\"\r\n" +
+	"\x16keeper/v1/keeper.proto\x12\x13soulstack.keeper.v1\x1a\x1akeeper/v1/onboarding.proto\x1a\x19keeper/v1/lifecycle.proto\x1a\x15keeper/v1/apply.proto\x1a\x19keeper/v1/soulprint.proto\x1a\x15keeper/v1/sigil.proto\x1a\x15keeper/v1/augur.proto\x1a\x16keeper/v1/beacon.proto\x1a\x16keeper/v1/errand.proto\x1a\x1bkeeper/v1/utilization.proto\"\r\n" +
 	"\vPingRequest\"%\n" +
 	"\tPingReply\x12\x18\n" +
-	"\aversion\x18\x01 \x01(\tR\aversion\"\xa0\x05\n" +
+	"\aversion\x18\x01 \x01(\tR\aversion\"\xf3\x05\n" +
 	"\bFromSoul\x122\n" +
 	"\x05hello\x18\x01 \x01(\v2\x1a.soulstack.keeper.v1.HelloH\x00R\x05hello\x12?\n" +
 	"\n" +
@@ -543,7 +559,9 @@ const file_keeper_v1_keeper_proto_rawDesc = "" +
 	"\rportent_event\x18\a \x01(\v2!.soulstack.keeper.v1.PortentEventH\x00R\fportentEvent\x12B\n" +
 	"\vward_roster\x18\b \x01(\v2\x1f.soulstack.keeper.v1.WardRosterH\x00R\n" +
 	"wardRoster\x12H\n" +
-	"\rerrand_result\x18\t \x01(\v2!.soulstack.keeper.v1.ErrandResultH\x00R\ferrandResultB\t\n" +
+	"\rerrand_result\x18\t \x01(\v2!.soulstack.keeper.v1.ErrandResultH\x00R\ferrandResult\x12Q\n" +
+	"\x10host_utilization\x18\n" +
+	" \x01(\v2$.soulstack.keeper.v1.HostUtilizationH\x00R\x0fhostUtilizationB\t\n" +
 	"\apayload\"\xdc\x06\n" +
 	"\n" +
 	"FromKeeper\x12B\n" +
@@ -595,21 +613,22 @@ var file_keeper_v1_keeper_proto_goTypes = []any{
 	(*PortentEvent)(nil),        // 10: soulstack.keeper.v1.PortentEvent
 	(*WardRoster)(nil),          // 11: soulstack.keeper.v1.WardRoster
 	(*ErrandResult)(nil),        // 12: soulstack.keeper.v1.ErrandResult
-	(*HelloReply)(nil),          // 13: soulstack.keeper.v1.HelloReply
-	(*ApplyRequest)(nil),        // 14: soulstack.keeper.v1.ApplyRequest
-	(*CancelApply)(nil),         // 15: soulstack.keeper.v1.CancelApply
-	(*SeedRotationReply)(nil),   // 16: soulstack.keeper.v1.SeedRotationReply
-	(*PluginSigil)(nil),         // 17: soulstack.keeper.v1.PluginSigil
-	(*AugurReply)(nil),          // 18: soulstack.keeper.v1.AugurReply
-	(*SigilSnapshot)(nil),       // 19: soulstack.keeper.v1.SigilSnapshot
-	(*SigilTrustAnchors)(nil),   // 20: soulstack.keeper.v1.SigilTrustAnchors
-	(*VigilSnapshot)(nil),       // 21: soulstack.keeper.v1.VigilSnapshot
-	(*ErrandRequest)(nil),       // 22: soulstack.keeper.v1.ErrandRequest
-	(*CancelErrand)(nil),        // 23: soulstack.keeper.v1.CancelErrand
-	(*BootstrapRequest)(nil),    // 24: soulstack.keeper.v1.BootstrapRequest
-	(*PluginFetchRequest)(nil),  // 25: soulstack.keeper.v1.PluginFetchRequest
-	(*BootstrapReply)(nil),      // 26: soulstack.keeper.v1.BootstrapReply
-	(*PluginChunk)(nil),         // 27: soulstack.keeper.v1.PluginChunk
+	(*HostUtilization)(nil),     // 13: soulstack.keeper.v1.HostUtilization
+	(*HelloReply)(nil),          // 14: soulstack.keeper.v1.HelloReply
+	(*ApplyRequest)(nil),        // 15: soulstack.keeper.v1.ApplyRequest
+	(*CancelApply)(nil),         // 16: soulstack.keeper.v1.CancelApply
+	(*SeedRotationReply)(nil),   // 17: soulstack.keeper.v1.SeedRotationReply
+	(*PluginSigil)(nil),         // 18: soulstack.keeper.v1.PluginSigil
+	(*AugurReply)(nil),          // 19: soulstack.keeper.v1.AugurReply
+	(*SigilSnapshot)(nil),       // 20: soulstack.keeper.v1.SigilSnapshot
+	(*SigilTrustAnchors)(nil),   // 21: soulstack.keeper.v1.SigilTrustAnchors
+	(*VigilSnapshot)(nil),       // 22: soulstack.keeper.v1.VigilSnapshot
+	(*ErrandRequest)(nil),       // 23: soulstack.keeper.v1.ErrandRequest
+	(*CancelErrand)(nil),        // 24: soulstack.keeper.v1.CancelErrand
+	(*BootstrapRequest)(nil),    // 25: soulstack.keeper.v1.BootstrapRequest
+	(*PluginFetchRequest)(nil),  // 26: soulstack.keeper.v1.PluginFetchRequest
+	(*BootstrapReply)(nil),      // 27: soulstack.keeper.v1.BootstrapReply
+	(*PluginChunk)(nil),         // 28: soulstack.keeper.v1.PluginChunk
 }
 var file_keeper_v1_keeper_proto_depIdxs = []int32{
 	4,  // 0: soulstack.keeper.v1.FromSoul.hello:type_name -> soulstack.keeper.v1.Hello
@@ -621,30 +640,31 @@ var file_keeper_v1_keeper_proto_depIdxs = []int32{
 	10, // 6: soulstack.keeper.v1.FromSoul.portent_event:type_name -> soulstack.keeper.v1.PortentEvent
 	11, // 7: soulstack.keeper.v1.FromSoul.ward_roster:type_name -> soulstack.keeper.v1.WardRoster
 	12, // 8: soulstack.keeper.v1.FromSoul.errand_result:type_name -> soulstack.keeper.v1.ErrandResult
-	13, // 9: soulstack.keeper.v1.FromKeeper.hello_reply:type_name -> soulstack.keeper.v1.HelloReply
-	14, // 10: soulstack.keeper.v1.FromKeeper.apply_request:type_name -> soulstack.keeper.v1.ApplyRequest
-	15, // 11: soulstack.keeper.v1.FromKeeper.cancel_apply:type_name -> soulstack.keeper.v1.CancelApply
-	16, // 12: soulstack.keeper.v1.FromKeeper.seed_rotation_reply:type_name -> soulstack.keeper.v1.SeedRotationReply
-	17, // 13: soulstack.keeper.v1.FromKeeper.plugin_sigil:type_name -> soulstack.keeper.v1.PluginSigil
-	18, // 14: soulstack.keeper.v1.FromKeeper.augur_reply:type_name -> soulstack.keeper.v1.AugurReply
-	19, // 15: soulstack.keeper.v1.FromKeeper.sigil_snapshot:type_name -> soulstack.keeper.v1.SigilSnapshot
-	20, // 16: soulstack.keeper.v1.FromKeeper.sigil_trust_anchors:type_name -> soulstack.keeper.v1.SigilTrustAnchors
-	21, // 17: soulstack.keeper.v1.FromKeeper.vigil_snapshot:type_name -> soulstack.keeper.v1.VigilSnapshot
-	22, // 18: soulstack.keeper.v1.FromKeeper.errand_request:type_name -> soulstack.keeper.v1.ErrandRequest
-	23, // 19: soulstack.keeper.v1.FromKeeper.cancel_errand:type_name -> soulstack.keeper.v1.CancelErrand
-	0,  // 20: soulstack.keeper.v1.Keeper.Ping:input_type -> soulstack.keeper.v1.PingRequest
-	24, // 21: soulstack.keeper.v1.Keeper.Bootstrap:input_type -> soulstack.keeper.v1.BootstrapRequest
-	2,  // 22: soulstack.keeper.v1.Keeper.EventStream:input_type -> soulstack.keeper.v1.FromSoul
-	25, // 23: soulstack.keeper.v1.Keeper.FetchModule:input_type -> soulstack.keeper.v1.PluginFetchRequest
-	1,  // 24: soulstack.keeper.v1.Keeper.Ping:output_type -> soulstack.keeper.v1.PingReply
-	26, // 25: soulstack.keeper.v1.Keeper.Bootstrap:output_type -> soulstack.keeper.v1.BootstrapReply
-	3,  // 26: soulstack.keeper.v1.Keeper.EventStream:output_type -> soulstack.keeper.v1.FromKeeper
-	27, // 27: soulstack.keeper.v1.Keeper.FetchModule:output_type -> soulstack.keeper.v1.PluginChunk
-	24, // [24:28] is the sub-list for method output_type
-	20, // [20:24] is the sub-list for method input_type
-	20, // [20:20] is the sub-list for extension type_name
-	20, // [20:20] is the sub-list for extension extendee
-	0,  // [0:20] is the sub-list for field type_name
+	13, // 9: soulstack.keeper.v1.FromSoul.host_utilization:type_name -> soulstack.keeper.v1.HostUtilization
+	14, // 10: soulstack.keeper.v1.FromKeeper.hello_reply:type_name -> soulstack.keeper.v1.HelloReply
+	15, // 11: soulstack.keeper.v1.FromKeeper.apply_request:type_name -> soulstack.keeper.v1.ApplyRequest
+	16, // 12: soulstack.keeper.v1.FromKeeper.cancel_apply:type_name -> soulstack.keeper.v1.CancelApply
+	17, // 13: soulstack.keeper.v1.FromKeeper.seed_rotation_reply:type_name -> soulstack.keeper.v1.SeedRotationReply
+	18, // 14: soulstack.keeper.v1.FromKeeper.plugin_sigil:type_name -> soulstack.keeper.v1.PluginSigil
+	19, // 15: soulstack.keeper.v1.FromKeeper.augur_reply:type_name -> soulstack.keeper.v1.AugurReply
+	20, // 16: soulstack.keeper.v1.FromKeeper.sigil_snapshot:type_name -> soulstack.keeper.v1.SigilSnapshot
+	21, // 17: soulstack.keeper.v1.FromKeeper.sigil_trust_anchors:type_name -> soulstack.keeper.v1.SigilTrustAnchors
+	22, // 18: soulstack.keeper.v1.FromKeeper.vigil_snapshot:type_name -> soulstack.keeper.v1.VigilSnapshot
+	23, // 19: soulstack.keeper.v1.FromKeeper.errand_request:type_name -> soulstack.keeper.v1.ErrandRequest
+	24, // 20: soulstack.keeper.v1.FromKeeper.cancel_errand:type_name -> soulstack.keeper.v1.CancelErrand
+	0,  // 21: soulstack.keeper.v1.Keeper.Ping:input_type -> soulstack.keeper.v1.PingRequest
+	25, // 22: soulstack.keeper.v1.Keeper.Bootstrap:input_type -> soulstack.keeper.v1.BootstrapRequest
+	2,  // 23: soulstack.keeper.v1.Keeper.EventStream:input_type -> soulstack.keeper.v1.FromSoul
+	26, // 24: soulstack.keeper.v1.Keeper.FetchModule:input_type -> soulstack.keeper.v1.PluginFetchRequest
+	1,  // 25: soulstack.keeper.v1.Keeper.Ping:output_type -> soulstack.keeper.v1.PingReply
+	27, // 26: soulstack.keeper.v1.Keeper.Bootstrap:output_type -> soulstack.keeper.v1.BootstrapReply
+	3,  // 27: soulstack.keeper.v1.Keeper.EventStream:output_type -> soulstack.keeper.v1.FromKeeper
+	28, // 28: soulstack.keeper.v1.Keeper.FetchModule:output_type -> soulstack.keeper.v1.PluginChunk
+	25, // [25:29] is the sub-list for method output_type
+	21, // [21:25] is the sub-list for method input_type
+	21, // [21:21] is the sub-list for extension type_name
+	21, // [21:21] is the sub-list for extension extendee
+	0,  // [0:21] is the sub-list for field type_name
 }
 
 func init() { file_keeper_v1_keeper_proto_init() }
@@ -660,6 +680,7 @@ func file_keeper_v1_keeper_proto_init() {
 	file_keeper_v1_augur_proto_init()
 	file_keeper_v1_beacon_proto_init()
 	file_keeper_v1_errand_proto_init()
+	file_keeper_v1_utilization_proto_init()
 	file_keeper_v1_keeper_proto_msgTypes[2].OneofWrappers = []any{
 		(*FromSoul_Hello)(nil),
 		(*FromSoul_TaskEvent)(nil),
@@ -670,6 +691,7 @@ func file_keeper_v1_keeper_proto_init() {
 		(*FromSoul_PortentEvent)(nil),
 		(*FromSoul_WardRoster)(nil),
 		(*FromSoul_ErrandResult)(nil),
+		(*FromSoul_HostUtilization)(nil),
 	}
 	file_keeper_v1_keeper_proto_msgTypes[3].OneofWrappers = []any{
 		(*FromKeeper_HelloReply)(nil),

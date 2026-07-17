@@ -4132,9 +4132,13 @@ func (d *daemon) setupAPIServer(ctx context.Context) error {
 		// Keeper daemon runtime wiring note.
 		// Keeper daemon runtime wiring note.
 		SoulPresence: soulPresence,
-		// Keeper daemon runtime wiring note.
-		// Keeper daemon runtime wiring note.
-		// Keeper daemon runtime wiring note.
+		// UtilizationReader — host-vitals из Redis для telemetry-эндпоинтов
+		// (NIM-86). Value-адаптер (не typed-nil interface): при nil-Redis
+		// (single-Keeper dev) внутренний nil-guard отдаёт stale/empty.
+		UtilizationReader: utilizationReader{rc: d.redisClient},
+		// SoulStatsStaleFn — hot-reload порог disconnect-а для stale_count в
+		// GET /v1/souls/stats (тот же mark_disconnected.stale_after, что flush
+		// last_seen_at и Reaper): читаем свежий cfg-снимок на каждом запросе.
 		SoulStatsStaleFn: func() time.Duration {
 			return reaper.ResolveMarkDisconnectedStale(d.store.Get().Reaper)
 		},
@@ -4773,9 +4777,28 @@ func (c topologyLeaseChecker) SoulsStreamAlive(ctx context.Context, sids []strin
 	return keeperredis.SoulsStreamAlive(ctx, c.rc, sids)
 }
 
-// Keeper daemon runtime wiring note.
-// Keeper daemon runtime wiring note.
-// Keeper daemon runtime wiring note.
+// utilizationReader адаптирует Redis-клиент под host-vitals-ридер telemetry-
+// эндпоинтов (NIM-86, [handlers.UtilizationReader]). Зеркало topologyLeaseChecker;
+// nil-Redis (dev/unit без Redis) → stale/empty, не паникует.
+type utilizationReader struct{ rc *keeperredis.Client }
+
+func (u utilizationReader) ReadUtilization(ctx context.Context, sid string) (keeperredis.UtilizationSnapshot, bool, error) {
+	if u.rc == nil {
+		return keeperredis.UtilizationSnapshot{}, false, nil
+	}
+	return keeperredis.ReadUtilization(ctx, u.rc, sid)
+}
+
+func (u utilizationReader) ReadUtilizationWindow(ctx context.Context, sid string, limit int) ([]keeperredis.UtilizationPoint, error) {
+	if u.rc == nil {
+		return nil, nil
+	}
+	return keeperredis.ReadUtilizationWindow(ctx, u.rc, sid, limit)
+}
+
+// clusterRegistryAdapter адаптирует Redis-клиент под read-поверхность Conclave
+// для `GET /v1/cluster` ([handlers.ClusterRegistry]). Узкая склейка ради изоляции
+// api-пакета от keeperredis (handler зависит от интерфейса, не от клиента).
 type clusterRegistryAdapter struct{ rc *keeperredis.Client }
 
 func (a clusterRegistryAdapter) LiveKIDs(ctx context.Context) ([]string, error) {
