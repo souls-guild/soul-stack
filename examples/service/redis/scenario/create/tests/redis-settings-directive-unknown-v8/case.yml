@@ -93,4 +93,4 @@ fixtures:
 
 # The run aborts at render: assert "Validate redis_settings directive names..." false.
 # Substring — the assert rule's message (create/main.yml).
-expect_render_error: "unknown redis_settings directive"
+expect_render_error: "unknown redis.conf directive"

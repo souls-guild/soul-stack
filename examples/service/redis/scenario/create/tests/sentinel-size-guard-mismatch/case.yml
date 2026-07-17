@@ -85,4 +85,4 @@ fixtures:
 
 # The run aborts at render: the size-guard assert "Guard sentinel roster size matches
 # replicas" is false (2 != 1+2). Substring — the message of the create/sentinel.yml assert rule.
-expect_render_error: "the run roster host count must be exactly 1+replicas_per_master"
+expect_render_error: "roster host count must be exactly 1+replicas_per_master"

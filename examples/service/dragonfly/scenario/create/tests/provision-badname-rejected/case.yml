@@ -75,4 +75,4 @@ mocks:
         - { sid: vm-2.example.com, vm_id: i-bbb222, primary_ip: 10.0.0.2, bootstrap_token: tok-vm2 }
         - { sid: vm-3.example.com, vm_id: i-ccc333, primary_ip: 10.0.0.3, bootstrap_token: tok-vm3 }
 
-expect_render_error: "incarnation name is not valid as a VM base name"
+expect_render_error: "incarnation name is not valid as a VM-name base"

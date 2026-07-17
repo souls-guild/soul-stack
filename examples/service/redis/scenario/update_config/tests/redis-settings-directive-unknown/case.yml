@@ -71,4 +71,4 @@ fixtures:
 
 # The run aborts at render: assert "Validate redis_settings directive names..." false
 # (maxmemoyr not in catalog[7.2]). Substring — the assert rule's message (update_config/main.yml).
-expect_render_error: "unknown redis_settings directive"
+expect_render_error: "unknown redis.conf directive"

@@ -75,4 +75,4 @@ fixtures:
 
 # Abort at render: size-guard sum-form false (3 != sum(2+2)). The substring is the shared message
 # of the create/cluster.yml assert rule (it's a single one for both forms).
-expect_render_error: "the number of hosts in the run roster must be exactly"
+expect_render_error: "host count must be exactly shards*(1+replicas_per_master)"
