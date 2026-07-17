@@ -17,7 +17,7 @@ func TestMaskSecretsWithSchema_DeclaredSecretMasked(t *testing.T) {
 		t.Errorf("schema-secret password = %v, want masked", out["password"])
 	}
 	if out["hostname"] != "node-01" {
-		t.Errorf("несекретный hostname = %v, want passthrough", out["hostname"])
+		t.Errorf("non-secret hostname = %v, want passthrough", out["hostname"])
 	}
 }
 
@@ -35,14 +35,14 @@ func TestMaskSecretsWithSchema_GenericFieldNotMasked(t *testing.T) {
 	out := MaskSecretsWithSchema(in, SecretPathSet{})
 
 	if out["content"] != "maxmemory 256mb\nappendonly yes\n" {
-		t.Errorf("generic content замаскирован: %v (over-masking!)", out["content"])
+		t.Errorf("generic content masked: %v (over-masking!)", out["content"])
 	}
 	cfg, ok := out["config"].(map[string]any)
 	if !ok {
-		t.Fatalf("config не map: %T", out["config"])
+		t.Fatalf("config is not a map: %T", out["config"])
 	}
 	if cfg["loglevel"] != "notice" || cfg["port"] != 6379 {
-		t.Errorf("generic config поля замаскированы: %v (over-masking!)", cfg)
+		t.Errorf("generic config fields masked: %v (over-masking!)", cfg)
 	}
 }
 
@@ -69,7 +69,7 @@ func TestMaskSecretsWithSchema_NestedAndArrayIndex(t *testing.T) {
 			t.Errorf("acl[%d].password = %v, want masked", i, m["password"])
 		}
 		if m["name"] == maskedValue {
-			t.Errorf("acl[%d].name замаскирован — over-masking", i)
+			t.Errorf("acl[%d].name masked - over-masking", i)
 		}
 	}
 	tls := out["tls"].(map[string]any)
@@ -77,7 +77,7 @@ func TestMaskSecretsWithSchema_NestedAndArrayIndex(t *testing.T) {
 		t.Errorf("tls.key = %v, want masked", tls["key"])
 	}
 	if tls["port"] != 6379 {
-		t.Errorf("tls.port замаскирован — over-masking")
+		t.Errorf("tls.port masked - over-masking")
 	}
 }
 
@@ -97,7 +97,7 @@ func TestMaskSecretsWithSchema_NilSchemaDegradesToMaskSecrets(t *testing.T) {
 		t.Errorf("dsn_ref = %v, want masked (vault)", out["dsn_ref"])
 	}
 	if out["plain"] != "ok" || out["some_data"] != "value" {
-		t.Errorf("несекретные поля замаскированы: %v", out)
+		t.Errorf("non-secret fields masked: %v", out)
 	}
 }
 
@@ -118,7 +118,7 @@ func TestMaskSecretsSealed_RegexFallbackAlarm(t *testing.T) {
 		t.Errorf("bootstrap_token = %v, want masked", out["bootstrap_token"])
 	}
 	if len(fired) != 1 || fired[0] != "bootstrap_token" {
-		t.Fatalf("regex-fallback аларм: got %v, want [bootstrap_token]", fired)
+		t.Fatalf("regex-fallback alarm: got %v, want [bootstrap_token]", fired)
 	}
 }
 
@@ -136,7 +136,7 @@ func TestMaskSecretsSealed_NoAlarmWhenSchemaCatches(t *testing.T) {
 		t.Errorf("api_secret = %v, want masked", out["api_secret"])
 	}
 	if len(fired) != 0 {
-		t.Fatalf("аларм сработал при schema-catch: %v (regex не единственный)", fired)
+		t.Fatalf("alarm fired on schema-catch: %v (regex is not the only one)", fired)
 	}
 }
 
@@ -151,7 +151,7 @@ func TestMaskSecretsSealed_NoAlarmOnVaultRefValue(t *testing.T) {
 		t.Errorf("db_password = %v, want masked", out["db_password"])
 	}
 	if len(fired) != 0 {
-		t.Fatalf("аларм на vault-ref-значении: %v (vault-слой поймал бы сам)", fired)
+		t.Fatalf("alarm on a vault-ref value: %v (the vault layer would catch it itself)", fired)
 	}
 }
 
@@ -177,17 +177,17 @@ func TestMaskSecretsSealed_SealedPaths(t *testing.T) {
 		t.Errorf("sealed content = %v, want masked (a)", out["content"])
 	}
 	if out["requirepass"] != maskedValue {
-		t.Errorf("sealed смешанное = %v, want masked (d)", out["requirepass"])
+		t.Errorf("sealed mixed = %v, want masked (d)", out["requirepass"])
 	}
 	cfg := out["config"].(map[string]any)
 	if cfg["token"] != maskedValue {
 		t.Errorf("sealed config.token = %v, want masked", cfg["token"])
 	}
 	if cfg["port"] != 6379 {
-		t.Errorf("config.port замаскирован — over-masking")
+		t.Errorf("config.port masked - over-masking")
 	}
 	if out["public"] != "not sealed" {
-		t.Errorf("не-sealed public замаскирован — over-masking")
+		t.Errorf("non-sealed public masked - over-masking")
 	}
 }
 
@@ -196,13 +196,13 @@ func TestMaskSecretsSealed_VaultRefAnyKey(t *testing.T) {
 	in := map[string]any{"connection": "host=db pass=vault:kv/app/db#pw"}
 	out := MaskSecretsSealed(in, SealOpts{})
 	if out["connection"] != maskedValue {
-		t.Errorf("vault-ref-значение = %v, want masked", out["connection"])
+		t.Errorf("vault-ref value = %v, want masked", out["connection"])
 	}
 }
 
 func TestMaskSecretsSealed_NilInput(t *testing.T) {
 	if MaskSecretsSealed(nil, SealOpts{}) != nil {
-		t.Fatal("nil-вход → nil-выход")
+		t.Fatal("nil input -> nil output")
 	}
 }
 

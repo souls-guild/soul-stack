@@ -61,23 +61,23 @@ func RegisterConductorMetrics(r *obs.Registry) *ConductorMetrics {
 	m := &ConductorMetrics{
 		LeaseHeld: prometheus.NewGauge(prometheus.GaugeOpts{
 			Name: "keeper_conductor_lease_held",
-			Help: "1 если этот Keeper-инстанс держит Redis-lease лидерства Conductor (conductor:leader), 0 иначе.",
+			Help: "1 if this Keeper instance holds the Redis lease for Conductor leadership (conductor:leader), 0 otherwise.",
 		}),
 		SpawnExecutions: prometheus.NewCounter(prometheus.CounterOpts{
 			Name: "keeper_conductor_spawn_executions_total",
-			Help: "Количество тиков спавна due-Cadence Conductor-лидера.",
+			Help: "Number of due-Cadence spawn ticks by the Conductor leader.",
 		}),
 		SpawnedTotal: prometheus.NewCounter(prometheus.CounterOpts{
 			Name: "keeper_conductor_spawned_total",
-			Help: "Количество Voyage, заспавненных Conductor-ом из созревших Cadence.",
+			Help: "Number of Voyages spawned by the Conductor from due Cadences.",
 		}),
 		SpawnErrors: prometheus.NewCounter(prometheus.CounterOpts{
 			Name: "keeper_conductor_spawn_errors_total",
-			Help: "Количество ошибок тика спавна Conductor (Spawner вернул error).",
+			Help: "Number of Conductor spawn tick errors (Spawner returned an error).",
 		}),
 		SpawnDuration: prometheus.NewHistogram(prometheus.HistogramOpts{
 			Name:    "keeper_conductor_spawn_duration_seconds",
-			Help:    "Длительность тика спавна due-Cadence Conductor в секундах.",
+			Help:    "Duration of the Conductor due-Cadence spawn tick, in seconds.",
 			Buckets: []float64{0.005, 0.01, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10, 30},
 		}),
 	}

@@ -652,7 +652,7 @@ func TestAugur_Semaphore_Overflow(t *testing.T) {
 	select {
 	case <-started:
 	case <-time.After(2 * time.Second):
-		t.Fatal("первый запрос не дошёл до fetch (семафор не занят)")
+		t.Fatal("first request did not reach fetch (semaphore not held)")
 	}
 
 	// Second — semaphore full → immediate ERROR without spawning.
@@ -661,7 +661,7 @@ func TestAugur_Semaphore_Overflow(t *testing.T) {
 	})
 	reply := recvReply(t, outCh)
 	if reply.GetRequestId() != "s-2" {
-		t.Fatalf("ожидался reply на s-2 (overflow), got %q", reply.GetRequestId())
+		t.Fatalf("expected reply on s-2 (overflow), got %q", reply.GetRequestId())
 	}
 	if reply.GetStatus() != keeperv1.AugurStatus_AUGUR_STATUS_ERROR {
 		t.Fatalf("overflow status = %v, want ERROR", reply.GetStatus())
@@ -674,7 +674,7 @@ func TestAugur_Semaphore_Overflow(t *testing.T) {
 	close(release)
 	r1 := recvReply(t, outCh)
 	if r1.GetRequestId() != "s-1" || r1.GetStatus() != keeperv1.AugurStatus_AUGUR_STATUS_OK {
-		t.Errorf("первый запрос: id=%q status=%v, want s-1/OK", r1.GetRequestId(), r1.GetStatus())
+		t.Errorf("first request: id=%q status=%v, want s-1/OK", r1.GetRequestId(), r1.GetStatus())
 	}
 }
 
@@ -802,7 +802,7 @@ func TestAugurMetrics_SemaphoreOverflow(t *testing.T) {
 	select {
 	case <-started:
 	case <-time.After(2 * time.Second):
-		t.Fatal("первый запрос не дошёл до fetch")
+		t.Fatal("first request did not reach fetch")
 	}
 	// Second — rejected by the semaphore.
 	h.handleAugurRequest(context.Background(), sid, "sess", &keeperv1.AugurRequest{

@@ -54,7 +54,7 @@ func TestValidate_AllowHTTP_AcceptsHTTP(t *testing.T) {
 		}),
 	})
 	if !reply.Ok {
-		t.Fatalf("Validate ok=false для http:// при allow_http:true: %v", reply.Errors)
+		t.Fatalf("Validate ok=false for http:// with allow_http:true: %v", reply.Errors)
 	}
 }
 
@@ -69,7 +69,7 @@ func TestValidate_AllowHTTP_StillRejectsFileScheme(t *testing.T) {
 		}),
 	})
 	if reply.Ok {
-		t.Fatal("Validate ok=true для file:// даже с allow_http:true")
+		t.Fatal("Validate ok=true for file:// even with allow_http:true")
 	}
 }
 
@@ -84,7 +84,7 @@ func TestValidate_RejectsNonBoolFlags(t *testing.T) {
 			}),
 		})
 		if reply.Ok {
-			t.Fatalf("Validate ok=true для %s строкой (ожидался тип-чек)", flag)
+			t.Fatalf("Validate ok=true for %s as a string (expected a type check)", flag)
 		}
 	}
 }
@@ -106,10 +106,10 @@ func TestApply_AllowHTTP_HTTPAccepted(t *testing.T) {
 		t.Fatalf("Apply: %v", err)
 	}
 	if stream.Last().Failed {
-		t.Fatalf("failed=true для http:// при allow_http:true: %s", stream.Last().Message)
+		t.Fatalf("failed=true for http:// with allow_http:true: %s", stream.Last().Message)
 	}
 	if d.calls != 1 {
-		t.Fatalf("клиент вызван %d раз (ожидалось 1)", d.calls)
+		t.Fatalf("client called %d times (expected 1)", d.calls)
 	}
 }
 
@@ -128,10 +128,10 @@ func TestApply_AllowHTTP_PropagatesRedirectOpt(t *testing.T) {
 		}),
 	}, stream)
 	if !got.AllowHTTPRedirect {
-		t.Fatal("AllowHTTPRedirect=false при allow_http:true")
+		t.Fatal("AllowHTTPRedirect=false with allow_http:true")
 	}
 	if got.AllowPrivate || got.InsecureSkipVerify {
-		t.Fatalf("allow_http задел чужой контур: %+v", got)
+		t.Fatalf("allow_http touched an unrelated guard: %+v", got)
 	}
 }
 
@@ -150,10 +150,10 @@ func TestApply_InsecureSkipVerify_PropagatesToClientOpts(t *testing.T) {
 		}),
 	}, stream)
 	if !got.InsecureSkipVerify {
-		t.Fatal("InsecureSkipVerify=false при insecure_skip_verify:true")
+		t.Fatal("InsecureSkipVerify=false with insecure_skip_verify:true")
 	}
 	if got.AllowPrivate || got.AllowHTTPRedirect {
-		t.Fatalf("insecure_skip_verify задел чужой контур: %+v", got)
+		t.Fatalf("insecure_skip_verify touched an unrelated guard: %+v", got)
 	}
 }
 
@@ -174,7 +174,7 @@ func TestApply_InsecureSkipVerify_EndToEndTLS(t *testing.T) {
 		"allow_private": true,
 	}
 
-	t.Run("без insecure_skip_verify -> TLS не доверяет -> failed", func(t *testing.T) {
+	t.Run("without insecure_skip_verify -> TLS does not trust -> failed", func(t *testing.T) {
 		m := httpmod.New() // real util.NewHTTPClient factory
 		stream := &internaltest.ApplyStream{}
 		_ = m.Apply(&pluginv1.ApplyRequest{
@@ -182,11 +182,11 @@ func TestApply_InsecureSkipVerify_EndToEndTLS(t *testing.T) {
 			Params: mustStruct(t, base),
 		}, stream)
 		if !stream.Last().Failed {
-			t.Fatal("failed=false для самоподписанного TLS без insecure_skip_verify")
+			t.Fatal("failed=false for a self-signed TLS cert without insecure_skip_verify")
 		}
 	})
 
-	t.Run("insecure_skip_verify:true -> TLS не верифицируется -> ok", func(t *testing.T) {
+	t.Run("insecure_skip_verify:true -> TLS is not verified -> ok", func(t *testing.T) {
 		params := map[string]any{}
 		for k, v := range base {
 			params[k] = v
@@ -202,7 +202,7 @@ func TestApply_InsecureSkipVerify_EndToEndTLS(t *testing.T) {
 		}
 		ev := stream.Last()
 		if ev.Failed {
-			t.Fatalf("failed=true с insecure_skip_verify на самоподписанном TLS: %s", ev.Message)
+			t.Fatalf("failed=true with insecure_skip_verify on a self-signed TLS cert: %s", ev.Message)
 		}
 		if ev.Output.Fields["status"].GetNumberValue() != 200 {
 			t.Fatalf("status=%v want 200", ev.Output.Fields["status"].GetNumberValue())
@@ -247,7 +247,7 @@ func TestApply_OptOutTruthTable(t *testing.T) {
 				AllowPrivate:       allowPrivate,
 			}
 			if got != want {
-				t.Fatalf("opts в фабрике = %+v, ожидалось %+v", got, want)
+				t.Fatalf("opts in the factory = %+v, expected %+v", got, want)
 			}
 		})
 	}
@@ -270,7 +270,7 @@ func TestApply_AllFlags_PropagateOrthogonally(t *testing.T) {
 		}),
 	}, stream)
 	if !got.AllowPrivate || !got.AllowHTTPRedirect || !got.InsecureSkipVerify {
-		t.Fatalf("не все флаги доехали до фабрики: %+v", got)
+		t.Fatalf("not all flags reached the factory: %+v", got)
 	}
 }
 
@@ -285,7 +285,7 @@ func TestApply_NoFlags_SecureByDefault(t *testing.T) {
 		Params: mustStruct(t, map[string]any{"url": "https://example.com/health"}),
 	}, stream)
 	if got.AllowPrivate || got.AllowHTTPRedirect || got.InsecureSkipVerify {
-		t.Fatalf("default не secure-by-default: %+v", got)
+		t.Fatalf("default not secure-by-default: %+v", got)
 	}
 }
 
@@ -301,7 +301,7 @@ func TestApply_NoFlags_NoWarnings(t *testing.T) {
 		Params: mustStruct(t, map[string]any{"url": "https://example.com/health"}),
 	}, stream)
 	if w := warningsOf(stream.Last()); len(w) != 0 {
-		t.Fatalf("warnings без снятых guard-ов: %v", w)
+		t.Fatalf("warnings with no guards disabled: %v", w)
 	}
 }
 
@@ -342,10 +342,10 @@ func TestApply_GuardWarnings(t *testing.T) {
 			}, stream)
 			ws := warningsOf(stream.Last())
 			if !anyWarningContains(ws, c.wantSub) {
-				t.Fatalf("нет warning %q в %v", c.wantSub, ws)
+				t.Fatalf("no warning %q in %v", c.wantSub, ws)
 			}
 			if !anyWarningContains(ws, c.wantHost) {
-				t.Fatalf("host %q не в warning %v", c.wantHost, ws)
+				t.Fatalf("host %q not in warning %v", c.wantHost, ws)
 			}
 		})
 	}
@@ -368,14 +368,14 @@ func TestApply_GuardWarning_NoURLPathNoHeaders(t *testing.T) {
 	}, stream)
 	ws := warningsOf(stream.Last())
 	if len(ws) == 0 {
-		t.Fatal("нет warnings при allow_private:true")
+		t.Fatal("no warnings with allow_private:true")
 	}
 	for _, w := range ws {
 		if strings.Contains(w, "secret-path") || strings.Contains(w, "leak123") {
-			t.Fatalf("URL path/query просочились в warning: %q", w)
+			t.Fatalf("URL path/query leaked into the warning: %q", w)
 		}
 		if strings.Contains(w, "super-secret-token") || strings.Contains(w, "Authorization") {
-			t.Fatalf("headers просочились в warning: %q", w)
+			t.Fatalf("headers leaked into the warning: %q", w)
 		}
 	}
 }
@@ -396,6 +396,6 @@ func TestApply_GuardWarnings_Multiple(t *testing.T) {
 	}, stream)
 	ws := warningsOf(stream.Last())
 	if len(ws) != 3 {
-		t.Fatalf("ожидалось 3 warning-а, получено %d: %v", len(ws), ws)
+		t.Fatalf("expected 3 warnings, got %d: %v", len(ws), ws)
 	}
 }

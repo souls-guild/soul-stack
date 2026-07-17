@@ -70,7 +70,7 @@ func TestUpgradePaths_Cheap_ListsRefs_IsCurrent(t *testing.T) {
 		t.Errorf("current = %q/%d, want v1/1", view.CurrentVersion, view.CurrentStateSchemaVersion)
 	}
 	if view.Target != nil {
-		t.Errorf("Target = %+v, want nil в дешёвом режиме", view.Target)
+		t.Errorf("Target = %+v, want nil in cheap mode", view.Target)
 	}
 	if len(view.Paths) != 3 {
 		t.Fatalf("Paths len = %d, want 3", len(view.Paths))
@@ -80,17 +80,17 @@ func TestUpgradePaths_Cheap_ListsRefs_IsCurrent(t *testing.T) {
 		byRef[p.Ref] = p
 	}
 	if !byRef["v1"].IsCurrent {
-		t.Errorf("v1.IsCurrent = false, want true (текущий пин)")
+		t.Errorf("v1.IsCurrent = false, want true (current pin)")
 	}
 	if byRef["v2"].IsCurrent || byRef["main"].IsCurrent {
-		t.Errorf("не-текущие ref помечены is_current: v2=%v main=%v", byRef["v2"].IsCurrent, byRef["main"].IsCurrent)
+		t.Errorf("non-current refs marked is_current: v2=%v main=%v", byRef["v2"].IsCurrent, byRef["main"].IsCurrent)
 	}
 	if byRef["main"].Type != artifact.GitRefTypeBranch {
 		t.Errorf("main.Type = %q, want branch", byRef["main"].Type)
 	}
 	// Cheap mode does not load snapshots (ADR-0068 §6: only ls-remote).
 	if loader.loadCalls != 0 {
-		t.Errorf("loadCalls = %d, want 0 (дешёвый режим не грузит снапшот)", loader.loadCalls)
+		t.Errorf("loadCalls = %d, want 0 (cheap mode does not load a snapshot)", loader.loadCalls)
 	}
 	if refs.called != 1 {
 		t.Errorf("refs.called = %d, want 1", refs.called)
@@ -132,11 +132,11 @@ func TestUpgradePaths_Target_Found(t *testing.T) {
 		t.Fatalf("UpgradePathsTyped: %v", err)
 	}
 	if view.Paths != nil {
-		t.Errorf("Paths = %+v, want nil в on-demand", view.Paths)
+		t.Errorf("Paths = %+v, want nil in on-demand", view.Paths)
 	}
 	tgt := view.Target
 	if tgt == nil {
-		t.Fatal("Target = nil, want заполнен")
+		t.Fatal("Target = nil, want populated")
 	}
 	if tgt.To != "v2" || tgt.TargetStateSchemaVersion != 2 {
 		t.Errorf("to=%q target_schema=%d, want v2/2", tgt.To, tgt.TargetStateSchemaVersion)
@@ -158,7 +158,7 @@ func TestUpgradePaths_Target_Found(t *testing.T) {
 		t.Errorf("migration step = %+v, want {1 2 migrations/001_to_002.yml}", got)
 	}
 	if !tgt.Reachable || tgt.UnreachableReason != "" {
-		t.Errorf("reachable/reason = %v/%q, want true/empty (цепочка собралась)", tgt.Reachable, tgt.UnreachableReason)
+		t.Errorf("reachable/reason = %v/%q, want true/empty (chain assembled)", tgt.Reachable, tgt.UnreachableReason)
 	}
 }
 
@@ -184,10 +184,10 @@ func TestUpgradePaths_Target_Legacy(t *testing.T) {
 		t.Errorf("direction = %q, want forward", tgt.Direction)
 	}
 	if len(tgt.StateMigrations) != 1 {
-		t.Errorf("StateMigrations len = %d, want 1 (forward грузит цепочку)", len(tgt.StateMigrations))
+		t.Errorf("StateMigrations len = %d, want 1 (forward loads the chain)", len(tgt.StateMigrations))
 	}
 	if !tgt.Reachable {
-		t.Errorf("Reachable = false, want true (forward с собранной цепочкой)")
+		t.Errorf("Reachable = false, want true (forward with an assembled chain)")
 	}
 }
 
@@ -209,20 +209,20 @@ func TestUpgradePaths_Target_Downgrade(t *testing.T) {
 		t.Errorf("direction/downgrade = %q/%v, want downgrade/true", tgt.Direction, tgt.Downgrade)
 	}
 	if tgt.StateMigrations != nil {
-		t.Errorf("StateMigrations = %+v, want nil (downgrade не грузит цепочку)", tgt.StateMigrations)
+		t.Errorf("StateMigrations = %+v, want nil (downgrade does not load the chain)", tgt.StateMigrations)
 	}
 	if loader.chainCalls != 0 {
-		t.Errorf("chainCalls = %d, want 0 (downgrade не зовёт LoadMigrationChain)", loader.chainCalls)
+		t.Errorf("chainCalls = %d, want 0 (downgrade does not call LoadMigrationChain)", loader.chainCalls)
 	}
 	// mode is meaningless for downgrade → empty, ListUpgrades is not called.
 	if tgt.Mode != "" {
-		t.Errorf("mode = %q, want empty (downgrade не вычисляет found/legacy)", tgt.Mode)
+		t.Errorf("mode = %q, want empty (downgrade does not compute found/legacy)", tgt.Mode)
 	}
 	if loader.upgradesCalls != 0 {
-		t.Errorf("upgradesCalls = %d, want 0 (downgrade не зовёт ListUpgrades)", loader.upgradesCalls)
+		t.Errorf("upgradesCalls = %d, want 0 (downgrade does not call ListUpgrades)", loader.upgradesCalls)
 	}
 	if !tgt.Reachable {
-		t.Errorf("Reachable = false, want true (downgrade — другое направление, не «недостижимость»)")
+		t.Errorf("Reachable = false, want true (downgrade is a different direction, not \"unreachable\")")
 	}
 }
 
@@ -240,13 +240,13 @@ func TestUpgradePaths_Target_Noop(t *testing.T) {
 	}
 	// mode is meaningless for no-op → empty, ListUpgrades is not called.
 	if view.Target.Mode != "" {
-		t.Errorf("mode = %q, want empty (no-op не вычисляет found/legacy)", view.Target.Mode)
+		t.Errorf("mode = %q, want empty (no-op does not compute found/legacy)", view.Target.Mode)
 	}
 	if loader.upgradesCalls != 0 {
-		t.Errorf("upgradesCalls = %d, want 0 (no-op не зовёт ListUpgrades)", loader.upgradesCalls)
+		t.Errorf("upgradesCalls = %d, want 0 (no-op does not call ListUpgrades)", loader.upgradesCalls)
 	}
 	if !view.Target.Reachable {
-		t.Errorf("Reachable = false, want true (no-op достижим)")
+		t.Errorf("Reachable = false, want true (no-op is reachable)")
 	}
 }
 
@@ -267,7 +267,7 @@ func TestUpgradePaths_Target_SameSchema(t *testing.T) {
 		t.Errorf("Downgrade = true, want false (same-schema)")
 	}
 	if !view.Target.Reachable {
-		t.Errorf("Reachable = false, want true (same-schema достижим)")
+		t.Errorf("Reachable = false, want true (same-schema is reachable)")
 	}
 }
 
@@ -280,27 +280,27 @@ func TestUpgradePaths_Target_BrokenChain_Unreachable_200(t *testing.T) {
 	h := newUpPathsHandler(upPathsDB(), loader, nil)
 	view, err := h.UpgradePathsTyped(context.Background(), "redis-prod", "v3", alwaysInScope)
 	if err != nil {
-		t.Fatalf("UpgradePathsTyped: %v (битая цепочка — preview-данные, не HTTP-ошибка)", err)
+		t.Fatalf("UpgradePathsTyped: %v (broken chain is preview data, not an HTTP error)", err)
 	}
 	tgt := view.Target
 	if tgt == nil {
 		t.Fatal("Target = nil")
 	}
 	if tgt.Reachable {
-		t.Errorf("Reachable = true, want false (битая цепочка)")
+		t.Errorf("Reachable = true, want false (broken chain)")
 	}
 	wantReason := "migration chain to v3 is broken: " + artifact.ErrMigrationChainBroken.Error()
 	if tgt.UnreachableReason != wantReason {
 		t.Errorf("UnreachableReason = %q, want %q", tgt.UnreachableReason, wantReason)
 	}
 	if tgt.Direction != upgradeDirectionForward {
-		t.Errorf("direction = %q, want forward (цель — апгрейд, недостижима лишь цепочкой)", tgt.Direction)
+		t.Errorf("direction = %q, want forward (target is an upgrade, only the chain is unreachable)", tgt.Direction)
 	}
 	if tgt.Mode != upgradeModeLegacy {
-		t.Errorf("mode = %q, want legacy (mode всё равно вычислен на forward)", tgt.Mode)
+		t.Errorf("mode = %q, want legacy (mode is still computed on forward)", tgt.Mode)
 	}
 	if len(tgt.StateMigrations) != 0 {
-		t.Errorf("StateMigrations = %+v, want пусто (цепочку собрать нельзя)", tgt.StateMigrations)
+		t.Errorf("StateMigrations = %+v, want empty (chain cannot be assembled)", tgt.StateMigrations)
 	}
 }
 

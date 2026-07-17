@@ -74,8 +74,8 @@ func ResolveScenarioCovenant(m *ScenarioManifest, doc *Document, serviceRoot str
 		return []diag.Diagnostic{{
 			Level: diag.LevelError, Phase: diag.PhaseSchemaValidate,
 			File: scenarioPath, Code: "covenant_extends_invalid",
-			Message: fmt.Sprintf("extends: %q — недопустимое имя covenant-фрагмента", name),
-			Hint:    "single-segment kebab-case (^[a-z][a-z0-9-]*$), без разделителей пути",
+			Message: fmt.Sprintf("extends: %q - invalid covenant-fragment name", name),
+			Hint:    "single-segment kebab-case (^[a-z][a-z0-9-]*$), no path separators",
 		}}
 	}
 
@@ -86,14 +86,14 @@ func ResolveScenarioCovenant(m *ScenarioManifest, doc *Document, serviceRoot str
 			return []diag.Diagnostic{{
 				Level: diag.LevelError, Phase: diag.PhaseSchemaValidate,
 				File: scenarioPath, Code: "covenant_extends_target_not_found",
-				Message: fmt.Sprintf("extends: %q — covenant-файл %s в корне сервиса не найден", name, covenantFile),
-				Hint:    "covenant.yml-семейство (<extends>.yml) лежит в корне service-репо, сиблинг service.yml/types.yml",
+				Message: fmt.Sprintf("extends: %q - covenant file %s not found in service root", name, covenantFile),
+				Hint:    "covenant.yml family (<extends>.yml) lives in service-repo root, sibling of service.yml/types.yml",
 			}}
 		}
 		return []diag.Diagnostic{{
 			Level: diag.LevelError, Phase: diag.PhaseParse,
 			File: covenantFile, Code: "io_error", Message: err.Error(),
-			Hint: "covenant-файл присутствует, но не читается — extends не резолвится",
+			Hint: "covenant file is present but unreadable - extends does not resolve",
 		}}
 	}
 
@@ -116,8 +116,8 @@ func ResolveScenarioCovenant(m *ScenarioManifest, doc *Document, serviceRoot str
 		return append(fdiags, diag.Diagnostic{
 			Level: diag.LevelError, Phase: diag.PhaseSchemaValidate,
 			File: scenarioPath, Code: "state_changes_form_mismatch",
-			Message: fmt.Sprintf("extends: %q — covenant и сценарий объявили state_changes в разных формах (list vs map)", name),
-			Hint:    "приведите обе стороны к list-форме state_changes (map-форма deprecated)",
+			Message: fmt.Sprintf("extends: %q - covenant and scenario declared state_changes in different forms (list vs map)", name),
+			Hint:    "bring both sides to the list-form of state_changes (map-form is deprecated)",
 		})
 	}
 
@@ -127,9 +127,9 @@ func ResolveScenarioCovenant(m *ScenarioManifest, doc *Document, serviceRoot str
 			return append(fdiags, diag.Diagnostic{
 				Level: diag.LevelError, Phase: diag.PhaseSchemaValidate,
 				File: scenarioPath, Code: conflict.Code(),
-				Message: fmt.Sprintf("extends: %q — секция %s.%s объявлена и в covenant, и в сценарии (add-only merge запрещает override)",
+				Message: fmt.Sprintf("extends: %q - section %s.%s is declared in both covenant and scenario (add-only merge forbids override)",
 					name, conflict.Section, conflict.Key),
-				Hint: "уберите дубль ключа из одной из сторон — covenant задаёт общий контракт, сценарий добавляет дельту",
+				Hint: "remove the duplicate key from one of the sides - covenant defines the common contract, scenario adds the delta",
 			})
 		}
 		// Other merge errors (not expected for already-validated sections) — pass
@@ -137,7 +137,7 @@ func ResolveScenarioCovenant(m *ScenarioManifest, doc *Document, serviceRoot str
 		return append(fdiags, diag.Diagnostic{
 			Level: diag.LevelError, Phase: diag.PhaseSchemaValidate,
 			File: scenarioPath, Code: "covenant_merge_failed",
-			Message: fmt.Sprintf("extends: %q — слияние covenant не удалось: %s", name, err.Error()),
+			Message: fmt.Sprintf("extends: %q - covenant merge failed: %s", name, err.Error()),
 		})
 	}
 
@@ -186,7 +186,7 @@ func readCovenantFile(serviceRoot, name string) ([]byte, error) {
 	}
 	full, err := securejoin.SecureJoin(serviceRoot, name)
 	if err != nil {
-		return nil, fmt.Errorf("config: небезопасный путь covenant %q: %w", name, err)
+		return nil, fmt.Errorf("config: unsafe covenant path %q: %w", name, err)
 	}
 	// os.ReadFile wraps a missing file in *PathError with fs.ErrNotExist — the
 	// caller's errors.Is catches it, telling "no covenant" from other I/O errors.

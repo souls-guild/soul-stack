@@ -37,7 +37,7 @@ func TestValidate_RejectsUnknownState(t *testing.T) {
 		Params: mustStruct(t, map[string]any{"path": "/etc/x"}),
 	})
 	if reply.Ok {
-		t.Fatal("Validate ok=true для неизвестного state")
+		t.Fatal("Validate ok=true for an unknown state")
 	}
 }
 
@@ -51,7 +51,7 @@ func TestValidate_AcceptsRendered(t *testing.T) {
 		}),
 	})
 	if !reply.Ok {
-		t.Fatalf("Validate ok=false для валидного rendered: %v", reply.Errors)
+		t.Fatalf("Validate ok=false for a valid rendered: %v", reply.Errors)
 	}
 }
 
@@ -62,7 +62,7 @@ func TestValidate_Rendered_RequiresTemplateContent(t *testing.T) {
 		Params: mustStruct(t, map[string]any{"path": "/etc/x"}),
 	})
 	if reply.Ok {
-		t.Fatal("Validate ok=true для rendered без template_content")
+		t.Fatal("Validate ok=true for rendered without template_content")
 	}
 }
 
@@ -288,7 +288,7 @@ func TestApply_Present_Src_CreatesFromSource(t *testing.T) {
 		t.Fatalf("mode=%v want 0600", info.Mode().Perm())
 	}
 	if ev.Output.Fields["sha256"].GetStringValue() != sha("binary payload\n") {
-		t.Fatal("sha256 mismatch (должен быть хэш содержимого src)")
+		t.Fatal("sha256 mismatch (must be the hash of src content)")
 	}
 }
 
@@ -297,10 +297,10 @@ func TestApply_Present_Src_IdempotentSecondRun(t *testing.T) {
 	dst := filepath.Join(t.TempDir(), "dest")
 
 	if ev := applyPresent(t, map[string]any{"path": dst, "src": src}).Last(); !ev.Changed {
-		t.Fatal("первый прогон: changed=false")
+		t.Fatal("first run: changed=false")
 	}
 	if ev := applyPresent(t, map[string]any{"path": dst, "src": src}).Last(); ev.Changed {
-		t.Fatal("второй прогон того же src: changed=true (нет идемпотентности)")
+		t.Fatal("second run of the same src: changed=true (not idempotent)")
 	}
 }
 
@@ -349,7 +349,7 @@ func TestApply_Present_Src_GroupDrift(t *testing.T) {
 	_, ownGID := statUIDGID(t, dst)
 	targetGID, ok := foreignGID(t, ownGID)
 	if !ok {
-		t.Skip("нет supplementary-группы для chgrp без root")
+		t.Skip("no supplementary group for chgrp without root")
 	}
 
 	m := file.New()
@@ -366,7 +366,7 @@ func TestApply_Present_Src_GroupDrift(t *testing.T) {
 		t.Fatalf("changed=%v failed=%v want changed=true (group drift)", ev.Changed, ev.Failed)
 	}
 	if _, gid := statUIDGID(t, dst); gid != targetGID {
-		t.Fatalf("gid=%d want %d (chgrp не выполнен)", gid, targetGID)
+		t.Fatalf("gid=%d want %d (chgrp not performed)", gid, targetGID)
 	}
 }
 
@@ -381,7 +381,7 @@ func TestValidate_Present_ContentSrcMutuallyExclusive(t *testing.T) {
 		}),
 	})
 	if reply.Ok {
-		t.Fatal("Validate ok=true для content+src (должен быть конфликт)")
+		t.Fatal("Validate ok=true for content+src (should be a conflict)")
 	}
 	if !hasErr(reply.Errors, "mutually exclusive") {
 		t.Fatalf("errors=%v want mutually-exclusive", reply.Errors)
@@ -395,7 +395,7 @@ func TestApply_Present_ContentSrcMutuallyExclusive(t *testing.T) {
 		"src":     "/opt/payload",
 	}).Last()
 	if !ev.Failed {
-		t.Fatal("failed=false для content+src")
+		t.Fatal("failed=false for content+src")
 	}
 }
 
@@ -408,7 +408,7 @@ func TestApply_Present_EmptyContentPlusSrc_StillConflict(t *testing.T) {
 		"src":     seedSrc(t, "payload"),
 	}).Last()
 	if !ev.Failed {
-		t.Fatal("failed=false для content:\"\"+src (конфликт должен ловиться по ключу)")
+		t.Fatal("failed=false for content:\"\"+src (conflict must be caught by key presence)")
 	}
 }
 
@@ -418,7 +418,7 @@ func TestApply_Present_Src_Missing_Fails(t *testing.T) {
 		"src":  filepath.Join(t.TempDir(), "nope"),
 	}).Last()
 	if !ev.Failed {
-		t.Fatal("failed=false для отсутствующего src")
+		t.Fatal("failed=false for a missing src")
 	}
 	if !hasErr([]string{ev.Message}, "no such file") {
 		t.Fatalf("message=%q want no-such-file", ev.Message)
@@ -432,7 +432,7 @@ func TestApply_Present_Src_Directory_Fails(t *testing.T) {
 		"src":  srcDir,
 	}).Last()
 	if !ev.Failed {
-		t.Fatal("failed=false для src-каталога")
+		t.Fatal("failed=false for a src directory")
 	}
 	if !hasErr([]string{ev.Message}, "not a regular file") {
 		t.Fatalf("message=%q want not-a-regular-file", ev.Message)
@@ -451,7 +451,7 @@ func TestApply_Present_Src_Symlink_Fails(t *testing.T) {
 		"src":  link,
 	}).Last()
 	if !ev.Failed {
-		t.Fatal("failed=false для src-симлинка (Lstat должен reject-ить)")
+		t.Fatal("failed=false for a src symlink (Lstat must reject)")
 	}
 	if !hasErr([]string{ev.Message}, "not a regular file") {
 		t.Fatalf("message=%q want not-a-regular-file", ev.Message)
@@ -464,7 +464,7 @@ func TestApply_Present_Src_Relative_Fails(t *testing.T) {
 		"src":  "relative/payload",
 	}).Last()
 	if !ev.Failed {
-		t.Fatal("failed=false для относительного src")
+		t.Fatal("failed=false for a relative src")
 	}
 	if !hasErr([]string{ev.Message}, "must be absolute") {
 		t.Fatalf("message=%q want must-be-absolute", ev.Message)
@@ -478,7 +478,7 @@ func TestValidate_Present_Src_Relative_Fails(t *testing.T) {
 		Params: mustStruct(t, map[string]any{"path": "/etc/x", "src": "relative/payload"}),
 	})
 	if reply.Ok {
-		t.Fatal("Validate ok=true для относительного src")
+		t.Fatal("Validate ok=true for a relative src")
 	}
 	if !hasErr(reply.Errors, "must be absolute") {
 		t.Fatalf("errors=%v want must-be-absolute", reply.Errors)
@@ -500,7 +500,7 @@ func TestApply_Present_Src_AtomicNoLeftoverTemp(t *testing.T) {
 	}
 	for _, e := range entries {
 		if e.Name() != "dest" {
-			t.Fatalf("остаточный temp-файл после atomic-записи: %s", e.Name())
+			t.Fatalf("leftover temp file after an atomic write: %s", e.Name())
 		}
 	}
 }

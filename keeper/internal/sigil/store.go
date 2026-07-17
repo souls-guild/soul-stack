@@ -78,9 +78,9 @@ var (
 	_ ExecQueryRower = (pgx.Tx)(nil)
 )
 
-// insertSigilSQL writes commit_sha as NULLIF($9, “”): empty CommitSHA
+// insertSigilSQL writes commit_sha as NULLIF($9, ""): empty CommitSHA
 // (legacy operator-asserted / resolver fill comes in S4) is stored as NULL in DB,
-// preserving semantics of “origin unknown” rather than empty string.
+// preserving semantics of "origin unknown" rather than empty string.
 const insertSigilSQL = `
 INSERT INTO plugin_sigils (namespace, name, ref, sha256, signature, manifest, allowed_by_aid, manifest_raw, commit_sha)
 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NULLIF($9, ''))
@@ -88,7 +88,7 @@ RETURNING id, allowed_at
 `
 
 // selectActiveByKeySQL / listActiveSQL reads commit_sha via
-// COALESCE(..., “”) (NULL → “” for legacy/pre-038 rows), so scanning into a string
+// COALESCE(..., "") (NULL → "" for legacy/pre-038 rows), so scanning into a string
 // field does not require a pointer.
 const selectActiveByKeySQL = `
 SELECT id, namespace, name, ref, sha256, signature, manifest, manifest_raw,

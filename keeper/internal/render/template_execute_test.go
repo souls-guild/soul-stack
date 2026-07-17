@@ -95,16 +95,16 @@ func TestRenderToSoulExecute_GoldenPath(t *testing.T) {
 	// Keeper delivered literal template_content (not a path).
 	tc := fields[paramTemplateContent].GetStringValue()
 	if tc == "" {
-		t.Fatal("template_content пуст — Keeper не доставил содержимое .tmpl")
+		t.Fatal("template_content empty - Keeper did not deliver .tmpl content")
 	}
 	if _, ok := fields[paramTemplate]; ok {
-		t.Error("template-путь должен быть удалён из params (Soul читает только template_content)")
+		t.Error("template-path must be removed from params (Soul only reads template_content)")
 	}
 
 	// Keeper built render_context = §3.2 root {vars,self,role,essence}.
 	rcVal, ok := fields[paramRenderContext]
 	if !ok {
-		t.Fatal("render_context отсутствует в params — Keeper не собрал корень §3.2")
+		t.Fatal("render_context missing from params - Keeper did not assemble the §3.2 root")
 	}
 	renderContext := rcVal.GetStructValue().AsMap()
 
@@ -115,25 +115,25 @@ func TestRenderToSoulExecute_GoldenPath(t *testing.T) {
 	}
 	out, err := engine.Render(tc, renderContext)
 	if err != nil {
-		t.Fatalf("soul-render упал (это и есть BUG-A, если падает на missing self): %v", err)
+		t.Fatalf("soul-render failed (this is exactly BUG-A if it fails on missing self): %v", err)
 	}
 
 	// .self.network.primary_ip substituted (used to fail "no entry for key self").
 	if !strings.Contains(out, "bind 10.0.0.7 127.0.0.1") {
-		t.Errorf(".self.network.primary_ip не подставлен:\n%s", out)
+		t.Errorf(".self.network.primary_ip not substituted:\n%s", out)
 	}
 	if !strings.Contains(out, "family debian") {
-		t.Errorf(".self.os.family не подставлен:\n%s", out)
+		t.Errorf(".self.os.family not substituted:\n%s", out)
 	}
 	// .vars.* substituted from CEL-rendered params.
 	if !strings.Contains(out, "unixsocket /run/redis/redis.sock") {
-		t.Errorf(".vars.socket не подставлен:\n%s", out)
+		t.Errorf(".vars.socket not substituted:\n%s", out)
 	}
 	if !strings.Contains(out, "maxmemory 512mb") {
-		t.Errorf(".vars.maxmemory (из essence) не подставлен:\n%s", out)
+		t.Errorf(".vars.maxmemory (from essence) not substituted:\n%s", out)
 	}
 	if !strings.Contains(out, "requirepass s3cr3t") {
-		t.Errorf(".vars.password (из input) не подставлен:\n%s", out)
+		t.Errorf(".vars.password (from input) not substituted:\n%s", out)
 	}
 }
 
@@ -219,7 +219,7 @@ func TestRenderToSoulExecute_CompositeSelfKeys_SnakeCase(t *testing.T) {
 	}
 	out, err := engine.Render(tc, renderContext)
 	if err != nil {
-		t.Fatalf("soul-render упал на composite snake-ключе (BUG-A): %v", err)
+		t.Fatalf("soul-render failed on composite snake-key (BUG-A): %v", err)
 	}
 
 	for _, want := range []string{
@@ -229,7 +229,7 @@ func TestRenderToSoulExecute_CompositeSelfKeys_SnakeCase(t *testing.T) {
 		"family debian",
 	} {
 		if !strings.Contains(out, want) {
-			t.Errorf("ожидалось %q в рендере (snake-канон .self.*):\n%s", want, out)
+			t.Errorf("expected %q in the render (snake-canon .self.*):\n%s", want, out)
 		}
 	}
 }

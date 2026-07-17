@@ -120,7 +120,7 @@ func TestBuildChangedTasks_StagedPlanIndexCorrelation(t *testing.T) {
 
 	got := buildChangedTasks(tasks, plans, keys)
 	if len(got) != 1 {
-		t.Fatalf("got %d, want 1 (changed-задача под staged должна корелировать по глобальному plan_index)", len(got))
+		t.Fatalf("got %d, want 1 (changed task under staged should correlate by global plan_index)", len(got))
 	}
 	if got[0].ChangedHosts != 1 || got[0].Register != "rst" {
 		t.Errorf("ChangedHosts=%d Register=%q, want 1/rst", got[0].ChangedHosts, got[0].Register)
@@ -145,7 +145,7 @@ func TestBuildChangedTasks_StagedLocalIdxMiscorrelates(t *testing.T) {
 
 	got := buildChangedTasks(tasks, plans, keys)
 	if len(got) != 0 {
-		t.Fatalf("got %d, want 0 — ключ по ЛОКАЛЬНОМУ task_idx (2) не должен матчить глобальный Index (5): %+v", len(got), got)
+		t.Fatalf("got %d, want 0 - a key by LOCAL task_idx (2) must not match the global Index (5): %+v", len(got), got)
 	}
 }
 

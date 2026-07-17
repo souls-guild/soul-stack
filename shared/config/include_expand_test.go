@@ -14,7 +14,7 @@ func mapResolver(files map[string]string) IncludeResolver {
 	return func(name string) ([]byte, string, error) {
 		data, ok := files[name]
 		if !ok {
-			return nil, "", fmt.Errorf("файл %q не найден", name)
+			return nil, "", fmt.Errorf("file %q not found", name)
 		}
 		return []byte(data), name, nil
 	}
@@ -83,7 +83,7 @@ func TestExpandIncludes_DirectCycle(t *testing.T) {
 	}
 	_, diags := ExpandIncludes(root, mapResolver(files))
 	if !hasCode(diags, "include_cycle") {
-		t.Fatalf("ожидался include_cycle, diagnostics: %v", diags)
+		t.Fatalf("expected include_cycle, diagnostics: %v", diags)
 	}
 }
 
@@ -95,7 +95,7 @@ func TestExpandIncludes_MutualCycle(t *testing.T) {
 	}
 	_, diags := ExpandIncludes(root, mapResolver(files))
 	if !hasCode(diags, "include_cycle") {
-		t.Fatalf("ожидался include_cycle для a→b→a, diagnostics: %v", diags)
+		t.Fatalf("expected include_cycle for a->b->a, diagnostics: %v", diags)
 	}
 }
 
@@ -103,7 +103,7 @@ func TestExpandIncludes_ResolveError(t *testing.T) {
 	root := []Task{{Include: &IncludeTask{Include: "missing.yml"}}}
 	_, diags := ExpandIncludes(root, mapResolver(map[string]string{}))
 	if !hasCode(diags, "include_resolve_failed") {
-		t.Fatalf("ожидался include_resolve_failed, diagnostics: %v", diags)
+		t.Fatalf("expected include_resolve_failed, diagnostics: %v", diags)
 	}
 }
 
@@ -115,7 +115,7 @@ func TestExpandIncludes_ParseErrorInSub(t *testing.T) {
 	}
 	_, diags := ExpandIncludes(root, mapResolver(files))
 	if !diag.HasErrors(diags) {
-		t.Fatalf("ожидалась диагностика парсинга подключённого файла, diagnostics: %v", diags)
+		t.Fatalf("expected a parse diagnostic for the included file, diagnostics: %v", diags)
 	}
 }
 
@@ -133,7 +133,7 @@ func TestExpandIncludes_ModifierUnsupported(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			_, diags := ExpandIncludes([]Task{task}, mapResolver(files))
 			if !hasCode(diags, "include_modifier_unsupported") {
-				t.Fatalf("ожидался include_modifier_unsupported, diagnostics: %v", diags)
+				t.Fatalf("expected include_modifier_unsupported, diagnostics: %v", diags)
 			}
 		})
 	}
@@ -148,7 +148,7 @@ func TestExpandIncludes_DepthExceeded(t *testing.T) {
 	resolve := func(name string) ([]byte, string, error) {
 		var n int
 		if _, err := fmt.Sscanf(name, "level-%d.yml", &n); err != nil {
-			return nil, "", fmt.Errorf("неожиданное имя %q", name)
+			return nil, "", fmt.Errorf("unexpected name %q", name)
 		}
 		if n >= depth {
 			return []byte("- name: leaf\n  module: core.cmd.shell\n  params: { cmd: 'true' }\n"), name, nil
@@ -159,7 +159,7 @@ func TestExpandIncludes_DepthExceeded(t *testing.T) {
 	root := []Task{{Include: &IncludeTask{Include: "level-0.yml"}}}
 	_, diags := ExpandIncludes(root, resolve)
 	if !hasCode(diags, "include_depth_exceeded") {
-		t.Fatalf("ожидался include_depth_exceeded для цепочки глубиной %d, diagnostics: %v", depth, diags)
+		t.Fatalf("expected include_depth_exceeded for a chain of depth %d, diagnostics: %v", depth, diags)
 	}
 }
 
@@ -172,7 +172,7 @@ func levelChainResolver(leafLevel int) IncludeResolver {
 	return func(name string) ([]byte, string, error) {
 		var n int
 		if _, err := fmt.Sscanf(name, "level-%d.yml", &n); err != nil {
-			return nil, "", fmt.Errorf("неожиданное имя %q", name)
+			return nil, "", fmt.Errorf("unexpected name %q", name)
 		}
 		if n >= leafLevel {
 			return []byte("- name: leaf\n  module: core.cmd.shell\n  params: { cmd: 'true' }\n"), name, nil
@@ -214,7 +214,7 @@ func TestExpandIncludes_DepthBoundary(t *testing.T) {
 			if !tc.wantExc {
 				// At the boundary the chain expands to a single leaf.
 				if diag.HasErrors(diags) {
-					t.Fatalf("на границе depth=%d unexpected diagnostics: %v", tc.leafLevel, diags)
+					t.Fatalf("at boundary depth=%d unexpected diagnostics: %v", tc.leafLevel, diags)
 				}
 				if names := moduleNames(got); len(names) != 1 || names[0] != "core.cmd.shell" {
 					t.Fatalf("modules = %v, want [core.cmd.shell]", names)
@@ -239,7 +239,7 @@ func TestExpandIncludes_Diamond(t *testing.T) {
 	}
 	got, diags := ExpandIncludes(root, mapResolver(files))
 	if diag.HasErrors(diags) {
-		t.Fatalf("diamond не должен давать ошибок (это не цикл), diagnostics: %v", diags)
+		t.Fatalf("diamond should not produce errors (this is not a cycle), diagnostics: %v", diags)
 	}
 	names := moduleNames(got)
 	count := 0
@@ -249,7 +249,7 @@ func TestExpandIncludes_Diamond(t *testing.T) {
 		}
 	}
 	if count != 2 {
-		t.Fatalf("leaf-задача встречается %d раз(а), want 2 (diamond раскрывается дважды); modules = %v", count, names)
+		t.Fatalf("leaf task occurs %d time(s), want 2 (diamond expands twice); modules = %v", count, names)
 	}
 }
 
@@ -259,11 +259,11 @@ func TestExpandIncludes_Diamond(t *testing.T) {
 // fields" regression (Name is deliberately outside includeModifierReason: an
 // include node's name is a legitimate label, not scope/control).
 func TestExpandIncludes_NameAllowed(t *testing.T) {
-	root := []Task{{Name: "подключаю install", Include: &IncludeTask{Include: "x.yml"}}}
+	root := []Task{{Name: "include install", Include: &IncludeTask{Include: "x.yml"}}}
 	files := map[string]string{"x.yml": "- name: a\n  module: core.cmd.shell\n  params: { cmd: 'true' }\n"}
 	got, diags := ExpandIncludes(root, mapResolver(files))
 	if hasCode(diags, "include_modifier_unsupported") {
-		t.Fatalf("name: на include-задаче не должен отвергаться, diagnostics: %v", diags)
+		t.Fatalf("name: on an include task should not be rejected, diagnostics: %v", diags)
 	}
 	if diag.HasErrors(diags) {
 		t.Fatalf("unexpected diagnostics: %v", diags)
@@ -313,12 +313,12 @@ func TestExpandIncludes_DuplicateAddressAcrossInclude(t *testing.T) {
 `, tc.sub)
 			rootTasks, diags, _ := LoadDestinyTasksFromBytes("tasks/main.yml", []byte(rootSrc), ValidateOptions{})
 			if diag.HasErrors(diags) {
-				t.Fatalf("root-файл не должен иметь per-file ошибок (дубль cross-file): %v", diags)
+				t.Fatalf("root file should not have per-file errors (cross-file dup): %v", diags)
 			}
 			files := map[string]string{"sub.yml": subSrc}
 			_, idiags := ExpandIncludes(rootTasks, mapResolver(files))
 			if !hasCode(idiags, "duplicate_task_address") {
-				t.Fatalf("ожидался duplicate_task_address через include, diagnostics: %v", idiags)
+				t.Fatalf("expected duplicate_task_address via include, diagnostics: %v", idiags)
 			}
 		})
 	}
@@ -348,7 +348,7 @@ func TestExpandIncludes_UniqueAddressAcrossInclude(t *testing.T) {
 	}
 	_, idiags := ExpandIncludes(rootTasks, mapResolver(files))
 	if diag.HasErrors(idiags) {
-		t.Fatalf("уникальные адреса через include не должны давать ошибок: %v", idiags)
+		t.Fatalf("unique addresses via include should not produce errors: %v", idiags)
 	}
 }
 
@@ -375,26 +375,26 @@ func TestExpandIncludes_ConditionalWhenCarriesThrough(t *testing.T) {
 	}
 	got, diags := ExpandIncludes(root, mapResolver(files))
 	if diag.HasErrors(diags) {
-		t.Fatalf("статический when на include не должен давать ошибок: %v", diags)
+		t.Fatalf("a static when on include should not produce errors: %v", diags)
 	}
 	if len(got) != 3 {
-		t.Fatalf("len = %d, want 3 (head + 2 вклеенных)", len(got))
+		t.Fatalf("len = %d, want 3 (head + 2 spliced)", len(got))
 	}
 	// Head — outside the conditional include.
 	if got[0].IncludeGroupID != 0 || got[0].IncludeWhen != "" {
-		t.Errorf("head: IncludeGroupID=%d IncludeWhen=%q, want 0/\"\" (безусловная задача)", got[0].IncludeGroupID, got[0].IncludeWhen)
+		t.Errorf("head: IncludeGroupID=%d IncludeWhen=%q, want 0/\"\" (unconditional task)", got[0].IncludeGroupID, got[0].IncludeWhen)
 	}
 	// Both spliced tasks carry the same group-id and include-when.
 	for _, gi := range []int{1, 2} {
 		if got[gi].IncludeGroupID == 0 {
-			t.Errorf("got[%d].IncludeGroupID = 0, want != 0 (условный include)", gi)
+			t.Errorf("got[%d].IncludeGroupID = 0, want != 0 (conditional include)", gi)
 		}
 		if got[gi].IncludeWhen != "input.topology == 'cluster'" {
-			t.Errorf("got[%d].IncludeWhen = %q, want протянутый include-when", gi, got[gi].IncludeWhen)
+			t.Errorf("got[%d].IncludeWhen = %q, want threaded-through include-when", gi, got[gi].IncludeWhen)
 		}
 	}
 	if got[1].IncludeGroupID != got[2].IncludeGroupID {
-		t.Errorf("задачи одной include-группы получили РАЗНЫЕ group-id: %d vs %d", got[1].IncludeGroupID, got[2].IncludeGroupID)
+		t.Errorf("tasks in one include group got DIFFERENT group-ids: %d vs %d", got[1].IncludeGroupID, got[2].IncludeGroupID)
 	}
 }
 
@@ -417,10 +417,10 @@ func TestExpandIncludes_ConditionalGroupsDistinct(t *testing.T) {
 		t.Fatalf("len = %d, want 2", len(got))
 	}
 	if got[0].IncludeGroupID == got[1].IncludeGroupID {
-		t.Errorf("два разных условных include получили ОДИН group-id %d — дроп смешался бы", got[0].IncludeGroupID)
+		t.Errorf("two different conditional includes got ONE group-id %d - drop would mix them", got[0].IncludeGroupID)
 	}
 	if got[0].IncludeWhen != "input.x" || got[1].IncludeWhen != "input.y" {
-		t.Errorf("include-when группы спутан: %q / %q", got[0].IncludeWhen, got[1].IncludeWhen)
+		t.Errorf("include-when groups mixed up: %q / %q", got[0].IncludeWhen, got[1].IncludeWhen)
 	}
 }
 
@@ -455,10 +455,10 @@ func TestExpandIncludes_NestedConditionalConjoinsWhen(t *testing.T) {
 	}
 	// inner → inner group: effective when = conjunction of ancestor and its own.
 	if got[1].IncludeWhen != "(input.x) && (input.y)" {
-		t.Errorf("inner.IncludeWhen = %q, want \"(input.x) && (input.y)\" (конъюнкция предка для каскадного дропа)", got[1].IncludeWhen)
+		t.Errorf("inner.IncludeWhen = %q, want \"(input.x) && (input.y)\" (ancestor conjunction for cascading drop)", got[1].IncludeWhen)
 	}
 	if got[0].IncludeGroupID == got[1].IncludeGroupID {
-		t.Errorf("внешняя и вложенная группы получили один group-id %d — дроп вложенной зависел бы от внешнего when", got[0].IncludeGroupID)
+		t.Errorf("outer and nested groups got one group-id %d - the nested drop would depend on the outer when", got[0].IncludeGroupID)
 	}
 }
 
@@ -491,7 +491,7 @@ func TestExpandIncludes_NestedConditionalThroughUnconditional(t *testing.T) {
 	// mid-direct → outer conditional group (input.x): the unconditional mid does
 	// not reset the accumulated ancestor, and the outer stamp brands its tasks with its when.
 	if got[0].IncludeWhen != "input.x" {
-		t.Errorf("mid-direct.IncludeWhen = %q, want input.x (ancestor сквозь безусловный include)", got[0].IncludeWhen)
+		t.Errorf("mid-direct.IncludeWhen = %q, want input.x (ancestor through an unconditional include)", got[0].IncludeWhen)
 	}
 	// inner → conjunction of ancestor (input.x) and its own (input.y).
 	if got[1].IncludeWhen != "(input.x) && (input.y)" {
@@ -533,7 +533,7 @@ func TestExpandIncludes_ThreeLevelConjunction(t *testing.T) {
 	// Three DIFFERENT group-ids (dropping each level is its own evaluation of its conjunction).
 	ids := map[int]bool{byName["t1"].IncludeGroupID: true, byName["t2"].IncludeGroupID: true, byName["t3"].IncludeGroupID: true}
 	if len(ids) != 3 {
-		t.Errorf("ожидались 3 различных group-id, got %v", ids)
+		t.Errorf("expected 3 different group-ids, got %v", ids)
 	}
 }
 
@@ -552,7 +552,7 @@ func TestExpandIncludes_DynamicWhenRejected(t *testing.T) {
 			root := []Task{{Include: &IncludeTask{Include: "x.yml"}, When: when}}
 			_, diags := ExpandIncludes(root, mapResolver(files))
 			if !hasCode(diags, "include_when_dynamic_unsupported") {
-				t.Fatalf("ожидался include_when_dynamic_unsupported для when %q, diagnostics: %v", when, diags)
+				t.Fatalf("expected include_when_dynamic_unsupported for when %q, diagnostics: %v", when, diags)
 			}
 		})
 	}
@@ -577,7 +577,7 @@ func TestConditionalInclude_CrossFileRegisterRejectedOffline(t *testing.T) {
 `
 	_, diags, _ := LoadDestinyTasksFromBytes("scenario/create/main.yml", []byte(mainSrc), ValidateOptions{})
 	if !hasCode(diags, "unknown_register_reference") {
-		t.Fatalf("cross-file onchanges на register included-файла обязан отвергаться офлайн (unknown_register_reference), diagnostics: %v", diags)
+		t.Fatalf("cross-file onchanges on an included file's register must be rejected offline (unknown_register_reference), diagnostics: %v", diags)
 	}
 }
 
@@ -588,6 +588,6 @@ func TestExpandIncludes_NoInclude(t *testing.T) {
 		t.Fatalf("unexpected diagnostics: %v", diags)
 	}
 	if len(got) != 1 {
-		t.Fatalf("len = %d, want 1 (passthrough без include)", len(got))
+		t.Fatalf("len = %d, want 1 (passthrough without include)", len(got))
 	}
 }

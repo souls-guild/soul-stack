@@ -40,11 +40,11 @@ func TestRender_OnFail_ResolvesNameToIndex(t *testing.T) {
 		t.Fatalf("len(tasks) = %d, want 2", len(tasks))
 	}
 	if tasks[0].OnFailIdx != nil {
-		t.Errorf("источник: OnFailIdx = %v, want nil (не-onfail-задача)", tasks[0].OnFailIdx)
+		t.Errorf("source: OnFailIdx = %v, want nil (not an onfail task)", tasks[0].OnFailIdx)
 	}
 	got := tasks[1].OnFailIdx
 	if len(got) != 1 || got[0] != 0 {
-		t.Errorf("rescue: OnFailIdx = %v, want [0] (индекс задачи migration)", got)
+		t.Errorf("rescue: OnFailIdx = %v, want [0] (index of the migration task)", got)
 	}
 }
 
@@ -70,7 +70,7 @@ func TestRender_OnFail_UnknownRegister(t *testing.T) {
 	p := NewPipeline(nil, newEngine(t), nil, nil)
 	_, _, err := p.Render(context.Background(), onChangesRenderInput(onFailScenario([]string{"typo_migration"})))
 	if err == nil {
-		t.Fatal("Render: ожидалась ошибка на несуществующий onfail register, got nil")
+		t.Fatal("Render: expected an error for a nonexistent onfail register, got nil")
 	}
 	if !errors.Is(err, ErrOnFailUnknownRegister) {
 		t.Errorf("err = %v, want ErrOnFailUnknownRegister", err)

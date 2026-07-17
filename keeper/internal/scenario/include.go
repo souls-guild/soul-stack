@@ -34,15 +34,15 @@ func scenarioIncludeResolver(loader *artifact.ServiceLoader, art *artifact.Servi
 		// Fall back to service-level ONLY when the local file is absent; an
 		// I/O error (permission denied, broken symlink) must never be masked.
 		if !errors.Is(err, fs.ErrNotExist) {
-			return nil, "", fmt.Errorf("include %q: чтение локально (%s): %w", name, local, err)
+			return nil, "", fmt.Errorf("include %q: reading locally (%s): %w", name, local, err)
 		}
 		service := path.Join(serviceDir, name)
 		data, err = loader.ReadFile(art, service)
 		if err != nil {
 			if errors.Is(err, fs.ErrNotExist) {
-				return nil, "", fmt.Errorf("include %q не найден ни локально (%s), ни на service-level (%s)", name, local, service)
+				return nil, "", fmt.Errorf("include %q not found either locally (%s) or at service-level (%s)", name, local, service)
 			}
-			return nil, "", fmt.Errorf("include %q: чтение service-level (%s): %w", name, service, err)
+			return nil, "", fmt.Errorf("include %q: reading service-level (%s): %w", name, service, err)
 		}
 		return data, service, nil
 	}

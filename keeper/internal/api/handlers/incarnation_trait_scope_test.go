@@ -60,7 +60,7 @@ func TestIncarnation_Get_TraitScalarMatch_200(t *testing.T) {
 		fakeIncScoper{traitExprs: []string{"env:prod"}}, nil)
 	rec := doIncGet(t, h, "redis-prod")
 	if rec.Code != http.StatusOK {
-		t.Errorf("Code = %d, want 200 (scalar trait env=prod в scope)", rec.Code)
+		t.Errorf("Code = %d, want 200 (scalar trait env=prod in scope)", rec.Code)
 	}
 }
 
@@ -76,7 +76,7 @@ func TestIncarnation_Get_TraitScalarMismatch_404(t *testing.T) {
 		fakeIncScoper{traitExprs: []string{"env:prod"}}, nil)
 	rec := doIncGet(t, h, "redis-prod")
 	if rec.Code != http.StatusNotFound {
-		t.Errorf("Code = %d, want 404 (trait env=stage не матчит scope env=prod)", rec.Code)
+		t.Errorf("Code = %d, want 404 (trait env=stage does not match scope env=prod)", rec.Code)
 	}
 }
 
@@ -94,7 +94,7 @@ func TestIncarnation_Get_TraitListLabel_404(t *testing.T) {
 		fakeIncScoper{traitExprs: []string{"env:prod"}}, nil)
 	rec := doIncGet(t, h, "redis-prod")
 	if rec.Code != http.StatusNotFound {
-		t.Errorf("Code = %d, want 404 (list-метка env=[prod,stage] НЕ матчит scalar-scope env=prod — BUG#1)", rec.Code)
+		t.Errorf("Code = %d, want 404 (list label env=[prod,stage] does NOT match scalar-scope env=prod - BUG#1)", rec.Code)
 	}
 }
 
@@ -109,7 +109,7 @@ func TestIncarnation_Get_TraitMissingKey_404(t *testing.T) {
 		fakeIncScoper{traitExprs: []string{"env:prod"}}, nil)
 	rec := doIncGet(t, h, "redis-prod")
 	if rec.Code != http.StatusNotFound {
-		t.Errorf("Code = %d, want 404 (ключ env отсутствует в traits)", rec.Code)
+		t.Errorf("Code = %d, want 404 (key env absent from traits)", rec.Code)
 	}
 }
 
@@ -125,7 +125,7 @@ func TestIncarnation_Get_TraitNumberMatch_200(t *testing.T) {
 		fakeIncScoper{traitExprs: []string{"shard:3"}}, nil)
 	rec := doIncGet(t, h, "redis-prod")
 	if rec.Code != http.StatusOK {
-		t.Errorf("Code = %d, want 200 (числовая scalar-метка shard=3)", rec.Code)
+		t.Errorf("Code = %d, want 200 (numeric scalar label shard=3)", rec.Code)
 	}
 }
 
@@ -144,7 +144,7 @@ func TestIncarnation_Get_TraitOR_CovenMatch_200(t *testing.T) {
 		fakeIncScoper{covens: []string{"prod"}, traitExprs: []string{"env:prod"}}, nil)
 	rec := doIncGet(t, h, "redis-prod")
 	if rec.Code != http.StatusOK {
-		t.Errorf("Code = %d, want 200 (coven-плечо OR-union матчит, хотя trait — нет)", rec.Code)
+		t.Errorf("Code = %d, want 200 (coven arm of OR-union matches, though trait does not)", rec.Code)
 	}
 }
 
@@ -177,18 +177,18 @@ func TestIncarnation_List_TraitScope_ScalarEqualitySQL(t *testing.T) {
 		t.Fatalf("Code = %d, body=%s", rec.Code, rec.Body.String())
 	}
 	if !strings.Contains(*sql, "traits->>") {
-		t.Errorf("trait-scope не дошёл до SQL как traits->> scalar-equality:\n%s", *sql)
+		t.Errorf("trait-scope did not reach SQL as traits->> scalar-equality:\n%s", *sql)
 	}
 	if strings.Contains(*sql, "@>") {
-		t.Errorf("trait-scope использует jsonb-containment @> (BUG#1: матчит list-метку, рассинхрон с Get):\n%s", *sql)
+		t.Errorf("trait-scope uses jsonb-containment @> (BUG#1: matches list label, out of sync with Get):\n%s", *sql)
 	}
 	// scope pushdown is active (not fail-closed FALSE): SelectAll is called.
 	if !db.listCalled {
-		t.Errorf("trait-scope: SelectAll не вызван (ожидался scope-pushdown, не fail-closed)")
+		t.Errorf("trait-scope: SelectAll not called (expected scope-pushdown, not fail-closed)")
 	}
 	// key and value are separate bind-args (env / prod), not concatenated into text.
 	if !argsHasString(db.lastCountArgs, "env") || !argsHasString(db.lastCountArgs, "prod") {
-		t.Errorf("trait key/value не пришли раздельными bind-args (env, prod): %v", db.lastCountArgs)
+		t.Errorf("trait key/value did not arrive as separate bind-args (env, prod): %v", db.lastCountArgs)
 	}
 }
 
@@ -203,10 +203,10 @@ func TestIncarnation_List_TraitScope_ValueBound(t *testing.T) {
 		t.Fatalf("Code = %d, body=%s", rec.Code, rec.Body.String())
 	}
 	if strings.Contains(*sql, "OR '1'='1") {
-		t.Errorf("trait-значение попало в SQL-ТЕКСТ (инъекция), а должно быть bind-арг:\n%s", *sql)
+		t.Errorf("trait value ended up in SQL TEXT (injection), should be a bind-arg:\n%s", *sql)
 	}
 	if !argsHasString(db.lastCountArgs, "prod' OR '1'='1") {
-		t.Errorf("trait-значение не пришло bind-аргом: %v", db.lastCountArgs)
+		t.Errorf("trait value did not arrive as a bind-arg: %v", db.lastCountArgs)
 	}
 }
 
@@ -228,7 +228,7 @@ func TestIncarnation_List_TraitScope_NonEmpty_NotFailClosed(t *testing.T) {
 		t.Fatalf("Code = %d, body=%s", rec.Code, rec.Body.String())
 	}
 	if !db.listCalled {
-		t.Errorf("trait-only Purview обязан НЕ быть fail-closed (SelectAll должен вызваться)")
+		t.Errorf("trait-only Purview must NOT be fail-closed (SelectAll should be called)")
 	}
 }
 
@@ -250,10 +250,10 @@ func TestIncarnation_List_TraitOR_CovenAndTrait_BothReachSQL(t *testing.T) {
 		t.Fatalf("Code = %d, body=%s", rec.Code, rec.Body.String())
 	}
 	if !strings.Contains(sql, "covens &&") {
-		t.Errorf("OR-union: coven-плечо (covens &&) не в SQL:\n%s", sql)
+		t.Errorf("OR-union: coven arm (covens &&) not in SQL:\n%s", sql)
 	}
 	if !strings.Contains(sql, "traits->>") {
-		t.Errorf("OR-union: trait-плечо (traits->>) не в SQL:\n%s", sql)
+		t.Errorf("OR-union: trait arm (traits->>) not in SQL:\n%s", sql)
 	}
 }
 

@@ -32,14 +32,14 @@ func RegisterMetrics(reg *obs.Registry) *Metrics {
 		HostCAUsed: prometheus.NewCounterVec(
 			prometheus.CounterOpts{
 				Name: "keeper_push_host_ca_used_total",
-				Help: "Совпадения host-CA на SSH-handshake (S7-3 multi-CA verify); разрез по имени CA из push.host_ca_refs[].name.",
+				Help: "Host-CA matches on SSH handshake (S7-3 multi-CA verify); broken down by CA name from push.host_ca_refs[].name.",
 			},
 			[]string{"ca_name"},
 		),
 		ProviderRouted: prometheus.NewCounterVec(
 			prometheus.CounterOpts{
 				Name: "keeper_push_provider_routed_total",
-				Help: "Routing-decisions per-SID в Multi-provider push (P2 W-4); разрез по имени SshProvider-плагина и уровню резолва (soul/coven/cluster).",
+				Help: "Routing decisions per-SID in Multi-provider push (P2 W-4); broken down by SshProvider plugin name and resolve level (soul/coven/cluster).",
 			},
 			[]string{"provider", "decision_source"},
 		),

@@ -88,13 +88,13 @@ func RegisterApplyMetrics(reg *obs.Registry) *ApplyMetrics {
 		tasksTotal: prometheus.NewCounterVec(
 			prometheus.CounterOpts{
 				Name: "soul_apply_tasks_total",
-				Help: "Количество завершённых задач прогона, разрезанное по результату (ok/changed/failed).",
+				Help: "Number of completed run tasks, broken down by result (ok/changed/failed).",
 			},
 			[]string{"result"},
 		),
 		applyDuration: prometheus.NewHistogram(prometheus.HistogramOpts{
 			Name: "soul_apply_duration_seconds",
-			Help: "Длительность одного прогона apply (Run целиком), в секундах.",
+			Help: "Duration of one apply run (the whole Run), in seconds.",
 			// An apply run is heavier than an HTTP request (packages/files/
 			// services): typical runs are seconds to tens of seconds, heavy
 			// ones (compiling/large archives) run minutes. Can't narrow the
@@ -104,22 +104,22 @@ func RegisterApplyMetrics(reg *obs.Registry) *ApplyMetrics {
 		}),
 		taskRetries: prometheus.NewCounter(prometheus.CounterOpts{
 			Name: "soul_apply_task_retries_total",
-			Help: "Количество повторных попыток runTask (retry:/until:), без учёта первой попытки.",
+			Help: "Number of runTask retry attempts (retry:/until:), excluding the first attempt.",
 		}),
 		taskSkipped: prometheus.NewCounterVec(
 			prometheus.CounterOpts{
 				Name: "soul_apply_task_skipped_total",
-				Help: "Количество задач, пропущенных gating-ом flow-control, по причине (when/requisite/failed_run).",
+				Help: "Number of tasks skipped by flow-control gating, by reason (when/requisite/failed_run).",
 			},
 			[]string{"reason"},
 		),
 		taskTimedOut: prometheus.NewCounter(prometheus.CounterOpts{
 			Name: "soul_apply_task_timed_out_total",
-			Help: "Количество задач, завершившихся таймаутом (по финальному исходу после retry).",
+			Help: "Number of tasks that ended in a timeout (by final outcome after retry).",
 		}),
 		applyFenced: prometheus.NewCounter(prometheus.CounterOpts{
 			Name: "soul_apply_fenced_total",
-			Help: "Количество ApplyRequest, отвергнутых attempt-fencing-guard-ом (stale-дубль, attempt < виденного).",
+			Help: "Number of ApplyRequests rejected by the attempt-fencing guard (stale duplicate, attempt < last seen).",
 		}),
 	}
 	reg.Registerer().MustRegister(

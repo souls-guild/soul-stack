@@ -160,7 +160,7 @@ func TestToolsCall_IncarnationRerunLast_ReusesStoredInput(t *testing.T) {
 	}
 	gotInput := starter.gotSpec.Input
 	if gotInput == nil {
-		t.Fatal("RunSpec.Input = nil — stored spec.input НЕ проброшен (create-путь регресс)")
+		t.Fatal("RunSpec.Input = nil - stored spec.input NOT propagated (create-path regression)")
 	}
 	if gotInput["version"] != "8.6.1" {
 		t.Errorf("RunSpec.Input[version] = %v, want 8.6.1 (stored)", gotInput["version"])
@@ -190,7 +190,7 @@ func TestToolsCall_IncarnationRerunLast_NoStoredInput_NilInput(t *testing.T) {
 		t.Fatalf("scenario start calls = %d, want 1", starter.calls)
 	}
 	if starter.gotSpec.Input != nil {
-		t.Errorf("RunSpec.Input = %v, want nil (spec без input)", starter.gotSpec.Input)
+		t.Errorf("RunSpec.Input = %v, want nil (spec without input)", starter.gotSpec.Input)
 	}
 }
 
@@ -235,14 +235,14 @@ func TestToolsCall_IncarnationRerunLast_Day2ReusesRecipeInput(t *testing.T) {
 		t.Fatalf("RunSpec.Input = %v, want {user:alice} (recipe.input)", gotInput)
 	}
 	if _, leaked := gotInput["version"]; leaked {
-		t.Error("RunSpec.Input несёт spec.input[version] — day-2 обязан брать recipe.input")
+		t.Error("RunSpec.Input carries spec.input[version] - operational reruns must take recipe.input")
 	}
 	if rec.events[0].Payload["scenario"] != "add_user" {
 		t.Errorf("audit scenario = %v, want add_user", rec.events[0].Payload["scenario"])
 	}
 	// day-2 recipe without from_upgrade → RunSpec.FromUpgrade=false.
 	if starter.gotSpec.FromUpgrade {
-		t.Error("RunSpec.FromUpgrade = true, want false (recipe без from_upgrade)")
+		t.Error("RunSpec.FromUpgrade = true, want false (recipe without from_upgrade)")
 	}
 }
 
@@ -273,7 +273,7 @@ func TestToolsCall_IncarnationRerunLast_Day2FromUpgrade(t *testing.T) {
 		t.Errorf("ScenarioName = %q, want to_v2", starter.gotSpec.ScenarioName)
 	}
 	if !starter.gotSpec.FromUpgrade {
-		t.Error("RunSpec.FromUpgrade = false, want true (recipe.from_upgrade → перезапуск из upgrade/)")
+		t.Error("RunSpec.FromUpgrade = false, want true (recipe.from_upgrade -> rerun from upgrade/)")
 	}
 }
 
@@ -325,7 +325,7 @@ func TestToolsCall_IncarnationRerunLast_Day2RecipeUnavailable(t *testing.T) {
 	resp := callTool(t, h, "archon-alice", "keeper.incarnation.rerun-last",
 		`{"name":"redis-prod","reason":"rerun add_user"}`)
 	if resp.Error == nil {
-		t.Fatal("expected rerun-input-unavailable (recipe недоступен)")
+		t.Fatal("expected rerun-input-unavailable (recipe unavailable)")
 	}
 	if data := mustToolErrorData(t, resp.Error.Data); data.Code != mcpCodeRerunInputUnavailable {
 		t.Errorf("data.code = %q, want rerun-input-unavailable", data.Code)

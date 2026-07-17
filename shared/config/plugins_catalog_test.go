@@ -16,7 +16,7 @@ func TestPluginsCatalog_SoulModulesParsed(t *testing.T) {
 	}
 	if hasCode(diags, "unknown_key") {
 		dump(t, diags)
-		t.Fatal("plugins.soul_modules должен быть известным ключом схемы")
+		t.Fatal("plugins.soul_modules should be a known schema key")
 	}
 	if cfg.Plugins == nil || len(cfg.Plugins.SoulModules) != 1 {
 		t.Fatalf("SoulModules: want 1 entry, got %+v", cfg.Plugins)

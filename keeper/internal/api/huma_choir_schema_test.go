@@ -42,12 +42,12 @@ func TestSchemaNames_Choir(t *testing.T) {
 	schemas := loadFullSpecSchemas(t)
 	for _, name := range choirContractSchemas {
 		if _, ok := schemas[name]; !ok {
-			t.Errorf("контрактonя схема %q ОТСУТСТВУЕТ в components/schemas (имя не выровнеbut)", name)
+			t.Errorf("contract schema %q IS MISSING from components/schemas (name not aligned)", name)
 		}
 	}
 	for _, name := range choirForbiddenSchemas {
 		if _, ok := schemas[name]; ok {
-			t.Errorf("техническое huma-имя %q ПРИСУТСТВУЕТ в спеке — имя не выровнеbut под контракт", name)
+			t.Errorf("technical huma name %q IS PRESENT in the spec - name not aligned with the contract", name)
 		}
 	}
 }
@@ -62,7 +62,7 @@ func TestSchemaNames_ChoirEnvelopes(t *testing.T) {
 	}
 	var doc map[string]any
 	if err := yaml.Unmarshal([]byte(y), &doc); err != nil {
-		t.Fatalf("спека не парсится: %v", err)
+		t.Fatalf("spec does not parse: %v", err)
 	}
 	comp, _ := doc["components"].(map[string]any)
 	schemas, _ := comp["schemas"].(map[string]any)
@@ -79,20 +79,20 @@ func TestSchemaNames_ChoirRequestShapes(t *testing.T) {
 	}
 	var doc map[string]any
 	if err := yaml.Unmarshal([]byte(y), &doc); err != nil {
-		t.Fatalf("спека не парсится: %v", err)
+		t.Fatalf("spec does not parse: %v", err)
 	}
 	comp, _ := doc["components"].(map[string]any)
 	schemas, _ := comp["schemas"].(map[string]any)
 
 	cc, _ := schemas["ChoirCreateRequest"].(map[string]any)
 	if cc == nil {
-		t.Fatal("ChoirCreateRequest отсутствует")
+		t.Fatal("ChoirCreateRequest is missing")
 	}
 	assertRequiredExactly(t, cc, "ChoirCreateRequest", "choir_name")
 
 	va, _ := schemas["VoiceAddRequest"].(map[string]any)
 	if va == nil {
-		t.Fatal("VoiceAddRequest отсутствует")
+		t.Fatal("VoiceAddRequest is missing")
 	}
 	assertRequiredExactly(t, va, "VoiceAddRequest", "sid")
 }

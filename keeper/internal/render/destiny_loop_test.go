@@ -61,16 +61,16 @@ func TestRender_ApplyDestiny_Loop_Expands(t *testing.T) {
 	}
 	// object → 2 iterations, alphabetical order by key (alice, bob).
 	if len(tasks) != 2 || len(plans) != 2 {
-		t.Fatalf("len(tasks)=%d plans=%d, want 2/2 (loop в destiny развёрнут)", len(tasks), len(plans))
+		t.Fatalf("len(tasks)=%d plans=%d, want 2/2 (loop in destiny expanded)", len(tasks), len(plans))
 	}
 	if tasks[0].Index != 0 || tasks[1].Index != 1 {
-		t.Errorf("indices = %d,%d, want 0,1 (сквозные через loop в destiny)", tasks[0].Index, tasks[1].Index)
+		t.Errorf("indices = %d,%d, want 0,1 (continuous through loop in destiny)", tasks[0].Index, tasks[1].Index)
 	}
 	if got := tasks[0].Params.GetFields()["cmd"].GetStringValue(); got != "redis-cli ACL SETUSER alice ~* +@all" {
-		t.Errorf("tasks[0].cmd = %q (биндинг username/change.acl первой итерации)", got)
+		t.Errorf("tasks[0].cmd = %q (binding username/change.acl of first iteration)", got)
 	}
 	if got := tasks[1].Params.GetFields()["cmd"].GetStringValue(); got != "redis-cli ACL SETUSER bob ~foo +get" {
-		t.Errorf("tasks[1].cmd = %q (биндинг второй итерации)", got)
+		t.Errorf("tasks[1].cmd = %q (binding of second iteration)", got)
 	}
 	if plans[0].TaskIndex != 0 || plans[1].TaskIndex != 1 {
 		t.Errorf("plans indices = %d,%d, want 0,1", plans[0].TaskIndex, plans[1].TaskIndex)
@@ -112,11 +112,11 @@ func TestRender_ApplyDestiny_Loop_MixedPlan(t *testing.T) {
 	}
 	for i, rt := range tasks {
 		if rt.Index != i {
-			t.Errorf("tasks[%d].Index = %d, want %d (сквозные через destiny-loop)", i, rt.Index, i)
+			t.Errorf("tasks[%d].Index = %d, want %d (continuous through destiny-loop)", i, rt.Index, i)
 		}
 	}
 	if got := tasks[4].Params.GetFields()["cmd"].GetStringValue(); got != "echo post" {
-		t.Errorf("post после destiny-loop отрендерена неверно: %q", got)
+		t.Errorf("post after destiny-loop rendered incorrectly: %q", got)
 	}
 }
 
@@ -142,7 +142,7 @@ func TestRender_ApplyDestiny_Loop_Isolation(t *testing.T) {
 	}
 	_, _, err := p.Render(context.Background(), in)
 	if err == nil {
-		t.Fatal("Render: ожидалась ошибка изоляции — destiny-loop не должен видеть soulprint.hosts (AllowHosts=false)")
+		t.Fatal("Render: expected isolation error - destiny-loop must not see soulprint.hosts (AllowHosts=false)")
 	}
 }
 
@@ -169,7 +169,7 @@ func TestRender_ApplyDestiny_Loop_RegisterIsolation(t *testing.T) {
 	}
 	_, _, err := p.Render(context.Background(), in)
 	if err == nil {
-		t.Fatal("Render: ожидалась ошибка — destiny-loop не должен видеть scenario register (изоляция)")
+		t.Fatal("Render: expected error - destiny-loop must not see scenario register (isolation)")
 	}
 }
 
@@ -222,10 +222,10 @@ func TestRender_ApplyDestiny_Loop_OnChanges(t *testing.T) {
 	// iteration (registerIndex: one register → last Index; semantics shared with scenario).
 	consumer := tasks[2]
 	if len(consumer.OnChangesIdx) != 1 {
-		t.Fatalf("OnChangesIdx = %v, want 1 (register loop-задачи → Index последней итерации)", consumer.OnChangesIdx)
+		t.Fatalf("OnChangesIdx = %v, want 1 (register loop-task -> Index of last iteration)", consumer.OnChangesIdx)
 	}
 	if consumer.OnChangesIdx[0] != 1 {
-		t.Errorf("OnChangesIdx = %v, want [1] (remap register-имени в Index последней loop-итерации)", consumer.OnChangesIdx)
+		t.Errorf("OnChangesIdx = %v, want [1] (remap register-name to Index of last loop-iteration)", consumer.OnChangesIdx)
 	}
 }
 
@@ -273,18 +273,18 @@ func TestRender_ApplyDestiny_Loop_StaticWhenSkip(t *testing.T) {
 	}
 	tasks, _, err := p.Render(context.Background(), in)
 	if err != nil {
-		t.Fatalf("Render: %v (static-when:false должен скипнуть params, а не падать на missing_var)", err)
+		t.Fatalf("Render: %v (static-when:false must skip params, not fail on missing_var)", err)
 	}
 	// 2 iterations → 2 skip-placeholders, Params==nil (never rendered).
 	if len(tasks) != 2 {
-		t.Fatalf("len(tasks) = %d, want 2 (placeholder за каждую loop-итерацию)", len(tasks))
+		t.Fatalf("len(tasks) = %d, want 2 (placeholder for each loop-iteration)", len(tasks))
 	}
 	for i, rt := range tasks {
 		if rt.Params != nil {
-			t.Errorf("tasks[%d].Params != nil — static-when:false должен скипнуть рендер params", i)
+			t.Errorf("tasks[%d].Params != nil - static-when:false must skip rendering params", i)
 		}
 		if rt.Index != i {
-			t.Errorf("tasks[%d].Index = %d, want %d (сквозные даже при skip)", i, rt.Index, i)
+			t.Errorf("tasks[%d].Index = %d, want %d (continuous even when skipped)", i, rt.Index, i)
 		}
 	}
 }

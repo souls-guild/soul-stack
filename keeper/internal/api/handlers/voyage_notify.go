@@ -102,7 +102,7 @@ func prepareNotifyTidingsErr(
 
 		if !herald.ValidName(n.Herald) {
 			return nil, problemDetailsPtr(problem.TypeValidationFailed,
-				idx+".herald: имя "+n.Herald+" must match "+herald.NamePattern)
+				idx+".herald: name "+n.Herald+" must match "+herald.NamePattern)
 		}
 		eventTypes, etErr := notifyEventTypes(kind, n.On)
 		if etErr != "" {
@@ -240,7 +240,7 @@ func notifyEventTypes(kind voyage.Kind, on []string) (eventTypes []string, errMs
 		case notifyOnPartial:
 			action = "partial_failed"
 		default:
-			return nil, "значение " + t + " must be one of {completed, failed, partial}"
+			return nil, "value " + t + " must be one of {completed, failed, partial}"
 		}
 		et := prefix + action
 		if _, dup := seen[et]; dup {

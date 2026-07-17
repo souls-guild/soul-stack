@@ -116,7 +116,7 @@ func TestPlan_Extracted_MarkerMatches_Clean(t *testing.T) {
 	}
 	assertEntries(t, dest, beforeEntries)
 	if afterMarker, _ := os.ReadFile(markerPath); string(afterMarker) != string(beforeMarker) {
-		t.Fatalf("Plan изменил marker")
+		t.Fatalf("Plan modified marker")
 	}
 }
 

@@ -49,7 +49,7 @@ func TestSoulsListFilters(t *testing.T) {
 		t.Errorf("limit: %q", capturedQuery.Get("limit"))
 	}
 	if len(reply.Items) != 1 {
-		t.Fatalf("ожидалась 1 запись, got %d", len(reply.Items))
+		t.Fatalf("expected 1 item, got %d", len(reply.Items))
 	}
 }
 
@@ -87,10 +87,10 @@ func TestSoulsGetNotFound(t *testing.T) {
 	})
 	_, err := cl.Souls.Get(context.Background(), "ghost.example")
 	if err == nil {
-		t.Fatal("ожидалась ошибка")
+		t.Fatal("expected an error")
 	}
 	apiErr, ok := client.AsAPIError(err)
 	if !ok || apiErr.Status != 404 {
-		t.Errorf("ожидался 404 APIError, got %v", err)
+		t.Errorf("expected a 404 APIError, got %v", err)
 	}
 }

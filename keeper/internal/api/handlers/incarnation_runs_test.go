@@ -171,7 +171,7 @@ func TestRunDetailTyped_PerHostMapping_OK(t *testing.T) {
 		t.Errorf("Scenario = %q, want scale", d.Scenario)
 	}
 	if d.Status != "failed" {
-		t.Errorf("Status = %q, want failed (host-a упал)", d.Status)
+		t.Errorf("Status = %q, want failed (host-a failed)", d.Status)
 	}
 	if len(d.Hosts) != 2 {
 		t.Fatalf("len(Hosts) = %d, want 2", len(d.Hosts))
@@ -196,7 +196,7 @@ func TestRunDetailTyped_PerHostMapping_OK(t *testing.T) {
 		t.Errorf("Hosts[1] = {%q,%q}, want {host-b,success}", hb.SID, hb.Status)
 	}
 	if hb.FailedTaskIdx != nil || hb.FailedPlanIndex != nil || hb.ErrorSummary != nil {
-		t.Errorf("Hosts[1] несёт детали упавшей задачи на success: %+v", hb)
+		t.Errorf("Hosts[1] carries failed-task details on success: %+v", hb)
 	}
 }
 
@@ -205,11 +205,11 @@ func TestRunDetailTyped_PerHostMapping_OK(t *testing.T) {
 func requireProblemStatus(t *testing.T, err error, want int) {
 	t.Helper()
 	if err == nil {
-		t.Fatalf("ожидалась ошибка со статусом %d, получено nil", want)
+		t.Fatalf("expected error with status %d, got nil", want)
 	}
 	d, ok := AsProblemDetails(err)
 	if !ok {
-		t.Fatalf("ошибка не *problemError: %v", err)
+		t.Fatalf("error is not *problemError: %v", err)
 	}
 	if d.Status != want {
 		t.Errorf("problem status = %d, want %d (%v)", d.Status, want, err)
@@ -293,7 +293,7 @@ func scanApplyRunCol(dest, v any) error {
 	case **time.Time:
 		*d = v.(*time.Time)
 	default:
-		return errors.New("applyRunsHostRows.Scan: неподдержанный тип dest")
+		return errors.New("applyRunsHostRows.Scan: unsupported dest type")
 	}
 	return nil
 }

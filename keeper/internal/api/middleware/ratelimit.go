@@ -91,7 +91,7 @@ func RateLimit(limiter RateLimiter, bucket string, limits func() RateLimitLimits
 				// Wire-up without RequireJWT before Tempo is a server-configuration
 				// programming error. Fail-OPEN: a per-AID limit without an AID
 				// is uncomputable, blocking is not allowed.
-				logger.Warn("tempo: no AID in context — middleware навешан без RequireJWT? fail-open",
+				logger.Warn("tempo: no AID in context - middleware wired without RequireJWT? fail-open",
 					slog.String("path", r.URL.Path),
 				)
 				next.ServeHTTP(w, r)

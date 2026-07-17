@@ -193,7 +193,7 @@ func TestRequirePermissionMulti_CovenScope_Match(t *testing.T) {
 	allowed, code := runMulti(t, e, "archon-prod", "incarnation", "run",
 		incCovenContexts("redis-main", "redis", []string{"prod"}))
 	if !allowed || code != http.StatusOK {
-		t.Errorf("coven=prod role должна матчить inc covens=[prod]; allowed=%v code=%d", allowed, code)
+		t.Errorf("coven=prod role should match inc covens=[prod]; allowed=%v code=%d", allowed, code)
 	}
 }
 
@@ -205,7 +205,7 @@ func TestRequirePermissionMulti_CovenScope_NoMatch(t *testing.T) {
 	allowed, code := runMulti(t, e, "archon-prod", "incarnation", "run",
 		incCovenContexts("redis-dev", "redis", []string{"dev"}))
 	if allowed || code != http.StatusForbidden {
-		t.Errorf("coven=prod role НЕ должна матчить inc covens=[dev]; allowed=%v code=%d", allowed, code)
+		t.Errorf("coven=prod role should NOT match inc covens=[dev]; allowed=%v code=%d", allowed, code)
 	}
 }
 
@@ -216,13 +216,13 @@ func TestRequirePermissionMulti_ServiceScope_Match(t *testing.T) {
 	allowed, code := runMulti(t, e, "archon-r", "incarnation", "run",
 		incCovenContexts("redis-x", "redis", []string{"any"}))
 	if !allowed || code != http.StatusOK {
-		t.Errorf("service=redis role должна матчить inc сервиса redis; allowed=%v code=%d", allowed, code)
+		t.Errorf("service=redis role should match inc of service redis; allowed=%v code=%d", allowed, code)
 	}
 	// service=postgres incarnation — does not match.
 	allowed2, code2 := runMulti(t, e, "archon-r", "incarnation", "run",
 		incCovenContexts("pg-x", "postgres", []string{"any"}))
 	if allowed2 || code2 != http.StatusForbidden {
-		t.Errorf("service=redis role НЕ должна матчить inc сервиса postgres; allowed=%v code=%d", allowed2, code2)
+		t.Errorf("service=redis role should NOT match inc of service postgres; allowed=%v code=%d", allowed2, code2)
 	}
 }
 
@@ -234,7 +234,7 @@ func TestRequirePermissionMulti_NameAsCoven_Match(t *testing.T) {
 	allowed, code := runMulti(t, e, "archon-n", "incarnation", "upgrade",
 		incCovenContexts("redis-prod", "redis", nil))
 	if !allowed || code != http.StatusOK {
-		t.Errorf("coven=<name> должна матчить incarnation с этим именем; allowed=%v code=%d", allowed, code)
+		t.Errorf("coven=<name> should match the incarnation with that name; allowed=%v code=%d", allowed, code)
 	}
 }
 
@@ -249,7 +249,7 @@ func TestRequirePermissionMulti_Negative_DevCannotTouchProd(t *testing.T) {
 		allowed, code := runMulti(t, e, "archon-dev", "incarnation", action,
 			incCovenContexts("redis-prod", "redis", []string{"prod"}))
 		if allowed || code != http.StatusForbidden {
-			t.Errorf("coven=dev оператор НЕ должен %s prod-incarnation; allowed=%v code=%d", action, allowed, code)
+			t.Errorf("coven=dev operator should NOT %s prod-incarnation; allowed=%v code=%d", action, allowed, code)
 		}
 	}
 }
@@ -263,13 +263,13 @@ func TestRequirePermissionMulti_Negative_DevCannotCreateProd(t *testing.T) {
 	allowed, code := runMulti(t, e, "archon-dev", "incarnation", "create",
 		incCovenContexts("redis-prod", "redis", []string{"prod"}))
 	if allowed || code != http.StatusForbidden {
-		t.Errorf("coven=dev оператор НЕ должен создать incarnation с covens=[prod]; allowed=%v code=%d", allowed, code)
+		t.Errorf("coven=dev operator should NOT create incarnation with covens=[prod]; allowed=%v code=%d", allowed, code)
 	}
 	// But within its own scope (covens=[dev]) — it can.
 	allowed2, code2 := runMulti(t, e, "archon-dev", "incarnation", "create",
 		incCovenContexts("redis-dev", "redis", []string{"dev"}))
 	if !allowed2 || code2 != http.StatusOK {
-		t.Errorf("coven=dev оператор должен создать incarnation covens=[dev]; allowed=%v code=%d", allowed2, code2)
+		t.Errorf("coven=dev operator should create incarnation covens=[dev]; allowed=%v code=%d", allowed2, code2)
 	}
 }
 
@@ -281,7 +281,7 @@ func TestRequirePermissionMulti_BarePermission_NoRegression(t *testing.T) {
 	allowed, code := runMulti(t, e, "archon-bare", "incarnation", "run",
 		incCovenContexts("redis-prod", "redis", []string{"prod"}))
 	if !allowed || code != http.StatusOK {
-		t.Errorf("bare incarnation.run должна проходить (регресс); allowed=%v code=%d", allowed, code)
+		t.Errorf("bare incarnation.run should pass (regression); allowed=%v code=%d", allowed, code)
 	}
 }
 
@@ -292,7 +292,7 @@ func TestRequirePermissionMulti_Wildcard_NoRegression(t *testing.T) {
 	allowed, code := runMulti(t, e, "archon-root", "incarnation", "destroy",
 		incCovenContexts("anything", "redis", []string{"prod"}))
 	if !allowed || code != http.StatusOK {
-		t.Errorf("* должна проходить любую incarnation-операцию (регресс); allowed=%v code=%d", allowed, code)
+		t.Errorf("* should pass any incarnation operation (regression); allowed=%v code=%d", allowed, code)
 	}
 }
 
@@ -305,11 +305,11 @@ func TestRequirePermissionMulti_EmptyContexts_BareOnly(t *testing.T) {
 	// fail-closed for scoped, pass for bare.
 	allowedScoped, codeScoped := runMulti(t, e, "archon-s", "incarnation", "run", nil)
 	if allowedScoped || codeScoped != http.StatusForbidden {
-		t.Errorf("scoped роль при пустом наборе → deny; allowed=%v code=%d", allowedScoped, codeScoped)
+		t.Errorf("scoped role on an empty set -> deny; allowed=%v code=%d", allowedScoped, codeScoped)
 	}
 	allowedBare, codeBare := runMulti(t, e, "archon-b", "incarnation", "run", nil)
 	if !allowedBare || codeBare != http.StatusOK {
-		t.Errorf("bare роль при пустом наборе → allow; allowed=%v code=%d", allowedBare, codeBare)
+		t.Errorf("bare role on an empty set -> allow; allowed=%v code=%d", allowedBare, codeBare)
 	}
 }
 
@@ -357,10 +357,10 @@ func TestRequireAnyPermission_EnableGrantsEnableNotDisable(t *testing.T) {
 		{Name: "enabler", Operators: []string{"archon-e"}, Permissions: []string{"cadence.enable"}},
 	}})
 	if allowed, code := runAny(t, e, "archon-e", "cadence", "enable", "update"); !allowed || code != http.StatusOK {
-		t.Errorf("cadence.enable должна допускать enable; allowed=%v code=%d", allowed, code)
+		t.Errorf("cadence.enable should allow enable; allowed=%v code=%d", allowed, code)
 	}
 	if allowed, code := runAny(t, e, "archon-e", "cadence", "disable", "update"); allowed || code != http.StatusForbidden {
-		t.Errorf("cadence.enable НЕ должна допускать disable; allowed=%v code=%d", allowed, code)
+		t.Errorf("cadence.enable should NOT allow disable; allowed=%v code=%d", allowed, code)
 	}
 }
 
@@ -370,10 +370,10 @@ func TestRequireAnyPermission_DisableGrantsDisableNotEnable(t *testing.T) {
 		{Name: "disabler", Operators: []string{"archon-d"}, Permissions: []string{"cadence.disable"}},
 	}})
 	if allowed, code := runAny(t, e, "archon-d", "cadence", "disable", "update"); !allowed || code != http.StatusOK {
-		t.Errorf("cadence.disable должна допускать disable; allowed=%v code=%d", allowed, code)
+		t.Errorf("cadence.disable should allow disable; allowed=%v code=%d", allowed, code)
 	}
 	if allowed, code := runAny(t, e, "archon-d", "cadence", "enable", "update"); allowed || code != http.StatusForbidden {
-		t.Errorf("cadence.disable НЕ должна допускать enable; allowed=%v code=%d", allowed, code)
+		t.Errorf("cadence.disable should NOT allow enable; allowed=%v code=%d", allowed, code)
 	}
 }
 
@@ -383,10 +383,10 @@ func TestRequireAnyPermission_UpdateBackcompat(t *testing.T) {
 		{Name: "updater", Operators: []string{"archon-u"}, Permissions: []string{"cadence.update"}},
 	}})
 	if allowed, code := runAny(t, e, "archon-u", "cadence", "enable", "update"); !allowed || code != http.StatusOK {
-		t.Errorf("cadence.update должна допускать enable (backcompat); allowed=%v code=%d", allowed, code)
+		t.Errorf("cadence.update should allow enable (backcompat); allowed=%v code=%d", allowed, code)
 	}
 	if allowed, code := runAny(t, e, "archon-u", "cadence", "disable", "update"); !allowed || code != http.StatusOK {
-		t.Errorf("cadence.update должна допускать disable (backcompat); allowed=%v code=%d", allowed, code)
+		t.Errorf("cadence.update should allow disable (backcompat); allowed=%v code=%d", allowed, code)
 	}
 }
 
@@ -396,10 +396,10 @@ func TestRequireAnyPermission_NoneDenied(t *testing.T) {
 		{Name: "reader", Operators: []string{"archon-r"}, Permissions: []string{"cadence.list"}},
 	}})
 	if allowed, code := runAny(t, e, "archon-r", "cadence", "enable", "update"); allowed || code != http.StatusForbidden {
-		t.Errorf("cadence.list НЕ должна допускать enable; allowed=%v code=%d", allowed, code)
+		t.Errorf("cadence.list should NOT allow enable; allowed=%v code=%d", allowed, code)
 	}
 	if allowed, code := runAny(t, e, "archon-r", "cadence", "disable", "update"); allowed || code != http.StatusForbidden {
-		t.Errorf("cadence.list НЕ должна допускать disable; allowed=%v code=%d", allowed, code)
+		t.Errorf("cadence.list should NOT allow disable; allowed=%v code=%d", allowed, code)
 	}
 }
 
@@ -455,7 +455,7 @@ func TestRequireAction_ScopedHolder_PassesToHandler(t *testing.T) {
 		}})
 		allowed, code := runAction(t, e, "archon-ro", "soul", "list")
 		if !allowed || code != http.StatusOK {
-			t.Errorf("perm=%q: gate должен пускать держателя; allowed=%v code=%d", perm, allowed, code)
+			t.Errorf("perm=%q: gate should let the holder through; allowed=%v code=%d", perm, allowed, code)
 		}
 	}
 }
@@ -466,7 +466,7 @@ func TestRequireAction_NonHolder_403(t *testing.T) {
 	}})
 	allowed, code := runAction(t, e, "archon-x", "soul", "list")
 	if allowed || code != http.StatusForbidden {
-		t.Errorf("оператор без soul.list → 403; allowed=%v code=%d", allowed, code)
+		t.Errorf("operator without soul.list -> 403; allowed=%v code=%d", allowed, code)
 	}
 }
 
@@ -476,7 +476,7 @@ func TestRequireAction_NoClaims_500(t *testing.T) {
 	}})
 	allowed, code := runAction(t, e, "", "soul", "list")
 	if allowed || code != http.StatusInternalServerError {
-		t.Errorf("missing claims → 500 (конфиг-ошибка chain-а); allowed=%v code=%d", allowed, code)
+		t.Errorf("missing claims -> 500 (chain config error); allowed=%v code=%d", allowed, code)
 	}
 }
 

@@ -112,36 +112,36 @@ func RegisterGRPCMetrics(reg *obs.Registry) *GRPCMetrics {
 	m := &GRPCMetrics{
 		streamsActive: prometheus.NewGauge(prometheus.GaugeOpts{
 			Name: "keeper_grpc_streams_active",
-			Help: "Число открытых EventStream-стримов Keeper↔Soul прямо сейчас.",
+			Help: "Number of currently open EventStream streams Keeper<->Soul.",
 		}),
 		messagesTotal: prometheus.NewCounterVec(
 			prometheus.CounterOpts{
 				Name: "keeper_grpc_messages_total",
-				Help: "Количество app-сообщений EventStream-а, разрезанное по направлению (from_soul/to_soul).",
+				Help: "Number of EventStream app messages, split by direction (from_soul/to_soul).",
 			},
 			[]string{"direction"},
 		),
 		applyDispatchTotal: prometheus.NewCounterVec(
 			prometheus.CounterOpts{
 				Name: "keeper_grpc_apply_dispatch_total",
-				Help: "Количество попыток отправить ApplyRequest в Soul, разрезанное по результату (ok/failed).",
+				Help: "Number of attempts to send an ApplyRequest to Soul, split by result (ok/failed).",
 			},
 			[]string{"result"},
 		),
 		bootstrapTotal: prometheus.NewCounterVec(
 			prometheus.CounterOpts{
 				Name: "keeper_grpc_bootstrap_total",
-				Help: "Количество онбординг-попыток Soul-а через Bootstrap-RPC, разрезанное по результату (ok/failed).",
+				Help: "Number of Soul onboarding attempts via Bootstrap-RPC, split by result (ok/failed).",
 			},
 			[]string{"result"},
 		),
 		runResultStaleTotal: prometheus.NewCounter(prometheus.CounterOpts{
 			Name: "keeper_runresult_stale_total",
-			Help: "Количество отвергнутых RunResult-ов от устаревших попыток (attempt < apply_runs.attempt, gate-1 epoch-check на приёме).",
+			Help: "Number of RunResults rejected from stale attempts (attempt < apply_runs.attempt, gate-1 epoch-check on receipt).",
 		}),
 		applyOrphanedTotal: prometheus.NewCounter(prometheus.CounterOpts{
 			Name: "keeper_apply_orphaned_total",
-			Help: "Количество dispatched-строк, терминалённых в orphaned по Soul-reconcile (Soul на reconnect не объявил apply_id в WardRoster, ADR-027(g)).",
+			Help: "Number of dispatched rows terminated as orphaned by Soul-reconcile (Soul did not declare apply_id in WardRoster on reconnect, ADR-027(g)).",
 		}),
 	}
 	reg.Registerer().MustRegister(m.streamsActive, m.messagesTotal, m.applyDispatchTotal, m.bootstrapTotal, m.runResultStaleTotal, m.applyOrphanedTotal)

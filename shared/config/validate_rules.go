@@ -35,7 +35,7 @@ type ValidateRuleFailure struct {
 // Error is the human-readable failure form: the rule's message + the predicate
 // index/text. Symmetric to the render.ErrAssertFailed format.
 func (f ValidateRuleFailure) Error() string {
-	return fmt.Sprintf("%s (validate[%d] %q вычислился в false)", f.Message, f.Index, f.That)
+	return fmt.Sprintf("%s (validate[%d] %q evaluated to false)", f.Message, f.Index, f.That)
 }
 
 // EvalValidateRules evaluates the `validate:` rules over the merged input (after
@@ -63,7 +63,7 @@ func EvalValidateRules(rules []ValidateRule, merged map[string]any) (*ValidateRu
 		}
 		b, ok := out.Value().(bool)
 		if !ok {
-			return nil, fmt.Errorf("validate[%d] %q вернул %s, ожидался bool", i, rule.That, out.Type().TypeName())
+			return nil, fmt.Errorf("validate[%d] %q returned %s, expected bool", i, rule.That, out.Type().TypeName())
 		}
 		if !b {
 			return &ValidateRuleFailure{Index: i, Message: rule.Message, That: rule.That}, nil

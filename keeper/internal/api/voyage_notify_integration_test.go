@@ -158,7 +158,7 @@ func TestIntegration_VoyageNotify_CreatesEphemeralTiding_202(t *testing.T) {
 
 	tidings := selectTidingsByVoyage(t, voyageID)
 	if len(tidings) != 1 {
-		t.Fatalf("ephemeral-Tiding-ов = %d, want 1", len(tidings))
+		t.Fatalf("ephemeral tidings = %d, want 1", len(tidings))
 	}
 	got := tidings[0]
 	if !got.ephemeral {
@@ -177,14 +177,14 @@ func TestIntegration_VoyageNotify_CreatesEphemeralTiding_202(t *testing.T) {
 	}
 	for _, et := range got.eventTypes {
 		if !wantET[et] {
-			t.Errorf("неожиданный event_type %q (want command_run.failed/partial_failed)", et)
+			t.Errorf("unexpected event_type %q (want command_run.failed/partial_failed)", et)
 		}
 	}
 	if !got.onlyFailures {
 		t.Error("only_failures = false, want true")
 	}
 	if got.annotations == "" || got.annotations == "{}" {
-		t.Errorf("annotations пустой: %q", got.annotations)
+		t.Errorf("annotations is empty: %q", got.annotations)
 	}
 	if len(got.projection) != 1 || got.projection[0] != "summary.succeeded" {
 		t.Errorf("projection = %v, want [summary.succeeded]", got.projection)
@@ -223,11 +223,11 @@ func TestIntegration_VoyageNotify_DefaultOnAllTerminals_202(t *testing.T) {
 		"command_run.partial_failed": true,
 	}
 	if len(tidings[0].eventTypes) != 3 {
-		t.Fatalf("event_types = %v, want 3 термиonла", tidings[0].eventTypes)
+		t.Fatalf("event_types = %v, want 3 terminal", tidings[0].eventTypes)
 	}
 	for _, et := range tidings[0].eventTypes {
 		if !want[et] {
-			t.Errorf("неожиданный event_type %q", et)
+			t.Errorf("unexpected event_type %q", et)
 		}
 	}
 }
@@ -250,11 +250,11 @@ func TestIntegration_VoyageNotify_NoHeraldRead_403_NoSideEffect(t *testing.T) {
 		"notify":[{"herald":"ops-webhook"}]}`
 	code, respBody := postCommandVoyage(t, base, tok, body)
 	if code != 403 {
-		t.Fatalf("status = %d, want 403 (нет herald.read); body=%s", code, respBody)
+		t.Fatalf("status = %d, want 403 (no herald.read); body=%s", code, respBody)
 	}
 	// Atomicity of the failure: the guard fired BEFORE persist — the DB is clean.
 	if v := countVoyages(t); v != 0 {
-		t.Errorf("voyages = %d, want 0 (notify-403 не toлжен withздать Voyage)", v)
+		t.Errorf("voyages = %d, want 0 (notify-403 should not create a Voyage)", v)
 	}
 	if ti := countTidings(t); ti != 0 {
 		t.Errorf("tidings = %d, want 0", ti)
@@ -277,10 +277,10 @@ func TestIntegration_VoyageNotify_HeraldNotFound_422_NoSideEffect(t *testing.T) 
 		"notify":[{"herald":"does-not-exist"}]}`
 	code, respBody := postCommandVoyage(t, base, tok, body)
 	if code != 422 {
-		t.Fatalf("status = %d, want 422 (каonл не существует); body=%s", code, respBody)
+		t.Fatalf("status = %d, want 422 (channel does not exist); body=%s", code, respBody)
 	}
 	if v := countVoyages(t); v != 0 {
-		t.Errorf("voyages = %d, want 0 (notify-422 не toлжен withздать Voyage)", v)
+		t.Errorf("voyages = %d, want 0 (notify-422 should not create a Voyage)", v)
 	}
 	if ti := countTidings(t); ti != 0 {
 		t.Errorf("tidings = %d, want 0", ti)
@@ -304,7 +304,7 @@ func TestIntegration_VoyageNotify_InvalidOn_422(t *testing.T) {
 		"notify":[{"herald":"ops-webhook","on":["started"]}]}`
 	code, respBody := postCommandVoyage(t, base, tok, body)
 	if code != 422 {
-		t.Fatalf("status = %d, want 422 (невалидный on); body=%s", code, respBody)
+		t.Fatalf("status = %d, want 422 (invalid on); body=%s", code, respBody)
 	}
 	if v := countVoyages(t); v != 0 {
 		t.Errorf("voyages = %d, want 0", v)
@@ -339,11 +339,11 @@ func TestIntegration_VoyageNotify_MultipleAllOrNothing_202(t *testing.T) {
 	voyageID := voyageIDFromReply(t, respBody)
 	tidings := selectTidingsByVoyage(t, voyageID)
 	if len(tidings) != 2 {
-		t.Fatalf("ephemeral-Tiding-ов = %d, want 2 (оба notify в одbutй tx)", len(tidings))
+		t.Fatalf("ephemeral tidings = %d, want 2 (both notify in one tx)", len(tidings))
 	}
 	// Names are unique (a fresh ULID per rule), both bound to one voyage_id.
 	if tidings[0].name == tidings[1].name {
-		t.Errorf("names ephemeral withвпали: %q (onрушеon уникальbutсть)", tidings[0].name)
+		t.Errorf("ephemeral names collided: %q (uniqueness violated)", tidings[0].name)
 	}
 	heralds := map[string]bool{tidings[0].herald: true, tidings[1].herald: true}
 	if !heralds["ops-a"] || !heralds["ops-b"] {
@@ -361,7 +361,7 @@ func voyageIDFromReply(t *testing.T, body string) string {
 		t.Fatalf("unmarshal reply: %v; body=%s", err, body)
 	}
 	if r.VoyageID == "" {
-		t.Fatalf("voyage_id пустой в ответе: %s", body)
+		t.Fatalf("voyage_id is empty in response: %s", body)
 	}
 	return r.VoyageID
 }

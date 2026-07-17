@@ -323,7 +323,7 @@ type RunSummaryEntry struct {
 // status — host-level status (planned/claimed/running/dispatched/success/failed/
 // cancelled/orphaned/no_match).
 type RunHostStatusEntry struct {
-	SID             string  `json:"sid" pattern:"^(keeper|__run__|[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?(\\.[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)*)$" doc:"FQDN хоста ЛИБО синтетический sid прогоon (keeper=on:keeper, __run__=run-sentinel аборта to dispatch), не адресующий Soul (NIM-36)"`
+	SID             string  `json:"sid" pattern:"^(keeper|__run__|[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?(\\.[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)*)$" doc:"host FQDN OR synthetic run sid (keeper=on:keeper, __run__=run-sentinel abort to dispatch), not addressing a Soul (NIM-36)"`
 	Status          string  `json:"status"`
 	Passage         int     `json:"passage"`
 	FailedTaskIdx   *int    `json:"failed_task_idx,omitempty"`
@@ -400,7 +400,7 @@ type RunTaskErrorEntry struct {
 // register_data (omitempty: nil for tasks without register: / no_log). error — only on
 // the failed host (omitempty). status — TASK_STATUS_* (keeperv1.TaskStatus).
 type RunTaskHostEntry struct {
-	SID    string                  `json:"sid" pattern:"^(keeper|__run__|[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?(\\.[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)*)$" doc:"FQDN хоста ЛИБО синтетический sid прогоon (keeper=on:keeper)"`
+	SID    string                  `json:"sid" pattern:"^(keeper|__run__|[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?(\\.[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)*)$" doc:"host FQDN OR synthetic run sid (keeper=on:keeper)"`
 	Status string                  `json:"status" enum:"TASK_STATUS_UNSPECIFIED,TASK_STATUS_OK,TASK_STATUS_CHANGED,TASK_STATUS_SKIPPED,TASK_STATUS_FAILED,TASK_STATUS_TIMED_OUT,TASK_STATUS_CANCELLED"`
 	Output *map[string]interface{} `json:"output,omitempty"`
 	Error  *RunTaskErrorEntry      `json:"error,omitempty"`

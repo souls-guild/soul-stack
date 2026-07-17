@@ -24,11 +24,11 @@ tasks:
 	_, _, diags, _ := LoadScenarioManifestFromBytes("main.yml", []byte(src), ValidateOptions{})
 	if hasCode(diags, "state_naked_reference") {
 		dump(t, diags)
-		t.Fatalf("ложно-позитивный state_naked_reference на канонической incarnation.state.*")
+		t.Fatalf("false-positive state_naked_reference on canonical incarnation.state.*")
 	}
 	if diag.HasErrors(diags) {
 		dump(t, diags)
-		t.Fatalf("ожидаем ноль ошибок на incarnation.state.*")
+		t.Fatalf("expect zero errors on incarnation.state.*")
 	}
 }
 
@@ -45,7 +45,7 @@ tasks:
 	_, _, diags, _ := LoadScenarioManifestFromBytes("main.yml", []byte(src), ValidateOptions{})
 	if !hasCode(diags, "state_naked_reference") {
 		dump(t, diags)
-		t.Fatalf("ожидаем state_naked_reference на голом state.* в where:")
+		t.Fatalf("expect state_naked_reference on bare state.* in where:")
 	}
 }
 
@@ -63,7 +63,7 @@ tasks:
 	_, _, diags, _ := LoadScenarioManifestFromBytes("main.yml", []byte(src), ValidateOptions{})
 	if !hasCodeAt(diags, "state_naked_reference", "$.tasks[0].apply.input") {
 		dump(t, diags)
-		t.Fatalf("ожидаем state_naked_reference на голом state.* в apply.input")
+		t.Fatalf("expect state_naked_reference on bare state.* in apply.input")
 	}
 }
 
@@ -79,7 +79,7 @@ tasks:
 	_, _, diags, _ := LoadScenarioManifestFromBytes("main.yml", []byte(src), ValidateOptions{})
 	if !hasCode(diags, "state_naked_reference") {
 		dump(t, diags)
-		t.Fatalf("ожидаем state_naked_reference на голом state.* в params:")
+		t.Fatalf("expect state_naked_reference on bare state.* in params:")
 	}
 }
 
@@ -96,7 +96,7 @@ tasks:
 	_, _, diags, _ := LoadScenarioManifestFromBytes("main.yml", []byte(src), ValidateOptions{})
 	if hasCode(diags, "state_naked_reference") {
 		dump(t, diags)
-		t.Fatalf("ложно-позитивный state_naked_reference на state.x внутри строкового литерала")
+		t.Fatalf("false-positive state_naked_reference on state.x inside a string literal")
 	}
 }
 
@@ -114,6 +114,6 @@ tasks:
 	_, _, diags, _ := LoadScenarioManifestFromBytes("main.yml", []byte(src), ValidateOptions{})
 	if hasCode(diags, "state_naked_reference") {
 		dump(t, diags)
-		t.Fatalf("ложно-позитивный state_naked_reference на incarnation.state_schema_version (state — подстрока, не корень)")
+		t.Fatalf("false-positive state_naked_reference on incarnation.state_schema_version (state is a substring, not the root)")
 	}
 }

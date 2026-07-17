@@ -39,7 +39,7 @@ var incarnationStatusEnum = []any{
 }
 
 // incarnationStatusDescription — the schema description (parity with the spec).
-const incarnationStatusDescription = "Статус runtime-инстанса. В proto константы имеют " +
-	"family-prefix (INCARNATION_STATUS_READY), в JSON API — короткие формы. `drift` — " +
-	"инformционный статус Scry (ADR-031), NOT блокирующий: remediation = обычный apply, " +
-	"который при успехе вернёт incarnation в `ready`."
+const incarnationStatusDescription = "Runtime instance status. In proto the constants have " +
+	"a family-prefix (INCARNATION_STATUS_READY), in the JSON API - short forms. `drift` - " +
+	"an informational Scry status (ADR-031), NOT blocking: remediation = a regular apply, " +
+	"which on success returns the incarnation to `ready`."

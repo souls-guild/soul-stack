@@ -207,7 +207,7 @@ func waitDriftResult(t *testing.T, ch <-chan struct {
 	case r := <-ch:
 		return r.report, r.err
 	case <-time.After(15 * time.Second):
-		t.Fatal("CheckDrift не вернулся за 15s")
+		t.Fatal("CheckDrift did not return within 15s")
 		return nil, nil
 	}
 }
@@ -380,7 +380,7 @@ func TestIntegration_CheckDrift_AcolyteRequired(t *testing.T) {
 		StartedByAID:    "archon-alice",
 	})
 	if err == nil {
-		t.Fatal("CheckDrift на runner без AcolyteEnabled прошёл, want отказ")
+		t.Fatal("CheckDrift succeeded on a runner without AcolyteEnabled, want failure")
 	}
 }
 

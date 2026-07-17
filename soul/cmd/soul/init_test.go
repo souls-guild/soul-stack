@@ -18,25 +18,25 @@ func TestResolveInitToken(t *testing.T) {
 		wantErr   bool
 	}{
 		{
-			name:      "флаг побеждает env",
+			name:      "flag wins over env",
 			flagToken: "flag-tok",
 			env:       "env-tok",
 			want:      "flag-tok",
 		},
 		{
-			name:      "флаг побеждает даже без env",
+			name:      "flag wins even without env",
 			flagToken: "flag-tok",
 			env:       "",
 			want:      "flag-tok",
 		},
 		{
-			name:      "env подхватывается когда флаг пуст",
+			name:      "env is picked up when flag is empty",
 			flagToken: "",
 			env:       "env-tok",
 			want:      "env-tok",
 		},
 		{
-			name:      "оба пусты → ошибка",
+			name:      "both empty -> error",
 			flagToken: "",
 			env:       "",
 			wantErr:   true,

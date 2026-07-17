@@ -107,7 +107,7 @@ func schemaValidateDestiny(path string, root *ast.MappingNode, m *DestinyManifes
 				Level: diag.LevelError, Phase: diag.PhaseSchemaValidate,
 				Code:    "required_module_invalid_format",
 				Message: fmt.Sprintf("required_modules[%d] = %q does not match <namespace>.<module>", i, mod),
-				Hint:    "two-level address per architecture.md → «Адресация модулей»; core-modules are not listed here",
+				Hint:    "two-level address per architecture.md -> \"Module addressing\"; core-modules are not listed here",
 			}))
 		}
 	}

@@ -205,7 +205,7 @@ func TestHandleTaskEvent_FailedRecordsTaskFailure(t *testing.T) {
 	}
 	if !strings.Contains(ardb.execSQL, "UPDATE apply_runs") || !strings.Contains(ardb.execSQL, "COALESCE(error_summary") ||
 		!strings.Contains(ardb.execSQL, "COALESCE(failed_plan_index") {
-		t.Errorf("SQL = %q, want RecordTaskFailure UPDATE (с failed_plan_index)", ardb.execSQL)
+		t.Errorf("SQL = %q, want RecordTaskFailure UPDATE (with failed_plan_index)", ardb.execSQL)
 	}
 	// S3 (ADR-056): RecordTaskFailure carries passage (5th arg) + failed_plan_index
 	// (6th arg) — the reason is written into the (apply_id, sid, passage) row. passage comes from
@@ -214,13 +214,13 @@ func TestHandleTaskEvent_FailedRecordsTaskFailure(t *testing.T) {
 		t.Fatalf("execArgs len = %d, want 6", len(ardb.execArgs))
 	}
 	if ardb.execArgs[2] != 1 {
-		t.Errorf("task_idx arg = %v, want 1 (локальный)", ardb.execArgs[2])
+		t.Errorf("task_idx arg = %v, want 1 (local)", ardb.execArgs[2])
 	}
 	if ardb.execArgs[4] != 0 {
 		t.Errorf("passage arg = %v, want 0", ardb.execArgs[4])
 	}
 	if ardb.execArgs[5] != 6 {
-		t.Errorf("★ failed_plan_index arg = %v, want 6 (глобальный ev.PlanIndex, не локальный TaskIdx=1)", ardb.execArgs[5])
+		t.Errorf("* failed_plan_index arg = %v, want 6 (global ev.PlanIndex, not local TaskIdx=1)", ardb.execArgs[5])
 	}
 	want := "task 1 core.pkg.installed: E: Version '7.2.4' not found"
 	if ardb.execArgs[3] != want {
@@ -257,7 +257,7 @@ func TestHandleTaskEvent_OKDoesNotRecordFailure(t *testing.T) {
 		ApplyId: "01HAPPLY", TaskIdx: 0, Status: keeperv1.TaskStatus_TASK_STATUS_OK,
 	})
 	if ardb.execCalls != 0 {
-		t.Errorf("execCalls = %d, want 0 (OK не пишет failure)", ardb.execCalls)
+		t.Errorf("execCalls = %d, want 0 (OK does not write a failure)", ardb.execCalls)
 	}
 }
 
@@ -340,7 +340,7 @@ func TestHandleTaskEvent_NoLogSuppressesAudit(t *testing.T) {
 		t.Errorf("error.code/module dropped: %v", errMap)
 	}
 	if e.Payload["status"] != "TASK_STATUS_FAILED" || e.Payload["apply_id"] != "01HAPPLY" {
-		t.Errorf("несекретные поля статуса потеряны: %v", e.Payload)
+		t.Errorf("non-secret status fields lost: %v", e.Payload)
 	}
 }
 
@@ -389,9 +389,9 @@ func TestComposeTaskErrorSummary(t *testing.T) {
 		te   *keeperv1.TaskError
 		want string
 	}{
-		{"полный", 0, &keeperv1.TaskError{Module: "core.pkg.installed", Message: "boom"}, "task 0 core.pkg.installed: boom"},
-		{"без модуля", 3, &keeperv1.TaskError{Message: "boom"}, "task 3: boom"},
-		{"без message", 1, &keeperv1.TaskError{Module: "core.file.present"}, "task 1 core.file.present"},
+		{"full", 0, &keeperv1.TaskError{Module: "core.pkg.installed", Message: "boom"}, "task 0 core.pkg.installed: boom"},
+		{"no module", 3, &keeperv1.TaskError{Message: "boom"}, "task 3: boom"},
+		{"no message", 1, &keeperv1.TaskError{Module: "core.file.present"}, "task 1 core.file.present"},
 		{"nil error", 2, nil, "task 2"},
 	}
 	for _, tt := range tests {
@@ -425,7 +425,7 @@ func TestHandleTaskEvent_AccumulatesRegister(t *testing.T) {
 		t.Fatalf("execCalls = %d, want 1 (upsert apply_task_register)", ardb.execCalls)
 	}
 	if want := "INSERT INTO apply_task_register"; !strings.Contains(ardb.execSQL, want) {
-		t.Errorf("SQL = %q, want содержащий %q", ardb.execSQL, want)
+		t.Errorf("SQL = %q, want containing %q", ardb.execSQL, want)
 	}
 	// ADR-056 §S1 fix Variant B: the register-upsert carries the GLOBAL plan_index as the
 	// correlation key ($3), local task_idx as data ($4), passage as a component of the
@@ -447,7 +447,7 @@ func TestHandleTaskEvent_NoRegisterData_NoAccumulate(t *testing.T) {
 		ApplyId: "a", TaskIdx: 0, Status: keeperv1.TaskStatus_TASK_STATUS_OK,
 	})
 	if ardb.execCalls != 0 {
-		t.Errorf("execCalls = %d, want 0 (нет register_data)", ardb.execCalls)
+		t.Errorf("execCalls = %d, want 0 (no register_data)", ardb.execCalls)
 	}
 }
 
@@ -463,7 +463,7 @@ func TestHandleTaskEvent_NilApplyRunDB_NoAccumulate(t *testing.T) {
 		ApplyId: "a", TaskIdx: 0, Status: keeperv1.TaskStatus_TASK_STATUS_CHANGED, RegisterData: rd,
 	})
 	if len(aw.snapshot()) != 1 {
-		t.Errorf("audit events = %d, want 1 (accumulate no-op не должен мешать audit)", len(aw.snapshot()))
+		t.Errorf("audit events = %d, want 1 (accumulate no-op must not interfere with audit)", len(aw.snapshot()))
 	}
 }
 
@@ -675,7 +675,7 @@ func TestHandleRunResult_FailedPreservesPerTaskSummary(t *testing.T) {
 		t.Errorf("status arg = %v, want failed", ardb.execArgs[2])
 	}
 	if ardb.execArgs[3] != nil {
-		t.Errorf("error_summary arg = %v, want nil (per-task summary не перезаписывается)", ardb.execArgs[3])
+		t.Errorf("error_summary arg = %v, want nil (per-task summary is not overwritten)", ardb.execArgs[3])
 	}
 }
 
@@ -750,7 +750,7 @@ func TestCorrelateRunResult_StaleAttemptDropped(t *testing.T) {
 	}
 	// audit + SSE-publish happen BEFORE correlate — receipt is recorded even on stale.
 	if len(aw.snapshot()) != 1 {
-		t.Errorf("audit events = %d, want 1 (run.completed пишется до correlate)", len(aw.snapshot()))
+		t.Errorf("audit events = %d, want 1 (run.completed is written before correlate)", len(aw.snapshot()))
 	}
 }
 
@@ -788,7 +788,7 @@ func TestCorrelateRunResult_GreaterAttemptCommitsFailSafe(t *testing.T) {
 		ApplyId: "01HAPPLY", Status: keeperv1.RunStatus_RUN_STATUS_SUCCESS, Attempt: 5,
 	})
 	if ardb.execCalls != 1 {
-		t.Fatalf("execCalls = %d, want 1 (fail-safe commit при recvAttempt>rowAttempt)", ardb.execCalls)
+		t.Fatalf("execCalls = %d, want 1 (fail-safe commit on recvAttempt>rowAttempt)", ardb.execCalls)
 	}
 	if body := obstest.Scrape(t, reg.Gatherer()); strings.Contains(body, "keeper_runresult_stale_total 1") {
 		t.Errorf("stale_total must stay 0 on recvAttempt>rowAttempt (commit, not stale-drop); got=\n%s", body)
@@ -913,10 +913,10 @@ func TestSoulprintFactsMarshaler_SnakeCaseKeys(t *testing.T) {
 		t.Errorf("os.init_system = %v, want systemd (snake_case canon)", os["init_system"])
 	}
 	if _, ok := os["pkgMgr"]; ok {
-		t.Errorf("camelCase key pkgMgr present — рассинхрон с CEL/docs: %s", b)
+		t.Errorf("camelCase key pkgMgr present -- out of sync with CEL/docs: %s", b)
 	}
 	if _, ok := os["initSystem"]; ok {
-		t.Errorf("camelCase key initSystem present — рассинхрон с CEL/docs: %s", b)
+		t.Errorf("camelCase key initSystem present -- out of sync with CEL/docs: %s", b)
 	}
 
 	net, _ := got["network"].(map[string]any)
@@ -924,7 +924,7 @@ func TestSoulprintFactsMarshaler_SnakeCaseKeys(t *testing.T) {
 		t.Errorf("network.primary_ip = %v, want 10.0.0.7 (snake_case canon): %s", net, b)
 	}
 	if _, ok := net["primaryIp"]; ok {
-		t.Errorf("camelCase key primaryIp present — рассинхрон с CEL/docs: %s", b)
+		t.Errorf("camelCase key primaryIp present -- out of sync with CEL/docs: %s", b)
 	}
 }
 
@@ -979,10 +979,10 @@ func TestHandleRunResult_Passage0_CorrelatesIdentically(t *testing.T) {
 			t.Fatalf("%s: UpdateStatus execCalls = %d, want 1", name, ardb.execCalls)
 		}
 		if !strings.Contains(ardb.execSQL, "WHERE apply_id = $1 AND sid = $2 AND passage = $5") {
-			t.Errorf("%s: correlation WHERE не passage-aware (S3 ADR-056): %q", name, ardb.execSQL)
+			t.Errorf("%s: correlation WHERE is not passage-aware (S3 ADR-056): %q", name, ardb.execSQL)
 		}
 		if len(ardb.execArgs) != 5 {
-			t.Errorf("%s: execArgs len = %d, want 5 (passage в WHERE на S3)", name, len(ardb.execArgs))
+			t.Errorf("%s: execArgs len = %d, want 5 (passage in WHERE on S3)", name, len(ardb.execArgs))
 		}
 		if ardb.execArgs[2] != "success" {
 			t.Errorf("%s: status arg = %v, want success", name, ardb.execArgs[2])
@@ -1033,7 +1033,7 @@ func TestHandleTaskEvent_Passage0_AccumulatesIdentically(t *testing.T) {
 		t.Errorf("SQL = %q, want INSERT INTO apply_task_register", ardb.execSQL)
 	}
 	if len(ardb.execArgs) != 6 {
-		t.Fatalf("execArgs len = %d, want 6 (plan_index + passage в register-upsert)", len(ardb.execArgs))
+		t.Fatalf("execArgs len = %d, want 6 (plan_index + passage in register-upsert)", len(ardb.execArgs))
 	}
 	if ardb.execArgs[0] != "01HABCAPPLY00000000000000" || ardb.execArgs[1] != "host.example.com" || ardb.execArgs[2] != 2 || ardb.execArgs[3] != 2 {
 		t.Errorf("args[0..3] = %v / %v / %v / %v", ardb.execArgs[0], ardb.execArgs[1], ardb.execArgs[2], ardb.execArgs[3])

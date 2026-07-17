@@ -98,7 +98,7 @@ func (h *Handler) callIncarnationTraitsSet(ctx context.Context, claims *jwt.Clai
 	// souls.traits. Best-effort (log, don't fail the tool): incarnation.traits
 	// is already written, the projection will catch up on the next bind/sync.
 	if serr := incarnation.SyncTraitsToHosts(ctx, h.deps.IncarnationDB, a.Name, res.Incarnation.Traits); serr != nil {
-		h.deps.Logger.Warn("mcp: incarnation.traits-set sync traits → souls провален (best-effort)",
+		h.deps.Logger.Warn("mcp: incarnation.traits-set sync traits → souls failed (best-effort)",
 			slog.String("name", a.Name), slog.Any("error", serr))
 	}
 

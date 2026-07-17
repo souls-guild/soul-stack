@@ -80,14 +80,14 @@ func TestHeraldAuditNoPlaintext(t *testing.T) {
 
 	auditJSON, _ := json.Marshal(map[string]any(reply.AuditPayload()))
 	if strings.Contains(string(auditJSON), leakHandlerPlaintext) {
-		t.Fatalf("plaintext утёк в herald audit-payload: %s", auditJSON)
+		t.Fatalf("plaintext leaked into herald audit-payload: %s", auditJSON)
 	}
 	if !strings.Contains(string(auditJSON), "plaintext_ingested") {
-		t.Fatalf("маркер plaintext_ingested отсутствует в audit: %s", auditJSON)
+		t.Fatalf("plaintext_ingested marker missing from audit: %s", auditJSON)
 	}
 	// The returned View is clean too.
 	if viewJSON, _ := json.Marshal(reply.View); strings.Contains(string(viewJSON), leakHandlerPlaintext) {
-		t.Fatalf("plaintext утёк в herald View: %s", viewJSON)
+		t.Fatalf("plaintext leaked into herald View: %s", viewJSON)
 	}
 }
 
@@ -113,12 +113,12 @@ func TestProviderAuditNoPlaintext(t *testing.T) {
 
 	auditJSON, _ := json.Marshal(map[string]any(reply.AuditPayload()))
 	if strings.Contains(string(auditJSON), leakHandlerPlaintext) {
-		t.Fatalf("plaintext утёк в provider audit-payload: %s", auditJSON)
+		t.Fatalf("plaintext leaked into provider audit-payload: %s", auditJSON)
 	}
 	if !strings.Contains(string(auditJSON), "plaintext_ingested") {
-		t.Fatalf("маркер plaintext_ingested отсутствует в audit: %s", auditJSON)
+		t.Fatalf("plaintext_ingested marker missing from audit: %s", auditJSON)
 	}
 	if bodyJSON, _ := json.Marshal(reply.Body); strings.Contains(string(bodyJSON), leakHandlerPlaintext) {
-		t.Fatalf("plaintext утёк в provider View: %s", bodyJSON)
+		t.Fatalf("plaintext leaked into provider View: %s", bodyJSON)
 	}
 }

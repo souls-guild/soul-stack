@@ -32,7 +32,7 @@ func TestGlob_HappyPath(t *testing.T) {
 				t.Fatalf("EvalExpression: %v", err)
 			}
 			if got := out.Value(); got != tc.want {
-				t.Fatalf("результат = %v, want %v", got, tc.want)
+				t.Fatalf("result = %v, want %v", got, tc.want)
 			}
 		})
 	}
@@ -51,7 +51,7 @@ func TestGlob_SoulprintSelf(t *testing.T) {
 		t.Fatalf("EvalExpression: %v", err)
 	}
 	if got := out.Value(); got != true {
-		t.Fatalf("результат = %v, want true", got)
+		t.Fatalf("result = %v, want true", got)
 	}
 }
 
@@ -100,7 +100,7 @@ func TestGlob_MalformedPattern(t *testing.T) {
 		t.Fatalf("EvalExpression: %v", err)
 	}
 	if got := out.Value(); got != false {
-		t.Fatalf("малформ-pattern: результат = %v, want false", got)
+		t.Fatalf("malformed-pattern: result = %v, want false", got)
 	}
 }
 
@@ -123,7 +123,7 @@ func TestGlob_CombinedExpression(t *testing.T) {
 		t.Fatalf("EvalExpression: %v", err)
 	}
 	if got := out.Value(); got != true {
-		t.Fatalf("результат = %v, want true", got)
+		t.Fatalf("result = %v, want true", got)
 	}
 }
 
@@ -138,7 +138,7 @@ func TestGlob_UndeclaredInMigration(t *testing.T) {
 	})
 	var ce *ErrCompile
 	if !errors.As(err, &ce) {
-		t.Fatalf("glob() в migration-env: ошибка = %v, want *ErrCompile (no such overload)", err)
+		t.Fatalf("glob() in migration-env: error = %v, want *ErrCompile (no such overload)", err)
 	}
 }
 
@@ -157,6 +157,6 @@ func TestGlob_AvailableInFlowControl(t *testing.T) {
 		t.Fatalf("EvalExpression: %v", err)
 	}
 	if got := out.Value(); got != true {
-		t.Fatalf("результат = %v, want true", got)
+		t.Fatalf("result = %v, want true", got)
 	}
 }

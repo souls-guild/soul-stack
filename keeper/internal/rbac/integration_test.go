@@ -241,10 +241,10 @@ func TestIntegration_LoadSnapshot_IncludesRevoked(t *testing.T) {
 		t.Fatalf("LoadSnapshot: %v", err)
 	}
 	if _, ok := snap.Revoked["archon-fired"]; !ok {
-		t.Errorf("Revoked[archon-fired] отсутствует: %+v", snap.Revoked)
+		t.Errorf("Revoked[archon-fired] is missing: %+v", snap.Revoked)
 	}
 	if _, ok := snap.Revoked["archon-active"]; ok {
-		t.Errorf("Revoked[archon-active] = true, want false (активный оператор не в выборке)")
+		t.Errorf("Revoked[archon-active] = true, want false (active operator must not be in the set)")
 	}
 
 	// End-to-end path: enforcer built from the snapshot → Check for a
@@ -254,7 +254,7 @@ func TestIntegration_LoadSnapshot_IncludesRevoked(t *testing.T) {
 	}
 	snap, err = LoadSnapshot(ctx, integrationPool)
 	if err != nil {
-		t.Fatalf("LoadSnapshot после grant: %v", err)
+		t.Fatalf("LoadSnapshot after grant: %v", err)
 	}
 	e, err := NewEnforcerFromSnapshot(snap)
 	if err != nil {
@@ -329,7 +329,7 @@ func TestIntegration_SynodMembershipUnion(t *testing.T) {
 		t.Fatalf("LoadSnapshot: %v", err)
 	}
 	if got := snap.Membership["archon-x"]; len(got) != 1 || got[0] != "prod-ops" {
-		t.Fatalf("Membership[archon-x] = %v, want [prod-ops] (через Synod)", got)
+		t.Fatalf("Membership[archon-x] = %v, want [prod-ops] (via Synod)", got)
 	}
 	e, err := NewEnforcerFromSnapshot(snap)
 	if err != nil {
@@ -415,6 +415,6 @@ func TestIntegration_SynodRoleCascadeOnRoleDelete(t *testing.T) {
 		t.Fatalf("count synod_operators: %v", err)
 	}
 	if opRows != 1 {
-		t.Errorf("synod_operators rows = %d, want 1 (membership не трогается DELETE-ом роли)", opRows)
+		t.Errorf("synod_operators rows = %d, want 1 (membership is untouched by deleting the role)", opRows)
 	}
 }

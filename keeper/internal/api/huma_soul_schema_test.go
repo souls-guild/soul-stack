@@ -84,12 +84,12 @@ func TestSchemaNames_Soul(t *testing.T) {
 	schemas := loadFullSpecSchemas(t)
 	for _, name := range soulContractSchemas {
 		if _, ok := schemas[name]; !ok {
-			t.Errorf("контрактonя схема %q ОТСУТСТВУЕТ в components/schemas (имя не выровнеbut)", name)
+			t.Errorf("contract schema %q is MISSING from components/schemas (name not aligned)", name)
 		}
 	}
 	for _, name := range soulForbiddenSchemas {
 		if _, ok := schemas[name]; ok {
-			t.Errorf("техническое huma-имя %q ПРИСУТСТВУЕТ в спеке — имя не выровнеbut под контракт", name)
+			t.Errorf("technical huma name %q IS PRESENT in the spec -- name not aligned with the contract", name)
 		}
 	}
 }
@@ -107,10 +107,10 @@ func TestSchemaNames_SoulStatusEnum(t *testing.T) {
 	assertStringEnum(t, schemas, "SoulTransport", "agent", "ssh")
 
 	if !strings.Contains(y, "#/components/schemas/SoulStatus") {
-		t.Error("ни одbut field не ссылается on SoulStatus via $ref — статус остался инлайн")
+		t.Error("no field references SoulStatus via $ref -- status remained inline")
 	}
 	if !strings.Contains(y, "#/components/schemas/SoulTransport") {
-		t.Error("ни одbut field не ссылается on SoulTransport via $ref — transport остался инлайн")
+		t.Error("no field references SoulTransport via $ref -- transport remained inline")
 	}
 }
 
@@ -130,13 +130,13 @@ func TestSchemaNames_SoulSshTargetNested(t *testing.T) {
 	// SoulSSHTargetReply → api-named-struct soulSshTargetReply). The capitalization drift
 	// SoulSSHTargetReply is displaced (in the forbidden set).
 	if got := propRef(t, schemas, "SoulSshTargetReply", "ssh_target"); got != targetRef {
-		t.Errorf("SoulSshTargetReply.ssh_target → %q, ожидался %q (output не сведён on единую SoulSshTarget — alias не сработал)", got, targetRef)
+		t.Errorf("SoulSshTargetReply.ssh_target -> %q, expected %q (output not consolidated to a single SoulSshTarget -- alias did not work)", got, targetRef)
 	}
 
 	// The SoulSshTarget shape is checked against the hand-written spec :6394.
 	tgt, _ := schemas["SoulSshTarget"].(map[string]any)
 	if tgt == nil {
-		t.Fatal("SoulSshTarget отсутствует в components.schemas")
+		t.Fatal("SoulSshTarget is missing from components.schemas")
 	}
 	assertRequiredExactly(t, tgt, "SoulSshTarget", "ssh_port", "ssh_user", "soul_path")
 	assertProps(t, tgt, "SoulSshTarget", "ssh_port", "ssh_user", "soul_path", "ssh_provider")
@@ -154,11 +154,11 @@ func TestSchemaNames_SoulListEnvelope(t *testing.T) {
 
 	env, ok := schemas["SoulListReply"].(map[string]any)
 	if !ok {
-		t.Fatal("SoulListReply отсутствует в components/schemas — envelope-alias не сработал")
+		t.Fatal("SoulListReply is missing from components/schemas -- envelope-alias did not work")
 	}
 	props, _ := env["properties"].(map[string]any)
 	if props == nil {
-		t.Fatal("SoulListReply без properties")
+		t.Fatal("SoulListReply has no properties")
 	}
 
 	// ★ Exactly 6 fields — cursor fields MUST be present (differs from the 4-field incarnation).
@@ -169,11 +169,11 @@ func TestSchemaNames_SoulListEnvelope(t *testing.T) {
 			got = append(got, k)
 		}
 		sort.Strings(got)
-		t.Errorf("SoulListReply несёт %d fields %v, ожидалось ровbut 6 (cursor-form: items/offset/limit/total/next_cursor/total_approximate)", len(props), got)
+		t.Errorf("SoulListReply carries %d fields %v, expected exactly 6 (cursor-form: items/offset/limit/total/next_cursor/total_approximate)", len(props), got)
 	}
 	for _, f := range wantFields {
 		if _, ok := props[f]; !ok {
-			t.Errorf("SoulListReply не withдержит контрактbutго поля %q", f)
+			t.Errorf("SoulListReply is missing contract field %q", f)
 		}
 	}
 
@@ -184,36 +184,36 @@ func TestSchemaNames_SoulListEnvelope(t *testing.T) {
 			continue
 		}
 		if !schemaTypeHas(fp["type"], "integer") {
-			t.Errorf("SoulListReply.%s.type=%v, ожидалось integer", f, fp["type"])
+			t.Errorf("SoulListReply.%s.type=%v, expected integer", f, fp["type"])
 		}
 		if format, _ := fp["format"].(string); format != "int32" {
-			t.Errorf("SoulListReply.%s.format=%q, ожидалось int32", f, format)
+			t.Errorf("SoulListReply.%s.format=%q, expected int32", f, format)
 		}
 	}
 
 	// next_cursor — string; total_approximate — boolean.
 	if nc, _ := props["next_cursor"].(map[string]any); nc != nil && !schemaTypeHas(nc["type"], "string") {
-		t.Errorf("SoulListReply.next_cursor.type=%v, ожидалось string", nc["type"])
+		t.Errorf("SoulListReply.next_cursor.type=%v, expected string", nc["type"])
 	}
 	if ta, _ := props["total_approximate"].(map[string]any); ta != nil && !schemaTypeHas(ta["type"], "boolean") {
-		t.Errorf("SoulListReply.total_approximate.type=%v, ожидалось boolean", ta["type"])
+		t.Errorf("SoulListReply.total_approximate.type=%v, expected boolean", ta["type"])
 	}
 
 	// items — an array with a $ref to the contract element SoulListEntry.
 	items, _ := props["items"].(map[string]any)
 	if items == nil {
-		t.Fatal("SoulListReply.items отсутствует")
+		t.Fatal("SoulListReply.items is missing")
 	}
 	if !schemaTypeHas(items["type"], "array") {
-		t.Errorf("SoulListReply.items.type=%v, ожидалось array", items["type"])
+		t.Errorf("SoulListReply.items.type=%v, expected array", items["type"])
 	}
 	elem, _ := items["items"].(map[string]any)
 	if elem == nil {
-		t.Fatal("SoulListReply.items.items отсутствует (element-схема)")
+		t.Fatal("SoulListReply.items.items is missing (element schema)")
 	}
 	const wantRef = "#/components/schemas/SoulListEntry"
 	if ref, _ := elem["$ref"].(string); ref != wantRef {
-		t.Errorf("SoulListReply.items.items.$ref=%q, ожидалось %q", ref, wantRef)
+		t.Errorf("SoulListReply.items.items.$ref=%q, expected %q", ref, wantRef)
 	}
 }
 
@@ -229,7 +229,7 @@ func TestSchemaNames_SoulprintFactsTyped(t *testing.T) {
 
 	// typed_facts → $ref SoulprintFacts (typed, not a free-form object).
 	if got := propRef(t, schemas, "SoulprintReadReply", "typed_facts"); got != "#/components/schemas/SoulprintFacts" {
-		t.Errorf("SoulprintReadReply.typed_facts.$ref=%q, ожидался #/components/schemas/SoulprintFacts (alias не сработал — typed_facts остался free-form object)", got)
+		t.Errorf("SoulprintReadReply.typed_facts.$ref=%q, expected #/components/schemas/SoulprintFacts (alias did not work -- typed_facts remained a free-form object)", got)
 	}
 
 	// SoulprintFacts.{os,kernel,cpu,memory,network} → $ref to the contract sub-schemas.
@@ -242,23 +242,23 @@ func TestSchemaNames_SoulprintFactsTyped(t *testing.T) {
 	}
 	for field, want := range wantFactRefs {
 		if got := propRef(t, schemas, "SoulprintFacts", field); got != want {
-			t.Errorf("SoulprintFacts.%s.$ref=%q, ожидался %q", field, got, want)
+			t.Errorf("SoulprintFacts.%s.$ref=%q, expected %q", field, got, want)
 		}
 	}
 
 	// SoulprintNetworkFacts.interfaces — array $ref to the contract SoulprintNetworkInterface.
 	net, _ := schemas["SoulprintNetworkFacts"].(map[string]any)
 	if net == nil {
-		t.Fatal("SoulprintNetworkFacts отсутствует в components/schemas")
+		t.Fatal("SoulprintNetworkFacts is missing from components/schemas")
 	}
 	netProps, _ := net["properties"].(map[string]any)
 	ifaces, _ := netProps["interfaces"].(map[string]any)
 	if ifaces == nil {
-		t.Fatal("SoulprintNetworkFacts.interfaces отсутствует")
+		t.Fatal("SoulprintNetworkFacts.interfaces is missing")
 	}
 	elem, _ := ifaces["items"].(map[string]any)
 	if ref, _ := elem["$ref"].(string); ref != "#/components/schemas/SoulprintNetworkInterface" {
-		t.Errorf("SoulprintNetworkFacts.interfaces.items.$ref=%q, ожидался #/components/schemas/SoulprintNetworkInterface", ref)
+		t.Errorf("SoulprintNetworkFacts.interfaces.items.$ref=%q, expected #/components/schemas/SoulprintNetworkInterface", ref)
 	}
 }
 
@@ -271,7 +271,7 @@ func loadFullSpecDoc(t *testing.T) (string, map[string]any) {
 	}
 	var doc map[string]any
 	if err := yaml.Unmarshal([]byte(y), &doc); err != nil {
-		t.Fatalf("спека не парсится: %v", err)
+		t.Fatalf("spec does not parse: %v", err)
 	}
 	return y, doc
 }
@@ -281,14 +281,14 @@ func assertStringEnum(t *testing.T, schemas map[string]any, name string, want ..
 	t.Helper()
 	sch, ok := schemas[name].(map[string]any)
 	if !ok {
-		t.Fatalf("%s не вынесен as named-схема в components/schemas", name)
+		t.Fatalf("%s was not extracted as a named schema in components/schemas", name)
 	}
 	if typ, _ := sch["type"].(string); typ != "string" {
-		t.Errorf("%s.type=%q, ожидалось string", name, typ)
+		t.Errorf("%s.type=%q, expected string", name, typ)
 	}
 	rawEnum, ok := sch["enum"].([]any)
 	if !ok || len(rawEnum) == 0 {
-		t.Fatalf("%s без enum — выbutса as enum не проfromошло", name)
+		t.Fatalf("%s has no enum -- enum extraction did not happen", name)
 	}
 	got := map[string]struct{}{}
 	for _, v := range rawEnum {
@@ -302,11 +302,11 @@ func assertStringEnum(t *testing.T, schemas map[string]any, name string, want ..
 			have = append(have, k)
 		}
 		sort.Strings(have)
-		t.Errorf("enum %s = %v, ожидалось %v", name, have, want)
+		t.Errorf("enum %s = %v, expected %v", name, have, want)
 	}
 	for _, w := range want {
 		if _, ok := got[w]; !ok {
-			t.Errorf("enum %s не withдержит %q", name, w)
+			t.Errorf("enum %s does not contain %q", name, w)
 		}
 	}
 }

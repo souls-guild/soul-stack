@@ -33,12 +33,12 @@ func newRunPushCmd() *cobra.Command {
 	)
 	c := &cobra.Command{
 		Use:   "push <destiny@ref>",
-		Short: "push-применение destiny через SSH-провайдер",
+		Short: "push-apply destiny via an SSH provider",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			destiny := args[0]
 			if destiny == "" {
-				return errors.New("destiny пуст; ожидался формат <name>@<ref>")
+				return errors.New("destiny is empty; expected format <name>@<ref>")
 			}
 			target, err := tflags.resolve()
 			if err != nil {
@@ -81,10 +81,10 @@ func newRunPushCmd() *cobra.Command {
 		},
 	}
 	c.Flags().StringVar(&sshProvider, "ssh-provider", "",
-		"имя SshProvider-плагина (pусто → server-default)")
-	c.Flags().StringVar(&inputJSON, "input", "", "input destiny в JSON")
+		"SshProvider plugin name (empty -> server-default)")
+	c.Flags().StringVar(&inputJSON, "input", "", "input destiny as JSON")
 	c.Flags().BoolVar(&cleanupStaleVersions, "cleanup-stale-versions", false,
-		"удалить устаревшие версии soul-бинаря/модулей в этой же SSH-сессии")
+		"remove stale soul-binary/module versions within the same SSH session")
 	tflags.bind(c)
 	return c
 }
@@ -94,10 +94,10 @@ func newRunPushCmd() *cobra.Command {
 // with a hint on how to get the inventory via a separate command.
 func validatePushTarget(t resolvedTarget) error {
 	if len(t.SIDs) == 0 {
-		return errors.New("push требует --target-sids <host1,host2,...> (inventory exact-match)")
+		return errors.New("push requires --target-sids <host1,host2,...> (inventory exact-match)")
 	}
 	if len(t.Coven) > 0 || t.Where != "" {
-		return errors.New("push поддерживает только --target-sids; coven/glob/regex/where недоступны (используйте `soulctl souls list --coven=…` для получения inventory)")
+		return errors.New("push supports only --target-sids; coven/glob/regex/where are not available (use `soulctl souls list --coven=…` to get the inventory)")
 	}
 	return nil
 }

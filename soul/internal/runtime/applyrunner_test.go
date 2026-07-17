@@ -92,7 +92,7 @@ func TestRun_EchoesAttemptInRunResult(t *testing.T) {
 		t.Fatalf("Run(zero attempt): %v", err)
 	}
 	if got := zeroSink.runResult.GetAttempt(); got != 0 {
-		t.Errorf("RunResult.attempt = %d, want 0 (нет attempt в запросе)", got)
+		t.Errorf("RunResult.attempt = %d, want 0 (no attempt in the request)", got)
 	}
 }
 
@@ -213,16 +213,16 @@ func TestRun_StopsOnFirstFailed(t *testing.T) {
 		t.Fatalf("Run: %v", err)
 	}
 	if secondCalled {
-		t.Errorf("вторая задача исполнилась, хотя прогон уже провален (fail-stop)")
+		t.Errorf("second task executed even though the run had already failed (fail-stop)")
 	}
 	if len(sink.taskEvents) != 2 {
 		t.Fatalf("taskEvents = %d (want 2: FAILED + SKIPPED)", len(sink.taskEvents))
 	}
 	if got := sink.taskEvents[0].GetStatus(); got != keeperv1.TaskStatus_TASK_STATUS_FAILED {
-		t.Errorf("первая задача status = %v, want FAILED", got)
+		t.Errorf("first task status = %v, want FAILED", got)
 	}
 	if got := sink.taskEvents[1].GetStatus(); got != keeperv1.TaskStatus_TASK_STATUS_SKIPPED {
-		t.Errorf("вторая задача status = %v, want SKIPPED (пропущена после провала)", got)
+		t.Errorf("second task status = %v, want SKIPPED (skipped after failure)", got)
 	}
 	if sink.runResult.GetStatus() != keeperv1.RunStatus_RUN_STATUS_FAILED {
 		t.Errorf("runResult.status = %v", sink.runResult.GetStatus())
@@ -403,7 +403,7 @@ func TestRun_TaskTimeout_TimesOut(t *testing.T) {
 		t.Fatalf("Run: %v", err)
 	}
 	if elapsed := time.Since(start); elapsed >= time.Second {
-		t.Fatalf("прогон завис на %v — отвалился по scenario-ceiling, не по task-timeout", elapsed)
+		t.Fatalf("run hung for %v - timed out on scenario-ceiling, not task-timeout", elapsed)
 	}
 	if len(sink.taskEvents) != 1 {
 		t.Fatalf("taskEvents = %d (want 1)", len(sink.taskEvents))
@@ -419,7 +419,7 @@ func TestRun_TaskTimeout_TimesOut(t *testing.T) {
 		t.Errorf("register_data.timed_out != true")
 	}
 	if !ev.GetRegisterData().GetFields()["failed"].GetBoolValue() {
-		t.Errorf("register_data.failed != true (timed_out — частный случай failed)")
+		t.Errorf("register_data.failed != true (timed_out is a special case of failed)")
 	}
 	if sink.runResult.GetStatus() != keeperv1.RunStatus_RUN_STATUS_FAILED {
 		t.Errorf("runResult.status = %v, want FAILED", sink.runResult.GetStatus())
@@ -477,7 +477,7 @@ func TestRun_TaskTimeout_DaySuffix(t *testing.T) {
 		t.Fatalf("Run: %v", err)
 	}
 	if sink.taskEvents[0].GetStatus() != keeperv1.TaskStatus_TASK_STATUS_CHANGED {
-		t.Errorf("status = %v, want CHANGED (`1d` распознан как валидный лимит)", sink.taskEvents[0].GetStatus())
+		t.Errorf("status = %v, want CHANGED (`1d` recognized as a valid limit)", sink.taskEvents[0].GetStatus())
 	}
 	if sink.runResult.GetStatus() != keeperv1.RunStatus_RUN_STATUS_SUCCESS {
 		t.Errorf("runResult.status = %v, want SUCCESS", sink.runResult.GetStatus())
@@ -506,7 +506,7 @@ func TestRun_TaskTimeout_NonPositiveNoLimit(t *testing.T) {
 		t.Fatalf("Run: %v", err)
 	}
 	if sink.taskEvents[0].GetStatus() != keeperv1.TaskStatus_TASK_STATUS_CHANGED {
-		t.Errorf("status = %v, want CHANGED (`0s` = лимита нет, не мгновенный TIMED_OUT)", sink.taskEvents[0].GetStatus())
+		t.Errorf("status = %v, want CHANGED (`0s` = no limit, not an instant TIMED_OUT)", sink.taskEvents[0].GetStatus())
 	}
 	if sink.runResult.GetStatus() != keeperv1.RunStatus_RUN_STATUS_SUCCESS {
 		t.Errorf("runResult.status = %v, want SUCCESS", sink.runResult.GetStatus())
@@ -539,7 +539,7 @@ func TestRun_TaskTimeout_NotMaskedAsCancel(t *testing.T) {
 	}
 	ev := sink.taskEvents[0]
 	if ev.GetStatus() == keeperv1.TaskStatus_TASK_STATUS_CANCELLED {
-		t.Fatalf("status = CANCELLED — timeout замаскировался под cancel")
+		t.Fatalf("status = CANCELLED - timeout masqueraded as cancel")
 	}
 	if ev.GetStatus() != keeperv1.TaskStatus_TASK_STATUS_TIMED_OUT {
 		t.Errorf("status = %v, want TIMED_OUT", ev.GetStatus())
@@ -548,7 +548,7 @@ func TestRun_TaskTimeout_NotMaskedAsCancel(t *testing.T) {
 		t.Errorf("error.code = %q, want task.timed_out", ev.GetError().GetCode())
 	}
 	if sink.runResult.GetStatus() == keeperv1.RunStatus_RUN_STATUS_CANCELLED {
-		t.Fatalf("runResult.status = CANCELLED — прогон замаскировал timeout под cancel")
+		t.Fatalf("runResult.status = CANCELLED - the run masqueraded timeout as cancel")
 	}
 	if sink.runResult.GetStatus() != keeperv1.RunStatus_RUN_STATUS_FAILED {
 		t.Errorf("runResult.status = %v, want FAILED", sink.runResult.GetStatus())
@@ -573,10 +573,10 @@ func TestRun_TaskTimeout_InvalidDuration(t *testing.T) {
 		Tasks:   []*keeperv1.RenderedTask{{Module: "core.pkg.installed", Timeout: "not-a-duration"}},
 	}, sink)
 	if err != nil {
-		t.Fatalf("Run: %v (не должен падать на невалидной duration)", err)
+		t.Fatalf("Run: %v (must not fail on an invalid duration)", err)
 	}
 	if sink.taskEvents[0].GetStatus() != keeperv1.TaskStatus_TASK_STATUS_CHANGED {
-		t.Errorf("status = %v, want CHANGED (невалидный timeout = не задан)", sink.taskEvents[0].GetStatus())
+		t.Errorf("status = %v, want CHANGED (invalid timeout = not set)", sink.taskEvents[0].GetStatus())
 	}
 	if sink.runResult.GetStatus() != keeperv1.RunStatus_RUN_STATUS_SUCCESS {
 		t.Errorf("runResult.status = %v, want SUCCESS", sink.runResult.GetStatus())
@@ -679,13 +679,13 @@ func TestRun_OnChanges_SourceChanged_Runs(t *testing.T) {
 		t.Fatalf("Run: %v", err)
 	}
 	if !restarted {
-		t.Fatal("restart task НЕ выполнена, хотя источник changed (mod.Apply должен быть вызван)")
+		t.Fatal("restart task was NOT executed even though the source changed (mod.Apply should be called)")
 	}
 	if len(sink.taskEvents) != 2 {
 		t.Fatalf("taskEvents = %d, want 2", len(sink.taskEvents))
 	}
 	if sink.taskEvents[1].GetStatus() == keeperv1.TaskStatus_TASK_STATUS_SKIPPED {
-		t.Errorf("restart status = SKIPPED, want выполнена (источник changed)")
+		t.Errorf("restart status = SKIPPED, want executed (source changed)")
 	}
 	if sink.runResult.GetStatus() != keeperv1.RunStatus_RUN_STATUS_SUCCESS {
 		t.Errorf("runResult.status = %v, want SUCCESS", sink.runResult.GetStatus())
@@ -726,10 +726,10 @@ func TestRun_OnChanges_SourceUnchanged_Skipped(t *testing.T) {
 		t.Fatalf("Run: %v", err)
 	}
 	if restarted {
-		t.Fatal("restart task ВЫПОЛНЕНА (mod.Apply вызван), хотя источник unchanged — restart-flap не исправлен")
+		t.Fatal("restart task WAS EXECUTED (mod.Apply called) even though the source is unchanged - restart-flap not fixed")
 	}
 	if len(sink.taskEvents) != 2 {
-		t.Fatalf("taskEvents = %d, want 2 (skipped задача тоже шлёт TaskEvent)", len(sink.taskEvents))
+		t.Fatalf("taskEvents = %d, want 2 (skipped task also sends TaskEvent)", len(sink.taskEvents))
 	}
 	skip := sink.taskEvents[1]
 	if skip.GetStatus() != keeperv1.TaskStatus_TASK_STATUS_SKIPPED {
@@ -740,10 +740,10 @@ func TestRun_OnChanges_SourceUnchanged_Skipped(t *testing.T) {
 		t.Errorf("register.skipped != true")
 	}
 	if rd["changed"].GetBoolValue() {
-		t.Errorf("register.changed == true у skipped задачи (skipped ≠ changed)")
+		t.Errorf("register.changed == true for a skipped task (skipped != changed)")
 	}
 	if rd["failed"].GetBoolValue() {
-		t.Errorf("register.failed == true у skipped задачи")
+		t.Errorf("register.failed == true for a skipped task")
 	}
 	// SKIPPED is not a failure: the run succeeds.
 	if sink.runResult.GetStatus() != keeperv1.RunStatus_RUN_STATUS_SUCCESS {
@@ -788,10 +788,10 @@ func TestRun_OnChanges_MultiSource_AnyChanged(t *testing.T) {
 		t.Fatalf("Run: %v", err)
 	}
 	if !ran {
-		t.Fatal("onchanges-задача НЕ выполнена, хотя один из источников changed (any-семантика)")
+		t.Fatal("onchanges-task was NOT executed even though one of the sources changed (any-semantics)")
 	}
 	if sink.taskEvents[2].GetStatus() == keeperv1.TaskStatus_TASK_STATUS_SKIPPED {
-		t.Errorf("restart status = SKIPPED, want выполнена")
+		t.Errorf("restart status = SKIPPED, want executed")
 	}
 }
 
@@ -834,10 +834,10 @@ func TestRun_OnChanges_SkippedDoesNotTrigger(t *testing.T) {
 		t.Fatalf("Run: %v", err)
 	}
 	if ran["a"] {
-		t.Error("задача a выполнена, хотя её источник unchanged")
+		t.Error("task a executed even though its source is unchanged")
 	}
 	if ran["b"] {
-		t.Error("задача b выполнена — skipped-источник a НЕ должен триггерить onchanges (skipped ≠ changed)")
+		t.Error("task b executed - skipped-source a must NOT trigger onchanges (skipped != changed)")
 	}
 	if sink.taskEvents[1].GetStatus() != keeperv1.TaskStatus_TASK_STATUS_SKIPPED ||
 		sink.taskEvents[2].GetStatus() != keeperv1.TaskStatus_TASK_STATUS_SKIPPED {
@@ -859,13 +859,13 @@ func TestSkipOnChanges(t *testing.T) {
 		reg  map[int32]*structpb.Struct
 		want bool
 	}{
-		{"пусто onchanges → run", nil, nil, false},
-		{"источник changed → run", []int32{0}, map[int32]*structpb.Struct{0: changed}, false},
-		{"источник unchanged → skip", []int32{0}, map[int32]*structpb.Struct{0: unchanged}, true},
+		{"empty onchanges -> run", nil, nil, false},
+		{"source changed -> run", []int32{0}, map[int32]*structpb.Struct{0: changed}, false},
+		{"source unchanged -> skip", []int32{0}, map[int32]*structpb.Struct{0: unchanged}, true},
 		{"any changed → run", []int32{0, 1}, map[int32]*structpb.Struct{0: unchanged, 1: changed}, false},
-		{"все unchanged → skip", []int32{0, 1}, map[int32]*structpb.Struct{0: unchanged, 1: unchanged}, true},
-		{"skipped-источник → skip", []int32{0}, map[int32]*structpb.Struct{0: skipped}, true},
-		{"отсутствует источник → skip", []int32{0}, map[int32]*structpb.Struct{}, true},
+		{"all unchanged -> skip", []int32{0, 1}, map[int32]*structpb.Struct{0: unchanged, 1: unchanged}, true},
+		{"skipped-source -> skip", []int32{0}, map[int32]*structpb.Struct{0: skipped}, true},
+		{"missing source -> skip", []int32{0}, map[int32]*structpb.Struct{}, true},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

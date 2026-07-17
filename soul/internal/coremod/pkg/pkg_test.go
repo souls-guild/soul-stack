@@ -231,11 +231,11 @@ func TestApply_Installed_NoVersion_InstallsWithoutPin(t *testing.T) {
 				t.Fatalf("Apply: %v", err)
 			}
 			if !hasCall(r, tc.want) {
-				t.Fatalf("ожидалась install-команда без пина %q, calls=%v", tc.want, r.Calls)
+				t.Fatalf("expected install command without a pin %q, calls=%v", tc.want, r.Calls)
 			}
 			for _, c := range r.Calls {
 				if strings.Contains(c, tc.notWant) {
-					t.Fatalf("install получил version-пин %q (хотя version не задан): %q", tc.notWant, c)
+					t.Fatalf("install got a version pin %q (although version was not set): %q", tc.notWant, c)
 				}
 			}
 			// repo-index refresh (apt/apk) must precede install;
@@ -243,10 +243,10 @@ func TestApply_Installed_NoVersion_InstallsWithoutPin(t *testing.T) {
 			if tc.refresh != "" {
 				ri, ii := callIndex(r, tc.refresh), callIndex(r, tc.want)
 				if ri < 0 {
-					t.Fatalf("ожидался refresh индекса %q перед install, calls=%v", tc.refresh, r.Calls)
+					t.Fatalf("expected index refresh %q before install, calls=%v", tc.refresh, r.Calls)
 				}
 				if ri > ii {
-					t.Fatalf("refresh %q должен идти ДО install %q, calls=%v", tc.refresh, tc.want, r.Calls)
+					t.Fatalf("refresh %q should come BEFORE install %q, calls=%v", tc.refresh, tc.want, r.Calls)
 				}
 			}
 		})
@@ -272,11 +272,11 @@ func TestApply_Installed_EmptyVersion_InstallsWithoutPin(t *testing.T) {
 		t.Fatalf("Apply: %v", err)
 	}
 	if !hasCall(r, aptInstallCmd("redis-server")) {
-		t.Fatalf("ожидался install без пина при version=\"\", calls=%v", r.Calls)
+		t.Fatalf("expected install without a pin when version=\"\", calls=%v", r.Calls)
 	}
 	for _, c := range r.Calls {
 		if strings.Contains(c, "redis-server=") {
-			t.Fatalf("version=\"\" не должен давать пин, но получили: %q", c)
+			t.Fatalf("version=\"\" should not produce a pin, but got: %q", c)
 		}
 	}
 }
@@ -306,7 +306,7 @@ func TestApply_Installed_DistroNativeVersion_PinsExact(t *testing.T) {
 		t.Fatalf("Apply: %v", err)
 	}
 	if !hasCall(r, aptInstallCmd("redis-server="+ver)) {
-		t.Fatalf("ожидался точный пин distro-native версии, calls=%v", r.Calls)
+		t.Fatalf("expected an exact pin of the distro-native version, calls=%v", r.Calls)
 	}
 }
 
@@ -345,7 +345,7 @@ func TestApply_Apt_Install_NonInteractive_ConffileSafe(t *testing.T) {
 		}
 	}
 	if install == "" {
-		t.Fatalf("install-команда не вызвана, calls=%v", r.Calls)
+		t.Fatalf("install command not called, calls=%v", r.Calls)
 	}
 	for _, frag := range []string{
 		"DEBIAN_FRONTEND=noninteractive",
@@ -353,7 +353,7 @@ func TestApply_Apt_Install_NonInteractive_ConffileSafe(t *testing.T) {
 		"Dpkg::Options::=--force-confold",
 	} {
 		if !strings.Contains(install, frag) {
-			t.Fatalf("install-команда не несёт %q (conffile-prompt снова возможен): %q", frag, install)
+			t.Fatalf("install command does not carry %q (conffile-prompt possible again): %q", frag, install)
 		}
 	}
 }
@@ -399,7 +399,7 @@ func assertAptNonInteractive(t *testing.T, r *internaltest.Runner, subcmd string
 	t.Helper()
 	for _, c := range r.Calls {
 		if strings.Contains(c, subcmd) && !strings.Contains(c, "DEBIAN_FRONTEND=noninteractive") {
-			t.Fatalf("%q вызван без DEBIAN_FRONTEND=noninteractive: %q", subcmd, c)
+			t.Fatalf("%q called without DEBIAN_FRONTEND=noninteractive: %q", subcmd, c)
 		}
 	}
 }
@@ -436,10 +436,10 @@ func TestApply_Apt_RefreshBeforeInstall(t *testing.T) {
 	}
 	ri, ii := callIndex(r, aptUpdateCmd), callIndex(r, aptInstallCmd("redis-server"))
 	if ri < 0 {
-		t.Fatalf("apt-get update не вызван, calls=%v", r.Calls)
+		t.Fatalf("apt-get update not called, calls=%v", r.Calls)
 	}
 	if ri > ii {
-		t.Fatalf("apt-get update должен идти ДО install, calls=%v", r.Calls)
+		t.Fatalf("apt-get update should come BEFORE install, calls=%v", r.Calls)
 	}
 }
 
@@ -463,10 +463,10 @@ func TestApply_Apk_RefreshBeforeInstall(t *testing.T) {
 	}
 	ri, ii := callIndex(r, "apk update"), callIndex(r, "apk add --no-cache redis")
 	if ri < 0 {
-		t.Fatalf("apk update не вызван, calls=%v", r.Calls)
+		t.Fatalf("apk update not called, calls=%v", r.Calls)
 	}
 	if ri > ii {
-		t.Fatalf("apk update должен идти ДО install, calls=%v", r.Calls)
+		t.Fatalf("apk update should come BEFORE install, calls=%v", r.Calls)
 	}
 }
 
@@ -494,7 +494,7 @@ func TestApply_Apt_RefreshOncePerProcess(t *testing.T) {
 		}
 	}
 	if n := countCalls(r, aptUpdateCmd); n != 1 {
-		t.Fatalf("apt-get update вызван %d раз, ожидался ровно 1 (refresh-once), calls=%v", n, r.Calls)
+		t.Fatalf("apt-get update called %d times, expected exactly 1 (refresh-once), calls=%v", n, r.Calls)
 	}
 }
 
@@ -517,7 +517,7 @@ func TestApply_Dnf_NoRefresh(t *testing.T) {
 	}
 	for _, c := range r.Calls {
 		if strings.Contains(c, "update") || strings.Contains(c, "makecache") || strings.Contains(c, "check-update") {
-			t.Fatalf("dnf не должен делать refresh, но был вызов: %q", c)
+			t.Fatalf("dnf should not refresh, but there was a call: %q", c)
 		}
 	}
 }
@@ -542,11 +542,11 @@ func TestApply_Apt_RefreshFails_NoInstall(t *testing.T) {
 		t.Fatalf("Apply: %v", err)
 	}
 	if !stream.Last().Failed {
-		t.Fatal("failed=false, want true (refresh упал)")
+		t.Fatal("failed=false, want true (refresh failed)")
 	}
 	for _, c := range r.Calls {
 		if strings.Contains(c, "apt-get install") {
-			t.Fatalf("install не должен вызываться после провала refresh: %q", c)
+			t.Fatalf("install should not be called after refresh failure: %q", c)
 		}
 	}
 }
@@ -659,7 +659,7 @@ func TestApply_ApkInstalled(t *testing.T) {
 		t.Fatal("changed=true, want false")
 	}
 	if got := stream.Last().Output.Fields["version"].GetStringValue(); got != "7.0.0-r0" {
-		t.Fatalf("version=%q, want 7.0.0-r0 (номер без имени пакета, MINOR-C)", got)
+		t.Fatalf("version=%q, want 7.0.0-r0 (number without package name, MINOR-C)", got)
 	}
 }
 
@@ -684,14 +684,14 @@ func TestApply_PkgMgrFromFact_NoDetect(t *testing.T) {
 	}
 	ev := stream.Last()
 	if ev.Failed {
-		t.Fatalf("failed=true: факт pkg_mgr=apk должен миновать детект, msg=%q", ev.Message)
+		t.Fatalf("failed=true: fact pkg_mgr=apk should bypass detection, msg=%q", ev.Message)
 	}
 	if got := ev.Output.Fields["version"].GetStringValue(); got != "7.0.0-r0" {
 		t.Fatalf("version=%q, want 7.0.0-r0", got)
 	}
 	for _, c := range r.Calls {
 		if strings.HasPrefix(c, "command -v") || strings.HasPrefix(c, "which") {
-			t.Fatalf("факт primary: detection не должен вызываться, call=%q", c)
+			t.Fatalf("primary fact: detection should not be called, call=%q", c)
 		}
 	}
 }
@@ -715,10 +715,10 @@ func TestApply_PkgMgrFactEmpty_FallbackDetect(t *testing.T) {
 		t.Fatalf("Apply: %v", err)
 	}
 	if stream.Last().Failed {
-		t.Fatalf("failed=true: fallback-детект apk должен сработать, msg=%q", stream.Last().Message)
+		t.Fatalf("failed=true: fallback detection of apk should work, msg=%q", stream.Last().Message)
 	}
 	if !hasCall(r, "command -v apk") {
-		t.Fatalf("пустой факт: ожидался fallback-детект, calls=%v", r.Calls)
+		t.Fatalf("empty fact: expected fallback detection, calls=%v", r.Calls)
 	}
 }
 
@@ -741,7 +741,7 @@ func TestApply_ApkVersion_NameWithDash(t *testing.T) {
 		t.Fatalf("Apply: %v", err)
 	}
 	if got := stream.Last().Output.Fields["version"].GetStringValue(); got != "23.3.1-r0" {
-		t.Fatalf("version=%q, want 23.3.1-r0 (имя с дефисом, MINOR-C)", got)
+		t.Fatalf("version=%q, want 23.3.1-r0 (name with a dash, MINOR-C)", got)
 	}
 }
 
@@ -839,7 +839,7 @@ func TestApply_Latest_AllBackends(t *testing.T) {
 				t.Fatalf("failed=true unexpectedly: %s", ev.Message)
 			}
 			if !hasCall(r, tc.upgrade) {
-				t.Fatalf("ожидалась upgrade-команда %q, calls=%v", tc.upgrade, r.Calls)
+				t.Fatalf("expected upgrade command %q, calls=%v", tc.upgrade, r.Calls)
 			}
 			if ev.Changed != tc.wantChange {
 				t.Fatalf("changed=%v want %v", ev.Changed, tc.wantChange)
@@ -847,7 +847,7 @@ func TestApply_Latest_AllBackends(t *testing.T) {
 			if tc.refresh != "" {
 				ri, ui := callIndex(r, tc.refresh), callIndex(r, tc.upgrade)
 				if ri < 0 || ri > ui {
-					t.Fatalf("refresh %q должен предшествовать upgrade %q, calls=%v", tc.refresh, tc.upgrade, r.Calls)
+					t.Fatalf("refresh %q should precede upgrade %q, calls=%v", tc.refresh, tc.upgrade, r.Calls)
 				}
 			}
 		})
@@ -875,7 +875,7 @@ func TestApply_Latest_NotInstalled_Installs(t *testing.T) {
 		t.Fatalf("Apply: %v", err)
 	}
 	if !stream.Last().Changed {
-		t.Fatal("changed=false, want true (пакета не было)")
+		t.Fatal("changed=false, want true (package was absent)")
 	}
 }
 
@@ -897,7 +897,7 @@ func TestApply_Latest_NoChange(t *testing.T) {
 		t.Fatalf("Apply: %v", err)
 	}
 	if stream.Last().Changed {
-		t.Fatal("changed=true, want false (версия не изменилась)")
+		t.Fatal("changed=true, want false (version unchanged)")
 	}
 }
 
@@ -919,11 +919,11 @@ func TestApply_Latest_RefreshFails(t *testing.T) {
 		t.Fatalf("Apply: %v", err)
 	}
 	if !stream.Last().Failed {
-		t.Fatal("failed=false, want true (refresh упал)")
+		t.Fatal("failed=false, want true (refresh failed)")
 	}
 	for _, c := range r.Calls {
 		if c == aptInstallCmd("nginx") {
-			t.Fatalf("upgrade не должен вызываться после провала refresh: %q", c)
+			t.Fatalf("upgrade should not be called after refresh failure: %q", c)
 		}
 	}
 }
@@ -1004,7 +1004,7 @@ func TestApply_Installed_VersionPin_RpmAndApk(t *testing.T) {
 				t.Fatalf("Apply: %v", err)
 			}
 			if !hasCall(r, tc.want) {
-				t.Fatalf("ожидался install с пином %q, calls=%v", tc.want, r.Calls)
+				t.Fatalf("expected install with a pin %q, calls=%v", tc.want, r.Calls)
 			}
 		})
 	}
@@ -1078,7 +1078,7 @@ func TestApply_Absent_RpmAndApk(t *testing.T) {
 				t.Fatalf("changed=false, want true (%s remove)", tc.name)
 			}
 			if !hasCall(r, tc.remove) {
-				t.Fatalf("ожидалась remove-команда %q, calls=%v", tc.remove, r.Calls)
+				t.Fatalf("expected remove command %q, calls=%v", tc.remove, r.Calls)
 			}
 		})
 	}
@@ -1140,7 +1140,7 @@ func TestApply_QueryError_PerBackend(t *testing.T) {
 				t.Fatalf("failed=false, want true (%s query Err)", tc.name)
 			}
 			if !strings.Contains(ev.Message, "permission denied") {
-				t.Fatalf("message не несёт причину запуска: %q", ev.Message)
+				t.Fatalf("message does not carry the run reason: %q", ev.Message)
 			}
 		})
 	}
@@ -1214,7 +1214,7 @@ func TestApply_InstallCmdError(t *testing.T) {
 		t.Fatal("failed=false, want true (install Err)")
 	}
 	if !strings.Contains(ev.Message, "exec format error") {
-		t.Fatalf("message не несёт причину: %q", ev.Message)
+		t.Fatalf("message does not carry the reason: %q", ev.Message)
 	}
 }
 
@@ -1246,7 +1246,7 @@ func TestApply_DpkgStatus_RemovedButConfigFiles(t *testing.T) {
 	}
 	for _, c := range r.Calls {
 		if strings.Contains(c, "apt-get remove") {
-			t.Fatalf("remove не должен вызываться для config-files-only пакета: %q", c)
+			t.Fatalf("remove should not be called for a config-files-only package: %q", c)
 		}
 	}
 }
@@ -1282,13 +1282,13 @@ func TestApply_InstallFails_MultilineStderr(t *testing.T) {
 		t.Fatal("failed=false, want true")
 	}
 	if strings.ContainsAny(ev.Message, "\r\n") {
-		t.Fatalf("message содержит CR/LF, oneLine не схлопнул: %q", ev.Message)
+		t.Fatalf("message contains CR/LF, oneLine did not collapse it: %q", ev.Message)
 	}
 	if strings.HasSuffix(ev.Message, " ") {
-		t.Fatalf("message с хвостовым пробелом, trailing-trim не сработал: %q", ev.Message)
+		t.Fatalf("message has trailing whitespace, trailing-trim did not work: %q", ev.Message)
 	}
 	if !strings.Contains(ev.Message, "Unable to find a match") {
-		t.Fatalf("message потерял текст stderr: %q", ev.Message)
+		t.Fatalf("message lost the stderr text: %q", ev.Message)
 	}
 }
 
@@ -1309,11 +1309,11 @@ func TestApply_VersionWrongType_Fails(t *testing.T) {
 		t.Fatalf("Apply: %v", err)
 	}
 	if !stream.Last().Failed {
-		t.Fatal("failed=false, want true (version не строка)")
+		t.Fatal("failed=false, want true (version is not a string)")
 	}
 	// detect-pkg-mgr must not run: the error happens earlier.
 	if len(r.Calls) != 0 {
-		t.Fatalf("команды не должны выполняться при ошибке параметра, calls=%v", r.Calls)
+		t.Fatalf("commands should not run on a parameter error, calls=%v", r.Calls)
 	}
 }
 
@@ -1336,7 +1336,7 @@ func TestApply_UnknownState_Fails(t *testing.T) {
 		t.Fatal("failed=false, want true (unknown state)")
 	}
 	if !strings.Contains(ev.Message, "frobnicate") {
-		t.Fatalf("message не называет неизвестный state: %q", ev.Message)
+		t.Fatalf("message does not name the unknown state: %q", ev.Message)
 	}
 }
 
@@ -1359,10 +1359,10 @@ func TestApply_DetectViaWhichFallback(t *testing.T) {
 	}
 	ev := stream.Last()
 	if ev.Failed {
-		t.Fatalf("failed=true, want false (which-fallback должен дать apt): %s", ev.Message)
+		t.Fatalf("failed=true, want false (which-fallback should yield apt): %s", ev.Message)
 	}
 	if !hasCall(r, "dpkg-query -W -f=${Status} ${Version} redis") {
-		t.Fatalf("apt-путь не выбран через which-fallback, calls=%v", r.Calls)
+		t.Fatalf("apt path not selected via which-fallback, calls=%v", r.Calls)
 	}
 }
 
@@ -1385,7 +1385,7 @@ func TestApply_ApkInstalled_NoTrailingNewline(t *testing.T) {
 		t.Fatalf("Apply: %v", err)
 	}
 	if got := stream.Last().Output.Fields["version"].GetStringValue(); got != "7.0.0-r0" {
-		t.Fatalf("version=%q, want 7.0.0-r0 (номер без имени, MINOR-C)", got)
+		t.Fatalf("version=%q, want 7.0.0-r0 (number without a name, MINOR-C)", got)
 	}
 }
 
@@ -1462,7 +1462,7 @@ func TestPlan_Latest_Unsupported(t *testing.T) {
 		Params: mustStruct(t, map[string]any{"name": "redis-server"}),
 	}, &planStream{})
 	if err == nil {
-		t.Fatal("Plan(latest) вернул nil, ожидалась явная ошибка не-поддержки")
+		t.Fatal("Plan(latest) returned nil, expected an explicit unsupported error")
 	}
 }
 
@@ -1480,7 +1480,7 @@ func assertNoMutatingPkgCalls(t *testing.T, r *internaltest.Runner) {
 	for _, c := range r.Calls {
 		for _, bad := range []string{"install", "remove", " del ", " add ", "update", "upgrade"} {
 			if strings.Contains(c, bad) {
-				t.Fatalf("Plan вызвал мутирующую команду %q (должен быть pure-read)", c)
+				t.Fatalf("Plan called a mutating command %q (should be pure-read)", c)
 			}
 		}
 	}

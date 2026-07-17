@@ -30,10 +30,10 @@ func TestModuleParams_ExecCommandTypo(t *testing.T) {
 	src := "- name: t\n  module: core.exec.run\n  params:\n    command: \"true\"\n"
 	_, diags, _ := LoadDestinyTasksFromBytes("tasks/main.yml", []byte(src), ValidateOptions{})
 	if !hasCodeP(diags, "unknown_param") {
-		t.Errorf("ожидался unknown_param для command:, got %v", diagCodesP(diags))
+		t.Errorf("expected unknown_param for command:, got %v", diagCodesP(diags))
 	}
 	if !hasCodeP(diags, "missing_required_param") {
-		t.Errorf("ожидался missing_required_param для cmd, got %v", diagCodesP(diags))
+		t.Errorf("expected missing_required_param for cmd, got %v", diagCodesP(diags))
 	}
 }
 
@@ -42,7 +42,7 @@ func TestModuleParams_ExecValid(t *testing.T) {
 	src := "- name: t\n  module: core.exec.run\n  params:\n    cmd: install\n    args: [\"-d\", \"/var/run/x\"]\n    creates: /var/run/x\n"
 	_, diags, _ := LoadDestinyTasksFromBytes("tasks/main.yml", []byte(src), ValidateOptions{})
 	if diag.HasErrors(diags) {
-		t.Fatalf("валидный core.exec.run дал ошибки: %v", diags)
+		t.Fatalf("valid core.exec.run produced errors: %v", diags)
 	}
 }
 
@@ -51,7 +51,7 @@ func TestModuleParams_FileUnknownParam(t *testing.T) {
 	src := "- name: t\n  module: core.file.present\n  params:\n    path: /etc/x\n    contnet: hi\n"
 	_, diags, _ := LoadDestinyTasksFromBytes("tasks/main.yml", []byte(src), ValidateOptions{})
 	if !hasCodeP(diags, "unknown_param") {
-		t.Errorf("ожидался unknown_param для contnet:, got %v", diagCodesP(diags))
+		t.Errorf("expected unknown_param for contnet:, got %v", diagCodesP(diags))
 	}
 }
 
@@ -60,7 +60,7 @@ func TestModuleParams_FileMissingPath(t *testing.T) {
 	src := "- name: t\n  module: core.file.absent\n  params: {}\n"
 	_, diags, _ := LoadDestinyTasksFromBytes("tasks/main.yml", []byte(src), ValidateOptions{})
 	if !hasCodeP(diags, "missing_required_param") {
-		t.Errorf("ожидался missing_required_param для path, got %v", diagCodesP(diags))
+		t.Errorf("expected missing_required_param for path, got %v", diagCodesP(diags))
 	}
 }
 
@@ -71,7 +71,7 @@ func TestModuleParams_RenderedAuthorForm(t *testing.T) {
 	src := "- name: t\n  module: core.file.rendered\n  params:\n    path: /etc/x.conf\n    template: templates/x.conf.tmpl\n    mode: \"0640\"\n    vars:\n      a: \"${ input.a }\"\n"
 	_, diags, _ := LoadDestinyTasksFromBytes("tasks/main.yml", []byte(src), ValidateOptions{})
 	if diag.HasErrors(diags) {
-		t.Fatalf("author-форма core.file.rendered дала ошибки: %v", diags)
+		t.Fatalf("author form of core.file.rendered produced errors: %v", diags)
 	}
 }
 
@@ -80,7 +80,7 @@ func TestModuleParams_RenderedMissingTemplate(t *testing.T) {
 	src := "- name: t\n  module: core.file.rendered\n  params:\n    path: /etc/x.conf\n"
 	_, diags, _ := LoadDestinyTasksFromBytes("tasks/main.yml", []byte(src), ValidateOptions{})
 	if !hasCodeP(diags, "missing_required_param") {
-		t.Errorf("ожидался missing_required_param для template, got %v", diagCodesP(diags))
+		t.Errorf("expected missing_required_param for template, got %v", diagCodesP(diags))
 	}
 }
 
@@ -89,7 +89,7 @@ func TestModuleParams_TypeMismatch(t *testing.T) {
 	src := "- name: t\n  module: core.exec.run\n  params:\n    cmd: ls\n    args: \"not a list\"\n"
 	_, diags, _ := LoadDestinyTasksFromBytes("tasks/main.yml", []byte(src), ValidateOptions{})
 	if !hasCodeP(diags, "param_type_mismatch") {
-		t.Errorf("ожидался param_type_mismatch для args, got %v", diagCodesP(diags))
+		t.Errorf("expected param_type_mismatch for args, got %v", diagCodesP(diags))
 	}
 }
 
@@ -99,7 +99,7 @@ func TestModuleParams_CELWrappedSkipsTypeCheck(t *testing.T) {
 	src := "- name: t\n  module: core.exec.run\n  params:\n    cmd: ls\n    args: \"${ input.args }\"\n"
 	_, diags, _ := LoadDestinyTasksFromBytes("tasks/main.yml", []byte(src), ValidateOptions{})
 	if diag.HasErrors(diags) {
-		t.Fatalf("CEL-обёрнутый args не должен давать ошибок: %v", diags)
+		t.Fatalf("CEL-wrapped args must not produce errors: %v", diags)
 	}
 }
 
@@ -108,7 +108,7 @@ func TestModuleParams_UnknownState(t *testing.T) {
 	src := "- name: t\n  module: core.exec.runn\n  params:\n    cmd: ls\n"
 	_, diags, _ := LoadDestinyTasksFromBytes("tasks/main.yml", []byte(src), ValidateOptions{})
 	if !hasCodeP(diags, "module_state_unknown") {
-		t.Errorf("ожидался module_state_unknown, got %v", diagCodesP(diags))
+		t.Errorf("expected module_state_unknown, got %v", diagCodesP(diags))
 	}
 }
 
@@ -118,7 +118,7 @@ func TestModuleParams_CustomNamespaceSkipped(t *testing.T) {
 	src := "- name: t\n  module: wb.haproxy.running\n  params:\n    whatever: 1\n"
 	_, diags, _ := LoadDestinyTasksFromBytes("tasks/main.yml", []byte(src), ValidateOptions{})
 	if hasCodeP(diags, "unknown_param") || hasCodeP(diags, "missing_required_param") {
-		t.Errorf("custom-namespace не должен валидироваться coremanifest-ом: %v", diagCodesP(diags))
+		t.Errorf("custom namespace must not be validated by coremanifest: %v", diagCodesP(diags))
 	}
 }
 
@@ -127,7 +127,7 @@ func TestModuleParams_ScenarioPath(t *testing.T) {
 	src := "name: x\ntasks:\n  - module: core.exec.run\n    params: { command: \"true\" }\n"
 	_, _, diags, _ := LoadScenarioManifestFromBytes("main.yml", []byte(src), ValidateOptions{})
 	if !hasCodeP(diags, "unknown_param") {
-		t.Errorf("ожидался unknown_param в scenario-пути, got %v", diagCodesP(diags))
+		t.Errorf("expected unknown_param on the scenario path, got %v", diagCodesP(diags))
 	}
 }
 
@@ -138,7 +138,7 @@ func TestModuleParams_ServiceUnknownParam(t *testing.T) {
 	src := "- name: t\n  module: core.service.running\n  params:\n    name: nginx\n    enabledd: true\n"
 	_, diags, _ := LoadDestinyTasksFromBytes("tasks/main.yml", []byte(src), ValidateOptions{})
 	if !hasCodeP(diags, "unknown_param") {
-		t.Errorf("ожидался unknown_param для enabledd:, got %v", diagCodesP(diags))
+		t.Errorf("expected unknown_param for enabledd:, got %v", diagCodesP(diags))
 	}
 }
 
@@ -147,7 +147,7 @@ func TestModuleParams_GitMissingRequired(t *testing.T) {
 	src := "- name: t\n  module: core.git.cloned\n  params:\n    repo: https://x/y.git\n"
 	_, diags, _ := LoadDestinyTasksFromBytes("tasks/main.yml", []byte(src), ValidateOptions{})
 	if !hasCodeP(diags, "missing_required_param") {
-		t.Errorf("ожидался missing_required_param для path, got %v", diagCodesP(diags))
+		t.Errorf("expected missing_required_param for path, got %v", diagCodesP(diags))
 	}
 }
 
@@ -157,7 +157,7 @@ func TestModuleParams_CronMissingPerState(t *testing.T) {
 	src := "- name: t\n  module: core.cron.present\n  params:\n    name: nightly\n"
 	_, diags, _ := LoadDestinyTasksFromBytes("tasks/main.yml", []byte(src), ValidateOptions{})
 	if !hasCodeP(diags, "missing_required_param") {
-		t.Errorf("ожидался missing_required_param для schedule/command, got %v", diagCodesP(diags))
+		t.Errorf("expected missing_required_param for schedule/command, got %v", diagCodesP(diags))
 	}
 }
 
@@ -167,7 +167,7 @@ func TestModuleParams_UserNewParamsValid(t *testing.T) {
 	src := "- name: t\n  module: core.user.present\n  params:\n    name: redis\n    system: true\n    group: redis\n"
 	_, diags, _ := LoadDestinyTasksFromBytes("tasks/main.yml", []byte(src), ValidateOptions{})
 	if diag.HasErrors(diags) {
-		t.Fatalf("system/group у core.user должны быть валидны, got %v", diags)
+		t.Fatalf("system/group of core.user should be valid, got %v", diags)
 	}
 }
 
@@ -179,12 +179,12 @@ func TestModuleParams_KeeperSoulRegistered(t *testing.T) {
 	valid := "- name: t\n  on: keeper\n  module: core.soul.registered\n  params:\n    sid: host.example.com\n    coven: [prod]\n    mode: append\n"
 	_, diags, _ := LoadDestinyTasksFromBytes("tasks/main.yml", []byte(valid), ValidateOptions{})
 	if diag.HasErrors(diags) {
-		t.Fatalf("валидный core.soul.registered дал ошибки: %v", diags)
+		t.Fatalf("valid core.soul.registered produced errors: %v", diags)
 	}
 	bad := "- name: t\n  on: keeper\n  module: core.soul.registered\n  params:\n    sid: host.example.com\n    coven: [prod]\n    covenn: oops\n"
 	_, diags, _ = LoadDestinyTasksFromBytes("tasks/main.yml", []byte(bad), ValidateOptions{})
 	if !hasCodeP(diags, "unknown_param") {
-		t.Errorf("ожидался unknown_param для covenn:, got %v", diagCodesP(diags))
+		t.Errorf("expected unknown_param for covenn:, got %v", diagCodesP(diags))
 	}
 }
 
@@ -207,6 +207,6 @@ func TestModuleParams_KeeperSoulRegistered_AwaitFields(t *testing.T) {
 		"    refresh_soulprint: true\n"
 	_, diags, _ := LoadDestinyTasksFromBytes("tasks/main.yml", []byte(valid), ValidateOptions{})
 	if diag.HasErrors(diags) {
-		t.Fatalf("валидная await-форма дала ошибки: %v", diags)
+		t.Fatalf("valid await form produced errors: %v", diags)
 	}
 }

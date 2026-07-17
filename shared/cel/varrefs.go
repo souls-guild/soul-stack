@@ -14,7 +14,7 @@ import (
 // simpler for the author (canonical vars.* is the only form, like
 // soulprint.self.<path> in ADR-018). Dedicated sentinel so the caller can tell it
 // apart from the syntactic ErrCompile via errors.Is.
-var ErrVarIndexForm = fmt.Errorf("обращение к vars индекс-формой vars[...] не поддерживается — используй vars.<имя>")
+var ErrVarIndexForm = fmt.Errorf("accessing vars via the index form vars[...] is not supported - use vars.<name>")
 
 // VarRefs extracts the `vars.<X>` names referenced by an interpolation string raw
 // (`${ … }` blocks). Mirror of DetectSealed (seal.go): scanInterpolation →
@@ -66,7 +66,7 @@ func (e *Engine) VarRefs(raw string) ([]string, error) {
 				}
 			case ast.CallKind:
 				if isVarsIndex(n) {
-					visitErr = fmt.Errorf("%w (выражение %q)", ErrVarIndexForm, s.text)
+					visitErr = fmt.Errorf("%w (expression %q)", ErrVarIndexForm, s.text)
 				}
 			}
 		}))

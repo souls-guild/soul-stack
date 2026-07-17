@@ -101,10 +101,10 @@ func TestIntegration_Voyage_CommandScope_TargetForeignCoven_422(t *testing.T) {
 	code, body := postCommandVoyage(t, base, tok,
 		`{"kind":"command","module":"core.cmd.shell","target":{"coven":["coven-b"]}}`)
 	if code != http.StatusUnprocessableEntity {
-		t.Fatalf("status = %d, want 422 (чужой coven урезан в butль); body=%s", code, body)
+		t.Fatalf("status = %d, want 422 (foreign coven trimmed to empty); body=%s", code, body)
 	}
 	if !strings.Contains(body, "voyage_empty_target") {
-		t.Errorf("detail не withдержит voyage_empty_target: %s", body)
+		t.Errorf("detail does not contain voyage_empty_target: %s", body)
 	}
 }
 
@@ -123,7 +123,7 @@ func TestIntegration_Voyage_CommandScope_ExplicitForeignSID_403(t *testing.T) {
 	code, body := postCommandVoyage(t, base, tok,
 		`{"kind":"command","module":"core.cmd.shell","target":{"sids":["b-01.example.com"]}}`)
 	if code != http.StatusForbidden {
-		t.Fatalf("status = %d, want 403 (явный чужой SID); body=%s", code, body)
+		t.Fatalf("status = %d, want 403 (explicit foreign SID); body=%s", code, body)
 	}
 }
 
@@ -142,7 +142,7 @@ func TestIntegration_Voyage_CommandScope_MultiCovenHostVisible_202(t *testing.T)
 	code, body := postCommandVoyage(t, base, tok,
 		`{"kind":"command","module":"core.cmd.shell","target":{"coven":["coven-a"]}}`)
 	if code != http.StatusAccepted {
-		t.Fatalf("status = %d, want 202 (хост виден по coven-a); body=%s", code, body)
+		t.Fatalf("status = %d, want 202 (host visible via coven-a); body=%s", code, body)
 	}
 	if scope := scopeSizeFromReply(t, body); scope != 1 {
 		t.Errorf("scope_size = %d, want 1", scope)
@@ -169,11 +169,11 @@ func TestIntegration_Voyage_CommandScope_WideTargetTrimmed_202(t *testing.T) {
 	code, body := postCommandVoyage(t, base, tok,
 		`{"kind":"command","module":"core.cmd.shell","target":{"coven":["shared"]}}`)
 	if code != http.StatusAccepted {
-		t.Fatalf("status = %d, want 202 (урезание без отказа); body=%s", code, body)
+		t.Fatalf("status = %d, want 202 (trimming without denial); body=%s", code, body)
 	}
 	// scope_size = 2 (visible via coven-a), NOT 3 (the whole shared).
 	if scope := scopeSizeFromReply(t, body); scope != 2 {
-		t.Errorf("scope_size = %d, want 2 (урезаbut to видимых coven-a, не весь shared)", scope)
+		t.Errorf("scope_size = %d, want 2 (trimmed to hosts visible via coven-a, not the whole shared)", scope)
 	}
 }
 
@@ -197,14 +197,14 @@ func TestIntegration_Voyage_CommandScope_Unrestricted_FullResolve_202(t *testing
 		t.Fatalf("status = %d, want 202 (Unrestricted backcompat); body=%s", code, body)
 	}
 	if scope := scopeSizeFromReply(t, body); scope != 2 {
-		t.Errorf("scope_size = %d, want 2 (весь coven-b, без урезания)", scope)
+		t.Errorf("scope_size = %d, want 2 (all of coven-b, no trimming)", scope)
 	}
 
 	// An explicit SID from any coven is also OK (not 403): Unrestricted has no DeniedExplicit.
 	code2, body2 := postCommandVoyage(t, base, tok,
 		`{"kind":"command","module":"core.cmd.shell","target":{"sids":["a-01.example.com"]}}`)
 	if code2 != http.StatusAccepted {
-		t.Fatalf("явный SID при Unrestricted: status = %d, want 202; body=%s", code2, body2)
+		t.Fatalf("explicit SID under Unrestricted: status = %d, want 202; body=%s", code2, body2)
 	}
 }
 
@@ -228,14 +228,14 @@ func TestIntegration_Voyage_CommandScope_RegexScope_202(t *testing.T) {
 		t.Fatalf("status = %d, want 202; body=%s", code, body)
 	}
 	if scope := scopeSizeFromReply(t, body); scope != 2 {
-		t.Errorf("scope_size = %d, want 2 (только web-*, db-01 урезан regex-ом)", scope)
+		t.Errorf("scope_size = %d, want 2 (only web-*, db-01 trimmed out by the regex)", scope)
 	}
 
 	// An explicit db-01 (doesn't match ^web-) → 403 (anti-escalation).
 	code2, body2 := postCommandVoyage(t, base, tok,
 		`{"kind":"command","module":"core.cmd.shell","target":{"sids":["db-01.example.com"]}}`)
 	if code2 != http.StatusForbidden {
-		t.Fatalf("явный db-01 (не ^web-): status = %d, want 403; body=%s", code2, body2)
+		t.Fatalf("explicit db-01 (does not match ^web-): status = %d, want 403; body=%s", code2, body2)
 	}
 }
 
@@ -264,7 +264,7 @@ func TestIntegration_Voyage_CommandScope_SoulprintPartial_UnderShow_202(t *testi
 		t.Fatalf("status = %d, want 202; body=%s", code, body)
 	}
 	if scope := scopeSizeFromReply(t, body); scope != 1 {
-		t.Errorf("scope_size = %d, want 1 (coven-a работает, soulprint под-показ)", scope)
+		t.Errorf("scope_size = %d, want 1 (coven-a dimension works, soulprint under-shows)", scope)
 	}
 
 	// An explicit b-01 (outside coven-A, would only be reachable via soulprint) → 403
@@ -272,7 +272,7 @@ func TestIntegration_Voyage_CommandScope_SoulprintPartial_UnderShow_202(t *testi
 	code2, body2 := postCommandVoyage(t, base, tok,
 		`{"kind":"command","module":"core.cmd.shell","target":{"sids":["b-01.example.com"]}}`)
 	if code2 != http.StatusForbidden {
-		t.Fatalf("явный b-01 (soulprint-only под-показ): status = %d, want 403; body=%s", code2, body2)
+		t.Fatalf("explicit b-01 (soulprint-only, under-shown): status = %d, want 403; body=%s", code2, body2)
 	}
 }
 

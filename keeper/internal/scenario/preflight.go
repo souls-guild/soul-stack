@@ -78,7 +78,7 @@ func (r *Runner) PreflightAssert(ctx context.Context, spec RunSpec) error {
 	// evaluating asserts on the expanded list — keeping a single source.
 	expanded, idiags := config.ExpandIncludes(scn.Tasks, scenarioIncludeResolver(r.deps.Loader, art, spec.ScenarioName))
 	if diag.HasErrors(idiags) {
-		return fmt.Errorf("preflight: раскрытие include в %s/%s: %s", spec.ScenarioName, scenarioMainFile, firstError(idiags))
+		return fmt.Errorf("preflight: include expansion in %s/%s: %s", spec.ScenarioName, scenarioMainFile, firstError(idiags))
 	}
 	scn.Tasks = expanded
 

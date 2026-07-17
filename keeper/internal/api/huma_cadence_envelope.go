@@ -77,7 +77,7 @@ type cadence struct {
 	Kind                 string        `json:"kind" enum:"scenario,command"`
 	ScenarioName         string        `json:"scenario_name,omitempty"`
 	Module               string        `json:"module,omitempty"`
-	Target               *VoyageTarget `json:"target,omitempty" doc:"декларативный таргет прогоon (declarative, отgivesся as-is)"`
+	Target               *VoyageTarget `json:"target,omitempty" doc:"declarative run target (declarative, passed through as-is)"`
 	BatchSize            *int          `json:"batch_size,omitempty"`
 	BatchPercent         *int          `json:"batch_percent,omitempty"`
 	Concurrency          *int          `json:"concurrency,omitempty"`
@@ -97,7 +97,7 @@ type cadence struct {
 // committed reference (:8147 → CadenceListReply): EXACTLY 4 fields (items/offset/limit/total), all required, items.$ref
 // to element Cadence. Type name → "CadenceListReply". The wire body (PagedResponse[cadenceDTO]) does NOT change.
 type cadenceListReply struct {
-	Items  []cadence `json:"items" doc:"страница расписаний"`
+	Items  []cadence `json:"items" doc:"page of schedules"`
 	Offset int32     `json:"offset" doc:"offset from start of set"`
 	Limit  int32     `json:"limit" doc:"page size"`
 	Total  int32     `json:"total" doc:"total number of entries in set"`

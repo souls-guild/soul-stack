@@ -220,12 +220,12 @@ func TestHumaOmen_Create_GoldenWire(t *testing.T) {
 	}
 	var m map[string]any
 	if err := json.Unmarshal(rec.Body.Bytes(), &m); err != nil {
-		t.Fatalf("reply не JSON-object: %v; body=%s", err, rec.Body.String())
+		t.Fatalf("reply is not a JSON object: %v; body=%s", err, rec.Body.String())
 	}
 	out, _ := json.Marshal(m)
 	const golden = `{"auth_ref":"vault:secret/keeper/ar","created_at":"2026-06-13T10:00:00Z","created_by_aid":"archon-alice","endpoint":"https://vault:8200","name":"vault-prod","source_type":"vault"}`
 	if got := string(out); got != golden {
-		t.Errorf("GOLDEN wire-дрейф omen.create:\n got  = %s\n want = %s", got, golden)
+		t.Errorf("GOLDEN wire drift omen.create:\n got  = %s\n want = %s", got, golden)
 	}
 }
 
@@ -304,7 +304,7 @@ func TestHumaAudit_OmenCreate_NoAudit_OnRBACDeny(t *testing.T) {
 		t.Fatalf("status = %d, want 403; body=%s", rec.Code, rec.Body.String())
 	}
 	if len(auditCap.Events()) != 0 {
-		t.Errorf("audit записан on RBAC-deny omen.create (%d withбытий)", len(auditCap.Events()))
+		t.Errorf("audit recorded on RBAC-deny omen.create (%d events)", len(auditCap.Events()))
 	}
 }
 
@@ -319,7 +319,7 @@ func TestHumaAudit_OmenCreate_NoAudit_OnValidationFail(t *testing.T) {
 		t.Fatalf("status = %d, want 422; body=%s", rec.Code, rec.Body.String())
 	}
 	if len(auditCap.Events()) != 0 {
-		t.Errorf("audit записан on 422 omen.create (%d withбытий)", len(auditCap.Events()))
+		t.Errorf("audit recorded on 422 omen.create (%d events)", len(auditCap.Events()))
 	}
 }
 
@@ -338,12 +338,12 @@ func TestHumaOmen_List_GoldenWire(t *testing.T) {
 	}
 	var m map[string]any
 	if err := json.Unmarshal(rec.Body.Bytes(), &m); err != nil {
-		t.Fatalf("reply не JSON-object: %v; body=%s", err, rec.Body.String())
+		t.Fatalf("reply is not a JSON object: %v; body=%s", err, rec.Body.String())
 	}
 	out, _ := json.Marshal(m)
 	const golden = `{"items":[{"auth_ref":"vault:secret/keeper/ar","created_at":"2026-06-13T10:00:00Z","endpoint":"https://vault:8200","name":"vault-prod","source_type":"vault"}],"limit":50,"offset":0,"total":1}`
 	if got := string(out); got != golden {
-		t.Errorf("GOLDEN wire-дрейф omen.list:\n got  = %s\n want = %s", got, golden)
+		t.Errorf("GOLDEN wire drift omen.list:\n got  = %s\n want = %s", got, golden)
 	}
 }
 
@@ -360,7 +360,7 @@ func TestHumaOmen_List_GoldenEmpty(t *testing.T) {
 	_ = json.Unmarshal(rec.Body.Bytes(), &m)
 	out, _ := json.Marshal(m)
 	if got := string(out); got != golden {
-		t.Errorf("GOLDEN wire-дрейф omen.list (empty): got=%q want=%q", got, golden)
+		t.Errorf("GOLDEN wire drift omen.list (empty): got=%q want=%q", got, golden)
 	}
 }
 
@@ -410,7 +410,7 @@ func TestHumaOmen_List_NoAudit(t *testing.T) {
 		t.Fatalf("status = %d, want 200; body=%s", rec.Code, rec.Body.String())
 	}
 	if len(auditCap.Events()) != 0 {
-		t.Errorf("READ-роут omen.list записал audit (%d withбытий)", len(auditCap.Events()))
+		t.Errorf("READ route omen.list recorded audit (%d events)", len(auditCap.Events()))
 	}
 }
 
@@ -436,12 +436,12 @@ func TestHumaOmen_Get_GoldenWire(t *testing.T) {
 	}
 	var m map[string]any
 	if err := json.Unmarshal(rec.Body.Bytes(), &m); err != nil {
-		t.Fatalf("reply не JSON-object: %v; body=%s", err, rec.Body.String())
+		t.Fatalf("reply is not a JSON object: %v; body=%s", err, rec.Body.String())
 	}
 	out, _ := json.Marshal(m)
 	const golden = `{"auth_ref":"vault:secret/keeper/ar","created_at":"2026-06-13T10:00:00Z","endpoint":"https://vault:8200","name":"vault-prod","source_type":"vault"}`
 	if got := string(out); got != golden {
-		t.Errorf("GOLDEN wire-дрейф omen.get:\n got  = %s\n want = %s", got, golden)
+		t.Errorf("GOLDEN wire drift omen.get:\n got  = %s\n want = %s", got, golden)
 	}
 }
 
@@ -478,7 +478,7 @@ func TestHumaOmen_Delete_204(t *testing.T) {
 		t.Fatalf("status = %d, want 204; body=%s", rec.Code, rec.Body.String())
 	}
 	if body := strings.TrimSpace(rec.Body.String()); body != "" {
-		t.Errorf("204-body omen.delete toлжbut быть ПУСТЫМ, got %q", body)
+		t.Errorf("204-body omen.delete must be EMPTY, got %q", body)
 	}
 }
 
@@ -504,7 +504,7 @@ func TestHumaAudit_OmenDelete_NoAudit_OnNotFound(t *testing.T) {
 		t.Fatalf("status = %d, want 404; body=%s", rec.Code, rec.Body.String())
 	}
 	if len(auditCap.Events()) != 0 {
-		t.Errorf("audit записан on 404 omen.delete (%d withбытий)", len(auditCap.Events()))
+		t.Errorf("audit recorded on 404 omen.delete (%d events)", len(auditCap.Events()))
 	}
 }
 
@@ -521,12 +521,12 @@ func TestHumaRite_Create_GoldenWire(t *testing.T) {
 	}
 	var m map[string]any
 	if err := json.Unmarshal(rec.Body.Bytes(), &m); err != nil {
-		t.Fatalf("reply не JSON-object: %v; body=%s", err, rec.Body.String())
+		t.Fatalf("reply is not a JSON object: %v; body=%s", err, rec.Body.String())
 	}
 	out, _ := json.Marshal(m)
 	const golden = `{"allow":{"paths":["secret/data/app"]},"coven":"prod","created_at":"2026-06-13T10:00:00Z","created_by_aid":"archon-alice","delegate":false,"id":42,"omen":"vault-prod"}`
 	if got := string(out); got != golden {
-		t.Errorf("GOLDEN wire-дрейф rite.create:\n got  = %s\n want = %s", got, golden)
+		t.Errorf("GOLDEN wire drift rite.create:\n got  = %s\n want = %s", got, golden)
 	}
 }
 
@@ -597,12 +597,12 @@ func TestHumaRite_List_GoldenWire(t *testing.T) {
 	}
 	var m map[string]any
 	if err := json.Unmarshal(rec.Body.Bytes(), &m); err != nil {
-		t.Fatalf("reply не JSON-object: %v; body=%s", err, rec.Body.String())
+		t.Fatalf("reply is not a JSON object: %v; body=%s", err, rec.Body.String())
 	}
 	out, _ := json.Marshal(m)
 	const golden = `{"items":[{"allow":{"paths":["secret/data/app"]},"coven":"prod","created_at":"2026-06-13T10:00:00Z","delegate":false,"id":42,"omen":"vault-prod"}]}`
 	if got := string(out); got != golden {
-		t.Errorf("GOLDEN wire-дрейф rite.list:\n got  = %s\n want = %s", got, golden)
+		t.Errorf("GOLDEN wire drift rite.list:\n got  = %s\n want = %s", got, golden)
 	}
 }
 
@@ -612,7 +612,7 @@ func TestHumaRite_List_MissingOmen_422(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "/v1/augur/rites", nil)
 	r.ServeHTTP(rec, req)
 	if rec.Code != http.StatusUnprocessableEntity {
-		t.Fatalf("status = %d, want 422 (omen-query обязателен); body=%s", rec.Code, rec.Body.String())
+		t.Fatalf("status = %d, want 422 (omen query is required); body=%s", rec.Code, rec.Body.String())
 	}
 	assertHumaProblem(t, rec, problem.TypeValidationFailed)
 }
@@ -627,7 +627,7 @@ func TestHumaRite_List_NoAudit(t *testing.T) {
 		t.Fatalf("status = %d, want 200; body=%s", rec.Code, rec.Body.String())
 	}
 	if len(auditCap.Events()) != 0 {
-		t.Errorf("READ-роут rite.list записал audit (%d withбытий)", len(auditCap.Events()))
+		t.Errorf("READ route rite.list recorded audit (%d events)", len(auditCap.Events()))
 	}
 }
 
@@ -642,7 +642,7 @@ func TestHumaRite_Delete_204(t *testing.T) {
 		t.Fatalf("status = %d, want 204; body=%s", rec.Code, rec.Body.String())
 	}
 	if body := strings.TrimSpace(rec.Body.String()); body != "" {
-		t.Errorf("204-body rite.delete toлжbut быть ПУСТЫМ, got %q", body)
+		t.Errorf("204-body rite.delete must be EMPTY, got %q", body)
 	}
 }
 
@@ -665,10 +665,10 @@ func TestHumaAudit_RiteDelete_NoAudit_OnBadID(t *testing.T) {
 	req := httptest.NewRequest(http.MethodDelete, "/v1/augur/rites/notanint", nil)
 	r.ServeHTTP(rec, req)
 	if rec.Code != http.StatusUnprocessableEntity {
-		t.Fatalf("status = %d, want 422 (id не число); body=%s", rec.Code, rec.Body.String())
+		t.Fatalf("status = %d, want 422 (id is not a number); body=%s", rec.Code, rec.Body.String())
 	}
 	if len(auditCap.Events()) != 0 {
-		t.Errorf("audit записан on bad-id rite.delete (%d withбытий)", len(auditCap.Events()))
+		t.Errorf("audit recorded on bad-id rite.delete (%d events)", len(auditCap.Events()))
 	}
 }
 
@@ -680,17 +680,17 @@ func TestHumaAugur_OpenAPIFragment_3_1(t *testing.T) {
 		t.Fatalf("HumaAugurSpecYAML: %v", err)
 	}
 	if !strings.Contains(frag, "openapi: 3.1.0") {
-		t.Errorf("huma-фрагмент не несёт `openapi: 3.1.0`:\n%s", frag)
+		t.Errorf("huma fragment does not carry `openapi: 3.1.0`:\n%s", frag)
 	}
 	for _, want := range []string{
 		"createOmen", "listOmens", "getOmen", "deleteOmen",
 		"createRite", "listRites", "deleteRite", "source_type",
 	} {
 		if !strings.Contains(frag, want) {
-			t.Errorf("OpenAPI-фрагмент не withдержит %q:\n%s", want, frag)
+			t.Errorf("OpenAPI fragment does not contain %q:\n%s", want, frag)
 		}
 	}
 	if strings.Contains(frag, "octet-stream") {
-		t.Errorf("OpenAPI-фрагмент несёт application/octet-stream:\n%s", frag)
+		t.Errorf("OpenAPI fragment carries application/octet-stream:\n%s", frag)
 	}
 }

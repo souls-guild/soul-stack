@@ -220,7 +220,7 @@ func ppProblemType(t *testing.T, err error) string {
 	}
 	d, ok := AsProblemDetails(err)
 	if !ok {
-		t.Fatalf("ошибка не *problemError: %T %v", err, err)
+		t.Fatalf("error is not *problemError: %T %v", err, err)
 	}
 	return d.Type
 }

@@ -683,7 +683,7 @@ func (s *Stack) AssertRedisACLUser(t *testing.T, soulIdx int, host string, port 
 }
 
 // shellQuote wraps a string in single quotes, escaping internal single
-// quotes per the POSIX `'\”` pattern. Used only for paths and substrings
+// quotes per the POSIX `'\"` pattern. Used only for paths and substrings
 // from test fixtures (controlled input, not user data).
 func shellQuote(s string) string {
 	return `'` + strings.ReplaceAll(s, `'`, `'\''`) + `'`

@@ -32,7 +32,7 @@ func TestValidate(t *testing.T) {
 		Params: mustStruct(t, map[string]any{"repo": "git@x:y.git"}),
 	})
 	if reply.Ok {
-		t.Fatal("Validate без path: ok unexpectedly")
+		t.Fatal("Validate without path: ok unexpectedly")
 	}
 }
 
@@ -53,11 +53,11 @@ func TestApply_Cloned_AlreadyPresent_NoOp(t *testing.T) {
 		t.Fatalf("Apply: %v", err)
 	}
 	if stream.Last().Changed {
-		t.Fatal("Changed=true для уже склонированного")
+		t.Fatal("Changed=true for an already-cloned repo")
 	}
 	for _, c := range r.Calls {
 		if c == "git clone --branch main -- https://example/x.git /srv/app" {
-			t.Fatalf("неожиданный clone при cloned+exists")
+			t.Fatalf("unexpected clone with cloned+exists")
 		}
 	}
 }
@@ -80,7 +80,7 @@ func TestApply_Cloned_Missing_Clones(t *testing.T) {
 		t.Fatalf("Apply: %v", err)
 	}
 	if !stream.Last().Changed {
-		t.Fatal("Changed=false при clone")
+		t.Fatal("Changed=false on clone")
 	}
 	if got := stream.Last().Output.Fields["head"].GetStringValue(); got != "abc123" {
 		t.Fatalf("head=%q want abc123", got)
@@ -107,7 +107,7 @@ func TestApply_Cloned_DepthAndBranch(t *testing.T) {
 		t.Fatalf("Apply: %v", err)
 	}
 	if !stream.Last().Changed {
-		t.Fatal("Changed=false при clone depth+branch")
+		t.Fatal("Changed=false on clone depth+branch")
 	}
 }
 
@@ -133,7 +133,7 @@ func TestApply_Pulled_Existing_HeadSame_NoChange(t *testing.T) {
 		t.Fatalf("Apply: %v", err)
 	}
 	if stream.Last().Changed {
-		t.Fatal("Changed=true при HEAD не изменился")
+		t.Fatal("Changed=true when HEAD did not change")
 	}
 }
 
@@ -158,7 +158,7 @@ func TestApply_Pulled_HeadMoves_Changed(t *testing.T) {
 		t.Fatalf("Apply: %v", err)
 	}
 	if !stream.Last().Changed {
-		t.Fatal("Changed=false при HEAD shift")
+		t.Fatal("Changed=false on HEAD shift")
 	}
 	if got := stream.Last().Output.Fields["head"].GetStringValue(); got != "new" {
 		t.Fatalf("head=%q want new", got)
@@ -183,7 +183,7 @@ func TestApply_Pulled_Missing_Clones(t *testing.T) {
 		t.Fatalf("Apply: %v", err)
 	}
 	if !stream.Last().Changed {
-		t.Fatal("Changed=false при первоначальном clone в pulled")
+		t.Fatal("Changed=false on initial clone in pulled")
 	}
 }
 
@@ -208,7 +208,7 @@ func TestApply_Cloned_DashRepo_SeparatorPresent(t *testing.T) {
 		t.Fatalf("Apply: %v", err)
 	}
 	if stream.Last().Failed {
-		t.Fatalf("clone с `--` должен пройти, got failed: %+v", stream.Last())
+		t.Fatalf("clone with `--` should pass, got failed: %+v", stream.Last())
 	}
 }
 
@@ -226,6 +226,6 @@ func TestApply_CloneFailure(t *testing.T) {
 		}),
 	}, stream)
 	if !stream.Last().Failed {
-		t.Fatal("Failed=false при clone failure")
+		t.Fatal("Failed=false on clone failure")
 	}
 }

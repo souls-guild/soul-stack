@@ -24,7 +24,7 @@ func statUIDGID(t *testing.T, path string) (uint32, uint32) {
 	}
 	sys, ok := info.Sys().(*syscall.Stat_t)
 	if !ok {
-		t.Fatalf("Sys() не *syscall.Stat_t на этой платформе")
+		t.Fatalf("Sys() is not *syscall.Stat_t on this platform")
 	}
 	return sys.Uid, sys.Gid
 }
@@ -121,7 +121,7 @@ func TestApply_Directory_Creates(t *testing.T) {
 		t.Fatalf("stat: %v", err)
 	}
 	if !info.IsDir() {
-		t.Fatal("создан не каталог")
+		t.Fatal("created is not a directory")
 	}
 	if info.Mode().Perm() != 0o750 {
 		t.Fatalf("mode=%v want 0750", info.Mode().Perm())
@@ -143,7 +143,7 @@ func TestApply_Directory_DriftOwner(t *testing.T) {
 	_, ownGID := statUIDGID(t, path)
 	targetGID, ok := foreignGID(t, ownGID)
 	if !ok {
-		t.Skip("нет supplementary-группы, отличной от gid каталога — chgrp без root недоказуем")
+		t.Skip("no supplementary group different from the directory gid - chgrp without root cannot be proven")
 	}
 
 	m := file.New()
@@ -164,7 +164,7 @@ func TestApply_Directory_DriftOwner(t *testing.T) {
 		t.Fatalf("failed=true: %s", ev.Message)
 	}
 	if !ev.Changed {
-		t.Fatal("changed=false на owner/group drift")
+		t.Fatal("changed=false on owner/group drift")
 	}
 	if _, gid := statUIDGID(t, path); gid != targetGID {
 		t.Fatalf("gid=%d not fixed to %d", gid, targetGID)
@@ -217,16 +217,16 @@ func TestApply_Directory_TypeConflict_File(t *testing.T) {
 		t.Fatalf("Apply: %v", err)
 	}
 	if !stream.Last().Failed {
-		t.Fatal("failed=false на конфликте типа (файл)")
+		t.Fatal("failed=false on type conflict (file)")
 	}
 	// The file must not be touched.
 	got, _ := os.ReadFile(path)
 	if string(got) != "i am a file" {
-		t.Fatalf("файл изменён: %q", string(got))
+		t.Fatalf("file was modified: %q", string(got))
 	}
 	info, _ := os.Stat(path)
 	if info.IsDir() {
-		t.Fatal("файл превращён в каталог")
+		t.Fatal("file was turned into a directory")
 	}
 }
 
@@ -252,7 +252,7 @@ func TestApply_Directory_Parents_CreatesIntermediate(t *testing.T) {
 	}
 	info, err := os.Stat(path)
 	if err != nil || !info.IsDir() {
-		t.Fatalf("каталог не создан: err=%v", err)
+		t.Fatalf("directory not created: err=%v", err)
 	}
 }
 
@@ -273,10 +273,10 @@ func TestApply_Directory_NoParents_MissingParent_Fails(t *testing.T) {
 		t.Fatalf("Apply: %v", err)
 	}
 	if !stream.Last().Failed {
-		t.Fatal("failed=false при отсутствующем родителе без parents")
+		t.Fatal("failed=false with a missing parent and no parents")
 	}
 	if _, err := os.Stat(path); !os.IsNotExist(err) {
-		t.Fatalf("каталог создан вопреки ошибке: err=%v", err)
+		t.Fatalf("directory created despite the error: err=%v", err)
 	}
 }
 
@@ -323,7 +323,7 @@ func TestPlan_Directory_Parity(t *testing.T) {
 			t.Fatalf("changed=false want true (missing dir)")
 		}
 		if _, err := os.Stat(path); !os.IsNotExist(err) {
-			t.Fatalf("Plan создал каталог %s (должен быть pure-read)", path)
+			t.Fatalf("Plan created directory %s (should be pure-read)", path)
 		}
 	})
 
@@ -363,7 +363,7 @@ func TestPlan_Directory_Parity(t *testing.T) {
 			State:  "directory",
 			Params: mustStruct(t, map[string]any{"path": path}),
 		}, stream); err == nil {
-			t.Fatal("Plan вернул nil error на конфликте типа (ожидался error)")
+			t.Fatal("Plan returned nil error on type conflict (expected an error)")
 		}
 	})
 }
@@ -386,6 +386,6 @@ func assertDirUnchanged(t *testing.T, path string, before dirState) {
 	t.Helper()
 	now := dirSnapshot(t, path)
 	if now != before {
-		t.Fatalf("Plan изменил каталог: %+v != before %+v (pure-read)", now, before)
+		t.Fatalf("Plan modified the directory: %+v != before %+v (pure-read)", now, before)
 	}
 }

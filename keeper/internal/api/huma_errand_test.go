@@ -298,12 +298,12 @@ func TestHumaErrand_List_GoldenWire(t *testing.T) {
 	}
 	var m map[string]any
 	if err := json.Unmarshal(rec.Body.Bytes(), &m); err != nil {
-		t.Fatalf("reply не JSON-object: %v; body=%s", err, rec.Body.String())
+		t.Fatalf("reply is not a JSON-object: %v; body=%s", err, rec.Body.String())
 	}
 	out, _ := json.Marshal(m)
 	const golden = `{"items":[{"errand_id":"ERR-01","exit_code":0,"finished_at":"2026-06-13T10:00:00Z","module":"core.cmd.shell","sid":"host.test","started_at":"2026-06-13T10:00:00Z","started_by_aid":"archon-alice","status":"success"}],"limit":50,"offset":0,"total":1}`
 	if got := string(out); got != golden {
-		t.Errorf("GOLDEN wire-дрейф errand.list:\n got  = %s\n want = %s", got, golden)
+		t.Errorf("GOLDEN wire-drift errand.list:\n got  = %s\n want = %s", got, golden)
 	}
 }
 
@@ -320,7 +320,7 @@ func TestHumaErrand_List_GoldenEmpty(t *testing.T) {
 	_ = json.Unmarshal(rec.Body.Bytes(), &m)
 	out, _ := json.Marshal(m)
 	if got := string(out); got != golden {
-		t.Errorf("GOLDEN wire-дрейф errand.list (empty): got=%q want=%q", got, golden)
+		t.Errorf("GOLDEN wire-drift errand.list (empty): got=%q want=%q", got, golden)
 	}
 }
 
@@ -330,7 +330,7 @@ func TestHumaErrand_List_BadOffset_400(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "/v1/errands?offset=-1", nil)
 	r.ServeHTTP(rec, req)
 	if rec.Code != http.StatusBadRequest {
-		t.Fatalf("status = %d, want 400 (offset<0 → CheckPageBounds 400, блокер!); body=%s", rec.Code, rec.Body.String())
+		t.Fatalf("status = %d, want 400 (offset<0 -> CheckPageBounds 400, blocker!); body=%s", rec.Code, rec.Body.String())
 	}
 	assertHumaProblem(t, rec, problem.TypeMalformedRequest)
 }
@@ -342,7 +342,7 @@ func TestHumaErrand_List_BadLimit_400(t *testing.T) {
 		req := httptest.NewRequest(http.MethodGet, c, nil)
 		r.ServeHTTP(rec, req)
 		if rec.Code != http.StatusBadRequest {
-			t.Errorf("%s: status = %d, want 400 (out-of-range limit → CheckPageBounds 400, блокер!); body=%s", c, rec.Code, rec.Body.String())
+			t.Errorf("%s: status = %d, want 400 (out-of-range limit -> CheckPageBounds 400, blocker!); body=%s", c, rec.Code, rec.Body.String())
 			continue
 		}
 		assertHumaProblem(t, rec, problem.TypeMalformedRequest)
@@ -392,7 +392,7 @@ func TestHumaErrand_List_NoAudit(t *testing.T) {
 		t.Fatalf("status = %d, want 200; body=%s", rec.Code, rec.Body.String())
 	}
 	if len(auditCap.Events()) != 0 {
-		t.Errorf("READ-роут errand.list записал audit (%d withбытий)", len(auditCap.Events()))
+		t.Errorf("READ route errand.list recorded audit (%d events)", len(auditCap.Events()))
 	}
 }
 
@@ -418,12 +418,12 @@ func TestHumaErrand_Get_GoldenWire_Terminal(t *testing.T) {
 	}
 	var m map[string]any
 	if err := json.Unmarshal(rec.Body.Bytes(), &m); err != nil {
-		t.Fatalf("reply не JSON-object: %v; body=%s", err, rec.Body.String())
+		t.Fatalf("reply is not a JSON-object: %v; body=%s", err, rec.Body.String())
 	}
 	out, _ := json.Marshal(m)
 	const golden = `{"errand_id":"ERR-01","exit_code":0,"finished_at":"2026-06-13T10:00:00Z","module":"core.cmd.shell","sid":"host.test","started_at":"2026-06-13T10:00:00Z","started_by_aid":"archon-alice","status":"success"}`
 	if got := string(out); got != golden {
-		t.Errorf("GOLDEN wire-дрейф errand.get (terminal):\n got  = %s\n want = %s", got, golden)
+		t.Errorf("GOLDEN wire-drift errand.get (terminal):\n got  = %s\n want = %s", got, golden)
 	}
 }
 
@@ -437,12 +437,12 @@ func TestHumaErrand_Get_Running_202(t *testing.T) {
 	}
 	var m map[string]any
 	if err := json.Unmarshal(rec.Body.Bytes(), &m); err != nil {
-		t.Fatalf("reply не JSON-object: %v; body=%s", err, rec.Body.String())
+		t.Fatalf("reply is not a JSON-object: %v; body=%s", err, rec.Body.String())
 	}
 	out, _ := json.Marshal(m)
 	const golden = `{"errand_id":"ERR-01","status":"running"}`
 	if got := string(out); got != golden {
-		t.Errorf("GOLDEN wire-дрейф errand.get (running 202):\n got  = %s\n want = %s", got, golden)
+		t.Errorf("GOLDEN wire-drift errand.get (running 202):\n got  = %s\n want = %s", got, golden)
 	}
 }
 
@@ -469,7 +469,7 @@ func TestHumaErrand_Cancel_204(t *testing.T) {
 		t.Fatalf("status = %d, want 204; body=%s", rec.Code, rec.Body.String())
 	}
 	if body := strings.TrimSpace(rec.Body.String()); body != "" {
-		t.Errorf("204-body errand.cancel toлжbut быть ПУСТЫМ, got %q", body)
+		t.Errorf("204-body errand.cancel must be EMPTY, got %q", body)
 	}
 }
 
@@ -532,7 +532,7 @@ func TestHumaAudit_ErrandCancel_NoAudit_OnNotFound(t *testing.T) {
 		t.Fatalf("status = %d, want 404; body=%s", rec.Code, rec.Body.String())
 	}
 	if len(auditCap.Events()) != 0 {
-		t.Errorf("audit записан on 404 errand.cancel (%d withбытий)", len(auditCap.Events()))
+		t.Errorf("audit recorded on 404 errand.cancel (%d events)", len(auditCap.Events()))
 	}
 }
 
@@ -547,7 +547,7 @@ func TestHumaAudit_ErrandCancel_NoAudit_OnTerminal(t *testing.T) {
 		t.Fatalf("status = %d, want 409; body=%s", rec.Code, rec.Body.String())
 	}
 	if len(auditCap.Events()) != 0 {
-		t.Errorf("audit записан on 409 errand.cancel (%d withбытий)", len(auditCap.Events()))
+		t.Errorf("audit recorded on 409 errand.cancel (%d events)", len(auditCap.Events()))
 	}
 }
 
@@ -559,14 +559,14 @@ func TestHumaErrand_OpenAPIFragment_3_1(t *testing.T) {
 		t.Fatalf("HumaErrandSpecYAML: %v", err)
 	}
 	if !strings.Contains(frag, "openapi: 3.1.0") {
-		t.Errorf("huma-фрагмент не несёт `openapi: 3.1.0`:\n%s", frag)
+		t.Errorf("huma fragment does not carry `openapi: 3.1.0`:\n%s", frag)
 	}
 	for _, want := range []string{"listErrands", "getErrand", "cancelErrand", "started_after"} {
 		if !strings.Contains(frag, want) {
-			t.Errorf("OpenAPI-фрагмент не withдержит %q:\n%s", want, frag)
+			t.Errorf("OpenAPI fragment does not contain %q:\n%s", want, frag)
 		}
 	}
 	if strings.Contains(frag, "octet-stream") {
-		t.Errorf("OpenAPI-фрагмент несёт application/octet-stream:\n%s", frag)
+		t.Errorf("OpenAPI fragment carries application/octet-stream:\n%s", frag)
 	}
 }

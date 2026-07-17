@@ -36,7 +36,7 @@ func assertNoMutatingFirewallCalls(t *testing.T, r *internaltest.Runner) {
 			"firewall-cmd --permanent", "firewall-cmd --reload", "firewall-cmd --add", "firewall-cmd --remove",
 		} {
 			if strings.Contains(c, bad) {
-				t.Fatalf("Plan вызвал мутирующую команду %q (должен быть pure-read)", c)
+				t.Fatalf("Plan invoked a mutating command %q (must be pure-read)", c)
 			}
 		}
 	}

@@ -27,12 +27,12 @@ func goldenRoleWire(t *testing.T, name string, native any, want string) {
 
 func TestGoldenWire_RoleReply(t *testing.T) {
 	scope := "coven=prod,eu"
-	desc := "ops роль"
+	desc := "ops role"
 
 	// --- RoleView: default_scope/description omitempty (both branches) + []-vs-null ---
 	goldenRoleWire(t, "RoleView/full",
 		RoleView{Builtin: true, DefaultScope: &scope, Description: &desc, Name: "ops", Operators: []string{"archon-alice"}, Permissions: []string{"role.list", "service.list"}},
-		`{"builtin":true,"default_scope":"coven=prod,eu","description":"ops роль","name":"ops","operators":["archon-alice"],"permissions":["role.list","service.list"]}`)
+		`{"builtin":true,"default_scope":"coven=prod,eu","description":"ops role","name":"ops","operators":["archon-alice"],"permissions":["role.list","service.list"]}`)
 	// default_scope omitted (nil), description present and empty; operators/permissions
 	// empty arrays (non-nil) → `[]`.
 	goldenRoleWire(t, "RoleView/nil_scope_empty_lists",

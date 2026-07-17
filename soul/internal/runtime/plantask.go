@@ -78,7 +78,7 @@ func (r *ApplyRunner) planTask(ctx context.Context, applyID string, idx int32, t
 		ev.Error = &keeperv1.TaskError{
 			Code:    "plan.unsupported",
 			Module:  modName,
-			Message: fmt.Sprintf("module %q не объявил read-safe Plan — drift на dry_run не поддержан (task %q)", modName, task.GetName()),
+			Message: fmt.Sprintf("module %q did not declare a read-safe Plan - drift on dry_run is unsupported (task %q)", modName, task.GetName()),
 		}
 		ev.RegisterData = buildRegisterData(ev.GetStatus(), nil)
 		return ev
@@ -112,7 +112,7 @@ func (r *ApplyRunner) planTask(ctx context.Context, applyID string, idx int32, t
 		ev.Error = &keeperv1.TaskError{
 			Code:    "plan.no_result",
 			Module:  modName,
-			Message: fmt.Sprintf("module %q объявил read-safe Plan, но не прислал PlanEvent (task %q)", modName, task.GetName()),
+			Message: fmt.Sprintf("module %q declared a read-safe Plan but sent no PlanEvent (task %q)", modName, task.GetName()),
 		}
 		ev.RegisterData = buildRegisterData(ev.GetStatus(), nil)
 		return ev

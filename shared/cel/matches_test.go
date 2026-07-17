@@ -30,7 +30,7 @@ func TestMatches_StdlibAvailable(t *testing.T) {
 				t.Fatalf("EvalExpression: %v", err)
 			}
 			if got := out.Value(); got != tc.want {
-				t.Fatalf("результат = %v, want %v", got, tc.want)
+				t.Fatalf("result = %v, want %v", got, tc.want)
 			}
 		})
 	}
@@ -50,6 +50,6 @@ func TestMatches_CombinedWithGlob(t *testing.T) {
 		t.Fatalf("EvalExpression: %v", err)
 	}
 	if got := out.Value(); got != true {
-		t.Fatalf("результат = %v, want true", got)
+		t.Fatalf("result = %v, want true", got)
 	}
 }

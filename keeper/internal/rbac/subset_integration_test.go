@@ -97,10 +97,10 @@ func TestIntegration_Subset_DefaultScope_CreateRole_Escalation_Denied(t *testing
 		CallerAID:   sub,
 	})
 	if !errors.Is(err, ErrPermissionNotHeld) {
-		t.Fatalf("err = %v, want ErrPermissionNotHeld (caller scope=prod не покрывает staging)", err)
+		t.Fatalf("err = %v, want ErrPermissionNotHeld (caller scope=prod does not cover staging)", err)
 	}
 	if roleExists(t, "staging-escalation") {
-		t.Error("роль создана несмотря на subset-check (эскалация на staging)")
+		t.Error("role created despite the subset-check (escalation to staging)")
 	}
 }
 
@@ -116,10 +116,10 @@ func TestIntegration_Subset_DefaultScope_CreateRole_InScope_OK(t *testing.T) {
 		Permissions: []string{"incarnation.run on coven=prod"},
 		CallerAID:   sub,
 	}); err != nil {
-		t.Fatalf("CreateRole (в scope=prod): %v", err)
+		t.Fatalf("CreateRole (in scope=prod): %v", err)
 	}
 	if !roleExists(t, "prod-only") {
-		t.Error("роль не создана")
+		t.Error("role not created")
 	}
 }
 
@@ -140,7 +140,7 @@ func TestIntegration_Subset_DefaultScope_CreateRole_SameScope_OK(t *testing.T) {
 		t.Fatalf("CreateRole (default_scope=prod + bare): %v", err)
 	}
 	if !roleExists(t, "prod-runners-2") {
-		t.Error("роль не создана")
+		t.Error("role not created")
 	}
 }
 
@@ -160,10 +160,10 @@ func TestIntegration_Subset_DefaultScope_CreateRole_OtherScope_Denied(t *testing
 		DefaultScope: &scope,
 	})
 	if !errors.Is(err, ErrPermissionNotHeld) {
-		t.Fatalf("err = %v, want ErrPermissionNotHeld (default_scope=staging вне scope caller-а)", err)
+		t.Fatalf("err = %v, want ErrPermissionNotHeld (default_scope=staging outside the caller scope)", err)
 	}
 	if roleExists(t, "staging-runners") {
-		t.Error("роль создана несмотря на subset-check")
+		t.Error("role created despite the subset-check")
 	}
 }
 
@@ -178,10 +178,10 @@ func TestIntegration_Subset_DefaultScope_ClusterAdmin_AnyScope_OK(t *testing.T) 
 		Permissions: []string{"incarnation.run on coven=staging"},
 		CallerAID:   alice,
 	}); err != nil {
-		t.Fatalf("CreateRole (cluster-admin любой scope): %v", err)
+		t.Fatalf("CreateRole (cluster-admin any scope): %v", err)
 	}
 	if !roleExists(t, "any-scope") {
-		t.Error("роль не создана")
+		t.Error("role not created")
 	}
 }
 
@@ -213,7 +213,7 @@ func TestIntegration_Subset_DefaultScope_UnrestrictedCaller_AnyScope_OK(t *testi
 		t.Fatalf("CreateRole (unrestricted caller, backcompat): %v", err)
 	}
 	if !roleExists(t, "bc-staging") {
-		t.Error("роль не создана (backcompat сломан)")
+		t.Error("role not created (backcompat broken)")
 	}
 }
 
@@ -234,7 +234,7 @@ func TestIntegration_Subset_CreateRole_Wildcard_Denied(t *testing.T) {
 		t.Fatalf("err = %v, want ErrPermissionNotHeld", err)
 	}
 	if roleExists(t, "escalation") {
-		t.Error("роль создана несмотря на subset-check (tx не откатилась)")
+		t.Error("role created despite the subset-check (tx not rolled back)")
 	}
 }
 
@@ -253,7 +253,7 @@ func TestIntegration_Subset_CreateRole_ForeignPermission_Denied(t *testing.T) {
 		t.Fatalf("err = %v, want ErrPermissionNotHeld", err)
 	}
 	if roleExists(t, "ops") {
-		t.Error("роль создана несмотря на subset-check")
+		t.Error("role created despite the subset-check")
 	}
 }
 
@@ -268,10 +268,10 @@ func TestIntegration_Subset_CreateRole_OwnedPermission_OK(t *testing.T) {
 		Permissions: []string{"role.create"}, // sub has this
 		CallerAID:   sub,
 	}); err != nil {
-		t.Fatalf("CreateRole (право в наборе): %v", err)
+		t.Fatalf("CreateRole (permission in the set): %v", err)
 	}
 	if !roleExists(t, "more-granters") {
-		t.Error("роль не создана")
+		t.Error("role not created")
 	}
 }
 
@@ -289,7 +289,7 @@ func TestIntegration_Subset_CreateRole_ClusterAdmin_OK(t *testing.T) {
 		t.Fatalf("CreateRole (cluster-admin): %v", err)
 	}
 	if !roleExists(t, "powerful") {
-		t.Error("роль не создана")
+		t.Error("role not created")
 	}
 }
 
@@ -313,7 +313,7 @@ func TestIntegration_Subset_UpdateRole_AddForeign_Denied(t *testing.T) {
 	// `*` wasn't added — the tx rolled back.
 	got := rolePerms(t, "target")
 	if len(got) != 1 || got[0] != "role.create" {
-		t.Errorf("permissions = %v, want [role.create] (откат)", got)
+		t.Errorf("permissions = %v, want [role.create] (rollback)", got)
 	}
 }
 
@@ -329,7 +329,7 @@ func TestIntegration_Subset_UpdateRole_AddOwned_OK(t *testing.T) {
 		Permissions: []string{"role.create", "role.grant-operator"}, // both held by sub
 		CallerAID:   sub,
 	}); err != nil {
-		t.Fatalf("UpdateRolePermissions (свои права): %v", err)
+		t.Fatalf("UpdateRolePermissions (own permissions): %v", err)
 	}
 	if len(rolePerms(t, "target")) != 2 {
 		t.Errorf("permissions = %v, want 2", rolePerms(t, "target"))
@@ -351,7 +351,7 @@ func TestIntegration_Subset_UpdateRole_RemoveForeign_OK(t *testing.T) {
 		Permissions: []string{"role.create"},
 		CallerAID:   sub,
 	}); err != nil {
-		t.Fatalf("UpdateRolePermissions (удаление чужого права): %v", err)
+		t.Fatalf("UpdateRolePermissions (removing a foreign permission): %v", err)
 	}
 	got := rolePerms(t, "target")
 	if len(got) != 1 || got[0] != "role.create" {
@@ -379,7 +379,7 @@ func TestIntegration_Subset_GrantOperator_PowerfulRole_Denied(t *testing.T) {
 		t.Fatalf("err = %v, want ErrPermissionNotHeld", err)
 	}
 	if membershipCount(t, "powerful") != 0 {
-		t.Error("membership вставлен несмотря на subset-check")
+		t.Error("membership inserted despite the subset-check")
 	}
 }
 
@@ -396,10 +396,10 @@ func TestIntegration_Subset_GrantOperator_WithinRights_OK(t *testing.T) {
 		AID:       "archon-bob",
 		CallerAID: &sub,
 	}); err != nil {
-		t.Fatalf("GrantOperator (в пределах прав): %v", err)
+		t.Fatalf("GrantOperator (within permission bounds): %v", err)
 	}
 	if membershipCount(t, "weak") != 1 {
-		t.Error("membership не вставлен")
+		t.Error("membership not inserted")
 	}
 }
 
@@ -416,10 +416,10 @@ func TestIntegration_Subset_GrantOperator_ClusterAdmin_OK(t *testing.T) {
 		AID:       "archon-bob",
 		CallerAID: &alice,
 	}); err != nil {
-		t.Fatalf("GrantOperator (cluster-admin грантит `*`-роль): %v", err)
+		t.Fatalf("GrantOperator (cluster-admin grants a `*`-role): %v", err)
 	}
 	if membershipCount(t, "powerful") != 1 {
-		t.Error("membership не вставлен")
+		t.Error("membership not inserted")
 	}
 }
 
@@ -438,7 +438,7 @@ func TestIntegration_Subset_GrantOperator_NilCaller_BypassesCheck(t *testing.T) 
 		t.Fatalf("GrantOperator (bootstrap nil-caller): %v", err)
 	}
 	if membershipCount(t, "cluster-admin") != 1 {
-		t.Error("bootstrap membership не вставлен")
+		t.Error("bootstrap membership not inserted")
 	}
 }
 
@@ -463,6 +463,6 @@ func TestIntegration_Subset_RevokedCaller_HasNoPermissions(t *testing.T) {
 		CallerAID:   sub,
 	})
 	if !errors.Is(err, ErrPermissionNotHeld) {
-		t.Fatalf("err = %v, want ErrPermissionNotHeld (revoked caller без прав)", err)
+		t.Fatalf("err = %v, want ErrPermissionNotHeld (revoked caller without permissions)", err)
 	}
 }

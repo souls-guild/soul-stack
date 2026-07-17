@@ -25,7 +25,7 @@ func TestFlowControl_RegisterAccessible(t *testing.T) {
 		t.Fatalf("EvalPredicate: %v", err)
 	}
 	if !ok {
-		t.Fatalf("предикат = false, want true")
+		t.Fatalf("predicate = false, want true")
 	}
 }
 
@@ -65,7 +65,7 @@ func TestFlowControl_VaultGuarded(t *testing.T) {
 	_, err := e.EvalPredicate("vault('secret/x').enabled", Vars{})
 	var ue *ErrUnsupported
 	if !errors.As(err, &ue) {
-		t.Fatalf("vault(): ошибка = %v, want *ErrUnsupported", err)
+		t.Fatalf("vault(): error = %v, want *ErrUnsupported", err)
 	}
 }
 
@@ -76,7 +76,7 @@ func TestFlowControl_NowGuarded(t *testing.T) {
 	_, err := e.EvalPredicate("now() > now()", Vars{})
 	var ue *ErrUnsupported
 	if !errors.As(err, &ue) {
-		t.Fatalf("now(): ошибка = %v, want *ErrUnsupported", err)
+		t.Fatalf("now(): error = %v, want *ErrUnsupported", err)
 	}
 }
 
@@ -92,7 +92,7 @@ func TestFlowControl_HostsAccessorIsolated(t *testing.T) {
 		_, err := e.EvalPredicate(expr, Vars{AllowHosts: true})
 		var ue *ErrUnsupported
 		if !errors.As(err, &ue) {
-			t.Errorf("expr %q: ошибка = %v, want *ErrUnsupported (изоляция host-аксессора)", expr, err)
+			t.Errorf("expr %q: error = %v, want *ErrUnsupported (host-accessor isolation)", expr, err)
 		}
 	}
 }
@@ -104,7 +104,7 @@ func TestFlowControl_InternalIdentGuarded(t *testing.T) {
 	_, err := e.EvalPredicate("__vault_read('secret/x', __vault_resolver).enabled", Vars{})
 	var ue *ErrUnsupported
 	if !errors.As(err, &ue) {
-		t.Fatalf("__-ident: ошибка = %v, want *ErrUnsupported", err)
+		t.Fatalf("__-ident: error = %v, want *ErrUnsupported", err)
 	}
 }
 
@@ -115,7 +115,7 @@ func TestFlowControl_StateUndeclared(t *testing.T) {
 	_, err := e.EvalPredicate("state.foo == 1", Vars{State: map[string]any{"foo": 1}})
 	var ce *ErrCompile
 	if !errors.As(err, &ce) {
-		t.Fatalf("state в flow-control: ошибка = %v, want *ErrCompile (undeclared)", err)
+		t.Fatalf("state in flow-control: error = %v, want *ErrCompile (undeclared)", err)
 	}
 }
 
@@ -166,10 +166,10 @@ func TestFlowControl_NonBoolPredicate(t *testing.T) {
 	})
 	var ee *ErrEval
 	if !errors.As(err, &ee) {
-		t.Fatalf("не-bool предикат: ошибка = %v, want *ErrEval", err)
+		t.Fatalf("non-bool predicate: error = %v, want *ErrEval", err)
 	}
 	if !errors.Is(err, ErrPredicateNotBool) {
-		t.Fatalf("не-bool предикат: errors.Is(err, ErrPredicateNotBool)=false, err=%v", err)
+		t.Fatalf("non-bool predicate: errors.Is(err, ErrPredicateNotBool)=false, err=%v", err)
 	}
 }
 
@@ -180,10 +180,10 @@ func TestFlowControl_RuntimeErrorNotPredicateNotBool(t *testing.T) {
 	_, err := e.EvalPredicate("register.nonexistent.changed", Vars{Register: map[string]any{}})
 	var ee *ErrEval
 	if !errors.As(err, &ee) {
-		t.Fatalf("missing register: ошибка = %v, want *ErrEval", err)
+		t.Fatalf("missing register: error = %v, want *ErrEval", err)
 	}
 	if errors.Is(err, ErrPredicateNotBool) {
-		t.Fatalf("no-such-key ошибочно помечен ErrPredicateNotBool: %v", err)
+		t.Fatalf("no-such-key incorrectly marked as ErrPredicateNotBool: %v", err)
 	}
 }
 
@@ -196,7 +196,7 @@ func TestFlowControl_EmptyPredicateTrue(t *testing.T) {
 		t.Fatalf("EvalPredicate(''): %v", err)
 	}
 	if !ok {
-		t.Fatalf("пустой предикат = false, want true")
+		t.Fatalf("empty predicate = false, want true")
 	}
 }
 
@@ -208,7 +208,7 @@ func TestFlowControl_RuntimeErrorOnMissingRegister(t *testing.T) {
 	_, err := e.EvalPredicate("register.nonexistent.changed", Vars{Register: map[string]any{}})
 	var ee *ErrEval
 	if !errors.As(err, &ee) {
-		t.Fatalf("missing register: ошибка = %v, want *ErrEval", err)
+		t.Fatalf("missing register: error = %v, want *ErrEval", err)
 	}
 }
 
@@ -217,6 +217,6 @@ func TestFlowControl_RuntimeErrorOnMissingRegister(t *testing.T) {
 func TestFlowControl_WithVaultRejected(t *testing.T) {
 	kv := &stubKV{secrets: map[string]map[string]any{}}
 	if _, err := NewFlowControl(WithVault(kv)); err == nil {
-		t.Fatalf("NewFlowControl(WithVault): ошибка = nil, want non-nil (guard)")
+		t.Fatalf("NewFlowControl(WithVault): error = nil, want non-nil (guard)")
 	}
 }

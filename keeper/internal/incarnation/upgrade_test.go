@@ -233,7 +233,7 @@ func TestUpgradeStateSchema_HappyMultiStep(t *testing.T) {
 		t.Errorf("drift-history scenario = %v, want %q", dh[2], upgradeDriftScenarioLabel)
 	}
 	if string(dh[3].([]byte)) != string(up[1].([]byte)) {
-		t.Errorf("drift-history state не равен пост-миграционному: %s vs %s", dh[3], up[1])
+		t.Errorf("drift-history state does not equal post-migration: %s vs %s", dh[3], up[1])
 	}
 	if dh[5] != "01HUPGRADE0000000000000000" {
 		t.Errorf("drift-history apply_id = %v, want shared ApplyID", dh[5])
@@ -254,12 +254,12 @@ func upgradeUPDATEStatus(t *testing.T, tx *fakeTx) string {
 		const marker = "status               = '"
 		i := strings.Index(sql, marker)
 		if i < 0 {
-			t.Fatalf("UPDATE incarnation без status-литерала: %q", sql)
+			t.Fatalf("UPDATE incarnation without a status literal: %q", sql)
 		}
 		rest := sql[i+len(marker):]
 		j := strings.IndexByte(rest, '\'')
 		if j < 0 {
-			t.Fatalf("незакрытый status-литерал в UPDATE: %q", sql)
+			t.Fatalf("unterminated status literal in UPDATE: %q", sql)
 		}
 		return rest[:j]
 	}
@@ -314,7 +314,7 @@ func TestUpgradeStateSchema_FinalStatusDrift(t *testing.T) {
 				t.Fatal("upgrade tx not committed")
 			}
 			if got := upgradeUPDATEStatus(t, tx); got != string(StatusDrift) {
-				t.Errorf("финальный статус = %q, want drift (ADR-031: upgrade оставляет хосты позади БД-state)", got)
+				t.Errorf("final status = %q, want drift (ADR-031: upgrade leaves hosts behind the DB state)", got)
 			}
 			// The transition reason is recorded as a separate history entry.
 			var sawDriftHistory bool
@@ -324,7 +324,7 @@ func TestUpgradeStateSchema_FinalStatusDrift(t *testing.T) {
 				}
 			}
 			if !sawDriftHistory {
-				t.Errorf("нет state_history-записи перехода в drift (scenario=%q)", upgradeDriftScenarioLabel)
+				t.Errorf("no state_history record of transition to drift (scenario=%q)", upgradeDriftScenarioLabel)
 			}
 		})
 	}
@@ -366,10 +366,10 @@ func TestUpgradeStateSchema_LockedStatusNotOverwritten(t *testing.T) {
 			}
 			// No mutation, no commit: blocking status preserved as-is.
 			if tx.committed {
-				t.Errorf("status=%s: tx committed — блокирующий статус перетёрт", c.status)
+				t.Errorf("status=%s: tx committed - blocking status overwritten", c.status)
 			}
 			if tx.execN != 0 {
-				t.Errorf("status=%s: Exec = %d, want 0 (отказ ДО мутации, статус не тронут)", c.status, tx.execN)
+				t.Errorf("status=%s: Exec = %d, want 0 (rejection BEFORE mutation, status untouched)", c.status, tx.execN)
 			}
 		})
 	}
@@ -664,7 +664,7 @@ func TestUnlockForRerun_FromErrorLocked(t *testing.T) {
 	}
 	// create path: stored spec.input is returned in UnlockResult.Input.
 	if res.Input == nil {
-		t.Fatal("UnlockResult.Input = nil — spec.input НЕ прочитан под FOR UPDATE")
+		t.Fatal("UnlockResult.Input = nil - spec.input NOT read under FOR UPDATE")
 	}
 	if res.Input["version"] != "8.6.1" {
 		t.Errorf("UnlockResult.Input[version] = %v, want 8.6.1 (stored spec.input)", res.Input["version"])
@@ -684,10 +684,10 @@ func TestUnlockForRerun_FromErrorLocked(t *testing.T) {
 		t.Errorf("history apply_id = %v, want %q", hist[5], applyID)
 	}
 	if got := tx.execArgs[1][1]; got != string(StatusApplying) {
-		t.Errorf("UPDATE status arg = %v, want applying (минуя ready)", got)
+		t.Errorf("UPDATE status arg = %v, want applying (bypassing ready)", got)
 	}
 	if tx.execArgs[1][1] == string(StatusReady) {
-		t.Error("rerun перевёл в ready — race-window не закрыт (должно быть applying)")
+		t.Error("rerun moved to ready - race window not closed (should be applying)")
 	}
 }
 
@@ -709,10 +709,10 @@ func TestUnlockForRerun_RejectNonErrorLocked(t *testing.T) {
 				t.Fatalf("status=%s: err = %v, want ErrIncarnationNotErrorLocked", status, err)
 			}
 			if tx.committed {
-				t.Errorf("status=%s: tx committed (должен быть отказ без мутации)", status)
+				t.Errorf("status=%s: tx committed (should be rejected without mutation)", status)
 			}
 			if tx.execN != 0 {
-				t.Errorf("status=%s: Exec = %d, want 0 (отказ ДО мутации)", status, tx.execN)
+				t.Errorf("status=%s: Exec = %d, want 0 (rejection BEFORE mutation)", status, tx.execN)
 			}
 		})
 	}
@@ -740,20 +740,20 @@ func TestUnlockForRerun_Day2_ReusesRecipeInput(t *testing.T) {
 		t.Fatalf("UnlockForRerun day-2 add_user: %v", err)
 	}
 	if res.Scenario != "add_user" {
-		t.Errorf("Scenario = %q, want add_user (последний упавший day-2)", res.Scenario)
+		t.Errorf("Scenario = %q, want add_user (last failed operational run)", res.Scenario)
 	}
 	if res.Input == nil {
-		t.Fatal("UnlockResult.Input = nil — recipe.input НЕ прочитан (day-2 регресс)")
+		t.Fatal("UnlockResult.Input = nil - recipe.input NOT read (operational regression)")
 	}
 	if res.Input["user"] != "alice" {
 		t.Errorf("UnlockResult.Input[user] = %v, want alice (recipe.input)", res.Input["user"])
 	}
 	if _, leaked := res.Input["version"]; leaked {
-		t.Error("UnlockResult.Input несёт spec.input[version] — day-2 обязан брать recipe.input, не spec")
+		t.Error("UnlockResult.Input carries spec.input[version] - operational must take recipe.input, not spec")
 	}
 	// recipe without from_upgrade → FromUpgrade=false (rerun from scenario/, ADR-0068).
 	if res.FromUpgrade {
-		t.Error("UnlockResult.FromUpgrade = true, want false (recipe без from_upgrade)")
+		t.Error("UnlockResult.FromUpgrade = true, want false (recipe without from_upgrade)")
 	}
 	if !tx.committed {
 		t.Error("rerun-last day-2 tx not committed")
@@ -781,13 +781,13 @@ func TestUnlockForRerun_Day2_RecipeNull_FailClosed(t *testing.T) {
 
 	_, err := UnlockForRerun(context.Background(), pool, "redis-prod", "x", "archon-alice", "01HRERUNHIST000000000000F", "01HRERUN00000000000000000F")
 	if !errors.Is(err, ErrRerunInputUnavailable) {
-		t.Fatalf("err = %v, want ErrRerunInputUnavailable (recipe недоступен)", err)
+		t.Fatalf("err = %v, want ErrRerunInputUnavailable (recipe unavailable)", err)
 	}
 	if tx.committed {
-		t.Error("tx committed (fail-closed: отказ без мутации)")
+		t.Error("tx committed (fail-closed: rejection without mutation)")
 	}
 	if tx.execN != 0 {
-		t.Errorf("Exec = %d, want 0 (отказ ДО мутации)", tx.execN)
+		t.Errorf("Exec = %d, want 0 (rejection BEFORE mutation)", tx.execN)
 	}
 }
 
@@ -840,16 +840,16 @@ func TestUnlockForRerun_CustomCreateScenario(t *testing.T) {
 		t.Fatalf("UnlockForRerun created_scenario=create_cluster: %v", err)
 	}
 	if res.Scenario != "create_cluster" {
-		t.Errorf("Scenario = %q, want create_cluster (рестарт СОЗДАВШЕГО сценария)", res.Scenario)
+		t.Errorf("Scenario = %q, want create_cluster (restart of the CREATING scenario)", res.Scenario)
 	}
 	if res.Input == nil {
-		t.Fatal("UnlockResult.Input = nil — spec.input cluster НЕ прочитан")
+		t.Fatal("UnlockResult.Input = nil - spec.input cluster NOT read")
 	}
 	if shards, ok := res.Input["shards"].(float64); !ok || shards != 3 {
 		t.Errorf("UnlockResult.Input[shards] = %v (%T), want 3", res.Input["shards"], res.Input["shards"])
 	}
 	if !tx.committed {
-		t.Error("rerun-last tx not committed для валидного custom create-сценария")
+		t.Error("rerun-last tx not committed for a valid custom create scenario")
 	}
 }
 
@@ -868,10 +868,10 @@ func TestUnlockForRerun_NoStateHistory_FailClosed(t *testing.T) {
 
 	_, err := UnlockForRerun(context.Background(), pool, "redis-prod", "x", "archon-alice", "01HRERUNHIST00000000000G0", "01HRERUN0000000000000000G0")
 	if !errors.Is(err, ErrRerunInputUnavailable) {
-		t.Fatalf("err = %v, want ErrRerunInputUnavailable (нет snapshot-а)", err)
+		t.Fatalf("err = %v, want ErrRerunInputUnavailable (no snapshot)", err)
 	}
 	if tx.committed {
-		t.Error("tx committed (fail-closed без snapshot-а)")
+		t.Error("tx committed (fail-closed without a snapshot)")
 	}
 }
 
@@ -911,7 +911,7 @@ func TestUnlock_FromDestroyFailed(t *testing.T) {
 	}
 	pool := &fakePool{txs: []*fakeTx{tx}}
 
-	res, err := Unlock(context.Background(), pool, "redis-prod", "оператор отменил destroy", "archon-alice", "01HUNLOCK0000000000000020")
+	res, err := Unlock(context.Background(), pool, "redis-prod", "operator canceled destroy", "archon-alice", "01HUNLOCK0000000000000020")
 	if err != nil {
 		t.Fatalf("Unlock from destroy_failed: %v", err)
 	}
@@ -1005,7 +1005,7 @@ func TestUpgradeStateSchema_FoundModeApplyingRunHistory(t *testing.T) {
 		t.Fatal("found upgrade tx not committed")
 	}
 	if got := upgradeUPDATEStatus(t, tx); got != string(StatusApplying) {
-		t.Errorf("финальный статус = %q, want applying (found → Runner-у, ADR-0068)", got)
+		t.Errorf("final status = %q, want applying (found -> to the Runner, ADR-0068)", got)
 	}
 	var sawRunHistory, sawDriftHistory bool
 	for i, sql := range tx.execSQLs {
@@ -1029,10 +1029,10 @@ func TestUpgradeStateSchema_FoundModeApplyingRunHistory(t *testing.T) {
 		}
 	}
 	if !sawRunHistory {
-		t.Error("нет linkage-записи под R (scenario=slug) — found не написал run-history")
+		t.Error("no linkage record under R (scenario=slug) - found did not write run-history")
 	}
 	if sawDriftHistory {
-		t.Error("found написал drift-pending-apply — должен писать run-history под R, не drift")
+		t.Error("found wrote drift-pending-apply - should write run-history under R, not drift")
 	}
 }
 
@@ -1060,7 +1060,7 @@ func TestUpgradeStateSchema_SlugWithoutRunApplyID_Legacy(t *testing.T) {
 		t.Fatalf("UpgradeStateSchema: %v", err)
 	}
 	if got := upgradeUPDATEStatus(t, tx); got != string(StatusDrift) {
-		t.Errorf("статус = %q, want drift (slug без R = legacy, анти-стрэндинг)", got)
+		t.Errorf("status = %q, want drift (slug without R = legacy, anti-stranding)", got)
 	}
 	var sawDrift bool
 	for i, sql := range tx.execSQLs {
@@ -1069,7 +1069,7 @@ func TestUpgradeStateSchema_SlugWithoutRunApplyID_Legacy(t *testing.T) {
 		}
 	}
 	if !sawDrift {
-		t.Error("slug-без-R обязан писать legacy drift-pending-apply под M")
+		t.Error("slug-without-R must write legacy drift-pending-apply under M")
 	}
 }
 
@@ -1092,7 +1092,7 @@ func TestUnlockForRerun_Day2_FromUpgradeRecipe(t *testing.T) {
 		t.Fatalf("UnlockForRerun day-2 upgrade: %v", err)
 	}
 	if !res.FromUpgrade {
-		t.Error("UnlockResult.FromUpgrade = false, want true (recipe.from_upgrade → rerun из upgrade/)")
+		t.Error("UnlockResult.FromUpgrade = false, want true (recipe.from_upgrade -> rerun from upgrade/)")
 	}
 	if res.Scenario != "to_v2" {
 		t.Errorf("Scenario = %q, want to_v2", res.Scenario)

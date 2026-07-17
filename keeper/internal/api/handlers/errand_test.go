@@ -66,7 +66,7 @@ func TestErrandHandler_ListTyped_ModuleFilter_ForwardedToStore(t *testing.T) {
 
 	// COUNT SQL must carry an IN predicate with two placeholders and two args.
 	if !strings.Contains(pool.countSQL, "module IN") {
-		t.Errorf("count SQL не содержит module IN: %q", pool.countSQL)
+		t.Errorf("count SQL does not contain module IN: %q", pool.countSQL)
 	}
 	if len(pool.countArgs) != 2 {
 		t.Fatalf("count args = %v, want 2 module-values", pool.countArgs)
@@ -77,7 +77,7 @@ func TestErrandHandler_ListTyped_ModuleFilter_ForwardedToStore(t *testing.T) {
 
 	// SELECT SQL — the same IN + LIMIT/OFFSET appended on the right.
 	if !strings.Contains(pool.selectSQL, "module IN") {
-		t.Errorf("select SQL не содержит module IN: %q", pool.selectSQL)
+		t.Errorf("select SQL does not contain module IN: %q", pool.selectSQL)
 	}
 	if len(pool.selectArgs) != 4 {
 		t.Fatalf("select args = %v (want 2 module + limit + offset)", pool.selectArgs)
@@ -93,7 +93,7 @@ func TestErrandHandler_ListTyped_NoModule_NoINPredicate(t *testing.T) {
 		t.Fatalf("ListTyped: %v", err)
 	}
 	if strings.Contains(pool.countSQL, "module IN") {
-		t.Errorf("count SQL не должна содержать module IN без фильтра: %q", pool.countSQL)
+		t.Errorf("count SQL must not contain module IN without a filter: %q", pool.countSQL)
 	}
 }
 
@@ -113,7 +113,7 @@ func cancelProblemType(t *testing.T, err error) string {
 	}
 	d, ok := AsProblemDetails(err)
 	if !ok {
-		t.Fatalf("ошибка не *problemError: %T %v", err, err)
+		t.Fatalf("error is not *problemError: %T %v", err, err)
 	}
 	return d.Type
 }
@@ -123,7 +123,7 @@ func TestErrandHandler_CancelTyped_NotFound(t *testing.T) {
 	h := NewErrandHandler(d, nil, nil)
 	_, err := h.CancelTyped(context.Background(), claimsFor("archon-alice"), "MISSING-ID")
 	if got := cancelProblemType(t, err); !strings.Contains(got, "not-found") {
-		t.Fatalf("problem.Type = %q, ожидался not-found", got)
+		t.Fatalf("problem.Type = %q, expected not-found", got)
 	}
 }
 
@@ -132,7 +132,7 @@ func TestErrandHandler_CancelTyped_TerminalState(t *testing.T) {
 	h := NewErrandHandler(d, nil, nil)
 	_, err := h.CancelTyped(context.Background(), claimsFor("archon-alice"), "ERR-TERM")
 	if got := cancelProblemType(t, err); !strings.Contains(got, "errand-not-cancellable") {
-		t.Fatalf("problem.Type = %q, ожидался errand-not-cancellable (409 terminal)", got)
+		t.Fatalf("problem.Type = %q, expected errand-not-cancellable (409 terminal)", got)
 	}
 }
 
@@ -140,7 +140,7 @@ func TestErrandHandler_CancelTyped_NoDispatcher(t *testing.T) {
 	h := NewErrandHandler(nil, nil, nil)
 	_, err := h.CancelTyped(context.Background(), claimsFor("archon-alice"), "ANY")
 	if got := cancelProblemType(t, err); !strings.Contains(got, "internal") {
-		t.Fatalf("problem.Type = %q, ожидался internal (dispatcher nil)", got)
+		t.Fatalf("problem.Type = %q, expected internal (dispatcher nil)", got)
 	}
 }
 
@@ -286,22 +286,22 @@ func TestRowToErrandResultView_FieldProjection(t *testing.T) {
 	v := rowToErrandResultView(row)
 
 	if v.Status != "success" {
-		t.Errorf("status не плоская строка домен-статуса: %q", v.Status)
+		t.Errorf("status is not a flat domain-status string: %q", v.Status)
 	}
 	if !v.StartedAt.Equal(time.Date(2026, 6, 9, 10, 0, 0, 0, time.UTC)) {
-		t.Errorf("started_at не усечён до секунды UTC: %v", v.StartedAt)
+		t.Errorf("started_at is not truncated to the UTC second: %v", v.StartedAt)
 	}
 	if v.FinishedAt == nil || !v.FinishedAt.Equal(time.Date(2026, 6, 9, 10, 0, 5, 0, time.UTC)) {
-		t.Errorf("finished_at не усечён до секунды UTC: %v", v.FinishedAt)
+		t.Errorf("finished_at is not truncated to the UTC second: %v", v.FinishedAt)
 	}
 	if v.StdoutTruncated != nil || v.StderrTruncated != nil {
-		t.Errorf("truncated-флаги должны быть nil при false: %v %v", v.StdoutTruncated, v.StderrTruncated)
+		t.Errorf("truncated flags must be nil when false: %v %v", v.StdoutTruncated, v.StderrTruncated)
 	}
 	if v.Stderr != nil || v.ErrorMessage != nil || v.Output != nil {
-		t.Errorf("пустые опциональные поля должны быть nil: %v %v %v", v.Stderr, v.ErrorMessage, v.Output)
+		t.Errorf("empty optional fields must be nil: %v %v %v", v.Stderr, v.ErrorMessage, v.Output)
 	}
 	if v.Stdout == nil || *v.Stdout != "ok\n" {
-		t.Errorf("непустой stdout должен быть указателем на значение: %v", v.Stdout)
+		t.Errorf("non-empty stdout must be a pointer to a value: %v", v.Stdout)
 	}
 }
 
@@ -320,10 +320,10 @@ func TestRowToErrandResultView_TruncatedPresentWhenTrue(t *testing.T) {
 	}
 	v := rowToErrandResultView(row)
 	if v.StdoutTruncated == nil || !*v.StdoutTruncated {
-		t.Errorf("stdout_truncated=true должен быть non-nil true: %v", v.StdoutTruncated)
+		t.Errorf("stdout_truncated=true must be non-nil true: %v", v.StdoutTruncated)
 	}
 	if v.StderrTruncated != nil {
-		t.Errorf("stderr_truncated=false должен быть nil: %v", v.StderrTruncated)
+		t.Errorf("stderr_truncated=false must be nil: %v", v.StderrTruncated)
 	}
 }
 
@@ -346,22 +346,22 @@ func TestDispatchResultView_FieldProjection(t *testing.T) {
 	v := dispatchResultView(res, "host.test", "core.cmd.shell", "archon-alice")
 
 	if v.Status != "success" {
-		t.Errorf("status не плоская строка домен-статуса: %q", v.Status)
+		t.Errorf("status is not a flat domain-status string: %q", v.Status)
 	}
 	if v.SID != "host.test" || v.Module != "core.cmd.shell" || v.StartedByAID != "archon-alice" {
-		t.Errorf("sid/module/aid из request не проброшены: %+v", v)
+		t.Errorf("sid/module/aid from request were not propagated: %+v", v)
 	}
 	if v.StartedAt.IsZero() {
-		t.Errorf("started_at должен быть заполнен (не zero time)")
+		t.Errorf("started_at must be filled in (not zero time)")
 	}
 	if v.StartedAt.Nanosecond() != 0 {
-		t.Errorf("started_at должен быть усечён до секунды: %v", v.StartedAt)
+		t.Errorf("started_at must be truncated to the second: %v", v.StartedAt)
 	}
 	if !v.StartedAt.Equal(time.Date(2026, 6, 9, 10, 0, 0, 0, time.UTC)) {
-		t.Errorf("started_at должен быть = DispatchResult.StartedAt (секундный UTC): %v", v.StartedAt)
+		t.Errorf("started_at must equal DispatchResult.StartedAt (second-precision UTC): %v", v.StartedAt)
 	}
 	if v.Stdout == nil || *v.Stdout != "done" {
-		t.Errorf("stdout должен быть указателем на значение: %v", v.Stdout)
+		t.Errorf("stdout must be a pointer to a value: %v", v.Stdout)
 	}
 }
 

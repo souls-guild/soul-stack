@@ -256,14 +256,14 @@ func TestIntegration_2Passage_WhereTargetsOnlyMaster(t *testing.T) {
 	// Passage 0 (probe): ApplyRequest to BOTH hosts (probe has no where → whole roster).
 	p0 := disp.targets(0)
 	if len(p0) != 2 {
-		t.Errorf("Passage 0 targets = %v, want оба хоста", p0)
+		t.Errorf("Passage 0 targets = %v, want both hosts", p0)
 	}
 
 	// ★ Passage 1 (action): ApplyRequest ONLY to the master host. where:
 	// register.role.stdout == 'master' resolved via the Passage 0 per-host register.
 	p1 := disp.targets(1)
 	if len(p1) != 1 || p1[0] != "host-a.example.com" {
-		t.Fatalf("★ Passage 1 targets = %v, want [host-a.example.com] (only master) — staged where не резолвнулся register-ом Passage 0", p1)
+		t.Fatalf("* Passage 1 targets = %v, want [host-a.example.com] (only master) - staged where did not resolve via Passage 0 register", p1)
 	}
 
 	// apply_runs: per-host × per-passage. host-a: passage 0 + passage 1 (master).
@@ -283,7 +283,7 @@ func TestIntegration_2Passage_WhereTargetsOnlyMaster(t *testing.T) {
 		t.Errorf("host-a passages = %v, want [0 1] (probe + master-action)", got["host-a.example.com"])
 	}
 	if len(got["host-b.example.com"]) != 1 || got["host-b.example.com"][0] != 0 {
-		t.Errorf("host-b passages = %v, want [0] (probe только — slave не таргетился Passage 1)", got["host-b.example.com"])
+		t.Errorf("host-b passages = %v, want [0] (probe only - slave was not targeted by Passage 1)", got["host-b.example.com"])
 	}
 }
 
@@ -391,7 +391,7 @@ func TestIntegration_StagedExpandingPassage_RunPlanMatchesExecution(t *testing.T
 	// task.executed. probe idx0 (P0) + loop idx1,2 (P1) = 3 unique plan_index.
 	exec := disp.dispatchedPlanByIndex()
 	if len(exec) != 3 {
-		t.Fatalf("dispatched plan_index set = %v, want 3 (probe idx0 + loop idx1,2 раскрытого Passage 1)", exec)
+		t.Fatalf("dispatched plan_index set = %v, want 3 (probe idx0 + loop idx1,2 unrolled from Passage 1)", exec)
 	}
 
 	// apply_run_plan (persistRunPlan) must match execution both in the set of
@@ -414,15 +414,15 @@ func TestIntegration_StagedExpandingPassage_RunPlanMatchesExecution(t *testing.T
 		}
 		sort.Ints(planIdx)
 		sort.Ints(execIdx)
-		t.Fatalf("★ H1: apply_run_plan plan_index = %v, want == исполнение %v (staged passage-1 снят placeholder-ом вместо активного render'а — index потерян)", planIdx, execIdx)
+		t.Fatalf("* H1: apply_run_plan plan_index = %v, want == execution %v (staged passage-1 was recorded with a compressed placeholder instead of the active render - index lost)", planIdx, execIdx)
 	}
 	for idx, dt := range exec {
 		p, ok := planByIndex[idx]
 		if !ok {
-			t.Fatalf("★ H1: plan_index %d исполнен (passage %d, %q), но отсутствует в apply_run_plan — persistRunPlan снял сжатый placeholder вместо раскрытого render'а Passage 1", idx, dt.passage, dt.name)
+			t.Fatalf("* H1: plan_index %d executed (passage %d, %q), but missing from apply_run_plan - persistRunPlan recorded the compressed placeholder instead of the unrolled render of Passage 1", idx, dt.passage, dt.name)
 		}
 		if p.Passage != dt.passage || p.Name != dt.name {
-			t.Errorf("plan_index %d: apply_run_plan (passage=%d, name=%q) != исполнение (passage=%d, name=%q)", idx, p.Passage, p.Name, dt.passage, dt.name)
+			t.Errorf("plan_index %d: apply_run_plan (passage=%d, name=%q) != execution (passage=%d, name=%q)", idx, p.Passage, p.Name, dt.passage, dt.name)
 		}
 	}
 }
@@ -486,12 +486,12 @@ func TestIntegration_StagedAllSlave_NoOpReady(t *testing.T) {
 
 	// Passage 0 (probe): both hosts (probe has no where → whole roster).
 	if p0 := disp.targets(0); len(p0) != 2 {
-		t.Errorf("Passage 0 targets = %v, want оба хоста", p0)
+		t.Errorf("Passage 0 targets = %v, want both hosts", p0)
 	}
 
 	// ★ Passage 1: NO ApplyRequest at all (all slave → where=false on each).
 	if p1 := disp.targets(1); len(p1) != 0 {
-		t.Fatalf("★ Passage 1 targets = %v, want [] (all-slave: destructive-таргет пуст, no-op)", p1)
+		t.Fatalf("* Passage 1 targets = %v, want [] (all-slave: destructive target is empty, no-op)", p1)
 	}
 
 	// apply_runs: both hosts have ONLY passage 0 (no Passage-1 row — nobody was
@@ -499,7 +499,7 @@ func TestIntegration_StagedAllSlave_NoOpReady(t *testing.T) {
 	got := passagesBySID(t, applyID, applyrun.StatusSuccess)
 	for _, sid := range []string{"host-a.example.com", "host-b.example.com"} {
 		if len(got[sid]) != 1 || got[sid][0] != 0 {
-			t.Errorf("%s passages = %v, want [0] (probe только — Passage 1 не таргетился)", sid, got[sid])
+			t.Errorf("%s passages = %v, want [0] (probe only - Passage 1 was not targeted)", sid, got[sid])
 		}
 	}
 }
@@ -545,7 +545,7 @@ func TestIntegration_StagedProbeFail_FailStop(t *testing.T) {
 		t.Errorf("Passage 0 targets = %v, want [host-a.example.com]", p0)
 	}
 	if p1 := disp.targets(1); len(p1) != 0 {
-		t.Fatalf("★ Passage 1 targets = %v, want [] (probe-fail остановил прогон до Passage 1)", p1)
+		t.Fatalf("* Passage 1 targets = %v, want [] (probe-fail stopped the run before Passage 1)", p1)
 	}
 
 	// apply_runs: the only row is passage 0 = failed (no Passage-1 row).
@@ -554,7 +554,7 @@ func TestIntegration_StagedProbeFail_FailStop(t *testing.T) {
 		t.Fatalf("SelectStatusesByApplyID: %v", err)
 	}
 	if len(statuses) != 1 {
-		t.Fatalf("apply_runs rows = %d, want 1 (только probe passage 0)", len(statuses))
+		t.Fatalf("apply_runs rows = %d, want 1 (only probe passage 0)", len(statuses))
 	}
 	if statuses[0].Passage != 0 || statuses[0].Status != applyrun.StatusFailed {
 		t.Errorf("apply_runs[0] = passage %d/%s, want passage 0/failed", statuses[0].Passage, statuses[0].Status)
@@ -593,12 +593,12 @@ func TestIntegration_StagedAllMaster(t *testing.T) {
 	waitRunDone(t, "redis-prod", applyID, incarnation.StatusReady)
 
 	if p0 := disp.targets(0); len(p0) != 2 {
-		t.Errorf("Passage 0 targets = %v, want оба хоста", p0)
+		t.Errorf("Passage 0 targets = %v, want both hosts", p0)
 	}
 	// ★ Passage 1: BOTH hosts (where master is true on each).
 	p1 := disp.targets(1)
 	if len(p1) != 2 {
-		t.Fatalf("★ Passage 1 targets = %v, want оба хоста (all-master)", p1)
+		t.Fatalf("* Passage 1 targets = %v, want both hosts (all-master)", p1)
 	}
 
 	// apply_runs: both hosts have passage 0 + passage 1, all success.
@@ -643,16 +643,16 @@ func TestIntegration_StagedPartialProbeFail_FailClosed(t *testing.T) {
 
 	inc := waitRunDone(t, "redis-prod", applyID, incarnation.StatusErrorLocked)
 	if inc.StatusDetails["reason"] != "dispatch_failed" {
-		t.Errorf("reason = %v, want dispatch_failed (частичный probe-fail валит весь прогон)", inc.StatusDetails["reason"])
+		t.Errorf("reason = %v, want dispatch_failed (partial probe-fail fails the whole run)", inc.StatusDetails["reason"])
 	}
 
 	// Passage 0 went to both hosts; ★ Passage 1 — to nobody (fail-closed:
 	// surviving host-a does NOT get Passage-1 on a partial register).
 	if p0 := disp.targets(0); len(p0) != 2 {
-		t.Errorf("Passage 0 targets = %v, want оба хоста", p0)
+		t.Errorf("Passage 0 targets = %v, want both hosts", p0)
 	}
 	if p1 := disp.targets(1); len(p1) != 0 {
-		t.Fatalf("★ Passage 1 targets = %v, want [] (частичный probe-fail → fail-closed, Passage 1 не диспатчится)", p1)
+		t.Fatalf("* Passage 1 targets = %v, want [] (partial probe-fail -> fail-closed, Passage 1 is not dispatched)", p1)
 	}
 }
 
@@ -859,14 +859,14 @@ func TestIntegration_Staged3Passage_ReprobeRetargets(t *testing.T) {
 
 	// Passage 0 (probe): both hosts (probe has no where).
 	if p0 := disp.targets(0); len(p0) != 2 {
-		t.Errorf("Passage 0 targets = %v, want оба хоста", p0)
+		t.Errorf("Passage 0 targets = %v, want both hosts", p0)
 	}
 	// Passage 1 (failover where role==master PLUS re-probe with no where):
 	// re-probe targets the whole roster, so BOTH hosts get a Passage-1
 	// ApplyRequest (re-probe #2 goes to everyone; failover #1 — only to the old
 	// master host-a).
 	if p1 := disp.targets(1); len(p1) != 2 {
-		t.Errorf("Passage 1 targets = %v, want оба хоста (re-probe без where → весь roster)", p1)
+		t.Errorf("Passage 1 targets = %v, want both hosts (re-probe without where -> whole roster)", p1)
 	}
 
 	// ★ Passage 2 (act where role_after==master): ONLY host-b — the NEW master
@@ -875,7 +875,7 @@ func TestIntegration_Staged3Passage_ReprobeRetargets(t *testing.T) {
 	// targeting is BROKEN.
 	p2 := disp.targets(2)
 	if len(p2) != 1 || p2[0] != "host-b.example.com" {
-		t.Fatalf("★ Passage 2 targets = %v, want [host-b.example.com] (НОВЫЙ master по re-probe Passage 1) — re-probe retargeting сломан: targeting пошёл по СТАРОМУ probe Passage 0", p2)
+		t.Fatalf("* Passage 2 targets = %v, want [host-b.example.com] (NEW master from re-probe Passage 1) - re-probe retargeting broken: targeting followed the OLD probe Passage 0", p2)
 	}
 
 	// apply_runs: host-a — passage 0,1 (probe + failover-action + re-probe; both
@@ -883,7 +883,7 @@ func TestIntegration_Staged3Passage_ReprobeRetargets(t *testing.T) {
 	// passage 0,1,2 (probe + re-probe + new-master-action). All success.
 	got := passagesBySID(t, applyID, applyrun.StatusSuccess)
 	if len(got["host-a.example.com"]) != 2 {
-		t.Errorf("host-a passages = %v, want [0 1] (probe + failover/re-probe, не таргетился Passage 2)", got["host-a.example.com"])
+		t.Errorf("host-a passages = %v, want [0 1] (probe + failover/re-probe, not targeted by Passage 2)", got["host-a.example.com"])
 	}
 	if len(got["host-b.example.com"]) != 3 {
 		t.Errorf("host-b passages = %v, want [0 1 2] (probe + re-probe + new-master-action)", got["host-b.example.com"])
@@ -928,13 +928,13 @@ func TestIntegration_StagedOldSoul_Rejected(t *testing.T) {
 
 	inc := waitRunDone(t, "redis-prod", applyID, incarnation.StatusErrorLocked)
 	if inc.StatusDetails["reason"] != "soul_passage_unsupported" {
-		t.Fatalf("reason = %v, want soul_passage_unsupported (старый Soul под staged отвергнут ДО dispatch)", inc.StatusDetails["reason"])
+		t.Fatalf("reason = %v, want soul_passage_unsupported (old Soul under staged rejected BEFORE dispatch)", inc.StatusDetails["reason"])
 	}
 
 	// ★ Rejected BEFORE dispatch: NO ApplyRequest at all (not even the Passage 0
 	// probe went out) — not a hang, not a silent single-pass execution.
 	if p0 := disp.targets(0); len(p0) != 0 {
-		t.Fatalf("★ Passage 0 targets = %v, want [] (старый Soul под staged отвергнут ДО любого dispatch)", p0)
+		t.Fatalf("* Passage 0 targets = %v, want [] (old Soul under staged rejected BEFORE any dispatch)", p0)
 	}
 }
 
@@ -973,7 +973,7 @@ func TestIntegration_StagedNilPassageCap_FailClosed(t *testing.T) {
 		t.Fatalf("reason = %v, want soul_passage_unsupported (nil passageCap → fail-closed)", inc.StatusDetails["reason"])
 	}
 	if p0 := disp.targets(0); len(p0) != 0 {
-		t.Fatalf("★ Passage 0 targets = %v, want [] (nil passageCap → отказ ДО dispatch)", p0)
+		t.Fatalf("* Passage 0 targets = %v, want [] (nil passageCap -> reject BEFORE dispatch)", p0)
 	}
 }
 
@@ -1064,7 +1064,7 @@ tasks:
 	waitRunDone(t, "redis-prod", applyID, incarnation.StatusReady)
 
 	if p0 := disp.targets(0); len(p0) != 2 {
-		t.Errorf("Passage 0 targets = %v, want оба хоста", p0)
+		t.Errorf("Passage 0 targets = %v, want both hosts", p0)
 	}
 	// ★ Passage 1: ONLY host-a — run_once trimmed the master target
 	// {host-a,host-b} to the first by SID. Proves run_once applied to the
@@ -1072,7 +1072,7 @@ tasks:
 	// roster host.
 	p1 := disp.targets(1)
 	if len(p1) != 1 || p1[0] != "host-a.example.com" {
-		t.Fatalf("★ Passage 1 targets = %v, want [host-a.example.com] (run_once → первый по SID из master-таргета)", p1)
+		t.Fatalf("* Passage 1 targets = %v, want [host-a.example.com] (run_once -> first by SID from the master target)", p1)
 	}
 }
 
@@ -1115,7 +1115,7 @@ func TestIntegration_StagedInlineNotAcolyteClaim(t *testing.T) {
 	// The inline path dispatches SendApply immediately (does NOT write planned
 	// for Acolyte claim): Passage 0 went to both hosts, Passage 1 — to master.
 	if p0 := disp.targets(0); len(p0) != 2 {
-		t.Errorf("Passage 0 targets = %v, want оба хоста (inline SendApply, не Acolyte planned)", p0)
+		t.Errorf("Passage 0 targets = %v, want both hosts (inline SendApply, not Acolyte planned)", p0)
 	}
 	if p1 := disp.targets(1); len(p1) != 1 || p1[0] != "host-a.example.com" {
 		t.Errorf("Passage 1 targets = %v, want [host-a.example.com] (inline)", p1)
@@ -1130,7 +1130,7 @@ func TestIntegration_StagedInlineNotAcolyteClaim(t *testing.T) {
 	}
 	for _, st := range statuses {
 		if st.Status == applyrun.StatusPlanned || st.Status == applyrun.StatusClaimed {
-			t.Fatalf("★ apply_runs[%s,passage=%d] = %s — staged ОШИБОЧНО пошёл Acolyte-путём (planned/claimed), а обязан inline", st.SID, st.Passage, st.Status)
+			t.Fatalf("* apply_runs[%s,passage=%d] = %s - staged WRONGLY went through the Acolyte path (planned/claimed), but must be inline", st.SID, st.Passage, st.Status)
 		}
 		if st.Status != applyrun.StatusSuccess {
 			t.Errorf("apply_runs[%s,passage=%d] = %s, want success", st.SID, st.Passage, st.Status)
@@ -1171,17 +1171,17 @@ func TestIntegration_StagedEmptyRegister(t *testing.T) {
 	waitRunDone(t, "redis-prod", applyID, incarnation.StatusReady)
 
 	if p0 := disp.targets(0); len(p0) != 2 {
-		t.Errorf("Passage 0 targets = %v, want оба хоста", p0)
+		t.Errorf("Passage 0 targets = %v, want both hosts", p0)
 	}
 	// ★ Passage 1: NONE (empty/whitespace stdout != 'master').
 	if p1 := disp.targets(1); len(p1) != 0 {
-		t.Fatalf("★ Passage 1 targets = %v, want [] (empty/whitespace register не == 'master')", p1)
+		t.Fatalf("* Passage 1 targets = %v, want [] (empty/whitespace register != 'master')", p1)
 	}
 
 	got := passagesBySID(t, applyID, applyrun.StatusSuccess)
 	for _, sid := range []string{"host-a.example.com", "host-b.example.com"} {
 		if len(got[sid]) != 1 || got[sid][0] != 0 {
-			t.Errorf("%s passages = %v, want [0] (probe только)", sid, got[sid])
+			t.Errorf("%s passages = %v, want [0] (probe only)", sid, got[sid])
 		}
 	}
 }
@@ -1372,18 +1372,18 @@ func TestIntegration_MultiTaskPassage0_RegisterNotClobbered(t *testing.T) {
 		if reg.SID == "host-a.example.com" && reg.PlanIndex == 0 {
 			probeFound = true
 			if reg.RegisterData["stdout"] != "master" {
-				t.Errorf("★ probe-register (plan_index 0) host-a.stdout = %v, want master (затёрт действием?)", reg.RegisterData["stdout"])
+				t.Errorf("* probe-register (plan_index 0) host-a.stdout = %v, want master (overwritten by an action?)", reg.RegisterData["stdout"])
 			}
 		}
 	}
 	if !probeFound {
-		t.Fatalf("★ probe-register (plan_index 0) host-a отсутствует — затёрт коллизией task_idx (баг)")
+		t.Fatalf("* probe-register (plan_index 0) host-a missing - overwritten by a task_idx collision (bug)")
 	}
 
 	// (2) ★ Passage 1 — ONLY master (where resolved via the non-clobbered probe register).
 	p1 := disp.targets(1)
 	if len(p1) != 1 || p1[0] != "host-a.example.com" {
-		t.Fatalf("★ Passage 1 targets = %v, want [host-a.example.com] — register.role не резолвнулся (probe затёрт?)", p1)
+		t.Fatalf("* Passage 1 targets = %v, want [host-a.example.com] - register.role did not resolve (probe overwritten?)", p1)
 	}
 }
 
@@ -1520,16 +1520,16 @@ func TestIntegration_PerHostDifferentWhere_RegisterResolves(t *testing.T) {
 	// host-a probe role at local 1 (slice [#0,#1]); host-b at local 0 (#0
 	// filtered out by per-host where). The differing task_idx is the point.
 	if taskIdxBySID["host-a.example.com"] != 1 {
-		t.Errorf("host-a probe role task_idx = %d, want 1 (срез [#0,#1])", taskIdxBySID["host-a.example.com"])
+		t.Errorf("host-a probe role task_idx = %d, want 1 (slice [#0,#1])", taskIdxBySID["host-a.example.com"])
 	}
 	if taskIdxBySID["host-b.example.com"] != 0 {
-		t.Errorf("host-b probe role task_idx = %d, want 0 (срез [#1], #0 отфильтрован)", taskIdxBySID["host-b.example.com"])
+		t.Errorf("host-b probe role task_idx = %d, want 0 (slice [#1], #0 filtered out)", taskIdxBySID["host-b.example.com"])
 	}
 
 	// ★ Passage 1 → ONLY master, despite the probe task's differing per-host
 	// local task_idx: register resolves via the global plan_index.
 	p1 := disp.targets(1)
 	if len(p1) != 1 || p1[0] != "host-a.example.com" {
-		t.Fatalf("★ Passage 1 targets = %v, want [host-a.example.com] — register.role не резолвнулся при разном per-host task_idx", p1)
+		t.Fatalf("* Passage 1 targets = %v, want [host-a.example.com] - register.role did not resolve with different per-host task_idx", p1)
 	}
 }

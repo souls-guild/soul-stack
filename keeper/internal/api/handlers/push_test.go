@@ -29,7 +29,7 @@ func pushProblemType(t *testing.T, err error) string {
 	}
 	d, ok := AsProblemDetails(err)
 	if !ok {
-		t.Fatalf("ошибка не *problemError: %T %v", err, err)
+		t.Fatalf("error is not *problemError: %T %v", err, err)
 	}
 	return d.Type
 }
@@ -67,7 +67,7 @@ func TestPush_ListRunsTyped_ValidStatusAndProvider_PassValidation(t *testing.T) 
 	h := NewPushHandler(nil, nil)
 	_, err := h.ListRunsTyped(context.Background(), []string{"success", "failed"}, "openssh", 0, 50)
 	if got := pushProblemType(t, err); !strings.Contains(got, "internal") {
-		t.Fatalf("problem.Type = %q, want internal (валидация прошла, svc=nil)", got)
+		t.Fatalf("problem.Type = %q, want internal (validation passed, svc=nil)", got)
 	}
 }
 
@@ -153,7 +153,7 @@ func TestRowToPushRunListEntryView_Pending_NoFinishedAt(t *testing.T) {
 		t.Errorf("ApplyID = %q", entry.ApplyID)
 	}
 	if entry.Status != "pending" {
-		t.Errorf("Status = %q, want плоская строка pending", entry.Status)
+		t.Errorf("Status = %q, want flat string pending", entry.Status)
 	}
 	if entry.FinishedAt != nil {
 		t.Errorf("FinishedAt = %v, want nil (pending)", entry.FinishedAt)
@@ -182,7 +182,7 @@ func TestRowToPushRunListEntryView_Terminal_WithCounts(t *testing.T) {
 	}
 	entry := rowToPushRunListEntryView(row)
 	if entry.Status != "partial_failed" {
-		t.Errorf("Status = %q, want плоская строка partial_failed", entry.Status)
+		t.Errorf("Status = %q, want flat string partial_failed", entry.Status)
 	}
 	if entry.FinishedAt == nil {
 		t.Errorf("FinishedAt is nil, want timestamp")

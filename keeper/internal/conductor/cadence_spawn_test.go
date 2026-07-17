@@ -228,17 +228,17 @@ func TestProcessOne_Parallel_SpawnsIgnoringLive(t *testing.T) {
 		t.Fatalf("processOne: %v", err)
 	}
 	if !spawned {
-		t.Fatal("parallel должен спавнить")
+		t.Fatal("parallel should spawn")
 	}
 	if tx.hasLiveCalls != 0 {
-		t.Errorf("parallel не должен проверять live; hasLiveCalls=%d", tx.hasLiveCalls)
+		t.Errorf("parallel should not check live; hasLiveCalls=%d", tx.hasLiveCalls)
 	}
 	if tx.insertCalls != 1 || tx.copyCalls != 1 || tx.execCalls != 1 {
-		t.Errorf("ожидался insert+targets+advance; insert=%d copy=%d exec=%d",
+		t.Errorf("expected insert+targets+advance; insert=%d copy=%d exec=%d",
 			tx.insertCalls, tx.copyCalls, tx.execCalls)
 	}
 	if rec == nil || rec.voyageID == "" {
-		t.Error("ожидалась spawned-запись с voyage_id")
+		t.Error("expected a spawned record with voyage_id")
 	}
 }
 
@@ -254,16 +254,16 @@ func TestProcessOne_Skip_LiveChild_SkipsButAdvances(t *testing.T) {
 		t.Fatalf("processOne: %v", err)
 	}
 	if spawned {
-		t.Fatal("skip с живым ребёнком не должен спавнить")
+		t.Fatal("skip with a live child should not spawn")
 	}
 	if tx.insertCalls != 0 || tx.copyCalls != 0 {
-		t.Errorf("skip не должен вставлять voyage; insert=%d copy=%d", tx.insertCalls, tx.copyCalls)
+		t.Errorf("skip should not insert a voyage; insert=%d copy=%d", tx.insertCalls, tx.copyCalls)
 	}
 	if tx.execCalls != 1 {
-		t.Errorf("skip всё равно двигает next_run (AdvanceSchedule); exec=%d, want 1", tx.execCalls)
+		t.Errorf("skip still advances next_run (AdvanceSchedule); exec=%d, want 1", tx.execCalls)
 	}
 	if rec == nil || !rec.skipped {
-		t.Error("ожидалась skipped-запись для audit")
+		t.Error("expected a skipped record for audit")
 	}
 }
 
@@ -279,7 +279,7 @@ func TestProcessOne_Skip_NoLiveChild_Spawns(t *testing.T) {
 		t.Fatalf("processOne: %v", err)
 	}
 	if !spawned {
-		t.Fatal("skip без живого ребёнка должен спавнить")
+		t.Fatal("skip without a live child should spawn")
 	}
 	if tx.insertCalls != 1 {
 		t.Errorf("insert=%d, want 1", tx.insertCalls)
@@ -312,10 +312,10 @@ func TestProcessOne_FailThresholdPercent_ResolvedOnSpawnScope(t *testing.T) {
 		t.Fatalf("processOne: %v", err)
 	}
 	if !spawned {
-		t.Fatal("ожидался спавн")
+		t.Fatal("expected a spawn")
 	}
 	if len(tx.voyageInsertArgs) <= voyageInsertFailThresholdIdx {
-		t.Fatalf("voyageInsertArgs len=%d, ожидался хотя бы %d", len(tx.voyageInsertArgs), voyageInsertFailThresholdIdx+1)
+		t.Fatalf("voyageInsertArgs len=%d, expected at least %d", len(tx.voyageInsertArgs), voyageInsertFailThresholdIdx+1)
 	}
 	got := tx.voyageInsertArgs[voyageInsertFailThresholdIdx]
 	n, ok := got.(int)
@@ -323,7 +323,7 @@ func TestProcessOne_FailThresholdPercent_ResolvedOnSpawnScope(t *testing.T) {
 		t.Fatalf("voyage fail_threshold arg = %T (%v), want int", got, got)
 	}
 	if n != 3 { // ceil(10*30/100)
-		t.Errorf("спавнящийся Voyage.fail_threshold = %d, want 3 (30%% от spawn-scope=10)", n)
+		t.Errorf("spawned Voyage.fail_threshold = %d, want 3 (30%% of spawn-scope=10)", n)
 	}
 }
 
@@ -348,7 +348,7 @@ func TestProcessOne_FailThresholdPercent_DifferentSpawnScope(t *testing.T) {
 	}
 	got := tx.voyageInsertArgs[voyageInsertFailThresholdIdx]
 	if n, ok := got.(int); !ok || n != 30 {
-		t.Errorf("спавнящийся Voyage.fail_threshold = %v, want 30 (30%% от 100)", got)
+		t.Errorf("spawned Voyage.fail_threshold = %v, want 30 (30%% of 100)", got)
 	}
 }
 
@@ -364,13 +364,13 @@ func TestProcessOne_Queue_LiveChild_WaitsNoAdvance(t *testing.T) {
 		t.Fatalf("processOne: %v", err)
 	}
 	if spawned {
-		t.Fatal("queue с живым ребёнком не должен спавнить")
+		t.Fatal("queue with a live child should not spawn")
 	}
 	if tx.execCalls != 0 {
-		t.Errorf("queue НЕ двигает next_run при живом ребёнке; exec=%d, want 0", tx.execCalls)
+		t.Errorf("queue does NOT advance next_run with a live child; exec=%d, want 0", tx.execCalls)
 	}
 	if rec != nil {
-		t.Error("queue-ожидание не пишет audit (это не пропуск)")
+		t.Error("queue-wait does not write audit (this is not a skip)")
 	}
 }
 
@@ -386,7 +386,7 @@ func TestProcessOne_Queue_NoLiveChild_Spawns(t *testing.T) {
 		t.Fatalf("processOne: %v", err)
 	}
 	if !spawned {
-		t.Fatal("queue без живого ребёнка должен спавнить")
+		t.Fatal("queue without a live child should spawn")
 	}
 	if tx.insertCalls != 1 || tx.execCalls != 1 {
 		t.Errorf("insert=%d exec=%d, want 1/1", tx.insertCalls, tx.execCalls)
@@ -405,13 +405,13 @@ func TestProcessOne_EmptyScope_AdvancesNoSpawn(t *testing.T) {
 		t.Fatalf("processOne: %v", err)
 	}
 	if spawned || rec != nil {
-		t.Fatal("пустой резолв не спавнит и не пишет audit")
+		t.Fatal("empty resolve does not spawn and does not write audit")
 	}
 	if tx.insertCalls != 0 {
-		t.Errorf("пустой резолв не вставляет voyage; insert=%d", tx.insertCalls)
+		t.Errorf("empty resolve does not insert a voyage; insert=%d", tx.insertCalls)
 	}
 	if tx.execCalls != 1 {
-		t.Errorf("пустой резолв двигает расписание; exec=%d, want 1", tx.execCalls)
+		t.Errorf("empty resolve advances the schedule; exec=%d, want 1", tx.execCalls)
 	}
 }
 
@@ -454,7 +454,7 @@ func TestSpawner_Emit_SpawnedEvent(t *testing.T) {
 	// archon_aid for a background spawn = NULL (no initiating operator).
 	// Recipe authorship lives in Voyage.started_by_aid, not here.
 	if ev.ArchonAID != "" {
-		t.Errorf("archon_aid = %q, want \"\" (NULL для background)", ev.ArchonAID)
+		t.Errorf("archon_aid = %q, want \"\" (NULL for background)", ev.ArchonAID)
 	}
 	if ev.CorrelationID != "V1" {
 		t.Errorf("correlation_id = %q, want voyage_id", ev.CorrelationID)
@@ -470,7 +470,7 @@ func TestSpawner_Emit_SkippedEvent(t *testing.T) {
 		skipped:      true,
 	})
 	if len(ad.events) != 1 || ad.events[0].EventType != audit.EventCadenceSkippedOverlap {
-		t.Fatalf("ожидался cadence.skipped_overlap, got %+v", ad.events)
+		t.Fatalf("expected cadence.skipped_overlap, got %+v", ad.events)
 	}
 	if ad.events[0].CorrelationID != "C1" {
 		t.Errorf("skip correlation_id = %q, want cadence_id", ad.events[0].CorrelationID)
@@ -479,7 +479,7 @@ func TestSpawner_Emit_SkippedEvent(t *testing.T) {
 		t.Errorf("skip source = %q, want background", ad.events[0].Source)
 	}
 	if ad.events[0].ArchonAID != "" {
-		t.Errorf("skip archon_aid = %q, want \"\" (NULL для background)", ad.events[0].ArchonAID)
+		t.Errorf("skip archon_aid = %q, want \"\" (NULL for background)", ad.events[0].ArchonAID)
 	}
 }
 
@@ -488,14 +488,14 @@ func TestSpawner_Emit_SkippedEvent(t *testing.T) {
 func TestSpawner_Run_NilResolvers(t *testing.T) {
 	s := newCadenceSpawnerFromBeginner(spawnOneBeginner{tx: &spawnFakeTx{}}, nil, nil, nil, silentLogger())
 	if _, err := s.Run(context.Background(), 0, 10); err == nil {
-		t.Fatal("ожидалась ошибка при nil-резолверах")
+		t.Fatal("expected an error with nil resolvers")
 	}
 }
 
 func TestSpawner_Run_NilPool(t *testing.T) {
 	s := &CadenceSpawner{scenarioR: stubResolver{}, commandR: stubResolver{}}
 	if _, err := s.Run(context.Background(), 0, 10); err == nil {
-		t.Fatal("ожидалась ошибка при nil pool")
+		t.Fatal("expected an error with nil pool")
 	}
 }
 
@@ -526,19 +526,19 @@ func TestSpawner_Run_ProcessError_RollsBack(t *testing.T) {
 		t.Fatalf("err = %v, want wrap of %v", err, want)
 	}
 	if affected != 0 {
-		t.Errorf("affected = %d, want 0 (ничего не создано при откате)", affected)
+		t.Errorf("affected = %d, want 0 (nothing created on rollback)", affected)
 	}
 	if tx.committed {
-		t.Error("tx.committed = true, want false (commit не должен был случиться)")
+		t.Error("tx.committed = true, want false (commit should not have happened)")
 	}
 	if !tx.rolled {
-		t.Error("tx.rolled = false, want true (defer обязан откатить)")
+		t.Error("tx.rolled = false, want true (defer must roll back)")
 	}
 	if tx.insertCalls != 0 {
-		t.Errorf("insertCalls = %d, want 0 (resolver упал до вставки voyage)", tx.insertCalls)
+		t.Errorf("insertCalls = %d, want 0 (resolver failed before inserting the voyage)", tx.insertCalls)
 	}
 	if tx.execCalls != 0 {
-		t.Errorf("execCalls = %d, want 0 (AdvanceSchedule не вызван → next_run не сдвинут)", tx.execCalls)
+		t.Errorf("execCalls = %d, want 0 (AdvanceSchedule not called -> next_run not advanced)", tx.execCalls)
 	}
 }
 
@@ -568,7 +568,7 @@ func TestSpawner_Run_ExecError_RollsBack(t *testing.T) {
 		t.Error("tx.committed = true, want false")
 	}
 	if !tx.rolled {
-		t.Error("tx.rolled = false, want true (откат после фейла AdvanceSchedule)")
+		t.Error("tx.rolled = false, want true (rollback after AdvanceSchedule failure)")
 	}
 }
 
@@ -592,6 +592,6 @@ func TestSpawner_Run_Success_Commits(t *testing.T) {
 		t.Errorf("affected = %d, want 1", affected)
 	}
 	if !tx.committed {
-		t.Error("tx.committed = false, want true (успешный тик должен зафиксироваться)")
+		t.Error("tx.committed = false, want true (a successful tick should commit)")
 	}
 }

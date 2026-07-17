@@ -213,21 +213,21 @@ func TestHumaSigilKey_Introduce_201(t *testing.T) {
 	}
 	var m map[string]any
 	if err := json.Unmarshal(rec.Body.Bytes(), &m); err != nil {
-		t.Fatalf("reply не JSON-object: %v; body=%s", err, rec.Body.String())
+		t.Fatalf("reply is not a JSON object: %v; body=%s", err, rec.Body.String())
 	}
 	// key_id/pubkey are ed25519-generated (not byte-exact); we guard the field set + types.
 	for _, k := range []string{"key_id", "pubkey_pem", "is_primary", "status", "introduced_at"} {
 		if _, ok := m[k]; !ok {
-			t.Errorf("introduce 201-body без поля %q: %v", k, m)
+			t.Errorf("introduce 201-body missing field %q: %v", k, m)
 		}
 	}
 	if m["is_primary"] != true {
 		// makePrimary default — the first key becomes primary (Introduce semantics).
-		t.Logf("is_primary=%v (makePrimary=false; зависит от onличия active-primary)", m["is_primary"])
+		t.Logf("is_primary=%v (makePrimary=false; depends on presence of an active-primary)", m["is_primary"])
 	}
 	// pubkey must NOT carry the private key.
 	if pem, _ := m["pubkey_pem"].(string); strings.Contains(pem, "PRIVATE") {
-		t.Errorf("SECURITY: introduce-ответ несёт PRIVATE-материал: %q", pem)
+		t.Errorf("SECURITY: introduce reply carries PRIVATE material: %q", pem)
 	}
 }
 
@@ -263,7 +263,7 @@ func TestHumaAudit_SigilKeyIntroduce_RecordsOnSuccess(t *testing.T) {
 	}
 	evs := auditCap.Events()
 	if len(evs) == 0 {
-		t.Fatalf("audit NOT записан on успешbutм introduce (S6-рецидив)")
+		t.Fatalf("audit NOT recorded on successful introduce (S6 regression)")
 	}
 	if evs[0].EventType != audit.EventSigilKeyIntroduced {
 		t.Errorf("event_type = %q, want %q", evs[0].EventType, audit.EventSigilKeyIntroduced)
@@ -275,7 +275,7 @@ func TestHumaAudit_SigilKeyIntroduce_RecordsOnSuccess(t *testing.T) {
 		t.Errorf("payload introduced_by_aid = %v, want archon-alice (payload=%+v)", evs[0].Payload["introduced_by_aid"], evs[0].Payload)
 	}
 	if _, ok := evs[0].Payload["key_id"]; !ok {
-		t.Errorf("payload без key_id: %+v", evs[0].Payload)
+		t.Errorf("payload missing key_id: %+v", evs[0].Payload)
 	}
 }
 
@@ -289,7 +289,7 @@ func TestHumaAudit_SigilKeyIntroduce_NoAudit_OnRBACDeny(t *testing.T) {
 		t.Fatalf("status = %d, want 403; body=%s", rec.Code, rec.Body.String())
 	}
 	if len(auditCap.Events()) != 0 {
-		t.Errorf("audit записан on RBAC-deny introduce (%d withбытий)", len(auditCap.Events()))
+		t.Errorf("audit recorded on RBAC-deny introduce (%d events)", len(auditCap.Events()))
 	}
 }
 
@@ -305,12 +305,12 @@ func TestHumaSigilKey_List_GoldenWire(t *testing.T) {
 	}
 	var m map[string]any
 	if err := json.Unmarshal(rec.Body.Bytes(), &m); err != nil {
-		t.Fatalf("reply не JSON-object: %v; body=%s", err, rec.Body.String())
+		t.Fatalf("reply is not a JSON object: %v; body=%s", err, rec.Body.String())
 	}
 	out, _ := json.Marshal(m)
 	golden := `{"items":[{"introduced_at":"2026-06-13T10:00:00Z","is_primary":false,"key_id":"` + skTestKeyID + `","status":"active"}]}`
 	if got := string(out); got != golden {
-		t.Errorf("GOLDEN wire-дрейф sigil-key.list:\n got  = %s\n want = %s", got, golden)
+		t.Errorf("GOLDEN wire drift sigil-key.list:\n got  = %s\n want = %s", got, golden)
 	}
 }
 
@@ -324,7 +324,7 @@ func TestHumaSigilKey_List_NoAudit(t *testing.T) {
 		t.Fatalf("status = %d, want 200; body=%s", rec.Code, rec.Body.String())
 	}
 	if len(auditCap.Events()) != 0 {
-		t.Errorf("READ-роут sigil-key.list записал audit (%d withбытий)", len(auditCap.Events()))
+		t.Errorf("READ route sigil-key.list recorded audit (%d events)", len(auditCap.Events()))
 	}
 }
 
@@ -349,7 +349,7 @@ func TestHumaSigilKey_SetPrimary_204(t *testing.T) {
 		t.Fatalf("status = %d, want 204; body=%s", rec.Code, rec.Body.String())
 	}
 	if body := strings.TrimSpace(rec.Body.String()); body != "" {
-		t.Errorf("204-body set-primary toлжbut быть ПУСТЫМ, got %q", body)
+		t.Errorf("204-body set-primary must be EMPTY, got %q", body)
 	}
 }
 
@@ -374,10 +374,10 @@ func TestHumaAudit_SigilKeySetPrimary_NoAudit_OnBadKeyID(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPost, "/v1/sigil/keys/NOTHEX/primary", nil)
 	r.ServeHTTP(rec, req)
 	if rec.Code != http.StatusUnprocessableEntity {
-		t.Fatalf("status = %d, want 422 (битый key_id); body=%s", rec.Code, rec.Body.String())
+		t.Fatalf("status = %d, want 422 (malformed key_id); body=%s", rec.Code, rec.Body.String())
 	}
 	if len(auditCap.Events()) != 0 {
-		t.Errorf("audit записан on bad-key_id set-primary (%d withбытий)", len(auditCap.Events()))
+		t.Errorf("audit recorded on bad-key_id set-primary (%d events)", len(auditCap.Events()))
 	}
 }
 
@@ -392,7 +392,7 @@ func TestHumaSigilKey_Retire_204(t *testing.T) {
 		t.Fatalf("status = %d, want 204; body=%s", rec.Code, rec.Body.String())
 	}
 	if body := strings.TrimSpace(rec.Body.String()); body != "" {
-		t.Errorf("204-body retire toлжbut быть ПУСТЫМ, got %q", body)
+		t.Errorf("204-body retire must be EMPTY, got %q", body)
 	}
 }
 
@@ -417,10 +417,10 @@ func TestHumaAudit_SigilKeyRetire_NoAudit_OnBadKeyID(t *testing.T) {
 	req := httptest.NewRequest(http.MethodDelete, "/v1/sigil/keys/NOTHEX", nil)
 	r.ServeHTTP(rec, req)
 	if rec.Code != http.StatusUnprocessableEntity {
-		t.Fatalf("status = %d, want 422 (битый key_id); body=%s", rec.Code, rec.Body.String())
+		t.Fatalf("status = %d, want 422 (malformed key_id); body=%s", rec.Code, rec.Body.String())
 	}
 	if len(auditCap.Events()) != 0 {
-		t.Errorf("audit записан on bad-key_id retire (%d withбытий)", len(auditCap.Events()))
+		t.Errorf("audit recorded on bad-key_id retire (%d events)", len(auditCap.Events()))
 	}
 }
 
@@ -432,17 +432,17 @@ func TestHumaSigilKey_OpenAPIFragment_3_1(t *testing.T) {
 		t.Fatalf("HumaSigilKeySpecYAML: %v", err)
 	}
 	if !strings.Contains(frag, "openapi: 3.1.0") {
-		t.Errorf("huma-фрагмент не несёт `openapi: 3.1.0`:\n%s", frag)
+		t.Errorf("huma fragment does not carry `openapi: 3.1.0`:\n%s", frag)
 	}
 	for _, want := range []string{
 		"introduceSigilKey", "listSigilKeys", "setPrimarySigilKey", "retireSigilKey",
 		"make_primary", "pubkey_pem",
 	} {
 		if !strings.Contains(frag, want) {
-			t.Errorf("OpenAPI-фрагмент не withдержит %q:\n%s", want, frag)
+			t.Errorf("OpenAPI fragment does not contain %q:\n%s", want, frag)
 		}
 	}
 	if strings.Contains(frag, "octet-stream") {
-		t.Errorf("OpenAPI-фрагмент несёт application/octet-stream:\n%s", frag)
+		t.Errorf("OpenAPI fragment carries application/octet-stream:\n%s", frag)
 	}
 }

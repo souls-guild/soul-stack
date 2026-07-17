@@ -43,95 +43,95 @@ var coreModuleDocs = []coreModuleDoc{
 	// --- soul-side (ADR-015) ---
 	{
 		Name:        "core.archive",
-		Description: "Распаковка архива (tar/tar.gz/tar.bz2/zip) в каталог назначения.",
+		Description: "Extract an archive (tar/tar.gz/tar.bz2/zip) into the destination directory.",
 		States:      []string{"extracted"},
 	},
 	{
 		Name:        "core.augur",
-		Description: "Read-probe живого доступа к внешней системе через брокер Augur (verb fetch, changed=false).",
+		Description: "Read-probe of live access to an external system via the Augur broker (verb fetch, changed=false).",
 		States:      []string{"fetch"},
 	},
 	{
 		Name:             "core.cmd",
-		Description:      "Выполнение произвольной shell-команды (императивный verb shell).",
+		Description:      "Run an arbitrary shell command (imperative verb shell).",
 		States:           []string{"shell"},
 		ErrandSafeStates: []string{"shell"},
 	},
 	{
 		Name:        "core.cron",
-		Description: "Управление cron-задачей (present/absent).",
+		Description: "Manage a cron job (present/absent).",
 		States:      []string{"present", "absent"},
 	},
 	{
 		Name:             "core.exec",
-		Description:      "Выполнение команды без shell-обёртки (императивный verb run).",
+		Description:      "Run a command without a shell wrapper (imperative verb run).",
 		States:           []string{"run"},
 		ErrandSafeStates: []string{"run"},
 	},
 	{
 		Name:        "core.file",
-		Description: "Управление файлом: present (inline-content), absent, rendered (text/template-рендер).",
+		Description: "Manage a file: present (inline-content), absent, rendered (text/template render).",
 		States:      []string{"present", "absent", "rendered"},
 	},
 	{
 		Name:        "core.firewall",
-		Description: "Управление правилом файрвола (present/absent).",
+		Description: "Manage a firewall rule (present/absent).",
 		States:      []string{"present", "absent"},
 	},
 	{
 		Name:        "core.git",
-		Description: "Клонирование/обновление git-репозитория в каталог (state cloned).",
+		Description: "Clone/update a git repository into a directory (state cloned).",
 		States:      []string{"cloned"},
 	},
 	{
 		Name:        "core.group",
-		Description: "Управление системной группой (present/absent).",
+		Description: "Manage a system group (present/absent).",
 		States:      []string{"present", "absent"},
 	},
 	{
 		Name:             "core.http",
-		Description:      "Read-probe HTTP-эндпоинта (verb probe, GET/HEAD, changed=false).",
+		Description:      "Read-probe of an HTTP endpoint (verb probe, GET/HEAD, changed=false).",
 		States:           []string{"probe"},
 		ErrandSafeStates: []string{"probe"},
 	},
 	{
 		Name:        "core.line",
-		Description: "Построчная in-place правка файла (present/absent, regex-match).",
+		Description: "Line-by-line in-place file edit (present/absent, regex-match).",
 		States:      []string{"present", "absent"},
 	},
 	{
 		Name:        "core.mount",
-		Description: "Управление точкой монтирования (present/absent/mounted/unmounted).",
+		Description: "Manage a mount point (present/absent/mounted/unmounted).",
 		States:      []string{"present", "absent", "mounted", "unmounted"},
 	},
 	{
 		Name:        "core.pkg",
-		Description: "Управление системным пакетом (installed/absent/latest).",
+		Description: "Manage a system package (installed/absent/latest).",
 		States:      []string{"installed", "absent", "latest"},
 	},
 	{
 		Name:        "core.repo",
-		Description: "Управление пакетным репозиторием (present/absent).",
+		Description: "Manage a package repository (present/absent).",
 		States:      []string{"present", "absent"},
 	},
 	{
 		Name:        "core.service",
-		Description: "Управление сервисом init-системы (running/stopped/restarted/enabled).",
+		Description: "Manage an init-system service (running/stopped/restarted/enabled).",
 		States:      []string{"running", "stopped", "restarted", "enabled"},
 	},
 	{
 		Name:        "core.sysctl",
-		Description: "Управление параметром ядра sysctl (state present).",
+		Description: "Manage a sysctl kernel parameter (state present).",
 		States:      []string{"present"},
 	},
 	{
 		Name:        "core.url",
-		Description: "Скачивание файла по URL с проверкой checksum (state fetched).",
+		Description: "Download a file by URL with checksum verification (state fetched).",
 		States:      []string{"fetched"},
 	},
 	{
 		Name:        "core.user",
-		Description: "Управление системным пользователем (present/absent).",
+		Description: "Manage a system user (present/absent).",
 		States:      []string{"present", "absent"},
 	},
 
@@ -140,22 +140,22 @@ var coreModuleDocs = []coreModuleDoc{
 	// author address = `<Name>.<state>` (core.cloud.created, core.vault.kv-read).
 	{
 		Name:        "core.choir",
-		Description: "Управление членством Voice в Choir текущей инкарнации (params: incarnation, choir, sid, optional role/position; keeper-side, on: keeper).",
+		Description: "Manage Voice membership in the Choir of the current incarnation (params: incarnation, choir, sid, optional role/position; keeper-side, on: keeper).",
 		States:      []string{"present", "absent"},
 	},
 	{
 		Name:        "core.cloud",
-		Description: "Provision/destroy облачной VM через CloudDriver-плагин (keeper-side, on: keeper).",
+		Description: "Provision/destroy a cloud VM via a CloudDriver plugin (keeper-side, on: keeper).",
 		States:      []string{"created", "destroyed"},
 	},
 	{
 		Name:        "core.soul",
-		Description: "Регистрация Soul-а в реестре keeper-а (keeper-side, on: keeper).",
+		Description: "Register a Soul in the keeper registry (keeper-side, on: keeper).",
 		States:      []string{"registered"},
 	},
 	{
 		Name:        "core.vault",
-		Description: "Работа с Vault KV на keeper-стороне: kv-read (явное чтение с audit-event) и kv-present (generate-if-absent — гарантирует существование секрета, генерит недостающее crypto/rand). keeper-side, on: keeper.",
+		Description: "Work with Vault KV on the keeper side: kv-read (explicit read with an audit event) and kv-present (generate-if-absent - guarantees the secret exists, generates missing crypto/rand). keeper-side, on: keeper.",
 		States:      []string{"kv-read", "kv-present"},
 	},
 }

@@ -77,7 +77,7 @@ func TestHumaAudit_BadStartedAfter_400(t *testing.T) {
 	rec := auditGet(t, r, "/v1/audit?started_after=yesterday")
 
 	if rec.Code != http.StatusBadRequest {
-		t.Fatalf("status = %d, want 400 (bad started_after → parse-детект 400); body=%s", rec.Code, rec.Body.String())
+		t.Fatalf("status = %d, want 400 (bad started_after -> parse-detect 400); body=%s", rec.Code, rec.Body.String())
 	}
 	assertHumaProblem(t, rec, problem.TypeMalformedRequest)
 }
@@ -88,7 +88,7 @@ func TestHumaAudit_BadOffset_400(t *testing.T) {
 	rec := auditGet(t, r, "/v1/audit?offset=notanint")
 
 	if rec.Code != http.StatusBadRequest {
-		t.Fatalf("status = %d, want 400 (bad offset → parse-детект 400); body=%s", rec.Code, rec.Body.String())
+		t.Fatalf("status = %d, want 400 (bad offset -> parse-detect 400); body=%s", rec.Code, rec.Body.String())
 	}
 	assertHumaProblem(t, rec, problem.TypeMalformedRequest)
 }
@@ -99,7 +99,7 @@ func TestHumaAudit_BadLimit_400(t *testing.T) {
 	rec := auditGet(t, r, "/v1/audit?limit=abc")
 
 	if rec.Code != http.StatusBadRequest {
-		t.Fatalf("status = %d, want 400 (bad limit → parse-детект 400); body=%s", rec.Code, rec.Body.String())
+		t.Fatalf("status = %d, want 400 (bad limit -> parse-detect 400); body=%s", rec.Code, rec.Body.String())
 	}
 	assertHumaProblem(t, rec, problem.TypeMalformedRequest)
 }
@@ -134,7 +134,7 @@ func TestHumaAudit_BadSource_422(t *testing.T) {
 	rec := auditGet(t, r, "/v1/audit?source=hax0r")
 
 	if rec.Code != http.StatusUnprocessableEntity {
-		t.Fatalf("status = %d, want 422 (bad source-enum → 422, parse-детект its NOT ловит); body=%s", rec.Code, rec.Body.String())
+		t.Fatalf("status = %d, want 422 (bad source-enum -> 422, parse-detect does NOT catch it); body=%s", rec.Code, rec.Body.String())
 	}
 	assertHumaProblem(t, rec, problem.TypeValidationFailed)
 }
@@ -152,7 +152,7 @@ func TestHumaAudit_ConfigBootstrapSource_200(t *testing.T) {
 	rec := auditGet(t, r, "/v1/audit?source=config_bootstrap")
 
 	if rec.Code != http.StatusOK {
-		t.Fatalf("status = %d, want 200 (config_bootstrap — валидный source, NOT 422; enum-тег = toмен-valid-set); body=%s", rec.Code, rec.Body.String())
+		t.Fatalf("status = %d, want 200 (config_bootstrap - valid source, NOT 422; enum tag = domain-valid-set); body=%s", rec.Code, rec.Body.String())
 	}
 }
 
@@ -173,12 +173,12 @@ func TestHumaAudit_ValidFilters_200(t *testing.T) {
 	// the envelope's set/shape (items=[] non-nil, offset/limit echo, total=0).
 	var m map[string]any
 	if err := json.Unmarshal(rec.Body.Bytes(), &m); err != nil {
-		t.Fatalf("reply не JSON-object: %v; body=%s", err, rec.Body.String())
+		t.Fatalf("reply is not a JSON-object: %v; body=%s", err, rec.Body.String())
 	}
 	out, _ := json.Marshal(m)
 	const golden = `{"items":[],"limit":20,"offset":10,"total":0}`
 	if got := string(out); got != golden {
-		t.Errorf("GOLDEN wire-дрейф audit-envelope:\n got  = %s\n want = %s", got, golden)
+		t.Errorf("GOLDEN wire-drift audit-envelope:\n got  = %s\n want = %s", got, golden)
 	}
 }
 
@@ -193,12 +193,12 @@ func TestHumaAudit_DefaultPagination_200(t *testing.T) {
 	}
 	var m map[string]any
 	if err := json.Unmarshal(rec.Body.Bytes(), &m); err != nil {
-		t.Fatalf("reply не JSON-object: %v; body=%s", err, rec.Body.String())
+		t.Fatalf("reply is not a JSON-object: %v; body=%s", err, rec.Body.String())
 	}
 	out, _ := json.Marshal(m)
 	const golden = `{"items":[],"limit":50,"offset":0,"total":0}`
 	if got := string(out); got != golden {
-		t.Errorf("GOLDEN дрейф default-пагиonции (toлжbut withвпадать с ParsePage offset=0 limit=50):\n got  = %s\n want = %s", got, golden)
+		t.Errorf("GOLDEN drift default-pagination (must match ParsePage offset=0 limit=50):\n got  = %s\n want = %s", got, golden)
 	}
 }
 
@@ -220,7 +220,7 @@ func TestHumaAudit_OpenAPIFragment_3_1(t *testing.T) {
 		t.Fatalf("HumaAuditSpecYAML: %v", err)
 	}
 	if !strings.Contains(frag, "openapi: 3.1.0") {
-		t.Errorf("huma-фрагмент не несёт `openapi: 3.1.0`:\n%s", frag)
+		t.Errorf("huma fragment does not carry `openapi: 3.1.0`:\n%s", frag)
 	}
 	for _, want := range []string{
 		"listAuditEvents",
@@ -235,7 +235,7 @@ func TestHumaAudit_OpenAPIFragment_3_1(t *testing.T) {
 		"int32",         // MINOR fix: offset/limit are int32 (match committed OffsetQuery/LimitQuery), NOT int64
 	} {
 		if !strings.Contains(frag, want) {
-			t.Errorf("OpenAPI-фрагмент не withдержит %q:\n%s", want, frag)
+			t.Errorf("OpenAPI fragment does not contain %q:\n%s", want, frag)
 		}
 	}
 	// MINOR-3 scope — SPECIFICALLY the query params offset/limit must be int32
@@ -247,17 +247,17 @@ func TestHumaAudit_OpenAPIFragment_3_1(t *testing.T) {
 	_, afterParams, hasParams := strings.Cut(frag, "parameters:")
 	paramsBlock, _, hasResponses := strings.Cut(afterParams, "responses:")
 	if !hasParams || !hasResponses {
-		t.Fatalf("во фрагменте нет блока `parameters:`…`responses:` — структура операции fromменилась, негатив-проверка int64 невалидon:\n%s", frag)
+		t.Fatalf("fragment has no `parameters:`...`responses:` block - operation structure changed, int64 negative check is invalid:\n%s", frag)
 	}
 	if strings.Contains(paramsBlock, "int64") {
-		t.Errorf("query-параметры операции несут int64 (offset/limit обязаны быть int32):\n%s", paramsBlock)
+		t.Errorf("operation query params carry int64 (offset/limit must be int32):\n%s", paramsBlock)
 	}
 	// GET has no body: requestBody must not be present on the operation.
 	if strings.Contains(frag, "requestBody") {
-		t.Errorf("GET /v1/audit фрагмент несёт requestBody (у GET тела быть не toлжbut):\n%s", frag)
+		t.Errorf("GET /v1/audit fragment carries requestBody (GET must not have a body):\n%s", frag)
 	}
 	// the fourth tier does not carry a RawBody octet-stream artifact.
 	if strings.Contains(frag, "octet-stream") {
-		t.Errorf("OpenAPI-фрагмент несёт application/octet-stream:\n%s", frag)
+		t.Errorf("OpenAPI fragment carries application/octet-stream:\n%s", frag)
 	}
 }

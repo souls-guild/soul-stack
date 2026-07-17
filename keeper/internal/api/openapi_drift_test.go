@@ -77,113 +77,113 @@ const wildcardSuffix = "/*"
 // handler is wired unconditionally, its entry must be removed — then the test
 // starts checking it as an ordinary route.
 var pathAllowlist = map[route]string{
-	{method: http.MethodPost, path: "/v1/push/apply"}:     "keeper.push apply объявлен в спеке, роут подключён ТОЛЬКО при non-nil pushH (drift-test builds router с pushH=nil)",
-	{method: http.MethodGet, path: "/v1/push/{apply_id}"}: "keeper.push GET по apply_id, аonлогичbut push/apply подключается только при non-nil pushH",
+	{method: http.MethodPost, path: "/v1/push/apply"}:     "keeper.push apply declared in the spec, route wired ONLY when non-nil pushH (drift-test builds router with pushH=nil)",
+	{method: http.MethodGet, path: "/v1/push/{apply_id}"}: "keeper.push GET by apply_id, similarly, push/apply is wired only when pushH is non-nil",
 	// errand.*-routes are wired ONLY when errandH is non-nil (ADR-033, slice E2);
 	// the drift-test builds the router with errandH=nil, so they're declared in
 	// the spec but absent from the router — a documented "opt-in" block (push pattern).
-	{method: http.MethodPost, path: "/v1/souls/{sid}/exec"}:      "ADR-033 Errand: роут подключён ТОЛЬКО при non-nil errandH (slice E2 production-wire-up)",
-	{method: http.MethodGet, path: "/v1/errands"}:                "ADR-033 Errand list: роут подключён ТОЛЬКО при non-nil errandH",
-	{method: http.MethodGet, path: "/v1/errands/{errand_id}"}:    "ADR-033 Errand get: роут подключён ТОЛЬКО при non-nil errandH",
-	{method: http.MethodDelete, path: "/v1/errands/{errand_id}"}: "ADR-033 Errand cancel (slice E5): роут подключён ТОЛЬКО при non-nil errandH",
+	{method: http.MethodPost, path: "/v1/souls/{sid}/exec"}:      "ADR-033 Errand: route wired ONLY when non-nil errandH (slice E2 production-wire-up)",
+	{method: http.MethodGet, path: "/v1/errands"}:                "ADR-033 Errand list: route wired ONLY when non-nil errandH",
+	{method: http.MethodGet, path: "/v1/errands/{errand_id}"}:    "ADR-033 Errand get: route wired ONLY when non-nil errandH",
+	{method: http.MethodDelete, path: "/v1/errands/{errand_id}"}: "ADR-033 Errand cancel (slice E5): route wired ONLY when non-nil errandH",
 	// audit.read — route wired ONLY when auditH is non-nil (UI iter 2, errandH/pushH
 	// pattern). The drift-test builds the router with auditH=nil → declared in
 	// the spec, but not in the router.
-	{method: http.MethodGet, path: "/v1/audit"}: "UI iter 2 audit: роут подключён ТОЛЬКО при non-nil auditH (production-wire-up via AuditReader)",
+	{method: http.MethodGet, path: "/v1/audit"}: "UI iter 2 audit: route wired ONLY when non-nil auditH (production-wire-up via AuditReader)",
 	// push-provider.* — routes are wired ONLY when pushProviderH is non-nil
 	// (ADR-032 amendment 2026-05-26, S7-2); the drift-test builds the router
 	// with pushProviderH=nil → declared in the spec, but not in the router.
-	{method: http.MethodPost, path: "/v1/push-providers"}:          "S7-2 push-provider CRUD: роут подключён ТОЛЬКО при non-nil pushProviderH",
-	{method: http.MethodGet, path: "/v1/push-providers"}:           "S7-2 push-provider list: роут подключён ТОЛЬКО при non-nil pushProviderH",
-	{method: http.MethodGet, path: "/v1/push-providers/{name}"}:    "S7-2 push-provider get: роут подключён ТОЛЬКО при non-nil pushProviderH",
-	{method: http.MethodPut, path: "/v1/push-providers/{name}"}:    "S7-2 push-provider update: роут подключён ТОЛЬКО при non-nil pushProviderH",
-	{method: http.MethodDelete, path: "/v1/push-providers/{name}"}: "S7-2 push-provider delete: роут подключён ТОЛЬКО при non-nil pushProviderH",
+	{method: http.MethodPost, path: "/v1/push-providers"}:          "S7-2 push-provider CRUD: route wired ONLY when non-nil pushProviderH",
+	{method: http.MethodGet, path: "/v1/push-providers"}:           "S7-2 push-provider list: route wired ONLY when non-nil pushProviderH",
+	{method: http.MethodGet, path: "/v1/push-providers/{name}"}:    "S7-2 push-provider get: route wired ONLY when non-nil pushProviderH",
+	{method: http.MethodPut, path: "/v1/push-providers/{name}"}:    "S7-2 push-provider update: route wired ONLY when non-nil pushProviderH",
+	{method: http.MethodDelete, path: "/v1/push-providers/{name}"}: "S7-2 push-provider delete: route wired ONLY when non-nil pushProviderH",
 
 	// provider.* / profile.* — Cloud CRUD (ADR-017): routes are wired ONLY when
 	// providerH/profileH is non-nil; the drift-test builds the router with nil →
 	// declared in the spec, absent from the router (documented opt-in, push-provider pattern).
-	{method: http.MethodPost, path: "/v1/providers"}:          "ADR-017 provider create: роут подключён ТОЛЬКО при non-nil providerH",
-	{method: http.MethodGet, path: "/v1/providers"}:           "ADR-017 provider list: роут подключён ТОЛЬКО при non-nil providerH",
-	{method: http.MethodGet, path: "/v1/providers/{name}"}:    "ADR-017 provider get: роут подключён ТОЛЬКО при non-nil providerH",
-	{method: http.MethodDelete, path: "/v1/providers/{name}"}: "ADR-017 provider delete: роут подключён ТОЛЬКО при non-nil providerH",
-	{method: http.MethodPost, path: "/v1/profiles"}:           "ADR-017 profile create: роут подключён ТОЛЬКО при non-nil profileH",
-	{method: http.MethodGet, path: "/v1/profiles"}:            "ADR-017 profile list: роут подключён ТОЛЬКО при non-nil profileH",
-	{method: http.MethodGet, path: "/v1/profiles/{name}"}:     "ADR-017 profile get: роут подключён ТОЛЬКО при non-nil profileH",
-	{method: http.MethodDelete, path: "/v1/profiles/{name}"}:  "ADR-017 profile delete: роут подключён ТОЛЬКО при non-nil profileH",
+	{method: http.MethodPost, path: "/v1/providers"}:          "ADR-017 provider create: route wired ONLY when non-nil providerH",
+	{method: http.MethodGet, path: "/v1/providers"}:           "ADR-017 provider list: route wired ONLY when non-nil providerH",
+	{method: http.MethodGet, path: "/v1/providers/{name}"}:    "ADR-017 provider get: route wired ONLY when non-nil providerH",
+	{method: http.MethodDelete, path: "/v1/providers/{name}"}: "ADR-017 provider delete: route wired ONLY when non-nil providerH",
+	{method: http.MethodPost, path: "/v1/profiles"}:           "ADR-017 profile create: route wired ONLY when non-nil profileH",
+	{method: http.MethodGet, path: "/v1/profiles"}:            "ADR-017 profile list: route wired ONLY when non-nil profileH",
+	{method: http.MethodGet, path: "/v1/profiles/{name}"}:     "ADR-017 profile get: route wired ONLY when non-nil profileH",
+	{method: http.MethodDelete, path: "/v1/profiles/{name}"}:  "ADR-017 profile delete: route wired ONLY when non-nil profileH",
 
 	// push-runs list: route wired ONLY when pushH is non-nil (UI-4); the
 	// drift-test builds the router with pushH=nil. The paired per-id detail
 	// (`GET /v1/push/{apply_id}`) and `POST /v1/push/apply` are already in the
 	// allowlist above.
-	{method: http.MethodGet, path: "/v1/push-runs"}: "UI-4 Push-runs global list: роут подключён ТОЛЬКО при non-nil pushH",
+	{method: http.MethodGet, path: "/v1/push-runs"}: "UI-4 Push-runs global list: route wired ONLY when non-nil pushH",
 
 	// auth.ldap login: route wired ONLY when LDAPAuth is non-nil (ADR-058); the
 	// drift-test builds the router with LDAPAuth=nil → declared in the spec
 	// (prefix /auth), but absent from the router. OUTSIDE /v1 (public entry,
 	// RequireJWT doesn't apply).
-	{method: http.MethodPost, path: "/auth/ldap/login"}: "ADR-058 LDAP login: роут подключён ТОЛЬКО при non-nil LDAPAuth (опц. блок auth.ldap в keeper.yml)",
+	{method: http.MethodPost, path: "/auth/ldap/login"}: "ADR-058 LDAP login: route wired ONLY when non-nil LDAPAuth (optional block auth.ldap in keeper.yml)",
 
 	// auth.oidc endpoints (ADR-058 stage 2): wired ONLY when OIDCAuth is non-nil
 	// (optional auth.oidc + Redis block); the drift-test builds the router with
 	// OIDCAuth=nil → declared in the spec (prefix /auth), absent from the router.
-	{method: http.MethodGet, path: "/auth/oidc/login"}:    "ADR-058 OIDC login: роут подключён ТОЛЬКО при non-nil OIDCAuth (опц. блок auth.oidc + Redis)",
-	{method: http.MethodGet, path: "/auth/oidc/callback"}: "ADR-058 OIDC callback: роут подключён ТОЛЬКО при non-nil OIDCAuth (опц. блок auth.oidc + Redis)",
+	{method: http.MethodGet, path: "/auth/oidc/login"}:    "ADR-058 OIDC login: route wired ONLY when non-nil OIDCAuth (optional block auth.oidc + Redis)",
+	{method: http.MethodGet, path: "/auth/oidc/callback"}: "ADR-058 OIDC callback: route wired ONLY when non-nil OIDCAuth (optional block auth.oidc + Redis)",
 
 	// voyage.*-routes are wired ONLY when voyageH is non-nil (ADR-043 S5); the
 	// drift-test builds the router with voyageH=nil, so they're declared in the
 	// spec but absent from the router — a documented "opt-in" block (the
 	// errandRunH/pushH pattern).
-	{method: http.MethodPost, path: "/v1/voyages"}:             "ADR-043 Voyage create: роут подключён ТОЛЬКО при non-nil voyageH",
-	{method: http.MethodPost, path: "/v1/voyages/preview"}:     "ADR-043 amendment §4 Voyage preview: роут подключён ТОЛЬКО при non-nil voyageH",
-	{method: http.MethodGet, path: "/v1/voyages"}:              "ADR-043 Voyage list: роут подключён ТОЛЬКО при non-nil voyageH",
-	{method: http.MethodGet, path: "/v1/voyages/{id}"}:         "ADR-043 Voyage get: роут подключён ТОЛЬКО при non-nil voyageH",
-	{method: http.MethodGet, path: "/v1/voyages/{id}/targets"}: "ADR-043 Voyage targets drill: роут подключён ТОЛЬКО при non-nil voyageH",
-	{method: http.MethodDelete, path: "/v1/voyages/{id}"}:      "ADR-043 Voyage cancel: роут подключён ТОЛЬКО при non-nil voyageH",
+	{method: http.MethodPost, path: "/v1/voyages"}:             "ADR-043 Voyage create: route wired ONLY when non-nil voyageH",
+	{method: http.MethodPost, path: "/v1/voyages/preview"}:     "ADR-043 amendment §4 Voyage preview: route wired ONLY when non-nil voyageH",
+	{method: http.MethodGet, path: "/v1/voyages"}:              "ADR-043 Voyage list: route wired ONLY when non-nil voyageH",
+	{method: http.MethodGet, path: "/v1/voyages/{id}"}:         "ADR-043 Voyage get: route wired ONLY when non-nil voyageH",
+	{method: http.MethodGet, path: "/v1/voyages/{id}/targets"}: "ADR-043 Voyage targets drill: route wired ONLY when non-nil voyageH",
+	{method: http.MethodDelete, path: "/v1/voyages/{id}"}:      "ADR-043 Voyage cancel: route wired ONLY when non-nil voyageH",
 
 	// cadence.*-routes are wired ONLY when cadenceH is non-nil (ADR-046 S4); the
 	// drift-test builds the router with cadenceH=nil, so they're declared in the
 	// spec but absent from the router — a documented "opt-in" block (the voyageH
 	// pattern).
-	{method: http.MethodPost, path: "/v1/cadences"}:              "ADR-046 Cadence create: роут подключён ТОЛЬКО при non-nil cadenceH",
-	{method: http.MethodGet, path: "/v1/cadences"}:               "ADR-046 Cadence list: роут подключён ТОЛЬКО при non-nil cadenceH",
-	{method: http.MethodGet, path: "/v1/cadences/{id}"}:          "ADR-046 Cadence get: роут подключён ТОЛЬКО при non-nil cadenceH",
-	{method: http.MethodPatch, path: "/v1/cadences/{id}"}:        "ADR-046 Cadence update: роут подключён ТОЛЬКО при non-nil cadenceH",
-	{method: http.MethodDelete, path: "/v1/cadences/{id}"}:       "ADR-046 Cadence delete: роут подключён ТОЛЬКО при non-nil cadenceH",
-	{method: http.MethodPost, path: "/v1/cadences/{id}/enable"}:  "ADR-046 Cadence enable: роут подключён ТОЛЬКО при non-nil cadenceH",
-	{method: http.MethodPost, path: "/v1/cadences/{id}/disable"}: "ADR-046 Cadence disable: роут подключён ТОЛЬКО при non-nil cadenceH",
-	{method: http.MethodGet, path: "/v1/cadences/{id}/runs"}:     "ADR-046 Cadence runs drill: роут подключён ТОЛЬКО при non-nil cadenceH",
+	{method: http.MethodPost, path: "/v1/cadences"}:              "ADR-046 Cadence create: route wired ONLY when non-nil cadenceH",
+	{method: http.MethodGet, path: "/v1/cadences"}:               "ADR-046 Cadence list: route wired ONLY when non-nil cadenceH",
+	{method: http.MethodGet, path: "/v1/cadences/{id}"}:          "ADR-046 Cadence get: route wired ONLY when non-nil cadenceH",
+	{method: http.MethodPatch, path: "/v1/cadences/{id}"}:        "ADR-046 Cadence update: route wired ONLY when non-nil cadenceH",
+	{method: http.MethodDelete, path: "/v1/cadences/{id}"}:       "ADR-046 Cadence delete: route wired ONLY when non-nil cadenceH",
+	{method: http.MethodPost, path: "/v1/cadences/{id}/enable"}:  "ADR-046 Cadence enable: route wired ONLY when non-nil cadenceH",
+	{method: http.MethodPost, path: "/v1/cadences/{id}/disable"}: "ADR-046 Cadence disable: route wired ONLY when non-nil cadenceH",
+	{method: http.MethodGet, path: "/v1/cadences/{id}/runs"}:     "ADR-046 Cadence runs drill: route wired ONLY when non-nil cadenceH",
 
 	// choir.*-routes are wired ONLY when choirH is non-nil (ADR-044 S-T3); the
 	// drift-test builds the router with choirH=nil, so they're declared in the
 	// spec but absent from the router — a documented "opt-in" block (the
 	// tideH/errandH/pushH pattern).
-	{method: http.MethodPost, path: "/v1/incarnations/{name}/choirs"}:                        "ADR-044 Choir create: роут подключён ТОЛЬКО при non-nil choirH",
-	{method: http.MethodGet, path: "/v1/incarnations/{name}/choirs"}:                         "ADR-044 Choir list: роут подключён ТОЛЬКО при non-nil choirH",
-	{method: http.MethodDelete, path: "/v1/incarnations/{name}/choirs/{choir}"}:              "ADR-044 Choir delete: роут подключён ТОЛЬКО при non-nil choirH",
-	{method: http.MethodPost, path: "/v1/incarnations/{name}/choirs/{choir}/voices"}:         "ADR-044 Voice add: роут подключён ТОЛЬКО при non-nil choirH",
-	{method: http.MethodGet, path: "/v1/incarnations/{name}/choirs/{choir}/voices"}:          "ADR-044 Voice list: роут подключён ТОЛЬКО при non-nil choirH",
-	{method: http.MethodDelete, path: "/v1/incarnations/{name}/choirs/{choir}/voices/{sid}"}: "ADR-044 Voice remove: роут подключён ТОЛЬКО при non-nil choirH",
+	{method: http.MethodPost, path: "/v1/incarnations/{name}/choirs"}:                        "ADR-044 Choir create: route wired ONLY when non-nil choirH",
+	{method: http.MethodGet, path: "/v1/incarnations/{name}/choirs"}:                         "ADR-044 Choir list: route wired ONLY when non-nil choirH",
+	{method: http.MethodDelete, path: "/v1/incarnations/{name}/choirs/{choir}"}:              "ADR-044 Choir delete: route wired ONLY when non-nil choirH",
+	{method: http.MethodPost, path: "/v1/incarnations/{name}/choirs/{choir}/voices"}:         "ADR-044 Voice add: route wired ONLY when non-nil choirH",
+	{method: http.MethodGet, path: "/v1/incarnations/{name}/choirs/{choir}/voices"}:          "ADR-044 Voice list: route wired ONLY when non-nil choirH",
+	{method: http.MethodDelete, path: "/v1/incarnations/{name}/choirs/{choir}/voices/{sid}"}: "ADR-044 Voice remove: route wired ONLY when non-nil choirH",
 
 	// herald.*/tiding.*-routes are wired ONLY when heraldH is non-nil (ADR-052 S4);
 	// the drift-test builds the router with heraldH=nil, so they're declared in
 	// the spec but absent from the router — a documented "opt-in" block (the
 	// push-provider pattern).
-	{method: http.MethodPost, path: "/v1/heralds"}:          "ADR-052 Herald create: роут подключён ТОЛЬКО при non-nil heraldH",
-	{method: http.MethodGet, path: "/v1/heralds"}:           "ADR-052 Herald list: роут подключён ТОЛЬКО при non-nil heraldH",
-	{method: http.MethodGet, path: "/v1/heralds/{name}"}:    "ADR-052 Herald get: роут подключён ТОЛЬКО при non-nil heraldH",
-	{method: http.MethodPut, path: "/v1/heralds/{name}"}:    "ADR-052 Herald update: роут подключён ТОЛЬКО при non-nil heraldH",
-	{method: http.MethodDelete, path: "/v1/heralds/{name}"}: "ADR-052 Herald delete: роут подключён ТОЛЬКО при non-nil heraldH",
-	{method: http.MethodPost, path: "/v1/tidings"}:          "ADR-052 Tiding create: роут подключён ТОЛЬКО при non-nil heraldH",
-	{method: http.MethodGet, path: "/v1/tidings"}:           "ADR-052 Tiding list: роут подключён ТОЛЬКО при non-nil heraldH",
-	{method: http.MethodGet, path: "/v1/tidings/{name}"}:    "ADR-052 Tiding get: роут подключён ТОЛЬКО при non-nil heraldH",
-	{method: http.MethodPut, path: "/v1/tidings/{name}"}:    "ADR-052 Tiding update: роут подключён ТОЛЬКО при non-nil heraldH",
-	{method: http.MethodDelete, path: "/v1/tidings/{name}"}: "ADR-052 Tiding delete: роут подключён ТОЛЬКО при non-nil heraldH",
+	{method: http.MethodPost, path: "/v1/heralds"}:          "ADR-052 Herald create: route wired ONLY when non-nil heraldH",
+	{method: http.MethodGet, path: "/v1/heralds"}:           "ADR-052 Herald list: route wired ONLY when non-nil heraldH",
+	{method: http.MethodGet, path: "/v1/heralds/{name}"}:    "ADR-052 Herald get: route wired ONLY when non-nil heraldH",
+	{method: http.MethodPut, path: "/v1/heralds/{name}"}:    "ADR-052 Herald update: route wired ONLY when non-nil heraldH",
+	{method: http.MethodDelete, path: "/v1/heralds/{name}"}: "ADR-052 Herald delete: route wired ONLY when non-nil heraldH",
+	{method: http.MethodPost, path: "/v1/tidings"}:          "ADR-052 Tiding create: route wired ONLY when non-nil heraldH",
+	{method: http.MethodGet, path: "/v1/tidings"}:           "ADR-052 Tiding list: route wired ONLY when non-nil heraldH",
+	{method: http.MethodGet, path: "/v1/tidings/{name}"}:    "ADR-052 Tiding get: route wired ONLY when non-nil heraldH",
+	{method: http.MethodPut, path: "/v1/tidings/{name}"}:    "ADR-052 Tiding update: route wired ONLY when non-nil heraldH",
+	{method: http.MethodDelete, path: "/v1/tidings/{name}"}: "ADR-052 Tiding delete: route wired ONLY when non-nil heraldH",
 
 	// GET /v1/cluster — HA topology from the Conclave: route wired ONLY when
 	// clusterH is non-nil (Redis wire-up); the drift-test builds the router with
 	// clusterH=nil, so it's declared in the spec but absent from the router — a
 	// documented "opt-in" block (the voyageH/cadenceH pattern).
-	{method: http.MethodGet, path: "/v1/cluster"}: "ADR-006 Cluster overview: роут подключён ТОЛЬКО при non-nil clusterH (production-wire-up onд Redis-Conclave)",
+	{method: http.MethodGet, path: "/v1/cluster"}: "ADR-006 Cluster overview: route wired ONLY when non-nil clusterH (production-wire-up with Redis-Conclave)",
 }
 
 // collectRoutes gathers the actual `(method, path)` pairs from the chi tree
@@ -245,7 +245,7 @@ func collectRoutes(t *testing.T) map[route]struct{} {
 
 	routes, ok := h.(chi.Routes)
 	if !ok {
-		t.Fatalf("buildRouter вернул %T, не реалfromует chi.Routes — обход chi.Walk невозможен", h)
+		t.Fatalf("buildRouter returned %T, does not implement chi.Routes - chi.Walk traversal is impossible", h)
 	}
 
 	set := make(map[route]struct{})
@@ -257,7 +257,7 @@ func collectRoutes(t *testing.T) map[route]struct{} {
 		t.Fatalf("chi.Walk: %v", err)
 	}
 	if len(set) == 0 {
-		t.Fatal("chi.Walk не вернул ни одbutго роута — роутер пуст?")
+		t.Fatal("chi.Walk did not return a single route - is the router empty?")
 	}
 	return set
 }
@@ -427,7 +427,7 @@ type stubOperatorPool struct{ handlers.OperatorPool }
 type stubIssuer struct{}
 
 func (stubIssuer) Issue(string, []string, time.Duration, bool) (string, error) {
-	return "", fmt.Errorf("stub issuer: не toлжен вызываться в drift-тесте")
+	return "", fmt.Errorf("stub issuer: should not be called in the drift test")
 }
 
 type stubRBACSource struct{}

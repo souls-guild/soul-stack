@@ -227,7 +227,7 @@ func (s *CadenceSpawner) processOne(ctx context.Context, tx pgx.Tx, c *cadence.C
 			return nil, false, aerr
 		}
 		if s.logger != nil {
-			s.logger.Info("conductor.spawn_due_cadence: пустой резолв target, спавн пропущен",
+			s.logger.Info("conductor.spawn_due_cadence: empty target resolve, spawn skipped",
 				slog.String("cadence_id", c.ID))
 		}
 		return nil, false, nil

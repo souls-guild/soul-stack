@@ -122,12 +122,12 @@ func TestHumaSigil_Allow_GoldenWire(t *testing.T) {
 	}
 	var m map[string]any
 	if err := json.Unmarshal(rec.Body.Bytes(), &m); err != nil {
-		t.Fatalf("reply не JSON-object: %v; body=%s", err, rec.Body.String())
+		t.Fatalf("reply is not a JSON object: %v; body=%s", err, rec.Body.String())
 	}
 	out, _ := json.Marshal(m)
 	golden := `{"name":"hetzner","namespace":"cloud","ref":"v1.0.0","sha256":"` + sigilFixtureSHA + `"}`
 	if got := string(out); got != golden {
-		t.Errorf("GOLDEN wire-дрейф sigil.allow:\n got  = %s\n want = %s", got, golden)
+		t.Errorf("GOLDEN wire drift sigil.allow:\n got  = %s\n want = %s", got, golden)
 	}
 }
 
@@ -188,7 +188,7 @@ func TestHumaAudit_SigilAllow_NoAudit_OnRBACDeny(t *testing.T) {
 		t.Fatalf("status = %d, want 403; body=%s", rec.Code, rec.Body.String())
 	}
 	if len(auditCap.Events()) != 0 {
-		t.Errorf("audit записан on RBAC-deny sigil.allow (%d withбытий)", len(auditCap.Events()))
+		t.Errorf("audit recorded on RBAC-deny sigil.allow (%d events)", len(auditCap.Events()))
 	}
 }
 
@@ -213,12 +213,12 @@ func TestHumaSigil_List_GoldenWire(t *testing.T) {
 	}
 	var m map[string]any
 	if err := json.Unmarshal(rec.Body.Bytes(), &m); err != nil {
-		t.Fatalf("reply не JSON-object: %v; body=%s", err, rec.Body.String())
+		t.Fatalf("reply is not a JSON object: %v; body=%s", err, rec.Body.String())
 	}
 	out, _ := json.Marshal(m)
 	golden := `{"items":[{"allowed_at":"2026-06-13T10:00:00Z","allowed_by_aid":"archon-alice","name":"hetzner","namespace":"cloud","ref":"v1.0.0","sha256":"` + sigilFixtureSHA + `"}]}`
 	if got := string(out); got != golden {
-		t.Errorf("GOLDEN wire-дрейф sigil.list:\n got  = %s\n want = %s", got, golden)
+		t.Errorf("GOLDEN wire drift sigil.list:\n got  = %s\n want = %s", got, golden)
 	}
 }
 
@@ -232,7 +232,7 @@ func TestHumaSigil_List_GoldenEmpty(t *testing.T) {
 	}
 	const golden = `{"items":[]}`
 	if got := strings.TrimSpace(rec.Body.String()); got != golden {
-		t.Errorf("GOLDEN wire-дрейф sigil.list (empty): got=%q want=%q", got, golden)
+		t.Errorf("GOLDEN wire drift sigil.list (empty): got=%q want=%q", got, golden)
 	}
 }
 
@@ -246,7 +246,7 @@ func TestHumaSigil_List_NoAudit(t *testing.T) {
 		t.Fatalf("status = %d, want 200; body=%s", rec.Code, rec.Body.String())
 	}
 	if len(auditCap.Events()) != 0 {
-		t.Errorf("READ-роут sigil.list записал audit (%d withбытий)", len(auditCap.Events()))
+		t.Errorf("READ route sigil.list recorded audit (%d events)", len(auditCap.Events()))
 	}
 }
 
@@ -271,7 +271,7 @@ func TestHumaSigil_Revoke_204(t *testing.T) {
 		t.Fatalf("status = %d, want 204; body=%s", rec.Code, rec.Body.String())
 	}
 	if body := strings.TrimSpace(rec.Body.String()); body != "" {
-		t.Errorf("204-body sigil.revoke toлжbut быть ПУСТЫМ, got %q", body)
+		t.Errorf("204-body sigil.revoke must be empty, got %q", body)
 	}
 }
 
@@ -297,10 +297,10 @@ func TestHumaAudit_SigilRevoke_NoAudit_OnBadRef(t *testing.T) {
 	req := httptest.NewRequest(http.MethodDelete, "/v1/plugins/sigils/cloud/hetzner/bad%20ref", nil)
 	r.ServeHTTP(rec, req)
 	if rec.Code != http.StatusUnprocessableEntity {
-		t.Fatalf("status = %d, want 422 (битый ref-сегмент); body=%s", rec.Code, rec.Body.String())
+		t.Fatalf("status = %d, want 422 (bad ref segment); body=%s", rec.Code, rec.Body.String())
 	}
 	if len(auditCap.Events()) != 0 {
-		t.Errorf("audit записан on bad-ref revoke (%d withбытий)", len(auditCap.Events()))
+		t.Errorf("audit recorded on bad-ref revoke (%d events)", len(auditCap.Events()))
 	}
 }
 
@@ -312,17 +312,17 @@ func TestHumaSigil_OpenAPIFragment_3_1(t *testing.T) {
 		t.Fatalf("HumaSigilSpecYAML: %v", err)
 	}
 	if !strings.Contains(frag, "openapi: 3.1.0") {
-		t.Errorf("huma-фрагмент не несёт `openapi: 3.1.0`:\n%s", frag)
+		t.Errorf("huma fragment does not carry `openapi: 3.1.0`:\n%s", frag)
 	}
 	for _, want := range []string{
 		"allowPluginSigil", "listPluginSigils", "revokePluginSigil",
 		"namespace", "sha256",
 	} {
 		if !strings.Contains(frag, want) {
-			t.Errorf("OpenAPI-фрагмент не withдержит %q:\n%s", want, frag)
+			t.Errorf("OpenAPI fragment does not contain %q:\n%s", want, frag)
 		}
 	}
 	if strings.Contains(frag, "octet-stream") {
-		t.Errorf("OpenAPI-фрагмент несёт application/octet-stream:\n%s", frag)
+		t.Errorf("OpenAPI fragment carries application/octet-stream:\n%s", frag)
 	}
 }

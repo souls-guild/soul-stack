@@ -27,21 +27,21 @@ func TestPermissionsOf_TwoBarePermissions(t *testing.T) {
 
 	perms := e.PermissionsOf("archon-ops")
 	if len(perms) != 2 {
-		t.Fatalf("ожидали 2 effective-permission, получили %d: %+v", len(perms), perms)
+		t.Fatalf("expected 2 effective-permissions, got %d: %+v", len(perms), perms)
 	}
 	if _, ok := findEff(perms, "incarnation", "run"); !ok {
-		t.Errorf("incarnation.run отсутствует: %+v", perms)
+		t.Errorf("incarnation.run missing: %+v", perms)
 	}
 	if _, ok := findEff(perms, "soul", "list"); !ok {
-		t.Errorf("soul.list отсутствует: %+v", perms)
+		t.Errorf("soul.list missing: %+v", perms)
 	}
 	// A bare permission with no role default_scope is unrestricted, no scope labels.
 	for _, p := range perms {
 		if p.Wildcard {
-			t.Errorf("%s.%s не должен быть wildcard", p.Resource, p.Action)
+			t.Errorf("%s.%s should not be wildcard", p.Resource, p.Action)
 		}
 		if !p.Scope.Unrestricted {
-			t.Errorf("%s.%s bare-permission должен быть unrestricted: %+v", p.Resource, p.Action, p.Scope)
+			t.Errorf("%s.%s bare-permission should be unrestricted: %+v", p.Resource, p.Action, p.Scope)
 		}
 	}
 }
@@ -53,13 +53,13 @@ func TestPermissionsOf_ClusterAdminWildcard(t *testing.T) {
 
 	perms := e.PermissionsOf("archon-root")
 	if len(perms) != 1 {
-		t.Fatalf("cluster-admin: ожидали один wildcard-маркер, получили %d: %+v", len(perms), perms)
+		t.Fatalf("cluster-admin: expected one wildcard marker, got %d: %+v", len(perms), perms)
 	}
 	if !perms[0].Wildcard {
-		t.Errorf("cluster-admin должен дать wildcard-маркер: %+v", perms[0])
+		t.Errorf("cluster-admin should yield a wildcard marker: %+v", perms[0])
 	}
 	if perms[0].Resource != "" || perms[0].Action != "" {
-		t.Errorf("wildcard-маркер не должен нести resource/action: %+v", perms[0])
+		t.Errorf("wildcard marker should not carry resource/action: %+v", perms[0])
 	}
 }
 
@@ -69,7 +69,7 @@ func TestPermissionsOf_UnknownAID_Empty(t *testing.T) {
 	})
 
 	if perms := e.PermissionsOf("archon-nobody"); len(perms) != 0 {
-		t.Errorf("неизвестный AID должен дать пусто, получили: %+v", perms)
+		t.Errorf("unknown AID should yield empty, got: %+v", perms)
 	}
 }
 
@@ -82,7 +82,7 @@ func TestPermissionsOf_Dedup(t *testing.T) {
 
 	perms := e.PermissionsOf("archon-dup")
 	if len(perms) != 2 {
-		t.Fatalf("ожидали 2 уникальных permission (дедуп soul.list), получили %d: %+v", len(perms), perms)
+		t.Fatalf("expected 2 unique permissions (dedup soul.list), got %d: %+v", len(perms), perms)
 	}
 	count := 0
 	for _, p := range perms {
@@ -91,7 +91,7 @@ func TestPermissionsOf_Dedup(t *testing.T) {
 		}
 	}
 	if count != 1 {
-		t.Errorf("soul.list должен встретиться ровно один раз, встретился %d", count)
+		t.Errorf("soul.list should appear exactly once, appeared %d", count)
 	}
 }
 
@@ -108,16 +108,16 @@ func TestPermissionsOf_ScopeIncluded(t *testing.T) {
 	perms := e.PermissionsOf("archon-prod")
 	p, ok := findEff(perms, "incarnation", "run")
 	if !ok {
-		t.Fatalf("incarnation.run отсутствует: %+v", perms)
+		t.Fatalf("incarnation.run missing: %+v", perms)
 	}
 	if p.Scope.Unrestricted {
-		t.Errorf("scope с default_scope=coven=prod не должен быть unrestricted: %+v", p.Scope)
+		t.Errorf("scope with default_scope=coven=prod should not be unrestricted: %+v", p.Scope)
 	}
 	want := []string{"prod"}
 	got := append([]string(nil), p.Scope.Covens...)
 	sort.Strings(got)
 	if !reflect.DeepEqual(got, want) {
-		t.Errorf("covens = %v, ожидали %v", got, want)
+		t.Errorf("covens = %v, want %v", got, want)
 	}
 }
 
@@ -154,7 +154,7 @@ func TestPermissionsOf_Revoked_Empty(t *testing.T) {
 				t.Fatalf("NewEnforcerFromSnapshot: %v", err)
 			}
 			if perms := e.PermissionsOf("archon-fired"); len(perms) != 0 {
-				t.Errorf("revoked AID (%s): PermissionsOf = %+v, want пусто", tc.name, perms)
+				t.Errorf("revoked AID (%s): PermissionsOf = %+v, want empty", tc.name, perms)
 			}
 		})
 	}
@@ -170,7 +170,7 @@ func TestPermissionsOf_NotRevoked_HappyPath(t *testing.T) {
 		})
 		perms := e.PermissionsOf("archon-root")
 		if len(perms) != 1 || !perms[0].Wildcard {
-			t.Errorf("не-revoked cluster-admin: perms = %+v, want один wildcard-маркер", perms)
+			t.Errorf("non-revoked cluster-admin: perms = %+v, want one wildcard marker", perms)
 		}
 	})
 	t.Run("scoped", func(t *testing.T) {
@@ -181,13 +181,13 @@ func TestPermissionsOf_NotRevoked_HappyPath(t *testing.T) {
 		perms := e.PermissionsOf("archon-prod")
 		p, ok := findEff(perms, "incarnation", "run")
 		if !ok {
-			t.Fatalf("не-revoked scoped: incarnation.run отсутствует: %+v", perms)
+			t.Fatalf("non-revoked scoped: incarnation.run missing: %+v", perms)
 		}
 		if p.Scope.Unrestricted {
-			t.Errorf("не-revoked scoped: scope не должен быть unrestricted: %+v", p.Scope)
+			t.Errorf("non-revoked scoped: scope should not be unrestricted: %+v", p.Scope)
 		}
 		if !reflect.DeepEqual(p.Scope.Covens, []string{"prod"}) {
-			t.Errorf("не-revoked scoped: covens = %v, want [prod]", p.Scope.Covens)
+			t.Errorf("non-revoked scoped: covens = %v, want [prod]", p.Scope.Covens)
 		}
 	})
 }
@@ -205,7 +205,7 @@ func TestPermissionsOf_DeterministicOrder(t *testing.T) {
 		prev := perms[i-1].Resource + "." + perms[i-1].Action
 		cur := perms[i].Resource + "." + perms[i].Action
 		if prev >= cur {
-			t.Errorf("порядок не детерминирован/дубль: %q >= %q", prev, cur)
+			t.Errorf("order not deterministic/duplicate: %q >= %q", prev, cur)
 		}
 	}
 }

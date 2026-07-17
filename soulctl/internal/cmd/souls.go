@@ -15,7 +15,7 @@ import (
 func newSoulsCmd() *cobra.Command {
 	c := &cobra.Command{
 		Use:   "souls",
-		Short: "операции над Souls (управляемыми агентами)",
+		Short: "operations on Souls (managed agents)",
 	}
 	c.AddCommand(newSoulsListCmd(), newSoulsGetCmd(), newSoulsSshTargetCmd())
 	return c
@@ -29,7 +29,7 @@ func newSoulsCmd() *cobra.Command {
 func newSoulsSshTargetCmd() *cobra.Command {
 	c := &cobra.Command{
 		Use:   "ssh-target",
-		Short: "управление per-host SSH-реквизитами push-flow (souls.ssh_target)",
+		Short: "manage per-host SSH credentials for push-flow (souls.ssh_target)",
 	}
 	c.AddCommand(newSoulsSshTargetSetCmd(), newSoulsSshTargetBulkSetCmd())
 	return c
@@ -44,18 +44,18 @@ func newSoulsSshTargetSetCmd() *cobra.Command {
 	)
 	c := &cobra.Command{
 		Use:   "set <sid>",
-		Short: "задать per-host ssh_target (ssh_port/ssh_user/soul_path[/ssh_provider])",
+		Short: "set per-host ssh_target (ssh_port/ssh_user/soul_path[/ssh_provider])",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			sid := args[0]
 			if port < 1 || port > 65535 {
-				return fmt.Errorf("--port обязателен и должен быть в [1..65535]")
+				return fmt.Errorf("--port is required and must be in [1..65535]")
 			}
 			if user == "" {
-				return fmt.Errorf("--user обязателен")
+				return fmt.Errorf("--user is required")
 			}
 			if soulPath == "" || soulPath[0] != '/' {
-				return fmt.Errorf("--soul-path обязателен и должен быть абсолютным Unix-путём")
+				return fmt.Errorf("--soul-path is required and must be an absolute Unix path")
 			}
 			cl, err := loadClient(cmd)
 			if err != nil {
@@ -75,10 +75,10 @@ func newSoulsSshTargetSetCmd() *cobra.Command {
 			return output.JSON(cmd.OutOrStdout(), reply)
 		},
 	}
-	c.Flags().IntVar(&port, "port", 22, "SSH-порт (1..65535)")
-	c.Flags().StringVar(&user, "user", "root", "SSH-пользователь")
-	c.Flags().StringVar(&soulPath, "soul-path", "/usr/local/bin/soul", "абсолютный путь к soul-бинарю на хосте")
-	c.Flags().StringVar(&sshProvider, "ssh-provider", "", "per-SID explicit SshProvider plugin name (Level 1 routing); пусто → routing по coven/cluster-default")
+	c.Flags().IntVar(&port, "port", 22, "SSH port (1..65535)")
+	c.Flags().StringVar(&user, "user", "root", "SSH user")
+	c.Flags().StringVar(&soulPath, "soul-path", "/usr/local/bin/soul", "absolute path to the soul binary on the host")
+	c.Flags().StringVar(&sshProvider, "ssh-provider", "", "per-SID explicit SshProvider plugin name (Level 1 routing); empty → routing via coven/cluster-default")
 	return c
 }
 
@@ -101,22 +101,22 @@ func newSoulsSshTargetBulkSetCmd() *cobra.Command {
 	)
 	c := &cobra.Command{
 		Use:   "bulk-set",
-		Short: "массово задать ssh_provider всем Souls в Coven (P2 W-4)",
+		Short: "bulk-set ssh_provider for all Souls in a Coven (P2 W-4)",
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			if coven == "" {
-				return fmt.Errorf("--coven обязателен")
+				return fmt.Errorf("--coven is required")
 			}
 			if sshProvider == "" {
-				return fmt.Errorf("--ssh-provider обязателен (bulk-set настраивает именно provider)")
+				return fmt.Errorf("--ssh-provider is required (bulk-set configures exactly the provider)")
 			}
 			if port < 1 || port > 65535 {
-				return fmt.Errorf("--port обязателен и должен быть в [1..65535]")
+				return fmt.Errorf("--port is required and must be in [1..65535]")
 			}
 			if user == "" {
-				return fmt.Errorf("--user обязателен")
+				return fmt.Errorf("--user is required")
 			}
 			if soulPath == "" || soulPath[0] != '/' {
-				return fmt.Errorf("--soul-path обязателен и должен быть абсолютным Unix-путём")
+				return fmt.Errorf("--soul-path is required and must be an absolute Unix path")
 			}
 			cl, err := loadClient(cmd)
 			if err != nil {
@@ -164,11 +164,11 @@ func newSoulsSshTargetBulkSetCmd() *cobra.Command {
 			})
 		},
 	}
-	c.Flags().StringVar(&coven, "coven", "", "Coven-метка (обязательно)")
-	c.Flags().StringVar(&sshProvider, "ssh-provider", "", "имя SshProvider-плагина (обязательно)")
-	c.Flags().IntVar(&port, "port", 22, "SSH-порт (1..65535)")
-	c.Flags().StringVar(&user, "user", "root", "SSH-пользователь")
-	c.Flags().StringVar(&soulPath, "soul-path", "/usr/local/bin/soul", "абсолютный путь к soul-бинарю на хосте")
+	c.Flags().StringVar(&coven, "coven", "", "Coven label (required)")
+	c.Flags().StringVar(&sshProvider, "ssh-provider", "", "SshProvider plugin name (required)")
+	c.Flags().IntVar(&port, "port", 22, "SSH port (1..65535)")
+	c.Flags().StringVar(&user, "user", "root", "SSH user")
+	c.Flags().StringVar(&soulPath, "soul-path", "/usr/local/bin/soul", "absolute path to the soul binary on the host")
 	return c
 }
 
@@ -179,7 +179,7 @@ func newSoulsSshTargetBulkSetCmd() *cobra.Command {
 func newSoulCmd() *cobra.Command {
 	c := &cobra.Command{
 		Use:   "soul",
-		Short: "одиночные действия на конкретном Soul (exec)",
+		Short: "single actions on a specific Soul (exec)",
 	}
 	c.AddCommand(newSoulExecCmd())
 	return c
@@ -198,9 +198,9 @@ func newSoulExecCmd() *cobra.Command {
 	)
 	c := &cobra.Command{
 		Use:   "exec <sid>",
-		Short: "запустить одиночный модуль на Soul (Errand, ADR-033)",
-		Long: `Pull-ad-hoc exec одиночного модуля на Soul через mTLS EventStream.
-Whitelist на Soul-side: core.cmd.shell, core.exec.run + read-safe модули.
+		Short: "run a single module on a Soul (Errand, ADR-033)",
+		Long: `Pull-ad-hoc exec of a single module on a Soul over the mTLS EventStream.
+Whitelist on the Soul side: core.cmd.shell, core.exec.run + read-safe modules.
 
 Examples:
   soulctl soul exec web-01.example.com --module core.cmd.shell --input '{"command":"uptime"}'
@@ -210,12 +210,12 @@ Examples:
 		RunE: func(cmd *cobra.Command, args []string) error {
 			sid := args[0]
 			if module == "" {
-				return fmt.Errorf("--module обязателен")
+				return fmt.Errorf("--module is required")
 			}
 			var inputObj map[string]any
 			if input != "" && input != "{}" {
 				if err := json.Unmarshal([]byte(input), &inputObj); err != nil {
-					return fmt.Errorf("--input: невалидный JSON: %w", err)
+					return fmt.Errorf("--input: invalid JSON: %w", err)
 				}
 			}
 
@@ -255,18 +255,18 @@ Examples:
 
 			if async {
 				fmt.Fprintf(cmd.OutOrStdout(),
-					"Errand %s принят асинхронно (server-cap превышен); poll: soulctl errand get %s\n",
+					"Errand %s accepted asynchronously (server-cap exceeded); poll: soulctl errand get %s\n",
 					res.ErrandID, res.ErrandID)
 				return nil
 			}
 			return renderErrandResult(cmd.OutOrStdout(), res)
 		},
 	}
-	c.Flags().StringVar(&module, "module", "", "адрес модуля (core.cmd.shell / core.exec.run / core.<class>.<state>); обязателен")
-	c.Flags().StringVar(&input, "input", "{}", "input JSON-объект модуля")
-	c.Flags().IntVar(&timeout, "timeout", 30, "timeout в секундах (1..300)")
-	c.Flags().BoolVar(&dryRun, "dry-run", false, "Plan вместо Apply (только read-safe модули)")
-	c.Flags().BoolVar(&poll, "poll", true, "дожимать async-результат через keeper.errand.get до терминала")
+	c.Flags().StringVar(&module, "module", "", "module address (core.cmd.shell / core.exec.run / core.<class>.<state>); required")
+	c.Flags().StringVar(&input, "input", "{}", "module input JSON object")
+	c.Flags().IntVar(&timeout, "timeout", 30, "timeout in seconds (1..300)")
+	c.Flags().BoolVar(&dryRun, "dry-run", false, "Plan instead of Apply (read-safe modules only)")
+	c.Flags().BoolVar(&poll, "poll", true, "poll async result via keeper.errand.get to terminal state")
 	return c
 }
 
@@ -280,7 +280,7 @@ func newSoulsListCmd() *cobra.Command {
 	)
 	c := &cobra.Command{
 		Use:   "list",
-		Short: "перечислить зарегистрированные Souls",
+		Short: "list registered Souls",
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			cl, err := loadClient(cmd)
 			if err != nil {
@@ -310,18 +310,18 @@ func newSoulsListCmd() *cobra.Command {
 				rows)
 		},
 	}
-	c.Flags().StringSliceVar(&covens, "coven", nil, "фильтр по Coven-метке (можно повторять)")
-	c.Flags().StringVar(&status, "status", "", "фильтр по статусу (pending|connected|disconnected|expired)")
-	c.Flags().StringVar(&transport, "transport", "", "фильтр по транспорту (agent|ssh)")
-	c.Flags().IntVar(&limit, "limit", 0, "максимум записей (1..1000, default server 50)")
-	c.Flags().IntVar(&offset, "offset", 0, "смещение пагинации")
+	c.Flags().StringSliceVar(&covens, "coven", nil, "filter by Coven label (repeatable)")
+	c.Flags().StringVar(&status, "status", "", "filter by status (pending|connected|disconnected|expired)")
+	c.Flags().StringVar(&transport, "transport", "", "filter by transport (agent|ssh)")
+	c.Flags().IntVar(&limit, "limit", 0, "max records (1..1000, default server 50)")
+	c.Flags().IntVar(&offset, "offset", 0, "pagination offset")
 	return c
 }
 
 func newSoulsGetCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "get <sid>",
-		Short: "показать Soul по SID (фоллбэк через list — soul.get не выставлен в MVP)",
+		Short: "show a Soul by SID (fallback via list — soul.get is not exposed in MVP)",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			cl, err := loadClient(cmd)

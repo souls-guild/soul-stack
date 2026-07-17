@@ -13,14 +13,14 @@ const revealBase = "name: redis\nstate_schema_version: 1\nstate_schema:\n  type:
 func TestRevealableSecrets_Valid(t *testing.T) {
 	src := revealBase + `revealable_secrets:
   - id: user_password
-    label: "Пароль пользователя Redis"
+    label: "Redis user password"
     enumerate: state.redis_users
     vault_ref: "secret/{service}/{incarnation}/users/{key}#password"
 `
 	cfg, _, diags, _ := LoadServiceManifestFromBytes("service.yml", []byte(src), ValidateOptions{})
 	if diag.HasErrors(diags) {
 		dump(t, diags)
-		t.Fatal("валидная секция revealable_secrets дала ошибки")
+		t.Fatal("a valid revealable_secrets section produced errors")
 	}
 	if len(cfg.RevealableSecrets) != 1 {
 		t.Fatalf("RevealableSecrets = %d, want 1", len(cfg.RevealableSecrets))
@@ -28,7 +28,7 @@ func TestRevealableSecrets_Valid(t *testing.T) {
 	rs := cfg.RevealableSecrets[0]
 	if rs.ID != "user_password" || rs.Enumerate != "state.redis_users" ||
 		rs.VaultRef != "secret/{service}/{incarnation}/users/{key}#password" {
-		t.Errorf("разбор полей неверен: %#v", rs)
+		t.Errorf("field parsing is incorrect: %#v", rs)
 	}
 }
 
@@ -43,7 +43,7 @@ func TestRevealableSecrets_VaultRefMissingKey(t *testing.T) {
 	_, _, diags, _ := LoadServiceManifestFromBytes("service.yml", []byte(src), ValidateOptions{})
 	if !hasCode(diags, "vault_ref_missing_key") {
 		dump(t, diags)
-		t.Fatal("ожидался vault_ref_missing_key (enumerate задан, {key} отсутствует)")
+		t.Fatal("expected vault_ref_missing_key (enumerate set, {key} missing)")
 	}
 }
 
@@ -58,7 +58,7 @@ func TestRevealableSecrets_UnknownPlaceholder(t *testing.T) {
 	_, _, diags, _ := LoadServiceManifestFromBytes("service.yml", []byte(src), ValidateOptions{})
 	if !hasCode(diags, "vault_ref_unknown_placeholder") {
 		dump(t, diags)
-		t.Fatal("ожидался vault_ref_unknown_placeholder для {field}")
+		t.Fatal("expected vault_ref_unknown_placeholder for {field}")
 	}
 }
 
@@ -75,7 +75,7 @@ func TestRevealableSecrets_DuplicateID(t *testing.T) {
 	_, _, diags, _ := LoadServiceManifestFromBytes("service.yml", []byte(src), ValidateOptions{})
 	if !hasCode(diags, "duplicate_id") {
 		dump(t, diags)
-		t.Fatal("ожидался duplicate_id для дублирующегося user_password")
+		t.Fatal("expected duplicate_id for the duplicate user_password")
 	}
 }
 
@@ -89,7 +89,7 @@ func TestRevealableSecrets_MissingEnumerate(t *testing.T) {
 	_, _, diags, _ := LoadServiceManifestFromBytes("service.yml", []byte(src), ValidateOptions{})
 	if !hasCode(diags, "missing_required_field") {
 		dump(t, diags)
-		t.Fatal("ожидался missing_required_field для отсутствующего enumerate")
+		t.Fatal("expected missing_required_field for the missing enumerate")
 	}
 }
 
@@ -104,7 +104,7 @@ func TestRevealableSecrets_BadEnumerateForm(t *testing.T) {
 	_, _, diags, _ := LoadServiceManifestFromBytes("service.yml", []byte(src), ValidateOptions{})
 	if !hasCode(diags, "enumerate_invalid_format") {
 		dump(t, diags)
-		t.Fatal("ожидался enumerate_invalid_format (нет префикса state.)")
+		t.Fatal("expected enumerate_invalid_format (missing state. prefix)")
 	}
 }
 
@@ -120,7 +120,7 @@ func TestRevealableSecrets_VaultRefNotServiceScoped(t *testing.T) {
 	_, _, diags, _ := LoadServiceManifestFromBytes("service.yml", []byte(src), ValidateOptions{})
 	if !hasCode(diags, "vault_ref_not_service_scoped") {
 		dump(t, diags)
-		t.Fatal("ожидался vault_ref_not_service_scoped (нет {service})")
+		t.Fatal("expected vault_ref_not_service_scoped (missing {service})")
 	}
 }
 
@@ -135,7 +135,7 @@ func TestRevealableSecrets_VaultRefMissingField(t *testing.T) {
 	_, _, diags, _ := LoadServiceManifestFromBytes("service.yml", []byte(src), ValidateOptions{})
 	if !hasCode(diags, "vault_ref_missing_field") {
 		dump(t, diags)
-		t.Fatal("ожидался vault_ref_missing_field (нет #<field>)")
+		t.Fatal("expected vault_ref_missing_field (missing #<field>)")
 	}
 }
 
@@ -148,6 +148,6 @@ func TestRevealableSecrets_MissingID(t *testing.T) {
 	_, _, diags, _ := LoadServiceManifestFromBytes("service.yml", []byte(src), ValidateOptions{})
 	if !hasCode(diags, "missing_required_field") {
 		dump(t, diags)
-		t.Fatal("ожидался missing_required_field для отсутствующего id")
+		t.Fatal("expected missing_required_field for the missing id")
 	}
 }

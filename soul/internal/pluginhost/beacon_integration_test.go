@@ -194,7 +194,7 @@ func TestSpawnBeaconDigestMismatchRejected(t *testing.T) {
 	// First Spawn — verify+seal pass (valid admission).
 	p, err := h.SpawnBeacon(ctx, d)
 	if err != nil {
-		t.Fatalf("первый SpawnBeacon: %v", err)
+		t.Fatalf("first SpawnBeacon: %v", err)
 	}
 	_ = p.Close()
 
@@ -204,13 +204,13 @@ func TestSpawnBeaconDigestMismatchRejected(t *testing.T) {
 	// The second Spawn must be denied.
 	_, err = h.SpawnBeacon(ctx, d)
 	if err == nil {
-		t.Fatal("SECURITY: SpawnBeacon запустил подменённый бинарь")
+		t.Fatal("SECURITY: SpawnBeacon started a swapped binary")
 	}
 	if !errors.Is(err, sharedhost.ErrSigilVerify) {
-		t.Fatalf("ожидался ErrSigilVerify, got %v", err)
+		t.Fatalf("expected ErrSigilVerify, got %v", err)
 	}
 	var ve *sharedhost.VerifyError
 	if !errors.As(err, &ve) || ve.Reason != sharedhost.VerifyReasonDigestMismatch {
-		t.Errorf("ожидался reason digest_mismatch, got %v", err)
+		t.Errorf("expected reason digest_mismatch, got %v", err)
 	}
 }

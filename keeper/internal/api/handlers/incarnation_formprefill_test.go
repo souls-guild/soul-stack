@@ -94,10 +94,10 @@ func TestFormPrefill_UncoveredPathOmitted(t *testing.T) {
 		t.Fatalf("FormPrefillTyped: %v", err)
 	}
 	if _, present := res.Values["missing"]; present {
-		t.Errorf("поле с непокрытым state-путём не должно попадать в values: %#v", res.Values)
+		t.Errorf("field with an uncovered state path should not land in values: %#v", res.Values)
 	}
 	if res.Values["redis_version"] != "7.2.4" {
-		t.Errorf("покрытое поле потеряно: %#v", res.Values)
+		t.Errorf("covered field lost: %#v", res.Values)
 	}
 }
 
@@ -121,10 +121,10 @@ func TestFormPrefill_PathWhitelist(t *testing.T) {
 		t.Fatalf("FormPrefillTyped: %v", err)
 	}
 	if _, present := res.Values["secret_token"]; present {
-		t.Errorf("поле без объявленного prefill_from_state утекло в values (path-whitelist пробит): %#v", res.Values)
+		t.Errorf("field without declared prefill_from_state leaked into values (path-whitelist breached): %#v", res.Values)
 	}
 	if len(res.Values) != 1 || res.Values["redis_version"] != "7.2.4" {
-		t.Errorf("ожидался только объявленный redis_version: %#v", res.Values)
+		t.Errorf("expected only the declared redis_version: %#v", res.Values)
 	}
 }
 
@@ -155,10 +155,10 @@ func TestFormPrefill_SecretExcluded(t *testing.T) {
 		t.Fatalf("FormPrefillTyped: %v", err)
 	}
 	if _, present := res.Values["admin_token"]; present {
-		t.Errorf("secret-поле утекло в prefill-ответ (инвариант c пробит): %#v", res.Values["admin_token"])
+		t.Errorf("secret field leaked into the prefill response (invariant c breached): %#v", res.Values["admin_token"])
 	}
 	if res.Values["redis_version"] != "7.2.4" {
-		t.Errorf("несекретное поле потеряно: %#v", res.Values)
+		t.Errorf("non-secret field lost: %#v", res.Values)
 	}
 }
 
@@ -172,11 +172,11 @@ func TestFormPrefill_OutOfScope404(t *testing.T) {
 	_, err := h.FormPrefillTyped(context.Background(), "redis-prod", "update_config",
 		func(*incarnation.Incarnation) bool { return false })
 	if err == nil {
-		t.Fatal("вне scope ожидалась ошибка 404")
+		t.Fatal("out of scope expected a 404 error")
 	}
 	d, ok := AsProblemDetails(err)
 	if !ok {
-		t.Fatalf("ошибка не problemError: %v", err)
+		t.Fatalf("error is not problemError: %v", err)
 	}
 	if d.Status != 404 {
 		t.Errorf("status = %d, want 404", d.Status)
@@ -190,7 +190,7 @@ func TestFormPrefill_NilScope404(t *testing.T) {
 	h := formPrefillHandler(map[string]any{"redis_version": "7.2.4"}, scenarioYAML, nil)
 
 	if _, err := h.FormPrefillTyped(context.Background(), "redis-prod", "update_config", nil); err == nil {
-		t.Fatal("nil-scope ожидалась ошибка 404 (fail-closed)")
+		t.Fatal("nil-scope expected a 404 error (fail-closed)")
 	}
 }
 
@@ -206,7 +206,7 @@ func TestFormPrefill_NoPrefillFields(t *testing.T) {
 		t.Fatalf("FormPrefillTyped: %v", err)
 	}
 	if len(res.Values) != 0 {
-		t.Errorf("ожидались пустые values (нет prefill-полей): %#v", res.Values)
+		t.Errorf("expected empty values (no prefill fields): %#v", res.Values)
 	}
 }
 
@@ -240,11 +240,11 @@ func TestFormPrefill_SchemaPinnedToServiceVersion(t *testing.T) {
 	}
 
 	if len(loader.loadedRefs) == 0 {
-		t.Fatal("снапшот сервиса не загружался — version-pin недоказуем")
+		t.Fatal("service snapshot was not loaded - version-pin unproven")
 	}
 	for i, ref := range loader.loadedRefs {
 		if ref != wantVersion {
-			t.Errorf("Load[%d] ref = %q, want %q (схема обязана пиниться на ServiceVersion, не на клиентскую/дефолтную)", i, ref, wantVersion)
+			t.Errorf("Load[%d] ref = %q, want %q (schema must be pinned to ServiceVersion, not the client-supplied/default one)", i, ref, wantVersion)
 		}
 	}
 }

@@ -218,7 +218,7 @@ func TestHumaRole_Create_GoldenEmptyBody(t *testing.T) {
 	}
 	const golden = "" // legacy POST /v1/roles 201 — no body
 	if got := rec.Body.String(); got != golden {
-		t.Errorf("GOLDEN wire-дрейф role.create 201-тела: got=%q want=%q", got, golden)
+		t.Errorf("GOLDEN wire drift role.create 201 body: got=%q want=%q", got, golden)
 	}
 }
 
@@ -348,12 +348,12 @@ func TestHumaRole_List_GoldenWire(t *testing.T) {
 	// set/shape, not the order.
 	var m map[string]any
 	if err := json.Unmarshal(rec.Body.Bytes(), &m); err != nil {
-		t.Fatalf("reply не JSON-object: %v; body=%s", err, rec.Body.String())
+		t.Fatalf("reply not a JSON object: %v; body=%s", err, rec.Body.String())
 	}
 	out, _ := json.Marshal(m)
 	const golden = `{"items":[{"builtin":false,"description":"","name":"ops","operators":[],"permissions":[]}]}`
 	if got := string(out); got != golden {
-		t.Errorf("GOLDEN wire-дрейф role.list:\n got  = %s\n want = %s", got, golden)
+		t.Errorf("GOLDEN wire drift role.list:\n got  = %s\n want = %s", got, golden)
 	}
 }
 
@@ -371,7 +371,7 @@ func TestHumaRole_List_NoAudit(t *testing.T) {
 		t.Fatalf("status = %d, want 200; body=%s", rec.Code, rec.Body.String())
 	}
 	if len(auditCap.Events()) != 0 {
-		t.Errorf("READ-роут role.list записал audit (%d withбытий) — у нits нет audit-middleware", len(auditCap.Events()))
+		t.Errorf("READ route role.list recorded audit (%d events) - it has no audit-middleware", len(auditCap.Events()))
 	}
 }
 
@@ -400,7 +400,7 @@ func TestHumaRole_Delete_204(t *testing.T) {
 		t.Fatalf("status = %d, want 204; body=%s", rec.Code, rec.Body.String())
 	}
 	if body := strings.TrimSpace(rec.Body.String()); body != "" {
-		t.Errorf("204-body role.delete toлжbut быть ПУСТЫМ, got %q", body)
+		t.Errorf("204-body role.delete must be EMPTY, got %q", body)
 	}
 }
 
@@ -433,7 +433,7 @@ func TestHumaAudit_RoleDelete_NoAudit_OnRBACDeny(t *testing.T) {
 		t.Fatalf("status = %d, want 403; body=%s", rec.Code, rec.Body.String())
 	}
 	if len(auditCap.Events()) != 0 {
-		t.Errorf("audit записан on RBAC-deny role.delete (%d withбытий)", len(auditCap.Events()))
+		t.Errorf("audit recorded on RBAC-deny role.delete (%d events)", len(auditCap.Events()))
 	}
 }
 
@@ -479,7 +479,7 @@ func TestHumaAudit_RoleUpdatePermissions_NoAudit_OnReject(t *testing.T) {
 		t.Fatalf("status = %d, want 422; body=%s", rec.Code, rec.Body.String())
 	}
 	if len(auditCap.Events()) != 0 {
-		t.Errorf("audit записан on rejected PATCH (%d withбытий)", len(auditCap.Events()))
+		t.Errorf("audit recorded on rejected PATCH (%d events)", len(auditCap.Events()))
 	}
 }
 
@@ -550,7 +550,7 @@ func TestHumaRole_UpdatePermissions_ScopePresence(t *testing.T) {
 		wantScopeWrite bool // whether we expect UPDATE default_scope (== SetDefaultScope)
 		wantScopeArg   any  // expected args[1] on write (nil=NULL/reset)
 	}{
-		{"omitted_не_трогать", `{"permissions":["incarnation.run"]}`, false, nil},
+		{"omitted_do_not_touch", `{"permissions":["incarnation.run"]}`, false, nil},
 		{"null_reset", `{"permissions":["incarnation.run"],"default_scope":null}`, true, nil},
 		{"value_set", `{"permissions":["incarnation.run"],"default_scope":"coven=prod"}`, true, "coven=prod"},
 	}
@@ -567,10 +567,10 @@ func TestHumaRole_UpdatePermissions_ScopePresence(t *testing.T) {
 				t.Fatalf("status = %d, want 204; body=%s", rec.Code, rec.Body.String())
 			}
 			if pool.scopeUpdateCalled != tc.wantScopeWrite {
-				t.Fatalf("UPDATE default_scope вызван=%v, want %v (presence-конверт SetDefaultScope сломан)", pool.scopeUpdateCalled, tc.wantScopeWrite)
+				t.Fatalf("UPDATE default_scope called=%v, want %v (SetDefaultScope presence envelope broken)", pool.scopeUpdateCalled, tc.wantScopeWrite)
 			}
 			if tc.wantScopeWrite && pool.scopeArg != tc.wantScopeArg {
-				t.Errorf("default_scope arg = %v, want %v (presence-конверт DefaultScope сломан)", pool.scopeArg, tc.wantScopeArg)
+				t.Errorf("default_scope arg = %v, want %v (DefaultScope presence envelope broken)", pool.scopeArg, tc.wantScopeArg)
 			}
 		})
 	}
@@ -617,10 +617,10 @@ func TestHumaAudit_RoleGrantOperator_NoAudit_OnInvalidAID(t *testing.T) {
 	r.ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusUnprocessableEntity {
-		t.Fatalf("status = %d, want 422 (битый AID); body=%s", rec.Code, rec.Body.String())
+		t.Fatalf("status = %d, want 422 (malformed AID); body=%s", rec.Code, rec.Body.String())
 	}
 	if len(auditCap.Events()) != 0 {
-		t.Errorf("audit записан on invalid-AID grant (%d withбытий)", len(auditCap.Events()))
+		t.Errorf("audit recorded on invalid-AID grant (%d events)", len(auditCap.Events()))
 	}
 }
 
@@ -663,10 +663,10 @@ func TestHumaAudit_RoleRevokeOperator_NoAudit_OnInvalidAID(t *testing.T) {
 	r.ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusUnprocessableEntity {
-		t.Fatalf("status = %d, want 422 (битый path-AID); body=%s", rec.Code, rec.Body.String())
+		t.Fatalf("status = %d, want 422 (malformed path-AID); body=%s", rec.Code, rec.Body.String())
 	}
 	if len(auditCap.Events()) != 0 {
-		t.Errorf("audit записан on invalid-AID revoke (%d withбытий)", len(auditCap.Events()))
+		t.Errorf("audit recorded on invalid-AID revoke (%d events)", len(auditCap.Events()))
 	}
 }
 
@@ -678,14 +678,14 @@ func TestHumaRole_OpenAPIFragment_3_1(t *testing.T) {
 		t.Fatalf("HumaRoleSpecYAML: %v", err)
 	}
 	if !strings.Contains(frag, "openapi: 3.1.0") {
-		t.Errorf("huma-фрагмент не несёт `openapi: 3.1.0`:\n%s", frag)
+		t.Errorf("huma fragment does not carry `openapi: 3.1.0`:\n%s", frag)
 	}
 	for _, want := range []string{
 		"createRole", "listRoles", "deleteRole", "updateRolePermissions",
 		"grantRoleOperator", "revokeRoleOperator", "permissions", "default_scope",
 	} {
 		if !strings.Contains(frag, want) {
-			t.Errorf("OpenAPI-фрагмент не withдержит %q:\n%s", want, frag)
+			t.Errorf("OpenAPI fragment does not contain %q:\n%s", want, frag)
 		}
 	}
 	// GOLDEN tier invariant (ADR-054 §Pattern third tier): the default_scope presence
@@ -693,7 +693,7 @@ func TestHumaRole_OpenAPIFragment_3_1(t *testing.T) {
 	// application/octet-stream into requestBody. A recurrence of the RawBody bridge would break
 	// web-codegen on spec merge (explicit assert of the artifact's absence).
 	if strings.Contains(frag, "octet-stream") {
-		t.Errorf("OpenAPI-фрагмент несёт application/octet-stream (рецидив RawBody []byte-моста, ADR-054 §Pattern третий tier):\n%s", frag)
+		t.Errorf("OpenAPI fragment carries application/octet-stream (RawBody []byte bridge recurrence, ADR-054 §Pattern third tier):\n%s", frag)
 	}
 }
 
@@ -711,20 +711,20 @@ func TestHumaRole_PatchPermissions_RequestBody_JSONOnly(t *testing.T) {
 	// reference name after N1 alignment); it's its requestBody MIME we guard. octet-stream
 	// ANYWHERE in the fragment is a tier failure.
 	if strings.Contains(frag, "octet-stream") {
-		t.Fatalf("PATCH-permissions requestBody несёт application/octet-stream (Optional[string] обязан давать чистый application/json):\n%s", frag)
+		t.Fatalf("PATCH-permissions requestBody carries application/octet-stream (Optional[string] must yield clean application/json):\n%s", frag)
 	}
 	if !strings.Contains(frag, "application/json") {
-		t.Errorf("PATCH-permissions requestBody не несёт application/json:\n%s", frag)
+		t.Errorf("PATCH-permissions requestBody does not carry application/json:\n%s", frag)
 	}
 	// default_scope — a nullable string (presence reset via null), NOT required.
 	const bodySchemaName = "RolePermissionsUpdateRequest:"
 	bodyIdx := strings.Index(frag, bodySchemaName)
 	if bodyIdx < 0 {
-		t.Fatalf("фрагмент не withдержит схему %s\n%s", bodySchemaName, frag)
+		t.Fatalf("fragment does not contain schema %s\n%s", bodySchemaName, frag)
 	}
 	bodySection := frag[bodyIdx:]
 	if !strings.Contains(bodySection, "- string") || !strings.Contains(bodySection, `- "null"`) {
-		t.Errorf("default_scope в %s не nullable-string (ожидался `type: [string, null]`):\n%s", bodySchemaName, bodySection[:min(len(bodySection), 600)])
+		t.Errorf("default_scope in %s is not a nullable string (expected `type: [string, null]`):\n%s", bodySchemaName, bodySection[:min(len(bodySection), 600)])
 	}
 }
 
@@ -734,7 +734,7 @@ func assertAuditWritten(t *testing.T, cap *auditCaptureWriter, evt audit.EventTy
 	t.Helper()
 	evs := cap.Events()
 	if len(evs) == 0 {
-		t.Fatalf("audit NOT записан on успешbutм write routeе (S6-рецидив: huma-audit-middleware не toвёл write-путь to audit, event=%s)", evt)
+		t.Fatalf("audit NOT recorded on a successful write route (S6 recurrence: huma-audit-middleware did not carry the write path through to audit, event=%s)", evt)
 	}
 	ev := evs[0]
 	if ev.EventType != evt {
@@ -747,7 +747,7 @@ func assertAuditWritten(t *testing.T, cap *auditCaptureWriter, evt audit.EventTy
 		t.Errorf("archon_aid = %q, want archon-alice", ev.ArchonAID)
 	}
 	if len(ev.Payload) == 0 {
-		t.Fatalf("audit payload empty — huma-audit-middleware потерял toменный payload (carrier не пробросился), event=%s", evt)
+		t.Fatalf("audit payload empty - huma-audit-middleware lost the domain payload (carrier not propagated), event=%s", evt)
 	}
 	for k, want := range wantPayload {
 		if ev.Payload[k] != want {

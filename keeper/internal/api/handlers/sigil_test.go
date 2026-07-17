@@ -169,7 +169,7 @@ func TestSigilHandler_List_200_NoSignatureNoManifest(t *testing.T) {
 	}
 	// Active record: RevokedAt nil → the native type omits revoked_at (omitempty).
 	if it.RevokedAt != nil {
-		t.Errorf("активная запись не должна нести revoked_at: %v", it.RevokedAt)
+		t.Errorf("active entry must not carry revoked_at: %v", it.RevokedAt)
 	}
 }
 
@@ -181,7 +181,7 @@ func TestSigilHandler_List_200_EmptyNonNil(t *testing.T) {
 	}
 	// non-nil [] (not nil): the native projection serializes as `[]`, not null.
 	if page.Items == nil {
-		t.Errorf("пустой список должен быть non-nil [], получен nil")
+		t.Errorf("empty list must be non-nil [], got nil")
 	}
 	if len(page.Items) != 0 {
 		t.Errorf("items = %d, want 0", len(page.Items))

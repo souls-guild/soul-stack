@@ -72,7 +72,7 @@ func TestRender_EssenceInWhere(t *testing.T) {
 		t.Fatalf("Render(disabled): %v", err)
 	}
 	if got := plans[0].TargetSIDs; len(got) != 0 {
-		t.Errorf("disabled: TargetSIDs = %v, want 0 hosts (where отфильтровал)", got)
+		t.Errorf("disabled: TargetSIDs = %v, want 0 hosts (where filtered)", got)
 	}
 }
 
@@ -157,10 +157,10 @@ func TestRender_ApplyDestiny_EssenceNotLeaked(t *testing.T) {
 	}
 	_, _, err := p.Render(context.Background(), in)
 	if err == nil {
-		t.Fatal("ожидали eval-ошибку: essence не должен быть виден в destiny-проходе")
+		t.Fatal("expected an eval error: essence should not be visible in the destiny pass")
 	}
 	if !strings.Contains(err.Error(), "essence") {
-		t.Errorf("ошибка не про essence: %v", err)
+		t.Errorf("error is not about essence: %v", err)
 	}
 }
 
@@ -192,6 +192,6 @@ func TestRender_ApplyDestiny_EssenceViaInput(t *testing.T) {
 		t.Fatalf("Render: %v", err)
 	}
 	if got := tasks[0].Params.GetFields()["cmd"].GetStringValue(); got != "connect pg-primary" {
-		t.Errorf("command = %q, want %q (essence через apply:input)", got, "connect pg-primary")
+		t.Errorf("command = %q, want %q (essence via apply:input)", got, "connect pg-primary")
 	}
 }

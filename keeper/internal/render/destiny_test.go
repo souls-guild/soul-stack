@@ -94,20 +94,20 @@ func TestRender_ApplyDestiny_Expands(t *testing.T) {
 		t.Fatalf("len(tasks)=%d plans=%d, want 2/2", len(tasks), len(plans))
 	}
 	if tasks[0].Index != 0 || tasks[1].Index != 1 {
-		t.Errorf("indices = %d,%d, want 0,1 (сквозные)", tasks[0].Index, tasks[1].Index)
+		t.Errorf("indices = %d,%d, want 0,1 (contiguous)", tasks[0].Index, tasks[1].Index)
 	}
 	if tasks[0].Module != "core.file.present" {
 		t.Errorf("task0 module = %q", tasks[0].Module)
 	}
 	f0 := tasks[0].Params.GetFields()
 	if got := f0["path"].GetStringValue(); got != "/etc/marker" {
-		t.Errorf("path = %q, want /etc/marker (из apply.input ← scenario.input.path)", got)
+		t.Errorf("path = %q, want /etc/marker (from apply.input <- scenario.input.path)", got)
 	}
 	if got := f0["content"].GetStringValue(); got != "ok" {
 		t.Errorf("content = %q, want ok", got)
 	}
 	if got := f0["mode"].GetStringValue(); got != "0644" {
-		t.Errorf("mode = %q, want 0644 (добран из default destiny)", got)
+		t.Errorf("mode = %q, want 0644 (picked up from default destiny)", got)
 	}
 	cmd := tasks[1].Params.GetFields()["cmd"].GetStringValue()
 	if cmd != "echo /etc/marker" {
@@ -137,7 +137,7 @@ func TestRender_ApplyDestiny_Isolation(t *testing.T) {
 
 	_, _, err := p.Render(context.Background(), in)
 	if err == nil {
-		t.Fatal("Render: ожидалась ошибка — destiny не должна видеть scenario-input (изоляция ADR-009)")
+		t.Fatal("Render: expected an error - destiny must not see scenario-input (isolation ADR-009)")
 	}
 }
 
@@ -166,7 +166,7 @@ func TestRender_ApplyDestiny_StateIsolation(t *testing.T) {
 
 	_, _, err := p.Render(context.Background(), in)
 	if err == nil {
-		t.Fatal("Render: ожидалась ошибка — destiny не должна видеть incarnation.state (изоляция Вариант A)")
+		t.Fatal("Render: expected an error - destiny must not see incarnation.state (isolation Variant A)")
 	}
 }
 
@@ -184,7 +184,7 @@ func TestRender_ApplyDestiny_MissingRequired(t *testing.T) {
 	}
 	_, _, err := p.Render(context.Background(), in)
 	if err == nil {
-		t.Fatal("Render: ожидалась ошибка на отсутствующий обязательный input destiny")
+		t.Fatal("Render: expected an error for a missing required destiny input")
 	}
 }
 
@@ -223,7 +223,7 @@ func TestRender_ApplyDestiny_UnexpandedInclude(t *testing.T) {
 	}
 	_, _, err := p.Render(context.Background(), in)
 	if !errors.Is(err, ErrUnexpandedInclude) {
-		t.Fatalf("err = %v, want ErrUnexpandedInclude (нераскрытый include в destiny)", err)
+		t.Fatalf("err = %v, want ErrUnexpandedInclude (unexpanded include in destiny)", err)
 	}
 }
 
@@ -245,7 +245,7 @@ func TestRender_ApplyDestiny_RejectsSerial(t *testing.T) {
 	}
 	_, _, err := p.Render(context.Background(), in)
 	if !errors.Is(err, ErrUnsupportedDSL) {
-		t.Fatalf("err = %v, want ErrUnsupportedDSL (serial: на destiny-задаче)", err)
+		t.Fatalf("err = %v, want ErrUnsupportedDSL (serial: on a destiny task)", err)
 	}
 }
 
@@ -264,7 +264,7 @@ func TestRender_ApplyDestiny_RejectsRunOnce(t *testing.T) {
 	}
 	_, _, err := p.Render(context.Background(), in)
 	if !errors.Is(err, ErrUnsupportedDSL) {
-		t.Fatalf("err = %v, want ErrUnsupportedDSL (run_once: на destiny-задаче)", err)
+		t.Fatalf("err = %v, want ErrUnsupportedDSL (run_once: on a destiny task)", err)
 	}
 }
 
@@ -280,7 +280,7 @@ func TestRender_ApplyDestiny_ResolverError(t *testing.T) {
 	}
 	_, _, err := p.Render(context.Background(), in)
 	if err == nil {
-		t.Fatal("Render: ожидалась проброшенная ошибка резолвера")
+		t.Fatal("Render: expected a propagated resolver error")
 	}
 }
 
@@ -318,7 +318,7 @@ func TestRender_ApplyDestiny_MixedPlan(t *testing.T) {
 		}
 	}
 	if tasks[3].Module != "core.exec.run" || tasks[3].Params.GetFields()["cmd"].GetStringValue() != "echo post" {
-		t.Errorf("post-задача после destiny отрендерена неверно: %+v", tasks[3])
+		t.Errorf("post-task after destiny rendered incorrectly: %+v", tasks[3])
 	}
 }
 
@@ -345,7 +345,7 @@ func TestRender_ApplyDestiny_RejectsNestedApply(t *testing.T) {
 	}
 	_, _, err := p.Render(context.Background(), in)
 	if !errors.Is(err, ErrUnsupportedDSL) {
-		t.Fatalf("err = %v, want ErrUnsupportedDSL (вложенный apply: в destiny)", err)
+		t.Fatalf("err = %v, want ErrUnsupportedDSL (nested apply: in destiny)", err)
 	}
 }
 

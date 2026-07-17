@@ -237,7 +237,7 @@ func TestHumaSynod_Create_GoldenEmptyBody(t *testing.T) {
 	}
 	const golden = "" // legacy POST /v1/synods 201 — no body
 	if got := rec.Body.String(); got != golden {
-		t.Errorf("GOLDEN wire-дрейф synod.create 201-тела: got=%q want=%q", got, golden)
+		t.Errorf("GOLDEN wire drift synod.create 201-body: got=%q want=%q", got, golden)
 	}
 }
 
@@ -297,7 +297,7 @@ func TestHumaAudit_SynodCreate_NoAudit_OnRBACDeny(t *testing.T) {
 		t.Fatalf("status = %d, want 403; body=%s", rec.Code, rec.Body.String())
 	}
 	if len(auditCap.Events()) != 0 {
-		t.Errorf("audit записан on RBAC-deny synod.create (%d withбытий)", len(auditCap.Events()))
+		t.Errorf("audit recorded on RBAC-deny synod.create (%d events)", len(auditCap.Events()))
 	}
 }
 
@@ -316,12 +316,12 @@ func TestHumaSynod_List_GoldenWire(t *testing.T) {
 	}
 	var m map[string]any
 	if err := json.Unmarshal(rec.Body.Bytes(), &m); err != nil {
-		t.Fatalf("reply не JSON-object: %v; body=%s", err, rec.Body.String())
+		t.Fatalf("reply is not a JSON object: %v; body=%s", err, rec.Body.String())
 	}
 	out, _ := json.Marshal(m)
 	const golden = `{"items":[{"builtin":false,"description":"ops team","name":"team-ops","operators":[],"roles":[]}]}`
 	if got := string(out); got != golden {
-		t.Errorf("GOLDEN wire-дрейф synod.list:\n got  = %s\n want = %s", got, golden)
+		t.Errorf("GOLDEN wire drift synod.list:\n got  = %s\n want = %s", got, golden)
 	}
 }
 
@@ -338,7 +338,7 @@ func TestHumaSynod_List_GoldenEmpty(t *testing.T) {
 	_ = json.Unmarshal(rec.Body.Bytes(), &m)
 	out, _ := json.Marshal(m)
 	if got := string(out); got != golden {
-		t.Errorf("GOLDEN wire-дрейф synod.list (empty): got=%q want=%q", got, golden)
+		t.Errorf("GOLDEN wire drift synod.list (empty): got=%q want=%q", got, golden)
 	}
 }
 
@@ -352,7 +352,7 @@ func TestHumaSynod_List_NoAudit(t *testing.T) {
 		t.Fatalf("status = %d, want 200; body=%s", rec.Code, rec.Body.String())
 	}
 	if len(auditCap.Events()) != 0 {
-		t.Errorf("READ-роут synod.list записал audit (%d withбытий)", len(auditCap.Events()))
+		t.Errorf("READ route synod.list recorded audit (%d events)", len(auditCap.Events()))
 	}
 }
 
@@ -377,7 +377,7 @@ func TestHumaSynod_Update_204(t *testing.T) {
 		t.Fatalf("status = %d, want 204; body=%s", rec.Code, rec.Body.String())
 	}
 	if body := strings.TrimSpace(rec.Body.String()); body != "" {
-		t.Errorf("204-body synod.update toлжbut быть ПУСТЫМ, got %q", body)
+		t.Errorf("204-body synod.update must be EMPTY, got %q", body)
 	}
 }
 
@@ -405,7 +405,7 @@ func TestHumaAudit_SynodUpdate_NoAudit_OnMissingDescription(t *testing.T) {
 		t.Fatalf("status = %d, want 422 (missing required description); body=%s", rec.Code, rec.Body.String())
 	}
 	if len(auditCap.Events()) != 0 {
-		t.Errorf("audit записан on 422 synod.update (%d withбытий)", len(auditCap.Events()))
+		t.Errorf("audit recorded on 422 synod.update (%d events)", len(auditCap.Events()))
 	}
 }
 
@@ -420,7 +420,7 @@ func TestHumaSynod_Delete_204(t *testing.T) {
 		t.Fatalf("status = %d, want 204; body=%s", rec.Code, rec.Body.String())
 	}
 	if body := strings.TrimSpace(rec.Body.String()); body != "" {
-		t.Errorf("204-body synod.delete toлжbut быть ПУСТЫМ, got %q", body)
+		t.Errorf("204-body synod.delete must be EMPTY, got %q", body)
 	}
 }
 
@@ -446,7 +446,7 @@ func TestHumaAudit_SynodDelete_NoAudit_OnRBACDeny(t *testing.T) {
 		t.Fatalf("status = %d, want 403; body=%s", rec.Code, rec.Body.String())
 	}
 	if len(auditCap.Events()) != 0 {
-		t.Errorf("audit записан on RBAC-deny synod.delete (%d withбытий)", len(auditCap.Events()))
+		t.Errorf("audit recorded on RBAC-deny synod.delete (%d events)", len(auditCap.Events()))
 	}
 }
 
@@ -483,10 +483,10 @@ func TestHumaAudit_SynodAddOperator_NoAudit_OnInvalidAID(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPost, "/v1/synods/team-ops/operators", strings.NewReader(`{"aid":"bad aid!"}`))
 	r.ServeHTTP(rec, req)
 	if rec.Code != http.StatusUnprocessableEntity {
-		t.Fatalf("status = %d, want 422 (битый AID); body=%s", rec.Code, rec.Body.String())
+		t.Fatalf("status = %d, want 422 (malformed AID); body=%s", rec.Code, rec.Body.String())
 	}
 	if len(auditCap.Events()) != 0 {
-		t.Errorf("audit записан on invalid-AID add-operator (%d withбытий)", len(auditCap.Events()))
+		t.Errorf("audit recorded on invalid-AID add-operator (%d events)", len(auditCap.Events()))
 	}
 }
 
@@ -523,10 +523,10 @@ func TestHumaAudit_SynodRemoveOperator_NoAudit_OnInvalidAID(t *testing.T) {
 	req := httptest.NewRequest(http.MethodDelete, "/v1/synods/team-ops/operators/INVALID", nil)
 	r.ServeHTTP(rec, req)
 	if rec.Code != http.StatusUnprocessableEntity {
-		t.Fatalf("status = %d, want 422 (битый path-AID); body=%s", rec.Code, rec.Body.String())
+		t.Fatalf("status = %d, want 422 (malformed path-AID); body=%s", rec.Code, rec.Body.String())
 	}
 	if len(auditCap.Events()) != 0 {
-		t.Errorf("audit записан on invalid-AID remove-operator (%d withбытий)", len(auditCap.Events()))
+		t.Errorf("audit recorded on invalid-AID remove-operator (%d events)", len(auditCap.Events()))
 	}
 }
 
@@ -566,7 +566,7 @@ func TestHumaAudit_SynodGrantRole_NoAudit_OnMissingRole(t *testing.T) {
 		t.Fatalf("status = %d, want 422 (missing required role); body=%s", rec.Code, rec.Body.String())
 	}
 	if len(auditCap.Events()) != 0 {
-		t.Errorf("audit записан on 422 grant-role (%d withбытий)", len(auditCap.Events()))
+		t.Errorf("audit recorded on 422 grant-role (%d events)", len(auditCap.Events()))
 	}
 }
 
@@ -606,7 +606,7 @@ func TestHumaAudit_SynodRevokeRole_NoAudit_OnRBACDeny(t *testing.T) {
 		t.Fatalf("status = %d, want 403; body=%s", rec.Code, rec.Body.String())
 	}
 	if len(auditCap.Events()) != 0 {
-		t.Errorf("audit записан on RBAC-deny revoke-role (%d withбытий)", len(auditCap.Events()))
+		t.Errorf("audit recorded on RBAC-deny revoke-role (%d events)", len(auditCap.Events()))
 	}
 }
 
@@ -618,17 +618,17 @@ func TestHumaSynod_OpenAPIFragment_3_1(t *testing.T) {
 		t.Fatalf("HumaSynodSpecYAML: %v", err)
 	}
 	if !strings.Contains(frag, "openapi: 3.1.0") {
-		t.Errorf("huma-фрагмент не несёт `openapi: 3.1.0`:\n%s", frag)
+		t.Errorf("huma fragment does not contain `openapi: 3.1.0`:\n%s", frag)
 	}
 	for _, want := range []string{
 		"createSynod", "listSynods", "updateSynod", "deleteSynod",
 		"addSynodOperator", "removeSynodOperator", "grantSynodRole", "revokeSynodRole",
 	} {
 		if !strings.Contains(frag, want) {
-			t.Errorf("OpenAPI-фрагмент не withдержит %q:\n%s", want, frag)
+			t.Errorf("OpenAPI fragment does not contain %q:\n%s", want, frag)
 		}
 	}
 	if strings.Contains(frag, "octet-stream") {
-		t.Errorf("OpenAPI-фрагмент несёт application/octet-stream:\n%s", frag)
+		t.Errorf("OpenAPI fragment contains application/octet-stream:\n%s", frag)
 	}
 }

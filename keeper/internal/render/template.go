@@ -96,12 +96,12 @@ func (r *SnapshotTemplateReader) Read(relPath string) ([]byte, error) {
 			return data, nil
 		}
 		if !isNotExist(err) {
-			return nil, fmt.Errorf("render: чтение шаблона %q (scenario-local %q): %w", relPath, local, err)
+			return nil, fmt.Errorf("render: reading template %q (scenario-local %q): %w", relPath, local, err)
 		}
 	}
 	data, err := r.read(relPath)
 	if err != nil {
-		return nil, fmt.Errorf("render: чтение шаблона %q (service-level): %w", relPath, err)
+		return nil, fmt.Errorf("render: reading template %q (service-level): %w", relPath, err)
 	}
 	return data, nil
 }
@@ -129,7 +129,7 @@ func injectTemplateContent(rt *RenderedTask, reader TemplateReader, preloaded st
 		return nil
 	}
 	if rt.Params == nil {
-		return fmt.Errorf("render: task %q (core.file.rendered): params пусты — нет ключа %q", rt.Name, paramTemplate)
+		return fmt.Errorf("render: task %q (core.file.rendered): params empty - missing key %q", rt.Name, paramTemplate)
 	}
 	fields := rt.Params.GetFields()
 	tv, ok := fields[paramTemplate]
@@ -139,17 +139,17 @@ func injectTemplateContent(rt *RenderedTask, reader TemplateReader, preloaded st
 			rt.RawTemplate = preloaded
 			return nil
 		}
-		return fmt.Errorf("render: task %q (core.file.rendered): нет ни %q (путь), ни %q (inline-содержимое)", rt.Name, paramTemplate, paramTemplateContent)
+		return fmt.Errorf("render: task %q (core.file.rendered): neither %q (path) nor %q (inline content)", rt.Name, paramTemplate, paramTemplateContent)
 	}
 	rel := tv.GetStringValue()
 	if _, isStr := tv.GetKind().(*structpb.Value_StringValue); !isStr || rel == "" {
-		return fmt.Errorf("render: task %q (core.file.rendered): %q должен быть непустой строкой-путём, получено %v", rt.Name, paramTemplate, tv.AsInterface())
+		return fmt.Errorf("render: task %q (core.file.rendered): %q must be a non-empty path string, got %v", rt.Name, paramTemplate, tv.AsInterface())
 	}
 
 	content := preloaded
 	if content == "" {
 		if reader == nil {
-			return fmt.Errorf("render: task %q (core.file.rendered): TemplateReader не сконфигурирован — Keeper не может доставить содержимое шаблона %q (RenderInput.Templates=nil)", rt.Name, rel)
+			return fmt.Errorf("render: task %q (core.file.rendered): TemplateReader not configured - Keeper cannot deliver template content %q (RenderInput.Templates=nil)", rt.Name, rel)
 		}
 		data, err := reader.Read(rel)
 		if err != nil {

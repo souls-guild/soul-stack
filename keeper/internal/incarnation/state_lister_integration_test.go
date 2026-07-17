@@ -44,21 +44,21 @@ func TestIntegration_StateLister_PushdownAndPages(t *testing.T) {
 	// pushdown service=redis & coven=prod → exactly redis-prod-a, redis-prod-b.
 	got := drain(t, l, statepredicate.BaseFilter{Service: "redis", Coven: "prod"})
 	if len(got) != 2 {
-		t.Fatalf("service=redis coven=prod: got %d строк %v, want 2", len(got), names(got))
+		t.Fatalf("service=redis coven=prod: got %d rows %v, want 2", len(got), names(got))
 	}
 	byName := map[string]map[string]any{}
 	for _, s := range got {
 		byName[s.Name] = s.State
 	}
 	if _, ok := byName["redis-prod-a"]; !ok {
-		t.Errorf("redis-prod-a отсутствует в выборке")
+		t.Errorf("redis-prod-a missing from the result set")
 	}
 	if _, ok := byName["redis-prod-b"]; !ok {
-		t.Errorf("redis-prod-b отсутствует в выборке")
+		t.Errorf("redis-prod-b missing from the result set")
 	}
 	// state-jsonb passed through (foundation for CEL-eval).
 	if byName["redis-prod-a"]["redis_version"] != "8.0" {
-		t.Errorf("state не пробросился: %+v", byName["redis-prod-a"])
+		t.Errorf("state was not propagated: %+v", byName["redis-prod-a"])
 	}
 
 	// pushdown service=postgres only → exactly pg-prod.
@@ -92,12 +92,12 @@ func TestIntegration_StateLister_MultiPage(t *testing.T) {
 	got := drain(t, l, statepredicate.BaseFilter{Service: "bulk"})
 
 	if len(got) != n {
-		t.Fatalf("multi-page: got %d строк, want %d (offset/limit-цикл потерял строки)", len(got), n)
+		t.Fatalf("multi-page: got %d rows, want %d (offset/limit loop lost rows)", len(got), n)
 	}
 	seen := make(map[string]bool, n)
 	for _, s := range got {
 		if seen[s.Name] {
-			t.Fatalf("дубликат %q — страница перечитана", s.Name)
+			t.Fatalf("duplicate %q - page re-read", s.Name)
 		}
 		seen[s.Name] = true
 	}

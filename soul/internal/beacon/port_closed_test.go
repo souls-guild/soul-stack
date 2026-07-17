@@ -28,7 +28,7 @@ func TestPortClosedOpen(t *testing.T) {
 		t.Fatalf("state = %q, want open", state)
 	}
 	if int(data.GetFields()["port"].GetNumberValue()) != port {
-		t.Error("data.port должно нести порт")
+		t.Error("data.port must carry the port")
 	}
 }
 
@@ -45,7 +45,7 @@ func TestPortClosedRefused(t *testing.T) {
 	b := NewPortClosed()
 	state, _, err := b.Check(context.Background(), paramStruct(t, map[string]any{"port": port}))
 	if err != nil {
-		t.Fatalf("Check для закрытого порта не должен возвращать ошибку: %v", err)
+		t.Fatalf("Check for a closed port must not return an error: %v", err)
 	}
 	if state != statePortClosed {
 		t.Fatalf("state = %q, want closed", state)
@@ -68,7 +68,7 @@ func TestPortClosedDialError(t *testing.T) {
 		t.Fatalf("state = %q, want closed", state)
 	}
 	if data.GetFields()["host"].GetStringValue() != "10.255.255.1" {
-		t.Error("data.host должно нести хост")
+		t.Error("data.host must carry the host")
 	}
 }
 
@@ -82,20 +82,20 @@ func TestPortClosedDefaultHost(t *testing.T) {
 		t.Fatalf("Check: %v", err)
 	}
 	if gotAddr != "127.0.0.1:5432" {
-		t.Fatalf("default host: dial по %q, ожидали 127.0.0.1:5432", gotAddr)
+		t.Fatalf("default host: dial on %q, expected 127.0.0.1:5432", gotAddr)
 	}
 }
 
 func TestPortClosedMissingPort(t *testing.T) {
 	b := NewPortClosed()
 	if _, _, err := b.Check(context.Background(), paramStruct(t, map[string]any{})); err == nil {
-		t.Fatal("ожидали ошибку при отсутствии param port")
+		t.Fatal("expected an error when param port is missing")
 	}
 }
 
 func TestPortClosedInvalidPort(t *testing.T) {
 	b := NewPortClosed()
 	if _, _, err := b.Check(context.Background(), paramStruct(t, map[string]any{"port": 70000})); err == nil {
-		t.Fatal("ожидали ошибку при port вне диапазона 1..65535")
+		t.Fatal("expected an error when port is out of range 1..65535")
 	}
 }

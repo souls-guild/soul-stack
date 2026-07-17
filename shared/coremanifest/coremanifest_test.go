@@ -41,25 +41,25 @@ var expectedModules = map[string][]string{
 func TestDefault_EmbedManifestsParse(t *testing.T) {
 	reg := Default()
 	if got, want := len(reg.Names()), len(expectedModules); got != want {
-		t.Errorf("в реестре %d модулей, ожидалось %d: %v", got, want, reg.Names())
+		t.Errorf("registry has %d modules, expected %d: %v", got, want, reg.Names())
 	}
 	for name, states := range expectedModules {
 		m, ok := reg.Lookup(name)
 		if !ok {
-			t.Errorf("реестр не содержит %q", name)
+			t.Errorf("registry does not contain %q", name)
 			continue
 		}
 		for _, s := range states {
 			if _, ok := m.Spec.States[s]; !ok {
-				t.Errorf("%s: нет state %q", name, s)
+				t.Errorf("%s: missing state %q", name, s)
 			}
 		}
 		if len(m.Spec.States) != len(states) {
-			t.Errorf("%s: states = %d, ожидалось %d", name, len(m.Spec.States), len(states))
+			t.Errorf("%s: states = %d, expected %d", name, len(m.Spec.States), len(states))
 		}
 	}
 	if _, ok := reg.Lookup("core.nope"); ok {
-		t.Error("Lookup несуществующего модуля вернул ok=true")
+		t.Error("Lookup of a non-existent module returned ok=true")
 	}
 }
 
@@ -73,7 +73,7 @@ func TestDefault_RequiredParamsPresent(t *testing.T) {
 		for state, def := range m.Spec.States {
 			for pname, p := range def.Input {
 				if p.Required && p.Type == "" {
-					t.Errorf("%s.%s: required param %q без type", name, state, pname)
+					t.Errorf("%s.%s: required param %q without type", name, state, pname)
 				}
 			}
 		}
@@ -85,7 +85,7 @@ func TestNames_Deterministic(t *testing.T) {
 	names := Default().Names()
 	for i := 1; i < len(names); i++ {
 		if names[i-1] > names[i] {
-			t.Fatalf("Names() не отсортирован: %q после %q", names[i], names[i-1])
+			t.Fatalf("Names() not sorted: %q after %q", names[i], names[i-1])
 		}
 	}
 }
@@ -94,21 +94,21 @@ func TestNames_Deterministic(t *testing.T) {
 func TestState_ExecRun(t *testing.T) {
 	def, ok := Default().State("core.exec", "run")
 	if !ok {
-		t.Fatal("core.exec.run не найден")
+		t.Fatal("core.exec.run not found")
 	}
 	cmd, ok := def.Input["cmd"]
 	if !ok || !cmd.Required {
-		t.Errorf("cmd должен быть required: %+v", cmd)
+		t.Errorf("cmd should be required: %+v", cmd)
 	}
 	if cmd.Type != "string" {
 		t.Errorf("cmd.Type = %q, want string", cmd.Type)
 	}
 	if args, ok := def.Input["args"]; !ok || args.Required {
-		t.Errorf("args должен быть опциональным list: %+v", args)
+		t.Errorf("args should be an optional list: %+v", args)
 	}
 	// `command` is a common typo for cmd; it must not be in the schema.
 	if _, ok := def.Input["command"]; ok {
-		t.Error("в схеме core.exec.run не должно быть param 'command'")
+		t.Error("schema of core.exec.run should not have param 'command'")
 	}
 }
 
@@ -125,12 +125,12 @@ func TestState_FileStates(t *testing.T) {
 	for _, tc := range cases {
 		def, ok := Default().State("core.file", tc.state)
 		if !ok {
-			t.Fatalf("core.file.%s не найден", tc.state)
+			t.Fatalf("core.file.%s not found", tc.state)
 		}
 		for _, name := range tc.required {
 			p, ok := def.Input[name]
 			if !ok || !p.Required {
-				t.Errorf("core.file.%s: %q должен быть required, got %+v", tc.state, name, p)
+				t.Errorf("core.file.%s: %q should be required, got %+v", tc.state, name, p)
 			}
 		}
 	}
@@ -139,6 +139,6 @@ func TestState_FileStates(t *testing.T) {
 // TestState_UnknownState — a missing state yields ok=false.
 func TestState_UnknownState(t *testing.T) {
 	if _, ok := Default().State("core.exec", "runn"); ok {
-		t.Error("несуществующий state вернул ok=true")
+		t.Error("non-existent state returned ok=true")
 	}
 }

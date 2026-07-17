@@ -52,7 +52,7 @@ func TestWhereEvaluator_CompileError(t *testing.T) {
 	}
 	// Syntactically invalid expression → compile error (malformed Decree).
 	if _, err := w.Eval(`event.data.x ==`, map[string]any{}); err == nil {
-		t.Error("ожидали compile-ошибку на невалидном where_cel")
+		t.Error("expected a compile error on invalid where_cel")
 	}
 }
 
@@ -65,10 +65,10 @@ func TestWhereEvaluator_NilData(t *testing.T) {
 	// without error.
 	got, err := w.Eval(`event.data.severity == "critical"`, nil)
 	if err != nil {
-		t.Fatalf("Eval с nil-data: %v", err)
+		t.Fatalf("Eval with nil-data: %v", err)
 	}
 	if got {
-		t.Error("при nil-payload предикат не должен срабатывать")
+		t.Error("predicate must not fire on nil payload")
 	}
 }
 
@@ -205,7 +205,7 @@ func TestEvalEvent_LegacyDataAccess(t *testing.T) {
 		t.Fatalf("EvalEvent legacy: %v", err)
 	}
 	if !got {
-		t.Error("legacy event.data.* должен матчить в hand-off-период")
+		t.Error("legacy event.data.* must match during the hand-off period")
 	}
 
 	got, err = w.EvalEvent(`event.file_changed.path == "/etc/passwd"`, evt)
@@ -213,7 +213,7 @@ func TestEvalEvent_LegacyDataAccess(t *testing.T) {
 		t.Fatalf("EvalEvent typed: %v", err)
 	}
 	if !got {
-		t.Error("typed event.file_changed.* должен матчить одновременно с legacy")
+		t.Error("typed event.file_changed.* must match alongside legacy")
 	}
 }
 
@@ -236,7 +236,7 @@ func TestEvalEvent_TypeMismatchFailSafe(t *testing.T) {
 		t.Fatalf("EvalEvent type-mismatch: %v", err)
 	}
 	if got {
-		t.Error("type-mismatch должен давать false (default-deny)")
+		t.Error("type-mismatch must give false (default-deny)")
 	}
 }
 
@@ -251,7 +251,7 @@ func TestEvalEvent_NilEvent(t *testing.T) {
 		t.Fatalf("EvalEvent nil: %v", err)
 	}
 	if got {
-		t.Error("nil-event должен давать false (default-deny)")
+		t.Error("nil-event must give false (default-deny)")
 	}
 }
 
@@ -275,6 +275,6 @@ func TestEvalEvent_CustomPayload(t *testing.T) {
 		t.Fatalf("EvalEvent custom: %v", err)
 	}
 	if !got {
-		t.Error("event.custom.queue_depth > 1000 должен совпасть")
+		t.Error("event.custom.queue_depth > 1000 must match")
 	}
 }

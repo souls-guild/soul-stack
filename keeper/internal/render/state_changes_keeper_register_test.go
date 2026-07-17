@@ -23,10 +23,10 @@ func TestStateChangesVars_KeeperRegisterVisible(t *testing.T) {
 
 	vars := stateChangesVars(in, host)
 	if _, ok := vars.Register["provision"]; !ok {
-		t.Errorf("★ stateChangesVars.Register = %v, want keeper-register 'provision' (run-level подложка state_changes-scope)", vars.Register)
+		t.Errorf("stateChangesVars.Register = %v, want keeper-register 'provision' (run-level backing for state_changes-scope)", vars.Register)
 	}
 	if _, ok := vars.Register["probe"]; !ok {
-		t.Errorf("stateChangesVars.Register = %v, want per-host register 'probe' рядом с keeper-подложкой", vars.Register)
+		t.Errorf("stateChangesVars.Register = %v, want per-host register 'probe' alongside keeper backing", vars.Register)
 	}
 }
 
@@ -45,7 +45,7 @@ func TestStateChangesVars_HostWinsOnCollision(t *testing.T) {
 	vars := stateChangesVars(in, host)
 	got, _ := vars.Register["x"].(map[string]any)
 	if got == nil || got["src"] != "host" {
-		t.Errorf("stateChangesVars.Register[x] = %v, want host-значение (host-wins при коллизии)", vars.Register["x"])
+		t.Errorf("stateChangesVars.Register[x] = %v, want host value (host-wins on collision)", vars.Register["x"])
 	}
 }
 
@@ -62,16 +62,16 @@ func TestStateChangesVars_NoKeeperBucket_BitForBit(t *testing.T) {
 
 	vars := stateChangesVars(in, host)
 	if len(vars.Register) != len(bucket) {
-		t.Fatalf("stateChangesVars.Register = %v, want ровно per-host bucket %v", vars.Register, bucket)
+		t.Fatalf("stateChangesVars.Register = %v, want exactly per-host bucket %v", vars.Register, bucket)
 	}
 	// Same map, not a copy: mutating bucket is visible through vars (no extra allocation).
 	bucket["late"] = true
 	if _, ok := vars.Register["late"]; !ok {
-		t.Errorf("stateChangesVars.Register — копия per-host bucket-а, want та же карта (бит-в-бит без keeper-подложки)")
+		t.Errorf("stateChangesVars.Register - a copy of the per-host bucket, want the same map (bit-for-bit, without keeper backing)")
 	}
 
 	noBucket := &topology.HostFacts{SID: "host-b.example.com"}
 	if got := stateChangesVars(in, noBucket).Register; got != nil {
-		t.Errorf("stateChangesVars.Register (хост без bucket-а) = %v, want nil", got)
+		t.Errorf("stateChangesVars.Register (host without a bucket) = %v, want nil", got)
 	}
 }

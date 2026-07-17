@@ -188,7 +188,7 @@ func TestIntegration_MidRunReResolve_GrownRosterVisibleNextPassage(t *testing.T)
 		gotSet[sid] = true
 	}
 	if !gotSet["host-a.example.com"] || !gotSet["host-c.example.com"] || len(p1) != 2 {
-		t.Fatalf("★ Passage 1 targets = %v, want оба [host-a host-c] — re-resolve НЕ увидел выросший roster (host-c онбордился на refresh-границе)", p1)
+		t.Fatalf("* Passage 1 targets = %v, want both [host-a host-c] - re-resolve did NOT see the grown roster (host-c onboarded at refresh boundary)", p1)
 	}
 
 	// apply_runs: host-a + host-c both have a Passage-1 success row. The keeper
@@ -196,7 +196,7 @@ func TestIntegration_MidRunReResolve_GrownRosterVisibleNextPassage(t *testing.T)
 	// row (it appeared only before Passage 1 — it wasn't in the Passage 0 roster).
 	got := passagesBySID(t, applyID, applyrun.StatusSuccess)
 	if len(got["host-c.example.com"]) != 1 || got["host-c.example.com"][0] != 1 {
-		t.Errorf("host-c passages = %v, want [1] (появился на refresh-границе, в Passage 0 его НЕ было)", got["host-c.example.com"])
+		t.Errorf("host-c passages = %v, want [1] (appeared at refresh boundary, was NOT in Passage 0)", got["host-c.example.com"])
 	}
 	hostAHasP1 := false
 	for _, p := range got["host-a.example.com"] {
@@ -205,7 +205,7 @@ func TestIntegration_MidRunReResolve_GrownRosterVisibleNextPassage(t *testing.T)
 		}
 	}
 	if !hostAHasP1 {
-		t.Errorf("host-a passages = %v, want содержащее 1 (роль применена на выросший roster)", got["host-a.example.com"])
+		t.Errorf("host-a passages = %v, want containing 1 (role applied to grown roster)", got["host-a.example.com"])
 	}
 }
 
@@ -244,7 +244,7 @@ func TestIntegration_MidRunReResolve_NoGrowthSameRoster(t *testing.T) {
 
 	p1 := disp.targets(1)
 	if len(p1) != 2 {
-		t.Fatalf("Passage 1 targets = %v, want оба исходных хоста (re-resolve без роста = тот же roster)", p1)
+		t.Fatalf("Passage 1 targets = %v, want both original hosts (re-resolve with no growth = same roster)", p1)
 	}
 }
 
@@ -362,7 +362,7 @@ func TestIntegration_MidRunReResolve_OfflineHostExcludedNextPassage(t *testing.T
 	// SHRINK).
 	p1 := disp.targets(1)
 	if len(p1) != 1 || p1[0] != "host-a.example.com" {
-		t.Fatalf("★ Passage 1 targets = %v, want [host-a] — live-снимок re-resolve обязан ИСКЛЮЧИТЬ ушедший offline host-b (ADR-0061 §S3: re-resolve = live-snapshot, не монотонный рост)", p1)
+		t.Fatalf("* Passage 1 targets = %v, want [host-a] - live-snapshot re-resolve must EXCLUDE the offline host-b (ADR-0061 SS3: re-resolve = live-snapshot, not monotonic growth)", p1)
 	}
 }
 

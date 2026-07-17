@@ -93,10 +93,10 @@ func TestResolveInputValues_FormatEnforce(t *testing.T) {
 			schema := schemaFromInput(t, "host:\n  type: string\n  format: "+tc.format+"\n")
 			_, err := ResolveInputValues(schema, map[string]any{"host": tc.value})
 			if tc.ok && err != nil {
-				t.Fatalf("format=%s value=%q: ожидалось прохождение, получили %v", tc.format, tc.value, err)
+				t.Fatalf("format=%s value=%q: expected to pass, got %v", tc.format, tc.value, err)
 			}
 			if !tc.ok && err == nil {
-				t.Fatalf("format=%s value=%q: ожидалась ошибка валидации, прошло", tc.format, tc.value)
+				t.Fatalf("format=%s value=%q: expected validation error, passed", tc.format, tc.value)
 			}
 		})
 	}
@@ -109,7 +109,7 @@ func TestResolveInputValues_FormatExprSkipped(t *testing.T) {
 	schema := schemaFromInput(t, "host:\n  type: string\n  format: ipv4\n")
 	got, err := ResolveInputValues(schema, map[string]any{"host": "${ soulprint.self.primary_ip }"})
 	if err != nil {
-		t.Fatalf("выражение не должно валидироваться против format: %v", err)
+		t.Fatalf("expression must not be validated against format: %v", err)
 	}
 	if got["host"] != "${ soulprint.self.primary_ip }" {
 		t.Errorf("got=%#v", got)
@@ -122,9 +122,9 @@ func TestResolveInputValues_FormatExprSkipped(t *testing.T) {
 func TestResolveInputValues_FormatArrayItems(t *testing.T) {
 	schema := schemaFromInput(t, "users:\n  type: array\n  items:\n    type: string\n    format: email\n")
 	if _, err := ResolveInputValues(schema, map[string]any{"users": []any{"a@b.ru", "bad-email"}}); err == nil {
-		t.Fatal("ожидалась ошибка: невалидный email-элемент массива")
+		t.Fatal("expected error: invalid email element of array")
 	}
 	if _, err := ResolveInputValues(schema, map[string]any{"users": []any{"a@b.ru", "c@d.ru"}}); err != nil {
-		t.Fatalf("валидные email-элементы должны проходить: %v", err)
+		t.Fatalf("valid email elements must pass: %v", err)
 	}
 }

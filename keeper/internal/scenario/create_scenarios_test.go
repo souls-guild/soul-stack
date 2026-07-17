@@ -62,12 +62,12 @@ func TestResolveCreateScenarios_OnlyFlagged(t *testing.T) {
 	}
 	for _, want := range []string{"create", "create_cluster"} {
 		if _, ok := set[want]; !ok {
-			t.Errorf("create-набор должен содержать %q; set=%v", want, set)
+			t.Errorf("create set should contain %q; set=%v", want, set)
 		}
 	}
 	for _, notWant := range []string{"add_user", "restart"} {
 		if _, ok := set[notWant]; ok {
-			t.Errorf("create-набор НЕ должен содержать %q; set=%v", notWant, set)
+			t.Errorf("create set should NOT contain %q; set=%v", notWant, set)
 		}
 	}
 }
@@ -86,10 +86,10 @@ func TestResolveCreateScenarios_CreateNotPrivileged(t *testing.T) {
 		t.Fatalf("ResolveCreateScenarios: %v", err)
 	}
 	if _, ok := set[CreateScenarioName]; ok {
-		t.Errorf("`create` без флага create:true НЕ должен быть в наборе; set=%v", set)
+		t.Errorf("`create` without the create:true flag should NOT be in the set; set=%v", set)
 	}
 	if len(set) != 0 {
-		t.Errorf("набор должен быть пуст (нет create:true); set=%v", set)
+		t.Errorf("set should be empty (no create:true); set=%v", set)
 	}
 }
 
@@ -106,7 +106,7 @@ func TestResolveCreateScenarios_EmptyWhenNoFlags(t *testing.T) {
 		t.Fatalf("ResolveCreateScenarios: %v", err)
 	}
 	if len(set) != 0 {
-		t.Errorf("набор должен быть пуст (нет create-сценариев); set=%v", set)
+		t.Errorf("set should be empty (no create-scenarios); set=%v", set)
 	}
 }
 
@@ -133,7 +133,7 @@ func TestValidateCreateScenarioChoice_EmptyHasScenarios_Required(t *testing.T) {
 		t.Fatalf("err = %v, want ErrCreateScenarioRequired", err)
 	}
 	if bare {
-		t.Errorf("bare = true, want false (набор непуст)")
+		t.Errorf("bare = true, want false (set is non-empty)")
 	}
 	if name != "" {
 		t.Errorf("name = %q, want \"\"", name)
@@ -152,7 +152,7 @@ func TestValidateCreateScenarioChoice_EmptyNoScenarios_Bare(t *testing.T) {
 		t.Fatalf("ValidateCreateScenarioChoice(\"\", no-scenarios): %v", err)
 	}
 	if !bare {
-		t.Errorf("bare = false, want true (нет create-сценариев)")
+		t.Errorf("bare = false, want true (no create-scenarios)")
 	}
 	if name != "" {
 		t.Errorf("name = %q, want \"\" (bare)", name)
@@ -171,7 +171,7 @@ func TestValidateCreateScenarioChoice_FlaggedOK(t *testing.T) {
 		t.Fatalf("ValidateCreateScenarioChoice(create_cluster): %v", err)
 	}
 	if bare {
-		t.Errorf("bare = true, want false (явный выбор)")
+		t.Errorf("bare = true, want false (explicit selection)")
 	}
 	if name != "create_cluster" {
 		t.Fatalf("resolved name = %q, want create_cluster", name)
@@ -204,7 +204,7 @@ func TestValidateCreateScenarioChoice_CreateWithoutFlag_NotEligible(t *testing.T
 
 	_, _, err := ValidateCreateScenarioChoice(context.Background(), &fakeCreateLoader{localDir: root}, artifact.ServiceRef{Name: "svc"}, "create")
 	if !errors.Is(err, ErrCreateScenarioNotEligible) {
-		t.Fatalf("err = %v, want ErrCreateScenarioNotEligible (create без флага не привилегирован)", err)
+		t.Fatalf("err = %v, want ErrCreateScenarioNotEligible (create without the flag is not privileged)", err)
 	}
 }
 
@@ -255,17 +255,17 @@ func TestResolveCreatePlan_NilLoader_StubPlan(t *testing.T) {
 		t.Fatalf("ResolveCreatePlan(nil loader): %v", err)
 	}
 	if plan.CreateScenario != CreateScenarioName {
-		t.Errorf("CreateScenario = %q, want %q (stub-дефолт)", plan.CreateScenario, CreateScenarioName)
+		t.Errorf("CreateScenario = %q, want %q (stub default)", plan.CreateScenario, CreateScenarioName)
 	}
 	if plan.BareNoScenario {
-		t.Error("BareNoScenario = true, want false (stub-план не bare)")
+		t.Error("BareNoScenario = true, want false (stub plan is not bare)")
 	}
 	if !plan.AutoCreate {
-		t.Error("AutoCreate = false, want true (stub-дефолт)")
+		t.Error("AutoCreate = false, want true (stub default)")
 	}
 	// PreflightAssert is called with the incarnation name and the stub `create` scenario.
 	if !pf.called {
-		t.Fatal("PreflightAssert НЕ вызван при nil-loader (регресс: исходный handler звал его вне loader-ветки)")
+		t.Fatal("PreflightAssert NOT called with a nil-loader (regression: the original handler called it outside the loader branch)")
 	}
 	if pf.gotSpec.IncarnationName != "redis-prod" {
 		t.Errorf("preflight IncarnationName = %q, want redis-prod", pf.gotSpec.IncarnationName)
@@ -285,7 +285,7 @@ func TestResolveCreatePlan_AssertFails_Propagated(t *testing.T) {
 	_, err := ResolveCreatePlan(context.Background(), nil, pf, "redis-prod",
 		artifact.ServiceRef{Name: "redis", Ref: "v1"}, "", nil, "archon-alice")
 	if !errors.Is(err, ErrAssertFailed) {
-		t.Fatalf("err = %v, want ErrAssertFailed (проброс из preflighter)", err)
+		t.Fatalf("err = %v, want ErrAssertFailed (propagated from the preflighter)", err)
 	}
 }
 
@@ -319,13 +319,13 @@ func TestResolveCreatePlan_Bare_NoPreflight(t *testing.T) {
 		t.Fatalf("ResolveCreatePlan(bare): %v", err)
 	}
 	if !plan.BareNoScenario {
-		t.Error("BareNoScenario = false, want true (пустой набор)")
+		t.Error("BareNoScenario = false, want true (empty set)")
 	}
 	if plan.CreateScenario != "" {
 		t.Errorf("CreateScenario = %q, want \"\" (bare)", plan.CreateScenario)
 	}
 	if pf.called {
-		t.Error("PreflightAssert вызван для bare-плана (гейт !bare нарушен)")
+		t.Error("PreflightAssert called for a bare plan (the !bare gate is violated)")
 	}
 }
 
@@ -345,6 +345,6 @@ func TestResolveCreatePlan_Required_Error(t *testing.T) {
 		t.Fatalf("err = %v, want ErrCreateScenarioRequired", err)
 	}
 	if pf.called {
-		t.Error("PreflightAssert вызван при required-ошибке (должен быть отказ ДО гейта)")
+		t.Error("PreflightAssert called on a required-error (should be rejected BEFORE the gate)")
 	}
 }

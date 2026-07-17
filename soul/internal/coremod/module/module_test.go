@@ -138,7 +138,7 @@ func (f *fixture) applyCtx(t *testing.T, ctx context.Context, params map[string]
 	}
 	last := stream.Last()
 	if last == nil {
-		t.Fatal("Apply не прислал финального события")
+		t.Fatal("Apply did not send a final event")
 	}
 	return last
 }
@@ -154,10 +154,10 @@ func (f *fixture) manifestPath() string {
 func wantFailedReason(t *testing.T, ev *pluginv1.ApplyEvent, reason string) {
 	t.Helper()
 	if !ev.GetFailed() {
-		t.Fatalf("ожидался failed, получено changed=%v message=%q", ev.GetChanged(), ev.GetMessage())
+		t.Fatalf("expected failed, got changed=%v message=%q", ev.GetChanged(), ev.GetMessage())
 	}
 	if !strings.HasPrefix(ev.GetMessage(), reason+":") {
-		t.Fatalf("message = %q; ожидался префикс %q", ev.GetMessage(), reason+":")
+		t.Fatalf("message = %q; expected prefix %q", ev.GetMessage(), reason+":")
 	}
 }
 
@@ -205,7 +205,7 @@ func TestApplyNotAllowedNoSigil(t *testing.T) {
 	ev := f.apply(t, map[string]any{"name": "community.mongo"})
 	wantFailedReason(t, ev, "module_not_allowed")
 	if f.fetcher.calls != 0 {
-		t.Errorf("fetch вызван %d раз(а) до allow-check; должен не вызываться", f.fetcher.calls)
+		t.Errorf("fetch called %d time(s) before allow-check; must not be called", f.fetcher.calls)
 	}
 }
 
@@ -214,7 +214,7 @@ func TestApplyNotAllowedRefMismatch(t *testing.T) {
 	ev := f.apply(t, map[string]any{"name": "community.redis", "ref": "v9.9.9"})
 	wantFailedReason(t, ev, "module_not_allowed")
 	if f.fetcher.calls != 0 {
-		t.Errorf("fetch вызван при ref-mismatch; pin-сверка должна отказывать до fetch")
+		t.Errorf("fetch called on ref-mismatch; pin check must reject before fetch")
 	}
 }
 
@@ -231,13 +231,13 @@ func TestApplyIdempotentSkipsFetch(t *testing.T) {
 
 	ev := f.apply(t, map[string]any{"name": "community.redis"})
 	if ev.GetFailed() {
-		t.Fatalf("ожидался успех, получен failed: %q", ev.GetMessage())
+		t.Fatalf("expected success, got failed: %q", ev.GetMessage())
 	}
 	if ev.GetChanged() {
-		t.Error("changed = true; слот с тем же sha должен давать changed=false")
+		t.Error("changed = true; a slot with the same sha should give changed=false")
 	}
 	if f.fetcher.calls != 0 {
-		t.Errorf("fetch вызван %d раз(а) при совпавшем sha; должен пропускаться", f.fetcher.calls)
+		t.Errorf("fetch called %d time(s) with a matching sha; should be skipped", f.fetcher.calls)
 	}
 }
 
@@ -247,10 +247,10 @@ func TestApplyInstallHappyPath(t *testing.T) {
 	f := newFixture(t)
 	ev := f.apply(t, map[string]any{"name": "community.redis", "ref": "v1.2.0"})
 	if ev.GetFailed() {
-		t.Fatalf("ожидался успех, получен failed: %q", ev.GetMessage())
+		t.Fatalf("expected success, got failed: %q", ev.GetMessage())
 	}
 	if !ev.GetChanged() {
-		t.Error("changed = false; установка нового модуля должна давать changed=true")
+		t.Error("changed = false; installing a new module should give changed=true")
 	}
 
 	if f.fetcher.gotReq.GetNamespace() != "community" || f.fetcher.gotReq.GetName() != "redis" {
@@ -262,25 +262,25 @@ func TestApplyInstallHappyPath(t *testing.T) {
 
 	got, err := os.ReadFile(f.binPath())
 	if err != nil {
-		t.Fatalf("бинарь не материализован: %v", err)
+		t.Fatalf("binary not materialized: %v", err)
 	}
 	if string(got) != string(f.binData) {
-		t.Error("содержимое установленного бинаря не совпало с fetch-байтами")
+		t.Error("installed binary content did not match fetch bytes")
 	}
 	st, err := os.Stat(f.binPath())
 	if err != nil {
 		t.Fatal(err)
 	}
 	if st.Mode().Perm()&0o111 == 0 {
-		t.Errorf("бинарь не исполняемый: mode %o", st.Mode().Perm())
+		t.Errorf("binary is not executable: mode %o", st.Mode().Perm())
 	}
 
 	mf, err := os.ReadFile(f.manifestPath())
 	if err != nil {
-		t.Fatalf("manifest.yaml не материализован: %v", err)
+		t.Fatalf("manifest.yaml not materialized: %v", err)
 	}
 	if string(mf) != testManifest {
-		t.Errorf("manifest.yaml = %q; ожидались сырые байты manifest_raw допуска", string(mf))
+		t.Errorf("manifest.yaml = %q; expected raw manifest_raw admission bytes", string(mf))
 	}
 }
 
@@ -291,7 +291,7 @@ func TestApplyVerifyFailedWrongBytes(t *testing.T) {
 	ev := f.apply(t, map[string]any{"name": "community.redis"})
 	wantFailedReason(t, ev, "module_verify_failed")
 	if _, err := os.Stat(f.binPath()); !os.IsNotExist(err) {
-		t.Errorf("бинарь материализован при проваленном verify (stat err=%v)", err)
+		t.Errorf("binary materialized on failed verify (stat err=%v)", err)
 	}
 }
 
@@ -302,7 +302,7 @@ func TestApplyVerifyFailedBadSignature(t *testing.T) {
 	ev := f.apply(t, map[string]any{"name": "community.redis"})
 	wantFailedReason(t, ev, "module_verify_failed")
 	if _, err := os.Stat(f.binPath()); !os.IsNotExist(err) {
-		t.Errorf("бинарь материализован при невалидной подписи (stat err=%v)", err)
+		t.Errorf("binary materialized with an invalid signature (stat err=%v)", err)
 	}
 }
 
@@ -324,7 +324,7 @@ func TestApplyFetchStreamBroken(t *testing.T) {
 	ev := f.apply(t, map[string]any{"name": "community.redis"})
 	wantFailedReason(t, ev, "module_fetch_failed")
 	if _, err := os.Stat(f.binPath()); !os.IsNotExist(err) {
-		t.Errorf("бинарь материализован при оборванном fetch (stat err=%v)", err)
+		t.Errorf("binary materialized on an aborted fetch (stat err=%v)", err)
 	}
 }
 
@@ -341,6 +341,6 @@ func TestApplyUnknownState(t *testing.T) {
 		t.Fatalf("Apply: %v", err)
 	}
 	if last := stream.Last(); last == nil || !last.GetFailed() {
-		t.Fatalf("ожидался failed на unknown state, получено %v", last)
+		t.Fatalf("expected failed on unknown state, got %v", last)
 	}
 }

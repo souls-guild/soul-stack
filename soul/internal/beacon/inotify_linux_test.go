@@ -28,10 +28,10 @@ func TestInotify_QuietThenEvents(t *testing.T) {
 
 	state, _, err := b.Check(context.Background(), params)
 	if err != nil {
-		t.Fatalf("первый Check: %v", err)
+		t.Fatalf("first Check: %v", err)
 	}
 	if state != stateInotifyQuiet {
-		t.Fatalf("первый Check без событий должен быть quiet, got %q", state)
+		t.Fatalf("first Check with no events should be quiet, got %q", state)
 	}
 
 	if err := os.WriteFile(filepath.Join(dir, "x"), []byte("v"), 0o644); err != nil {
@@ -42,10 +42,10 @@ func TestInotify_QuietThenEvents(t *testing.T) {
 
 	state, data, err := b.Check(context.Background(), params)
 	if err != nil {
-		t.Fatalf("второй Check: %v", err)
+		t.Fatalf("second Check: %v", err)
 	}
 	if state != stateInotifyEvents {
-		t.Fatalf("после touch ожидали state=events, got %q", state)
+		t.Fatalf("after touch expected state=events, got %q", state)
 	}
 	if data.GetFields()["count"].GetNumberValue() < 1 {
 		t.Errorf("data.count = %v, want >= 1", data.GetFields()["count"].GetNumberValue())
@@ -55,11 +55,11 @@ func TestInotify_QuietThenEvents(t *testing.T) {
 	}
 	events := data.GetFields()["events"].GetListValue().GetValues()
 	if len(events) == 0 {
-		t.Fatal("data.events пуст после touch")
+		t.Fatal("data.events empty after touch")
 	}
 	firstType := events[0].GetStructValue().GetFields()["type"].GetStringValue()
 	if firstType != "created" && firstType != "modified" {
-		t.Errorf("первое событие type=%q, want created/modified", firstType)
+		t.Errorf("first event type=%q, want created/modified", firstType)
 	}
 }
 
@@ -91,10 +91,10 @@ func TestInotify_FilterCreatedOnly(t *testing.T) {
 
 	state, _, err := b.Check(context.Background(), params)
 	if err != nil {
-		t.Fatalf("Check после modify: %v", err)
+		t.Fatalf("Check after modify: %v", err)
 	}
 	if state != stateInotifyQuiet {
-		t.Errorf("modify не в фильтре, но state=%q", state)
+		t.Errorf("modify is not in the filter, but state=%q", state)
 	}
 
 	// IN_CREATE — should land.
@@ -105,10 +105,10 @@ func TestInotify_FilterCreatedOnly(t *testing.T) {
 
 	state, data, err := b.Check(context.Background(), params)
 	if err != nil {
-		t.Fatalf("Check после create: %v", err)
+		t.Fatalf("Check after create: %v", err)
 	}
 	if state != stateInotifyEvents {
-		t.Errorf("create в фильтре, но state=%q", state)
+		t.Errorf("create is in the filter, but state=%q", state)
 	}
 	if got := data.GetFields()["count"].GetNumberValue(); got < 1 {
 		t.Errorf("count=%v, want >= 1", got)
@@ -125,7 +125,7 @@ func TestInotify_MissingPath(t *testing.T) {
 	b := NewInotify()
 	_, _, err := b.Check(context.Background(), paramStruct(t, map[string]any{"path": absent}))
 	if err == nil {
-		t.Fatal("ожидали ошибку на отсутствующий path")
+		t.Fatal("expected an error for a missing path")
 	}
 }
 
@@ -138,7 +138,7 @@ func TestInotify_RecursiveRejected(t *testing.T) {
 		"recursive": true,
 	}))
 	if err == nil {
-		t.Fatal("recursive=true должно отвергаться в MVP")
+		t.Fatal("recursive=true must be rejected in MVP")
 	}
 }
 
@@ -146,7 +146,7 @@ func TestInotify_RecursiveRejected(t *testing.T) {
 func TestInotify_MissingParam(t *testing.T) {
 	b := NewInotify()
 	if _, _, err := b.Check(context.Background(), paramStruct(t, map[string]any{})); err == nil {
-		t.Fatal("ожидали ошибку при отсутствии param path")
+		t.Fatal("expected an error when param path is missing")
 	}
 }
 
@@ -181,7 +181,7 @@ func TestInotify_MultipleVigilsSeparateWatches(t *testing.T) {
 		t.Fatalf("Check B: %v", err)
 	}
 	if stateB != stateInotifyQuiet {
-		t.Errorf("watch B не должен видеть событие из A, state=%q", stateB)
+		t.Errorf("watch B must not see the event from A, state=%q", stateB)
 	}
 
 	// A should pick up the event.
@@ -190,7 +190,7 @@ func TestInotify_MultipleVigilsSeparateWatches(t *testing.T) {
 		t.Fatalf("Check A: %v", err)
 	}
 	if stateA != stateInotifyEvents {
-		t.Errorf("watch A должен видеть своё событие, state=%q", stateA)
+		t.Errorf("watch A must see its own event, state=%q", stateA)
 	}
 }
 
@@ -202,10 +202,10 @@ func TestInotify_RegistryAndDefault(t *testing.T) {
 	reg := Default()
 	b, ok := reg.Lookup(InotifyName)
 	if !ok {
-		t.Fatalf("InotifyName=%q отсутствует в Default()", InotifyName)
+		t.Fatalf("InotifyName=%q is missing from Default()", InotifyName)
 	}
 	if _, isInotify := b.(*InotifyBeacon); !isInotify {
-		t.Errorf("Lookup(%q) вернул %T, want *InotifyBeacon", InotifyName, b)
+		t.Errorf("Lookup(%q) returned %T, want *InotifyBeacon", InotifyName, b)
 	}
 }
 
@@ -232,7 +232,7 @@ func TestInotify_SchedulerEdgeTriggered(t *testing.T) {
 	// Baseline (first tick) — no Portent.
 	select {
 	case ev := <-s.Portents():
-		t.Fatalf("baseline не должен эмитить Portent, got %q", ev.GetBeaconName())
+		t.Fatalf("baseline must not emit Portent, got %q", ev.GetBeaconName())
 	case <-time.After(200 * time.Millisecond):
 	}
 
@@ -247,11 +247,11 @@ func TestInotify_SchedulerEdgeTriggered(t *testing.T) {
 		}
 		// V5-1 dual-write: data + typed payload.
 		if ev.GetData() == nil {
-			t.Error("data-ветка пуста (нарушение deprecation hand-off)")
+			t.Error("data branch is empty (deprecation hand-off violation)")
 		}
 		ino := ev.GetInotify()
 		if ino == nil {
-			t.Fatal("typed payload InotifyPortent пуст")
+			t.Fatal("typed payload InotifyPortent is empty")
 		}
 		if ino.GetPath() != dir {
 			t.Errorf("InotifyPortent.path=%q, want %q", ino.GetPath(), dir)
@@ -260,10 +260,10 @@ func TestInotify_SchedulerEdgeTriggered(t *testing.T) {
 			t.Errorf("InotifyPortent.count=%d, want >= 1", ino.GetCount())
 		}
 		if len(ino.GetEvents()) == 0 {
-			t.Error("InotifyPortent.events пуст")
+			t.Error("InotifyPortent.events is empty")
 		}
 	case <-time.After(3 * time.Second):
-		t.Fatal("touch файла не поднял Portent через scheduler")
+		t.Fatal("touching the file did not raise a Portent through the scheduler")
 	}
 }
 

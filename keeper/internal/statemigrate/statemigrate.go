@@ -59,13 +59,13 @@ func Apply(ctx context.Context, state map[string]any, chain Chain, ev Evaluator)
 		if i > 0 && chain[i-1].ToVersion != m.FromVersion {
 			return Result{}, &EvalError{
 				Class: ClassChainVersion,
-				Msg:   fmt.Sprintf("разрыв цепочки: шаг %d→%d следует за %d→%d", m.FromVersion, m.ToVersion, chain[i-1].FromVersion, chain[i-1].ToVersion),
+				Msg:   fmt.Sprintf("chain break: step %d->%d follows %d->%d", m.FromVersion, m.ToVersion, chain[i-1].FromVersion, chain[i-1].ToVersion),
 			}
 		}
 
 		before := deepCopyMap(cur)
 		if err := applyOps(m.Transform, cur, ev, nil); err != nil {
-			return Result{}, fmt.Errorf("миграция %d→%d: %w", m.FromVersion, m.ToVersion, err)
+			return Result{}, fmt.Errorf("migration %d->%d: %w", m.FromVersion, m.ToVersion, err)
 		}
 		steps = append(steps, StepSnapshot{
 			FromVersion: m.FromVersion,

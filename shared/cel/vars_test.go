@@ -13,7 +13,7 @@ func TestEvalInterpolation_Vars(t *testing.T) {
 		t.Fatalf("EvalInterpolation: %v", err)
 	}
 	if out != "ping 10.0.0.1" {
-		t.Fatalf("ожидали %q, получили %q", "ping 10.0.0.1", out)
+		t.Fatalf("expected %q, got %q", "ping 10.0.0.1", out)
 	}
 }
 
@@ -28,7 +28,7 @@ func TestEvalExpression_Vars(t *testing.T) {
 		t.Fatalf("EvalExpression: %v", err)
 	}
 	if got := val.Value(); got != true {
-		t.Fatalf("ожидали true, получили %v", got)
+		t.Fatalf("expected true, got %v", got)
 	}
 }
 
@@ -38,6 +38,6 @@ func TestEvalExpression_VarsEmptyNoPanic(t *testing.T) {
 	e := newEngine(t)
 
 	if _, err := e.EvalExpression("vars.absent", Vars{}); err == nil {
-		t.Fatal("ожидали no-such-key для пустого Vars, получили nil")
+		t.Fatal("expected no-such-key for empty Vars, got nil")
 	}
 }

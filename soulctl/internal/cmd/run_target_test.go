@@ -22,7 +22,7 @@ func TestTargetFlagsParsingCSV(t *testing.T) {
 		t.Errorf("Coven: got %v", got.Coven)
 	}
 	if got.Where != "" {
-		t.Errorf("Where должен быть пустым: %q", got.Where)
+		t.Errorf("Where should be empty: %q", got.Where)
 	}
 }
 
@@ -68,22 +68,22 @@ func TestTargetFlagsQuoteEscape(t *testing.T) {
 func TestTargetFlagsEmptyHasAny(t *testing.T) {
 	r, _ := (targetFlags{}).resolve()
 	if r.hasAny() {
-		t.Error("empty target должен hasAny()==false")
+		t.Error("empty target should have hasAny()==false")
 	}
 	r2, _ := (targetFlags{SIDs: "host1"}).resolve()
 	if !r2.hasAny() {
-		t.Error("SIDs-only target должен hasAny()==true")
+		t.Error("SIDs-only target should have hasAny()==true")
 	}
 }
 
 func TestTargetFlagsRequire(t *testing.T) {
 	r, _ := (targetFlags{}).resolve()
 	if err := r.require(); err == nil {
-		t.Error("require() должен ошибиться при пустом target")
+		t.Error("require() should fail on empty target")
 	}
 	r2, _ := (targetFlags{Where: "x"}).resolve()
 	if err := r2.require(); err != nil {
-		t.Errorf("require() не должен ошибаться: %v", err)
+		t.Errorf("require() should not fail: %v", err)
 	}
 }
 

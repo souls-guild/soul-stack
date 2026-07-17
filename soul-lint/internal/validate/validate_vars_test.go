@@ -46,14 +46,14 @@ func TestValidateDestiny_VarsCollisionWarn(t *testing.T) {
 	var out, errOut bytes.Buffer
 	code := Run(Options{Path: path, Kind: KindDestiny}, &out, &errOut)
 	if code != ExitOK {
-		t.Fatalf("exit = %d, want ExitOK (warning не ошибка)\nstdout: %s", code, out.String())
+		t.Fatalf("exit = %d, want ExitOK (warning is not an error)\nstdout: %s", code, out.String())
 	}
 	s := out.String()
 	if !strings.Contains(s, "vars_collision") {
-		t.Errorf("ожидался warn vars_collision в выводе, got: %s", s)
+		t.Errorf("expected warn vars_collision in output, got: %s", s)
 	}
 	if !strings.Contains(s, "unit") {
-		t.Errorf("ожидалось имя 'unit' в warn, got: %s", s)
+		t.Errorf("expected name 'unit' in warn, got: %s", s)
 	}
 }
 
@@ -74,7 +74,7 @@ func TestValidateDestiny_NoCollision_Clean(t *testing.T) {
 		t.Fatalf("exit = %d, want ExitOK", code)
 	}
 	if strings.Contains(out.String(), "vars_collision") {
-		t.Errorf("ложный warn vars_collision на непересекающихся именах: %s", out.String())
+		t.Errorf("false warn vars_collision on non-overlapping names: %s", out.String())
 	}
 }
 
@@ -96,6 +96,6 @@ func TestValidateDestiny_NoVarsYml_Clean(t *testing.T) {
 		t.Fatalf("exit = %d, want ExitOK", code)
 	}
 	if strings.Contains(out.String(), "vars_collision") {
-		t.Errorf("warn vars_collision без vars.yml — не должно быть: %s", out.String())
+		t.Errorf("warn vars_collision without vars.yml - should not happen: %s", out.String())
 	}
 }

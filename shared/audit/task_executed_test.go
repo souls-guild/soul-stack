@@ -38,10 +38,10 @@ func TestBuildTaskExecutedPayload_PlanIndexEmitted(t *testing.T) {
 		SID: "h", ApplyID: "a", TaskIdx: 2, PlanIndex: 9, Status: "TASK_STATUS_CHANGED",
 	})
 	if p["plan_index"] != 9 {
-		t.Errorf("plan_index = %v, want 9 (глобальный сквозной индекс)", p["plan_index"])
+		t.Errorf("plan_index = %v, want 9 (global sequential index)", p["plan_index"])
 	}
 	if p["task_idx"] != 2 {
-		t.Errorf("task_idx = %v, want 2 (локальный сохранён для наблюдаемости)", p["task_idx"])
+		t.Errorf("task_idx = %v, want 2 (local, kept for observability)", p["task_idx"])
 	}
 }
 
@@ -85,7 +85,7 @@ func TestBuildTaskExecutedPayload_NoLogSuppression(t *testing.T) {
 		t.Errorf("error.message leaked for no_log: %v (must be suppressed)", em["message"])
 	}
 	if em["module"] != "core.vault.kv-read" {
-		t.Errorf("error.module = %v, want core.vault.kv-read (module не подавляется)", em["module"])
+		t.Errorf("error.module = %v, want core.vault.kv-read (module is not suppressed)", em["module"])
 	}
 }
 

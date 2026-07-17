@@ -50,13 +50,13 @@ func TestClaim_AbortedGuard(t *testing.T) {
 
 	live := context.Background()
 	if c.aborted(live) {
-		t.Error("живой ctx не должен считаться drain-прерванным")
+		t.Error("a live ctx should not be considered drain-interrupted")
 	}
 
 	cctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	if !c.aborted(cctx) {
-		t.Error("отменённый claim-ctx должен считаться drain-прерванным")
+		t.Error("a cancelled claim-ctx should be considered drain-interrupted")
 	}
 }
 
@@ -70,10 +70,10 @@ func TestClaim_FailedSummaryMasksSecret(t *testing.T) {
 	summary := maskErrText(err, nil) // Acolyte path without a seal set → vault+regex layers
 
 	if strings.Contains(summary, "vault:secret/db-creds") {
-		t.Errorf("summary несёт голый vault-ref: %q", summary)
+		t.Errorf("summary carries a bare vault-ref: %q", summary)
 	}
 	if strings.Contains(summary, "***MASKED***") == false {
-		t.Errorf("summary не замаскирован: %q", summary)
+		t.Errorf("summary is not masked: %q", summary)
 	}
 }
 
@@ -94,7 +94,7 @@ func TestClaim_RecipeCarriesVaultRefAsIs(t *testing.T) {
 	}
 	// The persisted recipe carries exactly the vault-ref string, not a revealed value.
 	if !strings.Contains(string(b), "vault:secret/db-creds#password") {
-		t.Errorf("рецепт не несёт vault-ref как есть: %s", b)
+		t.Errorf("recipe does not carry the vault-ref as-is: %s", b)
 	}
 
 	back, err := applyrun.UnmarshalRecipe(b)
@@ -102,6 +102,6 @@ func TestClaim_RecipeCarriesVaultRefAsIs(t *testing.T) {
 		t.Fatalf("UnmarshalRecipe: %v", err)
 	}
 	if back.Input["db_password"] != "vault:secret/db-creds#password" {
-		t.Errorf("round-trip потерял vault-ref: %v", back.Input["db_password"])
+		t.Errorf("round-trip lost the vault-ref: %v", back.Input["db_password"])
 	}
 }

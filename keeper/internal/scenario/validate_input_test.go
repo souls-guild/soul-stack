@@ -58,10 +58,10 @@ func TestValidateInput_RequiredMissing_ErrInputInvalid(t *testing.T) {
 	// input WITHOUT the required field `name` (reproduces the "ba" bug).
 	err := ValidateInput(context.Background(), loader, artifact.ServiceRef{Name: "svc"}, "create", map[string]any{})
 	if err == nil {
-		t.Fatal("ожидалась ошибка для отсутствующего required-поля, got nil")
+		t.Fatal("expected an error for a missing required field, got nil")
 	}
 	if !errors.Is(err, ErrInputInvalid) {
-		t.Fatalf("err не оборачивает ErrInputInvalid: %v", err)
+		t.Fatalf("err does not wrap ErrInputInvalid: %v", err)
 	}
 }
 
@@ -70,7 +70,7 @@ func TestValidateInput_RequiredMissing_NilInput(t *testing.T) {
 	// nil input (field absent from JSON entirely) — same rejection as `{}`.
 	err := ValidateInput(context.Background(), loader, artifact.ServiceRef{Name: "svc"}, "create", nil)
 	if !errors.Is(err, ErrInputInvalid) {
-		t.Fatalf("nil input: ожидался ErrInputInvalid, got %v", err)
+		t.Fatalf("nil input: expected ErrInputInvalid, got %v", err)
 	}
 }
 
@@ -79,7 +79,7 @@ func TestValidateInput_RequiredProvided_OK(t *testing.T) {
 	err := ValidateInput(context.Background(), loader, artifact.ServiceRef{Name: "svc"}, "create",
 		map[string]any{"name": "alice"})
 	if err != nil {
-		t.Fatalf("валидный input: %v", err)
+		t.Fatalf("valid input: %v", err)
 	}
 }
 
@@ -89,7 +89,7 @@ func TestValidateInput_DefaultPresent_OK(t *testing.T) {
 	err := ValidateInput(context.Background(), loader, artifact.ServiceRef{Name: "svc"}, "create",
 		map[string]any{"name": "alice"})
 	if err != nil {
-		t.Fatalf("default-поле без передачи должно проходить: %v", err)
+		t.Fatalf("default field without a value should pass: %v", err)
 	}
 }
 
@@ -99,7 +99,7 @@ func TestValidateInput_TypeMismatch_ErrInputInvalid(t *testing.T) {
 	err := ValidateInput(context.Background(), loader, artifact.ServiceRef{Name: "svc"}, "create",
 		map[string]any{"name": "alice", "replicas": "not-int"})
 	if !errors.Is(err, ErrInputInvalid) {
-		t.Fatalf("type-mismatch: ожидался ErrInputInvalid, got %v", err)
+		t.Fatalf("type-mismatch: expected ErrInputInvalid, got %v", err)
 	}
 }
 
@@ -111,7 +111,7 @@ func TestValidateInput_EmptyStringForRequired_ErrInputInvalid(t *testing.T) {
 	err := ValidateInput(context.Background(), loader, artifact.ServiceRef{Name: "svc"}, "create",
 		map[string]any{"name": ""})
 	if !errors.Is(err, ErrInputInvalid) {
-		t.Fatalf("пустая строка для required: ожидался ErrInputInvalid, got %v", err)
+		t.Fatalf("empty string for required: expected ErrInputInvalid, got %v", err)
 	}
 }
 
@@ -129,22 +129,22 @@ tasks:
 `
 	loader := &fakeInputLoader{yaml: noInput}
 	if err := ValidateInput(context.Background(), loader, artifact.ServiceRef{Name: "svc"}, "create", nil); err != nil {
-		t.Fatalf("scenario без input: %v", err)
+		t.Fatalf("scenario without input: %v", err)
 	}
 	if err := ValidateInput(context.Background(), loader, artifact.ServiceRef{Name: "svc"}, "create",
 		map[string]any{"extra": "x"}); err != nil {
-		t.Fatalf("scenario без input + unknown key: %v", err)
+		t.Fatalf("scenario without input + unknown key: %v", err)
 	}
 }
 
 func TestValidateInput_NilLoader_ConfigError(t *testing.T) {
 	err := ValidateInput(context.Background(), nil, artifact.ServiceRef{Name: "svc"}, "create", nil)
 	if err == nil {
-		t.Fatal("nil loader должен давать config-ошибку")
+		t.Fatal("nil loader must yield a config error")
 	}
 	// NOT ErrInputInvalid (this is a config failure, not validation) → handler returns 500.
 	if errors.Is(err, ErrInputInvalid) {
-		t.Fatalf("nil loader не должен маппиться в ErrInputInvalid: %v", err)
+		t.Fatalf("nil loader must not map to ErrInputInvalid: %v", err)
 	}
 }
 
@@ -152,10 +152,10 @@ func TestValidateInput_LoadError_Propagated(t *testing.T) {
 	loader := &fakeInputLoader{loadErr: fmt.Errorf("git clone failed")}
 	err := ValidateInput(context.Background(), loader, artifact.ServiceRef{Name: "svc"}, "create", nil)
 	if err == nil {
-		t.Fatal("ошибка загрузки снапшота должна пробрасываться")
+		t.Fatal("snapshot load error must propagate")
 	}
 	if errors.Is(err, ErrInputInvalid) {
-		t.Fatalf("load-error не должен маппиться в ErrInputInvalid (это 5xx): %v", err)
+		t.Fatalf("load-error must not map to ErrInputInvalid (this is a 5xx): %v", err)
 	}
 }
 
@@ -189,13 +189,13 @@ func TestValidateInput_ValidateRuleFalse_ErrValidateFailed(t *testing.T) {
 	// tls=false (default), port=0 (default) → rule is false.
 	err := ValidateInput(context.Background(), loader, artifact.ServiceRef{Name: "svc"}, "create", map[string]any{})
 	if err == nil {
-		t.Fatal("ожидалась ошибка для нарушенного validate-правила, got nil")
+		t.Fatal("expected an error for a violated validate rule, got nil")
 	}
 	if !errors.Is(err, ErrValidateFailed) {
-		t.Fatalf("err не оборачивает ErrValidateFailed: %v", err)
+		t.Fatalf("err does not wrap ErrValidateFailed: %v", err)
 	}
 	if errors.Is(err, ErrInputInvalid) {
-		t.Fatalf("validate-провал не должен маппиться в ErrInputInvalid (различимые sentinel): %v", err)
+		t.Fatalf("validate failure must not map to ErrInputInvalid (distinct sentinels): %v", err)
 	}
 }
 
@@ -206,13 +206,13 @@ func TestValidateInput_ValidateRuleTrue_OK(t *testing.T) {
 	err := ValidateInput(context.Background(), loader, artifact.ServiceRef{Name: "svc"}, "create",
 		map[string]any{"port": 6379})
 	if err != nil {
-		t.Fatalf("валидный input (port>0): %v", err)
+		t.Fatalf("valid input (port>0): %v", err)
 	}
 	// tls=true also satisfies it (cross-field OR).
 	err = ValidateInput(context.Background(), loader, artifact.ServiceRef{Name: "svc"}, "create",
 		map[string]any{"tls": true})
 	if err != nil {
-		t.Fatalf("валидный input (tls=true): %v", err)
+		t.Fatalf("valid input (tls=true): %v", err)
 	}
 }
 
@@ -235,13 +235,13 @@ tasks: []
 	// port=0 fails the first; the second (port<65536) is true — but the first wins.
 	err := ValidateInput(context.Background(), loader, artifact.ServiceRef{Name: "svc"}, "create", map[string]any{})
 	if !errors.Is(err, ErrValidateFailed) {
-		t.Fatalf("ожидался ErrValidateFailed: %v", err)
+		t.Fatalf("expected ErrValidateFailed: %v", err)
 	}
 	if !strings.Contains(err.Error(), "PORT_MUST_BE_POSITIVE") {
-		t.Fatalf("ошибка должна нести message первого правила, got: %v", err)
+		t.Fatalf("error must carry the first rule's message, got: %v", err)
 	}
 	if strings.Contains(err.Error(), "PORT_TOO_LARGE") {
-		t.Fatalf("message второго правила не должен фигурировать (короткое замыкание): %v", err)
+		t.Fatalf("second rule's message must not appear (short-circuit): %v", err)
 	}
 }
 
@@ -253,9 +253,9 @@ func TestValidateInput_ValidateAfterSchema(t *testing.T) {
 	err := ValidateInput(context.Background(), loader, artifact.ServiceRef{Name: "svc"}, "create",
 		map[string]any{"port": "not-int"})
 	if !errors.Is(err, ErrInputInvalid) {
-		t.Fatalf("type-mismatch должен дать ErrInputInvalid до validate: %v", err)
+		t.Fatalf("type-mismatch must yield ErrInputInvalid before validate: %v", err)
 	}
 	if errors.Is(err, ErrValidateFailed) {
-		t.Fatalf("schema-провал не должен превращаться в validate-провал: %v", err)
+		t.Fatalf("schema failure must not turn into a validate failure: %v", err)
 	}
 }

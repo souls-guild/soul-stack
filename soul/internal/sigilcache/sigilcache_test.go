@@ -15,16 +15,16 @@ func TestReplaceAllGet(t *testing.T) {
 	c := New()
 
 	if got := c.Get("core", "pkg"); got != nil {
-		t.Fatalf("Get на пустом кеше: ожидался nil, получено %v", got)
+		t.Fatalf("Get on an empty cache: expected nil, got %v", got)
 	}
 
 	c.ReplaceAll([]*keeperv1.PluginSigil{sig("core", "pkg", "v1")})
 	got := c.Get("core", "pkg")
 	if got == nil {
-		t.Fatal("Get после ReplaceAll: ожидался Sigil, получен nil")
+		t.Fatal("Get after ReplaceAll: expected Sigil, got nil")
 	}
 	if got.GetRef() != "v1" {
-		t.Fatalf("ref: ожидался v1, получен %q", got.GetRef())
+		t.Fatalf("ref: expected v1, got %q", got.GetRef())
 	}
 }
 
@@ -39,11 +39,11 @@ func TestKeyIsNamespaceAndName(t *testing.T) {
 
 	core := c.Get("core", "pkg")
 	if core == nil || core.GetRef() != "v1" {
-		t.Fatalf("ожидался core/pkg ref=v1, получено %v", core)
+		t.Fatalf("expected core/pkg ref=v1, got %v", core)
 	}
 	comm := c.Get("community", "pkg")
 	if comm == nil || comm.GetRef() != "v9" {
-		t.Fatalf("одинаковый name в разных namespace должен быть разными слотами: %v", comm)
+		t.Fatalf("the same name in different namespaces must be different slots: %v", comm)
 	}
 }
 
@@ -60,7 +60,7 @@ func TestSurvivesReconnect(t *testing.T) {
 	// "Session 2" (after reconnect) sees the grant applied in session 1 —
 	// the same *Cache isn't recreated.
 	if got := c.Get("core", "file"); got == nil {
-		t.Fatal("кеш потерял допуск после условного reconnect — он не должен пере-создаваться на сессию")
+		t.Fatal("cache lost admission after a conditional reconnect - it must not be re-created per session")
 	}
 }
 
@@ -75,7 +75,7 @@ func TestReplaceAllAddsAndRevokes(t *testing.T) {
 		sig("core", "file", "v1"),
 	})
 	if c.Get("core", "pkg") == nil || c.Get("core", "file") == nil {
-		t.Fatal("ReplaceAll должен был добавить оба допуска")
+		t.Fatal("ReplaceAll should have added both admissions")
 	}
 
 	// Second snapshot: core/pkg revoked (missing), core/service added,
@@ -86,13 +86,13 @@ func TestReplaceAllAddsAndRevokes(t *testing.T) {
 	})
 
 	if c.Get("core", "pkg") != nil {
-		t.Fatal("revoke: отсутствующий в snapshot допуск должен быть забыт")
+		t.Fatal("revoke: admission missing from the snapshot must be forgotten")
 	}
 	if got := c.Get("core", "file"); got == nil || got.GetRef() != "v2" {
-		t.Fatalf("update: core/file ожидался ref=v2, получено %v", got)
+		t.Fatalf("update: core/file expected ref=v2, got %v", got)
 	}
 	if c.Get("core", "service") == nil {
-		t.Fatal("allow: новый допуск должен появиться")
+		t.Fatal("allow: a new admission should appear")
 	}
 }
 
@@ -102,12 +102,12 @@ func TestReplaceAllEmptyClears(t *testing.T) {
 	c := New()
 	c.ReplaceAll([]*keeperv1.PluginSigil{sig("core", "pkg", "v1")})
 	if c.Get("core", "pkg") == nil {
-		t.Fatal("предусловие: допуск должен быть в кеше")
+		t.Fatal("precondition: the admission must be in the cache")
 	}
 
 	c.ReplaceAll(nil)
 	if c.Get("core", "pkg") != nil {
-		t.Fatal("пустой/nil snapshot должен очистить кеш")
+		t.Fatal("empty/nil snapshot should clear the cache")
 	}
 }
 
@@ -121,10 +121,10 @@ func TestReplaceAllSkipsNilElements(t *testing.T) {
 		sig("core", "file", "v1"),
 	})
 	if c.Get("core", "pkg") == nil || c.Get("core", "file") == nil {
-		t.Fatal("ReplaceAll должен пропустить nil и сохранить валидные допуски")
+		t.Fatal("ReplaceAll should skip nil and keep valid admissions")
 	}
 	if c.Get("", "") != nil {
-		t.Fatal("nil-элемент не должен создавать запись по пустому ключу")
+		t.Fatal("a nil element must not create an entry under an empty key")
 	}
 }
 

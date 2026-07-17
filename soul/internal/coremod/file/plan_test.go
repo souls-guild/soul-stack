@@ -93,7 +93,7 @@ func TestPlan_Present_Missing_Drift(t *testing.T) {
 		t.Fatalf("changed=false, want true (missing file drift)")
 	}
 	if _, err := os.Stat(path); !os.IsNotExist(err) {
-		t.Fatalf("Plan создал файл %s (должен быть pure-read)", path)
+		t.Fatalf("Plan created file %s (should be pure-read)", path)
 	}
 }
 
@@ -156,10 +156,10 @@ func TestPlan_Present_Src_Missing_Drift(t *testing.T) {
 		t.Fatalf("Plan: %v", err)
 	}
 	if got := stream.last(); got == nil || !got.GetChanged() {
-		t.Fatal("changed=false, want true (dest отсутствует)")
+		t.Fatal("changed=false, want true (dest missing)")
 	}
 	if _, err := os.Stat(dst); !os.IsNotExist(err) {
-		t.Fatalf("Plan создал dest %s (должен быть pure-read)", dst)
+		t.Fatalf("Plan created dest %s (should be pure-read)", dst)
 	}
 }
 
@@ -199,10 +199,10 @@ func TestPlan_Present_Src_Unreadable_PlanFailed(t *testing.T) {
 		Params: mustStruct(t, map[string]any{"path": dst, "src": filepath.Join(t.TempDir(), "nope")}),
 	}, stream)
 	if err == nil {
-		t.Fatal("Plan вернул nil, want PlanFailed для нечитаемого src (не false-clean)")
+		t.Fatal("Plan returned nil, want PlanFailed for an unreadable src (not false-clean)")
 	}
 	if stream.last() != nil && !stream.last().GetChanged() {
-		t.Fatal("Plan отправил changed=false вместо PlanFailed (false-clean)")
+		t.Fatal("Plan sent changed=false instead of PlanFailed (false-clean)")
 	}
 }
 
@@ -229,6 +229,6 @@ func assertUnchanged(t *testing.T, path string, before fileState) {
 	t.Helper()
 	now := snapshot(t, path)
 	if now != before {
-		t.Fatalf("Plan изменил файл: %+v != before %+v (должен быть pure-read)", now, before)
+		t.Fatalf("Plan changed the file: %+v != before %+v (should be pure-read)", now, before)
 	}
 }

@@ -36,7 +36,7 @@ func TestRenderStateOps_ForeachList_FanOut(t *testing.T) {
 		t.Fatalf("RenderStateOps: %v", err)
 	}
 	if len(ops) != 3 {
-		t.Fatalf("★ ops = %d, want 3 (foreach по 3 элементам → 3 add)", len(ops))
+		t.Fatalf("* ops = %d, want 3 (foreach over 3 elements -> 3 add)", len(ops))
 	}
 	want := []string{"r1.example.com", "r2.example.com", "r3.example.com"}
 	for i, op := range ops {
@@ -44,10 +44,10 @@ func TestRenderStateOps_ForeachList_FanOut(t *testing.T) {
 			t.Errorf("ops[%d] = %+v, want add redis_hosts", i, op)
 		}
 		if op.Value != want[i] {
-			t.Errorf("ops[%d].Value = %v, want %v (биндинг sid → элемент)", i, op.Value, want[i])
+			t.Errorf("ops[%d].Value = %v, want %v (sid -> element binding)", i, op.Value, want[i])
 		}
 		if op.Match != "elem == sid" {
-			t.Errorf("ops[%d].Match = %q (протягивается строкой)", i, op.Match)
+			t.Errorf("ops[%d].Match = %q (carried through as a string)", i, op.Match)
 		}
 	}
 }
@@ -86,7 +86,7 @@ func TestRenderStateOps_ForeachMap_KeyValueBinding(t *testing.T) {
 		t.Fatalf("RenderStateOps: %v", err)
 	}
 	if len(ops) != 2 {
-		t.Fatalf("★ ops = %d, want 2 (foreach по 2 записям map → 2 modify)", len(ops))
+		t.Fatalf("* ops = %d, want 2 (foreach over 2 map entries -> 2 modify)", len(ops))
 	}
 	// Order is deterministic: alice < bob.
 	for i, wantKey := range []string{"alice", "bob"} {
@@ -104,7 +104,7 @@ func TestRenderStateOps_ForeachMap_KeyValueBinding(t *testing.T) {
 		}
 		val, ok := change["value"].(map[string]any)
 		if !ok || val["acl"] == nil {
-			t.Errorf("ops[%d] change.value = %+v, want map с acl", i, change["value"])
+			t.Errorf("ops[%d] change.value = %+v, want map with acl", i, change["value"])
 		}
 	}
 }
@@ -146,7 +146,7 @@ func TestForeachBindings_ListVsMap(t *testing.T) {
 		t.Fatalf("list: %v", err)
 	}
 	if len(listB) != 2 || listB[0]["sid"] != "a" || listB[1]["sid"] != "b" {
-		t.Errorf("list биндинги = %+v, want sid→элемент", listB)
+		t.Errorf("list bindings = %+v, want sid->element", listB)
 	}
 
 	mapB, err := foreachBindings("change", map[string]any{"bob": map[string]any{"acl": "x"}, "alice": map[string]any{"acl": "y"}})
@@ -156,14 +156,14 @@ func TestForeachBindings_ListVsMap(t *testing.T) {
 	// Deterministic order: alice < bob.
 	first := mapB[0]["change"].(map[string]any)
 	if first["key"] != "alice" {
-		t.Errorf("map биндинг[0].key = %v, want alice (сортировка ключей)", first["key"])
+		t.Errorf("map binding[0].key = %v, want alice (key sort)", first["key"])
 	}
 	if first["value"].(map[string]any)["acl"] != "y" {
-		t.Errorf("map биндинг[0].value.acl = %v, want y", first["value"])
+		t.Errorf("map binding[0].value.acl = %v, want y", first["value"])
 	}
 
 	// Scalar/nil → error (foreach requires a collection).
 	if _, err := foreachBindings("x", "scalar"); err == nil {
-		t.Error("foreach по скаляру должен дать ошибку")
+		t.Error("foreach over a scalar must return an error")
 	}
 }

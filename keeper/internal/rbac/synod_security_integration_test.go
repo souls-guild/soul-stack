@@ -88,10 +88,10 @@ func TestIntegration_SynodSubset_ForeignPermission_Denied(t *testing.T) {
 		CallerAID:   sub,
 	})
 	if !errors.Is(err, ErrPermissionNotHeld) {
-		t.Fatalf("err = %v, want ErrPermissionNotHeld (operator.create вне эффективных прав caller-а)", err)
+		t.Fatalf("err = %v, want ErrPermissionNotHeld (operator.create outside caller effective permissions)", err)
 	}
 	if roleExists(t, "esc-via-group") {
-		t.Error("роль создана несмотря на subset-check")
+		t.Error("role created despite the subset-check")
 	}
 }
 
@@ -123,10 +123,10 @@ func TestIntegration_SynodSubset_OwnedViaGroup_OK(t *testing.T) {
 		Permissions: []string{"role.create"},
 		CallerAID:   sub,
 	}); err != nil {
-		t.Fatalf("CreateRole (право через Synod, не должно быть ложного deny): %v", err)
+		t.Fatalf("CreateRole (permission via Synod, should not be a false deny): %v", err)
 	}
 	if !roleExists(t, "more-granters") {
-		t.Error("роль не создана (ложный deny — subset не учёл Synod-права caller-а)")
+		t.Error("role not created (false deny - subset did not account for the caller Synod permissions)")
 	}
 }
 
@@ -154,10 +154,10 @@ func TestIntegration_SynodSubset_WildcardViaGroup_Absent_Denied(t *testing.T) {
 		CallerAID:   sub,
 	})
 	if !errors.Is(err, ErrPermissionNotHeld) {
-		t.Fatalf("err = %v, want ErrPermissionNotHeld (`*` вне эффективных прав)", err)
+		t.Fatalf("err = %v, want ErrPermissionNotHeld (`*` outside effective permissions)", err)
 	}
 	if roleExists(t, "esc-wildcard") {
-		t.Error("роль с `*` создана несмотря на subset-check")
+		t.Error("role with `*` created despite the subset-check")
 	}
 }
 
@@ -189,10 +189,10 @@ func TestIntegration_SynodSubset_ScopedRoleViaGroup_Escalation_Denied(t *testing
 		CallerAID:   sub,
 	})
 	if !errors.Is(err, ErrPermissionNotHeld) {
-		t.Fatalf("err = %v, want ErrPermissionNotHeld (scope=prod через Synod не покрывает staging)", err)
+		t.Fatalf("err = %v, want ErrPermissionNotHeld (scope=prod via Synod does not cover staging)", err)
 	}
 	if roleExists(t, "synod-staging-esc") {
-		t.Error("роль создана несмотря на subset-check (scope-эскалация через Synod)")
+		t.Error("role created despite the subset-check (scope escalation via Synod)")
 	}
 
 	// prod is within scope → ok (scope inheritance from the Synod role works).
@@ -201,10 +201,10 @@ func TestIntegration_SynodSubset_ScopedRoleViaGroup_Escalation_Denied(t *testing
 		Permissions: []string{"incarnation.run on coven=prod"},
 		CallerAID:   sub,
 	}); err != nil {
-		t.Fatalf("CreateRole (в scope=prod через Synod): %v", err)
+		t.Fatalf("CreateRole (in scope=prod via Synod): %v", err)
 	}
 	if !roleExists(t, "synod-prod-ok") {
-		t.Error("роль не создана (ложный deny — scope от Synod-роли не учтён)")
+		t.Error("role not created (false deny - scope from the Synod role not accounted for)")
 	}
 }
 
@@ -237,7 +237,7 @@ func TestIntegration_SynodSubset_RevokedCallerViaGroup_NoPermissions(t *testing.
 		CallerAID:   sub,
 	})
 	if !errors.Is(err, ErrPermissionNotHeld) {
-		t.Fatalf("err = %v, want ErrPermissionNotHeld (revoked caller прав через Synod не держит)", err)
+		t.Fatalf("err = %v, want ErrPermissionNotHeld (revoked caller does not hold permissions via Synod)", err)
 	}
 }
 
@@ -263,7 +263,7 @@ func TestIntegration_SynodLockout_AdminViaGroup_Counted(t *testing.T) {
 		t.Fatalf("LockEffectiveClusterAdmins: %v", err)
 	}
 	if !containsAID(admins, "archon-grpadmin") {
-		t.Fatalf("admins = %v, want содержит archon-grpadmin (`*` через Synod)", admins)
+		t.Fatalf("admins = %v, want to contain archon-grpadmin (`*` via Synod)", admins)
 	}
 }
 
@@ -287,10 +287,10 @@ func TestIntegration_SynodLockout_RevokedAdminViaGroup_NotCounted(t *testing.T) 
 		t.Fatalf("LockEffectiveClusterAdmins: %v", err)
 	}
 	if containsAID(admins, "archon-grpadmin") {
-		t.Fatalf("admins = %v, revoked grpadmin не должен считаться admin-ом", admins)
+		t.Fatalf("admins = %v, revoked grpadmin should not count as admin", admins)
 	}
 	if len(admins) != 0 {
-		t.Fatalf("admins = %v, want пусто (единственный admin revoked)", admins)
+		t.Fatalf("admins = %v, want empty (the only admin revoked)", admins)
 	}
 }
 
@@ -316,10 +316,10 @@ func TestIntegration_SynodLockout_DeleteRole_SurvivorViaGroup_OK(t *testing.T) {
 
 	// Delete the direct extra-admin role — bob remains admin via Synod → ok.
 	if err := s.DeleteRole(context.Background(), "extra-admin"); err != nil {
-		t.Fatalf("DeleteRole (выживший admin через Synod): %v", err)
+		t.Fatalf("DeleteRole (surviving admin via Synod): %v", err)
 	}
 	if roleExists(t, "extra-admin") {
-		t.Error("роль не удалена")
+		t.Error("role not deleted")
 	}
 }
 
@@ -337,10 +337,10 @@ func TestIntegration_SynodLockout_DeleteRole_LastViaGroup_Locked(t *testing.T) {
 	// grp-admin-role is the only path to `*` (via Synod). Deleting it → lockout.
 	err := s.DeleteRole(context.Background(), "grp-admin-role")
 	if !errors.Is(err, ErrWouldLockOutCluster) {
-		t.Fatalf("err = %v, want ErrWouldLockOutCluster (удаление последней `*`-роли через Synod)", err)
+		t.Fatalf("err = %v, want ErrWouldLockOutCluster (deleting the last `*` role via Synod)", err)
 	}
 	if !roleExists(t, "grp-admin-role") {
-		t.Error("роль удалена несмотря на lockout (tx не откатилась)")
+		t.Error("role deleted despite the lockout (tx not rolled back)")
 	}
 }
 
@@ -364,7 +364,7 @@ func TestIntegration_SynodLockout_UpdateRole_SurvivorViaGroup_OK(t *testing.T) {
 	if err := s.UpdateRolePermissions(context.Background(), UpdateRolePermissionsInput{
 		Name: "extra-admin", Permissions: []string{"soul.list"}, CallerAID: "archon-alice",
 	}); err != nil {
-		t.Fatalf("UpdateRolePermissions (выживший admin через Synod): %v", err)
+		t.Fatalf("UpdateRolePermissions (surviving admin via Synod): %v", err)
 	}
 }
 
@@ -390,10 +390,10 @@ func TestIntegration_SynodLockout_RevokeOperator_AdminAlsoViaGroup_OK(t *testing
 	if err := s.RevokeOperator(context.Background(), RevokeOperatorInput{
 		RoleName: "direct-admin", AID: "archon-grpadmin",
 	}); err != nil {
-		t.Fatalf("RevokeOperator (admin держит `*` ещё и через Synod): %v", err)
+		t.Fatalf("RevokeOperator (admin still holds `*` via Synod too): %v", err)
 	}
 	if membershipCount(t, "direct-admin") != 0 {
-		t.Error("прямой membership не снят")
+		t.Error("direct membership not removed")
 	}
 	// The Synod path is alive — the admin set is not empty.
 	admins, err := LockEffectiveClusterAdmins(ctx, beginRoTx(t))
@@ -401,7 +401,7 @@ func TestIntegration_SynodLockout_RevokeOperator_AdminAlsoViaGroup_OK(t *testing
 		t.Fatalf("LockEffectiveClusterAdmins: %v", err)
 	}
 	if !containsAID(admins, "archon-grpadmin") {
-		t.Fatalf("admins = %v, want содержит archon-grpadmin (`*` через Synod после снятия прямого)", admins)
+		t.Fatalf("admins = %v, want to contain archon-grpadmin (`*` via Synod after removing the direct one)", admins)
 	}
 }
 
@@ -425,10 +425,10 @@ func TestIntegration_SynodLockout_RevokeOperator_LastDirectNoGroup_Locked(t *tes
 		RoleName: "cluster-admin", AID: "archon-alice",
 	})
 	if !errors.Is(err, ErrWouldLockOutCluster) {
-		t.Fatalf("err = %v, want ErrWouldLockOutCluster (последний прямой admin, Synod не держит `*`)", err)
+		t.Fatalf("err = %v, want ErrWouldLockOutCluster (last direct admin, Synod does not hold `*`)", err)
 	}
 	if membershipCount(t, "cluster-admin") != 1 {
-		t.Error("membership снят несмотря на lockout (tx не откатилась)")
+		t.Error("membership removed despite the lockout (tx not rolled back)")
 	}
 }
 
@@ -451,6 +451,6 @@ func TestIntegration_SynodLockout_OperatorRevoke_LastAdminViaGroup_Counted(t *te
 		t.Fatalf("LockEffectiveClusterAdmins: %v", err)
 	}
 	if len(admins) != 1 || admins[0] != "archon-grpadmin" {
-		t.Fatalf("admins = %v, want [archon-grpadmin] (единственный admin через Synod)", admins)
+		t.Fatalf("admins = %v, want [archon-grpadmin] (the only admin via Synod)", admins)
 	}
 }

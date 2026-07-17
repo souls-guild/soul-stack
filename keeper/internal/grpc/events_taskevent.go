@@ -34,7 +34,7 @@ import (
 // `task.cancelled` audit-event is post-MVP (filtering by `payload->>'status'`
 // in `audit_log` covers the practical use case without duplicating the enum).
 //
-// Persisting into `incarnation.run_state` (PM-decision 3 “optional”) is post-MVP:
+// Persisting into `incarnation.run_state` (PM-decision 3 "optional") is post-MVP:
 // in MVP, run-time state is not materialized as a separate table — the outcome is recorded
 // in one motion via `RunResult` (see [handleRunResult]).
 func (h *eventStreamHandler) handleTaskEvent(ctx context.Context, sid, sessionID string, ev *keeperv1.TaskEvent) {
@@ -123,7 +123,7 @@ func (h *eventStreamHandler) handleTaskEvent(ctx context.Context, sid, sessionID
 // here, on the write path — vault-ref / secret-shaped values in a task's stderr
 // won't leak. For a no_log task (echoing TaskEvent.no_log, apply.proto), message
 // (= stderr) may carry an arbitrary plaintext secret that MaskSecrets doesn't
-// catch — so the summary is entirely replaced with the neutral “(no_log task failed)”
+// catch — so the summary is entirely replaced with the neutral "(no_log task failed)"
 // right here, on the write path. This is defense-in-depth: the run-goroutine
 // (scenario.dispatch) does the same, holding []RenderedTask with NoLog, but on
 // multi-Keeper (ADR-002) it may have ended up on a different instance; the floor in dispatch
@@ -283,7 +283,7 @@ func (h *eventStreamHandler) accumulateRegister(ctx context.Context, sid string,
 // vault-ref) is NOT placed into SSE at all: the frame only carries code/module for triage.
 // The operator gets the detailed, safe reason via `status_details`/GET
 // (which has no_log suppression + a second MaskSecrets pass, see scenario.failureReason).
-// Symmetric to “(no_log task failed)” in dispatch, but stricter — a floor for all
+// Symmetric to "(no_log task failed)" in dispatch, but stricter — a floor for all
 // failed tasks, without depending on cross-Keeper propagation of run state.
 //
 // For NON-failed tasks (ok/changed), `error` is absent (TaskError is populated
@@ -292,7 +292,7 @@ func (h *eventStreamHandler) accumulateRegister(ctx context.Context, sid string,
 // second barrier for register/state_changes secrets by vault-ref/keys.
 //
 // A no_log task additionally carries a suppressed:"no_log" marker — so the client
-// can see the reason for a “quiet” frame (error without message), instead of treating it as data loss.
+// can see the reason for a "quiet" frame (error without message), instead of treating it as data loss.
 func (h *eventStreamHandler) publishTaskExecuted(sid string, ev *keeperv1.TaskEvent) {
 	if h.deps.ApplyBus == nil {
 		return
@@ -308,7 +308,7 @@ func (h *eventStreamHandler) publishTaskExecuted(sid string, ev *keeperv1.TaskEv
 		"passage": ev.GetPassage(),
 	}
 	// A marker for intentional suppression, for UX (SSE already floors error.message and doesn't
-	// carry register_data; the marker lets the client see the reason for a “quiet” frame).
+	// carry register_data; the marker lets the client see the reason for a "quiet" frame).
 	if ev.GetNoLog() {
 		payload["suppressed"] = "no_log"
 	}

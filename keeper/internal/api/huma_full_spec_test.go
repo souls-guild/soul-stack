@@ -43,9 +43,9 @@ func TestFullSpec_NoPathMethodCollision(t *testing.T) {
 		ops += len(pathItemOps(item))
 	}
 	if ops < 100 {
-		t.Fatalf("withбраbut %d операций — ожидалось ~120; возможon уwithхшая регистрация групп", ops)
+		t.Fatalf("got %d operations - expected ~120; possibly a group registration failed", ops)
 	}
-	t.Logf("gate (а): %d путей, %d операций, дублей path+method нет", len(spec.Paths), ops)
+	t.Logf("gate (a): %d paths, %d operations, no path+method duplicates", len(spec.Paths), ops)
 }
 
 // TestFullSpec_NoSchemaCollision — gate (b), the main unknown. buildFullOpenAPISpec
@@ -55,7 +55,7 @@ func TestFullSpec_NoPathMethodCollision(t *testing.T) {
 func TestFullSpec_NoSchemaCollision(t *testing.T) {
 	// The direct build must pass without a collision.
 	if _, err := buildFullOpenAPISpec(); err != nil {
-		t.Fatalf("schema-merge коллfromия (gate б): %v\n→ needs_architect: as namespace-ить одbutимённые схемы разных toмеbutв", err)
+		t.Fatalf("schema-merge collision (gate b): %v\n-> needs_architect: how to namespace same-named schemas from different domains", err)
 	}
 
 	// Independent iteration over groups: for each schema name we collect the set of
@@ -67,7 +67,7 @@ func TestFullSpec_NoSchemaCollision(t *testing.T) {
 	for i, g := range fullSpecGroups() {
 		api := newHumaCadenceAPI(chi.NewRouter())
 		if err := g.register(api); err != nil {
-			t.Fatalf("группа #%d register: %v", i, err)
+			t.Fatalf("group #%d register: %v", i, err)
 		}
 		for name, sch := range api.OpenAPI().Components.Schemas.Map() {
 			body, err := yamlMarshalSchema(sch)
@@ -90,7 +90,7 @@ func TestFullSpec_NoSchemaCollision(t *testing.T) {
 	}
 	if len(collided) > 0 {
 		sort.Strings(collided)
-		t.Fatalf("gate (б) ПРОВАЛЕН: схемы с одним именем but РАЗНЫМ bodyм между toмеonми: %v\n→ needs_architect", collided)
+		t.Fatalf("gate (b) FAILED: schemas with the same name but DIFFERENT bodies between domains: %v\n-> needs_architect", collided)
 	}
 
 	var shared []string
@@ -100,7 +100,7 @@ func TestFullSpec_NoSchemaCollision(t *testing.T) {
 		}
 	}
 	sort.Strings(shared)
-	t.Logf("gate (б): 0 коллfromий; одbutимённые схемы с идентичным bodyм (безопасный дедуп): %v", shared)
+	t.Logf("gate (b): 0 collisions; same-named schemas with identical body (safe dedup): %v", shared)
 }
 
 // TestFullSpec_ValidOpenAPI31 — gate (c). Parses the YAML of the assembled spec and checks
@@ -114,27 +114,27 @@ func TestFullSpec_ValidOpenAPI31(t *testing.T) {
 
 	var doc map[string]any
 	if err := yaml.Unmarshal([]byte(y), &doc); err != nil {
-		t.Fatalf("withбранonя спека не парсится as YAML: %v", err)
+		t.Fatalf("assembled spec does not parse as YAML: %v", err)
 	}
 
 	if v, _ := doc["openapi"].(string); v != "3.1.0" {
-		t.Errorf("openapi=%q, ожидалось 3.1.0", v)
+		t.Errorf("openapi=%q, expected 3.1.0", v)
 	}
 	if _, ok := doc["info"]; !ok {
-		t.Error("обязательbutе field info отсутствует")
+		t.Error("required field info is missing")
 	}
 
 	paths, ok := doc["paths"].(map[string]any)
 	if !ok || len(paths) == 0 {
-		t.Fatal("paths пуст or не map — не валидonя 3.1-спека")
+		t.Fatal("paths is empty or not a map - not a valid 3.1 spec")
 	}
 	comp, ok := doc["components"].(map[string]any)
 	if !ok {
-		t.Fatal("components отсутствует")
+		t.Fatal("components is missing")
 	}
 	schemas, ok := comp["schemas"].(map[string]any)
 	if !ok || len(schemas) == 0 {
-		t.Fatal("components.schemas пуст — операции без тел?")
+		t.Fatal("components.schemas is empty - operations without bodies?")
 	}
 
 	validMethods := map[string]struct{}{
@@ -144,7 +144,7 @@ func TestFullSpec_ValidOpenAPI31(t *testing.T) {
 	for p, item := range paths {
 		pi, ok := item.(map[string]any)
 		if !ok {
-			t.Errorf("path-item %q не map", p)
+			t.Errorf("path-item %q is not a map", p)
 			continue
 		}
 		hasOp := false
@@ -155,7 +155,7 @@ func TestFullSpec_ValidOpenAPI31(t *testing.T) {
 			}
 		}
 		if !hasOp {
-			t.Errorf("path %q без едиbutй HTTP-операции", p)
+			t.Errorf("path %q has no single HTTP operation", p)
 		}
 	}
 
@@ -167,11 +167,11 @@ func TestFullSpec_ValidOpenAPI31(t *testing.T) {
 			continue // not a local schemas-ref
 		}
 		if _, ok := schemas[name]; !ok {
-			t.Errorf("$ref %q не разрешается — схема %q отсутствует в components.schemas (битый merge)", ref, name)
+			t.Errorf("$ref %q does not resolve - schema %q is missing from components.schemas (broken merge)", ref, name)
 		}
 	}
 
-	t.Logf("gate (в): валидonя 3.1-спека — %d путей, %d схем, все $ref разрешимы", len(paths), len(schemas))
+	t.Logf("gate (c): valid 3.1 spec - %d paths, %d schemas, all $ref resolve", len(paths), len(schemas))
 }
 
 // TestFullSpec_CoversAllRoutes — gate (d), drift guard. The (method, path) set of the
@@ -222,15 +222,15 @@ func TestFullSpec_CoversAllRoutes(t *testing.T) {
 	sort.Strings(inRealNotSpec)
 
 	if len(inRealNotSpec) > 0 {
-		t.Errorf("РОУТ ЕСТЬ, in compiled spec NOTТ (агрегатор забыл toмен/группу) — %d:\n  %s",
+		t.Errorf("ROUTE EXISTS, compiled spec does NOT (aggregator forgot a domain/group) - %d:\n  %s",
 			len(inRealNotSpec), strings.Join(inRealNotSpec, "\n  "))
 	}
 	if len(inSpecNotReal) > 0 {
-		t.Errorf("В СПЕКЕ ЕСТЬ, реальbutго роута NOTТ (лишняя/неверbut-префикwithванonя операция) — %d:\n  %s",
+		t.Errorf("IN SPEC, real route does NOT exist (extra/incorrectly-prefixed operation) - %d:\n  %s",
 			len(inSpecNotReal), strings.Join(inSpecNotReal, "\n  "))
 	}
 
-	t.Logf("gate (г): спека и роуты withвпадают — %d роутов покрыто", len(specSet))
+	t.Logf("gate (d): spec and routes match - %d routes covered", len(specSet))
 }
 
 // TestFullSpec_NoTechnicalSchemaNames — FINAL END-TO-END CLEANLINESS GATE for the spec (batch N6,
@@ -266,7 +266,7 @@ func TestFullSpec_NoTechnicalSchemaNames(t *testing.T) {
 		}
 		for _, m := range substrMarkers {
 			if strings.Contains(name, m) {
-				offenders = append(offenders, name+" (маркер "+m+")")
+				offenders = append(offenders, name+" (marker "+m+")")
 			}
 		}
 		for _, c := range capsMarkers {
@@ -278,11 +278,11 @@ func TestFullSpec_NoTechnicalSchemaNames(t *testing.T) {
 	sort.Strings(offenders)
 
 	if len(offenders) > 0 {
-		t.Fatalf("ФИНАЛЬНЫЙ ГЕЙТ ПРОВАЛЕН: в спеке остались technical/дрейф-names схем (%d) — выравнивание не завершеbut:\n  %s",
+		t.Fatalf("FINAL GATE FAILED: spec still has technical/drift schema names (%d) - alignment not complete:\n  %s",
 			len(offenders), strings.Join(offenders, "\n  "))
 	}
 
-	t.Logf("фиonльный gate: 0 техимён в спеке (%d схем; единственbutе исключение — %s)",
+	t.Logf("final gate: 0 technical names in spec (%d schemas; only exception - %s)",
 		len(spec.Components.Schemas.Map()), allowed)
 }
 

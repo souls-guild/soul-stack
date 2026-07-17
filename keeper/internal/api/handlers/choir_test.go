@@ -180,11 +180,11 @@ func (r *fakeChoirRows) Conn() *pgx.Conn                              { return n
 func wantChoirProblem(t *testing.T, err error, want string) {
 	t.Helper()
 	if err == nil {
-		t.Fatalf("ожидалась ошибка %q, получено nil", want)
+		t.Fatalf("expected error %q, got nil", want)
 	}
 	d, ok := AsProblemDetails(err)
 	if !ok {
-		t.Fatalf("ошибка не *problemError: %v", err)
+		t.Fatalf("error is not *problemError: %v", err)
 	}
 	if d.Type != want {
 		t.Errorf("problem.Type = %q, want %q", d.Type, want)
@@ -252,7 +252,7 @@ func TestChoir_ListChoirsTyped_Empty_NonNil(t *testing.T) {
 		t.Fatalf("ListChoirsTyped: %v", err)
 	}
 	if page.Items == nil {
-		t.Errorf("Items должен быть non-nil пустым срезом")
+		t.Errorf("Items should be a non-nil empty slice")
 	}
 }
 

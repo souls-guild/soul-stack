@@ -63,7 +63,7 @@ func resolveVarLayer(engine *cel.Engine, raw map[string]any, base cel.Vars) (map
 		}
 		for _, ref := range refs {
 			if _, exists := raw[ref]; !exists {
-				return nil, fmt.Errorf("%w: vars.%s ссылается на vars.%s, которого нет в слое", ErrVarUnknownRef, name, ref)
+				return nil, fmt.Errorf("%w: vars.%s references vars.%s, which is not in the layer", ErrVarUnknownRef, name, ref)
 			}
 		}
 		deps[name] = refs

@@ -21,7 +21,7 @@ import (
 func newArchonCmd() *cobra.Command {
 	c := &cobra.Command{
 		Use:   "archon",
-		Short: "аутентификация и идентичность оператора (Archon)",
+		Short: "operator authentication and identity (Archon)",
 	}
 	c.AddCommand(newArchonLoginCmd(), newArchonWhoamiCmd(), newArchonLogoutCmd())
 	return c
@@ -34,20 +34,20 @@ func newArchonLoginCmd() *cobra.Command {
 	)
 	c := &cobra.Command{
 		Use:   "login",
-		Short: "сохранить keeper_url + JWT в credentials.yaml (валидируется ping-ом)",
-		Long: `archon login читает JWT из --jwt-file, валидирует его пингом
-авторизованного эндпоинта (GET /v1/incarnations?limit=1), и при успехе
-сохраняет credentials в ~/.config/soul-stack/credentials.yaml (mode 0600).
+		Short: "save keeper_url + JWT to credentials.yaml (validated by ping)",
+		Long: `archon login reads the JWT from --jwt-file, validates it by pinging
+an authorized endpoint (GET /v1/incarnations?limit=1), and on success
+saves credentials to ~/.config/soul-stack/credentials.yaml (mode 0600).
 
-В Operator API MVP нет отдельного /v1/whoami endpoint-а, поэтому для проверки
-используется любой авторизованный list — это даёт быструю обратную связь по
-401 (битый JWT) и 403 (есть JWT, но нет права incarnation.list).`,
+The Operator API MVP has no separate /v1/whoami endpoint, so any
+authorized list is used for the check - this gives fast feedback on
+401 (broken JWT) and 403 (JWT present, but no incarnation.list permission).`,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			if keeperURL == "" {
-				return errors.New("--keeper-url обязателен")
+				return errors.New("--keeper-url is required")
 			}
 			if jwtFile == "" {
-				return errors.New("--jwt-file обязателен")
+				return errors.New("--jwt-file is required")
 			}
 			jwt, err := readJWTFile(jwtFile)
 			if err != nil {
@@ -80,15 +80,15 @@ func newArchonLoginCmd() *cobra.Command {
 			return nil
 		},
 	}
-	c.Flags().StringVar(&keeperURL, "keeper-url", "", "базовый URL Keeper-а (https://keeper.example:8443)")
-	c.Flags().StringVar(&jwtFile, "jwt-file", "", "путь к файлу с JWT (одной строкой)")
+	c.Flags().StringVar(&keeperURL, "keeper-url", "", "base Keeper URL (https://keeper.example:8443)")
+	c.Flags().StringVar(&jwtFile, "jwt-file", "", "path to a file with the JWT (single line)")
 	return c
 }
 
 func newArchonWhoamiCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "whoami",
-		Short: "показать текущего Архонта (AID + permissions из JWT-claims)",
+		Short: "show the current Archon (AID + permissions from JWT claims)",
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			cl, err := loadClient(cmd)
 			if err != nil {
@@ -151,7 +151,7 @@ func whoamiPrint(cmd *cobra.Command, v whoamiView) error {
 		fmt.Fprintf(out, "Expires at: %s\n", v.ExpiresAt)
 	}
 	if v.BootstrapInitial {
-		fmt.Fprintln(out, "Note:       bootstrap-initial JWT (см. ADR-013)")
+		fmt.Fprintln(out, "Note:       bootstrap-initial JWT (see ADR-013)")
 	}
 	return nil
 }
@@ -159,7 +159,7 @@ func whoamiPrint(cmd *cobra.Command, v whoamiView) error {
 func newArchonLogoutCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "logout",
-		Short: "удалить credentials.yaml",
+		Short: "delete credentials.yaml",
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			rf := RootFlags(cmd)
 			path := rf.ConfigPath
@@ -175,7 +175,7 @@ func newArchonLogoutCmd() *cobra.Command {
 					fmt.Fprintf(cmd.OutOrStdout(), "credentials file %s already absent\n", path)
 					return nil
 				}
-				return fmt.Errorf("удалить %s: %w", path, err)
+				return fmt.Errorf("remove %s: %w", path, err)
 			}
 			fmt.Fprintf(cmd.OutOrStdout(), "logged out. removed %s\n", path)
 			return nil
@@ -188,14 +188,14 @@ func newArchonLogoutCmd() *cobra.Command {
 func readJWTFile(path string) (string, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
-		return "", fmt.Errorf("прочитать JWT из %s: %w", path, err)
+		return "", fmt.Errorf("read JWT from %s: %w", path, err)
 	}
 	jwt := strings.TrimSpace(string(data))
 	if jwt == "" {
-		return "", fmt.Errorf("JWT-файл %s пуст", path)
+		return "", fmt.Errorf("JWT file %s is empty", path)
 	}
 	if strings.ContainsAny(jwt, " \t\n\r") {
-		return "", fmt.Errorf("JWT-файл %s содержит пробельные символы внутри токена", path)
+		return "", fmt.Errorf("JWT file %s contains whitespace inside the token", path)
 	}
 	return jwt, nil
 }
@@ -212,20 +212,20 @@ func saveCredentials(override string, creds *config.Credentials) (string, error)
 		}
 	}
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
-		return "", fmt.Errorf("создать каталог %s: %w", filepath.Dir(path), err)
+		return "", fmt.Errorf("create directory %s: %w", filepath.Dir(path), err)
 	}
 	data, err := yaml.Marshal(creds)
 	if err != nil {
-		return "", fmt.Errorf("сериализовать credentials: %w", err)
+		return "", fmt.Errorf("serialize credentials: %w", err)
 	}
 	// Atomic write via tmp+rename, so a failure never leaves a half-written file.
 	tmp := path + ".tmp"
 	if err := os.WriteFile(tmp, data, 0o600); err != nil {
-		return "", fmt.Errorf("записать %s: %w", tmp, err)
+		return "", fmt.Errorf("write %s: %w", tmp, err)
 	}
 	if err := os.Rename(tmp, path); err != nil {
 		_ = os.Remove(tmp)
-		return "", fmt.Errorf("переименовать %s → %s: %w", tmp, path, err)
+		return "", fmt.Errorf("rename %s -> %s: %w", tmp, path, err)
 	}
 	return path, nil
 }

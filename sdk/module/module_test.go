@@ -86,11 +86,11 @@ func TestServerAdapterDelegates(t *testing.T) {
 func TestBaseModuleNotPlanReadSafe(t *testing.T) {
 	var b any = BaseModule{}
 	if _, ok := b.(PlanReadSafe); ok {
-		t.Fatal("BaseModule реализует PlanReadSafe — должен НЕ реализовывать (default-deny)")
+		t.Fatal("BaseModule implements PlanReadSafe - it should NOT implement it (default-deny)")
 	}
 	var p any = &planReadSafeImpl{}
 	if _, ok := p.(PlanReadSafe); !ok {
-		t.Fatal("явная реализация PlanReadSafe не распознаётся type-assertion-ом")
+		t.Fatal("an explicit PlanReadSafe implementation is not recognized by the type assertion")
 	}
 }
 
@@ -106,11 +106,11 @@ func (planReadSafeImpl) PlanReadSafe() {}
 func TestBaseModuleNotErrandReadSafe(t *testing.T) {
 	var b any = BaseModule{}
 	if _, ok := b.(ErrandReadSafe); ok {
-		t.Fatal("BaseModule реализует ErrandReadSafe — должен НЕ реализовывать (default-deny)")
+		t.Fatal("BaseModule implements ErrandReadSafe - it should NOT implement it (default-deny)")
 	}
 	var e any = &errandReadSafeImpl{}
 	if _, ok := e.(ErrandReadSafe); !ok {
-		t.Fatal("явная реализация ErrandReadSafe не распознаётся type-assertion-ом")
+		t.Fatal("an explicit ErrandReadSafe implementation is not recognized by the type assertion")
 	}
 }
 

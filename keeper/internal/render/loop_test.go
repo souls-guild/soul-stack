@@ -224,10 +224,10 @@ func TestRenderLoop_WhenBySoulprintRejected(t *testing.T) {
 	}
 	_, _, err := p.Render(context.Background(), in)
 	if err == nil {
-		t.Fatal("ожидали ошибку: host-вариативный when по soulprint вне pilot-объёма")
+		t.Fatal("expected an error: host-variant when over soulprint outside pilot scope")
 	}
 	if !strings.Contains(err.Error(), "soulprint") || !strings.Contains(err.Error(), "loop.when") {
-		t.Fatalf("сообщение должно явно указывать на loop.when и soulprint, получили: %v", err)
+		t.Fatalf("message should explicitly name loop.when and soulprint, got: %v", err)
 	}
 }
 
@@ -256,7 +256,7 @@ func TestRenderLoop_WhenFiltersAll(t *testing.T) {
 		t.Fatalf("Render: %v", err)
 	}
 	if len(tasks) != 0 || len(plans) != 0 {
-		t.Fatalf("len(tasks)=%d len(plans)=%d, want 0,0 (when отсеял всё)", len(tasks), len(plans))
+		t.Fatalf("len(tasks)=%d len(plans)=%d, want 0,0 (when filtered out everything)", len(tasks), len(plans))
 	}
 }
 
@@ -281,10 +281,10 @@ func TestRenderLoop_WhenNonBool(t *testing.T) {
 	}
 	_, _, err := p.Render(context.Background(), in)
 	if err == nil {
-		t.Fatal("ожидали ошибку: when вернул не-bool")
+		t.Fatal("expected an error: when returned non-bool")
 	}
 	if !strings.Contains(err.Error(), "loop.when") || !strings.Contains(err.Error(), "bool") {
-		t.Fatalf("сообщение должно указывать loop.when и ожидаемый bool, получили: %v", err)
+		t.Fatalf("message should name loop.when and the expected bool, got: %v", err)
 	}
 }
 
@@ -317,7 +317,7 @@ func TestRenderLoop_WithRunOnce(t *testing.T) {
 	}
 	for i, pl := range plans {
 		if len(pl.TargetSIDs) != 1 || pl.TargetSIDs[0] != "h1" {
-			t.Errorf("plans[%d].TargetSIDs = %v, want [h1] (run_once → первый по SID)", i, pl.TargetSIDs)
+			t.Errorf("plans[%d].TargetSIDs = %v, want [h1] (run_once -> first by SID)", i, pl.TargetSIDs)
 		}
 	}
 	if cmdOf(t, tasks[0]) != "do a" || cmdOf(t, tasks[2]) != "do c" {
@@ -353,11 +353,11 @@ func TestRenderLoop_InDestinyExpands(t *testing.T) {
 	}
 	// task0 (marker, Index 0) + loop×3 (Index 1,2,3) = 4 tasks, continuous indices.
 	if len(tasks) != 4 {
-		t.Fatalf("len(tasks) = %d, want 4 (marker + loop×3 в destiny)", len(tasks))
+		t.Fatalf("len(tasks) = %d, want 4 (marker + loop x3 in destiny)", len(tasks))
 	}
 	for i, rt := range tasks {
 		if rt.Index != i {
-			t.Errorf("tasks[%d].Index = %d, want %d (сквозные через destiny-loop)", i, rt.Index, i)
+			t.Errorf("tasks[%d].Index = %d, want %d (continuous through destiny-loop)", i, rt.Index, i)
 		}
 	}
 	if cmdOf(t, tasks[1]) != "echo a" || cmdOf(t, tasks[3]) != "echo c" {
@@ -480,7 +480,7 @@ func TestRenderLoop_PerIterationHostInvariant(t *testing.T) {
 	}
 	_, _, err := p.Render(context.Background(), in)
 	if err == nil {
-		t.Fatal("ожидали ошибку host-инвариантности для host-зависимых params в итерации")
+		t.Fatal("expected an error for host invariance for host-dependent params in an iteration")
 	}
 }
 
@@ -503,7 +503,7 @@ func TestRenderLoop_PerIterationDifferentParamsOK(t *testing.T) {
 	}
 	tasks, _, err := p.Render(context.Background(), in)
 	if err != nil {
-		t.Fatalf("Render: %v (разные params по оси итераций должны быть ок)", err)
+		t.Fatalf("Render: %v (different params across the iteration axis should be fine)", err)
 	}
 	if cmdOf(t, tasks[0]) != "do a" || cmdOf(t, tasks[1]) != "do b" {
 		t.Errorf("commands wrong: %q %q", cmdOf(t, tasks[0]), cmdOf(t, tasks[1]))
@@ -553,7 +553,7 @@ func TestRenderLoop_NonCollectionItems(t *testing.T) {
 		Hosts:       []*topology.HostFacts{host("h", []string{"svc"}, nil)},
 	}
 	if _, _, err := p.Render(context.Background(), in); err == nil {
-		t.Fatal("ожидали ошибку: items не array/object")
+		t.Fatal("expected an error: items is not array/object")
 	}
 }
 
@@ -590,23 +590,23 @@ func TestRenderLoop_StaticWhenSkip_UnresolvableItems(t *testing.T) {
 	}
 	tasks, plans, err := p.Render(context.Background(), in)
 	if err != nil {
-		t.Fatalf("Render: %v (static-when:false должен скипнуть задачу ДО resolveLoopItems, а не падать на no-such-key input.users)", err)
+		t.Fatalf("Render: %v (static-when:false should skip the task BEFORE resolveLoopItems, not fail on no-such-key input.users)", err)
 	}
 	if len(tasks) != 1 || len(plans) != 1 {
-		t.Fatalf("len(tasks)=%d len(plans)=%d, want 1,1 (нерезолвимый items → один skip-placeholder)", len(tasks), len(plans))
+		t.Fatalf("len(tasks)=%d len(plans)=%d, want 1,1 (unresolvable items -> a single skip-placeholder)", len(tasks), len(plans))
 	}
 	rt := tasks[0]
 	if rt.Params != nil {
-		t.Errorf("Params != nil — static-when:false должен скипнуть рендер")
+		t.Errorf("Params != nil - static-when:false should skip rendering")
 	}
 	if rt.When != "input.action == 'apply'" {
-		t.Errorf("When = %q, не протянут", rt.When)
+		t.Errorf("When = %q, not propagated", rt.When)
 	}
 	if rt.FlowContext == nil {
-		t.Errorf("FlowContext == nil — нужен для Soul-side evalWhen → SKIPPED")
+		t.Errorf("FlowContext == nil - needed for Soul-side evalWhen -> SKIPPED")
 	}
 	if rt.Index != 0 {
-		t.Errorf("Index = %d, want 0 (сквозной)", rt.Index)
+		t.Errorf("Index = %d, want 0 (continuous)", rt.Index)
 	}
 	if plans[0].TaskIndex != 0 {
 		t.Errorf("plans[0].TaskIndex = %d, want 0", plans[0].TaskIndex)
@@ -651,7 +651,7 @@ func TestRenderLoop_StaticWhenSkip_UnresolvableItems_ContinuousIndex(t *testing.
 		t.Errorf("placeholder Params != nil")
 	}
 	if cmdOf(t, tasks[2]) != "post" {
-		t.Errorf("after-задача рендерится после placeholder: %q", cmdOf(t, tasks[2]))
+		t.Errorf("after-task renders after the placeholder: %q", cmdOf(t, tasks[2]))
 	}
 }
 
@@ -682,14 +682,14 @@ func TestRenderLoop_StaticTrueWhen_FansOut(t *testing.T) {
 		t.Fatalf("Render: %v", err)
 	}
 	if len(tasks) != 2 {
-		t.Fatalf("len(tasks) = %d, want 2 (static-true → обычный fan-out)", len(tasks))
+		t.Fatalf("len(tasks) = %d, want 2 (static-true -> regular fan-out)", len(tasks))
 	}
 	if cmdOf(t, tasks[0]) != "useradd alice" || cmdOf(t, tasks[1]) != "useradd bob" {
 		t.Errorf("static-true fan-out commands wrong: %q %q", cmdOf(t, tasks[0]), cmdOf(t, tasks[1]))
 	}
 	for i, rt := range tasks {
 		if rt.Params == nil {
-			t.Errorf("tasks[%d].Params == nil — static-true задача должна рендериться", i)
+			t.Errorf("tasks[%d].Params == nil - static-true task should render", i)
 		}
 	}
 }
@@ -722,10 +722,10 @@ func TestRenderLoop_MixedWhen_NotStaticSkipped(t *testing.T) {
 	}
 	// register-dependent when → NOT static-skip: items resolves, fan-out over it.
 	if len(tasks) != 1 {
-		t.Fatalf("len(tasks) = %d, want 1 (mixed-when не статический, fan-out по items)", len(tasks))
+		t.Fatalf("len(tasks) = %d, want 1 (mixed-when is not static, fan-out over items)", len(tasks))
 	}
 	if tasks[0].Params == nil {
-		t.Errorf("Params == nil — mixed-when не статический, params должны рендериться")
+		t.Errorf("Params == nil - mixed-when is not static, params should render")
 	}
 	if cmdOf(t, tasks[0]) != "useradd alice" {
 		t.Errorf("command = %q, want 'useradd alice'", cmdOf(t, tasks[0]))
@@ -757,16 +757,16 @@ func TestRenderLoop_StaticWhenSkip_ConsistentAcrossPassages(t *testing.T) {
 	}
 	second, _, err := p.Render(context.Background(), in)
 	if err != nil {
-		t.Fatalf("Render (повтор): %v", err)
+		t.Fatalf("Render (repeat): %v", err)
 	}
 	if len(first) != 1 || len(second) != 1 {
-		t.Fatalf("len first=%d second=%d, want 1,1 (консистентность по проходам)", len(first), len(second))
+		t.Fatalf("len first=%d second=%d, want 1,1 (consistency across passes)", len(first), len(second))
 	}
 	if first[0].When != second[0].When || first[0].Index != second[0].Index {
-		t.Errorf("placeholder разошёлся между проходами: %+v vs %+v", first[0], second[0])
+		t.Errorf("placeholder diverged between passes: %+v vs %+v", first[0], second[0])
 	}
 	if first[0].Params != nil || second[0].Params != nil {
-		t.Errorf("Params должны быть nil на обоих проходах")
+		t.Errorf("Params should be nil on both passes")
 	}
 }
 
@@ -812,10 +812,10 @@ func TestRenderLoop_StaticWhenSkip_PreservesOnChanges(t *testing.T) {
 	}
 	ph := tasks[1]
 	if ph.Params != nil {
-		t.Errorf("placeholder Params != nil — static-when:false должен скипнуть рендер")
+		t.Errorf("placeholder Params != nil - static-when:false should skip rendering")
 	}
 	if len(ph.OnChangesIdx) != 1 || ph.OnChangesIdx[0] != 0 {
-		t.Fatalf("OnChangesIdx = %v, want [0] (onchanges: [probe] → Index probe-задачи) — requisite-имена потерялись на skip-placeholder", ph.OnChangesIdx)
+		t.Fatalf("OnChangesIdx = %v, want [0] (onchanges: [probe] -> Index of the probe task) - requisite names were lost on skip-placeholder", ph.OnChangesIdx)
 	}
 }
 

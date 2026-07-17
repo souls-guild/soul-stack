@@ -212,7 +212,7 @@ func (h *Handler) callIncarnationCreate(ctx context.Context, claims *jwt.Claims,
 	// created, sync will converge on the next bind.
 	if len(traits) > 0 {
 		if serr := incarnation.SyncTraitsToHosts(ctx, h.deps.IncarnationDB, a.Name, traits); serr != nil {
-			h.deps.Logger.Warn("mcp: incarnation.create sync traits → souls провален (best-effort)",
+			h.deps.Logger.Warn("mcp: incarnation.create sync traits -> souls failed (best-effort)",
 				slog.String("name", a.Name), slog.Any("error", serr))
 		}
 	}

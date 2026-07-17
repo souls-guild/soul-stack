@@ -65,13 +65,13 @@ func TestReceiverAppliesSnapshot(t *testing.T) {
 
 	got := sigils.Get("core", "pkg")
 	if got == nil {
-		t.Fatal("receiver не положил snapshot-Sigil в кеш")
+		t.Fatal("receiver did not put the snapshot Sigil into the cache")
 	}
 	if got.GetRef() != "v1.2.3" || got.GetBinarySha256() != "deadbeef" {
-		t.Fatalf("в кеше неверный Sigil: ref=%q sha=%q", got.GetRef(), got.GetBinarySha256())
+		t.Fatalf("wrong Sigil in cache: ref=%q sha=%q", got.GetRef(), got.GetBinarySha256())
 	}
 	if sigils.Get("cloud", "hetzner") == nil {
-		t.Fatal("receiver потерял второй Sigil из snapshot-а")
+		t.Fatal("receiver lost the second Sigil from the snapshot")
 	}
 }
 
@@ -86,17 +86,17 @@ func TestReceiverSnapshotRevokesAbsent(t *testing.T) {
 		pluginSigil("core", "file", "v1", "bb"),
 	), sigils, nil)
 	if sigils.Get("core", "pkg") == nil || sigils.Get("core", "file") == nil {
-		t.Fatal("предусловие: оба допуска должны быть в кеше")
+		t.Fatal("precondition: both entries must be in the cache")
 	}
 
 	// revoke core/pkg: the new snapshot no longer includes it.
 	dispatchPayload(snapshotMsg(pluginSigil("core", "file", "v1", "bb")), sigils, nil)
 
 	if sigils.Get("core", "pkg") != nil {
-		t.Fatal("near-instant revoke не сработал: отозванный допуск остался в кеше")
+		t.Fatal("near-instant revoke did not work: the revoked entry is still in the cache")
 	}
 	if sigils.Get("core", "file") == nil {
-		t.Fatal("ReplaceAll по ошибке стёр действующий допуск")
+		t.Fatal("ReplaceAll wrongly erased a still-valid entry")
 	}
 }
 
@@ -106,13 +106,13 @@ func TestReceiverEmptySnapshotClearsCache(t *testing.T) {
 	sigils := sigilcache.New()
 	dispatchPayload(snapshotMsg(pluginSigil("core", "pkg", "v1", "aa")), sigils, nil)
 	if sigils.Get("core", "pkg") == nil {
-		t.Fatal("предусловие: допуск должен быть в кеше")
+		t.Fatal("precondition: the entry must be in the cache")
 	}
 
 	dispatchPayload(snapshotMsg(), sigils, nil) // empty snapshot
 
 	if sigils.Get("core", "pkg") != nil {
-		t.Fatal("пустой snapshot должен очистить кеш (ни один плагин не допущен)")
+		t.Fatal("an empty snapshot must clear the cache (no plugin allowed)")
 	}
 }
 
@@ -134,10 +134,10 @@ func TestReceiverSinglePluginSigilDoesNotMutate(t *testing.T) {
 
 	got := sigils.Get("core", "pkg")
 	if got == nil || got.GetRef() != "v1" || got.GetBinarySha256() != "aa" {
-		t.Fatalf("одиночный PluginSigil не должен менять авторитетный набор, получено %v", got)
+		t.Fatalf("a lone PluginSigil must not change the authoritative set, got %v", got)
 	}
 	if sigils.Get("community", "new") != nil {
-		t.Fatal("одиночный PluginSigil не должен добавлять допуск в набор")
+		t.Fatal("a lone PluginSigil must not add an entry to the set")
 	}
 }
 
@@ -151,7 +151,7 @@ func TestReceiverIgnoresNonSigilPayload(t *testing.T) {
 	dispatchPayload(msg, sigils, nil)
 
 	if got := sigils.Get("core", "pkg"); got != nil {
-		t.Fatalf("не-Sigil payload не должен наполнять кеш, получено %v", got)
+		t.Fatalf("a non-Sigil payload must not populate the cache, got %v", got)
 	}
 }
 
@@ -190,7 +190,7 @@ func TestReceiverAppliesTrustAnchors(t *testing.T) {
 		t.Fatalf("parseTrustAnchorSet: %v", err)
 	}
 	if len(parsed) != 2 {
-		t.Fatalf("ожидали 2 якоря, распарсилось %d", len(parsed))
+		t.Fatalf("expected 2 anchors, got %d parsed", len(parsed))
 	}
 }
 
@@ -208,10 +208,10 @@ func TestReceiverTrustAnchorsRejectsBrokenPEM(t *testing.T) {
 	// The holder stays unchanged: verify by re-parsing the original set.
 	keep, err := parseTrustAnchorSet([]string{prevPEM})
 	if err != nil || len(keep) != 1 || !keep[0].Equal(prevPub) {
-		t.Fatalf("предусловие/инвариант битого набора нарушен: keep=%d err=%v", len(keep), err)
+		t.Fatalf("precondition/invariant broken: keep=%d err=%v", len(keep), err)
 	}
 	if _, err := parseTrustAnchorSet([]string{goodPEM, "not a pem block"}); err == nil {
-		t.Fatal("ожидали ошибку парсинга битого набора, получили nil")
+		t.Fatal("expected a parse error for the broken set, got nil")
 	}
 }
 
@@ -225,7 +225,7 @@ func TestReceiverEmptyTrustAnchorsClearsHolder(t *testing.T) {
 
 	got, err := parseTrustAnchorSet(nil)
 	if err != nil || got != nil {
-		t.Fatalf("пустой набор должен парситься в nil без ошибки, got=%v err=%v", got, err)
+		t.Fatalf("an empty set must parse to nil without error, got=%v err=%v", got, err)
 	}
 }
 

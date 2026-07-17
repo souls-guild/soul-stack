@@ -31,12 +31,12 @@ func parsePath(raw string) ([]pathSegment, error) {
 	case strings.HasPrefix(trimmed, prefix+"."):
 		// ok, cut the body after `state.`
 	default:
-		return nil, &ParseError{Code: CodeOpFieldMissing, Msg: fmt.Sprintf("path %q должен начинаться с 'state.'", raw)}
+		return nil, &ParseError{Code: CodeOpFieldMissing, Msg: fmt.Sprintf("path %q must start with 'state.'", raw)}
 	}
 
 	body := trimmed[len(prefix)+1:]
 	if body == "" {
-		return nil, &ParseError{Code: CodeOpFieldMissing, Msg: fmt.Sprintf("path %q: пустой адрес после 'state.'", raw)}
+		return nil, &ParseError{Code: CodeOpFieldMissing, Msg: fmt.Sprintf("path %q: empty address after 'state.'", raw)}
 	}
 
 	var segs []pathSegment
@@ -46,7 +46,7 @@ func parsePath(raw string) ([]pathSegment, error) {
 		s := cur.String()
 		cur.Reset()
 		if s == "" {
-			return &ParseError{Code: CodeOpFieldMissing, Msg: fmt.Sprintf("path %q: пустой сегмент", raw)}
+			return &ParseError{Code: CodeOpFieldMissing, Msg: fmt.Sprintf("path %q: empty segment", raw)}
 		}
 		segs = append(segs, pathSegment{literal: s})
 		return nil
@@ -56,27 +56,27 @@ func parsePath(raw string) ([]pathSegment, error) {
 		// Start of a `${ … }` block: the whole segment is an interpolation.
 		if body[i] == '$' && i+1 < len(body) && body[i+1] == '{' {
 			if cur.Len() != 0 {
-				return nil, &ParseError{Code: CodeOpFieldMissing, Msg: fmt.Sprintf("path %q: ${…} должен быть отдельным сегментом (между точками)", raw)}
+				return nil, &ParseError{Code: CodeOpFieldMissing, Msg: fmt.Sprintf("path %q: ${…} must be a standalone segment (between dots)", raw)}
 			}
 			end := strings.IndexByte(body[i:], '}')
 			if end < 0 {
-				return nil, &ParseError{Code: CodeOpFieldMissing, Msg: fmt.Sprintf("path %q: ${ без закрывающей }", raw)}
+				return nil, &ParseError{Code: CodeOpFieldMissing, Msg: fmt.Sprintf("path %q: ${ without a closing }", raw)}
 			}
 			end += i
 			expr := strings.TrimSpace(body[i+2 : end])
 			if expr == "" {
-				return nil, &ParseError{Code: CodeOpFieldMissing, Msg: fmt.Sprintf("path %q: пустое ${ }", raw)}
+				return nil, &ParseError{Code: CodeOpFieldMissing, Msg: fmt.Sprintf("path %q: empty ${ }", raw)}
 			}
 			segs = append(segs, pathSegment{expr: expr})
 			i = end + 1
 			// After the block we expect either the end or a `.` separator.
 			if i < len(body) {
 				if body[i] != '.' {
-					return nil, &ParseError{Code: CodeOpFieldMissing, Msg: fmt.Sprintf("path %q: после ${…} ожидается '.' или конец", raw)}
+					return nil, &ParseError{Code: CodeOpFieldMissing, Msg: fmt.Sprintf("path %q: expected '.' or end after ${…}", raw)}
 				}
 				i++ // consumed the separator; the next segment is required
 				if i >= len(body) {
-					return nil, &ParseError{Code: CodeOpFieldMissing, Msg: fmt.Sprintf("path %q: путь оканчивается на '.'", raw)}
+					return nil, &ParseError{Code: CodeOpFieldMissing, Msg: fmt.Sprintf("path %q: path ends with '.'", raw)}
 				}
 			}
 			continue
@@ -87,7 +87,7 @@ func parsePath(raw string) ([]pathSegment, error) {
 			}
 			i++
 			if i >= len(body) {
-				return nil, &ParseError{Code: CodeOpFieldMissing, Msg: fmt.Sprintf("path %q: путь оканчивается на '.'", raw)}
+				return nil, &ParseError{Code: CodeOpFieldMissing, Msg: fmt.Sprintf("path %q: path ends with '.'", raw)}
 			}
 			continue
 		}
@@ -115,11 +115,11 @@ func resolveSegments(segs []pathSegment, ev Evaluator, scope Scope) ([]string, e
 		}
 		val, err := ev.Eval(s.expr, scope)
 		if err != nil {
-			return nil, &EvalError{Class: ClassCELInterp, Msg: fmt.Sprintf("сегмент пути ${ %s }", s.expr), Err: err}
+			return nil, &EvalError{Class: ClassCELInterp, Msg: fmt.Sprintf("path segment ${ %s }", s.expr), Err: err}
 		}
 		key, ok := stringKey(val)
 		if !ok {
-			return nil, &EvalError{Class: ClassPathSegment, Msg: fmt.Sprintf("сегмент пути ${ %s } дал %T, ожидалась строка/число-ключ", s.expr, val)}
+			return nil, &EvalError{Class: ClassPathSegment, Msg: fmt.Sprintf("path segment ${ %s } produced %T, expected a string/number key", s.expr, val)}
 		}
 		out = append(out, key)
 	}

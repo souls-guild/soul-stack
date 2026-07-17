@@ -20,7 +20,7 @@ import (
 func newErrandCmd() *cobra.Command {
 	c := &cobra.Command{
 		Use:   "errand",
-		Short: "реестр Errand-ов (ADR-033): list / get / cancel",
+		Short: "Errand registry (ADR-033): list / get / cancel",
 	}
 	c.AddCommand(newErrandListCmd(), newErrandGetCmd(), newErrandCancelCmd())
 	return c
@@ -32,7 +32,7 @@ func newErrandCmd() *cobra.Command {
 func newErrandCancelCmd() *cobra.Command {
 	c := &cobra.Command{
 		Use:   "cancel <errand_id>",
-		Short: "отменить in-flight Errand",
+		Short: "cancel an in-flight Errand",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			cl, err := loadClient(cmd)
@@ -61,7 +61,7 @@ func newErrandListCmd() *cobra.Command {
 	)
 	c := &cobra.Command{
 		Use:   "list",
-		Short: "перечислить Errand-ы с фильтрами",
+		Short: "list Errands with filters",
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			cl, err := loadClient(cmd)
 			if err != nil {
@@ -92,11 +92,11 @@ func newErrandListCmd() *cobra.Command {
 				rows)
 		},
 	}
-	c.Flags().StringVar(&sid, "sid", "", "фильтр по SID")
-	c.Flags().StringVar(&status, "status", "", "фильтр по статусу (running|success|failed|timed_out|cancelled|module_not_allowed)")
-	c.Flags().StringVar(&startedAfter, "started-after", "", "фильтр по started_at > <RFC3339>")
-	c.Flags().IntVar(&limit, "limit", 0, "максимум записей (1..1000, default 50)")
-	c.Flags().IntVar(&offset, "offset", 0, "смещение пагинации")
+	c.Flags().StringVar(&sid, "sid", "", "filter by SID")
+	c.Flags().StringVar(&status, "status", "", "filter by status (running|success|failed|timed_out|cancelled|module_not_allowed)")
+	c.Flags().StringVar(&startedAfter, "started-after", "", "filter by started_at > <RFC3339>")
+	c.Flags().IntVar(&limit, "limit", 0, "maximum records (1..1000, default 50)")
+	c.Flags().IntVar(&offset, "offset", 0, "pagination offset")
 	return c
 }
 
@@ -104,7 +104,7 @@ func newErrandGetCmd() *cobra.Command {
 	var poll bool
 	c := &cobra.Command{
 		Use:   "get <errand_id>",
-		Short: "показать состояние Errand-а",
+		Short: "show the state of an Errand",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			cl, err := loadClient(cmd)
@@ -129,7 +129,7 @@ func newErrandGetCmd() *cobra.Command {
 			return renderErrandResult(cmd.OutOrStdout(), res)
 		},
 	}
-	c.Flags().BoolVar(&poll, "poll", false, "дожимать running-Errand до терминала (poll loop)")
+	c.Flags().BoolVar(&poll, "poll", false, "drive a running Errand to a terminal state (poll loop)")
 	return c
 }
 

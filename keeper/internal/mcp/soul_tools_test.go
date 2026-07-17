@@ -294,10 +294,10 @@ func TestSoulCreate_Success(t *testing.T) {
 	// (bringing back the `token_expires_at` tag in soulCreateOutput → red).
 	raw := decodeSoulCreateRaw(t, resp)
 	if _, ok := raw["expires_at"]; !ok {
-		t.Errorf("raw-ключ expires_at отсутствует в structured output")
+		t.Errorf("raw key expires_at missing from structured output")
 	}
 	if _, ok := raw["token_expires_at"]; ok {
-		t.Errorf("legacy raw-ключ token_expires_at присутствует — переименование откатилось")
+		t.Errorf("legacy raw key token_expires_at present - rename rolled back")
 	}
 
 	ev := requireSingleAudit(t, rec, string(audit.EventSoulCreated))

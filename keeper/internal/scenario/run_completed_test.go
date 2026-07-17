@@ -301,7 +301,7 @@ func TestWriteDestroyFailedAudit_CorrelationIDIsApplyID(t *testing.T) {
 		t.Errorf("source = %q, want keeper_internal", ev.Source)
 	}
 	if ev.CorrelationID != "apply-xyz" {
-		t.Errorf("correlation_id = %q, want apply-xyz (= apply_id, как run_completed)", ev.CorrelationID)
+		t.Errorf("correlation_id = %q, want apply-xyz (= apply_id, like run_completed)", ev.CorrelationID)
 	}
 	if ev.Payload["apply_id"] != "apply-xyz" {
 		t.Errorf("payload apply_id = %v, want apply-xyz", ev.Payload["apply_id"])

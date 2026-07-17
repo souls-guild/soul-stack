@@ -180,11 +180,11 @@ func newOracleHandler(t *testing.T, pool *oracleFakePool) *OracleHandler {
 func wantOracleProblem(t *testing.T, err error, want string) {
 	t.Helper()
 	if err == nil {
-		t.Fatalf("ожидалась ошибка %q, получено nil", want)
+		t.Fatalf("expected error %q, got nil", want)
 	}
 	d, ok := AsProblemDetails(err)
 	if !ok {
-		t.Fatalf("ошибка не *problemError: %v", err)
+		t.Fatalf("error is not *problemError: %v", err)
 	}
 	if d.Type != want {
 		t.Errorf("problem.Type = %q, want %q", d.Type, want)
@@ -278,7 +278,7 @@ func TestOracleHandler_CreateVigilTyped_ParamsByteExact(t *testing.T) {
 		t.Fatalf("CreateVigilTyped: %v", err)
 	}
 	if string(reply.View.Params) != params {
-		t.Fatalf("params должны сохраниться байт-в-байт (порядок ключей as-is); got = %s", reply.View.Params)
+		t.Fatalf("params should be preserved byte-for-byte (key order as-is); got = %s", reply.View.Params)
 	}
 }
 
@@ -308,7 +308,7 @@ func TestOracleHandler_ListVigilsTyped_Empty_NonNil(t *testing.T) {
 		t.Fatalf("ListVigilsTyped: %v", err)
 	}
 	if page.Items == nil {
-		t.Errorf("Items должен быть non-nil пустым срезом")
+		t.Errorf("Items should be a non-nil empty slice")
 	}
 }
 
@@ -444,7 +444,7 @@ func TestOracleHandler_CreateDecreeTyped_ActionInputByteExact(t *testing.T) {
 		t.Fatalf("CreateDecreeTyped: %v", err)
 	}
 	if string(reply.View.ActionInput) != actionInput {
-		t.Fatalf("action_input должен сохраниться байт-в-байт (порядок ключей as-is); got = %s", reply.View.ActionInput)
+		t.Fatalf("action_input should be preserved byte-for-byte (key order as-is); got = %s", reply.View.ActionInput)
 	}
 }
 
@@ -509,7 +509,7 @@ func TestOracleHandler_CreateVigilTyped_AuditPayload(t *testing.T) {
 		t.Errorf("subject = %v", p["subject"])
 	}
 	if _, ok := p["params"]; ok {
-		t.Errorf("params НЕ должны попадать в audit-payload: %v", p)
+		t.Errorf("params must NOT end up in the audit-payload: %v", p)
 	}
 	if p["created_by_aid"] != "archon-alice" {
 		t.Errorf("created_by_aid = %v", p["created_by_aid"])
@@ -536,9 +536,9 @@ func TestOracleHandler_CreateDecreeTyped_AuditPayload(t *testing.T) {
 		t.Errorf("subject = %v", p["subject"])
 	}
 	if _, ok := p["where"]; ok {
-		t.Errorf("where-CEL НЕ должен попадать в audit-payload: %v", p)
+		t.Errorf("where-CEL must NOT end up in the audit-payload: %v", p)
 	}
 	if _, ok := p["action_input"]; ok {
-		t.Errorf("action_input НЕ должен попадать в audit-payload: %v", p)
+		t.Errorf("action_input must NOT end up in the audit-payload: %v", p)
 	}
 }

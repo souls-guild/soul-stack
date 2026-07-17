@@ -47,7 +47,7 @@ func remarshalSorted(t *testing.T, raw []byte) string {
 	t.Helper()
 	var v any
 	if err := json.Unmarshal(raw, &v); err != nil {
-		t.Fatalf("reply не JSON: %v; raw=%s", err, raw)
+		t.Fatalf("reply not JSON: %v; raw=%s", err, raw)
 	}
 	out, err := json.Marshal(v)
 	if err != nil {
@@ -90,7 +90,7 @@ func TestHumaPermissions_GoldenWire(t *testing.T) {
 	want := remarshalSorted(t, mustMarshal(t, newPermissionCatalogReply(permH.ListTyped())))
 	got := remarshalSorted(t, rec.Body.Bytes())
 	if got != want {
-		t.Errorf("GOLDEN byte-exact дрейф permissions huma↔native:\n huma   = %s\n native = %s\n($schema / []-vs-null / onбор ключей разошлись — проверь permissionsListOutput и newHumaCadenceAPI)", got, want)
+		t.Errorf("GOLDEN byte-exact drift permissions huma<->native:\n huma   = %s\n native = %s\n($schema / []-vs-null / key set diverged - check permissionsListOutput and newHumaCadenceAPI)", got, want)
 	}
 }
 
@@ -99,7 +99,7 @@ func mustMarshal(t *testing.T, v any) []byte {
 	t.Helper()
 	b, err := json.Marshal(v)
 	if err != nil {
-		t.Fatalf("marshal эталоon: %v", err)
+		t.Fatalf("marshal reference: %v", err)
 	}
 	return b
 }
@@ -115,7 +115,7 @@ func TestHumaPermissions_NoAudit(t *testing.T) {
 		t.Fatalf("status = %d, want 200; body=%s", rec.Code, rec.Body.String())
 	}
 	if len(auditCap.Events()) != 0 {
-		t.Errorf("READ-роут permissions записал audit (%d withбытий) — у нits нет audit-middleware", len(auditCap.Events()))
+		t.Errorf("READ route permissions wrote audit (%d events) - it has no audit-middleware", len(auditCap.Events()))
 	}
 }
 
@@ -147,7 +147,7 @@ func TestHumaEventTypes_GoldenWire(t *testing.T) {
 	want := remarshalSorted(t, mustMarshal(t, newEventTypeCatalogReply(eventTypeH.ListTyped())))
 	got := remarshalSorted(t, rec.Body.Bytes())
 	if got != want {
-		t.Errorf("GOLDEN byte-exact дрейф event-types huma↔native:\n huma   = %s\n native = %s", got, want)
+		t.Errorf("GOLDEN byte-exact drift event-types huma<->native:\n huma   = %s\n native = %s", got, want)
 	}
 }
 
@@ -162,7 +162,7 @@ func TestHumaEventTypes_NoAudit(t *testing.T) {
 		t.Fatalf("status = %d, want 200; body=%s", rec.Code, rec.Body.String())
 	}
 	if len(auditCap.Events()) != 0 {
-		t.Errorf("READ-роут event-types записал audit (%d withбытий)", len(auditCap.Events()))
+		t.Errorf("READ route event-types wrote audit (%d events)", len(auditCap.Events()))
 	}
 }
 
@@ -200,7 +200,7 @@ func TestHumaMyPermissions_GoldenWire(t *testing.T) {
 	want := remarshalSorted(t, mustMarshal(t, newMyPermissionsReply(meH.GetTyped("archon-alice"))))
 	got := remarshalSorted(t, rec.Body.Bytes())
 	if got != want {
-		t.Errorf("GOLDEN byte-exact дрейф me-permissions huma↔native:\n huma   = %s\n native = %s", got, want)
+		t.Errorf("GOLDEN byte-exact drift me-permissions huma<->native:\n huma   = %s\n native = %s", got, want)
 	}
 }
 
@@ -224,7 +224,7 @@ func TestHumaMyPermissions_ScopeWire(t *testing.T) {
 		t.Fatalf("status = %d, want 200; body=%s", rec.Code, rec.Body.String())
 	}
 	if !strings.Contains(rec.Body.String(), `"state"`) {
-		t.Fatalf("wire-JSON не withдержит scope-ключ \"state\":\n%s", rec.Body.String())
+		t.Fatalf("wire-JSON does not contain scope key \"state\":\n%s", rec.Body.String())
 	}
 }
 
@@ -238,7 +238,7 @@ func TestHumaMyPermissions_NoClaims_500(t *testing.T) {
 	rec := httptest.NewRecorder()
 	r.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/v1/me/permissions", nil))
 	if rec.Code != http.StatusInternalServerError {
-		t.Fatalf("без claims status = %d, want 500; body=%s", rec.Code, rec.Body.String())
+		t.Fatalf("without claims status = %d, want 500; body=%s", rec.Code, rec.Body.String())
 	}
 	assertHumaProblem(t, rec, problem.TypeInternalError)
 }
@@ -257,7 +257,7 @@ func TestHumaMyPermissions_NoAudit(t *testing.T) {
 		t.Fatalf("status = %d, want 200; body=%s", rec.Code, rec.Body.String())
 	}
 	if len(auditCap.Events()) != 0 {
-		t.Errorf("READ-роут me-permissions записал audit (%d withбытий)", len(auditCap.Events()))
+		t.Errorf("READ route me-permissions wrote audit (%d events)", len(auditCap.Events()))
 	}
 }
 
@@ -269,7 +269,7 @@ func TestHumaCatalog_OpenAPIFragment_3_1(t *testing.T) {
 		t.Fatalf("HumaCatalogSpecYAML: %v", err)
 	}
 	if !strings.Contains(frag, "openapi: 3.1.0") {
-		t.Errorf("huma-фрагмент не несёт `openapi: 3.1.0`:\n%s", frag)
+		t.Errorf("huma fragment does not carry `openapi: 3.1.0`:\n%s", frag)
 	}
 	// The dump is built on a bare chi router (without the /v1 prefix), so the paths
 	// in the fragment are relative to the /v1 group (/permissions, /event-types,
@@ -279,11 +279,11 @@ func TestHumaCatalog_OpenAPIFragment_3_1(t *testing.T) {
 		"/permissions", "/event-types", "/me/permissions",
 	} {
 		if !strings.Contains(frag, want) {
-			t.Errorf("OpenAPI-фрагмент не withдержит %q:\n%s", want, frag)
+			t.Errorf("OpenAPI fragment does not contain %q:\n%s", want, frag)
 		}
 	}
 	// READ catalogs have no input → must NOT carry requestBody/octet-stream.
 	if strings.Contains(frag, "octet-stream") {
-		t.Errorf("OpenAPI-фрагмент несёт application/octet-stream (READ-каталог не имеет тела запроса):\n%s", frag)
+		t.Errorf("OpenAPI fragment carries application/octet-stream (READ catalog has no request body):\n%s", frag)
 	}
 }

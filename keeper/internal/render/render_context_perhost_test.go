@@ -80,18 +80,18 @@ func TestRenderContext_PerHostSelf_Dispatch(t *testing.T) {
 		t.Fatalf("Render: %v", err)
 	}
 	if len(tasks) != 1 {
-		t.Fatalf("ожидалась одна задача, got %d", len(tasks))
+		t.Fatalf("expected one task, got %d", len(tasks))
 	}
 	rt := tasks[0]
 
 	// (1) Per-host materialization: RenderContextBySID carries EACH SID's OWN IP.
 	if len(rt.RenderContextBySID) != len(hosts) {
-		t.Fatalf("RenderContextBySID размер = %d, want %d (по числу хостов)", len(rt.RenderContextBySID), len(hosts))
+		t.Fatalf("RenderContextBySID size = %d, want %d (matching host count)", len(rt.RenderContextBySID), len(hosts))
 	}
 	for _, h := range hosts {
 		rc := rt.RenderContextBySID[h.sid]
 		if rc == nil {
-			t.Fatalf("RenderContextBySID[%s] отсутствует", h.sid)
+			t.Fatalf("RenderContextBySID[%s] missing", h.sid)
 		}
 		if got := selfPrimaryIP(rc.AsMap()); got != h.ip {
 			t.Fatalf("RenderContextBySID[%s].self.network.primary_ip = %q, want %q", h.sid, got, h.ip)
@@ -112,23 +112,23 @@ func TestRenderContext_PerHostSelf_Dispatch(t *testing.T) {
 		}
 		rc := wire[0].GetParams().GetFields()[paramRenderContext].GetStructValue().AsMap()
 		if got := selfPrimaryIP(rc); got != h.ip {
-			t.Fatalf("хост %s: wire render_context.self.network.primary_ip = %q, want %q (баг подставил бы первый по SID)", h.sid, got, h.ip)
+			t.Fatalf("host %s: wire render_context.self.network.primary_ip = %q, want %q (a bug would substitute the first by SID)", h.sid, got, h.ip)
 		}
 		// The real Soul render of the template with this render_context: the
 		// string must carry ITS OWN IP and NOT anyone else's.
 		out, rerr := engine.Render(wire[0].GetParams().GetFields()[paramTemplateContent].GetStringValue(), rc)
 		if rerr != nil {
-			t.Fatalf("хост %s: soul-render упал: %v", h.sid, rerr)
+			t.Fatalf("host %s: soul-render failed: %v", h.sid, rerr)
 		}
 		if !strings.Contains(out, "primary_ip "+h.ip) {
-			t.Fatalf("хост %s: рендер не несёт свой primary_ip %s:\n%s", h.sid, h.ip, out)
+			t.Fatalf("host %s: render does not carry its own primary_ip %s:\n%s", h.sid, h.ip, out)
 		}
 		for _, other := range hosts {
 			if other.ip == h.ip {
 				continue
 			}
 			if strings.Contains(out, "primary_ip "+other.ip) {
-				t.Fatalf("хост %s рендерит ЧУЖОЙ primary_ip %s (CORE-баг вернулся):\n%s", h.sid, other.ip, out)
+				t.Fatalf("host %s renders ANOTHER host's primary_ip %s (CORE bug returned):\n%s", h.sid, other.ip, out)
 			}
 		}
 	}
@@ -138,12 +138,12 @@ func TestRenderContext_PerHostSelf_Dispatch(t *testing.T) {
 	//     single *RenderedTask dispatched to multiple SIDs would leak between
 	//     hosts.
 	if got := selfPrimaryIP(rt.Params.GetFields()[paramRenderContext].GetStructValue().AsMap()); got != "10.0.0.99" {
-		t.Fatalf("t.Params.render_context.self.primary_ip = %q, want 10.0.0.99 (первый по SID, golden-path) — overlay не должен мутировать Params", got)
+		t.Fatalf("t.Params.render_context.self.primary_ip = %q, want 10.0.0.99 (first by SID, golden-path) - overlay must not mutate Params", got)
 	}
 
 	// The plan targets all 3 hosts (sanity: the per-host map agrees with dispatch).
 	if len(plans) != 1 || len(plans[0].TargetSIDs) != len(hosts) {
-		t.Fatalf("DispatchPlan: want 1 план на %d SID, got %d план(ов)", len(hosts), len(plans))
+		t.Fatalf("DispatchPlan: want 1 plan for %d SID, got %d plan(s)", len(hosts), len(plans))
 	}
 }
 
@@ -182,7 +182,7 @@ func TestRenderContext_PerHostSelf_SingleHostGoldenPath(t *testing.T) {
 		t.Fatalf("Render: %v", err)
 	}
 	if tasks[0].RenderContextBySID != nil {
-		t.Fatalf("N=1: RenderContextBySID должен быть nil (overlay не нужен), got %#v", tasks[0].RenderContextBySID)
+		t.Fatalf("N=1: RenderContextBySID should be nil (overlay not needed), got %#v", tasks[0].RenderContextBySID)
 	}
 	// Params carries this single host's render_context; ToProtoTasks (without
 	// SID) passes through as-is.

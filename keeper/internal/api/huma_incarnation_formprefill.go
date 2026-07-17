@@ -23,14 +23,14 @@ import (
 // by inc.ServiceVersion (an anti-version-craft invariant, see FormPrefillTyped).
 type incFormPrefillInput struct {
 	Name     string `path:"name" doc:"incarnation name"`
-	Scenario string `path:"scenario" doc:"имя сцеonрия"`
+	Scenario string `path:"scenario" doc:"scenario name"`
 }
 
 // IncarnationFormPrefillReply — the native 200 body of POST .../form-prefill. Values —
 // a map `field → current-value` (only prefill-declared non-secret fields with a
 // covered state path; the rest are omitted). The struct name = the contract schema name.
 type IncarnationFormPrefillReply struct {
-	Values map[string]any `json:"values" doc:"field → текущее зonчение from incarnation.state (prefill-hint)"`
+	Values map[string]any `json:"values" doc:"field → current value from incarnation.state (prefill-hint)"`
 }
 
 // incFormPrefillOutput — huma output for POST .../form-prefill (FULL-TYPED). Body —
@@ -48,8 +48,8 @@ func incFormPrefillOperation() huma.Operation {
 		OperationID:   "incarnationFormPrefill",
 		Method:        http.MethodPost,
 		Path:          "/{name}/scenarios/{scenario}/form-prefill",
-		Summary:       "Pre-fill day-2-формы сцеonрия from incarnation.state",
-		Description:   "Текущие зonчения state под поля схемы сцеonрия с prefill_from_state (docs/input.md). Path-whitelist (клиент путь не заgives), secret-поля исключены. Вне RBAC-scope → 404. Permission incarnation.get. Read-only, no audit.",
+		Summary:       "Pre-fill scenario form from incarnation.state",
+		Description:   "Current state values under scenario schema fields with prefill_from_state (docs/input.md). Path-whitelist (client does not set the path), secret fields excluded. Out of RBAC-scope → 404. Permission incarnation.get. Read-only, no audit.",
 		Tags:          []string{"incarnation"},
 		DefaultStatus: http.StatusOK,
 		Errors:        []int{http.StatusForbidden, http.StatusNotFound, http.StatusUnprocessableEntity, http.StatusInternalServerError},

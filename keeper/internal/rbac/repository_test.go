@@ -302,7 +302,7 @@ func TestLoadSnapshot_IncludesRevoked(t *testing.T) {
 		t.Errorf("Revoked[archon-carol] = (%v, %v), want (%v, true)", gotCarol, ok, earlier)
 	}
 	if _, ok := snap.Revoked["archon-alice"]; ok {
-		t.Errorf("Revoked[archon-alice] = true, want false (active operator не в выборке)")
+		t.Errorf("Revoked[archon-alice] = true, want false (active operator not in the selection)")
 	}
 }
 
@@ -319,7 +319,7 @@ func TestLoadSnapshot_RevokedEmpty(t *testing.T) {
 		t.Fatalf("LoadSnapshot: %v", err)
 	}
 	if snap.Revoked == nil {
-		t.Errorf("Revoked = nil, want пустая map (read-side ожидает non-nil)")
+		t.Errorf("Revoked = nil, want an empty map (the read side expects non-nil)")
 	}
 	if len(snap.Revoked) != 0 {
 		t.Errorf("Revoked size = %d, want 0", len(snap.Revoked))
@@ -405,7 +405,7 @@ func TestLoadSnapshot_SynodRolesUnioned(t *testing.T) {
 		t.Errorf("Check via Synod: %v, want nil", err)
 	}
 	if p := e.ResolvePurview("archon-alice", "incarnation", "run"); !p.Unrestricted {
-		t.Errorf("ResolvePurview via Synod = %+v, want Unrestricted (bare-perm роли без default_scope)", p)
+		t.Errorf("ResolvePurview via Synod = %+v, want Unrestricted (bare-perm roles without default_scope)", p)
 	}
 	perms := e.PermissionsOf("archon-alice")
 	if len(perms) != 1 || perms[0].Resource != "incarnation" || perms[0].Action != "run" {
@@ -440,11 +440,11 @@ func TestLoadSnapshot_SynodScopeUnion(t *testing.T) {
 	}
 	p := e.ResolvePurview("archon-alice", "incarnation", "run")
 	if p.Unrestricted {
-		t.Fatalf("Purview Unrestricted, want scoped (обе роли с default_scope)")
+		t.Fatalf("Purview Unrestricted, want scoped (both roles have default_scope)")
 	}
 	got := sortedStrings(p.Covens)
 	if len(got) != 2 || got[0] != "prod" || got[1] != "staging" {
-		t.Errorf("Purview.Covens = %v, want [prod staging] (union прямой + через Synod)", got)
+		t.Errorf("Purview.Covens = %v, want [prod staging] (union of direct + via Synod)", got)
 	}
 }
 
@@ -465,7 +465,7 @@ func TestLoadSnapshot_SynodRoleDedup(t *testing.T) {
 	}
 	got := snap.Membership["archon-alice"]
 	if len(got) != 1 || got[0] != "prod-ops" {
-		t.Errorf("Membership[archon-alice] = %v, want [prod-ops] (дедуп прямой+Synod)", got)
+		t.Errorf("Membership[archon-alice] = %v, want [prod-ops] (dedup direct+Synod)", got)
 	}
 }
 
@@ -495,7 +495,7 @@ func TestLoadSnapshot_SynodMultipleSynods(t *testing.T) {
 	}
 	got := sortedStrings(snap.Membership["archon-alice"])
 	if len(got) != 2 || got[0] != "role-a" || got[1] != "role-b" {
-		t.Errorf("Membership[archon-alice] = %v, want [role-a role-b] (union двух Synod, дедуп)", got)
+		t.Errorf("Membership[archon-alice] = %v, want [role-a role-b] (union of two Synods, dedup)", got)
 	}
 }
 

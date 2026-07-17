@@ -37,10 +37,10 @@ type VigilCreateRequest struct {
 	Name     string           `json:"name" required:"true" pattern:"^[a-z0-9-]{1,63}$" doc:"Vigil name (kebab-case, 1..63)"`
 	Coven    *[]string        `json:"coven,omitempty" doc:"subject Coven tags (XOR with sid)"`
 	SID      *string          `json:"sid,omitempty" doc:"subject — single specific SID (XOR with coven)"`
-	Interval string           `json:"interval" required:"true" doc:"частота проверки (duration-конвенция, onпр. '30s')"`
-	Check    string           `json:"check" required:"true" doc:"адрес core-beacon (onпр. 'core.beacon.file_changed')"`
-	Params   *json.RawMessage `json:"params,omitempty" doc:"параметры проверки; form зависит от check (переgivesся as есть)"`
-	Enabled  *bool            `json:"enabled,omitempty" doc:"активon ли проверка (по умолчанию true)"`
+	Interval string           `json:"interval" required:"true" doc:"check frequency (duration convention, e.g. '30s')"`
+	Check    string           `json:"check" required:"true" doc:"core-beacon address (e.g. 'core.beacon.file_changed')"`
+	Params   *json.RawMessage `json:"params,omitempty" doc:"check parameters; shape depends on check (passed through as-is)"`
+	Enabled  *bool            `json:"enabled,omitempty" doc:"whether the check is active (default true)"`
 }
 
 // vigilCreateOutput — huma output POST /v1/vigils (FULL-TYPED). Status=201; Body —
@@ -60,8 +60,8 @@ func vigilCreateOperation() huma.Operation {
 		OperationID:   "createVigil",
 		Method:        http.MethodPost,
 		Path:          "/vigils",
-		Summary:       "Создать Vigil",
-		Description:   "Заbutсит Vigil (Soul-side проверку) в реестр oracle (ADR-030). Permission vigil.create. 409 — name занят.",
+		Summary:       "Create Vigil",
+		Description:   "Registers a Vigil (Soul-side check) in the oracle registry (ADR-030). Permission vigil.create. 409 -- name taken.",
 		Tags:          []string{"oracle"},
 		DefaultStatus: http.StatusCreated,
 		Errors:        []int{http.StatusBadRequest, http.StatusForbidden, http.StatusConflict, http.StatusUnprocessableEntity, http.StatusInternalServerError},
@@ -92,8 +92,8 @@ func vigilListOperation() huma.Operation {
 		OperationID:   "listVigils",
 		Method:        http.MethodGet,
 		Path:          "/vigils",
-		Summary:       "Спиwithк Vigil-ов (paged)",
-		Description:   "Реестр Vigil-ов с пагиonцией (ADR-030). Permission vigil.list. Read-only, no audit.",
+		Summary:       "List of Vigils (paged)",
+		Description:   "Vigil registry with pagination (ADR-030). Permission vigil.list. Read-only, no audit.",
 		Tags:          []string{"oracle"},
 		DefaultStatus: http.StatusOK,
 		Errors:        []int{http.StatusBadRequest, http.StatusForbidden, http.StatusInternalServerError},
@@ -122,8 +122,8 @@ func vigilGetOperation() huma.Operation {
 		OperationID:   "getVigil",
 		Method:        http.MethodGet,
 		Path:          "/vigils/{name}",
-		Summary:       "Карточка Vigil-а",
-		Description:   "Метаданные одbutго Vigil-а по имени (ADR-030). Permission vigil.list (read покрыт list-правом). Read-only, no audit.",
+		Summary:       "Vigil card",
+		Description:   "Metadata of a single Vigil by name (ADR-030). Permission vigil.list (read is covered by the list permission). Read-only, no audit.",
 		Tags:          []string{"oracle"},
 		DefaultStatus: http.StatusOK,
 		Errors:        []int{http.StatusForbidden, http.StatusNotFound, http.StatusUnprocessableEntity, http.StatusInternalServerError},
@@ -152,8 +152,8 @@ func vigilDeleteOperation() huma.Operation {
 		OperationID:   "deleteVigil",
 		Method:        http.MethodDelete,
 		Path:          "/vigils/{name}",
-		Summary:       "Удалить Vigil",
-		Description:   "Удаляет Vigil from реестра oracle (ADR-030). Permission vigil.delete. 404 — записи absent.",
+		Summary:       "Delete Vigil",
+		Description:   "Deletes a Vigil from the oracle registry (ADR-030). Permission vigil.delete. 404 -- record absent.",
 		Tags:          []string{"oracle"},
 		DefaultStatus: http.StatusNoContent,
 		Errors:        []int{http.StatusForbidden, http.StatusNotFound, http.StatusUnprocessableEntity, http.StatusInternalServerError},
@@ -176,15 +176,15 @@ type decreeCreateInput struct {
 // name = the contract schema name in OpenAPI (committed hand-written spec → DecreeCreateRequest).
 type DecreeCreateRequest struct {
 	Name            string           `json:"name" required:"true" pattern:"^[a-z0-9-]{1,63}$" doc:"Decree name (kebab-case, 1..63)"`
-	OnBeacon        string           `json:"on_beacon" required:"true" pattern:"^[a-z0-9-]{1,63}$" doc:"Vigil name, on чей Portent правило реагирует"`
+	OnBeacon        string           `json:"on_beacon" required:"true" pattern:"^[a-z0-9-]{1,63}$" doc:"Vigil name whose Portent the rule reacts to"`
 	Coven           *[]string        `json:"coven,omitempty" doc:"subject Coven tags (XOR with sid)"`
 	SID             *string          `json:"sid,omitempty" doc:"subject — single specific SID (XOR with coven)"`
-	IncarnationName string           `json:"incarnation_name" required:"true" pattern:"^[a-z0-9][a-z0-9-]{0,62}$" doc:"таргет-incarnation реакции (обязательbut)"`
-	ActionScenario  string           `json:"action_scenario" required:"true" pattern:"^[a-z][a-z0-9_]*$" doc:"named scenario (whitelist; raw-команда отвергнута)"`
-	ActionInput     *json.RawMessage `json:"action_input,omitempty" doc:"вход сцеonрия (vault-ref едет as есть)"`
-	Where           *string          `json:"where,omitempty" doc:"опц. CEL-предикат onд event.data; compile-checksся"`
-	Cooldown        *string          `json:"cooldown,omitempty" doc:"минимальный интервал между срабатываниями per-(decree, subject)"`
-	Enabled         *bool            `json:"enabled,omitempty" doc:"активbut ли правило (по умолчанию true)"`
+	IncarnationName string           `json:"incarnation_name" required:"true" pattern:"^[a-z0-9][a-z0-9-]{0,62}$" doc:"target incarnation of the reaction (required)"`
+	ActionScenario  string           `json:"action_scenario" required:"true" pattern:"^[a-z][a-z0-9_]*$" doc:"named scenario (whitelist; raw command rejected)"`
+	ActionInput     *json.RawMessage `json:"action_input,omitempty" doc:"scenario input (vault-ref passed through as-is)"`
+	Where           *string          `json:"where,omitempty" doc:"opt. CEL predicate over event.data; compile-checked"`
+	Cooldown        *string          `json:"cooldown,omitempty" doc:"minimum interval between triggers per-(decree, subject)"`
+	Enabled         *bool            `json:"enabled,omitempty" doc:"whether the rule is active (default true)"`
 }
 
 // decreeCreateOutput — huma output POST /v1/decrees (FULL-TYPED). Status=201; Body —
@@ -204,8 +204,8 @@ func decreeCreateOperation() huma.Operation {
 		OperationID:   "createDecree",
 		Method:        http.MethodPost,
 		Path:          "/decrees",
-		Summary:       "Создать Decree",
-		Description:   "Заbutсит Decree (правило reactor) в реестр oracle (ADR-030). Permission decree.create. 409 — name занят.",
+		Summary:       "Create Decree",
+		Description:   "Registers a Decree (reactor rule) in the oracle registry (ADR-030). Permission decree.create. 409 -- name taken.",
 		Tags:          []string{"oracle"},
 		DefaultStatus: http.StatusCreated,
 		Errors:        []int{http.StatusBadRequest, http.StatusForbidden, http.StatusConflict, http.StatusUnprocessableEntity, http.StatusInternalServerError},
@@ -234,8 +234,8 @@ func decreeListOperation() huma.Operation {
 		OperationID:   "listDecrees",
 		Method:        http.MethodGet,
 		Path:          "/decrees",
-		Summary:       "Спиwithк Decree-ов (paged)",
-		Description:   "Реестр Decree-ов с пагиonцией (ADR-030). Permission decree.list. Read-only, no audit.",
+		Summary:       "List of Decrees (paged)",
+		Description:   "Decree registry with pagination (ADR-030). Permission decree.list. Read-only, no audit.",
 		Tags:          []string{"oracle"},
 		DefaultStatus: http.StatusOK,
 		Errors:        []int{http.StatusBadRequest, http.StatusForbidden, http.StatusInternalServerError},
@@ -264,8 +264,8 @@ func decreeGetOperation() huma.Operation {
 		OperationID:   "getDecree",
 		Method:        http.MethodGet,
 		Path:          "/decrees/{name}",
-		Summary:       "Карточка Decree-а",
-		Description:   "Метаданные одbutго Decree-а по имени (ADR-030). Permission decree.list (read покрыт list-правом). Read-only, no audit.",
+		Summary:       "Decree card",
+		Description:   "Metadata of a single Decree by name (ADR-030). Permission decree.list (read is covered by the list permission). Read-only, no audit.",
 		Tags:          []string{"oracle"},
 		DefaultStatus: http.StatusOK,
 		Errors:        []int{http.StatusForbidden, http.StatusNotFound, http.StatusUnprocessableEntity, http.StatusInternalServerError},
@@ -287,8 +287,8 @@ func decreeDeleteOperation() huma.Operation {
 		OperationID:   "deleteDecree",
 		Method:        http.MethodDelete,
 		Path:          "/decrees/{name}",
-		Summary:       "Удалить Decree",
-		Description:   "Удаляет Decree каскадbut (cooldown-state, ADR-030). Permission decree.delete. 404 — записи absent.",
+		Summary:       "Delete Decree",
+		Description:   "Deletes a Decree cascading (cooldown state, ADR-030). Permission decree.delete. 404 -- record absent.",
 		Tags:          []string{"oracle"},
 		DefaultStatus: http.StatusNoContent,
 		Errors:        []int{http.StatusForbidden, http.StatusNotFound, http.StatusUnprocessableEntity, http.StatusInternalServerError},

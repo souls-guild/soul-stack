@@ -1550,7 +1550,7 @@ func UpgradeStateSchema(ctx context.Context, pool TxBeginner, in UpgradeInput) (
 	// migration_failed with separate background-tx.
 	markErr := markMigrationFailed(pool, in, err)
 	if markErr != nil {
-		return nil, fmt.Errorf("incarnation: upgrade failed (%w); пометка migration_failed провалена: %v", err, markErr)
+		return nil, fmt.Errorf("incarnation: upgrade failed (%w); marking migration_failed failed: %v", err, markErr)
 	}
 	return nil, err
 }

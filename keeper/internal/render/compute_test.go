@@ -39,14 +39,14 @@ func TestResolveCompute_ChainAndContext(t *testing.T) {
 	}
 	base, _ := got["base"].(map[string]any)
 	if base["a"] != "1" || base["b"] != "9" {
-		t.Fatalf("compute.base = %#v, want {a:1, b:9} (input.over.b бьёт essence)", got["base"])
+		t.Fatalf("compute.base = %#v, want {a:1, b:9} (input.over.b beats essence)", got["base"])
 	}
 	full, _ := got["full"].(map[string]any)
 	if full["a"] != "1" || full["b"] != "9" || full["extra"] != "yes" {
-		t.Fatalf("compute.full = %#v, want base + extra:yes (ссылка на ранний compute)", got["full"])
+		t.Fatalf("compute.full = %#v, want base + extra:yes (reference to an earlier compute)", got["full"])
 	}
 	if got["n"] != int64(7) {
-		t.Fatalf("compute.n = %#v, want литерал 7", got["n"])
+		t.Fatalf("compute.n = %#v, want literal 7", got["n"])
 	}
 }
 
@@ -69,10 +69,10 @@ func TestResolveCompute_BarrierSoulprint(t *testing.T) {
 	}
 	_, err := p.resolveCompute(in)
 	if err == nil {
-		t.Fatalf("★ ожидалась ошибка: compute не должен видеть soulprint (барьер host-инвариантности)")
+		t.Fatalf("★ expected an error: compute must not see soulprint (host-invariance barrier)")
 	}
 	if !strings.Contains(err.Error(), "compute.ip") {
-		t.Fatalf("ошибка должна указывать на compute.ip, получено: %v", err)
+		t.Fatalf("error should point to compute.ip, got: %v", err)
 	}
 }
 
@@ -152,7 +152,7 @@ func TestCompute_NotLeakingIntoDestiny(t *testing.T) {
 		t.Fatalf("resolveCompute(destiny): %v", err)
 	}
 	if got != nil {
-		t.Fatalf("★ destiny compute = %#v, want nil (изоляция: compute не протекает в destiny)", got)
+		t.Fatalf("★ destiny compute = %#v, want nil (isolation: compute must not leak into destiny)", got)
 	}
 }
 
@@ -186,7 +186,7 @@ func TestCompute_NotLeakingIntoDestiny_RenderThrough(t *testing.T) {
 
 	_, _, err := p.Render(context.Background(), in)
 	if err == nil {
-		t.Fatal("★ Render: ожидалась ошибка — destiny не должна видеть compute (изоляция, compute.* недоступен в destiny-проходе)")
+		t.Fatal("★ Render: expected an error — destiny must not see compute (isolation, compute.* unavailable in the destiny pass)")
 	}
 }
 
@@ -212,10 +212,10 @@ func TestResolveCompute_ForwardReferenceIsNoSuchKey(t *testing.T) {
 	}
 	_, err := p.resolveCompute(in)
 	if err == nil {
-		t.Fatal("★ ожидалась ошибка: forward-reference compute.late из compute.early (объявлен позже)")
+		t.Fatal("★ expected an error: forward-reference to compute.late from compute.early (declared later)")
 	}
 	if !strings.Contains(err.Error(), "compute.early") {
-		t.Fatalf("ошибка должна указывать на compute.early, получено: %v", err)
+		t.Fatalf("error should point to compute.early, got: %v", err)
 	}
 }
 
@@ -237,9 +237,9 @@ func TestResolveCompute_BrokenCELWrapped(t *testing.T) {
 	}
 	_, err := p.resolveCompute(in)
 	if err == nil {
-		t.Fatal("★ ожидалась ошибка на битом CEL внутри compute.bad")
+		t.Fatal("★ expected an error on broken CEL inside compute.bad")
 	}
 	if !strings.Contains(err.Error(), "render: compute.bad") {
-		t.Fatalf("ошибка должна быть обёрнута как 'render: compute.bad: ...', получено: %v", err)
+		t.Fatalf("error should be wrapped as 'render: compute.bad: ...', got: %v", err)
 	}
 }

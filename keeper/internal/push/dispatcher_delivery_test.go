@@ -124,10 +124,10 @@ func TestSendApply_DeliverFailAbortsExec(t *testing.T) {
 
 	_, err := disp.SendApply(context.Background(), "host-1.example.com", testProviderName, &keeperv1.ApplyRequest{ApplyId: "ap-deliv-2"})
 	if err == nil {
-		t.Fatal("ждали fail-closed на ошибке доставки")
+		t.Fatal("expected fail-closed on delivery error")
 	}
 	if len(sess.gotStdin) != 0 {
-		t.Errorf("exec не должен был случиться (stdin пуст)")
+		t.Errorf("exec should not have happened (stdin empty)")
 	}
 }
 
@@ -142,7 +142,7 @@ func TestSendApply_DelivererNilSkipsDelivery_S0BC(t *testing.T) {
 		Dial:      func(_ context.Context, _ DialConfig) (Session, error) { return sess, nil },
 	})
 	if _, err := disp.SendApply(context.Background(), "host-1.example.com", testProviderName, &keeperv1.ApplyRequest{ApplyId: "ap-deliv-3"}); err != nil {
-		t.Fatalf("S0-flow без Deliverer должен работать: %v", err)
+		t.Fatalf("S0-flow without Deliverer should work: %v", err)
 	}
 }
 
@@ -165,13 +165,13 @@ func TestSendApply_PropagatesSoulSpecToDeliverer(t *testing.T) {
 		t.Fatalf("SendApply: %v", err)
 	}
 	if deliv.deliverN != 1 {
-		t.Fatalf("Deliver вызван %d раз, want 1", deliv.deliverN)
+		t.Fatalf("Deliver called %d times, want 1", deliv.deliverN)
 	}
 	if deliv.gotSpec.SoulBinaryPath != spec.SoulBinaryPath {
 		t.Errorf("SoulBinaryPath=%q, want %q", deliv.gotSpec.SoulBinaryPath, spec.SoulBinaryPath)
 	}
 	if len(deliv.gotSpec.Modules) != 1 || deliv.gotSpec.Modules[0].Name != "soul-mod-pkg" {
-		t.Errorf("Modules не доехали: %+v", deliv.gotSpec.Modules)
+		t.Errorf("Modules did not make it through: %+v", deliv.gotSpec.Modules)
 	}
 }
 
@@ -189,10 +189,10 @@ func TestDispatcher_Cleanup_UsesCleaner(t *testing.T) {
 		t.Fatalf("Cleanup: %v", err)
 	}
 	if cleaner.cleanupN != 1 {
-		t.Errorf("Cleaner вызван %d раз, want 1", cleaner.cleanupN)
+		t.Errorf("Cleaner called %d times, want 1", cleaner.cleanupN)
 	}
 	if !sess.closed {
-		t.Error("сессия не закрыта после Cleanup")
+		t.Error("session not closed after Cleanup")
 	}
 }
 
@@ -205,7 +205,7 @@ func TestDispatcher_Cleanup_NoCleanerConfigured(t *testing.T) {
 	})
 	err := disp.Cleanup(context.Background(), "host-1.example.com", testProviderName)
 	if err == nil {
-		t.Fatal("без Cleaner cleanup должен возвращать ошибку")
+		t.Fatal("without Cleaner, cleanup should return an error")
 	}
 }
 
@@ -220,10 +220,10 @@ func TestDispatcher_Cleanup_RejectsNonSSHTransport(t *testing.T) {
 		Dial:      func(_ context.Context, _ DialConfig) (Session, error) { dialed = true; return &mockSession{}, nil },
 	})
 	if err := disp.Cleanup(context.Background(), "host-1.example.com", testProviderName); err == nil {
-		t.Fatal("ждали ошибку для transport=agent")
+		t.Fatal("expected error for transport=agent")
 	}
 	if dialed {
-		t.Error("connect не должен происходить для non-ssh при Cleanup")
+		t.Error("connect should not happen for non-ssh during Cleanup")
 	}
 }
 
@@ -237,6 +237,6 @@ func TestDispatcher_Cleanup_AuthorizeDeny(t *testing.T) {
 		Dial:      func(_ context.Context, _ DialConfig) (Session, error) { return &mockSession{}, nil },
 	})
 	if err := disp.Cleanup(context.Background(), "host-1.example.com", testProviderName); err == nil {
-		t.Fatal("ждали отказ Authorize → ошибка Cleanup")
+		t.Fatal("expected Authorize failure -> Cleanup error")
 	}
 }

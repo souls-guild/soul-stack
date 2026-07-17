@@ -82,7 +82,7 @@ tasks: []
 	diags := runJSON(t, p)
 	for _, c := range []string{"input_type_unknown", "input_type_cycle", "input_type_duplicate", "input_type_ref_conflict"} {
 		if hasCode(diags, c) {
-			t.Fatalf("валидная ссылка не должна давать %s: %+v", c, diags)
+			t.Fatalf("a valid reference should not produce %s: %+v", c, diags)
 		}
 	}
 }
@@ -105,7 +105,7 @@ tasks: []
 	p := writeMiniService(t, types, "deploy", main)
 	diags := runJSON(t, p)
 	if !hasCode(diags, "input_type_unknown") {
-		t.Fatalf("ссылка на отсутствующий тип → input_type_unknown: %+v", diags)
+		t.Fatalf("reference to a missing type -> input_type_unknown: %+v", diags)
 	}
 }
 
@@ -133,7 +133,7 @@ tasks: []
 	p := writeMiniService(t, types, "deploy", main)
 	diags := runJSON(t, p)
 	if !hasCode(diags, "input_type_cycle") {
-		t.Fatalf("цикл между типами → input_type_cycle: %+v", diags)
+		t.Fatalf("cycle between types -> input_type_cycle: %+v", diags)
 	}
 }
 
@@ -154,7 +154,7 @@ tasks: []
 	p := writeMiniService(t, types, "deploy", main)
 	diags := runJSON(t, p)
 	if !hasCode(diags, "input_type_duplicate") {
-		t.Fatalf("дубликат типа → input_type_duplicate: %+v", diags)
+		t.Fatalf("duplicate type -> input_type_duplicate: %+v", diags)
 	}
 }
 
@@ -188,7 +188,7 @@ tasks: []
 	diags := runJSON(t, p)
 	for _, c := range []string{"input_type_unknown", "input_type_cycle", "io_error"} {
 		if hasCode(diags, c) {
-			t.Fatalf("сценарий без $type не должен давать %s: %+v", c, diags)
+			t.Fatalf("a scenario without $type should not produce %s: %+v", c, diags)
 		}
 	}
 }

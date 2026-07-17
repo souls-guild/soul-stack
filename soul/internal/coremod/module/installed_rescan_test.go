@@ -22,11 +22,11 @@ func TestApplyInstalledChangedCallsRescan(t *testing.T) {
 
 	ev := f.apply(t, map[string]any{"name": "community.redis"})
 	if ev.GetFailed() || !ev.GetChanged() {
-		t.Fatalf("ожидался changed=true, получено failed=%v changed=%v message=%q",
+		t.Fatalf("expected changed=true, got failed=%v changed=%v message=%q",
 			ev.GetFailed(), ev.GetChanged(), ev.GetMessage())
 	}
 	if calls != 1 {
-		t.Errorf("Rescan вызван %d раз(а) после установки, want 1", calls)
+		t.Errorf("Rescan called %d time(s) after install, want 1", calls)
 	}
 }
 
@@ -43,11 +43,11 @@ func TestApplyInstalledIdempotentSkipsRescan(t *testing.T) {
 
 	ev := f.apply(t, map[string]any{"name": "community.redis"})
 	if ev.GetFailed() || ev.GetChanged() {
-		t.Fatalf("ожидался идемпотентный changed=false, получено failed=%v changed=%v message=%q",
+		t.Fatalf("expected idempotent changed=false, got failed=%v changed=%v message=%q",
 			ev.GetFailed(), ev.GetChanged(), ev.GetMessage())
 	}
 	if calls != 0 {
-		t.Errorf("Rescan вызван %d раз(а) на идемпотентном skip-е, want 0", calls)
+		t.Errorf("Rescan called %d time(s) on an idempotent skip, want 0", calls)
 	}
 }
 
@@ -59,9 +59,9 @@ func TestApplyInstalledFailedSkipsRescan(t *testing.T) {
 
 	ev := f.apply(t, map[string]any{"name": "community.redis"})
 	if !ev.GetFailed() {
-		t.Fatalf("ожидался failed на verify, получено changed=%v", ev.GetChanged())
+		t.Fatalf("expected failed on verify, got changed=%v", ev.GetChanged())
 	}
 	if calls != 0 {
-		t.Errorf("Rescan вызван %d раз(а) на проваленной установке, want 0", calls)
+		t.Errorf("Rescan called %d time(s) on a failed install, want 0", calls)
 	}
 }

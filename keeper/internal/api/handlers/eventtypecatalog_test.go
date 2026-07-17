@@ -38,24 +38,24 @@ func TestEventTypeCatalog_List(t *testing.T) {
 	resp := h.ListTyped()
 
 	if len(resp.Areas) == 0 {
-		t.Fatal("areas пусты")
+		t.Fatal("areas empty")
 	}
 	if len(resp.PointEvents) == 0 {
-		t.Fatal("point_events пусты")
+		t.Fatal("point_events empty")
 	}
 
 	// Expected run areas in area-glob form (ADR-052(b)): the catalog returns
 	// `<area>.*`, not the bare area name (a bare name is invalid for subscription).
 	for _, want := range []string{"scenario_run.*", "command_run.*", "voyage.*", "cadence.*"} {
 		if !containsName(areaNames(resp.Areas), want) {
-			t.Errorf("область %q отсутствует в каталоге areas", want)
+			t.Errorf("area %q missing from areas catalog", want)
 		}
 	}
 
 	// Point types: drift check + terminal run_completed (T4a/T4b subscriptions).
 	for _, want := range []string{"incarnation.drift_checked", "incarnation.run_completed"} {
 		if !containsName(pointNames(resp.PointEvents), want) {
-			t.Errorf("точечный тип %q отсутствует в каталоге point_events", want)
+			t.Errorf("point type %q missing from point_events catalog", want)
 		}
 	}
 
@@ -68,7 +68,7 @@ func assertSorted(t *testing.T, label string, names []string) {
 	t.Helper()
 	for i := 1; i < len(names); i++ {
 		if names[i-1] >= names[i] {
-			t.Errorf("%s не отсортированы или дубль: %q >= %q", label, names[i-1], names[i])
+			t.Errorf("%s not sorted or duplicate: %q >= %q", label, names[i-1], names[i])
 		}
 	}
 }
@@ -104,12 +104,12 @@ func TestEventTypeCatalog_SingleSourceOfTruth(t *testing.T) {
 	// contract: the UI submits values verbatim. We run exactly what the output contains.
 	for _, a := range gotAreas {
 		if err := herald.ValidateEventTypes([]string{a}); err != nil {
-			t.Errorf("area-glob %q отвергнут валидатором: %v", a, err)
+			t.Errorf("area-glob %q rejected by validator: %v", a, err)
 		}
 	}
 	for _, p := range gotPoints {
 		if err := herald.ValidateEventTypes([]string{p}); err != nil {
-			t.Errorf("точечный тип %q отвергнут валидатором: %v", p, err)
+			t.Errorf("point type %q rejected by validator: %v", p, err)
 		}
 	}
 }

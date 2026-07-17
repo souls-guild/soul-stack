@@ -456,7 +456,7 @@ func TestAugurRiteCreate_Success(t *testing.T) {
 	assertPayload(t, rec.events[0].Payload, "subject", "coven=web")
 	// allow-list is NOT in the payload (augur.md §8).
 	if _, ok := rec.events[0].Payload["allow"]; ok {
-		t.Errorf("allow-list попал в audit-payload: %v", rec.events[0].Payload)
+		t.Errorf("allow-list leaked into the audit payload: %v", rec.events[0].Payload)
 	}
 }
 

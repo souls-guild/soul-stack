@@ -35,9 +35,9 @@ import (
 // "Scenario". The type name = the contract schema name (huma DefaultSchemaNamer capitalizes →
 // "ServiceScenariosListReply").
 type serviceScenariosListReply struct {
-	Service   string              `json:"service" doc:"Service name (дубль path-параметра)"`
-	Ref       string              `json:"ref" doc:"git-ref, on котором withставлен listing"`
-	Scenarios []artifact.Scenario `json:"scenarios" doc:"scenario from сonпшота git-репо Service-а"`
+	Service   string              `json:"service" doc:"Service name (duplicate of path parameter)"`
+	Ref       string              `json:"ref" doc:"git-ref the listing was produced from"`
+	Scenarios []artifact.Scenario `json:"scenarios" doc:"scenario from the Service git-repo snapshot"`
 }
 
 // registerServiceEnvelopes registers a huma alias handlers.ServiceScenariosReply →

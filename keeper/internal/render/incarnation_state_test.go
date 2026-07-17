@@ -20,7 +20,7 @@ func TestIncarnationVars_StateProjected(t *testing.T) {
 	}
 	got := incarnationVars(in, 3)
 	if got["state"] == nil {
-		t.Fatalf("incarnation.state не спроецирован: %v", got)
+		t.Fatalf("incarnation.state is not projected: %v", got)
 	}
 	if !reflect.DeepEqual(got["state"], state) {
 		t.Fatalf("incarnation.state = %v, want %v", got["state"], state)
@@ -34,7 +34,7 @@ func TestIncarnationVars_NilStateNoKey(t *testing.T) {
 	in := RenderInput{Incarnation: IncarnationMeta{Name: "x"}}
 	got := incarnationVars(in, 1)
 	if _, ok := got["state"]; ok {
-		t.Fatalf("nil-State не должен класть ключ state, got: %v", got)
+		t.Fatalf("nil-State must not set the state key, got: %v", got)
 	}
 }
 
@@ -77,7 +77,7 @@ func TestRenderState_ReadOnly(t *testing.T) {
 		"count":       2,
 	}
 	if !reflect.DeepEqual(state, want) {
-		t.Fatalf("★ incarnation.state мутирован eval-ом: got %v, want %v", state, want)
+		t.Fatalf("★ incarnation.state was mutated by eval: got %v, want %v", state, want)
 	}
 }
 
@@ -114,7 +114,7 @@ func TestRenderState_StagedSnapshotInvariant(t *testing.T) {
 	p0 := eval(0)
 	p1 := eval(1)
 	if !reflect.DeepEqual(p0, p1) {
-		t.Fatalf("★ incarnation.state разошёлся между passages: P0=%v P1=%v (снимок обязан быть инвариантен)", p0, p1)
+		t.Fatalf("★ incarnation.state diverged between passages: P0=%v P1=%v (the snapshot must be invariant)", p0, p1)
 	}
 	// Snapshot == the original pre-run state (no accumulation across passages).
 	want := map[string]any{"alice": map[string]any{"acl": "+@read"}}
@@ -141,10 +141,10 @@ func TestRenderState_BackwardCompatNoState(t *testing.T) {
 	// not a compile error, even without State.
 	out, err := e.EvalExpression("has(incarnation.state) && size(incarnation.state.redis_users) > 0", vars)
 	if err != nil {
-		t.Fatalf("backward-compat has(incarnation.state): %v (должно резолвиться без State)", err)
+		t.Fatalf("backward-compat has(incarnation.state): %v (must resolve without State)", err)
 	}
 	if b, _ := out.Value().(bool); b {
-		t.Fatalf("has(incarnation.state) без State = true, want false")
+		t.Fatalf("has(incarnation.state) without State = true, want false")
 	}
 }
 
@@ -161,7 +161,7 @@ func TestRenderState_StateChangesSeesState(t *testing.T) {
 	}
 	vars := stateChangesVars(in, in.Hosts[0])
 	if vars.Incarnation["state"] == nil {
-		t.Fatalf("state_changes-контекст не видит incarnation.state: %v", vars.Incarnation)
+		t.Fatalf("state_changes context does not see incarnation.state: %v", vars.Incarnation)
 	}
 	if !reflect.DeepEqual(vars.Incarnation["state"], state) {
 		t.Fatalf("state_changes incarnation.state = %v, want %v", vars.Incarnation["state"], state)

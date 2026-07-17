@@ -36,16 +36,16 @@ func TestLastSeenFlusher_ThrottlesWithinWindow(t *testing.T) {
 	base := time.Now()
 
 	if !f.shouldFlush("host.example.com", base) {
-		t.Fatal("первый вызов должен флашить")
+		t.Fatal("first call should flush")
 	}
 	if f.shouldFlush("host.example.com", base.Add(10*time.Second)) {
-		t.Error("второй вызов внутри окна не должен флашить")
+		t.Error("second call within the window should not flush")
 	}
 	if f.shouldFlush("host.example.com", base.Add(29*time.Second)) {
-		t.Error("вызов на границе окна (29s < 30s) не должен флашить")
+		t.Error("call at window boundary (29s < 30s) should not flush")
 	}
 	if !f.shouldFlush("host.example.com", base.Add(30*time.Second)) {
-		t.Error("вызов на/после интервала (30s) должен флашить")
+		t.Error("call at/after the interval (30s) should flush")
 	}
 }
 
@@ -54,14 +54,14 @@ func TestLastSeenFlusher_PerSIDIndependent(t *testing.T) {
 	base := time.Now()
 
 	if !f.shouldFlush("a.example.com", base) {
-		t.Fatal("первый flush для a")
+		t.Fatal("first flush for a")
 	}
 	// A different SID within the first one's window should not be throttled.
 	if !f.shouldFlush("b.example.com", base.Add(time.Second)) {
-		t.Error("первый flush для b должен пройти независимо от a")
+		t.Error("first flush for b should pass independently of a")
 	}
 	if f.shouldFlush("a.example.com", base.Add(time.Second)) {
-		t.Error("a внутри своего окна троттлится")
+		t.Error("a is throttled within its own window")
 	}
 }
 
@@ -70,13 +70,13 @@ func TestLastSeenFlusher_ForgetResetsThrottle(t *testing.T) {
 	base := time.Now()
 
 	if !f.shouldFlush("host.example.com", base) {
-		t.Fatal("первый flush")
+		t.Fatal("first flush")
 	}
 	f.forget("host.example.com")
 	// After forget, the next call within the window flushes again (as if
 	// it were a new connection of the same SID).
 	if !f.shouldFlush("host.example.com", base.Add(time.Second)) {
-		t.Error("после forget вызов внутри окна должен флашить")
+		t.Error("after forget, a call within the window should flush")
 	}
 }
 
@@ -132,15 +132,15 @@ func TestFlushLastSeen_WritesThenThrottles(t *testing.T) {
 	now := time.Now()
 	h.flushLastSeen(context.Background(), "host.example.com", now)
 	if db.execCalls != 1 {
-		t.Fatalf("после первого flush execCalls = %d, want 1", db.execCalls)
+		t.Fatalf("after first flush execCalls = %d, want 1", db.execCalls)
 	}
 	h.flushLastSeen(context.Background(), "host.example.com", now.Add(5*time.Second))
 	if db.execCalls != 1 {
-		t.Errorf("второй flush в окне: execCalls = %d, want 1 (throttled)", db.execCalls)
+		t.Errorf("second flush within window: execCalls = %d, want 1 (throttled)", db.execCalls)
 	}
 	h.flushLastSeen(context.Background(), "host.example.com", now.Add(31*time.Second))
 	if db.execCalls != 2 {
-		t.Errorf("flush после интервала: execCalls = %d, want 2", db.execCalls)
+		t.Errorf("flush after interval: execCalls = %d, want 2", db.execCalls)
 	}
 }
 

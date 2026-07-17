@@ -46,9 +46,9 @@ func TestResolveVaultRefs_Empty(t *testing.T) {
 func TestReadVaultRef_InterpolationMarker(t *testing.T) {
 	_, err := readVaultRef(context.Background(), nil, "vault:secret/db/${ input.x }")
 	if err == nil {
-		t.Fatal("ожидалась ошибка ${…} в vault-ref")
+		t.Fatal("expected an error for ${...} in vault-ref")
 	}
-	if !strings.Contains(err.Error(), "статической строкой") {
+	if !strings.Contains(err.Error(), "static string") {
 		t.Errorf("err = %v", err)
 	}
 }
@@ -57,9 +57,9 @@ func TestReadVaultRef_InterpolationMarker(t *testing.T) {
 func TestReadVaultRef_NilClient(t *testing.T) {
 	_, err := readVaultRef(context.Background(), nil, "vault:secret/db/password")
 	if err == nil {
-		t.Fatal("ожидалась ошибка nil-client при наличии vault-ref")
+		t.Fatal("expected a nil-client error when a vault-ref is present")
 	}
-	if !strings.Contains(err.Error(), "не сконфигурирован") {
+	if !strings.Contains(err.Error(), "not configured") {
 		t.Errorf("err = %v", err)
 	}
 }
@@ -68,7 +68,7 @@ func TestReadVaultRef_NilClient(t *testing.T) {
 func TestReadVaultRef_EmptyField(t *testing.T) {
 	_, err := readVaultRef(context.Background(), nil, "vault:secret/db/creds#")
 	if err == nil {
-		t.Fatal("ожидалась ошибка пустого поля после '#'")
+		t.Fatal("expected an error for an empty field after '#'")
 	}
 }
 
@@ -83,7 +83,7 @@ func TestResolveVaultRefs_RefDetectedInNested(t *testing.T) {
 	}
 	_, err := resolveVaultRefs(context.Background(), nil, params)
 	if err == nil {
-		t.Fatal("ожидалась ошибка: ref во вложенной структуре должен дойти до Vault")
+		t.Fatal("expected an error: ref in a nested struct must reach Vault")
 	}
 }
 
@@ -109,7 +109,7 @@ func TestReadVaultRef_MissingSecretActionable(t *testing.T) {
 	kv := resolveVaultStubKV{secrets: map[string]map[string]any{}}
 	_, err := readVaultRef(context.Background(), kv, "vault:secret/redis/nosql/users/alice#password")
 	if err == nil {
-		t.Fatal("ожидали ошибку отсутствующего секрета")
+		t.Fatal("expected a missing-secret error")
 	}
 	assertResolveVaultActionable(t, err.Error(), "secret/redis/nosql/users/alice")
 }
@@ -123,14 +123,14 @@ func TestReadVaultRef_MissingFieldActionable(t *testing.T) {
 	}}
 	_, err := readVaultRef(context.Background(), kv, "vault:secret/redis/admin#nope")
 	if err == nil {
-		t.Fatal("ожидали ошибку отсутствующего поля")
+		t.Fatal("expected a missing-field error")
 	}
 	assertResolveVaultActionable(t, err.Error(), "secret/redis/admin")
 	if !strings.Contains(err.Error(), "nope") {
-		t.Fatalf("текст не называет отсутствующее поле nope: %q", err.Error())
+		t.Fatalf("text does not name the missing field nope: %q", err.Error())
 	}
 	if strings.Contains(err.Error(), "TOP-SECRET-VALUE") {
-		t.Fatalf("значение другого поля секрета утекло: %q", err.Error())
+		t.Fatalf("another secret field's value leaked: %q", err.Error())
 	}
 }
 
@@ -140,17 +140,17 @@ func TestReadVaultRef_MissingFieldActionable(t *testing.T) {
 func assertResolveVaultActionable(t *testing.T, errText, path string) {
 	t.Helper()
 	if !strings.Contains(errText, path) {
-		t.Fatalf("текст не несёт путь %q: %q", path, errText)
+		t.Fatalf("text does not carry path %q: %q", path, errText)
 	}
 	if strings.Contains(errText, "vault:"+path) {
-		t.Fatalf("текст несёт vault:-ref-форму (маскинг съест целиком): %q", errText)
+		t.Fatalf("text carries the vault:-ref form (masking would eat it whole): %q", errText)
 	}
 	masked := audit.MaskSecretsSealed(map[string]any{"error": errText}, audit.SealOpts{})
 	got, _ := masked["error"].(string)
 	if got == "***MASKED***" {
-		t.Fatalf("actionable-ошибка замаскирована целиком: %q", got)
+		t.Fatalf("actionable error is masked entirely: %q", got)
 	}
 	if !strings.Contains(got, path) {
-		t.Fatalf("путь %q пропал после маскинга: %q", path, got)
+		t.Fatalf("path %q disappeared after masking: %q", path, got)
 	}
 }

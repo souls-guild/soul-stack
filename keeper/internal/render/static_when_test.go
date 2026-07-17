@@ -39,23 +39,23 @@ func TestStaticWhenFalse_SkipsParamRender(t *testing.T) {
 	}
 	tasks, _, err := p.Render(context.Background(), in)
 	if err != nil {
-		t.Fatalf("Render: static-when:false должен скипнуть рендер params (optional-input не достигается), got %v", err)
+		t.Fatalf("Render: static-when:false should skip param render (optional-input is unreachable), got %v", err)
 	}
 	if len(tasks) != 1 {
-		t.Fatalf("len(tasks) = %d, want 1 (placeholder остаётся в плане)", len(tasks))
+		t.Fatalf("len(tasks) = %d, want 1 (placeholder stays in the plan)", len(tasks))
 	}
 	rt := tasks[0]
 	if rt.Params != nil {
-		t.Errorf("Params = %v, want nil (рендер пропущен)", rt.Params.AsMap())
+		t.Errorf("Params = %v, want nil (render skipped)", rt.Params.AsMap())
 	}
 	if rt.When != "input.action == 'apply'" {
-		t.Errorf("When = %q, want протянутый as-is предикат", rt.When)
+		t.Errorf("When = %q, want the as-is passed-through predicate", rt.When)
 	}
 	if rt.Module != "core.exec.run" {
-		t.Errorf("Module = %q, want core.exec.run (плейсхолдер несёт модуль)", rt.Module)
+		t.Errorf("Module = %q, want core.exec.run (placeholder carries the module)", rt.Module)
 	}
 	if rt.FlowContext == nil {
-		t.Error("FlowContext = nil — Soul должен получить flow_context для собственного evalWhen")
+		t.Error("FlowContext = nil - Soul must get flow_context for its own evalWhen")
 	}
 }
 
@@ -76,7 +76,7 @@ func TestStaticWhenTrue_RendersParams(t *testing.T) {
 	}
 	got := tasks[0].Params.GetFields()["cmd"].GetStringValue()
 	if got != "redis-cli config set maxmemory 256mb" {
-		t.Errorf("cmd = %q, want отрендеренную команду (static-when:true → params рендерятся)", got)
+		t.Errorf("cmd = %q, want the rendered command (static-when:true -> params render)", got)
 	}
 }
 
@@ -114,17 +114,17 @@ func TestStaticSkip_OnChangesIndicesIntact(t *testing.T) {
 		t.Fatalf("Render: %v", err)
 	}
 	if len(tasks) != 2 {
-		t.Fatalf("len(tasks) = %d, want 2 (skip не выкидывает задачу из плана)", len(tasks))
+		t.Fatalf("len(tasks) = %d, want 2 (skip does not drop the task from the plan)", len(tasks))
 	}
 	if tasks[0].Index != 0 || tasks[1].Index != 1 {
-		t.Errorf("Index = %d,%d, want 0,1 (сквозная нумерация цела)", tasks[0].Index, tasks[1].Index)
+		t.Errorf("Index = %d,%d, want 0,1 (contiguous numbering intact)", tasks[0].Index, tasks[1].Index)
 	}
 	if tasks[0].Params != nil {
-		t.Error("источник static-skipped → Params должны быть nil")
+		t.Error("source static-skipped -> Params must be nil")
 	}
 	// onchanges resolved to the source's Index (0): the consumer references src.
 	if len(tasks[1].OnChangesIdx) != 1 || tasks[1].OnChangesIdx[0] != 0 {
-		t.Errorf("OnChangesIdx = %v, want [0] (резолв register-имени в Index источника цел)", tasks[1].OnChangesIdx)
+		t.Errorf("OnChangesIdx = %v, want [0] (register-name resolution to source Index intact)", tasks[1].OnChangesIdx)
 	}
 	if plans[1].TaskIndex != 1 {
 		t.Errorf("plans[1].TaskIndex = %d, want 1", plans[1].TaskIndex)
@@ -159,15 +159,15 @@ func TestStaticSkip_ConsistentAcrossPassages(t *testing.T) {
 	in1.ActivePassage = 0 // same active stage — re-render of the same snapshot
 	t1, _, err := p.Render(context.Background(), in1)
 	if err != nil {
-		t.Fatalf("Render P0 (повтор): %v", err)
+		t.Fatalf("Render P0 (repeat): %v", err)
 	}
 
 	if (t0[0].Params == nil) != (t1[0].Params == nil) {
-		t.Errorf("skip непоследователен между прогонами: P0.Params==nil=%v, повтор.Params==nil=%v",
+		t.Errorf("skip is inconsistent between runs: P0.Params==nil=%v, repeat.Params==nil=%v",
 			t0[0].Params == nil, t1[0].Params == nil)
 	}
 	if t0[0].Params != nil {
-		t.Error("оба прогона должны скипнуть (static-when:false на том же снимке)")
+		t.Error("both runs must skip (static-when:false on the same snapshot)")
 	}
 }
 
@@ -204,10 +204,10 @@ func TestStaticSkipEqualsSoulSkip(t *testing.T) {
 	soulSkipped := !soulWhen
 
 	if keeperSkipped != soulSkipped {
-		t.Errorf("Keeper static-skip=%v != Soul when-skip=%v — расхождение sandbox/flow_context", keeperSkipped, soulSkipped)
+		t.Errorf("Keeper static-skip=%v != Soul when-skip=%v - sandbox/flow_context mismatch", keeperSkipped, soulSkipped)
 	}
 	if !keeperSkipped {
-		t.Error("ожидался skip обеими сторонами (action=update_acls != apply)")
+		t.Error("expected a skip on both sides (action=update_acls != apply)")
 	}
 }
 
@@ -237,13 +237,13 @@ func TestRegisterWhen_StaysSoulSide(t *testing.T) {
 		t.Fatalf("Render: %v", err)
 	}
 	if tasks[0].Params == nil {
-		t.Fatal("register-when НЕ должен скипать рендер params (остаётся Soul-side)")
+		t.Fatal("register-when must NOT skip param render (stays Soul-side)")
 	}
 	if got := tasks[0].Params.GetFields()["cmd"].GetStringValue(); got != "echo alice" {
-		t.Errorf("cmd = %q, want отрендеренную команду (params рендерятся прежним путём)", got)
+		t.Errorf("cmd = %q, want the rendered command (params render via the usual path)", got)
 	}
 	if tasks[0].When != "register.probe.changed" {
-		t.Errorf("When = %q, want протянутый as-is предикат", tasks[0].When)
+		t.Errorf("When = %q, want the as-is passed-through predicate", tasks[0].When)
 	}
 }
 
@@ -255,7 +255,7 @@ func TestRegisterWhen_StaysSoulSide(t *testing.T) {
 // register reference.
 func TestMixedWhen_NotStatic(t *testing.T) {
 	if isStaticWhen("input.a && register.b.changed") {
-		t.Fatal("isStaticWhen(input.a && register.b) = true, want false (register-зависимый)")
+		t.Fatal("isStaticWhen(input.a && register.b) = true, want false (register-dependent)")
 	}
 	manifest := &config.ScenarioManifest{
 		Name: "mixed-when",
@@ -276,13 +276,13 @@ func TestMixedWhen_NotStatic(t *testing.T) {
 	}
 	tasks, _, err := p.Render(context.Background(), in)
 	if err != nil {
-		t.Fatalf("Render: смешанный when НЕ должен вычисляться Keeper-side, got %v", err)
+		t.Fatalf("Render: mixed when must NOT be evaluated Keeper-side, got %v", err)
 	}
 	if tasks[0].Params == nil {
-		t.Fatal("смешанный when (с register) НЕ должен скипать рендер params")
+		t.Fatal("mixed when (with register) must NOT skip param render")
 	}
 	if got := tasks[0].Params.GetFields()["cmd"].GetStringValue(); got != "echo bob" {
-		t.Errorf("cmd = %q, want echo bob (прежний путь)", got)
+		t.Errorf("cmd = %q, want echo bob (usual path)", got)
 	}
 }
 
@@ -319,27 +319,27 @@ func TestStaticWhenFalse_UnsupportedDSL_PrecedesGuard(t *testing.T) {
 	}
 	tasks, plans, err := p.Render(context.Background(), in)
 	if err != nil {
-		t.Fatalf("Render: static-when ДОЛЖЕН предшествовать guardPilotDSL — gated-off parallel-задача не должна ронять Render, got %v", err)
+		t.Fatalf("Render: static-when MUST precede guardPilotDSL - a gated-off parallel task must not fail Render, got %v", err)
 	}
 	if len(tasks) != 2 || len(plans) != 2 {
-		t.Fatalf("len(tasks)=%d len(plans)=%d, want 2,2 (skip-placeholder + активная)", len(tasks), len(plans))
+		t.Fatalf("len(tasks)=%d len(plans)=%d, want 2,2 (skip-placeholder + active)", len(tasks), len(plans))
 	}
 	// Task 0 — gated-off parallel: skip placeholder, params weren't rendered.
 	if tasks[0].Params != nil {
-		t.Errorf("tasks[0].Params != nil — gated-off parallel должен быть skip-placeholder")
+		t.Errorf("tasks[0].Params != nil - gated-off parallel must be a skip-placeholder")
 	}
 	if tasks[0].When != "input.action == 'diagnose'" {
-		t.Errorf("tasks[0].When = %q, want протянутый предикат", tasks[0].When)
+		t.Errorf("tasks[0].When = %q, want the passed-through predicate", tasks[0].When)
 	}
 	if tasks[0].FlowContext == nil {
-		t.Error("tasks[0].FlowContext == nil — Soul нужен flow_context для собственного evalWhen → SKIPPED")
+		t.Error("tasks[0].FlowContext == nil - Soul needs flow_context for its own evalWhen -> SKIPPED")
 	}
 	// Task 1 — active: renders the normal way.
 	if tasks[1].Params == nil {
-		t.Fatal("tasks[1].Params == nil — активная update_acls должна отрендериться")
+		t.Fatal("tasks[1].Params == nil - active update_acls must render")
 	}
 	if got := tasks[1].Params.GetFields()["cmd"].GetStringValue(); got != "echo alice" {
-		t.Errorf("tasks[1].cmd = %q, want echo alice (активная ветка рендерится)", got)
+		t.Errorf("tasks[1].cmd = %q, want echo alice (active branch renders)", got)
 	}
 }
 
@@ -369,7 +369,7 @@ func TestStaticWhenTrue_UnsupportedDSL_StillRejected(t *testing.T) {
 	}
 	_, _, err := p.Render(context.Background(), in)
 	if !errors.Is(err, ErrUnsupportedDSL) {
-		t.Fatalf("err = %v, want ErrUnsupportedDSL (активная parallel-задача отвергается per-action)", err)
+		t.Fatalf("err = %v, want ErrUnsupportedDSL (active parallel task is rejected per-action)", err)
 	}
 }
 
@@ -399,7 +399,7 @@ func TestNonStaticWhen_UnsupportedDSL_StillRejected(t *testing.T) {
 	}
 	_, _, err := p.Render(context.Background(), in)
 	if !errors.Is(err, ErrUnsupportedDSL) {
-		t.Fatalf("err = %v, want ErrUnsupportedDSL (register-when parallel не статичен → guard отвергает)", err)
+		t.Fatalf("err = %v, want ErrUnsupportedDSL (register-when parallel is not static -> guard rejects)", err)
 	}
 }
 
@@ -443,16 +443,16 @@ func TestStaticWhenFalse_UnsupportedDSL_PrecedesGuard_Destiny(t *testing.T) {
 	}
 	tasks, _, err := p.Render(context.Background(), in)
 	if err != nil {
-		t.Fatalf("Render: static-when ДОЛЖЕН предшествовать guardDestinyTask в destiny-проходе, got %v", err)
+		t.Fatalf("Render: static-when MUST precede guardDestinyTask in the destiny pass, got %v", err)
 	}
 	if len(tasks) != 2 {
-		t.Fatalf("len(tasks) = %d, want 2 (skip-placeholder destiny + активная destiny)", len(tasks))
+		t.Fatalf("len(tasks) = %d, want 2 (skip-placeholder destiny + active destiny)", len(tasks))
 	}
 	if tasks[0].Params != nil {
-		t.Errorf("tasks[0].Params != nil — gated-off parallel destiny должен быть skip-placeholder")
+		t.Errorf("tasks[0].Params != nil - gated-off parallel destiny must be a skip-placeholder")
 	}
 	if tasks[1].Params == nil {
-		t.Fatal("tasks[1].Params == nil — активная update_acls destiny должна отрендериться")
+		t.Fatal("tasks[1].Params == nil - active update_acls destiny must render")
 	}
 	if got := tasks[1].Params.GetFields()["cmd"].GetStringValue(); got != "echo alice" {
 		t.Errorf("tasks[1].cmd = %q, want echo alice", got)
@@ -486,7 +486,7 @@ func TestStaticWhenTrue_UnsupportedDSL_StillRejected_Destiny(t *testing.T) {
 	}
 	_, _, err := p.Render(context.Background(), in)
 	if !errors.Is(err, ErrUnsupportedDSL) {
-		t.Fatalf("err = %v, want ErrUnsupportedDSL (активная parallel destiny отвергается per-action)", err)
+		t.Fatalf("err = %v, want ErrUnsupportedDSL (active parallel destiny is rejected per-action)", err)
 	}
 }
 

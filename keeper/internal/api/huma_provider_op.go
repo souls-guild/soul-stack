@@ -28,15 +28,15 @@ type providerCreateInput struct {
 // CreateTyped (422).
 type ProviderCreateRequest struct {
 	Name   string `json:"name" required:"true" pattern:"^[a-z0-9-]{1,63}$" doc:"Cloud Provider name (kebab)"`
-	Type   string `json:"type" required:"true" pattern:"^[a-z0-9-]{1,63}$" doc:"имя CloudDriver-плагиon (= plugins.cloud_drivers[].name)"`
-	Region string `json:"region" required:"true" doc:"регион провайдера"`
+	Type   string `json:"type" required:"true" pattern:"^[a-z0-9-]{1,63}$" doc:"CloudDriver plugin name (= plugins.cloud_drivers[].name)"`
+	Region string `json:"region" required:"true" doc:"provider region"`
 	// credentials_ref XOR credentials (dual-mode, ADR-064): exactly one. ref — a
 	// vault path (the value is NOT resolved); credentials — plaintext (keeper writes
 	// it to Vault itself). The service validates format/XOR (422); pattern dropped
 	// (conditional validation).
-	CredentialsRef string         `json:"credentials_ref,omitempty" doc:"vault-ref to credentials (vault:<path>); XOR с credentials. Зonчение NOT резолвится"`
-	Credentials    map[string]any `json:"credentials,omitempty" doc:"опц. plaintext cloud-credentials (dual-mode, ADR-064): onпр. {access_key, secret_key}; keeper writes их в Vault сам; XOR с credentials_ref. Требует TLS-фронта (secret_ingest.accept_plaintext)"`
-	FQDNSuffix     *string        `json:"fqdn_suffix,omitempty" doc:"суффикс FQDN VM (self-onboard: keeper предсказывает FQDN=<name>-<index>.<fqdn_suffix>). Опущеbut → self-onboard неtoступен"`
+	CredentialsRef string         `json:"credentials_ref,omitempty" doc:"vault-ref to credentials (vault:<path>); XOR with credentials. Value is NOT resolved"`
+	Credentials    map[string]any `json:"credentials,omitempty" doc:"opt. plaintext cloud-credentials (dual-mode, ADR-064): e.g. {access_key, secret_key}; keeper writes them to Vault itself; XOR with credentials_ref. Requires TLS front (secret_ingest.accept_plaintext)"`
+	FQDNSuffix     *string        `json:"fqdn_suffix,omitempty" doc:"VM FQDN suffix (self-onboard: keeper predicts FQDN=<name>-<index>.<fqdn_suffix>). If omitted, self-onboard is unavailable"`
 }
 
 type providerCreateOutput struct {
@@ -49,8 +49,8 @@ func providerCreateOperation() huma.Operation {
 		OperationID:   "createProvider",
 		Method:        http.MethodPost,
 		Path:          "/",
-		Summary:       "Создать Cloud-Provider",
-		Description:   "Заbutсит Cloud-Provider (реестр providers, ADR-017). Permission provider.create. 409 — name занят. credentials_ref хранится as vault-путь, секрет не резолвится.",
+		Summary:       "Create Cloud-Provider",
+		Description:   "Registers a Cloud-Provider (providers registry, ADR-017). Permission provider.create. 409 - name taken. credentials_ref is stored as a vault path, the secret is not resolved.",
 		Tags:          []string{"provider"},
 		DefaultStatus: http.StatusCreated,
 		Errors:        []int{http.StatusBadRequest, http.StatusForbidden, http.StatusConflict, http.StatusUnprocessableEntity, http.StatusInternalServerError},
@@ -73,8 +73,8 @@ func providerListOperation() huma.Operation {
 		OperationID:   "listProviders",
 		Method:        http.MethodGet,
 		Path:          "/",
-		Summary:       "Спиwithк Cloud-Provider-ов (paged)",
-		Description:   "Реестр Cloud-Provider-ов с пагиonцией (ADR-017). Permission provider.read. Read-only, no audit.",
+		Summary:       "List Cloud-Providers (paged)",
+		Description:   "Cloud-Provider registry with pagination (ADR-017). Permission provider.read. Read-only, no audit.",
 		Tags:          []string{"provider"},
 		DefaultStatus: http.StatusOK,
 		Errors:        []int{http.StatusBadRequest, http.StatusForbidden, http.StatusInternalServerError},
@@ -96,8 +96,8 @@ func providerGetOperation() huma.Operation {
 		OperationID:   "getProvider",
 		Method:        http.MethodGet,
 		Path:          "/{name}",
-		Summary:       "Карточка Cloud-Provider-а",
-		Description:   "Метаданные одbutго Cloud-Provider-а по имени (ADR-017). Permission provider.read. Read-only, no audit. credentials_ref — путь, секрет не резолвится.",
+		Summary:       "Cloud-Provider detail",
+		Description:   "Metadata of one Cloud-Provider by name (ADR-017). Permission provider.read. Read-only, no audit. credentials_ref is a path, the secret is not resolved.",
 		Tags:          []string{"provider"},
 		DefaultStatus: http.StatusOK,
 		Errors:        []int{http.StatusForbidden, http.StatusNotFound, http.StatusUnprocessableEntity, http.StatusInternalServerError},
@@ -120,8 +120,8 @@ func providerDeleteOperation() huma.Operation {
 		OperationID:   "deleteProvider",
 		Method:        http.MethodDelete,
 		Path:          "/{name}",
-		Summary:       "Удалить Cloud-Provider",
-		Description:   "Удаляет запись Cloud-Provider-а (ADR-017). Permission provider.delete. 404 — записи нет; 409 — есть зависимые Profile-и (FK RESTRICT).",
+		Summary:       "Delete Cloud-Provider",
+		Description:   "Deletes a Cloud-Provider record (ADR-017). Permission provider.delete. 404 - record not found; 409 - dependent Profiles exist (FK RESTRICT).",
 		Tags:          []string{"provider"},
 		DefaultStatus: http.StatusNoContent,
 		Errors:        []int{http.StatusForbidden, http.StatusNotFound, http.StatusConflict, http.StatusUnprocessableEntity, http.StatusInternalServerError},

@@ -43,11 +43,11 @@ func assertSynthTask(t *testing.T, task Task, module, ref string) {
 		t.Errorf("synth params = %v, want %v", task.Module.Params, wantParams)
 	}
 	if task.On != nil || task.Where != "" || task.Serial != nil || task.RunOnce {
-		t.Errorf("synth несёт оркестрационные поля (on=%v where=%q serial=%v run_once=%v), want чистая roster-задача",
+		t.Errorf("synth carries orchestration fields (on=%v where=%q serial=%v run_once=%v), want a clean roster task",
 			task.On, task.Where, task.Serial, task.RunOnce)
 	}
 	if task.IncludeGroupID != 0 || task.IncludeWhen != "" {
-		t.Errorf("synth привязан к include-группе (%d, %q), want вне групп", task.IncludeGroupID, task.IncludeWhen)
+		t.Errorf("synth is bound to an include group (%d, %q), want outside any group", task.IncludeGroupID, task.IncludeWhen)
 	}
 }
 
@@ -81,7 +81,7 @@ tasks:
 	}
 	assertSynthTask(t, out[1], "community.redis", "v1.2.3")
 	if out[0].Name != "Warmup" || out[2].Name != "Configure redis" || out[3].Name != "ACL redis" {
-		t.Errorf("порядок задач съехал: %q %q %q", out[0].Name, out[2].Name, out[3].Name)
+		t.Errorf("task order shifted: %q %q %q", out[0].Name, out[2].Name, out[3].Name)
 	}
 }
 
@@ -113,7 +113,7 @@ tasks:
 	}
 	assertSynthTask(t, out[1], "community.redis", "v1.0.0")
 	if out[2].Block == nil {
-		t.Fatalf("out[2] должен остаться block-ом (вставка перед block-ом целиком)")
+		t.Fatalf("out[2] must remain a block (insertion before the whole block)")
 	}
 }
 
@@ -131,10 +131,10 @@ tasks:
 `)
 	out, names := SynthesizeModuleInstalls(tasks, []DependencyRef{{Name: "community.redis", Ref: "v1.0.0"}})
 	if len(names) != 0 {
-		t.Errorf("names = %v, want пусто", names)
+		t.Errorf("names = %v, want empty", names)
 	}
 	if len(out) != 1 || out[0].Name != "Warmup" {
-		t.Errorf("план изменён без потребителей: %+v", out)
+		t.Errorf("plan changed with no consumers: %+v", out)
 	}
 }
 
@@ -157,10 +157,10 @@ tasks:
 `)
 	out, names := SynthesizeModuleInstalls(tasks, []DependencyRef{{Name: "community.redis", Ref: "v1.0.0"}})
 	if len(names) != 0 {
-		t.Errorf("names = %v, want пусто (takeover)", names)
+		t.Errorf("names = %v, want empty (takeover)", names)
 	}
 	if len(out) != 2 {
-		t.Errorf("len(out) = %d, want 2 (без синтеза)", len(out))
+		t.Errorf("len(out) = %d, want 2 (no synthesis)", len(out))
 	}
 }
 
@@ -183,7 +183,7 @@ tasks:
 `)
 	out, names := SynthesizeModuleInstalls(tasks, []DependencyRef{{Name: "community.redis", Ref: "v1.0.0"}})
 	if len(names) != 0 || len(out) != 2 {
-		t.Errorf("takeover в block не распознан: names=%v len=%d, want пусто/2", names, len(out))
+		t.Errorf("takeover in a block not recognized: names=%v len=%d, want empty/2", names, len(out))
 	}
 }
 
@@ -205,7 +205,7 @@ tasks:
 `)
 	out, names := SynthesizeModuleInstalls(tasks, []DependencyRef{{Name: "community.redis", Ref: "v1.0.0"}})
 	if !reflect.DeepEqual(names, []string{"community.redis"}) {
-		t.Fatalf("names = %v, want [community.redis] (CEL-имя не подавляет синтез)", names)
+		t.Fatalf("names = %v, want [community.redis] (a CEL name does not suppress synthesis)", names)
 	}
 	if len(out) != 3 {
 		t.Fatalf("len(out) = %d, want 3", len(out))
@@ -224,7 +224,7 @@ func TestSynthesizeModuleInstalls_NonStringNameNotTakeover(t *testing.T) {
 	}
 	out, names := SynthesizeModuleInstalls(tasks, []DependencyRef{{Name: "community.redis", Ref: "v1.0.0"}})
 	if !reflect.DeepEqual(names, []string{"community.redis"}) {
-		t.Fatalf("names = %v, want [community.redis] (не-строковое имя не подавляет синтез)", names)
+		t.Fatalf("names = %v, want [community.redis] (a non-string name does not suppress synthesis)", names)
 	}
 	if len(out) != 3 {
 		t.Fatalf("len(out) = %d, want 3", len(out))
@@ -249,7 +249,7 @@ tasks:
 			t.Errorf("names = %v, want nil", names)
 		}
 		if len(out) != len(tasks) || &out[0] != &tasks[0] {
-			t.Errorf("modules=%v: вход должен вернуться бит-в-бит (тот же slice)", modules)
+			t.Errorf("modules=%v: input must return byte-for-byte (the same slice)", modules)
 		}
 	}
 }
@@ -268,7 +268,7 @@ tasks:
 `)
 	out, names := SynthesizeModuleInstalls(tasks, []DependencyRef{{Name: "core.pkg", Ref: "v1.0.0"}})
 	if len(names) != 0 || len(out) != 1 {
-		t.Errorf("core.*-запись не пропущена: names=%v len=%d", names, len(out))
+		t.Errorf("core.* entry not skipped: names=%v len=%d", names, len(out))
 	}
 }
 
@@ -297,14 +297,14 @@ tasks:
 		{Name: "community.b", Ref: "v2"},
 	})
 	if !reflect.DeepEqual(names, []string{"community.a", "community.b"}) {
-		t.Fatalf("names = %v, want [community.a community.b] (порядок манифеста)", names)
+		t.Fatalf("names = %v, want [community.a community.b] (manifest order)", names)
 	}
 	if len(out) != 5 {
 		t.Fatalf("len(out) = %d, want 5", len(out))
 	}
 	assertSynthTask(t, out[0], "community.b", "v2")
 	if out[1].Name != "Use b" || out[2].Name != "Warmup" {
-		t.Errorf("позиции съехали: %q %q", out[1].Name, out[2].Name)
+		t.Errorf("positions shifted: %q %q", out[1].Name, out[2].Name)
 	}
 	assertSynthTask(t, out[3], "community.a", "v1")
 	if out[4].Name != "Use a" {
@@ -339,7 +339,7 @@ tasks:
 	assertSynthTask(t, out2[0], "community.a", "v1")
 	assertSynthTask(t, out2[1], "community.b", "v2")
 	if out2[2].Block == nil {
-		t.Errorf("out2[2] должен остаться block-ом")
+		t.Errorf("out2[2] must remain a block")
 	}
 }
 
@@ -375,12 +375,12 @@ tasks:
 		t.Fatalf("Stratify: %v", err)
 	}
 	if p.Count != 2 {
-		t.Fatalf("Count = %d, want 2 (refresh-граница)", p.Count)
+		t.Fatalf("Count = %d, want 2 (refresh boundary)", p.Count)
 	}
 	want := []int{0, 1, 1} // emitter / synth-install / consumer
 	for i, w := range want {
 		if p.TaskPassage[i] != w {
-			t.Errorf("task #%d passage = %d, want %d (синтез-шаг — roster-потребитель ПОСЛЕ refresh-границы)", i, p.TaskPassage[i], w)
+			t.Errorf("task #%d passage = %d, want %d (synth step -- roster consumer AFTER the refresh boundary)", i, p.TaskPassage[i], w)
 		}
 	}
 }

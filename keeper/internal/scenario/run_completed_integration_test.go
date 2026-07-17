@@ -97,13 +97,13 @@ func waitRunCompletedEvents(t *testing.T, applyID string) map[string]any {
 	for time.Now().Before(deadline) {
 		if evs := runCompletedEvents(t, applyID); len(evs) > 0 {
 			if len(evs) > 1 {
-				t.Fatalf("run_completed events = %d, want ровно 1 (одно событие на прогон)", len(evs))
+				t.Fatalf("run_completed events = %d, want exactly 1 (one event per run)", len(evs))
 			}
 			return evs[0]
 		}
 		time.Sleep(20 * time.Millisecond)
 	}
-	t.Fatalf("incarnation.run_completed для apply_id=%s не появилось за 10s", applyID)
+	t.Fatalf("incarnation.run_completed for apply_id=%s did not appear within 10s", applyID)
 	return nil
 }
 
@@ -143,7 +143,7 @@ func TestIntegration_RunCompletedFailed_LateAbort(t *testing.T) {
 		t.Errorf("event incarnation = %v, want noop-prod", ev["incarnation"])
 	}
 	if _, hasCadence := ev["cadence_id"]; hasCadence {
-		t.Errorf("ручной прогон не должен нести cadence_id, got %v", ev["cadence_id"])
+		t.Errorf("manual run should not carry cadence_id, got %v", ev["cadence_id"])
 	}
 }
 
@@ -184,7 +184,7 @@ func TestIntegration_RunCompletedFailed_EarlyAbort(t *testing.T) {
 		t.Fatalf("changed_tasks type = %T, want []any (JSONB array)", ev["changed_tasks"])
 	}
 	if len(ct) != 0 {
-		t.Errorf("changed_tasks len = %d, want 0 (ранний abort, tasks=nil)", len(ct))
+		t.Errorf("changed_tasks len = %d, want 0 (early abort, tasks=nil)", len(ct))
 	}
 }
 
@@ -216,7 +216,7 @@ func TestIntegration_RunCompletedFailed_CadenceIDPresent(t *testing.T) {
 
 	ev := waitRunCompletedEvents(t, applyID)
 	if ev["cadence_id"] != "cad-77" {
-		t.Errorf("event cadence_id = %v, want cad-77 (дочерний Voyage расписания)", ev["cadence_id"])
+		t.Errorf("event cadence_id = %v, want cad-77 (child Voyage of the schedule)", ev["cadence_id"])
 	}
 }
 
@@ -252,10 +252,10 @@ func TestIntegration_RunCompleted_VoyageIDPresent(t *testing.T) {
 
 	ev := waitRunCompletedEvents(t, applyID)
 	if ev["voyage_id"] != "voy-77" {
-		t.Errorf("event voyage_id = %v, want voy-77 (прогон через Voyage)", ev["voyage_id"])
+		t.Errorf("event voyage_id = %v, want voy-77 (run via Voyage)", ev["voyage_id"])
 	}
 	if _, hasCadence := ev["cadence_id"]; hasCadence {
-		t.Errorf("voyage без cadence не должен нести cadence_id, got %v", ev["cadence_id"])
+		t.Errorf("voyage without cadence should not carry cadence_id, got %v", ev["cadence_id"])
 	}
 
 	// Voyage detail fetches the voyage's run events by filtering on
@@ -268,7 +268,7 @@ func TestIntegration_RunCompleted_VoyageIDPresent(t *testing.T) {
 		t.Fatalf("count by voyage_id: %v", err)
 	}
 	if byVoyage != 1 {
-		t.Errorf("событий вояжа по payload->>'voyage_id' = %d, want 1", byVoyage)
+		t.Errorf("voyage events by payload->>'voyage_id' = %d, want 1", byVoyage)
 	}
 }
 
@@ -316,7 +316,7 @@ func TestIntegration_DestroyFailed_NoRunCompleted(t *testing.T) {
 		time.Sleep(20 * time.Millisecond)
 	}
 	if destroyFailed != 1 {
-		t.Errorf("destroy_failed events = %d, want 1 (свой терминал destroy)", destroyFailed)
+		t.Errorf("destroy_failed events = %d, want 1 (its own destroy terminal)", destroyFailed)
 	}
 
 	// run_completed is NOT emitted for a destroy failure (the TerminalDestroy
@@ -324,7 +324,7 @@ func TestIntegration_DestroyFailed_NoRunCompleted(t *testing.T) {
 	// run_completed were emitted, it would have shown up too; we check after
 	// its appearance.
 	if evs := runCompletedEvents(t, applyID); len(evs) != 0 {
-		t.Errorf("run_completed events = %d, want 0 (destroy-провал эмитит destroy_failed, НЕ run_completed)", len(evs))
+		t.Errorf("run_completed events = %d, want 0 (destroy failure emits destroy_failed, NOT run_completed)", len(evs))
 	}
 }
 
@@ -353,7 +353,7 @@ func TestIntegration_LockIncarnation_SingleWinnerSignal(t *testing.T) {
 
 	// First committer (us) — actually finalizes applying → error_locked.
 	if finalized := r.lockIncarnation(context.Background(), spec, nil, incarnation.StatusErrorLocked, "dispatch_failed", nil, nil, log); !finalized {
-		t.Fatalf("первый lockIncarnation: finalized=false, want true (реальный финализатор)")
+		t.Fatalf("first lockIncarnation: finalized=false, want true (real finalizer)")
 	}
 
 	// Second call (simulating a recovery loser: incarnation is no longer in
@@ -361,6 +361,6 @@ func TestIntegration_LockIncarnation_SingleWinnerSignal(t *testing.T) {
 	// event is emitted by the winner, not this instance.
 	spec2 := RunSpec{ApplyID: audit.NewULID(), IncarnationName: "noop-prod", ScenarioName: "create", StartedByAID: "archon-alice"}
 	if finalized := r.lockIncarnation(context.Background(), spec2, nil, incarnation.StatusErrorLocked, "dispatch_failed", nil, nil, log); finalized {
-		t.Errorf("второй lockIncarnation на уже-финализированной incarnation: finalized=true, want false (single-winner-проигравший)")
+		t.Errorf("second lockIncarnation on an already-finalized incarnation: finalized=true, want false (single-winner loser)")
 	}
 }

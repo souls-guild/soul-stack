@@ -63,23 +63,23 @@ func RegisterOracleMetrics(reg *obs.Registry) *OracleMetrics {
 	m := &OracleMetrics{
 		portentsReceived: prometheus.NewCounter(prometheus.CounterOpts{
 			Name: "keeper_oracle_portents_received_total",
-			Help: "Количество принятых PortentEvent-ов reactor-ом Oracle (с непустым beacon_name).",
+			Help: "Number of PortentEvents accepted by the Oracle reactor (with non-empty beacon_name).",
 		}),
 		decreesMatched: prometheus.NewCounter(prometheus.CounterOpts{
 			Name: "keeper_oracle_decrees_matched_total",
-			Help: "Количество Decree-срабатываний, прошедших весь фильтр (subject/membership/where/cooldown) и дошедших до постановки.",
+			Help: "Number of Decree triggers that passed the full filter (subject/membership/where/cooldown) and reached dispatch.",
 		}),
 		scenariosEnqueued: prometheus.NewCounter(prometheus.CounterOpts{
 			Name: "keeper_oracle_scenarios_enqueued_total",
-			Help: "Количество named-scenario, успешно поставленных в work-queue Oracle-реакцией.",
+			Help: "Number of named-scenarios successfully queued to the work-queue by an Oracle reaction.",
 		}),
 		cooldownBlocked: prometheus.NewCounter(prometheus.CounterOpts{
 			Name: "keeper_oracle_cooldown_blocked_total",
-			Help: "Количество Decree-срабатываний, отсечённых cooldown-ом per-(decree, subject) (loop-prevention).",
+			Help: "Number of Decree triggers cut off by per-(decree, subject) cooldown (loop-prevention).",
 		}),
 		circuitTripped: prometheus.NewCounter(prometheus.CounterOpts{
 			Name: "keeper_oracle_circuit_tripped_total",
-			Help: "Количество авто-disable Decree circuit-breaker-ом (N срабатываний за окно → enabled=false).",
+			Help: "Number of Decree auto-disables by the circuit-breaker (N triggers within a window -> enabled=false).",
 		}),
 	}
 	reg.Registerer().MustRegister(

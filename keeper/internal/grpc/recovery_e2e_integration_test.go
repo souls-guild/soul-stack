@@ -157,13 +157,13 @@ func TestIntegration_RecoveryReclaim_StaleRunResultDropped_LiveAttempt2Commits(t
 		t.Fatalf("ClaimNext#1: %v", err)
 	}
 	if len(claimed) != 1 || claimed[0].Attempt != 1 {
-		t.Fatalf("первый claim: len=%d attempt=%v, want 1/1", len(claimed), claimed)
+		t.Fatalf("first claim: len=%d attempt=%v, want 1/1", len(claimed), claimed)
 	}
 	if err := applyrun.MarkDispatched(ctx, integrationPool, applyID, sid); err != nil {
 		t.Fatalf("MarkDispatched: %v", err)
 	}
 	if got := readApplyStatus(t, ctx, applyID, sid); got != string(applyrun.StatusDispatched) {
-		t.Fatalf("после MarkDispatched status=%q, want dispatched", got)
+		t.Fatalf("after MarkDispatched status=%q, want dispatched", got)
 	}
 
 	// 3) Emulate owner death BEFORE handoff + lease expiry + re-claim.
@@ -182,20 +182,20 @@ func TestIntegration_RecoveryReclaim_StaleRunResultDropped_LiveAttempt2Commits(t
 		SET status='claimed', claim_by_kid='keeper-dead', claim_at=NOW() - INTERVAL '2 hours',
 		    claim_expires_at=NOW() - INTERVAL '1 hour'
 		WHERE apply_id=$1 AND sid=$2`, applyID, sid); err != nil {
-		t.Fatalf("эмуляция истёкшего claimed: %v", err)
+		t.Fatalf("emulating expired claimed: %v", err)
 	}
 	tag, err := integrationPool.Exec(ctx, `
 		UPDATE apply_runs
 		SET status='planned', claim_by_kid=NULL, claim_at=NULL, claim_expires_at=NULL
 		WHERE status='claimed' AND claim_expires_at < NOW()`)
 	if err != nil {
-		t.Fatalf("reclaim протухшего claimed: %v", err)
+		t.Fatalf("reclaim of stale claimed: %v", err)
 	}
 	if tag.RowsAffected() != 1 {
-		t.Fatalf("reclaim затронул %d строк, want 1 (протухший claimed → planned)", tag.RowsAffected())
+		t.Fatalf("reclaim affected %d rows, want 1 (stale claimed → planned)", tag.RowsAffected())
 	}
 	if got := readApplyStatus(t, ctx, applyID, sid); got != string(applyrun.StatusPlanned) {
-		t.Fatalf("после reclaim status=%q, want planned", got)
+		t.Fatalf("after reclaim status=%q, want planned", got)
 	}
 
 	// 4) ClaimNext again → attempt 1→2 (fencing epoch increased: new owner).
@@ -204,10 +204,10 @@ func TestIntegration_RecoveryReclaim_StaleRunResultDropped_LiveAttempt2Commits(t
 		t.Fatalf("ClaimNext#2: %v", err)
 	}
 	if len(reclaim) != 1 {
-		t.Fatalf("повторный claim len=%d, want 1", len(reclaim))
+		t.Fatalf("repeat claim len=%d, want 1", len(reclaim))
 	}
 	if reclaim[0].Attempt != 2 {
-		t.Fatalf("повторный claim attempt=%d, want 2 (1→2 через пере-claim)", reclaim[0].Attempt)
+		t.Fatalf("repeat claim attempt=%d, want 2 (1→2 via re-claim)", reclaim[0].Attempt)
 	}
 	// Drive it to dispatched, as a live Acolyte would before SendApply.
 	if err := applyrun.MarkDispatched(ctx, integrationPool, applyID, sid); err != nil {
@@ -224,19 +224,19 @@ func TestIntegration_RecoveryReclaim_StaleRunResultDropped_LiveAttempt2Commits(t
 
 	// ASSERT: stale metric +1.
 	if body := obstest.Scrape(t, reg.Gatherer()); !strings.Contains(body, "keeper_runresult_stale_total 1") {
-		t.Errorf("keeper_runresult_stale_total != 1 после stale RunResult; got=\n%s", body)
+		t.Errorf("keeper_runresult_stale_total != 1 after stale RunResult; got=\n%s", body)
 	}
 	// ASSERT: the row remains NON-terminal (dispatched from the 2nd claim).
 	if got := readApplyStatus(t, ctx, applyID, sid); got != string(applyrun.StatusDispatched) {
-		t.Errorf("после stale RunResult status=%q, want dispatched (не терминал)", got)
+		t.Errorf("after stale RunResult status=%q, want dispatched (not terminal)", got)
 	}
 	// ASSERT: incarnation.state is unchanged (correlateRunResult doesn't touch it).
 	if got := readIncarnationState(t, ctx, incName); got != stateBefore {
-		t.Errorf("incarnation.state изменён stale-результатом: %q → %q", stateBefore, got)
+		t.Errorf("incarnation.state changed by a stale result: %q → %q", stateBefore, got)
 	}
 	// audit run.completed is written BEFORE correlate — the fact of receipt is recorded even for stale results.
 	if len(aw.snapshot()) != 1 {
-		t.Errorf("audit events = %d, want 1 (run.completed до correlate)", len(aw.snapshot()))
+		t.Errorf("audit events = %d, want 1 (run.completed before correlate)", len(aw.snapshot()))
 	}
 
 	// 6) Contrast: RunResult from the CURRENT attempt=2 → commit (terminal).
@@ -244,10 +244,10 @@ func TestIntegration_RecoveryReclaim_StaleRunResultDropped_LiveAttempt2Commits(t
 		ApplyId: applyID, Status: keeperv1.RunStatus_RUN_STATUS_SUCCESS, Attempt: 2,
 	})
 	if got := readApplyStatus(t, ctx, applyID, sid); got != string(applyrun.StatusSuccess) {
-		t.Errorf("после актуального RunResult status=%q, want success (commit)", got)
+		t.Errorf("after a fresh RunResult status=%q, want success (commit)", got)
 	}
 	// The stale metric did NOT increase again: the current attempt isn't stale.
 	if body := obstest.Scrape(t, reg.Gatherer()); strings.Contains(body, "keeper_runresult_stale_total 2") {
-		t.Errorf("keeper_runresult_stale_total вырос на актуальной попытке; got=\n%s", body)
+		t.Errorf("keeper_runresult_stale_total grew on a fresh attempt; got=\n%s", body)
 	}
 }

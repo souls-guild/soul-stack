@@ -34,7 +34,7 @@ type statePageDB struct {
 }
 
 func (d *statePageDB) Exec(context.Context, string, ...any) (pgconn.CommandTag, error) {
-	return pgconn.CommandTag{}, errors.New("statePageDB: Exec не ожидается")
+	return pgconn.CommandTag{}, errors.New("statePageDB: Exec not expected")
 }
 
 func (d *statePageDB) QueryRow(_ context.Context, sql string, args ...any) pgx.Row {
@@ -47,7 +47,7 @@ func (d *statePageDB) QueryRow(_ context.Context, sql string, args ...any) pgx.R
 
 func (d *statePageDB) Query(_ context.Context, sql string, args ...any) (pgx.Rows, error) {
 	if !strings.Contains(sql, "SELECT name") {
-		return nil, fmt.Errorf("statePageDB: неожиданный Query: %s", sql)
+		return nil, fmt.Errorf("statePageDB: unexpected Query: %s", sql)
 	}
 	d.queryCalls++
 	d.queryArgs = append(d.queryArgs, args)
@@ -75,7 +75,7 @@ type stateCountRow struct{ total int }
 
 func (r stateCountRow) Scan(dest ...any) error {
 	if len(dest) != 1 {
-		return errors.New("stateCountRow: ожидался один dest")
+		return errors.New("stateCountRow: expected a single dest")
 	}
 	*dest[0].(*int) = r.total
 	return nil
@@ -141,13 +141,13 @@ func TestStateLister_PushdownToSQL(t *testing.T) {
 
 	// buildListWhere for Service+Coven binds two parameters: service, coven.
 	if len(db.countArgs) != 2 {
-		t.Fatalf("COUNT получил %d args, want 2 (service+coven pushdown)", len(db.countArgs))
+		t.Fatalf("COUNT got %d args, want 2 (service+coven pushdown)", len(db.countArgs))
 	}
 	if db.countArgs[0] != "redis" {
-		t.Errorf("первый bind=%v, want redis (service pushdown)", db.countArgs[0])
+		t.Errorf("first bind=%v, want redis (service pushdown)", db.countArgs[0])
 	}
 	if db.countArgs[1] != "prod" {
-		t.Errorf("второй bind=%v, want prod (coven pushdown)", db.countArgs[1])
+		t.Errorf("second bind=%v, want prod (coven pushdown)", db.countArgs[1])
 	}
 }
 
@@ -165,7 +165,7 @@ func TestStateLister_MultiCovenScope_PushdownCovenUnionName(t *testing.T) {
 
 	// countArgs = [scope-covens] (one bind for both arms of coven∪{name}).
 	if len(db.countArgs) != 1 {
-		t.Fatalf("COUNT получил %d args, want 1 (coven∪{name} один bind)", len(db.countArgs))
+		t.Fatalf("COUNT got %d args, want 1 (coven cup {name} single bind)", len(db.countArgs))
 	}
 	covs, ok := db.countArgs[0].([]string)
 	if !ok || len(covs) != 1 || covs[0] != "redis-prod" {
@@ -184,7 +184,7 @@ func TestStateLister_NoCovens_UnrestrictedScope(t *testing.T) {
 	_ = collectPages(t, l, statepredicate.BaseFilter{})
 
 	if len(db.countArgs) != 0 {
-		t.Errorf("без Covens scope обязан быть Unrestricted (без bind-args), got %v", db.countArgs)
+		t.Errorf("with no Covens, scope must be Unrestricted (no bind-args), got %v", db.countArgs)
 	}
 }
 
@@ -204,29 +204,29 @@ func TestStateLister_PageByPage(t *testing.T) {
 	got := collectPages(t, l, statepredicate.BaseFilter{Service: "redis"})
 
 	if len(got) != n {
-		t.Fatalf("обойдено %d строк, want %d (ни одна не потеряна)", len(got), n)
+		t.Fatalf("iterated %d rows, want %d (none lost)", len(got), n)
 	}
 	// Three pages (1000 + 1000 + 17).
 	if db.queryCalls != 3 {
-		t.Fatalf("SELECT-ов %d, want 3 (offset/limit-цикл по страницам)", db.queryCalls)
+		t.Fatalf("SELECTs %d, want 3 (offset/limit loop over pages)", db.queryCalls)
 	}
 	// Offsets increase by the page size.
 	wantOffsets := []int{0, statePageSize, statePageSize * 2}
 	for i, args := range db.queryArgs {
 		off := args[len(args)-2].(int)
 		if off != wantOffsets[i] {
-			t.Errorf("страница %d: offset=%d, want %d", i, off, wantOffsets[i])
+			t.Errorf("page %d: offset=%d, want %d", i, off, wantOffsets[i])
 		}
 	}
 	// All names are unique and present.
 	seen := make(map[string]bool, n)
 	for _, s := range got {
 		if seen[s.Name] {
-			t.Fatalf("дубликат %q (страница перечитана)", s.Name)
+			t.Fatalf("duplicate %q (page re-read)", s.Name)
 		}
 		seen[s.Name] = true
 		if s.State == nil {
-			t.Fatalf("%q: state не пробросился", s.Name)
+			t.Fatalf("%q: state was not propagated", s.Name)
 		}
 	}
 }
@@ -248,7 +248,7 @@ func TestStateLister_ExactPage(t *testing.T) {
 	// total==statePageSize: offset+len >= total on the first page → a second SELECT
 	// is not needed (offset+1000 >= 1000).
 	if db.queryCalls != 1 {
-		t.Errorf("SELECT-ов %d, want 1 (ровно страница, без лишнего round-trip)", db.queryCalls)
+		t.Errorf("SELECTs %d, want 1 (exactly one page, no extra round-trip)", db.queryCalls)
 	}
 }
 
@@ -267,7 +267,7 @@ func TestStateLister_EmptySet(t *testing.T) {
 		t.Fatalf("ListStatePages: %v", err)
 	}
 	if yields != 0 {
-		t.Errorf("пустой набор: yield вызван %d раз, want 0 (пустые страницы не отдаются)", yields)
+		t.Errorf("empty set: yield called %d times, want 0 (empty pages are not yielded)", yields)
 	}
 }
 
@@ -280,7 +280,7 @@ func TestStateLister_SelectError(t *testing.T) {
 
 	err := l.ListStatePages(context.Background(), statepredicate.BaseFilter{}, func([]statepredicate.Stated) error { return nil })
 	if !errors.Is(err, sentinel) {
-		t.Fatalf("ошибка SELECT должна проброситься: got %v", err)
+		t.Fatalf("SELECT error must propagate: got %v", err)
 	}
 }
 
@@ -300,9 +300,9 @@ func TestStateLister_YieldErrorStops(t *testing.T) {
 		return sentinel // fail on the very first page
 	})
 	if !errors.Is(err, sentinel) {
-		t.Fatalf("ошибка yield должна проброситься: got %v", err)
+		t.Fatalf("yield error must propagate: got %v", err)
 	}
 	if db.queryCalls != 1 {
-		t.Errorf("после ошибки yield SELECT-ов %d, want 1 (вторая страница не тянется)", db.queryCalls)
+		t.Errorf("after yield error SELECTs %d, want 1 (second page not fetched)", db.queryCalls)
 	}
 }

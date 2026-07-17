@@ -53,7 +53,7 @@ func TestAssignTraits_Merge_Happy(t *testing.T) {
 	}
 	keys, ok := out["keys"].([]any)
 	if !ok || len(keys) != 2 {
-		t.Fatalf("keys = %v, want 2-элементный массив", out["keys"])
+		t.Fatalf("keys = %v, want a 2-element array", out["keys"])
 	}
 	// keys are sorted deterministically.
 	if keys[0] != "namespace" || keys[1] != "tier" {
@@ -98,7 +98,7 @@ func TestAssignTraits_Replace_Happy(t *testing.T) {
 		t.Errorf("mode = %v, want replace", out["mode"])
 	}
 	if pool.bulkChunkCalls != 1 {
-		t.Errorf("bulkChunkCalls = %d, want 1 (replace дошёл до chunk-UPDATE)", pool.bulkChunkCalls)
+		t.Errorf("bulkChunkCalls = %d, want 1 (replace reached chunk-UPDATE)", pool.bulkChunkCalls)
 	}
 }
 
@@ -188,7 +188,7 @@ func TestAssignTraits_BadKey_422(t *testing.T) {
 		t.Fatalf("status = %d, want 422 (bad key), body=%s", rec.Code, rec.Body.String())
 	}
 	if pool.bulkChunkCalls != 0 {
-		t.Errorf("UPDATE выполнен на битом ключе")
+		t.Errorf("UPDATE executed on a malformed key")
 	}
 }
 
@@ -210,7 +210,7 @@ func TestAssignTraits_NestedValue_422(t *testing.T) {
 			t.Fatalf("value %#v: status = %d, want 422 (nested rejected), body=%s", v, rec.Code, rec.Body.String())
 		}
 		if pool.bulkChunkCalls != 0 {
-			t.Errorf("value %#v: UPDATE выполнен на вложенном значении", v)
+			t.Errorf("value %#v: UPDATE executed on a nested value", v)
 		}
 	}
 }
@@ -224,7 +224,7 @@ func TestAssignTraits_XOR_TraitsForRemove_422(t *testing.T) {
 		Selector: SoulCovenAssignSelectorInput{All: true},
 	}, false)
 	if rec.Code != http.StatusUnprocessableEntity {
-		t.Fatalf("status = %d, want 422 (traits запрещён для remove)", rec.Code)
+		t.Fatalf("status = %d, want 422 (traits forbidden for remove)", rec.Code)
 	}
 }
 
@@ -237,7 +237,7 @@ func TestAssignTraits_XOR_KeysForMerge_422(t *testing.T) {
 		Selector: SoulCovenAssignSelectorInput{All: true},
 	}, false)
 	if rec.Code != http.StatusUnprocessableEntity {
-		t.Fatalf("status = %d, want 422 (keys запрещён для merge)", rec.Code)
+		t.Fatalf("status = %d, want 422 (keys forbidden for merge)", rec.Code)
 	}
 }
 
@@ -249,7 +249,7 @@ func TestAssignTraits_Remove_EmptyKeys_422(t *testing.T) {
 		Selector: SoulCovenAssignSelectorInput{All: true},
 	}, false)
 	if rec.Code != http.StatusUnprocessableEntity {
-		t.Fatalf("status = %d, want 422 (пустой keys для remove)", rec.Code)
+		t.Fatalf("status = %d, want 422 (empty keys for remove)", rec.Code)
 	}
 }
 
@@ -263,7 +263,7 @@ func TestAssignTraits_EmptySelector_422(t *testing.T) {
 		Traits: map[string]any{"x": "y"},
 	}, false)
 	if rec.Code != http.StatusUnprocessableEntity {
-		t.Fatalf("status = %d, want 422 (пустой selector), body=%s", rec.Code, rec.Body.String())
+		t.Fatalf("status = %d, want 422 (empty selector), body=%s", rec.Code, rec.Body.String())
 	}
 }
 
@@ -296,7 +296,7 @@ func TestAssignTraits_AuditPayload_NoValues(t *testing.T) {
 	// secret).
 	raw, _ := json.Marshal(p)
 	if containsSubstr(string(raw), "secret-value") {
-		t.Errorf("audit payload содержит trait-ЗНАЧЕНИЕ: %s", raw)
+		t.Errorf("audit payload contains trait VALUE: %s", raw)
 	}
 }
 
@@ -321,7 +321,7 @@ func TestAssignTraits_ScopedOperator_HostOutOfScope_0Changed(t *testing.T) {
 		t.Errorf("matched/changed = %v/%v, want 0/0 (host out of scope)", out["matched"], out["changed"])
 	}
 	if pool.bulkChunkCalls != 0 {
-		t.Errorf("UPDATE выполнен при matched=0 (out-of-scope host)")
+		t.Errorf("UPDATE executed when matched=0 (out-of-scope host)")
 	}
 }
 

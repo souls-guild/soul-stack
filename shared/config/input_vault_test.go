@@ -138,7 +138,7 @@ func TestResolveInputValuesVault_NoScopeRejects(t *testing.T) {
 		map[string]any{"redis_password": "vault:secret/services/redis/prod#password"},
 		fakeResolver("x", nil))
 	if err == nil {
-		t.Fatal("ожидалась ошибка default-deny для поля без vault_scope")
+		t.Fatal("expected a default-deny error for a field without vault_scope")
 	}
 }
 
@@ -154,7 +154,7 @@ func TestResolveInputValuesVault_OutOfScopeRejects(t *testing.T) {
 		map[string]any{"redis_password": "vault:secret/services/postgres/prod#password"},
 		fakeResolver("x", nil))
 	if err == nil {
-		t.Fatal("ожидалась ошибка out-of-scope")
+		t.Fatal("expected an out-of-scope error")
 	}
 }
 
@@ -171,7 +171,7 @@ func TestResolveInputValuesVault_DenyListRejects(t *testing.T) {
 		map[string]any{"bad_field": "vault:secret/keeper/jwt-signing-key#key"},
 		fakeResolver("x", nil))
 	if err == nil {
-		t.Fatal("ожидалась ошибка deny-list для secret/keeper/*")
+		t.Fatal("expected a deny-list error for secret/keeper/*")
 	}
 }
 
@@ -188,7 +188,7 @@ func TestResolveInputValuesVault_LiteralPasses(t *testing.T) {
 	got, err := ResolveInputValuesVault(schema,
 		map[string]any{"redis_password": "change-me-please-32"},
 		func(name string, s *InputSchema, raw string) (any, error) {
-			t.Fatalf("резолвер не должен вызываться для литерала, raw=%q", raw)
+			t.Fatalf("resolver must not be called for a literal, raw=%q", raw)
 			return nil, nil
 		})
 	if err != nil {
@@ -215,7 +215,7 @@ func TestResolveInputValuesVault_PatternOnResolved(t *testing.T) {
 		map[string]any{"redis_version": "vault:secret/services/redis/prod#version"},
 		fakeResolver("not-a-version", nil))
 	if err == nil {
-		t.Fatal("ожидалась ошибка pattern на резолвнутом значении")
+		t.Fatal("expected a pattern error on the resolved value")
 	}
 
 	// the resolver returned a valid version → passes.
@@ -223,7 +223,7 @@ func TestResolveInputValuesVault_PatternOnResolved(t *testing.T) {
 		map[string]any{"redis_version": "vault:secret/services/redis/prod#version"},
 		fakeResolver("7.2.4", nil))
 	if err != nil {
-		t.Fatalf("ResolveInputValuesVault (валидное): %v", err)
+		t.Fatalf("ResolveInputValuesVault (valid): %v", err)
 	}
 	if got["redis_version"] != "7.2.4" {
 		t.Fatalf("redis_version=%v", got["redis_version"])
@@ -249,7 +249,7 @@ func TestVaultScope_RequiresSecret(t *testing.T) {
   vault_scope: "secret/x/*"
 `)
 	if !hasCode(diags, "input_vault_scope_requires_secret") {
-		t.Fatalf("ожидался input_vault_scope_requires_secret; diags=%v", diags)
+		t.Fatalf("expected input_vault_scope_requires_secret; diags=%v", diags)
 	}
 }
 
@@ -261,7 +261,7 @@ func TestVaultScope_OnNonString(t *testing.T) {
   vault_scope: "secret/x/*"
 `)
 	if !hasCode(diags, "input_key_invalid_for_type") {
-		t.Fatalf("ожидался input_key_invalid_for_type; diags=%v", diags)
+		t.Fatalf("expected input_key_invalid_for_type; diags=%v", diags)
 	}
 }
 
@@ -273,7 +273,7 @@ func TestVaultScope_InvalidGlob(t *testing.T) {
   vault_scope: "noslash"
 `)
 	if !hasCode(diags, "input_vault_scope_invalid") {
-		t.Fatalf("ожидался input_vault_scope_invalid; diags=%v", diags)
+		t.Fatalf("expected input_vault_scope_invalid; diags=%v", diags)
 	}
 }
 
@@ -286,7 +286,7 @@ func TestVaultScope_ValidNoErrors(t *testing.T) {
   vault_scope: "secret/services/redis/*"
 `)
 	if diag.HasErrors(diags) {
-		t.Fatalf("корректный vault_scope не должен давать ошибок; diags=%v", diags)
+		t.Fatalf("a valid vault_scope must not produce errors; diags=%v", diags)
 	}
 }
 
@@ -304,6 +304,6 @@ func TestResolveInputValuesVault_NilResolver(t *testing.T) {
 		t.Fatalf("ResolveInputValuesVault(nil): %v", err)
 	}
 	if got["note"] != "vault:secret/x/y#f" {
-		t.Fatalf("note=%v, ожидалась нетронутая строка", got["note"])
+		t.Fatalf("note=%v, expected an untouched string", got["note"])
 	}
 }

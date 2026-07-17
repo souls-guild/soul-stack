@@ -74,7 +74,7 @@ func TestParseSelector_Trait_EmptyHalvesRejected(t *testing.T) {
 func TestParseSelector_Trait_BadCharsRejected(t *testing.T) {
 	_, err := ParsePermission(`incarnation.run on trait=owner:al ice`)
 	if err == nil {
-		t.Fatal("ParsePermission(trait с пробелом): want error, got nil")
+		t.Fatal("ParsePermission(trait with a space): want error, got nil")
 	}
 }
 
@@ -89,10 +89,10 @@ func TestMatches_Trait_FailClosedWithoutTraits(t *testing.T) {
 		t.Fatalf("ParsePermission: %v", err)
 	}
 	if p.Matches("incarnation", "run", map[string]string{"incarnation": "redis-prod", "trait": "owner:alice"}) {
-		t.Error("trait-perm без nested traits в context должна давать deny (slice 1 fail-closed)")
+		t.Error("trait-perm without nested traits in context must deny (slice 1 fail-closed)")
 	}
 	if p.Matches("incarnation", "run", nil) {
-		t.Error("trait-perm с nil-context должна давать deny")
+		t.Error("trait-perm with nil context must deny")
 	}
 }
 
@@ -122,10 +122,10 @@ func TestResolvePurview_Trait_DefaultScopeInherited(t *testing.T) {
 	})
 	p := e.ResolvePurview("archon-a", "incarnation", "run")
 	if p.Unrestricted {
-		t.Error("Unrestricted=true, want false (bare наследует trait default_scope)")
+		t.Error("Unrestricted=true, want false (bare inherits trait default_scope)")
 	}
 	if len(p.TraitExprs) != 1 || p.TraitExprs[0] != "owner:alice" {
-		t.Errorf("TraitExprs = %v, want [owner:alice] (наследование default_scope)", p.TraitExprs)
+		t.Errorf("TraitExprs = %v, want [owner:alice] (default_scope inheritance)", p.TraitExprs)
 	}
 }
 
@@ -138,7 +138,7 @@ func TestHoldsAction_TraitOnly(t *testing.T) {
 		permissions: []string{`incarnation.list on trait=owner:alice`},
 	})
 	if !e.HoldsAction("archon-a", "incarnation", "list") {
-		t.Error("trait-only scope обязан давать HoldsAction=true (gate-видимость)")
+		t.Error("trait-only scope must give HoldsAction=true (gate visibility)")
 	}
 }
 
@@ -155,37 +155,37 @@ func TestSubset_Trait_StringEquality(t *testing.T) {
 		wantHeld    bool // true → ErrPermissionNotHeld (grant denied)
 	}{
 		{
-			name:        "идентичная trait-пара → выдача ок",
+			name:        "identical trait pair -> grant ok",
 			callerRaws:  []string{alice},
 			grantedRaws: []string{alice},
 			wantHeld:    false,
 		},
 		{
-			name:        "иная trait-пара → DENY (fail-closed, escalation-guard)",
+			name:        "different trait pair -> DENY (fail-closed, escalation-guard)",
 			callerRaws:  []string{alice},
 			grantedRaws: []string{bob},
 			wantHeld:    true,
 		},
 		{
-			name:        "caller с * выдаёт любой trait",
+			name:        "caller with * grants any trait",
 			callerRaws:  []string{"*"},
 			grantedRaws: []string{alice},
 			wantHeld:    false,
 		},
 		{
-			name:        "caller без trait-scope (bare) выдаёт trait → ок (bare покрывает)",
+			name:        "caller without trait-scope (bare) grants trait -> ok (bare covers)",
 			callerRaws:  []string{"incarnation.run"},
 			grantedRaws: []string{alice},
 			wantHeld:    false,
 		},
 		{
-			name:        "caller с trait выдаёт bare → DENY (bare шире trait-scope caller-а)",
+			name:        "caller with trait grants bare -> DENY (bare is wider than caller trait-scope)",
 			callerRaws:  []string{alice},
 			grantedRaws: []string{"incarnation.run"},
 			wantHeld:    true,
 		},
 		{
-			name:        "caller с trait выдаёт coven (иное измерение) → DENY",
+			name:        "caller with trait grants coven (different dimension) -> DENY",
 			callerRaws:  []string{alice},
 			grantedRaws: []string{"incarnation.run on coven=prod"},
 			wantHeld:    true,

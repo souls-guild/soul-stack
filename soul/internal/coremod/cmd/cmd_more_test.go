@@ -20,11 +20,11 @@ func apply(t *testing.T, m *cmd.Module, params map[string]any) *pluginv1.ApplyEv
 		State:  "shell",
 		Params: mustStruct(t, params),
 	}, stream); err != nil {
-		t.Fatalf("Apply вернул error (контракт — failed-event, не error): %v", err)
+		t.Fatalf("Apply returned error (contract is failed-event, not error): %v", err)
 	}
 	ev := stream.Last()
 	if ev == nil {
-		t.Fatal("Apply не отправил ни одного события")
+		t.Fatal("Apply did not send a single event")
 	}
 	return ev
 }
@@ -40,7 +40,7 @@ func TestApply_UnknownState_Failed(t *testing.T) {
 	}
 	ev := stream.Last()
 	if !ev.Failed {
-		t.Fatal("unknown state должен давать failed-event")
+		t.Fatal("unknown state should produce a failed-event")
 	}
 	if ev.Message != `unknown state "run"` {
 		t.Fatalf("message=%q", ev.Message)
@@ -57,7 +57,7 @@ func TestApply_MissingCmd_Failed(t *testing.T) {
 		t.Fatalf("Apply: %v", err)
 	}
 	if !stream.Last().Failed {
-		t.Fatal("отсутствие cmd должно давать failed-event")
+		t.Fatal("missing cmd should produce a failed-event")
 	}
 }
 
@@ -70,7 +70,7 @@ func TestApply_BadEnvType_Failed(t *testing.T) {
 		"env": "PATH=/bin",
 	})
 	if !ev.Failed {
-		t.Fatal("env неверного типа должен давать failed")
+		t.Fatal("env of the wrong type should produce failed")
 	}
 }
 
@@ -81,7 +81,7 @@ func TestApply_BadCwdType_Failed(t *testing.T) {
 		"cwd": float64(7),
 	})
 	if !ev.Failed {
-		t.Fatal("cwd неверного типа должен давать failed")
+		t.Fatal("cwd of the wrong type should produce failed")
 	}
 }
 
@@ -105,10 +105,10 @@ func TestApply_BadGuardTypes_Failed(t *testing.T) {
 				c.param: float64(1), // not a string
 			})
 			if !ev.Failed {
-				t.Fatalf("%s неверного типа должен давать failed", c.param)
+				t.Fatalf("%s of the wrong type should produce failed", c.param)
 			}
 			if len(r.Calls) != 0 {
-				t.Fatalf("ошибка извлечения параметра не должна запускать команд, calls=%v", r.Calls)
+				t.Fatalf("a parameter-extraction error should not run commands, calls=%v", r.Calls)
 			}
 		})
 	}
@@ -130,7 +130,7 @@ func TestApply_EnvPassedToShell(t *testing.T) {
 		t.Fatalf("changed=%v failed=%v", ev.Changed, ev.Failed)
 	}
 	if len(r.Calls) != 1 || r.Calls[0] != key {
-		t.Fatalf("ожидал вызов %q, получил %v", key, r.Calls)
+		t.Fatalf("expected call %q, got %v", key, r.Calls)
 	}
 }
 
@@ -143,7 +143,7 @@ func TestApply_OutputCarriesStdoutStderrExit(t *testing.T) {
 
 	ev := apply(t, m, map[string]any{"cmd": "probe"})
 	if ev.Failed {
-		t.Fatal("non-zero exit не должен давать failed")
+		t.Fatal("non-zero exit should not produce failed")
 	}
 	if got := ev.Output.Fields["stdout"].GetStringValue(); got != "out\n" {
 		t.Fatalf("stdout=%q", got)
@@ -165,7 +165,7 @@ func TestApply_RunnerLaunchError_Failed(t *testing.T) {
 
 	ev := apply(t, m, map[string]any{"cmd": "true"})
 	if !ev.Failed {
-		t.Fatal("Result.Err должен давать failed")
+		t.Fatal("Result.Err should produce failed")
 	}
 	if ev.Message != "sh -c: permission denied" {
 		t.Fatalf("message=%q", ev.Message)
@@ -191,10 +191,10 @@ func TestApply_Creates_StatError_Failed(t *testing.T) {
 
 	ev := apply(t, m, map[string]any{"cmd": "touch /tmp/x", "creates": "/tmp/x"})
 	if !ev.Failed {
-		t.Fatal("ошибка stat в creates должна давать failed")
+		t.Fatal("a stat error in creates should produce failed")
 	}
 	if len(r.Calls) != 0 {
-		t.Fatalf("при ошибке guard команда не должна запускаться, calls=%v", r.Calls)
+		t.Fatalf("on a guard error the command should not run, calls=%v", r.Calls)
 	}
 }
 
@@ -205,7 +205,7 @@ func TestApply_Creates_SkipOutput(t *testing.T) {
 
 	ev := apply(t, m, map[string]any{"cmd": "echo hi", "creates": "/tmp/m"})
 	if ev.Changed {
-		t.Fatal("skip не должен быть changed")
+		t.Fatal("skip should not be changed")
 	}
 	if ev.Output.Fields["skipped"].GetBoolValue() != true {
 		t.Fatal("output.skipped != true")
@@ -217,7 +217,7 @@ func TestApply_Creates_SkipOutput(t *testing.T) {
 		t.Fatalf("exit_code=%v", ev.Output.Fields["exit_code"].GetNumberValue())
 	}
 	if len(r.Calls) != 0 {
-		t.Fatalf("при skip команда не запускается, calls=%v", r.Calls)
+		t.Fatalf("on skip the command should not run, calls=%v", r.Calls)
 	}
 }
 
@@ -229,7 +229,7 @@ func TestApply_Unless_True_Skips(t *testing.T) {
 
 	ev := apply(t, m, map[string]any{"cmd": "make-it", "unless": "test -f /tmp/m"})
 	if ev.Changed {
-		t.Fatal("unless exit 0 → должно скипнуть")
+		t.Fatal("unless exit 0 -> should skip")
 	}
 	if ev.Output.Fields["reason"].GetStringValue() != "unless" {
 		t.Fatalf("reason=%q", ev.Output.Fields["reason"].GetStringValue())
@@ -237,7 +237,7 @@ func TestApply_Unless_True_Skips(t *testing.T) {
 	// the main command must not run (only the unless check)
 	for _, c := range r.Calls {
 		if c == "sh -c make-it" {
-			t.Fatalf("основная команда запустилась вопреки unless: %v", r.Calls)
+			t.Fatalf("the main command ran despite unless: %v", r.Calls)
 		}
 	}
 }
@@ -251,7 +251,7 @@ func TestApply_Unless_False_Runs(t *testing.T) {
 
 	ev := apply(t, m, map[string]any{"cmd": "make-it", "unless": "test -f /tmp/m"})
 	if ev.Failed || !ev.Changed {
-		t.Fatalf("unless exit!=0 → команда должна выполниться: changed=%v failed=%v", ev.Changed, ev.Failed)
+		t.Fatalf("unless exit!=0 -> the command should run: changed=%v failed=%v", ev.Changed, ev.Failed)
 	}
 	if ev.Output.Fields["stdout"].GetStringValue() != "done" {
 		t.Fatalf("stdout=%q", ev.Output.Fields["stdout"].GetStringValue())
@@ -266,7 +266,7 @@ func TestApply_Unless_LaunchError_Failed(t *testing.T) {
 
 	ev := apply(t, m, map[string]any{"cmd": "make-it", "unless": "broken"})
 	if !ev.Failed {
-		t.Fatal("ошибка запуска unless должна давать failed")
+		t.Fatal("an unless run error should produce failed")
 	}
 }
 
@@ -278,7 +278,7 @@ func TestApply_Onlyif_False_Skips(t *testing.T) {
 
 	ev := apply(t, m, map[string]any{"cmd": "systemctl restart nginx", "onlyif": "which nginx"})
 	if ev.Changed {
-		t.Fatal("onlyif exit!=0 → должно скипнуть")
+		t.Fatal("onlyif exit!=0 -> should skip")
 	}
 	if ev.Output.Fields["reason"].GetStringValue() != "onlyif" {
 		t.Fatalf("reason=%q", ev.Output.Fields["reason"].GetStringValue())
@@ -294,7 +294,7 @@ func TestApply_Onlyif_True_Runs(t *testing.T) {
 
 	ev := apply(t, m, map[string]any{"cmd": "systemctl restart nginx", "onlyif": "which nginx"})
 	if ev.Failed || !ev.Changed {
-		t.Fatalf("onlyif exit 0 → команда должна выполниться: changed=%v failed=%v", ev.Changed, ev.Failed)
+		t.Fatalf("onlyif exit 0 -> the command should run: changed=%v failed=%v", ev.Changed, ev.Failed)
 	}
 }
 
@@ -306,7 +306,7 @@ func TestApply_Onlyif_LaunchError_Failed(t *testing.T) {
 
 	ev := apply(t, m, map[string]any{"cmd": "make-it", "onlyif": "broken"})
 	if !ev.Failed {
-		t.Fatal("ошибка запуска onlyif должна давать failed")
+		t.Fatal("an onlyif run error should produce failed")
 	}
 }
 
@@ -327,7 +327,7 @@ func TestApply_AllGuards_PassThrough_Runs(t *testing.T) {
 		"onlyif":  "check-present",
 	})
 	if ev.Failed || !ev.Changed {
-		t.Fatalf("сквозной проход guard-ов: changed=%v failed=%v", ev.Changed, ev.Failed)
+		t.Fatalf("guard pass-through: changed=%v failed=%v", ev.Changed, ev.Failed)
 	}
 	if ev.Output.Fields["stdout"].GetStringValue() != "ok" {
 		t.Fatalf("stdout=%q", ev.Output.Fields["stdout"].GetStringValue())
@@ -355,7 +355,7 @@ func TestApply_Production_RealShell_Pipe(t *testing.T) {
 	// wc -l on 3 lines → "3" (allowing for wc's possible padding).
 	stdout := ev.Output.Fields["stdout"].GetStringValue()
 	if stdout == "" {
-		t.Fatal("ожидал непустой stdout от pipe")
+		t.Fatal("expected non-empty stdout from pipe")
 	}
 	if ev.Output.Fields["exit_code"].GetNumberValue() != 0 {
 		t.Fatalf("exit_code=%v", ev.Output.Fields["exit_code"].GetNumberValue())
@@ -376,13 +376,13 @@ func TestApply_Production_Creates_RealStat_Skips(t *testing.T) {
 		"creates": marker,
 	})
 	if ev.Changed {
-		t.Fatal("существующий creates-файл должен дать skip")
+		t.Fatal("an existing creates-file should produce skip")
 	}
 	if ev.Output.Fields["reason"].GetStringValue() != "creates" {
 		t.Fatalf("reason=%q", ev.Output.Fields["reason"].GetStringValue())
 	}
 	if _, err := os.Stat(filepath.Join(dir, "out")); !os.IsNotExist(err) {
-		t.Fatal("команда выполнилась несмотря на creates-skip")
+		t.Fatal("the command ran despite creates-skip")
 	}
 }
 
@@ -401,9 +401,9 @@ func TestApply_Production_Creates_Absent_Runs(t *testing.T) {
 	}
 	b, err := os.ReadFile(out)
 	if err != nil {
-		t.Fatalf("команда не записала файл: %v", err)
+		t.Fatalf("the command did not write the file: %v", err)
 	}
 	if string(b) != "done" {
-		t.Fatalf("содержимое=%q", string(b))
+		t.Fatalf("content=%q", string(b))
 	}
 }

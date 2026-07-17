@@ -15,7 +15,7 @@ import (
 //
 // Pilot form (S6, 2026-05-26): inline in keeper.yml. S7 will replace the
 // resolver with a `souls.ssh_target jsonb` read; the sentinel stays the same.
-var ErrTargetNotConfigured = errors.New("push: SID не сконфигурирован в push.targets[]")
+var ErrTargetNotConfigured = errors.New("push: SID not configured in push.targets[]")
 
 // Defaults for the pilot resolver's omitted `push.targets[].*` fields (see
 // the [config.KeeperPushTarget] doc). Canonical unix conventions; the

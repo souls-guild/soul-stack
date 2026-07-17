@@ -55,11 +55,11 @@ func TestRenderMissingKeyError(t *testing.T) {
 	e := newEngine(t)
 	_, err := e.Render("{{ .missing }}", map[string]any{"present": 1})
 	if err == nil {
-		t.Fatal("ожидалась ошибка на отсутствующий ключ (strict-mode), получен nil")
+		t.Fatal("expected an error for a missing key (strict-mode), got nil")
 	}
 	var exec *ErrExecute
 	if !errors.As(err, &exec) {
-		t.Fatalf("ожидался *ErrExecute, получен %T: %v", err, err)
+		t.Fatalf("expected *ErrExecute, got %T: %v", err, err)
 	}
 }
 
@@ -67,7 +67,7 @@ func TestRenderMissingKeyOnNilVars(t *testing.T) {
 	e := newEngine(t)
 	_, err := e.Render("{{ .anything }}", nil)
 	if err == nil {
-		t.Fatal("ожидалась ошибка на обращение к ключу при nil-vars")
+		t.Fatal("expected an error for key access with nil vars")
 	}
 }
 
@@ -87,11 +87,11 @@ func TestRenderParseError(t *testing.T) {
 	e := newEngine(t)
 	_, err := e.Render("{{ .unterminated ", nil)
 	if err == nil {
-		t.Fatal("ожидалась ошибка парсинга незакрытого действия")
+		t.Fatal("expected a parse error for an unterminated action")
 	}
 	var perr *ErrParse
 	if !errors.As(err, &perr) {
-		t.Fatalf("ожидался *ErrParse, получен %T: %v", err, err)
+		t.Fatalf("expected *ErrParse, got %T: %v", err, err)
 	}
 }
 
@@ -111,11 +111,11 @@ func TestRenderExcludedFuncsFail(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			_, err := e.Render("{{ "+name+" \"x\" }}", nil)
 			if err == nil {
-				t.Fatalf("функция %q должна быть недоступна, рендер прошёл без ошибки", name)
+				t.Fatalf("function %q should be unavailable, render succeeded without error", name)
 			}
 			var perr *ErrParse
 			if !errors.As(err, &perr) {
-				t.Fatalf("ожидался *ErrParse для %q, получен %T: %v", name, err, err)
+				t.Fatalf("expected *ErrParse for %q, got %T: %v", name, err, err)
 			}
 		})
 	}
@@ -126,10 +126,10 @@ func TestRenderEnvExcluded(t *testing.T) {
 	e := newEngine(t)
 	_, err := e.Render(`{{ env "PATH" }}`, nil)
 	if err == nil {
-		t.Fatal(`{{ env "PATH" }} должно давать ошибку (excluded)`)
+		t.Fatal(`{{ env "PATH" }} should give an error (excluded)`)
 	}
 	if !strings.Contains(err.Error(), "tmpl parse") {
-		t.Fatalf("ожидалась parse-ошибка, получено: %v", err)
+		t.Fatalf("expected a parse error, got: %v", err)
 	}
 }
 
@@ -143,22 +143,22 @@ func TestFuncMapAllowlistEnforced(t *testing.T) {
 
 	for _, name := range allowedSprig {
 		if _, ok := funcs[name]; !ok {
-			t.Errorf("разрешённая функция %q отсутствует в FuncMap", name)
+			t.Errorf("allowed function %q is missing from FuncMap", name)
 		}
 	}
 	// Soul Stack's own functions (not from sprig) — toYaml/fromYaml.
 	for _, name := range customFuncNames {
 		if _, ok := funcs[name]; !ok {
-			t.Errorf("собственная функция %q отсутствует в FuncMap", name)
+			t.Errorf("custom function %q is missing from FuncMap", name)
 		}
 	}
 	for _, name := range excludedFuncs {
 		if _, ok := funcs[name]; ok {
-			t.Errorf("запрещённая функция %q присутствует в FuncMap", name)
+			t.Errorf("forbidden function %q is present in FuncMap", name)
 		}
 	}
 	if want := len(allowedSprig) + len(customFuncNames); len(funcs) != want {
-		t.Errorf("FuncMap содержит %d функций, ожидалось ровно %d (allowlist + custom)",
+		t.Errorf("FuncMap contains %d functions, expected exactly %d (allowlist + custom)",
 			len(funcs), want)
 	}
 }
@@ -226,11 +226,11 @@ func TestFromYamlParseError(t *testing.T) {
 	_, err := e.Render(`{{ fromYaml .x }}`,
 		map[string]any{"x": "key: : : broken"})
 	if err == nil {
-		t.Fatal("ожидалась ошибка на невалидном YAML, получен nil")
+		t.Fatal("expected an error for invalid YAML, got nil")
 	}
 	var exec *ErrExecute
 	if !errors.As(err, &exec) {
-		t.Fatalf("ожидался *ErrExecute, получен %T: %v", err, err)
+		t.Fatalf("expected *ErrExecute, got %T: %v", err, err)
 	}
 }
 

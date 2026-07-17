@@ -74,32 +74,32 @@ func TestWarnCrossKeeperDispatch(t *testing.T) {
 		wantWarn   bool
 	}{
 		{
-			name:       "lease у другого KID → WARN",
+			name:       "lease held by another KID -> WARN",
 			leaseOwner: stubLeaseOwner{kid: "keeper-b", ok: true},
 			wantWarn:   true,
 		},
 		{
-			name:       "lease у нас самих → нет WARN",
+			name:       "lease held by ourselves -> no WARN",
 			leaseOwner: stubLeaseOwner{kid: selfKID, ok: true},
 			wantWarn:   false,
 		},
 		{
-			name:       "lease-ключа нет (Soul ни у кого на стриме) → нет WARN",
+			name:       "no lease key (Soul not on anyone's stream) -> no WARN",
 			leaseOwner: stubLeaseOwner{ok: false},
 			wantWarn:   false,
 		},
 		{
-			name:       "владелец-пустая-строка → нет WARN",
+			name:       "empty-string owner -> no WARN",
 			leaseOwner: stubLeaseOwner{kid: "", ok: true},
 			wantWarn:   false,
 		},
 		{
-			name:       "ошибка чтения lease → нет WARN (best-effort, не шумим)",
+			name:       "lease read error -> no WARN (best-effort, stay quiet)",
 			leaseOwner: stubLeaseOwner{kid: "keeper-b", ok: true, err: errors.New("redis down")},
 			wantWarn:   false,
 		},
 		{
-			name:       "guard выключен (nil чекер) → нет WARN",
+			name:       "guard disabled (nil checker) -> no WARN",
 			leaseOwner: nil,
 			wantWarn:   false,
 		},

@@ -80,7 +80,7 @@ func (e *liveOracleEnqueuer) EnqueueScenario(ctx context.Context, req EnqueueSce
 	}
 	ref, ok := e.resolver.Resolve(inc.Service)
 	if !ok {
-		return "", fmt.Errorf("liveOracleEnqueuer: resolver не знает сервис %q", inc.Service)
+		return "", fmt.Errorf("liveOracleEnqueuer: resolver does not know service %q", inc.Service)
 	}
 	ref.Ref = inc.ServiceVersion // roll out with the deployed version (mirrors the enqueuer)
 
@@ -251,7 +251,7 @@ func TestIntegration_OracleCrossSide_PortentToPlannedApplyRun(t *testing.T) {
 	if err := integrationPool.QueryRow(ctx,
 		`SELECT status, recipe, incarnation_name, scenario FROM apply_runs WHERE sid = $1`, sid).
 		Scan(&status, &recipeJSON, &gotInc, &gotScen); err != nil {
-		t.Fatalf("apply_runs не создан или не читается: %v", err)
+		t.Fatalf("apply_runs not created or not readable: %v", err)
 	}
 	if status != string(applyrun.StatusPlanned) {
 		t.Errorf("apply_runs.status = %q, want planned", status)
@@ -268,7 +268,7 @@ func TestIntegration_OracleCrossSide_PortentToPlannedApplyRun(t *testing.T) {
 		t.Fatalf("UnmarshalRecipe: %v", err)
 	}
 	if recipe == nil {
-		t.Fatal("planned-задание без recipe")
+		t.Fatal("planned task without recipe")
 	}
 	// ServiceRef is resolved FROM the incarnation: Name comes from the
 	// resolver, Ref is overridden to inc.ServiceVersion (not the tip of
@@ -277,11 +277,11 @@ func TestIntegration_OracleCrossSide_PortentToPlannedApplyRun(t *testing.T) {
 		t.Errorf("Recipe.ServiceRef.Name = %q, want %q", recipe.ServiceRef.Name, svcName)
 	}
 	if recipe.ServiceRef.Ref != svcVer {
-		t.Errorf("Recipe.ServiceRef.Ref = %q, want %q (развёрнутая версия incarnation)", recipe.ServiceRef.Ref, svcVer)
+		t.Errorf("Recipe.ServiceRef.Ref = %q, want %q (deployed incarnation version)", recipe.ServiceRef.Ref, svcVer)
 	}
 	// Input (the Decree's action_input) is carried through as-is.
 	if recipe.Input["unit"] != "nginx" || recipe.Input["graceful"] != true {
-		t.Errorf("Recipe.Input не проброшен: %+v", recipe.Input)
+		t.Errorf("Recipe.Input not forwarded: %+v", recipe.Input)
 	}
 
 	// --- assert: audit oracle.fired recorded on live PG (via recordingAudit). ---
@@ -300,7 +300,7 @@ func TestIntegration_OracleCrossSide_PortentToPlannedApplyRun(t *testing.T) {
 		}
 	}
 	if !firedPayloadInc {
-		t.Error("ожидали audit oracle.fired")
+		t.Error("expected audit oracle.fired")
 	}
 
 	// --- assert: the cooldown is recorded (oracle_fires) under correlation = apply_id. ---
@@ -309,7 +309,7 @@ func TestIntegration_OracleCrossSide_PortentToPlannedApplyRun(t *testing.T) {
 		t.Fatalf("LastFiredAt: %v", err)
 	}
 	if !hasFired {
-		t.Error("после успешной реакции oracle_fires-cooldown должен быть записан")
+		t.Error("after a successful reaction, oracle_fires-cooldown should be recorded")
 	}
 
 	// The audit's correlation_id = apply_id of the run that was queued.
@@ -377,19 +377,19 @@ func TestIntegration_OracleCrossSide_IncarnationNotFoundNoApplyRun(t *testing.T)
 		t.Fatalf("count apply_runs: %v", err)
 	}
 	if cnt != 0 {
-		t.Errorf("enqueue-fail (incarnation not found): apply_runs должен быть пуст, got %d", cnt)
+		t.Errorf("enqueue-fail (incarnation not found): apply_runs should be empty, got %d", cnt)
 	}
 	// audit oracle.fired is NOT written (the reaction is suppressed before
 	// fire).
 	for _, e := range aw.snapshot() {
 		if e.EventType == audit.EventOracleFired {
-			t.Error("enqueue-fail: audit oracle.fired НЕ должен писаться")
+			t.Error("enqueue-fail: audit oracle.fired should NOT be written")
 		}
 	}
 	// The cooldown is NOT recorded (a false cooldown would block future
 	// reactions).
 	if _, hasFired, _ := oracle.LastFiredAt(ctx, integrationPool, "restart-ghost", sid); hasFired {
-		t.Error("enqueue-fail: oracle_fires-cooldown НЕ должен писаться")
+		t.Error("enqueue-fail: oracle_fires-cooldown should NOT be written")
 	}
 }
 
@@ -462,7 +462,7 @@ func assertApplyPlannedV5(t *testing.T, ctx context.Context, sid string) {
 		t.Fatalf("count apply_runs: %v", err)
 	}
 	if cnt != 1 {
-		t.Fatalf("ожидали 1 planned apply_run для sid=%s, got %d", sid, cnt)
+		t.Fatalf("expected 1 planned apply_run for sid=%s, got %d", sid, cnt)
 	}
 }
 
@@ -474,7 +474,7 @@ func assertApplyNotPlannedV5(t *testing.T, ctx context.Context, sid string) {
 		t.Fatalf("count apply_runs: %v", err)
 	}
 	if cnt != 0 {
-		t.Errorf("apply_runs не должен быть создан, got %d", cnt)
+		t.Errorf("apply_runs should not be created, got %d", cnt)
 	}
 }
 
@@ -519,7 +519,7 @@ func TestIntegration_OracleV5_TypedPayloadDualWriteFires(t *testing.T) {
 		}
 	}
 	if !fired {
-		t.Error("ожидали audit oracle.fired для typed-payload Decree")
+		t.Error("expected audit oracle.fired for typed-payload Decree")
 	}
 }
 

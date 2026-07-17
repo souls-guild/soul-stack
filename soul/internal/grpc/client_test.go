@@ -514,10 +514,10 @@ func TestStreamSession_SendWardRoster_Empty(t *testing.T) {
 	got := srv.lastWard
 	srv.mu.Unlock()
 	if got == nil {
-		t.Fatal("WardRoster не получен")
+		t.Fatal("WardRoster not received")
 	}
 	if n := len(got.GetActive()); n != 0 {
-		t.Errorf("WardRoster.active len = %d, want 0 (пустой набор)", n)
+		t.Errorf("WardRoster.active len = %d, want 0 (empty set)", n)
 	}
 }
 

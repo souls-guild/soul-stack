@@ -50,11 +50,11 @@ func TestCollectStateSchemaSecrets(t *testing.T) {
 
 	for _, want := range []string{"admin_token", "tls.key", "acl[].password"} {
 		if !set[want] {
-			t.Errorf("secret-путь %q не собран: %v", want, set)
+			t.Errorf("secret path %q not collected: %v", want, set)
 		}
 	}
 	if set["replicas"] || set["tls.port"] || set["acl[].name"] {
-		t.Errorf("несекретный путь помечен — over-collect: %v", set)
+		t.Errorf("non-secret path marked — over-collect: %v", set)
 	}
 }
 
@@ -77,13 +77,13 @@ func TestCollectStateSchemaSecrets_AdditionalPropertiesSecretLeaf(t *testing.T) 
 	collectStateSchemaSecrets(schema, "", set)
 
 	if set["map_field"] {
-		t.Errorf("ap-secret-leaf пометил `map_field` — over-mask всей map: %v", set)
+		t.Errorf("ap-secret-leaf marked `map_field` — over-mask of the whole map: %v", set)
 	}
 	if set["map_field.*"] {
-		t.Errorf("ap-secret-leaf пометил `map_field.*` — мёртвая запись (IsSecret такой путь не запрашивает): %v", set)
+		t.Errorf("ap-secret-leaf marked `map_field.*` — dead entry (IsSecret never queries this path): %v", set)
 	}
 	if len(set) != 0 {
-		t.Errorf("ap-secret-leaf не должен давать ни одной записи (деградация к vault+regex): %v", set)
+		t.Errorf("ap-secret-leaf should not produce any entry (degradation to vault+regex): %v", set)
 	}
 }
 
@@ -110,10 +110,10 @@ func TestCollectStateSchemaSecrets_AdditionalPropertiesNestedSecret(t *testing.T
 
 	// ap-path = map name (`users`), nested concrete `password` → `users.password`.
 	if !set["users.password"] {
-		t.Errorf("вложенный конкретный secret под ap не собран: %v", set)
+		t.Errorf("nested concrete secret under ap not collected: %v", set)
 	}
 	if set["users"] {
-		t.Errorf("сам ap-узел `users` помечен secret — over-mask: %v", set)
+		t.Errorf("the ap-node `users` itself marked secret — over-mask: %v", set)
 	}
 }
 
@@ -147,16 +147,16 @@ func TestCollectStateSchemaSecrets_AdditionalPropertiesNestedSecret_DynamicKeyGa
 
 	// The ap-path is collected without a dynamic-key segment.
 	if !set["users.password"] {
-		t.Fatalf("ожидался собранный путь `users.password`: %v", set)
+		t.Fatalf("expected collected path `users.password`: %v", set)
 	}
 	// ★ Current behavior: the real cell path with a CONCRETE map key does NOT match the
 	// schema layer (the dynamic-key segment `alice` is not covered; normalizeIdx leaves it alone).
 	if set.IsSecret("users.alice.password") {
-		t.Errorf("IsSecret(users.alice.password) = true — gap неожиданно закрыт; обнови ограничение в collectStateSchemaSecrets")
+		t.Errorf("IsSecret(users.alice.password) = true — gap unexpectedly closed; update the limitation in collectStateSchemaSecrets")
 	}
 	// Control: idx generalization does not help — a map key is not a slice index.
 	if set.IsSecret("users.bob.password") {
-		t.Errorf("IsSecret(users.bob.password) = true — gap неожиданно закрыт; обнови ограничение в collectStateSchemaSecrets")
+		t.Errorf("IsSecret(users.bob.password) = true — gap unexpectedly closed; update the limitation in collectStateSchemaSecrets")
 	}
 }
 
@@ -178,16 +178,16 @@ func TestSecretSchemaForIncarnation_StateAndInput(t *testing.T) {
 
 	schema := h.secretSchemaForIncarnation(context.Background(), inc)
 	if schema == nil {
-		t.Fatal("schema nil — ожидалась непустая (state+input secret)")
+		t.Fatal("schema nil — expected non-empty (state+input secret)")
 	}
 	if !schema.IsSecret("admin_token") {
-		t.Errorf("state.admin_token не secret в схеме")
+		t.Errorf("state.admin_token not secret in schema")
 	}
 	if !schema.IsSecret("input.db_password") {
-		t.Errorf("spec.input.db_password не secret в схеме")
+		t.Errorf("spec.input.db_password not secret in schema")
 	}
 	if schema.IsSecret("input.hostname") {
-		t.Errorf("input.hostname помечен secret — over-collect")
+		t.Errorf("input.hostname marked secret — over-collect")
 	}
 }
 
@@ -197,7 +197,7 @@ func TestSecretSchemaForIncarnation_LoadErrorNil(t *testing.T) {
 	h := sealSchemaHandler(loader)
 	inc := &incarnation.Incarnation{Service: "redis", ServiceVersion: "v1"}
 	if schema := h.secretSchemaForIncarnation(context.Background(), inc); schema != nil {
-		t.Errorf("при load-ошибке schema должна быть nil (best-effort): %v", schema)
+		t.Errorf("on load error schema must be nil (best-effort): %v", schema)
 	}
 }
 
@@ -206,7 +206,7 @@ func TestSecretSchemaForIncarnation_NilDeps(t *testing.T) {
 	h := &IncarnationHandler{}
 	inc := &incarnation.Incarnation{Service: "redis"}
 	if schema := h.secretSchemaForIncarnation(context.Background(), inc); schema != nil {
-		t.Errorf("без loader/services schema должна быть nil: %v", schema)
+		t.Errorf("without loader/services schema must be nil: %v", schema)
 	}
 }
 
@@ -240,11 +240,11 @@ func TestToIncarnationGetView_SchemaMasksDeclaredState(t *testing.T) {
 		t.Errorf("schema-secret state.join_value = %v, want masked (e)", view.State["join_value"])
 	}
 	if view.State["replicas"] != float64(3) {
-		t.Errorf("несекретный state.replicas = %v, want passthrough (нет over-masking)", view.State["replicas"])
+		t.Errorf("non-secret state.replicas = %v, want passthrough (no over-masking)", view.State["replicas"])
 	}
 	// The stored state is not mutated.
 	if inc.State["join_value"] != "plaintext-secret-value" {
-		t.Errorf("исходный inc.State мутирован: %v", inc.State["join_value"])
+		t.Errorf("original inc.State mutated: %v", inc.State["join_value"])
 	}
 }
 
@@ -270,6 +270,6 @@ func TestToIncarnationGetView_GenericStateNotMasked(t *testing.T) {
 
 	cfg := view.State["redis_config"].(map[string]any)
 	if cfg["maxmemory"] != "256mb" || cfg["loglevel"] != "notice" {
-		t.Errorf("generic redis_config замаскирован — over-masking: %v", cfg)
+		t.Errorf("generic redis_config masked — over-masking: %v", cfg)
 	}
 }

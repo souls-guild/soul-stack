@@ -78,10 +78,10 @@ func TestRateLimit_NilLimiter_Passthrough(t *testing.T) {
 	mw.ServeHTTP(rec, req)
 
 	if !called {
-		t.Fatal("nil-limiter → middleware должен быть no-op (next вызван)")
+		t.Fatal("nil-limiter -> middleware must be a no-op (next called)")
 	}
 	if rec.Code != http.StatusAccepted {
-		t.Fatalf("ожидался 202, got %d", rec.Code)
+		t.Fatalf("expected 202, got %d", rec.Code)
 	}
 }
 
@@ -100,16 +100,16 @@ func TestRateLimit_Allowed_Passthrough(t *testing.T) {
 	mw.ServeHTTP(rec, req)
 
 	if !called {
-		t.Fatal("allowed=true → next должен вызваться")
+		t.Fatal("allowed=true -> next must be called")
 	}
 	if rec.Code != http.StatusCreated {
-		t.Fatalf("ожидался 201, got %d", rec.Code)
+		t.Fatalf("expected 201, got %d", rec.Code)
 	}
 	if lim.gotAID != "archon-alice" {
-		t.Errorf("AID прокинут неверно: got %q, want archon-alice", lim.gotAID)
+		t.Errorf("AID propagated incorrectly: got %q, want archon-alice", lim.gotAID)
 	}
 	if lim.gotBucket != "voyage_create" || lim.gotRate != 10 || lim.gotBurst != 20 {
-		t.Errorf("bucket/rate/burst прокинуты неверно: %q/%v/%d", lim.gotBucket, lim.gotRate, lim.gotBurst)
+		t.Errorf("bucket/rate/burst propagated incorrectly: %q/%v/%d", lim.gotBucket, lim.gotRate, lim.gotBurst)
 	}
 	if metrics.allowed["voyage_create"] != 1 || metrics.rejected["voyage_create"] != 0 {
 		t.Errorf("allowed=true → allowed{voyage_create}+1, rejected 0; got allowed=%d rejected=%d",
@@ -129,32 +129,32 @@ func TestRateLimit_Exceeded_429_RetryAfter_Problem(t *testing.T) {
 	mw.ServeHTTP(rec, req)
 
 	if called {
-		t.Fatal("allowed=false → next вызываться не должен")
+		t.Fatal("allowed=false -> next must not be called")
 	}
 	if metrics.rejected["voyage_create"] != 1 || metrics.allowed["voyage_create"] != 0 {
 		t.Errorf("allowed=false → rejected{voyage_create}+1, allowed 0; got allowed=%d rejected=%d",
 			metrics.allowed["voyage_create"], metrics.rejected["voyage_create"])
 	}
 	if rec.Code != http.StatusTooManyRequests {
-		t.Fatalf("ожидался 429, got %d", rec.Code)
+		t.Fatalf("expected 429, got %d", rec.Code)
 	}
 
 	// Retry-After rounds UP: 1500ms → 2s.
 	ra := rec.Header().Get("Retry-After")
 	if ra == "" {
-		t.Fatal("ожидался заголовок Retry-After")
+		t.Fatal("expected a Retry-After header")
 	}
 	n, err := strconv.Atoi(ra)
 	if err != nil {
-		t.Fatalf("Retry-After должен быть целым числом секунд, got %q", ra)
+		t.Fatalf("Retry-After must be an integer number of seconds, got %q", ra)
 	}
 	if n != 2 {
-		t.Fatalf("Retry-After: 1500ms должно округлиться вверх до 2с, got %d", n)
+		t.Fatalf("Retry-After: 1500ms should round up to 2s, got %d", n)
 	}
 
 	ct := rec.Header().Get("Content-Type")
 	if !strings.HasPrefix(ct, "application/problem+json") {
-		t.Fatalf("ожидался Content-Type application/problem+json, got %q", ct)
+		t.Fatalf("expected Content-Type application/problem+json, got %q", ct)
 	}
 
 	var body problem.Details
@@ -162,10 +162,10 @@ func TestRateLimit_Exceeded_429_RetryAfter_Problem(t *testing.T) {
 		t.Fatalf("body decode: %v", err)
 	}
 	if body.Type != problem.TypeTempoExceeded {
-		t.Fatalf("ожидался type %q, got %q", problem.TypeTempoExceeded, body.Type)
+		t.Fatalf("expected type %q, got %q", problem.TypeTempoExceeded, body.Type)
 	}
 	if body.Status != http.StatusTooManyRequests {
-		t.Fatalf("ожидался status 429 в теле, got %d", body.Status)
+		t.Fatalf("expected status 429 in the body, got %d", body.Status)
 	}
 }
 
@@ -180,7 +180,7 @@ func TestRateLimit_RetryAfter_Floor1s(t *testing.T) {
 	mw.ServeHTTP(rec, req)
 
 	if got := rec.Header().Get("Retry-After"); got != "1" {
-		t.Fatalf("Retry-After для 50ms должен быть минимумом 1, got %q", got)
+		t.Fatalf("Retry-After for 50ms should floor to 1, got %q", got)
 	}
 }
 
@@ -198,10 +198,10 @@ func TestRateLimit_LimiterError_FailOpen(t *testing.T) {
 	mw.ServeHTTP(rec, req)
 
 	if !called {
-		t.Fatal("limiter-error → fail-open (next вызван), ADR-050(b)")
+		t.Fatal("limiter-error -> fail-open (next called), ADR-050(b)")
 	}
 	if rec.Code != http.StatusOK {
-		t.Fatalf("ожидался 200 fail-open, got %d", rec.Code)
+		t.Fatalf("expected 200 fail-open, got %d", rec.Code)
 	}
 }
 
@@ -220,13 +220,13 @@ func TestRateLimit_NoClaims_FailOpen(t *testing.T) {
 	mw.ServeHTTP(rec, req)
 
 	if !called {
-		t.Fatal("нет AID в context → fail-open passthrough (wire-up без RequireJWT)")
+		t.Fatal("no AID in context -> fail-open passthrough (wire-up without RequireJWT)")
 	}
 	if lim.calls != 0 {
-		t.Fatalf("без AID limiter дёргаться не должен, calls=%d", lim.calls)
+		t.Fatalf("limiter must not be invoked without AID, calls=%d", lim.calls)
 	}
 	if rec.Code != http.StatusOK {
-		t.Fatalf("ожидался 200, got %d", rec.Code)
+		t.Fatalf("expected 200, got %d", rec.Code)
 	}
 }
 
@@ -287,19 +287,19 @@ func TestRateLimit_PreviewAndCreate_SeparateBuckets(t *testing.T) {
 
 	// 1. Exhaust the create bucket: the first — 202, the second — 429.
 	if code := do(createMW, "/v1/voyages"); code != http.StatusAccepted {
-		t.Fatalf("create #1: ожидался 202 в пределах burst, got %d", code)
+		t.Fatalf("create #1: expected 202 within burst, got %d", code)
 	}
 	if code := do(createMW, "/v1/voyages"); code != http.StatusTooManyRequests {
-		t.Fatalf("create #2: ожидался 429 (бакет create исчерпан), got %d", code)
+		t.Fatalf("create #2: expected 429 (create bucket exhausted), got %d", code)
 	}
 
 	// 2. preview is NOT affected by exhausting create: the first preview passes (202).
 	if code := do(previewMW, "/v1/voyages/preview"); code != http.StatusAccepted {
-		t.Fatalf("preview #1: ожидался 202 — preview не делит квоту с create, got %d", code)
+		t.Fatalf("preview #1: expected 202 -- preview does not share a quota with create, got %d", code)
 	}
 	// preview is exhausted by its own burst → the second preview gets 429.
 	if code := do(previewMW, "/v1/voyages/preview"); code != http.StatusTooManyRequests {
-		t.Fatalf("preview #2: ожидался 429 (собственный preview-бакет исчерпан), got %d", code)
+		t.Fatalf("preview #2: expected 429 (own preview bucket exhausted), got %d", code)
 	}
 
 	// 3. Symmetry: exhausting preview does not affect create. create was already exhausted in
@@ -312,14 +312,14 @@ func TestRateLimit_PreviewAndCreate_SeparateBuckets(t *testing.T) {
 		return rec.Code
 	}
 	if code := doAs(previewMW, "/v1/voyages/preview", aid2); code != http.StatusAccepted {
-		t.Fatalf("bob preview #1: ожидался 202, got %d", code)
+		t.Fatalf("bob preview #1: expected 202, got %d", code)
 	}
 	if code := doAs(previewMW, "/v1/voyages/preview", aid2); code != http.StatusTooManyRequests {
-		t.Fatalf("bob preview #2: ожидался 429 (preview-бакет исчерпан), got %d", code)
+		t.Fatalf("bob preview #2: expected 429 (preview bucket exhausted), got %d", code)
 	}
 	// bob's create bucket is untouched by exhausting his preview → it passes.
 	if code := doAs(createMW, "/v1/voyages", aid2); code != http.StatusAccepted {
-		t.Fatalf("bob create #1: ожидался 202 — create не делит квоту с preview, got %d", code)
+		t.Fatalf("bob create #1: expected 202 -- create does not share a quota with preview, got %d", code)
 	}
 }
 
@@ -340,12 +340,12 @@ func TestRateLimit_NonPositiveLimits_FailOpen(t *testing.T) {
 	mw.ServeHTTP(rec, req)
 
 	if !called {
-		t.Fatal("нулевой rate/burst → fail-open passthrough")
+		t.Fatal("zero rate/burst -> fail-open passthrough")
 	}
 	if lim.calls != 0 {
-		t.Fatalf("при невалидном лимите limiter дёргаться не должен, calls=%d", lim.calls)
+		t.Fatalf("limiter must not be invoked with an invalid limit, calls=%d", lim.calls)
 	}
 	if rec.Code != http.StatusOK {
-		t.Fatalf("ожидался 200, got %d", rec.Code)
+		t.Fatalf("expected 200, got %d", rec.Code)
 	}
 }

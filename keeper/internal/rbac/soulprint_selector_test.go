@@ -111,7 +111,7 @@ func TestParseSelector_Soulprint_RequiresQuotes(t *testing.T) {
 	}
 }
 
-// An empty soulprint (soulprint=”) is rejected.
+// An empty soulprint (soulprint=") is rejected.
 func TestParseSelector_Soulprint_EmptyRejected(t *testing.T) {
 	_, err := ParsePermission(`incarnation.run on soulprint=''`)
 	if err == nil {
@@ -143,10 +143,10 @@ func TestMatches_Soulprint_FailClosed(t *testing.T) {
 	// No context (including coven/host/sid) activates a soulprint predicate
 	// in S2b — there are no facts in map[string]string.
 	if p.Matches("incarnation", "run", map[string]string{"host": "web-01", "coven": "prod"}) {
-		t.Errorf("soulprint-perm должна давать deny в Matches (S2b fail-closed)")
+		t.Errorf("soulprint-perm should deny in Matches (S2b fail-closed)")
 	}
 	if p.Matches("incarnation", "run", nil) {
-		t.Errorf("soulprint-perm с nil-context должна давать deny")
+		t.Errorf("soulprint-perm with nil-context should deny")
 	}
 }
 
@@ -157,18 +157,18 @@ func TestEvalSoulprintExpr(t *testing.T) {
 	rhel := map[string]any{"os": map[string]any{"family": "rhel", "arch": "amd64"}}
 
 	if ok, err := EvalSoulprintExpr(`soulprint.self.os.family == "debian"`, debian); err != nil || !ok {
-		t.Errorf("debian-хост: ok=%v err=%v, want true,nil", ok, err)
+		t.Errorf("debian host: ok=%v err=%v, want true,nil", ok, err)
 	}
 	if ok, err := EvalSoulprintExpr(`soulprint.self.os.family == "debian"`, rhel); err != nil || ok {
-		t.Errorf("rhel-хост: ok=%v err=%v, want false,nil", ok, err)
+		t.Errorf("rhel host: ok=%v err=%v, want false,nil", ok, err)
 	}
 	// A missing key in the facts → no-match (default-deny), NOT a function error.
 	if ok, err := EvalSoulprintExpr(`soulprint.self.os.family == "debian"`, map[string]any{}); err != nil || ok {
-		t.Errorf("пустые факты: ok=%v err=%v, want false,nil (no-such-key → no-match)", ok, err)
+		t.Errorf("empty facts: ok=%v err=%v, want false,nil (no-such-key -> no-match)", ok, err)
 	}
 	// nil facts → no-match.
 	if ok, err := EvalSoulprintExpr(`soulprint.self.os.family == "debian"`, nil); err != nil || ok {
-		t.Errorf("nil-факты: ok=%v err=%v, want false,nil", ok, err)
+		t.Errorf("nil facts: ok=%v err=%v, want false,nil", ok, err)
 	}
 }
 
@@ -200,11 +200,11 @@ func TestResolvePurview_Soulprint_DefaultScopeInherited(t *testing.T) {
 	})
 	p := e.ResolvePurview("archon-a", "incarnation", "run")
 	if p.Unrestricted {
-		t.Errorf("Unrestricted=true, want false (bare наследует soulprint default_scope)")
+		t.Errorf("Unrestricted=true, want false (bare inherits soulprint default_scope)")
 	}
 	want := `soulprint.self.os.family == "debian"`
 	if len(p.SoulprintExprs) != 1 || p.SoulprintExprs[0] != want {
-		t.Errorf("SoulprintExprs = %v, want [%q] (наследование default_scope)", p.SoulprintExprs, want)
+		t.Errorf("SoulprintExprs = %v, want [%q] (default_scope inheritance)", p.SoulprintExprs, want)
 	}
 }
 
@@ -224,43 +224,43 @@ func TestSubset_Soulprint_StringEquality(t *testing.T) {
 		wantHeld    bool // true → ErrPermissionNotHeld (grant denied)
 	}{
 		{
-			name:        "идентичный soulprint → выдача ок",
+			name:        "identical soulprint -> grant ok",
 			callerRaws:  []string{deb},
 			grantedRaws: []string{deb},
 			wantHeld:    false,
 		},
 		{
-			name:        "иной soulprint → DENY (fail-closed, не string-equal)",
+			name:        "different soulprint -> DENY (fail-closed, not string-equal)",
 			callerRaws:  []string{deb},
 			grantedRaws: []string{rhel},
 			wantHeld:    true,
 		},
 		{
-			name:        "соулпринт-сужение недостижимо статически → DENY",
+			name:        "soulprint narrowing statically undecidable -> DENY",
 			callerRaws:  []string{deb},
 			grantedRaws: []string{debArch},
 			wantHeld:    true,
 		},
 		{
-			name:        "caller с * выдаёт любой soulprint",
+			name:        "caller with * grants any soulprint",
 			callerRaws:  []string{"*"},
 			grantedRaws: []string{deb},
 			wantHeld:    false,
 		},
 		{
-			name:        "caller без soulprint-scope (bare) выдаёт soulprint → ок (bare покрывает)",
+			name:        "caller without soulprint-scope (bare) grants soulprint -> ok (bare covers)",
 			callerRaws:  []string{"incarnation.run"},
 			grantedRaws: []string{deb},
 			wantHeld:    false,
 		},
 		{
-			name:        "caller с soulprint выдаёт bare → DENY (bare шире soulprint-scope caller-а)",
+			name:        "caller with soulprint grants bare -> DENY (bare wider than caller soulprint-scope)",
 			callerRaws:  []string{deb},
 			grantedRaws: []string{"incarnation.run"},
 			wantHeld:    true,
 		},
 		{
-			name:        "caller с soulprint выдаёт coven (иное измерение) → DENY",
+			name:        "caller with soulprint grants coven (different dimension) -> DENY",
 			callerRaws:  []string{deb},
 			grantedRaws: []string{"incarnation.run on coven=prod"},
 			wantHeld:    true,

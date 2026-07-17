@@ -28,7 +28,7 @@ func goldenAugur(t *testing.T, name string, native any, want string) {
 		t.Fatalf("%s: marshal: %v", name, err)
 	}
 	if string(got) != want {
-		t.Errorf("%s: GOLDEN wire-дрейф:\n got  = %s\n want = %s", name, got, want)
+		t.Errorf("%s: GOLDEN wire-drift:\n got  = %s\n want = %s", name, got, want)
 	}
 }
 

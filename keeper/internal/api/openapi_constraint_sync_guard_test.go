@@ -614,7 +614,7 @@ var constraintSyncCases = []constraintSyncCase{
 		fieldPath: []string{"HistoryID"},
 		tag:       tagPattern,
 		runtime:   ulidRuntimePattern,
-		source:    "ULID (миграция 006, history_id)",
+		source:    "ULID (migration 006, history_id)",
 	},
 	{
 		name:      "PushApplyReply apply_id ULID",
@@ -718,7 +718,7 @@ var constraintSyncCases = []constraintSyncCase{
 		fieldPath: []string{"ID"},
 		tag:       tagPattern,
 		runtime:   ulidRuntimePattern,
-		source:    "ULID (миграция 001, audit_id)",
+		source:    "ULID (migration 001, audit_id)",
 	},
 	{
 		name:      "AuditEvent correlation_id ULID",
@@ -726,7 +726,7 @@ var constraintSyncCases = []constraintSyncCase{
 		fieldPath: []string{"CorrelationID"},
 		tag:       tagPattern,
 		runtime:   ulidRuntimePattern,
-		source:    "ULID (миграция 001, correlation_id)",
+		source:    "ULID (migration 001, correlation_id)",
 	},
 
 	// --- sha256 hex on hash-derived IDs ---
@@ -1023,7 +1023,7 @@ var constraintSyncCases = []constraintSyncCase{
 		fieldPath: []string{"Body", "Ref"},
 		tag:       tagPattern,
 		runtime:   sigilSegmentRuntimePattern,
-		source:    "reSigilSegment (validateSigilTriple, AllowTyped — tag-ref, слеш→422)",
+		source:    "reSigilSegment (validateSigilTriple, AllowTyped - tag-ref, slash->422)",
 	},
 	{
 		name:      "sigil.revoke namespace (path)",
@@ -1047,7 +1047,7 @@ var constraintSyncCases = []constraintSyncCase{
 		fieldPath: []string{"Ref"},
 		tag:       tagPattern,
 		runtime:   sigilSegmentRuntimePattern,
-		source:    "reSigilSegment (validateSigilTriple, RevokeTyped — tag-ref, слеш→422)",
+		source:    "reSigilSegment (validateSigilTriple, RevokeTyped - tag-ref, slash->422)",
 	},
 
 	// --- incarnation name/service (incarnation.NamePattern, 422 in CreateTyped) ---
@@ -1260,7 +1260,7 @@ var constraintSyncCases = []constraintSyncCase{
 		fieldPath: []string{"Name"},
 		tag:       tagPattern,
 		runtime:   rbac.RoleNamePattern,
-		source:    "rbac.RoleNamePattern (output synod name — единый reRoleName)",
+		source:    "rbac.RoleNamePattern (output synod name - shared reRoleName)",
 	},
 	{
 		name:      "SynodView roles[] (rbac.RoleNamePattern, per-element)",
@@ -1268,7 +1268,7 @@ var constraintSyncCases = []constraintSyncCase{
 		fieldPath: []string{"Roles"},
 		tag:       tagPattern,
 		runtime:   rbac.RoleNamePattern,
-		source:    "rbac.RoleNamePattern (output synod.roles[] — names ролей)",
+		source:    "rbac.RoleNamePattern (output synod.roles[] - role names)",
 	},
 
 	// --- service name (serviceregistry.NamePattern ^[a-z][a-z0-9-]*$) ---
@@ -1309,7 +1309,7 @@ var constraintSyncCases = []constraintSyncCase{
 		source:    "soul.CovenPattern (output covens[], per-element)",
 	},
 	{
-		name:      "soulCovenAssignReply labels[] (soul.CovenPattern, replace-эхо)",
+		name:      "soulCovenAssignReply labels[] (soul.CovenPattern, replace echo)",
 		structPtr: &soulCovenAssignReply{},
 		fieldPath: []string{"Labels"},
 		tag:       tagPattern,
@@ -1375,7 +1375,7 @@ var constraintSyncCases = []constraintSyncCase{
 		fieldPath: []string{"IncarnationName"},
 		tag:       tagPattern,
 		runtime:   oracle.IncarnationPattern,
-		source:    "oracle.IncarnationPattern (output decree.incarnation_name — тот же const, which INPUT)",
+		source:    "oracle.IncarnationPattern (output decree.incarnation_name - same const as INPUT)",
 	},
 
 	// ====================================================================
@@ -1471,7 +1471,7 @@ var constraintSyncCases = []constraintSyncCase{
 		fieldPath: []string{"Body", "Label"},
 		tag:       tagMaxLength,
 		runtime:   covenRuntimeMaxLen,
-		source:    "soul.ValidCoven (append/remove, soul.go:1239; пустой замен при replace → valid)",
+		source:    "soul.ValidCoven (append/remove, soul.go:1239; empty replacement on replace -> valid)",
 	},
 	{
 		name:      "soul.coven-assign labels[] maxLength",
@@ -1535,11 +1535,11 @@ func TestOpenAPIConstraintSyncWithRuntime(t *testing.T) {
 		t.Run(c.name, func(t *testing.T) {
 			got, ok := constraintTag(t, c.structPtr, c.fieldPath, c.tag)
 			if !ok {
-				t.Fatalf("field %v типа %s NOT несёт тега %q — пилотbutе ограничение исчезло from спеки (drift спека<runtime)",
+				t.Fatalf("field %v of type %s does NOT carry tag %q - pilot constraint vanished from the spec (drift spec<runtime)",
 					c.fieldPath, reflect.TypeOf(c.structPtr).Elem().Name(), c.tag)
 			}
 			if got != c.runtime {
-				t.Fatalf("DRIFT тег<>runtime for %s:\n  huma-тег %q = %q\n  runtime-источник %s = %q\n→ синхронfromируй литерал тега с runtime-валидатором (ручonя синхронfromация, see шапку файла)",
+				t.Fatalf("DRIFT tag<>runtime for %s:\n  huma tag %q = %q\n  runtime source %s = %q\n-> sync the tag literal with the runtime validator (manual sync, see file header)",
 					c.name, c.tag, got, c.source, c.runtime)
 			}
 		})
@@ -1558,11 +1558,11 @@ func constraintTag(t *testing.T, structPtr any, fieldPath []string, kind constra
 	var last reflect.StructField
 	for i, name := range fieldPath {
 		if typ.Kind() != reflect.Struct {
-			t.Fatalf("сегмент %q пути %v: предыдущий тип %s не структура", name, fieldPath, typ.Name())
+			t.Fatalf("segment %q of path %v: previous type %s is not a struct", name, fieldPath, typ.Name())
 		}
 		f, ok := typ.FieldByName(name)
 		if !ok {
-			t.Fatalf("field %q не onйдеbut в %s (путь %v) — структура op-input переимеbutваon? обbutви кейс",
+			t.Fatalf("field %q not found in %s (path %v) - was the op-input struct renamed? cover the case",
 				name, typ.Name(), fieldPath)
 		}
 		last = f

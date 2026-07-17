@@ -39,7 +39,7 @@ func attemptOf(set []*keeperv1.ActiveApply, id string) int32 {
 func TestActiveSet_Empty(t *testing.T) {
 	r := NewApplyRunner(mapRegistry{}, nil)
 	if got := r.ActiveSet(); len(got) != 0 {
-		t.Fatalf("ActiveSet() на свежем runner = %v, want пусто", activeIDs(got))
+		t.Fatalf("ActiveSet() on a fresh runner = %v, want empty", activeIDs(got))
 	}
 }
 
@@ -71,11 +71,11 @@ func TestActiveSet_RecentlyFinished(t *testing.T) {
 
 	// active is empty, but the ring holds apply_id within TTL.
 	if _, ok := r.active["apply-done"]; ok {
-		t.Fatal("apply-done остался в active после unregister")
+		t.Fatal("apply-done remained in active after unregister")
 	}
 	got := activeIDs(r.ActiveSet())
 	if len(got) != 1 || got[0] != "apply-done" {
-		t.Fatalf("ActiveSet() сразу после unregister = %v, want [apply-done] (ring TTL)", got)
+		t.Fatalf("ActiveSet() right after unregister = %v, want [apply-done] (ring TTL)", got)
 	}
 }
 
@@ -93,17 +93,17 @@ func TestActiveSet_RingExpiresAfterTTL(t *testing.T) {
 	// Within TTL — present.
 	now = base.Add(recentlyFinishedTTL - time.Second)
 	if got := activeIDs(r.ActiveSet()); len(got) != 1 {
-		t.Fatalf("ActiveSet() в пределах TTL = %v, want [apply-done]", got)
+		t.Fatalf("ActiveSet() within TTL = %v, want [apply-done]", got)
 	}
 
 	// At the TTL boundary (>=) — evicted.
 	now = base.Add(recentlyFinishedTTL)
 	if got := r.ActiveSet(); len(got) != 0 {
-		t.Fatalf("ActiveSet() после TTL = %v, want пусто (ring протух)", activeIDs(got))
+		t.Fatalf("ActiveSet() after TTL = %v, want empty (ring expired)", activeIDs(got))
 	}
 	// Lazy cleanup actually removed the entry from the map.
 	if _, ok := r.recentlyFinished["apply-done"]; ok {
-		t.Error("протухшая ring-запись не вычищена из recentlyFinished")
+		t.Error("an expired ring entry was not purged from recentlyFinished")
 	}
 }
 
@@ -120,7 +120,7 @@ func TestActiveSet_UnionDedup(t *testing.T) {
 
 	got := activeIDs(r.ActiveSet())
 	if len(got) != 1 || got[0] != "apply-x" {
-		t.Fatalf("ActiveSet() при union active+ring = %v, want ровно [apply-x]", got)
+		t.Fatalf("ActiveSet() under union active+ring = %v, want exactly [apply-x]", got)
 	}
 }
 
@@ -134,10 +134,10 @@ func TestActiveSet_AttemptEcho(t *testing.T) {
 
 	set := r.ActiveSet()
 	if got := attemptOf(set, "apply-fenced"); got != 7 {
-		t.Errorf("attempt[apply-fenced] = %d, want 7 (эхо lastSeenAttempt)", got)
+		t.Errorf("attempt[apply-fenced] = %d, want 7 (echo of lastSeenAttempt)", got)
 	}
 	if got := attemptOf(set, "apply-plain"); got != 0 {
-		t.Errorf("attempt[apply-plain] = %d, want 0 (нет fencing-epoch)", got)
+		t.Errorf("attempt[apply-plain] = %d, want 0 (no fencing-epoch)", got)
 	}
 }
 
@@ -159,7 +159,7 @@ func TestActiveSet_SurvivesReconnect(t *testing.T) {
 	r.nowFn = func() time.Time { return base }
 
 	if !r.AcceptAttempt("apply-r", 3) {
-		t.Fatal("attempt=3 отвергнут")
+		t.Fatal("attempt=3 was rejected")
 	}
 	if err := r.Run(context.Background(), &keeperv1.ApplyRequest{
 		ApplyId: "apply-r",
@@ -172,10 +172,10 @@ func TestActiveSet_SurvivesReconnect(t *testing.T) {
 	// "reconnect": same runner, a new session reads ActiveSet for WardRoster.
 	got := r.ActiveSet()
 	if ids := activeIDs(got); len(ids) != 1 || ids[0] != "apply-r" {
-		t.Fatalf("ActiveSet() после Run+reconnect = %v, want [apply-r] (ring пережил swap)", ids)
+		t.Fatalf("ActiveSet() after Run+reconnect = %v, want [apply-r] (ring survived the swap)", ids)
 	}
 	if a := attemptOf(got, "apply-r"); a != 3 {
-		t.Errorf("attempt[apply-r] = %d, want 3 (epoch пережил Run)", a)
+		t.Errorf("attempt[apply-r] = %d, want 3 (epoch survived Run)", a)
 	}
 }
 
@@ -188,13 +188,13 @@ func TestActiveSet_RestartClearsSet(t *testing.T) {
 	r1.register("apply-old", func() {})
 	r1.unregister("apply-old")
 	if len(r1.ActiveSet()) != 1 {
-		t.Fatal("предусловие: apply-old должен быть в ring r1")
+		t.Fatal("precondition: apply-old should be in ring r1")
 	}
 
 	// "Process restart" — new runner, nothing inherited.
 	r2 := NewApplyRunner(mapRegistry{}, nil)
 	if got := r2.ActiveSet(); len(got) != 0 {
-		t.Fatalf("ActiveSet() нового runner после «рестарта» = %v, want пусто", activeIDs(got))
+		t.Fatalf("ActiveSet() of a new runner after a \"restart\" = %v, want empty", activeIDs(got))
 	}
 }
 

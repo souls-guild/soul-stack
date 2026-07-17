@@ -415,7 +415,7 @@ func waitRunDone(t *testing.T, name, applyID string, want incarnation.Status) *i
 		}
 		time.Sleep(20 * time.Millisecond)
 	}
-	t.Fatalf("прогон %s не завершился за 10s", applyID)
+	t.Fatalf("run %s did not finish within 10s", applyID)
 	return nil
 }
 
@@ -563,13 +563,13 @@ func TestIntegration_CrossKeeperCancel_FlagInPG(t *testing.T) {
 		t.Fatalf("RequestCancel: %v", err)
 	}
 	if affected == 0 {
-		t.Fatal("RequestCancel affected = 0, want >=1 (running-хост прогона)")
+		t.Fatal("RequestCancel affected = 0, want >=1 (running host of the run)")
 	}
 
 	// run-goroutine sees the flag during barrier polling and cancels the run.
 	inc := waitRunDone(t, "noop-prod", applyID, incarnation.StatusErrorLocked)
 	if inc.StatusDetails == nil || inc.StatusDetails["reason"] != "dispatch_failed" {
-		t.Errorf("status_details = %+v, want reason=dispatch_failed (отмена через barrier)", inc.StatusDetails)
+		t.Errorf("status_details = %+v, want reason=dispatch_failed (cancel via barrier)", inc.StatusDetails)
 	}
 }
 
@@ -604,7 +604,7 @@ func TestIntegration_LocalCancel_FastPath(t *testing.T) {
 		t.Fatalf("RequestCancel: %v", err)
 	}
 	if !found {
-		t.Error("RequestCancel found = false, want true (прогон активен)")
+		t.Error("RequestCancel found = false, want true (run is active)")
 	}
 
 	inc := waitRunDone(t, "noop-prod", applyID, incarnation.StatusErrorLocked)
@@ -645,14 +645,14 @@ func TestIntegration_RequestCancel_TerminalNoOp(t *testing.T) {
 		t.Fatalf("RequestCancel: %v", err)
 	}
 	if found {
-		t.Error("RequestCancel found = true для завершённого прогона, want false (no-op)")
+		t.Error("RequestCancel found = true for a finished run, want false (no-op)")
 	}
 	inc, err := incarnation.SelectByName(context.Background(), integrationPool, "noop-prod")
 	if err != nil {
 		t.Fatalf("SelectByName: %v", err)
 	}
 	if inc.Status != incarnation.StatusReady {
-		t.Errorf("incarnation status = %q, want ready (Cancel не должен трогать завершённый прогон)", inc.Status)
+		t.Errorf("incarnation status = %q, want ready (Cancel must not touch a finished run)", inc.Status)
 	}
 }
 
@@ -674,7 +674,7 @@ func waitHostDispatched(t *testing.T, applyID string) {
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
-	t.Fatalf("прогон %s не дошёл до running-строки за 5s", applyID)
+	t.Fatalf("run %s did not reach the running row within 5s", applyID)
 }
 
 func TestIntegration_NoHosts_ErrorLocked(t *testing.T) {
@@ -837,7 +837,7 @@ func TestIntegration_RegisterInSets_CommitsToState(t *testing.T) {
 
 	inc := waitRunDone(t, "noop-prod", applyID, incarnation.StatusReady)
 	if inc.State["leader"] != "leader" {
-		t.Errorf("incarnation.state.leader = %v, want \"leader\" (из register.probe.stdout)", inc.State["leader"])
+		t.Errorf("incarnation.state.leader = %v, want \"leader\" (from register.probe.stdout)", inc.State["leader"])
 	}
 }
 
@@ -989,10 +989,10 @@ func TestIntegration_ApplyDestiny(t *testing.T) {
 
 	waitRunDone(t, "noop-prod", applyID, incarnation.StatusReady)
 	if disp.calls != 1 {
-		t.Errorf("SendApply calls = %d, want 1 (один хост)", disp.calls)
+		t.Errorf("SendApply calls = %d, want 1 (one host)", disp.calls)
 	}
 	if disp.gotTasks != 2 {
-		t.Errorf("dispatched tasks = %d, want 2 (apply:destiny раскрылся в 2 задачи)", disp.gotTasks)
+		t.Errorf("dispatched tasks = %d, want 2 (apply:destiny expanded into 2 tasks)", disp.gotTasks)
 	}
 }
 
@@ -1023,7 +1023,7 @@ func TestIntegration_ApplyDestiny_NoSource(t *testing.T) {
 		t.Errorf("reason = %v, want render_failed", inc.StatusDetails["reason"])
 	}
 	if disp.calls != 0 {
-		t.Errorf("SendApply calls = %d, want 0 (render упал до dispatch)", disp.calls)
+		t.Errorf("SendApply calls = %d, want 0 (render failed before dispatch)", disp.calls)
 	}
 }
 
@@ -1138,7 +1138,7 @@ func TestIntegration_ScenarioInputDefaultsMerged(t *testing.T) {
 
 	waitRunDone(t, "noop-prod", applyID, incarnation.StatusReady)
 	if disp.gotCommand != "echo hi!" {
-		t.Errorf("rendered command = %q, want %q (default suffix смёржен)", disp.gotCommand, "echo hi!")
+		t.Errorf("rendered command = %q, want %q (default suffix merged in)", disp.gotCommand, "echo hi!")
 	}
 }
 
@@ -1172,7 +1172,7 @@ func TestIntegration_ScenarioInputRequiredMissing(t *testing.T) {
 		t.Errorf("reason = %v, want input_invalid", inc.StatusDetails["reason"])
 	}
 	if disp.calls != 0 {
-		t.Errorf("SendApply calls = %d, want 0 (input провалился до dispatch)", disp.calls)
+		t.Errorf("SendApply calls = %d, want 0 (input failed before dispatch)", disp.calls)
 	}
 }
 
@@ -1207,7 +1207,7 @@ func TestIntegration_AlreadyApplying_Rejected(t *testing.T) {
 	deadline := time.Now().Add(2 * time.Second)
 	for time.Now().Before(deadline) {
 		if disp.calls > 0 {
-			t.Fatalf("SendApply вызван при applying-incarnation")
+			t.Fatalf("SendApply called on an applying incarnation")
 		}
 		time.Sleep(20 * time.Millisecond)
 	}
@@ -1250,7 +1250,7 @@ func TestIntegration_ErrorLocked_Rejected(t *testing.T) {
 	deadline := time.Now().Add(2 * time.Second)
 	for time.Now().Before(deadline) {
 		if disp.calls > 0 {
-			t.Fatalf("SendApply вызван при error_locked-incarnation")
+			t.Fatalf("SendApply called on an error_locked incarnation")
 		}
 		time.Sleep(20 * time.Millisecond)
 	}
@@ -1305,7 +1305,7 @@ func TestIntegration_NonRunnableStatus_Rejected(t *testing.T) {
 			deadline := time.Now().Add(2 * time.Second)
 			for time.Now().Before(deadline) {
 				if disp.calls > 0 {
-					t.Fatalf("SendApply вызван при %s-incarnation", tc.status)
+					t.Fatalf("SendApply called on a %s incarnation", tc.status)
 				}
 				time.Sleep(20 * time.Millisecond)
 			}
@@ -1406,11 +1406,11 @@ func TestIntegration_Serial_AllWavesCommitOnce(t *testing.T) {
 	got := disp.dispatchedSIDs()
 	want := []string{"host-a.example.com", "host-b.example.com", "host-c.example.com"}
 	if len(got) != 3 {
-		t.Fatalf("dispatched = %v, want 3 хоста", got)
+		t.Fatalf("dispatched = %v, want 3 hosts", got)
 	}
 	for i := range want {
 		if got[i] != want[i] {
-			t.Errorf("dispatch order[%d] = %q, want %q (волны по SID)", i, got[i], want[i])
+			t.Errorf("dispatch order[%d] = %q, want %q (waves by SID)", i, got[i], want[i])
 		}
 	}
 
@@ -1427,7 +1427,7 @@ func TestIntegration_Serial_AllWavesCommitOnce(t *testing.T) {
 		t.Fatalf("HistorySelectByName: %v", err)
 	}
 	if total != 1 {
-		t.Errorf("state_history snapshots = %d, want 1 (единый commit, НЕ по-волново)", total)
+		t.Errorf("state_history snapshots = %d, want 1 (single commit, NOT per-wave)", total)
 	}
 
 	// All apply_runs success.
@@ -1472,12 +1472,12 @@ func TestIntegration_Serial_FailStop(t *testing.T) {
 	// Only the first wave (host-a) started; second/third do NOT start.
 	got := disp.dispatchedSIDs()
 	if len(got) != 1 || got[0] != "host-a.example.com" {
-		t.Errorf("dispatched = %v, want [host-a.example.com] (fail-stop: волны 2,3 не стартуют)", got)
+		t.Errorf("dispatched = %v, want [host-a.example.com] (fail-stop: waves 2,3 must not start)", got)
 	}
 
 	// state NOT committed (rolled didn't appear) — §7: partial commit is forbidden.
 	if inc.State["rolled"] == "yes" {
-		t.Errorf("state.rolled = yes — state НЕ должен коммититься при fail (§7)")
+		t.Errorf("state.rolled = yes - state must NOT be committed on fail (§7)")
 	}
 	if inc.StatusDetails == nil || inc.StatusDetails["reason"] != "dispatch_failed" {
 		t.Errorf("reason = %v, want dispatch_failed", inc.StatusDetails)
@@ -1511,7 +1511,7 @@ func TestIntegration_Serial_Percent(t *testing.T) {
 
 	inc := waitRunDone(t, "noop-prod", applyID, incarnation.StatusReady)
 	if len(disp.dispatchedSIDs()) != 3 {
-		t.Errorf("dispatched = %v, want 3 хоста", disp.dispatchedSIDs())
+		t.Errorf("dispatched = %v, want 3 hosts", disp.dispatchedSIDs())
 	}
 	if inc.State["rolled"] != "yes" {
 		t.Errorf("state.rolled = %v, want yes", inc.State["rolled"])
@@ -1619,11 +1619,11 @@ func TestIntegration_Serial_Width2_FiveHosts(t *testing.T) {
 		"host-d.example.com", "host-e.example.com",
 	}
 	if len(got) != 5 {
-		t.Fatalf("dispatched = %v, want 5 хостов", got)
+		t.Fatalf("dispatched = %v, want 5 hosts", got)
 	}
 	for i := range want {
 		if got[i] != want[i] {
-			t.Errorf("dispatch order[%d] = %q, want %q (волны [2,2,1] по SID)", i, got[i], want[i])
+			t.Errorf("dispatch order[%d] = %q, want %q (waves [2,2,1] by SID)", i, got[i], want[i])
 		}
 	}
 
@@ -1637,7 +1637,7 @@ func TestIntegration_Serial_Width2_FiveHosts(t *testing.T) {
 		t.Fatalf("HistorySelectByName: %v", err)
 	}
 	if total != 1 {
-		t.Errorf("state_history snapshots = %d, want 1 (единый commit после волн [2,2,1])", total)
+		t.Errorf("state_history snapshots = %d, want 1 (single commit after waves [2,2,1])", total)
 	}
 }
 
@@ -1676,7 +1676,7 @@ func TestIntegration_Serial_FailStop_SecondWave(t *testing.T) {
 	got := disp.dispatchedSIDs()
 	want := []string{"host-a.example.com", "host-b.example.com"}
 	if len(got) != 2 {
-		t.Fatalf("dispatched = %v, want 2 (host-a, host-b; волна 3 не стартует)", got)
+		t.Fatalf("dispatched = %v, want 2 (host-a, host-b; wave 3 must not start)", got)
 	}
 	for i := range want {
 		if got[i] != want[i] {
@@ -1686,7 +1686,7 @@ func TestIntegration_Serial_FailStop_SecondWave(t *testing.T) {
 
 	// state NOT committed (§7: partial commit is forbidden).
 	if inc.State["rolled"] == "yes" {
-		t.Errorf("state.rolled = yes — state НЕ должен коммититься при fail во 2-й волне (§7)")
+		t.Errorf("state.rolled = yes - state must NOT be committed on fail in wave 2 (§7)")
 	}
 	if inc.StatusDetails == nil || inc.StatusDetails["reason"] != "dispatch_failed" {
 		t.Errorf("reason = %v, want dispatch_failed", inc.StatusDetails)
@@ -1782,15 +1782,15 @@ func TestIntegration_Serial_CancelStopsNextWave(t *testing.T) {
 	// Only the first wave (host-a) started; waves 2,3 interrupted by cancel.
 	got := disp.dispatchedSIDs()
 	if len(got) != 1 || got[0] != "host-a.example.com" {
-		t.Errorf("dispatched = %v, want [host-a.example.com] (cancel останавливает волны 2,3)", got)
+		t.Errorf("dispatched = %v, want [host-a.example.com] (cancel stops waves 2,3)", got)
 	}
 
 	// state NOT committed — cancel = abort, same as fail-stop (§7).
 	if inc.State["rolled"] == "yes" {
-		t.Errorf("state.rolled = yes — отменённый прогон НЕ должен коммитить state")
+		t.Errorf("state.rolled = yes - a cancelled run must NOT commit state")
 	}
 	if inc.StatusDetails == nil || inc.StatusDetails["reason"] != "dispatch_failed" {
-		t.Errorf("reason = %v, want dispatch_failed (cancel через barrier → abort)", inc.StatusDetails)
+		t.Errorf("reason = %v, want dispatch_failed (cancel via barrier -> abort)", inc.StatusDetails)
 	}
 }
 
@@ -1834,11 +1834,11 @@ func TestIntegration_Serial_MinWidth_TwoTasks(t *testing.T) {
 		"host-d.example.com", "host-e.example.com",
 	}
 	if len(got) != 5 {
-		t.Fatalf("dispatched = %v, want 5 (min-width 1 → по одному хосту на волну)", got)
+		t.Fatalf("dispatched = %v, want 5 (min-width 1 -> one host per wave)", got)
 	}
 	for i := range want {
 		if got[i] != want[i] {
-			t.Errorf("dispatch order[%d] = %q, want %q (min-width=1, волны по SID)", i, got[i], want[i])
+			t.Errorf("dispatch order[%d] = %q, want %q (min-width=1, waves by SID)", i, got[i], want[i])
 		}
 	}
 	if inc.State["rolled"] != "yes" {
@@ -1926,7 +1926,7 @@ func TestIntegration_RunOnce_SingleHost(t *testing.T) {
 	waitRunDone(t, "noop-prod", applyID, incarnation.StatusReady)
 	got := disp.dispatchedSIDs()
 	if len(got) != 1 || got[0] != "host-a.example.com" {
-		t.Errorf("dispatched = %v, want [host-a.example.com] (run_once → первый по SID)", got)
+		t.Errorf("dispatched = %v, want [host-a.example.com] (run_once -> first by SID)", got)
 	}
 }
 
@@ -2043,7 +2043,7 @@ func TestIntegration_SecretInParams_MaskedInObservability_NotOnWire(t *testing.T
 	// 1. Wire is untouched: the real value reached the dispatcher.
 	wantWire := "deploy --token=vault:secret/keeper/deploy-token"
 	if disp.wireParams != wantWire {
-		t.Errorf("wire params = %q, want %q (wire-Params не должны маскироваться)", disp.wireParams, wantWire)
+		t.Errorf("wire params = %q, want %q (wire params must not be masked)", disp.wireParams, wantWire)
 	}
 
 	// 2. error_summary has no payload echo.
@@ -2052,10 +2052,10 @@ func TestIntegration_SecretInParams_MaskedInObservability_NotOnWire(t *testing.T
 		t.Fatalf("SelectStatusesByApplyID: %v", err)
 	}
 	if len(st) != 1 || st[0].ErrorSummary == nil {
-		t.Fatalf("apply_runs = %+v, want 1 row с error_summary", st)
+		t.Fatalf("apply_runs = %+v, want 1 row with error_summary", st)
 	}
 	if *st[0].ErrorSummary != "send_apply_failed" {
-		t.Errorf("error_summary = %q, want safe-причина без payload-эха", *st[0].ErrorSummary)
+		t.Errorf("error_summary = %q, want a safe reason without a payload echo", *st[0].ErrorSummary)
 	}
 	if strings.Contains(*st[0].ErrorSummary, "vault:") || strings.Contains(*st[0].ErrorSummary, "deploy-token") {
 		t.Errorf("error_summary leaks secret: %q", *st[0].ErrorSummary)
@@ -2138,7 +2138,7 @@ tasks:
 		t.Errorf("status_details.error leaks vault-ref: %q", errStr)
 	}
 	if disp.calls != 0 {
-		t.Errorf("SendApply calls = %d, want 0 (render упал до dispatch)", disp.calls)
+		t.Errorf("SendApply calls = %d, want 0 (render failed before dispatch)", disp.calls)
 	}
 }
 
@@ -2256,12 +2256,12 @@ func TestIntegration_KeeperDispatch_Failed_ErrorLocked(t *testing.T) {
 
 	// host-fan-out did NOT start — the keeper task failed before dispatching to hosts.
 	if disp.calls != 0 {
-		t.Errorf("SendApply calls = %d, want 0 (keeper-задача упала до host-fan-out)", disp.calls)
+		t.Errorf("SendApply calls = %d, want 0 (keeper task failed before host-fan-out)", disp.calls)
 	}
 
 	// state NOT committed (stayed at state_before = the empty seed state).
 	if len(inc.State) != 0 {
-		t.Errorf("incarnation.state = %v, want пустой (state_before, keeper-fail НЕ коммитит)", inc.State)
+		t.Errorf("incarnation.state = %v, want empty (state_before, keeper-fail does NOT commit)", inc.State)
 	}
 
 	// apply_runs(sid="keeper") = failed with error_summary.
@@ -2276,13 +2276,13 @@ func TestIntegration_KeeperDispatch_Failed_ErrorLocked(t *testing.T) {
 		}
 	}
 	if keeperRow == nil {
-		t.Fatalf("нет apply_runs строки sid=%q: %+v", render.KeeperTargetSID, st)
+		t.Fatalf("no apply_runs row for sid=%q: %+v", render.KeeperTargetSID, st)
 	}
 	if keeperRow.Status != applyrun.StatusFailed {
 		t.Errorf("keeper apply_run status = %q, want failed", keeperRow.Status)
 	}
 	if keeperRow.ErrorSummary == nil || !strings.Contains(*keeperRow.ErrorSummary, "invalid coven") {
-		t.Errorf("keeper error_summary = %v, want содержащее 'invalid coven'", keeperRow.ErrorSummary)
+		t.Errorf("keeper error_summary = %v, want containing 'invalid coven'", keeperRow.ErrorSummary)
 	}
 }
 
@@ -2320,12 +2320,12 @@ func TestIntegration_KeeperDispatch_TwoTasks_OrderAndRegister(t *testing.T) {
 
 	// Both keeper tasks executed (module called twice).
 	if got := mod.applyCount(); got != 2 {
-		t.Errorf("keeper module Apply вызван %d раз, want 2", got)
+		t.Errorf("keeper module Apply called %d times, want 2", got)
 	}
 
 	// host-fan-out started: the Soul task went to one host.
 	if disp.calls != 1 {
-		t.Errorf("SendApply calls = %d, want 1 (Soul echo на одном хосте)", disp.calls)
+		t.Errorf("SendApply calls = %d, want 1 (Soul echo on a single host)", disp.calls)
 	}
 
 	// Both register entries under sid="keeper" with different task_idx (0,1).
@@ -2340,7 +2340,7 @@ func TestIntegration_KeeperDispatch_TwoTasks_OrderAndRegister(t *testing.T) {
 		}
 	}
 	if !keeperIdx[0] || !keeperIdx[1] {
-		t.Errorf("keeper register task_idx-ы = %v, want {0,1} под sid=keeper", keeperIdx)
+		t.Errorf("keeper register task_idx values = %v, want {0,1} under sid=keeper", keeperIdx)
 	}
 }
 
@@ -2404,10 +2404,10 @@ func TestIntegration_KeeperDispatch_FirstFailedAbortsSecond(t *testing.T) {
 		t.Errorf("reason = %v, want keeper_dispatch_failed", inc.StatusDetails)
 	}
 	if got := mod.applyCount(); got != 1 {
-		t.Errorf("keeper module Apply вызван %d раз, want 1 (вторая keeper-задача не стартует после fail)", got)
+		t.Errorf("keeper module Apply called %d times, want 1 (second keeper task must not start after fail)", got)
 	}
 	if disp.calls != 0 {
-		t.Errorf("SendApply calls = %d, want 0 (abort до host-fan-out)", disp.calls)
+		t.Errorf("SendApply calls = %d, want 0 (abort before host-fan-out)", disp.calls)
 	}
 }
 
@@ -2423,7 +2423,7 @@ func (m *countingFailModule) Apply(_ *pluginv1.ApplyRequest, stream grpc.ServerS
 	m.mu.Lock()
 	m.count++
 	m.mu.Unlock()
-	return stream.Send(&pluginv1.ApplyEvent{Failed: true, Message: "первая keeper-задача провалена"})
+	return stream.Send(&pluginv1.ApplyEvent{Failed: true, Message: "first keeper task failed"})
 }
 
 func (m *countingFailModule) applyCount() int {
@@ -2464,7 +2464,7 @@ func TestIntegration_KeeperDispatch_NilRegistry_ErrorLocked(t *testing.T) {
 		t.Errorf("reason = %v, want keeper_dispatch_failed (nil keeper-registry)", inc.StatusDetails)
 	}
 	if disp.calls != 0 {
-		t.Errorf("SendApply calls = %d, want 0 (keeper-задача отвергнута до host-fan-out)", disp.calls)
+		t.Errorf("SendApply calls = %d, want 0 (keeper task rejected before host-fan-out)", disp.calls)
 	}
 }
 
@@ -2532,11 +2532,11 @@ func TestIntegration_KeeperOnly_NoHosts_RunsKeeperTasks(t *testing.T) {
 
 	// Keeper task EXECUTED — gate bypassed based on composition (all-keeper).
 	if got := mod.applyCount(); got != 1 {
-		t.Errorf("keeper module Apply вызван %d раз, want 1 (all-keeper bypass no_hosts на пустом roster)", got)
+		t.Errorf("keeper module Apply called %d times, want 1 (all-keeper bypasses no_hosts on an empty roster)", got)
 	}
 	// host-fan-out did not start — no Soul tasks, empty roster.
 	if disp.calls != 0 {
-		t.Errorf("SendApply calls = %d, want 0 (нет Soul-задач, пустой roster)", disp.calls)
+		t.Errorf("SendApply calls = %d, want 0 (no Soul tasks, empty roster)", disp.calls)
 	}
 
 	// keeper apply_runs(sid="keeper") = success (NOT the no_hosts sentinel).
@@ -2547,14 +2547,14 @@ func TestIntegration_KeeperOnly_NoHosts_RunsKeeperTasks(t *testing.T) {
 	var keeperRow *applyrun.HostStatus
 	for i := range st {
 		if st[i].SID == render.RunSentinelSID {
-			t.Errorf("найдена sentinel-строка %q — прогон не должен был упасть в no_hosts", render.RunSentinelSID)
+			t.Errorf("found sentinel row %q - the run should not have fallen into no_hosts", render.RunSentinelSID)
 		}
 		if st[i].SID == render.KeeperTargetSID {
 			keeperRow = &st[i]
 		}
 	}
 	if keeperRow == nil {
-		t.Fatalf("нет apply_runs строки sid=%q (keeper-задача не исполнилась): %+v", render.KeeperTargetSID, st)
+		t.Fatalf("no apply_runs row for sid=%q (keeper task did not execute): %+v", render.KeeperTargetSID, st)
 	}
 	if keeperRow.Status != applyrun.StatusSuccess {
 		t.Errorf("keeper apply_run status = %q, want success", keeperRow.Status)
@@ -2617,7 +2617,7 @@ func TestIntegration_HostScenario_NoHosts_StillAborts(t *testing.T) {
 
 	inc := waitRunDone(t, "noop-prod", applyID, incarnation.StatusErrorLocked)
 	if inc.StatusDetails["reason"] != "no_hosts" {
-		t.Errorf("reason = %v, want no_hosts (host-сценарий на пустом roster не bypass-ится)", inc.StatusDetails["reason"])
+		t.Errorf("reason = %v, want no_hosts (host scenario on an empty roster is not bypassed)", inc.StatusDetails["reason"])
 	}
 	if disp.calls != 0 {
 		t.Errorf("SendApply calls = %d, want 0", disp.calls)
@@ -2659,11 +2659,11 @@ func TestIntegration_MixedKeeperAndHost_NoHosts_StillAborts(t *testing.T) {
 
 	inc := waitRunDone(t, "noop-prod", applyID, incarnation.StatusErrorLocked)
 	if inc.StatusDetails["reason"] != "no_hosts" {
-		t.Errorf("reason = %v, want no_hosts (смешанный keeper+host → !allKeeperTasks)", inc.StatusDetails["reason"])
+		t.Errorf("reason = %v, want no_hosts (mixed keeper+host -> !allKeeperTasks)", inc.StatusDetails["reason"])
 	}
 	// Keeper module NOT executed — no_hosts cut the run short before keeper-dispatch (step 5.5).
 	if got := mod.applyCount(); got != 0 {
-		t.Errorf("keeper module Apply вызван %d раз, want 0 (no_hosts до keeper-dispatch)", got)
+		t.Errorf("keeper module Apply called %d times, want 0 (no_hosts before keeper-dispatch)", got)
 	}
 	if disp.calls != 0 {
 		t.Errorf("SendApply calls = %d, want 0", disp.calls)
@@ -2748,7 +2748,7 @@ func TestIntegration_MixedKeeperAndHost_Refresh_RunsToDispatch(t *testing.T) {
 
 	// Provision keeper task EXECUTED — bypass let the empty roster through via refresh.
 	if got := mod.applyCount(); got != 1 {
-		t.Errorf("keeper module Apply вызван %d раз, want 1 (mixed+refresh bypass no_hosts на пустом roster)", got)
+		t.Errorf("keeper module Apply called %d times, want 1 (mixed+refresh bypasses no_hosts on an empty roster)", got)
 	}
 
 	// No no_hosts sentinel row — the starting gate was bypassed.
@@ -2758,7 +2758,7 @@ func TestIntegration_MixedKeeperAndHost_Refresh_RunsToDispatch(t *testing.T) {
 	}
 	for i := range st {
 		if st[i].SID == render.RunSentinelSID {
-			t.Errorf("найдена sentinel-строка %q — mixed+refresh не должен был упасть в no_hosts", render.RunSentinelSID)
+			t.Errorf("found sentinel row %q - mixed+refresh should not have fallen into no_hosts", render.RunSentinelSID)
 		}
 	}
 }
@@ -2800,7 +2800,7 @@ func waitIncarnationStatus(t *testing.T, name string, want incarnation.Status) *
 		}
 		time.Sleep(20 * time.Millisecond)
 	}
-	t.Fatalf("incarnation %s не достигла статуса %q за 10s", name, want)
+	t.Fatalf("incarnation %s did not reach status %q within 10s", name, want)
 	return nil
 }
 
@@ -2851,7 +2851,7 @@ func TestIntegration_FromLocked_RerunLast_DrivesRun(t *testing.T) {
 	// Run driven to completion: incarnation is ready (did NOT get stuck in applying).
 	waitIncarnationStatus(t, "noop-prod", incarnation.StatusReady)
 	if disp.calls != 1 {
-		t.Errorf("SendApply calls = %d, want 1 (прогон должен был стартовать)", disp.calls)
+		t.Errorf("SendApply calls = %d, want 1 (the run should have started)", disp.calls)
 	}
 	if disp.gotApplyID != applyID {
 		t.Errorf("dispatched apply_id = %q, want %q", disp.gotApplyID, applyID)
@@ -2890,12 +2890,12 @@ func TestIntegration_FromLocked_FailClosed_RejectsNonApplying(t *testing.T) {
 	deadline := time.Now().Add(2 * time.Second)
 	for time.Now().Before(deadline) {
 		if disp.calls > 0 {
-			t.Fatalf("SendApply вызван при FromLocked против не-applying статуса (fail-closed нарушен)")
+			t.Fatalf("SendApply called on FromLocked against a non-applying status (fail-closed violated)")
 		}
 		time.Sleep(20 * time.Millisecond)
 	}
 	got, _ := incarnation.SelectByName(context.Background(), integrationPool, "noop-prod")
 	if got.Status != incarnation.StatusReady {
-		t.Errorf("status = %q, want ready (unchanged — fail-closed не должен трогать статус)", got.Status)
+		t.Errorf("status = %q, want ready (unchanged - fail-closed must not touch status)", got.Status)
 	}
 }

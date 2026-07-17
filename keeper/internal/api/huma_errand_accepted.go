@@ -41,8 +41,8 @@ import (
 // schema-builder type: on the wire the handler serializes the 202 body via json.RawMessage,
 // this type does NOT participate in serialization.
 type errandAccepted struct {
-	ErrandID string `json:"errand_id" pattern:"^[0-9A-HJKMNP-TV-Z]{26}$" doc:"ULID запущенbutго Errand-а"`
-	Status   string `json:"status" enum:"running" doc:"string ещё выполняется (async-escalation)"`
+	ErrandID string `json:"errand_id" pattern:"^[0-9A-HJKMNP-TV-Z]{26}$" doc:"ULID of the started Errand"`
+	Status   string `json:"status" enum:"running" doc:"string still running (async-escalation)"`
 }
 
 // registerErrandAccepted places the ErrandAccepted schema into components/schemas via

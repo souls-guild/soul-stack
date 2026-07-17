@@ -249,7 +249,7 @@ func TestInstanceAlive_Dead(t *testing.T) {
 		t.Fatalf("InstanceAlive: %v", err)
 	}
 	if alive {
-		t.Error("InstanceAlive = true on absent key, want false (presence-смерть владельца)")
+		t.Error("InstanceAlive = true on absent key, want false (owner presence death)")
 	}
 }
 
@@ -277,7 +277,7 @@ func TestInstanceAlive_RedisErrorPropagates(t *testing.T) {
 	mr.Close() // Redis unavailable → EXISTS will return an error.
 
 	if _, err := InstanceAlive(ctx, c, testKIDa); err == nil {
-		t.Error("InstanceAlive on broken Redis: want error (presence-чек fail-safe у caller-а)")
+		t.Error("InstanceAlive on broken Redis: want error (presence-check fail-safe on the caller side)")
 	}
 }
 
@@ -327,7 +327,7 @@ func TestReadInstanceMeta_ReturnsStoredValue(t *testing.T) {
 		t.Fatalf("ReadInstanceMeta: %v", err)
 	}
 	if !ok {
-		t.Fatal("ReadInstanceMeta ok=false, want true (ключ существует)")
+		t.Fatal("ReadInstanceMeta ok=false, want true (key exists)")
 	}
 	if meta != `{"started_at":"2026-07-01T00:00:00Z","kid":"keeper-eu-west-01"}` {
 		t.Errorf("meta = %q, want stored JSON", meta)
@@ -371,6 +371,6 @@ func TestPeekLeaseHolder_NoLeader_NotOK(t *testing.T) {
 		t.Fatalf("PeekLeaseHolder on missing key: %v", err)
 	}
 	if ok {
-		t.Errorf("PeekLeaseHolder ok=true on missing key (holder=%q), want false (нет лидера)", holder)
+		t.Errorf("PeekLeaseHolder ok=true on missing key (holder=%q), want false (no leader)", holder)
 	}
 }

@@ -95,7 +95,7 @@ func TestVerifyArtifactBytesFailures(t *testing.T) {
 
 			err := VerifyArtifactBytes(data, rec, anchors)
 			if !errors.Is(err, ErrSigilVerify) {
-				t.Fatalf("err = %v; ожидался ErrSigilVerify", err)
+				t.Fatalf("err = %v; expected ErrSigilVerify", err)
 			}
 			var verr *VerifyError
 			if !errors.As(err, &verr) || verr.Reason != tc.reason {

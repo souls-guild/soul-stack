@@ -40,8 +40,8 @@ import (
 //     ParsePage returns exactly 400 (TypeMalformedRequest). The domain ListTyped enforces
 //     the range via CheckPageBounds → 400 — otherwise a wire change.
 type cadenceListInput struct {
-	Enabled string `query:"enabled" enum:"true,false" doc:"фильтр по enabled: true → только включённые, false → все (без фильтра); опущен → все"`
-	Kind    string `query:"kind" enum:"scenario,command" doc:"фильтр по типу рецепта (exact); вне onбора → 422"`
+	Enabled string `query:"enabled" enum:"true,false" doc:"filter by enabled: true -> only enabled, false -> all (no filter); omitted -> all"`
+	Kind    string `query:"kind" enum:"scenario,command" doc:"filter by recipe type (exact); outside enum -> 422"`
 	Offset  int32  `query:"offset" default:"0" doc:"offset from start of set, ≥0 (matches shared/api.ParsePage; out-of-range → 400)"`
 	Limit   int32  `query:"limit" default:"50" doc:"page size 1..1000 (matches shared/api.ParsePage; out-of-range → 400)"`
 }
@@ -64,8 +64,8 @@ func cadenceListOperation() huma.Operation {
 		OperationID:   "listCadences",
 		Method:        http.MethodGet,
 		Path:          "/",
-		Summary:       "Спиwithк расписаний (Cadence, paged)",
-		Description:   "Read-only-спиwithк Cadence с фильтрами enabled/kind и пагinацией (sort created_at DESC). Permission cadence.list. Read-only, no audit.",
+		Summary:       "List of cadences (Cadence, paged)",
+		Description:   "Read-only list of Cadences with enabled/kind filters and pagination (sort created_at DESC). Permission cadence.list. Read-only, no audit.",
 		Tags:          []string{"cadence"},
 		DefaultStatus: http.StatusOK,
 		Errors:        []int{http.StatusBadRequest, http.StatusForbidden, http.StatusUnprocessableEntity, http.StatusInternalServerError},

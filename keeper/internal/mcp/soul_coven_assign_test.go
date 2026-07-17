@@ -534,21 +534,21 @@ func TestSoulCovenAssign_Replace_Success(t *testing.T) {
 		t.Errorf("mode = %q, want replace", out.Mode)
 	}
 	if out.Label != "" {
-		t.Errorf("label = %q, want пусто для replace", out.Label)
+		t.Errorf("label = %q, want empty for replace", out.Label)
 	}
 	if len(out.Labels) != 2 {
-		t.Errorf("labels = %v, want 2-элементный набор", out.Labels)
+		t.Errorf("labels = %v, want a 2-element set", out.Labels)
 	}
 	if out.Matched != 2 || out.Changed != 2 {
 		t.Errorf("matched/changed = %d/%d, want 2/2", out.Matched, out.Changed)
 	}
 	ev := requireSingleAudit(t, rec, string(audit.EventSoulCovenChanged))
 	if _, hasLabel := ev.Payload["label"]; hasLabel {
-		t.Errorf("audit replace содержит label: %v", ev.Payload)
+		t.Errorf("audit replace contains label: %v", ev.Payload)
 	}
 	auditLabels, ok := ev.Payload["labels"].([]string)
 	if !ok || len(auditLabels) != 2 {
-		t.Errorf("audit labels = %v, want 2 элемента", ev.Payload["labels"])
+		t.Errorf("audit labels = %v, want 2 elements", ev.Payload["labels"])
 	}
 }
 
@@ -640,7 +640,7 @@ func TestSoulCovenAssign_Incarnation_Match(t *testing.T) {
 		}
 	}
 	if !foundIncarnation {
-		t.Errorf("incarnation `redis` не дошёл до COUNT-args: %v", pool.gotCountArgs)
+		t.Errorf("incarnation `redis` did not reach COUNT-args: %v", pool.gotCountArgs)
 	}
 }
 
@@ -684,7 +684,7 @@ func TestSoulCovenAssign_Incarnation_ScopeIntersection(t *testing.T) {
 		}
 	}
 	if !foundIncarnation || !foundScope {
-		t.Errorf("count-args не содержат incarnation+scope: %v", pool.gotCountArgs)
+		t.Errorf("count-args do not contain incarnation+scope: %v", pool.gotCountArgs)
 	}
 }
 

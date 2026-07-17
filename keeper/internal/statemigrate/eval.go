@@ -43,7 +43,7 @@ type celEvaluator struct {
 func NewEvaluator() (Evaluator, error) {
 	engine, err := cel.NewMigration()
 	if err != nil {
-		return nil, fmt.Errorf("statemigrate: сборка migration-CEL: %w", err)
+		return nil, fmt.Errorf("statemigrate: building migration-CEL: %w", err)
 	}
 	return &celEvaluator{engine: engine}, nil
 }

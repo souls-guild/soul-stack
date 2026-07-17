@@ -46,14 +46,14 @@ func Register(reg *obs.Registry) *Metrics {
 		errandsTotal: prometheus.NewCounterVec(
 			prometheus.CounterOpts{
 				Name: "soul_errand_total",
-				Help: "Количество завершённых Errand-ов, разрезанное по терминалу.",
+				Help: "Count of completed Errands, sliced by terminal state.",
 			},
 			[]string{"status"},
 		),
 		errandDuration: prometheus.NewHistogramVec(
 			prometheus.HistogramOpts{
 				Name: "soul_errand_duration_seconds",
-				Help: "Длительность одного Errand-а в секундах, по модулю (без state-суффикса).",
+				Help: "Duration of a single Errand in seconds, by module (without state suffix).",
 				// Errand is a single shell/exec/probe, typically < a second;
 				// server-side dispatch cap is 30s, hard cap 300s. Buckets cover
 				// a fast shell (50ms), a typical probe (250ms), a slow exec

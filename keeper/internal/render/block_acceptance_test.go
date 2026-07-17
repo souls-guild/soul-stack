@@ -98,7 +98,7 @@ func TestAcceptance_RestartBlockFanOut(t *testing.T) {
 
 	tasks, plans, err := p.Render(context.Background(), in)
 	if err != nil {
-		t.Fatalf("Render (приёмка restart/main.yml): %v", err)
+		t.Fatalf("Render (acceptance restart/main.yml): %v", err)
 	}
 
 	// Collect block children by name: 2 block steps (Restart + Wait).
@@ -120,23 +120,23 @@ func TestAcceptance_RestartBlockFanOut(t *testing.T) {
 		}
 	}
 	if len(blockChildren) != 2 {
-		t.Fatalf("block fan-out дал %d потомков, want 2 (Restart + Wait)", len(blockChildren))
+		t.Fatalf("block fan-out produced %d children, want 2 (Restart + Wait)", len(blockChildren))
 	}
 
 	for name, pl := range blockPlans {
 		// Inherited block.where (slave) → target is ONLY slave hosts b,c.
 		if len(pl.TargetSIDs) != 2 {
-			t.Errorf("block-потомок %q таргетит %v, want [b c] (унаследованный where: slave)", name, pl.TargetSIDs)
+			t.Errorf("block child %q targets %v, want [b c] (inherited where: slave)", name, pl.TargetSIDs)
 			continue
 		}
 		for _, sid := range pl.TargetSIDs {
 			if sid == "a.example.com" {
-				t.Errorf("block-потомок %q таргетит master a — унаследованный where: slave не применился", name)
+				t.Errorf("block child %q targets master a - inherited where: slave was not applied", name)
 			}
 		}
 		// serial:1 is inherited by all children.
 		if pl.SerialWidth != 1 {
-			t.Errorf("block-потомок %q SerialWidth = %d, want 1 (унаследован block.serial:1)", name, pl.SerialWidth)
+			t.Errorf("block child %q SerialWidth = %d, want 1 (inherited block.serial:1)", name, pl.SerialWidth)
 		}
 	}
 }
@@ -313,7 +313,7 @@ func TestAcceptance_SentinelReplicaExcludesMaster(t *testing.T) {
 
 	tasks, plans, err := p.Render(context.Background(), in)
 	if err != nil {
-		t.Fatalf("Render (приёмка create/main.yml sentinel): %v", err)
+		t.Fatalf("Render (acceptance create/main.yml sentinel): %v", err)
 	}
 
 	byIndex := map[int]*RenderedTask{}
@@ -327,19 +327,19 @@ func TestAcceptance_SentinelReplicaExcludesMaster(t *testing.T) {
 		}
 	}
 	if replicaPlan == nil {
-		t.Fatal("REPLICAOF-задача (community.redis.replica) не найдена в отрендеренном плане")
+		t.Fatal("REPLICAOF task (community.redis.replica) not found in the rendered plan")
 	}
 
 	// master is NOT in the target: where excluded node-1 (first by SID).
 	const masterSID = "node-1.example.com"
 	for _, sid := range replicaPlan.TargetSIDs {
 		if sid == masterSID {
-			t.Errorf("REPLICAOF таргетит master %s — where (self.sid != hosts[0].sid) не исключил master (P0: master реплицирует сам себя)", masterSID)
+			t.Errorf("REPLICAOF targets master %s - where (self.sid != hosts[0].sid) did not exclude master (P0: master replicates itself)", masterSID)
 		}
 	}
 	// Exactly two replicas in the target.
 	if len(replicaPlan.TargetSIDs) != 2 {
-		t.Errorf("REPLICAOF таргетит %v, want ровно 2 реплики (node-2, node-3) без master", replicaPlan.TargetSIDs)
+		t.Errorf("REPLICAOF targets %v, want exactly 2 replicas (node-2, node-3) without master", replicaPlan.TargetSIDs)
 	}
 	for _, want := range []string{"node-2.example.com", "node-3.example.com"} {
 		found := false
@@ -349,7 +349,7 @@ func TestAcceptance_SentinelReplicaExcludesMaster(t *testing.T) {
 			}
 		}
 		if !found {
-			t.Errorf("REPLICAOF не таргетит реплику %s: TargetSIDs=%v", want, replicaPlan.TargetSIDs)
+			t.Errorf("REPLICAOF does not target replica %s: TargetSIDs=%v", want, replicaPlan.TargetSIDs)
 		}
 	}
 }
@@ -487,7 +487,7 @@ func TestAcceptance_SentinelOnlySkipsRedisServer(t *testing.T) {
 
 	tasks, _, err := p.Render(context.Background(), in)
 	if err != nil {
-		t.Fatalf("Render (приёмка destiny redis sentinel_only: deploy_redis=false): %v", err)
+		t.Fatalf("Render (acceptance destiny redis sentinel_only: deploy_redis=false): %v", err)
 	}
 
 	// Find destiny tasks by Name. group-dropped tasks (include server.yml disabled)
@@ -503,22 +503,22 @@ func TestAcceptance_SentinelOnlySkipsRedisServer(t *testing.T) {
 	pkgInstall := byName["Install redis-server package"]
 
 	if redisConf != nil {
-		t.Errorf("redis.conf-задача присутствует в плане — include server.yml должен быть group-dropped при deploy_redis=false (физическое отсутствие, не placeholder)")
+		t.Errorf("redis.conf task is present in the plan - include server.yml must be group-dropped when deploy_redis=false (physical absence, not a placeholder)")
 	}
 	if redisRunning != nil {
-		t.Errorf("core.service.running redis-server присутствует в плане — include server.yml должен быть group-dropped при deploy_redis=false")
+		t.Errorf("core.service.running redis-server is present in the plan - include server.yml must be group-dropped when deploy_redis=false")
 	}
 	if sentinelConf == nil {
-		t.Fatal("sentinel.conf-задача (core.file.rendered) не найдена в плане")
+		t.Fatal("sentinel.conf task (core.file.rendered) not found in the plan")
 	}
 	if sentinelConf.Params == nil {
-		t.Errorf("sentinel.conf placeholder-skip (Params == nil) — sentinel-демон не разворачивается в sentinel_only")
+		t.Errorf("sentinel.conf placeholder-skip (Params == nil) - sentinel daemon is not deployed in sentinel_only")
 	}
 	if pkgInstall == nil {
-		t.Fatal("core.pkg.installed redis-server не найдена в плане")
+		t.Fatal("core.pkg.installed redis-server not found in the plan")
 	}
 	if pkgInstall.Params == nil {
-		t.Errorf("пакет redis НЕ ставится в sentinel_only (Params == nil) — пакет обязан ставиться всегда (несёт sentinel-демон)")
+		t.Errorf("redis package is NOT installed in sentinel_only (Params == nil) - the package must always be installed (it carries the sentinel daemon)")
 	}
 }
 
@@ -556,7 +556,7 @@ func (k stubKV) ReadKV(_ context.Context, path string) (map[string]any, error) {
 	if v, ok := k[path]; ok {
 		return v, nil
 	}
-	return nil, errors.New("stubKV: нет секрета " + path)
+	return nil, errors.New("stubKV: no secret " + path)
 }
 
 // redisSentinelEssence — essence backing for the redis create scenario (persistence

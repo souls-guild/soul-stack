@@ -16,19 +16,19 @@ import "github.com/spf13/cobra"
 func newRunCmd() *cobra.Command {
 	c := &cobra.Command{
 		Use:   "run",
-		Short: "запуск scenario / ad-hoc cmd / push-prog с универсальным таргетингом",
-		Long: `soulctl run — высокоуровневый UX-зонтик над тремя путями исполнения:
+		Short: "run a scenario / ad-hoc cmd / push program with universal targeting",
+		Long: `soulctl run - a high-level UX umbrella over three execution paths:
 
-  run scenario <service>/<scenario>  батчевый scenario через Voyage (kind=scenario)
-  run cmd '<команда>'                ad-hoc multi-target shell-команда (Voyage kind=command)
-  run push <destiny@ref>             push-применение через SSH-провайдер
+  run scenario <service>/<scenario>  batch scenario via Voyage (kind=scenario)
+  run cmd '<command>'                ad-hoc multi-target shell command (Voyage kind=command)
+  run push <destiny@ref>             push-apply via the SSH provider
 
-Универсальные target-флаги:
+Universal target flags:
   --target-sids host1,host2          CSV exact-match
-  --target-coven prod-eu,dc1         CSV Coven-меток (AND)
+  --target-coven prod-eu,dc1         CSV Coven labels (AND)
   --target-glob 'web-*'              shell-glob → CEL sid.glob("X")
   --target-regex 'host-[0-9]+'       regex → CEL sid.matches("X")
-  --target-where 'CEL-выражение'     raw CEL, AND-merge с glob/regex`,
+  --target-where 'CEL-expression'    raw CEL, AND-merge with glob/regex`,
 	}
 	c.AddCommand(newRunScenarioCmd(), newRunCmdCmd(), newRunPushCmd())
 	return c

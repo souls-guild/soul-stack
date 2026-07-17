@@ -106,7 +106,7 @@ func ValidateInput(ctx context.Context, loader InputScenarioLoader, ref artifact
 		return fmt.Errorf("scenario: validate input: parse %s: %w", rel, err)
 	}
 	if diag.HasErrors(diags) {
-		return fmt.Errorf("scenario: validate input: %s невалиден: %s", rel, firstError(diags))
+		return fmt.Errorf("scenario: validate input: %s is invalid: %s", rel, firstError(diags))
 	}
 
 	// merge defaults + required + value validation (type/enum/pattern/length,

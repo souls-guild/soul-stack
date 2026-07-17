@@ -34,15 +34,15 @@ type targetFlags struct {
 // all `run` sub-commands (hence a shared helper instead of duplication).
 func (t *targetFlags) bind(c *cobra.Command) {
 	c.Flags().StringVar(&t.SIDs, "target-sids", "",
-		"CSV exact-match SID-ов (`host1,host2`)")
+		"CSV exact-match SIDs (`host1,host2`)")
 	c.Flags().StringVar(&t.Coven, "target-coven", "",
-		"CSV Coven-меток (AND-семантика по `souls.coven`)")
+		"CSV Coven labels (AND semantics over `souls.coven`)")
 	c.Flags().StringVar(&t.Glob, "target-glob", "",
-		"shell-glob по SID; превращается в CEL `sid.glob(\"X\")`")
+		"shell-glob over SID; becomes the CEL `sid.glob(\"X\")`")
 	c.Flags().StringVar(&t.Regex, "target-regex", "",
-		"regex по SID; превращается в CEL `sid.matches(\"X\")`")
+		"regex over SID; becomes the CEL `sid.matches(\"X\")`")
 	c.Flags().StringVar(&t.Where, "target-where", "",
-		"raw CEL-предикат (`soulprint.self.os.family == \"debian\"`)")
+		"raw CEL predicate (`soulprint.self.os.family == \"debian\"`)")
 }
 
 // resolvedTarget — the result of parsing/merging. Any empty component stays
@@ -87,7 +87,7 @@ func (t targetFlags) resolve() (resolvedTarget, error) {
 // scope without a target is meaningless (cmd: nothing to run without hosts).
 func (r resolvedTarget) require() error {
 	if !r.hasAny() {
-		return errors.New("требуется хотя бы один `--target-*` флаг (sids/coven/glob/regex/where)")
+		return errors.New("at least one `--target-*` flag is required (sids/coven/glob/regex/where)")
 	}
 	return nil
 }

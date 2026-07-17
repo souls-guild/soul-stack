@@ -75,7 +75,7 @@ func TestApply_Creates_Skips(t *testing.T) {
 		t.Fatalf("Apply: %v", err)
 	}
 	if stream.Last().Changed {
-		t.Fatal("Changed=true при creates+файл существует")
+		t.Fatal("Changed=true when creates+file exists")
 	}
 }
 
@@ -92,6 +92,6 @@ func TestApply_NonZeroExit_NotFailed(t *testing.T) {
 		t.Fatalf("Apply: %v", err)
 	}
 	if stream.Last().Failed {
-		t.Fatal("Failed=true для non-zero exit (grep с exit 1 — норма)")
+		t.Fatal("Failed=true for non-zero exit (grep with exit 1 is normal)")
 	}
 }

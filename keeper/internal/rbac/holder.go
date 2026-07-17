@@ -185,7 +185,7 @@ func (h *Holder) WatchInvalidations(ctx context.Context, src InvalidationSource)
 		h.refresh(ctx)
 	})
 	if err != nil && ctx.Err() == nil {
-		h.logger.Warn("rbac: подписка на cluster-инвалидацию завершилась с ошибкой, остаётся TTL-poll",
+		h.logger.Warn("rbac: cluster-invalidation subscription ended with an error, falling back to TTL-poll",
 			slog.Any("error", err),
 		)
 	}
@@ -225,7 +225,7 @@ func (h *Holder) Refresh(ctx context.Context) error {
 // logs the error, doesn't propagate it.
 func (h *Holder) refresh(ctx context.Context) {
 	if err := h.Refresh(ctx); err != nil {
-		h.logger.Warn("rbac: TTL-refresh снимка из БД не удался, оставлен прежний enforcer",
+		h.logger.Warn("rbac: TTL-refresh of DB snapshot failed, keeping the previous enforcer",
 			slog.Any("error", err),
 		)
 	}

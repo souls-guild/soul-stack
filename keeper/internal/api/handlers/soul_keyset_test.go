@@ -94,10 +94,10 @@ func TestSoulList_Keyset_FilterIntersectsScope_AND(t *testing.T) {
 			var out keysetReplyDTO
 			mustJSON(t, rec.Body.Bytes(), &out)
 			if len(out.Items) != 1 {
-				t.Fatalf("items = %d, want 1 (фильтр ∩ scope = ровно один хост); got %+v", len(out.Items), out.Items)
+				t.Fatalf("items = %d, want 1 (filter ∩ scope = exactly one host); got %+v", len(out.Items), out.Items)
 			}
 			if out.Items[0].SID != tc.want {
-				t.Errorf("got SID %q, want %q (фильтр должен сужать ВНУТРИ scope, не игнорироваться)", out.Items[0].SID, tc.want)
+				t.Errorf("got SID %q, want %q (filter must narrow WITHIN scope, not be ignored)", out.Items[0].SID, tc.want)
 			}
 		})
 	}
@@ -121,7 +121,7 @@ func TestSoulList_Keyset_FilterNarrowsBelowScope(t *testing.T) {
 	var out keysetReplyDTO
 	mustJSON(t, rec.Body.Bytes(), &out)
 	if len(out.Items) != 0 {
-		t.Fatalf("items = %d, want 0 (фильтр ∩ scope пуст: ни один scoped-хост не disconnected)", len(out.Items))
+		t.Fatalf("items = %d, want 0 (filter ∩ scope empty: no scoped host is disconnected)", len(out.Items))
 	}
 }
 
@@ -153,19 +153,19 @@ func TestSoulList_Keyset_RegexFilters_ORUnion(t *testing.T) {
 		got[it.SID] = true
 	}
 	if !got["web-01.example.com"] {
-		t.Error("web-01 (prod, не db-*) скрыт — union должен показать по coven")
+		t.Error("web-01 (prod, not db-*) hidden - union should show it via coven")
 	}
 	if !got["db-07.example.com"] {
-		t.Error("db-07 (db-*, не prod) скрыт — union должен показать по regex")
+		t.Error("db-07 (db-*, not prod) hidden - union should show it via regex")
 	}
 	if !got["db-09.example.com"] {
-		t.Error("db-09 (оба) скрыт")
+		t.Error("db-09 (both) hidden")
 	}
 	if got["app-01.example.com"] {
-		t.Error("app-01 (ни coven, ни regex) ВИДЕН — over-show за границу Purview (union ⊆ Purview нарушен)")
+		t.Error("app-01 (neither coven nor regex) VISIBLE - over-show beyond Purview boundary (union subset-of Purview violated)")
 	}
 	if !out.TotalApproximate {
-		t.Error("keyset-режим: total_approximate=false; want true (total не точен)")
+		t.Error("keyset mode: total_approximate=false; want true (total is not exact)")
 	}
 }
 
@@ -192,7 +192,7 @@ func TestSoulList_Keyset_RegexOnly_HidesNonMatching(t *testing.T) {
 	}
 	for _, it := range out.Items {
 		if it.SID == "db-01.example.com" {
-			t.Error("db-01 виден — не матчит ^web-, должен быть скрыт")
+			t.Error("db-01 visible - does not match ^web-, should be hidden")
 		}
 	}
 }
@@ -236,7 +236,7 @@ func TestSoulList_Keyset_MultiPageNoDupesNoGaps(t *testing.T) {
 		mustJSON(t, rec.Body.Bytes(), &out)
 		for _, it := range out.Items {
 			if got[it.SID] {
-				t.Fatalf("ДУБЛЬ %s на границе keyset-страницы", it.SID)
+				t.Fatalf("DUPLICATE %s at the keyset-page boundary", it.SID)
 			}
 			got[it.SID] = true
 		}
@@ -246,15 +246,15 @@ func TestSoulList_Keyset_MultiPageNoDupesNoGaps(t *testing.T) {
 		cursorParam = *out.NextCursor
 		pages++
 		if pages > 20 {
-			t.Fatal("курсор не сходится")
+			t.Fatal("cursor does not converge")
 		}
 	}
 	if len(got) != len(want) {
-		t.Fatalf("собрано %d, want %d (пропуски/дубли в keyset-обходе)", len(got), len(want))
+		t.Fatalf("collected %d, want %d (gaps/duplicates in keyset traversal)", len(got), len(want))
 	}
 	for sid := range want {
 		if !got[sid] {
-			t.Errorf("%s пропущен", sid)
+			t.Errorf("%s skipped", sid)
 		}
 	}
 }
@@ -286,14 +286,14 @@ func TestSoulList_Keyset_UnderFill(t *testing.T) {
 	mustJSON(t, rec.Body.Bytes(), &out)
 	// limit=50 not filled (only 2 matches total), DB exhausted → return both + next_cursor=nil.
 	if len(out.Items) != 2 {
-		t.Fatalf("items = %d, want 2 (special-01, special-02 — добор через внутр. страницы)", len(out.Items))
+		t.Fatalf("items = %d, want 2 (special-01, special-02 - fill via internal pages)", len(out.Items))
 	}
 	if out.NextCursor != nil {
-		t.Errorf("next_cursor = %v, want nil (БД исчерпана при under-fill)", *out.NextCursor)
+		t.Errorf("next_cursor = %v, want nil (DB exhausted during under-fill)", *out.NextCursor)
 	}
 	// At least 2 inner pages were read (the top-up worked).
 	if pool.scopeEvalQueries < 2 {
-		t.Errorf("scopeEvalQueries = %d, want >= 2 (добор должен читать след. внутр. страницы)", pool.scopeEvalQueries)
+		t.Errorf("scopeEvalQueries = %d, want >= 2 (fill must read the next internal pages)", pool.scopeEvalQueries)
 	}
 }
 
@@ -320,16 +320,16 @@ func TestSoulList_Keyset_LimitExactFill_NextCursorPresent(t *testing.T) {
 		t.Fatalf("items = %d, want 2 (limit)", len(out.Items))
 	}
 	if out.NextCursor == nil {
-		t.Fatal("next_cursor=nil при наличии 3-го матча; want присутствует")
+		t.Fatal("next_cursor=nil while a 3rd match exists; want present")
 	}
 	// The cursor encodes the last SCANNED row; when filling by limit, the scan
 	// stopped exactly at web-02 (without scanning web-03) → cursor = web-02.
 	cur, err := sharedapi.DecodeKeysetCursor(*out.NextCursor)
 	if err != nil {
-		t.Fatalf("декод курсора: %v", err)
+		t.Fatalf("cursor decode: %v", err)
 	}
 	if cur.SID != "web-02.example.com" {
-		t.Errorf("курсор SID = %q, want web-02 (последняя просмотренная == последняя отданная при наборе по limit)", cur.SID)
+		t.Errorf("cursor SID = %q, want web-02 (last viewed == last returned when filling by limit)", cur.SID)
 	}
 }
 
@@ -342,16 +342,16 @@ func TestSoulList_Keyset_BadRegex_FailClosed(t *testing.T) {
 	h := NewSoulHandler(pool, fakeScoper{regexes: []string{"([unclosed"}}, nil, nil)
 	rec := doList(t, h, "")
 	if rec.Code != http.StatusOK {
-		t.Fatalf("status = %d, want 200 (битый regex → пусто, НЕ 500); body=%s", rec.Code, rec.Body.String())
+		t.Fatalf("status = %d, want 200 (broken regex -> empty, NOT 500); body=%s", rec.Code, rec.Body.String())
 	}
 	var out keysetReplyDTO
 	mustJSON(t, rec.Body.Bytes(), &out)
 	if len(out.Items) != 0 {
-		t.Fatalf("items = %d, want 0 (fail-closed на битом regex)", len(out.Items))
+		t.Fatalf("items = %d, want 0 (fail-closed on broken regex)", len(out.Items))
 	}
 	// fail-closed BEFORE the DB: scope-eval must not be invoked on a non-compilable scope.
 	if pool.scopeEvalQueries != 0 {
-		t.Errorf("scopeEvalQueries = %d, want 0 (fail-closed до запроса)", pool.scopeEvalQueries)
+		t.Errorf("scopeEvalQueries = %d, want 0 (fail-closed before query)", pool.scopeEvalQueries)
 	}
 }
 
@@ -362,7 +362,7 @@ func TestSoulList_Keyset_OffsetAndCursorConflict_422(t *testing.T) {
 	h := NewSoulHandler(&fakeSoulPool{}, fakeScoper{regexes: []string{"^web-"}}, nil, nil)
 	rec := doList(t, h, "offset=10&cursor="+enc)
 	if rec.Code != http.StatusUnprocessableEntity {
-		t.Fatalf("status = %d, want 422 (offset+cursor конфликт); body=%s", rec.Code, rec.Body.String())
+		t.Fatalf("status = %d, want 422 (offset+cursor conflict); body=%s", rec.Code, rec.Body.String())
 	}
 }
 
@@ -371,7 +371,7 @@ func TestSoulList_Keyset_BadCursor_400(t *testing.T) {
 	h := NewSoulHandler(&fakeSoulPool{}, fakeScoper{regexes: []string{"^web-"}}, nil, nil)
 	rec := doList(t, h, "cursor=!!!not-base64!!!")
 	if rec.Code != http.StatusBadRequest {
-		t.Fatalf("status = %d, want 400 (битый курсор); body=%s", rec.Code, rec.Body.String())
+		t.Fatalf("status = %d, want 400 (broken cursor); body=%s", rec.Code, rec.Body.String())
 	}
 }
 
@@ -397,10 +397,10 @@ func TestSoulList_Keyset_CardHasStatusTransport(t *testing.T) {
 		t.Fatalf("items = %d, want 1", len(out.Items))
 	}
 	if out.Items[0].Transport != "agent" {
-		t.Errorf("keyset-карточка transport = %q, want agent (полная проекция)", out.Items[0].Transport)
+		t.Errorf("keyset card transport = %q, want agent (full projection)", out.Items[0].Transport)
 	}
 	if out.Items[0].Status != "connected" {
-		t.Errorf("keyset-карточка status = %q, want connected (полная проекция)", out.Items[0].Status)
+		t.Errorf("keyset card status = %q, want connected (full projection)", out.Items[0].Status)
 	}
 }
 
@@ -429,11 +429,11 @@ func TestSoulList_Keyset_PresenceOverlayFlipsStatus(t *testing.T) {
 		t.Fatalf("items = %d, want 1", len(out.Items))
 	}
 	if out.Items[0].Status != "disconnected" {
-		t.Errorf("keyset status = %q, want disconnected (presence-overlay флипнул мёртвый lease)", out.Items[0].Status)
+		t.Errorf("keyset status = %q, want disconnected (presence overlay flipped dead lease)", out.Items[0].Status)
 	}
 	// the overlay actually asked presence about this SID (the card carried a connected snapshot).
 	if len(presence.gotSIDs) != 1 || presence.gotSIDs[0] != "web-01.example.com" {
-		t.Errorf("presence.gotSIDs = %v, want [web-01] (overlay должен спросить lease в keyset-режиме)", presence.gotSIDs)
+		t.Errorf("presence.gotSIDs = %v, want [web-01] (overlay must query lease in keyset mode)", presence.gotSIDs)
 	}
 }
 
@@ -482,7 +482,7 @@ func TestSoulList_Keyset_CapTruncation_NoLostMatches(t *testing.T) {
 		mustJSON(t, rec.Body.Bytes(), &out)
 		for _, it := range out.Items {
 			if got[it.SID] {
-				t.Fatalf("ДУБЛЬ %s при cap-обходе", it.SID)
+				t.Fatalf("DUPLICATE %s during cap traversal", it.SID)
 			}
 			got[it.SID] = true
 		}
@@ -497,18 +497,18 @@ func TestSoulList_Keyset_CapTruncation_NoLostMatches(t *testing.T) {
 		cursorParam = *out.NextCursor
 		pages++
 		if pages > 50 {
-			t.Fatal("cap-обход не сходится (>50 страниц)")
+			t.Fatal("cap traversal does not converge (>50 pages)")
 		}
 	}
 	if !sawEmptyButCursor {
-		t.Error("ни одной пусто-но-с-курсором страницы — cap-кейс не смоделирован (тест не проверяет фикс)")
+		t.Error("no empty-but-with-cursor page - cap case not modeled (test does not verify the fix)")
 	}
 	if len(got) != len(want) {
-		t.Fatalf("собрано %d матчей, want %d — cap-truncation ПОТЕРЯЛ матчи за первыми страницами", len(got), len(want))
+		t.Fatalf("collected %d matches, want %d - cap-truncation LOST matches beyond the first pages", len(got), len(want))
 	}
 	for sid := range want {
 		if !got[sid] {
-			t.Errorf("%s потерян при cap-обходе (BLOCKER регресс)", sid)
+			t.Errorf("%s lost during cap traversal (BLOCKER regression)", sid)
 		}
 	}
 }
@@ -533,10 +533,10 @@ func TestSoulList_Keyset_EmptyResult_NoCursor(t *testing.T) {
 	var out keysetReplyDTO
 	mustJSON(t, rec.Body.Bytes(), &out)
 	if len(out.Items) != 0 {
-		t.Fatalf("items = %d, want 0 (^web- не матчит db-*)", len(out.Items))
+		t.Fatalf("items = %d, want 0 (^web- does not match db-*)", len(out.Items))
 	}
 	if out.NextCursor != nil {
-		t.Errorf("next_cursor = %q, want nil (БД исчерпана, набрано 0 — не зацикливаться)", *out.NextCursor)
+		t.Errorf("next_cursor = %q, want nil (DB exhausted, 0 collected - must not loop)", *out.NextCursor)
 	}
 }
 
@@ -571,7 +571,7 @@ func TestSoulList_Keyset_LimitOne_FullTraversal(t *testing.T) {
 		}
 		for _, it := range out.Items {
 			if got[it.SID] {
-				t.Fatalf("ДУБЛЬ %s при limit=1 обходе", it.SID)
+				t.Fatalf("DUPLICATE %s during limit=1 traversal", it.SID)
 			}
 			got[it.SID] = true
 		}
@@ -581,11 +581,11 @@ func TestSoulList_Keyset_LimitOne_FullTraversal(t *testing.T) {
 		cursorParam = *out.NextCursor
 		steps++
 		if steps > 20 {
-			t.Fatal("limit=1 обход не сходится")
+			t.Fatal("limit=1 traversal does not converge")
 		}
 	}
 	if len(got) != 3 {
-		t.Fatalf("собрано %d, want 3 (limit=1 пропустил/дублировал)", len(got))
+		t.Fatalf("collected %d, want 3 (limit=1 skipped/duplicated)", len(got))
 	}
 }
 
@@ -607,10 +607,10 @@ func TestSoulList_Keyset_LimitOverFleet_Exhausted(t *testing.T) {
 	var out keysetReplyDTO
 	mustJSON(t, rec.Body.Bytes(), &out)
 	if len(out.Items) != 2 {
-		t.Fatalf("items = %d, want 2 (limit > флота → весь scoped-набор)", len(out.Items))
+		t.Fatalf("items = %d, want 2 (limit > fleet -> the entire scoped set)", len(out.Items))
 	}
 	if out.NextCursor != nil {
-		t.Errorf("next_cursor = %q, want nil (limit>флота, исчерпано)", *out.NextCursor)
+		t.Errorf("next_cursor = %q, want nil (limit > fleet, exhausted)", *out.NextCursor)
 	}
 }
 
@@ -632,13 +632,13 @@ func TestSoulList_Keyset_CursorPastDeletedHost_NoCrash(t *testing.T) {
 	enc := sharedapi.EncodeKeysetCursor(sharedapi.KeysetCursor{RegisteredAt: deletedAt, SID: "web-02.example.com"})
 	rec := doList(t, h, "cursor="+enc)
 	if rec.Code != http.StatusOK {
-		t.Fatalf("status = %d, want 200 (best-effort, не 500); body=%s", rec.Code, rec.Body.String())
+		t.Fatalf("status = %d, want 200 (best-effort, not 500); body=%s", rec.Code, rec.Body.String())
 	}
 	var out keysetReplyDTO
 	mustJSON(t, rec.Body.Bytes(), &out)
 	// keyset "strictly AFTER (deletedAt, web-02)" → only web-03 (web-01 is before the cursor).
 	if len(out.Items) != 1 || out.Items[0].SID != "web-03.example.com" {
-		t.Fatalf("items = %+v, want [web-03] (продолжение после удалённого без дублей)", out.Items)
+		t.Fatalf("items = %+v, want [web-03] (continuation after deletion without duplicates)", out.Items)
 	}
 }
 
@@ -664,6 +664,6 @@ func TestSoulList_Keyset_PresenceOverlayAfterScope(t *testing.T) {
 	mustJSON(t, rec.Body.Bytes(), &out)
 	// scope is preserved despite the presence failure: only web-01, db-01 is hidden.
 	if len(out.Items) != 1 || out.Items[0].SID != "web-01.example.com" {
-		t.Fatalf("items = %+v, want [web-01] (scope fail-closed устоял при сбое presence)", out.Items)
+		t.Fatalf("items = %+v, want [web-01] (scope fail-closed held despite presence failure)", out.Items)
 	}
 }

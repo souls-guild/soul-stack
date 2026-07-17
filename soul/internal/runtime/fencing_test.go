@@ -20,7 +20,7 @@ import (
 func TestAcceptAttempt_FirstAttemptAccepted(t *testing.T) {
 	r := NewApplyRunner(mapRegistry{}, nil)
 	if !r.AcceptAttempt("apply-1", 1) {
-		t.Fatalf("AcceptAttempt(apply-1, 1) = false, want true (первый attempt)")
+		t.Fatalf("AcceptAttempt(apply-1, 1) = false, want true (first attempt)")
 	}
 	if got := r.lastSeenAttempt["apply-1"]; got != 1 {
 		t.Errorf("seen[apply-1] = %d, want 1", got)
@@ -34,7 +34,7 @@ func TestAcceptAttempt_HigherAttemptAccepted(t *testing.T) {
 	r := NewApplyRunner(mapRegistry{}, nil)
 	r.AcceptAttempt("apply-1", 1)
 	if !r.AcceptAttempt("apply-1", 2) {
-		t.Fatalf("AcceptAttempt(apply-1, 2) = false, want true (больший attempt)")
+		t.Fatalf("AcceptAttempt(apply-1, 2) = false, want true (higher attempt)")
 	}
 	if got := r.lastSeenAttempt["apply-1"]; got != 2 {
 		t.Errorf("seen[apply-1] = %d, want 2", got)
@@ -48,7 +48,7 @@ func TestAcceptAttempt_EqualAttemptAccepted(t *testing.T) {
 	r := NewApplyRunner(mapRegistry{}, nil)
 	r.AcceptAttempt("apply-1", 2)
 	if !r.AcceptAttempt("apply-1", 2) {
-		t.Errorf("AcceptAttempt(apply-1, 2) повторно = false, want true (==seen не stale)")
+		t.Errorf("AcceptAttempt(apply-1, 2) again = false, want true (==seen is not stale)")
 	}
 }
 
@@ -63,7 +63,7 @@ func TestAcceptAttempt_StaleRejected(t *testing.T) {
 	}
 	// seen did NOT roll back.
 	if got := r.lastSeenAttempt["apply-1"]; got != 3 {
-		t.Errorf("seen[apply-1] = %d, want 3 (stale не должен сдвигать seen)", got)
+		t.Errorf("seen[apply-1] = %d, want 3 (stale must not move seen)", got)
 	}
 }
 
@@ -75,11 +75,11 @@ func TestAcceptAttempt_ZeroNeverFenced(t *testing.T) {
 	// Even after seeing attempt=5, zero is still accepted (old Keeper).
 	r.AcceptAttempt("apply-1", 5)
 	if !r.AcceptAttempt("apply-1", 0) {
-		t.Errorf("AcceptAttempt(apply-1, 0) = false, want true (старый Keeper не фенсится)")
+		t.Errorf("AcceptAttempt(apply-1, 0) = false, want true (old Keeper is not fenced)")
 	}
 	// attempt=0 didn't move seen down.
 	if got := r.lastSeenAttempt["apply-1"]; got != 5 {
-		t.Errorf("seen[apply-1] = %d, want 5 (0 не пишется в кеш)", got)
+		t.Errorf("seen[apply-1] = %d, want 5 (0 is not written to cache)", got)
 	}
 
 	// Fresh apply with nothing seen yet: 0 is accepted, cache stays empty (0 isn't written).
@@ -87,7 +87,7 @@ func TestAcceptAttempt_ZeroNeverFenced(t *testing.T) {
 		t.Errorf("AcceptAttempt(apply-fresh, 0) = false, want true")
 	}
 	if _, ok := r.lastSeenAttempt["apply-fresh"]; ok {
-		t.Errorf("seen[apply-fresh] записан для attempt=0, ожидалось отсутствие")
+		t.Errorf("seen[apply-fresh] recorded for attempt=0, expected absence")
 	}
 }
 
@@ -98,7 +98,7 @@ func TestAcceptAttempt_PerApplyIDIsolation(t *testing.T) {
 	r.AcceptAttempt("apply-a", 5)
 	// apply-b sees attempt=1 for the first time — accepted (isolated from apply-a).
 	if !r.AcceptAttempt("apply-b", 1) {
-		t.Errorf("AcceptAttempt(apply-b, 1) = false, want true (другой apply_id)")
+		t.Errorf("AcceptAttempt(apply-b, 1) = false, want true (different apply_id)")
 	}
 }
 
@@ -113,10 +113,10 @@ func TestAcceptAttempt_RejectedIncrementsMetric(t *testing.T) {
 	r.AcceptAttempt("apply-1", 2)
 	// Two stale duplicates in a row → counter reaches 2.
 	if r.AcceptAttempt("apply-1", 1) {
-		t.Fatal("первый stale принят, want отвергнут")
+		t.Fatal("first stale accepted, want rejected")
 	}
 	if r.AcceptAttempt("apply-1", 0+1) { // attempt=1 < seen=2
-		t.Fatal("второй stale принят, want отвергнут")
+		t.Fatal("second stale accepted, want rejected")
 	}
 
 	body := obstest.Scrape(t, reg.Gatherer())
@@ -141,7 +141,7 @@ func TestAcceptAttempt_AcceptedDoesNotIncrementMetric(t *testing.T) {
 	// fenced series in body (or it's 0). Check for absence of a positive value.
 	if strings.Contains(body, "soul_apply_fenced_total 1") ||
 		strings.Contains(body, "soul_apply_fenced_total 2") {
-		t.Errorf("fenced-счётчик инкрементирован на принятых запросах; got=\n%s", body)
+		t.Errorf("fenced counter incremented on accepted requests; got=\n%s", body)
 	}
 }
 
@@ -163,7 +163,7 @@ func TestAcceptAttempt_CachePersistsAcrossRunnerLifetime(t *testing.T) {
 
 	// Session #1: accept attempt=2 and execute.
 	if !r.AcceptAttempt("apply-x", 2) {
-		t.Fatal("attempt=2 на сессии №1 отвергнут")
+		t.Fatal("attempt=2 on session #1 rejected")
 	}
 	sink1 := &recordingSink{}
 	if err := r.Run(context.Background(), &keeperv1.ApplyRequest{
@@ -171,14 +171,14 @@ func TestAcceptAttempt_CachePersistsAcrossRunnerLifetime(t *testing.T) {
 		Tasks:   []*keeperv1.RenderedTask{{Module: "core.pkg.installed"}},
 		Attempt: 2,
 	}, sink1); err != nil {
-		t.Fatalf("Run сессии №1: %v", err)
+		t.Fatalf("Run session #1: %v", err)
 	}
 
 	// "reconnect-swap": same runner, new session (sink2). A stale attempt=1
 	// arrives (recovery re-queued a still-alive Ward; the original with
 	// attempt=2 already ran). The per-process cache remembers seen=2 → reject.
 	if r.AcceptAttempt("apply-x", 1) {
-		t.Fatal("stale attempt=1 после swap принят — кеш не пережил swap (баг)")
+		t.Fatal("stale attempt=1 accepted after swap - cache did not survive swap (bug)")
 	}
 }
 
@@ -215,6 +215,6 @@ func TestAcceptAttempt_B1_NoSideChannelOnReject(t *testing.T) {
 
 	// A rejected request never started Run → never registered a cancel in active.
 	if r.Cancel("apply-1") {
-		t.Errorf("Cancel(apply-1) = true: отвергнутый stale не должен регистрировать active-apply")
+		t.Errorf("Cancel(apply-1) = true: a rejected stale must not register active-apply")
 	}
 }

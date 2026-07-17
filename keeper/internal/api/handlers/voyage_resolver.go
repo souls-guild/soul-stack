@@ -346,7 +346,7 @@ ORDER BY sid ASC
 		}
 		alive, perr := r.presence.SoulsStreamAlive(ctx, sids)
 		if perr != nil {
-			return nil, fmt.Errorf("voyage resolver: presence-фильтр (require_alive): %w", perr)
+			return nil, fmt.Errorf("voyage resolver: presence filter (require_alive): %w", perr)
 		}
 		filtered := out[:0]
 		for i := range out {

@@ -37,7 +37,7 @@ spec:
         username:
           type: string
           required: true
-          description: имя роли
+          description: role name
         password:
           type: string
           secret: true
@@ -67,7 +67,7 @@ func catalogProblemType(t *testing.T, err error) string {
 	}
 	d, ok := AsProblemDetails(err)
 	if !ok {
-		t.Fatalf("ошибка не *problemError: %T %v", err, err)
+		t.Fatalf("error is not *problemError: %T %v", err, err)
 	}
 	return d.Type
 }
@@ -86,60 +86,60 @@ func TestModuleCatalog_ListTyped_CoreAndPlugin(t *testing.T) {
 
 	// core: all 21 (18 soul-side + 3 keeper-side) are present.
 	if len(resp.Items) != len(coreModuleDocs)+1 {
-		t.Fatalf("ожидали %d записей (core + 1 plugin), получили %d", len(coreModuleDocs)+1, len(resp.Items))
+		t.Fatalf("expected %d entries (core + 1 plugin), got %d", len(coreModuleDocs)+1, len(resp.Items))
 	}
 
 	// Sorted by name.
 	for i := 1; i < len(resp.Items); i++ {
 		if resp.Items[i-1].Name > resp.Items[i].Name {
-			t.Fatalf("выдача не отсортирована: %q > %q", resp.Items[i-1].Name, resp.Items[i].Name)
+			t.Fatalf("output not sorted: %q > %q", resp.Items[i-1].Name, resp.Items[i].Name)
 		}
 	}
 
 	cmd, ok := findItem(resp.Items, "core.cmd")
 	if !ok {
-		t.Fatal("core.cmd отсутствует в каталоге")
+		t.Fatal("core.cmd missing from catalog")
 	}
 	if cmd.Kind != "core" {
-		t.Errorf("core.cmd kind=%q, ожидали core", cmd.Kind)
+		t.Errorf("core.cmd kind=%q, expected core", cmd.Kind)
 	}
 	if !cmd.ErrandSafe {
-		t.Error("core.cmd должен быть errand_safe (whitelist core.cmd.shell)")
+		t.Error("core.cmd must be errand_safe (whitelist core.cmd.shell)")
 	}
 	// core params are now read from coremanifest (ADR-045 S2): core.cmd carries
 	// cmd/cwd/env/timeout/onlyif/unless; cmd is required.
 	if len(cmd.Params) == 0 {
-		t.Error("core.cmd params должны заполняться из coremanifest, получили 0")
+		t.Error("core.cmd params must be populated from coremanifest, got 0")
 	}
 	if cp := findParam(cmd.Params, "cmd"); cp == nil || !cp.Required {
-		t.Errorf("core.cmd должен нести required-param cmd: %+v", cp)
+		t.Errorf("core.cmd must carry required-param cmd: %+v", cp)
 	}
 
 	pkg, _ := findItem(resp.Items, "core.pkg")
 	if pkg.ErrandSafe {
-		t.Error("core.pkg НЕ errand_safe")
+		t.Error("core.pkg is NOT errand_safe")
 	}
 
 	// plugin: name <ns>.<name>, params from manifest, username dedup.
 	pg, ok := findItem(resp.Items, "official.postgres-user")
 	if !ok {
-		t.Fatal("plugin official.postgres-user отсутствует")
+		t.Fatal("plugin official.postgres-user missing")
 	}
 	if pg.Kind != "plugin" || pg.Namespace != "official" {
 		t.Errorf("plugin kind=%q ns=%q", pg.Kind, pg.Namespace)
 	}
 	if len(pg.States) != 2 {
-		t.Errorf("ожидали 2 state-а (present/absent), получили %v", pg.States)
+		t.Errorf("expected 2 states (present/absent), got %v", pg.States)
 	}
 	if len(pg.Params) != 2 {
-		t.Fatalf("ожидали 2 уникальных param-а (username/password), получили %d: %+v", len(pg.Params), pg.Params)
+		t.Fatalf("expected 2 unique params (username/password), got %d: %+v", len(pg.Params), pg.Params)
 	}
 	uname, pword := findParam(pg.Params, "username"), findParam(pg.Params, "password")
 	if uname == nil || !uname.Required {
-		t.Errorf("username должен быть required: %+v", uname)
+		t.Errorf("username must be required: %+v", uname)
 	}
 	if pword == nil || !pword.Secret {
-		t.Errorf("password должен быть secret: %+v", pword)
+		t.Errorf("password must be secret: %+v", pword)
 	}
 }
 
@@ -186,27 +186,27 @@ func TestModuleCatalog_Source_SnakeCaseWire(t *testing.T) {
 
 	for _, key := range []string{`"incarnation_hosts"`, `"choir"`} {
 		if !strings.Contains(raw, key) {
-			t.Errorf("wire-JSON не содержит snake_case-ключ %s; source-picker формы сломан:\n%s", key, raw)
+			t.Errorf("wire-JSON does not contain snake_case key %s; source-picker form broken:\n%s", key, raw)
 		}
 	}
 	for _, bad := range []string{`"IncarnationHosts"`, `"Choir"`} {
 		if strings.Contains(raw, bad) {
-			t.Errorf("wire-JSON содержит PascalCase-ключ %s (регресс json-тегов InputSource); ожидался snake_case", bad)
+			t.Errorf("wire-JSON contains PascalCase key %s (InputSource json-tag regression); expected snake_case", bad)
 		}
 	}
 
 	// Semantics are in place too: the source values are correct.
 	mod, ok := findItem(resp.Items, "official.with-source")
 	if !ok {
-		t.Fatal("official.with-source отсутствует в каталоге")
+		t.Fatal("official.with-source missing from catalog")
 	}
 	host := findParam(mod.Params, "host")
 	if host == nil || host.Source == nil || host.Source.IncarnationHosts == nil || !*host.Source.IncarnationHosts {
-		t.Errorf("host.source.incarnation_hosts должен быть true: %+v", host)
+		t.Errorf("host.source.incarnation_hosts must be true: %+v", host)
 	}
 	voice := findParam(mod.Params, "voice")
 	if voice == nil || voice.Source == nil || voice.Source.Choir == nil || *voice.Source.Choir != "alpha" {
-		t.Errorf("voice.source.choir должен быть \"alpha\": %+v", voice)
+		t.Errorf("voice.source.choir must be \"alpha\": %+v", voice)
 	}
 }
 
@@ -229,14 +229,14 @@ func TestModuleCatalog_ListTyped_ErrandSafeFilter(t *testing.T) {
 
 	want := map[string]bool{"core.cmd": true, "core.exec": true, "core.http": true}
 	if len(resp.Items) != len(want) {
-		t.Fatalf("ожидали %d errand-safe core, получили %d: %+v", len(want), len(resp.Items), resp.Items)
+		t.Fatalf("expected %d errand-safe core, got %d: %+v", len(want), len(resp.Items), resp.Items)
 	}
 	for _, it := range resp.Items {
 		if !want[it.Name] {
-			t.Errorf("неожиданный errand_safe модуль: %q", it.Name)
+			t.Errorf("unexpected errand_safe module: %q", it.Name)
 		}
 		if !it.ErrandSafe {
-			t.Errorf("%q попал в errand_safe-фильтр без флага", it.Name)
+			t.Errorf("%q ended up in errand_safe filter without the flag", it.Name)
 		}
 	}
 }
@@ -249,11 +249,11 @@ func TestModuleCatalog_ListTyped_NoPlugins(t *testing.T) {
 		t.Fatalf("ListTyped: %v", err)
 	}
 	if len(resp.Items) != len(coreModuleDocs) {
-		t.Fatalf("без plugins ожидали %d core-модулей, получили %d", len(coreModuleDocs), len(resp.Items))
+		t.Fatalf("without plugins expected %d core modules, got %d", len(coreModuleDocs), len(resp.Items))
 	}
 	for _, it := range resp.Items {
 		if it.Kind != "core" {
-			t.Errorf("при nil plugins запись %q kind=%q (ожидали только core)", it.Name, it.Kind)
+			t.Errorf("with nil plugins entry %q kind=%q (expected core only)", it.Name, it.Kind)
 		}
 	}
 }
@@ -269,7 +269,7 @@ func TestModuleCatalog_ListTyped_RevokedPluginNotShown(t *testing.T) {
 	}
 	for _, it := range resp.Items {
 		if it.Kind == "plugin" {
-			t.Errorf("revoked/нет активных plugin → не должно быть plugin-записей, нашли %q", it.Name)
+			t.Errorf("revoked/no active plugins -> there must be no plugin entries, found %q", it.Name)
 		}
 	}
 }
@@ -279,7 +279,7 @@ func TestModuleCatalog_ListTyped_PluginStoreError(t *testing.T) {
 
 	_, err := h.ListTyped(context.Background(), false)
 	if got := catalogProblemType(t, err); !strings.Contains(got, "internal") {
-		t.Fatalf("при сбое реестра ожидали internal (500), problem.Type = %q", got)
+		t.Fatalf("on registry failure expected internal (500), problem.Type = %q", got)
 	}
 }
 
@@ -291,7 +291,7 @@ func TestModuleCatalog_GetTyped_Found(t *testing.T) {
 		t.Fatalf("GetTyped: %v", err)
 	}
 	if it.Name != "core.service" || it.Kind != "core" {
-		t.Errorf("получили %+v", it)
+		t.Errorf("got %+v", it)
 	}
 }
 
@@ -300,6 +300,6 @@ func TestModuleCatalog_GetTyped_NotFound(t *testing.T) {
 
 	_, err := h.GetTyped(context.Background(), "core.nonexistent")
 	if got := catalogProblemType(t, err); got != problem.TypeNotFound {
-		t.Fatalf("ожидали not-found (404), problem.Type = %q", got)
+		t.Fatalf("expected not-found (404), problem.Type = %q", got)
 	}
 }

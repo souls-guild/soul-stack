@@ -23,11 +23,11 @@ func apply(t *testing.T, m *exec.Module, params map[string]any) *pluginv1.ApplyE
 		State:  "run",
 		Params: mustStruct(t, params),
 	}, stream); err != nil {
-		t.Fatalf("Apply вернул Go-error (контракт — failed-event, не error): %v", err)
+		t.Fatalf("Apply returned a Go error (the contract is failed-event, not error): %v", err)
 	}
 	ev := stream.Last()
 	if ev == nil {
-		t.Fatal("Apply не отправил ни одного события")
+		t.Fatal("Apply did not send a single event")
 	}
 	return ev
 }
@@ -48,13 +48,13 @@ func TestApply_UnknownState_Failed(t *testing.T) {
 	}
 	ev := stream.Last()
 	if !ev.Failed {
-		t.Fatal("неизвестный state должен давать failed-event")
+		t.Fatal("an unknown state should produce a failed-event")
 	}
 	if ev.Message != `unknown state "shell"` {
 		t.Fatalf("message=%q", ev.Message)
 	}
 	if len(r.Calls) != 0 {
-		t.Fatalf("при неизвестном state команда не запускается, calls=%v", r.Calls)
+		t.Fatalf("the command must not run on an unknown state, calls=%v", r.Calls)
 	}
 }
 
@@ -78,7 +78,7 @@ func TestApply_Argv_MetacharsAreLiteral(t *testing.T) {
 		t.Fatalf("changed=%v failed=%v", ev.Changed, ev.Failed)
 	}
 	if len(r.Calls) != 1 || r.Calls[0] != key {
-		t.Fatalf("ожидал argv-вызов %q без shell-обёртки, получил %v", key, r.Calls)
+		t.Fatalf("expected an argv call %q without a shell wrapper, got %v", key, r.Calls)
 	}
 	if got := ev.Output.Fields["stdout"].GetStringValue(); got != "a|b > c ; $HOME\n" {
 		t.Fatalf("stdout=%q", got)
@@ -95,7 +95,7 @@ func TestApply_RunnerLaunchError_Failed(t *testing.T) {
 
 	ev := apply(t, m, map[string]any{"cmd": "nonexistent-binary"})
 	if !ev.Failed {
-		t.Fatal("Result.Err должен давать failed")
+		t.Fatal("Result.Err should produce failed")
 	}
 	if ev.Message != "exec nonexistent-binary: file does not exist" {
 		t.Fatalf("message=%q", ev.Message)
@@ -125,10 +125,10 @@ func TestApply_BadParamTypes_Failed(t *testing.T) {
 			m := newModule(r, noStat)
 			ev := apply(t, m, c.params)
 			if !ev.Failed {
-				t.Fatalf("%s: ожидал failed", c.name)
+				t.Fatalf("%s: expected failed", c.name)
 			}
 			if len(r.Calls) != 0 {
-				t.Fatalf("%s: ошибка разбора параметра не должна запускать команд, calls=%v", c.name, r.Calls)
+				t.Fatalf("%s: a parameter parse error must not run commands, calls=%v", c.name, r.Calls)
 			}
 		})
 	}
@@ -144,10 +144,10 @@ func TestApply_Creates_StatError_Failed(t *testing.T) {
 
 	ev := apply(t, m, map[string]any{"cmd": "touch", "args": []any{"/x"}, "creates": "/x"})
 	if !ev.Failed {
-		t.Fatal("ошибка stat в creates должна давать failed")
+		t.Fatal("a stat error in creates should produce failed")
 	}
 	if len(r.Calls) != 0 {
-		t.Fatalf("при ошибке guard команда не запускается, calls=%v", r.Calls)
+		t.Fatalf("the command must not run on a guard error, calls=%v", r.Calls)
 	}
 }
 
@@ -162,7 +162,7 @@ func TestApply_Creates_Absent_Runs(t *testing.T) {
 		t.Fatalf("changed=%v failed=%v", ev.Changed, ev.Failed)
 	}
 	if len(r.Calls) != 1 || r.Calls[0] != "touch /x" {
-		t.Fatalf("ожидал запуск основной команды, calls=%v", r.Calls)
+		t.Fatalf("expected the main command to run, calls=%v", r.Calls)
 	}
 }
 
@@ -181,7 +181,7 @@ func TestApply_Unless_False_Runs(t *testing.T) {
 		"unless": "test -f /etc/passwd",
 	})
 	if ev.Failed || !ev.Changed {
-		t.Fatalf("unless exit!=0 → команда должна выполниться: changed=%v failed=%v", ev.Changed, ev.Failed)
+		t.Fatalf("unless exit!=0 -> the command should run: changed=%v failed=%v", ev.Changed, ev.Failed)
 	}
 	if ev.Output.Fields["stdout"].GetStringValue() != "added" {
 		t.Fatalf("stdout=%q", ev.Output.Fields["stdout"].GetStringValue())
@@ -197,7 +197,7 @@ func TestApply_Unless_LaunchError_Failed(t *testing.T) {
 
 	ev := apply(t, m, map[string]any{"cmd": "x", "unless": "broken"})
 	if !ev.Failed {
-		t.Fatal("ошибка запуска unless должна давать failed")
+		t.Fatal("an unless launch error should produce failed")
 	}
 }
 
@@ -215,7 +215,7 @@ func TestApply_Onlyif_True_Runs(t *testing.T) {
 		"onlyif": "which make",
 	})
 	if ev.Failed || !ev.Changed {
-		t.Fatalf("onlyif exit 0 → команда должна выполниться: changed=%v failed=%v", ev.Changed, ev.Failed)
+		t.Fatalf("onlyif exit 0 -> the command should run: changed=%v failed=%v", ev.Changed, ev.Failed)
 	}
 	if ev.Output.Fields["stdout"].GetStringValue() != "built" {
 		t.Fatalf("stdout=%q", ev.Output.Fields["stdout"].GetStringValue())
@@ -230,7 +230,7 @@ func TestApply_Onlyif_LaunchError_Failed(t *testing.T) {
 
 	ev := apply(t, m, map[string]any{"cmd": "x", "onlyif": "broken"})
 	if !ev.Failed {
-		t.Fatal("ошибка запуска onlyif должна давать failed")
+		t.Fatal("an onlyif launch error should produce failed")
 	}
 }
 
@@ -253,7 +253,7 @@ func TestApply_AllGuards_PassThrough_Runs(t *testing.T) {
 		"onlyif":  "present",
 	})
 	if ev.Failed || !ev.Changed {
-		t.Fatalf("сквозной проход guard-ов: changed=%v failed=%v", ev.Changed, ev.Failed)
+		t.Fatalf("guard pass-through: changed=%v failed=%v", ev.Changed, ev.Failed)
 	}
 	if ev.Output.Fields["stdout"].GetStringValue() != "done" {
 		t.Fatalf("stdout=%q", ev.Output.Fields["stdout"].GetStringValue())
@@ -261,11 +261,11 @@ func TestApply_AllGuards_PassThrough_Runs(t *testing.T) {
 	// order: unless check before onlyif check, main command last
 	want := []string{"sh -c absent", "sh -c present", "do work"}
 	if len(r.Calls) != 3 {
-		t.Fatalf("ожидал 3 вызова %v, получил %v", want, r.Calls)
+		t.Fatalf("expected 3 calls %v, got %v", want, r.Calls)
 	}
 	for i := range want {
 		if r.Calls[i] != want[i] {
-			t.Fatalf("вызов[%d]=%q want %q (полный список %v)", i, r.Calls[i], want[i], r.Calls)
+			t.Fatalf("call[%d]=%q want %q (full list %v)", i, r.Calls[i], want[i], r.Calls)
 		}
 	}
 }
@@ -279,7 +279,7 @@ func TestApply_OutputCarriesStderr(t *testing.T) {
 
 	ev := apply(t, m, map[string]any{"cmd": "probe"})
 	if ev.Failed {
-		t.Fatal("non-zero exit не должен давать failed")
+		t.Fatal("non-zero exit should not produce failed")
 	}
 	if got := ev.Output.Fields["stderr"].GetStringValue(); got != "err-text" {
 		t.Fatalf("stderr=%q", got)
@@ -317,12 +317,12 @@ func TestApply_Production_RealArgv_NoShellExpansion(t *testing.T) {
 		})
 	}
 	if ev.Failed {
-		t.Fatalf("argv-запуск упал: msg=%q", ev.Message)
+		t.Fatalf("argv launch failed: msg=%q", ev.Message)
 	}
 	got := ev.Output.Fields["stdout"].GetStringValue()
 	// no shell was invoked → $HOME wasn't expanded, metacharacters stay literal.
 	if got != "$HOME|;>" && got != "$HOME|;>\n" {
-		t.Fatalf("ожидал литеральный вывод без shell-расширения, got=%q", got)
+		t.Fatalf("expected literal output without shell expansion, got=%q", got)
 	}
 	if ev.Output.Fields["exit_code"].GetNumberValue() != 0 {
 		t.Fatalf("exit_code=%v", ev.Output.Fields["exit_code"].GetNumberValue())
@@ -340,10 +340,10 @@ func TestApply_Production_RealFalse_NonZeroNotFailed(t *testing.T) {
 		ev = apply(t, m2, map[string]any{"cmd": "/bin/false"})
 	}
 	if ev.Failed {
-		t.Fatalf("non-zero exit не должен давать failed: msg=%q", ev.Message)
+		t.Fatalf("non-zero exit should not produce failed: msg=%q", ev.Message)
 	}
 	if !ev.Changed {
-		t.Fatal("запущенная команда должна быть changed")
+		t.Fatal("a run command should be changed")
 	}
 	if ev.Output.Fields["exit_code"].GetNumberValue() != 1 {
 		t.Fatalf("exit_code=%v want 1", ev.Output.Fields["exit_code"].GetNumberValue())
@@ -356,7 +356,7 @@ func TestApply_Production_BinaryNotFound_Failed(t *testing.T) {
 	m := exec.New()
 	ev := apply(t, m, map[string]any{"cmd": "/nonexistent/soul-stack/no-such-binary-zzz"})
 	if !ev.Failed {
-		t.Fatal("несуществующий бинарь должен давать failed")
+		t.Fatal("a nonexistent binary should produce failed")
 	}
 }
 
@@ -377,13 +377,13 @@ func TestApply_Production_Creates_RealStat_Skips(t *testing.T) {
 		"creates": marker,
 	})
 	if ev.Changed {
-		t.Fatal("существующий creates-файл должен дать skip")
+		t.Fatal("an existing creates file should skip")
 	}
 	if ev.Output.Fields["reason"].GetStringValue() != "creates" {
 		t.Fatalf("reason=%q", ev.Output.Fields["reason"].GetStringValue())
 	}
 	if _, err := os.Stat(out); !os.IsNotExist(err) {
-		t.Fatal("команда выполнилась несмотря на creates-skip")
+		t.Fatal("the command ran despite creates-skip")
 	}
 }
 
@@ -394,7 +394,7 @@ func TestApply_Production_Creates_RealStat_Skips(t *testing.T) {
 // doesn't happen under root — the test is then irrelevant and skipped.
 func TestApply_Production_Creates_StatPermissionError_Failed(t *testing.T) {
 	if os.Geteuid() == 0 {
-		t.Skip("под root permission denied не воспроизводится")
+		t.Skip("permission denied does not reproduce under root")
 	}
 	dir := t.TempDir()
 	locked := filepath.Join(dir, "locked")
@@ -413,7 +413,7 @@ func TestApply_Production_Creates_StatPermissionError_Failed(t *testing.T) {
 		"creates": target,
 	})
 	if !ev.Failed {
-		t.Fatalf("stat с permission denied должен давать failed, ev=%+v", ev)
+		t.Fatalf("stat with permission denied should produce failed, ev=%+v", ev)
 	}
 }
 
@@ -432,6 +432,6 @@ func TestApply_Production_Creates_Absent_Runs(t *testing.T) {
 		t.Fatalf("changed=%v failed=%v msg=%q", ev.Changed, ev.Failed, ev.Message)
 	}
 	if _, err := os.Stat(out); err != nil {
-		t.Fatalf("команда не создала файл: %v", err)
+		t.Fatalf("the command did not create the file: %v", err)
 	}
 }

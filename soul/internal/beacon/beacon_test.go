@@ -17,13 +17,13 @@ func TestDefaultRegistry(t *testing.T) {
 	canonical := beaconaddr.All()
 	for _, name := range canonical {
 		if _, ok := r.Lookup(name); !ok {
-			t.Errorf("Default-реестр не содержит канонический адрес %q", name)
+			t.Errorf("Default registry does not contain the canonical address %q", name)
 		}
 	}
 	if len(r.Names()) != len(canonical) {
-		t.Fatalf("soul-registry (%d) рассинхронен с beaconaddr.All (%d): %v", len(r.Names()), len(canonical), r.Names())
+		t.Fatalf("soul-registry (%d) is out of sync with beaconaddr.All (%d): %v", len(r.Names()), len(canonical), r.Names())
 	}
 	if _, ok := r.Lookup("core.beacon.nope"); ok {
-		t.Error("Lookup неизвестного beacon должен вернуть false")
+		t.Error("Lookup of an unknown beacon should return false")
 	}
 }

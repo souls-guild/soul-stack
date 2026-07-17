@@ -255,7 +255,7 @@ func TestHumaChoir_Create_BadChoirName_422_NoAudit(t *testing.T) {
 		t.Fatalf("status = %d, want 422 (bad choir_name); body=%s", rec.Code, rec.Body.String())
 	}
 	if len(auditCap.Events()) != 0 {
-		t.Errorf("audit записан on 422 — write-путь не toлжен писать")
+		t.Errorf("audit written on 422 - write path must not write")
 	}
 }
 
@@ -270,7 +270,7 @@ func TestHumaChoir_Create_RBACDeny_403_NoAudit(t *testing.T) {
 		t.Fatalf("status = %d, want 403; body=%s", rec.Code, rec.Body.String())
 	}
 	if len(auditCap.Events()) != 0 {
-		t.Errorf("audit записан on 403")
+		t.Errorf("audit written on 403")
 	}
 }
 
@@ -288,7 +288,7 @@ func TestHumaChoir_Create_GoldenWire(t *testing.T) {
 	// omitempty, parity legacy Choir). created_at is normalized (epoch-0 fix).
 	const golden = `{"choir_name":"primary","created_at":"1970-01-01T00:00:00Z","created_by_aid":"archon-alice","description":null,"incarnation_name":"redis-prod","max_size":null,"min_size":null}`
 	if got != golden {
-		t.Errorf("GOLDEN wire-дрейф choir create-reply:\n got  = %s\n want = %s\n(onбор ключей/null/$schema fromменился — проверь choirCreateOutput/toChoirDTO)", got, golden)
+		t.Errorf("GOLDEN wire drift choir create-reply:\n got  = %s\n want = %s\n(key set/null/$schema changed - check choirCreateOutput/toChoirDTO)", got, golden)
 	}
 }
 
@@ -318,7 +318,7 @@ func TestHumaChoir_Delete_NotFound_404_NoAudit(t *testing.T) {
 		t.Fatalf("status = %d, want 404; body=%s", rec.Code, rec.Body.String())
 	}
 	if len(auditCap.Events()) != 0 {
-		t.Errorf("audit записан on 404 delete")
+		t.Errorf("audit written on 404 delete")
 	}
 }
 
@@ -355,10 +355,10 @@ func TestHumaVoice_Add_NotMember_422_NoAudit(t *testing.T) {
 	r.ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusUnprocessableEntity {
-		t.Fatalf("status = %d, want 422 (SID не член); body=%s", rec.Code, rec.Body.String())
+		t.Fatalf("status = %d, want 422 (SID not a member); body=%s", rec.Code, rec.Body.String())
 	}
 	if len(auditCap.Events()) != 0 {
-		t.Errorf("audit записан on 422 add-voice")
+		t.Errorf("audit written on 422 add-voice")
 	}
 }
 
@@ -388,7 +388,7 @@ func TestHumaVoice_Remove_NotFound_404_NoAudit(t *testing.T) {
 		t.Fatalf("status = %d, want 404; body=%s", rec.Code, rec.Body.String())
 	}
 	if len(auditCap.Events()) != 0 {
-		t.Errorf("audit записан on 404 remove-voice")
+		t.Errorf("audit written on 404 remove-voice")
 	}
 }
 
@@ -411,10 +411,10 @@ func TestHumaChoir_List_Read_NoAudit(t *testing.T) {
 		t.Fatalf("unmarshal: %v; body=%s", err, rec.Body.String())
 	}
 	if reply.Items == nil {
-		t.Error("items toлжен быть [] (non-nil), а не null")
+		t.Error("items must be [] (non-nil), not null")
 	}
 	if len(auditCap.Events()) != 0 {
-		t.Errorf("READ list записал audit (%d withбытий) — read не toлжен писать", len(auditCap.Events()))
+		t.Errorf("READ list wrote audit (%d events) - read must not write", len(auditCap.Events()))
 	}
 }
 
@@ -429,6 +429,6 @@ func TestHumaVoice_List_Read_NoAudit(t *testing.T) {
 		t.Fatalf("status = %d, want 200; body=%s", rec.Code, rec.Body.String())
 	}
 	if len(auditCap.Events()) != 0 {
-		t.Errorf("READ list-voices записал audit")
+		t.Errorf("READ list-voices wrote audit")
 	}
 }

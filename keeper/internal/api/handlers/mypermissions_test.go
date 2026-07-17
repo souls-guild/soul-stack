@@ -33,13 +33,13 @@ func TestMyPermissions_Self_OK(t *testing.T) {
 
 	resp := h.GetTyped("archon-alice")
 	if len(resp.Permissions) != 2 {
-		t.Fatalf("ожидали 2 права, получили %d: %+v", len(resp.Permissions), resp.Permissions)
+		t.Fatalf("expected 2 permissions, got %d: %+v", len(resp.Permissions), resp.Permissions)
 	}
 	if _, ok := findMyPermission(resp.Permissions, "incarnation", "run"); !ok {
-		t.Errorf("incarnation.run отсутствует: %+v", resp.Permissions)
+		t.Errorf("incarnation.run missing: %+v", resp.Permissions)
 	}
 	if _, ok := findMyPermission(resp.Permissions, "soul", "list"); !ok {
-		t.Errorf("soul.list отсутствует: %+v", resp.Permissions)
+		t.Errorf("soul.list missing: %+v", resp.Permissions)
 	}
 }
 
@@ -51,7 +51,7 @@ func TestMyPermissions_Wildcard(t *testing.T) {
 
 	resp := h.GetTyped("archon-root")
 	if len(resp.Permissions) != 1 || !resp.Permissions[0].Wildcard {
-		t.Fatalf("cluster-admin: ожидали один wildcard-маркер, получили %+v", resp.Permissions)
+		t.Fatalf("cluster-admin: expected a single wildcard marker, got %+v", resp.Permissions)
 	}
 }
 
@@ -72,13 +72,13 @@ func TestMyPermissions_StateScope(t *testing.T) {
 	resp := h.GetTyped("archon-state")
 	p, ok := findMyPermission(resp.Permissions, "incarnation", "run")
 	if !ok || p.Scope == nil {
-		t.Fatalf("incarnation.run без scope: %+v", resp.Permissions)
+		t.Fatalf("incarnation.run without scope: %+v", resp.Permissions)
 	}
 	if len(p.Scope.State) != 1 || p.Scope.State[0] != `state.redis_version == "8.0"` {
-		t.Errorf("scope.State = %v, ожидали один state-предикат", p.Scope.State)
+		t.Errorf("scope.State = %v, expected a single state predicate", p.Scope.State)
 	}
 	if p.Scope.Unrestricted {
-		t.Errorf("scope с state-селектором не должен быть unrestricted: %+v", p.Scope)
+		t.Errorf("scope with a state selector must not be unrestricted: %+v", p.Scope)
 	}
 }
 
@@ -95,15 +95,15 @@ func TestMyPermissions_ScopeIncluded(t *testing.T) {
 	resp := h.GetTyped("archon-prod")
 	p, ok := findMyPermission(resp.Permissions, "incarnation", "run")
 	if !ok {
-		t.Fatalf("incarnation.run отсутствует: %+v", resp.Permissions)
+		t.Fatalf("incarnation.run missing: %+v", resp.Permissions)
 	}
 	if p.Scope == nil {
-		t.Fatalf("scope не собран, ожидали covens=[prod]: %+v", p)
+		t.Fatalf("scope not assembled, expected covens=[prod]: %+v", p)
 	}
 	if p.Scope.Unrestricted {
-		t.Errorf("scope с coven=prod не должен быть unrestricted: %+v", p.Scope)
+		t.Errorf("scope with coven=prod must not be unrestricted: %+v", p.Scope)
 	}
 	if len(p.Scope.Covens) != 1 || p.Scope.Covens[0] != "prod" {
-		t.Errorf("Covens = %v, ожидали [prod]", p.Scope.Covens)
+		t.Errorf("Covens = %v, expected [prod]", p.Scope.Covens)
 	}
 }

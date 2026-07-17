@@ -246,7 +246,7 @@ func TestIntegration_SerialStaged_RollingPerPassage(t *testing.T) {
 	// Passage 0 (probe, NO serial): ONE wave — all three hosts (ordered by SID).
 	p0 := disp.passageEvents(0)
 	if len(p0) != 3 {
-		t.Fatalf("Passage 0 events = %v, want 3 хоста в одной волне (probe без serial)", p0)
+		t.Fatalf("Passage 0 events = %v, want 3 hosts in one wave (probe without serial)", p0)
 	}
 
 	// Passage 1 (serial:1): three hosts SEQUENTIALLY (3 waves of 1). Ordered by
@@ -254,11 +254,11 @@ func TestIntegration_SerialStaged_RollingPerPassage(t *testing.T) {
 	p1 := disp.passageEvents(1)
 	wantP1 := []string{"host-a.example.com", "host-b.example.com", "host-c.example.com"}
 	if len(p1) != 3 {
-		t.Fatalf("Passage 1 events = %v, want 3 волны по 1 хосту (serial:1)", p1)
+		t.Fatalf("Passage 1 events = %v, want 3 waves of 1 host (serial:1)", p1)
 	}
 	for i := range wantP1 {
 		if p1[i] != wantP1[i] {
-			t.Errorf("Passage 1 wave[%d] = %q, want %q (serial:1 rolling по SID)", i, p1[i], wantP1[i])
+			t.Errorf("Passage 1 wave[%d] = %q, want %q (serial:1 rolling by SID)", i, p1[i], wantP1[i])
 		}
 	}
 
@@ -266,14 +266,14 @@ func TestIntegration_SerialStaged_RollingPerPassage(t *testing.T) {
 	// 0's events (the probe wave fully cleared its barrier before the
 	// action's first serial wave).
 	if first1, last0 := disp.firstPassageEvent(1), disp.lastPassageEvent(0); first1 <= last0 {
-		t.Fatalf("★ Passage 1 первый SendApply (idx %d) НЕ после последнего события Passage 0 (idx %d) — barrier Passage 0 не дождался полной волны", first1, last0)
+		t.Fatalf("* Passage 1 first SendApply (idx %d) NOT after Passage 0 last event (idx %d) - Passage 0 barrier did not wait for the full wave", first1, last0)
 	}
 
 	// apply_runs: every host has passage 0 + passage 1, all success.
 	got := passagesBySID(t, applyID, applyrun.StatusSuccess)
 	for _, sid := range wantP1 {
 		if len(got[sid]) != 2 {
-			t.Errorf("%s passages = %v, want [0 1] (probe + serial-действие)", sid, got[sid])
+			t.Errorf("%s passages = %v, want [0 1] (probe + serial action)", sid, got[sid])
 		}
 	}
 }
@@ -331,7 +331,7 @@ func TestIntegration_SerialStaged_ProbeNotThrottled(t *testing.T) {
 	last0 := disp.lastPassageEvent(0)
 	first1 := disp.firstPassageEvent(1)
 	if first1 <= last0 {
-		t.Fatalf("★ probe Passage 0 (последнее событие idx %d) пересёкся с Passage 1 (первое idx %d) — barrier некорректен", last0, first1)
+		t.Fatalf("* probe Passage 0 (last event idx %d) overlapped with Passage 1 (first idx %d) - barrier is incorrect", last0, first1)
 	}
 
 	// The decisive reversal assert (width Passage 0 = 0) is checked on a pure
@@ -346,7 +346,7 @@ func TestIntegration_SerialStaged_ProbeNotThrottled(t *testing.T) {
 	// (above), plus Passage 0's host count = 3 in one group.
 	p0 := disp.passageEvents(0)
 	if len(p0) != 3 {
-		t.Fatalf("★ Passage 0 events = %v, want 3 хоста (probe одной волной, per-passage width=0)", p0)
+		t.Fatalf("* Passage 0 events = %v, want 3 hosts (probe in one wave, per-passage width=0)", p0)
 	}
 
 	// apply_runs: all hosts have passage 0 + passage 1 success.
@@ -400,7 +400,7 @@ func TestIntegration_SerialStaged_FailStopInWave(t *testing.T) {
 
 	inc := waitRunDone(t, "redis-prod", applyID, incarnation.StatusErrorLocked)
 	if inc.StatusDetails["reason"] != "dispatch_failed" {
-		t.Errorf("reason = %v, want dispatch_failed (serial-волна fail-stop)", inc.StatusDetails["reason"])
+		t.Errorf("reason = %v, want dispatch_failed (serial wave fail-stop)", inc.StatusDetails["reason"])
 	}
 
 	// ★ Passage 1: host-a (wave 1) + host-b (wave 2, failed) dispatched; host-c
@@ -408,7 +408,7 @@ func TestIntegration_SerialStaged_FailStopInWave(t *testing.T) {
 	p1 := disp.passageEvents(1)
 	wantDispatched := []string{"host-a.example.com", "host-b.example.com"}
 	if len(p1) != 2 {
-		t.Fatalf("★ Passage 1 events = %v, want [host-a host-b] (host-c не диспатчен — fail-stop на host-b)", p1)
+		t.Fatalf("* Passage 1 events = %v, want [host-a host-b] (host-c not dispatched - fail-stop on host-b)", p1)
 	}
 	for i := range wantDispatched {
 		if p1[i] != wantDispatched[i] {
@@ -416,12 +416,12 @@ func TestIntegration_SerialStaged_FailStopInWave(t *testing.T) {
 		}
 	}
 	if got := disp.passageEvents(1); contains(got, "host-c.example.com") {
-		t.Fatalf("★ host-c получил Passage-1 ApplyRequest (%v) — следующая волна стартовала после fail-stop", got)
+		t.Fatalf("* host-c received a Passage-1 ApplyRequest (%v) - the next wave started after fail-stop", got)
 	}
 
 	// ★ state NOT committed (last known-good): incarnation.state is unchanged.
 	if len(inc.State) != len(incBefore.State) {
-		t.Errorf("★ state изменён при fail-stop: before=%v after=%v (commit обязан быть пропущен)", incBefore.State, inc.State)
+		t.Errorf("* state changed on fail-stop: before=%v after=%v (commit must be skipped)", incBefore.State, inc.State)
 	}
 }
 
@@ -467,7 +467,7 @@ func TestIntegration_SerialStaged_RegisterAcrossWaves(t *testing.T) {
 
 	// Passage 0: all three hosts (probe has no where).
 	if p0 := disp.passageEvents(0); len(p0) != 3 {
-		t.Errorf("Passage 0 events = %v, want 3 хоста", p0)
+		t.Errorf("Passage 0 events = %v, want 3 hosts", p0)
 	}
 
 	// ★ Passage 1: ONLY the slave hosts {host-b, host-c}, one at a time
@@ -477,7 +477,7 @@ func TestIntegration_SerialStaged_RegisterAcrossWaves(t *testing.T) {
 	p1 := disp.passageEvents(1)
 	want := []string{"host-b.example.com", "host-c.example.com"}
 	if len(p1) != 2 {
-		t.Fatalf("★ Passage 1 events = %v, want [host-b host-c] (master исключён where, slave резолвнуты register)", p1)
+		t.Fatalf("* Passage 1 events = %v, want [host-b host-c] (master excluded by where, slaves resolved via register)", p1)
 	}
 	for i := range want {
 		if p1[i] != want[i] {
@@ -485,14 +485,14 @@ func TestIntegration_SerialStaged_RegisterAcrossWaves(t *testing.T) {
 		}
 	}
 	if contains(p1, "host-a.example.com") {
-		t.Fatalf("★ host-a (master) получил Passage-1 ApplyRequest (%v) — where role==slave не резолвнулся по register Passage 0", p1)
+		t.Fatalf("* host-a (master) received a Passage-1 ApplyRequest (%v) - where role==slave did not resolve via Passage 0 register", p1)
 	}
 
 	// apply_runs: host-a — only passage 0 (probe; Passage 1 didn't target
 	// it); host-b/host-c — passage 0 + passage 1.
 	got := passagesBySID(t, applyID, applyrun.StatusSuccess)
 	if len(got["host-a.example.com"]) != 1 || got["host-a.example.com"][0] != 0 {
-		t.Errorf("host-a passages = %v, want [0] (master не таргетился Passage 1)", got["host-a.example.com"])
+		t.Errorf("host-a passages = %v, want [0] (master not targeted by Passage 1)", got["host-a.example.com"])
 	}
 	for _, sid := range want {
 		if len(got[sid]) != 2 {

@@ -34,8 +34,8 @@ type synodCreateInput struct {
 // CreateTyped (422/409). Struct name = the contract schema name in OpenAPI
 // (committed manuscript → SynodCreateRequest).
 type SynodCreateRequest struct {
-	Name        string  `json:"name" required:"true" pattern:"^[a-z][a-z0-9-]*$" doc:"Synod group name (kebab-case), уникальbutе в кластере"`
-	Description *string `json:"description,omitempty" maxLength:"1024" doc:"человекочитаемое описание группы for UI/аудита"`
+	Name        string  `json:"name" required:"true" pattern:"^[a-z][a-z0-9-]*$" doc:"Synod group name (kebab-case), unique cluster-wide"`
+	Description *string `json:"description,omitempty" maxLength:"1024" doc:"human-readable group description for UI/audit"`
 }
 
 // synodCreateOutput — huma-output POST /v1/synods (FULL-TYPED). Status=201; NO Body
@@ -54,8 +54,8 @@ func synodCreateOperation() huma.Operation {
 		OperationID:   "createSynod",
 		Method:        http.MethodPost,
 		Path:          "/",
-		Summary:       "Создать Synod-группу",
-		Description:   "Заbutсит Synod-группу (группа архоbutв, bundle ролей) в реестр (ADR-049). Permission synod.create. 409 — name занят.",
+		Summary:       "Create a Synod group",
+		Description:   "Registers a Synod group (a group of archons, a role bundle) in the registry (ADR-049). Permission synod.create. 409 - name taken.",
 		Tags:          []string{"synod"},
 		DefaultStatus: http.StatusCreated,
 		Errors:        []int{http.StatusBadRequest, http.StatusForbidden, http.StatusConflict, http.StatusUnprocessableEntity, http.StatusInternalServerError},
@@ -83,8 +83,8 @@ func synodListOperation() huma.Operation {
 		OperationID:   "listSynods",
 		Method:        http.MethodGet,
 		Path:          "/",
-		Summary:       "Спиwithк Synod-групп",
-		Description:   "Каталог Synod-групп с bundle ролей и withставом члеbutв (ADR-049). Permission synod.list. Read-only, no audit.",
+		Summary:       "List Synod groups",
+		Description:   "Catalog of Synod groups with role bundle and member roster (ADR-049). Permission synod.list. Read-only, no audit.",
 		Tags:          []string{"synod"},
 		DefaultStatus: http.StatusOK,
 		Errors:        []int{http.StatusForbidden, http.StatusInternalServerError},
@@ -106,7 +106,7 @@ type synodUpdateInput struct {
 // (domain validation in UpdateTyped). Struct name = the contract schema name in
 // OpenAPI (committed manuscript → SynodUpdateRequest).
 type SynodUpdateRequest struct {
-	Description string `json:"description" required:"true" minLength:"1" maxLength:"1024" doc:"butвое человекочитаемое описание группы for UI/аудита"`
+	Description string `json:"description" required:"true" minLength:"1" maxLength:"1024" doc:"new human-readable group description for UI/audit"`
 }
 
 // synodNoContentOutput — the shared huma-output for synod's 204 write routes
@@ -125,8 +125,8 @@ func synodUpdateOperation() huma.Operation {
 		OperationID:   "updateSynod",
 		Method:        http.MethodPatch,
 		Path:          "/{name}",
-		Summary:       "Обbutвить описание Synod-группы",
-		Description:   "Меняет ТОЛЬКО description (name immutable, ADR-049 amend). Permission synod.update. 404 — записи absent.",
+		Summary:       "Update a Synod group description",
+		Description:   "Changes ONLY the description (name immutable, ADR-049 amend). Permission synod.update. 404 - entry absent.",
 		Tags:          []string{"synod"},
 		DefaultStatus: http.StatusNoContent,
 		Errors:        []int{http.StatusBadRequest, http.StatusForbidden, http.StatusNotFound, http.StatusUnprocessableEntity, http.StatusInternalServerError},
@@ -148,8 +148,8 @@ func synodDeleteOperation() huma.Operation {
 		OperationID:   "deleteSynod",
 		Method:        http.MethodDelete,
 		Path:          "/{name}",
-		Summary:       "Удалить Synod-группу",
-		Description:   "Удаляет Synod каскадbut (membership + bundle, ADR-049). Permission synod.delete. 409 — builtin/last-admin lock-out.",
+		Summary:       "Delete a Synod group",
+		Description:   "Deletes the Synod cascadingly (membership + bundle, ADR-049). Permission synod.delete. 409 - builtin/last-admin lock-out.",
 		Tags:          []string{"synod"},
 		DefaultStatus: http.StatusNoContent,
 		Errors:        []int{http.StatusForbidden, http.StatusNotFound, http.StatusConflict, http.StatusInternalServerError},
@@ -176,8 +176,8 @@ func synodAddOperatorOperation() huma.Operation {
 		OperationID:   "addSynodOperator",
 		Method:        http.MethodPost,
 		Path:          "/{name}/operators",
-		Summary:       "Добавить архонта в Synod-группу",
-		Description:   "Член получает весь bundle ролей группы (ADR-049). Идемпотентbut. Permission synod.add-operator. 403 — least-privilege.",
+		Summary:       "Add an archon to a Synod group",
+		Description:   "The member receives the group's full role bundle (ADR-049). Idempotent. Permission synod.add-operator. 403 - least-privilege.",
 		Tags:          []string{"synod"},
 		DefaultStatus: http.StatusNoContent,
 		Errors:        []int{http.StatusBadRequest, http.StatusForbidden, http.StatusNotFound, http.StatusUnprocessableEntity, http.StatusInternalServerError},
@@ -190,7 +190,7 @@ func synodAddOperatorOperation() huma.Operation {
 // Both parameters are path. No Body.
 type synodRemoveOperatorInput struct {
 	Name string `path:"name" doc:"Synod group name"`
-	AID  string `path:"aid" doc:"AID архонта-члеon группы"`
+	AID  string `path:"aid" doc:"AID of the group member archon"`
 }
 
 // synodRemoveOperatorOperation — metadata for DELETE /v1/synods/{name}/operators/
@@ -202,8 +202,8 @@ func synodRemoveOperatorOperation() huma.Operation {
 		OperationID:   "removeSynodOperator",
 		Method:        http.MethodDelete,
 		Path:          "/{name}/operators/{aid}",
-		Summary:       "Убрать архонта from Synod-группы",
-		Description:   "Снимает membership-строку (name, aid). Permission synod.remove-operator. 409 — last-admin lock-out.",
+		Summary:       "Remove an archon from a Synod group",
+		Description:   "Removes the membership row (name, aid). Permission synod.remove-operator. 409 - last-admin lock-out.",
 		Tags:          []string{"synod"},
 		DefaultStatus: http.StatusNoContent,
 		Errors:        []int{http.StatusForbidden, http.StatusNotFound, http.StatusConflict, http.StatusUnprocessableEntity, http.StatusInternalServerError},
@@ -224,7 +224,7 @@ type synodGrantRoleInput struct {
 // required:"true" in the schema; empty → domain validation in GrantRoleTyped (422).
 // Struct name = the contract schema name in OpenAPI (committed manuscript → SynodGrantRoleRequest).
 type SynodGrantRoleRequest struct {
-	Role string `json:"role" required:"true" doc:"имя роли, toбавляемой в bundle группы"`
+	Role string `json:"role" required:"true" doc:"name of the role being added to the group bundle"`
 }
 
 // synodGrantRoleOperation — metadata for POST /v1/synods/{name}/roles.
@@ -236,8 +236,8 @@ func synodGrantRoleOperation() huma.Operation {
 		OperationID:   "grantSynodRole",
 		Method:        http.MethodPost,
 		Path:          "/{name}/roles",
-		Summary:       "Добавить роль в bundle Synod-группы",
-		Description:   "Все члены группы получают эффективные права роли (ADR-049). Идемпотентbut. Permission synod.grant-role. 403 — least-privilege.",
+		Summary:       "Add a role to a Synod group bundle",
+		Description:   "All group members receive the role's effective permissions (ADR-049). Idempotent. Permission synod.grant-role. 403 - least-privilege.",
 		Tags:          []string{"synod"},
 		DefaultStatus: http.StatusNoContent,
 		Errors:        []int{http.StatusBadRequest, http.StatusForbidden, http.StatusNotFound, http.StatusUnprocessableEntity, http.StatusInternalServerError},
@@ -250,7 +250,7 @@ func synodGrantRoleOperation() huma.Operation {
 // Both parameters are path. No Body.
 type synodRevokeRoleInput struct {
 	Name string `path:"name" doc:"Synod group name"`
-	Role string `path:"role_name" doc:"имя роли в bundle группы"`
+	Role string `path:"role_name" doc:"role name in the group bundle"`
 }
 
 // synodRevokeRoleOperation — metadata for DELETE /v1/synods/{name}/roles/{role_name}.
@@ -261,8 +261,8 @@ func synodRevokeRoleOperation() huma.Operation {
 		OperationID:   "revokeSynodRole",
 		Method:        http.MethodDelete,
 		Path:          "/{name}/roles/{role_name}",
-		Summary:       "Снять роль from bundle Synod-группы",
-		Description:   "Права роли снимаются у всех члеbutв группы (ADR-049). Permission synod.revoke-role. 409 — last-admin lock-out.",
+		Summary:       "Remove a role from a Synod group bundle",
+		Description:   "The role's permissions are revoked from all group members (ADR-049). Permission synod.revoke-role. 409 - last-admin lock-out.",
 		Tags:          []string{"synod"},
 		DefaultStatus: http.StatusNoContent,
 		Errors:        []int{http.StatusForbidden, http.StatusNotFound, http.StatusConflict, http.StatusInternalServerError},

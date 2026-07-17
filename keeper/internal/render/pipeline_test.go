@@ -147,7 +147,7 @@ func TestRender_PropagatesTimeout(t *testing.T) {
 		t.Errorf("tasks[0].Timeout = %q, want 30s", tasks[0].Timeout)
 	}
 	if tasks[1].Timeout != "" {
-		t.Errorf("tasks[1].Timeout = %q, want \"\" (timeout не задан)", tasks[1].Timeout)
+		t.Errorf("tasks[1].Timeout = %q, want \"\" (timeout not set)", tasks[1].Timeout)
 	}
 }
 
@@ -245,7 +245,7 @@ func TestRender_OnCovenFilter_MultiLabelAND(t *testing.T) {
 	}
 	got := plans[0].TargetSIDs
 	if len(got) != 1 || got[0] != "prod-eu" {
-		t.Errorf("TargetSIDs = %v, want [prod-eu] (AND-пересечение prod ∩ eu)", got)
+		t.Errorf("TargetSIDs = %v, want [prod-eu] (AND intersection prod n eu)", got)
 	}
 }
 
@@ -276,7 +276,7 @@ func TestRender_OnCovenFilter_MultiLabelAND_NoMatch(t *testing.T) {
 		t.Fatalf("Render: %v", err)
 	}
 	if len(plans[0].TargetSIDs) != 0 {
-		t.Errorf("TargetSIDs = %v, want [] (ни один хост не несёт обе метки)", plans[0].TargetSIDs)
+		t.Errorf("TargetSIDs = %v, want [] (no host carries both labels)", plans[0].TargetSIDs)
 	}
 }
 
@@ -378,7 +378,7 @@ func TestRender_CELVaultResolvesRealValue(t *testing.T) {
 	env := tasks[0].Params.GetFields()["env"].GetStructValue()
 	got := env.GetFields()["REDIS_PASSWORD"].GetStringValue()
 	if got != "real-s3cr3t" {
-		t.Fatalf("params.env.REDIS_PASSWORD = %q, want реальное значение секрета real-s3cr3t (CEL vault() резолвлен keeper-side)", got)
+		t.Fatalf("params.env.REDIS_PASSWORD = %q, want the real secret value real-s3cr3t (CEL vault() resolved keeper-side)", got)
 	}
 }
 
@@ -413,13 +413,13 @@ func TestRender_CELVaultMissingSecret_ActionablePath(t *testing.T) {
 	}
 	_, _, err := p.Render(context.Background(), in)
 	if err == nil {
-		t.Fatal("Render: ожидалась ошибка отсутствующего секрета")
+		t.Fatal("Render: expected an error for a missing secret")
 	}
 	if !strings.Contains(err.Error(), "secret/redis/admin") {
-		t.Fatalf("текст ошибки не несёт путь секрета (actionable): %q", err.Error())
+		t.Fatalf("error text does not carry the secret path (actionable): %q", err.Error())
 	}
 	if strings.Contains(err.Error(), "vault:secret/redis/admin") {
-		t.Fatalf("текст ошибки несёт vault:-ref-форму (маскинг съест целиком): %q", err.Error())
+		t.Fatalf("error text carries the vault:-ref form (masking would eat it whole): %q", err.Error())
 	}
 	// Same masking as status_details/error_summary in lockIncarnation, with a
 	// seal set carrying the run's real sealed cell (env.REDIS_PASSWORD).
@@ -430,10 +430,10 @@ func TestRender_CELVaultMissingSecret_ActionablePath(t *testing.T) {
 	)
 	got, _ := masked["error"].(string)
 	if got == "***MASKED***" {
-		t.Fatalf("actionable-ошибка замаскирована целиком: %q", got)
+		t.Fatalf("actionable error was masked entirely: %q", got)
 	}
 	if !strings.Contains(got, "secret/redis/admin") {
-		t.Fatalf("путь секрета пропал после маскинга: %q", got)
+		t.Fatalf("secret path disappeared after masking: %q", got)
 	}
 }
 
@@ -458,7 +458,7 @@ func TestRender_HostVariantParams_Error(t *testing.T) {
 	}
 	_, _, err := p.Render(context.Background(), in)
 	if err == nil {
-		t.Fatal("Render: ожидалась ошибка host-вариативных params, got nil")
+		t.Fatal("Render: expected an error for host-variant params, got nil")
 	}
 }
 
@@ -498,10 +498,10 @@ func TestRender_FlowControlSoulprintMultiHost_Error(t *testing.T) {
 			}
 			_, _, err := p.Render(context.Background(), in)
 			if err == nil {
-				t.Fatalf("Render: ожидалась ошибка host-вариативного %s на multi-host", name)
+				t.Fatalf("Render: expected an error for host-variant %s on multi-host", name)
 			}
-			if !strings.Contains(err.Error(), "per-host dispatch отложен") {
-				t.Errorf("текст ошибки не про горизонт pilot: %q", err.Error())
+			if !strings.Contains(err.Error(), "per-host dispatch deferred") {
+				t.Errorf("error text is not about the pilot horizon: %q", err.Error())
 			}
 		})
 	}
@@ -529,10 +529,10 @@ func TestRender_FlowControlSoulprintSingleHost_OK(t *testing.T) {
 	}
 	tasks, _, err := p.Render(context.Background(), in)
 	if err != nil {
-		t.Fatalf("Render: single-host soulprint.self в when: должен проходить, got %v", err)
+		t.Fatalf("Render: single-host soulprint.self in when: should pass, got %v", err)
 	}
 	if tasks[0].When != "soulprint.self.os.family == 'debian'" {
-		t.Errorf("When = %q, want протянутый as-is предикат", tasks[0].When)
+		t.Errorf("When = %q, want the predicate passed through as-is", tasks[0].When)
 	}
 }
 
@@ -561,10 +561,10 @@ func TestRender_FlowControlHostInvariantMultiHost_OK(t *testing.T) {
 	}
 	tasks, _, err := p.Render(context.Background(), in)
 	if err != nil {
-		t.Fatalf("Render: host-инвариантный when: на multi-host должен проходить, got %v", err)
+		t.Fatalf("Render: host-invariant when: on multi-host should pass, got %v", err)
 	}
 	if tasks[0].When != "register.probe.changed" {
-		t.Errorf("When = %q, want протянутый as-is предикат", tasks[0].When)
+		t.Errorf("When = %q, want the predicate passed through as-is", tasks[0].When)
 	}
 }
 
@@ -596,13 +596,13 @@ func TestRender_FlowContextVarsLaundering_Error(t *testing.T) {
 	}
 	_, _, err := p.Render(context.Background(), in)
 	if err == nil {
-		t.Fatal("Render: ожидалась fail-closed ошибка vars-laundering, got nil")
+		t.Fatal("Render: expected a fail-closed vars-laundering error, got nil")
 	}
-	if !strings.Contains(err.Error(), "host-вариативный flow_context") {
-		t.Errorf("текст ошибки не про vars-laundering flow_context: %q", err.Error())
+	if !strings.Contains(err.Error(), "host-variant flow_context") {
+		t.Errorf("error text is not about vars-laundering flow_context: %q", err.Error())
 	}
-	if !strings.Contains(err.Error(), "per-host dispatch отложен") {
-		t.Errorf("текст ошибки не про горизонт pilot: %q", err.Error())
+	if !strings.Contains(err.Error(), "per-host dispatch deferred") {
+		t.Errorf("error text is not about the pilot horizon: %q", err.Error())
 	}
 }
 
@@ -633,10 +633,10 @@ func TestRender_FlowContextHostInvariantVars_OK(t *testing.T) {
 	}
 	tasks, _, err := p.Render(context.Background(), in)
 	if err != nil {
-		t.Fatalf("Render: host-инвариантный vars + when: на multi-host должен проходить, got %v", err)
+		t.Fatalf("Render: host-invariant vars + when: on multi-host should pass, got %v", err)
 	}
 	if tasks[0].When != "vars.x" {
-		t.Errorf("When = %q, want протянутый as-is предикат", tasks[0].When)
+		t.Errorf("When = %q, want the predicate passed through as-is", tasks[0].When)
 	}
 }
 
@@ -680,15 +680,15 @@ func TestRender_RenderedWithFlowControlHostInvariantVars_OK(t *testing.T) {
 	}
 	tasks, _, err := p.Render(context.Background(), in)
 	if err != nil {
-		t.Fatalf("Render: rendered + host-инвариантный vars + when на multi-host должен проходить, got %v", err)
+		t.Fatalf("Render: rendered + host-invariant vars + when on multi-host should pass, got %v", err)
 	}
 	// flow_context.vars must not include render_context — otherwise the check would fail
 	// on host-variant self. Since Render succeeded, the guard didn't false-trigger.
 	if tasks[0].When != "vars.enabled" {
-		t.Errorf("When = %q, want протянутый as-is предикат", tasks[0].When)
+		t.Errorf("When = %q, want the predicate passed through as-is", tasks[0].When)
 	}
 	if _, ok := tasks[0].FlowContext.GetFields()["render_context"]; ok {
-		t.Error("flow_context не должен содержать render_context (он живёт в params)")
+		t.Error("flow_context should not contain render_context (it lives in params)")
 	}
 }
 
@@ -720,13 +720,13 @@ func TestRender_HostVariantVarsNoFlowControl_FailsOnParams(t *testing.T) {
 	}
 	_, _, err := p.Render(context.Background(), in)
 	if err == nil {
-		t.Fatal("Render: ожидалась ошибка host-зависимых params, got nil")
+		t.Fatal("Render: expected an error for host-dependent params, got nil")
 	}
-	if !strings.Contains(err.Error(), "host-зависимые params") {
-		t.Errorf("ошибка не от paramsHostInvariant (гейт перехватил чужую?): %q", err.Error())
+	if !strings.Contains(err.Error(), "host-dependent params") {
+		t.Errorf("error is not from paramsHostInvariant (did the gate catch someone else's?): %q", err.Error())
 	}
 	if strings.Contains(err.Error(), "flow_context") {
-		t.Errorf("второй контур ошибочно сработал без flow-control-предиката: %q", err.Error())
+		t.Errorf("the second circuit fired incorrectly without a flow-control predicate: %q", err.Error())
 	}
 }
 
@@ -753,10 +753,10 @@ func TestRender_FlowContextVarsLaunderingSingleHost_OK(t *testing.T) {
 	}
 	tasks, _, err := p.Render(context.Background(), in)
 	if err != nil {
-		t.Fatalf("Render: single-host host-вариативный vars + when: должен проходить, got %v", err)
+		t.Fatalf("Render: single-host host-variant vars + when: should pass, got %v", err)
 	}
 	if tasks[0].When != "vars.is_debian" {
-		t.Errorf("When = %q, want протянутый as-is предикат", tasks[0].When)
+		t.Errorf("When = %q, want the predicate passed through as-is", tasks[0].When)
 	}
 }
 
@@ -787,10 +787,10 @@ func TestRender_FlowContextVarsLaunderingChangedWhen_Error(t *testing.T) {
 	}
 	_, _, err := p.Render(context.Background(), in)
 	if err == nil {
-		t.Fatal("Render: ожидалась fail-closed ошибка vars-laundering в changed_when, got nil")
+		t.Fatal("Render: expected a fail-closed vars-laundering error in changed_when, got nil")
 	}
-	if !strings.Contains(err.Error(), "host-вариативный flow_context") {
-		t.Errorf("текст ошибки не про vars-laundering flow_context: %q", err.Error())
+	if !strings.Contains(err.Error(), "host-variant flow_context") {
+		t.Errorf("error text is not about vars-laundering flow_context: %q", err.Error())
 	}
 }
 
@@ -876,7 +876,7 @@ func TestRender_OnKeeper_KeeperTarget(t *testing.T) {
 	}
 	sid := tasks[0].Params.GetFields()["sid"].GetStringValue()
 	if sid != "node-1.example.com" {
-		t.Fatalf("params.sid = %q, want node-1.example.com (keeper-контекст input)", sid)
+		t.Fatalf("params.sid = %q, want node-1.example.com (keeper-context input)", sid)
 	}
 }
 
@@ -898,7 +898,7 @@ func TestRender_OnKeeper_SoulprintUnavailable(t *testing.T) {
 		Hosts:       []*topology.HostFacts{host("a", []string{"svc"}, nil)},
 	}
 	if _, _, err := p.Render(context.Background(), in); err == nil {
-		t.Fatalf("Render: err = nil, want CEL-ошибка (soulprint недоступен в keeper-задаче)")
+		t.Fatalf("Render: err = nil, want a CEL error (soulprint unavailable in a keeper task)")
 	}
 }
 
@@ -930,7 +930,7 @@ func TestRender_OnKeeper_StateReadable(t *testing.T) {
 	}
 	got := tasks[0].Params.GetFields()["vm_id"].GetStringValue()
 	if got != "vm-42" {
-		t.Fatalf("params.vm_id = %q, want vm-42 (keeper-задача видит incarnation.state)", got)
+		t.Fatalf("params.vm_id = %q, want vm-42 (a keeper task sees incarnation.state)", got)
 	}
 }
 
@@ -953,7 +953,7 @@ func TestRender_OnKeeper_StateNilNoSuchKey(t *testing.T) {
 		Hosts:       []*topology.HostFacts{host("a", []string{"svc"}, nil)},
 	}
 	if _, _, err := p.Render(context.Background(), in); err == nil {
-		t.Fatalf("Render: err = nil, want no-such-key (incarnation.state без State)")
+		t.Fatalf("Render: err = nil, want no-such-key (incarnation.state without State)")
 	}
 }
 
@@ -1001,7 +1001,7 @@ func TestRender_WhereNonBool_Error(t *testing.T) {
 	}
 	_, _, err := p.Render(context.Background(), in)
 	if err == nil {
-		t.Fatal("Render: ожидалась ошибка non-bool where")
+		t.Fatal("Render: expected a non-bool where error")
 	}
 }
 
@@ -1134,7 +1134,7 @@ func TestRenderStateChanges_RegisterFromHost(t *testing.T) {
 		t.Fatalf("RenderStateChanges: %v", err)
 	}
 	if got["x"] != "hello" {
-		t.Errorf("sets.x = %v, want \"hello\" (из register.probe.stdout)", got["x"])
+		t.Errorf("sets.x = %v, want \"hello\" (from register.probe.stdout)", got["x"])
 	}
 }
 
@@ -1159,10 +1159,10 @@ func TestRenderStateChanges_GlobalRegisterNotLeaked(t *testing.T) {
 	}
 	got, err := p.RenderStateChanges(in)
 	if err == nil {
-		t.Fatalf("RenderStateChanges: ожидалась eval-ошибка (got=%v): глобальный Register не должен протекать в sets", got)
+		t.Fatalf("RenderStateChanges: expected an eval error (got=%v): the global Register must not leak into sets", got)
 	}
 	if got != nil {
-		t.Errorf("при ошибке рендера ожидался nil-результат, got = %v", got)
+		t.Errorf("expected a nil result on a render error, got = %v", got)
 	}
 }
 
@@ -1194,7 +1194,7 @@ func TestRenderStateChanges_RegisterLastWinsCrossHost(t *testing.T) {
 		t.Fatalf("RenderStateChanges: %v", err)
 	}
 	if got["leader"] != "from-b" {
-		t.Errorf("sets.leader = %v, want \"from-b\" (last-wins по SID)", got["leader"])
+		t.Errorf("sets.leader = %v, want \"from-b\" (last-wins by SID)", got["leader"])
 	}
 }
 
@@ -1251,10 +1251,10 @@ func TestRender_RunOnce_PicksFirstBySID(t *testing.T) {
 		t.Fatalf("Render: %v", err)
 	}
 	if got := plans[0].TargetSIDs; len(got) != 1 || got[0] != "a.example.com" {
-		t.Errorf("TargetSIDs = %v, want [a.example.com] (run_once → первый по SID)", got)
+		t.Errorf("TargetSIDs = %v, want [a.example.com] (run_once -> first by SID)", got)
 	}
 	if plans[0].SerialWidth != 0 {
-		t.Errorf("SerialWidth = %d, want 0 (run_once без serial)", plans[0].SerialWidth)
+		t.Errorf("SerialWidth = %d, want 0 (run_once without serial)", plans[0].SerialWidth)
 	}
 }
 
@@ -1328,7 +1328,7 @@ func TestRender_Serial_WidthInPlan(t *testing.T) {
 				t.Errorf("SerialWidth = %d, want %d", plans[0].SerialWidth, tt.wantWidth)
 			}
 			if got := len(plans[0].TargetSIDs); got != 4 {
-				t.Errorf("TargetSIDs len = %d, want 4 (serial не режет таргет, только ширину волны)", got)
+				t.Errorf("TargetSIDs len = %d, want 4 (serial does not cut the target, only the wave width)", got)
 			}
 		})
 	}
@@ -1395,10 +1395,10 @@ func TestRender_Serial_PercentAfterWhere(t *testing.T) {
 		t.Fatalf("Render: %v", err)
 	}
 	if got := len(plans[0].TargetSIDs); got != 2 {
-		t.Fatalf("TargetSIDs len = %d, want 2 (where: оставил debian-хосты a,c)", got)
+		t.Fatalf("TargetSIDs len = %d, want 2 (where: left debian hosts a,c)", got)
 	}
 	if plans[0].SerialWidth != 1 {
-		t.Errorf("SerialWidth = %d, want 1 (50%% от 2 where-хостов = ceil 1, НЕ 2 от полного roster-а)", plans[0].SerialWidth)
+		t.Errorf("SerialWidth = %d, want 1 (50%% of 2 where-hosts = ceil 1, NOT 2 of the full roster)", plans[0].SerialWidth)
 	}
 }
 
@@ -1412,26 +1412,26 @@ func TestApplyRunOnce(t *testing.T) {
 		return out
 	}
 
-	t.Run("run_once false → без изменений", func(t *testing.T) {
+	t.Run("run_once false -> no change", func(t *testing.T) {
 		in := mk("c", "a", "b")
 		got := applyRunOnce(in, false)
 		if len(got) != 3 {
 			t.Errorf("len = %d, want 3", len(got))
 		}
 	})
-	t.Run("run_once true N>1 → первый по SID", func(t *testing.T) {
+	t.Run("run_once true N>1 -> first by SID", func(t *testing.T) {
 		got := applyRunOnce(mk("c", "a", "b"), true)
 		if len(got) != 1 || got[0].SID != "a" {
 			t.Errorf("got = %v, want [a]", sidsOf(got))
 		}
 	})
-	t.Run("run_once true 1 хост → он же", func(t *testing.T) {
+	t.Run("run_once true 1 host -> that same host", func(t *testing.T) {
 		got := applyRunOnce(mk("only"), true)
 		if len(got) != 1 || got[0].SID != "only" {
 			t.Errorf("got = %v, want [only]", sidsOf(got))
 		}
 	})
-	t.Run("run_once true 0 хостов → пусто", func(t *testing.T) {
+	t.Run("run_once true 0 hosts -> empty", func(t *testing.T) {
 		got := applyRunOnce(mk(), true)
 		if len(got) != 0 {
 			t.Errorf("got = %v, want empty", sidsOf(got))

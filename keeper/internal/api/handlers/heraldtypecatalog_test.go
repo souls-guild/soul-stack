@@ -12,7 +12,7 @@ import (
 func TestHeraldTypeCatalog_CoversAllTypes(t *testing.T) {
 	resp := NewHeraldTypeCatalogHandler(nil).ListTyped()
 	if len(resp.Types) == 0 {
-		t.Fatal("herald-type catalog пуст")
+		t.Fatal("herald-type catalog is empty")
 	}
 
 	got := make([]string, 0, len(resp.Types))

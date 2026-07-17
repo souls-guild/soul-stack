@@ -10,14 +10,14 @@ import (
 // warn): a typo'd empty onchanges source would silently turn gating into
 // "never changed" → the task would always be skipped, masking the scenario
 // author's bug.
-var ErrOnChangesUnknownRegister = errors.New("render: onchanges ссылается на несуществующий register")
+var ErrOnChangesUnknownRegister = errors.New("render: onchanges references a non-existent register")
 
 // ErrOnFailUnknownRegister — `onfail:` references a register name that
 // doesn't exist among the run's task registers. Mirrors
 // ErrOnChangesUnknownRegister: a typo'd empty onfail source would silently
 // turn rescue gating into "never failed" → the onfail task would always be
 // skipped, masking the scenario author's bug.
-var ErrOnFailUnknownRegister = errors.New("render: onfail ссылается на несуществующий register")
+var ErrOnFailUnknownRegister = errors.New("render: onfail references a non-existent register")
 
 // resolveOnChanges turns `onchanges:` register names (RenderedTask.
 // onChangesNames) into task indexes (RenderedTask.OnChangesIdx) across the
@@ -95,7 +95,7 @@ func resolveRegisterNames(byRegister map[string]int, names []string, taskName, k
 	for _, name := range names {
 		srcIdx, ok := byRegister[name]
 		if !ok {
-			return nil, fmt.Errorf("%w: задача %q → %s: [%s] (нет задачи с register: %s)",
+			return nil, fmt.Errorf("%w: task %q -> %s: [%s] (no task with register: %s)",
 				unknownErr, taskName, kind, name, name)
 		}
 		idxs = append(idxs, srcIdx)

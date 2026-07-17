@@ -60,7 +60,7 @@ func TestAnchorSetSetCopiesInput(t *testing.T) {
 
 	snap := a.snapshot()
 	if !bytes.Equal(snap[0], orig) {
-		t.Errorf("snapshot[0] изменился после мутации caller-буфера: набор не скопирован")
+		t.Errorf("snapshot[0] changed after mutating the caller buffer: the set was not copied")
 	}
 }
 

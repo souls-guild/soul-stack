@@ -50,12 +50,12 @@ func TestSchemaNames_Herald(t *testing.T) {
 	schemas := loadFullSpecSchemas(t)
 	for _, name := range heraldContractSchemas {
 		if _, ok := schemas[name]; !ok {
-			t.Errorf("контрактonя схема %q ОТСУТСТВУЕТ в components/schemas (имя не выровнеbut)", name)
+			t.Errorf("contract schema %q IS MISSING from components/schemas (name not aligned)", name)
 		}
 	}
 	for _, name := range heraldForbiddenSchemas {
 		if _, ok := schemas[name]; ok {
-			t.Errorf("техническое huma-имя %q ПРИСУТСТВУЕТ в спеке — имя не выровнеbut под контракт", name)
+			t.Errorf("technical huma name %q IS PRESENT in the spec - name not aligned to the contract", name)
 		}
 	}
 }
@@ -72,7 +72,7 @@ func TestSchemaNames_HeraldEnvelopes(t *testing.T) {
 	}
 	var doc map[string]any
 	if err := yaml.Unmarshal([]byte(y), &doc); err != nil {
-		t.Fatalf("спека не парсится: %v", err)
+		t.Fatalf("spec did not parse: %v", err)
 	}
 	comp, _ := doc["components"].(map[string]any)
 	schemas, _ := comp["schemas"].(map[string]any)
@@ -90,11 +90,11 @@ func assertOffsetEnvelopeNoFormat(t *testing.T, schemas map[string]any, name, el
 
 	env, ok := schemas[name].(map[string]any)
 	if !ok {
-		t.Fatalf("envelope-схема %q отсутствует в components/schemas", name)
+		t.Fatalf("envelope schema %q is missing from components/schemas", name)
 	}
 	props, ok := env["properties"].(map[string]any)
 	if !ok {
-		t.Fatalf("%q без properties", name)
+		t.Fatalf("%q has no properties", name)
 	}
 
 	wantFields := map[string]struct{}{"items": {}, "offset": {}, "limit": {}, "total": {}}
@@ -104,11 +104,11 @@ func assertOffsetEnvelopeNoFormat(t *testing.T, schemas map[string]any, name, el
 			got = append(got, k)
 		}
 		sort.Strings(got)
-		t.Errorf("%q несёт %d fields %v, ожидалось ровbut 4 (items/offset/limit/total) — cursor-поля протекли?", name, len(props), got)
+		t.Errorf("%q carries %d fields %v, expected exactly 4 (items/offset/limit/total) - did cursor fields leak?", name, len(props), got)
 	}
 	for f := range wantFields {
 		if _, ok := props[f]; !ok {
-			t.Errorf("%q не withдержит контрактbutго поля %q", name, f)
+			t.Errorf("%q is missing contract field %q", name, f)
 		}
 	}
 
@@ -118,23 +118,23 @@ func assertOffsetEnvelopeNoFormat(t *testing.T, schemas map[string]any, name, el
 			continue
 		}
 		if !schemaTypeHas(fp["type"], "integer") {
-			t.Errorf("%q.%s.type=%v, ожидалось integer", name, f, fp["type"])
+			t.Errorf("%q.%s.type=%v, expected integer", name, f, fp["type"])
 		}
 	}
 
 	items, ok := props["items"].(map[string]any)
 	if !ok {
-		t.Fatalf("%q.items отсутствует", name)
+		t.Fatalf("%q.items is missing", name)
 	}
 	if !schemaTypeHas(items["type"], "array") {
-		t.Errorf("%q.items.type=%v, ожидалось array", name, items["type"])
+		t.Errorf("%q.items.type=%v, expected array", name, items["type"])
 	}
 	elemSchema, ok := items["items"].(map[string]any)
 	if !ok {
-		t.Fatalf("%q.items.items отсутствует (element-схема)", name)
+		t.Fatalf("%q.items.items is missing (element schema)", name)
 	}
 	wantRef := "#/components/schemas/" + element
 	if ref, _ := elemSchema["$ref"].(string); ref != wantRef {
-		t.Errorf("%q.items.items.$ref=%q, ожидалось %q (контрактный element)", name, ref, wantRef)
+		t.Errorf("%q.items.items.$ref=%q, expected %q (contract element)", name, ref, wantRef)
 	}
 }

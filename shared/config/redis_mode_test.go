@@ -39,7 +39,7 @@ func TestRedis_Standalone_Implicit_OK(t *testing.T) {
 	cfg, _, diags, _ := LoadKeeperFromBytes("keeper.yml", src, ValidateOptions{})
 	if diag.HasErrors(diags) {
 		dump(t, diags)
-		t.Fatalf("standalone без mode (addr задан) должен быть валиден")
+		t.Fatalf("standalone without mode (addr set) should be valid")
 	}
 	if cfg.Redis.Mode != "" {
 		t.Errorf("Mode = %q, want empty (implicit standalone)", cfg.Redis.Mode)
@@ -55,7 +55,7 @@ func TestRedis_Standalone_Explicit_OK(t *testing.T) {
 	_, _, diags, _ := LoadKeeperFromBytes("keeper.yml", src, ValidateOptions{})
 	if diag.HasErrors(diags) {
 		dump(t, diags)
-		t.Fatalf("mode=standalone + addr должен быть валиден")
+		t.Fatalf("mode=standalone + addr should be valid")
 	}
 }
 
@@ -64,7 +64,7 @@ func TestRedis_Standalone_MissingAddr_Rejected(t *testing.T) {
 	_, _, diags, _ := LoadKeeperFromBytes("keeper.yml", src, ValidateOptions{})
 	if !hasCodeAt(diags, "missing_required_field", "$.redis.addr") {
 		dump(t, diags)
-		t.Fatalf("ожидался missing_required_field на redis.addr (standalone без addr)")
+		t.Fatalf("expected missing_required_field on redis.addr (standalone without addr)")
 	}
 }
 
@@ -74,7 +74,7 @@ func TestRedis_ImplicitStandalone_MissingAddr_Rejected(t *testing.T) {
 	_, _, diags, _ := LoadKeeperFromBytes("keeper.yml", src, ValidateOptions{})
 	if !hasCodeAt(diags, "missing_required_field", "$.redis.addr") {
 		dump(t, diags)
-		t.Fatalf("ожидался missing_required_field на redis.addr (implicit standalone без addr)")
+		t.Fatalf("expected missing_required_field on redis.addr (implicit standalone without addr)")
 	}
 }
 
@@ -91,7 +91,7 @@ func TestRedis_Sentinel_OK(t *testing.T) {
 	cfg, _, diags, _ := LoadKeeperFromBytes("keeper.yml", src, ValidateOptions{})
 	if diag.HasErrors(diags) {
 		dump(t, diags)
-		t.Fatalf("sentinel + master_name + sentinels должен быть валиден")
+		t.Fatalf("sentinel + master_name + sentinels should be valid")
 	}
 	if cfg.Redis.Mode != "sentinel" || cfg.Redis.MasterName != "mymaster" {
 		t.Errorf("Mode/MasterName = %q/%q", cfg.Redis.Mode, cfg.Redis.MasterName)
@@ -108,7 +108,7 @@ func TestRedis_Sentinel_MissingMasterName_Rejected(t *testing.T) {
 	_, _, diags, _ := LoadKeeperFromBytes("keeper.yml", src, ValidateOptions{})
 	if !hasCodeAt(diags, "missing_required_field", "$.redis.master_name") {
 		dump(t, diags)
-		t.Fatalf("ожидался missing_required_field на redis.master_name (sentinel без него)")
+		t.Fatalf("expected missing_required_field on redis.master_name (sentinel without it)")
 	}
 }
 
@@ -118,7 +118,7 @@ func TestRedis_Sentinel_MissingSentinels_Rejected(t *testing.T) {
 	_, _, diags, _ := LoadKeeperFromBytes("keeper.yml", src, ValidateOptions{})
 	if !hasCodeAt(diags, "missing_required_field", "$.redis.sentinels") {
 		dump(t, diags)
-		t.Fatalf("ожидался missing_required_field на redis.sentinels (sentinel без них)")
+		t.Fatalf("expected missing_required_field on redis.sentinels (sentinel without them)")
 	}
 }
 
@@ -130,7 +130,7 @@ func TestRedis_Sentinel_BadSentinelAddr_Rejected(t *testing.T) {
 	_, _, diags, _ := LoadKeeperFromBytes("keeper.yml", src, ValidateOptions{})
 	if !hasCode(diags, "host_port_invalid") {
 		dump(t, diags)
-		t.Fatalf("ожидался host_port_invalid на sentinel-адрес без порта")
+		t.Fatalf("expected host_port_invalid on a sentinel address without a port")
 	}
 }
 
@@ -145,7 +145,7 @@ func TestRedis_Sentinel_EmptySentinelEntry_Rejected(t *testing.T) {
 	_, _, diags, _ := LoadKeeperFromBytes("keeper.yml", src, ValidateOptions{})
 	if !hasCodeAt(diags, "host_port_invalid", "$.redis.sentinels[0]") {
 		dump(t, diags)
-		t.Fatalf("ожидался host_port_invalid на пустой sentinel-элемент")
+		t.Fatalf("expected host_port_invalid on an empty sentinel element")
 	}
 }
 
@@ -159,11 +159,11 @@ func TestRedis_Sentinel_UnusedNodes_Warn(t *testing.T) {
 	_, _, diags, _ := LoadKeeperFromBytes("keeper.yml", src, ValidateOptions{})
 	if diag.HasErrors(diags) {
 		dump(t, diags)
-		t.Fatalf("лишние nodes при sentinel — warn, не error")
+		t.Fatalf("extra nodes with sentinel - warn, not error")
 	}
 	if !hasCode(diags, "redis_unused_field") {
 		dump(t, diags)
-		t.Fatalf("ожидался warning redis_unused_field на nodes при sentinel")
+		t.Fatalf("expected warning redis_unused_field on nodes with sentinel")
 	}
 }
 
@@ -179,7 +179,7 @@ func TestRedis_Cluster_OK(t *testing.T) {
 	cfg, _, diags, _ := LoadKeeperFromBytes("keeper.yml", src, ValidateOptions{})
 	if diag.HasErrors(diags) {
 		dump(t, diags)
-		t.Fatalf("cluster + nodes должен быть валиден")
+		t.Fatalf("cluster + nodes should be valid")
 	}
 	if cfg.Redis.Mode != "cluster" || len(cfg.Redis.Nodes) != 3 {
 		t.Errorf("Mode/Nodes = %q/%v", cfg.Redis.Mode, cfg.Redis.Nodes)
@@ -191,7 +191,7 @@ func TestRedis_Cluster_MissingNodes_Rejected(t *testing.T) {
 	_, _, diags, _ := LoadKeeperFromBytes("keeper.yml", src, ValidateOptions{})
 	if !hasCodeAt(diags, "missing_required_field", "$.redis.nodes") {
 		dump(t, diags)
-		t.Fatalf("ожидался missing_required_field на redis.nodes (cluster без них)")
+		t.Fatalf("expected missing_required_field on redis.nodes (cluster without them)")
 	}
 }
 
@@ -203,7 +203,7 @@ func TestRedis_Cluster_BadNodeAddr_Rejected(t *testing.T) {
 	_, _, diags, _ := LoadKeeperFromBytes("keeper.yml", src, ValidateOptions{})
 	if !hasCode(diags, "host_port_invalid") {
 		dump(t, diags)
-		t.Fatalf("ожидался host_port_invalid на cluster-узел без порта")
+		t.Fatalf("expected host_port_invalid on a cluster node without a port")
 	}
 }
 
@@ -217,11 +217,11 @@ func TestRedis_Cluster_UnusedSentinelFields_Warn(t *testing.T) {
 	_, _, diags, _ := LoadKeeperFromBytes("keeper.yml", src, ValidateOptions{})
 	if diag.HasErrors(diags) {
 		dump(t, diags)
-		t.Fatalf("лишние master_name/sentinels при cluster — warn, не error")
+		t.Fatalf("extra master_name/sentinels with cluster - warn, not error")
 	}
 	if !hasCode(diags, "redis_unused_field") {
 		dump(t, diags)
-		t.Fatalf("ожидался warning redis_unused_field на sentinel-поля при cluster")
+		t.Fatalf("expected warning redis_unused_field on sentinel fields with cluster")
 	}
 }
 
@@ -233,7 +233,7 @@ func TestRedis_InvalidMode_Rejected(t *testing.T) {
 	_, _, diags, _ := LoadKeeperFromBytes("keeper.yml", src, ValidateOptions{})
 	if !hasCodeAt(diags, "enum_invalid", "$.redis.mode") {
 		dump(t, diags)
-		t.Fatalf("ожидался enum_invalid на redis.mode=galaxy")
+		t.Fatalf("expected enum_invalid on redis.mode=galaxy")
 	}
 }
 
@@ -244,7 +244,7 @@ func TestRedis_PasswordRef_Plaintext_Rejected(t *testing.T) {
 	_, _, diags, _ := LoadKeeperFromBytes("keeper.yml", src, ValidateOptions{})
 	if !hasCodeAt(diags, "vault_ref_invalid_format", "$.redis.password_ref") {
 		dump(t, diags)
-		t.Fatalf("ожидался vault_ref_invalid_format на plaintext password_ref")
+		t.Fatalf("expected vault_ref_invalid_format on plaintext password_ref")
 	}
 }
 
@@ -258,6 +258,6 @@ func TestRedis_SentinelPasswordRef_FieldOverride_OK(t *testing.T) {
 	_, _, diags, _ := LoadKeeperFromBytes("keeper.yml", src, ValidateOptions{})
 	if diag.HasErrors(diags) {
 		dump(t, diags)
-		t.Fatalf("sentinel_password_ref с #field должен быть валиден")
+		t.Fatalf("sentinel_password_ref with #field should be valid")
 	}
 }

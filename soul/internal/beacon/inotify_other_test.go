@@ -17,19 +17,19 @@ func TestInotifyStub_NotSupported(t *testing.T) {
 		"path": "/tmp",
 	}))
 	if err == nil {
-		t.Fatal("на non-Linux stub обязан возвращать ошибку")
+		t.Fatal("on non-Linux the stub must return an error")
 	}
 	if !strings.Contains(err.Error(), "platform not supported") {
-		t.Errorf("ошибка stub-а должна упоминать 'platform not supported', got %q", err.Error())
+		t.Errorf("stub error should mention 'platform not supported', got %q", err.Error())
 	}
 	if state != "" || data != nil {
-		t.Errorf("stub не должен возвращать state/data, got state=%q data=%v", state, data)
+		t.Errorf("stub must not return state/data, got state=%q data=%v", state, data)
 	}
 }
 
 func TestInotifyStub_RegistryDefault(t *testing.T) {
 	reg := Default()
 	if _, ok := reg.Lookup(InotifyName); !ok {
-		t.Fatalf("InotifyName=%q отсутствует в Default() даже на non-Linux", InotifyName)
+		t.Fatalf("InotifyName=%q missing from Default() even on non-Linux", InotifyName)
 	}
 }

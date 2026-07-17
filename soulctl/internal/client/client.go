@@ -47,14 +47,14 @@ type Client struct {
 // slash stripped). Returns a meaningful error if credentials are incomplete.
 func New(c *config.Credentials) (*Client, error) {
 	if c == nil || c.KeeperURL == "" || c.ArchonJWT == "" {
-		return nil, errors.New("credentials пусты")
+		return nil, errors.New("credentials are empty")
 	}
 	u, err := url.Parse(c.KeeperURL)
 	if err != nil {
-		return nil, fmt.Errorf("разобрать keeper_url %q: %w", c.KeeperURL, err)
+		return nil, fmt.Errorf("parse keeper_url %q: %w", c.KeeperURL, err)
 	}
 	if u.Scheme == "" || u.Host == "" {
-		return nil, fmt.Errorf("keeper_url %q должен быть полным URL (scheme + host)", c.KeeperURL)
+		return nil, fmt.Errorf("keeper_url %q must be a full URL (scheme + host)", c.KeeperURL)
 	}
 	cl := &Client{
 		baseURL: strings.TrimRight(c.KeeperURL, "/"),
@@ -69,7 +69,7 @@ func New(c *config.Credentials) (*Client, error) {
 // Repeats URL/JWT validation so behavior matches New.
 func NewWithDoer(baseURL, jwt string, doer HTTPDoer) (*Client, error) {
 	if baseURL == "" {
-		return nil, errors.New("baseURL пуст")
+		return nil, errors.New("baseURL is empty")
 	}
 	cl := &Client{
 		baseURL: strings.TrimRight(baseURL, "/"),
@@ -139,13 +139,13 @@ func (c *Client) Do(ctx context.Context, method, path string, body, out any) err
 	if body != nil {
 		buf, err := json.Marshal(body)
 		if err != nil {
-			return fmt.Errorf("сериализовать запрос: %w", err)
+			return fmt.Errorf("serialize request: %w", err)
 		}
 		reqBody = bytes.NewReader(buf)
 	}
 	req, err := http.NewRequestWithContext(ctx, method, c.baseURL+path, reqBody)
 	if err != nil {
-		return fmt.Errorf("собрать запрос: %w", err)
+		return fmt.Errorf("build request: %w", err)
 	}
 	req.Header.Set("Authorization", "Bearer "+c.jwt)
 	req.Header.Set("Accept", "application/json, application/problem+json")
@@ -171,7 +171,7 @@ func (c *Client) Do(ctx context.Context, method, path string, body, out any) err
 	}
 	if out != nil && len(payload) > 0 {
 		if err := json.Unmarshal(payload, out); err != nil {
-			return fmt.Errorf("разобрать ответ %s %s: %w", method, path, err)
+			return fmt.Errorf("parse response %s %s: %w", method, path, err)
 		}
 	}
 	return nil

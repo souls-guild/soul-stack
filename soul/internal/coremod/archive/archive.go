@@ -618,7 +618,7 @@ func parseSize(s string) (int64, error) {
 	// errors instead of silently parsing a prefix (footgun: "10MB" → 10 bytes).
 	n, err := strconv.ParseInt(upper, 10, 64)
 	if err != nil || n < 0 {
-		return 0, fmt.Errorf("param %q: invalid size %q (want число или N[KiB|MiB|GiB])", "max_size", s)
+		return 0, fmt.Errorf("param %q: invalid size %q (want a number or N[KiB|MiB|GiB])", "max_size", s)
 	}
 	// Guard against overflow on multiplication.
 	if mult != 1 && n > (1<<62)/mult {

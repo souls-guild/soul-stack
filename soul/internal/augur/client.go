@@ -31,15 +31,15 @@ import (
 
 // ErrClientClosed — client closed (EventStream session ended) before an
 // AugurReply arrived. Returned by Fetch to waiting callers on Close.
-var ErrClientClosed = errors.New("augur: клиент закрыт (EventStream-сессия завершена)")
+var ErrClientClosed = errors.New("augur: client closed (EventStream session ended)")
 
 // ErrDenied — Augur denied access (AugurStatus DENIED, or UNSPECIFIED
 // defensively treated as deny, §5.1 augur.md). Carries the reason from
 // Keeper without any secret material.
-var ErrDenied = errors.New("augur: доступ запрещён")
+var ErrDenied = errors.New("augur: access denied")
 
 // ErrRemote — execution failure on the Keeper/Omen side (AugurStatus ERROR).
-var ErrRemote = errors.New("augur: ошибка исполнения на Keeper-е")
+var ErrRemote = errors.New("augur: execution failure on the Keeper side")
 
 // requestSender — the narrow EventStream-session surface the client needs:
 // just sending FromSoul. Kept separate for testability without a live gRPC
@@ -109,7 +109,7 @@ func (c *Client) Fetch(ctx context.Context, applyID, omen, query string) (*keepe
 		},
 	}
 	if err := c.send(req); err != nil {
-		return nil, fmt.Errorf("augur: отправка запроса: %w", err)
+		return nil, fmt.Errorf("augur: sending request: %w", err)
 	}
 
 	select {
@@ -215,7 +215,7 @@ func classify(reply *keeperv1.AugurReply) (*keeperv1.AugurReply, error) {
 		if reply.GetInlineData() == nil {
 			// OK without inline_data in MVP-1 means either delegate=true (not
 			// supported here) or a Keeper mismatch. Fail loud, not silent.
-			return nil, fmt.Errorf("augur: OK без inline_data (delegate=true не поддержан в MVP-1)")
+			return nil, fmt.Errorf("augur: OK without inline_data (delegate=true not supported in MVP-1)")
 		}
 		return reply, nil
 	case keeperv1.AugurStatus_AUGUR_STATUS_DENIED:

@@ -101,7 +101,7 @@ type VoyageCancelReply struct {
 // Create is POST /v1/voyages (ADR-043). Async by default: always 202.
 func (a *VoyagesAPI) Create(ctx context.Context, req VoyageCreateRequest) (*VoyageCreateReply, error) {
 	if req.Kind == "" {
-		return nil, fmt.Errorf("kind пуст")
+		return nil, fmt.Errorf("kind is empty")
 	}
 	var reply VoyageCreateReply
 	if err := a.c.Do(ctx, "POST", "/v1/voyages", req, &reply); err != nil {
@@ -113,7 +113,7 @@ func (a *VoyagesAPI) Create(ctx context.Context, req VoyageCreateRequest) (*Voya
 // Get is GET /v1/voyages/{id}.
 func (a *VoyagesAPI) Get(ctx context.Context, voyageID string) (*Voyage, error) {
 	if voyageID == "" {
-		return nil, fmt.Errorf("voyage_id пуст")
+		return nil, fmt.Errorf("voyage_id is empty")
 	}
 	var reply Voyage
 	if err := a.c.Do(ctx, "GET", "/v1/voyages/"+url.PathEscape(voyageID), nil, &reply); err != nil {
@@ -151,7 +151,7 @@ func (a *VoyagesAPI) List(ctx context.Context, opts VoyageListOptions) (*VoyageL
 // Cancel is DELETE /v1/voyages/{id} (ADR-043 S5): cancels pending/scheduled.
 func (a *VoyagesAPI) Cancel(ctx context.Context, voyageID string) (*VoyageCancelReply, error) {
 	if voyageID == "" {
-		return nil, fmt.Errorf("voyage_id пуст")
+		return nil, fmt.Errorf("voyage_id is empty")
 	}
 	var reply VoyageCancelReply
 	if err := a.c.Do(ctx, "DELETE", "/v1/voyages/"+url.PathEscape(voyageID), nil, &reply); err != nil {

@@ -120,7 +120,7 @@ func callMerge(args ...ref.Val) ref.Val {
 func callMergeList(arg ref.Val) ref.Val {
 	l, ok := arg.(traits.Lister)
 	if !ok {
-		return types.NewErr("merge(): аргумент должен быть list(map), получено %s", arg.Type().TypeName())
+		return types.NewErr("merge(): argument must be list(map), got %s", arg.Type().TypeName())
 	}
 	out := make(map[ref.Val]ref.Val)
 	it := l.Iterator()
@@ -137,7 +137,7 @@ func callMergeList(arg ref.Val) ref.Val {
 func mergeInto(out map[ref.Val]ref.Val, a ref.Val) ref.Val {
 	m, ok := a.(traits.Mapper)
 	if !ok {
-		return types.NewErr("merge(): элемент должен быть map, получено %s", a.Type().TypeName())
+		return types.NewErr("merge(): element must be map, got %s", a.Type().TypeName())
 	}
 	it := m.Iterator()
 	for it.HasNext() == types.True {

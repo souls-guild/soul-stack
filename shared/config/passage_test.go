@@ -181,7 +181,7 @@ func TestStratify_RedisUpdateACL(t *testing.T) {
 		t.Errorf("probe task #0 passage = %d, want 0", p.TaskPassage[0])
 	}
 	if p.TaskPassage[1] != 1 {
-		t.Errorf("where-task #1 passage = %d, want 1 (СТРОГО после probe)", p.TaskPassage[1])
+		t.Errorf("where-task #1 passage = %d, want 1 (STRICTLY after probe)", p.TaskPassage[1])
 	}
 }
 
@@ -209,7 +209,7 @@ func TestStratify_RedisAddUser(t *testing.T) {
 func TestStratify_RedisRestart(t *testing.T) {
 	p := stratify(t, redisRestart)
 	if p.Count != 3 {
-		t.Fatalf("restart: Count = %d, want 3 (две probe-границы)", p.Count)
+		t.Fatalf("restart: Count = %d, want 3 (two probe boundaries)", p.Count)
 	}
 	// #0 probe; #1 rolling-restart(where slave); #2 failover(where master);
 	// #3 re-probe; #4 restart former master(where redis_role_after && redis_role).
@@ -401,7 +401,7 @@ tasks:
 		t.Fatalf("Count = %d, want 2", p.Count)
 	}
 	if p.TaskPassage[0] != 0 || p.TaskPassage[1] != 1 || p.TaskPassage[2] != 1 {
-		t.Fatalf("passages = %v, want [0 1 1] (register в params/input двигает passage)", p.TaskPassage)
+		t.Fatalf("passages = %v, want [0 1 1] (register in params/input moves passage)", p.TaskPassage)
 	}
 }
 
@@ -427,7 +427,7 @@ tasks:
 `
 	p := stratify(t, src)
 	if p.Count != 1 {
-		t.Fatalf("Count = %d, want 1 (self/own register не cross-task)", p.Count)
+		t.Fatalf("Count = %d, want 1 (self/own register is not cross-task)", p.Count)
 	}
 	if p.TaskPassage[0] != 0 {
 		t.Errorf("probe passage = %d, want 0", p.TaskPassage[0])
@@ -457,10 +457,10 @@ tasks:
 `
 	p := stratify(t, src)
 	if p.Count != 2 {
-		t.Fatalf("Count = %d, want 2 (register в output двигает passage)", p.Count)
+		t.Fatalf("Count = %d, want 2 (register in output moves passage)", p.Count)
 	}
 	if p.TaskPassage[0] != 0 || p.TaskPassage[1] != 1 {
-		t.Fatalf("passages = %v, want [0 1] (output-потребитель СТРОГО после probe)", p.TaskPassage)
+		t.Fatalf("passages = %v, want [0 1] (output consumer STRICTLY after probe)", p.TaskPassage)
 	}
 }
 
@@ -676,7 +676,7 @@ func TestStratify_FlowControlInRefsNotPassageReads(t *testing.T) {
 			// is not in collectTaskReads → does not build a passage graph from ghost-register).
 			_, serr := Stratify(m.Tasks)
 			if serr != nil {
-				t.Fatalf("Stratify FAILED on ghost in flow-control %q (%v) — flow-control крадётся обратно в collectTaskReads (passage-определяющий), что вернуло бы FC-5 cross-passage-расщепление", field, serr)
+				t.Fatalf("Stratify FAILED on ghost in flow-control %q (%v) - flow-control leaked back into collectTaskReads (passage-defining), which would bring back FC-5 cross-passage splitting", field, serr)
 			}
 		})
 	}
@@ -707,11 +707,11 @@ tasks:
 `
 	p := stratify(t, src)
 	if p.Count != 1 {
-		t.Fatalf("Count = %d, want 1 — register-зависимый when НЕ должен расщеплять Passage (flow-control НЕ passage-определяющий, ADR-056:85); до narrow-fix было 2 → FC-5 cross-passage no-such-key", p.Count)
+		t.Fatalf("Count = %d, want 1 - a register-dependent when must NOT split Passage (flow-control is not passage-defining, ADR-056:85); before the narrow-fix it was 2 -> FC-5 cross-passage no-such-key", p.Count)
 	}
 	for i, pass := range p.TaskPassage {
 		if pass != 0 {
-			t.Errorf("task #%d passage = %d, want 0 (probe и when-потребитель в одном Passage → Soul видит register same-passage)", i, pass)
+			t.Errorf("task #%d passage = %d, want 0 (probe and when-consumer in the same Passage -> Soul sees register same-passage)", i, pass)
 		}
 	}
 }
@@ -750,17 +750,17 @@ tasks:
 	tasks := loadTasks(t, src)
 	passage := stratify(t, src)
 	if passage.Count <= 1 {
-		t.Fatalf("ожидался staged-план (Count>1), got Count=%d TaskPassage=%v", passage.Count, passage.TaskPassage)
+		t.Fatalf("expected a staged plan (Count>1), got Count=%d TaskPassage=%v", passage.Count, passage.TaskPassage)
 	}
 	info, bad := CrossPassageWhenGating(tasks, passage)
 	if !bad {
-		t.Fatalf("CrossPassageWhenGating НЕ задетектил genuinely cross-passage when (register.role из Passage 0, потребитель в Passage 1) — TaskPassage=%v", passage.TaskPassage)
+		t.Fatalf("CrossPassageWhenGating did NOT detect a genuinely cross-passage when (register.role from Passage 0, consumer in Passage 1) - TaskPassage=%v", passage.TaskPassage)
 	}
 	if info.Kind != "when" || info.RegisterName != "role" {
 		t.Errorf("info = %+v, want kind=when register=role", info)
 	}
 	if info.ConsumerPassage == info.SourcePassage {
-		t.Errorf("consumer passage %d == source passage %d, ожидались разные", info.ConsumerPassage, info.SourcePassage)
+		t.Errorf("consumer passage %d == source passage %d, expected them to differ", info.ConsumerPassage, info.SourcePassage)
 	}
 }
 
@@ -785,7 +785,7 @@ tasks:
 	tasks := loadTasks(t, src)
 	passage := stratify(t, src)
 	if _, bad := CrossPassageWhenGating(tasks, passage); bad {
-		t.Fatalf("CrossPassageWhenGating ложно зарепортил same-passage when как cross-passage — после narrow-fix when в одном Passage с probe (TaskPassage=%v)", passage.TaskPassage)
+		t.Fatalf("CrossPassageWhenGating falsely reported a same-passage when as cross-passage - after the narrow-fix when is in the same Passage as probe (TaskPassage=%v)", passage.TaskPassage)
 	}
 }
 
@@ -807,7 +807,7 @@ tasks:
 	tasks := loadTasks(t, src)
 	passage := stratify(t, src)
 	if _, bad := CrossPassageWhenGating(tasks, passage); bad {
-		t.Fatalf("CrossPassageWhenGating ложно зарепортил register.self (same-task) как cross-passage — сломал бы remove_replica-защиту (TaskPassage=%v)", passage.TaskPassage)
+		t.Fatalf("CrossPassageWhenGating falsely reported register.self (same-task) as cross-passage - would break the remove_replica guard (TaskPassage=%v)", passage.TaskPassage)
 	}
 }
 
@@ -881,17 +881,17 @@ tasks:
 	tasks := loadTasks(t, src)
 	passage := stratify(t, src)
 	if passage.Count <= 1 {
-		t.Fatalf("ожидался staged-план (Count>1), got Count=%d, TaskPassage=%v", passage.Count, passage.TaskPassage)
+		t.Fatalf("expected a staged plan (Count>1), got Count=%d, TaskPassage=%v", passage.Count, passage.TaskPassage)
 	}
 	info, bad := CrossPassageRequisite(tasks, passage)
 	if !bad {
-		t.Fatalf("CrossPassageRequisite не задетектил cross-passage onchanges (consumer/source в разных Passage) — TaskPassage=%v", passage.TaskPassage)
+		t.Fatalf("CrossPassageRequisite did NOT detect cross-passage onchanges (consumer/source in different Passages) - TaskPassage=%v", passage.TaskPassage)
 	}
 	if info.Kind != "onchanges" || info.RequisiteName != "cfg" {
 		t.Errorf("info = %+v, want kind=onchanges requisite=cfg", info)
 	}
 	if info.ConsumerPassage == info.SourcePassage {
-		t.Errorf("consumer passage %d == source passage %d, ожидались разные", info.ConsumerPassage, info.SourcePassage)
+		t.Errorf("consumer passage %d == source passage %d, expected them to differ", info.ConsumerPassage, info.SourcePassage)
 	}
 }
 
@@ -915,10 +915,10 @@ tasks:
 	tasks := loadTasks(t, src)
 	passage := stratify(t, src)
 	if passage.Count != 1 {
-		t.Fatalf("ожидался N=1 (Count=1), got Count=%d", passage.Count)
+		t.Fatalf("expected N=1 (Count=1), got Count=%d", passage.Count)
 	}
 	if _, bad := CrossPassageRequisite(tasks, passage); bad {
-		t.Fatalf("CrossPassageRequisite ложно зарепортил same-passage onchanges как cross-passage — R1-remap должен его чинить, не reject")
+		t.Fatalf("CrossPassageRequisite falsely reported same-passage onchanges as cross-passage - R1-remap should fix it, not reject")
 	}
 }
 
@@ -951,7 +951,7 @@ tasks:
 	passage := stratify(t, src)
 	info, bad := CrossPassageRequisite(tasks, passage)
 	if !bad {
-		t.Fatalf("CrossPassageRequisite не задетектил cross-passage onfail — TaskPassage=%v", passage.TaskPassage)
+		t.Fatalf("CrossPassageRequisite did NOT detect cross-passage onfail - TaskPassage=%v", passage.TaskPassage)
 	}
 	if info.Kind != "onfail" || info.RequisiteName != "deploy" {
 		t.Errorf("info = %+v, want kind=onfail requisite=deploy", info)
@@ -985,7 +985,7 @@ tasks:
 	tasks := loadTasks(t, src)
 	info, bad := WithinBlockRegisterDependency(tasks)
 	if !bad {
-		t.Fatalf("WithinBlockRegisterDependency не задетектил peer-register внутри block — silent-wrong-target прошёл бы молча")
+		t.Fatalf("WithinBlockRegisterDependency did NOT detect a peer-register inside a block - silent-wrong-target would pass silently")
 	}
 	if info.RegisterName != "role" {
 		t.Errorf("RegisterName = %q, want role", info.RegisterName)
@@ -1028,7 +1028,7 @@ tasks:
 `
 	tasks := loadTasks(t, src)
 	if info, bad := WithinBlockRegisterDependency(tasks); bad {
-		t.Fatalf("WithinBlockRegisterDependency ложно зарепортил within-block when:peer как silent-wrong-target (%+v) — после FC-5 narrow-fix when выпал из collectTaskReads, when:peer валиден (Soul-side gating, peer-probe в том же ApplyRequest)", info)
+		t.Fatalf("WithinBlockRegisterDependency falsely reported within-block when:peer as silent-wrong-target (%+v) - after the FC-5 narrow-fix when dropped out of collectTaskReads, when:peer is valid (Soul-side gating, peer-probe in the same ApplyRequest)", info)
 	}
 }
 
@@ -1059,7 +1059,7 @@ tasks:
 `
 	tasks := loadTasks(t, src)
 	if info, bad := WithinBlockRegisterDependency(tasks); bad {
-		t.Fatalf("WithinBlockRegisterDependency ложно зарепортил внешний top-level probe как peer-зависимость (%+v) — сломал бы валидный restart-кейс", info)
+		t.Fatalf("WithinBlockRegisterDependency falsely reported an external top-level probe as a peer dependency (%+v) - would break the valid restart case", info)
 	}
 }
 
@@ -1086,7 +1086,7 @@ tasks:
 `
 	tasks := loadTasks(t, src)
 	if info, bad := WithinBlockRegisterDependency(tasks); bad {
-		t.Fatalf("WithinBlockRegisterDependency ложно зарепортил register.self как peer-зависимость (%+v)", info)
+		t.Fatalf("WithinBlockRegisterDependency falsely reported register.self as a peer dependency (%+v)", info)
 	}
 }
 
@@ -1116,7 +1116,7 @@ tasks:
 	tasks := loadTasks(t, src)
 	info, bad := WithinBlockRegisterDependency(tasks)
 	if !bad {
-		t.Fatalf("WithinBlockRegisterDependency не задетектил peer-register через вложенный block — silent-wrong-target")
+		t.Fatalf("WithinBlockRegisterDependency did NOT detect a peer-register through a nested block - silent-wrong-target")
 	}
 	if info.RegisterName != "role" {
 		t.Errorf("RegisterName = %q, want role", info.RegisterName)
@@ -1144,7 +1144,7 @@ tasks:
 `
 	tasks := loadTasks(t, src)
 	if info, bad := WithinBlockRegisterDependency(tasks); bad {
-		t.Fatalf("WithinBlockRegisterDependency ложно сработал на блок без register (%+v)", info)
+		t.Fatalf("WithinBlockRegisterDependency falsely triggered on a block without a register (%+v)", info)
 	}
 }
 
@@ -1165,7 +1165,7 @@ func TestWithinBlock_AcceptanceRestart(t *testing.T) {
 		}
 	}
 	if info, bad := WithinBlockRegisterDependency(m.Tasks); bad {
-		t.Fatalf("ПРИЁМКА СЛОМАНА: restart/main.yml зарепортирован как within-block peer (%+v) — внешний probe redis_role валиден", info)
+		t.Fatalf("ACCEPTANCE BROKEN: restart/main.yml reported as within-block peer (%+v) - the external probe redis_role is valid", info)
 	}
 
 	// Acceptance regression: no committed example scenario is caught by the detector.
@@ -1174,7 +1174,7 @@ func TestWithinBlock_AcceptanceRestart(t *testing.T) {
 		t.Fatalf("glob examples: %v", gerr)
 	}
 	if len(all) == 0 {
-		t.Fatal("glob examples дал 0 сценариев — путь/раскладка сломаны")
+		t.Fatal("glob examples returned 0 scenarios - path/layout broken")
 	}
 	for _, p := range all {
 		em, _, ediags, eerr := LoadScenarioManifest(p, ValidateOptions{})
@@ -1192,7 +1192,7 @@ func TestWithinBlock_AcceptanceRestart(t *testing.T) {
 			continue
 		}
 		if info, bad := WithinBlockRegisterDependency(em.Tasks); bad {
-			t.Errorf("регресс приёмки: example %s ловится within-block-детектором (%+v) — валидный пример перестал бы прогоняться", p, info)
+			t.Errorf("acceptance regression: example %s caught by the within-block detector (%+v) - a valid example would stop running", p, info)
 		}
 	}
 }

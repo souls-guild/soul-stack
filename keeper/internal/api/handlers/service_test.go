@@ -379,7 +379,7 @@ func TestServiceHandler_Update_InvalidatesRefs(t *testing.T) {
 		t.Fatalf("UpdateTyped: %v", err)
 	}
 	if len(lister.invalidate) != 1 || lister.invalidate[0] != "web" {
-		t.Errorf("ожидался Invalidate(\"web\"), got %v", lister.invalidate)
+		t.Errorf("expected Invalidate(\"web\"), got %v", lister.invalidate)
 	}
 }
 
@@ -390,7 +390,7 @@ func TestServiceHandler_Deregister_InvalidatesRefs(t *testing.T) {
 		t.Fatalf("DeregisterTyped: %v", err)
 	}
 	if len(lister.invalidate) != 1 || lister.invalidate[0] != "web" {
-		t.Errorf("ожидался Invalidate(\"web\"), got %v", lister.invalidate)
+		t.Errorf("expected Invalidate(\"web\"), got %v", lister.invalidate)
 	}
 }
 
@@ -518,7 +518,7 @@ func TestServiceHandler_ListScenarios_RunnableByCanon(t *testing.T) {
 	}
 	for name := range want {
 		if !seen[name] {
-			t.Errorf("scenario %q отсутствует в ответе", name)
+			t.Errorf("scenario %q missing from response", name)
 		}
 	}
 }
@@ -534,10 +534,10 @@ func TestServiceHandler_ListScenarios_RefQueryOverride(t *testing.T) {
 		t.Fatalf("ListScenariosTyped: %v", err)
 	}
 	if lister.gotRef != "v2.0.0" {
-		t.Errorf("ref override не сработал: lister.gotRef = %q, want v2.0.0", lister.gotRef)
+		t.Errorf("ref override did not take effect: lister.gotRef = %q, want v2.0.0", lister.gotRef)
 	}
 	if got.Ref != "v2.0.0" {
-		t.Errorf("ответ должен отражать выбранный ref: %q", got.Ref)
+		t.Errorf("response should reflect the selected ref: %q", got.Ref)
 	}
 }
 
@@ -568,7 +568,7 @@ func TestServiceHandler_ListScenarios_EmptyScenarios_200(t *testing.T) {
 		t.Fatalf("ListScenariosTyped: %v", err)
 	}
 	if got.Scenarios == nil {
-		t.Errorf("пустой scenarios is nil, want non-nil empty slice")
+		t.Errorf("empty scenarios is nil, want non-nil empty slice")
 	}
 }
 
@@ -580,7 +580,7 @@ func TestServiceHandler_Update_InvalidatesScenarios(t *testing.T) {
 		t.Fatalf("UpdateTyped: %v", err)
 	}
 	if len(lister.invalidate) != 1 || lister.invalidate[0] != "web" {
-		t.Errorf("ожидался Invalidate(\"web\") у scenarios-кеша, got %v", lister.invalidate)
+		t.Errorf("expected Invalidate(\"web\") on scenarios cache, got %v", lister.invalidate)
 	}
 }
 
@@ -591,7 +591,7 @@ func TestServiceHandler_Deregister_InvalidatesScenarios(t *testing.T) {
 		t.Fatalf("DeregisterTyped: %v", err)
 	}
 	if len(lister.invalidate) != 1 || lister.invalidate[0] != "web" {
-		t.Errorf("ожидался Invalidate(\"web\") у scenarios-кеша, got %v", lister.invalidate)
+		t.Errorf("expected Invalidate(\"web\") on scenarios cache, got %v", lister.invalidate)
 	}
 }
 
@@ -671,10 +671,10 @@ func TestServiceHandler_ListStateSchema_RefQueryOverride(t *testing.T) {
 		t.Fatalf("ListStateSchemaTyped: %v", err)
 	}
 	if lister.gotRef != "v2.0.0" {
-		t.Errorf("ref override не сработал: lister.gotRef = %q, want v2.0.0", lister.gotRef)
+		t.Errorf("ref override did not take effect: lister.gotRef = %q, want v2.0.0", lister.gotRef)
 	}
 	if got.Ref != "v2.0.0" {
-		t.Errorf("ответ должен отражать выбранный ref: %q", got.Ref)
+		t.Errorf("response should reflect the selected ref: %q", got.Ref)
 	}
 }
 
@@ -714,7 +714,7 @@ func TestServiceHandler_ListStateSchema_NoSchemaDecl(t *testing.T) {
 		t.Errorf("empty migrations is nil, want non-nil empty slice")
 	}
 	if got.Schema != nil {
-		t.Errorf("nil schema decl должна оставаться nil, got %v", got.Schema)
+		t.Errorf("nil schema decl should remain nil, got %v", got.Schema)
 	}
 }
 
@@ -734,7 +734,7 @@ func TestServiceHandler_Update_InvalidatesStateSchema(t *testing.T) {
 		t.Fatalf("UpdateTyped: %v", err)
 	}
 	if len(lister.invalidate) != 1 || lister.invalidate[0] != "web" {
-		t.Errorf("ожидался Invalidate(\"web\") у state-schema-кеша, got %v", lister.invalidate)
+		t.Errorf("expected Invalidate(\"web\") on state-schema cache, got %v", lister.invalidate)
 	}
 }
 
@@ -811,10 +811,10 @@ func TestServiceHandler_ListDependencies_RefQueryOverride(t *testing.T) {
 		t.Fatalf("ListDependenciesTyped: %v", err)
 	}
 	if lister.gotRef != "v2.0.0" {
-		t.Errorf("ref override не сработал: lister.gotRef = %q, want v2.0.0", lister.gotRef)
+		t.Errorf("ref override did not take effect: lister.gotRef = %q, want v2.0.0", lister.gotRef)
 	}
 	if got.Ref != "v2.0.0" {
-		t.Errorf("ответ должен отражать выбранный ref: %q", got.Ref)
+		t.Errorf("response should reflect the selected ref: %q", got.Ref)
 	}
 }
 
@@ -849,7 +849,7 @@ func TestServiceHandler_ListDependencies_EmptyBlocks(t *testing.T) {
 		t.Fatalf("ListDependenciesTyped: %v", err)
 	}
 	if got.Destiny == nil || got.Modules == nil {
-		t.Errorf("пустые блоки должны быть non-nil [], got destiny=%v modules=%v", got.Destiny, got.Modules)
+		t.Errorf("empty blocks should be non-nil [], got destiny=%v modules=%v", got.Destiny, got.Modules)
 	}
 }
 
@@ -869,7 +869,7 @@ func TestServiceHandler_Update_InvalidatesDependencies(t *testing.T) {
 		t.Fatalf("UpdateTyped: %v", err)
 	}
 	if len(lister.invalidate) != 1 || lister.invalidate[0] != "web" {
-		t.Errorf("ожидался Invalidate(\"web\") у dependencies-кеша, got %v", lister.invalidate)
+		t.Errorf("expected Invalidate(\"web\") on dependencies cache, got %v", lister.invalidate)
 	}
 }
 
@@ -880,7 +880,7 @@ func TestServiceHandler_Deregister_InvalidatesDependencies(t *testing.T) {
 		t.Fatalf("DeregisterTyped: %v", err)
 	}
 	if len(lister.invalidate) != 1 || lister.invalidate[0] != "web" {
-		t.Errorf("ожидался Invalidate(\"web\") у dependencies-кеша, got %v", lister.invalidate)
+		t.Errorf("expected Invalidate(\"web\") on dependencies cache, got %v", lister.invalidate)
 	}
 }
 
@@ -891,7 +891,7 @@ func TestServiceHandler_Deregister_InvalidatesStateSchema(t *testing.T) {
 		t.Fatalf("DeregisterTyped: %v", err)
 	}
 	if len(lister.invalidate) != 1 || lister.invalidate[0] != "web" {
-		t.Errorf("ожидался Invalidate(\"web\") у state-schema-кеша, got %v", lister.invalidate)
+		t.Errorf("expected Invalidate(\"web\") on state-schema cache, got %v", lister.invalidate)
 	}
 }
 
@@ -934,10 +934,10 @@ func TestServiceHandler_ListDirectives_FullAndSHA1(t *testing.T) {
 		t.Fatalf("ListDirectivesTyped: %v", err)
 	}
 	if got.SHA1 != "cafebabe00" {
-		t.Errorf("SHA1 = %q, want cafebabe00 (ETag-источник)", got.SHA1)
+		t.Errorf("SHA1 = %q, want cafebabe00 (ETag source)", got.SHA1)
 	}
 	if len(got.Directives) != 2 {
-		t.Errorf("серий = %d, want 2 (весь каталог)", len(got.Directives))
+		t.Errorf("series = %d, want 2 (whole catalog)", len(got.Directives))
 	}
 }
 
@@ -949,7 +949,7 @@ func TestServiceHandler_ListDirectives_VersionNarrows(t *testing.T) {
 		t.Fatalf("ListDirectivesTyped: %v", err)
 	}
 	if len(got.Directives) != 1 || got.Directives["8.2"] == nil {
-		t.Fatalf("version=8.2.2 → %v, want ровно {8.2}", got.Directives)
+		t.Fatalf("version=8.2.2 -> %v, want exactly {8.2}", got.Directives)
 	}
 }
 
@@ -961,7 +961,7 @@ func TestServiceHandler_ListDirectives_EmptyCatalogNonNil(t *testing.T) {
 		t.Fatalf("ListDirectivesTyped: %v", err)
 	}
 	if got.Directives == nil {
-		t.Errorf("directives is nil, want non-nil {} (мягкая деградация → 200)")
+		t.Errorf("directives is nil, want non-nil {} (soft degradation -> 200)")
 	}
 }
 
@@ -973,7 +973,7 @@ func TestServiceHandler_ListDirectives_RefOverride(t *testing.T) {
 		t.Fatalf("ListDirectivesTyped: %v", err)
 	}
 	if lister.gotRef != "v9.9.9" || got.Ref != "v9.9.9" {
-		t.Errorf("ref override не сработал: lister.gotRef=%q got.Ref=%q, want v9.9.9", lister.gotRef, got.Ref)
+		t.Errorf("ref override did not take effect: lister.gotRef=%q got.Ref=%q, want v9.9.9", lister.gotRef, got.Ref)
 	}
 }
 
@@ -1004,6 +1004,6 @@ func TestServiceHandler_Update_InvalidatesDirectives(t *testing.T) {
 		t.Fatalf("UpdateTyped: %v", err)
 	}
 	if len(lister.invalidate) != 1 || lister.invalidate[0] != "redis" {
-		t.Errorf("ожидался Invalidate(\"redis\") у directives-кеша, got %v", lister.invalidate)
+		t.Errorf("expected Invalidate(\"redis\") on directives cache, got %v", lister.invalidate)
 	}
 }

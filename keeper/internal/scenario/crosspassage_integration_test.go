@@ -253,7 +253,7 @@ func TestIntegration_CrossPassageOnChanges_Fires(t *testing.T) {
 	// ★ Passage 1: restart WENT OUT to both primary hosts (cfg changed → onchanges fired).
 	p1 := disp.targets(1)
 	if len(p1) != 2 {
-		t.Fatalf("★ Passage 1 targets = %v, want оба хоста (cfg changed cross-passage → onchanges FIRES)", p1)
+		t.Fatalf("* Passage 1 targets = %v, want both hosts (cfg changed cross-passage -> onchanges FIRES)", p1)
 	}
 	// restart's onchanges_idx on the wire is EMPTY: keeper resolved
 	// cross-passage → stripped the idx, Soul runs unconditionally (no
@@ -261,11 +261,11 @@ func TestIntegration_CrossPassageOnChanges_Fires(t *testing.T) {
 	for _, sid := range p1 {
 		idx, ok := disp.onchanges(sid, "Restart on primary after config change")
 		if !ok {
-			t.Errorf("%s: restart не пришёл в Passage-1 ApplyRequest", sid)
+			t.Errorf("%s: restart did not arrive in the Passage-1 ApplyRequest", sid)
 			continue
 		}
 		if len(idx) != 0 {
-			t.Errorf("%s: restart onchanges_idx = %v, want [] (keeper резолвил cross-passage → убрал idx, Soul безусловно)", sid, idx)
+			t.Errorf("%s: restart onchanges_idx = %v, want [] (keeper resolved cross-passage -> removed idx, Soul runs unconditionally)", sid, idx)
 		}
 	}
 }
@@ -302,7 +302,7 @@ func TestIntegration_CrossPassageOnChanges_Skips(t *testing.T) {
 	// ★ Passage 1: restart went out to NO host (cfg not changed → onchanges
 	// didn't fire → consumer excluded). Doesn't misfire.
 	if p1 := disp.targets(1); len(p1) != 0 {
-		t.Fatalf("★ Passage 1 targets = %v, want [] (cfg НЕ changed cross-passage → onchanges SKIPS)", p1)
+		t.Fatalf("* Passage 1 targets = %v, want [] (cfg did NOT change cross-passage -> onchanges SKIPS)", p1)
 	}
 }
 
@@ -338,7 +338,7 @@ func TestIntegration_CrossPassageOnChanges_PerHostDivergent(t *testing.T) {
 	// ★ Passage 1: restart ONLY on host-a (cfg changed only there).
 	p1 := disp.targets(1)
 	if len(p1) != 1 || p1[0] != "host-a.example.com" {
-		t.Fatalf("★ Passage 1 targets = %v, want [host-a.example.com] (cfg changed только на host-a → per-host)", p1)
+		t.Fatalf("* Passage 1 targets = %v, want [host-a.example.com] (cfg changed only on host-a -> per-host)", p1)
 	}
 }
 

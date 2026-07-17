@@ -150,6 +150,6 @@ func getBool(s *structpb.Struct, key string) bool {
 // Called from emit() after successfully queuing a Portent with typed payload.
 func emitDeprecationWarnOnce(logger *slog.Logger) {
 	deprecationWarnOnce.Do(func() {
-		logger.Warn("beacon: PortentEvent.data заполняется параллельно с typed payload — deprecated, 1-release WARN, удалится hard-cut в S5-final (V5-1 ADR-030 amendment 2026-05-26)")
+		logger.Warn("beacon: PortentEvent.data is populated alongside typed payload - deprecated, 1-release WARN, will be hard-cut in S5-final (V5-1 ADR-030 amendment 2026-05-26)")
 	})
 }

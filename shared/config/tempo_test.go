@@ -132,11 +132,11 @@ func TestTempo_PreviewDefaultsAre30_60(t *testing.T) {
 // Guards "defaults not swapped / preview no stricter than create".
 func TestTempo_PreviewSofterThanCreate(t *testing.T) {
 	if DefaultTempoVoyagePreviewRate <= DefaultTempoVoyageCreateRate {
-		t.Errorf("preview rate (%v) должен быть строго мягче create rate (%v)",
+		t.Errorf("preview rate (%v) should be strictly softer than create rate (%v)",
 			DefaultTempoVoyagePreviewRate, DefaultTempoVoyageCreateRate)
 	}
 	if DefaultTempoVoyagePreviewBurst <= DefaultTempoVoyageCreateBurst {
-		t.Errorf("preview burst (%d) должен быть строго мягче create burst (%d)",
+		t.Errorf("preview burst (%d) should be strictly softer than create burst (%d)",
 			DefaultTempoVoyagePreviewBurst, DefaultTempoVoyageCreateBurst)
 	}
 }
@@ -156,10 +156,10 @@ func TestLoadKeeper_Tempo_PreviewIndependentOfCreate(t *testing.T) {
 	}
 	if hasCode(diags, "value_out_of_range") {
 		dump(t, diags)
-		t.Fatal("валидный preview-override не должен давать value_out_of_range")
+		t.Fatal("a valid preview-override should not produce value_out_of_range")
 	}
 	if cfg.Tempo == nil {
-		t.Fatal("tempo не распарсился")
+		t.Fatal("tempo was not parsed")
 	}
 	pr, pb := cfg.Tempo.ResolvedVoyagePreview()
 	if pr != 33 || pb != 66 {
@@ -168,7 +168,7 @@ func TestLoadKeeper_Tempo_PreviewIndependentOfCreate(t *testing.T) {
 	// create is untouched by the preview override — stays at default.
 	cr, cb := cfg.Tempo.ResolvedVoyageCreate()
 	if cr != DefaultTempoVoyageCreateRate || cb != DefaultTempoVoyageCreateBurst {
-		t.Errorf("ResolvedVoyageCreate() = (%v, %v) — override preview не должен трогать create-дефолты (%v, %v)",
+		t.Errorf("ResolvedVoyageCreate() = (%v, %v) - overriding preview should not touch create defaults (%v, %v)",
 			cr, cb, DefaultTempoVoyageCreateRate, DefaultTempoVoyageCreateBurst)
 	}
 }
@@ -183,7 +183,7 @@ func TestLoadKeeper_Tempo_PreviewNegativeRate(t *testing.T) {
 	_, _, diags, _ := LoadKeeperFromBytes("keeper.yml", []byte(src), ValidateOptions{})
 	if !hasCodeAt(diags, "value_out_of_range", "$.tempo.voyage_preview.rate") {
 		dump(t, diags)
-		t.Fatal("ожидался value_out_of_range на $.tempo.voyage_preview.rate (rate < 0)")
+		t.Fatal("expected value_out_of_range at $.tempo.voyage_preview.rate (rate < 0)")
 	}
 }
 
@@ -197,7 +197,7 @@ func TestLoadKeeper_Tempo_PreviewNegativeBurst(t *testing.T) {
 	_, _, diags, _ := LoadKeeperFromBytes("keeper.yml", []byte(src), ValidateOptions{})
 	if !hasCodeAt(diags, "value_out_of_range", "$.tempo.voyage_preview.burst") {
 		dump(t, diags)
-		t.Fatal("ожидался value_out_of_range на $.tempo.voyage_preview.burst (burst < 0)")
+		t.Fatal("expected value_out_of_range at $.tempo.voyage_preview.burst (burst < 0)")
 	}
 }
 
@@ -211,7 +211,7 @@ func TestLoadKeeper_Tempo_NegativeRate(t *testing.T) {
 	_, _, diags, _ := LoadKeeperFromBytes("keeper.yml", []byte(src), ValidateOptions{})
 	if !hasCodeAt(diags, "value_out_of_range", "$.tempo.voyage_create.rate") {
 		dump(t, diags)
-		t.Fatal("ожидался value_out_of_range на $.tempo.voyage_create.rate (rate < 0)")
+		t.Fatal("expected value_out_of_range at $.tempo.voyage_create.rate (rate < 0)")
 	}
 }
 
@@ -225,7 +225,7 @@ func TestLoadKeeper_Tempo_NegativeBurst(t *testing.T) {
 	_, _, diags, _ := LoadKeeperFromBytes("keeper.yml", []byte(src), ValidateOptions{})
 	if !hasCodeAt(diags, "value_out_of_range", "$.tempo.voyage_create.burst") {
 		dump(t, diags)
-		t.Fatal("ожидался value_out_of_range на $.tempo.voyage_create.burst (burst < 0)")
+		t.Fatal("expected value_out_of_range at $.tempo.voyage_create.burst (burst < 0)")
 	}
 }
 
@@ -244,14 +244,14 @@ func TestLoadKeeper_Tempo_ZeroResolvesToDefault(t *testing.T) {
 	}
 	if hasCode(diags, "value_out_of_range") {
 		dump(t, diags)
-		t.Fatal("rate:0/burst:0 не должны давать value_out_of_range (резолвятся к дефолту)")
+		t.Fatal("rate:0/burst:0 should not produce value_out_of_range (resolve to default)")
 	}
 	if cfg.Tempo == nil {
-		t.Fatal("tempo не распарсился")
+		t.Fatal("tempo was not parsed")
 	}
 	rate, burst := cfg.Tempo.ResolvedVoyageCreate()
 	if rate != DefaultTempoVoyageCreateRate || burst != DefaultTempoVoyageCreateBurst {
-		t.Errorf("ResolvedVoyageCreate() = (%v, %v), want (%v, %v) — 0 резолвится к дефолту",
+		t.Errorf("ResolvedVoyageCreate() = (%v, %v), want (%v, %v) - 0 resolves to default",
 			rate, burst, DefaultTempoVoyageCreateRate, DefaultTempoVoyageCreateBurst)
 	}
 }
@@ -271,13 +271,13 @@ func TestLoadKeeper_Tempo_ValidBlock(t *testing.T) {
 	}
 	if hasCode(diags, "value_out_of_range") {
 		dump(t, diags)
-		t.Fatal("валидный tempo-блок не должен давать value_out_of_range")
+		t.Fatal("a valid tempo block should not produce value_out_of_range")
 	}
 	if cfg.Tempo == nil {
-		t.Fatal("tempo не распарсился")
+		t.Fatal("tempo was not parsed")
 	}
 	if !cfg.Tempo.TempoEnabled() {
-		t.Error("enabled: true должно дать ON")
+		t.Error("enabled: true should give ON")
 	}
 	rate, burst := cfg.Tempo.ResolvedVoyageCreate()
 	if rate != 10 || burst != 20 {

@@ -30,7 +30,7 @@ func TestOpenAPI_VoyageWrite_Has429Tempo(t *testing.T) {
 		Paths map[string]yaml.Node `yaml:"paths"`
 	}
 	if err := yaml.Unmarshal([]byte(dump), &doc); err != nil {
-		t.Fatalf("разбор huma-спеки: %v", err)
+		t.Fatalf("parsing huma spec: %v", err)
 	}
 
 	// Both paths are under Tempo, each under its own bucket (create→voyage_create,
@@ -38,7 +38,7 @@ func TestOpenAPI_VoyageWrite_Has429Tempo(t *testing.T) {
 	for _, path := range []string{"/v1/voyages", "/v1/voyages/preview"} {
 		pathNode, ok := doc.Paths[path]
 		if !ok {
-			t.Fatalf("в спеке нет пути %s", path)
+			t.Fatalf("spec has no path %s", path)
 		}
 		var pathItem map[string]yaml.Node
 		if err := pathNode.Decode(&pathItem); err != nil {
@@ -46,7 +46,7 @@ func TestOpenAPI_VoyageWrite_Has429Tempo(t *testing.T) {
 		}
 		postNode, ok := pathItem["post"]
 		if !ok {
-			t.Fatalf("в спеке нет операции POST %s", path)
+			t.Fatalf("spec has no POST operation %s", path)
 		}
 		var post struct {
 			Responses map[string]struct {
@@ -57,7 +57,7 @@ func TestOpenAPI_VoyageWrite_Has429Tempo(t *testing.T) {
 			t.Fatalf("decode POST %s: %v", path, err)
 		}
 		if _, ok := post.Responses["429"]; !ok {
-			t.Errorf("POST %s не объявляет ответ 429 (Tempo, ADR-050(d))", path)
+			t.Errorf("POST %s does not declare 429 response (Tempo, ADR-050(d))", path)
 		}
 	}
 }

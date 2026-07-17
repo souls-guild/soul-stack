@@ -121,7 +121,7 @@ func TestRun_AcquiresLeaseAndSpawns(t *testing.T) {
 		return v == cfg.Holder
 	})
 	if v, _ := mr.Get("reaper:leader"); v != "" {
-		t.Errorf("conductor занял reaper:leader=%q; должен быть свой ключ conductor:leader", v)
+		t.Errorf("conductor took reaper:leader=%q; it should have its own key conductor:leader", v)
 	}
 
 	// Immediate spawn on acquire + subsequent ticks per interval.
@@ -140,7 +140,7 @@ func TestLeaseKey_NotReaper(t *testing.T) {
 		t.Errorf("LeaseKey = %q; want conductor:leader", LeaseKey)
 	}
 	if LeaseKey == "reaper:leader" {
-		t.Fatal("Conductor lease конфликтует с Reaper lease")
+		t.Fatal("Conductor lease conflicts with Reaper lease")
 	}
 }
 
@@ -183,7 +183,7 @@ func TestRun_TwoInstances_OnlyLeaderSpawns(t *testing.T) {
 
 	waitFor(t, 500*time.Millisecond, func() bool { return winnerSp.calls.Load() >= 3 })
 	if got := loserSp.calls.Load(); got != 0 {
-		t.Errorf("loser спавнил %d раз без lease; want 0", got)
+		t.Errorf("loser spawned %d times without lease; want 0", got)
 	}
 
 	cancel()
@@ -210,7 +210,7 @@ func TestRun_PassesBatchSize(t *testing.T) {
 
 	waitFor(t, 500*time.Millisecond, func() bool { return sp.calls.Load() >= 1 })
 	if got := sp.lastBatch.Load(); got != 42 {
-		t.Errorf("Spawner получил batch=%d; want 42", got)
+		t.Errorf("Spawner received batch=%d; want 42", got)
 	}
 
 	cancel()
@@ -269,10 +269,10 @@ func TestRun_GracefulShutdown(t *testing.T) {
 			t.Errorf("Run after cancel: %v", err)
 		}
 	case <-time.After(2 * time.Second):
-		t.Fatal("Run не вернулся за 2s после cancel — leak")
+		t.Fatal("Run did not return within 2s after cancel -- leak")
 	}
 
 	if v, _ := mr.Get(LeaseKey); v != "" {
-		t.Errorf("lease-ключ всё ещё держится после shutdown: %q", v)
+		t.Errorf("lease key is still held after shutdown: %q", v)
 	}
 }

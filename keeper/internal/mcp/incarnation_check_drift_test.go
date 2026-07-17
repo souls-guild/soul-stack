@@ -125,7 +125,7 @@ func TestToolsCall_IncarnationCheckDrift_Success(t *testing.T) {
 		if ev.EventType == audit.EventIncarnationDriftChecked {
 			found = true
 			if ev.CorrelationID == "" {
-				t.Error("audit: correlation_id (apply_id) пуст")
+				t.Error("audit: correlation_id (apply_id) is empty")
 			}
 			if ev.Source != audit.SourceMCP {
 				t.Errorf("audit source = %s, want mcp", ev.Source)
@@ -133,7 +133,7 @@ func TestToolsCall_IncarnationCheckDrift_Success(t *testing.T) {
 		}
 	}
 	if !found {
-		t.Error("audit: incarnation.drift_checked не записан")
+		t.Error("audit: incarnation.drift_checked not recorded")
 	}
 }
 

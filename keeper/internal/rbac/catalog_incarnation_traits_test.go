@@ -17,6 +17,6 @@ func TestCatalog_IncarnationTraitsSet(t *testing.T) {
 	}
 	// The deprecated per-soul permission is NOT removed (forward-compat, closed enum).
 	if !IsAllowedPermission("soul", "traits-assign") {
-		t.Error("soul.traits-assign removed — deprecate ≠ remove (роли в keeper.yml сломаются)")
+		t.Error("soul.traits-assign removed - deprecate != remove (roles in keeper.yml would break)")
 	}
 }

@@ -779,7 +779,7 @@ func validateSource(s *InputSchema, present map[string]*ast.MappingValueNode, pa
 			Level: diag.LevelError, Phase: diag.PhaseSemanticValidate,
 			Code:     "input_source_invalid_for_type",
 			Message:  "source on type=array requires items.type=string",
-			Hint:     "multi-выбор из каталога — массив строк (SID); set items: { type: string }",
+			Hint:     "multi-select from catalog - array of strings (SID); set items: { type: string }",
 			YAMLPath: path + ".source",
 		}))
 	}

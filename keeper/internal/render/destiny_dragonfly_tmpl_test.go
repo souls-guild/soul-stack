@@ -106,7 +106,7 @@ func TestDragonflyFlagfile_AbslFlagForm(t *testing.T) {
 	// regression reintroducing requirepass (which would reopen the master
 	// password instead of the ACL model).
 	if strings.Contains(out, "--requirepass") {
-		t.Fatalf("flagfile содержит --requirepass: редизайн default_admin убрал его (аутентификация под ACL default_admin). Рендер:\n%s", out)
+		t.Fatalf("flagfile contains --requirepass: the default_admin redesign removed it (authentication is under the default_admin ACL). Render:\n%s", out)
 	}
 
 	// (c) merged config — --<key>=<value> with DF flags (underscore). bool
@@ -128,7 +128,7 @@ func TestDragonflyFlagfile_AbslFlagForm(t *testing.T) {
 			continue
 		}
 		if !strings.HasPrefix(ln, "--") {
-			t.Fatalf("flagfile содержит не-absl строку (ожидался --flag=value): %q", ln)
+			t.Fatalf("flagfile contains a non-absl line (expected --flag=value): %q", ln)
 		}
 	}
 }
@@ -176,7 +176,7 @@ func TestDragonflyFlagfile_TLSOnMainPort(t *testing.T) {
 	// presence is an absl FATAL at start. Catches a regression reintroducing
 	// tls_port into df_config.
 	if strings.Contains(out, "--tls_port") {
-		t.Fatalf("flagfile содержит --tls_port: у DragonFly нет такого флага (TLS встаёт на основной --port). Рендер:\n%s", out)
+		t.Fatalf("flagfile contains --tls_port: DragonFly has no such flag (TLS goes on the main --port). Render:\n%s", out)
 	}
 }
 
@@ -227,7 +227,7 @@ func TestDragonflyServiceUnit_TypeSimpleAndExecStart(t *testing.T) {
 	mustContainLine(t, out, "User=dragonfly")
 	mustContainLine(t, out, "Group=dragonfly")
 	if strings.Contains(out, "Type=notify") {
-		t.Fatalf("юнит DragonFly не должен быть Type=notify (DF без sd_notify): %s", out)
+		t.Fatalf("the DragonFly unit should not be Type=notify (DF has no sd_notify): %s", out)
 	}
 }
 
@@ -249,5 +249,5 @@ func mustContainLine(t *testing.T, out, want string) {
 			return
 		}
 	}
-	t.Fatalf("ожидалась строка %q в рендере, не найдена. Рендер:\n%s", want, out)
+	t.Fatalf("expected line %q in the render, not found. Render:\n%s", want, out)
 }

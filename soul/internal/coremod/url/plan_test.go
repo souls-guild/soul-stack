@@ -16,6 +16,6 @@ import (
 func TestURL_NotPlanReadSafe(t *testing.T) {
 	m := url.New()
 	if _, ok := any(m).(module.PlanReadSafe); ok {
-		t.Fatal("core.url реализует PlanReadSafe (не должен в MVP — см. doc Plan)")
+		t.Fatal("core.url implements PlanReadSafe (should not in MVP - see doc Plan)")
 	}
 }

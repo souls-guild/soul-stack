@@ -36,10 +36,10 @@ func TestTaskRefs_DuplicateRegister_Destiny(t *testing.T) {
 `
 	_, diags, _ := LoadDestinyTasksFromBytes("tasks/main.yml", []byte(src), ValidateOptions{})
 	if !diag.HasErrors(diags) {
-		t.Fatal("ожидалась ошибка duplicate_task_address")
+		t.Fatal("expected a duplicate_task_address error")
 	}
 	if got := countCode(diags, "duplicate_task_address"); got != 1 {
-		t.Fatalf("duplicate_task_address count = %d, want 1 (на втором объявлении); diags=%v", got, diags)
+		t.Fatalf("duplicate_task_address count = %d, want 1 (on the second declaration); diags=%v", got, diags)
 	}
 	// Diagnostic points at the SECOND declaration (the first is primary).
 	for _, d := range diags {
@@ -128,7 +128,7 @@ func TestTaskRefs_RequireAll_NotFlagged(t *testing.T) {
 `
 	_, diags, _ := LoadDestinyTasksFromBytes("tasks/main.yml", []byte(src), ValidateOptions{})
 	if got := countCode(diags, "unknown_register_reference"); got != 0 {
-		t.Fatalf("require: all не должен давать unknown_register_reference; got=%d, diags=%v", got, diags)
+		t.Fatalf("require: all must not produce unknown_register_reference; got=%d, diags=%v", got, diags)
 	}
 }
 
@@ -155,7 +155,7 @@ func TestTaskRefs_Valid_Destiny(t *testing.T) {
 `
 	_, diags, _ := LoadDestinyTasksFromBytes("tasks/main.yml", []byte(src), ValidateOptions{})
 	if got := countCode(diags, "duplicate_task_address") + countCode(diags, "unknown_register_reference"); got != 0 {
-		t.Fatalf("валидный план не должен давать cross-ref ошибок; got=%d, diags=%v", got, diags)
+		t.Fatalf("a valid plan must not produce cross-ref errors; got=%d, diags=%v", got, diags)
 	}
 }
 
@@ -177,7 +177,7 @@ func TestTaskRefs_CELRef_NotFlagged(t *testing.T) {
 `
 	_, diags, _ := LoadDestinyTasksFromBytes("tasks/main.yml", []byte(src), ValidateOptions{})
 	if got := countCode(diags, "unknown_register_reference"); got != 0 {
-		t.Fatalf("CEL-обёртка в onchanges не должна ловиться; got=%d, diags=%v", got, diags)
+		t.Fatalf("a CEL wrapper in onchanges must not be flagged; got=%d, diags=%v", got, diags)
 	}
 }
 
@@ -208,11 +208,11 @@ func TestTaskRefs_BlockNested_Destiny(t *testing.T) {
 	_, diags, _ := LoadDestinyTasksFromBytes("tasks/main.yml", []byte(src), ValidateOptions{})
 	// onchanges:[inner_conf] resolves (block register visible) → no unknown ref.
 	if got := countCode(diags, "unknown_register_reference"); got != 0 {
-		t.Errorf("block register должен быть виден из top-level onchanges; got unknown=%d, diags=%v", got, diags)
+		t.Errorf("block register must be visible from top-level onchanges; got unknown=%d, diags=%v", got, diags)
 	}
 	// top-level register inner_conf duplicates the block register → error.
 	if got := countCode(diags, "duplicate_task_address"); got != 1 {
-		t.Errorf("дубль register между block и top-level должен ловиться; got=%d, diags=%v", got, diags)
+		t.Errorf("a duplicate register between block and top-level must be flagged; got=%d, diags=%v", got, diags)
 	}
 }
 
@@ -237,7 +237,7 @@ func TestTaskAddress_DuplicateID_Destiny(t *testing.T) {
 	_, diags, _ := LoadDestinyTasksFromBytes("tasks/main.yml", []byte(src), ValidateOptions{})
 	if got := countCode(diags, "duplicate_task_address"); got != 1 {
 		dump(t, diags)
-		t.Fatalf("дубль id должен ловиться; duplicate_task_address count = %d, want 1", got)
+		t.Fatalf("a duplicate id must be flagged; duplicate_task_address count = %d, want 1", got)
 	}
 	for _, d := range diags {
 		if d.Code == "duplicate_task_address" && d.YAMLPath != "$[1].id" {
@@ -265,7 +265,7 @@ func TestTaskAddress_IDCollidesRegister_Destiny(t *testing.T) {
 	_, diags, _ := LoadDestinyTasksFromBytes("tasks/main.yml", []byte(src), ValidateOptions{})
 	if got := countCode(diags, "duplicate_task_address"); got != 1 {
 		dump(t, diags)
-		t.Fatalf("пересечение register/id должно ловиться; count = %d, want 1", got)
+		t.Fatalf("a register/id collision must be flagged; count = %d, want 1", got)
 	}
 	for _, d := range diags {
 		if d.Code == "duplicate_task_address" && d.YAMLPath != "$[1].id" {
@@ -294,7 +294,7 @@ func TestTaskAddress_RegisterCollidesID_Destiny(t *testing.T) {
 	_, diags, _ := LoadDestinyTasksFromBytes("tasks/main.yml", []byte(src), ValidateOptions{})
 	if got := countCode(diags, "duplicate_task_address"); got != 1 {
 		dump(t, diags)
-		t.Fatalf("пересечение id/register должно ловиться; count = %d, want 1", got)
+		t.Fatalf("an id/register collision must be flagged; count = %d, want 1", got)
 	}
 	for _, d := range diags {
 		if d.Code == "duplicate_task_address" && d.YAMLPath != "$[1].register" {
@@ -322,7 +322,7 @@ func TestTaskAddress_UniqueIDAndRegister_Destiny(t *testing.T) {
 	_, diags, _ := LoadDestinyTasksFromBytes("tasks/main.yml", []byte(src), ValidateOptions{})
 	if got := countCode(diags, "duplicate_task_address"); got != 0 {
 		dump(t, diags)
-		t.Fatalf("уникальные register+id не должны давать дубль; count = %d, want 0", got)
+		t.Fatalf("unique register+id must not produce a duplicate; count = %d, want 0", got)
 	}
 }
 
@@ -346,11 +346,11 @@ func TestTaskAddress_IDNotResolvableInRequisites_Destiny(t *testing.T) {
 	_, diags, _ := LoadDestinyTasksFromBytes("tasks/main.yml", []byte(src), ValidateOptions{})
 	if got := countCode(diags, "unknown_register_reference"); got != 1 {
 		dump(t, diags)
-		t.Fatalf("ссылка onchanges на id-задачу должна быть unknown_register_reference; count = %d, want 1", got)
+		t.Fatalf("an onchanges reference to an id-task must be unknown_register_reference; count = %d, want 1", got)
 	}
 	// No address duplicate here (id and register reference are different names).
 	if got := countCode(diags, "duplicate_task_address"); got != 0 {
-		t.Errorf("неожиданный duplicate_task_address; count = %d, want 0", got)
+		t.Errorf("unexpected duplicate_task_address; count = %d, want 0", got)
 	}
 }
 
@@ -424,7 +424,7 @@ func TestTaskTypes_OnChangesScalar_Rejected(t *testing.T) {
 	_, diags, _ := LoadDestinyTasksFromBytes("tasks/main.yml", []byte(src), ValidateOptions{})
 	if !hasCodeAt(diags, "type_mismatch", "$[1].onchanges") {
 		dump(t, diags)
-		t.Fatalf("ожидался type_mismatch на $[1].onchanges (скаляр вместо списка)")
+		t.Fatalf("expected type_mismatch on $[1].onchanges (scalar instead of a list)")
 	}
 }
 
@@ -444,7 +444,7 @@ func TestTaskTypes_OnFailScalar_Rejected(t *testing.T) {
 	_, diags, _ := LoadDestinyTasksFromBytes("tasks/main.yml", []byte(src), ValidateOptions{})
 	if !hasCodeAt(diags, "type_mismatch", "$[1].onfail") {
 		dump(t, diags)
-		t.Fatalf("ожидался type_mismatch на $[1].onfail (скаляр вместо списка)")
+		t.Fatalf("expected type_mismatch on $[1].onfail (scalar instead of a list)")
 	}
 }
 
@@ -460,7 +460,7 @@ func TestTaskTypes_RequireAll_Accepted(t *testing.T) {
 	_, diags, _ := LoadDestinyTasksFromBytes("tasks/main.yml", []byte(src), ValidateOptions{})
 	if countCode(diags, "type_mismatch") != 0 {
 		dump(t, diags)
-		t.Fatalf("require: all не должен давать type_mismatch")
+		t.Fatalf("require: all must not produce type_mismatch")
 	}
 }
 
@@ -481,7 +481,7 @@ func TestTaskTypes_RequireScalarOther_Rejected(t *testing.T) {
 	_, diags, _ := LoadDestinyTasksFromBytes("tasks/main.yml", []byte(src), ValidateOptions{})
 	if !hasCodeAt(diags, "type_mismatch", "$[1].require") {
 		dump(t, diags)
-		t.Fatalf("ожидался type_mismatch на $[1].require (скаляр != all)")
+		t.Fatalf("expected type_mismatch on $[1].require (scalar != all)")
 	}
 }
 
@@ -501,7 +501,7 @@ func TestTaskTypes_RequireList_Accepted(t *testing.T) {
 	_, diags, _ := LoadDestinyTasksFromBytes("tasks/main.yml", []byte(src), ValidateOptions{})
 	if countCode(diags, "type_mismatch") != 0 {
 		dump(t, diags)
-		t.Fatalf("require: [prep] не должен давать type_mismatch")
+		t.Fatalf("require: [prep] must not produce type_mismatch")
 	}
 }
 
@@ -517,7 +517,7 @@ func TestTaskTypes_OnChangesNonStringElem_Rejected(t *testing.T) {
 	_, diags, _ := LoadDestinyTasksFromBytes("tasks/main.yml", []byte(src), ValidateOptions{})
 	if !hasCodeAt(diags, "type_mismatch", "$[0].onchanges[0]") {
 		dump(t, diags)
-		t.Fatalf("ожидался type_mismatch на $[0].onchanges[0] (int-элемент)")
+		t.Fatalf("expected type_mismatch on $[0].onchanges[0] (int element)")
 	}
 }
 
@@ -539,7 +539,7 @@ func TestTaskRefs_CELWhenUnknown_Destiny(t *testing.T) {
 	_, diags, _ := LoadDestinyTasksFromBytes("tasks/main.yml", []byte(src), ValidateOptions{})
 	if !hasCodeAt(diags, "unknown_register_reference", "$[1].when") {
 		dump(t, diags)
-		t.Fatalf("ожидался unknown_register_reference на $[1].when (опечатка register-имени в CEL)")
+		t.Fatalf("expected unknown_register_reference on $[1].when (typo in a register name in CEL)")
 	}
 }
 
@@ -559,7 +559,7 @@ func TestTaskRefs_CELWhenKnown_Destiny(t *testing.T) {
 	_, diags, _ := LoadDestinyTasksFromBytes("tasks/main.yml", []byte(src), ValidateOptions{})
 	if countCode(diags, "unknown_register_reference") != 0 {
 		dump(t, diags)
-		t.Fatalf("существующее register-имя в when не должно ловиться")
+		t.Fatalf("an existing register name in when must not be flagged")
 	}
 }
 
@@ -580,7 +580,7 @@ func TestTaskRefs_CELSelf_NotFlagged(t *testing.T) {
 	_, diags, _ := LoadDestinyTasksFromBytes("tasks/main.yml", []byte(src), ValidateOptions{})
 	if countCode(diags, "unknown_register_reference") != 0 {
 		dump(t, diags)
-		t.Fatalf("register.self не должен ловиться cross-ref-ом")
+		t.Fatalf("register.self must not be flagged by the cross-ref check")
 	}
 }
 
@@ -597,7 +597,7 @@ func TestTaskRefs_CELStringLiteral_NotFalsePositive(t *testing.T) {
 	_, diags, _ := LoadDestinyTasksFromBytes("tasks/main.yml", []byte(src), ValidateOptions{})
 	if countCode(diags, "unknown_register_reference") != 0 {
 		dump(t, diags)
-		t.Fatalf("register.<x> внутри строкового литерала не должен ловиться")
+		t.Fatalf("register.<x> inside a string literal must not be flagged")
 	}
 }
 
@@ -621,7 +621,7 @@ func TestTaskRefs_CELRetryUntilLoopWhere_Unknown(t *testing.T) {
 	_, diags, _ := LoadDestinyTasksFromBytes("tasks/main.yml", []byte(src), ValidateOptions{})
 	if got := countCode(diags, "unknown_register_reference"); got != 3 {
 		dump(t, diags)
-		t.Fatalf("ожидалось 3 unknown_register_reference (where/loop.when/retry.until); got=%d", got)
+		t.Fatalf("expected 3 unknown_register_reference (where/loop.when/retry.until); got=%d", got)
 	}
 }
 
@@ -642,7 +642,7 @@ func TestTaskRefs_CELDynamicAccess_NotFlagged(t *testing.T) {
 	_, diags, _ := LoadDestinyTasksFromBytes("tasks/main.yml", []byte(src), ValidateOptions{})
 	if countCode(diags, "unknown_register_reference") != 0 {
 		dump(t, diags)
-		t.Fatalf("динамический register[...] не должен давать unknown_register_reference")
+		t.Fatalf("a dynamic register[...] must not produce unknown_register_reference")
 	}
 }
 
@@ -663,7 +663,7 @@ tasks:
 `
 	_, _, diags, _ := LoadScenarioManifestFromBytes("scenario/create/main.yml", []byte(src), ValidateOptions{})
 	if got := countCode(diags, "duplicate_task_address") + countCode(diags, "unknown_register_reference"); got != 0 {
-		t.Fatalf("валидный scenario не должен давать cross-ref ошибок; got=%d, diags=%v", got, diags)
+		t.Fatalf("a valid scenario must not produce cross-ref errors; got=%d, diags=%v", got, diags)
 	}
 }
 
@@ -713,7 +713,7 @@ func TestTaskRefs_UnknownInterpField_Destiny(t *testing.T) {
 			_, diags, _ := LoadDestinyTasksFromBytes("tasks/main.yml", []byte(src), ValidateOptions{})
 			if got := countCode(diags, "unknown_register_reference"); got != 1 {
 				dump(t, diags)
-				t.Fatalf("%s: unknown_register_reference count = %d, want 1 (валидатор-дыра ADR-056 S2 не закрыта)", field, got)
+				t.Fatalf("%s: unknown_register_reference count = %d, want 1 (ADR-056 S2 validator gap not closed)", field, got)
 			}
 		})
 	}
@@ -768,7 +768,7 @@ tasks:
 	_, _, diags, _ := LoadScenarioManifestFromBytes("scenario/chain/main.yml", []byte(src), ValidateOptions{})
 	if got := countCode(diags, "unknown_register_reference"); got != 0 {
 		dump(t, diags)
-		t.Fatalf("known register в output/params/apply.input не должен ловиться; got=%d", got)
+		t.Fatalf("a known register in output/params/apply.input must not be flagged; got=%d", got)
 	}
 }
 
@@ -798,7 +798,7 @@ tasks:
 	_, _, diags, _ := LoadScenarioManifestFromBytes("scenario/act/main.yml", []byte(src), ValidateOptions{})
 	if got := countCode(diags, "unknown_register_reference"); got != 0 {
 		dump(t, diags)
-		t.Fatalf("onchanges на applier-register не должен ловиться unknown_register_reference; got=%d (applier-register — валидный адрес подписки)", got)
+		t.Fatalf("onchanges on an applier-register must not be flagged unknown_register_reference; got=%d (applier-register is a valid subscription address)", got)
 	}
 }
 
@@ -824,6 +824,6 @@ tasks:
 	_, _, diags, _ := LoadScenarioManifestFromBytes("scenario/act/main.yml", []byte(src), ValidateOptions{})
 	if got := countCode(diags, "unknown_register_reference"); got != 1 {
 		dump(t, diags)
-		t.Fatalf("опечатка в onchanges на applier-register обязана ловиться; unknown_register_reference count = %d, want 1", got)
+		t.Fatalf("a typo in onchanges on an applier-register must be flagged; unknown_register_reference count = %d, want 1", got)
 	}
 }

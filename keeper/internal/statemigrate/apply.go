@@ -34,7 +34,7 @@ func applyOp(op Op, state map[string]any, ev Evaluator, scope Scope) error {
 		return applyForeach(op.Foreach, state, ev, scope)
 	default:
 		// Discriminator is guaranteed by the parser; this guards against a programming error.
-		return &EvalError{Class: ClassPathSegment, Msg: "пустая операция (нет дискриминатора)"}
+		return &EvalError{Class: ClassPathSegment, Msg: "empty operation (no discriminator)"}
 	}
 }
 
@@ -63,7 +63,7 @@ func applyRename(op *RenameOp, state map[string]any, ev Evaluator, scope Scope) 
 	if _, exists, err := getPath(state, toKeys); err != nil {
 		return err
 	} else if exists {
-		return &EvalError{Class: ClassRenameToExists, Path: op.To, Msg: "целевой путь rename/move уже существует (нужен явный delete)"}
+		return &EvalError{Class: ClassRenameToExists, Path: op.To, Msg: "rename/move target path already exists (explicit delete required)"}
 	}
 
 	if err := setPath(state, toKeys, val); err != nil {
@@ -101,7 +101,7 @@ func applyDelete(op *DeleteOp, state map[string]any, ev Evaluator, scope Scope) 
 // blocks add their As on top of the outer ones (a new loop map per iteration).
 func applyForeach(op *ForeachOp, state map[string]any, ev Evaluator, scope Scope) error {
 	if op.As == "" {
-		return &EvalError{Class: ClassForeachType, Msg: "foreach без as:"}
+		return &EvalError{Class: ClassForeachType, Msg: "foreach without as:"}
 	}
 	coll, err := evalCollection(op.In, ev, scope)
 	if err != nil {
@@ -154,7 +154,7 @@ func iterItems(coll any, expr string) ([]any, error) {
 		}
 		return out, nil
 	default:
-		return nil, &EvalError{Class: ClassForeachType, Msg: fmt.Sprintf("foreach in: %q дал %T, ожидался список или map", expr, coll)}
+		return nil, &EvalError{Class: ClassForeachType, Msg: fmt.Sprintf("foreach in: %q gave %T, expected a list or map", expr, coll)}
 	}
 }
 
@@ -165,7 +165,7 @@ func resolvePath(raw string, ev Evaluator, scope Scope) ([]string, error) {
 		return nil, err
 	}
 	if len(segs) == 0 {
-		return nil, &EvalError{Class: ClassPathSegment, Path: raw, Msg: "пустой адрес (операции над корнем state не поддерживаются)"}
+		return nil, &EvalError{Class: ClassPathSegment, Path: raw, Msg: "empty address (operations on the state root are not supported)"}
 	}
 	return resolveSegments(segs, ev, scope)
 }
@@ -185,7 +185,7 @@ func getPath(state map[string]any, keys []string) (any, bool, error) {
 		}
 		next, ok := v.(map[string]any)
 		if !ok {
-			return nil, false, &EvalError{Class: ClassPathTraverse, Path: joinKeys(keys[:i+1]), Msg: fmt.Sprintf("промежуточный сегмент — %T, не map", v)}
+			return nil, false, &EvalError{Class: ClassPathTraverse, Path: joinKeys(keys[:i+1]), Msg: fmt.Sprintf("intermediate segment is %T, not a map", v)}
 		}
 		cur = next
 	}
@@ -211,7 +211,7 @@ func setPath(state map[string]any, keys []string, val any) error {
 		}
 		next, ok := v.(map[string]any)
 		if !ok {
-			return &EvalError{Class: ClassPathTraverse, Path: joinKeys(keys[:i+1]), Msg: fmt.Sprintf("промежуточный сегмент — %T, не map", v)}
+			return &EvalError{Class: ClassPathTraverse, Path: joinKeys(keys[:i+1]), Msg: fmt.Sprintf("intermediate segment is %T, not a map", v)}
 		}
 		cur = next
 	}

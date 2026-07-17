@@ -28,10 +28,10 @@ func TestSecretInputNames(t *testing.T) {
 	}}
 	got := secretInputNames(scn)
 	if !got["password"] || !got["api_key"] {
-		t.Errorf("secret-имена не собраны: %v", got)
+		t.Errorf("secret names not collected: %v", got)
 	}
 	if got["hostname"] {
-		t.Errorf("несекретный hostname попал в набор: %v", got)
+		t.Errorf("non-secret hostname ended up in the set: %v", got)
 	}
 }
 
@@ -51,13 +51,13 @@ func TestCollectSealed_SecretInputInGenericField(t *testing.T) {
 
 	paths := set.Paths()
 	if !paths["content"] {
-		t.Errorf("content (secret-input в generic-поле) не sealed: %v", paths)
+		t.Errorf("content (secret-input in a generic field) not sealed: %v", paths)
 	}
 	if paths["port"] {
-		t.Errorf("port (несекретный input) sealed — over-seal: %v", paths)
+		t.Errorf("port (non-secret input) sealed - over-seal: %v", paths)
 	}
 	if paths["label"] {
-		t.Errorf("label (литерал) sealed — over-seal: %v", paths)
+		t.Errorf("label (literal) sealed - over-seal: %v", paths)
 	}
 }
 
@@ -74,7 +74,7 @@ func TestCollectSealed_VaultValue(t *testing.T) {
 
 	paths := set.Paths()
 	if !paths["token"] {
-		t.Errorf("vault()-ячейка не sealed: %v", paths)
+		t.Errorf("vault() cell not sealed: %v", paths)
 	}
 	if paths["plain"] {
 		t.Errorf("plain sealed — over-seal: %v", paths)
@@ -92,7 +92,7 @@ func TestCollectSealed_TernaryReadsSecret(t *testing.T) {
 	}
 	collectSealed(e, set, params, sources, "")
 	if !set.Paths()["cert"] {
-		t.Errorf("тернарник с secret-input не sealed: %v", set.Paths())
+		t.Errorf("ternary with secret-input not sealed: %v", set.Paths())
 	}
 }
 
@@ -107,7 +107,7 @@ func TestCollectSealed_MixedLiteralSecret(t *testing.T) {
 	}
 	collectSealed(e, set, params, sources, "")
 	if !set.Paths()["line"] {
-		t.Errorf("смешанное literal+secret не sealed: %v", set.Paths())
+		t.Errorf("mixed literal+secret not sealed: %v", set.Paths())
 	}
 }
 
@@ -127,10 +127,10 @@ func TestCollectSealed_NestedPaths(t *testing.T) {
 
 	paths := set.Paths()
 	if !paths["acl[0].secret"] {
-		t.Errorf("acl[0].secret не sealed: %v", paths)
+		t.Errorf("acl[0].secret not sealed: %v", paths)
 	}
 	if !paths["nested.token"] {
-		t.Errorf("nested.token не sealed: %v", paths)
+		t.Errorf("nested.token not sealed: %v", paths)
 	}
 }
 
@@ -142,7 +142,7 @@ func TestCollectSealed_NilSetNoop(t *testing.T) {
 	collectSealed(e, nil, params, cel.SealSources{}, "")
 	var nilSet *SealedSet
 	if nilSet.Paths() != nil {
-		t.Error("nil-SealedSet.Paths() должен быть nil")
+		t.Error("nil-SealedSet.Paths() should be nil")
 	}
 }
 
@@ -156,7 +156,7 @@ func TestCollectSealed_PathConventionMatchesRenderValue(t *testing.T) {
 	collectSealed(e, set, params, sources, "")
 	// renderValue would build the path "a.b[0]" for this.
 	if !set.Paths()["a.b[0]"] {
-		t.Errorf("путь не a.b[0]: %v", set.Paths())
+		t.Errorf("path is not a.b[0]: %v", set.Paths())
 	}
 }
 
@@ -187,9 +187,9 @@ func TestCollectSealed_RedisTLSPEMContentViaVault(t *testing.T) {
 
 	paths := set.Paths()
 	if !paths["content"] {
-		t.Errorf("PEM content (vault() в ячейке) НЕ sealed — PEM утечёт в state/error: %v", paths)
+		t.Errorf("PEM content (vault() in the cell) NOT sealed - PEM will leak into state/error: %v", paths)
 	}
 	if paths["path"] || paths["mode"] || paths["owner"] {
-		t.Errorf("несекретные поля sealed — over-seal: %v", paths)
+		t.Errorf("non-secret fields sealed - over-seal: %v", paths)
 	}
 }

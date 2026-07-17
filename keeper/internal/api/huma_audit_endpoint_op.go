@@ -55,14 +55,14 @@ import (
 //     enforced by the DOMAIN ListTyped with the same ParsePage message → 400 — otherwise a
 //     wire change. The range is documented via `doc:` (not via schema-min/max).
 type auditListInput struct {
-	Types         []string  `query:"type,explode" doc:"multi-value ?type=X&type=Y — exact-match OR по event_type"`
-	Sources       []string  `query:"source,explode" enum:"signal,api,mcp,keeper_internal,soul_grpc,background,config_bootstrap" doc:"multi-value ?source=api&source=mcp — exact-match OR; зonчение вне enum → 422"`
-	ArchonAID     string    `query:"archon_aid" doc:"AID Архонта-инициатора (case-insensitive substring, ILIKE)"`
-	CorrelationID string    `query:"correlation_id" doc:"ULID цепочки связанных withбытий (case-insensitive substring, ILIKE)"`
+	Types         []string  `query:"type,explode" doc:"multi-value ?type=X&type=Y - exact-match OR by event_type"`
+	Sources       []string  `query:"source,explode" enum:"signal,api,mcp,keeper_internal,soul_grpc,background,config_bootstrap" doc:"multi-value ?source=api&source=mcp - exact-match OR; value outside enum -> 422"`
+	ArchonAID     string    `query:"archon_aid" doc:"AID of the initiating Archon (case-insensitive substring, ILIKE)"`
+	CorrelationID string    `query:"correlation_id" doc:"ULID of the related event chain (case-insensitive substring, ILIKE)"`
 	PayloadHerald string    `query:"payload_herald" doc:"Herald channel name from payload->>'herald' (exact match)"`
 	PayloadVoyage string    `query:"payload_voyage" doc:"voyage_id from payload->>'voyage_id' (exact match)"`
-	StartedAfter  time.Time `query:"started_after" doc:"created_at >= started_after (RFC3339, включающая); bad-value → 400"`
-	StartedBefore time.Time `query:"started_before" doc:"created_at <= started_before (RFC3339, включающая); bad-value → 400"`
+	StartedAfter  time.Time `query:"started_after" doc:"created_at >= started_after (RFC3339, inclusive); bad-value -> 400"`
+	StartedBefore time.Time `query:"started_before" doc:"created_at <= started_before (RFC3339, inclusive); bad-value -> 400"`
 	Offset        int32     `query:"offset" default:"0" doc:"offset from start of set, ≥0 (matches shared/api.ParsePage; out-of-range → 400)"`
 	Limit         int32     `query:"limit" default:"50" doc:"page size 1..1000 (matches shared/api.ParsePage; out-of-range → 400)"`
 }
@@ -87,8 +87,8 @@ func auditListOperation() huma.Operation {
 		OperationID:   "listAuditEvents",
 		Method:        http.MethodGet,
 		Path:          "/audit",
-		Summary:       "Лента audit-events (paged + фильтры)",
-		Description:   "Read-only-лента audit_log с фильтрами (type/source multi-OR, archon_aid/correlation_id case-insensitive substring ILIKE, payload_herald/payload_voyage exact, started_after/before RFC3339) и пагиonцией. Permission audit.read. Read-only, no audit (чтение не writesся — рекурсия).",
+		Summary:       "Feed of audit-events (paged + filters)",
+		Description:   "Read-only feed of audit_log with filters (type/source multi-OR, archon_aid/correlation_id case-insensitive substring ILIKE, payload_herald/payload_voyage exact, started_after/before RFC3339) and pagination. Permission audit.read. Read-only, no audit (reads are not written - recursion).",
 		Tags:          []string{"audit"},
 		DefaultStatus: http.StatusOK,
 		Errors:        []int{http.StatusBadRequest, http.StatusForbidden, http.StatusUnprocessableEntity, http.StatusInternalServerError},

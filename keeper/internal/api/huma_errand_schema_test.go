@@ -39,7 +39,7 @@ func TestSchemaNames_Errand(t *testing.T) {
 	schemas := loadFullSpecSchemas(t)
 	for _, name := range errandContractSchemas {
 		if _, ok := schemas[name]; !ok {
-			t.Errorf("контрактonя схема %q ОТСУТСТВУЕТ в components/schemas (имя не выровнеbut)", name)
+			t.Errorf("contract schema %q IS MISSING from components/schemas (name not aligned)", name)
 		}
 	}
 }
@@ -55,7 +55,7 @@ func TestSchemaNames_ErrandEnvelope(t *testing.T) {
 	}
 	var doc map[string]any
 	if err := yaml.Unmarshal([]byte(y), &doc); err != nil {
-		t.Fatalf("спека не парсится: %v", err)
+		t.Fatalf("spec does not parse: %v", err)
 	}
 	comp, _ := doc["components"].(map[string]any)
 	schemas, _ := comp["schemas"].(map[string]any)
@@ -73,7 +73,7 @@ func TestSchemaNames_ErrandAccepted(t *testing.T) {
 
 	acc, ok := schemas["ErrandAccepted"].(map[string]any)
 	if !ok {
-		t.Fatal("ErrandAccepted отсутствует в components/schemas — pre-seed не сработал")
+		t.Fatal("ErrandAccepted is missing from components/schemas - pre-seed did not work")
 	}
 	assertRequiredExactly(t, acc, "ErrandAccepted", "errand_id", "status")
 	assertProps(t, acc, "ErrandAccepted", "errand_id", "status")
@@ -82,10 +82,10 @@ func TestSchemaNames_ErrandAccepted(t *testing.T) {
 	props, _ := acc["properties"].(map[string]any)
 	status, _ := props["status"].(map[string]any)
 	if status == nil {
-		t.Fatal("ErrandAccepted.status отсутствует")
+		t.Fatal("ErrandAccepted.status is missing")
 	}
 	rawEnum, _ := status["enum"].([]any)
 	if len(rawEnum) != 1 || rawEnum[0] != "running" {
-		t.Errorf("ErrandAccepted.status.enum=%v, ожидался ровbut [running]", rawEnum)
+		t.Errorf("ErrandAccepted.status.enum=%v, expected exactly [running]", rawEnum)
 	}
 }

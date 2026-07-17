@@ -93,7 +93,7 @@ type SoulSshTargetReply struct {
 // SetSshTarget is PUT /v1/souls/{sid}/ssh-target. Permission: soul.ssh-target-update.
 func (a *SoulsAPI) SetSshTarget(ctx context.Context, sid string, body SoulSshTargetBody) (*SoulSshTargetReply, error) {
 	if sid == "" {
-		return nil, fmt.Errorf("SID пуст")
+		return nil, fmt.Errorf("SID is empty")
 	}
 	var reply SoulSshTargetReply
 	if err := a.c.Do(ctx, "PUT", "/v1/souls/"+sid+"/ssh-target", body, &reply); err != nil {
@@ -108,7 +108,7 @@ func (a *SoulsAPI) SetSshTarget(ctx context.Context, sid string, body SoulSshTar
 // soulctl/README.md.
 func (a *SoulsAPI) Get(ctx context.Context, sid string) (*SoulListEntry, error) {
 	if sid == "" {
-		return nil, fmt.Errorf("SID пуст")
+		return nil, fmt.Errorf("SID is empty")
 	}
 	// Paginate in pages of 1000 (max per openapi PaginationRequest); if the
 	// cluster has more, we'll extend this, but it's enough for the MVP CLI.
@@ -132,7 +132,7 @@ func (a *SoulsAPI) Get(ctx context.Context, sid string) (*SoulListEntry, error) 
 	return nil, &APIError{
 		Status: 404,
 		Title:  "not-found",
-		Detail: fmt.Sprintf("soul %s не найден в реестре", sid),
+		Detail: fmt.Sprintf("soul %s not found in registry", sid),
 		Method: "GET",
 		Path:   "/v1/souls (filtered by sid)",
 	}

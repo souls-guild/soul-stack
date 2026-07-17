@@ -17,7 +17,7 @@ import (
 func newPushProvidersCmd() *cobra.Command {
 	c := &cobra.Command{
 		Use:     "push-providers",
-		Short:   "управление per-provider params SSH-плагинов push-flow (S7-2, push_providers)",
+		Short:   "manage per-provider params of push-flow SSH plugins (S7-2, push_providers)",
 		Aliases: []string{"push-provider"},
 	}
 	c.AddCommand(
@@ -34,10 +34,10 @@ func newPushProvidersCreateCmd() *cobra.Command {
 	var paramsJSON string
 	c := &cobra.Command{
 		Use:   "create <name>",
-		Short: "создать запись Push-Provider-а",
-		Long: `Создаёт запись в push_providers (per-provider env-payload params SSH-плагина push-flow).
+		Short: "create a Push Provider record",
+		Long: `Creates a record in push_providers (per-provider env-payload params of the push-flow SSH plugin).
 
-Sensitive params (secret_id/token/password/private_key) ОБЯЗАНЫ быть vault-refs (vault:<path>).
+Sensitive params (secret_id/token/password/private_key) MUST be vault-refs (vault:<path>).
 Permission: push-provider.create.
 
 Examples:
@@ -49,7 +49,7 @@ Examples:
 			var params map[string]any
 			if paramsJSON != "" {
 				if err := json.Unmarshal([]byte(paramsJSON), &params); err != nil {
-					return fmt.Errorf("--params не JSON: %w", err)
+					return fmt.Errorf("--params is not JSON: %w", err)
 				}
 			}
 			cl, err := loadClient(cmd)
@@ -65,7 +65,7 @@ Examples:
 			return output.JSON(cmd.OutOrStdout(), reply)
 		},
 	}
-	c.Flags().StringVar(&paramsJSON, "params", "", "params как JSON-объект (sensitive-ключи обязаны быть vault-refs)")
+	c.Flags().StringVar(&paramsJSON, "params", "", "params as a JSON object (sensitive keys must be vault-refs)")
 	return c
 }
 
@@ -73,16 +73,16 @@ func newPushProvidersUpdateCmd() *cobra.Command {
 	var paramsJSON string
 	c := &cobra.Command{
 		Use:   "update <name>",
-		Short: "заменить params Push-Provider-а (replace-семантика)",
+		Short: "replace a Push Provider's params (replace semantics)",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			name := args[0]
 			if paramsJSON == "" {
-				return fmt.Errorf("--params обязателен")
+				return fmt.Errorf("--params is required")
 			}
 			var params map[string]any
 			if err := json.Unmarshal([]byte(paramsJSON), &params); err != nil {
-				return fmt.Errorf("--params не JSON: %w", err)
+				return fmt.Errorf("--params is not JSON: %w", err)
 			}
 			cl, err := loadClient(cmd)
 			if err != nil {
@@ -97,14 +97,14 @@ func newPushProvidersUpdateCmd() *cobra.Command {
 			return output.JSON(cmd.OutOrStdout(), reply)
 		},
 	}
-	c.Flags().StringVar(&paramsJSON, "params", "", "новый набор params как JSON-объект (полная замена)")
+	c.Flags().StringVar(&paramsJSON, "params", "", "new set of params as a JSON object (full replace)")
 	return c
 }
 
 func newPushProvidersDeleteCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "delete <name>",
-		Short: "удалить запись Push-Provider-а",
+		Short: "delete a Push Provider record",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			cl, err := loadClient(cmd)
@@ -130,7 +130,7 @@ func newPushProvidersListCmd() *cobra.Command {
 	)
 	c := &cobra.Command{
 		Use:   "list",
-		Short: "перечислить Push-Provider-ов",
+		Short: "list Push Providers",
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			cl, err := loadClient(cmd)
 			if err != nil {
@@ -149,16 +149,16 @@ func newPushProvidersListCmd() *cobra.Command {
 			return output.JSON(cmd.OutOrStdout(), reply)
 		},
 	}
-	c.Flags().StringVar(&namePattern, "name-pattern", "", "LIKE-форма фильтра имени (например vault%)")
-	c.Flags().IntVar(&limit, "limit", 100, "максимум записей на странице (1..1000)")
-	c.Flags().IntVar(&offset, "offset", 0, "сдвиг от начала")
+	c.Flags().StringVar(&namePattern, "name-pattern", "", "LIKE-style name filter (e.g. vault%)")
+	c.Flags().IntVar(&limit, "limit", 100, "max records per page (1..1000)")
+	c.Flags().IntVar(&offset, "offset", 0, "offset from the start")
 	return c
 }
 
 func newPushProvidersGetCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "get <name>",
-		Short: "прочитать запись Push-Provider-а",
+		Short: "read a Push Provider record",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			cl, err := loadClient(cmd)

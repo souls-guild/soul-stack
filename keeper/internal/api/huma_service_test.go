@@ -287,12 +287,12 @@ func TestHumaService_Register_GoldenWire(t *testing.T) {
 	}
 	var m map[string]any
 	if err := json.Unmarshal(rec.Body.Bytes(), &m); err != nil {
-		t.Fatalf("reply не JSON-object: %v; body=%s", err, rec.Body.String())
+		t.Fatalf("reply is not a JSON object: %v; body=%s", err, rec.Body.String())
 	}
 	out, _ := json.Marshal(m)
 	const golden = `{"created_at":"2026-06-13T10:00:00Z","created_by_aid":"archon-alice","git":"https://git/web.git","name":"web","ref":"v1.0.0","updated_at":"2026-06-13T10:00:00Z","updated_by_aid":"archon-alice"}`
 	if got := string(out); got != golden {
-		t.Errorf("GOLDEN wire-дрейф service.register:\n got  = %s\n want = %s", got, golden)
+		t.Errorf("GOLDEN wire-drift service.register:\n got  = %s\n want = %s", got, golden)
 	}
 }
 
@@ -357,7 +357,7 @@ func TestHumaAudit_ServiceRegister_NoAudit_OnRBACDeny(t *testing.T) {
 		t.Fatalf("status = %d, want 403; body=%s", rec.Code, rec.Body.String())
 	}
 	if len(auditCap.Events()) != 0 {
-		t.Errorf("audit записан on RBAC-deny service.register (%d withбытий)", len(auditCap.Events()))
+		t.Errorf("audit recorded on RBAC-deny service.register (%d events)", len(auditCap.Events()))
 	}
 }
 
@@ -374,12 +374,12 @@ func TestHumaService_List_GoldenWire(t *testing.T) {
 	}
 	var m map[string]any
 	if err := json.Unmarshal(rec.Body.Bytes(), &m); err != nil {
-		t.Fatalf("reply не JSON-object: %v; body=%s", err, rec.Body.String())
+		t.Fatalf("reply is not a JSON object: %v; body=%s", err, rec.Body.String())
 	}
 	out, _ := json.Marshal(m)
 	const golden = `{"items":[{"created_at":"2026-06-13T10:00:00Z","git":"https://git/web.git","name":"web","ref":"v1.0.0","updated_at":"2026-06-13T10:00:00Z"}]}`
 	if got := string(out); got != golden {
-		t.Errorf("GOLDEN wire-дрейф service.list:\n got  = %s\n want = %s", got, golden)
+		t.Errorf("GOLDEN wire-drift service.list:\n got  = %s\n want = %s", got, golden)
 	}
 }
 
@@ -396,7 +396,7 @@ func TestHumaService_List_GoldenEmpty(t *testing.T) {
 	_ = json.Unmarshal(rec.Body.Bytes(), &m)
 	out, _ := json.Marshal(m)
 	if got := string(out); got != golden {
-		t.Errorf("GOLDEN wire-дрейф service.list (empty): got=%q want=%q", got, golden)
+		t.Errorf("GOLDEN wire-drift service.list (empty): got=%q want=%q", got, golden)
 	}
 }
 
@@ -410,7 +410,7 @@ func TestHumaService_List_NoAudit(t *testing.T) {
 		t.Fatalf("status = %d, want 200; body=%s", rec.Code, rec.Body.String())
 	}
 	if len(auditCap.Events()) != 0 {
-		t.Errorf("READ-роут service.list записал audit (%d withбытий)", len(auditCap.Events()))
+		t.Errorf("READ route service.list recorded audit (%d events)", len(auditCap.Events()))
 	}
 }
 
@@ -437,12 +437,12 @@ func TestHumaService_Get_GoldenWire(t *testing.T) {
 	}
 	var m map[string]any
 	if err := json.Unmarshal(rec.Body.Bytes(), &m); err != nil {
-		t.Fatalf("reply не JSON-object: %v; body=%s", err, rec.Body.String())
+		t.Fatalf("reply is not a JSON object: %v; body=%s", err, rec.Body.String())
 	}
 	out, _ := json.Marshal(m)
 	const golden = `{"created_at":"2026-06-13T10:00:00Z","git":"https://git/web.git","name":"web","ref":"v1.0.0","updated_at":"2026-06-13T10:00:00Z"}`
 	if got := string(out); got != golden {
-		t.Errorf("GOLDEN wire-дрейф service.get:\n got  = %s\n want = %s", got, golden)
+		t.Errorf("GOLDEN wire-drift service.get:\n got  = %s\n want = %s", got, golden)
 	}
 }
 
@@ -470,12 +470,12 @@ func TestHumaService_Update_GoldenWire(t *testing.T) {
 	}
 	var m map[string]any
 	if err := json.Unmarshal(rec.Body.Bytes(), &m); err != nil {
-		t.Fatalf("reply не JSON-object: %v; body=%s", err, rec.Body.String())
+		t.Fatalf("reply is not a JSON object: %v; body=%s", err, rec.Body.String())
 	}
 	out, _ := json.Marshal(m)
 	const golden = `{"created_at":"2026-06-13T10:00:00Z","git":"https://git/web.git","name":"web","ref":"v2.0.0","updated_at":"2026-06-13T10:00:00Z","updated_by_aid":"archon-alice"}`
 	if got := string(out); got != golden {
-		t.Errorf("GOLDEN wire-дрейф service.update:\n got  = %s\n want = %s", got, golden)
+		t.Errorf("GOLDEN wire-drift service.update:\n got  = %s\n want = %s", got, golden)
 	}
 }
 
@@ -505,7 +505,7 @@ func TestHumaAudit_ServiceUpdate_NoAudit_OnMissingRef(t *testing.T) {
 		t.Fatalf("status = %d, want 422 (missing required ref); body=%s", rec.Code, rec.Body.String())
 	}
 	if len(auditCap.Events()) != 0 {
-		t.Errorf("audit записан on 422 service.update (%d withбытий)", len(auditCap.Events()))
+		t.Errorf("audit recorded on 422 service.update (%d events)", len(auditCap.Events()))
 	}
 }
 
@@ -520,7 +520,7 @@ func TestHumaService_Deregister_204(t *testing.T) {
 		t.Fatalf("status = %d, want 204; body=%s", rec.Code, rec.Body.String())
 	}
 	if body := strings.TrimSpace(rec.Body.String()); body != "" {
-		t.Errorf("204-body service.deregister toлжbut быть ПУСТЫМ, got %q", body)
+		t.Errorf("204-body service.deregister must be EMPTY, got %q", body)
 	}
 }
 
@@ -546,7 +546,7 @@ func TestHumaAudit_ServiceDeregister_NoAudit_OnNotFound(t *testing.T) {
 		t.Fatalf("status = %d, want 404; body=%s", rec.Code, rec.Body.String())
 	}
 	if len(auditCap.Events()) != 0 {
-		t.Errorf("audit записан on 404 service.deregister (%d withбытий)", len(auditCap.Events()))
+		t.Errorf("audit recorded on 404 service.deregister (%d events)", len(auditCap.Events()))
 	}
 }
 
@@ -564,12 +564,12 @@ func TestHumaService_Refs_GoldenWire(t *testing.T) {
 	}
 	var m map[string]any
 	if err := json.Unmarshal(rec.Body.Bytes(), &m); err != nil {
-		t.Fatalf("reply не JSON-object: %v; body=%s", err, rec.Body.String())
+		t.Fatalf("reply is not a JSON object: %v; body=%s", err, rec.Body.String())
 	}
 	out, _ := json.Marshal(m)
 	const golden = `{"refs":[{"commit":"abc","name":"v1.0.0","type":"tag"}],"service":"web"}`
 	if got := string(out); got != golden {
-		t.Errorf("GOLDEN wire-дрейф service.refs:\n got  = %s\n want = %s", got, golden)
+		t.Errorf("GOLDEN wire-drift service.refs:\n got  = %s\n want = %s", got, golden)
 	}
 }
 
@@ -604,10 +604,10 @@ func TestHumaService_Scenarios_GoldenWire(t *testing.T) {
 		} `json:"scenarios"`
 	}
 	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
-		t.Fatalf("reply не JSON: %v; body=%s", err, rec.Body.String())
+		t.Fatalf("reply is not JSON: %v; body=%s", err, rec.Body.String())
 	}
 	if got.Service != "web" || got.Ref != "v1.0.0" || len(got.Scenarios) != 1 || got.Scenarios[0].Name != "deploy" {
-		t.Errorf("scenarios wire-дрейф: %+v", got)
+		t.Errorf("scenarios wire-drift: %+v", got)
 	}
 }
 
@@ -623,12 +623,12 @@ func TestHumaService_StateSchema_GoldenWire(t *testing.T) {
 	}
 	var m map[string]any
 	if err := json.Unmarshal(rec.Body.Bytes(), &m); err != nil {
-		t.Fatalf("reply не JSON-object: %v; body=%s", err, rec.Body.String())
+		t.Fatalf("reply is not a JSON object: %v; body=%s", err, rec.Body.String())
 	}
 	out, _ := json.Marshal(m)
 	const golden = `{"migrations":[],"ref":"v1.0.0","service":"web","state_schema_version":3}`
 	if got := string(out); got != golden {
-		t.Errorf("GOLDEN wire-дрейф service.state-schema:\n got  = %s\n want = %s", got, golden)
+		t.Errorf("GOLDEN wire-drift service.state-schema:\n got  = %s\n want = %s", got, golden)
 	}
 }
 
@@ -644,12 +644,12 @@ func TestHumaService_Dependencies_GoldenWire(t *testing.T) {
 	}
 	var m map[string]any
 	if err := json.Unmarshal(rec.Body.Bytes(), &m); err != nil {
-		t.Fatalf("reply не JSON-object: %v; body=%s", err, rec.Body.String())
+		t.Fatalf("reply is not a JSON object: %v; body=%s", err, rec.Body.String())
 	}
 	out, _ := json.Marshal(m)
 	const golden = `{"destiny":[],"modules":[],"ref":"v1.0.0","service":"web"}`
 	if got := string(out); got != golden {
-		t.Errorf("GOLDEN wire-дрейф service.dependencies:\n got  = %s\n want = %s", got, golden)
+		t.Errorf("GOLDEN wire-drift service.dependencies:\n got  = %s\n want = %s", got, golden)
 	}
 }
 
@@ -673,16 +673,16 @@ func TestHumaService_Scenarios_RefOverride_ReachesLister(t *testing.T) {
 		t.Fatalf("status = %d, want 200; body=%s", rec.Code, rec.Body.String())
 	}
 	if gotRef != "v2.0.0" {
-		t.Errorf("override-ref NOT toехал to lister: gotRef=%q, want \"v2.0.0\" (huma не забиндил ?ref= or override не применился)", gotRef)
+		t.Errorf("override-ref did NOT reach the lister: gotRef=%q, want \"v2.0.0\" (huma did not bind ?ref= or override was not applied)", gotRef)
 	}
 	var got struct {
 		Ref string `json:"ref"`
 	}
 	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
-		t.Fatalf("reply не JSON: %v; body=%s", err, rec.Body.String())
+		t.Fatalf("reply is not JSON: %v; body=%s", err, rec.Body.String())
 	}
 	if got.Ref != "v2.0.0" {
-		t.Errorf("reply.Ref=%q, want \"v2.0.0\" (override toлжен отражаться в ответе, не дефолт реестра)", got.Ref)
+		t.Errorf("reply.Ref=%q, want \"v2.0.0\" (override must be reflected in the response, not the registry default)", got.Ref)
 	}
 }
 
@@ -698,13 +698,13 @@ func TestHumaService_StateSchema_RefOverride_ReachesLister(t *testing.T) {
 		t.Fatalf("status = %d, want 200; body=%s", rec.Code, rec.Body.String())
 	}
 	if gotRef != "v2.0.0" {
-		t.Errorf("override-ref NOT toехал to lister: gotRef=%q, want \"v2.0.0\"", gotRef)
+		t.Errorf("override-ref did NOT reach the lister: gotRef=%q, want \"v2.0.0\"", gotRef)
 	}
 	var got struct {
 		Ref string `json:"ref"`
 	}
 	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
-		t.Fatalf("reply не JSON: %v; body=%s", err, rec.Body.String())
+		t.Fatalf("reply is not JSON: %v; body=%s", err, rec.Body.String())
 	}
 	if got.Ref != "v2.0.0" {
 		t.Errorf("reply.Ref=%q, want \"v2.0.0\"", got.Ref)
@@ -723,13 +723,13 @@ func TestHumaService_Dependencies_RefOverride_ReachesLister(t *testing.T) {
 		t.Fatalf("status = %d, want 200; body=%s", rec.Code, rec.Body.String())
 	}
 	if gotRef != "v2.0.0" {
-		t.Errorf("override-ref NOT toехал to lister: gotRef=%q, want \"v2.0.0\"", gotRef)
+		t.Errorf("override-ref did NOT reach the lister: gotRef=%q, want \"v2.0.0\"", gotRef)
 	}
 	var got struct {
 		Ref string `json:"ref"`
 	}
 	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
-		t.Fatalf("reply не JSON: %v; body=%s", err, rec.Body.String())
+		t.Fatalf("reply is not JSON: %v; body=%s", err, rec.Body.String())
 	}
 	if got.Ref != "v2.0.0" {
 		t.Errorf("reply.Ref=%q, want \"v2.0.0\"", got.Ref)
@@ -750,7 +750,7 @@ func TestHumaService_Scenarios_NoRef_UsesRegistryDefault(t *testing.T) {
 		t.Fatalf("status = %d, want 200; body=%s", rec.Code, rec.Body.String())
 	}
 	if gotRef != "v1.0.0" {
-		t.Errorf("без ?ref= lister toлжен получить дефолт реестра: gotRef=%q, want \"v1.0.0\"", gotRef)
+		t.Errorf("without ?ref= the lister must get the registry default: gotRef=%q, want \"v1.0.0\"", gotRef)
 	}
 }
 
@@ -768,7 +768,7 @@ func TestHumaService_Scenarios_LoaderError_502(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "/v1/services/web/scenarios", nil)
 	r.ServeHTTP(rec, req)
 	if rec.Code != http.StatusBadGateway {
-		t.Fatalf("status = %d, want 502 (loader git-источник неtoступен); body=%s", rec.Code, rec.Body.String())
+		t.Fatalf("status = %d, want 502 (loader git source unavailable); body=%s", rec.Code, rec.Body.String())
 	}
 	assertHumaProblem(t, rec, problem.TypeBadGateway)
 }
@@ -780,7 +780,7 @@ func TestHumaService_Dependencies_LoaderError_502(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "/v1/services/web/dependencies", nil)
 	r.ServeHTTP(rec, req)
 	if rec.Code != http.StatusBadGateway {
-		t.Fatalf("status = %d, want 502 (loader git-источник неtoступен); body=%s", rec.Code, rec.Body.String())
+		t.Fatalf("status = %d, want 502 (loader git source unavailable); body=%s", rec.Code, rec.Body.String())
 	}
 	assertHumaProblem(t, rec, problem.TypeBadGateway)
 }
@@ -797,7 +797,7 @@ func TestHumaService_SubRead_NoAudit(t *testing.T) {
 		t.Fatalf("status = %d, want 200; body=%s", rec.Code, rec.Body.String())
 	}
 	if len(auditCap.Events()) != 0 {
-		t.Errorf("READ-роут service.refs записал audit (%d withбытий)", len(auditCap.Events()))
+		t.Errorf("READ route service.refs recorded audit (%d events)", len(auditCap.Events()))
 	}
 }
 
@@ -809,17 +809,17 @@ func TestHumaService_OpenAPIFragment_3_1(t *testing.T) {
 		t.Fatalf("HumaServiceSpecYAML: %v", err)
 	}
 	if !strings.Contains(frag, "openapi: 3.1.0") {
-		t.Errorf("huma-фрагмент не несёт `openapi: 3.1.0`:\n%s", frag)
+		t.Errorf("huma fragment does not carry `openapi: 3.1.0`:\n%s", frag)
 	}
 	for _, want := range []string{
 		"registerService", "listServices", "getService", "updateService", "deregisterService",
 		"listServiceRefs", "listServiceScenarios", "listServiceStateSchema", "listServiceDependencies",
 	} {
 		if !strings.Contains(frag, want) {
-			t.Errorf("OpenAPI-фрагмент не withдержит %q:\n%s", want, frag)
+			t.Errorf("OpenAPI fragment does not contain %q:\n%s", want, frag)
 		}
 	}
 	if strings.Contains(frag, "octet-stream") {
-		t.Errorf("OpenAPI-фрагмент несёт application/octet-stream:\n%s", frag)
+		t.Errorf("OpenAPI fragment carries application/octet-stream:\n%s", frag)
 	}
 }

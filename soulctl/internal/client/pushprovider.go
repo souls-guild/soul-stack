@@ -55,7 +55,7 @@ type PushProviderListOptions struct {
 // Create is POST /v1/push-providers. Permission: push-provider.create.
 func (a *PushProvidersAPI) Create(ctx context.Context, body PushProviderBody) (*PushProviderEntry, error) {
 	if body.Name == "" {
-		return nil, fmt.Errorf("name пуст")
+		return nil, fmt.Errorf("name is empty")
 	}
 	var reply PushProviderEntry
 	if err := a.c.Do(ctx, "POST", "/v1/push-providers", body, &reply); err != nil {
@@ -67,7 +67,7 @@ func (a *PushProvidersAPI) Create(ctx context.Context, body PushProviderBody) (*
 // Update is PUT /v1/push-providers/{name}. Permission: push-provider.update.
 func (a *PushProvidersAPI) Update(ctx context.Context, name string, body PushProviderUpdateBody) (*PushProviderEntry, error) {
 	if name == "" {
-		return nil, fmt.Errorf("name пуст")
+		return nil, fmt.Errorf("name is empty")
 	}
 	var reply PushProviderEntry
 	if err := a.c.Do(ctx, "PUT", "/v1/push-providers/"+name, body, &reply); err != nil {
@@ -79,7 +79,7 @@ func (a *PushProvidersAPI) Update(ctx context.Context, name string, body PushPro
 // Delete is DELETE /v1/push-providers/{name}. Permission: push-provider.delete.
 func (a *PushProvidersAPI) Delete(ctx context.Context, name string) error {
 	if name == "" {
-		return fmt.Errorf("name пуст")
+		return fmt.Errorf("name is empty")
 	}
 	return a.c.Do(ctx, "DELETE", "/v1/push-providers/"+name, nil, nil)
 }
@@ -87,7 +87,7 @@ func (a *PushProvidersAPI) Delete(ctx context.Context, name string) error {
 // Get is GET /v1/push-providers/{name}. Permission: push-provider.read.
 func (a *PushProvidersAPI) Get(ctx context.Context, name string) (*PushProviderEntry, error) {
 	if name == "" {
-		return nil, fmt.Errorf("name пуст")
+		return nil, fmt.Errorf("name is empty")
 	}
 	var reply PushProviderEntry
 	if err := a.c.Do(ctx, "GET", "/v1/push-providers/"+name, nil, &reply); err != nil {

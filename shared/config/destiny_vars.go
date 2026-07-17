@@ -27,7 +27,7 @@ func LoadDestinyVars(path string) (map[string]any, error) {
 		if os.IsNotExist(err) {
 			return nil, nil
 		}
-		return nil, fmt.Errorf("config: чтение %s: %w", path, err)
+		return nil, fmt.Errorf("config: reading %s: %w", path, err)
 	}
 	return LoadDestinyVarsFromBytes(path, src)
 }
@@ -43,7 +43,7 @@ func LoadDestinyVarsFromBytes(filename string, data []byte) (map[string]any, err
 	}
 	var out map[string]any
 	if err := yaml.Unmarshal(data, &out); err != nil {
-		return nil, fmt.Errorf("config: парсинг %s (vars.yml — top-level YAML-map): %w", filename, err)
+		return nil, fmt.Errorf("config: parsing %s (vars.yml - top-level YAML map): %w", filename, err)
 	}
 	return out, nil
 }

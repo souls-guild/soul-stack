@@ -225,9 +225,9 @@ func buildEngine(mode engineMode, vars []string, opts ...Option) (*Engine, error
 	if (mode.migration || mode.flowControl) && cfg.kv != nil {
 		switch {
 		case mode.migration:
-			return nil, fmt.Errorf("сборка migration-Engine: WithVault несовместим с migration-режимом (ADR-019: migration-CEL sandbox запрещает vault())")
+			return nil, fmt.Errorf("building migration-Engine: WithVault is incompatible with migration mode (ADR-019: migration-CEL sandbox forbids vault())")
 		default:
-			return nil, fmt.Errorf("сборка flow-control-Engine: WithVault несовместим с flow-control-режимом (ADR-012(d): Soul-CEL sandbox без внешнего доступа, vault() keeper-only)")
+			return nil, fmt.Errorf("building flow-control-Engine: WithVault is incompatible with flow-control mode (ADR-012(d): Soul-CEL sandbox has no external access, vault() is keeper-only)")
 		}
 	}
 
@@ -255,14 +255,14 @@ func buildEngine(mode engineMode, vars []string, opts ...Option) (*Engine, error
 
 	env, err := cel.NewEnv(envOpts...)
 	if err != nil {
-		return nil, fmt.Errorf("создание CEL-окружения: %w", err)
+		return nil, fmt.Errorf("creating CEL environment: %w", err)
 	}
 
 	// Parser without macros (no Macros(...) options). Needed only for the rewrite
 	// phase: see the Engine.noMacroParser field.
 	noMacroParser, err := parser.NewParser()
 	if err != nil {
-		return nil, fmt.Errorf("создание CEL-парсера без макросов: %w", err)
+		return nil, fmt.Errorf("creating CEL parser without macros: %w", err)
 	}
 
 	return &Engine{
@@ -299,7 +299,7 @@ func (e *Engine) loopEnv(names []string) (*cel.Env, error) {
 	}
 	env, err := e.env.Extend(opts...)
 	if err != nil {
-		return nil, fmt.Errorf("расширение CEL-окружения loop-переменными %v: %w", names, err)
+		return nil, fmt.Errorf("extending CEL environment with loop variables %v: %w", names, err)
 	}
 
 	e.mu.Lock()

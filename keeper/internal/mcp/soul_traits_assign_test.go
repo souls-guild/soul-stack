@@ -103,7 +103,7 @@ func TestSoulTraitsAssign_MergeSuccess(t *testing.T) {
 	// trait VALUES are NOT put in the audit payload.
 	raw, _ := json.Marshal(ev.Payload)
 	if containsSubstrMCP(string(raw), `"dba"`) {
-		t.Errorf("audit payload содержит trait-значение: %s", raw)
+		t.Errorf("audit payload contains a trait value: %s", raw)
 	}
 }
 

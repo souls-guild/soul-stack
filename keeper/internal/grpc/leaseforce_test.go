@@ -69,7 +69,7 @@ func TestAcquireSoulLease_DeadPrevHolder_ForceReleases(t *testing.T) {
 
 	cleanup, err := h.acquireSoulLease(ctx, sid)
 	if err != nil {
-		t.Fatalf("acquireSoulLease: err = %v, want nil (force-release должен был перехватить)", err)
+		t.Fatalf("acquireSoulLease: err = %v, want nil (force-release should have taken over)", err)
 	}
 	if cleanup == nil {
 		t.Fatal("cleanup = nil on successful force-release")
@@ -77,7 +77,7 @@ func TestAcquireSoulLease_DeadPrevHolder_ForceReleases(t *testing.T) {
 	defer cleanup()
 
 	if owner, _, _ := keeperredis.SoulLeaseOwner(ctx, rc, sid); owner != "kid-self" {
-		t.Errorf("lease owner = %q, want kid-self (перезахвачен)", owner)
+		t.Errorf("lease owner = %q, want kid-self (retaken)", owner)
 	}
 
 	evs := ca.snapshot()
@@ -118,16 +118,16 @@ func TestAcquireSoulLease_LivePrevHolder_NoForce(t *testing.T) {
 
 	cleanup, err := h.acquireSoulLease(ctx, sid)
 	if cleanup != nil {
-		t.Error("cleanup != nil, want nil (lease не захвачен)")
+		t.Error("cleanup != nil, want nil (lease not taken)")
 	}
 	if got := status.Code(err); got != codes.AlreadyExists {
 		t.Fatalf("code = %v, want AlreadyExists (split-brain guard)", got)
 	}
 	if owner, _, _ := keeperredis.SoulLeaseOwner(ctx, rc, sid); owner != "kid-live" {
-		t.Errorf("lease owner = %q, want kid-live (не перезахвачен)", owner)
+		t.Errorf("lease owner = %q, want kid-live (not retaken)", owner)
 	}
 	if n := len(ca.snapshot()); n != 0 {
-		t.Errorf("audit count = %d, want 0 (force не происходил)", n)
+		t.Errorf("audit count = %d, want 0 (no force happened)", n)
 	}
 }
 
@@ -152,16 +152,16 @@ func TestAcquireSoulLease_PresenceCheckError_FailSafeNoForce(t *testing.T) {
 
 	cleanup, err := h.acquireSoulLease(ctx, sid)
 	if cleanup != nil {
-		t.Error("cleanup != nil, want nil (fail-safe: lease не захвачен)")
+		t.Error("cleanup != nil, want nil (fail-safe: lease not taken)")
 	}
 	if got := status.Code(err); got != codes.AlreadyExists {
 		t.Fatalf("code = %v, want AlreadyExists (fail-safe)", got)
 	}
 	if owner, _, _ := keeperredis.SoulLeaseOwner(ctx, rc, sid); owner != "kid-unknown" {
-		t.Errorf("lease owner = %q, want kid-unknown (не перезахвачен)", owner)
+		t.Errorf("lease owner = %q, want kid-unknown (not retaken)", owner)
 	}
 	if n := len(ca.snapshot()); n != 0 {
-		t.Errorf("audit count = %d, want 0 (force не происходил)", n)
+		t.Errorf("audit count = %d, want 0 (force did not happen)", n)
 	}
 }
 
@@ -187,13 +187,13 @@ func TestAcquireSoulLease_PrevHolderIsSelf_NoForce(t *testing.T) {
 		t.Error("cleanup != nil, want nil")
 	}
 	if got := status.Code(err); got != codes.AlreadyExists {
-		t.Fatalf("code = %v, want AlreadyExists (self не перехватывается)", got)
+		t.Fatalf("code = %v, want AlreadyExists (self must not be preempted)", got)
 	}
 	if owner, _, _ := keeperredis.SoulLeaseOwner(ctx, rc, sid); owner != "kid-self" {
-		t.Errorf("lease owner = %q, want kid-self (не тронут)", owner)
+		t.Errorf("lease owner = %q, want kid-self (untouched)", owner)
 	}
 	if n := len(ca.snapshot()); n != 0 {
-		t.Errorf("audit count = %d, want 0 (self-reconnect, force не нужен)", n)
+		t.Errorf("audit count = %d, want 0 (self-reconnect, no force needed)", n)
 	}
 }
 
@@ -226,16 +226,16 @@ func TestAcquireSoulLease_ForceRace_KeyChanged_FallbackNoHijack(t *testing.T) {
 
 	cleanup, err := h.acquireSoulLease(ctx, sid)
 	if cleanup != nil {
-		t.Error("cleanup != nil, want nil (force провалился по гонке)")
+		t.Error("cleanup != nil, want nil (force lost the race)")
 	}
 	if got := status.Code(err); got != codes.AlreadyExists {
-		t.Fatalf("code = %v, want AlreadyExists (fallback после гонки)", got)
+		t.Fatalf("code = %v, want AlreadyExists (fallback after race)", got)
 	}
 	if owner, _, _ := keeperredis.SoulLeaseOwner(ctx, rc, sid); owner != "kid-fresh" {
-		t.Errorf("lease owner = %q, want kid-fresh (чужой свежий lease НЕ перехвачен)", owner)
+		t.Errorf("lease owner = %q, want kid-fresh (fresh foreign lease NOT preempted)", owner)
 	}
 	if n := len(ca.snapshot()); n != 0 {
-		t.Errorf("audit count = %d, want 0 (force не удался)", n)
+		t.Errorf("audit count = %d, want 0 (force failed)", n)
 	}
 }
 
@@ -260,6 +260,6 @@ func TestAcquireSoulLease_NoConflict_HappyPath(t *testing.T) {
 		t.Errorf("lease owner = %q, want kid-self", owner)
 	}
 	if n := len(ca.snapshot()); n != 0 {
-		t.Errorf("audit count = %d, want 0 (нет force на свободном lease)", n)
+		t.Errorf("audit count = %d, want 0 (no force on a free lease)", n)
 	}
 }

@@ -93,8 +93,8 @@ func (h *eventStreamHandler) handleRunResult(ctx context.Context, sid, sessionID
 
 // correlateRunResult resolves the incarnation by `(apply_id, sid)` via the
 // `apply_runs` registry and moves the run row to a terminal status
-// (`success`/`failed`/`cancelled`). Closes the correlation gap “Keeper doesn't
-// know which incarnation a run belongs to.”
+// (`success`/`failed`/`cancelled`). Closes the correlation gap "Keeper doesn't
+// know which incarnation a run belongs to."
 //
 // ApplyRunDB=nil (unit build without PG / ad-hoc push) → no-op.
 // apply_id not found in `apply_runs` (push without a scenario-runner) → log+skip.
@@ -110,13 +110,13 @@ func (h *eventStreamHandler) correlateRunResult(ctx context.Context, sid, sessio
 	name, scenario, rowAttempt, err := applyrun.SelectIncarnationByApplyID(ctx, h.deps.ApplyRunDB, applyID, sid, passage)
 	if err != nil {
 		if errors.Is(err, applyrun.ErrApplyRunNotFound) {
-			h.logger.Info("eventstream: RunResult без apply_runs-строки — correlation пропущена",
+			h.logger.Info("eventstream: RunResult without an apply_runs row - correlation skipped",
 				slog.String("sid", sid),
 				slog.String("session_id", sessionID),
 				slog.String("apply_id", applyID))
 			return
 		}
-		h.logger.Warn("eventstream: resolve incarnation по apply_id failed",
+		h.logger.Warn("eventstream: resolve incarnation by apply_id failed",
 			slog.String("sid", sid),
 			slog.String("apply_id", applyID),
 			slog.Any("error", err))
@@ -137,7 +137,7 @@ func (h *eventStreamHandler) correlateRunResult(ctx context.Context, sid, sessio
 	recvAttempt := ev.GetAttempt()
 	if recvAttempt != 0 && recvAttempt < rowAttempt {
 		h.deps.Metrics.ObserveRunResultStale()
-		h.logger.Info("eventstream: RunResult от устаревшей попытки — stale-drop (commit отвергнут)",
+		h.logger.Info("eventstream: RunResult from a stale attempt - stale-drop (commit rejected)",
 			slog.String("sid", sid),
 			slog.String("apply_id", applyID),
 			slog.Int("recv_attempt", int(recvAttempt)),
@@ -147,10 +147,10 @@ func (h *eventStreamHandler) correlateRunResult(ctx context.Context, sid, sessio
 		return
 	}
 	if recvAttempt > rowAttempt {
-		// The “attempt only grows” invariant is violated: keeper↔soul epoch desync
+		// The "attempt only grows" invariant is violated: keeper↔soul epoch desync
 		// or a row-read anomaly. We don't drop — we commit (fail-safe), but
 		// flag the invariant violation for triage.
-		h.logger.Warn("eventstream: RunResult.attempt больше attempt строки — нарушен инвариант «attempt только растёт» (commit fail-safe)",
+		h.logger.Warn("eventstream: RunResult.attempt greater than the row attempt - 'attempt only grows' invariant violated (commit fail-safe)",
 			slog.String("sid", sid),
 			slog.String("apply_id", applyID),
 			slog.Int("recv_attempt", int(recvAttempt)),
@@ -169,7 +169,7 @@ func (h *eventStreamHandler) correlateRunResult(ctx context.Context, sid, sessio
 		// to terminal (recovery takeover / repeated RunResult). NOT an error
 		// — the first one won, we don't write a duplicate terminal. Log it as a no-op.
 		if errors.Is(err, applyrun.ErrApplyRunAlreadyTerminal) {
-			h.logger.Info("eventstream: apply_runs уже терминальна — correlation no-op (первый коммиттер победил)",
+			h.logger.Info("eventstream: apply_runs already terminal - correlation no-op (first committer won)",
 				slog.String("sid", sid),
 				slog.String("apply_id", applyID),
 				slog.String("incarnation", name),

@@ -62,7 +62,7 @@ func TestApplied_NewDropIn_WritesAndReloads(t *testing.T) {
 		t.Fatalf("Apply: %v", err)
 	}
 	if !stream.Last().Changed {
-		t.Fatal("Changed=false при создании drop-in")
+		t.Fatal("Changed=false when creating drop-in")
 	}
 	got, err := os.ReadFile(dropInPath(dir, "30-redis"))
 	if err != nil {
@@ -71,10 +71,10 @@ func TestApplied_NewDropIn_WritesAndReloads(t *testing.T) {
 	// SORTED keys: net.core.somaxconn < vm.overcommit_memory < vm.swappiness.
 	want := "net.core.somaxconn = 65535\nvm.overcommit_memory = 1\nvm.swappiness = 1\n"
 	if string(got) != want {
-		t.Fatalf("контент drop-in:\n--- got ---\n%s\n--- want ---\n%s", string(got), want)
+		t.Fatalf("drop-in content:\n--- got ---\n%s\n--- want ---\n%s", string(got), want)
 	}
 	if !reloadCalled(r) {
-		t.Fatal("reload (sysctl -p) не вызван при file-change")
+		t.Fatal("reload (sysctl -p) not called on file-change")
 	}
 }
 
@@ -94,16 +94,16 @@ func TestApplied_EmptySettings_NoOp(t *testing.T) {
 		t.Fatalf("Apply: %v", err)
 	}
 	if stream.Last().Failed {
-		t.Fatalf("пустой settings → Failed: %v", stream.Last().Message)
+		t.Fatalf("empty settings -> Failed: %v", stream.Last().Message)
 	}
 	if stream.Last().Changed {
-		t.Fatal("пустой settings → changed=true (ожидался no-op)")
+		t.Fatal("empty settings -> changed=true (expected no-op)")
 	}
 	if _, err := os.Stat(dropInPath(dir, "30-redis")); !os.IsNotExist(err) {
-		t.Fatalf("пустой settings записал drop-in (ожидалось: файла нет): %v", err)
+		t.Fatalf("empty settings wrote a drop-in (expected: no file): %v", err)
 	}
 	if reloadCalled(r) {
-		t.Fatalf("пустой settings вызвал reload: %v", r.Calls)
+		t.Fatalf("empty settings triggered reload: %v", r.Calls)
 	}
 }
 
@@ -122,10 +122,10 @@ func TestPlanApplied_EmptySettings_NoDrift(t *testing.T) {
 		t.Fatalf("Plan: %v", err)
 	}
 	if got := stream.last(); got == nil || got.GetChanged() {
-		t.Fatalf("changed=%v, want false (пустой settings — no drift)", got.GetChanged())
+		t.Fatalf("changed=%v, want false (empty settings - no drift)", got.GetChanged())
 	}
 	if _, err := os.Stat(dropInPath(dir, "30-redis")); !os.IsNotExist(err) {
-		t.Fatalf("Plan записал drop-in на пустом settings: %v", err)
+		t.Fatalf("Plan wrote a drop-in with empty settings: %v", err)
 	}
 }
 
@@ -152,10 +152,10 @@ func TestApplied_Idempotent_SameMap(t *testing.T) {
 		t.Fatalf("Apply: %v", err)
 	}
 	if stream.Last().Changed {
-		t.Fatal("Changed=true для идентичного drop-in")
+		t.Fatal("Changed=true for an identical drop-in")
 	}
 	if reloadCalled(r) {
-		t.Fatalf("reload вызван без file-change: %v", r.Calls)
+		t.Fatalf("reload triggered without a file-change: %v", r.Calls)
 	}
 }
 
@@ -179,14 +179,14 @@ func TestApplied_Drift_RewritesAndReloads(t *testing.T) {
 		t.Fatalf("Apply: %v", err)
 	}
 	if !stream.Last().Changed {
-		t.Fatal("Changed=false при drift контента")
+		t.Fatal("Changed=false on content drift")
 	}
 	got, _ := os.ReadFile(path)
 	if string(got) != "vm.swappiness = 1\n" {
-		t.Fatalf("drop-in не перезаписан: %q", string(got))
+		t.Fatalf("drop-in not overwritten: %q", string(got))
 	}
 	if !reloadCalled(r) {
-		t.Fatal("reload не вызван при file-change")
+		t.Fatal("reload not called on file-change")
 	}
 }
 
@@ -210,10 +210,10 @@ func TestApplied_ReloadAlways_NoFileChange(t *testing.T) {
 		t.Fatalf("Apply: %v", err)
 	}
 	if stream.Last().Changed {
-		t.Fatal("reload=always пометил changed=true без file-change")
+		t.Fatal("reload=always marked changed=true without a file-change")
 	}
 	if !reloadCalled(r) {
-		t.Fatal("reload=always не вызвал sysctl -p")
+		t.Fatal("reload=always did not call sysctl -p")
 	}
 }
 
@@ -232,10 +232,10 @@ func TestApplied_ReloadNever_FileChange(t *testing.T) {
 		t.Fatalf("Apply: %v", err)
 	}
 	if !stream.Last().Changed {
-		t.Fatal("Changed=false при создании drop-in (reload=never не влияет на запись)")
+		t.Fatal("Changed=false when creating drop-in (reload=never does not affect the write)")
 	}
 	if reloadCalled(r) {
-		t.Fatalf("reload=never всё равно вызвал sysctl -p: %v", r.Calls)
+		t.Fatalf("reload=never still called sysctl -p: %v", r.Calls)
 	}
 }
 
@@ -264,11 +264,11 @@ func TestApplied_IgnoreFailures_AddsDashE(t *testing.T) {
 			found = true
 		}
 		if c == "sysctl -p "+path {
-			t.Fatalf("ignore_failures=true, а reload без -e: %v", r.Calls)
+			t.Fatalf("ignore_failures=true, but reload without -e: %v", r.Calls)
 		}
 	}
 	if !found {
-		t.Fatalf("ожидался `sysctl -e -p`, calls=%v", r.Calls)
+		t.Fatalf("expected `sysctl -e -p`, calls=%v", r.Calls)
 	}
 }
 
@@ -286,7 +286,7 @@ func TestApplied_ReloadFails_Fails(t *testing.T) {
 		Params: mustStruct(t, appliedParams(map[string]any{"vm.swappiness": "1"}, nil)),
 	}, stream)
 	if !stream.Last().Failed {
-		t.Fatal("Failed=false при non-zero exit reload-а")
+		t.Fatal("Failed=false on non-zero reload exit")
 	}
 }
 
@@ -308,7 +308,7 @@ func TestApplied_FilenameSuffix(t *testing.T) {
 		t.Fatalf("Apply: %v", err)
 	}
 	if _, err := os.Stat(filepath.Join(dir, "99-custom.conf")); err != nil {
-		t.Fatalf("drop-in 99-custom.conf не создан: %v", err)
+		t.Fatalf("drop-in 99-custom.conf not created: %v", err)
 	}
 }
 
@@ -323,7 +323,7 @@ func TestApplied_Validate_RequiredAndReloadEnum(t *testing.T) {
 		Params: mustStruct(t, map[string]any{"filename": "30-redis"}),
 	})
 	if reply.Ok {
-		t.Fatal("Validate applied без settings: ok unexpectedly")
+		t.Fatal("Validate applied without settings: ok unexpectedly")
 	}
 
 	// reload with an unknown value → ok=false.
@@ -336,7 +336,7 @@ func TestApplied_Validate_RequiredAndReloadEnum(t *testing.T) {
 		}),
 	})
 	if bad.Ok {
-		t.Fatal("Validate applied reload=reload-pls: ok=true (должно быть отклонено)")
+		t.Fatal("Validate applied reload=reload-pls: ok=true (should be rejected)")
 	}
 
 	// valid set → ok=true.
@@ -376,10 +376,10 @@ func TestPlanApplied_Clean_NoMutation(t *testing.T) {
 		t.Fatalf("changed=%v, want false (clean)", got.GetChanged())
 	}
 	if reloadCalled(r) {
-		t.Fatalf("Plan вызвал reload: %v", r.Calls)
+		t.Fatalf("Plan called reload: %v", r.Calls)
 	}
 	if after, _ := os.ReadFile(path); string(after) != seed {
-		t.Fatal("Plan изменил drop-in")
+		t.Fatal("Plan changed the drop-in")
 	}
 }
 
@@ -404,6 +404,6 @@ func TestPlanApplied_Drift(t *testing.T) {
 		t.Fatalf("changed=false, want true (drift)")
 	}
 	if reloadCalled(r) {
-		t.Fatalf("Plan вызвал reload: %v", r.Calls)
+		t.Fatalf("Plan called reload: %v", r.Calls)
 	}
 }

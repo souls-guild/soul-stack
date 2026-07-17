@@ -27,7 +27,7 @@ type sigilKeyIntroduceInput struct {
 // additionalProperties:false → unknown→400. The struct name = the contract schema name
 // (huma DefaultSchemaNamer; hand-written SigilKeyIntroduceRequest, N4).
 type SigilKeyIntroduceRequest struct {
-	MakePrimary *bool `json:"make_primary,omitempty" doc:"сделать butвый ключ primary (butвые Sigil-ы подписываются им); default false"`
+	MakePrimary *bool `json:"make_primary,omitempty" doc:"make the new key primary (new Sigils are signed with it); default false"`
 }
 
 // sigilKeyIntroduceOutput — huma-output POST /v1/sigil/keys (FULL-TYPED). Status=201;
@@ -47,8 +47,8 @@ func sigilKeyIntroduceOperation() huma.Operation {
 		OperationID:   "introduceSigilKey",
 		Method:        http.MethodPost,
 		Path:          "/",
-		Summary:       "Ввести ключ подписи Sigil",
-		Description:   "Генерирует ed25519-пару, writes приватник в Vault, вводит публичную часть в реестр trust-anchor-ов (ADR-026(h)). Permission sigil.key-introduce. Returns pubkey, NOT приватник.",
+		Summary:       "Introduce a Sigil signing key",
+		Description:   "Generates an ed25519 pair, writes the private key into Vault, introduces the public part into the trust-anchor registry (ADR-026(h)). Permission sigil.key-introduce. Returns pubkey, NOT the private key.",
 		Tags:          []string{"sigil-key"},
 		DefaultStatus: http.StatusCreated,
 		Errors:        []int{http.StatusBadRequest, http.StatusForbidden, http.StatusConflict, http.StatusInternalServerError},
@@ -76,8 +76,8 @@ func sigilKeyListOperation() huma.Operation {
 		OperationID:   "listSigilKeys",
 		Method:        http.MethodGet,
 		Path:          "/",
-		Summary:       "Спиwithк active-ключей подписи Sigil",
-		Description:   "Active trust-anchor-ключи подписи (primary первым, без vault_ref, ADR-026(h)). Permission sigil.key-list. Read-only, no audit.",
+		Summary:       "List of active Sigil signing keys",
+		Description:   "Active trust-anchor signing keys (primary first, without vault_ref, ADR-026(h)). Permission sigil.key-list. Read-only, no audit.",
 		Tags:          []string{"sigil-key"},
 		DefaultStatus: http.StatusOK,
 		Errors:        []int{http.StatusForbidden, http.StatusInternalServerError},
@@ -90,7 +90,7 @@ func sigilKeyListOperation() huma.Operation {
 // a path parameter (huma extracts it via `path:"key_id"`). The format (reSigilKeyID, 64 hex) —
 // domain validation in SetPrimaryTyped (422). No Body.
 type sigilKeySetPrimaryInput struct {
-	KeyID string `path:"key_id" doc:"key_id ключа подписи (SHA-256(SPKI), 64 hex)"`
+	KeyID string `path:"key_id" doc:"key_id of the signing key (SHA-256(SPKI), 64 hex)"`
 }
 
 // sigilKeyNoContentOutput — huma-output for the 204 write routes set-primary/retire. WITHOUT Body
@@ -107,8 +107,8 @@ func sigilKeySetPrimaryOperation() huma.Operation {
 		OperationID:   "setPrimarySigilKey",
 		Method:        http.MethodPost,
 		Path:          "/{key_id}/primary",
-		Summary:       "Сделать ключ подписи primary",
-		Description:   "Назonчает active-ключ primary (butвые Sigil-ы подписываются им, ADR-026(h)). Permission sigil.key-set-primary. 404 — ключа нет; 409 — retired/гонка.",
+		Summary:       "Make a signing key primary",
+		Description:   "Sets an active key as primary (new Sigils are signed with it, ADR-026(h)). Permission sigil.key-set-primary. 404 - key not found; 409 - retired/race.",
 		Tags:          []string{"sigil-key"},
 		DefaultStatus: http.StatusNoContent,
 		Errors:        []int{http.StatusForbidden, http.StatusNotFound, http.StatusConflict, http.StatusUnprocessableEntity, http.StatusInternalServerError},
@@ -120,7 +120,7 @@ func sigilKeySetPrimaryOperation() huma.Operation {
 // sigilKeyRetireInput — huma-input DELETE /v1/sigil/keys/{key_id}. key_id — a path
 // parameter. The format (reSigilKeyID) — domain validation in RetireTyped. No Body.
 type sigilKeyRetireInput struct {
-	KeyID string `path:"key_id" doc:"key_id ключа подписи for вывода (SHA-256(SPKI), 64 hex)"`
+	KeyID string `path:"key_id" doc:"key_id of the signing key to retire (SHA-256(SPKI), 64 hex)"`
 }
 
 // sigilKeyRetireOperation — metadata for DELETE /v1/sigil/keys/{key_id}.
@@ -131,8 +131,8 @@ func sigilKeyRetireOperation() huma.Operation {
 		OperationID:   "retireSigilKey",
 		Method:        http.MethodDelete,
 		Path:          "/{key_id}",
-		Summary:       "Вывести ключ подписи from active",
-		Description:   "Помечает ключ retired (ADR-026(h)). Permission sigil.key-retire. 404 — active-записи нет; 409 — последний active либо primary (сперва SetPrimary другому).",
+		Summary:       "Retire a signing key from active",
+		Description:   "Marks the key retired (ADR-026(h)). Permission sigil.key-retire. 404 - no active record; 409 - last active or primary (SetPrimary to another key first).",
 		Tags:          []string{"sigil-key"},
 		DefaultStatus: http.StatusNoContent,
 		Errors:        []int{http.StatusForbidden, http.StatusNotFound, http.StatusConflict, http.StatusUnprocessableEntity, http.StatusInternalServerError},

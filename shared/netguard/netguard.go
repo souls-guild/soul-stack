@@ -52,7 +52,7 @@ var extraBlockedNets = []*net.IPNet{
 func mustCIDR(s string) *net.IPNet {
 	_, n, err := net.ParseCIDR(s)
 	if err != nil {
-		panic(fmt.Sprintf("netguard: неверный CIDR %q в блок-листе SSRF-guard: %v", s, err))
+		panic(fmt.Sprintf("netguard: invalid CIDR %q in the SSRF-guard block-list: %v", s, err))
 	}
 	return n
 }

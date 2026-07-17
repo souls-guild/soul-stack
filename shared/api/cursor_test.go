@@ -14,7 +14,7 @@ func TestKeysetCursor_RoundTrip(t *testing.T) {
 	at := time.Date(2026, 5, 20, 15, 29, 55, 0, time.UTC)
 	enc := EncodeKeysetCursor(KeysetCursor{RegisteredAt: at, SID: "web-01.example.com"})
 	if enc == "" {
-		t.Fatal("EncodeKeysetCursor → пустая строка")
+		t.Fatal("EncodeKeysetCursor -> empty string")
 	}
 	got, err := DecodeKeysetCursor(enc)
 	if err != nil {
@@ -34,7 +34,7 @@ func TestKeysetCursor_RoundTrip(t *testing.T) {
 func TestKeysetCursor_Opaque(t *testing.T) {
 	enc := EncodeKeysetCursor(KeysetCursor{RegisteredAt: time.Now().UTC(), SID: "h.example.com"})
 	if _, err := base64.RawURLEncoding.DecodeString(enc); err != nil {
-		t.Errorf("курсор не base64url-декодируется: %v", err)
+		t.Errorf("cursor does not base64url-decode: %v", err)
 	}
 }
 
@@ -52,7 +52,7 @@ func TestDecodeKeysetCursor_Bad(t *testing.T) {
 		base64.RawURLEncoding.EncodeToString([]byte(`{"sid":"x","registered_at":"0001-01-01T00:00:00Z"}`)),
 	} {
 		if _, err := DecodeKeysetCursor(c); err == nil {
-			t.Errorf("DecodeKeysetCursor(%q) → nil err; want ошибка", c)
+			t.Errorf("DecodeKeysetCursor(%q) -> nil err; want error", c)
 		}
 	}
 }
@@ -67,7 +67,7 @@ func TestParseCursor_FromQuery(t *testing.T) {
 		t.Fatalf("ParseCursor: %v", err)
 	}
 	if cur == nil {
-		t.Fatal("ParseCursor → nil при заданном cursor")
+		t.Fatal("ParseCursor -> nil with cursor given")
 	}
 	if cur.SID != "h.example.com" {
 		t.Errorf("SID = %q", cur.SID)
@@ -81,7 +81,7 @@ func TestParseCursor_Absent(t *testing.T) {
 		t.Fatalf("ParseCursor empty: %v", err)
 	}
 	if cur != nil {
-		t.Errorf("ParseCursor без cursor → %+v, want nil", cur)
+		t.Errorf("ParseCursor without cursor -> %+v, want nil", cur)
 	}
 }
 
@@ -90,7 +90,7 @@ func TestParseCursor_Bad(t *testing.T) {
 	q := url.Values{"cursor": []string{"!!!bad!!!"}}
 	_, err := ParseCursor(q)
 	if err == nil {
-		t.Fatal("ParseCursor(битый) → nil err")
+		t.Fatal("ParseCursor(malformed) -> nil err")
 	}
 	var pe *PaginationError
 	if !errors.As(err, &pe) {
@@ -107,7 +107,7 @@ func TestParsePage_OffsetAndCursorConflict(t *testing.T) {
 	// offset>0 + cursor → conflict.
 	q := url.Values{"offset": []string{"10"}, "cursor": []string{enc}}
 	if _, _, err := ParsePageWithCursor(q); err == nil {
-		t.Error("offset=10 + cursor → nil err; want конфликт")
+		t.Error("offset=10 + cursor -> nil err; want conflict")
 	}
 
 	// offset=0 (default) + cursor → ok.
@@ -117,9 +117,9 @@ func TestParsePage_OffsetAndCursorConflict(t *testing.T) {
 		t.Fatalf("offset=0 + cursor: %v", err)
 	}
 	if cur == nil || cur.SID != "h.example.com" {
-		t.Errorf("cursor не распарсен: %+v", cur)
+		t.Errorf("cursor not parsed: %+v", cur)
 	}
 	if page.Limit != DefaultPageLimit {
-		t.Errorf("limit не применился при cursor-режиме: %d", page.Limit)
+		t.Errorf("limit was not applied in cursor mode: %d", page.Limit)
 	}
 }

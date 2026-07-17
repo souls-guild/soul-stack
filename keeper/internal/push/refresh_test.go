@@ -86,10 +86,10 @@ func TestRefreshProvider_HappyPath(t *testing.T) {
 		t.Errorf("respawner called with %q, want %q", r.gotName, testProviderName)
 	}
 	if oldCloser.closed.Load() != 1 {
-		t.Errorf("old plugin-handle не закрыт (closed=%d, want 1)", oldCloser.closed.Load())
+		t.Errorf("old plugin-handle not closed (closed=%d, want 1)", oldCloser.closed.Load())
 	}
 	if providerForTest(disp, testProviderName) != newProv {
-		t.Errorf("dispatcher не подменил provider")
+		t.Errorf("dispatcher did not swap the provider")
 	}
 }
 
@@ -124,10 +124,10 @@ func TestRefreshProvider_EmptyName_MassInvalidate(t *testing.T) {
 		t.Fatalf("RefreshProvider(empty name): %v", err)
 	}
 	if providerForTest(disp, "static") != newA {
-		t.Errorf("static не подменился на newA")
+		t.Errorf("static was not swapped for newA")
 	}
 	if providerForTest(disp, "vault") != newB {
-		t.Errorf("vault не подменился на newB")
+		t.Errorf("vault was not swapped for newB")
 	}
 	if r.calls.Load() != 2 {
 		t.Errorf("respawner calls = %d, want 2 (mass invalidate)", r.calls.Load())
@@ -148,13 +148,13 @@ func TestRefreshProvider_WrongName_NoOp(t *testing.T) {
 	})
 
 	if err := disp.RefreshProvider(context.Background(), "another-ssh"); err != nil {
-		t.Fatalf("чужое имя не должно давать ошибку: %v", err)
+		t.Fatalf("a foreign name should not produce an error: %v", err)
 	}
 	if atomic.LoadInt32(&r.calls) != 0 {
-		t.Errorf("respawner не должен вызываться для чужого имени")
+		t.Errorf("respawner should not be called for a foreign name")
 	}
 	if providerForTest(disp, testProviderName) != oldProv {
-		t.Errorf("provider не должен меняться для чужого имени")
+		t.Errorf("provider should not change for a foreign name")
 	}
 }
 
@@ -169,7 +169,7 @@ func TestRefreshProvider_NoRespawner_Sentinel(t *testing.T) {
 
 	err := disp.RefreshProvider(context.Background(), testProviderName)
 	if !errors.Is(err, ErrRespawnNotSupported) {
-		t.Errorf("ожидалась ErrRespawnNotSupported, got %v", err)
+		t.Errorf("expected ErrRespawnNotSupported, got %v", err)
 	}
 }
 
@@ -191,13 +191,13 @@ func TestRefreshProvider_SpawnFailed_DegradedState(t *testing.T) {
 
 	err := disp.RefreshProvider(context.Background(), testProviderName)
 	if err == nil {
-		t.Fatal("ждали ошибку при spawn-fail")
+		t.Fatal("expected an error on spawn-fail")
 	}
 	if providerForTest(disp, testProviderName) != nil {
-		t.Errorf("после spawn-fail запись должна быть удалена (degraded), есть провайдер")
+		t.Errorf("after spawn-fail the entry should be removed (degraded), a provider exists")
 	}
 	if oldCloser.closed.Load() == 0 {
-		t.Errorf("respawner не закрыл old handle перед возвратом ошибки")
+		t.Errorf("respawner did not close the old handle before returning the error")
 	}
 }
 
@@ -242,7 +242,7 @@ func TestRefreshProvider_Concurrent_MutexProtected(t *testing.T) {
 	wg.Wait()
 
 	if r.maxConcurrent.Load() > 1 {
-		t.Errorf("respawner вызывался конкурентно (maxConcurrent=%d) — mutex не сработал",
+		t.Errorf("respawner was called concurrently (maxConcurrent=%d) - mutex did not work",
 			r.maxConcurrent.Load())
 	}
 	if got := r.calls.Load(); got != n {
@@ -250,7 +250,7 @@ func TestRefreshProvider_Concurrent_MutexProtected(t *testing.T) {
 	}
 	final := providerForTest(disp, testProviderName)
 	if final != provA && final != provB {
-		t.Errorf("final provider не соответствует ни одному из spawn-result")
+		t.Errorf("final provider does not match any of the spawn results")
 	}
 }
 

@@ -111,10 +111,10 @@ func TestIntegration_SelectActiveVigilsForSubject(t *testing.T) {
 	}
 	// host-watch (sid) + web-watch (coven), not db-watch, not web-disabled.
 	if !gotNames["host-watch"] || !gotNames["web-watch"] {
-		t.Errorf("ожидали host-watch + web-watch, got %v", gotNames)
+		t.Errorf("expected host-watch + web-watch, got %v", gotNames)
 	}
 	if gotNames["db-watch"] || gotNames["web-disabled"] {
-		t.Errorf("db-watch/web-disabled не должны попасть, got %v", gotNames)
+		t.Errorf("db-watch/web-disabled should not appear, got %v", gotNames)
 	}
 }
 
@@ -133,7 +133,7 @@ func TestIntegration_SelectDecreesByBeacon(t *testing.T) {
 		t.Fatalf("SelectDecreesByBeacon: %v", err)
 	}
 	if len(got) != 1 || got[0].Name != "restart-web" {
-		t.Fatalf("ожидали 1 enabled-Decree restart-web, got %+v", got)
+		t.Fatalf("expected 1 enabled-Decree restart-web, got %+v", got)
 	}
 	if got[0].IncarnationName != "web-app" {
 		t.Errorf("incarnation_name round-trip: got %q, want web-app", got[0].IncarnationName)
@@ -144,7 +144,7 @@ func TestIntegration_SelectDecreesByBeacon(t *testing.T) {
 		t.Fatalf("SelectDecreesByBeacon(other): %v", err)
 	}
 	if len(none) != 0 {
-		t.Errorf("default-deny: ожидали 0 Decree для несвязанного beacon, got %d", len(none))
+		t.Errorf("default-deny: expected 0 Decree for an unrelated beacon, got %d", len(none))
 	}
 }
 
@@ -162,7 +162,7 @@ func TestIntegration_CooldownUpsert(t *testing.T) {
 		t.Fatalf("LastFiredAt: %v", err)
 	}
 	if has {
-		t.Fatal("пара не должна существовать до первого fire")
+		t.Fatal("the pair should not exist before the first fire")
 	}
 
 	t1 := time.Now().UTC().Truncate(time.Second)
@@ -171,7 +171,7 @@ func TestIntegration_CooldownUpsert(t *testing.T) {
 	}
 	got, has, err := LastFiredAt(ctx, integrationPool, "restart-web", "host-a")
 	if err != nil || !has {
-		t.Fatalf("LastFiredAt после fire: has=%v err=%v", has, err)
+		t.Fatalf("LastFiredAt after fire: has=%v err=%v", has, err)
 	}
 	if !got.Equal(t1) {
 		t.Errorf("fired_at = %v, want %v", got, t1)
@@ -184,14 +184,14 @@ func TestIntegration_CooldownUpsert(t *testing.T) {
 	}
 	got2, _, _ := LastFiredAt(ctx, integrationPool, "restart-web", "host-a")
 	if !got2.Equal(t2) {
-		t.Errorf("после UPSERT fired_at = %v, want %v", got2, t2)
+		t.Errorf("after UPSERT fired_at = %v, want %v", got2, t2)
 	}
 	var count int
 	if err := integrationPool.QueryRow(ctx, `SELECT COUNT(*) FROM oracle_fires WHERE decree='restart-web' AND subject='host-a'`).Scan(&count); err != nil {
 		t.Fatalf("count: %v", err)
 	}
 	if count != 1 {
-		t.Errorf("UPSERT должен держать одну строку на пару, got %d", count)
+		t.Errorf("UPSERT should keep one row per pair, got %d", count)
 	}
 }
 
@@ -210,7 +210,7 @@ func TestIntegration_DecreeSubjectXOR(t *testing.T) {
 		ActionScenario:  "restart", Enabled: true, CreatedByAID: &aid,
 	})
 	if err == nil {
-		t.Fatal("ожидали CHECK-violation на subject XOR")
+		t.Fatal("expected CHECK-violation on subject XOR")
 	}
 }
 
@@ -227,7 +227,7 @@ func TestIntegration_DecreeIncarnationNameFormat(t *testing.T) {
 		IncarnationName: "Web_App", ActionScenario: "restart", Enabled: true, CreatedByAID: &aid,
 	})
 	if err == nil {
-		t.Fatal("ожидали CHECK-violation на incarnation_name format")
+		t.Fatal("expected CHECK-violation on incarnation_name format")
 	}
 
 	// Empty incarnation_name → NOT NULL (a Go string "" is written as ''; the CHECK
@@ -237,7 +237,7 @@ func TestIntegration_DecreeIncarnationNameFormat(t *testing.T) {
 		IncarnationName: "", ActionScenario: "restart", Enabled: true, CreatedByAID: &aid,
 	})
 	if err == nil {
-		t.Fatal("ожидали отказ на пустой incarnation_name")
+		t.Fatal("expected rejection on empty incarnation_name")
 	}
 }
 
@@ -261,7 +261,7 @@ func TestIntegration_OracleFireCascade(t *testing.T) {
 		t.Fatalf("count: %v", err)
 	}
 	if count != 0 {
-		t.Errorf("ON DELETE CASCADE: oracle_fires должны быть пусты, got %d", count)
+		t.Errorf("ON DELETE CASCADE: oracle_fires should be empty, got %d", count)
 	}
 }
 
@@ -295,7 +295,7 @@ func TestIntegration_VigilCRUD(t *testing.T) {
 		t.Fatalf("CreateVigil: %v", err)
 	}
 	if v.CreatedAt.IsZero() {
-		t.Error("created_at не заполнен после round-trip-а")
+		t.Error("created_at not populated after round-trip")
 	}
 
 	got, err := svc.GetVigil(ctx, "web-conf")
@@ -318,7 +318,7 @@ func TestIntegration_VigilCRUD(t *testing.T) {
 		t.Fatalf("DeleteVigil: %v", err)
 	}
 	if _, err := svc.GetVigil(ctx, "web-conf"); !errors.Is(err, ErrVigilNotFound) {
-		t.Errorf("после delete: %v, want ErrVigilNotFound", err)
+		t.Errorf("after delete: %v, want ErrVigilNotFound", err)
 	}
 
 	// Duplicate → ErrVigilAlreadyExists.
@@ -373,7 +373,7 @@ func TestIntegration_DecreeCRUD(t *testing.T) {
 		t.Fatalf("DeleteDecree: %v", err)
 	}
 	if _, err := svc.GetDecree(ctx, "restart-on-down"); !errors.Is(err, ErrDecreeNotFound) {
-		t.Errorf("после delete: %v, want ErrDecreeNotFound", err)
+		t.Errorf("after delete: %v, want ErrDecreeNotFound", err)
 	}
 }
 
@@ -431,7 +431,7 @@ func TestIntegration_BumpCircuitFixedWindow(t *testing.T) {
 		t.Fatalf("BumpCircuit after window: %v", err)
 	}
 	if cnt != 1 {
-		t.Errorf("после истечения окна fire_count должен сброситься в 1, got %d", cnt)
+		t.Errorf("after window expiry fire_count should reset to 1, got %d", cnt)
 	}
 	// window_start moved to afterWindow → the next bump grows again.
 	cnt, err = BumpCircuit(ctx, integrationPool, decree, afterWindow.Add(time.Minute), window)
@@ -439,7 +439,7 @@ func TestIntegration_BumpCircuitFixedWindow(t *testing.T) {
 		t.Fatalf("BumpCircuit in new window: %v", err)
 	}
 	if cnt != 2 {
-		t.Errorf("в новом окне fire_count=%d, want 2", cnt)
+		t.Errorf("in the new window fire_count=%d, want 2", cnt)
 	}
 }
 
@@ -461,7 +461,7 @@ func TestIntegration_BumpCircuitWindowBoundary(t *testing.T) {
 		t.Fatalf("BumpCircuit at boundary: %v", err)
 	}
 	if cnt != 1 {
-		t.Errorf("на границе окна (<=) счётчик должен сброситься в 1, got %d", cnt)
+		t.Errorf("at the window boundary (<=) the counter should reset to 1, got %d", cnt)
 	}
 }
 
@@ -478,7 +478,7 @@ func TestIntegration_TripDecreeSingleWinner(t *testing.T) {
 		t.Fatalf("TripDecree #1: %v", err)
 	}
 	if !tripped {
-		t.Fatal("первый TripDecree должен выиграть (enabled true→false)")
+		t.Fatal("the first TripDecree should win (enabled true->false)")
 	}
 	// Decree is now disabled.
 	d, err := SelectDecreeByName(ctx, integrationPool, decree)
@@ -486,7 +486,7 @@ func TestIntegration_TripDecreeSingleWinner(t *testing.T) {
 		t.Fatalf("SelectDecreeByName: %v", err)
 	}
 	if d.Enabled {
-		t.Error("после TripDecree Decree должен быть disabled")
+		t.Error("after TripDecree the Decree should be disabled")
 	}
 
 	// A repeated TripDecree — already disabled, RowsAffected==0.
@@ -495,7 +495,7 @@ func TestIntegration_TripDecreeSingleWinner(t *testing.T) {
 		t.Fatalf("TripDecree #2: %v", err)
 	}
 	if tripped2 {
-		t.Error("повторный TripDecree должен проиграть (RowsAffected==0)")
+		t.Error("a repeated TripDecree should lose (RowsAffected==0)")
 	}
 }
 
@@ -531,11 +531,11 @@ func TestIntegration_BumpCircuitConcurrent(t *testing.T) {
 	}
 	// Concurrent RETURNING values — {1,2} in some order, no increment is lost.
 	if results[0]+results[1] != 3 {
-		t.Errorf("конкурентные RETURNING fire_count = %v (сумма %d), want {1,2}", results, results[0]+results[1])
+		t.Errorf("concurrent RETURNING fire_count = %v (sum %d), want {1,2}", results, results[0]+results[1])
 	}
 	final, ok := circuitFireCount(t, decree)
 	if !ok || final != 2 {
-		t.Errorf("итоговый fire_count после 2 конкурентных bump = %d (есть=%v), want 2", final, ok)
+		t.Errorf("final fire_count after 2 concurrent bumps = %d (has=%v), want 2", final, ok)
 	}
 }
 
@@ -549,7 +549,7 @@ func TestIntegration_CircuitRecreateCascade(t *testing.T) {
 		t.Fatalf("BumpCircuit: %v", err)
 	}
 	if _, ok := circuitFireCount(t, decree); !ok {
-		t.Fatal("после bump oracle_circuit-строка должна существовать")
+		t.Fatal("after bump the oracle_circuit row should exist")
 	}
 
 	// Delete Decree → cascade cleans up oracle_circuit.
@@ -557,14 +557,14 @@ func TestIntegration_CircuitRecreateCascade(t *testing.T) {
 		t.Fatalf("DeleteDecree: %v", err)
 	}
 	if _, ok := circuitFireCount(t, decree); ok {
-		t.Error("ON DELETE CASCADE: oracle_circuit-строка должна уйти с Decree")
+		t.Error("ON DELETE CASCADE: the oracle_circuit row should go with the Decree")
 	}
 	var total int
 	if err := integrationPool.QueryRow(ctx, `SELECT COUNT(*) FROM oracle_circuit`).Scan(&total); err != nil {
 		t.Fatalf("count oracle_circuit: %v", err)
 	}
 	if total != 0 {
-		t.Errorf("oracle_circuit должна быть пуста после delete, got %d", total)
+		t.Errorf("oracle_circuit should be empty after delete, got %d", total)
 	}
 
 	// Recreate (same name) → the new Decree starts with a clean window.
@@ -575,7 +575,7 @@ func TestIntegration_CircuitRecreateCascade(t *testing.T) {
 		t.Fatalf("BumpCircuit after recreate: %v", err)
 	}
 	if cnt != 1 {
-		t.Errorf("пересозданный Decree должен стартовать с fire_count=1, got %d", cnt)
+		t.Errorf("a recreated Decree should start with fire_count=1, got %d", cnt)
 	}
 }
 

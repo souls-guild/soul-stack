@@ -101,7 +101,7 @@ func TestParseSelector_State_RequiresQuotes(t *testing.T) {
 	}
 }
 
-// An empty state (state=”) is rejected.
+// An empty state (state=") is rejected.
 func TestParseSelector_State_EmptyRejected(t *testing.T) {
 	_, err := ParsePermission(`incarnation.run on state=''`)
 	if err == nil {
@@ -131,10 +131,10 @@ func TestMatches_State_FailClosedWithoutState(t *testing.T) {
 		t.Fatalf("ParsePermission: %v", err)
 	}
 	if p.Matches("incarnation", "run", map[string]string{"incarnation": "redis-prod", "coven": "prod"}) {
-		t.Errorf("state-perm без state-в-context должна давать deny (S2c fail-closed)")
+		t.Errorf("state-perm without state-in-context should deny (S2c fail-closed)")
 	}
 	if p.Matches("incarnation", "run", nil) {
-		t.Errorf("state-perm с nil-context должна давать deny")
+		t.Errorf("state-perm with nil-context should deny")
 	}
 }
 
@@ -152,7 +152,7 @@ func TestEvalStateExpr(t *testing.T) {
 	}
 	// A missing key in state → no-match (fail-closed), NOT a function error.
 	if ok, err := EvalStateExpr(`state.redis_version == "8.0"`, map[string]any{}); err != nil || ok {
-		t.Errorf("пустой state: ok=%v err=%v, want false,nil (no-such-key → no-match)", ok, err)
+		t.Errorf("empty state: ok=%v err=%v, want false,nil (no-such-key -> no-match)", ok, err)
 	}
 	// nil state → no-match.
 	if ok, err := EvalStateExpr(`state.redis_version == "8.0"`, nil); err != nil || ok {
@@ -187,11 +187,11 @@ func TestResolvePurview_State_DefaultScopeInherited(t *testing.T) {
 	})
 	p := e.ResolvePurview("archon-a", "incarnation", "run")
 	if p.Unrestricted {
-		t.Errorf("Unrestricted=true, want false (bare наследует state default_scope)")
+		t.Errorf("Unrestricted=true, want false (bare inherits state default_scope)")
 	}
 	want := `state.redis_version == "8.0"`
 	if len(p.StateExprs) != 1 || p.StateExprs[0] != want {
-		t.Errorf("StateExprs = %v, want [%q] (наследование default_scope)", p.StateExprs, want)
+		t.Errorf("StateExprs = %v, want [%q] (default_scope inheritance)", p.StateExprs, want)
 	}
 }
 
@@ -211,43 +211,43 @@ func TestSubset_State_StringEquality(t *testing.T) {
 		wantHeld    bool // true → ErrPermissionNotHeld (grant denied)
 	}{
 		{
-			name:        "идентичный state → выдача ок",
+			name:        "identical state -> grant ok",
 			callerRaws:  []string{v80},
 			grantedRaws: []string{v80},
 			wantHeld:    false,
 		},
 		{
-			name:        "иной state → DENY (fail-closed, не string-equal)",
+			name:        "different state -> DENY (fail-closed, not string-equal)",
 			callerRaws:  []string{v80},
 			grantedRaws: []string{v81},
 			wantHeld:    true,
 		},
 		{
-			name:        "state-сужение недостижимо статически → DENY",
+			name:        "state narrowing statically unreachable -> DENY",
 			callerRaws:  []string{v80},
 			grantedRaws: []string{v80repl},
 			wantHeld:    true,
 		},
 		{
-			name:        "caller с * выдаёт любой state",
+			name:        "caller with * grants any state",
 			callerRaws:  []string{"*"},
 			grantedRaws: []string{v80},
 			wantHeld:    false,
 		},
 		{
-			name:        "caller без state-scope (bare) выдаёт state → ок (bare покрывает)",
+			name:        "caller without state-scope (bare) grants state -> ok (bare covers)",
 			callerRaws:  []string{"incarnation.run"},
 			grantedRaws: []string{v80},
 			wantHeld:    false,
 		},
 		{
-			name:        "caller со state выдаёт bare → DENY (bare шире state-scope caller-а)",
+			name:        "caller with state grants bare -> DENY (bare is wider than caller state-scope)",
 			callerRaws:  []string{v80},
 			grantedRaws: []string{"incarnation.run"},
 			wantHeld:    true,
 		},
 		{
-			name:        "caller со state выдаёт coven (иное измерение) → DENY",
+			name:        "caller with state grants coven (a different dimension) -> DENY",
 			callerRaws:  []string{v80},
 			grantedRaws: []string{"incarnation.run on coven=prod"},
 			wantHeld:    true,

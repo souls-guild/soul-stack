@@ -343,16 +343,16 @@ func TestPortent_MatchEnqueuesScenario(t *testing.T) {
 
 	calls := enq.snapshot()
 	if len(calls) != 1 {
-		t.Fatalf("ожидали 1 enqueue, got %d", len(calls))
+		t.Fatalf("expected 1 enqueue, got %d", len(calls))
 	}
 	if calls[0].ScenarioName != "restart" || calls[0].SubjectSID != "host-a.example.com" {
 		t.Errorf("enqueue: %+v", calls[0])
 	}
 	if calls[0].IncarnationName != "web-app" {
-		t.Errorf("incarnation_name не пробросился: %+v", calls[0])
+		t.Errorf("incarnation_name did not propagate: %+v", calls[0])
 	}
 	if calls[0].ActionInput["service"] != "nginx" {
-		t.Errorf("action_input не пробросился: %+v", calls[0].ActionInput)
+		t.Errorf("action_input did not propagate: %+v", calls[0].ActionInput)
 	}
 	// audit oracle.fired.
 	var fired bool
@@ -362,7 +362,7 @@ func TestPortent_MatchEnqueuesScenario(t *testing.T) {
 		}
 	}
 	if !fired {
-		t.Error("ожидали audit oracle.fired")
+		t.Error("expected audit oracle.fired")
 	}
 }
 
@@ -374,7 +374,7 @@ func TestPortent_NoDecreeDefaultDeny(t *testing.T) {
 	h.handlePortentEvent(context.Background(), "host-a.example.com", "sess", portent("svc-down", nil))
 
 	if len(enq.snapshot()) != 0 {
-		t.Error("default-deny: без Decree ничего не должно ставиться")
+		t.Error("default-deny: nothing should be enqueued without a Decree")
 	}
 }
 
@@ -392,7 +392,7 @@ func TestPortent_SubjectMismatch(t *testing.T) {
 	h.handlePortentEvent(context.Background(), "host-a.example.com", "sess", portent("svc-down", nil))
 
 	if len(enq.snapshot()) != 0 {
-		t.Error("subject-mismatch: enqueue не должен произойти")
+		t.Error("subject-mismatch: enqueue should not happen")
 	}
 }
 
@@ -414,12 +414,12 @@ func TestPortent_MembershipMismatch(t *testing.T) {
 	h.handlePortentEvent(context.Background(), "host-a.example.com", "sess", portent("svc-down", nil))
 
 	if len(enq.snapshot()) != 0 {
-		t.Error("membership-mismatch: enqueue не должен произойти")
+		t.Error("membership-mismatch: enqueue should not happen")
 	}
 	// fire is not recorded and audit oracle.fired is not written.
 	for _, e := range aw.snapshot() {
 		if e.EventType == audit.EventOracleFired {
-			t.Error("membership-mismatch: audit oracle.fired НЕ должен писаться")
+			t.Error("membership-mismatch: audit oracle.fired should NOT be written")
 		}
 	}
 }
@@ -443,7 +443,7 @@ func TestPortent_SIDDecreeEnqueues(t *testing.T) {
 
 	calls := enq.snapshot()
 	if len(calls) != 1 {
-		t.Fatalf("sid-Decree: ожидали 1 enqueue, got %d", len(calls))
+		t.Fatalf("sid-Decree: expected 1 enqueue, got %d", len(calls))
 	}
 	if calls[0].IncarnationName != "web-app" || calls[0].SubjectSID != "host-a.example.com" {
 		t.Errorf("sid-Decree enqueue: %+v", calls[0])
@@ -455,7 +455,7 @@ func TestPortent_SIDDecreeEnqueues(t *testing.T) {
 		}
 	}
 	if !fired {
-		t.Error("sid-Decree: ожидали audit oracle.fired")
+		t.Error("sid-Decree: expected audit oracle.fired")
 	}
 }
 
@@ -475,14 +475,14 @@ func TestPortent_WhereCELFilters(t *testing.T) {
 	h.handlePortentEvent(context.Background(), "host-a.example.com", "sess",
 		portent("svc-down", map[string]any{"severity": "info"}))
 	if len(enq.snapshot()) != 0 {
-		t.Fatal("where-CEL false должен фильтровать (skip)")
+		t.Fatal("where-CEL false must filter out (skip)")
 	}
 
 	// severity=critical → where true → enqueue.
 	h.handlePortentEvent(context.Background(), "host-a.example.com", "sess",
 		portent("svc-down", map[string]any{"severity": "critical"}))
 	if len(enq.snapshot()) != 1 {
-		t.Fatal("where-CEL true должен пропустить (enqueue)")
+		t.Fatal("where-CEL true must let through (enqueue)")
 	}
 }
 
@@ -502,7 +502,7 @@ func TestPortent_CooldownBlocks(t *testing.T) {
 	h.handlePortentEvent(context.Background(), "host-a.example.com", "sess", portent("svc-down", nil))
 
 	if len(enq.snapshot()) != 0 {
-		t.Error("cooldown в окне должен блокировать повтор")
+		t.Error("cooldown within window must block a repeat")
 	}
 }
 
@@ -561,7 +561,7 @@ func TestPortent_MetricsCooldownPath(t *testing.T) {
 		}
 	}
 	if strings.Contains(body, "keeper_oracle_scenarios_enqueued_total 1") {
-		t.Errorf("cooldown-путь не должен инкрементить scenarios_enqueued; got=\n%s", body)
+		t.Errorf("cooldown path must not increment scenarios_enqueued; got=\n%s", body)
 	}
 }
 
@@ -579,7 +579,7 @@ func TestPortent_MetricsDefaultDeny(t *testing.T) {
 		t.Errorf("missing portents_received; got=\n%s", body)
 	}
 	if strings.Contains(body, "keeper_oracle_decrees_matched_total 1") {
-		t.Errorf("default-deny не должен инкрементить decrees_matched; got=\n%s", body)
+		t.Errorf("default-deny must not increment decrees_matched; got=\n%s", body)
 	}
 }
 
@@ -609,11 +609,11 @@ func TestPortent_CircuitTripsAtThreshold(t *testing.T) {
 	h.handlePortentEvent(context.Background(), "host-a.example.com", "sess", portent("svc-down", nil))
 
 	if !db.bumpCalled {
-		t.Error("breaker включён → BumpCircuit должен вызываться")
+		t.Error("breaker enabled -> BumpCircuit must be called")
 	}
 	body := obstest.Scrape(t, reg.Gatherer())
 	if !strings.Contains(body, "keeper_oracle_circuit_tripped_total 1") {
-		t.Errorf("ожидали circuit_tripped 1; got=\n%s", body)
+		t.Errorf("expected circuit_tripped 1; got=\n%s", body)
 	}
 	var tripped bool
 	for _, e := range aw.snapshot() {
@@ -631,7 +631,7 @@ func TestPortent_CircuitTripsAtThreshold(t *testing.T) {
 		}
 	}
 	if !tripped {
-		t.Error("ожидали audit decree.circuit_tripped")
+		t.Error("expected audit decree.circuit_tripped")
 	}
 }
 
@@ -646,15 +646,15 @@ func TestPortent_CircuitBelowThreshold(t *testing.T) {
 	h.handlePortentEvent(context.Background(), "host-a.example.com", "sess", portent("svc-down", nil))
 
 	if !db.bumpCalled {
-		t.Error("breaker включён → BumpCircuit должен вызываться даже ниже порога")
+		t.Error("breaker enabled -> BumpCircuit must be called even below threshold")
 	}
 	body := obstest.Scrape(t, reg.Gatherer())
 	if strings.Contains(body, "keeper_oracle_circuit_tripped_total 1") {
-		t.Errorf("ниже порога trip не должен срабатывать; got=\n%s", body)
+		t.Errorf("below threshold trip must not fire; got=\n%s", body)
 	}
 	for _, e := range aw.snapshot() {
 		if e.EventType == audit.EventDecreeCircuitTripped {
-			t.Error("ниже порога audit decree.circuit_tripped НЕ должен писаться")
+			t.Error("below threshold audit decree.circuit_tripped must NOT be written")
 		}
 	}
 }
@@ -670,11 +670,11 @@ func TestPortent_CircuitOffSkipsBump(t *testing.T) {
 	h.handlePortentEvent(context.Background(), "host-a.example.com", "sess", portent("svc-down", nil))
 
 	if db.bumpCalled {
-		t.Error("breaker OFF (max_fires==0) → BumpCircuit вызываться НЕ должен")
+		t.Error("breaker OFF (max_fires==0) -> BumpCircuit must NOT be called")
 	}
 	body := obstest.Scrape(t, reg.Gatherer())
 	if strings.Contains(body, "keeper_oracle_circuit_tripped_total 1") {
-		t.Errorf("breaker OFF → trip невозможен; got=\n%s", body)
+		t.Errorf("breaker OFF -> trip is impossible; got=\n%s", body)
 	}
 }
 
@@ -690,11 +690,11 @@ func TestPortent_CircuitTripLoserNoDuplicate(t *testing.T) {
 
 	body := obstest.Scrape(t, reg.Gatherer())
 	if strings.Contains(body, "keeper_oracle_circuit_tripped_total 1") {
-		t.Errorf("trip-проигравший не должен инкрементить circuit_tripped; got=\n%s", body)
+		t.Errorf("trip loser must not increment circuit_tripped; got=\n%s", body)
 	}
 	for _, e := range aw.snapshot() {
 		if e.EventType == audit.EventDecreeCircuitTripped {
-			t.Error("trip-проигравший не должен писать audit decree.circuit_tripped")
+			t.Error("trip loser must not write audit decree.circuit_tripped")
 		}
 	}
 }
@@ -724,20 +724,20 @@ func TestPortent_EnqueueFailNoFireNoAudit(t *testing.T) {
 	h.handlePortentEvent(context.Background(), "host-a.example.com", "sess", portent("svc-down", nil))
 
 	if fireRecorded {
-		t.Error("enqueue-fail: RecordFire (cooldown) НЕ должен писаться — иначе ложный cooldown")
+		t.Error("enqueue-fail: RecordFire (cooldown) must NOT be written - otherwise a false cooldown")
 	}
 	for _, e := range aw.snapshot() {
 		if e.EventType == audit.EventOracleFired {
-			t.Error("enqueue-fail: audit oracle.fired НЕ должен писаться")
+			t.Error("enqueue-fail: audit oracle.fired must NOT be written")
 		}
 	}
 	body := obstest.Scrape(t, reg.Gatherer())
 	// match is recorded BEFORE enqueue (the attempt counts), enqueued is not.
 	if !strings.Contains(body, "keeper_oracle_decrees_matched_total 1") {
-		t.Errorf("match должен фиксироваться до enqueue; got=\n%s", body)
+		t.Errorf("match must be recorded before enqueue; got=\n%s", body)
 	}
 	if strings.Contains(body, "keeper_oracle_scenarios_enqueued_total 1") {
-		t.Errorf("enqueue-fail не должен инкрементить scenarios_enqueued; got=\n%s", body)
+		t.Errorf("enqueue-fail must not increment scenarios_enqueued; got=\n%s", body)
 	}
 }
 
@@ -769,7 +769,7 @@ func TestPortent_AuditPayloadExcludesEventData(t *testing.T) {
 		}
 	}
 	if fired == nil {
-		t.Fatal("ожидали audit oracle.fired")
+		t.Fatal("expected audit oracle.fired")
 	}
 	// Exactly the expected set of keys — no more, no less.
 	wantKeys := map[string]bool{"sid": true, "beacon": true, "decree": true, "scenario": true, "apply_id": true}
@@ -778,13 +778,13 @@ func TestPortent_AuditPayloadExcludesEventData(t *testing.T) {
 	}
 	for k := range fired.Payload {
 		if !wantKeys[k] {
-			t.Errorf("неожиданный ключ в payload: %q", k)
+			t.Errorf("unexpected key in payload: %q", k)
 		}
 	}
 	// No payload value carries the event.data marker.
 	for k, v := range fired.Payload {
 		if s, ok := v.(string); ok && strings.Contains(s, leak) {
-			t.Errorf("event.data протёк в payload[%q] = %q", k, s)
+			t.Errorf("event.data leaked into payload[%q] = %q", k, s)
 		}
 	}
 }
@@ -821,14 +821,14 @@ func TestPortent_SIDDecreeMembershipMismatch(t *testing.T) {
 	h.handlePortentEvent(context.Background(), "host-a.example.com", "sess", portent("svc-down", nil))
 
 	if len(enq.snapshot()) != 0 {
-		t.Error("sid-Decree membership-mismatch: enqueue не должен произойти")
+		t.Error("sid-Decree membership-mismatch: enqueue should not happen")
 	}
 	if fireRecorded {
-		t.Error("sid-Decree membership-mismatch: RecordFire НЕ должен писаться")
+		t.Error("sid-Decree membership-mismatch: RecordFire must NOT be written")
 	}
 	for _, e := range aw.snapshot() {
 		if e.EventType == audit.EventOracleFired {
-			t.Error("sid-Decree membership-mismatch: audit oracle.fired НЕ должен писаться")
+			t.Error("sid-Decree membership-mismatch: audit oracle.fired must NOT be written")
 		}
 	}
 }
@@ -848,7 +848,7 @@ func TestActiveVigilsForSID_ConvertsToVigilDef(t *testing.T) {
 		t.Fatalf("ActiveVigilsForSID: %v", err)
 	}
 	if len(defs) != 1 {
-		t.Fatalf("ожидали 1 VigilDef, got %d", len(defs))
+		t.Fatalf("expected 1 VigilDef, got %d", len(defs))
 	}
 	if defs[0].GetName() != "web-watch" || defs[0].GetInterval() != "30s" || defs[0].GetCheck() != "core.beacon.service_down" {
 		t.Errorf("VigilDef mapping: %+v", defs[0])

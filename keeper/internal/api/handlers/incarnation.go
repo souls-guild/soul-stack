@@ -414,7 +414,7 @@ func (h *IncarnationHandler) GetInScopeFor(claims *jwt.Claims, action string) fu
 		for _, expr := range pv.StateExprs {
 			matched, err := rbac.EvalStateExpr(expr, inc.State)
 			if err != nil {
-				h.logger.Warn("incarnation.get: state-CEL eval упал — предикат не даёт доступ",
+				h.logger.Warn("incarnation.get: state-CEL eval failed - predicate denies access",
 					slog.String("name", inc.Name), slog.Any("error", err))
 				continue
 			}
@@ -493,7 +493,7 @@ func (h *IncarnationHandler) resolveListScope(ctx context.Context, claims *jwt.C
 	if len(pv.StateExprs) > 0 {
 		names, err := h.resolveStateNames(ctx, pv.StateExprs, serviceFilter)
 		if err != nil {
-			h.logger.Warn("incarnation."+action+": state-scope резолв упал — применяется только coven-измерение (fail-closed по state)",
+			h.logger.Warn("incarnation."+action+": state-scope resolve failed - applying only the coven dimension (fail-closed on state)",
 				slog.String("aid", claims.Subject), slog.Any("error", err))
 		} else {
 			scope.StateNames = names

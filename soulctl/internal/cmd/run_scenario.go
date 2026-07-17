@@ -41,7 +41,7 @@ func newRunScenarioCmd() *cobra.Command {
 	)
 	c := &cobra.Command{
 		Use:   "scenario <service>/<scenario>",
-		Short: "батчевый scenario-прогон над инкарнациями (Voyage kind=scenario)",
+		Short: "batched scenario run over incarnations (Voyage kind=scenario)",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			svc, scenario, err := parseServiceScenario(args[0])
@@ -51,9 +51,9 @@ func newRunScenarioCmd() *cobra.Command {
 			// target flags don't apply to the scenario path (only cmd/push):
 			// a scenario run targets an incarnation, not a host.
 			if target, _ := tflags.resolve(); target.hasAny() {
-				return fmt.Errorf("--target-* флаги не применимы к `run scenario` " +
-					"(цель — инкарнация); используйте `run cmd` для ad-hoc " +
-					"multi-target или `run push`")
+				return fmt.Errorf("--target-* flags don't apply to `run scenario` " +
+					"(the target is an incarnation); use `run cmd` for ad-hoc " +
+					"multi-target or `run push`")
 			}
 
 			cl, err := loadClient(cmd)
@@ -73,7 +73,7 @@ func newRunScenarioCmd() *cobra.Command {
 			var input map[string]any
 			if inputJSON != "" {
 				if err := json.Unmarshal([]byte(inputJSON), &input); err != nil {
-					return fmt.Errorf("--input не JSON-объект: %w", err)
+					return fmt.Errorf("--input is not a JSON object: %w", err)
 				}
 			}
 
@@ -118,23 +118,23 @@ func newRunScenarioCmd() *cobra.Command {
 		},
 	}
 	c.Flags().StringVar(&incarnation, "incarnation", "",
-		"имя incarnation (если не задано — auto-detect по service)")
+		"incarnation name (if unset - auto-detect by service)")
 	c.Flags().StringVar(&inputJSON, "input", "",
-		"JSON-объект scenario-input (например '{\"shards\":3}')")
+		"JSON object scenario-input (e.g. '{\"shards\":3}')")
 	c.Flags().IntVar(&batchSize, "batch-size", 0,
-		"размер Leg (0/missing → весь прогон один Leg)")
+		"Leg size (0/missing -> the whole run is one Leg)")
 	c.Flags().StringVar(&batch, "batch", "",
-		"размер Leg в формате N|N% (% от числа инкарнаций); пусто → не задано, парсит Keeper")
+		"Leg size in N|N% format (% of incarnation count); empty -> unset, Keeper parses it")
 	c.Flags().StringVar(&maxFailures, "max-failures", "",
-		"порог провалов N|N% (% от числа инкарнаций); пусто → не задано, парсит Keeper")
+		"failure threshold N|N% (% of incarnation count); empty -> unset, Keeper parses it")
 	c.Flags().IntVar(&concurrency, "concurrency", 0,
 		"semaphore-cap fan-out (0/missing → default 50, max 500)")
 	c.Flags().StringVar(&onFailure, "on-failure", "",
-		"failure-policy: continue (default) или abort")
+		"failure-policy: continue (default) or abort")
 	c.Flags().BoolVar(&wait, "wait", false,
-		"ждать терминал Voyage (poll GET /v1/voyages/{id})")
+		"wait for the Voyage terminal state (poll GET /v1/voyages/{id})")
 	c.Flags().DurationVar(&waitTimeout, "wait-timeout", 10*time.Minute,
-		"максимальное время ожидания для --wait")
+		"maximum wait time for --wait")
 	tflags.bind(c)
 	return c
 }
@@ -145,15 +145,15 @@ func newRunScenarioCmd() *cobra.Command {
 func parseServiceScenario(raw string) (service, scenario string, err error) {
 	parts := strings.SplitN(raw, "/", 2)
 	if len(parts) != 2 {
-		return "", "", fmt.Errorf("ожидается <service>/<scenario>, получено %q", raw)
+		return "", "", fmt.Errorf("expected <service>/<scenario>, got %q", raw)
 	}
 	service = strings.TrimSpace(parts[0])
 	scenario = strings.TrimSpace(parts[1])
 	if service == "" || scenario == "" {
-		return "", "", fmt.Errorf("service/scenario пусты в %q", raw)
+		return "", "", fmt.Errorf("service/scenario are empty in %q", raw)
 	}
 	if strings.Contains(scenario, "/") {
-		return "", "", fmt.Errorf("scenario не должен содержать `/`: %q", scenario)
+		return "", "", fmt.Errorf("scenario must not contain `/`: %q", scenario)
 	}
 	return service, scenario, nil
 }
@@ -172,11 +172,11 @@ func autoDetectIncarnation(ctx context.Context, cl *client.Client, service strin
 	sort.Strings(names)
 	switch len(names) {
 	case 0:
-		return "", fmt.Errorf("сервиса %q: ни одной incarnation; создайте её или укажите --incarnation", service)
+		return "", fmt.Errorf("service %q: no incarnation; create one or pass --incarnation", service)
 	case 1:
 		return names[0], nil
 	default:
-		return "", fmt.Errorf("у сервиса %q несколько incarnation (%s); укажите --incarnation явно",
+		return "", fmt.Errorf("service %q has multiple incarnations (%s); pass --incarnation explicitly",
 			service, strings.Join(names, ", "))
 	}
 }

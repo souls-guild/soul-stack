@@ -96,11 +96,11 @@ func (h *Handler) callIncarnationCheckDrift(ctx context.Context, claims *jwt.Cla
 	if err != nil {
 		if errors.Is(err, scenario.ErrConvergeMissing) {
 			return h.toolError(req.ID, toolName, mcpCodeValidationFailed,
-				"drift-проверка недоступна для service "+inc.Service+": сценарий converge отсутствует в текущем service-snapshot-е")
+				"drift check unavailable for service "+inc.Service+": converge scenario missing from the current service snapshot")
 		}
 		if errors.Is(err, scenario.ErrDriftInputMissing) {
 			return h.toolError(req.ID, toolName, mcpCodeValidationFailed,
-				"drift-input не резолвится: "+err.Error())
+				"drift-input does not resolve: "+err.Error())
 		}
 		h.deps.Logger.Error("mcp: incarnation.check-drift failed",
 			slog.String("name", a.Name),
@@ -112,7 +112,7 @@ func (h *Handler) callIncarnationCheckDrift(ctx context.Context, claims *jwt.Cla
 
 	hasDrift := report.Summary.HostsDrifted > 0 || report.Summary.HostsFailed > 0
 	if err := h.deps.ScenarioDrift.MarkDriftStatus(ctx, a.Name, hasDrift); err != nil {
-		h.deps.Logger.Warn("mcp: incarnation.check-drift статус не зафиксирован",
+		h.deps.Logger.Warn("mcp: incarnation.check-drift status not recorded",
 			slog.String("name", a.Name), slog.Any("error", err))
 	}
 

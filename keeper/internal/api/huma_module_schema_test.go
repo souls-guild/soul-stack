@@ -53,12 +53,12 @@ func TestSchemaNames_Module(t *testing.T) {
 	schemas := loadFullSpecSchemas(t)
 	for _, name := range moduleContractSchemas {
 		if _, ok := schemas[name]; !ok {
-			t.Errorf("контрактonя схема %q ОТСУТСТВУЕТ в components/schemas (имя не выровнеbut)", name)
+			t.Errorf("contract schema %q MISSING from components/schemas (name not aligned)", name)
 		}
 	}
 	for _, name := range moduleForbiddenSchemas {
 		if _, ok := schemas[name]; ok {
-			t.Errorf("техническое huma-имя %q ПРИСУТСТВУЕТ в спеке — имя не выровнеbut под контракт", name)
+			t.Errorf("technical huma name %q PRESENT in the spec - name not aligned to the contract", name)
 		}
 	}
 }
@@ -74,24 +74,24 @@ func TestSchemaNames_ModuleFormPrepNested(t *testing.T) {
 	}
 	var doc map[string]any
 	if err := yaml.Unmarshal([]byte(y), &doc); err != nil {
-		t.Fatalf("спека не парсится: %v", err)
+		t.Fatalf("spec does not parse: %v", err)
 	}
 	comp, _ := doc["components"].(map[string]any)
 	schemas, _ := comp["schemas"].(map[string]any)
 
 	const sourceRef = "#/components/schemas/ModuleFormPrepSource"
 	if got := propRef(t, schemas, "ModuleFormPrepRequest", "source"); got != sourceRef {
-		t.Errorf("ModuleFormPrepRequest.source → %q, ожидался %q", got, sourceRef)
+		t.Errorf("ModuleFormPrepRequest.source -> %q, expected %q", got, sourceRef)
 	}
 	const choirRef = "#/components/schemas/ModuleFormPrepChoirSource"
 	if got := propRef(t, schemas, "ModuleFormPrepSource", "choir"); got != choirRef {
-		t.Errorf("ModuleFormPrepSource.choir → %q, ожидался %q", got, choirRef)
+		t.Errorf("ModuleFormPrepSource.choir -> %q, expected %q", got, choirRef)
 	}
 
 	// ModuleFormPrepRequest shape checked against the hand-written spec (:5433 — required:[source]).
 	req, _ := schemas["ModuleFormPrepRequest"].(map[string]any)
 	if req == nil {
-		t.Fatal("ModuleFormPrepRequest отсутствует")
+		t.Fatal("ModuleFormPrepRequest missing")
 	}
 	assertRequiredExactly(t, req, "ModuleFormPrepRequest", "source")
 }

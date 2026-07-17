@@ -369,7 +369,7 @@ func TestLoadScenarioManifest_ChangedWhenBoolLiteral(t *testing.T) {
 		for _, d := range diags {
 			if d.Level == diag.LevelError {
 				dump(t, diags)
-				t.Fatalf("changed_when/failed_when: %s — неожиданная ошибка валидации", v)
+				t.Fatalf("changed_when/failed_when: %s - unexpected validation error", v)
 			}
 		}
 	}
@@ -380,7 +380,7 @@ func TestLoadScenarioManifest_ChangedWhenBoolLiteral(t *testing.T) {
 		_, _, diags, _ := LoadScenarioManifestFromBytes("main.yml", []byte(src), ValidateOptions{})
 		if !hasCodeAt(diags, "type_mismatch", "$.tasks[0].changed_when") {
 			dump(t, diags)
-			t.Fatalf("changed_when: %s — ожидался type_mismatch", v)
+			t.Fatalf("changed_when: %s - expected type_mismatch", v)
 		}
 	}
 }
@@ -499,13 +499,13 @@ state_changes:
 	cfg, _, diags, _ := LoadScenarioManifestFromBytes("main.yml", []byte(src), ValidateOptions{})
 	if diag.HasErrors(diags) {
 		dump(t, diags)
-		t.Fatalf("★ TRANSIT: старая map-форма должна парситься без ошибок")
+		t.Fatalf("* TRANSIT: the old map form should parse without errors")
 	}
 	if cfg.StateChanges == nil || cfg.StateChanges.IsList {
-		t.Fatalf("★ map-форма: IsList должен быть false, got %+v", cfg.StateChanges)
+		t.Fatalf("* map form: IsList should be false, got %+v", cfg.StateChanges)
 	}
 	if cfg.StateChanges.Sets["redis_version"] != "${ input.version }" {
-		t.Errorf("map-форма sets не распарсен: %+v", cfg.StateChanges.Sets)
+		t.Errorf("map form sets not parsed: %+v", cfg.StateChanges.Sets)
 	}
 }
 
@@ -527,7 +527,7 @@ state_changes:
 	cfg, _, diags, _ := LoadScenarioManifestFromBytes("main.yml", []byte(src), ValidateOptions{})
 	if diag.HasErrors(diags) {
 		dump(t, diags)
-		t.Fatalf("list-форма set+add должна валидироваться без ошибок")
+		t.Fatalf("list form set+add should validate without errors")
 	}
 	sc := cfg.StateChanges
 	if sc == nil || !sc.IsList || len(sc.Ops) != 2 {
@@ -541,7 +541,7 @@ state_changes:
 	}
 	valMap, ok := sc.Ops[0].Value.(map[string]any)
 	if !ok || valMap["role"] != "replica" {
-		t.Errorf("op[0].value = %+v, want map с role:replica", sc.Ops[0].Value)
+		t.Errorf("op[0].value = %+v, want a map with role:replica", sc.Ops[0].Value)
 	}
 	if sc.Ops[1].Verb != VerbSet || sc.Ops[1].Field != "redis_version" || sc.Ops[1].Value != "${ input.version }" {
 		t.Errorf("op[1] = %+v, want set redis_version", sc.Ops[1])
@@ -558,10 +558,10 @@ tasks: []
 	cfg, _, diags, _ := LoadScenarioManifestFromBytes("main.yml", []byte(src), ValidateOptions{})
 	if diag.HasErrors(diags) {
 		dump(t, diags)
-		t.Fatalf("пустой list state_changes должен быть валиден")
+		t.Fatalf("empty list state_changes should be valid")
 	}
 	if cfg.StateChanges == nil || !cfg.StateChanges.IsList || len(cfg.StateChanges.Ops) != 0 {
-		t.Fatalf("state_changes = %+v, want пустой list", cfg.StateChanges)
+		t.Fatalf("state_changes = %+v, want an empty list", cfg.StateChanges)
 	}
 }
 
@@ -574,7 +574,7 @@ state_changes:
 	_, _, diags, _ := LoadScenarioManifestFromBytes("main.yml", []byte(src), ValidateOptions{})
 	if !hasCode(diags, "missing_required_field") {
 		dump(t, diags)
-		t.Fatalf("expected missing_required_field (set без value)")
+		t.Fatalf("expected missing_required_field (set with no value)")
 	}
 }
 
@@ -588,7 +588,7 @@ state_changes:
 	_, _, diags, _ := LoadScenarioManifestFromBytes("main.yml", []byte(src), ValidateOptions{})
 	if !hasCode(diags, "missing_required_field") {
 		dump(t, diags)
-		t.Fatalf("expected missing_required_field (add без value)")
+		t.Fatalf("expected missing_required_field (add with no value)")
 	}
 }
 
@@ -604,7 +604,7 @@ state_changes:
 	_, _, diags, _ := LoadScenarioManifestFromBytes("main.yml", []byte(src), ValidateOptions{})
 	if !hasCode(diags, "invalid_value") {
 		dump(t, diags)
-		t.Fatalf("expected invalid_value (on_conflict: overwrite не из skip/replace/error)")
+		t.Fatalf("expected invalid_value (on_conflict: overwrite not one of skip/replace/error)")
 	}
 }
 
@@ -620,7 +620,7 @@ state_changes:
 	_, _, diags, _ := LoadScenarioManifestFromBytes("main.yml", []byte(src), ValidateOptions{})
 	if !hasCode(diags, "unknown_key") {
 		dump(t, diags)
-		t.Fatalf("expected unknown_key (match на set неприменим)")
+		t.Fatalf("expected unknown_key (match not applicable to set)")
 	}
 }
 
@@ -635,7 +635,7 @@ state_changes:
 	_, _, diags, _ := LoadScenarioManifestFromBytes("main.yml", []byte(src), ValidateOptions{})
 	if !hasCode(diags, "unknown_key") {
 		dump(t, diags)
-		t.Fatalf("expected unknown_key (patch на add неприменим)")
+		t.Fatalf("expected unknown_key (patch not applicable to add)")
 	}
 }
 
@@ -654,7 +654,7 @@ state_changes:
 	cfg, _, diags, _ := LoadScenarioManifestFromBytes("main.yml", []byte(src), ValidateOptions{})
 	if diag.HasErrors(diags) {
 		dump(t, diags)
-		t.Fatalf("modify с match+patch должен валидироваться без ошибок")
+		t.Fatalf("modify with match+patch should validate without errors")
 	}
 	op := cfg.StateChanges.Ops[0]
 	if op.Verb != VerbModify || op.Field != "redis_users" || op.Match != "key == input.username" {
@@ -678,7 +678,7 @@ state_changes:
 	_, _, diags, _ := LoadScenarioManifestFromBytes("main.yml", []byte(src), ValidateOptions{})
 	if !hasCode(diags, "missing_required_field") {
 		dump(t, diags)
-		t.Fatalf("expected missing_required_field (modify без patch)")
+		t.Fatalf("expected missing_required_field (modify with no patch)")
 	}
 }
 
@@ -694,7 +694,7 @@ state_changes:
 	cfg, _, diags, _ := LoadScenarioManifestFromBytes("main.yml", []byte(src), ValidateOptions{})
 	if diag.HasErrors(diags) {
 		dump(t, diags)
-		t.Fatalf("remove с match+expect должен валидироваться без ошибок")
+		t.Fatalf("remove with match+expect should validate without errors")
 	}
 	op := cfg.StateChanges.Ops[0]
 	if op.Verb != VerbRemove || op.Match != "elem.sid == input.sid" || op.Expect != ExpectOne {
@@ -719,7 +719,7 @@ state_changes:
 	cfg, _, diags, _ := LoadScenarioManifestFromBytes("main.yml", []byte(src), ValidateOptions{})
 	if diag.HasErrors(diags) {
 		dump(t, diags)
-		t.Fatalf("foreach с as+do должен валидироваться без ошибок")
+		t.Fatalf("foreach with as+do should validate without errors")
 	}
 	op := cfg.StateChanges.Ops[0]
 	if op.Verb != VerbForeach || op.In != "${ input.replicas }" || op.As != "sid" {
@@ -740,7 +740,7 @@ state_changes:
 	_, _, diags, _ := LoadScenarioManifestFromBytes("main.yml", []byte(src), ValidateOptions{})
 	if !hasCode(diags, "missing_required_field") {
 		dump(t, diags)
-		t.Fatalf("expected missing_required_field (foreach без as/do)")
+		t.Fatalf("expected missing_required_field (foreach with no as/do)")
 	}
 }
 
@@ -784,7 +784,7 @@ state_changes:
 			_, _, diags, _ := LoadScenarioManifestFromBytes("main.yml", []byte(src), ValidateOptions{})
 			if diag.HasErrors(diags) {
 				dump(t, diags)
-				t.Fatalf("wide match — WARN, не ошибка (exit-code 0)")
+				t.Fatalf("wide match - WARN, not an error (exit-code 0)")
 			}
 			if !hasCode(diags, "wide_match") {
 				dump(t, diags)
@@ -809,7 +809,7 @@ state_changes:
 	_, _, diags, _ := LoadScenarioManifestFromBytes("main.yml", []byte(src), ValidateOptions{})
 	if diag.HasErrors(diags) {
 		dump(t, diags)
-		t.Fatalf("map-форма deprecated — WARN, не ошибка")
+		t.Fatalf("map form deprecated - WARN, not an error")
 	}
 	if !hasCode(diags, "deprecated_form") {
 		dump(t, diags)
@@ -831,7 +831,7 @@ state_changes:
 	_, _, diags, _ := LoadScenarioManifestFromBytes("main.yml", []byte(src), ValidateOptions{})
 	if !hasCode(diags, "missing_required_field") {
 		dump(t, diags)
-		t.Fatalf("expected missing_required_field (операция без глагола)")
+		t.Fatalf("expected missing_required_field (operation without a verb)")
 	}
 }
 
@@ -1248,7 +1248,7 @@ state_changes:
 	_, _, diags, _ := LoadScenarioManifestFromBytes("main.yml", []byte(src), ValidateOptions{})
 	if !hasCodeAt(diags, "unknown_key", "$.state_changes[0].expect") {
 		dump(t, diags)
-		t.Fatalf("expected unknown_key on $.state_changes[0].expect (expect неприменим к set)")
+		t.Fatalf("expected unknown_key on $.state_changes[0].expect (expect not applicable to set)")
 	}
 }
 
@@ -1263,7 +1263,7 @@ state_changes:
 	_, _, diags, _ := LoadScenarioManifestFromBytes("main.yml", []byte(src), ValidateOptions{})
 	if !hasCodeAt(diags, "unknown_key", "$.state_changes[0].expect") {
 		dump(t, diags)
-		t.Fatalf("expected unknown_key on $.state_changes[0].expect (expect неприменим к add — дедуп делает on_conflict)")
+		t.Fatalf("expected unknown_key on $.state_changes[0].expect (expect not applicable to add - dedup is done by on_conflict)")
 	}
 }
 
@@ -1288,7 +1288,7 @@ state_changes:
 	_, _, diags, _ := LoadScenarioManifestFromBytes("main.yml", []byte(src), ValidateOptions{})
 	if !hasCode(diags, "nested_foreach_unsupported") {
 		dump(t, diags)
-		t.Fatalf("★ expected nested_foreach_unsupported (lint-error, НЕ рантайм) on do-level foreach")
+		t.Fatalf("* expected nested_foreach_unsupported (lint-error, NOT runtime) on do-level foreach")
 	}
 }
 
@@ -1332,11 +1332,11 @@ state_changes:
 	_, _, diags, _ := LoadScenarioManifestFromBytes("main.yml", []byte(src), ValidateOptions{})
 	if hasCode(diags, "reserved_binding_name") {
 		dump(t, diags)
-		t.Fatalf("as: sid не должен триггерить reserved_binding_name")
+		t.Fatalf("as: sid should not trigger reserved_binding_name")
 	}
 	if diag.HasErrors(diags) {
 		dump(t, diags)
-		t.Fatalf("корректный foreach с as: sid не должен давать ошибок")
+		t.Fatalf("a valid foreach with as: sid should not produce errors")
 	}
 }
 
@@ -1353,7 +1353,7 @@ tasks: []
 	cfg, _, diags, _ := LoadScenarioManifestFromBytes("main.yml", []byte(src), ValidateOptions{})
 	if diag.HasErrors(diags) {
 		dump(t, diags)
-		t.Fatalf("create: true должен быть валидным top-level ключом")
+		t.Fatalf("create: true should be a valid top-level key")
 	}
 	if cfg.Create == nil || *cfg.Create != true {
 		t.Fatalf("cfg.Create = %v, want *true", cfg.Create)
@@ -1370,7 +1370,7 @@ tasks: []
 	cfg, _, diags, _ := LoadScenarioManifestFromBytes("main.yml", []byte(src), ValidateOptions{})
 	if diag.HasErrors(diags) {
 		dump(t, diags)
-		t.Fatalf("create: false должен быть валидным")
+		t.Fatalf("create: false should be valid")
 	}
 	if cfg.Create == nil || *cfg.Create != false {
 		t.Fatalf("cfg.Create = %v, want *false", cfg.Create)
@@ -1386,7 +1386,7 @@ tasks: []
 	cfg, _, diags, _ := LoadScenarioManifestFromBytes("main.yml", []byte(src), ValidateOptions{})
 	if diag.HasErrors(diags) {
 		dump(t, diags)
-		t.Fatalf("отсутствие create: — валидно")
+		t.Fatalf("absence of create: - valid")
 	}
 	if cfg.Create != nil {
 		t.Fatalf("cfg.Create = %v, want nil", cfg.Create)
@@ -1403,12 +1403,12 @@ tasks: []
 	_, _, diags, _ := LoadScenarioManifestFromBytes("main.yml", []byte(src), ValidateOptions{})
 	if !hasCode(diags, "type_mismatch") {
 		dump(t, diags)
-		t.Fatalf("create: \"yes\" должен дать type_mismatch (ожидается boolean)")
+		t.Fatalf("create: \"yes\" should yield type_mismatch (boolean expected)")
 	}
 	// `create:` must NOT be caught as unknown_key (it is known to a struct field).
 	if hasCodeAt(diags, "unknown_key", "$.create") {
 		dump(t, diags)
-		t.Fatalf("create: не должен быть unknown_key (известное поле)")
+		t.Fatalf("create: should not be unknown_key (a known field)")
 	}
 }
 
@@ -1427,11 +1427,11 @@ tasks: []
 	cfg, _, diags, _ := LoadScenarioManifestFromBytes("main.yml", []byte(src), ValidateOptions{})
 	if diag.HasErrors(diags) {
 		dump(t, diags)
-		t.Fatalf("top-level from: должен быть валидным ключом (ADR-0068)")
+		t.Fatalf("top-level from: should be a valid key (ADR-0068)")
 	}
 	if hasCodeAt(diags, "unknown_key", "$.from") {
 		dump(t, diags)
-		t.Fatalf("from: не должен быть unknown_key (известное поле)")
+		t.Fatalf("from: should not be unknown_key (a known field)")
 	}
 	want := []string{"v1.0.0", "v1.2.0"}
 	if len(cfg.FromVersions) != len(want) {
@@ -1453,7 +1453,7 @@ tasks: []
 	cfg, _, diags, _ := LoadScenarioManifestFromBytes("main.yml", []byte(src), ValidateOptions{})
 	if diag.HasErrors(diags) {
 		dump(t, diags)
-		t.Fatalf("отсутствие from: — валидно")
+		t.Fatalf("absence of from: - valid")
 	}
 	if cfg.FromVersions != nil {
 		t.Fatalf("cfg.FromVersions = %v, want nil", cfg.FromVersions)
@@ -1470,10 +1470,10 @@ tasks: []
 	_, _, diags, _ := LoadScenarioManifestFromBytes("main.yml", []byte(src), ValidateOptions{})
 	if !hasCode(diags, "type_mismatch") {
 		dump(t, diags)
-		t.Fatalf(`from: "v1.0.0" (скаляр вместо списка) должен дать type_mismatch`)
+		t.Fatalf(`from: "v1.0.0" (scalar instead of a list) should yield type_mismatch`)
 	}
 	if hasCodeAt(diags, "unknown_key", "$.from") {
 		dump(t, diags)
-		t.Fatalf("from: не должен быть unknown_key (известное поле)")
+		t.Fatalf("from: should not be unknown_key (a known field)")
 	}
 }

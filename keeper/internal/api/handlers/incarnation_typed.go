@@ -216,7 +216,7 @@ func (h *IncarnationHandler) CreateTyped(ctx context.Context, claims *jwt.Claims
 	// converges on the next bind/create retry.
 	if len(traits) > 0 {
 		if serr := incarnation.SyncTraitsToHosts(ctx, h.db, req.Name, traits); serr != nil {
-			h.logger.Warn("incarnation.create: sync traits → souls провален (best-effort)",
+			h.logger.Warn("incarnation.create: sync traits -> souls failed (best-effort)",
 				slog.String("name", req.Name), slog.Any("error", serr))
 		}
 	}
@@ -484,7 +484,7 @@ func (h *IncarnationHandler) UpgradeTyped(ctx context.Context, claims *jwt.Claim
 		switch {
 		case errors.Is(err, incarnation.ErrUpgradeNoop):
 			return zero, incProblem(problem.TypeValidationFailed,
-				"to_version "+toVersion+" совпадает с текущей версией incarnation — апгрейдить нечего")
+				"to_version "+toVersion+" matches the current incarnation version - nothing to upgrade")
 		case errors.Is(err, incarnation.ErrDowngradeViaRef):
 			return zero, incProblem(problem.TypeIncarnationLocked,
 				"to_version "+toVersion+" downgrades state_schema_version — forward-only (ADR-019)")
@@ -643,10 +643,10 @@ func (h *IncarnationHandler) RerunLastTyped(ctx context.Context, claims *jwt.Cla
 				"incarnation "+name+" is not error_locked — rerun-last requires error_locked")
 		case errors.Is(err, incarnation.ErrRerunInputUnavailable):
 			return zero, incProblem(problem.TypeRerunInputUnavailable,
-				"incarnation "+name+" rerun-last неприменим: input упавшего прогона недоступен "+
-					"(прогон упал до dispatch — render/no_hosts/preflight, рецепт не записан; "+
-					"рецепт вычищен ретеншном; legacy-прогон без рецепта) — сними блок обычным unlock "+
-					"и запусти нужный сценарий вручную с явным input")
+				"incarnation "+name+" rerun-last is not applicable: input of the failed run is unavailable "+
+					"(the run failed before dispatch - render/no_hosts/preflight, no recipe recorded; "+
+					"the recipe was purged by retention; legacy run without a recipe) - clear the lock via plain unlock "+
+					"and launch the desired scenario manually with an explicit input")
 		default:
 			h.logger.Error("incarnation.rerun-last: unlock failed",
 				slog.String("name", name), slog.String("by_aid", claims.Subject), slog.Any("error", err))
@@ -735,10 +735,10 @@ func (h *IncarnationHandler) CheckDriftTyped(ctx context.Context, claims *jwt.Cl
 	if err != nil {
 		if errors.Is(err, scenario.ErrConvergeMissing) {
 			return nil, incProblem(problem.TypeValidationFailed,
-				"drift-проверка недоступна для service "+inc.Service+": сценарий converge отсутствует в текущем service-snapshot-е")
+				"drift check unavailable for service "+inc.Service+": converge scenario is absent from the current service snapshot")
 		}
 		if errors.Is(err, scenario.ErrDriftInputMissing) {
-			return nil, incProblem(problem.TypeValidationFailed, "drift-input не резолвится: "+err.Error())
+			return nil, incProblem(problem.TypeValidationFailed, "drift input does not resolve: "+err.Error())
 		}
 		h.logger.Error("incarnation.check-drift: failed",
 			slog.String("name", name), slog.String("apply_id", applyID), slog.Any("error", err))
@@ -747,7 +747,7 @@ func (h *IncarnationHandler) CheckDriftTyped(ctx context.Context, claims *jwt.Cl
 
 	hasDrift := report.Summary.HostsDrifted > 0 || report.Summary.HostsFailed > 0
 	if err := h.drift.MarkDriftStatus(ctx, name, hasDrift); err != nil {
-		h.logger.Warn("incarnation.check-drift: статус drift не зафиксирован",
+		h.logger.Warn("incarnation.check-drift: drift status not recorded",
 			slog.String("name", name), slog.Any("error", err))
 	}
 
@@ -1005,7 +1005,7 @@ func (h *IncarnationHandler) SetTraitsTyped(ctx context.Context, claims *jwt.Cla
 	// written — the projection converges on the next bind/sync. Full replace, including on
 	// an empty map (clear the member hosts' labels).
 	if serr := incarnation.SyncTraitsToHosts(ctx, h.db, name, res.Incarnation.Traits); serr != nil {
-		h.logger.Warn("incarnation.set-traits: sync traits → souls провален (best-effort)",
+		h.logger.Warn("incarnation.set-traits: sync traits -> souls failed (best-effort)",
 			slog.String("name", name), slog.Any("error", serr))
 	}
 

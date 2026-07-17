@@ -47,22 +47,22 @@ func TestResolveTargetsRootCovenNoSpecialCasing(t *testing.T) {
 		want []string
 	}{
 		{
-			name: "root coven only → весь incarnation",
+			name: "root coven only -> whole incarnation",
 			on:   []any{"${ incarnation.name }"},
 			want: []string{"bm-1.example.com", "bm-2.example.com", "vm-1.example.com"},
 		},
 		{
-			name: "root coven + baremetal → AND сужает до baremetal",
+			name: "root coven + baremetal -> AND narrows to baremetal",
 			on:   []any{"${ incarnation.name }", "baremetal"},
 			want: []string{"bm-1.example.com", "bm-2.example.com"},
 		},
 		{
-			name: "baremetal only → контроль, только baremetal",
+			name: "baremetal only -> control, baremetal only",
 			on:   []any{"baremetal"},
 			want: []string{"bm-1.example.com", "bm-2.example.com"},
 		},
 		{
-			name: "on опущен → весь incarnation",
+			name: "on omitted -> whole incarnation",
 			on:   nil,
 			want: []string{"bm-1.example.com", "bm-2.example.com", "vm-1.example.com"},
 		},

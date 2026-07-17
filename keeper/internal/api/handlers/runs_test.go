@@ -86,7 +86,7 @@ func TestAllRunsTyped_ValidSort_OK(t *testing.T) {
 		t.Fatalf("AllRunsTyped(valid sort): %v", err)
 	}
 	if !db.runsCalled {
-		t.Error("валидный sort не дошёл до store")
+		t.Error("valid sort did not reach the store")
 	}
 }
 
@@ -101,13 +101,13 @@ func TestAllRunsTyped_ServiceLongName_NoValidation422(t *testing.T) {
 	longSvc := strings.Repeat("a", 80) // valid for the registry, but longer than the old ValidName=63 cap
 	if _, err := h.AllRunsTyped(context.Background(), runsClaims(),
 		AllRunsInput{Service: longSvc, Offset: 0, Limit: 50}); err != nil {
-		t.Fatalf("AllRunsTyped(long service): неожиданно 422/ошибка на валидном сервисе: %v", err)
+		t.Fatalf("AllRunsTyped(long service): unexpected 422/error on a valid service: %v", err)
 	}
 	if !db.runsCalled {
-		t.Error("длинное валидное имя сервиса не дошло до store (ошибочно отсечено валидатором)")
+		t.Error("long valid service name did not reach the store (wrongly rejected by the validator)")
 	}
 	if !argsHasString(db.lastRunsArgs, longSvc) {
-		t.Errorf("service не пришёл bind-аргом: %v", db.lastRunsArgs)
+		t.Errorf("service did not arrive as a bind-arg: %v", db.lastRunsArgs)
 	}
 }
 
@@ -120,10 +120,10 @@ func TestAllRunsTyped_ServiceGarbage_SafeBind(t *testing.T) {
 	garbage := "no-such'; DROP TABLE incarnation;--"
 	if _, err := h.AllRunsTyped(context.Background(), runsClaims(),
 		AllRunsInput{Service: garbage, Offset: 0, Limit: 50}); err != nil {
-		t.Fatalf("AllRunsTyped(garbage service): want без ошибки (bound-фильтр), got %v", err)
+		t.Fatalf("AllRunsTyped(garbage service): want no error (bound filter), got %v", err)
 	}
 	if !db.runsCalled || !argsHasString(db.lastRunsArgs, garbage) {
-		t.Errorf("garbage service должен уйти bound bind-аргом (инъекционно безопасно): args=%v", db.lastRunsArgs)
+		t.Errorf("garbage service must go as a bound bind-arg (injection-safe): args=%v", db.lastRunsArgs)
 	}
 }
 
@@ -132,16 +132,16 @@ func TestAllRunsTyped_ServiceGarbage_SafeBind(t *testing.T) {
 func TestAllRunsTyped_FilterCapByRunes(t *testing.T) {
 	db := &fakeIncDB{}
 	h := newRunsHandler(db, fakeIncScoper{unrestricted: true})
-	okRunes := strings.Repeat("я", 128) // 256 bytes — a byte cap would have cut it
-	tooLong := strings.Repeat("я", 129) // 129 characters — over the limit
+	okRunes := strings.Repeat("я", 128) // 256 bytes -- a byte cap would have cut it
+	tooLong := strings.Repeat("я", 129) // 129 characters -- over the limit
 
 	if _, err := h.AllRunsTyped(context.Background(), runsClaims(),
 		AllRunsInput{Q: okRunes, Offset: 0, Limit: 50}); err != nil {
-		t.Fatalf("q=128 рун: неожиданно 422 (cap в байтах?): %v", err)
+		t.Fatalf("q=128 runes: unexpected 422 (byte cap?): %v", err)
 	}
 	if _, err := h.AllRunsTyped(context.Background(), runsClaims(),
 		AllRunsInput{Service: okRunes, Offset: 0, Limit: 50}); err != nil {
-		t.Fatalf("service=128 рун: неожиданно 422 (cap в байтах?): %v", err)
+		t.Fatalf("service=128 runes: unexpected 422 (byte cap?): %v", err)
 	}
 	_, err := h.AllRunsTyped(context.Background(), runsClaims(),
 		AllRunsInput{Q: tooLong, Offset: 0, Limit: 50})
@@ -178,7 +178,7 @@ func TestAllRunsTyped_TimeFilters_Bind(t *testing.T) {
 		t.Fatalf("AllRunsTyped(valid time): %v", err)
 	}
 	if !db.runsCalled {
-		t.Fatal("валидные time-границы не дошли до store")
+		t.Fatal("valid time bounds did not reach the store")
 	}
 	var times int
 	for _, a := range db.lastRunsArgs {
@@ -187,7 +187,7 @@ func TestAllRunsTyped_TimeFilters_Bind(t *testing.T) {
 		}
 	}
 	if times != 2 {
-		t.Errorf("ожидались 2 time.Time bind-арга (after/before), got %d: %v", times, db.lastRunsArgs)
+		t.Errorf("expected 2 time.Time bind-args (after/before), got %d: %v", times, db.lastRunsArgs)
 	}
 }
 
@@ -206,7 +206,7 @@ func TestAllRunsTyped_NilClaims_FailClosed(t *testing.T) {
 		t.Errorf("Total=%d len=%d, want 0/0 (fail-closed)", reply.Total, len(reply.Items))
 	}
 	if db.runsCalled {
-		t.Error("store вызван при nil claims — fail-closed обязан отсечь ДО БД")
+		t.Error("store was called with nil claims -- fail-closed must reject BEFORE the DB")
 	}
 }
 
@@ -223,7 +223,7 @@ func TestAllRunsTyped_EmptyPurview_FailClosed(t *testing.T) {
 		t.Errorf("Total=%d len=%d, want 0/0 (fail-closed empty Purview)", reply.Total, len(reply.Items))
 	}
 	if db.runsCalled {
-		t.Error("store вызван при пустом Purview — fail-closed обязан отсечь ДО БД")
+		t.Error("store was called with empty Purview -- fail-closed must reject BEFORE the DB")
 	}
 }
 
@@ -236,7 +236,7 @@ func TestAllRunsTyped_NilScoper_FailClosed(t *testing.T) {
 		t.Fatalf("AllRunsTyped: %v", err)
 	}
 	if reply.Total != 0 || len(reply.Items) != 0 || db.runsCalled {
-		t.Errorf("want пустой ответ без захода в store (nil scoper); Total=%d runsCalled=%v",
+		t.Errorf("want empty reply without hitting the store (nil scoper); Total=%d runsCalled=%v",
 			reply.Total, db.runsCalled)
 	}
 }
@@ -252,13 +252,13 @@ func TestAllRunsTyped_ScopePushdownSQL(t *testing.T) {
 		t.Fatalf("AllRunsTyped: %v", err)
 	}
 	if !db.runsCalled {
-		t.Fatal("store не вызван (ожидался scope-pushdown, не fail-closed)")
+		t.Fatal("store was not called (expected scope-pushdown, not fail-closed)")
 	}
 	if !strings.Contains(db.lastRunsSQL, "IN (SELECT name FROM incarnation WHERE") {
-		t.Errorf("scope не дошёл до SQL подзапросом по incarnation:\n%s", db.lastRunsSQL)
+		t.Errorf("scope did not reach SQL as an incarnation subquery:\n%s", db.lastRunsSQL)
 	}
 	if !strings.Contains(db.lastRunsSQL, "covens &&") {
-		t.Errorf("coven∪{name}-плечо scope не в SQL:\n%s", db.lastRunsSQL)
+		t.Errorf("coven∪{name} scope arm not in SQL:\n%s", db.lastRunsSQL)
 	}
 	foundCovens := false
 	for _, a := range db.lastRunsArgs {
@@ -267,7 +267,7 @@ func TestAllRunsTyped_ScopePushdownSQL(t *testing.T) {
 		}
 	}
 	if !foundCovens {
-		t.Errorf("scope-ковены не пришли bind-аргом: %v", db.lastRunsArgs)
+		t.Errorf("scope covens did not arrive as a bind-arg: %v", db.lastRunsArgs)
 	}
 }
 
@@ -280,7 +280,7 @@ func TestAllRunsTyped_Unrestricted_NoScopeSubquery(t *testing.T) {
 		t.Fatalf("AllRunsTyped: %v", err)
 	}
 	if strings.Contains(db.lastRunsSQL, "SELECT name FROM incarnation") {
-		t.Errorf("Unrestricted не должен нести scope-подзапрос:\n%s", db.lastRunsSQL)
+		t.Errorf("Unrestricted must not carry a scope subquery:\n%s", db.lastRunsSQL)
 	}
 }
 
@@ -293,7 +293,7 @@ func TestAllRunsTyped_Filters_Bind(t *testing.T) {
 		t.Fatalf("AllRunsTyped: %v", err)
 	}
 	if !argsHasString(db.lastRunsArgs, "failed") || !argsHasString(db.lastRunsArgs, "redis-prod") {
-		t.Errorf("фильтры не пришли bind-args (failed, redis-prod): %v", db.lastRunsArgs)
+		t.Errorf("filters did not arrive as bind-args (failed, redis-prod): %v", db.lastRunsArgs)
 	}
 }
 
@@ -327,10 +327,10 @@ func TestAllRunsTyped_Projection_OK(t *testing.T) {
 		t.Errorf("Items[0] = %+v, want 01HRUN2/redis-staging/applying", first)
 	}
 	if first.Service != "redis" {
-		t.Errorf("Items[0].Service = %q, want redis (service не перенесён в проекцию)", first.Service)
+		t.Errorf("Items[0].Service = %q, want redis (service not carried into the projection)", first.Service)
 	}
 	if first.FinishedAt != nil || first.StartedByAID != nil {
-		t.Errorf("Items[0] applying: FinishedAt/StartedByAID должны быть nil: %+v", first)
+		t.Errorf("Items[0] applying: FinishedAt/StartedByAID must be nil: %+v", first)
 	}
 	second := reply.Items[1]
 	if second.Incarnation != "redis-prod" || second.Status != "success" {
@@ -340,7 +340,7 @@ func TestAllRunsTyped_Projection_OK(t *testing.T) {
 		t.Errorf("Items[1].Service = %q, want postgres", second.Service)
 	}
 	if second.FinishedAt == nil || second.StartedByAID == nil || *second.StartedByAID != aid {
-		t.Errorf("Items[1] success: FinishedAt/StartedByAID не перенесены: %+v", second)
+		t.Errorf("Items[1] success: FinishedAt/StartedByAID not carried over: %+v", second)
 	}
 }
 
@@ -357,10 +357,10 @@ func TestRunsStatsTyped_NilClaims_ZeroStats(t *testing.T) {
 		t.Fatalf("RunsStatsTyped: %v", err)
 	}
 	if stats != (RunsStatsView{}) {
-		t.Errorf("stats = %+v, want нулевой агрегат (fail-closed)", stats)
+		t.Errorf("stats = %+v, want zero aggregate (fail-closed)", stats)
 	}
 	if storeCalled {
-		t.Error("store вызван при nil claims — fail-closed обязан отсечь ДО БД")
+		t.Error("store was called with nil claims -- fail-closed must reject BEFORE the DB")
 	}
 }
 
@@ -435,7 +435,7 @@ func (r *globalRunRows) Scan(dest ...any) error {
 		case **string:
 			*d = vals[i].(*string)
 		default:
-			return errors.New("globalRunRows.Scan: неподдержанный тип dest")
+			return errors.New("globalRunRows.Scan: unsupported dest type")
 		}
 	}
 	return nil
@@ -472,7 +472,7 @@ func (r *runsStatsRows) Scan(dest ...any) error {
 		case *int:
 			*d = row[i].(int)
 		default:
-			return errors.New("runsStatsRows.Scan: неподдержанный тип dest")
+			return errors.New("runsStatsRows.Scan: unsupported dest type")
 		}
 	}
 	return nil

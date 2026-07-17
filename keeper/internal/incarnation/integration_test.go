@@ -867,7 +867,7 @@ func TestIntegration_ReleaseApplyingOrphan_HappyPath(t *testing.T) {
 		t.Fatalf("SelectByName: %v", err)
 	}
 	if got.Status != StatusReady {
-		t.Errorf("status = %q, want ready (orphan lock снят)", got.Status)
+		t.Errorf("status = %q, want ready (orphan lock released)", got.Status)
 	}
 	if got.StatusDetails != nil {
 		t.Errorf("status_details = %v, want nil (reset)", got.StatusDetails)
@@ -907,11 +907,11 @@ func TestIntegration_ReleaseApplyingOrphan_LiveRival(t *testing.T) {
 		t.Fatalf("SelectByName: %v", err)
 	}
 	if got.Status != StatusApplying {
-		t.Errorf("status = %q, want applying (live-lock не тронут)", got.Status)
+		t.Errorf("status = %q, want applying (live-lock untouched)", got.Status)
 	}
 	_, total, _ := HistorySelectByName(ctx, integrationPool, name, HistoryFilter{}, 0, 50)
 	if total != 0 {
-		t.Errorf("history rows = %d, want 0 (rollback, ничего не снято)", total)
+		t.Errorf("history rows = %d, want 0 (rollback, nothing released)", total)
 	}
 }
 
@@ -945,7 +945,7 @@ func TestIntegration_ReleaseApplyingOrphan_OrphanRunVanished(t *testing.T) {
 		t.Fatalf("SelectByName: %v", err)
 	}
 	if got.Status != StatusReady {
-		t.Errorf("status = %q, want ready (бесхозный lock снят)", got.Status)
+		t.Errorf("status = %q, want ready (orphan lock released)", got.Status)
 	}
 }
 
@@ -977,11 +977,11 @@ func TestIntegration_ReleaseApplyingOrphan_NotApplying(t *testing.T) {
 		t.Fatalf("SelectByName: %v", err)
 	}
 	if got.Status != StatusReady {
-		t.Errorf("status = %q, want ready (honest finalize не перетёрт)", got.Status)
+		t.Errorf("status = %q, want ready (honest finalize not overwritten)", got.Status)
 	}
 	_, total, _ := HistorySelectByName(ctx, integrationPool, name, HistoryFilter{}, 0, 50)
 	if total != 0 {
-		t.Errorf("history rows = %d, want 0 (no-op, snapshot не пишется)", total)
+		t.Errorf("history rows = %d, want 0 (no-op, snapshot not written)", total)
 	}
 }
 

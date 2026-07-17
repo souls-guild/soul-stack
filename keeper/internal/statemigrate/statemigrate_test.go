@@ -64,7 +64,7 @@ func TestApply_AllFixtures(t *testing.T) {
 		t.Fatalf("glob migrations: %v", err)
 	}
 	if len(migFiles) == 0 {
-		t.Fatalf("не найдено ни одного файла миграции в %s", fixtureDir)
+		t.Fatalf("no migration files found in %s", fixtureDir)
 	}
 
 	var totalCases int
@@ -77,7 +77,7 @@ func TestApply_AllFixtures(t *testing.T) {
 		if len(caseFiles) == 0 {
 			// Migration without fixtures is a potential coverage gap but not a failure
 			// (some steps may be trivial). Mark explicitly.
-			t.Logf("миграция %s: тест-фикстур нет", stepName)
+			t.Logf("migration %s: no test fixtures", stepName)
 			continue
 		}
 
@@ -104,7 +104,7 @@ func TestApply_AllFixtures(t *testing.T) {
 		}
 	}
 
-	t.Logf("прогнано миграций: %d, тест-кейсов: %d", len(migFiles), totalCases)
+	t.Logf("migrations run: %d, test cases: %d", len(migFiles), totalCases)
 }
 
 // TestApply_RealFixture_EmptyUsers: empty user list yields empty map.
@@ -159,7 +159,7 @@ func TestApply_DoesNotMutateInput(t *testing.T) {
 		t.Fatalf("Apply: %v", err)
 	}
 	if !reflect.DeepEqual(in, snapshot) {
-		t.Fatalf("входной state мутирован: %#v", in)
+		t.Fatalf("input state mutated: %#v", in)
 	}
 }
 
@@ -188,7 +188,7 @@ func TestApply_StepSnapshots(t *testing.T) {
 		t.Errorf("step0.StateAfter[a] = %v", res.Steps[0].StateAfter["a"])
 	}
 	if res.Steps[1].FromVersion != 2 || res.Steps[1].ToVersion != 3 {
-		t.Errorf("step1 версии = %d→%d", res.Steps[1].FromVersion, res.Steps[1].ToVersion)
+		t.Errorf("step1 versions = %d->%d", res.Steps[1].FromVersion, res.Steps[1].ToVersion)
 	}
 }
 
@@ -202,7 +202,7 @@ func TestApply_ChainVersionGap(t *testing.T) {
 	_, err := Apply(context.Background(), map[string]any{}, chain, ev)
 	var ee *EvalError
 	if !errors.As(err, &ee) || ee.Class != ClassChainVersion {
-		t.Fatalf("ошибка = %v, want ClassChainVersion", err)
+		t.Fatalf("error = %v, want ClassChainVersion", err)
 	}
 }
 

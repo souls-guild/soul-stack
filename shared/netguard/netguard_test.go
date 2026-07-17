@@ -49,10 +49,10 @@ func TestIsBlockedIP(t *testing.T) {
 	for _, s := range blocked {
 		ip := net.ParseIP(s)
 		if ip == nil {
-			t.Fatalf("кривой тестовый IP %q", s)
+			t.Fatalf("invalid test IP %q", s)
 		}
 		if !netguard.IsBlockedIP(ip) {
-			t.Errorf("IsBlockedIP(%q)=false, ожидался блок", s)
+			t.Errorf("IsBlockedIP(%q)=false, expected a block", s)
 		}
 	}
 
@@ -71,10 +71,10 @@ func TestIsBlockedIP(t *testing.T) {
 	for _, s := range allowed {
 		ip := net.ParseIP(s)
 		if ip == nil {
-			t.Fatalf("кривой тестовый IP %q", s)
+			t.Fatalf("invalid test IP %q", s)
 		}
 		if netguard.IsBlockedIP(ip) {
-			t.Errorf("IsBlockedIP(%q)=true, ожидался пропуск", s)
+			t.Errorf("IsBlockedIP(%q)=true, expected a pass", s)
 		}
 	}
 }
@@ -88,7 +88,7 @@ func TestValidateHTTPSURL(t *testing.T) {
 			"HTTPS://ok.example/x",
 		} {
 			if err := netguard.ValidateHTTPSURL(raw); err != nil {
-				t.Errorf("ValidateHTTPSURL отверг валидный https %q: %v", raw, err)
+				t.Errorf("ValidateHTTPSURL rejected a valid https %q: %v", raw, err)
 			}
 		}
 	})
@@ -100,7 +100,7 @@ func TestValidateHTTPSURL(t *testing.T) {
 			"file:///etc/passwd",
 		} {
 			if err := netguard.ValidateHTTPSURL(raw); err == nil {
-				t.Errorf("ValidateHTTPSURL пропустил не-https %q", raw)
+				t.Errorf("ValidateHTTPSURL let through a non-https %q", raw)
 			}
 		}
 	})
@@ -108,7 +108,7 @@ func TestValidateHTTPSURL(t *testing.T) {
 	t.Run("malformed url reject", func(t *testing.T) {
 		// A control character in the URL makes url.Parse fail.
 		if err := netguard.ValidateHTTPSURL("https://ok.example/\x7f"); err == nil {
-			t.Fatal("ValidateHTTPSURL пропустил кривой URL")
+			t.Fatal("ValidateHTTPSURL let through a malformed URL")
 		}
 	})
 }
@@ -163,7 +163,7 @@ func TestNewCheckRedirect(t *testing.T) {
 			"HTTPS://ok.example/x",
 		} {
 			if err := check(mkRedirReq(t, raw), nil); err != nil {
-				t.Errorf("CheckRedirect отверг валидный https %q: %v", raw, err)
+				t.Errorf("CheckRedirect rejected a valid https %q: %v", raw, err)
 			}
 		}
 	})
@@ -176,7 +176,7 @@ func TestNewCheckRedirect(t *testing.T) {
 			"file:///etc/passwd",
 		} {
 			if err := check(mkRedirReq(t, raw), nil); err == nil {
-				t.Errorf("CheckRedirect пропустил downgrade на %q", raw)
+				t.Errorf("CheckRedirect let through a downgrade to %q", raw)
 			}
 		}
 	})
@@ -184,12 +184,12 @@ func TestNewCheckRedirect(t *testing.T) {
 	t.Run("redirect limit reject", func(t *testing.T) {
 		via := make([]*http.Request, maxRedirects)
 		if err := check(mkRedirReq(t, "https://ok.example/x"), via); err == nil {
-			t.Fatalf("CheckRedirect не остановил цепочку на лимите %d", maxRedirects)
+			t.Fatalf("CheckRedirect did not stop the chain at the limit %d", maxRedirects)
 		}
 		// One hop below the limit — still allowed.
 		via = make([]*http.Request, maxRedirects-1)
 		if err := check(mkRedirReq(t, "https://ok.example/x"), via); err != nil {
-			t.Fatalf("CheckRedirect отверг цепочку короче лимита: %v", err)
+			t.Fatalf("CheckRedirect rejected a chain shorter than the limit: %v", err)
 		}
 	})
 }
@@ -252,10 +252,10 @@ func TestGuardedDialContext(t *testing.T) {
 		dc := netguard.GuardedDialContext(staticResolver{}, recordingDial(&dialed))
 		_, err := dc(context.Background(), "tcp", "169.254.169.254:443")
 		if err == nil {
-			t.Fatal("metadata 169.254.169.254 не заблокирован")
+			t.Fatal("metadata 169.254.169.254 not blocked")
 		}
 		if dialed != "" {
-			t.Fatalf("dial выполнен по %q несмотря на блок", dialed)
+			t.Fatalf("dial performed to %q despite the block", dialed)
 		}
 	})
 
@@ -264,10 +264,10 @@ func TestGuardedDialContext(t *testing.T) {
 			var dialed string
 			dc := netguard.GuardedDialContext(staticResolver{}, recordingDial(&dialed))
 			if _, err := dc(context.Background(), "tcp", addr); err == nil {
-				t.Errorf("loopback %q не заблокирован", addr)
+				t.Errorf("loopback %q not blocked", addr)
 			}
 			if dialed != "" {
-				t.Errorf("dial выполнен по %q (loopback)", dialed)
+				t.Errorf("dial performed to %q (loopback)", dialed)
 			}
 		}
 	})
@@ -276,7 +276,7 @@ func TestGuardedDialContext(t *testing.T) {
 		for _, addr := range []string{"10.0.0.5:443", "192.168.1.1:443", "172.16.0.9:443"} {
 			dc := netguard.GuardedDialContext(staticResolver{}, recordingDial(new(string)))
 			if _, err := dc(context.Background(), "tcp", addr); err == nil {
-				t.Errorf("RFC1918 %q не заблокирован", addr)
+				t.Errorf("RFC1918 %q not blocked", addr)
 			}
 		}
 	})
@@ -286,10 +286,10 @@ func TestGuardedDialContext(t *testing.T) {
 			var dialed string
 			dc := netguard.GuardedDialContext(staticResolver{}, recordingDial(&dialed))
 			if _, err := dc(context.Background(), "tcp", addr); err == nil {
-				t.Errorf("CGNAT %q не заблокирован", addr)
+				t.Errorf("CGNAT %q not blocked", addr)
 			}
 			if dialed != "" {
-				t.Errorf("dial выполнен по %q (CGNAT)", dialed)
+				t.Errorf("dial performed to %q (CGNAT)", dialed)
 			}
 		}
 	})
@@ -298,10 +298,10 @@ func TestGuardedDialContext(t *testing.T) {
 		var dialed string
 		dc := netguard.GuardedDialContext(staticResolver{}, recordingDial(&dialed))
 		if _, err := dc(context.Background(), "tcp", "[fec0::1]:443"); err == nil {
-			t.Error("site-local fec0::1 не заблокирован")
+			t.Error("site-local fec0::1 not blocked")
 		}
 		if dialed != "" {
-			t.Errorf("dial выполнен по %q (site-local)", dialed)
+			t.Errorf("dial performed to %q (site-local)", dialed)
 		}
 	})
 
@@ -309,10 +309,10 @@ func TestGuardedDialContext(t *testing.T) {
 		var dialed string
 		dc := netguard.GuardedDialContext(staticResolver{}, recordingDial(&dialed))
 		if _, err := dc(context.Background(), "tcp", "8.8.8.8:443"); err != nil {
-			t.Fatalf("публичный IP заблокирован: %v", err)
+			t.Fatalf("public IP blocked: %v", err)
 		}
 		if dialed != "8.8.8.8:443" {
-			t.Fatalf("dial по %q, ожидался 8.8.8.8:443", dialed)
+			t.Fatalf("dial to %q, expected 8.8.8.8:443", dialed)
 		}
 	})
 
@@ -320,10 +320,10 @@ func TestGuardedDialContext(t *testing.T) {
 		var dialed string
 		dc := netguard.GuardedDialContext(staticResolver{addrs: []string{"169.254.169.254"}}, recordingDial(&dialed))
 		if _, err := dc(context.Background(), "tcp", "rebind.evil.example:443"); err == nil {
-			t.Fatal("DNS-имя, резолвящееся в metadata, не заблокировано (rebind открыт)")
+			t.Fatal("a DNS name resolving to metadata is not blocked (rebind open)")
 		}
 		if dialed != "" {
-			t.Fatalf("dial выполнен по %q несмотря на rebind в metadata", dialed)
+			t.Fatalf("dial performed to %q despite rebind to metadata", dialed)
 		}
 	})
 
@@ -332,10 +332,10 @@ func TestGuardedDialContext(t *testing.T) {
 		// One public + one metadata: the classic bypass attempt.
 		dc := netguard.GuardedDialContext(staticResolver{addrs: []string{"8.8.8.8", "169.254.169.254"}}, recordingDial(&dialed))
 		if _, err := dc(context.Background(), "tcp", "mixed.evil.example:443"); err == nil {
-			t.Fatal("multi-IP с приватным адресом не заблокирован (обход «public+metadata»)")
+			t.Fatal("multi-IP with a private address not blocked (bypass of 'public+metadata')")
 		}
 		if dialed != "" {
-			t.Fatalf("dial выполнен по %q несмотря на один приватный IP в наборе", dialed)
+			t.Fatalf("dial performed to %q despite one private IP in the set", dialed)
 		}
 	})
 
@@ -345,25 +345,25 @@ func TestGuardedDialContext(t *testing.T) {
 			"good.example": ipAddrs("8.8.8.8"),
 		}}, recordingDial(&dialed))
 		if _, err := dc(context.Background(), "tcp", "good.example:443"); err != nil {
-			t.Fatalf("публичное DNS-имя заблокировано: %v", err)
+			t.Fatalf("public DNS name blocked: %v", err)
 		}
 		// Dial to the specific resolved IP, not the name (rebind-safe).
 		if dialed != "8.8.8.8:443" {
-			t.Fatalf("dial по %q, ожидался 8.8.8.8:443 (по проверенному IP, не имени)", dialed)
+			t.Fatalf("dial to %q, expected 8.8.8.8:443 (by the checked IP, not the name)", dialed)
 		}
 	})
 
 	t.Run("no addresses surfaces error", func(t *testing.T) {
 		dc := netguard.GuardedDialContext(byHostResolver{byHost: map[string][]net.IPAddr{"empty.example": nil}}, recordingDial(new(string)))
 		if _, err := dc(context.Background(), "tcp", "empty.example:443"); err == nil {
-			t.Fatal("host без A-записей не дал ошибку")
+			t.Fatal("host without A records did not produce an error")
 		}
 	})
 
 	t.Run("resolver error surfaces", func(t *testing.T) {
 		dc := netguard.GuardedDialContext(staticResolver{err: errors.New("nxdomain")}, recordingDial(new(string)))
 		if _, err := dc(context.Background(), "tcp", "nope.example:443"); err == nil {
-			t.Fatal("ошибка резолва не проброшена")
+			t.Fatal("resolve error not propagated")
 		}
 	})
 }

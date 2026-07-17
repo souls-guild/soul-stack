@@ -224,19 +224,19 @@ tasks:
 	// Parity: identical task set per host.
 	// Old path: host-a (run_once picks the first by SID) → 2 tasks; host-b → 1 (roster-size only).
 	if oldCounts["host-a.example.com"] != 2 {
-		t.Errorf("old-path host-a tasks = %d, want 2 (run_once-первый + roster-size)", oldCounts["host-a.example.com"])
+		t.Errorf("old-path host-a tasks = %d, want 2 (run_once-first + roster-size)", oldCounts["host-a.example.com"])
 	}
 	if oldCounts["host-b.example.com"] != 1 {
-		t.Errorf("old-path host-b tasks = %d, want 1 (только roster-size, run_once срезан)", oldCounts["host-b.example.com"])
+		t.Errorf("old-path host-b tasks = %d, want 1 (roster-size only, run_once trimmed)", oldCounts["host-b.example.com"])
 	}
 	for sid, want := range oldCounts {
 		if newCounts[sid] != want {
-			t.Errorf("PARITY break на %s: новый путь %d задач, старый %d (Y не закрыл BUG-1/2)",
+			t.Errorf("PARITY break on %s: new path %d tasks, old %d (Y did not close BUG-1/2)",
 				sid, newCounts[sid], want)
 		}
 	}
 	if len(newCounts) != len(oldCounts) {
-		t.Errorf("PARITY break: новый путь покрыл %d хостов, старый %d", len(newCounts), len(oldCounts))
+		t.Errorf("PARITY break: new path covered %d hosts, old %d", len(newCounts), len(oldCounts))
 	}
 }
 
@@ -265,10 +265,10 @@ func TestIntegration_RunOnce_SingleHostUnderAcolyte(t *testing.T) {
 	counts := disp.snapshot()
 	// host-a (first by SID): run_once task + shared = 2. host-b: shared only = 1.
 	if counts["host-a.example.com"] != 2 {
-		t.Errorf("host-a tasks = %d, want 2 (run_once-первый + общая)", counts["host-a.example.com"])
+		t.Errorf("host-a tasks = %d, want 2 (run_once-first + common)", counts["host-a.example.com"])
 	}
 	if counts["host-b.example.com"] != 1 {
-		t.Errorf("host-b tasks = %d, want 1 (BUG-1: run_once НЕ должен попасть на host-b)", counts["host-b.example.com"])
+		t.Errorf("host-b tasks = %d, want 1 (BUG-1: run_once must NOT land on host-b)", counts["host-b.example.com"])
 	}
 }
 
@@ -298,7 +298,7 @@ func TestIntegration_SoulprintHosts_FullRosterUnderAcolyte(t *testing.T) {
 	cmds := disp.snapshot()
 	for _, sid := range []string{"host-a.example.com", "host-b.example.com"} {
 		if cmds[sid] != "echo 2" {
-			t.Errorf("%s rendered cmd = %q, want \"echo 2\" (BUG-2: soulprint.hosts.size() видит полный roster)", sid, cmds[sid])
+			t.Errorf("%s rendered cmd = %q, want \"echo 2\" (BUG-2: soulprint.hosts.size() sees the full roster)", sid, cmds[sid])
 		}
 	}
 }
@@ -328,11 +328,11 @@ func TestIntegration_PerHostWhere_TwoHosts(t *testing.T) {
 
 	counts := disp.snapshot()
 	if counts["host-a.example.com"] != 1 {
-		t.Errorf("host-a tasks = %d, want 1 (where пропустил)", counts["host-a.example.com"])
+		t.Errorf("host-a tasks = %d, want 1 (where let it through)", counts["host-a.example.com"])
 	}
 	// host-b: where filtered everything out → no-op success, SendApply wasn't called.
 	if _, ok := counts["host-b.example.com"]; ok {
-		t.Errorf("host-b получил SendApply, want no-op success (where срезал всё)")
+		t.Errorf("host-b received SendApply, want no-op success (where trimmed everything)")
 	}
 	// But the host-b row must be success (the barrier counted it as a no-op).
 	st, err := applyrun.SelectStatusesByApplyID(context.Background(), integrationPool, applyID)
@@ -344,7 +344,7 @@ func TestIntegration_PerHostWhere_TwoHosts(t *testing.T) {
 		byStatus[hs.SID] = hs.Status
 	}
 	if byStatus["host-b.example.com"] != applyrun.StatusNoMatch {
-		t.Errorf("host-b status = %q, want no_match (FINDING-01 (б): where срезал всё на хосте)", byStatus["host-b.example.com"])
+		t.Errorf("host-b status = %q, want no_match (FINDING-01 (b): where trimmed everything on the host)", byStatus["host-b.example.com"])
 	}
 }
 
@@ -380,7 +380,7 @@ func TestIntegration_CancelInPlannedWindow_Cancels(t *testing.T) {
 		t.Fatalf("RequestCancel: %v", err)
 	}
 	if affected == 0 {
-		t.Fatal("RequestCancel affected = 0, want >=1 (planned-строка) — фильтр не покрыл planned")
+		t.Fatal("RequestCancel affected = 0, want >=1 (planned row) - the filter did not cover planned")
 	}
 
 	// Acolyte claims planned, sees cancel_requested before SendApply → cancelled.
@@ -389,14 +389,14 @@ func TestIntegration_CancelInPlannedWindow_Cancels(t *testing.T) {
 	driveClaims(t, cr, applyID, 1)
 
 	if disp.calls.Load() != 0 {
-		t.Errorf("SendApply calls = %d, want 0 (Cancel до отправки apply)", disp.calls.Load())
+		t.Errorf("SendApply calls = %d, want 0 (Cancel before apply was sent)", disp.calls.Load())
 	}
 	got, err := applyrun.SelectByApplyID(context.Background(), integrationPool, applyID, "host-a.example.com")
 	if err != nil {
 		t.Fatalf("SelectByApplyID: %v", err)
 	}
 	if got.Status != applyrun.StatusCancelled {
-		t.Errorf("status = %q, want cancelled (Cancel в planned-окне)", got.Status)
+		t.Errorf("status = %q, want cancelled (Cancel within the planned window)", got.Status)
 	}
 	// Run cancelled → incarnation error_locked (barrier saw a non-success terminal).
 	waitRunDone(t, "noop-prod", applyID, incarnation.StatusErrorLocked)

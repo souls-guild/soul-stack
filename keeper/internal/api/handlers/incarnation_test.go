@@ -507,7 +507,7 @@ func TestToDTO_MasksSecretsInStateAndSpec(t *testing.T) {
 		t.Errorf("state.vault_ref = %v, want masked", got)
 	}
 	if got := dto.State["replicas"]; got != float64(3) {
-		t.Errorf("state.replicas = %v, want 3 (несекретное — без маскировки)", got)
+		t.Errorf("state.replicas = %v, want 3 (non-secret - no masking)", got)
 	}
 	specInput := dto.Spec["input"].(map[string]any)
 	if got := specInput["db_password"]; got != "***MASKED***" {
@@ -519,10 +519,10 @@ func TestToDTO_MasksSecretsInStateAndSpec(t *testing.T) {
 
 	// The stored incarnation is not mutated — only the response is masked.
 	if inc.State["admin_token"] != pwd {
-		t.Errorf("исходный inc.State мутирован: %v", inc.State["admin_token"])
+		t.Errorf("original inc.State mutated: %v", inc.State["admin_token"])
 	}
 	if inc.Spec["input"].(map[string]any)["db_password"] != pwd {
-		t.Errorf("исходный inc.Spec мутирован")
+		t.Errorf("original inc.Spec mutated")
 	}
 }
 
@@ -547,7 +547,7 @@ func TestToIncarnationGetView_ProjectsTraitsAndCreatedScenario(t *testing.T) {
 		t.Errorf("Traits[env] = %v, want prod", got)
 	}
 	if got, ok := view.Traits["az"].([]any); !ok || len(got) != 2 {
-		t.Errorf("Traits[az] = %v, want list len 2 (Trait полиморфен)", view.Traits["az"])
+		t.Errorf("Traits[az] = %v, want list len 2 (Trait is polymorphic)", view.Traits["az"])
 	}
 
 	// Empty domain values pass through as-is (omitempty drops them in the wire projection).
@@ -577,11 +577,11 @@ func TestToHistoryDTO_MasksSecretsInStateSnapshots(t *testing.T) {
 		t.Errorf("state_after.admin_token = %v, want masked", got)
 	}
 	if got := dto.StateBefore["replicas"]; got != float64(1) {
-		t.Errorf("state_before.replicas = %v, want 1 (несекретное)", got)
+		t.Errorf("state_before.replicas = %v, want 1 (non-secret)", got)
 	}
 	// The stored snapshot is not mutated.
 	if e.StateBefore["admin_token"] != "old" {
-		t.Errorf("исходный StateBefore мутирован")
+		t.Errorf("original StateBefore mutated")
 	}
 }
 
@@ -617,10 +617,10 @@ func TestIncarnation_Get_200_StateMasked(t *testing.T) {
 		t.Fatalf("decode: %v", err)
 	}
 	if got := dto.State["admin_token"]; got != "***MASKED***" {
-		t.Errorf("state.admin_token = %v, want masked в JSON-ответе", got)
+		t.Errorf("state.admin_token = %v, want masked in JSON response", got)
 	}
 	if got := dto.State["replicas"]; got != float64(3) {
-		t.Errorf("state.replicas = %v, want 3 (несекретное отдаётся как есть)", got)
+		t.Errorf("state.replicas = %v, want 3 (non-secret returned as-is)", got)
 	}
 }
 
@@ -696,11 +696,11 @@ func TestIncarnation_List_CovenFilter_PassesToSQL(t *testing.T) {
 		t.Fatalf("Code = %d, body=%s", rec.Code, rec.Body.String())
 	}
 	if len(capturedArgs) == 0 {
-		t.Fatal("countRow не был вызван")
+		t.Fatal("countRow was not called")
 	}
 	sql, _ := capturedArgs[0].(string)
 	if !strings.Contains(sql, "ANY(covens)") {
-		t.Errorf("count SQL не содержит ANY(covens)-предикат:\n%s", sql)
+		t.Errorf("count SQL does not contain the ANY(covens) predicate:\n%s", sql)
 	}
 }
 
@@ -741,7 +741,7 @@ func TestIncarnation_List_StateFilter_PassesToSQL(t *testing.T) {
 		t.Fatalf("Code = %d, body=%s", rec.Code, rec.Body.String())
 	}
 	if !strings.Contains(*captured, "state->>'redis_version'") {
-		t.Errorf("state-фильтр не долетел до SQL:\n%s", *captured)
+		t.Errorf("state filter did not reach SQL:\n%s", *captured)
 	}
 }
 
@@ -756,7 +756,7 @@ func TestIncarnation_List_StateFilter_NumericOp(t *testing.T) {
 		t.Fatalf("Code = %d, body=%s", rec.Code, rec.Body.String())
 	}
 	if !strings.Contains(*captured, "(state->>'memory_mb')::numeric >") {
-		t.Errorf("числовой state-фильтр не долетел до SQL:\n%s", *captured)
+		t.Errorf("numeric state filter did not reach SQL:\n%s", *captured)
 	}
 }
 
@@ -814,7 +814,7 @@ func TestIncarnation_List_SortStateField_PassesToSQL(t *testing.T) {
 		t.Fatalf("Code = %d, body=%s", rec.Code, rec.Body.String())
 	}
 	if !strings.Contains(listSQL, "ORDER BY state->>'redis_version' DESC") {
-		t.Errorf("sort по state-полю не долетел до ORDER BY:\n%s", listSQL)
+		t.Errorf("sort by state field did not reach ORDER BY:\n%s", listSQL)
 	}
 }
 
@@ -1140,10 +1140,10 @@ func TestIncarnation_List_EmptyPurview_FailClosed(t *testing.T) {
 		t.Fatalf("decode: %v", err)
 	}
 	if out.Total != 0 || len(out.Items) != 0 {
-		t.Fatalf("empty-purview total/len = %d/%d, want 0/0 (fail-closed, НЕ все incarnation)", out.Total, len(out.Items))
+		t.Fatalf("empty-purview total/len = %d/%d, want 0/0 (fail-closed, NOT all incarnations)", out.Total, len(out.Items))
 	}
 	if db.listCalled {
-		t.Errorf("fail-closed обязан НЕ ходить в SelectAll, но SelectAll вызван (args=%v)", db.lastCountArgs)
+		t.Errorf("fail-closed must NOT hit SelectAll, but SelectAll was called (args=%v)", db.lastCountArgs)
 	}
 }
 
@@ -1238,7 +1238,7 @@ func TestIncarnation_List_NilScoper_FailClosed(t *testing.T) {
 		t.Fatalf("Code = %d, body=%s", rec.Code, rec.Body.String())
 	}
 	if db.listCalled {
-		t.Errorf("nil-scoper обязан fail-closed (НЕ вызывать SelectAll)")
+		t.Errorf("nil-scoper must fail-closed (must NOT call SelectAll)")
 	}
 }
 
@@ -1270,7 +1270,7 @@ func TestIncarnation_List_Unrestricted_All(t *testing.T) {
 	// Unrestricted → there must be NO scope-args ([]string) in COUNT.
 	for _, a := range db.lastCountArgs {
 		if _, ok := a.([]string); ok {
-			t.Errorf("unrestricted scope добавил scope-args в SQL: %v", db.lastCountArgs)
+			t.Errorf("unrestricted scope added scope-args to SQL: %v", db.lastCountArgs)
 		}
 	}
 }
@@ -1292,11 +1292,11 @@ func TestIncarnation_List_CovenScope_ReachesSQL(t *testing.T) {
 		t.Fatalf("Code = %d, body=%s", rec.Code, rec.Body.String())
 	}
 	if !scopeArgHas(db.lastCountArgs, []string{"redis-prod"}) {
-		t.Errorf("coven-scope [redis-prod] не дошёл до SQL-args: %v", db.lastCountArgs)
+		t.Errorf("coven-scope [redis-prod] did not reach SQL-args: %v", db.lastCountArgs)
 	}
 	// coven∪{name}: the SQL must contain both arms (covens && + name = ANY).
 	if !strings.Contains(listSQL, "covens &&") || !strings.Contains(listSQL, "name = ANY") {
-		t.Errorf("coven∪{name} SQL неполон (нужны covens && И name = ANY): %q", listSQL)
+		t.Errorf("coven∪{name} SQL incomplete (need both covens && AND name = ANY): %q", listSQL)
 	}
 }
 
@@ -1335,7 +1335,7 @@ func TestIncarnation_List_StateScope_ResolvedNamesReachSQL(t *testing.T) {
 	}
 	// The name redis-a (state-matched) must reach the final list as a scope-arg.
 	if !scopeArgHas(db.lastCountArgs, []string{"redis-a"}) {
-		t.Errorf("state-резолв: имя redis-a не дошло до финального list-SQL как scope-name: %v", db.lastCountArgs)
+		t.Errorf("state-resolve: name redis-a did not reach the final list-SQL as scope-name: %v", db.lastCountArgs)
 	}
 }
 
@@ -1363,10 +1363,10 @@ func TestIncarnation_List_OR_CovenAndState_Union(t *testing.T) {
 		t.Fatalf("Code = %d, body=%s", rec.Code, rec.Body.String())
 	}
 	if !scopeArgHas(db.lastCountArgs, []string{"prod"}) {
-		t.Errorf("OR-union: coven-плечо [prod] не дошло до SQL: %v", db.lastCountArgs)
+		t.Errorf("OR-union: coven arm [prod] did not reach SQL: %v", db.lastCountArgs)
 	}
 	if !scopeArgHas(db.lastCountArgs, []string{"redis-8"}) {
-		t.Errorf("OR-union: state-плечо [redis-8] не дошло до SQL: %v", db.lastCountArgs)
+		t.Errorf("OR-union: state arm [redis-8] did not reach SQL: %v", db.lastCountArgs)
 	}
 }
 
@@ -1388,7 +1388,7 @@ func TestIncarnation_Get_EmptyPurview_404(t *testing.T) {
 	h := NewIncarnationHandler(db, nil, nil, nil, nil, nil, nil, fakeIncScoper{empty: true}, nil)
 	rec := doIncGet(t, h, "redis-prod")
 	if rec.Code != http.StatusNotFound {
-		t.Errorf("Code = %d, want 404 (out-of-scope не палим как 403)", rec.Code)
+		t.Errorf("Code = %d, want 404 (out-of-scope must not leak as 403)", rec.Code)
 	}
 }
 
@@ -1428,7 +1428,7 @@ func TestIncarnation_Get_CovenMatch_200(t *testing.T) {
 		fakeIncScoper{covens: []string{"prod"}}, nil)
 	rec := doIncGet(t, h, "redis-prod")
 	if rec.Code != http.StatusOK {
-		t.Errorf("Code = %d, want 200 (coven-match по covens[])", rec.Code)
+		t.Errorf("Code = %d, want 200 (coven-match via covens[])", rec.Code)
 	}
 }
 
@@ -1445,7 +1445,7 @@ func TestIncarnation_Get_NameMatch_200(t *testing.T) {
 		fakeIncScoper{covens: []string{"redis-prod"}}, nil)
 	rec := doIncGet(t, h, "redis-prod")
 	if rec.Code != http.StatusOK {
-		t.Errorf("Code = %d, want 200 (coven∪{name}: name=redis-prod матчит scope coven=redis-prod)", rec.Code)
+		t.Errorf("Code = %d, want 200 (coven∪{name}: name=redis-prod matches scope coven=redis-prod)", rec.Code)
 	}
 }
 
@@ -1461,7 +1461,7 @@ func TestIncarnation_Get_CovenMismatch_404(t *testing.T) {
 		fakeIncScoper{covens: []string{"prod"}}, nil)
 	rec := doIncGet(t, h, "redis-prod")
 	if rec.Code != http.StatusNotFound {
-		t.Errorf("Code = %d, want 404 (incarnation вне scope)", rec.Code)
+		t.Errorf("Code = %d, want 404 (incarnation outside scope)", rec.Code)
 	}
 }
 
@@ -1477,7 +1477,7 @@ func TestIncarnation_Get_StateMatch_200(t *testing.T) {
 		fakeIncScoper{stateExprs: []string{`state.redis_version == "8.0"`}}, nil)
 	rec := doIncGet(t, h, "redis-prod")
 	if rec.Code != http.StatusOK {
-		t.Errorf("Code = %d, want 200 (state-match по StateExpr)", rec.Code)
+		t.Errorf("Code = %d, want 200 (state-match via StateExpr)", rec.Code)
 	}
 }
 
@@ -1493,7 +1493,7 @@ func TestIncarnation_Get_StateMismatch_404(t *testing.T) {
 		fakeIncScoper{stateExprs: []string{`state.redis_version == "8.0"`}}, nil)
 	rec := doIncGet(t, h, "redis-prod")
 	if rec.Code != http.StatusNotFound {
-		t.Errorf("Code = %d, want 404 (state не матчит)", rec.Code)
+		t.Errorf("Code = %d, want 404 (state does not match)", rec.Code)
 	}
 }
 
@@ -1529,7 +1529,7 @@ func TestIncarnation_History_StateMatch_200(t *testing.T) {
 		fakeIncScoper{stateExprs: []string{`state.redis_version == "8.0"`}}, nil)
 	rec := doIncHistory(t, h, "redis-prod")
 	if rec.Code != http.StatusOK {
-		t.Errorf("Code = %d, want 200 (state-scoped видит историю своей incarnation)", rec.Code)
+		t.Errorf("Code = %d, want 200 (state-scoped sees the history of its own incarnation)", rec.Code)
 	}
 }
 
@@ -1541,7 +1541,7 @@ func TestIncarnation_History_StateMismatch_404(t *testing.T) {
 		fakeIncScoper{stateExprs: []string{`state.redis_version == "8.0"`}}, nil)
 	rec := doIncHistory(t, h, "redis-prod")
 	if rec.Code != http.StatusNotFound {
-		t.Errorf("Code = %d, want 404 (state не матчит — история скрыта)", rec.Code)
+		t.Errorf("Code = %d, want 404 (state does not match -- history hidden)", rec.Code)
 	}
 }
 
@@ -1975,7 +1975,7 @@ func TestIncarnation_Run_BareIncarnation_Day2_202(t *testing.T) {
 		t.Fatalf("Code = %d, want 202 (bare day-2 run), body=%s", rec.Code, rec.Body.String())
 	}
 	if starter.calls != 1 {
-		t.Fatalf("starter.calls = %d, want 1 (bare инкарнация допускает day-2 operational-сценарий)", starter.calls)
+		t.Fatalf("starter.calls = %d, want 1 (a bare incarnation allows a day-2 operational scenario)", starter.calls)
 	}
 	if starter.gotSpec.ScenarioName != "add_user" {
 		t.Errorf("RunSpec.ScenarioName = %q, want add_user", starter.gotSpec.ScenarioName)
@@ -2090,7 +2090,7 @@ func TestIncarnation_Unlock_ReasonAtMax_200(t *testing.T) {
 	req = withClaims(req, "archon-alice")
 	rec := incUnlock(h, req)
 	if rec.Code != http.StatusOK {
-		t.Fatalf("Code = %d, want 200 (reason ровно %d допустим), body=%s",
+		t.Fatalf("Code = %d, want 200 (reason of exactly %d chars is allowed), body=%s",
 			rec.Code, incarnation.ReasonMaxLen, rec.Body.String())
 	}
 	if len(db.execCalls) != 2 {
@@ -2321,13 +2321,13 @@ func TestIncarnation_Upgrade_FoundAutostart_202(t *testing.T) {
 	applyID, _ := raw["apply_id"].(string)
 	runApplyID, _ := raw["run_apply_id"].(string)
 	if len(runApplyID) != 26 {
-		t.Errorf("run_apply_id = %q, want 26-char ULID (found-ветвь)", runApplyID)
+		t.Errorf("run_apply_id = %q, want 26-char ULID (found branch)", runApplyID)
 	}
 	if runApplyID == applyID {
-		t.Errorf("run_apply_id == apply_id (%q) — R и M обязаны отличаться", applyID)
+		t.Errorf("run_apply_id == apply_id (%q) -- R and M must differ", applyID)
 	}
 	if starter.calls != 1 {
-		t.Fatalf("runner.Start calls = %d, want 1 (автозапуск upgrade-сценария)", starter.calls)
+		t.Fatalf("runner.Start calls = %d, want 1 (autostart of the upgrade scenario)", starter.calls)
 	}
 	sp := starter.gotSpec
 	if !sp.FromUpgrade || !sp.FromLocked {
@@ -2340,7 +2340,7 @@ func TestIncarnation_Upgrade_FoundAutostart_202(t *testing.T) {
 		t.Errorf("RunSpec.ApplyID = %q, want run_apply_id %q (R)", sp.ApplyID, runApplyID)
 	}
 	if sp.ServiceRef.Ref != "v2" {
-		t.Errorf("RunSpec.ServiceRef.Ref = %q, want v2 (пин цели)", sp.ServiceRef.Ref)
+		t.Errorf("RunSpec.ServiceRef.Ref = %q, want v2 (target pin)", sp.ServiceRef.Ref)
 	}
 	if sp.StartedByAID != "archon-alice" {
 		t.Errorf("RunSpec.StartedByAID = %q, want archon-alice", sp.StartedByAID)
@@ -2349,7 +2349,7 @@ func TestIncarnation_Upgrade_FoundAutostart_202(t *testing.T) {
 	// input is NOT migrated. RunSpec.Input must be nil (regress if someone
 	// starts smuggling spec.input into the upgrade run).
 	if sp.Input != nil {
-		t.Errorf("RunSpec.Input = %v, want nil (input НЕ мигрируется, ADR-0068 §7)", sp.Input)
+		t.Errorf("RunSpec.Input = %v, want nil (input is NOT migrated, ADR-0068 §7)", sp.Input)
 	}
 }
 
@@ -2384,10 +2384,10 @@ func TestIncarnation_Upgrade_FoundNilRunner_500(t *testing.T) {
 	// Anti-zombie: applying was NOT reserved (UpgradeStateSchema SELECT FOR UPDATE
 	// not called, no tx opened) — the runner=nil check is BEFORE the status change.
 	if selectCalled {
-		t.Error("UpgradeStateSchema SELECT FOR UPDATE вызван — applying зарезервирован ДО проверки runner (анти-зомби нарушен)")
+		t.Error("UpgradeStateSchema SELECT FOR UPDATE was called -- applying was reserved BEFORE the runner check (anti-zombie invariant violated)")
 	}
 	if len(db.execCalls) != 0 {
-		t.Errorf("execCalls = %v, want пусто (никакого tx до 500)", db.execCalls)
+		t.Errorf("execCalls = %v, want empty (no tx before 500)", db.execCalls)
 	}
 }
 
@@ -2418,10 +2418,10 @@ func TestIncarnation_Upgrade_LegacyNoRun_202(t *testing.T) {
 		t.Fatalf("decode: %v", err)
 	}
 	if _, present := raw["run_apply_id"]; present {
-		t.Errorf("legacy reply несёт run_apply_id (%v) — должно быть опущено (omitempty)", raw["run_apply_id"])
+		t.Errorf("legacy reply carries run_apply_id (%v) -- should be omitted (omitempty)", raw["run_apply_id"])
 	}
 	if starter.calls != 0 {
-		t.Errorf("runner.Start calls = %d, want 0 (legacy — без автозапуска)", starter.calls)
+		t.Errorf("runner.Start calls = %d, want 0 (legacy -- no autostart)", starter.calls)
 	}
 }
 
@@ -2756,7 +2756,7 @@ func TestIncarnation_CheckDrift_Success_200(t *testing.T) {
 	// MarkDriftStatus called with hasDrift=true (there is a drifted host) — parity
 	// with the MCP handler.
 	if !drift.marked {
-		t.Fatal("MarkDriftStatus не вызван")
+		t.Fatal("MarkDriftStatus was not called")
 	}
 	if drift.markName != "redis-prod" || !drift.markHasDrift {
 		t.Errorf("MarkDriftStatus state = (%q, %v), want (redis-prod, true)",
@@ -2766,7 +2766,7 @@ func TestIncarnation_CheckDrift_Success_200(t *testing.T) {
 	// Audit-trail: EventIncarnationDriftChecked with correlation_id=apply_id and
 	// source=api.
 	if !hasEvent(aw, audit.EventIncarnationDriftChecked) {
-		t.Fatal("audit: incarnation.drift_checked не записан")
+		t.Fatal("audit: incarnation.drift_checked was not recorded")
 	}
 	for _, ev := range aw.events {
 		if ev.EventType != audit.EventIncarnationDriftChecked {
@@ -2783,7 +2783,7 @@ func TestIncarnation_CheckDrift_Success_200(t *testing.T) {
 		}
 		summary, _ := ev.Payload["drift_summary"].(map[string]any)
 		if summary == nil {
-			t.Fatalf("audit drift_summary отсутствует: %+v", ev.Payload)
+			t.Fatalf("audit drift_summary is missing: %+v", ev.Payload)
 		}
 		if summary["hosts_drifted"] != 1 {
 			t.Errorf("audit hosts_drifted = %v, want 1", summary["hosts_drifted"])
@@ -2809,7 +2809,7 @@ func TestIncarnation_CheckDrift_ConvergeMissing_422(t *testing.T) {
 		t.Errorf("Type = %q, want %q", p.Type, problem.TypeValidationFailed)
 	}
 	if drift.marked {
-		t.Error("MarkDriftStatus не должен вызываться при ErrConvergeMissing")
+		t.Error("MarkDriftStatus must not be called on ErrConvergeMissing")
 	}
 }
 
@@ -2857,7 +2857,7 @@ func TestIncarnation_CheckDrift_NotFound_404(t *testing.T) {
 		t.Errorf("Code = %d, want 404", rec.Code)
 	}
 	if drift.calls != 0 {
-		t.Errorf("CheckDrift calls = %d, want 0 (404 до CheckDrift)", drift.calls)
+		t.Errorf("CheckDrift calls = %d, want 0 (404 before CheckDrift)", drift.calls)
 	}
 }
 
@@ -2872,7 +2872,7 @@ func TestIncarnation_CheckDrift_InvalidName_422(t *testing.T) {
 		t.Errorf("Code = %d, want 422", rec.Code)
 	}
 	if drift.calls != 0 {
-		t.Errorf("CheckDrift calls = %d, want 0 (validation до CheckDrift)", drift.calls)
+		t.Errorf("CheckDrift calls = %d, want 0 (validation before CheckDrift)", drift.calls)
 	}
 }
 
@@ -2988,7 +2988,7 @@ func TestUpdateHosts_200_Append(t *testing.T) {
 	_ = json.NewDecoder(rec.Body).Decode(&dto)
 	hostsRaw, _ := dto.Spec["hosts"].([]any)
 	if len(hostsRaw) != 2 {
-		t.Errorf("dto.spec.hosts len = %d, want 2 (append добавляет к existing)", len(hostsRaw))
+		t.Errorf("dto.spec.hosts len = %d, want 2 (append adds to existing)", len(hostsRaw))
 	}
 }
 
@@ -3015,7 +3015,7 @@ func TestUpdateHosts_200_Remove(t *testing.T) {
 	_ = json.NewDecoder(rec.Body).Decode(&dto)
 	hostsRaw, _ := dto.Spec["hosts"].([]any)
 	if len(hostsRaw) != 1 {
-		t.Errorf("dto.spec.hosts len = %d, want 1 (b удалён)", len(hostsRaw))
+		t.Errorf("dto.spec.hosts len = %d, want 1 (b removed)", len(hostsRaw))
 	}
 }
 
@@ -3153,13 +3153,13 @@ func TestUpdateHosts_EmptyReplace_Clears(t *testing.T) {
 	req = withClaims(req, "archon-alice")
 	rec := incUpdateHosts(h, req)
 	if rec.Code != http.StatusOK {
-		t.Fatalf("Code = %d, want 200 (replace-clear легитимен), body=%s", rec.Code, rec.Body.String())
+		t.Fatalf("Code = %d, want 200 (replace-clear is legitimate), body=%s", rec.Code, rec.Body.String())
 	}
 	var dto incDTOJSON
 	_ = json.NewDecoder(rec.Body).Decode(&dto)
 	hostsRaw, _ := dto.Spec["hosts"].([]any)
 	if len(hostsRaw) != 0 {
-		t.Errorf("dto.spec.hosts len = %d, want 0 (очищено)", len(hostsRaw))
+		t.Errorf("dto.spec.hosts len = %d, want 0 (cleared)", len(hostsRaw))
 	}
 }
 
@@ -3211,7 +3211,7 @@ func TestUpdateHosts_EmptySID_422(t *testing.T) {
 	req = withClaims(req, "archon-alice")
 	rec := incUpdateHosts(h, req)
 	if rec.Code != http.StatusUnprocessableEntity {
-		t.Errorf("Code = %d, want 422 (пустой sid)", rec.Code)
+		t.Errorf("Code = %d, want 422 (empty sid)", rec.Code)
 	}
 }
 
@@ -3457,10 +3457,10 @@ func TestIncarnation_Create_AutoCreateFalse_NoRun(t *testing.T) {
 		t.Fatalf("Code = %d, want 202; body=%s", rec.Code, rec.Body.String())
 	}
 	if db.insertCalls != 1 {
-		t.Errorf("insertCalls = %d, want 1 (инкарнация создаётся)", db.insertCalls)
+		t.Errorf("insertCalls = %d, want 1 (the incarnation is created)", db.insertCalls)
 	}
 	if starter.calls != 0 {
-		t.Errorf("starter.calls = %d, want 0 (auto_create=false → прогона нет)", starter.calls)
+		t.Errorf("starter.calls = %d, want 0 (auto_create=false -> no run)", starter.calls)
 	}
 	// created_scenario at auto_create=false is NOT NULL: the bootstrap scenario exists (create),
 	// the run is merely deferred (unlike bare). $12 = create.
@@ -3473,7 +3473,7 @@ func TestIncarnation_Create_AutoCreateFalse_NoRun(t *testing.T) {
 		t.Fatalf("decode: %v", err)
 	}
 	if _, has := raw["apply_id"]; has {
-		t.Errorf("apply_id присутствует при auto_create=false: %v", raw)
+		t.Errorf("apply_id is present when auto_create=false: %v", raw)
 	}
 	if raw["incarnation"] != "ba" {
 		t.Errorf("incarnation = %v", raw["incarnation"])
@@ -3504,7 +3504,7 @@ func TestIncarnation_Create_AutoCreateTrueExplicit_Run(t *testing.T) {
 	var raw map[string]any
 	_ = json.NewDecoder(rec.Body).Decode(&raw)
 	if _, has := raw["apply_id"]; !has {
-		t.Errorf("apply_id отсутствует при auto_create=true: %v", raw)
+		t.Errorf("apply_id is missing when auto_create=true: %v", raw)
 	}
 }
 
@@ -3609,7 +3609,7 @@ func TestIncarnationGetReply_GoldenNullFields(t *testing.T) {
 		`"status_details":null`,
 	} {
 		if !strings.Contains(got, want) {
-			t.Errorf("wire НЕ содержит %s (omitempty-регресс?)\nwire: %s", want, got)
+			t.Errorf("wire does NOT contain %s (omitempty regression?)\nwire: %s", want, got)
 		}
 	}
 }
@@ -3649,7 +3649,7 @@ func TestIncarnationGetReply_DriftSummaryTyped(t *testing.T) {
 		`"scanned_at":"2026-05-26T12:00:00.123456789Z"`,
 	} {
 		if !strings.Contains(got, want) {
-			t.Errorf("wire НЕ содержит %s (typed-drift-регресс?)\nwire: %s", want, got)
+			t.Errorf("wire does NOT contain %s (typed-drift regression?)\nwire: %s", want, got)
 		}
 	}
 	// Round-trip through the wire form — counts/scanned_at read back typed without loss.
@@ -3664,10 +3664,10 @@ func TestIncarnationGetReply_DriftSummaryTyped(t *testing.T) {
 		t.Fatalf("unmarshal wire: %v", err)
 	}
 	if reply.LastDriftSummary == nil {
-		t.Fatalf("LastDriftSummary опущен на wire при заполненной колонке")
+		t.Fatalf("LastDriftSummary is omitted from the wire despite a populated column")
 	}
 	if reply.LastDriftSummary.HostsDrifted != 1 || reply.LastDriftSummary.TotalHosts != 3 {
-		t.Errorf("round-trip counts разъехались: %+v", *reply.LastDriftSummary)
+		t.Errorf("round-trip counts diverged: %+v", *reply.LastDriftSummary)
 	}
 	if !reply.LastDriftSummary.ScannedAt.Equal(scannedAt) {
 		t.Errorf("round-trip scanned_at = %v, want %v", reply.LastDriftSummary.ScannedAt, scannedAt)
@@ -3693,7 +3693,7 @@ func TestIncarnationGetReply_DriftSummaryOmittedWhenNil(t *testing.T) {
 		t.Fatalf("marshal: %v", err)
 	}
 	if got := string(b); strings.Contains(got, "last_drift_summary") {
-		t.Errorf("wire содержит last_drift_summary при NULL-колонке (должен быть опущен)\nwire: %s", got)
+		t.Errorf("wire contains last_drift_summary for a NULL column (should be omitted)\nwire: %s", got)
 	}
 }
 
@@ -3715,12 +3715,12 @@ func TestStateHistoryEntry_GoldenChangedByAIDOmitted(t *testing.T) {
 	}
 	got := string(b)
 	if strings.Contains(got, "changed_by_aid") {
-		t.Errorf("wire содержит changed_by_aid при пустом значении (должен быть опущен)\nwire: %s", got)
+		t.Errorf("wire contains changed_by_aid for an empty value (should be omitted)\nwire: %s", got)
 	}
 	// state_before/state_after — conversely, PRESENT as null (required+nullable).
 	for _, want := range []string{`"state_before":null`, `"state_after":null`} {
 		if !strings.Contains(got, want) {
-			t.Errorf("wire НЕ содержит %s (omitempty-регресс?)\nwire: %s", want, got)
+			t.Errorf("wire does NOT contain %s (omitempty regression?)\nwire: %s", want, got)
 		}
 	}
 }

@@ -83,7 +83,7 @@ func TestBroadcastSigils_SendsSnapshotWithManifestRaw(t *testing.T) {
 	h.broadcastSigils(context.Background(), stream, "sid", "sess")
 
 	if len(stream.sent) != 1 {
-		t.Fatalf("sent = %d, want 1 (один SigilSnapshot)", len(stream.sent))
+		t.Fatalf("sent = %d, want 1 (a single SigilSnapshot)", len(stream.sent))
 	}
 	snap := stream.sent[0].GetSigilSnapshot()
 	if snap == nil {
@@ -104,7 +104,7 @@ func TestBroadcastSigils_SendsSnapshotWithManifestRaw(t *testing.T) {
 		t.Errorf("manifest = %q, want byte-equal ManifestRaw %q", got.GetManifest(), rec.ManifestRaw)
 	}
 	if bytes.Equal(got.GetManifest(), rec.Manifest) {
-		t.Errorf("manifest equals JSONB-проекцию — должно быть ManifestRaw")
+		t.Errorf("manifest equals the JSONB projection - should be ManifestRaw")
 	}
 	if !bytes.Equal(got.GetSignature(), rec.Signature) {
 		t.Errorf("signature = %q, want %q", got.GetSignature(), rec.Signature)
@@ -129,7 +129,7 @@ func TestBroadcastSigils_EmptyListSendsEmptySnapshot(t *testing.T) {
 	stream := &fakeBidiStream{}
 	h.broadcastSigils(context.Background(), stream, "sid", "sess")
 	if len(stream.sent) != 1 {
-		t.Fatalf("sent = %d, want 1 (пустой snapshot всё равно отправляется)", len(stream.sent))
+		t.Fatalf("sent = %d, want 1 (an empty snapshot is still sent)", len(stream.sent))
 	}
 	snap := stream.sent[0].GetSigilSnapshot()
 	if snap == nil {
@@ -164,6 +164,6 @@ func TestBroadcastSigils_SendFailDoesNotPanic(t *testing.T) {
 	// close via its own recv loop.
 	h.broadcastSigils(context.Background(), stream, "sid", "sess")
 	if len(stream.sent) != 1 {
-		t.Fatalf("sent = %d, want 1 (одна попытка Send, упавшая)", len(stream.sent))
+		t.Fatalf("sent = %d, want 1 (a single Send attempt, which failed)", len(stream.sent))
 	}
 }

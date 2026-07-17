@@ -46,14 +46,14 @@ func TestIntegration_Claim_DestroyCascade_BenignNoMatch(t *testing.T) {
 			t.Fatalf("Claim: %v", err)
 		}
 		if disp.calls.Load() != 0 {
-			t.Errorf("SendApply calls = %d, want 0 (снесённый хост — no-op)", disp.calls.Load())
+			t.Errorf("SendApply calls = %d, want 0 (torn-down host -- no-op)", disp.calls.Load())
 		}
 		got, err := applyrun.SelectByApplyID(ctx, integrationPool, applyID, "host-a.example.com")
 		if err != nil {
 			t.Fatalf("SelectByApplyID: %v", err)
 		}
 		if got.Status != applyrun.StatusNoMatch {
-			t.Errorf("status = %q, want no_match (destroy-каскад — benign-терминал, не failed)", got.Status)
+			t.Errorf("status = %q, want no_match (destroy cascade -- benign terminal, not failed)", got.Status)
 		}
 	})
 
@@ -76,14 +76,14 @@ func TestIntegration_Claim_DestroyCascade_BenignNoMatch(t *testing.T) {
 			t.Fatalf("Claim: %v", err)
 		}
 		if disp.calls.Load() != 0 {
-			t.Errorf("SendApply calls = %d, want 0 (хост вне roster-а)", disp.calls.Load())
+			t.Errorf("SendApply calls = %d, want 0 (host outside the roster)", disp.calls.Load())
 		}
 		got, err := applyrun.SelectByApplyID(ctx, integrationPool, applyID, "host-a.example.com")
 		if err != nil {
 			t.Fatalf("SelectByApplyID: %v", err)
 		}
 		if got.Status != applyrun.StatusFailed {
-			t.Errorf("status = %q, want failed (disconnected — fail-closed, не benign)", got.Status)
+			t.Errorf("status = %q, want failed (disconnected -- fail-closed, not benign)", got.Status)
 		}
 	})
 }

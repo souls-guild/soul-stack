@@ -19,7 +19,7 @@ input:
 	_, _, diags, _ := LoadDestinyManifestFromBytes("destiny.yml", []byte(src), ValidateOptions{})
 	if hasCode(diags, "unknown_key") {
 		dump(t, diags)
-		t.Fatalf("x-* vendor-extension key не должен давать unknown_key")
+		t.Fatalf("x-* vendor-extension key must not produce unknown_key")
 	}
 }
 
@@ -33,6 +33,6 @@ input:
 	_, _, diags, _ := LoadDestinyManifestFromBytes("destiny.yml", []byte(src), ValidateOptions{})
 	if !hasCode(diags, "unknown_key") {
 		dump(t, diags)
-		t.Fatalf("неизвестный не-x- ключ обязан давать unknown_key")
+		t.Fatalf("an unknown non-x- key must produce unknown_key")
 	}
 }

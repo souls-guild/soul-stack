@@ -690,7 +690,7 @@ func TestAssignCoven_NegativeScope_LabelOutOfScope(t *testing.T) {
 		}
 		// A label outside scope is rejected BEFORE the DB — neither count nor UPDATE.
 		if pool.bulkChunkCalls != 0 {
-			t.Errorf("selector %s: UPDATE выполнен на out-of-scope метке", sel)
+			t.Errorf("selector %s: UPDATE executed on out-of-scope label", sel)
 		}
 	}
 }
@@ -739,13 +739,13 @@ func TestAssignCoven_Replace_Happy(t *testing.T) {
 	}
 	labels, ok := out["labels"].([]any)
 	if !ok || len(labels) != 2 {
-		t.Fatalf("labels = %v, want 2-элементный массив", out["labels"])
+		t.Fatalf("labels = %v, want 2-element array", out["labels"])
 	}
 	if _, hasLabel := out["label"]; hasLabel {
-		t.Errorf("replace-ответ содержит лишнее поле label: %v", out)
+		t.Errorf("replace response contains extra label field: %v", out)
 	}
 	if pool.bulkChunkCalls != 1 {
-		t.Errorf("bulkChunkCalls = %d, want 1 (replace дошёл до chunk-UPDATE)", pool.bulkChunkCalls)
+		t.Errorf("bulkChunkCalls = %d, want 1 (replace reached chunk-UPDATE)", pool.bulkChunkCalls)
 	}
 }
 
@@ -756,10 +756,10 @@ func TestAssignCoven_Replace_LabelOutOfScope_422(t *testing.T) {
 	h := NewSoulHandler(pool, fakeScoper{covens: []string{"dev"}}, nil, nil)
 	rec := doAssignCoven(t, h, `{"mode":"replace","labels":["dev","prod"],"selector":{"all":true}}`, "")
 	if rec.Code != http.StatusUnprocessableEntity {
-		t.Fatalf("status = %d, want 422 (prod вне scope), body=%s", rec.Code, rec.Body.String())
+		t.Fatalf("status = %d, want 422 (prod out of scope), body=%s", rec.Code, rec.Body.String())
 	}
 	if pool.bulkChunkCalls != 0 {
-		t.Errorf("UPDATE выполнен на out-of-scope replace-наборе")
+		t.Errorf("UPDATE executed on out-of-scope replace set")
 	}
 }
 
@@ -781,7 +781,7 @@ func TestAssignCoven_Replace_HostOutOfScope_0Changed(t *testing.T) {
 		t.Errorf("matched/changed = %v/%v, want 0/0 (host out of scope)", out["matched"], out["changed"])
 	}
 	if pool.bulkChunkCalls != 0 {
-		t.Errorf("UPDATE выполнен при matched=0")
+		t.Errorf("UPDATE executed with matched=0")
 	}
 }
 
@@ -790,7 +790,7 @@ func TestAssignCoven_Replace_RejectsLabelField_422(t *testing.T) {
 	h := NewSoulHandler(&fakeSoulPool{}, fakeScoper{unrestricted: true}, nil, nil)
 	rec := doAssignCoven(t, h, `{"mode":"replace","label":"prod","selector":{"all":true}}`, "")
 	if rec.Code != http.StatusUnprocessableEntity {
-		t.Fatalf("status = %d, want 422 (label запрещён для replace), body=%s", rec.Code, rec.Body.String())
+		t.Fatalf("status = %d, want 422 (label forbidden for replace), body=%s", rec.Code, rec.Body.String())
 	}
 }
 
@@ -799,7 +799,7 @@ func TestAssignCoven_Append_RejectsLabelsField_422(t *testing.T) {
 	h := NewSoulHandler(&fakeSoulPool{}, fakeScoper{unrestricted: true}, nil, nil)
 	rec := doAssignCoven(t, h, `{"mode":"append","labels":["prod"],"selector":{"all":true}}`, "")
 	if rec.Code != http.StatusUnprocessableEntity {
-		t.Fatalf("status = %d, want 422 (labels запрещены для append), body=%s", rec.Code, rec.Body.String())
+		t.Fatalf("status = %d, want 422 (labels forbidden for append), body=%s", rec.Code, rec.Body.String())
 	}
 }
 
@@ -810,7 +810,7 @@ func TestAssignCoven_Replace_EmptyLabels_OK(t *testing.T) {
 	h := NewSoulHandler(pool, fakeScoper{unrestricted: true}, nil, nil)
 	rec := doAssignCoven(t, h, `{"mode":"replace","labels":[],"selector":{"all":true}}`, "")
 	if rec.Code != http.StatusOK {
-		t.Fatalf("status = %d, want 200 (пустой labels — clear-all), body=%s", rec.Code, rec.Body.String())
+		t.Fatalf("status = %d, want 200 (empty labels - clear-all), body=%s", rec.Code, rec.Body.String())
 	}
 	var out map[string]any
 	_ = json.Unmarshal(rec.Body.Bytes(), &out)
@@ -853,7 +853,7 @@ func TestAssignCoven_Incarnation_NoMatch_0(t *testing.T) {
 		t.Errorf("matched/changed = %v/%v, want 0/0", out["matched"], out["changed"])
 	}
 	if pool.bulkChunkCalls != 0 {
-		t.Errorf("UPDATE выполнен при matched=0")
+		t.Errorf("UPDATE executed with matched=0")
 	}
 }
 
@@ -879,7 +879,7 @@ func TestAssignCoven_Incarnation_ScopeIntersection(t *testing.T) {
 		}
 	}
 	if !foundIncarnation || !foundScope {
-		t.Errorf("count-args не содержат incarnation+scope: %v", pool.lastListArgs)
+		t.Errorf("count-args do not contain incarnation+scope: %v", pool.lastListArgs)
 	}
 }
 
@@ -893,7 +893,7 @@ func TestAssignCoven_Incarnation_InvalidName_422(t *testing.T) {
 		t.Fatalf("status = %d, want 422, body=%s", rec.Code, rec.Body.String())
 	}
 	if pool.bulkChunkCalls != 0 {
-		t.Errorf("UPDATE на невалидной incarnation")
+		t.Errorf("UPDATE on invalid incarnation")
 	}
 }
 
@@ -1019,10 +1019,10 @@ func TestAssignCoven_MultiChunk_Aggregates(t *testing.T) {
 	}
 	// changed = sum over two full chunks (empty final 0).
 	if out["changed"].(float64) != float64(handlerBulkChunkSize*2) {
-		t.Errorf("changed = %v, want %d (агрегат по чанкам)", out["changed"], handlerBulkChunkSize*2)
+		t.Errorf("changed = %v, want %d (aggregate across chunks)", out["changed"], handlerBulkChunkSize*2)
 	}
 	if pool.bulkChunkCalls != 3 {
-		t.Errorf("bulkChunkCalls = %d, want 3 (2 полных + пустой финальный)", pool.bulkChunkCalls)
+		t.Errorf("bulkChunkCalls = %d, want 3 (2 full + one empty final)", pool.bulkChunkCalls)
 	}
 }
 
@@ -1087,7 +1087,7 @@ func TestAssignCoven_Audit_PayloadOnSuccess(t *testing.T) {
 		t.Fatalf("status = %d, want 200, body=%s", rec.Code, rec.Body.String())
 	}
 	if len(cap.events) != 1 {
-		t.Fatalf("audit events = %d, want ровно 1", len(cap.events))
+		t.Fatalf("audit events = %d, want exactly 1", len(cap.events))
 	}
 	ev := cap.events[0]
 	if ev.EventType != audit.EventSoulCovenChanged {
@@ -1128,7 +1128,7 @@ func TestAssignCoven_Audit_PayloadOnSuccess(t *testing.T) {
 		t.Errorf("normalized selector = %v", sel)
 	}
 	if _, hasSIDs := sel["sids"]; hasSIDs {
-		t.Errorf("normalized selector содержит пустой sids: %v", sel)
+		t.Errorf("normalized selector contains empty sids: %v", sel)
 	}
 }
 
@@ -1144,7 +1144,7 @@ func TestAssignCoven_Audit_OnDryRun(t *testing.T) {
 		t.Fatalf("status = %d, want 200, body=%s", rec.Code, rec.Body.String())
 	}
 	if len(cap.events) != 1 {
-		t.Fatalf("audit events on dry_run = %d, want 1 (намеренный след предпросмотра)", len(cap.events))
+		t.Fatalf("audit events on dry_run = %d, want 1 (intentional preview trail)", len(cap.events))
 	}
 	p := cap.events[0].Payload
 	if p["dry_run"] != true {
@@ -1158,7 +1158,7 @@ func TestAssignCoven_Audit_OnDryRun(t *testing.T) {
 		t.Errorf("payload.scope_applied = %v, want false (unrestricted)", p["scope_applied"])
 	}
 	if pool.bulkChunkCalls != 0 {
-		t.Errorf("dry_run выполнил UPDATE: bulkChunkCalls = %d", pool.bulkChunkCalls)
+		t.Errorf("dry_run executed UPDATE: bulkChunkCalls = %d", pool.bulkChunkCalls)
 	}
 }
 
@@ -1185,7 +1185,7 @@ func TestAssignCoven_Audit_NotWrittenOnEarlyReject(t *testing.T) {
 				t.Fatalf("status = %d, want %d, body=%s", rec.Code, tc.code, rec.Body.String())
 			}
 			if len(cap.events) != 0 {
-				t.Errorf("audit написан на раннем отказе (%d): %d событий", tc.code, len(cap.events))
+				t.Errorf("audit written on early failure (%d): %d events", tc.code, len(cap.events))
 			}
 		})
 	}
@@ -1218,10 +1218,10 @@ func TestSoulCreate_Happy_Agent(t *testing.T) {
 	// Catches regression of wire-key rename (restore tag `token_expires_at`
 	// → red).
 	if _, ok := out["expires_at"]; !ok {
-		t.Errorf("ключ expires_at отсутствует в ответе")
+		t.Errorf("expires_at key missing from response")
 	}
 	if _, ok := out["token_expires_at"]; ok {
-		t.Errorf("legacy-ключ token_expires_at присутствует — переименование откатилось")
+		t.Errorf("legacy key token_expires_at present - rename rolled back")
 	}
 	if out["created_by_aid"] != "archon-alice" {
 		t.Errorf("created_by_aid = %v", out["created_by_aid"])
@@ -1272,10 +1272,10 @@ func TestSoulCreate_TokenInsertFails_Rollback(t *testing.T) {
 		t.Fatalf("status = %d, want 500, body=%s", rec.Code, rec.Body.String())
 	}
 	if pool.commitCalled {
-		t.Errorf("Commit вызван, не должен быть (token-insert упал)")
+		t.Errorf("Commit called, should not be (token-insert failed)")
 	}
 	if !pool.rollbackCalled {
-		t.Errorf("Rollback НЕ вызван — осиротевшая souls-row останется в БД")
+		t.Errorf("Rollback NOT called - orphaned souls-row will remain in DB")
 	}
 }
 
@@ -1396,13 +1396,13 @@ func TestSoulIssueToken_Happy(t *testing.T) {
 	}
 	// guard: expiration key is `expires_at` (not legacy `token_expires_at`).
 	if _, ok := out["expires_at"]; !ok {
-		t.Errorf("ключ expires_at отсутствует в ответе")
+		t.Errorf("expires_at key missing from response")
 	}
 	if _, ok := out["token_expires_at"]; ok {
-		t.Errorf("legacy-ключ token_expires_at присутствует — переименование откатилось")
+		t.Errorf("legacy key token_expires_at present - rename rolled back")
 	}
 	if pool.expireCalled {
-		t.Errorf("expire должен НЕ вызываться без force")
+		t.Errorf("expire should NOT be called without force")
 	}
 }
 
@@ -1436,7 +1436,7 @@ func TestSoulIssueToken_Force_ExpiresOld(t *testing.T) {
 		t.Fatalf("status = %d, want 200, body=%s", rec.Code, rec.Body.String())
 	}
 	if !pool.expireCalled {
-		t.Errorf("expire должен вызываться при force=true")
+		t.Errorf("expire should be called with force=true")
 	}
 	if pool.tokenInserts != 1 {
 		t.Errorf("token inserts = %d, want 1", pool.tokenInserts)
@@ -1702,7 +1702,7 @@ func TestSoulList_Filters_ReachSQL(t *testing.T) {
 	}
 	for v, found := range want {
 		if !found {
-			t.Errorf("filter value %q не дошёл до SQL-args (%v)", v, pool.lastListArgs)
+			t.Errorf("filter value %q did not reach SQL-args (%v)", v, pool.lastListArgs)
 		}
 	}
 }
@@ -1794,10 +1794,10 @@ func TestSoulList_EmptyPurview_FailClosed(t *testing.T) {
 	}
 	out := decodeListItems(t, rec.Body.Bytes())
 	if out.Total != 0 || len(out.Items) != 0 {
-		t.Fatalf("empty-purview list total/len = %d/%d, want 0/0 (fail-closed, НЕ весь флот)", out.Total, len(out.Items))
+		t.Fatalf("empty-purview list total/len = %d/%d, want 0/0 (fail-closed, NOT the whole fleet)", out.Total, len(out.Items))
 	}
 	if pool.lastListArgs != nil {
-		t.Errorf("fail-closed обязан НЕ ходить в SelectAll, но lastListArgs=%v", pool.lastListArgs)
+		t.Errorf("fail-closed must NOT call SelectAll, but lastListArgs=%v", pool.lastListArgs)
 	}
 }
 
@@ -1868,7 +1868,7 @@ func TestSoulList_Unrestricted_All(t *testing.T) {
 	// Unrestricted → MUST NOT have coven-scope-args (`[]string`) in SQL.
 	for _, a := range pool.lastListArgs {
 		if _, ok := a.([]string); ok {
-			t.Errorf("unrestricted scope добавил coven-scope-args в SQL: %v", pool.lastListArgs)
+			t.Errorf("unrestricted scope added coven-scope-args to SQL: %v", pool.lastListArgs)
 		}
 	}
 }
@@ -1892,7 +1892,7 @@ func TestSoulList_CovenScope_ReachesSQL(t *testing.T) {
 		}
 	}
 	if !found {
-		t.Errorf("coven-scope [prod staging] не дошёл до SQL-args как []string: %v", pool.lastListArgs)
+		t.Errorf("coven-scope [prod staging] did not reach SQL-args as []string: %v", pool.lastListArgs)
 	}
 }
 
@@ -1917,10 +1917,10 @@ func TestSoulList_ScopeOverridesPresence(t *testing.T) {
 	}
 	out := decodeListItems(t, rec.Body.Bytes())
 	if out.Total != 0 || len(out.Items) != 0 {
-		t.Fatalf("scope=empty list total/len = %d/%d, want 0/0 (scope скрывает раньше presence)", out.Total, len(out.Items))
+		t.Fatalf("scope=empty list total/len = %d/%d, want 0/0 (scope hides before presence)", out.Total, len(out.Items))
 	}
 	if len(presence.gotSIDs) != 0 {
-		t.Errorf("presence-overlay не должен вызываться при пустом scope (0 items), gotSIDs=%v", presence.gotSIDs)
+		t.Errorf("presence-overlay should not be called with empty scope (0 items), gotSIDs=%v", presence.gotSIDs)
 	}
 }
 
@@ -1952,7 +1952,7 @@ func TestSoulList_PartialScope_AppliesCovenSubset(t *testing.T) {
 		}
 	}
 	if !found {
-		t.Errorf("partial-scope coven [prod] не дошёл до SQL: %v", pool.lastListArgs)
+		t.Errorf("partial-scope coven [prod] did not reach SQL: %v", pool.lastListArgs)
 	}
 }
 

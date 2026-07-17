@@ -54,7 +54,7 @@ func (m *Module) applyRendered(stream grpc.ServerStreamingServer[pluginv1.ApplyE
 		// it, templates using `.self.*`/`.vars.*` fail under strict-mode.
 		// Keeper must deliver it (missing handoff is a golden-path prod
 		// blocker, same as template_content was).
-		return util.SendFailed(stream, fmt.Sprintf("render %s: отсутствует render_context (Keeper не доставил корень §3.2)", path))
+		return util.SendFailed(stream, fmt.Sprintf("render %s: render_context is missing (Keeper did not deliver the root §3.2)", path))
 	}
 	modeStr, err := util.OptStringParam(req.Params, "mode")
 	if err != nil {
@@ -147,7 +147,7 @@ func (m *Module) planRendered(stream grpc.ServerStreamingServer[pluginv1.PlanEve
 		return util.PlanFailed(err.Error())
 	}
 	if renderContext == nil {
-		return util.PlanFailed(fmt.Sprintf("render %s: отсутствует render_context (Keeper не доставил корень §3.2)", path))
+		return util.PlanFailed(fmt.Sprintf("render %s: render_context is missing (Keeper did not deliver the root §3.2)", path))
 	}
 	modeStr, err := util.OptStringParam(req.Params, "mode")
 	if err != nil {

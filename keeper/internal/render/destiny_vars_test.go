@@ -97,7 +97,7 @@ func TestDestinyFileVars_RegisterIsolation(t *testing.T) {
 	}
 	_, _, err := p.Render(context.Background(), in)
 	if err == nil {
-		t.Fatal("Render: ожидалась ошибка — vars.yml не должен видеть register.* (изоляция)")
+		t.Fatal("Render: expected an error - vars.yml must not see register.* (isolation)")
 	}
 }
 
@@ -118,7 +118,7 @@ func TestDestinyFileVars_HostsIsolation(t *testing.T) {
 	}
 	_, _, err := p.Render(context.Background(), in)
 	if err == nil {
-		t.Fatal("Render: vars.yml не должен видеть soulprint.hosts (изоляция destiny, не ослаблена var→var)")
+		t.Fatal("Render: vars.yml must not see soulprint.hosts (destiny isolation, not weakened by var->var)")
 	}
 }
 
@@ -148,7 +148,7 @@ func TestDestinyFileVars_OverrideWithInLayerRef(t *testing.T) {
 		t.Fatalf("Render: %v", err)
 	}
 	if got := tasks[0].Params.GetFields()["cmd"].GetStringValue(); got != "redis-TASK-svc" {
-		t.Errorf("cmd = %q, want redis-TASK-svc (task-var svc видит task-var unit, override Вариант A)", got)
+		t.Errorf("cmd = %q, want redis-TASK-svc (task-var svc sees task-var unit, override Variant A)", got)
 	}
 }
 
@@ -170,7 +170,7 @@ func TestDestinyFileVars_EssenceIsolation(t *testing.T) {
 	}
 	_, _, err := p.Render(context.Background(), in)
 	if err == nil {
-		t.Fatal("Render: ожидалась ошибка — vars.yml не должен видеть essence.* (изоляция)")
+		t.Fatal("Render: expected an error - vars.yml must not see essence.* (isolation)")
 	}
 }
 
@@ -195,10 +195,10 @@ func TestDestinyFileVars_VarToVar(t *testing.T) {
 	}
 	tasks, _, err := p.Render(context.Background(), in)
 	if err != nil {
-		t.Fatalf("Render: var→var внутри file-слоя должен резолвиться: %v", err)
+		t.Fatalf("Render: var->var within the file layer must resolve: %v", err)
 	}
 	if got := tasks[0].Params.GetFields()["cmd"].GetStringValue(); got != "echo redis-server" {
-		t.Errorf("cmd = %q, want echo redis-server (unit ссылается на base)", got)
+		t.Errorf("cmd = %q, want echo redis-server (unit references base)", got)
 	}
 }
 
@@ -214,7 +214,7 @@ func TestDestinyFileVars_TransitiveChain(t *testing.T) {
 		t.Fatalf("resolveVarLayer: %v", err)
 	}
 	if got["a"] != "root/b/a" {
-		t.Errorf("vars.a = %v, want root/b/a (транзитивно a→b→c)", got["a"])
+		t.Errorf("vars.a = %v, want root/b/a (transitively a->b->c)", got["a"])
 	}
 }
 
@@ -226,11 +226,11 @@ func TestDestinyFileVars_Cycle(t *testing.T) {
 		"c": "${ vars.a }",
 	}, cel.Vars{})
 	if err == nil || !errors.Is(err, ErrVarCycle) {
-		t.Fatalf("resolveVarLayer: ожидался ErrVarCycle, получено: %v", err)
+		t.Fatalf("resolveVarLayer: expected ErrVarCycle, got: %v", err)
 	}
 	// The trace is closed: it contains the starting node twice (a → … → a).
 	if !strings.Contains(err.Error(), "a → b → c → a") {
-		t.Errorf("err = %v, want трассу 'a → b → c → a'", err)
+		t.Errorf("err = %v, want trace 'a -> b -> c -> a'", err)
 	}
 }
 
@@ -241,10 +241,10 @@ func TestDestinyFileVars_SelfReference(t *testing.T) {
 		"a": "${ vars.a }-loop",
 	}, cel.Vars{})
 	if err == nil || !errors.Is(err, ErrVarCycle) {
-		t.Fatalf("resolveVarLayer: самоссылка должна давать ErrVarCycle, получено: %v", err)
+		t.Fatalf("resolveVarLayer: self-reference must give ErrVarCycle, got: %v", err)
 	}
 	if !strings.Contains(err.Error(), "a → a") {
-		t.Errorf("err = %v, want трассу 'a → a'", err)
+		t.Errorf("err = %v, want trace 'a -> a'", err)
 	}
 }
 
@@ -268,7 +268,7 @@ func TestDestinyFileVars_UnusedBrokenRef(t *testing.T) {
 	}
 	_, _, err := p.Render(context.Background(), in)
 	if err == nil {
-		t.Fatal("Render: битый неиспользуемый var должен ронять рендер EAGER (var_unknown_ref)")
+		t.Fatal("Render: a broken unused var must fail render EAGERLY (var_unknown_ref)")
 	}
 	if !errors.Is(err, ErrVarUnknownRef) {
 		t.Errorf("err = %v, want ErrVarUnknownRef", err)
@@ -298,7 +298,7 @@ func TestDestinyFileVars_OrderIndependent(t *testing.T) {
 	}
 	for _, k := range []string{"a", "b", "c"} {
 		if v1[k] != v2[k] {
-			t.Errorf("vars.%s расходится при разном порядке: v1=%v v2=%v", k, v1[k], v2[k])
+			t.Errorf("vars.%s diverges with different order: v1=%v v2=%v", k, v1[k], v2[k])
 		}
 	}
 	if v1["c"] != "root-b-c" {
@@ -330,7 +330,7 @@ func TestDestinyFileVars_TaskOverridesFile(t *testing.T) {
 		t.Fatalf("Render: %v", err)
 	}
 	if got := tasks[0].Params.GetFields()["cmd"].GetStringValue(); got != "echo redis-staging" {
-		t.Errorf("cmd = %q, want echo redis-staging (task-level vars поверх file-level, Вариант A)", got)
+		t.Errorf("cmd = %q, want echo redis-staging (task-level vars over file-level, Variant A)", got)
 	}
 }
 
@@ -356,7 +356,7 @@ func TestDestinyFileVars_TaskAndFileCoexist(t *testing.T) {
 		t.Fatalf("Render: %v", err)
 	}
 	if got := tasks[0].Params.GetFields()["cmd"].GetStringValue(); got != "redis-server flag" {
-		t.Errorf("cmd = %q, want 'redis-server flag' (file-var + task-var сосуществуют)", got)
+		t.Errorf("cmd = %q, want 'redis-server flag' (file-var + task-var coexist)", got)
 	}
 }
 
@@ -389,7 +389,7 @@ func TestDestinyFileVars_ScenarioVarsDoNotLeak(t *testing.T) {
 	}
 	_, _, err := p.Render(context.Background(), in)
 	if err == nil {
-		t.Fatal("Render: ожидалась ошибка — scenario vars не должны течь в destiny (только через apply.input)")
+		t.Fatal("Render: expected an error - scenario vars must not flow into destiny (only via apply.input)")
 	}
 }
 
@@ -475,7 +475,7 @@ func TestDestinyFileVars_InRenderedTemplateContext(t *testing.T) {
 	rc := tasks[0].Params.GetFields()[paramRenderContext].GetStructValue().AsMap()
 	vars, _ := rc["vars"].(map[string]any)
 	if vars["bin_path"] != "/usr/local/bin/node_exporter" {
-		t.Fatalf("render_context.vars.bin_path = %#v, want /usr/local/bin/node_exporter (file-var НАПРЯМУЮ в .vars)", vars["bin_path"])
+		t.Fatalf("render_context.vars.bin_path = %#v, want /usr/local/bin/node_exporter (file-var DIRECTLY in .vars)", vars["bin_path"])
 	}
 
 	// Execute with the same engine as Soul, render_context as the ROOT.
@@ -485,10 +485,10 @@ func TestDestinyFileVars_InRenderedTemplateContext(t *testing.T) {
 	}
 	out, err := engine.Render(tasks[0].Params.GetFields()[paramTemplateContent].GetStringValue(), rc)
 	if err != nil {
-		t.Fatalf("soul-render упал (.vars.bin_path недоступен?): %v", err)
+		t.Fatalf("soul-render failed (.vars.bin_path unavailable?): %v", err)
 	}
 	if !strings.Contains(out, "ExecStart=/usr/local/bin/node_exporter") {
-		t.Errorf(".vars.bin_path (file-var) не подставлен:\n%s", out)
+		t.Errorf(".vars.bin_path (file-var) not substituted:\n%s", out)
 	}
 }
 
@@ -536,10 +536,10 @@ func TestDestinyFileVars_TaskVarsOverrideFileInRenderContext(t *testing.T) {
 	}
 	vars, _ := tasks[0].Params.GetFields()[paramRenderContext].GetStructValue().AsMap()["vars"].(map[string]any)
 	if vars["bin_path"] != "/from/task" {
-		t.Errorf("render_context.vars.bin_path = %#v, want /from/task (task-var override file-var, Вариант A)", vars["bin_path"])
+		t.Errorf("render_context.vars.bin_path = %#v, want /from/task (task-var override file-var, Variant A)", vars["bin_path"])
 	}
 	if vars["extra"] != "/file-only" {
-		t.Errorf("render_context.vars.extra = %#v, want /file-only (file-var без одноимённого task-var)", vars["extra"])
+		t.Errorf("render_context.vars.extra = %#v, want /file-only (file-var without a matching task-var)", vars["extra"])
 	}
 }
 
@@ -571,7 +571,7 @@ func TestDestinyFileVars_PerHost(t *testing.T) {
 		t.Errorf("host a vars.family = %v, want debian", got["a"]["family"])
 	}
 	if got["b"]["family"] != "rhel" {
-		t.Errorf("host b vars.family = %v, want rhel (per-host резолв)", got["b"]["family"])
+		t.Errorf("host b vars.family = %v, want rhel (per-host resolve)", got["b"]["family"])
 	}
 }
 
@@ -608,10 +608,10 @@ func TestDestinyFileVars_StagedInvariant(t *testing.T) {
 	}
 	for _, key := range []string{"acl", "family"} {
 		if p0["a"][key] != p1["a"][key] {
-			t.Errorf("vars.%s расходится P0=%v P1=%v — file-vars обязаны быть инвариантны по Passage", key, p0["a"][key], p1["a"][key])
+			t.Errorf("vars.%s diverges P0=%v P1=%v - file-vars must be invariant across Passage", key, p0["a"][key], p1["a"][key])
 		}
 	}
 	if p0["a"]["acl"] != "/acl/dave" || p0["a"]["family"] != "debian" {
-		t.Errorf("file-vars резолв = %v, want acl=/acl/dave family=debian", p0["a"])
+		t.Errorf("file-vars resolve = %v, want acl=/acl/dave family=debian", p0["a"])
 	}
 }

@@ -56,11 +56,11 @@ func TestBuildHostReport_PerHostDifferentWhere_NoMismatch(t *testing.T) {
 		}
 		got := hr.Tasks[0]
 		if got.Idx != 1 {
-			t.Errorf("★ %s: task.Idx = %d, want 1 (глобальный plan_index, не локальный task_idx=%d)",
+			t.Errorf("★ %s: task.Idx = %d, want 1 (global plan_index, not local task_idx=%d)",
 				c.sid, got.Idx, c.register.TaskIdx)
 		}
 		if got.Module != "core.exec.run" {
-			t.Errorf("★ %s: task.Module = %q, want core.exec.run (резолв по plan_index, не локальному task_idx)",
+			t.Errorf("★ %s: task.Module = %q, want core.exec.run (resolved by plan_index, not by local task_idx)",
 				c.sid, got.Module)
 		}
 		if got.Action != "probe" {
@@ -116,19 +116,19 @@ func TestBuildHostReport_FailureBranch_GlobalPlanIndex(t *testing.T) {
 	failureMap := buildTaskFailureMap([]applyrun.HostStatus{hs})
 	failure := failureMap["host-B"]
 	if failure.planIndex != 2 {
-		t.Fatalf("★ hostTaskFailure.planIndex = %d, want 2 (глобальный failed_plan_index, не локальный task_idx=0)", failure.planIndex)
+		t.Fatalf("★ hostTaskFailure.planIndex = %d, want 2 (global failed_plan_index, not local task_idx=0)", failure.planIndex)
 	}
 
 	hr := buildHostReport(hs, taskMeta, nil, failure)
 	if len(hr.Tasks) != 1 {
-		t.Fatalf("tasks len = %d, want 1 (одна failure-строка)", len(hr.Tasks))
+		t.Fatalf("tasks len = %d, want 1 (one failure row)", len(hr.Tasks))
 	}
 	got := hr.Tasks[0]
 	if got.Idx != 2 {
-		t.Errorf("★ failure task.Idx = %d, want 2 (глобальный plan_index, не локальный task_idx=0)", got.Idx)
+		t.Errorf("★ failure task.Idx = %d, want 2 (global plan_index, not local task_idx=0)", got.Idx)
 	}
 	if got.Module != "core.exec.run" {
-		t.Errorf("★ failure task.Module = %q, want core.exec.run (резолв по plan_index; реверс по task_idx=0 дал бы core.file.present)", got.Module)
+		t.Errorf("★ failure task.Module = %q, want core.exec.run (resolved by plan_index; reversing by task_idx=0 would give core.file.present)", got.Module)
 	}
 	if got.Action != "the-failing-probe" {
 		t.Errorf("★ failure task.Action = %q, want the-failing-probe", got.Action)
@@ -159,9 +159,9 @@ func TestBuildTaskFailureMap_FallbackToTaskIdx(t *testing.T) {
 	m := buildTaskFailureMap([]applyrun.HostStatus{hs})
 	f, ok := m["host-legacy"]
 	if !ok {
-		t.Fatal("failure-строка потеряна при NULL failed_plan_index (нет fallback на task_idx)")
+		t.Fatal("failure row was lost with NULL failed_plan_index (no fallback to task_idx)")
 	}
 	if f.planIndex != 3 {
-		t.Errorf("fallback planIndex = %d, want 3 (== task_idx для N=1)", f.planIndex)
+		t.Errorf("fallback planIndex = %d, want 3 (== task_idx for N=1)", f.planIndex)
 	}
 }

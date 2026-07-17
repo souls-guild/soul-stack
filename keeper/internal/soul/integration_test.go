@@ -159,7 +159,7 @@ func TestIntegration_Insert_Traits_RoundTrip(t *testing.T) {
 		t.Fatalf("SelectBySID: %v", err)
 	}
 	if got.Traits == nil {
-		t.Fatalf("Traits = nil после round-trip, want map")
+		t.Fatalf("Traits = nil after round-trip, want map")
 	}
 	if got.Traits["namespace"] != "dba-ns" {
 		t.Errorf("Traits[namespace] = %v, want dba-ns", got.Traits["namespace"])
@@ -175,7 +175,7 @@ func TestIntegration_Insert_Traits_RoundTrip(t *testing.T) {
 
 	// Coven is unaffected by the parallel traits axis.
 	if len(got.Coven) != 1 || got.Coven[0] != "prod" {
-		t.Errorf("Coven = %v, want [prod] (traits — отдельная ось)", got.Coven)
+		t.Errorf("Coven = %v, want [prod] (traits are a separate axis)", got.Coven)
 	}
 
 	// Host without traits → empty map (jsonb '{}'), not nil.
@@ -188,7 +188,7 @@ func TestIntegration_Insert_Traits_RoundTrip(t *testing.T) {
 		t.Fatalf("SelectBySID(bare): %v", err)
 	}
 	if gotBare.Traits == nil || len(gotBare.Traits) != 0 {
-		t.Errorf("bare Traits = %v, want пустой map", gotBare.Traits)
+		t.Errorf("bare Traits = %v, want empty map", gotBare.Traits)
 	}
 }
 
@@ -339,7 +339,7 @@ func TestIntegration_SelectAll_Scope(t *testing.T) {
 		t.Fatalf("SelectAll(scope=empty): %v", err)
 	}
 	if emptyTotal != 0 || len(empty) != 0 {
-		t.Errorf("empty scope total/len = %d/%d, want 0/0 (fail-closed, НЕ весь флот)", emptyTotal, len(empty))
+		t.Errorf("empty scope total/len = %d/%d, want 0/0 (fail-closed, NOT the entire fleet)", emptyTotal, len(empty))
 	}
 
 	// filter ∩ scope: an operator with scope=[prod] filtering coven=staging → empty
@@ -349,7 +349,7 @@ func TestIntegration_SelectAll_Scope(t *testing.T) {
 		t.Fatalf("SelectAll(filter=staging ∩ scope=prod): %v", err)
 	}
 	if crossTotal != 0 || len(cross) != 0 {
-		t.Errorf("filter=staging ∩ scope=prod total/len = %d/%d, want 0/0 (scope не расширяется фильтром)", crossTotal, len(cross))
+		t.Errorf("filter=staging cap scope=prod total/len = %d/%d, want 0/0 (scope is not widened by filter)", crossTotal, len(cross))
 	}
 }
 
@@ -401,7 +401,7 @@ func TestIntegration_ListForScopeEval_KeysetNoDupesNoGaps(t *testing.T) {
 		}
 		for _, r := range rows {
 			if _, dup := got[r.SID]; dup {
-				t.Fatalf("ДУБЛЬ: %s встретился дважды (keyset-граница протекла)", r.SID)
+				t.Fatalf("DUPLICATE: %s encountered twice (keyset boundary leaked)", r.SID)
 			}
 			got[r.SID] = struct{}{}
 		}
@@ -412,15 +412,15 @@ func TestIntegration_ListForScopeEval_KeysetNoDupesNoGaps(t *testing.T) {
 			break
 		}
 		if pages > 20 {
-			t.Fatal("курсор не сходится (>20 страниц на 9 хостах)")
+			t.Fatal("cursor does not converge (>20 pages for 9 hosts)")
 		}
 	}
 	if len(got) != len(want) {
-		t.Fatalf("собрано %d хостов, want %d — есть пропуски/дубли", len(got), len(want))
+		t.Fatalf("collected %d hosts, want %d - there are gaps/duplicates", len(got), len(want))
 	}
 	for sid := range want {
 		if _, ok := got[sid]; !ok {
-			t.Errorf("хост %s пропущен keyset-обходом", sid)
+			t.Errorf("host %s skipped by keyset traversal", sid)
 		}
 	}
 }
@@ -453,7 +453,7 @@ func TestIntegration_ListForScopeEval_OrderStable(t *testing.T) {
 	wantOrder := []string{"c.example.com", "a.example.com", "b.example.com"}
 	for i, w := range wantOrder {
 		if rows[i].SID != w {
-			t.Errorf("rows[%d] = %s, want %s (порядок registered_at DESC, sid ASC нарушен)", i, rows[i].SID, w)
+			t.Errorf("rows[%d] = %s, want %s (order registered_at DESC, sid ASC violated)", i, rows[i].SID, w)
 		}
 	}
 }
@@ -497,7 +497,7 @@ func TestIntegration_ListForScopeEval_FilterPushdown(t *testing.T) {
 		t.Errorf("status=connected: got %d, want 2 (%v)", len(got), got)
 	}
 	if _, ok := got["web-02.example.com"]; ok {
-		t.Error("status=connected пропустил pending web-02 — фильтр не применён в SQL")
+		t.Error("status=connected let through pending web-02 - filter not applied in SQL")
 	}
 	// transport=ssh → only ssh-03.
 	got = collect(ListFilter{Transport: TransportSSH})
@@ -505,7 +505,7 @@ func TestIntegration_ListForScopeEval_FilterPushdown(t *testing.T) {
 		t.Errorf("transport=ssh: got %d, want 1 (%v)", len(got), got)
 	}
 	if _, ok := got["ssh-03.example.com"]; !ok {
-		t.Error("transport=ssh не вернул ssh-03")
+		t.Error("transport=ssh did not return ssh-03")
 	}
 	// coven=dev → only web-02.
 	got = collect(ListFilter{Coven: "dev"})
@@ -513,7 +513,7 @@ func TestIntegration_ListForScopeEval_FilterPushdown(t *testing.T) {
 		t.Errorf("coven=dev: got %d, want 1 (%v)", len(got), got)
 	}
 	if _, ok := got["web-02.example.com"]; !ok {
-		t.Error("coven=dev не вернул web-02")
+		t.Error("coven=dev did not return web-02")
 	}
 	// Combined (AND): connected + prod + agent → only web-01.
 	got = collect(ListFilter{Status: StatusConnected, Coven: "prod", Transport: TransportAgent})
@@ -521,7 +521,7 @@ func TestIntegration_ListForScopeEval_FilterPushdown(t *testing.T) {
 		t.Errorf("combined: got %d, want 1 (%v)", len(got), got)
 	}
 	if _, ok := got["web-01.example.com"]; !ok {
-		t.Error("combined фильтр не вернул web-01")
+		t.Error("combined filter did not return web-01")
 	}
 }
 
@@ -613,7 +613,7 @@ func TestIntegration_SelectStats_Scope(t *testing.T) {
 		t.Fatalf("SelectStats(scope=prod): %v", err)
 	}
 	if prod.Total != 3 {
-		t.Errorf("scope=prod Total = %d, want 3 (хосты вне scope НЕ в агрегате)", prod.Total)
+		t.Errorf("scope=prod Total = %d, want 3 (hosts outside scope are NOT in the aggregate)", prod.Total)
 	}
 	if prod.ByStatus[StatusConnected] != 1 || prod.ByStatus[StatusDisconnected] != 1 || prod.ByStatus[StatusPending] != 1 {
 		t.Errorf("scope=prod ByStatus = %v, want connected:1 disconnected:1 pending:1", prod.ByStatus)
@@ -626,14 +626,14 @@ func TestIntegration_SelectStats_Scope(t *testing.T) {
 		t.Errorf("scope=prod ByCoven = %v, want prod:3 dc-eu:1", prod.ByCoven)
 	}
 	if _, leaked := prod.ByCoven["staging"]; leaked {
-		t.Errorf("scope=prod ByCoven просочился staging: %v (scope-leak в агрегате)", prod.ByCoven)
+		t.Errorf("scope=prod ByCoven leaked staging: %v (scope-leak in the aggregate)", prod.ByCoven)
 	}
 	if _, leaked := prod.ByCoven["dev"]; leaked {
-		t.Errorf("scope=prod ByCoven просочился dev: %v (scope-leak в агрегате)", prod.ByCoven)
+		t.Errorf("scope=prod ByCoven leaked dev: %v (scope-leak in the aggregate)", prod.ByCoven)
 	}
 	// stale_count: only prod-2 (prod-3 has no last_seen so is NOT stale; staging/dev are stale but outside scope).
 	if prod.StaleCount != 1 {
-		t.Errorf("scope=prod StaleCount = %d, want 1 (только prod-2; хосты вне scope не считаются)", prod.StaleCount)
+		t.Errorf("scope=prod StaleCount = %d, want 1 (only prod-2; hosts outside scope are not counted)", prod.StaleCount)
 	}
 
 	// unrestricted → the whole fleet: 5 hosts, 3 stale (prod-2, stg-1, dev-1).
@@ -654,7 +654,7 @@ func TestIntegration_SelectStats_Scope(t *testing.T) {
 		t.Fatalf("SelectStats(empty scope): %v", err)
 	}
 	if empty.Total != 0 || empty.StaleCount != 0 || len(empty.ByStatus) != 0 || len(empty.ByCoven) != 0 {
-		t.Errorf("empty scope = %+v, want всё нули (fail-closed, НЕ весь флот)", empty)
+		t.Errorf("empty scope = %+v, want all zeros (fail-closed, NOT the entire fleet)", empty)
 	}
 }
 

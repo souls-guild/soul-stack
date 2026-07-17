@@ -25,10 +25,10 @@ func TestResolveInputValues_PrefillFromStateNotLeaked(t *testing.T) {
 		t.Fatalf("ResolveInputValues: %v", err)
 	}
 	if _, present := got["redis_version"]; present {
-		t.Fatalf("prefill_from_state протёк в эффективный input: redis_version=%#v (ожидалось отсутствие)", got["redis_version"])
+		t.Fatalf("prefill_from_state leaked into the effective input: redis_version=%#v (expected absence)", got["redis_version"])
 	}
 	if len(got) != 0 {
-		t.Fatalf("эффективный input не пуст: %#v", got)
+		t.Fatalf("effective input is not empty: %#v", got)
 	}
 }
 
@@ -75,7 +75,7 @@ func TestValidatePrefillFromState_Accepts(t *testing.T) {
 		diags := diagsForInput(t, c)
 		for _, d := range diags {
 			if d.Code == "input_prefill_from_state_invalid" {
-				t.Fatalf("валидный prefill_from_state отвергнут: %s\n---\n%s", d.Message, c)
+				t.Fatalf("valid prefill_from_state rejected: %s\n---\n%s", d.Message, c)
 			}
 		}
 	}
@@ -108,7 +108,7 @@ func TestValidatePrefillFromState_Rejects(t *testing.T) {
 	}
 	for _, c := range cases {
 		if !hasDiagCode(diagsForInput(t, c), "input_prefill_from_state_invalid") {
-			t.Fatalf("невалидный prefill_from_state НЕ отвергнут:\n---\n%s", c)
+			t.Fatalf("invalid prefill_from_state NOT rejected:\n---\n%s", c)
 		}
 	}
 }
@@ -122,7 +122,7 @@ func TestPrefillFromState_KnownKey(t *testing.T) {
 `
 	for _, d := range diagsForInput(t, c) {
 		if d.Code == "unknown_key" {
-			t.Fatalf("prefill_from_state поднял unknown_key: %s", d.Message)
+			t.Fatalf("prefill_from_state raised unknown_key: %s", d.Message)
 		}
 	}
 }

@@ -76,10 +76,10 @@ func TestResolvePkgMgr_FactPrimary(t *testing.T) {
 	r.Fallback = util.Result{ExitCode: 127} // any `command -v`/`which` fails
 	got := util.ResolvePkgMgr(context.Background(), r, util.PkgMgrApk)
 	if got != util.PkgMgrApk {
-		t.Fatalf("ResolvePkgMgr=%q want apk (из факта)", got)
+		t.Fatalf("ResolvePkgMgr=%q want apk (from the fact)", got)
 	}
 	if len(r.Calls) != 0 {
-		t.Fatalf("факт primary: runtime-детект не должен вызываться, calls=%v", r.Calls)
+		t.Fatalf("fact primary: runtime detection should not be called, calls=%v", r.Calls)
 	}
 }
 
@@ -90,7 +90,7 @@ func TestResolvePkgMgr_FallbackOnEmpty(t *testing.T) {
 	r.On("command -v apk", util.Result{ExitCode: 0})
 	got := util.ResolvePkgMgr(context.Background(), r, util.PkgMgrUnknown)
 	if got != util.PkgMgrApk {
-		t.Fatalf("ResolvePkgMgr=%q want apk (fallback-детект)", got)
+		t.Fatalf("ResolvePkgMgr=%q want apk (fallback detect)", got)
 	}
 }
 
@@ -103,10 +103,10 @@ func TestResolveInitSystem_FactPrimary(t *testing.T) {
 	r.Fallback = util.Result{ExitCode: 127}
 	got := util.ResolveInitSystem(context.Background(), r, util.InitSystemOpenRC)
 	if got != util.InitSystemOpenRC {
-		t.Fatalf("ResolveInitSystem=%q want openrc (из факта)", got)
+		t.Fatalf("ResolveInitSystem=%q want openrc (from the fact)", got)
 	}
 	if len(r.Calls) != 0 {
-		t.Fatalf("факт primary: runtime-детект не должен вызываться, calls=%v", r.Calls)
+		t.Fatalf("fact primary: runtime detection should not be called, calls=%v", r.Calls)
 	}
 }
 
@@ -117,7 +117,7 @@ func TestResolveInitSystem_FallbackOnEmpty(t *testing.T) {
 	r.On("systemctl --version", util.Result{ExitCode: 0})
 	got := util.ResolveInitSystem(context.Background(), r, util.InitSystemUnknown)
 	if got != util.InitSystemSystemd {
-		t.Fatalf("ResolveInitSystem=%q want systemd (fallback-детект)", got)
+		t.Fatalf("ResolveInitSystem=%q want systemd (fallback detect)", got)
 	}
 }
 

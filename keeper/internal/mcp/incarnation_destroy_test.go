@@ -107,7 +107,7 @@ func TestToolsCall_IncarnationDestroy_Teardown_Success(t *testing.T) {
 	}
 	// audit destroy_started (source=mcp), force=false.
 	if !recHasEvent(rec, audit.EventIncarnationDestroyStarted) {
-		t.Errorf("ожидался destroy_started")
+		t.Errorf("expected destroy_started")
 	}
 	ev := recEvent(rec, audit.EventIncarnationDestroyStarted)
 	if ev == nil || ev.Source != audit.SourceMCP {
@@ -134,10 +134,10 @@ func TestToolsCall_IncarnationDestroy_NoScenario_NoForce(t *testing.T) {
 		t.Errorf("data.code = %q, want validation-failed", data.Code)
 	}
 	if destroyer.calls != 0 {
-		t.Error("teardown must NOT start (отказ pre-check)")
+		t.Error("teardown must NOT start (pre-check denial)")
 	}
 	if len(rec.events) != 0 {
-		t.Error("отказ pre-check не должен писать audit")
+		t.Error("pre-check denial must not write audit")
 	}
 }
 
@@ -154,14 +154,14 @@ func TestToolsCall_IncarnationDestroy_Force_Delete(t *testing.T) {
 		t.Fatalf("unexpected error: %+v", resp.Error)
 	}
 	if destroyer.calls != 0 {
-		t.Error("force пропускает teardown")
+		t.Error("force skips teardown")
 	}
 	// destroy_started (force=true) + destroy_completed (force-DELETE).
 	if !recHasEvent(rec, audit.EventIncarnationDestroyStarted) {
-		t.Errorf("ожидался destroy_started")
+		t.Errorf("expected destroy_started")
 	}
 	if !recHasEvent(rec, audit.EventIncarnationDestroyCompleted) {
-		t.Errorf("ожидался destroy_completed (force-DELETE)")
+		t.Errorf("expected destroy_completed (force-DELETE)")
 	}
 	if ev := recEvent(rec, audit.EventIncarnationDestroyStarted); ev == nil || ev.Payload["force"] != true {
 		t.Errorf("destroy_started force payload = %v, want true", ev)
@@ -183,7 +183,7 @@ func TestToolsCall_IncarnationDestroy_Force_DeleteNoOp(t *testing.T) {
 		t.Fatalf("unexpected error: %+v", resp.Error)
 	}
 	if recHasEvent(rec, audit.EventIncarnationDestroyCompleted) {
-		t.Errorf("destroy_completed не должен писаться при no-op DELETE")
+		t.Errorf("destroy_completed must not be written on no-op DELETE")
 	}
 }
 
@@ -203,7 +203,7 @@ func TestToolsCall_IncarnationDestroy_NotDestroyable(t *testing.T) {
 		t.Errorf("data.code = %q, want incarnation-locked", data.Code)
 	}
 	if destroyer.calls != 0 {
-		t.Error("applying не запускает teardown")
+		t.Error("applying must not start teardown")
 	}
 }
 

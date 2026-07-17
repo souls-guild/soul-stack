@@ -105,10 +105,10 @@ func TestSigilInvalidate_NoSelfFilter(t *testing.T) {
 	select {
 	case _, ok := <-sub.Channel():
 		if !ok {
-			t.Fatal("channel closed before self message — self не должен фильтроваться")
+			t.Fatal("channel closed before self message - self should not be filtered")
 		}
 	case <-time.After(2 * time.Second):
-		t.Fatal("собственный invalidate не пришёл (а должен — self-filter-а нет)")
+		t.Fatal("own invalidate did not arrive (it should - there is no self-filter)")
 	}
 }
 

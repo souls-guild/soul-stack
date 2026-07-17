@@ -128,7 +128,7 @@ func TestPGRouter_PGError_PropagatesUnknown(t *testing.T) {
 		t.Fatal("expected error")
 	}
 	if errors.Is(err, ErrProviderNotRouted) {
-		t.Error("PG transport error не должен маскироваться под ErrProviderNotRouted")
+		t.Error("PG transport error should not be masked as ErrProviderNotRouted")
 	}
 	if src != SourceUnknown {
 		t.Errorf("source = %v, want SourceUnknown", src)
@@ -180,10 +180,10 @@ func TestDispatcher_MultiProvider_LookupByName(t *testing.T) {
 	})
 
 	if !disp.HasProvider("static") || !disp.HasProvider("vault") {
-		t.Error("HasProvider не видит обоих провайдеров")
+		t.Error("HasProvider does not see both providers")
 	}
 	if disp.HasProvider("ghost") {
-		t.Error("HasProvider даёт true для незарегистрированного имени")
+		t.Error("HasProvider returns true for an unregistered name")
 	}
 	names := disp.ProviderNames()
 	if len(names) != 2 {
@@ -236,10 +236,10 @@ func TestDispatcher_RefreshProvider_PerNameIsolated(t *testing.T) {
 	}
 	// static was swapped, vault stayed the same.
 	if providerForTest(disp, "static") != newA {
-		t.Errorf("static не подменился")
+		t.Errorf("static was not replaced")
 	}
 	if providerForTest(disp, "vault") != provB {
-		t.Errorf("vault затронут чужим refresh: должен остаться provB")
+		t.Errorf("vault affected by an unrelated refresh: should remain provB")
 	}
 }
 
@@ -278,6 +278,6 @@ func TestDispatcher_Concurrent_ReadWrite(t *testing.T) {
 	}
 	wg.Wait()
 	if refreshCount.Load() == 0 {
-		t.Error("ни один RefreshProvider не прошёл")
+		t.Error("no RefreshProvider went through")
 	}
 }

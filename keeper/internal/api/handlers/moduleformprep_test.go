@@ -29,7 +29,7 @@ func formPrepProblemType(t *testing.T, err error) string {
 	}
 	d, ok := AsProblemDetails(err)
 	if !ok {
-		t.Fatalf("ошибка не *problemError: %T %v", err, err)
+		t.Fatalf("error is not *problemError: %T %v", err, err)
 	}
 	return d.Type
 }
@@ -94,7 +94,7 @@ func TestFormPrepTyped_SourceValidation(t *testing.T) {
 			h := NewModuleFormPrepHandler(&stubFormPrepResolver{}, nil)
 			_, err := h.FormPrepTyped(context.Background(), c.in)
 			if got := formPrepProblemType(t, err); got != problem.TypeValidationFailed {
-				t.Fatalf("problem.Type = %q, want %q (невалидный source → 422)", got, problem.TypeValidationFailed)
+				t.Fatalf("problem.Type = %q, want %q (invalid source -> 422)", got, problem.TypeValidationFailed)
 			}
 		})
 	}

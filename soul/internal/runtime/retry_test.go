@@ -63,7 +63,7 @@ func TestRetry_NoUntil_SecondAttemptOK(t *testing.T) {
 	}
 	// One TaskEvent per task_idx — intermediate attempts aren't emitted outward.
 	if len(sink.taskEvents) != 1 {
-		t.Errorf("taskEvents = %d, want 1 (промежуточные попытки не эмитятся)", len(sink.taskEvents))
+		t.Errorf("taskEvents = %d, want 1 (intermediate attempts are not emitted)", len(sink.taskEvents))
 	}
 }
 
@@ -128,7 +128,7 @@ func TestRetry_TimedOutAttempt_Retries(t *testing.T) {
 		t.Fatalf("Run: %v", err)
 	}
 	if got := atomic.LoadInt32(&attempts); got != 2 {
-		t.Errorf("attempts = %d, want 2 (TIMED_OUT 1-я ретраится, 2-я OK)", got)
+		t.Errorf("attempts = %d, want 2 (TIMED_OUT retries once, 2nd OK)", got)
 	}
 	if got := sink.taskEvents[0].GetStatus(); got != keeperv1.TaskStatus_TASK_STATUS_OK {
 		t.Errorf("status = %v, want OK", got)
@@ -156,7 +156,7 @@ func TestRetry_AllTimedOut_FinalTimedOut(t *testing.T) {
 		t.Errorf("attempts = %d, want 2", got)
 	}
 	if got := sink.taskEvents[0].GetStatus(); got != keeperv1.TaskStatus_TASK_STATUS_TIMED_OUT {
-		t.Errorf("status = %v, want TIMED_OUT (не схлопывать в FAILED)", got)
+		t.Errorf("status = %v, want TIMED_OUT (must not collapse into FAILED)", got)
 	}
 }
 
@@ -178,7 +178,7 @@ func TestUntil_TrueFirstAttempt_Exits(t *testing.T) {
 		t.Fatalf("Run: %v", err)
 	}
 	if got := atomic.LoadInt32(&attempts); got != 1 {
-		t.Errorf("attempts = %d, want 1 (until-true сразу)", got)
+		t.Errorf("attempts = %d, want 1 (until-true immediately)", got)
 	}
 	if got := sink.taskEvents[0].GetStatus(); got != keeperv1.TaskStatus_TASK_STATUS_CHANGED {
 		t.Errorf("status = %v, want CHANGED", got)
@@ -209,7 +209,7 @@ func TestUntil_NeverTrue_Exhausted(t *testing.T) {
 	}
 	ev := sink.taskEvents[0]
 	if ev.GetStatus() != keeperv1.TaskStatus_TASK_STATUS_FAILED {
-		t.Errorf("status = %v, want FAILED (until не стал truthy)", ev.GetStatus())
+		t.Errorf("status = %v, want FAILED (until never became truthy)", ev.GetStatus())
 	}
 	if ev.GetError().GetCode() != "flowcontrol.until_exhausted" {
 		t.Errorf("error.code = %q, want flowcontrol.until_exhausted", ev.GetError().GetCode())
@@ -236,10 +236,10 @@ func TestUntil_TrueButFailed_FinalFailed(t *testing.T) {
 		t.Fatalf("Run: %v", err)
 	}
 	if got := atomic.LoadInt32(&attempts); got != 1 {
-		t.Errorf("attempts = %d, want 1 (until-true сразу — self.failed==true)", got)
+		t.Errorf("attempts = %d, want 1 (until-true immediately - self.failed==true)", got)
 	}
 	if got := sink.taskEvents[0].GetStatus(); got != keeperv1.TaskStatus_TASK_STATUS_FAILED {
-		t.Errorf("status = %v, want FAILED (until не override-ит failed)", got)
+		t.Errorf("status = %v, want FAILED (until does not override failed)", got)
 	}
 }
 
@@ -299,14 +299,14 @@ func TestUntil_ChangedWhenError_PreservesCode(t *testing.T) {
 		t.Fatalf("Run: %v", err)
 	}
 	if got := atomic.LoadInt32(&attempts); got != 1 {
-		t.Errorf("attempts = %d, want 1 (терминальная ошибка changed_when не ретраится)", got)
+		t.Errorf("attempts = %d, want 1 (terminal changed_when error is not retried)", got)
 	}
 	ev := sink.taskEvents[0]
 	if ev.GetStatus() != keeperv1.TaskStatus_TASK_STATUS_FAILED {
 		t.Errorf("status = %v, want FAILED", ev.GetStatus())
 	}
 	if ev.GetError().GetCode() != "flowcontrol.changed_when_error" {
-		t.Errorf("error.code = %q, want flowcontrol.changed_when_error (until не должен затирать его на until_error)", ev.GetError().GetCode())
+		t.Errorf("error.code = %q, want flowcontrol.changed_when_error (until must not overwrite it with until_error)", ev.GetError().GetCode())
 	}
 }
 
@@ -330,7 +330,7 @@ func TestRetry_FailedWhenFalse_SingleAttempt(t *testing.T) {
 		t.Fatalf("Run: %v", err)
 	}
 	if got := atomic.LoadInt32(&attempts); got != 1 {
-		t.Errorf("attempts = %d, want 1 (ignore_errors побеждает retry)", got)
+		t.Errorf("attempts = %d, want 1 (ignore_errors wins over retry)", got)
 	}
 	if got := sink.taskEvents[0].GetStatus(); got != keeperv1.TaskStatus_TASK_STATUS_OK {
 		t.Errorf("status = %v, want OK", got)
@@ -371,7 +371,7 @@ func TestRetry_CancelDuringDelay_NotBlocked(t *testing.T) {
 	select {
 	case <-done:
 	case <-time.After(5 * time.Second):
-		t.Fatal("Run завис на полный retry_delay — cancel во время delay не прервал петлю")
+		t.Fatal("Run hung for the full retry_delay - cancel during delay did not interrupt the loop")
 	}
 
 	if got := sink.taskEvents[0].GetStatus(); got != keeperv1.TaskStatus_TASK_STATUS_CANCELLED {
@@ -382,7 +382,7 @@ func TestRetry_CancelDuringDelay_NotBlocked(t *testing.T) {
 	}
 	// Only one attempt should have run (delay was interrupted before the 2nd).
 	if got := atomic.LoadInt32(&attempts); got != 1 {
-		t.Errorf("attempts = %d, want 1 (cancel в первом delay)", got)
+		t.Errorf("attempts = %d, want 1 (cancel during first delay)", got)
 	}
 }
 
@@ -408,10 +408,10 @@ func TestRetry_ExhaustedTriggersOnfail(t *testing.T) {
 		t.Fatalf("Run: %v", err)
 	}
 	if got := atomic.LoadInt32(&attempts); got != 2 {
-		t.Errorf("A attempts = %d, want 2 (retry исчерпан)", got)
+		t.Errorf("A attempts = %d, want 2 (retry exhausted)", got)
 	}
 	if atomic.LoadInt32(&rescueCalled) != 1 {
-		t.Errorf("rescue не сработал на retries-exhausted FAILED")
+		t.Errorf("rescue did not fire on retries-exhausted FAILED")
 	}
 	if got := sink.taskEvents[0].GetStatus(); got != keeperv1.TaskStatus_TASK_STATUS_FAILED {
 		t.Errorf("A status = %v, want FAILED", got)

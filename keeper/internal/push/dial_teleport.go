@@ -118,13 +118,13 @@ type TeleportDialerConfig struct {
 // stream), closed in Session.Close() — see [teleportSession].
 func NewTeleportDialer(cfg TeleportDialerConfig) (Dialer, error) {
 	if cfg.ProxyAddr == "" {
-		return nil, errors.New("push: NewTeleportDialer: proxy_addr пуст")
+		return nil, errors.New("push: NewTeleportDialer: proxy_addr is empty")
 	}
 	if cfg.IdentityFile == "" {
-		return nil, errors.New("push: NewTeleportDialer: identity_file пуст")
+		return nil, errors.New("push: NewTeleportDialer: identity_file is empty")
 	}
 	if cfg.Cluster == "" {
-		return nil, errors.New("push: NewTeleportDialer: cluster пуст")
+		return nil, errors.New("push: NewTeleportDialer: cluster is empty")
 	}
 
 	// Preflight: confirm once that the identity file exists and parses
@@ -312,7 +312,7 @@ func applyProxyTLSTrustALPN(tlsConfig *tls.Config, identityCAPEM [][]byte) error
 	}
 	for _, caPEM := range identityCAPEM {
 		if !pool.AppendCertsFromPEM(caPEM) {
-			return fmt.Errorf("alpn-trust: невалидный identity-CA PEM")
+			return fmt.Errorf("alpn-trust: invalid identity-CA PEM")
 		}
 	}
 	tlsConfig.RootCAs = pool
@@ -354,7 +354,7 @@ func newTeleportSSHClient(ctx context.Context, conn net.Conn, addr, user string,
 	sshClientConfig := proxyClient.SSHConfig(user)
 	sshConn, chans, reqs, err := apissh.NewClientConn(ctx, conn, addr, sshClientConfig)
 	if err != nil {
-		return nil, fmt.Errorf("push: teleport SSH-handshake с %s: %w", addr, err)
+		return nil, fmt.Errorf("push: teleport SSH handshake with %s: %w", addr, err)
 	}
 	return ssh.NewClient(sshConn, chans, reqs), nil
 }

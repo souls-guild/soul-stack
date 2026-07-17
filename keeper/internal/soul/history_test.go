@@ -133,25 +133,25 @@ func TestSelectHistory_MergeOrder(t *testing.T) {
 		t.Errorf("item1 errand-only fields leaked: %+v", items[1])
 	}
 	if items[1].FinishedAt != nil {
-		t.Errorf("item1 running должен иметь FinishedAt=nil, got %v", items[1].FinishedAt)
+		t.Errorf("item1 running should have FinishedAt=nil, got %v", items[1].FinishedAt)
 	}
 	// item[2] — errand e1.
 	if items[2].ID != "e1" || items[2].Status != "failed" {
 		t.Errorf("item2 = %+v", items[2])
 	}
 	if items[2].FinishedAt == nil {
-		t.Errorf("item2 terminal должен иметь FinishedAt")
+		t.Errorf("item2 terminal should have FinishedAt")
 	}
 
 	// UNION ALL of both sources + ORDER BY started_at DESC in the page SQL.
 	if !strings.Contains(db.querySQL, "FROM apply_runs") || !strings.Contains(db.querySQL, "FROM errands") {
-		t.Errorf("page SQL должен включать оба источника: %s", db.querySQL)
+		t.Errorf("page SQL should include both sources: %s", db.querySQL)
 	}
 	if !strings.Contains(db.querySQL, "UNION ALL") {
-		t.Errorf("page SQL должен быть UNION ALL: %s", db.querySQL)
+		t.Errorf("page SQL should be UNION ALL: %s", db.querySQL)
 	}
 	if !strings.Contains(db.querySQL, "ORDER BY started_at DESC") {
-		t.Errorf("page SQL должен сортировать started_at DESC: %s", db.querySQL)
+		t.Errorf("page SQL should sort by started_at DESC: %s", db.querySQL)
 	}
 }
 
@@ -165,13 +165,13 @@ func TestSelectHistory_FilterTypeScenarioOnly(t *testing.T) {
 		t.Fatalf("SelectHistory: %v", err)
 	}
 	if strings.Contains(db.querySQL, "FROM errands") {
-		t.Errorf("type=scenario не должен включать errands: %s", db.querySQL)
+		t.Errorf("type=scenario should not include errands: %s", db.querySQL)
 	}
 	if !strings.Contains(db.querySQL, "FROM apply_runs") {
-		t.Errorf("type=scenario должен включать apply_runs: %s", db.querySQL)
+		t.Errorf("type=scenario should include apply_runs: %s", db.querySQL)
 	}
 	if strings.Contains(db.querySQL, "UNION ALL") {
-		t.Errorf("один источник — без UNION ALL: %s", db.querySQL)
+		t.Errorf("single source - no UNION ALL: %s", db.querySQL)
 	}
 }
 
@@ -185,10 +185,10 @@ func TestSelectHistory_FilterTypeErrandOnly(t *testing.T) {
 		t.Fatalf("SelectHistory: %v", err)
 	}
 	if strings.Contains(db.querySQL, "FROM apply_runs") {
-		t.Errorf("type=errand не должен включать apply_runs: %s", db.querySQL)
+		t.Errorf("type=errand should not include apply_runs: %s", db.querySQL)
 	}
 	if !strings.Contains(db.querySQL, "FROM errands") {
-		t.Errorf("type=errand должен включать errands: %s", db.querySQL)
+		t.Errorf("type=errand should include errands: %s", db.querySQL)
 	}
 }
 
@@ -201,7 +201,7 @@ func TestSelectHistory_SinceFilter(t *testing.T) {
 		t.Fatalf("SelectHistory: %v", err)
 	}
 	if !strings.Contains(db.querySQL, "started_at > $2") {
-		t.Errorf("since должен добавить started_at > $2: %s", db.querySQL)
+		t.Errorf("since should add started_at > $2: %s", db.querySQL)
 	}
 	// args: $1=sid, $2=since, $3=limit, $4=offset.
 	if len(db.queryArgs) != 4 {
@@ -230,7 +230,7 @@ func TestSelectHistory_Pagination(t *testing.T) {
 		t.Errorf("LIMIT/OFFSET args = %v, want [_,25,50]", db.queryArgs)
 	}
 	if !strings.Contains(db.querySQL, "LIMIT $2 OFFSET $3") {
-		t.Errorf("page SQL LIMIT/OFFSET плейсхолдеры: %s", db.querySQL)
+		t.Errorf("page SQL LIMIT/OFFSET placeholders: %s", db.querySQL)
 	}
 }
 
@@ -305,9 +305,9 @@ func TestSelectHistory_VoyageBacklink(t *testing.T) {
 
 	// SQL form: both arms LEFT JOIN voyage_targets on their own dispatch references.
 	if !strings.Contains(db.querySQL, "LEFT JOIN voyage_targets vt ON vt.apply_id = apply_runs.apply_id") {
-		t.Errorf("scenario-плечо должно LEFT JOIN-ить voyage_targets по apply_id: %s", db.querySQL)
+		t.Errorf("scenario branch should LEFT JOIN voyage_targets by apply_id: %s", db.querySQL)
 	}
 	if !strings.Contains(db.querySQL, "LEFT JOIN voyage_targets vt ON vt.errand_id = errands.errand_id") {
-		t.Errorf("errand-плечо должно LEFT JOIN-ить voyage_targets по errand_id: %s", db.querySQL)
+		t.Errorf("errand branch should LEFT JOIN voyage_targets by errand_id: %s", db.querySQL)
 	}
 }

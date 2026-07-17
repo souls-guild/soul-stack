@@ -46,9 +46,9 @@ type inputVaultAuditCtx struct {
 // secret; the path is not secret (it's logged), but the operator-facing
 // error only carries the reason.
 var (
-	errInputVaultNoScope = errors.New("значение vault:-ref в input запрещено: поле без vault_scope (default-deny)")
-	errInputVaultOutOf   = errors.New("значение vault:-ref в input вне разрешённого vault_scope")
-	errInputVaultDenied  = errors.New("значение vault:-ref в input ведёт к запрещённому пути (deny-list)")
+	errInputVaultNoScope = errors.New("vault:-ref value in input is forbidden: field has no vault_scope (default-deny)")
+	errInputVaultOutOf   = errors.New("vault:-ref value in input is outside the allowed vault_scope")
+	errInputVaultDenied  = errors.New("vault:-ref value in input points to a forbidden path (deny-list)")
 )
 
 // newInputVaultResolver builds a config.InputVaultResolver for one run.
@@ -104,7 +104,7 @@ func buildInputVaultResolver(ctx context.Context, vc InputVaultReader, w audit.W
 			auditInputVault(ctx, w, ac, name, logical, "denied", "read_error", log)
 			// The Vault error is propagated without a secret value (ReadKV
 			// doesn't carry one anyway — only path/sentinel).
-			return nil, fmt.Errorf("input %q: чтение vault-ref: %w", name, err)
+			return nil, fmt.Errorf("input %q: reading vault-ref: %w", name, err)
 		}
 
 		val, err := selectVaultField(data, field)
@@ -128,7 +128,7 @@ func parseInputVaultRef(ref string) (logical, field string, err error) {
 	if i := strings.LastIndexByte(ref, '#'); i >= 0 {
 		body, field = ref[:i], ref[i+1:]
 		if field == "" {
-			return "", "", errors.New("vault-ref: пустое имя поля после '#'")
+			return "", "", errors.New("vault-ref: empty field name after '#'")
 		}
 	}
 	logical, perr := vault.ParseRef(body)
@@ -148,7 +148,7 @@ func selectVaultField(data map[string]any, field string) (any, error) {
 	}
 	v, ok := data[field]
 	if !ok {
-		return nil, fmt.Errorf("поле %q отсутствует в секрете", field)
+		return nil, fmt.Errorf("field %q is missing from the secret", field)
 	}
 	return v, nil
 }
@@ -186,7 +186,7 @@ func auditInputVault(ctx context.Context, w audit.Writer, ac inputVaultAuditCtx,
 		Payload:   payload,
 	}
 	if err := w.Write(ctx, ev); err != nil && log != nil {
-		log.Warn("scenario: запись audit input.vault_resolved провалена",
+		log.Warn("scenario: writing audit input.vault_resolved failed",
 			slog.String("field", field), slog.String("result", result), slog.Any("error", err))
 	}
 }

@@ -102,7 +102,7 @@ func TestBulkAssignTraits_RejectsReplaceMode(t *testing.T) {
 	_, err := BulkAssignTraits(nil, bulkFakePool{f}, BulkSelector{All: true},
 		BulkScope{Unrestricted: true}, TraitReplace, map[string]any{"k": "v"}, nil)
 	if err == nil {
-		t.Fatal("BulkAssignTraits with replace mode returned nil err (replace вынесен в BulkReplaceTraits)")
+		t.Fatal("BulkAssignTraits with replace mode returned nil err (replace moved to BulkReplaceTraits)")
 	}
 	if f.queryCalls != 0 || f.execCalls != 0 {
 		t.Errorf("DB touched on unsupported mode (queries=%d execs=%d)", f.queryCalls, f.execCalls)

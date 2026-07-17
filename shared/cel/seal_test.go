@@ -18,10 +18,10 @@ func TestDetectSealed_SecretInputDirect(t *testing.T) {
 	src := SealSources{SecretInputs: map[string]bool{"password": true}}
 
 	if !e.DetectSealed("${ input.password }", src) {
-		t.Fatal("input.password должен быть sealed")
+		t.Fatal("input.password should be sealed")
 	}
 	if e.DetectSealed("${ input.hostname }", src) {
-		t.Fatal("несекретный input.hostname НЕ должен быть sealed")
+		t.Fatal("non-secret input.hostname should NOT be sealed")
 	}
 }
 
@@ -29,17 +29,17 @@ func TestDetectSealed_PlainLiteralNotSealed(t *testing.T) {
 	e := newSealEngine(t)
 	src := SealSources{SecretInputs: map[string]bool{"password": true}}
 	if e.DetectSealed("just a config line", src) {
-		t.Fatal("чистый литерал без ${} не sealed")
+		t.Fatal("a plain literal without ${} is not sealed")
 	}
 }
 
 func TestDetectSealed_VaultCall(t *testing.T) {
 	e := newSealEngine(t)
 	if !e.DetectSealed("${ vault('secret/redis/admin').password }", SealSources{}) {
-		t.Fatal("vault(...) должен быть sealed")
+		t.Fatal("vault(...) should be sealed")
 	}
 	if !e.DetectSealed("${ vault('secret/redis/admin#password') }", SealSources{}) {
-		t.Fatal("vault(... #field) должен быть sealed")
+		t.Fatal("vault(... #field) should be sealed")
 	}
 }
 
@@ -48,11 +48,11 @@ func TestDetectSealed_TernaryReadsSecret(t *testing.T) {
 	src := SealSources{SecretInputs: map[string]bool{"tls_cert": true}}
 	// Ternary: the secret is read only in the then branch — the whole cell is still sealed.
 	if !e.DetectSealed("${ has(input.tls_cert) ? input.tls_cert : '' }", src) {
-		t.Fatal("тернарник, читающий secret-input в любой ветке, sealed")
+		t.Fatal("a ternary reading a secret-input in either branch is sealed")
 	}
 	// A ternary without a secret input — not sealed.
 	if e.DetectSealed("${ input.enabled ? 'on' : 'off' }", SealSources{SecretInputs: map[string]bool{"tls_cert": true}}) {
-		t.Fatal("тернарник без secret-чтения НЕ sealed")
+		t.Fatal("a ternary without a secret read is NOT sealed")
 	}
 }
 
@@ -61,7 +61,7 @@ func TestDetectSealed_MixedLiteralAndSecret(t *testing.T) {
 	src := SealSources{SecretInputs: map[string]bool{"password": true}}
 	// Concatenating literal + secret → the whole result is sealed (whole-value taint).
 	if !e.DetectSealed("requirepass ${ input.password }", src) {
-		t.Fatal("смешение литерала и secret-input → весь sealed")
+		t.Fatal("mixing a literal and secret-input -> the whole thing is sealed")
 	}
 }
 
@@ -72,13 +72,13 @@ func TestDetectSealed_TransitiveVarsCompute(t *testing.T) {
 		SealedCompute: map[string]bool{"token": true},
 	}
 	if !e.DetectSealed("${ vars.pw }", src) {
-		t.Fatal("vars.<sealed> транзитивно sealed")
+		t.Fatal("vars.<sealed> is transitively sealed")
 	}
 	if !e.DetectSealed("${ compute.token }", src) {
-		t.Fatal("compute.<sealed> транзитивно sealed")
+		t.Fatal("compute.<sealed> is transitively sealed")
 	}
 	if e.DetectSealed("${ vars.public }", src) {
-		t.Fatal("vars.<не-sealed> не sealed")
+		t.Fatal("vars.<not-sealed> is not sealed")
 	}
 }
 
@@ -88,6 +88,6 @@ func TestDetectSealed_NestedSelect(t *testing.T) {
 	// vars.tls_cert pair, which is in SealedVars → sealed.
 	src := SealSources{SealedVars: map[string]bool{"tls_cert": true}}
 	if !e.DetectSealed("${ vars.tls_cert.length() > 0 ? vars.tls_cert : '' }", src) {
-		t.Fatal("вложенное обращение к sealed vars → sealed")
+		t.Fatal("a nested reference to sealed vars -> sealed")
 	}
 }

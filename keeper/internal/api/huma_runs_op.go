@@ -22,14 +22,14 @@ import (
 // done by AllRunsTyped: invalid status/incarnation → 422); offset/limit are int32 with a
 // default (out-of-range/limit>100 → 400).
 type runsListInput struct {
-	Status        string `query:"status" doc:"фильтр по агрегатbutму статусу прогоon (applying/success/failed/cancelled); невалидный → 422"`
-	Incarnation   string `query:"incarnation" doc:"фильтр по имени инкарonции; невалидbutе имя → 422"`
-	Service       string `query:"service" doc:"фильтр по сервису инкарonции-владельца (точbutе withвпадение); длиннее 128 символов → 422"`
-	Q             string `query:"q" doc:"свободный поиск (substring, регистронезависимо) по incarnation/scenario/service/started_by; длиннее 128 символов → 422"`
-	StartedAfter  string `query:"started_after" doc:"фильтр: время старта прогоon ≥ (RFC3339, inclusive); невалидbutе → 422"`
-	StartedBefore string `query:"started_before" doc:"фильтр: время старта прогоon ≤ (RFC3339, inclusive); невалидbutе → 422"`
-	Sort          string `query:"sort" doc:"field withртировки (started_at/finished_at/status/incarnation/service/scenario; дефолт started_at); невалидbutе → 422"`
-	SortDir       string `query:"sort_dir" doc:"onправление withртировки (asc/desc; дефолт desc); невалидbutе → 422"`
+	Status        string `query:"status" doc:"filter by aggregate run status (applying/success/failed/cancelled); invalid -> 422"`
+	Incarnation   string `query:"incarnation" doc:"filter by incarnation name; invalid name -> 422"`
+	Service       string `query:"service" doc:"filter by the incarnation's owner service (exact match); longer than 128 characters -> 422"`
+	Q             string `query:"q" doc:"free-text search (substring, case-insensitive) over incarnation/scenario/service/started_by; longer than 128 characters -> 422"`
+	StartedAfter  string `query:"started_after" doc:"filter: run start time >= (RFC3339, inclusive); invalid -> 422"`
+	StartedBefore string `query:"started_before" doc:"filter: run start time <= (RFC3339, inclusive); invalid -> 422"`
+	Sort          string `query:"sort" doc:"sort field (started_at/finished_at/status/incarnation/service/scenario; default started_at); invalid -> 422"`
+	SortDir       string `query:"sort_dir" doc:"sort direction (asc/desc; default desc); invalid -> 422"`
 	Offset        int32  `query:"offset" default:"0" doc:"offset from start of set, ≥0 (out-of-range → 400)"`
 	Limit         int32  `query:"limit" default:"50" doc:"page size 1..100 (out-of-range → 400)"`
 }
@@ -45,8 +45,8 @@ func runsListOperation() huma.Operation {
 		OperationID:   "listRuns",
 		Method:        http.MethodGet,
 		Path:          "/",
-		Summary:       "Глобальный спиwithк прогоbutв (paged)",
-		Description:   "Свёртка apply_runs по apply_id ЧЕРЕЗ ВСЕ инкарonции: статус прогоon (applying/success/failed/cancelled), инкарonция-владелец, границы времени, инициатор. Прогон (apply_run) — NOT Voyage. Сортировка колоbutк — sort/sort_dir (стабильный tie-break apply_id). Видимость scoped по RBAC (ADR-047, fail-closed: пустой scope → пустой спиwithк). Permission incarnation.history. Read-only.",
+		Summary:       "Global run list (paged)",
+		Description:   "Folds apply_runs by apply_id ACROSS ALL incarnations: run status (applying/success/failed/cancelled), owner incarnation, time bounds, initiator. A run (apply_run) is NOT a Voyage. Sorting by column - sort/sort_dir (stable tie-break on apply_id). Visibility scoped by RBAC (ADR-047, fail-closed: empty scope -> empty list). Permission incarnation.history. Read-only.",
 		Tags:          []string{"runs"},
 		DefaultStatus: http.StatusOK,
 		Errors:        []int{http.StatusBadRequest, http.StatusForbidden, http.StatusUnprocessableEntity, http.StatusInternalServerError},
@@ -70,8 +70,8 @@ func runsStatsOperation() huma.Operation {
 		OperationID:   "getRunsStats",
 		Method:        http.MethodGet,
 		Path:          "/stats",
-		Summary:       "Сводные счётчики прогоbutв",
-		Description:   "Счётчики прогоbutв по агрегатbutму статусу (total/applying/success/failed/cancelled) за всё время и за последние 24 часа, в границах RBAC-scope (fail-closed: пустой scope → нулевой агрегат). Permission incarnation.history. Read-only.",
+		Summary:       "Run summary counters",
+		Description:   "Run counters by aggregate status (total/applying/success/failed/cancelled) for all time and for the last 24 hours, within the RBAC scope (fail-closed: empty scope -> zero aggregate). Permission incarnation.history. Read-only.",
 		Tags:          []string{"runs"},
 		DefaultStatus: http.StatusOK,
 		Errors:        []int{http.StatusForbidden, http.StatusInternalServerError},
@@ -98,26 +98,26 @@ type GlobalRunEntry struct {
 // items/offset/limit/total, parity with incarnationRunsReply). The type name = the
 // contract schema name (huma DefaultSchemaNamer capitalizes → "RunsListReply").
 type runsListReply struct {
-	Items  []GlobalRunEntry `json:"items" doc:"страница прогоbutв via все инкарonции (свёртка apply_runs)"`
+	Items  []GlobalRunEntry `json:"items" doc:"page of runs across all incarnations (apply_runs fold)"`
 	Offset int32            `json:"offset" doc:"offset from start of set"`
 	Limit  int32            `json:"limit" doc:"page size"`
-	Total  int32            `json:"total" doc:"общее число прогоbutв под фильтрами/scope"`
+	Total  int32            `json:"total" doc:"total number of runs under filters/scope"`
 }
 
 // RunsStatsBucket — one run-summary bucket (all time or the last 24 hours): total +
 // a counter for each aggregate status (zeros included — the enum is closed).
 type RunsStatsBucket struct {
-	Total     int `json:"total" doc:"всits прогоbutв в корзине"`
-	Applying  int `json:"applying" doc:"прогоны в процессе"`
-	Success   int `json:"success" doc:"успешные прогоны"`
-	Failed    int `json:"failed" doc:"упавшие прогоны (включая orphaned-хосты)"`
-	Cancelled int `json:"cancelled" doc:"отменённые прогоны"`
+	Total     int `json:"total" doc:"total runs in the bucket"`
+	Applying  int `json:"applying" doc:"runs in progress"`
+	Success   int `json:"success" doc:"successful runs"`
+	Failed    int `json:"failed" doc:"failed runs (including orphaned hosts)"`
+	Cancelled int `json:"cancelled" doc:"cancelled runs"`
 }
 
 // RunsStatsReply — the native body of GET /v1/runs/stats: two buckets of the same shape.
 type RunsStatsReply struct {
-	All     RunsStatsBucket `json:"all" doc:"за всё время"`
-	Last24h RunsStatsBucket `json:"last_24h" doc:"прогоны, стартовавшие за последние 24 часа"`
+	All     RunsStatsBucket `json:"all" doc:"all time"`
+	Last24h RunsStatsBucket `json:"last_24h" doc:"runs started in the last 24 hours"`
 }
 
 // newGlobalRunEntry projects the domain handlers.RunSummaryView into native.

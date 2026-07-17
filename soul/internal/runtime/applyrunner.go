@@ -205,7 +205,7 @@ func (r *ApplyRunner) AcceptAttempt(applyID string, attempt int32) bool {
 		// a debug log + metric; no RunResult (the barrier closes the original
 		// apply with its own RunResult; runTimeout is the backstop).
 		r.metrics.ObserveFenced()
-		slog.Default().Debug("runtime: ApplyRequest отвергнут attempt-fencing-guard-ом (stale-дубль)",
+		slog.Default().Debug("runtime: ApplyRequest rejected by the attempt-fencing guard (stale duplicate)",
 			slog.String("apply_id", applyID),
 			slog.Int("attempt", int(attempt)),
 			slog.Int("last_seen", int(seen)))
@@ -341,7 +341,7 @@ func (r *ApplyRunner) Run(ctx context.Context, req *keeperv1.ApplyRequest, sink 
 	// instead of silently ignoring predicates (that would corrupt gating — a
 	// when:false task would run).
 	if r.flowEngineErr != nil || r.flowEngine == nil {
-		return fmt.Errorf("runtime: flow-control CEL-движок недоступен: %w", r.flowEngineErr)
+		return fmt.Errorf("runtime: flow-control CEL engine unavailable: %w", r.flowEngineErr)
 	}
 
 	// Local ctx for this run — lets Cancel stop exactly this apply without
@@ -751,7 +751,7 @@ func parseRetryDelay(task *keeperv1.RenderedTask) time.Duration {
 	}
 	d, err := config.ParseDuration(rd)
 	if err != nil || d <= 0 {
-		slog.Default().Warn("runtime: невалидный/неположительный retry delay, применён default",
+		slog.Default().Warn("runtime: invalid/non-positive retry delay, default applied",
 			slog.String("task", task.GetName()),
 			slog.String("retry_delay", rd),
 			slog.Duration("default", defaultRetryDelay))
@@ -781,7 +781,7 @@ func untilExhaustedEvent(applyID string, idx int32, task *keeperv1.RenderedTask,
 		Error: &keeperv1.TaskError{
 			Code:    "flowcontrol.until_exhausted",
 			Module:  task.GetModule(),
-			Message: fmt.Sprintf("until %q не стал truthy за %d попыток", until, attempts),
+			Message: fmt.Sprintf("until %q did not become truthy after %d attempts", until, attempts),
 		},
 	}
 	ev.RegisterData = buildRegisterData(ev.GetStatus(), nil)
@@ -860,7 +860,7 @@ func (r *ApplyRunner) runTask(ctx context.Context, applyID string, idx int32, ta
 			// Invalid duration string (defensive: Keeper already validated this
 			// when parsing destiny, "should never happen"). Treated as "not set" +
 			// warn, rather than failing on a housekeeping error.
-			slog.Default().Warn("runtime: невалидный task timeout, лимит не применён",
+			slog.Default().Warn("runtime: invalid task timeout, limit not applied",
 				slog.String("task", task.GetName()),
 				slog.String("module", modName),
 				slog.String("timeout", to),
@@ -873,7 +873,7 @@ func (r *ApplyRunner) runTask(ctx context.Context, applyID string, idx int32, ta
 			// d <= 0 (`0s`, `-1s`): treated as "no limit", NOT an instant deadline.
 			// WithTimeout(ctx, 0) would expire immediately → a false TIMED_OUT
 			// before the module even runs.
-			slog.Default().Warn("runtime: неположительный task timeout, лимит не применён",
+			slog.Default().Warn("runtime: non-positive task timeout, limit not applied",
 				slog.String("task", task.GetName()),
 				slog.String("module", modName),
 				slog.String("timeout", to))
@@ -998,7 +998,7 @@ func (r *ApplyRunner) runTask(ctx context.Context, applyID string, idx int32, ta
 			ev.Error = &keeperv1.TaskError{
 				Code:    "flowcontrol.failed_when",
 				Module:  modName,
-				Message: fmt.Sprintf("failed_when %q вычислился в true", task.GetFailedWhen()),
+				Message: fmt.Sprintf("failed_when %q evaluated to true", task.GetFailedWhen()),
 			}
 		}
 	case changed:
@@ -1165,7 +1165,7 @@ func (r *ApplyRunner) logFlowControlError(kind string, task *keeperv1.RenderedTa
 	var ce *cel.ErrCompile
 	var ue *cel.ErrUnsupported
 	if errors.As(err, &ce) || errors.As(err, &ue) {
-		slog.Default().Warn("runtime: flow-control predicate невалиден на Soul (Keeper пропустил — internal-расхождение)",
+		slog.Default().Warn("runtime: flow-control predicate invalid on Soul (Keeper let it through - internal mismatch)",
 			slog.String("kind", kind),
 			slog.String("task", task.GetName()),
 			slog.String("module", task.GetModule()),

@@ -311,7 +311,7 @@ func TestHumaSoul_Create_GoldenWire(t *testing.T) {
 	// transport=ssh → no bootstrap_token; date-time seconds.
 	const golden = `{"covens":["web"],"created_by_aid":"archon-alice","registered_at":"2026-06-13T12:00:00Z","sid":"host-1.example.com","status":"pending","transport":"ssh"}`
 	if got := remarshalSorted(t, rec.Body.Bytes()); got != golden {
-		t.Errorf("GOLDEN wire-дрейф soul.create:\n got  = %s\n want = %s", got, golden)
+		t.Errorf("GOLDEN wire-drift soul.create:\n got  = %s\n want = %s", got, golden)
 	}
 }
 
@@ -371,7 +371,7 @@ func TestHumaAudit_SoulCreate_NoAudit_OnRBACDeny(t *testing.T) {
 		t.Fatalf("status = %d, want 403; body=%s", rec.Code, rec.Body.String())
 	}
 	if len(auditCap.Events()) != 0 {
-		t.Errorf("audit записан on RBAC-deny soul.create (%d withбытий)", len(auditCap.Events()))
+		t.Errorf("audit recorded on RBAC-deny soul.create (%d events)", len(auditCap.Events()))
 	}
 }
 
@@ -385,7 +385,7 @@ func TestHumaAudit_SoulCreate_NoAudit_OnValidationFail(t *testing.T) {
 		t.Fatalf("status = %d, want 422; body=%s", rec.Code, rec.Body.String())
 	}
 	if len(auditCap.Events()) != 0 {
-		t.Errorf("audit записан on 422 soul.create (%d withбытий)", len(auditCap.Events()))
+		t.Errorf("audit recorded on 422 soul.create (%d events)", len(auditCap.Events()))
 	}
 }
 
@@ -401,10 +401,10 @@ func TestHumaSoul_IssueToken_GoldenWire(t *testing.T) {
 	}
 	var m map[string]any
 	if err := json.Unmarshal(rec.Body.Bytes(), &m); err != nil {
-		t.Fatalf("reply не JSON: %v; body=%s", err, rec.Body.String())
+		t.Fatalf("reply not JSON: %v; body=%s", err, rec.Body.String())
 	}
 	if m["sid"] != "host-1.example.com" || m["bootstrap_token"] == "" || m["expires_at"] == nil {
-		t.Errorf("issue-token 200-body: %v (ожидали sid+bootstrap_token+expires_at)", m)
+		t.Errorf("issue-token 200-body: %v (expected sid+bootstrap_token+expires_at)", m)
 	}
 }
 
@@ -430,7 +430,7 @@ func TestHumaAudit_SoulIssueToken_NoAudit_OnRBACDeny(t *testing.T) {
 		t.Fatalf("status = %d, want 403; body=%s", rec.Code, rec.Body.String())
 	}
 	if len(auditCap.Events()) != 0 {
-		t.Errorf("audit записан on RBAC-deny soul.issue-token (%d withбытий)", len(auditCap.Events()))
+		t.Errorf("audit recorded on RBAC-deny soul.issue-token (%d events)", len(auditCap.Events()))
 	}
 }
 
@@ -447,7 +447,7 @@ func TestHumaSoul_SshTarget_GoldenWire(t *testing.T) {
 	}
 	const golden = `{"sid":"host-1.example.com","ssh_target":{"soul_path":"/opt/soul","ssh_port":22,"ssh_user":"deploy"}}`
 	if got := remarshalSorted(t, rec.Body.Bytes()); got != remarshalSorted(t, []byte(golden)) {
-		t.Errorf("GOLDEN wire-дрейф soul.ssh-target:\n got  = %s\n want = %s", got, remarshalSorted(t, []byte(golden)))
+		t.Errorf("GOLDEN wire-drift soul.ssh-target:\n got  = %s\n want = %s", got, remarshalSorted(t, []byte(golden)))
 	}
 }
 
@@ -490,14 +490,14 @@ func TestHumaSoul_CovenAssign_DryRunGolden(t *testing.T) {
 	}
 	var m map[string]any
 	if err := json.Unmarshal(rec.Body.Bytes(), &m); err != nil {
-		t.Fatalf("reply не JSON: %v; body=%s", err, rec.Body.String())
+		t.Fatalf("reply not JSON: %v; body=%s", err, rec.Body.String())
 	}
 	// custom MarshalJSON XOR: append → label (not labels), dry_run:true.
 	if m["mode"] != "append" || m["label"] != "prod" || m["dry_run"] != true {
-		t.Errorf("coven-assign dry_run 200-body XOR-form неверon: %v", m)
+		t.Errorf("coven-assign dry_run 200-body XOR-form incorrect: %v", m)
 	}
 	if _, hasLabels := m["labels"]; hasLabels {
-		t.Errorf("append-mode не toлжен нести labels: %v", m)
+		t.Errorf("append-mode must not carry labels: %v", m)
 	}
 }
 
@@ -580,7 +580,7 @@ func TestHumaSoul_List_BadCursor_400(t *testing.T) {
 	rec := httptest.NewRecorder()
 	r.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/v1/souls?cursor=not-base64!", nil))
 	if rec.Code != http.StatusBadRequest {
-		t.Fatalf("status = %d, want 400 (битый cursor → decode-фейл); body=%s", rec.Code, rec.Body.String())
+		t.Fatalf("status = %d, want 400 (broken cursor → decode-fail); body=%s", rec.Code, rec.Body.String())
 	}
 	assertHumaProblem(t, rec, problem.TypeMalformedRequest)
 }
@@ -603,7 +603,7 @@ func TestHumaSoul_List_NoAudit(t *testing.T) {
 		t.Fatalf("status = %d, want 200; body=%s", rec.Code, rec.Body.String())
 	}
 	if len(auditCap.Events()) != 0 {
-		t.Errorf("read soul.list записал audit (%d withбытий)", len(auditCap.Events()))
+		t.Errorf("read soul.list recorded audit (%d events)", len(auditCap.Events()))
 	}
 }
 
@@ -741,23 +741,23 @@ func TestHumaSoul_Exec_GoldenWire_Sync200(t *testing.T) {
 		strings.NewReader(`{"module":"core.cmd.shell","timeout_seconds":5}`))
 	r.ServeHTTP(rec, req)
 	if rec.Code != http.StatusOK {
-		t.Fatalf("status = %d, want 200 (sync термиonл); body=%s", rec.Code, rec.Body.String())
+		t.Fatalf("status = %d, want 200 (sync terminal); body=%s", rec.Code, rec.Body.String())
 	}
 	if loc := rec.Header().Get("Location"); loc != "" {
-		t.Errorf("Location-header on 200 sync toлжен ОТСУТСТВОВАТЬ, got %q", loc)
+		t.Errorf("Location-header on 200 sync must be ABSENT, got %q", loc)
 	}
 	var m map[string]any
 	if err := json.Unmarshal(rec.Body.Bytes(), &m); err != nil {
-		t.Fatalf("reply не JSON-object: %v; body=%s", err, rec.Body.String())
+		t.Fatalf("reply not JSON-object: %v; body=%s", err, rec.Body.String())
 	}
 	// errand_id (a fresh ULID) and duration_ms (real time.Since elapsed) are non-deterministic —
 	// we check their presence and zero them for a byte-exact comparison of the rest of the wire (fields/enum/
 	// started_at-truncation). The same contract as the legacy strict path.
 	if m["errand_id"] == "" || m["errand_id"] == nil {
-		t.Errorf("sync 200-body toлжbut нести errand_id, got %v", m)
+		t.Errorf("sync 200-body must carry errand_id, got %v", m)
 	}
 	if _, ok := m["duration_ms"]; !ok {
-		t.Errorf("sync 200-body toлжbut нести duration_ms, got %v", m)
+		t.Errorf("sync 200-body must carry duration_ms, got %v", m)
 	}
 	delete(m, "errand_id")
 	delete(m, "duration_ms")
@@ -765,7 +765,7 @@ func TestHumaSoul_Exec_GoldenWire_Sync200(t *testing.T) {
 	// started_at = hSoulAt (Clock) .UTC().Truncate(Second); status a bare enum string.
 	const golden = `{"exit_code":0,"module":"core.cmd.shell","sid":"host-1.example.com","started_at":"2026-06-13T12:00:00Z","started_by_aid":"archon-alice","status":"success","stdout":"ok"}`
 	if got := string(out); got != golden {
-		t.Errorf("GOLDEN wire-дрейф soul.exec (sync 200):\n got  = %s\n want = %s", got, golden)
+		t.Errorf("GOLDEN wire-drift soul.exec (sync 200):\n got  = %s\n want = %s", got, golden)
 	}
 }
 
@@ -782,14 +782,14 @@ func TestHumaSoul_Exec_GoldenWire_Async202(t *testing.T) {
 	}
 	loc := rec.Header().Get("Location")
 	if !strings.HasPrefix(loc, "/v1/errands/") {
-		t.Errorf("Location-header on 202 toлжен быть /v1/errands/<id>, got %q", loc)
+		t.Errorf("Location-header on 202 must be /v1/errands/<id>, got %q", loc)
 	}
 	var m map[string]any
 	if err := json.Unmarshal(rec.Body.Bytes(), &m); err != nil {
-		t.Fatalf("reply не JSON-object: %v; body=%s", err, rec.Body.String())
+		t.Fatalf("reply not JSON-object: %v; body=%s", err, rec.Body.String())
 	}
 	if m["status"] != "running" || m["errand_id"] == "" || m["errand_id"] == nil {
-		t.Errorf("202-body toлжbut нести errand_id + status:running, got %v", m)
+		t.Errorf("202-body must carry errand_id + status:running, got %v", m)
 	}
 }
 
@@ -890,7 +890,7 @@ func TestHumaAudit_ErrandExec_NoAudit_OnRBACDeny(t *testing.T) {
 		t.Fatalf("status = %d, want 403; body=%s", rec.Code, rec.Body.String())
 	}
 	if len(auditCap.Events()) != 0 {
-		t.Errorf("audit записан on RBAC-deny soul.exec (%d withбытий)", len(auditCap.Events()))
+		t.Errorf("audit recorded on RBAC-deny soul.exec (%d events)", len(auditCap.Events()))
 	}
 }
 
@@ -906,7 +906,7 @@ func TestHumaAudit_ErrandExec_NoAudit_OnValidationFail(t *testing.T) {
 		t.Fatalf("status = %d, want 422; body=%s", rec.Code, rec.Body.String())
 	}
 	if len(auditCap.Events()) != 0 {
-		t.Errorf("audit записан on 422 soul.exec (%d withбытий)", len(auditCap.Events()))
+		t.Errorf("audit recorded on 422 soul.exec (%d events)", len(auditCap.Events()))
 	}
 }
 
@@ -924,7 +924,7 @@ func TestHumaAudit_ErrandExec_NoAudit_OnSoulNotConnected_404(t *testing.T) {
 	}
 	assertHumaProblem(t, rec, problem.TypeNotFound)
 	if len(auditCap.Events()) != 0 {
-		t.Errorf("audit записан on 404 soul.exec (%d withбытий)", len(auditCap.Events()))
+		t.Errorf("audit recorded on 404 soul.exec (%d events)", len(auditCap.Events()))
 	}
 }
 
@@ -1006,7 +1006,7 @@ func TestHumaSoul_Exec_ChiCoexistence(t *testing.T) {
 	)
 	routes, ok := h.(chi.Routes)
 	if !ok {
-		t.Fatalf("buildRouter вернул %T, не chi.Routes", h)
+		t.Fatalf("buildRouter returned %T, not chi.Routes", h)
 	}
 	var execCount, detailCount int
 	if err := chi.Walk(routes, func(method, pattern string, _ http.Handler, _ ...func(http.Handler) http.Handler) error {
@@ -1021,10 +1021,10 @@ func TestHumaSoul_Exec_ChiCoexistence(t *testing.T) {
 		t.Fatalf("chi.Walk: %v", err)
 	}
 	if execCount != 1 {
-		t.Errorf("POST /v1/souls/{sid}/exec встретился %d раз, want 1 (дубль/коллfromия mount-а)", execCount)
+		t.Errorf("POST /v1/souls/{sid}/exec occurred %d times, want 1 (duplicate/mount collision)", execCount)
 	}
 	if detailCount != 1 {
-		t.Errorf("GET /v1/souls/{sid}/soulprint встретился %d раз, want 1 (exec сломал soul-detail-группу)", detailCount)
+		t.Errorf("GET /v1/souls/{sid}/soulprint occurred %d times, want 1 (exec broke the soul-detail group)", detailCount)
 	}
 }
 
@@ -1035,7 +1035,7 @@ func TestHumaSoul_SpecYAML(t *testing.T) {
 	}
 	for _, want := range []string{"createSoul", "assignSoulCoven", "issueSoulToken", "updateSoulSSHTarget", "ErrandExec", "listSouls", "getSoul", "getSoulprint", "getSoulHistory"} {
 		if !strings.Contains(frag, want) {
-			t.Errorf("спека не withдержит op %q:\n%s", want, frag)
+			t.Errorf("spec does not contain op %q:\n%s", want, frag)
 		}
 	}
 }

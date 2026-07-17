@@ -130,7 +130,7 @@ func (b *InotifyBeacon) Check(_ context.Context, params *structpb.Struct) (State
 		return "", nil, err
 	}
 	if recursive {
-		return "", nil, fmt.Errorf("param %q: recursive watch не поддерживается в MVP (V5-3)", "recursive")
+		return "", nil, fmt.Errorf("param %q: recursive watch is not supported in MVP (V5-3)", "recursive")
 	}
 	mask := resolveInotifyMask(eventsFilter)
 
@@ -188,7 +188,7 @@ func (b *InotifyBeacon) startWatch(path string, mask uint32) (*inotifyWatch, err
 	if err != nil {
 		_ = unix.Close(fd)
 		if errors.Is(err, syscall.ENOSPC) {
-			return nil, fmt.Errorf("inotify_add_watch %s: max_user_watches исчерпан (sysctl fs.inotify.max_user_watches)", path)
+			return nil, fmt.Errorf("inotify_add_watch %s: max_user_watches exhausted (sysctl fs.inotify.max_user_watches)", path)
 		}
 		return nil, fmt.Errorf("inotify_add_watch %s: %w", path, err)
 	}

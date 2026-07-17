@@ -107,7 +107,7 @@ func TestSigilKeyHandler_Introduce_201_NoPrivateKey(t *testing.T) {
 		t.Errorf("key_id len = %d, want 64", len(reply.View.KeyID))
 	}
 	if !strings.Contains(reply.View.PubkeyPEM, "BEGIN PUBLIC KEY") {
-		t.Errorf("pubkey_pem не SPKI: %q", reply.View.PubkeyPEM)
+		t.Errorf("pubkey_pem is not SPKI: %q", reply.View.PubkeyPEM)
 	}
 	// SECURITY: the projection carries no private key (KeyService doesn't return it;
 	// the View form has no private field by construction).

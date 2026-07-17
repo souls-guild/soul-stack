@@ -142,10 +142,10 @@ func TestFetchModule_AllowedSHA_StreamsChunks(t *testing.T) {
 		t.Fatalf("FetchModule: %v", err)
 	}
 	if got := stream.chunkCount(); got != 3 {
-		t.Errorf("chunks = %d, want 3 (2 полных + хвост)", got)
+		t.Errorf("chunks = %d, want 3 (2 full + tail)", got)
 	}
 	if !bytes.Equal(stream.assembled(), content) {
-		t.Error("собранные чанки != содержимое файла")
+		t.Error("assembled chunks != file content")
 	}
 	if src.lastSHA() != testModuleSHA {
 		t.Errorf("lookup sha = %q, want lowercase %q", src.lastSHA(), testModuleSHA)
@@ -164,7 +164,7 @@ func TestFetchModule_NotAllowed_NotFound(t *testing.T) {
 		t.Fatalf("code = %v, want NotFound; err = %v", got, err)
 	}
 	if stream.chunkCount() != 0 {
-		t.Error("не должно быть чанков при отказе")
+		t.Error("no chunks should be sent on rejection")
 	}
 }
 
@@ -196,7 +196,7 @@ func TestFetchModule_NoAuthenticatedSID_Internal(t *testing.T) {
 		t.Fatalf("code = %v, want Internal; err = %v", got, err)
 	}
 	if src.lastSHA() != "" {
-		t.Error("lookup не должен вызываться без authenticated SID")
+		t.Error("lookup must not be called without an authenticated SID")
 	}
 }
 
@@ -233,7 +233,7 @@ func TestFetchModule_InvalidSHA_InvalidArgument(t *testing.T) {
 				t.Fatalf("code = %v, want InvalidArgument; err = %v", got, err)
 			}
 			if src.lastSHA() != "" {
-				t.Error("lookup не должен вызываться на невалидном sha")
+				t.Error("lookup must not be called on an invalid sha")
 			}
 		})
 	}
@@ -253,7 +253,7 @@ func TestFetchModule_FileTooLarge_FailedPrecondition(t *testing.T) {
 		t.Fatalf("code = %v, want FailedPrecondition; err = %v", got, err)
 	}
 	if stream.chunkCount() != 0 {
-		t.Error("не должно быть чанков при превышении лимита")
+		t.Error("no chunks should be sent when the limit is exceeded")
 	}
 }
 
@@ -291,7 +291,7 @@ func TestFetchModule_ContextCancel_StopsStream(t *testing.T) {
 		t.Fatalf("code = %v, want Canceled; err = %v", got, err)
 	}
 	if got := stream.chunkCount(); got >= 4 {
-		t.Errorf("chunks = %d — стрим не прервался после cancel", got)
+		t.Errorf("chunks = %d - stream did not stop after cancel", got)
 	}
 }
 
@@ -321,7 +321,7 @@ func TestFetchModule_PerSIDLimit(t *testing.T) {
 	select {
 	case <-holdStarted:
 	case <-time.After(5 * time.Second):
-		t.Fatal("первый fetch не дошёл до Send")
+		t.Fatal("first fetch never reached Send")
 	}
 
 	// Same SID on top of an occupied slot → ResourceExhausted.
@@ -345,7 +345,7 @@ func TestFetchModule_PerSIDLimit(t *testing.T) {
 	// The slot freed up — a retry fetch with the same SID goes through.
 	retry := &fakePluginChunkStream{ctx: fetchCtx("host.example.com")}
 	if err := h.FetchModule(&keeperv1.PluginFetchRequest{BinarySha256: testModuleSHA}, retry); err != nil {
-		t.Fatalf("retry FetchModule после release: %v", err)
+		t.Fatalf("retry FetchModule after release: %v", err)
 	}
 }
 
@@ -361,7 +361,7 @@ func TestKeeperServiceDesc_OnlyAdd(t *testing.T) {
 	}
 	for _, want := range []string{"Ping", "Bootstrap"} {
 		if !methods[want] {
-			t.Errorf("unary RPC %q пропал из service Keeper (only-add нарушен)", want)
+			t.Errorf("unary RPC %q disappeared from service Keeper (only-add violated)", want)
 		}
 	}
 	streams := map[string]grpclib.StreamDesc{}
@@ -370,10 +370,10 @@ func TestKeeperServiceDesc_OnlyAdd(t *testing.T) {
 	}
 	es, ok := streams["EventStream"]
 	if !ok || !es.ClientStreams || !es.ServerStreams {
-		t.Errorf("EventStream должен остаться bidi-стримом: %+v", es)
+		t.Errorf("EventStream must remain a bidi stream: %+v", es)
 	}
 	fm, ok := streams["FetchModule"]
 	if !ok || fm.ClientStreams || !fm.ServerStreams {
-		t.Errorf("FetchModule должен быть server-streaming: %+v", fm)
+		t.Errorf("FetchModule must be server-streaming: %+v", fm)
 	}
 }

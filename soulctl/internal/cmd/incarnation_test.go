@@ -40,14 +40,14 @@ func TestIncarnationsList(t *testing.T) {
 		"/v1/incarnations": func(w http.ResponseWriter, r *http.Request) {
 			atomic.AddInt32(&called, 1)
 			if r.Method != "GET" {
-				t.Errorf("ожидался GET, получено %s", r.Method)
+				t.Errorf("expected GET, got %s", r.Method)
 			}
 			q := r.URL.Query()
 			if got, want := q.Get("service"), "redis-cluster"; got != want {
-				t.Errorf("service-фильтр: got %q, want %q", got, want)
+				t.Errorf("service filter: got %q, want %q", got, want)
 			}
 			if got, want := q.Get("status"), "ready"; got != want {
-				t.Errorf("status-фильтр: got %q, want %q", got, want)
+				t.Errorf("status filter: got %q, want %q", got, want)
 			}
 			if got, want := q.Get("limit"), "10"; got != want {
 				t.Errorf("limit: got %q, want %q", got, want)
@@ -78,10 +78,10 @@ func TestIncarnationsList(t *testing.T) {
 		t.Fatalf("List: %v", err)
 	}
 	if atomic.LoadInt32(&called) != 1 {
-		t.Fatalf("обработчик не вызван")
+		t.Fatalf("handler was not called")
 	}
 	if len(reply.Items) != 1 || reply.Items[0].Name != "redis-prod" {
-		t.Fatalf("неожиданный ответ: %+v", reply)
+		t.Fatalf("unexpected response: %+v", reply)
 	}
 	if reply.Total != 1 {
 		t.Errorf("total: got %d, want 1", reply.Total)
@@ -92,7 +92,7 @@ func TestIncarnationsListCovenClientSide(t *testing.T) {
 	_, cl := fakeServer(t, map[string]http.HandlerFunc{
 		"/v1/incarnations": func(w http.ResponseWriter, r *http.Request) {
 			if r.URL.Query().Get("coven") != "" {
-				t.Errorf("coven НЕ должен уходить в query (отсутствует в openapi для incarnations); got=%q", r.URL.Query().Get("coven"))
+				t.Errorf("coven must NOT go into the query (absent from openapi for incarnations); got=%q", r.URL.Query().Get("coven"))
 			}
 			_ = json.NewEncoder(w).Encode(map[string]any{
 				"items": []map[string]any{
@@ -113,7 +113,7 @@ func TestIncarnationsListCovenClientSide(t *testing.T) {
 		t.Fatalf("List: %v", err)
 	}
 	if len(reply.Items) != 1 || reply.Items[0].Name != "a" {
-		t.Fatalf("ожидалась только incarnation 'a', got %+v", reply.Items)
+		t.Fatalf("expected only incarnation 'a', got %+v", reply.Items)
 	}
 }
 
@@ -121,7 +121,7 @@ func TestIncarnationsGet(t *testing.T) {
 	_, cl := fakeServer(t, map[string]http.HandlerFunc{
 		"/v1/incarnations/redis-prod": func(w http.ResponseWriter, r *http.Request) {
 			if r.Method != "GET" {
-				t.Errorf("ожидался GET, получено %s", r.Method)
+				t.Errorf("expected GET, got %s", r.Method)
 			}
 			_ = json.NewEncoder(w).Encode(map[string]any{
 				"name": "redis-prod", "service": "redis-cluster",
@@ -149,24 +149,24 @@ func TestIncarnationsGet404(t *testing.T) {
 				"type":   "https://soul-stack.io/errors/not-found",
 				"title":  "not-found",
 				"status": 404,
-				"detail": "incarnation missing не существует",
+				"detail": "incarnation missing does not exist",
 			})
 		},
 	})
 	_, err := cl.Incarnations.Get(context.Background(), "missing")
 	if err == nil {
-		t.Fatal("ожидалась ошибка")
+		t.Fatal("expected an error")
 	}
 	apiErr, ok := client.AsAPIError(err)
 	if !ok {
-		t.Fatalf("ожидался APIError, got %T", err)
+		t.Fatalf("expected APIError, got %T", err)
 	}
 	if apiErr.Status != 404 {
 		t.Errorf("status: got %d, want 404", apiErr.Status)
 	}
 	rendered := renderAPIError(err)
 	if !strings.Contains(rendered.Error(), "not found") {
-		t.Errorf("renderAPIError должен содержать 'not found', got %q", rendered.Error())
+		t.Errorf("renderAPIError should contain 'not found', got %q", rendered.Error())
 	}
 }
 
@@ -175,7 +175,7 @@ func TestIncarnationsRun(t *testing.T) {
 	_, cl := fakeServer(t, map[string]http.HandlerFunc{
 		"/v1/incarnations/redis-prod/scenarios/converge": func(w http.ResponseWriter, r *http.Request) {
 			if r.Method != "POST" {
-				t.Errorf("ожидался POST, получено %s", r.Method)
+				t.Errorf("expected POST, got %s", r.Method)
 			}
 			_, _ = capturedBody.ReadFrom(r.Body)
 			if r.URL.Query().Get("dry_run") != "true" {
@@ -195,10 +195,10 @@ func TestIncarnationsRun(t *testing.T) {
 		t.Fatalf("Run: %v", err)
 	}
 	if reply.ApplyID == "" {
-		t.Error("apply_id пуст")
+		t.Error("apply_id is empty")
 	}
 	if !strings.Contains(capturedBody.String(), `"shards":3`) {
-		t.Errorf("input не пробросился в body: %s", capturedBody.String())
+		t.Errorf("input did not propagate into the body: %s", capturedBody.String())
 	}
 }
 
@@ -227,7 +227,7 @@ func TestIncarnationsHistory(t *testing.T) {
 		t.Fatalf("History: %v", err)
 	}
 	if len(reply.Items) != 1 {
-		t.Fatalf("ожидалась 1 запись, got %d", len(reply.Items))
+		t.Fatalf("expected 1 entry, got %d", len(reply.Items))
 	}
 }
 
@@ -271,7 +271,7 @@ func TestWaitForApplySuccess(t *testing.T) {
 		t.Errorf("final_status: got %q, want ready", result.FinalStatus)
 	}
 	if result.HistoryEntry == nil || result.HistoryEntry.ApplyID != "01HX_TEST" {
-		t.Errorf("history entry не возвращён: %+v", result.HistoryEntry)
+		t.Errorf("history entry was not returned: %+v", result.HistoryEntry)
 	}
 }
 
@@ -293,7 +293,7 @@ func TestWaitForApplyBlocking(t *testing.T) {
 	})
 	result, err := waitForApply(context.Background(), cl, "redis-prod", "01HX_TEST", 0)
 	if err == nil {
-		t.Fatal("ожидалась ошибка (error_locked)")
+		t.Fatal("expected an error (error_locked)")
 	}
 	if result == nil || result.FinalStatus != "error_locked" {
 		t.Errorf("waitResult: %+v", result)

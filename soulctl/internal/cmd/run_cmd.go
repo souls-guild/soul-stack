@@ -36,12 +36,12 @@ func newRunCmdCmd() *cobra.Command {
 	)
 	c := &cobra.Command{
 		Use:   "cmd <command>",
-		Short: "ad-hoc выполнение shell-команды на N хостов (Voyage kind=command)",
+		Short: "ad-hoc shell command execution on N hosts (Voyage kind=command)",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			shellCmd := args[0]
 			if strings.TrimSpace(shellCmd) == "" {
-				return fmt.Errorf("команда пуста")
+				return fmt.Errorf("command is empty")
 			}
 			target, err := tflags.resolve()
 			if err != nil {
@@ -102,21 +102,21 @@ func newRunCmdCmd() *cobra.Command {
 		},
 	}
 	c.Flags().StringVar(&module, "module", "core.cmd.shell",
-		"command-модуль (whitelist Soul-side: core.cmd.shell / core.exec.run)")
+		"command module (whitelist Soul-side: core.cmd.shell / core.exec.run)")
 	c.Flags().IntVar(&concurrency, "concurrency", 0,
 		"semaphore-cap fan-out (0/missing → default 50, max 500)")
 	c.Flags().StringVar(&onFailure, "on-failure", "",
-		"failure-policy: continue (default) или abort")
+		"failure-policy: continue (default) or abort")
 	c.Flags().IntVar(&batchSize, "batch-size", 0,
-		"размер Leg (0/missing → весь прогон один Leg)")
+		"Leg size (0/missing → the whole run is one Leg)")
 	c.Flags().StringVar(&batch, "batch", "",
-		"размер Leg в формате N|N% (% от числа хостов); пусто → не задано, парсит Keeper")
+		"Leg size in format N|N% (% of host count); empty → unset, Keeper parses it")
 	c.Flags().StringVar(&maxFailures, "max-failures", "",
-		"порог провалов N|N% (% от числа хостов); пусто → не задано, парсит Keeper")
+		"failure threshold N|N% (% of host count); empty → unset, Keeper parses it")
 	c.Flags().BoolVar(&wait, "wait", false,
-		"ждать терминал Voyage (poll GET /v1/voyages/{id})")
+		"wait for Voyage terminal state (poll GET /v1/voyages/{id})")
 	c.Flags().DurationVar(&waitTimeout, "wait-timeout", 10*time.Minute,
-		"максимальное время ожидания для --wait")
+		"maximum wait time for --wait")
 	tflags.bind(c)
 	return c
 }
@@ -134,7 +134,7 @@ func waitForVoyage(parent context.Context, cl *client.Client, voyageID string, t
 	defer tick.Stop()
 	for {
 		if err := ctx.Err(); err != nil {
-			return nil, fmt.Errorf("ожидание voyage прервано: %w", err)
+			return nil, fmt.Errorf("voyage wait interrupted: %w", err)
 		}
 		snap, err := cl.Voyages.Get(ctx, voyageID)
 		if err != nil {
@@ -144,7 +144,7 @@ func waitForVoyage(parent context.Context, cl *client.Client, voyageID string, t
 			return snap, nil
 		}
 		if time.Now().After(deadline) {
-			return snap, fmt.Errorf("wait-timeout: voyage %s ещё в %s",
+			return snap, fmt.Errorf("wait-timeout: voyage %s still in %s",
 				voyageID, snap.Status)
 		}
 		select {

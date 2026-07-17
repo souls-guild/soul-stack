@@ -180,11 +180,11 @@ func newAugurHandler(t *testing.T, pool *augurFakePool) *AugurHandler {
 func wantAugurProblem(t *testing.T, err error, want string) {
 	t.Helper()
 	if err == nil {
-		t.Fatalf("ожидалась ошибка %q, получено nil", want)
+		t.Fatalf("expected error %q, got nil", want)
 	}
 	d, ok := AsProblemDetails(err)
 	if !ok {
-		t.Fatalf("ошибка не *problemError: %v", err)
+		t.Fatalf("error is not *problemError: %v", err)
 	}
 	if d.Type != want {
 		t.Errorf("problem.Type = %q, want %q", d.Type, want)
@@ -285,7 +285,7 @@ func TestAugurHandler_ListOmensTyped_Empty_NonNil(t *testing.T) {
 		t.Fatalf("ListOmensTyped: %v", err)
 	}
 	if page.Items == nil {
-		t.Errorf("Items должен быть non-nil пустым срезом")
+		t.Errorf("Items must be a non-nil empty slice")
 	}
 }
 
@@ -353,7 +353,7 @@ func TestAugurHandler_CreateRiteTyped_201(t *testing.T) {
 	}
 	// audit-payload: allow is NOT included (augur.md §8).
 	if _, ok := reply.AuditPayload()["allow"]; ok {
-		t.Errorf("allow-list НЕ должен попадать в audit-payload")
+		t.Errorf("allow-list must NOT appear in the audit-payload")
 	}
 }
 
@@ -378,7 +378,7 @@ func TestAugurHandler_CreateRiteTyped_AllowByteExact(t *testing.T) {
 	}
 	// allow in RiteView is raw bytes as-is, key order untouched.
 	if string(reply.View.Allow) != allow {
-		t.Fatalf("allow должен сохраниться байт-в-байт (порядок ключей as-is); got = %s", reply.View.Allow)
+		t.Fatalf("allow must be preserved byte-for-byte (key order as-is); got = %s", reply.View.Allow)
 	}
 }
 

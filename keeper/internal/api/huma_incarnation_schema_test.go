@@ -71,18 +71,18 @@ func TestSchemaNames_Incarnation(t *testing.T) {
 		} `yaml:"components"`
 	}
 	if err := yaml.Unmarshal([]byte(y), &doc); err != nil {
-		t.Fatalf("спека не парсится: %v", err)
+		t.Fatalf("spec does not parse: %v", err)
 	}
 	schemas := doc.Components.Schemas
 
 	for _, name := range incarnationContractSchemas {
 		if _, ok := schemas[name]; !ok {
-			t.Errorf("контрактonя схема %q ОТСУТСТВУЕТ в components/schemas (имя не выровнеbut)", name)
+			t.Errorf("contract schema %q MISSING from components/schemas (name not aligned)", name)
 		}
 	}
 	for _, name := range incarnationForbiddenSchemas {
 		if _, ok := schemas[name]; ok {
-			t.Errorf("техническое huma-имя %q ПРИСУТСТВУЕТ в спеке — имя не выровнеbut под контракт", name)
+			t.Errorf("technical huma name %q PRESENT in spec -- name not aligned to contract", name)
 		}
 	}
 }
@@ -106,34 +106,34 @@ func TestTraitsRelocation_OpenAPI(t *testing.T) {
 		} `yaml:"components"`
 	}
 	if err := yaml.Unmarshal([]byte(y), &doc); err != nil {
-		t.Fatalf("спека не парсится: %v", err)
+		t.Fatalf("spec does not parse: %v", err)
 	}
 
 	// (1) create-request carries the traits field.
 	if _, ok := doc.Components.Schemas["IncarnationCreateRequest"].Properties["traits"]; !ok {
-		t.Error("IncarnationCreateRequest без поля traits — top-level create-traits не прокинут")
+		t.Error("IncarnationCreateRequest missing traits field -- top-level create-traits not wired")
 	}
 
 	// (2) PUT .../traits is mounted.
 	put, ok := doc.Paths["/v1/incarnations/{name}/traits"]
 	if !ok {
-		t.Fatal("путь /v1/incarnations/{name}/traits ОТСУТСТВУЕТ в спеке")
+		t.Fatal("path /v1/incarnations/{name}/traits MISSING from spec")
 	}
 	if _, ok := put["put"]; !ok {
-		t.Errorf("у /v1/incarnations/{name}/traits нет PUT-операции: %v", put)
+		t.Errorf("/v1/incarnations/{name}/traits has no PUT operation: %v", put)
 	}
 	if !strings.Contains(y, "setIncarnationTraits") {
-		t.Error("operationId setIncarnationTraits отсутствует в спеке")
+		t.Error("operationId setIncarnationTraits missing from spec")
 	}
 
 	// (3) per-soul deprecated:true.
 	soulTraits, ok := doc.Paths["/v1/souls/traits"]
 	if !ok {
-		t.Fatal("путь /v1/souls/traits ОТСУТСТВУЕТ в спеке")
+		t.Fatal("path /v1/souls/traits MISSING from spec")
 	}
 	postNode, ok := soulTraits["post"]
 	if !ok {
-		t.Fatal("/v1/souls/traits без POST-операции")
+		t.Fatal("/v1/souls/traits has no POST operation")
 	}
 	var op struct {
 		Deprecated bool `yaml:"deprecated"`
@@ -142,7 +142,7 @@ func TestTraitsRelocation_OpenAPI(t *testing.T) {
 		t.Fatalf("decode soul.traits POST: %v", err)
 	}
 	if !op.Deprecated {
-		t.Error("POST /v1/souls/traits NOT помечен deprecated:true (релокация per-soul → per-incarnation не отражеon)")
+		t.Error("POST /v1/souls/traits NOT marked deprecated:true (per-soul to per-incarnation relocation not reflected)")
 	}
 }
 
@@ -157,21 +157,21 @@ func TestSchemaNames_IncarnationStatusEnum(t *testing.T) {
 
 	var doc map[string]any
 	if err := yaml.Unmarshal([]byte(y), &doc); err != nil {
-		t.Fatalf("спека не парсится: %v", err)
+		t.Fatalf("spec does not parse: %v", err)
 	}
 	comp, _ := doc["components"].(map[string]any)
 	schemas, _ := comp["schemas"].(map[string]any)
 
 	statusSchema, ok := schemas["IncarnationStatus"].(map[string]any)
 	if !ok {
-		t.Fatal("IncarnationStatus не вынесен as named-схема в components/schemas")
+		t.Fatal("IncarnationStatus not extracted as named schema in components/schemas")
 	}
 	if typ, _ := statusSchema["type"].(string); typ != "string" {
-		t.Errorf("IncarnationStatus.type=%q, ожидалось string", typ)
+		t.Errorf("IncarnationStatus.type=%q, want string", typ)
 	}
 	rawEnum, ok := statusSchema["enum"].([]any)
 	if !ok || len(rawEnum) == 0 {
-		t.Fatal("IncarnationStatus без enum — выbutса as enum не проfromошло")
+		t.Fatal("IncarnationStatus has no enum -- enum extraction did not happen")
 	}
 	got := map[string]struct{}{}
 	for _, v := range rawEnum {
@@ -187,13 +187,13 @@ func TestSchemaNames_IncarnationStatusEnum(t *testing.T) {
 				have = append(have, k)
 			}
 			sort.Strings(have)
-			t.Errorf("enum IncarnationStatus не withдержит %q; есть: %v", want, have)
+			t.Errorf("enum IncarnationStatus does not contain %q; have: %v", want, have)
 		}
 	}
 
 	// status fields reference the named schema via $ref (not inline).
 	if !strings.Contains(y, "#/components/schemas/IncarnationStatus") {
-		t.Error("ни одbut field не ссылается on IncarnationStatus via $ref — статус остался инлайн")
+		t.Error("no field references IncarnationStatus via $ref -- status stayed inline")
 	}
 }
 
@@ -210,7 +210,7 @@ func TestSchemaNames_IncarnationEnvelope(t *testing.T) {
 
 	var doc map[string]any
 	if err := yaml.Unmarshal([]byte(y), &doc); err != nil {
-		t.Fatalf("спека не парсится: %v", err)
+		t.Fatalf("spec does not parse: %v", err)
 	}
 	comp, _ := doc["components"].(map[string]any)
 	schemas, _ := comp["schemas"].(map[string]any)
@@ -236,11 +236,11 @@ func assertEnvelopeShape(t *testing.T, schemas map[string]any, name, element str
 
 	env, ok := schemas[name].(map[string]any)
 	if !ok {
-		t.Fatalf("envelope-схема %q отсутствует в components/schemas — envelope-alias не сработал", name)
+		t.Fatalf("envelope schema %q missing from components/schemas -- envelope alias did not work", name)
 	}
 	props, ok := env["properties"].(map[string]any)
 	if !ok {
-		t.Fatalf("%q без properties", name)
+		t.Fatalf("%q missing properties", name)
 	}
 
 	// Exactly 4 fields — cursor fields (next_cursor/total_approximate) must not leak.
@@ -251,11 +251,11 @@ func assertEnvelopeShape(t *testing.T, schemas map[string]any, name, element str
 			got = append(got, k)
 		}
 		sort.Strings(got)
-		t.Errorf("%q несёт %d fields %v, ожидалось ровbut 4 (items/offset/limit/total) — cursor-поля протекли?", name, len(props), got)
+		t.Errorf("%q carries %d fields %v, want exactly 4 (items/offset/limit/total) -- did cursor fields leak?", name, len(props), got)
 	}
 	for f := range wantFields {
 		if _, ok := props[f]; !ok {
-			t.Errorf("%q не withдержит контрактbutго поля %q", name, f)
+			t.Errorf("%q does not contain contract field %q", name, f)
 		}
 	}
 
@@ -267,10 +267,10 @@ func assertEnvelopeShape(t *testing.T, schemas map[string]any, name, element str
 			continue
 		}
 		if !schemaTypeHas(fp["type"], "integer") {
-			t.Errorf("%q.%s.type=%v, ожидалось integer", name, f, fp["type"])
+			t.Errorf("%q.%s.type=%v, want integer", name, f, fp["type"])
 		}
 		if format, _ := fp["format"].(string); format != "int32" {
-			t.Errorf("%q.%s.format=%q, ожидалось int32", name, f, format)
+			t.Errorf("%q.%s.format=%q, want int32", name, f, format)
 		}
 	}
 
@@ -278,18 +278,18 @@ func assertEnvelopeShape(t *testing.T, schemas map[string]any, name, element str
 	// [array,null]; schemaTypeHas accepts both notations.)
 	items, ok := props["items"].(map[string]any)
 	if !ok {
-		t.Fatalf("%q.items отсутствует", name)
+		t.Fatalf("%q.items missing", name)
 	}
 	if !schemaTypeHas(items["type"], "array") {
-		t.Errorf("%q.items.type=%v, ожидалось array", name, items["type"])
+		t.Errorf("%q.items.type=%v, want array", name, items["type"])
 	}
 	elemSchema, ok := items["items"].(map[string]any)
 	if !ok {
-		t.Fatalf("%q.items.items отсутствует (element-схема)", name)
+		t.Fatalf("%q.items.items missing (element schema)", name)
 	}
 	wantRef := "#/components/schemas/" + element
 	if ref, _ := elemSchema["$ref"].(string); ref != wantRef {
-		t.Errorf("%q.items.items.$ref=%q, ожидалось %q (контрактный element)", name, ref, wantRef)
+		t.Errorf("%q.items.items.$ref=%q, want %q (contract element)", name, ref, wantRef)
 	}
 }
 

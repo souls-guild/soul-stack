@@ -35,10 +35,10 @@ func TestScenarioIncludeResolver_LocalShadowsService(t *testing.T) {
 		t.Fatalf("resolve: %v", err)
 	}
 	if want := filepath.ToSlash(filepath.Join("scenario", "deploy", "lib.yml")); display != want {
-		t.Fatalf("display = %q, want локальный %q", display, want)
+		t.Fatalf("display = %q, want local %q", display, want)
 	}
 	if !strings.Contains(string(data), "local") {
-		t.Fatalf("data = %q, want содержимое локального файла", data)
+		t.Fatalf("data = %q, want content of the local file", data)
 	}
 }
 
@@ -83,19 +83,19 @@ func TestScenarioIncludeResolver_IOErrorNotMasked(t *testing.T) {
 	// Under root (or another permission-bypassing environment) chmod 000 doesn't cause permission
 	// denied — the case is unreproducible, skip it, but keep the test in the code.
 	if _, err := os.ReadFile(local); err == nil {
-		t.Skip("chmod 000 не блокирует чтение под текущим uid (root?) — кейс невоспроизводим")
+		t.Skip("chmod 000 does not block reading under the current uid (root?) - case not reproducible")
 	}
 
 	resolve := scenarioIncludeResolver(artifact.NewServiceLoader(t.TempDir(), nil), newServiceArtifactAt(root), "deploy")
 	data, display, err := resolve("lib.yml")
 	if err == nil {
-		t.Fatalf("ожидалась I/O-ошибка чтения локального файла, получено молчаливое чтение display=%q data=%q (фоллбэк замаскировал permission denied)", display, data)
+		t.Fatalf("expected I/O error reading local file, got silent read display=%q data=%q (fallback masked permission denied)", display, data)
 	}
 	if errors.Is(err, fs.ErrNotExist) {
-		t.Fatalf("ошибка трактована как fs.ErrNotExist, want permission denied: %v", err)
+		t.Fatalf("error treated as fs.ErrNotExist, want permission denied: %v", err)
 	}
 	if strings.Contains(string(data), "service-bait") {
-		t.Fatalf("резолвер вернул service-level-приманку вместо ошибки: %q", data)
+		t.Fatalf("resolver returned the service-level decoy instead of an error: %q", data)
 	}
 }
 

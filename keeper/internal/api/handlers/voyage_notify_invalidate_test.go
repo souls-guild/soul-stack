@@ -69,17 +69,17 @@ func TestVoyageNotify_InvalidatesAfterCommit(t *testing.T) {
 		t.Fatalf("status = %d, want 202; body=%s", rec.Code, rec.Body.String())
 	}
 	if !store.committed {
-		t.Fatal("tx не закоммичена — инвариант теста сломан")
+		t.Fatal("tx not committed — test invariant broken")
 	}
 	if store.insertTidings != 1 {
-		t.Fatalf("insertTidings = %d, want 1 (один notify-элемент)", store.insertTidings)
+		t.Fatalf("insertTidings = %d, want 1 (one notify element)", store.insertTidings)
 	}
 	inProc, cross := inv.counts()
 	if inProc != 1 {
-		t.Errorf("in-process InvalidateRules вызван %d раз, want ровно 1", inProc)
+		t.Errorf("in-process InvalidateRules called %d times, want exactly 1", inProc)
 	}
 	if cross != 1 {
-		t.Errorf("cross-keeper publish вызван %d раз, want ровно 1", cross)
+		t.Errorf("cross-keeper publish called %d times, want exactly 1", cross)
 	}
 }
 
@@ -101,7 +101,7 @@ func TestVoyageNotify_NoNotify_NoInvalidate(t *testing.T) {
 		t.Fatalf("insertTidings = %d, want 0", store.insertTidings)
 	}
 	if inProc, cross := inv.counts(); inProc != 0 || cross != 0 {
-		t.Errorf("invalidate вызван (in=%d cross=%d), want 0/0 — без notify правил нет", inProc, cross)
+		t.Errorf("invalidate called (in=%d cross=%d), want 0/0 — no notify means no rules", inProc, cross)
 	}
 }
 
@@ -122,9 +122,9 @@ func TestVoyageNotify_TidingInsertFails_NoInvalidate(t *testing.T) {
 		t.Fatalf("status = %d, want 500 (insert tiding failed); body=%s", rec.Code, rec.Body.String())
 	}
 	if store.committed {
-		t.Fatal("tx закоммичена при сбое InsertTiding — нарушена атомарность")
+		t.Fatal("tx committed despite InsertTiding failure — atomicity violated")
 	}
 	if inProc, cross := inv.counts(); inProc != 0 || cross != 0 {
-		t.Errorf("invalidate вызван при rollback (in=%d cross=%d), want 0/0 — инвариант «только после commit» нарушен", inProc, cross)
+		t.Errorf("invalidate called on rollback (in=%d cross=%d), want 0/0 — the \"only after commit\" invariant is violated", inProc, cross)
 	}
 }

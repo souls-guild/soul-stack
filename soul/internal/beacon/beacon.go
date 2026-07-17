@@ -82,11 +82,11 @@ func Default() *Registry {
 	}
 	canonical := beaconaddr.All()
 	if len(beacons) != len(canonical) {
-		panic(fmt.Sprintf("beacon: реестр (%d) рассинхронен с beaconaddr.All (%d)", len(beacons), len(canonical)))
+		panic(fmt.Sprintf("beacon: registry (%d) out of sync with beaconaddr.All (%d)", len(beacons), len(canonical)))
 	}
 	for _, addr := range canonical {
 		if _, ok := beacons[addr]; !ok {
-			panic(fmt.Sprintf("beacon: канонический адрес %q не зарегистрирован в Default", addr))
+			panic(fmt.Sprintf("beacon: canonical address %q not registered in Default", addr))
 		}
 	}
 	return &Registry{beacons: beacons}

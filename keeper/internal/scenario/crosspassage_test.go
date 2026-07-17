@@ -65,14 +65,14 @@ func TestCrossPassageGate_OnChangesFires(t *testing.T) {
 	got := g.applyGate(perHost, 1)
 	tasks := got["host-a"]
 	if len(tasks) != 1 || tasks[0].Name != "restart" {
-		t.Fatalf("host-a срез = %v, want [restart] (onchanges-источник changed → выполняется)", taskNames(tasks))
+		t.Fatalf("host-a slice = %v, want [restart] (onchanges-source changed -> executes)", taskNames(tasks))
 	}
 	if len(tasks[0].OnChangesIdx) != 0 {
-		t.Errorf("OnChangesIdx = %v, want [] (cross-passage idx убран → безусловно)", tasks[0].OnChangesIdx)
+		t.Errorf("OnChangesIdx = %v, want [] (cross-passage idx dropped -> unconditional)", tasks[0].OnChangesIdx)
 	}
 	// Clone, not a mutation of the original consumer.
 	if len(consumer.OnChangesIdx) != 1 {
-		t.Errorf("исходный consumer.OnChangesIdx мутирован = %v, want [0]", consumer.OnChangesIdx)
+		t.Errorf("original consumer.OnChangesIdx mutated = %v, want [0]", consumer.OnChangesIdx)
 	}
 }
 
@@ -88,7 +88,7 @@ func TestCrossPassageGate_OnChangesSkips(t *testing.T) {
 
 	got := g.applyGate(perHost, 1)
 	if _, present := got["host-a"]; present {
-		t.Fatalf("host-a остался в срезе = %v, want выпал (onchanges не сработал, нет same-passage)", taskNames(got["host-a"]))
+		t.Fatalf("host-a stayed in slice = %v, want dropped (onchanges did not fire, no same-passage)", taskNames(got["host-a"]))
 	}
 }
 
@@ -106,10 +106,10 @@ func TestCrossPassageGate_OnFailFires(t *testing.T) {
 	got := g.applyGate(perHost, 1)
 	tasks := got["host-a"]
 	if len(tasks) != 1 || tasks[0].Name != "rescue" {
-		t.Fatalf("host-a срез = %v, want [rescue] (onfail-источник failed → rescue выполняется)", taskNames(tasks))
+		t.Fatalf("host-a slice = %v, want [rescue] (onfail-source failed -> rescue executes)", taskNames(tasks))
 	}
 	if len(tasks[0].OnFailIdx) != 0 {
-		t.Errorf("OnFailIdx = %v, want [] (cross-passage idx убран → безусловно)", tasks[0].OnFailIdx)
+		t.Errorf("OnFailIdx = %v, want [] (cross-passage idx dropped -> unconditional)", tasks[0].OnFailIdx)
 	}
 }
 
@@ -122,7 +122,7 @@ func TestCrossPassageGate_OnFailSkips(t *testing.T) {
 	rescue := &render.RenderedTask{Index: 1, Passage: 1, Name: "rescue", OnFailIdx: []int{0}}
 	got := g.applyGate(map[string][]*render.RenderedTask{"host-a": {rescue}}, 1)
 	if _, present := got["host-a"]; present {
-		t.Fatalf("host-a остался = %v, want выпал (onfail не сработал)", taskNames(got["host-a"]))
+		t.Fatalf("host-a stayed = %v, want dropped (onfail did not fire)", taskNames(got["host-a"]))
 	}
 }
 
@@ -139,10 +139,10 @@ func TestCrossPassageGate_PerHostDivergent(t *testing.T) {
 
 	got := g.applyGate(perHost, 1)
 	if len(got["host-a"]) != 1 {
-		t.Errorf("host-a = %v, want [restart] (источник changed)", taskNames(got["host-a"]))
+		t.Errorf("host-a = %v, want [restart] (source changed)", taskNames(got["host-a"]))
 	}
 	if _, present := got["host-b"]; present {
-		t.Errorf("host-b = %v, want выпал (источник НЕ changed на host-b)", taskNames(got["host-b"]))
+		t.Errorf("host-b = %v, want dropped (source NOT changed on host-b)", taskNames(got["host-b"]))
 	}
 }
 
@@ -159,7 +159,7 @@ func TestCrossPassageGate_SkippedSourceNotChanged(t *testing.T) {
 	consumer := &render.RenderedTask{Index: 1, Passage: 1, Name: "restart", OnChangesIdx: []int{0}}
 	got := g.applyGate(map[string][]*render.RenderedTask{"host-a": {consumer}}, 1)
 	if _, present := got["host-a"]; present {
-		t.Fatalf("host-a остался = %v, want выпал (skipped-источник ≠ changed)", taskNames(got["host-a"]))
+		t.Fatalf("host-a stayed = %v, want dropped (skipped-source != changed)", taskNames(got["host-a"]))
 	}
 }
 
@@ -177,11 +177,11 @@ func TestCrossPassageGate_MixedCrossAndSame_CrossNotChanged(t *testing.T) {
 	got := g.applyGate(map[string][]*render.RenderedTask{"host-a": {consumer}}, 1)
 	tasks := got["host-a"]
 	if len(tasks) != 1 {
-		t.Fatalf("host-a = %v, want [restart] (есть same-passage onchanges B → не исключается, Soul гейтит)", taskNames(tasks))
+		t.Fatalf("host-a = %v, want [restart] (has same-passage onchanges B -> not excluded, Soul gates)", taskNames(tasks))
 	}
 	// cross idx 0 (A) removed; same idx 2 (B) stays → Soul gates by B.
 	if len(tasks[0].OnChangesIdx) != 1 || tasks[0].OnChangesIdx[0] != 2 {
-		t.Errorf("OnChangesIdx = %v, want [2] (cross A убран, same B на wire → Soul гейтит по B)", tasks[0].OnChangesIdx)
+		t.Errorf("OnChangesIdx = %v, want [2] (cross A dropped, same B on wire -> Soul gates by B)", tasks[0].OnChangesIdx)
 	}
 }
 
@@ -199,12 +199,12 @@ func TestCrossPassageGate_MixedCrossAndSame_CrossChanged(t *testing.T) {
 	got := g.applyGate(map[string][]*render.RenderedTask{"host-a": {consumer}}, 1)
 	tasks := got["host-a"]
 	if len(tasks) != 1 {
-		t.Fatalf("host-a = %v, want [restart] (A changed → выполняется)", taskNames(tasks))
+		t.Fatalf("host-a = %v, want [restart] (A changed -> executes)", taskNames(tasks))
 	}
 	// The WHOLE onchanges is stripped (OR satisfied by cross A): Soul runs
 	// unconditionally, doesn't re-gate on same B.
 	if len(tasks[0].OnChangesIdx) != 0 {
-		t.Errorf("OnChangesIdx = %v, want [] (OR удовлетворён cross A → весь requisite снят, безусловно)", tasks[0].OnChangesIdx)
+		t.Errorf("OnChangesIdx = %v, want [] (OR satisfied by cross A -> entire requisite dropped, unconditional)", tasks[0].OnChangesIdx)
 	}
 }
 
@@ -219,7 +219,7 @@ func TestCrossPassageGate_NoCrossPassage_Untouched(t *testing.T) {
 	got := g.applyGate(map[string][]*render.RenderedTask{"host-a": {consumer}}, 1)
 	tasks := got["host-a"]
 	if len(tasks) != 1 || tasks[0] != consumer {
-		t.Fatalf("same-passage requisite: задача должна вернуться тем же указателем без клона")
+		t.Fatalf("same-passage requisite: task must be returned as the same pointer without a clone")
 	}
 }
 
@@ -230,6 +230,6 @@ func TestCrossPassageGate_Nil(t *testing.T) {
 	in := map[string][]*render.RenderedTask{"host-a": {consumer}}
 	got := g.applyGate(in, 0)
 	if len(got["host-a"]) != 1 || got["host-a"][0] != consumer {
-		t.Fatalf("nil-gate должен вернуть perHost как есть")
+		t.Fatalf("nil-gate must return perHost as-is")
 	}
 }

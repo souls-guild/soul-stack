@@ -12,22 +12,22 @@ func TestAllCoversConsts(t *testing.T) {
 	}
 	all := All()
 	if len(all) != len(consts) {
-		t.Fatalf("All() (%d) не совпадает с числом констант (%d)", len(all), len(consts))
+		t.Fatalf("All() (%d) does not match the number of constants (%d)", len(all), len(consts))
 	}
 
 	seen := make(map[string]struct{}, len(all))
 	for _, a := range all {
 		if a == "" {
-			t.Error("пустой адрес в All()")
+			t.Error("empty address in All()")
 		}
 		if _, dup := seen[a]; dup {
-			t.Errorf("дубль адреса в All(): %q", a)
+			t.Errorf("duplicate address in All(): %q", a)
 		}
 		seen[a] = struct{}{}
 	}
 	for _, c := range consts {
 		if _, ok := seen[c]; !ok {
-			t.Errorf("константа %q отсутствует в All()", c)
+			t.Errorf("constant %q missing from All()", c)
 		}
 	}
 }
@@ -37,10 +37,10 @@ func TestAllCoversConsts(t *testing.T) {
 func TestAllReturnsCopy(t *testing.T) {
 	a := All()
 	if len(a) == 0 {
-		t.Fatal("All() пуст")
+		t.Fatal("All() is empty")
 	}
 	a[0] = "mutated"
 	if All()[0] == "mutated" {
-		t.Error("All() вернул общий мутируемый срез")
+		t.Error("All() returned a shared mutable slice")
 	}
 }

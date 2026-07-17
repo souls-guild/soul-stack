@@ -239,7 +239,7 @@ func TestHeraldCreate_Success_AuditAndInvalidate(t *testing.T) {
 		t.Fatalf("unexpected error: %+v", resp.Error)
 	}
 	if inv.calls != 1 {
-		t.Errorf("InvalidateRules calls = %d, want 1 (CRUD-мутация инвалидирует снимок)", inv.calls)
+		t.Errorf("InvalidateRules calls = %d, want 1 (CRUD mutation invalidates the snapshot)", inv.calls)
 	}
 	if len(rec.events) != 1 || rec.events[0].EventType != audit.EventHeraldCreated {
 		t.Errorf("audit events = %v, want one herald.created", rec.events)
@@ -294,7 +294,7 @@ func TestTidingCreate_MissingHerald404(t *testing.T) {
 		t.Fatal("expected error")
 	}
 	if data := mustToolErrorData(t, resp.Error.Data); data.Code != mcpCodeNotFound {
-		t.Errorf("code = %q, want not-found (FK на missing herald)", data.Code)
+		t.Errorf("code = %q, want not-found (FK on missing herald)", data.Code)
 	}
 }
 

@@ -231,7 +231,7 @@ func TestIntegration_KeeperChain_3Passage_TransitiveRegister(t *testing.T) {
 
 	// The middle link (P1, state delivered) got ip from P0 (register.provision.ip).
 	if got := bootstrap.paramsForState("delivered"); got == nil || got["target_ip"] != "10.0.0.7" {
-		t.Fatalf("P1 (delivered) Params.target_ip = %v, want '10.0.0.7' (register.provision.ip P0 не прокинут)", got["target_ip"])
+		t.Fatalf("P1 (delivered) Params.target_ip = %v, want '10.0.0.7' (register.provision.ip P0 not propagated)", got["target_ip"])
 	}
 
 	// ★ TRANSITIVE forwarding: finalize (P2, state finalized) got origin == ip of
@@ -239,7 +239,7 @@ func TestIntegration_KeeperChain_3Passage_TransitiveRegister(t *testing.T) {
 	// across more than one link.
 	got := bootstrap.paramsForState("finalized")
 	if got == nil || got["origin"] != "10.0.0.7" {
-		t.Fatalf("★ P2 (finalized) Params.origin = %v, want '10.0.0.7' — значение register ПЕРВОЙ задачи (P0) НЕ протянуто транзитивно через P1 до P2 (keeper→keeper chaining оборвался на 2-м звене)", got["origin"])
+		t.Fatalf("* P2 (finalized) Params.origin = %v, want '10.0.0.7' -- the register value of the FIRST task (P0) is NOT propagated transitively through P1 to P2 (keeper->keeper chaining broke at the 2nd link)", got["origin"])
 	}
 
 	// No host-fan-out happened (all-keeper).
@@ -255,13 +255,13 @@ func TestIntegration_KeeperChain_3Passage_TransitiveRegister(t *testing.T) {
 	keeperPassages := map[int]applyrun.Status{}
 	for _, st := range statuses {
 		if st.SID != render.KeeperTargetSID {
-			t.Errorf("неожиданная не-keeper apply_runs-строка sid=%s passage=%d", st.SID, st.Passage)
+			t.Errorf("unexpected non-keeper apply_runs row sid=%s passage=%d", st.SID, st.Passage)
 			continue
 		}
 		keeperPassages[st.Passage] = st.Status
 	}
 	if len(keeperPassages) != 3 {
-		t.Fatalf("★ keeper apply_runs passages = %v, want ровно {0,1,2} (по строке на Passage с keeper-задачами)", keeperPassages)
+		t.Fatalf("* keeper apply_runs passages = %v, want exactly {0,1,2} (one row per Passage with keeper tasks)", keeperPassages)
 	}
 	for _, p := range []int{0, 1, 2} {
 		if keeperPassages[p] != applyrun.StatusSuccess {
@@ -319,7 +319,7 @@ func TestIntegration_KeeperChain_Rerun_NoPKConflict(t *testing.T) {
 		out := map[int]applyrun.Status{}
 		for _, st := range statuses {
 			if st.SID != render.KeeperTargetSID {
-				t.Errorf("прогон %s: не-keeper строка sid=%s passage=%d", applyID, st.SID, st.Passage)
+				t.Errorf("run %s: non-keeper row sid=%s passage=%d", applyID, st.SID, st.Passage)
 				continue
 			}
 			out[st.Passage] = st.Status
@@ -330,7 +330,7 @@ func TestIntegration_KeeperChain_Rerun_NoPKConflict(t *testing.T) {
 	applyID1 := audit.NewULID()
 	run(applyID1)
 	if got := keeperPassages(applyID1); len(got) != 2 || got[0] != applyrun.StatusSuccess || got[1] != applyrun.StatusSuccess {
-		t.Fatalf("прогон #1 keeper passages = %v, want {0:success,1:success}", got)
+		t.Fatalf("run #1 keeper passages = %v, want {0:success,1:success}", got)
 	}
 
 	// The second run uses a different apply_id. If Passage weren't part of the PK,
@@ -340,24 +340,24 @@ func TestIntegration_KeeperChain_Rerun_NoPKConflict(t *testing.T) {
 	applyID2 := audit.NewULID()
 	run(applyID2)
 	if got := keeperPassages(applyID2); len(got) != 2 || got[0] != applyrun.StatusSuccess || got[1] != applyrun.StatusSuccess {
-		t.Fatalf("★ прогон #2 keeper passages = %v, want {0:success,1:success} (rerun staged keeper-цепочки переисполнился без PK-конфликта)", got)
+		t.Fatalf("* run #2 keeper passages = %v, want {0:success,1:success} (rerun of the staged keeper chain re-executed without a PK conflict)", got)
 	}
 
 	// ★ Run #1's rows are NOT overwritten by run #2 — each apply_id carries its own set.
 	if got := keeperPassages(applyID1); len(got) != 2 {
-		t.Fatalf("★ прогон #1 keeper passages ПОСЛЕ rerun = %v, want по-прежнему {0,1} (строки #1 затёрты прогоном #2 — apply_id не изолирует)", got)
+		t.Fatalf("* run #1 keeper passages AFTER rerun = %v, want still {0,1} (row #1 was overwritten by run #2 -- apply_id does not isolate)", got)
 	}
 
 	// register-chaining worked on the SECOND run too (deliver sees ip).
 	if got := bootstrap.params(); got == nil || got["target_ip"] != "10.0.0.7" {
-		t.Errorf("после rerun bootstrap.delivered Params.target_ip = %v, want '10.0.0.7'", got["target_ip"])
+		t.Errorf("after rerun bootstrap.delivered Params.target_ip = %v, want '10.0.0.7'", got["target_ip"])
 	}
 	// Each link executed twice (two runs).
 	if got := cloud.states(); len(got) != 2 {
-		t.Errorf("cloud states = %v, want 2 исполнения (два прогона)", got)
+		t.Errorf("cloud states = %v, want 2 executions (two runs)", got)
 	}
 	if got := bootstrap.states(); len(got) != 2 {
-		t.Errorf("bootstrap states = %v, want 2 исполнения (два прогона)", got)
+		t.Errorf("bootstrap states = %v, want 2 executions (two runs)", got)
 	}
 }
 
@@ -439,10 +439,10 @@ func TestIntegration_KeeperChain_ForwardAccumulation(t *testing.T) {
 		t.Fatal("P2 (finalized) Params == nil")
 	}
 	if got["from_p0"] != "10.0.0.7" {
-		t.Errorf("from_p0 = %v, want '10.0.0.7' (register.provision.ip P0 не виден на P2)", got["from_p0"])
+		t.Errorf("from_p0 = %v, want '10.0.0.7' (register.provision.ip P0 not visible at P2)", got["from_p0"])
 	}
 	if got["from_p1"] != "tok-abc" {
-		t.Errorf("from_p1 = %v, want 'tok-abc' (register.deliver.token P1 не виден на P2)", got["from_p1"])
+		t.Errorf("from_p1 = %v, want 'tok-abc' (register.deliver.token P1 not visible at P2)", got["from_p1"])
 	}
 }
 
@@ -486,12 +486,12 @@ func TestIntegration_KeeperChain_FailPassage2_EarlyPassagesSucceed(t *testing.T)
 		t.Errorf("reason = %v, want keeper_dispatch_failed (keeper-fail Passage 2)", inc.StatusDetails)
 	}
 	if len(inc.State) != 0 {
-		t.Errorf("incarnation.state = %v, want пустой (фейл до финального commit)", inc.State)
+		t.Errorf("incarnation.state = %v, want empty (failure before the final commit)", inc.State)
 	}
 
 	// Early Passages completed (P0 created, P1 delivered), P2 finalized failed at the end.
 	if got := bootstrap.states(); len(got) != 3 || got[0] != "created" || got[1] != "delivered" || got[2] != "finalized" {
-		t.Errorf("bootstrap states = %v, want [created delivered finalized] (ранние Passage успели, P2 дошёл до Apply и упал)", got)
+		t.Errorf("bootstrap states = %v, want [created delivered finalized] (earlier Passages succeeded, P2 reached Apply and failed)", got)
 	}
 
 	statuses, err := applyrun.SelectStatusesByApplyID(context.Background(), integrationPool, applyID)
@@ -501,16 +501,16 @@ func TestIntegration_KeeperChain_FailPassage2_EarlyPassagesSucceed(t *testing.T)
 	keeperPassages := map[int]applyrun.Status{}
 	for _, st := range statuses {
 		if st.SID != render.KeeperTargetSID {
-			t.Errorf("неожиданная не-keeper apply_runs-строка sid=%s passage=%d", st.SID, st.Passage)
+			t.Errorf("unexpected non-keeper apply_runs row sid=%s passage=%d", st.SID, st.Passage)
 			continue
 		}
 		keeperPassages[st.Passage] = st.Status
 	}
 	if keeperPassages[0] != applyrun.StatusSuccess || keeperPassages[1] != applyrun.StatusSuccess {
-		t.Errorf("keeper passages 0/1 = %s/%s, want success/success (ранние Passage отработали ДО фейла P2)", keeperPassages[0], keeperPassages[1])
+		t.Errorf("keeper passages 0/1 = %s/%s, want success/success (earlier Passages ran BEFORE the P2 failure)", keeperPassages[0], keeperPassages[1])
 	}
 	if keeperPassages[2] != applyrun.StatusFailed {
-		t.Fatalf("★ keeper apply_runs[passage=2] = %s, want failed (keeper-fail на последнем звене записал failed-строку именно P2)", keeperPassages[2])
+		t.Fatalf("* keeper apply_runs[passage=2] = %s, want failed (keeper-fail at the last link recorded a failed row exactly for P2)", keeperPassages[2])
 	}
 }
 
@@ -590,14 +590,14 @@ func TestIntegration_KeeperChain_CrossChannel_FailClosed(t *testing.T) {
 	// visible in keeperVars). Reason must be render_failed (not
 	// keeper_dispatch_failed: the failure happens at render, before module execution).
 	if inc.StatusDetails == nil || inc.StatusDetails["reason"] != "render_failed" {
-		t.Errorf("reason = %v, want render_failed (host-register не виден keeper-задаче на render Passage 1)", inc.StatusDetails)
+		t.Errorf("reason = %v, want render_failed (host-register not visible to a keeper task at render Passage 1)", inc.StatusDetails)
 	}
 
 	// ★ The keeper-task is NOT executed — failure at render, before module dispatch.
 	// If the host register had leaked into keeperVars, render would have passed and
 	// bootstrap.Apply would have been called.
 	if got := bootstrap.states(); len(got) != 0 {
-		t.Fatalf("★ keeper-модуль states = %v, want пусто — keeper-задача читает HOST-register, должна упасть на render (no-such-key) ДО исполнения; непустой states ⇒ host-register протёк в keeperVars (канал НЕ изолирован)", got)
+		t.Fatalf("* keeper module states = %v, want empty -- a keeper task reading a HOST register must fail at render (no-such-key) BEFORE execution; non-empty states => host-register leaked into keeperVars (channel NOT isolated)", got)
 	}
 }
 
@@ -649,12 +649,12 @@ func TestIntegration_KeeperChain_2Passage_RegisterChained(t *testing.T) {
 	// ★ register forwarded end-to-end: deliver got target_ip == ip from provision.
 	got := bootstrap.params()
 	if got == nil || got["target_ip"] != "10.0.0.7" {
-		t.Fatalf("★ bootstrap.delivered Params.target_ip = %v, want '10.0.0.7' (register.provision.ip Passage 0 НЕ прокинут в keeper-задачу Passage 1)", got["target_ip"])
+		t.Fatalf("* bootstrap.delivered Params.target_ip = %v, want '10.0.0.7' (register.provision.ip Passage 0 NOT propagated into the keeper task at Passage 1)", got["target_ip"])
 	}
 
 	// No host-fan-out happened (all-keeper).
 	if disp.calls != 0 {
-		t.Errorf("SendApply calls = %d, want 0 (all-keeper, host-fan-out нет)", disp.calls)
+		t.Errorf("SendApply calls = %d, want 0 (all-keeper, no host fan-out)", disp.calls)
 	}
 
 	// apply_runs = exactly 2 keeper rows (apply_id, keeper, 0) and (apply_id, keeper, 1),
@@ -666,13 +666,13 @@ func TestIntegration_KeeperChain_2Passage_RegisterChained(t *testing.T) {
 	keeperPassages := map[int]applyrun.Status{}
 	for _, st := range statuses {
 		if st.SID != render.KeeperTargetSID {
-			t.Errorf("неожиданная не-keeper apply_runs-строка sid=%s passage=%d", st.SID, st.Passage)
+			t.Errorf("unexpected non-keeper apply_runs row sid=%s passage=%d", st.SID, st.Passage)
 			continue
 		}
 		keeperPassages[st.Passage] = st.Status
 	}
 	if len(keeperPassages) != 2 {
-		t.Fatalf("★ keeper apply_runs passages = %v, want ровно {0,1} (по строке на Passage с keeper-задачами)", keeperPassages)
+		t.Fatalf("* keeper apply_runs passages = %v, want exactly {0,1} (one row per Passage with keeper tasks)", keeperPassages)
 	}
 	for _, p := range []int{0, 1} {
 		if keeperPassages[p] != applyrun.StatusSuccess {
@@ -723,12 +723,12 @@ func TestIntegration_KeeperChain_FailPassage1_ErrorLocked(t *testing.T) {
 	}
 	// state is NOT committed (commit only after the LAST Passage; Passage 1 fails before that).
 	if len(inc.State) != 0 {
-		t.Errorf("incarnation.state = %v, want пустой (keeper-fail Passage 1 НЕ коммитит state)", inc.State)
+		t.Errorf("incarnation.state = %v, want empty (keeper-fail Passage 1 does NOT commit state)", inc.State)
 	}
 
 	// Passage 0's keeper-task completed (cloud executed), Passage 1 failed before finishing.
 	if got := cloud.states(); len(got) != 1 {
-		t.Errorf("cloud states = %v, want [created] (Passage 0 успел до фейла Passage 1)", got)
+		t.Errorf("cloud states = %v, want [created] (Passage 0 succeeded before the Passage 1 failure)", got)
 	}
 
 	// apply_runs: keeper passage 0 = success, keeper passage 1 = failed. No host rows.
@@ -739,16 +739,16 @@ func TestIntegration_KeeperChain_FailPassage1_ErrorLocked(t *testing.T) {
 	keeperPassages := map[int]applyrun.Status{}
 	for _, st := range statuses {
 		if st.SID != render.KeeperTargetSID {
-			t.Errorf("неожиданная не-keeper apply_runs-строка sid=%s passage=%d (host-dispatch не должен был стартовать)", st.SID, st.Passage)
+			t.Errorf("unexpected non-keeper apply_runs row sid=%s passage=%d (host-dispatch should not have started)", st.SID, st.Passage)
 			continue
 		}
 		keeperPassages[st.Passage] = st.Status
 	}
 	if keeperPassages[0] != applyrun.StatusSuccess {
-		t.Errorf("keeper apply_runs[passage=0] = %s, want success (отработал ДО фейла Passage 1)", keeperPassages[0])
+		t.Errorf("keeper apply_runs[passage=0] = %s, want success (ran BEFORE the Passage 1 failure)", keeperPassages[0])
 	}
 	if keeperPassages[1] != applyrun.StatusFailed {
-		t.Fatalf("★ keeper apply_runs[passage=1] = %s, want failed (keeper-fail Passage 1 записал failed-строку)", keeperPassages[1])
+		t.Fatalf("* keeper apply_runs[passage=1] = %s, want failed (keeper-fail Passage 1 recorded a failed row)", keeperPassages[1])
 	}
 }
 
@@ -820,7 +820,7 @@ func TestIntegration_MixedKeeperHostPassage0(t *testing.T) {
 	}
 	// host-fan-out started (the host-task went out to one host).
 	if disp.calls != 1 {
-		t.Errorf("SendApply calls = %d, want 1 (host echo на одном хосте)", disp.calls)
+		t.Errorf("SendApply calls = %d, want 1 (host echo on one host)", disp.calls)
 	}
 
 	// apply_runs: keeper passage 0 (success) + host passage 0 (success).
@@ -831,7 +831,7 @@ func TestIntegration_MixedKeeperHostPassage0(t *testing.T) {
 	var keeperOK, hostOK bool
 	for _, st := range statuses {
 		if st.Passage != 0 {
-			t.Errorf("apply_runs[%s] passage = %d, want 0 (N=1, всё в Passage 0)", st.SID, st.Passage)
+			t.Errorf("apply_runs[%s] passage = %d, want 0 (N=1, everything in Passage 0)", st.SID, st.Passage)
 		}
 		switch st.SID {
 		case render.KeeperTargetSID:
@@ -841,10 +841,10 @@ func TestIntegration_MixedKeeperHostPassage0(t *testing.T) {
 		}
 	}
 	if !keeperOK {
-		t.Errorf("нет keeper apply_runs success passage 0: %+v", statuses)
+		t.Errorf("no keeper apply_runs success passage 0: %+v", statuses)
 	}
 	if !hostOK {
-		t.Errorf("нет host apply_runs success passage 0: %+v", statuses)
+		t.Errorf("no host apply_runs success passage 0: %+v", statuses)
 	}
 }
 
@@ -887,6 +887,6 @@ tasks:
 		t.Fatalf("passage.Count = %d, want 2 (provision P0, deliver P1)", passage.Count)
 	}
 	if passage.TaskPassage[0] != 0 || passage.TaskPassage[1] != 1 {
-		t.Fatalf("TaskPassage = %v, want [0 1] (deliver читает register.provision в params)", passage.TaskPassage)
+		t.Fatalf("TaskPassage = %v, want [0 1] (deliver reads register.provision in params)", passage.TaskPassage)
 	}
 }

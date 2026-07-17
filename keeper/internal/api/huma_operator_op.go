@@ -35,9 +35,9 @@ type operatorCreateInput struct {
 // schema name in OpenAPI (huma's DefaultSchemaNamer takes reflect.Type.Name()) — aligned with the
 // committed hand-written spec (docs/keeper/openapi.yaml → OperatorCreateRequest).
 type OperatorCreateRequest struct {
-	AID         string   `json:"aid" required:"true" pattern:"^[a-z0-9][a-z0-9._@-]{1,127}$" doc:"AID butвого Архонта (naming-rules.md)"`
-	DisplayName string   `json:"display_name,omitempty" doc:"человекочитаемое имя for UI/аудита"`
-	Roles       []string `json:"roles,omitempty" doc:"опц. спиwithк ролей for atomic create+grant (онбординг одним вызовом); error роли → rollback"`
+	AID         string   `json:"aid" required:"true" pattern:"^[a-z0-9][a-z0-9._@-]{1,127}$" doc:"AID of the new Archon (naming-rules.md)"`
+	DisplayName string   `json:"display_name,omitempty" doc:"human-readable name for UI/audit"`
+	Roles       []string `json:"roles,omitempty" doc:"opt. list of roles for atomic create+grant (onboarding in one call); role error -> rollback"`
 }
 
 // operatorCreateOutput — huma output for POST /v1/operators (FULL-TYPED). Status=201;
@@ -57,8 +57,8 @@ func operatorCreateOperation() huma.Operation {
 		OperationID:   "createOperator",
 		Method:        http.MethodPost,
 		Path:          "/",
-		Summary:       "Создать Архонта",
-		Description:   "Созgives оператора (Archon) + опц. atomic-grant ролей (ADR-013/014). Permission operator.create. 409 — AID занят. Returns JWT один раз.",
+		Summary:       "Create an Archon",
+		Description:   "Creates an operator (Archon) + opt. atomic-grant of roles (ADR-013/014). Permission operator.create. 409 - AID taken. Returns JWT once.",
 		Tags:          []string{"operator"},
 		DefaultStatus: http.StatusCreated,
 		Errors:        []int{http.StatusBadRequest, http.StatusForbidden, http.StatusNotFound, http.StatusConflict, http.StatusUnprocessableEntity, http.StatusInternalServerError},
@@ -87,9 +87,9 @@ func operatorCreateOperation() huma.Operation {
 //     with 422, whereas legacy ParsePage returns 400) — enforced by the DOMAIN ListTyped via
 //     CheckPageBounds with the same message → 400.
 type operatorListInput struct {
-	AuthMethod string `query:"auth_method" enum:"jwt,mtls,combined,ldap,oidc" doc:"фильтр по форме credential; зonчение вне enum → 422"`
-	Revoked    bool   `query:"revoked" doc:"включать ревокнутых (false — только активные); bad-value → 400"`
-	Q          string `query:"q" doc:"свободный поиск по display_name/aid (substring, регистронезависимо); пусто → без фильтра"`
+	AuthMethod string `query:"auth_method" enum:"jwt,mtls,combined,ldap,oidc" doc:"filter by credential form; value outside enum -> 422"`
+	Revoked    bool   `query:"revoked" doc:"include revoked (false - active only); bad-value -> 400"`
+	Q          string `query:"q" doc:"free search over display_name/aid (substring, case-insensitive); empty -> no filter"`
 	Offset     int32  `query:"offset" default:"0" doc:"offset from start of set, ≥0 (matches shared/api.ParsePage; out-of-range → 400)"`
 	Limit      int32  `query:"limit" default:"50" doc:"page size 1..1000 (matches shared/api.ParsePage; out-of-range → 400)"`
 }
@@ -120,8 +120,8 @@ func operatorListOperation() huma.Operation {
 		OperationID:   "listOperators",
 		Method:        http.MethodGet,
 		Path:          "/",
-		Summary:       "Спиwithк Архонтов (paged + фильтры)",
-		Description:   "Реестр операторов с фильтрами (auth_method enum, revoked, q — substring-поиск по display_name/aid, регистронезависимо) и пагиonцией. Permission operator.list. Read-only, no audit.",
+		Summary:       "List of Archons (paged + filters)",
+		Description:   "Registry of operators with filters (auth_method enum, revoked, q - substring search over display_name/aid, case-insensitive) and pagination. Permission operator.list. Read-only, no audit.",
 		Tags:          []string{"operator"},
 		DefaultStatus: http.StatusOK,
 		Errors:        []int{http.StatusBadRequest, http.StatusForbidden, http.StatusUnprocessableEntity, http.StatusInternalServerError},
@@ -134,7 +134,7 @@ func operatorListOperation() huma.Operation {
 // (huma extracts it via `path:"aid"`). AID format (operator.ValidAID) — domain
 // validation in GetTyped (422), not the huma schema.
 type operatorGetInput struct {
-	AID string `path:"aid" pattern:"^[a-z0-9][a-z0-9._@-]{1,127}$" doc:"AID Архонта"`
+	AID string `path:"aid" pattern:"^[a-z0-9][a-z0-9._@-]{1,127}$" doc:"AID of the Archon"`
 }
 
 // operatorGetOutput — huma output for GET /v1/operators/{aid} (FULL-TYPED). Body —
@@ -152,8 +152,8 @@ func operatorGetOperation() huma.Operation {
 		OperationID:   "getOperator",
 		Method:        http.MethodGet,
 		Path:          "/{aid}",
-		Summary:       "Карточка Архонта",
-		Description:   "Метаданные одbutго оператора по AID. Permission operator.list (read покрыт list-правом). Read-only, no audit.",
+		Summary:       "Archon card",
+		Description:   "Metadata of a single operator by AID. Permission operator.list (read covered by list-right). Read-only, no audit.",
 		Tags:          []string{"operator"},
 		DefaultStatus: http.StatusOK,
 		Errors:        []int{http.StatusForbidden, http.StatusNotFound, http.StatusUnprocessableEntity, http.StatusInternalServerError},
@@ -165,7 +165,7 @@ func operatorGetOperation() huma.Operation {
 // operatorRevokeInput — huma input for POST /v1/operators/{aid}/revoke. AID — path;
 // Body — typed body (optional reason). aid in the body (echo for MCP) is NOT read by huma.
 type operatorRevokeInput struct {
-	AID  string `path:"aid" pattern:"^[a-z0-9][a-z0-9._@-]{1,127}$" doc:"AID Архонта for отзыва"`
+	AID  string `path:"aid" pattern:"^[a-z0-9][a-z0-9._@-]{1,127}$" doc:"AID of the Archon to revoke"`
 	Body OperatorRevokeRequest
 }
 
@@ -174,7 +174,7 @@ type operatorRevokeInput struct {
 // is authoritative; the body echo field was only for MCP). The struct name = the contractual
 // schema name in OpenAPI (committed hand-written spec → OperatorRevokeRequest).
 type OperatorRevokeRequest struct {
-	Reason string `json:"reason,omitempty" doc:"свободный текст причины for audit-trail (optional)"`
+	Reason string `json:"reason,omitempty" doc:"free-text reason for audit-trail (optional)"`
 }
 
 // operatorNoContentOutput — huma output for the 204 write route revoke. No Body
@@ -192,8 +192,8 @@ func operatorRevokeOperation() huma.Operation {
 		OperationID:   "revokeOperator",
 		Method:        http.MethodPost,
 		Path:          "/{aid}/revoke",
-		Summary:       "Отозвать Архонта",
-		Description:   "Ставит operators.revoked_at (ADR-014). Permission operator.revoke. 409 — последний cluster-admin (self-lockout-защита) либо already revoked.",
+		Summary:       "Revoke an Archon",
+		Description:   "Sets operators.revoked_at (ADR-014). Permission operator.revoke. 409 - last cluster-admin (self-lockout protection) or already revoked.",
 		Tags:          []string{"operator"},
 		DefaultStatus: http.StatusNoContent,
 		Errors:        []int{http.StatusForbidden, http.StatusNotFound, http.StatusConflict, http.StatusUnprocessableEntity, http.StatusInternalServerError},
@@ -205,7 +205,7 @@ func operatorRevokeOperation() huma.Operation {
 // operatorIssueTokenInput — huma input for POST /v1/operators/{aid}/issue-token. AID —
 // path parameter. No Body (issuing a new JWT carries no body).
 type operatorIssueTokenInput struct {
-	AID string `path:"aid" pattern:"^[a-z0-9][a-z0-9._@-]{1,127}$" doc:"AID Архонта, for которого выпускается butвый JWT"`
+	AID string `path:"aid" pattern:"^[a-z0-9][a-z0-9._@-]{1,127}$" doc:"AID of the Archon for whom a new JWT is issued"`
 }
 
 // operatorIssueTokenOutput — huma output for POST /v1/operators/{aid}/issue-token
@@ -224,8 +224,8 @@ func operatorIssueTokenOperation() huma.Operation {
 		OperationID:   "issueOperatorToken",
 		Method:        http.MethodPost,
 		Path:          "/{aid}/issue-token",
-		Summary:       "Выпустить butвый JWT Архонту",
-		Description:   "Выпускает свежий JWT существующему оператору (ADR-014). Permission operator.issue-token. 409 — оператор revoked. Returns JWT один раз.",
+		Summary:       "Issue a new JWT to an Archon",
+		Description:   "Issues a fresh JWT to an existing operator (ADR-014). Permission operator.issue-token. 409 - operator revoked. Returns JWT once.",
 		Tags:          []string{"operator"},
 		DefaultStatus: http.StatusOK,
 		Errors:        []int{http.StatusForbidden, http.StatusNotFound, http.StatusConflict, http.StatusUnprocessableEntity, http.StatusInternalServerError},

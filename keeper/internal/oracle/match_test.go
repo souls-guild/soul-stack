@@ -11,10 +11,10 @@ func TestSubjectMatches_SID(t *testing.T) {
 	d := &Decree{Name: "d", SubjectSID: strptr("host-a.example.com")}
 
 	if !SubjectMatches(d, "host-a.example.com", nil) {
-		t.Error("sid-Decree должен сматчить совпадающий SID")
+		t.Error("sid-Decree should match a matching SID")
 	}
 	if SubjectMatches(d, "host-b.example.com", []string{"web"}) {
-		t.Error("sid-Decree НЕ должен матчить другой SID (covens не учитываются)")
+		t.Error("sid-Decree must NOT match a different SID (covens are not considered)")
 	}
 }
 
@@ -22,13 +22,13 @@ func TestSubjectMatches_Coven(t *testing.T) {
 	d := &Decree{Name: "d", SubjectCoven: []string{"web", "prod"}}
 
 	if !SubjectMatches(d, "host-a", []string{"prod", "eu"}) {
-		t.Error("coven-Decree должен сматчить при пересечении (prod)")
+		t.Error("coven-Decree should match on intersection (prod)")
 	}
 	if SubjectMatches(d, "host-a", []string{"db", "eu"}) {
-		t.Error("coven-Decree НЕ должен матчить без пересечения")
+		t.Error("coven-Decree must NOT match without an intersection")
 	}
 	if SubjectMatches(d, "host-a", nil) {
-		t.Error("coven-Decree НЕ должен матчить хост без covens")
+		t.Error("coven-Decree must NOT match a host with no covens")
 	}
 }
 
@@ -37,7 +37,7 @@ func TestSubjectMatches_EmptySubjectFailSafe(t *testing.T) {
 	// programming error: empty subject → no match (default-deny).
 	d := &Decree{Name: "d"}
 	if SubjectMatches(d, "host-a", []string{"web"}) {
-		t.Error("Decree без субъекта должен давать no-match (fail-safe default-deny)")
+		t.Error("Decree with no subject should yield no-match (fail-safe default-deny)")
 	}
 }
 
@@ -51,13 +51,13 @@ func TestWithinCooldown(t *testing.T) {
 		hasFired  bool
 		want      bool
 	}{
-		{"никогда не срабатывал", "5m", time.Time{}, false, false},
-		{"cooldown выключен (0s)", "0s", now.Add(-1 * time.Second), true, false},
-		{"в окне cooldown", "5m", now.Add(-1 * time.Minute), true, true},
-		{"ровно на границе (>= cooldown → нет)", "5m", now.Add(-5 * time.Minute), true, false},
-		{"за окном cooldown", "5m", now.Add(-10 * time.Minute), true, false},
-		{"битый формат → cooldown выключен", "nonsense", now.Add(-1 * time.Second), true, false},
-		{"суффикс дня (1d)", "1d", now.Add(-1 * time.Hour), true, true},
+		{"never fired", "5m", time.Time{}, false, false},
+		{"cooldown disabled (0s)", "0s", now.Add(-1 * time.Second), true, false},
+		{"inside the cooldown window", "5m", now.Add(-1 * time.Minute), true, true},
+		{"exactly on the boundary (>= cooldown -> no)", "5m", now.Add(-5 * time.Minute), true, false},
+		{"outside the cooldown window", "5m", now.Add(-10 * time.Minute), true, false},
+		{"malformed format -> cooldown disabled", "nonsense", now.Add(-1 * time.Second), true, false},
+		{"day suffix (1d)", "1d", now.Add(-1 * time.Hour), true, true},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {

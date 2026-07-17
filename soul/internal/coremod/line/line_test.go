@@ -68,7 +68,7 @@ func TestValidate_UnknownState(t *testing.T) {
 		Params: mustStruct(t, map[string]any{"path": "/etc/x", "line": "a"}),
 	})
 	if reply.Ok {
-		t.Fatal("Validate ok=true для неизвестного state")
+		t.Fatal("Validate ok=true for an unknown state")
 	}
 }
 
@@ -78,7 +78,7 @@ func TestValidate_PresentRequiresLine(t *testing.T) {
 		Params: mustStruct(t, map[string]any{"path": "/etc/x"}),
 	})
 	if reply.Ok {
-		t.Fatal("Validate ok=true для present без line")
+		t.Fatal("Validate ok=true for present without line")
 	}
 }
 
@@ -88,7 +88,7 @@ func TestValidate_AbsentRequiresLineOrRegexp(t *testing.T) {
 		Params: mustStruct(t, map[string]any{"path": "/etc/x"}),
 	})
 	if reply.Ok {
-		t.Fatal("Validate ok=true для absent без line и regexp")
+		t.Fatal("Validate ok=true for absent without line and regexp")
 	}
 }
 
@@ -98,7 +98,7 @@ func TestValidate_InvalidRegexp(t *testing.T) {
 		Params: mustStruct(t, map[string]any{"path": "/etc/x", "line": "a", "regexp": "("}),
 	})
 	if reply.Ok {
-		t.Fatal("Validate ok=true для битого regexp")
+		t.Fatal("Validate ok=true for a broken regexp")
 	}
 }
 
@@ -111,7 +111,7 @@ func TestValidate_InsertAfterBeforeMutualExclusive(t *testing.T) {
 		}),
 	})
 	if reply.Ok {
-		t.Fatal("Validate ok=true при одновременных insertafter/insertbefore")
+		t.Fatal("Validate ok=true with simultaneous insertafter/insertbefore")
 	}
 }
 
@@ -121,7 +121,7 @@ func TestValidate_AcceptsAbsentRegexpOnly(t *testing.T) {
 		Params: mustStruct(t, map[string]any{"path": "/etc/x", "regexp": "^foo"}),
 	})
 	if !reply.Ok {
-		t.Fatalf("Validate ok=false для валидного absent+regexp: %v", reply.Errors)
+		t.Fatalf("Validate ok=false for valid absent+regexp: %v", reply.Errors)
 	}
 }
 
@@ -146,10 +146,10 @@ func TestPresent_AlreadyPresent_NoOp(t *testing.T) {
 	path := seed(t, "alpha\nbeta\n")
 	stream, _ := apply(t, "present", map[string]any{"path": path, "line": "beta"})
 	if stream.Last().Changed {
-		t.Fatal("changed=true для уже присутствующей строки")
+		t.Fatal("changed=true for an already-present line")
 	}
 	if got := read(t, path); got != "alpha\nbeta\n" {
-		t.Fatalf("content изменён: %q", got)
+		t.Fatalf("content changed: %q", got)
 	}
 }
 
@@ -202,7 +202,7 @@ func TestPresent_Regexp_ReplaceFirst(t *testing.T) {
 	})
 	ev := stream.Last()
 	if !ev.Changed {
-		t.Fatal("changed=false при regexp-замене")
+		t.Fatal("changed=false on regexp-replace")
 	}
 	if got := read(t, path); got != "# config\nport = 443\nhost = local\n" {
 		t.Fatalf("content=%q", got)
@@ -219,17 +219,17 @@ func TestPresent_Regexp_MultipleMatch_ReplacesFirstWithWarning(t *testing.T) {
 	})
 	ev := stream.Last()
 	if !ev.Changed {
-		t.Fatal("changed=false при множественном совпадении")
+		t.Fatal("changed=false on multiple match")
 	}
 	if got := read(t, path); got != "x = 9\nx = 2\nx = 3\n" {
-		t.Fatalf("заменена не только первая: %q", got)
+		t.Fatalf("replaced more than just the first: %q", got)
 	}
 	if m := ev.Output.Fields["matched"].GetNumberValue(); m != 3 {
 		t.Fatalf("matched=%v want 3", m)
 	}
 	w := ev.Output.Fields["warning"].GetStringValue()
 	if w == "" || !strings.Contains(w, "3") {
-		t.Fatalf("warning отсутствует/некорректен: %q", w)
+		t.Fatalf("warning missing/incorrect: %q", w)
 	}
 }
 
@@ -239,7 +239,7 @@ func TestPresent_Regexp_FirstAlreadyEqual_NoOp(t *testing.T) {
 		"path": path, "line": "port = 443", "regexp": "^port = ",
 	})
 	if stream.Last().Changed {
-		t.Fatal("changed=true когда первое совпадение уже равно line")
+		t.Fatal("changed=true when the first match already equals line")
 	}
 }
 
@@ -249,7 +249,7 @@ func TestPresent_Regexp_NoMatch_Appends(t *testing.T) {
 		"path": path, "line": "gamma = 1", "regexp": "^gamma = ",
 	})
 	if !stream.Last().Changed {
-		t.Fatal("changed=false когда regexp без совпадений и line добавляется")
+		t.Fatal("changed=false when regexp has no matches and line is appended")
 	}
 	if got := read(t, path); got != "alpha\nbeta\ngamma = 1\n" {
 		t.Fatalf("content=%q", got)
@@ -265,7 +265,7 @@ func TestAbsent_Regexp_RemoveAll(t *testing.T) {
 	})
 	ev := stream.Last()
 	if !ev.Changed {
-		t.Fatal("changed=false при absent+regexp")
+		t.Fatal("changed=false on absent+regexp")
 	}
 	if got := read(t, path); got != "keep\n# c1\n# c2\nkeep2\n" {
 		t.Fatalf("content=%q", got)
@@ -292,7 +292,7 @@ func TestAbsent_NoMatch_NoOp(t *testing.T) {
 	path := seed(t, "a\nb\nc\n")
 	stream, _ := apply(t, "absent", map[string]any{"path": path, "line": "zzz"})
 	if stream.Last().Changed {
-		t.Fatal("changed=true когда нечего удалять")
+		t.Fatal("changed=true when there's nothing to remove")
 	}
 }
 
@@ -323,10 +323,10 @@ func TestCreate_False_FileMissing_Present_Fails(t *testing.T) {
 	stream, _ := apply(t, "present", map[string]any{"path": path, "line": "x"})
 	ev := stream.Last()
 	if !ev.Failed {
-		t.Fatal("failed=false когда файла нет и create=false")
+		t.Fatal("failed=false when the file doesn't exist and create=false")
 	}
 	if !strings.Contains(ev.Message, "create:true") {
-		t.Fatalf("ожидалась подсказка про create:true, got %q", ev.Message)
+		t.Fatalf("expected a hint about create:true, got %q", ev.Message)
 	}
 }
 
@@ -336,7 +336,7 @@ func TestAbsent_FileMissing_NoOp(t *testing.T) {
 	stream, _ := apply(t, "absent", map[string]any{"path": path, "line": "x"})
 	ev := stream.Last()
 	if ev.Changed || ev.Failed {
-		t.Fatalf("changed=%v failed=%v для absent с отсутствующим файлом", ev.Changed, ev.Failed)
+		t.Fatalf("changed=%v failed=%v for absent with a missing file", ev.Changed, ev.Failed)
 	}
 }
 
@@ -348,10 +348,10 @@ func TestIdempotency_Present(t *testing.T) {
 		stream, _ := apply(t, "present", map[string]any{"path": path, "line": "beta"})
 		if i == 0 {
 			if !stream.Last().Changed {
-				t.Fatal("первый прогон: changed=false")
+				t.Fatal("first run: changed=false")
 			}
 		} else if stream.Last().Changed {
-			t.Fatalf("прогон %d: changed=true (не идемпотентно)", i)
+			t.Fatalf("run %d: changed=true (not idempotent)", i)
 		}
 	}
 	if got := read(t, path); got != "alpha\nbeta\n" {
@@ -365,10 +365,10 @@ func TestIdempotency_Absent(t *testing.T) {
 		stream, _ := apply(t, "absent", map[string]any{"path": path, "line": "drop"})
 		if i == 0 {
 			if !stream.Last().Changed {
-				t.Fatal("первый прогон: changed=false")
+				t.Fatal("first run: changed=false")
 			}
 		} else if stream.Last().Changed {
-			t.Fatalf("прогон %d: changed=true (не идемпотентно)", i)
+			t.Fatalf("run %d: changed=true (not idempotent)", i)
 		}
 	}
 }
@@ -381,10 +381,10 @@ func TestIdempotency_PresentRegexp(t *testing.T) {
 		})
 		if i == 0 {
 			if !stream.Last().Changed {
-				t.Fatal("первый прогон regexp: changed=false")
+				t.Fatal("first regexp run: changed=false")
 			}
 		} else if stream.Last().Changed {
-			t.Fatalf("прогон %d regexp: changed=true (не идемпотентно)", i)
+			t.Fatalf("regexp run %d: changed=true (not idempotent)", i)
 		}
 	}
 	if got := read(t, path); got != "port = 443\n" {
@@ -406,7 +406,7 @@ func TestPreservesNoTrailingNewline(t *testing.T) {
 func TestMissingPath_Fails(t *testing.T) {
 	stream, _ := apply(t, "present", map[string]any{"line": "x"})
 	if !stream.Last().Failed {
-		t.Fatal("failed=false при отсутствии path")
+		t.Fatal("failed=false when path is missing")
 	}
 }
 
@@ -419,11 +419,11 @@ func TestPresent_Edit_PreservesMode(t *testing.T) {
 		t.Fatalf("Apply: %v", err)
 	}
 	if !stream.Last().Changed {
-		t.Fatal("changed=false при добавлении строки")
+		t.Fatal("changed=false when appending a line")
 	}
 	info, _ := os.Stat(path)
 	if info.Mode().Perm() != 0o600 {
-		t.Fatalf("mode=%v want 0600 (mode не задан → preserve)", info.Mode().Perm())
+		t.Fatalf("mode=%v want 0600 (mode not set → preserve)", info.Mode().Perm())
 	}
 }
 
@@ -435,7 +435,7 @@ func TestPresent_Edit_ExplicitModeOverrides(t *testing.T) {
 	}
 	info, _ := os.Stat(path)
 	if info.Mode().Perm() != 0o640 {
-		t.Fatalf("mode=%v want 0640 (явный mode → override)", info.Mode().Perm())
+		t.Fatalf("mode=%v want 0640 (explicit mode → override)", info.Mode().Perm())
 	}
 }
 
@@ -446,7 +446,7 @@ func TestAbsent_Rewrite_PreservesMode(t *testing.T) {
 		t.Fatalf("Apply: %v", err)
 	}
 	if !stream.Last().Changed {
-		t.Fatal("changed=false при absent-удалении")
+		t.Fatal("changed=false on absent-removal")
 	}
 	if got := read(t, path); got != "keep\nkeep2\n" {
 		t.Fatalf("content=%q", got)
@@ -474,7 +474,7 @@ func TestPresent_Edit_PreservesOwner(t *testing.T) {
 	}
 	afterUID, afterGID := ownerOf(t, path)
 	if beforeUID != afterUID || beforeGID != afterGID {
-		t.Fatalf("owner изменился: before=%d:%d after=%d:%d", beforeUID, beforeGID, afterUID, afterGID)
+		t.Fatalf("owner changed: before=%d:%d after=%d:%d", beforeUID, beforeGID, afterUID, afterGID)
 	}
 }
 
@@ -486,7 +486,7 @@ func ownerOf(t *testing.T, path string) (uid, gid int) {
 	}
 	sys, ok := info.Sys().(*syscall.Stat_t)
 	if !ok {
-		t.Skip("Stat_t недоступен на этой платформе")
+		t.Skip("Stat_t unavailable on this platform")
 	}
 	return int(sys.Uid), int(sys.Gid)
 }

@@ -34,7 +34,7 @@ func assertNoMutatingSysctlCalls(t *testing.T, r *internaltest.Runner) {
 	t.Helper()
 	for _, c := range r.Calls {
 		if strings.Contains(c, "sysctl -w") {
-			t.Fatalf("Plan вызвал мутирующую команду %q", c)
+			t.Fatalf("Plan invoked a mutating command %q", c)
 		}
 	}
 }
@@ -70,7 +70,7 @@ func TestPlan_RuntimeAndPersistMatch_Clean(t *testing.T) {
 	}
 	assertNoMutatingSysctlCalls(t, r)
 	if afterPersist, _ := os.ReadFile(path); string(afterPersist) != string(beforePersist) {
-		t.Fatalf("Plan изменил persist-файл")
+		t.Fatalf("Plan modified the persist file")
 	}
 }
 
@@ -122,7 +122,7 @@ func TestPlan_PersistMissing_Drift(t *testing.T) {
 	// Plan must not create the persist file.
 	fname := "net-ipv4-ip_forward.conf"
 	if _, err := os.Stat(filepath.Join(dir, fname)); !os.IsNotExist(err) {
-		t.Fatalf("Plan создал persist-файл")
+		t.Fatalf("Plan created the persist file")
 	}
 	assertNoMutatingSysctlCalls(t, r)
 }
@@ -156,7 +156,7 @@ func TestPlan_PersistContentDrift(t *testing.T) {
 		t.Fatalf("changed=false, want true (persist content drift)")
 	}
 	if afterPersist, _ := os.ReadFile(path); string(afterPersist) != string(beforePersist) {
-		t.Fatalf("Plan изменил persist-файл")
+		t.Fatalf("Plan modified the persist file")
 	}
 	assertNoMutatingSysctlCalls(t, r)
 }

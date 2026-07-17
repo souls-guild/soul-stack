@@ -90,7 +90,7 @@ func ParsePermission(raw string) (Permission, error) {
 	}
 
 	if !IsAllowedPermission(resource, action) {
-		return Permission{}, fmt.Errorf("permission %q: unknown_permission (resource.action not in catalog rbac.md → §Каталог permissions)", raw)
+		return Permission{}, fmt.Errorf("permission %q: unknown_permission (resource.action not in catalog rbac.md -> §Permissions Catalog)", raw)
 	}
 
 	// A DEPRECATED alias is canonicalized to the new name (selector is kept):

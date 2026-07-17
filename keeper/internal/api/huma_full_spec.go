@@ -364,7 +364,7 @@ type schemaCollisionError struct {
 }
 
 func (e *schemaCollisionError) Error() string {
-	return fmt.Sprintf("schema %q: коллfromия имени с РАЗНЫМИ телами между toмеonми (нельзя молча дедуплицировать)\n--- variant A ---\n%s\n--- variant B ---\n%s",
+	return fmt.Sprintf("schema %q: name collision with DIFFERENT bodies between domains (cannot silently dedup)\n--- variant A ---\n%s\n--- variant B ---\n%s",
 		e.name, e.bodyA, e.bodyB)
 }
 
@@ -376,7 +376,7 @@ type pathMethodCollisionError struct {
 }
 
 func (e *pathMethodCollisionError) Error() string {
-	return fmt.Sprintf("операция %s %s объявлеon дважды после префикwithвания (коллfromия path+method между toмеonми)", e.method, e.path)
+	return fmt.Sprintf("operation %s %s declared twice after prefixing (path+method collision between domains)", e.method, e.path)
 }
 
 // buildFullOpenAPISpec assembles a single huma.OpenAPI object from all registration
@@ -410,7 +410,7 @@ func buildFullOpenAPISpec() (*huma.OpenAPI, error) {
 		Type:         "http",
 		Scheme:       "bearer",
 		BearerFormat: "JWT",
-		Description:  "Archon JWT (Authorization: Bearer <jwt>). Все /v1-операции требуют валидный токен.",
+		Description:  "Archon JWT (Authorization: Bearer <jwt>). All /v1 operations require a valid token.",
 	}
 	full.Security = []map[string][]string{{bearerSecuritySchemeName: {}}}
 	// The base Registry schema of the full spec is filled in below from the per-group dumps;

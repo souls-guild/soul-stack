@@ -79,7 +79,7 @@ func (s *fakeShellSession) Run(_ context.Context, cmd string, stdin []byte) (str
 		// (single-quote escape, see delivery.go::remoteSha256).
 		fields := strings.Fields(cmd)
 		if len(fields) < 3 {
-			return "", fmt.Errorf("плохая команда: %q", cmd)
+			return "", fmt.Errorf("bad command: %q", cmd)
 		}
 		path := strings.Trim(fields[2], "'")
 		sum, ok := s.fs.sha256(path)
@@ -93,7 +93,7 @@ func (s *fakeShellSession) Run(_ context.Context, cmd string, stdin []byte) (str
 		// rest = "path && chmod 0755 path"
 		parts := strings.SplitN(rest, " ", 2)
 		if len(parts) < 1 {
-			return "", fmt.Errorf("плохая cat-команда: %q", cmd)
+			return "", fmt.Errorf("bad cat command: %q", cmd)
 		}
 		path := parts[0]
 		s.fs.mu.Lock()
@@ -101,7 +101,7 @@ func (s *fakeShellSession) Run(_ context.Context, cmd string, stdin []byte) (str
 		parent := filepath.Dir(path)
 		if !s.fs.dirs[parent] {
 			s.fs.mu.Unlock()
-			return "", fmt.Errorf("каталог %q не создан", parent)
+			return "", fmt.Errorf("dir %q not created", parent)
 		}
 		buf := make([]byte, len(stdin))
 		copy(buf, stdin)
@@ -122,7 +122,7 @@ func (s *fakeShellSession) Run(_ context.Context, cmd string, stdin []byte) (str
 		s.fs.mu.Unlock()
 		return "", nil
 	default:
-		return "", fmt.Errorf("неподдержанная команда: %q", cmd)
+		return "", fmt.Errorf("unsupported command: %q", cmd)
 	}
 }
 
@@ -154,10 +154,10 @@ func TestDeliver_UploadsWhenMissing(t *testing.T) {
 	}
 	// Files delivered.
 	if got, ok := fs.files[hostSoulDir+"/"+hostSoulFile]; !ok || string(got) != "SOUL-BINARY-V1" {
-		t.Errorf("soul не доставлен, got %q ok=%v", got, ok)
+		t.Errorf("soul not delivered, got %q ok=%v", got, ok)
 	}
 	if got, ok := fs.files[hostModulesDir+"/soul-mod-pkg"]; !ok || string(got) != "MOD-PKG-V1" {
-		t.Errorf("модуль не доставлен, got %q ok=%v", got, ok)
+		t.Errorf("module not delivered, got %q ok=%v", got, ok)
 	}
 	// Check chmod by the presence of a subcommand in the exec log.
 	var sawChmod bool
@@ -168,7 +168,7 @@ func TestDeliver_UploadsWhenMissing(t *testing.T) {
 		}
 	}
 	if !sawChmod {
-		t.Errorf("chmod 0755 не вызван; execLog: %v", fs.execLog)
+		t.Errorf("chmod 0755 not called; execLog: %v", fs.execLog)
 	}
 }
 
@@ -189,7 +189,7 @@ func TestDeliver_IdempotentSkipsWhenSha256Matches(t *testing.T) {
 	}
 	for _, c := range fs.execLog {
 		if strings.Contains(c, "cat > ") {
-			t.Errorf("upload должен быть skipped (sha256 совпал), а в логе есть cat: %q", c)
+			t.Errorf("upload should be skipped (sha256 matched), but cat is in the log: %q", c)
 		}
 	}
 }
@@ -208,7 +208,7 @@ func TestDeliver_UploadsWhenSha256Differs(t *testing.T) {
 		t.Fatalf("Deliver: %v", err)
 	}
 	if string(fs.files[hostSoulDir+"/"+hostSoulFile]) != "NEW" {
-		t.Errorf("файл не перезаписан, got %q", fs.files[hostSoulDir+"/"+hostSoulFile])
+		t.Errorf("file not overwritten, got %q", fs.files[hostSoulDir+"/"+hostSoulFile])
 	}
 }
 
@@ -221,10 +221,10 @@ func TestDeliver_FailClosedOnExecError(t *testing.T) {
 	d := NewShaDeliverer()
 	err := d.Deliver(context.Background(), sess, SoulSpec{SoulBinaryPath: soulPath})
 	if err == nil {
-		t.Fatal("ждали fail-closed на mkdir-ошибке")
+		t.Fatal("expected fail-closed on mkdir error")
 	}
 	if !strings.Contains(err.Error(), "mkdir") {
-		t.Errorf("ошибка не про mkdir: %v", err)
+		t.Errorf("error is not about mkdir: %v", err)
 	}
 }
 
@@ -239,10 +239,10 @@ func TestDeliver_FailClosedOnPostVerifyMismatch(t *testing.T) {
 	d := NewShaDeliverer()
 	err := d.Deliver(context.Background(), sess, SoulSpec{SoulBinaryPath: soulPath})
 	if err == nil {
-		t.Fatal("ждали ошибку: post-verify sha256 разошёлся")
+		t.Fatal("expected error: post-verify sha256 mismatch")
 	}
 	if !strings.Contains(err.Error(), "sha256") {
-		t.Errorf("ошибка не про sha256: %v", err)
+		t.Errorf("error is not about sha256: %v", err)
 	}
 }
 
@@ -276,17 +276,17 @@ func TestDeliver_RejectsBadModuleName(t *testing.T) {
 		Modules:        []ModuleSpec{{Name: "../etc/passwd", Path: soulPath}},
 	})
 	if err == nil {
-		t.Fatal("ждали валидацию имени модуля (path traversal)")
+		t.Fatal("expected module name validation (path traversal)")
 	}
-	if !strings.Contains(err.Error(), "недопустимое имя модуля") {
-		t.Errorf("ошибка не про имя модуля: %v", err)
+	if !strings.Contains(err.Error(), "invalid module name") {
+		t.Errorf("error is not about module name: %v", err)
 	}
 }
 
 func TestDeliver_NilSession(t *testing.T) {
 	d := NewShaDeliverer()
 	if err := d.Deliver(context.Background(), nil, SoulSpec{SoulBinaryPath: "/x"}); err == nil {
-		t.Fatal("ждали ошибку при nil session")
+		t.Fatal("expected error on nil session")
 	}
 }
 
@@ -295,7 +295,7 @@ func TestDeliver_EmptySoulBinaryPath(t *testing.T) {
 	sess := newFakeShell(fs)
 	d := NewShaDeliverer()
 	if err := d.Deliver(context.Background(), sess, SoulSpec{}); err == nil {
-		t.Fatal("ждали ошибку при пустом SoulBinaryPath")
+		t.Fatal("expected error on empty SoulBinaryPath")
 	}
 }
 
@@ -312,13 +312,13 @@ func TestCleanup_RemovesArtifactDirs(t *testing.T) {
 		t.Fatalf("Cleanup: %v", err)
 	}
 	if _, ok := fs.files[hostSoulDir+"/"+hostSoulFile]; ok {
-		t.Error("soul-бинарь не удалён")
+		t.Error("soul binary not removed")
 	}
 	if _, ok := fs.files[hostModulesDir+"/soul-mod-pkg"]; ok {
-		t.Error("модуль не удалён")
+		t.Error("module not removed")
 	}
 	if fs.dirs[hostSoulDir] || fs.dirs[hostModulesDir] {
-		t.Error("каталоги артефактов не удалены")
+		t.Error("artifact directories not removed")
 	}
 }
 
@@ -329,17 +329,17 @@ func TestCleanup_FailClosedOnExecError(t *testing.T) {
 	c := NewShaCleaner()
 	err := c.Cleanup(context.Background(), sess)
 	if err == nil {
-		t.Fatal("ждали fail-closed на rm-ошибке")
+		t.Fatal("expected fail-closed on rm error")
 	}
 	if !strings.Contains(err.Error(), "rm -rf") {
-		t.Errorf("ошибка не про rm: %v", err)
+		t.Errorf("error is not about rm: %v", err)
 	}
 }
 
 func TestCleanup_NilSession(t *testing.T) {
 	c := NewShaCleaner()
 	if err := c.Cleanup(context.Background(), nil); err == nil {
-		t.Fatal("ждали ошибку при nil session")
+		t.Fatal("expected error on nil session")
 	}
 }
 
@@ -356,6 +356,6 @@ func TestCleanup_PreservesLogsLayout(t *testing.T) {
 		t.Fatalf("Cleanup: %v", err)
 	}
 	if _, ok := fs.files["/var/log/soul-stack/audit.log"]; !ok {
-		t.Error("Cleanup затронул /var/log/soul-stack/ — это аудит-данные, не trash")
+		t.Error("Cleanup touched /var/log/soul-stack/ - this is audit data, not trash")
 	}
 }

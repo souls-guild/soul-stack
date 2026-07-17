@@ -214,7 +214,7 @@ func TestAutoImporter_Targets_Existing_Skip(t *testing.T) {
 		t.Fatalf("ImportLegacyOnStart: %v", err)
 	}
 	if tw.updateCalls != 0 {
-		t.Errorf("UpdateSshTarget вызван при существующем PG-target — должен быть skip; calls = %d", tw.updateCalls)
+		t.Errorf("UpdateSshTarget called for an existing PG target -- should be skipped; calls = %d", tw.updateCalls)
 	}
 	// The PG row must not be overwritten.
 	if tw.rows["soul-a.example.com"].SSHPort != 22 {
@@ -240,7 +240,7 @@ func TestAutoImporter_Targets_MissingSoul_WarnSkip(t *testing.T) {
 		t.Fatalf("ImportLegacyOnStart: %v (must not be fatal)", err)
 	}
 	if tw.updateCalls != 0 {
-		t.Errorf("UpdateSshTarget вызван для отсутствующей souls row")
+		t.Errorf("UpdateSshTarget called for a missing souls row")
 	}
 	if len(au.events) != 0 {
 		t.Errorf("audit emitted for skipped (missing souls row)")
@@ -342,7 +342,7 @@ func TestAutoImporter_Providers_Existing_Skip(t *testing.T) {
 		t.Fatalf("ImportLegacyOnStart: %v", err)
 	}
 	if pw.insertCalls != 0 {
-		t.Errorf("Insert вызван при существующей PG-row (skip ожидался)")
+		t.Errorf("Insert called for an existing PG row (skip expected)")
 	}
 	if pw.rows["vault"].CreatedByAID != "archon-alice" {
 		t.Errorf("existing PG-row created_by_aid changed: %+v", pw.rows["vault"])

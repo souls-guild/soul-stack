@@ -13,6 +13,6 @@ import (
 func TestCmd_NotPlanReadSafe(t *testing.T) {
 	m := cmd.New()
 	if _, ok := any(m).(module.PlanReadSafe); ok {
-		t.Fatal("core.cmd реализует PlanReadSafe (не должен — verb-модуль без desired state)")
+		t.Fatal("core.cmd implements PlanReadSafe (must not - verb module with no desired state)")
 	}
 }

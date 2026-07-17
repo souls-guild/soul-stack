@@ -212,7 +212,7 @@ func dialDirect(ctx context.Context, cfg DialConfig) (Session, error) {
 	d := net.Dialer{Timeout: cfg.Timeout}
 	conn, err := d.DialContext(ctx, "tcp", addr)
 	if err != nil {
-		return nil, fmt.Errorf("push: TCP-соединение с %s: %w", addr, err)
+		return nil, fmt.Errorf("push: TCP connection to %s: %w", addr, err)
 	}
 	client, err := newSSHClient(conn, addr, clientCfg)
 	if err != nil {
@@ -220,7 +220,7 @@ func dialDirect(ctx context.Context, cfg DialConfig) (Session, error) {
 		// A host-cert verification failure lands here too (handshake fail) —
 		// this is the normal path for rejecting a foreign/self-signed host
 		// key.
-		return nil, fmt.Errorf("push: SSH-handshake с %s: %w", addr, err)
+		return nil, fmt.Errorf("push: SSH handshake with %s: %w", addr, err)
 	}
 	return &sshSession{client: client}, nil
 }
@@ -240,7 +240,7 @@ func dialViaProxy(ctx context.Context, cfg DialConfig) (Session, error) {
 	proxyCAs := cfg.HostAuthorities
 	if cfg.ProxyHostAuthority != nil {
 		if cfg.ProxyHostAuthority.CAPublicKey == nil {
-			return nil, errors.New("push: ProxyHostAuthority задан, но CAPublicKey пуст")
+			return nil, errors.New("push: ProxyHostAuthority is set, but CAPublicKey is empty")
 		}
 		// A separate proxy CA is a singleton set; multi-CA for the proxy hop
 		// isn't introduced in MVP (a separate CA bag here covers the "proxy
@@ -262,12 +262,12 @@ func dialViaProxy(ctx context.Context, cfg DialConfig) (Session, error) {
 	d := net.Dialer{Timeout: cfg.Timeout}
 	tcpConn, err := d.DialContext(ctx, "tcp", proxyAddr)
 	if err != nil {
-		return nil, fmt.Errorf("push: TCP-соединение с proxy %s: %w", proxyAddr, err)
+		return nil, fmt.Errorf("push: TCP connection to proxy %s: %w", proxyAddr, err)
 	}
 	proxyClient, err := newSSHClient(tcpConn, proxyAddr, proxyCfg)
 	if err != nil {
 		_ = tcpConn.Close()
-		return nil, fmt.Errorf("push: SSH-handshake с proxy %s: %w", proxyAddr, err)
+		return nil, fmt.Errorf("push: SSH handshake with proxy %s: %w", proxyAddr, err)
 	}
 
 	// Hop 2: direct-tcpip channel proxy → target + second handshake.
@@ -275,7 +275,7 @@ func dialViaProxy(ctx context.Context, cfg DialConfig) (Session, error) {
 	tunnelConn, err := proxyClient.Dial("tcp", targetAddr)
 	if err != nil {
 		_ = proxyClient.Close()
-		return nil, fmt.Errorf("push: direct-tcpip через proxy %s до %s: %w", proxyAddr, targetAddr, err)
+		return nil, fmt.Errorf("push: direct-tcpip through proxy %s to %s: %w", proxyAddr, targetAddr, err)
 	}
 	targetCfg := &ssh.ClientConfig{
 		User:            cfg.User,
@@ -287,7 +287,7 @@ func dialViaProxy(ctx context.Context, cfg DialConfig) (Session, error) {
 	if err != nil {
 		_ = tunnelConn.Close()
 		_ = proxyClient.Close()
-		return nil, fmt.Errorf("push: SSH-handshake с target %s через proxy %s: %w", targetAddr, proxyAddr, err)
+		return nil, fmt.Errorf("push: SSH handshake with target %s through proxy %s: %w", targetAddr, proxyAddr, err)
 	}
 	return &sshSession{client: targetClient, proxy: proxyClient}, nil
 }
@@ -309,7 +309,7 @@ func newSSHClient(conn net.Conn, addr string, cfg *ssh.ClientConfig) (*ssh.Clien
 func parseProxyJump(raw, defaultUser string) (user, addr string, err error) {
 	raw = strings.TrimSpace(raw)
 	if raw == "" {
-		return "", "", errors.New("пустая строка")
+		return "", "", errors.New("empty string")
 	}
 	user = defaultUser
 	hostPort := raw
@@ -317,15 +317,15 @@ func parseProxyJump(raw, defaultUser string) (user, addr string, err error) {
 		user = raw[:at]
 		hostPort = raw[at+1:]
 		if user == "" {
-			return "", "", errors.New("user пуст до '@'")
+			return "", "", errors.New("user is empty before '@'")
 		}
 	}
 	host, port, splitErr := net.SplitHostPort(hostPort)
 	if splitErr != nil {
-		return "", "", fmt.Errorf("ожидался host:port: %w", splitErr)
+		return "", "", fmt.Errorf("expected host:port: %w", splitErr)
 	}
 	if host == "" || port == "" {
-		return "", "", errors.New("host или port пуст")
+		return "", "", errors.New("host or port is empty")
 	}
 	return user, net.JoinHostPort(host, port), nil
 }
@@ -335,7 +335,7 @@ func parseProxyJump(raw, defaultUser string) (user, addr string, err error) {
 func (s *sshSession) Run(ctx context.Context, cmd string, stdinData []byte) (string, error) {
 	sess, err := s.client.NewSession()
 	if err != nil {
-		return "", fmt.Errorf("push: открытие SSH-сессии: %w", err)
+		return "", fmt.Errorf("push: opening SSH session: %w", err)
 	}
 	defer sess.Close()
 
@@ -347,7 +347,7 @@ func (s *sshSession) Run(ctx context.Context, cmd string, stdinData []byte) (str
 	sess.Stdout = &stdout
 
 	if err := sess.Start(cmd); err != nil {
-		return "", fmt.Errorf("push: запуск %q: %w", cmd, err)
+		return "", fmt.Errorf("push: running %q: %w", cmd, err)
 	}
 
 	// We feed stdin (ApplyRequest protojson) and close it — `soul apply`
@@ -373,12 +373,12 @@ func (s *sshSession) Run(ctx context.Context, cmd string, stdinData []byte) (str
 		_ = sess.Signal(ssh.SIGTERM)
 		_ = sess.Close()
 		<-done // wait for the goroutine to finish, don't leak it
-		return stdout.String(), fmt.Errorf("push: сессия прервана: %w", ctx.Err())
+		return stdout.String(), fmt.Errorf("push: session interrupted: %w", ctx.Err())
 	case waitErr := <-done:
 		if writeErr != nil && waitErr == nil {
 			// stdin wasn't delivered, but the process reported 0 — a
 			// contradiction; return the write error as primary.
-			return stdout.String(), fmt.Errorf("push: подача stdin: %w", writeErr)
+			return stdout.String(), fmt.Errorf("push: writing stdin: %w", writeErr)
 		}
 		return stdout.String(), waitErr
 	}

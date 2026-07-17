@@ -46,7 +46,7 @@ func snapshot(t *testing.T, path string) fileSnap {
 func assertUnchanged(t *testing.T, path string, before fileSnap) {
 	t.Helper()
 	if snapshot(t, path) != before {
-		t.Fatalf("Plan изменил файл")
+		t.Fatalf("Plan modified the file")
 	}
 }
 
@@ -113,7 +113,7 @@ func TestPlan_Present_FileMissing_Drift(t *testing.T) {
 		t.Fatalf("changed=false, want true (file missing)")
 	}
 	if _, err := os.Stat(path); !os.IsNotExist(err) {
-		t.Fatalf("Plan создал файл")
+		t.Fatalf("Plan created the file")
 	}
 }
 

@@ -81,7 +81,7 @@ func TestConvergeIsOperational(t *testing.T) {
 		t.Errorf("IsLifecycleScenario(%q) = true, want false (converge — operational, amend ADR-031)", ConvergeScenarioName)
 	}
 	if _, ok := LifecycleScenarioNames[ConvergeScenarioName]; ok {
-		t.Errorf("converge (%q) не должен входить в LifecycleScenarioNames", ConvergeScenarioName)
+		t.Errorf("converge (%q) must not be in LifecycleScenarioNames", ConvergeScenarioName)
 	}
 }
 

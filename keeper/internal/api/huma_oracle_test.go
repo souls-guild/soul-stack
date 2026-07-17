@@ -233,12 +233,12 @@ func TestHumaVigil_Create_GoldenWire(t *testing.T) {
 	}
 	var m map[string]any
 	if err := json.Unmarshal(rec.Body.Bytes(), &m); err != nil {
-		t.Fatalf("reply не JSON-object: %v; body=%s", err, rec.Body.String())
+		t.Fatalf("reply is not a JSON object: %v; body=%s", err, rec.Body.String())
 	}
 	out, _ := json.Marshal(m)
 	const golden = `{"check":"core.beacon.file_changed","coven":["web"],"created_at":"2026-06-13T10:00:00Z","created_by_aid":"archon-alice","enabled":true,"interval":"30s","name":"web-conf","params":{},"updated_at":"2026-06-13T10:00:00Z"}`
 	if got := string(out); got != golden {
-		t.Errorf("GOLDEN wire-дрейф vigil.create:\n got  = %s\n want = %s", got, golden)
+		t.Errorf("GOLDEN wire drift vigil.create:\n got  = %s\n want = %s", got, golden)
 	}
 }
 
@@ -304,7 +304,7 @@ func TestHumaAudit_VigilCreate_NoAudit_OnRBACDeny(t *testing.T) {
 		t.Fatalf("status = %d, want 403; body=%s", rec.Code, rec.Body.String())
 	}
 	if len(auditCap.Events()) != 0 {
-		t.Errorf("audit записан on RBAC-deny vigil.create (%d withбытий)", len(auditCap.Events()))
+		t.Errorf("audit was recorded on RBAC-deny vigil.create (%d events)", len(auditCap.Events()))
 	}
 }
 
@@ -319,7 +319,7 @@ func TestHumaAudit_VigilCreate_NoAudit_OnValidationFail(t *testing.T) {
 		t.Fatalf("status = %d, want 422; body=%s", rec.Code, rec.Body.String())
 	}
 	if len(auditCap.Events()) != 0 {
-		t.Errorf("audit записан on 422 vigil.create (%d withбытий)", len(auditCap.Events()))
+		t.Errorf("audit was recorded on 422 vigil.create (%d events)", len(auditCap.Events()))
 	}
 }
 
@@ -338,12 +338,12 @@ func TestHumaVigil_List_GoldenWire(t *testing.T) {
 	}
 	var m map[string]any
 	if err := json.Unmarshal(rec.Body.Bytes(), &m); err != nil {
-		t.Fatalf("reply не JSON-object: %v; body=%s", err, rec.Body.String())
+		t.Fatalf("reply is not a JSON object: %v; body=%s", err, rec.Body.String())
 	}
 	out, _ := json.Marshal(m)
 	const golden = `{"items":[{"check":"core.beacon.file_changed","coven":["web"],"created_at":"2026-06-13T10:00:00Z","enabled":true,"interval":"30s","name":"web-conf","params":{},"updated_at":"2026-06-13T10:00:00Z"}],"limit":50,"offset":0,"total":1}`
 	if got := string(out); got != golden {
-		t.Errorf("GOLDEN wire-дрейф vigil.list:\n got  = %s\n want = %s", got, golden)
+		t.Errorf("GOLDEN wire drift vigil.list:\n got  = %s\n want = %s", got, golden)
 	}
 }
 
@@ -382,7 +382,7 @@ func TestHumaVigil_List_NoAudit(t *testing.T) {
 		t.Fatalf("status = %d, want 200; body=%s", rec.Code, rec.Body.String())
 	}
 	if len(auditCap.Events()) != 0 {
-		t.Errorf("READ-роут vigil.list записал audit (%d withбытий)", len(auditCap.Events()))
+		t.Errorf("READ route vigil.list recorded audit (%d events)", len(auditCap.Events()))
 	}
 }
 
@@ -408,12 +408,12 @@ func TestHumaVigil_Get_GoldenWire(t *testing.T) {
 	}
 	var m map[string]any
 	if err := json.Unmarshal(rec.Body.Bytes(), &m); err != nil {
-		t.Fatalf("reply не JSON-object: %v; body=%s", err, rec.Body.String())
+		t.Fatalf("reply is not a JSON object: %v; body=%s", err, rec.Body.String())
 	}
 	out, _ := json.Marshal(m)
 	const golden = `{"check":"core.beacon.file_changed","coven":["web"],"created_at":"2026-06-13T10:00:00Z","enabled":true,"interval":"30s","name":"web-conf","params":{},"updated_at":"2026-06-13T10:00:00Z"}`
 	if got := string(out); got != golden {
-		t.Errorf("GOLDEN wire-дрейф vigil.get:\n got  = %s\n want = %s", got, golden)
+		t.Errorf("GOLDEN wire drift vigil.get:\n got  = %s\n want = %s", got, golden)
 	}
 }
 
@@ -450,7 +450,7 @@ func TestHumaVigil_Delete_204(t *testing.T) {
 		t.Fatalf("status = %d, want 204; body=%s", rec.Code, rec.Body.String())
 	}
 	if body := strings.TrimSpace(rec.Body.String()); body != "" {
-		t.Errorf("204-body vigil.delete toлжbut быть ПУСТЫМ, got %q", body)
+		t.Errorf("204-body vigil.delete must be EMPTY, got %q", body)
 	}
 }
 
@@ -476,7 +476,7 @@ func TestHumaAudit_VigilDelete_NoAudit_OnNotFound(t *testing.T) {
 		t.Fatalf("status = %d, want 404; body=%s", rec.Code, rec.Body.String())
 	}
 	if len(auditCap.Events()) != 0 {
-		t.Errorf("audit записан on 404 vigil.delete (%d withбытий)", len(auditCap.Events()))
+		t.Errorf("audit was recorded on 404 vigil.delete (%d events)", len(auditCap.Events()))
 	}
 }
 
@@ -493,12 +493,12 @@ func TestHumaDecree_Create_GoldenWire(t *testing.T) {
 	}
 	var m map[string]any
 	if err := json.Unmarshal(rec.Body.Bytes(), &m); err != nil {
-		t.Fatalf("reply не JSON-object: %v; body=%s", err, rec.Body.String())
+		t.Fatalf("reply is not a JSON object: %v; body=%s", err, rec.Body.String())
 	}
 	out, _ := json.Marshal(m)
 	const golden = `{"action_input":{},"action_scenario":"reload","cooldown":"0s","coven":["web"],"created_at":"2026-06-13T10:00:00Z","created_by_aid":"archon-alice","enabled":true,"incarnation_name":"web","name":"on-conf","on_beacon":"web-conf","updated_at":"2026-06-13T10:00:00Z"}`
 	if got := string(out); got != golden {
-		t.Errorf("GOLDEN wire-дрейф decree.create:\n got  = %s\n want = %s", got, golden)
+		t.Errorf("GOLDEN wire drift decree.create:\n got  = %s\n want = %s", got, golden)
 	}
 }
 
@@ -568,12 +568,12 @@ func TestHumaDecree_List_GoldenWire(t *testing.T) {
 	}
 	var m map[string]any
 	if err := json.Unmarshal(rec.Body.Bytes(), &m); err != nil {
-		t.Fatalf("reply не JSON-object: %v; body=%s", err, rec.Body.String())
+		t.Fatalf("reply is not a JSON object: %v; body=%s", err, rec.Body.String())
 	}
 	out, _ := json.Marshal(m)
 	const golden = `{"items":[{"action_input":{},"action_scenario":"reload","cooldown":"0s","coven":["web"],"created_at":"2026-06-13T10:00:00Z","enabled":true,"incarnation_name":"web","name":"on-conf","on_beacon":"web-conf","updated_at":"2026-06-13T10:00:00Z"}],"limit":50,"offset":0,"total":1}`
 	if got := string(out); got != golden {
-		t.Errorf("GOLDEN wire-дрейф decree.list:\n got  = %s\n want = %s", got, golden)
+		t.Errorf("GOLDEN wire drift decree.list:\n got  = %s\n want = %s", got, golden)
 	}
 }
 
@@ -598,7 +598,7 @@ func TestHumaDecree_List_NoAudit(t *testing.T) {
 		t.Fatalf("status = %d, want 200; body=%s", rec.Code, rec.Body.String())
 	}
 	if len(auditCap.Events()) != 0 {
-		t.Errorf("READ-роут decree.list записал audit (%d withбытий)", len(auditCap.Events()))
+		t.Errorf("READ route decree.list recorded audit (%d events)", len(auditCap.Events()))
 	}
 }
 
@@ -626,7 +626,7 @@ func TestHumaDecree_Delete_204(t *testing.T) {
 		t.Fatalf("status = %d, want 204; body=%s", rec.Code, rec.Body.String())
 	}
 	if body := strings.TrimSpace(rec.Body.String()); body != "" {
-		t.Errorf("204-body decree.delete toлжbut быть ПУСТЫМ, got %q", body)
+		t.Errorf("204-body decree.delete must be EMPTY, got %q", body)
 	}
 }
 
@@ -652,7 +652,7 @@ func TestHumaAudit_DecreeDelete_NoAudit_OnBadName(t *testing.T) {
 		t.Fatalf("status = %d, want 422 (bad path-name); body=%s", rec.Code, rec.Body.String())
 	}
 	if len(auditCap.Events()) != 0 {
-		t.Errorf("audit записан on bad-name decree.delete (%d withбытий)", len(auditCap.Events()))
+		t.Errorf("audit was recorded on bad-name decree.delete (%d events)", len(auditCap.Events()))
 	}
 }
 
@@ -664,17 +664,17 @@ func TestHumaOracle_OpenAPIFragment_3_1(t *testing.T) {
 		t.Fatalf("HumaOracleSpecYAML: %v", err)
 	}
 	if !strings.Contains(frag, "openapi: 3.1.0") {
-		t.Errorf("huma-фрагмент не несёт `openapi: 3.1.0`:\n%s", frag)
+		t.Errorf("huma fragment does not carry `openapi: 3.1.0`:\n%s", frag)
 	}
 	for _, want := range []string{
 		"createVigil", "listVigils", "getVigil", "deleteVigil",
 		"createDecree", "listDecrees", "getDecree", "deleteDecree", "on_beacon",
 	} {
 		if !strings.Contains(frag, want) {
-			t.Errorf("OpenAPI-фрагмент не withдержит %q:\n%s", want, frag)
+			t.Errorf("OpenAPI fragment does not contain %q:\n%s", want, frag)
 		}
 	}
 	if strings.Contains(frag, "octet-stream") {
-		t.Errorf("OpenAPI-фрагмент несёт application/octet-stream:\n%s", frag)
+		t.Errorf("OpenAPI fragment carries application/octet-stream:\n%s", frag)
 	}
 }

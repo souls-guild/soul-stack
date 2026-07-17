@@ -272,15 +272,15 @@ func requireInputValues(schema InputSchemaMap, merged map[string]any) error {
 		// RequiredProps directly. For non-resolved schemas the invariant is
 		// unchanged: Required=true ⟺ requiredKind==requiredBool.
 		if s.Required {
-			return fmt.Errorf("input %q обязателен, но не передан и не имеет default", name)
+			return fmt.Errorf("input %q is required but was not provided and has no default", name)
 		}
 		if s.RequiredWhen != "" {
 			required, err := evalRequiredWhen(s.RequiredWhen, merged)
 			if err != nil {
-				return fmt.Errorf("input %q: вычисление required_when: %w", name, err)
+				return fmt.Errorf("input %q: evaluating required_when: %w", name, err)
 			}
 			if required {
-				return fmt.Errorf("input %q обязателен, но не передан и не имеет default (required_when: %s)", name, s.RequiredWhen)
+				return fmt.Errorf("input %q is required but was not provided and has no default (required_when: %s)", name, s.RequiredWhen)
 			}
 		}
 	}
@@ -377,7 +377,7 @@ func validateValueAt(path string, s *InputSchema, v any) error {
 	exprString := s.Type == "string" && isStringExpr(v)
 
 	if !valueMatchesType(v, s.Type) {
-		return fmt.Errorf("input %s = %s не соответствует типу %q", path, literalFor(s, v), s.Type)
+		return fmt.Errorf("input %s = %s does not match type %q", path, literalFor(s, v), s.Type)
 	}
 
 	if !exprString && len(s.Enum) > 0 &&
@@ -387,9 +387,9 @@ func validateValueAt(path string, s *InputSchema, v any) error {
 			// list of allowed values is itself a secret (e.g. a fixed password
 			// set).
 			if s.Secret {
-				return fmt.Errorf("input %s = %s не входит в enum", path, maskedSecretLiteral)
+				return fmt.Errorf("input %s = %s is not in enum", path, maskedSecretLiteral)
 			}
-			return fmt.Errorf("input %s = %s не входит в enum %s", path, formatLiteral(v), formatEnum(s.Enum))
+			return fmt.Errorf("input %s = %s is not in enum %s", path, formatLiteral(v), formatEnum(s.Enum))
 		}
 	}
 
@@ -402,7 +402,7 @@ func validateValueAt(path string, s *InputSchema, v any) error {
 	// value-expression for the same reason as enum/pattern.
 	if !exprString && s.Type == "string" && s.Format != "" {
 		if !validateFormat(s.Format, v.(string)) {
-			return fmt.Errorf("input %s = %s не соответствует формату %q", path, literalFor(s, v), s.Format)
+			return fmt.Errorf("input %s = %s does not match format %q", path, literalFor(s, v), s.Format)
 		}
 	}
 
@@ -411,10 +411,10 @@ func validateValueAt(path string, s *InputSchema, v any) error {
 		if err != nil {
 			// The schema is already validated (input_pattern_invalid) — an
 			// invalid pattern shouldn't reach here; defensive.
-			return fmt.Errorf("input %s: pattern %q не компилируется: %w", path, s.Pattern, err)
+			return fmt.Errorf("input %s: pattern %q does not compile: %w", path, s.Pattern, err)
 		}
 		if !re.MatchString(v.(string)) {
-			return fmt.Errorf("input %s = %s не соответствует pattern %q", path, literalFor(s, v), s.Pattern)
+			return fmt.Errorf("input %s = %s does not match pattern %q", path, literalFor(s, v), s.Pattern)
 		}
 	}
 
@@ -427,10 +427,10 @@ func validateValueAt(path string, s *InputSchema, v any) error {
 	if !exprString && s.Type == "string" && (s.MinLength != nil || s.MaxLength != nil) {
 		n := utf8.RuneCountInString(v.(string))
 		if s.MinLength != nil && n < *s.MinLength {
-			return fmt.Errorf("input %s = %s короче min_length %d (длина %d)", path, literalFor(s, v), *s.MinLength, n)
+			return fmt.Errorf("input %s = %s is shorter than min_length %d (length %d)", path, literalFor(s, v), *s.MinLength, n)
 		}
 		if s.MaxLength != nil && n > *s.MaxLength {
-			return fmt.Errorf("input %s = %s длиннее max_length %d (длина %d)", path, literalFor(s, v), *s.MaxLength, n)
+			return fmt.Errorf("input %s = %s is longer than max_length %d (length %d)", path, literalFor(s, v), *s.MaxLength, n)
 		}
 	}
 
@@ -453,10 +453,10 @@ func validateArrayItems(path string, s *InputSchema, v any) error {
 	arr := v.([]any)
 	n := len(arr)
 	if s.MinItems != nil && n < *s.MinItems {
-		return fmt.Errorf("input %s содержит %d элементов, меньше min_items %d", path, n, *s.MinItems)
+		return fmt.Errorf("input %s contains %d elements, fewer than min_items %d", path, n, *s.MinItems)
 	}
 	if s.MaxItems != nil && n > *s.MaxItems {
-		return fmt.Errorf("input %s содержит %d элементов, больше max_items %d", path, n, *s.MaxItems)
+		return fmt.Errorf("input %s contains %d elements, more than max_items %d", path, n, *s.MaxItems)
 	}
 	if s.Items == nil {
 		// items is required for an array (schema-validate catches its absence);
@@ -484,7 +484,7 @@ func validateObjectFields(path string, s *InputSchema, v any) error {
 	for _, req := range s.RequiredProps {
 		fv, present := obj[req]
 		if !present || isMissingField(s.Properties[req], fv) {
-			return fmt.Errorf("input %s.%s обязателен, но не передан", path, req)
+			return fmt.Errorf("input %s.%s is required but was not provided", path, req)
 		}
 	}
 

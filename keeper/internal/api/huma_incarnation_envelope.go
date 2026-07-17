@@ -50,7 +50,7 @@ import (
 // domain soul, not incarnation). items.$ref to the contract native element IncarnationGetReply
 // (T5a). The type name = the contract schema name (huma DefaultSchemaNamer capitalizes → "IncarnationListReply").
 type incarnationListReply struct {
-	Items  []IncarnationGetReply `json:"items" doc:"страница инкарonций"`
+	Items  []IncarnationGetReply `json:"items" doc:"page of incarnations"`
 	Offset int32                 `json:"offset" doc:"offset from start of set"`
 	Limit  int32                 `json:"limit" doc:"page size"`
 	Total  int32                 `json:"total" doc:"total number of entries in set"`
@@ -61,7 +61,7 @@ type incarnationListReply struct {
 // EXACTLY 4 int32 fields (items/offset/limit/total), all required, with no cursor fields. items.$ref
 // to the contract native element StateHistoryEntry (T5a). The type name = the contract schema name.
 type incarnationHistoryReply struct {
-	Items  []StateHistoryEntry `json:"items" doc:"страница записей state_history"`
+	Items  []StateHistoryEntry `json:"items" doc:"page of state_history entries"`
 	Offset int32               `json:"offset" doc:"offset from start of set"`
 	Limit  int32               `json:"limit" doc:"page size"`
 	Total  int32               `json:"total" doc:"total number of entries in set"`
@@ -72,10 +72,10 @@ type incarnationHistoryReply struct {
 // cursor fields), items.$ref to the native element RunSummaryEntry. The type name = the contract
 // schema name (huma DefaultSchemaNamer capitalizes → "IncarnationRunsReply").
 type incarnationRunsReply struct {
-	Items  []RunSummaryEntry `json:"items" doc:"страница прогоbutв инкарonции (свёртка apply_runs)"`
+	Items  []RunSummaryEntry `json:"items" doc:"page of incarnation runs (apply_runs fold)"`
 	Offset int32             `json:"offset" doc:"offset from start of set"`
 	Limit  int32             `json:"limit" doc:"page size"`
-	Total  int32             `json:"total" doc:"общее число прогоbutв инкарonции"`
+	Total  int32             `json:"total" doc:"total number of incarnation runs"`
 }
 
 // registerIncarnationEnvelopes registers on the registry a huma alias from the instantiated generic

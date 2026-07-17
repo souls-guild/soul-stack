@@ -373,7 +373,7 @@ func TestIntegration_Bulk_Partial_NoRollback(t *testing.T) {
 		t.Errorf("rep.Err = nil, want non-nil on partial")
 	}
 	if rep.Matched != n {
-		t.Errorf("matched = %d, want %d (count до итерации)", rep.Matched, n)
+		t.Errorf("matched = %d, want %d (count before iteration)", rep.Matched, n)
 	}
 	if rep.ChunksCommitted != failChunk-1 {
 		t.Errorf("chunksCommitted = %d, want %d", rep.ChunksCommitted, failChunk-1)
@@ -382,7 +382,7 @@ func TestIntegration_Bulk_Partial_NoRollback(t *testing.T) {
 		t.Errorf("changed = %d, want < matched (%d) on partial", rep.Changed, rep.Matched)
 	}
 	if rep.Changed != bulkChunkSize {
-		t.Errorf("changed = %d, want %d (ровно 1 закоммиченный чанк)", rep.Changed, bulkChunkSize)
+		t.Errorf("changed = %d, want %d (exactly 1 committed chunk)", rep.Changed, bulkChunkSize)
 	}
 
 	// Chunks 1..K-1 are ACTUALLY committed in real PG (label present on rows).
@@ -392,7 +392,7 @@ func TestIntegration_Bulk_Partial_NoRollback(t *testing.T) {
 		t.Fatalf("count after partial: %v", err)
 	}
 	if withBatch != bulkChunkSize {
-		t.Errorf("hosts with 'batch' after partial = %d, want %d (commit чанка 1 уцелел)", withBatch, bulkChunkSize)
+		t.Errorf("hosts with 'batch' after partial = %d, want %d (commit of chunk 1 survived)", withBatch, bulkChunkSize)
 	}
 
 	// Idempotent retry FINISHES the remainder (fresh, non-cancelled ctx).
@@ -405,7 +405,7 @@ func TestIntegration_Bulk_Partial_NoRollback(t *testing.T) {
 	}
 	// Retry touches only not-yet-labeled rows (idem-filtering): n - already-labeled.
 	if rep2.Changed != n-bulkChunkSize {
-		t.Errorf("repeat changed = %d, want %d (только остаток)", rep2.Changed, n-bulkChunkSize)
+		t.Errorf("repeat changed = %d, want %d (remainder only)", rep2.Changed, n-bulkChunkSize)
 	}
 
 	// Final state is consistent: label present on exactly all n, no dupes in the array.
@@ -424,7 +424,7 @@ func TestIntegration_Bulk_Partial_NoRollback(t *testing.T) {
 		t.Fatalf("dup-check: %v", err)
 	}
 	if dupHosts != 0 {
-		t.Errorf("hosts с дублями меток в coven = %d, want 0 (idem-отсев не дал двойного append)", dupHosts)
+		t.Errorf("hosts with duplicate labels in coven = %d, want 0 (idempotent filtering prevented double append)", dupHosts)
 	}
 }
 
@@ -455,7 +455,7 @@ func TestIntegration_Bulk_ExactMultipleOfChunk(t *testing.T) {
 	// pass with an empty window (scanned 0 < chunk → exit). ChunksCommitted
 	// also counts the empty final pass (it commits a no-op transaction).
 	if rep.ChunksCommitted != 3 {
-		t.Errorf("chunksCommitted = %d, want 3 (2 полных + пустой финальный)", rep.ChunksCommitted)
+		t.Errorf("chunksCommitted = %d, want 3 (2 full + an empty final one)", rep.ChunksCommitted)
 	}
 
 	var withExact int
@@ -464,7 +464,7 @@ func TestIntegration_Bulk_ExactMultipleOfChunk(t *testing.T) {
 		t.Fatalf("count: %v", err)
 	}
 	if withExact != n {
-		t.Errorf("hosts with 'exact' = %d, want %d (off-by-one в keyset)", withExact, n)
+		t.Errorf("hosts with 'exact' = %d, want %d (off-by-one in keyset)", withExact, n)
 	}
 }
 
@@ -599,7 +599,7 @@ func TestIntegration_Bulk_Selector_Incarnation_Match(t *testing.T) {
 		t.Fatalf("BulkAssignCoven: %v", err)
 	}
 	if rep.Matched != 2 || rep.Changed != 2 {
-		t.Errorf("matched/changed = %d/%d, want 2/2 (только redis-хосты)", rep.Matched, rep.Changed)
+		t.Errorf("matched/changed = %d/%d, want 2/2 (redis hosts only)", rep.Matched, rep.Changed)
 	}
 	if got := covenOf(t, "other.example.com"); !equalStr(got, []string{"nginx"}) {
 		t.Errorf("other mutated though not in incarnation: %v", got)
@@ -640,7 +640,7 @@ func TestIntegration_Bulk_Selector_Incarnation_ScopeIntersection(t *testing.T) {
 		t.Fatalf("BulkAssignCoven: %v", err)
 	}
 	if rep.Matched != 1 {
-		t.Errorf("matched = %d, want 1 (только redis-dev в scope)", rep.Matched)
+		t.Errorf("matched = %d, want 1 (only redis-dev in scope)", rep.Matched)
 	}
 	if got := covenOf(t, "redis-prod.example.com"); !equalStr(got, []string{"prod", "redis"}) {
 		t.Errorf("redis-prod mutated despite out-of-scope: %v", got)

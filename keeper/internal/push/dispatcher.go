@@ -172,20 +172,20 @@ func NewSshDispatcher(deps Deps) (*SshDispatcher, error) {
 		}
 	}
 	if deps.Targets == nil {
-		return nil, errors.New("push: TargetResolver обязателен")
+		return nil, errors.New("push: TargetResolver is required")
 	}
 	if deps.Souls == nil {
-		return nil, errors.New("push: SoulLookup обязателен")
+		return nil, errors.New("push: SoulLookup is required")
 	}
 	if deps.Logger == nil {
-		return nil, errors.New("push: logger обязателен")
+		return nil, errors.New("push: logger is required")
 	}
 	if len(deps.HostAuthorities) == 0 {
-		return nil, errors.New("push: HostAuthorities обязателен непустым (CA-signed host-cert verification)")
+		return nil, errors.New("push: HostAuthorities must be non-empty (CA-signed host-cert verification)")
 	}
 	for i, ha := range deps.HostAuthorities {
 		if ha.Name == "" {
-			return nil, fmt.Errorf("push: HostAuthorities[%d].Name пуст", i)
+			return nil, fmt.Errorf("push: HostAuthorities[%d].Name is empty", i)
 		}
 		if ha.CAPubKey == nil {
 			return nil, fmt.Errorf("push: HostAuthorities[%d].CAPubKey nil (CA %q)", i, ha.Name)
@@ -350,15 +350,15 @@ func (d *SshDispatcher) SendApply(ctx context.Context, sid string, providerName 
 	// Precondition: the dispatcher only serves transport=ssh.
 	s, err := d.deps.Souls.SelectBySID(ctx, sid)
 	if err != nil {
-		return nil, fmt.Errorf("push: резолв soul %s: %w", sid, err)
+		return nil, fmt.Errorf("push: resolve soul %s: %w", sid, err)
 	}
 	if s.Transport != soul.TransportSSH {
-		return nil, fmt.Errorf("push: soul %s имеет transport=%q, ожидался ssh", sid, s.Transport)
+		return nil, fmt.Errorf("push: soul %s has transport=%q, expected ssh", sid, s.Transport)
 	}
 
 	target, err := d.deps.Targets.Resolve(ctx, sid)
 	if err != nil {
-		return nil, fmt.Errorf("push: резолв ssh-target %s: %w", sid, err)
+		return nil, fmt.Errorf("push: resolve ssh-target %s: %w", sid, err)
 	}
 
 	prov := entry.Provider
@@ -372,7 +372,7 @@ func (d *SshDispatcher) SendApply(ctx context.Context, sid string, providerName 
 		return nil, fmt.Errorf("push: Authorize %s@%s: %w", target.User, target.Host, err)
 	}
 	if !authReply.GetAllowed() {
-		return nil, fmt.Errorf("push: Authorize отказал для %s@%s: %s", target.User, target.Host, authReply.GetReason())
+		return nil, fmt.Errorf("push: Authorize refused for %s@%s: %s", target.User, target.Host, authReply.GetReason())
 	}
 
 	// Ephemeral keypair: a Keeper-side ed25519 pair per session. The pubkey
@@ -380,7 +380,7 @@ func (d *SshDispatcher) SendApply(ctx context.Context, sid string, providerName 
 	// Keeper.
 	ephSigner, ephPubAuthorized, err := newEphemeralEd25519()
 	if err != nil {
-		return nil, fmt.Errorf("push: генерация ephemeral keypair %s: %w", sid, err)
+		return nil, fmt.Errorf("push: generate ephemeral keypair %s: %w", sid, err)
 	}
 
 	signReply, err := prov.Sign(ctx, &pluginv1.SignRequest{
@@ -393,7 +393,7 @@ func (d *SshDispatcher) SendApply(ctx context.Context, sid string, providerName 
 	}
 	auth, err := authMethodsFromSign(signReply, ephSigner)
 	if err != nil {
-		return nil, fmt.Errorf("push: подготовка SSH-auth %s: %w", sid, err)
+		return nil, fmt.Errorf("push: prepare SSH-auth %s: %w", sid, err)
 	}
 
 	sess, err := d.deps.Dial(ctx, DialConfig{
@@ -411,13 +411,13 @@ func (d *SshDispatcher) SendApply(ctx context.Context, sid string, providerName 
 	}
 	defer func() {
 		if cerr := sess.Close(); cerr != nil {
-			log.Warn("push: закрытие SSH-сессии с ошибкой", slog.Any("error", cerr))
+			log.Warn("push: closing SSH session with error", slog.Any("error", cerr))
 		}
 	}()
 
 	if d.deps.Deliverer != nil {
 		if err := d.deps.Deliverer.Deliver(ctx, sess, d.deps.SoulSpec); err != nil {
-			return nil, fmt.Errorf("push: доставка артефактов %s: %w", sid, err)
+			return nil, fmt.Errorf("push: artifact delivery %s: %w", sid, err)
 		}
 	}
 
@@ -436,12 +436,12 @@ func (d *SshDispatcher) SendApply(ctx context.Context, sid string, providerName 
 	})
 	if parseErr != nil {
 		if runErr != nil {
-			return nil, fmt.Errorf("push: прогон %s без RunResult (exit: %v): %w", sid, runErr, parseErr)
+			return nil, fmt.Errorf("push: run %s without RunResult (exit: %v): %w", sid, runErr, parseErr)
 		}
-		return nil, fmt.Errorf("push: прогон %s: %w", sid, parseErr)
+		return nil, fmt.Errorf("push: run %s: %w", sid, parseErr)
 	}
 
-	log.Info("push: прогон завершён", slog.String("status", rr.GetStatus().String()))
+	log.Info("push: run finished", slog.String("status", rr.GetStatus().String()))
 	return rr, nil
 }
 
@@ -452,7 +452,7 @@ func (d *SshDispatcher) SendApply(ctx context.Context, sid string, providerName 
 // SendApply (the caller keeps the correspondence in push_runs.summary).
 func (d *SshDispatcher) Cleanup(ctx context.Context, sid string, providerName string) error {
 	if d.deps.Cleaner == nil {
-		return errors.New("push: Cleaner не сконфигурирован")
+		return errors.New("push: Cleaner is not configured")
 	}
 	if providerName == "" {
 		return fmt.Errorf("push: providerName is empty for sid=%s (cleanup)", sid)
@@ -470,15 +470,15 @@ func (d *SshDispatcher) Cleanup(ctx context.Context, sid string, providerName st
 
 	s, err := d.deps.Souls.SelectBySID(ctx, sid)
 	if err != nil {
-		return fmt.Errorf("push: резолв soul %s: %w", sid, err)
+		return fmt.Errorf("push: resolve soul %s: %w", sid, err)
 	}
 	if s.Transport != soul.TransportSSH {
-		return fmt.Errorf("push: soul %s имеет transport=%q, ожидался ssh", sid, s.Transport)
+		return fmt.Errorf("push: soul %s has transport=%q, expected ssh", sid, s.Transport)
 	}
 
 	target, err := d.deps.Targets.Resolve(ctx, sid)
 	if err != nil {
-		return fmt.Errorf("push: резолв ssh-target %s: %w", sid, err)
+		return fmt.Errorf("push: resolve ssh-target %s: %w", sid, err)
 	}
 
 	prov := entry.Provider
@@ -491,12 +491,12 @@ func (d *SshDispatcher) Cleanup(ctx context.Context, sid string, providerName st
 		return fmt.Errorf("push: Authorize %s@%s: %w", target.User, target.Host, err)
 	}
 	if !authReply.GetAllowed() {
-		return fmt.Errorf("push: Authorize отказал для %s@%s: %s", target.User, target.Host, authReply.GetReason())
+		return fmt.Errorf("push: Authorize refused for %s@%s: %s", target.User, target.Host, authReply.GetReason())
 	}
 
 	ephSigner, ephPubAuthorized, err := newEphemeralEd25519()
 	if err != nil {
-		return fmt.Errorf("push: генерация ephemeral keypair %s: %w", sid, err)
+		return fmt.Errorf("push: generate ephemeral keypair %s: %w", sid, err)
 	}
 
 	signReply, err := prov.Sign(ctx, &pluginv1.SignRequest{
@@ -509,7 +509,7 @@ func (d *SshDispatcher) Cleanup(ctx context.Context, sid string, providerName st
 	}
 	auth, err := authMethodsFromSign(signReply, ephSigner)
 	if err != nil {
-		return fmt.Errorf("push: подготовка SSH-auth %s: %w", sid, err)
+		return fmt.Errorf("push: prepare SSH-auth %s: %w", sid, err)
 	}
 
 	sess, err := d.deps.Dial(ctx, DialConfig{
@@ -527,14 +527,14 @@ func (d *SshDispatcher) Cleanup(ctx context.Context, sid string, providerName st
 	}
 	defer func() {
 		if cerr := sess.Close(); cerr != nil {
-			log.Warn("push: закрытие SSH-сессии с ошибкой", slog.Any("error", cerr))
+			log.Warn("push: closing SSH session with error", slog.Any("error", cerr))
 		}
 	}()
 
 	if err := d.deps.Cleaner.Cleanup(ctx, sess); err != nil {
 		return fmt.Errorf("push: cleanup %s: %w", sid, err)
 	}
-	log.Info("push: host-side cleanup выполнен")
+	log.Info("push: host-side cleanup done")
 	return nil
 }
 
@@ -551,7 +551,7 @@ func authMethodsFromSign(reply *pluginv1.SignReply, ephSigner ssh.Signer) ([]ssh
 	if reply.GetPrivateKey() != "" {
 		signer, err := ssh.ParsePrivateKey([]byte(reply.GetPrivateKey()))
 		if err != nil {
-			return nil, fmt.Errorf("разбор private_key: %w", err)
+			return nil, fmt.Errorf("parse private_key: %w", err)
 		}
 		if cert := reply.GetCertificate(); cert != "" {
 			certSigner, cerr := certSignerFrom(cert, signer)
@@ -565,10 +565,10 @@ func authMethodsFromSign(reply *pluginv1.SignReply, ephSigner ssh.Signer) ([]ssh
 
 	cert := reply.GetCertificate()
 	if cert == "" {
-		return nil, errors.New("SignReply: оба поля пусты (нужен certificate для ephemeral-режима либо private_key для static-режима)")
+		return nil, errors.New("SignReply: both fields are empty (need certificate for ephemeral mode or private_key for static mode)")
 	}
 	if ephSigner == nil {
-		return nil, errors.New("ephemeral signer не передан, а private_key пуст — нечем подписать handshake")
+		return nil, errors.New("ephemeral signer not provided and private_key is empty - nothing to sign the handshake with")
 	}
 	certSigner, err := certSignerFrom(cert, ephSigner)
 	if err != nil {
@@ -583,15 +583,15 @@ func authMethodsFromSign(reply *pluginv1.SignReply, ephSigner ssh.Signer) ([]ssh
 func certSignerFrom(certText string, signer ssh.Signer) (ssh.Signer, error) {
 	pub, _, _, _, perr := ssh.ParseAuthorizedKey([]byte(certText))
 	if perr != nil {
-		return nil, fmt.Errorf("разбор certificate: %w", perr)
+		return nil, fmt.Errorf("parse certificate: %w", perr)
 	}
 	sshCert, ok := pub.(*ssh.Certificate)
 	if !ok {
-		return nil, errors.New("certificate не является SSH-сертификатом")
+		return nil, errors.New("certificate is not an SSH certificate")
 	}
 	certSigner, cerr := ssh.NewCertSigner(sshCert, signer)
 	if cerr != nil {
-		return nil, fmt.Errorf("сборка cert-signer: %w", cerr)
+		return nil, fmt.Errorf("build cert-signer: %w", cerr)
 	}
 	return certSigner, nil
 }

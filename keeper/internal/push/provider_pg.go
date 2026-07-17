@@ -127,7 +127,7 @@ func (r *PGFallbackProviderResolver) ResolveParams(ctx context.Context, pluginNa
 
 	r.legacyWarned.Do(func() {
 		if r.Logger != nil {
-			r.Logger.Warn("push: S7-2 deprecation: keeper.yml::push.providers[] используется как fallback; мигрируйте на push_providers через POST /v1/push-providers",
+			r.Logger.Warn("push: S7-2 deprecation: keeper.yml::push.providers[] used as fallback; migrate to push_providers via POST /v1/push-providers",
 				slog.String("trigger_plugin", pluginName))
 		}
 	})

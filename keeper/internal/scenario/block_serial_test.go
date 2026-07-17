@@ -60,7 +60,7 @@ func TestDispatch_BlockSerialWave(t *testing.T) {
 	}
 	for _, sid := range []string{"a.example.com", "b.example.com", "c.example.com"} {
 		if len(perHost[sid]) != 2 {
-			t.Errorf("host %s несёт %d задач, want 2 (весь блок)", sid, len(perHost[sid]))
+			t.Errorf("host %s carries %d tasks, want 2 (the whole block)", sid, len(perHost[sid]))
 		}
 	}
 
@@ -71,11 +71,11 @@ func TestDispatch_BlockSerialWave(t *testing.T) {
 	}
 	waves := splitWaves(sortedSIDs(perHost), width)
 	if len(waves) != 3 {
-		t.Fatalf("waves = %d, want 3 (serial:1 на 3 хостах)", len(waves))
+		t.Fatalf("waves = %d, want 3 (serial:1 on 3 hosts)", len(waves))
 	}
 	for i, w := range waves {
 		if len(w) != 1 {
-			t.Errorf("wave[%d] = %v, want ровно 1 хост", i, w)
+			t.Errorf("wave[%d] = %v, want exactly 1 host", i, w)
 		}
 	}
 }
@@ -144,24 +144,24 @@ func TestDispatch_NestedBlockSerialMinWidth(t *testing.T) {
 	}
 	for _, w := range []int{1, 2, 3} {
 		if !widths[w] {
-			t.Errorf("ожидался план с SerialWidth=%d, got widths=%v", w, widths)
+			t.Errorf("expected a plan with SerialWidth=%d, got widths=%v", w, widths)
 		}
 	}
 
 	// effectiveSerialWidth = minimum positive = 1 (the narrow L3 window wins).
 	width := effectiveSerialWidth(plans)
 	if width != 1 {
-		t.Fatalf("effectiveSerialWidth = %d, want 1 (min среди {3,2,1} — самое узкое окно)", width)
+		t.Fatalf("effectiveSerialWidth = %d, want 1 (min among {3,2,1} - the narrowest window)", width)
 	}
 
 	perHost := groupByHost(tasks, plans)
 	waves := splitWaves(sortedSIDs(perHost), width)
 	if len(waves) != 6 {
-		t.Fatalf("waves = %d, want 6 (leaf width=1 на 6 хостах)", len(waves))
+		t.Fatalf("waves = %d, want 6 (leaf width=1 on 6 hosts)", len(waves))
 	}
 	for i, w := range waves {
 		if len(w) != 1 {
-			t.Errorf("wave[%d] = %v, want ровно 1 хост (leaf width=1)", i, w)
+			t.Errorf("wave[%d] = %v, want exactly 1 host (leaf width=1)", i, w)
 		}
 	}
 }

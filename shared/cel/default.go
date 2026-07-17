@@ -82,7 +82,7 @@ func expandDefaultMacro(mef parser.ExprHelper, _ ast.Expr, args []ast.Expr) (ast
 		return mef.Copy(x), nil
 	default:
 		return nil, mef.NewError(x.ID(),
-			"default(x, y): первый аргумент должен быть полем (essence.tls_enable, a.b.c) "+
-				"или идентификатором, а не выражением — для вычислений используй тернар has(...)?...:...")
+			"default(x, y): first argument must be a field (essence.tls_enable, a.b.c) "+
+				"or an identifier, not an expression - for computations use the ternary has(...)?...:...")
 	}
 }

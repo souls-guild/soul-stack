@@ -36,7 +36,7 @@ func TestValidate(t *testing.T) {
 		Params: mustStruct(t, map[string]any{"path": "/mnt/data"}),
 	})
 	if reply.Ok {
-		t.Fatal("Validate без source/fstype: ok unexpectedly")
+		t.Fatal("Validate without source/fstype: ok unexpectedly")
 	}
 	reply, _ = m.Validate(context.Background(), &pluginv1.ValidateRequest{
 		State: "present",
@@ -77,12 +77,12 @@ func TestApply_Present_AddsToFstabAndMounts(t *testing.T) {
 		t.Fatalf("Apply: %v", err)
 	}
 	if !stream.Last().Changed {
-		t.Fatal("Changed=false при добавлении")
+		t.Fatal("Changed=false when adding")
 	}
 	content, _ := os.ReadFile(fstab)
 	want := "/dev/sdb1 " + target + " ext4 defaults 0 0"
 	if !strings.Contains(string(content), want) {
-		t.Fatalf("fstab=%q не содержит %q", string(content), want)
+		t.Fatalf("fstab=%q does not contain %q", string(content), want)
 	}
 }
 
@@ -111,7 +111,7 @@ func TestApply_Present_IdempotentWhenAlreadyMountedAndInFstab(t *testing.T) {
 		t.Fatalf("Apply: %v", err)
 	}
 	if stream.Last().Changed {
-		t.Fatal("Changed=true для already-mounted + identical fstab")
+		t.Fatal("Changed=true for already-mounted + identical fstab")
 	}
 }
 
@@ -141,11 +141,11 @@ func TestApply_Present_ReplacesFstabOnOptsDiff(t *testing.T) {
 		t.Fatalf("Apply: %v", err)
 	}
 	if !stream.Last().Changed {
-		t.Fatal("Changed=false при изменении opts в fstab")
+		t.Fatal("Changed=false when opts change in fstab")
 	}
 	content, _ := os.ReadFile(fstab)
 	if !strings.Contains(string(content), "noatime,nodiratime") {
-		t.Fatalf("fstab не обновлён: %q", string(content))
+		t.Fatalf("fstab was not updated: %q", string(content))
 	}
 }
 
@@ -171,14 +171,14 @@ func TestApply_Absent_RemovesFstabAndUnmounts(t *testing.T) {
 		t.Fatalf("Apply: %v", err)
 	}
 	if !stream.Last().Changed {
-		t.Fatal("Changed=false при удалении")
+		t.Fatal("Changed=false when removing")
 	}
 	content, _ := os.ReadFile(fstab)
 	if strings.Contains(string(content), target) {
-		t.Fatalf("fstab всё ещё содержит target: %q", string(content))
+		t.Fatalf("fstab still contains target: %q", string(content))
 	}
 	if !strings.Contains(string(content), "/other") {
-		t.Fatalf("неожиданно удалена другая строка: %q", string(content))
+		t.Fatalf("unexpectedly removed a different line: %q", string(content))
 	}
 }
 
@@ -208,11 +208,11 @@ func TestApply_Mounted_NoFstabWrite(t *testing.T) {
 		t.Fatalf("Apply: %v", err)
 	}
 	if !stream.Last().Changed {
-		t.Fatal("Changed=false при mounted")
+		t.Fatal("Changed=false when mounted")
 	}
 	content, _ := os.ReadFile(fstab)
 	if strings.Contains(string(content), target) {
-		t.Fatalf("fstab не должен трогаться для mounted; got %q", string(content))
+		t.Fatalf("fstab must not be touched for mounted; got %q", string(content))
 	}
 }
 
@@ -250,14 +250,14 @@ func TestApply_Present_PreservesFstabMode(t *testing.T) {
 		t.Fatalf("Apply: %v", err)
 	}
 	if !stream.Last().Changed {
-		t.Fatal("Changed=false при изменении opts")
+		t.Fatal("Changed=false when opts change")
 	}
 	info, err := os.Stat(fstab)
 	if err != nil {
 		t.Fatalf("stat: %v", err)
 	}
 	if info.Mode().Perm() != 0o600 {
-		t.Fatalf("mode=%v want 0600 (preserve-by-default не сработал)", info.Mode().Perm())
+		t.Fatalf("mode=%v want 0600 (preserve-by-default did not trigger)", info.Mode().Perm())
 	}
 }
 
@@ -287,14 +287,14 @@ func TestApply_Absent_PreservesFstabMode(t *testing.T) {
 		t.Fatalf("Apply: %v", err)
 	}
 	if !stream.Last().Changed {
-		t.Fatal("Changed=false при удалении")
+		t.Fatal("Changed=false when removing")
 	}
 	info, err := os.Stat(fstab)
 	if err != nil {
 		t.Fatalf("stat: %v", err)
 	}
 	if info.Mode().Perm() != 0o600 {
-		t.Fatalf("mode=%v want 0600 (preserve при absent не сработал)", info.Mode().Perm())
+		t.Fatalf("mode=%v want 0600 (preserve on absent did not trigger)", info.Mode().Perm())
 	}
 }
 
@@ -333,17 +333,17 @@ func TestApply_Present_IdempotentRepeatKeepsFile(t *testing.T) {
 		t.Fatalf("Apply: %v", err)
 	}
 	if stream.Last().Changed {
-		t.Fatal("Changed=true для идентичного fstab + mounted")
+		t.Fatal("Changed=true for identical fstab + mounted")
 	}
 	after, err := os.Stat(fstab)
 	if err != nil {
 		t.Fatalf("stat after: %v", err)
 	}
 	if after.Mode().Perm() != 0o600 {
-		t.Fatalf("mode=%v want 0600 (idempotent повтор изменил mode)", after.Mode().Perm())
+		t.Fatalf("mode=%v want 0600 (idempotent rerun changed mode)", after.Mode().Perm())
 	}
 	if !before.ModTime().Equal(after.ModTime()) {
-		t.Fatalf("idempotent повтор переписал fstab: mtime %v -> %v", before.ModTime(), after.ModTime())
+		t.Fatalf("idempotent rerun rewrote fstab: mtime %v -> %v", before.ModTime(), after.ModTime())
 	}
 }
 
@@ -370,10 +370,10 @@ func TestApply_Unmounted_NoFstabChange(t *testing.T) {
 		t.Fatalf("Apply: %v", err)
 	}
 	if !stream.Last().Changed {
-		t.Fatal("Changed=false при unmount")
+		t.Fatal("Changed=false when unmounting")
 	}
 	content, _ := os.ReadFile(fstab)
 	if string(content) != fstabContent {
-		t.Fatalf("fstab изменился при unmounted; want %q got %q", fstabContent, string(content))
+		t.Fatalf("fstab changed while unmounted; want %q got %q", fstabContent, string(content))
 	}
 }

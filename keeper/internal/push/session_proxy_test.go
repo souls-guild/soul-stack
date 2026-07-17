@@ -147,7 +147,7 @@ func proxyHandle(s *liveSSHServer) func(t *testing.T, sc *ssh.ServerConn, chans 
 		go ssh.DiscardRequests(reqs)
 		for newCh := range chans {
 			if newCh.ChannelType() != "direct-tcpip" {
-				_ = newCh.Reject(ssh.UnknownChannelType, "только direct-tcpip")
+				_ = newCh.Reject(ssh.UnknownChannelType, "direct-tcpip only")
 				continue
 			}
 			s.sawDirectTCPIP.Store(true)
@@ -180,7 +180,7 @@ func targetHandle(s *liveSSHServer) func(t *testing.T, sc *ssh.ServerConn, chans
 		go ssh.DiscardRequests(reqs)
 		for newCh := range chans {
 			if newCh.ChannelType() != "session" {
-				_ = newCh.Reject(ssh.UnknownChannelType, "только session")
+				_ = newCh.Reject(ssh.UnknownChannelType, "session only")
 				continue
 			}
 			ch, chReqs, err := newCh.Accept()
@@ -332,7 +332,7 @@ func TestDial_ProxyJump_EndToEnd(t *testing.T) {
 		Timeout:         3 * time.Second,
 	})
 	if err != nil {
-		t.Fatalf("Dial через proxy_jump: %v", err)
+		t.Fatalf("Dial via proxy_jump: %v", err)
 	}
 	defer sess.Close()
 
@@ -351,10 +351,10 @@ func TestDial_ProxyJump_EndToEnd(t *testing.T) {
 		t.Errorf("status = %v, want SUCCESS", rr.GetStatus())
 	}
 	if !proxy.sawDirectTCPIP.Load() {
-		t.Error("proxy не зафиксировал direct-tcpip-канал (dispatcher шёл напрямую, не через proxy)")
+		t.Error("proxy did not record a direct-tcpip channel (dispatcher went straight, not via proxy)")
 	}
 	if !target.sawTargetExec.Load() {
-		t.Error("target не получил exec — туннель не довёл до него команду")
+		t.Error("target did not receive exec - the tunnel did not carry the command to it")
 	}
 }
 
@@ -421,10 +421,10 @@ func TestDial_ProxyJump_ProxyUnavailable(t *testing.T) {
 		Timeout:         1 * time.Second,
 	})
 	if err == nil {
-		t.Fatal("ждали ошибку: proxy недоступен — fail-closed")
+		t.Fatal("expected an error: proxy unreachable - fail-closed")
 	}
 	if !strings.Contains(err.Error(), "proxy") {
-		t.Errorf("ошибка не помечена как proxy-fail: %v", err)
+		t.Errorf("error not marked as proxy-fail: %v", err)
 	}
 }
 
@@ -459,10 +459,10 @@ func TestDial_ProxyJump_TargetUnavailable(t *testing.T) {
 		Timeout:         1 * time.Second,
 	})
 	if err == nil {
-		t.Fatal("ждали ошибку: target недоступен через proxy — fail-closed")
+		t.Fatal("expected an error: target unreachable via proxy - fail-closed")
 	}
 	if !strings.Contains(err.Error(), "direct-tcpip") && !strings.Contains(err.Error(), "target") {
-		t.Errorf("ошибка не помечена как target-fail через proxy: %v", err)
+		t.Errorf("error not marked as target-fail via proxy: %v", err)
 	}
 }
 
@@ -476,25 +476,25 @@ func TestParseProxyJump(t *testing.T) {
 		wantAddr   string
 		expectFail bool
 	}{
-		{"host:port без user → default", "proxy.example.com:3023", "soul", "soul", "proxy.example.com:3023", false},
+		{"host:port without user -> default", "proxy.example.com:3023", "soul", "soul", "proxy.example.com:3023", false},
 		{"user@host:port", "jumper@proxy.example.com:3023", "soul", "jumper", "proxy.example.com:3023", false},
 		{"IPv4 host:port", "127.0.0.1:2222", "soul", "soul", "127.0.0.1:2222", false},
 		{"IPv6 host:port", "[::1]:2222", "soul", "soul", "[::1]:2222", false},
-		{"пустой", "", "soul", "", "", true},
-		{"только host без port", "proxy.example.com", "soul", "", "", true},
-		{"@-без user", "@host:22", "soul", "", "", true},
+		{"empty", "", "soul", "", "", true},
+		{"host only, no port", "proxy.example.com", "soul", "", "", true},
+		{"@ without user", "@host:22", "soul", "", "", true},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			user, addr, err := parseProxyJump(c.raw, c.defUser)
 			if c.expectFail {
 				if err == nil {
-					t.Errorf("ждали ошибку для %q", c.raw)
+					t.Errorf("expected an error for %q", c.raw)
 				}
 				return
 			}
 			if err != nil {
-				t.Fatalf("неожиданная ошибка: %v", err)
+				t.Fatalf("unexpected error: %v", err)
 			}
 			if user != c.wantUser || addr != c.wantAddr {
 				t.Errorf("got (%q, %q), want (%q, %q)", user, addr, c.wantUser, c.wantAddr)

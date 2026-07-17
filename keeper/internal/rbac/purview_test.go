@@ -83,13 +83,13 @@ func TestResolvePurview_Revoked_Deny(t *testing.T) {
 			}
 			p := e.ResolvePurview("archon-fired", "soul", "list")
 			if !p.Deny {
-				t.Errorf("revoked AID с %q: Deny = false, want true", tc.perm)
+				t.Errorf("revoked AID with %q: Deny = false, want true", tc.perm)
 			}
 			if p.Unrestricted {
-				t.Errorf("revoked AID с %q: Unrestricted = true, want false (revoked не unrestricted)", tc.perm)
+				t.Errorf("revoked AID with %q: Unrestricted = true, want false (revoked is not unrestricted)", tc.perm)
 			}
 			if p.Covens != nil || p.Regexes != nil || p.SoulprintExprs != nil || p.StateExprs != nil {
-				t.Errorf("revoked AID с %q: измерения не пусты (%+v), want все nil", tc.perm, p)
+				t.Errorf("revoked AID with %q: dimensions are not empty (%+v), want all nil", tc.perm, p)
 			}
 		})
 	}

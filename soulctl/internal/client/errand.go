@@ -75,10 +75,10 @@ type ErrandListReply struct {
 //   - 4xx/5xx → (zero, false, *APIError).
 func (a *ErrandAPI) Exec(ctx context.Context, req ErrandExecRequest) (ErrandResult, bool, error) {
 	if req.SID == "" {
-		return ErrandResult{}, false, fmt.Errorf("SID пуст")
+		return ErrandResult{}, false, fmt.Errorf("SID is empty")
 	}
 	if req.Module == "" {
-		return ErrandResult{}, false, fmt.Errorf("module пуст")
+		return ErrandResult{}, false, fmt.Errorf("module is empty")
 	}
 	path := "/v1/souls/" + url.PathEscape(req.SID) + "/exec"
 
@@ -105,7 +105,7 @@ func (a *ErrandAPI) Exec(ctx context.Context, req ErrandExecRequest) (ErrandResu
 // result + an async flag.
 func (a *ErrandAPI) Get(ctx context.Context, errandID string) (ErrandResult, bool, error) {
 	if errandID == "" {
-		return ErrandResult{}, false, fmt.Errorf("errand_id пуст")
+		return ErrandResult{}, false, fmt.Errorf("errand_id is empty")
 	}
 	var raw ErrandResult
 	if err := a.c.Do(ctx, "GET", "/v1/errands/"+url.PathEscape(errandID), nil, &raw); err != nil {
@@ -121,7 +121,7 @@ func (a *ErrandAPI) Get(ctx context.Context, errandID string) (ErrandResult, boo
 // ErrandResult{CANCELLED} after receiving the CancelErrand signal.
 func (a *ErrandAPI) Cancel(ctx context.Context, errandID string) error {
 	if errandID == "" {
-		return fmt.Errorf("errand_id пуст")
+		return fmt.Errorf("errand_id is empty")
 	}
 	return a.c.Do(ctx, "DELETE", "/v1/errands/"+url.PathEscape(errandID), nil, nil)
 }

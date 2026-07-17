@@ -216,7 +216,7 @@ func (e *includeExpander) expandOne(task Task, stack []string, ancestorWhen stri
 
 	if reason := includeModifierReason(task); reason != "" {
 		e.addError("include_modifier_unsupported",
-			fmt.Sprintf("include %q несёт %s — проброс scope/контроля через include вне слайса B; вынеси модификатор на module-задачу подключённого файла", name, reason),
+			fmt.Sprintf("include %q carries %s - forwarding scope/control through include is out of slice B; move the modifier onto a module task of the included file", name, reason),
 			"")
 		return nil, false
 	}
@@ -236,8 +236,8 @@ func (e *includeExpander) expandOne(task Task, stack []string, ancestorWhen stri
 	if task.When != "" {
 		if !IsStaticIncludeWhen(task.When) {
 			e.addError("include_when_dynamic_unsupported",
-				fmt.Sprintf("include %q несёт динамический when %q (ссылка на register./soulprint.) — include раскрывается ДО стратификации, доступен только статический предикат input./essence./incarnation./vars.", name, task.When),
-				"замените на статический предикат (input./essence./incarnation.) либо перенесите условие на module-задачу подключённого файла через when:")
+				fmt.Sprintf("include %q carries a dynamic when %q (reference to register./soulprint.) - include expands BEFORE stratification, only a static predicate input./essence./incarnation./vars. is available", name, task.When),
+				"replace with a static predicate (input./essence./incarnation.) or move the condition onto a module task of the included file via when:")
 			return nil, false
 		}
 		e.lastGroupID++
@@ -253,15 +253,15 @@ func (e *includeExpander) expandOne(task Task, stack []string, ancestorWhen stri
 
 	if depth := len(stack); depth >= maxIncludeDepth {
 		e.addError("include_depth_exceeded",
-			fmt.Sprintf("include %q: превышена максимальная глубина %d (цепочка: %v)", name, maxIncludeDepth, stack),
+			fmt.Sprintf("include %q: maximum depth %d exceeded (chain: %v)", name, maxIncludeDepth, stack),
 			"")
 		return nil, false
 	}
 	for _, prev := range stack {
 		if prev == display {
 			e.addError("include_cycle",
-				fmt.Sprintf("include %q образует цикл: %s уже в активной цепочке %v", name, display, stack),
-				"разорви циклическую зависимость include")
+				fmt.Sprintf("include %q forms a cycle: %s is already in the active chain %v", name, display, stack),
+				"break the cyclic include dependency")
 			return nil, false
 		}
 	}
@@ -294,7 +294,7 @@ func (e *includeExpander) expandOne(task Task, stack []string, ancestorWhen stri
 func includeModifierReason(task Task) string {
 	switch {
 	case task.Loop != nil:
-		return "loop: (слайс E)"
+		return "loop: (slice E)"
 	case len(task.Vars) > 0:
 		return "vars:"
 	case task.Parallel:

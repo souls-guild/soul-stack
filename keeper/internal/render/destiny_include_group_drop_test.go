@@ -62,21 +62,21 @@ func TestDestinyIncludeGroupDrop_WhenFalse_TasksAbsent(t *testing.T) {
 
 	tasks, plans, err := p.Render(context.Background(), in)
 	if err != nil {
-		t.Fatalf("Render: дроп sentinel-группы при non-sentinel input НЕ должен падать (no-such-key недопустим — input.topology в apply.input): %v", err)
+		t.Fatalf("Render: dropping the sentinel group on non-sentinel input must NOT fail (no-such-key is not allowed - input.topology is in apply.input): %v", err)
 	}
 	if len(tasks) != 2 || len(plans) != 2 {
-		t.Fatalf("len(tasks)=%d plans=%d, want 2/2 (head + tail; группа дропнута БЕЗ placeholder)", len(tasks), len(plans))
+		t.Fatalf("len(tasks)=%d plans=%d, want 2/2 (head + tail; group dropped WITHOUT a placeholder)", len(tasks), len(plans))
 	}
 	for _, rt := range tasks {
 		if rt.Name == "sentinel-a" || rt.Name == "sentinel-b" {
-			t.Fatalf("задача %q дропнутой sentinel-группы присутствует в плане destiny", rt.Name)
+			t.Fatalf("task %q of the dropped sentinel group is present in the destiny plan", rt.Name)
 		}
 	}
 	if tasks[0].Name != "head" || tasks[1].Name != "tail" {
-		t.Errorf("план = [%q,%q], want [head,tail]", tasks[0].Name, tasks[1].Name)
+		t.Errorf("plan = [%q,%q], want [head,tail]", tasks[0].Name, tasks[1].Name)
 	}
 	if tasks[0].Index != 0 || tasks[1].Index != 1 {
-		t.Errorf("Index = %d,%d, want 0,1 (сквозные без дыр — дроп не резервирует idx)", tasks[0].Index, tasks[1].Index)
+		t.Errorf("Index = %d,%d, want 0,1 (contiguous without gaps - drop does not reserve idx)", tasks[0].Index, tasks[1].Index)
 	}
 }
 
@@ -110,7 +110,7 @@ func TestDestinyIncludeGroupDrop_WhenTrue_TasksPresent(t *testing.T) {
 		t.Fatalf("Render: %v", err)
 	}
 	if len(tasks) != 4 {
-		t.Fatalf("len(tasks)=%d, want 4 (head + 2 группы + tail)", len(tasks))
+		t.Fatalf("len(tasks)=%d, want 4 (head + 2 groups + tail)", len(tasks))
 	}
 	want := []string{"head", "sentinel-a", "sentinel-b", "tail"}
 	for i, w := range want {
@@ -118,11 +118,11 @@ func TestDestinyIncludeGroupDrop_WhenTrue_TasksPresent(t *testing.T) {
 			t.Errorf("tasks[%d].Name = %q, want %q", i, tasks[i].Name, w)
 		}
 		if tasks[i].Index != i {
-			t.Errorf("tasks[%d].Index = %d, want %d (сквозная нумерация)", i, tasks[i].Index, i)
+			t.Errorf("tasks[%d].Index = %d, want %d (contiguous numbering)", i, tasks[i].Index, i)
 		}
 	}
 	if tasks[1].Params == nil {
-		t.Error("sentinel-a.Params == nil — include-when:true должен рендерить группу обычным путём")
+		t.Error("sentinel-a.Params == nil - include-when:true should render the group the normal way")
 	}
 	if got := tasks[1].Params.GetFields()["cmd"].GetStringValue(); got != "sa" {
 		t.Errorf("sentinel-a.cmd = %q, want sa", got)
@@ -170,23 +170,23 @@ func TestDestinyIncludeGroupDrop_Nested(t *testing.T) {
 	}
 	// head + outer-a(keep) + tail = 3; the inner group (ha=off) is dropped.
 	if len(tasks) != 3 {
-		t.Fatalf("len(tasks)=%d, want 3 (head + outer-a + tail; inner-группа дропнута)", len(tasks))
+		t.Fatalf("len(tasks)=%d, want 3 (head + outer-a + tail; inner group dropped)", len(tasks))
 	}
 	names := map[string]*RenderedTask{}
 	for _, rt := range tasks {
 		names[rt.Name] = rt
 	}
 	if _, ok := names["inner-a"]; ok {
-		t.Error("inner-a присутствует — вложенная include-группа (ha=off) должна быть дропнута")
+		t.Error("inner-a is present - nested include group (ha=off) should be dropped")
 	}
 	if _, ok := names["inner-b"]; ok {
-		t.Error("inner-b присутствует — вложенная include-группа (ha=off) должна быть дропнута")
+		t.Error("inner-b is present - nested include group (ha=off) should be dropped")
 	}
 	if _, ok := names["outer-a"]; !ok {
-		t.Error("outer-a отсутствует — внешняя include-группа (tls=on) должна остаться")
+		t.Error("outer-a is missing - outer include group (tls=on) should remain")
 	}
 	if tail := names["tail"]; tail == nil || tail.Index != 2 {
-		t.Errorf("tail.Index = %v, want 2 (сквозной после head=0, outer-a=1; inner-drop не резервирует idx)", tail)
+		t.Errorf("tail.Index = %v, want 2 (contiguous after head=0, outer-a=1; inner-drop does not reserve idx)", tail)
 	}
 }
 
@@ -222,6 +222,6 @@ func TestDestinyIncludeGroupDrop_IsolatedEnv(t *testing.T) {
 		t.Fatalf("Render: %v", err)
 	}
 	if len(tasks) != 0 {
-		t.Fatalf("len(tasks)=%d, want 0 — include-when должен читать destiny-input (standalone → дроп), НЕ scenario-input (sentinel)", len(tasks))
+		t.Fatalf("len(tasks)=%d, want 0 - include-when should read destiny-input (standalone -> drop), NOT scenario-input (sentinel)", len(tasks))
 	}
 }

@@ -82,7 +82,7 @@ func TestFetch_OK_CorrelatesByRequestID(t *testing.T) {
 	defer cancel()
 	reply, err := c.Fetch(ctx, "apply-1", "vault-prod", "secret/data/app#token")
 	if err != nil {
-		t.Fatalf("Fetch вернул ошибку: %v", err)
+		t.Fatalf("Fetch returned an error: %v", err)
 	}
 	if got := reply.GetInlineData().AsMap()["value"]; got != "secret-xyz" {
 		t.Fatalf("inline_data.value = %v, want secret-xyz", got)
@@ -90,13 +90,13 @@ func TestFetch_OK_CorrelatesByRequestID(t *testing.T) {
 
 	sent := fs.sentRequests()
 	if len(sent) != 1 {
-		t.Fatalf("отправлено %d запросов, want 1", len(sent))
+		t.Fatalf("sent %d requests, want 1", len(sent))
 	}
 	if sent[0].GetApplyId() != "apply-1" || sent[0].GetOmenName() != "vault-prod" {
-		t.Fatalf("AugurRequest заполнен неверно: %+v", sent[0])
+		t.Fatalf("AugurRequest filled incorrectly: %+v", sent[0])
 	}
 	if sent[0].GetRequestId() == "" {
-		t.Fatalf("request_id пуст — Soul обязан его сгенерировать")
+		t.Fatalf("request_id is empty - Soul must generate it")
 	}
 }
 
@@ -106,7 +106,7 @@ func TestFetch_WrongRequestIDNotDelivered_TimesOut(t *testing.T) {
 	// Reply with a FOREIGN request_id — correlation must not match; Fetch
 	// waits until ctx is canceled.
 	fs.auto = func(req *keeperv1.AugurRequest) *keeperv1.AugurReply {
-		return okReply("не-тот-id", map[string]any{"value": 1})
+		return okReply("wrong-id", map[string]any{"value": 1})
 	}
 	delivered := make(chan bool, 1)
 	fs.deliver = func(r *keeperv1.AugurReply) bool {
@@ -119,15 +119,15 @@ func TestFetch_WrongRequestIDNotDelivered_TimesOut(t *testing.T) {
 	defer cancel()
 	_, err := c.Fetch(ctx, "apply-1", "omen", "q")
 	if !errors.Is(err, context.DeadlineExceeded) {
-		t.Fatalf("ожидался DeadlineExceeded, got %v", err)
+		t.Fatalf("expected DeadlineExceeded, got %v", err)
 	}
 	select {
 	case ok := <-delivered:
 		if ok {
-			t.Fatalf("Deliver с чужим request_id вернул true — корреляция сломана")
+			t.Fatalf("Deliver with a foreign request_id returned true - correlation is broken")
 		}
 	case <-time.After(time.Second):
-		t.Fatalf("Deliver так и не был вызван")
+		t.Fatalf("Deliver was never called")
 	}
 }
 
@@ -139,7 +139,7 @@ func TestFetch_Timeout_CleansUpPending(t *testing.T) {
 	defer cancel()
 	_, err := c.Fetch(ctx, "apply-1", "omen", "q")
 	if !errors.Is(err, context.DeadlineExceeded) {
-		t.Fatalf("ожидался DeadlineExceeded, got %v", err)
+		t.Fatalf("expected DeadlineExceeded, got %v", err)
 	}
 
 	// pending map is cleared on timeout (discard in Fetch's defer).
@@ -147,7 +147,7 @@ func TestFetch_Timeout_CleansUpPending(t *testing.T) {
 	n := len(c.pending)
 	c.mu.Unlock()
 	if n != 0 {
-		t.Fatalf("после таймаута в pending осталось %d записей, want 0 (утечка)", n)
+		t.Fatalf("after timeout, pending still has %d entries, want 0 (leak)", n)
 	}
 }
 
@@ -186,11 +186,11 @@ func TestFetch_ParallelRequests_EachGetsOwnReply(t *testing.T) {
 
 	for i := 0; i < n; i++ {
 		if errs[i] != nil {
-			t.Fatalf("запрос %d: ошибка %v", i, errs[i])
+			t.Fatalf("request %d: error %v", i, errs[i])
 		}
 		want := "query-" + string(rune('A'+i))
 		if vals[i] != want {
-			t.Fatalf("запрос %d получил value=%q, want %q — ответы перепутаны", i, vals[i], want)
+			t.Fatalf("request %d got value=%q, want %q - replies got mixed up", i, vals[i], want)
 		}
 	}
 
@@ -198,7 +198,7 @@ func TestFetch_ParallelRequests_EachGetsOwnReply(t *testing.T) {
 	leftover := len(c.pending)
 	c.mu.Unlock()
 	if leftover != 0 {
-		t.Fatalf("после параллельных запросов в pending осталось %d, want 0", leftover)
+		t.Fatalf("after parallel requests, pending still has %d, want 0", leftover)
 	}
 }
 
@@ -223,15 +223,15 @@ func TestRequestID_UniquePerStream(t *testing.T) {
 	for _, req := range fs.sentRequests() {
 		id := req.GetRequestId()
 		if id == "" {
-			t.Fatalf("пустой request_id")
+			t.Fatalf("empty request_id")
 		}
 		if _, dup := seen[id]; dup {
-			t.Fatalf("дубль request_id %q — нарушена уникальность per-stream", id)
+			t.Fatalf("duplicate request_id %q - per-stream uniqueness violated", id)
 		}
 		seen[id] = struct{}{}
 	}
 	if len(seen) != n {
-		t.Fatalf("уникальных request_id %d, отправлено %d", len(seen), n)
+		t.Fatalf("unique request_id count %d, sent %d", len(seen), n)
 	}
 }
 
@@ -242,7 +242,7 @@ func TestFetch_Denied(t *testing.T) {
 		return &keeperv1.AugurReply{
 			RequestId: req.GetRequestId(),
 			Status:    keeperv1.AugurStatus_AUGUR_STATUS_DENIED,
-			Error:     "query вне allow-list",
+			Error:     "query outside allow-list",
 		}
 	}
 	fs.deliver = c.Deliver
@@ -251,10 +251,10 @@ func TestFetch_Denied(t *testing.T) {
 	defer cancel()
 	_, err := c.Fetch(ctx, "apply-1", "omen", "q")
 	if !errors.Is(err, ErrDenied) {
-		t.Fatalf("ожидался ErrDenied, got %v", err)
+		t.Fatalf("expected ErrDenied, got %v", err)
 	}
 	if err.Error() == ErrDenied.Error() {
-		t.Fatalf("причина Keeper-а потеряна — error не обёрнут reason-ом")
+		t.Fatalf("Keeper's reason was lost - error is not wrapped with the reason")
 	}
 }
 
@@ -265,7 +265,7 @@ func TestFetch_Error(t *testing.T) {
 		return &keeperv1.AugurReply{
 			RequestId: req.GetRequestId(),
 			Status:    keeperv1.AugurStatus_AUGUR_STATUS_ERROR,
-			Error:     "Omen недоступен",
+			Error:     "Omen unavailable",
 		}
 	}
 	fs.deliver = c.Deliver
@@ -274,7 +274,7 @@ func TestFetch_Error(t *testing.T) {
 	defer cancel()
 	_, err := c.Fetch(ctx, "apply-1", "omen", "q")
 	if !errors.Is(err, ErrRemote) {
-		t.Fatalf("ожидался ErrRemote, got %v", err)
+		t.Fatalf("expected ErrRemote, got %v", err)
 	}
 }
 
@@ -291,7 +291,7 @@ func TestFetch_UnspecifiedTreatedAsDeny(t *testing.T) {
 	defer cancel()
 	_, err := c.Fetch(ctx, "apply-1", "omen", "q")
 	if !errors.Is(err, ErrDenied) {
-		t.Fatalf("UNSPECIFIED должен трактоваться как ErrDenied, got %v", err)
+		t.Fatalf("UNSPECIFIED should be treated as ErrDenied, got %v", err)
 	}
 }
 
@@ -312,7 +312,7 @@ func TestFetch_OKWithoutInlineData_IsError(t *testing.T) {
 	defer cancel()
 	_, err := c.Fetch(ctx, "apply-1", "omen", "q")
 	if err == nil {
-		t.Fatalf("OK без inline_data должен быть ошибкой")
+		t.Fatalf("OK without inline_data should be an error")
 	}
 }
 
@@ -339,7 +339,7 @@ func TestClose_UnblocksPendingFetch(t *testing.T) {
 		}
 		select {
 		case <-deadline:
-			t.Fatalf("Fetch не зарегистрировал pending за отведённое время")
+			t.Fatalf("Fetch did not register pending within the allotted time")
 		case <-time.After(time.Millisecond):
 		}
 	}
@@ -348,10 +348,10 @@ func TestClose_UnblocksPendingFetch(t *testing.T) {
 	select {
 	case err := <-errCh:
 		if !errors.Is(err, ErrClientClosed) {
-			t.Fatalf("ожидался ErrClientClosed, got %v", err)
+			t.Fatalf("expected ErrClientClosed, got %v", err)
 		}
 	case <-time.After(2 * time.Second):
-		t.Fatalf("Fetch не разблокировался после Close")
+		t.Fatalf("Fetch did not unblock after Close")
 	}
 }
 
@@ -361,17 +361,17 @@ func TestFetch_AfterClose_Rejected(t *testing.T) {
 	c.Close()
 	_, err := c.Fetch(context.Background(), "apply-1", "omen", "q")
 	if !errors.Is(err, ErrClientClosed) {
-		t.Fatalf("Fetch после Close должен вернуть ErrClientClosed, got %v", err)
+		t.Fatalf("Fetch after Close should return ErrClientClosed, got %v", err)
 	}
 }
 
 func TestDeliver_NilAndUnknown(t *testing.T) {
 	c := NewClient(&fakeSender{})
 	if c.Deliver(nil) {
-		t.Fatalf("Deliver(nil) должен вернуть false")
+		t.Fatalf("Deliver(nil) should return false")
 	}
-	if c.Deliver(&keeperv1.AugurReply{RequestId: "нет-такого"}) {
-		t.Fatalf("Deliver неизвестного request_id должен вернуть false")
+	if c.Deliver(&keeperv1.AugurReply{RequestId: "no-such-id"}) {
+		t.Fatalf("Deliver of unknown request_id should return false")
 	}
 }
 
@@ -380,13 +380,13 @@ func TestSend_ErrorPropagates(t *testing.T) {
 	c := NewClient(fs)
 	_, err := c.Fetch(context.Background(), "apply-1", "omen", "q")
 	if err == nil {
-		t.Fatalf("ошибка Send должна проброситься наружу")
+		t.Fatalf("Send error should propagate outward")
 	}
 	// pending is cleared even when Send errors.
 	c.mu.Lock()
 	n := len(c.pending)
 	c.mu.Unlock()
 	if n != 0 {
-		t.Fatalf("после ошибки Send в pending осталось %d записей", n)
+		t.Fatalf("after Send error, pending still has %d entries", n)
 	}
 }

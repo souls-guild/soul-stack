@@ -115,13 +115,13 @@ func resolveOn(engine *cel.Engine, in RenderInput, on any) ([]string, error) {
 		return nil, nil
 	case string:
 		if v == keeperOnLiteral {
-			return nil, fmt.Errorf("render: on: keeper достиг Soul-side резолва roster — keeper-side задача должна маршрутизироваться в renderKeeperTask (программная ошибка)")
+			return nil, fmt.Errorf("render: on: keeper reached the Soul-side roster resolve -- a keeper-side task must be routed to renderKeeperTask (programming error)")
 		}
-		return nil, fmt.Errorf("render: on: %q — недопустимая скалярная форма (ожидалось 'keeper' или список ковенов)", v)
+		return nil, fmt.Errorf("render: on: %q -- invalid scalar form (expected 'keeper' or a list of covens)", v)
 	case []any:
 		return resolveCovenList(engine, in, v)
 	default:
-		return nil, fmt.Errorf("render: on: имеет тип %T, ожидалась строка 'keeper' или список ковенов", on)
+		return nil, fmt.Errorf("render: on: has type %T, expected string 'keeper' or a list of covens", on)
 	}
 }
 
@@ -197,7 +197,7 @@ func resolveCovenList(engine *cel.Engine, in RenderInput, items []any) ([]string
 	for i, raw := range items {
 		s, ok := raw.(string)
 		if !ok {
-			return nil, fmt.Errorf("render: on[%d] имеет тип %T, ожидалась строка-coven", i, raw)
+			return nil, fmt.Errorf("render: on[%d] has type %T, expected a coven string", i, raw)
 		}
 		val, err := engine.EvalInterpolation(s, vars)
 		if err != nil {
@@ -205,7 +205,7 @@ func resolveCovenList(engine *cel.Engine, in RenderInput, items []any) ([]string
 		}
 		coven, ok := val.(string)
 		if !ok {
-			return nil, fmt.Errorf("render: on[%d] %q вычислился в %T, ожидалась строка-coven", i, s, val)
+			return nil, fmt.Errorf("render: on[%d] %q evaluated to %T, expected a coven string", i, s, val)
 		}
 		out = append(out, coven)
 	}

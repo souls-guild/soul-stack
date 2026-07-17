@@ -96,38 +96,38 @@ func RegisterRBACMetrics(reg *obs.Registry) *RBACMetrics {
 	m := &RBACMetrics{
 		rebuildDuration: prometheus.NewHistogram(prometheus.HistogramOpts{
 			Name:    "keeper_rbac_snapshot_rebuild_duration_seconds",
-			Help:    "Длительность пересборки RBAC-снимка в секундах (Load из БД → NewEnforcerFromSnapshot).",
+			Help:    "Duration of RBAC snapshot rebuild in seconds (Load from DB -> NewEnforcerFromSnapshot).",
 			Buckets: prometheus.DefBuckets,
 		}),
 		rebuildErrorsTotal: prometheus.NewCounterVec(
 			prometheus.CounterOpts{
 				Name: "keeper_rbac_snapshot_rebuild_errors_total",
-				Help: "Количество неуспешных пересборок RBAC-снимка, разрезанное по kind (load/parse).",
+				Help: "Number of failed RBAC snapshot rebuilds, split by kind (load/parse).",
 			},
 			[]string{"kind"},
 		),
 		lastSuccessTimestamp: prometheus.NewGauge(prometheus.GaugeOpts{
 			Name: "keeper_rbac_snapshot_last_success_timestamp_seconds",
-			Help: "Unix-время последней успешной пересборки RBAC-снимка (возраст = time() - этот gauge).",
+			Help: "Unix time of the last successful RBAC snapshot rebuild (age = time() - this gauge).",
 		}),
 		roles: prometheus.NewGauge(prometheus.GaugeOpts{
 			Name: "keeper_rbac_snapshot_roles",
-			Help: "Число ролей в актуальном RBAC-снимке.",
+			Help: "Number of roles in the current RBAC snapshot.",
 		}),
 		operators: prometheus.NewGauge(prometheus.GaugeOpts{
 			Name: "keeper_rbac_snapshot_operators",
-			Help: "Число операторов с ≥1 ролевой привязкой в актуальном RBAC-снимке.",
+			Help: "Number of operators with >=1 role binding in the current RBAC snapshot.",
 		}),
 		checksTotal: prometheus.NewCounterVec(
 			prometheus.CounterOpts{
 				Name: "keeper_rbac_checks_total",
-				Help: "Количество permission-проверок RBAC, разрезанное по результату (allow/deny).",
+				Help: "Number of RBAC permission checks, split by result (allow/deny).",
 			},
 			[]string{"result"},
 		),
 		invalidationsTotal: prometheus.NewCounter(prometheus.CounterOpts{
 			Name: "keeper_rbac_invalidations_received_total",
-			Help: "Количество принятых cluster-wide RBAC-инвалидаций (pub/sub-сигналов).",
+			Help: "Number of accepted cluster-wide RBAC invalidations (pub/sub signals).",
 		}),
 	}
 	reg.Registerer().MustRegister(

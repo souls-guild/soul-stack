@@ -141,7 +141,7 @@ func TestRender_LoopOverSoulprintHostsWhere(t *testing.T) {
 		t.Fatalf("Render: %v", err)
 	}
 	if len(tasks) != 2 {
-		t.Fatalf("len(tasks) = %d, want 2 (две реплики)", len(tasks))
+		t.Fatalf("len(tasks) = %d, want 2 (two replicas)", len(tasks))
 	}
 	got := []string{
 		tasks[0].Params.GetFields()["cmd"].GetStringValue(),
@@ -150,13 +150,13 @@ func TestRender_LoopOverSoulprintHostsWhere(t *testing.T) {
 	want := map[string]bool{"echo 10.0.0.2": false, "echo 10.0.0.3": false}
 	for _, g := range got {
 		if _, ok := want[g]; !ok {
-			t.Fatalf("неожиданный command %q (got %v)", g, got)
+			t.Fatalf("unexpected command %q (got %v)", g, got)
 		}
 		want[g] = true
 	}
 	for cmd, seen := range want {
 		if !seen {
-			t.Fatalf("ожидали command %q среди %v", cmd, got)
+			t.Fatalf("expected command %q among %v", cmd, got)
 		}
 	}
 }
@@ -186,10 +186,10 @@ func TestRender_DestinyIsolation_HostsForbidden(t *testing.T) {
 
 	_, _, err := p.Render(context.Background(), in)
 	if err == nil {
-		t.Fatalf("ожидали ошибку изоляции для soulprint.hosts в destiny")
+		t.Fatalf("expected isolation error for soulprint.hosts in destiny")
 	}
 	if !strings.Contains(err.Error(), "soulprint.hosts") {
-		t.Fatalf("ожидали сообщение про soulprint.hosts, получили: %v", err)
+		t.Fatalf("expected message about soulprint.hosts, got: %v", err)
 	}
 }
 
@@ -301,10 +301,10 @@ func TestRender_DestinyIsolation_WhereForbidden(t *testing.T) {
 
 	_, _, err := p.Render(context.Background(), in)
 	if err == nil {
-		t.Fatalf("ожидали ошибку изоляции для soulprint.where в destiny")
+		t.Fatalf("expected isolation error for soulprint.where in destiny")
 	}
 	if !strings.Contains(err.Error(), "soulprint.hosts") {
-		t.Fatalf("ожидали сообщение про изоляцию soulprint.hosts, получили: %v", err)
+		t.Fatalf("expected message about soulprint.hosts isolation, got: %v", err)
 	}
 }
 
@@ -388,7 +388,7 @@ func TestRender_EmptyFilterIndex0_StepError(t *testing.T) {
 	}))
 	_, _, err := p.Render(context.Background(), in)
 	if err == nil {
-		t.Fatalf("ожидали ошибку рендера для [0] над пустым фильтром")
+		t.Fatalf("expected render error for [0] over an empty filter")
 	}
 }
 
@@ -408,9 +408,9 @@ func TestRender_HostMissingFactSection(t *testing.T) {
 	}
 	_, _, err := p.Render(context.Background(), in)
 	if err == nil {
-		t.Fatalf("ожидали ошибку рендера для where над хостом без факта os")
+		t.Fatalf("expected render error for where over a host without os fact")
 	}
 	if !strings.Contains(err.Error(), "family") {
-		t.Fatalf("ожидали no-such-key по полю family (секция os = пустой map), получили: %v", err)
+		t.Fatalf("expected no-such-key for field family (os section = empty map), got: %v", err)
 	}
 }

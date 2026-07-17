@@ -39,12 +39,12 @@ func TestSchemaNames_Augur(t *testing.T) {
 	schemas := loadFullSpecSchemas(t)
 	for _, name := range augurContractSchemas {
 		if _, ok := schemas[name]; !ok {
-			t.Errorf("контрактonя схема %q ОТСУТСТВУЕТ в components/schemas (имя не выровнеbut)", name)
+			t.Errorf("contract schema %q MISSING in components/schemas (name not aligned)", name)
 		}
 	}
 	for _, name := range augurForbiddenSchemas {
 		if _, ok := schemas[name]; ok {
-			t.Errorf("техническое huma-имя %q ПРИСУТСТВУЕТ в спеке — имя не выровнеbut под контракт", name)
+			t.Errorf("technical huma name %q PRESENT in spec - name not aligned to contract", name)
 		}
 	}
 }
@@ -60,7 +60,7 @@ func TestSchemaNames_AugurEnvelopes(t *testing.T) {
 	}
 	var doc map[string]any
 	if err := yaml.Unmarshal([]byte(y), &doc); err != nil {
-		t.Fatalf("спека не парсится: %v", err)
+		t.Fatalf("spec does not parse: %v", err)
 	}
 	comp, _ := doc["components"].(map[string]any)
 	schemas, _ := comp["schemas"].(map[string]any)

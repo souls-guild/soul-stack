@@ -24,11 +24,11 @@ input:
 	_, _, diags, _ := LoadDestinyManifestFromBytes("destiny.yml", []byte(src), ValidateOptions{})
 	if hasCode(diags, "missing_required_field") {
 		dump(t, diags)
-		t.Fatalf("$type-узел не должен требовать type: (он ссылка)")
+		t.Fatalf("$type node should not require type: (it is a reference)")
 	}
 	if diag.HasErrors(diags) {
 		dump(t, diags)
-		t.Fatalf("чистая $type-ссылка должна валидироваться без ошибок")
+		t.Fatalf("a pure $type reference should validate without errors")
 	}
 }
 
@@ -44,7 +44,7 @@ input:
 	_, _, diags, _ := LoadDestinyManifestFromBytes("destiny.yml", []byte(src), ValidateOptions{})
 	if !hasCode(diags, "input_type_ref_conflict") {
 		dump(t, diags)
-		t.Fatalf("$type + type: должно дать input_type_ref_conflict")
+		t.Fatalf("$type + type: should yield input_type_ref_conflict")
 	}
 }
 
@@ -60,7 +60,7 @@ input:
 	_, _, diags, _ := LoadDestinyManifestFromBytes("destiny.yml", []byte(src), ValidateOptions{})
 	if !hasCode(diags, "input_type_ref_conflict") {
 		dump(t, diags)
-		t.Fatalf("$type + properties: должно дать input_type_ref_conflict")
+		t.Fatalf("$type + properties: should yield input_type_ref_conflict")
 	}
 }
 
@@ -75,7 +75,7 @@ input:
 	_, _, diags, _ := LoadDestinyManifestFromBytes("destiny.yml", []byte(src), ValidateOptions{})
 	if !hasCode(diags, "input_type_ref_conflict") {
 		dump(t, diags)
-		t.Fatalf("$type + items: на одном узле должно дать input_type_ref_conflict")
+		t.Fatalf("$type + items: on one node should yield input_type_ref_conflict")
 	}
 }
 
@@ -91,7 +91,7 @@ input:
 	_, _, diags, _ := LoadDestinyManifestFromBytes("destiny.yml", []byte(src), ValidateOptions{})
 	if hasCode(diags, "input_type_ref_conflict") {
 		dump(t, diags)
-		t.Fatalf("items:{$type} не должно считаться конфликтом")
+		t.Fatalf("items:{$type} should not be considered a conflict")
 	}
 }
 
@@ -106,7 +106,7 @@ input:
 	_, _, diags, _ := LoadDestinyManifestFromBytes("destiny.yml", []byte(src), ValidateOptions{})
 	if !hasCode(diags, "type_mismatch") {
 		dump(t, diags)
-		t.Fatalf("$type не-строка должно дать type_mismatch")
+		t.Fatalf("$type non-string should yield type_mismatch")
 	}
 }
 
@@ -119,7 +119,7 @@ input:
 	_, _, diags, _ := LoadDestinyManifestFromBytes("destiny.yml", []byte(src), ValidateOptions{})
 	if !hasCode(diags, "input_type_ref_name_invalid") {
 		dump(t, diags)
-		t.Fatalf("имя $type с точками/дефисами должно дать input_type_ref_name_invalid")
+		t.Fatalf("$type name with dots/dashes should yield input_type_ref_name_invalid")
 	}
 }
 
@@ -138,17 +138,17 @@ func TestParseTypeCatalog_Basic(t *testing.T) {
 	catalog, diags := ParseTypeCatalog("types.yml", []byte(src))
 	if diag.HasErrors(diags) {
 		dump(t, diags)
-		t.Fatalf("валидный types.yml не должен давать ошибок")
+		t.Fatalf("a valid types.yml should not produce errors")
 	}
 	spec, ok := catalog["ServerSpec"]
 	if !ok {
-		t.Fatalf("ServerSpec должен быть в каталоге")
+		t.Fatalf("ServerSpec should be in the catalog")
 	}
 	if spec.Type != "object" {
-		t.Fatalf("ServerSpec.Type = %q, ожидался object", spec.Type)
+		t.Fatalf("ServerSpec.Type = %q, want object", spec.Type)
 	}
 	if _, ok := spec.Properties["port"]; !ok {
-		t.Fatalf("ServerSpec.properties.port отсутствует")
+		t.Fatalf("ServerSpec.properties.port missing")
 	}
 }
 
@@ -156,10 +156,10 @@ func TestParseTypeCatalog_Empty(t *testing.T) {
 	catalog, diags := ParseTypeCatalog("types.yml", []byte(""))
 	if diag.HasErrors(diags) {
 		dump(t, diags)
-		t.Fatalf("пустой types.yml — пустой каталог без ошибок")
+		t.Fatalf("empty types.yml -- empty catalog without errors")
 	}
 	if len(catalog) != 0 {
-		t.Fatalf("пустой types.yml → пустой каталог, got %d", len(catalog))
+		t.Fatalf("empty types.yml -> empty catalog, got %d", len(catalog))
 	}
 }
 
@@ -167,10 +167,10 @@ func TestParseTypeCatalog_NoTypesSection(t *testing.T) {
 	catalog, diags := ParseTypeCatalog("types.yml", []byte("# comment only\n"))
 	if diag.HasErrors(diags) {
 		dump(t, diags)
-		t.Fatalf("types.yml без секции types: валиден (пустой каталог)")
+		t.Fatalf("types.yml without a types: section is valid (empty catalog)")
 	}
 	if len(catalog) != 0 {
-		t.Fatalf("нет секции types: → пустой каталог")
+		t.Fatalf("no types: section -> empty catalog")
 	}
 }
 
@@ -183,7 +183,7 @@ junk: true
 	_, diags := ParseTypeCatalog("types.yml", []byte(src))
 	if !hasCode(diags, "unknown_key") {
 		dump(t, diags)
-		t.Fatalf("посторонний top-level ключ в types.yml → unknown_key")
+		t.Fatalf("stray top-level key in types.yml -> unknown_key")
 	}
 }
 
@@ -199,7 +199,7 @@ func TestParseTypeCatalog_Duplicate(t *testing.T) {
 	_, diags := ParseTypeCatalog("types.yml", []byte(src))
 	if !hasCode(diags, "input_type_duplicate") {
 		dump(t, diags)
-		t.Fatalf("два типа с одним именем → input_type_duplicate")
+		t.Fatalf("two types with the same name -> input_type_duplicate")
 	}
 }
 
@@ -227,25 +227,25 @@ func TestParseTypeCatalog_NestedTypeRef(t *testing.T) {
 	catalog, diags := ParseTypeCatalog("types.yml", []byte(src))
 	if diag.HasErrors(diags) {
 		dump(t, diags)
-		t.Fatalf("вложенность тип→тип должна резолвиться без ошибок")
+		t.Fatalf("type-in-type nesting should resolve without errors")
 	}
 	cluster := catalog["Cluster"]
 	if cluster == nil {
-		t.Fatalf("Cluster отсутствует")
+		t.Fatalf("Cluster missing")
 	}
 	primary := cluster.Properties["primary"]
 	if primary == nil || primary.TypeRef != "" {
-		t.Fatalf("primary должен быть резолвнут (TypeRef очищен), got %+v", primary)
+		t.Fatalf("primary should be resolved (TypeRef cleared), got %+v", primary)
 	}
 	if primary.Type != "object" || primary.Properties["host"] == nil {
-		t.Fatalf("primary должен нести форму Endpoint, got %+v", primary)
+		t.Fatalf("primary should carry the Endpoint shape, got %+v", primary)
 	}
 	replicas := cluster.Properties["replicas"]
 	if replicas == nil || replicas.Items == nil {
-		t.Fatalf("replicas.items должен присутствовать")
+		t.Fatalf("replicas.items should be present")
 	}
 	if replicas.Items.TypeRef != "" || replicas.Items.Type != "object" {
-		t.Fatalf("replicas.items должен быть резолвнут в Endpoint, got %+v", replicas.Items)
+		t.Fatalf("replicas.items should be resolved to Endpoint, got %+v", replicas.Items)
 	}
 }
 
@@ -261,7 +261,7 @@ func TestParseTypeCatalog_DirectCycle(t *testing.T) {
 	_, diags := ParseTypeCatalog("types.yml", []byte(src))
 	if !hasCode(diags, "input_type_cycle") {
 		dump(t, diags)
-		t.Fatalf("A→B→A должно дать input_type_cycle (а не зависание)")
+		t.Fatalf("A->B->A should yield input_type_cycle (not a hang)")
 	}
 }
 
@@ -276,7 +276,7 @@ func TestParseTypeCatalog_SelfCycle(t *testing.T) {
 	_, diags := ParseTypeCatalog("types.yml", []byte(src))
 	if !hasCode(diags, "input_type_cycle") {
 		dump(t, diags)
-		t.Fatalf("самоссылка Recur→Recur должна дать input_type_cycle")
+		t.Fatalf("self-reference Recur->Recur should yield input_type_cycle")
 	}
 }
 
@@ -301,7 +301,7 @@ func TestParseTypeCatalog_IndirectCycle(t *testing.T) {
 	_, diags := ParseTypeCatalog("types.yml", []byte(src))
 	if !hasCode(diags, "input_type_cycle") {
 		dump(t, diags)
-		t.Fatalf("транзитивный цикл A→B→C→A должен дать input_type_cycle")
+		t.Fatalf("transitive cycle A->B->C->A should yield input_type_cycle")
 	}
 }
 
@@ -318,7 +318,7 @@ func TestParseTypeCatalog_UnknownRef(t *testing.T) {
 	_, diags := ParseTypeCatalog("types.yml", []byte(src))
 	if !hasCode(diags, "input_type_unknown") {
 		dump(t, diags)
-		t.Fatalf("ссылка на отсутствующий тип → input_type_unknown")
+		t.Fatalf("reference to a missing type -> input_type_unknown")
 	}
 }
 
@@ -334,7 +334,7 @@ func TestResolveTypeRefs_BareField(t *testing.T) {
 `))
 	if diag.HasErrors(diags) {
 		dump(t, diags)
-		t.Fatalf("каталог невалиден")
+		t.Fatalf("catalog is invalid")
 	}
 	in := InputSchemaMap{
 		"target": {TypeRef: "Endpoint"},
@@ -342,14 +342,14 @@ func TestResolveTypeRefs_BareField(t *testing.T) {
 	resolved, rdiags := ResolveTypeRefs(in, cat)
 	if diag.HasErrors(rdiags) {
 		dump(t, rdiags)
-		t.Fatalf("резолв валидной ссылки не должен давать ошибок")
+		t.Fatalf("resolving a valid reference should not produce errors")
 	}
 	tgt := resolved["target"]
 	if tgt == nil || tgt.TypeRef != "" {
-		t.Fatalf("target должен быть резолвнут, got %+v", tgt)
+		t.Fatalf("target should be resolved, got %+v", tgt)
 	}
 	if tgt.Type != "object" || tgt.Properties["host"] == nil {
-		t.Fatalf("target должен нести форму Endpoint, got %+v", tgt)
+		t.Fatalf("target should carry the Endpoint shape, got %+v", tgt)
 	}
 }
 
@@ -370,14 +370,14 @@ func TestResolveTypeRefs_ItemsRef(t *testing.T) {
 	resolved, rdiags := ResolveTypeRefs(in, cat)
 	if diag.HasErrors(rdiags) {
 		dump(t, rdiags)
-		t.Fatalf("резолв items:{$type} не должен давать ошибок")
+		t.Fatalf("resolving items:{$type} should not produce errors")
 	}
 	nodes := resolved["nodes"]
 	if nodes.Items == nil || nodes.Items.TypeRef != "" {
-		t.Fatalf("nodes.items должен быть резолвнут, got %+v", nodes.Items)
+		t.Fatalf("nodes.items should be resolved, got %+v", nodes.Items)
 	}
 	if nodes.Items.Type != "object" || nodes.Items.Properties["id"] == nil {
-		t.Fatalf("nodes.items должен нести форму Node, got %+v", nodes.Items)
+		t.Fatalf("nodes.items should carry the Node shape, got %+v", nodes.Items)
 	}
 }
 
@@ -392,7 +392,7 @@ func TestResolveTypeRefs_Unknown(t *testing.T) {
 	_, rdiags := ResolveTypeRefs(in, cat)
 	if !hasCode(rdiags, "input_type_unknown") {
 		dump(t, rdiags)
-		t.Fatalf("ссылка на отсутствующий тип → input_type_unknown")
+		t.Fatalf("reference to a missing type -> input_type_unknown")
 	}
 }
 
@@ -412,20 +412,20 @@ func TestResolveTypeRefs_NoRef_PassThrough(t *testing.T) {
 	resolved, rdiags := ResolveTypeRefs(in, cat)
 	if diag.HasErrors(rdiags) {
 		dump(t, rdiags)
-		t.Fatalf("схемы без $type не должны давать ошибок")
+		t.Fatalf("schemas without $type should not produce errors")
 	}
 	if resolved["port"].Type != "integer" {
-		t.Fatalf("port должен пройти насквозь")
+		t.Fatalf("port should pass through unchanged")
 	}
 	if resolved["opts"].Properties["verbose"].Type != "boolean" {
-		t.Fatalf("вложенный opts.verbose должен пройти насквозь")
+		t.Fatalf("nested opts.verbose should pass through unchanged")
 	}
 }
 
 func TestResolveTypeRefs_Nil(t *testing.T) {
 	resolved, rdiags := ResolveTypeRefs(nil, TypeCatalog{})
 	if resolved != nil || rdiags != nil {
-		t.Fatalf("nil input → nil без диагностик")
+		t.Fatalf("nil input -> nil without diagnostics")
 	}
 }
 
@@ -441,7 +441,7 @@ func TestResolveTypeRefs_SharedTypeNoFalseCycle(t *testing.T) {
 `))
 	if diag.HasErrors(diags) {
 		dump(t, diags)
-		t.Fatalf("каталог невалиден")
+		t.Fatalf("catalog is invalid")
 	}
 	in := InputSchemaMap{
 		"a": {TypeRef: "Endpoint"},
@@ -453,7 +453,7 @@ func TestResolveTypeRefs_SharedTypeNoFalseCycle(t *testing.T) {
 	_, rdiags := ResolveTypeRefs(in, cat)
 	if hasCode(rdiags, "input_type_cycle") {
 		dump(t, rdiags)
-		t.Fatalf("один тип в двух местах — не цикл")
+		t.Fatalf("one type used in two places is not a cycle")
 	}
 }
 
@@ -477,11 +477,11 @@ func TestResolveTypeRefs_DeepPlainObject_NoFalseCycle(t *testing.T) {
 	_, rdiags := ResolveTypeRefs(in, TypeCatalog{})
 	if hasCode(rdiags, "input_type_cycle") {
 		dump(t, rdiags)
-		t.Fatalf("глубокий обычный object (без $type) не должен давать input_type_cycle")
+		t.Fatalf("a deep plain object (without $type) should not yield input_type_cycle")
 	}
 	if diag.HasErrors(rdiags) {
 		dump(t, rdiags)
-		t.Fatalf("глубокий обычный object без $type не должен давать ошибок резолва")
+		t.Fatalf("a deep plain object without $type should not produce resolve errors")
 	}
 }
 
@@ -495,7 +495,7 @@ func TestParseTypeCatalog_NameNotPascalCase(t *testing.T) {
 		_, diags := ParseTypeCatalog("types.yml", []byte(src))
 		if !hasCode(diags, "input_type_ref_name_invalid") {
 			dump(t, diags)
-			t.Fatalf("имя типа %q (не PascalCase) должно дать input_type_ref_name_invalid", name)
+			t.Fatalf("type name %q (not PascalCase) should yield input_type_ref_name_invalid", name)
 		}
 	}
 }
@@ -508,7 +508,7 @@ func TestParseTypeCatalog_NamePascalCase_OK(t *testing.T) {
 		_, diags := ParseTypeCatalog("types.yml", []byte(src))
 		if hasCode(diags, "input_type_ref_name_invalid") {
 			dump(t, diags)
-			t.Fatalf("PascalCase-имя %q не должно давать input_type_ref_name_invalid", name)
+			t.Fatalf("PascalCase name %q should not yield input_type_ref_name_invalid", name)
 		}
 	}
 }
@@ -531,7 +531,7 @@ func TestResolveTypeRefs_OverlayRequired(t *testing.T) {
 `))
 	if diag.HasErrors(diags) {
 		dump(t, diags)
-		t.Fatalf("каталог AclUser невалиден")
+		t.Fatalf("AclUser catalog is invalid")
 	}
 	in := schemaFromInput(t, `user:
   $type: AclUser
@@ -541,27 +541,27 @@ func TestResolveTypeRefs_OverlayRequired(t *testing.T) {
 	resolved, rdiags := ResolveTypeRefs(in, cat)
 	if diag.HasErrors(rdiags) {
 		dump(t, rdiags)
-		t.Fatalf("резолв не должен давать ошибок")
+		t.Fatalf("resolve should not produce errors")
 	}
 	u := resolved["user"]
 	if u == nil || u.TypeRef != "" {
-		t.Fatalf("user должен быть резолвнут (TypeRef очищен), got %+v", u)
+		t.Fatalf("user should be resolved (TypeRef cleared), got %+v", u)
 	}
 	// (a) the type's shape is substituted.
 	if u.Type != "object" || u.Properties["name"] == nil || u.Properties["perms"] == nil || u.Properties["state"] == nil {
-		t.Fatalf("user должен нести форму AclUser (object + name/perms/state), got %+v", u)
+		t.Fatalf("user should carry the AclUser shape (object + name/perms/state), got %+v", u)
 	}
 	// (b) object-level required-children are preserved.
 	if len(u.RequiredProps) != 2 || u.RequiredProps[0] != "name" || u.RequiredProps[1] != "perms" {
-		t.Fatalf("object-level required [name perms] должны сохраниться, got %v", u.RequiredProps)
+		t.Fatalf("object-level required [name perms] should be preserved, got %v", u.RequiredProps)
 	}
 	// (c) field-mandatory carried over from the reference node.
 	if !u.Required {
-		t.Fatalf("field-level `required: true` узла-ссылки должен перенестись (Required=true)")
+		t.Fatalf("field-level `required: true` on the reference node should carry over (Required=true)")
 	}
 	// (d) description carried over (regression guard for the former overlay).
 	if u.Description != "ACL user" {
-		t.Fatalf("description узла-ссылки должен перенестись, got %q", u.Description)
+		t.Fatalf("description of the reference node should carry over, got %q", u.Description)
 	}
 }
 
@@ -580,7 +580,7 @@ func TestResolveTypeRefs_OverlayRequired_Enforced(t *testing.T) {
 `))
 	if diag.HasErrors(diags) {
 		dump(t, diags)
-		t.Fatalf("каталог невалиден")
+		t.Fatalf("catalog is invalid")
 	}
 	in := schemaFromInput(t, `user:
   $type: AclUser
@@ -589,27 +589,27 @@ func TestResolveTypeRefs_OverlayRequired_Enforced(t *testing.T) {
 	resolved, rdiags := ResolveTypeRefs(in, cat)
 	if diag.HasErrors(rdiags) {
 		dump(t, rdiags)
-		t.Fatalf("резолв не должен давать ошибок")
+		t.Fatalf("resolve should not produce errors")
 	}
 	// user not passed → field-mandatory rejects (NIM-72 regression).
 	if _, err := ResolveInputValues(resolved, map[string]any{}); err == nil {
-		t.Fatalf("отсутствующий field-mandatory user должен отсекаться")
+		t.Fatalf("a missing field-mandatory user should be rejected")
 	}
 	// user passed but without the required perms → object-level required rejects.
 	_, err := ResolveInputValues(resolved, map[string]any{
 		"user": map[string]any{"name": "app"},
 	})
 	if err == nil {
-		t.Fatalf("неполный user (без perms) должен отсекаться")
+		t.Fatalf("an incomplete user (without perms) should be rejected")
 	}
 	if !strings.Contains(err.Error(), "perms") {
-		t.Fatalf("ошибка должна указывать на perms, got %v", err)
+		t.Fatalf("the error should point at perms, got %v", err)
 	}
 	// full user → OK.
 	if _, err := ResolveInputValues(resolved, map[string]any{
 		"user": map[string]any{"name": "app", "perms": "on"},
 	}); err != nil {
-		t.Fatalf("полный user должен проходить: %v", err)
+		t.Fatalf("a complete user should pass: %v", err)
 	}
 }
 
@@ -625,7 +625,7 @@ func TestResolveTypeRefs_OverlayRequiredWhen(t *testing.T) {
 `))
 	if diag.HasErrors(diags) {
 		dump(t, diags)
-		t.Fatalf("каталог невалиден")
+		t.Fatalf("catalog is invalid")
 	}
 	in := schemaFromInput(t, `target:
   $type: Endpoint
@@ -634,10 +634,10 @@ func TestResolveTypeRefs_OverlayRequiredWhen(t *testing.T) {
 	resolved, rdiags := ResolveTypeRefs(in, cat)
 	if diag.HasErrors(rdiags) {
 		dump(t, rdiags)
-		t.Fatalf("резолв не должен давать ошибок")
+		t.Fatalf("resolve should not produce errors")
 	}
 	if resolved["target"].RequiredWhen != "input.mode == 'remote'" {
-		t.Fatalf("required_when узла-ссылки должен перенестись, got %q", resolved["target"].RequiredWhen)
+		t.Fatalf("required_when of the reference node should carry over, got %q", resolved["target"].RequiredWhen)
 	}
 }
 
@@ -655,7 +655,7 @@ func TestResolveTypeRefs_OverlayRequiredFalse(t *testing.T) {
 `))
 	if diag.HasErrors(diags) {
 		dump(t, diags)
-		t.Fatalf("каталог невалиден")
+		t.Fatalf("catalog is invalid")
 	}
 	in := schemaFromInput(t, `user:
   $type: AclUser
@@ -664,14 +664,14 @@ func TestResolveTypeRefs_OverlayRequiredFalse(t *testing.T) {
 	resolved, rdiags := ResolveTypeRefs(in, cat)
 	if diag.HasErrors(rdiags) {
 		dump(t, rdiags)
-		t.Fatalf("резолв не должен давать ошибок")
+		t.Fatalf("resolve should not produce errors")
 	}
 	if resolved["user"].Required {
-		t.Fatalf("явный `required: false` узла-ссылки НЕ должен делать поле обязательным")
+		t.Fatalf("explicit `required: false` on the reference node should NOT make the field required")
 	}
 	// Behaviorally: a missing user is NOT rejected (not field-mandatory).
 	if _, err := ResolveInputValues(resolved, map[string]any{}); err != nil {
-		t.Fatalf("required:false → отсутствующий user должен проходить, got %v", err)
+		t.Fatalf("required:false -> a missing user should pass, got %v", err)
 	}
 }
 
@@ -688,7 +688,7 @@ func TestResolveTypeRefs_OverlayRequiredWhen_TypeWins(t *testing.T) {
 `))
 	if diag.HasErrors(diags) {
 		dump(t, diags)
-		t.Fatalf("каталог невалиден")
+		t.Fatalf("catalog is invalid")
 	}
 	in := schemaFromInput(t, `target:
   $type: Endpoint
@@ -697,9 +697,9 @@ func TestResolveTypeRefs_OverlayRequiredWhen_TypeWins(t *testing.T) {
 	resolved, rdiags := ResolveTypeRefs(in, cat)
 	if diag.HasErrors(rdiags) {
 		dump(t, rdiags)
-		t.Fatalf("резолв не должен давать ошибок")
+		t.Fatalf("resolve should not produce errors")
 	}
 	if resolved["target"].RequiredWhen != "input.mode == 'type_side'" {
-		t.Fatalf("required_when типа должен победить (тип-wins), got %q", resolved["target"].RequiredWhen)
+		t.Fatalf("required_when of the type should win (type-wins), got %q", resolved["target"].RequiredWhen)
 	}
 }

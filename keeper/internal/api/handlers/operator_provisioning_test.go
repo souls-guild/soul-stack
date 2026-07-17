@@ -25,7 +25,7 @@ func (g fakeProvisioningGate) ProvisioningMethodAllowed(method string) bool {
 func TestOperatorCreateTyped_UserDisabled_403(t *testing.T) {
 	pool := &fakePool{
 		selectFn: func(string) (*operator.Operator, error) {
-			t.Fatal("svc.Create не должен дойти до БД при запрещённом методе")
+			t.Fatal("svc.Create must not reach the DB on a forbidden method")
 			return nil, nil
 		},
 	}
@@ -43,13 +43,13 @@ func TestOperatorCreateTyped_UserDisabled_403(t *testing.T) {
 	}
 	d, ok := AsProblemDetails(err)
 	if !ok {
-		t.Fatalf("err не *problemError: %v", err)
+		t.Fatalf("err is not *problemError: %v", err)
 	}
 	if d.Type != problem.TypeProvisioningMethodDisabled {
 		t.Errorf("problem type = %q, want %q", d.Type, problem.TypeProvisioningMethodDisabled)
 	}
 	if pool.insertCalls != 0 {
-		t.Errorf("insertCalls = %d, want 0 (оператор не создан)", pool.insertCalls)
+		t.Errorf("insertCalls = %d, want 0 (operator not created)", pool.insertCalls)
 	}
 }
 
@@ -102,7 +102,7 @@ func TestOperatorCreateTyped_NilGate_Proceeds(t *testing.T) {
 	// gate NOT set.
 	if _, err := h.CreateTyped(context.Background(), claims("archon-alice"),
 		OperatorCreateInput{AID: "archon-bob"}); err != nil {
-		t.Fatalf("CreateTyped с nil-gate err=%v, want nil (back-compat)", err)
+		t.Fatalf("CreateTyped with nil-gate err=%v, want nil (back-compat)", err)
 	}
 	if pool.insertCalls != 1 {
 		t.Errorf("insertCalls = %d, want 1", pool.insertCalls)

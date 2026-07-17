@@ -74,7 +74,7 @@ func TestValidate_UnknownState(t *testing.T) {
 		Params: mustStruct(t, map[string]any{"port": 22}),
 	})
 	if reply.Ok {
-		t.Fatal("Validate ok=true для неизвестного state")
+		t.Fatal("Validate ok=true for an unknown state")
 	}
 }
 
@@ -84,7 +84,7 @@ func TestValidate_PortRequired(t *testing.T) {
 		Params: mustStruct(t, map[string]any{}),
 	})
 	if reply.Ok {
-		t.Fatal("Validate ok=true без port")
+		t.Fatal("Validate ok=true without port")
 	}
 }
 
@@ -95,7 +95,7 @@ func TestValidate_PortRange(t *testing.T) {
 			Params: mustStruct(t, map[string]any{"port": p}),
 		})
 		if reply.Ok {
-			t.Fatalf("Validate ok=true для порта вне диапазона %v", p)
+			t.Fatalf("Validate ok=true for a port out of range %v", p)
 		}
 	}
 }
@@ -106,14 +106,14 @@ func TestValidate_BadProtoAndAction(t *testing.T) {
 		Params: mustStruct(t, map[string]any{"port": 22, "proto": "sctp"}),
 	})
 	if reply.Ok {
-		t.Fatal("Validate ok=true для proto=sctp")
+		t.Fatal("Validate ok=true for proto=sctp")
 	}
 	reply, _ = firewall.New().Validate(context.Background(), &pluginv1.ValidateRequest{
 		State:  "present",
 		Params: mustStruct(t, map[string]any{"port": 22, "action": "reject"}),
 	})
 	if reply.Ok {
-		t.Fatal("Validate ok=true для action=reject")
+		t.Fatal("Validate ok=true for action=reject")
 	}
 }
 
@@ -123,7 +123,7 @@ func TestValidate_BadSource(t *testing.T) {
 		Params: mustStruct(t, map[string]any{"port": 22, "source": "not-a-cidr"}),
 	})
 	if reply.Ok {
-		t.Fatal("Validate ok=true для битого source")
+		t.Fatal("Validate ok=true for a malformed source")
 	}
 }
 
@@ -134,7 +134,7 @@ func TestValidate_IPv6Source_Rejected(t *testing.T) {
 			Params: mustStruct(t, map[string]any{"port": 22, "source": src}),
 		})
 		if reply.Ok {
-			t.Fatalf("Validate ok=true для IPv6-source %q (ожидался отказ)", src)
+			t.Fatalf("Validate ok=true for IPv6-source %q (expected a rejection)", src)
 		}
 	}
 }
@@ -145,7 +145,7 @@ func TestValidate_Happy(t *testing.T) {
 		Params: mustStruct(t, map[string]any{"port": 5432, "proto": "tcp", "source": "10.0.0.0/8", "action": "allow"}),
 	})
 	if !reply.Ok {
-		t.Fatalf("Validate ok=false для валидного правила: %v", reply.Errors)
+		t.Fatalf("Validate ok=false for a valid rule: %v", reply.Errors)
 	}
 }
 
@@ -173,10 +173,10 @@ func TestUFW_Present_AlreadyPresentSimplePort_NoOp(t *testing.T) {
 	r := ufwRunner()
 	stream := apply(t, r, "present", map[string]any{"port": 80, "proto": "tcp"})
 	if stream.Last().Changed {
-		t.Fatal("changed=true для уже существующего 80/tcp")
+		t.Fatal("changed=true for an already existing 80/tcp")
 	}
 	if calledWith(r, "ufw", "allow") {
-		t.Fatalf("ufw allow вызван при идемпотентности: %v", r.Calls)
+		t.Fatalf("ufw allow called on an idempotent run: %v", r.Calls)
 	}
 }
 
@@ -184,7 +184,7 @@ func TestUFW_Present_AlreadyPresentWithSource_NoOp(t *testing.T) {
 	r := ufwRunner()
 	stream := apply(t, r, "present", map[string]any{"port": 5432, "proto": "tcp", "source": "10.0.0.0/8"})
 	if stream.Last().Changed {
-		t.Fatal("changed=true для уже существующего 5432/tcp from 10.0.0.0/8")
+		t.Fatal("changed=true for an already existing 5432/tcp from 10.0.0.0/8")
 	}
 }
 
@@ -196,10 +196,10 @@ func TestUFW_Present_SourceWithHostBits_Idempotent(t *testing.T) {
 	r := ufwRunner()
 	stream := apply(t, r, "present", map[string]any{"port": 5432, "proto": "tcp", "source": "10.0.0.1/8"})
 	if stream.Last().Changed {
-		t.Fatal("changed=true для 10.0.0.1/8 (нормализуется к 10.0.0.0/8, уже присутствует)")
+		t.Fatal("changed=true for 10.0.0.1/8 (normalizes to 10.0.0.0/8, already present)")
 	}
 	if calledWith(r, "ufw", "allow") {
-		t.Fatalf("ufw allow вызван при идемпотентности source-нормализации: %v", r.Calls)
+		t.Fatalf("ufw allow called on source-normalization idempotency: %v", r.Calls)
 	}
 }
 
@@ -214,10 +214,10 @@ func TestUFW_Present_AllowInFormat_Idempotent(t *testing.T) {
 	r.On("ufw status", util.Result{Stdout: ufwStatusInSample})
 	stream := apply(t, r, "present", map[string]any{"port": 9100, "proto": "tcp"})
 	if stream.Last().Changed {
-		t.Fatal("changed=true для уже существующего 9100/tcp в формате 'ALLOW IN'")
+		t.Fatal("changed=true for an already existing 9100/tcp in the 'ALLOW IN' format")
 	}
 	if calledWith(r, "ufw", "allow") {
-		t.Fatalf("ufw allow вызван при идемпотентности 'ALLOW IN'-формата: %v", r.Calls)
+		t.Fatalf("ufw allow called on idempotency of the 'ALLOW IN' format: %v", r.Calls)
 	}
 }
 
@@ -230,10 +230,10 @@ func TestUFW_Present_AllowInFormat_WithSource_Idempotent(t *testing.T) {
 	r.On("ufw status", util.Result{Stdout: ufwStatusInSample})
 	stream := apply(t, r, "present", map[string]any{"port": 5432, "proto": "tcp", "source": "10.0.0.0/8"})
 	if stream.Last().Changed {
-		t.Fatal("changed=true для 5432/tcp from 10.0.0.0/8 в формате 'ALLOW IN'")
+		t.Fatal("changed=true for 5432/tcp from 10.0.0.0/8 in the 'ALLOW IN' format")
 	}
 	if calledWith(r, "ufw", "allow") {
-		t.Fatalf("ufw allow вызван при идемпотентности 'ALLOW IN' с source: %v", r.Calls)
+		t.Fatalf("ufw allow called on idempotency of 'ALLOW IN' with source: %v", r.Calls)
 	}
 }
 
@@ -242,10 +242,10 @@ func TestUFW_Present_NewRule_Adds(t *testing.T) {
 	r.On("ufw allow 8080/tcp", util.Result{ExitCode: 0})
 	stream := apply(t, r, "present", map[string]any{"port": 8080, "proto": "tcp"})
 	if !stream.Last().Changed {
-		t.Fatal("changed=false при добавлении нового правила")
+		t.Fatal("changed=false when adding a new rule")
 	}
 	if !calledExact(r, "ufw allow 8080/tcp") {
-		t.Fatalf("ожидался вызов 'ufw allow 8080/tcp': %v", r.Calls)
+		t.Fatalf("expected call 'ufw allow 8080/tcp': %v", r.Calls)
 	}
 }
 
@@ -255,7 +255,7 @@ func TestUFW_Present_DenyAndAllowDistinct(t *testing.T) {
 	r.On("ufw allow 53/tcp", util.Result{ExitCode: 0})
 	stream := apply(t, r, "present", map[string]any{"port": 53, "proto": "tcp", "action": "allow"})
 	if !stream.Last().Changed {
-		t.Fatal("allow 53/tcp не должен совпасть с DENY 53 → ожидался changed=true")
+		t.Fatal("allow 53/tcp must not match DENY 53 -- expected changed=true")
 	}
 }
 
@@ -264,10 +264,10 @@ func TestUFW_Absent_RemovesExisting(t *testing.T) {
 	r.On("ufw delete allow 80/tcp", util.Result{ExitCode: 0})
 	stream := apply(t, r, "absent", map[string]any{"port": 80, "proto": "tcp"})
 	if !stream.Last().Changed {
-		t.Fatal("changed=false при удалении существующего правила")
+		t.Fatal("changed=false when deleting an existing rule")
 	}
 	if !calledExact(r, "ufw delete allow 80/tcp") {
-		t.Fatalf("ожидался 'ufw delete allow 80/tcp': %v", r.Calls)
+		t.Fatalf("expected 'ufw delete allow 80/tcp': %v", r.Calls)
 	}
 }
 
@@ -275,7 +275,7 @@ func TestUFW_Absent_NotPresent_NoOp(t *testing.T) {
 	r := ufwRunner()
 	stream := apply(t, r, "absent", map[string]any{"port": 9999, "proto": "tcp"})
 	if stream.Last().Changed {
-		t.Fatal("changed=true при удалении несуществующего правила")
+		t.Fatal("changed=true when deleting a nonexistent rule")
 	}
 }
 
@@ -285,7 +285,7 @@ func TestFirewalld_Present_SimplePortPresent_NoOp(t *testing.T) {
 	r := firewalldRunner()
 	stream := apply(t, r, "present", map[string]any{"port": 5432, "proto": "tcp"})
 	if stream.Last().Changed {
-		t.Fatal("changed=true для уже открытого 5432/tcp")
+		t.Fatal("changed=true for an already open 5432/tcp")
 	}
 }
 
@@ -293,7 +293,7 @@ func TestFirewalld_Present_RichRulePresent_NoOp(t *testing.T) {
 	r := firewalldRunner()
 	stream := apply(t, r, "present", map[string]any{"port": 5432, "proto": "tcp", "source": "10.0.0.0/8"})
 	if stream.Last().Changed {
-		t.Fatal("changed=true для уже существующего rich-rule 5432 from 10.0.0.0/8")
+		t.Fatal("changed=true for an already existing rich-rule 5432 from 10.0.0.0/8")
 	}
 }
 
@@ -303,10 +303,10 @@ func TestFirewalld_Present_SourceWithHostBits_Idempotent(t *testing.T) {
 	r := firewalldRunner()
 	stream := apply(t, r, "present", map[string]any{"port": 5432, "proto": "tcp", "source": "10.0.0.1/8"})
 	if stream.Last().Changed {
-		t.Fatal("changed=true для 10.0.0.1/8 (нормализуется к 10.0.0.0/8, rich-rule уже есть)")
+		t.Fatal("changed=true for 10.0.0.1/8 (normalizes to 10.0.0.0/8, rich-rule already present)")
 	}
 	if calledWith(r, "firewall-cmd", "--add-rich-rule") {
-		t.Fatalf("--add-rich-rule вызван при идемпотентности source-нормализации: %v", r.Calls)
+		t.Fatalf("--add-rich-rule called on source-normalization idempotency: %v", r.Calls)
 	}
 }
 
@@ -314,7 +314,7 @@ func TestFirewalld_Present_DenyRichRulePresent_NoOp(t *testing.T) {
 	r := firewalldRunner()
 	stream := apply(t, r, "present", map[string]any{"port": 53, "proto": "udp", "source": "192.168.0.0/16", "action": "deny"})
 	if stream.Last().Changed {
-		t.Fatal("changed=true для существующего reject rich-rule")
+		t.Fatal("changed=true for an existing reject rich-rule")
 	}
 }
 
@@ -324,13 +324,13 @@ func TestFirewalld_Present_NewSimplePort_Adds(t *testing.T) {
 	r.On("firewall-cmd --reload", util.Result{ExitCode: 0})
 	stream := apply(t, r, "present", map[string]any{"port": 8080, "proto": "tcp"})
 	if !stream.Last().Changed {
-		t.Fatal("changed=false при добавлении нового порта")
+		t.Fatal("changed=false when adding a new port")
 	}
 	if !calledExact(r, "firewall-cmd --permanent --add-port=8080/tcp") {
-		t.Fatalf("ожидался --permanent --add-port=8080/tcp: %v", r.Calls)
+		t.Fatalf("expected --permanent --add-port=8080/tcp: %v", r.Calls)
 	}
 	if !calledExact(r, "firewall-cmd --reload") {
-		t.Fatalf("ожидался --reload: %v", r.Calls)
+		t.Fatalf("expected --reload: %v", r.Calls)
 	}
 }
 
@@ -340,10 +340,10 @@ func TestFirewalld_Absent_RemovesPort(t *testing.T) {
 	r.On("firewall-cmd --reload", util.Result{ExitCode: 0})
 	stream := apply(t, r, "absent", map[string]any{"port": 80, "proto": "tcp"})
 	if !stream.Last().Changed {
-		t.Fatal("changed=false при удалении существующего порта")
+		t.Fatal("changed=false when deleting an existing port")
 	}
 	if !calledExact(r, "firewall-cmd --permanent --remove-port=80/tcp") {
-		t.Fatalf("ожидался --remove-port=80/tcp: %v", r.Calls)
+		t.Fatalf("expected --remove-port=80/tcp: %v", r.Calls)
 	}
 }
 
@@ -354,10 +354,10 @@ func TestFirewalld_Zone_PassedThrough(t *testing.T) {
 	r.On("firewall-cmd --reload", util.Result{ExitCode: 0})
 	stream := apply(t, r, "present", map[string]any{"port": 8080, "proto": "tcp", "zone": "public"})
 	if !stream.Last().Changed {
-		t.Fatal("changed=false при добавлении в зону public")
+		t.Fatal("changed=false when adding to the public zone")
 	}
 	if !calledExact(r, "firewall-cmd --permanent --zone public --add-port=8080/tcp") {
-		t.Fatalf("zone не проброшен в mutate: %v", r.Calls)
+		t.Fatalf("zone not passed through to mutate: %v", r.Calls)
 	}
 }
 
@@ -374,13 +374,13 @@ func TestFirewalld_DenyWithoutSource_RichRule(t *testing.T) {
 	add.On("firewall-cmd --reload", util.Result{ExitCode: 0})
 	stream := apply(t, add, "present", denyParams)
 	if !stream.Last().Changed {
-		t.Fatal("changed=false при добавлении deny rich-rule")
+		t.Fatal("changed=false when adding a deny rich-rule")
 	}
 	if !calledExact(add, "firewall-cmd --permanent --add-rich-rule="+wantRich) {
-		t.Fatalf("ожидался --add-rich-rule reject: %v", add.Calls)
+		t.Fatalf("expected --add-rich-rule reject: %v", add.Calls)
 	}
 	if calledWith(add, "--add-port") {
-		t.Fatalf("deny не должен идти через --add-port: %v", add.Calls)
+		t.Fatalf("deny must not go through --add-port: %v", add.Calls)
 	}
 
 	// idempotent: the same reject is already in --list-rich-rules → changed=false, no add.
@@ -388,10 +388,10 @@ func TestFirewalld_DenyWithoutSource_RichRule(t *testing.T) {
 	idem.On("firewall-cmd --list-rich-rules", util.Result{Stdout: wantRich + "\n"})
 	stream = apply(t, idem, "present", denyParams)
 	if stream.Last().Changed {
-		t.Fatal("changed=true для уже существующего deny rich-rule")
+		t.Fatal("changed=true for an already existing deny rich-rule")
 	}
 	if calledWith(idem, "--add-rich-rule") {
-		t.Fatalf("--add-rich-rule вызван при идемпотентности deny: %v", idem.Calls)
+		t.Fatalf("--add-rich-rule called on deny idempotency: %v", idem.Calls)
 	}
 
 	// delete: rich-rule is present → --remove-rich-rule + --reload.
@@ -401,10 +401,10 @@ func TestFirewalld_DenyWithoutSource_RichRule(t *testing.T) {
 	del.On("firewall-cmd --reload", util.Result{ExitCode: 0})
 	stream = apply(t, del, "absent", denyParams)
 	if !stream.Last().Changed {
-		t.Fatal("changed=false при удалении существующего deny rich-rule")
+		t.Fatal("changed=false when deleting an existing deny rich-rule")
 	}
 	if !calledExact(del, "firewall-cmd --permanent --remove-rich-rule="+wantRich) {
-		t.Fatalf("ожидался --remove-rich-rule reject: %v", del.Calls)
+		t.Fatalf("expected --remove-rich-rule reject: %v", del.Calls)
 	}
 }
 
@@ -415,10 +415,10 @@ func TestFirewalld_Zone_Idempotent(t *testing.T) {
 	r.On("firewall-cmd --list-ports --zone public", util.Result{Stdout: "8080/tcp\n"})
 	stream := apply(t, r, "present", map[string]any{"port": 8080, "proto": "tcp", "zone": "public"})
 	if stream.Last().Changed {
-		t.Fatal("changed=true для уже открытого 8080/tcp в зоне public")
+		t.Fatal("changed=true for an already open 8080/tcp in the public zone")
 	}
 	if calledWith(r, "--add-port") {
-		t.Fatalf("--add-port вызван при идемпотентности зоны: %v", r.Calls)
+		t.Fatalf("--add-port called on zone idempotency: %v", r.Calls)
 	}
 }
 
@@ -430,10 +430,10 @@ func TestUFW_UDPDistinctFromTCP(t *testing.T) {
 	r.On("ufw allow 53/udp", util.Result{ExitCode: 0})
 	stream := apply(t, r, "present", map[string]any{"port": 53, "proto": "udp", "action": "allow"})
 	if !stream.Last().Changed {
-		t.Fatal("allow 53/udp не должен совпасть с 53/tcp DENY → ожидался changed=true")
+		t.Fatal("allow 53/udp must not match 53/tcp DENY -- expected changed=true")
 	}
 	if !calledExact(r, "ufw allow 53/udp") {
-		t.Fatalf("ожидался 'ufw allow 53/udp': %v", r.Calls)
+		t.Fatalf("expected 'ufw allow 53/udp': %v", r.Calls)
 	}
 }
 
@@ -443,7 +443,7 @@ func TestApply_NoFirewall_Fails(t *testing.T) {
 	r := internaltest.NewRunner() // everything → 127
 	stream := apply(t, r, "present", map[string]any{"port": 22})
 	if !stream.Last().Failed {
-		t.Fatal("без firewall-инструмента Apply должен зафейлиться")
+		t.Fatal("Apply must fail without a firewall tool")
 	}
 }
 
@@ -518,7 +518,7 @@ func assertNoDangerousFirewallCmd(t *testing.T, r *internaltest.Runner) {
 	for _, call := range r.Calls {
 		for _, b := range banned {
 			if strings.Contains(call, b) {
-				t.Fatalf("Apply сгенерировал запрещённую команду %q (содержит %q)", call, b)
+				t.Fatalf("Apply generated a forbidden command %q (contains %q)", call, b)
 			}
 		}
 	}

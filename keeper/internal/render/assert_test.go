@@ -45,13 +45,13 @@ func TestAssert_PassEmitsNoTask(t *testing.T) {
 	}
 	tasks, _, err := p.Render(context.Background(), in)
 	if err != nil {
-		t.Fatalf("Render: assert-pass не должен ронять render, got %v", err)
+		t.Fatalf("Render: assert-pass must not fail render, got %v", err)
 	}
 	if len(tasks) != 1 {
-		t.Fatalf("len(tasks) = %d, want 1 (assert не эмитит задачу, остаётся только install)", len(tasks))
+		t.Fatalf("len(tasks) = %d, want 1 (assert emits no task, only install remains)", len(tasks))
 	}
 	if tasks[0].Index != 0 {
-		t.Errorf("install Index = %d, want 0 (assert не резервирует индекс)", tasks[0].Index)
+		t.Errorf("install Index = %d, want 0 (assert does not reserve an index)", tasks[0].Index)
 	}
 	if tasks[0].Module != "core.pkg.installed" {
 		t.Errorf("Module = %q, want core.pkg.installed", tasks[0].Module)
@@ -81,19 +81,19 @@ func TestAssert_FailAbortsRenderWithMessage(t *testing.T) {
 	}
 	tasks, _, err := p.Render(context.Background(), in)
 	if err == nil {
-		t.Fatalf("Render: assert-fail должен оборвать render, got tasks=%d err=nil", len(tasks))
+		t.Fatalf("Render: assert-fail should abort render, got tasks=%d err=nil", len(tasks))
 	}
 	if !errors.Is(err, ErrAssertFailed) {
-		t.Errorf("err не ErrAssertFailed: %v", err)
+		t.Errorf("err is not ErrAssertFailed: %v", err)
 	}
 	if !strings.Contains(err.Error(), "topology mismatch: want 3 hosts") {
-		t.Errorf("ошибка не несёт message автора: %v", err)
+		t.Errorf("error does not carry the author's message: %v", err)
 	}
 	if !strings.Contains(err.Error(), "that[0]") {
-		t.Errorf("ошибка не указывает индекс непрошедшего предиката: %v", err)
+		t.Errorf("error does not point to the failed predicate's index: %v", err)
 	}
 	if tasks != nil {
-		t.Errorf("tasks = %v, want nil (ни одной задачи на dispatch при abort)", tasks)
+		t.Errorf("tasks = %v, want nil (no task should reach dispatch on abort)", tasks)
 	}
 }
 
@@ -111,10 +111,10 @@ func TestAssert_DefaultMessageOnEmpty(t *testing.T) {
 	}
 	_, _, err := p.Render(context.Background(), in)
 	if err == nil {
-		t.Fatal("Render: assert-fail должен оборвать render")
+		t.Fatal("Render: assert-fail should abort render")
 	}
 	if !strings.Contains(err.Error(), "topology guard") {
-		t.Errorf("дефолт-сообщение не несёт имя задачи: %v", err)
+		t.Errorf("default message does not carry the task name: %v", err)
 	}
 }
 
@@ -137,10 +137,10 @@ func TestAssert_StaticWhenFalseSkips(t *testing.T) {
 	}
 	tasks, _, err := p.Render(context.Background(), in)
 	if err != nil {
-		t.Fatalf("Render: static-when:false должен пропустить assert без вычисления, got %v", err)
+		t.Fatalf("Render: static-when:false should skip assert without evaluating it, got %v", err)
 	}
 	if len(tasks) != 0 {
-		t.Fatalf("len(tasks) = %d, want 0 (assert не эмитит задачу, when:false → не вычислялся)", len(tasks))
+		t.Fatalf("len(tasks) = %d, want 0 (assert emits no task, when:false -> not evaluated)", len(tasks))
 	}
 }
 
@@ -159,10 +159,10 @@ func TestAssert_StaticWhenTrueEvaluates(t *testing.T) {
 	}
 	_, _, err := p.Render(context.Background(), in)
 	if err == nil {
-		t.Fatal("Render: when:true + false-предикат должен оборвать render")
+		t.Fatal("Render: when:true + a false predicate should abort render")
 	}
 	if !errors.Is(err, ErrAssertFailed) {
-		t.Errorf("err не ErrAssertFailed: %v", err)
+		t.Errorf("err is not ErrAssertFailed: %v", err)
 	}
 }
 
@@ -205,14 +205,14 @@ func TestEvalAsserts_SameSourceAsRender(t *testing.T) {
 
 			// Either both nil or both ErrAssertFailed — the verdict must match.
 			if (renderErr == nil) != (preErr == nil) {
-				t.Fatalf("вердикт расходится: render=%v, EvalAsserts=%v (диалект)", renderErr, preErr)
+				t.Fatalf("verdict mismatch: render=%v, EvalAsserts=%v (dialect drift)", renderErr, preErr)
 			}
 			if renderErr != nil {
 				if !errors.Is(renderErr, ErrAssertFailed) || !errors.Is(preErr, ErrAssertFailed) {
-					t.Fatalf("не ErrAssertFailed на обеих точках: render=%v, pre=%v", renderErr, preErr)
+					t.Fatalf("not ErrAssertFailed at both points: render=%v, pre=%v", renderErr, preErr)
 				}
 				if renderErr.Error() != preErr.Error() {
-					t.Errorf("текст ошибки расходится:\n render=%q\n pre=   %q", renderErr.Error(), preErr.Error())
+					t.Errorf("error text mismatch:\n render=%q\n pre=   %q", renderErr.Error(), preErr.Error())
 				}
 			}
 		})
@@ -233,7 +233,7 @@ func TestEvalAsserts_NoAssertNoOp(t *testing.T) {
 		Hosts:       []*topology.HostFacts{host("a.example.com", []string{"svc"}, nil)},
 	}
 	if err := p.EvalAsserts(context.Background(), in); err != nil {
-		t.Fatalf("EvalAsserts: сценарий без assert должен быть no-op, got %v", err)
+		t.Fatalf("EvalAsserts: a scenario without assert should be a no-op, got %v", err)
 	}
 }
 
@@ -252,7 +252,7 @@ func TestEvalAsserts_StaticWhenFalseSkips(t *testing.T) {
 		Hosts:       []*topology.HostFacts{host("a.example.com", []string{"svc"}, nil)},
 	}
 	if err := p.EvalAsserts(context.Background(), in); err != nil {
-		t.Fatalf("EvalAsserts: static-when:false должен пропустить assert, got %v", err)
+		t.Fatalf("EvalAsserts: static-when:false should skip assert, got %v", err)
 	}
 }
 
@@ -297,7 +297,7 @@ func TestEvalAsserts_IncludeGroupDropSkipsAssert(t *testing.T) {
 		Hosts:       []*topology.HostFacts{host("a.example.com", []string{"redis"}, nil)},
 	}
 	if err := p.EvalAsserts(context.Background(), in); err != nil {
-		t.Fatalf("EvalAsserts: sentinel-прогон не должен вычислять cluster-assert (group-drop), got %v", err)
+		t.Fatalf("EvalAsserts: a sentinel run should not evaluate the cluster-assert (group-drop), got %v", err)
 	}
 }
 
@@ -322,10 +322,10 @@ func TestEvalAsserts_IncludeGroupKeepEvaluatesAssert(t *testing.T) {
 	}
 	err := p.EvalAsserts(context.Background(), in)
 	if err == nil {
-		t.Fatal("EvalAsserts: cluster-прогон должен вычислить cluster-assert и упасть (roster не сходится)")
+		t.Fatal("EvalAsserts: a cluster run should evaluate the cluster-assert and fail (roster mismatch)")
 	}
 	if !errors.Is(err, ErrAssertFailed) {
-		t.Errorf("err не ErrAssertFailed (значит упал не на предикате, а на eval): %v", err)
+		t.Errorf("err is not ErrAssertFailed (means it failed on eval, not the predicate): %v", err)
 	}
 }
 
@@ -367,7 +367,7 @@ func TestEvalAsserts_ProvisionGateSkipsSizeGuard(t *testing.T) {
 		Hosts:       nil, // EMPTY roster — VMs not created yet (provision brings them up later).
 	}
 	if err := p.EvalAsserts(context.Background(), in); err != nil {
-		t.Fatalf("EvalAsserts: при provision.enabled size-guard должен быть пропущен (when:false), got %v", err)
+		t.Fatalf("EvalAsserts: with provision.enabled the size-guard should be skipped (when:false), got %v", err)
 	}
 }
 
@@ -395,9 +395,9 @@ func TestEvalAsserts_NoProvisionStillEnforcesSizeGuard(t *testing.T) {
 	}
 	err := p.EvalAsserts(context.Background(), in)
 	if err == nil {
-		t.Fatal("EvalAsserts: без provision size-guard должен оставаться активным и упасть (roster 1 != 6)")
+		t.Fatal("EvalAsserts: without provision the size-guard should stay active and fail (roster 1 != 6)")
 	}
 	if !errors.Is(err, ErrAssertFailed) {
-		t.Errorf("err не ErrAssertFailed (значит упал не на предикате, а на eval): %v", err)
+		t.Errorf("err is not ErrAssertFailed (means it failed on eval, not the predicate): %v", err)
 	}
 }

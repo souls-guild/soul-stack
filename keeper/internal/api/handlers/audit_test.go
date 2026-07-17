@@ -107,7 +107,7 @@ func auditProblemStatus(t *testing.T, err error) int {
 	t.Helper()
 	d, ok := AsProblemDetails(err)
 	if !ok {
-		t.Fatalf("ожидался *problemError, получено: %v", err)
+		t.Fatalf("expected *problemError, got: %v", err)
 	}
 	return d.Status
 }
@@ -185,10 +185,10 @@ func TestAuditHandler_List_FiltersForwarded(t *testing.T) {
 		}
 	}
 	if !heraldForwarded {
-		t.Errorf("payload_herald=ops-slack не прокинут в SELECT-args: %v", pool.selectArgs)
+		t.Errorf("payload_herald=ops-slack not passed through in SELECT-args: %v", pool.selectArgs)
 	}
 	if !voyageForwarded {
-		t.Errorf("payload_voyage=voy-77 не прокинут в SELECT-args: %v", pool.selectArgs)
+		t.Errorf("payload_voyage=voy-77 not passed through in SELECT-args: %v", pool.selectArgs)
 	}
 }
 

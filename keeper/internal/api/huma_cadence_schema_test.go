@@ -65,12 +65,12 @@ func TestSchemaNames_Cadence(t *testing.T) {
 	schemas := loadFullSpecSchemas(t)
 	for _, name := range cadenceContractSchemas {
 		if _, ok := schemas[name]; !ok {
-			t.Errorf("контрактonя схема %q ОТСУТСТВУЕТ в components/schemas (имя не выровнеbut)", name)
+			t.Errorf("contract schema %q MISSING in components/schemas (name not aligned)", name)
 		}
 	}
 	for _, name := range cadenceForbiddenSchemas {
 		if _, ok := schemas[name]; ok {
-			t.Errorf("техническое huma-имя %q ПРИСУТСТВУЕТ в спеке — имя не выровнеbut под контракт", name)
+			t.Errorf("technical huma name %q PRESENT in the spec - name not aligned with the contract", name)
 		}
 	}
 }
@@ -86,25 +86,25 @@ func TestSchemaNames_CadenceCreateRequestShape(t *testing.T) {
 	}
 	var doc map[string]any
 	if err := yaml.Unmarshal([]byte(y), &doc); err != nil {
-		t.Fatalf("спека не парсится: %v", err)
+		t.Fatalf("spec does not parse: %v", err)
 	}
 	comp, _ := doc["components"].(map[string]any)
 	schemas, _ := comp["schemas"].(map[string]any)
 
 	req, _ := schemas["CadenceCreateRequest"].(map[string]any)
 	if req == nil {
-		t.Fatal("CadenceCreateRequest отсутствует в components.schemas")
+		t.Fatal("CadenceCreateRequest missing in components.schemas")
 	}
 	assertRequiredExactly(t, req, "CadenceCreateRequest",
 		"name", "schedule_kind", "overlap_policy", "kind", "target")
 
 	const targetRef = "#/components/schemas/VoyageTarget"
 	if got := propRef(t, schemas, "CadenceCreateRequest", "target"); got != targetRef {
-		t.Errorf("CadenceCreateRequest.target → %q, ожидался %q", got, targetRef)
+		t.Errorf("CadenceCreateRequest.target -> %q, expected %q", got, targetRef)
 	}
 	const notifyRef = "#/components/schemas/VoyageNotify"
 	if got := propItemsRef(t, schemas, "CadenceCreateRequest", "notify"); got != notifyRef {
-		t.Errorf("CadenceCreateRequest.notify[] → %q, ожидался %q", got, notifyRef)
+		t.Errorf("CadenceCreateRequest.notify[] -> %q, expected %q", got, notifyRef)
 	}
 }
 
@@ -120,7 +120,7 @@ func TestSchemaNames_CadenceRunsEnvelope(t *testing.T) {
 	}
 	var doc map[string]any
 	if err := yaml.Unmarshal([]byte(y), &doc); err != nil {
-		t.Fatalf("спека не парсится: %v", err)
+		t.Fatalf("spec does not parse: %v", err)
 	}
 	comp, _ := doc["components"].(map[string]any)
 	schemas, _ := comp["schemas"].(map[string]any)
@@ -139,7 +139,7 @@ func TestSchemaNames_CadenceListEnvelope(t *testing.T) {
 	}
 	var doc map[string]any
 	if err := yaml.Unmarshal([]byte(y), &doc); err != nil {
-		t.Fatalf("спека не парсится: %v", err)
+		t.Fatalf("spec does not parse: %v", err)
 	}
 	comp, _ := doc["components"].(map[string]any)
 	schemas, _ := comp["schemas"].(map[string]any)
@@ -148,7 +148,7 @@ func TestSchemaNames_CadenceListEnvelope(t *testing.T) {
 
 	cad, _ := schemas["Cadence"].(map[string]any)
 	if cad == nil {
-		t.Fatal("Cadence отсутствует в components.schemas — element-alias не сработал")
+		t.Fatal("Cadence missing in components.schemas - element-alias did not work")
 	}
 	assertRequiredExactly(t, cad, "Cadence",
 		"cadence_id", "name", "enabled", "schedule_kind", "overlap_policy",
@@ -156,6 +156,6 @@ func TestSchemaNames_CadenceListEnvelope(t *testing.T) {
 
 	const targetRef = "#/components/schemas/VoyageTarget"
 	if got := propRef(t, schemas, "Cadence", "target"); got != targetRef {
-		t.Errorf("Cadence.target → %q, ожидался %q (target не типfromирован on VoyageTarget — alias не сработал / free-form остался)", got, targetRef)
+		t.Errorf("Cadence.target -> %q, expected %q (target not typed as VoyageTarget - alias did not work / free-form left)", got, targetRef)
 	}
 }

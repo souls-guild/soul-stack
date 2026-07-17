@@ -22,10 +22,10 @@ func TestDiskFullOK(t *testing.T) {
 		t.Fatalf("state = %q, want ok", state)
 	}
 	if data.GetFields()["used_percent"].GetNumberValue() != 50 {
-		t.Error("data.used_percent должно нести фактический процент")
+		t.Error("data.used_percent must carry the actual percentage")
 	}
 	if data.GetFields()["threshold"].GetNumberValue() != diskFullDefaultThreshold {
-		t.Error("data.threshold должно нести дефолтный порог 90")
+		t.Error("data.threshold must carry the default threshold 90")
 	}
 }
 
@@ -48,7 +48,7 @@ func TestDiskFullAtThresholdIsFull(t *testing.T) {
 		t.Fatalf("Check: %v", err)
 	}
 	if state != stateDiskFull {
-		t.Fatalf("state = %q, want full (90%% == порог)", state)
+		t.Fatalf("state = %q, want full (90%% == threshold)", state)
 	}
 }
 
@@ -66,7 +66,7 @@ func TestDiskFullCustomThreshold(t *testing.T) {
 		t.Fatalf("state = %q, want full (50%% ≥ 40%%)", state)
 	}
 	if data.GetFields()["threshold"].GetNumberValue() != 40 {
-		t.Error("data.threshold должно нести кастомный порог 40")
+		t.Error("data.threshold must carry the custom threshold 40")
 	}
 }
 
@@ -83,26 +83,26 @@ func TestDiskFullRealStatfs(t *testing.T) {
 	}
 	up := data.GetFields()["used_percent"].GetNumberValue()
 	if up < 0 || up > 100 {
-		t.Fatalf("used_percent вне [0,100]: %v", up)
+		t.Fatalf("used_percent outside [0,100]: %v", up)
 	}
 	// At threshold 100 the filesystem is usually "ok" (not packed to the brim); we
 	// only check that state is one of the valid values, without pinning to the test host's actual usage.
 	if state != stateDiskOK && state != stateDiskFull {
-		t.Fatalf("неожиданный state %q", state)
+		t.Fatalf("unexpected state %q", state)
 	}
 }
 
 func TestDiskFullStatfsError(t *testing.T) {
 	b := &DiskFull{Usage: func(string) (diskUsage, error) { return diskUsage{}, errors.New("ENOENT") }}
 	if _, _, err := b.Check(context.Background(), paramStruct(t, map[string]any{"path": "/nope"})); err == nil {
-		t.Fatal("ожидали ошибку при сбое statfs")
+		t.Fatal("expected an error on statfs failure")
 	}
 }
 
 func TestDiskFullMissingPath(t *testing.T) {
 	b := &DiskFull{Usage: fakeUsage(10)}
 	if _, _, err := b.Check(context.Background(), paramStruct(t, map[string]any{})); err == nil {
-		t.Fatal("ожидали ошибку при отсутствии param path")
+		t.Fatal("expected an error when param path is missing")
 	}
 }
 
@@ -112,6 +112,6 @@ func TestDiskFullInvalidThreshold(t *testing.T) {
 		"path":              "/",
 		"threshold_percent": 0,
 	})); err == nil {
-		t.Fatal("ожидали ошибку при threshold_percent вне 1..100")
+		t.Fatal("expected an error when threshold_percent is outside 1..100")
 	}
 }

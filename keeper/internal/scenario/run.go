@@ -70,21 +70,21 @@ func (r *Runner) run(ctx context.Context, spec RunSpec) {
 	if err != nil {
 		if errors.Is(err, ErrAlreadyRunning) {
 			result = runResultLocked
-			log.Warn("scenario: incarnation уже в статусе applying — прогон отклонён")
+			log.Warn("scenario: incarnation is already in applying status - run rejected")
 			return
 		}
 		if errors.Is(err, ErrLocked) {
 			result = runResultLocked
-			log.Warn("scenario: incarnation в статусе error_locked — прогон отклонён до unlock")
+			log.Warn("scenario: incarnation is in error_locked status - run rejected until unlock")
 			return
 		}
 		if errors.Is(err, ErrNotRunnable) {
 			result = runResultLocked
-			log.Warn("scenario: статус incarnation не допускает прогон — отклонён",
+			log.Warn("scenario: incarnation status does not allow a run - rejected",
 				slog.Any("error", err))
 			return
 		}
-		log.Error("scenario: подготовка прогона провалена", slog.Any("error", err))
+		log.Error("scenario: run preparation failed", slog.Any("error", err))
 		return
 	}
 	stateBefore := inc.State
@@ -127,7 +127,7 @@ func (r *Runner) run(ctx context.Context, spec RunSpec) {
 		// with the masked DB status_details.
 		maskedCause := errors.New(maskErrText(cause, sealed.Paths()))
 		span.RecordError(maskedCause)
-		log.Error("scenario: прогон провален — incarnation заблокирована",
+		log.Error("scenario: run failed - incarnation locked",
 			slog.String("reason", reason),
 			slog.String("terminal_status", string(failStatus)),
 			slog.String("error", maskErrText(cause, sealed.Paths())))
@@ -187,7 +187,7 @@ func (r *Runner) run(ctx context.Context, spec RunSpec) {
 	// remain in its input after this.
 	expanded, idiags := config.ExpandIncludes(scn.Tasks, scenarioIncludeResolver(r.deps.Loader, art, spec.ScenarioName))
 	if diag.HasErrors(idiags) {
-		abort("scenario_load_failed", fmt.Errorf("scenario: раскрытие include в %s/%s: %s", spec.ScenarioName, scenarioMainFile, firstError(idiags)))
+		abort("scenario_load_failed", fmt.Errorf("scenario: expanding include in %s/%s: %s", spec.ScenarioName, scenarioMainFile, firstError(idiags)))
 		return
 	}
 	scn.Tasks = expanded
@@ -198,7 +198,7 @@ func (r *Runner) run(ctx context.Context, spec RunSpec) {
 	// consumer).
 	if synthed, names := config.SynthesizeModuleInstalls(scn.Tasks, art.Manifest.Modules); len(names) > 0 {
 		scn.Tasks = synthed
-		log.Info("scenario: синтезированы install-шаги модулей из manifest.modules[] (ADR-065)",
+		log.Info("scenario: synthesized module install steps from manifest.modules[] (ADR-065)",
 			slog.Any("modules", names))
 	}
 
@@ -249,7 +249,7 @@ func (r *Runner) run(ctx context.Context, spec RunSpec) {
 	// top-level list Render and Stratify see.
 	provisionsRoster := config.HasRefreshEmitter(scn.Tasks)
 	if len(hosts) == 0 && !allKeeperTasks(scn.Tasks) && !provisionsRoster {
-		abort("no_hosts", fmt.Errorf("incarnation %q не имеет connected-хостов", spec.IncarnationName))
+		abort("no_hosts", fmt.Errorf("incarnation %q has no connected hosts", spec.IncarnationName))
 		return
 	}
 
@@ -349,7 +349,7 @@ func (r *Runner) run(ctx context.Context, spec RunSpec) {
 	//      and fail (the original drift).
 	passage, perr := render.Stratify(scn.Tasks)
 	if perr != nil {
-		abort("render_failed", fmt.Errorf("scenario: стратификация passage %s/%s: %w", spec.IncarnationName, spec.ScenarioName, perr))
+		abort("render_failed", fmt.Errorf("scenario: passage stratification %s/%s: %w", spec.IncarnationName, spec.ScenarioName, perr))
 		return
 	}
 	staged := passage.Count > 1
@@ -376,7 +376,7 @@ func (r *Runner) run(ctx context.Context, spec RunSpec) {
 	//       silent-wrong-target).
 	if info, bad := config.WithinBlockRegisterDependency(scn.Tasks); bad {
 		abort(config.CodeWithinBlockRegisterDependency, fmt.Errorf(
-			"scenario %s/%s: задача %q внутри block: читает register %q, эмитнутый соседней %q ТОГО ЖЕ блока — невозможно на render (block атомарен, peer-register доступен только Soul-side ПОСЛЕ probe, а where/when/params резолвятся Keeper-side ДО dispatch); вынесите probe на top-level (разные Passage)",
+			"scenario %s/%s: task %q inside block: reads register %q, emitted by sibling %q of the SAME block - impossible at render (block is atomic, peer-register is available only Soul-side AFTER probe, while where/when/params resolve Keeper-side BEFORE dispatch); move the probe to top-level (different Passage)",
 			spec.IncarnationName, spec.ScenarioName, info.ReaderName, info.RegisterName, info.EmitterName))
 		return
 	}
@@ -397,7 +397,7 @@ func (r *Runner) run(ctx context.Context, spec RunSpec) {
 	//        impossible).
 	if info, bad := config.CrossPassageWhenGating(scn.Tasks, passage); bad {
 		abort(config.CodeCrossPassageWhenGating, fmt.Errorf(
-			"scenario %s/%s: задача %q гейтит %s: по register %q из другого Passage (consumer passage %d, источник passage %d) — Soul-side gating видит только свой Passage, cross-passage register недоступен → no such key; используйте where: для cross-task register-таргетинга или register.self для same-task gating (ADR-056:85)",
+			"scenario %s/%s: task %q gates %s: on register %q from a different Passage (consumer passage %d, source passage %d) - Soul-side gating only sees its own Passage, cross-passage register is unavailable -> no such key; use where: for cross-task register-targeting or register.self for same-task gating (ADR-056:85)",
 			spec.IncarnationName, spec.ScenarioName, info.ConsumerName, info.Kind, info.RegisterName, info.ConsumerPassage, info.SourcePassage))
 		return
 	}
@@ -436,7 +436,7 @@ func (r *Runner) run(ctx context.Context, spec RunSpec) {
 	if staged && r.deps.AuditReader == nil {
 		if info, bad := config.CrossPassageRequisite(scn.Tasks, passage); bad {
 			abort("cross_passage_requisite_unsupported", fmt.Errorf(
-				"scenario %s/%s: задача %q ссылается через %s: на register %q, чей источник в другом Passage (consumer passage %d, источник passage %d) — cross-passage gating требует журнала аудита (AuditReader), но он недоступен → отказ fail-closed (ADR-056 R3)",
+				"scenario %s/%s: task %q references via %s: register %q whose source is in a different Passage (consumer passage %d, source passage %d) - cross-passage gating requires an audit log (AuditReader), but it is unavailable -> fail-closed rejection (ADR-056 R3)",
 				spec.IncarnationName, spec.ScenarioName, info.ConsumerName, info.Kind, info.RequisiteName, info.ConsumerPassage, info.SourcePassage))
 			return
 		}
@@ -464,20 +464,20 @@ func (r *Runner) run(ctx context.Context, spec RunSpec) {
 		}
 		if r.passageCap == nil {
 			abort("soul_passage_unsupported", fmt.Errorf(
-				"scenario %s/%s: staged-прогон (%d Passage) требует подтверждения passage-capability хостов, но presence-чекер недоступен (нет Redis) — отказ fail-closed (ADR-056 §S5)",
+				"scenario %s/%s: staged run (%d Passage) requires confirmation of host passage-capability, but the presence checker is unavailable (no Redis) - fail-closed rejection (ADR-056 §S5)",
 				spec.IncarnationName, spec.ScenarioName, passage.Count))
 			return
 		}
 		lacking, lerr := r.passageCap.SoulsLackingPassage(ctx, sids)
 		if lerr != nil {
 			abort("soul_passage_unsupported", fmt.Errorf(
-				"scenario %s/%s: проверка passage-capability хостов staged-прогона провалилась — отказ fail-closed (ADR-056 §S5): %w",
+				"scenario %s/%s: staged run host passage-capability check failed - fail-closed rejection (ADR-056 §S5): %w",
 				spec.IncarnationName, spec.ScenarioName, lerr))
 			return
 		}
 		if len(lacking) > 0 {
 			abort("soul_passage_unsupported", fmt.Errorf(
-				"scenario %s/%s: staged-прогон (%d Passage по register-зависимости) требует Passage-aware Soul, но хосты %v не поддерживают поле passage — обнови soul-бинарь либо убери register-зависимость (ADR-056 §S5)",
+				"scenario %s/%s: staged run (%d Passage by register dependency) requires a Passage-aware Soul, but hosts %v do not support the passage field - update the soul binary or remove the register dependency (ADR-056 §S5)",
 				spec.IncarnationName, spec.ScenarioName, passage.Count, lacking))
 			return
 		}
@@ -579,12 +579,12 @@ func (r *Runner) run(ctx context.Context, spec RunSpec) {
 				if refreshBoundaries[p] {
 					grown, rerr := r.resolveRoster(ctx, spec.IncarnationName)
 					if rerr != nil {
-						abort("topology_failed", fmt.Errorf("scenario: re-resolve roster перед Passage %d: %w", p, rerr))
+						abort("topology_failed", fmt.Errorf("scenario: re-resolve roster before Passage %d: %w", p, rerr))
 						return
 					}
 					prevSize := len(renderIn.Hosts)
 					renderIn.Hosts = grown
-					log.Info("scenario: roster пере-резолвлен на refresh-границе — live-снимок (ADR-0061 §S3)",
+					log.Info("scenario: roster re-resolved at refresh boundary - live snapshot (ADR-0061 §S3)",
 						slog.Int("passage", p), slog.Int("roster_size", len(grown)), slog.Int("prev_roster_size", prevSize))
 				}
 
@@ -668,12 +668,12 @@ func (r *Runner) run(ctx context.Context, spec RunSpec) {
 			if p > 0 && r.deps.AuditReader != nil {
 				changed, ferr := r.deps.AuditReader.SelectChangedTaskKeys(ctx, spec.ApplyID)
 				if ferr != nil {
-					abort("register_load_failed", fmt.Errorf("scenario: cross-passage changed-факты: %w", ferr))
+					abort("register_load_failed", fmt.Errorf("scenario: cross-passage changed facts: %w", ferr))
 					return
 				}
 				failed, ferr := r.deps.AuditReader.SelectFailedTaskKeys(ctx, spec.ApplyID)
 				if ferr != nil {
-					abort("register_load_failed", fmt.Errorf("scenario: cross-passage failed-факты: %w", ferr))
+					abort("register_load_failed", fmt.Errorf("scenario: cross-passage failed facts: %w", ferr))
 					return
 				}
 				gate = newCrossPassageGate(tasks, changed, failed)
@@ -730,13 +730,13 @@ func (r *Runner) run(ctx context.Context, spec RunSpec) {
 			dspan.RecordError(derr)
 			dspan.SetStatus(codes.Error, "teardown_delete_failed")
 			span.RecordError(derr)
-			log.Error("scenario: teardown успешен, но снос строки incarnation провалился — остаётся в destroying",
+			log.Error("scenario: teardown succeeded, but dropping the incarnation row failed - stays in destroying",
 				slog.Any("error", derr))
 			return
 		}
 		dspan.SetAttributes(attribute.Bool("deleted", res.Deleted))
 		result = runResultOK
-		log.Info("scenario: destroy завершён — teardown успешен, строка incarnation снесена",
+		log.Info("scenario: destroy completed - teardown succeeded, incarnation row dropped",
 			slog.Bool("deleted", res.Deleted), slog.Int("tasks", len(tasks)), slog.Int("hosts", len(hosts)))
 		return
 	}
@@ -782,7 +782,7 @@ func (r *Runner) run(ctx context.Context, spec RunSpec) {
 		// hosts. result=runResultOK.
 		if errors.Is(err, incarnation.ErrAlreadyFinalized) {
 			result = runResultOK
-			log.Info("scenario: state-commit пропущен — incarnation уже финализирована другим коммиттером",
+			log.Info("scenario: state-commit skipped - incarnation already finalized by another committer",
 				slog.Int("tasks", len(tasks)), slog.Int("hosts", len(hosts)))
 			// The losing commit does NOT emit incarnation.run_completed (returns
 			// before emitRunCompleted below): the winning instance (whose
@@ -798,7 +798,7 @@ func (r *Runner) run(ctx context.Context, spec RunSpec) {
 		return
 	}
 	result = runResultOK
-	log.Info("scenario: прогон завершён успешно", slog.Int("tasks", len(tasks)), slog.Int("hosts", len(hosts)))
+	log.Info("scenario: run finished successfully", slog.Int("tasks", len(tasks)), slog.Int("hosts", len(hosts)))
 
 	// Terminal per-incarnation run-outcome event (T3, ADR-052 §k):
 	// incarnation.run_completed (status=success) with per-task changed_tasks.
@@ -1015,7 +1015,7 @@ func parseScenarioFromArtifact(loader *artifact.ServiceLoader, art *artifact.Ser
 		return nil, fmt.Errorf("scenario: parse %s: %w", rel, err)
 	}
 	if diag.HasErrors(diags) {
-		return nil, fmt.Errorf("scenario: %s невалиден: %s", rel, firstError(diags))
+		return nil, fmt.Errorf("scenario: %s is invalid: %s", rel, firstError(diags))
 	}
 	return scn, nil
 }
@@ -1089,11 +1089,11 @@ func (r *Runner) lockIncarnation(ctx context.Context, spec RunSpec, stateBefore 
 		// write error: log it as a no-op and skip the destroy_failed audit (the
 		// terminal isn't ours anymore).
 		if errors.Is(err, incarnation.ErrAlreadyFinalized) {
-			log.Info("scenario: терминальный статус провала пропущен — incarnation уже финализирована другим коммиттером",
+			log.Info("scenario: failure terminal status skipped - incarnation already finalized by another committer",
 				slog.String("terminal_status", string(failStatus)))
 			return false
 		}
-		log.Error("scenario: запись терминального статуса провала провалена — incarnation осталась в applying",
+		log.Error("scenario: writing failure terminal status failed - incarnation stayed in applying",
 			slog.String("terminal_status", string(failStatus)),
 			slog.Any("error", err))
 		return false
@@ -1159,7 +1159,7 @@ func (r *Runner) ensureTerminalApplyRun(ctx context.Context, spec RunSpec, reaso
 
 	statuses, err := applyrun.SelectStatusesByApplyID(wctx, r.deps.DB, spec.ApplyID)
 	if err != nil {
-		log.Warn("scenario: чтение apply_runs для терминализации прогона провалено",
+		log.Warn("scenario: reading apply_runs to terminalize the run failed",
 			slog.String("reason", reason), slog.Any("error", err))
 		return
 	}
@@ -1180,7 +1180,7 @@ func (r *Runner) ensureTerminalApplyRun(ctx context.Context, spec RunSpec, reaso
 			StartedByAID:    startedByPtr(spec.StartedByAID),
 		}
 		if ierr := applyrun.Insert(wctx, r.deps.DB, &run); ierr != nil {
-			log.Warn("scenario: вставка sentinel-строки apply_runs провалена — прогон без терминальной строки",
+			log.Warn("scenario: inserting apply_runs sentinel row failed - run without a terminal row",
 				slog.String("reason", reason), slog.Any("error", ierr))
 		}
 		return
@@ -1206,7 +1206,7 @@ func (r *Runner) ensureTerminalApplyRun(ctx context.Context, spec RunSpec, reaso
 			continue // already terminal
 		}
 		if uerr := applyrun.UpdateStatus(wctx, r.deps.DB, spec.ApplyID, st.SID, st.Passage, terminal, &summary); uerr != nil {
-			log.Warn("scenario: терминализация строки apply_runs провалена",
+			log.Warn("scenario: terminalizing apply_runs row failed",
 				slog.String("sid", st.SID), slog.Int("passage", st.Passage), slog.String("reason", reason), slog.Any("error", uerr))
 		}
 	}
@@ -1239,7 +1239,7 @@ func (r *Runner) writeDestroyFailedAudit(ctx context.Context, spec RunSpec, reas
 		Payload:       payload,
 	}
 	if err := r.deps.Audit.Write(ctx, ev); err != nil && log != nil {
-		log.Warn("scenario: запись audit incarnation.destroy_failed провалена",
+		log.Warn("scenario: writing audit incarnation.destroy_failed failed",
 			slog.String("incarnation", spec.IncarnationName), slog.Any("error", err))
 	}
 }
@@ -1337,7 +1337,7 @@ func (r *Runner) emitRunCompleted(ctx context.Context, spec RunSpec, status stri
 		if err != nil {
 			// Reading the aggregate failed — write the event without changed_tasks,
 			// without losing the terminal fact itself. Best-effort aggregation.
-			log.Warn("scenario: чтение changed-агрегата для incarnation.run_completed провалено — событие без changed_tasks",
+			log.Warn("scenario: reading changed-aggregate for incarnation.run_completed failed - event without changed_tasks",
 				slog.Any("error", err))
 		} else {
 			changed = buildChangedTasks(tasks, plans, keys)
@@ -1365,7 +1365,7 @@ func (r *Runner) emitRunCompleted(ctx context.Context, spec RunSpec, status stri
 		Payload:       payload,
 	}
 	if err := r.deps.Audit.Write(wctx, ev); err != nil {
-		log.Warn("scenario: запись audit incarnation.run_completed провалена",
+		log.Warn("scenario: writing audit incarnation.run_completed failed",
 			slog.String("incarnation", spec.IncarnationName), slog.Any("error", err))
 	}
 }
@@ -1406,7 +1406,7 @@ func (r *Runner) persistRunPlan(ctx context.Context, spec RunSpec, tasks []*rend
 		})
 	}
 	if err := applyrun.InsertRunPlan(ctx, r.deps.DB, spec.ApplyID, plan); err != nil {
-		log.Warn("scenario: персист плана задач прогона (apply_run_plan) провален — /tasks без плана",
+		log.Warn("scenario: persisting run task plan (apply_run_plan) failed - /tasks without a plan",
 			slog.String("apply_id", spec.ApplyID), slog.Any("error", err))
 	}
 }

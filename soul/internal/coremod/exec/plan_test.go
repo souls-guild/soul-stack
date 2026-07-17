@@ -14,6 +14,6 @@ import (
 func TestExec_NotPlanReadSafe(t *testing.T) {
 	m := exec.New()
 	if _, ok := any(m).(module.PlanReadSafe); ok {
-		t.Fatal("core.exec реализует PlanReadSafe (не должен — verb-модуль без desired state)")
+		t.Fatal("core.exec implements PlanReadSafe (it should not - verb module with no desired state)")
 	}
 }

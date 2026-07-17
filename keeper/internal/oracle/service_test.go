@@ -23,7 +23,7 @@ func newTestService(t *testing.T, db ExecQueryRower) *Service {
 
 func TestNewService_NilWhere(t *testing.T) {
 	if _, err := NewService(ServiceDeps{Pool: &fakeDB{}}); err == nil {
-		t.Error("NewService без Where должен падать")
+		t.Error("NewService without Where must fail")
 	}
 }
 
@@ -47,7 +47,7 @@ func TestService_CreateVigil_OK(t *testing.T) {
 func TestService_CreateVigil_ValidationBeforeDB(t *testing.T) {
 	// insertErr is set, but validation must reject before the round-trip —
 	// the error is ErrValidation, not infra.
-	db := &fakeDB{insertErr: errors.New("должен быть недостижим")}
+	db := &fakeDB{insertErr: errors.New("must be unreachable")}
 	svc := newTestService(t, db)
 	cases := []struct {
 		name string
@@ -67,7 +67,7 @@ func TestService_CreateVigil_ValidationBeforeDB(t *testing.T) {
 		})
 	}
 	if db.execSQL != "" {
-		t.Errorf("Exec не должен вызываться при провале валидации, got %q", db.execSQL)
+		t.Errorf("Exec must not be called on validation failure, got %q", db.execSQL)
 	}
 }
 
@@ -102,7 +102,7 @@ func TestService_CreateDecree_OK(t *testing.T) {
 }
 
 func TestService_CreateDecree_BadWhereCEL(t *testing.T) {
-	db := &fakeDB{insertErr: errors.New("должен быть недостижим")}
+	db := &fakeDB{insertErr: errors.New("must be unreachable")}
 	svc := newTestService(t, db)
 	bad := "event.data.x =="
 	_, err := svc.CreateDecree(context.Background(), CreateDecreeInput{
@@ -117,12 +117,12 @@ func TestService_CreateDecree_BadWhereCEL(t *testing.T) {
 		t.Errorf("err = %v, want ErrValidation (compile-check where-CEL)", err)
 	}
 	if db.execSQL != "" {
-		t.Error("Exec не должен вызываться при битом where-CEL")
+		t.Error("Exec must not be called with broken where-CEL")
 	}
 }
 
 func TestService_CreateDecree_ValidationBeforeDB(t *testing.T) {
-	db := &fakeDB{insertErr: errors.New("должен быть недостижим")}
+	db := &fakeDB{insertErr: errors.New("must be unreachable")}
 	svc := newTestService(t, db)
 	cases := []struct {
 		name string

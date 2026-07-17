@@ -52,7 +52,7 @@ func TestSendApply_InjectsTraceContext(t *testing.T) {
 	}
 
 	if req.GetTraceContext() == "" {
-		t.Fatal("req.TraceContext пуст, ожидался непустой W3C traceparent")
+		t.Fatal("req.TraceContext is empty, expected a non-empty W3C traceparent")
 	}
 
 	// Round-trip: Extract on the injected traceparent gives a valid remote
@@ -61,10 +61,10 @@ func TestSendApply_InjectsTraceContext(t *testing.T) {
 		propagation.MapCarrier{"traceparent": req.GetTraceContext()})
 	sc := trace.SpanContextFromContext(extracted)
 	if !sc.IsValid() {
-		t.Fatal("извлечённый SpanContext невалиден")
+		t.Fatal("extracted SpanContext is invalid")
 	}
 	if sc.TraceID() != parent.SpanContext().TraceID() {
-		t.Errorf("trace_id = %s, want %s (трасса разорвана)", sc.TraceID(), parent.SpanContext().TraceID())
+		t.Errorf("trace_id = %s, want %s (trace broken)", sc.TraceID(), parent.SpanContext().TraceID())
 	}
 }
 
@@ -84,10 +84,10 @@ func TestApplyRequest_ExtractTraceContext_RoundTrip(t *testing.T) {
 		propagation.MapCarrier{"traceparent": req.GetTraceContext()})
 	sc := trace.SpanContextFromContext(ctx)
 	if !sc.IsValid() {
-		t.Fatal("SpanContext невалиден при непустом traceparent")
+		t.Fatal("SpanContext is invalid with a non-empty traceparent")
 	}
 	if !sc.IsRemote() {
-		t.Error("SpanContext должен быть remote (пришёл из протокола)")
+		t.Error("SpanContext must be remote (came from the protocol)")
 	}
 	if got := sc.TraceID().String(); got != "0123456789abcdef0123456789abcdef" {
 		t.Errorf("trace_id = %s, want 0123456789abcdef0123456789abcdef", got)
@@ -107,6 +107,6 @@ func TestApplyRequest_ExtractTraceContext_Empty(t *testing.T) {
 	ctx := otel.GetTextMapPropagator().Extract(context.Background(),
 		propagation.MapCarrier{"traceparent": req.GetTraceContext()})
 	if sc := trace.SpanContextFromContext(ctx); sc.IsValid() {
-		t.Errorf("при пустом traceparent SpanContext должен быть невалиден, got %+v", sc)
+		t.Errorf("with an empty traceparent SpanContext must be invalid, got %+v", sc)
 	}
 }

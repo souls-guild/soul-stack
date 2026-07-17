@@ -37,7 +37,7 @@ func TestVaultAuth_Default_IsToken(t *testing.T) {
 	cfg, _, diags, _ := LoadKeeperFromBytes("keeper.yml", src, ValidateOptions{})
 	if diag.HasErrors(diags) {
 		dump(t, diags)
-		t.Fatalf("token-режим без auth-блока должен быть валиден")
+		t.Fatalf("token mode without an auth block should be valid")
 	}
 	if got := cfg.Vault.Auth.ResolvedAuthMethod(); got != AuthMethodToken {
 		t.Errorf("ResolvedAuthMethod = %q, want token", got)
@@ -51,7 +51,7 @@ func TestVaultAuth_ExplicitToken_OK(t *testing.T) {
 	_, _, diags, _ := LoadKeeperFromBytes("keeper.yml", src, ValidateOptions{})
 	if diag.HasErrors(diags) {
 		dump(t, diags)
-		t.Fatalf("method=token должен быть валиден")
+		t.Fatalf("method=token should be valid")
 	}
 }
 
@@ -64,7 +64,7 @@ func TestVaultAuth_AppRole_FileSource_OK(t *testing.T) {
 	cfg, _, diags, _ := LoadKeeperFromBytes("keeper.yml", src, ValidateOptions{})
 	if diag.HasErrors(diags) {
 		dump(t, diags)
-		t.Fatalf("approle + role_id + secret_id_file должен быть валиден")
+		t.Fatalf("approle + role_id + secret_id_file should be valid")
 	}
 	if cfg.Vault.Auth.RoleID != "keeper-prod" {
 		t.Errorf("RoleID = %q", cfg.Vault.Auth.RoleID)
@@ -83,7 +83,7 @@ func TestVaultAuth_AppRole_EnvSource_OK(t *testing.T) {
 	_, _, diags, _ := LoadKeeperFromBytes("keeper.yml", src, ValidateOptions{})
 	if diag.HasErrors(diags) {
 		dump(t, diags)
-		t.Fatalf("approle + secret_id_env должен быть валиден")
+		t.Fatalf("approle + secret_id_env should be valid")
 	}
 }
 
@@ -95,7 +95,7 @@ func TestVaultAuth_AppRole_MissingRoleID(t *testing.T) {
 	_, _, diags, _ := LoadKeeperFromBytes("keeper.yml", src, ValidateOptions{})
 	if !hasCodeAt(diags, "missing_required_field", "$.vault.auth.role_id") {
 		dump(t, diags)
-		t.Fatalf("ожидался missing_required_field на role_id")
+		t.Fatalf("expected missing_required_field on role_id")
 	}
 }
 
@@ -107,7 +107,7 @@ func TestVaultAuth_AppRole_MissingSecretSource(t *testing.T) {
 	_, _, diags, _ := LoadKeeperFromBytes("keeper.yml", src, ValidateOptions{})
 	if !hasCode(diags, "missing_required_field") {
 		dump(t, diags)
-		t.Fatalf("ожидался missing_required_field на отсутствие secret_id источника")
+		t.Fatalf("expected missing_required_field for missing secret_id source")
 	}
 }
 
@@ -121,7 +121,7 @@ func TestVaultAuth_AppRole_ConflictingSecretSources(t *testing.T) {
 	_, _, diags, _ := LoadKeeperFromBytes("keeper.yml", src, ValidateOptions{})
 	if !hasCode(diags, "vault_auth_conflicting_secret_source") {
 		dump(t, diags)
-		t.Fatalf("ожидался vault_auth_conflicting_secret_source")
+		t.Fatalf("expected vault_auth_conflicting_secret_source")
 	}
 }
 
@@ -134,7 +134,7 @@ func TestVaultAuth_AppRole_SecretIDFileNotAbsolute(t *testing.T) {
 	_, _, diags, _ := LoadKeeperFromBytes("keeper.yml", src, ValidateOptions{})
 	if !hasCodeAt(diags, "path_not_absolute", "$.vault.auth.secret_id_file") {
 		dump(t, diags)
-		t.Fatalf("ожидался path_not_absolute на secret_id_file")
+		t.Fatalf("expected path_not_absolute on secret_id_file")
 	}
 }
 
@@ -148,7 +148,7 @@ func TestVaultAuth_AppRole_TokenAlsoSet_Conflict(t *testing.T) {
 	_, _, diags, _ := LoadKeeperFromBytes("keeper.yml", src, ValidateOptions{})
 	if !hasCode(diags, "vault_auth_conflicting_method") {
 		dump(t, diags)
-		t.Fatalf("ожидался vault_auth_conflicting_method (token при approle)")
+		t.Fatalf("expected vault_auth_conflicting_method (token alongside approle)")
 	}
 }
 
@@ -158,7 +158,7 @@ func TestVaultAuth_InvalidMethod(t *testing.T) {
 	_, _, diags, _ := LoadKeeperFromBytes("keeper.yml", src, ValidateOptions{})
 	if !hasCode(diags, "enum_invalid") {
 		dump(t, diags)
-		t.Fatalf("ожидался enum_invalid на неизвестный method")
+		t.Fatalf("expected enum_invalid on an unknown method")
 	}
 }
 
@@ -172,11 +172,11 @@ func TestVaultAuth_Token_UnusedAppRoleFields_Warn(t *testing.T) {
 	_, _, diags, _ := LoadKeeperFromBytes("keeper.yml", src, ValidateOptions{})
 	if diag.HasErrors(diags) {
 		dump(t, diags)
-		t.Fatalf("token + лишние approle-поля не должны давать error")
+		t.Fatalf("token + extra approle fields should not produce an error")
 	}
 	if !hasCode(diags, "vault_auth_unused_fields") {
 		dump(t, diags)
-		t.Fatalf("ожидался warning vault_auth_unused_fields")
+		t.Fatalf("expected warning vault_auth_unused_fields")
 	}
 }
 
@@ -187,7 +187,7 @@ func TestVaultKVVersion_Empty_AutoDetect_OK(t *testing.T) {
 	cfg, _, diags, _ := LoadKeeperFromBytes("keeper.yml", src, ValidateOptions{})
 	if diag.HasErrors(diags) {
 		dump(t, diags)
-		t.Fatalf("kv_version опущен должен быть валиден (auto-detect)")
+		t.Fatalf("kv_version omitted should be valid (auto-detect)")
 	}
 	if cfg.Vault.KVVersion != "" {
 		t.Errorf("KVVersion = %q, want empty", cfg.Vault.KVVersion)
@@ -204,7 +204,7 @@ func TestVaultKVVersion_Explicit_OK(t *testing.T) {
 			cfg, _, diags, _ := LoadKeeperFromBytes("keeper.yml", src, ValidateOptions{})
 			if diag.HasErrors(diags) {
 				dump(t, diags)
-				t.Fatalf("kv_version=%q должен быть валиден", v)
+				t.Fatalf("kv_version=%q should be valid", v)
 			}
 			if cfg.Vault.KVVersion != v {
 				t.Errorf("KVVersion = %q, want %q", cfg.Vault.KVVersion, v)
@@ -220,7 +220,7 @@ func TestVaultKVVersion_Invalid_Rejected(t *testing.T) {
 	_, _, diags, _ := LoadKeeperFromBytes("keeper.yml", src, ValidateOptions{})
 	if !hasCodeAt(diags, "vault_kv_version_invalid", "$.vault.kv_version") {
 		dump(t, diags)
-		t.Fatalf("ожидался vault_kv_version_invalid на kv_version=3")
+		t.Fatalf("expected vault_kv_version_invalid on kv_version=3")
 	}
 }
 
@@ -236,7 +236,7 @@ func TestVaultAuth_NoPlaintextSecretIDField(t *testing.T) {
 	_, _, diags, _ := LoadKeeperFromBytes("keeper.yml", src, ValidateOptions{})
 	if !hasCode(diags, "unknown_key") {
 		dump(t, diags)
-		t.Fatalf("plaintext secret_id-поле должно отвергаться как unknown_key")
+		t.Fatalf("plaintext secret_id field should be rejected as unknown_key")
 	}
 	// Just in case — the secret value must not appear in messages
 	// (unknown_key echoes the key name, not the value).

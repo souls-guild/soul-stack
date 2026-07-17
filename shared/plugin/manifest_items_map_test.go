@@ -34,7 +34,7 @@ __PARAM__
 			wantCode: "",
 		},
 		{
-			name:     "map without items is valid (JSON-редактор в UI)",
+			name:     "map without items is valid (JSON editor in UI)",
 			paramDef: "          { type: map }\n",
 			wantCode: "",
 		},
@@ -69,12 +69,12 @@ __PARAM__
 			got := itemsRelatedCode(diags)
 			if tc.wantCode == "" {
 				if got != "" {
-					t.Fatalf("ожидали отсутствие items-ошибок, получили %q (diags=%v)", got, diagCodesList(diags))
+					t.Fatalf("expected no items errors, got %q (diags=%v)", got, diagCodesList(diags))
 				}
 				return
 			}
 			if got != tc.wantCode {
-				t.Fatalf("ожидали %q, получили %q (diags=%v)", tc.wantCode, got, diagCodesList(diags))
+				t.Fatalf("expected %q, got %q (diags=%v)", tc.wantCode, got, diagCodesList(diags))
 			}
 		})
 	}

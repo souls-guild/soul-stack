@@ -33,7 +33,7 @@ func TestServiceDownActive(t *testing.T) {
 		t.Fatalf("state = %q, want up", state)
 	}
 	if data.GetFields()["active"].GetBoolValue() != true {
-		t.Error("data.active должно быть true")
+		t.Error("data.active must be true")
 	}
 }
 
@@ -52,7 +52,7 @@ func TestServiceDownStopped(t *testing.T) {
 		t.Fatalf("state = %q, want down", state)
 	}
 	if data.GetFields()["service"].GetStringValue() != "redis" {
-		t.Error("data.service должно нести имя сервиса")
+		t.Error("data.service must carry the service name")
 	}
 }
 
@@ -72,7 +72,7 @@ func TestServiceDownOpenRCStarted(t *testing.T) {
 		t.Fatalf("state = %q, want up", state)
 	}
 	if data.GetFields()["active"].GetBoolValue() != true {
-		t.Error("data.active должно быть true")
+		t.Error("data.active must be true")
 	}
 }
 
@@ -93,7 +93,7 @@ func TestServiceDownOpenRCStopped(t *testing.T) {
 		t.Fatalf("state = %q, want down", state)
 	}
 	if data.GetFields()["active"].GetBoolValue() != false {
-		t.Error("data.active должно быть false")
+		t.Error("data.active must be false")
 	}
 }
 
@@ -114,6 +114,6 @@ func TestServiceDownNoInitSystem(t *testing.T) {
 func TestServiceDownMissingParam(t *testing.T) {
 	b := &ServiceDown{Runner: internaltest.NewRunner()}
 	if _, _, err := b.Check(context.Background(), paramStruct(t, map[string]any{})); err == nil {
-		t.Fatal("ожидали ошибку при отсутствии param service")
+		t.Fatal("expected an error when param service is missing")
 	}
 }

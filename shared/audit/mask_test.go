@@ -104,16 +104,16 @@ func TestMaskSecrets_VaultRefMarkerNarrowed(t *testing.T) {
 		t.Errorf("real_ref = %v, want masked (vault:secret/ marker)", out["real_ref"])
 	}
 	if out["real_in_error"] != maskedValue {
-		t.Errorf("real_in_error = %v, want masked (vault:secret/ склеен в строку)", out["real_in_error"])
+		t.Errorf("real_in_error = %v, want masked (vault:secret/ concatenated into a string)", out["real_in_error"])
 	}
 	if out["endpoint"] != "https://vault:8200" {
-		t.Errorf("endpoint = %v, want passthrough (vault: но не vault:secret/)", out["endpoint"])
+		t.Errorf("endpoint = %v, want passthrough (vault: but not vault:secret/)", out["endpoint"])
 	}
 	if out["image"] != "hashicorp/vault:1.18" {
-		t.Errorf("image = %v, want passthrough (docker-тег)", out["image"])
+		t.Errorf("image = %v, want passthrough (docker tag)", out["image"])
 	}
 	if out["kv_diag"] != "vault: KV error" {
-		t.Errorf("kv_diag = %v, want passthrough (диагностика, не ref)", out["kv_diag"])
+		t.Errorf("kv_diag = %v, want passthrough (diagnostics, not a ref)", out["kv_diag"])
 	}
 }
 
@@ -277,20 +277,20 @@ func TestMaskSecrets_TLSPEMKeys(t *testing.T) {
 
 	for _, k := range []string{"tls_key", "tls_cert", "tls_ca", "tls-key", "tls_ca_data"} {
 		if out[k] != maskedValue {
-			t.Errorf("%s = %v, want %q (PEM-материал обязан маскироваться)", k, out[k], maskedValue)
+			t.Errorf("%s = %v, want %q (PEM material must be masked)", k, out[k], maskedValue)
 		}
 	}
 	if out["tls"] != true {
-		t.Errorf("tls = %v, want passthrough (флаг, не секрет)", out["tls"])
+		t.Errorf("tls = %v, want passthrough (flag, not a secret)", out["tls"])
 	}
 	if out["tls_enable"] != true {
-		t.Errorf("tls_enable = %v, want passthrough (флаг)", out["tls_enable"])
+		t.Errorf("tls_enable = %v, want passthrough (flag)", out["tls_enable"])
 	}
 	if out["tls_port"] != 7379 {
-		t.Errorf("tls_port = %v, want passthrough (число)", out["tls_port"])
+		t.Errorf("tls_port = %v, want passthrough (number)", out["tls_port"])
 	}
 	if out["tls_skip_verify"] != false {
-		t.Errorf("tls_skip_verify = %v, want passthrough (булев флаг verify)", out["tls_skip_verify"])
+		t.Errorf("tls_skip_verify = %v, want passthrough (boolean verify flag)", out["tls_skip_verify"])
 	}
 }
 
@@ -322,7 +322,7 @@ func TestMaskSecrets_RedisRenderContextTLSVars(t *testing.T) {
 	vars := out["render_context"].(map[string]any)["vars"].(map[string]any)
 	for _, k := range []string{"tls_cert", "tls_key", "tls_ca"} {
 		if vars[k] != maskedValue {
-			t.Errorf("render_context.vars.%s = %v, want %q (PEM обязан маскироваться по имени)", k, vars[k], maskedValue)
+			t.Errorf("render_context.vars.%s = %v, want %q (PEM must be masked by name)", k, vars[k], maskedValue)
 		}
 	}
 	if out["path"] != "/etc/redis/tls/redis.key" {
@@ -336,7 +336,7 @@ func TestMaskSecrets_RedisRenderContextTLSVars(t *testing.T) {
 	bareOut := MaskSecrets(map[string]any{"cert": pemCert, "key": pemKey, "ca": pemCA})
 	for _, k := range []string{"cert", "key", "ca"} {
 		if bareOut[k] == maskedValue {
-			t.Errorf("голое %q замаскировалось — каталог расширился, проверь обоснование префикса tls_", k)
+			t.Errorf("bare %q got masked - catalog expanded, check the tls_ prefix rationale", k)
 		}
 	}
 }
@@ -374,11 +374,11 @@ func TestMaskSecrets_MigrateClusterSecrets(t *testing.T) {
 		"source_tls_key", "source_tls_cert", "source_tls_ca",
 	} {
 		if out[k] != maskedValue {
-			t.Errorf("%s = %v, want %q (secret миграции обязан маскироваться)", k, out[k], maskedValue)
+			t.Errorf("%s = %v, want %q (migration secret must be masked)", k, out[k], maskedValue)
 		}
 	}
 	if out["master_username"] != "admin" {
-		t.Errorf("master_username = %v, want passthrough (не секрет)", out["master_username"])
+		t.Errorf("master_username = %v, want passthrough (not a secret)", out["master_username"])
 	}
 	if out["master_host"] != "10.0.0.1" {
 		t.Errorf("master_host = %v, want passthrough", out["master_host"])
@@ -412,7 +412,7 @@ func TestMaskSecrets_MigrateClusterRunResultShape(t *testing.T) {
 	}
 	for _, k := range []string{"master_password", "source_password", "source_tls_ca"} {
 		if params[k] != maskedValue {
-			t.Errorf("params.%s = %v, want %q (secret обязан маскироваться в RunResult-payload)", k, params[k], maskedValue)
+			t.Errorf("params.%s = %v, want %q (secret must be masked in RunResult payload)", k, params[k], maskedValue)
 		}
 	}
 	if params["master_username"] != "admin" {

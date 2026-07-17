@@ -37,9 +37,9 @@ type serviceRegisterInput struct {
 // schema name in OpenAPI (committed hand-written spec → ServiceRegisterRequest).
 type ServiceRegisterRequest struct {
 	Name    string  `json:"name" required:"true" pattern:"^[a-z][a-z0-9-]*$" doc:"Service name (kebab-case)"`
-	Git     string  `json:"git" required:"true" doc:"git-источник service-репо (URL; не секрет)"`
-	Ref     string  `json:"ref" required:"true" doc:"git ref (tag/branch) — версия Service-а (ADR-007)"`
-	Refresh *string `json:"refresh,omitempty" doc:"опц. duration авто-refresh ('5m'); опущеbut — без авто-refresh"`
+	Git     string  `json:"git" required:"true" doc:"git source of the service repo (URL; not a secret)"`
+	Ref     string  `json:"ref" required:"true" doc:"git ref (tag/branch) - Service version (ADR-007)"`
+	Refresh *string `json:"refresh,omitempty" doc:"opt. auto-refresh duration ('5m'); omitted - no auto-refresh"`
 }
 
 // serviceRegisterOutput — huma-output POST /v1/services (FULL-TYPED). Status=201;
@@ -59,8 +59,8 @@ func serviceRegisterOperation() huma.Operation {
 		OperationID:   "registerService",
 		Method:        http.MethodPost,
 		Path:          "/",
-		Summary:       "Зарегистрировать Service",
-		Description:   "Заbutсит Service в реестр service_registry (ADR-028). Permission service.register. 409 — name занят. 404 — caller AID отсутствует в реестре операторов.",
+		Summary:       "Register a Service",
+		Description:   "Registers the Service in the service_registry (ADR-028). Permission service.register. 409 - name taken. 404 - caller AID missing from the operator registry.",
 		Tags:          []string{"service"},
 		DefaultStatus: http.StatusCreated,
 		Errors:        []int{http.StatusBadRequest, http.StatusForbidden, http.StatusNotFound, http.StatusConflict, http.StatusUnprocessableEntity, http.StatusInternalServerError},
@@ -88,8 +88,8 @@ func serviceListOperation() huma.Operation {
 		OperationID:   "listServices",
 		Method:        http.MethodGet,
 		Path:          "/",
-		Summary:       "Спиwithк Service-ов",
-		Description:   "Реестр Service-ов (sort name ASC, ADR-028). Permission service.list. Read-only, no audit.",
+		Summary:       "List of Services",
+		Description:   "Registry of Services (sort name ASC, ADR-028). Permission service.list. Read-only, no audit.",
 		Tags:          []string{"service"},
 		DefaultStatus: http.StatusOK,
 		Errors:        []int{http.StatusForbidden, http.StatusInternalServerError},
@@ -117,8 +117,8 @@ func serviceGetOperation() huma.Operation {
 		OperationID:   "getService",
 		Method:        http.MethodGet,
 		Path:          "/{name}",
-		Summary:       "Карточка Service-а",
-		Description:   "Метаданные одbutй записи реестра по имени (ADR-028). Permission service.list. Read-only, no audit.",
+		Summary:       "Service card",
+		Description:   "Metadata of a single registry entry by name (ADR-028). Permission service.list. Read-only, no audit.",
 		Tags:          []string{"service"},
 		DefaultStatus: http.StatusOK,
 		Errors:        []int{http.StatusForbidden, http.StatusNotFound, http.StatusInternalServerError},
@@ -138,9 +138,9 @@ type serviceUpdateInput struct {
 // for the mutable fields: git/ref required, refresh optional; name is immutable — comes from path). The struct
 // name = the contract schema name in OpenAPI (committed hand-written spec → ServiceUpdateRequest).
 type ServiceUpdateRequest struct {
-	Git     string  `json:"git" required:"true" doc:"butвый git-источник"`
-	Ref     string  `json:"ref" required:"true" doc:"butвый git ref"`
-	Refresh *string `json:"refresh,omitempty" doc:"опц. duration авто-refresh ('5m')"`
+	Git     string  `json:"git" required:"true" doc:"new git source"`
+	Ref     string  `json:"ref" required:"true" doc:"new git ref"`
+	Refresh *string `json:"refresh,omitempty" doc:"opt. auto-refresh duration ('5m')"`
 }
 
 // serviceUpdateOutput — huma-output PATCH /v1/services/{name} (FULL-TYPED).
@@ -159,8 +159,8 @@ func serviceUpdateOperation() huma.Operation {
 		OperationID:   "updateService",
 		Method:        http.MethodPatch,
 		Path:          "/{name}",
-		Summary:       "Обbutвить Service (replace mutable-fields)",
-		Description:   "Replace-семантика git/ref/refresh, name immutable (ADR-028). Permission service.update. 404 — записи absent.",
+		Summary:       "Update a Service (replace mutable-fields)",
+		Description:   "Replace semantics for git/ref/refresh, name is immutable (ADR-028). Permission service.update. 404 - entry absent.",
 		Tags:          []string{"service"},
 		DefaultStatus: http.StatusOK,
 		Errors:        []int{http.StatusBadRequest, http.StatusForbidden, http.StatusNotFound, http.StatusUnprocessableEntity, http.StatusInternalServerError},
@@ -189,8 +189,8 @@ func serviceDeregisterOperation() huma.Operation {
 		OperationID:   "deregisterService",
 		Method:        http.MethodDelete,
 		Path:          "/{name}",
-		Summary:       "Удалить Service from реестра",
-		Description:   "Удаляет запись реестра по имени + инвалидирует кеши (ADR-028). Permission service.deregister. 404 — записи absent.",
+		Summary:       "Remove a Service from the registry",
+		Description:   "Deletes the registry entry by name + invalidates caches (ADR-028). Permission service.deregister. 404 - entry absent.",
 		Tags:          []string{"service"},
 		DefaultStatus: http.StatusNoContent,
 		Errors:        []int{http.StatusForbidden, http.StatusNotFound, http.StatusInternalServerError},
@@ -220,8 +220,8 @@ func serviceRefsOperation() huma.Operation {
 		OperationID:   "listServiceRefs",
 		Method:        http.MethodGet,
 		Path:          "/{name}/refs",
-		Summary:       "git-tag-и + branch-и Service-а",
-		Description:   "Спиwithк git-ref-ов remote-репозитория Service-а for UI Upgrade-modal (ADR-028). Permission service.list. Read-only, no audit. 502 — git-источник unreachable.",
+		Summary:       "git tags + branches of a Service",
+		Description:   "List of git refs of the Service remote repository for the UI Upgrade-modal (ADR-028). Permission service.list. Read-only, no audit. 502 - git source unreachable.",
 		Tags:          []string{"service"},
 		DefaultStatus: http.StatusOK,
 		Errors:        []int{http.StatusForbidden, http.StatusNotFound, http.StatusInternalServerError, http.StatusBadGateway},
@@ -252,8 +252,8 @@ func serviceScenariosOperation() huma.Operation {
 		OperationID:   "listServiceScenarios",
 		Method:        http.MethodGet,
 		Path:          "/{name}/scenarios",
-		Summary:       "scenario from сonпшота Service-репо",
-		Description:   "Спиwithк scenario from материалfromованbutго сonпшота git-репо Service-а for UI Run-modal (ADR-028). Permission service.list. Read-only, no audit. 502 — loader упал.",
+		Summary:       "scenario from a snapshot of the Service repo",
+		Description:   "List of scenarios from a materialized snapshot of the Service git repo for the UI Run-modal (ADR-028). Permission service.list. Read-only, no audit. 502 - loader failed.",
 		Tags:          []string{"service"},
 		DefaultStatus: http.StatusOK,
 		Errors:        []int{http.StatusForbidden, http.StatusNotFound, http.StatusInternalServerError, http.StatusBadGateway},
@@ -284,8 +284,8 @@ func serviceStateSchemaOperation() huma.Operation {
 		OperationID:   "listServiceStateSchema",
 		Method:        http.MethodGet,
 		Path:          "/{name}/state-schema",
-		Summary:       "state_schema-метаданные Service-а",
-		Description:   "state_schema-версия + декларация структуры + цепочка миграций (metadata-only) for UI Schema explorer (ADR-019/028). Permission service.list. Read-only, no audit. 502 — loader упал.",
+		Summary:       "state_schema metadata of a Service",
+		Description:   "state_schema version + structure declaration + migration chain (metadata-only) for the UI Schema explorer (ADR-019/028). Permission service.list. Read-only, no audit. 502 - loader failed.",
 		Tags:          []string{"service"},
 		DefaultStatus: http.StatusOK,
 		Errors:        []int{http.StatusForbidden, http.StatusNotFound, http.StatusInternalServerError, http.StatusBadGateway},
@@ -316,8 +316,8 @@ func serviceDependenciesOperation() huma.Operation {
 		OperationID:   "listServiceDependencies",
 		Method:        http.MethodGet,
 		Path:          "/{name}/dependencies",
-		Summary:       "git-зависимости Service-а",
-		Description:   "Задекларированные в service.yml destiny-кирпичики + custom-модули with своими git-ref-ами for UI Service Detail (ADR-007/028). Permission service.list. Read-only, no audit. 502 — loader упал.",
+		Summary:       "git dependencies of a Service",
+		Description:   "Destiny building blocks + custom modules declared in service.yml with their own git refs, for the UI Service Detail (ADR-007/028). Permission service.list. Read-only, no audit. 502 - loader failed.",
 		Tags:          []string{"service"},
 		DefaultStatus: http.StatusOK,
 		Errors:        []int{http.StatusForbidden, http.StatusNotFound, http.StatusInternalServerError, http.StatusBadGateway},
@@ -358,8 +358,8 @@ func directivesCacheControlFor(ref string) string {
 type serviceDirectivesInput struct {
 	Name        string `path:"name" doc:"Service name"`
 	Ref         string `query:"ref" doc:"opt. git-ref override (omitted → ref from registry)"`
-	Version     string `query:"version" doc:"опц. версия (onпр. 8.2.2) — сузить каталог to серии major.minor"`
-	IfNoneMatch string `header:"If-None-Match" doc:"conditional GET: 304, если withвпало с ETag (snapshot SHA1)"`
+	Version     string `query:"version" doc:"opt. version (e.g. 8.2.2) - narrow the catalog to the major.minor series"`
+	IfNoneMatch string `header:"If-None-Match" doc:"conditional GET: 304 if it matches the ETag (snapshot SHA1)"`
 }
 
 // serviceDirectivesOutput — huma-output GET /v1/services/{name}/directives (FULL-TYPED).
@@ -381,8 +381,8 @@ func serviceDirectivesOperation() huma.Operation {
 		OperationID:   "listServiceDirectives",
 		Method:        http.MethodGet,
 		Path:          "/{name}/directives",
-		Summary:       "каталог валидных директив redis.conf по версиям",
-		Description:   "Каталог валидных имён директив сервиса (essence.redis_directives, карта серия major.minor → names) for UI-редактора redis_settings (ADR-042). Permission service.list. Read-only, no audit. ?version=X.Y.Z сужает to серии. ETag=snapshot SHA1; If-None-Match → 304. Cache-Control: immutable+год for pinned commit-SHA ref, иonче no-cache (branch/тег mutable — реvalidation via ETag/304). Сервис без каталога → directives:{} + 200. 502 — loader упал.",
+		Summary:       "catalog of valid redis.conf directives by version",
+		Description:   "Catalog of valid service directive names (essence.redis_directives, major.minor series map -> names) for the UI redis_settings editor (ADR-042). Permission service.list. Read-only, no audit. ?version=X.Y.Z narrows to the series. ETag=snapshot SHA1; If-None-Match -> 304. Cache-Control: immutable+year for a pinned commit-SHA ref, otherwise no-cache (branch/tag mutable - revalidation via ETag/304). Service without a catalog -> directives:{} + 200. 502 - loader failed.",
 		Tags:          []string{"service"},
 		DefaultStatus: http.StatusOK,
 		Errors:        []int{http.StatusForbidden, http.StatusNotFound, http.StatusInternalServerError, http.StatusBadGateway},

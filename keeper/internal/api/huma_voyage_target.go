@@ -39,19 +39,19 @@ package api
 // Voyage.target wire (oapi-codegen sorts fields alphabetically), else golden voyage
 // fails on byte-order. For INPUT the order is irrelevant (unmarshal is order-independent).
 type VoyageTarget struct {
-	Coven        []string `json:"coven,omitempty" doc:"coven-метки (env-тег scenario / метка хоста command)"`
-	Incarnations []string `json:"incarnations,omitempty" doc:"names инкарonций (scenario-режим)"`
-	Service      string   `json:"service,omitempty" doc:"имя сервиса (scenario-режим)"`
-	SIDs         []string `json:"sids,omitempty" doc:"SID-ы хостов (command-режим)"`
-	Where        string   `json:"where,omitempty" doc:"CEL-предикат as ДОПОЛNOTНИЕ к sids/coven (command-режим)"`
+	Coven        []string `json:"coven,omitempty" doc:"coven labels (scenario env-tag / command host label)"`
+	Incarnations []string `json:"incarnations,omitempty" doc:"incarnation names (scenario mode)"`
+	Service      string   `json:"service,omitempty" doc:"service name (scenario mode)"`
+	SIDs         []string `json:"sids,omitempty" doc:"host SIDs (command mode)"`
+	Where        string   `json:"where,omitempty" doc:"CEL predicate as an ADDITION to sids/coven (command mode)"`
 }
 
 // VoyageNotify — a one-off subscription to run notifications (CLASS B, shared between input
 // bodies). Shape only; runtime validation (herald existence / RBAC herald.read / on-enum) is done
 // by the domain prepareNotifyErr. herald is required (spec :7612 — required:[herald]).
 type VoyageNotify struct {
-	Herald       string         `json:"herald" required:"true" pattern:"^[a-z0-9-]{1,63}$" doc:"имя каonла-герольда"`
-	On           []string       `json:"on,omitempty" doc:"термиonлы/типы withбытий: completed|failed|partial"`
+	Herald       string         `json:"herald" required:"true" pattern:"^[a-z0-9-]{1,63}$" doc:"herald channel name"`
+	On           []string       `json:"on,omitempty" doc:"terminal event types: completed|failed|partial"`
 	OnlyFailures *bool          `json:"only_failures,omitempty"`
 	OnlyChanges  *bool          `json:"only_changes,omitempty"`
 	Annotations  map[string]any `json:"annotations,omitempty"`

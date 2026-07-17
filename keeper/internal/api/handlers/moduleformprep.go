@@ -177,7 +177,7 @@ func NewFormPrepPGResolver(db voyageResolverDB) *FormPrepPGResolver {
 
 // incarnationHostsSQL — live SIDs of incarnation hosts: souls with the Coven label
 // `$1 = ANY(coven)` (ADR-008: incarnation.name is the root Coven label),
-// online snapshot, optional prefix filter ($2 = ” → no filter), cap+1 ($3) to
+// online snapshot, optional prefix filter ($2 = " → no filter), cap+1 ($3) to
 // detect truncated. ORDER BY sid — determinism + stable autocomplete.
 const formPrepIncarnationHostsSQL = `
 SELECT sid FROM souls

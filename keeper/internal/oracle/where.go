@@ -53,7 +53,7 @@ func NewWhereEvaluator() (*WhereEvaluator, error) {
 		cel.Variable("event", cel.DynType),
 	)
 	if err != nil {
-		return nil, fmt.Errorf("oracle: создание where-CEL окружения: %w", err)
+		return nil, fmt.Errorf("oracle: creating where-CEL environment: %w", err)
 	}
 	return &WhereEvaluator{env: env, cache: make(map[string]cel.Program)}, nil
 }
@@ -206,11 +206,11 @@ func (w *WhereEvaluator) program(expr string) (cel.Program, error) {
 
 	ast, iss := w.env.Compile(expr)
 	if iss != nil && iss.Err() != nil {
-		return nil, fmt.Errorf("oracle: компиляция where-CEL %q: %w", expr, iss.Err())
+		return nil, fmt.Errorf("oracle: compiling where-CEL %q: %w", expr, iss.Err())
 	}
 	prg, err := w.env.Program(ast)
 	if err != nil {
-		return nil, fmt.Errorf("oracle: сборка программы where-CEL %q: %w", expr, err)
+		return nil, fmt.Errorf("oracle: building where-CEL program %q: %w", expr, err)
 	}
 
 	w.mu.Lock()

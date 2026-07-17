@@ -68,10 +68,10 @@ func TestIntegration_TokenBucket_BurstThenSustained(t *testing.T) {
 			t.Fatalf("Allow #%d: %v", i, err)
 		}
 		if !allowed {
-			t.Fatalf("Allow #%d: ожидался allow в пределах burst, got deny (retry=%v)", i, retry)
+			t.Fatalf("Allow #%d: expected allow within burst, got deny (retry=%v)", i, retry)
 		}
 		if retry != 0 {
-			t.Fatalf("Allow #%d: на allow retryAfter должен быть 0, got %v", i, retry)
+			t.Fatalf("Allow #%d: on allow retryAfter must be 0, got %v", i, retry)
 		}
 	}
 
@@ -81,14 +81,14 @@ func TestIntegration_TokenBucket_BurstThenSustained(t *testing.T) {
 		t.Fatalf("Allow over burst: %v", err)
 	}
 	if allowed {
-		t.Fatal("Allow over burst: ожидался deny, got allow")
+		t.Fatal("Allow over burst: expected deny, got allow")
 	}
 	if retry <= 0 {
-		t.Fatalf("Allow over burst: retryAfter должен быть > 0, got %v", retry)
+		t.Fatalf("Allow over burst: retryAfter must be > 0, got %v", retry)
 	}
 	// At rate=1, the next token is ~1s away; allow some slack.
 	if retry > 2*time.Second {
-		t.Fatalf("Allow over burst: retryAfter неожиданно велик: %v", retry)
+		t.Fatalf("Allow over burst: retryAfter unexpectedly large: %v", retry)
 	}
 }
 
@@ -110,7 +110,7 @@ func TestIntegration_TokenBucket_RefillOverTime(t *testing.T) {
 		}
 	}
 	if allowed, _, err := tb.Allow(ctx, aid, "voyage_create", rate, burst); err != nil || allowed {
-		t.Fatalf("Allow after drain: ожидался deny, allowed=%v err=%v", allowed, err)
+		t.Fatalf("Allow after drain: expected deny, allowed=%v err=%v", allowed, err)
 	}
 
 	// Wait comfortably longer than one refill interval (1 token = 100ms at rate=10).
@@ -121,7 +121,7 @@ func TestIntegration_TokenBucket_RefillOverTime(t *testing.T) {
 		t.Fatalf("Allow after refill: %v", err)
 	}
 	if !allowed {
-		t.Fatalf("Allow after refill: ожидался allow (бакет пополнился), got deny (retry=%v)", retry)
+		t.Fatalf("Allow after refill: expected allow (bucket refilled), got deny (retry=%v)", retry)
 	}
 }
 
@@ -144,17 +144,17 @@ func TestIntegration_TokenBucket_IsolationByKey(t *testing.T) {
 		}
 	}
 	if allowed, _, err := tb.Allow(ctx, aidA, "voyage_create", rate, burst); err != nil || allowed {
-		t.Fatalf("A over burst: ожидался deny, allowed=%v err=%v", allowed, err)
+		t.Fatalf("A over burst: expected deny, allowed=%v err=%v", allowed, err)
 	}
 
 	// AID-B — independent bucket, the first request goes through.
 	if allowed, _, err := tb.Allow(ctx, aidB, "voyage_create", rate, burst); err != nil || !allowed {
-		t.Fatalf("B first: ожидался allow (другой AID), allowed=%v err=%v", allowed, err)
+		t.Fatalf("B first: expected allow (different AID), allowed=%v err=%v", allowed, err)
 	}
 
 	// Same AID-A, but a different bucket — also independent.
 	if allowed, _, err := tb.Allow(ctx, aidA, "voyage_preview", rate, burst); err != nil || !allowed {
-		t.Fatalf("A other-bucket: ожидался allow (другой bucket), allowed=%v err=%v", allowed, err)
+		t.Fatalf("A other-bucket: expected allow (different bucket), allowed=%v err=%v", allowed, err)
 	}
 }
 
@@ -173,31 +173,31 @@ func TestIntegration_TokenBucket_CreateVsPreviewSeparate(t *testing.T) {
 
 	// Drain the create bucket (burst=1): first allow, second deny.
 	if allowed, _, err := tb.Allow(ctx, aid, "voyage_create", rate, burst); err != nil || !allowed {
-		t.Fatalf("create #1: ожидался allow, allowed=%v err=%v", allowed, err)
+		t.Fatalf("create #1: expected allow, allowed=%v err=%v", allowed, err)
 	}
 	if allowed, _, err := tb.Allow(ctx, aid, "voyage_create", rate, burst); err != nil || allowed {
-		t.Fatalf("create #2: ожидался deny (create исчерпан), allowed=%v err=%v", allowed, err)
+		t.Fatalf("create #2: expected deny (create exhausted), allowed=%v err=%v", allowed, err)
 	}
 
 	// preview for the SAME AID is untouched by create's exhaustion → passes.
 	if allowed, _, err := tb.Allow(ctx, aid, "voyage_preview", rate, burst); err != nil || !allowed {
-		t.Fatalf("preview #1: ожидался allow — preview не делит квоту с create, allowed=%v err=%v", allowed, err)
+		t.Fatalf("preview #1: expected allow -- preview does not share quota with create, allowed=%v err=%v", allowed, err)
 	}
 	// preview exhausted by its own burst → deny.
 	if allowed, _, err := tb.Allow(ctx, aid, "voyage_preview", rate, burst); err != nil || allowed {
-		t.Fatalf("preview #2: ожидался deny (собственный preview-бакет исчерпан), allowed=%v err=%v", allowed, err)
+		t.Fatalf("preview #2: expected deny (own preview bucket exhausted), allowed=%v err=%v", allowed, err)
 	}
 
 	// Symmetry on a fresh AID: exhausting preview doesn't touch create.
 	aid2 := uniqueAID(t) + "-sym"
 	if allowed, _, err := tb.Allow(ctx, aid2, "voyage_preview", rate, burst); err != nil || !allowed {
-		t.Fatalf("sym preview #1: ожидался allow, allowed=%v err=%v", allowed, err)
+		t.Fatalf("sym preview #1: expected allow, allowed=%v err=%v", allowed, err)
 	}
 	if allowed, _, err := tb.Allow(ctx, aid2, "voyage_preview", rate, burst); err != nil || allowed {
-		t.Fatalf("sym preview #2: ожидался deny, allowed=%v err=%v", allowed, err)
+		t.Fatalf("sym preview #2: expected deny, allowed=%v err=%v", allowed, err)
 	}
 	if allowed, _, err := tb.Allow(ctx, aid2, "voyage_create", rate, burst); err != nil || !allowed {
-		t.Fatalf("sym create #1: ожидался allow — create не делит квоту с preview, allowed=%v err=%v", allowed, err)
+		t.Fatalf("sym create #1: expected allow -- create does not share quota with preview, allowed=%v err=%v", allowed, err)
 	}
 }
 
@@ -224,7 +224,7 @@ func TestIntegration_TokenBucket_RejectsInvalidArgs(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			if _, _, err := tb.Allow(ctx, tc.aid, tc.bucket, tc.rate, tc.burst); err == nil {
-				t.Errorf("Allow(%+v) вернул nil err; ожидалась валидационная ошибка", tc)
+				t.Errorf("Allow(%+v) returned nil err; expected a validation error", tc)
 			}
 		})
 	}

@@ -45,12 +45,12 @@ func TestSchemaNames_Sigil(t *testing.T) {
 	schemas := loadFullSpecSchemas(t)
 	for _, name := range sigilContractSchemas {
 		if _, ok := schemas[name]; !ok {
-			t.Errorf("контрактonя схема %q ОТСУТСТВУЕТ в components/schemas (имя не выровнеbut)", name)
+			t.Errorf("contract schema %q MISSING from components/schemas (name not aligned)", name)
 		}
 	}
 	for _, name := range sigilForbiddenSchemas {
 		if _, ok := schemas[name]; ok {
-			t.Errorf("техническое huma-имя %q ПРИСУТСТВУЕТ в спеке — имя не выровнеbut под контракт", name)
+			t.Errorf("technical huma name %q PRESENT in the spec - name not aligned to the contract", name)
 		}
 	}
 }
@@ -65,22 +65,22 @@ func TestSchemaNames_SigilRequestShapes(t *testing.T) {
 	}
 	var doc map[string]any
 	if err := yaml.Unmarshal([]byte(y), &doc); err != nil {
-		t.Fatalf("спека не парсится: %v", err)
+		t.Fatalf("spec does not parse: %v", err)
 	}
 	comp, _ := doc["components"].(map[string]any)
 	schemas, _ := comp["schemas"].(map[string]any)
 
 	allow, _ := schemas["PluginSigilAllowRequest"].(map[string]any)
 	if allow == nil {
-		t.Fatal("PluginSigilAllowRequest отсутствует")
+		t.Fatal("PluginSigilAllowRequest missing")
 	}
 	assertRequiredExactly(t, allow, "PluginSigilAllowRequest", "namespace", "name", "ref")
 
 	intro, _ := schemas["SigilKeyIntroduceRequest"].(map[string]any)
 	if intro == nil {
-		t.Fatal("SigilKeyIntroduceRequest отсутствует")
+		t.Fatal("SigilKeyIntroduceRequest missing")
 	}
 	if req, ok := intro["required"]; ok {
-		t.Errorf("SigilKeyIntroduceRequest.required=%v — hand-written :5619 NOT объявляет required (make_primary опциоonлен)", req)
+		t.Errorf("SigilKeyIntroduceRequest.required=%v - hand-written :5619 NOT declaring required (make_primary is optional)", req)
 	}
 }

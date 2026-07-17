@@ -19,21 +19,21 @@ func TestSecretWritepathKeysMasked(t *testing.T) {
 
 	for _, k := range []string{"secret", "credentials", "bot_token", "header_secret"} {
 		if masked[k] == plaintext {
-			t.Fatalf("ключ %q не замаскирован", k)
+			t.Fatalf("key %q not masked", k)
 		}
 	}
 	// credentials — a nested map; MaskSecrets masked the whole key.
 	if masked["credentials"] != maskedValue {
-		t.Fatalf("credentials должен быть замаскирован целиком, got %v", masked["credentials"])
+		t.Fatalf("credentials should be masked entirely, got %v", masked["credentials"])
 	}
 }
 
 func TestPlaintextIngestedMarkerSurvivesMasking(t *testing.T) {
 	masked := MaskSecrets(map[string]any{"plaintext_ingested": true, "name": "ops-hook"})
 	if masked["plaintext_ingested"] != true {
-		t.Fatalf("маркер plaintext_ingested замаскирован (не должен): %v", masked["plaintext_ingested"])
+		t.Fatalf("plaintext_ingested marker masked (should not be): %v", masked["plaintext_ingested"])
 	}
 	if masked["name"] != "ops-hook" {
-		t.Fatalf("name не должен маскироваться: %v", masked["name"])
+		t.Fatalf("name should not be masked: %v", masked["name"])
 	}
 }

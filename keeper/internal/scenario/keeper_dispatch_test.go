@@ -75,7 +75,7 @@ func TestKeeperTasksOf(t *testing.T) {
 
 	got0 := keeperTasksOf(tasks, plans, 0)
 	if len(got0) != 2 {
-		t.Fatalf("keeperTasksOf(0): len=%d, want 2 (keeper-задачи Passage 0)", len(got0))
+		t.Fatalf("keeperTasksOf(0): len=%d, want 2 (keeper tasks, Passage 0)", len(got0))
 	}
 	if got0[0].Index != 0 || got0[1].Index != 2 {
 		t.Fatalf("keeperTasksOf(0) order = [%d %d], want [0 2]", got0[0].Index, got0[1].Index)
@@ -83,12 +83,12 @@ func TestKeeperTasksOf(t *testing.T) {
 
 	got1 := keeperTasksOf(tasks, plans, 1)
 	if len(got1) != 1 || got1[0].Index != 3 {
-		t.Fatalf("keeperTasksOf(1) = %v, want ровно [idx 3] (keeper-задача Passage 1)", got1)
+		t.Fatalf("keeperTasksOf(1) = %v, want exactly [idx 3] (keeper task, Passage 1)", got1)
 	}
 
 	// A Passage with no keeper tasks → empty (host-only Passage / out of range).
 	if got := keeperTasksOf(tasks, plans, 2); len(got) != 0 {
-		t.Fatalf("keeperTasksOf(2) = %v, want пусто", got)
+		t.Fatalf("keeperTasksOf(2) = %v, want empty", got)
 	}
 }
 
@@ -105,7 +105,7 @@ func TestApplyKeeperTask_Success(t *testing.T) {
 		t.Fatalf("changed=%v failed=%v, want true/false", changed, failed)
 	}
 	if mod.gotState != "registered" {
-		t.Fatalf("module got state %q, want registered (state-суффикс адреса core.soul.registered)", mod.gotState)
+		t.Fatalf("module got state %q, want registered (state suffix of the core.soul.registered address)", mod.gotState)
 	}
 	if output["created"] != true {
 		t.Fatalf("output[created] = %v, want true", output["created"])
@@ -129,10 +129,10 @@ func TestApplyKeeperTask_UnknownModule(t *testing.T) {
 	r := &Runner{keeperModules: fakeKeeperRegistry{}}
 	_, failed, _, msg := r.applyKeeperTask(context.Background(), &render.RenderedTask{Module: "core.soul.registered"})
 	if !failed {
-		t.Fatalf("failed=false, want true (модуль не найден в Registry)")
+		t.Fatalf("failed=false, want true (module not found in Registry)")
 	}
 	if msg == "" {
-		t.Fatalf("message пуст, ожидалось упоминание unknown module")
+		t.Fatalf("message empty, expected mention of unknown module")
 	}
 }
 
@@ -156,13 +156,13 @@ func TestApplyKeeperTask_NoFinalEvent(t *testing.T) {
 
 	_, failed, output, msg := r.applyKeeperTask(context.Background(), &render.RenderedTask{Module: "core.soul.registered"})
 	if !failed {
-		t.Fatalf("failed=false, want true (модуль не прислал финального события)")
+		t.Fatalf("failed=false, want true (module sent no final event)")
 	}
 	if output != nil {
 		t.Errorf("output = %v, want nil", output)
 	}
 	if !strings.Contains(msg, "no final event") {
-		t.Fatalf("message = %q, want содержащее 'no final event'", msg)
+		t.Fatalf("message = %q, want containing 'no final event'", msg)
 	}
 }
 
@@ -254,19 +254,19 @@ func TestEmitKeeperTaskExecuted_ChangedEmits(t *testing.T) {
 		t.Errorf("source = %q, want keeper_internal", ev.Source)
 	}
 	if ev.CorrelationID != "apply-k1" {
-		t.Errorf("correlation_id = %q, want apply-k1 (= apply_id, фильтр SelectChangedTaskKeys)", ev.CorrelationID)
+		t.Errorf("correlation_id = %q, want apply-k1 (= apply_id, SelectChangedTaskKeys filter)", ev.CorrelationID)
 	}
 	if ev.Payload["sid"] != render.KeeperTargetSID {
 		t.Errorf("payload sid = %v, want %q", ev.Payload["sid"], render.KeeperTargetSID)
 	}
 	if ev.Payload["status"] != "TASK_STATUS_CHANGED" {
-		t.Errorf("payload status = %v, want TASK_STATUS_CHANGED (свёртка фильтрует по литералу)", ev.Payload["status"])
+		t.Errorf("payload status = %v, want TASK_STATUS_CHANGED (the fold filters by literal)", ev.Payload["status"])
 	}
 	if ev.Payload["task_idx"] != 2 {
 		t.Errorf("payload task_idx = %v, want 2", ev.Payload["task_idx"])
 	}
 	if ev.Payload["passage"] != 1 {
-		t.Errorf("payload passage = %v, want 1 (эхо Passage keeper-задачи, Слайс 2)", ev.Payload["passage"])
+		t.Errorf("payload passage = %v, want 1 (echo of the keeper-task Passage, Slice 2)", ev.Payload["passage"])
 	}
 }
 
@@ -286,14 +286,14 @@ func TestEmitKeeperTaskExecuted_FailedStatus(t *testing.T) {
 	}
 	ev := aw.events[0]
 	if ev.Payload["status"] != "TASK_STATUS_FAILED" {
-		t.Errorf("payload status = %v, want TASK_STATUS_FAILED (не CHANGED → не в changed_tasks)", ev.Payload["status"])
+		t.Errorf("payload status = %v, want TASK_STATUS_FAILED (not CHANGED -> not in changed_tasks)", ev.Payload["status"])
 	}
 	errMap, ok := ev.Payload["error"].(map[string]any)
 	if !ok {
 		t.Fatalf("payload error type = %T, want map", ev.Payload["error"])
 	}
 	if errMap["message"] != "boom from driver" {
-		t.Errorf("error.message = %v, want 'boom from driver' (не-no_log → message кладётся)", errMap["message"])
+		t.Errorf("error.message = %v, want 'boom from driver' (non-no_log -> message is set)", errMap["message"])
 	}
 	if errMap["module"] != "core.cloud.created" {
 		t.Errorf("error.module = %v, want core.cloud.created", errMap["module"])
@@ -361,7 +361,7 @@ func TestKeeperTaskExecuted_NoRegisterButIDFoldsToChangedTask(t *testing.T) {
 	r.emitKeeperTaskExecuted(context.Background(), "apply-k5", 0 /*passage*/, rt, true /*changed*/, false, "", slog.New(slog.DiscardHandler))
 
 	if len(aw.events) != 1 {
-		t.Fatalf("emitted %d events, want 1 (задача без register, но с id адресуется)", len(aw.events))
+		t.Fatalf("emitted %d events, want 1 (task without register, but addressable by id)", len(aw.events))
 	}
 	if aw.events[0].Payload["status"] != "TASK_STATUS_CHANGED" {
 		t.Fatalf("status = %v, want TASK_STATUS_CHANGED", aw.events[0].Payload["status"])
@@ -378,7 +378,7 @@ func TestKeeperTaskExecuted_NoRegisterButIDFoldsToChangedTask(t *testing.T) {
 
 	got := buildChangedTasks(tasks, plans, keys)
 	if len(got) != 1 {
-		t.Fatalf("buildChangedTasks: got %d, want 1 (keeper changed task должна попасть)", len(got))
+		t.Fatalf("buildChangedTasks: got %d, want 1 (keeper changed task should land)", len(got))
 	}
 	if got[0].ChangedHosts != 1 || got[0].TotalHosts != 1 {
 		t.Errorf("changed_hosts/total_hosts = %d/%d, want 1/1", got[0].ChangedHosts, got[0].TotalHosts)

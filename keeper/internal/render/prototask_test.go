@@ -28,7 +28,7 @@ func TestToProtoTasks(t *testing.T) {
 	// timeout: must reach the wire form (catches a threading regression —
 	// MAJOR #2: the field was silently dropped before RenderedTask.Timeout).
 	if pt.GetTimeout() != "30s" {
-		t.Errorf("timeout = %q, want 30s (протяжка config.Task → render → proto оборвана)", pt.GetTimeout())
+		t.Errorf("timeout = %q, want 30s (config.Task -> render -> proto propagation broken)", pt.GetTimeout())
 	}
 }
 
@@ -43,11 +43,11 @@ func TestToProtoTasks_OnChangesIdx(t *testing.T) {
 	}
 	got := ToProtoTasks(tasks)
 	if got[0].GetOnchangesIdx() != nil {
-		t.Errorf("источник: onchanges_idx = %v, want nil", got[0].GetOnchangesIdx())
+		t.Errorf("source: onchanges_idx = %v, want nil", got[0].GetOnchangesIdx())
 	}
 	oc := got[1].GetOnchangesIdx()
 	if len(oc) != 1 || oc[0] != 0 {
-		t.Errorf("потребитель: onchanges_idx = %v, want [0]", oc)
+		t.Errorf("consumer: onchanges_idx = %v, want [0]", oc)
 	}
 }
 
@@ -68,7 +68,7 @@ func TestToProtoTasks_RemapOnChangesGlobalToLocal(t *testing.T) {
 	got := ToProtoTasks(tasks)
 	oc := got[2].GetOnchangesIdx()
 	if len(oc) != 1 || oc[0] != 1 {
-		t.Fatalf("onchanges_idx = %v, want [1] (global Index 2 → локальная позиция 1; реверс без remap дал бы [2] → registerByIdx промах → restart молча SKIPPED)", oc)
+		t.Fatalf("onchanges_idx = %v, want [1] (global Index 2 -> local position 1; reverse without remap would give [2] -> registerByIdx miss -> restart silently SKIPPED)", oc)
 	}
 }
 
@@ -84,7 +84,7 @@ func TestToProtoTasks_RemapOnFailGlobalToLocal(t *testing.T) {
 	got := ToProtoTasks(tasks)
 	of := got[2].GetOnfailIdx()
 	if len(of) != 1 || of[0] != 1 {
-		t.Fatalf("onfail_idx = %v, want [1] (global Index 2 → локальная позиция 1; реверс дал бы [2] → onfail-rescue молча НЕ запускается)", of)
+		t.Fatalf("onfail_idx = %v, want [1] (global Index 2 -> local position 1; reverse would give [2] -> onfail-rescue silently does NOT run)", of)
 	}
 }
 
@@ -103,13 +103,13 @@ func TestToProtoTasks_RemapMissingSourceSentinel(t *testing.T) {
 	got := ToProtoTasks(tasks)
 	oc := got[1].GetOnchangesIdx()
 	if len(oc) != 2 {
-		t.Fatalf("onchanges_idx len = %d (%v), want 2 (отсутствующий источник кодируется sentinel-ом, НЕ выкидывается)", len(oc), oc)
+		t.Fatalf("onchanges_idx len = %d (%v), want 2 (a missing source is encoded with a sentinel, NOT dropped)", len(oc), oc)
 	}
 	if oc[0] != 0 {
-		t.Errorf("onchanges_idx[0] = %d, want 0 (присутствующий источник Index 0 → локальная 0)", oc[0])
+		t.Errorf("onchanges_idx[0] = %d, want 0 (a present source Index 0 -> local 0)", oc[0])
 	}
 	if oc[1] != outOfRangeRequisite {
-		t.Errorf("onchanges_idx[1] = %d, want %d (sentinel отсутствующего источника)", oc[1], outOfRangeRequisite)
+		t.Errorf("onchanges_idx[1] = %d, want %d (sentinel of a missing source)", oc[1], outOfRangeRequisite)
 	}
 }
 
@@ -126,7 +126,7 @@ func TestToProtoTasks_RemapIdentityBackwardCompat(t *testing.T) {
 	got := ToProtoTasks(tasks)
 	oc := got[2].GetOnchangesIdx()
 	if len(oc) != 2 || oc[0] != 0 || oc[1] != 1 {
-		t.Fatalf("onchanges_idx = %v, want [0 1] (identity: global==local при Index==позиция)", oc)
+		t.Fatalf("onchanges_idx = %v, want [0 1] (identity: global==local when Index==position)", oc)
 	}
 	for i, pt := range got {
 		if pt.GetPlanIndex() != int32(i) {

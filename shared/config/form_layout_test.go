@@ -27,17 +27,17 @@ input:
 form:
   sections:
     - key: connection
-      title: "Подключение"
-      description: "Сетевые параметры"
+      title: "Connection"
+      description: "Network parameters"
       collapsed: false
       fields:
         - { name: tls_enabled, label: "TLS" }
         - { name: tls_port }
     - key: secrets
-      title: "Секреты"
+      title: "Secrets"
       collapsed: true
       fields:
-        - { name: redis_password, label: "Пароль Redis" }
+        - { name: redis_password, label: "Redis password" }
 tasks: []
 `
 	cfg, _, diags, _ := LoadScenarioManifestFromBytes("main.yml", []byte(src), ValidateOptions{})
@@ -264,7 +264,7 @@ form:
       title: "TLS"
       show_when: "input.tls_enabled"
       fields:
-        - { name: tls_enabled, label: "Включить TLS" }
+        - { name: tls_enabled, label: "Enable TLS" }
         - { name: tls_port, show_when: "input.tls_enabled" }
 tasks: []
 `
@@ -352,7 +352,7 @@ form:
   sections:
     - key: s1
       fields:
-        - { name: port, placeholder: "6379", hint: "TCP-порт Redis" }
+        - { name: port, placeholder: "6379", hint: "Redis TCP port" }
         - { name: host }
 tasks: []
 `
@@ -362,7 +362,7 @@ tasks: []
 		t.Fatalf("expected zero diagnostics, got %d", len(diags))
 	}
 	f0 := cfg.Form.Sections[0].Fields[0]
-	if f0.Placeholder != "6379" || f0.Hint != "TCP-порт Redis" {
+	if f0.Placeholder != "6379" || f0.Hint != "Redis TCP port" {
 		t.Errorf("placeholder/hint not parsed: %#v", f0)
 	}
 	f1 := cfg.Form.Sections[0].Fields[1]

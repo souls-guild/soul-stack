@@ -58,7 +58,7 @@ func TestIsAllowed_NilModule(t *testing.T) {
 	t.Parallel()
 	// nil-mod: defensive reject, the hardcoded list still applies.
 	if ok, _ := IsAllowed("core.cmd.shell", nil); !ok {
-		t.Errorf("IsAllowed(core.cmd.shell, nil) = false; want true (hardcoded прежде marker-check)")
+		t.Errorf("IsAllowed(core.cmd.shell, nil) = false; want true (hardcoded before marker-check)")
 	}
 	if ok, _ := IsAllowed("core.pkg.installed", nil); ok {
 		t.Errorf("IsAllowed(core.pkg.installed, nil) = true; want false")

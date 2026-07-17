@@ -42,7 +42,7 @@ func requiredWhenEnv() (*cel.Env, error) {
 			cel.Variable("input", cel.DynType),
 		)
 		if inputEnvErr != nil {
-			inputEnvErr = fmt.Errorf("сборка CEL-окружения required_when: %w", inputEnvErr)
+			inputEnvErr = fmt.Errorf("building CEL environment for required_when: %w", inputEnvErr)
 		}
 	})
 	return inputEnv, inputEnvErr
@@ -97,7 +97,7 @@ func evalRequiredWhen(expr string, merged map[string]any) (bool, error) {
 	}
 	b, ok := out.Value().(bool)
 	if !ok {
-		return false, fmt.Errorf("required_when %q вернул %s, ожидался bool", expr, out.Type().TypeName())
+		return false, fmt.Errorf("required_when %q returned %s, expected bool", expr, out.Type().TypeName())
 	}
 	return b, nil
 }

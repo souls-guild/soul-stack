@@ -45,7 +45,7 @@ func TestLoadDestinyTasks_NotSequence(t *testing.T) {
 		t.Fatalf("err: %v", err)
 	}
 	if !diag.HasErrors(diags) {
-		t.Fatal("ожидалась type_mismatch-диагностика на mapping вместо sequence")
+		t.Fatal("expected a type_mismatch diagnostic for mapping instead of sequence")
 	}
 }
 
@@ -55,7 +55,7 @@ func TestLoadDestinyTasks_Empty(t *testing.T) {
 		t.Fatalf("err: %v", err)
 	}
 	if !diag.HasErrors(diags) {
-		t.Fatal("ожидалась empty_document-диагностика на пустой файл")
+		t.Fatal("expected an empty_document diagnostic for an empty file")
 	}
 }
 
@@ -67,6 +67,6 @@ func TestLoadDestinyTasks_BadTask(t *testing.T) {
 		t.Fatalf("err: %v", err)
 	}
 	if !diag.HasErrors(diags) {
-		t.Fatal("ожидалась диагностика на задачу без дискриминатора")
+		t.Fatal("expected a diagnostic for a task without a discriminator")
 	}
 }

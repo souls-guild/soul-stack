@@ -61,10 +61,10 @@ func TestSoulList_Reconnect_LeaseFlipsToConnected(t *testing.T) {
 	}
 	items := decodeListStatuses(t, rec.Body.Bytes())
 	if items["redis-01.example.com"] != "connected" {
-		t.Errorf("redis-01 status = %q, want connected (live lease, реконнект)", items["redis-01.example.com"])
+		t.Errorf("redis-01 status = %q, want connected (live lease, reconnect)", items["redis-01.example.com"])
 	}
 	if items["redis-02.example.com"] != "disconnected" {
-		t.Errorf("redis-02 status = %q, want disconnected (lease мёртв)", items["redis-02.example.com"])
+		t.Errorf("redis-02 status = %q, want disconnected (lease dead)", items["redis-02.example.com"])
 	}
 }
 
@@ -87,7 +87,7 @@ func TestSoulList_StaleConnectedSnapshot_LeaseFlipsToDisconnected(t *testing.T) 
 	}
 	items := decodeListStatuses(t, rec.Body.Bytes())
 	if items["web-01.example.com"] != "disconnected" {
-		t.Errorf("web-01 status = %q, want disconnected (lease мёртв)", items["web-01.example.com"])
+		t.Errorf("web-01 status = %q, want disconnected (lease dead)", items["web-01.example.com"])
 	}
 }
 
@@ -122,12 +122,12 @@ func TestSoulList_LifecycleStatusesNotOverlaid(t *testing.T) {
 	}
 	for sid, st := range want {
 		if items[sid] != st {
-			t.Errorf("%s status = %q, want %q (lifecycle — не presence)", sid, items[sid], st)
+			t.Errorf("%s status = %q, want %q (lifecycle - not presence)", sid, items[sid], st)
 		}
 	}
 	// The lease is NOT queried for any lifecycle SID (the overlay filters before the call).
 	if len(presence.gotSIDs) != 0 {
-		t.Errorf("presence.gotSIDs = %v, want [] (lifecycle-статусы не идут в lease-проверку)", presence.gotSIDs)
+		t.Errorf("presence.gotSIDs = %v, want [] (lifecycle statuses do not go into the lease check)", presence.gotSIDs)
 	}
 }
 
@@ -151,13 +151,13 @@ func TestSoulList_PresenceCheckScopedToSnapshotStatuses(t *testing.T) {
 	}
 	got := aliveSet(presence.gotSIDs...)
 	if _, ok := got["c-01.example.com"]; !ok {
-		t.Errorf("connected-SID не попал в lease-проверку: %v", presence.gotSIDs)
+		t.Errorf("connected-SID did not make it into the lease check: %v", presence.gotSIDs)
 	}
 	if _, ok := got["x-01.example.com"]; !ok {
-		t.Errorf("disconnected-SID не попал в lease-проверку: %v", presence.gotSIDs)
+		t.Errorf("disconnected-SID did not make it into the lease check: %v", presence.gotSIDs)
 	}
 	if _, ok := got["p-01.example.com"]; ok {
-		t.Errorf("pending-SID просочился в lease-проверку: %v", presence.gotSIDs)
+		t.Errorf("pending-SID leaked into the lease check: %v", presence.gotSIDs)
 	}
 }
 
@@ -175,11 +175,11 @@ func TestSoulList_PresenceFailSafe(t *testing.T) {
 
 	rec := doList(t, h, "")
 	if rec.Code != http.StatusOK {
-		t.Fatalf("status = %d, want 200 (fail-safe, не 500); body=%s", rec.Code, rec.Body.String())
+		t.Fatalf("status = %d, want 200 (fail-safe, not 500); body=%s", rec.Code, rec.Body.String())
 	}
 	items := decodeListStatuses(t, rec.Body.Bytes())
 	if items["redis-01.example.com"] != "disconnected" {
-		t.Errorf("redis-01 status = %q, want disconnected (PG-снимок, Redis-сбой)", items["redis-01.example.com"])
+		t.Errorf("redis-01 status = %q, want disconnected (PG snapshot, Redis failure)", items["redis-01.example.com"])
 	}
 }
 
@@ -200,7 +200,7 @@ func TestSoulList_NilPresence_SnapshotPassthrough(t *testing.T) {
 	}
 	items := decodeListStatuses(t, rec.Body.Bytes())
 	if items["redis-01.example.com"] != "disconnected" {
-		t.Errorf("redis-01 status = %q, want disconnected (presence=nil → PG-снимок)", items["redis-01.example.com"])
+		t.Errorf("redis-01 status = %q, want disconnected (presence=nil -> PG snapshot)", items["redis-01.example.com"])
 	}
 }
 
@@ -227,7 +227,7 @@ func TestGetSoul_Reconnect_LeaseFlipsToConnected(t *testing.T) {
 		t.Fatalf("decode: %v", err)
 	}
 	if out["status"] != "connected" {
-		t.Errorf("status = %v, want connected (live lease, реконнект)", out["status"])
+		t.Errorf("status = %v, want connected (live lease, reconnect)", out["status"])
 	}
 }
 

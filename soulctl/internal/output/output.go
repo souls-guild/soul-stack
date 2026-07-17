@@ -36,7 +36,7 @@ func ParseFormat(v string) (Format, error) {
 	case "yaml", "yml":
 		return FormatYAML, nil
 	default:
-		return "", fmt.Errorf("неизвестный формат %q: ожидается table|json|yaml", v)
+		return "", fmt.Errorf("unknown format %q: expected table|json|yaml", v)
 	}
 }
 

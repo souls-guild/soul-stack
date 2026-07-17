@@ -77,7 +77,7 @@ func (e *Engine) rewriteHostsWhere(expr string, allowHosts bool) (string, error)
 	if !containsWhereCall(root) {
 		// soulprint.hosts without .where (e.g. soulprint.hosts.size()).
 		if containsHostsAccessor(root) && !allowHosts {
-			return "", &ErrUnsupported{Expr: expr, Feature: "soulprint.hosts (scenario-only; недоступен в destiny-проходе)"}
+			return "", &ErrUnsupported{Expr: expr, Feature: "soulprint.hosts (scenario-only; not available in destiny pass)"}
 		}
 		return expr, nil
 	}
@@ -86,7 +86,7 @@ func (e *Engine) rewriteHostsWhere(expr string, allowHosts bool) (string, error)
 	// soulprint.hosts/soulprint.where is an error (destiny pass). A generic .where
 	// on a non-soulprint receiver is rejected below with a clear rewriteWhereCall error.
 	if !allowHosts && containsHostsAccessor(root) {
-		return "", &ErrUnsupported{Expr: expr, Feature: "soulprint.hosts (scenario-only; недоступен в destiny-проходе)"}
+		return "", &ErrUnsupported{Expr: expr, Feature: "soulprint.hosts (scenario-only; not available in destiny pass)"}
 	}
 
 	fac := ast.NewExprFactory()
@@ -99,7 +99,7 @@ func (e *Engine) rewriteHostsWhere(expr string, allowHosts bool) (string, error)
 
 	out, err := parser.Unparse(rewritten, parsed.SourceInfo())
 	if err != nil {
-		return "", &ErrCompile{Expr: expr, Err: fmt.Errorf("unparse переписанного дерева: %w", err)}
+		return "", &ErrCompile{Expr: expr, Err: fmt.Errorf("unparse rewritten tree: %w", err)}
 	}
 	return out, nil
 }
@@ -175,7 +175,7 @@ func (e *Engine) rewriteNode(fac ast.ExprFactory, node ast.Expr, iter string) (a
 func (e *Engine) rewriteWhereCall(fac ast.ExprFactory, node ast.Expr, iter string) (ast.Expr, error) {
 	c := node.AsCall()
 	if len(c.Args()) != 1 {
-		return nil, fmt.Errorf(".where(...) принимает ровно один аргумент-предикат (получено %d)", len(c.Args()))
+		return nil, fmt.Errorf(".where(...) takes exactly one predicate argument (got %d)", len(c.Args()))
 	}
 
 	hostsReceiver, err := e.hostsReceiver(fac, c.Target(), iter)
@@ -198,7 +198,7 @@ func (e *Engine) rewriteWhereCall(fac ast.ExprFactory, node ast.Expr, iter strin
 	}
 	pred := predParsed.Expr()
 	if nestedWhere(pred) {
-		return nil, fmt.Errorf("nested .where(...) внутри предиката не поддерживается")
+		return nil, fmt.Errorf("nested .where(...) inside a predicate is not supported")
 	}
 
 	boundPred := e.qualifyPredicate(fac, pred, iter, nil)
@@ -229,7 +229,7 @@ func (e *Engine) hostsReceiver(fac ast.ExprFactory, recv ast.Expr, iter string) 
 			return e.rewriteWhereCall(fac, recv, iter)
 		}
 	}
-	return nil, fmt.Errorf(".where(...) разрешён только на soulprint.hosts / soulprint.where(...); generic .where на произвольном списке запрещён")
+	return nil, fmt.Errorf(".where(...) is only allowed on soulprint.hosts / soulprint.where(...); generic .where on an arbitrary list is prohibited")
 }
 
 // qualifyPredicate qualifies "bare" element fields in the predicate (role,

@@ -58,7 +58,7 @@ func buildFuncMap() (template.FuncMap, error) {
 	for _, name := range allowedSprig {
 		fn, ok := src[name]
 		if !ok {
-			return nil, fmt.Errorf("tmpl: функция %q из allowlist отсутствует в sprig", name)
+			return nil, fmt.Errorf("tmpl: function %q from allowlist missing in sprig", name)
 		}
 		funcs[name] = fn
 	}

@@ -117,7 +117,7 @@ func TestAdaptivePollInterval_FailoverStateless(t *testing.T) {
 	// "New leader" after failover — same registry, same config.
 	b := AdaptivePollInterval(context.Background(), calmCorridor, fetcher, nil)
 	if a != b {
-		t.Errorf("stateless нарушен: leader1=%v leader2=%v", a, b)
+		t.Errorf("stateless violated: leader1=%v leader2=%v", a, b)
 	}
 	if a != 45*time.Second {
 		t.Errorf("derived(min(45,60)) clamp = %v, want 45s", a)

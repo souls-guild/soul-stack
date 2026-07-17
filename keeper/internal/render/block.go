@@ -308,13 +308,13 @@ func unionNames(blockNames, childNames []string) []string {
 func guardPilotBlockChild(child config.Task, idx int, blockName string) error {
 	switch {
 	case child.Loop != nil:
-		return fmt.Errorf("%w: loop: на потомке block %q (task[%d] %q) — вне pilot-объёма block", ErrUnsupportedDSL, blockName, idx, child.Name)
+		return fmt.Errorf("%w: loop: on descendant of block %q (task[%d] %q) - outside block pilot scope", ErrUnsupportedDSL, blockName, idx, child.Name)
 	case child.Parallel:
-		return fmt.Errorf("%w: parallel: на потомке block %q (task[%d] %q) — вне pilot-объёма block", ErrUnsupportedDSL, blockName, idx, child.Name)
+		return fmt.Errorf("%w: parallel: on descendant of block %q (task[%d] %q) - outside block pilot scope", ErrUnsupportedDSL, blockName, idx, child.Name)
 	case child.Include != nil:
-		return fmt.Errorf("%w: include: на потомке block %q (task[%d] %q)", ErrUnexpandedInclude, blockName, idx, child.Name)
+		return fmt.Errorf("%w: include: on descendant of block %q (task[%d] %q)", ErrUnexpandedInclude, blockName, idx, child.Name)
 	case child.Module == nil && child.Apply == nil && child.Block == nil:
-		return fmt.Errorf("%w: task[%d] %q в block %q не является module/apply/block-задачей", ErrUnsupportedDSL, idx, child.Name, blockName)
+		return fmt.Errorf("%w: task[%d] %q in block %q is not a module/apply/block task", ErrUnsupportedDSL, idx, child.Name, blockName)
 	}
 	return nil
 }

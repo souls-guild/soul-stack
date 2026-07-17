@@ -123,9 +123,9 @@ tasks:
 	// host-a: config-change is present (local 0), restart (local 1). onchanges_idx
 	// restart = [0] — the source's LOCAL position in host-a's slice.
 	if idxA, ok := disp.onchanges("host-a.example.com", "restart"); !ok {
-		t.Fatalf("host-a: restart не пришёл в ApplyRequest")
+		t.Fatalf("host-a: restart did not arrive in ApplyRequest")
 	} else if len(idxA) != 1 || idxA[0] != 0 {
-		t.Fatalf("host-a: restart onchanges_idx = %v, want [0] (источник config-change на локальной позиции 0)", idxA)
+		t.Fatalf("host-a: restart onchanges_idx = %v, want [0] (config-change source at local position 0)", idxA)
 	}
 
 	// ★ host-b: config-change is FILTERED OUT by where: → the slice has ONLY
@@ -134,14 +134,14 @@ tasks:
 	// registerByIdx[0]=restart itself → false gating (misfire).
 	idxB, ok := disp.onchanges("host-b.example.com", "restart")
 	if !ok {
-		t.Fatalf("host-b: restart не пришёл в ApplyRequest (должен — onchanges не режет таргет)")
+		t.Fatalf("host-b: restart did not arrive in ApplyRequest (it should - onchanges does not cut the target)")
 	}
 	if len(idxB) != 1 || idxB[0] != -1 {
-		t.Fatalf("★ host-b: restart onchanges_idx = %v, want [-1] (источник config-change отфильтрован where → sentinel; реверс без remap дал бы [0] = глобальный Index → registerByIdx-промах → restart мисфайрит)", idxB)
+		t.Fatalf("* host-b: restart onchanges_idx = %v, want [-1] (config-change source filtered out by where -> sentinel; reverse without remap would give [0] = global Index -> registerByIdx miss -> restart misfires)", idxB)
 	}
 
 	// host-b must NOT carry the config-change task at all (where filtered it out).
 	if _, present := disp.onchanges("host-b.example.com", "config-change"); present {
-		t.Errorf("host-b: config-change не должен был попасть в срез (where: только host-a)")
+		t.Errorf("host-b: config-change should not have made it into the slice (where: host-a only)")
 	}
 }

@@ -178,7 +178,7 @@ func TestIntegration_Cluster_HeraldNoCrossSlot(t *testing.T) {
 		t.Fatalf("CLUSTER KEYSLOT lease: %v", err)
 	}
 	if slotPending != slotProcessing || slotPending != slotLease {
-		t.Fatalf("hash-tag {q} не свёл ключи в один слот: pending=%d processing=%d lease=%d",
+		t.Fatalf("hash-tag {q} did not converge keys into one slot: pending=%d processing=%d lease=%d",
 			slotPending, slotProcessing, slotLease)
 	}
 
@@ -195,7 +195,7 @@ func TestIntegration_Cluster_HeraldNoCrossSlot(t *testing.T) {
 	if err != nil {
 		// This is exactly where CROSSSLOT would show up if the keys were in different slots.
 		if strings.Contains(strings.ToUpper(err.Error()), "CROSSSLOT") {
-			t.Fatalf("БЛОКЕР 1 регрессировал: Claim вернул CROSSSLOT: %v", err)
+			t.Fatalf("BLOCKER 1 regressed: Claim returned CROSSSLOT: %v", err)
 		}
 		t.Fatalf("Claim: %v", err)
 	}
@@ -238,7 +238,7 @@ func TestIntegration_Cluster_CountLiveCrossNode(t *testing.T) {
 		slots[slot] = struct{}{}
 	}
 	if len(slots) < 2 {
-		t.Fatalf("presence-ключи не распределились по слотам (slots=%v) — тест не доказателен", slots)
+		t.Fatalf("presence keys did not spread across slots (slots=%v) -- test is not conclusive", slots)
 	}
 
 	got, err := CountLive(ctx, c)
@@ -246,7 +246,7 @@ func TestIntegration_Cluster_CountLiveCrossNode(t *testing.T) {
 		t.Fatalf("CountLive: %v", err)
 	}
 	if got != len(kids) {
-		t.Fatalf("БЛОКЕР 2 guard: CountLive=%d, want %d — per-master SCAN недосчитал cross-node presence", got, len(kids))
+		t.Fatalf("BLOCKER 2 guard: CountLive=%d, want %d -- per-master SCAN undercounted cross-node presence", got, len(kids))
 	}
 
 	live, err := LiveKIDs(ctx, c)
@@ -259,7 +259,7 @@ func TestIntegration_Cluster_CountLiveCrossNode(t *testing.T) {
 	}
 	for _, k := range kids {
 		if !seen[k] {
-			t.Errorf("LiveKIDs не вернул %q (cross-node недосчёт)", k)
+			t.Errorf("LiveKIDs did not return %q (cross-node undercount)", k)
 		}
 	}
 }

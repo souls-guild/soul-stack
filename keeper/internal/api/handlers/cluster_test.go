@@ -79,13 +79,13 @@ func TestClusterGetTyped_ListsInstancesFromConclave(t *testing.T) {
 	wantOrder := []string{"keeper-a", "keeper-b", "keeper-c"}
 	for i, inst := range reply.Body.Instances {
 		if inst.KID != wantOrder[i] {
-			t.Errorf("Instances[%d].KID = %q, want %q (стабильный порядок по KID)", i, inst.KID, wantOrder[i])
+			t.Errorf("Instances[%d].KID = %q, want %q (stable order by KID)", i, inst.KID, wantOrder[i])
 		}
 		if !inst.Alive {
-			t.Errorf("Instances[%d].Alive = false, want true (KID из LiveKIDs)", i)
+			t.Errorf("Instances[%d].Alive = false, want true (KID from LiveKIDs)", i)
 		}
 		if inst.StartedAt == nil {
-			t.Errorf("Instances[%d].StartedAt = nil, want распарсенный из meta", i)
+			t.Errorf("Instances[%d].StartedAt = nil, want parsed from meta", i)
 		}
 	}
 	// self_health reuses health.Check.
@@ -93,7 +93,7 @@ func TestClusterGetTyped_ListsInstancesFromConclave(t *testing.T) {
 		t.Errorf("SelfHealth = %v, want postgres:ok redis:ok", reply.Body.SelfHealth)
 	}
 	if _, hasVault := reply.Body.SelfHealth["vault"]; hasVault {
-		t.Errorf("SelfHealth содержит vault, а Vault-pinger был nil (check должен пропуститься): %v", reply.Body.SelfHealth)
+		t.Errorf("SelfHealth contains vault, but the Vault-pinger was nil (check should have been skipped): %v", reply.Body.SelfHealth)
 	}
 }
 
@@ -112,10 +112,10 @@ func TestClusterGetTyped_ReaperLeaderHolder(t *testing.T) {
 		byKID[inst.KID] = inst
 	}
 	if !byKID["keeper-b"].IsReaperLeader {
-		t.Error("keeper-b (holder ключа reaper:leader) IsReaperLeader=false, want true")
+		t.Error("keeper-b (holder of the reaper:leader key) IsReaperLeader=false, want true")
 	}
 	if byKID["keeper-a"].IsReaperLeader {
-		t.Error("keeper-a (не holder) IsReaperLeader=true, want false")
+		t.Error("keeper-a (not the holder) IsReaperLeader=true, want false")
 	}
 }
 
@@ -131,7 +131,7 @@ func TestClusterGetTyped_NoReaperLeader(t *testing.T) {
 	}
 	for _, inst := range reply.Body.Instances {
 		if inst.IsReaperLeader {
-			t.Errorf("%s IsReaperLeader=true при отсутствии лидера, want false", inst.KID)
+			t.Errorf("%s IsReaperLeader=true with no leader present, want false", inst.KID)
 		}
 	}
 }
@@ -144,10 +144,10 @@ func TestClusterGetTyped_LeaderReadError_FailSafe(t *testing.T) {
 
 	reply, err := h.GetTyped(context.Background(), nil)
 	if err != nil {
-		t.Fatalf("GetTyped: %v (leader-read-error должен быть fail-safe, не 500)", err)
+		t.Fatalf("GetTyped: %v (leader-read-error should be fail-safe, not 500)", err)
 	}
 	if len(reply.Body.Instances) != 1 || reply.Body.Instances[0].IsReaperLeader {
-		t.Errorf("view = %+v, want 1 инстанс без reaper-leader (fail-safe)", reply.Body.Instances)
+		t.Errorf("view = %+v, want 1 instance without reaper-leader (fail-safe)", reply.Body.Instances)
 	}
 }
 
@@ -160,17 +160,17 @@ func TestClusterGetTyped_ConclaveDown_SelfOnly(t *testing.T) {
 
 	reply, err := h.GetTyped(context.Background(), nil)
 	if err != nil {
-		t.Fatalf("GetTyped: %v (Conclave-down должен быть fail-safe, не 500)", err)
+		t.Fatalf("GetTyped: %v (Conclave-down should be fail-safe, not 500)", err)
 	}
 	if len(reply.Body.Instances) != 1 || reply.Body.Instances[0].KID != "keeper-a" {
 		t.Fatalf("Instances = %+v, want self-only [keeper-a]", reply.Body.Instances)
 	}
 	if !reply.Body.Instances[0].Alive {
-		t.Error("self-инстанс Alive=false, want true")
+		t.Error("self-instance Alive=false, want true")
 	}
 	// self_health reflects the Redis failure.
 	if reply.Body.SelfHealth["redis"] == "ok" {
-		t.Errorf("SelfHealth[redis] = ok, want причину падения: %v", reply.Body.SelfHealth)
+		t.Errorf("SelfHealth[redis] = ok, want the failure reason: %v", reply.Body.SelfHealth)
 	}
 }
 
@@ -189,7 +189,7 @@ func TestClusterGetTyped_SelfMissingFromLiveKIDs(t *testing.T) {
 		found[inst.KID] = true
 	}
 	if !found["keeper-a"] || !found["keeper-b"] {
-		t.Errorf("Instances = %+v, want содержит и keeper-a (self, дописан), и keeper-b", reply.Body.Instances)
+		t.Errorf("Instances = %+v, want contains both keeper-a (self, appended) and keeper-b", reply.Body.Instances)
 	}
 }
 
@@ -210,9 +210,9 @@ func TestClusterGetTyped_BadMeta_StartedAtOmitted(t *testing.T) {
 		t.Fatalf("Instances len = %d, want 1", len(reply.Body.Instances))
 	}
 	if reply.Body.Instances[0].StartedAt != nil {
-		t.Errorf("StartedAt = %v, want nil (не-JSON meta → опущен)", reply.Body.Instances[0].StartedAt)
+		t.Errorf("StartedAt = %v, want nil (non-JSON meta -> omitted)", reply.Body.Instances[0].StartedAt)
 	}
 	if !reply.Body.Instances[0].Alive {
-		t.Error("Alive=false при битой meta, want true (meta не влияет на alive)")
+		t.Error("Alive=false with corrupt meta, want true (meta doesn't affect alive)")
 	}
 }

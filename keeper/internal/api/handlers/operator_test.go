@@ -30,11 +30,11 @@ func claims(subject string) *keeperjwt.Claims { return &keeperjwt.Claims{Subject
 func wantProblem(t *testing.T, err error, want string) {
 	t.Helper()
 	if err == nil {
-		t.Fatalf("ожидалась ошибка %q, получено nil", want)
+		t.Fatalf("expected error %q, got nil", want)
 	}
 	d, ok := AsProblemDetails(err)
 	if !ok {
-		t.Fatalf("ошибка не *problemError: %v", err)
+		t.Fatalf("error is not *problemError: %v", err)
 	}
 	if d.Type != want {
 		t.Errorf("problem.Type = %q, want %q", d.Type, want)
@@ -742,7 +742,7 @@ func TestOperatorCreateTyped_WithRoles_201(t *testing.T) {
 		t.Errorf("GrantedRoles = %v, want [cluster-readonly, incarnation-operator]", reply.GrantedRoles)
 	}
 	if len(pool.roleGrants) != 2 {
-		t.Errorf("pool.roleGrants = %v, want 2 grant-а", pool.roleGrants)
+		t.Errorf("pool.roleGrants = %v, want 2 grants", pool.roleGrants)
 	}
 }
 
@@ -763,7 +763,7 @@ func TestOperatorCreateTyped_WithRoles_UnknownRole_404(t *testing.T) {
 	})
 	wantProblem(t, err, problem.TypeRoleNotFound)
 	if len(pool.roleGrants) != 0 {
-		t.Errorf("pool.roleGrants = %v, want 0 при rollback", pool.roleGrants)
+		t.Errorf("pool.roleGrants = %v, want 0 on rollback", pool.roleGrants)
 	}
 }
 
@@ -777,7 +777,7 @@ func TestOperatorCreateTyped_WithRoles_InvalidRoleName_422(t *testing.T) {
 	})
 	wantProblem(t, err, problem.TypeValidationFailed)
 	if pool.insertCalls != 0 {
-		t.Errorf("insertCalls = %d, want 0 — pre-валидация до tx", pool.insertCalls)
+		t.Errorf("insertCalls = %d, want 0 - pre-validation before tx", pool.insertCalls)
 	}
 }
 
@@ -799,9 +799,9 @@ func TestOperatorCreateTyped_WithoutRoles_201_BackwardCompat(t *testing.T) {
 		t.Fatalf("CreateTyped: %v", err)
 	}
 	if len(reply.GrantedRoles) != 0 {
-		t.Errorf("GrantedRoles = %v, want пусто без roles[]", reply.GrantedRoles)
+		t.Errorf("GrantedRoles = %v, want empty without roles[]", reply.GrantedRoles)
 	}
 	if len(pool.roleGrants) != 0 {
-		t.Errorf("roleGrants = %v, want 0 без roles[]", pool.roleGrants)
+		t.Errorf("roleGrants = %v, want 0 without roles[]", pool.roleGrants)
 	}
 }

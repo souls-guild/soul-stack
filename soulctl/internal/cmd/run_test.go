@@ -61,7 +61,7 @@ func TestRunCmd_BuildPayload(t *testing.T) {
 		t.Fatalf("Create: %v", err)
 	}
 	if reply.VoyageID == "" {
-		t.Error("voyage_id пуст")
+		t.Error("voyage_id is empty")
 	}
 
 	if got := captured["kind"]; got != "command" {
@@ -185,10 +185,10 @@ func TestVoyageCreate_BatchOmittedWhenEmpty(t *testing.T) {
 		t.Fatalf("Create: %v", err)
 	}
 	if _, ok := captured["batch"]; ok {
-		t.Errorf("пустой batch не должен попадать в body, got %v", captured["batch"])
+		t.Errorf("empty batch must not end up in the body, got %v", captured["batch"])
 	}
 	if _, ok := captured["max_failures"]; ok {
-		t.Errorf("пустой max_failures не должен попадать в body, got %v", captured["max_failures"])
+		t.Errorf("empty max_failures must not end up in the body, got %v", captured["max_failures"])
 	}
 }
 
@@ -315,7 +315,7 @@ func TestRunScenario_BuildPayload(t *testing.T) {
 		t.Fatalf("Create: %v", err)
 	}
 	if reply.VoyageID == "" {
-		t.Error("voyage_id пуст")
+		t.Error("voyage_id is empty")
 	}
 	if got := captured["kind"]; got != "scenario" {
 		t.Errorf("kind: %v", got)
@@ -354,7 +354,7 @@ func TestRunPush_BuildPayload(t *testing.T) {
 		t.Fatalf("Apply: %v", err)
 	}
 	if reply.ApplyID == "" {
-		t.Error("apply_id пуст")
+		t.Error("apply_id is empty")
 	}
 	inv := captured["inventory"].([]any)
 	if len(inv) != 2 || inv[0] != "bastion-a" {
@@ -380,7 +380,7 @@ func TestRunPush_RejectsDynamicTarget(t *testing.T) {
 	for _, tf := range cases {
 		target, _ := tf.resolve()
 		if err := validatePushTarget(target); err == nil {
-			t.Errorf("validatePushTarget(%+v) должен ошибиться", tf)
+			t.Errorf("validatePushTarget(%+v) should error", tf)
 		}
 	}
 	// happy path
@@ -404,7 +404,7 @@ func TestParseServiceScenario(t *testing.T) {
 	bad := []string{"redis", "", "/", "redis/", "/create", "redis/sub/path"}
 	for _, b := range bad {
 		if _, _, err := parseServiceScenario(b); err == nil {
-			t.Errorf("parseServiceScenario(%q) должен ошибиться", b)
+			t.Errorf("parseServiceScenario(%q) should error", b)
 		}
 	}
 }
@@ -439,7 +439,7 @@ func TestAutoDetectIncarnation(t *testing.T) {
 		got, err := autoDetectIncarnation(context.Background(), cl, "redis")
 		if tc.wantErr {
 			if err == nil {
-				t.Errorf("autoDetect(%d items): ожидалась ошибка", len(items))
+				t.Errorf("autoDetect(%d items): expected an error", len(items))
 			}
 			continue
 		}
@@ -469,10 +469,10 @@ func TestRunScenario_AutoDetect_Many(t *testing.T) {
 	})
 	_, err := autoDetectIncarnation(context.Background(), cl, "redis")
 	if err == nil {
-		t.Fatal("ожидалась ошибка о нескольких incarnation")
+		t.Fatal("expected an error about multiple incarnations")
 	}
 	if !strings.Contains(err.Error(), "redis-a") || !strings.Contains(err.Error(), "redis-b") {
-		t.Errorf("ошибка должна содержать список: %q", err.Error())
+		t.Errorf("error must contain the list: %q", err.Error())
 	}
 }
 
@@ -481,12 +481,12 @@ func TestIsVoyageTerminal(t *testing.T) {
 	terminal := []string{"succeeded", "failed", "partial_failed", "cancelled"}
 	for _, s := range terminal {
 		if !isVoyageTerminal(s) {
-			t.Errorf("%q должен быть terminal", s)
+			t.Errorf("%q should be terminal", s)
 		}
 	}
 	for _, s := range []string{"pending", "running", "scheduled", "", "unknown"} {
 		if isVoyageTerminal(s) {
-			t.Errorf("%q НЕ должен быть terminal", s)
+			t.Errorf("%q must NOT be terminal", s)
 		}
 	}
 }

@@ -64,22 +64,22 @@ func TestIncludeGroupDrop_WhenFalse_TasksAbsent(t *testing.T) {
 		t.Fatalf("Render: %v", err)
 	}
 	if len(tasks) != 2 {
-		t.Fatalf("len(tasks) = %d, want 2 (head + tail; группа дропнута БЕЗ placeholder)", len(tasks))
+		t.Fatalf("len(tasks) = %d, want 2 (head + tail; group dropped WITHOUT placeholder)", len(tasks))
 	}
 	if len(plans) != 2 {
-		t.Fatalf("len(plans) = %d, want 2 (дроп не резервирует план)", len(plans))
+		t.Fatalf("len(plans) = %d, want 2 (drop does not reserve a plan)", len(plans))
 	}
 	for _, rt := range tasks {
 		if rt.Name == "cluster-a" || rt.Name == "cluster-b" {
-			t.Fatalf("задача %q дропнутой группы присутствует в плане", rt.Name)
+			t.Fatalf("task %q of the dropped group is present in the plan", rt.Name)
 		}
 	}
 	// Indices are contiguous with no gaps: head=0, tail=1 (NOT tail=3 with gaps at 1,2).
 	if tasks[0].Index != 0 || tasks[1].Index != 1 {
-		t.Errorf("Index = %d,%d, want 0,1 (сквозные без дыр — дроп не резервирует idx)", tasks[0].Index, tasks[1].Index)
+		t.Errorf("Index = %d,%d, want 0,1 (contiguous, no gaps - drop does not reserve idx)", tasks[0].Index, tasks[1].Index)
 	}
 	if tasks[0].Name != "head" || tasks[1].Name != "tail" {
-		t.Errorf("план = [%q,%q], want [head,tail]", tasks[0].Name, tasks[1].Name)
+		t.Errorf("plan = [%q,%q], want [head,tail]", tasks[0].Name, tasks[1].Name)
 	}
 	if plans[0].TaskIndex != 0 || plans[1].TaskIndex != 1 {
 		t.Errorf("plans TaskIndex = %d,%d, want 0,1", plans[0].TaskIndex, plans[1].TaskIndex)
@@ -110,7 +110,7 @@ func TestIncludeGroupDrop_WhenTrue_TasksPresent(t *testing.T) {
 		t.Fatalf("Render: %v", err)
 	}
 	if len(tasks) != 4 {
-		t.Fatalf("len(tasks) = %d, want 4 (head + 2 группы + tail)", len(tasks))
+		t.Fatalf("len(tasks) = %d, want 4 (head + 2 groups + tail)", len(tasks))
 	}
 	want := []string{"head", "cluster-a", "cluster-b", "tail"}
 	for i, w := range want {
@@ -118,12 +118,12 @@ func TestIncludeGroupDrop_WhenTrue_TasksPresent(t *testing.T) {
 			t.Errorf("tasks[%d].Name = %q, want %q", i, tasks[i].Name, w)
 		}
 		if tasks[i].Index != i {
-			t.Errorf("tasks[%d].Index = %d, want %d (сквозная нумерация)", i, tasks[i].Index, i)
+			t.Errorf("tasks[%d].Index = %d, want %d (contiguous numbering)", i, tasks[i].Index, i)
 		}
 	}
 	// The group renders fully (Params non-empty — normal path, not a placeholder).
 	if tasks[1].Params == nil {
-		t.Error("cluster-a.Params == nil — include-when:true должен рендерить группу обычным путём")
+		t.Error("cluster-a.Params == nil - include-when:true should render the group the normal way")
 	}
 	if got := tasks[1].Params.GetFields()["cmd"].GetStringValue(); got != "ca" {
 		t.Errorf("cluster-a.cmd = %q, want ca", got)
@@ -199,10 +199,10 @@ func TestIncludeGroupDrop_OnChangesWithinGroupSafe(t *testing.T) {
 	}
 	tasks, _, err := p.Render(context.Background(), in)
 	if err != nil {
-		t.Fatalf("Render: дроп группы с внутренним onchanges НЕ должен падать ErrOnChangesUnknownRegister, got %v", err)
+		t.Fatalf("Render: dropping a group with an internal onchanges should NOT fail with ErrOnChangesUnknownRegister, got %v", err)
 	}
 	if len(tasks) != 1 || tasks[0].Name != "head" {
-		t.Fatalf("план = %d задач, want [head] (вся группа — emitter+consumer — дропнута)", len(tasks))
+		t.Fatalf("plan = %d tasks, want [head] (the whole group - emitter+consumer - is dropped)", len(tasks))
 	}
 }
 
@@ -241,28 +241,28 @@ func TestIncludeGroupDrop_CoexistsWithBlockPlaceholderSkip(t *testing.T) {
 	}
 	// head + block-child(placeholder) + tail = 3; the include group is dropped (gone).
 	if len(tasks) != 3 {
-		t.Fatalf("len(tasks) = %d, want 3 (head + block-child-placeholder + tail; inc-группа дропнута)", len(tasks))
+		t.Fatalf("len(tasks) = %d, want 3 (head + block-child-placeholder + tail; inc-group dropped)", len(tasks))
 	}
 	names := map[string]*RenderedTask{}
 	for _, rt := range tasks {
 		names[rt.Name] = rt
 	}
 	if _, ok := names["inc-a"]; ok {
-		t.Error("inc-a присутствует — условный include должен быть РЕАЛЬНО дропнут (group-drop)")
+		t.Error("inc-a is present - the conditional include should be ACTUALLY dropped (group-drop)")
 	}
 	bc, ok := names["block-child"]
 	if !ok {
-		t.Fatal("block-child отсутствует — block-static-skip должен оставить placeholder (НЕ дроп)")
+		t.Fatal("block-child is absent - block-static-skip should leave a placeholder (NOT drop)")
 	}
 	if bc.Params != nil {
-		t.Error("block-child.Params != nil — static-false block-потомок должен быть skip-placeholder")
+		t.Error("block-child.Params != nil - static-false block-child should be a skip-placeholder")
 	}
 	if bc.FlowContext == nil {
-		t.Error("block-child.FlowContext == nil — placeholder несёт flow_context для Soul-side evalWhen")
+		t.Error("block-child.FlowContext == nil - placeholder carries flow_context for Soul-side evalWhen")
 	}
 	// tail after the group drop — index is contiguous (after head=0, block-child=1 → tail=2).
 	tail := names["tail"]
 	if tail == nil || tail.Index != 2 {
-		t.Errorf("tail.Index = %v, want 2 (block-placeholder резервирует idx, include-drop — нет)", tail)
+		t.Errorf("tail.Index = %v, want 2 (block-placeholder reserves idx, include-drop does not)", tail)
 	}
 }

@@ -35,7 +35,7 @@ func assertCurrent(t *testing.T, dir, want string) {
 		t.Fatalf("readlink %s: %v", link, err)
 	}
 	if filepath.IsAbs(target) {
-		t.Errorf("current -> %q; ждём относительный симлинк", target)
+		t.Errorf("current -> %q; expected a relative symlink", target)
 	}
 	if target != want {
 		t.Errorf("current -> %q; want %q", target, want)
@@ -59,13 +59,13 @@ func TestPathsIn(t *testing.T) {
 func TestLoad_EmptyDir(t *testing.T) {
 	_, err := Load("")
 	if err == nil {
-		t.Fatal("Load(\"\") должна вернуть ошибку")
+		t.Fatal("Load(\"\") should return an error")
 	}
 	if errors.Is(err, ErrIncomplete) {
-		t.Fatalf("пустой dir — не ErrIncomplete, а ошибка конфига: %v", err)
+		t.Fatalf("empty dir - not ErrIncomplete, but a config error: %v", err)
 	}
 	if !strings.Contains(err.Error(), "paths.seed is empty") {
-		t.Fatalf("ошибка = %v; ждём про пустой paths.seed", err)
+		t.Fatalf("error = %v; expected mention of empty paths.seed", err)
 	}
 }
 
@@ -82,10 +82,10 @@ func TestLoad_PartialVersion(t *testing.T) {
 	}
 	_, err := Load(dir)
 	if !errors.Is(err, ErrIncomplete) {
-		t.Fatalf("Load с неполной версией: %v; want ErrIncomplete", err)
+		t.Fatalf("Load with an incomplete version: %v; want ErrIncomplete", err)
 	}
 	if !strings.Contains(err.Error(), CAFile) {
-		t.Fatalf("ошибка должна называть ca.pem: %v", err)
+		t.Fatalf("error should name ca.pem: %v", err)
 	}
 }
 
@@ -107,10 +107,10 @@ func TestLoad_Mismatched(t *testing.T) {
 	}
 	_, err := Load(dir)
 	if !errors.Is(err, ErrMismatched) {
-		t.Fatalf("Load с рассинхроном пары: %v; want ErrMismatched", err)
+		t.Fatalf("Load with a mismatched pair: %v; want ErrMismatched", err)
 	}
 	if errors.Is(err, ErrIncomplete) {
-		t.Fatalf("рассинхрон — не ErrIncomplete: %v", err)
+		t.Fatalf("mismatch - not ErrIncomplete: %v", err)
 	}
 }
 
@@ -126,37 +126,37 @@ func TestLoad_UnreadableCert(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = os.Chmod(cert, 0o644) })
 	if canStillRead(cert) {
-		t.Skip("FS/уровень привилегий игнорирует права на чтение (root?) — пропускаем")
+		t.Skip("FS/privilege level ignores read permissions (root?) - skipping")
 	}
 	_, err := Load(dir)
 	if err == nil {
-		t.Fatal("Load с нечитаемым cert должна вернуть ошибку")
+		t.Fatal("Load with an unreadable cert should return an error")
 	}
 	if errors.Is(err, ErrIncomplete) {
-		t.Fatalf("нечитаемый существующий файл — не ErrIncomplete: %v", err)
+		t.Fatalf("unreadable existing file - not ErrIncomplete: %v", err)
 	}
 	if !strings.Contains(err.Error(), "read") || !strings.Contains(err.Error(), CertFile) {
-		t.Fatalf("ждём обёрнутую read-ошибку cert: %v", err)
+		t.Fatalf("expected a wrapped read error for cert: %v", err)
 	}
 }
 
 func TestWrite_EmptyDir(t *testing.T) {
 	err := Write("", validMaterial(t, "ca"))
 	if err == nil {
-		t.Fatal("Write(\"\") должна вернуть ошибку")
+		t.Fatal("Write(\"\") should return an error")
 	}
 	if !strings.Contains(err.Error(), "paths.seed is empty") {
-		t.Fatalf("ошибка = %v; ждём про пустой paths.seed", err)
+		t.Fatalf("error = %v; expected mention of empty paths.seed", err)
 	}
 }
 
 func TestWrite_NilMaterial(t *testing.T) {
 	err := Write(t.TempDir(), nil)
 	if err == nil {
-		t.Fatal("Write(nil material) должна вернуть ошибку")
+		t.Fatal("Write(nil material) should return an error")
 	}
 	if !strings.Contains(err.Error(), "material is nil") {
-		t.Fatalf("ошибка = %v; ждём про nil material", err)
+		t.Fatalf("error = %v; expected mention of nil material", err)
 	}
 }
 
@@ -168,14 +168,14 @@ func TestWrite_MismatchedFailFast(t *testing.T) {
 	_, otherKey := keypair(t)
 	err := Write(dir, &Material{CertPEM: cert, KeyPEM: otherKey, CAPEM: []byte("ca")})
 	if !errors.Is(err, ErrMismatched) {
-		t.Fatalf("Write несогласованной пары: %v; want ErrMismatched", err)
+		t.Fatalf("Write of a mismatched pair: %v; want ErrMismatched", err)
 	}
 	// No version on disk.
 	if v := readVersions(t, dir); len(v) != 0 {
-		t.Fatalf("после fail-fast на диске есть версии %v; ждём пусто", v)
+		t.Fatalf("after fail-fast there are versions %v on disk; expected empty", v)
 	}
 	if _, statErr := os.Lstat(filepath.Join(dir, currentLink)); statErr == nil {
-		t.Fatal("current не должен существовать после fail-fast")
+		t.Fatal("current should not exist after fail-fast")
 	}
 }
 
@@ -192,20 +192,20 @@ func TestWrite_FailFastKeepsOldCurrent(t *testing.T) {
 	cert, _ := keypair(t)
 	_, otherKey := keypair(t)
 	if err := Write(dir, &Material{CertPEM: cert, KeyPEM: otherKey, CAPEM: []byte("ca2")}); !errors.Is(err, ErrMismatched) {
-		t.Fatalf("rotation битой парой: %v; want ErrMismatched", err)
+		t.Fatalf("rotation with a broken pair: %v; want ErrMismatched", err)
 	}
 	// current is still v1, and Load returns the old material.
 	assertCurrent(t, dir, "v1")
 	got, err := Load(dir)
 	if err != nil {
-		t.Fatalf("Load после неудачной ротации: %v", err)
+		t.Fatalf("Load after a failed rotation: %v", err)
 	}
 	if string(got.CAPEM) != "ca1" {
-		t.Fatalf("после неудачной ротации Load вернул %q; ждём старый ca1", got.CAPEM)
+		t.Fatalf("after a failed rotation Load returned %q; expected the old ca1", got.CAPEM)
 	}
 	// The broken v2 version is either never created or rolled back — only v1 on disk.
 	if v := readVersions(t, dir); len(v) != 1 || v[0] != 1 {
-		t.Fatalf("versions = %v; ждём [1] (битая ротация ничего не оставила)", v)
+		t.Fatalf("versions = %v; expected [1] (broken rotation left nothing)", v)
 	}
 }
 
@@ -265,10 +265,10 @@ func TestWrite_MkdirFails(t *testing.T) {
 	dir := filepath.Join(fileOnPath, "seed")
 	err := Write(dir, validMaterial(t, "ca"))
 	if err == nil {
-		t.Fatal("Write в недопустимый путь должна вернуть ошибку mkdir")
+		t.Fatal("Write to an invalid path should return an mkdir error")
 	}
 	if !strings.Contains(err.Error(), "mkdir") {
-		t.Fatalf("ждём mkdir-ошибку: %v", err)
+		t.Fatalf("expected an mkdir error: %v", err)
 	}
 }
 
@@ -291,7 +291,7 @@ func TestWrite_RotationOverwritesKeyMode(t *testing.T) {
 		t.Fatal(err)
 	}
 	if perm := st.Mode().Perm(); perm != 0o400 {
-		t.Errorf("после ротации v2 key.pem mode = %o, want 0400", perm)
+		t.Errorf("after rotation v2 key.pem mode = %o, want 0400", perm)
 	}
 }
 
@@ -310,7 +310,7 @@ func TestWrite_DoesNotLeaveTempArtifacts(t *testing.T) {
 	}
 	for _, e := range ents {
 		if strings.Contains(e.Name(), ".tmp-") {
-			t.Errorf("остался temp в seed-dir: %s", e.Name())
+			t.Errorf("leftover temp in seed-dir: %s", e.Name())
 		}
 	}
 	// The version has exactly three files, no .tmp files.
@@ -322,16 +322,16 @@ func TestWrite_DoesNotLeaveTempArtifacts(t *testing.T) {
 	for _, e := range vents {
 		names[e.Name()] = true
 		if strings.Contains(e.Name(), ".tmp-") {
-			t.Errorf("остался temp в версии: %s", e.Name())
+			t.Errorf("leftover temp in version: %s", e.Name())
 		}
 	}
 	for _, want := range []string{CertFile, KeyFile, CAFile} {
 		if !names[want] {
-			t.Errorf("в версии отсутствует %s", want)
+			t.Errorf("missing %s in version", want)
 		}
 	}
 	if len(vents) != 3 {
-		t.Errorf("в версии %d записей, ждём ровно 3", len(vents))
+		t.Errorf("version has %d entries, expected exactly 3", len(vents))
 	}
 }
 
@@ -348,14 +348,14 @@ func TestWrite_VersionMkdirFails(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = os.Chmod(dir, 0o700) })
 	if canCreateVersion(dir) {
-		t.Skip("FS/уровень привилегий игнорирует права на запись (root?) — пропускаем")
+		t.Skip("FS/privilege level ignores write permissions (root?) - skipping")
 	}
 	err := Write(dir, validMaterial(t, "ca2"))
 	if err == nil {
-		t.Fatal("Write в read-only seed-dir должна упасть на mkdir версии")
+		t.Fatal("Write to a read-only seed-dir should fail on the version mkdir")
 	}
 	if !strings.Contains(err.Error(), "mkdir") {
-		t.Fatalf("ждём mkdir-ошибку версии: %v", err)
+		t.Fatalf("expected a version mkdir error: %v", err)
 	}
 	// Crash-safety: restore permissions and confirm current is still v1.
 	if err := os.Chmod(dir, 0o700); err != nil {
@@ -364,10 +364,10 @@ func TestWrite_VersionMkdirFails(t *testing.T) {
 	assertCurrent(t, dir, "v1")
 	got, err := Load(dir)
 	if err != nil {
-		t.Fatalf("Load после неудачной записи: %v", err)
+		t.Fatalf("Load after a failed write: %v", err)
 	}
 	if string(got.CAPEM) != "ca1" {
-		t.Fatalf("Load вернул %q; ждём старый ca1", got.CAPEM)
+		t.Fatalf("Load returned %q; expected the old ca1", got.CAPEM)
 	}
 }
 
@@ -392,14 +392,14 @@ func TestWrite_SwapFailsKeepsVersion(t *testing.T) {
 	}
 	err := Write(dir, validMaterial(t, "ca2"))
 	if err == nil {
-		t.Fatal("Write со swap поверх непустого каталога должна упасть")
+		t.Fatal("Write with a swap over a non-empty directory should fail")
 	}
 	if !strings.Contains(err.Error(), "swap") {
-		t.Fatalf("ждём swap-ошибку: %v", err)
+		t.Fatalf("expected a swap error: %v", err)
 	}
 	// v2 is written to disk (write happened before swap), but current wasn't switched.
 	if v := readVersions(t, dir); len(v) != 2 || v[1] != 2 {
-		t.Fatalf("versions = %v; ждём [1 2] (v2 записана, swap не дошёл)", v)
+		t.Fatalf("versions = %v; expected [1 2] (v2 written, swap did not go through)", v)
 	}
 }
 
@@ -413,9 +413,9 @@ func TestWrite_KeyPEMNotInErrorText(t *testing.T) {
 	cert, _ := keypair(t)
 	_, otherKey := keypair(t)
 	if err := Write(t.TempDir(), &Material{CertPEM: cert, KeyPEM: otherKey, CAPEM: []byte("ca")}); err == nil {
-		t.Fatal("ждём ошибку рассинхрона пары")
+		t.Fatal("expected a mismatched-pair error")
 	} else if strings.Contains(err.Error(), string(otherKey)) {
-		t.Fatalf("приватный ключ утёк в текст ошибки X509-валидации: %v", err)
+		t.Fatalf("private key leaked into the X509 validation error text: %v", err)
 	}
 
 	// (2) Swap failure: current occupied by a non-empty directory, key.pem already written.
@@ -436,10 +436,10 @@ func TestWrite_KeyPEMNotInErrorText(t *testing.T) {
 	certV, keyV := keypair(t)
 	err := Write(dir, &Material{CertPEM: certV, KeyPEM: keyV, CAPEM: []byte("ca2")})
 	if err == nil {
-		t.Fatal("ждём ошибку swap-а")
+		t.Fatal("expected a swap error")
 	}
 	if strings.Contains(err.Error(), string(keyV)) {
-		t.Fatalf("приватный ключ утёк в текст ошибки swap-а: %v", err)
+		t.Fatalf("private key leaked into the swap error text: %v", err)
 	}
 }
 

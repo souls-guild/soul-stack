@@ -90,7 +90,7 @@ func TestIntegration_TempoMW_PerAIDCoherence(t *testing.T) {
 		rec := httptest.NewRecorder()
 		h.ServeHTTP(rec, postAs(aidA))
 		if rec.Code != http.StatusAccepted {
-			t.Fatalf("A #%d: ожидался 202 в пределах burst, got %d", i, rec.Code)
+			t.Fatalf("A #%d: expected 202 within burst, got %d", i, rec.Code)
 		}
 	}
 
@@ -98,14 +98,14 @@ func TestIntegration_TempoMW_PerAIDCoherence(t *testing.T) {
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, postAs(aidA))
 	if rec.Code != http.StatusTooManyRequests {
-		t.Fatalf("A over burst: ожидался 429, got %d", rec.Code)
+		t.Fatalf("A over burst: expected 429, got %d", rec.Code)
 	}
 
 	// AID-B — independent bucket in the shared Redis: the first request goes through.
 	recB := httptest.NewRecorder()
 	h.ServeHTTP(recB, postAs(aidB))
 	if recB.Code != http.StatusAccepted {
-		t.Fatalf("B first: ожидался 202 (другой AID не делит bucket), got %d", recB.Code)
+		t.Fatalf("B first: expected 202 (a different AID does not share the bucket), got %d", recB.Code)
 	}
 }
 
@@ -136,10 +136,10 @@ func TestIntegration_TempoMW_FailOpenOnRedisDown(t *testing.T) {
 	h.ServeHTTP(rec, postAs(uniqueAID(t)))
 
 	if rec.Code != http.StatusAccepted {
-		t.Fatalf("Redis-down → fail-open: ожидался 202 passthrough, got %d (5xx = недопустим, ADR-050(b))", rec.Code)
+		t.Fatalf("Redis-down → fail-open: expected 202 passthrough, got %d (5xx is not allowed, ADR-050(b))", rec.Code)
 	}
 	if *nextCalls != 1 {
-		t.Fatalf("fail-open → next должен вызваться ровно 1 раз, got %d", *nextCalls)
+		t.Fatalf("fail-open → next must be called exactly once, got %d", *nextCalls)
 	}
 }
 
@@ -158,7 +158,7 @@ func TestIntegration_TempoMW_429Shape(t *testing.T) {
 	rec0 := httptest.NewRecorder()
 	h.ServeHTTP(rec0, postAs(aid))
 	if rec0.Code != http.StatusAccepted {
-		t.Fatalf("drain: ожидался 202, got %d", rec0.Code)
+		t.Fatalf("drain: expected 202, got %d", rec0.Code)
 	}
 
 	// Second request — 429 with the full shape.
@@ -166,19 +166,19 @@ func TestIntegration_TempoMW_429Shape(t *testing.T) {
 	h.ServeHTTP(rec, postAs(aid))
 
 	if rec.Code != http.StatusTooManyRequests {
-		t.Fatalf("ожидался 429, got %d", rec.Code)
+		t.Fatalf("expected 429, got %d", rec.Code)
 	}
 
 	ra := rec.Header().Get("Retry-After")
 	if ra == "" {
-		t.Fatal("отсутствует заголовок Retry-After")
+		t.Fatal("missing Retry-After header")
 	}
 	secs, err := strconv.Atoi(ra)
 	if err != nil {
-		t.Fatalf("Retry-After должен быть целым числом секунд, got %q", ra)
+		t.Fatalf("Retry-After must be a whole number of seconds, got %q", ra)
 	}
 	if secs < 1 {
-		t.Fatalf("Retry-After должен быть >= 1, got %d", secs)
+		t.Fatalf("Retry-After must be >= 1, got %d", secs)
 	}
 
 	ct := rec.Header().Get("Content-Type")

@@ -248,7 +248,7 @@ func TestRun_DryRun_PlanReadSafeOK(t *testing.T) {
 				return stream.Send(&pluginv1.PlanEvent{Changed: false})
 			},
 			applyFunc: func(req *pluginv1.ApplyRequest, stream grpc.ServerStreamingServer[pluginv1.ApplyEvent]) error {
-				t.Errorf("Apply вызван на dry_run; должен был быть Plan")
+				t.Errorf("Apply called on dry_run; should have been Plan")
 				return nil
 			},
 		}},
@@ -263,7 +263,7 @@ func TestRun_DryRun_PlanReadSafeOK(t *testing.T) {
 		t.Fatalf("status = %v; want SUCCESS (err=%q)", res.GetStatus(), res.GetErrorMessage())
 	}
 	if !planCalled {
-		t.Errorf("Plan не вызван")
+		t.Errorf("Plan not called")
 	}
 }
 
@@ -286,7 +286,7 @@ func TestRun_TimedOut(t *testing.T) {
 		TimeoutSeconds: 1,
 	})
 	if elapsed := time.Since(start); elapsed > 3*time.Second {
-		t.Errorf("Run заблокировался дольше таймаута: %s", elapsed)
+		t.Errorf("Run blocked longer than the timeout: %s", elapsed)
 	}
 	if res.GetStatus() != keeperv1.ErrandStatus_ERRAND_STATUS_TIMED_OUT {
 		t.Fatalf("status = %v; want TIMED_OUT (err=%q)", res.GetStatus(), res.GetErrorMessage())
@@ -364,10 +364,10 @@ func TestRun_CancelByExternalSignal(t *testing.T) {
 			t.Fatalf("status = %v; want CANCELLED (err=%q)", res.GetStatus(), res.GetErrorMessage())
 		}
 		if res.GetErrorMessage() == "" {
-			t.Errorf("error_message пусто, ожидали маркер cancel-а")
+			t.Errorf("error_message empty, expected a cancel marker")
 		}
 	case <-time.After(2 * time.Second):
-		t.Fatal("Run не завершился после Cancel")
+		t.Fatal("Run did not finish after Cancel")
 	}
 }
 

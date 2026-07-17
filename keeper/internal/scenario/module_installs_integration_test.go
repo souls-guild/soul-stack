@@ -146,18 +146,18 @@ tasks:
 
 	tasks := disp.captured()
 	if len(tasks) != 2 {
-		t.Fatalf("dispatched tasks = %d, want 2 (синтез-install + потребитель)", len(tasks))
+		t.Fatalf("dispatched tasks = %d, want 2 (synth-install + consumer)", len(tasks))
 	}
 	install := tasks[0]
 	if install.GetModule() != "core.module.installed" {
-		t.Fatalf("task[0].module = %q, want core.module.installed (синтез ПЕРЕД потребителем)", install.GetModule())
+		t.Fatalf("task[0].module = %q, want core.module.installed (synth BEFORE the consumer)", install.GetModule())
 	}
 	fields := install.GetParams().GetFields()
 	if got := fields["name"].GetStringValue(); got != "community.echo" {
 		t.Errorf("install params.name = %q, want community.echo", got)
 	}
 	if got := fields["ref"].GetStringValue(); got != "v1.2.0" {
-		t.Errorf("install params.ref = %q, want v1.2.0 (ref записи modules[])", got)
+		t.Errorf("install params.ref = %q, want v1.2.0 (ref of the modules[] entry)", got)
 	}
 	if tasks[1].GetModule() != "community.echo.run" {
 		t.Errorf("task[1].module = %q, want community.echo.run", tasks[1].GetModule())
@@ -202,14 +202,14 @@ tasks:
 
 	tasks := disp.captured()
 	if len(tasks) != 2 {
-		t.Fatalf("dispatched tasks = %d, want 2 (takeover: без синтез-дубля)", len(tasks))
+		t.Fatalf("dispatched tasks = %d, want 2 (takeover: no synth duplicate)", len(tasks))
 	}
 	idx := installIndexes(tasks)
 	if len(idx) != 1 || idx[0] != 0 {
-		t.Fatalf("core.module.installed indexes = %v, want [0] (ровно один — операторский)", idx)
+		t.Fatalf("core.module.installed indexes = %v, want [0] (exactly one - the operator's)", idx)
 	}
 	if _, hasRef := tasks[0].GetParams().GetFields()["ref"]; hasRef {
-		t.Errorf("takeover-шаг несёт ref — в плане синтез-шаг вместо операторского")
+		t.Errorf("takeover step carries ref - the plan has a synth step instead of the operator's")
 	}
 }
 
@@ -249,7 +249,7 @@ tasks:
 	waitRunDone(t, "noop-prod", applyID, incarnation.StatusReady)
 	dispatched := disp.captured()
 	if len(dispatched) != 2 {
-		t.Fatalf("run-путь dispatched tasks = %d, want 2", len(dispatched))
+		t.Fatalf("run path dispatched tasks = %d, want 2", len(dispatched))
 	}
 
 	// Claim path: the Acolyte reproduces the plan from the recipe.
@@ -261,10 +261,10 @@ tasks:
 		t.Fatalf("RenderForHost: %v", err)
 	}
 	if len(tasks) != 2 {
-		t.Fatalf("RenderForHost tasks = %d, want 2 (синтез-install + потребитель)", len(tasks))
+		t.Fatalf("RenderForHost tasks = %d, want 2 (synth-install + consumer)", len(tasks))
 	}
 	if tasks[0].Module != "core.module.installed" {
-		t.Fatalf("claim task[0].module = %q, want core.module.installed (синтез на claim-пути)", tasks[0].Module)
+		t.Fatalf("claim task[0].module = %q, want core.module.installed (synth on the claim path)", tasks[0].Module)
 	}
 	fields := tasks[0].Params.GetFields()
 	if got := fields["name"].GetStringValue(); got != "community.echo" {
@@ -277,7 +277,7 @@ tasks:
 	// Parity: the claim plan's module sequence ≡ the run path's dispatched plan.
 	for i := range tasks {
 		if tasks[i].Module != dispatched[i].GetModule() {
-			t.Errorf("plan parity: task[%d] claim=%q run=%q — планы Acolyte↔run разошлись", i, tasks[i].Module, dispatched[i].GetModule())
+			t.Errorf("plan parity: task[%d] claim=%q run=%q - Acolyte<->run plans diverged", i, tasks[i].Module, dispatched[i].GetModule())
 		}
 	}
 }
@@ -329,10 +329,10 @@ tasks:
 	}
 	tasks := report.Hosts[0].Tasks
 	if len(tasks) != 2 {
-		t.Fatalf("drift tasks = %d, want 2 (синтез-install + потребитель): %+v", len(tasks), tasks)
+		t.Fatalf("drift tasks = %d, want 2 (synth-install + consumer): %+v", len(tasks), tasks)
 	}
 	if tasks[0].Module != "core.module.installed" {
-		t.Errorf("drift task[0].module = %q, want core.module.installed (синтез в drift-плане)", tasks[0].Module)
+		t.Errorf("drift task[0].module = %q, want core.module.installed (synth in the drift plan)", tasks[0].Module)
 	}
 	if tasks[1].Module != "community.echo.run" {
 		t.Errorf("drift task[1].module = %q, want community.echo.run", tasks[1].Module)
@@ -420,10 +420,10 @@ tasks:
 		case "core.file.present":
 			sawUpgradeTask = true
 		case "core.file.absent":
-			t.Errorf("RenderForHost прочитал scenario/to_v2 (core.file.absent) вместо upgrade/to_v2 — recipe.FromUpgrade не проведён")
+			t.Errorf("RenderForHost read scenario/to_v2 (core.file.absent) instead of upgrade/to_v2 - recipe.FromUpgrade was not honored")
 		}
 	}
 	if !sawUpgradeTask {
-		t.Fatalf("RenderForHost FromUpgrade=true не отрендерил задачу upgrade/to_v2 (core.file.present); got %d tasks", len(tasks))
+		t.Fatalf("RenderForHost FromUpgrade=true did not render the upgrade/to_v2 task (core.file.present); got %d tasks", len(tasks))
 	}
 }

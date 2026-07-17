@@ -575,7 +575,7 @@ func (p *Pipeline) renderTaskIter(ctx context.Context, in RenderInput, task conf
 		}
 		if !paramsHostInvariant(rt.Params, st) {
 			return nil, fmt.Errorf(
-				"render: task %q даёт host-зависимые params (%s vs %s) — host-вариативность params вне pilot-объёма (per-host ApplyRequest — слой orchestrator-а)",
+				"render: task %q gives host-dependent params (%s vs %s) - host variance of params is outside pilot scope (per-host ApplyRequest is an orchestrator-layer concern)",
 				task.Name, firstSID, h.SID)
 		}
 		// Second fail-closed layer: host-variant flow_context (vars derived
@@ -597,7 +597,7 @@ func (p *Pipeline) renderTaskIter(ctx context.Context, in RenderInput, task conf
 		// they'll be removed together when it does.
 		if hasFlowControl(task) && !flowContextHostInvariant(rt.FlowContext, fc) {
 			return nil, fmt.Errorf(
-				"render: task %q: host-вариативный flow_context (vars, производный от soulprint.self) на multi-host таргете (%s vs %s) — fail-closed; per-host dispatch отложен (отдельный ADR)",
+				"render: task %q: host-variant flow_context (vars derived from soulprint.self) on a multi-host target (%s vs %s) - fail-closed; per-host dispatch is deferred (separate ADR)",
 				task.Name, firstSID, h.SID)
 		}
 	}
@@ -690,7 +690,7 @@ func (p *Pipeline) evalIncludeWhen(in RenderInput, when string) (bool, error) {
 	// non-static include-when reaches here (an expansion bug) — fail-closed,
 	// don't silently keep.
 	if !isStaticWhen(when) {
-		return false, fmt.Errorf("render: include-when %q не статичен (register/soulprint) — group-drop требует статического предиката (ADR-009 amendment)", when)
+		return false, fmt.Errorf("render: include-when %q is not static (register/soulprint) - group-drop requires a static predicate (ADR-009 amendment)", when)
 	}
 	host := &topology.HostFacts{}
 	if len(in.Hosts) > 0 {
@@ -973,7 +973,7 @@ func (p *Pipeline) evalAssertTask(in RenderInput, task config.Task) error {
 			return fmt.Errorf("render: assert %q: %w", task.Name, err)
 		}
 		if !ok {
-			return fmt.Errorf("%w: %s (предикат that[%d] %q вычислился в false)", ErrAssertFailed, assertMessage(task), i, pred)
+			return fmt.Errorf("%w: %s (predicate that[%d] %q evaluated to false)", ErrAssertFailed, assertMessage(task), i, pred)
 		}
 	}
 	return nil
@@ -986,9 +986,9 @@ func assertMessage(task config.Task) string {
 		return task.Assert.Message
 	}
 	if task.Name != "" {
-		return fmt.Sprintf("assert %q не прошёл", task.Name)
+		return fmt.Sprintf("assert %q failed", task.Name)
 	}
-	return "assert-предикат не прошёл"
+	return "assert predicate failed"
 }
 
 // renderKeeperTask renders a keeper-side task (`on: keeper`, docs/keeper/
@@ -1008,10 +1008,10 @@ func assertMessage(task config.Task) string {
 // under KeeperTargetSID.
 func (p *Pipeline) renderKeeperTask(ctx context.Context, in RenderInput, task config.Task, idx int) (*RenderedTask, error) {
 	if task.Apply != nil {
-		return nil, fmt.Errorf("%w: apply: на keeper-side задаче (task[%d] %q)", ErrUnsupportedDSL, idx, task.Name)
+		return nil, fmt.Errorf("%w: apply: on a keeper-side task (task[%d] %q)", ErrUnsupportedDSL, idx, task.Name)
 	}
 	if task.Loop != nil {
-		return nil, fmt.Errorf("%w: loop: на keeper-side задаче (task[%d] %q)", ErrUnsupportedDSL, idx, task.Name)
+		return nil, fmt.Errorf("%w: loop: on a keeper-side task (task[%d] %q)", ErrUnsupportedDSL, idx, task.Name)
 	}
 
 	resolved, err := resolveVaultRefs(ctx, p.vault, task.Module.Params)
@@ -1140,7 +1140,7 @@ func isStaticWhen(when string) bool {
 func evalStaticWhen(when string, fc *structpb.Struct) (bool, error) {
 	engine, err := flowControlEngine()
 	if err != nil {
-		return false, fmt.Errorf("static-when: сборка flow-control-движка: %w", err)
+		return false, fmt.Errorf("static-when: building the flow-control engine: %w", err)
 	}
 	// Activation uses the Soul-side flowControlVars shape (flow_context +
 	// empty register). The register map is empty: isStaticWhen already
@@ -1212,7 +1212,7 @@ func guardFlowControlHostInvariant(task config.Task, targeted []*topology.HostFa
 	} {
 		if reFlowControlSoulprint.MatchString(p.expr) {
 			return fmt.Errorf(
-				"render: task %q: %s %q — host-вариативный flow-control-предикат (soulprint.self) на multi-host таргете не поддержан в pilot — per-host dispatch отложен (отдельный ADR)",
+				"render: task %q: %s %q - a host-variant flow-control predicate (soulprint.self) on a multi-host target is unsupported in the pilot - per-host dispatch is deferred (separate ADR)",
 				task.Name, p.kind, p.expr)
 		}
 	}
@@ -1369,16 +1369,16 @@ func (p *Pipeline) resolveTemplateUsesInput(in RenderInput, resolved map[string]
 		// non-string/`${}` path: resolve via CEL in the keeper context.
 		st, err := renderParams(p.cel, map[string]any{paramTemplate: tv}, keeperVars(in))
 		if err != nil {
-			return "", false, fmt.Errorf("резолв пути шаблона: %w", err)
+			return "", false, fmt.Errorf("resolving template path: %w", err)
 		}
 		rel = st.GetFields()[paramTemplate].GetStringValue()
 		if rel == "" {
-			return "", false, fmt.Errorf("%q должен резолвиться в непустую строку-путь, получено %v", paramTemplate, tv)
+			return "", false, fmt.Errorf("%q must resolve to a non-empty path string, got %v", paramTemplate, tv)
 		}
 	}
 
 	if in.Templates == nil {
-		return "", false, fmt.Errorf("TemplateReader не сконфигурирован — Keeper не может доставить содержимое шаблона %q (RenderInput.Templates=nil)", rel)
+		return "", false, fmt.Errorf("TemplateReader not configured - Keeper cannot deliver template content %q (RenderInput.Templates=nil)", rel)
 	}
 	data, err := in.Templates.Read(rel)
 	if err != nil {
@@ -1405,7 +1405,7 @@ func templateVarSubKeys(content string) (map[string]bool, error) {
 	}
 	engine, err := usesFieldEngine()
 	if err != nil {
-		return nil, fmt.Errorf("сборка tmpl-движка: %w", err)
+		return nil, fmt.Errorf("building the tmpl engine: %w", err)
 	}
 	return engine.RootFieldSubKeys(content, templateVarField)
 }
@@ -1436,7 +1436,7 @@ func referencedFileVars(fileVars map[string]any, keys map[string]bool) map[strin
 func usesInputField(content string) (bool, error) {
 	engine, err := usesFieldEngine()
 	if err != nil {
-		return false, fmt.Errorf("сборка tmpl-движка: %w", err)
+		return false, fmt.Errorf("building the tmpl engine: %w", err)
 	}
 	return engine.UsesRootField(content, templateInputField)
 }
@@ -1740,7 +1740,7 @@ func foreachBindings(asName string, coll any) ([]map[string]any, error) {
 		}
 		return out, nil
 	default:
-		return nil, fmt.Errorf("foreach: выражение дало %T, ожидался list или map", coll)
+		return nil, fmt.Errorf("foreach: expression yielded %T, expected list or map", coll)
 	}
 }
 
@@ -1753,7 +1753,7 @@ func patchMapFromAny(v any) (map[string]any, error) {
 	}
 	m, ok := v.(map[string]any)
 	if !ok {
-		return nil, fmt.Errorf("patch должен быть map путь→значение, получено %T", v)
+		return nil, fmt.Errorf("patch must be a map path->value, got %T", v)
 	}
 	return m, nil
 }
@@ -1911,7 +1911,7 @@ func guardPilotDSL(task config.Task, idx int) error {
 		// module == nil is fine for an apply task (discriminator is apply).
 		// loop: on apply is deferred (slice E.later) — reject explicitly.
 		if task.Loop != nil {
-			return fmt.Errorf("%w: loop: на apply-задаче (task[%d] %q)", ErrUnsupportedDSL, idx, task.Name)
+			return fmt.Errorf("%w: loop: on an apply task (task[%d] %q)", ErrUnsupportedDSL, idx, task.Name)
 		}
 		return nil
 	case task.Include != nil:
@@ -1926,7 +1926,7 @@ func guardPilotDSL(task config.Task, idx int) error {
 		// never looks at block.Loop).
 		return nil
 	case task.Module == nil:
-		return fmt.Errorf("%w: task[%d] %q не является module-задачей", ErrUnsupportedDSL, idx, task.Name)
+		return fmt.Errorf("%w: task[%d] %q is not a module task", ErrUnsupportedDSL, idx, task.Name)
 	}
 	return nil
 }

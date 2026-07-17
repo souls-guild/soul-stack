@@ -41,14 +41,14 @@ func RegisterHTTPMetrics(r *Registry) *HTTPMetrics {
 		requestsTotal: prometheus.NewCounterVec(
 			prometheus.CounterOpts{
 				Name: "keeper_http_requests_total",
-				Help: "Количество HTTP-запросов под /v1/*, разрезанное по method/path/status.",
+				Help: "Number of HTTP requests under /v1/*, sliced by method/path/status.",
 			},
 			[]string{"method", "path", "status"},
 		),
 		requestDur: prometheus.NewHistogramVec(
 			prometheus.HistogramOpts{
 				Name: "keeper_http_request_duration_seconds",
-				Help: "Latency HTTP-запросов под /v1/*, в секундах.",
+				Help: "Latency of HTTP requests under /v1/*, in seconds.",
 				// Buckets tuned for the Operator API: typical requests 1-50ms,
 				// PG-write-path 10-200ms, slow 1s+. Prometheus default buckets
 				// (0.005..10) target web traffic with a long tail; the Keeper
@@ -60,7 +60,7 @@ func RegisterHTTPMetrics(r *Registry) *HTTPMetrics {
 		),
 		inFlight: prometheus.NewGauge(prometheus.GaugeOpts{
 			Name: "keeper_http_in_flight_requests",
-			Help: "Число HTTP-запросов под /v1/* в обработке прямо сейчас.",
+			Help: "Number of HTTP requests under /v1/* currently in flight.",
 		}),
 	}
 	r.reg.MustRegister(m.requestsTotal, m.requestDur, m.inFlight)

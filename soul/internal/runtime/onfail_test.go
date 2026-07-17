@@ -33,7 +33,7 @@ func TestOnFail_NoFailures_Skips(t *testing.T) {
 		t.Fatalf("Run: %v", err)
 	}
 	if rescueCalled {
-		t.Errorf("rescue выполнился, хотя источник A не упал (onfail в нормальном прогоне = SKIPPED)")
+		t.Errorf("rescue ran even though source A did not fail (onfail in a normal run = SKIPPED)")
 	}
 	if got := sink.taskEvents[1].GetStatus(); got != keeperv1.TaskStatus_TASK_STATUS_SKIPPED {
 		t.Errorf("rescue status = %v, want SKIPPED", got)
@@ -67,22 +67,22 @@ func TestOnFail_SourceFailed_RescueRuns(t *testing.T) {
 		t.Fatalf("Run: %v", err)
 	}
 	if !rescueCalled {
-		t.Errorf("rescue не выполнился, хотя источник A упал")
+		t.Errorf("rescue did not run even though source A failed")
 	}
 	if plainCalled {
-		t.Errorf("обычная C выполнилась после провала A (должна быть SKIPPED)")
+		t.Errorf("plain C ran after A's failure (should be SKIPPED)")
 	}
 	if got := sink.taskEvents[0].GetStatus(); got != keeperv1.TaskStatus_TASK_STATUS_FAILED {
 		t.Errorf("A status = %v, want FAILED", got)
 	}
 	if got := sink.taskEvents[1].GetStatus(); got != keeperv1.TaskStatus_TASK_STATUS_CHANGED {
-		t.Errorf("rescue status = %v, want CHANGED (исполнился)", got)
+		t.Errorf("rescue status = %v, want CHANGED (it ran)", got)
 	}
 	if got := sink.taskEvents[2].GetStatus(); got != keeperv1.TaskStatus_TASK_STATUS_SKIPPED {
 		t.Errorf("plain status = %v, want SKIPPED", got)
 	}
 	if sink.runResult.GetStatus() != keeperv1.RunStatus_RUN_STATUS_FAILED {
-		t.Errorf("runResult = %v, want FAILED (rescue не отменяет провал прогона)", sink.runResult.GetStatus())
+		t.Errorf("runResult = %v, want FAILED (rescue does not cancel the run's failure)", sink.runResult.GetStatus())
 	}
 }
 
@@ -110,7 +110,7 @@ func TestOnFail_MultiSource_AnyFailed(t *testing.T) {
 		t.Fatalf("Run: %v", err)
 	}
 	if !rescueCalled {
-		t.Errorf("rescue не выполнился, хотя один из источников (B) упал (any-семантика)")
+		t.Errorf("rescue did not run even though one of the sources (B) failed (any semantics)")
 	}
 	if got := sink.taskEvents[2].GetStatus(); got != keeperv1.TaskStatus_TASK_STATUS_CHANGED {
 		t.Errorf("rescue status = %v, want CHANGED", got)
@@ -151,7 +151,7 @@ func TestOnFail_TimedOutSource_RescueRuns(t *testing.T) {
 		t.Fatalf("A status = %v, want TIMED_OUT", got)
 	}
 	if !rescueCalled {
-		t.Errorf("rescue не выполнился на TIMED_OUT-источник (timed_out — частный случай failed)")
+		t.Errorf("rescue did not run for a TIMED_OUT source (timed_out is a special case of failed)")
 	}
 	if sink.runResult.GetStatus() != keeperv1.RunStatus_RUN_STATUS_FAILED {
 		t.Errorf("runResult = %v, want FAILED", sink.runResult.GetStatus())
@@ -181,16 +181,16 @@ func TestOnFail_IgnoredErrorSource_Skips(t *testing.T) {
 		t.Fatalf("Run: %v", err)
 	}
 	if got := sink.taskEvents[0].GetStatus(); got != keeperv1.TaskStatus_TASK_STATUS_OK {
-		t.Fatalf("A status = %v, want OK (failed_when:false проглотил ошибку)", got)
+		t.Fatalf("A status = %v, want OK (failed_when:false swallowed the error)", got)
 	}
 	if rescueCalled {
-		t.Errorf("rescue выполнился, хотя ошибка A проглочена ignore_errors (A не failed)")
+		t.Errorf("rescue ran even though A's error was swallowed by ignore_errors (A is not failed)")
 	}
 	if got := sink.taskEvents[1].GetStatus(); got != keeperv1.TaskStatus_TASK_STATUS_SKIPPED {
 		t.Errorf("rescue status = %v, want SKIPPED", got)
 	}
 	if sink.runResult.GetStatus() != keeperv1.RunStatus_RUN_STATUS_SUCCESS {
-		t.Errorf("runResult = %v, want SUCCESS (ignore_errors не триггерит fail-stop/onfail)", sink.runResult.GetStatus())
+		t.Errorf("runResult = %v, want SUCCESS (ignore_errors does not trigger fail-stop/onfail)", sink.runResult.GetStatus())
 	}
 }
 
@@ -223,13 +223,13 @@ func TestOnFail_MultipleFailures_RescueTailRuns(t *testing.T) {
 		t.Fatalf("Run: %v", err)
 	}
 	if bCalled {
-		t.Errorf("B исполнилась после провала A (должна быть SKIPPED)")
+		t.Errorf("B ran after A's failure (should be SKIPPED)")
 	}
 	if !cCalled {
-		t.Errorf("C (rescue) не исполнилась, хотя A упал")
+		t.Errorf("C (rescue) did not run even though A failed")
 	}
 	if dCalled {
-		t.Errorf("D исполнилась после провала (должна быть SKIPPED)")
+		t.Errorf("D ran after the failure (should be SKIPPED)")
 	}
 	want := []keeperv1.TaskStatus{
 		keeperv1.TaskStatus_TASK_STATUS_FAILED,
@@ -289,23 +289,23 @@ func TestOnFail_CancelOverFailedRun_Cancelled(t *testing.T) {
 		t.Fatalf("Run: %v", err)
 	}
 	if !rescueCalled {
-		t.Errorf("rescue не исполнился, хотя A упал (cancel пришёл уже ПОСЛЕ его запуска)")
+		t.Errorf("rescue did not run even though A failed (cancel arrived AFTER it started)")
 	}
 	if tailCalled {
-		t.Errorf("tail-задача исполнилась, хотя cancel прервал цикл до неё")
+		t.Errorf("tail task ran even though cancel broke the loop before it")
 	}
 	// Cancel fired on the tail iteration → tail's event never sent: exactly A + rescue.
 	if len(sink.taskEvents) != 2 {
-		t.Fatalf("taskEvents = %d, want 2 (A + rescue, tail не дошёл — cancel-break)", len(sink.taskEvents))
+		t.Fatalf("taskEvents = %d, want 2 (A + rescue, tail never reached - cancel-break)", len(sink.taskEvents))
 	}
 	if got := sink.taskEvents[0].GetStatus(); got != keeperv1.TaskStatus_TASK_STATUS_FAILED {
 		t.Errorf("A status = %v, want FAILED", got)
 	}
 	if got := sink.taskEvents[1].GetStatus(); got != keeperv1.TaskStatus_TASK_STATUS_CHANGED {
-		t.Errorf("rescue status = %v, want CHANGED (исполнился до cancel)", got)
+		t.Errorf("rescue status = %v, want CHANGED (it ran before cancel)", got)
 	}
 	if sink.runResult.GetStatus() != keeperv1.RunStatus_RUN_STATUS_CANCELLED {
-		t.Errorf("runResult = %v, want CANCELLED (cancel перекрывает FAILED, НЕ ложный SUCCESS)", sink.runResult.GetStatus())
+		t.Errorf("runResult = %v, want CANCELLED (cancel overrides FAILED, NOT a false SUCCESS)", sink.runResult.GetStatus())
 	}
 }
 
@@ -335,10 +335,10 @@ func TestOnFail_RescueItselfFails_RunStaysFailed(t *testing.T) {
 		t.Fatalf("Run: %v", err)
 	}
 	if !rescueCalled {
-		t.Errorf("rescue не исполнился, хотя источник A упал")
+		t.Errorf("rescue did not run even though source A failed")
 	}
 	if plainCalled {
-		t.Errorf("обычная C исполнилась после провала (должна быть SKIPPED)")
+		t.Errorf("plain C ran after the failure (should be SKIPPED)")
 	}
 	want := []keeperv1.TaskStatus{
 		keeperv1.TaskStatus_TASK_STATUS_FAILED,  // A
@@ -354,7 +354,7 @@ func TestOnFail_RescueItselfFails_RunStaysFailed(t *testing.T) {
 		}
 	}
 	if sink.runResult.GetStatus() != keeperv1.RunStatus_RUN_STATUS_FAILED {
-		t.Errorf("runResult = %v, want FAILED (провал rescue не отменяет провал прогона)", sink.runResult.GetStatus())
+		t.Errorf("runResult = %v, want FAILED (rescue's failure does not cancel the run's failure)", sink.runResult.GetStatus())
 	}
 }
 
@@ -384,10 +384,10 @@ func TestOnFail_RescueChain_RescueOfRescueRuns(t *testing.T) {
 		t.Fatalf("Run: %v", err)
 	}
 	if !bCalled {
-		t.Errorf("B (rescue A) не исполнился, хотя A упал")
+		t.Errorf("B (rescue A) did not run even though A failed")
 	}
 	if !cCalled {
-		t.Errorf("C (rescue B) не исполнился, хотя B упал — onfail-композиция сломана")
+		t.Errorf("C (rescue B) did not run even though B failed - onfail composition is broken")
 	}
 	want := []keeperv1.TaskStatus{
 		keeperv1.TaskStatus_TASK_STATUS_FAILED,  // A
@@ -434,20 +434,20 @@ func TestOnFail_ForwardRef_Skips(t *testing.T) {
 		t.Fatalf("Run: %v", err)
 	}
 	if xCalled {
-		t.Errorf("X исполнился, хотя источник Y ещё не выполнялся (forward-ref onfail = no-op SKIPPED)")
+		t.Errorf("X ran even though source Y had not run yet (forward-ref onfail = no-op SKIPPED)")
 	}
 	if !yCalled {
-		t.Errorf("Y не исполнился (он обычная задача, идёт первой по факту провалов)")
+		t.Errorf("Y did not run (it's a plain task - the first actual failure in the run)")
 	}
 	if got := sink.taskEvents[0].GetStatus(); got != keeperv1.TaskStatus_TASK_STATUS_SKIPPED {
-		t.Errorf("X status = %v, want SKIPPED (forward-ref onfail — намеренный no-op)", got)
+		t.Errorf("X status = %v, want SKIPPED (forward-ref onfail is an intentional no-op)", got)
 	}
 	if got := sink.taskEvents[1].GetStatus(); got != keeperv1.TaskStatus_TASK_STATUS_FAILED {
 		t.Errorf("Y status = %v, want FAILED", got)
 	}
 	// Y failed → run FAILED; X — SKIPPED, didn't "rescue" Y's failure (it ran before Y).
 	if sink.runResult.GetStatus() != keeperv1.RunStatus_RUN_STATUS_FAILED {
-		t.Errorf("runResult = %v, want FAILED (Y упал, forward-ref X его не покрыл)", sink.runResult.GetStatus())
+		t.Errorf("runResult = %v, want FAILED (Y failed, forward-ref X did not cover it)", sink.runResult.GetStatus())
 	}
 }
 
@@ -474,7 +474,7 @@ func TestOnFail_AndWhen_BothApplied(t *testing.T) {
 		t.Fatalf("Run: %v", err)
 	}
 	if rescueCalled {
-		t.Errorf("rescue выполнился, хотя when:false (связка onfail && when по AND)")
+		t.Errorf("rescue ran even though when:false (onfail && when combine via AND)")
 	}
 	if got := sink.taskEvents[1].GetStatus(); got != keeperv1.TaskStatus_TASK_STATUS_SKIPPED {
 		t.Errorf("rescue status = %v, want SKIPPED (when:false)", got)

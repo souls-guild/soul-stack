@@ -15,7 +15,7 @@ func TestValidName(t *testing.T) {
 		{"web-conf", true},
 		{"a", true},
 		{"WEB", false},
-		{"под_чёрк", false},
+		{"under_score", false},
 		{"", false},
 	}
 	for _, c := range cases {
@@ -36,35 +36,35 @@ func TestValidCheckAddr(t *testing.T) {
 	canonical := beaconaddr.All()
 	for _, addr := range canonical {
 		if !ValidCheckAddr(addr) {
-			t.Errorf("%s должен быть известным core-beacon", addr)
+			t.Errorf("%s should be a known core-beacon", addr)
 		}
 	}
 	if len(canonical) != len(knownBeaconAddrs) {
-		t.Errorf("keeper-enum (%d) рассинхронен с beaconaddr.All (%d)", len(knownBeaconAddrs), len(canonical))
+		t.Errorf("keeper-enum (%d) is out of sync with beaconaddr.All (%d)", len(knownBeaconAddrs), len(canonical))
 	}
 	if ValidCheckAddr("core.beacon.bogus") {
-		t.Error("неизвестный beacon не должен проходить")
+		t.Error("unknown beacon should not pass")
 	}
 }
 
 func TestValidIncarnationName(t *testing.T) {
 	if !ValidIncarnationName("prod-db") {
-		t.Error("prod-db валиден")
+		t.Error("prod-db is valid")
 	}
 	if ValidIncarnationName("BAD..NAME") {
-		t.Error("BAD..NAME невалиден")
+		t.Error("BAD..NAME is invalid")
 	}
 	if ValidIncarnationName("-leading") {
-		t.Error("ведущий дефис невалиден")
+		t.Error("leading hyphen is invalid")
 	}
 }
 
 func TestValidScenario(t *testing.T) {
 	if !ValidScenario("restart_service") {
-		t.Error("restart_service валиден")
+		t.Error("restart_service is valid")
 	}
 	if ValidScenario("Bad-Scenario") {
-		t.Error("Bad-Scenario невалиден (заглавные / дефис)")
+		t.Error("Bad-Scenario is invalid (uppercase / hyphen)")
 	}
 }
 
@@ -90,7 +90,7 @@ func TestValidateSubjectXOR(t *testing.T) {
 				t.Errorf("validateSubjectXOR(%v, %v) err=%v, want ok=%v", c.coven, c.sid, err, c.ok)
 			}
 			if err != nil && !errors.Is(err, ErrValidation) {
-				t.Errorf("ошибка должна быть помечена ErrValidation: %v", err)
+				t.Errorf("error should be marked ErrValidation: %v", err)
 			}
 		})
 	}
@@ -98,24 +98,24 @@ func TestValidateSubjectXOR(t *testing.T) {
 
 func TestValidateInterval(t *testing.T) {
 	if err := validateInterval("30s"); err != nil {
-		t.Errorf("30s валиден: %v", err)
+		t.Errorf("30s is valid: %v", err)
 	}
 	if err := validateInterval("nope"); err == nil {
-		t.Error("nope невалиден")
+		t.Error("nope is invalid")
 	}
 	if err := validateInterval(""); err == nil {
-		t.Error("пустой interval невалиден")
+		t.Error("empty interval is invalid")
 	}
 }
 
 func TestValidateCooldown(t *testing.T) {
 	if err := validateCooldown(""); err != nil {
-		t.Errorf("пустой cooldown допустим (DEFAULT 0s): %v", err)
+		t.Errorf("empty cooldown is allowed (DEFAULT 0s): %v", err)
 	}
 	if err := validateCooldown("5m"); err != nil {
-		t.Errorf("5m валиден: %v", err)
+		t.Errorf("5m is valid: %v", err)
 	}
 	if err := validateCooldown("nope"); err == nil {
-		t.Error("nope невалиден")
+		t.Error("nope is invalid")
 	}
 }

@@ -211,7 +211,7 @@ func resolveLoopItems(engine *cel.Engine, in RenderInput, loop *config.LoopSpec,
 		}
 		return out, nil
 	default:
-		return nil, fmt.Errorf("loop.items вычислился в %T, ожидался array или object", resolved)
+		return nil, fmt.Errorf("loop.items evaluated to %T, expected array or object", resolved)
 	}
 }
 
@@ -263,7 +263,7 @@ func evalLoopWhen(engine *cel.Engine, in RenderInput, when string, loopVars map[
 	}
 	if reLoopWhenSoulprint.MatchString(when) {
 		return false, fmt.Errorf(
-			"loop.when %q ссылается на soulprint — host-вариативный when в loop не поддержан в пилоте (loop host-инвариантен; per-host loop-фильтрация отложена)",
+			"loop.when %q references soulprint - host-variant when in loop isn't supported in the pilot (loop is host-invariant; per-host loop filtering is deferred)",
 			when)
 	}
 	return evalBoolExpr(engine, "loop.when", when, loopInvariantVars(in, loopVars))

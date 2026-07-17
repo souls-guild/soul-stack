@@ -24,12 +24,12 @@ func goldenSynodWire(t *testing.T, name string, native any, want string) {
 }
 
 func TestGoldenWire_SynodReply(t *testing.T) {
-	desc := "группа ops"
+	desc := "ops group"
 
 	// --- SynodView: description omitempty (both branches) + []-vs-null ---
 	goldenSynodWire(t, "SynodView/full",
 		SynodView{Builtin: true, Description: &desc, Name: "ops-group", Operators: []string{"archon-alice"}, Roles: []string{"cluster-admin", "viewer"}},
-		`{"builtin":true,"description":"группа ops","name":"ops-group","operators":["archon-alice"],"roles":["cluster-admin","viewer"]}`)
+		`{"builtin":true,"description":"ops group","name":"ops-group","operators":["archon-alice"],"roles":["cluster-admin","viewer"]}`)
 	// description omitted (nil); operators/roles empty arrays (non-nil) → `[]`.
 	goldenSynodWire(t, "SynodView/nil_desc_empty_lists",
 		SynodView{Builtin: false, Description: nil, Name: "empty-group", Operators: []string{}, Roles: []string{}},

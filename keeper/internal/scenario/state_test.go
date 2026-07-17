@@ -28,7 +28,7 @@ func noOpEval(string, map[string]any, map[string]any, bool) (any, error) {
 	return nil, errInvariant
 }
 
-var errInvariant = errors.New("matchEval/opEval не должен вызываться в этом тесте")
+var errInvariant = errors.New("matchEval/opEval must not be called in this test")
 
 // opEvalForTest builds a real render.Pipeline.EvalStateOpExpr (CEL for
 // modify/remove match+patch with the full scenario context + element bindings).
@@ -173,15 +173,15 @@ func TestMergeStateChanges_AddNewSID_Grows(t *testing.T) {
 	}
 	hosts := after["redis_hosts"].([]any)
 	if len(hosts) != 2 {
-		t.Fatalf("redis_hosts len = %d, want 2 (add нового sid растит коллекцию)", len(hosts))
+		t.Fatalf("redis_hosts len = %d, want 2 (add of a new sid grows the collection)", len(hosts))
 	}
 	newHost := hosts[1].(map[string]any)
 	if newHost["sid"] != "host-b" || newHost["role"] != "replica" {
-		t.Errorf("новый элемент = %+v, want {sid:host-b, role:replica}", newHost)
+		t.Errorf("new element = %+v, want {sid:host-b, role:replica}", newHost)
 	}
 	// Original untouched (deep-copy).
 	if len(before["redis_hosts"].([]any)) != 1 {
-		t.Errorf("before мутирован: redis_hosts len = %d", len(before["redis_hosts"].([]any)))
+		t.Errorf("before mutated: redis_hosts len = %d", len(before["redis_hosts"].([]any)))
 	}
 }
 
@@ -201,7 +201,7 @@ func TestMergeStateChanges_AddExistingSID_Idempotent(t *testing.T) {
 	}
 	hosts := after["redis_hosts"].([]any)
 	if len(hosts) != 2 {
-		t.Fatalf("★ redis_hosts len = %d, want 2 (повтор существующего sid = NO-OP, on_conflict=skip)", len(hosts))
+		t.Fatalf("* redis_hosts len = %d, want 2 (repeat of an existing sid = NO-OP, on_conflict=skip)", len(hosts))
 	}
 }
 
@@ -215,7 +215,7 @@ func TestMergeStateChanges_AddExistingSID_ErrorBlocks(t *testing.T) {
 
 	_, err := mergeStateChanges(before, ops, redisHostsSchema, matchEvalForTest(t), noOpEval)
 	if err == nil {
-		t.Fatal("★ ожидали ошибку (on_conflict=error на существующем) — state не должен коммититься")
+		t.Fatal("* expected an error (on_conflict=error on existing) - state must not be committed")
 	}
 }
 
@@ -233,10 +233,10 @@ func TestMergeStateChanges_AddReplaceExisting(t *testing.T) {
 	}
 	hosts := after["redis_hosts"].([]any)
 	if len(hosts) != 1 {
-		t.Fatalf("redis_hosts len = %d, want 1 (replace не растит)", len(hosts))
+		t.Fatalf("redis_hosts len = %d, want 1 (replace does not grow)", len(hosts))
 	}
 	if hosts[0].(map[string]any)["role"] != "primary" {
-		t.Errorf("элемент не перезаписан: %+v", hosts[0])
+		t.Errorf("element not overwritten: %+v", hosts[0])
 	}
 }
 
@@ -253,7 +253,7 @@ func TestMergeStateChanges_AddMaterializesFromSchema(t *testing.T) {
 	}
 	hosts, ok := after["redis_hosts"].([]any)
 	if !ok {
-		t.Fatalf("redis_hosts = %T, want []any (материализован list из schema)", after["redis_hosts"])
+		t.Fatalf("redis_hosts = %T, want []any (list materialized from schema)", after["redis_hosts"])
 	}
 	if len(hosts) != 1 {
 		t.Fatalf("redis_hosts len = %d, want 1", len(hosts))
@@ -277,10 +277,10 @@ func TestMergeStateChanges_AddMapByKey(t *testing.T) {
 	}
 	users, ok := after["redis_users"].(map[string]any)
 	if !ok {
-		t.Fatalf("redis_users = %T, want map (материализован object из schema)", after["redis_users"])
+		t.Fatalf("redis_users = %T, want map (object materialized from schema)", after["redis_users"])
 	}
 	if _, has := users["alice"]; !has {
-		t.Fatal("ключ alice не добавлен")
+		t.Fatal("key alice was not added")
 	}
 
 	// Repeating the same key (skip) → no-op (map length unchanged).
@@ -289,7 +289,7 @@ func TestMergeStateChanges_AddMapByKey(t *testing.T) {
 		t.Fatalf("merge2: %v", err)
 	}
 	if len(after2["redis_users"].(map[string]any)) != 1 {
-		t.Errorf("повтор key=alice (skip) должен быть no-op, got len=%d", len(after2["redis_users"].(map[string]any)))
+		t.Errorf("repeat key=alice (skip) should be a no-op, got len=%d", len(after2["redis_users"].(map[string]any)))
 	}
 }
 
@@ -327,14 +327,14 @@ func TestMergeStateChanges_ModifyAllByPredicate(t *testing.T) {
 		}
 	}
 	if standby != 3 {
-		t.Fatalf("★ standby = %d, want 3 (все реплики пропатчены)", standby)
+		t.Fatalf("* standby = %d, want 3 (all replicas patched)", standby)
 	}
 	if hosts[0].(map[string]any)["role"] != "primary" {
-		t.Errorf("primary задет: %+v (не подходил под предикат)", hosts[0])
+		t.Errorf("primary affected: %+v (did not match the predicate)", hosts[0])
 	}
 	// Original untouched (deep-copy + per-element copy in applyPatch).
 	if before["redis_hosts"].([]any)[1].(map[string]any)["role"] != "replica" {
-		t.Errorf("before мутирован")
+		t.Errorf("before mutated")
 	}
 }
 
@@ -347,10 +347,10 @@ func TestMergeStateChanges_ModifyEmptyMatch_Noop(t *testing.T) {
 
 	after, err := mergeStateChanges(before, []render.RenderedOp{op}, redisHostsSchema, noMatch, opEvalForTest(t))
 	if err != nil {
-		t.Fatalf("★ empty-match modify должен быть no-op, не ошибка: %v", err)
+		t.Fatalf("* empty-match modify should be a no-op, not an error: %v", err)
 	}
 	if after["redis_hosts"].([]any)[0].(map[string]any)["role"] != "primary" {
-		t.Errorf("no-op нарушен: %+v", after["redis_hosts"])
+		t.Errorf("no-op violated: %+v", after["redis_hosts"])
 	}
 }
 
@@ -374,13 +374,13 @@ func TestMergeStateChanges_ModifyNestedPatch(t *testing.T) {
 	host := after["redis_hosts"].([]any)[0].(map[string]any)
 	cfg := host["config"].(map[string]any)
 	if cfg["maxmemory"] != "512mb" {
-		t.Fatalf("★ config.maxmemory = %v, want 512mb (вложенное поле обновлено)", cfg["maxmemory"])
+		t.Fatalf("* config.maxmemory = %v, want 512mb (nested field updated)", cfg["maxmemory"])
 	}
 	if cfg["appendonly"] != "yes" {
-		t.Errorf("★ config.appendonly = %v, want yes (соседнее поле затёрто — patch перезаписал запись целиком)", cfg["appendonly"])
+		t.Errorf("* config.appendonly = %v, want yes (sibling field clobbered - patch overwrote the whole entry)", cfg["appendonly"])
 	}
 	if host["role"] != "primary" {
-		t.Errorf("top-level role затёрт: %+v", host)
+		t.Errorf("top-level role clobbered: %+v", host)
 	}
 }
 
@@ -405,10 +405,10 @@ func TestMergeStateChanges_ModifyMapByKey(t *testing.T) {
 	users := after["redis_users"].(map[string]any)
 	alice := users["alice"].(map[string]any)
 	if alice["acl"] != "+@all" || alice["state"] != "off" {
-		t.Errorf("alice не пропатчен: %+v", alice)
+		t.Errorf("alice was not patched: %+v", alice)
 	}
 	if users["bob"].(map[string]any)["acl"] != "+@read" {
-		t.Errorf("bob задет (не подходил под key == input.username): %+v", users["bob"])
+		t.Errorf("bob affected (did not match key == input.username): %+v", users["bob"])
 	}
 }
 
@@ -428,16 +428,16 @@ func TestMergeStateChanges_RemoveAllByPredicate(t *testing.T) {
 	}
 	hosts := after["redis_hosts"].([]any)
 	if len(hosts) != 1 || hosts[0].(map[string]any)["sid"] != "host-a" {
-		t.Fatalf("★ remove реплик: осталось %+v, want [host-a]", hosts)
+		t.Fatalf("* remove replicas: left %+v, want [host-a]", hosts)
 	}
 
 	// empty match (no replicas) → no-op.
 	noop, err := mergeStateChanges(after, []render.RenderedOp{op}, redisHostsSchema, noMatch, opEvalForTest(t))
 	if err != nil {
-		t.Fatalf("★ remove empty-match должен быть no-op: %v", err)
+		t.Fatalf("* remove empty-match should be a no-op: %v", err)
 	}
 	if len(noop["redis_hosts"].([]any)) != 1 {
-		t.Errorf("empty-match remove изменил коллекцию: %+v", noop["redis_hosts"])
+		t.Errorf("empty-match remove changed the collection: %+v", noop["redis_hosts"])
 	}
 }
 
@@ -456,10 +456,10 @@ func TestMergeStateChanges_RemoveMapByKey(t *testing.T) {
 	}
 	users := after["redis_users"].(map[string]any)
 	if _, ok := users["bob"]; ok {
-		t.Errorf("bob не удалён: %+v", users)
+		t.Errorf("bob was not removed: %+v", users)
 	}
 	if _, ok := users["alice"]; !ok {
-		t.Errorf("alice удалён ошибочно: %+v", users)
+		t.Errorf("alice was removed erroneously: %+v", users)
 	}
 }
 
@@ -472,7 +472,7 @@ func TestMergeStateChanges_ExpectOne(t *testing.T) {
 	}}
 	tooMany := render.RenderedOp{Verb: config.VerbRemove, Field: "redis_hosts", Match: "elem.role == 'replica'", Expect: config.ExpectOne}
 	if _, err := mergeStateChanges(twoReplicas, []render.RenderedOp{tooMany}, redisHostsSchema, noMatch, opEvalForTest(t)); err == nil {
-		t.Fatal("★ expect: one зацепил 2 — ожидали ошибку (error_locked, state не коммитнут)")
+		t.Fatal("* expect: one matched 2 - expected an error (error_locked, state not committed)")
 	}
 
 	// Matched exactly one → ok.
@@ -480,10 +480,10 @@ func TestMergeStateChanges_ExpectOne(t *testing.T) {
 	one := render.RenderedOp{Verb: config.VerbRemove, Field: "redis_hosts", Match: "elem.sid == input.sid", Expect: config.ExpectOne, Context: ctx}
 	after, err := mergeStateChanges(twoReplicas, []render.RenderedOp{one}, redisHostsSchema, noMatch, opEvalForTest(t))
 	if err != nil {
-		t.Fatalf("★ expect: one зацепил 1 должен быть ок: %v", err)
+		t.Fatalf("* expect: one matching 1 should be ok: %v", err)
 	}
 	if len(after["redis_hosts"].([]any)) != 1 {
-		t.Errorf("после remove одного осталось %+v", after["redis_hosts"])
+		t.Errorf("after removing one, left %+v", after["redis_hosts"])
 	}
 }
 
@@ -532,7 +532,7 @@ func TestForeachListAdd_GrowsByN(t *testing.T) {
 	}
 	hosts := after["redis_hosts"].([]any)
 	if len(hosts) != 4 {
-		t.Fatalf("★ redis_hosts len = %d, want 4 (r0 + 3 foreach-add)", len(hosts))
+		t.Fatalf("* redis_hosts len = %d, want 4 (r0 + 3 foreach-add)", len(hosts))
 	}
 
 	// Idempotency: repeating the same ops → length doesn't grow (on_conflict: skip).
@@ -541,7 +541,7 @@ func TestForeachListAdd_GrowsByN(t *testing.T) {
 		t.Fatalf("merge2: %v", err)
 	}
 	if len(again["redis_hosts"].([]any)) != 4 {
-		t.Errorf("★ повтор foreach-add не идемпотентен: len = %d, want 4", len(again["redis_hosts"].([]any)))
+		t.Errorf("* repeated foreach-add is not idempotent: len = %d, want 4", len(again["redis_hosts"].([]any)))
 	}
 }
 
@@ -593,17 +593,17 @@ func TestForeachMapModify_PerEntryBinding(t *testing.T) {
 	}
 	users := after["redis_users"].(map[string]any)
 	if users["alice"].(map[string]any)["acl"] != "+@all" {
-		t.Errorf("★ alice.acl = %v, want +@all (свой биндинг)", users["alice"])
+		t.Errorf("* alice.acl = %v, want +@all (own binding)", users["alice"])
 	}
 	if users["bob"].(map[string]any)["acl"] != "+@write" {
-		t.Errorf("★ bob.acl = %v, want +@write (свой биндинг)", users["bob"])
+		t.Errorf("* bob.acl = %v, want +@write (own binding)", users["bob"])
 	}
 	if users["carol"].(map[string]any)["acl"] != "+@read" {
-		t.Errorf("carol задет (не во input.changes): %v", users["carol"])
+		t.Errorf("carol affected (not in input.changes): %v", users["carol"])
 	}
 	// state field intact (patch touches only acl, merge not overwrite).
 	if users["alice"].(map[string]any)["state"] != "on" {
-		t.Errorf("alice.state затёрт patch-ем: %v", users["alice"])
+		t.Errorf("alice.state clobbered by patch: %v", users["alice"])
 	}
 }
 
@@ -641,7 +641,7 @@ func TestMergeStateChanges_MirrorProd(t *testing.T) {
 	}
 	got, _ := json.Marshal(after)
 	if !equalJSONState(t, string(got), stateMirrorExpectedJSON) {
-		t.Errorf("★ прод state_after = %s, want %s", got, stateMirrorExpectedJSON)
+		t.Errorf("* prod state_after = %s, want %s", got, stateMirrorExpectedJSON)
 	}
 }
 
@@ -689,7 +689,7 @@ func TestMergeVerbsMirror_Prod(t *testing.T) {
 	}
 	got, _ := json.Marshal(after)
 	if !equalJSONState(t, string(got), verbsMirrorExpectedJSON) {
-		t.Errorf("★ прод state_after = %s, want %s (дрейф modify/remove)", got, verbsMirrorExpectedJSON)
+		t.Errorf("* prod state_after = %s, want %s (modify/remove drift)", got, verbsMirrorExpectedJSON)
 	}
 }
 
@@ -712,10 +712,10 @@ func TestMergeStateChanges_Composition_SetThenAdd(t *testing.T) {
 	}
 	hosts := after["redis_hosts"].([]any)
 	if len(hosts) != 2 {
-		t.Fatalf("★ redis_hosts len = %d, want 2 (add в созданную set-ом коллекцию)", len(hosts))
+		t.Fatalf("* redis_hosts len = %d, want 2 (add into a set-created collection)", len(hosts))
 	}
 	if hosts[0].(map[string]any)["sid"] != "host-a" || hosts[1].(map[string]any)["sid"] != "host-b" {
-		t.Errorf("★ порядок add нарушен: %+v", hosts)
+		t.Errorf("* add order violated: %+v", hosts)
 	}
 }
 
@@ -737,7 +737,7 @@ func TestMergeStateChanges_Composition_AddThenRemove(t *testing.T) {
 	}
 	hosts := after["redis_hosts"].([]any)
 	if len(hosts) != 1 || hosts[0].(map[string]any)["sid"] != "host-a" {
-		t.Fatalf("★ add X → remove X: ожидали только host-a, got %+v", hosts)
+		t.Fatalf("* add X -> remove X: expected only host-a, got %+v", hosts)
 	}
 }
 
@@ -756,7 +756,7 @@ func TestMergeStateChanges_ScalarList_ModifyRemove(t *testing.T) {
 	rm := render.RenderedOp{Verb: config.VerbRemove, Field: "tags", Match: "elem == 'b'", Context: map[string]any{}}
 	after, err := mergeStateChanges(before(), []render.RenderedOp{rm}, scalarSchema, noMatch, opEvalForTest(t))
 	if err != nil {
-		t.Fatalf("remove над scalar-list: %v", err)
+		t.Fatalf("remove over scalar-list: %v", err)
 	}
 	tags := after["tags"].([]any)
 	if len(tags) != 2 || tags[0] != "a" || tags[1] != "c" {
@@ -767,7 +767,7 @@ func TestMergeStateChanges_ScalarList_ModifyRemove(t *testing.T) {
 	mod := render.RenderedOp{Verb: config.VerbModify, Field: "tags", Match: "elem == 'a'",
 		Patch: map[string]any{"x": "${ 'y' }"}, Context: map[string]any{}}
 	if _, err := mergeStateChanges(before(), []render.RenderedOp{mod}, scalarSchema, noMatch, opEvalForTest(t)); err == nil {
-		t.Fatal("★ modify scalar-элемента точечным patch должен дать ошибку (patch применим только к объекту)")
+		t.Fatal("* modify of a scalar element via a dotted patch should error (patch only applies to an object)")
 	}
 }
 
@@ -790,10 +790,10 @@ func TestMergeStateChanges_RemoveAll_EmptyNotNil(t *testing.T) {
 	}
 	hosts, ok := after["redis_hosts"].([]any)
 	if !ok {
-		t.Fatalf("★ redis_hosts = %T, want []any (remove-всех оставляет пустой list, не nil)", after["redis_hosts"])
+		t.Fatalf("* redis_hosts = %T, want []any (remove-all leaves an empty list, not nil)", after["redis_hosts"])
 	}
 	if len(hosts) != 1 || hosts[0].(map[string]any)["sid"] != "host-c" {
-		t.Fatalf("★ add после remove-всех: got %+v, want [host-c]", hosts)
+		t.Fatalf("* add after remove-all: got %+v, want [host-c]", hosts)
 	}
 
 	// map: remove-all → map{} (not nil), add by key grows by 1.
@@ -811,13 +811,13 @@ func TestMergeStateChanges_RemoveAll_EmptyNotNil(t *testing.T) {
 	}
 	users, ok := afterMap["redis_users"].(map[string]any)
 	if !ok {
-		t.Fatalf("★ redis_users = %T, want map (remove-всех оставляет пустой map, не nil)", afterMap["redis_users"])
+		t.Fatalf("* redis_users = %T, want map (remove-all leaves an empty map, not nil)", afterMap["redis_users"])
 	}
 	if len(users) != 1 {
-		t.Fatalf("★ add после remove-всех map: got %+v, want {bob}", users)
+		t.Fatalf("* add after remove-all map: got %+v, want {bob}", users)
 	}
 	if _, has := users["bob"]; !has {
-		t.Errorf("★ bob не добавлен в опустевший map: %+v", users)
+		t.Errorf("* bob was not added to the emptied map: %+v", users)
 	}
 }
 
@@ -839,11 +839,11 @@ func TestMergeStateChanges_PatchClobber_MissingVsExistingScalar(t *testing.T) {
 	}}
 	after, err := mergeStateChanges(beforeMissing, []render.RenderedOp{patchOp()}, redisHostsSchema, noMatch, opEvalForTest(t))
 	if err != nil {
-		t.Fatalf("★ missing промежуточный путь должен материализоваться, не ошибка: %v", err)
+		t.Fatalf("* a missing intermediate path should materialize, not error: %v", err)
 	}
 	cfg := after["redis_hosts"].([]any)[0].(map[string]any)["config"].(map[string]any)
 	if cfg["maxmemory"] != "512mb" {
-		t.Errorf("★ config.maxmemory = %v, want 512mb (config материализован)", cfg["maxmemory"])
+		t.Errorf("* config.maxmemory = %v, want 512mb (config materialized)", cfg["maxmemory"])
 	}
 
 	// existing-scalar → ERROR (config is a string; descending the nested path = clobber).
@@ -851,7 +851,7 @@ func TestMergeStateChanges_PatchClobber_MissingVsExistingScalar(t *testing.T) {
 		map[string]any{"sid": "host-a", "role": "primary", "config": "some-string-value"},
 	}}
 	if _, err := mergeStateChanges(beforeScalar, []render.RenderedOp{patchOp()}, redisHostsSchema, noMatch, opEvalForTest(t)); err == nil {
-		t.Fatal("★ patch config.maxmemory поверх config=\"string\" должен дать ошибку (silent-clobber небезопасен), не молча затереть")
+		t.Fatal("* patch config.maxmemory over config=\"string\" should error (silent clobber is unsafe), not silently overwrite")
 	}
 }
 
@@ -864,14 +864,14 @@ func TestSetNestedPath_ProdNoSilentClobber(t *testing.T) {
 		t.Fatalf("setNestedPath missing: %v", err)
 	}
 	if m["config"].(map[string]any)["maxmemory"] != "256mb" {
-		t.Errorf("config не материализован: %+v", m)
+		t.Errorf("config was not materialized: %+v", m)
 	}
 	m2 := map[string]any{"config": "scalar"}
 	if err := setNestedPath(m2, "config.maxmemory", "256mb"); err == nil {
-		t.Fatal("★ setNestedPath поверх config=\"scalar\" должен вернуть ошибку")
+		t.Fatal("* setNestedPath over config=\"scalar\" should return an error")
 	}
 	if m2["config"] != "scalar" {
-		t.Errorf("★ скалярное значение затёрто: %+v", m2)
+		t.Errorf("* scalar value clobbered: %+v", m2)
 	}
 }
 
@@ -892,13 +892,13 @@ func TestMergeStateChanges_AddConflictReason_NoSecretLeak(t *testing.T) {
 		Value: map[string]any{"acl": "+@all"}, OnConflict: config.OnConflictError}
 	_, err := mergeStateChanges(beforeMap, []render.RenderedOp{mapOp}, redisHostsSchema, noMatch, noOpEval)
 	if err == nil {
-		t.Fatal("ожидали ошибку (on_conflict=error на существующем key)")
+		t.Fatal("expected an error (on_conflict=error on an existing key)")
 	}
 	if strings.Contains(err.Error(), secret) {
-		t.Fatalf("★ secret-LEAK: reason содержит plaintext ключа: %q", err.Error())
+		t.Fatalf("* secret-LEAK: reason contains the plaintext key: %q", err.Error())
 	}
 	if !strings.Contains(err.Error(), "redis_users") {
-		t.Errorf("reason должен называть поле redis_users: %q", err.Error())
+		t.Errorf("reason should name the field redis_users: %q", err.Error())
 	}
 
 	// list add-conflict: value carries a secret, the element already exists (deep-equal).
@@ -907,13 +907,13 @@ func TestMergeStateChanges_AddConflictReason_NoSecretLeak(t *testing.T) {
 		Value: secret, OnConflict: config.OnConflictError}
 	_, err = mergeStateChanges(beforeList, []render.RenderedOp{listOp}, redisHostsSchema, matchEvalForTest(t), noOpEval)
 	if err == nil {
-		t.Fatal("ожидали ошибку (on_conflict=error на существующем элементе)")
+		t.Fatal("expected an error (on_conflict=error on an existing element)")
 	}
 	if strings.Contains(err.Error(), secret) {
-		t.Fatalf("★ secret-LEAK: list-reason содержит plaintext value: %q", err.Error())
+		t.Fatalf("* secret-LEAK: list-reason contains the plaintext value: %q", err.Error())
 	}
 	if !strings.Contains(err.Error(), "redis_hosts") {
-		t.Errorf("list-reason должен называть поле redis_hosts: %q", err.Error())
+		t.Errorf("list-reason should name the field redis_hosts: %q", err.Error())
 	}
 }
 
@@ -961,10 +961,10 @@ func TestBuildRegisterByHost_ResolvesNamesPerHost(t *testing.T) {
 	}
 	// task_idx=1 without register: must not show up.
 	if _, ok := got["host-2"]["probe_b"]; ok {
-		t.Errorf("host-2.probe_b не должен существовать (task без register:)")
+		t.Errorf("host-2.probe_b should not exist (task without register:)")
 	}
 	if len(got["host-2"]) != 1 {
-		t.Errorf("host-2 register-ключей = %d, want 1", len(got["host-2"]))
+		t.Errorf("host-2 register keys = %d, want 1", len(got["host-2"]))
 	}
 }
 
@@ -975,7 +975,7 @@ func TestBuildRegisterByHost_ResolvesNamesPerHost(t *testing.T) {
 func TestBuildRegisterByHost_NoLogTaskExcluded(t *testing.T) {
 	tasks := []*render.RenderedTask{
 		{Index: 0, Register: "plain"},                     // ordinary — accumulated
-		{Index: 1, Register: "secret_probe", NoLog: true}, // no_log — NOT accumulated
+		{Index: 1, Register: "secret_probe", NoLog: true}, // no_log - NOT accumulated
 	}
 	rows := []applyrun.TaskRegister{
 		{ApplyID: "a", SID: "host-1", PlanIndex: 0, TaskIdx: 0, RegisterData: map[string]any{"stdout": "ok"}},
@@ -990,17 +990,17 @@ func TestBuildRegisterByHost_NoLogTaskExcluded(t *testing.T) {
 	}
 	// no_log register is absent → a set referencing it gets no-such-key.
 	if _, ok := got["host-1"]["secret_probe"]; ok {
-		t.Errorf("host-1.secret_probe не должен существовать (no_log-задача)")
+		t.Errorf("host-1.secret_probe should not exist (no_log task)")
 	}
 	if len(got["host-1"]) != 1 {
-		t.Errorf("host-1 register-ключей = %d, want 1 (только plain)", len(got["host-1"]))
+		t.Errorf("host-1 register keys = %d, want 1 (plain only)", len(got["host-1"]))
 	}
 }
 
 func TestBuildRegisterByHost_EmptyRows(t *testing.T) {
 	got := buildRegisterByHost(nil, []*render.RenderedTask{{Index: 0, Register: "p"}})
 	if got == nil || len(got) != 0 {
-		t.Errorf("got = %v, want пустая map", got)
+		t.Errorf("got = %v, want empty map", got)
 	}
 }
 
@@ -1042,17 +1042,17 @@ func TestBuildRegisterByHost_MultiTaskPassage0_NoCollision(t *testing.T) {
 	// ★ probe-register X is NOT clobbered by action-Y (the task_idx=0 collision didn't merge them).
 	x, ok := got["host-1"]["X"]
 	if !ok {
-		t.Fatalf("★ register X отсутствует — probe-register затёрт коллизией task_idx (баг)")
+		t.Fatalf("* register X missing - probe-register clobbered by task_idx collision (bug)")
 	}
 	if v := x.(map[string]any)["stdout"]; v != "probe-A-value" {
-		t.Errorf("★ register X.stdout = %v, want probe-A-value (имя резолвится по глобальному plan_index)", v)
+		t.Errorf("* register X.stdout = %v, want probe-A-value (name resolves by global plan_index)", v)
 	}
 	// Y resolves to its own value (plan_index 2 → Index 2 → name Y).
 	if v := got["host-1"]["Y"].(map[string]any)["stdout"]; v != "action-Y-value" {
 		t.Errorf("register Y.stdout = %v, want action-Y-value", v)
 	}
 	if len(got["host-1"]) != 2 {
-		t.Errorf("host-1 register-ключей = %d, want 2 (X и Y)", len(got["host-1"]))
+		t.Errorf("host-1 register keys = %d, want 2 (X and Y)", len(got["host-1"]))
 	}
 }
 
@@ -1081,10 +1081,10 @@ func TestBuildRegisterByHost_PerHostDifferentWhere_NoMismatch(t *testing.T) {
 	got := buildRegisterByHost(rows, tasks)
 
 	if v := got["host-A"]["R"].(map[string]any)["stdout"]; v != "A-R" {
-		t.Errorf("★ host-A.R.stdout = %v, want A-R (локальный task_idx=1)", v)
+		t.Errorf("* host-A.R.stdout = %v, want A-R (local task_idx=1)", v)
 	}
 	if v := got["host-B"]["R"].(map[string]any)["stdout"]; v != "B-R" {
-		t.Errorf("★ host-B.R.stdout = %v, want B-R (локальный task_idx=0, тот же plan_index=1)", v)
+		t.Errorf("* host-B.R.stdout = %v, want B-R (local task_idx=0, same plan_index=1)", v)
 	}
 }
 
@@ -1097,7 +1097,7 @@ func TestDeepCopyMap(t *testing.T) {
 	nested := cp["nested"].(map[string]any)
 	nested["k"] = "changed"
 	if src["nested"].(map[string]any)["k"] != "v" {
-		t.Errorf("deep copy не глубокая: original mutated")
+		t.Errorf("deep copy is not deep: original mutated")
 	}
 }
 
@@ -1184,13 +1184,13 @@ func TestKeeperRegisterBucket_FromRegisterByHost(t *testing.T) {
 
 	bucket := keeperRegisterBucket(reg)
 	if bucket == nil {
-		t.Fatal("keeperRegisterBucket вернул nil — keeper-register предыдущего Passage потерян (дыра Слайса 1)")
+		t.Fatal("keeperRegisterBucket returned nil - previous Passage keeper-register lost (Slice 1 gap)")
 	}
 	// keeper register is available in flat form under the name provision →
 	// keeperVars will see register.provision.* on the active Passage's keeper task.
 	prov, ok := bucket["provision"].(map[string]any)
 	if !ok {
-		t.Fatalf("bucket[provision] = %T, want map (register keeper-задачи)", bucket["provision"])
+		t.Fatalf("bucket[provision] = %T, want map (keeper task register)", bucket["provision"])
 	}
 	if prov["ip"] != "10.0.0.5" {
 		t.Errorf("bucket[provision].ip = %v, want 10.0.0.5", prov["ip"])
@@ -1200,7 +1200,7 @@ func TestKeeperRegisterBucket_FromRegisterByHost(t *testing.T) {
 	// host bucket stays in RegisterByHost[sid] (the host path reads it
 	// per-host, not from the flat Register).
 	if _, leaked := bucket["probe"]; leaked {
-		t.Error("bucket[probe] присутствует — host-register протёк в keeper-bucket")
+		t.Error("bucket[probe] is present - host-register leaked into the keeper-bucket")
 	}
 }
 
@@ -1217,7 +1217,7 @@ func TestKeeperRegisterBucket_NoKeeperRegister_Nil(t *testing.T) {
 	}
 	reg := buildRegisterByHost(rows, tasks)
 	if bucket := keeperRegisterBucket(reg); bucket != nil {
-		t.Errorf("keeperRegisterBucket = %v, want nil (нет register под KeeperTargetSID)", bucket)
+		t.Errorf("keeperRegisterBucket = %v, want nil (no register under KeeperTargetSID)", bucket)
 	}
 	// Empty/nil map → nil.
 	if bucket := keeperRegisterBucket(nil); bucket != nil {

@@ -429,7 +429,7 @@ func TestRetry_FailoverLatencyBound_HungEndpoint(t *testing.T) {
 	// excluded from the lower bound (jitter/scheduler); it only adds on top.
 	wantMin := time.Duration(maxAttempts) * hsTimeout
 	if elapsed < wantMin {
-		t.Fatalf("elapsed %s < %s — hung endpoint не дожидался handshake_timeout каждую попытку", elapsed, wantMin)
+		t.Fatalf("elapsed %s < %s - hung endpoint did not wait out handshake_timeout each attempt", elapsed, wantMin)
 	}
 	// Upper bound: maxAttempts handshake_timeouts + (maxAttempts-1) inter-attempt
 	// pauses + one live handshake + overhead. Generous multiplier catches
@@ -437,7 +437,7 @@ func TestRetry_FailoverLatencyBound_HungEndpoint(t *testing.T) {
 	// working.
 	wantMax := time.Duration(maxAttempts)*hsTimeout + time.Duration(maxAttempts-1)*interAttempt + 3*time.Second
 	if elapsed > wantMax {
-		t.Fatalf("elapsed %s > %s — failover-latency вышла за границу (лишние попытки / поднятый default / non-retriable)", elapsed, wantMax)
+		t.Fatalf("elapsed %s > %s - failover latency exceeded the bound (extra attempts / raised default / non-retriable)", elapsed, wantMax)
 	}
 }
 
@@ -485,12 +485,12 @@ func TestRetry_CtxCancelDuringDialOne(t *testing.T) {
 	// inter-attempt pause (10s). Tolerance is generous (1s) but an order of
 	// magnitude below both.
 	if elapsed > 1*time.Second {
-		t.Fatalf("Dial blocked %s — ctx cancel не прервал зависший dialOne (упал в handshake_timeout %s?)", elapsed, hsTimeout)
+		t.Fatalf("Dial blocked %s - ctx cancel did not interrupt the hung dialOne (fell through to handshake_timeout %s?)", elapsed, hsTimeout)
 	}
 	// dialOne attempted exactly once — cancel landed on the first attempt,
 	// before the inter-attempt pause / second attempt.
 	if n := hung.dialCount(); n != 1 {
-		t.Errorf("hung endpoint dialOne %d times, want 1 (отмена попала в первую попытку)", n)
+		t.Errorf("hung endpoint dialOne %d times, want 1 (cancel landed on the first attempt)", n)
 	}
 }
 
@@ -529,7 +529,7 @@ func TestRetry_MixedErrors_TransientThenLeaseHeld(t *testing.T) {
 	// The endpoint's last error is AlreadyExists, single endpoint → aggregate
 	// = lease-held (accumulator depends on the LAST error).
 	if !IsLeaseHeld(err) {
-		t.Fatalf("Dial err=%v, want IsLeaseHeld (last error of endpoint = AlreadyExists, accumulator должен решить по ней)", err)
+		t.Fatalf("Dial err=%v, want IsLeaseHeld (last error of endpoint = AlreadyExists, accumulator must decide by it)", err)
 	}
 }
 
@@ -559,7 +559,7 @@ func TestRetry_MixedErrors_LeaseHeldFirstAttempt(t *testing.T) {
 		t.Fatal("Dial: expected error, got nil")
 	}
 	if n := srv.dialCount(); n != 1 {
-		t.Fatalf("dialOne %d times, want EXACTLY 1 (AlreadyExists на 1-й попытке → break сразу)", n)
+		t.Fatalf("dialOne %d times, want EXACTLY 1 (AlreadyExists on the 1st attempt -> break immediately)", n)
 	}
 	if !IsLeaseHeld(err) {
 		t.Fatalf("Dial err=%v, want IsLeaseHeld", err)
@@ -600,7 +600,7 @@ func TestRetry_Failback_HigherPrioRetriableFails_NotMasked(t *testing.T) {
 	}
 	// NOT masked as NoHigherPriority: the endpoint was actually tried and failed.
 	if IsNoHigherPriority(err) {
-		t.Fatalf("DialPriority err=%v classified NoHigherPriority — падение higher-prio замаскировано (failback счёл «некуда возвращаться»)", err)
+		t.Fatalf("DialPriority err=%v classified NoHigherPriority - higher-prio failure was masked (failback thought there was nowhere to return to)", err)
 	}
 	// retry loop exhausted max_attempts on higher-prio (Unavailable retriable).
 	if n := higher.dialCount(); n != maxAttempts {
@@ -636,10 +636,10 @@ func TestRetry_Failback_HigherPrioLeaseHeld_SentinelKept(t *testing.T) {
 		t.Fatal("DialPriority: expected error (higher-prio lease-held), got nil")
 	}
 	if IsNoHigherPriority(err) {
-		t.Fatalf("DialPriority err=%v classified NoHigherPriority — lease-held higher-prio замаскирован", err)
+		t.Fatalf("DialPriority err=%v classified NoHigherPriority - lease-held higher-prio was masked", err)
 	}
 	if !IsLeaseHeld(err) {
-		t.Fatalf("DialPriority err=%v, want IsLeaseHeld (sentinel потерян в failback-режиме)", err)
+		t.Fatalf("DialPriority err=%v, want IsLeaseHeld (sentinel lost in failback mode)", err)
 	}
 	// lease-held → exactly 1 dialOne (non-retriable), attempts not burned.
 	if n := higher.dialCount(); n != 1 {

@@ -53,12 +53,12 @@ func RegisterRenderMetrics(reg *obs.Registry) *RenderMetrics {
 	m := &RenderMetrics{
 		duration: prometheus.NewHistogram(prometheus.HistogramOpts{
 			Name:    "keeper_render_duration_seconds",
-			Help:    "Длительность одного прохода render-пайплайна scenario в секундах (vault-resolve → CEL-render → резолв on/where).",
+			Help:    "Duration of one scenario render pipeline pass in seconds (vault-resolve -> CEL-render -> on/where resolve).",
 			Buckets: prometheus.DefBuckets,
 		}),
 		errorsTotal: prometheus.NewCounter(prometheus.CounterOpts{
 			Name: "keeper_render_errors_total",
-			Help: "Количество неуспешных проходов render-пайплайна scenario (любой error рендера).",
+			Help: "Count of failed scenario render pipeline passes (any render error).",
 		}),
 	}
 	reg.Registerer().MustRegister(m.duration, m.errorsTotal)

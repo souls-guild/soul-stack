@@ -260,12 +260,12 @@ func TestHumaOperator_Create_GoldenWire(t *testing.T) {
 	}
 	var m map[string]any
 	if err := json.Unmarshal(rec.Body.Bytes(), &m); err != nil {
-		t.Fatalf("reply не JSON-object: %v; body=%s", err, rec.Body.String())
+		t.Fatalf("reply is not a JSON object: %v; body=%s", err, rec.Body.String())
 	}
 	out, _ := json.Marshal(m)
 	const golden = `{"aid":"archon-bob","created_at":"2026-06-13T10:00:00Z","created_by_aid":"archon-alice","display_name":"Bob","jwt":"jwt-archon-bob"}`
 	if got := string(out); got != golden {
-		t.Errorf("GOLDEN wire-дрейф operator.create:\n got  = %s\n want = %s", got, golden)
+		t.Errorf("GOLDEN wire-drift operator.create:\n got  = %s\n want = %s", got, golden)
 	}
 }
 
@@ -325,7 +325,7 @@ func TestHumaAudit_OperatorCreate_NoAudit_OnRBACDeny(t *testing.T) {
 		t.Fatalf("status = %d, want 403; body=%s", rec.Code, rec.Body.String())
 	}
 	if len(auditCap.Events()) != 0 {
-		t.Errorf("audit записан on RBAC-deny operator.create (%d withбытий)", len(auditCap.Events()))
+		t.Errorf("audit recorded on RBAC-deny operator.create (%d events)", len(auditCap.Events()))
 	}
 }
 
@@ -341,12 +341,12 @@ func TestHumaOperator_List_GoldenWire(t *testing.T) {
 	}
 	var m map[string]any
 	if err := json.Unmarshal(rec.Body.Bytes(), &m); err != nil {
-		t.Fatalf("reply не JSON-object: %v; body=%s", err, rec.Body.String())
+		t.Fatalf("reply is not a JSON object: %v; body=%s", err, rec.Body.String())
 	}
 	out, _ := json.Marshal(m)
 	const golden = `{"items":[{"aid":"archon-bob","auth_method":"jwt","bootstrap_initial":true,"created_at":"2026-06-13T10:00:00Z","created_via":"bootstrap","display_name":"Bob"}],"limit":50,"offset":0,"total":1}`
 	if got := string(out); got != golden {
-		t.Errorf("GOLDEN wire-дрейф operator.list:\n got  = %s\n want = %s", got, golden)
+		t.Errorf("GOLDEN wire-drift operator.list:\n got  = %s\n want = %s", got, golden)
 	}
 }
 
@@ -363,7 +363,7 @@ func TestHumaOperator_List_Q_BindsToFilter(t *testing.T) {
 		t.Fatalf("status = %d, want 200; body=%s", rec.Code, rec.Body.String())
 	}
 	if !strings.Contains(pool.listSQL, "display_name ILIKE") || !strings.Contains(pool.listSQL, "aid ILIKE") {
-		t.Fatalf("list SQL без ILIKE-предиката q: %q", pool.listSQL)
+		t.Fatalf("list SQL without ILIKE predicate q: %q", pool.listSQL)
 	}
 	const wantArg = `%a\%b%`
 	found := false
@@ -373,7 +373,7 @@ func TestHumaOperator_List_Q_BindsToFilter(t *testing.T) {
 		}
 	}
 	if !found {
-		t.Errorf("list args %v не withдержат экранированbutго q-аргумента %q", pool.listArgs, wantArg)
+		t.Errorf("list args %v do not contain the escaped q argument %q", pool.listArgs, wantArg)
 	}
 }
 
@@ -445,7 +445,7 @@ func TestHumaOperator_List_NoAudit(t *testing.T) {
 		t.Fatalf("status = %d, want 200; body=%s", rec.Code, rec.Body.String())
 	}
 	if len(auditCap.Events()) != 0 {
-		t.Errorf("READ-роут operator.list записал audit (%d withбытий)", len(auditCap.Events()))
+		t.Errorf("READ route operator.list recorded audit (%d events)", len(auditCap.Events()))
 	}
 }
 
@@ -471,12 +471,12 @@ func TestHumaOperator_Get_GoldenWire(t *testing.T) {
 	}
 	var m map[string]any
 	if err := json.Unmarshal(rec.Body.Bytes(), &m); err != nil {
-		t.Fatalf("reply не JSON-object: %v; body=%s", err, rec.Body.String())
+		t.Fatalf("reply is not a JSON object: %v; body=%s", err, rec.Body.String())
 	}
 	out, _ := json.Marshal(m)
 	const golden = `{"aid":"archon-bob","auth_method":"jwt","bootstrap_initial":true,"created_at":"2026-06-13T10:00:00Z","created_via":"bootstrap","display_name":"Bob"}`
 	if got := string(out); got != golden {
-		t.Errorf("GOLDEN wire-дрейф operator.get:\n got  = %s\n want = %s", got, golden)
+		t.Errorf("GOLDEN wire-drift operator.get:\n got  = %s\n want = %s", got, golden)
 	}
 }
 
@@ -512,7 +512,7 @@ func TestHumaOperator_Revoke_204(t *testing.T) {
 		t.Fatalf("status = %d, want 204; body=%s", rec.Code, rec.Body.String())
 	}
 	if body := strings.TrimSpace(rec.Body.String()); body != "" {
-		t.Errorf("204-body operator.revoke toлжbut быть ПУСТЫМ, got %q", body)
+		t.Errorf("204-body operator.revoke must be EMPTY, got %q", body)
 	}
 }
 
@@ -540,7 +540,7 @@ func TestHumaAudit_OperatorRevoke_NoAudit_OnBadAID(t *testing.T) {
 		t.Fatalf("status = %d, want 422 (bad path-AID); body=%s", rec.Code, rec.Body.String())
 	}
 	if len(auditCap.Events()) != 0 {
-		t.Errorf("audit записан on bad-AID revoke (%d withбытий)", len(auditCap.Events()))
+		t.Errorf("audit recorded on bad-AID revoke (%d events)", len(auditCap.Events()))
 	}
 }
 
@@ -556,7 +556,7 @@ func TestHumaOperator_IssueToken_GoldenWire(t *testing.T) {
 	}
 	var m map[string]any
 	if err := json.Unmarshal(rec.Body.Bytes(), &m); err != nil {
-		t.Fatalf("reply не JSON-object: %v; body=%s", err, rec.Body.String())
+		t.Fatalf("reply is not a JSON object: %v; body=%s", err, rec.Body.String())
 	}
 	// expires_at — now+TTL (unstable), we guard the set of the remaining fields.
 	if m["aid"] != "archon-bob" {
@@ -566,7 +566,7 @@ func TestHumaOperator_IssueToken_GoldenWire(t *testing.T) {
 		t.Errorf("jwt = %v, want jwt-archon-bob", m["jwt"])
 	}
 	if _, ok := m["expires_at"]; !ok {
-		t.Errorf("issue-token reply без expires_at: %v", m)
+		t.Errorf("issue-token reply without expires_at: %v", m)
 	}
 }
 
@@ -592,7 +592,7 @@ func TestHumaAudit_OperatorIssueToken_NoAudit_OnBadAID(t *testing.T) {
 		t.Fatalf("status = %d, want 422 (bad path-AID); body=%s", rec.Code, rec.Body.String())
 	}
 	if len(auditCap.Events()) != 0 {
-		t.Errorf("audit записан on bad-AID issue-token (%d withбытий)", len(auditCap.Events()))
+		t.Errorf("audit recorded on bad-AID issue-token (%d events)", len(auditCap.Events()))
 	}
 }
 
@@ -604,19 +604,19 @@ func TestHumaOperator_OpenAPIFragment_3_1(t *testing.T) {
 		t.Fatalf("HumaOperatorSpecYAML: %v", err)
 	}
 	if !strings.Contains(frag, "openapi: 3.1.0") {
-		t.Errorf("huma-фрагмент не несёт `openapi: 3.1.0`:\n%s", frag)
+		t.Errorf("huma fragment does not carry `openapi: 3.1.0`:\n%s", frag)
 	}
 	for _, want := range []string{
 		"createOperator", "listOperators", "getOperator", "revokeOperator",
 		"issueOperatorToken", "auth_method", "revoked",
 	} {
 		if !strings.Contains(frag, want) {
-			t.Errorf("OpenAPI-фрагмент не withдержит %q:\n%s", want, frag)
+			t.Errorf("OpenAPI fragment does not contain %q:\n%s", want, frag)
 		}
 	}
 	// list-query auth_method multi-value is NOT needed (single string), but there
 	// must be no explode artifacts of the RawBody bridge.
 	if strings.Contains(frag, "octet-stream") {
-		t.Errorf("OpenAPI-фрагмент несёт application/octet-stream:\n%s", frag)
+		t.Errorf("OpenAPI fragment carries application/octet-stream:\n%s", frag)
 	}
 }

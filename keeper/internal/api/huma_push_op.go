@@ -31,11 +31,11 @@ type pushApplyInput struct {
 // hand-written spec (rollout N3). The register func projects into native handlers.PushApplyInput
 // (toPushApplyInput).
 type PushApplyRequest struct {
-	Inventory            []string       `json:"inventory" required:"true" doc:"спиwithк SID (FQDN) target-хостов (transport: ssh)"`
-	Destiny              string         `json:"destiny" required:"true" doc:"ссылка on Destiny в форме <name>@<ref>"`
+	Inventory            []string       `json:"inventory" required:"true" doc:"list of target SID (FQDN) hosts (transport: ssh)"`
+	Destiny              string         `json:"destiny" required:"true" doc:"reference to Destiny in the form <name>@<ref>"`
 	Input                map[string]any `json:"input,omitempty" doc:"input for destiny"`
-	SSHProvider          string         `json:"ssh_provider,omitempty" doc:"имя SshProvider; по умолчанию первый зарегистрированный"`
-	CleanupStaleVersions bool           `json:"cleanup_stale_versions,omitempty" doc:"удалить устаревшие версии soul-binary/модулей в той же SSH-сессии"`
+	SSHProvider          string         `json:"ssh_provider,omitempty" doc:"SshProvider name; defaults to the first registered one"`
+	CleanupStaleVersions bool           `json:"cleanup_stale_versions,omitempty" doc:"remove stale soul-binary/module versions in the same SSH session"`
 }
 
 // pushApplyOutput — huma output POST /v1/push/apply (FULL-TYPED). Status=202 (async
@@ -55,8 +55,8 @@ func pushApplyOperation() huma.Operation {
 		OperationID:   "pushApply",
 		Method:        http.MethodPost,
 		Path:          "/apply",
-		Summary:       "Запустить push-прогон Destiny по SSH",
-		Description:   "Async push-orchestrator (Variant C, ADR-004 push-flow). 202 + apply_id, далее опрос GET /v1/push/{apply_id}. Permission push.apply. Блокируется Toll при cluster:degraded (503).",
+		Summary:       "Run a Destiny push over SSH",
+		Description:   "Async push-orchestrator (Variant C, ADR-004 push-flow). 202 + apply_id, then poll GET /v1/push/{apply_id}. Permission push.apply. Blocked by Toll on cluster:degraded (503).",
 		Tags:          []string{"push"},
 		DefaultStatus: http.StatusAccepted,
 		Errors:        []int{http.StatusBadRequest, http.StatusForbidden, http.StatusUnprocessableEntity, http.StatusInternalServerError},
@@ -67,7 +67,7 @@ func pushApplyOperation() huma.Operation {
 
 // pushGetInput — huma input GET /v1/push/{apply_id}. ApplyID — path (ULID; empty → 422).
 type pushGetInput struct {
-	ApplyID string `path:"apply_id" doc:"ULID push-прогоon"`
+	ApplyID string `path:"apply_id" doc:"ULID of the push run"`
 }
 
 // pushGetOutput — huma output GET /v1/push/{apply_id} (FULL-TYPED). Body — the native 200 body
@@ -83,8 +83,8 @@ func pushGetOperation() huma.Operation {
 		OperationID:   "pushGet",
 		Method:        http.MethodGet,
 		Path:          "/{apply_id}",
-		Summary:       "Состояние push-прогоon",
-		Description:   "Текущее withстояние push-прогоon по apply_id (ADR-004 push-flow). Permission push.read. Read-only, no audit (recovery-friendly при degraded).",
+		Summary:       "Push run status",
+		Description:   "Current state of a push run by apply_id (ADR-004 push-flow). Permission push.read. Read-only, no audit (recovery-friendly when degraded).",
 		Tags:          []string{"push"},
 		DefaultStatus: http.StatusOK,
 		Errors:        []int{http.StatusForbidden, http.StatusNotFound, http.StatusUnprocessableEntity, http.StatusInternalServerError},
@@ -100,8 +100,8 @@ func pushGetOperation() huma.Operation {
 // SSHProvider — exact-match string. offset/limit — int32 with a default; CheckPageBounds
 // enforces the range in ListRunsTyped → 400 (NOT huma min/max — parity with ParsePage); bad-int → 400.
 type pushRunsListInput struct {
-	Statuses    []string `query:"status,explode" enum:"pending,running,success,partial_failed,failed,cancelled" doc:"multi-value ?status=X&status=Y — exact-match OR; зonчение вне enum → 422"`
-	SSHProvider string   `query:"ssh_provider" doc:"exact-match по push_runs.ssh_provider"`
+	Statuses    []string `query:"status,explode" enum:"pending,running,success,partial_failed,failed,cancelled" doc:"multi-value ?status=X&status=Y — exact-match OR; value outside enum → 422"`
+	SSHProvider string   `query:"ssh_provider" doc:"exact-match on push_runs.ssh_provider"`
 	Offset      int32    `query:"offset" default:"0" doc:"offset from start of set, ≥0 (matches shared/api.ParsePage; out-of-range → 400)"`
 	Limit       int32    `query:"limit" default:"50" doc:"page size 1..1000 (matches shared/api.ParsePage; out-of-range → 400)"`
 }
@@ -122,8 +122,8 @@ func pushRunsListOperation() huma.Operation {
 		OperationID:   "listPushRuns",
 		Method:        http.MethodGet,
 		Path:          "/push-runs",
-		Summary:       "Спиwithк push-прогоbutв (paged)",
-		Description:   "Глобальный реестр push-прогоbutв с фильтрами status/ssh_provider и пагиonцией (UI-4). Permission incarnation.history. Read-only, no audit.",
+		Summary:       "List push runs (paged)",
+		Description:   "Global registry of push runs with status/ssh_provider filters and pagination (UI-4). Permission incarnation.history. Read-only, no audit.",
 		Tags:          []string{"push"},
 		DefaultStatus: http.StatusOK,
 		Errors:        []int{http.StatusBadRequest, http.StatusForbidden, http.StatusUnprocessableEntity, http.StatusInternalServerError},

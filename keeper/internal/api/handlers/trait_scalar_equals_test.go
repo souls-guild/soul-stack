@@ -25,12 +25,12 @@ func TestTraitScalarEquals_Table(t *testing.T) {
 			key:    "owner", value: "alice", want: true,
 		},
 		{
-			name:   "string miss (другое значение)",
+			name:   "string miss (different value)",
 			traits: map[string]any{"owner": "alice"},
 			key:    "owner", value: "bob", want: false,
 		},
 		{
-			name:   "float64 hit (jsonb-число декодируется в float64)",
+			name:   "float64 hit (jsonb number decodes to float64)",
 			traits: map[string]any{"shard": float64(3)},
 			key:    "shard", value: "3", want: true,
 		},
@@ -40,7 +40,7 @@ func TestTraitScalarEquals_Table(t *testing.T) {
 			key:    "managed", value: "true", want: true,
 		},
 		{
-			name:   "отсутствующий ключ → miss",
+			name:   "missing key -> miss",
 			traits: map[string]any{"owner": "alice"},
 			key:    "team", value: "dba", want: false,
 		},
@@ -50,7 +50,7 @@ func TestTraitScalarEquals_Table(t *testing.T) {
 			key:    "owner", value: "alice", want: false,
 		},
 		{
-			name:   "list-Trait → false (scalar-only, НЕ матчит элемент массива)",
+			name:   "list-Trait -> false (scalar-only, does NOT match an array element)",
 			traits: map[string]any{"env": []any{"prod", "stage"}},
 			key:    "env", value: "prod", want: false,
 		},
@@ -80,6 +80,6 @@ func TestTraitScalarEquals_JSONNumber(t *testing.T) {
 		t.Fatalf("decode: %v", err)
 	}
 	if !traitScalarEquals(traits, "shard", "7") {
-		t.Errorf("json.Number 7 не сматчил \"7\" (scalar-ветка должна покрывать json.Number)")
+		t.Errorf("json.Number 7 did not match \"7\" (scalar branch must cover json.Number)")
 	}
 }

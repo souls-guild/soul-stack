@@ -173,7 +173,7 @@ func TestRunTasksTyped_PlanAuditJoin(t *testing.T) {
 		t.Fatalf("task0 hosts = %d, want 2", len(t0.Hosts))
 	}
 	if t0.Hosts[0].SID != "host-a" || t0.Hosts[1].SID != "host-b" {
-		t.Errorf("task0 hosts не отсортированы по sid: %q,%q", t0.Hosts[0].SID, t0.Hosts[1].SID)
+		t.Errorf("task0 hosts not sorted by sid: %q,%q", t0.Hosts[0].SID, t0.Hosts[1].SID)
 	}
 	ha := t0.Hosts[0]
 	if ha.Status != "TASK_STATUS_FAILED" {
@@ -183,7 +183,7 @@ func TestRunTasksTyped_PlanAuditJoin(t *testing.T) {
 		t.Errorf("task0 host-a error = %+v, want {E_APPLY,...,boom}", ha.Error)
 	}
 	if ha.Output != nil {
-		t.Errorf("task0 host-a output = %v, want nil (последний exec без register_data)", ha.Output)
+		t.Errorf("task0 host-a output = %v, want nil (last exec without register_data)", ha.Output)
 	}
 	hb := t0.Hosts[1]
 	if hb.Status != "TASK_STATUS_CHANGED" || hb.Error != nil {
@@ -200,13 +200,13 @@ func TestRunTasksTyped_PlanAuditJoin(t *testing.T) {
 	}
 	// a no_log task: params are NOT stored (NULL) → nil in the DTO (symmetric with output).
 	if t1.Params != nil {
-		t.Errorf("task1 (no_log) Params = %v, want nil (params не хранятся)", t1.Params)
+		t.Errorf("task1 (no_log) Params = %v, want nil (params are not stored)", t1.Params)
 	}
 	if len(t1.Hosts) != 1 || t1.Hosts[0].SID != "host-a" {
 		t.Fatalf("task1 hosts = %+v, want [host-a]", t1.Hosts)
 	}
 	if t1.Hosts[0].Output != nil {
-		t.Errorf("task1 (no_log) host output = %v, want nil (подавлен на write-path)", t1.Hosts[0].Output)
+		t.Errorf("task1 (no_log) host output = %v, want nil (suppressed on write-path)", t1.Hosts[0].Output)
 	}
 
 	// task[2]: pending — present in the plan, but no audit result → hosts empty.
@@ -215,7 +215,7 @@ func TestRunTasksTyped_PlanAuditJoin(t *testing.T) {
 		t.Errorf("task2 plan_index = %d, want 2", t2.PlanIndex)
 	}
 	if len(t2.Hosts) != 0 {
-		t.Errorf("task2 (pending) hosts = %d, want 0 (нет audit-результата)", len(t2.Hosts))
+		t.Errorf("task2 (pending) hosts = %d, want 0 (no audit result)", len(t2.Hosts))
 	}
 	if t2.Params == nil || t2.Params["unit"] != "redis" {
 		t.Errorf("task2.Params = %v, want {unit:redis}", t2.Params)
@@ -242,10 +242,10 @@ func TestRunTasksTyped_MaskedParamsFlowThrough(t *testing.T) {
 	}
 	p := v.Tasks[0].Params
 	if p == nil || p["password"] != "***MASKED***" {
-		t.Errorf("params.password = %v, want ***MASKED*** (masked-значение доезжает как есть)", p["password"])
+		t.Errorf("params.password = %v, want ***MASKED*** (masked value passes through as is)", p["password"])
 	}
 	if p["user"] != "admin" {
-		t.Errorf("params.user = %v, want admin (не секрет, сохранён)", p["user"])
+		t.Errorf("params.user = %v, want admin (not a secret, preserved)", p["user"])
 	}
 }
 

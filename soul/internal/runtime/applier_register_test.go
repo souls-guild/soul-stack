@@ -61,25 +61,25 @@ func TestApplierRegister_AggregateChangedTrue(t *testing.T) {
 		t.Fatalf("Run: %v", err)
 	}
 	if !noopCalled {
-		t.Errorf("core.noop Apply не вызывался (терминал всё равно исполняется)")
+		t.Errorf("core.noop Apply was not called (the terminal still executes)")
 	}
 	term := sink.taskEvents[2]
 	// Terminal status is OK (core.noop changed=false), the aggregate lives in register_data.
 	if got := term.GetStatus(); got != keeperv1.TaskStatus_TASK_STATUS_OK {
-		t.Errorf("терминал status = %v, want OK (core.noop тривиален; агрегат в register_data)", got)
+		t.Errorf("terminal status = %v, want OK (core.noop is trivial; aggregate in register_data)", got)
 	}
 	rd := term.GetRegisterData().GetFields()
 	if !rd["changed"].GetBoolValue() {
-		t.Errorf("агрегат .changed = false, want true (child0 changed)")
+		t.Errorf("aggregate .changed = false, want true (child0 changed)")
 	}
 	if rd["failed"].GetBoolValue() {
-		t.Errorf("агрегат .failed = true, want false (ни одна дочерняя не упала)")
+		t.Errorf("aggregate .failed = true, want false (no child failed)")
 	}
 	if rd["timed_out"].GetBoolValue() {
-		t.Errorf("агрегат .timed_out = true, want false")
+		t.Errorf("aggregate .timed_out = true, want false")
 	}
 	if rd["skipped"].GetBoolValue() {
-		t.Errorf("агрегат .skipped = true, want false (агрегат — реальный исход, не пропуск)")
+		t.Errorf("aggregate .skipped = true, want false (aggregate is a real outcome, not a skip)")
 	}
 }
 
@@ -106,7 +106,7 @@ func TestApplierRegister_AggregateChangedFalse(t *testing.T) {
 	}
 	rd := sink.taskEvents[2].GetRegisterData().GetFields()
 	if rd["changed"].GetBoolValue() {
-		t.Errorf("агрегат .changed = true, want false (все дочерние no-op)")
+		t.Errorf("aggregate .changed = true, want false (all children are no-op)")
 	}
 }
 
@@ -138,7 +138,7 @@ func TestApplierRegister_OnChangesResolvesAndReloads(t *testing.T) {
 		t.Fatalf("Run: %v", err)
 	}
 	if !reloadCalled {
-		t.Errorf("reload не исполнился, хотя агрегат applier-register changed=true (onchanges на терминал не сработал)")
+		t.Errorf("reload did not run, although the applier-register aggregate changed=true (onchanges on the terminal did not fire)")
 	}
 	if got := sink.taskEvents[2].GetStatus(); got != keeperv1.TaskStatus_TASK_STATUS_CHANGED {
 		t.Errorf("reload status = %v, want CHANGED", got)
@@ -165,10 +165,10 @@ func TestApplierRegister_OnChangesResolvesAndReloads(t *testing.T) {
 		t.Fatalf("Run (noflap): %v", err)
 	}
 	if reloadCalled {
-		t.Errorf("reload исполнился, хотя агрегат changed=false (reload должен срабатывать ТОЛЬКО при changed)")
+		t.Errorf("reload ran, although the aggregate changed=false (reload should fire ONLY when changed)")
 	}
 	if got := sink2.taskEvents[2].GetStatus(); got != keeperv1.TaskStatus_TASK_STATUS_SKIPPED {
-		t.Errorf("reload status = %v, want SKIPPED (агрегат не changed)", got)
+		t.Errorf("reload status = %v, want SKIPPED (aggregate not changed)", got)
 	}
 }
 
@@ -205,7 +205,7 @@ func TestApplierRegister_AggregateFailedOR(t *testing.T) {
 	}
 	rd := sink.taskEvents[2].GetRegisterData().GetFields()
 	if !rd["failed"].GetBoolValue() {
-		t.Errorf("агрегат .failed = false, want true (child1 упал — OR(failed дочерних)); терминал НЕ должен молча skip-нуться после провала прогона")
+		t.Errorf("aggregate .failed = false, want true (child1 failed - OR(children failed)); the terminal should NOT silently skip after a failed run")
 	}
 }
 
@@ -234,16 +234,16 @@ func TestAggregateRegisterData_OR(t *testing.T) {
 		t.Errorf(".failed = false, want true (idx 1 failed)")
 	}
 	if got["timed_out"].GetBoolValue() {
-		t.Errorf(".timed_out = true, want false (ни один источник)")
+		t.Errorf(".timed_out = true, want false (no source)")
 	}
 	if got["skipped"].GetBoolValue() {
-		t.Errorf(".skipped = true, want false (агрегат всегда не-skipped)")
+		t.Errorf(".skipped = true, want false (aggregate is always non-skipped)")
 	}
 
 	// Empty aggregate / all no-op → all false.
 	none := aggregateRegisterData([]int32{2}, registerByIdx).GetFields()
 	if none["changed"].GetBoolValue() || none["failed"].GetBoolValue() || none["timed_out"].GetBoolValue() {
-		t.Errorf("no-op агрегат = %v, want все false", none)
+		t.Errorf("no-op aggregate = %v, want all false", none)
 	}
 
 	// timed_out source → aggregate timed_out=true AND failed=false (timed_out

@@ -126,7 +126,7 @@ func TestIntegration_CreateRole_Happy(t *testing.T) {
 
 	err := s.CreateRole(context.Background(), CreateRoleInput{
 		Name:        "soul-reader",
-		Description: "видит Souls",
+		Description: "sees Souls",
 		Permissions: []string{"soul.list", "incarnation.get"},
 		CallerAID:   caller,
 	})
@@ -134,7 +134,7 @@ func TestIntegration_CreateRole_Happy(t *testing.T) {
 		t.Fatalf("CreateRole: %v", err)
 	}
 	if !roleExists(t, "soul-reader") {
-		t.Fatal("роль soul-reader не создана")
+		t.Fatal("role soul-reader was not created")
 	}
 	if got := rolePerms(t, "soul-reader"); len(got) != 2 {
 		t.Errorf("permissions = %v, want 2", got)
@@ -197,7 +197,7 @@ func TestIntegration_CreateRole_DefaultScope(t *testing.T) {
 	}
 	p := enf.ResolvePurview("archon-prod", "incarnation", "run")
 	if p.Unrestricted {
-		t.Errorf("Unrestricted=true, want false (bare-perm наследует default_scope)")
+		t.Errorf("Unrestricted=true, want false (bare-perm inherits default_scope)")
 	}
 	if len(p.Covens) != 1 || p.Covens[0] != "prod" {
 		t.Errorf("Covens=%v, want [prod]", p.Covens)
@@ -231,10 +231,10 @@ func TestIntegration_CreateRole_BadPermission(t *testing.T) {
 		CallerAID:   "archon-alice",
 	})
 	if err == nil {
-		t.Fatal("CreateRole с битым permission: want error, got nil")
+		t.Fatal("CreateRole with a broken permission: want error, got nil")
 	}
 	if roleExists(t, "broken") {
-		t.Error("роль broken создана несмотря на validation-ошибку (валидация должна быть ДО tx)")
+		t.Error("role broken was created despite the validation error (validation must run BEFORE tx)")
 	}
 }
 
@@ -263,7 +263,7 @@ func TestIntegration_DeleteRole_Happy(t *testing.T) {
 		t.Fatalf("DeleteRole: %v", err)
 	}
 	if roleExists(t, "tmp-role") {
-		t.Error("роль tmp-role не удалена")
+		t.Error("role tmp-role was not deleted")
 	}
 }
 
@@ -331,7 +331,7 @@ func TestIntegration_DeleteRole_Builtin(t *testing.T) {
 		t.Fatalf("err = %v, want ErrRoleBuiltin", err)
 	}
 	if !roleExists(t, "cluster-admin") {
-		t.Error("builtin-роль удалена")
+		t.Error("builtin role was deleted")
 	}
 }
 
@@ -348,10 +348,10 @@ func TestIntegration_DeleteRole_Cascade(t *testing.T) {
 		t.Fatalf("DeleteRole: %v", err)
 	}
 	if permCount(t, "casc-role") != 0 {
-		t.Error("permissions не снесены каскадом")
+		t.Error("permissions were not cascade-deleted")
 	}
 	if membershipCount(t, "casc-role") != 0 {
-		t.Error("membership не снесён каскадом")
+		t.Error("membership was not cascade-deleted")
 	}
 }
 
@@ -374,11 +374,11 @@ func TestIntegration_UpdateRolePermissions_Replace(t *testing.T) {
 	}
 	got := rolePerms(t, "upd-role")
 	if len(got) != 3 {
-		t.Fatalf("permissions = %v, want 3 (replace, старый soul.list снят)", got)
+		t.Fatalf("permissions = %v, want 3 (replace, old soul.list removed)", got)
 	}
 	for _, p := range got {
 		if p == "soul.list" {
-			t.Error("старый permission soul.list не снят (replace-семантика нарушена)")
+			t.Error("old permission soul.list was not removed (replace semantics violated)")
 		}
 	}
 }
@@ -431,7 +431,7 @@ func TestIntegration_UpdateRolePermissions_EmptySetRemovesWildcard(t *testing.T)
 		t.Fatalf("UpdateRolePermissions (empty set): %v", err)
 	}
 	if permCount(t, "extra-admin") != 0 {
-		t.Error("пустой набор не снял permissions")
+		t.Error("empty set did not clear permissions")
 	}
 }
 
@@ -452,7 +452,7 @@ func TestIntegration_RevokeOperator_Happy(t *testing.T) {
 		t.Fatalf("RevokeOperator: %v", err)
 	}
 	if membershipCount(t, "viewer") != 0 {
-		t.Error("membership не снят")
+		t.Error("membership was not revoked")
 	}
 }
 
@@ -520,7 +520,7 @@ func TestIntegration_SelfLockout_DeleteRole_Last(t *testing.T) {
 		t.Fatalf("err = %v, want ErrWouldLockOutCluster", err)
 	}
 	if !roleExists(t, "extra-admin") {
-		t.Error("роль удалена несмотря на lockout (tx не откатилась)")
+		t.Error("role was deleted despite lockout (tx did not roll back)")
 	}
 }
 
@@ -531,10 +531,10 @@ func TestIntegration_SelfLockout_DeleteRole_NotLast(t *testing.T) {
 	s := newService(t)
 
 	if err := s.DeleteRole(context.Background(), "extra-admin"); err != nil {
-		t.Fatalf("DeleteRole (есть второй admin-путь): %v", err)
+		t.Fatalf("DeleteRole (a second admin path exists): %v", err)
 	}
 	if roleExists(t, "extra-admin") {
-		t.Error("роль не удалена")
+		t.Error("role was not deleted")
 	}
 }
 
@@ -558,7 +558,7 @@ func TestIntegration_SelfLockout_UpdateRole_Last(t *testing.T) {
 	// `*` remains — the tx rolled back.
 	got := rolePerms(t, "extra-admin")
 	if len(got) != 1 || got[0] != "*" {
-		t.Errorf("permissions = %v, want [*] (откат)", got)
+		t.Errorf("permissions = %v, want [*] (rollback)", got)
 	}
 }
 
@@ -570,7 +570,7 @@ func TestIntegration_SelfLockout_UpdateRole_NotLast(t *testing.T) {
 	if err := s.UpdateRolePermissions(context.Background(), UpdateRolePermissionsInput{
 		Name: "extra-admin", Permissions: []string{"soul.list"}, CallerAID: "archon-alice",
 	}); err != nil {
-		t.Fatalf("UpdateRolePermissions (есть второй admin): %v", err)
+		t.Fatalf("UpdateRolePermissions (a second admin exists): %v", err)
 	}
 }
 
@@ -588,7 +588,7 @@ func TestIntegration_SelfLockout_UpdateRole_KeepsWildcard(t *testing.T) {
 	if err := s.UpdateRolePermissions(context.Background(), UpdateRolePermissionsInput{
 		Name: "extra-admin", Permissions: []string{"*", "soul.list"}, CallerAID: "archon-alice",
 	}); err != nil {
-		t.Fatalf("UpdateRolePermissions (новый набор тоже даёт *): %v", err)
+		t.Fatalf("UpdateRolePermissions (new set also grants *): %v", err)
 	}
 }
 
@@ -606,7 +606,7 @@ func TestIntegration_SelfLockout_RevokeOperator_Last(t *testing.T) {
 		t.Fatalf("err = %v, want ErrWouldLockOutCluster", err)
 	}
 	if membershipCount(t, "cluster-admin") != 1 {
-		t.Error("membership снят несмотря на lockout (tx не откатилась)")
+		t.Error("membership was revoked despite lockout (tx did not roll back)")
 	}
 }
 
@@ -619,7 +619,7 @@ func TestIntegration_SelfLockout_RevokeOperator_NotLast(t *testing.T) {
 	if err := s.RevokeOperator(context.Background(), RevokeOperatorInput{
 		RoleName: "extra-admin", AID: "archon-bob",
 	}); err != nil {
-		t.Fatalf("RevokeOperator (есть второй admin): %v", err)
+		t.Fatalf("RevokeOperator (a second admin exists): %v", err)
 	}
 }
 
@@ -642,11 +642,11 @@ func TestIntegration_SelfLockout_RevokeOperator_AdminViaTwoRoles(t *testing.T) {
 	if err := s.RevokeOperator(context.Background(), RevokeOperatorInput{
 		RoleName: "extra-admin", AID: "archon-alice",
 	}); err != nil {
-		t.Fatalf("RevokeOperator (admin через вторую роль): %v", err)
+		t.Fatalf("RevokeOperator (admin via a second role): %v", err)
 	}
 	// Via cluster-admin alice is still admin.
 	if membershipCount(t, "cluster-admin") != 1 {
-		t.Error("cluster-admin membership alice потерян")
+		t.Error("cluster-admin membership for alice was lost")
 	}
 }
 
@@ -703,11 +703,11 @@ func TestIntegration_SelfLockout_Concurrent_TwoPaths(t *testing.T) {
 		case errors.Is(e, ErrWouldLockOutCluster):
 			lockouts++
 		default:
-			t.Fatalf("неожиданная ошибка: %v", e)
+			t.Fatalf("unexpected error: %v", e)
 		}
 	}
 	if successes != 1 || lockouts != 1 {
-		t.Fatalf("successes=%d lockouts=%d, want 1/1 (сериализация FOR UPDATE)", successes, lockouts)
+		t.Fatalf("successes=%d lockouts=%d, want 1/1 (FOR UPDATE serialization)", successes, lockouts)
 	}
 
 	// Invariant: alice remains admin via at least one path.
@@ -716,7 +716,7 @@ func TestIntegration_SelfLockout_Concurrent_TwoPaths(t *testing.T) {
 		t.Fatalf("LockEffectiveClusterAdmins: %v", err)
 	}
 	if len(admins) < 1 {
-		t.Fatalf("активных admin-ов %d, want >= 1 (кластер не должен залочиться)", len(admins))
+		t.Fatalf("active admins %d, want >= 1 (cluster must not lock itself out)", len(admins))
 	}
 }
 
@@ -761,7 +761,7 @@ func TestIntegration_ServiceGrantOperator_Happy(t *testing.T) {
 		t.Fatalf("GrantOperator: %v", err)
 	}
 	if membershipCount(t, "viewer") != 1 {
-		t.Error("membership не вставлен")
+		t.Error("membership was not inserted")
 	}
 	// granted_by_aid = CallerAID.
 	if by := grantedByOf(t, "viewer", "archon-bob"); by == nil || *by != alice {
@@ -817,7 +817,7 @@ func TestIntegration_ServiceGrantOperator_RoleNotFound(t *testing.T) {
 		t.Fatalf("err = %v, want ErrRoleNotFound", err)
 	}
 	if membershipCount(t, "ghost-role") != 0 {
-		t.Error("membership вставлен для несуществующей роли")
+		t.Error("membership was inserted for a nonexistent role")
 	}
 }
 
@@ -833,7 +833,7 @@ func TestIntegration_ServiceGrantOperator_OperatorNotFound(t *testing.T) {
 		t.Fatalf("err = %v, want ErrOperatorNotFound", err)
 	}
 	if membershipCount(t, "viewer") != 0 {
-		t.Error("membership вставлен для несуществующего AID (FK должен откатить)")
+		t.Error("membership was inserted for a nonexistent AID (FK should have rolled back)")
 	}
 }
 
@@ -862,7 +862,7 @@ func TestIntegration_ServiceListRoles_WithPermissionsAndOperators(t *testing.T) 
 	// builtin cluster-admin: builtin=true, `*`, no operators.
 	ca, ok := byName["cluster-admin"]
 	if !ok {
-		t.Fatal("cluster-admin отсутствует в каталоге")
+		t.Fatal("cluster-admin is missing from the catalog")
 	}
 	if !ca.Builtin {
 		t.Error("cluster-admin.Builtin = false, want true")
@@ -877,7 +877,7 @@ func TestIntegration_ServiceListRoles_WithPermissionsAndOperators(t *testing.T) 
 	// custom viewer: builtin=false, 2 permissions, 2 operators.
 	v, ok := byName["viewer"]
 	if !ok {
-		t.Fatal("viewer отсутствует в каталоге")
+		t.Fatal("viewer is missing from the catalog")
 	}
 	if v.Builtin {
 		t.Error("viewer.Builtin = true, want false")
@@ -902,7 +902,7 @@ func TestIntegration_ServiceListRoles_SeedOnly(t *testing.T) {
 		t.Fatalf("ListRoles: %v", err)
 	}
 	if len(views) != 1 {
-		t.Fatalf("len(views) = %d, want 1 (только seed cluster-admin)", len(views))
+		t.Fatalf("len(views) = %d, want 1 (only seed cluster-admin)", len(views))
 	}
 	if views[0].Name != "cluster-admin" || !views[0].Builtin {
 		t.Errorf("view = %+v, want builtin cluster-admin", views[0])

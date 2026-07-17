@@ -29,10 +29,10 @@ type PushApplyReply struct {
 // Apply is POST /v1/push/apply. Inventory/Destiny are required.
 func (a *PushAPI) Apply(ctx context.Context, req PushApplyRequest) (*PushApplyReply, error) {
 	if len(req.Inventory) == 0 {
-		return nil, fmt.Errorf("inventory пуст: требуется хотя бы один SID")
+		return nil, fmt.Errorf("inventory is empty: at least one SID is required")
 	}
 	if req.Destiny == "" {
-		return nil, fmt.Errorf("destiny пуст: требуется ссылка <name>@<ref>")
+		return nil, fmt.Errorf("destiny is empty: a <name>@<ref> reference is required")
 	}
 	var reply PushApplyReply
 	if err := a.c.Do(ctx, "POST", "/v1/push/apply", req, &reply); err != nil {

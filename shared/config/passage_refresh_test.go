@@ -110,13 +110,13 @@ tasks:
 func TestStratify_RefreshThenSoulprintHosts(t *testing.T) {
 	p := stratify(t, refreshThenSoulprintHosts)
 	if p.Count != 2 {
-		t.Fatalf("Count = %d, want 2 (refresh-граница расщепляет refresh-шаг и soulprint.hosts-потребителя)", p.Count)
+		t.Fatalf("Count = %d, want 2 (refresh boundary splits the refresh step and the soulprint.hosts consumer)", p.Count)
 	}
 	if p.TaskPassage[0] != 0 {
-		t.Errorf("refresh-шаг passage = %d, want 0", p.TaskPassage[0])
+		t.Errorf("refresh-step passage = %d, want 0", p.TaskPassage[0])
 	}
 	if p.TaskPassage[1] != 1 {
-		t.Errorf("soulprint.hosts-потребитель passage = %d, want 1 (СТРОГО после refresh)", p.TaskPassage[1])
+		t.Errorf("soulprint.hosts consumer passage = %d, want 1 (STRICTLY after refresh)", p.TaskPassage[1])
 	}
 }
 
@@ -126,10 +126,10 @@ func TestStratify_RefreshThenSoulprintHosts(t *testing.T) {
 func TestStratify_RefreshThenOnIncarnation(t *testing.T) {
 	p := stratify(t, refreshThenOnIncarnation)
 	if p.Count != 2 {
-		t.Fatalf("Count = %d, want 2 (refresh-граница расщепляет refresh-шаг и on:[incarnation.name]-потребителя)", p.Count)
+		t.Fatalf("Count = %d, want 2 (refresh boundary splits the refresh step and the on:[incarnation.name] consumer)", p.Count)
 	}
 	if p.TaskPassage[0] != 0 || p.TaskPassage[1] != 1 {
-		t.Fatalf("passages = %v, want [0 1] (on:[incarnation.name] СТРОГО после refresh)", p.TaskPassage)
+		t.Fatalf("passages = %v, want [0 1] (on:[incarnation.name] STRICTLY after refresh)", p.TaskPassage)
 	}
 }
 
@@ -138,10 +138,10 @@ func TestStratify_RefreshThenOnIncarnation(t *testing.T) {
 func TestStratify_RefreshThenSoulprintSelf(t *testing.T) {
 	p := stratify(t, refreshThenSoulprintSelf)
 	if p.Count != 2 {
-		t.Fatalf("Count = %d, want 2 (refresh-граница расщепляет refresh-шаг и soulprint.self-потребителя)", p.Count)
+		t.Fatalf("Count = %d, want 2 (refresh boundary splits the refresh step and the soulprint.self consumer)", p.Count)
 	}
 	if p.TaskPassage[0] != 0 || p.TaskPassage[1] != 1 {
-		t.Fatalf("passages = %v, want [0 1] (soulprint.self СТРОГО после refresh)", p.TaskPassage)
+		t.Fatalf("passages = %v, want [0 1] (soulprint.self STRICTLY after refresh)", p.TaskPassage)
 	}
 }
 
@@ -152,10 +152,10 @@ func TestStratify_RefreshThenSoulprintSelf(t *testing.T) {
 func TestStratify_RefreshThenOmittedOn(t *testing.T) {
 	p := stratify(t, refreshThenOmittedOn)
 	if p.Count != 2 {
-		t.Fatalf("Count = %d, want 2 (опущенный on: после refresh = весь выросший roster → следующий Passage)", p.Count)
+		t.Fatalf("Count = %d, want 2 (omitted on: after refresh = the whole grown roster -> next Passage)", p.Count)
 	}
 	if p.TaskPassage[0] != 0 || p.TaskPassage[1] != 1 {
-		t.Fatalf("passages = %v, want [0 1] (опущенный on: СТРОГО после refresh)", p.TaskPassage)
+		t.Fatalf("passages = %v, want [0 1] (omitted on: STRICTLY after refresh)", p.TaskPassage)
 	}
 }
 
@@ -186,11 +186,11 @@ tasks:
 `
 	p := stratify(t, src)
 	if p.Count != 1 {
-		t.Fatalf("Count = %d, want 1 — без refresh_soulprint roster-граница НЕ активна (опечатка/отсутствие флага → потребитель в том же Passage)", p.Count)
+		t.Fatalf("Count = %d, want 1 -- without refresh_soulprint the roster boundary is NOT active (typo/missing flag -> consumer in the same Passage)", p.Count)
 	}
 	for i, pass := range p.TaskPassage {
 		if pass != 0 {
-			t.Errorf("task #%d passage = %d, want 0 (нет refresh-эмиттера → один Passage)", i, pass)
+			t.Errorf("task #%d passage = %d, want 0 (no refresh emitter -> one Passage)", i, pass)
 		}
 	}
 }
@@ -219,7 +219,7 @@ tasks:
 `
 	p := stratify(t, src)
 	if p.Count != 1 {
-		t.Fatalf("Count = %d, want 1 — refresh_soulprint: false НЕ эмиттер", p.Count)
+		t.Fatalf("Count = %d, want 1 -- refresh_soulprint: false is NOT an emitter", p.Count)
 	}
 }
 
@@ -259,7 +259,7 @@ tasks:
 	want := []int{0, 0, 1}
 	for i, w := range want {
 		if p.TaskPassage[i] != w {
-			t.Errorf("task #%d passage = %d, want %d (refresh-граница: только ПОСЛЕДУЮЩИЕ roster-потребители расщепляются)", i, p.TaskPassage[i], w)
+			t.Errorf("task #%d passage = %d, want %d (refresh boundary: only SUBSEQUENT roster consumers are split)", i, p.TaskPassage[i], w)
 		}
 	}
 }
@@ -287,10 +287,10 @@ tasks:
 `
 	p := stratify(t, src)
 	if p.Count != 2 {
-		t.Fatalf("Count = %d, want 2 (assert soulprint.hosts ПОСЛЕ refresh → следующий Passage)", p.Count)
+		t.Fatalf("Count = %d, want 2 (assert soulprint.hosts AFTER refresh -> next Passage)", p.Count)
 	}
 	if p.TaskPassage[0] != 0 || p.TaskPassage[1] != 1 {
-		t.Fatalf("passages = %v, want [0 1] (assert-топология видит выросший roster)", p.TaskPassage)
+		t.Fatalf("passages = %v, want [0 1] (assert topology sees the grown roster)", p.TaskPassage)
 	}
 }
 
@@ -338,7 +338,7 @@ tasks:
 	}
 	for _, d := range diags {
 		if d.Code == "unknown_register_reference" {
-			t.Fatalf("ложный unknown_register_reference (%s): refresh-граница не должна вводить register-ссылок", d.Message)
+			t.Fatalf("false unknown_register_reference (%s): the refresh boundary must not introduce register references", d.Message)
 		}
 	}
 
@@ -349,13 +349,13 @@ tasks:
 	for i := range m.Tasks {
 		reads := taskRegisterReads(&m.Tasks[i])
 		if len(reads) != 0 {
-			t.Errorf("task #%d имеет cross-task register-reads %v — refresh-фикстура должна расщепляться ТОЛЬКО roster-границей (register-рёбер быть не должно)", i, reads)
+			t.Errorf("task #%d has cross-task register-reads %v — the refresh fixture must split ONLY on the roster boundary (there must be no register edges)", i, reads)
 		}
 		// reads⊆refs: every read register must have an emitter (here reads is empty,
 		// the check is trivial, but it pins the invariant against regression).
 		for _, name := range reads {
 			if _, ok := emitter[name]; !ok {
-				t.Errorf("task #%d читает register %q без эмиттера — reads⊄refs", i, name)
+				t.Errorf("task #%d reads register %q with no emitter — reads⊄refs", i, name)
 			}
 		}
 	}
@@ -363,15 +363,15 @@ tasks:
 	// Stratify does not fail (register graph is clean) and yields exactly the roster split.
 	p, serr := Stratify(m.Tasks)
 	if serr != nil {
-		t.Fatalf("Stratify: %v (refresh-граница не должна валить чистый register-граф)", serr)
+		t.Fatalf("Stratify: %v (the refresh boundary must not break a clean register graph)", serr)
 	}
 	if p.Count != 2 {
-		t.Fatalf("Count = %d, want 2 (расщепление на roster-оси)", p.Count)
+		t.Fatalf("Count = %d, want 2 (split on the roster axis)", p.Count)
 	}
 	// Without the refresh boundary (refreshEmitters empty) the same plan would not
 	// split: a control proof that Count==2 is owed to the roster axis.
 	if p.TaskPassage[0] != 0 || p.TaskPassage[1] != 1 {
-		t.Fatalf("passages = %v, want [0 1] (roster-потребитель строго после refresh)", p.TaskPassage)
+		t.Fatalf("passages = %v, want [0 1] (roster consumer strictly after refresh)", p.TaskPassage)
 	}
 }
 

@@ -48,14 +48,14 @@ func TestFillTypedPayload_FileChanged(t *testing.T) {
 	got := roundtripPortent(t, ev)
 	fc := got.GetFileChanged()
 	if fc == nil {
-		t.Fatalf("typed payload не выставлен после roundtrip")
+		t.Fatalf("typed payload not set after roundtrip")
 	}
 	if fc.GetPath() != "/etc/passwd" || fc.GetSha256() != "deadbeef" {
 		t.Errorf("FileChangedPortent = %+v", fc)
 	}
 	// dual-write: the data branch is also preserved after roundtrip.
 	if got.GetData() == nil || got.GetData().GetFields()["path"].GetStringValue() != "/etc/passwd" {
-		t.Error("legacy data-ветка должна быть заполнена в hand-off-период")
+		t.Error("legacy data branch should be populated during the hand-off period")
 	}
 }
 
@@ -71,7 +71,7 @@ func TestFillTypedPayload_ServiceDown(t *testing.T) {
 	got := roundtripPortent(t, ev)
 	sd := got.GetServiceDown()
 	if sd == nil {
-		t.Fatal("ServiceDown typed payload не выставлен")
+		t.Fatal("ServiceDown typed payload not set")
 	}
 	if sd.GetService() != "nginx" || sd.GetActive() != false || sd.GetInitSystem() != "systemd" {
 		t.Errorf("ServiceDownPortent = %+v", sd)
@@ -89,7 +89,7 @@ func TestFillTypedPayload_PortClosed(t *testing.T) {
 	got := roundtripPortent(t, ev)
 	pc := got.GetPortClosed()
 	if pc == nil {
-		t.Fatal("PortClosed typed payload не выставлен")
+		t.Fatal("PortClosed typed payload not set")
 	}
 	if pc.GetHost() != "10.0.0.1" || pc.GetPort() != 8443 {
 		t.Errorf("PortClosedPortent = %+v", pc)
@@ -108,7 +108,7 @@ func TestFillTypedPayload_DiskFull(t *testing.T) {
 	got := roundtripPortent(t, ev)
 	df := got.GetDiskFull()
 	if df == nil {
-		t.Fatal("DiskFull typed payload не выставлен")
+		t.Fatal("DiskFull typed payload not set")
 	}
 	if df.GetPath() != "/var" || df.GetUsedPercent() != 95.5 || df.GetThreshold() != 90.0 {
 		t.Errorf("DiskFullPortent = %+v", df)
@@ -125,7 +125,7 @@ func TestFillTypedPayload_ProcessAbsent(t *testing.T) {
 	got := roundtripPortent(t, ev)
 	pa := got.GetProcessAbsent()
 	if pa == nil {
-		t.Fatal("ProcessAbsent typed payload не выставлен")
+		t.Fatal("ProcessAbsent typed payload not set")
 	}
 	if pa.GetPattern() != "redis-server" {
 		t.Errorf("ProcessAbsentPortent = %+v", pa)
@@ -143,7 +143,7 @@ func TestFillTypedPayload_HTTPUnhealthy(t *testing.T) {
 	got := roundtripPortent(t, ev)
 	hu := got.GetHttpUnhealthy()
 	if hu == nil {
-		t.Fatal("HttpUnhealthy typed payload не выставлен")
+		t.Fatal("HttpUnhealthy typed payload not set")
 	}
 	if hu.GetUrl() != "https://api.example.com/health" || hu.GetStatus() != 503 {
 		t.Errorf("HttpUnhealthyPortent = %+v", hu)
@@ -166,7 +166,7 @@ func TestFillTypedPayload_Inotify(t *testing.T) {
 	got := roundtripPortent(t, ev)
 	ino := got.GetInotify()
 	if ino == nil {
-		t.Fatal("Inotify typed payload не выставлен")
+		t.Fatal("Inotify typed payload not set")
 	}
 	if ino.GetPath() != "/var/log/audit" {
 		t.Errorf("InotifyPortent.path=%q", ino.GetPath())
@@ -198,7 +198,7 @@ func TestFillTypedPayload_InotifyEmptyEvents(t *testing.T) {
 	got := roundtripPortent(t, ev)
 	ino := got.GetInotify()
 	if ino == nil {
-		t.Fatal("Inotify typed payload должен быть выставлен даже без events")
+		t.Fatal("Inotify typed payload should be set even without events")
 	}
 	if ino.GetPath() != "/etc/x" {
 		t.Errorf("InotifyPortent.path=%q", ino.GetPath())
@@ -217,7 +217,7 @@ func TestFillTypedPayload_UnknownCheckNoop(t *testing.T) {
 	fillTypedPayload(ev, "soul_beacon.example", data)
 
 	if ev.GetPayload() != nil {
-		t.Errorf("неизвестный check не должен выставлять typed payload, got %T", ev.GetPayload())
+		t.Errorf("unknown check should not set typed payload, got %T", ev.GetPayload())
 	}
 }
 
@@ -227,7 +227,7 @@ func TestFillTypedPayload_NilDataNoop(t *testing.T) {
 	ev := &keeperv1.PortentEvent{BeaconName: "v1"}
 	fillTypedPayload(ev, beaconaddr.FileChanged, nil)
 	if ev.GetPayload() != nil {
-		t.Errorf("nil-data должна оставлять payload пустым, got %T", ev.GetPayload())
+		t.Errorf("nil data should leave payload empty, got %T", ev.GetPayload())
 	}
 }
 
@@ -247,15 +247,15 @@ func TestPortentEvent_OneofExclusive(t *testing.T) {
 
 	// Exactly one typed branch — FileChanged.
 	if got.GetFileChanged() == nil {
-		t.Error("file_changed ветка пуста после roundtrip")
+		t.Error("file_changed branch is empty after roundtrip")
 	}
 	if got.GetServiceDown() != nil || got.GetPortClosed() != nil ||
 		got.GetDiskFull() != nil || got.GetProcessAbsent() != nil ||
 		got.GetHttpUnhealthy() != nil || got.GetCustom() != nil {
-		t.Error("oneof нарушен: несколько typed-веток после roundtrip")
+		t.Error("oneof violated: multiple typed branches after roundtrip")
 	}
 	// dual-write: the legacy data branch is also present.
 	if got.GetData() == nil {
-		t.Error("data-ветка потеряна после roundtrip")
+		t.Error("data branch lost after roundtrip")
 	}
 }

@@ -137,7 +137,7 @@ type voyageCancelRow struct {
 
 func (r voyageCancelRow) Scan(dest ...any) error {
 	if len(dest) != 31 {
-		return errStrict("voyageCancelRow: expected 31 dest, got scanVoyage-рассинхрон")
+		return errStrict("voyageCancelRow: expected 31 dest, got scanVoyage desync")
 	}
 	kind := r.kind
 	if kind == "" {
@@ -272,7 +272,7 @@ func TestHumaVoyage_Create_MissingTarget_422_NoAudit(t *testing.T) {
 		t.Fatalf("status = %d, want 422 (missing target); body=%s", rec.Code, rec.Body.String())
 	}
 	if len(auditCap.Events()) != 0 {
-		t.Errorf("audit записан on 422 — write-путь не toлжен писать")
+		t.Errorf("audit recorded on 422 - the write path must not write")
 	}
 }
 
@@ -288,7 +288,7 @@ func TestHumaVoyage_Create_RBACDeny_403_NoAudit(t *testing.T) {
 		t.Fatalf("status = %d, want 403 (RBAC-by-kind deny); body=%s", rec.Code, rec.Body.String())
 	}
 	if len(auditCap.Events()) != 0 {
-		t.Errorf("audit записан on 403")
+		t.Errorf("audit recorded on 403")
 	}
 }
 
@@ -314,7 +314,7 @@ func TestHumaVoyage_Preview_WireAndNoAudit(t *testing.T) {
 		t.Errorf("preview reply = %+v, want kind=command scope_size=2", reply)
 	}
 	if len(auditCap.Events()) != 0 {
-		t.Errorf("preview записал audit (%d withбытий) — dry-resolve не toлжен писать", len(auditCap.Events()))
+		t.Errorf("preview recorded audit (%d events) - dry-resolve must not write", len(auditCap.Events()))
 	}
 }
 
@@ -337,10 +337,10 @@ func TestHumaVoyage_List_Read_NoAudit(t *testing.T) {
 		t.Fatalf("unmarshal: %v; body=%s", err, rec.Body.String())
 	}
 	if reply.Items == nil {
-		t.Error("items toлжен быть [] (non-nil)")
+		t.Error("items must be [] (non-nil)")
 	}
 	if len(auditCap.Events()) != 0 {
-		t.Errorf("READ list записал audit")
+		t.Errorf("READ list recorded audit")
 	}
 }
 
@@ -441,7 +441,7 @@ func TestHumaVoyage_Cancel_NotFound_404_NoAudit(t *testing.T) {
 		t.Fatalf("status = %d, want 404; body=%s", rec.Code, rec.Body.String())
 	}
 	if len(auditCap.Events()) != 0 {
-		t.Errorf("audit записан on 404 cancel")
+		t.Errorf("audit recorded on 404 cancel")
 	}
 }
 
@@ -537,7 +537,7 @@ func TestHumaVoyage_Create_GoldenWire(t *testing.T) {
 	got := normalizeVoyageID(t, rec.Body.Bytes())
 	const golden = `{"kind":"command","location":"/v1/voyages/ULID","scope_size":1,"status":"pending","voyage_id":"ULID"}`
 	if got != golden {
-		t.Errorf("GOLDEN wire-дрейф create-202:\n got  = %s\n want = %s\n(onбор ключей/$schema/location fromменился — проверь voyageCreateOutput/VoyageCreateReply)", got, golden)
+		t.Errorf("GOLDEN wire-drift create-202:\n got  = %s\n want = %s\n(key set/$schema/location changed - check voyageCreateOutput/VoyageCreateReply)", got, golden)
 	}
 }
 
@@ -559,7 +559,7 @@ func TestHumaVoyage_Cancel_GoldenWire(t *testing.T) {
 	got := normalizeJSONKeys(t, rec.Body.Bytes())
 	const golden = `{"status":"cancelled","voyage_id":"01HZ0000000000000000000000"}`
 	if got != golden {
-		t.Errorf("GOLDEN wire-дрейф cancel-202:\n got  = %s\n want = %s\n(onбор ключей/$schema fromменился — проверь voyageCancelOutput/VoyageCancelReply)", got, golden)
+		t.Errorf("GOLDEN wire-drift cancel-202:\n got  = %s\n want = %s\n(key set/$schema changed - check voyageCancelOutput/VoyageCancelReply)", got, golden)
 	}
 }
 
@@ -570,7 +570,7 @@ func normalizeVoyageID(t *testing.T, raw []byte) string {
 	t.Helper()
 	var m map[string]any
 	if err := json.Unmarshal(raw, &m); err != nil {
-		t.Fatalf("reply не JSON-object: %v; raw=%s", err, raw)
+		t.Fatalf("reply is not a JSON-object: %v; raw=%s", err, raw)
 	}
 	if _, ok := m["voyage_id"]; ok {
 		m["voyage_id"] = "ULID"

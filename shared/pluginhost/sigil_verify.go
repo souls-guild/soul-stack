@@ -101,17 +101,17 @@ func verifyErrorFor(reason VerifyReason, namespace, name, ref string) *VerifyErr
 	var hint string
 	switch reason {
 	case VerifyReasonNoSigil:
-		hint = fmt.Sprintf("плагин (%s, %s) не допущен; выполните `keeper.plugin.allow ns=%s name=%s ref=<ref>`",
+		hint = fmt.Sprintf("plugin (%s, %s) not allowed; run `keeper.plugin.allow ns=%s name=%s ref=<ref>`",
 			namespace, name, namespace, name)
 	case VerifyReasonNoTrustAnchor:
-		hint = "Sigil не настроен на Keeper (нет trust-anchor для verify подписи плагинов)"
+		hint = "Sigil is not configured on Keeper (no trust-anchor to verify plugin signatures)"
 	case VerifyReasonDigestMismatch:
-		hint = "бинарь плагина не совпадает с допущенным хешем (подмена бинаря или устаревший допуск)"
+		hint = "plugin binary does not match the allowed hash (binary substitution or a stale allow)"
 	case VerifyReasonBadSignature:
-		hint = fmt.Sprintf("подпись допуска недействительна (ротация ключа подписи? пересоздайте допуск: `keeper.plugin.allow ns=%s name=%s ref=%s`)",
+		hint = fmt.Sprintf("allow signature is invalid (signing key rotated? recreate the allow: `keeper.plugin.allow ns=%s name=%s ref=%s`)",
 			namespace, name, ref)
 	default:
-		hint = "Sigil-verify не пройден"
+		hint = "Sigil-verify failed"
 	}
 	return &VerifyError{Reason: reason, Namespace: namespace, Name: name, Hint: hint}
 }

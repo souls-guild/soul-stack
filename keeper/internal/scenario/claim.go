@@ -112,20 +112,20 @@ func (c *ClaimRunner) execute(ctx context.Context, run *applyrun.ApplyRun) {
 		// (ADR-027(i)). Marking failed here would force-consume the job and
 		// burn an attempt without applying.
 		if c.aborted(ctx) {
-			log.Info("scenario: claim — render прерван drain-ом, Ward оставлен для recovery")
+			log.Info("scenario: claim - render interrupted by drain, Ward left for recovery")
 			return
 		}
 		if errors.Is(err, errHostDestroyed) {
 			// NIM-56: host status destroyed (removed by cloud-destroy cascade) → benign no_match, not a failure.
 			if uerr := applyrun.UpdateStatus(ctx, c.deps.Deps.DB, run.ApplyID, run.SID, run.Passage, applyrun.StatusNoMatch, nil); uerr != nil {
 				if errors.Is(uerr, applyrun.ErrApplyRunAlreadyTerminal) {
-					log.Info("scenario: claim benign no_match (destroy-каскад) — single-winner no-op")
+					log.Info("scenario: claim benign no_match (destroy cascade) - single-winner no-op")
 					return
 				}
-				log.Error("scenario: claim benign no_match (destroy-каскад) не записан", slog.Any("error", uerr))
+				log.Error("scenario: claim benign no_match (destroy cascade) not recorded", slog.Any("error", uerr))
 				return
 			}
-			log.Info("scenario: claim — хост снят destroy-каскадом, benign no_match")
+			log.Info("scenario: claim - host removed by destroy cascade, benign no_match")
 			return
 		}
 		// err may carry a vault:secret/-ref in transit — mask before writing to
@@ -149,13 +149,13 @@ func (c *ClaimRunner) execute(ctx context.Context, run *applyrun.ApplyRun) {
 		// to ready, not error_locked.
 		if err := applyrun.UpdateStatus(ctx, c.deps.Deps.DB, run.ApplyID, run.SID, run.Passage, applyrun.StatusNoMatch, nil); err != nil {
 			if errors.Is(err, applyrun.ErrApplyRunAlreadyTerminal) {
-				log.Info("scenario: claim no-op no_match — single-winner no-op, первый коммиттер победил")
+				log.Info("scenario: claim no-op no_match - single-winner no-op, first committer won")
 				return
 			}
-			log.Error("scenario: claim no-op no_match не записан", slog.Any("error", err))
+			log.Error("scenario: claim no-op no_match not recorded", slog.Any("error", err))
 			return
 		}
-		log.Info("scenario: claim — ни одна задача не таргетит хост, no-op no_match")
+		log.Info("scenario: claim - no task targets the host, no-op no_match")
 		return
 	}
 
@@ -169,17 +169,17 @@ func (c *ClaimRunner) execute(ctx context.Context, run *applyrun.ApplyRun) {
 	// skipping the cancel is safer than falsely canceling an already-valid
 	// apply — a repeat Cancel/recovery will finish it off.
 	if cancelled, cerr := applyrun.SelectCancelRequested(ctx, c.deps.Deps.DB, run.ApplyID, run.SID); cerr != nil {
-		log.Warn("scenario: claim — чтение cancel_requested провалено, продолжаем apply", slog.Any("error", cerr))
+		log.Warn("scenario: claim - reading cancel_requested failed, continuing apply", slog.Any("error", cerr))
 	} else if cancelled {
 		if err := applyrun.UpdateStatus(ctx, c.deps.Deps.DB, run.ApplyID, run.SID, run.Passage, applyrun.StatusCancelled, nil); err != nil {
 			if errors.Is(err, applyrun.ErrApplyRunAlreadyTerminal) {
-				log.Info("scenario: claim cancelled — single-winner no-op, первый коммиттер победил")
+				log.Info("scenario: claim cancelled - single-winner no-op, first committer won")
 				return
 			}
-			log.Error("scenario: claim — cancelled-статус не записан после Cancel в claim-окне", slog.Any("error", err))
+			log.Error("scenario: claim - cancelled status not recorded after Cancel in the claim window", slog.Any("error", err))
 			return
 		}
-		log.Info("scenario: claim — Cancel запрошен до SendApply, apply не отправлен, задание отменено")
+		log.Info("scenario: claim - Cancel requested before SendApply, apply not sent, job cancelled")
 		return
 	}
 
@@ -188,7 +188,7 @@ func (c *ClaimRunner) execute(ctx context.Context, run *applyrun.ApplyRun) {
 	// lease expires → recovery scan picks it up (ADR-027(i)). Nothing was sent —
 	// no double apply.
 	if c.aborted(ctx) {
-		log.Info("scenario: claim — drain до отметки dispatched, Ward оставлен для recovery")
+		log.Info("scenario: claim - drain before the dispatched mark, Ward left for recovery")
 		return
 	}
 
@@ -201,7 +201,7 @@ func (c *ClaimRunner) execute(ctx context.Context, run *applyrun.ApplyRun) {
 	// transitions are cut off by the status='claimed' filter inside
 	// MarkDispatched.
 	if err := applyrun.MarkDispatched(ctx, c.deps.Deps.DB, run.ApplyID, run.SID); err != nil {
-		log.Error("scenario: claimed → dispatched не записан, SendApply не вызван (Ward оставлен claimed для recovery)", slog.Any("error", err))
+		log.Error("scenario: claimed -> dispatched not recorded, SendApply not called (Ward left claimed for recovery)", slog.Any("error", err))
 		return
 	}
 
@@ -252,7 +252,7 @@ func (c *ClaimRunner) execute(ctx context.Context, run *applyrun.ApplyRun) {
 	// the host, RunResult never arrives → job hangs. This is NOT a double
 	// apply. Closed by Soul-reconcile (post-MVP, Variant A): on reconnect Soul
 	// reports its in-flight apply_ids, Keeper reconciles stuck dispatched rows.
-	log.Info("scenario: ApplyRequest отправлен (claim, dispatched)", slog.Int("tasks", len(hostTasks)))
+	log.Info("scenario: ApplyRequest sent (claim, dispatched)", slog.Int("tasks", len(hostTasks)))
 }
 
 // aborted reports whether the claim's ctx was canceled — the pool's claimCtx
@@ -273,13 +273,13 @@ func (c *ClaimRunner) aborted(ctx context.Context) bool {
 func (c *ClaimRunner) markFailed(ctx context.Context, run *applyrun.ApplyRun, summary string, log *slog.Logger) {
 	if err := applyrun.UpdateStatus(ctx, c.deps.Deps.DB, run.ApplyID, run.SID, run.Passage, applyrun.StatusFailed, &summary); err != nil {
 		if errors.Is(err, applyrun.ErrApplyRunAlreadyTerminal) {
-			log.Info("scenario: claim failed — single-winner no-op, первый коммиттер победил",
+			log.Info("scenario: claim failed - single-winner no-op, first committer won",
 				slog.String("summary", summary))
 			return
 		}
-		log.Error("scenario: claim failed-статус не записан — барьер может зависнуть до timeout",
+		log.Error("scenario: claim failed status not recorded - the barrier may hang until timeout",
 			slog.String("summary", summary), slog.Any("error", err))
 		return
 	}
-	log.Warn("scenario: claim — задание провалено", slog.String("summary", summary))
+	log.Warn("scenario: claim - job failed", slog.String("summary", summary))
 }

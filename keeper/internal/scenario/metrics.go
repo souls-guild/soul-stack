@@ -62,13 +62,13 @@ func RegisterScenarioMetrics(reg *obs.Registry) *ScenarioMetrics {
 		runsTotal: prometheus.NewCounterVec(
 			prometheus.CounterOpts{
 				Name: "keeper_scenario_runs_total",
-				Help: "Количество завершённых прогонов scenario, разрезанное по результату (ok/failed/locked).",
+				Help: "Number of finished scenario runs, broken down by outcome (ok/failed/locked).",
 			},
 			[]string{"result"},
 		),
 		runDuration: prometheus.NewHistogram(prometheus.HistogramOpts{
 			Name:    "keeper_scenario_run_duration_seconds",
-			Help:    "Длительность прогона scenario в секундах (от старта run-goroutine до терминала).",
+			Help:    "Duration of a scenario run in seconds (from run-goroutine start to terminal state).",
 			Buckets: prometheus.DefBuckets,
 		}),
 	}

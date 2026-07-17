@@ -45,11 +45,11 @@ func assertRootUnchanged(t *testing.T, root string, before map[string]string) {
 	t.Helper()
 	now := snapshotRoot(t, root)
 	if len(now) != len(before) {
-		t.Fatalf("файлы добавлены/удалены Plan-ом: before=%d after=%d", len(before), len(now))
+		t.Fatalf("files added/removed by Plan: before=%d after=%d", len(before), len(now))
 	}
 	for p, b := range before {
 		if now[p] != b {
-			t.Fatalf("Plan изменил %s", p)
+			t.Fatalf("Plan changed %s", p)
 		}
 	}
 }

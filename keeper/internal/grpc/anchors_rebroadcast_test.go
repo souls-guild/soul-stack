@@ -22,7 +22,7 @@ func TestOutbound_RebroadcastTrustAnchors_AllLocalStreams(t *testing.T) {
 
 	delivered := ob.RebroadcastTrustAnchors(context.Background(), set)
 	if delivered != 2 {
-		t.Fatalf("delivered = %d, want 2 (оба Soul-а)", delivered)
+		t.Fatalf("delivered = %d, want 2 (both Souls)", delivered)
 	}
 
 	for name, out := range map[string]<-chan *keeperv1.FromKeeper{"sid-a": outA, "sid-b": outB} {
@@ -36,11 +36,11 @@ func TestOutbound_RebroadcastTrustAnchors_AllLocalStreams(t *testing.T) {
 				t.Fatalf("%s: pubkey_pem = %d, want %d", name, len(ta.GetPubkeyPem()), len(set))
 			}
 		default:
-			t.Fatalf("%s: ожидался один SigilTrustAnchors, канал пуст", name)
+			t.Fatalf("%s: expected one SigilTrustAnchors, channel empty", name)
 		}
 		select {
 		case extra := <-out:
-			t.Fatalf("%s: лишнее сообщение после набора: %T", name, extra.GetPayload())
+			t.Fatalf("%s: extra message after the set: %T", name, extra.GetPayload())
 		default:
 		}
 	}
@@ -67,7 +67,7 @@ func TestOutbound_RebroadcastTrustAnchors_EmptySet(t *testing.T) {
 			t.Fatalf("empty re-broadcast pubkey_pem = %d, want 0", len(ta.GetPubkeyPem()))
 		}
 	default:
-		t.Fatal("пустой набор должен слать пустой SigilTrustAnchors, канал пуст")
+		t.Fatal("empty set should send an empty SigilTrustAnchors, channel is empty")
 	}
 }
 
@@ -95,9 +95,9 @@ func TestOutbound_SendSigilTrustAnchors_DeliversToLocalStream(t *testing.T) {
 	case msg := <-out:
 		ta := msg.GetSigilTrustAnchors()
 		if ta == nil || len(ta.GetPubkeyPem()) != 1 || ta.GetPubkeyPem()[0] != "pem-1" {
-			t.Fatalf("неверный SigilTrustAnchors: %+v", ta)
+			t.Fatalf("wrong SigilTrustAnchors: %+v", ta)
 		}
 	default:
-		t.Fatal("ожидался SigilTrustAnchors в канале")
+		t.Fatal("expected SigilTrustAnchors in the channel")
 	}
 }

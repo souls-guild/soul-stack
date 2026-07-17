@@ -51,7 +51,7 @@ func (m *Module) applyInstalled(stream grpc.ServerStreamingServer[pluginv1.Apply
 		return util.SendFailed(stream, fmt.Sprintf("param %q: expected \"<namespace>.<name>\", got %q", "name", fullName))
 	}
 	if m.deps.ModulesRoot == "" {
-		return util.SendFailed(stream, "paths.modules не задан в soul.yml — кешу модулей некуда материализоваться")
+		return util.SendFailed(stream, "paths.modules is not set in soul.yml - module cache has nowhere to materialize")
 	}
 
 	// (1) allow-check BEFORE a single network byte.
@@ -61,18 +61,18 @@ func (m *Module) applyInstalled(stream grpc.ServerStreamingServer[pluginv1.Apply
 	}
 	if rec == nil {
 		return util.SendFailed(stream, fmt.Sprintf(
-			"%s: нет активного Sigil-допуска для %s (kind: soul_module); выполните `keeper.plugin.allow ns=%s name=%s ref=<ref>`",
+			"%s: no active Sigil grant for %s (kind: soul_module); run `keeper.plugin.allow ns=%s name=%s ref=<ref>`",
 			reasonNotAllowed, fullName, namespace, name))
 	}
 	if pin != "" && rec.Ref != pin {
 		return util.SendFailed(stream, fmt.Sprintf(
-			"%s: активный допуск %s на ref %q, задача ожидает ref %q (pin-сверка, ADR-065)",
+			"%s: active grant %s is on ref %q, task expects ref %q (pin check, ADR-065)",
 			reasonNotAllowed, fullName, rec.Ref, pin))
 	}
 	manifest, diags := sharedplugin.LoadFromBytes(sharedplugin.FileName, rec.Manifest)
 	if diag.HasErrors(diags) || manifest.Kind != sharedplugin.KindSoulModule {
 		return util.SendFailed(stream, fmt.Sprintf(
-			"%s: допуск %s не подтверждает kind: soul_module (manifest допуска битый или иного kind)",
+			"%s: grant %s does not confirm kind: soul_module (grant manifest is corrupt or a different kind)",
 			reasonNotAllowed, fullName))
 	}
 
@@ -88,7 +88,7 @@ func (m *Module) applyInstalled(stream grpc.ServerStreamingServer[pluginv1.Apply
 	fetcher, ok := fetcherFrom(stream.Context())
 	if !ok {
 		return util.SendFailed(stream, fmt.Sprintf(
-			"%s: FetchModule недоступен в этом прогоне (нет EventStream-сессии; push-режим не поддержан)", reasonFetchFailed))
+			"%s: FetchModule is unavailable in this run (no EventStream session; push mode is not supported)", reasonFetchFailed))
 	}
 	data, err := fetchAll(stream.Context(), fetcher, namespace, name, rec.BinarySHA256hex)
 	if err != nil {

@@ -40,7 +40,7 @@ func TestBroadcastTrustAnchors_SendsSet(t *testing.T) {
 	h.broadcastTrustAnchors(context.Background(), stream, "sid", "sess")
 
 	if len(stream.sent) != 1 {
-		t.Fatalf("sent = %d, want 1 (один SigilTrustAnchors)", len(stream.sent))
+		t.Fatalf("sent = %d, want 1 (single SigilTrustAnchors)", len(stream.sent))
 	}
 	ta := stream.sent[0].GetSigilTrustAnchors()
 	if ta == nil {
@@ -70,7 +70,7 @@ func TestBroadcastTrustAnchors_EmptySetSendsEmpty(t *testing.T) {
 	stream := &fakeBidiStream{}
 	h.broadcastTrustAnchors(context.Background(), stream, "sid", "sess")
 	if len(stream.sent) != 1 {
-		t.Fatalf("sent = %d, want 1 (пустой набор всё равно отправляется)", len(stream.sent))
+		t.Fatalf("sent = %d, want 1 (empty set is still sent)", len(stream.sent))
 	}
 	ta := stream.sent[0].GetSigilTrustAnchors()
 	if ta == nil {
@@ -88,6 +88,6 @@ func TestBroadcastTrustAnchors_SendFailDoesNotPanic(t *testing.T) {
 	stream := &fakeBidiStream{failAt: 1}
 	h.broadcastTrustAnchors(context.Background(), stream, "sid", "sess")
 	if len(stream.sent) != 1 {
-		t.Fatalf("sent = %d, want 1 (одна попытка Send, упавшая)", len(stream.sent))
+		t.Fatalf("sent = %d, want 1 (one Send attempt, which failed)", len(stream.sent))
 	}
 }

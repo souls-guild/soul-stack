@@ -118,7 +118,7 @@ func (m *Module) Plan(req *pluginv1.PlanRequest, stream grpc.ServerStreamingServ
 		// drift: package is installed (Apply would remove it).
 		return util.SendPlanFinal(stream, installed)
 	case "latest":
-		return util.PlanFailed("Plan(dry_run) для state latest не поддержан: проверка «есть ли новее» требует чтения индекса репозитория (Slice B)")
+		return util.PlanFailed("Plan(dry_run) for state latest is not supported: checking \"is there a newer version\" requires reading the repository index (Slice B)")
 	default:
 		return util.PlanFailed(fmt.Sprintf("unknown state %q", req.State))
 	}

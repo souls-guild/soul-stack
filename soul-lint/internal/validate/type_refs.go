@@ -65,7 +65,7 @@ func typeRefDiagnostics(scenarioPath string, m *config.ScenarioManifest) []diag.
 				File:    typesPath,
 				Code:    "io_error",
 				Message: err.Error(),
-				Hint:    "types.yml присутствует, но не читается — $type-ссылки не проверены офлайн",
+				Hint:    "types.yml is present but unreadable - $type references not checked offline",
 			}}
 		}
 	}

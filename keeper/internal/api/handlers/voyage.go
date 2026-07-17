@@ -763,8 +763,8 @@ func (h *VoyageHandler) resolveCommandScopeErr(ctx context.Context, claims *jwt.
 	// is allowed: scope is already narrowed by them, where does not expand.
 	if req.Target.Where != "" && len(req.Target.SIDs) == 0 && len(req.Target.Coven) == 0 {
 		return nil, &problemError{problem.New(problem.TypeValidationFailed, "",
-			"voyage_where_not_evaluated: target where: пока не вычисляется (MVP); "+
-				"укажите sids или coven для сужения scope")}
+			"voyage_where_not_evaluated: target where: is not evaluated yet (MVP); "+
+				"specify sids or coven to narrow the scope")}
 	}
 	for _, sid := range req.Target.SIDs {
 		if !soul.ValidSID(sid) {
@@ -921,8 +921,8 @@ func (h *VoyageHandler) scopeExceedsCapErr(size int) error {
 		return nil
 	}
 	return &problemError{problem.New(problem.TypeValidationFailed, "",
-		fmt.Sprintf("voyage_scope_too_large: scope %d превышает лимит %d; "+
-			"сузьте target (sids/coven/incarnations) или поднимите voyage.max_scope",
+		fmt.Sprintf("voyage_scope_too_large: scope %d exceeds the limit %d; "+
+			"narrow target (sids/coven/incarnations) or raise voyage.max_scope",
 			size, h.maxScope))}
 }
 
@@ -938,8 +938,8 @@ func (h *VoyageHandler) batchSizeExceedsCapErr(size int, field string) error {
 		return nil
 	}
 	return &problemError{problem.New(problem.TypeValidationFailed, "",
-		fmt.Sprintf("voyage_batch_size_too_large: %s %d превышает лимит %d; "+
-			"уменьшите %s или поднимите voyage.max_batch_size",
+		fmt.Sprintf("voyage_batch_size_too_large: %s %d exceeds the limit %d; "+
+			"reduce %s or raise voyage.max_batch_size",
 			field, size, h.maxBatchSize, field))}
 }
 

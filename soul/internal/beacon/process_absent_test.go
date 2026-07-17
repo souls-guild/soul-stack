@@ -22,7 +22,7 @@ func TestProcessAbsentPresent(t *testing.T) {
 		t.Fatalf("state = %q, want present", state)
 	}
 	if data.GetFields()["pattern"].GetStringValue() != "nginx" {
-		t.Error("data.pattern должно нести паттерн")
+		t.Error("data.pattern must carry the pattern")
 	}
 }
 
@@ -48,7 +48,7 @@ func TestProcessAbsentPgrepError(t *testing.T) {
 
 	b := &ProcessAbsent{Runner: r}
 	if _, _, err := b.Check(context.Background(), paramStruct(t, map[string]any{"pattern": "[bad"})); err == nil {
-		t.Fatal("ожидали ошибку при pgrep exit ≥2")
+		t.Fatal("expected an error on pgrep exit >=2")
 	}
 }
 
@@ -58,13 +58,13 @@ func TestProcessAbsentRunnerLaunchError(t *testing.T) {
 
 	b := &ProcessAbsent{Runner: r}
 	if _, _, err := b.Check(context.Background(), paramStruct(t, map[string]any{"pattern": "nginx"})); err == nil {
-		t.Fatal("ожидали ошибку при сбое запуска pgrep")
+		t.Fatal("expected an error when pgrep fails to start")
 	}
 }
 
 func TestProcessAbsentMissingPattern(t *testing.T) {
 	b := &ProcessAbsent{Runner: internaltest.NewRunner()}
 	if _, _, err := b.Check(context.Background(), paramStruct(t, map[string]any{})); err == nil {
-		t.Fatal("ожидали ошибку при отсутствии param pattern")
+		t.Fatal("expected an error when param pattern is missing")
 	}
 }

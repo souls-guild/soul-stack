@@ -24,7 +24,7 @@ import (
 // bool filter `?errand_safe=true` (legacy read exactly the string "true"; huma bool-bind
 // accepts true/false/1/0 — an acceptable extension, the domain filters by the flag).
 type moduleListInput struct {
-	ErrandSafe bool `query:"errand_safe" doc:"только модули с хотя бы одним errand-safe state (для Run→Command whitelist)"`
+	ErrandSafe bool `query:"errand_safe" doc:"only modules with at least one errand-safe state (for the Run->Command whitelist)"`
 }
 
 // moduleListOutput — huma output for GET /v1/modules (FULL-TYPED). Body — typed 200 envelope
@@ -42,8 +42,8 @@ func moduleListOperation() huma.Operation {
 		OperationID:   "listModules",
 		Method:        http.MethodGet,
 		Path:          "/",
-		Summary:       "Каталог модулей",
-		Description:   "Доступные for прогоon модули (core + активные plugin) + input-метаданные (ADR-045). Опц. фильтр errand_safe. Permission service.list. Read-only, no audit.",
+		Summary:       "Module catalog",
+		Description:   "Available modules to run (core + active plugin) + input metadata (ADR-045). Optional errand_safe filter. Permission service.list. Read-only, no audit.",
 		Tags:          []string{"module"},
 		DefaultStatus: http.StatusOK,
 		Errors:        []int{http.StatusForbidden, http.StatusInternalServerError},
@@ -55,7 +55,7 @@ func moduleListOperation() huma.Operation {
 // moduleGetInput — huma input for GET /v1/modules/{name}. Name — path (full name without
 // the state suffix: core.cmd / official.postgres-user).
 type moduleGetInput struct {
-	Name string `path:"name" doc:"полbutе имя модуля без state-суффикса"`
+	Name string `path:"name" doc:"full module name without the state suffix"`
 }
 
 // moduleGetOutput — huma output for GET /v1/modules/{name} (FULL-TYPED). Body — typed
@@ -71,8 +71,8 @@ func moduleGetOperation() huma.Operation {
 		OperationID:   "getModule",
 		Method:        http.MethodGet,
 		Path:          "/{name}",
-		Summary:       "Карточка модуля",
-		Description:   "Деталь одbutго модуля по полbutму имени (ADR-045). Permission service.list. Read-only, no audit.",
+		Summary:       "Module details",
+		Description:   "Detail of one module by full name (ADR-045). Permission service.list. Read-only, no audit.",
 		Tags:          []string{"module"},
 		DefaultStatus: http.StatusOK,
 		Errors:        []int{http.StatusForbidden, http.StatusNotFound, http.StatusInternalServerError},
@@ -85,7 +85,7 @@ func moduleGetOperation() huma.Operation {
 // (per-module contract, not used in resolve). Body — typed body (source discriminator
 // + optional prefix).
 type moduleFormPrepInput struct {
-	Name string `path:"name" doc:"полbutе имя модуля (per-module контракт, при резолве не используется)"`
+	Name string `path:"name" doc:"full module name (per-module contract, not used during resolve)"`
 	Body ModuleFormPrepRequest
 }
 
@@ -96,22 +96,22 @@ type moduleFormPrepInput struct {
 // name = contract schema name (huma DefaultSchemaNamer; hand-written spec ModuleFormPrepRequest,
 // N4).
 type ModuleFormPrepRequest struct {
-	Source ModuleFormPrepSource `json:"source" required:"true" doc:"дискримиonтор source-каталога (ровbut один from incarnation_hosts/choir)"`
-	Prefix string               `json:"prefix,omitempty" doc:"префикс SID for автокомплита (LIKE prefix%)"`
+	Source ModuleFormPrepSource `json:"source" required:"true" doc:"source-catalog discriminator (exactly one of incarnation_hosts/choir)"`
+	Prefix string               `json:"prefix,omitempty" doc:"SID prefix for autocomplete (LIKE prefix%)"`
 }
 
 // ModuleFormPrepSource — Go form of the source discriminator (class C input-only). Both
 // sub-keys optional (the domain checks the XOR invariant → 422), value format is domain
 // validation. Struct name = contract schema name (hand-written spec ModuleFormPrepSource, N4).
 type ModuleFormPrepSource struct {
-	IncarnationHosts string                     `json:"incarnation_hosts,omitempty" doc:"имя incarnation — live SID-ы её хостов"`
-	Choir            *ModuleFormPrepChoirSource `json:"choir,omitempty" doc:"коордиonты Choir-source (incarnation + Choir name)"`
+	IncarnationHosts string                     `json:"incarnation_hosts,omitempty" doc:"incarnation name — live SIDs of its hosts"`
+	Choir            *ModuleFormPrepChoirSource `json:"choir,omitempty" doc:"coordinates of the Choir source (incarnation + Choir name)"`
 }
 
 // ModuleFormPrepChoirSource — Go form of the Choir source (incarnation + name; class C input-only).
 // Struct name = contract schema name (hand-written spec ModuleFormPrepChoirSource, N4).
 type ModuleFormPrepChoirSource struct {
-	Incarnation string `json:"incarnation" doc:"имя incarnation Choir-а"`
+	Incarnation string `json:"incarnation" doc:"incarnation name of the Choir"`
 	Name        string `json:"name" doc:"Choir name"`
 }
 
@@ -138,8 +138,8 @@ func moduleFormPrepOperation() huma.Operation {
 		OperationID:   "moduleFormPrep",
 		Method:        http.MethodPost,
 		Path:          "/{name}/form-prep",
-		Summary:       "Резолв source-каталога формы модуля",
-		Description:   "Живые SID-ы под source-поля UI-формы Run→Command (ADR-045 S3). Permission incarnation.run. Read-only-резолв, no audit.",
+		Summary:       "Resolve the module form source catalog",
+		Description:   "Live SIDs for the source fields of the Run->Command UI form (ADR-045 S3). Permission incarnation.run. Read-only resolve, no audit.",
 		Tags:          []string{"module"},
 		DefaultStatus: http.StatusOK,
 		Errors:        []int{http.StatusBadRequest, http.StatusForbidden, http.StatusUnprocessableEntity, http.StatusInternalServerError},

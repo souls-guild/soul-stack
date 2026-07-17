@@ -57,12 +57,12 @@ web_ui_enabled: false
 	}
 	if hasCode(diags, "unknown_key") {
 		dump(t, diags)
-		t.Fatal("web_ui_enabled породил unknown_key — strict-walker не знает поле")
+		t.Fatal("web_ui_enabled produced unknown_key - strict-walker does not know the field")
 	}
 	if cfg == nil || cfg.WebUIEnabled == nil || *cfg.WebUIEnabled {
-		t.Fatalf("web_ui_enabled: false не распарсился в *bool=false; cfg=%+v", cfg)
+		t.Fatalf("web_ui_enabled: false did not parse into *bool=false; cfg=%+v", cfg)
 	}
 	if cfg.WebUIMounted() {
-		t.Error("WebUIMounted() = true при явном web_ui_enabled: false")
+		t.Error("WebUIMounted() = true with explicit web_ui_enabled: false")
 	}
 }

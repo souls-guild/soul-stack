@@ -37,9 +37,9 @@ type omenCreateInput struct {
 // with the committed handwritten spec (OmenCreateRequest).
 type OmenCreateRequest struct {
 	Name       string `json:"name" required:"true" pattern:"^[a-z0-9-]{1,63}$" doc:"Omen name (kebab-case, 1..63)"`
-	SourceType string `json:"source_type" required:"true" enum:"vault,prometheus,elk" doc:"тип внешней системы; зonчение вне enum → 422"`
-	Endpoint   string `json:"endpoint" required:"true" doc:"URL внешней системы (не секрет)"`
-	AuthRef    string `json:"auth_ref" required:"true" doc:"vault-ref on master-credential (vault:<mount>/<path>); сам секрет не хранится"`
+	SourceType string `json:"source_type" required:"true" enum:"vault,prometheus,elk" doc:"external system type; a value outside the enum -> 422"`
+	Endpoint   string `json:"endpoint" required:"true" doc:"external system URL (not a secret)"`
+	AuthRef    string `json:"auth_ref" required:"true" doc:"vault-ref on master-credential (vault:<mount>/<path>); the secret itself is not stored"`
 }
 
 // omenCreateOutput — huma-output for POST /v1/augur/omens (FULL-TYPED). Status=201;
@@ -61,8 +61,8 @@ func omenCreateOperation() huma.Operation {
 		OperationID:   "createOmen",
 		Method:        http.MethodPost,
 		Path:          "/omens",
-		Summary:       "Создать Omen",
-		Description:   "Заbutсит Omen (внешняя система) в реестр augur (ADR-025). Permission omen.create. 409 — name занят. master-credential не хранится (только auth_ref).",
+		Summary:       "Create Omen",
+		Description:   "Registers an Omen (external system) in the augur registry (ADR-025). Permission omen.create. 409 - name taken. master-credential is not stored (only auth_ref).",
 		Tags:          []string{"augur"},
 		DefaultStatus: http.StatusCreated,
 		Errors:        []int{http.StatusBadRequest, http.StatusForbidden, http.StatusConflict, http.StatusUnprocessableEntity, http.StatusInternalServerError},
@@ -97,8 +97,8 @@ func omenListOperation() huma.Operation {
 		OperationID:   "listOmens",
 		Method:        http.MethodGet,
 		Path:          "/omens",
-		Summary:       "Спиwithк Omen-ов (paged)",
-		Description:   "Реестр Omen-ов с пагиonцией (ADR-025). Permission omen.list. Read-only, no audit.",
+		Summary:       "List of Omens (paged)",
+		Description:   "Registry of Omens with pagination (ADR-025). Permission omen.list. Read-only, no audit.",
 		Tags:          []string{"augur"},
 		DefaultStatus: http.StatusOK,
 		Errors:        []int{http.StatusBadRequest, http.StatusForbidden, http.StatusInternalServerError},
@@ -127,8 +127,8 @@ func omenGetOperation() huma.Operation {
 		OperationID:   "getOmen",
 		Method:        http.MethodGet,
 		Path:          "/omens/{name}",
-		Summary:       "Карточка Omen-а",
-		Description:   "Метаданные одbutго Omen-а по имени (ADR-025). Permission omen.list (read покрыт list-правом). Read-only, no audit.",
+		Summary:       "Omen card",
+		Description:   "Metadata of a single Omen by name (ADR-025). Permission omen.list (read is covered by the list permission). Read-only, no audit.",
 		Tags:          []string{"augur"},
 		DefaultStatus: http.StatusOK,
 		Errors:        []int{http.StatusForbidden, http.StatusNotFound, http.StatusUnprocessableEntity, http.StatusInternalServerError},
@@ -158,8 +158,8 @@ func omenDeleteOperation() huma.Operation {
 		OperationID:   "deleteOmen",
 		Method:        http.MethodDelete,
 		Path:          "/omens/{name}",
-		Summary:       "Удалить Omen",
-		Description:   "Удаляет Omen каскадbut (связанные Rite-ы, ADR-025). Permission omen.delete. 404 — записи absent.",
+		Summary:       "Delete Omen",
+		Description:   "Deletes an Omen cascadingly (related Rites, ADR-025). Permission omen.delete. 404 - record absent.",
 		Tags:          []string{"augur"},
 		DefaultStatus: http.StatusNoContent,
 		Errors:        []int{http.StatusForbidden, http.StatusNotFound, http.StatusUnprocessableEntity, http.StatusInternalServerError},
@@ -183,13 +183,13 @@ type riteCreateInput struct {
 // name is the contract schema name in OpenAPI (committed handwritten spec →
 // RiteCreateRequest).
 type RiteCreateRequest struct {
-	Omen         string          `json:"omen" required:"true" doc:"Omen, к которому отbutсится grant"`
-	Coven        *string         `json:"coven,omitempty" doc:"субъект-grant по Coven-метке (XOR с sid)"`
-	SID          *string         `json:"sid,omitempty" doc:"субъект-grant по конкретbutму SID (XOR с coven)"`
-	Allow        json.RawMessage `json:"allow" required:"true" doc:"allow-list; form по source_type Omen-а (переgivesся as есть)"`
-	Delegate     *bool           `json:"delegate,omitempty" doc:"false — брокер (MVP-1); true — делегация (MVP-2)"`
-	TokenTTL     *string         `json:"token_ttl,omitempty" doc:"TTL минтуемого scoped-токеon; только vault-delegate"`
-	TokenNumUses *int            `json:"token_num_uses,omitempty" doc:"лимит использований токеon; только vault-delegate"`
+	Omen         string          `json:"omen" required:"true" doc:"Omen the grant belongs to"`
+	Coven        *string         `json:"coven,omitempty" doc:"grant subject by Coven label (XOR with sid)"`
+	SID          *string         `json:"sid,omitempty" doc:"grant subject by specific SID (XOR with coven)"`
+	Allow        json.RawMessage `json:"allow" required:"true" doc:"allow-list; shape depends on Omen source_type (passed through as-is)"`
+	Delegate     *bool           `json:"delegate,omitempty" doc:"false - broker (MVP-1); true - delegation (MVP-2)"`
+	TokenTTL     *string         `json:"token_ttl,omitempty" doc:"TTL of the minted scoped token; vault-delegate only"`
+	TokenNumUses *int            `json:"token_num_uses,omitempty" doc:"token use-count limit; vault-delegate only"`
 }
 
 // riteCreateOutput — huma-output for POST /v1/augur/rites (FULL-TYPED). Status=201;
@@ -209,8 +209,8 @@ func riteCreateOperation() huma.Operation {
 		OperationID:   "createRite",
 		Method:        http.MethodPost,
 		Path:          "/rites",
-		Summary:       "Создать Rite (grant)",
-		Description:   "Заbutсит Rite (grant) в реестр augur (ADR-025). Permission rite.create. 404 — Omen не существует. 422 — XOR-onрушение субъекта/битый allow.",
+		Summary:       "Create Rite (grant)",
+		Description:   "Registers a Rite (grant) in the augur registry (ADR-025). Permission rite.create. 404 - Omen does not exist. 422 - subject XOR violation/broken allow.",
 		Tags:          []string{"augur"},
 		DefaultStatus: http.StatusCreated,
 		Errors:        []int{http.StatusBadRequest, http.StatusForbidden, http.StatusNotFound, http.StatusUnprocessableEntity, http.StatusInternalServerError},
@@ -224,7 +224,7 @@ func riteCreateOperation() huma.Operation {
 // The format/presence of omen is domain-validated in ListRitesTyped (422; a
 // query string without an enum, like path-name).
 type riteListInput struct {
-	Omen string `query:"omen" doc:"фильтр by-omen (обязателен в MVP); пустой/битый → 422"`
+	Omen string `query:"omen" doc:"by-omen filter (required in MVP); empty/broken -> 422"`
 }
 
 // riteListOutput — huma-output for GET /v1/augur/rites (FULL-TYPED). Body is the
@@ -243,8 +243,8 @@ func riteListOperation() huma.Operation {
 		OperationID:   "listRites",
 		Method:        http.MethodGet,
 		Path:          "/rites",
-		Summary:       "Спиwithк Rite-ов по Omen",
-		Description:   "Rite-ы (grant-ы) одbutго Omen-а (ADR-025). Permission rite.list. Обязательный фильтр omen=<name>. Read-only, no audit.",
+		Summary:       "List of Rites by Omen",
+		Description:   "Rites (grants) of a single Omen (ADR-025). Permission rite.list. Required filter omen=<name>. Read-only, no audit.",
 		Tags:          []string{"augur"},
 		DefaultStatus: http.StatusOK,
 		Errors:        []int{http.StatusForbidden, http.StatusUnprocessableEntity, http.StatusInternalServerError},
@@ -257,7 +257,7 @@ func riteListOperation() huma.Operation {
 // parameter (string: DeleteRiteTyped domain-validates it's a positive number →
 // 422 on a non-number).
 type riteDeleteInput struct {
-	ID string `path:"id" doc:"числовой id Rite-а"`
+	ID string `path:"id" doc:"numeric Rite id"`
 }
 
 // riteDeleteOperation — metadata for DELETE /v1/augur/rites/{id}. DefaultStatus=204.
@@ -268,8 +268,8 @@ func riteDeleteOperation() huma.Operation {
 		OperationID:   "deleteRite",
 		Method:        http.MethodDelete,
 		Path:          "/rites/{id}",
-		Summary:       "Удалить Rite",
-		Description:   "Снимает grant-запись Rite по id (ADR-025). Permission rite.delete. 404 — записи absent. 422 — id не положительbutе число.",
+		Summary:       "Delete Rite",
+		Description:   "Removes a Rite grant record by id (ADR-025). Permission rite.delete. 404 - record absent. 422 - id is not a positive number.",
 		Tags:          []string{"augur"},
 		DefaultStatus: http.StatusNoContent,
 		Errors:        []int{http.StatusForbidden, http.StatusNotFound, http.StatusUnprocessableEntity, http.StatusInternalServerError},

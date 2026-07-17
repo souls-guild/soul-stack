@@ -30,7 +30,7 @@ func TestSendFinal_NilOutput(t *testing.T) {
 		t.Fatalf("SendFinal: %v", err)
 	}
 	if s.Events[0].Output != nil {
-		t.Fatalf("Output=%v want nil (опущено)", s.Events[0].Output)
+		t.Fatalf("Output=%v want nil (omitted)", s.Events[0].Output)
 	}
 	if s.Events[0].Changed {
 		t.Fatal("Changed=true want false")
@@ -46,7 +46,7 @@ func TestSendFinal_UnserializableOutputErrors(t *testing.T) {
 		t.Fatal("SendFinal: want error on unserializable output")
 	}
 	if len(s.Events) != 0 {
-		t.Fatalf("events=%d want 0 (нечего отправлять при ошибке)", len(s.Events))
+		t.Fatalf("events=%d want 0 (nothing to send on error)", len(s.Events))
 	}
 }
 

@@ -57,12 +57,12 @@ func TestSchemaNames_Voyage(t *testing.T) {
 	schemas := loadFullSpecSchemas(t)
 	for _, name := range voyageContractSchemas {
 		if _, ok := schemas[name]; !ok {
-			t.Errorf("контрактonя схема %q ОТСУТСТВУЕТ в components/schemas (имя не выровнеbut)", name)
+			t.Errorf("contract schema %q IS MISSING from components/schemas (name not aligned)", name)
 		}
 	}
 	for _, name := range voyageForbiddenSchemas {
 		if _, ok := schemas[name]; ok {
-			t.Errorf("техническое huma-имя %q ПРИСУТСТВУЕТ в спеке — имя не выровнеbut под контракт", name)
+			t.Errorf("technical huma name %q IS PRESENT in the spec - name not aligned to the contract", name)
 		}
 	}
 }
@@ -77,7 +77,7 @@ func TestSchemaNames_VoyageEnvelope(t *testing.T) {
 	}
 	var doc map[string]any
 	if err := yaml.Unmarshal([]byte(y), &doc); err != nil {
-		t.Fatalf("спека не парсится: %v", err)
+		t.Fatalf("spec does not parse: %v", err)
 	}
 	comp, _ := doc["components"].(map[string]any)
 	schemas, _ := comp["schemas"].(map[string]any)
@@ -123,7 +123,7 @@ func TestSchemaNames_VoyageNested(t *testing.T) {
 	}
 	var doc map[string]any
 	if err := yaml.Unmarshal([]byte(y), &doc); err != nil {
-		t.Fatalf("спека не парсится: %v", err)
+		t.Fatalf("spec does not parse: %v", err)
 	}
 	comp, _ := doc["components"].(map[string]any)
 	schemas, _ := comp["schemas"].(map[string]any)
@@ -134,30 +134,30 @@ func TestSchemaNames_VoyageNested(t *testing.T) {
 	// (1) VoyageTarget — consumers reference the single schema.
 	for _, name := range voyageTargetConsumers {
 		if got := propRef(t, schemas, name, "target"); got != targetRef {
-			t.Errorf("%s.target → %q, ожидался %q (target не сведён on единую VoyageTarget)", name, got, targetRef)
+			t.Errorf("%s.target -> %q, expected %q (target not collapsed onto a single VoyageTarget)", name, got, targetRef)
 		}
 	}
 	// (2) VoyageNotify — input consumers reference the single schema (notify is an array).
 	for _, name := range voyageNotifyConsumers {
 		if got := propItemsRef(t, schemas, name, "notify"); got != notifyRef {
-			t.Errorf("%s.notify[] → %q, ожидался %q (notify не сведён on единую VoyageNotify)", name, got, notifyRef)
+			t.Errorf("%s.notify[] -> %q, expected %q (notify not collapsed onto a single VoyageNotify)", name, got, notifyRef)
 		}
 	}
 
 	// (3) VoyageTarget shape verified against the hand-written spec (:7455 — no required; 5 optional fields).
 	tgt, _ := schemas["VoyageTarget"].(map[string]any)
 	if tgt == nil {
-		t.Fatal("VoyageTarget отсутствует в components.schemas")
+		t.Fatal("VoyageTarget missing from components.schemas")
 	}
 	if req, ok := tgt["required"]; ok {
-		t.Errorf("VoyageTarget.required=%v — hand-written :7455 NOT объявляет required (all поля optional)", req)
+		t.Errorf("VoyageTarget.required=%v - hand-written :7455 does NOT declare required (all fields optional)", req)
 	}
 	assertProps(t, tgt, "VoyageTarget", "incarnations", "service", "sids", "where", "coven")
 
 	// (4) VoyageNotify shape verified against the hand-written spec (:7612 — required:[herald]).
 	ntf, _ := schemas["VoyageNotify"].(map[string]any)
 	if ntf == nil {
-		t.Fatal("VoyageNotify отсутствует в components.schemas")
+		t.Fatal("VoyageNotify missing from components.schemas")
 	}
 	assertRequiredExactly(t, ntf, "VoyageNotify", "herald")
 	assertProps(t, ntf, "VoyageNotify", "herald", "on", "only_failures", "only_changes", "annotations", "projection")
@@ -177,7 +177,7 @@ func propItemsRef(t *testing.T, schemas map[string]any, schemaName, field string
 	prop := schemaProp(t, schemas, schemaName, field)
 	items, _ := prop["items"].(map[string]any)
 	if items == nil {
-		t.Errorf("%s.%s — не массив (items отсутствует)", schemaName, field)
+		t.Errorf("%s.%s - not an array (items missing)", schemaName, field)
 		return ""
 	}
 	ref, _ := items["$ref"].(string)
@@ -189,12 +189,12 @@ func schemaProp(t *testing.T, schemas map[string]any, schemaName, field string) 
 	t.Helper()
 	sch, _ := schemas[schemaName].(map[string]any)
 	if sch == nil {
-		t.Fatalf("схема %q отсутствует", schemaName)
+		t.Fatalf("schema %q missing", schemaName)
 	}
 	props, _ := sch["properties"].(map[string]any)
 	prop, _ := props[field].(map[string]any)
 	if prop == nil {
-		t.Fatalf("%s.%s отсутствует в properties", schemaName, field)
+		t.Fatalf("%s.%s missing from properties", schemaName, field)
 	}
 	return prop
 }
@@ -204,11 +204,11 @@ func assertProps(t *testing.T, sch map[string]any, name string, want ...string) 
 	t.Helper()
 	props, _ := sch["properties"].(map[string]any)
 	if len(props) != len(want) {
-		t.Errorf("%s: %d fields, ожидалось %d (%v)", name, len(props), len(want), want)
+		t.Errorf("%s: %d fields, expected %d (%v)", name, len(props), len(want), want)
 	}
 	for _, f := range want {
 		if _, ok := props[f]; !ok {
-			t.Errorf("%s: field %q отсутствует", name, f)
+			t.Errorf("%s: field %q missing", name, f)
 		}
 	}
 }
@@ -224,11 +224,11 @@ func assertRequiredExactly(t *testing.T, sch map[string]any, name string, want .
 		}
 	}
 	if len(got) != len(want) {
-		t.Errorf("%s.required=%v, ожидалось %v", name, raw, want)
+		t.Errorf("%s.required=%v, expected %v", name, raw, want)
 	}
 	for _, w := range want {
 		if !got[w] {
-			t.Errorf("%s.required не withдержит %q", name, w)
+			t.Errorf("%s.required does not contain %q", name, w)
 		}
 	}
 }

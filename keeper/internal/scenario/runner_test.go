@@ -55,7 +55,7 @@ func newTestRunner(t *testing.T) *Runner {
 func TestNewRunner_NilDepPanics(t *testing.T) {
 	defer func() {
 		if recover() == nil {
-			t.Fatal("NewRunner с nil-зависимостью должен паниковать")
+			t.Fatal("NewRunner with nil dependency should panic")
 		}
 	}()
 	NewRunner(Deps{}) // all nil
@@ -117,7 +117,7 @@ func TestRequestCancel_EmptyApplyID(t *testing.T) {
 		t.Fatal("RequestCancel(\"\") = nil error, want validation error")
 	}
 	if found {
-		t.Error("found = true для пустого apply_id, want false")
+		t.Error("found = true for empty apply_id, want false")
 	}
 }
 
@@ -142,14 +142,14 @@ func TestAllKeeperTasks(t *testing.T) {
 		tasks []config.Task
 		want  bool
 	}{
-		{"пусто", nil, false},
-		{"пустой-срез", []config.Task{}, false},
-		{"один-keeper", []config.Task{keeper}, true},
-		{"все-keeper", []config.Task{keeper, keeper}, true},
-		{"один-host-опущен", []config.Task{hostOmitted}, false},
-		{"один-host-coven", []config.Task{hostCoven}, false},
-		{"keeper-плюс-host", []config.Task{keeper, hostOmitted}, false},
-		{"host-плюс-keeper", []config.Task{hostCoven, keeper}, false},
+		{"empty", nil, false},
+		{"empty-slice", []config.Task{}, false},
+		{"one-keeper", []config.Task{keeper}, true},
+		{"all-keeper", []config.Task{keeper, keeper}, true},
+		{"one-host-omitted", []config.Task{hostOmitted}, false},
+		{"one-host-coven", []config.Task{hostCoven}, false},
+		{"keeper-plus-host", []config.Task{keeper, hostOmitted}, false},
+		{"host-plus-keeper", []config.Task{hostCoven, keeper}, false},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -195,7 +195,7 @@ func TestStart_ConvergeAcceptedByGate(t *testing.T) {
 		ScenarioName:    ConvergeScenarioName, // operational run, not a special name
 	})
 	if !errors.Is(err, ErrShuttingDown) {
-		t.Errorf("Start(converge) = %v, want ErrShuttingDown (имя converge принято приёмкой, не отвергнуто)", err)
+		t.Errorf("Start(converge) = %v, want ErrShuttingDown (name converge accepted by admission, not rejected)", err)
 	}
 }
 

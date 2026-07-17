@@ -35,18 +35,18 @@ func TestCommittedOpenAPI_NoDrift(t *testing.T) {
 
 	if os.Getenv("GEN_OPENAPI") != "" {
 		if err := os.WriteFile(committedOpenAPIPath, []byte(dump), 0o644); err != nil {
-			t.Fatalf("запись committed openapi.yaml (%s): %v", committedOpenAPIPath, err)
+			t.Fatalf("writing committed openapi.yaml (%s): %v", committedOpenAPIPath, err)
 		}
-		t.Logf("gen-openapi: записан huma-дамп → %s (%d байт)", committedOpenAPIPath, len(dump))
+		t.Logf("gen-openapi: wrote huma dump -> %s (%d bytes)", committedOpenAPIPath, len(dump))
 		return
 	}
 
 	committed, err := os.ReadFile(committedOpenAPIPath)
 	if err != nil {
-		t.Skipf("committed openapi.yaml неtoступен (%v); drift-проверка пропущеon", err)
+		t.Skipf("committed openapi.yaml unavailable (%v); drift check skipped", err)
 	}
 	if string(committed) != dump {
-		t.Errorf("openapi.yaml drift: docs/keeper/openapi.yaml расходится с huma-дампом — " +
-			"запустите `make gen-openapi` (committed-файл = проfromводный huma-генерат, не hand-written)")
+		t.Errorf("openapi.yaml drift: docs/keeper/openapi.yaml diverges from the huma dump - " +
+			"run `make gen-openapi` (committed file = derived huma output, not hand-written)")
 	}
 }

@@ -137,7 +137,7 @@ func TestToolsCall_IncarnationCreate_NoTraits_NoSpecKey(t *testing.T) {
 	var spec map[string]any
 	_ = json.Unmarshal(specBytes, &spec)
 	if _, has := spec["traits"]; has {
-		t.Errorf("spec.traits present без traits в запросе: %v", spec)
+		t.Errorf("spec.traits present without traits in the request: %v", spec)
 	}
 }
 
@@ -361,7 +361,7 @@ func TestToolsCall_IncarnationCreate_EmptyChoice_HasScenarios_Required(t *testin
 	resp := callTool(t, h, "archon-alice", "keeper.incarnation.create",
 		`{"name":"redis-prod","service":"redis"}`)
 	if resp.Error == nil {
-		t.Fatal("expected create_scenario_required (набор непуст, выбор пуст)")
+		t.Fatal("expected create_scenario_required (set non-empty, choice empty)")
 	}
 	if data := mustToolErrorData(t, resp.Error.Data); data.Code != mcpCodeValidationFailed {
 		t.Errorf("data.code = %q, want validation-failed", data.Code)
@@ -392,17 +392,17 @@ func TestToolsCall_IncarnationCreate_BareNoScenario(t *testing.T) {
 	}
 	// Incarnation created WITHOUT a run.
 	if inserted != 1 {
-		t.Errorf("insert calls = %d, want 1 (bare создаётся)", inserted)
+		t.Errorf("insert calls = %d, want 1 (bare is created)", inserted)
 	}
 	if starter.calls != 0 {
-		t.Errorf("scenario start calls = %d, want 0 (bare без прогона)", starter.calls)
+		t.Errorf("scenario start calls = %d, want 0 (bare, no run)", starter.calls)
 	}
 	// created_scenario col ($12) = NULL (nil).
 	if len(pool.insertIncArgs) < 12 {
 		t.Fatalf("insertIncArgs len = %d, want ≥12", len(pool.insertIncArgs))
 	}
 	if pool.insertIncArgs[11] != nil {
-		t.Errorf("created_scenario col = %v, want nil (NULL для bare)", pool.insertIncArgs[11])
+		t.Errorf("created_scenario col = %v, want nil (NULL for bare)", pool.insertIncArgs[11])
 	}
 	// apply_id absent from output (omitempty).
 	var res toolsCallResult
@@ -410,7 +410,7 @@ func TestToolsCall_IncarnationCreate_BareNoScenario(t *testing.T) {
 	var out incarnationCreateOutput
 	_ = json.Unmarshal(res.StructuredContent, &out)
 	if out.ApplyID != nil {
-		t.Errorf("_apply_id = %v, want nil (bare без прогона)", *out.ApplyID)
+		t.Errorf("_apply_id = %v, want nil (bare, no run)", *out.ApplyID)
 	}
 }
 

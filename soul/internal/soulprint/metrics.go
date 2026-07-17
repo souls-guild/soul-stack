@@ -50,13 +50,13 @@ func RegisterSoulprintMetrics(reg *obs.Registry) *SoulprintMetrics {
 		collectionsTotal: prometheus.NewCounterVec(
 			prometheus.CounterOpts{
 				Name: "soul_soulprint_collections_total",
-				Help: "Количество снимков фактов о хосте, разрезанное по результату (ok/failed).",
+				Help: "Number of host fact snapshots, broken down by result (ok/failed).",
 			},
 			[]string{"result"},
 		),
 		collectDuration: prometheus.NewHistogram(prometheus.HistogramOpts{
 			Name: "soul_soulprint_collect_duration_seconds",
-			Help: "Длительность одного снимка фактов о хосте (Collect), в секундах.",
+			Help: "Duration of one host fact snapshot (Collect), in seconds.",
 			// Fact collection is lightweight (local reads), target is
 			// milliseconds. Narrow low buckets catch the norm; up to 5s at
 			// the top covers a slow FQDN/DNS resolve on a bad host.

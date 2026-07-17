@@ -43,11 +43,11 @@ func RegisterEventStreamMetrics(reg *obs.Registry) *EventStreamMetrics {
 	m := &EventStreamMetrics{
 		connected: prometheus.NewGauge(prometheus.GaugeOpts{
 			Name: "soul_eventstream_connected",
-			Help: "1, когда EventStream-сессия Soul↔Keeper установлена; 0 — при разрыве/реконнекте.",
+			Help: "1 when the Soul<->Keeper EventStream session is established; 0 on disconnect/reconnect.",
 		}),
 		reconnects: prometheus.NewCounter(prometheus.CounterOpts{
 			Name: "soul_eventstream_reconnects_total",
-			Help: "Количество попыток реконнекта EventStream-клиента к Keeper-у.",
+			Help: "Number of EventStream client reconnect attempts to the Keeper.",
 		}),
 	}
 	reg.Registerer().MustRegister(m.connected, m.reconnects)

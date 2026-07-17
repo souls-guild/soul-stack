@@ -135,17 +135,17 @@ func TestProvisioningPut_EmptyList_422(t *testing.T) {
 	_, err = h.PutTyped(context.Background(), provClaims("archon-alice"),
 		ProvisioningPolicyUpdateInput{AllowedMethods: nil})
 	if err == nil {
-		t.Fatal("PutTyped пустой список err=nil, want 422 (anti-lockout)")
+		t.Fatal("PutTyped empty list err=nil, want 422 (anti-lockout)")
 	}
 	d, ok := AsProblemDetails(err)
 	if !ok || d.Status != 422 {
 		t.Fatalf("err = %v, want 422 validation-failed", err)
 	}
 	if inv.calls.Load() != 0 {
-		t.Errorf("invalidate вызван при отказе, want 0 (запись не состоялась)")
+		t.Errorf("invalidate called on failure, want 0 (no write happened)")
 	}
 	if seenValue != "" {
-		t.Errorf("SetSetting вызван (value=%q), want пусто", seenValue)
+		t.Errorf("SetSetting called (value=%q), want empty", seenValue)
 	}
 }
 
@@ -162,7 +162,7 @@ func TestProvisioningPut_InvalidMethod_422(t *testing.T) {
 		ProvisioningPolicyUpdateInput{AllowedMethods: []string{"user", "bootstrap"}})
 	d, ok := AsProblemDetails(err)
 	if !ok || d.Status != 422 {
-		t.Fatalf("err = %v, want 422 (bootstrap нельзя задать в политике)", err)
+		t.Fatalf("err = %v, want 422 (bootstrap cannot be set in policy)", err)
 	}
 }
 
@@ -174,6 +174,6 @@ func TestProvisioningGet_DefaultPolicySetFalse(t *testing.T) {
 	h := NewProvisioningPolicyHandler(provReader{set: false}, svc, nil)
 	view := h.GetTyped()
 	if view.PolicySet {
-		t.Errorf("PolicySet = true, want false (политика не задана)")
+		t.Errorf("PolicySet = true, want false (policy not set)")
 	}
 }

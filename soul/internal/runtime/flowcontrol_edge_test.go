@@ -53,10 +53,10 @@ func TestWhen_Onchanges_Onfail_AllThree_AllSatisfied(t *testing.T) {
 		t.Fatalf("Run: %v", err)
 	}
 	if targetCalled {
-		t.Errorf("target выполнился, хотя onfail-источник не упал (AND: onfail-not-satisfied → SKIPPED)")
+		t.Errorf("target ran even though the onfail source did not fail (AND: onfail-not-satisfied -> SKIPPED)")
 	}
 	if got := sink.taskEvents[2].GetStatus(); got != keeperv1.TaskStatus_TASK_STATUS_SKIPPED {
-		t.Errorf("target status = %v, want SKIPPED (onfail-ветка AND не пройдена)", got)
+		t.Errorf("target status = %v, want SKIPPED (onfail AND branch not satisfied)", got)
 	}
 	if sink.runResult.GetStatus() != keeperv1.RunStatus_RUN_STATUS_SUCCESS {
 		t.Errorf("runResult = %v, want SUCCESS", sink.runResult.GetStatus())
@@ -96,14 +96,14 @@ func TestWhen_Onchanges_Onfail_AllThree_OnfailFiresWhenSatisfied(t *testing.T) {
 		t.Fatalf("Run: %v", err)
 	}
 	if !targetCalled {
-		t.Errorf("target не исполнился, хотя все три requisite (when+onchanges+onfail) выполнены")
+		t.Errorf("target did not run even though all three requisites (when+onchanges+onfail) are satisfied")
 	}
 	if got := sink.taskEvents[2].GetStatus(); got != keeperv1.TaskStatus_TASK_STATUS_CHANGED {
 		t.Errorf("target status = %v, want CHANGED", got)
 	}
 	// probe failed → run is FAILED; target is the onfail rescue — its execution doesn't cancel the failure.
 	if sink.runResult.GetStatus() != keeperv1.RunStatus_RUN_STATUS_FAILED {
-		t.Errorf("runResult = %v, want FAILED (источник onfail упал)", sink.runResult.GetStatus())
+		t.Errorf("runResult = %v, want FAILED (onfail source failed)", sink.runResult.GetStatus())
 	}
 }
 
@@ -140,7 +140,7 @@ func TestWhen_Onchanges_Onfail_AllThree_WhenFalseWins(t *testing.T) {
 		t.Fatalf("Run: %v", err)
 	}
 	if targetCalled {
-		t.Errorf("target выполнился при when:false (when должен коротить AND даже при сработавших onchanges/onfail)")
+		t.Errorf("target ran with when:false (when should short-circuit AND even when onchanges/onfail fired)")
 	}
 	if got := sink.taskEvents[2].GetStatus(); got != keeperv1.TaskStatus_TASK_STATUS_SKIPPED {
 		t.Errorf("target status = %v, want SKIPPED", got)
@@ -183,7 +183,7 @@ func TestUntil_WithChangedWhenOverride_Exhausted(t *testing.T) {
 		t.Fatalf("Run: %v", err)
 	}
 	if attempts != 3 {
-		t.Errorf("attempts = %d, want 3 (until ни разу не truthy — все попытки исчерпаны)", attempts)
+		t.Errorf("attempts = %d, want 3 (until never truthy - all attempts exhausted)", attempts)
 	}
 	ev := sink.taskEvents[0]
 	if ev.GetStatus() != keeperv1.TaskStatus_TASK_STATUS_FAILED {
@@ -226,7 +226,7 @@ func TestUntil_WithChangedWhenOverride_TrueExits(t *testing.T) {
 		t.Fatalf("Run: %v", err)
 	}
 	if attempts != 1 {
-		t.Errorf("attempts = %d, want 1 (changed_when:true → until-true на 1-й попытке)", attempts)
+		t.Errorf("attempts = %d, want 1 (changed_when:true -> until-true on the 1st attempt)", attempts)
 	}
 	if got := sink.taskEvents[0].GetStatus(); got != keeperv1.TaskStatus_TASK_STATUS_CHANGED {
 		t.Errorf("status = %v, want CHANGED", got)
@@ -258,19 +258,19 @@ func TestOnFail_SkippedSource_Skips(t *testing.T) {
 		t.Fatalf("Run: %v", err)
 	}
 	if srcCalled {
-		t.Errorf("источник A исполнился, хотя when:false (должен быть SKIPPED)")
+		t.Errorf("source A ran even though when:false (should be SKIPPED)")
 	}
 	if got := sink.taskEvents[0].GetStatus(); got != keeperv1.TaskStatus_TASK_STATUS_SKIPPED {
 		t.Fatalf("A status = %v, want SKIPPED", got)
 	}
 	// a skipped source carries failed=false → onfail doesn't activate.
 	if rescueCalled {
-		t.Errorf("rescue исполнился на SKIPPED-источник (skipped ≠ failed — onfail не должен срабатывать)")
+		t.Errorf("rescue ran on a SKIPPED source (skipped != failed - onfail should not fire)")
 	}
 	if got := sink.taskEvents[1].GetStatus(); got != keeperv1.TaskStatus_TASK_STATUS_SKIPPED {
 		t.Errorf("rescue status = %v, want SKIPPED", got)
 	}
 	if sink.runResult.GetStatus() != keeperv1.RunStatus_RUN_STATUS_SUCCESS {
-		t.Errorf("runResult = %v, want SUCCESS (skipped-источник не провал)", sink.runResult.GetStatus())
+		t.Errorf("runResult = %v, want SUCCESS (skipped source is not a failure)", sink.runResult.GetStatus())
 	}
 }

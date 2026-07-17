@@ -119,7 +119,7 @@ func TestIntegration_SyncTraitsToHosts_ProjectsToMembers(t *testing.T) {
 	}
 	// The foreign host is untouched.
 	if got := soulTraits(t, "outsider.example.com"); len(got) != 0 {
-		t.Errorf("outsider souls.traits = %v, want empty (вне инкарнации)", got)
+		t.Errorf("outsider souls.traits = %v, want empty (outside the incarnation)", got)
 	}
 }
 
@@ -177,7 +177,7 @@ func TestIntegration_ProjectedTraits_ContainmentTargeting(t *testing.T) {
 		t.Fatalf("containment query: %v", err)
 	}
 	if n != 2 {
-		t.Errorf("containment matched %d souls, want 2 (только спроецированные члены)", n)
+		t.Errorf("containment matched %d souls, want 2 (only projected members)", n)
 	}
 }
 
@@ -216,7 +216,7 @@ func TestIntegration_UpdateTraits_PersistsAndReturnsKeys(t *testing.T) {
 		t.Errorf("persisted traits = %v, want env=prod az=a", got.Traits)
 	}
 	if _, stillThere := got.Traits["team"]; stillThere {
-		t.Errorf("persisted traits still has team — replace должен затереть весь map: %v", got.Traits)
+		t.Errorf("persisted traits still has team - replace must overwrite the whole map: %v", got.Traits)
 	}
 }
 
@@ -241,7 +241,7 @@ func TestIntegration_UpdateTraits_EmptyClears(t *testing.T) {
 		t.Fatalf("UpdateTraits(empty): %v", err)
 	}
 	if len(res.NewKeys) != 0 {
-		t.Errorf("NewKeys = %v, want [] (очистка)", res.NewKeys)
+		t.Errorf("NewKeys = %v, want [] (cleared)", res.NewKeys)
 	}
 	got, _ := SelectByName(ctx, integrationPool, "redis-prod")
 	if len(got.Traits) != 0 {
@@ -278,7 +278,7 @@ func TestIntegration_PgContainmentMatchesArrayWithScalarRHS(t *testing.T) {
 		t.Fatalf("containment probe: %v", err)
 	}
 	if !containmentMatch {
-		t.Error("PG @> со скаляр-RHS НЕ сматчил массив — предпосылка BUG #1 не воспроизвелась (ожидался TRUE)")
+		t.Error("PG @> with a scalar-RHS did NOT match the array - the BUG #1 premise did not reproduce (expected TRUE)")
 	}
 	// the scalar form `->>` against an array → array text ≠ 'prod' → FALSE (the fix).
 	if err := integrationPool.QueryRow(ctx,
@@ -286,7 +286,7 @@ func TestIntegration_PgContainmentMatchesArrayWithScalarRHS(t *testing.T) {
 		t.Fatalf("scalar probe: %v", err)
 	}
 	if scalarMatch {
-		t.Error("scalar `->>'env' = 'prod'` сматчил массив — фикс не закрыл рассинхрон (ожидался FALSE)")
+		t.Error("scalar `->>'env' = 'prod'` matched the array - the fix did not close the desync (expected FALSE)")
 	}
 }
 
@@ -335,10 +335,10 @@ func TestIntegration_ScopeTrait_ListVsScalar_ConsistentWithGet(t *testing.T) {
 		listVisible[inc.Name] = true
 	}
 	if total != 1 || !listVisible["redis-scalar"] {
-		t.Errorf("List: total=%d visible=%v, want только redis-scalar (scalar-only)", total, listVisible)
+		t.Errorf("List: total=%d visible=%v, want only redis-scalar (scalar-only)", total, listVisible)
 	}
 	if listVisible["redis-list"] {
-		t.Error("List ВИДИТ list-Trait инкарнацию через trait-scope — BUG #1 не исправлен (containment-семантика)")
+		t.Error("List SEES the list-Trait incarnation via trait-scope - BUG #1 not fixed (containment semantics)")
 	}
 
 	// GET path: the same scalar predicate as traitScalarEquals (scalar-only).
@@ -350,7 +350,7 @@ func TestIntegration_ScopeTrait_ListVsScalar_ConsistentWithGet(t *testing.T) {
 		}
 		getVisible := traitScalarEqualsLocal(inc.Traits, "env", "prod")
 		if getVisible != listVisible[name] {
-			t.Errorf("РАССИНХРОН List↔Get для %s: List=%v Get=%v (traits=%v)",
+			t.Errorf("DESYNC List<->Get for %s: List=%v Get=%v (traits=%v)",
 				name, listVisible[name], getVisible, inc.Traits)
 		}
 	}

@@ -39,12 +39,12 @@ func TestSchemaNames_Service(t *testing.T) {
 	schemas := loadFullSpecSchemas(t)
 	for _, name := range serviceContractSchemas {
 		if _, ok := schemas[name]; !ok {
-			t.Errorf("контрактonя схема %q ОТСУТСТВУЕТ в components/schemas (имя не выровнеbut)", name)
+			t.Errorf("contract schema %q is MISSING in components/schemas (name not aligned)", name)
 		}
 	}
 	for _, name := range serviceForbiddenSchemas {
 		if _, ok := schemas[name]; ok {
-			t.Errorf("техническое huma-имя %q ПРИСУТСТВУЕТ в спеке — имя не выровнеbut под контракт", name)
+			t.Errorf("technical huma name %q is PRESENT in the spec - name not aligned to contract", name)
 		}
 	}
 }
@@ -61,7 +61,7 @@ func TestSchemaNames_ServiceEnvelopes(t *testing.T) {
 	}
 	var doc map[string]any
 	if err := yaml.Unmarshal([]byte(y), &doc); err != nil {
-		t.Fatalf("спека не парсится: %v", err)
+		t.Fatalf("spec does not parse: %v", err)
 	}
 	comp, _ := doc["components"].(map[string]any)
 	schemas, _ := comp["schemas"].(map[string]any)
@@ -77,30 +77,30 @@ func assertScenariosEnvelope(t *testing.T, schemas map[string]any) {
 	const name = "ServiceScenariosListReply"
 	env, ok := schemas[name].(map[string]any)
 	if !ok {
-		t.Fatalf("envelope-схема %q отсутствует — envelope-alias не сработал (huma оставил handler-имя ServiceScenariosReply?)", name)
+		t.Fatalf("envelope schema %q is missing - envelope-alias did not fire (did huma keep the handler name ServiceScenariosReply?)", name)
 	}
 	props, ok := env["properties"].(map[string]any)
 	if !ok {
-		t.Fatalf("%q без properties", name)
+		t.Fatalf("%q has no properties", name)
 	}
 	for _, f := range []string{"service", "ref", "scenarios"} {
 		if _, ok := props[f]; !ok {
-			t.Errorf("%q не withдержит контрактbutго поля %q", name, f)
+			t.Errorf("%q does not contain contract field %q", name, f)
 		}
 	}
 	scen, ok := props["scenarios"].(map[string]any)
 	if !ok {
-		t.Fatalf("%q.scenarios отсутствует", name)
+		t.Fatalf("%q.scenarios is missing", name)
 	}
 	if !schemaTypeHas(scen["type"], "array") {
-		t.Errorf("%q.scenarios.type=%v, ожидалось array", name, scen["type"])
+		t.Errorf("%q.scenarios.type=%v, expected array", name, scen["type"])
 	}
 	elemSchema, ok := scen["items"].(map[string]any)
 	if !ok {
-		t.Fatalf("%q.scenarios.items отсутствует (element-схема)", name)
+		t.Fatalf("%q.scenarios.items is missing (element schema)", name)
 	}
 	const wantRef = "#/components/schemas/Scenario"
 	if ref, _ := elemSchema["$ref"].(string); ref != wantRef {
-		t.Errorf("%q.scenarios.items.$ref=%q, ожидалось %q (контрактный element)", name, ref, wantRef)
+		t.Errorf("%q.scenarios.items.$ref=%q, expected %q (contract element)", name, ref, wantRef)
 	}
 }

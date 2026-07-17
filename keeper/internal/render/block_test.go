@@ -243,7 +243,7 @@ func TestRenderBlock_NestedRecursion(t *testing.T) {
 		t.Fatalf("len(tasks) = %d, want 2 (sibling + leaf)", len(tasks))
 	}
 	if tasks[0].Index != 0 || tasks[1].Index != 1 {
-		t.Errorf("indices = %d,%d, want 0,1 (сквозные)", tasks[0].Index, tasks[1].Index)
+		t.Errorf("indices = %d,%d, want 0,1 (threaded)", tasks[0].Index, tasks[1].Index)
 	}
 	// sibling: outer.when only.
 	if got, want := tasks[0].When, "input.a"; got != want {
@@ -252,7 +252,7 @@ func TestRenderBlock_NestedRecursion(t *testing.T) {
 	// leaf: outer.when && inner.when && leaf.when (cascade; the nested merge
 	// wraps the already-merged outer predicate in its own parens).
 	if got, want := tasks[1].When, "((input.a) && (input.b)) && (input.c)"; got != want {
-		t.Errorf("leaf.When = %q, want %q (каскад outer&&inner&&leaf)", got, want)
+		t.Errorf("leaf.When = %q, want %q (outer&&inner&&leaf cascade)", got, want)
 	}
 }
 
@@ -294,7 +294,7 @@ func TestRenderBlock_StaticSkipPerChild(t *testing.T) {
 		// Inherited block.when is ANDed into each child (AND with empty
 		// child.when → plain block.when).
 		if got, want := tasks[i].When, "input.action == 'apply'"; got != want {
-			t.Errorf("placeholder[%d].When = %q, want %q (унаследованный block.when)", i, got, want)
+			t.Errorf("placeholder[%d].When = %q, want %q (inherited block.when)", i, got, want)
 		}
 	}
 	// after didn't shift: Index 3.
@@ -303,7 +303,7 @@ func TestRenderBlock_StaticSkipPerChild(t *testing.T) {
 	}
 	for i := range tasks {
 		if tasks[i].Index != i {
-			t.Errorf("tasks[%d].Index = %d, want %d (сквозной без дыр)", i, tasks[i].Index, i)
+			t.Errorf("tasks[%d].Index = %d, want %d (threaded, no gaps)", i, tasks[i].Index, i)
 		}
 	}
 	if len(plans) != 4 {
@@ -335,19 +335,19 @@ func TestRenderBlock_StaticSkipPreservesRegister(t *testing.T) {
 	}
 	tasks, _, err := p.Render(context.Background(), in)
 	if err != nil {
-		t.Fatalf("Render НЕ должен падать на register потомка static-false block: %v", err)
+		t.Fatalf("Render must not fail on a static-false block child's register: %v", err)
 	}
 	if len(tasks) != 2 {
-		t.Fatalf("len(tasks) = %d, want 2 (skip-placeholder потомка + restart)", len(tasks))
+		t.Fatalf("len(tasks) = %d, want 2 (child skip-placeholder + restart)", len(tasks))
 	}
 	if tasks[0].Register != "cfg_changed" {
-		t.Errorf("tasks[0].Register = %q, want cfg_changed (register потомка виден на skip-placeholder)", tasks[0].Register)
+		t.Errorf("tasks[0].Register = %q, want cfg_changed (child's register visible on the skip-placeholder)", tasks[0].Register)
 	}
 	if tasks[0].Params != nil {
 		t.Errorf("tasks[0].Params = %v, want nil (static-skip placeholder)", tasks[0].Params)
 	}
 	if len(tasks[1].OnChangesIdx) != 1 || tasks[1].OnChangesIdx[0] != 0 {
-		t.Errorf("restart.OnChangesIdx = %v, want [0] — register потомка static-false block резолвится снаружи", tasks[1].OnChangesIdx)
+		t.Errorf("restart.OnChangesIdx = %v, want [0] - a static-false block child's register resolves from outside", tasks[1].OnChangesIdx)
 	}
 }
 
@@ -378,20 +378,20 @@ func TestRenderBlock_StaticSkipNested(t *testing.T) {
 	}
 	tasks, _, err := p.Render(context.Background(), in)
 	if err != nil {
-		t.Fatalf("Render НЕ должен падать на register листа вложенного static-false block: %v", err)
+		t.Fatalf("Render must not fail on a nested static-false block leaf's register: %v", err)
 	}
 	if len(tasks) != 2 {
-		t.Fatalf("len(tasks) = %d, want 2 (skip-placeholder листа + restart)", len(tasks))
+		t.Fatalf("len(tasks) = %d, want 2 (leaf skip-placeholder + restart)", len(tasks))
 	}
 	if tasks[0].Register != "leaf_reg" {
-		t.Errorf("tasks[0].Register = %q, want leaf_reg (register листа виден через каскад)", tasks[0].Register)
+		t.Errorf("tasks[0].Register = %q, want leaf_reg (leaf's register visible through the cascade)", tasks[0].Register)
 	}
 	// AND cascade: outer block.when is merged into inner, then into leaf — wrapped in parens.
 	if got, want := tasks[0].When, "input.action == 'apply'"; got != want {
-		t.Errorf("leaf placeholder.When = %q, want %q (каскад AND с пустыми child.when → чистый block.when)", got, want)
+		t.Errorf("leaf placeholder.When = %q, want %q (AND cascade with empty child.when -> plain block.when)", got, want)
 	}
 	if len(tasks[1].OnChangesIdx) != 1 || tasks[1].OnChangesIdx[0] != 0 {
-		t.Errorf("restart.OnChangesIdx = %v, want [0] — register листа вложенного static-false block резолвится снаружи", tasks[1].OnChangesIdx)
+		t.Errorf("restart.OnChangesIdx = %v, want [0] - a nested static-false block leaf's register resolves from outside", tasks[1].OnChangesIdx)
 	}
 }
 
@@ -430,28 +430,28 @@ func TestRenderBlock_StaticFalseBlockDynamicChildOperand(t *testing.T) {
 	}
 	tasks, _, err := p.Render(context.Background(), in)
 	if err != nil {
-		t.Fatalf("Render: динамический операнд потомка static-false block НЕ должен ронять рендер: %v", err)
+		t.Fatalf("Render: a static-false block child's dynamic operand must not fail render: %v", err)
 	}
 	if len(tasks) != 2 {
-		t.Fatalf("len(tasks) = %d, want 2 (отрендеренный потомок + consumer)", len(tasks))
+		t.Fatalf("len(tasks) = %d, want 2 (rendered child + consumer)", len(tasks))
 	}
 	// ★ Key invariant: the child IS RENDERED (not a placeholder) because the AND-merge isn't static.
 	if tasks[0].Params == nil {
-		t.Fatal("tasks[0].Params == nil — динамический операнд должен переводить обработку в РЕНДЕР, а не static-skip")
+		t.Fatal("tasks[0].Params == nil - a dynamic operand must route processing into RENDER, not static-skip")
 	}
 	if got := tasks[0].Params.GetFields()["name"].GetStringValue(); got != "redis-server" {
-		t.Errorf("tasks[0].name = %q, want redis-server (params отрендерены обычным путём)", got)
+		t.Errorf("tasks[0].name = %q, want redis-server (params rendered normally)", got)
 	}
 	// The AND predicate passes through as-is — Soul evaluates the whole AND (incl. the false block.when).
 	if got, want := tasks[0].When, "(input.action == 'apply') && (register.cfg.changed)"; got != want {
-		t.Errorf("tasks[0].When = %q, want %q (AND-merge протянут as-is на Soul)", got, want)
+		t.Errorf("tasks[0].When = %q, want %q (AND-merge passed through as-is to Soul)", got, want)
 	}
 	// The child's register is preserved and visible from outside: consumer resolves it in OnChangesIdx.
 	if tasks[0].Register != "reloaded" {
-		t.Errorf("tasks[0].Register = %q, want reloaded (register не теряется при рендере)", tasks[0].Register)
+		t.Errorf("tasks[0].Register = %q, want reloaded (register is not lost during render)", tasks[0].Register)
 	}
 	if len(tasks[1].OnChangesIdx) != 1 || tasks[1].OnChangesIdx[0] != 0 {
-		t.Errorf("consumer.OnChangesIdx = %v, want [0] — register отрендеренного потомка виден снаружи", tasks[1].OnChangesIdx)
+		t.Errorf("consumer.OnChangesIdx = %v, want [0] - a rendered child's register is visible from outside", tasks[1].OnChangesIdx)
 	}
 }
 
@@ -482,7 +482,7 @@ func TestRenderBlock_IndexIntegrity(t *testing.T) {
 	}
 	for i := range tasks {
 		if tasks[i].Index != i {
-			t.Errorf("tasks[%d].Index = %d, want %d (сквозной без дыр)", i, tasks[i].Index, i)
+			t.Errorf("tasks[%d].Index = %d, want %d (threaded, no gaps)", i, tasks[i].Index, i)
 		}
 		if plans[i].TaskIndex != i {
 			t.Errorf("plans[%d].TaskIndex = %d, want %d", i, plans[i].TaskIndex, i)
@@ -512,7 +512,7 @@ func TestRenderBlock_VarsInheritance(t *testing.T) {
 	}
 	got := tasks[0].Params.GetFields()["command"].GetStringValue()
 	if got != "block-a child-b" {
-		t.Errorf("command = %q, want %q (block.vars база, child.vars поверх)", got, "block-a child-b")
+		t.Errorf("command = %q, want %q (block.vars base, child.vars layered on top)", got, "block-a child-b")
 	}
 }
 
@@ -551,7 +551,7 @@ func TestRenderBlock_ApplyChild(t *testing.T) {
 		t.Errorf("module = %q, want core.exec.run", tasks[0].Module)
 	}
 	if plans[0].SerialWidth != 1 {
-		t.Errorf("SerialWidth = %d, want 1 (унаследован block.serial)", plans[0].SerialWidth)
+		t.Errorf("SerialWidth = %d, want 1 (inherited block.serial)", plans[0].SerialWidth)
 	}
 }
 
@@ -571,7 +571,7 @@ func TestRenderBlock_LoopChildRejected(t *testing.T) {
 	}
 	_, _, err := p.Render(context.Background(), in)
 	if !errors.Is(err, ErrUnsupportedDSL) {
-		t.Fatalf("err = %v, want ErrUnsupportedDSL (loop в block вне pilot)", err)
+		t.Fatalf("err = %v, want ErrUnsupportedDSL (loop in block out of pilot scope)", err)
 	}
 }
 
@@ -594,7 +594,7 @@ func TestRenderBlock_IncludeChildRejected(t *testing.T) {
 	}
 	_, _, err := p.Render(context.Background(), in)
 	if !errors.Is(err, ErrUnexpandedInclude) {
-		t.Fatalf("err = %v, want ErrUnexpandedInclude (include-потомок block вне pilot)", err)
+		t.Fatalf("err = %v, want ErrUnexpandedInclude (include child of block out of pilot scope)", err)
 	}
 }
 
@@ -616,7 +616,7 @@ func TestRenderBlock_ParallelChildRejected(t *testing.T) {
 	}
 	_, _, err := p.Render(context.Background(), in)
 	if !errors.Is(err, ErrUnsupportedDSL) {
-		t.Fatalf("err = %v, want ErrUnsupportedDSL (parallel-потомок block вне pilot)", err)
+		t.Fatalf("err = %v, want ErrUnsupportedDSL (parallel child of block out of pilot scope)", err)
 	}
 }
 
@@ -646,10 +646,10 @@ func TestRenderBlock_RunOnceOnBlock(t *testing.T) {
 	}
 	for i, pl := range plans {
 		if len(pl.TargetSIDs) != 1 {
-			t.Fatalf("plans[%d].TargetSIDs = %v, want ровно 1 хост (run_once на block)", i, pl.TargetSIDs)
+			t.Fatalf("plans[%d].TargetSIDs = %v, want exactly 1 host (run_once on block)", i, pl.TargetSIDs)
 		}
 		if pl.TargetSIDs[0] != "a.example.com" {
-			t.Errorf("plans[%d].TargetSIDs = %v, want [a.example.com] (первый по SID, ОДИН на весь блок)", i, pl.TargetSIDs)
+			t.Errorf("plans[%d].TargetSIDs = %v, want [a.example.com] (first by SID, ONE for the whole block)", i, pl.TargetSIDs)
 		}
 	}
 }
@@ -672,14 +672,14 @@ func TestRenderBlock_EmptyBlock(t *testing.T) {
 	}
 	tasks, plans, err := p.Render(context.Background(), in)
 	if err != nil {
-		t.Fatalf("Render пустого block: %v (ожидался no-op, не ошибка)", err)
+		t.Fatalf("Render of an empty block: %v (expected no-op, not an error)", err)
 	}
 	// 0 tasks for the empty block + 1 after = 1; after's Index didn't shift.
 	if len(tasks) != 1 {
-		t.Fatalf("len(tasks) = %d, want 1 (пустой block даёт 0 задач + after)", len(tasks))
+		t.Fatalf("len(tasks) = %d, want 1 (empty block gives 0 tasks + after)", len(tasks))
 	}
 	if tasks[0].Index != 0 || tasks[0].Name != "after" {
-		t.Errorf("tasks[0] = {Index:%d Name:%q}, want {0 after} (пустой block не сдвигает Index)", tasks[0].Index, tasks[0].Name)
+		t.Errorf("tasks[0] = {Index:%d Name:%q}, want {0 after} (empty block does not shift Index)", tasks[0].Index, tasks[0].Name)
 	}
 	if len(plans) != 1 {
 		t.Errorf("len(plans) = %d, want 1", len(plans))

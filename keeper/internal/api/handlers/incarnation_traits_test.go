@@ -69,7 +69,7 @@ func TestIncarnation_Create_NoTraits_NoSpecKey(t *testing.T) {
 	var spec map[string]any
 	_ = json.Unmarshal(specBytes, &spec)
 	if _, has := spec["traits"]; has {
-		t.Errorf("spec.traits present без traits в запросе: %v", spec)
+		t.Errorf("spec.traits present without traits in request: %v", spec)
 	}
 }
 
@@ -86,7 +86,7 @@ func TestIncarnation_Create_InvalidTraitValue_422(t *testing.T) {
 		t.Fatalf("Code = %d, want 422 (body=%s)", rec.Code, rec.Body.String())
 	}
 	if db.insertCalls != 0 {
-		t.Errorf("insertCalls = %d, want 0 (422 ДО insert)", db.insertCalls)
+		t.Errorf("insertCalls = %d, want 0 (422 before insert)", db.insertCalls)
 	}
 }
 
@@ -107,7 +107,7 @@ func TestIncarnation_SetTraits_200_Replaces(t *testing.T) {
 		t.Fatalf("Code = %d, body=%s", rec.Code, rec.Body.String())
 	}
 	if db.updateTraitsArg == nil {
-		t.Fatal("UPDATE incarnation SET traits не выполнен")
+		t.Fatal("UPDATE incarnation SET traits was not executed")
 	}
 	var got map[string]any
 	if err := json.Unmarshal(db.updateTraitsArg, &got); err != nil {
@@ -131,7 +131,7 @@ func TestIncarnation_SetTraits_EmptyClears(t *testing.T) {
 		t.Fatalf("Code = %d, body=%s", rec.Code, rec.Body.String())
 	}
 	if string(db.updateTraitsArg) != "{}" {
-		t.Errorf("traits arg = %s, want \"{}\" (очистка)", db.updateTraitsArg)
+		t.Errorf("traits arg = %s, want \"{}\" (cleared)", db.updateTraitsArg)
 	}
 }
 
@@ -149,7 +149,7 @@ func TestIncarnation_SetTraits_InvalidValue_422(t *testing.T) {
 		t.Fatalf("Code = %d, want 422 (body=%s)", rec.Code, rec.Body.String())
 	}
 	if db.updateTraitsArg != nil {
-		t.Error("UPDATE traits выполнен на невалидном значении — должен 422 ДО записи")
+		t.Error("UPDATE traits was executed on an invalid value - should 422 before writing")
 	}
 }
 

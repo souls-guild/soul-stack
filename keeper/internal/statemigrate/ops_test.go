@@ -50,7 +50,7 @@ func TestRename_ToExists(t *testing.T) {
 	}, map[string]any{"a": 1, "b": 2})
 	var ee *EvalError
 	if !errors.As(err, &ee) || ee.Class != ClassRenameToExists {
-		t.Fatalf("ошибка = %v, want ClassRenameToExists", err)
+		t.Fatalf("error = %v, want ClassRenameToExists", err)
 	}
 }
 
@@ -71,7 +71,7 @@ func TestMove_AliasOfRename(t *testing.T) {
 		t.Fatalf("Parse: %v", err)
 	}
 	if len(mig.Transform) != 1 || mig.Transform[0].Rename == nil {
-		t.Fatalf("move не разобран в Rename: %#v", mig.Transform)
+		t.Fatalf("move not parsed into Rename: %#v", mig.Transform)
 	}
 	out := mustApply(t, mig.Transform, map[string]any{"a": "x"})
 	assertDeepEqualJSON(t, out, map[string]any{"b": "x"})
@@ -193,7 +193,7 @@ func TestForeach_ScalarNotIterable(t *testing.T) {
 	}, map[string]any{"x": 5})
 	var ee *EvalError
 	if !errors.As(err, &ee) || ee.Class != ClassForeachType {
-		t.Fatalf("ошибка = %v, want ClassForeachType", err)
+		t.Fatalf("error = %v, want ClassForeachType", err)
 	}
 }
 
@@ -204,7 +204,7 @@ func TestSet_TraverseThroughScalar(t *testing.T) {
 	}, map[string]any{"a": "scalar"})
 	var ee *EvalError
 	if !errors.As(err, &ee) || ee.Class != ClassPathTraverse {
-		t.Fatalf("ошибка = %v, want ClassPathTraverse", err)
+		t.Fatalf("error = %v, want ClassPathTraverse", err)
 	}
 }
 

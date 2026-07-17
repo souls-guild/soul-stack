@@ -684,13 +684,13 @@ func TestVoyageCreate_CommandScoped_ExplicitForeignSID_403(t *testing.T) {
 		`{"kind":"command","module":"core.cmd.shell","target":{"sids":["web-01.example.com","db-01.example.com"]}}`))
 
 	if rec.Code != http.StatusForbidden {
-		t.Fatalf("status = %d, want 403 (явный чужой хост); body=%s", rec.Code, rec.Body.String())
+		t.Fatalf("status = %d, want 403 (explicit foreign host); body=%s", rec.Code, rec.Body.String())
 	}
 	if !cmd.calledIn {
-		t.Error("ResolveSIDsInScope не вызван — scope не применён")
+		t.Error("ResolveSIDsInScope not called - scope not applied")
 	}
 	if store.insertCalls != 0 {
-		t.Errorf("insertCalls = %d, want 0 (403 не создаёт прогон)", store.insertCalls)
+		t.Errorf("insertCalls = %d, want 0 (403 does not create a run)", store.insertCalls)
 	}
 }
 
@@ -708,17 +708,17 @@ func TestVoyageCreate_CommandScoped_WideTarget_Trimmed202(t *testing.T) {
 		`{"kind":"command","module":"core.cmd.shell","target":{"coven":["coven-a","coven-b"]}}`))
 
 	if rec.Code != http.StatusAccepted {
-		t.Fatalf("status = %d, want 202 (урезание без отказа); body=%s", rec.Code, rec.Body.String())
+		t.Fatalf("status = %d, want 202 (truncation without a failure); body=%s", rec.Code, rec.Body.String())
 	}
 	var reply voyageCreateReply
 	if err := json.Unmarshal(rec.Body.Bytes(), &reply); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
 	if reply.ScopeSize != 2 {
-		t.Errorf("scope_size = %d, want 2 (только подмножество A, не A∪B)", reply.ScopeSize)
+		t.Errorf("scope_size = %d, want 2 (only subset A, not A union B)", reply.ScopeSize)
 	}
 	if store.insertTargets != 2 {
-		t.Errorf("insertTargets = %d, want 2 (урезанный snapshot)", store.insertTargets)
+		t.Errorf("insertTargets = %d, want 2 (truncated snapshot)", store.insertTargets)
 	}
 }
 
@@ -735,10 +735,10 @@ func TestVoyageCreate_CommandScoped_EmptyIntersection_422(t *testing.T) {
 		`{"kind":"command","module":"core.cmd.shell","target":{"coven":["coven-b"]}}`))
 
 	if rec.Code != http.StatusUnprocessableEntity {
-		t.Fatalf("status = %d, want 422 (пустое пересечение); body=%s", rec.Code, rec.Body.String())
+		t.Fatalf("status = %d, want 422 (empty intersection); body=%s", rec.Code, rec.Body.String())
 	}
 	if !strings.Contains(rec.Body.String(), "voyage_empty_target") {
-		t.Errorf("detail не содержит voyage_empty_target: %s", rec.Body.String())
+		t.Errorf("detail does not contain voyage_empty_target: %s", rec.Body.String())
 	}
 	if store.insertCalls != 0 {
 		t.Errorf("insertCalls = %d, want 0", store.insertCalls)
@@ -761,12 +761,12 @@ func TestVoyageCreate_CommandScoped_Unrestricted_FullResolve202(t *testing.T) {
 		t.Fatalf("status = %d, want 202 (Unrestricted backcompat); body=%s", rec.Code, rec.Body.String())
 	}
 	if !cmd.lastScope.Unrestricted {
-		t.Error("scope, переданный в резолвер, не Unrestricted (cluster-admin backcompat сломан)")
+		t.Error("scope passed to the resolver is not Unrestricted (cluster-admin backcompat is broken)")
 	}
 	var reply voyageCreateReply
 	_ = json.Unmarshal(rec.Body.Bytes(), &reply)
 	if reply.ScopeSize != 3 {
-		t.Errorf("scope_size = %d, want 3 (полный резолв)", reply.ScopeSize)
+		t.Errorf("scope_size = %d, want 3 (full resolve)", reply.ScopeSize)
 	}
 }
 
@@ -786,7 +786,7 @@ func TestVoyageCreate_CommandScoped_ResolvesErrandRunPurview(t *testing.T) {
 		t.Fatalf("status = %d, want 202; body=%s", w.Code, w.Body.String())
 	}
 	if rec.resource != "errand" || rec.action != "run" {
-		t.Errorf("Purview резолвнут для (%q,%q), want (errand,run)", rec.resource, rec.action)
+		t.Errorf("Purview resolved for (%q,%q), want (errand,run)", rec.resource, rec.action)
 	}
 }
 
@@ -803,10 +803,10 @@ func TestVoyageCreate_CommandScoped_NoErrandRun_403(t *testing.T) {
 		`{"kind":"command","module":"core.cmd.shell","target":{"coven":["prod"]}}`))
 
 	if w.Code != http.StatusForbidden {
-		t.Fatalf("status = %d, want 403 (нет errand.run); body=%s", w.Code, w.Body.String())
+		t.Fatalf("status = %d, want 403 (no errand.run); body=%s", w.Code, w.Body.String())
 	}
 	if cmd.calledIn {
-		t.Error("ResolveSIDsInScope вызван при Empty-scope — existence-gate не сработал")
+		t.Error("ResolveSIDsInScope called on Empty-scope - existence-gate did not trigger")
 	}
 }
 
@@ -831,11 +831,11 @@ func TestVoyageCreate_CommandScoped_Revoked_RevokedTokenNotGeneric403(t *testing
 		t.Fatalf("status = %d, want 401 (revoked); body=%s", w.Code, w.Body.String())
 	}
 	if ct := w.Body.String(); !strings.Contains(ct, problem.TypeOperatorRevokedToken) {
-		t.Fatalf("body не содержит %s (вернулся generic 403?); body=%s",
+		t.Fatalf("body does not contain %s (returned generic 403?); body=%s",
 			problem.TypeOperatorRevokedToken, ct)
 	}
 	if cmd.calledIn {
-		t.Error("ResolveSIDsInScope вызван при Empty-scope — existence-gate не сработал")
+		t.Error("ResolveSIDsInScope called on Empty-scope - existence-gate did not trigger")
 	}
 }
 
@@ -901,11 +901,11 @@ func TestVoyageCreate_Command_WindowOK(t *testing.T) {
 		t.Errorf("batch_mode arg = %v, want %q", bm, voyage.BatchModeWindow)
 	}
 	if len(idxs) != 3 {
-		t.Fatalf("captured batch_indexes = %v, want 3 единицы", idxs)
+		t.Fatalf("captured batch_indexes = %v, want 3 items", idxs)
 	}
 	for i, bi := range idxs {
 		if bi != 0 {
-			t.Errorf("batch_index[%d] = %d, want 0 (window — плоский прогон)", i, bi)
+			t.Errorf("batch_index[%d] = %d, want 0 (window - a flat run)", i, bi)
 		}
 	}
 }
@@ -924,7 +924,7 @@ func TestVoyageCreate_WindowWithBatchSize422(t *testing.T) {
 		t.Fatalf("status = %d, want 422; body=%s", rec.Code, rec.Body.String())
 	}
 	if store.insertCalls != 0 {
-		t.Errorf("insertCalls = %d, want 0 (отвергнут до Insert)", store.insertCalls)
+		t.Errorf("insertCalls = %d, want 0 (rejected before Insert)", store.insertCalls)
 	}
 }
 
@@ -951,11 +951,11 @@ func TestVoyageCreate_ScenarioWindowOK(t *testing.T) {
 		t.Errorf("batch_mode arg = %v, want %q", bm, voyage.BatchModeWindow)
 	}
 	if len(idxs) != 3 {
-		t.Fatalf("captured batch_indexes = %v, want 3 инкарнации", idxs)
+		t.Fatalf("captured batch_indexes = %v, want 3 incarnations", idxs)
 	}
 	for i, bi := range idxs {
 		if bi != 0 {
-			t.Errorf("batch_index[%d] = %d, want 0 (window — плоский прогон)", i, bi)
+			t.Errorf("batch_index[%d] = %d, want 0 (window - a flat run)", i, bi)
 		}
 	}
 }
@@ -1048,7 +1048,7 @@ func TestVoyageCreate_BatchSizeAndPercent_MutuallyExclusive422(t *testing.T) {
 		t.Fatalf("status = %d, want 422; body=%s", rec.Code, rec.Body.String())
 	}
 	if store.insertCalls != 0 {
-		t.Errorf("insertCalls = %d, want 0 (отвергнут до Insert)", store.insertCalls)
+		t.Errorf("insertCalls = %d, want 0 (rejected before Insert)", store.insertCalls)
 	}
 }
 
@@ -1134,7 +1134,7 @@ func TestVoyageCreate_BatchSizeExceedsCap422(t *testing.T) {
 		t.Errorf("body lacks voyage_batch_size_too_large: %s", rec.Body.String())
 	}
 	if store.insertCalls != 0 {
-		t.Errorf("insertCalls = %d, want 0 (отвергнут до Insert)", store.insertCalls)
+		t.Errorf("insertCalls = %d, want 0 (rejected before Insert)", store.insertCalls)
 	}
 }
 
@@ -1189,7 +1189,7 @@ func TestVoyageCreate_BatchPercentEffectiveExceedsCap422(t *testing.T) {
 		t.Errorf("body lacks voyage_batch_size_too_large: %s", rec.Body.String())
 	}
 	if store.insertCalls != 0 {
-		t.Errorf("insertCalls = %d, want 0 (отвергнут до Insert)", store.insertCalls)
+		t.Errorf("insertCalls = %d, want 0 (rejected before Insert)", store.insertCalls)
 	}
 }
 
@@ -1210,7 +1210,7 @@ func TestVoyageCreate_RequireAlive_PropagatedAndPersisted(t *testing.T) {
 		t.Fatalf("status = %d, want 202; body=%s", rec.Code, rec.Body.String())
 	}
 	if !cmd.lastFilter.RequireAlive {
-		t.Errorf("filter.RequireAlive = false, want true (проброс §5)")
+		t.Errorf("filter.RequireAlive = false, want true (propagation of §5)")
 	}
 	store.mu.Lock()
 	ra := store.insertArgs[20]
@@ -1643,7 +1643,7 @@ func TestVoyageCreate_BatchString_Malformed422(t *testing.T) {
 		t.Errorf("body lacks human-readable batch detail: %s", rec.Body.String())
 	}
 	if store.insertCalls != 0 {
-		t.Errorf("insertCalls = %d, want 0 (отвергнут до Insert)", store.insertCalls)
+		t.Errorf("insertCalls = %d, want 0 (rejected before Insert)", store.insertCalls)
 	}
 }
 
@@ -1737,11 +1737,11 @@ func TestVoyageCreate_BatchString_EmptyTreatedAsUnset(t *testing.T) {
 	idxs := append([]int(nil), store.copyBatchIndexes...)
 	store.mu.Unlock()
 	if bs != nil {
-		t.Errorf("batch_size arg = %v, want nil (весь scope одним Leg)", bs)
+		t.Errorf("batch_size arg = %v, want nil (the entire scope in one Leg)", bs)
 	}
 	for i, bi := range idxs {
 		if bi != 0 {
-			t.Errorf("batch_index[%d] = %d, want 0 (один Leg)", i, bi)
+			t.Errorf("batch_index[%d] = %d, want 0 (one Leg)", i, bi)
 		}
 	}
 }
@@ -1892,7 +1892,7 @@ func TestVoyageCreate_MaxFailures_Malformed422(t *testing.T) {
 		t.Errorf("body lacks human-readable max_failures detail: %s", rec.Body.String())
 	}
 	if store.insertCalls != 0 {
-		t.Errorf("insertCalls = %d, want 0 (отвергнут до Insert)", store.insertCalls)
+		t.Errorf("insertCalls = %d, want 0 (rejected before Insert)", store.insertCalls)
 	}
 }
 
@@ -2017,13 +2017,13 @@ func TestVoyagePreview_Scenario_NoPersist_NoDisclosure(t *testing.T) {
 	}
 	// No-persist: neither Insert, nor InsertTargets, nor commit.
 	if store.insertCalls != 0 || store.insertTargets != 0 || store.committed {
-		t.Errorf("preview персистил: insertCalls=%d insertTargets=%d committed=%v, want 0/0/false",
+		t.Errorf("preview persisted: insertCalls=%d insertTargets=%d committed=%v, want 0/0/false",
 			store.insertCalls, store.insertTargets, store.committed)
 	}
 	// No-disclosure: the raw JSON carries no unit names / target fields.
 	for _, forbidden := range []string{"inc-a", "inc-b", "inc-c", "\"sids\"", "\"incarnations\"", "\"hosts\"", "target_resolved"} {
 		if strings.Contains(rec.Body.String(), forbidden) {
-			t.Errorf("preview-ответ раскрывает единицы (нашёл %q): %s", forbidden, rec.Body.String())
+			t.Errorf("preview response reveals items (found %q): %s", forbidden, rec.Body.String())
 		}
 	}
 }
@@ -2071,10 +2071,10 @@ func TestVoyagePreview_Command_Window_NoNullJunk(t *testing.T) {
 		t.Errorf("reply = %+v, want batch_mode=window scope_size=3 total_batches=1", rep)
 	}
 	if rep.EffectiveBatchSize != nil {
-		t.Errorf("effective_batch_size = %v, want отсутствие (window)", *rep.EffectiveBatchSize)
+		t.Errorf("effective_batch_size = %v, want absent (window)", *rep.EffectiveBatchSize)
 	}
 	if strings.Contains(rec.Body.String(), "effective_batch_size") {
-		t.Errorf("window-ответ несёт ключ effective_batch_size (должен быть опущен): %s", rec.Body.String())
+		t.Errorf("window response carries the effective_batch_size key (should be omitted): %s", rec.Body.String())
 	}
 }
 
@@ -2092,7 +2092,7 @@ func TestVoyagePreview_MaxScopeExceeded_422(t *testing.T) {
 		t.Fatalf("status = %d, want 422; body=%s", rec.Code, rec.Body.String())
 	}
 	if !strings.Contains(rec.Body.String(), "voyage_scope_too_large") {
-		t.Errorf("detail не содержит voyage_scope_too_large: %s", rec.Body.String())
+		t.Errorf("detail does not contain voyage_scope_too_large: %s", rec.Body.String())
 	}
 	if store.insertCalls != 0 {
 		t.Errorf("insertCalls = %d, want 0", store.insertCalls)
@@ -2128,7 +2128,7 @@ func TestVoyagePreview_EmptyTarget_422(t *testing.T) {
 		t.Fatalf("status = %d, want 422; body=%s", rec.Code, rec.Body.String())
 	}
 	if !strings.Contains(rec.Body.String(), "voyage_empty_target") {
-		t.Errorf("detail не содержит voyage_empty_target: %s", rec.Body.String())
+		t.Errorf("detail does not contain voyage_empty_target: %s", rec.Body.String())
 	}
 }
 
@@ -2151,7 +2151,7 @@ func TestVoyagePreview_CommandScoped_ExplicitForeignSID_403(t *testing.T) {
 		t.Fatalf("status = %d, want 403; body=%s", rec.Code, rec.Body.String())
 	}
 	if !cmd.calledIn {
-		t.Error("ResolveSIDsInScope не вызван — scope не применён")
+		t.Error("ResolveSIDsInScope not called - scope not applied")
 	}
 	if store.insertCalls != 0 {
 		t.Errorf("insertCalls = %d, want 0", store.insertCalls)
@@ -2175,10 +2175,10 @@ func TestVoyagePreview_CommandScoped_WideTargetTrimmed_200(t *testing.T) {
 	}
 	rep := decodePreviewBody(t, rec.Body.Bytes())
 	if rep.ScopeSize != 2 {
-		t.Errorf("scope_size = %d, want 2 (подмножество A, не A∪B)", rep.ScopeSize)
+		t.Errorf("scope_size = %d, want 2 (subset A, not A union B)", rep.ScopeSize)
 	}
 	if store.insertCalls != 0 || store.insertTargets != 0 {
-		t.Errorf("preview персистил: insertCalls=%d insertTargets=%d", store.insertCalls, store.insertTargets)
+		t.Errorf("preview persisted: insertCalls=%d insertTargets=%d", store.insertCalls, store.insertTargets)
 	}
 }
 
@@ -2229,10 +2229,10 @@ func TestToVoyageDTO_PointerOptional_WireEquivalence(t *testing.T) {
 		t.Fatalf("unmarshal: %v", err)
 	}
 	if _, ok := got["scenario_name"]; ok {
-		t.Errorf("scenario_name присутствует при nil; want опущен (байт-в-байт со старым omitempty)")
+		t.Errorf("scenario_name present when nil; want omitted (byte-for-byte with old omitempty)")
 	}
 	if _, ok := got["batch_mode"]; ok {
-		t.Errorf("batch_mode присутствует при nil (barrier→NULL); want опущен")
+		t.Errorf("batch_mode present when nil (barrier->NULL); want omitted")
 	}
 	if string(got["module"]) != `"core.cmd.shell"` {
 		t.Errorf("module = %s, want \"core.cmd.shell\"", got["module"])
@@ -2246,7 +2246,7 @@ func TestToVoyageDTO_PointerOptional_WireEquivalence(t *testing.T) {
 		t.Fatalf("unmarshal summary: %v", err)
 	}
 	if _, ok := summ["no_match"]; ok {
-		t.Errorf("summary.no_match присутствует при 0; want опущен")
+		t.Errorf("summary.no_match present at 0; want omitted")
 	}
 
 	// non-zero branch: scenario_name/batch_mode/no_match are present and carry a value.
@@ -2326,7 +2326,7 @@ func TestToVoyageDTO_DateTime_NanosecondWire(t *testing.T) {
 	}
 	for key, want := range wantWire {
 		if string(got[key]) != want {
-			t.Errorf("%s = %s, want %s (наносекундный wire, БЕЗ .UTC()/Truncate)", key, got[key], want)
+			t.Errorf("%s = %s, want %s (nanosecond wire, WITHOUT .UTC()/Truncate)", key, got[key], want)
 		}
 	}
 }
@@ -2368,6 +2368,6 @@ func TestVoyageTargetEntry_FinishedAt_NanosecondWire(t *testing.T) {
 		t.Fatalf("unmarshal: %v", err)
 	}
 	if want := `"2026-06-10T12:00:09.25+03:00"`; string(got["finished_at"]) != want {
-		t.Errorf("finished_at = %s, want %s (наносекундный wire, БЕЗ .UTC()/Truncate)", got["finished_at"], want)
+		t.Errorf("finished_at = %s, want %s (nanosecond wire, WITHOUT .UTC()/Truncate)", got["finished_at"], want)
 	}
 }

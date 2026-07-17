@@ -65,11 +65,11 @@ func TestRerunLast_202_FromErrorLocked(t *testing.T) {
 		t.Errorf("run apply_id = %q, want %q", starter.gotSpec.ApplyID, out.ApplyID)
 	}
 	if starter.gotSpec.ServiceRef.Ref != "v1" {
-		t.Errorf("ServiceRef.Ref = %q, want v1 (развёрнутая версия)", starter.gotSpec.ServiceRef.Ref)
+		t.Errorf("ServiceRef.Ref = %q, want v1 (expanded version)", starter.gotSpec.ServiceRef.Ref)
 	}
 	// audit rerun_last with reason + previous_status=error_locked + scenario.
 	if !hasEvent(aw, audit.EventIncarnationRerunLast) {
-		t.Fatalf("ожидался audit incarnation.rerun_last")
+		t.Fatalf("expected audit incarnation.rerun_last")
 	}
 	var ev *audit.Event
 	for _, e := range aw.events {
@@ -91,7 +91,7 @@ func TestRerunLast_202_FromErrorLocked(t *testing.T) {
 	}
 	// Does NOT reuse incarnation.unlocked.
 	if hasEvent(aw, audit.EventIncarnationUnlocked) {
-		t.Errorf("rerun не должен писать incarnation.unlocked")
+		t.Errorf("rerun must not write incarnation.unlocked")
 	}
 }
 
@@ -121,7 +121,7 @@ func TestRerunLast_ReusesStoredInput_202(t *testing.T) {
 	}
 	gotInput := starter.gotSpec.Input
 	if gotInput == nil {
-		t.Fatal("RunSpec.Input = nil — stored spec.input НЕ проброшен (create-путь регресс)")
+		t.Fatal("RunSpec.Input = nil - stored spec.input NOT threaded through (create-path regression)")
 	}
 	if gotInput["version"] != "8.6.1" {
 		t.Errorf("RunSpec.Input[version] = %v, want 8.6.1 (stored)", gotInput["version"])
@@ -152,7 +152,7 @@ func TestRerunLast_NoStoredInput_NilInput_202(t *testing.T) {
 		t.Fatalf("scenario start calls = %d, want 1", starter.calls)
 	}
 	if starter.gotSpec.Input != nil {
-		t.Errorf("RunSpec.Input = %v, want nil (spec без input)", starter.gotSpec.Input)
+		t.Errorf("RunSpec.Input = %v, want nil (spec without input)", starter.gotSpec.Input)
 	}
 }
 
@@ -189,14 +189,14 @@ func TestRerunLast_Day2_ReusesRecipeInput_202(t *testing.T) {
 		t.Fatalf("scenario start calls = %d, want 1", starter.calls)
 	}
 	if starter.gotSpec.ScenarioName != "add_user" {
-		t.Errorf("ScenarioName = %q, want add_user (последний упавший day-2)", starter.gotSpec.ScenarioName)
+		t.Errorf("ScenarioName = %q, want add_user (last failed operation)", starter.gotSpec.ScenarioName)
 	}
 	gotInput := starter.gotSpec.Input
 	if gotInput == nil || gotInput["user"] != "alice" {
 		t.Fatalf("RunSpec.Input = %v, want {user:alice} (recipe.input)", gotInput)
 	}
 	if _, leaked := gotInput["version"]; leaked {
-		t.Error("RunSpec.Input несёт spec.input[version] — day-2 обязан брать recipe.input")
+		t.Error("RunSpec.Input carries spec.input[version] - operation must take recipe.input")
 	}
 	var ev *audit.Event
 	for _, e := range aw.events {
@@ -209,7 +209,7 @@ func TestRerunLast_Day2_ReusesRecipeInput_202(t *testing.T) {
 	}
 	// day-2 recipe without from_upgrade → RunSpec.FromUpgrade=false (restart from scenario/).
 	if starter.gotSpec.FromUpgrade {
-		t.Error("RunSpec.FromUpgrade = true, want false (recipe без from_upgrade)")
+		t.Error("RunSpec.FromUpgrade = true, want false (recipe without from_upgrade)")
 	}
 }
 
@@ -246,10 +246,10 @@ func TestRerunLast_Day2_FromUpgradeRecipe_202(t *testing.T) {
 		t.Fatalf("scenario start calls = %d, want 1", starter.calls)
 	}
 	if !starter.gotSpec.FromUpgrade {
-		t.Error("RunSpec.FromUpgrade = false, want true (recipe.from_upgrade → перезапуск из upgrade/)")
+		t.Error("RunSpec.FromUpgrade = false, want true (recipe.from_upgrade -> rerun from upgrade/)")
 	}
 	if !starter.gotSpec.FromLocked {
-		t.Error("RunSpec.FromLocked = false, want true (applying зарезервирован)")
+		t.Error("RunSpec.FromLocked = false, want true (applying reserved)")
 	}
 }
 
@@ -304,7 +304,7 @@ func TestRerunLast_Day2_RecipeUnavailable_409(t *testing.T) {
 	_, err := h.RerunLastTyped(context.Background(), claims("archon-alice"), "redis-prod", "rerun add_user")
 	wantProblem(t, err, problem.TypeRerunInputUnavailable)
 	if starter.calls != 0 {
-		t.Errorf("scenario start calls = %d, want 0 (fail-closed recipe недоступен)", starter.calls)
+		t.Errorf("scenario start calls = %d, want 0 (fail-closed recipe unavailable)", starter.calls)
 	}
 }
 
@@ -350,7 +350,7 @@ func TestRerunLast_EmptyReason_422(t *testing.T) {
 	_, err := h.RerunLastTyped(context.Background(), claims("archon-alice"), "redis-prod", "")
 	wantProblem(t, err, problem.TypeValidationFailed)
 	if starter.calls != 0 {
-		t.Errorf("scenario start calls = %d, want 0 (отказ до старта)", starter.calls)
+		t.Errorf("scenario start calls = %d, want 0 (rejected before start)", starter.calls)
 	}
 }
 
@@ -371,7 +371,7 @@ func TestRerunLast_ReasonAtMax_202(t *testing.T) {
 	reason := strings.Repeat("a", incarnation.ReasonMaxLen)
 	out, err := h.RerunLastTyped(context.Background(), claims("archon-alice"), "redis-prod", reason)
 	if err != nil {
-		t.Fatalf("RerunLastTyped err = %v (reason ровно %d допустим)", err, incarnation.ReasonMaxLen)
+		t.Fatalf("RerunLastTyped err = %v (reason exactly %d is allowed)", err, incarnation.ReasonMaxLen)
 	}
 	if !audit.IsValidULID(out.ApplyID) {
 		t.Errorf("apply_id not ULID: %q", out.ApplyID)
@@ -392,7 +392,7 @@ func TestRerunLast_ReasonOverMax_422(t *testing.T) {
 	_, err := h.RerunLastTyped(context.Background(), claims("archon-alice"), "redis-prod", reason)
 	wantProblem(t, err, problem.TypeValidationFailed)
 	if starter.calls != 0 {
-		t.Errorf("scenario start calls = %d, want 0 (reason over max → отказ до старта)", starter.calls)
+		t.Errorf("scenario start calls = %d, want 0 (reason over max -> rejected before start)", starter.calls)
 	}
 }
 
@@ -405,14 +405,14 @@ func TestRerunLast_ReasonMultibyteAtMax_202(t *testing.T) {
 	starter := &fakeStarter{}
 	h := newRerunHandler(db, starter, &fakeAuditWriter{})
 
-	reason := strings.Repeat("я", incarnation.ReasonMaxLen) // ReasonMaxLen runes, 2*ReasonMaxLen bytes
+	reason := strings.Repeat("y", incarnation.ReasonMaxLen) // ReasonMaxLen runes, 2*ReasonMaxLen bytes
 	if len(reason) <= incarnation.ReasonMaxLen {
-		t.Fatalf("предусловие теста нарушено: %d байт не превышает лимит %d — кейс не различает байты/руны",
+		t.Fatalf("test precondition violated: %d bytes does not exceed limit %d - case does not distinguish bytes/runes",
 			len(reason), incarnation.ReasonMaxLen)
 	}
 	out, err := h.RerunLastTyped(context.Background(), claims("archon-alice"), "redis-prod", reason)
 	if err != nil {
-		t.Fatalf("RerunLastTyped err = %v (ReasonMaxLen рун кириллицей допустимо — считаем руны, не байты)", err)
+		t.Fatalf("RerunLastTyped err = %v (ReasonMaxLen runes in Cyrillic is allowed - we count runes, not bytes)", err)
 	}
 	if !audit.IsValidULID(out.ApplyID) {
 		t.Errorf("apply_id not ULID: %q", out.ApplyID)
@@ -429,10 +429,10 @@ func TestRerunLast_ReasonMultibyteOverMax_422(t *testing.T) {
 	starter := &fakeStarter{}
 	h := newRerunHandler(db, starter, &fakeAuditWriter{})
 
-	reason := strings.Repeat("я", incarnation.ReasonMaxLen+1)
+	reason := strings.Repeat("y", incarnation.ReasonMaxLen+1)
 	_, err := h.RerunLastTyped(context.Background(), claims("archon-alice"), "redis-prod", reason)
 	wantProblem(t, err, problem.TypeValidationFailed)
 	if starter.calls != 0 {
-		t.Errorf("scenario start calls = %d, want 0 (reason over max рунами → отказ до старта)", starter.calls)
+		t.Errorf("scenario start calls = %d, want 0 (reason over max in runes -> rejected before start)", starter.calls)
 	}
 }

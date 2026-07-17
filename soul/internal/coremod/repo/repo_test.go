@@ -98,7 +98,7 @@ func TestValidate_UnknownState(t *testing.T) {
 		Params: mustStruct(t, map[string]any{"name": "x", "uri": "https://m"}),
 	})
 	if reply.Ok {
-		t.Fatal("Validate ok=true для неизвестного state")
+		t.Fatal("Validate ok=true for an unknown state")
 	}
 }
 
@@ -108,7 +108,7 @@ func TestValidate_PresentRequiresUri(t *testing.T) {
 		Params: mustStruct(t, map[string]any{"name": "x"}),
 	})
 	if reply.Ok {
-		t.Fatal("Validate ok=true для present без uri")
+		t.Fatal("Validate ok=true for present without uri")
 	}
 }
 
@@ -119,7 +119,7 @@ func TestValidate_NameRejectsPathTraversal(t *testing.T) {
 			Params: mustStruct(t, map[string]any{"name": name, "uri": "https://m"}),
 		})
 		if reply.Ok {
-			t.Fatalf("Validate ok=true для небезопасного name %q", name)
+			t.Fatalf("Validate ok=true for an unsafe name %q", name)
 		}
 	}
 }
@@ -131,7 +131,7 @@ func TestValidate_RejectsNonHTTPScheme(t *testing.T) {
 			Params: mustStruct(t, map[string]any{"name": "x", "uri": uri}),
 		})
 		if reply.Ok {
-			t.Fatalf("Validate ok=true для запрещённой схемы %q", uri)
+			t.Fatalf("Validate ok=true for a forbidden scheme %q", uri)
 		}
 	}
 }
@@ -143,7 +143,7 @@ func TestValidate_AcceptsHTTPAndHTTPS(t *testing.T) {
 			Params: mustStruct(t, map[string]any{"name": "x", "uri": uri}),
 		})
 		if !reply.Ok {
-			t.Fatalf("Validate ok=false для допустимого uri %q: %v", uri, reply.Errors)
+			t.Fatalf("Validate ok=false for a valid uri %q: %v", uri, reply.Errors)
 		}
 	}
 }
@@ -172,7 +172,7 @@ func TestApt_Present_WritesListWithSignedByAndKey(t *testing.T) {
 		t.Fatalf(".list=%q want %q", got, wantLine)
 	}
 	if k := read(t, keyPath); !strings.Contains(k, "BEGIN PGP PUBLIC KEY") {
-		t.Fatalf("ключ не материализован: %q", k)
+		t.Fatalf("key not materialized: %q", k)
 	}
 }
 
@@ -186,7 +186,7 @@ func TestApt_Present_DisabledCommentsLine(t *testing.T) {
 	})
 	got := read(t, filepath.Join(m.AptSourcesDir, "extra.list"))
 	if !strings.HasPrefix(got, "# deb ") {
-		t.Fatalf("enabled=false должно закомментировать строку: %q", got)
+		t.Fatalf("enabled=false should comment out the line: %q", got)
 	}
 }
 
@@ -200,11 +200,11 @@ func TestApt_Present_Idempotent(t *testing.T) {
 	}
 	first := applyTo(t, m, "present", params)
 	if !first.Last().Changed {
-		t.Fatal("первый прогон: changed=false")
+		t.Fatal("first run: changed=false")
 	}
 	second := applyTo(t, m, "present", params)
 	if second.Last().Changed {
-		t.Fatal("повторный прогон: changed=true (не идемпотентно)")
+		t.Fatal("repeat run: changed=true (not idempotent)")
 	}
 }
 
@@ -216,10 +216,10 @@ func TestApt_Present_KeyChangeTriggersChanged(t *testing.T) {
 	base["gpg_key"] = "NEW"
 	stream := applyTo(t, m, "present", base)
 	if !stream.Last().Changed {
-		t.Fatal("смена ключа должна дать changed=true")
+		t.Fatal("changing the key should give changed=true")
 	}
 	if k := read(t, filepath.Join(m.AptKeyringsDir, "docker.gpg")); k != "NEW" {
-		t.Fatalf("ключ не обновлён: %q", k)
+		t.Fatalf("key not updated: %q", k)
 	}
 }
 
@@ -242,7 +242,7 @@ func TestYum_Present_WritesIni(t *testing.T) {
 		"gpgkey=https://m/RPM-GPG-KEY-EPEL",
 	} {
 		if !strings.Contains(got, want) {
-			t.Fatalf(".repo не содержит %q:\n%s", want, got)
+			t.Fatalf(".repo does not contain %q:\n%s", want, got)
 		}
 	}
 }
@@ -256,12 +256,12 @@ func TestYum_Present_GpgCheckFalseWritesZero(t *testing.T) {
 	})
 	got := read(t, filepath.Join(m.YumReposDir, "local.repo"))
 	if !strings.Contains(got, "gpgcheck=0") {
-		t.Fatalf("gpg_check=false должно дать gpgcheck=0:\n%s", got)
+		t.Fatalf("gpg_check=false should give gpgcheck=0:\n%s", got)
 	}
 	// gpg_check=false must return a warning (opt-out + warning).
 	ws := warningsOf(stream.Last())
 	if !hasSubstr(ws, "gpg_check disabled") {
-		t.Fatalf("ожидался warning про gpg_check, got %v", ws)
+		t.Fatalf("expected a warning about gpg_check, got %v", ws)
 	}
 }
 
@@ -269,10 +269,10 @@ func TestYum_Present_Idempotent(t *testing.T) {
 	m, _ := newModule(t, util.PkgMgrDnf)
 	params := map[string]any{"name": "epel", "uri": "https://m/epel"}
 	if !applyTo(t, m, "present", params).Last().Changed {
-		t.Fatal("первый прогон: changed=false")
+		t.Fatal("first run: changed=false")
 	}
 	if applyTo(t, m, "present", params).Last().Changed {
-		t.Fatal("повторный прогон: changed=true (не идемпотентно)")
+		t.Fatal("repeat run: changed=true (not idempotent)")
 	}
 }
 
@@ -292,7 +292,7 @@ func TestApk_Present_UpsertsLine(t *testing.T) {
 	})
 	got := read(t, m.ApkReposFile)
 	if !strings.Contains(got, "v3.19/main") || !strings.Contains(got, "v3.19/community") {
-		t.Fatalf("apk repositories не дополнен: %q", got)
+		t.Fatalf("apk repositories was not appended: %q", got)
 	}
 }
 
@@ -300,10 +300,10 @@ func TestApk_Present_Idempotent(t *testing.T) {
 	m, _ := newModule(t, util.PkgMgrApk)
 	params := map[string]any{"name": "community", "uri": "https://m/community"}
 	if !applyTo(t, m, "present", params).Last().Changed {
-		t.Fatal("первый прогон: changed=false")
+		t.Fatal("first run: changed=false")
 	}
 	if applyTo(t, m, "present", params).Last().Changed {
-		t.Fatal("повторный прогон: changed=true (не идемпотентно)")
+		t.Fatal("repeat run: changed=true (not idempotent)")
 	}
 }
 
@@ -324,17 +324,17 @@ func TestApk_Present_PreservesMode(t *testing.T) {
 	}
 	stream := applyTo(t, m, "present", params)
 	if !stream.Last().Changed {
-		t.Fatal("первый прогон: changed=false")
+		t.Fatal("first run: changed=false")
 	}
 	info, err := os.Stat(m.ApkReposFile)
 	if err != nil {
 		t.Fatalf("stat: %v", err)
 	}
 	if got := info.Mode().Perm(); got != 0o600 {
-		t.Fatalf("mode не сохранён: ожидался 0600, got %o", got)
+		t.Fatalf("mode not preserved: expected 0600, got %o", got)
 	}
 	if applyTo(t, m, "present", params).Last().Changed {
-		t.Fatal("повторный прогон: changed=true (не идемпотентно)")
+		t.Fatal("repeat run: changed=true (not idempotent)")
 	}
 }
 
@@ -348,7 +348,7 @@ func TestApk_Absent_RequiresUri(t *testing.T) {
 		t.Fatalf("Apply: %v", err)
 	}
 	if !stream.Last().Failed {
-		t.Fatal("apk absent без uri должен зафейлиться")
+		t.Fatal("apk absent without uri should fail")
 	}
 }
 
@@ -364,14 +364,14 @@ func TestApt_Absent_RemovesListKeepsKey(t *testing.T) {
 
 	stream := applyTo(t, m, "absent", map[string]any{"name": "docker"})
 	if !stream.Last().Changed {
-		t.Fatal("absent существующего репо: changed=false")
+		t.Fatal("absent of an existing repo: changed=false")
 	}
 	if _, err := os.Stat(listPath); !os.IsNotExist(err) {
-		t.Fatal(".list не удалён")
+		t.Fatal(".list not removed")
 	}
 	// The key is deliberately left alone (may be shared with other repos).
 	if _, err := os.Stat(keyPath); err != nil {
-		t.Fatalf("ключ не должен удаляться при absent: %v", err)
+		t.Fatalf("key must not be removed on absent: %v", err)
 	}
 }
 
@@ -379,7 +379,7 @@ func TestApt_Absent_Idempotent(t *testing.T) {
 	m, _ := newModule(t, util.PkgMgrApt)
 	stream := applyTo(t, m, "absent", map[string]any{"name": "absent-repo"})
 	if stream.Last().Changed {
-		t.Fatal("absent несуществующего репо: changed=true")
+		t.Fatal("absent of a non-existent repo: changed=true")
 	}
 }
 
@@ -392,7 +392,7 @@ func TestApt_Present_HTTPUriWarns(t *testing.T) {
 	})
 	ws := warningsOf(stream.Last())
 	if !hasSubstr(ws, "plain http") {
-		t.Fatalf("ожидался warning про http://, got %v", ws)
+		t.Fatalf("expected a warning about http://, got %v", ws)
 	}
 }
 
@@ -407,10 +407,10 @@ func TestYum_Present_GpgCheckTrueNoKeyWarns(t *testing.T) {
 	})
 	ws := warningsOf(stream.Last())
 	if !hasSubstr(ws, "gpg_check enabled but no gpg_key set") {
-		t.Fatalf("ожидался warning про gpg_check без gpg_key, got %v", ws)
+		t.Fatalf("expected a warning about gpg_check without gpg_key, got %v", ws)
 	}
 	if !hasSubstr(ws, "gpgcheck=1 without gpgkey will fail package install") {
-		t.Fatalf("ожидалась dnf/yum-специфика в warning, got %v", ws)
+		t.Fatalf("expected dnf/yum-specific wording in the warning, got %v", ws)
 	}
 }
 
@@ -422,7 +422,7 @@ func TestYum_Present_GpgCheckTrueWithKeyNoWarn(t *testing.T) {
 	})
 	ws := warningsOf(stream.Last())
 	if hasSubstr(ws, "gpg_check enabled but no gpg_key set") {
-		t.Fatalf("warning про отсутствие gpg_key не должен появляться при заданном ключе, got %v", ws)
+		t.Fatalf("warning about missing gpg_key must not appear when a key is set, got %v", ws)
 	}
 }
 
@@ -435,13 +435,13 @@ func TestApk_Present_GpgCheckTrueNoKeyWarns(t *testing.T) {
 	})
 	ws := warningsOf(stream.Last())
 	if !hasSubstr(ws, "gpg_check enabled but no gpg_key set") {
-		t.Fatalf("ожидался warning про gpg_check без gpg_key, got %v", ws)
+		t.Fatalf("expected a warning about gpg_check without gpg_key, got %v", ws)
 	}
 	if !hasSubstr(ws, "/etc/apk/keys") {
-		t.Fatalf("ожидалась apk-специфика в warning, got %v", ws)
+		t.Fatalf("expected apk-specific wording in the warning, got %v", ws)
 	}
 	if hasSubstr(ws, "gpgkey") {
-		t.Fatalf("warning не должен приписывать dnf/yum gpgkey= пути apk, got %v", ws)
+		t.Fatalf("warning must not attribute dnf/yum gpgkey= wording to apk, got %v", ws)
 	}
 }
 
@@ -460,7 +460,7 @@ func TestApply_NoPkgMgr_Fails(t *testing.T) {
 		t.Fatalf("Apply: %v", err)
 	}
 	if !stream.Last().Failed {
-		t.Fatal("без pkg-mgr Apply должен зафейлиться")
+		t.Fatal("without pkg-mgr, Apply should fail")
 	}
 }
 

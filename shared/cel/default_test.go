@@ -20,7 +20,7 @@ func TestDefault_PresentSelect(t *testing.T) {
 		t.Fatalf("eval: %v", err)
 	}
 	if got := out.Value(); got != true {
-		t.Fatalf("default(present) = %v, want true (значение x, не fallback)", got)
+		t.Fatalf("default(present) = %v, want true (value x, not fallback)", got)
 	}
 }
 
@@ -34,7 +34,7 @@ func TestDefault_AbsentSelect(t *testing.T) {
 
 	out, err := e.EvalExpression(`default(essence.tls_enable, false)`, Vars{Essence: map[string]any{}})
 	if err != nil {
-		t.Fatalf("eval (отсутствующий ключ НЕ должен бросать — жадность обойдена macro): %v", err)
+		t.Fatalf("eval (missing key must NOT throw - strict-check bypassed by macro): %v", err)
 	}
 	if got := out.Value(); got != false {
 		t.Fatalf("default(absent) = %v, want false (fallback)", got)
@@ -105,10 +105,10 @@ func TestDefault_EmptyMapFallback(t *testing.T) {
 	}
 	got, ok := out.(map[string]any)
 	if !ok {
-		t.Fatalf("результат типа %T, want map[string]any", out)
+		t.Fatalf("result of type %T, want map[string]any", out)
 	}
 	if len(got) != 0 {
-		t.Fatalf("default(absent, {}) = %v, want пустой map", got)
+		t.Fatalf("default(absent, {}) = %v, want an empty map", got)
 	}
 
 	// A present map passes through.
@@ -137,7 +137,7 @@ func TestDefault_IdentRoot(t *testing.T) {
 	}
 	want := map[string]any{"k": "v"}
 	if got := out.(map[string]any); !reflect.DeepEqual(got, want) {
-		t.Fatalf("default(ident root) = %v, want %v (сам корень, fallback недостижим)", got, want)
+		t.Fatalf("default(ident root) = %v, want %v (the root itself, fallback unreachable)", got, want)
 	}
 }
 
@@ -154,11 +154,11 @@ func TestDefault_NonSelectArgCompileError(t *testing.T) {
 	} {
 		_, err := e.EvalExpression(expr, Vars{Input: map[string]any{"x": []any{int64(1)}}})
 		if err == nil {
-			t.Fatalf("%s: ожидалась compile-ошибка (не-select arg0), получено nil", expr)
+			t.Fatalf("%s: expected a compile error (non-select arg0), got nil", expr)
 		}
 		var ce *ErrCompile
 		if !errors.As(err, &ce) {
-			t.Fatalf("%s: ошибка = %v, want *ErrCompile", expr, err)
+			t.Fatalf("%s: error = %v, want *ErrCompile", expr, err)
 		}
 	}
 }
@@ -175,7 +175,7 @@ func TestDefault_AvailableInFlowControl(t *testing.T) {
 		t.Fatalf("eval: %v", err)
 	}
 	if got := out.Value(); got != true {
-		t.Fatalf("default в flow-control = %v, want true", got)
+		t.Fatalf("default in flow-control = %v, want true", got)
 	}
 }
 
@@ -188,11 +188,11 @@ func TestDefault_UndeclaredInMigration(t *testing.T) {
 
 	_, err := e.EvalExpression(`default(state.x, 0)`, Vars{State: map[string]any{}})
 	if err == nil {
-		t.Fatal("default() в migration-env: ожидалась compile-ошибка (не зарегистрирована), получено nil")
+		t.Fatal("default() in migration-env: expected a compile error (not registered), got nil")
 	}
 	var ce *ErrCompile
 	if !errors.As(err, &ce) {
-		t.Fatalf("default() в migration-env: ошибка = %v, want *ErrCompile", err)
+		t.Fatalf("default() in migration-env: error = %v, want *ErrCompile", err)
 	}
 }
 
@@ -216,11 +216,11 @@ func TestDefault_SecretMaskedSameAsDirectVault(t *testing.T) {
 		t.Fatalf("eval direct vault: %v", err)
 	}
 	if direct != "s3cr3t-plaintext" {
-		t.Fatalf("direct vault резолвнул %v, want plaintext (keeper-side)", direct)
+		t.Fatalf("direct vault resolved %v, want plaintext (keeper-side)", direct)
 	}
 	maskedDirect := audit.MaskSecrets(map[string]any{"password": direct})
 	if maskedDirect["password"] == "s3cr3t-plaintext" {
-		t.Fatal("эталон: прямой vault-секрет НЕ замаскирован — слой маскинга сломан")
+		t.Fatal("baseline: the direct vault secret is NOT masked - the masking layer is broken")
 	}
 
 	// Same secret via default(essence.admin_password, vault(...)): the essence
@@ -233,16 +233,16 @@ func TestDefault_SecretMaskedSameAsDirectVault(t *testing.T) {
 		t.Fatalf("eval default+vault: %v", err)
 	}
 	if resolved != "s3cr3t-plaintext" {
-		t.Fatalf("default(absent, vault) = %v, want plaintext (vault-ветвь резолвится keeper-side)", resolved)
+		t.Fatalf("default(absent, vault) = %v, want plaintext (vault branch resolves keeper-side)", resolved)
 	}
 	maskedResolved := audit.MaskSecrets(map[string]any{"password": resolved})
 	// Key assertion: masked IDENTICALLY to direct vault.
 	if maskedResolved["password"] != maskedDirect["password"] {
-		t.Fatalf("default-секрет замаскирован как %v, прямой как %v — РАСХОЖДЕНИЕ (секрет течёт через default)",
+		t.Fatalf("default-secret masked as %v, direct as %v - DIVERGENCE (secret leaks through default)",
 			maskedResolved["password"], maskedDirect["password"])
 	}
 	if maskedResolved["password"] == "s3cr3t-plaintext" {
-		t.Fatal("default-секрет НЕ замаскирован — секрет протекает в выходной слой через default()")
+		t.Fatal("default-secret NOT masked - the secret leaks into the output layer through default()")
 	}
 
 	// A non-secret value via default is NOT over-masked.
@@ -252,6 +252,6 @@ func TestDefault_SecretMaskedSameAsDirectVault(t *testing.T) {
 	}
 	maskedNonSecret := audit.MaskSecrets(map[string]any{"maxmemory": nonSecret})
 	if maskedNonSecret["maxmemory"] != "256mb" {
-		t.Fatalf("несекретное значение замаскировано: %v (over-masking)", maskedNonSecret["maxmemory"])
+		t.Fatalf("non-secret value masked: %v (over-masking)", maskedNonSecret["maxmemory"])
 	}
 }

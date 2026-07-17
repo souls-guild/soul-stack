@@ -14,6 +14,6 @@ import (
 func TestHTTP_NotPlanReadSafe(t *testing.T) {
 	m := corehttp.New()
 	if _, ok := any(m).(module.PlanReadSafe); ok {
-		t.Fatal("core.http реализует PlanReadSafe (не должен — verb-модуль без desired state)")
+		t.Fatal("core.http implements PlanReadSafe (it should not — a verb module with no desired state)")
 	}
 }

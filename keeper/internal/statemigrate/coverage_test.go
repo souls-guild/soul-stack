@@ -22,7 +22,7 @@ func TestSet_LiteralScalar(t *testing.T) {
 		{Set: &SetOp{Path: "state.acl", Value: "off ~* &* +@all"}},
 	}, map[string]any{})
 	if out["acl"] != "off ~* &* +@all" {
-		t.Fatalf("acl = %v, want литерал без интерполяции", out["acl"])
+		t.Fatalf("acl = %v, want a literal without interpolation", out["acl"])
 	}
 }
 
@@ -33,7 +33,7 @@ func TestSet_OverwritesExisting(t *testing.T) {
 		{Set: &SetOp{Path: "state.x", Value: "new"}},
 	}, map[string]any{"x": "old"})
 	if out["x"] != "new" {
-		t.Fatalf("x = %v, want new (перезапись)", out["x"])
+		t.Fatalf("x = %v, want new (overwrite)", out["x"])
 	}
 }
 
@@ -43,7 +43,7 @@ func TestDelete_ExistingRemovesKey(t *testing.T) {
 		{Delete: &DeleteOp{Path: "state.drop"}},
 	}, map[string]any{"drop": 1, "keep": 2})
 	if _, ok := out["drop"]; ok {
-		t.Fatalf("ключ drop не удалён: %#v", out)
+		t.Fatalf("key drop not deleted: %#v", out)
 	}
 	// keep remains; JSON normalization of numeric types (deepCopyMap in Apply).
 	assertDeepEqualJSON(t, out, map[string]any{"keep": 2})
@@ -57,13 +57,13 @@ func TestDelete_NestedRemovesLeafKeepsParent(t *testing.T) {
 	}, map[string]any{"cfg": map[string]any{"port": 6379, "host": "h"}})
 	cfg, _ := out["cfg"].(map[string]any)
 	if cfg == nil {
-		t.Fatalf("родительский cfg удалён вместе с листом: %#v", out)
+		t.Fatalf("parent cfg deleted along with the leaf: %#v", out)
 	}
 	if _, ok := cfg["port"]; ok {
-		t.Fatalf("port не удалён: %#v", cfg)
+		t.Fatalf("port not deleted: %#v", cfg)
 	}
 	if cfg["host"] != "h" {
-		t.Fatalf("host затронут: %#v", cfg)
+		t.Fatalf("host affected: %#v", cfg)
 	}
 }
 
@@ -75,7 +75,7 @@ func TestDelete_ThroughScalarMidPathNoOp(t *testing.T) {
 		{Delete: &DeleteOp{Path: "state.a.b.c"}},
 	}, map[string]any{"a": "scalar"})
 	if out["a"] != "scalar" {
-		t.Fatalf("a затронут delete через скаляр: %#v", out)
+		t.Fatalf("a affected by delete through a scalar: %#v", out)
 	}
 }
 
@@ -91,7 +91,7 @@ func TestForeach_EmptyMapNoOp(t *testing.T) {
 		}}},
 	}, map[string]any{"src": map[string]any{}, "keep": 1})
 	if _, ok := out["touched"]; ok {
-		t.Fatalf("тело foreach выполнилось на пустом map: %#v", out)
+		t.Fatalf("foreach body executed on an empty map: %#v", out)
 	}
 	// state is unchanged (src remains an empty map, keep is untouched). Comparison
 	// via JSON normalization: deepCopyMap in Apply converts int to float64.
@@ -108,14 +108,14 @@ func TestForeach_NullInNotIterable(t *testing.T) {
 		}}},
 	}, map[string]any{"x": 1})
 	if err == nil {
-		t.Fatalf("ошибка = nil, want ошибку на null-коллекции")
+		t.Fatalf("error = nil, want an error on a null collection")
 	}
 	// Can be either ClassForeachType (if CEL returned nil) or ClassCELInterp
 	// (if no-such-key surfaced as a resolution error) — both are valid: what matters
 	// is that foreach over null doesn't stay silent.
 	var ee *EvalError
 	if !errors.As(err, &ee) {
-		t.Fatalf("ошибка = %v (%T), want *EvalError", err, err)
+		t.Fatalf("error = %v (%T), want *EvalError", err, err)
 	}
 	if ee.Class != ClassForeachType && ee.Class != ClassCELInterp {
 		t.Fatalf("class = %s, want ForeachType|CELInterp", ee.Class)
@@ -151,11 +151,11 @@ func applySetValueErr(t *testing.T, valueExpr string) *EvalError {
 		{Set: &SetOp{Path: "state.x", Value: valueExpr}},
 	}, map[string]any{})
 	if err == nil {
-		t.Fatalf("set.value %q: ошибка = nil, want sandbox-ошибку", valueExpr)
+		t.Fatalf("set.value %q: error = nil, want a sandbox error", valueExpr)
 	}
 	var ee *EvalError
 	if !errors.As(err, &ee) {
-		t.Fatalf("set.value %q: ошибка = %v (%T), want *EvalError", valueExpr, err, err)
+		t.Fatalf("set.value %q: error = %v (%T), want *EvalError", valueExpr, err, err)
 	}
 	if ee.Class != ClassCELInterp {
 		t.Fatalf("set.value %q: class = %s, want %s", valueExpr, ee.Class, ClassCELInterp)
@@ -201,11 +201,11 @@ func TestForeach_SandboxForbidsContextVarInIn(t *testing.T) {
 		}}},
 	}, map[string]any{"x": 1})
 	if err == nil {
-		t.Fatalf("foreach in: с input.* — ошибка = nil, want sandbox-ошибку")
+		t.Fatalf("foreach in: with input.* -- error = nil, want a sandbox error")
 	}
 	var ee *EvalError
 	if !errors.As(err, &ee) || ee.Class != ClassCELInterp {
-		t.Fatalf("ошибка = %v, want *EvalError ClassCELInterp", err)
+		t.Fatalf("error = %v, want *EvalError ClassCELInterp", err)
 	}
 }
 
@@ -226,19 +226,19 @@ func TestApply_FailedOpLeavesInputUntouched(t *testing.T) {
 
 	res, err := Apply(context.Background(), in, chain, ev)
 	if err == nil {
-		t.Fatalf("ошибка = nil, want ClassRenameToExists")
+		t.Fatalf("error = nil, want ClassRenameToExists")
 	}
 	var ee *EvalError
 	if !errors.As(err, &ee) || ee.Class != ClassRenameToExists {
-		t.Fatalf("ошибка = %v, want ClassRenameToExists", err)
+		t.Fatalf("error = %v, want ClassRenameToExists", err)
 	}
 	// Input state is untouched (including the partial mutation of state.c from the first op).
 	if len(in) != 2 || in["a"] != 1 || in["b"] != 2 {
-		t.Fatalf("входной state мутирован при ошибке: %#v", in)
+		t.Fatalf("input state mutated on error: %#v", in)
 	}
 	// Result is zero-valued (the core doesn't return a partial result).
 	if res.FinalState != nil || res.Steps != nil {
-		t.Fatalf("Result не нулевой при ошибке: %#v", res)
+		t.Fatalf("Result not zero on error: %#v", res)
 	}
 }
 
@@ -261,13 +261,13 @@ func TestApply_LaterStepFailureDiscardsEarlierStep(t *testing.T) {
 
 	res, err := Apply(context.Background(), in, chain, ev)
 	if err == nil {
-		t.Fatalf("ошибка = nil, want sandbox-ошибку второго шага")
+		t.Fatalf("error = nil, want a sandbox error on the second step")
 	}
 	if res.FinalState != nil || res.Steps != nil {
-		t.Fatalf("частичный Result при ошибке шага 2: %#v", res)
+		t.Fatalf("partial Result on step-2 error: %#v", res)
 	}
 	if len(in) != 1 || in["v"] != 1 {
-		t.Fatalf("входной state мутирован: %#v", in)
+		t.Fatalf("input state mutated: %#v", in)
 	}
 }
 
@@ -293,7 +293,7 @@ func TestRename_DeepNestedPaths(t *testing.T) {
 	b, _ := a["b"].(map[string]any)
 	c, _ := b["c"].(map[string]any)
 	if _, ok := c["d"]; ok {
-		t.Fatalf("источник state.a.b.c.d не удалён: %#v", c)
+		t.Fatalf("source state.a.b.c.d not deleted: %#v", c)
 	}
 }
 
@@ -308,7 +308,7 @@ func TestRename_ToExistsNested(t *testing.T) {
 	})
 	var ee *EvalError
 	if !errors.As(err, &ee) || ee.Class != ClassRenameToExists {
-		t.Fatalf("ошибка = %v, want ClassRenameToExists", err)
+		t.Fatalf("error = %v, want ClassRenameToExists", err)
 	}
 }
 
@@ -320,7 +320,7 @@ func TestSet_TypeMismatchOverwritesMapWithScalar(t *testing.T) {
 		{Set: &SetOp{Path: "state.obj", Value: "scalar"}},
 	}, map[string]any{"obj": map[string]any{"was": "map"}})
 	if out["obj"] != "scalar" {
-		t.Fatalf("obj = %#v, want перезапись map скаляром", out["obj"])
+		t.Fatalf("obj = %#v, want a map overwritten by a scalar", out["obj"])
 	}
 }
 

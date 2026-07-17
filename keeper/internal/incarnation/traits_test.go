@@ -27,7 +27,7 @@ func TestTraitsFromSpec_NoTraitsKey(t *testing.T) {
 		t.Fatalf("TraitsFromSpec: %v", err)
 	}
 	if got != nil {
-		t.Errorf("got %v, want nil (traits не заданы)", got)
+		t.Errorf("got %v, want nil (traits not set)", got)
 	}
 }
 
@@ -37,7 +37,7 @@ func TestTraitsFromSpec_EmptyMap(t *testing.T) {
 		t.Fatalf("TraitsFromSpec: %v", err)
 	}
 	if got != nil {
-		t.Errorf("got %v, want nil (пустой traits = не задано)", got)
+		t.Errorf("got %v, want nil (empty traits = not set)", got)
 	}
 }
 

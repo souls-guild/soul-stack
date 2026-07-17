@@ -50,10 +50,10 @@ func TestDecodeJWTClaims(t *testing.T) {
 func TestDecodeJWTClaimsBadFormat(t *testing.T) {
 	_, err := client.DecodeJWTClaims("not-a-jwt")
 	if err == nil {
-		t.Fatal("ожидалась ошибка")
+		t.Fatal("expected an error")
 	}
-	if !strings.Contains(err.Error(), "три сегмента") {
-		t.Errorf("неожиданное сообщение: %v", err)
+	if !strings.Contains(err.Error(), "three segments") {
+		t.Errorf("unexpected message: %v", err)
 	}
 }
 
@@ -74,7 +74,7 @@ func TestArchonPing(t *testing.T) {
 		t.Fatalf("Ping: %v", err)
 	}
 	if hit != 1 {
-		t.Errorf("обработчик вызван %d раз", hit)
+		t.Errorf("handler called %d times", hit)
 	}
 }
 
@@ -86,17 +86,17 @@ func TestArchonPingUnauthorized(t *testing.T) {
 			_ = json.NewEncoder(w).Encode(map[string]any{
 				"type":  "https://soul-stack.io/errors/unauthenticated",
 				"title": "unauthenticated", "status": 401,
-				"detail": "JWT истёк",
+				"detail": "JWT expired",
 			})
 		},
 	})
 	err := cl.Ping(context.Background())
 	if err == nil {
-		t.Fatal("ожидалась ошибка")
+		t.Fatal("expected an error")
 	}
 	rendered := renderAPIError(err)
 	if !strings.Contains(rendered.Error(), "not authenticated") {
-		t.Errorf("renderAPIError для 401: %q", rendered.Error())
+		t.Errorf("renderAPIError for 401: %q", rendered.Error())
 	}
 }
 
@@ -134,14 +134,14 @@ func TestArchonLoginSavesCredentials(t *testing.T) {
 		t.Fatalf("Execute: %v", err)
 	}
 	if !strings.Contains(stdout.String(), "logged in as archon-alice") {
-		t.Errorf("вывод не содержит aid: %q", stdout.String())
+		t.Errorf("output does not contain aid: %q", stdout.String())
 	}
 	loaded, err := config.Load(credsPath)
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
 	if loaded.ArchonJWT != jwt {
-		t.Errorf("сохранённый JWT не совпадает")
+		t.Errorf("stored JWT does not match")
 	}
 	if loaded.KeeperURL != srv.URL {
 		t.Errorf("keeper_url: got %q, want %q", loaded.KeeperURL, srv.URL)
@@ -170,9 +170,9 @@ func TestArchonLogoutRemovesCredentials(t *testing.T) {
 		t.Fatalf("Execute: %v", err)
 	}
 	if _, err := os.Stat(credsPath); !os.IsNotExist(err) {
-		t.Errorf("credentials всё ещё существует: %v", err)
+		t.Errorf("credentials still exist: %v", err)
 	}
 	if !strings.Contains(stdout.String(), "logged out") {
-		t.Errorf("вывод: %q", stdout.String())
+		t.Errorf("output: %q", stdout.String())
 	}
 }

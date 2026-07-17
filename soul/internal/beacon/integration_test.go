@@ -36,7 +36,7 @@ func TestSchedulerWithRealFileBeacon(t *testing.T) {
 	// baseline (first tick) must not emit a Portent.
 	select {
 	case ev := <-s.Portents():
-		t.Fatalf("baseline не должен эмитить Portent, получили %q", ev.GetBeaconName())
+		t.Fatalf("baseline should not emit Portent, got %q", ev.GetBeaconName())
 	case <-time.After(80 * time.Millisecond):
 	}
 
@@ -50,10 +50,10 @@ func TestSchedulerWithRealFileBeacon(t *testing.T) {
 			t.Fatalf("beacon_name = %q, want conf-watch", ev.GetBeaconName())
 		}
 		if ev.GetData().GetFields()["path"].GetStringValue() != path {
-			t.Error("Portent.data должен нести путь файла")
+			t.Error("Portent.data must carry the file path")
 		}
 	case <-time.After(2 * time.Second):
-		t.Fatal("смена файла не подняла Portent")
+		t.Fatal("file change did not raise Portent")
 	}
 }
 
@@ -97,9 +97,9 @@ func TestSchedulerReplaceAllSwapsSet(t *testing.T) {
 	select {
 	case ev := <-s.Portents():
 		if ev.GetBeaconName() != "watch-b" {
-			t.Fatalf("после ReplaceAll ожидали Portent только от watch-b, получили %q", ev.GetBeaconName())
+			t.Fatalf("after ReplaceAll expected Portent only from watch-b, got %q", ev.GetBeaconName())
 		}
 	case <-time.After(2 * time.Second):
-		t.Fatal("watch-b не поднял Portent после ReplaceAll")
+		t.Fatal("watch-b did not raise Portent after ReplaceAll")
 	}
 }

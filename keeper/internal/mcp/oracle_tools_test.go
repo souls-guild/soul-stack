@@ -366,7 +366,7 @@ func TestOracleVigilCreate_Success(t *testing.T) {
 	assertPayload(t, ev.Payload, "subject", "coven=web")
 	assertPayload(t, ev.Payload, "created_by_aid", "archon-alice")
 	if _, ok := ev.Payload["params"]; ok {
-		t.Errorf("params попали в audit-payload: %v", ev.Payload)
+		t.Errorf("params leaked into audit-payload: %v", ev.Payload)
 	}
 }
 
@@ -475,10 +475,10 @@ func TestOracleDecreeCreate_Success(t *testing.T) {
 	assertPayload(t, rec.events[0].Payload, "on_beacon", "db-svc")
 	assertPayload(t, rec.events[0].Payload, "subject", "coven=db")
 	if _, ok := rec.events[0].Payload["where"]; ok {
-		t.Errorf("where-CEL попал в audit-payload: %v", rec.events[0].Payload)
+		t.Errorf("where-CEL leaked into audit-payload: %v", rec.events[0].Payload)
 	}
 	if _, ok := rec.events[0].Payload["action_input"]; ok {
-		t.Errorf("action_input попал в audit-payload: %v", rec.events[0].Payload)
+		t.Errorf("action_input leaked into audit-payload: %v", rec.events[0].Payload)
 	}
 }
 

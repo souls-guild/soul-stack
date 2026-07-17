@@ -98,7 +98,7 @@ func (a *IncarnationsAPI) List(ctx context.Context, opts IncarnationListOptions)
 // Get is GET /v1/incarnations/{name}.
 func (a *IncarnationsAPI) Get(ctx context.Context, name string) (*IncarnationListItem, error) {
 	if name == "" {
-		return nil, fmt.Errorf("incarnation name пуст")
+		return nil, fmt.Errorf("incarnation name is empty")
 	}
 	var item IncarnationListItem
 	if err := a.c.Do(ctx, "GET", "/v1/incarnations/"+url.PathEscape(name), nil, &item); err != nil {
@@ -125,7 +125,7 @@ type IncarnationRunReply struct {
 // it, which is safe either way).
 func (a *IncarnationsAPI) Run(ctx context.Context, name, scenario string, input map[string]any, dryRun bool) (*IncarnationRunReply, error) {
 	if name == "" || scenario == "" {
-		return nil, fmt.Errorf("incarnation/scenario пусты")
+		return nil, fmt.Errorf("incarnation/scenario are empty")
 	}
 	path := fmt.Sprintf("/v1/incarnations/%s/scenarios/%s", url.PathEscape(name), url.PathEscape(scenario))
 	if dryRun {
@@ -161,7 +161,7 @@ type IncarnationHistoryReply struct {
 // History is GET /v1/incarnations/{name}/history.
 func (a *IncarnationsAPI) History(ctx context.Context, name string, limit, offset int) (*IncarnationHistoryReply, error) {
 	if name == "" {
-		return nil, fmt.Errorf("incarnation name пуст")
+		return nil, fmt.Errorf("incarnation name is empty")
 	}
 	q := url.Values{}
 	if limit > 0 {
@@ -215,7 +215,7 @@ type DriftSummaryCounts struct {
 // CheckDrift is POST /v1/incarnations/{name}/check-drift with optional input.
 func (a *IncarnationsAPI) CheckDrift(ctx context.Context, name string, input map[string]any) (*DriftReport, error) {
 	if name == "" {
-		return nil, fmt.Errorf("incarnation name пуст")
+		return nil, fmt.Errorf("incarnation name is empty")
 	}
 	body := map[string]any{}
 	if len(input) > 0 {

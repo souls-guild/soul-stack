@@ -39,7 +39,7 @@ func TestSubset_DefaultScope_Escalation(t *testing.T) {
 		wantHeld     bool // true → ErrPermissionNotHeld (grant denied)
 	}{
 		{
-			name:         "ЭСКАЛАЦИЯ: caller scope=prod + bare → выдать coven=staging запрещено",
+			name:         "ESCALATION: caller scope=prod + bare -> granting coven=staging is forbidden",
 			callerRaws:   []string{"incarnation.run"},
 			callerScope:  "coven=prod",
 			grantedRaws:  []string{"incarnation.run on coven=staging"},
@@ -47,7 +47,7 @@ func TestSubset_DefaultScope_Escalation(t *testing.T) {
 			wantHeld:     true,
 		},
 		{
-			name:         "caller scope=prod + bare → выдать coven=prod ок (в его scope)",
+			name:         "caller scope=prod + bare -> granting coven=prod is ok (within its scope)",
 			callerRaws:   []string{"incarnation.run"},
 			callerScope:  "coven=prod",
 			grantedRaws:  []string{"incarnation.run on coven=prod"},
@@ -55,7 +55,7 @@ func TestSubset_DefaultScope_Escalation(t *testing.T) {
 			wantHeld:     false,
 		},
 		{
-			name:         "caller scope=prod → роль scope=prod + bare ок (эффективно тот же scope)",
+			name:         "caller scope=prod -> role scope=prod + bare is ok (effectively the same scope)",
 			callerRaws:   []string{"incarnation.run"},
 			callerScope:  "coven=prod",
 			grantedRaws:  []string{"incarnation.run"},
@@ -63,7 +63,7 @@ func TestSubset_DefaultScope_Escalation(t *testing.T) {
 			wantHeld:     false,
 		},
 		{
-			name:         "caller scope=prod → роль scope=staging запрещена (шире/иной scope)",
+			name:         "caller scope=prod -> role scope=staging is forbidden (wider/different scope)",
 			callerRaws:   []string{"incarnation.run"},
 			callerScope:  "coven=prod",
 			grantedRaws:  []string{"incarnation.run"},
@@ -71,7 +71,7 @@ func TestSubset_DefaultScope_Escalation(t *testing.T) {
 			wantHeld:     true,
 		},
 		{
-			name:         "caller scope=prod → роль scope=prod,staging запрещена (staging вне scope)",
+			name:         "caller scope=prod -> role scope=prod,staging is forbidden (staging outside scope)",
 			callerRaws:   []string{"incarnation.run"},
 			callerScope:  "coven=prod",
 			grantedRaws:  []string{"incarnation.run"},
@@ -79,7 +79,7 @@ func TestSubset_DefaultScope_Escalation(t *testing.T) {
 			wantHeld:     true,
 		},
 		{
-			name:         "cluster-admin (*) → может выдать любой scope",
+			name:         "cluster-admin (*) -> can grant any scope",
 			callerRaws:   []string{"*"},
 			callerScope:  "",
 			grantedRaws:  []string{"incarnation.run on coven=staging"},
@@ -87,7 +87,7 @@ func TestSubset_DefaultScope_Escalation(t *testing.T) {
 			wantHeld:     false,
 		},
 		{
-			name:         "backcompat: caller БЕЗ default_scope + bare → может выдать любой scope",
+			name:         "backcompat: caller WITHOUT default_scope + bare -> can grant any scope",
 			callerRaws:   []string{"incarnation.run"},
 			callerScope:  "",
 			grantedRaws:  []string{"incarnation.run on coven=staging"},
@@ -95,7 +95,7 @@ func TestSubset_DefaultScope_Escalation(t *testing.T) {
 			wantHeld:     false,
 		},
 		{
-			name:         "backcompat: caller БЕЗ scope + bare → выдать роль с любым scope ок",
+			name:         "backcompat: caller WITHOUT scope + bare -> granting a role with any scope is ok",
 			callerRaws:   []string{"incarnation.run"},
 			callerScope:  "",
 			grantedRaws:  []string{"incarnation.run"},

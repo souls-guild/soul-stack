@@ -93,7 +93,7 @@ func TestHostCertCallback_ValidCert(t *testing.T) {
 
 	cb := hostCertCallback(singleCASet(caPub), nil)
 	if err := cb("host-1.example.com:22", nil, cert); err != nil {
-		t.Errorf("валидный host-cert от нашего CA отвергнут: %v", err)
+		t.Errorf("valid host-cert from our CA rejected: %v", err)
 	}
 }
 
@@ -106,7 +106,7 @@ func TestHostCertCallback_ForeignCA(t *testing.T) {
 
 	cb := hostCertCallback(singleCASet(ourCAPub), nil)
 	if err := cb("host-1.example.com:22", nil, cert); err == nil {
-		t.Error("cert от чужого CA должен быть отвергнут")
+		t.Error("cert from a foreign CA should be rejected")
 	}
 }
 
@@ -119,7 +119,7 @@ func TestHostCertCallback_SelfSignedBareKey(t *testing.T) {
 
 	cb := hostCertCallback(singleCASet(ourCAPub), nil)
 	if err := cb("host-1.example.com:22", nil, bareKey); err == nil {
-		t.Error("голый host-key (не cert) должен быть отвергнут — отказ от TOFU")
+		t.Error("bare host-key (not cert) should be rejected - refusal of TOFU")
 	}
 }
 
@@ -133,7 +133,7 @@ func TestHostCertCallback_WrongPrincipal(t *testing.T) {
 
 	cb := hostCertCallback(singleCASet(caPub), nil)
 	if err := cb("host-1.example.com:22", nil, cert); err == nil {
-		t.Error("cert с чужим principal-ом должен быть отвергнут для другого хоста")
+		t.Error("cert with a foreign principal should be rejected for a different host")
 	}
 }
 
@@ -141,7 +141,7 @@ func TestHostCertCallback_WrongPrincipal(t *testing.T) {
 func TestDial_RequiresCA(t *testing.T) {
 	_, err := Dial(t.Context(), DialConfig{Host: "h", Port: 22, User: "u"})
 	if err == nil {
-		t.Fatal("Dial без CA должен отвергаться")
+		t.Fatal("Dial without CA should be rejected")
 	}
 }
 
@@ -163,7 +163,7 @@ func TestHostCertCallback_MultiCA_MatchFirst(t *testing.T) {
 		func(caName string) { matched = caName },
 	)
 	if err := cb("host-1.example.com:22", nil, cert); err != nil {
-		t.Fatalf("cert от первого CA отвергнут: %v", err)
+		t.Fatalf("cert from the first CA rejected: %v", err)
 	}
 	if matched != "trusted-bastion-1" {
 		t.Errorf("OnHostCAMatch caName = %q, want trusted-bastion-1", matched)
@@ -189,7 +189,7 @@ func TestHostCertCallback_MultiCA_MatchSecond(t *testing.T) {
 		func(caName string) { matched = caName },
 	)
 	if err := cb("host-1.example.com:22", nil, cert); err != nil {
-		t.Fatalf("cert от второго CA отвергнут: %v", err)
+		t.Fatalf("cert from the second CA rejected: %v", err)
 	}
 	if matched != "trusted-bastion-2" {
 		t.Errorf("OnHostCAMatch caName = %q, want trusted-bastion-2", matched)
@@ -214,9 +214,9 @@ func TestHostCertCallback_MultiCA_NoMatch(t *testing.T) {
 		func(caName string) { matched = caName },
 	)
 	if err := cb("host-1.example.com:22", nil, cert); err == nil {
-		t.Error("cert от CA вне набора должен быть отвергнут")
+		t.Error("cert from a CA outside the set should be rejected")
 	}
 	if matched != "" {
-		t.Errorf("OnHostCAMatch вызван (caName = %q), ждали пусто (нет совпадения)", matched)
+		t.Errorf("OnHostCAMatch called (caName = %q), expected empty (no match)", matched)
 	}
 }

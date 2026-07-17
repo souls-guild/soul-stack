@@ -62,7 +62,7 @@ func renderValue(engine *cel.Engine, v any, vars cel.Vars, path string) (any, er
 	case string:
 		res, err := engine.EvalInterpolation(t, vars)
 		if err != nil {
-			return nil, fmt.Errorf("render: ячейка %q: %w", path, err)
+			return nil, fmt.Errorf("render: cell %q: %w", path, err)
 		}
 		return res, nil
 	default:
@@ -84,7 +84,7 @@ func evalBoolExpr(engine *cel.Engine, kind, expr string, vars cel.Vars) (bool, e
 	}
 	b, ok := out.Value().(bool)
 	if !ok {
-		return false, fmt.Errorf("render: %s %q вернул %T, ожидался bool", kind, expr, out.Value())
+		return false, fmt.Errorf("render: %s %q returned %T, expected bool", kind, expr, out.Value())
 	}
 	return b, nil
 }

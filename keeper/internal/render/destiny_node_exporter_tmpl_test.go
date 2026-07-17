@@ -36,7 +36,7 @@ func TestNodeExporterTemplates_ParseAndRender(t *testing.T) {
 		t.Fatalf("glob .tmpl: %v", err)
 	}
 	if len(files) == 0 {
-		t.Fatalf("в %q не найдено ни одного .tmpl — путь к destiny сломан", nodeExporterTemplatesDir)
+		t.Fatalf("no .tmpl found in %q - path to destiny is broken", nodeExporterTemplatesDir)
 	}
 	sort.Strings(files)
 
@@ -66,12 +66,12 @@ func TestNodeExporterTemplates_ParseAndRender(t *testing.T) {
 			if err != nil {
 				// This is exactly where the literal `{{ }}` in a comment blocker
 				// used to fail (ErrParse: "missing value for command").
-				t.Fatalf("text/template render %s упал: %v", name, err)
+				t.Fatalf("text/template render %s failed: %v", name, err)
 			}
 			// The render shouldn't leave unclosed action markers — a sign that
 			// something wasn't substituted/was swallowed.
 			if strings.Contains(out, "{{") || strings.Contains(out, "}}") {
-				t.Errorf("в рендере %s остались `{{`/`}}` — действие не выполнено:\n%s", name, out)
+				t.Errorf("render %s still has `{{`/`}}` - action was not performed:\n%s", name, out)
 			}
 		})
 	}
@@ -244,7 +244,7 @@ func TestNodeExporterTemplates_HardeningContent(t *testing.T) {
 			out := renderNodeExporterTmpl(t, tc.file)
 			for _, sub := range tc.want {
 				if !strings.Contains(out, sub) {
-					t.Errorf("в рендере %s отсутствует обязательная директива %q\n--- рендер ---\n%s", tc.file, sub, out)
+					t.Errorf("render %s missing required directive %q\n--- render ---\n%s", tc.file, sub, out)
 				}
 			}
 		})
@@ -328,10 +328,10 @@ func TestNodeExporterService_CollectorOptionsDeterministic(t *testing.T) {
 		for _, flag := range wantOrder {
 			idx := strings.Index(out, flag)
 			if idx < 0 {
-				t.Fatalf("прогон %d: флаг %q отсутствует в ExecStart\n--- рендер ---\n%s", run, flag, out)
+				t.Fatalf("run %d: flag %q missing in ExecStart\n--- render ---\n%s", run, flag, out)
 			}
 			if idx <= prev {
-				t.Fatalf("прогон %d: флаг %q идёт не по возрастанию (idx=%d, prev=%d) — порядок range НЕ детерминирован\n--- рендер ---\n%s", run, flag, idx, prev, out)
+				t.Fatalf("run %d: flag %q is not in ascending order (idx=%d, prev=%d) - range order is NOT deterministic\n--- render ---\n%s", run, flag, idx, prev, out)
 			}
 			prev = idx
 		}
@@ -343,7 +343,7 @@ func TestNodeExporterService_CollectorOptionsDeterministic(t *testing.T) {
 		logIdx := strings.Index(out, "--log.format=")
 		firstOptIdx := strings.Index(out, "--collector.cpu.info=")
 		if firstOptIdx < logIdx {
-			t.Fatalf("прогон %d: collector_options отрендерены до --log.format — нарушена позиция блока\n--- рендер ---\n%s", run, out)
+			t.Fatalf("run %d: collector_options rendered before --log.format - block position violated\n--- render ---\n%s", run, out)
 		}
 	}
 }
@@ -357,7 +357,7 @@ func TestNodeExporterService_CollectorOptionsDeterministic(t *testing.T) {
 func TestNodeExporterService_ExecStartBinPath(t *testing.T) {
 	out := renderNodeExporterTmpl(t, "node_exporter.service.tmpl")
 	if !strings.Contains(out, "ExecStart=/usr/local/bin/node_exporter ") {
-		t.Errorf("ExecStart не берёт путь бинаря из .vars.bin_path:\n%s", out)
+		t.Errorf("ExecStart does not take the binary path from .vars.bin_path:\n%s", out)
 	}
 }
 
@@ -366,9 +366,9 @@ func TestNodeExporterService_ExecStartBinPath(t *testing.T) {
 func TestNodeExporterService_TelemetryPathOverride(t *testing.T) {
 	out := renderNodeExporterServiceWithVars(t, map[string]any{"web_telemetry_path": "/node/metrics"})
 	if !strings.Contains(out, "--web.telemetry-path=/node/metrics") {
-		t.Errorf("web_telemetry_path override не отрендерен\n--- рендер ---\n%s", out)
+		t.Errorf("web_telemetry_path override not rendered\n--- render ---\n%s", out)
 	}
 	if strings.Contains(out, "--web.telemetry-path=/metrics") {
-		t.Errorf("остался дефолтный --web.telemetry-path=/metrics при override\n--- рендер ---\n%s", out)
+		t.Errorf("default --web.telemetry-path=/metrics remained despite override\n--- render ---\n%s", out)
 	}
 }

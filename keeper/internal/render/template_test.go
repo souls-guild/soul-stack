@@ -47,18 +47,18 @@ func TestInjectTemplateContent_PathToContent(t *testing.T) {
 	}
 	fields := rt.Params.GetFields()
 	if _, ok := fields[paramTemplate]; ok {
-		t.Error("ключ template должен быть удалён из params (Soul-у путь не нужен)")
+		t.Error("template key should be removed from params (Soul does not need the path)")
 	}
 	got := fields[paramTemplateContent].GetStringValue()
 	if got != "port {{ .vars.port }}\n" {
-		t.Errorf("template_content = %q, want literal содержимое .tmpl", got)
+		t.Errorf("template_content = %q, want the literal contents of .tmpl", got)
 	}
 	if rt.RawTemplate != got {
 		t.Errorf("RawTemplate = %q, want = template_content %q", rt.RawTemplate, got)
 	}
 	// Other keys untouched.
 	if fields["path"].GetStringValue() != "/etc/redis/redis.conf" {
-		t.Error("path не должен меняться")
+		t.Error("path should not change")
 	}
 }
 
@@ -72,10 +72,10 @@ func TestInjectTemplateContent_OtherModulePassthrough(t *testing.T) {
 		t.Fatalf("injectTemplateContent: %v", err)
 	}
 	if rt.RawTemplate != "" {
-		t.Error("RawTemplate должен быть пуст для не-rendered модуля")
+		t.Error("RawTemplate should be empty for a non-rendered module")
 	}
 	if _, ok := rt.Params.GetFields()["template_content"]; ok {
-		t.Error("template_content не должен появляться у не-rendered модуля")
+		t.Error("template_content should not appear for a non-rendered module")
 	}
 }
 
@@ -88,10 +88,10 @@ func TestInjectTemplateContent_NilReaderIsError(t *testing.T) {
 	})
 	err := injectTemplateContent(rt, nil, "")
 	if err == nil {
-		t.Fatal("ожидалась ошибка: TemplateReader не сконфигурирован")
+		t.Fatal("expected an error: TemplateReader not configured")
 	}
 	if !strings.Contains(err.Error(), "TemplateReader") {
-		t.Errorf("ошибка = %q, want упоминание TemplateReader", err)
+		t.Errorf("error = %q, want mention of TemplateReader", err)
 	}
 }
 
@@ -102,10 +102,10 @@ func TestInjectTemplateContent_InlineContentKept(t *testing.T) {
 		"template_content": "inline {{ .vars.y }}",
 	})
 	if err := injectTemplateContent(rt, nil, ""); err != nil {
-		t.Fatalf("inline template_content не должен требовать reader: %v", err)
+		t.Fatalf("inline template_content should not require a reader: %v", err)
 	}
 	if got := rt.Params.GetFields()["template_content"].GetStringValue(); got != "inline {{ .vars.y }}" {
-		t.Errorf("template_content = %q, want сохранённый inline", got)
+		t.Errorf("template_content = %q, want the preserved inline value", got)
 	}
 }
 
@@ -113,7 +113,7 @@ func TestInjectTemplateContent_InlineContentKept(t *testing.T) {
 func TestInjectTemplateContent_MissingBoth(t *testing.T) {
 	rt := renderedTask(moduleFileRendered, map[string]any{"path": "/etc/x"})
 	if err := injectTemplateContent(rt, fakeReader{}, ""); err == nil {
-		t.Fatal("ожидалась ошибка: нет ни template, ни template_content")
+		t.Fatal("expected an error: neither template nor template_content")
 	}
 }
 
@@ -124,7 +124,7 @@ func TestInjectTemplateContent_NonStringTemplate(t *testing.T) {
 		"template": 42,
 	})
 	if err := injectTemplateContent(rt, fakeReader{}, ""); err == nil {
-		t.Fatal("ожидалась ошибка: template не строка")
+		t.Fatal("expected an error: template is not a string")
 	}
 }
 
@@ -142,7 +142,7 @@ func TestSnapshotTemplateReader_TwoLevelShadowing(t *testing.T) {
 		t.Fatalf("Read: %v", err)
 	}
 	if string(data) != "LOCAL" {
-		t.Errorf("Read = %q, want LOCAL (scenario-local перекрывает service-level)", data)
+		t.Errorf("Read = %q, want LOCAL (scenario-local overrides service-level)", data)
 	}
 }
 
@@ -159,7 +159,7 @@ func TestSnapshotTemplateReader_FallbackToService(t *testing.T) {
 		t.Fatalf("Read: %v", err)
 	}
 	if string(data) != "SERVICE" {
-		t.Errorf("Read = %q, want SERVICE (фоллбэк на service-level)", data)
+		t.Errorf("Read = %q, want SERVICE (fallback to service-level)", data)
 	}
 }
 
@@ -206,7 +206,7 @@ func TestSnapshotTemplateReader_TraversalRejected(t *testing.T) {
 
 	// A legitimate path is read.
 	if data, err := reader.Read("templates/ok.tmpl"); err != nil || string(data) != "OK" {
-		t.Fatalf("легитимный путь: data=%q err=%v", data, err)
+		t.Fatalf("legitimate path: data=%q err=%v", data, err)
 	}
 
 	// `../` outside the snapshot — securejoin clamps it, never lets it escape:
@@ -214,6 +214,6 @@ func TestSnapshotTemplateReader_TraversalRejected(t *testing.T) {
 	// What matters — the outside secret's contents are NOT returned.
 	data, err := reader.Read("../" + filepath.Base(secret))
 	if err == nil && string(data) == "TOPSECRET" {
-		t.Fatal("traversal через ../ вернул внешний секрет — securejoin не сработал")
+		t.Fatal("traversal via ../ returned the outside secret - securejoin did not work")
 	}
 }

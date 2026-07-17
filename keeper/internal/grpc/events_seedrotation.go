@@ -157,7 +157,7 @@ func (h *eventStreamHandler) handleSeedRotationRequest(ctx context.Context, sid,
 	}
 
 	// Send reply BEFORE the audit write: the Soul is waiting for a reply — this is the
-	// “hot path” of rotation, audit is written best-effort afterward.
+	// "hot path" of rotation, audit is written best-effort afterward.
 	reply := &keeperv1.SeedRotationReply{
 		CertificatePem: signed.CertificatePEM,
 		CaChainPem:     signed.CAChainPEM,

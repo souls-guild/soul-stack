@@ -189,7 +189,7 @@ func TestCreate_HappyPath(t *testing.T) {
 	// created_scenario (args[11]): caller left the field unset (nil *string) → NULL in DB
 	// (migration 090, bare incarnation). No more ""→'create' normalization.
 	if f.queryRowArgs[11] != nil {
-		t.Errorf("args[11] created_scenario = %v, want nil (NULL для bare)", f.queryRowArgs[11])
+		t.Errorf("args[11] created_scenario = %v, want nil (NULL for bare)", f.queryRowArgs[11])
 	}
 	if f.queryRowArgs[1] != "redis" {
 		t.Errorf("args[1] service = %v", f.queryRowArgs[1])
@@ -605,10 +605,10 @@ func TestSelectAll_ScopeUnrestricted_NoClause(t *testing.T) {
 		t.Fatalf("SelectAll: %v", err)
 	}
 	if strings.Contains(f.querySQL, "covens &&") || strings.Contains(f.querySQL, "FALSE") {
-		t.Errorf("unrestricted scope добавил предикат: %q", f.querySQL)
+		t.Errorf("unrestricted scope added a predicate: %q", f.querySQL)
 	}
 	if len(f.queryArgs) != 2 {
-		t.Errorf("args = %v, want только [offset, limit]", f.queryArgs)
+		t.Errorf("args = %v, want only [offset, limit]", f.queryArgs)
 	}
 }
 
@@ -624,10 +624,10 @@ func TestSelectAll_ScopeEmpty_FailClosed(t *testing.T) {
 		t.Fatalf("SelectAll: %v", err)
 	}
 	if !strings.Contains(f.querySQL, "FALSE") {
-		t.Errorf("пустой scope обязан давать FALSE-предикат (fail-closed), got: %q", f.querySQL)
+		t.Errorf("empty scope must produce a FALSE predicate (fail-closed), got: %q", f.querySQL)
 	}
 	if !strings.Contains(f.queryRowSQL, "FALSE") {
-		t.Errorf("FALSE обязан попасть и в COUNT (total=0 в scope): %q", f.queryRowSQL)
+		t.Errorf("FALSE must also appear in COUNT (total=0 in scope): %q", f.queryRowSQL)
 	}
 }
 
@@ -643,10 +643,10 @@ func TestSelectAll_ScopeCovens_CovenUnionName(t *testing.T) {
 		t.Fatalf("SelectAll: %v", err)
 	}
 	if !strings.Contains(f.querySQL, "covens && $1") {
-		t.Errorf("coven-пересечение covens && $1 отсутствует: %q", f.querySQL)
+		t.Errorf("coven intersection covens && $1 is missing: %q", f.querySQL)
 	}
 	if !strings.Contains(f.querySQL, "name = ANY($1)") {
-		t.Errorf("coven∪{name}: name = ANY($1) отсутствует (incarnation с name=scope-coven должна матчиться): %q", f.querySQL)
+		t.Errorf("coven∪{name}: name = ANY($1) is missing (incarnation with name=scope-coven should match): %q", f.querySQL)
 	}
 	// Both arms use the same bind ($1); value = scope-covens.
 	if covs, ok := f.queryArgs[0].([]string); !ok || len(covs) != 1 || covs[0] != "redis-prod" {
@@ -665,7 +665,7 @@ func TestSelectAll_ScopeStateNames_PushdownByName(t *testing.T) {
 		t.Fatalf("SelectAll: %v", err)
 	}
 	if !strings.Contains(f.querySQL, "name = ANY($1)") {
-		t.Errorf("state-names pushdown name = ANY($1) отсутствует: %q", f.querySQL)
+		t.Errorf("state-names pushdown name = ANY($1) is missing: %q", f.querySQL)
 	}
 	if names, ok := f.queryArgs[0].([]string); !ok || len(names) != 2 {
 		t.Errorf("state-names bind = %v, want [redis-a redis-c]", f.queryArgs[0])
@@ -685,11 +685,11 @@ func TestSelectAll_ScopeOR_CovenAndState(t *testing.T) {
 	}
 	// service filter AND scope block; inside the scope block, coven OR state.
 	if !strings.Contains(f.querySQL, "service = $1") {
-		t.Errorf("service-фильтр отсутствует: %q", f.querySQL)
+		t.Errorf("service filter is missing: %q", f.querySQL)
 	}
 	// scope block is parenthesized and contains OR between dimensions.
 	if !strings.Contains(f.querySQL, "((covens && $2 OR name = ANY($2)) OR name = ANY($3))") {
-		t.Errorf("OR-блок измерений неверен: %q", f.querySQL)
+		t.Errorf("dimension OR-block is wrong: %q", f.querySQL)
 	}
 }
 
@@ -704,10 +704,10 @@ func TestSelectAll_ScopeWithUserFilter_AND(t *testing.T) {
 		t.Fatalf("SelectAll: %v", err)
 	}
 	if !strings.Contains(f.querySQL, "status = $1") || !strings.Contains(f.querySQL, "AND") {
-		t.Errorf("filter AND scope ожидается: %q", f.querySQL)
+		t.Errorf("filter AND scope expected: %q", f.querySQL)
 	}
 	if !strings.Contains(f.querySQL, "covens && $2") {
-		t.Errorf("scope-coven как $2 после status=$1: %q", f.querySQL)
+		t.Errorf("scope-coven as $2 after status=$1: %q", f.querySQL)
 	}
 }
 
@@ -726,22 +726,22 @@ func TestSelectAll_ScopeTrait_ScalarEquality(t *testing.T) {
 		t.Fatalf("SelectAll: %v", err)
 	}
 	if !strings.Contains(f.querySQL, "traits->>$1 = $2") {
-		t.Errorf("trait-плечо должно быть scalar `traits->>$1 = $2`, got: %q", f.querySQL)
+		t.Errorf("trait arm must be scalar `traits->>$1 = $2`, got: %q", f.querySQL)
 	}
 	// Regression guard: the old containment form must not return (that's exactly BUG #1).
 	if strings.Contains(f.querySQL, "@>") {
-		t.Errorf("trait-плечо использует containment @> (BUG #1 — матчит list): %q", f.querySQL)
+		t.Errorf("trait arm uses containment @> (BUG #1 — matches list): %q", f.querySQL)
 	}
 	// Key and value are separate bind parameters (not concatenated into SQL text).
 	if len(f.queryArgs) < 2 || f.queryArgs[0] != "env" || f.queryArgs[1] != "prod" {
-		t.Errorf("trait bind-args = %v, want [env prod] раздельно", f.queryArgs)
+		t.Errorf("trait bind-args = %v, want [env prod] separately", f.queryArgs)
 	}
 	if strings.Contains(f.querySQL, "env") || strings.Contains(f.querySQL, "prod") {
-		t.Errorf("ключ/значение утекли в текст SQL (должны быть bind): %q", f.querySQL)
+		t.Errorf("key/value leaked into SQL text (must be bind params): %q", f.querySQL)
 	}
 	// Same predicate in COUNT (otherwise total would diverge from items).
 	if !strings.Contains(f.queryRowSQL, "traits->>$1 = $2") {
-		t.Errorf("trait-плечо отсутствует в COUNT: %q", f.queryRowSQL)
+		t.Errorf("trait arm is missing from COUNT: %q", f.queryRowSQL)
 	}
 }
 
@@ -758,13 +758,13 @@ func TestAppendScopeClause_Table(t *testing.T) {
 		denySubstr []string // substrings that must be ABSENT
 	}{
 		{
-			name:       "один trait → scalar-плечо без OR",
+			name:       "one trait -> scalar arm without OR",
 			scope:      ListScope{Traits: []TraitPair{{Key: "owner", Value: "alice"}}},
 			wantSubstr: []string{"traits->>$1 = $2"},
 			denySubstr: []string{"@>", " OR ", "FALSE"},
 		},
 		{
-			name: "два trait → OR между плечами в общих скобках",
+			name: "two traits -> OR between arms inside common parens",
 			scope: ListScope{Traits: []TraitPair{
 				{Key: "owner", Value: "alice"},
 				{Key: "team", Value: "dba"},
@@ -773,7 +773,7 @@ func TestAppendScopeClause_Table(t *testing.T) {
 			denySubstr: []string{"@>", "FALSE"},
 		},
 		{
-			name: "coven ∪ trait → OR измерений, trait-плечо после coven-бинда",
+			name: "coven ∪ trait -> dimension OR, trait arm after the coven bind",
 			scope: ListScope{
 				Covens: []string{"prod"},
 				Traits: []TraitPair{{Key: "owner", Value: "alice"}},
@@ -783,7 +783,7 @@ func TestAppendScopeClause_Table(t *testing.T) {
 			denySubstr: []string{"@>", "FALSE"},
 		},
 		{
-			name:  "пустой scope, не Unrestricted → fail-closed FALSE",
+			name:  "empty scope, not Unrestricted -> fail-closed FALSE",
 			scope: ListScope{},
 			// FALSE predicate in WHERE; no scope arm at all (column names
 			// traits/covens in the SELECT list don't count — we check predicates).
@@ -791,7 +791,7 @@ func TestAppendScopeClause_Table(t *testing.T) {
 			denySubstr: []string{"traits->>", "covens &&"},
 		},
 		{
-			name:       "Unrestricted → ни одного scope-предиката",
+			name:       "Unrestricted -> no scope predicate at all",
 			scope:      ListScope{Unrestricted: true},
 			denySubstr: []string{"FALSE", "traits->>", "covens &&"},
 		},
@@ -804,12 +804,12 @@ func TestAppendScopeClause_Table(t *testing.T) {
 			}
 			for _, want := range tc.wantSubstr {
 				if !strings.Contains(f.querySQL, want) {
-					t.Errorf("SQL не содержит %q: %q", want, f.querySQL)
+					t.Errorf("SQL does not contain %q: %q", want, f.querySQL)
 				}
 			}
 			for _, deny := range tc.denySubstr {
 				if strings.Contains(f.querySQL, deny) {
-					t.Errorf("SQL содержит запрещённое %q: %q", deny, f.querySQL)
+					t.Errorf("SQL contains forbidden %q: %q", deny, f.querySQL)
 				}
 			}
 		})
@@ -907,7 +907,7 @@ func TestSelectAll_StatePredicate_RejectsInjectionPath(t *testing.T) {
 		}
 		// Injection must not reach the DB: no queries on reject.
 		if f.queryRowCalls != 0 || f.queryCalls != 0 {
-			t.Errorf("path %q: запрос ушёл в БД несмотря на reject", bad)
+			t.Errorf("path %q: query reached the DB despite the reject", bad)
 		}
 	}
 }
@@ -949,7 +949,7 @@ func TestSelectAll_StatePredicate_NumericOp_RejectsNonNumericValue(t *testing.T)
 			}
 			// An invalid value must not reach the DB (otherwise 22P02 → 500).
 			if f.queryRowCalls != 0 || f.queryCalls != 0 {
-				t.Errorf("op %q value %q: запрос ушёл в БД несмотря на reject", op, bad)
+				t.Errorf("op %q value %q: query reached the DB despite the reject", op, bad)
 			}
 		}
 	}
@@ -979,7 +979,7 @@ func TestSelectAll_StatePredicate_TextOp_AllowsNonNumericValue(t *testing.T) {
 			StatePredicates: []StateEq{{Path: "redis_version", Op: op, Value: "abc"}},
 		}, ListScope{Unrestricted: true}, 0, 50)
 		if err != nil {
-			t.Errorf("op %q: текстовое значение отбито: %v", op, err)
+			t.Errorf("op %q: text value was rejected: %v", op, err)
 		}
 	}
 }
@@ -1061,7 +1061,7 @@ func TestSelectAll_SortBy_RejectsUnknownField(t *testing.T) {
 		t.Errorf("err = %v, want ErrInvalidSortField", err)
 	}
 	if f.queryRowCalls != 0 || f.queryCalls != 0 {
-		t.Error("запрос ушёл в БД несмотря на reject sort-поля")
+		t.Error("query reached the DB despite the sort-field reject")
 	}
 }
 
@@ -1364,7 +1364,7 @@ func TestUpdateStateFromRun_HappyPath(t *testing.T) {
 		t.Errorf("QueryRow SQLs = %v, want single UPDATE incarnation … RETURNING", f.queryRowSQLs)
 	}
 	if !strings.Contains(f.queryRowSQLs[0], "status IN ('applying', 'destroying')") {
-		t.Errorf("UPDATE без single-winner guard: %q", f.queryRowSQLs[0])
+		t.Errorf("UPDATE missing the single-winner guard: %q", f.queryRowSQLs[0])
 	}
 }
 
@@ -1384,7 +1384,7 @@ func TestUpdateStateFromRun_SingleWinner_CommitsFromApplying(t *testing.T) {
 	}
 	// probe must not be called — UPDATE won the row immediately.
 	if len(f.queryRowSQLs) != 1 {
-		t.Errorf("QueryRow calls = %d, want 1 (UPDATE без probe)", len(f.queryRowSQLs))
+		t.Errorf("QueryRow calls = %d, want 1 (UPDATE without probe)", len(f.queryRowSQLs))
 	}
 }
 
@@ -1553,7 +1553,7 @@ func TestCreate_BareCreatedScenarioNull(t *testing.T) {
 		t.Fatalf("Create: %v", err)
 	}
 	if f.queryRowArgs[11] != nil {
-		t.Errorf("args[11] created_scenario = %v, want nil (NULL для bare)", f.queryRowArgs[11])
+		t.Errorf("args[11] created_scenario = %v, want nil (NULL for bare)", f.queryRowArgs[11])
 	}
 }
 
@@ -1621,7 +1621,7 @@ func TestSelectByName_ReadsApplyingApplyID(t *testing.T) {
 		t.Fatalf("SelectByName(applying): %v", err)
 	}
 	if applying.ApplyingApplyID == nil || *applying.ApplyingApplyID != "01HAPPLYINGRUN000000000000" {
-		t.Errorf("ApplyingApplyID = %v, want 01HAPPLYINGRUN000000000000 (non-null пока applying)", applying.ApplyingApplyID)
+		t.Errorf("ApplyingApplyID = %v, want 01HAPPLYINGRUN000000000000 (non-null while applying)", applying.ApplyingApplyID)
 	}
 
 	// Terminal → NULL → nil.
@@ -1630,6 +1630,6 @@ func TestSelectByName_ReadsApplyingApplyID(t *testing.T) {
 		t.Fatalf("SelectByName(terminal): %v", err)
 	}
 	if terminal.ApplyingApplyID != nil {
-		t.Errorf("terminal ApplyingApplyID = %v, want nil (NULL на терминале)", terminal.ApplyingApplyID)
+		t.Errorf("terminal ApplyingApplyID = %v, want nil (NULL at terminal)", terminal.ApplyingApplyID)
 	}
 }

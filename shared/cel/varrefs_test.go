@@ -37,7 +37,7 @@ func TestVarRefs_LiteralOutsideMarker(t *testing.T) {
 		t.Fatalf("VarRefs: %v", err)
 	}
 	if len(got) != 0 {
-		t.Errorf("VarRefs = %v, want [] (vars.x вне ${} — литерал)", got)
+		t.Errorf("VarRefs = %v, want [] (vars.x outside ${} - literal)", got)
 	}
 }
 
@@ -50,7 +50,7 @@ func TestVarRefs_StringLiteralInsideExpr(t *testing.T) {
 		t.Fatalf("VarRefs: %v", err)
 	}
 	if len(got) != 0 {
-		t.Errorf("VarRefs = %v, want [] (строковый литерал не Select)", got)
+		t.Errorf("VarRefs = %v, want [] (string literal is not a Select)", got)
 	}
 }
 
@@ -63,7 +63,7 @@ func TestVarRefs_OtherBaseIgnored(t *testing.T) {
 		t.Fatalf("VarRefs: %v", err)
 	}
 	if !reflect.DeepEqual(got, []string{"a"}) {
-		t.Errorf("VarRefs = %v, want [a] (только vars.*)", got)
+		t.Errorf("VarRefs = %v, want [a] (vars.* only)", got)
 	}
 }
 
@@ -75,7 +75,7 @@ func TestVarRefs_Dedup(t *testing.T) {
 		t.Fatalf("VarRefs: %v", err)
 	}
 	if !reflect.DeepEqual(got, []string{"a"}) {
-		t.Errorf("VarRefs = %v, want [a] (дедуп)", got)
+		t.Errorf("VarRefs = %v, want [a] (dedup)", got)
 	}
 }
 
@@ -85,7 +85,7 @@ func TestVarRefs_IndexForm(t *testing.T) {
 	e := newVarRefsEngine(t)
 	_, err := e.VarRefs(`${ vars['k'] }`)
 	if err == nil || !errors.Is(err, ErrVarIndexForm) {
-		t.Fatalf("VarRefs index-форма: ожидался ErrVarIndexForm, получено: %v", err)
+		t.Fatalf("VarRefs index form: expected ErrVarIndexForm, got: %v", err)
 	}
 }
 
@@ -98,7 +98,7 @@ func TestVarRefs_NestedSelect(t *testing.T) {
 		t.Fatalf("VarRefs: %v", err)
 	}
 	if !reflect.DeepEqual(got, []string{"cfg"}) {
-		t.Errorf("VarRefs = %v, want [cfg] (корневой var-ключ вложенного select)", got)
+		t.Errorf("VarRefs = %v, want [cfg] (root var key of a nested select)", got)
 	}
 }
 
@@ -113,7 +113,7 @@ func TestVarRefs_MacroBlockNoVars(t *testing.T) {
 		t.Fatalf("VarRefs: %v", err)
 	}
 	if !reflect.DeepEqual(got, []string{"a"}) {
-		t.Errorf("VarRefs = %v, want [a] (макро-блок без vars пропущен, vars.a собран)", got)
+		t.Errorf("VarRefs = %v, want [a] (macro block without vars skipped, vars.a collected)", got)
 	}
 }
 
@@ -128,10 +128,10 @@ func TestVarRefs_BrokenBlockRejectedEarly(t *testing.T) {
 	e := newVarRefsEngine(t)
 	_, err := e.VarRefs("${ vars.a }-${ vars.b + }")
 	if err == nil {
-		t.Fatal("VarRefs: ожидалась ошибка парс-фазы на битом блоке, получено nil")
+		t.Fatal("VarRefs: expected a parse-phase error on the broken block, got nil")
 	}
 	var compileErr *ErrCompile
 	if !errors.As(err, &compileErr) {
-		t.Errorf("VarRefs: ожидался *ErrCompile, получено %T: %v", err, err)
+		t.Errorf("VarRefs: expected *ErrCompile, got %T: %v", err, err)
 	}
 }

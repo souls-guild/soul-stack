@@ -21,7 +21,7 @@ import (
 // coremod/cloud.CascadeDestroy, an explicit terminal state, not a proxy for
 // disconnect/revoke/reap). claim.execute treats it as a benign no_match, not a
 // failure (NIM-56). The predicate is status-based, not tied to "this run".
-var errHostDestroyed = errors.New("scenario: RenderForHost: хост снят cloud-destroy каскадом этого прогона")
+var errHostDestroyed = errors.New("scenario: RenderForHost: host removed by cloud-destroy cascade of this run")
 
 // RenderForHost reproduces the Keeper-side render pipeline for a run on claim
 // (ADR-027, Phase 1.4.3): given a persisted [applyrun.Recipe] and the claimed
@@ -84,7 +84,7 @@ func RenderForHost(ctx context.Context, deps Deps, recipe *applyrun.Recipe, inca
 	// 2. Expand includes into a flat list — BEFORE render (as in the run-goroutine).
 	expanded, idiags := config.ExpandIncludes(scn.Tasks, scenarioIncludeResolver(deps.Loader, art, recipe.ScenarioName))
 	if diag.HasErrors(idiags) {
-		return nil, nil, fmt.Errorf("scenario: RenderForHost: раскрытие include в %s/%s: %s",
+		return nil, nil, fmt.Errorf("scenario: RenderForHost: expanding include in %s/%s: %s",
 			recipe.ScenarioName, scenarioMainFile, firstError(idiags))
 	}
 	scn.Tasks = expanded
@@ -190,7 +190,7 @@ func loadRosterWithHost(ctx context.Context, topo *topology.Resolver, db keepers
 	if s, serr := keepersoul.SelectBySID(ctx, db, sid); serr == nil && s.Status == keepersoul.StatusDestroyed {
 		return nil, errHostDestroyed
 	}
-	return nil, fmt.Errorf("scenario: RenderForHost: хост %q не в roster-е incarnation %q (disconnected с момента dispatch-а)", sid, incarnationName)
+	return nil, fmt.Errorf("scenario: RenderForHost: host %q not in the roster of incarnation %q (disconnected since dispatch)", sid, incarnationName)
 }
 
 // recipeAID unwraps recipe.StartedByAID (*string) to "" on nil — the shape

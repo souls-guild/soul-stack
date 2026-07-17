@@ -167,6 +167,6 @@ func TestIntegration_VaultRefNotFound(t *testing.T) {
 		Hosts:       []*topology.HostFacts{{SID: "a", Coven: []string{"svc"}}},
 	}
 	if _, _, err := p.Render(ctx, in); err == nil {
-		t.Fatal("Render: ожидалась ошибка для несуществующего vault-пути")
+		t.Fatal("Render: expected an error for a nonexistent vault path")
 	}
 }

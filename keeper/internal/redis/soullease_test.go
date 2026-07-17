@@ -117,7 +117,7 @@ func TestForceAcquireSoulLease_KeyIsPrevHolder_Reacquires(t *testing.T) {
 		t.Errorf("Holder = %q, want kid-new", l.Holder())
 	}
 	if v, _ := mr.Get(SoulLeaseKey(sid)); v != "kid-new" {
-		t.Errorf("redis value = %q, want kid-new (CAS-by-prev-holder перезахватил)", v)
+		t.Errorf("redis value = %q, want kid-new (CAS-by-prev-holder re-acquired)", v)
 	}
 }
 
@@ -135,13 +135,13 @@ func TestForceAcquireSoulLease_KeyChanged_DoesNotReacquire(t *testing.T) {
 
 	l, err := ForceAcquireSoulLease(ctx, c, sid, "kid-dead", "kid-new", 30*time.Second)
 	if !errors.Is(err, ErrLeaseTaken) {
-		t.Fatalf("err = %v, want ErrLeaseTaken (ключ принадлежит не-prev-holder-у)", err)
+		t.Fatalf("err = %v, want ErrLeaseTaken (key belongs to a non-prev-holder)", err)
 	}
 	if l != nil {
 		t.Error("lease != nil on failed CAS")
 	}
 	if v, _ := mr.Get(SoulLeaseKey(sid)); v != "kid-other" {
-		t.Errorf("redis value = %q, want kid-other (не перезахвачен)", v)
+		t.Errorf("redis value = %q, want kid-other (not re-acquired)", v)
 	}
 }
 
@@ -159,7 +159,7 @@ func TestForceAcquireSoulLease_KeyAbsent_SetnxAcquires(t *testing.T) {
 		t.Fatalf("lease=%v, want holder kid-new", l)
 	}
 	if v, _ := mr.Get(SoulLeaseKey(sid)); v != "kid-new" {
-		t.Errorf("redis value = %q, want kid-new (SETNX-захват)", v)
+		t.Errorf("redis value = %q, want kid-new (SETNX acquire)", v)
 	}
 }
 
@@ -177,7 +177,7 @@ func TestForceAcquireSoulLease_RenewWorksAfterReacquire(t *testing.T) {
 	}
 	// The returned handle belongs to the new holder — Renew by CAS goes through.
 	if err := l.Renew(ctx); err != nil {
-		t.Errorf("Renew after re-acquire: %v (handle должен быть kid-new)", err)
+		t.Errorf("Renew after re-acquire: %v (handle should be kid-new)", err)
 	}
 }
 

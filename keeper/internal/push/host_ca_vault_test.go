@@ -130,10 +130,10 @@ func TestLoadHostCAs_HappyPath(t *testing.T) {
 		t.Errorf("Names = %q,%q; want prod,stage", out[0].Name, out[1].Name)
 	}
 	if out[0].SourceRef != refs[0].Ref || out[1].SourceRef != refs[1].Ref {
-		t.Errorf("SourceRef не пробросился: %+v vs %+v", out, refs)
+		t.Errorf("SourceRef was not propagated: %+v vs %+v", out, refs)
 	}
 	if out[0].CAPubKey == nil || out[1].CAPubKey == nil {
-		t.Error("CAPubKey nil в одном из элементов")
+		t.Error("CAPubKey nil in one of the elements")
 	}
 }
 
@@ -152,10 +152,10 @@ func TestLoadHostCAs_PartialFail(t *testing.T) {
 	}
 	_, err := LoadHostCAs(context.Background(), vc, refs)
 	if err == nil {
-		t.Fatal("LoadHostCAs: ждали ошибку на missing stage-CA")
+		t.Fatal("LoadHostCAs: expected error on missing stage-CA")
 	}
 	if !contains(err.Error(), "LoadHostCAs[stage]") {
-		t.Errorf("err не содержит имени сбойного CA: %v", err)
+		t.Errorf("err does not contain the name of the failing CA: %v", err)
 	}
 }
 
@@ -178,9 +178,9 @@ func TestLoadHostCAs_NilVault(t *testing.T) {
 	refs := []config.KeeperPushCARef{{Ref: "vault:secret/x/y", Name: "x"}}
 	_, err := LoadHostCAs(context.Background(), nil, refs)
 	if err == nil {
-		t.Fatal("LoadHostCAs(nil vault): ждали ошибку")
+		t.Fatal("LoadHostCAs(nil vault): expected error")
 	}
 	if !contains(err.Error(), "vault client is nil") {
-		t.Errorf("err не про nil vault: %v", err)
+		t.Errorf("err is not about nil vault: %v", err)
 	}
 }

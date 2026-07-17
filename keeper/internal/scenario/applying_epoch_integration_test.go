@@ -58,16 +58,16 @@ FROM incarnation WHERE name = $1`
 	}
 	// All 4 epoch columns non-null in one row — no applying-without-epoch window.
 	if gotApply == nil || *gotApply != applyID {
-		t.Errorf("applying_apply_id = %v, want %q (epoch не записан атомарно)", gotApply, applyID)
+		t.Errorf("applying_apply_id = %v, want %q (epoch not written atomically)", gotApply, applyID)
 	}
 	if gotAtt == nil || *gotAtt != 0 {
-		t.Errorf("applying_attempt = %v, want 0 (echo начального attempt)", gotAtt)
+		t.Errorf("applying_attempt = %v, want 0 (echo of initial attempt)", gotAtt)
 	}
 	if gotKID == nil || *gotKID != kid {
 		t.Errorf("applying_by_kid = %v, want %q", gotKID, kid)
 	}
 	if gotSince == nil {
-		t.Error("applying_since = NULL, want NOW() (epoch неполный)")
+		t.Error("applying_since = NULL, want NOW() (epoch incomplete)")
 	}
 }
 
@@ -122,7 +122,7 @@ func TestIntegration_LockApplyingWithEpoch_FromLocked(t *testing.T) {
 		t.Fatalf("lockRun{FromLocked}: %v", err)
 	}
 	if got.Status != incarnation.StatusApplying {
-		t.Errorf("lockRun вернул status = %q, want applying", got.Status)
+		t.Errorf("lockRun returned status = %q, want applying", got.Status)
 	}
 
 	var (
@@ -144,21 +144,21 @@ FROM incarnation WHERE name = $1`
 
 	// Status stays applying (a repeat set is idempotent), the epoch is filled in.
 	if status != "applying" {
-		t.Errorf("status = %q, want applying (FromLocked не должен ломать статус)", status)
+		t.Errorf("status = %q, want applying (FromLocked must not break status)", status)
 	}
 	// Parity with a regular lockRun: all 4 epoch columns non-null —
 	// rerun-last-applying is covered by reconcile_orphan_applying.
 	if gotApply == nil || *gotApply != applyID {
-		t.Errorf("applying_apply_id = %v, want %q (epoch не записан на FromLocked-пути)", gotApply, applyID)
+		t.Errorf("applying_apply_id = %v, want %q (epoch not written on FromLocked path)", gotApply, applyID)
 	}
 	if gotAtt == nil || *gotAtt != 0 {
-		t.Errorf("applying_attempt = %v, want 0 (echo начального attempt)", gotAtt)
+		t.Errorf("applying_attempt = %v, want 0 (echo of initial attempt)", gotAtt)
 	}
 	if gotKID == nil || *gotKID != kid {
-		t.Errorf("applying_by_kid = %v, want %q (KID этого инстанса)", gotKID, kid)
+		t.Errorf("applying_by_kid = %v, want %q (KID of this instance)", gotKID, kid)
 	}
 	if gotSince == nil {
-		t.Error("applying_since = NULL, want NOW() (epoch неполный)")
+		t.Error("applying_since = NULL, want NOW() (epoch incomplete)")
 	}
 }
 
@@ -195,9 +195,9 @@ func TestIntegration_LockApplyingWithEpoch_RollbackLeavesNoEpoch(t *testing.T) {
 		t.Fatalf("read back: %v", err)
 	}
 	if status != "ready" {
-		t.Errorf("status = %q, want ready (rollback откатил applying)", status)
+		t.Errorf("status = %q, want ready (rollback reverted applying)", status)
 	}
 	if gotApply != nil || gotKID != nil {
-		t.Errorf("epoch persisted after rollback: apply=%v kid=%v (должны быть NULL)", gotApply, gotKID)
+		t.Errorf("epoch persisted after rollback: apply=%v kid=%v (should be NULL)", gotApply, gotKID)
 	}
 }

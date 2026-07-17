@@ -41,12 +41,12 @@ func (h *eventStreamHandler) handleErrandResult(ctx context.Context, sid, sessio
 	}
 	errandID := ev.GetErrandId()
 	if errandID == "" {
-		h.logger.Warn("eventstream: ErrandResult без errand_id",
+		h.logger.Warn("eventstream: ErrandResult without errand_id",
 			slog.String("sid", sid), slog.String("session_id", sessionID))
 		return
 	}
 	if h.deps.ApplyBus == nil {
-		h.logger.Debug("eventstream: ErrandResult без ApplyBus — drop",
+		h.logger.Debug("eventstream: ErrandResult without ApplyBus - drop",
 			slog.String("sid", sid),
 			slog.String("errand_id", errandID))
 		return

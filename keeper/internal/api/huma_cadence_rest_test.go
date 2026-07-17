@@ -91,7 +91,7 @@ func TestHumaCadence_RestReachable_ChiCoexistence(t *testing.T) {
 	)
 	routes, ok := h.(chi.Routes)
 	if !ok {
-		t.Fatalf("buildRouter вернул %T, не chi.Routes", h)
+		t.Fatalf("buildRouter returned %T, not chi.Routes", h)
 	}
 
 	// chi.Walk: each /{id} method is registered exactly once. Missing PATCH/DELETE = the
@@ -118,19 +118,19 @@ func TestHumaCadence_RestReachable_ChiCoexistence(t *testing.T) {
 		t.Fatalf("chi.Walk: %v", err)
 	}
 	if patchCount != 1 {
-		t.Errorf("PATCH /v1/cadences/{id} встретился %d раз, want 1 (0 = блокер: sibling chi.Route затеняет → 405)", patchCount)
+		t.Errorf("PATCH /v1/cadences/{id} matched %d times, want 1 (0 = blocker: sibling chi.Route shadows it -> 405)", patchCount)
 	}
 	if deleteCount != 1 {
-		t.Errorf("DELETE /v1/cadences/{id} встретился %d раз, want 1 (0 = блокер: sibling chi.Route затеняет → 405)", deleteCount)
+		t.Errorf("DELETE /v1/cadences/{id} matched %d times, want 1 (0 = blocker: sibling chi.Route shadows it -> 405)", deleteCount)
 	}
 	if getIDCount != 1 {
-		t.Errorf("GET /v1/cadences/{id} встретился %d раз, want 1 (read-роут on huma)", getIDCount)
+		t.Errorf("GET /v1/cadences/{id} matched %d times, want 1 (read route on huma)", getIDCount)
 	}
 	if getRunsCount != 1 {
-		t.Errorf("GET /v1/cadences/{id}/runs встретился %d раз, want 1 (read-роут on huma)", getRunsCount)
+		t.Errorf("GET /v1/cadences/{id}/runs matched %d times, want 1 (read route on huma)", getRunsCount)
 	}
 	if getListCount != 1 {
-		t.Errorf("GET /v1/cadences/ встретился %d раз, want 1 (Teardown T1: list-роут on huma, WITHOUT shadow с /{id})", getListCount)
+		t.Errorf("GET /v1/cadences/ matched %d times, want 1 (Teardown T1: list route on huma, WITHOUT shadow on /{id})", getListCount)
 	}
 }
 
@@ -271,7 +271,7 @@ func TestHumaCadenceRest_Patch_NotFound_NoAudit(t *testing.T) {
 		t.Fatalf("status = %d, want 404; body=%s", rec.Code, rec.Body.String())
 	}
 	if len(auditCap.Events()) != 0 {
-		t.Errorf("audit записан on 404 (%d withбытий) — write-путь не toлжен писать", len(auditCap.Events()))
+		t.Errorf("audit recorded on 404 (%d events) - the write path should not write", len(auditCap.Events()))
 	}
 }
 
@@ -288,7 +288,7 @@ func TestHumaCadenceRest_Patch_RBACDeny_403(t *testing.T) {
 		t.Fatalf("status = %d, want 403; body=%s", rec.Code, rec.Body.String())
 	}
 	if len(auditCap.Events()) != 0 {
-		t.Errorf("audit записан on 403 — RBAC-deny не toлжен toходить to handler-а")
+		t.Errorf("audit recorded on 403 - RBAC-deny should not reach the handler")
 	}
 }
 
@@ -318,7 +318,7 @@ func TestHumaCadenceRest_Delete_WireOK_204(t *testing.T) {
 		t.Fatalf("status = %d, want 204; body=%s", rec.Code, rec.Body.String())
 	}
 	if rec.Body.Len() != 0 {
-		t.Errorf("204 с непустым bodyм: %s", rec.Body.String())
+		t.Errorf("204 with a non-empty body: %s", rec.Body.String())
 	}
 }
 
@@ -350,7 +350,7 @@ func TestHumaCadenceRest_Delete_NotFound_NoAudit(t *testing.T) {
 		t.Fatalf("status = %d, want 404; body=%s", rec.Code, rec.Body.String())
 	}
 	if len(auditCap.Events()) != 0 {
-		t.Errorf("audit записан on 404 delete — write-путь не toлжен писать")
+		t.Errorf("audit recorded on 404 delete - the write path should not write")
 	}
 }
 
@@ -415,7 +415,7 @@ func TestHumaCadenceRest_Enable_NotFound_NoAudit(t *testing.T) {
 		t.Fatalf("status = %d, want 404; body=%s", rec.Code, rec.Body.String())
 	}
 	if len(auditCap.Events()) != 0 {
-		t.Errorf("audit записан on 404 enable")
+		t.Errorf("audit recorded on 404 enable")
 	}
 }
 
@@ -432,7 +432,7 @@ func TestHumaCadenceRest_Enable_GoldenWire(t *testing.T) {
 	got := normalizeJSONKeys(t, rec.Body.Bytes())
 	const golden = `{"cadence_id":"01HZ0000000000000000000000","enabled":true}`
 	if got != golden {
-		t.Errorf("GOLDEN wire-дрейф enable-reply:\n got  = %s\n want = %s\n(onбор ключей/$schema fromменился — проверь cadenceToggleOutput/newHumaCadenceAPI)", got, golden)
+		t.Errorf("GOLDEN wire drift enable-reply:\n got  = %s\n want = %s\n(key set/$schema changed - check cadenceToggleOutput/newHumaCadenceAPI)", got, golden)
 	}
 }
 
@@ -489,7 +489,7 @@ func TestHumaCadenceRest_Get_GoldenWire(t *testing.T) {
 	got := normalizeCadenceTimestamps(t, rec.Body.Bytes())
 	const golden = `{"cadence_id":"01HZ0000000000000000000000","created_at":"TS","created_by_aid":"archon-alice","cron_expr":"0 * * * *","enabled":true,"kind":"command","module":"core.cmd.shell","name":"hourly","overlap_policy":"queue","schedule_kind":"cron","target":{"coven":["prod"]},"updated_at":"TS"}`
 	if got != golden {
-		t.Errorf("GOLDEN wire-дрейф GET {id}:\n got  = %s\n want = %s\n(onбор ключей/$schema fromменился — проверь cadenceGetOutput/toCadenceDTO)", got, golden)
+		t.Errorf("GOLDEN wire drift GET {id}:\n got  = %s\n want = %s\n(key set/$schema changed - check cadenceGetOutput/toCadenceDTO)", got, golden)
 	}
 }
 
@@ -508,7 +508,7 @@ func TestHumaCadenceRest_Runs_GoldenWire(t *testing.T) {
 	got := normalizeJSONKeys(t, rec.Body.Bytes())
 	const golden = `{"items":[],"limit":50,"offset":0,"total":0}`
 	if got != golden {
-		t.Errorf("GOLDEN wire-дрейф GET {id}/runs:\n got  = %s\n want = %s\n(envelope-form fromменилась — проверь cadenceRunsOutput/CadenceRunsReply)", got, golden)
+		t.Errorf("GOLDEN wire drift GET {id}/runs:\n got  = %s\n want = %s\n(envelope shape changed - check cadenceRunsOutput/CadenceRunsReply)", got, golden)
 	}
 }
 
@@ -567,7 +567,7 @@ func TestHumaCadenceRest_List_GoldenWire(t *testing.T) {
 	got := normalizeJSONKeys(t, rec.Body.Bytes())
 	const golden = `{"items":[],"limit":50,"offset":0,"total":0}`
 	if got != golden {
-		t.Errorf("GOLDEN wire-дрейф GET /v1/cadences (list):\n got  = %s\n want = %s\n(envelope-form fromменилась — проверь cadenceListOutput/CadenceListReply)", got, golden)
+		t.Errorf("GOLDEN wire drift GET /v1/cadences (list):\n got  = %s\n want = %s\n(envelope shape changed - check cadenceListOutput/CadenceListReply)", got, golden)
 	}
 }
 
@@ -631,7 +631,7 @@ func normalizeCadenceTimestamps(t *testing.T, raw []byte) string {
 	t.Helper()
 	var m map[string]any
 	if err := json.Unmarshal(raw, &m); err != nil {
-		t.Fatalf("reply не JSON-object: %v; raw=%s", err, raw)
+		t.Fatalf("reply is not a JSON object: %v; raw=%s", err, raw)
 	}
 	for _, k := range []string{"created_at", "updated_at"} {
 		if _, ok := m[k]; ok {
@@ -653,7 +653,7 @@ func assertSelfAudit(t *testing.T, cap *auditCaptureWriter, want audit.EventType
 	t.Helper()
 	evs := cap.Events()
 	if len(evs) == 0 {
-		t.Fatalf("audit NOT записан on успешbutм 2xx — huma сломал self-audit write-путь (%s)", want)
+		t.Fatalf("audit NOT recorded on a successful 2xx - huma broke the self-audit write path (%s)", want)
 	}
 	ev := evs[0]
 	if ev.EventType != want {
@@ -663,10 +663,10 @@ func assertSelfAudit(t *testing.T, cap *auditCaptureWriter, want audit.EventType
 		t.Errorf("archon_aid = %q, want archon-alice", ev.ArchonAID)
 	}
 	if len(ev.Payload) == 0 {
-		t.Error("audit payload empty — self-audit потерял toменный payload")
+		t.Error("audit payload empty - self-audit lost the payload")
 	}
 	if ev.Payload[requiredKey] == nil {
-		t.Errorf("audit payload без %q: %+v", requiredKey, ev.Payload)
+		t.Errorf("audit payload missing %q: %+v", requiredKey, ev.Payload)
 	}
 }
 
@@ -677,7 +677,7 @@ func normalizeJSONKeys(t *testing.T, raw []byte) string {
 	t.Helper()
 	var m map[string]any
 	if err := json.Unmarshal(raw, &m); err != nil {
-		t.Fatalf("reply не JSON-object: %v; raw=%s", err, raw)
+		t.Fatalf("reply is not a JSON object: %v; raw=%s", err, raw)
 	}
 	out, err := json.Marshal(m)
 	if err != nil {

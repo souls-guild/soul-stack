@@ -64,14 +64,14 @@ func TestMaskRunPlanParams_SealedSecretMasked(t *testing.T) {
 	raw := maskRunPlanParams(task, map[string]bool{"password": true})
 
 	if bytes.Contains(raw, []byte(secret)) {
-		t.Fatalf("★ секрет %q утёк в params plaintext: %s", secret, raw)
+		t.Fatalf("★ secret %q leaked into params plaintext: %s", secret, raw)
 	}
 	got := decodeRunPlanParams(t, raw)
 	if got["password"] != "***MASKED***" {
 		t.Errorf("password = %v, want ***MASKED***", got["password"])
 	}
 	if got["command"] != "redis-cli" {
-		t.Errorf("command = %v, want redis-cli (не секрет — сохранён)", got["command"])
+		t.Errorf("command = %v, want redis-cli (not a secret - kept)", got["command"])
 	}
 }
 
@@ -96,7 +96,7 @@ func TestMaskRunPlanParams_VaultRefAndSensitiveKey(t *testing.T) {
 		t.Errorf("token (sensitive key) = %v, want masked", got["token"])
 	}
 	if got["host"] != "10.0.0.1" {
-		t.Errorf("host = %v, want 10.0.0.1 (не секрет — сохранён)", got["host"])
+		t.Errorf("host = %v, want 10.0.0.1 (not a secret - kept)", got["host"])
 	}
 }
 
@@ -114,13 +114,13 @@ func TestMaskRunPlanParams_TransportFiltered(t *testing.T) {
 	}
 	got := decodeRunPlanParams(t, maskRunPlanParams(task, nil))
 	if _, ok := got["template_content"]; ok {
-		t.Errorf("template_content не отфильтрован: %v", got)
+		t.Errorf("template_content not filtered out: %v", got)
 	}
 	if _, ok := got["render_context"]; ok {
-		t.Errorf("render_context не отфильтрован: %v", got)
+		t.Errorf("render_context not filtered out: %v", got)
 	}
 	if got["path"] != "/etc/app.conf" {
-		t.Errorf("path = %v, want /etc/app.conf (сохранён)", got["path"])
+		t.Errorf("path = %v, want /etc/app.conf (kept)", got["path"])
 	}
 }
 
@@ -149,7 +149,7 @@ func TestMaskRunPlanParams_NilAndEmptyRemainder(t *testing.T) {
 		Params: mustParamsStruct(t, map[string]any{"template_content": "x"}),
 	}
 	if raw := maskRunPlanParams(only, nil); raw != nil {
-		t.Errorf("только транспорт → %s, want nil (пустой остаток)", raw)
+		t.Errorf("transport-only → %s, want nil (empty remainder)", raw)
 	}
 }
 
@@ -168,18 +168,18 @@ func TestMaskRunPlanParams_NestedSealedMasked(t *testing.T) {
 	}
 	raw := maskRunPlanParams(task, map[string]bool{"acl[].password": true})
 	if bytes.Contains(raw, []byte(secret)) {
-		t.Fatalf("★ вложенный секрет утёк plaintext: %s", raw)
+		t.Fatalf("★ nested secret leaked plaintext: %s", raw)
 	}
 	got := decodeRunPlanParams(t, raw)
 	acl, ok := got["acl"].([]any)
 	if !ok || len(acl) != 1 {
-		t.Fatalf("acl = %v, want срез из 1 элемента", got["acl"])
+		t.Fatalf("acl = %v, want a slice of 1 element", got["acl"])
 	}
 	row, _ := acl[0].(map[string]any)
 	if row["password"] != "***MASKED***" {
 		t.Errorf("acl[0].password = %v, want ***MASKED***", row["password"])
 	}
 	if row["user"] != "alice" {
-		t.Errorf("acl[0].user = %v, want alice (не секрет — сохранён)", row["user"])
+		t.Errorf("acl[0].user = %v, want alice (not a secret - kept)", row["user"])
 	}
 }

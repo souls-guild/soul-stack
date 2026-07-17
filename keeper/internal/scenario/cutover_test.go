@@ -118,15 +118,15 @@ func TestIntegration_DispatchPlanned_WritesPlannedAndSummons(t *testing.T) {
 			t.Fatalf("SelectByApplyID(%s): %v", sid, err)
 		}
 		if got.Recipe == nil {
-			t.Fatalf("planned %s без recipe", sid)
+			t.Fatalf("planned %s without recipe", sid)
 		}
 		if got.Recipe.Input["db_password"] != "vault:secret/db-creds#password" {
-			t.Errorf("%s recipe несёт раскрытый секрет вместо vault-ref: %v", sid, got.Recipe.Input["db_password"])
+			t.Errorf("%s recipe carries a revealed secret instead of vault-ref: %v", sid, got.Recipe.Input["db_password"])
 		}
 	}
 
 	if summons.n.Load() != 1 {
-		t.Errorf("PublishSummons вызван %d раз, want 1", summons.n.Load())
+		t.Errorf("PublishSummons called %d times, want 1", summons.n.Load())
 	}
 
 	// Acolyte drives both planned → running → success (mockDispatcher simulates Soul).
@@ -188,13 +188,13 @@ func TestIntegration_SerialGuard_FallsBackToOldPath(t *testing.T) {
 	waitRunDone(t, "noop-prod", applyID, incarnation.StatusReady)
 	// Old path: SendApply is called directly (no Acolyte), the row went through running.
 	if disp.calls != 1 {
-		t.Errorf("SendApply calls = %d, want 1 (старый путь serial-guard)", disp.calls)
+		t.Errorf("SendApply calls = %d, want 1 (old serial-guard path)", disp.calls)
 	}
 	// The old inline path (dispatchWave) does NOT set attempt — fencing epoch
 	// degenerates there (no Ward-claim/recovery), on the wire attempt=0 (= old Keeper
 	// without fencing, ADR-027(g), S-P2.2). This is intentional, not a bug.
 	if disp.gotAttempt != 0 {
-		t.Errorf("ApplyRequest.Attempt = %d, want 0 (старый dispatchWave-путь не фенсит)", disp.gotAttempt)
+		t.Errorf("ApplyRequest.Attempt = %d, want 0 (old dispatchWave path does not fence)", disp.gotAttempt)
 	}
 }
 
@@ -239,7 +239,7 @@ func TestIntegration_RenderForHost_SingleHost(t *testing.T) {
 	// The plan targets exactly this SID.
 	host := groupByHost(tasks, plans)["host-a.example.com"]
 	if len(host) != 1 {
-		t.Errorf("host-a задачи = %d, want 1", len(host))
+		t.Errorf("host-a tasks = %d, want 1", len(host))
 	}
 }
 
@@ -270,7 +270,7 @@ func TestIntegration_RenderForHost_HostNotInRoster(t *testing.T) {
 	_, _, err = RenderForHost(context.Background(), deps, recipe,
 		"noop-prod", audit.NewULID(), "ghost.example.com")
 	if err == nil {
-		t.Fatalf("RenderForHost для хоста вне roster-а прошёл, want ошибку")
+		t.Fatalf("RenderForHost for a host outside the roster succeeded, want an error")
 	}
 }
 
@@ -302,11 +302,11 @@ func TestIntegration_Claim_HappyPath(t *testing.T) {
 	// Fencing propagation (ADR-027(g)): claim puts run.Attempt into
 	// ApplyRequest.Attempt. ClaimNext incremented 0→1, so on the wire attempt=1.
 	if got := disp.lastAttempt.Load(); got != 1 {
-		t.Errorf("ApplyRequest.Attempt = %d, want 1 (claim пробрасывает run.Attempt)", got)
+		t.Errorf("ApplyRequest.Attempt = %d, want 1 (claim forwards run.Attempt)", got)
 	}
 	// SendApply saw the row already dispatched — the mark happens strictly BEFORE send.
 	if disp.statusAtSend != string(applyrun.StatusDispatched) {
-		t.Errorf("статус на момент SendApply = %q, want dispatched (MarkDispatched строго ДО send)", disp.statusAtSend)
+		t.Errorf("status at SendApply time = %q, want dispatched (MarkDispatched strictly BEFORE send)", disp.statusAtSend)
 	}
 
 	got, err := applyrun.SelectByApplyID(ctx, integrationPool, "01HCLAIMOK", "host-a.example.com")
@@ -314,10 +314,10 @@ func TestIntegration_Claim_HappyPath(t *testing.T) {
 		t.Fatalf("SelectByApplyID: %v", err)
 	}
 	if got.Status != applyrun.StatusDispatched {
-		t.Errorf("status = %q, want dispatched (claimed→dispatched перед SendApply)", got.Status)
+		t.Errorf("status = %q, want dispatched (claimed->dispatched before SendApply)", got.Status)
 	}
 	if got.Attempt != 1 {
-		t.Errorf("attempt = %d, want 1 (claim инкрементит)", got.Attempt)
+		t.Errorf("attempt = %d, want 1 (claim increments it)", got.Attempt)
 	}
 }
 
@@ -343,7 +343,7 @@ func TestIntegration_Claim_MarkDispatchedBeforeSend(t *testing.T) {
 		t.Fatalf("SendApply calls = %d, want 1", disp.calls.Load())
 	}
 	if disp.statusAtSend != string(applyrun.StatusDispatched) {
-		t.Errorf("статус на момент SendApply = %q, want dispatched", disp.statusAtSend)
+		t.Errorf("status at SendApply time = %q, want dispatched", disp.statusAtSend)
 	}
 }
 
@@ -365,14 +365,14 @@ func TestIntegration_Claim_SendApplyFails_Failed(t *testing.T) {
 		t.Fatalf("Claim: %v", err)
 	}
 	if disp.calls.Load() != 1 {
-		t.Fatalf("SendApply calls = %d, want 1 (попытка доставки была)", disp.calls.Load())
+		t.Fatalf("SendApply calls = %d, want 1 (a delivery attempt was made)", disp.calls.Load())
 	}
 	got, err := applyrun.SelectByApplyID(ctx, integrationPool, "01HSENDFAIL", "host-a.example.com")
 	if err != nil {
 		t.Fatalf("SelectByApplyID: %v", err)
 	}
 	if got.Status != applyrun.StatusFailed {
-		t.Errorf("status = %q, want failed (SendApply-ошибка терминалит из dispatched)", got.Status)
+		t.Errorf("status = %q, want failed (SendApply error terminalizes from dispatched)", got.Status)
 	}
 	if got.ErrorSummary == nil || *got.ErrorSummary != "send_apply_failed" {
 		t.Errorf("error_summary = %v, want send_apply_failed", got.ErrorSummary)
@@ -398,14 +398,14 @@ func TestIntegration_Claim_NoOpHost(t *testing.T) {
 		t.Fatalf("Claim: %v", err)
 	}
 	if disp.calls.Load() != 0 {
-		t.Errorf("SendApply calls = %d, want 0 (no-op хост)", disp.calls.Load())
+		t.Errorf("SendApply calls = %d, want 0 (no-op host)", disp.calls.Load())
 	}
 	got, err := applyrun.SelectByApplyID(ctx, integrationPool, "01HCLAIMNOOP", "host-a.example.com")
 	if err != nil {
 		t.Fatalf("SelectByApplyID: %v", err)
 	}
 	if got.Status != applyrun.StatusNoMatch {
-		t.Errorf("status = %q, want no_match (FINDING-01 (б): no-op хост — отдельный benign-терминал)", got.Status)
+		t.Errorf("status = %q, want no_match (FINDING-01 (b): no-op host - separate benign terminal)", got.Status)
 	}
 }
 
@@ -433,20 +433,20 @@ func TestIntegration_Claim_RenderError_FailedMasked(t *testing.T) {
 		t.Fatalf("Claim: %v", err)
 	}
 	if disp.calls.Load() != 0 {
-		t.Errorf("SendApply calls = %d, want 0 (render упал до отправки)", disp.calls.Load())
+		t.Errorf("SendApply calls = %d, want 0 (render failed before sending)", disp.calls.Load())
 	}
 	got, err := applyrun.SelectByApplyID(ctx, integrationPool, "01HCLAIMERR", "host-a.example.com")
 	if err != nil {
 		t.Fatalf("SelectByApplyID: %v", err)
 	}
 	if got.Status != applyrun.StatusFailed {
-		t.Errorf("status = %q, want failed (render-ошибка)", got.Status)
+		t.Errorf("status = %q, want failed (render error)", got.Status)
 	}
 	if got.ErrorSummary == nil {
 		t.Fatalf("error_summary nil, want masked-summary")
 	}
 	if strings.Contains(*got.ErrorSummary, "vault:secret/db-creds") {
-		t.Errorf("error_summary несёт голый vault-ref: %q", *got.ErrorSummary)
+		t.Errorf("error_summary carries a bare vault-ref: %q", *got.ErrorSummary)
 	}
 }
 
@@ -512,7 +512,7 @@ func waitForPlanned(t *testing.T, applyID string, n int) {
 		}
 		time.Sleep(20 * time.Millisecond)
 	}
-	t.Fatalf("planned-строк %d не появилось за 10s для %s", n, applyID)
+	t.Fatalf("%d planned rows did not appear within 10s for %s", n, applyID)
 }
 
 // driveClaims loops ClaimRunner.Claim until all n tasks reach
@@ -540,7 +540,7 @@ func driveClaims(t *testing.T, cr *ClaimRunner, applyID string, n int) {
 		}
 		time.Sleep(20 * time.Millisecond)
 	}
-	t.Fatalf("claims не доведены до терминала за 10s для %s", applyID)
+	t.Fatalf("claims did not reach a terminal state within 10s for %s", applyID)
 }
 
 // insertPlannedFixture writes one planned task with a recipe for the noop scenario.

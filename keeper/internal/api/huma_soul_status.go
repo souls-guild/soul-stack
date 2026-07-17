@@ -59,10 +59,10 @@ var soulTransportEnum = []any{
 	string(soul.TransportSSH),
 }
 
-const soulStatusDescription = "Soul status в реестре."
+const soulStatusDescription = "Soul status in the registry."
 
-const soulTransportDescription = "Споwithб toставки конфигурации. agent — демон soul on top of " +
-	"mTLS gRPC stream; ssh — push без агента."
+const soulTransportDescription = "Configuration delivery method. agent — soul daemon on top of " +
+	"mTLS gRPC stream; ssh — agentless push."
 
 	// SchemaProvider targets — the NATIVE enum types SoulStatus / SoulTransport (huma_enums.go,
 	// T5d-2c-full Phase 1). The native enum types implement huma.SchemaProvider themselves (emitting

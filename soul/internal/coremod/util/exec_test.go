@@ -111,12 +111,12 @@ func TestOSRunner_ContextTimeoutKillsProcess(t *testing.T) {
 	elapsed := time.Since(start)
 
 	if elapsed > 5*time.Second {
-		t.Fatalf("Run took %v — процесс не был убит по таймауту", elapsed)
+		t.Fatalf("Run took %v - process was not killed on timeout", elapsed)
 	}
 	// A process killed by signal returns either a start error or a non-zero
 	// exit — either way, not success.
 	if res.OK() {
-		t.Fatalf("OK()=true want false (процесс должен быть прерван), elapsed=%v", elapsed)
+		t.Fatalf("OK()=true want false (process should have been interrupted), elapsed=%v", elapsed)
 	}
 }
 
@@ -134,10 +134,10 @@ func TestOSRunner_ContextCancelKillsProcess(t *testing.T) {
 	elapsed := time.Since(start)
 
 	if elapsed > 5*time.Second {
-		t.Fatalf("Run took %v — cancel не прервал процесс", elapsed)
+		t.Fatalf("Run took %v - cancel did not interrupt the process", elapsed)
 	}
 	if res.OK() {
-		t.Fatalf("OK()=true want false (cancel должен прервать), elapsed=%v", elapsed)
+		t.Fatalf("OK()=true want false (cancel should interrupt), elapsed=%v", elapsed)
 	}
 }
 

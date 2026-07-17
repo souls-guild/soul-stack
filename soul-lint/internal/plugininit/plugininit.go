@@ -173,7 +173,7 @@ func buildVars(opts Options) (TemplateVars, error) {
 	}
 	description := strings.TrimSpace(opts.Description)
 	if description == "" {
-		description = "TODO: краткое описание плагина (1-2 параграфа)."
+		description = "TODO: short plugin description (1-2 paragraphs)."
 	}
 
 	// `<author>` in the module path is kebab-case (like a GitHub username);
@@ -320,14 +320,14 @@ func renderBytes(name string, data []byte, vars TemplateVars) ([]byte, error) {
 }
 
 func printNextSteps(w io.Writer, outDir string, vars TemplateVars) {
-	fmt.Fprintf(w, "scaffold создан: %s\n", outDir)
+	fmt.Fprintf(w, "scaffold created: %s\n", outDir)
 	fmt.Fprintln(w, "")
-	fmt.Fprintln(w, "следующие шаги:")
+	fmt.Fprintln(w, "next steps:")
 	fmt.Fprintf(w, "  cd %s\n", outDir)
-	fmt.Fprintf(w, "  # 1. отредактируйте manifest.yaml::spec.states.<state>.input под ваш ресурс\n")
-	fmt.Fprintf(w, "  # 2. реализуйте Apply в internal/%s/handler.go\n", vars.NamePackage)
-	fmt.Fprintln(w, "  # 3. (опционально) реализуйте Plan + PlanReadSafe для drift-detect (ADR-031)")
-	fmt.Fprintln(w, "  # 4. подгоните L0/L1-тесты под реальную имплементацию")
+	fmt.Fprintf(w, "  # 1. edit manifest.yaml::spec.states.<state>.input for your resource\n")
+	fmt.Fprintf(w, "  # 2. implement Apply in internal/%s/handler.go\n", vars.NamePackage)
+	fmt.Fprintln(w, "  # 3. (optional) implement Plan + PlanReadSafe for drift-detect (ADR-031)")
+	fmt.Fprintln(w, "  # 4. adapt the L0/L1 tests to the real implementation")
 	fmt.Fprintln(w, "  make check    # gofmt + vet + test + build")
 	fmt.Fprintln(w, "")
 	fmt.Fprintf(w, "binary: %s/bin/%s\n", outDir, vars.BinaryName)

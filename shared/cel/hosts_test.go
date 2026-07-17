@@ -50,7 +50,7 @@ func TestHosts_ListProjection(t *testing.T) {
 		t.Fatalf("EvalExpression: %v", err)
 	}
 	if got := out.Value(); got != int64(3) {
-		t.Fatalf("soulprint.hosts.size(): ожидали 3, получили %v", got)
+		t.Fatalf("soulprint.hosts.size(): expected 3, got %v", got)
 	}
 }
 
@@ -61,7 +61,7 @@ func TestHosts_WhereByRole(t *testing.T) {
 		t.Fatalf("EvalExpression: %v", err)
 	}
 	if got := out.Value(); got != int64(1) {
-		t.Fatalf("where role==primary size: ожидали 1, получили %v", got)
+		t.Fatalf("where role==primary size: expected 1, got %v", got)
 	}
 }
 
@@ -72,7 +72,7 @@ func TestHosts_WhereByCoven(t *testing.T) {
 		t.Fatalf("EvalExpression: %v", err)
 	}
 	if got := out.Value(); got != int64(2) {
-		t.Fatalf("where 'web' in covens size: ожидали 2, получили %v", got)
+		t.Fatalf("where 'web' in covens size: expected 2, got %v", got)
 	}
 }
 
@@ -83,7 +83,7 @@ func TestHosts_WhereByOs(t *testing.T) {
 		t.Fatalf("EvalExpression: %v", err)
 	}
 	if got := out.Value(); got != int64(1) {
-		t.Fatalf("where os.family==rhel size: ожидали 1, получили %v", got)
+		t.Fatalf("where os.family==rhel size: expected 1, got %v", got)
 	}
 }
 
@@ -95,7 +95,7 @@ func TestHosts_WhereWithExternalContext(t *testing.T) {
 		t.Fatalf("EvalExpression: %v", err)
 	}
 	if got := out.Value(); got != int64(3) {
-		t.Fatalf("where incarnation.name in covens size: ожидали 3 (все в prod), получили %v", got)
+		t.Fatalf("where incarnation.name in covens size: expected 3 (all in prod), got %v", got)
 	}
 }
 
@@ -114,7 +114,7 @@ func TestHosts_WhereEqualsSoulprintWhere(t *testing.T) {
 		t.Fatalf("soulprint.where (%v) != soulprint.hosts.where (%v)", a.Value(), b.Value())
 	}
 	if a.Value() != int64(2) {
-		t.Fatalf("ожидали 2, получили %v", a.Value())
+		t.Fatalf("expected 2, got %v", a.Value())
 	}
 }
 
@@ -126,7 +126,7 @@ func TestHosts_FirstElementIndex0(t *testing.T) {
 		t.Fatalf("EvalExpression: %v", err)
 	}
 	if got := out.Value(); got != "10.0.0.1" {
-		t.Fatalf("[0].network.primary_ip: ожидали 10.0.0.1, получили %v", got)
+		t.Fatalf("[0].network.primary_ip: expected 10.0.0.1, got %v", got)
 	}
 }
 
@@ -137,7 +137,7 @@ func TestHosts_Interpolation(t *testing.T) {
 		t.Fatalf("EvalInterpolation: %v", err)
 	}
 	if out != "ip=10.0.0.1" {
-		t.Fatalf("ожидали ip=10.0.0.1, получили %v", out)
+		t.Fatalf("expected ip=10.0.0.1, got %v", out)
 	}
 }
 
@@ -146,10 +146,10 @@ func TestHosts_NonLiteralPredicate(t *testing.T) {
 	// Dynamic predicate (string concatenation) → clear compile error.
 	_, err := e.EvalExpression(`soulprint.hosts.where("'" + incarnation.name + "' in covens").size()`, scenarioVars())
 	if err == nil {
-		t.Fatalf("ожидали ошибку для не-литерального предиката")
+		t.Fatalf("expected an error for a non-literal predicate")
 	}
 	if !strings.Contains(err.Error(), "static string literal") {
-		t.Fatalf("ожидали сообщение про static string literal, получили: %v", err)
+		t.Fatalf("expected a message about static string literal, got: %v", err)
 	}
 }
 
@@ -157,7 +157,7 @@ func TestHosts_NonStringLiteralPredicate(t *testing.T) {
 	e := newEngine(t)
 	_, err := e.EvalExpression(`soulprint.hosts.where(42).size()`, scenarioVars())
 	if err == nil || !strings.Contains(err.Error(), "static string literal") {
-		t.Fatalf("ожидали ошибку про static string literal, получили: %v", err)
+		t.Fatalf("expected an error about static string literal, got: %v", err)
 	}
 }
 
@@ -169,10 +169,10 @@ func TestHosts_ReceiverNotSoulprint(t *testing.T) {
 		AllowHosts: true,
 	})
 	if err == nil {
-		t.Fatalf("ожидали ошибку для generic .where на input.xs")
+		t.Fatalf("expected an error for generic .where on input.xs")
 	}
 	if !strings.Contains(err.Error(), "soulprint.hosts") {
-		t.Fatalf("ожидали сообщение про разрешённый только soulprint receiver, получили: %v", err)
+		t.Fatalf("expected a message about only soulprint being an allowed receiver, got: %v", err)
 	}
 }
 
@@ -180,10 +180,10 @@ func TestHosts_NestedWhere(t *testing.T) {
 	e := newEngine(t)
 	_, err := e.EvalExpression(`soulprint.hosts.where("soulprint.hosts.where('role == \"primary\"').size() > 0").size()`, scenarioVars())
 	if err == nil {
-		t.Fatalf("ожидали ошибку для nested .where в предикате")
+		t.Fatalf("expected an error for nested .where in the predicate")
 	}
 	if !strings.Contains(err.Error(), "nested") {
-		t.Fatalf("ожидали сообщение про nested .where, получили: %v", err)
+		t.Fatalf("expected a message about nested .where, got: %v", err)
 	}
 }
 
@@ -195,12 +195,12 @@ func TestHosts_DestinyIsolation(t *testing.T) {
 	_, err := e.EvalExpression("soulprint.hosts.size()", v)
 	var ue *ErrUnsupported
 	if !errors.As(err, &ue) {
-		t.Fatalf("ожидали *ErrUnsupported (изоляция destiny), получили %T: %v", err, err)
+		t.Fatalf("expected *ErrUnsupported (destiny isolation), got %T: %v", err, err)
 	}
 	// soulprint.where is cut off by isolation too.
 	_, err = e.EvalExpression(`soulprint.where("'web' in covens").size()`, v)
 	if !errors.As(err, &ue) {
-		t.Fatalf("ожидали *ErrUnsupported для soulprint.where в destiny, получили %T: %v", err, err)
+		t.Fatalf("expected *ErrUnsupported for soulprint.where in destiny, got %T: %v", err, err)
 	}
 }
 
@@ -212,10 +212,10 @@ func TestHosts_DestinyIsolationDoesNotAffectSelf(t *testing.T) {
 		AllowHosts:    false,
 	})
 	if err != nil {
-		t.Fatalf("soulprint.self при AllowHosts=false: %v", err)
+		t.Fatalf("soulprint.self with AllowHosts=false: %v", err)
 	}
 	if out.Value() != "web-1.example.com" {
-		t.Fatalf("ожидали web-1.example.com, получили %v", out.Value())
+		t.Fatalf("expected web-1.example.com, got %v", out.Value())
 	}
 }
 
@@ -233,7 +233,7 @@ func TestHosts_IterVarCollision(t *testing.T) {
 		t.Fatalf("EvalExpression: %v", err)
 	}
 	if got := out.Value(); got != int64(1) {
-		t.Fatalf("ожидали 1, получили %v", got)
+		t.Fatalf("expected 1, got %v", got)
 	}
 	// Predicate explicitly referencing the element's __host field: the iter
 	// variable must not shadow it (it is renamed to __host0).
@@ -242,7 +242,7 @@ func TestHosts_IterVarCollision(t *testing.T) {
 		t.Fatalf("EvalExpression (__host field): %v", err)
 	}
 	if got := out.Value(); got != int64(1) {
-		t.Fatalf("where __host=='x': ожидали 1, получили %v", got)
+		t.Fatalf("where __host=='x': expected 1, got %v", got)
 	}
 }
 
@@ -254,7 +254,7 @@ func TestHosts_EmptyHostsList(t *testing.T) {
 		t.Fatalf("EvalExpression: %v", err)
 	}
 	if got := out.Value(); got != int64(0) {
-		t.Fatalf("пустой soulprint.hosts: ожидали 0, получили %v", got)
+		t.Fatalf("empty soulprint.hosts: expected 0, got %v", got)
 	}
 }
 
@@ -265,7 +265,7 @@ func TestHosts_SizeFunctionForm(t *testing.T) {
 		t.Fatalf("EvalExpression: %v", err)
 	}
 	if out.Value() != true {
-		t.Fatalf("ожидали true, получили %v", out.Value())
+		t.Fatalf("expected true, got %v", out.Value())
 	}
 }
 
@@ -280,7 +280,7 @@ func TestHosts_WhereWithMacroExistsPredicate(t *testing.T) {
 		t.Fatalf("EvalExpression: %v", err)
 	}
 	if got := out.Value(); got != int64(1) {
-		t.Fatalf("where covens.exists(db) size: ожидали 1, получили %v", got)
+		t.Fatalf("where covens.exists(db) size: expected 1, got %v", got)
 	}
 }
 
@@ -292,7 +292,7 @@ func TestHosts_WhereWithMacroAllPredicate(t *testing.T) {
 		t.Fatalf("EvalExpression: %v", err)
 	}
 	if got := out.Value(); got != int64(3) {
-		t.Fatalf("where covens.all size: ожидали 3, получили %v", got)
+		t.Fatalf("where covens.all size: expected 3, got %v", got)
 	}
 }
 
@@ -308,7 +308,7 @@ func TestHosts_MacroAdjacentToWhere(t *testing.T) {
 		t.Fatalf("EvalExpression: %v", err)
 	}
 	if out.Value() != true {
-		t.Fatalf("макрос рядом с .where: ожидали true, получили %v", out.Value())
+		t.Fatalf("macro adjacent to .where: expected true, got %v", out.Value())
 	}
 }
 
@@ -322,7 +322,7 @@ func TestHosts_WhereWithMacroMapPredicate(t *testing.T) {
 		t.Fatalf("EvalExpression: %v", err)
 	}
 	if got := out.Value(); got != int64(2) {
-		t.Fatalf("where covens.map size: ожидали 2, получили %v", got)
+		t.Fatalf("where covens.map size: expected 2, got %v", got)
 	}
 }
 
@@ -334,11 +334,11 @@ func TestHosts_EmptyFilterIndex0(t *testing.T) {
 	// (index out of bounds / no such overload), NOT a panic, NOT opaque internal.
 	_, err := e.EvalExpression(`soulprint.hosts.where("role == 'no-such-role'")[0].sid`, scenarioVars())
 	if err == nil {
-		t.Fatalf("ожидали runtime-ошибку для [0] над пустым фильтром")
+		t.Fatalf("expected a runtime error for [0] over an empty filter")
 	}
 	var ee *ErrEval
 	if !errors.As(err, &ee) {
-		t.Fatalf("ожидали *ErrEval (runtime), получили %T: %v", err, err)
+		t.Fatalf("expected *ErrEval (runtime), got %T: %v", err, err)
 	}
 }
 
@@ -353,11 +353,11 @@ func TestHosts_WhereOnHostMissingFact(t *testing.T) {
 	v := Vars{SoulprintHosts: hosts, AllowHosts: true}
 	_, err := e.EvalExpression(`soulprint.hosts.where("os.family == 'debian'").size()`, v)
 	if err == nil {
-		t.Fatalf("ожидали runtime-ошибку для where над хостом без факта os")
+		t.Fatalf("expected a runtime error for where over a host missing the os fact")
 	}
 	var ee *ErrEval
 	if !errors.As(err, &ee) {
-		t.Fatalf("ожидали *ErrEval (no such key), получили %T: %v", err, err)
+		t.Fatalf("expected *ErrEval (no such key), got %T: %v", err, err)
 	}
 }
 
@@ -370,11 +370,11 @@ func TestHosts_Index0NetworkOnHostMissingFact(t *testing.T) {
 	v := Vars{SoulprintHosts: hosts, AllowHosts: true}
 	_, err := e.EvalExpression(`soulprint.hosts.where("role == 'primary'")[0].network.primary_ip`, v)
 	if err == nil {
-		t.Fatalf("ожидали runtime-ошибку для .network над хостом без факта network")
+		t.Fatalf("expected a runtime error for .network over a host missing the network fact")
 	}
 	var ee *ErrEval
 	if !errors.As(err, &ee) {
-		t.Fatalf("ожидали *ErrEval (no such key), получили %T: %v", err, err)
+		t.Fatalf("expected *ErrEval (no such key), got %T: %v", err, err)
 	}
 }
 
@@ -384,11 +384,11 @@ func TestHosts_PredicateUnbalancedParen(t *testing.T) {
 	// syntax error (does not break the surrounding expression, no panic).
 	_, err := e.EvalExpression(`soulprint.hosts.where("role == 'primary')").size()`, scenarioVars())
 	if err == nil {
-		t.Fatalf("ожидали syntax-ошибку для несбалансированной скобки в предикате")
+		t.Fatalf("expected a syntax error for an unbalanced paren in the predicate")
 	}
 	var ce *ErrCompile
 	if !errors.As(err, &ce) {
-		t.Fatalf("ожидали *ErrCompile (syntax), получили %T: %v", err, err)
+		t.Fatalf("expected *ErrCompile (syntax), got %T: %v", err, err)
 	}
 }
 
@@ -401,7 +401,7 @@ func TestHosts_PredicateNestedQuoteOk(t *testing.T) {
 		t.Fatalf("EvalExpression: %v", err)
 	}
 	if got := out.Value(); got != int64(1) {
-		t.Fatalf("where sid==... (вложенная кавычка): ожидали 1, получили %v", got)
+		t.Fatalf("where sid==... (nested quote): expected 1, got %v", got)
 	}
 }
 
@@ -415,6 +415,6 @@ func TestHosts_MixedPredicateBothSides(t *testing.T) {
 		t.Fatalf("EvalExpression: %v", err)
 	}
 	if got := out.Value(); got != int64(1) {
-		t.Fatalf("where sid == soulprint.self.sid size: ожидали 1, получили %v", got)
+		t.Fatalf("where sid == soulprint.self.sid size: expected 1, got %v", got)
 	}
 }

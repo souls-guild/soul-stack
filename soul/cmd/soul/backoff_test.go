@@ -33,7 +33,7 @@ func TestNextDelay_DoublesUntilCap(t *testing.T) {
 func TestLeaseHeldCap_ProgressionStaysModest(t *testing.T) {
 	t.Parallel()
 	if leaseHeldBackoffCap > 5*time.Second {
-		t.Fatalf("leaseHeldBackoffCap = %s, want ≤ 5s (recovery-latency требует модест-cap)", leaseHeldBackoffCap)
+		t.Fatalf("leaseHeldBackoffCap = %s, want ≤ 5s (recovery-latency requires a modest cap)", leaseHeldBackoffCap)
 	}
 	// initial=1s, double repeatedly — should converge to cap, never above.
 	d := 1 * time.Second

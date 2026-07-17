@@ -33,7 +33,7 @@ func assertNoMutatingMountCalls(t *testing.T, r *internaltest.Runner) {
 	for _, c := range r.Calls {
 		for _, bad := range []string{"mount -", "mount /", "umount"} {
 			if len(c) >= len(bad) && c[:len(bad)] == bad {
-				t.Fatalf("Plan вызвал мутирующую команду %q (должен быть pure-read)", c)
+				t.Fatalf("Plan called a mutating command %q (should be pure-read)", c)
 			}
 		}
 	}
@@ -70,7 +70,7 @@ func TestPlan_Present_AlreadyMountedInFstab_Clean(t *testing.T) {
 	}
 	now, _ := os.ReadFile(fstab)
 	if string(now) != string(beforeFstab) {
-		t.Fatalf("Plan изменил fstab: %q != %q", string(now), string(beforeFstab))
+		t.Fatalf("Plan changed fstab: %q != %q", string(now), string(beforeFstab))
 	}
 	assertNoMutatingMountCalls(t, r)
 }
@@ -105,7 +105,7 @@ func TestPlan_Present_NotInFstab_Drift(t *testing.T) {
 	}
 	now, _ := os.ReadFile(fstab)
 	if string(now) != string(beforeFstab) {
-		t.Fatalf("Plan изменил fstab")
+		t.Fatalf("Plan changed fstab")
 	}
 	assertNoMutatingMountCalls(t, r)
 }

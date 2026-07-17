@@ -40,7 +40,7 @@ func RegisterBeaconMetrics(reg *obs.Registry) *BeaconMetrics {
 	m := &BeaconMetrics{
 		portentsDropped: prometheus.NewCounter(prometheus.CounterOpts{
 			Name: "soul_beacon_portents_dropped_total",
-			Help: "Количество Portent-ов, отброшенных при переполнении буфера канала (writer-loop отстаёт / нет сессии).",
+			Help: "Number of Portents dropped on channel buffer overflow (writer-loop lagging / no session).",
 		}),
 	}
 	reg.Registerer().MustRegister(m.portentsDropped)

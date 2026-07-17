@@ -124,18 +124,18 @@ func TestIntegration_PreflightAssert_TopologyMismatch_Fails(t *testing.T) {
 		StartedByAID:    "archon-alice",
 	})
 	if err == nil {
-		t.Fatal("PreflightAssert: несходящаяся топология должна дать ошибку, got nil")
+		t.Fatal("PreflightAssert: a non-converging topology must give an error, got nil")
 	}
 	if !errors.Is(err, render.ErrAssertFailed) {
-		t.Fatalf("err не ErrAssertFailed: %v", err)
+		t.Fatalf("err is not ErrAssertFailed: %v", err)
 	}
 	if !strings.Contains(err.Error(), "topology mismatch") {
-		t.Errorf("ошибка не несёт авторский message: %v", err)
+		t.Errorf("error does not carry the author message: %v", err)
 	}
 
 	// FORM-A INVARIANT: incarnation is NOT created (pre-flight writes nothing to PG).
 	if cnt := countIncarnations(t, "redis-new"); cnt != 0 {
-		t.Errorf("incarnation создана на pre-flight-fail (rows=%d), want 0 — pre-flight read-only до Create", cnt)
+		t.Errorf("incarnation created on pre-flight-fail (rows=%d), want 0 - pre-flight is read-only until Create", cnt)
 	}
 }
 
@@ -158,7 +158,7 @@ func TestIntegration_PreflightAssert_TopologyMatches_Passes(t *testing.T) {
 		StartedByAID:    "archon-alice",
 	})
 	if err != nil {
-		t.Fatalf("PreflightAssert: сходящаяся топология должна пройти, got %v", err)
+		t.Fatalf("PreflightAssert: a converging topology must pass, got %v", err)
 	}
 }
 
@@ -181,7 +181,7 @@ func TestIntegration_PreflightAssert_StandaloneSkipsClusterGuard(t *testing.T) {
 		StartedByAID:    "archon-alice",
 	})
 	if err != nil {
-		t.Fatalf("PreflightAssert: standalone-режим не должен вычислять cluster-assert, got %v", err)
+		t.Fatalf("PreflightAssert: standalone mode must not compute cluster-assert, got %v", err)
 	}
 }
 
@@ -298,16 +298,16 @@ func TestIntegration_PreflightAssert_AssertInIncludeBranch_Fails(t *testing.T) {
 		StartedByAID:    "archon-alice",
 	})
 	if err == nil {
-		t.Fatal("PreflightAssert: assert в include-ветке должен сработать, got nil (РЕГРЕСС: include не раскрыт до hasAssertTask)")
+		t.Fatal("PreflightAssert: assert in the include branch must fire, got nil (REGRESSION: include not expanded before hasAssertTask)")
 	}
 	if !errors.Is(err, render.ErrAssertFailed) {
-		t.Fatalf("err не ErrAssertFailed: %v", err)
+		t.Fatalf("err is not ErrAssertFailed: %v", err)
 	}
 	if !strings.Contains(err.Error(), "topology mismatch") {
-		t.Errorf("ошибка не несёт авторский message: %v", err)
+		t.Errorf("error does not carry the author message: %v", err)
 	}
 	if cnt := countIncarnations(t, "redis-dispatch-fail"); cnt != 0 {
-		t.Errorf("incarnation создана на pre-flight-fail (rows=%d), want 0", cnt)
+		t.Errorf("incarnation created on pre-flight-fail (rows=%d), want 0", cnt)
 	}
 }
 
@@ -330,7 +330,7 @@ func TestIntegration_PreflightAssert_AssertInIncludeBranch_Passes(t *testing.T) 
 		StartedByAID:    "archon-alice",
 	})
 	if err != nil {
-		t.Fatalf("PreflightAssert: сходящаяся топология в include-ветке должна пройти, got %v", err)
+		t.Fatalf("PreflightAssert: a converging topology in the include branch must pass, got %v", err)
 	}
 }
 
@@ -354,10 +354,10 @@ func TestIntegration_PreflightAssert_AssertInIncludeBranch_ZeroHosts_Fails(t *te
 		StartedByAID:    "archon-alice",
 	})
 	if err == nil {
-		t.Fatal("PreflightAssert: 0 connected souls должны провалить size-assert, got nil")
+		t.Fatal("PreflightAssert: 0 connected souls must fail the size-assert, got nil")
 	}
 	if !errors.Is(err, render.ErrAssertFailed) {
-		t.Fatalf("err не ErrAssertFailed: %v", err)
+		t.Fatalf("err is not ErrAssertFailed: %v", err)
 	}
 }
 

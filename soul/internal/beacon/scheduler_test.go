@@ -60,7 +60,7 @@ func waitChecked(t *testing.T, f *fakeBeacon) {
 	select {
 	case <-f.checked:
 	case <-time.After(2 * time.Second):
-		t.Fatal("beacon Check не вызван в срок")
+		t.Fatal("beacon Check not called in time")
 	}
 }
 
@@ -69,7 +69,7 @@ func expectNoPortent(t *testing.T, s *Scheduler) {
 	t.Helper()
 	select {
 	case ev := <-s.Portents():
-		t.Fatalf("неожиданный Portent: %v", ev.GetBeaconName())
+		t.Fatalf("unexpected Portent: %v", ev.GetBeaconName())
 	case <-time.After(100 * time.Millisecond):
 	}
 }
@@ -81,7 +81,7 @@ func expectPortent(t *testing.T, s *Scheduler) *keeperv1.PortentEvent {
 	case ev := <-s.Portents():
 		return ev
 	case <-time.After(2 * time.Second):
-		t.Fatal("ожидали Portent, не пришёл")
+		t.Fatal("expected Portent, did not arrive")
 		return nil
 	}
 }
@@ -236,7 +236,7 @@ func TestReplaceAllRemovesVigil(t *testing.T) {
 	mt.Tick()
 	select {
 	case <-fb.checked:
-		t.Fatal("Vigil продолжил проверки после удаления из snapshot")
+		t.Fatal("Vigil continued checks after removal from snapshot")
 	case <-time.After(150 * time.Millisecond):
 	}
 	s.Stop()
@@ -266,7 +266,7 @@ func TestReplaceAllSameDefKeepsBaseline(t *testing.T) {
 	mt.Tick()
 	waitChecked(t, fb)
 	if ev := expectPortent(t, s); ev.GetBeaconName() != "v1" {
-		t.Fatalf("ожидали Portent v1, получили %q", ev.GetBeaconName())
+		t.Fatalf("expected Portent v1, got %q", ev.GetBeaconName())
 	}
 	s.Stop()
 }
@@ -300,7 +300,7 @@ func TestInvalidIntervalSkipped(t *testing.T) {
 
 	select {
 	case <-fb.checked:
-		t.Fatal("Vigil с невалидным interval не должен запускаться")
+		t.Fatal("Vigil with an invalid interval should not start")
 	case <-time.After(150 * time.Millisecond):
 	}
 	s.Stop()
@@ -312,6 +312,6 @@ func TestNilSchedulerSafe(t *testing.T) {
 	s.Apply(context.Background(), nil)
 	s.Stop()
 	if s.Portents() != nil {
-		t.Fatal("nil-scheduler должен отдавать nil-канал Portents")
+		t.Fatal("nil scheduler should return a nil Portents channel")
 	}
 }

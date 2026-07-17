@@ -48,7 +48,7 @@ func TestHoldsAction_ScopedEachDimension_True(t *testing.T) {
 				permissions: []string{tc.perm},
 			})
 			if !e.HoldsAction("archon-s", "soul", "list") {
-				t.Errorf("%s-scoped %q: HoldsAction = false, want true (existence видит измерение)", tc.name, tc.perm)
+				t.Errorf("%s-scoped %q: HoldsAction = false, want true (existence sees the dimension)", tc.name, tc.perm)
 			}
 			// Control invariant: scope-aware Check with a nil context for
 			// a scoped permission gives a deny — exactly the false deny
@@ -57,7 +57,7 @@ func TestHoldsAction_ScopedEachDimension_True(t *testing.T) {
 			// context), the gate could be simplified — but that's exactly
 			// why it exists today.
 			if err := e.Check("archon-s", "soul", "list", nil); err == nil {
-				t.Errorf("%s-scoped: Check(nil) = nil, ожидался ложный deny (обоснование HoldsAction)", tc.name)
+				t.Errorf("%s-scoped: Check(nil) = nil, expected a false deny (HoldsAction justification)", tc.name)
 			}
 		})
 	}
@@ -90,7 +90,7 @@ func TestHoldsAction_Revoked_False(t *testing.T) {
 				t.Fatalf("NewEnforcerFromSnapshot: %v", err)
 			}
 			if e.HoldsAction("archon-fired", "soul", "list") {
-				t.Errorf("revoked AID с %q: HoldsAction = true, want false (revoked отрезается до scope)", tc.perm)
+				t.Errorf("revoked AID with %q: HoldsAction = true, want false (revoked is cut off before scope)", tc.perm)
 			}
 			// Control: the same AID WITHOUT revoked holds the action —
 			// isolates the revoked effect.
@@ -100,7 +100,7 @@ func TestHoldsAction_Revoked_False(t *testing.T) {
 				t.Fatalf("NewEnforcerFromSnapshot (not revoked): %v", err)
 			}
 			if !eOK.HoldsAction("archon-fired", "soul", "list") {
-				t.Errorf("НЕ-revoked AID с %q: HoldsAction = false, want true (контроль)", tc.perm)
+				t.Errorf("non-revoked AID with %q: HoldsAction = false, want true (control)", tc.perm)
 			}
 		})
 	}

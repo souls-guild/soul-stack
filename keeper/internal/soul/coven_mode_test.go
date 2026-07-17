@@ -151,7 +151,7 @@ func TestBulkAssignCoven_RejectsReplaceMode(t *testing.T) {
 	_, err := BulkAssignCoven(nil, bulkFakePool{f}, BulkSelector{All: true},
 		BulkScope{Unrestricted: true}, "edge", CovenReplace)
 	if err == nil {
-		t.Fatal("BulkAssignCoven with replace mode returned nil err (replace разнесён в BulkReplaceCoven)")
+		t.Fatal("BulkAssignCoven with replace mode returned nil err (replace moved to BulkReplaceCoven)")
 	}
 }
 
@@ -196,7 +196,7 @@ func TestBulkReplaceCoven_RejectsBadLabel(t *testing.T) {
 		t.Fatal("BulkReplaceCoven with bad label returned nil err")
 	}
 	if errors.Is(err, ErrBulkLabelOutOfScope) {
-		t.Errorf("bad label маппится в ErrBulkLabelOutOfScope, want format-error")
+		t.Errorf("bad label maps to ErrBulkLabelOutOfScope, want format-error")
 	}
 }
 
@@ -211,7 +211,7 @@ func TestBulkReplaceCoven_Unrestricted_PassesAnyLabels(t *testing.T) {
 		_, err := BulkReplaceCoven(nil, bulkFakePool{f}, BulkSelector{All: true},
 			BulkScope{Unrestricted: true}, labels)
 		if errors.Is(err, ErrBulkLabelOutOfScope) {
-			t.Errorf("labels=%v: unrestricted scope не должен срабатывать на гейт b", labels)
+			t.Errorf("labels=%v: unrestricted scope should not trigger gate b", labels)
 		}
 	}
 }
@@ -243,7 +243,7 @@ func TestBulkSelector_IncarnationPlusStatus(t *testing.T) {
 	}
 	// incarnation → $1 = ANY(coven); status → status = $2.
 	if where != " WHERE $1 = ANY(coven) AND status = $2" {
-		t.Errorf("where = %q, want incarnation AND status AND-комбинация", where)
+		t.Errorf("where = %q, want incarnation AND status AND-combination", where)
 	}
 	if len(args) != 2 || args[0] != "redis" || args[1] != string(StatusConnected) {
 		t.Errorf("args = %v, want [redis connected]", args)
@@ -260,7 +260,7 @@ func TestBulkSelector_IncarnationPlusCoven(t *testing.T) {
 		t.Fatalf("buildBulkWhere: %v", err)
 	}
 	if where != " WHERE $1 = ANY(coven) AND $2 = ANY(coven)" {
-		t.Errorf("where = %q, want coven AND incarnation as двойной = ANY(coven)", where)
+		t.Errorf("where = %q, want coven AND incarnation as a double = ANY(coven)", where)
 	}
 	if len(args) != 2 || args[0] != "stage" || args[1] != "redis" {
 		t.Errorf("args = %v, want [stage redis]", args)
@@ -272,6 +272,6 @@ func TestBulkSelector_IncarnationPlusCoven(t *testing.T) {
 func TestBulkSelector_EmptyIncarnation_NoSelector(t *testing.T) {
 	_, _, err := buildBulkWhere(BulkSelector{}, BulkScope{Unrestricted: true})
 	if !errors.Is(err, ErrBulkEmptySelector) {
-		t.Errorf("err = %v, want ErrBulkEmptySelector (Incarnation пуст не считается)", err)
+		t.Errorf("err = %v, want ErrBulkEmptySelector (empty Incarnation does not count)", err)
 	}
 }

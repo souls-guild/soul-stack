@@ -12,7 +12,7 @@ func parseErr(t *testing.T, src string) *ParseError {
 	_, err := Parse([]byte(src))
 	var pe *ParseError
 	if !errors.As(err, &pe) {
-		t.Fatalf("ожидался *ParseError, получено: %v", err)
+		t.Fatalf("expected *ParseError, got: %v", err)
 	}
 	return pe
 }
@@ -29,27 +29,27 @@ func TestParse_RealFixture(t *testing.T) {
 		t.Fatalf("Parse: %v", err)
 	}
 	if mig.FromVersion != 1 || mig.ToVersion != 2 {
-		t.Fatalf("версии = %d→%d", mig.FromVersion, mig.ToVersion)
+		t.Fatalf("versions = %d→%d", mig.FromVersion, mig.ToVersion)
 	}
 	if len(mig.Transform) != 4 {
-		t.Fatalf("операций = %d, want 4", len(mig.Transform))
+		t.Fatalf("operations = %d, want 4", len(mig.Transform))
 	}
 	if mig.Transform[0].Rename == nil {
-		t.Errorf("op0 не rename")
+		t.Errorf("op0 is not rename")
 	}
 	if mig.Transform[1].Set == nil {
-		t.Errorf("op1 не set (материализация целевого map)")
+		t.Errorf("op1 is not set (materializing the target map)")
 	}
 	if mig.Transform[2].Foreach == nil {
-		t.Errorf("op2 не foreach")
+		t.Errorf("op2 is not foreach")
 	} else {
 		fe := mig.Transform[2].Foreach
 		if fe.As != "user_name" || len(fe.Do) != 1 || fe.Do[0].Set == nil {
-			t.Errorf("foreach форма = %#v", fe)
+			t.Errorf("foreach shape = %#v", fe)
 		}
 	}
 	if mig.Transform[3].Delete == nil {
-		t.Errorf("op3 не delete")
+		t.Errorf("op3 is not delete")
 	}
 }
 
@@ -107,6 +107,6 @@ func TestParse_ForeachStructuralForm(t *testing.T) {
 	}
 	fe := mig.Transform[0].Foreach
 	if fe == nil || fe.In != "${ state.x }" || fe.As != "it" || len(fe.Do) != 1 {
-		t.Fatalf("структурный foreach = %#v", fe)
+		t.Fatalf("structural foreach = %#v", fe)
 	}
 }

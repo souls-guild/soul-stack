@@ -278,14 +278,14 @@ func TestOptStructMapParam(t *testing.T) {
 		t.Errorf("name=%v want redis", got["name"])
 	}
 	if got["port"] != float64(6379) {
-		t.Errorf("port=%v want 6379 (число сохраняется как float64)", got["port"])
+		t.Errorf("port=%v want 6379 (number is preserved as float64)", got["port"])
 	}
 	if got["enabled"] != true {
 		t.Errorf("enabled=%v want true", got["enabled"])
 	}
 	nested, ok := got["nested"].(map[string]any)
 	if !ok || nested["k"] != "v" {
-		t.Errorf("nested=%v want вложенный map", got["nested"])
+		t.Errorf("nested=%v want a nested map", got["nested"])
 	}
 	list, ok := got["list"].([]any)
 	if !ok || len(list) != 2 {
@@ -338,16 +338,16 @@ func TestParamPresent(t *testing.T) {
 	}
 	p := mustStruct(t, map[string]any{"content": "x", "empty": "", "null": nil})
 	if util.ParamPresent(p, "missing") {
-		t.Fatal("ParamPresent отсутствующего ключа = true")
+		t.Fatal("ParamPresent of a missing key = true")
 	}
 	if util.ParamPresent(p, "null") {
-		t.Fatal("ParamPresent явного null = true (должен трактоваться как отсутствие)")
+		t.Fatal("ParamPresent of explicit null = true (should be treated as absent)")
 	}
 	// Key present — even with an empty string (the key distinction from emptiness).
 	if !util.ParamPresent(p, "content") {
-		t.Fatal("ParamPresent заданного ключа = false")
+		t.Fatal("ParamPresent of a present key = false")
 	}
 	if !util.ParamPresent(p, "empty") {
-		t.Fatal("ParamPresent пустой строки = false (присутствие ключа != пустота значения)")
+		t.Fatal("ParamPresent of an empty string = false (key presence != value emptiness)")
 	}
 }

@@ -114,7 +114,7 @@ func TestValidate_RejectsUnknownState(t *testing.T) {
 		}),
 	})
 	if reply.Ok {
-		t.Fatal("Validate ok=true для неизвестного state")
+		t.Fatal("Validate ok=true for an unknown state")
 	}
 }
 
@@ -128,7 +128,7 @@ func TestValidate_RejectsHTTP(t *testing.T) {
 		}),
 	})
 	if reply.Ok {
-		t.Fatal("Validate ok=true для http:// URL")
+		t.Fatal("Validate ok=true for http:// URL")
 	}
 }
 
@@ -142,7 +142,7 @@ func TestValidate_RejectsFileScheme(t *testing.T) {
 		}),
 	})
 	if reply.Ok {
-		t.Fatal("Validate ok=true для file:// URL")
+		t.Fatal("Validate ok=true for file:// URL")
 	}
 }
 
@@ -157,7 +157,7 @@ func TestValidate_RejectsMD5Checksum(t *testing.T) {
 		}),
 	})
 	if reply.Ok {
-		t.Fatal("Validate ok=true для md5-checksum")
+		t.Fatal("Validate ok=true for md5-checksum")
 	}
 }
 
@@ -173,7 +173,7 @@ func TestValidate_AcceptsValid(t *testing.T) {
 		}),
 	})
 	if !reply.Ok {
-		t.Fatalf("Validate ok=false для валидного fetched: %v", reply.Errors)
+		t.Fatalf("Validate ok=false for a valid fetched: %v", reply.Errors)
 	}
 }
 
@@ -191,10 +191,10 @@ func TestApply_RejectsHTTPScheme(t *testing.T) {
 		t.Fatalf("Apply: %v", err)
 	}
 	if !stream.Last().Failed {
-		t.Fatal("failed=false для http:// в Apply")
+		t.Fatal("failed=false for http:// in Apply")
 	}
 	if d.calls != 0 {
-		t.Fatalf("HTTP вызван %d раз для http:// (ожидалось 0)", d.calls)
+		t.Fatalf("HTTP called %d times for http:// (expected 0)", d.calls)
 	}
 }
 
@@ -212,10 +212,10 @@ func TestApply_RejectsFileScheme(t *testing.T) {
 		t.Fatalf("Apply: %v", err)
 	}
 	if !stream.Last().Failed {
-		t.Fatal("failed=false для file:// в Apply")
+		t.Fatal("failed=false for file:// in Apply")
 	}
 	if d.calls != 0 {
-		t.Fatalf("HTTP вызван %d раз для file:// (ожидалось 0)", d.calls)
+		t.Fatalf("HTTP called %d times for file:// (expected 0)", d.calls)
 	}
 }
 
@@ -249,7 +249,7 @@ func TestApply_Download_NoChecksum_CreatesFile(t *testing.T) {
 		t.Fatalf("mode=%v want 0640", info.Mode().Perm())
 	}
 	if ev.Output.Fields["sha256"].GetStringValue() != sha256hex(body) {
-		t.Fatal("sha256 mismatch в output")
+		t.Fatal("sha256 mismatch in output")
 	}
 	if ev.Output.Fields["size"].GetNumberValue() != float64(len(body)) {
 		t.Fatalf("size=%v want %d", ev.Output.Fields["size"].GetNumberValue(), len(body))
@@ -274,7 +274,7 @@ func TestApply_Checksum_SHA256_VerifyPasses(t *testing.T) {
 		t.Fatalf("Apply: %v", err)
 	}
 	if stream.Last().Failed {
-		t.Fatalf("failed=true при совпадающем sha256: %s", stream.Last().Message)
+		t.Fatalf("failed=true on matching sha256: %s", stream.Last().Message)
 	}
 	got, _ := os.ReadFile(path)
 	if string(got) != string(body) {
@@ -301,12 +301,12 @@ func TestApply_Checksum_SHA1_VerifyPasses(t *testing.T) {
 	}
 	ev := stream.Last()
 	if ev.Failed {
-		t.Fatalf("failed=true при совпадающем sha1: %s", ev.Message)
+		t.Fatalf("failed=true on matching sha1: %s", ev.Message)
 	}
 	// output.sha256 is always the SHA-256 of the actual content, even when
 	// checksum is given as sha1.
 	if ev.Output.Fields["sha256"].GetStringValue() != sha256hex(body) {
-		t.Fatal("output.sha256 не SHA-256 содержимого")
+		t.Fatal("output.sha256 is not the SHA-256 of the content")
 	}
 }
 
@@ -329,11 +329,11 @@ func TestApply_Checksum_Mismatch_Fails_NoMaterialize(t *testing.T) {
 		t.Fatalf("Apply: %v", err)
 	}
 	if !stream.Last().Failed {
-		t.Fatal("failed=false при mismatch checksum")
+		t.Fatal("failed=false on mismatched checksum")
 	}
 	// Target file was not created.
 	if _, err := os.Stat(path); !os.IsNotExist(err) {
-		t.Fatalf("целевой файл материализован при mismatch: err=%v", err)
+		t.Fatalf("target file materialized on mismatch: err=%v", err)
 	}
 	// No temp leftovers in the directory.
 	assertNoTempLeftovers(t, dir)
@@ -365,15 +365,15 @@ func TestApply_Checksum_Idempotent_SkipsDownload(t *testing.T) {
 		t.Fatalf("failed=true: %s", ev.Message)
 	}
 	if ev.Changed {
-		t.Fatal("changed=true при совпадающем checksum существующего файла")
+		t.Fatal("changed=true with matching checksum of an existing file")
 	}
 	if d.calls != 0 {
-		t.Fatalf("HTTP вызван %d раз при совпадающем checksum (ожидалось 0)", d.calls)
+		t.Fatalf("HTTP called %d times with matching checksum (expected 0)", d.calls)
 	}
 	// File wasn't overwritten with garbage from fakeDoer.
 	got, _ := os.ReadFile(path)
 	if string(got) != string(body) {
-		t.Fatalf("файл перезаписан: %q", got)
+		t.Fatalf("file overwritten: %q", got)
 	}
 }
 
@@ -405,10 +405,10 @@ func TestApply_Checksum_NoOp_AppliesModeDrift(t *testing.T) {
 	}
 	// Content matched → no download, but mode must still be brought to spec.
 	if !ev.Changed {
-		t.Fatal("changed=false при drift mode на совпавшем checksum")
+		t.Fatal("changed=false on drift mode with matching checksum")
 	}
 	if d.calls != 0 {
-		t.Fatalf("HTTP вызван %d раз при совпавшем checksum (ожидалось 0)", d.calls)
+		t.Fatalf("HTTP called %d times with matching checksum (expected 0)", d.calls)
 	}
 	info, _ := os.Stat(path)
 	if info.Mode().Perm() != 0o600 {
@@ -417,7 +417,7 @@ func TestApply_Checksum_NoOp_AppliesModeDrift(t *testing.T) {
 	// File wasn't overwritten with garbage from fakeDoer.
 	got, _ := os.ReadFile(path)
 	if string(got) != string(body) {
-		t.Fatalf("файл перезаписан: %q", got)
+		t.Fatalf("file overwritten: %q", got)
 	}
 }
 
@@ -449,10 +449,10 @@ func TestApply_Checksum_NoOp_ModeMatches_TrueNoOp(t *testing.T) {
 	}
 	// Content and mode both matched → true no-op.
 	if ev.Changed {
-		t.Fatal("changed=true при совпавших checksum и mode")
+		t.Fatal("changed=true with matching checksum and mode")
 	}
 	if d.calls != 0 {
-		t.Fatalf("HTTP вызван %d раз (ожидалось 0)", d.calls)
+		t.Fatalf("HTTP called %d times (expected 0)", d.calls)
 	}
 }
 
@@ -483,7 +483,7 @@ func TestApply_NoChecksum_NoOp_AppliesModeDrift(t *testing.T) {
 	}
 	// Content matched (no-checksum branch) → no write needed, but mode drift is fixed.
 	if !ev.Changed {
-		t.Fatal("changed=false при drift mode на совпавшем содержимом")
+		t.Fatal("changed=false on drift mode with matching content")
 	}
 	info, _ := os.Stat(path)
 	if info.Mode().Perm() != 0o600 {
@@ -517,11 +517,11 @@ func TestApply_NoChecksum_Idempotent_SameContent(t *testing.T) {
 		t.Fatalf("failed=true: %s", ev.Message)
 	}
 	if ev.Changed {
-		t.Fatal("changed=true при идентичном содержимом (no checksum)")
+		t.Fatal("changed=true with identical content (no checksum)")
 	}
 	// Without checksum, download still happens (for comparison), but there's no diff.
 	if d.calls != 1 {
-		t.Fatalf("HTTP вызван %d раз (ожидался 1: скачать-и-сравнить)", d.calls)
+		t.Fatalf("HTTP called %d times (expected 1: download-and-compare)", d.calls)
 	}
 	assertNoTempLeftovers(t, dir)
 }
@@ -547,7 +547,7 @@ func TestApply_NoChecksum_Changed_OnDiff(t *testing.T) {
 		t.Fatalf("Apply: %v", err)
 	}
 	if !stream.Last().Changed {
-		t.Fatal("changed=false при diff содержимого")
+		t.Fatal("changed=false on differing content")
 	}
 	got, _ := os.ReadFile(path)
 	if string(got) != string(newBody) {
@@ -580,15 +580,15 @@ func TestApply_HeadersSent_NotInOutput(t *testing.T) {
 	}
 	// Header was actually sent in the request.
 	if got := d.gotHeaders.Get("Authorization"); got != "Bearer super-secret-token" {
-		t.Fatalf("Authorization не отправлен: %q", got)
+		t.Fatalf("Authorization not sent: %q", got)
 	}
 	// headers is absent from output, neither as key nor as value.
 	if _, ok := ev.Output.Fields["headers"]; ok {
-		t.Fatal("headers присутствует в output")
+		t.Fatal("headers present in output")
 	}
 	for k, v := range ev.Output.Fields {
 		if strings.Contains(v.GetStringValue(), "super-secret-token") {
-			t.Fatalf("значение заголовка просочилось в output[%q]", k)
+			t.Fatalf("header value leaked into output[%q]", k)
 		}
 	}
 }
@@ -610,10 +610,10 @@ func TestApply_HTTPError_Fails_NoFile(t *testing.T) {
 		t.Fatalf("Apply: %v", err)
 	}
 	if !stream.Last().Failed {
-		t.Fatal("failed=false при HTTP 404")
+		t.Fatal("failed=false on HTTP 404")
 	}
 	if _, err := os.Stat(path); !os.IsNotExist(err) {
-		t.Fatal("файл создан при HTTP-ошибке")
+		t.Fatal("file created on HTTP error")
 	}
 	assertNoTempLeftovers(t, dir)
 }
@@ -626,7 +626,7 @@ func TestApply_MissingURL_Fails(t *testing.T) {
 		Params: mustStruct(t, map[string]any{"path": "/tmp/x"}),
 	}, stream)
 	if !stream.Last().Failed {
-		t.Fatal("failed=false при отсутствии url")
+		t.Fatal("failed=false when url is missing")
 	}
 }
 
@@ -652,7 +652,7 @@ func TestCheckRedirect_BlocksNonHTTPS(t *testing.T) {
 		"file:///etc/passwd",
 	} {
 		if err := url.CheckRedirect(mkReq(raw), nil); err == nil {
-			t.Fatalf("CheckRedirect пропустил downgrade на %q", raw)
+			t.Fatalf("CheckRedirect let a downgrade to %q through", raw)
 		}
 	}
 
@@ -661,14 +661,14 @@ func TestCheckRedirect_BlocksNonHTTPS(t *testing.T) {
 		"HTTPS://ok.example/x",
 	} {
 		if err := url.CheckRedirect(mkReq(raw), nil); err != nil {
-			t.Fatalf("CheckRedirect отверг валидный https %q: %v", raw, err)
+			t.Fatalf("CheckRedirect rejected a valid https %q: %v", raw, err)
 		}
 	}
 
 	// Redirect limit: a chain of length util.MaxRedirects errors even on https.
 	via := make([]*http.Request, url.MaxRedirects)
 	if err := url.CheckRedirect(mkReq("https://ok.example/x"), via); err == nil {
-		t.Fatal("CheckRedirect не остановил цепочку на лимите редиректов")
+		t.Fatal("CheckRedirect did not stop the chain at the redirect limit")
 	}
 }
 
@@ -710,13 +710,13 @@ func TestApply_Redirect_HTTPS_to_HTTP_Blocked(t *testing.T) {
 		t.Fatalf("Apply: %v", err)
 	}
 	if !stream.Last().Failed {
-		t.Fatal("failed=false при редиректе https→http")
+		t.Fatal("failed=false on an https->http redirect")
 	}
 	if httpHit {
-		t.Fatal("downgrade-редирект достиг http-сервера (payload скачан по http)")
+		t.Fatal("downgrade redirect reached the http server (payload fetched over http)")
 	}
 	if _, err := os.Stat(path); !os.IsNotExist(err) {
-		t.Fatal("файл создан при заблокированном редиректе")
+		t.Fatal("file created despite a blocked redirect")
 	}
 	assertNoTempLeftovers(t, dir)
 }
@@ -733,7 +733,7 @@ func TestValidate_AcceptsUppercaseScheme(t *testing.T) {
 		}),
 	})
 	if !reply.Ok {
-		t.Fatalf("Validate ok=false для HTTPS:// (uppercase): %v", reply.Errors)
+		t.Fatalf("Validate ok=false for HTTPS:// (uppercase): %v", reply.Errors)
 	}
 }
 
@@ -749,7 +749,7 @@ func TestValidate_RejectsControlCharScheme(t *testing.T) {
 	} {
 		reply, _ := m_validate(t, raw)
 		if reply.Ok {
-			t.Fatalf("Validate ok=true для мусорной схемы %q", raw)
+			t.Fatalf("Validate ok=true for a garbage scheme %q", raw)
 		}
 	}
 }
@@ -770,13 +770,13 @@ func m_validate(t *testing.T, rawURL string) (*pluginv1.ValidateReply, error) {
 
 func TestValidate_RejectsBadChecksums(t *testing.T) {
 	cases := map[string]string{
-		"без двоеточия":      "abc123",
+		"no colon":           "abc123",
 		"sha512 unsupported": "sha512:" + strings.Repeat("a", 128),
 		"md5 unsupported":    "md5:" + strings.Repeat("a", 32),
-		"нечётный hex":       "sha256:" + strings.Repeat("a", 63),
-		"не-hex символы":     "sha256:" + strings.Repeat("z", 64),
-		"короткая длина":     "sha256:" + strings.Repeat("a", 63),
-		"sha1 кривая длина":  "sha1:" + strings.Repeat("a", 39),
+		"odd hex length":     "sha256:" + strings.Repeat("a", 63),
+		"non-hex chars":      "sha256:" + strings.Repeat("z", 64),
+		"short length":       "sha256:" + strings.Repeat("a", 63),
+		"sha1 wrong length":  "sha1:" + strings.Repeat("a", 39),
 	}
 	for name, cs := range cases {
 		t.Run(name, func(t *testing.T) {
@@ -790,10 +790,10 @@ func TestValidate_RejectsBadChecksums(t *testing.T) {
 				}),
 			})
 			if err != nil {
-				t.Fatalf("Validate вернул error (ожидалась штатная валидация): %v", err)
+				t.Fatalf("Validate returned an error (expected regular validation): %v", err)
 			}
 			if reply.Ok {
-				t.Fatalf("Validate ok=true для невалидного checksum %q", cs)
+				t.Fatalf("Validate ok=true for an invalid checksum %q", cs)
 			}
 		})
 	}
@@ -840,13 +840,13 @@ func TestApply_Timeout_Fails(t *testing.T) {
 	select {
 	case <-done:
 	case <-time.After(3 * time.Second):
-		t.Fatal("Apply завис: timeout не сработал")
+		t.Fatal("Apply hung: timeout did not fire")
 	}
 	if !stream.Last().Failed {
-		t.Fatal("failed=false при превышении timeout")
+		t.Fatal("failed=false when timeout is exceeded")
 	}
 	if _, err := os.Stat(path); !os.IsNotExist(err) {
-		t.Fatal("файл создан при timeout")
+		t.Fatal("file created on timeout")
 	}
 	assertNoTempLeftovers(t, dir)
 }
@@ -876,17 +876,17 @@ func TestApply_EmptyBody_CreatesEmptyFile(t *testing.T) {
 	}
 	ev := stream.Last()
 	if ev.Failed {
-		t.Fatalf("failed=true для пустого тела: %s", ev.Message)
+		t.Fatalf("failed=true for an empty body: %s", ev.Message)
 	}
 	info, err := os.Stat(path)
 	if err != nil {
-		t.Fatalf("файл не создан: %v", err)
+		t.Fatalf("file not created: %v", err)
 	}
 	if info.Size() != 0 {
 		t.Fatalf("size=%d want 0", info.Size())
 	}
 	if ev.Output.Fields["sha256"].GetStringValue() != sha256hex(empty) {
-		t.Fatal("output.sha256 != sha256 пустой строки")
+		t.Fatal("output.sha256 != sha256 of an empty string")
 	}
 	assertNoTempLeftovers(t, dir)
 }
@@ -924,10 +924,10 @@ func TestApply_ParallelSamePath_NoCorruption(t *testing.T) {
 
 	got, err := os.ReadFile(path)
 	if err != nil {
-		t.Fatalf("файл не создан после параллельных fetch: %v", err)
+		t.Fatalf("file not created after parallel fetches: %v", err)
 	}
 	if string(got) != string(body) {
-		t.Fatalf("повреждённое содержимое: %q want %q", got, body)
+		t.Fatalf("corrupted content: %q want %q", got, body)
 	}
 	assertNoTempLeftovers(t, dir)
 }
@@ -942,7 +942,7 @@ func assertNoTempLeftovers(t *testing.T, dir string) {
 	}
 	for _, e := range entries {
 		if strings.Contains(e.Name(), ".tmp-") {
-			t.Fatalf("остался temp-файл: %s", e.Name())
+			t.Fatalf("leftover temp file: %s", e.Name())
 		}
 	}
 }

@@ -89,12 +89,12 @@ local tokens = tonumber(data[1])
 local last_ms = tonumber(data[2])
 
 if tokens == nil or last_ms == nil then
-  -- Холодный бакет — стартуем полным.
+  -- Cold bucket - start full.
   tokens = burst
   last_ms = now_ms
 end
 
--- Refill: за прошедшее время накапливаем rate*dt токенов, но не выше burst.
+-- Refill: over the elapsed time accumulate rate*dt tokens, but no more than burst.
 local elapsed_ms = now_ms - last_ms
 if elapsed_ms < 0 then
   elapsed_ms = 0
@@ -110,8 +110,8 @@ if tokens >= 1 then
   tokens = tokens - 1
   allowed = 1
 else
-  -- Не хватает (1 - tokens) токенов; при rate токенов/сек до них ждать
-  -- (1 - tokens)/rate секунд. rate > 0 гарантируется Go-валидацией.
+  -- Short by (1 - tokens) tokens; at rate tokens/sec the wait is
+  -- (1 - tokens)/rate seconds. rate > 0 is guaranteed by Go validation.
   retry_after_ms = math.ceil(((1 - tokens) / rate) * 1000)
 end
 

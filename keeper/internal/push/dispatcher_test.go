@@ -176,20 +176,20 @@ func TestSendApply_HappyPath(t *testing.T) {
 	// ApplyRequest must go out over stdin as protojson.
 	gotReq := &keeperv1.ApplyRequest{}
 	if err := protojson.Unmarshal(sess.gotStdin, gotReq); err != nil {
-		t.Fatalf("stdin не protojson ApplyRequest: %v", err)
+		t.Fatalf("stdin is not protojson ApplyRequest: %v", err)
 	}
 	if gotReq.GetApplyId() != "ap-1" {
 		t.Errorf("stdin apply_id = %q", gotReq.GetApplyId())
 	}
 	if !strings.Contains(sess.gotCmd, "soul") || !strings.Contains(sess.gotCmd, "apply") {
-		t.Errorf("команда = %q, ожидался `soul apply`", sess.gotCmd)
+		t.Errorf("command = %q, expected `soul apply`", sess.gotCmd)
 	}
 	if !sess.closed {
-		t.Error("сессия не закрыта (defer Close)")
+		t.Error("session not closed (defer Close)")
 	}
 	// CA must reach Dial (host-cert verification).
 	if len(dialedCfg.HostAuthorities) == 0 {
-		t.Error("HostAuthorities не переданы в Dial")
+		t.Error("HostAuthorities not passed to Dial")
 	}
 }
 
@@ -210,7 +210,7 @@ func TestSendApply_FailedRunResult_NoTransportError(t *testing.T) {
 
 	got, err := disp.SendApply(context.Background(), "host-1.example.com", testProviderName, &keeperv1.ApplyRequest{ApplyId: "ap-2"})
 	if err != nil {
-		t.Fatalf("FAILED-прогон с валидным RunResult не должен давать transport-ошибку: %v", err)
+		t.Fatalf("a FAILED run with a valid RunResult must not produce a transport error: %v", err)
 	}
 	if got.GetStatus() != keeperv1.RunStatus_RUN_STATUS_FAILED {
 		t.Errorf("status = %v, want FAILED", got.GetStatus())
@@ -228,13 +228,13 @@ func TestSendApply_AuthorizeDeny(t *testing.T) {
 
 	_, err := disp.SendApply(context.Background(), "host-1.example.com", testProviderName, &keeperv1.ApplyRequest{ApplyId: "ap-3"})
 	if err == nil {
-		t.Fatal("ожидалась ошибка при Authorize deny")
+		t.Fatal("expected an error on Authorize deny")
 	}
-	if !strings.Contains(err.Error(), "Authorize отказал") {
-		t.Errorf("ошибка не про deny: %v", err)
+	if !strings.Contains(err.Error(), "Authorize denied") {
+		t.Errorf("error is not about deny: %v", err)
 	}
 	if dialed {
-		t.Error("connect не должен происходить после deny (fail-closed до connect-а)")
+		t.Error("connect must not happen after deny (fail-closed before connect)")
 	}
 }
 
@@ -250,10 +250,10 @@ func TestSendApply_ConnectFail(t *testing.T) {
 
 	_, err := disp.SendApply(context.Background(), "host-1.example.com", testProviderName, &keeperv1.ApplyRequest{ApplyId: "ap-4"})
 	if err == nil {
-		t.Fatal("ожидалась ошибка при connect-fail")
+		t.Fatal("expected an error on connect-fail")
 	}
 	if !strings.Contains(err.Error(), "connect") {
-		t.Errorf("ошибка не про connect: %v", err)
+		t.Errorf("error is not about connect: %v", err)
 	}
 }
 
@@ -269,13 +269,13 @@ func TestSendApply_RejectsNonSSHTransport(t *testing.T) {
 
 	_, err := disp.SendApply(context.Background(), "host-1.example.com", testProviderName, &keeperv1.ApplyRequest{ApplyId: "ap-5"})
 	if err == nil {
-		t.Fatal("ожидалась ошибка для transport=agent")
+		t.Fatal("expected an error for transport=agent")
 	}
 	if !strings.Contains(err.Error(), "transport") {
-		t.Errorf("ошибка не про transport: %v", err)
+		t.Errorf("error is not about transport: %v", err)
 	}
 	if dialed {
-		t.Error("connect не должен происходить для non-ssh транспорта")
+		t.Error("connect must not happen for a non-ssh transport")
 	}
 }
 
@@ -292,10 +292,10 @@ func TestSendApply_NoRunResultIsTransportError(t *testing.T) {
 
 	_, err := disp.SendApply(context.Background(), "host-1.example.com", testProviderName, &keeperv1.ApplyRequest{ApplyId: "ap-6"})
 	if err == nil {
-		t.Fatal("обрыв до RunResult должен быть ошибкой транспорта")
+		t.Fatal("a break before RunResult must be a transport error")
 	}
 	if !errors.Is(err, ErrNoRunResult) {
-		t.Errorf("ошибка не оборачивает ErrNoRunResult: %v", err)
+		t.Errorf("error does not wrap ErrNoRunResult: %v", err)
 	}
 }
 
@@ -309,7 +309,7 @@ func TestSendApply_SignError(t *testing.T) {
 
 	_, err := disp.SendApply(context.Background(), "host-1.example.com", testProviderName, &keeperv1.ApplyRequest{ApplyId: "ap-7"})
 	if err == nil || !strings.Contains(err.Error(), "Sign") {
-		t.Fatalf("ожидалась Sign-ошибка, got %v", err)
+		t.Fatalf("expected a Sign error, got %v", err)
 	}
 }
 
@@ -392,10 +392,10 @@ func TestSendApply_VaultEphemeralMode(t *testing.T) {
 	// Checking the S2 invariant: the dispatcher put a non-empty OpenSSH pubkey
 	// in SignRequest.public_key (without it, Vault SSH CA can't sign).
 	if prov.gotReq == nil || prov.gotReq.GetPublicKey() == "" {
-		t.Fatal("SignRequest.public_key пуст — dispatcher не передал ephemeral pubkey")
+		t.Fatal("SignRequest.public_key is empty - dispatcher did not pass the ephemeral pubkey")
 	}
 	if _, _, _, _, perr := ssh.ParseAuthorizedKey([]byte(prov.gotReq.GetPublicKey())); perr != nil {
-		t.Errorf("ephemeral pubkey не парсится как OpenSSH authorized_key: %v", perr)
+		t.Errorf("ephemeral pubkey does not parse as an OpenSSH authorized_key: %v", perr)
 	}
 }
 
@@ -412,10 +412,10 @@ func TestSendApply_VaultEphemeralMode_RejectsEmptyCert(t *testing.T) {
 	})
 	_, err := disp.SendApply(context.Background(), "host-1.example.com", testProviderName, &keeperv1.ApplyRequest{ApplyId: "ap-vault-2"})
 	if err == nil {
-		t.Fatal("ждали ошибку: SignReply с пустыми private_key и certificate должен отвергаться (fail-closed)")
+		t.Fatal("expected an error: a SignReply with empty private_key and certificate must be rejected (fail-closed)")
 	}
 	if dialed {
-		t.Error("connect не должен происходить, если нечем подписать handshake")
+		t.Error("connect must not happen if there is nothing to sign the handshake with")
 	}
 }
 
@@ -431,16 +431,16 @@ func TestAuthMethodsFromSign_EphemeralPrivateKeyNotLeaked(t *testing.T) {
 		t.Fatalf("newEphemeralEd25519: %v", err)
 	}
 	if strings.Contains(pubAuth, "PRIVATE KEY") {
-		t.Errorf("ephemeral authorized-key содержит PRIVATE KEY — утечка: %q", pubAuth)
+		t.Errorf("ephemeral authorized-key contains PRIVATE KEY - leak: %q", pubAuth)
 	}
 	// A broken cert + valid ephSigner → the error should be about parsing the
 	// cert, with no private key in the text.
 	_, err = authMethodsFromSign(&pluginv1.SignReply{Certificate: "not a cert", PrivateKey: ""}, signer)
 	if err == nil {
-		t.Fatal("ждали ошибку на битый cert")
+		t.Fatal("expected an error on a broken cert")
 	}
 	if strings.Contains(err.Error(), "PRIVATE KEY") || strings.Contains(err.Error(), "BEGIN OPENSSH PRIVATE") {
-		t.Errorf("error-сообщение содержит приватник: %q", err.Error())
+		t.Errorf("error message contains the private key: %q", err.Error())
 	}
 }
 
@@ -459,12 +459,12 @@ func TestAuthMethodsFromSign_StaticFlowIgnoresEphSigner(t *testing.T) {
 		t.Fatalf("static-flow: %v", err)
 	}
 	if len(auth) != 1 {
-		t.Errorf("ждали ровно один AuthMethod, got %d", len(auth))
+		t.Errorf("expected exactly one AuthMethod, got %d", len(auth))
 	}
 	// Without ephSigner the same reply should still work (explicit S0
 	// regression test).
 	if _, err := authMethodsFromSign(staticReply, nil); err != nil {
-		t.Errorf("static-flow без ephSigner сломался: %v", err)
+		t.Errorf("static-flow without ephSigner broke: %v", err)
 	}
 }
 
@@ -502,7 +502,7 @@ func TestSendApply_ProxyJumpPropagatedToDial(t *testing.T) {
 		t.Errorf("DialConfig.ProxyJump = %q, want %q", dialedCfg.ProxyJump, "teleport.example.com:3023")
 	}
 	if dialedCfg.Host != "host-1.example.com" || dialedCfg.Port != 22 {
-		t.Errorf("target изменился: host=%q port=%d", dialedCfg.Host, dialedCfg.Port)
+		t.Errorf("target changed: host=%q port=%d", dialedCfg.Host, dialedCfg.Port)
 	}
 	// Auth — the same set as for the direct flow (one user-cert for both hops).
 	if len(dialedCfg.Auth) != 1 {
@@ -532,7 +532,7 @@ func TestSendApply_ProxyJumpEmpty_DirectFlow(t *testing.T) {
 		t.Fatalf("SendApply: %v", err)
 	}
 	if dialedCfg.ProxyJump != "" {
-		t.Errorf("пустой SignReply.proxy_jump утёк в DialConfig.ProxyJump=%q (S0-regression)", dialedCfg.ProxyJump)
+		t.Errorf("empty SignReply.proxy_jump leaked into DialConfig.ProxyJump=%q (S0-regression)", dialedCfg.ProxyJump)
 	}
 }
 
@@ -548,42 +548,42 @@ func TestNewSshDispatcher_Validation(t *testing.T) {
 		}},
 	}
 	if _, err := NewSshDispatcher(base); err != nil {
-		t.Fatalf("валидный Deps отвергнут: %v", err)
+		t.Fatalf("valid Deps rejected: %v", err)
 	}
 
 	noCA := base
 	noCA.HostAuthorities = nil
 	if _, err := NewSshDispatcher(noCA); err == nil {
-		t.Error("Deps без CA должен отвергаться (fail-closed host-cert verify)")
+		t.Error("Deps without CA must be rejected (fail-closed host-cert verify)")
 	}
 
 	emptyName := base
 	emptyName.HostAuthorities = []NamedHostKeyAuthority{{Name: "", CAPubKey: testCAPub(t)}}
 	if _, err := NewSshDispatcher(emptyName); err == nil {
-		t.Error("Deps c пустым CA.Name должен отвергаться")
+		t.Error("Deps with empty CA.Name must be rejected")
 	}
 
 	nilKey := base
 	nilKey.HostAuthorities = []NamedHostKeyAuthority{{Name: "x", CAPubKey: nil}}
 	if _, err := NewSshDispatcher(nilKey); err == nil {
-		t.Error("Deps c nil CAPubKey должен отвергаться")
+		t.Error("Deps with nil CAPubKey must be rejected")
 	}
 
 	noProviders := base
 	noProviders.Providers = nil
 	if _, err := NewSshDispatcher(noProviders); err == nil {
-		t.Error("Deps без Providers должен отвергаться")
+		t.Error("Deps without Providers must be rejected")
 	}
 
 	emptyProviders := base
 	emptyProviders.Providers = map[string]ProviderEntry{}
 	if _, err := NewSshDispatcher(emptyProviders); err == nil {
-		t.Error("Deps с пустой Providers-map должен отвергаться")
+		t.Error("Deps with an empty Providers map must be rejected")
 	}
 
 	nilProvider := base
 	nilProvider.Providers = map[string]ProviderEntry{testProviderName: {Provider: nil}}
 	if _, err := NewSshDispatcher(nilProvider); err == nil {
-		t.Error("Deps с nil-Provider в записи должен отвергаться")
+		t.Error("Deps with a nil Provider entry must be rejected")
 	}
 }

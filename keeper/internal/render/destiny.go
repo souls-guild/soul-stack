@@ -94,7 +94,7 @@ func (p *Pipeline) renderApplyDestiny(
 	applierRegister string,
 ) ([]*RenderedTask, []DispatchPlan, error) {
 	if parentIn.Destiny == nil {
-		return nil, nil, fmt.Errorf("%w: apply: destiny %q — DestinyResolver не сконфигурирован (RenderInput.Destiny=nil)", ErrUnsupportedDSL, apply.Destiny)
+		return nil, nil, fmt.Errorf("%w: apply: destiny %q - DestinyResolver not configured (RenderInput.Destiny=nil)", ErrUnsupportedDSL, apply.Destiny)
 	}
 
 	resolved, err := parentIn.Destiny.Resolve(ctx, apply.Destiny)
@@ -419,7 +419,7 @@ func applyInputContract(values map[string]any, schema config.InputSchemaMap, des
 			continue
 		}
 		if sc.Required {
-			return fmt.Errorf("render: apply destiny %q: обязательный input %q не передан и не имеет default", destiny, name)
+			return fmt.Errorf("render: apply destiny %q: required input %q not passed and has no default", destiny, name)
 		}
 	}
 	return nil
@@ -450,21 +450,21 @@ func applyInputContract(values map[string]any, schema config.InputSchemaMap, des
 func guardDestinyTask(task config.Task, idx int, destiny string) error {
 	switch {
 	case task.Apply != nil:
-		return fmt.Errorf("%w: вложенный apply: в destiny %q (task[%d] %q)", ErrUnsupportedDSL, destiny, idx, task.Name)
+		return fmt.Errorf("%w: nested apply: in destiny %q (task[%d] %q)", ErrUnsupportedDSL, destiny, idx, task.Name)
 	case task.Include != nil:
-		return fmt.Errorf("%w: в destiny %q (task[%d] %q)", ErrUnexpandedInclude, destiny, idx, task.Name)
+		return fmt.Errorf("%w: in destiny %q (task[%d] %q)", ErrUnexpandedInclude, destiny, idx, task.Name)
 	case task.Parallel:
-		return fmt.Errorf("%w: parallel: в destiny %q (task[%d] %q)", ErrUnsupportedDSL, destiny, idx, task.Name)
+		return fmt.Errorf("%w: parallel: in destiny %q (task[%d] %q)", ErrUnsupportedDSL, destiny, idx, task.Name)
 	case task.RunOnce:
-		return fmt.Errorf("%w: run_once: в destiny %q (task[%d] %q)", ErrUnsupportedDSL, destiny, idx, task.Name)
+		return fmt.Errorf("%w: run_once: in destiny %q (task[%d] %q)", ErrUnsupportedDSL, destiny, idx, task.Name)
 	case task.Serial != nil:
-		return fmt.Errorf("%w: serial: в destiny %q (task[%d] %q)", ErrUnsupportedDSL, destiny, idx, task.Name)
+		return fmt.Errorf("%w: serial: in destiny %q (task[%d] %q)", ErrUnsupportedDSL, destiny, idx, task.Name)
 	case task.Block != nil:
 		// LOAD-BEARING (not dead code) — see doc comment above: block passes
 		// this guard first (return nil), renderDestinyBlock handles it next.
 		return nil
 	case task.Module == nil:
-		return fmt.Errorf("%w: task[%d] %q в destiny %q не является module-задачей", ErrUnsupportedDSL, idx, task.Name, destiny)
+		return fmt.Errorf("%w: task[%d] %q in destiny %q is not a module task", ErrUnsupportedDSL, idx, task.Name, destiny)
 	}
 	return nil
 }
@@ -549,23 +549,23 @@ func (p *Pipeline) renderDestinyBlock(
 func guardDestinyBlockChild(child config.Task, idx int, blockName string) error {
 	switch {
 	case child.Where != "":
-		return fmt.Errorf("%w: where: на потомке destiny-block %q (task[%d] %q) — scenario-оркестрация в destiny запрещена", ErrUnsupportedDSL, blockName, idx, child.Name)
+		return fmt.Errorf("%w: where: on a destiny-block child %q (task[%d] %q) - scenario orchestration in a destiny is forbidden", ErrUnsupportedDSL, blockName, idx, child.Name)
 	case child.Serial != nil:
-		return fmt.Errorf("%w: serial: на потомке destiny-block %q (task[%d] %q) — scenario-оркестрация в destiny запрещена", ErrUnsupportedDSL, blockName, idx, child.Name)
+		return fmt.Errorf("%w: serial: on a destiny-block child %q (task[%d] %q) - scenario orchestration in a destiny is forbidden", ErrUnsupportedDSL, blockName, idx, child.Name)
 	case child.RunOnce:
-		return fmt.Errorf("%w: run_once: на потомке destiny-block %q (task[%d] %q) — scenario-оркестрация в destiny запрещена", ErrUnsupportedDSL, blockName, idx, child.Name)
+		return fmt.Errorf("%w: run_once: on a destiny-block child %q (task[%d] %q) - scenario orchestration in a destiny is forbidden", ErrUnsupportedDSL, blockName, idx, child.Name)
 	case child.On != nil:
-		return fmt.Errorf("%w: on: на потомке destiny-block %q (task[%d] %q) — scenario-оркестрация в destiny запрещена", ErrUnsupportedDSL, blockName, idx, child.Name)
+		return fmt.Errorf("%w: on: on a destiny-block child %q (task[%d] %q) - scenario orchestration in a destiny is forbidden", ErrUnsupportedDSL, blockName, idx, child.Name)
 	case child.Parallel:
-		return fmt.Errorf("%w: parallel: на потомке destiny-block %q (task[%d] %q) — scenario-оркестрация в destiny запрещена", ErrUnsupportedDSL, blockName, idx, child.Name)
+		return fmt.Errorf("%w: parallel: on a destiny-block child %q (task[%d] %q) - scenario orchestration in a destiny is forbidden", ErrUnsupportedDSL, blockName, idx, child.Name)
 	case child.Loop != nil:
-		return fmt.Errorf("%w: loop: на потомке destiny-block %q (task[%d] %q) — вне destiny-объёма block", ErrUnsupportedDSL, blockName, idx, child.Name)
+		return fmt.Errorf("%w: loop: on a destiny-block child %q (task[%d] %q) - outside destiny block scope", ErrUnsupportedDSL, blockName, idx, child.Name)
 	case child.Include != nil:
-		return fmt.Errorf("%w: include: на потомке destiny-block %q (task[%d] %q)", ErrUnexpandedInclude, blockName, idx, child.Name)
+		return fmt.Errorf("%w: include: on a destiny-block child %q (task[%d] %q)", ErrUnexpandedInclude, blockName, idx, child.Name)
 	case child.Apply != nil:
-		return fmt.Errorf("%w: apply: на потомке destiny-block %q (task[%d] %q) — вложенный apply в destiny запрещён", ErrUnsupportedDSL, blockName, idx, child.Name)
+		return fmt.Errorf("%w: apply: on a destiny-block child %q (task[%d] %q) - nested apply in a destiny is forbidden", ErrUnsupportedDSL, blockName, idx, child.Name)
 	case child.Module == nil && child.Block == nil:
-		return fmt.Errorf("%w: task[%d] %q в destiny-block %q не является module/block-задачей", ErrUnsupportedDSL, idx, child.Name, blockName)
+		return fmt.Errorf("%w: task[%d] %q in destiny-block %q is not a module/block task", ErrUnsupportedDSL, idx, child.Name, blockName)
 	}
 	return nil
 }
@@ -585,17 +585,17 @@ func guardDestinyBlockChild(child config.Task, idx int, blockName string) error 
 func guardDestinyBlock(blockTask config.Task) error {
 	switch {
 	case blockTask.Where != "":
-		return fmt.Errorf("%w: where: на destiny-block %q — scenario-оркестрация в destiny запрещена", ErrUnsupportedDSL, blockTask.Name)
+		return fmt.Errorf("%w: where: on destiny-block %q - scenario orchestration in a destiny is forbidden", ErrUnsupportedDSL, blockTask.Name)
 	case blockTask.Serial != nil:
-		return fmt.Errorf("%w: serial: на destiny-block %q — scenario-оркестрация в destiny запрещена", ErrUnsupportedDSL, blockTask.Name)
+		return fmt.Errorf("%w: serial: on destiny-block %q - scenario orchestration in a destiny is forbidden", ErrUnsupportedDSL, blockTask.Name)
 	case blockTask.RunOnce:
-		return fmt.Errorf("%w: run_once: на destiny-block %q — scenario-оркестрация в destiny запрещена", ErrUnsupportedDSL, blockTask.Name)
+		return fmt.Errorf("%w: run_once: on destiny-block %q - scenario orchestration in a destiny is forbidden", ErrUnsupportedDSL, blockTask.Name)
 	case blockTask.On != nil:
-		return fmt.Errorf("%w: on: на destiny-block %q — scenario-оркестрация в destiny запрещена", ErrUnsupportedDSL, blockTask.Name)
+		return fmt.Errorf("%w: on: on destiny-block %q - scenario orchestration in a destiny is forbidden", ErrUnsupportedDSL, blockTask.Name)
 	case blockTask.Parallel:
-		return fmt.Errorf("%w: parallel: на destiny-block %q — scenario-оркестрация в destiny запрещена", ErrUnsupportedDSL, blockTask.Name)
+		return fmt.Errorf("%w: parallel: on destiny-block %q - scenario orchestration in a destiny is forbidden", ErrUnsupportedDSL, blockTask.Name)
 	case blockTask.Loop != nil:
-		return fmt.Errorf("%w: loop: на destiny-block %q — вне destiny-объёма block", ErrUnsupportedDSL, blockTask.Name)
+		return fmt.Errorf("%w: loop: on destiny-block %q - outside destiny block scope", ErrUnsupportedDSL, blockTask.Name)
 	}
 	return nil
 }

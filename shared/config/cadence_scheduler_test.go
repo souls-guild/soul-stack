@@ -67,16 +67,16 @@ func TestLoadKeeper_CadenceScheduler_Parse(t *testing.T) {
 	}
 	if hasCode(diags, "duration_invalid") {
 		dump(t, diags)
-		t.Fatal("валидный cadence_scheduler не должен давать duration_invalid")
+		t.Fatal("a valid cadence_scheduler should not produce duration_invalid")
 	}
 	if cfg.CadenceScheduler == nil {
-		t.Fatal("cadence_scheduler не распарсился")
+		t.Fatal("cadence_scheduler did not parse")
 	}
 	if !cfg.CadenceScheduler.CadenceSchedulerEnabled() {
-		t.Error("enabled: true должно дать ON")
+		t.Error("enabled: true should give ON")
 	}
 	if cfg.CadenceScheduler.Interval != "15s" {
-		t.Errorf("interval (alias-источник) = %q, want 15s", cfg.CadenceScheduler.Interval)
+		t.Errorf("interval (alias source) = %q, want 15s", cfg.CadenceScheduler.Interval)
 	}
 	if got := cfg.CadenceScheduler.ResolvedLockTTL(); got != 5*time.Minute {
 		t.Errorf("lock_ttl = %v, want 5m", got)
@@ -92,7 +92,7 @@ func TestLoadKeeper_CadenceScheduler_BadDuration(t *testing.T) {
 	_, _, diags, _ := LoadKeeperFromBytes("keeper.yml", []byte(src), ValidateOptions{})
 	if !hasCodeAt(diags, "duration_invalid", "$.cadence_scheduler.interval") {
 		dump(t, diags)
-		t.Fatal("ожидался duration_invalid на $.cadence_scheduler.interval")
+		t.Fatal("expected duration_invalid on $.cadence_scheduler.interval")
 	}
 }
 
@@ -117,7 +117,7 @@ func TestCadenceScheduler_ResolvedPollFloor(t *testing.T) {
 		})
 	}
 	if DefaultCadenceSchedulerPollFloor != 30*time.Second {
-		t.Errorf("профиль «Спокойный» floor=30s; got %v", DefaultCadenceSchedulerPollFloor)
+		t.Errorf("profile \"Calm\" floor=30s; got %v", DefaultCadenceSchedulerPollFloor)
 	}
 }
 
@@ -133,9 +133,9 @@ func TestCadenceScheduler_ResolvedPollCeiling(t *testing.T) {
 		{"nil block → default", nil, DefaultCadenceSchedulerPollCeiling},
 		{"empty → default", &KeeperCadenceScheduler{}, DefaultCadenceSchedulerPollCeiling},
 		{"explicit poll_ceiling 60s", &KeeperCadenceScheduler{PollCeiling: "60s"}, 60 * time.Second},
-		{"backcompat: interval alias выше floor → ceiling", &KeeperCadenceScheduler{Interval: "45s"}, 45 * time.Second},
-		{"backcompat: interval alias ниже floor → clamp до floor 30", &KeeperCadenceScheduler{Interval: "20s"}, 30 * time.Second},
-		{"backcompat: dev 5s alias → clamp до floor 30", &KeeperCadenceScheduler{Interval: "5s"}, 30 * time.Second},
+		{"backcompat: interval alias above floor -> ceiling", &KeeperCadenceScheduler{Interval: "45s"}, 45 * time.Second},
+		{"backcompat: interval alias below floor -> clamp to floor 30", &KeeperCadenceScheduler{Interval: "20s"}, 30 * time.Second},
+		{"backcompat: dev 5s alias -> clamp to floor 30", &KeeperCadenceScheduler{Interval: "5s"}, 30 * time.Second},
 		{"explicit ceiling wins over interval", &KeeperCadenceScheduler{Interval: "20s", PollCeiling: "45s"}, 45 * time.Second},
 		{"invalid interval alias → default", &KeeperCadenceScheduler{Interval: "garbage"}, DefaultCadenceSchedulerPollCeiling},
 	}
@@ -147,7 +147,7 @@ func TestCadenceScheduler_ResolvedPollCeiling(t *testing.T) {
 		})
 	}
 	if DefaultCadenceSchedulerPollCeiling != 60*time.Second {
-		t.Errorf("профиль «Спокойный» ceiling=60s; got %v", DefaultCadenceSchedulerPollCeiling)
+		t.Errorf("profile \"Calm\" ceiling=60s; got %v", DefaultCadenceSchedulerPollCeiling)
 	}
 }
 
@@ -171,7 +171,7 @@ func TestCadenceScheduler_ResolvedPollIdle(t *testing.T) {
 		})
 	}
 	if DefaultCadenceSchedulerPollIdle != 120*time.Second {
-		t.Errorf("профиль «Спокойный» idle=120s; got %v", DefaultCadenceSchedulerPollIdle)
+		t.Errorf("profile \"Calm\" idle=120s; got %v", DefaultCadenceSchedulerPollIdle)
 	}
 }
 
@@ -191,15 +191,15 @@ func TestLoadKeeper_CadenceScheduler_PollProfile(t *testing.T) {
 	for _, code := range []string{"duration_invalid", "value_out_of_range"} {
 		if hasCode(diags, code) {
 			dump(t, diags)
-			t.Fatalf("валидный профиль не должен давать %s", code)
+			t.Fatalf("a valid profile should not produce %s", code)
 		}
 	}
 	cs := cfg.CadenceScheduler
 	if cs == nil {
-		t.Fatal("cadence_scheduler не распарсился")
+		t.Fatal("cadence_scheduler did not parse")
 	}
 	if cs.ResolvedPollFloor() != 30*time.Second || cs.ResolvedPollCeiling() != 60*time.Second || cs.ResolvedPollIdle() != 120*time.Second {
-		t.Errorf("профиль = (%v,%v,%v), want (30s,60s,120s)", cs.ResolvedPollFloor(), cs.ResolvedPollCeiling(), cs.ResolvedPollIdle())
+		t.Errorf("profile = (%v,%v,%v), want (30s,60s,120s)", cs.ResolvedPollFloor(), cs.ResolvedPollCeiling(), cs.ResolvedPollIdle())
 	}
 }
 
@@ -211,27 +211,27 @@ func TestLoadKeeper_CadenceScheduler_PollProfile(t *testing.T) {
 // via floor ≤ ceiling).
 func TestLoadKeeper_CadenceScheduler_BackcompatInterval(t *testing.T) {
 	for _, iv := range []string{"5s", "15s", "29s"} {
-		t.Run("interval "+iv+" грузится с warning", func(t *testing.T) {
+		t.Run("interval "+iv+" loads with warning", func(t *testing.T) {
 			src := keeperBaseRequired + `cadence_scheduler:
   interval: ` + iv + `
 `
 			cfg, _, diags, err := LoadKeeperFromBytes("keeper.yml", []byte(src), ValidateOptions{})
 			if err != nil {
-				t.Fatalf("LoadKeeperFromBytes: %v (суб-floor interval не должен ронять конфиг)", err)
+				t.Fatalf("LoadKeeperFromBytes: %v (a sub-floor interval should not fail the config)", err)
 			}
 			// 0 error diagnostics: the config LOADS (backcompat invariant).
 			if diag.HasErrors(diags) {
 				dump(t, diags)
-				t.Fatalf("interval=%s alias не должен давать error-диагностик (clamp вверх до floor)", iv)
+				t.Fatalf("interval=%s alias should not produce error-diagnostics (clamp up to floor)", iv)
 			}
 			// ceiling raised to floor (30s).
 			if got := cfg.CadenceScheduler.ResolvedPollCeiling(); got != 30*time.Second {
-				t.Errorf("backcompat ceiling = %v, want 30s (clamp до floor)", got)
+				t.Errorf("backcompat ceiling = %v, want 30s (clamp to floor)", got)
 			}
 			// Warning about the raise is emitted.
 			if !hasCodeAt(diags, "value_clamped", "$.cadence_scheduler.interval") {
 				dump(t, diags)
-				t.Errorf("ожидался warning value_clamped на $.cadence_scheduler.interval (interval %s < floor 30s)", iv)
+				t.Errorf("expected warning value_clamped on $.cadence_scheduler.interval (interval %s < floor 30s)", iv)
 			}
 		})
 	}
@@ -249,14 +249,14 @@ func TestLoadKeeper_CadenceScheduler_BackcompatIntervalAboveFloor(t *testing.T) 
 	}
 	if diag.HasErrors(diags) {
 		dump(t, diags)
-		t.Fatal("interval=45s alias не должен ломать валидацию (floor 30 <= 45 <= idle 120)")
+		t.Fatal("interval=45s alias should not break validation (floor 30 <= 45 <= idle 120)")
 	}
 	if hasCode(diags, "value_clamped") {
 		dump(t, diags)
-		t.Error("interval=45s выше floor — warning о подъёме не должен эмититься")
+		t.Error("interval=45s above floor - a raise warning should not be emitted")
 	}
 	if got := cfg.CadenceScheduler.ResolvedPollCeiling(); got != 45*time.Second {
-		t.Errorf("backcompat ceiling = %v, want 45s (alias из interval, выше floor)", got)
+		t.Errorf("backcompat ceiling = %v, want 45s (alias from interval, above floor)", got)
 	}
 }
 
@@ -271,7 +271,7 @@ func TestLoadKeeper_CadenceScheduler_ExplicitFloorAboveCeiling(t *testing.T) {
 	_, _, diags, _ := LoadKeeperFromBytes("keeper.yml", []byte(src), ValidateOptions{})
 	if !hasCodeAt(diags, "value_out_of_range", "$.cadence_scheduler.poll_floor") {
 		dump(t, diags)
-		t.Fatal("явный poll_floor 40s > poll_ceiling 30s — реальная ошибка, ожидался value_out_of_range")
+		t.Fatal("explicit poll_floor 40s > poll_ceiling 30s - a real error, expected value_out_of_range")
 	}
 }
 
@@ -284,7 +284,7 @@ func TestLoadKeeper_CadenceScheduler_PollFloorBelowMinimum(t *testing.T) {
 	_, _, diags, _ := LoadKeeperFromBytes("keeper.yml", []byte(src), ValidateOptions{})
 	if !hasCodeAt(diags, "value_out_of_range", "$.cadence_scheduler.poll_floor") {
 		dump(t, diags)
-		t.Fatal("ожидался value_out_of_range на $.cadence_scheduler.poll_floor (< 30s)")
+		t.Fatal("expected value_out_of_range on $.cadence_scheduler.poll_floor (< 30s)")
 	}
 }
 
@@ -298,7 +298,7 @@ func TestLoadKeeper_CadenceScheduler_FloorGreaterThanCeiling(t *testing.T) {
 	_, _, diags, _ := LoadKeeperFromBytes("keeper.yml", []byte(src), ValidateOptions{})
 	if !hasCodeAt(diags, "value_out_of_range", "$.cadence_scheduler.poll_floor") {
 		dump(t, diags)
-		t.Fatal("ожидался value_out_of_range на $.cadence_scheduler.poll_floor (> ceiling)")
+		t.Fatal("expected value_out_of_range on $.cadence_scheduler.poll_floor (> ceiling)")
 	}
 }
 
@@ -312,6 +312,6 @@ func TestLoadKeeper_CadenceScheduler_IdleBelowCeiling(t *testing.T) {
 	_, _, diags, _ := LoadKeeperFromBytes("keeper.yml", []byte(src), ValidateOptions{})
 	if !hasCodeAt(diags, "value_out_of_range", "$.cadence_scheduler.poll_idle") {
 		dump(t, diags)
-		t.Fatal("ожидался value_out_of_range на $.cadence_scheduler.poll_idle (< ceiling)")
+		t.Fatal("expected value_out_of_range on $.cadence_scheduler.poll_idle (< ceiling)")
 	}
 }

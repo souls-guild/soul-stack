@@ -31,13 +31,13 @@ func TestServedOpenAPI_HandlerHuma31(t *testing.T) {
 	servedOpenAPIHandler(rec, req)
 
 	if rec.Code != http.StatusOK {
-		t.Fatalf("status = %d, want 200 (handler сам auth не checks)", rec.Code)
+		t.Fatalf("status = %d, want 200 (handler itself does not check auth)", rec.Code)
 	}
 	if ct := rec.Header().Get("Content-Type"); ct != contentTypeOpenAPI {
 		t.Errorf("Content-Type = %q, want %q", ct, contentTypeOpenAPI)
 	}
 	if cl := rec.Header().Get("Content-Length"); cl == "" {
-		t.Error("Content-Length не выставлен")
+		t.Error("Content-Length not set")
 	}
 
 	body, _ := io.ReadAll(rec.Body)
@@ -47,15 +47,15 @@ func TestServedOpenAPI_HandlerHuma31(t *testing.T) {
 	// check the field via parsing, not by a line prefix.
 	var doc map[string]any
 	if err := yaml.Unmarshal(body, &doc); err != nil {
-		t.Fatalf("served-спека не парсится as YAML: %v", err)
+		t.Fatalf("served spec does not parse as YAML: %v", err)
 	}
 	if v, _ := doc["openapi"].(string); v != "3.1.0" {
-		t.Errorf("openapi = %q, want 3.1.0 (huma-генерат, не 3.0.3-hand-written)", v)
+		t.Errorf("openapi = %q, want 3.1.0 (huma-generated, not 3.0.3-hand-written)", v)
 	}
 
 	for _, schema := range []string{"IncarnationCreateRequest", "SoulListReply", "SoulprintFacts"} {
 		if !strings.Contains(s, schema) {
-			t.Errorf("served-спека не withдержит контрактную схему %q — агрегат-дамп неполон?", schema)
+			t.Errorf("served spec does not contain contract schema %q - is the aggregate dump incomplete?", schema)
 		}
 	}
 }
@@ -73,6 +73,6 @@ func TestServedOpenAPI_CacheStable(t *testing.T) {
 	}
 	// The same backing array (cache, not a rebuild).
 	if len(first) == 0 || &first[0] != &second[0] {
-		t.Error("повторный вызов вернул иbutй буфер — кеш не сработал (пересборка on each запрос?)")
+		t.Error("repeated call returned a different buffer - cache did not work (rebuild on each request?)")
 	}
 }

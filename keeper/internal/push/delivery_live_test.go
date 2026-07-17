@@ -101,7 +101,7 @@ func liveShellTarget(fs *liveFs) func(t *testing.T, sc *ssh.ServerConn, chans <-
 		go ssh.DiscardRequests(reqs)
 		for newCh := range chans {
 			if newCh.ChannelType() != "session" {
-				_ = newCh.Reject(ssh.UnknownChannelType, "только session")
+				_ = newCh.Reject(ssh.UnknownChannelType, "session only")
 				continue
 			}
 			ch, chReqs, err := newCh.Accept()
@@ -185,10 +185,10 @@ func TestDeliverThenCleanup_LiveSSH(t *testing.T) {
 		t.Fatalf("Deliver: %v", err)
 	}
 	if got, ok := fs.files[hostSoulDir+"/"+hostSoulFile]; !ok || string(got) != "SOUL-BIN-LIVE" {
-		t.Fatalf("soul-бинарь не доехал, got %q ok=%v", got, ok)
+		t.Fatalf("soul binary did not arrive, got %q ok=%v", got, ok)
 	}
 	if got, ok := fs.files[hostModulesDir+"/soul-mod-pkg"]; !ok || string(got) != "MOD-PKG-LIVE" {
-		t.Fatalf("модуль не доехал, got %q ok=%v", got, ok)
+		t.Fatalf("module did not arrive, got %q ok=%v", got, ok)
 	}
 
 	// Repeat Deliver — must be idempotent (sha256 will match).
@@ -197,10 +197,10 @@ func TestDeliverThenCleanup_LiveSSH(t *testing.T) {
 		SoulBinaryPath: soulPath,
 		Modules:        []ModuleSpec{{Name: "soul-mod-pkg", Path: modPath}},
 	}); err != nil {
-		t.Fatalf("Deliver (повтор): %v", err)
+		t.Fatalf("Deliver (retry): %v", err)
 	}
 	if len(fs.files) != beforeFiles {
-		t.Errorf("повторный Deliver добавил файлы — нет идемпотентности")
+		t.Errorf("repeat Deliver added files - not idempotent")
 	}
 
 	c := NewShaCleaner()
@@ -208,9 +208,9 @@ func TestDeliverThenCleanup_LiveSSH(t *testing.T) {
 		t.Fatalf("Cleanup: %v", err)
 	}
 	if _, ok := fs.files[hostSoulDir+"/"+hostSoulFile]; ok {
-		t.Error("после Cleanup soul-бинарь остался")
+		t.Error("soul binary remained after Cleanup")
 	}
 	if _, ok := fs.files[hostModulesDir+"/soul-mod-pkg"]; ok {
-		t.Error("после Cleanup модуль остался")
+		t.Error("module remained after Cleanup")
 	}
 }

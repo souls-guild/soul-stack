@@ -45,19 +45,19 @@ type JWTClaims struct {
 func DecodeJWTClaims(jwt string) (*JWTClaims, error) {
 	parts := strings.Split(jwt, ".")
 	if len(parts) != 3 {
-		return nil, fmt.Errorf("JWT должен содержать три сегмента, получено %d", len(parts))
+		return nil, fmt.Errorf("JWT must contain three segments, got %d", len(parts))
 	}
 	payload, err := base64.RawURLEncoding.DecodeString(parts[1])
 	if err != nil {
 		// Some implementations add padding — try the std-base64 fallback.
 		payload, err = base64.URLEncoding.DecodeString(parts[1])
 		if err != nil {
-			return nil, fmt.Errorf("декодировать JWT payload: %w", err)
+			return nil, fmt.Errorf("decoding JWT payload: %w", err)
 		}
 	}
 	var claims JWTClaims
 	if err := json.Unmarshal(payload, &claims); err != nil {
-		return nil, fmt.Errorf("разобрать JWT payload: %w", err)
+		return nil, fmt.Errorf("parsing JWT payload: %w", err)
 	}
 	return &claims, nil
 }

@@ -73,8 +73,8 @@ import (
 // no input-422 risk. label (the singular append/remove echo) is NOT tagged: for replace mode
 // it is "" (XOR with labels), and a pattern would falsely require a coven on the empty string.
 type soulCovenAssignReply struct {
-	Mode    string   `json:"mode" doc:"тип операции onд covens[]"`
-	Label   string   `json:"label" doc:"применёнonя метка for append/remove (mirror input)"`
+	Mode    string   `json:"mode" doc:"operation type on covens[]"`
+	Label   string   `json:"label" doc:"applied label for append/remove (mirror input)"`
 	Labels  []string `json:"labels,omitempty" pattern:"^[a-z][a-z0-9]*(-[a-z0-9]+)*$" doc:"applied set tokens for replace (mirror input)"` // ← soul.CovenPattern (per-element, output echo)
 	Matched int32    `json:"matched" doc:"number of hosts matching selector ∩ scope"`
 	Changed int32    `json:"changed" doc:"number of rows actually changed"`
@@ -88,7 +88,7 @@ type soulCovenAssignReply struct {
 // trait VALUES are NOT included in the output (secret hygiene, symmetric with audit). matched/changed —
 // int32 (the soul envelope-domain convention). The reply is output-only → no input-422 pattern risk.
 type soulTraitsAssignReply struct {
-	Mode    string   `json:"mode" doc:"режим операции (merge/replace/remove)"`
+	Mode    string   `json:"mode" doc:"operation mode (merge/replace/remove)"`
 	Keys    []string `json:"keys" pattern:"^[a-z][a-z0-9]*([_-][a-z0-9]+)*$" doc:"affected trait keys (mirror input)"` // ← soul.TraitKeyPattern (per-element, output echo)
 	Matched int32    `json:"matched" doc:"number of hosts matching selector ∩ scope"`
 	Changed int32    `json:"changed" doc:"number of rows actually changed"`
@@ -105,12 +105,12 @@ type soulTraitsAssignReply struct {
 // DefaultSchemaNamer capitalizes → "SoulListReply"). The json tags repeat sharedapi.PagedResponse
 // (next_cursor/total_approximate omitempty) → the wire does not change.
 type soulListReply struct {
-	Items            []SoulListEntry `json:"items" doc:"страница реестра souls"`
-	Offset           int32           `json:"offset" doc:"offset from start of set (offset-режим)"`
+	Items            []SoulListEntry `json:"items" doc:"page of the souls registry"`
+	Offset           int32           `json:"offset" doc:"offset from start of set (offset mode)"`
 	Limit            int32           `json:"limit" doc:"page size"`
-	Total            int32           `json:"total" doc:"общее число записей; зonчимо только в offset-режиме"`
-	NextCursor       *string         `json:"next_cursor,omitempty" doc:"opaque keyset-курwithр следующей страницы (keyset-режим); отсутствует в offset-режиме и когда onбор исчерпан"`
-	TotalApproximate *bool           `json:"total_approximate,omitempty" doc:"total NOT точен (keyset-режим); в offset-режиме опущеbut"`
+	Total            int32           `json:"total" doc:"total record count; meaningful only in offset mode"`
+	NextCursor       *string         `json:"next_cursor,omitempty" doc:"opaque keyset cursor for the next page (keyset mode); absent in offset mode and when the set is exhausted"`
+	TotalApproximate *bool           `json:"total_approximate,omitempty" doc:"total is NOT exact (keyset mode); omitted in offset mode"`
 }
 
 // registerSoulEnvelopes registers on the registry a huma alias from the instantiated generic

@@ -73,13 +73,13 @@ func TestSchedulerDropOnOverflow(t *testing.T) {
 	// The buffered slot is the FIRST Portent (down). The next two transitions are dropped.
 	first := expectPortent(t, s)
 	if first.GetBeaconName() != "v1" {
-		t.Fatalf("ожидали первый (неслитый) Portent v1, got %q", first.GetBeaconName())
+		t.Fatalf("expected the first (unmerged) Portent v1, got %q", first.GetBeaconName())
 	}
 
 	body := obstest.Scrape(t, reg.Gatherer())
 	// Exactly two drops (2nd and 3rd transitions while the buffer was full; the 1st was buffered).
 	if !strings.Contains(body, "soul_beacon_portents_dropped_total 2") {
-		t.Errorf("ожидали 2 дропа через loop; got=\n%s", body)
+		t.Errorf("expected 2 drops through the loop; got=\n%s", body)
 	}
 }
 
@@ -127,7 +127,7 @@ func TestSchedulerFileFlapMissingHash(t *testing.T) {
 		t.Fatalf("present: beacon_name = %q, want flap-watch", ev.GetBeaconName())
 	}
 	if ev.GetData().GetFields()["sha256"].GetStringValue() == "" {
-		t.Error("present-Portent должен нести sha256 в data")
+		t.Error("present Portent must carry sha256 in data")
 	}
 
 	// present → missing (removed): the hash→"missing" transition is also a State change.
@@ -146,7 +146,7 @@ func TestSchedulerFileFlapMissingHash(t *testing.T) {
 	}
 	mt.Tick()
 	if ev := expectPortent(t, s); ev.GetData().GetFields()["sha256"].GetStringValue() == "" {
-		t.Error("повторное появление должно дать Portent с sha256")
+		t.Error("reappearance should produce a Portent with sha256")
 	}
 
 	// Stable state (same file) — no new Portent (no-change guard).

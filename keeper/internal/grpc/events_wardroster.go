@@ -12,7 +12,7 @@ import (
 // ADR-027(g), S6). On (re)connect the Soul declares the apply_ids it's tracking (ReplaceAll);
 // the Keeper uses the set to terminate this SID's orphaned `dispatched` rows.
 //
-// Closes the dispatched-orphan hole “Keeper and Soul both die after dispatch”: the row
+// Closes the dispatched-orphan hole "Keeper and Soul both die after dispatch": the row
 // would otherwise get stuck in `dispatched` forever (reclaim is scoped to `claimed`; the Reaper
 // deliberately doesn't do a dispatched-timeout). The sweep runs ONLY when a
 // WardRoster arrives — an old Soul without this message never sends it, so its
@@ -44,14 +44,14 @@ func (h *eventStreamHandler) handleWardRoster(ctx context.Context, sid, sessionI
 	}
 	if orphaned > 0 {
 		h.deps.Metrics.ObserveApplyOrphaned(orphaned)
-		h.logger.Info("eventstream: dispatched-строки осиротены по WardRoster (Soul-reconcile)",
+		h.logger.Info("eventstream: dispatched rows orphaned per WardRoster (Soul-reconcile)",
 			slog.String("sid", sid),
 			slog.String("session_id", sessionID),
 			slog.Int("known", len(known)),
 			slog.Int64("orphaned", orphaned))
 		return
 	}
-	h.logger.Debug("eventstream: WardRoster обработан, осиротевших dispatched нет",
+	h.logger.Debug("eventstream: WardRoster processed, no orphaned dispatched rows",
 		slog.String("sid", sid),
 		slog.String("session_id", sessionID),
 		slog.Int("known", len(known)))
@@ -59,7 +59,7 @@ func (h *eventStreamHandler) handleWardRoster(ctx context.Context, sid, sessionI
 
 // wardRosterToActive maps the proto set [keeperv1.WardRoster] into domain
 // [applyrun.ActiveApply], isolating the applyrun CRUD layer from proto generation.
-// An empty/nil set → nil (an explicit declaration of “nothing is being tracked”).
+// An empty/nil set → nil (an explicit declaration of "nothing is being tracked").
 func wardRosterToActive(ev *keeperv1.WardRoster) []*applyrun.ActiveApply {
 	src := ev.GetActive()
 	if len(src) == 0 {

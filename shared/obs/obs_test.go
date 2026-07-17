@@ -59,7 +59,7 @@ func TestMiddlewareForPath_RecordsRequest(t *testing.T) {
 	handler.ServeHTTP(rec, req)
 
 	if !called {
-		t.Fatal("downstream handler не был вызван")
+		t.Fatal("downstream handler was not called")
 	}
 	if rec.Code != http.StatusCreated {
 		t.Errorf("status = %d, want 201", rec.Code)
@@ -67,11 +67,11 @@ func TestMiddlewareForPath_RecordsRequest(t *testing.T) {
 
 	body := obstest.Scrape(t, reg.Gatherer())
 	if !strings.Contains(body, `keeper_http_requests_total{method="POST",path="/v1/operators",status="201"} 1`) {
-		t.Errorf("requests_total sample не найден; got=\n%s", body)
+		t.Errorf("requests_total sample not found; got=\n%s", body)
 	}
 	// duration_seconds_count{...} 1 — a guarantee that Observe() was called.
 	if !strings.Contains(body, `keeper_http_request_duration_seconds_count{method="POST",path="/v1/operators"} 1`) {
-		t.Errorf("duration_seconds_count sample не найден; got=\n%s", body)
+		t.Errorf("duration_seconds_count sample not found; got=\n%s", body)
 	}
 }
 
@@ -88,7 +88,7 @@ func TestMiddlewareForPath_DefaultStatusOK(t *testing.T) {
 
 	body := obstest.Scrape(t, reg.Gatherer())
 	if !strings.Contains(body, `status="200"`) {
-		t.Errorf("default status должен быть 200; got=\n%s", body)
+		t.Errorf("default status should be 200; got=\n%s", body)
 	}
 }
 

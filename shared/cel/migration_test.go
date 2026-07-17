@@ -25,7 +25,7 @@ func TestMigration_StateAccessible(t *testing.T) {
 		t.Fatalf("EvalExpression: %v", err)
 	}
 	if got := out.Value(); got != int64(536870912) {
-		t.Fatalf("результат = %v (%T), want 536870912", got, got)
+		t.Fatalf("result = %v (%T), want 536870912", got, got)
 	}
 }
 
@@ -45,7 +45,7 @@ func TestMigration_ContextVarsUndeclared(t *testing.T) {
 		_, err := e.EvalExpression(expr, Vars{State: map[string]any{}})
 		var ce *ErrCompile
 		if !errors.As(err, &ce) {
-			t.Errorf("expr %q: ошибка = %v, want *ErrCompile (undeclared)", expr, err)
+			t.Errorf("expr %q: error = %v, want *ErrCompile (undeclared)", expr, err)
 		}
 	}
 }
@@ -63,7 +63,7 @@ func TestMigration_VarsStillUndeclared_AfterVarLayer(t *testing.T) {
 	_, err := e.EvalInterpolation("${ vars.x }", Vars{State: map[string]any{}})
 	var ce *ErrCompile
 	if !errors.As(err, &ce) {
-		t.Fatalf("migration ${ vars.x }: ошибка = %v, want *ErrCompile (vars undeclared, фича var→var не задела миграцию)", err)
+		t.Fatalf("migration ${ vars.x }: error = %v, want *ErrCompile (vars undeclared, the var->var feature did not touch migration)", err)
 	}
 }
 
@@ -74,7 +74,7 @@ func TestMigration_VaultGuarded(t *testing.T) {
 	_, err := e.EvalExpression("vault('secret/x').password", Vars{State: map[string]any{}})
 	var ue *ErrUnsupported
 	if !errors.As(err, &ue) {
-		t.Fatalf("vault(): ошибка = %v, want *ErrUnsupported", err)
+		t.Fatalf("vault(): error = %v, want *ErrUnsupported", err)
 	}
 }
 
@@ -85,7 +85,7 @@ func TestMigration_NowGuarded(t *testing.T) {
 	_, err := e.EvalExpression("now()", Vars{State: map[string]any{}})
 	var ue *ErrUnsupported
 	if !errors.As(err, &ue) {
-		t.Fatalf("now(): ошибка = %v, want *ErrUnsupported", err)
+		t.Fatalf("now(): error = %v, want *ErrUnsupported", err)
 	}
 }
 
@@ -101,7 +101,7 @@ func TestMigration_LoopVarInScope(t *testing.T) {
 		t.Fatalf("EvalExpression: %v", err)
 	}
 	if got := out.Value(); got != "app-suffix" {
-		t.Fatalf("результат = %v, want app-suffix", got)
+		t.Fatalf("result = %v, want app-suffix", got)
 	}
 }
 
@@ -113,7 +113,7 @@ func TestMigration_StateUndeclaredInRegularEngine(t *testing.T) {
 	_, err := e.EvalExpression("state.foo", Vars{State: map[string]any{"foo": 1}})
 	var ce *ErrCompile
 	if !errors.As(err, &ce) {
-		t.Fatalf("state в обычном Engine: ошибка = %v, want *ErrCompile (undeclared)", err)
+		t.Fatalf("state in the regular Engine: error = %v, want *ErrCompile (undeclared)", err)
 	}
 }
 
@@ -125,7 +125,7 @@ func TestMigration_WithVaultRejected(t *testing.T) {
 	kv := &stubKV{secrets: map[string]map[string]any{}}
 	_, err := NewMigration(WithVault(kv))
 	if err == nil {
-		t.Fatalf("NewMigration(WithVault): ошибка = nil, want non-nil (guard сработал)")
+		t.Fatalf("NewMigration(WithVault): error = nil, want non-nil (the guard did not fire)")
 	}
 }
 

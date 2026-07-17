@@ -91,7 +91,7 @@ func TestApply_OptOutTruthTable(t *testing.T) {
 				AllowPrivate:       allowPrivate,
 			}
 			if got != want {
-				t.Fatalf("opts в фабрике = %+v, ожидалось %+v", got, want)
+				t.Fatalf("opts in the factory = %+v, expected %+v", got, want)
 			}
 		})
 	}
@@ -120,7 +120,7 @@ func TestApply_FlagsThreadedToFactory(t *testing.T) {
 		t.Fatalf("failed=true: %s", stream.Last().Message)
 	}
 	if !got.AllowHTTPRedirect || !got.InsecureSkipVerify || !got.AllowPrivate {
-		t.Fatalf("флаги не доехали до фабрики: %+v", got)
+		t.Fatalf("flags did not reach the factory: %+v", got)
 	}
 }
 
@@ -140,7 +140,7 @@ func TestApply_NoFlags_FactoryGetsSecureDefault(t *testing.T) {
 		t.Fatalf("Apply: %v", err)
 	}
 	if got.AllowHTTPRedirect || got.InsecureSkipVerify || got.AllowPrivate {
-		t.Fatalf("дефолт не безопасный: %+v", got)
+		t.Fatalf("default is not safe: %+v", got)
 	}
 }
 
@@ -157,7 +157,7 @@ func TestValidate_AllowHTTP_AcceptsHTTP(t *testing.T) {
 		}),
 	})
 	if !reply.Ok {
-		t.Fatalf("Validate ok=false для http:// при allow_http=true: %v", reply.Errors)
+		t.Fatalf("Validate ok=false for http:// with allow_http=true: %v", reply.Errors)
 	}
 }
 
@@ -172,7 +172,7 @@ func TestValidate_AllowHTTP_StillRejectsFile(t *testing.T) {
 		}),
 	})
 	if reply.Ok {
-		t.Fatal("allow_http пропустил file:// (ожидался отказ)")
+		t.Fatal("allow_http let file:// through (expected a rejection)")
 	}
 }
 
@@ -191,7 +191,7 @@ func TestValidate_AllowPrivate_DoesNotOpenHTTPScheme(t *testing.T) {
 		}),
 	})
 	if reply.Ok {
-		t.Fatal("allow_private пропустил http:// без allow_http (схема ослаблена не тем флагом)")
+		t.Fatal("allow_private let http:// through without allow_http (scheme relaxed by the wrong flag)")
 	}
 }
 
@@ -214,7 +214,7 @@ func TestApply_AllowHTTP_DownloadsOverHTTP(t *testing.T) {
 	}
 	ev := stream.Last()
 	if ev.Failed {
-		t.Fatalf("failed=true для http:// при allow_http: %s", ev.Message)
+		t.Fatalf("failed=true for http:// with allow_http: %s", ev.Message)
 	}
 	got, _ := os.ReadFile(path)
 	if string(got) != string(body) {
@@ -261,11 +261,11 @@ func TestApply_AllowHTTP_DowngradeRedirect(t *testing.T) {
 	}
 	ev := stream.Last()
 	if ev.Failed {
-		t.Fatalf("failed=true для downgrade при allow_http: %s", ev.Message)
+		t.Fatalf("failed=true for downgrade with allow_http: %s", ev.Message)
 	}
 	got, _ := os.ReadFile(path)
 	if string(got) != string(body) {
-		t.Fatalf("payload не скачан по http: %q", got)
+		t.Fatalf("payload not downloaded over http: %q", got)
 	}
 }
 
@@ -303,7 +303,7 @@ func TestApply_InsecureSkipVerify_AcceptsSelfSigned(t *testing.T) {
 		}),
 	}, stream)
 	if !stream.Last().Failed {
-		t.Fatal("failed=false для self-signed без insecure_skip_verify")
+		t.Fatal("failed=false for self-signed without insecure_skip_verify")
 	}
 
 	// With insecure: downloads successfully.
@@ -321,7 +321,7 @@ func TestApply_InsecureSkipVerify_AcceptsSelfSigned(t *testing.T) {
 		t.Fatalf("Apply: %v", err)
 	}
 	if stream2.Last().Failed {
-		t.Fatalf("failed=true с insecure_skip_verify: %s", stream2.Last().Message)
+		t.Fatalf("failed=true with insecure_skip_verify: %s", stream2.Last().Message)
 	}
 	got, _ := os.ReadFile(okPath)
 	if string(got) != string(body) {
@@ -363,10 +363,10 @@ func TestApply_AllowPrivate_DialsLoopback(t *testing.T) {
 		}),
 	}, stream)
 	if !stream.Last().Failed {
-		t.Fatal("failed=false: SSRF-guard пропустил loopback без allow_private")
+		t.Fatal("failed=false: SSRF guard let loopback through without allow_private")
 	}
 	if _, err := os.Stat(blockedPath); !os.IsNotExist(err) {
-		t.Fatal("файл создан при заблокированном dial")
+		t.Fatal("file created despite a blocked dial")
 	}
 
 	// With allow_private: goes through.
@@ -384,7 +384,7 @@ func TestApply_AllowPrivate_DialsLoopback(t *testing.T) {
 		t.Fatalf("Apply: %v", err)
 	}
 	if stream2.Last().Failed {
-		t.Fatalf("failed=true с allow_private для loopback: %s", stream2.Last().Message)
+		t.Fatalf("failed=true with allow_private for loopback: %s", stream2.Last().Message)
 	}
 	got, _ := os.ReadFile(okPath)
 	if string(got) != string(body) {
@@ -440,17 +440,17 @@ func TestApply_304_RealWire_IfNoneMatch(t *testing.T) {
 	}
 	ev := stream.Last()
 	if ev.Failed {
-		t.Fatalf("failed=true при реальном 304: %s", ev.Message)
+		t.Fatalf("failed=true on a real 304: %s", ev.Message)
 	}
 	if ev.Changed {
-		t.Fatal("changed=true при 304 (ожидался no-op)")
+		t.Fatal("changed=true on 304 (expected a no-op)")
 	}
 	if sawIfNoneMatch != etag {
-		t.Fatalf("сервер получил If-None-Match=%q, ожидался %q", sawIfNoneMatch, etag)
+		t.Fatalf("server received If-None-Match=%q, expected %q", sawIfNoneMatch, etag)
 	}
 	got, _ := os.ReadFile(path)
 	if string(got) != string(body) {
-		t.Fatalf("файл изменён при 304: %q", got)
+		t.Fatalf("file changed on 304: %q", got)
 	}
 }
 
@@ -478,19 +478,19 @@ func TestApply_304_LocalFileExists_NoOp(t *testing.T) {
 	}
 	ev := stream.Last()
 	if ev.Failed {
-		t.Fatalf("failed=true при 304 + локальный файл: %s", ev.Message)
+		t.Fatalf("failed=true for 304 + local file: %s", ev.Message)
 	}
 	if ev.Changed {
-		t.Fatal("changed=true при 304 без изменения атрибутов")
+		t.Fatal("changed=true on 304 with no attribute change")
 	}
 	// File is untouched.
 	got, _ := os.ReadFile(path)
 	if string(got) != string(body) {
-		t.Fatalf("файл изменён при 304: %q", got)
+		t.Fatalf("file changed on 304: %q", got)
 	}
 	// output.sha256 is the actual sha of the existing file.
 	if ev.Output.Fields["sha256"].GetStringValue() != sha256hex(body) {
-		t.Fatal("output.sha256 != sha существующего файла при 304")
+		t.Fatal("output.sha256 != sha of the existing file on 304")
 	}
 }
 
@@ -523,7 +523,7 @@ func TestApply_304_LocalFileExists_AppliesModeDrift(t *testing.T) {
 	}
 	// 304 → content isn't downloaded, but mode drift is corrected (converge).
 	if !ev.Changed {
-		t.Fatal("changed=false при 304 + drift mode")
+		t.Fatal("changed=false for 304 + drift mode")
 	}
 	info, _ := os.Stat(path)
 	if info.Mode().Perm() != 0o600 {
@@ -568,23 +568,23 @@ func TestApply_304_WithChecksum_NoOp_ShaCorrect(t *testing.T) {
 	}
 	ev := stream.Last()
 	if ev.Failed {
-		t.Fatalf("failed=true при checksum + 304 + локальный файл: %s", ev.Message)
+		t.Fatalf("failed=true for checksum + 304 + local file: %s", ev.Message)
 	}
 	if ev.Changed {
-		t.Fatal("changed=true при 304 (ожидался no-op)")
+		t.Fatal("changed=true on 304 (expected a no-op)")
 	}
 	if d.calls != 1 {
-		t.Fatalf("HTTP вызван %d раз (ожидался 1: conditional-GET → 304)", d.calls)
+		t.Fatalf("HTTP called %d times (expected 1: conditional-GET -> 304)", d.calls)
 	}
 	// output.sha256 is the actual SHA-256 of the existing file, regardless of
 	// the sha1 checksum (canonicalSHA256 recomputes sha256).
 	if got := ev.Output.Fields["sha256"].GetStringValue(); got != sha256hex(body) {
-		t.Fatalf("output.sha256=%q, ожидался sha256 файла %q", got, sha256hex(body))
+		t.Fatalf("output.sha256=%q, expected file sha256 %q", got, sha256hex(body))
 	}
 	// File is untouched.
 	got, _ := os.ReadFile(path)
 	if string(got) != string(body) {
-		t.Fatalf("файл изменён при 304: %q", got)
+		t.Fatalf("file changed on 304: %q", got)
 	}
 }
 
@@ -608,14 +608,14 @@ func TestApply_304_NoLocalFile_FailsFast(t *testing.T) {
 	}
 	ev := stream.Last()
 	if !ev.Failed {
-		t.Fatal("failed=false при 304 без локального файла")
+		t.Fatal("failed=false for 304 with no local file")
 	}
 	if !strings.Contains(ev.Message, "304") || !strings.Contains(ev.Message, "stale If-None-Match") {
-		t.Fatalf("неинформативное сообщение об ошибке 304: %q", ev.Message)
+		t.Fatalf("uninformative 304 error message: %q", ev.Message)
 	}
 	// File wasn't created.
 	if _, err := os.Stat(path); !os.IsNotExist(err) {
-		t.Fatal("файл создан при 304 без кэша")
+		t.Fatal("file created on 304 with no cache")
 	}
 }
 
@@ -654,15 +654,15 @@ func TestApply_GuardWarning_OnGuardLowered(t *testing.T) {
 
 			ws := warningsOf(stream.Last())
 			if !anyWarningContains(ws, tc.substr) {
-				t.Fatalf("нет warning про %s в output: %v", tc.substr, ws)
+				t.Fatalf("no warning about %s in output: %v", tc.substr, ws)
 			}
 			// host is present, but NOT the full URL and NOT headers.
 			if !anyWarningContains(ws, "host.example") {
-				t.Fatalf("в warning нет host: %v", ws)
+				t.Fatalf("warning has no host: %v", ws)
 			}
 			for _, w := range ws {
 				if strings.Contains(w, "secret-path") || strings.Contains(w, "token=leak") || strings.Contains(w, "Bearer") {
-					t.Fatalf("warning раскрыл секрет (path/query/header): %q", w)
+					t.Fatalf("warning leaked a secret (path/query/header): %q", w)
 				}
 			}
 		})
@@ -682,7 +682,7 @@ func TestApply_NoWarning_WhenGuardsUp(t *testing.T) {
 		}),
 	}, stream)
 	if w := warningsOf(stream.Last()); len(w) != 0 {
-		t.Fatalf("warnings при дефолтных guard-ах: %v", w)
+		t.Fatalf("warnings with default guards: %v", w)
 	}
 }
 
@@ -700,7 +700,7 @@ func TestValidate_RejectsNonBoolFlag(t *testing.T) {
 			}),
 		})
 		if reply.Ok {
-			t.Fatalf("Validate ok=true для не-bool %s", p)
+			t.Fatalf("Validate ok=true for a non-bool %s", p)
 		}
 	}
 }

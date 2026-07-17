@@ -46,12 +46,12 @@ func TestMultiWriter_NoTaps_ReturnsPrimary(t *testing.T) {
 	primary := &recordingWriter{}
 	w := NewMultiWriter(primary, nil)
 	if w != Writer(primary) {
-		t.Fatalf("без tap-ов NewMultiWriter должен вернуть primary как есть, получил %T", w)
+		t.Fatalf("without taps, NewMultiWriter should return primary as-is, got %T", w)
 	}
 	// nil taps are dropped too.
 	w = NewMultiWriter(primary, nil, nil, nil)
 	if w != Writer(primary) {
-		t.Fatalf("nil-tap-ы должны отбрасываться, получил %T", w)
+		t.Fatalf("nil taps should be dropped, got %T", w)
 	}
 }
 
@@ -64,10 +64,10 @@ func TestMultiWriter_PrimarySuccess_CallsTaps(t *testing.T) {
 		t.Fatalf("Write: %v", err)
 	}
 	if primary.count() != 1 {
-		t.Fatalf("primary должен записать 1 событие, записал %d", primary.count())
+		t.Fatalf("primary should write 1 event, wrote %d", primary.count())
 	}
 	if tap1.observed.Load() != 1 || tap2.observed.Load() != 1 {
-		t.Fatalf("оба tap-а должны получить событие: tap1=%d tap2=%d", tap1.observed.Load(), tap2.observed.Load())
+		t.Fatalf("both taps should receive the event: tap1=%d tap2=%d", tap1.observed.Load(), tap2.observed.Load())
 	}
 }
 
@@ -79,10 +79,10 @@ func TestMultiWriter_PrimaryFail_TapNotCalled(t *testing.T) {
 
 	err := w.Write(context.Background(), &Event{EventType: "scenario_run.failed"})
 	if !errors.Is(err, wantErr) {
-		t.Fatalf("ошибка primary должна пробрасываться как есть, получил %v", err)
+		t.Fatalf("primary error should propagate as-is, got %v", err)
 	}
 	if tap.observed.Load() != 0 {
-		t.Fatalf("при сбое primary tap НЕ должен вызываться, вызван %d раз", tap.observed.Load())
+		t.Fatalf("on primary failure the tap must NOT be called, called %d times", tap.observed.Load())
 	}
 }
 
@@ -97,21 +97,21 @@ func TestMultiWriter_TapPanic_DoesNotFailWrite(t *testing.T) {
 	w := NewMultiWriter(primary, nil, panicTap{}, after)
 
 	if err := w.Write(context.Background(), &Event{EventType: "command_run.completed"}); err != nil {
-		t.Fatalf("паника tap-а не должна фейлить Write, получил %v", err)
+		t.Fatalf("a tap panic must not fail Write, got %v", err)
 	}
 	if primary.count() != 1 {
-		t.Fatalf("primary-запись должна состояться несмотря на панику tap-а")
+		t.Fatalf("the primary write must succeed despite the tap panic")
 	}
 	// the tap after the panicking one must still be called (the panic is isolated).
 	if after.observed.Load() != 1 {
-		t.Fatalf("tap после паникующего должен быть вызван, вызван %d раз", after.observed.Load())
+		t.Fatalf("the tap after the panicking one must be called, called %d times", after.observed.Load())
 	}
 	mw, ok := w.(*MultiWriter)
 	if !ok {
-		t.Fatalf("ожидался *MultiWriter, получил %T", w)
+		t.Fatalf("expected *MultiWriter, got %T", w)
 	}
 	if mw.tapPanics.Load() != 1 {
-		t.Fatalf("счётчик паник должен быть 1, получил %d", mw.tapPanics.Load())
+		t.Fatalf("panic counter should be 1, got %d", mw.tapPanics.Load())
 	}
 }
 
@@ -140,13 +140,13 @@ func TestMultiWriter_TapInvokedAfterPrimary(t *testing.T) {
 	select {
 	case <-done:
 	case <-time.After(2 * time.Second):
-		t.Fatal("Write завис")
+		t.Fatal("Write hung")
 	}
 	if got := <-order; got != "primary" {
-		t.Fatalf("primary должен записаться ПЕРВЫМ, первым был %q", got)
+		t.Fatalf("primary should write FIRST, first was %q", got)
 	}
 	if got := <-order; got != "tap" {
-		t.Fatalf("tap должен вызваться ВТОРЫМ, вторым был %q", got)
+		t.Fatalf("tap should be called SECOND, second was %q", got)
 	}
 }
 

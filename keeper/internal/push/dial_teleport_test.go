@@ -343,7 +343,7 @@ func TestBuildProxyClientConfig_ResetsNextProtos(t *testing.T) {
 				t.Fatalf("TLSConfigFunc returned error: %v", err)
 			}
 			if len(c.NextProtos) != 0 {
-				t.Errorf("NextProtos = %v, want empty: h2 первым уведёт TLS-routing proxy в web-стек (403)", c.NextProtos)
+				t.Errorf("NextProtos = %v, want empty: h2 first would route the TLS-routing proxy into the web stack (403)", c.NextProtos)
 			}
 		})
 	}
@@ -387,22 +387,22 @@ func TestTeleportSession_ProxyClientOwnership(t *testing.T) {
 	sess := newTeleportSession(&journalSession{journal: &journal}, proxyClient)
 
 	if proxyClient.closed != 0 {
-		t.Fatalf("proxy-клиент закрыт сразу после dial (closed=%d) — conn мёртв до первого Run", proxyClient.closed)
+		t.Fatalf("proxy client closed right after dial (closed=%d) - conn is dead before the first Run", proxyClient.closed)
 	}
 	if err := sess.Close(); err != nil {
 		t.Fatalf("Close: %v", err)
 	}
 	if proxyClient.closed != 1 {
-		t.Fatalf("после sess.Close(): proxy closed=%d, want 1", proxyClient.closed)
+		t.Fatalf("after sess.Close(): proxy closed=%d, want 1", proxyClient.closed)
 	}
 	if want := []string{"client", "proxy"}; !slices.Equal(journal, want) {
-		t.Fatalf("порядок закрытия %v, want %v (proxy раньше client оборвал бы туннель под живым ssh)", journal, want)
+		t.Fatalf("close order %v, want %v (proxy closing before client would sever the tunnel under a live ssh)", journal, want)
 	}
 	if err := sess.Close(); err != nil {
-		t.Fatalf("повторный Close: %v", err)
+		t.Fatalf("repeated Close: %v", err)
 	}
 	if proxyClient.closed != 1 {
-		t.Fatalf("повторный Close снова закрыл proxy: closed=%d", proxyClient.closed)
+		t.Fatalf("repeated Close closed proxy again: closed=%d", proxyClient.closed)
 	}
 }
 

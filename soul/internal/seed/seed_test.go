@@ -108,7 +108,7 @@ func TestLoad_FlatFormatHardCut(t *testing.T) {
 	}
 	_, err := Load(dir)
 	if !errors.Is(err, ErrIncomplete) {
-		t.Fatalf("Load на плоском формате: %v; want ErrIncomplete (hard-cut)", err)
+		t.Fatalf("Load on the flat format: %v; want ErrIncomplete (hard-cut)", err)
 	}
 }
 

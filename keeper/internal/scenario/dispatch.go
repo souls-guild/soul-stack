@@ -73,7 +73,7 @@ func (r *Runner) dispatchPassage(ctx context.Context, spec RunSpec, log *slog.Lo
 		// No Passage task targets any host (where: filtered out all hosts on
 		// every task). Not an error: nothing to apply in this Passage; for
 		// N=1 the run succeeds as a no-op.
-		log.Info("scenario: dispatch — ни одна задача Passage не таргетит хосты, no-op",
+		log.Info("scenario: dispatch - no Passage task targets hosts, no-op",
 			slog.Int("passage", passage))
 		return nil
 	}
@@ -102,7 +102,7 @@ func (r *Runner) dispatchPassage(ctx context.Context, spec RunSpec, log *slog.Lo
 			return derr
 		}
 		if len(waves) > 1 {
-			log.Info("scenario: волна serial завершена",
+			log.Info("scenario: serial wave completed",
 				slog.Int("wave", wi+1), slog.Int("waves_total", len(waves)), slog.Int("hosts", len(wave)))
 		}
 	}
@@ -137,7 +137,7 @@ func (r *Runner) dispatchPlanned(ctx context.Context, spec RunSpec, log *slog.Lo
 	if len(hosts) == 0 {
 		// Host resolution upstream (run.go step 3) already rejects an empty
 		// roster (no_hosts). Empty shouldn't reach here; defensive check.
-		return fmt.Errorf("scenario: dispatchPlanned: пустой roster прогона %s", spec.ApplyID)
+		return fmt.Errorf("scenario: dispatchPlanned: empty roster for run %s", spec.ApplyID)
 	}
 
 	recipe := &applyrun.Recipe{
@@ -161,7 +161,7 @@ func (r *Runner) dispatchPlanned(ctx context.Context, spec RunSpec, log *slog.Lo
 			return fmt.Errorf("scenario: insert planned apply_run (%s): %w", h.SID, err)
 		}
 		dispatched++
-		log.Info("scenario: planned-задание записано", slog.String("sid", h.SID))
+		log.Info("scenario: planned job recorded", slog.String("sid", h.SID))
 	}
 
 	// Summons is best-effort: persisted planned assignments are picked up by
@@ -185,7 +185,7 @@ func (r *Runner) publishSummons(ctx context.Context, log *slog.Logger) {
 		return
 	}
 	if err := r.deps.Summons.PublishSummons(ctx); err != nil {
-		log.Warn("scenario: publish Summons провален — poll-fallback подхватит", slog.Any("error", err))
+		log.Warn("scenario: publish Summons failed - poll-fallback will pick it up", slog.Any("error", err))
 	}
 }
 
@@ -283,7 +283,7 @@ func (r *Runner) dispatchWave(ctx context.Context, spec RunSpec, log *slog.Logge
 			return dispatched, fmt.Errorf("scenario: send apply (%s): %w", sid, err)
 		}
 		dispatched++
-		log.Info("scenario: ApplyRequest отправлен", slog.String("sid", sid), slog.Int("tasks", len(perHost[sid])))
+		log.Info("scenario: ApplyRequest sent", slog.String("sid", sid), slog.Int("tasks", len(perHost[sid])))
 	}
 	return dispatched, nil
 }
@@ -321,7 +321,7 @@ func (r *Runner) warnCrossKeeperDispatch(ctx context.Context, sid string, log *s
 	if err != nil || !ok || owner == "" || owner == r.kid {
 		return
 	}
-	log.Warn("scenario: footgun multi-keeper + acolytes=0 — Soul на стриме другого Keeper-инстанса; прогон может зависнуть в applying (для HA-кластера выставьте keeper.acolytes>0, ADR-027)",
+	log.Warn("scenario: footgun multi-keeper + acolytes=0 - Soul is streamed to a different Keeper instance; the run may hang in applying (for an HA cluster set keeper.acolytes>0, ADR-027)",
 		slog.String("sid", sid),
 		slog.String("stream_owner_kid", owner),
 		slog.String("self_kid", r.kid))
@@ -356,8 +356,8 @@ func (r *Runner) waitBarrier(ctx context.Context, applyID string, passage, wantH
 		// error_locked), but survives cross-Keeper routing. Local Cancel
 		// remains the fast path via <-ctx.Done() below.
 		if cancelRequested(statuses) {
-			log.Info("scenario: barrier — получен cluster-wide Cancel (cancel_requested), прогон отменяется")
-			return fmt.Errorf("scenario: barrier прерван: %w", errCancelRequested)
+			log.Info("scenario: barrier - received cluster-wide Cancel (cancel_requested), run is being cancelled")
+			return fmt.Errorf("scenario: barrier interrupted: %w", errCancelRequested)
 		}
 
 		done, failed := classify(statuses, passage, wantHosts, noLogByIndex)
@@ -370,7 +370,7 @@ func (r *Runner) waitBarrier(ctx context.Context, applyID string, passage, wantH
 
 		select {
 		case <-ctx.Done():
-			return fmt.Errorf("scenario: barrier прерван: %w", ctx.Err())
+			return fmt.Errorf("scenario: barrier interrupted: %w", ctx.Err())
 		case <-ticker.C:
 		}
 	}
@@ -446,7 +446,7 @@ func classify(statuses []applyrun.HostStatus, passage, wantHosts int, noLogByInd
 			// (incarnation → error_locked via commitRunState), same as
 			// failed/cancelled. No RunResult will ever arrive for it —
 			// without this branch the barrier would hang until runTimeout.
-			return false, fmt.Errorf("scenario: хост %s завершился со статусом %s (%s)",
+			return false, fmt.Errorf("scenario: host %s finished with status %s (%s)",
 				hs.SID, hs.Status, failureReason(hs, noLogByIndex))
 		}
 	}

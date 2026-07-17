@@ -257,12 +257,12 @@ func TestHumaHerald_Create_GoldenWire(t *testing.T) {
 	}
 	var m map[string]any
 	if err := json.Unmarshal(rec.Body.Bytes(), &m); err != nil {
-		t.Fatalf("reply не JSON-object: %v; body=%s", err, rec.Body.String())
+		t.Fatalf("reply is not a JSON-object: %v; body=%s", err, rec.Body.String())
 	}
 	out, _ := json.Marshal(m)
 	const golden = `{"config":{"url":"https://hook.test/notify"},"created_at":"2026-06-13T10:00:00Z","created_by_aid":"archon-alice","enabled":true,"name":"ops-webhook","type":"webhook","updated_at":"2026-06-13T10:00:00Z"}`
 	if got := string(out); got != golden {
-		t.Errorf("GOLDEN wire-дрейф herald.create:\n got  = %s\n want = %s", got, golden)
+		t.Errorf("GOLDEN wire-drift herald.create:\n got  = %s\n want = %s", got, golden)
 	}
 }
 
@@ -337,7 +337,7 @@ func TestHumaAudit_HeraldCreate_NoAudit_OnRBACDeny(t *testing.T) {
 		t.Fatalf("status = %d, want 403; body=%s", rec.Code, rec.Body.String())
 	}
 	if len(auditCap.Events()) != 0 {
-		t.Errorf("audit записан on RBAC-deny herald.create (%d withбытий)", len(auditCap.Events()))
+		t.Errorf("audit recorded on RBAC-deny herald.create (%d events)", len(auditCap.Events()))
 	}
 }
 
@@ -352,7 +352,7 @@ func TestHumaAudit_HeraldCreate_NoAudit_OnValidationFail(t *testing.T) {
 		t.Fatalf("status = %d, want 422; body=%s", rec.Code, rec.Body.String())
 	}
 	if len(auditCap.Events()) != 0 {
-		t.Errorf("audit записан on 422 herald.create (%d withбытий)", len(auditCap.Events()))
+		t.Errorf("audit recorded on 422 herald.create (%d events)", len(auditCap.Events()))
 	}
 }
 
@@ -369,12 +369,12 @@ func TestHumaHerald_List_GoldenWire(t *testing.T) {
 	}
 	var m map[string]any
 	if err := json.Unmarshal(rec.Body.Bytes(), &m); err != nil {
-		t.Fatalf("reply не JSON-object: %v; body=%s", err, rec.Body.String())
+		t.Fatalf("reply is not a JSON-object: %v; body=%s", err, rec.Body.String())
 	}
 	out, _ := json.Marshal(m)
 	const golden = `{"items":[{"config":{"url":"https://hook.test/notify"},"created_at":"2026-06-13T10:00:00Z","enabled":true,"name":"ops-webhook","type":"webhook","updated_at":"2026-06-13T10:00:00Z"}],"limit":50,"offset":0,"total":1}`
 	if got := string(out); got != golden {
-		t.Errorf("GOLDEN wire-дрейф herald.list:\n got  = %s\n want = %s", got, golden)
+		t.Errorf("GOLDEN wire-drift herald.list:\n got  = %s\n want = %s", got, golden)
 	}
 }
 
@@ -391,7 +391,7 @@ func TestHumaHerald_List_GoldenEmpty(t *testing.T) {
 	_ = json.Unmarshal(rec.Body.Bytes(), &m)
 	out, _ := json.Marshal(m)
 	if got := string(out); got != golden {
-		t.Errorf("GOLDEN wire-дрейф herald.list (empty): got=%q want=%q", got, golden)
+		t.Errorf("GOLDEN wire-drift herald.list (empty): got=%q want=%q", got, golden)
 	}
 }
 
@@ -430,7 +430,7 @@ func TestHumaHerald_List_NoAudit(t *testing.T) {
 		t.Fatalf("status = %d, want 200; body=%s", rec.Code, rec.Body.String())
 	}
 	if len(auditCap.Events()) != 0 {
-		t.Errorf("READ-роут herald.list записал audit (%d withбытий)", len(auditCap.Events()))
+		t.Errorf("READ-route herald.list recorded audit (%d events)", len(auditCap.Events()))
 	}
 }
 
@@ -446,12 +446,12 @@ func TestHumaHerald_Get_GoldenWire(t *testing.T) {
 	}
 	var m map[string]any
 	if err := json.Unmarshal(rec.Body.Bytes(), &m); err != nil {
-		t.Fatalf("reply не JSON-object: %v; body=%s", err, rec.Body.String())
+		t.Fatalf("reply is not a JSON-object: %v; body=%s", err, rec.Body.String())
 	}
 	out, _ := json.Marshal(m)
 	const golden = `{"config":{"url":"https://hook.test/notify"},"created_at":"2026-06-13T10:00:00Z","enabled":true,"name":"ops-webhook","type":"webhook","updated_at":"2026-06-13T10:00:00Z"}`
 	if got := string(out); got != golden {
-		t.Errorf("GOLDEN wire-дрейф herald.get:\n got  = %s\n want = %s", got, golden)
+		t.Errorf("GOLDEN wire-drift herald.get:\n got  = %s\n want = %s", got, golden)
 	}
 }
 
@@ -490,12 +490,12 @@ func TestHumaHerald_Update_GoldenWire(t *testing.T) {
 	}
 	var m map[string]any
 	if err := json.Unmarshal(rec.Body.Bytes(), &m); err != nil {
-		t.Fatalf("reply не JSON-object: %v; body=%s", err, rec.Body.String())
+		t.Fatalf("reply is not a JSON-object: %v; body=%s", err, rec.Body.String())
 	}
 	out, _ := json.Marshal(m)
 	const golden = `{"config":{"url":"https://hook.test/notify"},"created_at":"2026-06-13T10:00:00Z","enabled":true,"name":"ops-webhook","type":"webhook","updated_at":"2026-06-13T10:00:00Z"}`
 	if got := string(out); got != golden {
-		t.Errorf("GOLDEN wire-дрейф herald.update:\n got  = %s\n want = %s", got, golden)
+		t.Errorf("GOLDEN wire-drift herald.update:\n got  = %s\n want = %s", got, golden)
 	}
 }
 
@@ -537,7 +537,7 @@ func TestHumaAudit_HeraldUpdate_NoAudit_OnNotFound(t *testing.T) {
 		t.Fatalf("status = %d, want 404; body=%s", rec.Code, rec.Body.String())
 	}
 	if len(auditCap.Events()) != 0 {
-		t.Errorf("audit записан on 404 herald.update (%d withбытий)", len(auditCap.Events()))
+		t.Errorf("audit recorded on 404 herald.update (%d events)", len(auditCap.Events()))
 	}
 }
 
@@ -552,7 +552,7 @@ func TestHumaHerald_Delete_204(t *testing.T) {
 		t.Fatalf("status = %d, want 204; body=%s", rec.Code, rec.Body.String())
 	}
 	if body := strings.TrimSpace(rec.Body.String()); body != "" {
-		t.Errorf("204-body herald.delete toлжbut быть ПУСТЫМ, got %q", body)
+		t.Errorf("204-body herald.delete must be EMPTY, got %q", body)
 	}
 }
 
@@ -578,7 +578,7 @@ func TestHumaAudit_HeraldDelete_NoAudit_OnNotFound(t *testing.T) {
 		t.Fatalf("status = %d, want 404; body=%s", rec.Code, rec.Body.String())
 	}
 	if len(auditCap.Events()) != 0 {
-		t.Errorf("audit записан on 404 herald.delete (%d withбытий)", len(auditCap.Events()))
+		t.Errorf("audit recorded on 404 herald.delete (%d events)", len(auditCap.Events()))
 	}
 }
 
@@ -596,12 +596,12 @@ func TestHumaTiding_Create_GoldenWire(t *testing.T) {
 	}
 	var m map[string]any
 	if err := json.Unmarshal(rec.Body.Bytes(), &m); err != nil {
-		t.Fatalf("reply не JSON-object: %v; body=%s", err, rec.Body.String())
+		t.Fatalf("reply is not a JSON-object: %v; body=%s", err, rec.Body.String())
 	}
 	out, _ := json.Marshal(m)
 	const golden = `{"created_at":"2026-06-13T10:00:00Z","created_by_aid":"archon-alice","enabled":true,"ephemeral":false,"event_types":["scenario_run.*"],"herald":"ops-webhook","name":"on-fail","only_changes":false,"only_failures":false,"updated_at":"2026-06-13T10:00:00Z"}`
 	if got := string(out); got != golden {
-		t.Errorf("GOLDEN wire-дрейф tiding.create:\n got  = %s\n want = %s", got, golden)
+		t.Errorf("GOLDEN wire-drift tiding.create:\n got  = %s\n want = %s", got, golden)
 	}
 }
 
@@ -667,12 +667,12 @@ func TestHumaTiding_List_GoldenWire(t *testing.T) {
 	}
 	var m map[string]any
 	if err := json.Unmarshal(rec.Body.Bytes(), &m); err != nil {
-		t.Fatalf("reply не JSON-object: %v; body=%s", err, rec.Body.String())
+		t.Fatalf("reply is not a JSON-object: %v; body=%s", err, rec.Body.String())
 	}
 	out, _ := json.Marshal(m)
 	const golden = `{"items":[{"created_at":"2026-06-13T10:00:00Z","enabled":true,"ephemeral":false,"event_types":["scenario_run.*"],"herald":"ops-webhook","name":"on-fail","only_changes":false,"only_failures":false,"updated_at":"2026-06-13T10:00:00Z"}],"limit":50,"offset":0,"total":1}`
 	if got := string(out); got != golden {
-		t.Errorf("GOLDEN wire-дрейф tiding.list:\n got  = %s\n want = %s", got, golden)
+		t.Errorf("GOLDEN wire-drift tiding.list:\n got  = %s\n want = %s", got, golden)
 	}
 }
 
@@ -708,7 +708,7 @@ func TestHumaTiding_List_NoAudit(t *testing.T) {
 		t.Fatalf("status = %d, want 200; body=%s", rec.Code, rec.Body.String())
 	}
 	if len(auditCap.Events()) != 0 {
-		t.Errorf("READ-роут tiding.list записал audit (%d withбытий)", len(auditCap.Events()))
+		t.Errorf("READ-route tiding.list recorded audit (%d events)", len(auditCap.Events()))
 	}
 }
 
@@ -754,7 +754,7 @@ func TestHumaTiding_Delete_204(t *testing.T) {
 		t.Fatalf("status = %d, want 204; body=%s", rec.Code, rec.Body.String())
 	}
 	if body := strings.TrimSpace(rec.Body.String()); body != "" {
-		t.Errorf("204-body tiding.delete toлжbut быть ПУСТЫМ, got %q", body)
+		t.Errorf("204-body tiding.delete must be EMPTY, got %q", body)
 	}
 }
 
@@ -780,7 +780,7 @@ func TestHumaAudit_TidingDelete_NoAudit_OnNotFound(t *testing.T) {
 		t.Fatalf("status = %d, want 404; body=%s", rec.Code, rec.Body.String())
 	}
 	if len(auditCap.Events()) != 0 {
-		t.Errorf("audit записан on 404 tiding.delete (%d withбытий)", len(auditCap.Events()))
+		t.Errorf("audit recorded on 404 tiding.delete (%d events)", len(auditCap.Events()))
 	}
 }
 
@@ -792,7 +792,7 @@ func TestHumaHerald_OpenAPIFragment_3_1(t *testing.T) {
 		t.Fatalf("HumaHeraldSpecYAML: %v", err)
 	}
 	if !strings.Contains(frag, "openapi: 3.1.0") {
-		t.Errorf("huma-фрагмент не несёт `openapi: 3.1.0`:\n%s", frag)
+		t.Errorf("huma-fragment does not carry `openapi: 3.1.0`:\n%s", frag)
 	}
 	for _, want := range []string{
 		"createHerald", "listHeralds", "getHerald", "updateHerald", "deleteHerald",
@@ -800,10 +800,10 @@ func TestHumaHerald_OpenAPIFragment_3_1(t *testing.T) {
 		"event_types",
 	} {
 		if !strings.Contains(frag, want) {
-			t.Errorf("OpenAPI-фрагмент не withдержит %q:\n%s", want, frag)
+			t.Errorf("OpenAPI-fragment does not contain %q:\n%s", want, frag)
 		}
 	}
 	if strings.Contains(frag, "octet-stream") {
-		t.Errorf("OpenAPI-фрагмент несёт application/octet-stream:\n%s", frag)
+		t.Errorf("OpenAPI-fragment carries application/octet-stream:\n%s", frag)
 	}
 }

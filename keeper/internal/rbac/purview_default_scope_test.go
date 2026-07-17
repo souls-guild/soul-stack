@@ -24,10 +24,10 @@ func TestResolvePurview_DefaultScope_Inherited(t *testing.T) {
 		t.Errorf("Unrestricted=true, want false (bare-perm inherits default_scope)")
 	}
 	if p.Deny {
-		t.Errorf("Deny=true, want false (scope введён непустой)")
+		t.Errorf("Deny=true, want false (scope was set non-empty)")
 	}
 	if !reflect.DeepEqual(p.Covens, []string{"prod"}) {
-		t.Errorf("Covens=%v, want [prod] (наследование default_scope)", p.Covens)
+		t.Errorf("Covens=%v, want [prod] (default_scope inheritance)", p.Covens)
 	}
 }
 
@@ -44,7 +44,7 @@ func TestResolvePurview_DefaultScope_OverriddenByPerPerm(t *testing.T) {
 		t.Errorf("Unrestricted=true, want false")
 	}
 	if !reflect.DeepEqual(p.Covens, []string{"staging"}) {
-		t.Errorf("Covens=%v, want [staging] (override, НЕ prod, НЕ merge)", p.Covens)
+		t.Errorf("Covens=%v, want [staging] (override, NOT prod, NOT merge)", p.Covens)
 	}
 }
 
@@ -93,10 +93,10 @@ func TestResolvePurview_Wildcard_IgnoresDefaultScope(t *testing.T) {
 	// `*` matches ANY (resource, action) — we check an arbitrary one.
 	p := e.ResolvePurview("archon-root", "incarnation", "run")
 	if !p.Unrestricted {
-		t.Errorf("Unrestricted=false, want true (`*` игнорирует default_scope — cluster-admin не залочен)")
+		t.Errorf("Unrestricted=false, want true (`*` ignores default_scope - cluster-admin is not locked)")
 	}
 	if p.Deny {
-		t.Errorf("Deny=true, want false (`*` всегда allow-all)")
+		t.Errorf("Deny=true, want false (`*` is always allow-all)")
 	}
 	if p.Covens != nil {
 		t.Errorf("Covens=%v, want nil (unrestricted)", p.Covens)
@@ -114,10 +114,10 @@ func TestResolvePurview_DefaultScope_OnlyOwnPermissions(t *testing.T) {
 	// The role does NOT grant soul.coven-assign → no match → empty Purview (not prod).
 	p := e.ResolvePurview("archon-a", "soul", "coven-assign")
 	if p.Unrestricted {
-		t.Errorf("Unrestricted=true, want false (роль не покрывает soul.coven-assign)")
+		t.Errorf("Unrestricted=true, want false (role does not cover soul.coven-assign)")
 	}
 	if len(p.Covens) != 0 {
-		t.Errorf("Covens=%v, want empty (default_scope не утекает на чужой resource)", p.Covens)
+		t.Errorf("Covens=%v, want empty (default_scope does not leak onto an unrelated resource)", p.Covens)
 	}
 }
 
@@ -161,7 +161,7 @@ func TestResolvePurview_UnionAcrossRoles_UnrestrictedWins(t *testing.T) {
 	)
 	p := e.ResolvePurview("archon-a", "incarnation", "run")
 	if !p.Unrestricted {
-		t.Errorf("Unrestricted=false, want true (одна роль bare-без-scope → unrestricted побеждает)")
+		t.Errorf("Unrestricted=false, want true (a single bare-scope-less role -> unrestricted wins)")
 	}
 }
 

@@ -52,10 +52,10 @@ func TestRun_InjectsHostFactsIntoAwareModule(t *testing.T) {
 		t.Fatalf("Run: %v", err)
 	}
 	if !mod.awareSet {
-		t.Fatal("SetHostFacts не вызван на SoulprintAware-модуле")
+		t.Fatal("SetHostFacts was not called on the SoulprintAware module")
 	}
 	if mod.applyHostFacts.PkgMgr != util.PkgMgrApk || mod.applyHostFacts.InitSystem != util.InitSystemOpenRC {
-		t.Fatalf("на момент Apply facts=%+v, want {apk, openrc} (инжект ДО Apply)", mod.applyHostFacts)
+		t.Fatalf("at Apply time facts=%+v, want {apk, openrc} (inject BEFORE Apply)", mod.applyHostFacts)
 	}
 }
 

@@ -83,8 +83,8 @@ type ldapLoginInput struct {
 // Password carries format:"password" (UI masking); it is NEVER logged and never
 // put into audit.
 type LDAPLoginRequest struct {
-	Username string `json:"username" minLength:"1" doc:"имя пользователя for LDAP search-bind"`
-	Password string `json:"password" format:"password" minLength:"1" doc:"пароль (не логируется, не возвращается)"`
+	Username string `json:"username" minLength:"1" doc:"username for LDAP search-bind"`
+	Password string `json:"password" format:"password" minLength:"1" doc:"password (never logged, never returned)"`
 }
 
 // ldapLoginOutput — huma output. The body is empty (ADR-058: no JSON token);
@@ -103,8 +103,8 @@ func ldapLoginOperation() huma.Operation {
 		OperationID:   "ldapLogin",
 		Method:        http.MethodPost,
 		Path:          "/ldap/login",
-		Summary:       "Логин оператора via LDAP",
-		Description:   "Федеративonя аутентификация (ADR-058): LDAP search-bind → маппинг on operators(aid)+роли → внутренний JWT в HttpOnly+Secure cookie. Тело ответа пустое.",
+		Summary:       "Operator login via LDAP",
+		Description:   "Federated authentication (ADR-058): LDAP search-bind -> mapping onto operators(aid)+roles -> internal JWT in HttpOnly+Secure cookie. Response body is empty.",
 		Tags:          []string{"auth"},
 		DefaultStatus: http.StatusNoContent,
 		// 429 — anti-bruteforce throttle/lockout (AuthLoginLimit middleware, HIGH-3).

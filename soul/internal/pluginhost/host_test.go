@@ -32,7 +32,7 @@ func TestNewHostNilConfig(t *testing.T) {
 		t.Errorf("ShutdownGrace = %v, want %v", h.ShutdownGrace, DefaultShutdownGrace)
 	}
 	if h.AllowedCapabilities != nil {
-		t.Errorf("AllowedCapabilities = %v, want nil (всё разрешено)", h.AllowedCapabilities)
+		t.Errorf("AllowedCapabilities = %v, want nil (everything allowed)", h.AllowedCapabilities)
 	}
 }
 
@@ -44,7 +44,7 @@ func TestNewHostEmptyConfig(t *testing.T) {
 		t.Fatalf("NewHost(empty): %v", err)
 	}
 	if h.SocketDir != DefaultSocketDir {
-		t.Errorf("SocketDir = %q, want %q (cfg.SocketDir пуст → дефолт)", h.SocketDir, DefaultSocketDir)
+		t.Errorf("SocketDir = %q, want %q (cfg.SocketDir empty -> default)", h.SocketDir, DefaultSocketDir)
 	}
 	if h.StartupTimeout != DefaultStartupTimeout || h.ShutdownGrace != DefaultShutdownGrace {
 		t.Errorf("timeouts = (%v,%v), want defaults", h.StartupTimeout, h.ShutdownGrace)
@@ -135,7 +135,7 @@ func TestSpawnRejectsKindMismatch(t *testing.T) {
 		t.Fatal("expected kind-mismatch denial for cloud_driver under soul-host")
 	}
 	if !contains(err.Error(), "soul_module") || !contains(err.Error(), KindCloudDriver) {
-		t.Errorf("error %q should mention expected kind soul_module и фактический %q", err.Error(), KindCloudDriver)
+		t.Errorf("error %q should mention expected kind soul_module and actual %q", err.Error(), KindCloudDriver)
 	}
 }
 
@@ -216,7 +216,7 @@ side_effects: []
 		}
 	}
 	if !sawCloudWarn {
-		t.Errorf("ожидался warning про отфильтрованный cloud_driver, warns=%v", warns)
+		t.Errorf("expected a warning about the filtered cloud_driver, warns=%v", warns)
 	}
 }
 
@@ -261,15 +261,15 @@ func TestSpawnDigestMismatchRejected(t *testing.T) {
 	// First run — Sigil-verify passes, sidecar sealed, normal operation.
 	p, err := h.Spawn(ctx, d)
 	if err != nil {
-		t.Fatalf("первый Spawn (verify+seal): %v", err)
+		t.Fatalf("first Spawn (verify+seal): %v", err)
 	}
 	if err := p.Close(); err != nil {
-		t.Logf("Close после seal: %v", err)
+		t.Logf("Close after seal: %v", err)
 	}
 
 	sidecar := filepath.Join(d.Dir, ".sha256")
 	if _, err := os.Stat(sidecar); err != nil {
-		t.Fatalf("sidecar .sha256 не создан первым Spawn: %v", err)
+		t.Fatalf("sidecar .sha256 not created by the first Spawn: %v", err)
 	}
 
 	// Swap the binary: append garbage → digest no longer matches the grant.
@@ -278,14 +278,14 @@ func TestSpawnDigestMismatchRejected(t *testing.T) {
 	// The second Spawn must refuse before exec — fail-closed on digest_mismatch.
 	_, err = h.Spawn(ctx, d)
 	if err == nil {
-		t.Fatal("SECURITY: Spawn запустил подменённый бинарь (digest mismatch не отвергнут)")
+		t.Fatal("SECURITY: Spawn launched a tampered binary (digest mismatch not rejected)")
 	}
 	if !errors.Is(err, sharedhost.ErrSigilVerify) {
-		t.Fatalf("ожидался ErrSigilVerify, got %v", err)
+		t.Fatalf("expected ErrSigilVerify, got %v", err)
 	}
 	var ve *sharedhost.VerifyError
 	if !errors.As(err, &ve) || ve.Reason != sharedhost.VerifyReasonDigestMismatch {
-		t.Errorf("ожидался reason digest_mismatch, got %v", err)
+		t.Errorf("expected reason digest_mismatch, got %v", err)
 	}
 }
 
@@ -302,31 +302,31 @@ func tamperBinary(t *testing.T, path string) {
 	t.Helper()
 	orig, err := os.ReadFile(path)
 	if err != nil {
-		t.Fatalf("read бинаря перед подменой: %v", err)
+		t.Fatalf("read binary before tampering: %v", err)
 	}
 	tampered := append(orig, []byte("\n// tampered\n")...)
 
 	tmp, err := os.CreateTemp(filepath.Dir(path), ".tamper-*")
 	if err != nil {
-		t.Fatalf("create temp для подмены: %v", err)
+		t.Fatalf("create temp for tampering: %v", err)
 	}
 	tmpPath := tmp.Name()
 	if _, err := tmp.Write(tampered); err != nil {
 		_ = tmp.Close()
 		_ = os.Remove(tmpPath)
-		t.Fatalf("write подмены: %v", err)
+		t.Fatalf("write tampered content: %v", err)
 	}
 	if err := tmp.Close(); err != nil {
 		_ = os.Remove(tmpPath)
-		t.Fatalf("close temp подмены: %v", err)
+		t.Fatalf("close tamper temp: %v", err)
 	}
 	if err := os.Chmod(tmpPath, 0o755); err != nil {
 		_ = os.Remove(tmpPath)
-		t.Fatalf("chmod temp подмены: %v", err)
+		t.Fatalf("chmod tamper temp: %v", err)
 	}
 	if err := os.Rename(tmpPath, path); err != nil {
 		_ = os.Remove(tmpPath)
-		t.Fatalf("rename подмены поверх бинаря: %v", err)
+		t.Fatalf("rename tampered content over binary: %v", err)
 	}
 }
 

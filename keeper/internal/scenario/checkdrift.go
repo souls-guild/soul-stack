@@ -185,7 +185,7 @@ func (r *Runner) CheckDrift(ctx context.Context, spec CheckDriftSpec) (*DriftRep
 		// mutation. Fail-closed: explicit config refusal, not implicit
 		// mutation. check-drift needs the work queue (Acolyte).
 		span.SetStatus(codes.Error, "acolyte_required")
-		return nil, fmt.Errorf("scenario: check-drift требует work-queue (keeper.acolytes>0, ADR-027); inline-путь не пробрасывает dry_run")
+		return nil, fmt.Errorf("scenario: check-drift requires a work queue (keeper.acolytes>0, ADR-027); the inline path does not propagate dry_run")
 	}
 
 	inc, err := incarnation.SelectByName(ctx, r.deps.DB, spec.IncarnationName)
@@ -211,7 +211,7 @@ func (r *Runner) CheckDrift(ctx context.Context, spec CheckDriftSpec) (*DriftRep
 		// collapses into ErrConvergeMissing, hence log.Warn — operators
 		// should see a possible IO issue in logs, not just a silent
 		// "converge undefined".
-		log.Warn("scenario: check-drift — converge не прочитан, проверка считается недоступной (возможна IO-проблема)",
+		log.Warn("scenario: check-drift - converge not read, the check is considered unavailable (possible IO issue)",
 			slog.String("ref", spec.ServiceRef.Ref), slog.Any("error", err))
 		return nil, ErrConvergeMissing
 	}
@@ -221,14 +221,14 @@ func (r *Runner) CheckDrift(ctx context.Context, spec CheckDriftSpec) (*DriftRep
 		return nil, fmt.Errorf("scenario: check-drift parse %s: %w", relMain, err)
 	}
 	if diag.HasErrors(diags) {
-		err := fmt.Errorf("scenario: check-drift %s невалиден: %s", relMain, firstError(diags))
+		err := fmt.Errorf("scenario: check-drift %s is invalid: %s", relMain, firstError(diags))
 		span.RecordError(err)
 		return nil, err
 	}
 
 	expanded, idiags := config.ExpandIncludes(scn.Tasks, scenarioIncludeResolver(r.deps.Loader, art, ConvergeScenarioName))
 	if diag.HasErrors(idiags) {
-		err := fmt.Errorf("scenario: check-drift раскрытие include в %s/%s: %s", ConvergeScenarioName, scenarioMainFile, firstError(idiags))
+		err := fmt.Errorf("scenario: check-drift include expansion in %s/%s: %s", ConvergeScenarioName, scenarioMainFile, firstError(idiags))
 		span.RecordError(err)
 		return nil, err
 	}
@@ -239,7 +239,7 @@ func (r *Runner) CheckDrift(ctx context.Context, spec CheckDriftSpec) (*DriftRep
 	// would show up as permanent drift.
 	if synthed, names := config.SynthesizeModuleInstalls(scn.Tasks, art.Manifest.Modules); len(names) > 0 {
 		scn.Tasks = synthed
-		log.Info("scenario: check-drift — синтезированы install-шаги модулей из manifest.modules[] (ADR-065)",
+		log.Info("scenario: check-drift - synthesized module install steps from manifest.modules[] (ADR-065)",
 			slog.Any("modules", names))
 	}
 
@@ -250,7 +250,7 @@ func (r *Runner) CheckDrift(ctx context.Context, spec CheckDriftSpec) (*DriftRep
 		return nil, fmt.Errorf("scenario: check-drift topology: %w", err)
 	}
 	if len(hosts) == 0 {
-		return nil, fmt.Errorf("scenario: check-drift incarnation %q не имеет connected-хостов", spec.IncarnationName)
+		return nil, fmt.Errorf("scenario: check-drift incarnation %q has no connected hosts", spec.IncarnationName)
 	}
 	essenceMap, err := r.deps.Essence.Resolve(essenceInput(art.LocalDir, inc, hosts[0]))
 	if err != nil {
@@ -355,7 +355,7 @@ func (r *Runner) CheckDrift(ctx context.Context, spec CheckDriftSpec) (*DriftRep
 		span.RecordError(err)
 		return nil, fmt.Errorf("scenario: check-drift assemble: %w", err)
 	}
-	log.Info("scenario: check-drift завершён",
+	log.Info("scenario: check-drift completed",
 		slog.Int("hosts", len(report.Hosts)),
 		slog.Int("hosts_drifted", report.Summary.HostsDrifted),
 		slog.Int("hosts_failed", report.Summary.HostsFailed))
@@ -404,7 +404,7 @@ func isInputRequiredErr(err error) bool {
 	if err == nil {
 		return false
 	}
-	return strings.Contains(err.Error(), "обязателен, но не передан и не имеет default")
+	return strings.Contains(err.Error(), "is required but was not provided and has no default")
 }
 
 // driftBarrier is the drift variant of [Runner.waitBarrier]: waits for
@@ -427,7 +427,7 @@ func (r *Runner) driftBarrier(ctx context.Context, applyID string, wantHosts int
 		}
 		select {
 		case <-ctx.Done():
-			return fmt.Errorf("прерван: %w", ctx.Err())
+			return fmt.Errorf("interrupted: %w", ctx.Err())
 		case <-ticker.C:
 		}
 	}

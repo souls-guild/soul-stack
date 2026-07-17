@@ -129,7 +129,7 @@ func TestHumaAudit_PushApply_NoAudit_OnRBACDeny(t *testing.T) {
 		t.Fatalf("status = %d, want 403; body=%s", rec.Code, rec.Body.String())
 	}
 	if len(auditCap.Events()) != 0 {
-		t.Errorf("audit записан on RBAC-deny push.apply (%d withбытий)", len(auditCap.Events()))
+		t.Errorf("audit written on RBAC-deny push.apply (%d events)", len(auditCap.Events()))
 	}
 }
 
@@ -143,7 +143,7 @@ func TestHumaAudit_PushApply_NoAudit_OnValidationFail(t *testing.T) {
 		t.Fatalf("status = %d, want 422; body=%s", rec.Code, rec.Body.String())
 	}
 	if len(auditCap.Events()) != 0 {
-		t.Errorf("audit записан on 422 push.apply (%d withбытий)", len(auditCap.Events()))
+		t.Errorf("audit written on 422 push.apply (%d events)", len(auditCap.Events()))
 	}
 }
 
@@ -160,7 +160,7 @@ func TestHumaAudit_PushApply_NoAudit_OnInternalError(t *testing.T) {
 		t.Fatalf("status = %d, want 500 (nil-svc); body=%s", rec.Code, rec.Body.String())
 	}
 	if len(auditCap.Events()) != 0 {
-		t.Errorf("audit записан on 500 push.apply (%d withбытий)", len(auditCap.Events()))
+		t.Errorf("audit written on 500 push.apply (%d events)", len(auditCap.Events()))
 	}
 }
 
@@ -226,7 +226,7 @@ func TestHumaPush_RunsList_ValidStatusEnum_PassesBind(t *testing.T) {
 		rec := httptest.NewRecorder()
 		r.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/v1/push-runs?status="+st, nil))
 		if rec.Code == http.StatusUnprocessableEntity {
-			t.Errorf("валидный статус %q отбит 422 (enum-onбор рассинхронен с toмеbutм); body=%s", st, rec.Body.String())
+			t.Errorf("valid status %q rejected with 422 (enum set out of sync with domain); body=%s", st, rec.Body.String())
 		}
 	}
 }
@@ -251,7 +251,7 @@ func TestHumaPush_GetRunsRead_NoAudit(t *testing.T) {
 		// nil-svc → 500, but this is read branch: audit-middleware NOT attached to these groups.
 	}
 	if len(auditCap.Events()) != 0 {
-		t.Errorf("read push get/push-runs записали audit (%d withбытий)", len(auditCap.Events()))
+		t.Errorf("read push get/push-runs wrote audit (%d events)", len(auditCap.Events()))
 	}
 }
 
@@ -262,7 +262,7 @@ func TestHumaPush_SpecYAML(t *testing.T) {
 	}
 	for _, want := range []string{"pushApply", "pushGet", "listPushRuns", "/apply", "/push-runs"} {
 		if !strings.Contains(frag, want) {
-			t.Errorf("спека не withдержит %q:\n%s", want, frag)
+			t.Errorf("spec does not contain %q:\n%s", want, frag)
 		}
 	}
 }

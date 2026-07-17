@@ -237,7 +237,7 @@ func TestIntegration_EventStream_DeadHolderLease_ForceReleased(t *testing.T) {
 		t.Fatalf("SoulLeaseOwner: ok=%v err=%v", ok, err)
 	}
 	if owner != "kid-live" {
-		t.Errorf("lease owner = %q, want kid-live (перехвачен у мёртвого kid-dead)", owner)
+		t.Errorf("lease owner = %q, want kid-live (taken over from dead kid-dead)", owner)
 	}
 
 	// Audit `eventstream.lease_force_released` with prev/new KID.
@@ -754,7 +754,7 @@ func TestIntegration_EventStream_SoulprintReportWritesSoulsAndAudit(t *testing.T
 		t.Errorf("souls.soulprint_facts = %q, want snake_case keys pkg_mgr/init_system", factsJSON)
 	}
 	if strings.Contains(factsJSON, `"pkgMgr"`) || strings.Contains(factsJSON, `"initSystem"`) {
-		t.Errorf("souls.soulprint_facts = %q содержит camelCase ключи — рассинхрон с CEL/docs", factsJSON)
+		t.Errorf("souls.soulprint_facts = %q contains camelCase keys -- out of sync with CEL/docs", factsJSON)
 	}
 
 	// Audit.
@@ -1022,7 +1022,7 @@ func TestIntegration_HeartbeatFlush_PreventsFalseDisconnect(t *testing.T) {
 		t.Fatalf("read last_seen: %v", err)
 	}
 	if now.Sub(flushed) > staleAfter {
-		t.Fatalf("flush не освежил last_seen: %v (now=%v)", flushed, now)
+		t.Fatalf("flush did not refresh last_seen: %v (now=%v)", flushed, now)
 	}
 
 	updated, err := callMarkDisconnected(ctx, staleAfter)
@@ -1030,10 +1030,10 @@ func TestIntegration_HeartbeatFlush_PreventsFalseDisconnect(t *testing.T) {
 		t.Fatalf("mark_disconnected: %v", err)
 	}
 	if updated != 1 {
-		t.Errorf("mark_disconnected updated = %d, want 1 (только no-flush soul)", updated)
+		t.Errorf("mark_disconnected updated = %d, want 1 (only no-flush soul)", updated)
 	}
 	if got := soulStatus(t, ctx, liveSID); got != "connected" {
-		t.Errorf("live soul status = %q, want connected (flush защитил)", got)
+		t.Errorf("live soul status = %q, want connected (flush protected it)", got)
 	}
 	if got := soulStatus(t, ctx, deadSID); got != "disconnected" {
 		t.Errorf("no-flush soul status = %q, want disconnected", got)

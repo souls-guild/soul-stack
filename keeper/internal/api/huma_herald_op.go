@@ -36,11 +36,11 @@ type heraldCreateInput struct {
 // CreateHeraldTyped (422). The struct name = the contract schema name in the OpenAPI
 // (committed hand-written spec → HeraldCreateRequest).
 type HeraldCreateRequest struct {
-	Name      string         `json:"name" required:"true" pattern:"^[a-z0-9-]{1,63}$" doc:"Herald channel name (kebab-case, 1..63), уникальbutе в кластере"`
-	Type      string         `json:"type" required:"true" enum:"custom,discord,email,mattermost,slack,telegram,webhook" doc:"тип каonла (closed-enum: webhook|telegram|slack|mattermost|discord|custom|email); зonчение вне enum → 422"`
-	Config    map[string]any `json:"config" required:"true" doc:"per-type config (form зависит от type; see каталог GET /v1/herald-types). Секрет каonла (bot_token/webhook_url/header_secret) — dual-mode: зonчение (plaintext) ИЛИ *_ref (vault-путь)"`
-	SecretRef *string        `json:"secret_ref,omitempty" doc:"опц. vault-ref on webhook signing-token (vault:<mount>/<path>); XOR с secret"`
-	Secret    *string        `json:"secret,omitempty" doc:"опц. plaintext webhook signing-token (dual-mode, ADR-064): keeper writes its в Vault сам; XOR с secret_ref. Требует TLS-фронта (secret_ingest.accept_plaintext)"`
+	Name      string         `json:"name" required:"true" pattern:"^[a-z0-9-]{1,63}$" doc:"Herald channel name (kebab-case, 1..63), unique in the cluster"`
+	Type      string         `json:"type" required:"true" enum:"custom,discord,email,mattermost,slack,telegram,webhook" doc:"channel type (closed-enum: webhook|telegram|slack|mattermost|discord|custom|email); value outside the enum -> 422"`
+	Config    map[string]any `json:"config" required:"true" doc:"per-type config (form depends on type; see catalog GET /v1/herald-types). Channel secret (bot_token/webhook_url/header_secret) — dual-mode: value (plaintext) OR *_ref (vault path)"`
+	SecretRef *string        `json:"secret_ref,omitempty" doc:"opt. vault-ref on webhook signing-token (vault:<mount>/<path>); XOR with secret"`
+	Secret    *string        `json:"secret,omitempty" doc:"opt. plaintext webhook signing-token (dual-mode, ADR-064): keeper writes it into Vault itself; XOR with secret_ref. Requires TLS-front (secret_ingest.accept_plaintext)"`
 	Enabled   *bool          `json:"enabled,omitempty" doc:"channel enabled (omitted → true)"`
 }
 
@@ -62,8 +62,8 @@ func heraldCreateOperation() huma.Operation {
 		OperationID:   "createHerald",
 		Method:        http.MethodPost,
 		Path:          "/heralds",
-		Summary:       "Create Herald-каonл",
-		Description:   "Заbutсит Herald (каonл toставки увеtoмлений) в реестр (ADR-052). Permission herald.create. 409 — name занят. Секрет не хранится (только secret_ref).",
+		Summary:       "Create Herald channel",
+		Description:   "Registers a Herald (notification delivery channel) in the registry (ADR-052). Permission herald.create. 409 — name taken. Secret is not stored (only secret_ref).",
 		Tags:          []string{"herald"},
 		DefaultStatus: http.StatusCreated,
 		Errors:        []int{http.StatusBadRequest, http.StatusForbidden, http.StatusConflict, http.StatusUnprocessableEntity, http.StatusInternalServerError},
@@ -97,8 +97,8 @@ func heraldListOperation() huma.Operation {
 		OperationID:   "listHeralds",
 		Method:        http.MethodGet,
 		Path:          "/heralds",
-		Summary:       "Спиwithк Herald-каonлов (paged)",
-		Description:   "Реестр Herald-каonлов с пагиonцией (ADR-052). Permission herald.list. Read-only, no audit.",
+		Summary:       "List Herald channels (paged)",
+		Description:   "Herald channel registry with pagination (ADR-052). Permission herald.list. Read-only, no audit.",
 		Tags:          []string{"herald"},
 		DefaultStatus: http.StatusOK,
 		Errors:        []int{http.StatusBadRequest, http.StatusForbidden, http.StatusInternalServerError},
@@ -127,8 +127,8 @@ func heraldGetOperation() huma.Operation {
 		OperationID:   "getHerald",
 		Method:        http.MethodGet,
 		Path:          "/heralds/{name}",
-		Summary:       "Карточка Herald-каonла",
-		Description:   "Метаданные одbutго Herald-каonла по имени (ADR-052). Permission herald.read. Read-only, no audit.",
+		Summary:       "Herald channel card",
+		Description:   "Metadata of a single Herald channel by name (ADR-052). Permission herald.read. Read-only, no audit.",
 		Tags:          []string{"herald"},
 		DefaultStatus: http.StatusOK,
 		Errors:        []int{http.StatusForbidden, http.StatusNotFound, http.StatusUnprocessableEntity, http.StatusInternalServerError},
@@ -149,10 +149,10 @@ type heraldUpdateInput struct {
 // secret_ref/enabled are optional. The struct name = the contract schema name in the OpenAPI
 // (committed hand-written spec → HeraldUpdateRequest).
 type HeraldUpdateRequest struct {
-	Type      string         `json:"type" required:"true" enum:"custom,discord,email,mattermost,slack,telegram,webhook" doc:"тип каonла (closed-enum: webhook|telegram|slack|mattermost|discord|custom|email)"`
-	Config    map[string]any `json:"config" required:"true" doc:"per-type config (replace — полbutстью заменяет существующий). Секрет каonла — dual-mode: зonчение (plaintext) ИЛИ *_ref"`
-	SecretRef *string        `json:"secret_ref,omitempty" doc:"опц. vault-ref on signing-token; XOR с secret; отсутствие обоих очищает подпись"`
-	Secret    *string        `json:"secret,omitempty" doc:"опц. plaintext webhook signing-token (dual-mode, ADR-064): keeper перезаписывает its в Vault по тому же пути; XOR с secret_ref"`
+	Type      string         `json:"type" required:"true" enum:"custom,discord,email,mattermost,slack,telegram,webhook" doc:"channel type (closed-enum: webhook|telegram|slack|mattermost|discord|custom|email)"`
+	Config    map[string]any `json:"config" required:"true" doc:"per-type config (replace — fully replaces the existing one). Channel secret — dual-mode: value (plaintext) OR *_ref"`
+	SecretRef *string        `json:"secret_ref,omitempty" doc:"opt. vault-ref on signing-token; XOR with secret; absence of both clears the signature"`
+	Secret    *string        `json:"secret,omitempty" doc:"opt. plaintext webhook signing-token (dual-mode, ADR-064): keeper overwrites it in Vault at the same path; XOR with secret_ref"`
 	Enabled   *bool          `json:"enabled,omitempty" doc:"channel enabled (omitted → true)"`
 }
 
@@ -171,8 +171,8 @@ func heraldUpdateOperation() huma.Operation {
 		OperationID:   "updateHerald",
 		Method:        http.MethodPut,
 		Path:          "/heralds/{name}",
-		Summary:       "Update Herald-каonл (replace)",
-		Description:   "Replace-семантика: поля полbutстью заменяют существующие, name immutable (ADR-052). Permission herald.update. 404 — записи absent.",
+		Summary:       "Update Herald channel (replace)",
+		Description:   "Replace semantics: fields fully replace the existing ones, name immutable (ADR-052). Permission herald.update. 404 — record absent.",
 		Tags:          []string{"herald"},
 		DefaultStatus: http.StatusOK,
 		Errors:        []int{http.StatusBadRequest, http.StatusForbidden, http.StatusNotFound, http.StatusUnprocessableEntity, http.StatusInternalServerError},
@@ -201,8 +201,8 @@ func heraldDeleteOperation() huma.Operation {
 		OperationID:   "deleteHerald",
 		Method:        http.MethodDelete,
 		Path:          "/heralds/{name}",
-		Summary:       "Delete Herald-каonл",
-		Description:   "Удаляет Herald каскадbut (связанные Tiding-ы, ADR-052). Permission herald.delete. 404 — записи absent.",
+		Summary:       "Delete Herald channel",
+		Description:   "Deletes the Herald cascadingly (related Tidings, ADR-052). Permission herald.delete. 404 — record absent.",
 		Tags:          []string{"herald"},
 		DefaultStatus: http.StatusNoContent,
 		Errors:        []int{http.StatusForbidden, http.StatusNotFound, http.StatusUnprocessableEntity, http.StatusInternalServerError},
@@ -224,17 +224,17 @@ type tidingCreateInput struct {
 // projection format — domain validation in CreateTidingTyped (422/409/404). The struct name =
 // the contract schema name in the OpenAPI (committed hand-written spec → TidingCreateRequest).
 type TidingCreateRequest struct {
-	Name         string          `json:"name" required:"true" pattern:"^[a-z0-9-]{1,63}$" doc:"имя Tiding-правила (kebab-case, 1..63)"`
-	Herald       string          `json:"herald" required:"true" doc:"Herald channel name toставки (FK on heralds.name)"`
-	EventTypes   []string        `json:"event_types" required:"true" doc:"спиwithк event-types в scope прогоbutв (area-glob or точный); пустой → 422"`
+	Name         string          `json:"name" required:"true" pattern:"^[a-z0-9-]{1,63}$" doc:"Tiding rule name (kebab-case, 1..63)"`
+	Herald       string          `json:"herald" required:"true" doc:"Herald channel name for delivery (FK on heralds.name)"`
+	EventTypes   []string        `json:"event_types" required:"true" doc:"list of event-types in run scope (area-glob or exact); empty -> 422"`
 	OnlyFailures *bool           `json:"only_failures,omitempty" doc:"deliver only failures (omitted → false)"`
-	OnlyChanges  *bool           `json:"only_changes,omitempty" doc:"toставлять только при fromменениях (опущеbut → false)"`
-	Incarnation  *string         `json:"incarnation,omitempty" doc:"опц. селектор привязки к инкарonции-источнику"`
-	Cadence      *string         `json:"cadence,omitempty" doc:"опц. селектор привязки к Cadence-расписанию-источнику"`
-	Task         *string         `json:"task,omitempty" doc:"опц. селектор подписки on конкретную задачу (register ∪ id from changed_tasks)"`
-	Annotations  *map[string]any `json:"annotations,omitempty" doc:"статические поля оператора, мержатся в body webhook ключом annotations"`
-	Projection   *[]string       `json:"projection,omitempty" doc:"allow-list путей payload; пусто/опущеbut — полonя form"`
-	Enabled      *bool           `json:"enabled,omitempty" doc:"правило включеbut (опущеbut → true)"`
+	OnlyChanges  *bool           `json:"only_changes,omitempty" doc:"deliver only on changes (omitted → false)"`
+	Incarnation  *string         `json:"incarnation,omitempty" doc:"opt. selector binding to the source incarnation"`
+	Cadence      *string         `json:"cadence,omitempty" doc:"opt. selector binding to the source Cadence schedule"`
+	Task         *string         `json:"task,omitempty" doc:"opt. selector subscribing to a specific task (register ∪ id from changed_tasks)"`
+	Annotations  *map[string]any `json:"annotations,omitempty" doc:"static operator fields, merged into the webhook body under the annotations key"`
+	Projection   *[]string       `json:"projection,omitempty" doc:"allow-list of payload paths; empty/omitted — full form"`
+	Enabled      *bool           `json:"enabled,omitempty" doc:"rule enabled (omitted → true)"`
 }
 
 // tidingCreateOutput — huma-output POST /v1/tidings (FULL-TYPED). Status=201; Body —
@@ -253,8 +253,8 @@ func tidingCreateOperation() huma.Operation {
 		OperationID:   "createTiding",
 		Method:        http.MethodPost,
 		Path:          "/tidings",
-		Summary:       "Создать Tiding-правило",
-		Description:   "Заbutсит постоянbutе Tiding-правило подписки (ADR-052). Permission tiding.create. 404 — Herald-каonл не существует. 409 — name занят.",
+		Summary:       "Create Tiding rule",
+		Description:   "Registers a permanent Tiding subscription rule (ADR-052). Permission tiding.create. 404 — Herald channel does not exist. 409 — name taken.",
 		Tags:          []string{"tiding"},
 		DefaultStatus: http.StatusCreated,
 		Errors:        []int{http.StatusBadRequest, http.StatusForbidden, http.StatusNotFound, http.StatusConflict, http.StatusUnprocessableEntity, http.StatusInternalServerError},
@@ -270,7 +270,7 @@ func tidingCreateOperation() huma.Operation {
 type tidingListInput struct {
 	Offset           int32 `query:"offset" default:"0" doc:"offset from start of set, ≥0 (matches shared/api.ParsePage; out-of-range → 400)"`
 	Limit            int32 `query:"limit" default:"50" doc:"page size 1..1000 (matches shared/api.ParsePage; out-of-range → 400)"`
-	IncludeEphemeral bool  `query:"include_ephemeral" default:"false" doc:"отдавать разовые (ephemeral) правила (отладка); опущеbut → false скрывает разовые (ADR-052(g))"`
+	IncludeEphemeral bool  `query:"include_ephemeral" default:"false" doc:"include ephemeral (one-off) rules (debugging); omitted → false hides ephemeral ones (ADR-052(g))"`
 }
 
 // tidingListOutput — huma-output GET /v1/tidings (FULL-TYPED). Body — the typed
@@ -288,8 +288,8 @@ func tidingListOperation() huma.Operation {
 		OperationID:   "listTidings",
 		Method:        http.MethodGet,
 		Path:          "/tidings",
-		Summary:       "Спиwithк Tiding-правил (paged)",
-		Description:   "Реестр Tiding-правил с пагиonцией (ADR-052). Permission tiding.list. По умолчанию скрывает разовые (include_ephemeral=true отgives все). Read-only, no audit.",
+		Summary:       "List Tiding rules (paged)",
+		Description:   "Tiding rule registry with pagination (ADR-052). Permission tiding.list. Hides ephemeral rules by default (include_ephemeral=true returns all). Read-only, no audit.",
 		Tags:          []string{"tiding"},
 		DefaultStatus: http.StatusOK,
 		Errors:        []int{http.StatusBadRequest, http.StatusForbidden, http.StatusInternalServerError},
@@ -301,7 +301,7 @@ func tidingListOperation() huma.Operation {
 // tidingGetInput — huma-input GET /v1/tidings/{name}. Name — a path parameter. The
 // name format (herald.NamePattern) is domain validation in GetTidingTyped (422).
 type tidingGetInput struct {
-	Name string `path:"name" doc:"имя Tiding-правила"`
+	Name string `path:"name" doc:"Tiding rule name"`
 }
 
 // tidingGetOutput — huma-output GET /v1/tidings/{name} (FULL-TYPED). Body — the typed
@@ -318,8 +318,8 @@ func tidingGetOperation() huma.Operation {
 		OperationID:   "getTiding",
 		Method:        http.MethodGet,
 		Path:          "/tidings/{name}",
-		Summary:       "Карточка Tiding-правила",
-		Description:   "Метаданные одbutго Tiding-правила по имени (ADR-052). Permission tiding.read. Read-only, no audit.",
+		Summary:       "Tiding rule card",
+		Description:   "Metadata of a single Tiding rule by name (ADR-052). Permission tiding.read. Read-only, no audit.",
 		Tags:          []string{"tiding"},
 		DefaultStatus: http.StatusOK,
 		Errors:        []int{http.StatusForbidden, http.StatusNotFound, http.StatusUnprocessableEntity, http.StatusInternalServerError},
@@ -331,7 +331,7 @@ func tidingGetOperation() huma.Operation {
 // tidingUpdateInput — huma-input PUT /v1/tidings/{name}. Name — path; Body — the typed
 // body (replace semantics).
 type tidingUpdateInput struct {
-	Name string `path:"name" doc:"имя Tiding-правила (immutable)"`
+	Name string `path:"name" doc:"Tiding rule name (immutable)"`
 	Body TidingUpdateRequest
 }
 
@@ -340,16 +340,16 @@ type tidingUpdateInput struct {
 // lesson N4). herald/event_types are mandatory; ephemeral/voyage_id are absent (server-side).
 // The struct name = the contract schema name in the OpenAPI (committed hand-written spec → TidingUpdateRequest).
 type TidingUpdateRequest struct {
-	Herald       string          `json:"herald" required:"true" doc:"Herald channel name toставки (FK)"`
-	EventTypes   []string        `json:"event_types" required:"true" doc:"спиwithк event-types в scope прогоbutв (replace)"`
+	Herald       string          `json:"herald" required:"true" doc:"Herald channel name for delivery (FK)"`
+	EventTypes   []string        `json:"event_types" required:"true" doc:"list of event-types in run scope (replace)"`
 	OnlyFailures *bool           `json:"only_failures,omitempty" doc:"deliver only failures (omitted → false)"`
-	OnlyChanges  *bool           `json:"only_changes,omitempty" doc:"toставлять только при fromменениях (опущеbut → false)"`
-	Incarnation  *string         `json:"incarnation,omitempty" doc:"опц. селектор привязки к инкарonции; отсутствие очищает"`
-	Cadence      *string         `json:"cadence,omitempty" doc:"опц. селектор привязки к Cadence; отсутствие очищает"`
-	Task         *string         `json:"task,omitempty" doc:"опц. селектор подписки on задачу; отсутствие очищает"`
-	Annotations  *map[string]any `json:"annotations,omitempty" doc:"статические поля оператора (replace — отсутствие очищает)"`
-	Projection   *[]string       `json:"projection,omitempty" doc:"allow-list путей payload (replace — отсутствие = полonя form)"`
-	Enabled      *bool           `json:"enabled,omitempty" doc:"правило включеbut (опущеbut → true)"`
+	OnlyChanges  *bool           `json:"only_changes,omitempty" doc:"deliver only on changes (omitted → false)"`
+	Incarnation  *string         `json:"incarnation,omitempty" doc:"opt. selector binding to the incarnation; absence clears it"`
+	Cadence      *string         `json:"cadence,omitempty" doc:"opt. selector binding to the Cadence; absence clears it"`
+	Task         *string         `json:"task,omitempty" doc:"opt. selector subscribing to a task; absence clears it"`
+	Annotations  *map[string]any `json:"annotations,omitempty" doc:"static operator fields (replace — absence clears)"`
+	Projection   *[]string       `json:"projection,omitempty" doc:"allow-list of payload paths (replace — absence = full form)"`
+	Enabled      *bool           `json:"enabled,omitempty" doc:"rule enabled (omitted → true)"`
 }
 
 // tidingUpdateOutput — huma-output PUT /v1/tidings/{name} (FULL-TYPED). Status=200 WITH
@@ -367,8 +367,8 @@ func tidingUpdateOperation() huma.Operation {
 		OperationID:   "updateTiding",
 		Method:        http.MethodPut,
 		Path:          "/tidings/{name}",
-		Summary:       "Обbutвить Tiding-правило (replace)",
-		Description:   "Replace-семантика: поля полbutстью заменяют существующие, name immutable (ADR-052). Permission tiding.update. 404 — записи/Herald absent.",
+		Summary:       "Update Tiding rule (replace)",
+		Description:   "Replace semantics: fields fully replace the existing ones, name immutable (ADR-052). Permission tiding.update. 404 — record/Herald absent.",
 		Tags:          []string{"tiding"},
 		DefaultStatus: http.StatusOK,
 		Errors:        []int{http.StatusBadRequest, http.StatusForbidden, http.StatusNotFound, http.StatusUnprocessableEntity, http.StatusInternalServerError},
@@ -379,7 +379,7 @@ func tidingUpdateOperation() huma.Operation {
 
 // tidingDeleteInput — huma-input DELETE /v1/tidings/{name}. Name — path. No Body.
 type tidingDeleteInput struct {
-	Name string `path:"name" doc:"имя Tiding-правила"`
+	Name string `path:"name" doc:"Tiding rule name"`
 }
 
 // tidingDeleteOperation — metadata for DELETE /v1/tidings/{name}. DefaultStatus=204.
@@ -390,8 +390,8 @@ func tidingDeleteOperation() huma.Operation {
 		OperationID:   "deleteTiding",
 		Method:        http.MethodDelete,
 		Path:          "/tidings/{name}",
-		Summary:       "Удалить Tiding-правило",
-		Description:   "Снимает Tiding-правило подписки по имени (ADR-052). Permission tiding.delete. 404 — записи absent.",
+		Summary:       "Delete Tiding rule",
+		Description:   "Removes the Tiding subscription rule by name (ADR-052). Permission tiding.delete. 404 — record absent.",
 		Tags:          []string{"tiding"},
 		DefaultStatus: http.StatusNoContent,
 		Errors:        []int{http.StatusForbidden, http.StatusNotFound, http.StatusUnprocessableEntity, http.StatusInternalServerError},

@@ -25,10 +25,10 @@ import (
 // the set → 422). sid — a string filter (the FQDN format is validated by the domain → 422). module —
 // multi-value exact-match OR (?module=X&module=Y; explode form).
 type errandListInput struct {
-	SID          string    `query:"sid" doc:"фильтр по целевому Soul (FQDN); битый formт → 422"`
-	Status       string    `query:"status" enum:"running,success,failed,timed_out,cancelled,module_not_allowed" doc:"фильтр по статусу Errand-а; зonчение вне enum → 422"`
-	StartedAfter time.Time `query:"started_after" doc:"фильтр по onчалу (started_at > value, RFC3339); bad value → 400"`
-	Modules      []string  `query:"module" explode:"true" doc:"multi-value exact-match OR по имени модуля (?module=X&module=Y)"`
+	SID          string    `query:"sid" doc:"filter by target Soul (FQDN); malformed -> 422"`
+	Status       string    `query:"status" enum:"running,success,failed,timed_out,cancelled,module_not_allowed" doc:"filter by Errand status; value outside enum -> 422"`
+	StartedAfter time.Time `query:"started_after" doc:"filter by start (started_at > value, RFC3339); bad value -> 400"`
+	Modules      []string  `query:"module" explode:"true" doc:"multi-value exact-match OR by module name (?module=X&module=Y)"`
 	Offset       int32     `query:"offset" default:"0" doc:"offset from start of set, ≥0 (matches shared/api.ParsePage; out-of-range → 400)"`
 	Limit        int32     `query:"limit" default:"50" doc:"page size 1..1000 (matches shared/api.ParsePage; out-of-range → 400)"`
 }
@@ -51,8 +51,8 @@ func errandListOperation() huma.Operation {
 		OperationID:   "listErrands",
 		Method:        http.MethodGet,
 		Path:          "/errands",
-		Summary:       "Спиwithк Errand-ов (paged)",
-		Description:   "Реестр Errand-ов с фильтрами и пагиonцией (ADR-033). Permission errand.list. Read-only, no audit.",
+		Summary:       "List of Errands (paged)",
+		Description:   "Registry of Errands with filters and pagination (ADR-033). Permission errand.list. Read-only, no audit.",
 		Tags:          []string{"errand"},
 		DefaultStatus: http.StatusOK,
 		Errors:        []int{http.StatusBadRequest, http.StatusForbidden, http.StatusUnprocessableEntity, http.StatusInternalServerError},
@@ -90,8 +90,8 @@ func errandGetOperation() huma.Operation {
 		OperationID:   "getErrand",
 		Method:        http.MethodGet,
 		Path:          "/errands/{errand_id}",
-		Summary:       "Состояние Errand-а",
-		Description:   "Термиonл-string (200) либо running-poll (202) по ULID (ADR-033). Permission errand.list. Read-only, no audit.",
+		Summary:       "Errand state",
+		Description:   "Terminal state (200) or running-poll (202) by ULID (ADR-033). Permission errand.list. Read-only, no audit.",
 		Tags:          []string{"errand"},
 		DefaultStatus: http.StatusOK,
 		Errors:        []int{http.StatusAccepted, http.StatusForbidden, http.StatusNotFound, http.StatusUnprocessableEntity, http.StatusInternalServerError},
@@ -119,8 +119,8 @@ func errandCancelOperation() huma.Operation {
 		OperationID:   "cancelErrand",
 		Method:        http.MethodDelete,
 		Path:          "/errands/{errand_id}",
-		Summary:       "Отменить Errand",
-		Description:   "Отправляет cancel-сигonл Soul-у (ADR-033, slice E5). Permission errand.cancel. 409 — already термиonл.",
+		Summary:       "Cancel Errand",
+		Description:   "Sends a cancel signal to the Soul (ADR-033, slice E5). Permission errand.cancel. 409 - already terminal.",
 		Tags:          []string{"errand"},
 		DefaultStatus: http.StatusNoContent,
 		Errors:        []int{http.StatusForbidden, http.StatusNotFound, http.StatusConflict, http.StatusUnprocessableEntity, http.StatusInternalServerError},

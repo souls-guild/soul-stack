@@ -173,7 +173,7 @@ func TestApply_Rendered_IdempotentNoChange(t *testing.T) {
 		t.Fatalf("Apply: %v", err)
 	}
 	if stream.Last().Changed {
-		t.Fatal("changed=true для совпадающего рендера")
+		t.Fatal("changed=true for a matching render")
 	}
 }
 
@@ -197,7 +197,7 @@ func TestApply_Rendered_ChangeOnContentDiff(t *testing.T) {
 		t.Fatalf("Apply: %v", err)
 	}
 	if !stream.Last().Changed {
-		t.Fatal("changed=false на diff содержимого")
+		t.Fatal("changed=false on differing content")
 	}
 	got, _ := os.ReadFile(path)
 	if string(got) != "value = 2\n" {
@@ -223,11 +223,11 @@ func TestApply_Rendered_MissingVarFails(t *testing.T) {
 		t.Fatalf("Apply: %v", err)
 	}
 	if !stream.Last().Failed {
-		t.Fatal("failed=false при отсутствующей переменной (ждём strict missingkey)")
+		t.Fatal("failed=false for a missing variable (expected strict missingkey)")
 	}
 	// file must not be created on render error
 	if _, err := os.Stat(path); !os.IsNotExist(err) {
-		t.Fatalf("файл создан несмотря на ошибку рендера: %v", err)
+		t.Fatalf("file created despite a render error: %v", err)
 	}
 }
 
@@ -255,10 +255,10 @@ func TestApply_Rendered_SelfMissingInContextFails(t *testing.T) {
 		t.Fatalf("Apply: %v", err)
 	}
 	if !stream.Last().Failed {
-		t.Fatal("failed=false при обращении к .self без self в корне (ждём strict missingkey)")
+		t.Fatal("failed=false when accessing .self without self at the root (expected strict missingkey)")
 	}
 	if _, err := os.Stat(path); !os.IsNotExist(err) {
-		t.Fatalf("файл создан несмотря на ошибку рендера: %v", err)
+		t.Fatalf("file created despite a render error: %v", err)
 	}
 }
 
@@ -280,7 +280,7 @@ func TestApply_Rendered_MissingRenderContextFails(t *testing.T) {
 		t.Fatalf("Apply: %v", err)
 	}
 	if !stream.Last().Failed {
-		t.Fatal("failed=false при отсутствии render_context")
+		t.Fatal("failed=false when render_context is missing")
 	}
 }
 
@@ -301,7 +301,7 @@ func TestApply_Rendered_ParseErrorFails(t *testing.T) {
 		t.Fatalf("Apply: %v", err)
 	}
 	if !stream.Last().Failed {
-		t.Fatal("failed=false на синтаксически битом шаблоне")
+		t.Fatal("failed=false on a syntactically broken template")
 	}
 }
 
@@ -353,7 +353,7 @@ func TestApply_Rendered_ModeOnlyChange(t *testing.T) {
 		t.Fatalf("Apply: %v", err)
 	}
 	if !stream.Last().Changed {
-		t.Fatal("changed=false на diff mode при совпадающем content")
+		t.Fatal("changed=false in diff mode with matching content")
 	}
 	info, _ := os.Stat(path)
 	if info.Mode().Perm() != 0o600 {
@@ -379,7 +379,7 @@ func TestApply_Rendered_InvalidModeFails(t *testing.T) {
 		t.Fatalf("Apply: %v", err)
 	}
 	if !stream.Last().Failed {
-		t.Fatal("failed=false на невалидном mode")
+		t.Fatal("failed=false for an invalid mode")
 	}
 }
 
@@ -396,7 +396,7 @@ func TestApply_Rendered_MissingTemplateContentFails(t *testing.T) {
 		t.Fatalf("Apply: %v", err)
 	}
 	if !stream.Last().Failed {
-		t.Fatal("failed=false при отсутствии template_content")
+		t.Fatal("failed=false when template_content is missing")
 	}
 }
 
@@ -420,7 +420,7 @@ func TestApply_Rendered_NoTempLeftover(t *testing.T) {
 	entries, _ := os.ReadDir(dir)
 	for _, e := range entries {
 		if strings.Contains(e.Name(), ".tmp-") {
-			t.Fatalf("остался временный файл: %s", e.Name())
+			t.Fatalf("leftover temp file: %s", e.Name())
 		}
 	}
 }

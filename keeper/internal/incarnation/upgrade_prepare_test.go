@@ -177,7 +177,7 @@ func TestPrepareUpgrade_FoundUpgradeScenario(t *testing.T) {
 		t.Errorf("UpgradeSlug = %q, want to_v2 (from ⊇ v1)", in.UpgradeSlug)
 	}
 	if in.TargetRef.Ref != "v2" {
-		t.Errorf("TargetRef.Ref = %q, want v2 (пин цели для runner.Start)", in.TargetRef.Ref)
+		t.Errorf("TargetRef.Ref = %q, want v2 (pinned target for runner.Start)", in.TargetRef.Ref)
 	}
 }
 
@@ -195,7 +195,7 @@ func TestPrepareUpgrade_LegacyNoUpgradeMatch(t *testing.T) {
 		t.Fatalf("PrepareUpgrade legacy: %v", err)
 	}
 	if in.UpgradeSlug != "" {
-		t.Errorf("UpgradeSlug = %q, want empty (from не матчит v1 → legacy)", in.UpgradeSlug)
+		t.Errorf("UpgradeSlug = %q, want empty (from does not match v1 -> legacy)", in.UpgradeSlug)
 	}
 }
 

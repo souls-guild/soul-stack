@@ -68,7 +68,7 @@ func incCreateOperation() huma.Operation {
 		Method:        http.MethodPost,
 		Path:          "/",
 		Summary:       "Create incarnation",
-		Description:   "Service runtime instance (ADR-029). Runs create scenario (async, если lifecycle.auto_create). Permission incarnation.create.",
+		Description:   "Service runtime instance (ADR-029). Runs create scenario (async, if lifecycle.auto_create). Permission incarnation.create.",
 		Tags:          []string{"incarnation"},
 		DefaultStatus: http.StatusAccepted,
 		Errors:        []int{http.StatusBadRequest, http.StatusForbidden, http.StatusConflict, http.StatusUnprocessableEntity, http.StatusInternalServerError},
@@ -108,7 +108,7 @@ func incListOperation() huma.Operation {
 		Method:        http.MethodGet,
 		Path:          "/",
 		Summary:       "List incarnations (paged)",
-		Description:   "Filters service/status/coven/state.<field> + withртировка. Visibility scoped by RBAC (ADR-047). Permission incarnation.list. Read-only.",
+		Description:   "Filters service/status/coven/state.<field> + sorting. Visibility scoped by RBAC (ADR-047). Permission incarnation.list. Read-only.",
 		Tags:          []string{"incarnation"},
 		DefaultStatus: http.StatusOK,
 		Errors:        []int{http.StatusBadRequest, http.StatusForbidden, http.StatusUnprocessableEntity, http.StatusInternalServerError},
@@ -134,7 +134,7 @@ func incGetOperation() huma.Operation {
 		Method:        http.MethodGet,
 		Path:          "/{name}",
 		Summary:       "Get incarnation",
-		Description:   "Service runtime instance detail. Outside RBAC scope → 404 (не палим существование). Permission incarnation.get. Read-only.",
+		Description:   "Service runtime instance detail. Outside RBAC scope -> 404 (does not leak existence). Permission incarnation.get. Read-only.",
 		Tags:          []string{"incarnation"},
 		DefaultStatus: http.StatusOK,
 		Errors:        []int{http.StatusForbidden, http.StatusNotFound, http.StatusUnprocessableEntity, http.StatusInternalServerError},
@@ -169,7 +169,7 @@ func incHistoryOperation() huma.Operation {
 		Method:        http.MethodGet,
 		Path:          "/{name}/history",
 		Summary:       "Incarnation state transition history (paged)",
-		Description:   "state_history with apply_id filter и пагиonцией. Outside RBAC scope → 404. Permission incarnation.history. Read-only.",
+		Description:   "state_history with apply_id filter and pagination. Outside RBAC scope -> 404. Permission incarnation.history. Read-only.",
 		Tags:          []string{"incarnation"},
 		DefaultStatus: http.StatusOK,
 		Errors:        []int{http.StatusBadRequest, http.StatusForbidden, http.StatusNotFound, http.StatusUnprocessableEntity, http.StatusInternalServerError},
@@ -203,7 +203,7 @@ func incRunsOperation() huma.Operation {
 		Method:        http.MethodGet,
 		Path:          "/{name}/runs",
 		Summary:       "List incarnation runs (paged)",
-		Description:   "Fold apply_runs by apply_id: статус прогоon (applying/success/failed/cancelled), границы времени, инициатор. Run (apply_run) — NOT Voyage. Outside RBAC scope → 404. Permission incarnation.history. Read-only.",
+		Description:   "Fold apply_runs by apply_id: run status (applying/success/failed/cancelled), time bounds, initiator. Run (apply_run) - NOT Voyage. Outside RBAC scope -> 404. Permission incarnation.history. Read-only.",
 		Tags:          []string{"incarnation"},
 		DefaultStatus: http.StatusOK,
 		Errors:        []int{http.StatusBadRequest, http.StatusForbidden, http.StatusNotFound, http.StatusUnprocessableEntity, http.StatusInternalServerError},
@@ -230,8 +230,8 @@ func incRunDetailOperation() huma.Operation {
 		OperationID:   "getIncarnationRun",
 		Method:        http.MethodGet,
 		Path:          "/{name}/runs/{apply_id}",
-		Summary:       "Детали прогоon инкарonции (per-host)",
-		Description:   "Slice by hosts одbutго apply_id: статус кажtoго хоста + address of failed task (task_idx/plan_index/error). Foreign apply_id / outside RBAC scope → 404. Permission incarnation.history. Read-only.",
+		Summary:       "Incarnation run details (per-host)",
+		Description:   "Slice by hosts of one apply_id: status per host + address of failed task (task_idx/plan_index/error). Foreign apply_id / outside RBAC scope -> 404. Permission incarnation.history. Read-only.",
 		Tags:          []string{"incarnation"},
 		DefaultStatus: http.StatusOK,
 		Errors:        []int{http.StatusBadRequest, http.StatusForbidden, http.StatusNotFound, http.StatusUnprocessableEntity, http.StatusInternalServerError},
@@ -258,8 +258,8 @@ func incRunTasksOperation() huma.Operation {
 		OperationID:   "getIncarnationRunTasks",
 		Method:        http.MethodGet,
 		Path:          "/{name}/runs/{apply_id}/tasks",
-		Summary:       "Incarnation run tasks (план + per-host)",
-		Description:   "Task plan одbutго apply_id (plan_index/name/module/no_log/passage) + per-host статус/output/error from журonла аудита (task.executed) joined by plan_index. Foreign apply_id / outside RBAC scope → 404. Permission incarnation.history. Read-only.",
+		Summary:       "Incarnation run tasks (plan + per-host)",
+		Description:   "Task plan of one apply_id (plan_index/name/module/no_log/passage) + per-host status/output/error from the audit log (task.executed) joined by plan_index. Foreign apply_id / outside RBAC scope -> 404. Permission incarnation.history. Read-only.",
 		Tags:          []string{"incarnation"},
 		DefaultStatus: http.StatusOK,
 		Errors:        []int{http.StatusBadRequest, http.StatusForbidden, http.StatusNotFound, http.StatusUnprocessableEntity, http.StatusInternalServerError},
@@ -299,7 +299,7 @@ func incRunOperation() huma.Operation {
 		Method:        http.MethodPost,
 		Path:          "/{name}/scenarios/{scenario}",
 		Summary:       "Run incarnation scenario",
-		Description:   "Async run имеbutванbutго scenario (ADR-009). Blocked on cluster:degraded (503). Permission incarnation.run.",
+		Description:   "Async run of a named scenario (ADR-009). Blocked on cluster:degraded (503). Permission incarnation.run.",
 		Tags:          []string{"incarnation"},
 		DefaultStatus: http.StatusAccepted,
 		Errors:        []int{http.StatusBadRequest, http.StatusForbidden, http.StatusNotFound, http.StatusConflict, http.StatusUnprocessableEntity, http.StatusServiceUnavailable, http.StatusInternalServerError},
@@ -371,7 +371,7 @@ func incUpgradeOperation() huma.Operation {
 		Method:        http.MethodPost,
 		Path:          "/{name}/upgrade",
 		Summary:       "Migrate incarnation to new version",
-		Description:   "Sync-under-202 migration state_schema (ADR-019) + service_version change одbutй tx. Permission incarnation.upgrade.",
+		Description:   "Sync-under-202 migration state_schema (ADR-019) + service_version change in one tx. Permission incarnation.upgrade.",
 		Tags:          []string{"incarnation"},
 		DefaultStatus: http.StatusAccepted,
 		Errors:        []int{http.StatusBadRequest, http.StatusForbidden, http.StatusNotFound, http.StatusConflict, http.StatusUnprocessableEntity, http.StatusInternalServerError},
@@ -398,8 +398,8 @@ func incUpgradePathsOperation() huma.Operation {
 		OperationID:   "getIncarnationUpgradePaths",
 		Method:        http.MethodGet,
 		Path:          "/{name}/upgrade-paths",
-		Summary:       "Пути апгрейда инкарonции",
-		Description:   "Дешёвый спиwithк тitsв реестра сервиса (пометка is_current) без ?to=; on-demand аonлfrom одbutй цели (direction / found-legacy / state-миграции) с ?to=<ref> (ADR-0068 §6). Permission incarnation.upgrade (read-грань). Read-only, no audit.",
+		Summary:       "Incarnation upgrade paths",
+		Description:   "Cheap list of service registry refs (marking is_current) without ?to=; on-demand analysis of one target (direction / found-legacy / state migrations) with ?to=<ref> (ADR-0068 6). Permission incarnation.upgrade (read facet). Read-only, no audit.",
 		Tags:          []string{"incarnation"},
 		DefaultStatus: http.StatusOK,
 		Errors:        []int{http.StatusForbidden, http.StatusNotFound, http.StatusUnprocessableEntity, http.StatusInternalServerError, http.StatusBadGateway},
@@ -431,8 +431,8 @@ func incRerunOperation() huma.Operation {
 		OperationID:   "rerunLastIncarnation",
 		Method:        http.MethodPost,
 		Path:          "/{name}/rerun-last",
-		Summary:       "Перезапустить последний упавший сцеonрий from error_locked",
-		Description:   "Снимает error_locked и тем же действием перезапускает последний упавший сцеonрий инкарonции (bootstrap create/… or day-2 add_user/…) с withхранённым input упавшits прогоon (одon tx FOR UPDATE). Permission incarnation.rerun-last.",
+		Summary:       "Restart the last failed scenario from error_locked",
+		Description:   "Clears error_locked and, in the same action, restarts the incarnation last failed scenario (bootstrap create/... or operational add_user/...) with the stored input of the failed run (one tx FOR UPDATE). Permission incarnation.rerun-last.",
 		Tags:          []string{"incarnation"},
 		DefaultStatus: http.StatusAccepted,
 		Errors:        []int{http.StatusForbidden, http.StatusNotFound, http.StatusConflict, http.StatusUnprocessableEntity, http.StatusInternalServerError},
@@ -446,14 +446,14 @@ func incRerunOperation() huma.Operation {
 // with legacy io.EOF→zero-value).
 type incCheckDriftInput struct {
 	Name string                        `path:"name" doc:"incarnation name"`
-	Body *IncarnationCheckDriftRequest `doc:"опц. body: override converge-параметров"`
+	Body *IncarnationCheckDriftRequest `doc:"optional body: override converge parameters"`
 }
 
 // IncarnationCheckDriftRequest — Go form of the POST .../check-drift body. input — an override
 // of converge parameters (opt.). additionalProperties:false → unknown field → 400. The name =
 // the contract schema name (T4b).
 type IncarnationCheckDriftRequest struct {
-	Input map[string]any `json:"input,omitempty" doc:"override converge-параметров (ADR-031 Slice B)"`
+	Input map[string]any `json:"input,omitempty" doc:"override converge parameters (ADR-031 Slice B)"`
 }
 
 // incCheckDriftOutput — huma-output POST .../check-drift (FULL-TYPED). Status=200; Body
@@ -468,8 +468,8 @@ func incCheckDriftOperation() huma.Operation {
 		OperationID:   "checkIncarnationDrift",
 		Method:        http.MethodPost,
 		Path:          "/{name}/check-drift",
-		Summary:       "Проверить drift инкарonции (Scry)",
-		Description:   "Sync dry_run converge → DriftReport (ADR-031 Slice B). Инformционonя маркировка status=drift. Permission incarnation.check-drift.",
+		Summary:       "Check incarnation drift (Scry)",
+		Description:   "Sync dry_run converge -> DriftReport (ADR-031 Slice B). Informational status=drift marking. Permission incarnation.check-drift.",
 		Tags:          []string{"incarnation"},
 		DefaultStatus: http.StatusOK,
 		Errors:        []int{http.StatusBadRequest, http.StatusForbidden, http.StatusNotFound, http.StatusUnprocessableEntity, http.StatusInternalServerError},
@@ -483,7 +483,7 @@ func incCheckDriftOperation() huma.Operation {
 // non-boolean → 400 (parity strict required-param + legacy ParseBool).
 type incDestroyInput struct {
 	Name         string `path:"name" doc:"incarnation name"`
-	AllowDestroy bool   `query:"allow_destroy" required:"true" doc:"confirmation-flag: true → destroy без teardown"`
+	AllowDestroy bool   `query:"allow_destroy" required:"true" doc:"confirmation-flag: true -> destroy without teardown"`
 }
 
 // incDestroyOutput — huma-output DELETE /v1/incarnations/{name} (FULL-TYPED). Status=202;
@@ -498,8 +498,8 @@ func incDestroyOperation() huma.Operation {
 		OperationID:   "destroyIncarnation",
 		Method:        http.MethodDelete,
 		Path:          "/{name}",
-		Summary:       "Снести инкарonцию",
-		Description:   "allow_destroy=true → DELETE без teardown; false → scenario destroy (S-D4). Permission incarnation.destroy.",
+		Summary:       "Destroy an incarnation",
+		Description:   "allow_destroy=true -> DELETE without teardown; false -> scenario destroy (S-D4). Permission incarnation.destroy.",
 		Tags:          []string{"incarnation"},
 		DefaultStatus: http.StatusAccepted,
 		Errors:        []int{http.StatusBadRequest, http.StatusForbidden, http.StatusNotFound, http.StatusConflict, http.StatusUnprocessableEntity, http.StatusInternalServerError},
@@ -525,16 +525,16 @@ type incUpdateHostsInput struct {
 // The name = the contract schema name (T4b); a huma form with validation tags, distinct from
 // IncarnationSpecHost (the domain model without huma tags).
 type IncarnationSpecHost struct {
-	SID  string  `json:"sid" required:"true" doc:"SID (FQDN) хоста — обязан существовать в souls"`
-	Role *string `json:"role,omitempty" maxLength:"63" doc:"declared-роль (kebab-case 1..63) or null"`
+	SID  string  `json:"sid" required:"true" doc:"SID (FQDN) of the host - must already exist in souls"`
+	Role *string `json:"role,omitempty" maxLength:"63" doc:"declared role (kebab-case 1..63) or null"`
 }
 
 // IncarnationUpdateHostsRequest — Go form of the PATCH .../hosts body. mode required (enum);
 // hosts — an array (empty is legitimate for replace). additionalProperties:false → unknown
 // field → 400. The name = the contract schema name (T4b).
 type IncarnationUpdateHostsRequest struct {
-	Mode  string                `json:"mode" required:"true" enum:"replace,append,remove" doc:"тип операции onд spec.hosts[]"`
-	Hosts []IncarnationSpecHost `json:"hosts" required:"true" doc:"спиwithк hosts for mode-операции (пустой legitimate for replace)"`
+	Mode  string                `json:"mode" required:"true" enum:"replace,append,remove" doc:"operation type over spec.hosts[]"`
+	Hosts []IncarnationSpecHost `json:"hosts" required:"true" doc:"host list for mode operation (empty legitimate for replace)"`
 }
 
 // incUpdateHostsOutput — huma-output PATCH .../hosts (FULL-TYPED). Status=200; Body —
@@ -548,8 +548,8 @@ func incUpdateHostsOperation() huma.Operation {
 		OperationID:   "updateIncarnationHosts",
 		Method:        http.MethodPatch,
 		Path:          "/{name}/hosts",
-		Summary:       "Править declared spec.hosts[] инкарonции",
-		Description:   "Три mode (replace/append/remove) onд declared hosts (ADR-008). Permission incarnation.update-hosts.",
+		Summary:       "Edit declared spec.hosts[] of an incarnation",
+		Description:   "Three modes (replace/append/remove) over declared hosts (ADR-008). Permission incarnation.update-hosts.",
 		Tags:          []string{"incarnation"},
 		DefaultStatus: http.StatusOK,
 		Errors:        []int{http.StatusBadRequest, http.StatusForbidden, http.StatusNotFound, http.StatusConflict, http.StatusUnprocessableEntity, http.StatusInternalServerError},
@@ -569,7 +569,7 @@ type incSetTraitsInput struct {
 // = clear. The value format (nested forbidden) is validated by the domain → 422.
 // additionalProperties:false → unknown field → 400. The name = the contract schema name.
 type IncarnationSetTraitsRequest struct {
-	Traits map[string]any `json:"traits,omitempty" doc:"полный onбор trait-tags (ключ → scalar|list of scalars); пустой/опущен = очистить (ADR-060)"`
+	Traits map[string]any `json:"traits,omitempty" doc:"full set of trait-tags (key -> scalar|list of scalars); empty/omitted = clear (ADR-060)"`
 }
 
 // incSetTraitsOutput — huma-output PUT .../traits (FULL-TYPED). Status=200; Body —
@@ -583,8 +583,8 @@ func incSetTraitsOperation() huma.Operation {
 		OperationID:   "setIncarnationTraits",
 		Method:        http.MethodPut,
 		Path:          "/{name}/traits",
-		Summary:       "Заменить operator-set trait-метки инкарonции",
-		Description:   "Целостonя замеon incarnation.traits (ADR-060) — источника истины, проецируемого в souls.traits хостов-члеbutв. Permission incarnation.traits-set.",
+		Summary:       "Replace operator-set trait labels of an incarnation",
+		Description:   "Wholesale replacement of incarnation.traits (ADR-060) - source of truth, projected onto souls.traits of member hosts. Permission incarnation.traits-set.",
 		Tags:          []string{"incarnation"},
 		DefaultStatus: http.StatusOK,
 		Errors:        []int{http.StatusBadRequest, http.StatusForbidden, http.StatusNotFound, http.StatusUnprocessableEntity, http.StatusInternalServerError},

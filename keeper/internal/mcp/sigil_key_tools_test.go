@@ -204,7 +204,7 @@ func TestSigilKeyIntroduce_Success_NoPrivateKey(t *testing.T) {
 		t.Errorf("key_id len = %d, want 64", len(out.KeyID))
 	}
 	if !strings.Contains(out.PubkeyPEM, "BEGIN PUBLIC KEY") {
-		t.Errorf("pubkey_pem не SPKI: %q", out.PubkeyPEM)
+		t.Errorf("pubkey_pem is not SPKI: %q", out.PubkeyPEM)
 	}
 	// SECURITY: no output field contains the private key.
 	raw, _ := json.Marshal(out)

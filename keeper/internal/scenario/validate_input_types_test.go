@@ -85,10 +85,10 @@ func TestValidateInput_TypeRef_NonObjectElement_Rejected(t *testing.T) {
 	err := ValidateInput(context.Background(), loader, artifact.ServiceRef{Name: "svc"}, "create",
 		map[string]any{"users": []any{"not-an-object"}})
 	if err == nil {
-		t.Fatal("submitted не-object для $type:AclUser должен быть отклонён, got nil (резолв $type не подключён?)")
+		t.Fatal("submitted non-object for $type:AclUser should be rejected, got nil ($type resolution not wired?)")
 	}
 	if !errors.Is(err, ErrInputInvalid) {
-		t.Fatalf("ожидался ErrInputInvalid (value-валидация против резолвнутой type-формы), got %v", err)
+		t.Fatalf("expected ErrInputInvalid (value validation against the resolved type shape), got %v", err)
 	}
 }
 
@@ -103,10 +103,10 @@ func TestValidateInput_TypeRef_MissingRequired_Rejected(t *testing.T) {
 	err := ValidateInput(context.Background(), loader, artifact.ServiceRef{Name: "svc"}, "create",
 		map[string]any{"users": []any{map[string]any{"read_only": true}}})
 	if err == nil {
-		t.Fatal("AclUser без required name должен быть отклонён, got nil")
+		t.Fatal("AclUser without required name should be rejected, got nil")
 	}
 	if !errors.Is(err, ErrInputInvalid) {
-		t.Fatalf("ожидался ErrInputInvalid (required name внутри резолвнутого AclUser), got %v", err)
+		t.Fatalf("expected ErrInputInvalid (required name inside the resolved AclUser), got %v", err)
 	}
 }
 
@@ -120,7 +120,7 @@ func TestValidateInput_TypeRef_ValidElement_OK(t *testing.T) {
 	err := ValidateInput(context.Background(), loader, artifact.ServiceRef{Name: "svc"}, "create",
 		map[string]any{"users": []any{map[string]any{"name": "alice", "read_only": true}}})
 	if err != nil {
-		t.Fatalf("валидный AclUser должен проходить после резолва $type: %v", err)
+		t.Fatalf("valid AclUser should pass after $type resolution: %v", err)
 	}
 }
 
@@ -141,10 +141,10 @@ tasks: []
 	err := ValidateInput(context.Background(), loader, artifact.ServiceRef{Name: "svc"}, "create",
 		map[string]any{"owner": "not-an-object"})
 	if err == nil {
-		t.Fatal("самостоятельное $type:AclUser-поле с non-object должно быть отклонено, got nil")
+		t.Fatal("standalone $type:AclUser field with a non-object should be rejected, got nil")
 	}
 	if !errors.Is(err, ErrInputInvalid) {
-		t.Fatalf("ожидался ErrInputInvalid, got %v", err)
+		t.Fatalf("expected ErrInputInvalid, got %v", err)
 	}
 }
 
@@ -181,24 +181,24 @@ func TestValidateInput_AclUserPerms_GarbageRejected(t *testing.T) {
 	loader := &dirInputLoader{root: root}
 
 	cases := map[string]string{
-		"произвольный текст":        "произвольный текст",
-		"shell-инъекция через ;":    "~* +@all; rm -rf /",
-		"перевод строки":            "~app:* +@read\n~evil:* +@all",
-		"неизвестный сигил =":       "~* =foo",
-		"pipe вне сабкоманды":       "~* +@all | cat",
+		"arbitrary text":            "arbitrary text",
+		"shell injection via ;":     "~* +@all; rm -rf /",
+		"newline":                   "~app:* +@read\n~evil:* +@all",
+		"unknown sigil =":           "~* =foo",
+		"pipe outside subcommand":   "~* +@all | cat",
 		"backtick":                  "~* `whoami`",
 		"command substitution":      "~* $(id)",
-		"ключевое-слово без сигила": "hello",
+		"keyword without sigil":     "hello",
 	}
 	for name, perms := range cases {
 		t.Run(name, func(t *testing.T) {
 			err := ValidateInput(context.Background(), loader, artifact.ServiceRef{Name: "svc"}, "create",
 				map[string]any{"users": []any{map[string]any{"name": "app", "perms": perms, "state": "on"}}})
 			if err == nil {
-				t.Fatalf("мусорная perms %q должна быть отклонена pattern-ом, got nil", perms)
+				t.Fatalf("garbage perms %q should be rejected by the pattern, got nil", perms)
 			}
 			if !errors.Is(err, ErrInputInvalid) {
-				t.Fatalf("ожидался ErrInputInvalid (perms не соответствует pattern), got %v", err)
+				t.Fatalf("expected ErrInputInvalid (perms does not match the pattern), got %v", err)
 			}
 		})
 	}
@@ -232,7 +232,7 @@ func TestValidateInput_AclUserPerms_ValidAccepted(t *testing.T) {
 		err := ValidateInput(context.Background(), loader, artifact.ServiceRef{Name: "svc"}, "create",
 			map[string]any{"users": []any{map[string]any{"name": "app", "perms": perms, "state": "on"}}})
 		if err != nil {
-			t.Fatalf("валидная perms %q должна проходить pattern, got %v", perms, err)
+			t.Fatalf("valid perms %q should pass the pattern, got %v", perms, err)
 		}
 	}
 }
@@ -273,10 +273,10 @@ func TestValidateInput_TypeRef_RequiredField_Omitted_Rejected(t *testing.T) {
 	err := ValidateInput(context.Background(), loader, artifact.ServiceRef{Name: "svc"}, "create",
 		map[string]any{}) // user omitted
 	if err == nil {
-		t.Fatal("required $type:AclUser-поле без значения должно быть отклонено, got nil (энфорсмент required снят?)")
+		t.Fatal("required $type:AclUser field without a value should be rejected, got nil (required enforcement removed?)")
 	}
 	if !errors.Is(err, ErrInputInvalid) {
-		t.Fatalf("ожидался ErrInputInvalid (required на резолвнутом object-узле), got %v", err)
+		t.Fatalf("expected ErrInputInvalid (required on the resolved object node), got %v", err)
 	}
 }
 
@@ -291,6 +291,6 @@ func TestValidateInput_TypeRef_OptionalField_Omitted_OK(t *testing.T) {
 	err := ValidateInput(context.Background(), loader, artifact.ServiceRef{Name: "svc"}, "create",
 		map[string]any{}) // user omitted — legal for an optional field
 	if err != nil {
-		t.Fatalf("опциональное $type:AclUser-поле без значения должно проходить, got %v", err)
+		t.Fatalf("optional $type:AclUser field without a value should pass, got %v", err)
 	}
 }

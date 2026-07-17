@@ -48,7 +48,7 @@ func TestPlan_Present_Exists_Clean(t *testing.T) {
 		t.Fatalf("changed=%v, want false (clean)", got.GetChanged())
 	}
 	if len(r.Calls) > 0 {
-		t.Fatalf("Plan вызвал runner-команды: %v (должен быть pure-read)", r.Calls)
+		t.Fatalf("Plan called runner commands: %v (should be pure-read)", r.Calls)
 	}
 }
 
@@ -73,7 +73,7 @@ func TestPlan_Present_Missing_Drift(t *testing.T) {
 		t.Fatalf("changed=false, want true (drift: missing)")
 	}
 	if len(r.Calls) > 0 {
-		t.Fatalf("Plan вызвал runner-команды: %v (должен быть pure-read)", r.Calls)
+		t.Fatalf("Plan called runner commands: %v (should be pure-read)", r.Calls)
 	}
 }
 
@@ -98,7 +98,7 @@ func TestPlan_Absent_Exists_Drift(t *testing.T) {
 		t.Fatalf("changed=false, want true (drift: exists)")
 	}
 	if len(r.Calls) > 0 {
-		t.Fatalf("Plan вызвал runner-команды: %v (должен быть pure-read)", r.Calls)
+		t.Fatalf("Plan called runner commands: %v (should be pure-read)", r.Calls)
 	}
 }
 
@@ -123,6 +123,6 @@ func TestPlan_Absent_Missing_Clean(t *testing.T) {
 		t.Fatalf("changed=%v, want false (clean)", got.GetChanged())
 	}
 	if len(r.Calls) > 0 {
-		t.Fatalf("Plan вызвал runner-команды: %v (должен быть pure-read)", r.Calls)
+		t.Fatalf("Plan called runner commands: %v (should be pure-read)", r.Calls)
 	}
 }

@@ -42,7 +42,7 @@ func TestRenderParams_VaultKeeperSide(t *testing.T) {
 	}
 	f := st.GetFields()
 	if got := f["cmd"].GetStringValue(); got != "redis-cli AUTH s3cr3t" {
-		t.Errorf("command = %q, want реальное значение секрета в Params", got)
+		t.Errorf("command = %q, want the real secret value in Params", got)
 	}
 	if got := f["token"].GetStringValue(); got != "s3cr3t" {
 		t.Errorf("token = %q, want s3cr3t (#field)", got)
@@ -149,7 +149,7 @@ func TestEvalWhere_SoulprintSelfChoirs(t *testing.T) {
 		t.Fatalf("evalWhere (member): %v", err)
 	}
 	if !ok {
-		t.Error("evalWhere = false для члена choir 'voters', want true")
+		t.Error("evalWhere = false for choir 'voters' member, want true")
 	}
 
 	outsider := soulprintSelfMap(&topology.HostFacts{SID: "b.example.com"})
@@ -158,7 +158,7 @@ func TestEvalWhere_SoulprintSelfChoirs(t *testing.T) {
 		t.Fatalf("evalWhere (outsider): %v", err)
 	}
 	if ok {
-		t.Error("evalWhere = true для хоста без choir-членств, want false")
+		t.Error("evalWhere = true for a host with no choir membership, want false")
 	}
 }
 
@@ -252,7 +252,7 @@ func TestSoulprintSelfMap_Traits(t *testing.T) {
 	elem := hostFactsToMap(h)
 	htraits, ok := elem["traits"].(map[string]any)
 	if !ok || htraits["namespace"] != "dba-ns" {
-		t.Errorf("hosts[].traits = %v, want согласованный с self", elem["traits"])
+		t.Errorf("hosts[].traits = %v, want consistent with self", elem["traits"])
 	}
 }
 
@@ -277,7 +277,7 @@ func TestSoulprintSelfMap_TraitsRegistryWinsOverReported(t *testing.T) {
 		t.Fatalf("self.traits type = %T, want map[string]any", self["traits"])
 	}
 	if traits["namespace"] != "dba-ns" {
-		t.Errorf("self.traits.namespace = %v, registry must override reported (анти-спуфинг)", traits["namespace"])
+		t.Errorf("self.traits.namespace = %v, registry must override reported (anti-spoofing)", traits["namespace"])
 	}
 }
 
@@ -363,10 +363,10 @@ func TestSoulprintSelfMap_NoMutateRoster(t *testing.T) {
 	_ = soulprintSelfMap(h)
 
 	if _, leaked := reported["sid"]; leaked {
-		t.Error("soulprintSelfMap замутировал host.Soulprint (добавил sid)")
+		t.Error("soulprintSelfMap mutated host.Soulprint (added sid)")
 	}
 	if _, leaked := reported["covens"]; leaked {
-		t.Error("soulprintSelfMap замутировал host.Soulprint (добавил covens)")
+		t.Error("soulprintSelfMap mutated host.Soulprint (added covens)")
 	}
 }
 
@@ -388,7 +388,7 @@ func TestEvalWhere_AddReplicasNullFacts(t *testing.T) {
 		t.Fatalf("evalWhere add_replicas: %v", err)
 	}
 	if !ok {
-		t.Error("evalWhere = false, want true (web-2 не в replicas)")
+		t.Error("evalWhere = false, want true (web-2 not in replicas)")
 	}
 }
 
@@ -405,10 +405,10 @@ func TestSoulprintSelf_HostsSymmetry(t *testing.T) {
 	hostsEl := hostFactsToMap(h)
 
 	if self["sid"] != hostsEl["sid"] {
-		t.Errorf("sid рассинхрон: self=%v hosts=%v", self["sid"], hostsEl["sid"])
+		t.Errorf("sid mismatch: self=%v hosts=%v", self["sid"], hostsEl["sid"])
 	}
 	if self["role"] != hostsEl["role"] {
-		t.Errorf("role рассинхрон: self=%v hosts=%v", self["role"], hostsEl["role"])
+		t.Errorf("role mismatch: self=%v hosts=%v", self["role"], hostsEl["role"])
 	}
 	assertListSymmetry(t, "covens", self["covens"], hostsEl["covens"])
 	assertListSymmetry(t, "choirs", self["choirs"], hostsEl["choirs"])
@@ -419,11 +419,11 @@ func assertListSymmetry(t *testing.T, name string, selfV, hostsV any) {
 	selfL, _ := selfV.([]any)
 	hostsL, _ := hostsV.([]any)
 	if len(selfL) != len(hostsL) {
-		t.Fatalf("%s len рассинхрон: self=%v hosts=%v", name, selfL, hostsL)
+		t.Fatalf("%s len mismatch: self=%v hosts=%v", name, selfL, hostsL)
 	}
 	for i := range selfL {
 		if selfL[i] != hostsL[i] {
-			t.Errorf("%s[%d] рассинхрон: self=%v hosts=%v", name, i, selfL[i], hostsL[i])
+			t.Errorf("%s[%d] mismatch: self=%v hosts=%v", name, i, selfL[i], hostsL[i])
 		}
 	}
 }

@@ -44,7 +44,7 @@ func TestBootstrap_ApplySigilAnchors_LiveSource(t *testing.T) {
 		t.Fatalf("reply1 set = %v, want [PEM-A PEM-B]", got)
 	}
 	if r1.GetSigilPubkeyPem() != "PEM-A" {
-		t.Errorf("reply1 single = %q, want PEM-A (первый якорь)", r1.GetSigilPubkeyPem())
+		t.Errorf("reply1 single = %q, want PEM-A (first anchor)", r1.GetSigilPubkeyPem())
 	}
 
 	// Rotation: the set changed (old PEM-A retired, C/D added).
@@ -54,7 +54,7 @@ func TestBootstrap_ApplySigilAnchors_LiveSource(t *testing.T) {
 	r2 := &keeperv1.BootstrapReply{}
 	h.applySigilAnchors(r2)
 	if got := r2.GetSigilPubkeyPemSet(); len(got) != 2 || got[0] != "PEM-C" || got[1] != "PEM-D" {
-		t.Fatalf("reply2 set = %v, want [PEM-C PEM-D] (живой источник)", got)
+		t.Fatalf("reply2 set = %v, want [PEM-C PEM-D] (live source)", got)
 	}
 	if r2.GetSigilPubkeyPem() != "PEM-C" {
 		t.Errorf("reply2 single = %q, want PEM-C", r2.GetSigilPubkeyPem())

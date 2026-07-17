@@ -29,7 +29,7 @@ func TestUsesRootField(t *testing.T) {
 		// ★KEY case: a mention of `.input` in literal text/a comment (as in
 		// redis.conf.tmpl/sentinel.conf.tmpl) must NOT be counted as an access —
 		// it's a TextNode, not a FieldNode.
-		{"input in comment text", "input", "# .vars.config: apply.input резолвится host-инвариантно\nbind 0.0.0.0", false},
+		{"input in comment text", "input", "# .vars.config: apply.input resolves host-invariantly\nbind 0.0.0.0", false},
 		{"input substring in literal", "input", `# describes .input.textfile_dir contract`, false},
 		{"empty template", "input", `bind 0.0.0.0`, false},
 	}
@@ -51,7 +51,7 @@ func TestUsesRootField(t *testing.T) {
 func TestUsesRootField_ParseError(t *testing.T) {
 	e := newEngine(t)
 	if _, err := e.UsesRootField(`{{ .input.x `, "input"); err == nil {
-		t.Fatalf("ожидалась ошибка парсинга битого шаблона")
+		t.Fatalf("expected a parse error for the broken template")
 	}
 }
 
@@ -82,7 +82,7 @@ func TestRootFieldSubKeys(t *testing.T) {
 		// Another field is ignored.
 		{"other field ignored", "vars", `{{ .input.user }}{{ .self.os.family }}`, map[string]bool{}},
 		// A mention in a comment/text — TextNode, not an access.
-		{"in comment text", "vars", "# .vars.bin_path резолвится из vars.yml\nbind 0.0.0.0", map[string]bool{}},
+		{"in comment text", "vars", "# .vars.bin_path resolves from vars.yml\nbind 0.0.0.0", map[string]bool{}},
 		{"empty template", "vars", `bind 0.0.0.0`, map[string]bool{}},
 	}
 	for _, tc := range cases {
@@ -96,7 +96,7 @@ func TestRootFieldSubKeys(t *testing.T) {
 			}
 			for k := range tc.want {
 				if !got[k] {
-					t.Errorf("RootFieldSubKeys(%q): отсутствует ключ %q (got %v)", tc.field, k, got)
+					t.Errorf("RootFieldSubKeys(%q): key %q is missing (got %v)", tc.field, k, got)
 				}
 			}
 		})
@@ -108,6 +108,6 @@ func TestRootFieldSubKeys(t *testing.T) {
 func TestRootFieldSubKeys_ParseError(t *testing.T) {
 	e := newEngine(t)
 	if _, err := e.RootFieldSubKeys(`{{ .vars.x `, "vars"); err == nil {
-		t.Fatalf("ожидалась ошибка парсинга битого шаблона")
+		t.Fatalf("expected a parse error for the broken template")
 	}
 }

@@ -40,7 +40,7 @@ func TestL1InotifyFold_BatchOfFsEvents(t *testing.T) {
 	// Let the baseline settle (no Portent).
 	select {
 	case ev := <-s.Portents():
-		t.Fatalf("baseline не должен эмитить Portent: %q", ev.GetBeaconName())
+		t.Fatalf("baseline should not emit a Portent: %q", ev.GetBeaconName())
 	case <-time.After(400 * time.Millisecond):
 	}
 
@@ -59,15 +59,15 @@ func TestL1InotifyFold_BatchOfFsEvents(t *testing.T) {
 	case ev := <-s.Portents():
 		ino := ev.GetInotify()
 		if ino == nil {
-			t.Fatal("typed Inotify payload пуст в L1-сценарии")
+			t.Fatal("typed Inotify payload empty in the L1 scenario")
 		}
 		if ino.GetCount() < 5 {
-			t.Errorf("InotifyPortent.count=%d, want >= 5 (fold-семантика)", ino.GetCount())
+			t.Errorf("InotifyPortent.count=%d, want >= 5 (fold semantics)", ino.GetCount())
 		}
 		if ino.GetPath() != dir {
 			t.Errorf("InotifyPortent.path=%q, want %q", ino.GetPath(), dir)
 		}
 	case <-time.After(3 * time.Second):
-		t.Fatal("серия из 5 touch-ей не подняла Portent через scheduler")
+		t.Fatal("a series of 5 touches did not raise a Portent via the scheduler")
 	}
 }

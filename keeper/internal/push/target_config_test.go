@@ -50,7 +50,7 @@ func TestConfigTargetResolver_EmptySIDSkipped(t *testing.T) {
 		{SID: "valid.example.com"},
 	})
 	if _, err := r.Resolve(context.Background(), ""); !errors.Is(err, ErrTargetNotConfigured) {
-		t.Errorf("Resolve(\"\") должен возвращать ErrTargetNotConfigured, got %v", err)
+		t.Errorf("Resolve(\"\") must return ErrTargetNotConfigured, got %v", err)
 	}
 	if _, err := r.Resolve(context.Background(), "valid.example.com"); err != nil {
 		t.Errorf("valid.example.com: %v", err)

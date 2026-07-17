@@ -83,13 +83,13 @@ func TestRedisUsersAcl_DeterministicOrder(t *testing.T) {
 		// the map), then map users in sorted order: alpha < default_admin < mike < zeta.
 		lines := nonEmptyLines(out)
 		if len(lines) != 5 {
-			t.Fatalf("ожидалось 5 строк user (default off + 4 map), получено %d:\n%s", len(lines), out)
+			t.Fatalf("expected 5 user lines (default off + 4 map), got %d:\n%s", len(lines), out)
 		}
 		gotNames := []string{userName(lines[0]), userName(lines[1]), userName(lines[2]), userName(lines[3]), userName(lines[4])}
 		wantNames := []string{"default", "alpha", "default_admin", "mike", "zeta"}
 		for j := range wantNames {
 			if gotNames[j] != wantNames[j] {
-				t.Fatalf("порядок юзеров = %v, want %v (default off-литерал + range по map → сортировка ключей)\n%s", gotNames, wantNames, out)
+				t.Fatalf("user order = %v, want %v (default off-literal + range over map -> key sort)\n%s", gotNames, wantNames, out)
 			}
 		}
 
@@ -97,28 +97,28 @@ func TestRedisUsersAcl_DeterministicOrder(t *testing.T) {
 		if i == 0 {
 			first = out
 		} else if out != first {
-			t.Fatalf("прогон %d дал ИНОЙ вывод, чем прогон 0 — недетерминизм:\n--- прогон 0 ---\n%s\n--- прогон %d ---\n%s", i, first, i, out)
+			t.Fatalf("run %d produced a DIFFERENT output than run 0 - nondeterminism:\n--- run 0 ---\n%s\n--- run %d ---\n%s", i, first, i, out)
 		}
 	}
 
 	// Password is written as a HASH (#<sha256>) — plaintext never hits the file.
 	if strings.Contains(first, "zeta-pass") || strings.Contains(first, "alpha-pass") ||
 		strings.Contains(first, "mike-pass") || strings.Contains(first, "admin-pass") {
-		t.Fatalf("plaintext-пароль протёк в users.acl:\n%s", first)
+		t.Fatalf("plaintext password leaked into users.acl:\n%s", first)
 	}
 	if !strings.Contains(first, "#") {
-		t.Fatalf("в users.acl нет хеша пароля (#<sha256>):\n%s", first)
+		t.Fatalf("users.acl has no password hash (#<sha256>):\n%s", first)
 	}
 	// Built-in default is OFF (`user default off`): redis no longer uses it
 	// (default_admin took the role), but without an explicit off line, an
 	// aclfile with no default entry would fall back to built-in `on nopass` —
 	// open passwordless access under protected-mode.
 	if !strings.Contains(first, "user default off") {
-		t.Fatalf("встроенный default должен рендериться `user default off` (его в .vars.users нет):\n%s", first)
+		t.Fatalf("the built-in default should render `user default off` (it is not in .vars.users):\n%s", first)
 	}
 	// default_admin is the full-access system user (~* &* +@all), carries #<hash>.
 	if !strings.Contains(first, "user default_admin on #") || !strings.Contains(first, "~* &* +@all") {
-		t.Fatalf("default_admin должен нести #<hash> и полный доступ ~* &* +@all:\n%s", first)
+		t.Fatalf("default_admin should carry #<hash> and full access ~* &* +@all:\n%s", first)
 	}
 }
 
@@ -175,7 +175,7 @@ func TestRedisConf_ClusterAnnounceIP_PerHost(t *testing.T) {
 
 		wantAnnounce := "cluster-announce-ip " + h.ip
 		if !strings.Contains(out, wantAnnounce) {
-			t.Fatalf("хост %s: нет своей announce-ip-строки %q:\n%s", h.sid, wantAnnounce, out)
+			t.Fatalf("host %s: missing its own announce-ip line %q:\n%s", h.sid, wantAnnounce, out)
 		}
 		// This host's announce line must not carry another host's IP (the
 		// host-invariant bug would show up exactly this way — one fixed IP for all).
@@ -184,12 +184,12 @@ func TestRedisConf_ClusterAnnounceIP_PerHost(t *testing.T) {
 				continue
 			}
 			if strings.Contains(out, "cluster-announce-ip "+other.ip) {
-				t.Fatalf("хост %s анонсирует ЧУЖОЙ IP %s — announce-ip host-инвариантен (баг вернулся):\n%s", h.sid, other.ip, out)
+				t.Fatalf("host %s announces a FOREIGN IP %s - announce-ip is not host-invariant (bug is back):\n%s", h.sid, other.ip, out)
 			}
 		}
 		// bind uses the same per-host .self.network.primary_ip — symmetry preserved.
 		if !strings.Contains(out, "bind "+h.ip+" 127.0.0.1") {
-			t.Fatalf("хост %s: bind не на своём primary_ip %s:\n%s", h.sid, h.ip, out)
+			t.Fatalf("host %s: bind not on its own primary_ip %s:\n%s", h.sid, h.ip, out)
 		}
 	}
 }
@@ -218,11 +218,11 @@ func TestRedisConf_ClusterAnnounceIP_StandaloneOmitsLine(t *testing.T) {
 	}
 	out := renderRedisTmpl(t, "redis.conf.tmpl", root)
 	if strings.Contains(out, "cluster-announce-ip") {
-		t.Fatalf("standalone (без cluster-enabled): cluster-announce-ip не должен присутствовать:\n%s", out)
+		t.Fatalf("standalone (without cluster-enabled): cluster-announce-ip should not be present:\n%s", out)
 	}
 	// bind still renders from .self (per-host, mode-agnostic).
 	if !strings.Contains(out, "bind 10.0.0.7 127.0.0.1") {
-		t.Fatalf("standalone: bind не на primary_ip:\n%s", out)
+		t.Fatalf("standalone: bind not on primary_ip:\n%s", out)
 	}
 }
 
@@ -238,13 +238,13 @@ func TestRedisUsersAcl_EmptyMapKeepsDefault(t *testing.T) {
 	out := renderRedisTmpl(t, "users.acl.tmpl", root)
 	lines := nonEmptyLines(out)
 	if len(lines) != 1 {
-		t.Fatalf("пустой users → ожидалась 1 строка (default), получено %d:\n%s", len(lines), out)
+		t.Fatalf("empty users -> expected 1 line (default), got %d:\n%s", len(lines), out)
 	}
 	if userName(lines[0]) != "default" {
-		t.Fatalf("единственная строка должна быть default-юзером, получено %q", lines[0])
+		t.Fatalf("the only line should be the default user, got %q", lines[0])
 	}
 	if strings.Contains(out, "main-requirepass") {
-		t.Fatalf("plaintext главного секрета протёк в default-строку:\n%s", out)
+		t.Fatalf("plaintext master secret leaked into the default line:\n%s", out)
 	}
 }
 
@@ -298,16 +298,16 @@ func TestSentinelConf_AnnounceIP_PerHost(t *testing.T) {
 
 		// announce-ip is this host's OWN primary_ip.
 		if !strings.Contains(out, "sentinel announce-ip "+h.ip) {
-			t.Fatalf("хост %s: нет своей announce-ip-строки %q:\n%s", h.sid, h.ip, out)
+			t.Fatalf("host %s: missing its own announce-ip line %q:\n%s", h.sid, h.ip, out)
 		}
 		for _, other := range hosts {
 			if other.ip != h.ip && strings.Contains(out, "sentinel announce-ip "+other.ip) {
-				t.Fatalf("хост %s анонсирует ЧУЖОЙ IP %s — announce-ip host-инвариантен (баг):\n%s", h.sid, other.ip, out)
+				t.Fatalf("host %s announces a FOREIGN IP %s - announce-ip is not host-invariant (bug):\n%s", h.sid, other.ip, out)
 			}
 		}
 		// monitor.ip (master) is HOST-INVARIANT: same for both hosts.
 		if !strings.Contains(out, "sentinel monitor mymaster 10.0.0.1 6379 2") {
-			t.Fatalf("хост %s: нет sentinel monitor master 10.0.0.1:\n%s", h.sid, out)
+			t.Fatalf("host %s: missing sentinel monitor master 10.0.0.1:\n%s", h.sid, out)
 		}
 	}
 }
@@ -342,12 +342,12 @@ func TestSentinelUnit_ConfDirInReadWritePaths(t *testing.T) {
 
 	rwLine := readWritePathsLine(t, out)
 	if !strings.Contains(rwLine, confDir) {
-		t.Fatalf("ReadWritePaths sentinel-юнита не содержит conf_dir %q (sentinel не сможет переписать sentinel.conf):\n%s", confDir, rwLine)
+		t.Fatalf("ReadWritePaths of the sentinel unit does not contain conf_dir %q (sentinel will not be able to rewrite sentinel.conf):\n%s", confDir, rwLine)
 	}
 	// Remaining required write dirs are still present (didn't crowd each other out).
 	for _, want := range []string{"/var/lib/redis", "/var/log/redis", "/var/run/redis"} {
 		if !strings.Contains(rwLine, want) {
-			t.Fatalf("ReadWritePaths sentinel-юнита не содержит %q:\n%s", want, rwLine)
+			t.Fatalf("ReadWritePaths of the sentinel unit does not contain %q:\n%s", want, rwLine)
 		}
 	}
 }
@@ -378,11 +378,11 @@ func TestRedisServerHardening_ConfDirInReadWritePaths(t *testing.T) {
 
 	rwLine := readWritePathsLine(t, out)
 	if !strings.Contains(rwLine, confDir) {
-		t.Fatalf("ReadWritePaths hardening drop-in не содержит conf_dir %q (CONFIG REWRITE на update_config упрётся в read-only /etc):\n%s", confDir, rwLine)
+		t.Fatalf("ReadWritePaths of the hardening drop-in does not contain conf_dir %q (CONFIG REWRITE on update_config will hit read-only /etc):\n%s", confDir, rwLine)
 	}
 	for _, want := range []string{"/var/lib/redis", "/var/run/redis", "/var/log/redis"} {
 		if !strings.Contains(rwLine, want) {
-			t.Fatalf("ReadWritePaths hardening drop-in не содержит %q:\n%s", want, rwLine)
+			t.Fatalf("ReadWritePaths of the hardening drop-in does not contain %q:\n%s", want, rwLine)
 		}
 	}
 }
@@ -423,7 +423,7 @@ func TestSentinelConf_DirectivesDeterministicOrder(t *testing.T) {
 		if i == 0 {
 			first = out
 		} else if out != first {
-			t.Fatalf("прогон %d дал ИНОЙ вывод (недетерминизм директив):\n--- 0 ---\n%s\n--- %d ---\n%s", i, first, i, out)
+			t.Fatalf("run %d produced a DIFFERENT output (directive nondeterminism):\n--- 0 ---\n%s\n--- %d ---\n%s", i, first, i, out)
 		}
 	}
 	// loglevel < sentinel down... < sentinel failover... — sorted-key order.
@@ -431,14 +431,14 @@ func TestSentinelConf_DirectivesDeterministicOrder(t *testing.T) {
 	iDown := strings.Index(first, "down-after-milliseconds mymaster 12000")
 	iFail := strings.Index(first, "failover-timeout mymaster 70000")
 	if iLog < 0 || iDown < 0 || iFail < 0 {
-		t.Fatalf("нет ожидаемых директив:\n%s", first)
+		t.Fatalf("expected directives missing:\n%s", first)
 	}
 	if !(iLog < iDown && iDown < iFail) {
-		t.Fatalf("директивы не в отсортированном порядке (loglevel<down<failover):\n%s", first)
+		t.Fatalf("directives not in sorted order (loglevel<down<failover):\n%s", first)
 	}
 	// Empty auth-pass → no auth-pass line.
 	if strings.Contains(first, "sentinel auth-pass") {
-		t.Fatalf("пустой auth_pass: строки auth-pass быть не должно:\n%s", first)
+		t.Fatalf("empty auth_pass: there should be no auth-pass line:\n%s", first)
 	}
 }
 
@@ -471,11 +471,11 @@ func TestSentinelConf_AuthRendered(t *testing.T) {
 
 	// auth-user carries the monitored master's name.
 	if !strings.Contains(out, "sentinel auth-user mymaster sentinel-user") {
-		t.Fatalf("нет строки auth-user с master_name:\n%s", out)
+		t.Fatalf("missing auth-user line with master_name:\n%s", out)
 	}
 	// auth-pass carries the monitored master's name.
 	if !strings.Contains(out, "sentinel auth-pass mymaster s3cr3t-sentinel-pass") {
-		t.Fatalf("нет строки auth-pass с master_name:\n%s", out)
+		t.Fatalf("missing auth-pass line with master_name:\n%s", out)
 	}
 }
 
@@ -526,10 +526,10 @@ func TestRedisConf_MasterAuthPersisted(t *testing.T) {
 	// (line starts with the directive name — not a substring match inside a
 	// template comment, where the word masterauth also appears).
 	if !hasDirectiveLine(out, "masteruser default_admin") {
-		t.Fatalf("нет директивы masteruser default_admin (replica не выберет ACL-юзера у master при рестарте):\n%s", out)
+		t.Fatalf("missing masteruser default_admin directive (replica will not pick the ACL user on the master after a restart):\n%s", out)
 	}
 	if !hasDirectiveLine(out, "masterauth default-admin-secret-pass") {
-		t.Fatalf("нет директивы masterauth <pass> (replica не авторизуется у master при рестарте → link DOWN):\n%s", out)
+		t.Fatalf("missing masterauth <pass> directive (replica will not authenticate to the master on restart -> link DOWN):\n%s", out)
 	}
 }
 
@@ -577,7 +577,7 @@ func TestRedisConf_Loadmodule_NoTrailingSpace(t *testing.T) {
 		if i == 0 {
 			first = out
 		} else if out != first {
-			t.Fatalf("прогон %d дал ИНОЙ вывод (недетерминизм loadmodule):\n--- 0 ---\n%s\n--- %d ---\n%s", i, first, i, out)
+			t.Fatalf("run %d produced a DIFFERENT output (loadmodule nondeterminism):\n--- 0 ---\n%s\n--- %d ---\n%s", i, first, i, out)
 		}
 	}
 
@@ -588,15 +588,15 @@ func TestRedisConf_Loadmodule_NoTrailingSpace(t *testing.T) {
 		}
 	}
 	if len(modLines) != 2 {
-		t.Fatalf("ожидалось 2 строки loadmodule, получено %d:\n%s", len(modLines), first)
+		t.Fatalf("expected 2 loadmodule lines, got %d:\n%s", len(modLines), first)
 	}
 	// (a) No trailing space — the line ends exactly at .so.
 	for _, ln := range modLines {
 		if ln != strings.TrimRight(ln, " ") {
-			t.Fatalf("строка loadmodule с хвостовым пробелом: %q", ln)
+			t.Fatalf("loadmodule line with trailing whitespace: %q", ln)
 		}
 		if !strings.HasSuffix(ln, ".so") {
-			t.Fatalf("строка loadmodule не заканчивается на .so: %q", ln)
+			t.Fatalf("loadmodule line does not end with .so: %q", ln)
 		}
 	}
 	// (b) Line order matches list order (list determinism, not map iteration).
@@ -606,7 +606,7 @@ func TestRedisConf_Loadmodule_NoTrailingSpace(t *testing.T) {
 	}
 	for i := range want {
 		if modLines[i] != want[i] {
-			t.Fatalf("строка %d = %q, want %q (порядок списка)", i, modLines[i], want[i])
+			t.Fatalf("line %d = %q, want %q (list order)", i, modLines[i], want[i])
 		}
 	}
 }
@@ -645,7 +645,7 @@ func TestRedisConf_Loadmodule_EmptyAndAbsent(t *testing.T) {
 	for name, lm := range cases {
 		out := renderRedisTmpl(t, "redis.conf.tmpl", base(lm))
 		if strings.Contains(out, "loadmodule") {
-			t.Fatalf("%s: директива loadmodule не должна присутствовать:\n%s", name, out)
+			t.Fatalf("%s: loadmodule directive should not be present:\n%s", name, out)
 		}
 	}
 }
@@ -675,11 +675,11 @@ func TestSentinelConf_AclfileSecondFile(t *testing.T) {
 	}
 	out := renderRedisTmpl(t, "sentinel.conf.tmpl", root)
 	if !strings.Contains(out, "aclfile /opt/redis-conf/sentinel-users.acl") {
-		t.Fatalf("sentinel.conf: нет aclfile под conf_dir (sentinel-users.acl):\n%s", out)
+		t.Fatalf("sentinel.conf: missing aclfile under conf_dir (sentinel-users.acl):\n%s", out)
 	}
 	// redis-server's users.acl must not be mentioned in sentinel.conf (separate file).
 	if strings.Contains(out, "/users.acl") {
-		t.Fatalf("sentinel.conf ссылается на users.acl redis-server — должен на свой sentinel-users.acl:\n%s", out)
+		t.Fatalf("sentinel.conf references the redis-server users.acl - it should reference its own sentinel-users.acl:\n%s", out)
 	}
 }
 
@@ -706,28 +706,28 @@ func TestSentinelUsersAcl_DeterministicOrder(t *testing.T) {
 		out := renderRedisTmpl(t, "sentinel-users.acl.tmpl", root)
 		lines := nonEmptyLines(out)
 		if len(lines) != 4 {
-			t.Fatalf("ожидалось 4 строки user, получено %d:\n%s", len(lines), out)
+			t.Fatalf("expected 4 user lines, got %d:\n%s", len(lines), out)
 		}
 		// Sorted: default < haproxy < monitoring < sentinel.
 		gotNames := []string{userName(lines[0]), userName(lines[1]), userName(lines[2]), userName(lines[3])}
 		want := []string{"default", "haproxy", "monitoring", "sentinel"}
 		for j := range want {
 			if gotNames[j] != want[j] {
-				t.Fatalf("порядок строк не отсортирован: got %v want %v\n%s", gotNames, want, out)
+				t.Fatalf("line order not sorted: got %v want %v\n%s", gotNames, want, out)
 			}
 		}
 		if i == 0 {
 			first = out
 		} else if out != first {
-			t.Fatalf("прогон %d дал ИНОЙ вывод (недетерминизм):\n%s", i, out)
+			t.Fatalf("run %d produced a DIFFERENT output (nondeterminism):\n%s", i, out)
 		}
 	}
 	// Password is a HASH (#<sha256hex>) — plaintext must not leak.
 	if strings.Contains(first, "default-pass") || strings.Contains(first, "sentinel-pass") {
-		t.Fatalf("plaintext-пароль в sentinel-users.acl (должен быть sha256-хеш):\n%s", first)
+		t.Fatalf("plaintext password in sentinel-users.acl (should be a sha256 hash):\n%s", first)
 	}
 	if !strings.Contains(first, "#") {
-		t.Fatalf("нет sha256-хеша пароля (#<hash>):\n%s", first)
+		t.Fatalf("missing sha256 password hash (#<hash>):\n%s", first)
 	}
 }
 
@@ -743,7 +743,7 @@ func TestSentinelUsersAcl_EmptyMapValid(t *testing.T) {
 	out := renderRedisTmpl(t, "sentinel-users.acl.tmpl", root)
 	lines := nonEmptyLines(out)
 	if len(lines) != 1 || lines[0] != "user default off" {
-		t.Fatalf("пустой map должен дать ровно `user default off` (безопасный дефолт), получено:\n%s", out)
+		t.Fatalf("an empty map should produce exactly `user default off` (safe default), got:\n%s", out)
 	}
 }
 
@@ -769,7 +769,7 @@ func readWritePathsLine(t *testing.T, out string) string {
 			return ln
 		}
 	}
-	t.Fatalf("в рендере нет строки ReadWritePaths=:\n%s", out)
+	t.Fatalf("the render has no ReadWritePaths= line:\n%s", out)
 	return ""
 }
 

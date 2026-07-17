@@ -39,7 +39,7 @@ func TestLoadDestinyVars_MissingFile(t *testing.T) {
 		t.Fatalf("LoadDestinyVars(missing): %v", err)
 	}
 	if got != nil {
-		t.Errorf("vars = %v, want nil для отсутствующего файла", got)
+		t.Errorf("vars = %v, want nil for a missing file", got)
 	}
 }
 
@@ -54,7 +54,7 @@ func TestLoadDestinyVars_EmptyFile(t *testing.T) {
 		t.Fatalf("LoadDestinyVars(empty): %v", err)
 	}
 	if got != nil {
-		t.Errorf("vars = %v, want nil для пустого файла", got)
+		t.Errorf("vars = %v, want nil for an empty file", got)
 	}
 }
 
@@ -62,7 +62,7 @@ func TestLoadDestinyVars_EmptyFile(t *testing.T) {
 func TestLoadDestinyVars_Malformed(t *testing.T) {
 	_, err := LoadDestinyVarsFromBytes("vars.yml", []byte("- not\n- a\n- map\n"))
 	if err == nil {
-		t.Fatal("LoadDestinyVarsFromBytes: ожидалась ошибка на не-map корне")
+		t.Fatal("LoadDestinyVarsFromBytes: expected an error on a non-map root")
 	}
 }
 
@@ -78,12 +78,12 @@ func TestDestinyVarsCollisions(t *testing.T) {
 	got := DestinyVarsCollisions(fileVars, tasks)
 	want := []string{"unit", "user"}
 	if !reflect.DeepEqual(got, want) {
-		t.Errorf("collisions = %v, want %v (отсортировано)", got, want)
+		t.Errorf("collisions = %v, want %v (sorted)", got, want)
 	}
 
 	// Non-overlapping.
 	if c := DestinyVarsCollisions(map[string]any{"a": 1}, []Task{{Vars: map[string]any{"b": 2}}}); c != nil {
-		t.Errorf("collisions = %v, want nil для непересекающихся", c)
+		t.Errorf("collisions = %v, want nil for non-overlapping", c)
 	}
 	// Empty inputs.
 	if c := DestinyVarsCollisions(nil, tasks); c != nil {

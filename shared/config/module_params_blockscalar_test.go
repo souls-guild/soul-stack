@@ -29,10 +29,10 @@ func TestModuleParams_BlockScalarStringParam_NoMismatch(t *testing.T) {
 		"      echo step2\n"
 	_, diags, _ := LoadDestinyTasksFromBytes("tasks/main.yml", []byte(src), ValidateOptions{})
 	if hasCodeP(diags, "param_type_mismatch") {
-		t.Errorf("block-scalar string-param дал param_type_mismatch (LiteralNode не признан строкой): %v", diagCodesP(diags))
+		t.Errorf("block-scalar string-param gave param_type_mismatch (LiteralNode not recognized as string): %v", diagCodesP(diags))
 	}
 	if diag.HasErrors(diags) {
-		t.Fatalf("валидный core.cmd.shell с cmd: |  дал ошибки: %v", diags)
+		t.Fatalf("valid core.cmd.shell with cmd: |  gave errors: %v", diags)
 	}
 }
 
@@ -47,10 +47,10 @@ func TestModuleParams_BlockScalarFoldedStringParam_NoMismatch(t *testing.T) {
 		"      two\n"
 	_, diags, _ := LoadDestinyTasksFromBytes("tasks/main.yml", []byte(src), ValidateOptions{})
 	if hasCodeP(diags, "param_type_mismatch") {
-		t.Errorf("folded block-scalar string-param дал param_type_mismatch: %v", diagCodesP(diags))
+		t.Errorf("folded block-scalar string-param gave param_type_mismatch: %v", diagCodesP(diags))
 	}
 	if diag.HasErrors(diags) {
-		t.Fatalf("валидный core.cmd.shell с cmd: >  дал ошибки: %v", diags)
+		t.Fatalf("valid core.cmd.shell with cmd: >  gave errors: %v", diags)
 	}
 }
 
@@ -69,6 +69,6 @@ func TestModuleParams_BlockScalarIntParam_StillMismatches(t *testing.T) {
 		"      8080\n"
 	_, diags, _ := LoadDestinyTasksFromBytes("tasks/main.yml", []byte(src), ValidateOptions{})
 	if !hasCodeP(diags, "param_type_mismatch") {
-		t.Errorf("block-scalar в int-поле НЕ дал param_type_mismatch — int-ветку astMatchesType ослабили: %v", diagCodesP(diags))
+		t.Errorf("block-scalar in int field did NOT give param_type_mismatch - the int branch of astMatchesType was weakened: %v", diagCodesP(diags))
 	}
 }

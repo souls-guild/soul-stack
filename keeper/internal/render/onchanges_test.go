@@ -50,11 +50,11 @@ func TestRender_OnChanges_ResolvesNameToIndex(t *testing.T) {
 		t.Fatalf("len(tasks) = %d, want 2", len(tasks))
 	}
 	if tasks[0].OnChangesIdx != nil {
-		t.Errorf("источник: OnChangesIdx = %v, want nil (безусловный запуск)", tasks[0].OnChangesIdx)
+		t.Errorf("source: OnChangesIdx = %v, want nil (unconditional run)", tasks[0].OnChangesIdx)
 	}
 	got := tasks[1].OnChangesIdx
 	if len(got) != 1 || got[0] != 0 {
-		t.Errorf("потребитель: OnChangesIdx = %v, want [0] (индекс задачи redis_conf)", got)
+		t.Errorf("consumer: OnChangesIdx = %v, want [0] (index of the redis_conf task)", got)
 	}
 }
 
@@ -79,7 +79,7 @@ func TestRender_OnChanges_UnknownRegister(t *testing.T) {
 	p := NewPipeline(nil, newEngine(t), nil, nil)
 	_, _, err := p.Render(context.Background(), onChangesRenderInput(onChangesScenario([]string{"typo_conf"})))
 	if err == nil {
-		t.Fatal("Render: ожидалась ошибка на несуществующий onchanges register, got nil")
+		t.Fatal("Render: expected an error for a nonexistent onchanges register, got nil")
 	}
 	if !errors.Is(err, ErrOnChangesUnknownRegister) {
 		t.Errorf("err = %v, want ErrOnChangesUnknownRegister", err)

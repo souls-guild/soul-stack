@@ -37,7 +37,7 @@ import (
 // ErrVaultUnavailable — vault() appears in an expression, but the Engine was built
 // without a KVReader (the vault function isn't registered). A separate class so the
 // caller distinguishes "no vault client in this context" from an author error.
-var ErrVaultUnavailable = errors.New("CEL: vault() недоступен — Engine собран без KVReader")
+var ErrVaultUnavailable = errors.New("CEL: vault() unavailable - Engine built without a KVReader")
 
 // KVReader — the narrow subset of the Vault KV client needed by the CEL vault()
 // function. keeper/internal/vault.Client satisfies the interface as-is; narrowing
@@ -148,10 +148,10 @@ func readKVMemoized(ctx context.Context, kv KVReader, body string) (map[string]a
 var vaultResolverType = types.NewOpaqueType("soulstack.vaultResolver")
 
 func (r *vaultResolver) ConvertToNative(reflect.Type) (any, error) {
-	return nil, errors.New("vaultResolver: не конвертируется в native (internal carrier)")
+	return nil, errors.New("vaultResolver: not convertible to native (internal carrier)")
 }
 func (r *vaultResolver) ConvertToType(ref.Type) ref.Val {
-	return types.NewErr("vaultResolver: не конвертируется (internal carrier)")
+	return types.NewErr("vaultResolver: not convertible (internal carrier)")
 }
 func (r *vaultResolver) Equal(ref.Val) ref.Val { return types.False }
 func (r *vaultResolver) Type() ref.Type        { return vaultResolverType }
@@ -197,7 +197,7 @@ func expandVaultMacro(mef parser.ExprHelper, _ ast.Expr, args []ast.Expr) (ast.E
 func callVault(pathVal, resolverVal ref.Val) ref.Val {
 	path, ok := pathVal.Value().(string)
 	if !ok {
-		return types.NewErr("vault(): аргумент-путь должен быть строкой, получено %s", pathVal.Type().TypeName())
+		return types.NewErr("vault(): the path argument must be a string, got %s", pathVal.Type().TypeName())
 	}
 	res, ok := resolverVal.Value().(*vaultResolver)
 	if !ok || res == nil || res.kv == nil {
@@ -218,9 +218,9 @@ func callVault(pathVal, resolverVal ref.Val) ref.Val {
 		// `vault:<mount>/`, so it survives masking of status_details/error_summary —
 		// the operator sees a clear cause, not `***MASKED***`.
 		if field != "" {
-			return types.NewErr("vault(): секрет %s#%s не найден в Vault (KV path not found или нет доступа)", vaultPathHint(body), field)
+			return types.NewErr("vault(): secret %s#%s not found in Vault (KV path not found or no access)", vaultPathHint(body), field)
 		}
-		return types.NewErr("vault(): секрет %s не найден в Vault (KV path not found или нет доступа)", vaultPathHint(body))
+		return types.NewErr("vault(): secret %s not found in Vault (KV path not found or no access)", vaultPathHint(body))
 	}
 
 	if field == "" {
@@ -231,7 +231,7 @@ func callVault(pathVal, resolverVal ref.Val) ref.Val {
 		// Path+field name is actionable diagnostics (which field to seed), not a
 		// secret value: values of other secret fields are NOT put into the text. The
 		// path in flat form survives masking (NIM-73).
-		return types.NewErr("vault(): в секрете %s нет поля %q", vaultPathHint(body), field)
+		return types.NewErr("vault(): secret %s has no field %q", vaultPathHint(body), field)
 	}
 	return types.DefaultTypeAdapter.NativeToValue(val)
 }
@@ -257,7 +257,7 @@ func splitVaultField(arg string) (body, field string, err error) {
 	if i := strings.LastIndexByte(arg, '#'); i >= 0 {
 		body, field = arg[:i], arg[i+1:]
 		if field == "" {
-			return "", "", errors.New("пустое имя поля после '#'")
+			return "", "", errors.New("empty field name after '#'")
 		}
 	} else {
 		body = arg
@@ -276,11 +276,11 @@ func splitVaultField(arg string) (body, field string, err error) {
 func validateVaultPath(body string) error {
 	b := strings.TrimPrefix(body, "/")
 	if b == "" {
-		return errors.New("пустой путь")
+		return errors.New("empty path")
 	}
 	slash := strings.IndexByte(b, '/')
 	if slash <= 0 || slash == len(b)-1 {
-		return fmt.Errorf("путь %q должен иметь форму <mount>/<path> (например secret/redis/admin)", vaultPathHint(body))
+		return fmt.Errorf("path %q must have the form <mount>/<path> (e.g. secret/redis/admin)", vaultPathHint(body))
 	}
 	return nil
 }

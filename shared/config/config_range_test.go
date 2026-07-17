@@ -206,7 +206,7 @@ func TestKeeperConfig_OracleCircuitMaxFiresOmittedVsZero(t *testing.T) {
 		t.Fatalf("load omitted: %v", err)
 	}
 	if cfgOmitted.OracleCircuitMaxFires != nil {
-		t.Fatalf("опущенное oracle_circuit_max_fires должно быть nil, got %v", *cfgOmitted.OracleCircuitMaxFires)
+		t.Fatalf("omitted oracle_circuit_max_fires should be nil, got %v", *cfgOmitted.OracleCircuitMaxFires)
 	}
 
 	src := keeperBaseRequired + `oracle_circuit_max_fires: 0
@@ -217,10 +217,10 @@ func TestKeeperConfig_OracleCircuitMaxFiresOmittedVsZero(t *testing.T) {
 	}
 	if hasCode(diags, "value_out_of_range") {
 		dump(t, diags)
-		t.Fatalf("явный 0 (breaker OFF) — валиден, не должен давать value_out_of_range")
+		t.Fatalf("explicit 0 (breaker OFF) is valid, should not yield value_out_of_range")
 	}
 	if cfgZero.OracleCircuitMaxFires == nil || *cfgZero.OracleCircuitMaxFires != 0 {
-		t.Fatalf("явный 0 должен парситься в non-nil 0, got %v", cfgZero.OracleCircuitMaxFires)
+		t.Fatalf("explicit 0 should parse into non-nil 0, got %v", cfgZero.OracleCircuitMaxFires)
 	}
 }
 
@@ -313,7 +313,7 @@ func TestSoulRange_EndpointPriorityDefaultZero_OK(t *testing.T) {
 	_, _, diags, _ := LoadSoulFromBytes("soul.yml", []byte(src), ValidateOptions{})
 	if hasCode(diags, "value_out_of_range") {
 		dump(t, diags)
-		t.Fatalf("priority 0 (не задано → default 1) must not trigger value_out_of_range")
+		t.Fatalf("priority 0 (unset -> default 1) must not trigger value_out_of_range")
 	}
 }
 

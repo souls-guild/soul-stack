@@ -325,7 +325,7 @@ func TestGetSoul_OutOfScope_404(t *testing.T) {
 	h := NewSoulHandler(scopedReadPool(), fakeScoper{covens: []string{"staging"}}, nil, nil)
 	rec := doGetSoulScoped(t, h, "prod-01.example.com", "archon-eve")
 	if rec.Code != http.StatusNotFound {
-		t.Fatalf("status = %d, want 404 (out-of-scope не палит существование); body=%s", rec.Code, rec.Body.String())
+		t.Fatalf("status = %d, want 404 (out-of-scope does not leak existence); body=%s", rec.Code, rec.Body.String())
 	}
 }
 
@@ -337,7 +337,7 @@ func TestGetSoul_InScope_RegexMatch_200(t *testing.T) {
 	h := NewSoulHandler(scopedReadPool(), fakeScoper{regexes: []string{"^prod-"}}, nil, nil)
 	rec := doGetSoulScoped(t, h, "prod-01.example.com", "archon-webops")
 	if rec.Code != http.StatusOK {
-		t.Fatalf("status = %d, want 200 (regex ^prod- матчит prod-01); body=%s", rec.Code, rec.Body.String())
+		t.Fatalf("status = %d, want 200 (regex ^prod- matches prod-01); body=%s", rec.Code, rec.Body.String())
 	}
 }
 
@@ -348,7 +348,7 @@ func TestGetSoul_OutOfRegexScope_404(t *testing.T) {
 	h := NewSoulHandler(scopedReadPool(), fakeScoper{regexes: []string{"^web-"}}, nil, nil)
 	rec := doGetSoulScoped(t, h, "prod-01.example.com", "archon-webops")
 	if rec.Code != http.StatusNotFound {
-		t.Fatalf("status = %d, want 404 (regex ^web- НЕ матчит prod-01); body=%s", rec.Code, rec.Body.String())
+		t.Fatalf("status = %d, want 404 (regex ^web- does NOT match prod-01); body=%s", rec.Code, rec.Body.String())
 	}
 }
 
@@ -803,10 +803,10 @@ func TestHistory_Happy_MergeShape(t *testing.T) {
 		t.Errorf("item0 = %+v", out.Items[0])
 	}
 	if out.Items[0].Incarnation != "" || out.Items[0].Scenario != "" {
-		t.Errorf("item0 scenario-поля просочились: %+v", out.Items[0])
+		t.Errorf("item0 scenario fields leaked: %+v", out.Items[0])
 	}
 	if out.Items[0].FinishedAt == "" {
-		t.Errorf("item0 terminal — finished_at должен быть: %+v", out.Items[0])
+		t.Errorf("item0 terminal - finished_at should be set: %+v", out.Items[0])
 	}
 	// item0 — the Voyage back-link (ADR-043) is forwarded.
 	if out.Items[0].VoyageID != "vy-1" {
@@ -818,11 +818,11 @@ func TestHistory_Happy_MergeShape(t *testing.T) {
 		t.Errorf("item1 = %+v", out.Items[1])
 	}
 	if out.Items[1].Module != "" || out.Items[1].FinishedAt != "" {
-		t.Errorf("item1 errand-поля/finished просочились: %+v", out.Items[1])
+		t.Errorf("item1 errand fields/finished leaked: %+v", out.Items[1])
 	}
 	// item1 — a direct run with no Voyage: voyage_id omitted (omitempty).
 	if out.Items[1].VoyageID != "" {
-		t.Errorf("item1 voyage_id должен быть пуст (вне Voyage): %q", out.Items[1].VoyageID)
+		t.Errorf("item1 voyage_id should be empty (outside Voyage): %q", out.Items[1].VoyageID)
 	}
 }
 
@@ -872,7 +872,7 @@ func TestHistory_FiltersForwarded(t *testing.T) {
 	}
 	// since → $2; LIMIT/OFFSET — the last two args (5, 10).
 	if !strings.Contains(pool.querySQL, "started_at > $2") {
-		t.Errorf("since не проброшен в SQL: %s", pool.querySQL)
+		t.Errorf("since not forwarded to SQL: %s", pool.querySQL)
 	}
 	n := len(pool.queryArgs)
 	if n < 4 {
@@ -883,7 +883,7 @@ func TestHistory_FiltersForwarded(t *testing.T) {
 	}
 	// Both sources (type=scenario+errand) → UNION ALL.
 	if !strings.Contains(pool.querySQL, "UNION ALL") {
-		t.Errorf("оба типа должны давать UNION ALL: %s", pool.querySQL)
+		t.Errorf("both types should produce UNION ALL: %s", pool.querySQL)
 	}
 }
 
@@ -920,7 +920,7 @@ func TestHistory_InScope_CovenMatch_200(t *testing.T) {
 	h := NewSoulHandler(pool, fakeScoper{covens: []string{"prod"}}, nil, nil)
 	rec := doGetHistory(t, h, "soul.example.com", "")
 	if rec.Code != http.StatusOK {
-		t.Fatalf("history своего coven = %d, want 200; body=%s", rec.Code, rec.Body.String())
+		t.Fatalf("history of own coven = %d, want 200; body=%s", rec.Code, rec.Body.String())
 	}
 }
 
@@ -933,7 +933,7 @@ func TestHistory_OutOfScope_404(t *testing.T) {
 	h := NewSoulHandler(pool, fakeScoper{covens: []string{"staging"}}, nil, nil)
 	rec := doGetHistory(t, h, "soul.example.com", "")
 	if rec.Code != http.StatusNotFound {
-		t.Fatalf("history чужого хоста = %d, want 404 (scope-gate режет утечку); body=%s", rec.Code, rec.Body.String())
+		t.Fatalf("history of foreign host = %d, want 404 (scope-gate blocks the leak); body=%s", rec.Code, rec.Body.String())
 	}
 }
 
@@ -944,7 +944,7 @@ func TestHistory_OutOfRegexScope_404(t *testing.T) {
 	h := NewSoulHandler(pool, fakeScoper{regexes: []string{"^web-"}}, nil, nil)
 	rec := doGetHistory(t, h, "db-01.example.com", "")
 	if rec.Code != http.StatusNotFound {
-		t.Fatalf("history не-матчащего хоста = %d, want 404; body=%s", rec.Code, rec.Body.String())
+		t.Fatalf("history of non-matching host = %d, want 404; body=%s", rec.Code, rec.Body.String())
 	}
 }
 
@@ -955,6 +955,6 @@ func TestHistory_HostMissing_404(t *testing.T) {
 	h := NewSoulHandler(pool, fakeScoper{unrestricted: true}, nil, nil)
 	rec := doGetHistory(t, h, "ghost.example.com", "")
 	if rec.Code != http.StatusNotFound {
-		t.Fatalf("history несуществующего хоста = %d, want 404; body=%s", rec.Code, rec.Body.String())
+		t.Fatalf("history of nonexistent host = %d, want 404; body=%s", rec.Code, rec.Body.String())
 	}
 }

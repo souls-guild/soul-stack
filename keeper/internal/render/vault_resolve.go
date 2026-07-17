@@ -79,10 +79,10 @@ func walkVaultValue(ctx context.Context, vc KVReader, v any) (any, error) {
 // secret map is returned (downstream CEL extracts the needed field).
 func readVaultRef(ctx context.Context, vc KVReader, ref string) (any, error) {
 	if strings.Contains(ref, "${") {
-		return nil, fmt.Errorf("render: vault-ref %q содержит ${…}-маркер — vault-ref должен быть статической строкой ([ADR-010], граница фаз)", ref)
+		return nil, fmt.Errorf("render: vault-ref %q contains a ${...} marker -- a vault-ref must be a static string ([ADR-010], phase boundary)", ref)
 	}
 	if vc == nil {
-		return nil, fmt.Errorf("render: vault-ref %q встречен, но Vault-client не сконфигурирован", ref)
+		return nil, fmt.Errorf("render: vault-ref %q found, but the Vault client is not configured", ref)
 	}
 
 	body := ref
@@ -90,7 +90,7 @@ func readVaultRef(ctx context.Context, vc KVReader, ref string) (any, error) {
 	if i := strings.LastIndexByte(ref, '#'); i >= 0 {
 		body, field = ref[:i], ref[i+1:]
 		if field == "" {
-			return nil, fmt.Errorf("render: vault-ref %q: пустое имя поля после '#'", ref)
+			return nil, fmt.Errorf("render: vault-ref %q: empty field name after '#'", ref)
 		}
 	}
 
@@ -107,9 +107,9 @@ func readVaultRef(ctx context.Context, vc KVReader, ref string) (any, error) {
 		// value → no leak. Symmetric with shared/cel.callVault. `%w` preserves the
 		// ErrVaultKVNotFound chain.
 		if field != "" {
-			return nil, fmt.Errorf("render: секрет %s#%s не резолвится: %w", logical, field, err)
+			return nil, fmt.Errorf("render: secret %s#%s failed to resolve: %w", logical, field, err)
 		}
-		return nil, fmt.Errorf("render: секрет %s не резолвится: %w", logical, err)
+		return nil, fmt.Errorf("render: secret %s failed to resolve: %w", logical, err)
 	}
 
 	if field == "" {
@@ -119,7 +119,7 @@ func readVaultRef(ctx context.Context, vc KVReader, ref string) (any, error) {
 	if !ok {
 		// Path+field name is actionable (which field to add), not secret value
 		// (other fields' values don't go into the text). Flat form (NIM-73).
-		return nil, fmt.Errorf("render: в секрете %s нет поля %q", logical, field)
+		return nil, fmt.Errorf("render: secret %s has no field %q", logical, field)
 	}
 	return val, nil
 }

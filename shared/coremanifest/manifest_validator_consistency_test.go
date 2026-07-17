@@ -111,23 +111,23 @@ func TestP5_AllModulesResolvableByValidator(t *testing.T) {
 	for _, mod := range allRegisteredModules() {
 		m, ok := reg.Lookup(mod)
 		if !ok {
-			t.Errorf("%s: есть в Names(), но Lookup вернул ok=false", mod)
+			t.Errorf("%s: present in Names(), but Lookup returned ok=false", mod)
 			continue
 		}
 		if len(m.Spec.States) == 0 {
-			t.Errorf("%s: манифест без states", mod)
+			t.Errorf("%s: manifest has no states", mod)
 			continue
 		}
 		for state := range m.Spec.States {
 			def, ok := reg.State(mod, state)
 			if !ok {
-				t.Errorf("%s.%s: State() не нашёл задекларированный state", mod, state)
+				t.Errorf("%s.%s: State() did not find the declared state", mod, state)
 				continue
 			}
 			// The def the validator reads (config.module_params) is exactly the
 			// same object from Spec.States; check the contract is non-empty.
 			if def.Input == nil && len(m.Spec.States[state].Input) != 0 {
-				t.Errorf("%s.%s: State().Input расходится с Spec.States", mod, state)
+				t.Errorf("%s.%s: State().Input diverges from Spec.States", mod, state)
 			}
 		}
 	}
@@ -168,7 +168,7 @@ func TestP5_DeclaredTypesAreEnforceable(t *testing.T) {
 					unenforced = append(unenforced, miss{
 						addr: fmt.Sprintf("core.%s.%s.%s", strings.TrimPrefix(mod, "core."), state, pname),
 						typ:  p.Type,
-						why:  "тест не умеет строить мисматч-литерал для этого типа (новый тип?)",
+						why:  "test cannot build a mismatch literal for this type (a new type?)",
 					})
 					continue
 				}
@@ -180,7 +180,7 @@ func TestP5_DeclaredTypesAreEnforceable(t *testing.T) {
 					unenforced = append(unenforced, miss{
 						addr: fmt.Sprintf("core.%s.%s.%s", strings.TrimPrefix(mod, "core."), state, pname),
 						typ:  p.Type,
-						why:  fmt.Sprintf("валидатор НЕ дал param_type_mismatch на литерал %q; diags=%v", mismatch, codes(diags)),
+						why:  fmt.Sprintf("validator did not raise param_type_mismatch on literal %q; diags=%v", mismatch, codes(diags)),
 					})
 				}
 			}
@@ -188,7 +188,7 @@ func TestP5_DeclaredTypesAreEnforceable(t *testing.T) {
 	}
 
 	if len(unenforced) > 0 {
-		t.Errorf("найдено %d param-ов, чей manifest-type валидатор не проверяет (дрейф manifest↔валидатор):", len(unenforced))
+		t.Errorf("found %d param(s) whose manifest-type the validator does not check (manifest<->validator drift):", len(unenforced))
 		for _, u := range unenforced {
 			side := "soul-side"
 			modName := "core." + strings.SplitN(strings.TrimPrefix(u.addr, "core."), ".", 2)[0]
@@ -218,7 +218,7 @@ func TestP5_RequiredEnforcedByValidator(t *testing.T) {
 			_, diags, _ := config.LoadDestinyTasksFromBytes("tasks/main.yml", []byte(src), config.ValidateOptions{})
 			for _, name := range req {
 				if !hasMissingRequiredFor(diags, name) {
-					t.Errorf("%s.%s: manifest пометил %q required, но валидатор не дал missing_required_param; diags=%v",
+					t.Errorf("%s.%s: manifest marks %q required, but the validator did not raise missing_required_param; diags=%v",
 						mod, state, name, codes(diags))
 				}
 			}

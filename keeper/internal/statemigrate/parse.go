@@ -21,7 +21,7 @@ type rawMigration struct {
 // discriminator. A pure function: I/O (reading the file) is the caller's responsibility.
 func Parse(data []byte) (*Migration, error) {
 	if len(data) == 0 {
-		return nil, &ParseError{Code: CodeEmptyDocument, Msg: "пустой файл миграции"}
+		return nil, &ParseError{Code: CodeEmptyDocument, Msg: "empty migration file"}
 	}
 
 	var rm rawMigration
@@ -30,10 +30,10 @@ func Parse(data []byte) (*Migration, error) {
 	}
 
 	if rm.FromVersion == nil || rm.ToVersion == nil {
-		return nil, &ParseError{Code: CodeVersionMissing, Msg: "обязательны from_version и to_version"}
+		return nil, &ParseError{Code: CodeVersionMissing, Msg: "from_version and to_version are required"}
 	}
 	if *rm.ToVersion != *rm.FromVersion+1 {
-		return nil, &ParseError{Code: CodeVersionInvalid, Msg: fmt.Sprintf("to_version (%d) должен быть from_version+1 (%d)", *rm.ToVersion, *rm.FromVersion+1)}
+		return nil, &ParseError{Code: CodeVersionInvalid, Msg: fmt.Sprintf("to_version (%d) must be from_version+1 (%d)", *rm.ToVersion, *rm.FromVersion+1)}
 	}
 
 	ops, err := toOps(rm.Transform)
@@ -76,13 +76,13 @@ func toOp(item map[string]any) (Op, error) {
 	for _, k := range opKeys {
 		if _, ok := item[k]; ok {
 			if disc != "" {
-				return Op{}, &ParseError{Code: CodeOpDiscriminator, Msg: fmt.Sprintf("операция содержит несколько ключей (%q и %q); ровно один из %v", disc, k, opKeys)}
+				return Op{}, &ParseError{Code: CodeOpDiscriminator, Msg: fmt.Sprintf("operation contains multiple keys (%q and %q); exactly one of %v expected", disc, k, opKeys)}
 			}
 			disc = k
 		}
 	}
 	if disc == "" {
-		return Op{}, &ParseError{Code: CodeOpDiscriminator, Msg: fmt.Sprintf("операция без ключа-дискриминатора; ожидается ровно один из %v", opKeys)}
+		return Op{}, &ParseError{Code: CodeOpDiscriminator, Msg: fmt.Sprintf("operation has no discriminator key; exactly one of %v expected", opKeys)}
 	}
 
 	// For non-foreach operations, extraneous keys (other than the discriminator itself)
@@ -90,7 +90,7 @@ func toOp(item map[string]any) (Op, error) {
 	if disc != "foreach" {
 		for k := range item {
 			if k != disc {
-				return Op{}, &ParseError{Code: CodeOpDiscriminator, Msg: fmt.Sprintf("операция %q содержит посторонний ключ %q", disc, k)}
+				return Op{}, &ParseError{Code: CodeOpDiscriminator, Msg: fmt.Sprintf("operation %q contains an unexpected key %q", disc, k)}
 			}
 		}
 	}
@@ -105,7 +105,7 @@ func toOp(item map[string]any) (Op, error) {
 	case "foreach":
 		return toForeach(item)
 	default:
-		return Op{}, &ParseError{Code: CodeOpDiscriminator, Msg: "неизвестный дискриминатор " + disc}
+		return Op{}, &ParseError{Code: CodeOpDiscriminator, Msg: "unknown discriminator " + disc}
 	}
 }
 
@@ -113,12 +113,12 @@ func toOp(item map[string]any) (Op, error) {
 func toRename(v any) (Op, error) {
 	m, ok := v.(map[string]any)
 	if !ok {
-		return Op{}, &ParseError{Code: CodeOpFieldMissing, Msg: "rename/move: ожидается { from:, to: }"}
+		return Op{}, &ParseError{Code: CodeOpFieldMissing, Msg: "rename/move: expected { from:, to: }"}
 	}
 	from, okf := stringField(m, "from")
 	to, okt := stringField(m, "to")
 	if !okf || !okt {
-		return Op{}, &ParseError{Code: CodeOpFieldMissing, Msg: "rename/move: обязательны строковые from и to"}
+		return Op{}, &ParseError{Code: CodeOpFieldMissing, Msg: "rename/move: string from and to are required"}
 	}
 	return Op{Rename: &RenameOp{From: from, To: to}}, nil
 }
@@ -128,15 +128,15 @@ func toRename(v any) (Op, error) {
 func toSet(v any) (Op, error) {
 	m, ok := v.(map[string]any)
 	if !ok {
-		return Op{}, &ParseError{Code: CodeOpFieldMissing, Msg: "set: ожидается { path:, value: }"}
+		return Op{}, &ParseError{Code: CodeOpFieldMissing, Msg: "set: expected { path:, value: }"}
 	}
 	path, okp := stringField(m, "path")
 	if !okp {
-		return Op{}, &ParseError{Code: CodeOpFieldMissing, Msg: "set: обязателен строковый path"}
+		return Op{}, &ParseError{Code: CodeOpFieldMissing, Msg: "set: a string path is required"}
 	}
 	val, okv := m["value"]
 	if !okv {
-		return Op{}, &ParseError{Code: CodeOpFieldMissing, Msg: "set: обязателен value"}
+		return Op{}, &ParseError{Code: CodeOpFieldMissing, Msg: "set: value is required"}
 	}
 	return Op{Set: &SetOp{Path: path, Value: val}}, nil
 }
@@ -145,11 +145,11 @@ func toSet(v any) (Op, error) {
 func toDelete(v any) (Op, error) {
 	m, ok := v.(map[string]any)
 	if !ok {
-		return Op{}, &ParseError{Code: CodeOpFieldMissing, Msg: "delete: ожидается { path: }"}
+		return Op{}, &ParseError{Code: CodeOpFieldMissing, Msg: "delete: expected { path: }"}
 	}
 	path, okp := stringField(m, "path")
 	if !okp {
-		return Op{}, &ParseError{Code: CodeOpFieldMissing, Msg: "delete: обязателен строковый path"}
+		return Op{}, &ParseError{Code: CodeOpFieldMissing, Msg: "delete: a string path is required"}
 	}
 	return Op{Delete: &DeleteOp{Path: path}}, nil
 }
@@ -163,7 +163,7 @@ func toForeach(item map[string]any) (Op, error) {
 	// Extraneous keys at the item level: only foreach + as/do/in.
 	for k := range item {
 		if k != "foreach" && !foreachSiblings[k] {
-			return Op{}, &ParseError{Code: CodeOpDiscriminator, Msg: fmt.Sprintf("foreach: посторонний ключ %q", k)}
+			return Op{}, &ParseError{Code: CodeOpDiscriminator, Msg: fmt.Sprintf("foreach: unexpected key %q", k)}
 		}
 	}
 
@@ -188,7 +188,7 @@ func toForeach(item map[string]any) (Op, error) {
 			doRaw = item["do"]
 		}
 	default:
-		return Op{}, &ParseError{Code: CodeOpFieldMissing, Msg: "foreach: ожидается выражение-строка или { in:, as:, do: }"}
+		return Op{}, &ParseError{Code: CodeOpFieldMissing, Msg: "foreach: expected a string expression or { in:, as:, do: }"}
 	}
 
 	// The structural form can place in via the sibling in: key (if the foreach scalar is empty).
@@ -196,10 +196,10 @@ func toForeach(item map[string]any) (Op, error) {
 		in, _ = stringField(item, "in")
 	}
 	if in == "" {
-		return Op{}, &ParseError{Code: CodeOpFieldMissing, Msg: "foreach: обязателен in (выражение коллекции)"}
+		return Op{}, &ParseError{Code: CodeOpFieldMissing, Msg: "foreach: in is required (collection expression)"}
 	}
 	if as == "" {
-		return Op{}, &ParseError{Code: CodeForeachMissingAs, Msg: "foreach: обязателен as (имя переменной итерации)"}
+		return Op{}, &ParseError{Code: CodeForeachMissingAs, Msg: "foreach: as is required (iteration variable name)"}
 	}
 
 	doItems, err := toDoList(doRaw)
@@ -213,17 +213,17 @@ func toForeach(item map[string]any) (Op, error) {
 // a nested []Op (nested foreach is allowed).
 func toDoList(v any) ([]Op, error) {
 	if v == nil {
-		return nil, &ParseError{Code: CodeOpFieldMissing, Msg: "foreach: обязателен do (список операций)"}
+		return nil, &ParseError{Code: CodeOpFieldMissing, Msg: "foreach: do is required (list of operations)"}
 	}
 	list, ok := v.([]any)
 	if !ok {
-		return nil, &ParseError{Code: CodeOpFieldMissing, Msg: "foreach.do: ожидается список операций"}
+		return nil, &ParseError{Code: CodeOpFieldMissing, Msg: "foreach.do: expected a list of operations"}
 	}
 	raw := make([]map[string]any, 0, len(list))
 	for i, el := range list {
 		m, ok := el.(map[string]any)
 		if !ok {
-			return nil, &ParseError{Code: CodeOpFieldMissing, Msg: fmt.Sprintf("foreach.do[%d]: ожидается операция-map", i)}
+			return nil, &ParseError{Code: CodeOpFieldMissing, Msg: fmt.Sprintf("foreach.do[%d]: expected a map operation", i)}
 		}
 		raw = append(raw, m)
 	}

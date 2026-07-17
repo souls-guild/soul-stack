@@ -204,7 +204,7 @@ func TestCheck_RevokedAID_Denied(t *testing.T) {
 	// errors.Is(ErrPermissionDenied) must NOT match — a revoke semantically
 	// means "untrusted token", not "no rights" (parity with expired).
 	if errors.Is(err, ErrPermissionDenied) {
-		t.Errorf("Check(revoked AID): %v неожиданно совпал с ErrPermissionDenied", err)
+		t.Errorf("Check(revoked AID): %v unexpectedly matched ErrPermissionDenied", err)
 	}
 }
 

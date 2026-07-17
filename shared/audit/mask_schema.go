@@ -159,7 +159,7 @@ func alarmRegexFallback(cell string, v any, opts SealOpts) {
 	}
 	if opts.Logger != nil {
 		// The cell path is NOT a secret (a field name); the value is NOT logged.
-		opts.Logger.Warn("audit: secret пойман regex-last-resort, декларатив (schema/seal/vault) молчал — пробел декларатива",
+		opts.Logger.Warn("audit: secret caught by regex-last-resort, declarative (schema/seal/vault) stayed silent - declarative gap",
 			slog.String("path", cell))
 	}
 }

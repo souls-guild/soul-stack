@@ -41,11 +41,11 @@ tasks:
 	_, _, diags, _ := LoadScenarioManifestFromBytes("main.yml", []byte(src), ValidateOptions{})
 	if diag.HasErrors(diags) {
 		dump(t, diags)
-		t.Fatalf("ожидаем ноль ошибок на валидных soulprint.self.* путях")
+		t.Fatalf("expected zero errors on valid soulprint.self.* paths")
 	}
 	if hasCode(diags, "soulprint_unknown_path") || hasCode(diags, "soulprint_naked_reference") {
 		dump(t, diags)
-		t.Fatalf("ложно-позитивный soulprint diagnostic на валидных путях")
+		t.Fatalf("false-positive soulprint diagnostic on valid paths")
 	}
 }
 
@@ -68,7 +68,7 @@ tasks:
 	_, _, diags, _ := LoadScenarioManifestFromBytes("main.yml", []byte(src), ValidateOptions{})
 	if hasCode(diags, "soulprint_unknown_path") || hasCode(diags, "soulprint_naked_reference") {
 		dump(t, diags)
-		t.Fatalf("choir-таргетинг через soulprint.self.choirs / soulprint.hosts[].choirs не должен флагаться (ADR-044)")
+		t.Fatalf("choir targeting via soulprint.self.choirs / soulprint.hosts[].choirs must not be flagged (ADR-044)")
 	}
 }
 
@@ -86,7 +86,7 @@ tasks:
 	_, _, diags, _ := LoadScenarioManifestFromBytes("main.yml", []byte(src), ValidateOptions{})
 	if !hasCode(diags, "soulprint_unknown_path") {
 		dump(t, diags)
-		t.Fatalf("ожидали soulprint_unknown_path на soulprint.self.choir (опечатка)")
+		t.Fatalf("expected soulprint_unknown_path on soulprint.self.choir (typo)")
 	}
 }
 
@@ -114,7 +114,7 @@ tasks:
 	_, _, diags, _ := LoadScenarioManifestFromBytes("main.yml", []byte(src), ValidateOptions{})
 	if hasCode(diags, "soulprint_unknown_path") || hasCode(diags, "soulprint_naked_reference") {
 		dump(t, diags)
-		t.Fatalf("trait-таргетинг через soulprint.self.traits.<key> не должен флагаться (ADR-060)")
+		t.Fatalf("trait targeting via soulprint.self.traits.<key> must not be flagged (ADR-060)")
 	}
 }
 
@@ -132,7 +132,7 @@ tasks:
 	_, _, diags, _ := LoadScenarioManifestFromBytes("main.yml", []byte(src), ValidateOptions{})
 	if !hasCode(diags, "soulprint_unknown_path") {
 		dump(t, diags)
-		t.Fatalf("ожидали soulprint_unknown_path на soulprint.self.trait (опечатка)")
+		t.Fatalf("expected soulprint_unknown_path on soulprint.self.trait (typo)")
 	}
 }
 
@@ -156,7 +156,7 @@ tasks:
 	_, _, diags, _ := LoadScenarioManifestFromBytes("main.yml", []byte(src), ValidateOptions{})
 	if !hasCode(diags, "soulprint_unknown_path") {
 		dump(t, diags)
-		t.Fatalf("ожидали soulprint_unknown_path на soulprint.self.memmory")
+		t.Fatalf("expected soulprint_unknown_path on soulprint.self.memmory")
 	}
 }
 
@@ -173,7 +173,7 @@ tasks:
 	_, _, diags, _ := LoadScenarioManifestFromBytes("main.yml", []byte(src), ValidateOptions{})
 	if !hasCode(diags, "soulprint_naked_reference") {
 		dump(t, diags)
-		t.Fatalf("ожидали soulprint_naked_reference на soulprint.os")
+		t.Fatalf("expected soulprint_naked_reference on soulprint.os")
 	}
 }
 
@@ -191,7 +191,7 @@ tasks:
 	_, _, diags, _ := LoadScenarioManifestFromBytes("main.yml", []byte(src), ValidateOptions{})
 	if hasCode(diags, "soulprint_naked_reference") || hasCode(diags, "soulprint_unknown_path") {
 		dump(t, diags)
-		t.Fatalf("soulprint.hosts.where(...) не должен флагаться")
+		t.Fatalf("soulprint.hosts.where(...) must not be flagged")
 	}
 }
 
@@ -213,7 +213,7 @@ tasks:
 	// must be stripped out. The guarantee is zero soulprint flags.
 	if hasCode(diags, "soulprint_naked_reference") || hasCode(diags, "soulprint_unknown_path") {
 		dump(t, diags)
-		t.Fatalf("вложенный CEL-литерал-аргумент .where(...) не должен порождать soulprint-флаги")
+		t.Fatalf("nested CEL literal argument .where(...) must not produce soulprint flags")
 	}
 }
 
@@ -231,7 +231,7 @@ tasks:
 	_, _, diags, _ := LoadScenarioManifestFromBytes("main.yml", []byte(src), ValidateOptions{})
 	if !hasCode(diags, "soulprint_unknown_path") {
 		dump(t, diags)
-		t.Fatalf("ожидали soulprint_unknown_path на retry.until")
+		t.Fatalf("expected soulprint_unknown_path on retry.until")
 	}
 }
 
@@ -251,7 +251,7 @@ tasks:
 	_, _, diags, _ := LoadScenarioManifestFromBytes("main.yml", []byte(src), ValidateOptions{})
 	if !hasCode(diags, "coven_label_unknown") {
 		dump(t, diags)
-		t.Fatalf("ожидали coven_label_unknown при активном reject-validator")
+		t.Fatalf("expected coven_label_unknown with an active reject-validator")
 	}
 }
 
@@ -267,7 +267,7 @@ tasks:
 	_, _, diags, _ := LoadScenarioManifestFromBytes("main.yml", []byte(src), ValidateOptions{})
 	if hasCode(diags, "coven_label_unknown") {
 		dump(t, diags)
-		t.Fatalf("no-op CovenLabelValidator не должен флагать валидные coven-id")
+		t.Fatalf("no-op CovenLabelValidator must not flag valid coven-id")
 	}
 }
 

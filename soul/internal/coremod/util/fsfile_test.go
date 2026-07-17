@@ -75,7 +75,7 @@ func TestAtomicWrite(t *testing.T) {
 			t.Fatalf("AtomicWrite: %v", err)
 		}
 		if data, _ := os.ReadFile(path); string(data) != "new" {
-			t.Errorf("content=%q want %q (полная подмена, не частичная)", data, "new")
+			t.Errorf("content=%q want %q (full replacement, not partial)", data, "new")
 		}
 	})
 
@@ -89,7 +89,7 @@ func TestAtomicWrite(t *testing.T) {
 		}
 		entries, _ := os.ReadDir(dir)
 		if len(entries) != 1 || entries[0].Name() != "target" {
-			t.Fatalf("dir entries=%v want только [target] (temp утёк)", names(entries))
+			t.Fatalf("dir entries=%v want only [target] (temp leaked)", names(entries))
 		}
 	})
 
@@ -101,7 +101,7 @@ func TestAtomicWrite(t *testing.T) {
 			t.Fatal("AtomicWrite: want error (parent dir missing)")
 		}
 		if _, statErr := os.Stat(path); !errors.Is(statErr, fs.ErrNotExist) {
-			t.Fatalf("target должен отсутствовать, stat err=%v", statErr)
+			t.Fatalf("target must be absent, stat err=%v", statErr)
 		}
 	})
 
@@ -212,7 +212,7 @@ func TestApplyOwnership(t *testing.T) {
 			t.Fatalf("ApplyOwnership: %v", err)
 		}
 		if changed {
-			t.Fatal("changed=true want false (uid/gid совпадают)")
+			t.Fatal("changed=true want false (uid/gid match)")
 		}
 	})
 
@@ -226,7 +226,7 @@ func TestApplyOwnership(t *testing.T) {
 			t.Fatalf("ApplyOwnership: %v", err)
 		}
 		if changed {
-			t.Fatal("changed=true want false (ничего не задано)")
+			t.Fatal("changed=true want false (nothing set)")
 		}
 	})
 
@@ -266,7 +266,7 @@ func TestApplyOwnership(t *testing.T) {
 	// outside CI-root.
 	t.Run("chown to foreign uid errors as non-root", func(t *testing.T) {
 		if os.Getuid() == 0 {
-			t.Skip("running as root: chown на чужой uid не даёт EPERM")
+			t.Skip("running as root: chown on a foreign uid does not return EPERM")
 		}
 		path := filepath.Join(t.TempDir(), "f")
 		if err := os.WriteFile(path, []byte("x"), 0o644); err != nil {
@@ -381,7 +381,7 @@ func TestAtomicWritePreserving(t *testing.T) {
 			t.Fatal("AtomicWritePreserving: want error on invalid mode")
 		}
 		if _, statErr := os.Stat(path); statErr == nil {
-			t.Fatal("файл не должен был создаться при ошибке mode")
+			t.Fatal("file should not have been created on a mode error")
 		}
 	})
 
@@ -390,7 +390,7 @@ func TestAtomicWritePreserving(t *testing.T) {
 	// changed=false without error.
 	t.Run("new file with owner set runs ApplyOwnership branch", func(t *testing.T) {
 		if os.Getuid() == 0 {
-			t.Skip("root: проверяется только non-root путь без реального chown")
+			t.Skip("root: only the non-root path without a real chown is checked")
 		}
 		path := filepath.Join(t.TempDir(), "f")
 		// owner resolves to the current user → no chown needed, no error.

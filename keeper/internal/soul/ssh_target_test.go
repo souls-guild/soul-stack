@@ -160,7 +160,7 @@ func TestSshTarget_WithSSHProvider(t *testing.T) {
 	}
 	// omitempty works for *string - field should be present in JSON.
 	if !bytes.Contains(b, []byte(`"ssh_provider":"vault-bastion"`)) {
-		t.Errorf("ssh_provider не сериализовался: %s", string(b))
+		t.Errorf("ssh_provider did not serialize: %s", string(b))
 	}
 	var got SSHTarget
 	if err := json.Unmarshal(b, &got); err != nil {
@@ -180,6 +180,6 @@ func TestSshTarget_OmitSSHProvider_BackCompat(t *testing.T) {
 		t.Fatalf("marshal: %v", err)
 	}
 	if bytes.Contains(b, []byte("ssh_provider")) {
-		t.Errorf("ssh_provider присутствует в JSON, должен быть омитен: %s", string(b))
+		t.Errorf("ssh_provider present in JSON, should be omitted: %s", string(b))
 	}
 }

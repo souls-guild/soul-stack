@@ -68,10 +68,10 @@ func TestResolveInputValues_RequiredMissing(t *testing.T) {
 `)
 	_, err := ResolveInputValues(schema, map[string]any{})
 	if err == nil {
-		t.Fatal("ожидалась ошибка на отсутствующий required input")
+		t.Fatal("expected an error for a missing required input")
 	}
 	if !strings.Contains(err.Error(), "redis_password") {
-		t.Errorf("ошибка не называет параметр: %v", err)
+		t.Errorf("error doesn't name the parameter: %v", err)
 	}
 }
 
@@ -102,7 +102,7 @@ func TestResolveInputValues_EmptyStringIsAbsent(t *testing.T) {
 		t.Fatalf("ResolveInputValues: %v", err)
 	}
 	if got["name"] != "fallback" {
-		t.Errorf(`name = %#v, want "fallback" (пустая строка = отсутствие)`, got["name"])
+		t.Errorf(`name = %#v, want "fallback" (empty string = absent)`, got["name"])
 	}
 }
 
@@ -131,7 +131,7 @@ func TestResolveInputValues_PatternMismatch(t *testing.T) {
 `)
 	_, err := ResolveInputValues(schema, map[string]any{"redis_version": "not-a-version"})
 	if err == nil {
-		t.Fatal("ожидалась ошибка несоответствия pattern")
+		t.Fatal("expected a pattern-mismatch error")
 	}
 }
 
@@ -159,7 +159,7 @@ func TestResolveInputValues_ExprValueSkipsPattern(t *testing.T) {
 `)
 	got, err := ResolveInputValues(schema, map[string]any{"redis_version": "${ essence.version }"})
 	if err != nil {
-		t.Fatalf("выражение не должно валидироваться против pattern: %v", err)
+		t.Fatalf("an expression must not be validated against pattern: %v", err)
 	}
 	if got["redis_version"] != "${ essence.version }" {
 		t.Errorf("got=%#v", got)
@@ -173,7 +173,7 @@ func TestResolveInputValues_TypeMismatch(t *testing.T) {
 `)
 	_, err := ResolveInputValues(schema, map[string]any{"replicas": "not-int"})
 	if err == nil {
-		t.Fatal("ожидалась ошибка несоответствия типа")
+		t.Fatal("expected a type-mismatch error")
 	}
 }
 
@@ -184,10 +184,10 @@ func TestResolveInputValues_EnumValidated(t *testing.T) {
   enum: [debug, info, warn]
 `)
 	if _, err := ResolveInputValues(schema, map[string]any{"level": "trace"}); err == nil {
-		t.Fatal("ожидалась ошибка значения вне enum")
+		t.Fatal("expected an error for a value outside the enum")
 	}
 	if _, err := ResolveInputValues(schema, map[string]any{"level": "info"}); err != nil {
-		t.Fatalf("значение из enum должно проходить: %v", err)
+		t.Fatalf("a value from the enum should pass: %v", err)
 	}
 }
 
@@ -203,15 +203,15 @@ func TestResolveInputValues_EnumIntegerBoundary(t *testing.T) {
 `)
 	// A value from the set (as uint64 from goccy) — passes.
 	if _, err := ResolveInputValues(schema, map[string]any{"replicas": uint64(3)}); err != nil {
-		t.Errorf("3 входит в enum, но отвергнуто: %v", err)
+		t.Errorf("3 is in the enum but was rejected: %v", err)
 	}
 	// int↔float equivalent: 5.0 ≡ 5 (equalScalar leniency).
 	if _, err := ResolveInputValues(schema, map[string]any{"replicas": float64(5)}); err != nil {
-		t.Errorf("5.0 эквивалентно 5 в enum, но отвергнуто: %v", err)
+		t.Errorf("5.0 is equivalent to 5 in the enum but was rejected: %v", err)
 	}
 	// A value outside the set — fails.
 	if _, err := ResolveInputValues(schema, map[string]any{"replicas": uint64(4)}); err == nil {
-		t.Error("4 не входит в integer-enum, но ошибки нет")
+		t.Error("4 is not in the integer-enum, yet there is no error")
 	}
 }
 
@@ -227,14 +227,14 @@ func TestResolveInputValues_ArrayItemsEnum(t *testing.T) {
     enum: [debug, info, warn]
 `)
 	if _, err := ResolveInputValues(schema, map[string]any{"levels": []any{"info", "warn"}}); err != nil {
-		t.Errorf("все элементы в enum, но отвергнуто: %v", err)
+		t.Errorf("all elements are in the enum but were rejected: %v", err)
 	}
 	_, err := ResolveInputValues(schema, map[string]any{"levels": []any{"info", "trace"}})
 	if err == nil {
-		t.Fatal("элемент 'trace' вне items.enum, но ошибки нет")
+		t.Fatal("element 'trace' is outside items.enum, yet there is no error")
 	}
 	if !strings.Contains(err.Error(), "[1]") {
-		t.Errorf("ошибка должна указывать индекс невалидного элемента [1]: %v", err)
+		t.Errorf("error should point to the invalid element's index [1]: %v", err)
 	}
 }
 
@@ -249,14 +249,14 @@ func TestResolveInputValues_ArrayItemsPattern(t *testing.T) {
     pattern: "^[a-z]+$"
 `)
 	if _, err := ResolveInputValues(schema, map[string]any{"tags": []any{"alpha", "beta"}}); err != nil {
-		t.Errorf("все элементы матчат pattern, но отвергнуто: %v", err)
+		t.Errorf("all elements match the pattern but were rejected: %v", err)
 	}
 	_, err := ResolveInputValues(schema, map[string]any{"tags": []any{"alpha", "B3ta"}})
 	if err == nil {
-		t.Fatal("элемент 'B3ta' не матчит items.pattern, но ошибки нет")
+		t.Fatal("element 'B3ta' doesn't match items.pattern, yet there is no error")
 	}
 	if !strings.Contains(err.Error(), "[1]") {
-		t.Errorf("ошибка должна указывать индекс [1]: %v", err)
+		t.Errorf("error should point to index [1]: %v", err)
 	}
 }
 
@@ -271,7 +271,7 @@ func TestResolveInputValues_DoesNotMutateProvided(t *testing.T) {
 		t.Fatalf("ResolveInputValues: %v", err)
 	}
 	if _, leaked := provided["suffix"]; leaked {
-		t.Fatalf("provided мутирован: %#v", provided)
+		t.Fatalf("provided was mutated: %#v", provided)
 	}
 }
 
@@ -312,7 +312,7 @@ func TestResolveInputValues_EnumExprValueSkipped(t *testing.T) {
 `)
 	got, err := ResolveInputValues(schema, map[string]any{"level": "${ essence.log_level }"})
 	if err != nil {
-		t.Fatalf("выражение не должно валидироваться против enum: %v", err)
+		t.Fatalf("an expression must not be validated against enum: %v", err)
 	}
 	if got["level"] != "${ essence.log_level }" {
 		t.Errorf("got=%#v", got)
@@ -352,16 +352,16 @@ opts:
 		t.Fatalf("ResolveInputValues: %v", err)
 	}
 	if got["flag"] != false {
-		t.Errorf("flag = %#v, want false (не подмена дефолтом)", got["flag"])
+		t.Errorf("flag = %#v, want false (not overridden by default)", got["flag"])
 	}
 	if got["count"] != 0 {
-		t.Errorf("count = %#v, want 0 (не подмена дефолтом)", got["count"])
+		t.Errorf("count = %#v, want 0 (not overridden by default)", got["count"])
 	}
 	if arr, ok := got["tags"].([]any); !ok || len(arr) != 0 {
-		t.Errorf("tags = %#v, want [] (не подмена дефолтом)", got["tags"])
+		t.Errorf("tags = %#v, want [] (not overridden by default)", got["tags"])
 	}
 	if obj, ok := got["opts"].(map[string]any); !ok || len(obj) != 0 {
-		t.Errorf("opts = %#v, want {} (не подмена дефолтом)", got["opts"])
+		t.Errorf("opts = %#v, want {} (not overridden by default)", got["opts"])
 	}
 }
 
@@ -395,7 +395,7 @@ func TestResolveInputValues_NestedValid(t *testing.T) {
 		},
 	})
 	if err != nil {
-		t.Fatalf("валидный вложенный список должен проходить: %v", err)
+		t.Fatalf("a valid nested list should pass: %v", err)
 	}
 }
 
@@ -407,10 +407,10 @@ func TestResolveInputValues_NestedElementTypeMismatch(t *testing.T) {
 		"users": []any{"i-am-a-string"},
 	})
 	if err == nil {
-		t.Fatal("ожидалась ошибка: элемент array не соответствует items.type")
+		t.Fatal("expected an error: array element doesn't match items.type")
 	}
 	if !strings.Contains(err.Error(), "users[0]") {
-		t.Errorf("ошибка не содержит путь элемента: %v", err)
+		t.Errorf("error doesn't contain the element's path: %v", err)
 	}
 }
 
@@ -422,10 +422,10 @@ func TestResolveInputValues_NestedFieldTypeMismatch(t *testing.T) {
 		"users": []any{map[string]any{"name": 123, "acl": "on"}},
 	})
 	if err == nil {
-		t.Fatal("ожидалась ошибка: поле object не соответствует properties.type")
+		t.Fatal("expected an error: object field doesn't match properties.type")
 	}
 	if !strings.Contains(err.Error(), "users[0].name") {
-		t.Errorf("ошибка не содержит путь поля: %v", err)
+		t.Errorf("error doesn't contain the field's path: %v", err)
 	}
 }
 
@@ -440,10 +440,10 @@ func TestResolveInputValues_NestedMissingRequired(t *testing.T) {
 		},
 	})
 	if err == nil {
-		t.Fatal("ожидалась ошибка: отсутствует обязательное поле acl")
+		t.Fatal("expected an error: required field acl is missing")
 	}
 	if !strings.Contains(err.Error(), "users[1].acl") {
-		t.Errorf("ошибка не содержит путь $.users[1].acl: %v", err)
+		t.Errorf("error doesn't contain the path $.users[1].acl: %v", err)
 	}
 }
 
@@ -455,10 +455,10 @@ func TestResolveInputValues_NestedPatternMismatch(t *testing.T) {
 		"users": []any{map[string]any{"name": "bad name!", "acl": "on"}},
 	})
 	if err == nil {
-		t.Fatal("ожидалась ошибка: name нарушает pattern")
+		t.Fatal("expected an error: name violates pattern")
 	}
 	if !strings.Contains(err.Error(), "users[0].name") {
-		t.Errorf("ошибка не содержит путь поля: %v", err)
+		t.Errorf("error doesn't contain the field's path: %v", err)
 	}
 }
 
@@ -470,7 +470,7 @@ func TestResolveInputValues_NestedExprFieldSkipped(t *testing.T) {
 		"users": []any{map[string]any{"name": "${ user.name }", "acl": "on"}},
 	})
 	if err != nil {
-		t.Fatalf("выражение во вложенном поле не должно валидироваться против pattern: %v", err)
+		t.Fatalf("an expression in a nested field must not be validated against pattern: %v", err)
 	}
 }
 
@@ -482,10 +482,10 @@ func TestResolveInputValues_NestedObjectMissingRequiredEmptyString(t *testing.T)
 		"users": []any{map[string]any{"name": "app", "acl": ""}},
 	})
 	if err == nil {
-		t.Fatal("ожидалась ошибка: пустая строка в required acl = отсутствие")
+		t.Fatal("expected an error: empty string in required acl = absent")
 	}
 	if !strings.Contains(err.Error(), "users[0].acl") {
-		t.Errorf("ошибка не содержит путь поля: %v", err)
+		t.Errorf("error doesn't contain the field's path: %v", err)
 	}
 }
 
@@ -503,13 +503,13 @@ func TestResolveInputValues_SecretValueMaskedOnType(t *testing.T) {
 	// integer instead of string — a type-check failure on a secret field.
 	_, err := ResolveInputValues(schema, map[string]any{"redis_password": 12345})
 	if err == nil {
-		t.Fatal("ожидалась ошибка: integer не соответствует type string")
+		t.Fatal("expected an error: integer doesn't match type string")
 	}
 	if strings.Contains(err.Error(), "12345") {
-		t.Errorf("сырое значение secret-поля утекло в ошибку: %v", err)
+		t.Errorf("raw value of a secret field leaked into the error: %v", err)
 	}
 	if !strings.Contains(err.Error(), maskedSecretLiteral) {
-		t.Errorf("ошибка не содержит маску %q: %v", maskedSecretLiteral, err)
+		t.Errorf("error doesn't contain the mask %q: %v", maskedSecretLiteral, err)
 	}
 }
 
@@ -524,13 +524,13 @@ func TestResolveInputValues_SecretValueMaskedOnPattern(t *testing.T) {
 `)
 	_, err := ResolveInputValues(schema, map[string]any{"redis_password": secretFieldRaw})
 	if err == nil {
-		t.Fatal("ожидалась ошибка: значение нарушает pattern")
+		t.Fatal("expected an error: value violates pattern")
 	}
 	if strings.Contains(err.Error(), secretFieldRaw) {
-		t.Errorf("сырое значение secret-поля утекло в ошибку: %v", err)
+		t.Errorf("raw value of a secret field leaked into the error: %v", err)
 	}
 	if !strings.Contains(err.Error(), maskedSecretLiteral) {
-		t.Errorf("ошибка не содержит маску %q: %v", maskedSecretLiteral, err)
+		t.Errorf("error doesn't contain the mask %q: %v", maskedSecretLiteral, err)
 	}
 }
 
@@ -544,16 +544,16 @@ func TestResolveInputValues_SecretValueMaskedOnEnum(t *testing.T) {
 `)
 	_, err := ResolveInputValues(schema, map[string]any{"tier_key": secretFieldRaw})
 	if err == nil {
-		t.Fatal("ожидалась ошибка: значение вне enum")
+		t.Fatal("expected an error: value outside enum")
 	}
 	if strings.Contains(err.Error(), secretFieldRaw) {
-		t.Errorf("сырое значение secret-поля утекло в ошибку: %v", err)
+		t.Errorf("raw value of a secret field leaked into the error: %v", err)
 	}
 	if strings.Contains(err.Error(), "enum-secret-a") {
-		t.Errorf("enum-литералы secret-поля утекли в ошибку: %v", err)
+		t.Errorf("enum literals of a secret field leaked into the error: %v", err)
 	}
 	if !strings.Contains(err.Error(), maskedSecretLiteral) {
-		t.Errorf("ошибка не содержит маску %q: %v", maskedSecretLiteral, err)
+		t.Errorf("error doesn't contain the mask %q: %v", maskedSecretLiteral, err)
 	}
 }
 
@@ -566,13 +566,13 @@ func TestResolveInputValues_NonSecretValueShown(t *testing.T) {
 `)
 	_, err := ResolveInputValues(schema, map[string]any{"region": "BadRegion1"})
 	if err == nil {
-		t.Fatal("ожидалась ошибка: значение нарушает pattern")
+		t.Fatal("expected an error: value violates pattern")
 	}
 	if !strings.Contains(err.Error(), "BadRegion1") {
-		t.Errorf("значение не-secret поля должно быть в ошибке для диагностики: %v", err)
+		t.Errorf("a non-secret field's value should appear in the error for diagnostics: %v", err)
 	}
 	if strings.Contains(err.Error(), maskedSecretLiteral) {
-		t.Errorf("не-secret поле не должно маскироваться: %v", err)
+		t.Errorf("a non-secret field must not be masked: %v", err)
 	}
 }
 
@@ -595,16 +595,16 @@ func TestResolveInputValues_NestedSecretFieldMasked(t *testing.T) {
 		"users": []any{map[string]any{"name": "app", "token": secretFieldRaw}},
 	})
 	if err == nil {
-		t.Fatal("ожидалась ошибка: вложенное token нарушает pattern")
+		t.Fatal("expected an error: nested token violates pattern")
 	}
 	if strings.Contains(err.Error(), secretFieldRaw) {
-		t.Errorf("сырое значение вложенного secret-поля утекло в ошибку: %v", err)
+		t.Errorf("raw value of a nested secret field leaked into the error: %v", err)
 	}
 	if !strings.Contains(err.Error(), maskedSecretLiteral) {
-		t.Errorf("ошибка не содержит маску %q: %v", maskedSecretLiteral, err)
+		t.Errorf("error doesn't contain the mask %q: %v", maskedSecretLiteral, err)
 	}
 	if !strings.Contains(err.Error(), "users[0].token") {
-		t.Errorf("ошибка не содержит путь вложенного поля: %v", err)
+		t.Errorf("error doesn't contain the nested field's path: %v", err)
 	}
 }
 
@@ -616,10 +616,10 @@ func TestResolveInputValues_MinLengthTooShort(t *testing.T) {
 `)
 	_, err := ResolveInputValues(schema, map[string]any{"secret_key": "short"})
 	if err == nil {
-		t.Fatal("ожидалась ошибка: значение короче min_length")
+		t.Fatal("expected an error: value shorter than min_length")
 	}
 	if !strings.Contains(err.Error(), "min_length") {
-		t.Errorf("ошибка не упоминает min_length: %v", err)
+		t.Errorf("error doesn't mention min_length: %v", err)
 	}
 }
 
@@ -631,10 +631,10 @@ func TestResolveInputValues_MaxLengthTooLong(t *testing.T) {
 `)
 	_, err := ResolveInputValues(schema, map[string]any{"code": "abcdef"})
 	if err == nil {
-		t.Fatal("ожидалась ошибка: значение длиннее max_length")
+		t.Fatal("expected an error: value longer than max_length")
 	}
 	if !strings.Contains(err.Error(), "max_length") {
-		t.Errorf("ошибка не упоминает max_length: %v", err)
+		t.Errorf("error doesn't mention max_length: %v", err)
 	}
 }
 
@@ -646,14 +646,14 @@ func TestResolveInputValues_LengthInRange(t *testing.T) {
   max_length: 10
 `)
 	if _, err := ResolveInputValues(schema, map[string]any{"name": "alice"}); err != nil {
-		t.Fatalf("значение в диапазоне отвергнуто: %v", err)
+		t.Fatalf("a value within range was rejected: %v", err)
 	}
 	// Boundary values — length exactly at min and at max — are valid.
 	if _, err := ResolveInputValues(schema, map[string]any{"name": "abc"}); err != nil {
-		t.Fatalf("значение длиной = min_length отвергнуто: %v", err)
+		t.Fatalf("a value with length = min_length was rejected: %v", err)
 	}
 	if _, err := ResolveInputValues(schema, map[string]any{"name": "0123456789"}); err != nil {
-		t.Fatalf("значение длиной = max_length отвергнуто: %v", err)
+		t.Fatalf("a value with length = max_length was rejected: %v", err)
 	}
 }
 
@@ -666,7 +666,7 @@ func TestResolveInputValues_LengthInRunes(t *testing.T) {
   max_length: 4
 `)
 	if _, err := ResolveInputValues(schema, map[string]any{"word": "тест"}); err != nil {
-		t.Fatalf("4-символьное слово (8 байт) должно пройти max_length 4: %v", err)
+		t.Fatalf("a 4-character word (8 bytes) should pass max_length 4: %v", err)
 	}
 }
 
@@ -678,7 +678,7 @@ func TestResolveInputValues_LengthExprSkipped(t *testing.T) {
   min_length: 16
 `)
 	if _, err := ResolveInputValues(schema, map[string]any{"token": "${ input.x }"}); err != nil {
-		t.Fatalf("выражение не должно валидироваться против min_length: %v", err)
+		t.Fatalf("an expression must not be validated against min_length: %v", err)
 	}
 }
 
@@ -692,13 +692,13 @@ func TestResolveInputValues_MinLengthSecretMasked(t *testing.T) {
 `)
 	_, err := ResolveInputValues(schema, map[string]any{"pass": secretFieldRaw[:5]})
 	if err == nil {
-		t.Fatal("ожидалась ошибка: secret короче min_length")
+		t.Fatal("expected an error: secret shorter than min_length")
 	}
 	if strings.Contains(err.Error(), secretFieldRaw[:5]) {
-		t.Errorf("сырое значение secret-поля утекло в ошибку: %v", err)
+		t.Errorf("raw value of a secret field leaked into the error: %v", err)
 	}
 	if !strings.Contains(err.Error(), maskedSecretLiteral) {
-		t.Errorf("ошибка не содержит маску %q: %v", maskedSecretLiteral, err)
+		t.Errorf("error doesn't contain the mask %q: %v", maskedSecretLiteral, err)
 	}
 }
 
@@ -723,15 +723,15 @@ func TestResolveInputValues_RequiredWhenTruePredicateMissing(t *testing.T) {
 	schema := requiredWhenSchema(t)
 	_, err := ResolveInputValues(schema, map[string]any{"redis_type": "cluster"})
 	if err == nil {
-		t.Fatal("ожидалась ошибка: shards обязателен при redis_type=cluster")
+		t.Fatal("expected an error: shards is required when redis_type=cluster")
 	}
 	if !strings.Contains(err.Error(), "shards") {
-		t.Errorf("ошибка не называет параметр: %v", err)
+		t.Errorf("error doesn't name the parameter: %v", err)
 	}
 	// A recognizable required-error form — downstream detection (checkdrift) catches
 	// both unconditional and conditional required with a single substring match.
-	if !strings.Contains(err.Error(), "обязателен, но не передан и не имеет default") {
-		t.Errorf("ошибка не несёт узнаваемую required-форму: %v", err)
+	if !strings.Contains(err.Error(), "not passed and has no default") {
+		t.Errorf("error doesn't carry the recognizable required form: %v", err)
 	}
 }
 
@@ -742,10 +742,10 @@ func TestResolveInputValues_RequiredWhenFalsePredicateMissing(t *testing.T) {
 	schema := requiredWhenSchema(t)
 	got, err := ResolveInputValues(schema, map[string]any{"redis_type": "standalone"})
 	if err != nil {
-		t.Fatalf("standalone без shards должен пройти: %v", err)
+		t.Fatalf("standalone without shards should pass: %v", err)
 	}
 	if _, present := got["shards"]; present {
-		t.Errorf("shards не передан — не должен появиться в эффективном input: %#v", got)
+		t.Errorf("shards not passed - should not appear in the effective input: %#v", got)
 	}
 }
 
@@ -755,7 +755,7 @@ func TestResolveInputValues_RequiredWhenTruePredicatePassed(t *testing.T) {
 	schema := requiredWhenSchema(t)
 	got, err := ResolveInputValues(schema, map[string]any{"redis_type": "cluster", "shards": 3})
 	if err != nil {
-		t.Fatalf("cluster с shards должен пройти: %v", err)
+		t.Fatalf("cluster with shards should pass: %v", err)
 	}
 	if got["shards"] != uint64(3) && got["shards"] != 3 {
 		t.Errorf("shards = %#v, want 3", got["shards"])
@@ -770,10 +770,10 @@ func TestResolveInputValues_RequiredWhenDefaultMaterialized(t *testing.T) {
 	schema := requiredWhenSchema(t)
 	got, err := ResolveInputValues(schema, map[string]any{})
 	if err != nil {
-		t.Fatalf("дефолтный redis_type=standalone → shards опционален: %v", err)
+		t.Fatalf("default redis_type=standalone -> shards is optional: %v", err)
 	}
 	if got["redis_type"] != "standalone" {
-		t.Errorf("default redis_type не смёржен: %#v", got)
+		t.Errorf("default redis_type was not merged: %#v", got)
 	}
 }
 
@@ -801,7 +801,7 @@ func TestRequiredWhen_InvalidCELRejectedAtSchema(t *testing.T) {
 				}
 			}
 			if !found {
-				t.Errorf("ожидался диагностический код input_required_when_invalid для %q; diags=%v", tc.expr, diags)
+				t.Errorf("expected diagnostic code input_required_when_invalid for %q; diags=%v", tc.expr, diags)
 			}
 		})
 	}
@@ -823,6 +823,6 @@ func TestRequiredWhen_EmptyStringRejectedAtSchema(t *testing.T) {
 		}
 	}
 	if !found {
-		t.Errorf("ожидался input_required_when_invalid на пустой required_when; diags=%v", diags)
+		t.Errorf("expected input_required_when_invalid for an empty required_when; diags=%v", diags)
 	}
 }

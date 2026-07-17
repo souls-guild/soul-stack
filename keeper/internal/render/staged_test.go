@@ -131,10 +131,10 @@ func TestRender_StagedWhereResolvesPerHostRegister(t *testing.T) {
 		}
 	}
 	if consumer == nil {
-		t.Fatalf("нет DispatchPlan для Passage-1 задачи (Index 1)")
+		t.Fatalf("no DispatchPlan for the Passage-1 task (Index 1)")
 	}
 	if len(consumer.TargetSIDs) != 1 || consumer.TargetSIDs[0] != "a.example.com" {
-		t.Fatalf("Passage-1 таргет = %v, want [a.example.com] (only master) — where не резолвнулся per-host register-ом", consumer.TargetSIDs)
+		t.Fatalf("Passage-1 target = %v, want [a.example.com] (only master) - where did not resolve via per-host register", consumer.TargetSIDs)
 	}
 }
 

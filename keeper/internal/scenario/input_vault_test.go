@@ -74,7 +74,7 @@ func TestInputVaultResolver_InScopeReads(t *testing.T) {
 	for _, e := range aw.events {
 		for k, v := range e.Payload {
 			if s, ok := v.(string); ok && s == "s3cr3t-resolved-32ch" {
-				t.Fatalf("секрет утёк в audit payload[%s]", k)
+				t.Fatalf("secret leaked into audit payload[%s]", k)
 			}
 		}
 	}
@@ -91,10 +91,10 @@ func TestInputVaultResolver_NoScopeRejected(t *testing.T) {
 	_, err := resolve("pw", &config.InputSchema{Type: "string", Secret: true},
 		"vault:secret/services/redis/prod#password")
 	if err == nil {
-		t.Fatal("ожидался reject default-deny")
+		t.Fatal("expected reject default-deny")
 	}
 	if len(vc.read) != 0 {
-		t.Fatalf("ReadKV не должен вызываться при default-deny, read=%v", vc.read)
+		t.Fatalf("ReadKV must not be called on default-deny, read=%v", vc.read)
 	}
 	requireAuditReason(t, aw, "denied", "no_scope")
 }
@@ -109,10 +109,10 @@ func TestInputVaultResolver_OutOfScopeRejected(t *testing.T) {
 	_, err := resolve("pw", scopedSecret("secret/services/redis/*"),
 		"vault:secret/services/postgres/prod#password")
 	if err == nil {
-		t.Fatal("ожидался reject out-of-scope")
+		t.Fatal("expected reject out-of-scope")
 	}
 	if len(vc.read) != 0 {
-		t.Fatalf("ReadKV не должен вызываться вне scope, read=%v", vc.read)
+		t.Fatalf("ReadKV must not be called outside scope, read=%v", vc.read)
 	}
 	requireAuditReason(t, aw, "denied", "out_of_scope")
 }
@@ -151,10 +151,10 @@ func TestInputVaultResolver_DenyListRejected(t *testing.T) {
 			// scope is accidentally broad (secret/*) — protection relies only on deny-list/ParseRef.
 			_, err := resolve("bad", scopedSecret("secret/*"), c.ref)
 			if err == nil {
-				t.Fatalf("ожидался reject для %q", c.ref)
+				t.Fatalf("expected reject for %q", c.ref)
 			}
 			if len(vc.read) != 0 {
-				t.Fatalf("ReadKV не должен вызываться (обход deny-list), read=%v", vc.read)
+				t.Fatalf("ReadKV must not be called (deny-list bypass), read=%v", vc.read)
 			}
 			requireAuditReason(t, aw, "denied", c.wantReason)
 		})
@@ -172,7 +172,7 @@ func TestInputVaultResolver_ConfigDenyExtends(t *testing.T) {
 
 	_, err := resolve("pw", scopedSecret("secret/*"), "vault:secret/team/x#k")
 	if err == nil {
-		t.Fatal("ожидался reject config-deny secret/team/")
+		t.Fatal("expected reject config-deny secret/team/")
 	}
 	requireAuditReason(t, aw, "denied", "deny_list")
 }
@@ -182,14 +182,14 @@ func TestInputVaultResolver_ConfigDenyExtends(t *testing.T) {
 func TestInputVaultResolver_NilVault(t *testing.T) {
 	r := vaultTestRunner(nil, &fakeAuditWriter{}, nil)
 	if got := r.newInputVaultResolver(context.Background(), ac(), nil); got != nil {
-		t.Fatal("при nil-Vault резолвер должен быть nil")
+		t.Fatal("resolver must be nil with nil-Vault")
 	}
 }
 
 func requireAudit(t *testing.T, aw *fakeAuditWriter, result, path, field string) {
 	t.Helper()
 	if len(aw.events) == 0 {
-		t.Fatal("audit-event не записан")
+		t.Fatal("audit-event was not recorded")
 	}
 	e := aw.events[len(aw.events)-1]
 	if e.EventType != audit.EventInputVaultResolved {
@@ -215,7 +215,7 @@ func requireAudit(t *testing.T, aw *fakeAuditWriter, result, path, field string)
 func requireAuditReason(t *testing.T, aw *fakeAuditWriter, result, reason string) {
 	t.Helper()
 	if len(aw.events) == 0 {
-		t.Fatal("audit-event не записан (denied тоже аудируется)")
+		t.Fatal("audit-event was not recorded (denied is also audited)")
 	}
 	e := aw.events[len(aw.events)-1]
 	if e.Payload["result"] != result {

@@ -201,7 +201,7 @@ func specEssence(inc *incarnation.Incarnation) map[string]any {
 func (r *Runner) loadRegisterByHost(ctx context.Context, applyID string, tasks []*render.RenderedTask) (map[string]map[string]any, error) {
 	rows, err := applyrun.SelectTaskRegistersByApplyID(ctx, r.deps.DB, applyID)
 	if err != nil {
-		return nil, fmt.Errorf("scenario: load register-данных прогона: %w", err)
+		return nil, fmt.Errorf("scenario: load run register data: %w", err)
 	}
 	return buildRegisterByHost(rows, tasks), nil
 }
@@ -218,7 +218,7 @@ func (r *Runner) loadRegisterByHost(ctx context.Context, applyID string, tasks [
 func (r *Runner) loadRegisterByHostUpToPassage(ctx context.Context, applyID string, upToPassage int, tasks []*render.RenderedTask) (map[string]map[string]any, error) {
 	rows, err := applyrun.SelectTaskRegistersByApplyIDUpToPassage(ctx, r.deps.DB, applyID, upToPassage)
 	if err != nil {
-		return nil, fmt.Errorf("scenario: load register-данных прогона (passage < %d): %w", upToPassage, err)
+		return nil, fmt.Errorf("scenario: load run register data (passage < %d): %w", upToPassage, err)
 	}
 	return buildRegisterByHost(rows, tasks), nil
 }
@@ -493,7 +493,7 @@ func mergeStateChanges(stateBefore map[string]any, ops []render.RenderedOp, sche
 				return nil, fmt.Errorf("state_changes[%d] remove %q: %w", i, op.Field, err)
 			}
 		default:
-			return nil, fmt.Errorf("state_changes[%d]: verb %q не поддержан движком", i, op.Verb)
+			return nil, fmt.Errorf("state_changes[%d]: verb %q not supported by the engine", i, op.Verb)
 		}
 	}
 	return out, nil
@@ -560,7 +560,7 @@ func applyModifyOp(out map[string]any, op render.RenderedOp, opEval render.State
 		out[op.Field] = coll
 		return nil
 	}
-	return fmt.Errorf("поле %q не является коллекцией (map/list)", op.Field)
+	return fmt.Errorf("field %q is not a collection (map/list)", op.Field)
 }
 
 // applyRemoveOp deletes ALL elements of collection op.Field matching op.Match.
@@ -614,7 +614,7 @@ func applyRemoveOp(out map[string]any, op render.RenderedOp, opEval render.State
 		out[op.Field] = kept
 		return nil
 	}
-	return fmt.Errorf("поле %q не является коллекцией (map/list)", op.Field)
+	return fmt.Errorf("field %q is not a collection (map/list)", op.Field)
 }
 
 // evalOpBool evaluates the modify/remove match predicate via opEval (full
@@ -628,11 +628,11 @@ func evalOpBool(opEval render.StateOpEvalFunc, match string, ctx, binds map[stri
 	}
 	res, err := opEval(match, ctx, binds, true)
 	if err != nil {
-		return false, fmt.Errorf("match-предикат %q: %w", match, err)
+		return false, fmt.Errorf("match predicate %q: %w", match, err)
 	}
 	b, ok := res.(bool)
 	if !ok {
-		return false, fmt.Errorf("match-предикат %q вернул %T, ожидался bool", match, res)
+		return false, fmt.Errorf("match predicate %q returned %T, want bool", match, res)
 	}
 	return b, nil
 }
@@ -646,7 +646,7 @@ func applyPatch(elem any, patch, ctx, binds map[string]any, opEval render.StateO
 	target, ok := deepCopyValue(elem).(map[string]any)
 	if !ok {
 		// A scalar list element (list of scalars) can't be patched by dotted path.
-		return nil, fmt.Errorf("patch применим только к объекту-записи (элемент %T не объект)", elem)
+		return nil, fmt.Errorf("patch applies only to a record object (element %T is not an object)", elem)
 	}
 	for path, rawVal := range patch {
 		val, err := renderPatchValue(rawVal, ctx, binds, opEval)
@@ -695,7 +695,7 @@ func setNestedPath(m map[string]any, path string, val any) error {
 		}
 		next, ok := existing.(map[string]any)
 		if !ok {
-			return fmt.Errorf("промежуточный узел %q уже существует и не является объектом (%T) — patch вложенного пути %q затёр бы его", seg, existing, path)
+			return fmt.Errorf("intermediate node %q already exists and is not an object (%T) - patch of nested path %q would clobber it", seg, existing, path)
 		}
 		cur = next
 	}
@@ -718,11 +718,11 @@ func checkExpect(op render.RenderedOp, matched int) error {
 		return nil
 	case config.ExpectOne:
 		if matched != 1 {
-			return fmt.Errorf("expect: one — match зацепил %d элементов (ожидался ровно один)", matched)
+			return fmt.Errorf("expect: one - match hit %d elements (expected exactly one)", matched)
 		}
 	case config.ExpectAtMostOne:
 		if matched > 1 {
-			return fmt.Errorf("expect: at_most_one — match зацепил %d элементов (ожидалось ≤1)", matched)
+			return fmt.Errorf("expect: at_most_one - match hit %d elements (expected <=1)", matched)
 		}
 	}
 	return nil
@@ -740,7 +740,7 @@ func applyAddOp(out map[string]any, op render.RenderedOp, schema map[string]any,
 	switch kind {
 	case collKindMap:
 		if op.Key == "" {
-			return fmt.Errorf("add в map-коллекцию требует key:")
+			return fmt.Errorf("add into a map collection requires key:")
 		}
 		coll, _ := existing.(map[string]any)
 		if coll == nil {
@@ -754,7 +754,7 @@ func applyAddOp(out map[string]any, op render.RenderedOp, schema map[string]any,
 				// incarnation.status_details.error unmasked (audit.MaskSecrets
 				// catches `vault:` refs, not plaintext values). Print only the
 				// collection-field name (BUG-3, security).
-				return fmt.Errorf("add %q: ключ уже существует (on_conflict: error)", op.Field)
+				return fmt.Errorf("add %q: key already exists (on_conflict: error)", op.Field)
 			case config.OnConflictReplace:
 				coll[op.Key] = op.Value
 			default: // skip (default) — idempotent no-op
@@ -776,7 +776,7 @@ func applyAddOp(out map[string]any, op render.RenderedOp, schema map[string]any,
 			case config.OnConflictError:
 				// Without the resolved op.Value/elem in reason (BUG-3, security): value
 				// could be `${ vault(...) }`. Print only the collection-field name.
-				return fmt.Errorf("add %q: элемент с такой идентичностью уже существует (on_conflict: error)", op.Field)
+				return fmt.Errorf("add %q: an element with this identity already exists (on_conflict: error)", op.Field)
 			case config.OnConflictReplace:
 				coll[idx] = op.Value
 			default: // skip (default) — idempotent no-op
@@ -787,7 +787,7 @@ func applyAddOp(out map[string]any, op render.RenderedOp, schema map[string]any,
 		out[op.Field] = coll
 		return nil
 	}
-	return fmt.Errorf("поле %q не является коллекцией (map/list) и тип не выводится из schema", op.Field)
+	return fmt.Errorf("field %q is not a collection (map/list) and the type can't be inferred from schema", op.Field)
 }
 
 // findListMatch finds the index of an existing element identical to the one
@@ -810,7 +810,7 @@ func findListMatch(coll []any, op render.RenderedOp, matchEval render.StateMatch
 				ok, err = matchEval(op.Match, coll[i], op.Value)
 			}
 			if err != nil {
-				return -1, fmt.Errorf("match-предикат %q: %w", op.Match, err)
+				return -1, fmt.Errorf("match predicate %q: %w", op.Match, err)
 			}
 			if ok {
 				return i, nil

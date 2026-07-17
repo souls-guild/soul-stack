@@ -57,7 +57,7 @@ func TestSetupOTel_DisabledNoOp(t *testing.T) {
 		t.Fatalf("SetupOTel(disabled): %v", err)
 	}
 	if p == nil {
-		t.Fatal("SetupOTel вернул nil provider при Enabled=false")
+		t.Fatal("SetupOTel returned nil provider with Enabled=false")
 	}
 	if err := p.Shutdown(context.Background()); err != nil {
 		t.Errorf("Shutdown(disabled): %v", err)
@@ -85,7 +85,7 @@ func TestSetupOTel_EnabledNoEndpoint(t *testing.T) {
 		t.Fatalf("SetupOTel(enabled, no endpoint): %v", err)
 	}
 	if p == nil {
-		t.Fatal("SetupOTel вернул nil provider")
+		t.Fatal("SetupOTel returned nil provider")
 	}
 	if err := p.Shutdown(context.Background()); err != nil {
 		t.Errorf("Shutdown: %v", err)

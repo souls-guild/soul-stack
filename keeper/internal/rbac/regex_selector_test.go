@@ -37,7 +37,7 @@ func TestParseSelector_Regex_CommaInsideQuotes(t *testing.T) {
 	}
 	got := p.Selector["regex"]
 	if len(got) != 1 || got[0] != "^a{1,3}$" {
-		t.Errorf("Selector[regex] = %v, want [^a{1,3}$] (запятая внутри regex не рвёт)", got)
+		t.Errorf("Selector[regex] = %v, want [^a{1,3}$] (comma inside regex does not split)", got)
 	}
 }
 
@@ -126,10 +126,10 @@ func TestMatches_Regex_NoHostKeyDeny(t *testing.T) {
 		t.Fatalf("ParsePermission: %v", err)
 	}
 	if p.Matches("incarnation", "run", map[string]string{"coven": "prod"}) {
-		t.Errorf("regex-perm without host/sid in context должна давать deny")
+		t.Errorf("regex-perm without host/sid in context should give deny")
 	}
 	if p.Matches("incarnation", "run", nil) {
-		t.Errorf("regex-perm с nil-context должна давать deny")
+		t.Errorf("regex-perm with nil context should give deny")
 	}
 }
 
@@ -159,10 +159,10 @@ func TestResolvePurview_Regex_DefaultScopeInherited(t *testing.T) {
 	})
 	p := e.ResolvePurview("archon-a", "incarnation", "run")
 	if p.Unrestricted {
-		t.Errorf("Unrestricted=true, want false (bare наследует regex default_scope)")
+		t.Errorf("Unrestricted=true, want false (bare inherits regex default_scope)")
 	}
 	if len(p.Regexes) != 1 || p.Regexes[0] != "^web-" {
-		t.Errorf("Regexes = %v, want [^web-] (наследование default_scope)", p.Regexes)
+		t.Errorf("Regexes = %v, want [^web-] (default_scope inheritance)", p.Regexes)
 	}
 }
 
@@ -176,37 +176,37 @@ func TestSubset_Regex_StringEquality(t *testing.T) {
 		wantHeld    bool // true → ErrPermissionNotHeld (grant forbidden)
 	}{
 		{
-			name:        "идентичный regex → выдача ок",
+			name:        "identical regex -> grant ok",
 			callerRaws:  []string{"incarnation.run on regex='^web-'"},
 			grantedRaws: []string{"incarnation.run on regex='^web-'"},
 			wantHeld:    false,
 		},
 		{
-			name:        "иной regex → DENY (fail-closed, не string-equal)",
+			name:        "different regex -> DENY (fail-closed, not string-equal)",
 			callerRaws:  []string{"incarnation.run on regex='^web-'"},
 			grantedRaws: []string{"incarnation.run on regex='^db-'"},
 			wantHeld:    true,
 		},
 		{
-			name:        "regex-сужение недостижимо статически → DENY (^web- не покрывает ^web-prod-)",
+			name:        "regex narrowing is not statically provable -> DENY (^web- does not cover ^web-prod-)",
 			callerRaws:  []string{"incarnation.run on regex='^web-'"},
 			grantedRaws: []string{"incarnation.run on regex='^web-prod-'"},
 			wantHeld:    true,
 		},
 		{
-			name:        "caller с * выдаёт любой regex",
+			name:        "caller with * grants any regex",
 			callerRaws:  []string{"*"},
 			grantedRaws: []string{"incarnation.run on regex='^web-'"},
 			wantHeld:    false,
 		},
 		{
-			name:        "caller без regex-scope (bare) выдаёт regex → ок (bare покрывает)",
+			name:        "caller without regex-scope (bare) grants regex -> ok (bare covers)",
 			callerRaws:  []string{"incarnation.run"},
 			grantedRaws: []string{"incarnation.run on regex='^web-'"},
 			wantHeld:    false,
 		},
 		{
-			name:        "caller с regex выдаёт bare → DENY (bare шире regex-scope caller-а)",
+			name:        "caller with regex grants bare -> DENY (bare is wider than caller regex-scope)",
 			callerRaws:  []string{"incarnation.run on regex='^web-'"},
 			grantedRaws: []string{"incarnation.run"},
 			wantHeld:    true,

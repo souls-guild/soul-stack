@@ -67,7 +67,7 @@ func TestIntegration_KeeperChangedTask_FoldsIntoChangedTasks(t *testing.T) {
 		t.Fatalf("SelectChangedTaskKeys: %v", err)
 	}
 	if _, ok := keys[auditpg.ChangedTaskKey{SID: render.KeeperTargetSID, PlanIndex: 0}]; !ok {
-		t.Fatalf("ключ (keeper, 0) отсутствует в SelectChangedTaskKeys — keeper changed-задача выпала: %v", keys)
+		t.Fatalf("key (keeper, 0) missing from SelectChangedTaskKeys - keeper changed task dropped: %v", keys)
 	}
 
 	got := buildChangedTasks(tasks, plans, keys)
@@ -112,11 +112,11 @@ func TestIntegration_KeeperFailedTask_NotInChangedTasks(t *testing.T) {
 		t.Fatalf("SelectChangedTaskKeys: %v", err)
 	}
 	if len(keys) != 0 {
-		t.Errorf("SelectChangedTaskKeys = %v, want пусто (failed-задача не CHANGED)", keys)
+		t.Errorf("SelectChangedTaskKeys = %v, want empty (failed task is not CHANGED)", keys)
 	}
 
 	got := buildChangedTasks(tasks, plans, keys)
 	if len(got) != 0 {
-		t.Errorf("buildChangedTasks = %+v, want пусто (failed keeper-задача не в changed_tasks)", got)
+		t.Errorf("buildChangedTasks = %+v, want empty (failed keeper task not in changed_tasks)", got)
 	}
 }

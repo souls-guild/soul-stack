@@ -56,7 +56,7 @@ func NewRoot(version string) *cobra.Command {
 	root := &cobra.Command{
 		Use:           "soulctl",
 		Short:         "soul-stack operator CLI",
-		Long:          "soulctl — клиентский CLI оператора Soul Stack, тонкая обёртка над Operator API Keeper-а.",
+		Long:          "soulctl -- operator CLI for Soul Stack, a thin wrapper over the Keeper Operator API.",
 		Version:       version,
 		SilenceUsage:  true,
 		SilenceErrors: false,
@@ -74,8 +74,8 @@ func NewRoot(version string) *cobra.Command {
 		},
 	}
 	root.SetVersionTemplate("soulctl {{.Version}} — soul-stack operator CLI\n")
-	root.PersistentFlags().StringVarP(&outputFlag, flagOutput, "o", "table", "формат вывода: table|json|yaml")
-	root.PersistentFlags().StringVar(&configFlag, flagConfig, "", "путь к credentials.yaml (по умолчанию ~/.config/soul-stack/credentials.yaml)")
+	root.PersistentFlags().StringVarP(&outputFlag, flagOutput, "o", "table", "output format: table|json|yaml")
+	root.PersistentFlags().StringVar(&configFlag, flagConfig, "", "path to credentials.yaml (defaults to ~/.config/soul-stack/credentials.yaml)")
 
 	root.AddCommand(
 		newIncarnationCmd(),

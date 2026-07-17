@@ -60,13 +60,13 @@ func TestDryRun_CallsPlanNotApply(t *testing.T) {
 		t.Fatalf("Run: %v", err)
 	}
 	if mod.applyCalled {
-		t.Fatal("Apply вызван на dry_run (должен вызываться только Plan)")
+		t.Fatal("Apply called on dry_run (only Plan should be called)")
 	}
 	if len(sink.taskEvents) != 1 {
 		t.Fatalf("taskEvents = %d, want 1", len(sink.taskEvents))
 	}
 	if got := sink.taskEvents[0].GetStatus(); got != keeperv1.TaskStatus_TASK_STATUS_CHANGED {
-		t.Fatalf("status = %v, want CHANGED (drift пробрасывается из PlanEvent.changed)", got)
+		t.Fatalf("status = %v, want CHANGED (drift propagates from PlanEvent.changed)", got)
 	}
 }
 
@@ -85,7 +85,7 @@ func TestDryRun_ChangedFalse_OK(t *testing.T) {
 		t.Fatalf("Run: %v", err)
 	}
 	if mod.applyCalled {
-		t.Fatal("Apply вызван на dry_run")
+		t.Fatal("Apply called on dry_run")
 	}
 	if got := sink.taskEvents[0].GetStatus(); got != keeperv1.TaskStatus_TASK_STATUS_OK {
 		t.Fatalf("status = %v, want OK (clean)", got)
@@ -116,11 +116,11 @@ func TestDryRun_DefaultDeny_NonReadSafe(t *testing.T) {
 		t.Fatalf("Run: %v", err)
 	}
 	if applyCalled {
-		t.Fatal("Apply вызван на dry_run default-deny-пути")
+		t.Fatal("Apply called on dry_run of the default-deny path")
 	}
 	ev := sink.taskEvents[0]
 	if ev.GetStatus() != keeperv1.TaskStatus_TASK_STATUS_FAILED {
-		t.Fatalf("status = %v, want FAILED (явный отказ, не false-clean)", ev.GetStatus())
+		t.Fatalf("status = %v, want FAILED (explicit rejection, not false-clean)", ev.GetStatus())
 	}
 	if ev.GetError().GetCode() != "plan.unsupported" {
 		t.Fatalf("error.code = %q, want plan.unsupported", ev.GetError().GetCode())
@@ -166,7 +166,7 @@ func TestDryRun_PlanError(t *testing.T) {
 		t.Fatalf("Run: %v", err)
 	}
 	if mod.applyCalled {
-		t.Fatal("Apply вызван на dry_run")
+		t.Fatal("Apply called on dry_run")
 	}
 	ev := sink.taskEvents[0]
 	if ev.GetStatus() != keeperv1.TaskStatus_TASK_STATUS_FAILED || ev.GetError().GetCode() != "plan.error" {

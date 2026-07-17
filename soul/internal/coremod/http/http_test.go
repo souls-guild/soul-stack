@@ -86,7 +86,7 @@ func TestValidate_RejectsUnknownVerb(t *testing.T) {
 		Params: mustStruct(t, map[string]any{"url": "https://example.com/health"}),
 	})
 	if reply.Ok {
-		t.Fatal("Validate ok=true для неизвестного verb")
+		t.Fatal("Validate ok=true for an unknown verb")
 	}
 }
 
@@ -97,7 +97,7 @@ func TestValidate_RequiresURL(t *testing.T) {
 		Params: mustStruct(t, map[string]any{}),
 	})
 	if reply.Ok {
-		t.Fatal("Validate ok=true без url")
+		t.Fatal("Validate ok=true without url")
 	}
 }
 
@@ -108,7 +108,7 @@ func TestValidate_RejectsHTTP(t *testing.T) {
 		Params: mustStruct(t, map[string]any{"url": "http://example.com/health"}),
 	})
 	if reply.Ok {
-		t.Fatal("Validate ok=true для http:// URL")
+		t.Fatal("Validate ok=true for http:// URL")
 	}
 }
 
@@ -119,7 +119,7 @@ func TestValidate_RejectsFileScheme(t *testing.T) {
 		Params: mustStruct(t, map[string]any{"url": "file:///etc/passwd"}),
 	})
 	if reply.Ok {
-		t.Fatal("Validate ok=true для file:// URL")
+		t.Fatal("Validate ok=true for file:// URL")
 	}
 }
 
@@ -134,7 +134,7 @@ func TestValidate_RejectsMutatingMethod(t *testing.T) {
 			}),
 		})
 		if reply.Ok {
-			t.Fatalf("Validate ok=true для мутирующего метода %q", method)
+			t.Fatalf("Validate ok=true for mutating method %q", method)
 		}
 	}
 }
@@ -151,7 +151,7 @@ func TestValidate_AcceptsGETHEAD(t *testing.T) {
 			Params: mustStruct(t, params),
 		})
 		if !reply.Ok {
-			t.Fatalf("Validate ok=false для метода %q: %v", method, reply.Errors)
+			t.Fatalf("Validate ok=false for method %q: %v", method, reply.Errors)
 		}
 	}
 }
@@ -168,7 +168,7 @@ func TestValidate_AcceptsValidFull(t *testing.T) {
 		}),
 	})
 	if !reply.Ok {
-		t.Fatalf("Validate ok=false для валидного probe: %v", reply.Errors)
+		t.Fatalf("Validate ok=false for a valid probe: %v", reply.Errors)
 	}
 }
 
@@ -192,7 +192,7 @@ func TestApply_GET_200_ReturnsRegister_ChangedFalse(t *testing.T) {
 	}
 	// changed=false by construction.
 	if ev.Changed {
-		t.Fatal("changed=true (read-probe обязан быть changed=false)")
+		t.Fatal("changed=true (read-probe must be changed=false)")
 	}
 	if ev.Output.Fields["changed"].GetBoolValue() != false {
 		t.Fatal("output.changed != false")
@@ -204,7 +204,7 @@ func TestApply_GET_200_ReturnsRegister_ChangedFalse(t *testing.T) {
 		t.Fatalf("body=%q want %q", ev.Output.Fields["body"].GetStringValue(), body)
 	}
 	if _, ok := ev.Output.Fields["elapsed_ms"]; !ok {
-		t.Fatal("elapsed_ms отсутствует в output")
+		t.Fatal("elapsed_ms missing from output")
 	}
 	if d.gotMethod != "GET" {
 		t.Fatalf("method=%q want GET", d.gotMethod)
@@ -229,11 +229,11 @@ func TestApply_StatusMismatch_Fails_WithOutput(t *testing.T) {
 	}
 	ev := stream.Last()
 	if !ev.Failed {
-		t.Fatal("failed=false при status 500 вне ожидаемого [200]")
+		t.Fatal("failed=false for status 500 outside the expected [200]")
 	}
 	// Output is attached for diagnostics: actual status/body.
 	if ev.Output == nil {
-		t.Fatal("output отсутствует при mismatch (нужен для диагностики)")
+		t.Fatal("output missing on mismatch (needed for diagnostics)")
 	}
 	if ev.Output.Fields["status"].GetNumberValue() != 500 {
 		t.Fatalf("output.status=%v want 500", ev.Output.Fields["status"].GetNumberValue())
@@ -249,7 +249,7 @@ func TestApply_DefaultStatusCodes_200(t *testing.T) {
 		Params: mustStruct(t, map[string]any{"url": "https://example.com/health"}),
 	}, stream)
 	if stream.Last().Failed {
-		t.Fatal("failed=true для 200 при дефолтном status_codes")
+		t.Fatal("failed=true for 200 with default status_codes")
 	}
 
 	d2 := &fakeDoer{status: 201}
@@ -260,7 +260,7 @@ func TestApply_DefaultStatusCodes_200(t *testing.T) {
 		Params: mustStruct(t, map[string]any{"url": "https://example.com/health"}),
 	}, stream2)
 	if !stream2.Last().Failed {
-		t.Fatal("failed=false для 201 при дефолтном status_codes [200]")
+		t.Fatal("failed=false for 201 with default status_codes [200]")
 	}
 }
 
@@ -288,7 +288,7 @@ func TestApply_HEAD_NoBody(t *testing.T) {
 		t.Fatalf("method=%q want HEAD", d.gotMethod)
 	}
 	if ev.Output.Fields["body"].GetStringValue() != "" {
-		t.Fatalf("HEAD вернул тело: %q", ev.Output.Fields["body"].GetStringValue())
+		t.Fatalf("HEAD returned a body: %q", ev.Output.Fields["body"].GetStringValue())
 	}
 }
 
@@ -316,7 +316,7 @@ func TestApply_Headers_Sent_OnlyKeysInOutput(t *testing.T) {
 	}
 	// Header actually sent.
 	if got := d.gotHeaders.Get("Authorization"); got != "Bearer super-secret-token" {
-		t.Fatalf("Authorization не отправлен: %q", got)
+		t.Fatalf("Authorization not sent: %q", got)
 	}
 	// output carries headers_keys (name only), no value.
 	keys := ev.Output.Fields["headers_keys"].GetListValue()
@@ -324,12 +324,12 @@ func TestApply_Headers_Sent_OnlyKeysInOutput(t *testing.T) {
 		t.Fatalf("headers_keys=%v want [Authorization]", keys)
 	}
 	if _, ok := ev.Output.Fields["headers"]; ok {
-		t.Fatal("сырой блок headers присутствует в output")
+		t.Fatal("raw headers block present in output")
 	}
 	// Secret value didn't leak into any output field.
 	for k, v := range ev.Output.Fields {
 		if strings.Contains(v.GetStringValue(), "super-secret-token") {
-			t.Fatalf("значение заголовка просочилось в output[%q]", k)
+			t.Fatalf("header value leaked into output[%q]", k)
 		}
 	}
 }
@@ -354,7 +354,7 @@ func TestApply_BodyCap_Truncated(t *testing.T) {
 		t.Fatalf("failed=true: %s", ev.Message)
 	}
 	if !ev.Output.Fields["truncated"].GetBoolValue() {
-		t.Fatal("truncated=false для тела > cap")
+		t.Fatal("truncated=false for a body > cap")
 	}
 	gotBody := ev.Output.Fields["body"].GetStringValue()
 	if len(gotBody) != 64*1024 {
@@ -371,7 +371,7 @@ func TestApply_BodyUnderCap_NotTruncated(t *testing.T) {
 		Params: mustStruct(t, map[string]any{"url": "https://example.com/small"}),
 	}, stream)
 	if stream.Last().Output.Fields["truncated"].GetBoolValue() {
-		t.Fatal("truncated=true для маленького тела")
+		t.Fatal("truncated=true for a small body")
 	}
 }
 
@@ -387,7 +387,7 @@ func TestApply_BodyMasked_VaultRef(t *testing.T) {
 	}, stream)
 	got := stream.Last().Output.Fields["body"].GetStringValue()
 	if strings.Contains(got, "vault:secret") {
-		t.Fatalf("vault-ref в теле не замаскирован: %q", got)
+		t.Fatalf("vault-ref in body not masked: %q", got)
 	}
 }
 
@@ -402,7 +402,7 @@ func TestApply_TransportError_Fails(t *testing.T) {
 		Params: mustStruct(t, map[string]any{"url": "https://example.com/x"}),
 	}, stream)
 	if !stream.Last().Failed {
-		t.Fatal("failed=false при транспортной ошибке")
+		t.Fatal("failed=false on a transport error")
 	}
 }
 
@@ -415,10 +415,10 @@ func TestApply_RejectsHTTPScheme_NoCall(t *testing.T) {
 		Params: mustStruct(t, map[string]any{"url": "http://example.com/x"}),
 	}, stream)
 	if !stream.Last().Failed {
-		t.Fatal("failed=false для http:// в Apply")
+		t.Fatal("failed=false for http:// in Apply")
 	}
 	if d.calls != 0 {
-		t.Fatalf("HTTP вызван %d раз для http:// (ожидалось 0)", d.calls)
+		t.Fatalf("HTTP called %d times for http:// (expected 0)", d.calls)
 	}
 }
 
@@ -440,10 +440,10 @@ func TestApply_AllowPrivate_PropagatesToClientOpts(t *testing.T) {
 		}, stream)
 
 		if d.calls != 1 {
-			t.Fatalf("клиент вызван %d раз (ожидалось 1)", d.calls)
+			t.Fatalf("client called %d times (expected 1)", d.calls)
 		}
 		if got.AllowPrivate {
-			t.Fatal("AllowPrivate=true без param (default обязан быть guarded)")
+			t.Fatal("AllowPrivate=true without param (default must be guarded)")
 		}
 	})
 
@@ -462,11 +462,11 @@ func TestApply_AllowPrivate_PropagatesToClientOpts(t *testing.T) {
 		}, stream)
 
 		if !got.AllowPrivate {
-			t.Fatal("AllowPrivate=false при allow_private:true")
+			t.Fatal("AllowPrivate=false with allow_private:true")
 		}
 		// Other flags unaffected (orthogonality).
 		if got.AllowHTTPRedirect || got.InsecureSkipVerify {
-			t.Fatalf("allow_private задел чужой контур: %+v", got)
+			t.Fatalf("allow_private affected an unrelated flag: %+v", got)
 		}
 	})
 
@@ -485,10 +485,10 @@ func TestApply_AllowPrivate_PropagatesToClientOpts(t *testing.T) {
 		}, stream)
 
 		if !stream.Last().Failed {
-			t.Fatal("allow_private строкой не дал failed")
+			t.Fatal("allow_private as a string did not produce failed")
 		}
 		if d.calls != 0 {
-			t.Fatalf("клиент вызван при кривом allow_private (calls=%d)", d.calls)
+			t.Fatalf("client called with a malformed allow_private (calls=%d)", d.calls)
 		}
 	})
 }
@@ -522,10 +522,10 @@ func TestApply_Redirect_HTTPS_to_HTTP_Blocked(t *testing.T) {
 		t.Fatalf("Apply: %v", err)
 	}
 	if !stream.Last().Failed {
-		t.Fatal("failed=false при редиректе https→http")
+		t.Fatal("failed=false on an https→http redirect")
 	}
 	if httpHit {
-		t.Fatal("downgrade-редирект достиг http-сервера")
+		t.Fatal("downgrade redirect reached the http server")
 	}
 }
 
@@ -542,7 +542,7 @@ func TestApply_NonUTF8Body_Success_CleanResult(t *testing.T) {
 		State:  "probe",
 		Params: mustStruct(t, map[string]any{"url": "https://example.com/bin"}),
 	}, stream); err != nil {
-		t.Fatalf("Apply вернул gRPC-ошибку на не-UTF8 теле: %v", err)
+		t.Fatalf("Apply returned a gRPC error for a non-UTF8 body: %v", err)
 	}
 	ev := stream.Last()
 	if ev.Failed {
@@ -550,7 +550,7 @@ func TestApply_NonUTF8Body_Success_CleanResult(t *testing.T) {
 	}
 	got := ev.Output.Fields["body"].GetStringValue()
 	if !utf8.ValidString(got) {
-		t.Fatalf("санитизированное тело невалидно как UTF-8: %q", got)
+		t.Fatalf("sanitized body invalid as UTF-8: %q", got)
 	}
 }
 
@@ -567,7 +567,7 @@ func TestApply_RuneSplitAtCap_RuneAware(t *testing.T) {
 		State:  "probe",
 		Params: mustStruct(t, map[string]any{"url": "https://example.com/rune"}),
 	}, stream); err != nil {
-		t.Fatalf("Apply вернул ошибку на разрезанной руне: %v", err)
+		t.Fatalf("Apply returned an error for a split rune: %v", err)
 	}
 	ev := stream.Last()
 	if ev.Failed {
@@ -575,14 +575,14 @@ func TestApply_RuneSplitAtCap_RuneAware(t *testing.T) {
 	}
 	got := ev.Output.Fields["body"].GetStringValue()
 	if !utf8.ValidString(got) {
-		t.Fatalf("тело после rune-aware cap невалидно: невалидный UTF-8")
+		t.Fatalf("body after rune-aware cap invalid: invalid UTF-8")
 	}
 	if !ev.Output.Fields["truncated"].GetBoolValue() {
-		t.Fatal("truncated=false при усечении по cap")
+		t.Fatal("truncated=false when truncating at cap")
 	}
 	// Rolled back the partial rune → length < cap, no trailing broken byte.
 	if strings.HasSuffix(got, "\xc3") {
-		t.Fatal("частичная руна осталась в конце тела")
+		t.Fatal("partial rune left at the end of the body")
 	}
 }
 
@@ -603,20 +603,20 @@ func TestApply_StatusMismatch_NonUTF8Body_OutputDelivered(t *testing.T) {
 	}
 	ev := stream.Last()
 	if !ev.Failed {
-		t.Fatal("failed=false при status 500 вне [200]")
+		t.Fatal("failed=false for status 500 outside [200]")
 	}
 	if ev.Output == nil {
-		t.Fatal("output потерян на mismatch с не-UTF8 телом (нужен для диагностики)")
+		t.Fatal("output lost on mismatch with a non-UTF8 body (needed for diagnostics)")
 	}
 	if ev.Output.Fields["status"].GetNumberValue() != 500 {
 		t.Fatalf("output.status=%v want 500", ev.Output.Fields["status"].GetNumberValue())
 	}
 	// changed=false on mismatch-failed (regression guard).
 	if ev.Changed {
-		t.Fatal("changed=true на mismatch (read-probe обязан быть changed=false)")
+		t.Fatal("changed=true on mismatch (read-probe must be changed=false)")
 	}
 	if ev.Output.Fields["changed"].GetBoolValue() {
-		t.Fatal("output.changed=true на mismatch")
+		t.Fatal("output.changed=true on mismatch")
 	}
 }
 
@@ -634,7 +634,7 @@ func TestApply_BodyExactlyAtCap_NotTruncated(t *testing.T) {
 	}
 	ev := stream.Last()
 	if ev.Output.Fields["truncated"].GetBoolValue() {
-		t.Fatal("truncated=true для тела ровно 64KiB (off-by-one)")
+		t.Fatal("truncated=true for a body of exactly 64KiB (off-by-one)")
 	}
 	if got := len(ev.Output.Fields["body"].GetStringValue()); got != 64*1024 {
 		t.Fatalf("len(body)=%d want %d", got, 64*1024)
@@ -654,10 +654,10 @@ func TestApply_BodyMasked_EmbeddedVaultRef(t *testing.T) {
 	}, stream)
 	got := stream.Last().Output.Fields["body"].GetStringValue()
 	if strings.Contains(got, "vault:secret") {
-		t.Fatalf("embedded vault-ref не замаскирован: %q", got)
+		t.Fatalf("embedded vault-ref not masked: %q", got)
 	}
 	if !strings.Contains(got, "***MASKED***") {
-		t.Fatalf("маска отсутствует в теле: %q", got)
+		t.Fatalf("mask missing from body: %q", got)
 	}
 }
 
@@ -672,7 +672,7 @@ func TestApply_BodyNoVaultRef_Untouched(t *testing.T) {
 	}, stream)
 	got := stream.Last().Output.Fields["body"].GetStringValue()
 	if got != `{"status":"ok","up":true}` {
-		t.Fatalf("тело без vault-ref изменено: %q", got)
+		t.Fatalf("body without vault-ref was modified: %q", got)
 	}
 }
 
@@ -688,7 +688,7 @@ func TestApply_BodyPlaintextSecret_NotMasked(t *testing.T) {
 	}, stream)
 	got := stream.Last().Output.Fields["body"].GetStringValue()
 	if !strings.Contains(got, "hunter2") {
-		t.Fatalf("plaintext-секрет неожиданно замаскирован (ограничение нарушено): %q", got)
+		t.Fatalf("plaintext secret unexpectedly masked (limitation violated): %q", got)
 	}
 }
 
@@ -706,13 +706,13 @@ func TestApply_EmptyBody_200(t *testing.T) {
 	}
 	ev := stream.Last()
 	if ev.Failed {
-		t.Fatalf("failed=true на пустом теле 200: %s", ev.Message)
+		t.Fatalf("failed=true for an empty body 200: %s", ev.Message)
 	}
 	if ev.Output.Fields["body"].GetStringValue() != "" {
-		t.Fatalf("body не пуст: %q", ev.Output.Fields["body"].GetStringValue())
+		t.Fatalf("body not empty: %q", ev.Output.Fields["body"].GetStringValue())
 	}
 	if ev.Output.Fields["truncated"].GetBoolValue() {
-		t.Fatal("truncated=true на пустом теле")
+		t.Fatal("truncated=true for an empty body")
 	}
 }
 
@@ -727,7 +727,7 @@ func TestValidate_InvalidTimeout(t *testing.T) {
 			}),
 		})
 		if reply.Ok {
-			t.Fatalf("Validate ok=true для невалидного timeout %q", ts)
+			t.Fatalf("Validate ok=true for an invalid timeout %q", ts)
 		}
 	}
 }
@@ -747,7 +747,7 @@ func TestApply_CustomStatusCodes_Matches204(t *testing.T) {
 		t.Fatalf("Apply: %v", err)
 	}
 	if stream.Last().Failed {
-		t.Fatal("failed=true для 204 при status_codes [200,204]")
+		t.Fatal("failed=true for 204 with status_codes [200,204]")
 	}
 }
 
@@ -763,7 +763,7 @@ func TestApply_EmptyStatusCodes_FallbackTo200(t *testing.T) {
 		}),
 	}, s)
 	if s.Last().Failed {
-		t.Fatal("failed=true для 200 при status_codes [] (ожидался fallback [200])")
+		t.Fatal("failed=true for 200 with status_codes [] (expected fallback [200])")
 	}
 
 	d201 := &fakeDoer{status: 201}
@@ -776,7 +776,7 @@ func TestApply_EmptyStatusCodes_FallbackTo200(t *testing.T) {
 		}),
 	}, s2)
 	if !s2.Last().Failed {
-		t.Fatal("failed=false для 201 при status_codes [] (fallback [200] не сработал)")
+		t.Fatal("failed=false for 201 with status_codes [] (fallback [200] did not kick in)")
 	}
 }
 
@@ -803,7 +803,7 @@ func TestApply_HeaderKeys_Sorted(t *testing.T) {
 	}
 	for i, w := range want {
 		if got := keys.Values[i].GetStringValue(); got != w {
-			t.Fatalf("headers_keys[%d]=%q want %q (не отсортировано)", i, got, w)
+			t.Fatalf("headers_keys[%d]=%q want %q (not sorted)", i, got, w)
 		}
 	}
 }
@@ -843,9 +843,9 @@ func TestApply_Timeout_Fails(t *testing.T) {
 	select {
 	case <-done:
 	case <-time.After(3 * time.Second):
-		t.Fatal("Apply завис: timeout не сработал")
+		t.Fatal("Apply hung: timeout did not trigger")
 	}
 	if !stream.Last().Failed {
-		t.Fatal("failed=false при превышении timeout")
+		t.Fatal("failed=false when exceeding timeout")
 	}
 }

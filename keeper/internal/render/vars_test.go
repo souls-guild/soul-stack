@@ -21,7 +21,7 @@ func TestResolveTaskVars_Empty(t *testing.T) {
 		t.Fatalf("resolveTaskVars(nil): %v", err)
 	}
 	if got.Vars != nil {
-		t.Errorf("Vars = %v, want nil для пустых task-vars", got.Vars)
+		t.Errorf("Vars = %v, want nil for empty task-vars", got.Vars)
 	}
 
 	got, err = resolveTaskVars(e, nil, map[string]any{}, base)
@@ -29,7 +29,7 @@ func TestResolveTaskVars_Empty(t *testing.T) {
 		t.Fatalf("resolveTaskVars(empty): %v", err)
 	}
 	if got.Vars != nil {
-		t.Errorf("Vars = %v, want nil для пустого map", got.Vars)
+		t.Errorf("Vars = %v, want nil for an empty map", got.Vars)
 	}
 }
 
@@ -95,13 +95,13 @@ func TestResolveTaskVars_VarToVar(t *testing.T) {
 		"a": "${ input.host }",
 	}, base)
 	if err != nil {
-		t.Fatalf("resolveTaskVars: var→var внутри task-слоя должен резолвиться: %v", err)
+		t.Fatalf("resolveTaskVars: var→var within the task layer must resolve: %v", err)
 	}
 	if got.Vars["a"] != "h" {
 		t.Errorf("vars.a = %v, want h", got.Vars["a"])
 	}
 	if got.Vars["b"] != "h-x" {
-		t.Errorf("vars.b = %v, want h-x (b ссылается на a того же слоя)", got.Vars["b"])
+		t.Errorf("vars.b = %v, want h-x (b refers to a of the same layer)", got.Vars["b"])
 	}
 }
 
@@ -118,7 +118,7 @@ func TestResolveTaskVars_CannotSeeFileVar(t *testing.T) {
 		map[string]any{"tv": "${ vars.fv }-from-task"}, // task-var references a file-var
 		base)
 	if err == nil {
-		t.Fatal("resolveTaskVars: task-var не должен видеть file-var (межслойная изоляция)")
+		t.Fatal("resolveTaskVars: task-var must not see file-var (cross-layer isolation)")
 	}
 	if !errors.Is(err, ErrVarUnknownRef) {
 		t.Errorf("err = %v, want ErrVarUnknownRef (var_unknown_ref)", err)
@@ -134,7 +134,7 @@ func TestResolveTaskVars_Cycle(t *testing.T) {
 		"b": "${ vars.a }",
 	}, cel.Vars{})
 	if err == nil || !errors.Is(err, ErrVarCycle) {
-		t.Fatalf("resolveTaskVars: ожидался ErrVarCycle, получено: %v", err)
+		t.Fatalf("resolveTaskVars: expected ErrVarCycle, got: %v", err)
 	}
 }
 
@@ -320,7 +320,7 @@ func TestRender_VarsPerLoopIteration(t *testing.T) {
 		t.Fatalf("Render: %v", err)
 	}
 	if len(tasks) != 2 {
-		t.Fatalf("len(tasks) = %d, want 2 (loop по 2 элементам)", len(tasks))
+		t.Fatalf("len(tasks) = %d, want 2 (loop over 2 items)", len(tasks))
 	}
 	want := []string{"echo hi-a", "echo hi-b"}
 	for i, w := range want {

@@ -149,7 +149,7 @@ func (s *Scheduler) Apply(ctx context.Context, defs []*keeperv1.VigilDef) {
 	wanted := make(map[string]*keeperv1.VigilDef, len(defs))
 	for _, d := range defs {
 		if d.GetName() == "" {
-			s.logger.Warn("beacon: vigil без имени в snapshot пропущен")
+			s.logger.Warn("beacon: vigil without a name in snapshot skipped")
 			continue
 		}
 		wanted[d.GetName()] = d
@@ -202,7 +202,7 @@ func (s *Scheduler) stopRun(name string, run *vigilRun) {
 func (s *Scheduler) startRun(ctx context.Context, name string, def *keeperv1.VigilDef) {
 	b, ok := s.registry.Lookup(def.GetCheck())
 	if !ok {
-		s.logger.Warn("beacon: неизвестный check, vigil не запущен",
+		s.logger.Warn("beacon: unknown check, vigil not started",
 			slog.String("vigil", name),
 			slog.String("check", def.GetCheck()),
 		)
@@ -210,7 +210,7 @@ func (s *Scheduler) startRun(ctx context.Context, name string, def *keeperv1.Vig
 	}
 	interval, err := config.ParseDuration(def.GetInterval())
 	if err != nil || interval <= 0 {
-		s.logger.Warn("beacon: невалидный interval, vigil не запущен",
+		s.logger.Warn("beacon: invalid interval, vigil not started",
 			slog.String("vigil", name),
 			slog.String("interval", def.GetInterval()),
 			slog.Any("error", err),
@@ -245,7 +245,7 @@ func (s *Scheduler) loop(ctx context.Context, run *vigilRun, b Beacon, interval 
 			if err != nil {
 				// A check error != a host state change: leave baseline/last
 				// alone, don't emit a Portent. Logged for diagnostics.
-				s.logger.Warn("beacon: проверка завершилась ошибкой",
+				s.logger.Warn("beacon: check finished with an error",
 					slog.String("vigil", run.def.GetName()),
 					slog.String("check", run.def.GetCheck()),
 					slog.Any("error", err),
@@ -255,7 +255,7 @@ func (s *Scheduler) loop(ctx context.Context, run *vigilRun, b Beacon, interval 
 			if !haveBaseline {
 				last = state
 				haveBaseline = true
-				s.logger.Debug("beacon: baseline установлен (без Portent)",
+				s.logger.Debug("beacon: baseline established (no Portent)",
 					slog.String("vigil", run.def.GetName()),
 					slog.String("state", state),
 				)
@@ -292,14 +292,14 @@ func (s *Scheduler) emit(ctx context.Context, def *keeperv1.VigilDef, state Stat
 	}
 	select {
 	case s.portents <- ev:
-		s.logger.Info("beacon: portent поднят (смена состояния)",
+		s.logger.Info("beacon: portent raised (state change)",
 			slog.String("vigil", def.GetName()),
 			slog.String("state", state),
 		)
 	case <-ctx.Done():
 	default:
 		s.metrics.ObservePortentDropped()
-		s.logger.Warn("beacon: канал portent переполнен, событие отброшено",
+		s.logger.Warn("beacon: portent channel is full, event dropped",
 			slog.String("vigil", def.GetName()),
 			slog.String("state", state),
 		)

@@ -44,7 +44,7 @@ func (f *fakeDestroyReader) ReadFile(_ *artifact.ServiceArtifact, file string) (
 		return []byte("on: keeper\ntasks: []\n"), nil
 	}
 	// Simulate the loader wrapper over os.ReadFile for a missing file.
-	return nil, fmt.Errorf("artifact: чтение main.yml: %w", os.ErrNotExist)
+	return nil, fmt.Errorf("artifact: reading main.yml: %w", os.ErrNotExist)
 }
 
 func destroyInc() *Incarnation {

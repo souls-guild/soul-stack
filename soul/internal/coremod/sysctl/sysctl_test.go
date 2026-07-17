@@ -30,7 +30,7 @@ func TestValidate(t *testing.T) {
 		Params: mustStruct(t, map[string]any{"name": "net.ipv4.ip_forward"}),
 	})
 	if reply.Ok {
-		t.Fatal("Validate без value: ok unexpectedly")
+		t.Fatal("Validate without value: ok unexpectedly")
 	}
 }
 
@@ -52,7 +52,7 @@ func TestApply_RuntimeAndPersist_NewValue(t *testing.T) {
 		t.Fatalf("Apply: %v", err)
 	}
 	if !stream.Last().Changed {
-		t.Fatal("Changed=false при new value")
+		t.Fatal("Changed=false for a new value")
 	}
 	want := filepath.Join(dir, "net-ipv4-ip_forward.conf")
 	got, err := os.ReadFile(want)
@@ -85,11 +85,11 @@ func TestApply_Idempotent_RuntimeMatchesAndPersistExists(t *testing.T) {
 		t.Fatalf("Apply: %v", err)
 	}
 	if stream.Last().Changed {
-		t.Fatal("Changed=true для already-set значения")
+		t.Fatal("Changed=true for an already-set value")
 	}
 	for _, c := range r.Calls {
 		if c == "sysctl -w net.ipv4.ip_forward=1" {
-			t.Fatalf("неожиданный sysctl -w для уже выставленного")
+			t.Fatalf("unexpected sysctl -w for an already-set value")
 		}
 	}
 }
@@ -111,7 +111,7 @@ func TestApply_RuntimeMatches_PersistMissing_StillChanges(t *testing.T) {
 		t.Fatalf("Apply: %v", err)
 	}
 	if !stream.Last().Changed {
-		t.Fatal("Changed=false когда persist-файл отсутствовал")
+		t.Fatal("Changed=false when the persist file was missing")
 	}
 }
 
@@ -137,7 +137,7 @@ func TestApply_CustomFilename(t *testing.T) {
 		t.Fatal("Changed=false")
 	}
 	if _, err := os.Stat(filepath.Join(dir, "99-tuning.conf")); err != nil {
-		t.Fatalf("custom filename не создан: %v", err)
+		t.Fatalf("custom filename not created: %v", err)
 	}
 }
 
@@ -163,7 +163,7 @@ func TestApply_MultiValueNormalization(t *testing.T) {
 		t.Fatalf("Apply: %v", err)
 	}
 	if stream.Last().Changed {
-		t.Fatal("Changed=true несмотря на эквивалентный multi-value")
+		t.Fatal("Changed=true despite an equivalent multi-value")
 	}
 }
 
@@ -183,6 +183,6 @@ func TestApply_SysctlWriteFails(t *testing.T) {
 		}),
 	}, stream)
 	if !stream.Last().Failed {
-		t.Fatal("Failed=false при sysctl -w error")
+		t.Fatal("Failed=false on sysctl -w error")
 	}
 }

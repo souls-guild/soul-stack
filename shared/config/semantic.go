@@ -431,7 +431,7 @@ func checkCadencePollProfile(root *ast.MappingNode, cs *KeeperCadenceScheduler) 
 	}
 	if floor < minCadencePollFloor {
 		rangeErr("$.cadence_scheduler.poll_floor",
-			fmt.Sprintf("poll_floor must be >= %s (абсолютный минимум шага опроса), got %s", minCadencePollFloor, floor))
+			fmt.Sprintf("poll_floor must be >= %s (absolute minimum poll step), got %s", minCadencePollFloor, floor))
 	}
 	if floor > ceiling {
 		rangeErr("$.cadence_scheduler.poll_floor",
@@ -439,7 +439,7 @@ func checkCadencePollProfile(root *ast.MappingNode, cs *KeeperCadenceScheduler) 
 	}
 	if idle < ceiling {
 		rangeErr("$.cadence_scheduler.poll_idle",
-			fmt.Sprintf("poll_idle (%s) must be >= poll_ceiling (%s) — idle опрос не чаще обычного", idle, ceiling))
+			fmt.Sprintf("poll_idle (%s) must be >= poll_ceiling (%s) - idle poll must not be more frequent than normal", idle, ceiling))
 	}
 	return out
 }
@@ -471,7 +471,7 @@ func cadenceIntervalBelowFloorWarn(root *ast.MappingNode, cs *KeeperCadenceSched
 		Level: diag.LevelWarning, Phase: diag.PhaseSemanticValidate,
 		Code: "value_clamped",
 		Message: fmt.Sprintf(
-			"cadence_scheduler.interval %s ниже poll_floor %s — поднято до %s; для суб-30s реакции используйте Beacons (ADR-030)",
+			"cadence_scheduler.interval %s is below poll_floor %s - raised to %s; for sub-30s reaction use Beacons (ADR-030)",
 			interval, floor, floor),
 	})}
 }

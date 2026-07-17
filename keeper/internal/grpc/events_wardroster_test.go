@@ -13,7 +13,7 @@ import (
 
 // TestHandleWardRoster_SweepsOrphans — a SID's dispatched rows outside the set
 // are terminated into orphaned (OrphanDispatched is called, the metric grows by the number
-// of orphans). The point of S6: “Keeper and Soul both die after dispatch”.
+// of orphans). The point of S6: "Keeper and Soul both die after dispatch".
 func TestHandleWardRoster_SweepsOrphans(t *testing.T) {
 	aw := &recordingAudit{}
 	// Exec returns UPDATE 2 — two dispatched rows were orphaned.
@@ -28,12 +28,12 @@ func TestHandleWardRoster_SweepsOrphans(t *testing.T) {
 		t.Fatalf("execCalls = %d, want 1 (OrphanDispatched)", ardb.execCalls)
 	}
 	if !strings.Contains(ardb.execSQL, "status        = 'orphaned'") {
-		t.Errorf("sweep SQL не ставит orphaned: %q", ardb.execSQL)
+		t.Errorf("sweep SQL does not set orphaned: %q", ardb.execSQL)
 	}
-	// $2 — known apply_ids: a “live” one protects its own row from being orphaned.
+	// $2 — known apply_ids: a "live" one protects its own row from being orphaned.
 	known, ok := ardb.execArgs[1].([]string)
 	if !ok || len(known) != 1 || known[0] != "apply-live" {
-		t.Errorf("known-набор = %v, want [apply-live]", ardb.execArgs[1])
+		t.Errorf("known set = %v, want [apply-live]", ardb.execArgs[1])
 	}
 	if body := obstest.Scrape(t, reg.Gatherer()); !strings.Contains(body, "keeper_apply_orphaned_total 2") {
 		t.Errorf("keeper_apply_orphaned_total must be 2; got=\n%s", body)
@@ -52,11 +52,11 @@ func TestHandleWardRoster_InSet_NotTouched(t *testing.T) {
 	})
 
 	if ardb.execCalls != 1 {
-		t.Fatalf("execCalls = %d, want 1 (sweep всё равно делается, фильтр отсёк строки)", ardb.execCalls)
+		t.Fatalf("execCalls = %d, want 1 (sweep still happens, filter cut rows)", ardb.execCalls)
 	}
 	if body := obstest.Scrape(t, reg.Gatherer()); strings.Contains(body, "keeper_apply_orphaned_total 1") ||
 		strings.Contains(body, "keeper_apply_orphaned_total 2") {
-		t.Errorf("orphaned-метрика не должна расти при 0 затронутых; got=\n%s", body)
+		t.Errorf("orphaned metric should not grow with 0 affected; got=\n%s", body)
 	}
 }
 
@@ -70,11 +70,11 @@ func TestHandleWardRoster_EmptySet_OrphansAll(t *testing.T) {
 	h.handleWardRoster(context.Background(), "host.example.com", "session-1", &keeperv1.WardRoster{Active: nil})
 
 	if ardb.execCalls != 1 {
-		t.Fatalf("execCalls = %d, want 1 (пустой набор → sweep всех dispatched)", ardb.execCalls)
+		t.Fatalf("execCalls = %d, want 1 (empty set -> sweep all dispatched)", ardb.execCalls)
 	}
 	known, ok := ardb.execArgs[1].([]string)
 	if !ok || len(known) != 0 {
-		t.Errorf("known-набор = %v, want пустой []string", ardb.execArgs[1])
+		t.Errorf("known set = %v, want empty []string", ardb.execArgs[1])
 	}
 	if body := obstest.Scrape(t, reg.Gatherer()); !strings.Contains(body, "keeper_apply_orphaned_total 5") {
 		t.Errorf("keeper_apply_orphaned_total must be 5; got=\n%s", body)
@@ -112,14 +112,14 @@ func TestWardRosterToActive_MapsAndFilters(t *testing.T) {
 		{ApplyId: "b", Attempt: 0},
 	}})
 	if len(got) != 2 {
-		t.Fatalf("len = %d, want 2 (nil отброшен)", len(got))
+		t.Fatalf("len = %d, want 2 (nil dropped)", len(got))
 	}
 	if got[0].ApplyID != "a" || got[0].Attempt != 2 {
 		t.Errorf("got[0] = %+v, want {a 2}", got[0])
 	}
 
 	if wardRosterToActive(&keeperv1.WardRoster{Active: nil}) != nil {
-		t.Error("пустой набор должен маппиться в nil")
+		t.Error("empty set should map to nil")
 	}
 }
 
@@ -142,7 +142,7 @@ func TestDispatch_OldSoulNoWardRoster_NoSweep(t *testing.T) {
 
 	for _, sql := range []string{ardb.execSQL} {
 		if strings.Contains(sql, "'orphaned'") {
-			t.Fatalf("sweep сработал без WardRoster (старый Soul) — нарушен forward-compat: %q", sql)
+			t.Fatalf("sweep fired without WardRoster (old Soul) - forward-compat violated: %q", sql)
 		}
 	}
 }

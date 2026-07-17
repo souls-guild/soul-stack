@@ -14,11 +14,11 @@ func TestSerialPresent(t *testing.T) {
 		serial any
 		want   bool
 	}{
-		{"nil → не задан", nil, false},
-		{"пустая строка → не задан", "", false},
-		{"int → задан", 2, true},
-		{"процент-строка → задан", "50%", true},
-		{"int 1 → задан", 1, true},
+		{"nil -> not set", nil, false},
+		{"empty string -> not set", "", false},
+		{"int -> set", 2, true},
+		{"percent string -> set", "50%", true},
+		{"int 1 -> set", 1, true},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -35,24 +35,24 @@ func TestHasSerialTask(t *testing.T) {
 		scn  *config.ScenarioManifest
 		want bool
 	}{
-		{"nil scenario → нет serial", nil, false},
+		{"nil scenario -> no serial", nil, false},
 		{
-			name: "ни одной serial-задачи",
+			name: "no serial tasks",
 			scn:  &config.ScenarioManifest{Tasks: []config.Task{{Name: "a"}, {Name: "b"}}},
 			want: false,
 		},
 		{
-			name: "одна задача с serial → есть",
+			name: "one task with serial -> present",
 			scn:  &config.ScenarioManifest{Tasks: []config.Task{{Name: "a"}, {Name: "b", Serial: 2}}},
 			want: true,
 		},
 		{
-			name: "serial процентом → есть",
+			name: "serial as percent -> present",
 			scn:  &config.ScenarioManifest{Tasks: []config.Task{{Name: "a", Serial: "25%"}}},
 			want: true,
 		},
 		{
-			name: "serial пустой строкой → нет (fail-closed в новый путь)",
+			name: "serial as empty string -> absent (fail-closed on the new path)",
 			scn:  &config.ScenarioManifest{Tasks: []config.Task{{Name: "a", Serial: ""}}},
 			want: false,
 		},
@@ -97,7 +97,7 @@ func TestGroupByHost_EmptyTargets(t *testing.T) {
 	plans := []render.DispatchPlan{{TaskIndex: 0, TargetSIDs: nil}}
 	got := groupByHost(tasks, plans)
 	if len(got) != 0 {
-		t.Errorf("hosts = %d, want 0 (where: отфильтровал всех)", len(got))
+		t.Errorf("hosts = %d, want 0 (where: filtered everyone out)", len(got))
 	}
 }
 
@@ -128,10 +128,10 @@ func TestEffectiveSerialWidth(t *testing.T) {
 		plans []render.DispatchPlan
 		want  int
 	}{
-		{"нет serial → 0", []render.DispatchPlan{{SerialWidth: 0}, {SerialWidth: 0}}, 0},
-		{"один serial", []render.DispatchPlan{{SerialWidth: 2}, {SerialWidth: 0}}, 2},
-		{"min среди нескольких", []render.DispatchPlan{{SerialWidth: 3}, {SerialWidth: 1}, {SerialWidth: 5}}, 1},
-		{"пустой план", nil, 0},
+		{"no serial -> 0", []render.DispatchPlan{{SerialWidth: 0}, {SerialWidth: 0}}, 0},
+		{"one serial", []render.DispatchPlan{{SerialWidth: 2}, {SerialWidth: 0}}, 2},
+		{"min among several", []render.DispatchPlan{{SerialWidth: 3}, {SerialWidth: 1}, {SerialWidth: 5}}, 1},
+		{"empty plan", nil, 0},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -169,13 +169,13 @@ func TestUnit_EffectiveSerialWidth_PerPassageSlice(t *testing.T) {
 	// one host at a time.
 	_, p0Plans := tasksForPassage(tasks, plans, 0)
 	if w := effectiveSerialWidth(p0Plans); w != 0 {
-		t.Fatalf("★ Passage 0 effectiveSerialWidth = %d, want 0 (probe БЕЗ serial — per-RUN min-width просочился бы из Passage 1 serial:1 → throttle)", w)
+		t.Fatalf("★ Passage 0 effectiveSerialWidth = %d, want 0 (probe WITHOUT serial - per-RUN min-width would leak from Passage 1 serial:1 -> throttle)", w)
 	}
 
 	// Passage 1: actions #1(1) and #2(3) → min positive = 1.
 	_, p1Plans := tasksForPassage(tasks, plans, 1)
 	if w := effectiveSerialWidth(p1Plans); w != 1 {
-		t.Fatalf("Passage 1 effectiveSerialWidth = %d, want 1 (min среди serial:1 и serial:3)", w)
+		t.Fatalf("Passage 1 effectiveSerialWidth = %d, want 1 (min among serial:1 and serial:3)", w)
 	}
 }
 
@@ -186,10 +186,10 @@ func TestSplitWaves(t *testing.T) {
 		width int
 		want  [][]string
 	}{
-		{"width 0 → одна волна", 0, [][]string{{"a", "b", "c", "d", "e"}}},
-		{"width >= len → одна волна", 10, [][]string{{"a", "b", "c", "d", "e"}}},
-		{"width 1 → по одному", 1, [][]string{{"a"}, {"b"}, {"c"}, {"d"}, {"e"}}},
-		{"width 2 → последний неполный", 2, [][]string{{"a", "b"}, {"c", "d"}, {"e"}}},
+		{"width 0 -> one wave", 0, [][]string{{"a", "b", "c", "d", "e"}}},
+		{"width >= len -> one wave", 10, [][]string{{"a", "b", "c", "d", "e"}}},
+		{"width 1 -> one at a time", 1, [][]string{{"a"}, {"b"}, {"c"}, {"d"}, {"e"}}},
+		{"width 2 -> last wave partial", 2, [][]string{{"a", "b"}, {"c", "d"}, {"e"}}},
 		{"width 3", 3, [][]string{{"a", "b", "c"}, {"d", "e"}}},
 	}
 	for _, tt := range tests {
@@ -228,10 +228,10 @@ func TestNoLogIndex(t *testing.T) {
 	}
 	got := noLogIndex(tasks)
 	if got[0] || got[2] {
-		t.Errorf("non-no_log задачи попали в индекс: %v", got)
+		t.Errorf("non-no_log tasks ended up in the index: %v", got)
 	}
 	if !got[1] || !got[5] {
-		t.Errorf("no_log задачи отсутствуют: %v", got)
+		t.Errorf("no_log tasks are missing: %v", got)
 	}
 	if len(got) != 2 {
 		t.Errorf("len = %d, want 2", len(got))
@@ -249,29 +249,29 @@ func TestFailureReason(t *testing.T) {
 		want  string
 	}{
 		{
-			name: "per-task summary доезжает дословно",
+			name: "per-task summary passes through verbatim",
 			hs:   applyrun.HostStatus{Status: applyrun.StatusFailed, TaskIdx: intp(0), ErrorSummary: strp("task 0 core.pkg.installed: E: Version '7.2.4' not found")},
 			want: "task 0 core.pkg.installed: E: Version '7.2.4' not found",
 		},
 		{
-			name: "нет summary → сам статус",
+			name: "no summary -> status itself",
 			hs:   applyrun.HostStatus{Status: applyrun.StatusFailed},
 			want: "failed",
 		},
 		{
-			name:  "no_log задача → stderr подавлен",
+			name:  "no_log task -> stderr suppressed",
 			hs:    applyrun.HostStatus{Status: applyrun.StatusFailed, TaskIdx: intp(2), ErrorSummary: strp("task 2 core.exec.run: secret-password-in-stderr")},
 			noLog: map[int]bool{2: true},
 			want:  "task 2: (no_log task failed)",
 		},
 		{
-			name:  "не-no_log задача при наличии no_log-карты → message виден",
+			name:  "non-no_log task with a no_log map present -> message visible",
 			hs:    applyrun.HostStatus{Status: applyrun.StatusFailed, TaskIdx: intp(0), ErrorSummary: strp("task 0 core.pkg.installed: boom")},
 			noLog: map[int]bool{2: true},
 			want:  "task 0 core.pkg.installed: boom",
 		},
 		{
-			name: "cancelled без summary → статус",
+			name: "cancelled without summary -> status",
 			hs:   applyrun.HostStatus{Status: applyrun.StatusCancelled},
 			want: "cancelled",
 		},
@@ -284,7 +284,7 @@ func TestFailureReason(t *testing.T) {
 			// REVERSAL (resolving by TaskIdx=1) → noLog[1]=false → the password
 			// from ErrorSummary would leak into the operator-facing reason.
 			// Security-relevant.
-			name:  "staged: no_log резолвится по глобальному plan_index, не локальному task_idx",
+			name:  "staged: no_log resolves by global plan_index, not local task_idx",
 			hs:    applyrun.HostStatus{Status: applyrun.StatusFailed, TaskIdx: intp(1), FailedPlanIndex: intp(5), ErrorSummary: strp("task 5 core.exec.run: secret-password-in-stderr")},
 			noLog: map[int]bool{5: true},
 			want:  "task 5: (no_log task failed)",
@@ -296,7 +296,7 @@ func TestFailureReason(t *testing.T) {
 			// FailedPlanIndex(5) → noLog[5]=false → message is visible.
 			// Reversal (by TaskIdx=2) would falsely suppress an ordinary
 			// task's reason.
-			name:  "staged: обычная задача не подавляется из-за коллизии локального task_idx",
+			name:  "staged: an ordinary task is not suppressed by a local task_idx collision",
 			hs:    applyrun.HostStatus{Status: applyrun.StatusFailed, TaskIdx: intp(2), FailedPlanIndex: intp(5), ErrorSummary: strp("task 5 core.pkg.installed: boom")},
 			noLog: map[int]bool{2: true},
 			want:  "task 5 core.pkg.installed: boom",
@@ -372,12 +372,12 @@ func TestClassify(t *testing.T) {
 			wantHosts: 2, wantFail: true,
 		},
 		{
-			name:      "no_match не досчитан до wantHosts → не done",
+			name:      "no_match short of wantHosts -> not done",
 			statuses:  []applyrun.HostStatus{{SID: "a", Status: applyrun.StatusNoMatch}},
 			wantHosts: 2, wantDone: false,
 		},
 		{
-			name:      "fewer rows than wantHosts (poll опередил Insert)",
+			name:      "fewer rows than wantHosts (poll raced ahead of Insert)",
 			statuses:  []applyrun.HostStatus{{SID: "a", Status: applyrun.StatusSuccess}},
 			wantHosts: 2, wantDone: false,
 		},
@@ -387,7 +387,7 @@ func TestClassify(t *testing.T) {
 			// real hosts only. One host still running → the barrier must NOT
 			// declare done (previously the keeper row inflated the terminal
 			// count and done would be true → silent success).
-			name: "keeper success + один host running → не done",
+			name: "keeper success + one host running -> not done",
 			statuses: []applyrun.HostStatus{
 				{SID: render.KeeperTargetSID, Status: applyrun.StatusSuccess},
 				{SID: "a", Status: applyrun.StatusSuccess},
@@ -398,7 +398,7 @@ func TestClassify(t *testing.T) {
 		{
 			// All real hosts are terminal (+ keeper success, doesn't count) →
 			// done.
-			name: "keeper success + все host success → done",
+			name: "keeper success + all hosts success -> done",
 			statuses: []applyrun.HostStatus{
 				{SID: render.KeeperTargetSID, Status: applyrun.StatusSuccess},
 				{SID: "a", Status: applyrun.StatusSuccess},
@@ -433,24 +433,24 @@ func TestCancelRequested(t *testing.T) {
 		want     bool
 	}{
 		{
-			name:     "ни одна строка не помечена",
+			name:     "no row is marked",
 			statuses: []applyrun.HostStatus{{SID: "a"}, {SID: "b"}},
 			want:     false,
 		},
 		{
 			// RequestCancel sets the flag on all running rows, but the barrier
 			// only needs to see it on any one (cluster-wide Cancel, G1).
-			name:     "одна строка помечена → отмена",
+			name:     "one row marked -> cancel",
 			statuses: []applyrun.HostStatus{{SID: "a"}, {SID: "b", CancelRequested: true}},
 			want:     true,
 		},
 		{
-			name:     "все строки помечены → отмена",
+			name:     "all rows marked -> cancel",
 			statuses: []applyrun.HostStatus{{SID: "a", CancelRequested: true}, {SID: "b", CancelRequested: true}},
 			want:     true,
 		},
 		{
-			name:     "пустой срез",
+			name:     "empty slice",
 			statuses: nil,
 			want:     false,
 		},

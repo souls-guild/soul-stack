@@ -97,7 +97,7 @@ func newRunEventsDeps(bus *applybus.EventBus, db applyrun.ExecQueryRower, rbac a
 // incRunEventsInput — huma input for GET .../runs/{apply_id}/events. Name/ApplyID are path params.
 type incRunEventsInput struct {
 	Name    string `path:"name" doc:"incarnation name"`
-	ApplyID string `path:"apply_id" doc:"ULID прогоon; чужой/несуществующий → 403 (anti-enum)"`
+	ApplyID string `path:"apply_id" doc:"run ULID; someone else's/nonexistent -> 403 (anti-enum)"`
 }
 
 func incRunEventsOperation() huma.Operation {
@@ -105,8 +105,8 @@ func incRunEventsOperation() huma.Operation {
 		OperationID:   "streamIncarnationRunEvents",
 		Method:        http.MethodGet,
 		Path:          "/{name}/runs/{apply_id}/events",
-		Summary:       "Live-ход прогоon инкарonции (SSE)",
-		Description:   "text/event-stream: task.executed/apply.completed/failed/cancelled по apply_id. Auth: Authorization: Bearer (fetch-streaming, ADR-068 §A0). Доступ: инициатор ИЛИ incarnation.get/history; чужой/несуществующий apply_id → 403 (anti-enum, parity /mcp/events). Секреты в payload маскируются.",
+		Summary:       "Live run progress of an incarnation (SSE)",
+		Description:   "text/event-stream: task.executed/apply.completed/failed/cancelled by apply_id. Auth: Authorization: Bearer (fetch-streaming, ADR-068 §A0). Access: the initiator OR incarnation.get/history; someone else's/nonexistent apply_id -> 403 (anti-enum, parity /mcp/events). Secrets in the payload are masked.",
 		Tags:          []string{"incarnation"},
 		DefaultStatus: http.StatusOK,
 		Errors:        []int{http.StatusUnauthorized, http.StatusForbidden, http.StatusTooManyRequests, http.StatusInternalServerError},
@@ -115,7 +115,7 @@ func incRunEventsOperation() huma.Operation {
 	// streaming; we do not create a named schema (inline string), to avoid a tech name in the spec.
 	op.Responses = map[string]*huma.Response{
 		"200": {
-			Description: "SSE-поток apply-withбытий прогоon",
+			Description: "SSE stream of apply events for the run",
 			Content: map[string]*huma.MediaType{
 				"text/event-stream": {Schema: &huma.Schema{Type: huma.TypeString}},
 			},

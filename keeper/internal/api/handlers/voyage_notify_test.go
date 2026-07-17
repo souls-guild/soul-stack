@@ -19,13 +19,13 @@ func TestNotifyEventTypes_MappingByKind(t *testing.T) {
 		want []string
 	}{
 		{
-			name: "scenario default (пустой on) → все три терминала",
+			name: "scenario default (empty on) -> all three terminals",
 			kind: voyage.KindScenario,
 			on:   nil,
 			want: []string{"scenario_run.completed", "scenario_run.failed", "scenario_run.partial_failed"},
 		},
 		{
-			name: "command default (пустой on) → все три терминала",
+			name: "command default (empty on) -> all three terminals",
 			kind: voyage.KindCommand,
 			on:   nil,
 			want: []string{"command_run.completed", "command_run.failed", "command_run.partial_failed"},
@@ -43,13 +43,13 @@ func TestNotifyEventTypes_MappingByKind(t *testing.T) {
 			want: []string{"command_run.failed", "command_run.partial_failed"},
 		},
 		{
-			name: "partial маппится в partial_failed (а не partial)",
+			name: "partial maps to partial_failed (not partial)",
 			kind: voyage.KindScenario,
 			on:   []string{"partial"},
 			want: []string{"scenario_run.partial_failed"},
 		},
 		{
-			name: "дубль в on дедуплицируется",
+			name: "duplicate in on is deduplicated",
 			kind: voyage.KindCommand,
 			on:   []string{"completed", "completed"},
 			want: []string{"command_run.completed"},
@@ -67,7 +67,7 @@ func TestNotifyEventTypes_MappingByKind(t *testing.T) {
 			// Every derived event_type must pass ValidateEventTypes
 			// (otherwise InsertTiding would reject it via the CHECK in the tx).
 			if err := herald.ValidateEventTypes(got); err != nil {
-				t.Fatalf("выведенные event_types не проходят ValidateEventTypes: %v", err)
+				t.Fatalf("derived event_types fail ValidateEventTypes: %v", err)
 			}
 		})
 	}
@@ -78,10 +78,10 @@ func TestNotifyEventTypes_MappingByKind(t *testing.T) {
 func TestNotifyEventTypes_UnknownTerminal(t *testing.T) {
 	_, errMsg := notifyEventTypes(voyage.KindScenario, []string{"started"})
 	if errMsg == "" {
-		t.Fatal("notifyEventTypes на неизвестном terminal должен вернуть ошибку")
+		t.Fatal("notifyEventTypes on an unknown terminal should return an error")
 	}
 	if !strings.Contains(errMsg, "started") {
-		t.Errorf("errMsg = %q, want упоминание невалидного значения", errMsg)
+		t.Errorf("errMsg = %q, want mention of the invalid value", errMsg)
 	}
 }
 
@@ -101,18 +101,18 @@ func TestStampEphemeralTidings_NameAndVoyageID(t *testing.T) {
 			t.Fatalf("tpls[%d].VoyageID = %v, want %s", i, tpls[i].VoyageID, vid)
 		}
 		if !herald.ValidName(tpls[i].Name) {
-			t.Fatalf("tpls[%d].Name = %q не матчит NamePattern", i, tpls[i].Name)
+			t.Fatalf("tpls[%d].Name = %q does not match NamePattern", i, tpls[i].Name)
 		}
 		if !strings.HasPrefix(tpls[i].Name, "eph-") {
-			t.Errorf("tpls[%d].Name = %q, want префикс eph-", i, tpls[i].Name)
+			t.Errorf("tpls[%d].Name = %q, want prefix eph-", i, tpls[i].Name)
 		}
 		if _, dup := names[tpls[i].Name]; dup {
-			t.Fatalf("имя %q повторилось — нарушена уникальность (коллизия имён ephemeral)", tpls[i].Name)
+			t.Fatalf("name %q repeated - uniqueness violated (ephemeral name collision)", tpls[i].Name)
 		}
 		names[tpls[i].Name] = struct{}{}
 		// A stamped template must satisfy the domain invariant ephemeral⟺voyage_id.
 		if !tpls[i].Ephemeral || tpls[i].VoyageID == nil {
-			t.Errorf("tpls[%d] нарушает ephemeral⟺voyage_id", i)
+			t.Errorf("tpls[%d] violates ephemeral<=>voyage_id", i)
 		}
 	}
 }

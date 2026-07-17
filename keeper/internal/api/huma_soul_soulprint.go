@@ -45,26 +45,26 @@ import (
 // SoulprintFacts — typed Soulprint facts (ADR-018). Name = the contract schema name from the hand-written spec.
 type SoulprintFacts struct {
 	CPU      *SoulprintCpuFacts     `json:"cpu,omitempty"`
-	Hostname *string                `json:"hostname,omitempty" doc:"короткое имя хоста, uname -n"`
+	Hostname *string                `json:"hostname,omitempty" doc:"short hostname, uname -n"`
 	Kernel   *SoulprintKernelFacts  `json:"kernel,omitempty"`
-	Memory   *SoulprintMemoryFacts  `json:"memory,omitempty" doc:"объёмы памяти в МБ"`
+	Memory   *SoulprintMemoryFacts  `json:"memory,omitempty" doc:"memory amounts in MB"`
 	Network  *SoulprintNetworkFacts `json:"network,omitempty"`
-	Os       *SoulprintOsFacts      `json:"os,omitempty" doc:"факты об операционbutй системе (ADR-018)"`
-	SID      *string                `json:"sid,omitempty" doc:"echo SID for логов; authority — mTLS peer cert"`
+	Os       *SoulprintOsFacts      `json:"os,omitempty" doc:"operating-system facts (ADR-018)"`
+	SID      *string                `json:"sid,omitempty" doc:"echo SID for logs; authority - mTLS peer cert"`
 }
 
 // SoulprintCpuFacts — the CPU sub-fact under the CONTRACT name (hand-written spec :7009; the oapi
 // generator would capitalize the acronym into SoulprintCPUFacts — here the name is contract from the start).
 type SoulprintCpuFacts struct {
-	Count  *int32  `json:"count,omitempty" doc:"количество logical CPUs (с учётом HT/SMT)"`
+	Count  *int32  `json:"count,omitempty" doc:"number of logical CPUs (accounting for HT/SMT)"`
 	Model  *string `json:"model,omitempty"`
 	Vendor *string `json:"vendor,omitempty"`
 }
 
 // SoulprintKernelFacts — kernel facts.
 type SoulprintKernelFacts struct {
-	Release *string `json:"release,omitempty" doc:"только версия ядра (5.15.0)"`
-	Version *string `json:"version,omitempty" doc:"полonя версия с dist-suffix (5.15.0-101-generic)"`
+	Release *string `json:"release,omitempty" doc:"kernel version only (5.15.0)"`
+	Version *string `json:"version,omitempty" doc:"full version with dist-suffix (5.15.0-101-generic)"`
 }
 
 // SoulprintMemoryFacts — memory amounts in MB.
@@ -78,12 +78,12 @@ type SoulprintMemoryFacts struct {
 type SoulprintNetworkFacts struct {
 	Fqdn       *string                      `json:"fqdn,omitempty"`
 	Interfaces *[]SoulprintNetworkInterface `json:"interfaces,omitempty"`
-	PrimaryIP  *string                      `json:"primary_ip,omitempty" doc:"осbutвbutй IPv4 (интерфейс с default-route)"`
+	PrimaryIP  *string                      `json:"primary_ip,omitempty" doc:"primary IPv4 (interface with default route)"`
 }
 
 // SoulprintNetworkInterface — a single network interface.
 type SoulprintNetworkInterface struct {
-	Ipv4 *[]string `json:"ipv4,omitempty" doc:"IPv4-адреса в CIDR (10.0.0.1/24)"`
+	Ipv4 *[]string `json:"ipv4,omitempty" doc:"IPv4 addresses in CIDR (10.0.0.1/24)"`
 	Ipv6 *[]string `json:"ipv6,omitempty"`
 	Mac  *string   `json:"mac,omitempty"`
 	Mtu  *int32    `json:"mtu,omitempty"`
@@ -109,9 +109,9 @@ type SoulprintOsFacts struct {
 // (json.RawMessage byte-passthrough); this type is only the shape source for OpenAPI.
 type soulprintReadReply struct {
 	SID         string          `json:"sid" doc:"SID (FQDN) of Soul"`
-	TypedFacts  *SoulprintFacts `json:"typed_facts" doc:"typed-факты Soulprint (ADR-018); byte-passthrough JSONB on wire, form по proto SoulprintFacts"`
-	CollectedAt *time.Time      `json:"collected_at,omitempty" doc:"Soul-side timestamp момента сбора фактов"`
-	ReceivedAt  *time.Time      `json:"received_at,omitempty" doc:"Keeper-side timestamp приёма стрима"`
+	TypedFacts  *SoulprintFacts `json:"typed_facts" doc:"typed Soulprint facts (ADR-018); byte-passthrough JSONB on wire, shaped per proto SoulprintFacts"`
+	CollectedAt *time.Time      `json:"collected_at,omitempty" doc:"Soul-side timestamp of fact collection"`
+	ReceivedAt  *time.Time      `json:"received_at,omitempty" doc:"Keeper-side timestamp of stream receipt"`
 }
 
 // registerSoulprintFacts hangs the typed-soulprint additional-emission alias on the registry. Called in

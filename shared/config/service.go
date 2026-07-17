@@ -402,7 +402,7 @@ func validateDependencyRef(root *ast.MappingNode, listKey string, idx int, dep D
 			Level: diag.LevelError, Phase: diag.PhaseSchemaValidate,
 			Code:    "core_module_in_modules_list",
 			Message: fmt.Sprintf("%s[%d].name %q is a core module — core modules are always available and must not be listed", listKey, idx, dep.Name),
-			Hint:    "Core-модули доступны автоматически — не перечисляются в `modules:` (ADR-009)",
+			Hint:    "Core modules are available automatically - not listed in `modules:` (ADR-009)",
 		}))
 	} else if !nameRegex.MatchString(dep.Name) {
 		out = append(out, atPath(root, base+".name", diag.Diagnostic{
@@ -438,7 +438,7 @@ func validateDependencyRef(root *ast.MappingNode, listKey string, idx int, dep D
 
 func nameHint(listKey string) string {
 	if listKey == "modules" {
-		return "two-level address <namespace>.<module> per architecture.md → «Адресация модулей»; core-modules are not listed here"
+		return "two-level address <namespace>.<module> per architecture.md -> \"Module addressing\"; core-modules are not listed here"
 	}
 	return "kebab-case: lowercase letters, digits, dashes; must start with letter"
 }

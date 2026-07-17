@@ -16,7 +16,7 @@ import (
 func newIncarnationCmd() *cobra.Command {
 	c := &cobra.Command{
 		Use:   "incarnation",
-		Short: "операции над incarnation (runtime-инстансами сервисов)",
+		Short: "operations on incarnations (runtime instances of services)",
 	}
 	c.AddCommand(
 		newIncarnationListCmd(),
@@ -38,7 +38,7 @@ func newIncarnationListCmd() *cobra.Command {
 	)
 	c := &cobra.Command{
 		Use:   "list",
-		Short: "перечислить incarnation",
+		Short: "list incarnations",
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			cl, err := loadClient(cmd)
 			if err != nil {
@@ -68,18 +68,18 @@ func newIncarnationListCmd() *cobra.Command {
 				rows)
 		},
 	}
-	c.Flags().StringVar(&service, "service", "", "фильтр по имени сервиса")
-	c.Flags().StringVar(&status, "status", "", "фильтр по статусу (ready|applying|error_locked|...)")
-	c.Flags().StringVar(&coven, "coven", "", "client-side фильтр по Coven-метке")
-	c.Flags().IntVar(&limit, "limit", 0, "максимум записей (1..1000, default server 50)")
-	c.Flags().IntVar(&offset, "offset", 0, "смещение пагинации")
+	c.Flags().StringVar(&service, "service", "", "filter by service name")
+	c.Flags().StringVar(&status, "status", "", "filter by status (ready|applying|error_locked|...)")
+	c.Flags().StringVar(&coven, "coven", "", "client-side filter by Coven label")
+	c.Flags().IntVar(&limit, "limit", 0, "maximum records (1..1000, default server 50)")
+	c.Flags().IntVar(&offset, "offset", 0, "pagination offset")
 	return c
 }
 
 func newIncarnationGetCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "get <name>",
-		Short: "показать incarnation по имени (spec/state/status/covens)",
+		Short: "show an incarnation by name (spec/state/status/covens)",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			cl, err := loadClient(cmd)
@@ -109,7 +109,7 @@ func newIncarnationRunCmd() *cobra.Command {
 	)
 	c := &cobra.Command{
 		Use:   "run <name> <scenario>",
-		Short: "запустить scenario на incarnation",
+		Short: "run a scenario on an incarnation",
 		Args:  cobra.ExactArgs(2),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			input, err := parseInputJSON(inputJSON)
@@ -156,10 +156,10 @@ func newIncarnationRunCmd() *cobra.Command {
 			return nil
 		},
 	}
-	c.Flags().StringVar(&inputJSON, "input", "", "input scenario в JSON (например '{\"shards\":3}')")
-	c.Flags().BoolVar(&dryRun, "dry-run", false, "запустить scenario в режиме dry-run")
-	c.Flags().BoolVar(&wait, "wait", false, "ждать завершения apply (poll status + history)")
-	c.Flags().DurationVar(&waitTimeout, "wait-timeout", 5*time.Minute, "максимальное время ожидания для --wait")
+	c.Flags().StringVar(&inputJSON, "input", "", "scenario input as JSON (e.g. '{\"shards\":3}')")
+	c.Flags().BoolVar(&dryRun, "dry-run", false, "run the scenario in dry-run mode")
+	c.Flags().BoolVar(&wait, "wait", false, "wait for apply to finish (poll status + history)")
+	c.Flags().DurationVar(&waitTimeout, "wait-timeout", 5*time.Minute, "maximum wait time for --wait")
 	return c
 }
 
@@ -170,7 +170,7 @@ func newIncarnationHistoryCmd() *cobra.Command {
 	)
 	c := &cobra.Command{
 		Use:   "history <name>",
-		Short: "история state_history incarnation",
+		Short: "incarnation state_history",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			cl, err := loadClient(cmd)
@@ -200,8 +200,8 @@ func newIncarnationHistoryCmd() *cobra.Command {
 				rows)
 		},
 	}
-	c.Flags().IntVar(&limit, "limit", 0, "максимум записей (1..1000, default server 50)")
-	c.Flags().IntVar(&offset, "offset", 0, "смещение пагинации")
+	c.Flags().IntVar(&limit, "limit", 0, "maximum records (1..1000, default server 50)")
+	c.Flags().IntVar(&offset, "offset", 0, "pagination offset")
 	return c
 }
 
@@ -209,7 +209,7 @@ func newIncarnationCheckDriftCmd() *cobra.Command {
 	var inputJSON string
 	c := &cobra.Command{
 		Use:   "check-drift <name>",
-		Short: "Scry-проверка drift incarnation (ADR-031)",
+		Short: "Scry drift check for an incarnation (ADR-031)",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			input, err := parseInputJSON(inputJSON)
@@ -234,7 +234,7 @@ func newIncarnationCheckDriftCmd() *cobra.Command {
 			return printDriftReport(cmd, report)
 		},
 	}
-	c.Flags().StringVar(&inputJSON, "input", "", "override converge-input в JSON")
+	c.Flags().StringVar(&inputJSON, "input", "", "override converge-input as JSON")
 	return c
 }
 
@@ -270,7 +270,7 @@ func parseInputJSON(s string) (map[string]any, error) {
 	}
 	var out map[string]any
 	if err := json.Unmarshal([]byte(s), &out); err != nil {
-		return nil, fmt.Errorf("--input: не JSON-объект: %w", err)
+		return nil, fmt.Errorf("--input: not a JSON object: %w", err)
 	}
 	return out, nil
 }
@@ -317,7 +317,7 @@ func waitForApply(parent context.Context, cl *client.Client, name, applyID strin
 	defer tick.Stop()
 	for {
 		if err := ctx.Err(); err != nil {
-			return nil, fmt.Errorf("ожидание apply прервано: %w", err)
+			return nil, fmt.Errorf("waiting for apply was interrupted: %w", err)
 		}
 		// 1. history is the most authoritative success signal.
 		hist, err := cl.Incarnations.History(ctx, name, 50, 0)
@@ -344,11 +344,11 @@ func waitForApply(parent context.Context, cl *client.Client, name, applyID strin
 		}
 		if isBlockingStatus(current.Status) {
 			return &waitResult{ApplyID: applyID, FinalStatus: current.Status},
-				fmt.Errorf("apply %s завершился со статусом %s", applyID, current.Status)
+				fmt.Errorf("apply %s finished with status %s", applyID, current.Status)
 		}
 		if time.Now().After(deadline) {
 			return &waitResult{ApplyID: applyID, FinalStatus: current.Status},
-				errors.New("ожидание apply превысило wait-timeout (статус всё ещё " + current.Status + ")")
+				errors.New("waiting for apply exceeded wait-timeout (status is still " + current.Status + ")")
 		}
 		select {
 		case <-ctx.Done():

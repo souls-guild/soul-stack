@@ -216,7 +216,7 @@ func (f *fakeCadenceStore) Query(_ context.Context, sql string, _ ...any) (pgx.R
 
 // CopyFrom — voyage.ExecQueryRower requirement; not called on the read-only `/runs` path.
 func (f *fakeCadenceStore) CopyFrom(context.Context, pgx.Identifier, []string, pgx.CopyFromSource) (int64, error) {
-	return 0, errors.New("fakeCadenceStore.CopyFrom: unexpected (cadence CRUD не использует CopyFrom)")
+	return 0, errors.New("fakeCadenceStore.CopyFrom: unexpected (cadence CRUD does not use CopyFrom)")
 }
 
 type cadenceErrRow struct{ err error }
@@ -392,7 +392,7 @@ func TestCadenceCreate_OK_Interval(t *testing.T) {
 		t.Errorf("reply = %+v, want name=nightly enabled=true", reply)
 	}
 	if reply.NextRunAt == nil {
-		t.Error("next_run_at должен быть вычислен при создании (interval)")
+		t.Error("next_run_at must be computed on creation (interval)")
 	}
 	if store.insertCalls != 1 {
 		t.Errorf("insertCalls = %d, want 1", store.insertCalls)
@@ -413,7 +413,7 @@ func TestCadenceCreate_OK_Cron(t *testing.T) {
 	var reply cadenceCreateReply
 	_ = json.Unmarshal(rec.Body.Bytes(), &reply)
 	if reply.NextRunAt == nil {
-		t.Error("next_run_at должен быть вычислен при создании (cron)")
+		t.Error("next_run_at must be computed on creation (cron)")
 	}
 }
 
@@ -434,7 +434,7 @@ const (
 func argInt(t *testing.T, args []any, idx int) (val int, isNull bool) {
 	t.Helper()
 	if idx >= len(args) {
-		t.Fatalf("arg[%d] вне диапазона (len=%d)", idx, len(args))
+		t.Fatalf("arg[%d] out of range (len=%d)", idx, len(args))
 	}
 	if args[idx] == nil {
 		return 0, true
@@ -459,10 +459,10 @@ func TestCadenceCreate_BatchPercentString(t *testing.T) {
 		t.Fatalf("status = %d, want 201; body=%s", rec.Code, rec.Body.String())
 	}
 	if v, isNull := argInt(t, store.insertArgs, cadenceArgBatchPercent); isNull || v != 20 {
-		t.Errorf("batch_percent колонка = %v (null=%v), want 20", v, isNull)
+		t.Errorf("batch_percent column = %v (null=%v), want 20", v, isNull)
 	}
 	if _, isNull := argInt(t, store.insertArgs, cadenceArgBatchSize); !isNull {
-		t.Errorf("batch_size должен быть NULL при batch=20%%")
+		t.Errorf("batch_size must be NULL when batch=20%%")
 	}
 }
 
@@ -478,10 +478,10 @@ func TestCadenceCreate_BatchHostsString(t *testing.T) {
 		t.Fatalf("status = %d, want 201; body=%s", rec.Code, rec.Body.String())
 	}
 	if v, isNull := argInt(t, store.insertArgs, cadenceArgBatchSize); isNull || v != 5 {
-		t.Errorf("batch_size колонка = %v (null=%v), want 5", v, isNull)
+		t.Errorf("batch_size column = %v (null=%v), want 5", v, isNull)
 	}
 	if _, isNull := argInt(t, store.insertArgs, cadenceArgBatchPercent); !isNull {
-		t.Errorf("batch_percent должен быть NULL при batch=5")
+		t.Errorf("batch_percent must be NULL when batch=5")
 	}
 }
 
@@ -498,10 +498,10 @@ func TestCadenceCreate_MaxFailuresPercentString(t *testing.T) {
 		t.Fatalf("status = %d, want 201; body=%s", rec.Code, rec.Body.String())
 	}
 	if v, isNull := argInt(t, store.insertArgs, cadenceArgFailThresholdPercent); isNull || v != 25 {
-		t.Errorf("fail_threshold_percent колонка = %v (null=%v), want 25", v, isNull)
+		t.Errorf("fail_threshold_percent column = %v (null=%v), want 25", v, isNull)
 	}
 	if _, isNull := argInt(t, store.insertArgs, cadenceArgFailThreshold); !isNull {
-		t.Errorf("fail_threshold должен быть NULL при max_failures=25%%")
+		t.Errorf("fail_threshold must be NULL when max_failures=25%%")
 	}
 }
 
@@ -517,10 +517,10 @@ func TestCadenceCreate_MaxFailuresAbsoluteString(t *testing.T) {
 		t.Fatalf("status = %d, want 201; body=%s", rec.Code, rec.Body.String())
 	}
 	if v, isNull := argInt(t, store.insertArgs, cadenceArgFailThreshold); isNull || v != 3 {
-		t.Errorf("fail_threshold колонка = %v (null=%v), want 3", v, isNull)
+		t.Errorf("fail_threshold column = %v (null=%v), want 3", v, isNull)
 	}
 	if _, isNull := argInt(t, store.insertArgs, cadenceArgFailThresholdPercent); !isNull {
-		t.Errorf("fail_threshold_percent должен быть NULL при max_failures=3")
+		t.Errorf("fail_threshold_percent must be NULL when max_failures=3")
 	}
 }
 
@@ -614,7 +614,7 @@ func TestCadenceCreate_BackcompatNumericFields(t *testing.T) {
 		t.Errorf("fail_threshold = %v (null=%v), want 2", v, isNull)
 	}
 	if _, isNull := argInt(t, store.insertArgs, cadenceArgFailThresholdPercent); !isNull {
-		t.Errorf("fail_threshold_percent должен быть NULL (backcompat без процента)")
+		t.Errorf("fail_threshold_percent must be NULL (backcompat without percent)")
 	}
 }
 
@@ -630,7 +630,7 @@ func TestCadencePatch_MaxFailuresPercentString(t *testing.T) {
 		t.Fatalf("status = %d, want 200; body=%s", rec.Code, rec.Body.String())
 	}
 	if v, isNull := argInt(t, store.updateArgs, cadenceArgFailThresholdPercent); isNull || v != 25 {
-		t.Errorf("PATCH fail_threshold_percent колонка = %v (null=%v), want 25", v, isNull)
+		t.Errorf("PATCH fail_threshold_percent column = %v (null=%v), want 25", v, isNull)
 	}
 }
 
@@ -678,13 +678,13 @@ func TestCadencePatch_MaxFailuresPercentToAbsolute(t *testing.T) {
 	rec := httptest.NewRecorder()
 	h.Patch(rec, cadenceReqID(http.MethodPatch, "/v1/cadences/"+id, id, `{"max_failures":"3"}`))
 	if rec.Code != http.StatusOK {
-		t.Fatalf("status = %d, want 200 (переключение percent→absolute не должно ловить XOR-422); body=%s", rec.Code, rec.Body.String())
+		t.Fatalf("status = %d, want 200 (switching percent->absolute must not hit XOR-422); body=%s", rec.Code, rec.Body.String())
 	}
 	if v, isNull := argInt(t, store.updateArgs, cadenceArgFailThreshold); isNull || v != 3 {
 		t.Errorf("PATCH fail_threshold = %v (null=%v), want 3", v, isNull)
 	}
 	if _, isNull := argInt(t, store.updateArgs, cadenceArgFailThresholdPercent); !isNull {
-		t.Errorf("встречное fail_threshold_percent должно обнулиться при set absolute")
+		t.Errorf("counterpart fail_threshold_percent must be cleared when setting absolute")
 	}
 }
 
@@ -704,7 +704,7 @@ func TestCadencePatch_MaxFailuresAbsoluteToPercent(t *testing.T) {
 		t.Errorf("PATCH fail_threshold_percent = %v (null=%v), want 25", v, isNull)
 	}
 	if _, isNull := argInt(t, store.updateArgs, cadenceArgFailThreshold); !isNull {
-		t.Errorf("встречное fail_threshold должно обнулиться при set percent")
+		t.Errorf("counterpart fail_threshold must be cleared when setting percent")
 	}
 }
 
@@ -723,7 +723,7 @@ func TestCadencePatch_BatchPercentToHosts(t *testing.T) {
 		t.Errorf("PATCH batch_size = %v (null=%v), want 5", v, isNull)
 	}
 	if _, isNull := argInt(t, store.updateArgs, cadenceArgBatchPercent); !isNull {
-		t.Errorf("встречное batch_percent должно обнулиться при set batch_size")
+		t.Errorf("counterpart batch_percent must be cleared when setting batch_size")
 	}
 }
 
@@ -742,7 +742,7 @@ func TestCadencePatch_BatchHostsToPercent(t *testing.T) {
 		t.Errorf("PATCH batch_percent = %v (null=%v), want 20", v, isNull)
 	}
 	if _, isNull := argInt(t, store.updateArgs, cadenceArgBatchSize); !isNull {
-		t.Errorf("встречное batch_size должно обнулиться при set batch_percent")
+		t.Errorf("counterpart batch_size must be cleared when setting batch_percent")
 	}
 }
 
@@ -759,7 +759,7 @@ func TestCadencePatch_MaxFailuresKeepsUntouchedPair(t *testing.T) {
 		t.Fatalf("status = %d, want 200; body=%s", rec.Code, rec.Body.String())
 	}
 	if v, isNull := argInt(t, store.updateArgs, cadenceArgFailThresholdPercent); isNull || v != 25 {
-		t.Errorf("хранимый fail_threshold_percent = %v (null=%v) должен остаться 25 (PATCH не трогал пару)", v, isNull)
+		t.Errorf("stored fail_threshold_percent = %v (null=%v) must remain 25 (PATCH did not touch the pair)", v, isNull)
 	}
 }
 
@@ -776,8 +776,8 @@ func TestCadenceCreate_IntervalBelowFloor422(t *testing.T) {
 		insert   int
 	}{
 		{"interval 5 → 422", 5, http.StatusUnprocessableEntity, 0},
-		{"interval 29 (граница) → 422", 29, http.StatusUnprocessableEntity, 0},
-		{"interval 30 (граница) → 201", 30, http.StatusCreated, 1},
+		{"interval 29 (boundary) -> 422", 29, http.StatusUnprocessableEntity, 0},
+		{"interval 30 (boundary) -> 201", 30, http.StatusCreated, 1},
 		{"interval 300 → 201", 300, http.StatusCreated, 1},
 	}
 	for _, tc := range cases {
@@ -796,7 +796,7 @@ func TestCadenceCreate_IntervalBelowFloor422(t *testing.T) {
 				t.Errorf("insertCalls = %d, want %d", store.insertCalls, tc.insert)
 			}
 			if tc.want == http.StatusUnprocessableEntity && !strings.Contains(rec.Body.String(), "Beacons") {
-				t.Errorf("floor-422 должен подсказывать Beacons; body=%s", rec.Body.String())
+				t.Errorf("floor-422 should hint at Beacons; body=%s", rec.Body.String())
 			}
 		})
 	}
@@ -811,10 +811,10 @@ func TestCadenceCreate_CronUnaffectedByFloor(t *testing.T) {
 	h.Create(rec, cadenceReq(http.MethodPost, "/v1/cadences",
 		`{"name":"freq","schedule_kind":"cron","cron_expr":"* * * * *","overlap_policy":"queue","kind":"command","module":"core.cmd.shell","target":{"coven":["prod"]}}`))
 	if rec.Code != http.StatusCreated {
-		t.Fatalf("cron не должен падать на floor; status = %d, body=%s", rec.Code, rec.Body.String())
+		t.Fatalf("cron should not fail on floor; status = %d, body=%s", rec.Code, rec.Body.String())
 	}
 	if store.insertCalls != 1 {
-		t.Errorf("insertCalls = %d, want 1 (cron прошёл floor)", store.insertCalls)
+		t.Errorf("insertCalls = %d, want 1 (cron passed floor)", store.insertCalls)
 	}
 }
 
@@ -831,7 +831,7 @@ func TestCadencePatch_IntervalBelowFloor422(t *testing.T) {
 		t.Fatalf("status = %d, want 422; body=%s", rec.Code, rec.Body.String())
 	}
 	if store.updateCalls != 0 {
-		t.Errorf("updateCalls = %d, want 0 (floor-reject до Update)", store.updateCalls)
+		t.Errorf("updateCalls = %d, want 0 (floor-reject before Update)", store.updateCalls)
 	}
 }
 
@@ -848,7 +848,7 @@ func TestCadenceCreate_IntervalAndCron422(t *testing.T) {
 		t.Fatalf("status = %d, want 422; body=%s", rec.Code, rec.Body.String())
 	}
 	if store.insertCalls != 0 {
-		t.Errorf("insertCalls = %d, want 0 (validate до SQL)", store.insertCalls)
+		t.Errorf("insertCalls = %d, want 0 (validate before SQL)", store.insertCalls)
 	}
 }
 
@@ -927,7 +927,7 @@ func TestCadenceCreate_EmptyTarget422(t *testing.T) {
 		t.Errorf("body should mention cadence_empty_target: %s", rec.Body.String())
 	}
 	if store.insertCalls != 0 {
-		t.Errorf("insertCalls = %d, want 0 (empty-target до Insert)", store.insertCalls)
+		t.Errorf("insertCalls = %d, want 0 (empty-target before Insert)", store.insertCalls)
 	}
 }
 
@@ -960,7 +960,7 @@ func TestCadenceCreate_ScenarioKindGuardDenied403(t *testing.T) {
 		t.Fatalf("status = %d, want 403; body=%s", rec.Code, rec.Body.String())
 	}
 	if store.insertCalls != 0 {
-		t.Errorf("insertCalls = %d, want 0 (kind-guard до Insert)", store.insertCalls)
+		t.Errorf("insertCalls = %d, want 0 (kind-guard before Insert)", store.insertCalls)
 	}
 }
 
@@ -1048,7 +1048,7 @@ func TestCadenceCreate_ScopeDenied_CovenB_403(t *testing.T) {
 		t.Fatalf("status = %d, want 403; body=%s", rec.Code, rec.Body.String())
 	}
 	if store.insertCalls != 0 {
-		t.Errorf("insertCalls = %d, want 0 (scope-check до Insert)", store.insertCalls)
+		t.Errorf("insertCalls = %d, want 0 (scope-check before Insert)", store.insertCalls)
 	}
 }
 
@@ -1089,7 +1089,7 @@ func TestCadencePatch_ScopeDenied_RetargetCovenB_403(t *testing.T) {
 		t.Fatalf("status = %d, want 403; body=%s", rec.Code, rec.Body.String())
 	}
 	if store.updateCalls != 0 {
-		t.Errorf("updateCalls = %d, want 0 (scope-check до Update)", store.updateCalls)
+		t.Errorf("updateCalls = %d, want 0 (scope-check before Update)", store.updateCalls)
 	}
 }
 
@@ -1127,7 +1127,7 @@ func TestCadencePatch_NoKindPermission_403(t *testing.T) {
 		t.Fatalf("status = %d, want 403; body=%s", rec.Code, rec.Body.String())
 	}
 	if store.updateCalls != 0 {
-		t.Errorf("updateCalls = %d, want 0 (kind-guard до Update)", store.updateCalls)
+		t.Errorf("updateCalls = %d, want 0 (kind-guard before Update)", store.updateCalls)
 	}
 }
 
@@ -1276,11 +1276,11 @@ func TestCadencePatch_ScheduleChange_RecomputesNextRun(t *testing.T) {
 		t.Errorf("dto schedule = %q/%q, want cron/'0 0 * * *'", dto.ScheduleKind, dto.CronExpr)
 	}
 	if dto.NextRunAt == nil {
-		t.Error("next_run_at должен быть пересчитан при смене расписания")
+		t.Error("next_run_at must be recomputed when schedule changes")
 	}
 	// interval_seconds cleared on switch to cron (validate invariant).
 	if dto.IntervalSeconds != nil {
-		t.Errorf("interval_seconds = %v, want nil (очищено при cron)", dto.IntervalSeconds)
+		t.Errorf("interval_seconds = %v, want nil (cleared on cron)", dto.IntervalSeconds)
 	}
 }
 
@@ -1412,7 +1412,7 @@ func TestCadenceRuns_OK(t *testing.T) {
 	}
 	_ = json.Unmarshal(rec.Body.Bytes(), &reply)
 	if reply.Total != 1 || len(reply.Items) != 1 {
-		t.Errorf("reply = %+v, want total=1 один дочерний Voyage", reply)
+		t.Errorf("reply = %+v, want total=1 one child Voyage", reply)
 	}
 }
 

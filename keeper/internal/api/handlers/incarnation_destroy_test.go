@@ -95,15 +95,15 @@ func TestIncarnation_Destroy_Teardown_202(t *testing.T) {
 	// force=false → there must be no direct row DELETE (that's handled by run.go S-D3).
 	for _, sql := range db.execCalls {
 		if strings.Contains(sql, "DELETE FROM incarnation") {
-			t.Errorf("force=false не должен делать DELETE напрямую; got exec %q", sql)
+			t.Errorf("force=false must not perform a direct DELETE; got exec %q", sql)
 		}
 	}
 	// audit destroy_started is written by the Destroy service layer (source=api), force=false.
 	if !hasEvent(aw, audit.EventIncarnationDestroyStarted) {
-		t.Errorf("ожидался audit destroy_started")
+		t.Errorf("expected audit destroy_started")
 	}
 	if hasEvent(aw, audit.EventIncarnationDestroyCompleted) {
-		t.Errorf("destroy_completed не должен писаться при teardown-пути (его пишет run.go)")
+		t.Errorf("destroy_completed must not be written on the teardown path (run.go writes it)")
 	}
 }
 
@@ -138,10 +138,10 @@ func TestIncarnation_Destroy_AutoDestroyFalse_DirectDelete(t *testing.T) {
 		t.Fatalf("DestroyTyped err = %v", err)
 	}
 	if destroyer.calls != 0 {
-		t.Errorf("StartDestroy calls = %d, want 0 (auto_destroy=false → без teardown)", destroyer.calls)
+		t.Errorf("StartDestroy calls = %d, want 0 (auto_destroy=false -> no teardown)", destroyer.calls)
 	}
 	if !sawDeleteIncarnation(db) {
-		t.Errorf("auto_destroy=false должен делать прямой DELETE; execCalls=%v", db.execCalls)
+		t.Errorf("auto_destroy=false must perform a direct DELETE; execCalls=%v", db.execCalls)
 	}
 }
 
@@ -154,13 +154,13 @@ func TestIncarnation_Destroy_AutoDestroyFalse_NoScenario_DirectDelete(t *testing
 	aw := &fakeAuditWriter{}
 	h := newDestroyHandlerLifecycle(db, destroyer, aw, false, &config.LifecycleConfig{AutoDestroy: boolPtr(false)})
 	if _, err := h.DestroyTyped(context.Background(), claims("archon-alice"), "redis-prod", false); err != nil {
-		t.Fatalf("DestroyTyped err = %v (auto_destroy=false минует scenario-gate)", err)
+		t.Fatalf("DestroyTyped err = %v (auto_destroy=false bypasses the scenario gate)", err)
 	}
 	if destroyer.calls != 0 {
 		t.Errorf("StartDestroy calls = %d, want 0", destroyer.calls)
 	}
 	if !sawDeleteIncarnation(db) {
-		t.Errorf("ожидался прямой DELETE; execCalls=%v", db.execCalls)
+		t.Errorf("expected a direct DELETE; execCalls=%v", db.execCalls)
 	}
 }
 
@@ -179,7 +179,7 @@ func TestIncarnation_Destroy_AutoDestroyDefault_Teardown(t *testing.T) {
 		t.Errorf("StartDestroy calls = %d, want 1 (default auto_destroy=true → teardown)", destroyer.calls)
 	}
 	if sawDeleteIncarnation(db) {
-		t.Errorf("teardown-путь не должен делать прямой DELETE")
+		t.Errorf("the teardown path must not perform a direct DELETE")
 	}
 }
 
@@ -194,13 +194,13 @@ func TestIncarnation_Destroy_NoScenario_NoForce_422(t *testing.T) {
 	wantProblem(t, err, problem.TypeValidationFailed)
 	// incarnation is NOT touched: no transition to destroying, no teardown.
 	if destroyer.calls != 0 {
-		t.Errorf("StartDestroy calls = %d, want 0 (отказ ДО destroying)", destroyer.calls)
+		t.Errorf("StartDestroy calls = %d, want 0 (rejected BEFORE destroying)", destroyer.calls)
 	}
 	if len(db.execCalls) != 0 {
-		t.Errorf("execCalls = %d, want 0 (incarnation не должен мутировать)", len(db.execCalls))
+		t.Errorf("execCalls = %d, want 0 (incarnation must not mutate)", len(db.execCalls))
 	}
 	if hasEvent(aw, audit.EventIncarnationDestroyStarted) {
-		t.Errorf("destroy_started не должен писаться при отказе pre-check")
+		t.Errorf("destroy_started must not be written when the pre-check is rejected")
 	}
 }
 
@@ -216,18 +216,18 @@ func TestIncarnation_Destroy_Force_NoScenario_202_Delete(t *testing.T) {
 	}
 	// force path: teardown is skipped.
 	if destroyer.calls != 0 {
-		t.Errorf("StartDestroy calls = %d, want 0 (force пропускает teardown)", destroyer.calls)
+		t.Errorf("StartDestroy calls = %d, want 0 (force skips teardown)", destroyer.calls)
 	}
 	// force path deletes the row directly (DeleteAfterTeardown).
 	if !sawDeleteIncarnation(db) {
-		t.Errorf("force-путь должен делать DELETE FROM incarnation; execCalls=%v", db.execCalls)
+		t.Errorf("the force path must perform DELETE FROM incarnation; execCalls=%v", db.execCalls)
 	}
 	// audit: destroy_started (force=true) + destroy_completed (force=true).
 	if !hasEvent(aw, audit.EventIncarnationDestroyStarted) {
-		t.Errorf("ожидался destroy_started")
+		t.Errorf("expected destroy_started")
 	}
 	if !hasEvent(aw, audit.EventIncarnationDestroyCompleted) {
-		t.Errorf("ожидался destroy_completed (force-DELETE)")
+		t.Errorf("expected destroy_completed (force-DELETE)")
 	}
 	if got := eventForce(aw, audit.EventIncarnationDestroyStarted); got != true {
 		t.Errorf("destroy_started force payload = %v, want true", got)
@@ -248,10 +248,10 @@ func TestIncarnation_Destroy_Force_WithScenario_SkipsTeardown(t *testing.T) {
 		t.Fatalf("DestroyTyped err = %v", err)
 	}
 	if destroyer.calls != 0 {
-		t.Errorf("StartDestroy calls = %d, want 0 (force пропускает teardown даже со scenario)", destroyer.calls)
+		t.Errorf("StartDestroy calls = %d, want 0 (force skips teardown even with a scenario)", destroyer.calls)
 	}
 	if !hasEvent(aw, audit.EventIncarnationDestroyCompleted) {
-		t.Errorf("ожидался destroy_completed (force-DELETE)")
+		t.Errorf("expected destroy_completed (force-DELETE)")
 	}
 }
 
@@ -273,10 +273,10 @@ func TestIncarnation_Destroy_AllowDestroyMapsToForce(t *testing.T) {
 		}
 	}
 	if !sawStatusUpdate {
-		t.Errorf("ожидался UPDATE incarnation status (переход в destroying)")
+		t.Errorf("expected UPDATE incarnation status (transition to destroying)")
 	}
 	if got := eventForce(aw, audit.EventIncarnationDestroyStarted); got != true {
-		t.Errorf("allow_destroy=true → force=true в audit, got %v", got)
+		t.Errorf("allow_destroy=true -> force=true in audit, got %v", got)
 	}
 }
 
@@ -300,7 +300,7 @@ func TestIncarnation_Destroy_NotDestroyable_409(t *testing.T) {
 	_, err := h.DestroyTyped(context.Background(), claims("archon-alice"), "redis-prod", false)
 	wantProblem(t, err, problem.TypeIncarnationLocked)
 	if destroyer.calls != 0 {
-		t.Errorf("StartDestroy calls = %d, want 0 (applying не запускает teardown)", destroyer.calls)
+		t.Errorf("StartDestroy calls = %d, want 0 (applying does not trigger teardown)", destroyer.calls)
 	}
 }
 
@@ -313,7 +313,7 @@ func TestIncarnation_Destroy_NotConfigured_500(t *testing.T) {
 	_, err := h.DestroyTyped(context.Background(), claims("archon-alice"), "redis-prod", false)
 	wantProblem(t, err, problem.TypeInternalError)
 	if len(db.execCalls) != 0 {
-		t.Errorf("execCalls = %d, want 0 (не сконфигурирован → нет мутаций)", len(db.execCalls))
+		t.Errorf("execCalls = %d, want 0 (not configured -> no mutations)", len(db.execCalls))
 	}
 }
 
@@ -335,11 +335,11 @@ func TestIncarnation_Destroy_Force_DeleteNoOp_202(t *testing.T) {
 	h := newDestroyHandler(db, &fakeDestroyer{}, aw, false)
 	// no-op DELETE is not an error (idempotency S-D3): the handler returns 202.
 	if _, err := h.DestroyTyped(context.Background(), claims("archon-alice"), "redis-prod", true); err != nil {
-		t.Fatalf("DestroyTyped err = %v (no-op DELETE не ошибка)", err)
+		t.Fatalf("DestroyTyped err = %v (a no-op DELETE is not an error)", err)
 	}
 	// destroy_completed is NOT written on no-op (Deleted=false).
 	if hasEvent(aw, audit.EventIncarnationDestroyCompleted) {
-		t.Errorf("destroy_completed не должен писаться при no-op DELETE")
+		t.Errorf("destroy_completed must not be written on a no-op DELETE")
 	}
 }
 

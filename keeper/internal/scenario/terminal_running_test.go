@@ -79,7 +79,7 @@ func TestIntegration_EnsureTerminal_TimeoutForceFailsRunning(t *testing.T) {
 
 	got := statusByApplyID(t, applyID)
 	if got["host-running.example.com"] != applyrun.StatusFailed {
-		t.Errorf("running host = %q, want failed (BAG-1: timeout force-фейлит running, RunResult не придёт)", got["host-running.example.com"])
+		t.Errorf("running host = %q, want failed (BAG-1: timeout force-fails running, RunResult will not arrive)", got["host-running.example.com"])
 	}
 	if got["host-dispatched.example.com"] != applyrun.StatusFailed {
 		t.Errorf("dispatched host = %q, want failed", got["host-dispatched.example.com"])
@@ -89,7 +89,7 @@ func TestIntegration_EnsureTerminal_TimeoutForceFailsRunning(t *testing.T) {
 	}
 	// success — already terminal, don't touch.
 	if got["host-success.example.com"] != applyrun.StatusSuccess {
-		t.Errorf("success host = %q, want success (терминал не перезаписываем)", got["host-success.example.com"])
+		t.Errorf("success host = %q, want success (terminal state is not overwritten)", got["host-success.example.com"])
 	}
 }
 
@@ -117,7 +117,7 @@ func TestIntegration_EnsureTerminal_CancelKeepsRunning(t *testing.T) {
 
 	got := statusByApplyID(t, applyID)
 	if got["host-running.example.com"] != applyrun.StatusRunning {
-		t.Errorf("running host = %q, want running (Cancel НЕ трогает живой apply — дойдёт честный RunResult)", got["host-running.example.com"])
+		t.Errorf("running host = %q, want running (Cancel does NOT touch a live apply - an honest RunResult will arrive)", got["host-running.example.com"])
 	}
 	if got["host-planned.example.com"] != applyrun.StatusCancelled {
 		t.Errorf("planned host = %q, want cancelled (operator-Cancel)", got["host-planned.example.com"])
@@ -127,7 +127,7 @@ func TestIntegration_EnsureTerminal_CancelKeepsRunning(t *testing.T) {
 	}
 	// success — already terminal, cancel doesn't overwrite it (mirrors the timeout test).
 	if got["host-success.example.com"] != applyrun.StatusSuccess {
-		t.Errorf("success host = %q, want success (терминал не перезаписываем при cancel)", got["host-success.example.com"])
+		t.Errorf("success host = %q, want success (terminal state is not overwritten on cancel)", got["host-success.example.com"])
 	}
 }
 

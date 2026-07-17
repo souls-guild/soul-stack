@@ -73,8 +73,8 @@ func stageDiagnostics(scenarioPath string, m *config.ScenarioManifest) []diag.Di
 				Phase:   diag.PhaseSemanticValidate,
 				File:    scenarioPath,
 				Code:    "stage_include_unresolved",
-				Message: fmt.Sprintf("include не резолвится офлайн (%s): %s — stage-граф проверен только по локально-доступным задачам", d.Code, d.Message),
-				Hint:    "полная Passage-валидация выполнится на keeper-е, где доступен service-слой include",
+				Message: fmt.Sprintf("include does not resolve offline (%s): %s -- the stage graph is checked only against locally available tasks", d.Code, d.Message),
+				Hint:    "full Passage validation runs on the keeper, where the service-layer include is available",
 			})
 		}
 	}
@@ -92,7 +92,7 @@ func stageDiagnostics(scenarioPath string, m *config.ScenarioManifest) []diag.Di
 			File:    scenarioPath,
 			Code:    code,
 			Message: err.Error(),
-			Hint:    "staged-render не сможет упорядочить Passage по register-зависимости (ADR-056)",
+			Hint:    "staged-render will not be able to order the Passage by register dependency (ADR-056)",
 		})
 		return out
 	}
@@ -116,8 +116,8 @@ func stageDiagnostics(scenarioPath string, m *config.ScenarioManifest) []diag.Di
 			Phase:   diag.PhaseSemanticValidate,
 			File:    scenarioPath,
 			Code:    config.CodeWithinBlockRegisterDependency,
-			Message: fmt.Sprintf("задача %q внутри block: читает register %q, эмитнутый соседней %q ТОГО ЖЕ блока — невозможно на render (block атомарен, peer-register доступен только Soul-side ПОСЛЕ probe, а where/when/params резолвятся Keeper-side ДО dispatch)", info.ReaderName, info.RegisterName, info.EmitterName),
-			Hint:    "вынесите probe на top-level (probe и потребитель — разные Passage; ADR-056 staged-render тогда упорядочит их штатно)",
+			Message: fmt.Sprintf("task %q inside a block: reads register %q emitted by a sibling %q of the SAME block -- impossible at render time (a block is atomic, the peer register is only available Soul-side AFTER probe, while where/when/params resolve Keeper-side BEFORE dispatch)", info.ReaderName, info.RegisterName, info.EmitterName),
+			Hint:    "move the probe to top-level (probe and consumer become separate Passages; ADR-056 staged-render will then order them normally)",
 		})
 		return out
 	}
@@ -138,8 +138,8 @@ func stageDiagnostics(scenarioPath string, m *config.ScenarioManifest) []diag.Di
 			Phase:   diag.PhaseSemanticValidate,
 			File:    scenarioPath,
 			Code:    config.CodeCrossPassageWhenGating,
-			Message: fmt.Sprintf("задача %q гейтит %s: по register %q из другого Passage (consumer passage %d, источник passage %d) — Soul-side gating видит только свой Passage, cross-passage register ему недоступен → no such key", info.ConsumerName, info.Kind, info.RegisterName, info.ConsumerPassage, info.SourcePassage),
-			Hint:    "when:/changed_when:/failed_when: по register из другого Passage не поддержан (Soul-side gating видит только свой Passage) — используй where: для cross-task register-таргетинга ИЛИ register.self для same-task gating",
+			Message: fmt.Sprintf("task %q gates %s: by register %q from a different Passage (consumer passage %d, source passage %d) -- Soul-side gating sees only its own Passage, a cross-passage register is unavailable to it -> no such key", info.ConsumerName, info.Kind, info.RegisterName, info.ConsumerPassage, info.SourcePassage),
+			Hint:    "when:/changed_when:/failed_when: by register from a different Passage is unsupported (Soul-side gating sees only its own Passage) -- use where: for cross-task register targeting, OR register.self for same-task gating",
 		})
 		return out
 	}
@@ -168,9 +168,9 @@ func passagePlanSummary(plan config.Passage) string {
 		}
 	}
 	if plan.Count <= 1 {
-		return fmt.Sprintf("single-passage прогон (%d задач, без cross-task register-зависимости) — один проход, как до staged-render", len(plan.TaskPassage))
+		return fmt.Sprintf("single-passage run (%d tasks, no cross-task register dependency) -- one pass, as before staged-render", len(plan.TaskPassage))
 	}
-	return fmt.Sprintf("staged-прогон: %d Passage по register-зависимости, задач в каждом %v (потребитель register исполняется строго после probe)", plan.Count, counts)
+	return fmt.Sprintf("staged run: %d Passage by register dependency, tasks in each %v (register consumer executes strictly after the probe)", plan.Count, counts)
 }
 
 // dynamicIncludeWhenDiagnostics raises include_when_dynamic_unsupported for
@@ -193,8 +193,8 @@ func dynamicIncludeWhenDiagnostics(scenarioPath string, tasks []config.Task) []d
 				Phase:   diag.PhaseSemanticValidate,
 				File:    scenarioPath,
 				Code:    "include_when_dynamic_unsupported",
-				Message: fmt.Sprintf("include %q несёт динамический when %q (ссылка на register./soulprint.) — include раскрывается ДО стратификации, доступен только статический предикат input./essence./incarnation./vars.", t.Include.Include, t.When),
-				Hint:    "замените на статический предикат (input./essence./incarnation.) либо перенесите условие на module-задачу подключённого файла через when:",
+				Message: fmt.Sprintf("include %q carries a dynamic when %q (reference to register./soulprint.) -- include expands BEFORE stratification, only a static predicate input./essence./incarnation./vars. is available", t.Include.Include, t.When),
+				Hint:    "replace with a static predicate (input./essence./incarnation.) or move the condition onto a module task of the included file via when:",
 			})
 		}
 		if t.Block != nil {

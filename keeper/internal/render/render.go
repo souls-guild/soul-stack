@@ -48,7 +48,7 @@ import (
 // excluded — it's expanded before render (config.ExpandIncludes), see
 // ErrUnexpandedInclude. on: keeper is excluded — keeper-side tasks render in
 // the keeper context (see resolveOn / renderKeeperTask).
-var ErrUnsupportedDSL = errors.New("render: DSL-конструкция вне pilot-объёма")
+var ErrUnsupportedDSL = errors.New("render: DSL construct outside the pilot scope")
 
 // KeeperTargetSID — synthetic "host" target for a keeper-side task (`on: keeper`,
 // docs/keeper/modules.md). A keeper-side step has no hosts: it runs on the
@@ -81,7 +81,7 @@ const RunSentinelSID = "__run__"
 // layer); its presence here is a programming error (expansion wasn't called),
 // not a pilot boundary. A separate sentinel from ErrUnsupportedDSL: include IS
 // supported, it just must arrive already expanded.
-var ErrUnexpandedInclude = errors.New("render: include-задача дошла до render нераскрытой")
+var ErrUnexpandedInclude = errors.New("render: include task reached render unexpanded")
 
 // ErrAssertFailed — an assert task (ADR-009 amendment 2026-06-23) failed: at
 // least one `that[]` predicate evaluated to false during the render phase.
@@ -90,7 +90,7 @@ var ErrUnexpandedInclude = errors.New("render: include-задача дошла �
 // declared DSL semantics: the caller (scenario.run / trial) distinguishes an
 // invariant failure from an internal error and reports the operator the
 // message + predicate text.
-var ErrAssertFailed = errors.New("render: assert не прошёл")
+var ErrAssertFailed = errors.New("render: assert failed")
 
 // IncarnationMeta — factual incarnation fields available in CEL as
 // `incarnation.<path>` ([ADR-010]). Pipeline expands them into a map for

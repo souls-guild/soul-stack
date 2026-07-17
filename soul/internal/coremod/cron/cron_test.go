@@ -29,7 +29,7 @@ func TestValidate(t *testing.T) {
 		Params: mustStruct(t, map[string]any{"name": "backup"}),
 	})
 	if reply.Ok {
-		t.Fatal("Validate без schedule/command: ok unexpectedly")
+		t.Fatal("Validate without schedule/command: ok unexpectedly")
 	}
 	reply, _ = m.Validate(context.Background(), &pluginv1.ValidateRequest{
 		State: "present",
@@ -59,7 +59,7 @@ func TestApply_Present_CreatesJobFile(t *testing.T) {
 		t.Fatalf("Apply: %v", err)
 	}
 	if !stream.Last().Changed {
-		t.Fatal("Changed=false при создании cron-job")
+		t.Fatal("Changed=false when creating a cron-job")
 	}
 	got, err := os.ReadFile(filepath.Join(dir, "backup"))
 	if err != nil {
@@ -112,7 +112,7 @@ func TestApply_Present_IdempotentWhenIdentical(t *testing.T) {
 		t.Fatalf("Apply: %v", err)
 	}
 	if stream.Last().Changed {
-		t.Fatal("Changed=true для identical cron-job")
+		t.Fatal("Changed=true for an identical cron-job")
 	}
 }
 
@@ -135,7 +135,7 @@ func TestApply_Present_ChangesOnScheduleDiff(t *testing.T) {
 		t.Fatalf("Apply: %v", err)
 	}
 	if !stream.Last().Changed {
-		t.Fatal("Changed=false при diff schedule")
+		t.Fatal("Changed=false with a different schedule")
 	}
 }
 
@@ -154,10 +154,10 @@ func TestApply_Absent_RemovesIfExists(t *testing.T) {
 		t.Fatalf("Apply: %v", err)
 	}
 	if !stream.Last().Changed {
-		t.Fatal("Changed=false при удалении существующего")
+		t.Fatal("Changed=false when removing an existing one")
 	}
 	if _, err := os.Stat(path); !os.IsNotExist(err) {
-		t.Fatalf("файл не удалён: err=%v", err)
+		t.Fatalf("file was not removed: err=%v", err)
 	}
 }
 
@@ -172,7 +172,7 @@ func TestApply_Absent_MissingIsNoOp(t *testing.T) {
 		t.Fatalf("Apply: %v", err)
 	}
 	if stream.Last().Changed {
-		t.Fatal("Changed=true для отсутствующего absent")
+		t.Fatal("Changed=true for an already-absent entry")
 	}
 }
 
@@ -189,6 +189,6 @@ func TestApply_RejectsInvalidName(t *testing.T) {
 		}),
 	}, stream)
 	if !stream.Last().Failed {
-		t.Fatal("Failed=false при невалидном имени job")
+		t.Fatal("Failed=false with an invalid job name")
 	}
 }

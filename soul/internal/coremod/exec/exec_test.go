@@ -91,10 +91,10 @@ func TestApply_Run_NonZeroExit_NotFailed(t *testing.T) {
 	}
 	ev := stream.Last()
 	if ev.Failed {
-		t.Fatal("Failed=true для non-zero exit; должно проходить, пользователь решает через failed_when")
+		t.Fatal("Failed=true for non-zero exit; should pass through, the user decides via failed_when")
 	}
 	if !ev.Changed {
-		t.Fatal("Changed=false для запущенной команды")
+		t.Fatal("Changed=false for a run command")
 	}
 	if ev.Output.Fields["exit_code"].GetNumberValue() != 1 {
 		t.Fatalf("exit_code=%v want 1", ev.Output.Fields["exit_code"].GetNumberValue())
@@ -123,14 +123,14 @@ func TestApply_Creates_SkipsIfFileExists(t *testing.T) {
 	}
 	ev := stream.Last()
 	if ev.Changed {
-		t.Fatal("Changed=true при creates: файл существует")
+		t.Fatal("Changed=true when creates: file exists")
 	}
 	if ev.Output.Fields["reason"].GetStringValue() != "creates" {
 		t.Fatalf("reason=%q want creates", ev.Output.Fields["reason"].GetStringValue())
 	}
 	for _, c := range r.Calls {
 		if c == "touch /tmp/marker" {
-			t.Fatalf("неожиданный вызов основной команды при creates-skip")
+			t.Fatalf("unexpected call of the main command on creates-skip")
 		}
 	}
 }
@@ -152,7 +152,7 @@ func TestApply_Unless_SkipsIfExitZero(t *testing.T) {
 		t.Fatalf("Apply: %v", err)
 	}
 	if stream.Last().Changed {
-		t.Fatal("Changed=true при unless+exit=0")
+		t.Fatal("Changed=true with unless+exit=0")
 	}
 }
 
@@ -173,7 +173,7 @@ func TestApply_Onlyif_SkipsIfExitNonZero(t *testing.T) {
 		t.Fatalf("Apply: %v", err)
 	}
 	if stream.Last().Changed {
-		t.Fatal("Changed=true при onlyif+exit≠0")
+		t.Fatal("Changed=true with onlyif+exit!=0")
 	}
 }
 
@@ -200,7 +200,7 @@ func TestApply_PassesCwdAndEnv(t *testing.T) {
 		t.Fatalf("changed=%v failed=%v", ev.Changed, ev.Failed)
 	}
 	if ev.Output.Fields["stdout"].GetStringValue() != "ok" {
-		t.Fatalf("stdout=%q (cwd/env не пробросились в Runner)", ev.Output.Fields["stdout"].GetStringValue())
+		t.Fatalf("stdout=%q (cwd/env were not propagated to the Runner)", ev.Output.Fields["stdout"].GetStringValue())
 	}
 }
 
@@ -212,6 +212,6 @@ func TestApply_MissingCmd_Fails(t *testing.T) {
 		Params: mustStruct(t, map[string]any{}),
 	}, stream)
 	if !stream.Last().Failed {
-		t.Fatal("Failed=false для missing cmd")
+		t.Fatal("Failed=false for a missing cmd")
 	}
 }

@@ -119,7 +119,7 @@ func TestMetaRoutes_Public_200(t *testing.T) {
 		req := httptest.NewRequest(http.MethodGet, path, http.NoBody) // NO Authorization header
 		r.ServeHTTP(rec, req)
 		if rec.Code != http.StatusOK {
-			t.Errorf("GET %s БЕЗ JWT = %d, want 200 (публичный meta-роут); body=%s",
+			t.Errorf("GET %s WITHOUT JWT = %d, want 200 (public meta route); body=%s",
 				path, rec.Code, rec.Body.String())
 		}
 	}
@@ -136,7 +136,7 @@ func TestMetaRoutes_OpenAPI_RequiresJWT(t *testing.T) {
 	reqNoAuth := httptest.NewRequest(http.MethodGet, "/openapi.yaml", http.NoBody)
 	r.ServeHTTP(recNoAuth, reqNoAuth)
 	if recNoAuth.Code != http.StatusUnauthorized {
-		t.Fatalf("GET /openapi.yaml БЕЗ JWT = %d, want 401 (спека за JWT, механfromм A); body=%s",
+		t.Fatalf("GET /openapi.yaml WITHOUT JWT = %d, want 401 (spec behind JWT, mechanism A); body=%s",
 			recNoAuth.Code, recNoAuth.Body.String())
 	}
 
@@ -147,18 +147,18 @@ func TestMetaRoutes_OpenAPI_RequiresJWT(t *testing.T) {
 	r.ServeHTTP(recAuth, reqAuth)
 
 	if recAuth.Code != http.StatusOK {
-		t.Fatalf("GET /openapi.yaml с валидным JWT = %d, want 200; body=%s", recAuth.Code, recAuth.Body.String())
+		t.Fatalf("GET /openapi.yaml with a valid JWT = %d, want 200; body=%s", recAuth.Code, recAuth.Body.String())
 	}
 	if ct := recAuth.Header().Get("Content-Type"); ct != "application/yaml; charset=utf-8" {
 		t.Errorf("Content-Type = %q, want application/yaml; charset=utf-8", ct)
 	}
 	if recAuth.Body.Len() == 0 {
-		t.Fatal("body /openapi.yaml пусто — huma-дамп не отдан")
+		t.Fatal("body /openapi.yaml is empty - huma dump not served")
 	}
 	// huma sorts top-level keys alphabetically — `openapi:` need not come first;
 	// we check the version as a substring (3.1 vs the former 3.0.3 hand-written spec).
 	if !strings.Contains(recAuth.Body.String(), "openapi: 3.1") {
-		t.Error("served-спека не withдержит `openapi: 3.1` — версия дампа не 3.1")
+		t.Error("served spec does not contain `openapi: 3.1` - dump version is not 3.1")
 	}
 }
 
@@ -187,11 +187,11 @@ func TestMetaRoutes_Docs_ShellAndAssets(t *testing.T) {
 		"sessionStorage",              // XSS hygiene (not localStorage)
 	} {
 		if !strings.Contains(body, marker) {
-			t.Errorf("/docs shell не withдержит ожидаемый маркер %q", marker)
+			t.Errorf("/docs shell does not contain the expected marker %q", marker)
 		}
 	}
 	if strings.Contains(body, "localStorage") {
-		t.Error("/docs использует localStorage — XSS-гигиеon требует sessionStorage")
+		t.Error("/docs uses localStorage - XSS hygiene requires sessionStorage")
 	}
 
 	// (2) The embedded asset — public, non-empty, correct JS Content-Type.
@@ -201,7 +201,7 @@ func TestMetaRoutes_Docs_ShellAndAssets(t *testing.T) {
 		t.Fatalf("GET /docs/assets/rapidoc-min.js = %d, want 200", recAsset.Code)
 	}
 	if recAsset.Body.Len() == 0 {
-		t.Error("вшитый ассет rapidoc-min.js пуст — go:embed не onполнен?")
+		t.Error("embedded asset rapidoc-min.js is empty - go:embed not filled in?")
 	}
 }
 
@@ -216,7 +216,7 @@ func TestMetaRoutes_OpenAPIJSON_RequiresJWT(t *testing.T) {
 	recNoAuth := httptest.NewRecorder()
 	r.ServeHTTP(recNoAuth, httptest.NewRequest(http.MethodGet, "/openapi.json", http.NoBody))
 	if recNoAuth.Code != http.StatusUnauthorized {
-		t.Fatalf("GET /openapi.json БЕЗ JWT = %d, want 401 (спека за JWT, механfromм A); body=%s",
+		t.Fatalf("GET /openapi.json WITHOUT JWT = %d, want 401 (spec behind JWT, mechanism A); body=%s",
 			recNoAuth.Code, recNoAuth.Body.String())
 	}
 
@@ -227,17 +227,17 @@ func TestMetaRoutes_OpenAPIJSON_RequiresJWT(t *testing.T) {
 	r.ServeHTTP(recAuth, reqAuth)
 
 	if recAuth.Code != http.StatusOK {
-		t.Fatalf("GET /openapi.json с валидным JWT = %d, want 200; body=%s", recAuth.Code, recAuth.Body.String())
+		t.Fatalf("GET /openapi.json with a valid JWT = %d, want 200; body=%s", recAuth.Code, recAuth.Body.String())
 	}
 	if ct := recAuth.Header().Get("Content-Type"); ct != "application/json; charset=utf-8" {
 		t.Errorf("Content-Type = %q, want application/json; charset=utf-8", ct)
 	}
 	if recAuth.Body.Len() == 0 {
-		t.Fatal("body /openapi.json пусто — huma-дамп не отдан")
+		t.Fatal("body /openapi.json is empty - huma dump not served")
 	}
 	// JSON form 3.1: the version is quoted as the value of the "openapi" key.
 	if !strings.Contains(recAuth.Body.String(), `"openapi":"3.1`) {
-		t.Error("served-JSON-спека не withдержит `\"openapi\":\"3.1` — версия дампа не 3.1")
+		t.Error("served JSON spec does not contain `\"openapi\":\"3.1` - dump version is not 3.1")
 	}
 }
 
@@ -253,15 +253,15 @@ func TestMetaRoutes_OpenAPIJSON_RequiresJWT(t *testing.T) {
 // A global ban would false-positive on that correct fetch string.
 func TestDocsShell_SetApiKey_CleanJWT(t *testing.T) {
 	if !strings.Contains(docsPage, "setApiKey('bearerAuth', jwt)") {
-		t.Error("docsPage не зовёт setApiKey('bearerAuth', jwt) с ЧИСТЫМ jwt — Try It не получит токен")
+		t.Error("docsPage does not call setApiKey('bearerAuth', jwt) with a CLEAN jwt - Try It will not get the token")
 	}
 	// RapiDoc itself prefixes 'Bearer ' for http/bearer; a manual prefix in
 	// setApiKey = a double Bearer.
 	if strings.Contains(docsPage, "setApiKey('bearerAuth', 'Bearer") {
-		t.Error("docsPage переgives в setApiKey already Bearer-префикwithванный литерал — двойbutй префикс ломает Try It")
+		t.Error("docsPage passes an already Bearer-prefixed literal to setApiKey - double prefix breaks Try It")
 	}
 	if strings.Contains(docsPage, "setApiKey('bearerAuth', 'Bearer ' + jwt") {
-		t.Error("docsPage склеивает 'Bearer ' + jwt в setApiKey — RapiDoc toбавит свой префикс, выйдет двойbutй Bearer")
+		t.Error("docsPage concatenates 'Bearer ' + jwt in setApiKey - RapiDoc will add its own prefix, resulting in double Bearer")
 	}
 }
 
@@ -271,13 +271,13 @@ func TestDocsShell_SetApiKey_CleanJWT(t *testing.T) {
 // Goes RED if someone returns loadSpec(string)/resp.text().
 func TestDocsShell_LoadSpec_Object(t *testing.T) {
 	if !strings.Contains(docsPage, "loadSpec(specObj)") {
-		t.Error("docsPage не зовёт loadSpec(specObj) — RapiDoc.loadSpec(string) трактует её as spec-URL (фетч без Bearer → 401)")
+		t.Error("docsPage does not call loadSpec(specObj) - RapiDoc.loadSpec(string) treats it as a spec URL (fetch without Bearer -> 401)")
 	}
 	if !strings.Contains(docsPage, "resp.json()") {
-		t.Error("docsPage не парсит resp.json() — loadSpec нalreadyн ОБЪЕКТ, не сырой текст спеки")
+		t.Error("docsPage does not parse resp.json() - loadSpec needs an OBJECT, not the raw spec text")
 	}
 	if strings.Contains(docsPage, "resp.text()") {
-		t.Error("docsPage читает resp.text() — loadSpec(string)=spec-URL → фетч без Bearer → 401")
+		t.Error("docsPage reads resp.text() - loadSpec(string)=spec-URL -> fetch without Bearer -> 401")
 	}
 }
 
@@ -303,18 +303,18 @@ func TestServedSpec_YAML_JSON_SameSourceOfTruth(t *testing.T) {
 	// float64, YAML — int) before comparing.
 	var fromYAML map[string]any
 	if err := yaml.Unmarshal(yamlBytes, &fromYAML); err != nil {
-		t.Fatalf("разбор YAML-спеки: %v", err)
+		t.Fatalf("parsing YAML spec: %v", err)
 	}
 	var fromJSON map[string]any
 	if err := json.Unmarshal(jsonBytes, &fromJSON); err != nil {
-		t.Fatalf("разбор JSON-спеки: %v", err)
+		t.Fatalf("parsing JSON spec: %v", err)
 	}
 
 	normalizeNumbers(fromYAML)
 	normalizeNumbers(fromJSON)
 
 	if !reflect.DeepEqual(fromYAML, fromJSON) {
-		t.Error("YAML- и JSON-served-спеки структурbut расходятся — onрушен единый source-of-truth (buildFullOpenAPISpec)")
+		t.Error("YAML and JSON served specs diverge structurally - single source-of-truth violated (buildFullOpenAPISpec)")
 	}
 }
 

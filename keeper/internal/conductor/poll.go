@@ -46,7 +46,7 @@ func AdaptivePollInterval(
 	mp, err := fetcher.SelectMinPeriod(ctx)
 	if err != nil {
 		if logger != nil {
-			logger.Warn("conductor: derivedMinPeriod query failed — fallback на poll_ceiling",
+			logger.Warn("conductor: derivedMinPeriod query failed — falling back to poll_ceiling",
 				slog.Duration("poll_ceiling", c.Ceiling), slog.Any("error", err))
 		}
 		return c.Ceiling

@@ -36,14 +36,14 @@ func TestSigilRecordsToProto_MapsManifestRaw(t *testing.T) {
 		t.Errorf("manifest = %q, want byte-equal ManifestRaw %q", p.GetManifest(), recs[0].ManifestRaw)
 	}
 	if bytes.Equal(p.GetManifest(), recs[0].Manifest) {
-		t.Errorf("manifest равен JSONB-проекции — должно быть ManifestRaw")
+		t.Errorf("manifest equals JSONB projection - should be ManifestRaw")
 	}
 }
 
 func TestStreamManager_SIDs(t *testing.T) {
 	m := NewStreamManager(discardLogger(t))
 	if got := m.SIDs(); len(got) != 0 {
-		t.Fatalf("пустой менеджер: SIDs = %v, want []", got)
+		t.Fatalf("empty manager: SIDs = %v, want []", got)
 	}
 
 	chA := m.Register("sid-a")
@@ -58,7 +58,7 @@ func TestStreamManager_SIDs(t *testing.T) {
 	m.Unregister("sid-a", chA)
 	got = m.SIDs()
 	if len(got) != 1 || got[0] != "sid-b" {
-		t.Fatalf("после Unregister SIDs = %v, want [sid-b]", got)
+		t.Fatalf("after Unregister SIDs = %v, want [sid-b]", got)
 	}
 	_ = chB
 }
@@ -78,7 +78,7 @@ func TestOutbound_RebroadcastSigils_AllLocalStreams(t *testing.T) {
 
 	delivered := ob.RebroadcastSigils(context.Background(), set)
 	if delivered != 2 {
-		t.Fatalf("delivered = %d, want 2 (оба Soul-а)", delivered)
+		t.Fatalf("delivered = %d, want 2 (both Souls)", delivered)
 	}
 
 	for name, out := range map[string]<-chan *keeperv1.FromKeeper{"sid-a": outA, "sid-b": outB} {
@@ -92,12 +92,12 @@ func TestOutbound_RebroadcastSigils_AllLocalStreams(t *testing.T) {
 				t.Fatalf("%s: snapshot sigils = %d, want %d", name, len(snap.GetSigils()), len(set))
 			}
 		default:
-			t.Fatalf("%s: ожидался один SigilSnapshot, канал пуст", name)
+			t.Fatalf("%s: expected a single SigilSnapshot, channel empty", name)
 		}
 		// There should be nothing else in the channel — exactly one snapshot per stream.
 		select {
 		case extra := <-out:
-			t.Fatalf("%s: лишнее сообщение после snapshot: %T", name, extra.GetPayload())
+			t.Fatalf("%s: extra message after snapshot: %T", name, extra.GetPayload())
 		default:
 		}
 	}
@@ -125,7 +125,7 @@ func TestOutbound_RebroadcastSigils_EmptySet(t *testing.T) {
 			t.Fatalf("empty re-broadcast snapshot sigils = %d, want 0", len(snap.GetSigils()))
 		}
 	default:
-		t.Fatal("пустой набор должен слать пустой snapshot (ReplaceAll-стирание), канал пуст")
+		t.Fatal("an empty set should send an empty snapshot (ReplaceAll erasure), channel empty")
 	}
 }
 

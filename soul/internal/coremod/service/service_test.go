@@ -367,13 +367,13 @@ func TestApply_InitFromFact_NoDetect(t *testing.T) {
 		t.Fatalf("Apply: %v", err)
 	}
 	if stream.Last().Failed {
-		t.Fatalf("failed=true: факт init_system=openrc должен миновать детект, msg=%q", stream.Last().Message)
+		t.Fatalf("failed=true: fact init_system=openrc must bypass detection, msg=%q", stream.Last().Message)
 	}
 	if !stream.Last().Changed {
-		t.Fatal("changed=false: остановленный сервис должен стартовать")
+		t.Fatal("changed=false: a stopped service must start")
 	}
 	if hasCall(r, "rc-service --version") {
-		t.Fatalf("факт primary: detection не должен вызываться, calls=%v", r.Calls)
+		t.Fatalf("primary fact: detection must not be called, calls=%v", r.Calls)
 	}
 }
 
@@ -396,10 +396,10 @@ func TestApply_FactEmpty_FallbackDetect(t *testing.T) {
 		t.Fatalf("Apply: %v", err)
 	}
 	if stream.Last().Failed {
-		t.Fatalf("failed=true: fallback-детект openrc должен сработать, msg=%q", stream.Last().Message)
+		t.Fatalf("failed=true: fallback detection of openrc must trigger, msg=%q", stream.Last().Message)
 	}
 	if !hasCall(r, "rc-service --version") {
-		t.Fatalf("пустой факт: ожидался fallback-детект, calls=%v", r.Calls)
+		t.Fatalf("empty fact: expected fallback detection, calls=%v", r.Calls)
 	}
 }
 
@@ -563,7 +563,7 @@ func TestPlan_Restarted_AlwaysDrift(t *testing.T) {
 		t.Fatalf("Plan: %v", err)
 	}
 	if got := stream.last(); got == nil || !got.GetChanged() {
-		t.Fatalf("changed=false, want true (restarted всегда drift)")
+		t.Fatalf("changed=false, want true (restarted is always drift)")
 	}
 	assertNoMutatingSvcCalls(t, r)
 }
@@ -596,7 +596,7 @@ func assertNoMutatingSvcCalls(t *testing.T, r *internaltest.Runner) {
 			"service redis", "chkconfig redis",
 		} {
 			if strings.HasPrefix(c, bad) {
-				t.Fatalf("Plan вызвал мутирующую команду %q (должен быть pure-read)", c)
+				t.Fatalf("Plan called a mutating command %q (must be pure-read)", c)
 			}
 		}
 	}
@@ -1168,10 +1168,10 @@ func TestApply_Restarted_DaemonReloadAuto_NeedYes_ReloadsBeforeRestart(t *testin
 	}
 	ri, xi := indexOf(r.Calls, cmdDaemonReload), indexOf(r.Calls, cmdRestart)
 	if ri < 0 || xi < 0 {
-		t.Fatalf("ожидались daemon-reload и restart, calls=%v", r.Calls)
+		t.Fatalf("expected daemon-reload and restart, calls=%v", r.Calls)
 	}
 	if ri >= xi {
-		t.Fatalf("daemon-reload должен идти ПЕРЕД restart: reload@%d restart@%d calls=%v", ri, xi, r.Calls)
+		t.Fatalf("daemon-reload must come BEFORE restart: reload@%d restart@%d calls=%v", ri, xi, r.Calls)
 	}
 	// reload doesn't mark the step changed beyond the usual restarted=true (contract).
 	if !stream.Last().Changed {
@@ -1198,14 +1198,14 @@ func TestApply_Restarted_DaemonReloadAuto_NeedNo_NoReload(t *testing.T) {
 		t.Fatalf("Apply: %v", err)
 	}
 	if contains(r.Calls, cmdDaemonReload) {
-		t.Fatalf("daemon-reload не должен вызываться при NeedDaemonReload=no, calls=%v", r.Calls)
+		t.Fatalf("daemon-reload must not be called when NeedDaemonReload=no, calls=%v", r.Calls)
 	}
 	if !contains(r.Calls, cmdRestart) {
-		t.Fatalf("restart не вызван, calls=%v", r.Calls)
+		t.Fatalf("restart not called, calls=%v", r.Calls)
 	}
 	// reloaded is absent from output when reload wasn't performed.
 	if _, ok := stream.Last().GetOutput().AsMap()["reloaded"]; ok {
-		t.Fatalf("output[reloaded] не должен присутствовать без reload: %v", stream.Last().GetOutput().AsMap())
+		t.Fatalf("output[reloaded] must not be present without reload: %v", stream.Last().GetOutput().AsMap())
 	}
 }
 
@@ -1226,11 +1226,11 @@ func TestApply_Restarted_DaemonReloadAlways_AlwaysReloads(t *testing.T) {
 		t.Fatalf("Apply: %v", err)
 	}
 	if contains(r.Calls, cmdShowNeedReload) {
-		t.Fatalf("always: systemctl show NeedDaemonReload не должен вызываться, calls=%v", r.Calls)
+		t.Fatalf("always: systemctl show NeedDaemonReload must not be called, calls=%v", r.Calls)
 	}
 	ri, xi := indexOf(r.Calls, cmdDaemonReload), indexOf(r.Calls, cmdRestart)
 	if ri < 0 || ri >= xi {
-		t.Fatalf("always: daemon-reload перед restart, reload@%d restart@%d calls=%v", ri, xi, r.Calls)
+		t.Fatalf("always: daemon-reload before restart, reload@%d restart@%d calls=%v", ri, xi, r.Calls)
 	}
 }
 
@@ -1249,13 +1249,13 @@ func TestApply_Restarted_DaemonReloadNever_NoReload(t *testing.T) {
 		t.Fatalf("Apply: %v", err)
 	}
 	if contains(r.Calls, cmdDaemonReload) {
-		t.Fatalf("never: daemon-reload не должен вызываться, calls=%v", r.Calls)
+		t.Fatalf("never: daemon-reload must not be called, calls=%v", r.Calls)
 	}
 	if contains(r.Calls, cmdShowNeedReload) {
-		t.Fatalf("never: systemctl show не должен вызываться, calls=%v", r.Calls)
+		t.Fatalf("never: systemctl show must not be called, calls=%v", r.Calls)
 	}
 	if !contains(r.Calls, cmdRestart) {
-		t.Fatalf("never: restart не вызван, calls=%v", r.Calls)
+		t.Fatalf("never: restart not called, calls=%v", r.Calls)
 	}
 }
 
@@ -1277,10 +1277,10 @@ func TestApply_Running_DaemonReloadAuto_NeedYes_ReloadsBeforeStart(t *testing.T)
 	}
 	ri, si := indexOf(r.Calls, cmdDaemonReload), indexOf(r.Calls, "systemctl start redis")
 	if ri < 0 || si < 0 || ri >= si {
-		t.Fatalf("running: daemon-reload перед start, reload@%d start@%d calls=%v", ri, si, r.Calls)
+		t.Fatalf("running: daemon-reload before start, reload@%d start@%d calls=%v", ri, si, r.Calls)
 	}
 	if !stream.Last().Changed {
-		t.Fatal("running: changed=false при старте")
+		t.Fatal("running: changed=false on start")
 	}
 }
 
@@ -1301,10 +1301,10 @@ func TestApply_Running_DaemonReloadAuto_ReloadDoesNotMarkChanged(t *testing.T) {
 		t.Fatalf("Apply: %v", err)
 	}
 	if !contains(r.Calls, cmdDaemonReload) {
-		t.Fatalf("reload должен был выполниться, calls=%v", r.Calls)
+		t.Fatalf("reload should have executed, calls=%v", r.Calls)
 	}
 	if stream.Last().Changed {
-		t.Fatal("changed=true из-за reload на уже-активном сервисе — reload не должен влиять на changed")
+		t.Fatal("changed=true due to reload on an already-active service - reload must not affect changed")
 	}
 	if v, ok := stream.Last().GetOutput().AsMap()["reloaded"]; !ok || v != true {
 		t.Fatalf("output[reloaded] != true: %v", stream.Last().GetOutput().AsMap())
@@ -1329,7 +1329,7 @@ func TestApply_Enabled_DaemonReloadAuto_NeedYes_ReloadsBeforeEnable(t *testing.T
 	}
 	ri, ei := indexOf(r.Calls, cmdDaemonReload), indexOf(r.Calls, "systemctl enable redis")
 	if ri < 0 || ei < 0 || ri >= ei {
-		t.Fatalf("enabled: daemon-reload перед enable, reload@%d enable@%d calls=%v", ri, ei, r.Calls)
+		t.Fatalf("enabled: daemon-reload before enable, reload@%d enable@%d calls=%v", ri, ei, r.Calls)
 	}
 }
 
@@ -1347,10 +1347,10 @@ func TestApply_OpenRC_DaemonReloadAlways_NoOp(t *testing.T) {
 		t.Fatalf("Apply: %v", err)
 	}
 	if contains(r.Calls, cmdDaemonReload) {
-		t.Fatalf("openrc: daemon-reload не должен вызываться (no-op), calls=%v", r.Calls)
+		t.Fatalf("openrc: daemon-reload must not be called (no-op), calls=%v", r.Calls)
 	}
 	if !contains(r.Calls, "rc-service redis restart") {
-		t.Fatalf("openrc restart не вызван, calls=%v", r.Calls)
+		t.Fatalf("openrc restart not called, calls=%v", r.Calls)
 	}
 }
 
@@ -1373,7 +1373,7 @@ func TestApply_Stopped_DaemonReload_NotInvoked(t *testing.T) {
 		t.Fatalf("Apply: %v", err)
 	}
 	if contains(r.Calls, cmdDaemonReload) || contains(r.Calls, cmdShowNeedReload) {
-		t.Fatalf("stopped не должен трогать daemon-reload, calls=%v", r.Calls)
+		t.Fatalf("stopped must not touch daemon-reload, calls=%v", r.Calls)
 	}
 }
 
@@ -1385,7 +1385,7 @@ func TestValidate_DaemonReload_UnknownValue_Fails(t *testing.T) {
 		Params: mustStruct(t, map[string]any{"name": "redis", "daemon_reload": "reload-pls"}),
 	})
 	if reply.Ok {
-		t.Fatal("Validate daemon_reload=reload-pls: ok=true (должно быть отклонено)")
+		t.Fatal("Validate daemon_reload=reload-pls: ok=true (should be rejected)")
 	}
 }
 
@@ -1428,14 +1428,14 @@ func TestApply_Restarted_DaemonReloadAuto_ShowNonZeroExit_NoReload_NoFail(t *tes
 	}
 	// The step does NOT fail: non-zero exit from show means "reload not needed", not an error.
 	if stream.Last().Failed {
-		t.Fatalf("show exit≠0 не должен фейлить шаг (текущее поведение): %s", stream.Last().Message)
+		t.Fatalf("show exit!=0 must not fail the step (current behavior): %s", stream.Last().Message)
 	}
 	// reload wasn't performed → restart still happened (restarted is always changed).
 	if contains(r.Calls, cmdDaemonReload) {
-		t.Fatalf("reload не должен делаться при show!=\"yes\", calls=%v", r.Calls)
+		t.Fatalf("reload must not happen when show!=\"yes\", calls=%v", r.Calls)
 	}
 	if !contains(r.Calls, cmdRestart) {
-		t.Fatalf("restart не вызван, calls=%v", r.Calls)
+		t.Fatalf("restart not called, calls=%v", r.Calls)
 	}
 	if !stream.Last().Changed {
 		t.Fatal("restarted: changed=false")
@@ -1455,7 +1455,7 @@ func TestDaemonReload_NonString_RejectedBothPaths(t *testing.T) {
 		Params: params,
 	})
 	if reply.Ok {
-		t.Fatal("Validate daemon_reload=7 (число): ok=true (должно быть отклонено)")
+		t.Fatal("Validate daemon_reload=7 (number): ok=true (should be rejected)")
 	}
 
 	// Apply: Failed on the same parser, no mutations (restart is NOT called).
@@ -1465,10 +1465,10 @@ func TestDaemonReload_NonString_RejectedBothPaths(t *testing.T) {
 	stream := &internaltest.ApplyStream{}
 	_ = mm.Apply(&pluginv1.ApplyRequest{State: "restarted", Params: params}, stream)
 	if !stream.Last().Failed {
-		t.Fatal("Apply daemon_reload=7: failed=false (должно падать на парсере)")
+		t.Fatal("Apply daemon_reload=7: failed=false (should fail at the parser)")
 	}
 	if contains(r.Calls, cmdRestart) || contains(r.Calls, cmdDaemonReload) {
-		t.Fatalf("non-string daemon_reload не должен доходить до мутаций, calls=%v", r.Calls)
+		t.Fatalf("non-string daemon_reload must not reach mutations, calls=%v", r.Calls)
 	}
 }
 
@@ -1489,10 +1489,10 @@ func TestApply_Restarted_DaemonReloadCommandFails_NoRestart(t *testing.T) {
 		Params: mustStruct(t, map[string]any{"name": "redis"}),
 	}, stream)
 	if !stream.Last().Failed {
-		t.Fatal("daemon-reload exit≠0 должен фейлить шаг")
+		t.Fatal("daemon-reload exit!=0 should fail the step")
 	}
 	if contains(r.Calls, cmdRestart) {
-		t.Fatalf("restart НЕ должен вызываться после фейла daemon-reload (иначе рестарт со старым unit-ом), calls=%v", r.Calls)
+		t.Fatalf("restart must NOT be called after a daemon-reload failure (otherwise restart with a stale unit), calls=%v", r.Calls)
 	}
 }
 
@@ -1511,9 +1511,9 @@ func TestApply_Restarted_DaemonReloadCommandProcessError_NoRestart(t *testing.T)
 		Params: mustStruct(t, map[string]any{"name": "redis"}),
 	}, stream)
 	if !stream.Last().Failed {
-		t.Fatal("daemon-reload process-error должен фейлить шаг")
+		t.Fatal("daemon-reload process-error should fail the step")
 	}
 	if contains(r.Calls, cmdRestart) {
-		t.Fatalf("restart НЕ должен вызываться после Err daemon-reload, calls=%v", r.Calls)
+		t.Fatalf("restart must NOT be called after Err daemon-reload, calls=%v", r.Calls)
 	}
 }

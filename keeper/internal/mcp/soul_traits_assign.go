@@ -68,7 +68,7 @@ func (h *Handler) callSoulTraitsAssign(ctx context.Context, claims *jwt.Claims, 
 	// per-incarnation (keeper.incarnation.traits-set). Per-soul writes get
 	// overwritten by the incarnation.traits projection. Tool kept for
 	// forward-compat; the call is logged as a signal.
-	h.deps.Logger.Warn("mcp: soul.traits-assign DEPRECATED per-soul trait-write (ADR-060) — используйте keeper.incarnation.traits-set",
+	h.deps.Logger.Warn("mcp: soul.traits-assign DEPRECATED per-soul trait-write (ADR-060) — use keeper.incarnation.traits-set",
 		slog.String("by_aid", claims.Subject))
 
 	if h.deps.SoulDB == nil {

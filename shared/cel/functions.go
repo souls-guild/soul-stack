@@ -103,7 +103,7 @@ func guardUnsupported(expr string, vaultEnabled bool) error {
 		}
 	}
 	if internalIdentGuard.MatchString(stripStringLiterals(expr)) {
-		return &ErrUnsupported{Expr: expr, Feature: "идентификатор с префиксом '__' (зарезервирован за internal-механизмами CEL)"}
+		return &ErrUnsupported{Expr: expr, Feature: "identifier with prefix '__' (reserved for internal CEL mechanisms)"}
 	}
 	if !vaultEnabled && vaultGuard.MatchString(expr) {
 		return &ErrUnsupported{Expr: expr, Feature: "vault(...)"}

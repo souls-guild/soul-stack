@@ -56,10 +56,10 @@ func TestHTTPUnhealthyHealthy(t *testing.T) {
 		t.Fatalf("state = %q, want healthy", state)
 	}
 	if int(data.GetFields()["status"].GetNumberValue()) != 200 {
-		t.Error("data.status должно нести статус-код")
+		t.Error("data.status should carry the status code")
 	}
 	if _, hasBody := data.GetFields()["body"]; hasBody {
-		t.Error("data НЕ должно нести тело ответа (sensitive)")
+		t.Error("data should NOT carry the response body (sensitive)")
 	}
 }
 
@@ -72,10 +72,10 @@ func TestHTTPUnhealthyBadStatus(t *testing.T) {
 		t.Fatalf("Check: %v", err)
 	}
 	if state != stateHTTPUnhealthy {
-		t.Fatalf("state = %q, want unhealthy (503 вне [200])", state)
+		t.Fatalf("state = %q, want unhealthy (503 outside [200])", state)
 	}
 	if int(data.GetFields()["status"].GetNumberValue()) != 503 {
-		t.Error("data.status должно нести фактический код 503")
+		t.Error("data.status should carry the actual code 503")
 	}
 }
 
@@ -101,13 +101,13 @@ func TestHTTPUnhealthyTransportError(t *testing.T) {
 		"url": "https://down.internal/healthz",
 	}))
 	if err != nil {
-		t.Fatalf("Check при транспортной ошибке не должен возвращать ошибку: %v", err)
+		t.Fatalf("Check should not return an error on a transport error: %v", err)
 	}
 	if state != stateHTTPUnhealthy {
 		t.Fatalf("state = %q, want unhealthy", state)
 	}
 	if int(data.GetFields()["status"].GetNumberValue()) != 0 {
-		t.Error("data.status при транспортной ошибке должно быть 0")
+		t.Error("data.status should be 0 on a transport error")
 	}
 }
 
@@ -117,14 +117,14 @@ func TestHTTPUnhealthyRejectsHTTP(t *testing.T) {
 	if _, _, err := b.Check(context.Background(), paramStruct(t, map[string]any{
 		"url": "http://service.internal/healthz",
 	})); err == nil {
-		t.Fatal("ожидали ошибку при http:// (https-only)")
+		t.Fatal("expected an error for http:// (https-only)")
 	}
 }
 
 func TestHTTPUnhealthyMissingURL(t *testing.T) {
 	b := newHTTPUnhealthy(&fakeDoer{status: 200})
 	if _, _, err := b.Check(context.Background(), paramStruct(t, map[string]any{})); err == nil {
-		t.Fatal("ожидали ошибку при отсутствии param url")
+		t.Fatal("expected an error when the url param is missing")
 	}
 }
 
@@ -145,16 +145,16 @@ func TestHTTPUnhealthyAllowHTTP(t *testing.T) {
 		"allow_http": true,
 	}))
 	if err != nil {
-		t.Fatalf("Check при allow_http:true не должен падать на http://: %v", err)
+		t.Fatalf("Check with allow_http:true should not fail on http://: %v", err)
 	}
 	if state != stateHTTPHealthy {
 		t.Fatalf("state = %q, want healthy", state)
 	}
 	if !got.AllowHTTPRedirect {
-		t.Fatal("allow_http не доехал до фабрики как AllowHTTPRedirect")
+		t.Fatal("allow_http did not reach the factory as AllowHTTPRedirect")
 	}
 	if got.AllowPrivate || got.InsecureSkipVerify {
-		t.Fatalf("allow_http задел чужой контур: %+v", got)
+		t.Fatalf("allow_http affected an unrelated circuit: %+v", got)
 	}
 }
 
@@ -169,7 +169,7 @@ func TestHTTPUnhealthyAllowPrivateLoopback(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	t.Run("allow_private+insecure -> dial проходит -> healthy", func(t *testing.T) {
+	t.Run("allow_private+insecure -> dial passes -> healthy", func(t *testing.T) {
 		var got util.HTTPClientOpts
 		b := newHTTPUnhealthyCapturing(&got)
 		state, data, err := b.Check(context.Background(), paramStruct(t, map[string]any{
@@ -181,17 +181,17 @@ func TestHTTPUnhealthyAllowPrivateLoopback(t *testing.T) {
 			t.Fatalf("Check: %v", err)
 		}
 		if state != stateHTTPHealthy {
-			t.Fatalf("state = %q, want healthy (loopback при allow_private)", state)
+			t.Fatalf("state = %q, want healthy (loopback with allow_private)", state)
 		}
 		if int(data.GetFields()["status"].GetNumberValue()) != 200 {
 			t.Errorf("status = %v, want 200", data.GetFields()["status"].GetNumberValue())
 		}
 		if !got.AllowPrivate || !got.InsecureSkipVerify {
-			t.Fatalf("opts не доехали до фабрики: %+v", got)
+			t.Fatalf("opts did not reach the factory: %+v", got)
 		}
 	})
 
-	t.Run("default -> SSRF-guard блокирует loopback -> unhealthy", func(t *testing.T) {
+	t.Run("default -> SSRF-guard blocks loopback -> unhealthy", func(t *testing.T) {
 		// Without allow_private, dialing 127.0.0.1 is rejected by netguard →
 		// transport error → unhealthy (status 0), not a Check error.
 		b := NewHTTPUnhealthy() // production factory, zero opts
@@ -200,13 +200,13 @@ func TestHTTPUnhealthyAllowPrivateLoopback(t *testing.T) {
 			"insecure_skip_verify": true, // isolate the SSRF contour specifically, not TLS
 		}))
 		if err != nil {
-			t.Fatalf("Check при заблокированном dial не должен падать: %v", err)
+			t.Fatalf("Check should not fail when dial is blocked: %v", err)
 		}
 		if state != stateHTTPUnhealthy {
-			t.Fatalf("state = %q, want unhealthy (loopback без allow_private)", state)
+			t.Fatalf("state = %q, want unhealthy (loopback without allow_private)", state)
 		}
 		if int(data.GetFields()["status"].GetNumberValue()) != 0 {
-			t.Error("status при заблокированном dial должно быть 0")
+			t.Error("status should be 0 when dial is blocked")
 		}
 	})
 }
@@ -221,7 +221,7 @@ func TestHTTPUnhealthyInsecureSkipVerify(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	t.Run("insecure_skip_verify:true -> self-signed принят -> healthy", func(t *testing.T) {
+	t.Run("insecure_skip_verify:true -> self-signed accepted -> healthy", func(t *testing.T) {
 		b := NewHTTPUnhealthy()
 		state, _, err := b.Check(context.Background(), paramStruct(t, map[string]any{
 			"url":                  srv.URL + "/health",
@@ -232,21 +232,21 @@ func TestHTTPUnhealthyInsecureSkipVerify(t *testing.T) {
 			t.Fatalf("Check: %v", err)
 		}
 		if state != stateHTTPHealthy {
-			t.Fatalf("state = %q, want healthy (self-signed при insecure_skip_verify)", state)
+			t.Fatalf("state = %q, want healthy (self-signed with insecure_skip_verify)", state)
 		}
 	})
 
-	t.Run("default -> self-signed не доверяется -> unhealthy", func(t *testing.T) {
+	t.Run("default -> self-signed is not trusted -> unhealthy", func(t *testing.T) {
 		b := NewHTTPUnhealthy()
 		state, _, err := b.Check(context.Background(), paramStruct(t, map[string]any{
 			"url":           srv.URL + "/health",
 			"allow_private": true, // loopback allowed through, isolating the TLS contour
 		}))
 		if err != nil {
-			t.Fatalf("Check при невалидном TLS не должен падать: %v", err)
+			t.Fatalf("Check should not fail on invalid TLS: %v", err)
 		}
 		if state != stateHTTPUnhealthy {
-			t.Fatalf("state = %q, want unhealthy (self-signed без insecure_skip_verify)", state)
+			t.Fatalf("state = %q, want unhealthy (self-signed without insecure_skip_verify)", state)
 		}
 	})
 }
@@ -264,7 +264,7 @@ func TestHTTPUnhealthyDefaultSecure(t *testing.T) {
 		t.Fatalf("Check: %v", err)
 	}
 	if got.AllowPrivate || got.InsecureSkipVerify || got.AllowHTTPRedirect {
-		t.Fatalf("default не secure-by-default: %+v", got)
+		t.Fatalf("default is not secure-by-default: %+v", got)
 	}
 }
 
@@ -276,7 +276,7 @@ func TestHTTPUnhealthyRejectsNonBoolFlag(t *testing.T) {
 			"url": "https://service.internal/healthz",
 			flag:  "yes",
 		})); err == nil {
-			t.Fatalf("ожидали ошибку при %s строкой (тип-чек)", flag)
+			t.Fatalf("expected an error for %s as a string (type check)", flag)
 		}
 	}
 }

@@ -35,7 +35,7 @@ func publishAndCapture(t *testing.T, applyID string, passage int, rt *render.Ren
 	case ev := <-ch:
 		return ev
 	case <-time.After(2 * time.Second):
-		t.Fatal("applybus: событие keeper-side task.executed не доставлено")
+		t.Fatal("applybus: keeper-side task.executed event not delivered")
 		return applybus.Event{}
 	}
 }
@@ -52,7 +52,7 @@ func TestPublishKeeperTaskExecuted_ChangedSymmetry(t *testing.T) {
 	}
 	p, ok := ev.Payload.(map[string]any)
 	if !ok {
-		t.Fatalf("payload тип %T, want map[string]any", ev.Payload)
+		t.Fatalf("payload type %T, want map[string]any", ev.Payload)
 	}
 	// sid=keeper — synthetic address of the keeper target (render.KeeperTargetSID).
 	if got := p["sid"]; got != render.KeeperTargetSID {
@@ -70,17 +70,17 @@ func TestPublishKeeperTaskExecuted_ChangedSymmetry(t *testing.T) {
 		t.Errorf("task_status = %v, want TASK_STATUS_CHANGED", got)
 	}
 	if got := p["kind"]; got != string(applybus.KindTaskExecuted) {
-		t.Errorf("kind-поле = %v, want %q", got, applybus.KindTaskExecuted)
+		t.Errorf("kind field = %v, want %q", got, applybus.KindTaskExecuted)
 	}
 	// Exactly the key set Soul-side uses for a non-failed task (no error).
 	wantKeys := map[string]bool{"apply_id": true, "kind": true, "sid": true, "task_idx": true, "task_status": true, "passage": true}
 	for k := range p {
 		if !wantKeys[k] {
-			t.Errorf("лишний ключ %q в payload changed-задачи", k)
+			t.Errorf("extra key %q in changed-task payload", k)
 		}
 	}
 	if _, has := p["error"]; has {
-		t.Error("changed-задача не должна нести error")
+		t.Error("changed task must not carry error")
 	}
 	assertNoSecretKeys(t, p)
 }
@@ -98,17 +98,17 @@ func TestPublishKeeperTaskExecuted_FailedSecretHygiene(t *testing.T) {
 	}
 	errObj, ok := p["error"].(map[string]any)
 	if !ok {
-		t.Fatalf("error тип %T, want map[string]any", p["error"])
+		t.Fatalf("error type %T, want map[string]any", p["error"])
 	}
 	// error carries ONLY code+module (no message = stderr).
 	if errObj["module"] != "core.vault.kv-read" {
 		t.Errorf("error.module = %v, want core.vault.kv-read", errObj["module"])
 	}
 	if _, hasCode := errObj["code"]; !hasCode {
-		t.Error("error должен нести ключ code (симметрия Soul-side)")
+		t.Error("error must carry the code key (Soul-side symmetry)")
 	}
 	if _, hasMsg := errObj["message"]; hasMsg {
-		t.Error("error.message (stderr) не должен попадать в SSE-frame (секрет-гигиена)")
+		t.Error("error.message (stderr) must not end up in the SSE frame (secret hygiene)")
 	}
 	assertNoSecretKeys(t, p)
 }
@@ -138,7 +138,7 @@ func assertNoSecretKeys(t *testing.T, p map[string]any) {
 	t.Helper()
 	for _, k := range forbiddenSSEKeys {
 		if _, has := p[k]; has {
-			t.Errorf("секрет-ключ %q не должен попадать в keeper-side SSE-frame", k)
+			t.Errorf("secret key %q must not end up in the keeper-side SSE frame", k)
 		}
 	}
 }

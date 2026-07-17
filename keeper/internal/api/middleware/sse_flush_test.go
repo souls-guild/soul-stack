@@ -69,14 +69,14 @@ func TestStatusRecorders_SSEFlushPassthrough(t *testing.T) {
 
 			f := walkFlusher(rec)
 			if f == nil {
-				t.Fatal("unwrapFlusher-цепочка порвалась на рекордере (нет Flush/Unwrap) — SSE не флашится")
+				t.Fatal("unwrapFlusher chain broke on the recorder (no Flush/Unwrap) - SSE not flushed")
 			}
 			f.Flush()
 			if !spy.flushed {
-				t.Fatal("Flush() не дошёл до терминального сокет-флашера")
+				t.Fatal("Flush() did not reach the terminal socket flusher")
 			}
 			if walkToSpy(rec) != spy {
-				t.Fatal("Unwrap()-цепочка не доходит до вложенного ResponseWriter (unwrapWriteDeadliner порвётся)")
+				t.Fatal("Unwrap() chain does not reach the wrapped ResponseWriter (unwrapWriteDeadliner would break)")
 			}
 		})
 	}

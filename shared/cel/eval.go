@@ -15,7 +15,7 @@ import (
 // div-by-zero) via errors.Is — without fragile message-text matching. Additive
 // sentinel: ErrEval's text is preserved, consumers keyed on the old text don't
 // break.
-var ErrPredicateNotBool = errors.New("предикат вернул не bool")
+var ErrPredicateNotBool = errors.New("predicate did not return bool")
 
 // ErrCompile — CEL compile error (syntax, unknown identifier, incompatible types).
 // Per [templating.md §10] this is a validation-phase error before the run starts.
@@ -53,7 +53,7 @@ type ErrUnsupported struct {
 }
 
 func (e *ErrUnsupported) Error() string {
-	return fmt.Sprintf("CEL unsupported %q: конструкция %s ещё не реализована (pilot)", e.Expr, e.Feature)
+	return fmt.Sprintf("CEL unsupported %q: construct %s not yet implemented (pilot)", e.Expr, e.Feature)
 }
 
 // EvalExpression evaluates an expression where the whole string is CEL — the form
@@ -128,7 +128,7 @@ func (e *Engine) EvalPredicate(expr string, vars Vars) (bool, error) {
 	if !ok {
 		return false, &ErrEval{
 			Expr: expr,
-			Err:  fmt.Errorf("предикат вернул %s, ожидался bool: %w", out.Type().TypeName(), ErrPredicateNotBool),
+			Err:  fmt.Errorf("predicate returned %s, expected bool: %w", out.Type().TypeName(), ErrPredicateNotBool),
 		}
 	}
 	return b, nil
@@ -303,7 +303,7 @@ func (e *Engine) parseBlock(raw string, start int) (string, int, error) {
 	}
 	return "", 0, &ErrCompile{
 		Expr: raw[start:],
-		Err:  fmt.Errorf("${ без закрывающей } или невалидное выражение"),
+		Err:  fmt.Errorf("${ without a closing } or an invalid expression"),
 	}
 }
 
@@ -324,6 +324,6 @@ func stringify(expr string, val ref.Val) (string, error) {
 
 	return "", &ErrEval{
 		Expr: expr,
-		Err:  fmt.Errorf("результат типа %s нельзя склеить со строкой (вынеси в отдельную ячейку)", val.Type().TypeName()),
+		Err:  fmt.Errorf("result of type %s cannot be concatenated with a string (move it to a separate cell)", val.Type().TypeName()),
 	}
 }

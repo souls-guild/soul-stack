@@ -80,9 +80,9 @@ func TestIntegration_KeeperRegisterInSets_CommitsToState(t *testing.T) {
 	// key: provision" → error_locked (waitRunDone fails the status assert).
 	inc := waitRunDone(t, "noop-prod", applyID, incarnation.StatusReady)
 	if inc.State["provisioned_ip"] != "10.0.0.7" {
-		t.Errorf("incarnation.state.provisioned_ip = %v, want \"10.0.0.7\" (из register.provision.ip keeper-задачи)", inc.State["provisioned_ip"])
+		t.Errorf("incarnation.state.provisioned_ip = %v, want \"10.0.0.7\" (from register.provision.ip of the keeper task)", inc.State["provisioned_ip"])
 	}
 	if disp.calls != 1 {
-		t.Errorf("SendApply calls = %d, want 1 (host-задача)", disp.calls)
+		t.Errorf("SendApply calls = %d, want 1 (host task)", disp.calls)
 	}
 }

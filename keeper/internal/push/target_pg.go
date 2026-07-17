@@ -95,7 +95,7 @@ func (r *PGFallbackTargetResolver) Resolve(ctx context.Context, sid string) (SSH
 
 	r.legacyWarned.Do(func() {
 		if r.Logger != nil {
-			r.Logger.Warn("push: S7-1 deprecation: keeper.yml::push.targets[] используется как fallback; мигрируйте на souls.ssh_target через PUT /v1/souls/{sid}/ssh-target",
+			r.Logger.Warn("push: S7-1 deprecation: keeper.yml::push.targets[] is used as a fallback; migrate to souls.ssh_target via PUT /v1/souls/{sid}/ssh-target",
 				slog.String("trigger_sid", sid))
 		}
 	})

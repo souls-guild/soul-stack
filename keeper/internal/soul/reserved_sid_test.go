@@ -35,10 +35,10 @@ func TestIsReservedSID(t *testing.T) {
 // imported by the leaf package soul). A mismatch = a bug (NIM-36).
 func TestReservedSIDs_MatchRenderConstants(t *testing.T) {
 	if !soul.IsReservedSID(render.KeeperTargetSID) {
-		t.Errorf("ReservedSIDs не содержит render.KeeperTargetSID=%q", render.KeeperTargetSID)
+		t.Errorf("ReservedSIDs does not contain render.KeeperTargetSID=%q", render.KeeperTargetSID)
 	}
 	if !soul.IsReservedSID(render.RunSentinelSID) {
-		t.Errorf("ReservedSIDs не содержит render.RunSentinelSID=%q", render.RunSentinelSID)
+		t.Errorf("ReservedSIDs does not contain render.RunSentinelSID=%q", render.RunSentinelSID)
 	}
 	if len(soul.ReservedSIDs) != 2 {
 		t.Errorf("len(ReservedSIDs) = %d, want 2 (keeper + __run__)", len(soul.ReservedSIDs))

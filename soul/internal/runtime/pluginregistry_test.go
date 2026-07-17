@@ -152,7 +152,7 @@ func TestPluginRegistry_RescanPicksUpNewModule(t *testing.T) {
 	}
 	r := NewPluginRegistry(&fakeSpawner{}, discovered, nil)
 	if _, ok := r.Lookup("wb.extra"); ok {
-		t.Fatal("Lookup(wb.extra): найден до установки")
+		t.Fatal("Lookup(wb.extra): found before installation")
 	}
 
 	writeSlot(t, root, "wb", "extra")
@@ -160,10 +160,10 @@ func TestPluginRegistry_RescanPicksUpNewModule(t *testing.T) {
 		t.Fatalf("Rescan: %v", err)
 	}
 	if _, ok := r.Lookup("wb.extra"); !ok {
-		t.Error("Lookup(wb.extra) после Rescan: not found")
+		t.Error("Lookup(wb.extra) after Rescan: not found")
 	}
 	if _, ok := r.Lookup("wb.echo"); !ok {
-		t.Error("Lookup(wb.echo): существующий модуль потерян после Rescan")
+		t.Error("Lookup(wb.echo): existing module lost after Rescan")
 	}
 }
 
@@ -179,10 +179,10 @@ func TestCompositeRegistry_RescanKeepsCoreLayer(t *testing.T) {
 	}
 	got, ok := c.Lookup("core.pkg")
 	if !ok || got != core["core.pkg"] {
-		t.Error("core-слой composite задет Rescan-ом plugin-слоя")
+		t.Error("core-layer composite affected by plugin-layer Rescan")
 	}
 	if _, ok := c.Lookup("wb.extra"); !ok {
-		t.Error("новый модуль недоступен через composite после Rescan")
+		t.Error("new module unavailable via composite after Rescan")
 	}
 }
 
@@ -222,7 +222,7 @@ func TestPluginRegistry_ConcurrentLookupAndRescan(t *testing.T) {
 	wg.Wait()
 
 	if _, ok := r.Lookup("wb.echo"); !ok {
-		t.Error("Lookup(wb.echo) после конкурентных Rescan-ов: not found")
+		t.Error("Lookup(wb.echo) after concurrent Rescans: not found")
 	}
 }
 

@@ -116,7 +116,7 @@ func waitStatusInc(t *testing.T, name string, want incarnation.Status) *incarnat
 		}
 		time.Sleep(20 * time.Millisecond)
 	}
-	t.Fatalf("incarnation %s не достиг статуса %q за 10s", name, want)
+	t.Fatalf("incarnation %s did not reach status %q within 10s", name, want)
 	return nil
 }
 
@@ -152,7 +152,7 @@ func TestIntegration_Destroy_Teardown_Success(t *testing.T) {
 
 	// dispatch happened exactly once (one host teardown).
 	if disp.calls != 1 {
-		t.Errorf("SendApply calls = %d, want 1 (один хост teardown)", disp.calls)
+		t.Errorf("SendApply calls = %d, want 1 (one host teardown)", disp.calls)
 	}
 
 	// V3 cascade: the run's apply_runs are removed along with the incarnation row.
@@ -161,7 +161,7 @@ func TestIntegration_Destroy_Teardown_Success(t *testing.T) {
 		t.Fatalf("SelectStatusesByApplyID: %v", serr)
 	}
 	if len(st) != 0 {
-		t.Errorf("apply_runs прогона = %d, want 0 (каскад V3 снёс вместе с incarnation)", len(st))
+		t.Errorf("apply_runs of the run = %d, want 0 (cascade V3 removed it along with the incarnation)", len(st))
 	}
 }
 
@@ -181,7 +181,7 @@ func waitIncarnationGone(t *testing.T, name string) {
 		}
 		time.Sleep(20 * time.Millisecond)
 	}
-	t.Fatalf("incarnation %s не снесена за 10s (teardown-success должен удалить строку)", name)
+	t.Fatalf("incarnation %s not removed within 10s (teardown-success should delete the row)", name)
 }
 
 // TestIntegration_Destroy_Teardown_Fail — a host failed (RunResult failed) →
@@ -211,14 +211,14 @@ func TestIntegration_Destroy_Teardown_Fail(t *testing.T) {
 	// A teardown failure transitions to destroy_failed (NOT error_locked).
 	inc := waitStatusInc(t, "noop-prod", incarnation.StatusDestroyFailed)
 	if inc.Status == incarnation.StatusErrorLocked {
-		t.Fatal("status = error_locked — провал teardown должен давать destroy_failed, НЕ error_locked")
+		t.Fatal("status = error_locked - a failed teardown should yield destroy_failed, NOT error_locked")
 	}
 	if inc.StatusDetails == nil || inc.StatusDetails["reason"] != "dispatch_failed" {
 		t.Errorf("status_details = %+v, want reason=dispatch_failed", inc.StatusDetails)
 	}
 	// state is untouched on failure (last known-good).
 	if inc.State["leader"] != "host-a" {
-		t.Errorf("state.leader = %v, want host-a (state не меняется при фейле)", inc.State["leader"])
+		t.Errorf("state.leader = %v, want host-a (state does not change on failure)", inc.State["leader"])
 	}
 
 	// A failure writes a state_history snapshot (zero-diff, records the fact of the run).
@@ -228,7 +228,7 @@ func TestIntegration_Destroy_Teardown_Fail(t *testing.T) {
 		t.Fatalf("HistorySelectByName: %v", herr)
 	}
 	if total != 1 {
-		t.Fatalf("state_history snapshots = %d, want 1 (фейл фиксирует факт прогона)", total)
+		t.Fatalf("state_history snapshots = %d, want 1 (failure records the fact of the run)", total)
 	}
 	if hist[0].Scenario != DestroyScenarioName {
 		t.Errorf("history scenario = %q, want %q", hist[0].Scenario, DestroyScenarioName)
@@ -262,12 +262,12 @@ func TestIntegration_Destroy_Teardown_RejectsNonDestroying(t *testing.T) {
 	deadline := time.Now().Add(2 * time.Second)
 	for time.Now().Before(deadline) {
 		if disp.calls > 0 {
-			t.Fatalf("SendApply вызван для teardown из ready-статуса")
+			t.Fatalf("SendApply called for teardown from the ready state")
 		}
 		time.Sleep(20 * time.Millisecond)
 	}
 	got, _ := incarnation.SelectByName(context.Background(), integrationPool, "noop-prod")
 	if got.Status != incarnation.StatusReady {
-		t.Errorf("status = %q, want ready (teardown из ready отвергнут)", got.Status)
+		t.Errorf("status = %q, want ready (teardown from ready is rejected)", got.Status)
 	}
 }

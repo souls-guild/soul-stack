@@ -32,7 +32,7 @@ type Credentials struct {
 func DefaultPath() (string, error) {
 	home, err := os.UserHomeDir()
 	if err != nil {
-		return "", fmt.Errorf("определить домашний каталог: %w", err)
+		return "", fmt.Errorf("determine home directory: %w", err)
 	}
 	return filepath.Join(home, ".config", "soul-stack", "credentials.yaml"), nil
 }
@@ -54,19 +54,19 @@ func Load(path string) (*Credentials, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		if errors.Is(err, fs.ErrNotExist) {
-			return nil, fmt.Errorf("credentials-файл %s не найден — выполните `soulctl archon login` для аутентификации", path)
+			return nil, fmt.Errorf("credentials file %s not found -- run `soulctl archon login` to authenticate", path)
 		}
-		return nil, fmt.Errorf("прочитать %s: %w", path, err)
+		return nil, fmt.Errorf("read %s: %w", path, err)
 	}
 	var c Credentials
 	if err := yaml.Unmarshal(data, &c); err != nil {
-		return nil, fmt.Errorf("разобрать %s: %w", path, err)
+		return nil, fmt.Errorf("parse %s: %w", path, err)
 	}
 	if c.KeeperURL == "" {
-		return nil, fmt.Errorf("в %s не задан keeper_url", path)
+		return nil, fmt.Errorf("keeper_url not set in %s", path)
 	}
 	if c.ArchonJWT == "" {
-		return nil, fmt.Errorf("в %s не задан archon_jwt — выполните `soulctl archon login`", path)
+		return nil, fmt.Errorf("archon_jwt not set in %s -- run `soulctl archon login`", path)
 	}
 	return &c, nil
 }

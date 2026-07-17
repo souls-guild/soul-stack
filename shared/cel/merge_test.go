@@ -25,7 +25,7 @@ func TestMerge_LastWins(t *testing.T) {
 	}
 	got, ok := out.(map[string]any)
 	if !ok {
-		t.Fatalf("результат типа %T, want map[string]any", out)
+		t.Fatalf("result type %T, want map[string]any", out)
 	}
 	want := map[string]any{"x": int64(1), "y": int64(20), "z": int64(30)}
 	if !reflect.DeepEqual(got, want) {
@@ -51,12 +51,12 @@ func TestMerge_Shallow(t *testing.T) {
 	got := out.(map[string]any)
 	nested, ok := got["nested"].(map[string]any)
 	if !ok {
-		t.Fatalf("nested типа %T, want map[string]any", got["nested"])
+		t.Fatalf("nested type %T, want map[string]any", got["nested"])
 	}
 	// SHALLOW: the right wholly replaced — the `drop` key from the left is gone.
 	want := map[string]any{"keep": int64(99)}
 	if !reflect.DeepEqual(nested, want) {
-		t.Fatalf("nested = %v, want %v (shallow, правый целиком замещает)", nested, want)
+		t.Fatalf("nested = %v, want %v (shallow, right wholly replaces)", nested, want)
 	}
 }
 
@@ -79,7 +79,7 @@ func TestMerge_EmptyMaps(t *testing.T) {
 	got := out.(map[string]any)
 	want := map[string]any{"k": "v"}
 	if !reflect.DeepEqual(got, want) {
-		t.Fatalf("merge с пустыми = %v, want %v", got, want)
+		t.Fatalf("merge with empty = %v, want %v", got, want)
 	}
 
 	// merge of two empties → empty map.
@@ -88,10 +88,10 @@ func TestMerge_EmptyMaps(t *testing.T) {
 		"empty2": map[string]any{},
 	}})
 	if err != nil {
-		t.Fatalf("eval (оба пустые): %v", err)
+		t.Fatalf("eval (both empty): %v", err)
 	}
 	if got2 := out2.(map[string]any); len(got2) != 0 {
-		t.Fatalf("merge двух пустых = %v, want пустой map", got2)
+		t.Fatalf("merge of two empties = %v, want empty map", got2)
 	}
 }
 
@@ -109,7 +109,7 @@ func TestMerge_SingleArg(t *testing.T) {
 	got := out.(map[string]any)
 	want := map[string]any{"x": int64(1), "y": int64(2)}
 	if !reflect.DeepEqual(got, want) {
-		t.Fatalf("merge(один) = %v, want %v", got, want)
+		t.Fatalf("merge(one) = %v, want %v", got, want)
 	}
 }
 
@@ -158,7 +158,7 @@ func TestMergeList_Flatten(t *testing.T) {
 	}
 	got, ok := out.(map[string]any)
 	if !ok {
-		t.Fatalf("результат типа %T, want map[string]any", out)
+		t.Fatalf("result type %T, want map[string]any", out)
 	}
 	want := map[string]any{"k": int64(3), "a_only": "A", "b_only": "B", "c_only": "C"}
 	if !reflect.DeepEqual(got, want) {
@@ -187,7 +187,7 @@ func TestMergeList_FromComprehension(t *testing.T) {
 	}
 	got, ok := out.(map[string]any)
 	if !ok {
-		t.Fatalf("результат типа %T, want map[string]any", out)
+		t.Fatalf("result type %T, want map[string]any", out)
 	}
 	want := map[string]any{
 		"zeta":  map[string]any{"perms": "~* +@all"},
@@ -236,10 +236,10 @@ func TestMergeList_Empty(t *testing.T) {
 	}
 	got, ok := out.(map[string]any)
 	if !ok {
-		t.Fatalf("результат типа %T, want map[string]any", out)
+		t.Fatalf("result type %T, want map[string]any", out)
 	}
 	if len(got) != 0 {
-		t.Fatalf("merge(пустой список) = %v, want пустой map", got)
+		t.Fatalf("merge(empty list) = %v, want empty map", got)
 	}
 }
 
@@ -255,12 +255,12 @@ func TestMergeList_NonMapElement(t *testing.T) {
 		},
 	}})
 	if err == nil {
-		t.Fatal("merge(list) с не-map элементом: ожидалась ошибка, получено nil")
+		t.Fatal("merge(list) with non-map element: expected error, got nil")
 	}
 	var ce *ErrCompile
 	var ee *ErrEval
 	if !errors.As(err, &ce) && !errors.As(err, &ee) {
-		t.Fatalf("merge(list) не-map элемент: ошибка = %v, want *ErrCompile или *ErrEval", err)
+		t.Fatalf("merge(list) non-map element: error = %v, want *ErrCompile or *ErrEval", err)
 	}
 }
 
@@ -282,7 +282,7 @@ func TestMergeList_AvailableInFlowControl(t *testing.T) {
 		t.Fatalf("eval: %v", err)
 	}
 	if got := out.Value(); got != true {
-		t.Fatalf("результат = %v, want true (list last-wins в flow-control)", got)
+		t.Fatalf("result = %v, want true (list last-wins in flow-control)", got)
 	}
 }
 
@@ -304,7 +304,7 @@ func TestMerge_VarargsBackCompat(t *testing.T) {
 	got := out.(map[string]any)
 	want := map[string]any{"x": int64(2), "y": int64(3)}
 	if !reflect.DeepEqual(got, want) {
-		t.Fatalf("varargs merge = %v, want %v (back-compat сломан)", got, want)
+		t.Fatalf("varargs merge = %v, want %v (back-compat broken)", got, want)
 	}
 }
 
@@ -325,11 +325,11 @@ func TestMerge_TooManyVarargs(t *testing.T) {
 	}
 	_, err := e.EvalExpression(expr, Vars{Input: in})
 	if err == nil {
-		t.Fatal("merge(9 аргументов): ожидалась compile-ошибка no-such-overload, получено nil")
+		t.Fatal("merge(9 arguments): expected a compile error no-such-overload, got nil")
 	}
 	var ce *ErrCompile
 	if !errors.As(err, &ce) {
-		t.Fatalf("merge(9): ошибка = %v, want *ErrCompile (no such overload)", err)
+		t.Fatalf("merge(9): error = %v, want *ErrCompile (no such overload)", err)
 	}
 }
 
@@ -344,12 +344,12 @@ func TestMerge_NonMapArg(t *testing.T) {
 		"notmap": "i-am-a-string",
 	}})
 	if err == nil {
-		t.Fatal("merge с не-map аргументом: ожидалась ошибка, получено nil")
+		t.Fatal("merge with non-map argument: expected error, got nil")
 	}
 	var ce *ErrCompile
 	var ee *ErrEval
 	if !errors.As(err, &ce) && !errors.As(err, &ee) {
-		t.Fatalf("merge с не-map: ошибка = %v, want *ErrCompile или *ErrEval", err)
+		t.Fatalf("merge with non-map: error = %v, want *ErrCompile or *ErrEval", err)
 	}
 }
 
@@ -370,7 +370,7 @@ func TestMerge_AvailableInFlowControl(t *testing.T) {
 		t.Fatalf("eval: %v", err)
 	}
 	if got := out.Value(); got != true {
-		t.Fatalf("результат = %v, want true (last-wins в flow-control)", got)
+		t.Fatalf("result = %v, want true (last-wins in flow-control)", got)
 	}
 }
 
@@ -396,12 +396,12 @@ func TestMerge_SecretMaskedSameAsDirectVault(t *testing.T) {
 		t.Fatalf("eval direct vault: %v", err)
 	}
 	if direct != "s3cr3t-plaintext" {
-		t.Fatalf("direct vault резолвнул %v, want реальный plaintext (резолв keeper-side)", direct)
+		t.Fatalf("direct vault resolved %v, want real plaintext (keeper-side resolve)", direct)
 	}
 	directPayload := map[string]any{"password": direct}
 	maskedDirect := audit.MaskSecrets(directPayload)
 	if maskedDirect["password"] == "s3cr3t-plaintext" {
-		t.Fatal("эталон: прямой vault-секрет НЕ замаскирован MaskSecrets — слой маскинга сломан")
+		t.Fatal("baseline: direct vault secret NOT masked by MaskSecrets - masking layer broken")
 	}
 
 	// The same secret, but via merge(defaults, {password: vault(...)}).
@@ -416,26 +416,26 @@ func TestMerge_SecretMaskedSameAsDirectVault(t *testing.T) {
 	}
 	mergedMap, ok := merged.(map[string]any)
 	if !ok {
-		t.Fatalf("merge результат типа %T, want map[string]any", merged)
+		t.Fatalf("merge result type %T, want map[string]any", merged)
 	}
 	// Control: the secret really landed in the merged map as plaintext (pre-masking).
 	if mergedMap["password"] != "s3cr3t-plaintext" {
-		t.Fatalf("merged.password = %v, want plaintext-секрет (vault резолвится в merge)", mergedMap["password"])
+		t.Fatalf("merged.password = %v, want plaintext secret (vault resolves in merge)", mergedMap["password"])
 	}
 
 	maskedMerged := audit.MaskSecrets(mergedMap)
 	// Main assertion: the merged secret is masked IDENTICALLY to the direct one.
 	if maskedMerged["password"] != maskedDirect["password"] {
-		t.Fatalf("merged.password замаскирован как %v, прямой как %v — РАСХОЖДЕНИЕ (секрет течёт через merge)",
+		t.Fatalf("merged.password masked as %v, direct as %v - MISMATCH (secret leaks through merge)",
 			maskedMerged["password"], maskedDirect["password"])
 	}
 	// And literally: no plaintext secret remains in the masked output.
 	if maskedMerged["password"] == "s3cr3t-plaintext" {
-		t.Fatal("merged.password НЕ замаскирован — секрет протекает в выходной слой через merge()")
+		t.Fatal("merged.password NOT masked - secret leaks into the output layer through merge()")
 	}
 	// Non-secret keys of the merged map pass through (no over-masking).
 	if maskedMerged["maxmemory"] != "256mb" || maskedMerged["appendonly"] != "yes" {
-		t.Fatalf("несекретные ключи замаскированы: %v (over-masking)", maskedMerged)
+		t.Fatalf("non-secret keys are masked: %v (over-masking)", maskedMerged)
 	}
 }
 
@@ -460,11 +460,11 @@ func TestMerge_TLSKeyMaskedSameAsDirectVault(t *testing.T) {
 		t.Fatalf("eval direct vault: %v", err)
 	}
 	if direct != pem {
-		t.Fatalf("direct vault резолвнул %v, want PEM plaintext (keeper-side)", direct)
+		t.Fatalf("direct vault resolved %v, want PEM plaintext (keeper-side)", direct)
 	}
 	maskedDirect := audit.MaskSecrets(map[string]any{"tls_key": direct})
 	if maskedDirect["tls_key"] == pem {
-		t.Fatal("эталон: прямой tls_key НЕ замаскирован — слой маскинга TLS сломан (sensitiveKeyRe не ловит tls_key)")
+		t.Fatal("baseline: direct tls_key NOT masked - TLS masking layer broken (sensitiveKeyRe misses tls_key)")
 	}
 
 	// The same PEM via merge(defaults, {tls_key/tls_cert/tls_ca: vault(...)}).
@@ -484,23 +484,23 @@ func TestMerge_TLSKeyMaskedSameAsDirectVault(t *testing.T) {
 	mergedMap := merged.(map[string]any)
 	// Control: the PEM really landed in the merged map as plaintext (pre-masking).
 	if mergedMap["tls_key"] != pem {
-		t.Fatalf("merged.tls_key = %v, want PEM plaintext (vault резолвится в merge)", mergedMap["tls_key"])
+		t.Fatalf("merged.tls_key = %v, want PEM plaintext (vault resolves in merge)", mergedMap["tls_key"])
 	}
 
 	maskedMerged := audit.MaskSecrets(mergedMap)
 	if maskedMerged["tls_key"] != maskedDirect["tls_key"] {
-		t.Fatalf("merged.tls_key замаскирован как %v, прямой как %v — РАСХОЖДЕНИЕ (PEM течёт через merge)",
+		t.Fatalf("merged.tls_key masked as %v, direct as %v - MISMATCH (PEM leaks through merge)",
 			maskedMerged["tls_key"], maskedDirect["tls_key"])
 	}
 	if maskedMerged["tls_key"] == pem {
-		t.Fatal("merged.tls_key НЕ замаскирован — PEM client-key протекает через merge()")
+		t.Fatal("merged.tls_key NOT masked - PEM client-key leaks through merge()")
 	}
 	// cert/ca are masked too (secret names); the non-secret tls-port passes through.
 	if maskedMerged["tls_cert"] == "CERTPEM" || maskedMerged["tls_ca"] == "CAPEM" {
-		t.Fatalf("tls_cert/tls_ca НЕ замаскированы: cert=%v ca=%v", maskedMerged["tls_cert"], maskedMerged["tls_ca"])
+		t.Fatalf("tls_cert/tls_ca NOT masked: cert=%v ca=%v", maskedMerged["tls_cert"], maskedMerged["tls_ca"])
 	}
 	if maskedMerged["tls-port"] != "7379" {
-		t.Fatalf("несекретный tls-port замаскирован: %v (over-masking)", maskedMerged["tls-port"])
+		t.Fatalf("non-secret tls-port masked: %v (over-masking)", maskedMerged["tls-port"])
 	}
 }
 
@@ -527,7 +527,7 @@ func TestMerge_SecretUnderNonSensitiveKeyNotMasked(t *testing.T) {
 	}
 	directPayload := map[string]any{"maxmemory": direct}
 	if audit.MaskSecrets(directPayload)["maxmemory"] != "s3cr3t-plaintext" {
-		t.Fatal("эталон: прямой vault под НЕ-sensitive ключом замаскирован — модель маскинга изменилась")
+		t.Fatal("baseline: direct vault under a NON-sensitive key is masked - masking model changed")
 	}
 
 	// The same secret via merge() under the NON-sensitive `maxmemory` key.
@@ -545,7 +545,7 @@ func TestMerge_SecretUnderNonSensitiveKeyNotMasked(t *testing.T) {
 	// Invariant: under a NON-sensitive key the secret passes through (merge adds
 	// no masking, just like a direct vault). Correctness is on the scenario author.
 	if maskedMerged["maxmemory"] != "s3cr3t-plaintext" {
-		t.Fatalf("merged.maxmemory = %v, want plaintext (несекретный ключ — merge не маскирует, симметрия с прямым vault)",
+		t.Fatalf("merged.maxmemory = %v, want plaintext (non-secret key - merge does not mask, symmetric with direct vault)",
 			maskedMerged["maxmemory"])
 	}
 }
@@ -558,11 +558,11 @@ func TestMerge_ZeroArgs(t *testing.T) {
 
 	_, err := e.EvalExpression(`merge()`, Vars{})
 	if err == nil {
-		t.Fatal("merge() без аргументов: ожидалась compile-ошибка no-such-overload, получено nil")
+		t.Fatal("merge() with no arguments: expected a compile error no-such-overload, got nil")
 	}
 	var ce *ErrCompile
 	if !errors.As(err, &ce) {
-		t.Fatalf("merge(): ошибка = %v, want *ErrCompile (no such overload)", err)
+		t.Fatalf("merge(): error = %v, want *ErrCompile (no such overload)", err)
 	}
 }
 
@@ -581,6 +581,6 @@ func TestMerge_UndeclaredInMigration(t *testing.T) {
 	})
 	var ce *ErrCompile
 	if !errors.As(err, &ce) {
-		t.Fatalf("merge() в migration-env: ошибка = %v, want *ErrCompile (no such overload)", err)
+		t.Fatalf("merge() in migration-env: error = %v, want *ErrCompile (no such overload)", err)
 	}
 }

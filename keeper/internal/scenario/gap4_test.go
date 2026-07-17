@@ -138,11 +138,11 @@ func TestIntegration_RunMergesIntoExistingState(t *testing.T) {
 
 	// a isn't mentioned in sets → must be preserved (JSON round-trip from JSONB → float64).
 	if inc.State["a"] != float64(1) {
-		t.Errorf("state.a = %v (%T), want 1 (merge должен сохранить непереписанные поля)", inc.State["a"], inc.State["a"])
+		t.Errorf("state.a = %v (%T), want 1 (merge must preserve unmodified fields)", inc.State["a"], inc.State["a"])
 	}
 	// b is mentioned in sets → overwritten with the literal "20".
 	if inc.State["b"] != "20" {
-		t.Errorf("state.b = %v (%T), want \"20\" (sets обновил поле)", inc.State["b"], inc.State["b"])
+		t.Errorf("state.b = %v (%T), want \"20\" (sets updated the field)", inc.State["b"], inc.State["b"])
 	}
 
 	// Real DB round-trip: read state again directly from the DB to
@@ -171,7 +171,7 @@ func TestIntegration_RunMergesIntoExistingState(t *testing.T) {
 		t.Errorf("history state_before.b = %v, want 2", hist[0].StateBefore["b"])
 	}
 	if hist[0].StateAfter["a"] != float64(1) {
-		t.Errorf("history state_after.a = %v, want 1 (a сохранён в snapshot)", hist[0].StateAfter["a"])
+		t.Errorf("history state_after.a = %v, want 1 (a preserved in snapshot)", hist[0].StateAfter["a"])
 	}
 	if hist[0].StateAfter["b"] != "20" {
 		t.Errorf("history state_after.b = %v, want \"20\"", hist[0].StateAfter["b"])
@@ -209,10 +209,10 @@ func TestIntegration_Lifecycle_LockUnlockRerun(t *testing.T) {
 	}
 	locked := waitRunDone(t, "noop-prod", apply1, incarnation.StatusErrorLocked)
 	if locked.StatusDetails == nil || locked.StatusDetails["reason"] != "dispatch_failed" {
-		t.Fatalf("после fail: status_details = %v, want reason dispatch_failed", locked.StatusDetails)
+		t.Fatalf("after fail: status_details = %v, want reason dispatch_failed", locked.StatusDetails)
 	}
 	if locked.State["seeded"] != true {
-		t.Errorf("state.seeded = %v, want true (fail не трогает state)", locked.State["seeded"])
+		t.Errorf("state.seeded = %v, want true (fail does not touch state)", locked.State["seeded"])
 	}
 
 	// --- run #2: against error_locked → lock-gate rejects it (backend 409) ---
@@ -231,16 +231,16 @@ func TestIntegration_Lifecycle_LockUnlockRerun(t *testing.T) {
 	deadline := time.Now().Add(2 * time.Second)
 	for time.Now().Before(deadline) {
 		if gateDisp.calls > 0 {
-			t.Fatalf("прогон #2: SendApply вызван при error_locked-incarnation (lock-gate не сработал)")
+			t.Fatalf("run #2: SendApply called on error_locked incarnation (lock-gate did not trigger)")
 		}
 		time.Sleep(20 * time.Millisecond)
 	}
 	stillLocked, err := incarnation.SelectByName(context.Background(), integrationPool, "noop-prod")
 	if err != nil {
-		t.Fatalf("SelectByName после #2: %v", err)
+		t.Fatalf("SelectByName after #2: %v", err)
 	}
 	if stillLocked.Status != incarnation.StatusErrorLocked {
-		t.Errorf("после отбитого #2: status = %q, want error_locked", stillLocked.Status)
+		t.Errorf("after rejected #2: status = %q, want error_locked", stillLocked.Status)
 	}
 
 	// --- unlock with reason → ready --------------------------------------
@@ -254,16 +254,16 @@ func TestIntegration_Lifecycle_LockUnlockRerun(t *testing.T) {
 	}
 	unlocked, err := incarnation.SelectByName(context.Background(), integrationPool, "noop-prod")
 	if err != nil {
-		t.Fatalf("SelectByName после unlock: %v", err)
+		t.Fatalf("SelectByName after unlock: %v", err)
 	}
 	if unlocked.Status != incarnation.StatusReady {
-		t.Fatalf("после unlock: status = %q, want ready", unlocked.Status)
+		t.Fatalf("after unlock: status = %q, want ready", unlocked.Status)
 	}
 	if unlocked.StatusDetails != nil {
-		t.Errorf("после unlock: status_details = %v, want nil (сброшены)", unlocked.StatusDetails)
+		t.Errorf("after unlock: status_details = %v, want nil (reset)", unlocked.StatusDetails)
 	}
 	if unlocked.State["seeded"] != true {
-		t.Errorf("после unlock: state.seeded = %v, want true (unlock не трогает state)", unlocked.State["seeded"])
+		t.Errorf("after unlock: state.seeded = %v, want true (unlock does not touch state)", unlocked.State["seeded"])
 	}
 
 	// --- run #3: ready again → goes through to success ------------------
@@ -278,13 +278,13 @@ func TestIntegration_Lifecycle_LockUnlockRerun(t *testing.T) {
 	}
 	final := waitRunDone(t, "noop-prod", apply3, incarnation.StatusReady)
 	if final.StatusDetails != nil {
-		t.Errorf("после #3: status_details = %v, want nil on success", final.StatusDetails)
+		t.Errorf("after #3: status_details = %v, want nil on success", final.StatusDetails)
 	}
 	if okDisp.calls != 1 {
-		t.Errorf("прогон #3: SendApply calls = %d, want 1 (после unlock прогон проходит)", okDisp.calls)
+		t.Errorf("run #3: SendApply calls = %d, want 1 (run succeeds after unlock)", okDisp.calls)
 	}
 	if final.State["seeded"] != true {
-		t.Errorf("после #3: state.seeded = %v, want true", final.State["seeded"])
+		t.Errorf("after #3: state.seeded = %v, want true", final.State["seeded"])
 	}
 }
 
@@ -360,13 +360,13 @@ func TestIntegration_Concurrency_LockGate_RunVsRun(t *testing.T) {
 		time.Sleep(10 * time.Millisecond)
 	}
 	if got := disp.calls.Load(); got != 1 {
-		t.Fatalf("SendApply calls = %d, want ровно 1 (lock-gate сериализует run-vs-run)", got)
+		t.Fatalf("SendApply calls = %d, want exactly 1 (lock-gate serializes run-vs-run)", got)
 	}
 
 	// Give the losers time to confirm they won't trigger dispatch later.
 	time.Sleep(300 * time.Millisecond)
 	if got := disp.calls.Load(); got != 1 {
-		t.Fatalf("SendApply calls = %d после паузы, want 1 (конкуренты не должны стартовать apply)", got)
+		t.Fatalf("SendApply calls = %d after pause, want 1 (concurrent runs must not start apply)", got)
 	}
 
 	// apply_runs: only the winner created a running row. Release the winner and
@@ -380,7 +380,7 @@ func TestIntegration_Concurrency_LockGate_RunVsRun(t *testing.T) {
 		t.Fatalf("count apply_runs: %v", err)
 	}
 	if applyRunRows != 1 {
-		t.Errorf("apply_runs rows = %d, want 1 (только победитель завёл строку прогона)", applyRunRows)
+		t.Errorf("apply_runs rows = %d, want 1 (only the winner created a run row)", applyRunRows)
 	}
 }
 
@@ -400,5 +400,5 @@ func waitStatus(t *testing.T, name string, want incarnation.Status) {
 		}
 		time.Sleep(20 * time.Millisecond)
 	}
-	t.Fatalf("incarnation %s не достиг статуса %q за 10s", name, want)
+	t.Fatalf("incarnation %s did not reach status %q within 10s", name, want)
 }

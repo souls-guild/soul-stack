@@ -44,7 +44,7 @@ func TestValidateAgainstManifest_MissingRequired(t *testing.T) {
 		t.Fatalf("errs=%v want 1", errs)
 	}
 	if !strings.Contains(errs[0], "path") || !strings.Contains(errs[0], "missing") {
-		t.Fatalf("err=%q want про path missing", errs[0])
+		t.Fatalf("err=%q want about path missing", errs[0])
 	}
 }
 
@@ -70,11 +70,11 @@ func TestValidateAgainstManifest_UnknownState(t *testing.T) {
 		t.Fatalf("errs=%v want 1", errs)
 	}
 	if !strings.Contains(errs[0], "unknown state") {
-		t.Fatalf("err=%q want про unknown state", errs[0])
+		t.Fatalf("err=%q want about unknown state", errs[0])
 	}
 	// The valid-states list mentions the actual states.
 	if !strings.Contains(errs[0], "present") || !strings.Contains(errs[0], "absent") {
-		t.Fatalf("err=%q want перечень states", errs[0])
+		t.Fatalf("err=%q want list of states", errs[0])
 	}
 }
 
@@ -95,10 +95,10 @@ func TestValidateAgainstManifest_NullParamCountsAsAbsent(t *testing.T) {
 		"path": nil,
 	}))
 	if len(errs) != 1 {
-		t.Fatalf("errs=%v want 1 (null required-param = отсутствует)", errs)
+		t.Fatalf("errs=%v want 1 (null required-param = absent)", errs)
 	}
 	if !strings.Contains(errs[0], "path") || !strings.Contains(errs[0], "missing") {
-		t.Fatalf("err=%q want про path missing", errs[0])
+		t.Fatalf("err=%q want about path missing", errs[0])
 	}
 }
 
@@ -110,7 +110,7 @@ func TestValidateAgainstManifest_OptionalNullParamOK(t *testing.T) {
 		"content": nil,
 	}))
 	if len(errs) != 0 {
-		t.Fatalf("errs=%v want none (null у optional-параметра допустим)", errs)
+		t.Fatalf("errs=%v want none (null on optional param is allowed)", errs)
 	}
 }
 

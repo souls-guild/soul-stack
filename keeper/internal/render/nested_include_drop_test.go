@@ -26,7 +26,7 @@ func mapIncludeResolver(files map[string]string) config.IncludeResolver {
 	return func(name string) ([]byte, string, error) {
 		data, ok := files[name]
 		if !ok {
-			return nil, "", fmt.Errorf("файл %q не найден", name)
+			return nil, "", fmt.Errorf("file %q not found", name)
 		}
 		return []byte(data), name, nil
 	}
@@ -61,7 +61,7 @@ func expandNestedFixture(t *testing.T) []config.Task {
 	rootSrc, files := nestedIncludeFixture()
 	rootTasks, diags, _ := config.LoadDestinyTasksFromBytes("scenario/create/main.yml", []byte(rootSrc), config.ValidateOptions{})
 	if diag.HasErrors(diags) {
-		t.Fatalf("парс main: %v", diags)
+		t.Fatalf("parse main: %v", diags)
 	}
 	expanded, idiags := config.ExpandIncludes(rootTasks, mapIncludeResolver(files))
 	if diag.HasErrors(idiags) {
@@ -114,23 +114,23 @@ func TestNestedConditionalInclude_DropMatrix(t *testing.T) {
 					len(tasks), len(tc.wantNames), gotNames, tc.wantNames)
 			}
 			if len(plans) != len(tc.wantNames) {
-				t.Fatalf("len(plans) = %d, want %d (дроп не резервирует план)", len(plans), len(tc.wantNames))
+				t.Fatalf("len(plans) = %d, want %d (drop does not reserve a plan)", len(plans), len(tc.wantNames))
 			}
 			for i, w := range tc.wantNames {
 				if tasks[i].Name != w {
 					t.Errorf("tasks[%d].Name = %q, want %q", i, tasks[i].Name, w)
 				}
 				if tasks[i].Index != i {
-					t.Errorf("tasks[%d].Index = %d, want %d (сквозная нумерация без дыр)", i, tasks[i].Index, i)
+					t.Errorf("tasks[%d].Index = %d, want %d (threaded numbering, no gaps)", i, tasks[i].Index, i)
 				}
 			}
 			// Hard guarantee the dropped inner-task is absent in the negative cases.
 			for _, rt := range tasks {
 				if rt.Name == "inner-task" && tc.inner == "no" {
-					t.Errorf("inner-task присутствует при inner=no — должна быть дропнута")
+					t.Errorf("inner-task is present with inner=no - should have been dropped")
 				}
 				if rt.Name == "inner-task" && tc.outer == "no" {
-					t.Errorf("inner-task присутствует при outer=no — каскадный дроп не сработал (исходный баг)")
+					t.Errorf("inner-task is present with outer=no - cascading drop did not fire (original bug)")
 				}
 			}
 		})

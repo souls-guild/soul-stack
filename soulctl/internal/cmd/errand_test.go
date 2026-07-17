@@ -52,7 +52,7 @@ func TestErrandExec_Sync(t *testing.T) {
 		t.Fatalf("Exec: %v", err)
 	}
 	if async {
-		t.Error("async = true, ожидался sync")
+		t.Error("async = true, expected sync")
 	}
 	if res.Status != "success" {
 		t.Errorf("status = %q, want success", res.Status)
@@ -87,7 +87,7 @@ func TestErrandExec_Async(t *testing.T) {
 		t.Fatalf("Exec: %v", err)
 	}
 	if !async {
-		t.Fatalf("async = false, ожидался true (202)")
+		t.Fatalf("async = false, expected true (202)")
 	}
 	if res.ErrandID != "01HFASYNC" {
 		t.Errorf("errand_id = %q", res.ErrandID)
@@ -116,11 +116,11 @@ func TestErrandExec_Forbidden(t *testing.T) {
 		Module: "core.cmd.shell",
 	})
 	if err == nil {
-		t.Fatal("ожидалась ошибка")
+		t.Fatal("expected an error")
 	}
 	apiErr, ok := client.AsAPIError(err)
 	if !ok {
-		t.Fatalf("ожидался APIError, got %T", err)
+		t.Fatalf("expected APIError, got %T", err)
 	}
 	if apiErr.Status != 403 {
 		t.Errorf("status = %d, want 403", apiErr.Status)
@@ -147,7 +147,7 @@ func TestErrandGet_Terminal(t *testing.T) {
 		t.Fatalf("Get: %v", err)
 	}
 	if async {
-		t.Error("async = true, ожидался терминал")
+		t.Error("async = true, expected terminal")
 	}
 	if res.Status != "success" {
 		t.Errorf("status = %q", res.Status)
@@ -186,7 +186,7 @@ func TestErrandList_Filters(t *testing.T) {
 		t.Errorf("total = %d, want 0", reply.Total)
 	}
 	if atomic.LoadInt32(&called) != 1 {
-		t.Error("server не был вызван")
+		t.Error("server was not called")
 	}
 }
 
@@ -226,7 +226,7 @@ func TestErrandCancel_Conflict(t *testing.T) {
 	})
 	err := cl.Errand.Cancel(context.Background(), "01HFDONE")
 	if err == nil {
-		t.Fatal("ожидалась ошибка")
+		t.Fatal("expected an error")
 	}
 	apiErr, ok := client.AsAPIError(err)
 	if !ok || apiErr.Status != 409 {
@@ -238,8 +238,8 @@ func TestErrandCancel_Conflict(t *testing.T) {
 func TestErrandCancel_EmptyID(t *testing.T) {
 	_, cl := fakeServer(t, map[string]http.HandlerFunc{})
 	if err := cl.Errand.Cancel(context.Background(), ""); err == nil {
-		t.Fatal("ожидалась ошибка")
-	} else if !strings.Contains(err.Error(), "errand_id пуст") {
+		t.Fatal("expected an error")
+	} else if !strings.Contains(err.Error(), "errand_id empty") {
 		t.Errorf("err = %v, want errand_id-empty", err)
 	}
 }
@@ -260,7 +260,7 @@ func TestErrandGet_NotFound(t *testing.T) {
 	})
 	_, _, err := cl.Errand.Get(context.Background(), "01HFNOSUCH")
 	if err == nil {
-		t.Fatal("ожидалась ошибка")
+		t.Fatal("expected an error")
 	}
 	apiErr, ok := client.AsAPIError(err)
 	if !ok || apiErr.Status != 404 {

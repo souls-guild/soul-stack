@@ -36,7 +36,7 @@ type pushProviderCreateInput struct {
 // N3). The register-func projects into the native handlers.PushProviderCreateInput.
 type PushProviderCreateRequest struct {
 	Name   string         `json:"name" required:"true" pattern:"^[a-z][a-z0-9-]{0,62}$" doc:"Push Provider name (= plugins.ssh_providers[].name)"`
-	Params map[string]any `json:"params,omitempty" doc:"opaque params; sensitive — vault-refs (зonчения не логируются)"`
+	Params map[string]any `json:"params,omitempty" doc:"opaque params; sensitive — vault-refs (values are not logged)"`
 }
 
 // pushProviderCreateOutput — huma output for POST /v1/push-providers (FULL-TYPED).
@@ -57,8 +57,8 @@ func pushProviderCreateOperation() huma.Operation {
 		OperationID:   "createPushProvider",
 		Method:        http.MethodPost,
 		Path:          "/",
-		Summary:       "Создать Push-Provider",
-		Description:   "Заbutсит Push-Provider (per-provider env-payload, ADR-032 S7-2). Permission push-provider.create. 409 — name занят. sensitive-ключи обязаны быть vault-refs.",
+		Summary:       "Create a Push Provider",
+		Description:   "Creates a Push Provider (per-provider env-payload, ADR-032 S7-2). Permission push-provider.create. 409 — name already taken. sensitive keys must be vault-refs.",
 		Tags:          []string{"push-provider"},
 		DefaultStatus: http.StatusCreated,
 		Errors:        []int{http.StatusBadRequest, http.StatusForbidden, http.StatusConflict, http.StatusUnprocessableEntity, http.StatusInternalServerError},
@@ -72,7 +72,7 @@ func pushProviderCreateOperation() huma.Operation {
 // range is enforced by CheckPageBounds in ListTyped → 400 (NOT huma minimum/maximum).
 // bad-int → 400 (parseInto).
 type pushProviderListInput struct {
-	NamePattern string `query:"name_pattern" doc:"LIKE-prefix-фильтр по имени (опц.)"`
+	NamePattern string `query:"name_pattern" doc:"LIKE-prefix filter by name (optional)"`
 	Offset      int32  `query:"offset" default:"0" doc:"offset from start of set, ≥0 (out-of-range → 400)"`
 	Limit       int32  `query:"limit" default:"50" doc:"page size 1..1000 (out-of-range → 400)"`
 }
@@ -91,8 +91,8 @@ func pushProviderListOperation() huma.Operation {
 		OperationID:   "listPushProviders",
 		Method:        http.MethodGet,
 		Path:          "/",
-		Summary:       "Спиwithк Push-Provider-ов (paged)",
-		Description:   "Реестр Push-Provider-ов с пагиonцией и фильтром name_pattern (ADR-032 S7-2). Permission push-provider.list. Read-only, no audit.",
+		Summary:       "List Push Providers (paged)",
+		Description:   "Registry of Push Providers with pagination and name_pattern filter (ADR-032 S7-2). Permission push-provider.list. Read-only, no audit.",
 		Tags:          []string{"push-provider"},
 		DefaultStatus: http.StatusOK,
 		Errors:        []int{http.StatusBadRequest, http.StatusForbidden, http.StatusInternalServerError},
@@ -121,8 +121,8 @@ func pushProviderGetOperation() huma.Operation {
 		OperationID:   "getPushProvider",
 		Method:        http.MethodGet,
 		Path:          "/{name}",
-		Summary:       "Карточка Push-Provider-а",
-		Description:   "Метаданные одbutго Push-Provider-а по имени (ADR-032 S7-2). Permission push-provider.read. Read-only, no audit.",
+		Summary:       "Push Provider card",
+		Description:   "Metadata of a single Push Provider by name (ADR-032 S7-2). Permission push-provider.read. Read-only, no audit.",
 		Tags:          []string{"push-provider"},
 		DefaultStatus: http.StatusOK,
 		Errors:        []int{http.StatusForbidden, http.StatusNotFound, http.StatusUnprocessableEntity, http.StatusInternalServerError},
@@ -146,7 +146,7 @@ type pushProviderUpdateInput struct {
 // the committed hand-written spec (rollout batch N3). The register-func projects into
 // the native handlers.PushProviderUpdateInput.
 type PushProviderUpdateRequest struct {
-	Params map[string]any `json:"params" required:"true" doc:"полный butвый onбор params (replace); sensitive — vault-refs"`
+	Params map[string]any `json:"params" required:"true" doc:"full new set of params (replace); sensitive — vault-refs"`
 }
 
 // pushProviderUpdateOutput — huma output for PUT /v1/push-providers/{name} (FULL-TYPED).
@@ -165,8 +165,8 @@ func pushProviderUpdateOperation() huma.Operation {
 		OperationID:   "updatePushProvider",
 		Method:        http.MethodPut,
 		Path:          "/{name}",
-		Summary:       "Заменить params Push-Provider-а",
-		Description:   "Replace-семантика: params полbutстью заменяет существующий onбор (ADR-032 S7-2). Permission push-provider.update. 404 — записи absent.",
+		Summary:       "Replace a Push Provider's params",
+		Description:   "Replace semantics: params fully replaces the existing set (ADR-032 S7-2). Permission push-provider.update. 404 — record absent.",
 		Tags:          []string{"push-provider"},
 		DefaultStatus: http.StatusOK,
 		Errors:        []int{http.StatusBadRequest, http.StatusForbidden, http.StatusNotFound, http.StatusUnprocessableEntity, http.StatusInternalServerError},
@@ -196,8 +196,8 @@ func pushProviderDeleteOperation() huma.Operation {
 		OperationID:   "deletePushProvider",
 		Method:        http.MethodDelete,
 		Path:          "/{name}",
-		Summary:       "Удалить Push-Provider",
-		Description:   "Удаляет запись Push-Provider-а (ADR-032 S7-2). Permission push-provider.delete. 404 — записи absent.",
+		Summary:       "Delete a Push Provider",
+		Description:   "Deletes a Push Provider record (ADR-032 S7-2). Permission push-provider.delete. 404 — record absent.",
 		Tags:          []string{"push-provider"},
 		DefaultStatus: http.StatusNoContent,
 		Errors:        []int{http.StatusForbidden, http.StatusNotFound, http.StatusUnprocessableEntity, http.StatusInternalServerError},

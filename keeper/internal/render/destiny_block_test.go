@@ -71,7 +71,7 @@ func TestRenderDestinyBlock_WhenAndMerge(t *testing.T) {
 		t.Fatalf("Render: %v", err)
 	}
 	if len(tasks) != 1 {
-		t.Fatalf("len(tasks) = %d, want 1 (один block-потомок)", len(tasks))
+		t.Fatalf("len(tasks) = %d, want 1 (one block child)", len(tasks))
 	}
 	want := "(register.cfg.changed) && (register.probe.changed)"
 	if tasks[0].When != want {
@@ -103,13 +103,13 @@ func TestRenderDestinyBlock_FlatRegisterScope(t *testing.T) {
 		t.Fatalf("Render: %v", err)
 	}
 	if len(tasks) != 2 {
-		t.Fatalf("len(tasks) = %d, want 2 (block-потомок probe + restart снаружи)", len(tasks))
+		t.Fatalf("len(tasks) = %d, want 2 (block child probe + restart outside)", len(tasks))
 	}
 	if tasks[0].Register != "tls_changed" {
-		t.Errorf("tasks[0].Register = %q, want tls_changed (потомок block виден в плоском плане)", tasks[0].Register)
+		t.Errorf("tasks[0].Register = %q, want tls_changed (block child visible in the flat plan)", tasks[0].Register)
 	}
 	if len(tasks[1].OnChangesIdx) != 1 || tasks[1].OnChangesIdx[0] != 0 {
-		t.Errorf("restart.OnChangesIdx = %v, want [0] — register потомка block виден onchanges СНАРУЖИ block", tasks[1].OnChangesIdx)
+		t.Errorf("restart.OnChangesIdx = %v, want [0] -- block child register visible to onchanges OUTSIDE the block", tasks[1].OnChangesIdx)
 	}
 }
 
@@ -135,19 +135,19 @@ func TestRenderDestinyBlock_StaticWhenFalse_PerChild(t *testing.T) {
 		t.Fatalf("Render: %v", err)
 	}
 	if len(tasks) != 1 || len(plans) != 1 {
-		t.Fatalf("len(tasks)=%d plans=%d, want 1/1 (per-потомок placeholder)", len(tasks), len(plans))
+		t.Fatalf("len(tasks)=%d plans=%d, want 1/1 (per-child placeholder)", len(tasks), len(plans))
 	}
 	if tasks[0].FlowContext == nil {
-		t.Errorf("placeholder должен нести FlowContext (static-skip)")
+		t.Errorf("placeholder should carry FlowContext (static-skip)")
 	}
 	if tasks[0].Register != "inner_reg" {
-		t.Errorf("tasks[0].Register = %q, want inner_reg — register потомка виден на skip-placeholder", tasks[0].Register)
+		t.Errorf("tasks[0].Register = %q, want inner_reg -- child register visible on the skip-placeholder", tasks[0].Register)
 	}
 	if tasks[0].Params != nil {
 		t.Errorf("tasks[0].Params = %v, want nil (static-skip placeholder)", tasks[0].Params)
 	}
 	if len(plans[0].TargetSIDs) != 0 {
-		t.Errorf("placeholder.TargetSIDs = %v, want пусто (не диспатчится)", plans[0].TargetSIDs)
+		t.Errorf("placeholder.TargetSIDs = %v, want empty (not dispatched)", plans[0].TargetSIDs)
 	}
 }
 
@@ -170,16 +170,16 @@ func TestRenderDestinyBlock_StaticWhenFalse_PreservesRegister(t *testing.T) {
 
 	tasks, _, err := renderBlockDestiny(t, d, map[string]any{"enabled": false})
 	if err != nil {
-		t.Fatalf("Render НЕ должен падать на register потомка static-false destiny-block: %v", err)
+		t.Fatalf("Render must NOT fail on the register of a static-false destiny-block child: %v", err)
 	}
 	if len(tasks) != 2 {
-		t.Fatalf("len(tasks) = %d, want 2 (skip-placeholder потомка + restart)", len(tasks))
+		t.Fatalf("len(tasks) = %d, want 2 (child skip-placeholder + restart)", len(tasks))
 	}
 	if tasks[0].Register != "tls_changed" {
-		t.Errorf("tasks[0].Register = %q, want tls_changed (register потомка виден через skip-placeholder)", tasks[0].Register)
+		t.Errorf("tasks[0].Register = %q, want tls_changed (child register visible through the skip-placeholder)", tasks[0].Register)
 	}
 	if len(tasks[1].OnChangesIdx) != 1 || tasks[1].OnChangesIdx[0] != 0 {
-		t.Errorf("restart.OnChangesIdx = %v, want [0] — register потомка static-false destiny-block резолвится снаружи", tasks[1].OnChangesIdx)
+		t.Errorf("restart.OnChangesIdx = %v, want [0] -- register of a static-false destiny-block child resolves from outside", tasks[1].OnChangesIdx)
 	}
 }
 
@@ -201,10 +201,10 @@ func TestRenderDestinyBlock_StaticWhenFalse_UnknownRegisterStillFails(t *testing
 
 	_, _, err := renderBlockDestiny(t, d, map[string]any{"enabled": false})
 	if err == nil {
-		t.Fatal("Render: ожидалась ошибка на несуществующий onchanges register, got nil")
+		t.Fatal("Render: expected an error for a nonexistent onchanges register, got nil")
 	}
 	if !errors.Is(err, ErrOnChangesUnknownRegister) {
-		t.Errorf("err = %v, want ErrOnChangesUnknownRegister (валидация не ослаблена static-skip)", err)
+		t.Errorf("err = %v, want ErrOnChangesUnknownRegister (validation not weakened by static-skip)", err)
 	}
 }
 
@@ -245,7 +245,7 @@ func TestRenderDestinyBlock_RejectsScenarioKeys(t *testing.T) {
 			case wantInclude && !errors.Is(err, ErrUnexpandedInclude):
 				t.Fatalf("err = %v, want ErrUnexpandedInclude", err)
 			case !wantInclude && !errors.Is(err, ErrUnsupportedDSL):
-				t.Fatalf("err = %v, want ErrUnsupportedDSL (scenario-ключ %s)", err, tc.name)
+				t.Fatalf("err = %v, want ErrUnsupportedDSL (scenario key %s)", err, tc.name)
 			}
 		})
 	}
@@ -274,10 +274,10 @@ func TestRenderDestinyBlock_Nested(t *testing.T) {
 		t.Fatalf("Render: %v", err)
 	}
 	if len(tasks) != 2 {
-		t.Fatalf("len(tasks) = %d, want 2 (sibling + leaf вложенного block)", len(tasks))
+		t.Fatalf("len(tasks) = %d, want 2 (sibling + leaf of a nested block)", len(tasks))
 	}
 	if tasks[0].Index != 0 || tasks[1].Index != 1 {
-		t.Errorf("indices = %d,%d, want 0,1 (сквозные)", tasks[0].Index, tasks[1].Index)
+		t.Errorf("indices = %d,%d, want 0,1 (contiguous)", tasks[0].Index, tasks[1].Index)
 	}
 	// sibling: only the outer when.
 	if tasks[0].When != "register.a.changed" {
@@ -287,7 +287,7 @@ func TestRenderDestinyBlock_Nested(t *testing.T) {
 	// (→ (a)&&(b)), then the result merges into the leaf (→ ((a)&&(b))&&(c)).
 	want := "((register.a.changed) && (register.b.changed)) && (register.c.changed)"
 	if tasks[1].When != want {
-		t.Errorf("leaf.When = %q, want %q (тройной AND каскадом)", tasks[1].When, want)
+		t.Errorf("leaf.When = %q, want %q (cascaded triple AND)", tasks[1].When, want)
 	}
 }
 

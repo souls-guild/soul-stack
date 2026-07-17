@@ -127,13 +127,13 @@ func TestApplyKeeperTask_RealCloud_CreatedResolves(t *testing.T) {
 	}
 	changed, failed, output, msg := r.applyKeeperTask(context.Background(), rt)
 	if failed {
-		t.Fatalf("core.cloud.created failed: %q (Lookup(core.cloud) hit + state=created должны были пройти)", msg)
+		t.Fatalf("core.cloud.created failed: %q (Lookup(core.cloud) hit + state=created should have passed)", msg)
 	}
 	if !changed {
 		t.Fatalf("expected changed=true on created, msg=%q", msg)
 	}
 	if output["action"] != "created" {
-		t.Errorf("output[action] = %v, want created (state резолвлен в created)", output["action"])
+		t.Errorf("output[action] = %v, want created (state resolved to created)", output["action"])
 	}
 }
 
@@ -166,12 +166,12 @@ func TestApplyKeeperTask_RealChoir_PresentResolves(t *testing.T) {
 	}
 	changed, failed, output, msg := r.applyKeeperTask(context.Background(), rt)
 	if failed {
-		t.Fatalf("core.choir.present failed: %q (Lookup(core.choir) hit + state=present должны были пройти)", msg)
+		t.Fatalf("core.choir.present failed: %q (Lookup(core.choir) hit + state=present should have passed)", msg)
 	}
 	if !changed {
 		t.Fatalf("expected changed=true on AddVoice, msg=%q", msg)
 	}
 	if output["state"] != "present" {
-		t.Errorf("output[state] = %v, want present (state резолвлен в present)", output["state"])
+		t.Errorf("output[state] = %v, want present (state resolved to present)", output["state"])
 	}
 }

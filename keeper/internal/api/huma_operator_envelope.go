@@ -29,7 +29,7 @@ import (
 // native element Operator (handler-native PILOT: the wire-DTO is fully native). The type name =
 // the contract schema name (huma DefaultSchemaNamer capitalizes → "OperatorListReply").
 type operatorListReply struct {
-	Items  []Operator `json:"items" doc:"страница операторов"`
+	Items  []Operator `json:"items" doc:"page of operators"`
 	Offset int32      `json:"offset" doc:"offset from start of set"`
 	Limit  int32      `json:"limit" doc:"page size"`
 	Total  int32      `json:"total" doc:"total number of entries in set"`

@@ -35,28 +35,28 @@ type voyageCreateInput struct {
 // hand-written spec (rollout N3). The domain VoyageCreateRequest does not reach the spec (the huma input is
 // this struct; the oapi type is not used as the huma body).
 type VoyageCreateRequest struct {
-	Kind         string         `json:"kind" required:"true" enum:"scenario,command" doc:"тип рецепта прогоon"`
-	ScenarioName string         `json:"scenario_name,omitempty" doc:"имя сцеonрия for kind=scenario"`
-	Module       string         `json:"module,omitempty" doc:"модуль for kind=command"`
-	Input        map[string]any `json:"input,omitempty" doc:"параметры рецепта"`
-	Target       VoyageTarget   `json:"target" required:"true" doc:"декларативный таргет (резолвится в snapshot единиц)"`
+	Kind         string         `json:"kind" required:"true" enum:"scenario,command" doc:"recipe type of the run"`
+	ScenarioName string         `json:"scenario_name,omitempty" doc:"scenario name for kind=scenario"`
+	Module       string         `json:"module,omitempty" doc:"module for kind=command"`
+	Input        map[string]any `json:"input,omitempty" doc:"recipe parameters"`
+	Target       VoyageTarget   `json:"target" required:"true" doc:"declarative target (resolved into a snapshot of units)"`
 
-	Batch                *string    `json:"batch,omitempty" doc:"размер батча: N хостов or N%"`
+	Batch                *string    `json:"batch,omitempty" doc:"batch size: N hosts or N%"`
 	BatchSize            *int       `json:"batch_size,omitempty" minimum:"1"`
 	BatchPercent         *int       `json:"batch_percent,omitempty" minimum:"1" maximum:"100"`
 	Concurrency          *int       `json:"concurrency,omitempty" minimum:"1" maximum:"500"`
 	BatchMode            string     `json:"batch_mode,omitempty" doc:"barrier (default) | window"`
 	DryRun               bool       `json:"dry_run,omitempty"`
-	ScheduleAt           *time.Time `json:"schedule_at,omitempty" doc:"RFC3339 отложенный старт"`
+	ScheduleAt           *time.Time `json:"schedule_at,omitempty" doc:"RFC3339 deferred start"`
 	InterBatchIntervalMS *int       `json:"inter_batch_interval_ms,omitempty"`
 	InterUnitIntervalMS  *int       `json:"inter_unit_interval_ms,omitempty"`
 
-	MaxFailures   *string `json:"max_failures,omitempty" doc:"порог провалов: N абwithлют or N%"`
+	MaxFailures   *string `json:"max_failures,omitempty" doc:"failure threshold: N absolute or N%"`
 	FailThreshold *int    `json:"fail_threshold,omitempty" minimum:"1"`
 	RequireAlive  *bool   `json:"require_alive,omitempty"`
 	OnFailure     string  `json:"on_failure,omitempty" doc:"abort | continue (default)"`
 
-	Notify []VoyageNotify `json:"notify,omitempty" doc:"разовые подписки on ЭТОТ прогон (ephemeral)"`
+	Notify []VoyageNotify `json:"notify,omitempty" doc:"one-time subscriptions for THIS run (ephemeral)"`
 }
 
 // Nested target/notify — the single api.VoyageTarget/api.VoyageNotify (huma_voyage_target.go),
@@ -80,8 +80,8 @@ func voyageCreateOperation() huma.Operation {
 		OperationID:   "createVoyage",
 		Method:        http.MethodPost,
 		Path:          "/",
-		Summary:       "Создать Voyage",
-		Description:   "Унифицированный батчевый прогон (ADR-043). RBAC-by-kind: scenario→incarnation.run, command→errand.run (fail-closed, в handler-е). Tempo per-AID rate-limit.",
+		Summary:       "Create a Voyage",
+		Description:   "Unified batch run (ADR-043). RBAC-by-kind: scenario->incarnation.run, command->errand.run (fail-closed, in the handler). Tempo per-AID rate-limit.",
 		Tags:          []string{"voyage"},
 		DefaultStatus: http.StatusAccepted,
 		Errors:        []int{http.StatusBadRequest, http.StatusForbidden, http.StatusNotFound, http.StatusUnprocessableEntity, http.StatusTooManyRequests, http.StatusInternalServerError},
@@ -113,7 +113,7 @@ func voyagePreviewOperation() huma.Operation {
 		Method:        http.MethodPost,
 		Path:          "/preview",
 		Summary:       "Dry-resolve scope Voyage",
-		Description:   "Предпоказ числа единиц/батчей БЕЗ withздания Voyage (ADR-043 amendment §4). Та же validation/резолв/RBAC, which Create. Без раhiddenия SID-списка. Read-like — no audit.",
+		Description:   "Preview of the number of units/batches WITHOUT creating a Voyage (ADR-043 amendment 4). Same validation/resolve/RBAC as Create. Without revealing the SID list. Read-like - no audit.",
 		Tags:          []string{"voyage"},
 		DefaultStatus: http.StatusOK,
 		Errors:        []int{http.StatusBadRequest, http.StatusForbidden, http.StatusNotFound, http.StatusUnprocessableEntity, http.StatusTooManyRequests, http.StatusInternalServerError},
@@ -127,8 +127,8 @@ func voyagePreviewOperation() huma.Operation {
 // default (the DOMAIN enforces the range via ParsePage/CheckPageBounds → 400, NOT a huma
 // schema min/max → otherwise out-of-range would give 422 instead of the contract 400).
 type voyageListInput struct {
-	Kind     string   `query:"kind" enum:"scenario,command" doc:"фильтр по kind; вне enum → 422"`
-	Statuses []string `query:"status,explode" enum:"scheduled,pending,running,succeeded,failed,partial_failed,cancelled" doc:"multi-value ?status=X&status=Y OR; вне enum → 422"`
+	Kind     string   `query:"kind" enum:"scenario,command" doc:"filter by kind; outside enum -> 422"`
+	Statuses []string `query:"status,explode" enum:"scheduled,pending,running,succeeded,failed,partial_failed,cancelled" doc:"multi-value ?status=X&status=Y OR; outside enum -> 422"`
 	Offset   int32    `query:"offset" default:"0" doc:"offset from start of set, ≥0 (out-of-range → 400)"`
 	Limit    int32    `query:"limit" default:"50" doc:"page size 1..1000 (out-of-range → 400)"`
 }
@@ -148,8 +148,8 @@ func voyageListOperation() huma.Operation {
 		OperationID:   "listVoyages",
 		Method:        http.MethodGet,
 		Path:          "/",
-		Summary:       "Спиwithк Voyage-прогоbutв (paged)",
-		Description:   "Спиwithк прогоbutв с фильтрами kind/status и пагиonцией (ADR-043). target_resolved NOT раскрывается (UI читает scope_size). Permission incarnation.history. Read-only, no audit.",
+		Summary:       "List Voyage runs (paged)",
+		Description:   "List of runs with kind/status filters and pagination (ADR-043). target_resolved is NOT exposed (UI reads scope_size). Permission incarnation.history. Read-only, no audit.",
 		Tags:          []string{"voyage"},
 		DefaultStatus: http.StatusOK,
 		Errors:        []int{http.StatusBadRequest, http.StatusForbidden, http.StatusUnprocessableEntity, http.StatusInternalServerError},
@@ -176,8 +176,8 @@ func voyageGetOperation() huma.Operation {
 		OperationID:   "getVoyage",
 		Method:        http.MethodGet,
 		Path:          "/{id}",
-		Summary:       "Snapshot Voyage-прогоon",
-		Description:   "Detail + summary одbutго прогоon (ADR-043). Permission incarnation.history. Read-only, no audit.",
+		Summary:       "Snapshot of a Voyage run",
+		Description:   "Detail + summary of a single run (ADR-043). Permission incarnation.history. Read-only, no audit.",
 		Tags:          []string{"voyage"},
 		DefaultStatus: http.StatusOK,
 		Errors:        []int{http.StatusForbidden, http.StatusNotFound, http.StatusUnprocessableEntity, http.StatusInternalServerError},
@@ -205,8 +205,8 @@ func voyageTargetsOperation() huma.Operation {
 		OperationID:   "listVoyageTargets",
 		Method:        http.MethodGet,
 		Path:          "/{id}/targets",
-		Summary:       "All-runs drill Voyage-прогоon",
-		Description:   "Per-target batch/status/back-link одbutго прогоon (ADR-043). Permission incarnation.history. Read-only, no audit.",
+		Summary:       "All-runs drill for a Voyage run",
+		Description:   "Per-target batch/status/back-link of a single run (ADR-043). Permission incarnation.history. Read-only, no audit.",
 		Tags:          []string{"voyage"},
 		DefaultStatus: http.StatusOK,
 		Errors:        []int{http.StatusForbidden, http.StatusNotFound, http.StatusUnprocessableEntity, http.StatusInternalServerError},
@@ -236,8 +236,8 @@ func voyageCancelOperation() huma.Operation {
 		OperationID:   "cancelVoyage",
 		Method:        http.MethodDelete,
 		Path:          "/{id}",
-		Summary:       "Отменить Voyage-прогон",
-		Description:   "Cancel pending/scheduled (running-abort — post-MVP). RBAC-by-kind в handler-е. 409 — running/terminal. Permission по kind.",
+		Summary:       "Cancel a Voyage run",
+		Description:   "Cancel pending/scheduled (running-abort - post-MVP). RBAC-by-kind in the handler. 409 - running/terminal. Permission by kind.",
 		Tags:          []string{"voyage"},
 		DefaultStatus: http.StatusAccepted,
 		Errors:        []int{http.StatusForbidden, http.StatusNotFound, http.StatusConflict, http.StatusUnprocessableEntity, http.StatusInternalServerError},

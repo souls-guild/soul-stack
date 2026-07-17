@@ -100,7 +100,7 @@ func schemaValidateKeeper(path string, root *ast.MappingNode, c *KeeperConfig) [
 				Level: diag.LevelError, Phase: diag.PhaseSchemaValidate,
 				Code:    "mcp_listener_required",
 				Message: "listen.mcp.addr is required",
-				Hint:    "MCP listener is mandatory per requirements.md → «встроенный MCP»; see docs/keeper/config.md → listen.mcp",
+				Hint:    "MCP listener is mandatory per requirements.md -> 'built-in MCP'; see docs/keeper/config.md -> listen.mcp",
 			}))
 		}
 		// Both gRPC sub-listeners are mandatory per ADR-002 / ADR-012: Soul gRPC =
@@ -479,7 +479,7 @@ func schemaValidateSoul(path string, root *ast.MappingNode, c *SoulConfig) []dia
 			out = append(out, atPath(root, fmt.Sprintf("$.keeper.endpoints[%d].priority", i), diag.Diagnostic{
 				Level: diag.LevelError, Phase: diag.PhaseSchemaValidate,
 				Code:    "value_out_of_range",
-				Message: fmt.Sprintf("keeper.endpoints[%d].priority must not be negative (0 = не задано → default 1), got %d", i, ep.Priority),
+				Message: fmt.Sprintf("keeper.endpoints[%d].priority must not be negative (0 = not set -> default 1), got %d", i, ep.Priority),
 			}))
 		}
 	}
@@ -490,7 +490,7 @@ func schemaValidateSoul(path string, root *ast.MappingNode, c *SoulConfig) []dia
 		out = append(out, atPath(root, "$.keeper.retry.max_attempts", diag.Diagnostic{
 			Level: diag.LevelError, Phase: diag.PhaseSchemaValidate,
 			Code:    "value_out_of_range",
-			Message: fmt.Sprintf("keeper.retry.max_attempts must not be negative (0 = не задано → default), got %d", c.Keeper.Retry.MaxAttempts),
+			Message: fmt.Sprintf("keeper.retry.max_attempts must not be negative (0 = not set -> default), got %d", c.Keeper.Retry.MaxAttempts),
 		}))
 	}
 	if c.OTel != nil {
@@ -538,7 +538,7 @@ func validateMaxApplySize(root *ast.MappingNode, yamlPath string, mb int) []diag
 			Level: diag.LevelError, Phase: diag.PhaseSchemaValidate,
 			Code:    "value_out_of_range",
 			Message: fmt.Sprintf("%s must be >= %d (MiB), got %d", yamlPath, MinMaxApplySizeMB, mb),
-			Hint:    "Keeper-send-лимит должен быть ≤ Soul-recv-лимиту; дефолт обоих — 8 MiB",
+			Hint:    "Keeper-send-limit must be <= Soul-recv-limit; default for both is 8 MiB",
 		})}
 	}
 	return nil
@@ -557,7 +557,7 @@ func validatePluginSizeMB(root *ast.MappingNode, yamlPath string, mb int) []diag
 			Level: diag.LevelError, Phase: diag.PhaseSchemaValidate,
 			Code:    "value_out_of_range",
 			Message: fmt.Sprintf("%s must be >= %d (MiB), got %d", yamlPath, MinPluginSizeMB, mb),
-			Hint:    "сабмегабайтный потолок отверг бы любой реальный бинарь плагина; дефолты — 256 MiB (артефакт) / 1024 MiB (клон)",
+			Hint:    "a sub-megabyte ceiling would reject any real plugin binary; defaults are 256 MiB (artifact) / 1024 MiB (clone)",
 		})}
 	}
 	return nil

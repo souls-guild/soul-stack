@@ -161,7 +161,7 @@ func (r *Runner) Run(ctx context.Context, req *keeperv1.ErrandRequest) *keeperv1
 		// contour's perspective it's "not allowed" (whitelist implies
 		// existence). Same audit mapping (errand.failed), status code
 		// distinguishes the reason.
-		r.logger.Warn("errand: модуль не найден в Registry",
+		r.logger.Warn("errand: module not found in Registry",
 			slog.String("errand_id", errandID),
 			slog.String("module", req.GetModule()))
 		r.recordTerminal(req.GetModule(), keeperv1.ErrandStatus_ERRAND_STATUS_MODULE_NOT_ALLOWED, started)

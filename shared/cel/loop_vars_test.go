@@ -13,7 +13,7 @@ func TestEvalExpression_LoopVarBare(t *testing.T) {
 		t.Fatalf("EvalExpression: %v", err)
 	}
 	if got := val.Value(); got != true {
-		t.Fatalf("ожидали true, получили %v", got)
+		t.Fatalf("expected true, got %v", got)
 	}
 }
 
@@ -27,7 +27,7 @@ func TestEvalInterpolation_LoopVar(t *testing.T) {
 		t.Fatalf("EvalInterpolation: %v", err)
 	}
 	if out != "hello alice" {
-		t.Fatalf("ожидали %q, получили %q", "hello alice", out)
+		t.Fatalf("expected %q, got %q", "hello alice", out)
 	}
 }
 
@@ -41,7 +41,7 @@ func TestEvalExpression_LoopVarIndex(t *testing.T) {
 		t.Fatalf("EvalExpression: %v", err)
 	}
 	if got := val.Value(); got != true {
-		t.Fatalf("ожидали true, получили %v", got)
+		t.Fatalf("expected true, got %v", got)
 	}
 }
 
@@ -58,7 +58,7 @@ func TestEvalExpression_LoopVarIsolated(t *testing.T) {
 	}
 	// Without it — undeclared (the base env doesn't know it).
 	if _, err := e.EvalExpression("user.name == 'x'", Vars{}); err == nil {
-		t.Fatalf("ожидали ошибку компиляции для необъявленной user без Loop")
+		t.Fatalf("expected a compile error for an undeclared user without Loop")
 	}
 }
 
@@ -116,6 +116,6 @@ func TestEvalExpression_LoopVarCoexists(t *testing.T) {
 		t.Fatalf("EvalInterpolation: %v", err)
 	}
 	if out != "u-alice" {
-		t.Fatalf("ожидали %q, получили %q", "u-alice", out)
+		t.Fatalf("expected %q, got %q", "u-alice", out)
 	}
 }

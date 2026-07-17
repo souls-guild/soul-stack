@@ -64,7 +64,7 @@ func redisUsersState(names ...string) map[string]any {
 func userPasswordSecret() config.RevealableSecret {
 	return config.RevealableSecret{
 		ID:        "user_password",
-		Label:     "Пароль пользователя Redis",
+		Label:     "Redis user password",
 		Enumerate: "state.redis_users",
 		VaultRef:  "secret/{service}/{incarnation}/users/{key}#password",
 	}
@@ -111,7 +111,7 @@ func TestRevealSecret_KeyNotInState_404(t *testing.T) {
 	_, err := h.RevealSecretTyped(context.Background(), revealClaims(), "redis-prod", "user_password", "carol")
 	assertRevealStatus(t, err, 404)
 	if len(vr.calledWith) != 0 {
-		t.Errorf("Vault не должен вызываться для key вне state: %#v", vr.calledWith)
+		t.Errorf("Vault must not be called for a key outside state: %#v", vr.calledWith)
 	}
 }
 
@@ -124,7 +124,7 @@ func TestRevealSecret_UnknownSecretID_404(t *testing.T) {
 	_, err := h.RevealSecretTyped(context.Background(), revealClaims(), "redis-prod", "nonexistent", "alice")
 	assertRevealStatus(t, err, 404)
 	if len(vr.calledWith) != 0 {
-		t.Errorf("Vault не должен вызываться для неизвестного secret_id: %#v", vr.calledWith)
+		t.Errorf("Vault must not be called for an unknown secret_id: %#v", vr.calledWith)
 	}
 }
 
@@ -137,7 +137,7 @@ func TestRevealSecret_OutOfScope_404(t *testing.T) {
 	_, err := h.RevealSecretTyped(context.Background(), revealClaims(), "redis-prod", "user_password", "alice")
 	assertRevealStatus(t, err, 404)
 	if len(vr.calledWith) != 0 {
-		t.Errorf("Vault не должен вызываться вне scope: %#v", vr.calledWith)
+		t.Errorf("Vault must not be called outside scope: %#v", vr.calledWith)
 	}
 }
 
@@ -172,7 +172,7 @@ func TestRevealSecret_InvalidKey_422(t *testing.T) {
 		assertRevealStatus(t, err, 422)
 	}
 	if len(vr.calledWith) != 0 {
-		t.Errorf("Vault не должен вызываться при невалидном key: %#v", vr.calledWith)
+		t.Errorf("Vault must not be called with an invalid key: %#v", vr.calledWith)
 	}
 }
 
@@ -192,7 +192,7 @@ func TestRevealSecret_TraversalGuard(t *testing.T) {
 	_, err := h.RevealSecretTyped(context.Background(), revealClaims(), "redis-prod", "user_password", "alice")
 	assertRevealStatus(t, err, 404)
 	if len(vr.calledWith) != 0 {
-		t.Errorf("traversal-guard пробит: ReadKV вызван с %#v (ParseRef обязан отсечь `..` до чтения)", vr.calledWith)
+		t.Errorf("traversal-guard breached: ReadKV called with %#v (ParseRef must cut `..` before reading)", vr.calledWith)
 	}
 }
 
@@ -211,7 +211,7 @@ func TestRevealSecret_LeakGuard(t *testing.T) {
 		t.Fatalf("RevealSecretTyped: %v", err)
 	}
 	if res.Value != plaintext {
-		t.Fatalf("значение обязано быть в теле ответа: %q", res.Value)
+		t.Fatalf("value must be in the response body: %q", res.Value)
 	}
 	if len(aw.events) != 1 {
 		t.Fatalf("audit events = %d, want 1", len(aw.events))
@@ -226,13 +226,13 @@ func TestRevealSecret_LeakGuard(t *testing.T) {
 	// The value must NOT appear ANYWHERE in the payload (serialize the whole thing).
 	payloadJSON, _ := json.Marshal(ev.Payload)
 	if strings.Contains(string(payloadJSON), plaintext) {
-		t.Fatalf("★ УТЕЧКА: plaintext секрета попал в audit-payload: %s", payloadJSON)
+		t.Fatalf("★ LEAK: secret plaintext ended up in audit payload: %s", payloadJSON)
 	}
 	if ev.Payload["result"] != "ok" {
 		t.Errorf("payload result = %#v, want ok", ev.Payload["result"])
 	}
 	if ev.Payload["name"] != "redis-prod" || ev.Payload["secret_id"] != "user_password" || ev.Payload["key"] != "alice" {
-		t.Errorf("payload полей не хватает/неверны: %#v", ev.Payload)
+		t.Errorf("payload fields missing/incorrect: %#v", ev.Payload)
 	}
 	if ev.Payload["path"] != "secret/redis/redis-prod/users/alice" {
 		t.Errorf("payload path = %#v, want logical secret/redis/redis-prod/users/alice", ev.Payload["path"])
@@ -252,8 +252,8 @@ func TestRevealableSecrets_Discovery(t *testing.T) {
 		t.Fatalf("items = %d, want 1", len(res.Items))
 	}
 	it := res.Items[0]
-	if it.SecretID != "user_password" || it.Label != "Пароль пользователя Redis" || it.StatePath != "redis_users" {
-		t.Errorf("item поля неверны: %#v", it)
+	if it.SecretID != "user_password" || it.Label != "Redis user password" || it.StatePath != "redis_users" {
+		t.Errorf("item fields incorrect: %#v", it)
 	}
 	if strings.Join(it.Keys, ",") != "alice,bob" {
 		t.Errorf("keys = %#v, want [alice bob]", it.Keys)
@@ -279,7 +279,7 @@ func TestRevealableSecrets_NoDeclarations_Empty(t *testing.T) {
 		t.Fatalf("RevealableSecretsTyped: %v", err)
 	}
 	if len(res.Items) != 0 {
-		t.Errorf("items = %d, want 0 (нет деклараций)", len(res.Items))
+		t.Errorf("items = %d, want 0 (no declarations)", len(res.Items))
 	}
 }
 
@@ -302,14 +302,14 @@ func TestRevealSecret_OutOfServiceScope_KeeperSecret_404(t *testing.T) {
 	_, err := h.RevealSecretTyped(context.Background(), revealClaims(), "redis-prod", "user_password", "alice")
 	assertRevealStatus(t, err, 404)
 	if len(vr.calledWith) != 0 {
-		t.Fatalf("★ SERVICE-SCOPE ПРОБИТ: ReadKV вызван для пути вне неймспейса: %#v", vr.calledWith)
+		t.Fatalf("★ SERVICE-SCOPE BREACHED: ReadKV called for a path outside namespace: %#v", vr.calledWith)
 	}
 	if len(aw.events) != 1 || aw.events[0].Payload["result"] != "denied" || aw.events[0].Payload["reason"] != "out_of_service_scope" {
-		t.Errorf("ожидался audit denied/out_of_service_scope: %#v", aw.events)
+		t.Errorf("expected audit denied/out_of_service_scope: %#v", aw.events)
 	}
 	pj, _ := json.Marshal(aw.events)
 	if strings.Contains(string(pj), "KEEPER-SIGNING-KEY") {
-		t.Fatalf("★ УТЕЧКА: значение в denied-audit: %s", pj)
+		t.Fatalf("★ LEAK: value in denied-audit: %s", pj)
 	}
 }
 
@@ -328,7 +328,7 @@ func TestRevealSecret_OutOfServiceScope_SiblingService_404(t *testing.T) {
 	_, err := h.RevealSecretTyped(context.Background(), revealClaims(), "redis-prod", "user_password", "alice")
 	assertRevealStatus(t, err, 404)
 	if len(vr.calledWith) != 0 {
-		t.Fatalf("★ SERVICE-SCOPE ПРОБИТ: ReadKV вызван для secret/foo/*: %#v", vr.calledWith)
+		t.Fatalf("★ SERVICE-SCOPE BREACHED: ReadKV called for secret/foo/*: %#v", vr.calledWith)
 	}
 }
 
@@ -347,7 +347,7 @@ func TestRevealSecret_PrefixConfusion_404(t *testing.T) {
 	_, err := h.RevealSecretTyped(context.Background(), revealClaims(), "redis-prod", "user_password", "alice")
 	assertRevealStatus(t, err, 404)
 	if len(vr.calledWith) != 0 {
-		t.Fatalf("★ PREFIX-CONFUSION: redis-prod-other прошёл scope redis-prod: %#v", vr.calledWith)
+		t.Fatalf("★ PREFIX-CONFUSION: redis-prod-other passed scope redis-prod: %#v", vr.calledWith)
 	}
 }
 
@@ -370,10 +370,10 @@ func TestRevealSecret_FloorBackstop_ServiceNamedKeeper(t *testing.T) {
 	_, err := h.RevealSecretTyped(context.Background(), revealClaims(), "kept", "user_password", "alice")
 	assertRevealStatus(t, err, 404)
 	if len(vr.calledWith) != 0 {
-		t.Fatalf("★ FLOOR-BACKSTOP ПРОБИТ: ReadKV вызван для secret/keeper/*: %#v", vr.calledWith)
+		t.Fatalf("★ FLOOR-BACKSTOP BREACHED: ReadKV called for secret/keeper/*: %#v", vr.calledWith)
 	}
 	if len(aw.events) != 1 || aw.events[0].Payload["reason"] != "floor_denied" {
-		t.Errorf("ожидался audit denied/floor_denied: %#v", aw.events)
+		t.Errorf("expected audit denied/floor_denied: %#v", aw.events)
 	}
 }
 
@@ -395,11 +395,11 @@ func TestRevealSecret_DeniedAudit_KeyNotInState(t *testing.T) {
 		t.Errorf("payload = %#v, want result=denied reason=key_not_in_state", ev.Payload)
 	}
 	if ev.Payload["name"] != "redis-prod" || ev.Payload["secret_id"] != "user_password" || ev.Payload["key"] != "bob" {
-		t.Errorf("payload идентификаторов неверен: %#v", ev.Payload)
+		t.Errorf("payload identifiers incorrect: %#v", ev.Payload)
 	}
 	pj, _ := json.Marshal(ev.Payload)
 	if strings.Contains(string(pj), "s3cr3t") {
-		t.Fatalf("★ УТЕЧКА: значение в denied-audit: %s", pj)
+		t.Fatalf("★ LEAK: value in denied-audit: %s", pj)
 	}
 }
 
@@ -412,7 +412,7 @@ func TestRevealSecret_DeniedAudit_OutOfScope(t *testing.T) {
 	_, err := h.RevealSecretTyped(context.Background(), revealClaims(), "redis-prod", "user_password", "alice")
 	assertRevealStatus(t, err, 404)
 	if len(aw.events) != 1 || aw.events[0].Payload["reason"] != "out_of_scope" {
-		t.Errorf("ожидался audit denied/out_of_scope: %#v", aw.events)
+		t.Errorf("expected audit denied/out_of_scope: %#v", aw.events)
 	}
 }
 
@@ -431,11 +431,11 @@ func TestRevealSecret_VersionCraft_PinsServiceVersion(t *testing.T) {
 		t.Fatalf("RevealSecretTyped: %v", err)
 	}
 	if len(loader.loadedRefs) == 0 {
-		t.Fatal("снапшот не загружался — version-pin недоказуем")
+		t.Fatal("snapshot was not loaded - version-pin unprovable")
 	}
 	for i, ref := range loader.loadedRefs {
 		if ref != wantVersion {
-			t.Errorf("Load[%d] ref = %q, want %q (манифест обязан пиниться на ServiceVersion)", i, ref, wantVersion)
+			t.Errorf("Load[%d] ref = %q, want %q (the manifest must pin to ServiceVersion)", i, ref, wantVersion)
 		}
 	}
 }
@@ -482,7 +482,7 @@ func TestRevealableSecrets_DiscoveryFiltersNonConformingKeys(t *testing.T) {
 		t.Fatalf("RevealableSecretsTyped: %v", err)
 	}
 	if strings.Join(res.Items[0].Keys, ",") != "bob" {
-		t.Errorf("keys = %#v, want только [bob] (Alice/пустое/без-name отфильтрованы)", res.Items[0].Keys)
+		t.Errorf("keys = %#v, want only [bob] (Alice/empty/no-name filtered out)", res.Items[0].Keys)
 	}
 }
 
@@ -503,7 +503,7 @@ func TestRevealableSecrets_MultipleDeclarations(t *testing.T) {
 		t.Fatalf("RevealableSecretsTyped: %v", err)
 	}
 	if len(res.Items) != 2 {
-		t.Fatalf("items = %d, want 2 (обе декларации)", len(res.Items))
+		t.Fatalf("items = %d, want 2 (both declarations)", len(res.Items))
 	}
 }
 
@@ -531,7 +531,7 @@ func TestEnumerateStateKeys_Coverage(t *testing.T) {
 	}}
 	got := enumerateStateKeys(state, "state.redis_users")
 	if strings.Join(got, ",") != "alice" {
-		t.Errorf("got %#v, want [alice] (дедуп + пропуск невалидных)", got)
+		t.Errorf("got %#v, want [alice] (dedup + skip invalid)", got)
 	}
 }
 
@@ -539,11 +539,11 @@ func TestEnumerateStateKeys_Coverage(t *testing.T) {
 func assertRevealStatus(t *testing.T, err error, want int) {
 	t.Helper()
 	if err == nil {
-		t.Fatalf("ожидалась ошибка со статусом %d, got nil", want)
+		t.Fatalf("expected an error with status %d, got nil", want)
 	}
 	d, ok := AsProblemDetails(err)
 	if !ok {
-		t.Fatalf("ошибка не problemError: %v", err)
+		t.Fatalf("error is not a problemError: %v", err)
 	}
 	if d.Status != want {
 		t.Errorf("status = %d, want %d (detail=%q)", d.Status, want, d.Detail)

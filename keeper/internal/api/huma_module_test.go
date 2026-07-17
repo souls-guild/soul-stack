@@ -74,7 +74,7 @@ func remarshalModule(t *testing.T, raw []byte) string {
 	t.Helper()
 	var v any
 	if err := json.Unmarshal(raw, &v); err != nil {
-		t.Fatalf("reply не JSON: %v; raw=%s", err, raw)
+		t.Fatalf("reply is not JSON: %v; raw=%s", err, raw)
 	}
 	out, err := json.Marshal(v)
 	if err != nil {
@@ -109,10 +109,10 @@ func TestHumaModule_List_GoldenWire(t *testing.T) {
 		Items []map[string]any `json:"items"`
 	}
 	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
-		t.Fatalf("reply не JSON-envelope: %v; body=%s", err, rec.Body.String())
+		t.Fatalf("reply is not a JSON envelope: %v; body=%s", err, rec.Body.String())
 	}
 	if len(got.Items) == 0 {
-		t.Fatal("items пуст — core-каталог обязан быть непустым")
+		t.Fatal("items is empty -- the core catalog must be non-empty")
 	}
 	// Byte-exact of one deterministic record (core.archive — single-state).
 	var archive map[string]any
@@ -122,12 +122,12 @@ func TestHumaModule_List_GoldenWire(t *testing.T) {
 		}
 	}
 	if archive == nil {
-		t.Fatal("core.archive отсутствует в каталоге")
+		t.Fatal("core.archive is missing from the catalog")
 	}
 	out, _ := json.Marshal(archive)
-	const golden = `{"description":"Распаковка архива (tar/tar.gz/tar.bz2/zip) в каталог onзonчения.","errand_safe":false,"kind":"core","name":"core.archive","params":[{"description":"Каталог распаковки.","name":"dest","required":true,"type":"string"},{"description":"Формат (tar|tar.gz|tar.bz2|zip); опущеbut — auto-detect по расширению.","name":"format","required":false,"type":"string"},{"description":"Лимит числа записей в архиве; по умолчанию 100000. Защита от zip-bomb.","name":"max_entries","required":false,"type":"integer"},{"description":"Лимит отbutшения распакованных байт к сжатым (compression ratio); по умолчанию 100, 0 — отключеbut. Защита от zip-bomb с маленьким сжатым размером.","name":"max_ratio","required":false,"type":"integer"},{"description":"Лимит суммарbutго распакованbutго размера (число байт or N[KiB|MiB|GiB]); по умолчанию 1GiB. Защита от zip-bomb.","name":"max_size","required":false,"type":"string"},{"description":"Путь к архиву-источнику.","name":"path","required":true,"type":"string"}],"states":["extracted"]}`
+	const golden = `{"description":"Extract an archive (tar/tar.gz/tar.bz2/zip) into the destination directory.","errand_safe":false,"kind":"core","name":"core.archive","params":[{"description":"Extraction directory.","name":"dest","required":true,"type":"string"},{"description":"Format (tar|tar.gz|tar.bz2|zip); omitted -- auto-detect by extension.","name":"format","required":false,"type":"string"},{"description":"Limit on the number of entries in the archive; default 100000. Guards against zip-bombs.","name":"max_entries","required":false,"type":"integer"},{"description":"Limit on the ratio of unpacked bytes to compressed bytes (compression ratio); default 100, 0 -- disabled. Guards against zip-bombs with a small compressed size.","name":"max_ratio","required":false,"type":"integer"},{"description":"Limit on total unpacked size (number of bytes or N[KiB|MiB|GiB]); default 1GiB. Guards against zip-bombs.","name":"max_size","required":false,"type":"string"},{"description":"Path to the source archive.","name":"path","required":true,"type":"string"}],"states":["extracted"]}`
 	if string(out) != golden {
-		t.Errorf("GOLDEN wire-дрейф module.list[core.archive]:\n got  = %s\n want = %s", string(out), golden)
+		t.Errorf("GOLDEN wire drift module.list[core.archive]:\n got  = %s\n want = %s", string(out), golden)
 	}
 }
 
@@ -148,7 +148,7 @@ func TestHumaModule_List_ErrandSafeFilter(t *testing.T) {
 	}
 	legacyBytes, _ := json.Marshal(reply)
 	if got, want := remarshalModule(t, rec.Body.Bytes()), remarshalModule(t, legacyBytes); got != want {
-		t.Errorf("errand_safe-фильтр дрейф:\n got  = %s\n want = %s", got, want)
+		t.Errorf("errand_safe filter drift:\n got  = %s\n want = %s", got, want)
 	}
 }
 
@@ -181,7 +181,7 @@ func TestHumaModule_Get_GoldenWire(t *testing.T) {
 	}
 	legacyBytes, _ := json.Marshal(item)
 	if got, want := remarshalModule(t, rec.Body.Bytes()), remarshalModule(t, legacyBytes); got != want {
-		t.Errorf("GOLDEN wire-дрейф module.get:\n got  = %s\n want = %s", got, want)
+		t.Errorf("GOLDEN wire drift module.get:\n got  = %s\n want = %s", got, want)
 	}
 }
 
@@ -211,7 +211,7 @@ func TestHumaModule_FormPrep_GoldenWire(t *testing.T) {
 	}
 	const golden = `{"sids":["host-a.example.com","host-b.example.com"],"truncated":true}`
 	if got := remarshalModule(t, rec.Body.Bytes()); got != golden {
-		t.Errorf("GOLDEN wire-дрейф module.form-prep:\n got  = %s\n want = %s", got, golden)
+		t.Errorf("GOLDEN wire drift module.form-prep:\n got  = %s\n want = %s", got, golden)
 	}
 }
 
@@ -285,7 +285,7 @@ func TestHumaModule_ReadNoAudit(t *testing.T) {
 		}
 	}
 	if len(auditCap.Events()) != 0 {
-		t.Errorf("module READ-toмен записал audit (%d withбытий) — read не toлжен", len(auditCap.Events()))
+		t.Errorf("module READ endpoint recorded audit (%d events) -- read must not", len(auditCap.Events()))
 	}
 }
 
@@ -299,7 +299,7 @@ func TestHumaModule_SpecYAML(t *testing.T) {
 	// the spec dump on a bare router emits "/", "/{name}", "/{name}/form-prep".
 	for _, want := range []string{"listModules", "getModule", "moduleFormPrep", "/{name}/form-prep"} {
 		if !strings.Contains(frag, want) {
-			t.Errorf("спека не withдержит %q:\n%s", want, frag)
+			t.Errorf("spec does not contain %q:\n%s", want, frag)
 		}
 	}
 }

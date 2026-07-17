@@ -37,7 +37,7 @@ func TestDestinySource_ResolveURL_GitOverrideEmptyTemplate(t *testing.T) {
 	s := NewDestinySource(nil, fixedTemplateSource(""))
 	got, err := s.resolveURL("pilot-flat", "https://git.example/destiny-special.git")
 	if err != nil {
-		t.Fatalf("resolveURL override без шаблона: %v", err)
+		t.Fatalf("resolveURL override without a template: %v", err)
 	}
 	if want := "https://git.example/destiny-special.git"; got != want {
 		t.Errorf("url = %q, want %q", got, want)
@@ -47,7 +47,7 @@ func TestDestinySource_ResolveURL_GitOverrideEmptyTemplate(t *testing.T) {
 func TestDestinySource_ResolveURL_EmptyTemplate(t *testing.T) {
 	s := NewDestinySource(nil, fixedTemplateSource(""))
 	if _, err := s.resolveURL("x", ""); err == nil {
-		t.Fatal("ожидалась ошибка на пустой default_destiny_source без git-override")
+		t.Fatal("expected an error on empty default_destiny_source without a git override")
 	}
 }
 
@@ -57,14 +57,14 @@ func TestDestinySource_ResolveURL_EmptyTemplate(t *testing.T) {
 func TestDestinySource_ResolveURL_NilSource(t *testing.T) {
 	s := NewDestinySource(nil, nil)
 	if _, err := s.resolveURL("x", ""); err == nil {
-		t.Fatal("ожидалась ошибка на nil-источник шаблона без git-override")
+		t.Fatal("expected an error on a nil template source without a git override")
 	}
 }
 
 func TestDestinySource_ResolveURL_NoPlaceholder(t *testing.T) {
 	s := NewDestinySource(nil, fixedTemplateSource("https://git.example/destiny.git"))
 	if _, err := s.resolveURL("x", ""); err == nil {
-		t.Fatal("ожидалась ошибка на шаблон без {name}")
+		t.Fatal("expected an error on a template without {name}")
 	}
 }
 
@@ -96,7 +96,7 @@ func TestDestinySource_ResolveURL_Lazy(t *testing.T) {
 		t.Fatalf("resolveURL #2: %v", err)
 	}
 	if want := "file:///new/svc"; got != want {
-		t.Errorf("url #2 = %q, want %q (шаблон не читается лениво)", got, want)
+		t.Errorf("url #2 = %q, want %q (template is not read lazily)", got, want)
 	}
 }
 
@@ -117,8 +117,8 @@ func TestDestinyResolver_RefFromManifest(t *testing.T) {
 	}
 	// destiny outside service.yml::destiny[] → resolve error without touching the loader.
 	_, err := r.Resolve(t.Context(), "ghost")
-	if err == nil || !strings.Contains(err.Error(), "не объявлена") {
-		t.Fatalf("Resolve(ghost) err = %v, want 'не объявлена'", err)
+	if err == nil || !strings.Contains(err.Error(), "not declared") {
+		t.Fatalf("Resolve(ghost) err = %v, want 'not declared'", err)
 	}
 }
 

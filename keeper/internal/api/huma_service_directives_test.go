@@ -101,7 +101,7 @@ func TestDirectives_FullCatalog_ETag(t *testing.T) {
 		t.Errorf("ETag = %q, want %q (snapshot SHA1)", got, want)
 	}
 	if got, want := rec.Header().Get("Cache-Control"), "no-cache"; got != want {
-		t.Errorf("Cache-Control = %q, want %q (тег-ref v1.0.0 mutable)", got, want)
+		t.Errorf("Cache-Control = %q, want %q (tag-ref v1.0.0 mutable)", got, want)
 	}
 	var body hDirBody
 	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
@@ -111,10 +111,10 @@ func TestDirectives_FullCatalog_ETag(t *testing.T) {
 		t.Errorf("body meta = %+v, want service=web ref=v1.0.0 sha1=%s", body, hDirSHA1)
 	}
 	if len(body.Directives) != 3 {
-		t.Errorf("directives-серий = %d, want 3", len(body.Directives))
+		t.Errorf("directives-series = %d, want 3", len(body.Directives))
 	}
 	if !hDirContains(body.Directives["8.2"], "maxmemory") {
-		t.Errorf("8.2 не withдержит maxmemory: %v", body.Directives["8.2"])
+		t.Errorf("8.2 does not contain maxmemory: %v", body.Directives["8.2"])
 	}
 }
 
@@ -167,7 +167,7 @@ func TestDirectives_VersionNarrows(t *testing.T) {
 		t.Fatalf("unmarshal: %v", err)
 	}
 	if len(body.Directives) != 1 || body.Directives["8.2"] == nil {
-		t.Fatalf("version=8.2.2 → серии %v, want ровbut {8.2}", hDirKeys(body.Directives))
+		t.Fatalf("version=8.2.2 -> series %v, want exactly {8.2}", hDirKeys(body.Directives))
 	}
 	// ETag stays snapshot SHA1 (per-URL resource, body changes, ETag = snapshot version).
 	if got := rec.Header().Get("ETag"); got != `"`+hDirSHA1+`"` {
@@ -183,7 +183,7 @@ func TestDirectives_EmptyCatalog_200(t *testing.T) {
 	r.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/v1/services/web/directives", nil))
 
 	if rec.Code != http.StatusOK {
-		t.Fatalf("status = %d, want 200 (не 404); body=%s", rec.Code, rec.Body.String())
+		t.Fatalf("status = %d, want 200 (not 404); body=%s", rec.Code, rec.Body.String())
 	}
 	// directives must be present as {} (not null) for graceful frontend degradation.
 	var raw map[string]json.RawMessage
@@ -208,7 +208,7 @@ func TestDirectives_IfNoneMatch_304(t *testing.T) {
 		t.Fatalf("status = %d, want 304; body=%s", rec.Code, rec.Body.String())
 	}
 	if rec.Body.Len() != 0 {
-		t.Errorf("304 body непустое: %q", rec.Body.String())
+		t.Errorf("304 body is not empty: %q", rec.Body.String())
 	}
 	if got := rec.Header().Get("ETag"); got != `"`+hDirSHA1+`"` {
 		t.Errorf("ETag on 304 = %q, want snapshot SHA1", got)
@@ -224,7 +224,7 @@ func TestDirectives_IfNoneMatch_Stale200(t *testing.T) {
 	r.ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusOK {
-		t.Fatalf("status = %d, want 200 (ETag не withвпал)", rec.Code)
+		t.Fatalf("status = %d, want 200 (ETag did not match)", rec.Code)
 	}
 }
 

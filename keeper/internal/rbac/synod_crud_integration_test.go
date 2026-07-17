@@ -105,7 +105,7 @@ func TestIntegration_SynodCRUD_HappyPath_EffectivePermission(t *testing.T) {
 		t.Fatalf("CreateSynod: %v", err)
 	}
 	if !synodExists(t, "ops-team") {
-		t.Fatal("группа не создана")
+		t.Fatal("group not created")
 	}
 	// 2. Bundle the role (cluster-admin holds its permissions via `*` → subset ok).
 	if err := s.GrantRole(ctx, GrantRoleInput{SynodName: "ops-team", RoleName: "deployer", CallerAID: admin}); err != nil {
@@ -119,14 +119,14 @@ func TestIntegration_SynodCRUD_HappyPath_EffectivePermission(t *testing.T) {
 	// Until now the member had no incarnation.run permission — now it has it
 	// THROUGH the group (snapshot union). Verify via enforcer.Check.
 	if err := effectiveCheck(t, member, "incarnation", "run", nil); err != nil {
-		t.Errorf("Check(member, incarnation.run) = %v, want nil (право через Synod)", err)
+		t.Errorf("Check(member, incarnation.run) = %v, want nil (permission via Synod)", err)
 	}
 	if err := effectiveCheck(t, member, "soul", "list", nil); err != nil {
-		t.Errorf("Check(member, soul.list) = %v, want nil (право через Synod)", err)
+		t.Errorf("Check(member, soul.list) = %v, want nil (permission via Synod)", err)
 	}
 	// A permission the role does NOT grant — deny.
 	if err := effectiveCheck(t, member, "operator", "create", nil); err == nil {
-		t.Error("Check(member, operator.create) = nil, want deny (роль такого права не даёт)")
+		t.Error("Check(member, operator.create) = nil, want deny (role does not grant this permission)")
 	}
 }
 
@@ -166,7 +166,7 @@ func TestIntegration_SynodCRUD_List(t *testing.T) {
 		}
 	}
 	if team == nil {
-		t.Fatal("группа team не в списке")
+		t.Fatal("group team not in the list")
 	}
 	if len(team.Roles) != 1 || team.Roles[0] != "viewer" {
 		t.Errorf("Roles = %v, want [viewer]", team.Roles)
@@ -203,10 +203,10 @@ func TestIntegration_SynodCRUD_Idempotent(t *testing.T) {
 		}
 	}
 	if synodRoleCount(t, "team") != 1 {
-		t.Errorf("roleCount = %d, want 1 (идемпотентно)", synodRoleCount(t, "team"))
+		t.Errorf("roleCount = %d, want 1 (idempotent)", synodRoleCount(t, "team"))
 	}
 	if synodOperatorCount(t, "team") != 1 {
-		t.Errorf("operatorCount = %d, want 1 (идемпотентно)", synodOperatorCount(t, "team"))
+		t.Errorf("operatorCount = %d, want 1 (idempotent)", synodOperatorCount(t, "team"))
 	}
 }
 
@@ -236,15 +236,15 @@ func TestIntegration_SynodEscalation_GrantWildcardRole_Denied(t *testing.T) {
 	s := newService(t)
 
 	if err := s.CreateSynod(ctx, CreateSynodInput{Name: "trap", CallerAID: sub}); err != nil {
-		t.Fatalf("CreateSynod (sub вправе): %v", err)
+		t.Fatalf("CreateSynod (sub is entitled): %v", err)
 	}
 	// sub bundles the `*`-role → subset must deny it (sub doesn't hold `*`).
 	err := s.GrantRole(ctx, GrantRoleInput{SynodName: "trap", RoleName: "super", CallerAID: sub})
 	if !errors.Is(err, ErrPermissionNotHeld) {
-		t.Fatalf("err = %v, want ErrPermissionNotHeld (sub не держит `*`)", err)
+		t.Fatalf("err = %v, want ErrPermissionNotHeld (sub does not hold `*`)", err)
 	}
 	if synodRoleCount(t, "trap") != 0 {
-		t.Error("`*`-роль забандлена несмотря на subset-check")
+		t.Error("`*` role was bundled despite the subset-check")
 	}
 }
 
@@ -281,11 +281,11 @@ func TestIntegration_SynodEscalation_GrantScopedRole(t *testing.T) {
 	// staging is outside scope=prod → denied.
 	err := s.GrantRole(ctx, GrantRoleInput{SynodName: "g", RoleName: "staging-run", CallerAID: sub})
 	if !errors.Is(err, ErrPermissionNotHeld) {
-		t.Fatalf("err = %v, want ErrPermissionNotHeld (staging вне scope=prod)", err)
+		t.Fatalf("err = %v, want ErrPermissionNotHeld (staging outside scope=prod)", err)
 	}
 	// prod is in scope → ok.
 	if err := s.GrantRole(ctx, GrantRoleInput{SynodName: "g", RoleName: "prod-run", CallerAID: sub}); err != nil {
-		t.Fatalf("GrantRole (prod в scope): %v", err)
+		t.Fatalf("GrantRole (prod in scope): %v", err)
 	}
 }
 
@@ -314,10 +314,10 @@ func TestIntegration_SynodEscalation_AddToWildcardGroup_Denied(t *testing.T) {
 	// sub adds itself to the `*`-group → subset must deny it.
 	err := s.AddOperator(ctx, AddOperatorInput{SynodName: "powerful", AID: sub, CallerAID: sub})
 	if !errors.Is(err, ErrPermissionNotHeld) {
-		t.Fatalf("err = %v, want ErrPermissionNotHeld (член получил бы `*`)", err)
+		t.Fatalf("err = %v, want ErrPermissionNotHeld (member would get `*`)", err)
 	}
 	if synodOperatorCount(t, "powerful") != 0 {
-		t.Error("архон добавлен в `*`-группу несмотря на subset-check")
+		t.Error("archon added to `*` group despite the subset-check")
 	}
 }
 
@@ -344,10 +344,10 @@ func TestIntegration_SynodEscalation_AddOwnedBundle_OK(t *testing.T) {
 	s := newService(t)
 
 	if err := s.AddOperator(ctx, AddOperatorInput{SynodName: "viewers", AID: "archon-target", CallerAID: sub}); err != nil {
-		t.Fatalf("AddOperator (sub держит весь bundle): %v", err)
+		t.Fatalf("AddOperator (sub holds the whole bundle): %v", err)
 	}
 	if synodOperatorCount(t, "viewers") != 1 {
-		t.Error("архон не добавлен (ложный subset-deny на покрытое право)")
+		t.Error("archon not added (false subset-deny on a covered permission)")
 	}
 }
 
@@ -366,10 +366,10 @@ func TestIntegration_SynodLockout_Delete_LastAdminViaGroup_Locked(t *testing.T) 
 
 	err := s.DeleteSynod(context.Background(), "admins-grp")
 	if !errors.Is(err, ErrWouldLockOutCluster) {
-		t.Fatalf("err = %v, want ErrWouldLockOutCluster (delete последнего `*`-пути через группу)", err)
+		t.Fatalf("err = %v, want ErrWouldLockOutCluster (delete of the last `*` path via the group)", err)
 	}
 	if !synodExists(t, "admins-grp") {
-		t.Error("группа удалена несмотря на lockout (tx не откатилась)")
+		t.Error("group deleted despite lockout (tx did not roll back)")
 	}
 }
 
@@ -391,10 +391,10 @@ func TestIntegration_SynodLockout_Delete_SurvivorDirect_OK(t *testing.T) {
 
 	// Delete the group — alice remains admin directly → ok.
 	if err := s.DeleteSynod(ctx, "admins-grp"); err != nil {
-		t.Fatalf("DeleteSynod (выживший admin напрямую): %v", err)
+		t.Fatalf("DeleteSynod (surviving admin directly): %v", err)
 	}
 	if synodExists(t, "admins-grp") {
-		t.Error("группа не удалена")
+		t.Error("group not deleted")
 	}
 }
 
@@ -410,10 +410,10 @@ func TestIntegration_SynodLockout_RemoveOperator_LastAdmin_Locked(t *testing.T) 
 
 	err := s.RemoveOperator(context.Background(), RemoveOperatorInput{SynodName: "admins-grp", AID: "archon-grpadmin"})
 	if !errors.Is(err, ErrWouldLockOutCluster) {
-		t.Fatalf("err = %v, want ErrWouldLockOutCluster (снятие последнего `*`-члена)", err)
+		t.Fatalf("err = %v, want ErrWouldLockOutCluster (removal of the last `*` member)", err)
 	}
 	if synodOperatorCount(t, "admins-grp") != 1 {
-		t.Error("член снят несмотря на lockout (tx не откатилась)")
+		t.Error("member removed despite lockout (tx did not roll back)")
 	}
 }
 
@@ -432,10 +432,10 @@ func TestIntegration_SynodLockout_RemoveOperator_AlsoDirect_OK(t *testing.T) {
 	s := newService(t)
 
 	if err := s.RemoveOperator(ctx, RemoveOperatorInput{SynodName: "admins-grp", AID: "archon-grpadmin"}); err != nil {
-		t.Fatalf("RemoveOperator (admin держит `*` ещё напрямую): %v", err)
+		t.Fatalf("RemoveOperator (admin still holds `*` directly): %v", err)
 	}
 	if synodOperatorCount(t, "admins-grp") != 0 {
-		t.Error("член не снят")
+		t.Error("member not removed")
 	}
 	// admin remains through the direct path.
 	admins, err := LockEffectiveClusterAdmins(ctx, beginRoTx(t))
@@ -443,7 +443,7 @@ func TestIntegration_SynodLockout_RemoveOperator_AlsoDirect_OK(t *testing.T) {
 		t.Fatalf("LockEffectiveClusterAdmins: %v", err)
 	}
 	if !containsAID(admins, "archon-grpadmin") {
-		t.Errorf("admins = %v, want содержит archon-grpadmin (через прямой `*`)", admins)
+		t.Errorf("admins = %v, want to contain archon-grpadmin (via direct `*`)", admins)
 	}
 }
 
@@ -459,10 +459,10 @@ func TestIntegration_SynodLockout_RevokeRole_LastWildcard_Locked(t *testing.T) {
 
 	err := s.RevokeRole(context.Background(), RevokeRoleInput{SynodName: "admins-grp", RoleName: "grp-admin-role"})
 	if !errors.Is(err, ErrWouldLockOutCluster) {
-		t.Fatalf("err = %v, want ErrWouldLockOutCluster (снятие последней `*`-роли группы)", err)
+		t.Fatalf("err = %v, want ErrWouldLockOutCluster (removal of the group's last `*` role)", err)
 	}
 	if synodRoleCount(t, "admins-grp") != 1 {
-		t.Error("роль снята несмотря на lockout (tx не откатилась)")
+		t.Error("role revoked despite lockout (tx did not roll back)")
 	}
 }
 
@@ -479,10 +479,10 @@ func TestIntegration_SynodLockout_RevokeRole_NonWildcard_OK(t *testing.T) {
 	s := newService(t)
 
 	if err := s.RevokeRole(ctx, RevokeRoleInput{SynodName: "team", RoleName: "viewer"}); err != nil {
-		t.Fatalf("RevokeRole (не-`*` роль): %v", err)
+		t.Fatalf("RevokeRole (non-`*` role): %v", err)
 	}
 	if synodRoleCount(t, "team") != 0 {
-		t.Error("роль не снята")
+		t.Error("role not revoked")
 	}
 }
 
@@ -554,10 +554,10 @@ func TestIntegration_SynodCascade_DeleteClearsMembershipAndBundle(t *testing.T) 
 		t.Fatalf("DeleteSynod: %v", err)
 	}
 	if synodOperatorCount(t, "team") != 0 {
-		t.Error("synod_operators не очищены каскадом")
+		t.Error("synod_operators not cleared by cascade")
 	}
 	if synodRoleCount(t, "team") != 0 {
-		t.Error("synod_roles не очищены каскадом")
+		t.Error("synod_roles not cleared by cascade")
 	}
 }
 
@@ -575,7 +575,7 @@ func TestIntegration_SynodCascade_RoleDeleteRemovesFromBundle(t *testing.T) {
 		t.Fatalf("DeleteRole: %v", err)
 	}
 	if synodRoleCount(t, "team") != 0 {
-		t.Error("роль не снята из bundle каскадом role.delete")
+		t.Error("role not removed from the bundle by role.delete cascade")
 	}
 }
 
@@ -684,7 +684,7 @@ func TestIntegration_Synod409_DeleteBuiltin(t *testing.T) {
 		t.Errorf("DeleteSynod(builtin) = %v, want ErrSynodBuiltin", err)
 	}
 	if !synodExists(t, "protected") {
-		t.Error("builtin-группа удалена")
+		t.Error("builtin group was deleted")
 	}
 }
 

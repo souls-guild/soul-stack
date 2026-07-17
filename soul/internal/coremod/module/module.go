@@ -101,7 +101,7 @@ func (m *Module) Validate(_ context.Context, req *pluginv1.ValidateRequest) (*pl
 		if err != nil {
 			errs = append(errs, err.Error())
 		} else if !reFullName.MatchString(name) {
-			errs = append(errs, fmt.Sprintf("param %q: expected \"<namespace>.<name>\" (например community.redis), got %q", "name", name))
+			errs = append(errs, fmt.Sprintf("param %q: expected \"<namespace>.<name>\" (e.g. community.redis), got %q", "name", name))
 		}
 	}
 	if _, err := util.OptStringParam(req.GetParams(), "ref"); err != nil {

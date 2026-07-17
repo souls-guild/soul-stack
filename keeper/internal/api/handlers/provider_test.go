@@ -163,7 +163,7 @@ func provProblemType(t *testing.T, err error) string {
 	}
 	d, ok := AsProblemDetails(err)
 	if !ok {
-		t.Fatalf("error не *problemError: %v", err)
+		t.Fatalf("error is not *problemError: %v", err)
 	}
 	return d.Type
 }

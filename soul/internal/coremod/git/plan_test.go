@@ -15,6 +15,6 @@ import (
 func TestGit_NotPlanReadSafe(t *testing.T) {
 	m := git.New()
 	if _, ok := any(m).(module.PlanReadSafe); ok {
-		t.Fatal("core.git реализует PlanReadSafe (не должен в MVP — см. doc Plan)")
+		t.Fatal("core.git implements PlanReadSafe (should not in MVP - see doc Plan)")
 	}
 }

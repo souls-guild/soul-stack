@@ -85,7 +85,7 @@ func TestVoyageCommandResolver_RequireAliveFalse_NoFilter(t *testing.T) {
 		t.Fatalf("ResolveSIDs: %v", err)
 	}
 	if len(out) != 2 {
-		t.Errorf("resolved = %v, want 2 (фильтр не применён при require_alive=false)", out)
+		t.Errorf("resolved = %v, want 2 (filter not applied when require_alive=false)", out)
 	}
 }
 
@@ -120,10 +120,10 @@ func TestResolveSIDsInScope_Unrestricted_FullResolve(t *testing.T) {
 		t.Fatalf("ResolveSIDsInScope: %v", err)
 	}
 	if len(got.SIDs) != 2 {
-		t.Errorf("SIDs = %v, want оба (Unrestricted без урезания)", got.SIDs)
+		t.Errorf("SIDs = %v, want both (Unrestricted, no trimming)", got.SIDs)
 	}
 	if len(got.DeniedExplicit) != 0 {
-		t.Errorf("DeniedExplicit = %v, want пусто (Unrestricted)", got.DeniedExplicit)
+		t.Errorf("DeniedExplicit = %v, want empty (Unrestricted)", got.DeniedExplicit)
 	}
 }
 
@@ -144,10 +144,10 @@ func TestResolveSIDsInScope_CovenScope_TrimsWide(t *testing.T) {
 		t.Fatalf("ResolveSIDsInScope: %v", err)
 	}
 	if len(got.SIDs) != 2 || got.SIDs[0] != "a.example.com" || got.SIDs[1] != "c.example.com" {
-		t.Errorf("SIDs = %v, want [a c] (урезано до prod)", got.SIDs)
+		t.Errorf("SIDs = %v, want [a c] (trimmed to prod)", got.SIDs)
 	}
 	if len(got.DeniedExplicit) != 0 {
-		t.Errorf("DeniedExplicit = %v, want пусто (широкий target урезается молча)", got.DeniedExplicit)
+		t.Errorf("DeniedExplicit = %v, want empty (wide target trimmed silently)", got.DeniedExplicit)
 	}
 }
 
@@ -170,7 +170,7 @@ func TestResolveSIDsInScope_ExplicitForeignSID_Denied(t *testing.T) {
 		t.Errorf("SIDs = %v, want [a]", got.SIDs)
 	}
 	if len(got.DeniedExplicit) != 1 || got.DeniedExplicit[0] != "b.example.com" {
-		t.Errorf("DeniedExplicit = %v, want [b] (явный чужой → 403)", got.DeniedExplicit)
+		t.Errorf("DeniedExplicit = %v, want [b] (explicit foreign -> 403)", got.DeniedExplicit)
 	}
 }
 
@@ -208,10 +208,10 @@ func TestResolveSIDsInScope_EmptyScope_FailClosed(t *testing.T) {
 		t.Fatalf("ResolveSIDsInScope: %v", err)
 	}
 	if len(got.SIDs) != 0 {
-		t.Errorf("SIDs = %v, want пусто (Empty fail-closed)", got.SIDs)
+		t.Errorf("SIDs = %v, want empty (Empty fail-closed)", got.SIDs)
 	}
 	if len(got.DeniedExplicit) != 1 {
-		t.Errorf("DeniedExplicit = %v, want [a] (явный SID при Empty → 403)", got.DeniedExplicit)
+		t.Errorf("DeniedExplicit = %v, want [a] (explicit SID with Empty -> 403)", got.DeniedExplicit)
 	}
 }
 
@@ -234,6 +234,6 @@ func TestResolveSIDsInScope_PartialScope_CovenWorksSoulprintUndershown(t *testin
 		t.Fatalf("ResolveSIDsInScope: %v", err)
 	}
 	if len(got.SIDs) != 1 || got.SIDs[0] != "a.example.com" {
-		t.Errorf("SIDs = %v, want [a] (coven работает, soulprint под-показ)", got.SIDs)
+		t.Errorf("SIDs = %v, want [a] (coven works, soulprint under-shown)", got.SIDs)
 	}
 }

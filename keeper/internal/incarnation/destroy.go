@@ -325,7 +325,7 @@ func writeDestroyCompletedAudit(
 		},
 	}
 	if err := w.Write(ctx, ev); err != nil && logger != nil {
-		logger.Warn("incarnation: запись audit incarnation.destroy_completed провалена",
+		logger.Warn("incarnation: writing audit incarnation.destroy_completed failed",
 			slog.String("name", name), slog.Any("error", err))
 	}
 }
@@ -357,7 +357,7 @@ func writeDestroyAudit(
 		},
 	}
 	if err := w.Write(ctx, ev); err != nil && logger != nil {
-		logger.Warn("incarnation: запись audit incarnation.destroy_started провалена",
+		logger.Warn("incarnation: writing audit incarnation.destroy_started failed",
 			slog.String("name", name), slog.Any("error", err))
 	}
 }

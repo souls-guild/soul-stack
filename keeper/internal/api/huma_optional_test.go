@@ -36,7 +36,7 @@ func TestOptional_UnmarshalJSON_ThreeBranches(t *testing.T) {
 			t.Fatalf("unmarshal: %v", err)
 		}
 		if w.Field.Set {
-			t.Errorf("omitted: Set=%v, want false (UnmarshalJSON не toлжен вызываться)", w.Field.Set)
+			t.Errorf("omitted: Set=%v, want false (UnmarshalJSON must not be called)", w.Field.Set)
 		}
 		if w.Field.Null {
 			t.Errorf("omitted: Null=%v, want false", w.Field.Null)
@@ -52,7 +52,7 @@ func TestOptional_UnmarshalJSON_ThreeBranches(t *testing.T) {
 			t.Fatalf("unmarshal: %v", err)
 		}
 		if !w.Field.Set {
-			t.Errorf("null: Set=%v, want true (ключ присутствует)", w.Field.Set)
+			t.Errorf("null: Set=%v, want true (key present)", w.Field.Set)
 		}
 		if !w.Field.Null {
 			t.Errorf("null: Null=%v, want true", w.Field.Null)
@@ -101,10 +101,10 @@ func TestOptional_Schema_NullableNoOctetStream(t *testing.T) {
 	s := Optional[string]{}.Schema(reg)
 
 	if s == nil {
-		t.Fatal("Schema(r) вернул nil")
+		t.Fatal("Schema(r) returned nil")
 	}
 	if s.Type != huma.TypeString {
-		t.Errorf("Schema.Type = %q, want %q (схема вложенbutго T, не octet-stream/object)", s.Type, huma.TypeString)
+		t.Errorf("Schema.Type = %q, want %q (schema of wrapped T, not octet-stream/object)", s.Type, huma.TypeString)
 	}
 	if !s.Nullable {
 		t.Errorf("Schema.Nullable = %v, want true (presence-reset via null)", s.Nullable)
@@ -114,10 +114,10 @@ func TestOptional_Schema_NullableNoOctetStream(t *testing.T) {
 	// Here we guard that the schema is a pure scalar without binary encoding (a RawBody []byte
 	// regression would give ContentEncoding:"base64"/Format:"binary", not a nullable string).
 	if s.ContentEncoding != "" {
-		t.Errorf("Schema.ContentEncoding = %q, want пусто (рецидив binary/RawBody-моста)", s.ContentEncoding)
+		t.Errorf("Schema.ContentEncoding = %q, want empty (recurrence of binary/RawBody bridge)", s.ContentEncoding)
 	}
 	if s.Format == "binary" {
-		t.Errorf("Schema.Format = %q, want не-binary (Optional[string] — чистый string)", s.Format)
+		t.Errorf("Schema.Format = %q, want non-binary (Optional[string] is a pure string)", s.Format)
 	}
 }
 
@@ -128,7 +128,7 @@ func TestOptional_Schema_Int_Nullable(t *testing.T) {
 	s := Optional[int]{}.Schema(reg)
 
 	if s == nil {
-		t.Fatal("Schema(r) вернул nil")
+		t.Fatal("Schema(r) returned nil")
 	}
 	if s.Type != huma.TypeInteger {
 		t.Errorf("Schema.Type = %q, want %q", s.Type, huma.TypeInteger)
@@ -164,26 +164,26 @@ func TestOptional_Schema_StructT_NoRefNoPanic(t *testing.T) {
 	reg := huma.NewMapRegistry("#/components/schemas/", huma.DefaultSchemaNamer)
 	fs := Optional[optStructField]{}.Schema(reg)
 	if fs == nil {
-		t.Fatal("Schema(r) вернул nil")
+		t.Fatal("Schema(r) returned nil")
 	}
 	if fs.Ref != "" {
-		t.Fatalf("Schema.Ref = %q, want пусто (struct-T toлжен инлайниться, не $ref — иonче nullable-on-ref паника)", fs.Ref)
+		t.Fatalf("Schema.Ref = %q, want empty (struct-T must inline, not $ref - otherwise nullable-on-ref panic)", fs.Ref)
 	}
 	if fs.Type != huma.TypeObject {
 		t.Errorf("Schema.Type = %q, want %q (inline-object)", fs.Type, huma.TypeObject)
 	}
 	if !fs.Nullable {
-		t.Errorf("Schema.Nullable = %v, want true (nullable on реальbutй object-схеме)", fs.Nullable)
+		t.Errorf("Schema.Nullable = %v, want true (nullable on a real object schema)", fs.Nullable)
 	}
 	if _, ok := fs.Properties["a"]; !ok {
-		t.Errorf("Schema.Properties не несёт inline-поля struct-T: %v", fs.Properties)
+		t.Errorf("Schema.Properties does not carry inline fields of struct-T: %v", fs.Properties)
 	}
 
 	// The main guard: REGISTERING the huma operation with this field does not panic. This is
 	// exactly where huma expands the body schema and (before the fix) crashed on nullable-ref.
 	defer func() {
 		if rec := recover(); rec != nil {
-			t.Fatalf("huma.Register с fieldм Optional[struct] запаниковал: %v (регресс allowRef=false → ref+nullable)", rec)
+			t.Fatalf("huma.Register with an Optional[struct] field panicked: %v (regression allowRef=false -> ref+nullable)", rec)
 		}
 	}()
 	r := chi.NewRouter()
@@ -209,7 +209,7 @@ func TestOptional_Schema_NotInRequired(t *testing.T) {
 
 	for _, r := range s.Required {
 		if r == "opt" {
-			t.Errorf("Optional-field `opt` попало в required %v — toлжbut быть опциоonльным", s.Required)
+			t.Errorf("Optional-field `opt` ended up in required %v - should be optional", s.Required)
 		}
 	}
 	var hasMust bool
@@ -219,7 +219,7 @@ func TestOptional_Schema_NotInRequired(t *testing.T) {
 		}
 	}
 	if !hasMust {
-		t.Errorf("required = %v, ожидалось onличие `must` (sanity)", s.Required)
+		t.Errorf("required = %v, expected presence of `must` (sanity)", s.Required)
 	}
 }
 
@@ -270,7 +270,7 @@ func TestOptional_RoundTrip_HumaInput(t *testing.T) {
 				t.Fatalf("status = %d, want 204; body=%s", rec.Code, rec.Body.String())
 			}
 			if captured.Set != tc.wantSet || captured.Null != tc.wantNull || captured.Value != tc.wantValue {
-				t.Errorf("Optional после huma-input = {Set:%v Null:%v Value:%q}, want {Set:%v Null:%v Value:%q}",
+				t.Errorf("Optional after huma-input = {Set:%v Null:%v Value:%q}, want {Set:%v Null:%v Value:%q}",
 					captured.Set, captured.Null, captured.Value, tc.wantSet, tc.wantNull, tc.wantValue)
 			}
 		})

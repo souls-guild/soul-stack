@@ -64,10 +64,10 @@ func (s *DestinySource) resolveURL(name, gitOverride string) (string, error) {
 		template = s.template.DefaultDestinySource()
 	}
 	if template == "" {
-		return "", fmt.Errorf("scenario: default_destiny_source не задан (keeper_settings), а destiny %q не указала per-entry git — резолв apply:destiny невозможен", name)
+		return "", fmt.Errorf("scenario: default_destiny_source is not set (keeper_settings), and destiny %q did not specify a per-entry git - resolving apply:destiny is impossible", name)
 	}
 	if !strings.Contains(template, destinyNamePlaceholder) {
-		return "", fmt.Errorf("scenario: default_destiny_source %q не содержит %s — имя destiny некуда подставить", template, destinyNamePlaceholder)
+		return "", fmt.Errorf("scenario: default_destiny_source %q does not contain %s - nowhere to substitute the destiny name", template, destinyNamePlaceholder)
 	}
 	return strings.ReplaceAll(template, destinyNamePlaceholder, name), nil
 }
@@ -98,7 +98,7 @@ type destinyResolver struct {
 func (r *destinyResolver) Resolve(ctx context.Context, name string) (*render.ResolvedDestiny, error) {
 	dep, ok := r.deps[name]
 	if !ok {
-		return nil, fmt.Errorf("scenario: destiny %q не объявлена в service.yml::destiny[] — apply:destiny ссылается только на декларированную зависимость (ADR-007)", name)
+		return nil, fmt.Errorf("scenario: destiny %q is not declared in service.yml::destiny[] - apply:destiny refers only to a declared dependency (ADR-007)", name)
 	}
 	gitURL, err := r.source.resolveURL(name, dep.Git)
 	if err != nil {

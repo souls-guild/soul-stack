@@ -15,7 +15,7 @@ func TestMaskAndCapBytes_Cap(t *testing.T) {
 	big := strings.Repeat("a", OutputCapBytes+100)
 	out, trunc := MaskAndCapBytes(big)
 	if !trunc {
-		t.Fatalf("trunc=false для строки %d > %d", len(big), OutputCapBytes)
+		t.Fatalf("trunc=false for a string of %d > %d", len(big), OutputCapBytes)
 	}
 	if len(out) != OutputCapBytes {
 		t.Errorf("len(out) = %d; want %d", len(out), OutputCapBytes)
@@ -27,7 +27,7 @@ func TestMaskAndCapBytes_NoCap(t *testing.T) {
 	small := "hello world"
 	out, trunc := MaskAndCapBytes(small)
 	if trunc {
-		t.Errorf("trunc=true для %q", small)
+		t.Errorf("trunc=true for %q", small)
 	}
 	if out != small {
 		t.Errorf("out = %q; want %q", out, small)
@@ -38,7 +38,7 @@ func TestMaskAndCapBytes_Empty(t *testing.T) {
 	t.Parallel()
 	out, trunc := MaskAndCapBytes("")
 	if out != "" || trunc {
-		t.Errorf("(%q, %v) для пустого входа", out, trunc)
+		t.Errorf("(%q, %v) for empty input", out, trunc)
 	}
 }
 
@@ -68,7 +68,7 @@ func TestOutputCollector_ExtractFinal_Shell(t *testing.T) {
 		t.Errorf("exit_code = %d", exit)
 	}
 	if structured == nil {
-		t.Fatalf("structured = nil; должен содержать оставшееся поле trace")
+		t.Fatalf("structured = nil; should contain the remaining trace field")
 	}
 	if v := structured.GetFields()["trace"].GetStringValue(); v != "x" {
 		t.Errorf("structured.trace = %q", v)
@@ -76,7 +76,7 @@ func TestOutputCollector_ExtractFinal_Shell(t *testing.T) {
 	// shell channels must NOT leak into structured.
 	for _, k := range []string{"stdout", "stderr", "exit_code"} {
 		if _, ok := structured.GetFields()[k]; ok {
-			t.Errorf("structured содержит shell-поле %q", k)
+			t.Errorf("structured contains shell field %q", k)
 		}
 	}
 }
@@ -93,7 +93,7 @@ func TestOutputCollector_ExtractFinal_ReadSafe(t *testing.T) {
 	_ = c.Send(&pluginv1.ApplyEvent{Output: out})
 	stdout, stderr, exit, structured := c.extractFinal()
 	if stdout != "" || stderr != "" || exit != 0 {
-		t.Errorf("shell-поля заполнены: %q / %q / %d", stdout, stderr, exit)
+		t.Errorf("shell fields populated: %q / %q / %d", stdout, stderr, exit)
 	}
 	if structured == nil || len(structured.GetFields()) != 2 {
 		t.Fatalf("structured = %v", structured)

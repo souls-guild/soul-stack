@@ -24,7 +24,7 @@ func TestEvalExpression_BoolKey(t *testing.T) {
 		t.Fatalf("EvalExpression: %v", err)
 	}
 	if got := val.Value(); got != true {
-		t.Fatalf("ожидали true, получили %v", got)
+		t.Fatalf("expected true, got %v", got)
 	}
 }
 
@@ -37,7 +37,7 @@ func TestEvalExpression_IntArithmetic(t *testing.T) {
 		t.Fatalf("EvalExpression: %v", err)
 	}
 	if got := val.Value(); got != int64(4) {
-		t.Fatalf("ожидали 4, получили %v (%T)", got, got)
+		t.Fatalf("expected 4, got %v (%T)", got, got)
 	}
 }
 
@@ -52,7 +52,7 @@ func TestEvalExpression_SoulprintSelf(t *testing.T) {
 		t.Fatalf("EvalExpression: %v", err)
 	}
 	if val.Value() != true {
-		t.Fatalf("ожидали true, получили %v", val.Value())
+		t.Fatalf("expected true, got %v", val.Value())
 	}
 }
 
@@ -68,7 +68,7 @@ func TestEvalExpression_RegisterAndIncarnation(t *testing.T) {
 		t.Fatalf("EvalExpression: %v", err)
 	}
 	if val.Value() != true {
-		t.Fatalf("ожидали true, получили %v", val.Value())
+		t.Fatalf("expected true, got %v", val.Value())
 	}
 }
 
@@ -84,7 +84,7 @@ func TestEvalExpression_StdlibSizeContains(t *testing.T) {
 		t.Fatalf("EvalExpression: %v", err)
 	}
 	if val.Value() != true {
-		t.Fatalf("ожидали true, получили %v", val.Value())
+		t.Fatalf("expected true, got %v", val.Value())
 	}
 }
 
@@ -94,7 +94,7 @@ func TestEvalExpression_CompileError(t *testing.T) {
 	_, err := e.EvalExpression("input.foo ==", Vars{})
 	var ce *ErrCompile
 	if !errors.As(err, &ce) {
-		t.Fatalf("ожидали *ErrCompile, получили %T: %v", err, err)
+		t.Fatalf("expected *ErrCompile, got %T: %v", err, err)
 	}
 }
 
@@ -105,7 +105,7 @@ func TestEvalExpression_EvalError(t *testing.T) {
 	_, err := e.EvalExpression("input.x / 0", Vars{Input: map[string]any{"x": 1}})
 	var ee *ErrEval
 	if !errors.As(err, &ee) {
-		t.Fatalf("ожидали *ErrEval, получили %T: %v", err, err)
+		t.Fatalf("expected *ErrEval, got %T: %v", err, err)
 	}
 }
 
@@ -118,7 +118,7 @@ func TestEvalInterpolation_SingleBlockNative(t *testing.T) {
 		t.Fatalf("EvalInterpolation: %v", err)
 	}
 	if out != int64(4) {
-		t.Fatalf("ожидали int64(4), получили %v (%T)", out, out)
+		t.Fatalf("expected int64(4), got %v (%T)", out, out)
 	}
 }
 
@@ -131,7 +131,7 @@ func TestEvalInterpolation_Concat(t *testing.T) {
 		t.Fatalf("EvalInterpolation: %v", err)
 	}
 	if out != "redis-cli replicaof 10.0.0.5 6379" {
-		t.Fatalf("неверная склейка: %q", out)
+		t.Fatalf("incorrect concatenation: %q", out)
 	}
 }
 
@@ -144,7 +144,7 @@ func TestEvalInterpolation_MultipleBlocks(t *testing.T) {
 		t.Fatalf("EvalInterpolation: %v", err)
 	}
 	if out != "1-2" {
-		t.Fatalf("ожидали \"1-2\", получили %q", out)
+		t.Fatalf("expected \"1-2\", got %q", out)
 	}
 }
 
@@ -158,7 +158,7 @@ func TestEvalInterpolation_StringResultNoText(t *testing.T) {
 		t.Fatalf("EvalInterpolation: %v", err)
 	}
 	if out != "world" {
-		t.Fatalf("ожидали \"world\", получили %q", out)
+		t.Fatalf("expected \"world\", got %q", out)
 	}
 }
 
@@ -173,7 +173,7 @@ func TestEvalInterpolation_BalancedBraces(t *testing.T) {
 		t.Fatalf("EvalInterpolation balanced: %v", err)
 	}
 	if out != int64(1) {
-		t.Fatalf("ожидали int64(1), получили %v (%T)", out, out)
+		t.Fatalf("expected int64(1), got %v (%T)", out, out)
 	}
 }
 
@@ -185,7 +185,7 @@ func TestEvalInterpolation_BalancedBracesConcat(t *testing.T) {
 		t.Fatalf("EvalInterpolation: %v", err)
 	}
 	if out != "v=1!" {
-		t.Fatalf("ожидали \"v=1!\", получили %q", out)
+		t.Fatalf("expected \"v=1!\", got %q", out)
 	}
 }
 
@@ -198,7 +198,7 @@ func TestEvalInterpolation_NestedParens(t *testing.T) {
 		t.Fatalf("EvalInterpolation: %v", err)
 	}
 	if out != "count=2" {
-		t.Fatalf("ожидали \"count=2\", получили %q", out)
+		t.Fatalf("expected \"count=2\", got %q", out)
 	}
 }
 
@@ -210,7 +210,7 @@ func TestEvalInterpolation_Escape(t *testing.T) {
 		t.Fatalf("EvalInterpolation: %v", err)
 	}
 	if out != "shell-var literal: ${HOME}" {
-		t.Fatalf("escape не сработал: %q", out)
+		t.Fatalf("escape did not work: %q", out)
 	}
 }
 
@@ -223,7 +223,7 @@ func TestEvalInterpolation_DollarLiteral(t *testing.T) {
 		t.Fatalf("EvalInterpolation: %v", err)
 	}
 	if out != "price: $100" {
-		t.Fatalf("ожидали литерал, получили %q", out)
+		t.Fatalf("expected a literal, got %q", out)
 	}
 }
 
@@ -235,7 +235,7 @@ func TestEvalInterpolation_NoMarker(t *testing.T) {
 		t.Fatalf("EvalInterpolation: %v", err)
 	}
 	if out != "plain string" {
-		t.Fatalf("ожидали без изменений, получили %q", out)
+		t.Fatalf("expected no changes, got %q", out)
 	}
 }
 
@@ -245,7 +245,7 @@ func TestEvalInterpolation_Unterminated(t *testing.T) {
 	_, err := e.EvalInterpolation("${ input.foo", Vars{})
 	var ce *ErrCompile
 	if !errors.As(err, &ce) {
-		t.Fatalf("ожидали *ErrCompile для незакрытого блока, получили %T: %v", err, err)
+		t.Fatalf("expected *ErrCompile for an unclosed block, got %T: %v", err, err)
 	}
 }
 
@@ -257,7 +257,7 @@ func TestEvalInterpolation_ListConcatError(t *testing.T) {
 	_, err := e.EvalInterpolation("xs: ${ input.xs }!", vars)
 	var ee *ErrEval
 	if !errors.As(err, &ee) {
-		t.Fatalf("ожидали *ErrEval для склейки list, получили %T: %v", err, err)
+		t.Fatalf("expected *ErrEval for concatenating a list, got %T: %v", err, err)
 	}
 }
 
@@ -272,10 +272,10 @@ func TestEvalInterpolation_ListNativeSingleBlock(t *testing.T) {
 		t.Fatalf("EvalInterpolation: %v", err)
 	}
 	if _, ok := out.(string); ok {
-		t.Fatalf("ожидали нативный list, получили строку %q", out)
+		t.Fatalf("expected a native list, got a string %q", out)
 	}
 	if out == nil {
-		t.Fatalf("ожидали ненулевой list, получили nil")
+		t.Fatalf("expected a non-nil list, got nil")
 	}
 }
 
@@ -290,7 +290,7 @@ func TestUnsupported(t *testing.T) {
 			_, err := e.EvalExpression(expr, Vars{})
 			var ue *ErrUnsupported
 			if !errors.As(err, &ue) {
-				t.Fatalf("ожидали *ErrUnsupported, получили %T: %v", err, err)
+				t.Fatalf("expected *ErrUnsupported, got %T: %v", err, err)
 			}
 		})
 	}
@@ -302,7 +302,7 @@ func TestUnsupportedInInterpolation(t *testing.T) {
 	_, err := e.EvalInterpolation("ip=${ vault('secret/ip') }", Vars{})
 	var ue *ErrUnsupported
 	if !errors.As(err, &ue) {
-		t.Fatalf("ожидали *ErrUnsupported, получили %T: %v", err, err)
+		t.Fatalf("expected *ErrUnsupported, got %T: %v", err, err)
 	}
 }
 
@@ -311,18 +311,18 @@ func TestCache_HitAndReset(t *testing.T) {
 	vars := Vars{Input: map[string]any{"foo": "bar"}}
 
 	if _, err := e.EvalExpression("input.foo == 'bar'", vars); err != nil {
-		t.Fatalf("первый eval: %v", err)
+		t.Fatalf("first eval: %v", err)
 	}
 	// The normalized form of the same expression must map to the same key.
 	if _, err := e.EvalExpression("input.foo   ==   'bar'", vars); err != nil {
-		t.Fatalf("второй eval: %v", err)
+		t.Fatalf("second eval: %v", err)
 	}
 
 	e.mu.RLock()
 	n := len(e.cache)
 	e.mu.RUnlock()
 	if n != 1 {
-		t.Fatalf("ожидали 1 запись в кеше (нормализация), получили %d", n)
+		t.Fatalf("expected 1 cache entry (normalization), got %d", n)
 	}
 
 	e.Reset()
@@ -330,7 +330,7 @@ func TestCache_HitAndReset(t *testing.T) {
 	n = len(e.cache)
 	e.mu.RUnlock()
 	if n != 0 {
-		t.Fatalf("после Reset кеш не пуст: %d", n)
+		t.Fatalf("cache is not empty after Reset: %d", n)
 	}
 }
 
@@ -344,7 +344,7 @@ func TestNormalizePreservesStringLiterals(t *testing.T) {
 		t.Fatalf("EvalExpression: %v", err)
 	}
 	if val.Value() != true {
-		t.Fatalf("нормализация испортила строковый литерал: %v", val.Value())
+		t.Fatalf("normalization corrupted a string literal: %v", val.Value())
 	}
 }
 
@@ -362,7 +362,7 @@ func TestConcurrentEval(t *testing.T) {
 				return
 			}
 			if val.Value() != true {
-				t.Errorf("goroutine %d: ожидали true", n)
+				t.Errorf("goroutine %d: expected true", n)
 			}
 		}(i)
 	}

@@ -60,7 +60,7 @@ func TestRender_ApplierRegister_TerminalEmitted(t *testing.T) {
 		t.Fatalf("Render (no register): %v", err)
 	}
 	if len(tasks) != 2 {
-		t.Fatalf("applier без register: len(tasks)=%d, want 2 (терминал НЕ эмитится)", len(tasks))
+		t.Fatalf("applier without register: len(tasks)=%d, want 2 (terminal is NOT emitted)", len(tasks))
 	}
 
 	// Same applier WITH register: → 2 children + 1 terminal.
@@ -70,23 +70,23 @@ func TestRender_ApplierRegister_TerminalEmitted(t *testing.T) {
 		t.Fatalf("Render (with register): %v", err)
 	}
 	if len(tasks) != 3 || len(plans) != 3 {
-		t.Fatalf("applier с register: len(tasks)=%d plans=%d, want 3/3 (+терминал)", len(tasks), len(plans))
+		t.Fatalf("applier with register: len(tasks)=%d plans=%d, want 3/3 (+terminal)", len(tasks), len(plans))
 	}
 	term := tasks[2]
 	if term.Module != "core.noop.run" {
-		t.Errorf("терминал module = %q, want core.noop.run", term.Module)
+		t.Errorf("terminal module = %q, want core.noop.run", term.Module)
 	}
 	if term.Register != "redis_destiny" {
-		t.Errorf("терминал Register = %q, want redis_destiny (= applier-register)", term.Register)
+		t.Errorf("terminal Register = %q, want redis_destiny (= applier-register)", term.Register)
 	}
 	if term.Index != 2 {
-		t.Errorf("терминал Index = %d, want 2 (сквозной за дочерними 0,1)", term.Index)
+		t.Errorf("terminal Index = %d, want 2 (through-numbered after children 0,1)", term.Index)
 	}
 	if len(term.AggregateOf) != 2 || term.AggregateOf[0] != 0 || term.AggregateOf[1] != 1 {
-		t.Errorf("терминал AggregateOf = %v, want [0 1] (Index всех дочерних)", term.AggregateOf)
+		t.Errorf("terminal AggregateOf = %v, want [0 1] (Index of all children)", term.AggregateOf)
 	}
 	if term.Params == nil {
-		t.Errorf("терминал Params = nil — должен быть пустой Struct (сборка ApplyRequest)")
+		t.Errorf("terminal Params = nil - must be an empty Struct (ApplyRequest assembly)")
 	}
 }
 
@@ -106,20 +106,20 @@ func TestRender_ApplierRegister_OnChangesResolves(t *testing.T) {
 
 	tasks, _, err := p.Render(context.Background(), in)
 	if err != nil {
-		t.Fatalf("Render: %v (раньше ErrOnChangesUnknownRegister — register applier-а не материализовался)", err)
+		t.Fatalf("Render: %v (used to fail with ErrOnChangesUnknownRegister - the applier register was not materialized)", err)
 	}
 	// 2 children (0,1) + terminal (2) + consumer (3).
 	if len(tasks) != 4 {
-		t.Fatalf("len(tasks)=%d, want 4 (2 дочерних + терминал + потребитель)", len(tasks))
+		t.Fatalf("len(tasks)=%d, want 4 (2 children + terminal + consumer)", len(tasks))
 	}
 	consumer := tasks[3]
 	if consumer.Module != "core.service.restarted" {
-		t.Fatalf("потребитель[3] module = %q, want core.service.restarted", consumer.Module)
+		t.Fatalf("consumer[3] module = %q, want core.service.restarted", consumer.Module)
 	}
 	// onchanges:[redis_destiny] must resolve to the terminal's Index (2), NOT
 	// to a child or to a nonexistent register.
 	if len(consumer.OnChangesIdx) != 1 || consumer.OnChangesIdx[0] != 2 {
-		t.Fatalf("потребитель OnChangesIdx = %v, want [2] (Index терминала core.noop.run)", consumer.OnChangesIdx)
+		t.Fatalf("consumer OnChangesIdx = %v, want [2] (Index of terminal core.noop.run)", consumer.OnChangesIdx)
 	}
 }
 
@@ -151,13 +151,13 @@ func TestRender_ApplierRegister_PassageStratification(t *testing.T) {
 		t.Fatalf("Stratify: %v", err)
 	}
 	if plan.Count != 2 {
-		t.Fatalf("Passage.Count = %d, want 2 (applier-register-эмиттер → потребитель в Passage+1)", plan.Count)
+		t.Fatalf("Passage.Count = %d, want 2 (applier-register emitter -> consumer in Passage+1)", plan.Count)
 	}
 	if plan.TaskPassage[0] != 0 {
 		t.Errorf("applier Passage = %d, want 0", plan.TaskPassage[0])
 	}
 	if plan.TaskPassage[1] != 1 {
-		t.Errorf("потребитель Passage = %d, want 1 (уехал в Passage+1 по register.redis_destiny)", plan.TaskPassage[1])
+		t.Errorf("consumer Passage = %d, want 1 (moved to Passage+1 via register.redis_destiny)", plan.TaskPassage[1])
 	}
 }
 
@@ -176,12 +176,12 @@ func TestToProtoTasks_AggregateOfRemap(t *testing.T) {
 	got := ToProtoTasks(tasks)
 	agg := got[1].GetAggregateOf()
 	if len(agg) != 2 {
-		t.Fatalf("aggregate_of len = %d (%v), want 2 (отсутствующий источник кодируется sentinel-ом, НЕ выкидывается)", len(agg), agg)
+		t.Fatalf("aggregate_of len = %d (%v), want 2 (a missing source is encoded as a sentinel, NOT dropped)", len(agg), agg)
 	}
 	if agg[0] != 0 {
-		t.Errorf("aggregate_of[0] = %d, want 0 (Index 0 → локальная 0)", agg[0])
+		t.Errorf("aggregate_of[0] = %d, want 0 (Index 0 -> local 0)", agg[0])
 	}
 	if agg[1] != outOfRangeRequisite {
-		t.Errorf("aggregate_of[1] = %d, want %d (sentinel отфильтрованного дочернего)", agg[1], outOfRangeRequisite)
+		t.Errorf("aggregate_of[1] = %d, want %d (sentinel of the filtered-out child)", agg[1], outOfRangeRequisite)
 	}
 }

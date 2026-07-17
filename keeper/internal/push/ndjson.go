@@ -18,7 +18,7 @@ import (
 // RunResult at the end (ndjsonsink.go), so its absence means the process
 // crashed or the session was cut before the run finished. The dispatcher must
 // treat this as a failure (fail-closed), not as "success without a report".
-var ErrNoRunResult = errors.New("push: NDJSON-поток завершился без RunResult")
+var ErrNoRunResult = errors.New("push: NDJSON stream ended without RunResult")
 
 // EventHandler — callback for each intermediate TaskEvent in the NDJSON
 // stream. nil is fine: the pilot only needs TaskEvents end-to-end (RunResult
@@ -60,7 +60,7 @@ func ParseStream(r io.Reader, onEvent EventHandler) (*keeperv1.RunResult, error)
 			continue
 		}
 		if result != nil {
-			return nil, fmt.Errorf("push: строка NDJSON после финального RunResult: %q", truncate(line))
+			return nil, fmt.Errorf("push: NDJSON line after final RunResult: %q", truncate(line))
 		}
 
 		kind, err := classifyLine(line)
@@ -71,7 +71,7 @@ func ParseStream(r io.Reader, onEvent EventHandler) (*keeperv1.RunResult, error)
 		case lineTaskEvent:
 			ev := &keeperv1.TaskEvent{}
 			if err := protojson.Unmarshal([]byte(line), ev); err != nil {
-				return nil, fmt.Errorf("push: разбор TaskEvent: %w (строка: %q)", err, truncate(line))
+				return nil, fmt.Errorf("push: parsing TaskEvent: %w (line: %q)", err, truncate(line))
 			}
 			if onEvent != nil {
 				onEvent(ev)
@@ -79,13 +79,13 @@ func ParseStream(r io.Reader, onEvent EventHandler) (*keeperv1.RunResult, error)
 		case lineRunResult:
 			rr := &keeperv1.RunResult{}
 			if err := protojson.Unmarshal([]byte(line), rr); err != nil {
-				return nil, fmt.Errorf("push: разбор RunResult: %w (строка: %q)", err, truncate(line))
+				return nil, fmt.Errorf("push: parsing RunResult: %w (line: %q)", err, truncate(line))
 			}
 			result = rr
 		}
 	}
 	if err := sc.Err(); err != nil {
-		return nil, fmt.Errorf("push: чтение NDJSON-потока: %w", err)
+		return nil, fmt.Errorf("push: reading NDJSON stream: %w", err)
 	}
 	if result == nil {
 		return nil, ErrNoRunResult
@@ -119,7 +119,7 @@ func classifyLine(line string) (lineKind, error) {
 		Status string `json:"status"`
 	}
 	if err := json.Unmarshal([]byte(line), &probe); err != nil {
-		return 0, fmt.Errorf("push: невалидная NDJSON-строка: %w (строка: %q)", err, truncate(line))
+		return 0, fmt.Errorf("push: invalid NDJSON line: %w (line: %q)", err, truncate(line))
 	}
 	switch {
 	case strings.HasPrefix(probe.Status, taskStatusPrefix):
@@ -127,7 +127,7 @@ func classifyLine(line string) (lineKind, error) {
 	case strings.HasPrefix(probe.Status, runStatusPrefix):
 		return lineRunResult, nil
 	default:
-		return 0, fmt.Errorf("push: неклассифицируемая NDJSON-строка (status=%q): %q", probe.Status, truncate(line))
+		return 0, fmt.Errorf("push: unclassifiable NDJSON line (status=%q): %q", probe.Status, truncate(line))
 	}
 }
 

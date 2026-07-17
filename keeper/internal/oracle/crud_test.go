@@ -80,10 +80,10 @@ func TestLastFiredAt_NoRows(t *testing.T) {
 	db := &fakeDB{} // QueryRow → ErrNoRows
 	_, has, err := LastFiredAt(context.Background(), db, "d", "host-a")
 	if err != nil {
-		t.Fatalf("LastFiredAt no-rows должен давать (zero, false, nil), got err=%v", err)
+		t.Fatalf("LastFiredAt no-rows should yield (zero, false, nil), got err=%v", err)
 	}
 	if has {
-		t.Error("has должен быть false при отсутствии строки")
+		t.Error("has should be false when the row is absent")
 	}
 }
 
@@ -111,10 +111,10 @@ func TestDeleteDecree_NotFound(t *testing.T) {
 func TestSelectAllVigils_BadPaging(t *testing.T) {
 	db := &fakeDB{}
 	if _, _, err := SelectAllVigils(context.Background(), db, -1, 10); err == nil {
-		t.Error("offset < 0 должен давать ошибку")
+		t.Error("offset < 0 should produce an error")
 	}
 	if _, _, err := SelectAllVigils(context.Background(), db, 0, 0); err == nil {
-		t.Error("limit < 1 должен давать ошибку")
+		t.Error("limit < 1 should produce an error")
 	}
 }
 
@@ -124,9 +124,9 @@ func TestRecordFire_PlumbsUpsert(t *testing.T) {
 		t.Fatalf("RecordFire: %v", err)
 	}
 	if db.execSQL == "" {
-		t.Fatal("RecordFire должен выполнить Exec")
+		t.Fatal("RecordFire should execute Exec")
 	}
 	if len(db.execArgs) != 3 {
-		t.Errorf("RecordFire ожидает 3 аргумента (decree, subject, fired_at), got %d", len(db.execArgs))
+		t.Errorf("RecordFire expects 3 arguments (decree, subject, fired_at), got %d", len(db.execArgs))
 	}
 }

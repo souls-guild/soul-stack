@@ -75,28 +75,28 @@ func TestEffectiveRunTimeout_ProvisionExtends(t *testing.T) {
 	}{
 		{
 			// provision plan: eff = 30m + 10m = 40m > base 5m → extension.
-			name:  "provision поднимает потолок до ceiling+deployBudget",
+			name:  "provision raises ceiling to ceiling+deployBudget",
 			base:  defaultRunTimeout,
 			tasks: []config.Task{refreshEmitterTask(), hostTask()},
 			want:  ceiling + deployBudget,
 		},
 		{
 			// non-provision: exactly the base (the eternal barrier still fires).
-			name:  "non-provision держит базу",
+			name:  "non-provision keeps the base",
 			base:  defaultRunTimeout,
 			tasks: []config.Task{hostTask(), hostTask()},
 			want:  defaultRunTimeout,
 		},
 		{
 			// max, not replace: the operator raised base above eff (50m > 40m) — we do NOT clamp it down.
-			name:  "base выше eff не урезается (max-семантика)",
+			name:  "base above eff is not clamped down (max semantics)",
 			base:  50 * time.Minute,
 			tasks: []config.Task{refreshEmitterTask()},
 			want:  50 * time.Minute,
 		},
 		{
 			// empty plan — not provision, base.
-			name:  "пустой план — база",
+			name:  "empty plan -- base",
 			base:  defaultRunTimeout,
 			tasks: nil,
 			want:  defaultRunTimeout,
@@ -134,11 +134,11 @@ func TestEffectiveRunTimeout_HotReloadCeiling(t *testing.T) {
 	r := newTimeoutRunner(t, defaultRunTimeout, func() time.Duration { return ceiling })
 
 	if got := r.effectiveRunTimeout([]config.Task{refreshEmitterTask()}); got != ceiling+deployBudget {
-		t.Fatalf("до reload: %s, want %s", got, ceiling+deployBudget)
+		t.Fatalf("before reload: %s, want %s", got, ceiling+deployBudget)
 	}
 	ceiling = 60 * time.Minute // operator overrode the keeper.yml snapshot
 	if got := r.effectiveRunTimeout([]config.Task{refreshEmitterTask()}); got != ceiling+deployBudget {
-		t.Errorf("после reload: %s, want %s (новый ceiling подхвачен)", got, ceiling+deployBudget)
+		t.Errorf("after reload: %s, want %s (new ceiling picked up)", got, ceiling+deployBudget)
 	}
 }
 
@@ -153,7 +153,7 @@ func TestProvisionTimeoutExceedsJoinWait(t *testing.T) {
 	provisionFloor := config.DefaultMaxAwaitTimeout + deployBudget
 	if provisionFloor <= bootstrap.DefaultJoinWaitTimeout {
 		t.Errorf(
-			"provision effective run-timeout floor (%s = DefaultMaxAwaitTimeout %s + deployBudget %s) НЕ превышает joinWait (%s) — provision-прогон оборвётся до завершения онбординга (мёртвая настройка)",
+			"provision effective run-timeout floor (%s = DefaultMaxAwaitTimeout %s + deployBudget %s) does NOT exceed joinWait (%s) -- a provision run would abort before onboarding finishes (dead setting)",
 			provisionFloor, config.DefaultMaxAwaitTimeout, deployBudget, bootstrap.DefaultJoinWaitTimeout)
 	}
 }

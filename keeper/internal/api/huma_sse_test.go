@@ -158,7 +158,7 @@ func TestRunEventsSSE_MissingAuth_401(t *testing.T) {
 	bus := applybus.NewBus(slog.Default())
 	srv, _ := sseTestHarness(t, bus, fakeRunAccess{acc: &applyrun.Access{IncarnationName: "redis-prod"}}, stubRBACChecker{})
 	if got := getStatus(t, sseURL(srv, "redis-prod", "01APPLY00000000000000000000"), ""); got != http.StatusUnauthorized {
-		t.Errorf("no-auth status = %d, want 401 (RequireJWT активен)", got)
+		t.Errorf("no-auth status = %d, want 401 (RequireJWT active)", got)
 	}
 }
 
@@ -166,7 +166,7 @@ func TestRunEventsSSE_GarbageToken_401(t *testing.T) {
 	bus := applybus.NewBus(slog.Default())
 	srv, _ := sseTestHarness(t, bus, fakeRunAccess{acc: &applyrun.Access{IncarnationName: "redis-prod"}}, stubRBACChecker{})
 	if got := getStatus(t, sseURL(srv, "redis-prod", "01APPLY00000000000000000000"), "not-a-jwt"); got != http.StatusUnauthorized {
-		t.Errorf("garbage-token status = %d, want 401 (verifier активен)", got)
+		t.Errorf("garbage-token status = %d, want 401 (verifier active)", got)
 	}
 }
 
@@ -237,14 +237,14 @@ func TestRunEventsSSE_OwnerStreamsAndMasks(t *testing.T) {
 		t.Errorf("event = %q, want task.executed", ev)
 	}
 	if strings.Contains(data, "SUPERSECRETVALUE") {
-		t.Errorf("frame payload несёт незамаскированный секрет: %s", data)
+		t.Errorf("frame payload carries an unmasked secret: %s", data)
 	}
 	var payload map[string]any
 	if err := json.Unmarshal([]byte(data), &payload); err != nil {
-		t.Fatalf("frame data не JSON: %v (%s)", err, data)
+		t.Fatalf("frame data is not JSON: %v (%s)", err, data)
 	}
 	if payload["task_status"] != "TASK_STATUS_CHANGED" {
-		t.Errorf("task_status в frame = %v, want TASK_STATUS_CHANGED", payload["task_status"])
+		t.Errorf("task_status in frame = %v, want TASK_STATUS_CHANGED", payload["task_status"])
 	}
 }
 
@@ -278,7 +278,7 @@ func waitSubscribed(t *testing.T, bus *applybus.EventBus, applyID string) {
 		}
 		time.Sleep(5 * time.Millisecond)
 	}
-	t.Fatal("подписчик SSE не зарегистрировался за 2s")
+	t.Fatal("SSE subscriber did not register within 2s")
 }
 
 // readFirstSSEFrame reads the first event/data frame from the stream (skipping `:` comments
@@ -310,7 +310,7 @@ func readFirstSSEFrame(t *testing.T, r io.Reader) (event, data string) {
 	case f := <-ch:
 		return f.event, f.data
 	case <-time.After(3 * time.Second):
-		t.Fatal("таймаут reading SSE-frame")
+		t.Fatal("timeout reading SSE frame")
 		return "", ""
 	}
 }

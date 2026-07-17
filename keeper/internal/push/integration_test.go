@@ -139,7 +139,7 @@ PermitRootLogin no
 UsePAM no
 StrictModes no
 
-# Принять ed25519-cert-алгоритмы (некоторые сборки openssh требуют явного opt-in).
+# Accept ed25519-cert algorithms (some openssh builds require explicit opt-in).
 PubkeyAcceptedAlgorithms +ssh-ed25519-cert-v01@openssh.com,ssh-ed25519
 HostKeyAlgorithms ssh-ed25519-cert-v01@openssh.com,ssh-ed25519
 CASignatureAlgorithms +ssh-ed25519
@@ -181,7 +181,7 @@ func startSSHContainer(ctx context.Context, t *testing.T, configDir string) (hos
 set -e
 apk add --no-cache openssh openssh-server-pam openssh-keygen sudo >/dev/null 2>&1 || true
 adduser -D -s /bin/sh soul
-# adduser -D создаёт locked-аккаунт; разлочим для pubkey-auth (без password).
+# adduser -D creates a locked account; unlock it for pubkey-auth (no password).
 passwd -u soul 2>/dev/null || sed -i 's/^soul:!/soul:*/' /etc/shadow
 mkdir -p /etc/ssh/keys
 cp /custom/ssh_host_ed25519_key /etc/ssh/keys/
@@ -192,9 +192,9 @@ chmod 644 /etc/ssh/keys/ssh_host_ed25519_key-cert.pub /etc/ssh/keys/user_ca.pub
 chown -R root:root /etc/ssh/keys
 cp /custom/sshd_config /etc/ssh/sshd_config
 mkdir -p /var/run/sshd /var/empty
-# Дадим пользователю soul собственный prefix /var/lib/soul-stack/* — иначе
-# mkdir на /var/lib без root-прав упадёт. Это и моделирует boot-time setup
-# soul-агента на реальном хосте (Deliverer не root по дизайну).
+# Give the soul user its own prefix /var/lib/soul-stack/* - otherwise
+# mkdir on /var/lib without root would fail. This models the boot-time setup
+# of the soul agent on a real host (Deliverer is not root by design).
 mkdir -p /var/lib/soul-stack/bin /var/lib/soul-stack/modules
 chown -R soul:soul /var/lib/soul-stack
 echo "sshd ready"
@@ -378,10 +378,10 @@ func TestIntegration_LiveSSHD_DeliverApplyCleanup(t *testing.T) {
 	// least check there's no regression).
 	rr2, err := disp.SendApply(ctx, containerHost, testProviderName, &keeperv1.ApplyRequest{ApplyId: "integration-2"})
 	if err != nil {
-		t.Fatalf("SendApply (повтор): %v", err)
+		t.Fatalf("SendApply (repeat): %v", err)
 	}
 	if rr2.GetStatus() != keeperv1.RunStatus_RUN_STATUS_SUCCESS {
-		t.Errorf("повторный прогон status = %v, want SUCCESS", rr2.GetStatus())
+		t.Errorf("repeat run status = %v, want SUCCESS", rr2.GetStatus())
 	}
 
 	// Cleanup → /var/lib/soul-stack/{bin,modules}/ removed.
@@ -407,10 +407,10 @@ func TestIntegration_LiveSSHD_DeliverApplyCleanup(t *testing.T) {
 	defer sess.Close()
 	out, _ := sess.Run(ctx, "test -d /var/lib/soul-stack/bin && echo PRESENT || echo ABSENT", nil)
 	if !strings.Contains(out, "ABSENT") {
-		t.Errorf("после Cleanup hostSoulDir не удалён: %q", out)
+		t.Errorf("after Cleanup hostSoulDir was not removed: %q", out)
 	}
 	out, _ = sess.Run(ctx, "test -d /var/lib/soul-stack/modules && echo PRESENT || echo ABSENT", nil)
 	if !strings.Contains(out, "ABSENT") {
-		t.Errorf("после Cleanup hostModulesDir не удалён: %q", out)
+		t.Errorf("after Cleanup hostModulesDir was not removed: %q", out)
 	}
 }

@@ -75,7 +75,7 @@ func (r *Runner) dispatchKeeperTasks(ctx context.Context, spec RunSpec, log *slo
 
 	for _, rt := range keeperTasks {
 		changed, failed, output, msg := r.applyKeeperTask(ctx, rt)
-		log.Info("scenario: keeper-side задача исполнена",
+		log.Info("scenario: keeper-side task executed",
 			slog.String("module", rt.Module),
 			slog.Int("task_idx", rt.Index),
 			slog.Bool("changed", changed),
@@ -99,14 +99,14 @@ func (r *Runner) dispatchKeeperTasks(ctx context.Context, spec RunSpec, log *slo
 			// plan-wide index; for keeper-target local==global (no per-host where:), so
 			// task_idx and plan_index both equal rt.Index.
 			if rerr := applyrun.RecordTaskFailure(ctx, r.deps.DB, spec.ApplyID, render.KeeperTargetSID, passage, rt.Index, rt.Index, summary); rerr != nil {
-				log.Warn("scenario: запись причины падения keeper-задачи провалена",
+				log.Warn("scenario: recording the keeper task failure reason failed",
 					slog.Int("passage", passage), slog.Int("task_idx", rt.Index), slog.Any("error", rerr))
 			}
 			if uerr := applyrun.UpdateStatus(ctx, r.deps.DB, spec.ApplyID, render.KeeperTargetSID, passage, applyrun.StatusFailed, &summary); uerr != nil {
-				log.Warn("scenario: перевод keeper apply_run в failed провален",
+				log.Warn("scenario: transitioning keeper apply_run to failed failed",
 					slog.Int("passage", passage), slog.Any("error", uerr))
 			}
-			return fmt.Errorf("scenario: keeper-side задача %q (%s) провалена: %s", rt.Name, rt.Module, msg)
+			return fmt.Errorf("scenario: keeper-side task %q (%s) failed: %s", rt.Name, rt.Module, msg)
 		}
 
 		// register: of a keeper task accumulates under KeeperTargetSID — same path
@@ -128,7 +128,7 @@ func (r *Runner) dispatchKeeperTasks(ctx context.Context, spec RunSpec, log *slo
 	}
 
 	if err := applyrun.UpdateStatus(ctx, r.deps.DB, spec.ApplyID, render.KeeperTargetSID, passage, applyrun.StatusSuccess, nil); err != nil {
-		return fmt.Errorf("scenario: перевод keeper apply_run (passage %d) в success: %w", passage, err)
+		return fmt.Errorf("scenario: transitioning keeper apply_run (passage %d) to success: %w", passage, err)
 	}
 	return nil
 }
@@ -185,7 +185,7 @@ func (r *Runner) emitKeeperTaskExecuted(ctx context.Context, applyID string, pas
 		Payload:       audit.BuildTaskExecutedPayload(in),
 	}
 	if err := r.deps.Audit.Write(ctx, ev); err != nil {
-		log.Warn("scenario: запись audit task.executed keeper-задачи провалена",
+		log.Warn("scenario: writing audit task.executed for the keeper task failed",
 			slog.Int("task_idx", rt.Index), slog.String("module", rt.Module), slog.Any("error", err))
 	}
 }
@@ -335,7 +335,7 @@ func (r *Runner) accumulateKeeperRegister(ctx context.Context, applyID string, p
 		// passage) + the accumulation filter loadRegisterByHostUpToPassage (register Passage<P).
 		Passage: passage,
 	}); err != nil {
-		log.Warn("scenario: аккумуляция register keeper-задачи провалена",
+		log.Warn("scenario: accumulating register for the keeper task failed",
 			slog.Int("passage", passage), slog.Int("task_idx", rt.Index), slog.Any("error", err))
 	}
 }
@@ -370,7 +370,7 @@ func (r *Runner) syncTraitsOnRegistered(ctx context.Context, incName string, rt 
 	}
 	inc, err := incarnation.SelectByName(ctx, r.deps.DB, incName)
 	if err != nil {
-		log.Warn("scenario: bind-sync traits — загрузка инкарнации провалена (best-effort)",
+		log.Warn("scenario: bind-sync traits - loading the incarnation failed (best-effort)",
 			slog.String("incarnation", incName), slog.Any("error", err))
 		return
 	}
@@ -378,7 +378,7 @@ func (r *Runner) syncTraitsOnRegistered(ctx context.Context, incName string, rt 
 		return
 	}
 	if serr := incarnation.SyncTraitsToHosts(ctx, r.deps.DB, incName, inc.Traits); serr != nil {
-		log.Warn("scenario: bind-sync traits → souls провален (best-effort)",
+		log.Warn("scenario: bind-sync traits -> souls failed (best-effort)",
 			slog.String("incarnation", incName), slog.Any("error", serr))
 	}
 }

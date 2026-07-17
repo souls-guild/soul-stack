@@ -12,7 +12,7 @@ func TestEvalInterpolation_Essence(t *testing.T) {
 		t.Fatalf("EvalInterpolation: %v", err)
 	}
 	if out != "conn://pg-1" {
-		t.Fatalf("ожидали %q, получили %q", "conn://pg-1", out)
+		t.Fatalf("expected %q, got %q", "conn://pg-1", out)
 	}
 }
 
@@ -26,7 +26,7 @@ func TestEvalExpression_Essence(t *testing.T) {
 		t.Fatalf("EvalExpression: %v", err)
 	}
 	if got := val.Value(); got != true {
-		t.Fatalf("ожидали true, получили %v", got)
+		t.Fatalf("expected true, got %v", got)
 	}
 }
 
@@ -36,7 +36,7 @@ func TestEvalExpression_EssenceEmptyNoPanic(t *testing.T) {
 	e := newEngine(t)
 
 	if _, err := e.EvalExpression("essence.absent", Vars{}); err == nil {
-		t.Fatal("ожидали no-such-key для пустого Essence, получили nil")
+		t.Fatal("expected no-such-key for an empty Essence, got nil")
 	}
 }
 
@@ -54,6 +54,6 @@ func TestEvalExpression_EssenceCoexists(t *testing.T) {
 		t.Fatalf("EvalInterpolation: %v", err)
 	}
 	if out != "svc-alice@prod" {
-		t.Fatalf("ожидали %q, получили %q", "svc-alice@prod", out)
+		t.Fatalf("expected %q, got %q", "svc-alice@prod", out)
 	}
 }

@@ -52,13 +52,13 @@ func TestCadenceCreate_NotifyEmpty_NoInvalidationNoTiding(t *testing.T) {
 		t.Errorf("insertCalls = %d, want 1", store.insertCalls)
 	}
 	if store.insertTidingCalls != 0 {
-		t.Errorf("insertTidingCalls = %d, want 0 (notify пуст)", store.insertTidingCalls)
+		t.Errorf("insertTidingCalls = %d, want 0 (notify empty)", store.insertTidingCalls)
 	}
 	if !store.committed {
-		t.Error("tx должна быть закоммичена")
+		t.Error("tx should be committed")
 	}
 	if inv.calls != 0 {
-		t.Errorf("InvalidateTidings calls = %d, want 0 (notify пуст)", inv.calls)
+		t.Errorf("InvalidateTidings calls = %d, want 0 (notify empty)", inv.calls)
 	}
 }
 
@@ -84,7 +84,7 @@ func TestCadenceCreate_Notify_PersistsTidingAndInvalidates(t *testing.T) {
 		t.Fatalf("insertCalls=%d insertTidingCalls=%d, want 1/1", store.insertCalls, store.insertTidingCalls)
 	}
 	if !store.committed {
-		t.Error("tx должна быть закоммичена (notify-OK)")
+		t.Error("tx should be committed (notify-OK)")
 	}
 
 	// Invalidation is called EXACTLY once, with the schedule's ULID (cadences.id).
@@ -112,18 +112,18 @@ func TestCadenceCreate_Notify_PersistsTidingAndInvalidates(t *testing.T) {
 		t.Errorf("Tiding.Herald = %q, want ops-webhook", gotHerald)
 	}
 	if gotEphemeral {
-		t.Error("Tiding.Ephemeral = true, want false (постоянное правило)")
+		t.Error("Tiding.Ephemeral = true, want false (persistent rule)")
 	}
 	if gotCadence != reply.CadenceID {
-		t.Errorf("Tiding.Cadence(селектор) = %q, want ULID %q (не name)", gotCadence, reply.CadenceID)
+		t.Errorf("Tiding.Cadence(selector) = %q, want ULID %q (not name)", gotCadence, reply.CadenceID)
 	}
 	if gotOrigin != reply.CadenceID {
-		t.Errorf("Tiding.CreatedFromCadenceID = %q, want ULID %q (origin-маркер каскада)", gotOrigin, reply.CadenceID)
+		t.Errorf("Tiding.CreatedFromCadenceID = %q, want ULID %q (cascade origin marker)", gotOrigin, reply.CadenceID)
 	}
 	// Bind by ULID, not by the schedule name: the name "nightly" must not land in
 	// the selector/marker (rename-safe invariant).
 	if gotCadence == "nightly" || gotOrigin == "nightly" {
-		t.Error("привязка по имени расписания, а не по ULID (нарушен rename-safe инвариант)")
+		t.Error("bound by schedule name, not by ULID (rename-safe invariant violated)")
 	}
 }
 
@@ -151,14 +151,14 @@ func TestCadenceCreate_Notify_MultipleUniqueNames(t *testing.T) {
 	for i, args := range store.insertTidingArgs {
 		n, _ := args[0].(string)
 		if names[n] {
-			t.Fatalf("дубликат имени Tiding %q (PK-коллизия недопустима)", n)
+			t.Fatalf("duplicate Tiding name %q (PK collision not allowed)", n)
 		}
 		names[n] = true
 		_ = i
 	}
 	for _, want := range []string{"nightly-notify", "nightly-notify-2", "nightly-notify-3"} {
 		if !names[want] {
-			t.Errorf("ожидаемое имя %q отсутствует; получены %v", want, names)
+			t.Errorf("expected name %q missing; got %v", want, names)
 		}
 	}
 }
@@ -175,14 +175,14 @@ func TestCadenceCreate_Notify_InsertTidingFails_Rollback(t *testing.T) {
 	h.Create(rec, cadenceReq(http.MethodPost, "/v1/cadences", cadenceNotifyBody))
 
 	if rec.Code != http.StatusInternalServerError {
-		t.Fatalf("status = %d, want 500 (сбой InsertTiding); body=%s", rec.Code, rec.Body.String())
+		t.Fatalf("status = %d, want 500 (InsertTiding failure); body=%s", rec.Code, rec.Body.String())
 	}
 	// Insert Cadence in the tx was called but NOT committed — the rollback takes it too.
 	if !store.rolledBack {
-		t.Error("ожидался Rollback при сбое InsertTiding")
+		t.Error("expected Rollback on InsertTiding failure")
 	}
 	if store.committed {
-		t.Error("tx закоммичена несмотря на сбой InsertTiding (атомарность нарушена)")
+		t.Error("tx committed despite InsertTiding failure (atomicity violated)")
 	}
 	// Invalidation NOT called (rollback → no rules in the DB, nothing to invalidate).
 	if inv.calls != 0 {
@@ -202,14 +202,14 @@ func TestCadenceCreate_Notify_NoHeraldRead_Denied(t *testing.T) {
 	h.Create(rec, cadenceReq(http.MethodPost, "/v1/cadences", cadenceNotifyBody))
 
 	if rec.Code != http.StatusForbidden {
-		t.Fatalf("status = %d, want 403 (нет herald.read); body=%s", rec.Code, rec.Body.String())
+		t.Fatalf("status = %d, want 403 (no herald.read); body=%s", rec.Code, rec.Body.String())
 	}
 	if store.insertCalls != 0 || store.insertTidingCalls != 0 {
-		t.Errorf("write вызван при RBAC-deny: insertCalls=%d insertTidingCalls=%d, want 0/0",
+		t.Errorf("write called on RBAC-deny: insertCalls=%d insertTidingCalls=%d, want 0/0",
 			store.insertCalls, store.insertTidingCalls)
 	}
 	if store.committed {
-		t.Error("tx закоммичена при RBAC-deny (Cadence не должен создаваться)")
+		t.Error("tx committed on RBAC-deny (Cadence must not be created)")
 	}
 	if inv.calls != 0 {
 		t.Errorf("InvalidateTidings calls = %d, want 0 (deny)", inv.calls)
@@ -239,7 +239,7 @@ func TestCadenceCreate_Notify_TooMany_422(t *testing.T) {
 		t.Fatalf("status = %d, want 422 (notify > cap); body=%s", rec.Code, rec.Body.String())
 	}
 	if store.insertCalls != 0 || store.insertTidingCalls != 0 || store.committed {
-		t.Errorf("write вызван при превышении cap: insertCalls=%d insertTidingCalls=%d committed=%v",
+		t.Errorf("write called when cap exceeded: insertCalls=%d insertTidingCalls=%d committed=%v",
 			store.insertCalls, store.insertTidingCalls, store.committed)
 	}
 	if inv.calls != 0 {
@@ -265,7 +265,7 @@ func TestCadenceCreate_Notify_AtCapBoundary_OK(t *testing.T) {
 	h.Create(rec, cadenceReq(http.MethodPost, "/v1/cadences", body))
 
 	if rec.Code != http.StatusCreated {
-		t.Fatalf("status = %d, want 201 (ровно cap); body=%s", rec.Code, rec.Body.String())
+		t.Fatalf("status = %d, want 201 (exactly cap); body=%s", rec.Code, rec.Body.String())
 	}
 	if store.insertTidingCalls != maxNotifyChannels {
 		t.Errorf("insertTidingCalls = %d, want %d", store.insertTidingCalls, maxNotifyChannels)
@@ -282,10 +282,10 @@ func TestCadenceCreate_Notify_UnknownHerald_422(t *testing.T) {
 	h.Create(rec, cadenceReq(http.MethodPost, "/v1/cadences", cadenceNotifyBody))
 
 	if rec.Code != http.StatusUnprocessableEntity {
-		t.Fatalf("status = %d, want 422 (несуществующий herald); body=%s", rec.Code, rec.Body.String())
+		t.Fatalf("status = %d, want 422 (nonexistent herald); body=%s", rec.Code, rec.Body.String())
 	}
 	if store.insertCalls != 0 || store.committed {
-		t.Error("Cadence создан несмотря на несуществующий herald")
+		t.Error("Cadence created despite nonexistent herald")
 	}
 }
 
@@ -313,7 +313,7 @@ func TestCadenceDelete_InvalidatesTidings(t *testing.T) {
 		t.Errorf("deleteCalls = %d, want 1", store.deleteCalls)
 	}
 	if inv.calls != 1 {
-		t.Fatalf("InvalidateTidings calls = %d, want 1 (безусловно при delete)", inv.calls)
+		t.Fatalf("InvalidateTidings calls = %d, want 1 (unconditional on delete)", inv.calls)
 	}
 	if inv.names[0] != id {
 		t.Errorf("InvalidateTidings(name) = %q, want cadence-id %q", inv.names[0], id)
@@ -336,7 +336,7 @@ func TestCadenceDelete_NotFound_NoInvalidation(t *testing.T) {
 		t.Fatalf("status = %d, want 404; body=%s", rec.Code, rec.Body.String())
 	}
 	if inv.calls != 0 {
-		t.Errorf("InvalidateTidings calls = %d, want 0 (delete не прошёл)", inv.calls)
+		t.Errorf("InvalidateTidings calls = %d, want 0 (delete did not go through)", inv.calls)
 	}
 }
 

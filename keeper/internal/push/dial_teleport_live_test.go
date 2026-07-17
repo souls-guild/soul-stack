@@ -25,11 +25,11 @@ func envOr(key, def string) string {
 //	  go test -count=1 -run TestLiveTeleportRun -v ./internal/push/
 func TestLiveTeleportRun(t *testing.T) {
 	if os.Getenv("TELEPORT_LIVE") == "" {
-		t.Skip("TELEPORT_LIVE не задан — live-Teleport harness пропущен")
+		t.Skip("TELEPORT_LIVE not set - live Teleport harness skipped")
 	}
 	sid := os.Getenv("TELEPORT_LIVE_SID")
 	if sid == "" {
-		t.Fatal("TELEPORT_LIVE_SID (node-name цели) обязателен")
+		t.Fatal("TELEPORT_LIVE_SID (target node name) is required")
 	}
 
 	dialer, err := NewTeleportDialer(TeleportDialerConfig{
@@ -63,7 +63,7 @@ func TestLiveTeleportRun(t *testing.T) {
 			t.Fatalf("Run #%d: %v", i, rerr)
 		}
 		if !strings.Contains(out, "teleport-live-ok") {
-			t.Fatalf("Run #%d: неожиданный stdout %q", i, out)
+			t.Fatalf("Run #%d: unexpected stdout %q", i, out)
 		}
 	}
 }

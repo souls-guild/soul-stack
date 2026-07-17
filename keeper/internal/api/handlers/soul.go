@@ -728,7 +728,7 @@ func (h *SoulHandler) listKeysetTyped(ctx context.Context, filter soul.ListFilte
 	if err != nil {
 		// scope-eval-error fail-CLOSED: a broken regex in the Purview does not show souls
 		// and does not fall into 500 — it hides (an empty list).
-		h.logger.Warn("soul.list: scope regex compile failed — fail-closed (пустой список)",
+		h.logger.Warn("soul.list: scope regex compile failed — fail-closed (empty list)",
 			slog.Any("error", err))
 		return h.emptyListReply(page), nil
 	}
@@ -871,7 +871,7 @@ func (h *SoulHandler) resolveListScopeForClaims(claims *jwt.Claims) (soulpurview
 		// coven/regex are applied; soulprint/state (S3b-2b) are dropped. The under-show
 		// is safe (the fail-closed side), but we log it — an operator may
 		// undercount visible hosts until the soulprint post-filter is implemented.
-		h.logger.Warn("soul.list: scope содержит не-вычисляемые измерения (soulprint/state) — применены только coven/regex, часть доступных хостов скрыта (S3b-2b)",
+		h.logger.Warn("soul.list: scope contains non-computable dimensions (soulprint/state) — only coven/regex applied, some visible hosts are hidden (S3b-2b)",
 			slog.String("aid", claims.Subject),
 			slog.Any("covens", sc.Covens),
 			slog.Any("regexes", sc.Regexes))
@@ -1618,7 +1618,7 @@ func (h *SoulHandler) AssignTraitsTyped(ctx context.Context, claims *jwt.Claims,
 	// per-soul → per-incarnation (incarnation.traits is the source of truth, PUT
 	// /v1/incarnations/{name}/traits). A per-soul write is overwritten by the next
 	// projection. The endpoint is kept forward-compat; we signal the call to the log.
-	h.logger.Warn("soul.traits-assign: DEPRECATED per-soul trait-write (ADR-060) — используйте PUT /v1/incarnations/{name}/traits",
+	h.logger.Warn("soul.traits-assign: DEPRECATED per-soul trait-write (ADR-060) — use PUT /v1/incarnations/{name}/traits",
 		slog.String("by_aid", claims.Subject))
 	if h.scoper == nil {
 		h.logger.Error("soul.traits-assign: scoper not configured")

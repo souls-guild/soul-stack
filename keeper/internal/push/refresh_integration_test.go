@@ -106,17 +106,17 @@ func TestRefresh_RedisRoundTrip(t *testing.T) {
 			t.Errorf("refreshed provider = %q, want vault-ssh", got)
 		}
 	case <-time.After(3 * time.Second):
-		t.Fatal("RefreshProvider не вызван в течение 3s после publish")
+		t.Fatal("RefreshProvider was not called within 3s after publish")
 	}
 
 	if atomic.LoadInt32(&resp.calls) != 1 {
 		t.Errorf("respawner calls = %d, want 1", atomic.LoadInt32(&resp.calls))
 	}
 	if entry, ok := disp.providerEntry("vault-ssh"); !ok || entry.Provider != newProv {
-		t.Errorf("dispatcher не подменил provider после Redis-round-trip")
+		t.Errorf("dispatcher did not swap the provider after the Redis round-trip")
 	}
 	if oldCloser.closed.Load() != 1 {
-		t.Errorf("old plugin-handle не закрыт (closed=%d)", oldCloser.closed.Load())
+		t.Errorf("old plugin handle was not closed (closed=%d)", oldCloser.closed.Load())
 	}
 
 	_ = sub.Close()
@@ -175,14 +175,14 @@ func TestRefresh_RedisRoundTrip_DegradedOnSpawnFail(t *testing.T) {
 	select {
 	case got := <-errs:
 		if got == nil {
-			t.Fatal("ждали ошибку refresh-а")
+			t.Fatal("expected a refresh error")
 		}
 	case <-time.After(3 * time.Second):
-		t.Fatal("ошибка refresh-а не зарегистрирована в течение 3s")
+		t.Fatal("refresh error was not registered within 3s")
 	}
 
 	if _, ok := disp.providerEntry("vault-ssh"); ok {
-		t.Errorf("после spawn-fail запись провайдера должна быть удалена (degraded)")
+		t.Errorf("after spawn-fail the provider entry should be removed (degraded)")
 	}
 
 	_ = sub.Close()

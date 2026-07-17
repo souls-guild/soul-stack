@@ -103,7 +103,7 @@ func (m *Module) applyFetch(stream grpc.ServerStreamingServer[pluginv1.ApplyEven
 		// Push mode (soul apply) or a session without Augur plumbing: the
 		// broker is unavailable. We don't stay silent — a read-probe without
 		// a broker is meaningless.
-		return util.SendFailed(stream, "core.augur.fetch: брокер Augur недоступен в этом прогоне (нет EventStream-сессии)")
+		return util.SendFailed(stream, "core.augur.fetch: Augur broker unavailable this run (no EventStream session)")
 	}
 
 	reply, ferr := fetcher.Fetch(ctx, applyID, omen, query)
@@ -126,14 +126,14 @@ func (m *Module) applyFetch(stream grpc.ServerStreamingServer[pluginv1.ApplyEven
 func fetchErrorMessage(omen string, err error) string {
 	switch {
 	case errors.Is(err, soulaugur.ErrDenied):
-		return fmt.Sprintf("core.augur.fetch: доступ к Omen %q запрещён: %v", omen, err)
+		return fmt.Sprintf("core.augur.fetch: access to Omen %q denied: %v", omen, err)
 	case errors.Is(err, soulaugur.ErrRemote):
-		return fmt.Sprintf("core.augur.fetch: Omen %q вернул ошибку: %v", omen, err)
+		return fmt.Sprintf("core.augur.fetch: Omen %q returned an error: %v", omen, err)
 	case errors.Is(err, soulaugur.ErrClientClosed):
-		return fmt.Sprintf("core.augur.fetch: EventStream-сессия закрыта до ответа по Omen %q", omen)
+		return fmt.Sprintf("core.augur.fetch: EventStream session closed before Omen %q replied", omen)
 	case errors.Is(err, context.Canceled), errors.Is(err, context.DeadlineExceeded):
-		return fmt.Sprintf("core.augur.fetch: запрос к Omen %q прерван (%v)", omen, err)
+		return fmt.Sprintf("core.augur.fetch: request to Omen %q interrupted (%v)", omen, err)
 	default:
-		return fmt.Sprintf("core.augur.fetch: запрос к Omen %q не выполнен: %v", omen, err)
+		return fmt.Sprintf("core.augur.fetch: request to Omen %q failed: %v", omen, err)
 	}
 }

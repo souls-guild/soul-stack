@@ -30,7 +30,7 @@ func TestPermissionCatalog_List(t *testing.T) {
 	resp := h.ListTyped()
 
 	if len(resp.Items) == 0 {
-		t.Fatal("каталог permissions пуст")
+		t.Fatal("permissions catalog is empty")
 	}
 
 	// Sum of actions across all resources == size of AllowedPermissions (we lost no
@@ -40,19 +40,19 @@ func TestPermissionCatalog_List(t *testing.T) {
 		total += len(it.Actions)
 	}
 	if total != len(rbac.AllowedPermissions) {
-		t.Errorf("сумма actions=%d, в каталоге rbac.AllowedPermissions=%d", total, len(rbac.AllowedPermissions))
+		t.Errorf("sum actions=%d, in catalog rbac.AllowedPermissions=%d", total, len(rbac.AllowedPermissions))
 	}
 
 	// Deterministic order: resources are sorted, actions within them too.
 	for i := 1; i < len(resp.Items); i++ {
 		if resp.Items[i-1].Resource >= resp.Items[i].Resource {
-			t.Fatalf("resource не отсортированы или дубль: %q >= %q", resp.Items[i-1].Resource, resp.Items[i].Resource)
+			t.Fatalf("resources are not sorted or have a duplicate: %q >= %q", resp.Items[i-1].Resource, resp.Items[i].Resource)
 		}
 	}
 	for _, it := range resp.Items {
 		for i := 1; i < len(it.Actions); i++ {
 			if it.Actions[i-1].Action >= it.Actions[i].Action {
-				t.Errorf("actions resource %q не отсортированы или дубль: %q >= %q",
+				t.Errorf("actions for resource %q are not sorted or have a duplicate: %q >= %q",
 					it.Resource, it.Actions[i-1].Action, it.Actions[i].Action)
 			}
 		}
@@ -75,18 +75,18 @@ func TestPermissionCatalog_KnownPermissionsPresent(t *testing.T) {
 	for _, c := range cases {
 		res, ok := findResource(resp.Items, c.resource)
 		if !ok {
-			t.Errorf("resource %q отсутствует в каталоге", c.resource)
+			t.Errorf("resource %q is missing from the catalog", c.resource)
 			continue
 		}
 		if !hasAction(res.Actions, c.action) {
-			t.Errorf("%s.%s отсутствует в каталоге", c.resource, c.action)
+			t.Errorf("%s.%s is missing from the catalog", c.resource, c.action)
 		}
 	}
 
 	// soul.read is a mythical name (UI hardcode bug); it MUST NOT be in the
 	// catalog (this test pins the root cause of the bug).
 	if soul, ok := findResource(resp.Items, "soul"); ok && hasAction(soul.Actions, "read") {
-		t.Error("soul.read не должен присутствовать (нет в rbac.catalog.go — источник unknown_permission)")
+		t.Error("soul.read must not be present (not in rbac.catalog.go - source of unknown_permission)")
 	}
 }
 
@@ -95,7 +95,7 @@ func TestPermissionCatalog_SelectorKeysCommon(t *testing.T) {
 
 	want := rbac.SelectorKeys()
 	if len(want) == 0 {
-		t.Fatal("rbac.SelectorKeys() пуст — тест не сможет проверить")
+		t.Fatal("rbac.SelectorKeys() is empty - test cannot verify")
 	}
 
 	// selector_keys is the SAME common list for every action (there is no
@@ -105,11 +105,11 @@ func TestPermissionCatalog_SelectorKeysCommon(t *testing.T) {
 			got := append([]string(nil), a.SelectorKeys...)
 			sort.Strings(got)
 			if len(got) != len(want) {
-				t.Fatalf("%s.%s selector_keys=%v, ожидали общий %v", res.Resource, a.Action, got, want)
+				t.Fatalf("%s.%s selector_keys=%v, expected common %v", res.Resource, a.Action, got, want)
 			}
 			for i := range want {
 				if got[i] != want[i] {
-					t.Fatalf("%s.%s selector_keys=%v, ожидали общий %v", res.Resource, a.Action, got, want)
+					t.Fatalf("%s.%s selector_keys=%v, expected common %v", res.Resource, a.Action, got, want)
 				}
 			}
 		}

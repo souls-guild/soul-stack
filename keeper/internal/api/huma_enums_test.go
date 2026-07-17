@@ -161,7 +161,7 @@ func TestNativeEnumConstsPinned(t *testing.T) {
 
 	for _, c := range cases {
 		if c.native != c.pin {
-			t.Errorf("%s: native enum-const %q != pinned wire-string %q — WIRE DRIFT каталога", c.name, c.native, c.pin)
+			t.Errorf("%s: native enum-const %q != pinned wire-string %q -- catalog WIRE DRIFT", c.name, c.native, c.pin)
 		}
 	}
 }

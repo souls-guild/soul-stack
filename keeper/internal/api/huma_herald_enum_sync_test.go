@@ -37,7 +37,7 @@ func TestHumaHeraldTypeEnum_MatchesRegistry(t *testing.T) {
 			got := enumTagValues(t, tc.structPtr, "Body", "Type")
 			sort.Strings(got)
 			if strings.Join(got, ",") != strings.Join(want, ",") {
-				t.Errorf("huma enum %v != herald.AllHeraldTypes %v — три места списка типов разошлись", got, want)
+				t.Errorf("huma enum %v != herald.AllHeraldTypes %v -- the three type-list locations diverged", got, want)
 			}
 		})
 	}

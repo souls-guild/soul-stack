@@ -41,12 +41,12 @@ func TestSchemaNames_Operator(t *testing.T) {
 	schemas := loadFullSpecSchemas(t)
 	for _, name := range operatorContractSchemas {
 		if _, ok := schemas[name]; !ok {
-			t.Errorf("контрактonя схема %q ОТСУТСТВУЕТ в components/schemas (имя не выровнеbut)", name)
+			t.Errorf("contract schema %q is MISSING in components/schemas (name not aligned)", name)
 		}
 	}
 	for _, name := range operatorForbiddenSchemas {
 		if _, ok := schemas[name]; ok {
-			t.Errorf("техническое huma-имя %q ПРИСУТСТВУЕТ в спеке — имя не выровнеbut под контракт", name)
+			t.Errorf("technical huma name %q is PRESENT in the spec - name not aligned to contract", name)
 		}
 	}
 }
@@ -63,7 +63,7 @@ func TestSchemaNames_OperatorEnvelope(t *testing.T) {
 	}
 	var doc map[string]any
 	if err := yaml.Unmarshal([]byte(y), &doc); err != nil {
-		t.Fatalf("спека не парсится: %v", err)
+		t.Fatalf("spec does not parse: %v", err)
 	}
 	comp, _ := doc["components"].(map[string]any)
 	schemas, _ := comp["schemas"].(map[string]any)
@@ -85,7 +85,7 @@ func loadFullSpecSchemas(t *testing.T) map[string]yaml.Node {
 		} `yaml:"components"`
 	}
 	if err := yaml.Unmarshal([]byte(y), &doc); err != nil {
-		t.Fatalf("спека не парсится: %v", err)
+		t.Fatalf("spec does not parse: %v", err)
 	}
 	return doc.Components.Schemas
 }

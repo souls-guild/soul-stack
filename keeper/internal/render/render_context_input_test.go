@@ -66,14 +66,14 @@ func TestRenderContext_InputRootPresent(t *testing.T) {
 
 	inputSec, ok := rc["input"].(map[string]any)
 	if !ok {
-		t.Fatalf("render_context.input отсутствует или не объект: %#v", rc["input"])
+		t.Fatalf("render_context.input is missing or not an object: %#v", rc["input"])
 	}
 	if inputSec["listen"] != "0.0.0.0:9100" || inputSec["log_level"] != "info" {
-		t.Errorf("render_context.input неполон: %#v", inputSec)
+		t.Errorf("render_context.input is incomplete: %#v", inputSec)
 	}
 	// back-compat: the vars channel is intact.
 	if vs, _ := rc["vars"].(map[string]any); vs["socket"] != "/run/app.sock" {
-		t.Errorf("render_context.vars (back-compat) потерян: %#v", rc["vars"])
+		t.Errorf("render_context.vars (back-compat) was lost: %#v", rc["vars"])
 	}
 
 	// Render with the same engine Soul uses, render_context AS ROOT.
@@ -83,11 +83,11 @@ func TestRenderContext_InputRootPresent(t *testing.T) {
 	}
 	out, err := engine.Render(fields[paramTemplateContent].GetStringValue(), rc)
 	if err != nil {
-		t.Fatalf("soul-render упал (.input.* недоступен в шаблоне?): %v", err)
+		t.Fatalf("soul-render failed (.input.* not available in template?): %v", err)
 	}
 	for _, want := range []string{"listen 0.0.0.0:9100", "level info", "socket /run/app.sock", "family debian"} {
 		if !strings.Contains(out, want) {
-			t.Errorf("ожидалось %q в рендере:\n%s", want, out)
+			t.Errorf("expected %q in render:\n%s", want, out)
 		}
 	}
 }
@@ -98,7 +98,7 @@ func TestRenderContext_InputRootPresent(t *testing.T) {
 func TestRenderContext_BuildRenderContext_EmptyInput(t *testing.T) {
 	rc := buildRenderContext(RenderInput{}, &topology.HostFacts{}, nil, nil, true)
 	if _, ok := rc["input"].(map[string]any); !ok {
-		t.Fatalf("render_context.input при nil Input должен быть пустым map, got %#v", rc["input"])
+		t.Fatalf("render_context.input with nil Input must be an empty map, got %#v", rc["input"])
 	}
 }
 
@@ -111,11 +111,11 @@ func TestRenderContext_BuildRenderContext_InputOmitted(t *testing.T) {
 		RenderInput{Input: map[string]any{"secret": "x"}},
 		&topology.HostFacts{}, nil, nil, false)
 	if _, present := rc["input"]; present {
-		t.Fatalf("при injectInput=false ключ input не должен присутствовать: %#v", rc)
+		t.Fatalf("with injectInput=false, key input must not be present: %#v", rc)
 	}
 	for _, k := range []string{"vars", "self", "role", "essence"} {
 		if _, ok := rc[k]; !ok {
-			t.Errorf("render_context.%s должен присутствовать всегда: %#v", k, rc)
+			t.Errorf("render_context.%s must always be present: %#v", k, rc)
 		}
 	}
 }
@@ -128,7 +128,7 @@ func TestRenderContext_BuildRenderContext_InputOmitted(t *testing.T) {
 func TestRenderContext_VarsOnlyTemplate_NoInput(t *testing.T) {
 	const tmplPath = "templates/vars-only.conf.tmpl"
 	// The body mentions `.input` ONLY in a comment (like redis.conf.tmpl) — not an actual reference.
-	const tmplBody = "# apply.input резолвится host-инвариантно, см. .input контракт\n" +
+	const tmplBody = "# apply.input resolves host-invariantly, see .input contract\n" +
 		"port {{ .vars.port }}\n"
 
 	manifest := &config.ScenarioManifest{
@@ -165,10 +165,10 @@ func TestRenderContext_VarsOnlyTemplate_NoInput(t *testing.T) {
 	}
 	rc := tasks[0].Params.GetFields()[paramRenderContext].GetStructValue().AsMap()
 	if _, present := rc["input"]; present {
-		t.Fatalf("vars-only шаблон НЕ должен получать render_context.input: %#v", rc)
+		t.Fatalf("vars-only template must NOT receive render_context.input: %#v", rc)
 	}
 	if vs, _ := rc["vars"].(map[string]any); vs["port"] != "6379" {
-		t.Errorf("render_context.vars потерян: %#v", rc["vars"])
+		t.Errorf("render_context.vars was lost: %#v", rc["vars"])
 	}
 }
 
@@ -231,10 +231,10 @@ func TestSealS1_SecretInputSealedAndMasked(t *testing.T) {
 	paths := sealed.Paths()
 	const secretPath = "render_context.input.admin_password"
 	if !paths[secretPath] {
-		t.Fatalf("seal-разрыв НЕ закрыт: %q не sealed — секрет утечёт в observable. Paths=%v", secretPath, paths)
+		t.Fatalf("seal-gap NOT closed: %q not sealed - secret will leak into observable. Paths=%v", secretPath, paths)
 	}
 	if paths["render_context.input.listen"] {
-		t.Errorf("over-seal: несекретный listen помечен sealed: %v", paths)
+		t.Errorf("over-seal: non-secret listen marked sealed: %v", paths)
 	}
 
 	// The secret genuinely reaches render_context.input (correct — Soul needs
@@ -242,7 +242,7 @@ func TestSealS1_SecretInputSealedAndMasked(t *testing.T) {
 	// observable channels must hide it via the sealed path.
 	rc := tasks[0].Params.GetFields()[paramRenderContext].GetStructValue().AsMap()
 	if got, _ := rc["input"].(map[string]any); got["admin_password"] != secretVal {
-		t.Fatalf("предусловие теста нарушено: секрет не доехал в render_context.input: %#v", got)
+		t.Fatalf("test precondition violated: secret did not reach render_context.input: %#v", got)
 	}
 
 	// (2) masking the observable payload via the sealed path: the secret
@@ -254,10 +254,10 @@ func TestSealS1_SecretInputSealedAndMasked(t *testing.T) {
 	masked := audit.MaskSecretsSealed(payload, audit.SealOpts{Sealed: paths})
 	maskedInput := masked["render_context"].(map[string]any)["input"].(map[string]any)
 	if maskedInput["admin_password"] == secretVal {
-		t.Fatalf("seal-маскинг НЕ сработал: plaintext-секрет %q остался в observable payload", secretVal)
+		t.Fatalf("seal-masking did NOT work: plaintext secret %q remained in observable payload", secretVal)
 	}
 	if maskedInput["listen"] != "0.0.0.0:9100" {
-		t.Errorf("несекретный listen ошибочно замаскирован: %#v", maskedInput["listen"])
+		t.Errorf("non-secret listen incorrectly masked: %#v", maskedInput["listen"])
 	}
 
 	// Protection against leaking through free-text error/detail strings: the
@@ -266,7 +266,7 @@ func TestSealS1_SecretInputSealedAndMasked(t *testing.T) {
 	strPayload := map[string]any{secretPath: secretVal}
 	maskedStr := audit.MaskSecretsSealed(strPayload, audit.SealOpts{Sealed: paths})
 	if maskedStr[secretPath] == secretVal {
-		t.Errorf("seal-маскинг по точному пути не сработал: %v", maskedStr)
+		t.Errorf("seal-masking by exact path did not work: %v", maskedStr)
 	}
 }
 
@@ -318,11 +318,11 @@ func TestSealS1_VarsOnlyTemplate_NoSeal(t *testing.T) {
 		t.Fatalf("Render: %v", err)
 	}
 	if paths := sealed.Paths(); paths["render_context.input.admin_password"] {
-		t.Errorf("vars-only шаблон не должен плодить seal-путь на input: %v", paths)
+		t.Errorf("vars-only template must not produce a seal-path on input: %v", paths)
 	}
 	rc := tasks[0].Params.GetFields()[paramRenderContext].GetStructValue().AsMap()
 	if _, present := rc["input"]; present {
-		t.Fatalf("секрет не должен попасть в render_context.input у vars-only шаблона: %#v", rc)
+		t.Fatalf("secret must not reach render_context.input of a vars-only template: %#v", rc)
 	}
 }
 
@@ -338,10 +338,10 @@ func TestSealS1_VaultScopeInputSealed(t *testing.T) {
 	sealRenderContextInput(set, in)
 	paths := set.Paths()
 	if !paths["render_context.input.tls_key"] {
-		t.Errorf("vault_scope-поле tls_key не sealed: %v", paths)
+		t.Errorf("vault_scope field tls_key not sealed: %v", paths)
 	}
 	if paths["render_context.input.plain"] {
-		t.Errorf("over-seal несекретного plain: %v", paths)
+		t.Errorf("over-seal of non-secret plain: %v", paths)
 	}
 }
 
@@ -363,9 +363,9 @@ func TestSecretInputNames_VaultScope(t *testing.T) {
 	}}
 	got := secretInputNames(scn)
 	if !got["a"] || !got["b"] {
-		t.Errorf("secret/vault_scope-имена не собраны: %v", got)
+		t.Errorf("secret/vault_scope names were not collected: %v", got)
 	}
 	if got["c"] {
-		t.Errorf("несекретное c попало в набор: %v", got)
+		t.Errorf("non-secret c ended up in the set: %v", got)
 	}
 }

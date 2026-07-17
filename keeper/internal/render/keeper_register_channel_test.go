@@ -37,10 +37,10 @@ func TestKeeperRegisterChannel_Isolated(t *testing.T) {
 	// A keeper task sees KeeperRegister (NOT the flat Register).
 	kv := keeperVars(in)
 	if _, ok := kv.Register["provision"]; !ok {
-		t.Errorf("keeperVars.Register = %v, want содержащее keeper-register 'provision'", kv.Register)
+		t.Errorf("keeperVars.Register = %v, want it to contain keeper-register 'provision'", kv.Register)
 	}
 	if _, ok := kv.Register["hostprobe"]; ok {
-		t.Errorf("keeperVars.Register протёк host-register 'hostprobe' — канал не изолирован: %v", kv.Register)
+		t.Errorf("keeperVars.Register leaked host-register 'hostprobe' -- channel not isolated: %v", kv.Register)
 	}
 
 	// A host task with an EMPTY per-host bucket → falls back to the flat
@@ -48,10 +48,10 @@ func TestKeeperRegisterChannel_Isolated(t *testing.T) {
 	host := &topology.HostFacts{SID: "host-a.example.com"}
 	hr := hostRegister(in, host)
 	if _, ok := hr["provision"]; ok {
-		t.Fatalf("★ hostRegister протёк keeper-register 'provision' через fallback — host случайно прочитал бы register.provision.* (handoff-флаг): %v", hr)
+		t.Fatalf("* hostRegister leaked keeper-register 'provision' via fallback -- host would accidentally read register.provision.* (handoff flag): %v", hr)
 	}
 	if _, ok := hr["hostprobe"]; !ok {
-		t.Errorf("hostRegister = %v, want плоскую Register (fallback 'hostprobe') при пустом per-host bucket", hr)
+		t.Errorf("hostRegister = %v, want the flat Register (fallback 'hostprobe') when per-host bucket is empty", hr)
 	}
 }
 
@@ -72,7 +72,7 @@ func TestKeeperRegisterChannel_PerHostBucketWins(t *testing.T) {
 		t.Errorf("hostRegister = %v, want per-host bucket ('role')", hr)
 	}
 	if _, ok := hr["provision"]; ok {
-		t.Errorf("hostRegister протёк keeper-register 'provision' поверх per-host bucket: %v", hr)
+		t.Errorf("hostRegister leaked keeper-register 'provision' over the per-host bucket: %v", hr)
 	}
 }
 
@@ -87,6 +87,6 @@ func TestKeeperVars_FallbackToFlatRegister(t *testing.T) {
 	}
 	kv := keeperVars(in)
 	if _, ok := kv.Register["prev"]; !ok {
-		t.Errorf("keeperVars.Register = %v, want fallback на плоскую Register ('prev') при пустом KeeperRegister", kv.Register)
+		t.Errorf("keeperVars.Register = %v, want fallback to the flat Register ('prev') when KeeperRegister is empty", kv.Register)
 	}
 }

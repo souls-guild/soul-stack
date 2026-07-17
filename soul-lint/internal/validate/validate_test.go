@@ -106,7 +106,7 @@ func TestGolden_ScenarioSerialStaged(t *testing.T) {
 	var out, errOut bytes.Buffer
 	code := Run(Options{Path: "../../testdata/scenario-golden/serial-staged.yml", JSON: true, Kind: KindScenario}, &out, &errOut)
 	if code != ExitOK {
-		t.Fatalf("exit code: got %d, want %d (serial+staged теперь валиден)\nstdout: %s\nstderr: %s", code, ExitOK, out.String(), errOut.String())
+		t.Fatalf("exit code: got %d, want %d (serial+staged is now valid)\nstdout: %s\nstderr: %s", code, ExitOK, out.String(), errOut.String())
 	}
 	codes := map[string]bool{}
 	dec := json.NewDecoder(&out)
@@ -121,10 +121,10 @@ func TestGolden_ScenarioSerialStaged(t *testing.T) {
 		codes[d.Code] = true
 	}
 	if !codes["passage_plan"] {
-		t.Errorf("ожидался passage_plan HINT (staged-структура), got: %v", sortedKeys(codes))
+		t.Errorf("expected passage_plan HINT (staged structure), got: %v", sortedKeys(codes))
 	}
 	if codes["serial_staged_unsupported"] {
-		t.Fatalf("★ serial_staged_unsupported поднялся — рестрикт вернулся (ADR-056 §S4 amend нарушен)")
+		t.Fatalf("* serial_staged_unsupported fired -- the restriction came back (ADR-056 S4 amend violated)")
 	}
 }
 
@@ -145,7 +145,7 @@ func TestGolden_ScenarioVaultStaged(t *testing.T) {
 	var out, errOut bytes.Buffer
 	code := Run(Options{Path: "../../testdata/scenario-golden/vault-staged.yml", JSON: true, Kind: KindScenario}, &out, &errOut)
 	if code != ExitOK {
-		t.Fatalf("exit code: got %d, want %d (vault-staged должен проходить линт)\nstdout: %s\nstderr: %s", code, ExitOK, out.String(), errOut.String())
+		t.Fatalf("exit code: got %d, want %d (vault-staged must pass lint)\nstdout: %s\nstderr: %s", code, ExitOK, out.String(), errOut.String())
 	}
 	staged := false
 	dec := json.NewDecoder(&out)
@@ -160,12 +160,12 @@ func TestGolden_ScenarioVaultStaged(t *testing.T) {
 		// A passage_plan with a staged structure confirms the vault axis split the
 		// plan into >1 Passage. A single-passage message (plan collapsed) will NOT
 		// set staged.
-		if d.Code == "passage_plan" && strings.Contains(d.Message, "staged-прогон") {
+		if d.Code == "passage_plan" && strings.Contains(d.Message, "staged run") {
 			staged = true
 		}
 	}
 	if !staged {
-		t.Fatalf("★ vault-ось НЕ расщепила план: ожидался passage_plan со staged-прогон (>1 Passage), но его нет — kv-present-эмиттер перестал уводить vault()-read в следующий Passage (ADR-056 amendment нарушен)")
+		t.Fatalf("* vault axis did NOT split the plan: expected passage_plan with staged run (>1 Passage), but got none -- kv-present emitter stopped pushing vault()-read into the next Passage (ADR-056 amendment violated)")
 	}
 }
 

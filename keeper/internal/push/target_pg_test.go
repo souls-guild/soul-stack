@@ -136,7 +136,7 @@ func TestPGFallbackTargetResolver_ReaderError(t *testing.T) {
 		t.Fatal("expected error from PG reader, got nil")
 	}
 	if errors.Is(err, ErrTargetNotConfigured) {
-		t.Errorf("reader-error должен пробрасываться как-есть, не маппиться в ErrTargetNotConfigured: %v", err)
+		t.Errorf("reader-error should propagate as-is, not be mapped into ErrTargetNotConfigured: %v", err)
 	}
 }
 

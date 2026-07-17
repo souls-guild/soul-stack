@@ -144,7 +144,7 @@ func apply(t *testing.T, params map[string]any) *internaltest.ApplyStream {
 		State:  "extracted",
 		Params: mustStruct(t, params),
 	}, stream); err != nil {
-		t.Fatalf("Apply вернул error: %v", err)
+		t.Fatalf("Apply returned error: %v", err)
 	}
 	return stream
 }
@@ -156,7 +156,7 @@ func TestValidate(t *testing.T) {
 		Params: mustStruct(t, map[string]any{"path": "/a.tar"}),
 	})
 	if reply.Ok {
-		t.Fatal("Validate без dest: ok unexpectedly")
+		t.Fatal("Validate without dest: ok unexpectedly")
 	}
 	reply, _ = m.Validate(context.Background(), &pluginv1.ValidateRequest{
 		State: "extracted",
@@ -167,7 +167,7 @@ func TestValidate(t *testing.T) {
 		}),
 	})
 	if reply.Ok {
-		t.Fatal("Validate с unknown format: ok unexpectedly")
+		t.Fatal("Validate with unknown format: ok unexpectedly")
 	}
 }
 
@@ -204,7 +204,7 @@ func TestApply_HappyPath_AllFormats(t *testing.T) {
 				t.Fatalf("Failed: %s", stream.Last().Message)
 			}
 			if !stream.Last().Changed {
-				t.Fatal("Changed=false при первой распаковке")
+				t.Fatal("Changed=false on first extraction")
 			}
 			got, err := os.ReadFile(filepath.Join(dest, "dir", "hello.txt"))
 			if err != nil {
@@ -247,7 +247,7 @@ func TestApply_Idempotent(t *testing.T) {
 
 	first := apply(t, map[string]any{"path": src, "dest": dest})
 	if !first.Last().Changed {
-		t.Fatal("первая распаковка: Changed=false")
+		t.Fatal("first extraction: Changed=false")
 	}
 	// corrupt the extracted file — a re-run must not touch it (no-op by
 	// marker), proving idempotency goes through the marker, not a walk.
@@ -256,11 +256,11 @@ func TestApply_Idempotent(t *testing.T) {
 	}
 	second := apply(t, map[string]any{"path": src, "dest": dest})
 	if second.Last().Changed {
-		t.Fatal("повторный прогон при совпавшем marker: Changed=true")
+		t.Fatal("re-run with a matching marker: Changed=true")
 	}
 	got, _ := os.ReadFile(filepath.Join(dest, "f.txt"))
 	if string(got) != "touched" {
-		t.Fatalf("no-op перезаписал файл: %q", got)
+		t.Fatalf("no-op overwrote the file: %q", got)
 	}
 }
 
@@ -278,7 +278,7 @@ func TestApply_ChangesOnNewHash(t *testing.T) {
 
 	stream := apply(t, map[string]any{"path": src, "dest": dest})
 	if !stream.Last().Changed {
-		t.Fatal("Changed=false при несовпадающем marker")
+		t.Fatal("Changed=false with a mismatched marker")
 	}
 }
 
@@ -287,7 +287,7 @@ func TestApply_AutoDetectFails_UnknownExtension(t *testing.T) {
 	src := writeArchive(t, dir, "blob.bin", []byte("x"))
 	stream := apply(t, map[string]any{"path": src, "dest": filepath.Join(dir, "out")})
 	if !stream.Last().Failed {
-		t.Fatal("Failed=false при auto-detect неудаче")
+		t.Fatal("Failed=false on auto-detect failure")
 	}
 }
 
@@ -299,7 +299,7 @@ func TestApply_MissingSource(t *testing.T) {
 		"format": "tar",
 	})
 	if !stream.Last().Failed {
-		t.Fatal("Failed=false для отсутствующего архива")
+		t.Fatal("Failed=false for a missing archive")
 	}
 }
 
@@ -308,7 +308,7 @@ func TestApply_CorruptArchive(t *testing.T) {
 	src := writeArchive(t, dir, "broken.tar.gz", []byte("not-a-gzip-stream"))
 	stream := apply(t, map[string]any{"path": src, "dest": filepath.Join(dir, "out")})
 	if !stream.Last().Failed {
-		t.Fatal("Failed=false для битого архива")
+		t.Fatal("Failed=false for a corrupt archive")
 	}
 }
 
@@ -323,18 +323,18 @@ func TestApply_ZipSlip_FailFast(t *testing.T) {
 
 	stream := apply(t, map[string]any{"path": src, "dest": dest})
 	if !stream.Last().Failed {
-		t.Fatal("zip-slip: Failed=false (ожидался fail-fast)")
+		t.Fatal("zip-slip: Failed=false (expected fail-fast)")
 	}
 	if !strings.Contains(stream.Last().Message, "escapes dest") {
-		t.Fatalf("zip-slip: message=%q (ожидалось escapes dest)", stream.Last().Message)
+		t.Fatalf("zip-slip: message=%q (expected escapes dest)", stream.Last().Message)
 	}
 	// fail-fast: no entry created outside dest.
 	if _, err := os.Stat(filepath.Join(dir, "escape")); err == nil {
-		t.Fatal("zip-slip: файл вне dest всё-таки создан (clamp вместо fail-fast)")
+		t.Fatal("zip-slip: file outside dest was created anyway (clamp instead of fail-fast)")
 	}
 	// marker not written — extraction aborted entirely.
 	if _, err := os.Stat(filepath.Join(dest, archive.MarkerFile)); err == nil {
-		t.Fatal("zip-slip: marker записан несмотря на провал")
+		t.Fatal("zip-slip: marker was written despite the failure")
 	}
 }
 
@@ -346,7 +346,7 @@ func TestApply_ZipSlip_AbsolutePath_FailFast(t *testing.T) {
 	src := writeArchive(t, dir, "abs.tar", tarBytes)
 	stream := apply(t, map[string]any{"path": src, "dest": filepath.Join(dir, "out")})
 	if !stream.Last().Failed || !strings.Contains(stream.Last().Message, "escapes dest") {
-		t.Fatalf("абсолютный путь: ожидался escape-fail, получено failed=%v msg=%q",
+		t.Fatalf("absolute path: expected escape-fail, got failed=%v msg=%q",
 			stream.Last().Failed, stream.Last().Message)
 	}
 }
@@ -365,16 +365,16 @@ func TestApply_ZipSlip_Zip_FailFast(t *testing.T) {
 
 	stream := apply(t, map[string]any{"path": src, "dest": dest})
 	if !stream.Last().Failed {
-		t.Fatal("zip-slip (zip): Failed=false (ожидался fail-fast)")
+		t.Fatal("zip-slip (zip): Failed=false (expected fail-fast)")
 	}
 	if !strings.Contains(stream.Last().Message, "escapes dest") {
-		t.Fatalf("zip-slip (zip): message=%q (ожидалось escapes dest)", stream.Last().Message)
+		t.Fatalf("zip-slip (zip): message=%q (expected escapes dest)", stream.Last().Message)
 	}
 	if _, err := os.Stat(filepath.Join(dir, "escape")); err == nil {
-		t.Fatal("zip-slip (zip): файл вне dest создан (clamp вместо fail-fast)")
+		t.Fatal("zip-slip (zip): file outside dest was created (clamp instead of fail-fast)")
 	}
 	if _, err := os.Stat(filepath.Join(dest, archive.MarkerFile)); err == nil {
-		t.Fatal("zip-slip (zip): marker записан несмотря на провал")
+		t.Fatal("zip-slip (zip): marker was written despite the failure")
 	}
 }
 
@@ -386,7 +386,7 @@ func TestApply_ZipSlip_Zip_AbsolutePath_FailFast(t *testing.T) {
 	}))
 	stream := apply(t, map[string]any{"path": src, "dest": filepath.Join(dir, "out")})
 	if !stream.Last().Failed || !strings.Contains(stream.Last().Message, "escapes dest") {
-		t.Fatalf("zip абсолютный путь: ожидался escape-fail, получено failed=%v msg=%q",
+		t.Fatalf("zip absolute path: expected escape-fail, got failed=%v msg=%q",
 			stream.Last().Failed, stream.Last().Message)
 	}
 }
@@ -403,10 +403,10 @@ func TestApply_ZipBomb_MaxSize(t *testing.T) {
 		"max_size": "1KiB",
 	})
 	if !stream.Last().Failed {
-		t.Fatal("max_size: Failed=false при превышении")
+		t.Fatal("max_size: Failed=false when exceeded")
 	}
 	if !strings.Contains(stream.Last().Message, "max_size") {
-		t.Fatalf("max_size: message=%q (ожидалось max_size)", stream.Last().Message)
+		t.Fatalf("max_size: message=%q (expected max_size)", stream.Last().Message)
 	}
 }
 
@@ -424,10 +424,10 @@ func TestApply_ZipBomb_MaxEntries(t *testing.T) {
 		"max_entries": float64(2),
 	})
 	if !stream.Last().Failed {
-		t.Fatal("max_entries: Failed=false при превышении")
+		t.Fatal("max_entries: Failed=false when exceeded")
 	}
 	if !strings.Contains(stream.Last().Message, "max_entries") {
-		t.Fatalf("max_entries: message=%q (ожидалось max_entries)", stream.Last().Message)
+		t.Fatalf("max_entries: message=%q (expected max_entries)", stream.Last().Message)
 	}
 }
 
@@ -447,14 +447,14 @@ func TestApply_ZipBomb_Ratio_TarGz(t *testing.T) {
 		"max_ratio": float64(50),
 	})
 	if !stream.Last().Failed {
-		t.Fatal("max_ratio: Failed=false при высоком compression-ratio")
+		t.Fatal("max_ratio: Failed=false at a high compression ratio")
 	}
 	if !strings.Contains(stream.Last().Message, "max_ratio") {
-		t.Fatalf("max_ratio: message=%q (ожидалось max_ratio)", stream.Last().Message)
+		t.Fatalf("max_ratio: message=%q (expected max_ratio)", stream.Last().Message)
 	}
 	// fail-fast: marker not written, extraction aborted.
 	if _, err := os.Stat(filepath.Join(dir, "out", archive.MarkerFile)); err == nil {
-		t.Fatal("max_ratio: marker записан несмотря на провал")
+		t.Fatal("max_ratio: marker was written despite the failure")
 	}
 }
 
@@ -477,7 +477,7 @@ func TestApply_Ratio_NormalArchivePasses(t *testing.T) {
 		// default max_ratio=100 — a normal archive fits within it.
 	})
 	if stream.Last().Failed {
-		t.Fatalf("нормальный архив отвергнут max_ratio: %s", stream.Last().Message)
+		t.Fatalf("normal archive rejected by max_ratio: %s", stream.Last().Message)
 	}
 }
 
@@ -495,7 +495,7 @@ func TestApply_Ratio_Disabled(t *testing.T) {
 		"max_ratio": float64(0),
 	})
 	if stream.Last().Failed {
-		t.Fatalf("max_ratio=0 должен отключать проверку, но Failed=%s", stream.Last().Message)
+		t.Fatalf("max_ratio=0 should disable the check, but Failed=%s", stream.Last().Message)
 	}
 }
 
@@ -512,10 +512,10 @@ func TestApply_ZipBomb_Ratio_Zip(t *testing.T) {
 		"max_ratio": float64(50),
 	})
 	if !stream.Last().Failed {
-		t.Fatal("zip max_ratio: Failed=false при высоком ratio")
+		t.Fatal("zip max_ratio: Failed=false at a high ratio")
 	}
 	if !strings.Contains(stream.Last().Message, "max_ratio") {
-		t.Fatalf("zip max_ratio: message=%q (ожидалось max_ratio)", stream.Last().Message)
+		t.Fatalf("zip max_ratio: message=%q (expected max_ratio)", stream.Last().Message)
 	}
 }
 
@@ -534,7 +534,7 @@ func TestApply_Ratio_PlainTarSkipped(t *testing.T) {
 		"max_ratio": float64(1),
 	})
 	if stream.Last().Failed {
-		t.Fatalf("голый tar не должен проверяться по ratio: %s", stream.Last().Message)
+		t.Fatalf("a plain tar should not be ratio-checked: %s", stream.Last().Message)
 	}
 }
 
@@ -549,7 +549,7 @@ func TestApply_Ratio_NegativeInvalid(t *testing.T) {
 		"max_ratio": float64(-1),
 	})
 	if !stream.Last().Failed || !strings.Contains(stream.Last().Message, "max_ratio") {
-		t.Fatalf("отрицательный max_ratio: failed=%v msg=%q", stream.Last().Failed, stream.Last().Message)
+		t.Fatalf("negative max_ratio: failed=%v msg=%q", stream.Last().Failed, stream.Last().Message)
 	}
 }
 
@@ -644,10 +644,10 @@ func TestApply_SetuidBit_Masked(t *testing.T) {
 		t.Fatalf("stat: %v", err)
 	}
 	if info.Mode()&(os.ModeSetuid|os.ModeSetgid|os.ModeSticky) != 0 {
-		t.Fatalf("setuid/setgid/sticky не замаскированы: mode=%v", info.Mode())
+		t.Fatalf("setuid/setgid/sticky not masked: mode=%v", info.Mode())
 	}
 	if info.Mode().Perm() != 0o777 {
-		t.Fatalf("perm-биты искажены: %v want 0777", info.Mode().Perm())
+		t.Fatalf("perm bits corrupted: %v want 0777", info.Mode().Perm())
 	}
 }
 
@@ -669,15 +669,15 @@ func TestApply_WriteThroughWithinDestSymlink_Fails(t *testing.T) {
 
 	stream := apply(t, map[string]any{"path": src, "dest": dest})
 	if !stream.Last().Failed {
-		t.Fatal("write-through symlink: Failed=false (ожидался fail по резолвнутому пути)")
+		t.Fatal("write-through symlink: Failed=false (expected a fail on the resolved path)")
 	}
 	if !strings.Contains(stream.Last().Message, "escapes dest") {
-		t.Fatalf("write-through symlink: message=%q (ожидалось escapes dest)", stream.Last().Message)
+		t.Fatalf("write-through symlink: message=%q (expected escapes dest)", stream.Last().Message)
 	}
 	// the file written "through" the symlink isn't materialized as either
 	// alias/file.txt or under subdir.
 	if _, err := os.Stat(filepath.Join(dest, "subdir", "file.txt")); err == nil {
-		t.Fatal("write-through symlink: файл создан в target-каталоге (защита обойдена)")
+		t.Fatal("write-through symlink: file created in the target directory (protection bypassed)")
 	}
 }
 
@@ -701,7 +701,7 @@ func TestApply_MaxSize_Boundary(t *testing.T) {
 			"max_size": "1024",
 		})
 		if stream.Last().Failed {
-			t.Fatalf("ровно лимит (%d байт): Failed=%s", limit, stream.Last().Message)
+			t.Fatalf("exactly at the limit (%d bytes): Failed=%s", limit, stream.Last().Message)
 		}
 	})
 
@@ -719,10 +719,10 @@ func TestApply_MaxSize_Boundary(t *testing.T) {
 			"max_size": "1024",
 		})
 		if !stream.Last().Failed {
-			t.Fatalf("лимит+1 байт (%d): Failed=false", limit+1)
+			t.Fatalf("limit+1 byte (%d): Failed=false", limit+1)
 		}
 		if !strings.Contains(stream.Last().Message, "max_size") {
-			t.Fatalf("лимит+1: message=%q (ожидалось max_size)", stream.Last().Message)
+			t.Fatalf("limit+1: message=%q (expected max_size)", stream.Last().Message)
 		}
 	})
 }
@@ -745,22 +745,22 @@ func TestApply_EmptyArchive(t *testing.T) {
 
 			first := apply(t, map[string]any{"path": src, "dest": dest})
 			if first.Last().Failed {
-				t.Fatalf("пустой архив: Failed=%s", first.Last().Message)
+				t.Fatalf("empty archive: Failed=%s", first.Last().Message)
 			}
 			if !first.Last().Changed {
-				t.Fatal("пустой архив: Changed=false при первой распаковке")
+				t.Fatal("empty archive: Changed=false on first extraction")
 			}
 			marker, err := os.ReadFile(filepath.Join(dest, archive.MarkerFile))
 			if err != nil {
-				t.Fatalf("пустой архив: marker не записан: %v", err)
+				t.Fatalf("empty archive: marker not written: %v", err)
 			}
 			if string(marker) != sha(c.data)+"\n" {
-				t.Fatalf("пустой архив: marker=%q want %q", marker, sha(c.data)+"\n")
+				t.Fatalf("empty archive: marker=%q want %q", marker, sha(c.data)+"\n")
 			}
 
 			second := apply(t, map[string]any{"path": src, "dest": dest})
 			if second.Last().Changed {
-				t.Fatal("пустой архив: повторный прогон Changed=true (ожидался no-op)")
+				t.Fatal("empty archive: re-run Changed=true (expected no-op)")
 			}
 		})
 	}

@@ -123,14 +123,14 @@ func TestIncarnation_Create_BareNoScenario_ReadyNoRun(t *testing.T) {
 		t.Fatalf("Code = %d, want 202, body=%s", rec.Code, rec.Body.String())
 	}
 	if db.insertCalls != 1 {
-		t.Errorf("insertCalls = %d, want 1 (bare создаётся)", db.insertCalls)
+		t.Errorf("insertCalls = %d, want 1 (bare is created)", db.insertCalls)
 	}
 	if starter.calls != 0 {
-		t.Errorf("starter.calls = %d, want 0 (bare без прогона)", starter.calls)
+		t.Errorf("starter.calls = %d, want 0 (bare without a run)", starter.calls)
 	}
 	// created_scenario col ($12) = NULL (nil) — bare carries NULL, not 'create'.
 	if db.insertArgs[11] != nil {
-		t.Errorf("INSERT created_scenario ($12) = %v, want nil (NULL для bare)", db.insertArgs[11])
+		t.Errorf("INSERT created_scenario ($12) = %v, want nil (NULL for bare)", db.insertArgs[11])
 	}
 	// apply_id is absent from JSON (bare without a run).
 	var raw map[string]any
@@ -138,7 +138,7 @@ func TestIncarnation_Create_BareNoScenario_ReadyNoRun(t *testing.T) {
 		t.Fatalf("decode: %v", err)
 	}
 	if _, has := raw["apply_id"]; has {
-		t.Errorf("apply_id присутствует для bare-инкарнации: %v", raw)
+		t.Errorf("apply_id present for bare incarnation: %v", raw)
 	}
 }
 
@@ -165,7 +165,7 @@ func TestIncarnation_Create_ChosenScenario_Starts_AndPersisted(t *testing.T) {
 		t.Fatalf("starter.calls = %d, want 1", starter.calls)
 	}
 	if starter.gotSpec.ScenarioName != "restore" {
-		t.Errorf("RunSpec.ScenarioName = %q, want restore (выбранный, НЕ дефолтный create)", starter.gotSpec.ScenarioName)
+		t.Errorf("RunSpec.ScenarioName = %q, want restore (chosen, NOT the default create)", starter.gotSpec.ScenarioName)
 	}
 	// created_scenario — $12 of the INSERT (insertArgs[11]); see insertSQL crud.go.
 	if len(db.insertArgs) < 12 {
@@ -199,11 +199,11 @@ func TestIncarnation_Create_EmptyChoice_HasScenarios_422(t *testing.T) {
 		t.Errorf("Type = %q, want %q", p.Type, problem.TypeValidationFailed)
 	}
 	if !bytes.Contains([]byte(p.Detail), []byte("create_scenario_required")) {
-		t.Errorf("detail = %q, want содержит create_scenario_required", p.Detail)
+		t.Errorf("detail = %q, want contains create_scenario_required", p.Detail)
 	}
 	// Listing the eligible scenarios — the operator sees what to choose.
 	if !bytes.Contains([]byte(p.Detail), []byte("create")) || !bytes.Contains([]byte(p.Detail), []byte("restore")) {
-		t.Errorf("detail = %q, want список {create, restore}", p.Detail)
+		t.Errorf("detail = %q, want listing {create, restore}", p.Detail)
 	}
 	if db.insertCalls != 0 || starter.calls != 0 {
 		t.Errorf("insertCalls/starter.calls = %d/%d, want 0/0", db.insertCalls, starter.calls)
@@ -260,13 +260,13 @@ func TestIncarnation_Create_NonCreateScenario_422(t *testing.T) {
 	}
 	// detail carries the create_scenario_invalid marker (handler mapping of ErrCreateScenarioNotEligible).
 	if !bytes.Contains([]byte(p.Detail), []byte("create_scenario_invalid")) {
-		t.Errorf("detail = %q, want содержит create_scenario_invalid", p.Detail)
+		t.Errorf("detail = %q, want contains create_scenario_invalid", p.Detail)
 	}
 	if db.insertCalls != 0 {
-		t.Errorf("insertCalls = %d, want 0 (incarnation НЕ создаётся)", db.insertCalls)
+		t.Errorf("insertCalls = %d, want 0 (incarnation is NOT created)", db.insertCalls)
 	}
 	if starter.calls != 0 {
-		t.Errorf("starter.calls = %d, want 0 (прогон НЕ стартует)", starter.calls)
+		t.Errorf("starter.calls = %d, want 0 (run does NOT start)", starter.calls)
 	}
 }
 
@@ -327,15 +327,15 @@ func TestIncarnation_Create_InputValidatedAgainstChosen_Missing_422(t *testing.T
 	rec := incCreate(h, req)
 
 	if rec.Code != http.StatusUnprocessableEntity {
-		t.Fatalf("Code = %d, want 422 (restore требует backup_id), body=%s", rec.Code, rec.Body.String())
+		t.Fatalf("Code = %d, want 422 (restore requires backup_id), body=%s", rec.Code, rec.Body.String())
 	}
 	var p problem.Details
 	_ = json.NewDecoder(rec.Body).Decode(&p)
 	if !bytes.Contains([]byte(p.Detail), []byte("input_invalid")) {
-		t.Errorf("detail = %q, want содержит input_invalid", p.Detail)
+		t.Errorf("detail = %q, want contains input_invalid", p.Detail)
 	}
 	if db.insertCalls != 0 || starter.calls != 0 {
-		t.Errorf("insertCalls/starter.calls = %d/%d, want 0/0 (отказ ДО мутации)", db.insertCalls, starter.calls)
+		t.Errorf("insertCalls/starter.calls = %d/%d, want 0/0 (rejection BEFORE mutation)", db.insertCalls, starter.calls)
 	}
 }
 
@@ -354,7 +354,7 @@ func TestIncarnation_Create_ChosenCreate_EmptyInputOK(t *testing.T) {
 	rec := incCreate(h, req)
 
 	if rec.Code != http.StatusAccepted {
-		t.Fatalf("Code = %d, want 202 (create НЕ требует backup_id), body=%s", rec.Code, rec.Body.String())
+		t.Fatalf("Code = %d, want 202 (create does NOT require backup_id), body=%s", rec.Code, rec.Body.String())
 	}
 }
 

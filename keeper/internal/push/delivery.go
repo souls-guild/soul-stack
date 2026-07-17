@@ -83,14 +83,14 @@ func (d *ShaDeliverer) Deliver(ctx context.Context, session Session, spec SoulSp
 		return errors.New("push/delivery: session is nil")
 	}
 	if spec.SoulBinaryPath == "" {
-		return errors.New("push/delivery: SoulBinaryPath обязателен")
+		return errors.New("push/delivery: SoulBinaryPath is required")
 	}
 	for _, m := range spec.Modules {
 		if !moduleNameRe.MatchString(m.Name) {
-			return fmt.Errorf("push/delivery: недопустимое имя модуля %q (ожидался [a-zA-Z0-9._-]+)", m.Name)
+			return fmt.Errorf("push/delivery: invalid module name %q (expected [a-zA-Z0-9._-]+)", m.Name)
 		}
 		if m.Path == "" {
-			return fmt.Errorf("push/delivery: пустой Path у модуля %q", m.Name)
+			return fmt.Errorf("push/delivery: empty Path for module %q", m.Name)
 		}
 	}
 
@@ -100,12 +100,12 @@ func (d *ShaDeliverer) Deliver(ctx context.Context, session Session, spec SoulSp
 	}
 
 	if err := d.deliverFile(ctx, session, spec.SoulBinaryPath, path.Join(hostSoulDir, hostSoulFile)); err != nil {
-		return fmt.Errorf("push/delivery: soul-бинарь: %w", err)
+		return fmt.Errorf("push/delivery: soul binary: %w", err)
 	}
 	for _, m := range spec.Modules {
 		remote := path.Join(hostModulesDir, m.Name)
 		if err := d.deliverFile(ctx, session, m.Path, remote); err != nil {
-			return fmt.Errorf("push/delivery: модуль %q: %w", m.Name, err)
+			return fmt.Errorf("push/delivery: module %q: %w", m.Name, err)
 		}
 	}
 	return nil
@@ -117,11 +117,11 @@ func (d *ShaDeliverer) Deliver(ctx context.Context, session Session, spec SoulSp
 func (d *ShaDeliverer) deliverFile(ctx context.Context, session Session, localPath, remotePath string) error {
 	localSum, err := fileSha256(localPath)
 	if err != nil {
-		return fmt.Errorf("локальный sha256 %s: %w", localPath, err)
+		return fmt.Errorf("local sha256 %s: %w", localPath, err)
 	}
 	remoteSum, err := remoteSha256(ctx, session, remotePath)
 	if err != nil {
-		return fmt.Errorf("удалённый sha256 %s: %w", remotePath, err)
+		return fmt.Errorf("remote sha256 %s: %w", remotePath, err)
 	}
 	if remoteSum == localSum {
 		return nil
@@ -132,7 +132,7 @@ func (d *ShaDeliverer) deliverFile(ctx context.Context, session Session, localPa
 	// controlled (hostSoulDir + validated moduleNameRe).
 	data, err := os.ReadFile(localPath) //nolint:gosec // the path is our own keeper-side artifact
 	if err != nil {
-		return fmt.Errorf("чтение локального файла %s: %w", localPath, err)
+		return fmt.Errorf("reading local file %s: %w", localPath, err)
 	}
 	// `set -e; cat > path; chmod 0755 path` in one command: if chmod fails,
 	// the run fails too (without a separate roundtrip).
@@ -145,10 +145,10 @@ func (d *ShaDeliverer) deliverFile(ctx context.Context, session Session, localPa
 	// relative to the upload.
 	got, err := remoteSha256(ctx, session, remotePath)
 	if err != nil {
-		return fmt.Errorf("проверка sha256 после upload %s: %w", remotePath, err)
+		return fmt.Errorf("sha256 check after upload %s: %w", remotePath, err)
 	}
 	if got != localSum {
-		return fmt.Errorf("sha256 после upload %s не совпал: got %s, want %s", remotePath, got, localSum)
+		return fmt.Errorf("sha256 after upload %s did not match: got %s, want %s", remotePath, got, localSum)
 	}
 	return nil
 }
@@ -192,11 +192,11 @@ func remoteSha256(ctx context.Context, session Session, p string) (string, error
 	}
 	fields := strings.Fields(out)
 	if len(fields) < 1 {
-		return "", fmt.Errorf("неожиданный вывод sha256sum: %q", out)
+		return "", fmt.Errorf("unexpected sha256sum output: %q", out)
 	}
 	hexSum := fields[0]
 	if len(hexSum) != sha256.Size*2 {
-		return "", fmt.Errorf("неожиданный sha256 в выводе: %q", hexSum)
+		return "", fmt.Errorf("unexpected sha256 in output: %q", hexSum)
 	}
 	return hexSum, nil
 }

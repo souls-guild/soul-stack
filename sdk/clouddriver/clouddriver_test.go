@@ -246,7 +246,7 @@ func (s *fakeResizeStream) Context() context.Context { return context.Background
 func TestBaseDriverNotResizable(t *testing.T) {
 	var b BaseDriver
 	if _, ok := any(b).(Resizable); ok {
-		t.Fatal("BaseDriver реализует Resizable — должен НЕ реализовывать (default-deny)")
+		t.Fatal("BaseDriver implements Resizable - it should NOT (default-deny)")
 	}
 }
 
@@ -255,11 +255,11 @@ func TestBaseDriverNotResizable(t *testing.T) {
 func TestResizableDetect(t *testing.T) {
 	var fake CloudDriver = &fakeDriver{}
 	if _, ok := fake.(Resizable); ok {
-		t.Fatal("fakeDriver без Resizable распознан как Resizable")
+		t.Fatal("fakeDriver without Resizable was detected as Resizable")
 	}
 	var rz CloudDriver = &resizableDriver{}
 	if _, ok := rz.(Resizable); !ok {
-		t.Fatal("явная реализация Resizable не распознаётся type-assertion-ом")
+		t.Fatal("explicit Resizable implementation not detected by type assertion")
 	}
 }
 
@@ -289,7 +289,7 @@ func TestServerAdapterResizeDefaultDeny(t *testing.T) {
 		t.Fatalf("Resize: %v", err)
 	}
 	if impl.resizeVmIds != nil {
-		t.Fatal("impl.Resize вызван несмотря на отсутствие Resizable")
+		t.Fatal("impl.Resize was called despite not implementing Resizable")
 	}
 	if len(stream.sent) != 1 || !stream.sent[0].Failed ||
 		!strings.Contains(stream.sent[0].Message, "resize.unsupported") {

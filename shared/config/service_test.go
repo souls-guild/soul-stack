@@ -105,16 +105,16 @@ lifecycle:
 	cfg, _, diags, _ := LoadServiceManifestFromBytes("service.yml", []byte(src), ValidateOptions{})
 	if diag.HasErrors(diags) {
 		dump(t, diags)
-		t.Fatalf("lifecycle block дал ошибки, ожидалось 0")
+		t.Fatalf("lifecycle block gave errors, expected 0")
 	}
 	if cfg.Lifecycle == nil {
-		t.Fatal("Lifecycle nil, ожидался разобранный блок")
+		t.Fatal("Lifecycle nil, expected a parsed block")
 	}
 	if cfg.Lifecycle.AutoCreateEnabled() {
-		t.Error("auto_create=false должно дать AutoCreateEnabled()=false")
+		t.Error("auto_create=false must give AutoCreateEnabled()=false")
 	}
 	if !cfg.Lifecycle.AutoDestroyEnabled() {
-		t.Error("auto_destroy=true должно дать AutoDestroyEnabled()=true")
+		t.Error("auto_destroy=true must give AutoDestroyEnabled()=true")
 	}
 }
 
@@ -125,14 +125,14 @@ func TestLoadServiceManifest_LifecycleAbsent(t *testing.T) {
 	cfg, _, diags, _ := LoadServiceManifestFromBytes("service.yml", []byte(src), ValidateOptions{})
 	if diag.HasErrors(diags) {
 		dump(t, diags)
-		t.Fatal("неожиданные ошибки")
+		t.Fatal("unexpected errors")
 	}
 	if cfg.Lifecycle != nil {
-		t.Error("Lifecycle должен быть nil без блока")
+		t.Error("Lifecycle must be nil without a block")
 	}
 	// nil-safe: both true.
 	if !cfg.Lifecycle.AutoCreateEnabled() || !cfg.Lifecycle.AutoDestroyEnabled() {
-		t.Error("nil-блок должен трактоваться как оба true (backcompat)")
+		t.Error("a nil block must be treated as both true (backcompat)")
 	}
 }
 
@@ -149,7 +149,7 @@ lifecycle:
 	_, _, diags, _ := LoadServiceManifestFromBytes("service.yml", []byte(src), ValidateOptions{})
 	if !hasCodeAt(diags, "unknown_key", "$.lifecycle.auto_creat") {
 		dump(t, diags)
-		t.Fatal("ожидался unknown_key для опечатки auto_creat под lifecycle")
+		t.Fatal("expected unknown_key for the auto_creat typo under lifecycle")
 	}
 }
 

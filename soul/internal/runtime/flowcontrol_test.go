@@ -64,7 +64,7 @@ func TestWhen_False_Skips(t *testing.T) {
 		t.Fatalf("Run: %v", err)
 	}
 	if called {
-		t.Errorf("mod.Apply вызван, хотя when:false")
+		t.Errorf("mod.Apply was called even though when:false")
 	}
 	if len(sink.taskEvents) != 1 {
 		t.Fatalf("taskEvents = %d", len(sink.taskEvents))
@@ -94,7 +94,7 @@ func TestWhen_True_Runs(t *testing.T) {
 		t.Fatalf("Run: %v", err)
 	}
 	if !called {
-		t.Errorf("mod.Apply НЕ вызван, хотя when:true")
+		t.Errorf("mod.Apply was NOT called even though when:true")
 	}
 	if got := sink.taskEvents[0].GetStatus(); got != keeperv1.TaskStatus_TASK_STATUS_CHANGED {
 		t.Errorf("status = %v, want CHANGED", got)
@@ -117,7 +117,7 @@ func TestWhen_Empty_RunsUnconditionally(t *testing.T) {
 		t.Fatalf("Run: %v", err)
 	}
 	if !called {
-		t.Errorf("mod.Apply НЕ вызван при пустом when")
+		t.Errorf("mod.Apply was NOT called with empty when")
 	}
 }
 
@@ -149,7 +149,7 @@ func TestWhen_FromFlowContext(t *testing.T) {
 		t.Fatalf("Run: %v", err)
 	}
 	if !called {
-		t.Errorf("задача не выполнилась, хотя when по flow_context истинен")
+		t.Errorf("task did not run even though when over flow_context is true")
 	}
 }
 
@@ -176,13 +176,13 @@ func TestWhen_RefsPreviousRegister(t *testing.T) {
 		t.Fatalf("Run: %v", err)
 	}
 	if !secondCalled {
-		t.Errorf("вторая задача не выполнилась, хотя register.probe.changed == true")
+		t.Errorf("second task did not run even though register.probe.changed == true")
 	}
 	if len(sink.taskEvents) != 2 {
 		t.Fatalf("taskEvents = %d, want 2", len(sink.taskEvents))
 	}
 	if got := sink.taskEvents[1].GetStatus(); got != keeperv1.TaskStatus_TASK_STATUS_CHANGED {
-		t.Errorf("вторая задача status = %v, want CHANGED", got)
+		t.Errorf("second task status = %v, want CHANGED", got)
 	}
 }
 
@@ -213,10 +213,10 @@ func TestWhen_RefsPreviousRegister_False(t *testing.T) {
 		t.Fatalf("Run: %v", err)
 	}
 	if secondCalled {
-		t.Errorf("вторая задача выполнилась, хотя register.probe.changed == false")
+		t.Errorf("second task ran even though register.probe.changed == false")
 	}
 	if got := sink.taskEvents[1].GetStatus(); got != keeperv1.TaskStatus_TASK_STATUS_SKIPPED {
-		t.Errorf("вторая задача status = %v, want SKIPPED", got)
+		t.Errorf("second task status = %v, want SKIPPED", got)
 	}
 }
 
@@ -252,7 +252,7 @@ func TestWhen_AndOnchanges_WhenTrueButOnchangesNotFired(t *testing.T) {
 		t.Fatalf("Run: %v", err)
 	}
 	if secondCalled {
-		t.Errorf("задача выполнилась, хотя onchanges не сработал (when:true && onchanges-not-satisfied)")
+		t.Errorf("task ran even though onchanges did not fire (when:true && onchanges-not-satisfied)")
 	}
 	if got := sink.taskEvents[1].GetStatus(); got != keeperv1.TaskStatus_TASK_STATUS_SKIPPED {
 		t.Errorf("status = %v, want SKIPPED", got)
@@ -286,7 +286,7 @@ func TestWhen_AndOnchanges_BothSatisfied(t *testing.T) {
 		t.Fatalf("Run: %v", err)
 	}
 	if !secondCalled {
-		t.Errorf("задача не выполнилась, хотя when:true && onchanges сработал")
+		t.Errorf("task did not run even though when:true && onchanges fired")
 	}
 }
 
@@ -308,7 +308,7 @@ func TestWhen_RuntimeError_Fails(t *testing.T) {
 		t.Fatalf("Run: %v", err)
 	}
 	if called {
-		t.Errorf("mod.Apply вызван, хотя when упал runtime-error")
+		t.Errorf("mod.Apply was called even though when raised a runtime-error")
 	}
 	ev := sink.taskEvents[0]
 	if ev.GetStatus() != keeperv1.TaskStatus_TASK_STATUS_FAILED {
@@ -342,7 +342,7 @@ func TestChangedWhen_False_OverridesChanged(t *testing.T) {
 	}
 	ev := sink.taskEvents[0]
 	if ev.GetStatus() != keeperv1.TaskStatus_TASK_STATUS_OK {
-		t.Errorf("status = %v, want OK (changed_when:false снял changed)", ev.GetStatus())
+		t.Errorf("status = %v, want OK (changed_when:false cleared changed)", ev.GetStatus())
 	}
 	if ev.GetRegisterData().GetFields()["changed"].GetBoolValue() {
 		t.Errorf("register.changed = true, want false")
@@ -390,7 +390,7 @@ func TestChangedWhen_DoesNotTriggerOnchanges(t *testing.T) {
 		t.Fatalf("Run: %v", err)
 	}
 	if handlerCalled {
-		t.Errorf("handler выполнился, хотя changed_when:false снял changed источника")
+		t.Errorf("handler ran even though changed_when:false cleared source changed")
 	}
 	if got := sink.taskEvents[1].GetStatus(); got != keeperv1.TaskStatus_TASK_STATUS_SKIPPED {
 		t.Errorf("handler status = %v, want SKIPPED", got)
@@ -445,7 +445,7 @@ func TestFailedWhen_False_IgnoresError(t *testing.T) {
 	}
 	ev := sink.taskEvents[0]
 	if ev.GetStatus() != keeperv1.TaskStatus_TASK_STATUS_OK {
-		t.Errorf("status = %v, want OK (failed_when:false проглотил ошибку)", ev.GetStatus())
+		t.Errorf("status = %v, want OK (failed_when:false swallowed the error)", ev.GetStatus())
 	}
 	if sink.runResult.GetStatus() != keeperv1.RunStatus_RUN_STATUS_SUCCESS {
 		t.Errorf("runResult = %v, want SUCCESS", sink.runResult.GetStatus())
@@ -456,7 +456,7 @@ func TestFailedWhen_False_IgnoresError(t *testing.T) {
 	}
 	// apply.proto contract: TaskEvent.error is empty for non-FAILED status.
 	if ev.GetError() != nil {
-		t.Errorf("TaskEvent.error = %v, want nil (статус OK — error должен быть пуст)", ev.GetError())
+		t.Errorf("TaskEvent.error = %v, want nil (status OK - error must be empty)", ev.GetError())
 	}
 }
 
@@ -482,7 +482,7 @@ func TestFailedWhen_False_DoesNotSwallowTimedOut(t *testing.T) {
 		t.Fatalf("Run: %v", err)
 	}
 	if got := sink.taskEvents[0].GetStatus(); got != keeperv1.TaskStatus_TASK_STATUS_TIMED_OUT {
-		t.Errorf("status = %v, want TIMED_OUT (failed_when:false не глушит таймаут)", got)
+		t.Errorf("status = %v, want TIMED_OUT (failed_when:false does not suppress timeout)", got)
 	}
 	if sink.runResult.GetStatus() != keeperv1.RunStatus_RUN_STATUS_FAILED {
 		t.Errorf("runResult = %v, want FAILED (TIMED_OUT — fail-stop)", sink.runResult.GetStatus())
@@ -511,7 +511,7 @@ func TestChangedWhenAndFailedWhen_FailedPrioritised(t *testing.T) {
 		t.Fatalf("Run: %v", err)
 	}
 	if got := sink.taskEvents[0].GetStatus(); got != keeperv1.TaskStatus_TASK_STATUS_FAILED {
-		t.Errorf("status = %v, want FAILED (failed приоритетнее changed)", got)
+		t.Errorf("status = %v, want FAILED (failed takes priority over changed)", got)
 	}
 }
 
@@ -533,7 +533,7 @@ func TestFlowControl_RegisterSelf_RuntimeError_Fails(t *testing.T) {
 	}
 	ev := sink.taskEvents[0]
 	if ev.GetStatus() != keeperv1.TaskStatus_TASK_STATUS_FAILED {
-		t.Errorf("status = %v, want FAILED (runtime-error в changed_when)", ev.GetStatus())
+		t.Errorf("status = %v, want FAILED (runtime-error in changed_when)", ev.GetStatus())
 	}
 	if ev.GetError().GetCode() != "flowcontrol.changed_when_error" {
 		t.Errorf("error.code = %q, want flowcontrol.changed_when_error", ev.GetError().GetCode())
@@ -561,7 +561,7 @@ func TestIgnoreErrors_DoesNotStopRun(t *testing.T) {
 		t.Fatalf("Run: %v", err)
 	}
 	if !nextCalled {
-		t.Errorf("задача N+1 не выполнилась — fail-stop сработал, хотя failed_when:false")
+		t.Errorf("task N+1 did not run - fail-stop triggered even though failed_when:false")
 	}
 	if len(sink.taskEvents) != 2 {
 		t.Fatalf("taskEvents = %d, want 2", len(sink.taskEvents))
@@ -609,11 +609,11 @@ func TestWhenSkipped_SubsequentSeesSkippedNotChanged(t *testing.T) {
 	}
 	// when:register.probe.skipped → true → react ran.
 	if !reactByWhenCalled {
-		t.Errorf("react-by-when не выполнился, хотя register.probe.skipped == true")
+		t.Errorf("react-by-when did not run even though register.probe.skipped == true")
 	}
 	// onchanges on a skipped source does NOT fire.
 	if reactByOnchangesCalled {
-		t.Errorf("react-by-onchanges выполнился, хотя источник skipped (не changed)")
+		t.Errorf("react-by-onchanges ran even though source was skipped (not changed)")
 	}
 	if got := sink.taskEvents[2].GetStatus(); got != keeperv1.TaskStatus_TASK_STATUS_SKIPPED {
 		t.Errorf("react-by-onchanges status = %v, want SKIPPED", got)
@@ -638,7 +638,7 @@ func TestFailedWhen_RegisterSelf_RuntimeError_Fails(t *testing.T) {
 	}
 	ev := sink.taskEvents[0]
 	if ev.GetStatus() != keeperv1.TaskStatus_TASK_STATUS_FAILED {
-		t.Errorf("status = %v, want FAILED (runtime-error в failed_when)", ev.GetStatus())
+		t.Errorf("status = %v, want FAILED (runtime-error in failed_when)", ev.GetStatus())
 	}
 	if ev.GetError().GetCode() != "flowcontrol.failed_when_error" {
 		t.Errorf("error.code = %q, want flowcontrol.failed_when_error", ev.GetError().GetCode())
@@ -667,7 +667,7 @@ func TestFailedWhen_SeesChangedWhenResult(t *testing.T) {
 		t.Fatalf("Run: %v", err)
 	}
 	if got := sink.taskEvents[0].GetStatus(); got != keeperv1.TaskStatus_TASK_STATUS_FAILED {
-		t.Errorf("status = %v, want FAILED (failed_when увидел changed=true от changed_when)", got)
+		t.Errorf("status = %v, want FAILED (failed_when saw changed=true from changed_when)", got)
 	}
 }
 
@@ -694,7 +694,7 @@ func TestIgnoredError_VisibleDownstreamByName(t *testing.T) {
 		t.Fatalf("Run: %v", err)
 	}
 	if !downstreamCalled {
-		t.Errorf("downstream-задача не выполнилась — register.X.ignored_error не виден по имени")
+		t.Errorf("downstream task did not run - register.X.ignored_error is not visible by name")
 	}
 	if got := sink.taskEvents[1].GetStatus(); got != keeperv1.TaskStatus_TASK_STATUS_CHANGED {
 		t.Errorf("downstream status = %v, want CHANGED", got)
@@ -740,16 +740,16 @@ func TestIgnoreThenRealFail(t *testing.T) {
 	// C: not executed (fail-stop after B) — arrives as SKIPPED (loop's rescue
 	// pass), but mod.Apply is never called.
 	if cCalled {
-		t.Errorf("C исполнилась, хотя B реально упал (fail-stop не сработал)")
+		t.Errorf("C ran even though B actually failed (fail-stop did not trigger)")
 	}
 	if len(sink.taskEvents) != 3 {
 		t.Fatalf("taskEvents = %d, want 3 (A OK + B FAILED + C SKIPPED)", len(sink.taskEvents))
 	}
 	if got := sink.taskEvents[2].GetStatus(); got != keeperv1.TaskStatus_TASK_STATUS_SKIPPED {
-		t.Errorf("C status = %v, want SKIPPED (пропущена после провала B)", got)
+		t.Errorf("C status = %v, want SKIPPED (skipped after B failed)", got)
 	}
 	if sink.runResult.GetStatus() != keeperv1.RunStatus_RUN_STATUS_FAILED {
-		t.Errorf("runResult = %v, want FAILED (ignore не маскирует последующий провал)", sink.runResult.GetStatus())
+		t.Errorf("runResult = %v, want FAILED (ignore does not mask a subsequent failure)", sink.runResult.GetStatus())
 	}
 }
 
@@ -771,11 +771,11 @@ func TestChangedWhenTrue_OnFailedModule_StaysFailed(t *testing.T) {
 	}
 	ev := sink.taskEvents[0]
 	if ev.GetStatus() != keeperv1.TaskStatus_TASK_STATUS_FAILED {
-		t.Errorf("status = %v, want FAILED (failed приоритетнее changed_when:true)", ev.GetStatus())
+		t.Errorf("status = %v, want FAILED (failed takes priority over changed_when:true)", ev.GetStatus())
 	}
 	// Error source is the module itself (boom), not flow-control synthetics.
 	if got := ev.GetError().GetMessage(); got != "boom" {
-		t.Errorf("error.message = %q, want %q (исходная ошибка модуля)", got, "boom")
+		t.Errorf("error.message = %q, want %q (original module error)", got, "boom")
 	}
 	if sink.runResult.GetStatus() != keeperv1.RunStatus_RUN_STATUS_FAILED {
 		t.Errorf("runResult = %v, want FAILED", sink.runResult.GetStatus())

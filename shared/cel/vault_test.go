@@ -69,7 +69,7 @@ func TestVault_HashField(t *testing.T) {
 		t.Fatalf("vault(#field) = %v, want s3cr3t", out)
 	}
 	if kv.calls[0] != "secret/redis/admin" {
-		t.Fatalf("ReadKV path = %q, want secret/redis/admin (без #field)", kv.calls[0])
+		t.Fatalf("ReadKV path = %q, want secret/redis/admin (without #field)", kv.calls[0])
 	}
 }
 
@@ -85,7 +85,7 @@ func TestVault_ResolvesRealValue(t *testing.T) {
 		t.Fatalf("eval: %v", err)
 	}
 	if out != "postgres://real-secret-value" {
-		t.Fatalf("результат = %v, want реальное значение секрета (не ref)", out)
+		t.Fatalf("result = %v, want the real secret value (not a ref)", out)
 	}
 }
 
@@ -105,10 +105,10 @@ func TestVault_PathFromContext(t *testing.T) {
 		t.Fatalf("eval: %v", err)
 	}
 	if out != "fromctx" {
-		t.Fatalf("vault() из контекста = %v, want fromctx", out)
+		t.Fatalf("vault() from context = %v, want fromctx", out)
 	}
 	if kv.calls[0] != "secret/svc-redis/admin" {
-		t.Fatalf("ReadKV path = %q, want secret/svc-redis/admin (путь резолвлен CEL до ReadKV)", kv.calls[0])
+		t.Fatalf("ReadKV path = %q, want secret/svc-redis/admin (path resolved by CEL before ReadKV)", kv.calls[0])
 	}
 }
 
@@ -119,11 +119,11 @@ func TestVault_MissingSecret(t *testing.T) {
 
 	_, err := e.EvalInterpolation("${ vault('secret/nope').password }", Vars{})
 	if err == nil {
-		t.Fatal("ожидали ошибку для отсутствующего секрета, получили nil")
+		t.Fatal("expected an error for a missing secret, got nil")
 	}
 	var ee *ErrEval
 	if !errors.As(err, &ee) {
-		t.Fatalf("ожидали *ErrEval, получили %T: %v", err, err)
+		t.Fatalf("expected *ErrEval, got %T: %v", err, err)
 	}
 }
 
@@ -136,7 +136,7 @@ func TestVault_MissingField(t *testing.T) {
 
 	_, err := e.EvalInterpolation("${ vault('secret/redis/admin#nope') }", Vars{})
 	if err == nil {
-		t.Fatal("ожидали ошибку для отсутствующего поля, получили nil")
+		t.Fatal("expected an error for a missing field, got nil")
 	}
 }
 
@@ -147,7 +147,7 @@ func TestVault_GuardLiftedWithReader(t *testing.T) {
 
 	_, err := e.EvalExpression("vault('secret/x').v == '1'", Vars{})
 	if err != nil {
-		t.Fatalf("vault() должен компилиться с KVReader, получили: %v", err)
+		t.Fatalf("vault() should compile with a KVReader, got: %v", err)
 	}
 }
 
@@ -157,7 +157,7 @@ func TestVault_GuardKeptWithoutReader(t *testing.T) {
 	_, err := e.EvalExpression("vault('secret/x').v == '1'", Vars{})
 	var ue *ErrUnsupported
 	if !errors.As(err, &ue) {
-		t.Fatalf("без KVReader ожидали *ErrUnsupported, получили %T: %v", err, err)
+		t.Fatalf("without a KVReader expected *ErrUnsupported, got %T: %v", err, err)
 	}
 }
 
@@ -175,7 +175,7 @@ func TestVault_CtxPropagation(t *testing.T) {
 	}
 	got := <-captured
 	if got.Value(ctxKey{}) != "marker" {
-		t.Fatal("ctx из Vars.Ctx не дошёл до ReadKV")
+		t.Fatal("ctx from Vars.Ctx did not reach ReadKV")
 	}
 }
 
@@ -212,11 +212,11 @@ func TestVault_DirectInternalReadRejected(t *testing.T) {
 		}
 		var ue *ErrUnsupported
 		if !errors.As(err, &ue) {
-			t.Fatalf("%q: ожидали *ErrUnsupported (обход macro vault()), получили %T: %v", expr, err, err)
+			t.Fatalf("%q: expected *ErrUnsupported (bypassing the vault() macro), got %T: %v", expr, err, err)
 		}
 	}
 	if len(kv.calls) != 0 {
-		t.Fatalf("kv не должен дёргаться при отвергнутом __vault_read, calls=%v", kv.calls)
+		t.Fatalf("kv must not be invoked when __vault_read is rejected, calls=%v", kv.calls)
 	}
 }
 
@@ -228,7 +228,7 @@ func TestVault_DirectResolverVarRejected(t *testing.T) {
 	_, err := e.EvalExpression("__vault_resolver != null", Vars{})
 	var ue *ErrUnsupported
 	if !errors.As(err, &ue) {
-		t.Fatalf("ожидали *ErrUnsupported для голого __vault_resolver, получили %T: %v", err, err)
+		t.Fatalf("expected *ErrUnsupported for bare __vault_resolver, got %T: %v", err, err)
 	}
 }
 
@@ -239,7 +239,7 @@ func TestVault_InternalIdentRejectedWithoutReader(t *testing.T) {
 	_, err := e.EvalExpression("__vault_read('secret/x', __vault_resolver).v == '1'", Vars{})
 	var ue *ErrUnsupported
 	if !errors.As(err, &ue) {
-		t.Fatalf("без KVReader ожидали *ErrUnsupported для __vault_read, получили %T: %v", err, err)
+		t.Fatalf("without a KVReader expected *ErrUnsupported for __vault_read, got %T: %v", err, err)
 	}
 }
 
@@ -253,10 +253,10 @@ func TestVault_InternalGuardNoFalsePositive(t *testing.T) {
 	// the guard must not reject it.
 	out, err := e.EvalInterpolation("${ vault('secret/db__primary/x#dsn') }", Vars{})
 	if err != nil {
-		t.Fatalf("ложное срабатывание guard на `__` в литерале-пути: %v", err)
+		t.Fatalf("false-positive guard trigger on `__` in a path literal: %v", err)
 	}
 	if out != "v" {
-		t.Fatalf("неожиданный результат: %v", out)
+		t.Fatalf("unexpected result: %v", out)
 	}
 }
 
@@ -271,7 +271,7 @@ func TestVault_MissingSecretErrorActionable(t *testing.T) {
 
 	_, err := e.EvalInterpolation("${ vault('secret/redis/admin').password }", Vars{})
 	if err == nil {
-		t.Fatal("ожидали ошибку для отсутствующего секрета")
+		t.Fatal("expected an error for a missing secret")
 	}
 	assertVaultPathActionable(t, err.Error(), "secret/redis/admin")
 }
@@ -284,11 +284,11 @@ func TestVault_MissingSecretWithFieldActionable(t *testing.T) {
 
 	_, err := e.EvalInterpolation("${ vault('secret/redis/nosql/users/alice#password') }", Vars{})
 	if err == nil {
-		t.Fatal("ожидали ошибку для отсутствующего секрета юзера")
+		t.Fatal("expected an error for a missing user secret")
 	}
 	assertVaultPathActionable(t, err.Error(), "secret/redis/nosql/users/alice")
 	if !strings.Contains(err.Error(), "password") {
-		t.Fatalf("текст ошибки не называет требуемое поле password: %q", err.Error())
+		t.Fatalf("error text does not name the required field password: %q", err.Error())
 	}
 }
 
@@ -302,11 +302,11 @@ func TestVault_MissingFieldErrorActionable(t *testing.T) {
 
 	_, err := e.EvalInterpolation("${ vault('secret/redis/admin#nope') }", Vars{})
 	if err == nil {
-		t.Fatal("ожидали ошибку для отсутствующего поля")
+		t.Fatal("expected an error for a missing field")
 	}
 	assertVaultPathActionable(t, err.Error(), "secret/redis/admin")
 	if !strings.Contains(err.Error(), "nope") {
-		t.Fatalf("текст ошибки не называет отсутствующее поле nope: %q", err.Error())
+		t.Fatalf("error text does not name the missing field nope: %q", err.Error())
 	}
 }
 
@@ -318,10 +318,10 @@ func TestVault_MissingFieldErrorActionable(t *testing.T) {
 func assertVaultPathActionable(t *testing.T, errText, path string) {
 	t.Helper()
 	if !strings.Contains(errText, path) {
-		t.Fatalf("текст ошибки не несёт путь %q: %q", path, errText)
+		t.Fatalf("error text does not carry the path %q: %q", path, errText)
 	}
 	if strings.Contains(errText, "vault:"+path) {
-		t.Fatalf("текст ошибки несёт vault:-ref-форму (маскинг съест целиком): %q", errText)
+		t.Fatalf("error text carries the vault:-ref form (masking would eat it whole): %q", errText)
 	}
 	masked := audit.MaskSecretsSealed(
 		map[string]any{"error": errText},
@@ -329,10 +329,10 @@ func assertVaultPathActionable(t *testing.T, errText, path string) {
 	)
 	got, _ := masked["error"].(string)
 	if got == "***MASKED***" {
-		t.Fatalf("actionable-ошибка замаскирована целиком: %q", got)
+		t.Fatalf("actionable error was masked entirely: %q", got)
 	}
 	if !strings.Contains(got, path) {
-		t.Fatalf("путь %q пропал после маскинга: %q", path, got)
+		t.Fatalf("path %q disappeared after masking: %q", path, got)
 	}
 }
 
@@ -346,10 +346,10 @@ func TestVault_MissingFieldNoSecretLeak(t *testing.T) {
 
 	_, err := e.EvalInterpolation("${ vault('secret/redis/admin#nope') }", Vars{})
 	if err == nil {
-		t.Fatal("ожидали ошибку")
+		t.Fatal("expected an error")
 	}
 	if strings.Contains(err.Error(), "TOP-SECRET-VALUE") {
-		t.Fatalf("plaintext-секрет утёк в текст ошибки: %q", err.Error())
+		t.Fatalf("plaintext secret leaked into the error text: %q", err.Error())
 	}
 }
 
@@ -363,12 +363,12 @@ func TestVault_PathFormatValidation(t *testing.T) {
 	for _, p := range bad {
 		_, err := e.EvalInterpolation("${ vault('"+p+"') }", Vars{})
 		if err == nil {
-			t.Fatalf("vault('%s'): ожидали ошибку формата пути", p)
+			t.Fatalf("vault('%s'): expected a path-format error", p)
 		}
 	}
 	// kv must not be hit on an invalid format (error before ReadKV).
 	if len(kv.calls) != 0 {
-		t.Fatalf("ReadKV дёрнулся при невалидном формате пути: %v", kv.calls)
+		t.Fatalf("ReadKV was invoked with an invalid path format: %v", kv.calls)
 	}
 }
 
@@ -401,7 +401,7 @@ func TestVault_ConcurrentEvals(t *testing.T) {
 				return
 			}
 			if out != want {
-				t.Errorf("vault('%s') = %q, want %q (перепутан per-eval контекст)", path, out, want)
+				t.Errorf("vault('%s') = %q, want %q (per-eval context mixed up)", path, out, want)
 			}
 		}(c.path, c.want)
 	}
@@ -471,7 +471,7 @@ func TestVaultMemo_SamePathOneBackendCall(t *testing.T) {
 		}
 	}
 	if got := kv.calls("secret/redis/admin"); got != 1 {
-		t.Fatalf("backend-вызовов ReadKV = %d, want 1 (memo дедуп в одном pass)", got)
+		t.Fatalf("backend calls to ReadKV = %d, want 1 (memo dedup within one pass)", got)
 	}
 }
 
@@ -493,10 +493,10 @@ func TestVaultMemo_DifferentFieldsSameSecretOneCall(t *testing.T) {
 		t.Fatalf("eval #tls: %v", err)
 	}
 	if pwd != "PWD" || tls != "TLS-CERT" {
-		t.Fatalf("разные #field перепутаны: password=%v tls=%v", pwd, tls)
+		t.Fatalf("different #field values mixed up: password=%v tls=%v", pwd, tls)
 	}
 	if got := kv.calls("secret/redis/inc"); got != 1 {
-		t.Fatalf("backend-вызовов = %d, want 1 (один ReadKV на секрет, поля из кеша)", got)
+		t.Fatalf("backend calls = %d, want 1 (one ReadKV per secret, fields from cache)", got)
 	}
 }
 
@@ -515,12 +515,12 @@ func TestVaultMemo_SeparatePassesDoNotShareCache(t *testing.T) {
 			t.Fatalf("pass #%d: %v", pass, err)
 		}
 		if _, err := e.EvalInterpolation(expr, Vars{Ctx: ctx}); err != nil {
-			t.Fatalf("pass #%d (повтор): %v", pass, err)
+			t.Fatalf("pass #%d (repeat): %v", pass, err)
 		}
 	}
 	// 3 passes × dedup within a pass = 3 backend calls (not 1, not 6).
 	if got := kv.calls("secret/redis/admin"); got != 3 {
-		t.Fatalf("backend-вызовов = %d, want 3 (по одному на pass, кеш не общий)", got)
+		t.Fatalf("backend calls = %d, want 3 (one per pass, cache not shared)", got)
 	}
 }
 
@@ -540,7 +540,7 @@ func TestVaultMemo_NoMemoEveryCallHitsBackend(t *testing.T) {
 		}
 	}
 	if got := kv.calls("secret/redis/admin"); got != 4 {
-		t.Fatalf("backend-вызовов = %d, want 4 (без memo — каждый вызов бьёт Vault)", got)
+		t.Fatalf("backend calls = %d, want 4 (without memo -- every call hits Vault)", got)
 	}
 }
 
@@ -554,10 +554,10 @@ func TestVaultMemo_ErrorsNotCached(t *testing.T) {
 	const expr = "${ vault('secret/redis/admin#password') }"
 	for i := 0; i < 3; i++ {
 		if _, err := e.EvalInterpolation(expr, Vars{Ctx: ctx}); err == nil {
-			t.Fatalf("eval #%d: ожидали ошибку missing-secret", i)
+			t.Fatalf("eval #%d: expected a missing-secret error", i)
 		}
 	}
 	if got := kv.calls("secret/redis/admin"); got != 3 {
-		t.Fatalf("backend-вызовов = %d, want 3 (ошибки не кешируются)", got)
+		t.Fatalf("backend calls = %d, want 3 (errors are not cached)", got)
 	}
 }

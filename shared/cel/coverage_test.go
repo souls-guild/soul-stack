@@ -37,13 +37,13 @@ func TestCoverageSink_BothBranches(t *testing.T) {
 	}
 
 	if len(sink.records) != 2 {
-		t.Fatalf("ожидали 2 факта eval-а, получили %d: %+v", len(sink.records), sink.records)
+		t.Fatalf("expected 2 eval facts, got %d: %+v", len(sink.records), sink.records)
 	}
 
 	var sawTrue, sawFalse bool
 	for _, r := range sink.records {
 		if r.expr != expr {
-			t.Errorf("expr = %q, ожидали %q", r.expr, expr)
+			t.Errorf("expr = %q, expected %q", r.expr, expr)
 		}
 		switch r.out {
 		case true:
@@ -53,7 +53,7 @@ func TestCoverageSink_BothBranches(t *testing.T) {
 		}
 	}
 	if !sawTrue || !sawFalse {
-		t.Fatalf("ожидали обе ветки (truthy=%v, falsy=%v)", sawTrue, sawFalse)
+		t.Fatalf("expected both branches (truthy=%v, falsy=%v)", sawTrue, sawFalse)
 	}
 }
 
@@ -70,10 +70,10 @@ func TestCoverageSink_Interpolation(t *testing.T) {
 	}
 
 	if len(sink.records) != 1 {
-		t.Fatalf("ожидали 1 факт eval-а от интерполяции, получили %d", len(sink.records))
+		t.Fatalf("expected 1 eval fact from interpolation, got %d", len(sink.records))
 	}
 	if sink.records[0].expr != "input.greeting" {
-		t.Errorf("expr = %q, ожидали %q", sink.records[0].expr, "input.greeting")
+		t.Errorf("expr = %q, expected %q", sink.records[0].expr, "input.greeting")
 	}
 }
 
@@ -82,6 +82,6 @@ func TestCoverageSink_Nil(t *testing.T) {
 	e := newEngine(t)
 	// sink not set — default behavior.
 	if _, err := e.EvalExpression("1 + 1 == 2", Vars{}); err != nil {
-		t.Fatalf("EvalExpression с nil-sink: %v", err)
+		t.Fatalf("EvalExpression with a nil sink: %v", err)
 	}
 }

@@ -990,7 +990,7 @@ func handleSession(ctx context.Context, store *config.Store[config.SoulConfig], 
 				if err == nil {
 					if reply := msg.GetAugurReply(); reply != nil {
 						if !ac.Deliver(reply) {
-							logger.Warn("augur: reply без ожидающего запроса (таймаут/отмена/неизвестный request_id)",
+							logger.Warn("augur: reply with no pending request (timeout/cancel/unknown request_id)",
 								slog.String("request_id", reply.GetRequestId()))
 						}
 						continue
