@@ -74,11 +74,11 @@ components:
       additionalProperties: false
       properties:
         expires_at:
-          description: expiry moment of the issued Bearer
+          description: expiration moment of the issued Bearer
           format: date-time
           type: string
         token:
-          description: short-lived Bearer-JWT for Authorization on /v1
+          description: short Bearer JWT for Authorization on /v1
           type: string
       required:
         - token
@@ -1570,7 +1570,7 @@ components:
         incarnation:
           type: string
         truncated:
-          description: true if the coven's fleet exceeded the cap and the host list is truncated (overview glance)
+          description: true if the coven's souls exceeded the cap and the host list is truncated (overview glance)
           type: boolean
       required:
         - incarnation
@@ -3833,9 +3833,9 @@ components:
           type: string
         latest:
           $ref: "#/components/schemas/UtilizationLatest"
-          description: latest snapshot (nil if there is no data)
+          description: the latest snapshot (nil if there is no data)
         received_at:
-          description: Keeper-side receipt moment
+          description: Keeper-side receive moment
           format: date-time
           type: string
         sid:
@@ -3845,7 +3845,7 @@ components:
           description: true if the snapshot is stale (age > TTL) or there is no data
           type: boolean
         window:
-          description: window of points for sparklines, newest-first
+          description: a window of points for sparklines, newest-first
           items:
             $ref: "#/components/schemas/UtilizationWindowPoint"
           type:
@@ -5088,7 +5088,7 @@ paths:
         - auth
   /auth/methods:
     get:
-      description: Public list of login methods for the UI login form (password is always true; ldap/oidc - per keeper config). Only booleans, no IdP URLs/domains.
+      description: Public list of login methods for the UI login form (password always true; ldap/oidc — depending on keeper config). Booleans only, no IdP URLs/domains.
       operationId: authMethods
       responses:
         "200":
@@ -5203,7 +5203,7 @@ paths:
         - auth
   /auth/token:
     post:
-      description: "NIM-77/ADR-058 (Option B): reads the HttpOnly cookie soul_session (internal JWT), verifies it with the same verifier as Bearer on /v1, and issues a short-lived Bearer in the JSON body. Subject/roles are taken strictly from the verified cookie claims. Not written to audit."
+      description: "NIM-77/ADR-058 (Variant B): reads the HttpOnly cookie soul_session (internal JWT), verifies it with the same verifier as the Bearer on /v1, and issues a short-lived Bearer in the JSON body. Subject/roles are strictly from verified cookie claims. Not written to audit."
       operationId: authTokenExchange
       parameters:
         - in: cookie
@@ -5251,7 +5251,7 @@ paths:
               schema:
                 $ref: "#/components/schemas/HumaProblemError"
           description: Internal Server Error
-      summary: Exchange session-cookie for a short-lived Bearer
+      summary: Exchange session-cookie for a short Bearer
       tags:
         - auth
   /v1/audit:
@@ -8174,15 +8174,15 @@ paths:
         - incarnation
   /v1/incarnations/{name}/telemetry:
     get:
-      description: Aggregate of the latest utilization snapshots by incarnation hosts (latest+stale per host, no window) from Redis (NIM-86). Permission incarnation.get; host visibility - soul-read-scope. Empty fleet / out of scope -> hosts:[]. Read-only, no audit.
+      description: Aggregate of the latest utilization snapshots across incarnation hosts (latest+stale per host, without a window) from Redis (NIM-86). Permission incarnation.get; host visibility - soul-read-scope. Empty souls / out of scope -> hosts:[]. Read-only, without audit.
       operationId: getIncarnationTelemetry
       parameters:
-        - description: incarnation name (root Coven label of the hosts)
+        - description: incarnation name (root Coven-label of hosts)
           in: path
           name: name
           required: true
           schema:
-            description: incarnation name (root Coven label of the hosts)
+            description: incarnation name (root Coven-label of hosts)
             type: string
       responses:
         "200":
@@ -8209,7 +8209,7 @@ paths:
               schema:
                 $ref: "#/components/schemas/HumaProblemError"
           description: Internal Server Error
-      summary: Host-vitals of the incarnation's hosts
+      summary: Host-vitals of incarnation hosts
       tags:
         - incarnation
   /v1/incarnations/{name}/traits:
@@ -10936,7 +10936,7 @@ paths:
         - service
   /v1/services/{name}/telemetry:
     get:
-      description: "Effective default (per-service, without essence/incarnation) host-vitals config of the service (enabled/interval_sec/collectors) from the `telemetry:` manifest block + known_collectors (the full allowed set for the UI, ADR-042 backend-driven, ADR-072). Permission service.list. Read-only, no audit. ETag=snapshot SHA1; If-None-Match -> 304. Cache-Control: immutable+1 year for a pinned commit-SHA ref, otherwise no-cache (mutable branch/tag). A service without a telemetry block -> manifest defaults (enabled=true, interval_sec=30, all collectors) + 200. 502 - the loader failed. Not to be confused with /v1/incarnations/{name}/telemetry (runtime host-vitals from Redis, NIM-86)."
+      description: "Effective default (per-service, without essence/incarnation) host-vitals config of the service (enabled/interval_sec/collectors) from the manifest `telemetry:` + known_collectors (full allowed set for the UI, ADR-042 backend-driven, ADR-072). Permission service.list. Read-only, no audit. ETag=snapshot SHA1; If-None-Match -> 304. Cache-Control: immutable+year for pinned commit-SHA ref, otherwise no-cache (mutable branch/tag). A service without a telemetry block -> manifest defaults (enabled=true, interval_sec=30, all collectors) + 200. 502 - loader failed. Not to be confused with /v1/incarnations/{name}/telemetry (runtime host-vitals from Redis, NIM-86)."
       operationId: getServiceTelemetry
       parameters:
         - description: Service name
@@ -10946,18 +10946,18 @@ paths:
           schema:
             description: Service name
             type: string
-        - description: optional git-ref override (omitted -> ref from the registry)
+        - description: optional git-ref override (omitted -> ref from registry)
           explode: false
           in: query
           name: ref
           schema:
-            description: optional git-ref override (omitted -> ref from the registry)
+            description: optional git-ref override (omitted -> ref from registry)
             type: string
-        - description: "conditional GET: 304 if it matched the ETag (snapshot SHA1)"
+        - description: "conditional GET: 304 if it matches ETag (snapshot SHA1)"
           in: header
           name: If-None-Match
           schema:
-            description: "conditional GET: 304 if it matched the ETag (snapshot SHA1)"
+            description: "conditional GET: 304 if it matches ETag (snapshot SHA1)"
             type: string
       responses:
         "200":
@@ -11003,7 +11003,7 @@ paths:
               schema:
                 $ref: "#/components/schemas/HumaProblemError"
           description: Bad Gateway
-      summary: default host-vitals telemetry config of the Service + allowed collectors
+      summary: default host-vitals telemetry config of a Service + allowed collectors
       tags:
         - service
   /v1/sigil/keys:
@@ -11828,7 +11828,7 @@ paths:
         - soul
   /v1/souls/{sid}/telemetry:
     get:
-      description: Latest host utilization snapshot (CPU/load/mem/disk) + a window for sparklines from Redis (NIM-86, ADR-006), with a scope gate. Permission soul.list. stale=true if the snapshot is stale or there is no data (an old agent -> graceful). Read-only, no audit.
+      description: Latest host utilization snapshot (CPU/load/mem/disk) + a window for sparklines from Redis (NIM-86, ADR-006), with a scope gate. Permission soul.list. stale=true if the snapshot is stale or there is no data (old agent -> graceful). Read-only, no audit.
       operationId: getSoulTelemetry
       parameters:
         - description: SID (FQDN) of the Soul
@@ -11869,7 +11869,7 @@ paths:
               schema:
                 $ref: "#/components/schemas/HumaProblemError"
           description: Internal Server Error
-      summary: Host-vitals of the Soul
+      summary: Host-vitals of a Soul
       tags:
         - soul
   /v1/synods:
