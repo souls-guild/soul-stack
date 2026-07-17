@@ -85,10 +85,12 @@ func TestHumaIncarnation_ChiCoexistence(t *testing.T) {
 		nil,                                  // tempoMetrics
 		nil,                                  // tempoVoyageCreateLimits
 		nil,                                  // tempoVoyagePreviewLimits
-		false,                                // webUIEnabled — /ui is out of scope for the incarnation routing test
-		nil,                                  // ldapAuth (LDAP not configured in the test)
-		nil,                                  // oidcAuth (OIDC not configured in the test)
-		nil,                                  // loginGuard (anti-bruteforce off in the test)
+		false,                                // webUIEnabled — /ui вне интереса incarnation-роутинг-теста
+		nil,                                  // ldapAuth (LDAP не сконфигурирован в тесте)
+		nil,                                  // oidcAuth (OIDC не сконфигурирован в тесте)
+		nil,                                  // authToken (обмен /auth/token не тестируется здесь)
+		AuthMethodsDeps{},                    // authMethods (/auth/methods монтируется, но не проверяется)
+		nil,                                  // loginGuard (anti-bruteforce off в тесте)
 		apimiddleware.AuthLoginLimitConfig{}, // loginLimitCfg
 		nil,                                  // soulStatsStaleFn (defaults to 90s in the test)
 		nil,                                  // clusterH (cluster-view not mounted in the test)

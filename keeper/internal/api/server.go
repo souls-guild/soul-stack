@@ -399,11 +399,21 @@ type Deps struct {
 	// AND Redis is live (the flow-state store is cluster-shared): without Redis OIDC is unavailable.
 	OIDCAuth *OIDCAuthDeps
 
-	// LoginGuard — the anti-bruteforce primitive of the public login endpoints (ADR-058(g),
-	// HIGH-3): per-IP+per-username throttle + lockout. Implemented by *redis.LoginGuard.
-	// nil (no Redis) → login endpoints without throttle (passthrough, like Tempo at
-	// nil limiter). The daemon assembles it when Redis is live. Used only when
-	// /auth routes are mounted (non-nil LDAPAuth/OIDCAuth).
+	// AuthToken — обмен session-cookie на короткий Bearer (POST /auth/token,
+	// NIM-77/ADR-058 Вариант B). При nil эндпоинт не монтируется (opt-in, паттерн
+	// LDAPAuth); production-wire-up даёт shared verifier+issuer+rbacHolder.
+	AuthToken *AuthTokenDeps
+
+	// AuthMethods — booleans доступных способов логина для публичного
+	// GET /auth/methods (форма входа UI). Значение: /auth/methods монтируется
+	// безусловно (password всегда доступен).
+	AuthMethods AuthMethodsDeps
+
+	// LoginGuard — anti-bruteforce-примитив публичных login-эндпоинтов (ADR-058(g),
+	// HIGH-3): per-IP+per-username throttle + lockout. Реализуется *redis.LoginGuard.
+	// nil (нет Redis) → login-эндпоинты без throttle (passthrough, как Tempo при
+	// nil-limiter). daemon собирает при живом Redis. Используется только при
+	// смонтированных /auth-роутах (non-nil LDAPAuth/OIDCAuth).
 	LoginGuard apimiddleware.LoginGuard
 
 	// LoginLimitCfg — the static parameters of the anti-bruteforce limit (resolved from
@@ -810,7 +820,7 @@ func NewServer(cfg config.KeeperListenSimple, deps Deps, logger *slog.Logger) (*
 	// via the `*/events` chain (fetch-streaming, A0); there is no separate minting endpoint.
 	runEventsDeps := newRunEventsDeps(deps.ApplyBus, deps.IncarnationDB, deps.RBAC, logger)
 
-	handler := buildRouter(deps.JWTVerifier, healthH, opH, incH, soulH, telemetryH, roleH, synodH, sigilH, sigilKeyH, serviceH, provisioningPolicyH, augurH, oracleH, pushH, pushProviderH, providerH, profileH, errandH, voyageH, cadenceH, auditH, choirH, heraldH, moduleCatalogH, deps.ModuleFormPrepH, permCatalogH, eventTypeCatalogH, heraldTypeCatalogH, meH, deps.RBAC, deps.AuditWriter, deps.MetricsHTTP, deps.TollDegraded, deps.TempoLimiter, deps.TempoMetrics, tempoVoyageCreateLimits, tempoVoyagePreviewLimits, deps.WebUIEnabled, deps.LDAPAuth, deps.OIDCAuth, deps.LoginGuard, deps.LoginLimitCfg, deps.SoulStatsStaleFn, clusterH, runEventsDeps, logger)
+	handler := buildRouter(deps.JWTVerifier, healthH, opH, incH, soulH, telemetryH, roleH, synodH, sigilH, sigilKeyH, serviceH, provisioningPolicyH, augurH, oracleH, pushH, pushProviderH, providerH, profileH, errandH, voyageH, cadenceH, auditH, choirH, heraldH, moduleCatalogH, deps.ModuleFormPrepH, permCatalogH, eventTypeCatalogH, heraldTypeCatalogH, meH, deps.RBAC, deps.AuditWriter, deps.MetricsHTTP, deps.TollDegraded, deps.TempoLimiter, deps.TempoMetrics, tempoVoyageCreateLimits, tempoVoyagePreviewLimits, deps.WebUIEnabled, deps.LDAPAuth, deps.OIDCAuth, deps.AuthToken, deps.AuthMethods, deps.LoginGuard, deps.LoginLimitCfg, deps.SoulStatsStaleFn, clusterH, runEventsDeps, logger)
 
 	srv := &http.Server{
 		Addr:              cfg.Addr,

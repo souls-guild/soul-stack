@@ -260,8 +260,13 @@ func (h *Holder) ClusterAdmins() []string {
 	return h.current().ClusterAdmins()
 }
 
-// RolesOf returns AID's role names in the current snapshot. See
-// [Enforcer.RolesOf].
+// IsRevoked — ревокнут ли AID в текущем снимке. См. [Enforcer.IsRevoked].
+// Нужна обмену cookie→Bearer (POST /auth/token, NIM-77): in-memory revoked-чек.
+func (h *Holder) IsRevoked(aid string) bool {
+	return h.current().IsRevoked(aid)
+}
+
+// RolesOf — имена ролей AID-а в текущем снимке. См. [Enforcer.RolesOf].
 func (h *Holder) RolesOf(aid string) []string {
 	return h.current().RolesOf(aid)
 }

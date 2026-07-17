@@ -143,10 +143,10 @@ const (
 	tempoBucketVoyagePreview = "voyage_preview"
 )
 
-// Health/meta are placed outside `/v1/*` per operator-api.md § Health / Meta.
-// chi.NotFound and chi.MethodNotAllowed are replaced with problem+json handlers,
-// so 404/405 do not arrive in the stdlib default text/plain format.
-func buildRouter(verifier *jwt.Verifier, healthH *health.Handler, opH *handlers.OperatorHandler, incH *handlers.IncarnationHandler, soulH *handlers.SoulHandler, telemetryH *handlers.TelemetryHandler, roleH *handlers.RoleHandler, synodH *handlers.SynodHandler, sigilH *handlers.SigilHandler, sigilKeyH *handlers.SigilKeyHandler, serviceH *handlers.ServiceHandler, provisioningPolicyH *handlers.ProvisioningPolicyHandler, augurH *handlers.AugurHandler, oracleH *handlers.OracleHandler, pushH *handlers.PushHandler, pushProviderH *handlers.PushProviderHandler, providerH *handlers.ProviderHandler, profileH *handlers.ProfileHandler, errandH *handlers.ErrandHandler, voyageH *handlers.VoyageHandler, cadenceH *handlers.CadenceHandler, auditH *handlers.AuditHandler, choirH *handlers.ChoirHandler, heraldH *handlers.HeraldHandler, moduleCatalogH *handlers.ModuleCatalogHandler, moduleFormPrepH *handlers.ModuleFormPrepHandler, permCatalogH *handlers.PermissionCatalogHandler, eventTypeCatalogH *handlers.EventTypeCatalogHandler, heraldTypeCatalogH *handlers.HeraldTypeCatalogHandler, meH *handlers.MyPermissionsHandler, enforcer RBACProvider, auditWriter audit.Writer, metricsHTTP *obs.HTTPMetrics, tollDegraded toll.DegradedReader, tempoLimiter apimiddleware.RateLimiter, tempoMetrics apimiddleware.RateLimitMetrics, tempoVoyageCreateLimits func() apimiddleware.RateLimitLimits, tempoVoyagePreviewLimits func() apimiddleware.RateLimitLimits, webUIEnabled bool, ldapAuth *LDAPAuthDeps, oidcAuth *OIDCAuthDeps, loginGuard apimiddleware.LoginGuard, loginLimitCfg apimiddleware.AuthLoginLimitConfig, soulStatsStaleFn func() time.Duration, clusterH *handlers.ClusterHandler, runEventsDeps *runEventsDeps, logger *slog.Logger) http.Handler {
+// Health/meta вынесены вне `/v1/*` по operator-api.md § Health / Meta.
+// chi.NotFound и chi.MethodNotAllowed заменены на problem+json-handlers,
+// чтобы 404/405 не приходили в text/plain default-формате stdlib.
+func buildRouter(verifier *jwt.Verifier, healthH *health.Handler, opH *handlers.OperatorHandler, incH *handlers.IncarnationHandler, soulH *handlers.SoulHandler, telemetryH *handlers.TelemetryHandler, roleH *handlers.RoleHandler, synodH *handlers.SynodHandler, sigilH *handlers.SigilHandler, sigilKeyH *handlers.SigilKeyHandler, serviceH *handlers.ServiceHandler, provisioningPolicyH *handlers.ProvisioningPolicyHandler, augurH *handlers.AugurHandler, oracleH *handlers.OracleHandler, pushH *handlers.PushHandler, pushProviderH *handlers.PushProviderHandler, providerH *handlers.ProviderHandler, profileH *handlers.ProfileHandler, errandH *handlers.ErrandHandler, voyageH *handlers.VoyageHandler, cadenceH *handlers.CadenceHandler, auditH *handlers.AuditHandler, choirH *handlers.ChoirHandler, heraldH *handlers.HeraldHandler, moduleCatalogH *handlers.ModuleCatalogHandler, moduleFormPrepH *handlers.ModuleFormPrepHandler, permCatalogH *handlers.PermissionCatalogHandler, eventTypeCatalogH *handlers.EventTypeCatalogHandler, heraldTypeCatalogH *handlers.HeraldTypeCatalogHandler, meH *handlers.MyPermissionsHandler, enforcer RBACProvider, auditWriter audit.Writer, metricsHTTP *obs.HTTPMetrics, tollDegraded toll.DegradedReader, tempoLimiter apimiddleware.RateLimiter, tempoMetrics apimiddleware.RateLimitMetrics, tempoVoyageCreateLimits func() apimiddleware.RateLimitLimits, tempoVoyagePreviewLimits func() apimiddleware.RateLimitLimits, webUIEnabled bool, ldapAuth *LDAPAuthDeps, oidcAuth *OIDCAuthDeps, authToken *AuthTokenDeps, authMethods AuthMethodsDeps, loginGuard apimiddleware.LoginGuard, loginLimitCfg apimiddleware.AuthLoginLimitConfig, soulStatsStaleFn func() time.Duration, clusterH *handlers.ClusterHandler, runEventsDeps *runEventsDeps, logger *slog.Logger) http.Handler {
 	r := chi.NewRouter()
 
 	// huma error-override (ADR-054, FULL-TYPED): global huma.NewError →
@@ -204,42 +204,55 @@ func buildRouter(verifier *jwt.Verifier, healthH *health.Handler, opH *handlers.
 		webui.Mount(r)
 	}
 
-	// /auth/* — federated authentication (ADR-058) OUTSIDE /v1: public login
-	// (the login itself, no JWT yet — RequireJWT does not apply, parity with /healthz). Mounted
-	// when ldapAuth is non-nil (POST /auth/ldap/login) AND/OR oidcAuth is non-nil
-	// (GET /auth/oidc/{login,callback}); otherwise the login method is unavailable (ADR-053
-	// OPTIONAL tier). The anti-DoS body-limit is in place (credentials/callback-query are small),
-	// but without metrics/RBAC/audit-middleware (the /v1 wiring): the login audit is written by the
-	// handler itself (operator.login).
+	// /auth/* — публичная аутентификация (ADR-058/NIM-77) ВНЕ /v1: JWT ещё нет —
+	// RequireJWT неприменим (parity /healthz). Монтируется БЕЗУСЛОВНО: GET
+	// /auth/methods (список способов входа для формы UI) есть всегда; POST
+	// /auth/token (обмен session-cookie→короткий Bearer, NIM-77) — при non-nil
+	// authToken; LDAP/OIDC-логин — при non-nil ldapAuth/oidcAuth (ADR-053
+	// OPTIONAL-tier). Anti-DoS body-limit стоит (credentials/callback-query — малые),
+	// но без metrics/RBAC/audit-middleware (/v1-обвязка): audit логина пишет сам
+	// handler (operator.login); обмен /auth/token в audit НЕ пишется (high-freq).
 	//
 	// ANTI-BRUTEFORCE (ADR-058(g), HIGH-3): AuthLoginLimit per-IP+per-username
-	// throttle + lockout (loginGuard, fail-closed on lockout, fail-open on throttle).
-	// loginGuard=nil (no Redis) → passthrough. Each method has its OWN chi subgroup,
-	// to attach a different username extractor (LDAP — from the body; OIDC — none) and
-	// a shared guard; separate huma.API dump targets in fullSpecGroups.
-	if ldapAuth != nil || oidcAuth != nil {
-		r.Route("/auth", func(r chi.Router) {
-			r.Use(maxBodyMiddleware(v1RequestBodyLimit))
-			if ldapAuth != nil {
-				// LDAP: throttle+lockout with per-username (from the JSON body) + recording
-				// of failures (401/403). Its own chi group under the middleware.
-				r.Group(func(r chi.Router) {
-					r.Use(apimiddleware.AuthLoginLimit(loginGuard, loginLimitCfg, apimiddleware.LDAPUsernameExtractor, true, logger))
-					registerHumaLDAPLogin(newHumaAuthAPI(r), ldapAuth)
-				})
-			}
-			if oidcAuth != nil {
-				// OIDC: throttle+lockout per-IP (the username comes from the IdP, not from
-				// the request → extractUsername=nil). recordFailures=true: on /login
-				// (302) there is no failure (isAuthFailure(302)=false → no-op), on /callback
-				// a 401/403 increments the counter. The /login throttle dampens the flow-state flood.
-				r.Group(func(r chi.Router) {
-					r.Use(apimiddleware.AuthLoginLimit(loginGuard, loginLimitCfg, nil, true, logger))
-					registerHumaOIDCLogin(newHumaAuthAPI(r), oidcAuth)
-				})
-			}
-		})
-	}
+	// throttle + lockout (loginGuard, fail-closed на lockout, fail-open на throttle).
+	// loginGuard=nil (нет Redis) → passthrough. Каждый способ — СВОЯ chi-подгруппа,
+	// чтобы навесить разный экстрактор username (LDAP — из тела; OIDC/token — нет) и
+	// общий guard; раздельные dump-таргеты huma.API в fullSpecGroups. /auth/methods —
+	// без throttle (лёгкий public read).
+	r.Route("/auth", func(r chi.Router) {
+		r.Use(maxBodyMiddleware(v1RequestBodyLimit))
+
+		// GET /auth/methods — публичный, без throttle (методы всегда доступны).
+		registerHumaAuthMethods(newHumaAuthAPI(r), authMethods)
+
+		if authToken != nil {
+			// POST /auth/token: throttle per-IP (username из запроса не берём,
+			// extractUsername=nil), recordFailures=false — refresh high-freq, каждый
+			// протухший cookie не должен копить lockout-счётчик.
+			r.Group(func(r chi.Router) {
+				r.Use(apimiddleware.AuthLoginLimit(loginGuard, loginLimitCfg, nil, false, logger))
+				registerHumaAuthTokenExchange(newHumaAuthAPI(r), authToken)
+			})
+		}
+		if ldapAuth != nil {
+			// LDAP: throttle+lockout с per-username (из JSON-тела) + запись
+			// неудач (401/403). Своя chi-группа под middleware.
+			r.Group(func(r chi.Router) {
+				r.Use(apimiddleware.AuthLoginLimit(loginGuard, loginLimitCfg, apimiddleware.LDAPUsernameExtractor, true, logger))
+				registerHumaLDAPLogin(newHumaAuthAPI(r), ldapAuth)
+			})
+		}
+		if oidcAuth != nil {
+			// OIDC: throttle+lockout per-IP (username приходит от IdP, не из
+			// запроса → extractUsername=nil). recordFailures=true: на /login
+			// (302) неудачи нет (isAuthFailure(302)=false → no-op), на /callback
+			// 401/403 пишется счётчик. /login-throttle гасит flow-state-flood.
+			r.Group(func(r chi.Router) {
+				r.Use(apimiddleware.AuthLoginLimit(loginGuard, loginLimitCfg, nil, true, logger))
+				registerHumaOIDCLogin(newHumaAuthAPI(r), oidcAuth)
+			})
+		}
+	})
 
 	// /v1/* — auth + RBAC + audit. The selector-extractor for operator
 	// endpoints is NoSelector (rbac.md does not define selectors for

@@ -28,21 +28,26 @@ import (
 // delivery, no JSON token in the body). `soul_session` — our own session name.
 const sessionCookieName = "soul_session"
 
-// newSessionCookie builds the Set-Cookie with the internal JWT — the SINGLE point for LDAP and
-// OIDC (ADR-058(g)/(#4): symmetry of login methods is mandatory). HttpOnly+Secure+
-// `SameSite=Strict`+`Path=/`.
+// newSessionCookie собирает Set-Cookie с внутренним JWT — ЕДИНАЯ точка для LDAP и
+// OIDC (ADR-058(g)/(№4): симметрия способов логина обязательна). HttpOnly+Secure+
+// `SameSite=Strict`+`Path=/auth`.
 //
-// SameSite=Strict is safe for the OIDC callback too (a MED fix for the Lax↔Strict desync,
-// 2026-06-24): SameSite restricts SENDING the cookie on a cross-site request, not its
-// SETTING. On a cross-site top-level redirect from the IdP we SET the cookie (Set-Cookie on
-// the callback response), not read it; the next step is a same-site top-level navigation to
-// `/ui` (302 Location), on which the Strict cookie IS SENT. The former Lax on OIDC
-// was an excessive relaxation and diverged from LDAP — removed.
+// Path=/auth (сужен с `/`, NIM-77): единственный серверный читатель cookie — POST
+// /auth/token (обмен на короткий Bearer, Вариант B). Браузер шлёт cookie ТОЛЬКО на
+// `/auth/*`, не на /v1//mcp//docs — сужение поверхности утечки 24h-credential
+// (cookie не приклеивается к каждому API-запросу).
+//
+// SameSite=Strict безопасен и для OIDC-callback (MED-фикс рассинхрона Lax↔Strict,
+// 2026-06-24): SameSite ограничивает ОТПРАВКУ cookie на cross-site-запрос, а не её
+// УСТАНОВКУ. На cross-site top-level redirect от IdP мы cookie СТАВИМ (Set-Cookie на
+// ответе callback-а), а не читаем; следующий шаг — same-site top-level навигация на
+// `/ui` (302 Location). Эта навигация НЕ шлёт /auth-cookie (Path не совпал), но она
+// и не требуется: сессию UI поднимает через POST /auth/token (обмен на Bearer).
 func newSessionCookie(token string, ttl time.Duration) *http.Cookie {
 	return &http.Cookie{
 		Name:     sessionCookieName,
 		Value:    token,
-		Path:     "/",
+		Path:     "/auth",
 		HttpOnly: true,
 		Secure:   true, // TLS-required perimeter (ADR-002 mTLS/HTTPS)
 		SameSite: http.SameSiteStrictMode,

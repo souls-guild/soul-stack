@@ -4137,6 +4137,35 @@ func (d *daemon) setupAPIServer(ctx context.Context) error {
 		return errSetupFailed
 	}
 
+	// exchange_ttl — короткий TTL Bearer, выдаваемого POST /auth/token (NIM-77,
+	// Вариант B). Отдельный от ttl_default (24h): refresh-обмен даёт
+	// короткоживущий токен, дефолт 10m, floor 1m (clampExchangeTTL).
+	exchangeTTL, err := parseTTL(d.cfg.Auth.JWT.ExchangeTTL, "auth.jwt.exchange_ttl", 10*time.Minute)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "keeper run: %v\n", err)
+		return errSetupFailed
+	}
+	if clamped := clampExchangeTTL(exchangeTTL); clamped != exchangeTTL {
+		if d.logger != nil {
+			d.logger.Warn("auth.jwt.exchange_ttl ниже минимума, поднят до floor",
+				slog.Duration("configured", exchangeTTL), slog.Duration("floor", minExchangeTTL))
+		}
+		exchangeTTL = clamped
+	}
+	// AuthToken — обмен session-cookie→короткий Bearer (NIM-77): тот же shared
+	// verifier/issuer, что RequireJWT/логин; revoked-чек по in-memory RBAC-снимку
+	// (d.rbacHolder, map-lookup, не SQL).
+	authTokenDeps := &api.AuthTokenDeps{
+		Verifier: d.verifier,
+		Issuer:   d.issuer,
+		TTL:      exchangeTTL,
+		Revoked:  d.rbacHolder,
+		Logger:   d.logger,
+	}
+	// AuthMethods — booleans для публичного GET /auth/methods (форма входа UI):
+	// password всегда доступен; ldap/oidc — по факту сконфигурированности.
+	authMethods := api.AuthMethodsDeps{Password: true, LDAP: ldapAuth != nil, OIDC: oidcAuth != nil}
+
 	srv, err := api.NewServer(cfg.Listen.OpenAPI, api.Deps{
 		JWTVerifier:         d.verifier,
 		JWTIssuer:           d.issuer,
@@ -4287,9 +4316,14 @@ func (d *daemon) setupAPIServer(ctx context.Context) error {
 		// Keeper daemon runtime wiring note.
 		// Keeper daemon runtime wiring note.
 		OIDCAuth: oidcAuth,
-		// Keeper daemon runtime wiring note.
-		// Keeper daemon runtime wiring note.
-		// Keeper daemon runtime wiring note.
+		// AuthToken / AuthMethods — обмен session-cookie→Bearer (POST /auth/token,
+		// NIM-77 Вариант B) + публичный GET /auth/methods. /auth/methods монтируется
+		// безусловно; /auth/token — при non-nil AuthToken.
+		AuthToken:   authTokenDeps,
+		AuthMethods: authMethods,
+		// LoginGuard / LoginLimitCfg — anti-bruteforce публичных login-эндпоинтов
+		// (ADR-058(g), HIGH-3). nil-guard (нет Redis / auth.rate_limit.enabled=false)
+		// → login без throttle (passthrough). loginGuardOrNil — typed-nil-guard.
 		LoginGuard:    loginGuardOrNil(d.loginGuard),
 		LoginLimitCfg: d.loginLimitCfg(),
 		// Keeper daemon runtime wiring note.

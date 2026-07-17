@@ -53,6 +53,37 @@ components:
         - offset
         - total
       type: object
+    AuthMethodsReply:
+      additionalProperties: false
+      properties:
+        ldap:
+          description: федеративный LDAP-логин сконфигурирован
+          type: boolean
+        oidc:
+          description: федеративный OIDC-логин сконфигурирован
+          type: boolean
+        password:
+          description: локальный логин (всегда доступен)
+          type: boolean
+      required:
+        - password
+        - ldap
+        - oidc
+      type: object
+    AuthTokenReply:
+      additionalProperties: false
+      properties:
+        expires_at:
+          description: момент истечения выданного Bearer
+          format: date-time
+          type: string
+        token:
+          description: короткий Bearer-JWT для Authorization на /v1
+          type: string
+      required:
+        - token
+        - expires_at
+      type: object
     Cadence:
       additionalProperties: false
       properties:
@@ -5055,6 +5086,26 @@ paths:
       summary: Operator login via LDAP
       tags:
         - auth
+  /auth/methods:
+    get:
+      description: Публичный список способов входа для формы логина UI (password всегда true; ldap/oidc — по конфигурации keeper). Только booleans, без IdP-URL/доменов.
+      operationId: authMethods
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AuthMethodsReply"
+          description: OK
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/HumaProblemError"
+          description: Error
+      summary: Доступные способы логина
+      tags:
+        - auth
   /auth/oidc/callback:
     get:
       description: Validates id_token (JWKS signature/iss/aud/exp/nonce), maps to operators(aid)+roles, issues the internal JWT in an HttpOnly+Secure cookie and redirects (302) to the UI. Validation/mapping error -> 401/403.
@@ -5148,6 +5199,59 @@ paths:
                 $ref: "#/components/schemas/HumaProblemError"
           description: Internal Server Error
       summary: Start OIDC login for the operator
+      tags:
+        - auth
+  /auth/token:
+    post:
+      description: "NIM-77/ADR-058 (Вариант B): читает HttpOnly-cookie soul_session (внутренний JWT), верифицирует тем же verifier, что и Bearer на /v1, и выпускает короткоживущий Bearer в JSON-теле. Субъект/роли — строго из проверенных claims cookie. В audit не пишется."
+      operationId: authTokenExchange
+      parameters:
+        - in: cookie
+          name: soul_session
+          schema:
+            type: string
+        - in: header
+          name: Sec-Fetch-Site
+          schema:
+            type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AuthTokenReply"
+          description: OK
+        "401":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/HumaProblemError"
+          description: Unauthorized
+        "403":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/HumaProblemError"
+          description: Forbidden
+        "422":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/HumaProblemError"
+          description: Unprocessable Entity
+        "429":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/HumaProblemError"
+          description: Too Many Requests
+        "500":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/HumaProblemError"
+          description: Internal Server Error
+      summary: Обмен session-cookie на короткий Bearer
       tags:
         - auth
   /v1/audit:

@@ -231,12 +231,14 @@ func collectRoutes(t *testing.T) map[route]struct{} {
 		nil,                                  // tollDegradedReader — DegradedMiddleware skips when nil (router.go)
 		nil,                                  // tempoLimiter — nil → RateLimit middleware passthrough (router.go)
 		nil,                                  // tempoMetrics — nil → emit no-op (router.go)
-		nil,                                  // tempoVoyageCreateLimits — nil is fine (RateLimit doesn't call the provider when the limiter is nil)
-		nil,                                  // tempoVoyagePreviewLimits — nil is fine (RateLimit doesn't call the provider when the limiter is nil)
-		false,                                // webUIEnabled — /ui is outside /v1, the drift-walker doesn't see it; keep it off for perimeter cleanliness
-		nil,                                  // ldapAuth (LDAP isn't configured in the test)
-		nil,                                  // oidcAuth (OIDC isn't configured in the test)
-		nil,                                  // loginGuard (anti-bruteforce off in the test)
+		nil,                                  // tempoVoyageCreateLimits — nil допустим (RateLimit при nil-limiter не вызывает provider)
+		nil,                                  // tempoVoyagePreviewLimits — nil допустим (RateLimit при nil-limiter не вызывает provider)
+		false,                                // webUIEnabled — /ui вне /v1, drift-walker его не видит; держим выключенным для чистоты периметра
+		nil,                                  // ldapAuth (LDAP не сконфигурирован в тесте)
+		nil,                                  // oidcAuth (OIDC не сконфигурирован в тесте)
+		authTokenSpecStub(),                  // authToken — /auth/token монтируется (NIM-77); в спеке И роутере → без allowlist
+		AuthMethodsDeps{Password: true},      // authMethods — /auth/methods монтируется безусловно
+		nil,                                  // loginGuard (anti-bruteforce off в тесте)
 		apimiddleware.AuthLoginLimitConfig{}, // loginLimitCfg
 		nil,                                  // soulStatsStaleFn (default 90s in the test)
 		nil,                                  // clusterH (cluster-view isn't mounted in the test)
