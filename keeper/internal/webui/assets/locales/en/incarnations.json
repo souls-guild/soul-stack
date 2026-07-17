@@ -267,5 +267,17 @@
   "revealForbidden": "Insufficient permissions",
   "revealNotFound": "Value not found",
   "revealFailed": "Failed to reveal password: {{detail}}",
-  "revealCopyPrompt": "Copy the password manually:"
+  "revealCopyPrompt": "Copy the password manually:",
+  "utilDesc": "Host utilization for this incarnation (CPU / memory / disk / load / uptime) from the latest Soul snapshot. Auto-refreshes; sparklines show a short per-host window.",
+  "utilLoadFailed": "Failed to load telemetry: {{detail}}",
+  "utilForbidden": "Insufficient permissions to view host telemetry.",
+  "utilEmpty": "No telemetry — hosts are not reporting metrics (legacy agent or the subsystem is disabled).",
+  "utilNoData": "no data",
+  "utilStale": "stale",
+  "utilTruncated": "Host list truncated (large fleet) — showing an overview slice.",
+  "utilExpandAria": "Show sparklines for host {{sid}}",
+  "utilCollapseAria": "Hide sparklines for host {{sid}}",
+  "utilWindowEmpty": "Metrics window is empty — not enough snapshots for a sparkline.",
+  "utilWindowFailed": "Failed to load metrics window: {{detail}}",
+  "utilUnavailable": "Host telemetry is unavailable — this Keeper doesn't support host vitals (older version) or the subsystem is disabled."
 }
