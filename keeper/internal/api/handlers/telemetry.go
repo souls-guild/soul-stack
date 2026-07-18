@@ -48,22 +48,28 @@ type SoulTelemetryReply struct {
 
 // UtilizationLatest — the expanded latest host-vitals snapshot.
 type UtilizationLatest struct {
-	CpuPct     float64         `json:"cpu_pct"`
-	Load1      float64         `json:"load1"`
-	Load5      float64         `json:"load5"`
-	Load15     float64         `json:"load15"`
-	MemUsedMb  int64           `json:"mem_used_mb"`
-	MemTotalMb int64           `json:"mem_total_mb"`
-	SwapUsedMb int64           `json:"swap_used_mb"`
-	UptimeSec  int64           `json:"uptime_sec"`
-	Disks      []TelemetryDisk `json:"disks,omitempty"`
+	CpuPct      float64         `json:"cpu_pct"`
+	Load1       float64         `json:"load1"`
+	Load5       float64         `json:"load5"`
+	Load15      float64         `json:"load15"`
+	MemUsedMb   int64           `json:"mem_used_mb"`
+	MemTotalMb  int64           `json:"mem_total_mb"`
+	SwapUsedMb  int64           `json:"swap_used_mb"`
+	UptimeSec   int64           `json:"uptime_sec"`
+	NetRxBps    int64           `json:"net_rx_bps"`
+	NetTxBps    int64           `json:"net_tx_bps"`
+	NetErrPs    int64           `json:"net_err_ps"`
+	IntervalSec int32           `json:"interval_sec"`
+	Disks       []TelemetryDisk `json:"disks,omitempty"`
 }
 
 // TelemetryDisk — usage of one mounted volume.
 type TelemetryDisk struct {
-	Mount   string `json:"mount"`
-	UsedMb  int64  `json:"used_mb"`
-	TotalMb int64  `json:"total_mb"`
+	Mount       string `json:"mount"`
+	UsedMb      int64  `json:"used_mb"`
+	TotalMb     int64  `json:"total_mb"`
+	InodesUsed  int64  `json:"inodes_used"`
+	InodesTotal int64  `json:"inodes_total"`
 }
 
 // UtilizationWindowPoint — a compact window point (sparkline).
@@ -73,6 +79,8 @@ type UtilizationWindowPoint struct {
 	Load1       float64   `json:"load1"`
 	MemUsedMb   int64     `json:"mem_used_mb"`
 	MemTotalMb  int64     `json:"mem_total_mb"`
+	NetRxBps    int64     `json:"net_rx_bps"`
+	NetTxBps    int64     `json:"net_tx_bps"`
 }
 
 // IncarnationTelemetryReply — 200-body of GET /v1/incarnations/{name}/telemetry:
@@ -226,11 +234,15 @@ func latestFromSnapshot(s keeperredis.UtilizationSnapshot) *UtilizationLatest {
 	l := &UtilizationLatest{
 		CpuPct: s.CPUPct, Load1: s.Load1, Load5: s.Load5, Load15: s.Load15,
 		MemUsedMb: s.MemUsedMB, MemTotalMb: s.MemTotalMB, SwapUsedMb: s.SwapUsedMB, UptimeSec: s.UptimeSec,
+		NetRxBps: s.NetRxBps, NetTxBps: s.NetTxBps, NetErrPs: s.NetErrPs, IntervalSec: s.IntervalSec,
 	}
 	if len(s.Disks) > 0 {
 		l.Disks = make([]TelemetryDisk, 0, len(s.Disks))
 		for _, d := range s.Disks {
-			l.Disks = append(l.Disks, TelemetryDisk{Mount: d.Mount, UsedMb: d.UsedMB, TotalMb: d.TotalMB})
+			l.Disks = append(l.Disks, TelemetryDisk{
+				Mount: d.Mount, UsedMb: d.UsedMB, TotalMb: d.TotalMB,
+				InodesUsed: d.InodesUsed, InodesTotal: d.InodesTotal,
+			})
 		}
 	}
 	return l
@@ -245,6 +257,7 @@ func windowFromPoints(pts []keeperredis.UtilizationPoint) []UtilizationWindowPoi
 		out = append(out, UtilizationWindowPoint{
 			CollectedAt: p.CollectedAt, CpuPct: p.CPUPct, Load1: p.Load1,
 			MemUsedMb: p.MemUsedMB, MemTotalMb: p.MemTotalMB,
+			NetRxBps: p.NetRxBps, NetTxBps: p.NetTxBps,
 		})
 	}
 	return out

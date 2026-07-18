@@ -41,7 +41,14 @@ type HostUtilization struct {
 	Disks     []*DiskUtilization `protobuf:"bytes,9,rep,name=disks,proto3" json:"disks,omitempty"`
 	UptimeSec int64              `protobuf:"varint,10,opt,name=uptime_sec,json=uptimeSec,proto3" json:"uptime_sec,omitempty"`
 	// Effective pulse cadence; the Keeper scales Redis key TTLs by it (ADR-072, NIM-87).
-	IntervalSec   int32 `protobuf:"varint,11,opt,name=interval_sec,json=intervalSec,proto3" json:"interval_sec,omitempty"`
+	IntervalSec int32 `protobuf:"varint,11,opt,name=interval_sec,json=intervalSec,proto3" json:"interval_sec,omitempty"`
+	// Network throughput — aggregate over physical NICs (lo + virtual ifaces filtered out),
+	// rate = delta of /proc/net/dev byte counters over wall time between samples (stateful,
+	// like cpu_pct). First tick after (re)start reports 0 (no baseline yet). Aggregate, not
+	// per-interface — bound size, no per-NIC explosion (ADR-072 amendment 2026-07-18, NIM-127).
+	NetRxBps      int64 `protobuf:"varint,12,opt,name=net_rx_bps,json=netRxBps,proto3" json:"net_rx_bps,omitempty"` // received bytes/sec
+	NetTxBps      int64 `protobuf:"varint,13,opt,name=net_tx_bps,json=netTxBps,proto3" json:"net_tx_bps,omitempty"` // transmitted bytes/sec
+	NetErrPs      int64 `protobuf:"varint,14,opt,name=net_err_ps,json=netErrPs,proto3" json:"net_err_ps,omitempty"` // combined NIC errors+drops per sec (rx+tx), a single health blip
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -153,12 +160,38 @@ func (x *HostUtilization) GetIntervalSec() int32 {
 	return 0
 }
 
+func (x *HostUtilization) GetNetRxBps() int64 {
+	if x != nil {
+		return x.NetRxBps
+	}
+	return 0
+}
+
+func (x *HostUtilization) GetNetTxBps() int64 {
+	if x != nil {
+		return x.NetTxBps
+	}
+	return 0
+}
+
+func (x *HostUtilization) GetNetErrPs() int64 {
+	if x != nil {
+		return x.NetErrPs
+	}
+	return 0
+}
+
 // DiskUtilization — the usage of a single mount point. Sizes in MB (like MemoryFacts).
 type DiskUtilization struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Mount         string                 `protobuf:"bytes,1,opt,name=mount,proto3" json:"mount,omitempty"`
-	UsedMb        int64                  `protobuf:"varint,2,opt,name=used_mb,json=usedMb,proto3" json:"used_mb,omitempty"`
-	TotalMb       int64                  `protobuf:"varint,3,opt,name=total_mb,json=totalMb,proto3" json:"total_mb,omitempty"`
+	state   protoimpl.MessageState `protogen:"open.v1"`
+	Mount   string                 `protobuf:"bytes,1,opt,name=mount,proto3" json:"mount,omitempty"`
+	UsedMb  int64                  `protobuf:"varint,2,opt,name=used_mb,json=usedMb,proto3" json:"used_mb,omitempty"`
+	TotalMb int64                  `protobuf:"varint,3,opt,name=total_mb,json=totalMb,proto3" json:"total_mb,omitempty"`
+	// Inode utilization from the same statvfs already taken for space (zero extra syscall):
+	// used = f_files - f_ffree, total = f_files. total=0 → the FS does not report inodes
+	// (ADR-072 amendment 2026-07-18, NIM-127).
+	InodesUsed    int64 `protobuf:"varint,4,opt,name=inodes_used,json=inodesUsed,proto3" json:"inodes_used,omitempty"`
+	InodesTotal   int64 `protobuf:"varint,5,opt,name=inodes_total,json=inodesTotal,proto3" json:"inodes_total,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -210,6 +243,20 @@ func (x *DiskUtilization) GetUsedMb() int64 {
 func (x *DiskUtilization) GetTotalMb() int64 {
 	if x != nil {
 		return x.TotalMb
+	}
+	return 0
+}
+
+func (x *DiskUtilization) GetInodesUsed() int64 {
+	if x != nil {
+		return x.InodesUsed
+	}
+	return 0
+}
+
+func (x *DiskUtilization) GetInodesTotal() int64 {
+	if x != nil {
+		return x.InodesTotal
 	}
 	return 0
 }
@@ -281,7 +328,7 @@ var File_keeper_v1_utilization_proto protoreflect.FileDescriptor
 
 const file_keeper_v1_utilization_proto_rawDesc = "" +
 	"\n" +
-	"\x1bkeeper/v1/utilization.proto\x12\x13soulstack.keeper.v1\x1a\x1fgoogle/protobuf/timestamp.proto\"\x8f\x03\n" +
+	"\x1bkeeper/v1/utilization.proto\x12\x13soulstack.keeper.v1\x1a\x1fgoogle/protobuf/timestamp.proto\"\xe9\x03\n" +
 	"\x0fHostUtilization\x12=\n" +
 	"\fcollected_at\x18\x01 \x01(\v2\x1a.google.protobuf.TimestampR\vcollectedAt\x12\x17\n" +
 	"\acpu_pct\x18\x02 \x01(\x01R\x06cpuPct\x12\x14\n" +
@@ -297,11 +344,20 @@ const file_keeper_v1_utilization_proto_rawDesc = "" +
 	"\n" +
 	"uptime_sec\x18\n" +
 	" \x01(\x03R\tuptimeSec\x12!\n" +
-	"\finterval_sec\x18\v \x01(\x05R\vintervalSec\"[\n" +
+	"\finterval_sec\x18\v \x01(\x05R\vintervalSec\x12\x1c\n" +
+	"\n" +
+	"net_rx_bps\x18\f \x01(\x03R\bnetRxBps\x12\x1c\n" +
+	"\n" +
+	"net_tx_bps\x18\r \x01(\x03R\bnetTxBps\x12\x1c\n" +
+	"\n" +
+	"net_err_ps\x18\x0e \x01(\x03R\bnetErrPs\"\x9f\x01\n" +
 	"\x0fDiskUtilization\x12\x14\n" +
 	"\x05mount\x18\x01 \x01(\tR\x05mount\x12\x17\n" +
 	"\aused_mb\x18\x02 \x01(\x03R\x06usedMb\x12\x19\n" +
-	"\btotal_mb\x18\x03 \x01(\x03R\atotalMb\"n\n" +
+	"\btotal_mb\x18\x03 \x01(\x03R\atotalMb\x12\x1f\n" +
+	"\vinodes_used\x18\x04 \x01(\x03R\n" +
+	"inodesUsed\x12!\n" +
+	"\finodes_total\x18\x05 \x01(\x03R\vinodesTotal\"n\n" +
 	"\x0fTelemetryConfig\x12\x18\n" +
 	"\aenabled\x18\x01 \x01(\bR\aenabled\x12!\n" +
 	"\finterval_sec\x18\x02 \x01(\x05R\vintervalSec\x12\x1e\n" +

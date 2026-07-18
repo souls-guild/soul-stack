@@ -3,15 +3,18 @@ package utilization
 import (
 	"context"
 	"testing"
+	"time"
 )
 
 // fakeSource — a deterministic Source for testing Collector without touching /proc.
 type fakeSource struct {
-	load   LoadAvg
-	mem    MemInfo
-	disks  []Disk
-	uptime int64
-	cpu    CPUSample
+	load     LoadAvg
+	mem      MemInfo
+	disks    []Disk
+	uptime   int64
+	cpu      CPUSample
+	net      NetSample
+	netCalls *int // when non-nil, incremented on each Network() call
 }
 
 func (f fakeSource) Load(context.Context) LoadAvg        { return f.load }
@@ -19,6 +22,12 @@ func (f fakeSource) Memory(context.Context) MemInfo      { return f.mem }
 func (f fakeSource) Disks(context.Context) []Disk        { return f.disks }
 func (f fakeSource) Uptime(context.Context) int64        { return f.uptime }
 func (f fakeSource) CPUSample(context.Context) CPUSample { return f.cpu }
+func (f fakeSource) Network(context.Context) NetSample {
+	if f.netCalls != nil {
+		*f.netCalls++
+	}
+	return f.net
+}
 
 func TestCollect_FillsAllFields(t *testing.T) {
 	src := fakeSource{
@@ -100,6 +109,76 @@ func TestCollect_CpuDeltaAcrossCollects(t *testing.T) {
 	c.src = fakeSource{cpu: CPUSample{Total: 200, Idle: 90}}
 	if got := c.Collect(context.Background(), "h", nil).GetCpuPct(); got != 60 {
 		t.Errorf("second Collect cpu_pct=%v want 60", got)
+	}
+}
+
+// netBps — per-second rate of a monotonic counter over dt.
+func TestNetBps(t *testing.T) {
+	cases := []struct {
+		name      string
+		prev, cur uint64
+		dt        time.Duration
+		want      int64
+	}{
+		{"normal", 1000, 2000, 2 * time.Second, 500},
+		{"first sample dt zero", 1000, 2000, 0, 0},
+		{"negative dt", 1000, 2000, -time.Second, 0},
+		{"counter reset", 2000, 500, time.Second, 0},
+		{"no movement", 2000, 2000, time.Second, 0},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := netBps(tc.prev, tc.cur, tc.dt); got != tc.want {
+				t.Errorf("netBps(%d,%d,%v)=%d want %d", tc.prev, tc.cur, tc.dt, got, tc.want)
+			}
+		})
+	}
+}
+
+// net rate: first Collect has no baseline → all-zero; a second Collect with an
+// advanced counter yields a positive rate. dt is real wall-clock (time.Now), so
+// we only assert the sign, not the exact value — the math is covered by TestNetBps.
+func TestCollect_NetFirstSampleZeroThenPositive(t *testing.T) {
+	c := NewCollector(fakeSource{net: NetSample{RxBytes: 1000, TxBytes: 2000, ErrDrops: 3}})
+	u := c.Collect(context.Background(), "h", CollectorSet{"net": true})
+	if u.GetNetRxBps() != 0 || u.GetNetTxBps() != 0 || u.GetNetErrPs() != 0 {
+		t.Fatalf("first Collect net must be zero: rx=%d tx=%d err=%d",
+			u.GetNetRxBps(), u.GetNetTxBps(), u.GetNetErrPs())
+	}
+	time.Sleep(time.Millisecond) // guarantee dt>0 for the second sample
+	c.src = fakeSource{net: NetSample{RxBytes: 1_000_000, TxBytes: 2_000_000, ErrDrops: 100}}
+	u2 := c.Collect(context.Background(), "h", CollectorSet{"net": true})
+	if u2.GetNetRxBps() <= 0 || u2.GetNetTxBps() <= 0 || u2.GetNetErrPs() <= 0 {
+		t.Errorf("second Collect net must be positive: rx=%d tx=%d err=%d",
+			u2.GetNetRxBps(), u2.GetNetTxBps(), u2.GetNetErrPs())
+	}
+}
+
+// net disabled → rates stay zero and Network() is never called.
+func TestCollect_NetDisabledNotCalled(t *testing.T) {
+	var calls int
+	src := fakeSource{net: NetSample{RxBytes: 1000}, netCalls: &calls}
+	u := NewCollector(src).Collect(context.Background(), "h", CollectorSet{"cpu": true})
+	if calls != 0 {
+		t.Errorf("Network() called %d times when net disabled, want 0", calls)
+	}
+	if u.GetNetRxBps() != 0 || u.GetNetTxBps() != 0 || u.GetNetErrPs() != 0 {
+		t.Errorf("net fields must be zero when disabled: %+v", u)
+	}
+}
+
+// inode counts flow from the Source Disk through to the proto DiskUtilization.
+func TestCollect_InodesFlowThrough(t *testing.T) {
+	src := fakeSource{disks: []Disk{
+		{Mount: "/", UsedMB: 100, TotalMB: 1000, InodesUsed: 4200, InodesTotal: 65536},
+	}}
+	u := NewCollector(src).Collect(context.Background(), "h", nil)
+	if len(u.GetDisks()) != 1 {
+		t.Fatalf("disks=%d want 1", len(u.GetDisks()))
+	}
+	d := u.GetDisks()[0]
+	if d.GetInodesUsed() != 4200 || d.GetInodesTotal() != 65536 {
+		t.Errorf("inode passthrough mismatch: used=%d total=%d", d.GetInodesUsed(), d.GetInodesTotal())
 	}
 }
 

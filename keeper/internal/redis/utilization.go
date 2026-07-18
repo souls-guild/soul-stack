@@ -55,9 +55,11 @@ func UtilizationWindowKey(sid string) string { return "soul:" + sid + ":util:win
 
 // DiskUsage — usage of one mounted volume.
 type DiskUsage struct {
-	Mount   string `json:"mount"`
-	UsedMB  int64  `json:"used_mb"`
-	TotalMB int64  `json:"total_mb"`
+	Mount       string `json:"mount"`
+	UsedMB      int64  `json:"used_mb"`
+	TotalMB     int64  `json:"total_mb"`
+	InodesUsed  int64  `json:"inodes_used"`
+	InodesTotal int64  `json:"inodes_total"`
 }
 
 // UtilizationSnapshot — the latest host-vitals snapshot of a host.
@@ -72,19 +74,25 @@ type UtilizationSnapshot struct {
 	MemTotalMB  int64
 	SwapUsedMB  int64
 	UptimeSec   int64
+	NetRxBps    int64
+	NetTxBps    int64
+	NetErrPs    int64
 	Disks       []DiskUsage
 	// IntervalSec — the effective cadence on which the Soul sent the snapshot (NIM-87);
 	// 0 for an old soul without the field. Reflects the telemetry interval resolved by Keeper.
 	IntervalSec int32
 }
 
-// UtilizationPoint — a compact window point for sparklines.
+// UtilizationPoint — a compact window point for sparklines. Net rides the point for
+// a sparkline; inode/swap/err stay latest-only (Hash) to keep the ring lean.
 type UtilizationPoint struct {
 	CollectedAt time.Time `json:"collected_at"`
 	CPUPct      float64   `json:"cpu_pct"`
 	Load1       float64   `json:"load1"`
 	MemUsedMB   int64     `json:"mem_used_mb"`
 	MemTotalMB  int64     `json:"mem_total_mb"`
+	NetRxBps    int64     `json:"net_rx_bps"`
+	NetTxBps    int64     `json:"net_tx_bps"`
 }
 
 // WriteUtilization writes a SID's utilization snapshot to Redis in one pipeline: latest
@@ -123,6 +131,8 @@ func WriteUtilization(ctx context.Context, c *Client, sid string, ev *keeperv1.H
 		Load1:       ev.GetLoad1(),
 		MemUsedMB:   ev.GetMemUsedMb(),
 		MemTotalMB:  ev.GetMemTotalMb(),
+		NetRxBps:    ev.GetNetRxBps(),
+		NetTxBps:    ev.GetNetTxBps(),
 	})
 	if err != nil {
 		return fmt.Errorf("redis.WriteUtilization: marshal point: %w", err)
@@ -147,6 +157,9 @@ func WriteUtilization(ctx context.Context, c *Client, sid string, ev *keeperv1.H
 		"mem_total_mb": ev.GetMemTotalMb(),
 		"swap_used_mb": ev.GetSwapUsedMb(),
 		"uptime_sec":   ev.GetUptimeSec(),
+		"net_rx_bps":   ev.GetNetRxBps(),
+		"net_tx_bps":   ev.GetNetTxBps(),
+		"net_err_ps":   ev.GetNetErrPs(),
 		"interval_sec": ev.GetIntervalSec(),
 		"disks":        string(disksJSON),
 	})
@@ -188,6 +201,9 @@ func ReadUtilization(ctx context.Context, c *Client, sid string) (UtilizationSna
 	snap.MemTotalMB = parseUtilInt(res["mem_total_mb"])
 	snap.SwapUsedMB = parseUtilInt(res["swap_used_mb"])
 	snap.UptimeSec = parseUtilInt(res["uptime_sec"])
+	snap.NetRxBps = parseUtilInt(res["net_rx_bps"])
+	snap.NetTxBps = parseUtilInt(res["net_tx_bps"])
+	snap.NetErrPs = parseUtilInt(res["net_err_ps"])
 	snap.IntervalSec = int32(parseUtilInt(res["interval_sec"]))
 	if raw := res["disks"]; raw != "" {
 		if err := json.Unmarshal([]byte(raw), &snap.Disks); err != nil {
@@ -233,7 +249,10 @@ func disksFromProto(in []*keeperv1.DiskUtilization) []DiskUsage {
 		if d == nil {
 			continue
 		}
-		out = append(out, DiskUsage{Mount: d.GetMount(), UsedMB: d.GetUsedMb(), TotalMB: d.GetTotalMb()})
+		out = append(out, DiskUsage{
+			Mount: d.GetMount(), UsedMB: d.GetUsedMb(), TotalMB: d.GetTotalMb(),
+			InodesUsed: d.GetInodesUsed(), InodesTotal: d.GetInodesTotal(),
+		})
 	}
 	return out
 }

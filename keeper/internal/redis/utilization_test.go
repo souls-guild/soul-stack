@@ -21,9 +21,12 @@ func sampleUtilization(collected time.Time) *keeperv1.HostUtilization {
 		MemTotalMb:  8192,
 		SwapUsedMb:  128,
 		UptimeSec:   987654,
+		NetRxBps:    1000000,
+		NetTxBps:    2000000,
+		NetErrPs:    7,
 		Disks: []*keeperv1.DiskUtilization{
-			{Mount: "/", UsedMb: 10240, TotalMb: 51200},
-			{Mount: "/data", UsedMb: 40960, TotalMb: 102400},
+			{Mount: "/", UsedMb: 10240, TotalMb: 51200, InodesUsed: 5000, InodesTotal: 100000},
+			{Mount: "/data", UsedMb: 40960, TotalMb: 102400, InodesUsed: 12000, InodesTotal: 200000},
 		},
 	}
 }
@@ -69,6 +72,21 @@ func TestWriteReadUtilization_RoundTrip(t *testing.T) {
 	}
 	if len(snap.Disks) != 2 || snap.Disks[0].Mount != "/" || snap.Disks[1].UsedMB != 40960 {
 		t.Errorf("disks mismatch: %+v", snap.Disks)
+	}
+	if snap.NetRxBps != 1000000 || snap.NetTxBps != 2000000 || snap.NetErrPs != 7 {
+		t.Errorf("net mismatch: rx=%d tx=%d err=%d", snap.NetRxBps, snap.NetTxBps, snap.NetErrPs)
+	}
+	if snap.Disks[0].InodesUsed != 5000 || snap.Disks[0].InodesTotal != 100000 || snap.Disks[1].InodesUsed != 12000 {
+		t.Errorf("inode mismatch: %+v", snap.Disks)
+	}
+
+	// net rides the window point (sparkline); inode/swap/err stay latest-only.
+	pts, err := ReadUtilizationWindow(ctx, c, sid, 1)
+	if err != nil {
+		t.Fatalf("ReadUtilizationWindow: %v", err)
+	}
+	if len(pts) != 1 || pts[0].NetRxBps != 1000000 || pts[0].NetTxBps != 2000000 {
+		t.Errorf("point net not round-tripped: %+v", pts)
 	}
 }
 

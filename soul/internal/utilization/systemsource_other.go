@@ -16,3 +16,4 @@ func (systemSource) Memory(context.Context) MemInfo      { return MemInfo{} }
 func (systemSource) Disks(context.Context) []Disk        { return nil }
 func (systemSource) Uptime(context.Context) int64        { return 0 }
 func (systemSource) CPUSample(context.Context) CPUSample { return CPUSample{} }
+func (systemSource) Network(context.Context) NetSample   { return NetSample{} }

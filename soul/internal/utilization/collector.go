@@ -10,6 +10,7 @@ package utilization
 
 import (
 	"context"
+	"time"
 
 	"google.golang.org/protobuf/types/known/timestamppb"
 
@@ -24,6 +25,10 @@ type Collector struct {
 	src  Source
 	prev CPUSample
 	seen bool // whether a sample has already been taken (first Collect → cpu%=0)
+
+	prevNet   NetSample
+	prevNetAt time.Time
+	seenNet   bool // first Collect with net → rates=0 (no baseline)
 }
 
 // NewCollector builds a Collector over the given Source. For production —
@@ -35,8 +40,8 @@ func NewCollector(src Source) *Collector {
 // CollectorSet — the set of enabled host-vitals collectors (ADR-072, NIM-87):
 // name → enabled. A disabled collector is not gathered, its fields in the snapshot are zero
 // (for disk — the expensive statfs is skipped). A nil set = "all enabled" (default).
-// Valid names are cpu/mem/disk/load/uptime (config.KnownCollectors); unknown names
-// in the set are ignored (Collect only reads these five keys).
+// Valid names are cpu/mem/disk/load/uptime/net (config.KnownCollectors); unknown
+// names in the set are ignored (Collect only reads these keys).
 type CollectorSet map[string]bool
 
 func (s CollectorSet) on(name string) bool {
@@ -51,9 +56,13 @@ func (s CollectorSet) on(name string) bool {
 // (authority is the mTLS peer cert on Keeper, ADR-072); it is accepted for symmetry with
 // soulprint.Collect. Does not return errors.
 func (c *Collector) Collect(ctx context.Context, _ string, enabled CollectorSet) *keeperv1.HostUtilization {
-	u := &keeperv1.HostUtilization{CollectedAt: timestamppb.Now()}
+	now := time.Now()
+	u := &keeperv1.HostUtilization{CollectedAt: timestamppb.New(now)}
 	if enabled.on("cpu") {
 		u.CpuPct = c.cpuPct(c.src.CPUSample(ctx))
+	}
+	if enabled.on("net") {
+		u.NetRxBps, u.NetTxBps, u.NetErrPs = c.netRates(c.src.Network(ctx), now)
 	}
 	if enabled.on("load") {
 		load := c.src.Load(ctx)
@@ -89,6 +98,30 @@ func (c *Collector) cpuPct(cur CPUSample) float64 {
 	return clamp(100*float64(busyD)/float64(totalD), 0, 100)
 }
 
+// netRates — rx/tx bytes-per-sec and combined errors+drops per-sec, each as a
+// delta of the monotonic counter over dt = now-prevNetAt. The first sample (no
+// baseline) → all-zero, like cpuPct.
+func (c *Collector) netRates(cur NetSample, now time.Time) (rx, tx, errPs int64) {
+	prev, prevAt, seen := c.prevNet, c.prevNetAt, c.seenNet
+	c.prevNet, c.prevNetAt, c.seenNet = cur, now, true
+	if !seen {
+		return 0, 0, 0
+	}
+	dt := now.Sub(prevAt)
+	return netBps(prev.RxBytes, cur.RxBytes, dt),
+		netBps(prev.TxBytes, cur.TxBytes, dt),
+		netBps(prev.ErrDrops, cur.ErrDrops, dt)
+}
+
+// netBps — per-second rate of a monotonic counter over dt. First-sample / dt<=0
+// / counter reset (cur<prev) → 0.
+func netBps(prev, cur uint64, dt time.Duration) int64 {
+	if dt <= 0 || cur < prev {
+		return 0
+	}
+	return int64(float64(cur-prev) / dt.Seconds())
+}
+
 func (c *Collector) disks(ctx context.Context) []*keeperv1.DiskUtilization {
 	src := c.src.Disks(ctx)
 	if len(src) == 0 {
@@ -96,7 +129,13 @@ func (c *Collector) disks(ctx context.Context) []*keeperv1.DiskUtilization {
 	}
 	out := make([]*keeperv1.DiskUtilization, 0, len(src))
 	for _, d := range src {
-		out = append(out, &keeperv1.DiskUtilization{Mount: d.Mount, UsedMb: d.UsedMB, TotalMb: d.TotalMB})
+		out = append(out, &keeperv1.DiskUtilization{
+			Mount:       d.Mount,
+			UsedMb:      d.UsedMB,
+			TotalMb:     d.TotalMB,
+			InodesUsed:  d.InodesUsed,
+			InodesTotal: d.InodesTotal,
+		})
 	}
 	return out
 }

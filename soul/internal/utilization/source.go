@@ -20,6 +20,8 @@ type Source interface {
 	Uptime(ctx context.Context) int64
 	// CPUSample — raw /proc/stat ticks for delta cpu% computation (Collector-side).
 	CPUSample(ctx context.Context) CPUSample
+	// Network — raw monotonic NIC counters for delta throughput (Collector-side).
+	Network(ctx context.Context) NetSample
 }
 
 // LoadAvg — load average.
@@ -32,10 +34,12 @@ type MemInfo struct {
 	UsedMB, TotalMB, SwapUsedMB int64
 }
 
-// Disk — usage of one mount point, volumes in MB.
+// Disk — usage of one mount point, volumes in MB. Inodes are 0 when the FS does
+// not report them (e.g. many network/virtual filesystems).
 type Disk struct {
-	Mount           string
-	UsedMB, TotalMB int64
+	Mount                   string
+	UsedMB, TotalMB         int64
+	InodesUsed, InodesTotal int64
 }
 
 // CPUSample — a snapshot of /proc/stat's `cpu ` line counters. Idle includes
@@ -43,4 +47,12 @@ type Disk struct {
 // samples.
 type CPUSample struct {
 	Total, Idle uint64
+}
+
+// NetSample — monotonic NIC byte/error counters aggregated over physical
+// interfaces. Throughput is computed Collector-side as delta/dt, like CPUSample.
+// ErrDrops sums rx_errs+rx_drop+tx_errs+tx_drop.
+type NetSample struct {
+	RxBytes, TxBytes uint64
+	ErrDrops         uint64
 }

@@ -30,6 +30,14 @@ message HostUtilization {
 
   // Effective pulse cadence; the Keeper scales Redis key TTLs by it (ADR-072, NIM-87).
   int32 interval_sec = 11;
+
+  // Network throughput — aggregate over physical NICs (lo + virtual ifaces filtered out),
+  // rate = delta of /proc/net/dev byte counters over wall time between samples (stateful,
+  // like cpu_pct). First tick after (re)start reports 0 (no baseline yet). Aggregate, not
+  // per-interface — bound size, no per-NIC explosion (ADR-072 amendment 2026-07-18, NIM-127).
+  int64 net_rx_bps = 12;   // received bytes/sec
+  int64 net_tx_bps = 13;   // transmitted bytes/sec
+  int64 net_err_ps = 14;   // combined NIC errors+drops per sec (rx+tx), a single health blip
 }
 
 // DiskUtilization — the usage of a single mount point. Sizes in MB (like MemoryFacts).
@@ -37,6 +45,12 @@ message DiskUtilization {
   string mount    = 1;
   int64  used_mb  = 2;
   int64  total_mb = 3;
+
+  // Inode utilization from the same statvfs already taken for space (zero extra syscall):
+  // used = f_files - f_ffree, total = f_files. total=0 → the FS does not report inodes
+  // (ADR-072 amendment 2026-07-18, NIM-127).
+  int64 inodes_used  = 4;
+  int64 inodes_total = 5;
 }
 
 // TelemetryConfig — the effective host-vitals collection config, resolved by

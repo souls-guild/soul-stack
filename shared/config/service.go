@@ -107,8 +107,9 @@ type CertificateRotationConfig struct {
 	PKIRole   string `yaml:"pki_role,omitempty"`  // Vault PKI role for signing; required when enable:true
 }
 
-// KnownCollectors — the closed set of host-vitals collectors (ADR-072, NIM-87).
-var KnownCollectors = []string{"cpu", "mem", "disk", "load", "uptime"}
+// KnownCollectors — the closed set of host-vitals collectors (ADR-072, NIM-87;
+// `net` added by the NIM-127 amendment — inode rides `disk`, same statvfs).
+var KnownCollectors = []string{"cpu", "mem", "disk", "load", "uptime", "net"}
 
 // TelemetryIntervalFloor — the lower bound of telemetry.interval (anti-DoS floor).
 const TelemetryIntervalFloor = 10 * time.Second

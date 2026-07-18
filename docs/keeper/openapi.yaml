@@ -4189,6 +4189,12 @@ components:
     TelemetryDisk:
       additionalProperties: false
       properties:
+        inodes_total:
+          format: int64
+          type: integer
+        inodes_used:
+          format: int64
+          type: integer
         mount:
           type: string
         total_mb:
@@ -4201,6 +4207,8 @@ components:
         - mount
         - used_mb
         - total_mb
+        - inodes_used
+        - inodes_total
       type: object
     Tiding:
       additionalProperties: false
@@ -4440,6 +4448,9 @@ components:
           type:
             - array
             - "null"
+        interval_sec:
+          format: int32
+          type: integer
         load1:
           format: double
           type: number
@@ -4453,6 +4464,15 @@ components:
           format: int64
           type: integer
         mem_used_mb:
+          format: int64
+          type: integer
+        net_err_ps:
+          format: int64
+          type: integer
+        net_rx_bps:
+          format: int64
+          type: integer
+        net_tx_bps:
           format: int64
           type: integer
         swap_used_mb:
@@ -4470,6 +4490,10 @@ components:
         - mem_total_mb
         - swap_used_mb
         - uptime_sec
+        - net_rx_bps
+        - net_tx_bps
+        - net_err_ps
+        - interval_sec
       type: object
     UtilizationWindowPoint:
       additionalProperties: false
@@ -4489,12 +4513,20 @@ components:
         mem_used_mb:
           format: int64
           type: integer
+        net_rx_bps:
+          format: int64
+          type: integer
+        net_tx_bps:
+          format: int64
+          type: integer
       required:
         - collected_at
         - cpu_pct
         - load1
         - mem_used_mb
         - mem_total_mb
+        - net_rx_bps
+        - net_tx_bps
       type: object
     VigilCreateRequest:
       additionalProperties: false
