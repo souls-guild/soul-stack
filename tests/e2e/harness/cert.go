@@ -74,28 +74,31 @@ func RegisterSoulPreAuth(t *testing.T, stack *Stack, sid string) (cert, key []by
 	return cert, key
 }
 
-// AddSoulToCoven adds a coven label to souls.coven of the i-th pre-auth Soul.
-// Needed for scenario-apply: the run's roster is resolved by Coven membership
-// (`WHERE <incarnation.name> = ANY(coven)`, ADR-008 — incarnation.name is the
-// root Coven label, topology/resolver.go::rosterSQL). Without this, an
-// incarnation "has no connected hosts" → no_hosts → error_locked.
+// AddMember binds the i-th pre-auth Soul to incarnation `incName` in
+// incarnation_membership (ADR-008 amendment 2026-07-17/NIM-124: membership is a
+// first-class M:N relation, no longer the derived fact
+// `incarnation.name ∈ souls.coven[]`). Needed for scenario-apply: the run's
+// roster resolves members via incarnation_membership
+// (topology/resolver.go::rosterSQL). Without this an incarnation "has no
+// connected hosts" → no_hosts → error_locked.
 //
-// Idempotent (array_append only if the label is not already there). Fatal on
+// The incarnation row must already exist (FK incarnation_name → incarnation).
+// Idempotent (ON CONFLICT DO NOTHING; PK (incarnation_name, sid)). Fatal on
 // error.
-func (s *Stack) AddSoulToCoven(t *testing.T, soulIndex int, coven string) {
+func (s *Stack) AddMember(t *testing.T, soulIndex int, incName string) {
 	t.Helper()
 	if soulIndex < 0 || soulIndex >= len(s.souls) {
-		t.Fatalf("AddSoulToCoven(%d): out of range (created %d souls)", soulIndex, len(s.souls))
+		t.Fatalf("AddMember(%d): out of range (created %d souls)", soulIndex, len(s.souls))
 	}
 	sid := s.souls[soulIndex].SID
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	if _, err := s.db.Exec(ctx, `
-		UPDATE souls
-		SET coven = array_append(coalesce(coven, '{}'), $2)
-		WHERE sid = $1 AND NOT ($2 = ANY(coalesce(coven, '{}')))
-	`, sid, coven); err != nil {
-		t.Fatalf("AddSoulToCoven(%s, %s): %v", sid, coven, err)
+		INSERT INTO incarnation_membership (incarnation_name, sid)
+		VALUES ($1, $2)
+		ON CONFLICT DO NOTHING
+	`, incName, sid); err != nil {
+		t.Fatalf("AddMember(%s, %s): %v", incName, sid, err)
 	}
 }
 

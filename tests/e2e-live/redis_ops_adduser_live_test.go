@@ -54,9 +54,9 @@ func TestL3bRedisLive_Day2AddUser(t *testing.T) {
 	harness.SeedVaultKV(t, stack, "redis/"+incName+"/users/"+adminUser, map[string]any{"password": adminPass})
 	harness.SeedVaultKV(t, stack, "redis/"+incName+"/users/"+newUser, map[string]any{"password": "e2e-appuser-secret"})
 
-	// Coven membership BEFORE Create (roster by incarnation.name in coven[], ADR-008) + wait
+	// Membership BEFORE Create (roster via incarnation_membership, NIM-124) + wait
 	// for the first SoulprintReport (redis.conf.tmpl binds to soulprint.self.network.primary_ip).
-	stack.AddSoulToCoven(t, 0, incName)
+	stack.AddMember(t, 0, incName)
 	stack.WaitSoulprintReported(t, 0, 60)
 
 	// Materialize ALL destinies that create composes: redis + UNCONDITIONAL

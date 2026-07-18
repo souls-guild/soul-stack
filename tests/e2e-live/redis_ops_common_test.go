@@ -44,7 +44,7 @@ func setupRedisStandalone(t *testing.T, persistence, maxmemoryPolicy string, mem
 	harness.SeedVaultKV(t, stack, "redis/"+incName, map[string]any{"password": "e2e-redis-main"})
 	harness.SeedVaultKV(t, stack, "redis/"+incName+"/users/"+redisDay2AdminUser, map[string]any{"password": redisDay2AdminPass})
 
-	stack.AddSoulToCoven(t, 0, incName)
+	stack.AddMember(t, 0, incName)
 	stack.WaitSoulprintReported(t, 0, 60)
 
 	stack.MaterializeDestinies(t, "v1.0.0", "redis", "node-exporter", "redis-exporter", "vector")

@@ -75,7 +75,7 @@ func TestE2E_MultiKeeper_WardRosterDispatchedOrphanAfterCrash(t *testing.T) {
 
 	// Ready incarnation with a single connected host in its coven.
 	stack.SeedIncarnationReady(t, incarnation, serviceName, "main", map[string]any{})
-	stack.AddSoulToCoven(t, 0, incarnation)
+	stack.AddMember(t, 0, incarnation)
 
 	// incarnation.run(create): noop carries a host task core.exec.run (echo
 	// hello). Acolyte claims planned -> dispatched -> SendApply into the

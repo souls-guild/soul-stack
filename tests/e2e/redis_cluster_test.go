@@ -57,7 +57,7 @@ func TestE2EServiceRedis_CreateCluster(t *testing.T) {
 		"password": "e2e-cluster-secret",
 	})
 
-	// soulprint + Coven membership (roster by incarnation.name, ADR-008) for
+	// soulprint + incarnation membership (roster via incarnation_membership, NIM-124) for
 	// all three. network.primary_ip is needed to render redis.conf.tmpl
 	// (cluster-announce-ip per-host) and the cluster nodes-MAP
 	// (soulprint.hosts.map by SID). pkg_mgr/init_system --
@@ -75,7 +75,7 @@ func TestE2EServiceRedis_CreateCluster(t *testing.T) {
 			},
 			"network": map[string]any{"primary_ip": ips[i]},
 		})
-		stack.AddSoulToCoven(t, i, incName)
+		stack.AddMember(t, i, incName)
 	}
 
 	// Materialize the mode-agnostic destiny `redis` (the cluster branch

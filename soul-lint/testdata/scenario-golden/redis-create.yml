@@ -85,7 +85,6 @@ tasks:
   # (реплики подхватят через replication). Per-role step-таргетинг отдельным
   # ключом не вводится (pattern пилота create/replication.yml).
   - name: Ensure redis users on the cluster
-    on: ["${ incarnation.name }"]
     apply:
       destiny: redis
       input:

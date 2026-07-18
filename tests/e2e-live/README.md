@@ -65,7 +65,7 @@ tests/e2e-live/
 │   ├── container.go                # SoulContainer + SpawnSoulContainer (privileged Debian-12)
 │   ├── asserts.go                  # keeper-side + container-side asserts (AssertHost*)
 │   ├── expectations.go             # LoadExpectations / AssertExpectations (+ host_state)
-│   ├── coven.go                    # AddSoulToCoven (roster by incarnation.name)
+│   ├── coven.go                    # AddMember (roster via incarnation_membership)
 │   ├── operator.go                 # Operator API HTTP client
 │   ├── vault.go                    # InitVaultTestSecrets / IssueKeeperServerCert / SeedVaultKV
 │   ├── config_builder.go           # buildKeeperYAML

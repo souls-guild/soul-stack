@@ -48,9 +48,9 @@ func TestE2EStagedFailover_2Passage(t *testing.T) {
 	master.SetTaskRegister("Probe role", map[string]any{"stdout": "master", "changed": false, "failed": false})
 	slave.SetTaskRegister("Probe role", map[string]any{"stdout": "slave", "changed": false, "failed": false})
 
-	// Coven membership: both hosts are in the incarnation coven (roster by incarnation.name).
-	stack.AddSoulToCoven(t, 0, "test-failover")
-	stack.AddSoulToCoven(t, 1, "test-failover")
+	// Membership: both hosts are bound to the incarnation (roster via incarnation_membership, NIM-124).
+	stack.AddMember(t, 0, "test-failover")
+	stack.AddMember(t, 1, "test-failover")
 
 	inc, createApply := stack.CreateIncarnationWithApply(t, "test-failover", "staged-failover@main", nil)
 	// The auto-create run (POST /v1/incarnations) must FINISH BEFORE the

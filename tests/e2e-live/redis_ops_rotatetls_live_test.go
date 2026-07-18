@@ -57,7 +57,7 @@ func TestL3bRedisLive_Day2RotateTls(t *testing.T) {
 	harness.SeedVaultKV(t, stack, "redis/"+incName, map[string]any{"password": "e2e-redis-main"})
 	harness.SeedVaultKV(t, stack, "redis/"+incName+"/users/"+adminUser, map[string]any{"password": adminPass})
 
-	stack.AddSoulToCoven(t, 0, incName)
+	stack.AddMember(t, 0, incName)
 	stack.WaitSoulprintReported(t, 0, 60)
 
 	stack.MaterializeDestinies(t, "v1.0.0", "redis", "node-exporter", "redis-exporter", "vector")

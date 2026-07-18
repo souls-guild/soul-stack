@@ -2,18 +2,18 @@ name: within-block-peer-register
 state_changes: {}
 tasks:
   - name: Rolling restart group
-    on: ["${ incarnation.name }"]
     serial: 1
     block:
-      # probe внутри блока — peer-register недоступен на render (block атомарен,
-      # probe ещё не отработал, when/where/params резолвятся Keeper-side ДО dispatch).
+      # probe inside the block -- peer register is unavailable at render (a block
+      # is atomic, the probe has not run yet, when/where/params resolve
+      # Keeper-side BEFORE dispatch).
       - name: Probe redis role inside block
         module: core.cmd.shell
         register: redis_role
         changed_when: false
         params:
           cmd: "redis-cli role | head -1"
-      # читает register СОСЕДНЕГО потомка того же блока → silent-wrong-target.
+      # reads the register of a SIBLING child of the same block -> silent-wrong-target.
       - name: Restart on master
         module: core.service.restarted
         where: register.redis_role.stdout == 'master'

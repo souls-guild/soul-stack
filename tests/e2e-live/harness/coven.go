@@ -8,37 +8,40 @@ import (
 	"time"
 )
 
-// AddSoulToCoven adds a Coven label to `souls.coven` for the i-th soul
-// container.
+// AddMember binds the i-th soul container to incarnation `incName` in
+// incarnation_membership.
 //
-// Why: the scenario run's roster is resolved by Coven membership
-// (`WHERE <incarnation.name> = ANY(coven)`, ADR-008 — incarnation.name is
-// the root Coven label; keeper/internal/topology/resolver.go::rosterSQL).
-// Without this the incarnation "has no connected hosts" -> run.go aborts
-// with `no_hosts` BEFORE the dispatch phase -> zero apply_runs rows (run.go
-// §3) -> WaitApplySuccess spins until timeout. Symmetric with the L3a
-// harness (tests/e2e/harness/cert.go::AddSoulToCoven).
+// Why: membership is a first-class M:N relation (ADR-008 amendment
+// 2026-07-17/NIM-124), no longer the derived fact
+// `incarnation.name ∈ souls.coven[]`. The scenario run's roster resolves
+// members via incarnation_membership
+// (keeper/internal/topology/resolver.go::rosterSQL). Without this the
+// incarnation "has no connected hosts" -> run.go aborts with `no_hosts`
+// BEFORE the dispatch phase -> zero apply_runs rows (run.go §3) ->
+// WaitApplySuccess spins until timeout. Symmetric with the L3a harness
+// (tests/e2e/harness/cert.go::AddMember).
 //
-// IssueBootstrapToken creates a `souls` row with an empty coven, and the
-// Bootstrap flow only upgrades status — coven stays empty. This step closes
-// the gap of "connected, but not in the incarnation's roster".
+// IssueBootstrapToken creates a `souls` row and the Bootstrap flow only
+// upgrades status — no membership is bound. This step closes the gap of
+// "connected, but not in the incarnation's roster". The incarnation row must
+// already exist (FK incarnation_name → incarnation).
 //
-// Idempotent (array_append only if the label isn't there yet). Fatal on
+// Idempotent (ON CONFLICT DO NOTHING; PK (incarnation_name, sid)). Fatal on
 // error.
-func (s *Stack) AddSoulToCoven(t *testing.T, soulIndex int, coven string) {
+func (s *Stack) AddMember(t *testing.T, soulIndex int, incName string) {
 	t.Helper()
 	if soulIndex < 0 || soulIndex >= len(s.SoulContainers) {
-		t.Fatalf("AddSoulToCoven(%d): out of range (%d soul containers created)", soulIndex, len(s.SoulContainers))
+		t.Fatalf("AddMember(%d): out of range (%d soul containers created)", soulIndex, len(s.SoulContainers))
 	}
 	sid := s.SoulContainers[soulIndex].SID
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	if _, err := s.db.Exec(ctx, `
-		UPDATE souls
-		SET coven = array_append(coalesce(coven, '{}'), $2)
-		WHERE sid = $1 AND NOT ($2 = ANY(coalesce(coven, '{}')))
-	`, sid, coven); err != nil {
-		t.Fatalf("AddSoulToCoven(%s, %s): %v", sid, coven, err)
+		INSERT INTO incarnation_membership (incarnation_name, sid)
+		VALUES ($1, $2)
+		ON CONFLICT DO NOTHING
+	`, incName, sid); err != nil {
+		t.Fatalf("AddMember(%s, %s): %v", incName, sid, err)
 	}
 }
 

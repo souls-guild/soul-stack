@@ -38,7 +38,7 @@ func TestSoulHistory_AggregatesScenarioAndErrand(t *testing.T) {
 	stub.SetApplyDefaultSuccess(true)
 	sid := stack.SoulSID(0)
 
-	stack.AddSoulToCoven(t, 0, "test-history")
+	stack.AddMember(t, 0, "test-history")
 
 	// Source #1 -- scenario: incarnation create auto-runs the scenario
 	// `create` -> an apply_runs row under this SID.

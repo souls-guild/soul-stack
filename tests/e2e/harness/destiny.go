@@ -25,7 +25,7 @@ import (
 // fails with "default_destiny_source not set".
 //
 // keeper_settings — a direct SQL upsert (the harness already works via
-// pgxpool, as in AddSoulToCoven): there is no OpenAPI endpoint for this
+// pgxpool, as in AddMember): there is no OpenAPI endpoint for this
 // scalar (managed only through keeper_settings, ADR-029). The Holder rereads
 // the snapshot via TTL poll (10s) OR pub/sub invalidation; to avoid waiting
 // on the poll, the harness calls SeedDefaultDestinySource BEFORE

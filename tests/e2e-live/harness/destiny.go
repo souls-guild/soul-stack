@@ -24,7 +24,7 @@ import (
 // not set" or "ref does not resolve".
 //
 // keeper_settings — direct SQL upsert (the harness already talks to pgxpool,
-// like AddSoulToCoven): there's no OpenAPI endpoint for this scalar
+// like AddMember): there's no OpenAPI endpoint for this scalar
 // (ADR-029). Call BEFORE registerExampleService — invalidation from POST
 // /v1/services will pick up the already-written setting in the same
 // snapshot without waiting on the Holder's 10s TTL poll.

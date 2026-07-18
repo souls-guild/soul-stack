@@ -48,14 +48,12 @@ func TestL3bSmokeNginxLive_InstallAndStart(t *testing.T) {
 
 	const incName = "test-nginx-live"
 
-	// Coven membership BEFORE Create: the run's roster is resolved by `incarnation.name in
-	// coven[]` (ADR-008, topology/resolver.go::rosterSQL). The bootstrap flow set
-	// souls.status='connected', but coven stayed empty - without this step the scenario
-	// sees no_hosts -> zero apply_runs rows -> WaitApplySuccess timeout. We set the
-	// label BEFORE CreateIncarnationWithApply, since POST /v1/incarnations auto-
-	// launches the create run immediately; coven must exist by the time of its roster
-	// resolve. Parallel to L3a (tests/e2e/smoke_nginx_test.go::AddSoulToCoven).
-	stack.AddSoulToCoven(t, 0, incName)
+	// Membership BEFORE Create: the run's roster resolves members via
+	// incarnation_membership (ADR-008 amendment/NIM-124, topology/resolver.go::rosterSQL).
+	// The bootstrap flow set souls.status='connected', but no membership is bound -
+	// without this step the scenario sees no_hosts -> zero apply_runs rows ->
+	// WaitApplySuccess timeout. Parallel to L3a (tests/e2e/smoke_nginx_test.go::AddMember).
+	stack.AddMember(t, 0, incName)
 
 	// POST /v1/incarnations auto-launches the `create` scenario and returns its
 	// apply_id. A separate RunScenario(create) would be rejected by the lock gate

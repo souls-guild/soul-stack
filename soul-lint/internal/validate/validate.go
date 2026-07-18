@@ -116,6 +116,12 @@ func Run(opts Options, out io.Writer, errOut io.Writer) int {
 		// validator at scenario parse time. Also resolves covenant fields
 		// (already merged into scn.Input above).
 		diags = append(diags, typeRefDiagnostics(opts.Path, scn)...)
+		// `on: ["${ incarnation.name }"]` is fail-closed (ADR-008 amendment/NIM-124:
+		// incarnation.name is not a Coven). Offline parity with the keeper render
+		// resolver (resolveCovenList) — the literal is visible without CEL eval.
+		if scn != nil {
+			diags = append(diags, onIncarnationNameDiagnostics(opts.Path, scn.Tasks)...)
+		}
 	case KindManifest:
 		_, diags = sharedplugin.LoadFromBytes(opts.Path, src)
 	default:

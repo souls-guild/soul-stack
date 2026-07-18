@@ -55,10 +55,10 @@ func TestL3bStagedProbeLive_WhereTargetsOnlyMaster(t *testing.T) {
 
 	const incName = "test-staged-probe"
 
-	// Coven membership BEFORE Create: the roster is resolved by `incarnation.name in coven[]`
-	// (ADR-008). Without it, scenario sees no_hosts -> zero apply_runs rows.
+	// Membership BEFORE Create: the roster resolves members via incarnation_membership
+	// (ADR-008 amendment/NIM-124). Without it, scenario sees no_hosts -> zero apply_runs rows.
 	for i := range stack.SoulContainers {
-		stack.AddSoulToCoven(t, i, incName)
+		stack.AddMember(t, i, incName)
 	}
 
 	// POST /v1/incarnations auto-launches the create scenario (= the staged scenario) and

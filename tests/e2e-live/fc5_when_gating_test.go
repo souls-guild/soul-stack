@@ -105,10 +105,10 @@ func TestFC5WhenGating_LiveRegister(t *testing.T) {
 
 	const incName = "when-gate-live-run"
 
-	// Coven membership BEFORE running the scenario: the roster resolves via incarnation.name ∈
-	// coven[] (ADR-008). Without it no_hosts -> zero apply_runs rows.
+	// Membership BEFORE running the scenario: the roster resolves members via
+	// incarnation_membership (ADR-008 amendment/NIM-124). Without it no_hosts -> zero apply_runs rows.
 	for i := range stack.SoulContainers {
-		stack.AddSoulToCoven(t, i, incName)
+		stack.AddMember(t, i, incName)
 	}
 
 	// Direct seed of a ready incarnation (state_schema is empty, the focus is gating, not state).

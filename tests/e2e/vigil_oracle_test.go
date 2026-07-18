@@ -9,8 +9,8 @@
 // Flow (real, no keeper-side mocks):
 //  1. RegisterService + CreateIncarnationWithApply (incarnation must exist --
 //     the Oracle enqueuer resolves ServiceRef from incarnation.service).
-//  2. AddSoulToCoven(incarnation.name) -- subject-match Decree + membership check
-//     (incarnation_name in subject covens, ADR-030(b)) pass.
+//  2. AddMember -- binds the host to the incarnation (incarnation_membership,
+//     NIM-124) so the auto-create + reactor roster is non-empty.
 //  3. CreateVigil (core.beacon.file_changed) + CreateDecree (typed-payload
 //     where-CEL `event.file_changed.path.startsWith("/etc/")`, action_scenario
 //     DIFFERENT from auto-create -- `converge`, so the reactor run is
@@ -59,10 +59,9 @@ func TestOracle_FileChanged_FiresScenario(t *testing.T) {
 	stub.SetApplyDefaultSuccess(true)
 	sid := stack.SoulSID(0)
 
-	// Coven=incarnation.name: roster auto-create + subject-match Decree +
-	// membership check (incarnation_name in covens, ADR-030(b)) -- all via
-	// one label.
-	stack.AddSoulToCoven(t, 0, incName)
+	// Membership binds the host to the incarnation (incarnation_membership,
+	// NIM-124): non-empty roster for both the auto-create and the reactor run.
+	stack.AddMember(t, 0, incName)
 
 	// The incarnation must exist BEFORE the Portent: the enqueuer resolves
 	// ServiceRef from incarnation.service (oracle_enqueuer.go). Auto-create

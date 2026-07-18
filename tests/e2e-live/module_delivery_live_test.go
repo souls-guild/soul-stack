@@ -65,9 +65,9 @@ func TestL3bModuleDeliveryLive_SynthesisFetchHotRegister(t *testing.T) {
 
 	const incName = "module-delivery"
 
-	// Coven membership BEFORE create: the roster resolves via incarnation.name ∈ coven[]
-	// (ADR-008). WaitSoulprintReported - soul fully online before the day-2 roster resolve.
-	stack.AddSoulToCoven(t, 0, incName)
+	// Membership BEFORE create: the roster resolves members via incarnation_membership
+	// (ADR-008 amendment/NIM-124). WaitSoulprintReported - soul fully online before the roster resolve.
+	stack.AddMember(t, 0, incName)
 	stack.WaitSoulprintReported(t, 0, 60)
 
 	// -- create: redis via core modules, WITHOUT the community.redis consumer --
