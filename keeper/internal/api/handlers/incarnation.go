@@ -529,11 +529,14 @@ type IncarnationContextReader interface {
 // incarnationCovenContexts expands an incarnation's coven scope into a set of
 // per-candidate RBAC contexts for [middleware.RequirePermissionMulti].
 //
-// Effective coven scope = covens ∪ {name} (declared env tags + name as the root
-// Coven label, ADR-008). Each candidate → a separate context
-// `{incarnation, service, coven=<candidate>}`; the permission check ORs them.
-// service is put into ALL contexts (a service-only permission matches on any
-// coven iteration). Dedup — the name may already be in covens.
+// Effective coven scope = the declared `covens` ONLY (ADR-008 amendment
+// 2026-07-17/NIM-124: `incarnation.name` is NOT a Coven — it is no longer added
+// to the coven set). Each declared coven → a context
+// `{incarnation, service, coven=<c>}`; scope by the incarnation's own name is the
+// `incarnation=<name>` dimension carried in every context (a role
+// `incarnation.* on incarnation=<name>` matches). If the incarnation declares no
+// covens, a single `{incarnation, service}` context (no coven) is emitted so the
+// incarnation/service dimensions still match. The permission check ORs them.
 //
 // Empty name → nil (the caller returns 422 on a broken path before RBAC, or create
 // passes name=its-own-name).
@@ -549,29 +552,37 @@ func incarnationCovenContexts(name, service string, covens []string) []map[strin
 	if name == "" {
 		return nil
 	}
-	seen := make(map[string]struct{}, len(covens)+1)
-	candidates := make([]string, 0, len(covens)+1)
-	add := func(c string) {
+	seen := make(map[string]struct{}, len(covens))
+	candidates := make([]string, 0, len(covens))
+	for _, c := range covens {
 		if c == "" {
-			return
+			continue
 		}
 		if _, ok := seen[c]; ok {
-			return
+			continue
 		}
 		seen[c] = struct{}{}
 		candidates = append(candidates, c)
 	}
-	for _, c := range covens {
-		add(c)
-	}
-	add(name) // name — root Coven label (ADR-008).
 
-	out := make([]map[string]string, 0, len(candidates))
-	for _, c := range candidates {
-		ctx := map[string]string{"incarnation": name, "coven": c}
+	base := func() map[string]string {
+		ctx := map[string]string{"incarnation": name}
 		if service != "" {
 			ctx["service"] = service
 		}
+		return ctx
+	}
+
+	// No declared covens → a single incarnation/service context (scope by the
+	// incarnation's own name is the `incarnation=` dimension, not `coven=`).
+	if len(candidates) == 0 {
+		return []map[string]string{base()}
+	}
+
+	out := make([]map[string]string, 0, len(candidates))
+	for _, c := range candidates {
+		ctx := base()
+		ctx["coven"] = c
 		out = append(out, ctx)
 	}
 	return out

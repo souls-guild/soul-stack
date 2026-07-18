@@ -56,13 +56,11 @@ state_changes:
 tasks:
   - name: Detect actual redis role per host
     module: core.cmd.shell
-    on: ["${ incarnation.name }"]
     register: redis_role
     changed_when: false
     params:
       cmd: "redis-cli role | head -1"
   - name: Diff and apply ACL changes on the current master
-    on: ["${ incarnation.name }"]
     where: register.redis_role.stdout == 'master'
     run_once: true
     apply:
@@ -83,13 +81,11 @@ state_changes:
 tasks:
   - name: Detect actual redis role per host
     module: core.cmd.shell
-    on: ["${ incarnation.name }"]
     register: redis_role
     changed_when: false
     params:
       cmd: "redis-cli role | head -1"
   - name: Create the user on the current master
-    on: ["${ incarnation.name }"]
     where: register.redis_role.stdout == 'master'
     run_once: true
     apply:
@@ -99,7 +95,6 @@ tasks:
         user:   "${ input.user }"
   - name: Wait until the user is replicated to all replicas
     module: core.exec.run
-    on: ["${ incarnation.name }"]
     where: register.redis_role.stdout == 'slave'
     changed_when: false
     retry:
@@ -120,13 +115,11 @@ state_changes: {}
 tasks:
   - name: Detect actual redis role per host
     module: core.cmd.shell
-    on: ["${ incarnation.name }"]
     register: redis_role
     changed_when: false
     params:
       cmd: "redis-cli role | head -1"
   - name: Rolling-restart replicas one at a time
-    on: ["${ incarnation.name }"]
     where: register.redis_role.stdout == 'slave'
     serial: 1
     block:
@@ -136,7 +129,6 @@ tasks:
           name: redis-server
       - name: Wait until replica is healthy again
         module: core.exec.run
-        on: ["${ incarnation.name }"]
         changed_when: false
         retry:
           count: 12
@@ -147,7 +139,6 @@ tasks:
           cmd: redis-cli
           args: ["INFO", "replication"]
   - name: Failover and restart the current master
-    on: ["${ incarnation.name }"]
     where: register.redis_role.stdout == 'master'
     run_once: true
     apply:
@@ -156,13 +147,11 @@ tasks:
         action: failover_and_restart
   - name: Re-detect redis role after failover
     module: core.cmd.shell
-    on: ["${ incarnation.name }"]
     register: redis_role_after
     changed_when: false
     params:
       cmd: "redis-cli role | head -1"
   - name: Restart the former master (now a replica)
-    on: ["${ incarnation.name }"]
     where: register.redis_role_after.stdout == 'slave' && register.redis_role.stdout == 'master'
     apply:
       destiny: redis
@@ -340,7 +329,6 @@ tasks:
     changed_when: false
     params: { cmd: "true" }
   - name: Act on a register nobody emits
-    on: ["${ incarnation.name }"]
     where: register.ghost_role.stdout == 'master'
     apply:
       destiny: redis
@@ -485,7 +473,6 @@ name: f_where
 tasks:
   - name: consumer
     module: core.exec.run
-    on: ["${ incarnation.name }"]
     where: register.ghost.stdout == 'x'
     changed_when: false
     params: { cmd: "true" }
@@ -970,7 +957,6 @@ name: within_block_peer
 state_changes: {}
 tasks:
   - name: Rolling group
-    on: ["${ incarnation.name }"]
     block:
       - name: Probe role inside block
         module: core.cmd.shell
@@ -1013,7 +999,6 @@ name: within_block_when_peer
 state_changes: {}
 tasks:
   - name: Rolling group
-    on: ["${ incarnation.name }"]
     block:
       - name: Probe role inside block
         module: core.cmd.shell
@@ -1045,12 +1030,10 @@ state_changes: {}
 tasks:
   - name: Probe role top-level
     module: core.cmd.shell
-    on: ["${ incarnation.name }"]
     register: role
     changed_when: false
     params: { cmd: "redis-cli role | head -1" }
   - name: Rolling group
-    on: ["${ incarnation.name }"]
     where: "register.role.stdout == 'slave'"
     block:
       - name: Restart replica
@@ -1073,7 +1056,6 @@ name: register_self
 state_changes: {}
 tasks:
   - name: Rolling group
-    on: ["${ incarnation.name }"]
     block:
       - name: Wait until healthy
         module: core.exec.run
@@ -1099,7 +1081,6 @@ name: nested_peer
 state_changes: {}
 tasks:
   - name: Outer group
-    on: ["${ incarnation.name }"]
     block:
       - name: Probe role in outer
         module: core.cmd.shell
@@ -1132,7 +1113,6 @@ name: no_register
 state_changes: {}
 tasks:
   - name: Rolling group
-    on: ["${ incarnation.name }"]
     where: "soulprint.self.sid != ''"
     block:
       - name: Restart redis

@@ -47,7 +47,7 @@ In `incarnation.*` the key **`incarnation.state.<path>`** is available - read-on
 
 ## `core.soul.registered`
 
-**The first Keeper-side core module.** Controls Soul's binding (by `SID`) to a set of stable Coven labels in the keeper's registry (tables `souls` + coven, [storage.md](storage.md)). Accepts a **string OR list of SIDs** (registering N created hosts in one step) and optionally carries an **onboarding barrier** `await_online` (blockingly waits for registered Souls to become online) - [ADR-061](../adr/0061-onboarding-await-and-midrun-reresolve.md).
+**The first Keeper-side core module.** Binds a Soul (by `SID`) as a **member of the run's incarnation** and optionally assigns a set of **real stable Coven tags** in the keeper's registry (tables `souls` + `incarnation_membership` + coven, [storage.md](storage.md)). **Membership is set implicitly** from the current run's incarnation (cross-incarnation binding is forbidden by the grammar, so the target is unambiguous) — it lives in the first-class relation `incarnation_membership`, **not** in `souls.coven[]` ([ADR-008 amendment 2026-07-17](../adr/0008-coven-stable-tags.md#amendment-2026-07-17-nim-124-incarnationname-is-not-a-coven--membership-is-a-first-class-relation)). Accepts a **string OR list of SIDs** (registering N created hosts in one step) and optionally carries an **onboarding barrier** `await_online` (blockingly waits for registered Souls to become online) - [ADR-061](../adr/0061-onboarding-await-and-midrun-reresolve.md).
 
 ### Addressing and side
 
@@ -57,18 +57,18 @@ In `incarnation.*` the key **`incarnation.state.<path>`** is available - read-on
 
 ### State (state form)
 
-`registered` - declarative form: "Soul with the specified `sid` is in the registry and is bound to the specified set of Coven tags." The module is idempotent by design (re-calling with the same set is no-op).
+`registered` - declarative form: "Soul with the specified `sid` is in the registry, is a **member** of the run's incarnation, and carries the specified set of stable Coven tags (if any)." The module is idempotent by design (re-calling with the same set is no-op).
 
-If there is no entry in `souls` for this `sid` yet, the module creates it under `status: pending` (a new host added by the scenario - for example, host branch `add_replica` or after cloud-create via `core.cloud.provisioned`). Creating an entry here is the only side-effect besides updating the coven; the module does not issue bootstrap tokens and does not launch a CSR cycle (this is the responsibility of onboarding, [soul/onboarding.md](../soul/onboarding.md)).
+If there is no entry in `souls` for this `sid` yet, the module creates it under `status: pending` (a new host added by the scenario - for example, host branch `add_replica` or after cloud-create via `core.cloud.provisioned`). Side-effects: the `souls` entry (if new), the **membership row** in `incarnation_membership` for the run's incarnation, and the optional stable-coven update. The module does not issue bootstrap tokens and does not launch a CSR cycle (this is the responsibility of onboarding, [soul/onboarding.md](../soul/onboarding.md)).
 
-In list form `sid` (see list-SID), the passed set `coven` is applied to **each** list SID; The `await_online` barrier (if specified) aggregates presence over the **entire** set.
+In list form `sid` (see list-SID), membership and the passed set `coven` are applied to **each** list SID; The `await_online` barrier (if specified) aggregates presence over the **entire** set.
 
 ### Parameters (`params:`)
 
 | Parameter | Type | Required | Default | Description |
 |---|---|---|---|---|
 | `sid` | string **or** array of string, `format: fqdn` | required | — | `SID` Soul (FQDN) to which the binding is applied. Accepts **single string OR list** ([ADR-061](../adr/0061-onboarding-await-and-midrun-reresolve.md), see list-SID). The list in practice comes with the CEL expression `${ register.<provision>.hosts }` (SID list from `core.cloud.provisioned`); literal list `sid: [a, b]` statically `soul-lint` **doesn't** pass (manifest declares `sid` as `string`) - this is a deliberate trade-off, see list-SID. |
-| `coven` | array of string, `pattern: "^[a-z][a-z0-9-]*$"`, `min_items: 1`, `unique: true` | required | — | A set of stable Coven tags. At least one tag. When listed, `sid` applies to each SID. |
+| `coven` | array of string, `pattern: "^[a-z][a-z0-9-]*$"`, `unique: true` | optional | `[]` | A set of **real stable** Coven tags (cluster / project / environment / datacenter). **May be empty** — membership no longer lives in `coven[]`, so a bind needs no coven tag. When listed, `sid` applies to each SID. |
 | `mode` | string, `enum: [append, replace, remove]` | optional | `append` | Strategy for applying the `coven` set to existing labels (see below). |
 | `refresh_soulprint` | boolean | optional | `false` | **Implemented (S2/S3 [ADR-061](../adr/0061-onboarding-await-and-midrun-reresolve.md)).** `true` - the step becomes a passage-defining boundary (Stratify), after its success, the scenario-runner will re-resolve the roster before the next Passage (live snapshot); output `refreshed` echoes the value of the flag. **Together with `await_online: true`** further tightens the barrier: SID is only counted when online **and** typed soulprint is written to PG (see facts-wait, amendment 2026-07-02). |
 | `await_online` | boolean | optional | `false` | **Onboarding Barrier** ([ADR-061](../adr/0061-onboarding-await-and-midrun-reresolve.md)). `true` - after recording `souls`+coven for all SIDs, the step **blocking** waits for the registered Souls to be ready. Readiness: online by **Redis SID-lease** (live EventStream, **not** PG `souls.status`); with `refresh_soulprint: true` - additionally recorded first typed soulprint (`souls.soulprint_facts`). Requires a configured presence checker on the keeper: `await_online: true` without it → step `failed`. |
@@ -81,10 +81,10 @@ In list form `sid` (see list-SID), the passed set `coven` is applied to **each**
 | `mode` | The final set of coven at `sid` | Edge behavior | Idempotency |
 |---|---|---|---|
 | `append` (default) | existing ∪ passed | empty intersecting set → no-op | yes: calling again with the same `coven` does not change anything |
-| `replace` | passed (existing, not mentioned, deleted) | empty `coven: []` - **error** (double protection from the footgun "host without root coven incarnation": schema `params.coven` `min_items: 1` + repetition at the semantic level of `mode`; intentional - so that the footgun is caught even when the schema is weakened / the contract is expanded in the future) | yes: calling again with the same set - no-op |
+| `replace` | passed (existing, not mentioned, deleted) | empty `coven: []` - **valid no-op-to-empty** (clears all stable tags); membership is untouched | yes: calling again with the same set - no-op |
 | `remove` | existing\passed | empty `coven: []` or labels that do not exist on the host - **no-op** (no error); removes only actually attached tags | yes: calling again with the same set - no-op |
 
-`replace` with a non-empty `coven` that does not contain the root `incarnation.name` - the module **does not block** at the mode semantic level (the set operation is symmetrical), but this is a user error - footgun. The "host always carries the root coven incarnation" guarantee is invariant at the `souls`+coven table/resolver level (see [storage.md](storage.md), [scenario/orchestration.md §3](../scenario/orchestration.md)), not at the level of an individual module call.
+Since membership now lives in `incarnation_membership` and **not** in `souls.coven[]` ([ADR-008 amendment 2026-07-17](../adr/0008-coven-stable-tags.md#amendment-2026-07-17-nim-124-incarnationname-is-not-a-coven--membership-is-a-first-class-relation)), **no coven operation can sever a host from its incarnation**. The former footgun guard ("a host must always carry the root coven incarnation": `params.coven` `min_items: 1` + the `mode: replace` empty-set error) is therefore **removed** — `coven[]` holds only real stable tags and may be emptied safely; the coven axis stops carrying two meanings at once.
 
 ### list-SID — registration+waiting for N hosts in one step
 
@@ -138,13 +138,13 @@ The fields `online`/`pending`/`satisfied` are present in output **only** when `a
 ### Example call from a scenario
 
 ```yaml
-- name: Register the new replica with the cluster coven labels
+- name: Bind the new replica to the incarnation
   on: keeper
   module: core.soul.registered
   register: registered
   params:
     sid:               "{{ input.host.sid }}"
-    coven:             ["{{ incarnation.name }}"]
+    # coven: optional stable tags (e.g. [prod, dc1]); membership is set implicitly
     mode:              append
     refresh_soulprint: true
 ```
@@ -162,7 +162,7 @@ Registering a list of SIDs from `core.cloud.provisioned` and blocking wait for o
   register: shards
   params:
     sid:                 "${ register.provision.hosts }"   # list of SIDs from cloud-provision
-    coven:               ["${ incarnation.name }"]
+    # coven: optional stable tags; membership is set implicitly from the run's incarnation
     mode:                append
     await_online:        true
     await_timeout:       10m                                # ≤ keeper.yml::max_await_timeout (default 30m)
@@ -174,7 +174,7 @@ The step first registers all SIDs of the list, then blocks Redis SID-lease. If t
 
 ### Relation to destiny `coven-assign`
 
-The existing destiny `coven-assign` ([examples/destiny/coven-assign/](../../examples/destiny/coven-assign/)) remains as a **thin wrapper** around this module: its `tasks/main.yml` is reduced to a single step `module: core.soul.registered` with `mode: append` (single `sid`, no barrier and without `refresh_soulprint`). `destiny.yml` `coven-assign` (input contract `sid`+`coven`) - compatible, does not change.
+After [ADR-008 amendment 2026-07-17](../adr/0008-coven-stable-tags.md#amendment-2026-07-17-nim-124-incarnationname-is-not-a-coven--membership-is-a-first-class-relation), `coven-assign` is **pure stable-tag management** — it assigns/updates the real stable Coven tags of an already-bound host and is **no longer a membership act** (assigning a tag does not make a host a member; membership is conferred by the bind, handled implicitly by `core.soul.registered` during onboarding/create). The existing destiny `coven-assign` ([examples/destiny/coven-assign/](../../examples/destiny/coven-assign/)) remains a **thin wrapper** around this module: its `tasks/main.yml` is a single step `module: core.soul.registered` with `mode: append` (single `sid`, no barrier and without `refresh_soulprint`). `destiny.yml` `coven-assign` (input contract `sid`+`coven`) - compatible, does not change.
 
 When to write a module call directly, and when to write `apply: { destiny: coven-assign }`:
 

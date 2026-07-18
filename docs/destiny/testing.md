@@ -138,7 +138,7 @@ In `case.yml`, **two forms** coexist, corresponding to different test levels ([A
 fixtures:
   hosts:
     - sid: node-1.example.com
-      covens: [prod, redis]          # must include the incarnation.name tag (see below)
+      covens: [prod, redis]          # real stable tags only (no incarnation.name); membership = presence in fixtures.hosts (see below)
       role: primary                  # opt: declared-role (bootstrap-create)
       soulprint:                     # opt: per-host facts (soulprint.self.* of this host)
         network: { primary_ip: 10.0.0.1 }
@@ -156,7 +156,7 @@ Host record fields:
 | Key | Obligation | What sets |
 |---|---|---|
 | `sid` | yes | Host SID (FQDN). The roster order in `soulprint.hosts` is determined by sorting by `sid` (regardless of the order in YAML). |
-| `covens` | yes | Host Coven Tags. **Must contain `incarnation.name`-label** (case scenario name) - mirror of the prod-roster (`rosterSQL WHERE $1 = ANY(coven)`); without it, the host will not hit the target `on:`/`where:` and will fall out of the run. |
+| `covens` | no | Host Coven Tags — **real stable tags only** (cluster / project / environment / datacenter), **not** the incarnation name (`incarnation.name` is no longer a Coven, [ADR-008 amendment 2026-07-17](../adr/0008-coven-stable-tags.md#amendment-2026-07-17-nim-124-incarnationname-is-not-a-coven--membership-is-a-first-class-relation)). Used only to model `on: [coven]` intersection filters. **Membership** is modeled by **presence in `fixtures.hosts`** (this list IS the run roster = the members), not by any coven tag — an empty `covens` host is still a member. |
 | `role` | no | Declared role (`soulprint.hosts[].role`), available only in bootstrap-create (ADR-008). |
 | `soulprint` | no | Per-host facts (`soulprint.self.<path>` of this host and `soulprint.hosts[].network/os`). Missing → empty fact context. |
 | `choirs` | no | Host Choir names (`soulprint.hosts[].choirs`, ADR-044). |

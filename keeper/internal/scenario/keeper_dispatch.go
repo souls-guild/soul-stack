@@ -93,20 +93,21 @@ func (r *Runner) dispatchKeeperTasks(ctx context.Context, spec RunSpec, log *slo
 
 		if failed {
 			summary := composeKeeperFailure(rt, msg)
-			// keeper-target is addressed by the triple (apply_id, keeper, passage) —
-			// this task's Passage (Slice 2: keeper tasks are stratified by Passage, the
-			// failed row belongs to exactly this Passage). rt.Index is the global
-			// plan-wide index; for keeper-target local==global (no per-host where:), so
-			// task_idx and plan_index both equal rt.Index.
-			if rerr := applyrun.RecordTaskFailure(ctx, r.deps.DB, spec.ApplyID, render.KeeperTargetSID, passage, rt.Index, rt.Index, summary); rerr != nil {
-				log.Warn("scenario: recording the keeper task failure reason failed",
-					slog.Int("passage", passage), slog.Int("task_idx", rt.Index), slog.Any("error", rerr))
-			}
-			if uerr := applyrun.UpdateStatus(ctx, r.deps.DB, spec.ApplyID, render.KeeperTargetSID, passage, applyrun.StatusFailed, &summary); uerr != nil {
-				log.Warn("scenario: transitioning keeper apply_run to failed failed",
-					slog.Int("passage", passage), slog.Any("error", uerr))
-			}
+			r.recordKeeperFailure(ctx, spec.ApplyID, passage, rt, summary, log)
 			return fmt.Errorf("scenario: keeper-side task %q (%s) failed: %s", rt.Name, rt.Module, msg)
+		}
+
+		// Bind membership BEFORE the trait sync-hook (ADR-008 amendment
+		// 2026-07-17/NIM-124): core.soul.registered is the bind act — it writes
+		// incarnation membership (incarnation_membership) for its SIDs from the
+		// current run's incarnation. Authoritative: a membership write failure fails
+		// the run (a registered-but-not-a-member host would be invisible to the
+		// roster). Must precede syncTraitsOnRegistered, which now resolves members
+		// via incarnation_membership.
+		if berr := r.bindMembershipOnRegistered(ctx, spec, rt, output); berr != nil {
+			summary := composeKeeperFailure(rt, berr.Error())
+			r.recordKeeperFailure(ctx, spec.ApplyID, passage, rt, summary, log)
+			return fmt.Errorf("scenario: keeper-side task %q (%s) membership bind failed: %w", rt.Name, rt.Module, berr)
 		}
 
 		// register: of a keeper task accumulates under KeeperTargetSID — same path
@@ -119,11 +120,10 @@ func (r *Runner) dispatchKeeperTasks(ctx context.Context, spec RunSpec, log *slo
 		// P>0 doesn't exist, and the register would be lost.
 		r.accumulateKeeperRegister(ctx, spec.ApplyID, passage, rt, changed, failed, output, log)
 
-		// Sync-hook for the bind path (ADR-060 amend, R1): once core.soul.registered
-		// succeeds, the host(s) are bound to the incarnation's coven — project
-		// incarnation.traits onto member souls.traits so the newly bound host picks
-		// up its incarnation's traits. Gated on the registered module specifically;
-		// other keeper tasks (cloud/vault) don't change membership.
+		// Sync-hook for the bind path (ADR-060 amend, R1): once membership is
+		// written above, project incarnation.traits onto member souls.traits so the
+		// newly bound host picks up its incarnation's traits. Gated on the registered
+		// module specifically; other keeper tasks (cloud/vault) don't bind hosts.
 		r.syncTraitsOnRegistered(ctx, spec.IncarnationName, rt, log)
 	}
 
@@ -350,11 +350,11 @@ const (
 )
 
 // syncTraitsOnRegistered is the sync-hook for the Trait relocation bind path
-// (ADR-060 amend, R1). After core.soul.registered SUCCEEDS, the host(s) are
-// bound to the incarnation's coven; project incarnation.traits onto member
+// (ADR-060 amend, R1). After core.soul.registered SUCCEEDS and membership is
+// written (bindMembershipOnRegistered), project incarnation.traits onto member
 // souls.traits so the newly bound host picks up its incarnation's traits.
 // Gated specifically on the registered module — other keeper tasks (cloud/vault)
-// don't change membership.
+// don't bind hosts.
 //
 // Best-effort: empty incName (direct keeper test without an incarnation) /
 // incarnation without traits / load failure → logged, run not failed (traits
@@ -380,6 +380,76 @@ func (r *Runner) syncTraitsOnRegistered(ctx context.Context, incName string, rt 
 	if serr := incarnation.SyncTraitsToHosts(ctx, r.deps.DB, incName, inc.Traits); serr != nil {
 		log.Warn("scenario: bind-sync traits -> souls failed (best-effort)",
 			slog.String("incarnation", incName), slog.Any("error", serr))
+	}
+}
+
+// recordKeeperFailure records a keeper-task failure (RecordTaskFailure +
+// apply_run → failed) for the triple (apply_id, keeper, passage). rt.Index is
+// the global plan-wide index; for keeper-target local==global (no per-host
+// where:), so task_idx and plan_index both equal rt.Index. Write errors are
+// only logged (losing the reason degrades triage but the run still aborts).
+func (r *Runner) recordKeeperFailure(ctx context.Context, applyID string, passage int, rt *render.RenderedTask, summary string, log *slog.Logger) {
+	if rerr := applyrun.RecordTaskFailure(ctx, r.deps.DB, applyID, render.KeeperTargetSID, passage, rt.Index, rt.Index, summary); rerr != nil {
+		log.Warn("scenario: recording the keeper task failure reason failed",
+			slog.Int("passage", passage), slog.Int("task_idx", rt.Index), slog.Any("error", rerr))
+	}
+	if uerr := applyrun.UpdateStatus(ctx, r.deps.DB, applyID, render.KeeperTargetSID, passage, applyrun.StatusFailed, &summary); uerr != nil {
+		log.Warn("scenario: transitioning keeper apply_run to failed failed",
+			slog.Int("passage", passage), slog.Any("error", uerr))
+	}
+}
+
+// bindMembershipOnRegistered writes incarnation membership for a successful
+// core.soul.registered task (ADR-008 amendment 2026-07-17/NIM-124: membership is
+// a first-class relation, no longer `incarnation.name ∈ souls.coven[]`). The
+// current run's incarnation (spec.IncarnationName) is the unambiguous target —
+// cross-incarnation binding is forbidden by the grammar. Idempotent (ON CONFLICT
+// DO NOTHING). Gated on the registered module specifically; other keeper tasks
+// (cloud/vault) don't bind hosts.
+//
+// Empty incarnation name (direct keeper test without an incarnation) / nil DB /
+// no SIDs in the module output → no-op, nil. Any DB error is returned so the
+// caller fails the run (the module already created the souls rows, so the FK
+// sid → souls is satisfied; an error here is a real DB fault, not a missing row).
+func (r *Runner) bindMembershipOnRegistered(ctx context.Context, spec RunSpec, rt *render.RenderedTask, output map[string]any) error {
+	base, state, ok := config.SplitModuleAddr(rt.Module)
+	if !ok || base != registeredModuleBase || state != registeredModuleState {
+		return nil
+	}
+	if spec.IncarnationName == "" || r.deps.DB == nil {
+		return nil
+	}
+	sids := sidsFromRegisteredOutput(output)
+	if len(sids) == 0 {
+		return nil
+	}
+	return incarnation.AddMembers(ctx, r.deps.DB, spec.IncarnationName, sids, startedByPtr(spec.StartedByAID))
+}
+
+// sidsFromRegisteredOutput extracts the registered SIDs from a
+// core.soul.registered module output: `sid` is a string (single) or a list of
+// strings (batch), matching buildOutput in coremod/soul. Empty/other → nil.
+func sidsFromRegisteredOutput(output map[string]any) []string {
+	raw, ok := output["sid"]
+	if !ok {
+		return nil
+	}
+	switch v := raw.(type) {
+	case string:
+		if v == "" {
+			return nil
+		}
+		return []string{v}
+	case []any:
+		out := make([]string, 0, len(v))
+		for _, item := range v {
+			if s, ok := item.(string); ok && s != "" {
+				out = append(out, s)
+			}
+		}
+		return out
+	default:
+		return nil
 	}
 }
 

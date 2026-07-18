@@ -81,7 +81,7 @@ Moved to [`docs/adr/0007-versioning-git-ref.md`](adr/0007-versioning-git-ref.md)
 
 ### [ADR-008. Coven - stable logical tags only](adr/0008-coven-stable-tags.md)
 
-Moved to [`docs/adr/0008-coven-stable-tags.md`](adr/0008-coven-stable-tags.md). Coven - only stable logical tags (cluster / project / environment / data center); `incarnation.name` remains the root Coven label; convention `{incarnation.name}-{role}` deleted; role NOT Coven (declared in spec / actual via probe); essence role-agnostic. Amendments: environment = special case Coven (first-class `Environment` rejected, per-Coven RBAC-scope implemented); cross-incarnation was lifted at the Voyage layer; Choir ≠ coven.
+Moved to [`docs/adr/0008-coven-stable-tags.md`](adr/0008-coven-stable-tags.md). Coven - only stable logical tags (cluster / project / environment / data center); convention `{incarnation.name}-{role}` deleted; role NOT Coven (declared in spec / actual via probe); essence role-agnostic. Amendments: environment = special case Coven (first-class `Environment` rejected, per-Coven RBAC-scope implemented); cross-incarnation was lifted at the Voyage layer; Choir ≠ coven. **[2026-07-17 (NIM-124): `incarnation.name` is NO LONGER a Coven — incarnation membership is a first-class relation `incarnation_membership`; the `on:` resolver / RBAC / bulk-select decouple from `coven==name`; `on: ["${ incarnation.name }"]` is a validation error.](adr/0008-coven-stable-tags.md#amendment-2026-07-17-nim-124-incarnationname-is-not-a-coven--membership-is-a-first-class-relation)**
 
 ### [ADR-009. Scenario - a complete DSL of destiny tasks; border with destiny - recommendation](adr/0009-scenario-dsl.md)
 
@@ -790,7 +790,7 @@ tasks:
       count:    "${ input.spawn.count }"
 
   - name: install-redis
-    on: ["${ incarnation.name }"]     # the whole incarnation (you could have omitted on:)
+    # on: omitted = the whole incarnation (all member hosts)
     apply:
       destiny: redis
       input:
@@ -918,7 +918,7 @@ Incarnation is a specific **instance** of a service in reality (one Redis cluste
 | Field | Type | Meaning |
 |---|---|---|
 | `incarnation_id` | UUID | primary key |
-| `name` | text UNIQUE | name incarnation, also known as root Coven label |
+| `name` | text UNIQUE | incarnation name (global PK). **Not** a Coven — membership lives in `incarnation_membership` ([ADR-008 amendment 2026-07-17](adr/0008-coven-stable-tags.md#amendment-2026-07-17-nim-124-incarnationname-is-not-a-coven--membership-is-a-first-class-relation)) |
 | `service` | text | service name |
 | `service_version` | text | pin version (git-tag) of the service under which incarnation runs |
 | `state_schema_version` | integer | version of state_schema under which state is structured |
@@ -988,18 +988,16 @@ Rewritten under [ADR-008](#adr-008-coven---stable-logical-tags-only). The full r
 
 ### Coven - stable logical tags
 
-Coven - **only stable** logical tags (cluster / project / environment / data center / hardware type). When an incarnation is created, its name becomes the **root Coven label** of all its hosts:
+Coven - **only stable** logical tags (cluster / project / environment / data center / hardware type). `incarnation.name` is **not** a Coven ([ADR-008 amendment 2026-07-17](adr/0008-coven-stable-tags.md#amendment-2026-07-17-nim-124-incarnationname-is-not-a-coven--membership-is-a-first-class-relation)): incarnation **membership** is a first-class relation `incarnation_membership(incarnation_name, sid)`, not the fact that a host carries a coven equal to the incarnation name. Coven and membership are two separate axes.
 
-- `incarnation.name = test-cache-redis-cl-dev` → coven `test-cache-redis-cl-dev`.
-
-**There are no more sub-covens by role (`{incarnation.name}-{role}`)** - convention removed ([ADR-008](adr/0008-coven-stable-tags.md)). The role (master / replica) **not Coven**: it is volatile (failover) and is not suitable for a stable label. Covens are assigned automatically by **keeper**; additional stable covens (for example, `baremetal`, `prod`) are assigned declaratively via incarnation, the operator does not make separate "tag host" API calls.
+**There are no more sub-covens by role (`{incarnation.name}-{role}`)** - convention removed ([ADR-008](adr/0008-coven-stable-tags.md)). The role (master / replica) **not Coven**: it is volatile (failover) and is not suitable for a stable label. Stable covens (for example, `baremetal`, `prod`) are assigned declaratively via incarnation; the operator does not make separate "tag host" API calls.
 
 ### `on:` - stable step target
 
 Scenario step target - key **`on:`**, resolved by Postgres (stable layer):
 
 ```yaml
-# Entire incarnation (on: omitted - root coven implied)
+# Entire incarnation (on: omitted - all member hosts via the membership relation)
 - name: Apply base config everywhere
   apply: { destiny: redis-base, input: { ... } }
 
@@ -1010,13 +1008,13 @@ Scenario step target - key **`on:`**, resolved by Postgres (stable layer):
   state: created
   params: { ... }
 
-# Intersection (AND) of stable covens, always ⊆ incarnation hosts
+# Intersection (AND) of stable covens, always ⊆ members
 - name: Tune kernel on bare-metal hosts of this cluster
-  on: ["${ incarnation.name }", baremetal]
+  on: [baremetal]                  # incarnation scope is implicit (roster is membership-scoped)
   apply: { destiny: kernel-tuning, input: { ... } }
 ```
 
-**Resolver contract** (invariant): list in `on:` - AND/intersection covens; result **always ⊆ hosts incarnation**; **cross-incarnation targeting is prohibited by the grammar** (security invariant); role in `on:` is not involved. Completely - [`docs/scenario/orchestration.md §3`](scenario/orchestration.md).
+**Resolver contract** (invariant): the omitted `on:` = all **members** (via `incarnation_membership`); `on: ["${ incarnation.name }"]` is a **validation error** (`incarnation.name` is not a Coven); a list in `on:` - AND/intersection of stable covens, result **always ⊆ members**; **cross-incarnation targeting is prohibited by construction** (enforced by the membership roster); role in `on:` is not involved. Completely - [`docs/scenario/orchestration.md §3`](scenario/orchestration.md).
 
 ### `where:` - volatile role via probe + register
 
@@ -1024,16 +1022,13 @@ The volatile role (who is now master) is not stored anywhere stably. The scenari
 
 ```yaml
 - name: Detect actual redis role per host
-  module: core.exec.run
-  on: ["${ incarnation.name }"]
+  module: core.exec.run                # on: omitted = all member hosts
   register: redis_role
   changed_when: false
-  failed_when: size(register.redis_role) < incarnation.host_count
   params: { command: "redis-cli role | head -1" }
 
 - name: Restart only the current replicas
-  on: ["${ incarnation.name }"]
-  where: register.redis_role.stdout == 'slave'
+  where: register.redis_role.stdout == 'slave'   # on: omitted = all members
   module: core.service.restarted
   params: { name: redis-server }
 ```
@@ -1054,10 +1049,10 @@ In the template context of the scenario, the following are always available:
 When a host needs data from another host (what is done in Salt via Mine, in Ansible via `hostvars[X]`), the `soulprint.where(<predicate>)` function is used on the **stable** layer (the CEL predicate is a static string literal):
 
 ```yaml
-master_addr: "${ soulprint.where(\"incarnation.name in covens\")[0].network.primary_ip }"
+master_addr: "${ soulprint.hosts[0].network.primary_ip }"
 ```
 
-The request goes to Postgres + Redis hot layer. Soulprint after [ADR-008](#adr-008-coven---stable-logical-tags-only) stores **only stable** facts, so `soulprint.where(...)` operates on a stable layer; volatile role (who is now master) - exclusively through probe + `where:`-key, not through Soulprint. The predicate `.where(...)` is a static string literal, expanded at the compile phase into the native CEL filter-comprehension (not runtime; dynamic merging of the predicate is prohibited, the first element is `[0]`, see [ADR-010](#adr-010-template-engine-cel-for-yaml-expressions-go-texttemplate-for-files)). Cross-host master discovery - through the accessor `soulprint.hosts` (`soulprint.hosts.where("role == 'primary'")[0].network.primary_ip`), the declared role is taken from `incarnation.spec.hosts[].role`, a probe is defined on the runtime master (as in `restart`); normative - [`docs/scenario/orchestration.md §4.1`](scenario/orchestration.md) (the former open Q is closed there, see [§8](scenario/orchestration.md)).
+All members of the run are simply `soulprint.hosts` (the accessor is incarnation-scoped); a stable-coven filter is `soulprint.where("'<X>' in covens")`. `incarnation.name` is not a Coven, so `soulprint.where("incarnation.name in covens")` is removed ([ADR-008 amendment 2026-07-17](adr/0008-coven-stable-tags.md#amendment-2026-07-17-nim-124-incarnationname-is-not-a-coven--membership-is-a-first-class-relation)). The request goes to Postgres + Redis hot layer. Soulprint after [ADR-008](#adr-008-coven---stable-logical-tags-only) stores **only stable** facts, so `soulprint.where(...)` operates on a stable layer; volatile role (who is now master) - exclusively through probe + `where:`-key, not through Soulprint. The predicate `.where(...)` is a static string literal, expanded at the compile phase into the native CEL filter-comprehension (not runtime; dynamic merging of the predicate is prohibited, the first element is `[0]`, see [ADR-010](#adr-010-template-engine-cel-for-yaml-expressions-go-texttemplate-for-files)). Cross-host master discovery - through the accessor `soulprint.hosts` (`soulprint.hosts.where("role == 'primary'")[0].network.primary_ip`), the declared role is taken from `incarnation.spec.hosts[].role`, a probe is defined on the runtime master (as in `restart`); normative - [`docs/scenario/orchestration.md §4.1`](scenario/orchestration.md) (the former open Q is closed there, see [§8](scenario/orchestration.md)).
 
 ## Versioning and state_schema migrations
 

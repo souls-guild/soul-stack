@@ -9,66 +9,56 @@ import (
 	"github.com/souls-guild/soul-stack/shared/config"
 )
 
-// TestResolveTargetsRootCovenNoSpecialCasing pins down the `on:` resolve
-// BEHAVIOR after removing the special-case branch that dropped the root label
-// in resolveCovenList: the root Coven label `${ incarnation.name }` has no
-// special handling and flows through the common filterByCovens like any other
-// label.
+// TestResolveTargets_IncarnationNameNotACoven pins down the `on:` resolve
+// BEHAVIOR after ADR-008 amendment 2026-07-17/NIM-124: incarnation.name is NOT a
+// Coven. Membership is a first-class relation, the roster (in.Hosts) is already
+// membership-scoped, and hosts carry only real stable tags in Coven.
 //
-// Roster invariant (ADR-008, rosterSQL `WHERE $1 = ANY(coven)`): EVERY host in
-// the roster carries the root label. So filtering by `incarnation.name` is a
-// no-op (= the whole incarnation), and adding a second label narrows scope via
-// ordinary AND-intersection. This test catches a regression if someone
-// reintroduces special-casing for the root label (then
-// `[incarnation.name, baremetal]` would start including non-baremetal hosts)
-// or breaks the roster invariant (then `[incarnation.name]` would stop
-// returning everyone).
-func TestResolveTargetsRootCovenNoSpecialCasing(t *testing.T) {
+//   - omitted on: → exactly the members (the whole roster), regardless of what
+//     each host carries in Coven (no name-coven filter);
+//   - on: [real-coven] → AND-narrowing over stable tags;
+//   - on: containing ${ incarnation.name } → validation error (fail-closed).
+//
+// This catches a regression if someone reintroduces the name-as-coven filter
+// (then `on: [incarnation.name]` would resolve instead of erroring) or lets a
+// host be selected because its Coven literally contains the incarnation name.
+func TestResolveTargets_IncarnationNameNotACoven(t *testing.T) {
 	engine, err := cel.New()
 	if err != nil {
 		t.Fatalf("cel.New: %v", err)
 	}
 
 	const incName = "svc-prod"
-	// Roster invariant: every host carries the root label incName; some also
-	// carry baremetal.
+	// Members carry only real stable tags now (no incName in Coven). One host
+	// deliberately carries a coven literally equal to the incarnation name to
+	// prove it is NOT special-cased on the resolve path (it's an ordinary tag,
+	// and on: [incName] still errors regardless).
 	in := RenderInput{
 		Incarnation: IncarnationMeta{Name: incName},
 		Hosts: []*topology.HostFacts{
-			{SID: "bm-1.example.com", Coven: []string{incName, "baremetal"}},
-			{SID: "bm-2.example.com", Coven: []string{incName, "baremetal"}},
+			{SID: "bm-1.example.com", Coven: []string{"baremetal"}},
+			{SID: "bm-2.example.com", Coven: []string{"baremetal"}},
 			{SID: "vm-1.example.com", Coven: []string{incName}},
 		},
 	}
 
-	cases := []struct {
+	okCases := []struct {
 		name string
 		on   any
 		want []string
 	}{
 		{
-			name: "root coven only -> whole incarnation",
-			on:   []any{"${ incarnation.name }"},
-			want: []string{"bm-1.example.com", "bm-2.example.com", "vm-1.example.com"},
-		},
-		{
-			name: "root coven + baremetal -> AND narrows to baremetal",
-			on:   []any{"${ incarnation.name }", "baremetal"},
-			want: []string{"bm-1.example.com", "bm-2.example.com"},
-		},
-		{
-			name: "baremetal only -> control, baremetal only",
-			on:   []any{"baremetal"},
-			want: []string{"bm-1.example.com", "bm-2.example.com"},
-		},
-		{
-			name: "on omitted -> whole incarnation",
+			name: "on omitted -> exactly the members",
 			on:   nil,
 			want: []string{"bm-1.example.com", "bm-2.example.com", "vm-1.example.com"},
 		},
+		{
+			name: "on: [baremetal] -> AND narrows to baremetal members",
+			on:   []any{"baremetal"},
+			want: []string{"bm-1.example.com", "bm-2.example.com"},
+		},
 	}
-
-	for _, tc := range cases {
+	for _, tc := range okCases {
 		t.Run(tc.name, func(t *testing.T) {
 			got, err := resolveTargets(engine, in, config.Task{On: tc.on})
 			if err != nil {
@@ -79,12 +69,29 @@ func TestResolveTargetsRootCovenNoSpecialCasing(t *testing.T) {
 			}
 		})
 	}
+
+	errCases := []struct {
+		name string
+		on   any
+	}{
+		{name: "on: [incarnation.name] -> error", on: []any{"${ incarnation.name }"}},
+		{name: "on: [incarnation.name, baremetal] -> error", on: []any{"${ incarnation.name }", "baremetal"}},
+		{name: "on: [literal name] -> error", on: []any{incName}},
+	}
+	for _, tc := range errCases {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := resolveTargets(engine, in, config.Task{On: tc.on})
+			if err == nil {
+				t.Fatalf("resolveTargets: expected a validation error (incarnation.name is not a Coven), got nil")
+			}
+		})
+	}
 }
 
-// TestResolveCovenListRootCovenRetained pins down that the root label stays in
-// the resolved list (not dropped): a direct check that the special-casing was
-// removed at the resolveCovenList level.
-func TestResolveCovenListRootCovenRetained(t *testing.T) {
+// TestResolveCovenList_IncarnationNameRejected pins down that resolveCovenList
+// rejects an element resolving to the incarnation name (ADR-008 amendment
+// 2026-07-17/NIM-124) and passes through real stable tags unchanged.
+func TestResolveCovenList_IncarnationNameRejected(t *testing.T) {
 	engine, err := cel.New()
 	if err != nil {
 		t.Fatalf("cel.New: %v", err)
@@ -93,13 +100,20 @@ func TestResolveCovenListRootCovenRetained(t *testing.T) {
 	const incName = "svc-prod"
 	in := RenderInput{Incarnation: IncarnationMeta{Name: incName}}
 
-	got, err := resolveCovenList(engine, in, []any{"${ incarnation.name }", "baremetal"})
+	// Real stable tags pass through unchanged.
+	got, err := resolveCovenList(engine, in, []any{"baremetal", "eu-west"})
 	if err != nil {
 		t.Fatalf("resolveCovenList: %v", err)
 	}
-	want := []string{incName, "baremetal"}
-	if diff := strDiff(got, want); diff != "" {
-		t.Fatalf("coven list mismatch (root coven must be retained): %s", diff)
+	if diff := strDiff(got, []string{"baremetal", "eu-west"}); diff != "" {
+		t.Fatalf("coven list mismatch: %s", diff)
+	}
+
+	// The incarnation name (via CEL or as a literal) is rejected.
+	for _, on := range [][]any{{"${ incarnation.name }", "baremetal"}, {incName}} {
+		if _, err := resolveCovenList(engine, in, on); err == nil {
+			t.Fatalf("resolveCovenList(%v): expected a validation error (incarnation.name is not a Coven), got nil", on)
+		}
 	}
 }
 

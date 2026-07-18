@@ -43,8 +43,7 @@ func OptStringParam(params *structpb.Struct, key string) (string, error) {
 	return s.StringValue, nil
 }
 
-// StringSliceParam is required string list. Used by
-// `core.soul.registered` for `params.coven` (min_items=1).
+// StringSliceParam is a required string list (a present, non-null list key).
 func StringSliceParam(params *structpb.Struct, key string) ([]string, error) {
 	v, err := lookup(params, key)
 	if err != nil {

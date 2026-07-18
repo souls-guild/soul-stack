@@ -87,10 +87,10 @@ var (
 	ErrInvalidSizeBounds   = errors.New("choir: invalid min/max size bounds")
 )
 
-// ErrNotMembers — the given SIDs are NOT members of the incarnation (their
-// `souls.coven[]` doesn't contain `incarnation.name`). ADR-044 item 3
-// invariant. The handler side (S-T3) maps this to 422; offending SIDs go into
-// .Missing.
+// ErrNotMembers — the given SIDs are NOT members of the incarnation (no row in
+// `incarnation_membership`; ADR-008 amendment 2026-07-17/NIM-124 — no longer
+// `souls.coven[]` contains the name). ADR-044 item 3 invariant. The handler side
+// (S-T3) maps this to 422; offending SIDs go into .Missing.
 //
 // Missing includes both SIDs absent from the `souls` registry entirely and
 // SIDs that exist but aren't members of this incarnation — for the operator

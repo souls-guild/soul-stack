@@ -153,14 +153,15 @@ func essenceInput(serviceDir string, inc *incarnation.Incarnation, host *topolog
 // keeperEssenceInput builds [essence.ResolveInput] for the keeper context — empty
 // roster, provision-from-zero (ADR-0061 §context): no representative host. The
 // OS-family overlay is skipped (OSFamily empty — no per-host soulprint), the
-// Coven overlay is the incarnation's root Coven label (inc.Name, ADR-008: every
-// host in the roster carries it, so it applies even without a host), and the
-// spec.essence override applies as usual. Symmetric to renderKeeperTask, which
-// renders keeper tasks in keeper context without per-host soulprint.
+// Coven overlay is the incarnation's declared stable coven tags (inc.Covens,
+// ADR-008 amendment 2026-07-17/NIM-124: incarnation.name is NOT a Coven, so it is
+// no longer overlaid here), and the spec.essence override applies as usual.
+// Symmetric to renderKeeperTask, which renders keeper tasks in keeper context
+// without per-host soulprint.
 func keeperEssenceInput(serviceDir string, inc *incarnation.Incarnation) essence.ResolveInput {
 	return essence.ResolveInput{
 		ServiceDir:      serviceDir,
-		Covens:          []string{inc.Name},
+		Covens:          inc.Covens,
 		IncarnationSpec: specEssence(inc),
 	}
 }

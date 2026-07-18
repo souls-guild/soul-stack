@@ -143,18 +143,32 @@ func TestToolsCall_IncarnationScope_MatchingCovenPasses(t *testing.T) {
 	}
 }
 
-// TestToolsCall_IncarnationScope_NameAsCovenPasses — scope coven=<name>
-// matches through the root Coven label (covens ∪ {name}, ADR-008): even when
-// declared covens is empty, the incarnation name works as a coven label.
-func TestToolsCall_IncarnationScope_NameAsCovenPasses(t *testing.T) {
+// TestToolsCall_IncarnationScope_NameAsCovenDenied — NIM-124: the incarnation
+// name is NOT a Coven, so scope coven=<name> no longer matches (must migrate to
+// incarnation=<name>). Fail-closed: forbidden.
+func TestToolsCall_IncarnationScope_NameAsCovenDenied(t *testing.T) {
 	noCovens := incWithCovens(nil)
-	h, _ := newTestHandlerFull(t, &fakePool{incFn: noCovens}, scopedRBAC("incarnation.run on coven=redis-prod"),
+	h, _ := newTestHandlerFull(t, &fakePool{
+		incFn:    noCovens,
+		beginErr: errFakeUnexpected{sql: "BeginTx must not run when scope denies"},
+	}, scopedRBAC("incarnation.run on coven=redis-prod"),
+		&mcpStarter{}, &mcpResolver{ok: true}, nil)
+	resp := callTool(t, h, "archon-alice", "keeper.incarnation.run",
+		`{"name":"redis-prod","scenario":"rotate"}`)
+	expectForbidden(t, resp, "run")
+}
+
+// TestToolsCall_IncarnationScope_NameAsIncarnationPasses — NIM-124: scope by the
+// incarnation's own name is the incarnation=<name> dimension, and it passes.
+func TestToolsCall_IncarnationScope_NameAsIncarnationPasses(t *testing.T) {
+	noCovens := incWithCovens(nil)
+	h, _ := newTestHandlerFull(t, &fakePool{incFn: noCovens}, scopedRBAC("incarnation.run on incarnation=redis-prod"),
 		&mcpStarter{}, &mcpResolver{ok: true}, nil)
 	resp := callTool(t, h, "archon-alice", "keeper.incarnation.run",
 		`{"name":"redis-prod","scenario":"rotate"}`)
 	expectNotForbidden(t, resp, "run")
 	if resp.Error != nil {
-		t.Fatalf("name-as-coven should fully pass: %+v", resp.Error)
+		t.Fatalf("incarnation=<name> should fully pass: %+v", resp.Error)
 	}
 }
 

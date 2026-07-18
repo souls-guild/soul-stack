@@ -75,7 +75,7 @@ soulctl incarnation run hello-demo converge --wait
 
 ## 3. Targeting by fleet
 
-By default, `run` without `on:` in the step hits **the entire incarnation** - all hosts under the root coven `${ incarnation.name }`. To drive only part of the fleet, there are two mechanisms ([orchestration.md → §3–§4](../scenario/orchestration.md)):
+By default, `run` without `on:` in the step hits **the entire incarnation** - all **member** hosts (via the membership relation `incarnation_membership`; `incarnation.name` is not a Coven, [ADR-008 amendment 2026-07-17](../adr/0008-coven-stable-tags.md#amendment-2026-07-17-nim-124-incarnationname-is-not-a-coven--membership-is-a-first-class-relation)). To drive only part of the fleet, there are two mechanisms ([orchestration.md → §3–§4](../scenario/orchestration.md)):
 
 **Stable target is `on:` (covens).** In the scenario, the step targets the intersection of stable covens, ⊆ incarnation:
 

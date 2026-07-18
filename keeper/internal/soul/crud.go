@@ -417,6 +417,50 @@ func scanSoul(row pgx.Row) (*Soul, error) {
 	return &s, nil
 }
 
+// selectIncarnationMembersSQL — member souls of an incarnation, resolved via the
+// membership relation (JOIN incarnation_membership, ADR-008 amendment
+// 2026-07-17/NIM-124 — no longer `incarnation.name = ANY(coven)`). Same column
+// set as SelectAll's list query (scanSoul), capped by $2, ordered by SID.
+const selectIncarnationMembersSQL = `
+SELECT s.sid, s.transport, s.status, s.coven, s.traits,
+       s.registered_at, s.last_seen_at, s.last_seen_by_kid,
+       s.created_by_aid, s.requested_at, s.note
+FROM souls s
+JOIN incarnation_membership m ON m.sid = s.sid
+WHERE m.incarnation_name = $1
+ORDER BY s.sid ASC
+LIMIT $2
+`
+
+// SelectIncarnationMembers returns the member souls of incarnation `incName`
+// (via incarnation_membership, NIM-124), capped at `limit` and ordered by SID.
+// Used by the host-vitals incarnation aggregate to list members before the
+// caller's soul-read-scope filter. A non-member host is not returned even if its
+// coven happens to contain a string equal to the incarnation name.
+func SelectIncarnationMembers(ctx context.Context, db ExecQueryRower, incName string, limit int) ([]*Soul, error) {
+	if limit < 1 {
+		limit = 1
+	}
+	rows, err := db.Query(ctx, selectIncarnationMembersSQL, incName, limit)
+	if err != nil {
+		return nil, fmt.Errorf("soul: select incarnation members: %w", err)
+	}
+	defer rows.Close()
+
+	var out []*Soul
+	for rows.Next() {
+		s, err := scanSoul(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, s)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("soul: iter incarnation members: %w", err)
+	}
+	return out, nil
+}
+
 // UpdateStatus transitions a Soul to a new status and updates
 // last_seen_by_kid. kid is a pointer: nil keeps the old value (PG
 // `COALESCE`), non-nil overwrites it (typical after a `Bootstrap` RPC or
@@ -546,11 +590,9 @@ type BulkPool interface {
 //   - All         — no host filter (whole registry; still intersects scope).
 //   - SIDs        — explicit host list (`sid = ANY($n)`).
 //   - Coven       — hosts that already carry this label (`$n = ANY(coven)`).
-//   - Incarnation — hosts of this incarnation: matched by its name against
-//     one of the host's coven labels (`incarnation.name` is the root Coven
-//     label per ADR-008), `$n = ANY(coven)`. Semantically distinct from
-//     Coven (incarnation name vs. an arbitrary stable label) despite the
-//     identical SQL predicate.
+//   - Incarnation — members of this incarnation, resolved via
+//     `incarnation_membership` (ADR-008 amendment 2026-07-17/NIM-124: membership
+//     is a first-class relation, no longer `incarnation.name = ANY(coven)`).
 //   - Status      — filter by status.
 //
 // Empty SIDs/Coven/Incarnation/Status means "don't filter". All=false with
@@ -934,11 +976,10 @@ func buildBulkWhereWithCursor(sel BulkSelector, scope BulkScope, cursor string) 
 // bulkSelectorClauses turns a BulkSelector into SQL clauses + args. All adds
 // no clause by itself (it means "no host filter").
 //
-// Coven and Incarnation produce the same SQL predicate `$n = ANY(coven)`:
-// an incarnation's name is the root Coven label per ADR-008. They're
-// semantically distinct (Coven is an arbitrary stable label, Incarnation is
-// a name from the `incarnation` registry) and kept separate at the
-// API/audit level, but collapse at the SQL level.
+// Coven and Incarnation are now DISTINCT predicates (ADR-008 amendment
+// 2026-07-17/NIM-124): Coven is a stable-tag membership test `$n = ANY(coven)`;
+// Incarnation resolves membership via `incarnation_membership` (a host's coven
+// no longer carries the incarnation name).
 func bulkSelectorClauses(sel BulkSelector) ([]string, []any) {
 	var (
 		clauses []string
@@ -954,7 +995,7 @@ func bulkSelectorClauses(sel BulkSelector) ([]string, []any) {
 	}
 	if sel.Incarnation != "" {
 		args = append(args, sel.Incarnation)
-		clauses = append(clauses, fmt.Sprintf("$%d = ANY(coven)", len(args)))
+		clauses = append(clauses, fmt.Sprintf("sid IN (SELECT sid FROM incarnation_membership WHERE incarnation_name = $%d)", len(args)))
 	}
 	if sel.Status != "" {
 		args = append(args, string(sel.Status))

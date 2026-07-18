@@ -8,27 +8,23 @@ Related sources of beta and GA limits are [known-limitations.md](known-limitatio
 
 ---
 
-## Per-service uniqueness of the incarnation name (decoupling `incarnation.name` from the Coven label)
+## Per-service uniqueness of the incarnation name (the name is still a global PK)
 
 **Status:** BACKLOG - postponed by user decision 2026-06-25.
 
 **What they wanted.** Allow **the same incarnation names for different services** (per-service uniqueness): the `prod` incarnation of the `redis` service and the `prod` incarnation of the `postgres` service must coexist. Now this is prohibited.
 
-**Why not now (by-design).** `incarnation.name` is a global PRIMARY KEY (PG migration 005), and this is intentional: the name simultaneously serves as the **root Coven label** of all incarnation hosts ([ADR-008](adr/0008-coven-stable-tags.md)). Consequence, if you allow duplicate names without decoupling:
+**Why not now (by-design).** `incarnation.name` is a global PRIMARY KEY (PG migration 005), and this is intentional. Allowing duplicate names requires replacing that PK with a synthetic id and a composite `(service, name)` uniqueness, which cascades across the schema and the API (see impact below).
 
-- incarnation `prod` of service `redis` and incarnation `prod` of service `postgres` give hosts of both `coven=[prod]`;
-- roster is resolved by the predicate `WHERE 'prod' = ANY(coven)` **without separation by service**;
-- targeting and `destroy` of one incarnation will hook other hosts (cross-service) - dangerous.
-
-Therefore, the name must be globally unique as long as it is also a Coven label.
+> **Update 2026-07-17 (NIM-124).** One sub-blocker of this epic is **already resolved**: `incarnation.name` is **no longer a Coven** — incarnation membership moved to the first-class relation `incarnation_membership` ([ADR-008 amendment 2026-07-17](adr/0008-coven-stable-tags.md#amendment-2026-07-17-nim-124-incarnationname-is-not-a-coven--membership-is-a-first-class-relation)). The old cross-service danger ("duplicate names → both services' hosts carry `coven=[prod]` → roster `WHERE 'prod' = ANY(coven)` hooks cross-service hosts on `destroy`") **no longer applies**: the roster is resolved by membership, not by `= ANY(coven)`, and the name never appears in `coven[]`. The remaining reason the name must stay globally unique is purely that it is the global PK — not the coven coupling.
 
 **Impact during implementation (architect assessment):**
 
-- amend [ADR-008](adr/0008-coven-stable-tags.md) - unbind `incarnation.name` from the Coven label (the root label no longer matches the PK);
+- ~~amend [ADR-008](adr/0008-coven-stable-tags.md) - unbind `incarnation.name` from the Coven label~~ — **DONE by NIM-124** (membership is now `incarnation_membership`, the name is not a coven);
 - enter a synthetic incarnation-id (PK), and make `(service, name)` composite-unique;
 - composite-FK `(service, name)` on >5 tables: `state_history` (006), `apply_runs` (018), `incarnation_choirs` + `incarnation_voices` (060), plus soft-links `decrees` (041), `tides` (055), `voyages` (059), `incarnation_archive` (039);
 - breaking change Operator API: path `/v1/incarnations/{name}` → `/v1/incarnations/{service}/{name}` - breaks UI routing, `soulctl` and `types.gen.ts`;
-- RBAC revision [Purview](adr/0047-purview.md): `IncarnationScopeSelector` is expanded to `covens ∪ {name}` (and name is no longer globally unique).
+- RBAC revision [Purview](adr/0047-purview.md): the incarnation RBAC scope is now `service=` + declared `covens` + the `incarnation=<name>` dimension (NIM-124 dropped the former `covens ∪ {name}`), and the name is no longer globally unique.
 
 **Related desired end-state (take into account when developing the epic).** The user wants a hierarchy of rights like `<services>.<incarnations>.<other>`; [Trait](naming-rules.md) tags work according to rights **only within the framework of their services** and **narrow** the scope of visibility (first "show service incarnations", then limit traits from above). This intersects with the deferred slice "RBAC-scope by traits" ([ADR-0060](adr/0060-traits.md): RBAC-scope by traits - pilot includes only targeting + metadata, scope is deferred).
 

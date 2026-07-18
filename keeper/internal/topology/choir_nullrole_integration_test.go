@@ -102,7 +102,8 @@ func TestIntegration_NullVoiceRole_FallbacksToSpecRole(t *testing.T) {
 			{"sid": "a.example.com", "role": "replica"},
 		},
 	})
-	seedSoul(t, "a.example.com", []string{"redis-prod"}, soul.StatusConnected)
+	seedSoul(t, "a.example.com", nil, soul.StatusConnected)
+	seedMembership(t, "redis-prod", "a.example.com")
 	seedChoir(t, "redis-prod", "voters")
 	seedVoiceNullRole(t, "redis-prod", "voters", "a.example.com")
 
@@ -135,7 +136,8 @@ func TestIntegration_NullVoiceRole_NoSpec_RoleEmpty(t *testing.T) {
 
 	// spec has no hosts at all, so the host is definitely outside declared spec.
 	seedIncarnation(t, "redis-prod", map[string]any{})
-	seedSoul(t, "b.example.com", []string{"redis-prod"}, soul.StatusConnected)
+	seedSoul(t, "b.example.com", nil, soul.StatusConnected)
+	seedMembership(t, "redis-prod", "b.example.com")
 	seedChoir(t, "redis-prod", "voters")
 	seedVoiceNullRole(t, "redis-prod", "voters", "b.example.com")
 
@@ -173,7 +175,8 @@ func TestIntegration_ExplicitVoiceRole_OverridesSpecRole(t *testing.T) {
 			{"sid": "c.example.com", "role": "replica"},
 		},
 	})
-	seedSoul(t, "c.example.com", []string{"redis-prod"}, soul.StatusConnected)
+	seedSoul(t, "c.example.com", nil, soul.StatusConnected)
+	seedMembership(t, "redis-prod", "c.example.com")
 	seedChoir(t, "redis-prod", "voters")
 	seedVoiceRole(t, "redis-prod", "voters", "c.example.com", "primary")
 

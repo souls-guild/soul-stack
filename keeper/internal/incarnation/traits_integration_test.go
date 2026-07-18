@@ -17,9 +17,10 @@ import (
 	"github.com/souls-guild/soul-stack/keeper/internal/soul"
 )
 
-// seedSoul inserts a minimal souls row with the given coven (incarnation
-// membership = incarnation name ∈ coven, ADR-008). traits is empty `{}`
-// (projection target before the sync hook).
+// seedSoul inserts a minimal souls row with the given stable-tag coven (ADR-008).
+// NIM-124: incarnation membership is NO longer coven == incarnation name — it is
+// the `incarnation_membership` relation, seeded via seedMembership. traits is
+// empty `{}` (projection target before the sync hook).
 func seedSoul(t *testing.T, sid string, coven []string) {
 	t.Helper()
 	_, err := integrationPool.Exec(context.Background(),
@@ -28,6 +29,27 @@ func seedSoul(t *testing.T, sid string, coven []string) {
 		sid, coven)
 	if err != nil {
 		t.Fatalf("seedSoul(%s): %v", sid, err)
+	}
+}
+
+// seedIncarnationRow / seedMembership: NIM-124 — the trait sync projects onto
+// members resolved via `incarnation_membership` (soul.BulkSelector.Incarnation),
+// so member hosts must be bound in that table and the incarnation must exist (FK).
+func seedIncarnationRow(t *testing.T, name string) {
+	t.Helper()
+	inc := &Incarnation{
+		Name: name, Service: "redis", ServiceVersion: "v1",
+		StateSchemaVersion: 1, Status: StatusReady,
+	}
+	if err := Create(context.Background(), integrationPool, inc); err != nil {
+		t.Fatalf("seedIncarnationRow(%s): %v", name, err)
+	}
+}
+
+func seedMembership(t *testing.T, incName string, sids ...string) {
+	t.Helper()
+	if err := AddMembers(context.Background(), integrationPool, incName, sids, nil); err != nil {
+		t.Fatalf("seedMembership(%s): %v", incName, err)
 	}
 }
 
@@ -102,9 +124,11 @@ func TestIntegration_SyncTraitsToHosts_ProjectsToMembers(t *testing.T) {
 	ctx := context.Background()
 
 	// Two redis-prod members + one foreign host (a different incarnation).
-	seedSoul(t, "host-a.example.com", []string{"redis-prod", "dc1"})
-	seedSoul(t, "host-b.example.com", []string{"redis-prod"})
+	seedIncarnationRow(t, "redis-prod")
+	seedSoul(t, "host-a.example.com", []string{"dc1"})
+	seedSoul(t, "host-b.example.com", nil)
 	seedSoul(t, "outsider.example.com", []string{"other-inc"})
+	seedMembership(t, "redis-prod", "host-a.example.com", "host-b.example.com")
 
 	traits := map[string]any{"team": "dba", "env": "prod"}
 	if err := SyncTraitsToHosts(ctx, integrationPool, "redis-prod", traits); err != nil {
@@ -131,7 +155,9 @@ func TestIntegration_SyncTraitsToHosts_NewHostPicksUp(t *testing.T) {
 	resetSouls(t)
 	ctx := context.Background()
 
-	seedSoul(t, "host-a.example.com", []string{"redis-prod"})
+	seedIncarnationRow(t, "redis-prod")
+	seedSoul(t, "host-a.example.com", nil)
+	seedMembership(t, "redis-prod", "host-a.example.com")
 	traits := map[string]any{"team": "dba"}
 	if err := SyncTraitsToHosts(ctx, integrationPool, "redis-prod", traits); err != nil {
 		t.Fatalf("SyncTraitsToHosts#1: %v", err)
@@ -139,7 +165,8 @@ func TestIntegration_SyncTraitsToHosts_NewHostPicksUp(t *testing.T) {
 
 	// A new host bound to the incarnation (bind via core.soul.registered);
 	// its souls.traits is still empty.
-	seedSoul(t, "host-c.example.com", []string{"redis-prod"})
+	seedSoul(t, "host-c.example.com", nil)
+	seedMembership(t, "redis-prod", "host-c.example.com")
 	if got := soulTraits(t, "host-c.example.com"); len(got) != 0 {
 		t.Fatalf("new host pre-sync traits = %v, want empty", got)
 	}
@@ -162,9 +189,11 @@ func TestIntegration_ProjectedTraits_ContainmentTargeting(t *testing.T) {
 	resetSouls(t)
 	ctx := context.Background()
 
-	seedSoul(t, "host-a.example.com", []string{"redis-prod"})
-	seedSoul(t, "host-b.example.com", []string{"redis-prod"})
+	seedIncarnationRow(t, "redis-prod")
+	seedSoul(t, "host-a.example.com", nil)
+	seedSoul(t, "host-b.example.com", nil)
 	seedSoul(t, "outsider.example.com", []string{"other-inc"})
+	seedMembership(t, "redis-prod", "host-a.example.com", "host-b.example.com")
 
 	if err := SyncTraitsToHosts(ctx, integrationPool, "redis-prod", map[string]any{"team": "dba"}); err != nil {
 		t.Fatalf("SyncTraitsToHosts: %v", err)

@@ -1,16 +1,17 @@
 // Package topology resolves "which hosts participate in a scenario run":
-// roster of incarnation hosts by Coven labels (ADR-008: `incarnation.name` —
-// root Coven label) + last-reported soulprint facts from
-// `souls.soulprint_facts` (migration 015, ADR-018).
+// roster of incarnation members (ADR-008 amendment 2026-07-17/NIM-124:
+// `incarnation_membership`, migration 099 — no longer `incarnation.name` in
+// `coven[]`) + last-reported soulprint facts from `souls.soulprint_facts`
+// (migration 015, ADR-018).
 //
 // Read-only layer: SELECT-only. Soulprint writes are done by
 // keeper/internal/grpc (SoulprintReport handler), roster/coven writes are done by
 // keeper/internal/soul. topology consumes the result for scenario resolver
 // (M2.x scenario-runner).
 //
-// Cross-incarnation isolation (ADR-008): resolver reads hosts strictly of one
-// incarnation — souls where `incarnation.name` is present in `coven[]`.
-// Other incarnations do not appear in the result.
+// Cross-incarnation isolation: resolver reads hosts strictly of one
+// incarnation — its members in `incarnation_membership`. Other incarnations do
+// not appear in the result.
 package topology
 
 import (

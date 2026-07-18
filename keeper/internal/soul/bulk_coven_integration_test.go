@@ -38,6 +38,30 @@ func covenOf(t *testing.T, sid string) []string {
 	return out
 }
 
+// seedIncarnationRow / seedMembership seed an incarnation and bind SIDs to it
+// (NIM-124: membership is the `incarnation_membership` relation, no longer
+// incarnation.name in souls.coven[]). Raw SQL is used because the incarnation
+// package imports soul — importing it here would be an import cycle.
+func seedIncarnationRow(t *testing.T, name string) {
+	t.Helper()
+	if _, err := integrationPool.Exec(context.Background(),
+		`INSERT INTO incarnation (name, service, service_version, status)
+		 VALUES ($1, 'redis', 'v1.0.0', 'ready')`, name); err != nil {
+		t.Fatalf("seedIncarnationRow(%s): %v", name, err)
+	}
+}
+
+func seedMembership(t *testing.T, incName string, sids ...string) {
+	t.Helper()
+	for _, sid := range sids {
+		if _, err := integrationPool.Exec(context.Background(),
+			`INSERT INTO incarnation_membership (incarnation_name, sid) VALUES ($1, $2)`,
+			incName, sid); err != nil {
+			t.Fatalf("seedMembership(%s, %s): %v", incName, sid, err)
+		}
+	}
+}
+
 func TestIntegration_Bulk_Append_All_Idempotent(t *testing.T) {
 	resetAll(t)
 	ctx := context.Background()
@@ -584,13 +608,16 @@ func TestIntegration_Bulk_Replace_LabelOutOfScope(t *testing.T) {
 // --- selector.incarnation integration ---
 
 // TestIntegration_Bulk_Selector_Incarnation_Match — bulk by incarnation matches
-// its hosts via `incarnation-name = ANY(coven)`.
+// its members via `incarnation_membership` (NIM-124), not incarnation-name in coven.
 func TestIntegration_Bulk_Selector_Incarnation_Match(t *testing.T) {
 	resetAll(t)
 	ctx := context.Background()
-	seedBulkSoul(t, "r1.example.com", []string{"redis"})
-	seedBulkSoul(t, "r2.example.com", []string{"redis", "dc-eu"})
+	// NIM-124: membership via incarnation_membership, not incarnation-name in coven.
+	seedIncarnationRow(t, "redis")
+	seedBulkSoul(t, "r1.example.com", nil)
+	seedBulkSoul(t, "r2.example.com", []string{"dc-eu"})
 	seedBulkSoul(t, "other.example.com", []string{"nginx"})
+	seedMembership(t, "redis", "r1.example.com", "r2.example.com")
 
 	sel := BulkSelector{Incarnation: "redis"}
 	scope := BulkScope{Unrestricted: true}
@@ -630,8 +657,11 @@ func TestIntegration_Bulk_Selector_Incarnation_ScopeIntersection(t *testing.T) {
 	resetAll(t)
 	ctx := context.Background()
 	// redis-incarnation covers both hosts, but prod-host is OUTSIDE scope=dev.
-	seedBulkSoul(t, "redis-dev.example.com", []string{"redis", "dev"})
-	seedBulkSoul(t, "redis-prod.example.com", []string{"redis", "prod"})
+	// NIM-124: membership via incarnation_membership; coven holds only real tags.
+	seedIncarnationRow(t, "redis")
+	seedBulkSoul(t, "redis-dev.example.com", []string{"dev"})
+	seedBulkSoul(t, "redis-prod.example.com", []string{"prod"})
+	seedMembership(t, "redis", "redis-dev.example.com", "redis-prod.example.com")
 
 	sel := BulkSelector{Incarnation: "redis"}
 	scope := BulkScope{Covens: []string{"dev"}}
@@ -642,7 +672,7 @@ func TestIntegration_Bulk_Selector_Incarnation_ScopeIntersection(t *testing.T) {
 	if rep.Matched != 1 {
 		t.Errorf("matched = %d, want 1 (only redis-dev in scope)", rep.Matched)
 	}
-	if got := covenOf(t, "redis-prod.example.com"); !equalStr(got, []string{"prod", "redis"}) {
+	if got := covenOf(t, "redis-prod.example.com"); !equalStr(got, []string{"prod"}) {
 		t.Errorf("redis-prod mutated despite out-of-scope: %v", got)
 	}
 }

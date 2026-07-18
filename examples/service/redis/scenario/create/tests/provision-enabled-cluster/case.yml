@@ -146,7 +146,6 @@ assert:
     - module: core.soul.registered
       params_subset:
         sid: [vm-1.example.com, vm-2.example.com, vm-3.example.com, vm-4.example.com]
-        coven: [create]
         await_online: true
         refresh_soulprint: true
         await_timeout: "5m"

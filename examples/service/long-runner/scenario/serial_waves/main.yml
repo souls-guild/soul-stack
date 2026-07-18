@@ -17,7 +17,8 @@ state_changes:
 
 tasks:
   - name: Serial wave sleep then write wave marker
-    on: ["${ incarnation.name }"]
+    # Whole incarnation (all members) = omitted on: (ADR-008 amendment NIM-124:
+    # incarnation.name is not a Coven).
     serial: 3
     module: core.cmd.shell
     params:

@@ -113,6 +113,16 @@ func seedSoul(t *testing.T, sid string, coven []string, status soul.Status) {
 	}
 }
 
+// seedMembership binds SIDs to an incarnation (NIM-124: membership is a
+// first-class relation `incarnation_membership`, no longer incarnation.name in
+// souls.coven[]). The roster now resolves members via this table.
+func seedMembership(t *testing.T, incName string, sids ...string) {
+	t.Helper()
+	if err := incarnation.AddMembers(context.Background(), integrationPool, incName, sids, nil); err != nil {
+		t.Fatalf("seedMembership(%s): %v", incName, err)
+	}
+}
+
 func setSoulprint(t *testing.T, sid string, factsJSON []byte, collectedAt, receivedAt time.Time) {
 	t.Helper()
 	if err := soul.UpdateSoulprint(context.Background(), integrationPool, sid, factsJSON, collectedAt, receivedAt); err != nil {
@@ -134,11 +144,12 @@ func TestIntegration_LoadIncarnationHosts_ByCovenAndStatus(t *testing.T) {
 	// nil-lease resolver → SQL-presence fallback: connected — pass through;
 	// pending/destroyed cut by SQL phase, disconnected — fallback filter
 	// (status='connected'). Lease-aware presence — in TestIntegration_LeaseAware_*.
-	seedSoul(t, "a.example.com", []string{"redis-prod", "db"}, soul.StatusConnected)
-	seedSoul(t, "b.example.com", []string{"redis-prod"}, soul.StatusConnected)
-	seedSoul(t, "pending.example.com", []string{"redis-prod"}, soul.StatusPending)
-	seedSoul(t, "disc.example.com", []string{"redis-prod"}, soul.StatusDisconnected)
-	seedSoul(t, "destroyed.example.com", []string{"redis-prod"}, soul.StatusDestroyed)
+	seedSoul(t, "a.example.com", []string{"db"}, soul.StatusConnected)
+	seedSoul(t, "b.example.com", nil, soul.StatusConnected)
+	seedSoul(t, "pending.example.com", nil, soul.StatusPending)
+	seedSoul(t, "disc.example.com", nil, soul.StatusDisconnected)
+	seedSoul(t, "destroyed.example.com", nil, soul.StatusDestroyed)
+	seedMembership(t, "redis-prod", "a.example.com", "b.example.com", "pending.example.com", "disc.example.com", "destroyed.example.com")
 
 	now := time.Now().UTC()
 	setSoulprint(t, "a.example.com",
@@ -182,7 +193,6 @@ func TestIntegration_LoadIncarnationHosts_Traits(t *testing.T) {
 	// Seed soul with traits directly via soul.Insert (pilot write path).
 	s := &soul.Soul{
 		SID:    "a.example.com",
-		Coven:  []string{"redis-prod"},
 		Status: soul.StatusConnected,
 		Traits: map[string]any{
 			"namespace": "dba-ns",
@@ -193,7 +203,8 @@ func TestIntegration_LoadIncarnationHosts_Traits(t *testing.T) {
 		t.Fatalf("seedSoul with traits: %v", err)
 	}
 	// Host without traits — Traits read as empty map (jsonb '{}').
-	seedSoul(t, "b.example.com", []string{"redis-prod"}, soul.StatusConnected)
+	seedSoul(t, "b.example.com", nil, soul.StatusConnected)
+	seedMembership(t, "redis-prod", "a.example.com", "b.example.com")
 
 	r := NewResolver(integrationPool, nil, nil)
 	hosts, err := r.LoadIncarnationHosts(ctx, "redis-prod")
@@ -224,8 +235,10 @@ func TestIntegration_LoadIncarnationHosts_CrossIncarnationIsolation(t *testing.T
 	seedIncarnation(t, "redis-prod", map[string]any{})
 	seedIncarnation(t, "redis-staging", map[string]any{})
 
-	seedSoul(t, "prod-1.example.com", []string{"redis-prod"}, soul.StatusConnected)
-	seedSoul(t, "stg-1.example.com", []string{"redis-staging"}, soul.StatusConnected)
+	seedSoul(t, "prod-1.example.com", nil, soul.StatusConnected)
+	seedSoul(t, "stg-1.example.com", nil, soul.StatusConnected)
+	seedMembership(t, "redis-prod", "prod-1.example.com")
+	seedMembership(t, "redis-staging", "stg-1.example.com")
 
 	r := NewResolver(integrationPool, nil, nil)
 	hosts, err := r.LoadIncarnationHosts(ctx, "redis-prod")
@@ -234,6 +247,31 @@ func TestIntegration_LoadIncarnationHosts_CrossIncarnationIsolation(t *testing.T
 	}
 	if len(hosts) != 1 || hosts[0].SID != "prod-1.example.com" {
 		t.Fatalf("got %v, want only [prod-1.example.com]", sids(hosts))
+	}
+}
+
+// TestIntegration_LoadIncarnationHosts_CovenNameIsNotMembership — GUARD
+// (NIM-124): a host carrying a coven literally equal to the incarnation name but
+// NOT in incarnation_membership is NOT in the roster; a member with no such coven
+// IS. Membership is the relation, not a coven value.
+func TestIntegration_LoadIncarnationHosts_CovenNameIsNotMembership(t *testing.T) {
+	resetAll(t)
+	ctx := context.Background()
+
+	seedIncarnation(t, "redis-prod", map[string]any{})
+	// Carries "redis-prod" as an ordinary coven tag, but is NOT a member.
+	seedSoul(t, "impostor.example.com", []string{"redis-prod"}, soul.StatusConnected)
+	// A real member with no name-coven.
+	seedSoul(t, "member.example.com", []string{"db"}, soul.StatusConnected)
+	seedMembership(t, "redis-prod", "member.example.com")
+
+	r := NewResolver(integrationPool, nil, nil)
+	hosts, err := r.LoadIncarnationHosts(ctx, "redis-prod")
+	if err != nil {
+		t.Fatalf("LoadIncarnationHosts: %v", err)
+	}
+	if len(hosts) != 1 || hosts[0].SID != "member.example.com" {
+		t.Fatalf("got %v, want only [member.example.com] (coven==name is NOT membership)", sids(hosts))
 	}
 }
 
@@ -258,8 +296,9 @@ func TestIntegration_LoadIncarnationHosts_UndeclaredHostRoleEmpty(t *testing.T) 
 	seedIncarnation(t, "redis-prod", map[string]any{
 		"hosts": []map[string]any{{"sid": "declared.example.com", "role": "master"}},
 	})
-	seedSoul(t, "declared.example.com", []string{"redis-prod"}, soul.StatusConnected)
-	seedSoul(t, "extra.example.com", []string{"redis-prod"}, soul.StatusConnected)
+	seedSoul(t, "declared.example.com", nil, soul.StatusConnected)
+	seedSoul(t, "extra.example.com", nil, soul.StatusConnected)
+	seedMembership(t, "redis-prod", "declared.example.com", "extra.example.com")
 
 	r := NewResolver(integrationPool, nil, nil)
 	hosts, err := r.LoadIncarnationHosts(ctx, "redis-prod")
@@ -283,8 +322,9 @@ func TestIntegration_FilterByCovens(t *testing.T) {
 	ctx := context.Background()
 
 	seedIncarnation(t, "redis-prod", map[string]any{})
-	seedSoul(t, "a.example.com", []string{"redis-prod", "db"}, soul.StatusConnected)
-	seedSoul(t, "b.example.com", []string{"redis-prod", "cache"}, soul.StatusConnected)
+	seedSoul(t, "a.example.com", []string{"db"}, soul.StatusConnected)
+	seedSoul(t, "b.example.com", []string{"cache"}, soul.StatusConnected)
+	seedMembership(t, "redis-prod", "a.example.com", "b.example.com")
 
 	r := NewResolver(integrationPool, nil, nil)
 	hosts, err := r.LoadIncarnationHosts(ctx, "redis-prod")
@@ -308,11 +348,12 @@ func TestIntegration_FilterByCovens_MultiLabelAND(t *testing.T) {
 	ctx := context.Background()
 
 	seedIncarnation(t, "redis-prod", map[string]any{})
-	seedSoul(t, "prod-only.example.com", []string{"redis-prod", "prod"}, soul.StatusConnected)
-	seedSoul(t, "eu-only.example.com", []string{"redis-prod", "eu"}, soul.StatusConnected)
-	seedSoul(t, "prod-eu.example.com", []string{"redis-prod", "prod", "eu"}, soul.StatusConnected)
-	seedSoul(t, "prod-us.example.com", []string{"redis-prod", "prod", "us"}, soul.StatusConnected)
-	seedSoul(t, "neither.example.com", []string{"redis-prod", "cache"}, soul.StatusConnected)
+	seedSoul(t, "prod-only.example.com", []string{"prod"}, soul.StatusConnected)
+	seedSoul(t, "eu-only.example.com", []string{"eu"}, soul.StatusConnected)
+	seedSoul(t, "prod-eu.example.com", []string{"prod", "eu"}, soul.StatusConnected)
+	seedSoul(t, "prod-us.example.com", []string{"prod", "us"}, soul.StatusConnected)
+	seedSoul(t, "neither.example.com", []string{"cache"}, soul.StatusConnected)
+	seedMembership(t, "redis-prod", "prod-only.example.com", "eu-only.example.com", "prod-eu.example.com", "prod-us.example.com", "neither.example.com")
 
 	r := NewResolver(integrationPool, nil, nil)
 	hosts, err := r.LoadIncarnationHosts(ctx, "redis-prod")
@@ -389,8 +430,9 @@ func TestIntegration_LeaseAware_PresenceFromLeaseNotStatus(t *testing.T) {
 	lease, mr := newLeaseChecker(t)
 
 	seedIncarnation(t, "redis-prod", map[string]any{})
-	seedSoul(t, "idle.example.com", []string{"redis-prod"}, soul.StatusDisconnected)
-	seedSoul(t, "stale.example.com", []string{"redis-prod"}, soul.StatusConnected)
+	seedSoul(t, "idle.example.com", nil, soul.StatusDisconnected)
+	seedSoul(t, "stale.example.com", nil, soul.StatusConnected)
+	seedMembership(t, "redis-prod", "idle.example.com", "stale.example.com")
 	setLease(t, mr, "idle.example.com") // live stream, but PG snapshot is disconnected
 
 	r := NewResolver(integrationPool, lease, nil)
@@ -411,7 +453,8 @@ func TestIntegration_LeaseAware_ReconnectRetargets(t *testing.T) {
 	lease, mr := newLeaseChecker(t)
 
 	seedIncarnation(t, "redis-prod", map[string]any{})
-	seedSoul(t, "host.example.com", []string{"redis-prod"}, soul.StatusConnected)
+	seedSoul(t, "host.example.com", nil, soul.StatusConnected)
+	seedMembership(t, "redis-prod", "host.example.com")
 	r := NewResolver(integrationPool, lease, nil)
 
 	// No lease -> offline.
@@ -458,7 +501,8 @@ func TestIntegration_LeaseAware_IdleSoulStaysTargetable(t *testing.T) {
 	seedIncarnation(t, "redis-prod", map[string]any{})
 	// disconnected snapshot + stale last_seen: neither status nor last_seen makes
 	// it online; only a live lease does.
-	seedSoul(t, "idle.example.com", []string{"redis-prod"}, soul.StatusDisconnected)
+	seedSoul(t, "idle.example.com", nil, soul.StatusDisconnected)
+	seedMembership(t, "redis-prod", "idle.example.com")
 	setLease(t, mr, "idle.example.com")
 
 	r := NewResolver(integrationPool, lease, nil)
@@ -480,8 +524,9 @@ func TestIntegration_LeaseAware_TerminalNotCandidate(t *testing.T) {
 	lease, mr := newLeaseChecker(t)
 
 	seedIncarnation(t, "redis-prod", map[string]any{})
-	seedSoul(t, "revoked.example.com", []string{"redis-prod"}, soul.StatusRevoked)
-	seedSoul(t, "ok.example.com", []string{"redis-prod"}, soul.StatusConnected)
+	seedSoul(t, "revoked.example.com", nil, soul.StatusRevoked)
+	seedSoul(t, "ok.example.com", nil, soul.StatusConnected)
+	seedMembership(t, "redis-prod", "revoked.example.com", "ok.example.com")
 	setLease(t, mr, "revoked.example.com") // not a candidate even with a live lease
 	setLease(t, mr, "ok.example.com")
 

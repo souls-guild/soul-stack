@@ -165,13 +165,12 @@ assert:
           - { sid: vm-2.example.com, vm_id: i-bbb222, primary_ip: 10.0.0.2, bootstrap_token: tok-vm2 }
 
     # (c) core.soul.registered: sid — the list of created VM SIDs (register.provision.hosts
-    # .map(h, h.sid)); coven — the root incarnation.name (redis-prod); the onboarding
+    # .map(h, h.sid)); membership is implicit (incarnation_membership, no coven:); the onboarding
     # barrier await_online + refresh_soulprint; await_timeout from input.provision (5m,
     # overrides essence's 10m). The only core.soul.registered in the plan.
     - module: core.soul.registered
       params_subset:
         sid: [vm-1.example.com, vm-2.example.com]
-        coven: [redis-prod]
         await_online: true
         refresh_soulprint: true
         await_timeout: "5m"

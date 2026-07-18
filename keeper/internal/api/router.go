@@ -544,8 +544,8 @@ func buildRouter(verifier *jwt.Verifier, healthH *health.Handler, opH *handlers.
 			// the incarnation's hosts from Redis (NIM-86). READ (WITHOUT
 			// audit). Existence-gate incarnation.get (the same read-tier as
 			// incarnation-read); host visibility is narrowed by the
-			// soul-read-scope in-handler (SIDsInCovenInScope → InScope), empty
-			// host set / out of scope → hosts:[].
+			// soul-read-scope in-handler (SIDsInIncarnationInScope → InScope),
+			// empty host set / out of scope → hosts:[].
 			r.With(
 				apimiddleware.RequireAction(enforcer, "incarnation", "get"),
 			).Group(func(r chi.Router) {

@@ -6,8 +6,8 @@ import (
 
 // Guard tests S2 (ADR-0061 §S2): `refresh_soulprint: true` on core.soul.registered
 // makes the step a PASSAGE-DEFINING "roster-refreshed" emitter. Any subsequent
-// roster consumer (soulprint.hosts / on:[incarnation.name] / soulprint.self.* /
-// omitted on:) MUST move to a Passage STRICTLY AFTER the refresh step — otherwise it
+// roster consumer (soulprint.hosts / omitted on: / soulprint.self.*) MUST move to a
+// Passage STRICTLY AFTER the refresh step — otherwise it
 // renders against the OLD (pre-growth) roster = silent-wrong-target on a destructive
 // operation (★ BLOCKER ADR-056 §risks: redis-apply on an empty/incomplete set).
 
@@ -27,10 +27,8 @@ tasks:
     params:
       refresh_soulprint: true
       sid: "host-new.example.com"
-      coven: ["${ incarnation.name }"]
   - name: Apply redis role to grown roster
     module: core.exec.run
-    on: ["${ incarnation.name }"]
     changed_when: false
     vars:
       members: "${ soulprint.hosts }"
@@ -38,10 +36,12 @@ tasks:
       cmd: "echo ${ members }"
 `
 
-// refreshThenOnIncarnation — refresh step (keeper) + a task with on:[incarnation.name]
-// (role over the whole grown roster). on:[incarnation.name] is roster targeting,
-// resolved from in.Hosts: after refresh it must see the new SIDs → next Passage.
-const refreshThenOnIncarnation = `
+// refreshThenOnSubCoven — refresh step (keeper) + a task with on:[a real sub-coven]
+// and NO soulprint read. A coven list targets a SUBset, NOT the whole roster
+// (ADR-008 amendment 2026-07-17/NIM-124: incarnation.name is not a Coven — there is
+// no whole-roster coven form; the whole roster is an omitted on:). So sub-coven
+// targeting alone is NOT a roster read and is NOT forced past the refresh boundary.
+const refreshThenOnSubCoven = `
 name: create
 state_changes: {}
 tasks:
@@ -51,10 +51,9 @@ tasks:
     params:
       refresh_soulprint: true
       sid: "host-new.example.com"
-      coven: ["${ incarnation.name }"]
-  - name: Apply role to all incarnation hosts
+  - name: Apply role to the replica sub-coven
     module: core.exec.run
-    on: ["${ incarnation.name }"]
+    on: ["replica"]
     changed_when: false
     params:
       cmd: "redis-server --start"
@@ -73,10 +72,8 @@ tasks:
     params:
       refresh_soulprint: true
       sid: "host-new.example.com"
-      coven: ["${ incarnation.name }"]
   - name: Configure each host by its facts
     module: core.exec.run
-    on: ["${ incarnation.name }"]
     where: "soulprint.self.os.family == 'debian'"
     changed_when: false
     params:
@@ -97,7 +94,6 @@ tasks:
     params:
       refresh_soulprint: true
       sid: "host-new.example.com"
-      coven: ["${ incarnation.name }"]
   - name: Apply baseline to whole incarnation
     module: core.exec.run
     changed_when: false
@@ -120,16 +116,20 @@ func TestStratify_RefreshThenSoulprintHosts(t *testing.T) {
 	}
 }
 
-// TestStratify_RefreshThenOnIncarnation — refresh step + on:[incarnation.name]
-// (roster targeting) → different Passages. Without this, redis-apply would land in
-// the same Passage with the old (empty) roster = silent-wrong-target.
-func TestStratify_RefreshThenOnIncarnation(t *testing.T) {
-	p := stratify(t, refreshThenOnIncarnation)
-	if p.Count != 2 {
-		t.Fatalf("Count = %d, want 2 (refresh boundary splits the refresh step and the on:[incarnation.name] consumer)", p.Count)
+// TestStratify_RefreshThenOnSubCoven — GUARD (NIM-124): refresh step + a task with
+// on:[a sub-coven] and no soulprint read stays in the SAME Passage. A coven list
+// targets a subset, NOT the whole roster, so it is NOT a refresh consumer (only an
+// omitted on: / soulprint read is). The old on:[incarnation.name] whole-roster form
+// no longer exists (it is a render error).
+func TestStratify_RefreshThenOnSubCoven(t *testing.T) {
+	p := stratify(t, refreshThenOnSubCoven)
+	if p.Count != 1 {
+		t.Fatalf("Count = %d, want 1 (a sub-coven on: is not a roster read -> no refresh boundary forced)", p.Count)
 	}
-	if p.TaskPassage[0] != 0 || p.TaskPassage[1] != 1 {
-		t.Fatalf("passages = %v, want [0 1] (on:[incarnation.name] STRICTLY after refresh)", p.TaskPassage)
+	for i, pass := range p.TaskPassage {
+		if pass != 0 {
+			t.Errorf("task #%d passage = %d, want 0 (sub-coven targeting is not a roster consumer)", i, pass)
+		}
 	}
 }
 
@@ -174,10 +174,8 @@ tasks:
     on: keeper
     params:
       sid: "host-new.example.com"
-      coven: ["${ incarnation.name }"]
   - name: Apply role to incarnation hosts
     module: core.exec.run
-    on: ["${ incarnation.name }"]
     changed_when: false
     vars:
       members: "${ soulprint.hosts }"
@@ -209,10 +207,8 @@ tasks:
     params:
       refresh_soulprint: false
       sid: "host-new.example.com"
-      coven: ["${ incarnation.name }"]
   - name: Apply role to incarnation hosts
     module: core.exec.run
-    on: ["${ incarnation.name }"]
     changed_when: false
     params:
       cmd: "role"
@@ -234,7 +230,6 @@ state_changes: {}
 tasks:
   - name: Act on initial roster
     module: core.exec.run
-    on: ["${ incarnation.name }"]
     changed_when: false
     params:
       cmd: "initial"
@@ -244,10 +239,8 @@ tasks:
     params:
       refresh_soulprint: true
       sid: "host-new.example.com"
-      coven: ["${ incarnation.name }"]
   - name: Act on grown roster
     module: core.exec.run
-    on: ["${ incarnation.name }"]
     changed_when: false
     params:
       cmd: "grown"
@@ -278,7 +271,6 @@ tasks:
     params:
       refresh_soulprint: true
       sid: "host-new.example.com"
-      coven: ["${ incarnation.name }"]
   - name: Assert the grown topology
     assert:
       that:
@@ -322,10 +314,8 @@ tasks:
     params:
       refresh_soulprint: true
       sid: "host-a.example.com"
-      coven: ["${ incarnation.name }"]
   - name: Apply role to grown roster
     module: core.exec.run
-    on: ["${ incarnation.name }"]
     changed_when: false
     vars:
       members: "${ soulprint.hosts }"
@@ -400,10 +390,8 @@ tasks:
     params:
       refresh_soulprint: true
       sid: "${ register.provision.hosts }"
-      coven: ["${ incarnation.name }"]
   - name: Deploy role
     module: core.exec.run
-    on: ["${ incarnation.name }"]
     changed_when: false
     params:
       cmd: "redis-server"
@@ -417,7 +405,6 @@ tasks:
     on: keeper
     params:
       sid: "host-a.example.com"
-      coven: ["${ incarnation.name }"]
 `
 	const refreshFalse = `
 name: create
@@ -429,7 +416,6 @@ tasks:
     params:
       refresh_soulprint: false
       sid: "host-a.example.com"
-      coven: ["${ incarnation.name }"]
 `
 	// Another keeper module with a same-named param — NOT an emitter (the carrier
 	// module is only core.soul.registered).
@@ -450,7 +436,6 @@ state_changes: {}
 tasks:
   - name: Deploy role
     module: core.exec.run
-    on: ["${ incarnation.name }"]
     changed_when: false
     params:
       cmd: "redis-server"
@@ -468,7 +453,6 @@ tasks:
         params:
           refresh_soulprint: true
           sid: "host-a.example.com"
-          coven: ["${ incarnation.name }"]
 `
 
 	tests := []struct {

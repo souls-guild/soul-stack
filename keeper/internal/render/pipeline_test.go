@@ -280,7 +280,9 @@ func TestRender_OnCovenFilter_MultiLabelAND_NoMatch(t *testing.T) {
 	}
 }
 
-// TestRender_OnIncarnationName — on: [${ incarnation.name }] = whole incarnation.
+// TestRender_OnIncarnationName — on: [${ incarnation.name }] is a validation
+// error (ADR-008 amendment 2026-07-17/NIM-124: incarnation.name is NOT a Coven;
+// the whole-incarnation form is an omitted on:).
 func TestRender_OnIncarnationName(t *testing.T) {
 	manifest := &config.ScenarioManifest{
 		Name: "all",
@@ -297,16 +299,12 @@ func TestRender_OnIncarnationName(t *testing.T) {
 		Scenario:    manifest,
 		Incarnation: IncarnationMeta{Name: "svc"},
 		Hosts: []*topology.HostFacts{
-			host("a", []string{"svc"}, nil),
-			host("b", []string{"svc"}, nil),
+			host("a", []string{"db"}, nil),
+			host("b", []string{"cache"}, nil),
 		},
 	}
-	_, plans, err := p.Render(context.Background(), in)
-	if err != nil {
-		t.Fatalf("Render: %v", err)
-	}
-	if got := plans[0].TargetSIDs; len(got) != 2 {
-		t.Errorf("TargetSIDs = %v, want both hosts", got)
+	if _, _, err := p.Render(context.Background(), in); err == nil {
+		t.Fatalf("Render: expected a validation error for on: [incarnation.name], got nil")
 	}
 }
 

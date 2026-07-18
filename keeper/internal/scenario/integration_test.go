@@ -144,11 +144,21 @@ func seedIncarnation(t *testing.T, name string) {
 	}
 }
 
-func seedConnectedSoul(t *testing.T, sid string, covens []string) {
+// seedConnectedSoul inserts a connected Soul and binds it as a member of each
+// listed incarnation (NIM-124: the roster resolved by topology reads the
+// `incarnation_membership` relation, no longer incarnation.name in
+// souls.coven[]). souls.coven stays empty — the stable-tag axis is unused by
+// these tests; the incarnation must already exist (membership FK).
+func seedConnectedSoul(t *testing.T, sid string, incarnations []string) {
 	t.Helper()
-	s := &soul.Soul{SID: sid, Coven: covens, Status: soul.StatusConnected}
+	s := &soul.Soul{SID: sid, Status: soul.StatusConnected}
 	if err := soul.Insert(context.Background(), integrationPool, s); err != nil {
 		t.Fatalf("seedConnectedSoul: %v", err)
+	}
+	for _, inc := range incarnations {
+		if err := incarnation.AddMembers(context.Background(), integrationPool, inc, []string{sid}, nil); err != nil {
+			t.Fatalf("seedConnectedSoul membership(%s): %v", inc, err)
+		}
 	}
 }
 
@@ -2690,10 +2700,8 @@ tasks:
     params:
       refresh_soulprint: true
       sid: "host-new.example.com"
-      coven: ["${ incarnation.name }"]
   - name: Deploy role to grown roster
     module: core.exec.run
-    on: ["${ incarnation.name }"]
     changed_when: "false"
     params:
       cmd: echo

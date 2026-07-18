@@ -79,7 +79,7 @@ type UtilizationWindowPoint struct {
 // latest+stale per host (no window — the payload is limited).
 type IncarnationTelemetryReply struct {
 	Incarnation string          `json:"incarnation"`
-	Truncated   bool            `json:"truncated" doc:"true if the coven's souls exceeded the cap and the host list is truncated (overview glance)"`
+	Truncated   bool            `json:"truncated" doc:"true if the incarnation's members exceeded the cap and the host list is truncated (overview glance)"`
 	Hosts       []HostTelemetry `json:"hosts"`
 }
 
@@ -147,21 +147,21 @@ func (h *TelemetryHandler) GetTelemetry(ctx context.Context, claims *jwt.Claims,
 }
 
 // AggregateByIncarnation — GET /v1/incarnations/{name}/telemetry: latest+stale across
-// the incarnation's hosts (name — the root Coven label). Hosts — the soul-read-scoped
-// coven listing ([SoulHandler.SIDsInCovenInScope]); an empty coven / no permissions →
-// hosts:[] (NOT an error). No window (the payload is limited).
+// the incarnation's MEMBER hosts (incarnation_membership, NIM-124). Hosts — the
+// soul-read-scoped member listing ([SoulHandler.SIDsInIncarnationInScope]); no
+// members / no permissions → hosts:[] (NOT an error). No window (the payload is limited).
 func (h *TelemetryHandler) AggregateByIncarnation(ctx context.Context, claims *jwt.Claims, name string) (IncarnationTelemetryReply, error) {
 	reply := IncarnationTelemetryReply{Incarnation: name, Hosts: []HostTelemetry{}}
 	if h.souls == nil {
 		return reply, nil
 	}
-	sids, truncated, err := h.souls.SIDsInCovenInScope(ctx, claims, name, telemetryAggregateHostCap)
+	sids, truncated, err := h.souls.SIDsInIncarnationInScope(ctx, claims, name, telemetryAggregateHostCap)
 	if err != nil {
 		h.logger.Error("telemetry.aggregate: host list lookup failed", slog.String("incarnation", name), slog.Any("error", err))
 		return IncarnationTelemetryReply{}, &problemError{problem.New(problem.TypeInternalError, "", "aggregate telemetry failed")}
 	}
 	if truncated {
-		h.logger.Warn("telemetry.aggregate: coven's souls exceeded the cap — list truncated",
+		h.logger.Warn("telemetry.aggregate: incarnation members exceeded the cap — list truncated",
 			slog.String("incarnation", name), slog.Int("cap", telemetryAggregateHostCap))
 		reply.Truncated = true
 	}
@@ -272,15 +272,17 @@ func (h *SoulHandler) AuthorizeReadScope(ctx context.Context, claims *jwt.Claims
 	return nil
 }
 
-// SIDsInCovenInScope — the SIDs of hosts in coven `coven` within the bounds of the
-// operator's soul-read-scope (the same Purview soul.list + soulpurview.InScope as
-// single-read). Lists the coven's souls (SelectAll, predicate `$1 = ANY(coven)`) up to
-// capN, then filters InScope (coven+regex dimensions) — under-showing is safe (fail-closed).
-// truncated=true when the coven's souls hit capN (the list may be incomplete).
-// An empty scope → nil. ⚠️ the cap is applied BEFORE the scope filter: on a coven > capN a
-// scoped operator whose in-scope hosts are in the tail will see fewer — acceptable for an
-// overview aggregate (fail-closed); a full scope-pushdown is a candidate for NIM-87+.
-func (h *SoulHandler) SIDsInCovenInScope(ctx context.Context, claims *jwt.Claims, coven string, capN int) (sids []string, truncated bool, err error) {
+// SIDsInIncarnationInScope — the SIDs of an incarnation's MEMBER hosts within the
+// bounds of the operator's soul-read-scope (ADR-008 amendment 2026-07-17/NIM-124:
+// membership is the `incarnation_membership` relation, no longer
+// `incarnation.name = ANY(coven)`). Lists members (SelectIncarnationMembers) up to
+// capN, then filters InScope (coven+regex dimensions) — under-showing is safe
+// (fail-closed). truncated=true when the members hit capN (the list may be
+// incomplete). An empty scope → nil. ⚠️ the cap is applied BEFORE the scope filter:
+// on an incarnation > capN a scoped operator whose in-scope hosts are in the tail
+// will see fewer — acceptable for an overview aggregate (fail-closed); a full
+// scope-pushdown is a candidate for NIM-87+.
+func (h *SoulHandler) SIDsInIncarnationInScope(ctx context.Context, claims *jwt.Claims, incName string, capN int) (sids []string, truncated bool, err error) {
 	scope := h.readScopeForClaims(claims)
 	if scope.Empty {
 		return nil, false, nil
@@ -288,7 +290,7 @@ func (h *SoulHandler) SIDsInCovenInScope(ctx context.Context, claims *jwt.Claims
 	if capN < 1 {
 		capN = 1
 	}
-	items, _, err := soul.SelectAll(ctx, h.pool, soul.ListFilter{Coven: coven}, soul.ListScope{Unrestricted: true}, 0, capN)
+	items, err := soul.SelectIncarnationMembers(ctx, h.pool, incName, capN)
 	if err != nil {
 		return nil, false, err
 	}

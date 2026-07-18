@@ -20,7 +20,8 @@ state_changes:
 
 tasks:
   - name: Staggered sleep per host then write done marker
-    on: ["${ incarnation.name }"]
+    # Whole incarnation (all members) = omitted on: (ADR-008 amendment NIM-124:
+    # incarnation.name is not a Coven).
     module: core.cmd.shell
     params:
       # Host number: trailing digits of hostname (lr-07 -> 7). Sleeps num*6 sec.

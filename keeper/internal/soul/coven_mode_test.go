@@ -218,49 +218,51 @@ func TestBulkReplaceCoven_Unrestricted_PassesAnyLabels(t *testing.T) {
 
 // --- Incarnation selector ---
 
-// The Incarnation selector must generate the predicate `$n = ANY(coven)` —
-// identical to the Coven field. Combined with other criteria = AND.
+// The Incarnation selector resolves membership via incarnation_membership
+// (ADR-008 amendment 2026-07-17/NIM-124 — no longer `$n = ANY(coven)`).
 func TestBulkSelector_IncarnationOnly(t *testing.T) {
 	where, args, err := buildBulkWhere(BulkSelector{Incarnation: "redis"},
 		BulkScope{Unrestricted: true})
 	if err != nil {
 		t.Fatalf("buildBulkWhere: %v", err)
 	}
-	if where != " WHERE $1 = ANY(coven)" {
-		t.Errorf("where = %q, want ' WHERE $1 = ANY(coven)' (incarnation as coven-label)", where)
+	const want = " WHERE sid IN (SELECT sid FROM incarnation_membership WHERE incarnation_name = $1)"
+	if where != want {
+		t.Errorf("where = %q, want %q (membership subquery)", where, want)
 	}
 	if len(args) != 1 || args[0] != "redis" {
 		t.Errorf("args = %v, want [redis]", args)
 	}
 }
 
-// Incarnation+Status: AND-combination of two predicates.
+// Incarnation+Status: AND-combination of the membership subquery and status.
 func TestBulkSelector_IncarnationPlusStatus(t *testing.T) {
 	where, args, err := buildBulkWhere(BulkSelector{Incarnation: "redis", Status: StatusConnected},
 		BulkScope{Unrestricted: true})
 	if err != nil {
 		t.Fatalf("buildBulkWhere: %v", err)
 	}
-	// incarnation → $1 = ANY(coven); status → status = $2.
-	if where != " WHERE $1 = ANY(coven) AND status = $2" {
-		t.Errorf("where = %q, want incarnation AND status AND-combination", where)
+	const want = " WHERE sid IN (SELECT sid FROM incarnation_membership WHERE incarnation_name = $1) AND status = $2"
+	if where != want {
+		t.Errorf("where = %q, want %q", where, want)
 	}
 	if len(args) != 2 || args[0] != "redis" || args[1] != string(StatusConnected) {
 		t.Errorf("args = %v, want [redis connected]", args)
 	}
 }
 
-// Incarnation+Coven: both generate `$n = ANY(coven)`; the AND-combination
-// produces a double predicate (the host must carry BOTH labels). In SQL — two
-// separate `$n = ANY(coven)` scalars ANDed together, equivalent to an intersection.
+// Incarnation+Coven: distinct predicates now — Coven is `$n = ANY(coven)`
+// (stable tag), Incarnation is the membership subquery. AND-combined: a member
+// of the incarnation that also carries the stable tag.
 func TestBulkSelector_IncarnationPlusCoven(t *testing.T) {
 	where, args, err := buildBulkWhere(BulkSelector{Coven: "stage", Incarnation: "redis"},
 		BulkScope{Unrestricted: true})
 	if err != nil {
 		t.Fatalf("buildBulkWhere: %v", err)
 	}
-	if where != " WHERE $1 = ANY(coven) AND $2 = ANY(coven)" {
-		t.Errorf("where = %q, want coven AND incarnation as a double = ANY(coven)", where)
+	const want = " WHERE $1 = ANY(coven) AND sid IN (SELECT sid FROM incarnation_membership WHERE incarnation_name = $2)"
+	if where != want {
+		t.Errorf("where = %q, want %q", where, want)
 	}
 	if len(args) != 2 || args[0] != "stage" || args[1] != "redis" {
 		t.Errorf("args = %v, want [stage redis]", args)

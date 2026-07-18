@@ -686,8 +686,9 @@ func incarnationRBACContext(name string) map[string]string {
 // checkIncarnationScope — RBAC OR-Check for single-incarnation tools (get /
 // history / run / upgrade / destroy). Mirrors REST [middleware.
 // RequirePermissionMulti] + [handlers.IncarnationScopeSelector]: effective
-// coven-scope = covens ∪ {name}, each candidate becomes a separate context
-// `{incarnation, service, coven}`, granted if ANY ONE matches (bare/`*` on
+// coven-scope = the declared covens (ADR-008 amendment 2026-07-17/NIM-124: name
+// is NOT a coven), each becoming a context `{incarnation, service, coven}` plus
+// the `incarnation=<name>` dimension; granted if ANY ONE matches (bare/`*` on
 // any, scoped only within its own scope label). Without this, a coven-scoped
 // operator could bypass REST protection through MCP.
 //

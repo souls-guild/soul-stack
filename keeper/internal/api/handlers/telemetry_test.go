@@ -319,28 +319,29 @@ func TestAggregate_HostReadError_StaleNotDropped(t *testing.T) {
 	}
 }
 
-// TestSIDsInCovenInScope_TruncatedFlag - cap truncates the list, the truncated flag
-// is not silent: len(soul set) >= cap -> true, cap > soul set -> false.
-func TestSIDsInCovenInScope_TruncatedFlag(t *testing.T) {
+// TestSIDsInIncarnationInScope_TruncatedFlag - cap truncates the member list, the
+// truncated flag is not silent: len(members) >= cap -> true, cap > members -> false.
+// (The member listing resolves via incarnation_membership — NIM-124.)
+func TestSIDsInIncarnationInScope_TruncatedFlag(t *testing.T) {
 	pool := &fakeSoulPool{listSouls: []*soul.Soul{
-		telemetrySoul("h1.example.com", "redis-prod"),
-		telemetrySoul("h2.example.com", "redis-prod"),
-		telemetrySoul("h3.example.com", "redis-prod"),
+		telemetrySoul("h1.example.com", "db"),
+		telemetrySoul("h2.example.com", "db"),
+		telemetrySoul("h3.example.com", "db"),
 	}}
 	sh := NewSoulHandler(pool, fakeScoper{unrestricted: true}, nil, nil)
-	sids, truncated, err := sh.SIDsInCovenInScope(context.Background(), claimsFor("archon-alice"), "redis-prod", 3)
+	sids, truncated, err := sh.SIDsInIncarnationInScope(context.Background(), claimsFor("archon-alice"), "redis-prod", 3)
 	if err != nil {
 		t.Fatalf("unexpected err: %v", err)
 	}
 	if !truncated {
-		t.Error("len(soul set) >= cap -> truncated=true")
+		t.Error("len(members) >= cap -> truncated=true")
 	}
 	if len(sids) != 3 {
 		t.Errorf("sids=%d, want 3", len(sids))
 	}
-	if _, truncated2, err := sh.SIDsInCovenInScope(context.Background(), claimsFor("archon-alice"), "redis-prod", 4); err != nil {
+	if _, truncated2, err := sh.SIDsInIncarnationInScope(context.Background(), claimsFor("archon-alice"), "redis-prod", 4); err != nil {
 		t.Fatalf("unexpected err: %v", err)
 	} else if truncated2 {
-		t.Error("cap > soul set -> truncated=false")
+		t.Error("cap > members -> truncated=false")
 	}
 }

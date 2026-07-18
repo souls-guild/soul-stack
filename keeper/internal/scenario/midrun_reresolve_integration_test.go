@@ -131,10 +131,8 @@ tasks:
     params:
       refresh_soulprint: true
       sid: "host-new.example.com"
-      coven: ["${ incarnation.name }"]
   - name: Apply role to grown incarnation roster
     module: core.exec.run
-    on: ["${ incarnation.name }"]
     changed_when: "false"
     params:
       cmd: echo
@@ -279,7 +277,6 @@ tasks:
     params:
       refresh_soulprint: true
       sid: "host-new.example.com"
-      coven: ["${ incarnation.name }"]
   - name: Assert grown topology
     assert:
       that:

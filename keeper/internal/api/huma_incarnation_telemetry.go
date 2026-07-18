@@ -15,7 +15,7 @@ import (
 
 // incarnationTelemetryInput — huma-input GET /v1/incarnations/{name}/telemetry.
 type incarnationTelemetryInput struct {
-	Name string `path:"name" doc:"incarnation name (root Coven-label of hosts)"`
+	Name string `path:"name" doc:"incarnation name"`
 }
 
 // incarnationTelemetryOutput — huma-output: Body — [handlers.IncarnationTelemetryReply]

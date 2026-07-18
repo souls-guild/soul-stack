@@ -1570,7 +1570,7 @@ components:
         incarnation:
           type: string
         truncated:
-          description: true if the coven's souls exceeded the cap and the host list is truncated (overview glance)
+          description: true if the incarnation's members exceeded the cap and the host list is truncated (overview glance)
           type: boolean
       required:
         - incarnation
@@ -8177,12 +8177,12 @@ paths:
       description: Aggregate of the latest utilization snapshots across incarnation hosts (latest+stale per host, without a window) from Redis (NIM-86). Permission incarnation.get; host visibility - soul-read-scope. Empty souls / out of scope -> hosts:[]. Read-only, without audit.
       operationId: getIncarnationTelemetry
       parameters:
-        - description: incarnation name (root Coven-label of hosts)
+        - description: incarnation name
           in: path
           name: name
           required: true
           schema:
-            description: incarnation name (root Coven-label of hosts)
+            description: incarnation name
             type: string
       responses:
         "200":

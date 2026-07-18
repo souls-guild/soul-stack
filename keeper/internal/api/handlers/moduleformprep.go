@@ -175,16 +175,18 @@ func NewFormPrepPGResolver(db voyageResolverDB) *FormPrepPGResolver {
 	return &FormPrepPGResolver{db: db}
 }
 
-// incarnationHostsSQL — live SIDs of incarnation hosts: souls with the Coven label
-// `$1 = ANY(coven)` (ADR-008: incarnation.name is the root Coven label),
-// online snapshot, optional prefix filter ($2 = " → no filter), cap+1 ($3) to
-// detect truncated. ORDER BY sid — determinism + stable autocomplete.
+// incarnationHostsSQL — live SIDs of incarnation members (join on
+// `incarnation_membership`, ADR-008 amendment 2026-07-17/NIM-124 — no longer
+// `incarnation.name = ANY(coven)`), online snapshot, optional prefix filter
+// ($2 = ” → no filter), cap+1 ($3) to detect truncated. ORDER BY sid —
+// determinism + stable autocomplete.
 const formPrepIncarnationHostsSQL = `
-SELECT sid FROM souls
-WHERE $1 = ANY(coven)
-  AND status IN ('connected', 'dormant')
-  AND ($2 = '' OR sid LIKE $2 || '%')
-ORDER BY sid ASC
+SELECT s.sid FROM souls s
+JOIN incarnation_membership m ON m.sid = s.sid
+WHERE m.incarnation_name = $1
+  AND s.status IN ('connected', 'dormant')
+  AND ($2 = '' OR s.sid LIKE $2 || '%')
+ORDER BY s.sid ASC
 LIMIT $3
 `
 

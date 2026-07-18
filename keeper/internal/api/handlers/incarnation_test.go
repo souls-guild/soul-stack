@@ -1582,31 +1582,56 @@ func hasCovenCtx(ctxs []map[string]string, name, service, coven string) bool {
 	return false
 }
 
-func TestIncarnationCovenContexts_DeclaredPlusName(t *testing.T) {
-	ctxs := incarnationCovenContexts("redis-prod", "redis", []string{"prod", "dc1"})
-	// covens ∪ {name} = {prod, dc1, redis-prod}, service in all.
-	if len(ctxs) != 3 {
-		t.Fatalf("len = %d, want 3: %v", len(ctxs), ctxs)
+// hasIncOnlyCtx — whether the set contains a context with no coven key (the
+// incarnation/service dimension only), matching name+service.
+func hasIncOnlyCtx(ctxs []map[string]string, name, service string) bool {
+	for _, c := range ctxs {
+		if _, hasCoven := c["coven"]; hasCoven {
+			continue
+		}
+		if c["incarnation"] == name && c["service"] == service {
+			return true
+		}
 	}
-	for _, coven := range []string{"prod", "dc1", "redis-prod"} {
+	return false
+}
+
+// hasAnyCovenValue — whether any context carries coven==v (used to prove the
+// incarnation name is NOT injected as a coven, NIM-124).
+func hasAnyCovenValue(ctxs []map[string]string, v string) bool {
+	for _, c := range ctxs {
+		if c["coven"] == v {
+			return true
+		}
+	}
+	return false
+}
+
+func TestIncarnationCovenContexts_DeclaredCovensNoName(t *testing.T) {
+	ctxs := incarnationCovenContexts("redis-prod", "redis", []string{"prod", "dc1"})
+	// NIM-124: only the declared covens {prod, dc1}, name is NOT a coven.
+	if len(ctxs) != 2 {
+		t.Fatalf("len = %d, want 2 (declared covens only, no name-coven): %v", len(ctxs), ctxs)
+	}
+	for _, coven := range []string{"prod", "dc1"} {
 		if !hasCovenCtx(ctxs, "redis-prod", "redis", coven) {
 			t.Errorf("missing context for coven=%q: %v", coven, ctxs)
 		}
 	}
-}
-
-func TestIncarnationCovenContexts_NameDedup(t *testing.T) {
-	// name is already in covens → not duplicated.
-	ctxs := incarnationCovenContexts("prod", "redis", []string{"prod"})
-	if len(ctxs) != 1 {
-		t.Fatalf("len = %d, want 1 (dedup): %v", len(ctxs), ctxs)
+	if hasAnyCovenValue(ctxs, "redis-prod") {
+		t.Errorf("incarnation name must NOT appear as a coven value: %v", ctxs)
 	}
 }
 
-func TestIncarnationCovenContexts_EmptyCovens_NameOnly(t *testing.T) {
+func TestIncarnationCovenContexts_EmptyCovens_IncarnationOnly(t *testing.T) {
+	// NIM-124: no declared covens → a single incarnation/service context (scope
+	// by the name is the incarnation= dimension, not coven=).
 	ctxs := incarnationCovenContexts("foo", "redis", nil)
-	if len(ctxs) != 1 || !hasCovenCtx(ctxs, "foo", "redis", "foo") {
-		t.Fatalf("want single name-as-coven context, got %v", ctxs)
+	if len(ctxs) != 1 || !hasIncOnlyCtx(ctxs, "foo", "redis") {
+		t.Fatalf("want single incarnation-only context, got %v", ctxs)
+	}
+	if hasAnyCovenValue(ctxs, "foo") {
+		t.Errorf("incarnation name must NOT appear as a coven value: %v", ctxs)
 	}
 }
 
@@ -1635,10 +1660,11 @@ func TestIncarnationScopeSelector_ReadsRow(t *testing.T) {
 	sel := IncarnationScopeSelector(db)
 	req := newChiRequest(http.MethodGet, "/v1/incarnations/redis-prod", nil, "name", "redis-prod")
 	ctxs := sel(req)
-	for _, coven := range []string{"prod", "redis-prod"} {
-		if !hasCovenCtx(ctxs, "redis-prod", "redis", coven) {
-			t.Errorf("missing coven=%q in %v", coven, ctxs)
-		}
+	if !hasCovenCtx(ctxs, "redis-prod", "redis", "prod") {
+		t.Errorf("missing coven=prod in %v", ctxs)
+	}
+	if hasAnyCovenValue(ctxs, "redis-prod") {
+		t.Errorf("NIM-124: incarnation name must NOT appear as a coven value: %v", ctxs)
 	}
 }
 
@@ -1664,10 +1690,11 @@ func TestIncarnationCreateScopeSelector_FromBody(t *testing.T) {
 	body := bytes.NewReader([]byte(`{"name":"redis-prod","service":"redis","covens":["prod"]}`))
 	req := httptest.NewRequest(http.MethodPost, "/v1/incarnations", body)
 	ctxs := IncarnationCreateScopeSelector(req)
-	for _, coven := range []string{"prod", "redis-prod"} {
-		if !hasCovenCtx(ctxs, "redis-prod", "redis", coven) {
-			t.Errorf("missing coven=%q in %v", coven, ctxs)
-		}
+	if !hasCovenCtx(ctxs, "redis-prod", "redis", "prod") {
+		t.Errorf("missing coven=prod in %v", ctxs)
+	}
+	if hasAnyCovenValue(ctxs, "redis-prod") {
+		t.Errorf("NIM-124: incarnation name must NOT appear as a coven value: %v", ctxs)
 	}
 	// The body is restored for the handler.
 	rest, _ := io.ReadAll(req.Body)

@@ -71,9 +71,11 @@ func run(m *testing.M) int {
 
 func resetAll(t *testing.T) {
 	t.Helper()
-	// CASCADE: soul_seeds → souls → operators (FK chain).
+	// CASCADE: soul_seeds → souls → operators (FK chain). incarnation +
+	// incarnation_membership (NIM-124) for the Incarnation-selector bulk tests.
 	_, err := integrationPool.Exec(context.Background(),
-		`TRUNCATE TABLE soul_seeds, bootstrap_tokens, souls, operators, audit_log CASCADE`)
+		`TRUNCATE TABLE soul_seeds, bootstrap_tokens, incarnation_membership,
+		 incarnation, souls, operators, audit_log CASCADE`)
 	if err != nil {
 		t.Fatalf("TRUNCATE: %v", err)
 	}
