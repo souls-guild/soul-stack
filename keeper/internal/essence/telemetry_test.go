@@ -14,7 +14,7 @@ func tel(en *bool, iv *string, col []string) *config.TelemetryConfig {
 }
 
 func TestResolveEffectiveTelemetry(t *testing.T) {
-	allFive := []string{"cpu", "mem", "disk", "load", "uptime"}
+	allDefault := []string{"cpu", "mem", "disk", "load", "uptime", "net"}
 
 	cases := []struct {
 		name        string
@@ -25,12 +25,12 @@ func TestResolveEffectiveTelemetry(t *testing.T) {
 		wantCollect []string
 	}{
 		{
-			name:        "manifest nil -> defaults (enabled, 30s, all 5)",
+			name:        "manifest nil -> defaults (enabled, 30s, all 6)",
 			manifest:    nil,
 			essence:     nil,
 			wantEnabled: true,
 			wantSec:     30,
-			wantCollect: allFive,
+			wantCollect: allDefault,
 		},
 		{
 			name:        "empty essence -> manifest values",
@@ -62,7 +62,7 @@ func TestResolveEffectiveTelemetry(t *testing.T) {
 			essence:     map[string]any{"telemetry_interval": "5s"},
 			wantEnabled: true,
 			wantSec:     10,
-			wantCollect: allFive,
+			wantCollect: allDefault,
 		},
 		{
 			name:        "clamp ceiling: interval > 3600s → 3600s",
@@ -70,7 +70,7 @@ func TestResolveEffectiveTelemetry(t *testing.T) {
 			essence:     map[string]any{"telemetry_interval": "2h"},
 			wantEnabled: true,
 			wantSec:     3600,
-			wantCollect: allFive,
+			wantCollect: allDefault,
 		},
 		{
 			name:        "unknown collector filtered out (REPLACE)",
@@ -86,7 +86,7 @@ func TestResolveEffectiveTelemetry(t *testing.T) {
 			essence:     map[string]any{"telemetry_interval": "not-a-duration"},
 			wantEnabled: true,
 			wantSec:     30,
-			wantCollect: allFive,
+			wantCollect: allDefault,
 		},
 		{
 			name:        "essence does NOT override enabled (manifest false stays)",
@@ -94,7 +94,7 @@ func TestResolveEffectiveTelemetry(t *testing.T) {
 			essence:     map[string]any{"telemetry_interval": "20s"},
 			wantEnabled: false,
 			wantSec:     20,
-			wantCollect: allFive,
+			wantCollect: allDefault,
 		},
 		{
 			name:        "essence collectors not a string list -> fallback to manifest",
@@ -105,12 +105,12 @@ func TestResolveEffectiveTelemetry(t *testing.T) {
 			wantCollect: []string{"cpu"},
 		},
 		{
-			name:        "all essence-collectors unknown + manifest nil -> fallback to default (all 5, NOT empty)",
+			name:        "all essence-collectors unknown + manifest nil -> fallback to default (all 6, NOT empty)",
 			manifest:    nil,
 			essence:     map[string]any{"telemetry_collectors": []string{"bogus", "nope"}},
 			wantEnabled: true,
 			wantSec:     30,
-			wantCollect: allFive,
+			wantCollect: allDefault,
 		},
 		{
 			name:        "all essence-collectors unknown + manifest set -> fallback to manifest",
@@ -126,7 +126,7 @@ func TestResolveEffectiveTelemetry(t *testing.T) {
 			essence:     nil,
 			wantEnabled: true,
 			wantSec:     10,
-			wantCollect: allFive,
+			wantCollect: allDefault,
 		},
 	}
 
