@@ -19,7 +19,6 @@ import (
 	"net/http"
 	"regexp"
 	"strings"
-	"sync"
 
 	"github.com/go-chi/chi/v5"
 
@@ -31,7 +30,6 @@ import (
 	"github.com/souls-guild/soul-stack/keeper/internal/rbac"
 	"github.com/souls-guild/soul-stack/keeper/internal/scenario"
 	"github.com/souls-guild/soul-stack/keeper/internal/statemigrate"
-	"github.com/souls-guild/soul-stack/keeper/internal/statepredicate"
 	"github.com/souls-guild/soul-stack/shared/audit"
 )
 
@@ -272,67 +270,19 @@ func specHostsToPayload(hosts []incarnation.SpecHost) []map[string]any {
 	return out
 }
 
-// --- RBAC scope (ADR-047 S3b-3) ---------------------------------------
+// --- RBAC scope (NIM-128 boolean scope) -------------------------------
 
-// incStateResolver — shared statepredicate.Resolver for scoped List/Get (the
-// state-CEL Purview dimension). Does NOT duplicate the CEL engine: statepredicate
-// delegates to shared/cel (migration sandbox, root `state`). One resolver per
-// process (thread-safe, shared compile cache) — lazily once, like rbac.stateResolver.
-var (
-	incStateResolverOnce sync.Once
-	incStateResolverInst statepredicate.Resolver
-	incStateResolverErr  error
-)
-
-func incStateResolver() (statepredicate.Resolver, error) {
-	incStateResolverOnce.Do(func() {
-		incStateResolverInst, incStateResolverErr = statepredicate.New()
-	})
-	return incStateResolverInst, incStateResolverErr
-}
-
-// resolveStateNames returns the names of incarnations whose state satisfies the
-// combined OR predicate of the state-CEL scope (StateExprs joined into `p1 || ...`).
-// Reuses statepredicate.ResolveIncarnations over incarnation.StateLister
-// (page-by-page pushdown). serviceFilter narrows the CEL-eval set to the same
-// service (BaseFilter pushdown) as the main query.
-func (h *IncarnationHandler) resolveStateNames(ctx context.Context, exprs []string, serviceFilter string) ([]string, error) {
-	resolver, err := incStateResolver()
-	if err != nil {
-		return nil, fmt.Errorf("incarnation: state-scope CEL engine: %w", err)
-	}
-	combined := joinStateExprs(exprs)
-	lister := incarnation.NewStateLister(h.db)
-	return resolver.ResolveIncarnations(ctx, combined, statepredicate.BaseFilter{Service: serviceFilter}, lister)
-}
-
-// joinStateExprs joins several state-CEL predicates into one OR expression
-// `(p1) || (p2) || ...` (union within a dimension — "available by any of them"). A
-// single predicate is returned as-is. Each is wrapped in parens: a predicate was
-// validated at snapshot load as a standalone bool expression, and the parens
-// preserve its boundary when joined (precedence of `||`).
-func joinStateExprs(exprs []string) string {
-	if len(exprs) == 1 {
-		return exprs[0]
-	}
-	parts := make([]string, len(exprs))
-	for i, e := range exprs {
-		parts[i] = "(" + e + ")"
-	}
-	return strings.Join(parts, " || ")
-}
-
-// scopeEmpty — true for a fail-closed Purview: not Unrestricted and no dimension
-// meaningful for incarnation scope (Covens / StateExprs / TraitExprs) is set.
-// regex/soulprint are soul facts, NOT applied to incarnations (S3b-3 spec), so they
-// don't count as "set dimensions" here: a Purview with only soulprint/regex (no
-// coven/state/trait) for incarnation scope is empty (nothing to match) →
-// fail-closed. Deny (S2 stub) is treated as fail-closed.
-func scopeEmpty(pv rbac.Purview) bool {
-	if pv.Deny {
-		return true
-	}
-	return len(pv.Covens) == 0 && len(pv.StateExprs) == 0 && len(pv.TraitExprs) == 0
+// incScopeColumns maps the NIM-128 scope dimensions onto the `incarnation`
+// table columns for [rbac.PurviewSQL] pushdown. Incarnations carry coven
+// (covens TEXT[], migration 046), incarnation-name (name), service (service)
+// and trait (traits jsonb, migration 088). They have NO host dimension, so
+// ScopeColumns.Host is empty — a host scope condition renders FALSE
+// (fail-closed), never matching an incarnation.
+var incScopeColumns = rbac.ScopeColumns{
+	Coven:       "covens",
+	Incarnation: "name",
+	Service:     "service",
+	Traits:      "traits",
 }
 
 // statePredicateOps — allowed operator prefixes in the query value
@@ -386,86 +336,62 @@ var statePathQueryPattern = regexp.MustCompile(`^[a-z][a-z0-9_]*$`)
 
 // GetInScopeFor — request-free factory of a scope predicate for FULL-TYPED GetTyped/
 // HistoryTyped (huma layer). claims/action arrive explicitly (instead of reading
-// from *http.Request). Semantics: Unrestricted → true; empty/Deny Purview → false;
-// coven∪{name} OR a state-CEL match → true. nil claims/nil scoper → the predicate is
-// always false (fail-closed).
+// from *http.Request). Semantics (NIM-128 boolean scope): the incarnation's own
+// dimensions (covens / name / service / traits) are fed to [rbac.Purview.Match] —
+// Unrestricted → true; Deny/empty Purview → false; otherwise true iff ANY scope
+// predicate matches. The incarnation carries no host dimension (host conditions
+// fail closed). nil claims / nil scoper → always false (fail-closed).
 func (h *IncarnationHandler) GetInScopeFor(claims *jwt.Claims, action string) func(*incarnation.Incarnation) bool {
 	return func(inc *incarnation.Incarnation) bool {
 		if claims == nil || h.scoper == nil {
 			return false
 		}
 		pv := h.scoper.ResolvePurview(claims.Subject, "incarnation", action)
-		if pv.Unrestricted {
-			return true
-		}
-		if scopeEmpty(pv) {
-			return false
-		}
-		for _, sc := range pv.Covens {
-			if sc == inc.Name {
-				return true
-			}
-			for _, c := range inc.Covens {
-				if c == sc {
-					return true
-				}
-			}
-		}
-		for _, expr := range pv.StateExprs {
-			matched, err := rbac.EvalStateExpr(expr, inc.State)
-			if err != nil {
-				h.logger.Warn("incarnation.get: state-CEL eval failed - predicate denies access",
-					slog.String("name", inc.Name), slog.Any("error", err))
-				continue
-			}
-			if matched {
-				return true
-			}
-		}
-		// trait dimension (ADR-047 amendment, ADR-060 §7 slice 1): the scope pair
-		// `key:value` grants access if incarnation.traits[key] == value (scalar).
-		for _, pair := range pv.TraitExprs {
-			key, value, ok := splitTraitPair(pair)
-			if !ok {
-				continue
-			}
-			if traitScalarEquals(inc.Traits, key, value) {
-				return true
-			}
-		}
-		return false
+		return pv.Match(rbac.ScopeInput{
+			Covens:       inc.Covens,
+			Incarnations: []string{inc.Name},
+			Services:     []string{inc.Service},
+			Traits:       traitsToScopeInput(inc.Traits),
+		})
 	}
 }
 
-// splitTraitPair splits a trait-scope string `key:value` (normalized by
-// [rbac.parseTraitValue] — exactly one `:`, non-empty halves) into key and value.
-// ok=false when `:` is absent (defensive against parser drift).
-func splitTraitPair(pair string) (key, value string, ok bool) {
-	return strings.Cut(pair, ":")
-}
-
-// traitScalarEquals — true if traits[key] is a scalar whose string form equals
-// value (slice 1 is scalar-only trait scope). A list Trait isn't covered by a single
-// equality (follow-up), so non-scalar → false. fmt.Sprint gives the canonical string
-// for string/number/bool (jsonb numbers arrive as float64/json.Number).
-func traitScalarEquals(traits map[string]any, key, value string) bool {
-	v, ok := traits[key]
-	if !ok {
-		return false
+// traitsToScopeInput projects an incarnation's `traits` jsonb (map[string]any)
+// into the [rbac.ScopeInput.Traits] shape (key → string values). A scalar value
+// becomes a one-element slice; a list value contributes each element's string
+// form; nested maps are skipped (not addressable by a scalar/list scope trait).
+// fmt.Sprint gives the canonical string for string/number/bool (jsonb numbers
+// arrive as float64 / json.Number).
+func traitsToScopeInput(traits map[string]any) map[string][]string {
+	if len(traits) == 0 {
+		return nil
 	}
-	switch v.(type) {
-	case string, float64, bool, json.Number, int, int64:
-		return fmt.Sprint(v) == value
-	default:
-		// map / slice (list Trait) — not a scalar match (slice 1 doesn't cover it).
-		return false
+	out := make(map[string][]string, len(traits))
+	for k, v := range traits {
+		switch tv := v.(type) {
+		case []any:
+			vals := make([]string, 0, len(tv))
+			for _, e := range tv {
+				vals = append(vals, fmt.Sprint(e))
+			}
+			out[k] = vals
+		case map[string]any:
+			// nested object — not addressable by a scalar/list trait scope.
+			continue
+		default:
+			out[k] = []string{fmt.Sprint(v)}
+		}
 	}
+	return out
 }
 
 // ResolveListScopeFor — request-free factory of a scope resolver for FULL-TYPED
 // ListTyped (huma layer). Semantics: fail-closed on nil claims/nil scoper/Empty
 // Purview (the caller returns an empty list); Unrestricted → the whole list;
-// otherwise coven∪{name} pushdown ∪ pre-resolved names by state-CEL.
+// otherwise the boolean scope predicate is pushed down into the list query via
+// [rbac.PurviewSQL]. serviceFilter is unused under the NIM-128 boolean scope (no
+// separate state-CEL resolution pass); the parameter is retained for the stable
+// ListTyped resolver signature.
 func (h *IncarnationHandler) ResolveListScopeFor(ctx context.Context, claims *jwt.Claims) func(serviceFilter string) (incarnation.ListScope, bool) {
 	return func(serviceFilter string) (incarnation.ListScope, bool) {
 		return h.resolveListScope(ctx, claims, "list", serviceFilter)
@@ -473,9 +399,15 @@ func (h *IncarnationHandler) ResolveListScopeFor(ctx context.Context, claims *jw
 }
 
 // resolveListScope — shared Purview→[incarnation.ListScope] resolution for
-// list-like reads (List action=list; global runs/stats action=history). Semantics
-// as in [IncarnationHandler.ResolveListScopeFor] (same fail-closed boundary).
+// list-like reads (List action=list; global runs/stats action=history).
+// Fail-closed on nil claims / nil scoper / empty(Deny) Purview (caller returns an
+// empty list). Unrestricted → no scope narrowing. Otherwise the boolean scope
+// predicates (OR of Exprs) are rendered into SQL over the incarnation columns by
+// [rbac.PurviewSQL], carried as a placeholder-relative closure so the incarnation
+// package needs no rbac import (see [incarnation.ScopeSQLFunc]).
 func (h *IncarnationHandler) resolveListScope(ctx context.Context, claims *jwt.Claims, action, serviceFilter string) (incarnation.ListScope, bool) {
+	_ = ctx
+	_ = serviceFilter
 	if claims == nil || h.scoper == nil {
 		return incarnation.ListScope{}, false
 	}
@@ -483,32 +415,13 @@ func (h *IncarnationHandler) resolveListScope(ctx context.Context, claims *jwt.C
 	if pv.Unrestricted {
 		return incarnation.ListScope{Unrestricted: true}, true
 	}
-	if scopeEmpty(pv) {
+	if pv.IsEmpty() {
 		return incarnation.ListScope{}, false
 	}
-	scope := incarnation.ListScope{Covens: pv.Covens}
-	// state dimension fail-OPEN: resolution failed → don't extend the output with
-	// its names, but the coven dimension stays in force (don't drop the whole List).
-	// Log it.
-	if len(pv.StateExprs) > 0 {
-		names, err := h.resolveStateNames(ctx, pv.StateExprs, serviceFilter)
-		if err != nil {
-			h.logger.Warn("incarnation."+action+": state-scope resolve failed - applying only the coven dimension (fail-closed on state)",
-				slog.String("aid", claims.Subject), slog.Any("error", err))
-		} else {
-			scope.StateNames = names
-		}
-	}
-	// trait dimension (ADR-047 amendment, ADR-060 §7 slice 1): scope pairs
-	// `key:value` → SQL pushdown `traits->>$key = $value` (scalar equality, no
-	// CEL/resolution; NOT containment `@>` — BUG#1 fix, [incarnation.appendScopeClause]).
-	// A broken pair (parser drift) is skipped, doesn't drop List.
-	for _, pair := range pv.TraitExprs {
-		key, value, ok := splitTraitPair(pair)
-		if !ok {
-			continue
-		}
-		scope.Traits = append(scope.Traits, incarnation.TraitPair{Key: key, Value: value})
+	scope := incarnation.ListScope{
+		Scope: func(startIdx int) (string, []any, int) {
+			return rbac.PurviewSQL(pv, incScopeColumns, startIdx)
+		},
 	}
 	return scope, true
 }

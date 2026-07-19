@@ -1,0 +1,8 @@
+-- 100_rbac_drop_pattern_selectors.down.sql
+--
+-- No-op. The up migration is a read-only fail-closed data-guard (NIM-128): it
+-- makes no schema or data changes -- it either passes silently (data already free
+-- of removed selector types) or aborts with a report. There is therefore nothing
+-- to roll back. Rolling BACK the code (to a binary that still understands
+-- regex/soulprint/state) does not require re-inserting any data, so this file is
+-- intentionally empty apart from this comment.

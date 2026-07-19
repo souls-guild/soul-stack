@@ -8,7 +8,6 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
-	"sort"
 	"strings"
 	"testing"
 	"time"
@@ -85,14 +84,6 @@ type fakeSoulPool struct {
 	updateSshTargetCalls    int
 	updateSshTargetNotFound bool
 	lastUpdateSshTargetArgs []any
-
-	// scopeEvalAll — the full set of ListForScopeEval rows (S3b-2a keyset mode),
-	// emulating the contents of `souls`. The fake applies the keyset window itself over
-	// the (registered_at, sid) boundary from args (like real PG does), so cursor
-	// traversal produces no duplicates/gaps. The set's order doesn't need to be set up —
-	// the fake sorts it like the SQL does (registered_at DESC, sid ASC).
-	scopeEvalAll     []soul.ScopeEvalRow
-	scopeEvalQueries int // counter of scope-eval Query calls (cap/backfill check).
 }
 
 // bulkChunkStep — one step of a multi-chunk plan: what the CTE chunk
@@ -105,27 +96,55 @@ type bulkChunkStep struct {
 	err     error
 }
 
-// fakeScoper — mock [PurviewResolver] for unit tests of List/AssignCoven. Fields
-// map to [rbac.Purview]: covens → Covens, unrestricted → Unrestricted.
-// The extra fields cover List's scope branches (Empty / regex keyset / soulprint Partial).
+// fakeScoper — mock [PurviewResolver] (+ covenScoper) for unit tests of
+// List/Get/AssignCoven (NIM-128 boolean scope). Fields:
+//   - covens — coven-scope: each becomes a `coven=<c>` disjunct in the Purview
+//     AND is returned as-is by CovenScope (the bulk coven/traits-assign path);
+//   - exprs — raw boolean scope expressions (parsed by rbac.ParseScopeExpr),
+//     e.g. "host matches web-*" or `trait.tier=gold`, for the single-read gate;
+//   - unrestricted — Purview{Unrestricted:true} (cluster-admin);
+//   - empty — Purview{} (fail-closed: no access).
 type fakeScoper struct {
-	covens         []string
-	unrestricted   bool
-	empty          bool     // Purview{} (fail-closed): no dimension at all.
-	regexes        []string // regex dimension (keyset mode, S3b-2a).
-	soulprintExprs []string // an introduced non-evaluable dimension (Partial branch).
+	covens       []string
+	exprs        []string
+	unrestricted bool
+	empty        bool
 }
 
 func (s fakeScoper) ResolvePurview(_, _, _ string) rbac.Purview {
 	if s.empty {
 		return rbac.Purview{}
 	}
-	return rbac.Purview{
-		Covens:         s.covens,
-		Unrestricted:   s.unrestricted,
-		Regexes:        s.regexes,
-		SoulprintExprs: s.soulprintExprs,
+	if s.unrestricted {
+		return rbac.Purview{Unrestricted: true}
 	}
+	var exprs []*rbac.ScopeExpr
+	for _, c := range s.covens {
+		exprs = append(exprs, mustScopeExpr("coven="+c))
+	}
+	for _, e := range s.exprs {
+		exprs = append(exprs, mustScopeExpr(e))
+	}
+	return rbac.Purview{Exprs: exprs}
+}
+
+// CovenScope projects the fake's coven-scope for the bulk coven/traits-assign
+// path (mirrors [rbac.Enforcer.CovenScope]): unrestricted → (nil, true), else
+// the coven set (empty → (nil,false), fail-closed).
+func (s fakeScoper) CovenScope(_, _, _ string) ([]string, bool) {
+	if s.unrestricted {
+		return nil, true
+	}
+	return s.covens, false
+}
+
+// mustScopeExpr parses a boolean scope expression for tests (panics on error).
+func mustScopeExpr(s string) *rbac.ScopeExpr {
+	e, err := rbac.ParseScopeExpr(s)
+	if err != nil {
+		panic("mustScopeExpr(" + s + "): " + err.Error())
+	}
+	return e
 }
 
 func (f *fakeSoulPool) BeginTx(_ context.Context, _ pgx.TxOptions) (pgx.Tx, error) {
@@ -240,18 +259,6 @@ func (f *fakeSoulPool) QueryRow(_ context.Context, sql string, args ...any) pgx.
 }
 
 func (f *fakeSoulPool) Query(_ context.Context, sql string, args ...any) (pgx.Rows, error) {
-	// The scope-eval keyset window (ListForScopeEval) pulls the FULL record (like
-	// SelectAll), so we distinguish by the keyset ordering `ORDER BY
-	// registered_at DESC, sid ASC` WITHOUT `OFFSET` (SelectAll has OFFSET).
-	if strings.Contains(sql, "ORDER BY registered_at DESC, sid ASC") && !strings.Contains(sql, "OFFSET") {
-		if f.listQueryErr != nil {
-			return nil, f.listQueryErr
-		}
-		f.lastListArgs = args
-		f.scopeEvalQueries++
-		page := f.scopeEvalWindow(sql, args)
-		return &scopeEvalRows{rows: page}, nil
-	}
 	if strings.Contains(sql, "FROM souls") {
 		if f.listQueryErr != nil {
 			return nil, f.listQueryErr
@@ -261,146 +268,6 @@ func (f *fakeSoulPool) Query(_ context.Context, sql string, args ...any) (pgx.Ro
 	}
 	return nil, errors.New("fakeSoulPool.Query: unexpected SQL: " + sql)
 }
-
-// scopeEvalWindow reproduces the ListForScopeEval keyset page over
-// scopeEvalAll (like real PG does): the user filter (status/transport/coven) as
-// SQL WHERE, the keyset predicate `registered_at < curAt OR (== curAt AND sid >
-// curSid)`, ordering by registered_at DESC, sid ASC, LIMIT pageSize.
-//
-// Args arrive in the order clauses are declared in [soul.buildScopeEvalSQL]:
-// filter-args first (status/transport/coven, when present in the SQL), then
-// the keyset boundary (curAt, curSid) if present, then pageSize last.
-// Which clauses are present is determined from the SQL text (the way real PG
-// sees WHERE), and args are read positionally in the same order.
-func (f *fakeSoulPool) scopeEvalWindow(sql string, args []any) []soul.ScopeEvalRow {
-	sorted := append([]soul.ScopeEvalRow(nil), f.scopeEvalAll...)
-	sort.Slice(sorted, func(i, j int) bool {
-		if !sorted[i].RegisteredAt.Equal(sorted[j].RegisteredAt) {
-			return sorted[i].RegisteredAt.After(sorted[j].RegisteredAt) // DESC.
-		}
-		return sorted[i].SID < sorted[j].SID // tie-break sid ASC.
-	})
-
-	var (
-		statusFilter    string
-		transportFilter string
-		covenFilter     string
-		hasCursor       bool
-		curAt           time.Time
-		curSID          string
-		pageSize        int
-	)
-	pos := 0
-	if strings.Contains(sql, "status = $") {
-		statusFilter, _ = args[pos].(string)
-		pos++
-	}
-	if strings.Contains(sql, "transport = $") {
-		transportFilter, _ = args[pos].(string)
-		pos++
-	}
-	if strings.Contains(sql, "= ANY(coven)") {
-		covenFilter, _ = args[pos].(string)
-		pos++
-	}
-	if strings.Contains(sql, "registered_at < $") {
-		hasCursor = true
-		curAt, _ = args[pos].(time.Time)
-		curSID, _ = args[pos+1].(string)
-		pos += 2
-	}
-	pageSize, _ = args[pos].(int)
-
-	out := make([]soul.ScopeEvalRow, 0, pageSize)
-	for _, row := range sorted {
-		if statusFilter != "" && string(row.Status) != statusFilter {
-			continue
-		}
-		if transportFilter != "" && string(row.Transport) != transportFilter {
-			continue
-		}
-		if covenFilter != "" && !containsStr(row.Coven, covenFilter) {
-			continue
-		}
-		if hasCursor {
-			after := row.RegisteredAt.Before(curAt) ||
-				(row.RegisteredAt.Equal(curAt) && row.SID > curSID)
-			if !after {
-				continue
-			}
-		}
-		out = append(out, row)
-		if len(out) == pageSize {
-			break
-		}
-	}
-	return out
-}
-
-// containsStr — reports whether v is among xs (for the coven-ANY filter in the fake).
-func containsStr(xs []string, v string) bool {
-	for _, x := range xs {
-		if x == v {
-			return true
-		}
-	}
-	return false
-}
-
-// scopeEvalRows — pgx.Rows over []soul.ScopeEvalRow (the FULL souls record) for
-// List's keyset mode. The Scan order matches the ListForScopeEval projection:
-// sid, transport, status, coven, traits, registered_at, last_seen_at,
-// last_seen_by_kid, created_by_aid, requested_at, note.
-type scopeEvalRows struct {
-	rows []soul.ScopeEvalRow
-	idx  int
-}
-
-func (r *scopeEvalRows) Next() bool {
-	if r.idx >= len(r.rows) {
-		return false
-	}
-	r.idx++
-	return true
-}
-
-func (r *scopeEvalRows) Scan(dest ...any) error {
-	row := r.rows[r.idx-1]
-	*dest[0].(*string) = row.SID
-	*dest[1].(*string) = string(row.Transport)
-	*dest[2].(*string) = string(row.Status)
-	*dest[3].(*[]string) = row.Coven
-	// traits jsonb (ADR-060): nil Traits → nil bytes (ListForScopeEval → an empty map).
-	if len(row.Traits) > 0 {
-		b, err := json.Marshal(row.Traits)
-		if err != nil {
-			return err
-		}
-		*dest[4].(*[]byte) = b
-	} else {
-		*dest[4].(*[]byte) = nil
-	}
-	*dest[5].(*time.Time) = row.RegisteredAt
-	*dest[6].(**time.Time) = row.LastSeenAt
-	*dest[7].(**string) = row.LastSeenByKID
-	*dest[8].(**string) = row.CreatedByAID
-	*dest[9].(**time.Time) = row.RequestedAt
-	if row.Note == "" {
-		*dest[10].(**string) = nil
-	} else {
-		note := row.Note
-		*dest[10].(**string) = &note
-	}
-	return nil
-}
-
-func (r *scopeEvalRows) Err() error                                   { return nil }
-func (r *scopeEvalRows) Close()                                       {}
-func (r *scopeEvalRows) CommandTag() pgconn.CommandTag                { return pgconn.CommandTag{} }
-func (r *scopeEvalRows) FieldDescriptions() []pgconn.FieldDescription { return nil }
-func (r *scopeEvalRows) Values() ([]any, error)                       { return nil, nil }
-func (r *scopeEvalRows) RawValues() [][]byte                          { return nil }
-func (r *scopeEvalRows) Conn() *pgx.Conn                              { return nil }
 
 // soulRows — a pgx.Rows stub for [soul.SelectAll]: returns a preconfigured
 // set of Souls in scanSoul order (sid, transport, status, coven, traits,
@@ -1873,8 +1740,9 @@ func TestSoulList_Unrestricted_All(t *testing.T) {
 	}
 }
 
-// TestSoulList_CovenScope_ReachesSQL — coven-scoped operator: covens reach
-// SQL as []string argument of scope-pushdown (`coven && ARRAY[covens]`).
+// TestSoulList_CovenScope_ReachesSQL — coven-scoped operator: both covens reach
+// SQL as []string args of the scope pushdown (each `coven=<c>` disjunct renders
+// its own `coven && $N::text[]` predicate, NIM-128 boolean scope).
 func TestSoulList_CovenScope_ReachesSQL(t *testing.T) {
 	pool := &fakeSoulPool{listCount: 0}
 	h := NewSoulHandler(pool, fakeScoper{covens: []string{"prod", "staging"}}, nil, nil)
@@ -1883,15 +1751,15 @@ func TestSoulList_CovenScope_ReachesSQL(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, body=%s", rec.Code, rec.Body.String())
 	}
-	var found bool
+	got := map[string]bool{}
 	for _, a := range pool.lastListArgs {
 		if covs, ok := a.([]string); ok {
-			if len(covs) == 2 && covs[0] == "prod" && covs[1] == "staging" {
-				found = true
+			for _, c := range covs {
+				got[c] = true
 			}
 		}
 	}
-	if !found {
+	if !got["prod"] || !got["staging"] {
 		t.Errorf("coven-scope [prod staging] did not reach SQL-args as []string: %v", pool.lastListArgs)
 	}
 }
@@ -1924,10 +1792,10 @@ func TestSoulList_ScopeOverridesPresence(t *testing.T) {
 	}
 }
 
-// TestSoulList_PartialScope_AppliesCovenSubset — operator with coven + non-coven
-// dimension (soulprint, not yet evaluated in pilot): pilot applies coven-
-// pushdown (strict subset, never over-show), list does not drop to 0.
-func TestSoulList_PartialScope_AppliesCovenSubset(t *testing.T) {
+// TestSoulList_MixedScope_PushesAllDimensions — an operator with a coven AND a
+// host dimension: the whole boolean scope pushes into SQL (NIM-128), so the
+// coven values array reaches the query and the result is not zeroed.
+func TestSoulList_MixedScope_PushesAllDimensions(t *testing.T) {
 	pool := &fakeSoulPool{
 		listCount: 1,
 		listSouls: []*soul.Soul{
@@ -1935,16 +1803,16 @@ func TestSoulList_PartialScope_AppliesCovenSubset(t *testing.T) {
 		},
 	}
 	h := NewSoulHandler(pool, fakeScoper{
-		covens:         []string{"prod"},
-		soulprintExprs: []string{`soulprint.self.os.family == "debian"`},
+		covens: []string{"prod"},
+		exprs:  []string{"host matches web-*"},
 	}, nil, nil)
 
 	rec := doList(t, h, "")
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, body=%s", rec.Code, rec.Body.String())
 	}
-	// coven-pushdown applied (covens reached SQL); non-coven dimension pilot
-	// ignores (S3b-2), but does NOT zero out result.
+	// The coven values array reached SQL (coven && $N::text[]) — the boolean
+	// scope pushes down, not a Go post-filter.
 	var found bool
 	for _, a := range pool.lastListArgs {
 		if covs, ok := a.([]string); ok && len(covs) == 1 && covs[0] == "prod" {
@@ -1952,7 +1820,7 @@ func TestSoulList_PartialScope_AppliesCovenSubset(t *testing.T) {
 		}
 	}
 	if !found {
-		t.Errorf("partial-scope coven [prod] did not reach SQL: %v", pool.lastListArgs)
+		t.Errorf("mixed-scope coven [prod] did not reach SQL: %v", pool.lastListArgs)
 	}
 }
 

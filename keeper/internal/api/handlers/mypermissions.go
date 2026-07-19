@@ -45,14 +45,13 @@ func NewMyPermissionsHandler(enforcer PermissionsLister, logger *slog.Logger) *M
 }
 
 // MyScope — the FLAT scope summary of one permission (handler-native T5d): either
-// unrestricted, or a set of concrete restrictions per dimension. The api package
-// projects empty dimensions into nil pointers (omitempty).
+// unrestricted, or the OR-set of boolean scope predicates (NIM-128). Each entry of
+// Exprs is the canonical string of one [rbac.ScopeExpr] (e.g.
+// `coven in (a, b) AND host matches redis-*`); Exprs is empty when Unrestricted.
+// The api package projects an empty Exprs into a nil pointer (omitempty).
 type MyScope struct {
 	Unrestricted bool
-	Covens       []string
-	Regex        []string
-	Soulprint    []string
-	State        []string
+	Exprs        []string
 }
 
 // MyPermission — a FLAT domain effective permission (handler-native T5d). Wildcard=true
@@ -91,15 +90,16 @@ func toMyPermission(p rbac.EffectivePermission) MyPermission {
 	if p.Wildcard {
 		return MyPermission{Wildcard: true}
 	}
+	exprs := make([]string, 0, len(p.Scope.Exprs))
+	for _, e := range p.Scope.Exprs {
+		exprs = append(exprs, e.String())
+	}
 	return MyPermission{
 		Resource: p.Resource,
 		Action:   p.Action,
 		Scope: &MyScope{
 			Unrestricted: p.Scope.Unrestricted,
-			Covens:       p.Scope.Covens,
-			Regex:        p.Scope.Regexes,
-			Soulprint:    p.Scope.SoulprintExprs,
-			State:        p.Scope.StateExprs,
+			Exprs:        exprs,
 		},
 	}
 }

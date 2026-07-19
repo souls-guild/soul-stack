@@ -204,27 +204,28 @@ func TestHumaMyPermissions_GoldenWire(t *testing.T) {
 	}
 }
 
-// TestHumaMyPermissions_ScopeWire — SECURITY-relevant: the state dimension of scope
-// (ADR-047 S2c) makes it through the huma route under the snake_case key `state`
-// (a converter regression = a silent loss of the scope predicate).
+// TestHumaMyPermissions_ScopeWire — SECURITY-relevant (NIM-128): the boolean scope
+// predicate makes it through the huma route under the `exprs` array (a converter
+// regression = a silent loss of the scope predicate).
 func TestHumaMyPermissions_ScopeWire(t *testing.T) {
 	e := rbactest.MustEnforcer(t, &rbactest.Config{Roles: []rbactest.Role{
 		{
-			Name:        "state-scoped",
-			Operators:   []string{"archon-state"},
-			Permissions: []string{`incarnation.run on state='state.redis_version == "8.0"'`},
+			Name:        "scoped",
+			Operators:   []string{"archon-scoped"},
+			Permissions: []string{`incarnation.run on coven=prod AND host matches "web-*"`},
 		},
 	}})
 	meH := handlers.NewMyPermissionsHandler(e, nil)
-	r := humaMyPermissionsRouter(t, meH, "archon-state", true)
+	r := humaMyPermissionsRouter(t, meH, "archon-scoped", true)
 
 	rec := httptest.NewRecorder()
 	r.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/v1/me/permissions", nil))
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200; body=%s", rec.Code, rec.Body.String())
 	}
-	if !strings.Contains(rec.Body.String(), `"state"`) {
-		t.Fatalf("wire-JSON does not contain scope key \"state\":\n%s", rec.Body.String())
+	body := rec.Body.String()
+	if !strings.Contains(body, `"exprs"`) || !strings.Contains(body, "coven=prod") {
+		t.Fatalf("wire-JSON does not carry the scope predicate under \"exprs\":\n%s", body)
 	}
 }
 

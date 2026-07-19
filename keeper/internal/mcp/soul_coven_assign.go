@@ -199,8 +199,17 @@ func (h *Handler) callSoulCovenAssign(ctx context.Context, claims *jwt.Claims, r
 		}
 	}
 
-	pv := h.deps.PurviewResolver.ResolvePurview(claims.Subject, "soul", "coven-assign")
-	scope := soul.BulkScope{Covens: pv.Covens, Unrestricted: pv.Unrestricted}
+	// Bulk mutation targets by coven → project the boolean scope onto its coven
+	// dimension ([rbac.Enforcer.CovenScope], NIM-128), reached via the same narrow
+	// assertion as traits-assign (the shared PurviewResolver only exposes
+	// ResolvePurview; nil/absent → fail-closed internal error).
+	scoper, ok := h.deps.PurviewResolver.(covenScoper)
+	if !ok {
+		h.deps.Logger.Error("mcp: soul.coven-assign resolver lacks CovenScope")
+		return h.toolError(req.ID, toolName, mcpCodeInternalError, "coven-assign unavailable")
+	}
+	covens, unrestricted := scoper.CovenScope(claims.Subject, "soul", "coven-assign")
+	scope := soul.BulkScope{Covens: covens, Unrestricted: unrestricted}
 
 	if a.DryRun {
 		matched, err := soul.CountBulkMatched(ctx, h.deps.SoulDB, sel, scope)

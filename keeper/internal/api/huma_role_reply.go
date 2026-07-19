@@ -34,7 +34,7 @@ import (
 // omitempty (an empty array, not nil).
 type RoleView struct {
 	Builtin      bool     `json:"builtin"`
-	DefaultScope *string  `json:"default_scope,omitempty"`
+	DefaultScope *string  `json:"default_scope,omitempty" doc:"role scope: boolean predicate over coven/service/incarnation/host/trait (e.g. coven in (a, b) AND host matches redis-*); omitted → role without scope"`
 	Description  *string  `json:"description,omitempty"`
 	Name         string   `json:"name" pattern:"^[a-z][a-z0-9-]*$"` // ← rbac.RoleNamePattern
 	Operators    []string `json:"operators"`

@@ -10,6 +10,8 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
+
+	"github.com/souls-guild/soul-stack/keeper/internal/soulpurview"
 )
 
 // Sentinel errors of the CRUD layer. Handler side maps:
@@ -1048,180 +1050,18 @@ type ListFilter struct {
 	Coven     string // ANY of one label; empty = no filter.
 }
 
-// ListScope — RBAC scope visibility boundary (`GET /v1/souls`, ADR-047 S3b),
-// SEPARATE from user-facing [ListFilter]: filter is what the operator asked
-// to see (query params), scope is what they're ALLOWED to see at all (from
-// the JWT, resolved by keeper/internal/soulpurview). Both intersect with AND
-// in the WHERE (filter narrows within scope, not the other way around).
-//
-// Semantics are fail-closed (ADR-047): empty Covens with !Unrestricted
-// yields `coven && ARRAY[]::text[]` — deliberately false (zero hosts), NOT
-// the entire registry. Symmetric to [BulkScope] / [appendScopeClause].
-// Unrestricted=true lifts the scope filter (full list).
-type ListScope struct {
-	Covens       []string
-	Unrestricted bool
-}
-
-// ScopeEvalRow — full `souls` card row for Go-side scope eval (ADR-047
-// S3b-2a keyset mode). Carries ALL [soulListItem] columns (same as
-// [SelectAll]) — the keyset card must match the offset card's shape exactly,
-// or the presence overlay won't flip status (it's skipped on an empty
-// snapshot) and `GET /v1/souls` would return a different card shape
-// depending on operator Purview. The union filter `covenMatch OR
-// regexMatch` uses SID + Coven; RegisteredAt feeds the composite cursor.
-// soulprint_facts is NOT pulled here — the soulprint dimension isn't
-// computed in this slice (S3b-2b).
-type ScopeEvalRow struct {
-	SID           string
-	Transport     Transport
-	Status        Status
-	Coven         []string
-	Traits        map[string]any
-	RegisteredAt  time.Time
-	LastSeenAt    *time.Time
-	LastSeenByKID *string
-	CreatedByAID  *string
-	RequestedAt   *time.Time
-	Note          string
-}
-
-// KeysetCursorBound — composite `(registered_at, sid)` keyset window bound
-// for [ListForScopeEval]. nil means the first page (no lower bound). A bare
-// sid would leave gaps on equal registered_at, hence the composite bound.
-type KeysetCursorBound struct {
-	RegisteredAt time.Time
-	SID          string
-}
-
-// scopeEvalSelectSQL — keyset window projection (full card, same as
-// [SelectAll]). WHERE/ORDER/LIMIT are appended dynamically by
-// [buildScopeEvalSQL]: the user filter (status/transport/coven) combines
-// with the keyset predicate via AND.
-const scopeEvalSelectSQL = `SELECT sid, transport, status, coven, traits,
-       registered_at, last_seen_at, last_seen_by_kid,
-       created_by_aid, requested_at, note
-FROM souls`
-
-// scopeEvalMaxPageSize — upper bound on the INTERNAL keyset-eval page size
-// (NOT the client limit). Guards against reading the entire registry in one
-// query: the handler reads internal pages in a ~2000 window and applies a
-// Go OR post-filter on top, accumulating up to the client limit (symmetric
-// to [bulkChunkSize]).
-const scopeEvalMaxPageSize = 2000
-
-// buildScopeEvalSQL builds one keyset page: user filter (status/transport/
-// coven) as SQL WHERE, combined with the keyset predicate `(registered_at,
-// sid)`. Visibility = (user filter in SQL) AND (scope union in the Go eval
-// on top) — the filter narrows WITHIN scope (ADR-047 S3b-2a, AND), while the
-// scope union (covenMatch OR regexMatch) is computed in Go, so no
-// coven-scope pushdown is added here (it would narrow visibility below
-// Purview).
-//
-// The user filter runs in SQL before the Go eval, shrinking the page scan
-// (fewer internal pages needed to fill the keyset page — a perf bonus). The
-// cursor invariant holds: the `(registered_at, sid)` window sits on top of
-// the filtered set, ORDER BY matches [SelectAll] (registered_at DESC, sid ASC).
-//
-// Argument order: filter clauses first ($1..), then keyset bounds (curAt,
-// curSid) if a cursor is set, then pageSize last.
-func buildScopeEvalSQL(filter ListFilter, cursor *KeysetCursorBound, pageSize int) (string, []any) {
-	clauses, args := listFilterClauses(filter)
-	if cursor != nil {
-		curAtPos := len(args) + 1
-		curSidPos := len(args) + 2
-		args = append(args, cursor.RegisteredAt.UTC(), cursor.SID)
-		clauses = append(clauses, fmt.Sprintf(
-			"(registered_at < $%d OR (registered_at = $%d AND sid > $%d))",
-			curAtPos, curAtPos, curSidPos))
-	}
-	args = append(args, pageSize)
-	sql := scopeEvalSelectSQL + joinWhere(clauses) +
-		fmt.Sprintf(" ORDER BY registered_at DESC, sid ASC LIMIT $%d", len(args))
-	return sql, args
-}
-
-// ListForScopeEval reads ONE internal `souls` keyset page (full card, same
-// as [SelectAll]) for Go-side scope eval (ADR-047 S3b-2a).
-//
-// The scope filter (`covenMatch OR regexMatch`) is applied in Go ON TOP of
-// the returned rows (a regex present disables coven SQL pushdown — an AND
-// there would narrow visibility below Purview). The user `filter`
-// (status/transport/coven from query params) IS pushed down as SQL WHERE
-// here: it narrows WITHIN scope (AND), never widens, so pushing it to the
-// DB is safe (independent of the scope union, and it shrinks the page
-// scan). Final host visibility ⟺ (filter in SQL) AND (scope union in Go).
-//
-// The projection is full (not sid/coven/registered_at) so the keyset card
-// carries status/transport/last_seen — otherwise the presence overlay
-// couldn't flip status, and the card would differ from offset mode. The
-// cost of the extra columns is negligible (page ≤ 2000 rows).
-//
-// cursor=nil means the first page; otherwise strictly AFTER the composite
-// `(registered_at, sid)` bound. pageSize is clamped to [1, scopeEvalMaxPageSize].
-func ListForScopeEval(ctx context.Context, db ExecQueryRower, filter ListFilter, cursor *KeysetCursorBound, pageSize int) ([]ScopeEvalRow, error) {
-	if pageSize < 1 {
-		pageSize = 1
-	}
-	if pageSize > scopeEvalMaxPageSize {
-		pageSize = scopeEvalMaxPageSize
-	}
-
-	sql, args := buildScopeEvalSQL(filter, cursor, pageSize)
-	rows, err := db.Query(ctx, sql, args...)
-	if err != nil {
-		return nil, fmt.Errorf("soul: scope-eval query: %w", err)
-	}
-	defer rows.Close()
-
-	out := make([]ScopeEvalRow, 0, pageSize)
-	for rows.Next() {
-		var (
-			r            ScopeEvalRow
-			transportStr string
-			statusStr    string
-			traitsJSON   []byte
-			note         *string
-		)
-		if err := rows.Scan(
-			&r.SID, &transportStr, &statusStr, &r.Coven, &traitsJSON,
-			&r.RegisteredAt, &r.LastSeenAt, &r.LastSeenByKID,
-			&r.CreatedByAID, &r.RequestedAt, &note,
-		); err != nil {
-			return nil, fmt.Errorf("soul: scope-eval scan: %w", err)
-		}
-		r.Transport = Transport(transportStr)
-		r.Status = Status(statusStr)
-		// traits jsonb (ADR-060): '{}' (NOT NULL DEFAULT) → empty map, not nil
-		// (symmetric to scanSoul).
-		if len(traitsJSON) > 0 {
-			if err := json.Unmarshal(traitsJSON, &r.Traits); err != nil {
-				return nil, fmt.Errorf("soul: scope-eval unmarshal traits for %q: %w", r.SID, err)
-			}
-		}
-		if note != nil {
-			r.Note = *note
-		}
-		out = append(out, r)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("soul: scope-eval iter: %w", err)
-	}
-	return out, nil
-}
-
 // SelectAll returns a page of Souls with the user filter (filter) ∩ RBAC
-// scope boundary (scope) applied, plus the total count.
+// purview boundary applied, plus the total count.
 //
 // The scope predicate is in the WHERE of BOTH queries (COUNT and SELECT) —
 // total stays coherent with the results (never counts out-of-scope hosts).
-// Coven pushdown is complete for offset pagination: no total drift (unlike
-// a Go post-filter, which would need keyset — S3b-2).
+// The full boolean purview (coven/host/trait) pushes down to SQL, so offset
+// pagination and total are exact — no Go post-filter, no keyset window (NIM-128).
 //
 // Sort order is `registered_at DESC, sid ASC` (newest first; SID as
 // tie-break, otherwise pagination is unstable on equal timestamps —
 // symmetric to incarnation.SelectAll).
-func SelectAll(ctx context.Context, db ExecQueryRower, filter ListFilter, scope ListScope, offset, limit int) ([]*Soul, int, error) {
+func SelectAll(ctx context.Context, db ExecQueryRower, filter ListFilter, scope soulpurview.Scope, offset, limit int) ([]*Soul, int, error) {
 	if offset < 0 {
 		return nil, 0, fmt.Errorf("soul: offset must be >= 0, got %d", offset)
 	}
@@ -1265,13 +1105,17 @@ FROM souls` + whereSQL +
 }
 
 // buildListWhere builds the WHERE for user filter ∩ RBAC scope. The scope
-// predicate (`coven && ARRAY[scope]`) reuses [appendScopeClause] — a single
-// source of scope-intersection semantics shared with bulk coven-assign (one
-// fail-closed form for the whole souls layer). joinWhere is shared with the
-// bulk path too.
-func buildListWhere(f ListFilter, scope ListScope) (string, []any) {
+// predicate is the full boolean purview rendered into SQL over the souls columns
+// (coven/host/trait) by [soulpurview.Scope.WhereSQL] — all dimensions push down
+// to the database, so offset/total stay exact. The scope fragment is always
+// atomic ("TRUE"/"FALSE"/parenthesized OR), safe to AND with the user filter;
+// its placeholders continue after the filter args. Fail-closed: an empty purview
+// renders "FALSE" (zero hosts, never the whole registry).
+func buildListWhere(f ListFilter, scope soulpurview.Scope) (string, []any) {
 	clauses, args := listFilterClauses(f)
-	clauses, args = appendScopeClause(clauses, args, BulkScope(scope))
+	frag, scopeArgs, _ := scope.WhereSQL(soulpurview.Columns, len(args)+1)
+	clauses = append(clauses, frag)
+	args = append(args, scopeArgs...)
 	return joinWhere(clauses), args
 }
 
@@ -1354,17 +1198,17 @@ SELECT 'stale'     AS axis, ''                         AS bucket, COUNT(*) AS n 
 // axes (status/transport/coven) + stale count are combined with UNION ALL
 // over a shared scope CTE.
 //
-// The scope predicate is the same [appendScopeClause] as [SelectAll]/bulk: a
-// single fail-closed source of scope-intersection semantics (empty scope
-// without Unrestricted → `coven && ARRAY[]::text[]` = zero hosts, NOT the
-// entire registry).
+// The scope predicate is the same full boolean purview rendered by
+// [soulpurview.Scope.WhereSQL] as [SelectAll]: a single fail-closed source
+// (empty purview → "FALSE" = zero hosts, NOT the entire registry) so the
+// aggregate matches the scoped list exactly.
 //
 // staleThreshold is the StaleCount cutoff (a host is "stale" if
 // `last_seen_at < now()-staleThreshold`); passed in from
 // reaper.ResolveMarkDisconnectedStale so the number matches the disconnect
 // threshold. <= 0 is rejected (a cutoff in the present/future is a
 // meaningless aggregate; the caller must pass a real threshold).
-func SelectStats(ctx context.Context, db ExecQueryRower, scope ListScope, staleThreshold time.Duration) (Stats, error) {
+func SelectStats(ctx context.Context, db ExecQueryRower, scope soulpurview.Scope, staleThreshold time.Duration) (Stats, error) {
 	if staleThreshold <= 0 {
 		return Stats{}, fmt.Errorf("soul: stale threshold must be > 0, got %v", staleThreshold)
 	}
@@ -1374,8 +1218,10 @@ func SelectStats(ctx context.Context, db ExecQueryRower, scope ListScope, staleT
 		ByCoven:     map[string]int{},
 	}
 
-	clauses, args := appendScopeClause(nil, nil, BulkScope(scope))
-	whereSQL := joinWhere(clauses)
+	// The scope fragment is always atomic ("TRUE"/"FALSE"/parenthesized OR),
+	// placeholders start at $1; the stale interval is the last positional arg.
+	frag, args, _ := scope.WhereSQL(soulpurview.Columns, 1)
+	whereSQL := " WHERE " + frag
 	// stale threshold is the last positional argument; Go duration → PG
 	// interval via the string "<seconds> seconds" (safe for sub-second
 	// thresholds).

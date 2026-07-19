@@ -329,38 +329,38 @@ func TestGetSoul_OutOfScope_404(t *testing.T) {
 	}
 }
 
-// TestGetSoul_InScope_RegexMatch_200 — a regex-scoped operator (regex=^prod-) reads a
-// matching host (prod-01) → 200. Closes the list↔get mismatch of the gate-fix: a host
-// visible via regex in List is also reachable by a direct GET /{sid} (InScope used to
-// be coven-only → 404 on a visible host). Regression = the mismatch returned.
-func TestGetSoul_InScope_RegexMatch_200(t *testing.T) {
-	h := NewSoulHandler(scopedReadPool(), fakeScoper{regexes: []string{"^prod-"}}, nil, nil)
+// TestGetSoul_InScope_HostGlobMatch_200 — a host-glob-scoped operator
+// (host matches prod-*) reads a matching host (prod-01) → 200. The single-read
+// gate uses the same boolean scope as List, so a host visible in List by its
+// host predicate is also reachable by a direct GET /{sid}.
+func TestGetSoul_InScope_HostGlobMatch_200(t *testing.T) {
+	h := NewSoulHandler(scopedReadPool(), fakeScoper{exprs: []string{"host matches prod-*"}}, nil, nil)
 	rec := doGetSoulScoped(t, h, "prod-01.example.com", "archon-webops")
 	if rec.Code != http.StatusOK {
-		t.Fatalf("status = %d, want 200 (regex ^prod- matches prod-01); body=%s", rec.Code, rec.Body.String())
+		t.Fatalf("status = %d, want 200 (glob prod-* matches prod-01); body=%s", rec.Code, rec.Body.String())
 	}
 }
 
-// TestGetSoul_OutOfRegexScope_404 — a regex-scoped operator (regex=^web-) reads a
-// NON-matching host (prod-01) → 404 (does not reveal existence outside the regex
-// boundary).
-func TestGetSoul_OutOfRegexScope_404(t *testing.T) {
-	h := NewSoulHandler(scopedReadPool(), fakeScoper{regexes: []string{"^web-"}}, nil, nil)
+// TestGetSoul_OutOfHostGlobScope_404 — a host-glob-scoped operator
+// (host matches web-*) reads a NON-matching host (prod-01) → 404 (does not
+// reveal existence outside the host boundary).
+func TestGetSoul_OutOfHostGlobScope_404(t *testing.T) {
+	h := NewSoulHandler(scopedReadPool(), fakeScoper{exprs: []string{"host matches web-*"}}, nil, nil)
 	rec := doGetSoulScoped(t, h, "prod-01.example.com", "archon-webops")
 	if rec.Code != http.StatusNotFound {
-		t.Fatalf("status = %d, want 404 (regex ^web- does NOT match prod-01); body=%s", rec.Code, rec.Body.String())
+		t.Fatalf("status = %d, want 404 (glob web-* does NOT match prod-01); body=%s", rec.Code, rec.Body.String())
 	}
 }
 
-// TestGetSoulprint_InScope_RegexMatch_200 — soulprint under the same regex predicate:
-// a matching host → 200, facts revealed.
-func TestGetSoulprint_InScope_RegexMatch_200(t *testing.T) {
+// TestGetSoulprint_InScope_HostGlobMatch_200 — soulprint under the same host-glob
+// predicate: a matching host → 200, facts revealed.
+func TestGetSoulprint_InScope_HostGlobMatch_200(t *testing.T) {
 	pool := scopedReadPool()
 	pool.soulFactsRaw = []byte(`{"sid":"prod-01.example.com","os":{"family":"debian"}}`)
-	h := NewSoulHandler(pool, fakeScoper{regexes: []string{"^prod-"}}, nil, nil)
+	h := NewSoulHandler(pool, fakeScoper{exprs: []string{"host matches prod-*"}}, nil, nil)
 	rec := doGetSoulprintScoped(t, h, "prod-01.example.com", "archon-webops")
 	if rec.Code != http.StatusOK {
-		t.Fatalf("status = %d, want 200 (regex match); body=%s", rec.Code, rec.Body.String())
+		t.Fatalf("status = %d, want 200 (glob match); body=%s", rec.Code, rec.Body.String())
 	}
 }
 
@@ -937,11 +937,11 @@ func TestHistory_OutOfScope_404(t *testing.T) {
 	}
 }
 
-// TestHistory_OutOfRegexScope_404 — guard (Fix 3, list↔get consistency by regex): a
-// regex-scoped operator (^web-) reads a non-matching host → 404.
-func TestHistory_OutOfRegexScope_404(t *testing.T) {
+// TestHistory_OutOfHostGlobScope_404 — guard (list↔get consistency by host glob): a
+// host-glob-scoped operator (host matches web-*) reads a non-matching host → 404.
+func TestHistory_OutOfHostGlobScope_404(t *testing.T) {
 	pool := &fakeHistoryPool{total: 5, hostCovens: []string{"prod"}}
-	h := NewSoulHandler(pool, fakeScoper{regexes: []string{"^web-"}}, nil, nil)
+	h := NewSoulHandler(pool, fakeScoper{exprs: []string{"host matches web-*"}}, nil, nil)
 	rec := doGetHistory(t, h, "db-01.example.com", "")
 	if rec.Code != http.StatusNotFound {
 		t.Fatalf("history of non-matching host = %d, want 404; body=%s", rec.Code, rec.Body.String())

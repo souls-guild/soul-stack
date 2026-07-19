@@ -32,8 +32,8 @@ func TestParsePermission_BareResourceAction(t *testing.T) {
 	if p.Action != "create" {
 		t.Errorf("Action = %q", p.Action)
 	}
-	if p.Selector != nil {
-		t.Errorf("Selector = %v, want nil", p.Selector)
+	if p.Scope != nil {
+		t.Errorf("Scope = %v, want nil", p.Scope)
 	}
 }
 
@@ -79,20 +79,21 @@ func TestParsePermission_RolePermissions(t *testing.T) {
 }
 
 func TestParsePermission_WithSelector(t *testing.T) {
+	// The old flat form `service=redis,vault` canonicalizes to an in-list.
 	p, err := ParsePermission("incarnation.create on service=redis,vault")
 	if err != nil {
 		t.Fatalf("ParsePermission: %v", err)
 	}
-	if p.Selector == nil || len(p.Selector["service"]) != 2 {
-		t.Fatalf("Selector = %v", p.Selector)
+	if p.Scope == nil {
+		t.Fatal("Scope = nil, want a service in-list predicate")
 	}
-	if p.Selector["service"][0] != "redis" || p.Selector["service"][1] != "vault" {
-		t.Errorf("values = %v", p.Selector["service"])
+	if got := p.Scope.String(); got != "service in (redis, vault)" {
+		t.Errorf("Scope = %q, want %q", got, "service in (redis, vault)")
 	}
 }
 
-// ADR-047 S1: ParseDefaultScope reuses parseSelector — the same closed key
-// enum and grammar as the per-perm selector.
+// ADR-047 S1 / NIM-128: ParseDefaultScope reuses the boolean scope grammar —
+// the same closed dimension enum and predicate syntax as the per-perm scope.
 func TestParseDefaultScope(t *testing.T) {
 	t.Run("empty-nil", func(t *testing.T) {
 		sel, err := ParseDefaultScope("")
@@ -105,15 +106,15 @@ func TestParseDefaultScope(t *testing.T) {
 		if err != nil {
 			t.Fatalf("ParseDefaultScope: %v", err)
 		}
-		if len(sel["coven"]) != 2 || sel["coven"][0] != "prod" || sel["coven"][1] != "stage" {
-			t.Errorf("sel = %v, want coven=[prod stage]", sel)
+		if got := sel.String(); got != "coven in (prod, stage)" {
+			t.Errorf("sel = %q, want %q", got, "coven in (prod, stage)")
 		}
 	})
 	t.Run("errors", func(t *testing.T) {
 		cases := []struct{ in, want string }{
-			{"coven", "missing '='"},
-			{"namespace=foo", "unknown selector key"},
-			{"coven=", "value-list is empty"},
+			{"coven", "expected '='"},
+			{"namespace=foo", "unknown dimension"},
+			{"coven=", "expected a value"},
 		}
 		for _, c := range cases {
 			if _, err := ParseDefaultScope(c.in); err == nil || !strings.Contains(err.Error(), c.want) {
@@ -136,11 +137,11 @@ func TestParsePermission_Errors(t *testing.T) {
 		{"upper-resource", "Incarnation.create", "does not match"},
 		{"underscore-action", "incarnation.add_user", "does not match"},
 		{"unknown-perm", "unknown.create", "unknown_permission"},
-		{"unknown-selector-key", "incarnation.create on namespace=foo", "unknown selector key"},
-		{"selector-no-eq", "incarnation.create on service", "missing '='"},
-		{"selector-empty-value", "incarnation.create on service=", "value-list is empty"},
-		{"selector-empty-mid", "incarnation.create on service=foo,,bar", "empty value"},
-		{"selector-bad-value", "incarnation.create on service=foo bar", "does not match"},
+		{"unknown-selector-key", "incarnation.create on namespace=foo", "unknown dimension"},
+		{"selector-no-eq", "incarnation.create on service", "expected '='"},
+		{"selector-empty-value", "incarnation.create on service=", "expected a value"},
+		{"selector-empty-mid", "incarnation.create on service=foo,,bar", "expected a value"},
+		{"selector-bad-value", "incarnation.create on service=foo bar", "unexpected"},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {

@@ -1,17 +1,32 @@
 package handlers
 
-// Unit test for traitScalarEquals (GET arm of trait-scope, ADR-047 amendment / ADR-060
-// §7 slice 1) — scalar-only semantics, aligned with the List SQL arm
-// (incarnation.appendScopeClause `traits->>$ = $`, BUG #1 fix). Self-contained
-// (a pure function of map[string]any), independent of the package's shared fakes.
+// NIM-128: incarnation trait-scope is evaluated by the unified resolver
+// (traitsToScopeInput → rbac.EvalScope), replacing the former scalar-only
+// traitScalarEquals. A jsonb trait value projects into rbac.ScopeInput.Traits:
+// scalars become a one-element slice; LIST values contribute each element
+// (so a `trait.env=prod` scope now matches a `{env:[prod,stage]}` label —
+// List and Get agree, resolving the former List↔Get divergence).
 
 import (
 	"encoding/json"
 	"strings"
 	"testing"
+
+	"github.com/souls-guild/soul-stack/keeper/internal/rbac"
 )
 
-func TestTraitScalarEquals_Table(t *testing.T) {
+// traitVisible mirrors the incarnation Get/List scope check: build the scope
+// input from an incarnation's traits and evaluate a single `trait.<key>=value`
+// predicate against it.
+func traitVisible(traits map[string]any, key, value string) bool {
+	expr, err := rbac.ParseScopeExpr("trait." + key + "=" + value)
+	if err != nil {
+		panic(err)
+	}
+	return rbac.EvalScope(expr, rbac.ScopeInput{Traits: traitsToScopeInput(traits)})
+}
+
+func TestTraitScope_Table(t *testing.T) {
 	tests := []struct {
 		name   string
 		traits map[string]any
@@ -19,67 +34,36 @@ func TestTraitScalarEquals_Table(t *testing.T) {
 		value  string
 		want   bool
 	}{
-		{
-			name:   "string hit",
-			traits: map[string]any{"owner": "alice"},
-			key:    "owner", value: "alice", want: true,
-		},
-		{
-			name:   "string miss (different value)",
-			traits: map[string]any{"owner": "alice"},
-			key:    "owner", value: "bob", want: false,
-		},
-		{
-			name:   "float64 hit (jsonb number decodes to float64)",
-			traits: map[string]any{"shard": float64(3)},
-			key:    "shard", value: "3", want: true,
-		},
-		{
-			name:   "bool hit",
-			traits: map[string]any{"managed": true},
-			key:    "managed", value: "true", want: true,
-		},
-		{
-			name:   "missing key -> miss",
-			traits: map[string]any{"owner": "alice"},
-			key:    "team", value: "dba", want: false,
-		},
-		{
-			name:   "nil traits → miss",
-			traits: nil,
-			key:    "owner", value: "alice", want: false,
-		},
-		{
-			name:   "list-Trait -> false (scalar-only, does NOT match an array element)",
-			traits: map[string]any{"env": []any{"prod", "stage"}},
-			key:    "env", value: "prod", want: false,
-		},
-		{
-			name:   "map-Trait → false (non-scalar)",
-			traits: map[string]any{"meta": map[string]any{"k": "v"}},
-			key:    "meta", value: "v", want: false,
-		},
+		{"string hit", map[string]any{"owner": "alice"}, "owner", "alice", true},
+		{"string miss", map[string]any{"owner": "alice"}, "owner", "bob", false},
+		{"float64 hit (jsonb number → float64)", map[string]any{"shard": float64(3)}, "shard", "3", true},
+		{"bool hit", map[string]any{"managed": true}, "managed", "true", true},
+		{"missing key → miss", map[string]any{"owner": "alice"}, "team", "dba", false},
+		{"nil traits → miss", nil, "owner", "alice", false},
+		// NIM-128: a list value matches on any element (List↔Get consistent).
+		{"list-Trait hit (element match)", map[string]any{"env": []any{"prod", "stage"}}, "env", "prod", true},
+		{"list-Trait miss (element absent)", map[string]any{"env": []any{"prod", "stage"}}, "env", "dev", false},
+		{"map-Trait → miss (non-addressable)", map[string]any{"meta": map[string]any{"k": "v"}}, "meta", "v", false},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			if got := traitScalarEquals(tc.traits, tc.key, tc.value); got != tc.want {
-				t.Errorf("traitScalarEquals(%v, %q, %q) = %v, want %v",
-					tc.traits, tc.key, tc.value, got, tc.want)
+			if got := traitVisible(tc.traits, tc.key, tc.value); got != tc.want {
+				t.Errorf("traitVisible(%v, %q, %q) = %v, want %v", tc.traits, tc.key, tc.value, got, tc.want)
 			}
 		})
 	}
 }
 
-// TestTraitScalarEquals_JSONNumber — values that arrive as json.Number (decoder
-// with UseNumber) also match by their string form (the scalar branch covers json.Number).
-func TestTraitScalarEquals_JSONNumber(t *testing.T) {
+// TestTraitScope_JSONNumber — a value decoded as json.Number (UseNumber) still
+// matches by its string form.
+func TestTraitScope_JSONNumber(t *testing.T) {
 	dec := json.NewDecoder(strings.NewReader(`{"shard": 7}`))
 	dec.UseNumber()
 	var traits map[string]any
 	if err := dec.Decode(&traits); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
-	if !traitScalarEquals(traits, "shard", "7") {
-		t.Errorf("json.Number 7 did not match \"7\" (scalar branch must cover json.Number)")
+	if !traitVisible(traits, "shard", "7") {
+		t.Errorf("json.Number 7 did not match \"7\"")
 	}
 }

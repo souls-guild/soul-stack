@@ -8,6 +8,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"slices"
 	"sort"
 	"time"
 
@@ -55,6 +56,16 @@ type PurviewResolver interface {
 	ResolvePurview(aid, resource, action string) rbac.Purview
 }
 
+// covenScoper is the coven-projection surface of the RBAC resolver
+// ([rbac.Enforcer.CovenScope] / [rbac.Holder.CovenScope]). The shared
+// [PurviewResolver] only declares ResolvePurview; this narrow interface is
+// asserted at the bulk coven/traits-assign call sites to reach the coven
+// projection without widening the shared contract (NIM-128, mirrors the MCP
+// slice). A resolver that does not implement it → fail-closed 500.
+type covenScoper interface {
+	CovenScope(aid, resource, action string) ([]string, bool)
+}
+
 // SoulPresence — a narrow surface for the batch check "is the Redis SID lease alive"
 // (a live EventStream), needed by the presence overlay of `GET /v1/souls` (ADR-006(a)).
 // Symmetric to [topology.SoulLeaseChecker]: the real implementation is a wrapper over
@@ -85,18 +96,6 @@ type SoulHandler struct {
 	scoper   PurviewResolver
 	presence SoulPresence
 	logger   *slog.Logger
-
-	// scopeEvalInnerPageSize — the internal page size of the keyset eval (ADR-047
-	// S3b-2a). 0 → [scopeEvalInnerPageSize] (prod default). Overridden
-	// only in tests (a small value to model a multi-page
-	// fill without spinning up tens of thousands of souls).
-	scopeEvalInnerPageSize int
-
-	// scopeEvalMaxInnerPages — the cap on internal keyset iterations per request
-	// (ADR-047 S3b-2a). 0 → [scopeEvalMaxInnerPages] (prod default). Injected
-	// only for tests: a small cap models the cap exit (a narrow regex over a large
-	// fleet) without spinning up tens of thousands of hosts.
-	scopeEvalMaxInnerPages int
 }
 
 // NewSoulHandler creates the handler. scoper — the read surface of the operator's
@@ -516,18 +515,6 @@ func presenceSnapshotStatus(status string) bool {
 	return false
 }
 
-// scopeEvalInnerPageSize — the internal page size of the keyset eval: the handler reads
-// souls in a window of this size and Go-OR-filters, accumulating the client limit. Does NOT
-// load all souls in one query (ADR-047 §Perf, symmetric to bulkChunkSize).
-const scopeEvalInnerPageSize = 2000
-
-// scopeEvalMaxInnerPages — the cap on internal keyset iterations per ONE client
-// request (~20 pages = 40k scanned rows). Past the cap the handler returns what it
-// gathered + next_cursor (the client reads the rest with the next request) — protection against
-// the patho-case "a very narrow regex over a huge fleet" (a full scan under one
-// HTTP request is unacceptable).
-const scopeEvalMaxInnerPages = 20
-
 // GET /v1/souls (ListTyped) — visibility scoped by RBAC (ADR-047 S3b): an operator sees only
 // hosts within their scope boundary (`soul.list` Purview). The scope is transparent to the client —
 // derived from the JWT, NOT a query parameter; the coven query (filter) narrows WITHIN the scope (AND).
@@ -588,12 +575,10 @@ type SoulStatsReply struct {
 func (h *SoulHandler) StatsTyped(ctx context.Context, claims *jwt.Claims, staleThreshold time.Duration) (SoulStatsReply, error) {
 	scope, ok := h.resolveListScopeForClaims(claims)
 	if !ok {
-		// fail-closed: scope undefined → a zero aggregate, NOT all souls.
+		// fail-closed: scope undefined / empty → a zero aggregate, NOT all souls.
 		return SoulStatsReply{Body: emptySoulStatsView()}, nil
 	}
-	stats, err := soul.SelectStats(ctx, h.pool,
-		soul.ListScope{Covens: scope.Covens, Unrestricted: scope.Unrestricted},
-		staleThreshold)
+	stats, err := soul.SelectStats(ctx, h.pool, scope, staleThreshold)
 	if err != nil {
 		h.logger.Error("soul.stats: select failed", slog.Any("error", err))
 		return SoulStatsReply{}, &problemError{problem.New(problem.TypeInternalError, "", "souls stats failed")}
@@ -660,21 +645,17 @@ func (h *SoulHandler) ListTyped(ctx context.Context, claims *jwt.Claims, in Soul
 
 	scope, ok := h.resolveListScopeForClaims(claims)
 	if !ok {
-		// fail-closed: scope undefined → an empty list, NOT all souls (200, not 403).
+		// fail-closed: scope undefined / empty → an empty list, NOT all souls (200, not 403).
 		return h.emptyListReply(in.Page), nil
-	}
-	if scope.NeedsKeyset() {
-		return h.listKeysetTyped(ctx, filter, scope, in.Page, in.Cursor)
 	}
 	return h.listOffsetTyped(ctx, filter, scope, in.Page)
 }
 
-// listOffsetTyped — coven-only / Unrestricted mode: SQL-pushdown offset pagination
-// (the backward-compatible path S3b-0). total is exact, next_cursor is absent.
+// listOffsetTyped — the single souls-list path (NIM-128): the full boolean
+// purview (coven/host/trait) is pushed into SQL by [soul.SelectAll], so offset
+// pagination and total are exact. There is no keyset/Go-post-filter mode anymore.
 func (h *SoulHandler) listOffsetTyped(ctx context.Context, filter soul.ListFilter, scope soulpurview.Scope, page sharedapi.Page) (SoulListReply, error) {
-	items, total, err := soul.SelectAll(ctx, h.pool,
-		filter, soul.ListScope{Covens: scope.Covens, Unrestricted: scope.Unrestricted},
-		page.Offset, page.Limit)
+	items, total, err := soul.SelectAll(ctx, h.pool, filter, scope, page.Offset, page.Limit)
 	if err != nil {
 		h.logger.Error("soul.list: select failed", slog.Any("filter", filter), slog.Any("error", err))
 		return SoulListReply{}, &problemError{problem.New(problem.TypeInternalError, "", "list souls failed")}
@@ -692,123 +673,6 @@ func (h *SoulHandler) listOffsetTyped(ctx context.Context, filter soul.ListFilte
 	}, nil
 }
 
-// listKeyset — regex mode (ADR-047 S3b-2a): a keyset window over `(registered_at,
-// sid)` + a Go-OR post-filter (covenMatch OR regexMatch) + fill up to limit. The presence
-// of a regex disables coven-SQL-pushdown (otherwise an AND would narrow visibility BELOW
-// the Purview); the scope union is computed in Go. total is not counted (total_approximate:true).
-//
-// The user filter (status/transport/coven from query params) is forwarded
-// into [soul.ListForScopeEval] and applied as SQL WHERE — it narrows WITHIN the scope
-// (AND), does not widen. A host's final visibility ⟺ (filter in SQL) AND (scope union
-// in Go-eval). Without this, keyset mode would silently ignore the filters (a regex-scoped
-// operator with `?status=connected` would also see pending hosts — a silent under-filter).
-//
-// next_cursor invariant — "continue from where we stopped SCANNING":
-// every row read from the DB is Go-eval'd (scanned), so the cursor
-// encodes the LAST SCANNED row (`bound`), not the last emitted one.
-//   - normal path (filled to limit): the scan stops on fill →
-//     the last scanned == the last emitted, the cursor does not "run" ahead.
-//   - cap exit (a narrow regex, hit the internal page cap): `bound` >
-//     the last emitted — the client reads the rest of the scan from the next request. Otherwise
-//     on an empty page next_cursor would not be emitted (lastEmitted==nil), the client
-//     would stop, and matching hosts past the first cap pages would be lost
-//     forever (a keyset "no gaps" violation).
-//   - exhausted (DB fully scanned): no cursor — the end. The summary from `bound` is correct:
-//     everything ≤ bound is scanned (matches emitted, non-matches discarded — they are outside
-//     the Purview), > bound not yet touched → neither duplicates nor gaps.
-//
-// scope-eval narrows the set BEFORE the presence overlay: presence is applied only
-// to elements that passed the scope (scope fail-CLOSED, presence fail-SAFE — two
-// different layers, see overlayPresence).
-//
-// A broken/too-long regex (CompileScope error) → fail-closed: an empty list,
-// NOT 500 (a scope-eval-error hides it).
-func (h *SoulHandler) listKeysetTyped(ctx context.Context, filter soul.ListFilter, scope soulpurview.Scope, page sharedapi.Page, cursor *sharedapi.KeysetCursor) (SoulListReply, error) {
-	compiled, err := soulpurview.CompileScope(scope)
-	if err != nil {
-		// scope-eval-error fail-CLOSED: a broken regex in the Purview does not show souls
-		// and does not fall into 500 — it hides (an empty list).
-		h.logger.Warn("soul.list: scope regex compile failed — fail-closed (empty list)",
-			slog.Any("error", err))
-		return h.emptyListReply(page), nil
-	}
-
-	var bound *soul.KeysetCursorBound
-	if cursor != nil {
-		bound = &soul.KeysetCursorBound{RegisteredAt: cursor.RegisteredAt, SID: cursor.SID}
-	}
-
-	innerPageSize := scopeEvalInnerPageSize
-	if h.scopeEvalInnerPageSize > 0 {
-		innerPageSize = h.scopeEvalInnerPageSize
-	}
-	maxInnerPages := scopeEvalMaxInnerPages
-	if h.scopeEvalMaxInnerPages > 0 {
-		maxInnerPages = h.scopeEvalMaxInnerPages
-	}
-
-	collected := make([]SoulListView, 0, page.Limit)
-	exhausted := false
-
-	for pages := 0; pages < maxInnerPages; pages++ {
-		rows, err := soul.ListForScopeEval(ctx, h.pool, filter, bound, innerPageSize)
-		if err != nil {
-			h.logger.Error("soul.list: scope-eval query failed", slog.Any("error", err))
-			return SoulListReply{}, &problemError{problem.New(problem.TypeInternalError, "", "list souls failed")}
-		}
-		if len(rows) == 0 {
-			exhausted = true
-			break
-		}
-		filled := false
-		for i := range rows {
-			row := rows[i]
-			// bound = the last SCANNED row. We advance it on every row
-			// (not just at the window end): when exiting on limit within a window, bound
-			// stops exactly at the last emitted row, not running to the tail
-			// of the window that we did NOT scan.
-			bound = &soul.KeysetCursorBound{RegisteredAt: row.RegisteredAt, SID: row.SID}
-			if compiled.Visible(row.SID, row.Coven) {
-				collected = append(collected, scopeEvalRowToListItem(row))
-				if len(collected) == page.Limit {
-					filled = true
-					break
-				}
-			}
-		}
-		if filled {
-			break
-		}
-		if len(rows) < innerPageSize {
-			exhausted = true
-			break
-		}
-	}
-
-	h.overlayPresence(ctx, collected)
-
-	resp := SoulListReply{
-		Items:            collected,
-		Offset:           page.Offset,
-		Limit:            page.Limit,
-		Total:            0,
-		TotalApproximate: true,
-	}
-	// next_cursor is absent ONLY when the DB is exhausted (all souls scanned).
-	// Otherwise (filled to limit OR cap exit) — there is more, the cursor = the last
-	// SCANNED row (bound), so the client reads the rest of the scan without gaps.
-	if !exhausted && bound != nil {
-		enc := sharedapi.EncodeKeysetCursor(sharedapi.KeysetCursor{
-			RegisteredAt: bound.RegisteredAt,
-			SID:          bound.SID,
-		})
-		resp.NextCursor = &enc
-	}
-	return resp, nil
-}
-
-// emptyListReply — a fail-closed/empty list response (200 + items:[]). total is exact (empty is
-// an exact fact): TotalApproximate omitted, no next_cursor.
 func (h *SoulHandler) emptyListReply(page sharedapi.Page) SoulListReply {
 	return SoulListReply{
 		Items:  []SoulListView{},
@@ -818,63 +682,27 @@ func (h *SoulHandler) emptyListReply(page sharedapi.Page) SoulListReply {
 	}
 }
 
-// scopeEvalRowToListItem — the projection of the full [soul.ScopeEvalRow] into [SoulListView].
-// The card is shape-identical to offset mode (toSoulListView): it carries status/
-// transport/last_seen/created_by_aid/requested_at — otherwise the presence overlay would not
-// flip status (it is omitted on an empty snapshot), and `GET /v1/souls` would return
-// a different card shape depending on the operator's Purview.
-func scopeEvalRowToListItem(row soul.ScopeEvalRow) SoulListView {
-	item := SoulListView{
-		SID:           row.SID,
-		Transport:     string(row.Transport),
-		Status:        string(row.Status),
-		Covens:        coalesceCoven(row.Coven),
-		Traits:        coalesceTraits(row.Traits),
-		LastSeenByKid: row.LastSeenByKID,
-		RegisteredAt:  row.RegisteredAt.UTC(),
-		CreatedByAID:  row.CreatedByAID,
-	}
-	if row.LastSeenAt != nil {
-		t := row.LastSeenAt.UTC()
-		item.LastSeenAt = &t
-	}
-	if row.RequestedAt != nil {
-		t := row.RequestedAt.UTC()
-		item.RequestedAt = &t
-	}
-	return item
-}
-
-// resolveListScope derives the RBAC scope boundary of `GET /v1/souls` from the operator's
-// Purview (ADR-047 S3b). Returns (scope, true) — apply; (_, false) —
-// fail-closed (the caller returns an empty list).
+// resolveListScope derives the RBAC scope boundary of `GET /v1/souls` (and
+// `/stats`) from the operator's Purview (ADR-047 S3b, NIM-128). Returns
+// (scope, true) — apply the SQL pushdown; (_, false) — fail-closed (the caller
+// returns an empty list / zero aggregate).
 //
 // fail-closed branches (NOT all souls when in doubt — OPPOSITE to presence
 // fail-safe):
 //   - no claims in the context (guard: the route is under RequireJWT, unreachable normally);
 //   - scoper not configured (nil) — we do not build a scope, we hide everything;
-//   - Purview is empty ([soulpurview.Scope].Empty) — the operator is entitled to no
-//     hosts (default-deny without a computable dimension).
+//   - Purview is empty ([soulpurview.Scope.Empty]) — the operator is entitled to
+//     no hosts (default-deny, revoked, or no matching permission).
 //
-// Partial-scope (soulprint/state introduced — S3b-2b): computable dimensions
-// (coven/regex) are applied, soulprint/state are dropped (a strict subset,
-// never over-show), logging the under-show with a warn.
+// The whole boolean scope (coven/host/trait) pushes down to SQL, so there is no
+// partial/under-show branch anymore — every dimension is evaluated exactly.
 func (h *SoulHandler) resolveListScopeForClaims(claims *jwt.Claims) (soulpurview.Scope, bool) {
 	if claims == nil || h.scoper == nil {
 		return soulpurview.Scope{}, false
 	}
 	sc := soulpurview.Resolve(h.scoper.ResolvePurview(claims.Subject, "soul", "list"))
-	if sc.Empty {
+	if sc.Empty() {
 		return soulpurview.Scope{}, false
-	}
-	if sc.Partial {
-		// coven/regex are applied; soulprint/state (S3b-2b) are dropped. The under-show
-		// is safe (the fail-closed side), but we log it — an operator may
-		// undercount visible hosts until the soulprint post-filter is implemented.
-		h.logger.Warn("soul.list: scope contains non-computable dimensions (soulprint/state) — only coven/regex applied, some visible hosts are hidden (S3b-2b)",
-			slog.String("aid", claims.Subject),
-			slog.Any("covens", sc.Covens),
-			slog.Any("regexes", sc.Regexes))
 	}
 	return sc, true
 }
@@ -896,7 +724,7 @@ func (h *SoulHandler) GetTyped(ctx context.Context, claims *jwt.Claims, sid stri
 		h.logger.Error("soul.get: select failed", slog.String("sid", sid), slog.Any("error", err))
 		return zero, &problemError{problem.New(problem.TypeInternalError, "", "get soul failed")}
 	}
-	if !soulpurview.InScope(h.readScopeForClaims(claims), sid, s.Coven) {
+	if !soulpurview.InScope(h.readScopeForClaims(claims), sid, s.Coven, soulpurview.TraitsInput(s.Traits)) {
 		return zero, &problemError{problem.New(problem.TypeNotFound, "", "soul "+sid+" not found")}
 	}
 	dtos := []SoulListView{toSoulListView(s)}
@@ -905,13 +733,13 @@ func (h *SoulHandler) GetTyped(ctx context.Context, claims *jwt.Claims, sid stri
 }
 
 // readScopeForClaims derives the single-read scope boundary from the operator's Purview
-// (`soul.list`, the coven dimension in the pilot). fail-closed: nil claims / nil-scoper →
-// [soulpurview.Scope]{Empty:true} → [soulpurview.InScope] false → 404. Symmetric to
-// [SoulHandler.resolveListScope], but Scope (a single object via InScope), not
-// [soul.ListScope] (the list's SQL pushdown).
+// (`soul.list`). fail-closed: nil claims / nil-scoper → an empty Purview
+// ([soulpurview.Scope.Empty]) → [soulpurview.InScope] false → 404. Symmetric to
+// [SoulHandler.resolveListScopeForClaims], but a single-object check via InScope
+// rather than the list's SQL pushdown.
 func (h *SoulHandler) readScopeForClaims(claims *jwt.Claims) soulpurview.Scope {
 	if claims == nil || h.scoper == nil {
-		return soulpurview.Scope{Empty: true}
+		return soulpurview.Resolve(rbac.Purview{})
 	}
 	return soulpurview.Resolve(h.scoper.ResolvePurview(claims.Subject, "soul", "list"))
 }
@@ -988,7 +816,7 @@ func (h *SoulHandler) GetSoulprintTyped(ctx context.Context, claims *jwt.Claims,
 		h.logger.Error("soul.soulprint.get: scope select failed", slog.String("sid", sid), slog.Any("error", err))
 		return zero, &problemError{problem.New(problem.TypeInternalError, "", "get soulprint failed")}
 	}
-	if !soulpurview.InScope(h.readScopeForClaims(claims), sid, s.Coven) {
+	if !soulpurview.InScope(h.readScopeForClaims(claims), sid, s.Coven, soulpurview.TraitsInput(s.Traits)) {
 		return zero, &problemError{problem.New(problem.TypeNotFound, "", "soul "+sid+" not found")}
 	}
 
@@ -1123,7 +951,7 @@ func (h *SoulHandler) HistoryTyped(ctx context.Context, claims *jwt.Claims, in S
 		h.logger.Error("soul.history: scope select failed", slog.String("sid", in.SID), slog.Any("error", err))
 		return zero, &problemError{problem.New(problem.TypeInternalError, "", "get soul history failed")}
 	}
-	if !soulpurview.InScope(h.readScopeForClaims(claims), in.SID, s.Coven) {
+	if !soulpurview.InScope(h.readScopeForClaims(claims), in.SID, s.Coven, soulpurview.TraitsInput(s.Traits)) {
 		return zero, &problemError{problem.New(problem.TypeNotFound, "", "soul "+in.SID+" not found")}
 	}
 
@@ -1369,20 +1197,28 @@ func (h *SoulHandler) AssignCovenTyped(ctx context.Context, claims *jwt.Claims, 
 		return zero, &problemError{problem.New(problem.TypeValidationFailed, "", "selector 'incarnation' must match "+incarnation.NamePattern)}
 	}
 
-	// coven-scope bulk operations = the coven dimension of the operator's Purview (the same
-	// resolver as List — the generalized PurviewResolver).
-	pv := h.scoper.ResolvePurview(claims.Subject, "soul", "coven-assign")
-	scope := soul.BulkScope{Covens: pv.Covens, Unrestricted: pv.Unrestricted}
+	// Bulk coven-assign targets hosts by coven → project the operator's boolean
+	// scope onto its coven dimension ([rbac.Enforcer.CovenScope], NIM-128): only
+	// coven-pure disjuncts contribute, host/trait-only predicates yield an empty
+	// coven set (fail-closed). The shared PurviewResolver only exposes
+	// ResolvePurview; the concrete resolver (rbac.Holder/Enforcer) also implements
+	// CovenScope, reached via a narrow assertion (nil/absent → fail-closed 500).
+	scoper, ok := h.scoper.(covenScoper)
+	if !ok {
+		h.logger.Error("soul.coven-assign: resolver lacks CovenScope")
+		return zero, &problemError{problem.New(problem.TypeInternalError, "", "coven-assign unavailable")}
+	}
+	covens, unrestricted := scoper.CovenScope(claims.Subject, "soul", "coven-assign")
+	scope := soul.BulkScope{Covens: covens, Unrestricted: unrestricted}
 
 	dryRun := req.DryRun || dryRunQuery
 
 	// For replace we apply gate (b) explicitly before the dry_run COUNT (as BulkAssignCoven
 	// does for append): an out-of-scope label must be rejected BEFORE any
 	// DB access, otherwise COUNT would give a misleading matched.
-	if mode == soul.CovenReplace && !scope.Unrestricted {
-		labelScope := soulpurview.Scope{Covens: scope.Covens}
+	if mode == soul.CovenReplace && !unrestricted {
 		for _, l := range req.Labels {
-			if !soulpurview.InScope(labelScope, "", []string{l}) {
+			if !slices.Contains(covens, l) {
 				return zero, &problemError{problem.New(problem.TypeValidationFailed, "", "label is outside operator coven-scope")}
 			}
 		}
@@ -1685,8 +1521,17 @@ func (h *SoulHandler) AssignTraitsTyped(ctx context.Context, claims *jwt.Claims,
 		return zero, &problemError{problem.New(problem.TypeValidationFailed, "", "selector 'incarnation' must match "+incarnation.NamePattern)}
 	}
 
-	pv := h.scoper.ResolvePurview(claims.Subject, "soul", "traits-assign")
-	scope := soul.BulkScope{Covens: pv.Covens, Unrestricted: pv.Unrestricted}
+	// Bulk traits-assign narrows target hosts by coven scope (gate a) → project
+	// the operator's boolean scope onto its coven dimension via CovenScope
+	// (NIM-128), reached through the same narrow assertion as coven-assign. A
+	// trait key is NOT a scope dimension, so there is no gate (b) on the values.
+	scoper, ok := h.scoper.(covenScoper)
+	if !ok {
+		h.logger.Error("soul.traits-assign: resolver lacks CovenScope")
+		return zero, &problemError{problem.New(problem.TypeInternalError, "", "traits-assign unavailable")}
+	}
+	covens, unrestricted := scoper.CovenScope(claims.Subject, "soul", "traits-assign")
+	scope := soul.BulkScope{Covens: covens, Unrestricted: unrestricted}
 
 	dryRun := rawReq.DryRun || dryRunQuery
 

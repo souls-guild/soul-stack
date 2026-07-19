@@ -1,22 +1,20 @@
 package rbac
 
-import "regexp"
-
 // Permission is one expanded permission string.
 //
-// Grammar (rbac.md § Permission format):
+// Grammar (rbac.md § Permission format, NIM-128 boolean scope):
 //
-//	permission := "*" | <resource>.<action> ( " on " <selector> )?
-//	selector   := <key>=<v1>,<v2>,…
-//	key        ∈ {service, coven, incarnation, host}
+//	permission := "*" | <resource>.<action> ( " on " <scope-expr> )?
+//	scope-expr := boolean predicate over coven/service/incarnation/host/trait
+//	              (see scope_ast.go)
 //
 // Wildcard variants:
-//   - `*` (full) → IsWildcard=true, Resource/Action="", Selector=nil.
+//   - `*` (full) → IsWildcard=true, Resource/Action="", Scope=nil.
 //   - `<resource>.*` → Action="*", everything else as usual.
 //
-// Selector — `nil` means "no filter" (any context matches). A non-nil empty
-// map (`len==0`) is an invalid form (parsePermission returns an error before
-// construction).
+// Scope — `nil` means "no filter" (any context matches). A boolean scope
+// predicate restricts the context (NIM-128, replaces the former flat
+// `map[string][]string` selector; regex/soulprint/state dimensions removed).
 type Permission struct {
 	// IsWildcard — full wildcard `*` (equivalent to cluster-admin).
 	IsWildcard bool
@@ -28,10 +26,23 @@ type Permission struct {
 	// Action — the second segment, or `*`. Empty when IsWildcard=true.
 	Action string
 
-	// Selector — map of key → list of values. nil = "no filter" (the
-	// permission applies to any context). Multiple values within one key
-	// are OR-logic per rbac.md § Semantics.
-	Selector map[string][]string
+	// Scope — the boolean scope predicate (NIM-128). nil = "no filter" (the
+	// permission applies to any context). Evaluated by [evalScope] over a
+	// [ScopeInput].
+	Scope *ScopeExpr
+}
+
+// ScopeInput is the full node context a scope predicate is evaluated against
+// (NIM-128 unified resolver). Every dimension is a SET — a Soul has many
+// covens; a request context carries at most one value per dimension. A
+// dimension absent (empty) from the input makes its conditions fail-closed
+// (deny), matching the former "selector key not in context → deny".
+type ScopeInput struct {
+	Covens       []string
+	Services     []string
+	Incarnations []string
+	Hosts        []string            // sid / hostname candidates
+	Traits       map[string][]string // trait key → values (scalar → one-element)
 }
 
 // Matches reports whether the permission satisfies the request.
@@ -46,18 +57,23 @@ type Permission struct {
 //   - IsWildcard → true for any resource/action/context.
 //   - Resource mismatch → false.
 //   - Action mismatch (accounting for `*`) → false.
-//   - Selector=nil → true (permission with no filter).
-//   - Selector → for each key-pair in the selector: the key must be present
-//     in the context AND the context's value must be among the selector's
-//     values. All selector keys must match (AND across keys); OR within one
-//     key's values.
+//   - Scope=nil → true (permission with no filter).
+//   - Scope → evaluate the boolean predicate over the context (built into a
+//     [ScopeInput]); a dimension absent from the context fails closed.
 //
-// Selector keys missing from the context make the permission inapplicable
-// (deny). This is deliberate: `incarnation.create on service=foo` must not
-// accidentally fire on a request that doesn't specify service in the context.
+// The flat request context carries no traits, so a trait condition fails
+// closed here — the real trait/host-glob evaluation happens in the unified
+// resolver ([EvalScope] with a full [ScopeInput]). Mutating endpoints that
+// carry coven/service/incarnation/host in the request context use this path.
 func (p Permission) Matches(resource, action string, context map[string]string) bool {
 	if p.IsWildcard {
-		return true
+		// Bare `*` = cluster-admin (any context). A scoped `* on <expr>`
+		// (NIM-128) is bounded — it matches only where its scope holds,
+		// enforced against the request context like any other permission.
+		if p.Scope == nil {
+			return true
+		}
+		return evalScope(p.Scope, scopeInputFromContext(context))
 	}
 	if p.Resource != resource {
 		return false
@@ -65,104 +81,113 @@ func (p Permission) Matches(resource, action string, context map[string]string) 
 	if p.Action != "*" && p.Action != action {
 		return false
 	}
-	if p.Selector == nil {
+	if p.Scope == nil {
 		return true
 	}
-	for key, values := range p.Selector {
-		if key == "regex" {
-			// ADR-047 S2a: regex matches against SID/hostname, sourced from
-			// the context's host or sid key (some endpoints set `host`,
-			// others `sid`). Neither present → deny (like an exact key
-			// missing its own context key). OR across one key's patterns.
-			target, ok := regexTarget(context)
-			if !ok {
-				return false
-			}
-			if !regexAny(values, target) {
-				return false
-			}
-			continue
-		}
-		if key == "soulprint" {
-			// ADR-047 S2b: the soulprint predicate is a CEL expression
-			// over host facts (`soulprint.self.*`). The current context
-			// (map[string]string) carries no nested SoulprintFacts, so in
-			// S2b the soulprint dimension is fail-closed: deny. REAL CEL
-			// eval against facts happens in slices S3/S4 (the list/target
-			// resolver feeds facts into [EvalSoulprintExpr]); feeding facts
-			// into the Check context would require widening the Matches
-			// signature, which is out of scope here (S2b boundary). This
-			// explicit branch marks the fail-closed as intentional, not a
-			// side effect of "key not in context".
-			return false
-		}
-		if key == "state" {
-			// ADR-047 S2c: the state predicate is a CEL expression over
-			// incarnation.state. The current context (map[string]string)
-			// carries no nested incarnation.state, so in S2c the state
-			// dimension is fail-closed: deny. REAL CEL eval against state
-			// happens in slice S3b (the incarnation list/target resolver
-			// feeds state into [EvalStateExpr]); feeding state into the
-			// Check context would require widening the Matches signature,
-			// which is out of scope here (S2c boundary). Symmetric with the
-			// soulprint branch.
-			return false
-		}
-		if key == "trait" {
-			// ADR-047 amendment (ADR-060 §7 slice 1): trait is a `key:value`
-			// exact match against incarnation.traits. The current context
-			// (map[string]string) carries no nested incarnation.traits, so
-			// in slice 1 the trait dimension is fail-closed: deny. REAL
-			// matching against an incarnation's traits happens in the
-			// incarnation-list/get resolver (slice 1 §7:
-			// inc.Traits[key]==value); feeding traits into the Check context
-			// would require widening the Matches signature, which is not
-			// done here. Symmetric with the state/soulprint branches.
-			return false
-		}
-		ctxVal, ok := context[key]
-		if !ok {
-			return false
-		}
-		matched := false
-		for _, v := range values {
-			if v == ctxVal {
-				matched = true
-				break
-			}
-		}
-		if !matched {
-			return false
-		}
-	}
-	return true
+	return evalScope(p.Scope, scopeInputFromContext(context))
 }
 
-// regexTarget extracts the string the regex selector matches against: the
-// host key takes priority, otherwise sid. nil/neither present → (_, false).
-func regexTarget(context map[string]string) (string, bool) {
+// scopeInputFromContext builds a [ScopeInput] from the flat request context
+// map used by mutating endpoints. host is sourced from both `host` and `sid`
+// (as the former regexTarget did). Traits are absent in this path.
+func scopeInputFromContext(context map[string]string) ScopeInput {
+	in := ScopeInput{}
+	if v, ok := context[dimCoven]; ok {
+		in.Covens = []string{v}
+	}
+	if v, ok := context[dimService]; ok {
+		in.Services = []string{v}
+	}
+	if v, ok := context[dimIncarnation]; ok {
+		in.Incarnations = []string{v}
+	}
 	if v, ok := context["host"]; ok {
-		return v, true
+		in.Hosts = append(in.Hosts, v)
 	}
 	if v, ok := context["sid"]; ok {
-		return v, true
+		in.Hosts = append(in.Hosts, v)
 	}
-	return "", false
+	return in
 }
 
-// regexAny reports true if at least one pattern matches target. Patterns
-// were already validated by [parseRegexValue] at snapshot load
-// (regexp.Compile succeeded), so MustCompile here wouldn't panic; recompiling
-// on the hot path is acceptable for MVP (Check isn't the hottest path,
-// scoped roles are rare). On desync with a broken pattern — fail-closed
-// (no match), not panic.
-func regexAny(patterns []string, target string) bool {
-	for _, pat := range patterns {
-		re, err := regexp.Compile(pat)
-		if err != nil {
-			continue
+// EvalScope reports whether a scope predicate is satisfied by the full node
+// context (NIM-128 unified resolver). A nil predicate = unrestricted → true.
+// Exported for the souls/incarnation resolvers that build a rich [ScopeInput].
+func EvalScope(e *ScopeExpr, in ScopeInput) bool {
+	return evalScope(e, in)
+}
+
+func evalScope(e *ScopeExpr, in ScopeInput) bool {
+	if e == nil {
+		return true
+	}
+	switch e.Op {
+	case OpLeaf:
+		return evalCond(e.Cond, in)
+	case OpAnd:
+		for _, c := range e.Children {
+			if !evalScope(c, in) {
+				return false
+			}
 		}
-		if re.MatchString(target) {
+		return true
+	case OpOr:
+		for _, c := range e.Children {
+			if evalScope(c, in) {
+				return true
+			}
+		}
+		return false
+	}
+	return false
+}
+
+func evalCond(c *ScopeCond, in ScopeInput) bool {
+	switch c.Dim {
+	case dimCoven:
+		return anyInSet(in.Covens, c.Values)
+	case dimService:
+		return anyInSet(in.Services, c.Values)
+	case dimIncarnation:
+		if c.Match == MatchGlob {
+			return anyGlobMatch(c.Values[0], in.Incarnations)
+		}
+		return anyInSet(in.Incarnations, c.Values)
+	case dimHost:
+		if c.Match == MatchGlob {
+			return anyGlobMatch(c.Values[0], in.Hosts)
+		}
+		return anyInSet(in.Hosts, c.Values)
+	case dimTrait:
+		return anyInSet(in.Traits[c.Key], c.Values)
+	}
+	return false
+}
+
+// anyGlobMatch reports whether the glob matches any element of have. Empty
+// have → false (fail-closed).
+func anyGlobMatch(glob string, have []string) bool {
+	for _, h := range have {
+		if globMatch(glob, h) {
+			return true
+		}
+	}
+	return false
+}
+
+// anyInSet reports whether any element of have is present in the want set.
+// Empty have → false (fail-closed: a dimension absent from the context does
+// not satisfy a condition on it).
+func anyInSet(have, want []string) bool {
+	if len(have) == 0 {
+		return false
+	}
+	set := make(map[string]struct{}, len(want))
+	for _, w := range want {
+		set[w] = struct{}{}
+	}
+	for _, h := range have {
+		if _, ok := set[h]; ok {
 			return true
 		}
 	}

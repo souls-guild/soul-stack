@@ -11,7 +11,6 @@ package incarnation
 
 import (
 	"context"
-	"fmt"
 	"testing"
 
 	"github.com/souls-guild/soul-stack/keeper/internal/soul"
@@ -286,120 +285,5 @@ func TestIntegration_UpdateTraits_NotFound(t *testing.T) {
 	_, err := UpdateTraits(ctx, integrationPool, "nope", map[string]any{"team": "dba"})
 	if err == nil {
 		t.Fatal("UpdateTraits(missing) returned nil")
-	}
-}
-
-// TestIntegration_PgContainmentMatchesArrayWithScalarRHS — CONFIRMS the root
-// cause of BUG #1 on real PG (the psql equivalent from the spec): jsonb
-// containment `@>` with a scalar RHS MATCHES an array (array-contains-primitive,
-// PG §8.14.3). This is exactly what made the old SQL leg
-// `traits @> '{"env":"prod"}'::jsonb` true for the list-Trait
-// `{"env":["prod","stage"]}`, diverging from the GET path's traitScalarEquals
-// (list→false). The fix replaced containment with scalar-equality
-// `traits->>$ = $`, which does NOT match an array — checked by the adjacent
-// scalar-leg test below.
-func TestIntegration_PgContainmentMatchesArrayWithScalarRHS(t *testing.T) {
-	ctx := context.Background()
-	var containmentMatch, scalarMatch bool
-	// @> with a scalar RHS against an array → TRUE (root cause of the bug).
-	if err := integrationPool.QueryRow(ctx,
-		`SELECT '{"env":["prod","stage"]}'::jsonb @> '{"env":"prod"}'::jsonb`).Scan(&containmentMatch); err != nil {
-		t.Fatalf("containment probe: %v", err)
-	}
-	if !containmentMatch {
-		t.Error("PG @> with a scalar-RHS did NOT match the array - the BUG #1 premise did not reproduce (expected TRUE)")
-	}
-	// the scalar form `->>` against an array → array text ≠ 'prod' → FALSE (the fix).
-	if err := integrationPool.QueryRow(ctx,
-		`SELECT ('{"env":["prod","stage"]}'::jsonb)->>'env' = 'prod'`).Scan(&scalarMatch); err != nil {
-		t.Fatalf("scalar probe: %v", err)
-	}
-	if scalarMatch {
-		t.Error("scalar `->>'env' = 'prod'` matched the array - the fix did not close the desync (expected FALSE)")
-	}
-}
-
-// TestIntegration_ScopeTrait_ListVsScalar_ConsistentWithGet — the MAIN guard
-// for BUG #1: the List path (SelectAll trait-scope SQL) and the GET path
-// (traitScalarEquals, scalar-only) give the SAME answer on the same data. Two
-// incarnations:
-//   - redis-list  traits={env:[prod,stage]}  (list-Trait);
-//   - redis-scalar traits={env:prod}          (scalar-Trait).
-//
-// Scope trait=env:prod: scalar is visible (both paths), list is NOT visible
-// (both paths, scalar-only). Previously List showed the list-incarnation
-// (containment @>) while GET returned 404 (traitScalarEquals list→false) — a
-// mismatch. Here we prove that after the fix both paths agree on live PG.
-func TestIntegration_ScopeTrait_ListVsScalar_ConsistentWithGet(t *testing.T) {
-	resetAll(t)
-	seedOperator(t, "archon-alice")
-	ctx := context.Background()
-	creator := "archon-alice"
-
-	for _, seed := range []struct {
-		name   string
-		traits map[string]any
-	}{
-		{"redis-list", map[string]any{"env": []any{"prod", "stage"}}},
-		{"redis-scalar", map[string]any{"env": "prod"}},
-	} {
-		if err := Create(ctx, integrationPool, &Incarnation{
-			Name: seed.name, Service: "redis", ServiceVersion: "v1",
-			StateSchemaVersion: 1, Status: StatusReady, CreatedByAID: &creator,
-			Traits: seed.traits,
-		}); err != nil {
-			t.Fatalf("Create %s: %v", seed.name, err)
-		}
-	}
-
-	scope := ListScope{Traits: []TraitPair{{Key: "env", Value: "prod"}}}
-
-	// List path: SQL trait-scope. Exactly redis-scalar must be visible.
-	out, total, err := SelectAll(ctx, integrationPool, ListFilter{}, scope, 0, 50)
-	if err != nil {
-		t.Fatalf("SelectAll trait-scope: %v", err)
-	}
-	listVisible := map[string]bool{}
-	for _, inc := range out {
-		listVisible[inc.Name] = true
-	}
-	if total != 1 || !listVisible["redis-scalar"] {
-		t.Errorf("List: total=%d visible=%v, want only redis-scalar (scalar-only)", total, listVisible)
-	}
-	if listVisible["redis-list"] {
-		t.Error("List SEES the list-Trait incarnation via trait-scope - BUG #1 not fixed (containment semantics)")
-	}
-
-	// GET path: the same scalar predicate as traitScalarEquals (scalar-only).
-	// Must agree with List on every incarnation.
-	for _, name := range []string{"redis-list", "redis-scalar"} {
-		inc, err := SelectByName(ctx, integrationPool, name)
-		if err != nil {
-			t.Fatalf("SelectByName %s: %v", name, err)
-		}
-		getVisible := traitScalarEqualsLocal(inc.Traits, "env", "prod")
-		if getVisible != listVisible[name] {
-			t.Errorf("DESYNC List<->Get for %s: List=%v Get=%v (traits=%v)",
-				name, listVisible[name], getVisible, inc.Traits)
-		}
-	}
-}
-
-// traitScalarEqualsLocal duplicates the scalar-only semantics of
-// handlers.traitScalarEquals (unexported, lives in the api package) to check
-// List↔Get consistency within the incarnation package: scalar
-// (string/number/bool) → string equality; list/map → false. A deliberate copy
-// (a few lines vs. an incarnation→api cross-package dependency that shouldn't
-// exist).
-func traitScalarEqualsLocal(traits map[string]any, key, value string) bool {
-	v, ok := traits[key]
-	if !ok {
-		return false
-	}
-	switch v.(type) {
-	case string, float64, bool, int, int64:
-		return fmt.Sprint(v) == value
-	default:
-		return false
 	}
 }

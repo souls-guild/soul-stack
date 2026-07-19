@@ -9,7 +9,34 @@ import (
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
+
+	"github.com/souls-guild/soul-stack/keeper/internal/rbac"
+	"github.com/souls-guild/soul-stack/keeper/internal/soulpurview"
 )
+
+// Scope test helpers (NIM-128 boolean scope): build a [soulpurview.Scope] from a
+// resolved [rbac.Purview] for SelectAll/SelectStats.
+func unrestrictedScope() soulpurview.Scope {
+	return soulpurview.Resolve(rbac.Purview{Unrestricted: true})
+}
+func emptyScope() soulpurview.Scope { return soulpurview.Resolve(rbac.Purview{}) }
+
+// covenScope builds an OR of coven predicates (the boolean-scope analog of the
+// former ListScope{Covens}). No covens → empty (fail-closed).
+func covenScope(covens ...string) soulpurview.Scope {
+	if len(covens) == 0 {
+		return emptyScope()
+	}
+	terms := make([]string, len(covens))
+	for i, c := range covens {
+		terms[i] = "coven=" + c
+	}
+	e, err := rbac.ParseScopeExpr(strings.Join(terms, " OR "))
+	if err != nil {
+		panic("covenScope: " + err.Error())
+	}
+	return soulpurview.Resolve(rbac.Purview{Exprs: []*rbac.ScopeExpr{e}})
+}
 
 // Test fakes follow the pattern from keeper/internal/operator/crud_test.go.
 // Not combined in a shared test-only helper package: each registry's CRUD API
@@ -521,14 +548,14 @@ func TestUpdateSoulprint_RejectsInvalidSID(t *testing.T) {
 
 func TestSelectAll_RejectsNegativeOffset(t *testing.T) {
 	f := &fakeDB{}
-	if _, _, err := SelectAll(context.Background(), f, ListFilter{}, ListScope{Unrestricted: true}, -1, 10); err == nil {
+	if _, _, err := SelectAll(context.Background(), f, ListFilter{}, unrestrictedScope(), -1, 10); err == nil {
 		t.Fatal("SelectAll with offset=-1 returned nil err")
 	}
 }
 
 func TestSelectAll_RejectsZeroLimit(t *testing.T) {
 	f := &fakeDB{}
-	if _, _, err := SelectAll(context.Background(), f, ListFilter{}, ListScope{Unrestricted: true}, 0, 0); err == nil {
+	if _, _, err := SelectAll(context.Background(), f, ListFilter{}, unrestrictedScope(), 0, 0); err == nil {
 		t.Fatal("SelectAll with limit=0 returned nil err")
 	}
 }

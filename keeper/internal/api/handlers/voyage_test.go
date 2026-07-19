@@ -760,7 +760,7 @@ func TestVoyageCreate_CommandScoped_Unrestricted_FullResolve202(t *testing.T) {
 	if rec.Code != http.StatusAccepted {
 		t.Fatalf("status = %d, want 202 (Unrestricted backcompat); body=%s", rec.Code, rec.Body.String())
 	}
-	if !cmd.lastScope.Unrestricted {
+	if !cmd.lastScope.Unrestricted() {
 		t.Error("scope passed to the resolver is not Unrestricted (cluster-admin backcompat is broken)")
 	}
 	var reply voyageCreateReply
@@ -775,7 +775,7 @@ func TestVoyageCreate_CommandScoped_Unrestricted_FullResolve202(t *testing.T) {
 func TestVoyageCreate_CommandScoped_ResolvesErrandRunPurview(t *testing.T) {
 	store := &fakeVoyageStore{}
 	cmd := &scopedCommandResolver{scoped: ScopedSIDs{SIDs: []string{"h1"}}}
-	rec := &recordingScoper{pv: rbac.Purview{Covens: []string{"prod"}}}
+	rec := &recordingScoper{pv: rbac.Purview{Exprs: []*rbac.ScopeExpr{mustScopeExpr("coven=prod")}}}
 	h := newVoyageHandlerScoped(store, cmd, allowAll(), rec)
 
 	w := httptest.NewRecorder()

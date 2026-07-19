@@ -442,7 +442,7 @@ func TestLoadSnapshot_SynodScopeUnion(t *testing.T) {
 	if p.Unrestricted {
 		t.Fatalf("Purview Unrestricted, want scoped (both roles have default_scope)")
 	}
-	got := sortedStrings(p.Covens)
+	got := sortedStrings(covensFromPurview(p))
 	if len(got) != 2 || got[0] != "prod" || got[1] != "staging" {
 		t.Errorf("Purview.Covens = %v, want [prod staging] (union of direct + via Synod)", got)
 	}

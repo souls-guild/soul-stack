@@ -253,7 +253,25 @@ type ListScope struct {
 	StateNames   []string
 	Traits       []TraitPair
 	Unrestricted bool
+
+	// Scope — NIM-128 boolean-scope predicate renderer. When non-nil it FULLY
+	// supersedes the flat Covens/StateNames/Traits dimensions: the RBAC boundary
+	// is an arbitrary AND/OR expression (rendered by the API handler via
+	// rbac.PurviewSQL) that a flat value-list can't express. Carried as a
+	// placeholder-relative closure ([ScopeSQLFunc]) so this package stays free of
+	// an rbac import. Unrestricted still short-circuits before this is consulted;
+	// the flat fields remain for the legacy state-CEL adapter ([StateLister]) and
+	// the global-runs view ([applyrun], via [ScopeCondition]).
+	Scope ScopeSQLFunc
 }
+
+// ScopeSQLFunc renders the RBAC boolean-scope predicate over the incarnation
+// table columns starting at placeholder $startIdx. It returns the SQL fragment
+// (already handling Unrestricted→TRUE and empty/deny→FALSE), its positional args
+// (in placeholder order), and the next free index. Supplied by the API handler
+// wrapping [rbac.PurviewSQL], keeping the incarnation package independent of the
+// rbac package.
+type ScopeSQLFunc func(startIdx int) (sql string, args []any, next int)
 
 // TraitPair — one `key:value` scope trait pair (ADR-047 amendment, ADR-060
 // §7 slice 1). Scalar-only: matches `traits->>'<key>' = '<value>'`, aligned
@@ -623,6 +641,14 @@ func appendScopeClause(clauses []string, args []any, scope ListScope) ([]string,
 func ScopeCondition(args []any, scope ListScope) (string, []any) {
 	if scope.Unrestricted {
 		return "", args
+	}
+
+	// NIM-128 boolean scope: the handler-supplied renderer fully supersedes the
+	// flat dimensions. It already emits TRUE/FALSE for unrestricted/empty, so its
+	// result is used verbatim (placeholders continue from the passed args).
+	if scope.Scope != nil {
+		sql, extra, _ := scope.Scope(len(args) + 1)
+		return sql, append(args, extra...)
 	}
 
 	var dims []string

@@ -199,8 +199,8 @@ func TestIntegration_CreateRole_DefaultScope(t *testing.T) {
 	if p.Unrestricted {
 		t.Errorf("Unrestricted=true, want false (bare-perm inherits default_scope)")
 	}
-	if len(p.Covens) != 1 || p.Covens[0] != "prod" {
-		t.Errorf("Covens=%v, want [prod]", p.Covens)
+	if covens := covensFromPurview(p); len(covens) != 1 || covens[0] != "prod" {
+		t.Errorf("Covens=%v, want [prod]", covens)
 	}
 }
 

@@ -1861,19 +1861,7 @@ components:
     MyPermissionScope:
       additionalProperties: false
       properties:
-        covens:
-          items:
-            type: string
-          type: array
-        regex:
-          items:
-            type: string
-          type: array
-        soulprint:
-          items:
-            type: string
-          type: array
-        state:
+        exprs:
           items:
             type: string
           type: array
@@ -2700,7 +2688,7 @@ components:
       additionalProperties: false
       properties:
         default_scope:
-          description: role scope selector of form key=v1,v2,… (service/coven/incarnation/host); omitted/null → role without scope
+          description: "role scope: boolean predicate over coven/service/incarnation/host/trait (e.g. coven in (a, b) AND host matches redis-*); omitted/null → role without scope"
           type: string
         description:
           description: human-readable role description for UI/audit
@@ -2736,7 +2724,7 @@ components:
       additionalProperties: false
       properties:
         default_scope:
-          description: "scope selector: omitted → scope untouched; present (incl. null) → replaces (null removes scope)"
+          description: "scope: boolean predicate over coven/service/incarnation/host/trait; omitted → scope untouched; present (incl. null) → replaces (null removes scope)"
           type:
             - string
             - "null"
@@ -2756,6 +2744,7 @@ components:
         builtin:
           type: boolean
         default_scope:
+          description: "role scope: boolean predicate over coven/service/incarnation/host/trait (e.g. coven in (a, b) AND host matches redis-*); omitted → role without scope"
           type: string
         description:
           type: string

@@ -53,15 +53,14 @@ func TestGoldenWire_CatalogReply(t *testing.T) {
 		HeraldTypeCatalogReply{Types: nil},
 		`{"types":null}`)
 
-	// --- MyPermissionsReply: scope set/nil, dimensions set/nil, wildcard ---
+	// --- MyPermissionsReply: scope set/nil, exprs set/nil, wildcard ---
 	res := "soul"
 	act := "list"
 	wild := true
-	covens := []string{"prod"}
-	regex := []string{"^web.*"}
+	exprs := []string{"coven=prod", "host matches web-*"}
 	goldenCatalogWire(t, "MyPermissionsReply/full",
-		MyPermissionsReply{Permissions: []MyPermission{{Resource: &res, Action: &act, Scope: &MyPermissionScope{Covens: &covens, Regex: &regex, Unrestricted: false}}}},
-		`{"permissions":[{"action":"list","resource":"soul","scope":{"covens":["prod"],"regex":["^web.*"],"unrestricted":false}}]}`)
+		MyPermissionsReply{Permissions: []MyPermission{{Resource: &res, Action: &act, Scope: &MyPermissionScope{Exprs: &exprs, Unrestricted: false}}}},
+		`{"permissions":[{"action":"list","resource":"soul","scope":{"exprs":["coven=prod","host matches web-*"],"unrestricted":false}}]}`)
 	goldenCatalogWire(t, "MyPermissionsReply/wildcard_no_scope",
 		MyPermissionsReply{Permissions: []MyPermission{{Wildcard: &wild}}},
 		`{"permissions":[{"wildcard":true}]}`)

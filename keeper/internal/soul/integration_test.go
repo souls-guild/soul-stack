@@ -267,7 +267,7 @@ func TestIntegration_SelectAll_FilterAndPaginate(t *testing.T) {
 		}
 	}
 
-	unrestricted := ListScope{Unrestricted: true}
+	unrestricted := unrestrictedScope()
 
 	all, total, err := SelectAll(ctx, integrationPool, ListFilter{}, unrestricted, 0, 10)
 	if err != nil {
@@ -318,7 +318,7 @@ func TestIntegration_SelectAll_Scope(t *testing.T) {
 	}
 
 	// scope=[prod] → only prod hosts (a subset, not the whole fleet).
-	prodItems, prodTotal, err := SelectAll(ctx, integrationPool, ListFilter{}, ListScope{Covens: []string{"prod"}}, 0, 10)
+	prodItems, prodTotal, err := SelectAll(ctx, integrationPool, ListFilter{}, covenScope("prod"), 0, 10)
 	if err != nil {
 		t.Fatalf("SelectAll(scope=prod): %v", err)
 	}
@@ -327,7 +327,7 @@ func TestIntegration_SelectAll_Scope(t *testing.T) {
 	}
 
 	// scope=[prod,staging] → union.
-	union, unionTotal, err := SelectAll(ctx, integrationPool, ListFilter{}, ListScope{Covens: []string{"prod", "staging"}}, 0, 10)
+	union, unionTotal, err := SelectAll(ctx, integrationPool, ListFilter{}, covenScope("prod", "staging"), 0, 10)
 	if err != nil {
 		t.Fatalf("SelectAll(scope=prod,staging): %v", err)
 	}
@@ -336,7 +336,7 @@ func TestIntegration_SelectAll_Scope(t *testing.T) {
 	}
 
 	// fail-closed: an empty scope (not Unrestricted) → zero rows, NOT the whole fleet.
-	empty, emptyTotal, err := SelectAll(ctx, integrationPool, ListFilter{}, ListScope{Covens: nil}, 0, 10)
+	empty, emptyTotal, err := SelectAll(ctx, integrationPool, ListFilter{}, emptyScope(), 0, 10)
 	if err != nil {
 		t.Fatalf("SelectAll(scope=empty): %v", err)
 	}
@@ -346,184 +346,12 @@ func TestIntegration_SelectAll_Scope(t *testing.T) {
 
 	// filter ∩ scope: an operator with scope=[prod] filtering coven=staging → empty
 	// (staging is outside their scope, AND-intersection, not an expansion).
-	cross, crossTotal, err := SelectAll(ctx, integrationPool, ListFilter{Coven: "staging"}, ListScope{Covens: []string{"prod"}}, 0, 10)
+	cross, crossTotal, err := SelectAll(ctx, integrationPool, ListFilter{Coven: "staging"}, covenScope("prod"), 0, 10)
 	if err != nil {
 		t.Fatalf("SelectAll(filter=staging ∩ scope=prod): %v", err)
 	}
 	if crossTotal != 0 || len(cross) != 0 {
 		t.Errorf("filter=staging cap scope=prod total/len = %d/%d, want 0/0 (scope is not widened by filter)", crossTotal, len(cross))
-	}
-}
-
-// TestIntegration_ListForScopeEval_KeysetNoDupesNoGaps — the MAIN keyset test
-// (ADR-047 S3b-2a): a fleet with a BATCH of identical registered_at, page_size
-// smaller than the fleet → walking all pages with the composite cursor
-// `(registered_at, sid)` collects EVERY host EXACTLY ONCE (no dupes, no gaps
-// at page boundaries). A bare sid cursor would leave holes on equal
-// registered_at — this test catches that regression.
-func TestIntegration_ListForScopeEval_KeysetNoDupesNoGaps(t *testing.T) {
-	resetAll(t)
-	ctx := context.Background()
-
-	// 7 hosts with the SAME registered_at (a batch), 2 with different times.
-	// The batch forces the composite cursor to break ties by sid.
-	sameTS := time.Date(2026, 5, 20, 12, 0, 0, 0, time.UTC)
-	earlier := sameTS.Add(-time.Hour)
-	later := sameTS.Add(time.Hour)
-	seed := []struct {
-		sid string
-		at  time.Time
-	}{
-		{"h1.example.com", sameTS}, {"h2.example.com", sameTS}, {"h3.example.com", sameTS},
-		{"h4.example.com", sameTS}, {"h5.example.com", sameTS}, {"h6.example.com", sameTS},
-		{"h7.example.com", sameTS},
-		{"early.example.com", earlier},
-		{"late.example.com", later},
-	}
-	want := map[string]struct{}{}
-	for _, s := range seed {
-		at := s.at
-		if err := Insert(ctx, integrationPool, &Soul{SID: s.sid, Status: StatusPending, RegisteredAt: at}); err != nil {
-			t.Fatalf("Insert(%s): %v", s.sid, err)
-		}
-		want[s.sid] = struct{}{}
-	}
-
-	const pageSize = 3 // smaller than the fleet (9) and the batch (7) → many boundaries.
-	got := map[string]struct{}{}
-	var cursor *KeysetCursorBound
-	pages := 0
-	for {
-		rows, err := ListForScopeEval(ctx, integrationPool, ListFilter{}, cursor, pageSize)
-		if err != nil {
-			t.Fatalf("ListForScopeEval (page %d): %v", pages, err)
-		}
-		if len(rows) == 0 {
-			break
-		}
-		for _, r := range rows {
-			if _, dup := got[r.SID]; dup {
-				t.Fatalf("DUPLICATE: %s encountered twice (keyset boundary leaked)", r.SID)
-			}
-			got[r.SID] = struct{}{}
-		}
-		last := rows[len(rows)-1]
-		cursor = &KeysetCursorBound{RegisteredAt: last.RegisteredAt, SID: last.SID}
-		pages++
-		if len(rows) < pageSize {
-			break
-		}
-		if pages > 20 {
-			t.Fatal("cursor does not converge (>20 pages for 9 hosts)")
-		}
-	}
-	if len(got) != len(want) {
-		t.Fatalf("collected %d hosts, want %d - there are gaps/duplicates", len(got), len(want))
-	}
-	for sid := range want {
-		if _, ok := got[sid]; !ok {
-			t.Errorf("host %s skipped by keyset traversal", sid)
-		}
-	}
-}
-
-// TestIntegration_ListForScopeEval_OrderStable — the registered_at DESC, sid
-// ASC ordering is stable: the cursor walk is strictly monotonic (each next
-// page never "goes backward").
-func TestIntegration_ListForScopeEval_OrderStable(t *testing.T) {
-	resetAll(t)
-	ctx := context.Background()
-	base := time.Date(2026, 5, 1, 0, 0, 0, 0, time.UTC)
-	for _, sid := range []string{"c.example.com", "a.example.com", "b.example.com"} {
-		// a,b in the same second, c later: checks both the tie-break and DESC.
-		at := base
-		if sid == "c.example.com" {
-			at = base.Add(time.Minute)
-		}
-		if err := Insert(ctx, integrationPool, &Soul{SID: sid, Status: StatusPending, RegisteredAt: at}); err != nil {
-			t.Fatalf("Insert(%s): %v", sid, err)
-		}
-	}
-	rows, err := ListForScopeEval(ctx, integrationPool, ListFilter{}, nil, 10)
-	if err != nil {
-		t.Fatalf("ListForScopeEval: %v", err)
-	}
-	if len(rows) != 3 {
-		t.Fatalf("rows = %d, want 3", len(rows))
-	}
-	// c (later) comes first; then a,b (equal TS) ordered by sid ASC.
-	wantOrder := []string{"c.example.com", "a.example.com", "b.example.com"}
-	for i, w := range wantOrder {
-		if rows[i].SID != w {
-			t.Errorf("rows[%d] = %s, want %s (order registered_at DESC, sid ASC violated)", i, rows[i].SID, w)
-		}
-	}
-}
-
-// TestIntegration_ListForScopeEval_FilterPushdown — the user filter
-// (status/transport/coven) is applied as a SQL WHERE inside the keyset window
-// (ADR-047 S3b-2a fix). Without pushdown, keyset mode would return all rows
-// and the handler's Go-eval couldn't distinguish "filtered out" from "outside
-// scope". This CRUD-level test pins down that the filter cuts the selection
-// IN the DB rather than being ignored.
-func TestIntegration_ListForScopeEval_FilterPushdown(t *testing.T) {
-	resetAll(t)
-	ctx := context.Background()
-	base := time.Date(2026, 5, 20, 12, 0, 0, 0, time.UTC)
-	seed := []*Soul{
-		{SID: "web-01.example.com", Transport: TransportAgent, Status: StatusConnected, Coven: []string{"prod"}, RegisteredAt: base},
-		{SID: "web-02.example.com", Transport: TransportAgent, Status: StatusPending, Coven: []string{"dev"}, RegisteredAt: base.Add(-time.Second)},
-		{SID: "ssh-03.example.com", Transport: TransportSSH, Status: StatusConnected, Coven: []string{"prod"}, RegisteredAt: base.Add(-2 * time.Second)},
-	}
-	for _, s := range seed {
-		if err := Insert(ctx, integrationPool, s); err != nil {
-			t.Fatalf("Insert(%s): %v", s.SID, err)
-		}
-	}
-
-	collect := func(f ListFilter) map[string]struct{} {
-		rows, err := ListForScopeEval(ctx, integrationPool, f, nil, 100)
-		if err != nil {
-			t.Fatalf("ListForScopeEval(%+v): %v", f, err)
-		}
-		out := map[string]struct{}{}
-		for _, r := range rows {
-			out[r.SID] = struct{}{}
-		}
-		return out
-	}
-
-	// status=connected → web-01, ssh-03 (NOT web-02 pending).
-	got := collect(ListFilter{Status: StatusConnected})
-	if len(got) != 2 {
-		t.Errorf("status=connected: got %d, want 2 (%v)", len(got), got)
-	}
-	if _, ok := got["web-02.example.com"]; ok {
-		t.Error("status=connected let through pending web-02 - filter not applied in SQL")
-	}
-	// transport=ssh → only ssh-03.
-	got = collect(ListFilter{Transport: TransportSSH})
-	if len(got) != 1 {
-		t.Errorf("transport=ssh: got %d, want 1 (%v)", len(got), got)
-	}
-	if _, ok := got["ssh-03.example.com"]; !ok {
-		t.Error("transport=ssh did not return ssh-03")
-	}
-	// coven=dev → only web-02.
-	got = collect(ListFilter{Coven: "dev"})
-	if len(got) != 1 {
-		t.Errorf("coven=dev: got %d, want 1 (%v)", len(got), got)
-	}
-	if _, ok := got["web-02.example.com"]; !ok {
-		t.Error("coven=dev did not return web-02")
-	}
-	// Combined (AND): connected + prod + agent → only web-01.
-	got = collect(ListFilter{Status: StatusConnected, Coven: "prod", Transport: TransportAgent})
-	if len(got) != 1 {
-		t.Errorf("combined: got %d, want 1 (%v)", len(got), got)
-	}
-	if _, ok := got["web-01.example.com"]; !ok {
-		t.Error("combined filter did not return web-01")
 	}
 }
 
@@ -610,7 +438,7 @@ func TestIntegration_SelectStats_Scope(t *testing.T) {
 	stale := 90 * time.Second
 
 	// scope=[prod] → only the 3 prod hosts, no staging/dev in the aggregate.
-	prod, err := SelectStats(ctx, integrationPool, ListScope{Covens: []string{"prod"}}, stale)
+	prod, err := SelectStats(ctx, integrationPool, covenScope("prod"), stale)
 	if err != nil {
 		t.Fatalf("SelectStats(scope=prod): %v", err)
 	}
@@ -639,7 +467,7 @@ func TestIntegration_SelectStats_Scope(t *testing.T) {
 	}
 
 	// unrestricted → the whole fleet: 5 hosts, 3 stale (prod-2, stg-1, dev-1).
-	all, err := SelectStats(ctx, integrationPool, ListScope{Unrestricted: true}, stale)
+	all, err := SelectStats(ctx, integrationPool, unrestrictedScope(), stale)
 	if err != nil {
 		t.Fatalf("SelectStats(unrestricted): %v", err)
 	}
@@ -651,7 +479,7 @@ func TestIntegration_SelectStats_Scope(t *testing.T) {
 	}
 
 	// fail-closed: an empty scope (not Unrestricted) → everything zero, NOT the whole fleet.
-	empty, err := SelectStats(ctx, integrationPool, ListScope{Covens: nil}, stale)
+	empty, err := SelectStats(ctx, integrationPool, emptyScope(), stale)
 	if err != nil {
 		t.Fatalf("SelectStats(empty scope): %v", err)
 	}

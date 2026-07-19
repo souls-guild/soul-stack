@@ -231,6 +231,14 @@ func (s hSoulScoper) ResolvePurview(string, string, string) rbac.Purview {
 	return rbac.Purview{Unrestricted: s.unrestricted}
 }
 
+// CovenScope satisfies the coven-projection surface used by bulk coven/traits-
+// assign (NIM-128): unrestricted → no coven restriction. The real resolver
+// (rbac.Holder) implements this; the mock mirrors it so the type assertion in
+// the handler succeeds.
+func (s hSoulScoper) CovenScope(string, string, string) ([]string, bool) {
+	return nil, s.unrestricted
+}
+
 func newHSoulHandler(pool *hSoulPool) *handlers.SoulHandler {
 	return handlers.NewSoulHandler(pool, hSoulScoper{unrestricted: true}, nil, nil)
 }

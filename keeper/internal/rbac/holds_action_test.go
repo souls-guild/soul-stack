@@ -37,9 +37,9 @@ func TestHoldsAction_ScopedEachDimension_True(t *testing.T) {
 		perm string
 	}{
 		{"coven", "soul.list on coven=prod"},
-		{"regex", `soul.list on regex='^web-'`},
-		{"soulprint", `soul.list on soulprint='soulprint.self.os.family == "debian"'`},
-		{"state", `soul.list on state='state.redis_version == "8.0"'`},
+		{"host", "soul.list on host matches web-*"},
+		{"trait", "soul.list on trait.owner=dba"},
+		{"service", "soul.list on service=redis"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -77,7 +77,7 @@ func TestHoldsAction_Revoked_False(t *testing.T) {
 		{"bare", "soul.list"},
 		{"wildcard", "*"},
 		{"coven", "soul.list on coven=prod"},
-		{"regex", `soul.list on regex='^web-'`},
+		{"host", "soul.list on host matches web-*"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -137,13 +137,17 @@ func TestHoldsAction_Deny_False(t *testing.T) {
 	// [holdsFromPurview] directly — the same source of truth as HoldsAction's
 	// body (a guard on the forward-compat `if p.Deny { return false }`
 	// branch, without duplicating the formula).
-	denied := Purview{Deny: true, Unrestricted: true, Covens: []string{"prod"}}
+	covenProd, err := ParseScopeExpr("coven=prod")
+	if err != nil {
+		t.Fatalf("ParseScopeExpr: %v", err)
+	}
+	denied := Purview{Deny: true, Unrestricted: true, Exprs: []*ScopeExpr{covenProd}}
 	if holdsFromPurview(denied) {
 		t.Errorf("Purview{Deny:true,...}: holds = true, want false (forward-compat S2+)")
 	}
-	// And the converse — without Deny, the same populated dimensions give true.
-	allowed := Purview{Covens: []string{"prod"}}
+	// And the converse — without Deny, a populated scope predicate gives true.
+	allowed := Purview{Exprs: []*ScopeExpr{covenProd}}
 	if !holdsFromPurview(allowed) {
-		t.Errorf("Purview{Covens:[prod]}: holds = false, want true")
+		t.Errorf("Purview{Exprs:[coven=prod]}: holds = false, want true")
 	}
 }

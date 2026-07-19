@@ -279,7 +279,7 @@ func (h *SoulHandler) AuthorizeReadScope(ctx context.Context, claims *jwt.Claims
 		h.logger.Error("soul.telemetry: scope select failed", slog.String("sid", sid), slog.Any("error", err))
 		return &problemError{problem.New(problem.TypeInternalError, "", "get soul failed")}
 	}
-	if !soulpurview.InScope(h.readScopeForClaims(claims), sid, s.Coven) {
+	if !soulpurview.InScope(h.readScopeForClaims(claims), sid, s.Coven, soulpurview.TraitsInput(s.Traits)) {
 		return &problemError{problem.New(problem.TypeNotFound, "", "soul "+sid+" not found")}
 	}
 	return nil
@@ -297,7 +297,7 @@ func (h *SoulHandler) AuthorizeReadScope(ctx context.Context, claims *jwt.Claims
 // scope-pushdown is a candidate for NIM-87+.
 func (h *SoulHandler) SIDsInIncarnationInScope(ctx context.Context, claims *jwt.Claims, incName string, capN int) (sids []string, truncated bool, err error) {
 	scope := h.readScopeForClaims(claims)
-	if scope.Empty {
+	if scope.Empty() {
 		return nil, false, nil
 	}
 	if capN < 1 {
@@ -309,7 +309,7 @@ func (h *SoulHandler) SIDsInIncarnationInScope(ctx context.Context, claims *jwt.
 	}
 	out := make([]string, 0, len(items))
 	for _, s := range items {
-		if soulpurview.InScope(scope, s.SID, s.Coven) {
+		if soulpurview.InScope(scope, s.SID, s.Coven, soulpurview.TraitsInput(s.Traits)) {
 			out = append(out, s.SID)
 		}
 	}

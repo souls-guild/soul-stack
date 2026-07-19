@@ -5,8 +5,9 @@ import (
 	"testing"
 )
 
-// mustScope parses a default_scope string into a selector (nil for an empty string).
-func mustScope(t *testing.T, raw string) map[string][]string {
+// mustScope parses a default_scope string into a scope predicate (nil for an
+// empty string).
+func mustScope(t *testing.T, raw string) *ScopeExpr {
 	t.Helper()
 	sc, err := ParseDefaultScope(raw)
 	if err != nil {
