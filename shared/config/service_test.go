@@ -677,8 +677,8 @@ func TestLoadServiceManifest_TelemetryAbsent(t *testing.T) {
 	if got := cfg.Telemetry.IntervalOrDefault(); got != "30s" {
 		t.Errorf("nil block → IntervalOrDefault()=30s, got %q", got)
 	}
-	if got := cfg.Telemetry.CollectorsOrDefault(); len(got) != 5 {
-		t.Errorf("nil block → CollectorsOrDefault()=all 5, got %v", got)
+	if got := cfg.Telemetry.CollectorsOrDefault(); len(got) != len(KnownCollectors) {
+		t.Errorf("nil block → CollectorsOrDefault()=all %d, got %v", len(KnownCollectors), got)
 	}
 }
 

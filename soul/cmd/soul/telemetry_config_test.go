@@ -63,8 +63,8 @@ func TestApplyTelemetryConfig_NilCfgNoop(t *testing.T) {
 	}
 }
 
-// collectorSetFromNames: empty list -> all 5; a list -> only valid ones;
-// unknown names are ignored (only config.KnownCollectors is valid).
+// collectorSetFromNames: empty list -> all N (== config.KnownCollectors);
+// a list -> only valid ones; unknown names are ignored.
 func TestCollectorSetFromNames(t *testing.T) {
 	all := collectorSetFromNames(nil)
 	if len(all) != len(config.KnownCollectors) {
