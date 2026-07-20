@@ -77,8 +77,8 @@ func resetAll(t *testing.T) {
 	// explicit enumeration.
 	_, err := integrationPool.Exec(context.Background(),
 		`TRUNCATE TABLE state_history, apply_runs, incarnation,
-		 incarnation_archive, state_history_archive,
-		 operators, audit_log CASCADE`)
+		 incarnation_archive, state_history_archive, incarnation_membership,
+		 souls, operators, audit_log CASCADE`)
 	if err != nil {
 		t.Fatalf("TRUNCATE: %v", err)
 	}

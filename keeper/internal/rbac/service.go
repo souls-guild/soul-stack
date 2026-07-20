@@ -284,26 +284,38 @@ func (s *Service) UpdateRolePermissions(ctx context.Context, in UpdateRolePermis
 		return err
 	}
 
-	// Least-privilege subset check: only the ADDED permissions (new ones not
-	// in the old set) are restricted. Removing permissions isn't restricted
-	// (an operator can trim someone else's role even without holding those
-	// permissions — that's not escalation). Guards against the update-based
-	// bypass: a caller with role.update adding `*` to an existing role.
-	added := addedPermissions(oldPerms, in.Permissions)
-	// Effective scope of the added bare perms (ADR-047 S1): with
-	// SetDefaultScope, it's the NEW value (replace); otherwise the role's
-	// EXISTING scope (PATCH: added permissions inherit whatever scope the
-	// role ends up living under).
-	grantedScope := in.DefaultScope
-	if !in.SetDefaultScope {
-		grantedScope, err = roleDefaultScope(ctx, tx, in.Name)
+	// Least-privilege subset check. Two paths (NIM-130):
+	//
+	//   - SetDefaultScope=true: the scope is being REPLACED, so bare permissions
+	//     end up re-scoped under the NEW default_scope. A caller could keep the
+	//     permission set identical (added=∅) yet widen or clear the scope,
+	//     re-scoping every bare perm to a broader grant. That's a re-scoped grant
+	//     and must pass least-privilege in full: gate the WHOLE resulting set
+	//     under the NEW scope (symmetric with CreateRole/GrantOperator, which
+	//     always gate the whole set under the role's own scope). Gating only the
+	//     added rows here would be a no-op and let a scoped caller widen the
+	//     scope — the escalation this fix closes.
+	//
+	//   - SetDefaultScope=false (PATCH trim): the scope is untouched, so only the
+	//     ADDED permissions can escalate. Bare perms inherit the role's EXISTING
+	//     scope. Removing permissions isn't escalation (an operator can trim
+	//     someone else's role without holding those perms).
+	var required []Permission
+	if in.SetDefaultScope {
+		required, err = requiredPermissions(in.Permissions, in.DefaultScope)
 		if err != nil {
 			return err
 		}
-	}
-	required, err := requiredPermissions(added, grantedScope)
-	if err != nil {
-		return err
+	} else {
+		added := addedPermissions(oldPerms, in.Permissions)
+		grantedScope, scopeErr := roleDefaultScope(ctx, tx, in.Name)
+		if scopeErr != nil {
+			return scopeErr
+		}
+		required, err = requiredPermissions(added, grantedScope)
+		if err != nil {
+			return err
+		}
 	}
 	if err := s.assertCallerMayGrant(ctx, tx, in.CallerAID, required); err != nil {
 		return err

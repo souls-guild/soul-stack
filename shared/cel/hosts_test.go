@@ -89,13 +89,17 @@ func TestHosts_WhereByOs(t *testing.T) {
 
 func TestHosts_WhereWithExternalContext(t *testing.T) {
 	e := newEngine(t)
-	// incarnation.name is NOT qualified into __host.*; covens is.
-	out, err := e.EvalExpression(`soulprint.hosts.where("incarnation.name in covens").size()`, scenarioVars())
+	// An external context var (input.target_coven) is NOT qualified into
+	// __host.*; the element field covens IS. Proves the where-macro resolves a
+	// scenario-level var against per-host facts.
+	v := scenarioVars()
+	v.Input = map[string]any{"target_coven": "prod"}
+	out, err := e.EvalExpression(`soulprint.hosts.where("input.target_coven in covens").size()`, v)
 	if err != nil {
 		t.Fatalf("EvalExpression: %v", err)
 	}
 	if got := out.Value(); got != int64(3) {
-		t.Fatalf("where incarnation.name in covens size: expected 3 (all in prod), got %v", got)
+		t.Fatalf("where input.target_coven in covens size: expected 3 (all in prod), got %v", got)
 	}
 }
 

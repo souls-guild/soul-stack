@@ -6,14 +6,12 @@ name: serial-staged
 tasks:
   - name: Probe role per host
     module: core.cmd.shell
-    on: ["${ incarnation.name }"]
     register: role
     changed_when: false
     params:
       cmd: "redis-cli role | head -1"
   - name: Rolling action on replicas, gated by probe
     module: core.service.restarted
-    on: ["${ incarnation.name }"]
     where: register.role.stdout == 'slave'
     serial: 1
     params:

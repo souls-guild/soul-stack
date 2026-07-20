@@ -18,8 +18,9 @@ type SoulsFixture []SoulFixtureEntry
 // SoulFixtureEntry — one row of SoulsFixture.
 //
 // Status — the desired souls.<sid>.status once the Stack is ready
-// ("connected" is the standard happy path). Covens — Coven membership for
-// `where:` targeting. Soulprint — soulprint_facts contents, written to the DB
+// ("connected" is the standard happy path). Covens — stable Coven tags for
+// `where:`/soulprint targeting (NOT incarnation membership, which is a separate
+// relation since NIM-124). Soulprint — soulprint_facts contents, written to the DB
 // via the same path as the Soul-side SoulprintReport (but without gRPC, a
 // direct INSERT).
 type SoulFixtureEntry struct {

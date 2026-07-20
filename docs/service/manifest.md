@@ -74,6 +74,7 @@ The root file contains only the service metadata and the contract for the runtim
 | `state_schema` | yes | JSON Schema object | Structure of `incarnation.state` JSONB fields in Postgres. Format - JSON Schema (`type: object` at root), draft-07 compatible. See "`state_schema` Format" below. |
 | `destiny` | yes (if there are dependencies) | array<{name, ref, git?}> | List of destiny dependencies. Each entry: `{ name: <kebab-case>, ref: <git-tag-or-branch> }` + opt. `git: <full-URL>` (override source, see below). Core modules **are not listed** - they are always available ([ADR-009](../adr/0009-scenario-dsl.md)). |
 | `modules` | yes (if there are dependencies) | array<{name, ref}> | List of custom modules `{ name: <namespace>.<module>, ref: <git-tag-or-branch> }`. Core modules **not listed** ([ADR-015](../adr/0015-core-modules-mvp.md)). From the Keeper entries **auto-synthesizes** install steps `core.module.installed` into the run plan - see below. |
+| `certificate_rotation` | no | object | Enables and configures **auto-rotation** of the incarnation's service TLS certs by the background Reaper ([ADR-017](../adr/0017-keeper-side-core.md)): fields `enable`/`scenario`/`threshold`/`pki_role`. No section (or `enable: false`) → rotation off. Semantics and example — ["`certificate_rotation` Section"](#certificate_rotation-section). |
 
 ### What is NOT in `service.yml`
 
@@ -128,6 +129,34 @@ Other field extensions (`enabled`, `optional`, etc.) are a separate propose-and-
 - **MVP limitation:** consumers are defined by `module:` script tasks; a module used only inside destiny (via `apply:`) is not considered a consumer - it requires an explicit install step.
 
 Full mechanics (synthesis points, position, token name, idempotency) - [`docs/keeper/modules.md → Auto-synthesis`](../keeper/modules.md).
+
+### `certificate_rotation` Section
+
+An optional top-level section that enables **auto-rotation** of the incarnation's service TLS certs (Redis server TLS, etc.) by the background Reaper ([ADR-017](../adr/0017-keeper-side-core.md); [Warrant](../naming-rules.md#domain-entities) registry, Reaper rule `rotate_due_certs`). This is about the **service** cert, not the Soul agent's identity cert (that's SoulSeed, rotated separately).
+
+```yaml
+# service.yml
+certificate_rotation:
+  enable: true            # enables service auto-rotation; false/no section → off
+  scenario: rotate_tls    # operational rotation scenario (scenario/<name>/ folder)
+  threshold: 30d          # desired margin before expiry (CURRENTLY informational, see below)
+  pki_role: redis-server  # Vault PKI role for signing this service's certs
+```
+
+| Field | Required | Type | Meaning |
+|---|---|---|---|
+| `enable` | yes | bool | Master switch for the service's auto-rotation. `true` — this service's incarnation certs participate in the `rotate_due_certs` scan. `false` — the section is **inert** (equivalent to its absence). |
+| `scenario` | yes (when `enable: true`) | string | Name of the operational rotation scenario (`scenario/<name>/`) that the Reaper spawns on the incarnation when a cert nears expiry. Conventionally `rotate_tls`. |
+| `threshold` | no | duration | Desired margin before expiry (`30d`). **Currently informational** — see semantics below. |
+| `pki_role` | yes (when `enable: true`) | string | Name of the Vault PKI role that signs this service's certs. Read keeper-side on issuance (`core.cert.issued`) and on rotation (Reaper re-sign). |
+
+**Semantics:**
+
+- **No section = rotation off.** The Reaper skips certs of a service without a `certificate_rotation` section — **no** fallback to hardcoded `rotate_tls`. `enable: false` behaves the same (section inert).
+- **`threshold` is currently informational.** The field is parsed and validated, but the effective scan threshold `not_after < NOW()+threshold` is taken from the **global** `keeper.yml::reaper.rules.rotate_due_certs.rotate_threshold` (one scan axis per cluster). Per-service `threshold` (+ essence-override) is a follow-up.
+- **"What and how" is here; "whether it's enabled and how cautiously" is in keeper.yml.** The manifest declares *what* is rotated, *how* (`scenario`/`pki_role`), and *with what margin* (`threshold`). The cluster-wide caution controls (`enabled`/`dry_run`/`rotate_jitter`/`max_rotations_per_tick`, default OFF+dry_run) live in `keeper.yml::reaper.rules.rotate_due_certs`. Plus a per-cert flag `auto_rotate` (default `true`) in the Warrant registry. Rotation happens when all three gates are true (`enable` x `auto_rotate` x keeper.yml `enabled`).
+- **`scenario`/`pki_role` are not duplicated in `params`.** Their single source is this section: the Reaper takes them on rotation, the keeper-side module `core.cert.issued` takes `pki_role` on issuance. The scenario author does NOT pass the PKI role through a step's `params` (blast-radius: the role comes from the git-reviewed manifest, the PKI-engine mount comes from `keeper.yml::vault.pki_mount`). See [ADR-017 amendment 2026-07-09](../adr/0017-keeper-side-core.md) and [keeper/modules.md → `core.cert`](../keeper/modules.md#corecertregistered--corecertissued).
+- **Rotation happens for the whole incarnation at once** (all hosts together), not host by host.
 
 ### Example
 

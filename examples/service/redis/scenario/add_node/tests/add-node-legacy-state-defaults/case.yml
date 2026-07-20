@@ -70,7 +70,7 @@ assert:
     # a NON-EMPTY modules_base_url; essence without the key → default(essence.modules_base_url,'')
     # = '' → vanilla redis → modules.yml group-drop (no modules-dir in the plan — correct).
     # We prove the data_dir default via the unconditional data-dir task.
-    - module: core.file.directory
+    - module: core.directory.present
       params_subset:
         path: /var/lib/redis
     # ADD-NODE plugin: empty master_sid → master.addr empty (role=master). Endpoints

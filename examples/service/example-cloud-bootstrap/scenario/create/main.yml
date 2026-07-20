@@ -106,5 +106,4 @@ tasks:
       - provision
     params:
       sid:          "${ register.provision.hosts.map(h, h.sid) }"
-      coven:        ["${ incarnation.name }"]
       await_online: true

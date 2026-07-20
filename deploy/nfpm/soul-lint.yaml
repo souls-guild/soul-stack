@@ -17,7 +17,7 @@ description: |
   service / manifest / scenario. CLI, no daemon and no config.
 vendor: Soul Stack
 homepage: https://github.com/souls-guild/soul-stack
-license: Apache-2.0
+license: BUSL-1.1
 
 contents:
   - src: ./soul-lint/bin/soul-lint

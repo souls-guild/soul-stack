@@ -111,8 +111,9 @@ func seedIncarnation(t *testing.T, name, creator string) {
 	}
 }
 
-// seedSoul inserts a Soul with the given set of coven tags (membership in
-// incarnations = incarnation.name in coven, ADR-008 / ADR-044 item 3).
+// seedSoul inserts a Soul with the given set of coven tags (stable tags only,
+// ADR-008). NIM-124: incarnation membership is NO longer coven == incarnation
+// name — it is the `incarnation_membership` relation, seeded via seedMembership.
 func seedSoul(t *testing.T, sid string, coven ...string) {
 	t.Helper()
 	s := &soul.Soul{
@@ -123,6 +124,15 @@ func seedSoul(t *testing.T, sid string, coven ...string) {
 	}
 	if err := soul.Insert(context.Background(), integrationPool, s); err != nil {
 		t.Fatalf("seedSoul(%s): %v", sid, err)
+	}
+}
+
+// seedMembership binds SIDs to an incarnation (NIM-124: the ADR-044 item 3
+// invariant now resolves against `incarnation_membership`, not souls.coven).
+func seedMembership(t *testing.T, incName string, sids ...string) {
+	t.Helper()
+	if err := incarnation.AddMembers(context.Background(), integrationPool, incName, sids, nil); err != nil {
+		t.Fatalf("seedMembership(%s): %v", incName, err)
 	}
 }
 
@@ -235,7 +245,8 @@ func TestIntegration_DeleteChoir_CascadesVoices(t *testing.T) {
 	resetAll(t)
 	seedOperator(t, "archon-alice")
 	seedIncarnation(t, "service-redis", "archon-alice")
-	seedSoul(t, "host-a.example.com", "service-redis")
+	seedSoul(t, "host-a.example.com")
+	seedMembership(t, "service-redis", "host-a.example.com")
 	ctx := context.Background()
 
 	if err := CreateChoir(ctx, integrationPool, &Choir{IncarnationName: "service-redis", ChoirName: "workers"}); err != nil {
@@ -267,8 +278,9 @@ func TestIntegration_AddVoice_AndList(t *testing.T) {
 	resetAll(t)
 	seedOperator(t, "archon-alice")
 	seedIncarnation(t, "service-redis", "archon-alice")
-	seedSoul(t, "host-a.example.com", "service-redis")
-	seedSoul(t, "host-b.example.com", "service-redis", "prod")
+	seedSoul(t, "host-a.example.com")
+	seedSoul(t, "host-b.example.com", "prod")
+	seedMembership(t, "service-redis", "host-a.example.com", "host-b.example.com")
 	ctx := context.Background()
 
 	if err := CreateChoir(ctx, integrationPool, &Choir{IncarnationName: "service-redis", ChoirName: "redis_primary"}); err != nil {
@@ -307,7 +319,8 @@ func TestIntegration_AddVoice_DuplicateRejected(t *testing.T) {
 	resetAll(t)
 	seedOperator(t, "archon-alice")
 	seedIncarnation(t, "service-redis", "archon-alice")
-	seedSoul(t, "host-a.example.com", "service-redis")
+	seedSoul(t, "host-a.example.com")
+	seedMembership(t, "service-redis", "host-a.example.com")
 	ctx := context.Background()
 
 	if err := CreateChoir(ctx, integrationPool, &Choir{IncarnationName: "service-redis", ChoirName: "workers"}); err != nil {
@@ -327,7 +340,8 @@ func TestIntegration_AddVoice_ChoirNotFound(t *testing.T) {
 	resetAll(t)
 	seedOperator(t, "archon-alice")
 	seedIncarnation(t, "service-redis", "archon-alice")
-	seedSoul(t, "host-a.example.com", "service-redis")
+	seedSoul(t, "host-a.example.com")
+	seedMembership(t, "service-redis", "host-a.example.com")
 	ctx := context.Background()
 
 	v := &Voice{IncarnationName: "service-redis", ChoirName: "ghost", SID: "host-a.example.com"}
@@ -343,8 +357,10 @@ func TestIntegration_AddVoice_NonMemberRejected(t *testing.T) {
 	resetAll(t)
 	seedOperator(t, "archon-alice")
 	seedIncarnation(t, "service-redis", "archon-alice")
+	seedIncarnation(t, "service-haproxy", "archon-alice")
 	// host-x is a member of a DIFFERENT incarnation, not service-redis.
-	seedSoul(t, "host-x.example.com", "service-haproxy", "prod")
+	seedSoul(t, "host-x.example.com", "prod")
+	seedMembership(t, "service-haproxy", "host-x.example.com")
 	ctx := context.Background()
 
 	if err := CreateChoir(ctx, integrationPool, &Choir{IncarnationName: "service-redis", ChoirName: "workers"}); err != nil {
@@ -388,7 +404,9 @@ func TestIntegration_AddVoice_MultiIncarnation(t *testing.T) {
 	seedIncarnation(t, "service-redis", "archon-alice")
 	seedIncarnation(t, "service-haproxy", "archon-alice")
 	// host-a is a member of BOTH incarnations.
-	seedSoul(t, "host-a.example.com", "service-redis", "service-haproxy")
+	seedSoul(t, "host-a.example.com")
+	seedMembership(t, "service-redis", "host-a.example.com")
+	seedMembership(t, "service-haproxy", "host-a.example.com")
 	ctx := context.Background()
 
 	if err := CreateChoir(ctx, integrationPool, &Choir{IncarnationName: "service-redis", ChoirName: "cache"}); err != nil {
@@ -419,7 +437,8 @@ func TestIntegration_RemoveVoice(t *testing.T) {
 	resetAll(t)
 	seedOperator(t, "archon-alice")
 	seedIncarnation(t, "service-redis", "archon-alice")
-	seedSoul(t, "host-a.example.com", "service-redis")
+	seedSoul(t, "host-a.example.com")
+	seedMembership(t, "service-redis", "host-a.example.com")
 	ctx := context.Background()
 
 	if err := CreateChoir(ctx, integrationPool, &Choir{IncarnationName: "service-redis", ChoirName: "workers"}); err != nil {

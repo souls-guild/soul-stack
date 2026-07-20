@@ -79,9 +79,9 @@ func TestFC2OnchangesIdempotency(t *testing.T) {
 	const incName = "fc2-onchanges"
 	const nginxConfPath = "/etc/nginx/sites-available/default"
 
-	// Coven membership BEFORE Create: the roster resolves via incarnation.name ∈ coven[]
-	// (ADR-008). Without it the scenario sees no_hosts -> zero apply_runs (as in L3b-smoke).
-	stack.AddSoulToCoven(t, 0, incName)
+	// Membership BEFORE Create: the roster resolves members via incarnation_membership
+	// (ADR-008 amendment/NIM-124). Without it the scenario sees no_hosts -> zero apply_runs (as in L3b-smoke).
+	stack.AddMember(t, 0, incName)
 
 	// ── Run 1: clean container ───────────────────────────────────────────
 	// POST /v1/incarnations auto-runs create and returns its apply_id.

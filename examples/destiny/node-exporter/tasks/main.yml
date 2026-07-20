@@ -6,7 +6,7 @@
 # Pipeline overview:
 #   install.yml    — fetch tarball → extract (prepares the artifact in /tmp);
 #   account.yml    — group + user node_exporter + textfile directory
-#                    (core.file.directory);
+#                    (core.directory.present);
 #   service.yml    — install the node_exporter binary (core.file.present src:) + render
 #                    hardened-unit + core.service.running + restarted (auto daemon-reload
 #                    built into core.service). The binary install step is here, not in

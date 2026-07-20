@@ -70,7 +70,7 @@ Bulk assignment of Coven labels: add ONE label (`mode: append`) / remove (`mode:
 | `selector.all` | `boolean` | optional | The entire registry (without host filter). |
 | `selector.sids` | `array<string>` | optional | Dot list of SIDs. |
 | `selector.coven` | `string` | optional | Hosts that ALREADY have this label. |
-| `selector.incarnation` | `string` (incarnation-name) | optional | Hosts of this incarnation (incarnation name as root Coven label, ADR-008). |
+| `selector.incarnation` | `string` (incarnation-name) | optional | **Member** hosts of this incarnation (matched via the `incarnation_membership` relation, not a coven — `incarnation.name` is no longer a Coven, [ADR-008 amendment 2026-07-17](../../adr/0008-coven-stable-tags.md#amendment-2026-07-17-nim-124-incarnationname-is-not-a-coven--membership-is-a-first-class-relation)). |
 | `selector.status` | `string` (enum) | optional | Filter by status `souls`. |
 | `dry_run` | `boolean` | optional | Default `false`. `true` - return `matched` without UPDATE. |
 

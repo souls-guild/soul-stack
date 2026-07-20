@@ -7,143 +7,142 @@ import (
 	"github.com/souls-guild/soul-stack/keeper/internal/rbac"
 )
 
-// TestResolve_Empty_FailClosed is the MAIN security invariant: Purview{} (no
-// dimensions, not Unrestricted) -> fail-closed: scope with Empty=true. Handler
-// must return EMPTY list, NOT whole fleet. Regression of this test = operator
-// sees someone else's hosts.
-func TestResolve_Empty_FailClosed(t *testing.T) {
+// mustExpr parses a boolean scope expression for tests (panics on error).
+func mustExpr(t *testing.T, s string) *rbac.ScopeExpr {
+	t.Helper()
+	e, err := rbac.ParseScopeExpr(s)
+	if err != nil {
+		t.Fatalf("ParseScopeExpr(%q): %v", s, err)
+	}
+	return e
+}
+
+func exprs(t *testing.T, ss ...string) []*rbac.ScopeExpr {
+	out := make([]*rbac.ScopeExpr, len(ss))
+	for i, s := range ss {
+		out[i] = mustExpr(t, s)
+	}
+	return out
+}
+
+// TestScope_Empty_FailClosed is the MAIN security invariant: Purview{} (no
+// predicates, not Unrestricted) → fail-closed. The handler must return an EMPTY
+// list, NOT the whole fleet. Regression = an operator sees someone else's hosts.
+func TestScope_Empty_FailClosed(t *testing.T) {
 	sc := Resolve(rbac.Purview{})
-	if !sc.Empty {
-		t.Fatalf("Purview{} → Empty=false (fail-OPEN!); want Empty=true (fail-closed)")
+	if !sc.Empty() {
+		t.Fatalf("Purview{} → Empty()=false (fail-OPEN!); want true (fail-closed)")
 	}
-	if sc.Unrestricted {
-		t.Fatalf("Purview{} → Unrestricted=true; want false")
-	}
-	if len(sc.Covens) != 0 {
-		t.Fatalf("Purview{} -> Covens=%v; want empty", sc.Covens)
+	if sc.Unrestricted() {
+		t.Fatalf("Purview{} → Unrestricted()=true; want false")
 	}
 }
 
-// TestResolve_Unrestricted verifies Unrestricted (bare-without-default /
-// coven=*) -> whole list without scope filter.
-func TestResolve_Unrestricted(t *testing.T) {
+// TestScope_Unrestricted verifies a bare/`*` permission → the whole list without
+// a scope filter.
+func TestScope_Unrestricted(t *testing.T) {
 	sc := Resolve(rbac.Purview{Unrestricted: true})
-	if !sc.Unrestricted {
-		t.Fatalf("Unrestricted purview → Unrestricted=false")
+	if !sc.Unrestricted() {
+		t.Fatalf("Unrestricted purview → Unrestricted()=false")
 	}
-	if sc.Empty {
-		t.Fatalf("Unrestricted purview -> Empty=true (would return empty instead of all)")
-	}
-}
-
-// TestResolve_SingleCoven verifies Covens=[prod] -> prod subset, not empty/not all.
-func TestResolve_SingleCoven(t *testing.T) {
-	sc := Resolve(rbac.Purview{Covens: []string{"prod"}})
-	if sc.Empty {
-		t.Fatalf("Covens=[prod] -> Empty=true (fail-closed on non-empty scope!)")
-	}
-	if sc.Unrestricted {
-		t.Fatalf("Covens=[prod] -> Unrestricted=true (expanded scope to whole fleet!)")
-	}
-	if !reflect.DeepEqual(sc.Covens, []string{"prod"}) {
-		t.Fatalf("Covens=%v; want [prod]", sc.Covens)
+	if sc.Empty() {
+		t.Fatalf("Unrestricted purview → Empty()=true (would return empty instead of all)")
 	}
 }
 
-// TestResolve_MultiCoven_Union verifies Covens=[prod,staging] -> union (OR
-// inside dimension), both covens in scope.
-func TestResolve_MultiCoven_Union(t *testing.T) {
-	sc := Resolve(rbac.Purview{Covens: []string{"prod", "staging"}})
-	if sc.Empty || sc.Unrestricted {
-		t.Fatalf("multi-coven -> Empty=%v Unrestricted=%v; want both false", sc.Empty, sc.Unrestricted)
+// TestScope_NonEmpty verifies a predicate scope is neither Empty nor Unrestricted.
+func TestScope_NonEmpty(t *testing.T) {
+	sc := Resolve(rbac.Purview{Exprs: exprs(t, "coven=prod")})
+	if sc.Empty() {
+		t.Fatalf("coven=prod → Empty()=true (fail-closed on non-empty scope!)")
 	}
-	if !reflect.DeepEqual(sc.Covens, []string{"prod", "staging"}) {
-		t.Fatalf("Covens=%v; want [prod staging]", sc.Covens)
-	}
-}
-
-// TestResolve_UnsupportedDimensions_Partial verifies soulprint/state dimensions
-// (without coven/regex and without Unrestricted) are NOT computable by S3b-2a
-// yet (page CEL is S3b-2b). Resolve must mark such scope Partial=true so handler
-// does not present partial set as complete (otherwise hosts available by
-// soulprint would silently disappear). Empty is false here (access exists).
-// regex is excluded from Partial because it is computed by keyset filter (see
-// regex_test.go).
-func TestResolve_UnsupportedDimensions_Partial(t *testing.T) {
-	for name, p := range map[string]rbac.Purview{
-		"soulprint":       {SoulprintExprs: []string{`soulprint.self.os.family == "debian"`}},
-		"state":           {StateExprs: []string{`state.role == "primary"`}},
-		"coven+soulprint": {Covens: []string{"prod"}, SoulprintExprs: []string{`soulprint.self.os.family == "debian"`}},
-	} {
-		sc := Resolve(p)
-		if sc.Empty {
-			t.Errorf("%s purview -> Empty=true (fail-closed on introduced available dimension)", name)
-		}
-		if sc.Unrestricted {
-			t.Errorf("%s purview -> Unrestricted=true (removed scope entirely)", name)
-		}
-		if !sc.Partial {
-			t.Errorf("%s purview -> Partial=false; want true (S3b-2a does not compute soulprint/state)", name)
-		}
+	if sc.Unrestricted() {
+		t.Fatalf("coven=prod → Unrestricted()=true (expanded to the whole fleet!)")
 	}
 }
 
-// TestResolve_CovenOnly_NotPartial verifies pure coven scope is fully covered
-// by pilot SQL pushdown -> Partial=false (result complete, does not require S3b-2).
-func TestResolve_CovenOnly_NotPartial(t *testing.T) {
-	if Resolve(rbac.Purview{Covens: []string{"prod"}}).Partial {
-		t.Fatalf("coven-only purview -> Partial=true; want false (coven is fully pushed down)")
-	}
-	if Resolve(rbac.Purview{Unrestricted: true}).Partial {
-		t.Fatalf("unrestricted purview → Partial=true; want false")
-	}
-}
-
-// TestInScope_Unrestricted verifies Unrestricted scope sees any host, including
-// host without covens at all.
+// TestInScope_Unrestricted verifies an Unrestricted scope sees any host,
+// including a host with no covens at all.
 func TestInScope_Unrestricted(t *testing.T) {
-	sc := Scope{Unrestricted: true}
-	if !InScope(sc, "host-01.example.com", []string{"prod"}) {
-		t.Fatalf("Unrestricted scope -> host [prod] outside scope; want in scope")
+	sc := Resolve(rbac.Purview{Unrestricted: true})
+	if !InScope(sc, "host-01.example.com", []string{"prod"}, nil) {
+		t.Fatalf("Unrestricted scope → host [prod] outside scope; want in scope")
 	}
-	if !InScope(sc, "host-01.example.com", nil) {
-		t.Fatalf("Unrestricted scope -> host without covens outside scope; want in scope")
+	if !InScope(sc, "host-01.example.com", nil, nil) {
+		t.Fatalf("Unrestricted scope → host without covens outside scope; want in scope")
 	}
 }
 
-// TestInScope_Empty_FailClosed is the MAIN single-read security invariant:
-// Empty scope (fail-closed) allows no host, including with covens. Regression =
-// scoped operator without rights reads someone else's host by direct SID.
+// TestInScope_Empty_FailClosed is the MAIN single-read security invariant: an
+// empty scope allows no host, even one carrying covens. Regression = a scoped
+// operator with no rights reads someone else's host by direct SID.
 func TestInScope_Empty_FailClosed(t *testing.T) {
-	sc := Scope{Empty: true}
-	if InScope(sc, "host-01.example.com", []string{"prod"}) {
-		t.Fatalf("Empty scope -> host [prod] in scope (fail-OPEN!); want outside scope")
-	}
-	if InScope(sc, "host-01.example.com", nil) {
-		t.Fatalf("Empty scope -> host without covens in scope (fail-OPEN!); want outside scope")
+	sc := Resolve(rbac.Purview{})
+	if InScope(sc, "host-01.example.com", []string{"prod"}, nil) {
+		t.Fatalf("empty scope → host [prod] in scope (fail-OPEN!); want outside")
 	}
 }
 
-// TestInScope_CovenMatch verifies intersection of host covens and scope.Covens
-// is non-empty -> host visible.
+// TestInScope_CovenMatch verifies a non-empty intersection of host covens and a
+// coven predicate → host visible; an empty intersection → hidden.
 func TestInScope_CovenMatch(t *testing.T) {
-	sc := Scope{Covens: []string{"prod", "staging"}}
-	if !InScope(sc, "host-01.example.com", []string{"staging"}) {
-		t.Fatalf("scope [prod staging] intersection host [staging] non-empty -> outside scope; want in scope")
+	sc := Resolve(rbac.Purview{Exprs: exprs(t, "coven=prod OR coven=staging")})
+	if !InScope(sc, "host-01.example.com", []string{"staging"}, nil) {
+		t.Fatalf("coven∈{prod,staging} vs host [staging] → outside; want in scope")
 	}
-	if !InScope(sc, "host-01.example.com", []string{"dev", "prod"}) {
-		t.Fatalf("scope [prod staging] intersection host [dev prod] non-empty -> outside scope; want in scope")
+	if InScope(sc, "host-01.example.com", []string{"dev"}, nil) {
+		t.Fatalf("coven∈{prod,staging} vs host [dev] → in scope; want outside (404)")
 	}
 }
 
-// TestInScope_CovenMismatch verifies empty intersection -> host outside scope
-// (single-read returns 404, does not reveal someone else's host existence).
-func TestInScope_CovenMismatch(t *testing.T) {
-	sc := Scope{Covens: []string{"prod"}}
-	if InScope(sc, "host-01.example.com", []string{"staging"}) {
-		t.Fatalf("scope [prod] intersection host [staging] empty -> in scope; want outside scope")
+// TestInScope_HostGlob verifies the host dimension (`host matches <glob>`) — the
+// replacement for the removed regex type. A matching SID is visible; a
+// non-matching one is hidden.
+func TestInScope_HostGlob(t *testing.T) {
+	sc := Resolve(rbac.Purview{Exprs: exprs(t, "host matches web-*")})
+	if !InScope(sc, "web-01.example.com", nil, nil) {
+		t.Fatalf("host matches web-* vs web-01 → outside; want in scope")
 	}
-	if InScope(sc, "host-01.example.com", nil) {
-		t.Fatalf("scope [prod] intersection host without covens -> in scope; want outside scope")
+	if InScope(sc, "db-01.example.com", nil, nil) {
+		t.Fatalf("host matches web-* vs db-01 → in scope; want outside")
+	}
+}
+
+// TestInScope_Trait verifies the trait dimension over a Soul's projected traits.
+// A matching value → visible; a mismatch or absent traits → hidden (fail-closed).
+func TestInScope_Trait(t *testing.T) {
+	sc := Resolve(rbac.Purview{Exprs: exprs(t, "trait.tier=gold")})
+	if !InScope(sc, "h", nil, map[string][]string{"tier": {"gold"}}) {
+		t.Fatalf("trait.tier=gold vs {tier:gold} → outside; want in scope")
+	}
+	if InScope(sc, "h", nil, map[string][]string{"tier": {"silver"}}) {
+		t.Fatalf("trait.tier=gold vs {tier:silver} → in scope; want outside")
+	}
+	if InScope(sc, "h", nil, nil) {
+		t.Fatalf("trait.tier=gold vs no traits → in scope (fail-OPEN!); want outside")
+	}
+}
+
+// TestTraitsInput verifies the jsonb-traits → ScopeInput projection: a scalar
+// becomes a one-element slice, a list becomes many, values are stringified like
+// PG's `->>`; an empty/nil map → nil.
+func TestTraitsInput(t *testing.T) {
+	got := TraitsInput(map[string]any{
+		"tier":   "gold",
+		"env":    []any{"prod", "stage"},
+		"shard":  float64(7),
+		"active": true,
+	})
+	want := map[string][]string{
+		"tier":   {"gold"},
+		"env":    {"prod", "stage"},
+		"shard":  {"7"},
+		"active": {"true"},
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("TraitsInput = %v; want %v", got, want)
+	}
+	if TraitsInput(nil) != nil {
+		t.Fatalf("TraitsInput(nil) → non-nil; want nil (trait condition fails closed)")
 	}
 }

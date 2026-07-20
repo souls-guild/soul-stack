@@ -786,6 +786,18 @@ func hasDirectiveLine(out, prefix string) bool {
 	return false
 }
 
+// hasExactLine — reports whether the render has a line that, after TrimSpace, EXACTLY equals want.
+// For directives with an empty value (CapabilityBoundingSet=), where a prefix-based
+// hasDirectiveLine would miss a regression to a non-empty value.
+func hasExactLine(out, want string) bool {
+	for _, ln := range strings.Split(out, "\n") {
+		if strings.TrimSpace(ln) == want {
+			return true
+		}
+	}
+	return false
+}
+
 // userName extracts the user name from a `user <name> <state> #<hash> <perms>` line.
 func userName(line string) string {
 	fields := strings.Fields(line)
@@ -793,4 +805,96 @@ func userName(line string) string {
 		return ""
 	}
 	return fields[1]
+}
+
+// redisHardeningCanon — canonical systemd-hardening set (NIM-97), shared between the
+// drop-in redis-server (hardening.conf.tmpl) and the sentinel unit. Each line is a
+// [Service] directive required to be present in both renders. ReadWritePaths is
+// checked by separate *_ConfDirInReadWritePaths tests (path-specific).
+var redisHardeningCanon = []string{
+	"NoNewPrivileges=yes",
+	"ProtectSystem=strict",
+	"ProtectHome=yes",
+	"PrivateTmp=yes",
+	"PrivateDevices=yes",
+	"ProtectKernelTunables=yes",
+	"ProtectKernelModules=yes",
+	"ProtectControlGroups=yes",
+	"RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX",
+	"RestrictNamespaces=yes",
+	"RestrictRealtime=yes",
+	"RestrictSUIDSGID=yes",
+	"LockPersonality=yes",
+	"MemoryDenyWriteExecute=yes",
+	"UMask=007",
+	"LimitNOFILE=65535",
+}
+
+// TestRedisServerHardening_CanonDirectives — guard on the full canonical
+// hardening set in the drop-in redis-server (NIM-97). Removing any directive (MDWE —
+// live-verified with redis 8.8 modules; UMask=007 — otherwise RDB is world-readable;
+// LimitNOFILE — otherwise the systemd default ~1024) fails the test.
+func TestRedisServerHardening_CanonDirectives(t *testing.T) {
+	root := map[string]any{"vars": map[string]any{
+		"data_dir": "/var/lib/redis", "run_dir": "/var/run/redis",
+		"log_dir": "/var/log/redis", "conf_dir": "/etc/redis",
+	}}
+	out := renderRedisTmpl(t, "hardening.conf.tmpl", root)
+	for _, d := range redisHardeningCanon {
+		if !hasDirectiveLine(out, d) {
+			t.Errorf("drop-in hardening.conf: missing directive %q\n--- render ---\n%s", d, out)
+		}
+	}
+	// CapabilityBoundingSet MUST be EMPTY (drops all caps — stricter than the
+	// redis.io-deb baseline with CAP_SYS_RESOURCE). A prefix match would miss a regression to CAP_*.
+	if !hasExactLine(out, "CapabilityBoundingSet=") {
+		t.Errorf("CapabilityBoundingSet must be EMPTY (drops all caps):\n%s", out)
+	}
+}
+
+// TestSentinelUnit_HardeningParity — the sentinel unit carries the SAME canonical set
+// as the drop-in redis-server (NIM-97 unification). RestrictAddressFamilies with AF_UNIX
+// is critical: Type=notify sends sd_notify over a unix socket (live: without AF_UNIX the unit
+// never reaches active).
+func TestSentinelUnit_HardeningParity(t *testing.T) {
+	root := map[string]any{"vars": map[string]any{
+		"sentinel_bin": "/usr/bin", "cli_bin": "/usr/bin", "conf_dir": "/etc/redis",
+		"sentinel_port": 26379, "redis_user": "redis", "redis_group": "redis",
+		"data_dir": "/var/lib/redis", "log_dir": "/var/log/redis", "run_dir": "/var/run/redis",
+	}}
+	out := renderRedisTmpl(t, "redis-sentinel.service.tmpl", root)
+	for _, d := range redisHardeningCanon {
+		if !hasDirectiveLine(out, d) {
+			t.Errorf("sentinel unit: missing directive %q (unification with drop-in)\n--- render ---\n%s", d, out)
+		}
+	}
+	// CapabilityBoundingSet MUST be EMPTY (drops all caps — stricter than the
+	// redis.io-deb baseline with CAP_SYS_RESOURCE). A prefix match would miss a regression to CAP_*.
+	if !hasExactLine(out, "CapabilityBoundingSet=") {
+		t.Errorf("CapabilityBoundingSet must be EMPTY (drops all caps):\n%s", out)
+	}
+}
+
+// TestRedisLogrotate_Copytruncate — redis logrotate uses copytruncate, NOT the
+// fragile rename+create (Redis holds the log fd, does not react to reopen → the new log
+// is empty until restart; NIM-97 fix). Guard: copytruncate + required directives
+// are present; no rename indicators (create/postrotate/sharedscripts); block is balanced.
+func TestRedisLogrotate_Copytruncate(t *testing.T) {
+	root := map[string]any{"vars": map[string]any{"log_dir": "/var/log/redis"}}
+	out := renderRedisTmpl(t, "logrotate.tmpl", root)
+	for _, want := range []string{"copytruncate", "daily", "missingok", "notifempty", "/var/log/redis/*.log {"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("logrotate: missing required %q\n%s", want, out)
+		}
+	}
+	for _, ln := range nonEmptyLines(out) {
+		for _, bad := range []string{"create", "postrotate", "sharedscripts", "nocopytruncate"} {
+			if strings.HasPrefix(ln, bad) {
+				t.Errorf("logrotate: rename indicator %q (Redis holds the fd → empty log until restart); copytruncate required\n%s", ln, out)
+			}
+		}
+	}
+	if strings.Count(out, "{") != 1 || strings.Count(out, "}") != 1 {
+		t.Errorf("logrotate: unbalanced { } block\n%s", out)
+	}
 }

@@ -21,14 +21,6 @@ spec:
       description: File is removed.
       input:
         path: { type: string, required: true, description: "Path of the file to remove." }
-    directory:
-      description: Directory exists with the given owner/group/mode (replacement for `core.exec.run install -d`, ADR-015).
-      input:
-        path:    { type: string, required: true, description: "Target directory path." }
-        mode:    { type: string, description: "Permissions in octal form, e.g. \"0755\"." }
-        owner:   { type: string, description: "Owner (username)." }
-        group:   { type: string, description: "Owning group (group name)." }
-        parents: { type: bool,   description: "Create intermediate directories (mkdir -p semantics). Default false." }
     rendered:
       description: File = result of rendering a text/template template (ADR-010).
       input:

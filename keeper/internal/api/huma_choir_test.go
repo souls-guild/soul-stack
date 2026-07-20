@@ -73,7 +73,7 @@ func (f *fakeChoirDB) QueryRow(_ context.Context, sql string, _ ...any) pgx.Row 
 
 func (f *fakeChoirDB) Query(_ context.Context, sql string, _ ...any) (pgx.Rows, error) {
 	switch {
-	case strings.Contains(sql, "FROM souls"):
+	case strings.Contains(sql, "FROM incarnation_membership"):
 		rows := make([][]any, 0, len(f.memberSIDs))
 		for _, s := range f.memberSIDs {
 			rows = append(rows, []any{s})

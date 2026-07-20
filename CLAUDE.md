@@ -14,7 +14,7 @@ Project at the design stage + first Go-framework. In the repo:
 - **Go-framework** by [ADR-011](docs/adr/0011-go-layout.md): `go.work` + 7 modules (`proto/`, `proto/plugin/`, `shared/`, `sdk/`, `keeper/`, `soul/`, `soul-lint/`), stub-binaries (`keeper`/`soul`/`soul-lint` print `<binary> stub`).
 - **Proto-contract Keeper↔Soul v1** for [ADR-012](docs/adr/0012-keeper-soul-grpc.md) with committed generated Go (`proto/gen/go/keeper/v1/*.pb.go`).
 - **Typed Soulprint** ([ADR-018](docs/adr/0018-soulprint-typed.md)) and **Migration DSL** ([ADR-019](docs/adr/0019-state-migration-dsl.md)) in proto and docs.
-- **`LICENSE`** Apache 2.0 ([ADR-016](docs/adr/0016-parity-license.md), open core / freemium).
+- **`LICENSE`** BSL 1.1 (fair-code; core → Apache 2.0 after 2 years) — SDK/plugins remain Apache 2.0 ([ADR-016](docs/adr/0016-parity-license.md), Amendment 2026-07-09).
 - **`Makefile`** with targets `gen` / `build` / `test` / `tidy` - all green, `make gen` is idempotent.
 - **Git history**: `main`, 4 commits (initial baseline + ADR-018 + canonical `.self` correspondence + ADR-019).
 - **There is no real logic of any binary** - only stubs and proto-contracts.

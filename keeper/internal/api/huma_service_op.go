@@ -389,6 +389,43 @@ func serviceDirectivesOperation() huma.Operation {
 	}
 }
 
+// === GET /v1/services/{name}/telemetry (get-telemetry) — READ-with-path+query (no audit) ===
+
+// serviceTelemetryInput — huma-input GET /v1/services/{name}/telemetry. Name — path;
+// Ref — optional query-override; If-None-Match — conditional-GET (304 on match with
+// ETag=snapshot SHA1).
+type serviceTelemetryInput struct {
+	Name        string `path:"name" doc:"Service name"`
+	Ref         string `query:"ref" doc:"optional git-ref override (omitted -> ref from registry)"`
+	IfNoneMatch string `header:"If-None-Match" doc:"conditional GET: 304 if it matches ETag (snapshot SHA1)"`
+}
+
+// serviceTelemetryOutput — huma-output GET /v1/services/{name}/telemetry (FULL-TYPED).
+// Body — handlers.ServiceTelemetryReply. ETag/Cache-Control — response headers
+// (header tags; json:"-"). Status=304 -> huma does not write a body (conditional-GET without a payload).
+type serviceTelemetryOutput struct {
+	Status       int    `json:"-"`
+	ETag         string `header:"ETag" json:"-"`
+	CacheControl string `header:"Cache-Control" json:"-"`
+	Body         handlers.ServiceTelemetryReply
+}
+
+// serviceTelemetryOperation — metadata for GET /v1/services/{name}/telemetry.
+// DefaultStatus=200. READ route: audit is NOT attached. Permission service.list. Errors:
+// 403 RBAC, 404 not-found, 500 (no lister / registry failure), 502 loader failed.
+func serviceTelemetryOperation() huma.Operation {
+	return huma.Operation{
+		OperationID:   "getServiceTelemetry",
+		Method:        http.MethodGet,
+		Path:          "/{name}/telemetry",
+		Summary:       "default host-vitals telemetry config of a Service + allowed collectors",
+		Description:   "Effective default (per-service, without essence/incarnation) host-vitals config of the service (enabled/interval_sec/collectors) from the manifest `telemetry:` + known_collectors (full allowed set for the UI, ADR-042 backend-driven, ADR-072). Permission service.list. Read-only, no audit. ETag=snapshot SHA1; If-None-Match -> 304. Cache-Control: immutable+year for pinned commit-SHA ref, otherwise no-cache (mutable branch/tag). A service without a telemetry block -> manifest defaults (enabled=true, interval_sec=30, all collectors) + 200. 502 - loader failed. Not to be confused with /v1/incarnations/{name}/telemetry (runtime host-vitals from Redis, NIM-86).",
+		Tags:          []string{"service"},
+		DefaultStatus: http.StatusOK,
+		Errors:        []int{http.StatusForbidden, http.StatusNotFound, http.StatusInternalServerError, http.StatusBadGateway},
+	}
+}
+
 // etagQuote wraps the snapshot SHA1 in a strong ETag (`"<sha1>"`, RFC 7232).
 func etagQuote(sha1 string) string {
 	return `"` + sha1 + `"`

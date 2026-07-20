@@ -6,7 +6,7 @@ package config
 // step `core.cloud.provisioned` (keeper) creates N VMs, step `core.soul.registered`
 // (keeper) with `refresh_soulprint: true` registers and waits for their onboarding,
 // and subsequent tasks apply the role to the ALREADY-onboarded hosts via the roster
-// (`soulprint.hosts`, `on: [incarnation.name]`, `soulprint.self.*`). The run roster is
+// (`soulprint.hosts`, an omitted `on:`, `soulprint.self.*`). The run roster is
 // resolved up-front before the first Passage and is stable WITHIN a Passage, but at a
 // refresh boundary it is re-resolved into a fresh live snapshot of the online set
 // (ADR-009 §7 in the current edition, relaxed by ADR-0061). For the re-resolve (S3) to
@@ -24,9 +24,8 @@ package config
 // `refresh_soulprint: true` (literal) in params. A refresh consumer is a task that
 // statically reads the run roster:
 //
-//   - `on: [incarnation.name]` (literal or `${ incarnation.name }`) — targeting by the
-//     root Coven label = the whole incarnation; resolved Keeper-side from the roster (Hosts);
-//   - an omitted `on:` (= the whole incarnation, orchestration.md §3) — also roster targeting;
+//   - an omitted `on:` (= the whole incarnation, all members, orchestration.md §3) —
+//     roster targeting resolved Keeper-side from the roster (Hosts);
 //   - `soulprint.hosts` / `soulprint.where(...)` — the list of run hosts;
 //   - `soulprint.self.*` — a host-varying fact (depends on which hosts are in the roster).
 //
@@ -146,7 +145,7 @@ func taskIsRefreshEmitter(t *Task) bool {
 }
 
 // taskReadsRoster — the task statically reads the run roster (see doc above):
-// on:[incarnation.name] / omitted on: / soulprint.hosts / soulprint.self.*.
+// omitted on: / soulprint.hosts / soulprint.self.*.
 // Recursively via block: (block is an atomic Passage unit; a roster read by any child
 // makes the container a refresh consumer).
 //
@@ -191,67 +190,17 @@ func taskReadsRoster(t *Task) bool {
 }
 
 // onTargetsRoster — `on:` targets the whole incarnation roster:
-//   - nil (omitted on:) → the whole incarnation (orchestration.md §3);
+//   - nil (omitted on:) → the whole incarnation (all members, orchestration.md §3);
 //   - `on: keeper` (string) → NOT the roster (keeper-side, no hosts);
-//   - a list containing the root Coven label `incarnation.name` (literal or
-//     `${ incarnation.name }`) → the whole incarnation (rosterSQL `$1 = ANY(coven)`).
+//   - a coven list → a SUBset, NOT the whole roster.
 //
-// Other coven labels (a sub-coven like `redis`/`prod`) do NOT count as a roster read:
-// they target a SUBset, and although a grown roster could add hosts to it, the refresh
-// emitter always tags new SIDs with exactly `incarnation.name` (ADR-0061:
-// `coven: ["${ incarnation.name }"]`). For the target scenario the root label is the
-// canonical way to address a grown roster. (Sub-coven targeting of new hosts within one
-// run is outside S2/S3; extended separately if needed.)
+// ADR-008 amendment 2026-07-17/NIM-124: `incarnation.name` is not a Coven, so
+// `on: [incarnation.name]` is invalid (a render error) — the whole-roster form is
+// an omitted `on:`. A coven list therefore always targets a subset and does not
+// count as a full roster read (a grown roster's new members are picked up by an
+// omitted `on:`, which re-resolves membership).
 func onTargetsRoster(on any) bool {
-	switch v := on.(type) {
-	case nil:
-		return true // omitted on: = the whole incarnation.
-	case string:
-		return false // `on: keeper` — the only valid string form, not the roster.
-	case []any:
-		for _, raw := range v {
-			s, ok := raw.(string)
-			if !ok {
-				continue
-			}
-			if labelIsIncarnationName(s) {
-				return true
-			}
-		}
-		return false
-	default:
-		return false
-	}
-}
-
-// labelIsIncarnationName — the coven label refers to the root `incarnation.name`:
-// either the literal `incarnation.name` (rare, but allowed) or the CEL wrapper
-// `${ incarnation.name }` / `${incarnation.name}`. Recognized textually: exact CEL
-// parsing isn't needed — the root label form is fixed by the grammar.
-func labelIsIncarnationName(s string) bool {
-	if !isCELWrapped(s) {
-		return false
-	}
-	// The inside of ${ … } must be exactly `incarnation.name` (with possible
-	// whitespace). More complex content (e.g. `${ incarnation.name + "-x" }`) does not
-	// count here: that's already a sub-coven, not the root label.
-	inner := s[2 : len(s)-1]
-	return trimSpace(inner) == "incarnation.name"
-}
-
-// trimSpace — a narrow trim of ASCII spaces/tabs at the edges (no unicode
-// dependencies, CEL tokens are ASCII). A local helper, to avoid pulling in strings for
-// one spot.
-func trimSpace(s string) string {
-	i := 0
-	for i < len(s) && (s[i] == ' ' || s[i] == '\t') {
-		i++
-	}
-	j := len(s)
-	for j > i && (s[j-1] == ' ' || s[j-1] == '\t') {
-		j--
-	}
-	return s[i:j]
+	return on == nil
 }
 
 // exprReadsSoulprint — the CEL string references soulprint.* (hosts/where/self/...).

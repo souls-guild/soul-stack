@@ -445,9 +445,9 @@ func TestRequireAction_ScopedHolder_PassesToHandler(t *testing.T) {
 	for _, perm := range []string{
 		"soul.list",
 		"soul.list on coven=prod",
-		`soul.list on regex='^web-'`,
-		`soul.list on soulprint='soulprint.self.os.family == "debian"'`,
-		`soul.list on state='state.redis_version == "8.0"'`,
+		`soul.list on host matches web-*`,
+		`soul.list on trait.owner=dba`,
+		`soul.list on coven=prod AND host matches web-*`,
 		"*",
 	} {
 		e := newRBAC(t, &rbactest.Config{Roles: []rbactest.Role{

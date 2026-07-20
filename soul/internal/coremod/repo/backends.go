@@ -92,13 +92,17 @@ func (m *Module) applyAptPresent(stream grpc.ServerStreamingServer[pluginv1.Appl
 //
 //	deb [signed-by=<keyPath> arch=...] <uri> <suite> <components...>
 //
-// signed-by is present only if a key is set (binds trust to the repo).
-// enabled=false → the line is commented out (apt has no enabled flag in the
-// one-line format; comment-out is the standard practice).
+// signed-by/arch are present only if set (signed-by binds trust to the repo;
+// arch is for multi-arch repos, [ADR-071]). enabled=false → the line is
+// commented out (apt has no enabled flag in the one-line format; comment-out
+// is the standard practice).
 func aptListContent(p repoParams, keyPath string) []byte {
 	var opts []string
 	if p.gpgKey != "" {
 		opts = append(opts, "signed-by="+keyPath)
+	}
+	if len(p.arch) > 0 {
+		opts = append(opts, "arch="+strings.Join(p.arch, ","))
 	}
 	var b strings.Builder
 	if !p.enabled {
@@ -281,10 +285,11 @@ func (m *Module) ensureFile(path string, content []byte) (bool, error) {
 // binary keyring — written as-is). The key is critical for supply-chain
 // integrity.
 //
-// Note: gpgKey-as-URL (fetch the key over https) is NOT implemented in MVP —
-// download-by-URL belongs to a separate core.url module; here the key is
-// always passed inline (CEL can substitute content via ${ file(...) } or
-// vault). This is a deliberate MVP limitation, extensible later.
+// Note: gpgKey-as-URL fetching is deliberately NOT done here ([ADR-071] §(g),
+// variant B) — network/SSRF stays in core.url.fetched (network_outbound +
+// SSRF-guard + checksum), core.repo stays pure-FS. The key is always passed
+// inline (CEL can substitute content via ${ file(...) } or vault); see
+// docs/module/core/repo/README.md for the core.url.fetched → gpg_key pattern.
 func (m *Module) ensureKey(keyPath, gpgKey string) (bool, error) {
 	cur, existed, err := readFile(keyPath)
 	if err != nil {

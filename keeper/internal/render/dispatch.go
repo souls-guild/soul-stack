@@ -13,16 +13,17 @@ import (
 // `where:` (per-host predicate). Returns TargetSIDs sorted by SID and the host
 // objects themselves for the subsequent per-host CEL render of params.
 //
-// `on:` resolution (orchestration.md §3, [ADR-040] amendment 2026-05-27):
-//   - omitted (task.On == nil) → the whole incarnation (all hosts);
+// `on:` resolution (orchestration.md §3, [ADR-040] amendment 2026-05-27;
+// ADR-008 amendment 2026-07-17/NIM-124):
+//   - omitted (task.On == nil) → the whole incarnation (all members — the roster
+//     is already membership-scoped);
 //   - `on: keeper` → keeper-side task, outside pilot scope here → [ErrUnsupportedDSL];
-//   - `on: [coven, …]` → AND-intersection over Coven labels (a host matches only
-//     if it has ALL listed labels). Coven literals wrapped in CEL `${ … }`
-//     (e.g. `${ incarnation.name }`) are evaluated; `${ incarnation.name }`
-//     passes through the common filter as an ordinary label and doesn't narrow
-//     scope — every host in the roster carries the root label by construction
-//     (rosterSQL `WHERE $1 = ANY(coven)`, ADR-008), so filtering on it is
-//     equivalent to "the whole incarnation".
+//   - `on: [coven, …]` → AND-intersection over stable Coven labels (a host
+//     matches only if it has ALL listed labels), always ⊆ members. A resolved
+//     element equal to the incarnation's own name is a validation error
+//     (`incarnation.name` is NOT a Coven — omit `on:` to target the whole
+//     incarnation; fail-closed so a stale scenario errors out instead of
+//     resolving to an empty set).
 //
 // `where:` resolution — per-host bool predicate (evalWhere). Empty where →
 // all targeted hosts.
@@ -98,12 +99,11 @@ func IsAssertTask(task config.Task) bool {
 	return task.Assert != nil
 }
 
-// resolveOn converts an `on:` value into a list of Coven labels. A returned
-// nil/empty means "no coven filter" (the whole incarnation, only when on: is
-// omitted). The root label `${ incarnation.name }` gets NO special handling:
-// it enters the list as an ordinary label, and filtering on it is safe and
-// equivalent to "the whole incarnation" — every host in the roster carries the
-// root label (rosterSQL `WHERE $1 = ANY(coven)`, ADR-008).
+// resolveOn converts an `on:` value into a list of stable Coven labels. A
+// returned nil/empty means "no coven filter" (the whole incarnation, only when
+// on: is omitted — the roster is already membership-scoped). A resolved element
+// equal to the incarnation name is rejected by [resolveCovenList]
+// (`incarnation.name` is not a Coven, ADR-008 amendment 2026-07-17/NIM-124).
 //
 // `on: keeper` never reaches here — keeper-side tasks are diverted by the
 // pipeline into renderKeeperTask before roster resolution (see
@@ -176,10 +176,11 @@ func keeperVars(in RenderInput) cel.Vars {
 
 // resolveCovenList computes `on: [...]` elements: static kebab labels as-is;
 // CEL wrappers `${ … }` via interpolation (soulprint-free context: `on:`
-// resolves once per run, not per host). The root label `incarnation.name` gets
-// NO special handling — it enters the list like any other: filtering on it is
-// safe and equivalent to "the whole incarnation", since every host in the
-// roster carries the root label (rosterSQL `WHERE $1 = ANY(coven)`, ADR-008).
+// resolves once per run, not per host). A resolved element equal to the
+// incarnation's own name is a validation error (ADR-008 amendment
+// 2026-07-17/NIM-124: `incarnation.name` is not a Coven — the whole-incarnation
+// form is an omitted `on:`). Fail-closed: a stale `on: ["${ incarnation.name }"]`
+// errors out instead of silently resolving to an empty set.
 func resolveCovenList(engine *cel.Engine, in RenderInput, items []any) ([]string, error) {
 	// on: resolves not per-host — soulprint is unavailable in this context.
 	vars := cel.Vars{
@@ -206,6 +207,11 @@ func resolveCovenList(engine *cel.Engine, in RenderInput, items []any) ([]string
 		coven, ok := val.(string)
 		if !ok {
 			return nil, fmt.Errorf("render: on[%d] %q evaluated to %T, expected a coven string", i, s, val)
+		}
+		// incarnation.name is not a Coven (ADR-008 amendment 2026-07-17/NIM-124):
+		// targeting the whole incarnation is an omitted on:, not on: [name].
+		if coven == in.Incarnation.Name {
+			return nil, fmt.Errorf("render: on[%d] %q resolves to the incarnation name %q, which is not a Coven; omit on: to target the whole incarnation", i, s, in.Incarnation.Name)
 		}
 		out = append(out, coven)
 	}

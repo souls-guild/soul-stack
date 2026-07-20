@@ -1,7 +1,11 @@
 # core.soul.registered
 
-Linking Soul (by `SID`) to a set of stable Coven marks in the keeper registry
-(tables `souls` + coven). **Keeper-side**, dispatcher `on: keeper` - step
+Binds a Soul (by `SID`) as a **member** of the run's incarnation and optionally to a
+set of real stable Coven tags in the keeper registry (tables `souls` +
+`incarnation_membership` + coven). Membership is set **implicitly** from the run's
+incarnation and lives in `incarnation_membership`, **not** in `souls.coven[]`
+([ADR-008 amendment 2026-07-17](../../../adr/0008-coven-stable-tags.md#amendment-2026-07-17-nim-124-incarnationname-is-not-a-coven--membership-is-a-first-class-relation)).
+**Keeper-side**, dispatcher `on: keeper` - step
 is executed on Keeper itself, not on the host (unlike Soul-side core like
 `core.pkg`/`core.file`). Launch without `on: keeper` - scenario validation error.
 Implementation - [`keeper/internal/coremod/soul/registered.go`](../../../../keeper/internal/coremod/soul/registered.go).
@@ -99,9 +103,10 @@ action: cloud-create / scenario-host-add do not carry a specific Archon).
 (`keepersoul.ValidCoven`); invalid - the step falls and is not included in the register.
 Symmetrically to the API boundary `POST /v1/souls` so that the scenario path is not "black"
 move" bypassing checks.
-- **Footgun protection `mode: replace`.** Empty `coven: []` with `replace` - error:
-the host must save at least one Coven label (otherwise it would lose the root coven
-incarnation and would fall out of targeting).
+- **Empty `coven: []` with `replace` is a valid no-op-to-empty.** Membership now lives in
+`incarnation_membership`, not in `souls.coven[]` ([ADR-008 amendment 2026-07-17](../../../adr/0008-coven-stable-tags.md#amendment-2026-07-17-nim-124-incarnationname-is-not-a-coven--membership-is-a-first-class-relation)),
+so clearing all stable coven tags cannot sever a host from its incarnation. The former
+footgun guard (`min_items: 1` + the `mode: replace` empty-set error) is removed.
 - **Does not issue bootstrap tokens and SoulSeed** - this is the competence of onboarding, not
 this module; The module does not produce or reveal secrets.
 - **DoS-guard of the onboarding barrier.** `await_timeout` is limited from above by the operator-
@@ -131,14 +136,15 @@ The `online`/`pending`/`satisfied` fields are only present with `await_online: t
 ## Example
 
 ```yaml
-# Register the new Soul in the incarnation registry: bind it to the root
-# coven (mode: append default). on: keeper is required - this is a keeper-side step.
-- name: Bind new replica to the incarnation root coven
+# Register the new Soul as a member of the incarnation. Membership is set
+# implicitly from the run's incarnation; coven carries only real stable tags
+# (optional). on: keeper is required - this is a keeper-side step.
+- name: Bind new replica to the incarnation
   on: keeper
   module: core.soul.registered
   params:
-    sid:   "${ vars.new_sid }"
-    coven: ["${ incarnation.name }"]
+    sid: "${ vars.new_sid }"
+    # coven: optional stable tags (e.g. [prod, dc1])
 ```
 
 ```yaml
@@ -150,7 +156,7 @@ The `online`/`pending`/`satisfied` fields are only present with `await_online: t
   register: shards
   params:
     sid:           "${ register.provision.hosts }"   # list of SIDs from cloud-provision
-    coven:         ["${ incarnation.name }"]
+    # coven: optional stable tags; membership is set implicitly
     await_online:  true
     await_timeout: 10m                                # ≤ keeper.yml::max_await_timeout
 ```

@@ -865,9 +865,12 @@ tasks:
 }
 
 func TestLoadScenarioManifest_OnCovenList(t *testing.T) {
+	// A CEL element + a coven literal in on: parse fine. The CEL element is a
+	// plain input ref (NOT ${ incarnation.name }, which is a render-time
+	// validation error post-NIM-124 — see resolveCovenList).
 	src := `name: x
 tasks:
-  - on: ["${ incarnation.name }", baremetal]
+  - on: ["${ input.zone }", baremetal]
     module: core.exec.run
     params: { cmd: "true" }
 `

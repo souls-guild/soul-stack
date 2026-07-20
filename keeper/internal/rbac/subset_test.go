@@ -77,6 +77,36 @@ func TestAssertCallerCovers(t *testing.T) {
 			wantHeld:   true,
 		},
 		{
+			name:       "resource-wildcard does NOT flow to another resource (concrete action)",
+			callerRaws: []string{"incarnation.*"},
+			required:   []string{"service.register"},
+			wantHeld:   true,
+		},
+		{
+			name:       "resource-wildcard owner incarnation.* does NOT grant service.*",
+			callerRaws: []string{"incarnation.*"},
+			required:   []string{"service.*"},
+			wantHeld:   true,
+		},
+		{
+			name:       "resource-wildcard does NOT flow to sensitive role.grant-operator",
+			callerRaws: []string{"incarnation.*"},
+			required:   []string{"role.grant-operator"},
+			wantHeld:   true,
+		},
+		{
+			name:       "resource-wildcard only covers the same resource-wildcard",
+			callerRaws: []string{"incarnation.*"},
+			required:   []string{"incarnation.*"},
+			wantHeld:   false,
+		},
+		{
+			name:       "full * covers a resource-wildcard of any resource",
+			callerRaws: []string{"*"},
+			required:   []string{"service.*", "role.*", "operator.*"},
+			wantHeld:   false,
+		},
+		{
 			name:       "empty required -> always covered (nothing to check)",
 			callerRaws: []string{},
 			required:   []string{},

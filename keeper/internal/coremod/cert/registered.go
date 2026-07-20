@@ -37,6 +37,8 @@ import (
 	"time"
 
 	keepercert "github.com/souls-guild/soul-stack/keeper/internal/cert"
+	"github.com/souls-guild/soul-stack/keeper/internal/certissue"
+	"github.com/souls-guild/soul-stack/keeper/internal/certpolicy"
 	"github.com/souls-guild/soul-stack/keeper/internal/coremod/util"
 	"github.com/souls-guild/soul-stack/shared/audit"
 
@@ -50,12 +52,15 @@ import (
 // keeper-side core modules); state `registered` arrives in pluginv1.ApplyRequest.state.
 const Name = "core.cert"
 
-// StateRegistered is the only state of the module.
+// StateRegistered — registration of an already-existing cert in the Warrant registry.
 const StateRegistered = "registered"
 
-// VaultReader is a narrow surface of vault.Client needed by the module: reading
-// KV paths to extract PEM certificates. Narrowing simplifies unit testing
-// (fake without HTTP).
+// StateIssued — Keeper ITSELF issues the cert: keypair+CSR → sign with the Vault PKI
+// role from the manifest → write cert/key to Vault → register in Warrant (NIM-99 Slice C).
+const StateIssued = "issued"
+
+// VaultReader — narrow surface of vault.Client that the module needs: reading a
+// KV path to extract the cert's PEM. Narrowing simplifies unit tests (fake without HTTP).
 type VaultReader interface {
 	ReadKV(ctx context.Context, path string) (map[string]any, error)
 }
@@ -73,7 +78,14 @@ type AuditWriter interface {
 	Write(ctx context.Context, event *audit.Event) error
 }
 
-// Module implements sdk/module.SoulModule. One module per base name `core.cert`.
+// IssuePolicyResolver resolves the incarnation's cert-rotation policy from its
+// manifest (certpolicy.Resolver satisfies it). For state `issued` the PKI-signing
+// role and service name are taken FROM HERE, not from params.
+type IssuePolicyResolver interface {
+	Resolve(ctx context.Context, incarnationName string) (certpolicy.Policy, error)
+}
+
+// Module — implementation of sdk/module.SoulModule. One module for base-name `core.cert`.
 type Module struct {
 	Vault VaultReader
 	Store Store
@@ -81,24 +93,39 @@ type Module struct {
 	// KID is the Keeper instance identifier, written to warrant.issued_by_kid
 	// (audit: "which instance registered the cert"). Empty → NULL.
 	KID string
+
+	// Dependencies for state `issued` (NIM-99 Slice C). Set by the wire-up slice
+	// in registry.go AFTER New; nil for any of them → issued returns failed (not
+	// configured). state `registered` does not depend on them.
+	Signer      certissue.Signer     // PKI signing of the CSR
+	VaultWriter certissue.KVWriter   // writing cert/key to Vault
+	Policy      IssuePolicyResolver  // rotation policy resolver from the manifest
+	CSRGen      certissue.CSRGenFunc // keypair+CSR generation (keeper-side, R2)
+	PKIMount    func() string        // hot-reload keeper.yml Vault.PKIMount
 }
 
-// New — wire-helper.
+// New — wire-helper. issued-dependencies (Signer/VaultWriter/Policy/CSRGen/
+// PKIMount) are set separately after the constructor.
 func New(v VaultReader, s Store, a AuditWriter, kid string) *Module {
 	return &Module{Vault: v, Store: s, Audit: a, KID: kid}
 }
 
 func (m *Module) Validate(_ context.Context, req *pluginv1.ValidateRequest) (*pluginv1.ValidateReply, error) {
 	var errs []string
-	if req.State != StateRegistered {
-		errs = append(errs, fmt.Sprintf("unknown state %q (want %s)", req.State, StateRegistered))
-		return &pluginv1.ValidateReply{Ok: false, Errors: errs}, nil
-	}
-	if _, err := util.StringParam(req.Params, "incarnation"); err != nil {
-		errs = append(errs, err.Error())
-	}
-	if _, err := parseCertTargets(req); err != nil {
-		errs = append(errs, err.Error())
+	switch req.State {
+	case StateRegistered:
+		if _, err := util.StringParam(req.Params, "incarnation"); err != nil {
+			errs = append(errs, err.Error())
+		}
+		if _, err := parseCertTargets(req); err != nil {
+			errs = append(errs, err.Error())
+		}
+	case StateIssued:
+		if _, err := util.StringParam(req.Params, "incarnation"); err != nil {
+			errs = append(errs, err.Error())
+		}
+	default:
+		errs = append(errs, fmt.Sprintf("unknown state %q (want %s or %s)", req.State, StateRegistered, StateIssued))
 	}
 	return &pluginv1.ValidateReply{Ok: len(errs) == 0, Errors: errs}, nil
 }
@@ -156,14 +183,25 @@ func parseCertTargetsFromStruct(params *structpb.Struct) ([]certTarget, error) {
 	return out, nil
 }
 
-// Apply reads PEM of each cert from Vault, extracts metadata and registers an
-// active-row in Warrant (idempotent by fingerprint). changed=true if at least
-// one cert was written (new / changed fingerprint).
+// Apply dispatches on req.State: `registered` — registration of an already
+// existing cert; `issued` — Keeper issues the cert itself (applyIssued in
+// issued.go).
 func (m *Module) Apply(req *pluginv1.ApplyRequest, stream grpc.ServerStreamingServer[pluginv1.ApplyEvent]) error {
-	ctx := stream.Context()
-	if req.State != StateRegistered {
-		return util.SendFailed(stream, fmt.Sprintf("unknown state %q", req.State))
+	switch req.State {
+	case StateRegistered:
+		return m.applyRegistered(req, stream)
+	case StateIssued:
+		return applyIssued(m, req, stream)
+	default:
+		return util.SendFailed(stream, fmt.Sprintf("unknown state %q (want %s or %s)", req.State, StateRegistered, StateIssued))
 	}
+}
+
+// applyRegistered reads the PEM of each cert from Vault, extracts metadata, and
+// registers the active Warrant row (idempotent by fingerprint). changed=true
+// if at least one cert was written (new / changed fingerprint).
+func (m *Module) applyRegistered(req *pluginv1.ApplyRequest, stream grpc.ServerStreamingServer[pluginv1.ApplyEvent]) error {
+	ctx := stream.Context()
 
 	incarnation, err := util.StringParam(req.Params, "incarnation")
 	if err != nil {

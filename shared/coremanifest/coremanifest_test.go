@@ -10,29 +10,30 @@ import "testing"
 // via the same mechanism; state names are aligned with the actual dispatch of the
 // keeper-side coremods (StateCreated/StateDestroyed, StateRead, present/absent).
 var expectedModules = map[string][]string{
-	"core.exec":     {"run"},
-	"core.file":     {"present", "absent", "rendered", "directory"},
-	"core.pkg":      {"installed", "latest", "absent"},
-	"core.service":  {"running", "stopped", "restarted", "enabled"},
-	"core.user":     {"present", "absent"},
-	"core.group":    {"present", "absent"},
-	"core.cmd":      {"shell"},
-	"core.cron":     {"present", "absent"},
-	"core.mount":    {"present", "absent", "mounted", "unmounted"},
-	"core.git":      {"cloned", "pulled"},
-	"core.archive":  {"extracted"},
-	"core.sysctl":   {"present", "applied"},
-	"core.url":      {"fetched"},
-	"core.line":     {"present", "absent"},
-	"core.repo":     {"present", "absent"},
-	"core.firewall": {"present", "absent"},
-	"core.http":     {"probe"},
-	"core.noop":     {"run"},                             // no-op/barrier anchor (ADR-015)
-	"core.module":   {"installed"},                       // SoulModule plugin delivery (ADR-065)
-	"core.soul":     {"registered"},                      // keeper-side (on: keeper)
-	"core.cloud":    {"created", "destroyed", "resized"}, // keeper-side (ADR-017; resized — VM auto-expansion)
-	"core.vault":    {"kv-read", "kv-present"},           // keeper-side (ADR-017): kv-read (explicit read) + kv-present (generate-if-absent)
-	"core.choir":    {"present", "absent"},               // keeper-side (ADR-044)
+	"core.exec":      {"run"},
+	"core.file":      {"present", "absent", "rendered"},
+	"core.directory": {"present", "absent"},
+	"core.pkg":       {"installed", "latest", "absent"},
+	"core.service":   {"running", "stopped", "restarted", "enabled", "disabled", "masked"},
+	"core.user":      {"present", "absent"},
+	"core.group":     {"present", "absent"},
+	"core.cmd":       {"shell"},
+	"core.cron":      {"present", "absent"},
+	"core.mount":     {"present", "absent", "mounted", "unmounted"},
+	"core.git":       {"cloned", "pulled"},
+	"core.archive":   {"extracted"},
+	"core.sysctl":    {"present", "applied"},
+	"core.url":       {"fetched"},
+	"core.line":      {"present", "absent"},
+	"core.repo":      {"present", "absent"},
+	"core.firewall":  {"present", "absent"},
+	"core.http":      {"probe"},
+	"core.noop":      {"run"},                             // no-op/barrier anchor (ADR-015)
+	"core.module":    {"installed"},                       // SoulModule plugin delivery (ADR-065)
+	"core.soul":      {"registered"},                      // keeper-side (on: keeper)
+	"core.cloud":     {"created", "destroyed", "resized"}, // keeper-side (ADR-017; resized — VM auto-expansion)
+	"core.vault":     {"kv-read", "kv-present"},           // keeper-side (ADR-017): kv-read (explicit read) + kv-present (generate-if-absent)
+	"core.choir":     {"present", "absent"},               // keeper-side (ADR-044)
 }
 
 // TestDefault_EmbedManifestsParse — all embed manifests parse and are valid

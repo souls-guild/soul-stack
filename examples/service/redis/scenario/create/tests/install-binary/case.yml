@@ -195,7 +195,7 @@ assert:
     # Regression "binary doesn't create conf-dir" = users.acl/redis.conf render fails with "open
     # .../.users.acl.tmp-...: no such file or directory" (caught live 2026-06-29).
     # Disambiguator from data/log/socket/tls/modules-dir - path /etc/redis (conf directory).
-    - module: core.file.directory
+    - module: core.directory.present
       params_subset:
         path: /etc/redis
         owner: redis
@@ -208,14 +208,14 @@ assert:
     # Regression "binary doesn't create data/log-dir" = redis-server on a binary install
     # fails (no RDB/AOF directory or logfile). Disambiguator from socket/tls/modules-dir -
     # path /var/lib/redis and /var/log/redis (exact data/log directories).
-    - module: core.file.directory
+    - module: core.directory.present
       params_subset:
         path: /var/lib/redis
         owner: redis
         group: redis
         mode: "0750"
         parents: true
-    - module: core.file.directory
+    - module: core.directory.present
       params_subset:
         path: /var/log/redis
         owner: redis

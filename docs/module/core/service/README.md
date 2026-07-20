@@ -19,9 +19,11 @@ step falls (`no supported init system detected (systemd/openrc/sysv)`).
 | `stopped` | The service has stopped. | `changed=true` if active and stopped. No longer active - `changed=false`. |
 | `restarted` | Unconditional restart. | **Always `changed=true`** - the user explicitly asked for a restart (for example, after changing the config). There is no idempotency here intentionally. |
 | `enabled` | Autostart when system boots (ortho to activity). | `changed=true` if autostart was disabled and enabled. Already enabled - `changed=false`. |
+| `disabled` | Boot-autostart is off (mirror of `enabled`, ortho to activity - a disabled service may still be running). | `changed=true` if autostart was enabled and disabled. Already disabled - `changed=false`. |
+| `masked` | The unit is masked (`systemctl mask`, symlink → `/dev/null`): start impossible manually or as a dependency; strictly stronger than `disabled`. **systemd-only**. | `changed=true` if the unit was not masked and got masked (or was enabled and got disabled first). Already masked - `changed=false`. openrc/sysv → error. |
 
-Mutating states (`running` / `restarted` / `enabled`, **NOT** `stopped`) before its
-action on systemd-backend execute `systemctl daemon-reload` - controls behavior
+Mutating states (`running` / `restarted` / `enabled`, **NOT** `stopped` / `disabled` /
+`masked`) before its action on systemd-backend execute `systemctl daemon-reload` - controls behavior
 optional param `daemon_reload` (see below).
 reload itself **doesn't** affect the `changed` step.
 
@@ -52,6 +54,35 @@ reload itself **doesn't** affect the `changed` step.
 |---|---|---|---|
 | `name` | string | required | Service/unit name. |
 | `daemon_reload` | string enum | optional, default `auto` | `auto` \| `always` \| `never`. Controls `systemctl daemon-reload` before enable (systemd). See § daemon_reload. |
+
+## disabled — params
+
+| Param | Type | Required/default | Meaning |
+|---|---|---|---|
+| `name` | string | required | Service/unit name. |
+
+`disabled` is the mirror of `enabled`: it guarantees boot-autostart is **off**,
+orthogonal to current activity (a disabled service may still be running - use
+`stopped` to stop it). Idempotent via `is-enabled`; backend-agnostic
+(systemd/openrc/sysv). `daemon_reload` does not apply (disable does not start the unit).
+
+## masked — params
+
+| Param | Type | Required/default | Meaning |
+|---|---|---|---|
+| `name` | string | required | Service/unit name. |
+
+`masked` guarantees the unit is masked (`systemctl mask`, unit symlink → `/dev/null`):
+the service cannot be started at all - neither manually nor pulled in as a dependency.
+Strictly stronger than `disabled`.
+
+- **systemd-only.** On openrc/sysv `masked` is **not** a no-op but an **error**
+  (fail-closed): a silent no-op would give a false sense of protection (masking is a
+  security control).
+- **Disable-before-mask.** `masked` idempotently disables autostart **before** masking
+  (systemd errors when masking a still-enabled unit). `changed` reflects the disable
+  step and/or the mask step: already masked (and disabled) → `changed=false`.
+- `daemon_reload` does not apply (masking does not start the unit).
 
 ## daemon_reload - rereading unit files
 
@@ -95,14 +126,15 @@ Existing tasks without `daemon_reload` receive `auto` - additive and backwards c
 
 ## Capabilities / side-effects
 
-- **Requires root** (`run_as_root`): start/stop/restart/enable/disable via
-init system.
+- **Requires root** (`run_as_root`): start/stop/restart/enable/disable/mask via
+init system (`mask` is systemd-only).
 - **Executes subprocesses** (`exec_subprocess`): detect init
 (`systemctl`/`rc-service`/`service` `--version`), status checks
   (`is-active`/`is-enabled`, `rc-service status`, `rc-update show`, `chkconfig
-  --list`), daemon-reload (`systemctl show <unit> --property=NeedDaemonReload
---value` with `auto`, then `systemctl daemon-reload`) and actions
-  (`systemctl start|stop|restart|enable|disable`, `rc-service`/`rc-update`,
+  --list`, `systemctl is-enabled` returning `masked`), daemon-reload
+  (`systemctl show <unit> --property=NeedDaemonReload --value` with `auto`, then
+  `systemctl daemon-reload`) and actions (`systemctl
+start|stop|restart|enable|disable|mask`, `rc-service`/`rc-update`,
   `service`/`chkconfig`).
 - **Changes the system:** service activity and/or its autostart.
 
@@ -110,7 +142,8 @@ init system.
 
 `running` returns `{ name, active: true }` (+ `enabled: <bool>` if param
 `enabled` was specified). `stopped` - `{ name, active: false }`. `restarted` —
-`{ name, active: true }`. `enabled` — `{ name, enabled: true }`.
+`{ name, active: true }`. `enabled` — `{ name, enabled: true }`. `disabled` —
+`{ name, enabled: false }`. `masked` — `{ name, masked: true }`.
 
 If `daemon-reload` was actually executed at this step (see.
 § daemon_reload), is added to output
@@ -192,15 +225,18 @@ Linking with [`core.file`](../file/README.md) is dangerous: if the autostart uni
 the binary under it is written in an untrusted `core.file` step, then `core.service.enabled`
 pins its execution on every boot. Control the source of the unit file
 exactly like the source of any executable artifact.
-- **`enabled` ortho activity.** The /state `enabled` parameter controls autorun
-and is idempotent (reconciliation via `is-enabled`), but `enable` itself is not a service
-starts, but `disable` does not stop an already running one - these are different axes. Not
-rely on `disabled` as a guarantee that the service is currently down
-(needs `stopped`).
+- **`enabled` / `disabled` / `masked` are orthogonal to activity.** `enabled` (state
+and param) and `disabled` control boot-autostart and are idempotent (reconciliation
+via `is-enabled`), but `enable` itself does not start a service and `disable` /
+`disabled` do not stop an already running one - these are different axes. Do not
+rely on `disabled` as a guarantee that the service is currently down (needs
+`stopped`). `masked` blocks starting entirely (manually or as a dependency) and is
+**systemd-only** - on openrc/sysv it is a loud error, never a silent no-op, so a
+masked step cannot give a false sense of protection on an unsupported init.
 - **Privileges.** Manifest
 [`service.yaml`](../../../../shared/coremanifest/service.yaml) announces
   `required_capabilities: [run_as_root, exec_subprocess]` —
-start/stop/restart/enable/disable via init system always require root and
+start/stop/restart/enable/disable/mask via init system always require root and
 launch subprocesses (`systemctl`/`rc-service`/`service`/`rc-update`/`chkconfig`,
 plus init detection and `is-active`/`is-enabled` checks). This is a **declaration** for
 static reconciliation of `soul-lint` with `allowed_capabilities` host (see
@@ -215,6 +251,6 @@ and **not** runtime elevation: the operation is executed with the privileges of 
 - [core/file/README.md](../file/README.md) - `core.file.rendered` (typical source `onchanges:` for `restarted`).
 - [soul/modules.md](../../../soul/modules.md) - host side of modules and cache.
 - [naming-rules.md → Destiny Modules](../../../naming-rules.md) - a dictionary of names.
-- [ADR-015](../../../adr/0015-core-modules-mvp.md) - list of core MVPs; **Amendment 2026-06-18** - centralized daemon-reload (`daemon_reload`).
+- [ADR-015](../../../adr/0015-core-modules-mvp.md) - list of core MVPs; **Amendment 2026-06-18** - centralized daemon-reload (`daemon_reload`); **Amendment 2026-07-17** - `disabled` / `masked` states (systemd-only mask, disable-before-mask).
 - [destiny/production-conventions.md §3a](../../../destiny/production-conventions.md) - manual daemon-reload pattern (now covered by built-in `auto`).
 - [ADR-018(b)](../../../adr/0018-soulprint-typed.md) — `SoulprintFacts.os.init_system` as **primary** backend source; runtime detection - fallback.

@@ -113,8 +113,8 @@ func TestLDAPLogin_SetsSecureCookie(t *testing.T) {
 	if c.SameSite != http.SameSiteStrictMode {
 		t.Errorf("cookie SameSite = %v, want Strict", c.SameSite)
 	}
-	if c.Path != "/" {
-		t.Errorf("cookie Path = %q, want /", c.Path)
+	if c.Path != "/auth" {
+		t.Errorf("cookie Path = %q, want /auth (NIM-77: narrowed from /)", c.Path)
 	}
 	// The JWT token is NOT in the body (cookie-only delivery).
 	if strings.Contains(rec.Body.String(), "ey.tok.jwt") {

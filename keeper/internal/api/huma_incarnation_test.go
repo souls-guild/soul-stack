@@ -58,6 +58,7 @@ func TestHumaIncarnation_ChiCoexistence(t *testing.T) {
 		stubOperatorHandler(t),
 		incH,
 		handlers.NewSoulHandler(nil, nil, nil, nil),
+		handlers.TelemetrySpecStub(),
 		stubRoleHandler(t), stubSynodHandler(t), stubSigilHandler(t), stubSigilKeyHandler(t),
 		stubServiceHandler(t), nil, stubAugurHandler(t), stubOracleHandler(t),
 		nil,                                     // pushH
@@ -87,6 +88,8 @@ func TestHumaIncarnation_ChiCoexistence(t *testing.T) {
 		false,                                // webUIEnabled — /ui is out of scope for the incarnation routing test
 		nil,                                  // ldapAuth (LDAP not configured in the test)
 		nil,                                  // oidcAuth (OIDC not configured in the test)
+		nil,                                  // authToken (/auth/token exchange is not tested here)
+		AuthMethodsDeps{},                    // authMethods (/auth/methods is mounted but not verified)
 		nil,                                  // loginGuard (anti-bruteforce off in the test)
 		apimiddleware.AuthLoginLimitConfig{}, // loginLimitCfg
 		nil,                                  // soulStatsStaleFn (defaults to 90s in the test)

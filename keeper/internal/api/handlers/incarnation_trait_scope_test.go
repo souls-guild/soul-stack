@@ -1,18 +1,18 @@
 package handlers
 
-// End-to-end guard tests for trait-scoped incarnation visibility at the handler layer (ADR-047
-// amendment / ADR-060 §7 slice 1). The constituent pieces are covered separately
-// (traitScalarEquals unit / incarnation.appendScopeClause integration / Purview),
-// but the e2e through the handler — List (ResolveListScopeFor → scope.Traits → SQL) and Get
-// (GetInScopeFor → traitScalarEquals) — was missing.
+// End-to-end guard tests for trait-scoped incarnation visibility at the handler
+// layer (NIM-128 unified boolean scope). The e2e through the handler — List
+// (ResolveListScopeFor → rbac.PurviewSQL → SQL) and Get (GetInScopeFor →
+// traitsToScopeInput → rbac.Purview.Match) — is exercised here.
 //
-// KEY invariant (BUG#1 — List↔Get consistency at the handler level):
-//   - scalar label {env:"prod"}  + scope trait=env:prod → VISIBLE  (Get 200; List
-//     emits scalar-equality `traits->>$ = $` in SQL, NOT containment `@>`);
-//   - list label {env:[prod,stage]} + the same scope → not visible (Get 404; List —
-//     the same scalar-equality SQL, which for an array yields its TEXT ≠ "prod").
-// The mismatch would be: List via `@>` shows the list label (array-contains-
-// primitive PG §8.14.3), while Get does NOT see it. Both arms must be scalar-only.
+// KEY invariant (BUG#1 fix — List↔Get consistency): a scope value matches BOTH a
+// scalar label and any element of a list label, IDENTICALLY in List and Get:
+//   - scalar label {env:"prod"}      + scope trait.env=prod → VISIBLE (Get 200;
+//     List `traits ->> $k = ANY($v)`);
+//   - list label {env:[prod,stage]}  + the same scope → VISIBLE (Get 200 via
+//     traitsToScopeInput element-expansion; List `traits -> $k ?| $v`).
+// The former scalar-only List↔Get divergence and the `@>` containment form are
+// removed.
 
 import (
 	"encoding/json"
@@ -46,7 +46,7 @@ func incTraitRow(name string, traits map[string]any) staticRow {
 	}}
 }
 
-// --- Get trait-scoped (GetInScopeFor → traitScalarEquals) -------------------
+// --- Get trait-scoped (GetInScopeFor → traitsToScopeInput → Match) ----------
 
 // TestIncarnation_Get_TraitScalarMatch_200 — scalar label {env:prod} + scope
 // trait=env:prod → 200 (visible). The base trait-scope arm on the GET path.
@@ -80,11 +80,12 @@ func TestIncarnation_Get_TraitScalarMismatch_404(t *testing.T) {
 	}
 }
 
-// TestIncarnation_Get_TraitListLabel_404 — ★BUG#1: list label {env:[prod,stage]}
-// + scope trait=env:prod → 404 (not visible). traitScalarEquals on an array → false
-// (scalar-only): an operator with a scalar scope does NOT see an incarnation with a list
-// label that contains this value as an element. Consistent with the List arm below.
-func TestIncarnation_Get_TraitListLabel_404(t *testing.T) {
+// TestIncarnation_Get_TraitListLabel_200 — NIM-128: list label {env:[prod,stage]}
+// + scope trait.env=prod → 200 (visible). The unified resolver matches a scope
+// value against ANY element of a list-Trait (traitsToScopeInput expands the
+// list), so List and Get agree — resolving the former scalar-only List↔Get
+// divergence.
+func TestIncarnation_Get_TraitListLabel_200(t *testing.T) {
 	db := &fakeIncDB{
 		selectByNameRow: func(name string) pgx.Row {
 			return incTraitRow(name, map[string]any{"env": []any{"prod", "stage"}})
@@ -93,8 +94,8 @@ func TestIncarnation_Get_TraitListLabel_404(t *testing.T) {
 	h := NewIncarnationHandler(db, nil, nil, nil, nil, nil, nil,
 		fakeIncScoper{traitExprs: []string{"env:prod"}}, nil)
 	rec := doIncGet(t, h, "redis-prod")
-	if rec.Code != http.StatusNotFound {
-		t.Errorf("Code = %d, want 404 (list label env=[prod,stage] does NOT match scalar-scope env=prod - BUG#1)", rec.Code)
+	if rec.Code != http.StatusOK {
+		t.Errorf("Code = %d, want 200 (list label env=[prod,stage] matches scope env=prod on element)", rec.Code)
 	}
 }
 
@@ -164,29 +165,34 @@ func listTraitSQLHandler(traitExprs []string) (*fakeIncDB, *string, *Incarnation
 	return db, &sql, h
 }
 
-// TestIncarnation_List_TraitScope_ScalarEqualitySQL — ★BUG#1: the trait scope reaches
-// SQL as scalar-equality `traits->>$N = $N`, NOT jsonb-containment `@>`. This is the
-// consistency arm: the same predicate on an array yields the array's TEXT ≠ "prod"
-// (the list label does NOT match in List, just like in Get). A regression to `@>` would bring
-// back the mismatch (List shows the list label, Get does not).
-func TestIncarnation_List_TraitScope_ScalarEqualitySQL(t *testing.T) {
+// TestIncarnation_List_TraitScope_ReachesSQL — NIM-128 unified trait resolver: the
+// trait scope reaches SQL as `traits ->> $k = ANY($v) OR traits -> $k ?| $v` — the
+// scalar arm (`->>`) matches a scalar label, the `?|` arm matches any element of a
+// list label, so List and Get agree (BUG#1 fix — the former scalar-only List↔Get
+// divergence, and the `@>` containment form, are gone). Key is a scalar bind-arg,
+// values a []string bind-arg.
+func TestIncarnation_List_TraitScope_ReachesSQL(t *testing.T) {
 	db, sql, h := listTraitSQLHandler([]string{"env:prod"})
 
 	rec := doIncList(t, h, "")
 	if rec.Code != http.StatusOK {
 		t.Fatalf("Code = %d, body=%s", rec.Code, rec.Body.String())
 	}
-	if !strings.Contains(*sql, "traits->>") {
-		t.Errorf("trait-scope did not reach SQL as traits->> scalar-equality:\n%s", *sql)
+	if !strings.Contains(*sql, "traits ->>") {
+		t.Errorf("trait-scope did not reach SQL as `traits ->>` scalar arm:\n%s", *sql)
+	}
+	if !strings.Contains(*sql, "?|") {
+		t.Errorf("trait-scope did not reach SQL as `?|` list arm:\n%s", *sql)
 	}
 	if strings.Contains(*sql, "@>") {
-		t.Errorf("trait-scope uses jsonb-containment @> (BUG#1: matches list label, out of sync with Get):\n%s", *sql)
+		t.Errorf("trait-scope must NOT use jsonb-containment @> (NIM-128 uses ->> / ?|):\n%s", *sql)
 	}
 	// scope pushdown is active (not fail-closed FALSE): SelectAll is called.
 	if !db.listCalled {
 		t.Errorf("trait-scope: SelectAll not called (expected scope-pushdown, not fail-closed)")
 	}
-	// key and value are separate bind-args (env / prod), not concatenated into text.
+	// key (scalar) and values ([]string) are separate bind-args, not concatenated
+	// into SQL text.
 	if !argsHasString(db.lastCountArgs, "env") || !argsHasString(db.lastCountArgs, "prod") {
 		t.Errorf("trait key/value did not arrive as separate bind-args (env, prod): %v", db.lastCountArgs)
 	}
@@ -233,8 +239,7 @@ func TestIncarnation_List_TraitScope_NonEmpty_NotFailClosed(t *testing.T) {
 }
 
 // TestIncarnation_List_TraitOR_CovenAndTrait_BothReachSQL — OR-union coven ∪ trait:
-// both dimensions reach SQL (coven arm covens && / name = ANY; trait arm
-// traits->>). Symmetric to the state∪coven union.
+// both dimensions reach SQL (coven arm `covens &&`; trait arm `traits ->>`).
 func TestIncarnation_List_TraitOR_CovenAndTrait_BothReachSQL(t *testing.T) {
 	var sql string
 	db := &fakeIncDB{
@@ -252,16 +257,36 @@ func TestIncarnation_List_TraitOR_CovenAndTrait_BothReachSQL(t *testing.T) {
 	if !strings.Contains(sql, "covens &&") {
 		t.Errorf("OR-union: coven arm (covens &&) not in SQL:\n%s", sql)
 	}
-	if !strings.Contains(sql, "traits->>") {
-		t.Errorf("OR-union: trait arm (traits->>) not in SQL:\n%s", sql)
+	if !strings.Contains(sql, "traits ->>") {
+		t.Errorf("OR-union: trait arm (traits ->>) not in SQL:\n%s", sql)
 	}
 }
 
-// argsHasString — whether the bind-args contain a string argument equal to want.
+// argsHasString — whether the bind-args contain a string equal to want, either as a
+// scalar string arg or as an element of a []string / []any arg (NIM-128 renders a
+// trait scope's values as a single []string bind-arg).
 func argsHasString(args []any, want string) bool {
+	match := func(a any) bool {
+		s, ok := a.(string)
+		return ok && s == want
+	}
 	for _, a := range args {
-		if s, ok := a.(string); ok && s == want {
+		if match(a) {
 			return true
+		}
+		switch xs := a.(type) {
+		case []string:
+			for _, s := range xs {
+				if s == want {
+					return true
+				}
+			}
+		case []any:
+			for _, e := range xs {
+				if match(e) {
+					return true
+				}
+			}
 		}
 	}
 	return false

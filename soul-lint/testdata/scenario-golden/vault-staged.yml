@@ -16,7 +16,6 @@ tasks:
       targets: "${ [{ 'path': 'secret/redis/' + incarnation.name, 'field': 'password' }] }"
   - name: Write file consuming the generated secret
     module: core.file.present
-    on: ["${ incarnation.name }"]
     params:
       path: /etc/redis/secret.conf
       content: "requirepass ${ vault('secret/redis/' + incarnation.name + '#password') }"

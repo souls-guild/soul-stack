@@ -28,21 +28,29 @@ import (
 // delivery, no JSON token in the body). `soul_session` — our own session name.
 const sessionCookieName = "soul_session"
 
-// newSessionCookie builds the Set-Cookie with the internal JWT — the SINGLE point for LDAP and
-// OIDC (ADR-058(g)/(#4): symmetry of login methods is mandatory). HttpOnly+Secure+
-// `SameSite=Strict`+`Path=/`.
+// newSessionCookie builds the Set-Cookie with the internal JWT — the SINGLE
+// point shared by LDAP and OIDC (ADR-058(g)/(#4): symmetry of login methods is
+// mandatory). HttpOnly+Secure+`SameSite=Strict`+`Path=/auth`.
 //
-// SameSite=Strict is safe for the OIDC callback too (a MED fix for the Lax↔Strict desync,
-// 2026-06-24): SameSite restricts SENDING the cookie on a cross-site request, not its
-// SETTING. On a cross-site top-level redirect from the IdP we SET the cookie (Set-Cookie on
-// the callback response), not read it; the next step is a same-site top-level navigation to
-// `/ui` (302 Location), on which the Strict cookie IS SENT. The former Lax on OIDC
-// was an excessive relaxation and diverged from LDAP — removed.
+// Path=/auth (narrowed from `/`, NIM-77): the only server-side reader of the
+// cookie is POST /auth/token (exchange for a short-lived Bearer, Option B). The
+// browser sends the cookie ONLY to `/auth/*`, not to /v1//mcp//docs — narrowing
+// the leak surface of the 24h credential (the cookie doesn't get attached to
+// every API request).
+//
+// SameSite=Strict is safe for the OIDC callback too (MED fix for the Lax↔Strict
+// desync, 2026-06-24): SameSite restricts SENDING the cookie on a cross-site
+// request, not SETTING it. On a cross-site top-level redirect from the IdP we
+// SET the cookie (Set-Cookie on the callback response), we don't read it; the
+// next step is a same-site top-level navigation to `/ui` (302 Location). That
+// navigation does NOT send the /auth-cookie (Path doesn't match), but it doesn't
+// need to: the UI session is bootstrapped via POST /auth/token (exchange for a
+// Bearer).
 func newSessionCookie(token string, ttl time.Duration) *http.Cookie {
 	return &http.Cookie{
 		Name:     sessionCookieName,
 		Value:    token,
-		Path:     "/",
+		Path:     "/auth",
 		HttpOnly: true,
 		Secure:   true, // TLS-required perimeter (ADR-002 mTLS/HTTPS)
 		SameSite: http.SameSiteStrictMode,

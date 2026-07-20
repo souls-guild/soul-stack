@@ -7,6 +7,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 
+	"github.com/souls-guild/soul-stack/keeper/internal/rbac"
 	"github.com/souls-guild/soul-stack/keeper/internal/soulpurview"
 )
 
@@ -115,7 +116,7 @@ func TestResolveSIDsInScope_Unrestricted_FullResolve(t *testing.T) {
 	r := NewVoyageCommandPGResolver(db)
 
 	got, err := r.ResolveSIDsInScope(context.Background(), VoyageCommandFilter{},
-		soulpurview.Scope{Unrestricted: true})
+		soulpurview.Resolve(rbac.Purview{Unrestricted: true}))
 	if err != nil {
 		t.Fatalf("ResolveSIDsInScope: %v", err)
 	}
@@ -139,7 +140,7 @@ func TestResolveSIDsInScope_CovenScope_TrimsWide(t *testing.T) {
 	// only prod hosts are visible (a, c), b is trimmed silently (∉ explicit).
 	got, err := r.ResolveSIDsInScope(context.Background(),
 		VoyageCommandFilter{Covens: []string{"prod", "staging"}},
-		soulpurview.Scope{Covens: []string{"prod"}})
+		soulpurview.Resolve(rbac.Purview{Exprs: []*rbac.ScopeExpr{mustScopeExpr("coven=prod")}}))
 	if err != nil {
 		t.Fatalf("ResolveSIDsInScope: %v", err)
 	}
@@ -162,7 +163,7 @@ func TestResolveSIDsInScope_ExplicitForeignSID_Denied(t *testing.T) {
 	// a (prod, visible) and b (staging, foreign) are listed explicitly. scope coven=prod.
 	got, err := r.ResolveSIDsInScope(context.Background(),
 		VoyageCommandFilter{SIDs: []string{"a.example.com", "b.example.com"}},
-		soulpurview.Scope{Covens: []string{"prod"}})
+		soulpurview.Resolve(rbac.Purview{Exprs: []*rbac.ScopeExpr{mustScopeExpr("coven=prod")}}))
 	if err != nil {
 		t.Fatalf("ResolveSIDsInScope: %v", err)
 	}
@@ -184,7 +185,7 @@ func TestResolveSIDsInScope_RegexScope_TrimsToMatching(t *testing.T) {
 
 	got, err := r.ResolveSIDsInScope(context.Background(),
 		VoyageCommandFilter{Covens: []string{"prod"}}, // wide target
-		soulpurview.Scope{Regexes: []string{"^web-"}})
+		soulpurview.Resolve(rbac.Purview{Exprs: []*rbac.ScopeExpr{mustScopeExpr("host matches web-*")}}))
 	if err != nil {
 		t.Fatalf("ResolveSIDsInScope: %v", err)
 	}
@@ -203,7 +204,7 @@ func TestResolveSIDsInScope_EmptyScope_FailClosed(t *testing.T) {
 
 	got, err := r.ResolveSIDsInScope(context.Background(),
 		VoyageCommandFilter{SIDs: []string{"a.example.com"}},
-		soulpurview.Scope{Empty: true})
+		soulpurview.Resolve(rbac.Purview{}))
 	if err != nil {
 		t.Fatalf("ResolveSIDsInScope: %v", err)
 	}
@@ -229,7 +230,7 @@ func TestResolveSIDsInScope_PartialScope_CovenWorksSoulprintUndershown(t *testin
 	// under-shown, not picked up (fail-closed, never over-show).
 	got, err := r.ResolveSIDsInScope(context.Background(),
 		VoyageCommandFilter{Covens: []string{"prod", "staging"}},
-		soulpurview.Scope{Covens: []string{"prod"}, Partial: true})
+		soulpurview.Resolve(rbac.Purview{Exprs: []*rbac.ScopeExpr{mustScopeExpr("coven=prod")}}))
 	if err != nil {
 		t.Fatalf("ResolveSIDsInScope: %v", err)
 	}

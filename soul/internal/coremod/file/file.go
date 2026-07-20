@@ -7,8 +7,9 @@
 //   - rendered:  file = output of rendering a text/template template ([ADR-010]).
 //     Keeper puts literal template_content + CEL-rendered vars into params,
 //     the Soul side renders it via shared/tmpl (see rendered.go).
-//   - directory: directory exists with given owner/group/mode (see
-//     directory.go); a declarative replacement for `core.exec.run install -d`.
+//
+// Directory management lives in the `core.directory` module (see
+// soul/internal/coremod/directory), split out of core.file.
 //
 // [ADR-010]: docs/adr/0010-templating.md
 // [ADR-015]: docs/adr/0015-core-modules-mvp.md
@@ -80,9 +81,9 @@ func New() *Module {
 func (m *Module) Validate(_ context.Context, req *pluginv1.ValidateRequest) (*pluginv1.ValidateReply, error) {
 	var errs []string
 	switch req.State {
-	case "present", "absent", "rendered", "directory":
+	case "present", "absent", "rendered":
 	default:
-		errs = append(errs, fmt.Sprintf("unknown state %q (want present|absent|rendered|directory)", req.State))
+		errs = append(errs, fmt.Sprintf("unknown state %q (want present|absent|rendered)", req.State))
 	}
 	if _, err := util.StringParam(req.Params, "path"); err != nil {
 		errs = append(errs, err.Error())
@@ -115,7 +116,7 @@ func (m *Module) PlanReadSafe() {}
 // Plan is a pure-read dry-run (ADR-031 Scry): reads current file state (the
 // same stat/read/perm/ownership comparison as the start of Apply) and sends
 // PlanEvent.changed — "would Apply change the file?". Does NOT mutate the
-// host: no write, no chmod/chown. Covers present/absent/rendered/directory.
+// host: no write, no chmod/chown. Covers present/absent/rendered.
 func (m *Module) Plan(req *pluginv1.PlanRequest, stream grpc.ServerStreamingServer[pluginv1.PlanEvent]) error {
 	path, err := util.StringParam(req.Params, "path")
 	if err != nil {
@@ -128,8 +129,6 @@ func (m *Module) Plan(req *pluginv1.PlanRequest, stream grpc.ServerStreamingServ
 		return m.planAbsent(stream, path)
 	case "rendered":
 		return m.planRendered(stream, req, path)
-	case "directory":
-		return m.planDirectory(stream, req, path)
 	default:
 		return util.PlanFailed(fmt.Sprintf("unknown state %q", req.State))
 	}
@@ -243,8 +242,6 @@ func (m *Module) Apply(req *pluginv1.ApplyRequest, stream grpc.ServerStreamingSe
 		return m.applyAbsent(stream, path)
 	case "rendered":
 		return m.applyRendered(stream, req, path)
-	case "directory":
-		return m.applyDirectory(stream, req, path)
 	default:
 		return util.SendFailed(stream, fmt.Sprintf("unknown state %q", req.State))
 	}

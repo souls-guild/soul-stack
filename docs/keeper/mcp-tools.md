@@ -62,7 +62,7 @@ Each MCP-tool is published according to the MCP spec with the following fields:
       "name": {
         "type": "string",
         "pattern": "^[a-z][a-z0-9-]*$",
-"description": "The name of the new instance, the root Coven label."
+"description": "The name of the new instance (not a Coven; membership lives in incarnation_membership)."
       },
       "service": {
         "type": "string",

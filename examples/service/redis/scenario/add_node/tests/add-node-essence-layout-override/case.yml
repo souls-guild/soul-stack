@@ -63,7 +63,7 @@ assert:
     # non-empty essence.modules_base_url activates the modules group (redis < 8), .so under
     # the data_dir override — proves default(essence.data_dir,...) + default(essence.
     # modules_base_url,...) were read from essence. Disambiguator — path.
-    - module: core.file.directory
+    - module: core.directory.present
       params_subset:
         path: /srv/redis-data/modules
     # ADD-NODE plugin: empty master_sid → master.addr empty (role=master). Endpoints

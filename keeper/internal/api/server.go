@@ -136,6 +136,16 @@ type Deps struct {
 	// *artifact.ServiceLoader.Load → artifact.LoadDirectiveCatalog.
 	ServiceDirectives handlers.ServiceDirectivesLister
 
+	// ServiceTelemetry — TTL cache of the default (per-service, no essence) host-vitals
+	// telemetry config (manifest `telemetry:` -> effective defaults) + the allowed
+	// set of collectors for `GET /v1/services/{name}/telemetry` (UI editor,
+	// ADR-042/072). Optional: when nil the /telemetry endpoint responds 500 (feature not
+	// configured); service-CRUD itself stays operational. Production wire-up
+	// in `keeper run` passes *serviceregistry.TelemetryCache over TelemetryListerFunc,
+	// resolving `(name,gitURL,ref)` via *artifact.ServiceLoader.Load →
+	// essence.ResolveEffectiveTelemetry.
+	ServiceTelemetry handlers.ServiceTelemetryLister
+
 	// AugurSvc — the Augur registry management logic (omen.create/list/delete +
 	// rite.create/list/delete, ADR-025). When nil the augur.* routes aren't wired
 	// (the production wire-up in `keeper run` passes the same *augur.Service as MCP).
@@ -175,6 +185,14 @@ type Deps struct {
 	// the PG snapshot is served. The production wire-up in `keeper run` passes a wrapper over
 	// the same Redis client as the topology resolver (keeperredis.SoulsStreamAlive).
 	SoulPresence handlers.SoulPresence
+
+	// UtilizationReader — Redis layer of host-vitals for the telemetry endpoints
+	// (NIM-86, ADR-006): GET /v1/souls/{sid}/telemetry and
+	// /v1/incarnations/{name}/telemetry read the utilization snapshot from Redis, NOT
+	// from PG. Optional: when nil (single-instance dev / unit without Redis) the reader
+	// is a no-op (stale/empty). Production wire-up in `keeper run` passes a wrapper
+	// over the same Redis client (keeperredis.ReadUtilization).
+	UtilizationReader handlers.UtilizationReader
 
 	// SoulStatsStaleFn — the provider of the "stale" last_seen_at threshold for
 	// stale_count in `GET /v1/souls/stats` (the same Reaper mark_disconnected.stale_after).
@@ -381,10 +399,20 @@ type Deps struct {
 	// AND Redis is live (the flow-state store is cluster-shared): without Redis OIDC is unavailable.
 	OIDCAuth *OIDCAuthDeps
 
-	// LoginGuard — the anti-bruteforce primitive of the public login endpoints (ADR-058(g),
+	// AuthToken — exchange of session-cookie for a short-lived Bearer (POST /auth/token,
+	// NIM-77/ADR-058 Variant B). When nil the endpoint is not mounted (opt-in, same
+	// pattern as LDAPAuth); production wire-up supplies shared verifier+issuer+rbacHolder.
+	AuthToken *AuthTokenDeps
+
+	// AuthMethods — booleans of the available login methods for the public
+	// GET /auth/methods (UI login form). Meaning: /auth/methods is mounted
+	// unconditionally (password is always available).
+	AuthMethods AuthMethodsDeps
+
+	// LoginGuard — anti-bruteforce primitive for public login endpoints (ADR-058(g),
 	// HIGH-3): per-IP+per-username throttle + lockout. Implemented by *redis.LoginGuard.
-	// nil (no Redis) → login endpoints without throttle (passthrough, like Tempo at
-	// nil limiter). The daemon assembles it when Redis is live. Used only when
+	// nil (no Redis) -> login endpoints without throttle (passthrough, same as Tempo with
+	// a nil limiter). The daemon assembles it when Redis is live. Used only when
 	// /auth routes are mounted (non-nil LDAPAuth/OIDCAuth).
 	LoginGuard apimiddleware.LoginGuard
 
@@ -558,6 +586,10 @@ func NewServer(cfg config.KeeperListenSimple, deps Deps, logger *slog.Logger) (*
 	}
 	soulH := handlers.NewSoulHandler(deps.SoulDB, deps.RBAC, deps.SoulPresence, logger)
 
+	// telemetryH — host-vitals read endpoints (NIM-86). Reuses soulH
+	// (scope gate + coven listing); reader nil (dev/unit without Redis) -> no-op.
+	telemetryH := handlers.NewTelemetryHandler(deps.UtilizationReader, soulH, logger)
+
 	// clusterH is optional: when nil ClusterRegistry `GET /v1/cluster` isn't mounted
 	// (single-Keeper dev without Redis — no cluster view needed). self_health uses
 	// the same PG/Redis/Vault pingers as `/readyz` (health.Check — single source).
@@ -606,7 +638,7 @@ func NewServer(cfg config.KeeperListenSimple, deps Deps, logger *slog.Logger) (*
 	// Symmetric to roleH / sigilH.
 	var serviceH *handlers.ServiceHandler
 	if deps.ServiceSvc != nil {
-		serviceH = handlers.NewServiceHandler(deps.ServiceSvc, deps.ServiceRefs, deps.ServiceScenarios, deps.ServiceStateSchema, deps.ServiceDependencies, deps.ServiceDirectives, logger)
+		serviceH = handlers.NewServiceHandler(deps.ServiceSvc, deps.ServiceRefs, deps.ServiceScenarios, deps.ServiceStateSchema, deps.ServiceDependencies, deps.ServiceDirectives, deps.ServiceTelemetry, logger)
 	}
 
 	// provisioningPolicyH is optional: GET reads the policy snapshot (Holder), PUT
@@ -788,7 +820,7 @@ func NewServer(cfg config.KeeperListenSimple, deps Deps, logger *slog.Logger) (*
 	// via the `*/events` chain (fetch-streaming, A0); there is no separate minting endpoint.
 	runEventsDeps := newRunEventsDeps(deps.ApplyBus, deps.IncarnationDB, deps.RBAC, logger)
 
-	handler := buildRouter(deps.JWTVerifier, healthH, opH, incH, soulH, roleH, synodH, sigilH, sigilKeyH, serviceH, provisioningPolicyH, augurH, oracleH, pushH, pushProviderH, providerH, profileH, errandH, voyageH, cadenceH, auditH, choirH, heraldH, moduleCatalogH, deps.ModuleFormPrepH, permCatalogH, eventTypeCatalogH, heraldTypeCatalogH, meH, deps.RBAC, deps.AuditWriter, deps.MetricsHTTP, deps.TollDegraded, deps.TempoLimiter, deps.TempoMetrics, tempoVoyageCreateLimits, tempoVoyagePreviewLimits, deps.WebUIEnabled, deps.LDAPAuth, deps.OIDCAuth, deps.LoginGuard, deps.LoginLimitCfg, deps.SoulStatsStaleFn, clusterH, runEventsDeps, logger)
+	handler := buildRouter(deps.JWTVerifier, healthH, opH, incH, soulH, telemetryH, roleH, synodH, sigilH, sigilKeyH, serviceH, provisioningPolicyH, augurH, oracleH, pushH, pushProviderH, providerH, profileH, errandH, voyageH, cadenceH, auditH, choirH, heraldH, moduleCatalogH, deps.ModuleFormPrepH, permCatalogH, eventTypeCatalogH, heraldTypeCatalogH, meH, deps.RBAC, deps.AuditWriter, deps.MetricsHTTP, deps.TollDegraded, deps.TempoLimiter, deps.TempoMetrics, tempoVoyageCreateLimits, tempoVoyagePreviewLimits, deps.WebUIEnabled, deps.LDAPAuth, deps.OIDCAuth, deps.AuthToken, deps.AuthMethods, deps.LoginGuard, deps.LoginLimitCfg, deps.SoulStatsStaleFn, clusterH, runEventsDeps, logger)
 
 	srv := &http.Server{
 		Addr:              cfg.Addr,

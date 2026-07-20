@@ -221,3 +221,11 @@ destiny:
 # compatible: PING/REPLICAOF/SENTINEL work; examples/module/soul-mod-community-redis/).
 modules:
   - { name: community.redis, ref: v1.0.0 }
+
+# Auto-rotation of server TLS (NIM-99): Reaper rotates expiring certs via the
+# rotate_tls scenario using the Vault dragonfly-server role. No section → rotation off.
+certificate_rotation:
+  enable: true
+  scenario: rotate_tls
+  threshold: 30d
+  pki_role: dragonfly-server

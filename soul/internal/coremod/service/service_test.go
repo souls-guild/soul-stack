@@ -38,7 +38,7 @@ func systemdDetected() *internaltest.Runner {
 
 func TestValidate(t *testing.T) {
 	m := service.New()
-	for _, st := range []string{"running", "stopped", "restarted", "enabled"} {
+	for _, st := range []string{"running", "stopped", "restarted", "enabled", "disabled", "masked"} {
 		reply, _ := m.Validate(context.Background(), &pluginv1.ValidateRequest{
 			State:  st,
 			Params: mustStruct(t, map[string]any{"name": "redis"}),
@@ -1516,4 +1516,263 @@ func TestApply_Restarted_DaemonReloadCommandProcessError_NoRestart(t *testing.T)
 	if contains(r.Calls, cmdRestart) {
 		t.Fatalf("restart must NOT be called after Err daemon-reload, calls=%v", r.Calls)
 	}
+}
+
+// --- disabled: mirror of enabled (autostart off, orthogonal to stopped) ---
+
+// disabled on an already-disabled unit → no disable, changed=false (idempotent).
+func TestApply_Disabled_AlreadyDisabled(t *testing.T) {
+	r := systemdDetected()
+	r.On("systemctl is-enabled --quiet redis", util.Result{ExitCode: 1})
+	m := &service.Module{Runner: r}
+
+	stream := &internaltest.ApplyStream{}
+	_ = m.Apply(&pluginv1.ApplyRequest{
+		State:  "disabled",
+		Params: mustStruct(t, map[string]any{"name": "redis"}),
+	}, stream)
+	if stream.Last().Changed {
+		t.Fatal("changed=true for already-disabled")
+	}
+	if hasCall(r, "systemctl disable redis") {
+		t.Fatalf("disable must not run on an already-disabled unit, calls=%v", r.Calls)
+	}
+}
+
+// disabled on an enabled unit → disable runs, changed=true, runtime untouched
+// (no start/stop): disabled is orthogonal to stopped.
+func TestApply_Disabled_DisablesWhenEnabled(t *testing.T) {
+	r := systemdDetected()
+	r.On("systemctl is-enabled --quiet redis", util.Result{ExitCode: 0})
+	r.On("systemctl disable redis", util.Result{ExitCode: 0})
+	m := &service.Module{Runner: r}
+
+	stream := &internaltest.ApplyStream{}
+	_ = m.Apply(&pluginv1.ApplyRequest{
+		State:  "disabled",
+		Params: mustStruct(t, map[string]any{"name": "redis"}),
+	}, stream)
+	if !stream.Last().Changed {
+		t.Fatal("changed=false on disable")
+	}
+	if !hasCall(r, "systemctl disable redis") {
+		t.Fatalf("disable not called, calls=%v", r.Calls)
+	}
+	for _, c := range r.Calls {
+		if strings.HasPrefix(c, "systemctl start") || strings.HasPrefix(c, "systemctl stop") {
+			t.Fatalf("disabled must not touch runtime state, saw %q", c)
+		}
+	}
+}
+
+// disabled: disable command failed (exit≠0) → failed.
+func TestApply_Disabled_DisableFails(t *testing.T) {
+	r := systemdDetected()
+	r.On("systemctl is-enabled --quiet redis", util.Result{ExitCode: 0})
+	r.On("systemctl disable redis", util.Result{ExitCode: 1, Stderr: "boom"})
+	m := &service.Module{Runner: r}
+
+	stream := &internaltest.ApplyStream{}
+	_ = m.Apply(&pluginv1.ApplyRequest{
+		State:  "disabled",
+		Params: mustStruct(t, map[string]any{"name": "redis"}),
+	}, stream)
+	if !stream.Last().Failed {
+		t.Fatal("failed=false when disable exits non-zero")
+	}
+}
+
+// --- masked: systemd-only guard, disable-before-mask, idempotency ---
+
+// masked on a non-systemd host (openrc) → fatal error (NOT a silent no-op), and
+// neither disable nor mask is attempted.
+func TestApply_Masked_NonSystemd_Fails(t *testing.T) {
+	r := openrcDetected()
+	m := &service.Module{Runner: r}
+
+	stream := &internaltest.ApplyStream{}
+	_ = m.Apply(&pluginv1.ApplyRequest{
+		State:  "masked",
+		Params: mustStruct(t, map[string]any{"name": "redis"}),
+	}, stream)
+	if !stream.Last().Failed {
+		t.Fatal("failed=false: masked on openrc must be a fatal error, not a no-op")
+	}
+	if !strings.Contains(stream.Last().Message, "systemd") {
+		t.Fatalf("message %q lacks systemd-only hint", stream.Last().Message)
+	}
+	for _, c := range r.Calls {
+		if strings.Contains(c, "mask") || strings.HasPrefix(c, "rc-update del") {
+			t.Fatalf("masked on openrc must not disable/mask anything, saw %q", c)
+		}
+	}
+}
+
+// masked on an enabled+unmasked unit → disable runs BEFORE mask (systemd errors
+// when masking an enabled unit), then mask; changed=true.
+func TestApply_Masked_DisablesBeforeMask(t *testing.T) {
+	r := systemdDetected()
+	// enabled (is-enabled --quiet exit 0) → disable needed.
+	r.On("systemctl is-enabled --quiet redis", util.Result{ExitCode: 0})
+	r.On("systemctl disable redis", util.Result{ExitCode: 0})
+	// isMasked probe (no --quiet) → not masked yet.
+	r.On("systemctl is-enabled redis", util.Result{ExitCode: 1, Stdout: "disabled\n"})
+	r.On("systemctl mask redis", util.Result{ExitCode: 0})
+	m := &service.Module{Runner: r}
+
+	stream := &internaltest.ApplyStream{}
+	_ = m.Apply(&pluginv1.ApplyRequest{
+		State:  "masked",
+		Params: mustStruct(t, map[string]any{"name": "redis"}),
+	}, stream)
+	if !stream.Last().Changed {
+		t.Fatal("changed=false when disabling+masking")
+	}
+	di, mi := indexOf(r.Calls, "systemctl disable redis"), indexOf(r.Calls, "systemctl mask redis")
+	if di < 0 || mi < 0 {
+		t.Fatalf("expected both disable and mask, calls=%v", r.Calls)
+	}
+	if di > mi {
+		t.Fatalf("disable must run BEFORE mask, calls=%v", r.Calls)
+	}
+}
+
+// masked on an already-masked unit → mask is not re-run and (already disabled)
+// changed=false: idempotent.
+func TestApply_Masked_AlreadyMasked_Idempotent(t *testing.T) {
+	r := systemdDetected()
+	// masked unit: is-enabled --quiet exits non-zero → treated as not-enabled →
+	// no disable; isMasked probe (no --quiet) prints "masked" → skip mask.
+	r.On("systemctl is-enabled --quiet redis", util.Result{ExitCode: 1})
+	r.On("systemctl is-enabled redis", util.Result{ExitCode: 1, Stdout: "masked\n"})
+	m := &service.Module{Runner: r}
+
+	stream := &internaltest.ApplyStream{}
+	_ = m.Apply(&pluginv1.ApplyRequest{
+		State:  "masked",
+		Params: mustStruct(t, map[string]any{"name": "redis"}),
+	}, stream)
+	if stream.Last().Changed {
+		t.Fatal("changed=true for an already-masked+disabled unit")
+	}
+	if hasCall(r, "systemctl mask redis") {
+		t.Fatalf("mask must not re-run on an already-masked unit, calls=%v", r.Calls)
+	}
+}
+
+// masked: mask command failed (exit≠0) → failed.
+func TestApply_Masked_MaskFails(t *testing.T) {
+	r := systemdDetected()
+	r.On("systemctl is-enabled --quiet redis", util.Result{ExitCode: 1})
+	r.On("systemctl is-enabled redis", util.Result{ExitCode: 1, Stdout: "disabled\n"})
+	r.On("systemctl mask redis", util.Result{ExitCode: 1, Stderr: "nope"})
+	m := &service.Module{Runner: r}
+
+	stream := &internaltest.ApplyStream{}
+	_ = m.Apply(&pluginv1.ApplyRequest{
+		State:  "masked",
+		Params: mustStruct(t, map[string]any{"name": "redis"}),
+	}, stream)
+	if !stream.Last().Failed {
+		t.Fatal("failed=false when mask exits non-zero")
+	}
+}
+
+// --- Plan: disabled / masked pure-read drift (ADR-031 Scry) ---
+
+// Plan(disabled) on an enabled unit → changed=true (Apply would disable), no mutations.
+func TestPlan_Disabled_Drift(t *testing.T) {
+	r := systemdDetected()
+	r.On("systemctl is-enabled --quiet redis", util.Result{ExitCode: 0})
+	m := &service.Module{Runner: r}
+
+	stream := &planStream{}
+	if err := m.Plan(&pluginv1.PlanRequest{
+		State:  "disabled",
+		Params: mustStruct(t, map[string]any{"name": "redis"}),
+	}, stream); err != nil {
+		t.Fatalf("Plan: %v", err)
+	}
+	if got := stream.last(); got == nil || !got.GetChanged() {
+		t.Fatal("changed=false, want true (enabled → disable drift)")
+	}
+	assertNoMutatingSvcCalls(t, r)
+}
+
+// Plan(disabled) on an already-disabled unit → changed=false.
+func TestPlan_Disabled_Clean(t *testing.T) {
+	r := systemdDetected()
+	r.On("systemctl is-enabled --quiet redis", util.Result{ExitCode: 1})
+	m := &service.Module{Runner: r}
+
+	stream := &planStream{}
+	if err := m.Plan(&pluginv1.PlanRequest{
+		State:  "disabled",
+		Params: mustStruct(t, map[string]any{"name": "redis"}),
+	}, stream); err != nil {
+		t.Fatalf("Plan: %v", err)
+	}
+	if got := stream.last(); got == nil || got.GetChanged() {
+		t.Fatalf("changed=%v, want false (already disabled)", got.GetChanged())
+	}
+	assertNoMutatingSvcCalls(t, r)
+}
+
+// Plan(masked) on a non-systemd host → plan error (fail-closed, symmetric with Apply).
+func TestPlan_Masked_NonSystemd_PlanFails(t *testing.T) {
+	r := openrcDetected()
+	m := &service.Module{Runner: r}
+
+	stream := &planStream{}
+	if err := m.Plan(&pluginv1.PlanRequest{
+		State:  "masked",
+		Params: mustStruct(t, map[string]any{"name": "redis"}),
+	}, stream); err == nil {
+		t.Fatal("Plan(masked) on openrc must error, got nil")
+	}
+	// Only init detection (rc-service --version) may have run; no mask/disable.
+	for _, c := range r.Calls {
+		if strings.Contains(c, "mask") || strings.HasPrefix(c, "rc-update") {
+			t.Fatalf("Plan(masked) on openrc must not mutate, saw %q", c)
+		}
+	}
+}
+
+// Plan(masked) on an unmasked unit → changed=true (Apply would mask), no mutations.
+func TestPlan_Masked_Drift(t *testing.T) {
+	r := systemdDetected()
+	r.On("systemctl is-enabled redis", util.Result{ExitCode: 1, Stdout: "disabled\n"})
+	m := &service.Module{Runner: r}
+
+	stream := &planStream{}
+	if err := m.Plan(&pluginv1.PlanRequest{
+		State:  "masked",
+		Params: mustStruct(t, map[string]any{"name": "redis"}),
+	}, stream); err != nil {
+		t.Fatalf("Plan: %v", err)
+	}
+	if got := stream.last(); got == nil || !got.GetChanged() {
+		t.Fatal("changed=false, want true (not masked → mask drift)")
+	}
+	assertNoMutatingSvcCalls(t, r)
+}
+
+// Plan(masked) on an already-masked+disabled unit → changed=false, no mutations.
+func TestPlan_Masked_Clean(t *testing.T) {
+	r := systemdDetected()
+	r.On("systemctl is-enabled redis", util.Result{ExitCode: 1, Stdout: "masked\n"})
+	r.On("systemctl is-enabled --quiet redis", util.Result{ExitCode: 1})
+	m := &service.Module{Runner: r}
+
+	stream := &planStream{}
+	if err := m.Plan(&pluginv1.PlanRequest{
+		State:  "masked",
+		Params: mustStruct(t, map[string]any{"name": "redis"}),
+	}, stream); err != nil {
+		t.Fatalf("Plan: %v", err)
+	}
+	if got := stream.last(); got == nil || got.GetChanged() {
+		t.Fatalf("changed=%v, want false (already masked+disabled)", got.GetChanged())
+	}
+	assertNoMutatingSvcCalls(t, r)
 }

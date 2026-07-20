@@ -41,7 +41,7 @@ src_bin: "${ vars.extract_dir + '/vector-' + vars.arch_triplet + '/bin/vector' }
 
 # ── vector.yaml config directory and path ("service name/paths in vars" directive) ─
 # INVARIANT: Vector reads a single config file (--config-yaml <path>). config_dir —
-# config directory (created by account.yml core.file.directory), config_path —
+# config directory (created by account.yml core.directory.present), config_path —
 # the file itself (rendered by service.yml core.file.rendered, read by the unit's ExecStart).
 config_dir:  /etc/vector
 config_path: /etc/vector/vector.yaml

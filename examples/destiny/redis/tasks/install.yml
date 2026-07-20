@@ -197,7 +197,7 @@
 # The config directory (/etc/redis: redis.conf, users.acl, sentinel.conf, sentinel-
 # users.acl, tls/) MUST exist BEFORE the first render of any of these files
 # (server.yml/sentinel.yml run AFTER this include). package branch: the distro package
-# sets up /etc/redis itself — idempotent core.file.directory = no-op/fixes drift. binary
+# sets up /etc/redis itself — idempotent core.directory.present = no-op/fixes drift. binary
 # branch: there's no package, no one to create it → rendering users.acl/redis.conf would fail with "open
 # .../.users.acl.tmp-…: no such file or directory" (caught live 2026-06-29). Hence
 # UNCONDITIONAL (NOT gated on install.method and NOT on deploy_redis): the conf dir is needed by BOTH
@@ -208,7 +208,7 @@
 # get in. parents:true — the operator can override conf_dir (input.conf_dir may be a
 # deep path with a nonexistent parent; default parents:false would fail on it).
 - name: Ensure the redis configuration directory exists
-  module: core.file.directory
+  module: core.directory.present
   params:
     path: "${ vars.redis_conf_dir_eff }"
     owner: "${ vars.redis_user }"
@@ -219,7 +219,7 @@
 # The data (/var/lib/redis: RDB/AOF, modules) and log (/var/log/redis:
 # redis-server.log/redis-sentinel.log) directories MUST exist BEFORE the first start of
 # redis-server (server.yml) AND the sentinel daemon. package branch: the distro package usually
-# sets up the data dir, but NOT always the log dir for our logfile — idempotent core.file.directory
+# sets up the data dir, but NOT always the log dir for our logfile — idempotent core.directory.present
 # in a package install = no-op/fixes drift. binary branch: there's no package, no one to create it
 # (systemd RuntimeDirectory only covers the run dir, not stateful data/log). Hence
 # UNCONDITIONAL (NOT gated on install.method and NOT on deploy_redis): both directories are needed by
@@ -227,7 +227,7 @@
 # owner/group redis (the package or the binary branch set them up — these tasks run AFTER both
 # install blocks). mode 0750: the redis owner reads/writes, others don't get in.
 - name: Ensure the redis data directory exists
-  module: core.file.directory
+  module: core.directory.present
   params:
     path: "${ vars.redis_data_dir_eff }"
     owner: "${ vars.redis_user }"
@@ -236,7 +236,7 @@
     parents: true
 
 - name: Ensure the redis log directory exists
-  module: core.file.directory
+  module: core.directory.present
   params:
     path: "${ vars.log_dir }"
     owner: "${ vars.redis_user }"
@@ -249,12 +249,12 @@
 # the directory via RuntimeDirectory only on unit start (fragile); we create it explicitly BEFORE the
 # redis-server start/restart, but AFTER install (needs the redis user/group — the package or
 # binary branch set them up; hence the task runs after both install blocks).
-# Declarative core.file.directory: idempotent on mode/owner/group, fixes drift,
+# Declarative core.directory.present: idempotent on mode/owner/group, fixes drift,
 # dry-run. mode 0755: the redis owner writes the socket, others traverse the directory; access to
 # the socket is cut by unixsocketperm (a config directive). NOT gated on install.method (needed in
 # both branches), gated on deploy_redis + presence of unixsocket in config.
 - name: Ensure the redis socket directory exists
-  module: core.file.directory
+  module: core.directory.present
   when: "default(input.deploy_redis, true) && has(input.config) && has(input.config.unixsocket)"
   params:
     # mode 0755 — as a literal (a one-off, needed only by this task): the redis owner writes

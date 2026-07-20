@@ -212,13 +212,14 @@ RETURNING added_at
 // AddVoice adds a Voice (a SID's membership in a Choir) atomically.
 // Transaction: SELECT … FOR UPDATE on the Choir row (serializes concurrent
 // AddVoice / DeleteChoir) → membership invariant validation (SID is already a
-// member of the incarnation: `souls.coven[]` contains `incarnation_name`,
-// ADR-044 item 3) → INSERT voice → commit.
+// member of the incarnation: a row in `incarnation_membership`, ADR-044 item 3;
+// ADR-008 amendment 2026-07-17/NIM-124 — no longer `souls.coven[]` contains the
+// name) → INSERT voice → commit.
 //
 // The membership invariant is checked with an explicit SELECT (the FK on
 // souls only covers the SID's existence in the registry, NOT membership in
-// this incarnation). A SID that exists in souls but doesn't carry the
-// incarnation in its coven is rejected with [ErrNotMembers].
+// this incarnation). A SID that exists in souls but is not a member of the
+// incarnation is rejected with [ErrNotMembers].
 //
 // Returns:
 //   - [ErrChoirNotFound]  — Choir doesn't exist (no row under FOR UPDATE).
@@ -351,16 +352,16 @@ func ListVoices(ctx context.Context, db ExecQueryRower, incarnation, choirName s
 // ---------------------------------------------------------------------------
 
 const membershipSQL = `
-SELECT sid FROM souls
-WHERE sid = ANY($1) AND $2 = ANY(coven)
+SELECT sid FROM incarnation_membership
+WHERE sid = ANY($1) AND incarnation_name = $2
 `
 
 // validateMembership checks the ADR-044 item 3 invariant: every SID is
-// already a member of the incarnation (its `souls.coven[]` contains
-// incarnation). Stricter than incarnation.validateSoulsExist (which only
+// already a member of the incarnation (a row in `incarnation_membership`,
+// ADR-008 amendment 2026-07-17/NIM-124 — no longer `souls.coven` contains the
+// incarnation name). Stricter than incarnation.validateSoulsExist (which only
 // checks the SID exists in souls): here membership in THIS incarnation is
-// required specifically. A single batch SELECT with the
-// `$incarnation = ANY(coven)` predicate — not a per-SID round-trip.
+// required specifically. A single batch SELECT — not a per-SID round-trip.
 //
 // Missing (in first-occurrence order, stable for tests) includes SIDs absent
 // from souls entirely, AND SIDs that exist but aren't members of the

@@ -22,8 +22,8 @@ func TestResolvePurview_Wildcard_Unrestricted(t *testing.T) {
 	if p.Deny {
 		t.Errorf("Deny = true, want false for `*`")
 	}
-	if p.Covens != nil {
-		t.Errorf("Covens = %v, want nil for unrestricted", p.Covens)
+	if covensFromPurview(p) != nil {
+		t.Errorf("Covens = %v, want nil for unrestricted", covensFromPurview(p))
 	}
 }
 
@@ -49,8 +49,8 @@ func TestResolvePurview_CovenSelector_Restricted(t *testing.T) {
 	if p.Unrestricted {
 		t.Errorf("Unrestricted = true, want false for coven-selector")
 	}
-	if !reflect.DeepEqual(p.Covens, []string{"dev", "stage"}) {
-		t.Errorf("Covens = %v, want [dev stage] (sorted)", p.Covens)
+	if !reflect.DeepEqual(covensFromPurview(p), []string{"dev", "stage"}) {
+		t.Errorf("Covens = %v, want [dev stage] (sorted)", covensFromPurview(p))
 	}
 }
 
@@ -68,8 +68,8 @@ func TestResolvePurview_Revoked_Deny(t *testing.T) {
 		{"bare", "soul.list"},
 		{"wildcard", "*"},
 		{"coven", "soul.list on coven=prod"},
-		{"regex", `soul.list on regex='^web-'`},
-		{"state", `soul.list on state='state.redis_version == "8.0"'`},
+		{"host", "soul.list on host matches web-*"},
+		{"trait", "soul.list on trait.owner=dba"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -88,8 +88,8 @@ func TestResolvePurview_Revoked_Deny(t *testing.T) {
 			if p.Unrestricted {
 				t.Errorf("revoked AID with %q: Unrestricted = true, want false (revoked is not unrestricted)", tc.perm)
 			}
-			if p.Covens != nil || p.Regexes != nil || p.SoulprintExprs != nil || p.StateExprs != nil {
-				t.Errorf("revoked AID with %q: dimensions are not empty (%+v), want all nil", tc.perm, p)
+			if len(p.Exprs) != 0 {
+				t.Errorf("revoked AID with %q: scope predicates are not empty (%+v), want none", tc.perm, p)
 			}
 		})
 	}
@@ -104,8 +104,8 @@ func TestResolvePurview_UnionAcrossRoles(t *testing.T) {
 	if p.Unrestricted {
 		t.Errorf("Unrestricted = true, want false")
 	}
-	if !reflect.DeepEqual(p.Covens, []string{"dev", "stage"}) {
-		t.Errorf("Covens = %v, want [dev stage] (union)", p.Covens)
+	if !reflect.DeepEqual(covensFromPurview(p), []string{"dev", "stage"}) {
+		t.Errorf("Covens = %v, want [dev stage] (union)", covensFromPurview(p))
 	}
 }
 
@@ -121,8 +121,8 @@ func TestResolvePurview_HostSelector_NotCovenScoped(t *testing.T) {
 	if p.Unrestricted {
 		t.Errorf("Unrestricted = true, want false (host-only selector)")
 	}
-	if len(p.Covens) != 0 {
-		t.Errorf("Covens = %v, want empty (host-only selector)", p.Covens)
+	if len(covensFromPurview(p)) != 0 {
+		t.Errorf("Covens = %v, want empty (host-only selector)", covensFromPurview(p))
 	}
 }
 
@@ -136,8 +136,8 @@ func TestResolvePurview_NoMatchingPermission_NotUnrestricted(t *testing.T) {
 	if p.Unrestricted {
 		t.Errorf("Unrestricted = true, want false for non-holder")
 	}
-	if len(p.Covens) != 0 {
-		t.Errorf("Covens = %v, want empty for non-holder", p.Covens)
+	if len(covensFromPurview(p)) != 0 {
+		t.Errorf("Covens = %v, want empty for non-holder", covensFromPurview(p))
 	}
 }
 
@@ -148,22 +148,29 @@ func TestResolvePurview_UnknownAID_Empty(t *testing.T) {
 		name: "ops", operators: []string{"archon-a"}, permissions: []string{"soul.coven-assign"},
 	})
 	p := e.ResolvePurview("archon-ghost", "soul", "coven-assign")
-	if p.Unrestricted || len(p.Covens) != 0 {
-		t.Errorf("ghost AID: Covens=%v Unrestricted=%v, want empty/false", p.Covens, p.Unrestricted)
+	if p.Unrestricted || len(covensFromPurview(p)) != 0 {
+		t.Errorf("ghost AID: Covens=%v Unrestricted=%v, want empty/false", covensFromPurview(p), p.Unrestricted)
 	}
 }
 
-// S2-dimension placeholders (regexes/soulprint/state) are ALWAYS empty in
-// S0 — proof that S0 doesn't populate them and S2 will be additive.
-func TestResolvePurview_S2Dimensions_EmptyInS0(t *testing.T) {
+// A coven-only permission yields a scope predicate that references ONLY the
+// coven dimension — resolving it must not accidentally introduce constraints on
+// other dimensions (host/service/incarnation/trait). NIM-128 boolean scope.
+func TestResolvePurview_CovenScope_OnlyCovenDimension(t *testing.T) {
 	e := mustEnforcer(t, fixtureRole{
 		name: "dev-ops", operators: []string{"archon-a"},
 		permissions: []string{"soul.coven-assign on coven=dev"},
 	})
 	p := e.ResolvePurview("archon-a", "soul", "coven-assign")
-	if len(p.Regexes) != 0 || len(p.SoulprintExprs) != 0 || len(p.StateExprs) != 0 {
-		t.Errorf("S2-dimensions non-empty in S0: regexes=%v soulprint=%v state=%v",
-			p.Regexes, p.SoulprintExprs, p.StateExprs)
+	if len(p.Exprs) != 1 {
+		t.Fatalf("Exprs = %+v, want exactly one predicate", p.Exprs)
+	}
+	dims := scopeDimsUsed(p.Exprs[0])
+	if len(dims) != 1 {
+		t.Errorf("scope references dimensions %v, want only {coven}", sortedSet(dims))
+	}
+	if _, ok := dims[dimCoven]; !ok {
+		t.Errorf("scope does not reference coven: %v", sortedSet(dims))
 	}
 }
 
@@ -188,8 +195,8 @@ func TestCovenScope_EquivalentToResolvePurviewProjection(t *testing.T) {
 		if unrestricted != p.Unrestricted {
 			t.Errorf("aid=%s: CovenScope.unrestricted=%v != Purview.Unrestricted=%v", aid, unrestricted, p.Unrestricted)
 		}
-		if !reflect.DeepEqual(covens, p.Covens) {
-			t.Errorf("aid=%s: CovenScope.covens=%v != Purview.Covens=%v", aid, covens, p.Covens)
+		if !reflect.DeepEqual(covens, covensFromPurview(p)) {
+			t.Errorf("aid=%s: CovenScope.covens=%v != Purview.Covens=%v", aid, covens, covensFromPurview(p))
 		}
 	}
 }

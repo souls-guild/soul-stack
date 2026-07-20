@@ -72,6 +72,7 @@ func metaRouter(t *testing.T, verifier *keeperjwt.Verifier) http.Handler {
 		stubOperatorHandler(t),
 		handlers.NewIncarnationHandler(nil, nil, nil, nil, nil, nil, nil, nil, nil),
 		handlers.NewSoulHandler(nil, nil, nil, nil),
+		handlers.TelemetrySpecStub(),
 		stubRoleHandler(t), stubSynodHandler(t), stubSigilHandler(t), stubSigilKeyHandler(t),
 		stubServiceHandler(t), nil, stubAugurHandler(t), stubOracleHandler(t),
 		nil, // pushH
@@ -101,6 +102,8 @@ func metaRouter(t *testing.T, verifier *keeperjwt.Verifier) http.Handler {
 		false,                                // webUIEnabled — meta tests don't check /ui (guard in webui_routes_test.go)
 		nil,                                  // ldapAuth (LDAP not configured in the test)
 		nil,                                  // oidcAuth (OIDC not configured in the test)
+		nil,                                  // authToken (/auth/token exchange not tested here)
+		AuthMethodsDeps{},                    // authMethods (/auth/methods is mounted but not checked)
 		nil,                                  // loginGuard (anti-bruteforce off in the test)
 		apimiddleware.AuthLoginLimitConfig{}, // loginLimitCfg
 		nil,                                  // soulStatsStaleFn (default 90s in the test)

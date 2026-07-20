@@ -50,10 +50,10 @@ func TestScenarioApply_NoopCreate_Succeeds(t *testing.T) {
 	stub := stack.ConnectSoulStub(t, 0)
 	stub.SetApplyDefaultSuccess(true)
 
-	// Coven membership: the run's roster resolves via
-	// `incarnation.name in coven[]` (ADR-008). Without it the scenario sees
+	// Membership: the run's roster resolves members via incarnation_membership
+	// (ADR-008 amendment, NIM-124). Without it the scenario sees
 	// no_hosts -> error_locked.
-	stack.AddSoulToCoven(t, 0, "test-noop")
+	stack.AddMember(t, 0, "test-noop")
 
 	// CreateIncarnation auto-runs the scenario `create` (incarnation.go) and
 	// returns that run's apply_id. noop-create has no required input. We use
@@ -84,7 +84,7 @@ func TestScenarioApply_SmokeNginx_StateCommit(t *testing.T) {
 
 	stub := stack.ConnectSoulStub(t, 0)
 	stub.SetApplyDefaultSuccess(true)
-	stack.AddSoulToCoven(t, 0, "test-nginx-state")
+	stack.AddMember(t, 0, "test-nginx-state")
 
 	inc, applyID := stack.CreateIncarnationWithApply(t, "test-nginx-state", "smoke-nginx@main", map[string]any{
 		"hostname": "web-01",

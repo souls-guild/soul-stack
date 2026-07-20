@@ -231,6 +231,14 @@ func (s hSoulScoper) ResolvePurview(string, string, string) rbac.Purview {
 	return rbac.Purview{Unrestricted: s.unrestricted}
 }
 
+// CovenScope satisfies the coven-projection surface used by bulk coven/traits-
+// assign (NIM-128): unrestricted → no coven restriction. The real resolver
+// (rbac.Holder) implements this; the mock mirrors it so the type assertion in
+// the handler succeeds.
+func (s hSoulScoper) CovenScope(string, string, string) ([]string, bool) {
+	return nil, s.unrestricted
+}
+
 func newHSoulHandler(pool *hSoulPool) *handlers.SoulHandler {
 	return handlers.NewSoulHandler(pool, hSoulScoper{unrestricted: true}, nil, nil)
 }
@@ -968,6 +976,7 @@ func TestHumaSoul_Exec_ChiCoexistence(t *testing.T) {
 		stubOperatorHandler(t),
 		handlers.NewIncarnationHandler(nil, nil, nil, nil, nil, nil, nil, nil, nil),
 		handlers.NewSoulHandler(nil, nil, nil, nil),
+		handlers.TelemetrySpecStub(),
 		stubRoleHandler(t), stubSynodHandler(t), stubSigilHandler(t), stubSigilKeyHandler(t),
 		stubServiceHandler(t), nil, stubAugurHandler(t), stubOracleHandler(t),
 		nil,                                      // pushH
@@ -994,9 +1003,11 @@ func TestHumaSoul_Exec_ChiCoexistence(t *testing.T) {
 		nil,                                  // tempoMetrics
 		nil,                                  // tempoVoyageCreateLimits
 		nil,                                  // tempoVoyagePreviewLimits
-		false,                                // webUIEnabled — /ui is out of scope for the soul routing test
+		false,                                // webUIEnabled — /ui is out of scope for the soul-routing test
 		nil,                                  // ldapAuth (LDAP not configured in the test)
 		nil,                                  // oidcAuth (OIDC not configured in the test)
+		nil,                                  // authToken (/auth/token exchange is not tested here)
+		AuthMethodsDeps{},                    // authMethods (/auth/methods is mounted but not checked)
 		nil,                                  // loginGuard (anti-bruteforce off in the test)
 		apimiddleware.AuthLoginLimitConfig{}, // loginLimitCfg
 		nil,                                  // soulStatsStaleFn (default 90s in the test)

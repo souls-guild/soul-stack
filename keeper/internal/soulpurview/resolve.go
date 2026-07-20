@@ -1,220 +1,117 @@
-// Package soulpurview resolves scoped visibility of Souls list by
-// [rbac.Purview] (ADR-047 S3b). Souls analog of keeper/internal/statepredicate
-// (that one resolves incarnations by state CEL; this one resolves Souls by
-// Purview scope dimensions).
+// Package soulpurview translates an operator's [rbac.Purview] into souls
+// visibility (ADR-047, NIM-128 boolean scope). Two consumers:
 //
-// Resolver accepts already resolved [rbac.Purview] AS PARAMETER and does NOT
-// call enforcer itself: caller side (handler) calls ResolvePurview, while
-// soulpurview only translates upper scope boundary into souls query parameters.
-// This keeps package free from RBAC resolution (S4 target filter reuses the same
-// translation over its Purview intersection) and one-way: soulpurview -> rbac,
-// without import cycle.
+//   - list (`GET /v1/souls`, `/stats`) — [Scope.WhereSQL] renders the purview
+//     into a parameterized SQL boolean pushed into the souls query. Every
+//     dimension is evaluated in the database, so offset pagination and total
+//     stay exact (no Go post-filter, no keyset window).
+//   - single-object reads (`GET /v1/souls/{sid}`, `/soulprint`, `/history`) —
+//     [InScope] checks one Soul against the purview boundary in Go.
 //
-// Perf strategy (foundation extended by additive slices as Purview dimensions):
-//   - S3b-0: coven dimension - pure SQL pushdown `souls.coven &&
-//     ARRAY[purview.Covens]` (offset/total correct without drift, keyset not needed).
-//   - S3b-2a: regex dimension - keyset window by `(registered_at, sid)` + Go OR
-//     post-filter over internal pages. Presence of regex DISABLES coven SQL
-//     pushdown (otherwise AND would narrow BELOW Purview): host visibility =
-//     covenMatch OR regexMatch computed in Go ([CompiledScope.Visible]).
-//     Single-read ([InScope]) uses the same coven+regex predicate; list/get are
-//     consistent (coven-only InScope divergence removed by gate fix).
-//   - S3b-2b: soulprint/state dimensions - page-CEL post-filter (not computed yet;
-//     [Scope.Partial] marks scope that pilot cannot express so consumer knows
-//     result is NOT complete until S3b-2b).
+// Souls carry three scope dimensions: coven (TEXT[] `coven`), host (`sid`) and
+// trait (jsonb `traits`). They have no service/incarnation column, so a
+// condition on those dimensions renders FALSE (fail-closed).
+//
+// fail-closed (ADR-047): uncertainty means "hide", NOT "show the whole fleet".
+// This is OPPOSITE of the presence-overlay (`GET /v1/souls` on a Redis error
+// fails SAFE by returning the PG snapshot): scope hides on doubt, presence
+// shows on doubt. These two layers MUST NOT borrow strategy from each other.
 package soulpurview
 
 import (
 	"fmt"
-	"regexp"
 
 	"github.com/souls-guild/soul-stack/keeper/internal/rbac"
 )
 
-// MaxRegexLen is upper bound for one scope pattern length (ReDoS guard).
-// RE2 (google/re2: linear time, no backtracking) is safe by nature, but
-// pathologically long pattern is still rejected at compilation: scope patterns
-// are short by construction (`^web-`, `^db-\d+`), long one is almost certainly
-// error/abuse.
-const MaxRegexLen = 256
+// Columns maps the souls table onto scope dimensions for [rbac.PurviewSQL].
+// A Soul carries coven / host / trait; it has no service or incarnation column,
+// so those stay empty — any condition on them renders FALSE (fail-closed).
+var Columns = rbac.ScopeColumns{
+	Coven:  "coven",
+	Host:   "sid",
+	Traits: "traits",
+}
 
-// Scope is translation of [rbac.Purview] into souls query parameters (upper
-// boundary of operator visibility). Terminal flags are mutually exclusive with
-// Covens.
-//
-// fail-closed (ADR-047): uncertainty means "hide", NOT "show whole fleet". This
-// is OPPOSITE of presence-overlay (`GET /v1/souls` on Redis error fails SAFE by
-// returning PG snapshot): scope hides on doubt, presence shows on doubt. These
-// two layers MUST NOT borrow strategy from each other (see handler.List).
+// Scope is a thin wrapper over the operator's [rbac.Purview] for souls
+// visibility. It hides the boolean-scope plumbing behind the two operations the
+// souls layer needs: a SQL predicate for the list, and an in-Go membership test
+// for single-object reads.
 type Scope struct {
-	// Covens are coven labels covered by visibility (deduped, sorted as in
-	// [rbac.Purview]). In coven-only mode applied by SQL pushdown
-	// `coven && ARRAY[Covens]`; in keyset mode (Regexes present), one of two OR
-	// dimensions in [CompiledScope.Visible]. Meaningful only when
-	// !Unrestricted && !Empty.
-	Covens []string
-
-	// Regexes are RE2 patterns over SID (ADR-047 S2a/S3b-2a). Host visibility =
-	// covenMatch(Covens) OR regexMatch(Regexes): union, NOT intersection.
-	// Presence of Regexes moves souls-list to keyset mode (see [Scope.NeedsKeyset]):
-	// coven SQL pushdown is disabled, OR filter is computed in Go.
-	Regexes []string
-
-	// Unrestricted means no scope restrictions: whole available list without filter.
-	Unrestricted bool
-
-	// Empty is fail-closed: operator is allowed NO hosts for (resource, action).
-	// Result is EMPTY list (NOT whole fleet). Main security invariant: Purview{}
-	// (no dimensions, not Unrestricted) -> Empty=true.
-	Empty bool
-
-	// Partial means dimensions beyond coven/regex are present (soulprint/state),
-	// and pilot does NOT compute them yet (page CEL is S3b-2b). Result under
-	// Partial is NOT complete: it omits hosts available ONLY by soulprint/state.
-	// Consumer treats this as "not supported yet" (handler does not present
-	// partial set as complete). regex from S3b-2a is excluded from Partial because
-	// it is computed by keyset filter.
-	Partial bool
+	p rbac.Purview
 }
 
-// NeedsKeyset reports whether scope requires keyset mode (has regex dimension
-// that cannot be expressed by pure coven SQL pushdown without narrowing below
-// Purview). coven-only / Unrestricted / Empty -> offset fast-path (false).
-func (s Scope) NeedsKeyset() bool { return len(s.Regexes) > 0 }
+// Resolve wraps a resolved [rbac.Purview] into a souls [Scope].
+func Resolve(p rbac.Purview) Scope { return Scope{p: p} }
 
-// Resolve translates [rbac.Purview] into [Scope] for souls query.
+// Unrestricted reports whether the operator has no scope restriction (the whole
+// registry is visible).
+func (s Scope) Unrestricted() bool { return s.p.Unrestricted }
+
+// Empty reports the fail-closed case: the operator is entitled to NO hosts (no
+// access at all). Consumers return an empty list / 404 without touching PG.
+func (s Scope) Empty() bool { return s.p.IsEmpty() }
+
+// WhereSQL renders the purview into a parameterized SQL boolean over cols, with
+// positional placeholders starting at startIdx. It returns the SQL fragment
+// (always atomic and safe to AND into a WHERE), the args in placeholder order,
+// and the next free placeholder index.
 //
-// Semantics (symmetric to statepredicate branching by Purview):
-//   - Unrestricted=true -> Scope{Unrestricted:true} (whole list);
-//   - Covens and/or Regexes present -> Scope{Covens, Regexes} (coven OR regex:
-//     coven pushdown when regex absent, otherwise keyset+Go OR post-filter);
-//   - soulprint/state present (not computed in S3b-2a) -> Partial=true (access
-//     exists, but pilot does not compute it: S3b-2b);
-//   - completely empty (Purview{}, not Unrestricted) -> Empty=true (fail-closed).
-//
-// Deny from Purview (S2 placeholder) is treated as Empty (fail-closed) as
-// defensive measure; coven MVP does not set Purview.Deny.
-func Resolve(p rbac.Purview) Scope {
-	if p.Unrestricted {
-		return Scope{Unrestricted: true}
-	}
-	if p.Deny {
-		return Scope{Empty: true}
-	}
-
-	// soulprint/state are dimensions that S3b-2a does NOT compute (coven+regex
-	// are computed). Their presence marks result Partial (not complete until S3b-2b).
-	hasUnsupported := len(p.SoulprintExprs) > 0 || len(p.StateExprs) > 0
-	hasComputable := len(p.Covens) > 0 || len(p.Regexes) > 0
-
-	if !hasComputable && !hasUnsupported {
-		// No introduced dimension and not Unrestricted -> fail-closed.
-		return Scope{Empty: true}
-	}
-
-	return Scope{
-		Covens:  p.Covens,
-		Regexes: p.Regexes,
-		Partial: hasUnsupported,
-	}
+//   - Unrestricted → "TRUE" (no narrowing);
+//   - empty / Deny → "FALSE" (fail-closed: zero hosts, NOT the whole registry);
+//   - otherwise → the OR of the purview predicates over coven/host/trait.
+func (s Scope) WhereSQL(cols rbac.ScopeColumns, startIdx int) (string, []any, int) {
+	return rbac.PurviewSQL(s.p, cols, startIdx)
 }
 
-// CompiledScope is [Scope] with precompiled RE2 patterns (compiled once per
-// request, not per host). Object returned by [CompileScope] knows whether a host
-// is visible within OR boundary of scope.
-type CompiledScope struct {
-	unrestricted bool
-	empty        bool
-	covens       []string
-	regexes      []*regexp.Regexp
+// InScope reports whether ONE Soul (its sid, covens and traits) is inside the
+// operator's purview boundary — the single-object gate for GET /v1/souls/{sid},
+// /soulprint and /history. Fail-closed (symmetric to [Scope.WhereSQL]):
+//
+//   - Unrestricted → true (any host, including one without covens);
+//   - empty / Deny → false (no visible host; the operator has no rights);
+//   - otherwise → the host satisfies ANY purview predicate (OR across Exprs,
+//     via [rbac.Purview.Match]).
+//
+// traits is the Soul's traits already projected onto the [rbac.ScopeInput] shape
+// (key → []string), or nil (a trait condition then fails closed). Use
+// [TraitsInput] to project a Soul's raw jsonb traits.
+func InScope(s Scope, sid string, soulCovens []string, traits map[string][]string) bool {
+	return s.p.Match(rbac.ScopeInput{
+		Covens: soulCovens,
+		Hosts:  []string{sid},
+		Traits: traits,
+	})
 }
 
-// CompileScope compiles scope regex patterns ONCE. Broken pattern or pattern
-// over [MaxRegexLen] -> error (caller treats as fail-CLOSED: hide/empty, NOT 500
-// and NOT over-show). RE2 (Go regexp) is linear time, so ReDoS is impossible;
-// length limit is only a guard against pathological input.
-func CompileScope(s Scope) (CompiledScope, error) {
-	cs := CompiledScope{
-		unrestricted: s.Unrestricted,
-		empty:        s.Empty,
-		covens:       s.Covens,
+// TraitsInput projects a Soul's traits (jsonb: key → scalar | list) onto the
+// [rbac.ScopeInput] shape (key → []string), stringifying values the way PG's
+// `->>` does so the in-Go check matches the SQL pushdown. A nil/empty map yields
+// nil (a trait condition then fails closed).
+func TraitsInput(traits map[string]any) map[string][]string {
+	if len(traits) == 0 {
+		return nil
 	}
-	for _, pat := range s.Regexes {
-		if len(pat) > MaxRegexLen {
-			return CompiledScope{}, fmt.Errorf("soulpurview: regex pattern too long (%d > %d)", len(pat), MaxRegexLen)
-		}
-		re, err := regexp.Compile(pat)
-		if err != nil {
-			return CompiledScope{}, fmt.Errorf("soulpurview: invalid regex %q: %w", pat, err)
-		}
-		cs.regexes = append(cs.regexes, re)
-	}
-	return cs, nil
-}
-
-// Visible reports whether host (sid + covens) is visible in OR boundary of scope:
-//
-//	visible ⟺ covenMatch(soulCovens, scope.Covens) OR regexMatch(sid, scope.Regexes)
-//
-// Union (OR), NOT intersection: host matching AT LEAST ONE dimension is visible;
-// otherwise keyset filter would narrow visibility BELOW operator Purview.
-// Terminals: Unrestricted -> always true; Empty -> always false (fail-closed).
-func (cs CompiledScope) Visible(sid string, soulCovens []string) bool {
-	if cs.unrestricted {
-		return true
-	}
-	if cs.empty {
-		return false
-	}
-	for _, sc := range cs.covens {
-		for _, hc := range soulCovens {
-			if sc == hc {
-				return true
+	out := make(map[string][]string, len(traits))
+	for k, v := range traits {
+		if list, ok := v.([]any); ok {
+			vals := make([]string, 0, len(list))
+			for _, e := range list {
+				vals = append(vals, scalarToString(e))
 			}
+			out[k] = vals
+			continue
 		}
+		out[k] = []string{scalarToString(v)}
 	}
-	for _, re := range cs.regexes {
-		if re.MatchString(sid) {
-			return true
-		}
-	}
-	return false
+	return out
 }
 
-// InScope reports whether ONE host (sid + covens=soulCovens) is visible in OR
-// boundary of scope (single-object check for `GET /v1/souls/{sid}`,
-// `/soulprint`, `/history`, ADR-047 S3b-1). Same union semantics as
-// [CompiledScope.Visible] in keyset List path: list filters selection,
-// single-read checks concrete host, both decide visibility with one predicate:
-//
-//	visible ⟺ covenMatch(soulCovens, scope.Covens) OR regexMatch(sid, scope.Regexes)
-//
-// fail-closed (symmetric to [Scope] and [CompiledScope.Visible]):
-//   - Unrestricted -> true (any host, including without covens);
-//   - Empty -> false (no visible host; operator has no rights);
-//   - eval-error (broken/too long regex in Purview, [CompileScope] error) ->
-//     false (hide, NOT show and NOT 500): uncertainty = "outside scope";
-//   - otherwise -> covenMatch OR regexMatch (through [CompiledScope.Visible]).
-//
-// S3b-2a -> gate fix: InScope is now coven+regex (list/get divergence from
-// S3b-2a removed; regex-visible host in List is also available by GET /{sid}).
-// soulprint/state dimensions (Scope.Partial) remain deferred until S3b-2b: they
-// are NOT computed here, giving strict narrowing (under-show, never over-show;
-// operator may miss a host available ONLY by soulprint, but will not see
-// someone else's host). Empty scope (neither Covens nor Regexes) with
-// !Unrestricted -> false.
-func InScope(scope Scope, sid string, soulCovens []string) bool {
-	if scope.Unrestricted {
-		return true
+// scalarToString renders a scalar trait value as text (string as-is; other JSON
+// scalars via %v, matching PG jsonb `->>`).
+func scalarToString(v any) string {
+	if s, ok := v.(string); ok {
+		return s
 	}
-	if scope.Empty {
-		return false
-	}
-	compiled, err := CompileScope(scope)
-	if err != nil {
-		// eval-error fail-CLOSED: broken regex in Purview hides host (as in
-		// listKeyset), rather than revealing existence or falling into 500.
-		return false
-	}
-	return compiled.Visible(sid, soulCovens)
+	return fmt.Sprintf("%v", v)
 }

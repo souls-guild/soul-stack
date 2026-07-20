@@ -40,7 +40,7 @@ Bulk addition (`mode: append`) / removal (`mode: remove`) of **one** Coven tag o
   - `all` — the entire registry ∩ scope (without host filter);
   - `sids` - dot list of hosts (SID = FQDN);
   - `coven` — hosts with an existing Coven tag;
-  - `incarnation` — hosts of this incarnation (incarnation name — root Coven label according to ADR-008; matching via `name = ANY(coven)`);
+  - `incarnation` — **member** hosts of this incarnation (matched via the membership relation `incarnation_membership`, **not** `name = ANY(coven)` — `incarnation.name` is no longer a Coven, [ADR-008 amendment 2026-07-17](../../adr/0008-coven-stable-tags.md#amendment-2026-07-17-nim-124-incarnationname-is-not-a-coven--membership-is-a-first-class-relation));
   - `status` - filter by `souls` status.
 
 Must specify at least one criterion (`all: true` or non-empty `sids`/`coven`/`incarnation`/`status`), otherwise `422`. Combinations are connected by **AND** (`incarnation: redis` + `status: connected` → connected-hosts incarnation `redis`). The free CEL predicate is deliberately not supported (scope check provability).

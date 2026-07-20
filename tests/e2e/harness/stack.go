@@ -480,9 +480,9 @@ func (w *testLogWriter) Write(p []byte) (int, error) {
 // seed provides the needed entry point.
 //
 // serviceVersion — the service's git ref (usually "main"); state — the
-// baseline incarnation.state (JSONB). covens are NOT set (declared env
-// tags aren't needed: the roster resolves via
-// `incarnation.name in souls.coven[]`, see AddSoulToCoven).
+// baseline incarnation.state (JSONB). Membership is NOT set here: the roster
+// resolves via incarnation_membership (NIM-124); bind hosts separately with
+// AddMember after this seed.
 // created_by_aid = NULL (seed without an operator; FK ON DELETE SET NULL
 // allows this). state_schema_version is not set explicitly, defaulting
 // from DDL (DEFAULT 1) — the mutating scenario reads state by field, not

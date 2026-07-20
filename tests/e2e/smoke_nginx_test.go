@@ -41,10 +41,10 @@ func TestSmokeNginx_InstallAndStart(t *testing.T) {
 	stub := stack.ConnectSoulStub(t, 0)
 	stub.SetApplyDefaultSuccess(true)
 
-	// Coven membership: the run's roster resolves via
-	// `incarnation.name in coven[]` (ADR-008). Without it the scenario sees
+	// Membership: the run's roster resolves members via incarnation_membership
+	// (ADR-008 amendment, NIM-124). Without it the scenario sees
 	// no_hosts -> error_locked.
-	stack.AddSoulToCoven(t, 0, "test-nginx")
+	stack.AddMember(t, 0, "test-nginx")
 
 	inc, applyID := stack.CreateIncarnationWithApply(t, "test-nginx", "smoke-nginx@main", map[string]any{
 		"hostname": "web-01",

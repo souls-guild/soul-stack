@@ -93,13 +93,11 @@ type HeraldTypeCatalogReply struct {
 // === me-permissions (GET /v1/me/permissions) ===
 
 // MyPermissionScope — a native scope summary of one effective permission (shape 1:1 with
-// MyPermissionScope): covens/regex/soulprint/state — `*[]string` with omitempty
-// (dimension fields are omitted when empty); unrestricted — bool without omitempty.
+// MyPermissionScope, NIM-128 boolean scope): exprs — the OR-set of canonical scope
+// predicates as `*[]string` with omitempty (omitted when empty, i.e. unrestricted);
+// unrestricted — bool without omitempty.
 type MyPermissionScope struct {
-	Covens       *[]string `json:"covens,omitempty"`
-	Regex        *[]string `json:"regex,omitempty"`
-	Soulprint    *[]string `json:"soulprint,omitempty"`
-	State        *[]string `json:"state,omitempty"`
+	Exprs        *[]string `json:"exprs,omitempty"`
 	Unrestricted bool      `json:"unrestricted"`
 }
 
@@ -177,10 +175,7 @@ func newMyPermissionScope(s *handlers.MyScope) *MyPermissionScope {
 		return nil
 	}
 	return &MyPermissionScope{
-		Covens:       slicePtrIfNotEmpty(s.Covens),
-		Regex:        slicePtrIfNotEmpty(s.Regex),
-		Soulprint:    slicePtrIfNotEmpty(s.Soulprint),
-		State:        slicePtrIfNotEmpty(s.State),
+		Exprs:        slicePtrIfNotEmpty(s.Exprs),
 		Unrestricted: s.Unrestricted,
 	}
 }

@@ -813,7 +813,7 @@ func (h *VoyageHandler) resolveCommandScopeErr(ctx context.Context, claims *jwt.
 		// 403. Narrowing by scope is done by the resolver (parity souls HoldsAction).
 		pv := h.scoper.ResolvePurview(claims.Subject, "errand", "run")
 		scope := soulpurview.Resolve(pv)
-		if scope.Empty {
+		if scope.Empty() {
 			// scope.Empty carries no reason (revoke vs no-perm are merged in Resolve).
 			// We classify the reason via the enforcer for error-semantics parity with the
 			// scenario path and the scoper==nil branch (revoked → TypeOperatorRevokedToken,

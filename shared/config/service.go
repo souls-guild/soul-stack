@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"regexp"
 	"strings"
+	"time"
 
 	"github.com/goccy/go-yaml/ast"
 
@@ -50,6 +51,16 @@ type ServiceManifest struct {
 	// [LifecycleConfig.AutoDestroyEnabled] (nil-safe: both a nil block and a nil
 	// flag are treated as true).
 	Lifecycle *LifecycleConfig `yaml:"lifecycle,omitempty"`
+
+	// CertificateRotation — optional auto-rotation policy for the service's TLS certs
+	// (NIM-99). nil = rotation off; enable:false/omitted = the section is inert.
+	CertificateRotation *CertificateRotationConfig `yaml:"certificate_rotation,omitempty"`
+
+	// Telemetry — optional host-vitals telemetry policy (ADR-072, NIM-87).
+	// Absence of the block (nil) = default: enabled, interval 30s, all collectors.
+	// Dereference via the nil-safe getters [TelemetryConfig.EnabledOrDefault] /
+	// [TelemetryConfig.IntervalOrDefault] / [TelemetryConfig.CollectorsOrDefault].
+	Telemetry *TelemetryConfig `yaml:"telemetry,omitempty"`
 }
 
 // LifecycleConfig — the `lifecycle:` block of the service manifest. Both flags
@@ -83,6 +94,63 @@ func (l *LifecycleConfig) AutoDestroyEnabled() bool {
 		return true
 	}
 	return *l.AutoDestroy
+}
+
+// CertificateRotationConfig — the `certificate_rotation:` manifest block (NIM-99):
+// whether the service supports auto-rotation of TLS certs, with which operational
+// scenario, and which Vault PKI role. No section (nil) → rotation off. `enable:false`/omitted →
+// the section is inert (explicit opt-in, security-first).
+type CertificateRotationConfig struct {
+	Enable    bool   `yaml:"enable"`              // enables auto-rotation of the service's certs
+	Scenario  string `yaml:"scenario,omitempty"`  // rotation scenario; required when enable:true
+	Threshold string `yaml:"threshold,omitempty"` // margin before expiry (`30d`); default, currently informational
+	PKIRole   string `yaml:"pki_role,omitempty"`  // Vault PKI role for signing; required when enable:true
+}
+
+// KnownCollectors — the closed set of host-vitals collectors (ADR-072, NIM-87;
+// `net` added by the NIM-127 amendment — inode rides `disk`, same statvfs).
+var KnownCollectors = []string{"cpu", "mem", "disk", "load", "uptime", "net"}
+
+// TelemetryIntervalFloor — the lower bound of telemetry.interval (anti-DoS floor).
+const TelemetryIntervalFloor = 10 * time.Second
+
+// IsKnownCollector — whether name belongs to the closed KnownCollectors set.
+func IsKnownCollector(name string) bool {
+	return contains(KnownCollectors, name)
+}
+
+// TelemetryConfig — the `telemetry:` block of the service manifest (ADR-072, NIM-87).
+// Enabled — `*bool` (nil → default true): distinguishes "not set" from "explicitly false".
+type TelemetryConfig struct {
+	Enabled    *bool    `yaml:"enabled,omitempty"`
+	Interval   *string  `yaml:"interval,omitempty"`
+	Collectors []string `yaml:"collectors,omitempty"`
+}
+
+// EnabledOrDefault — nil-safe: a nil block OR a nil flag → true (backcompat).
+func (t *TelemetryConfig) EnabledOrDefault() bool {
+	if t == nil || t.Enabled == nil {
+		return true
+	}
+	return *t.Enabled
+}
+
+// IntervalOrDefault — nil-safe: a nil block OR a nil/empty Interval → "30s".
+func (t *TelemetryConfig) IntervalOrDefault() string {
+	if t == nil || t.Interval == nil || *t.Interval == "" {
+		return "30s"
+	}
+	return *t.Interval
+}
+
+// CollectorsOrDefault — nil-safe: a nil block OR an empty list → a copy of KnownCollectors.
+func (t *TelemetryConfig) CollectorsOrDefault() []string {
+	if t == nil || len(t.Collectors) == 0 {
+		out := make([]string, len(KnownCollectors))
+		copy(out, KnownCollectors)
+		return out
+	}
+	return t.Collectors
 }
 
 // DependencyRef — an entry in `destiny[]` / `modules[]`: `{name, ref}` + optional `git`.
@@ -273,6 +341,88 @@ func schemaValidateService(path string, root *ast.MappingNode, m *ServiceManifes
 		out = append(out, validateRevealableSecret(root, i, rs, seenRevealIDs)...)
 	}
 
+	// 7) certificate_rotation — optional rotation policy (NIM-99).
+	out = append(out, validateCertificateRotation(root, m.CertificateRotation)...)
+
+	// 8) telemetry — optional host-vitals policy (ADR-072, NIM-87). A nil block
+	// is skipped (backcompat). Enabled is not validated; there are no cross-field invariants.
+	if m.Telemetry != nil {
+		for _, c := range m.Telemetry.Collectors {
+			if !IsKnownCollector(c) {
+				out = append(out, atPath(root, "$.telemetry.collectors", diag.Diagnostic{
+					Level: diag.LevelError, Phase: diag.PhaseSchemaValidate,
+					Code:    "unknown_collector",
+					Message: fmt.Sprintf("telemetry.collectors: unknown collector %q; known set: %s", c, strings.Join(KnownCollectors, ", ")),
+					Hint:    "allowed collectors: " + strings.Join(KnownCollectors, ", "),
+				}))
+			}
+		}
+		if m.Telemetry.Interval != nil && *m.Telemetry.Interval != "" {
+			if d, err := ParseDuration(*m.Telemetry.Interval); err != nil {
+				out = append(out, atPath(root, "$.telemetry.interval", diag.Diagnostic{
+					Level: diag.LevelError, Phase: diag.PhaseSchemaValidate,
+					Code:    "duration_invalid",
+					Message: fmt.Sprintf("telemetry.interval: invalid duration %q: %v", *m.Telemetry.Interval, err),
+					Hint:    "use Go-duration (e.g. 30s, 1m) or <N>d for days",
+				}))
+			} else if d < TelemetryIntervalFloor {
+				out = append(out, atPath(root, "$.telemetry.interval", diag.Diagnostic{
+					Level: diag.LevelError, Phase: diag.PhaseSchemaValidate,
+					Code:    "value_out_of_range",
+					Message: fmt.Sprintf("telemetry.interval must be >= 10s (anti-DoS floor), got %s", d),
+				}))
+			}
+		}
+	}
+
+	return out
+}
+
+// validateCertificateRotation — validation of the optional `certificate_rotation:` section
+// (NIM-99): when enable:true, scenario (snake/kebab, folder
+// scenario/<name>/) and pki_role are required; threshold — per the `duration` convention. A nil
+// section = rotation off, valid.
+func validateCertificateRotation(root *ast.MappingNode, crt *CertificateRotationConfig) []diag.Diagnostic {
+	if crt == nil {
+		return nil
+	}
+	var out []diag.Diagnostic
+	base := "$.certificate_rotation"
+
+	if crt.Enable && crt.Scenario == "" {
+		out = append(out, atPath(root, base+".scenario", diag.Diagnostic{
+			Level: diag.LevelError, Phase: diag.PhaseSchemaValidate,
+			Code:    "missing_required_field",
+			Message: "certificate_rotation.scenario is required when enable: true",
+			Hint:    "declare scenario: <name> matching scenario/<name>/main.yml",
+		}))
+	}
+	if crt.Enable && crt.PKIRole == "" {
+		out = append(out, atPath(root, base+".pki_role", diag.Diagnostic{
+			Level: diag.LevelError, Phase: diag.PhaseSchemaValidate,
+			Code:    "missing_required_field",
+			Message: "certificate_rotation.pki_role is required when enable: true",
+			Hint:    "declare pki_role: <vault-pki-role> used to sign this service's certs",
+		}))
+	}
+	if crt.Scenario != "" && !reScenarioName.MatchString(crt.Scenario) {
+		out = append(out, atPath(root, base+".scenario", diag.Diagnostic{
+			Level: diag.LevelError, Phase: diag.PhaseSchemaValidate,
+			Code:    "name_invalid_format",
+			Message: fmt.Sprintf("certificate_rotation.scenario %q does not match %s", crt.Scenario, reScenarioName),
+			Hint:    "snake_case or kebab-case: lowercase letters/digits with _/- separators; must start with letter",
+		}))
+	}
+	if crt.Threshold != "" {
+		if _, err := ParseDuration(crt.Threshold); err != nil {
+			out = append(out, atPath(root, base+".threshold", diag.Diagnostic{
+				Level: diag.LevelError, Phase: diag.PhaseSchemaValidate,
+				Code:    "duration_invalid",
+				Message: fmt.Sprintf("certificate_rotation.threshold %q is not a valid duration: %v", crt.Threshold, err),
+				Hint:    "use convention like 30d, 720h",
+			}))
+		}
+	}
 	return out
 }
 

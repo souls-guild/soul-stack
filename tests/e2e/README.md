@@ -113,7 +113,7 @@ Drivers (`harness/stack.go`):
   success).
 
 Fixture helpers: `RegisterService`, `MaterializeDestinies`, `SeedSoulprint`,
-`AddSoulToCoven` (roster by `incarnation.name ∈ souls.coven[]`, ADR-008),
+`AddMember` (roster via `incarnation_membership`, ADR-008 amendment/NIM-124),
 `SeedVaultKV`.
 
 Assertions (`harness/asserts.go`):

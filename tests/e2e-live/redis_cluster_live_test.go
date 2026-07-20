@@ -59,11 +59,11 @@ func TestL3bRedisClusterCreate_ThreeNode(t *testing.T) {
 
 	const incName = "redis-clstr-create"
 
-	// Coven membership BEFORE Create: roster resolves by `incarnation.name in
-	// coven[]` (ADR-008). All three Souls are in incarnation coven; otherwise
+	// Membership BEFORE Create: roster resolves members via incarnation_membership
+	// (ADR-008 amendment/NIM-124). All three Souls are bound to the incarnation; otherwise
 	// no_hosts -> zero apply_runs.
 	for i := range stack.SoulContainers {
-		stack.AddSoulToCoven(t, i, incName)
+		stack.AddMember(t, i, incName)
 		// cluster nodes-MAP is built from soulprint.hosts (primary_ip by SID);
 		// wait for non-empty facts BEFORE create-render.
 		stack.WaitSoulprintReported(t, i, 60)

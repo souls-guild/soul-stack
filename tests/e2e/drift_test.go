@@ -55,7 +55,7 @@ func TestDrift_CheckDrift_DriftedAndClean(t *testing.T) {
 	stub.SetApplyDefaultSuccess(true)
 	sid := stack.SoulSID(0)
 
-	stack.AddSoulToCoven(t, 0, "test-drift")
+	stack.AddMember(t, 0, "test-drift")
 
 	// Incarnation must be applied (status ready) — otherwise the roster is
 	// empty / status blocks the background scan; on-demand check-drift takes

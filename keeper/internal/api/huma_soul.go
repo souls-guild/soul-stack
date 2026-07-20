@@ -430,6 +430,7 @@ func HumaSoulSpecYAML() (string, error) {
 		registerHumaSoulGet(api, stub)
 		registerHumaSoulSoulprint(api, stub)
 		registerHumaSoulHistory(api, stub)
+		registerHumaSoulTelemetry(api, handlers.TelemetrySpecStub())
 		return nil
 	})
 }

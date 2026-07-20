@@ -14,7 +14,7 @@ func TestDefault_ContainsAllCoreMVP(t *testing.T) {
 	r := coremod.Default(installmod.Deps{})
 	want := []string{
 		// Core.a.1
-		"core.pkg", "core.file", "core.service", "core.user", "core.group",
+		"core.pkg", "core.file", "core.directory", "core.service", "core.user", "core.group",
 		// Core.a.2
 		"core.exec", "core.cmd", "core.cron", "core.mount",
 		// Core.a.3

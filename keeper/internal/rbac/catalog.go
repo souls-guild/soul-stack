@@ -393,62 +393,13 @@ func IsAllowedPermission(resource, action string) bool {
 	return ok
 }
 
-// allowedSelectorKeys — the closed enum of selector keys (rbac.md §
-// Selector grammar). Extending it is a separate PR.
-//
-// `regex` (ADR-047 S2a) — an RE2 pattern over SID/host name, quoted form
-// `regex='^web-.*'`. Unlike exact keys, matching is regexp.MatchString
-// against the host/sid context ([Permission.Matches]).
-//
-// `soulprint` (ADR-047 S2b) — a CEL predicate over host facts
-// (`soulprint.self.*`, ADR-018), quoted form
-// `soulprint='soulprint.self.os.family == "debian"'`. Compilation is
-// validated by shared/cel on load; real CEL eval against facts is slices
-// S3/S4 ([Permission.Matches] for soulprint fail-closed in S2b: the
-// map[string]string context carries no nested facts).
-//
-// `state` (ADR-047 S2c) — a CEL predicate over incarnation.state, quoted
-// form `state='state.redis_version == "8.0"'`. Compilation is validated via
-// keeper/internal/statepredicate (migration-sandbox root `state`) on load;
-// real CEL eval against state is slice S3b ([Permission.Matches] for state
-// fail-closed with no incarnation.state in the context).
-//
-// `trait` (ADR-047 amendment, ADR-060 item 7 slice 1) — an exact
-// key:value match against `incarnation.traits` (operator-set key-value
-// labels on an incarnation, jsonb). Form `trait=key:value` (exactly one
-// `:`; both halves — [a-zA-Z0-9_.-]+, scalar-only). Unlike the CEL
-// dimensions soulprint/state, this is exact equality (like coven), not a
-// predicate: the Trait value is fail-closed in [Permission.Matches] (the
-// current map[string]string context carries no nested
-// incarnation.traits — the real match is done by the incarnation
-// list/get resolver, slice 1 item 7). Slice 1 semantics — an OR dimension
-// of Purview (an incarnation is visible if its traits[key]==value); AND
-// narrowing across multiple pairs is a follow-up multi-key feature.
-var allowedSelectorKeys = map[string]struct{}{
-	"service":     {},
-	"coven":       {},
-	"incarnation": {},
-	"host":        {},
-	"regex":       {},
-	"soulprint":   {},
-	"state":       {},
-	"trait":       {},
-}
-
-// IsAllowedSelectorKey checks a selector key against the closed enum.
-func IsAllowedSelectorKey(key string) bool {
-	_, ok := allowedSelectorKeys[key]
-	return ok
-}
-
-// SelectorKeys returns a sorted list of allowed selector keys (closed enum
-// [allowedSelectorKeys]). The MVP catalog has no per-permission metadata —
-// this is a general list of allowed scope keys, applicable to permissions
-// that support a selector. Used by the `GET /v1/permissions` catalog
-// endpoint (selector_keys in the response is this general list).
+// SelectorKeys returns the sorted list of allowed scope dimensions (NIM-128
+// closed enum [scopeDims]: coven/service/incarnation/host/trait; the former
+// regex/soulprint/state dimensions were removed). Used by the
+// `GET /v1/permissions` catalog endpoint (selector_keys in the response).
 func SelectorKeys() []string {
-	keys := make([]string, 0, len(allowedSelectorKeys))
-	for k := range allowedSelectorKeys {
+	keys := make([]string, 0, len(scopeDims))
+	for k := range scopeDims {
 		keys = append(keys, k)
 	}
 	sort.Strings(keys)

@@ -15,7 +15,7 @@ Launching Soul-side core module with `on: keeper` - validation error; and vice v
 
 ## Registration and dispatch at (`base` + `state`)
 
-Keeper-side core modules are registered in the keeper-side Registry (`keeper/internal/coremod/registry.go`) by **base name** - `<namespace>.<module>` without state suffix: `core.soul`, `core.cloud`, `core.bootstrap`, `core.choir`, `core.vault`. State comes from the last segment of the task address.
+Keeper-side core modules are registered in the keeper-side Registry (`keeper/internal/coremod/registry.go`) by **base name** - `<namespace>.<module>` without state suffix: `core.soul`, `core.cloud`, `core.bootstrap`, `core.choir`, `core.vault`, `core.cert`. State comes from the last segment of the task address.
 
 When executing a keeper-side task (`keeper/internal/scenario/keeper_dispatch.go`), the address `module: <namespace>.<module>.<state>` is divided by the function `config.SplitModuleAddr` (a single parser for both sides, the same as the Soul-side runtime) into a pair `(base, state)`:
 
@@ -31,6 +31,7 @@ Author-form examples → parsing:
 | `core.bootstrap.delivered` | `core.bootstrap` | `delivered` |
 | `core.choir.present` / `core.choir.absent` | `core.choir` | `present` / `absent` |
 | `core.vault.kv-read` / `core.vault.kv-present` | `core.vault` | `kv-read` / `kv-present` |
+| `core.cert.registered` / `core.cert.issued` | `core.cert` | `registered` / `issued` |
 
 Defective address (`SplitModuleAddr` returned `ok=false`: empty, `.state`, `core.`) or `base`, which is not in the Registry - the keeper-task crashes (`failed`-event "unknown keeper-side module"), like Soul-side on an unknown module. Registration of a module in the Registry is conditional based on the presence of its dependency in `coremod.Deps`: `core.choir` is connected only when `ChoirStore` is specified, `core.bootstrap` - only with a full set of SSH-deps (provider card + host-CA + dialer), otherwise the assembly does not carry them, and the step with this module will fall "unknown".
 
@@ -46,7 +47,7 @@ In `incarnation.*` the key **`incarnation.state.<path>`** is available - read-on
 
 ## `core.soul.registered`
 
-**The first Keeper-side core module.** Controls Soul's binding (by `SID`) to a set of stable Coven labels in the keeper's registry (tables `souls` + coven, [storage.md](storage.md)). Accepts a **string OR list of SIDs** (registering N created hosts in one step) and optionally carries an **onboarding barrier** `await_online` (blockingly waits for registered Souls to become online) - [ADR-061](../adr/0061-onboarding-await-and-midrun-reresolve.md).
+**The first Keeper-side core module.** Binds a Soul (by `SID`) as a **member of the run's incarnation** and optionally assigns a set of **real stable Coven tags** in the keeper's registry (tables `souls` + `incarnation_membership` + coven, [storage.md](storage.md)). **Membership is set implicitly** from the current run's incarnation (cross-incarnation binding is forbidden by the grammar, so the target is unambiguous) — it lives in the first-class relation `incarnation_membership`, **not** in `souls.coven[]` ([ADR-008 amendment 2026-07-17](../adr/0008-coven-stable-tags.md#amendment-2026-07-17-nim-124-incarnationname-is-not-a-coven--membership-is-a-first-class-relation)). Accepts a **string OR list of SIDs** (registering N created hosts in one step) and optionally carries an **onboarding barrier** `await_online` (blockingly waits for registered Souls to become online) - [ADR-061](../adr/0061-onboarding-await-and-midrun-reresolve.md).
 
 ### Addressing and side
 
@@ -56,18 +57,18 @@ In `incarnation.*` the key **`incarnation.state.<path>`** is available - read-on
 
 ### State (state form)
 
-`registered` - declarative form: "Soul with the specified `sid` is in the registry and is bound to the specified set of Coven tags." The module is idempotent by design (re-calling with the same set is no-op).
+`registered` - declarative form: "Soul with the specified `sid` is in the registry, is a **member** of the run's incarnation, and carries the specified set of stable Coven tags (if any)." The module is idempotent by design (re-calling with the same set is no-op).
 
-If there is no entry in `souls` for this `sid` yet, the module creates it under `status: pending` (a new host added by the scenario - for example, host branch `add_replica` or after cloud-create via `core.cloud.provisioned`). Creating an entry here is the only side-effect besides updating the coven; the module does not issue bootstrap tokens and does not launch a CSR cycle (this is the responsibility of onboarding, [soul/onboarding.md](../soul/onboarding.md)).
+If there is no entry in `souls` for this `sid` yet, the module creates it under `status: pending` (a new host added by the scenario - for example, host branch `add_replica` or after cloud-create via `core.cloud.provisioned`). Side-effects: the `souls` entry (if new), the **membership row** in `incarnation_membership` for the run's incarnation, and the optional stable-coven update. The module does not issue bootstrap tokens and does not launch a CSR cycle (this is the responsibility of onboarding, [soul/onboarding.md](../soul/onboarding.md)).
 
-In list form `sid` (see list-SID), the passed set `coven` is applied to **each** list SID; The `await_online` barrier (if specified) aggregates presence over the **entire** set.
+In list form `sid` (see list-SID), membership and the passed set `coven` are applied to **each** list SID; The `await_online` barrier (if specified) aggregates presence over the **entire** set.
 
 ### Parameters (`params:`)
 
 | Parameter | Type | Required | Default | Description |
 |---|---|---|---|---|
 | `sid` | string **or** array of string, `format: fqdn` | required | — | `SID` Soul (FQDN) to which the binding is applied. Accepts **single string OR list** ([ADR-061](../adr/0061-onboarding-await-and-midrun-reresolve.md), see list-SID). The list in practice comes with the CEL expression `${ register.<provision>.hosts }` (SID list from `core.cloud.provisioned`); literal list `sid: [a, b]` statically `soul-lint` **doesn't** pass (manifest declares `sid` as `string`) - this is a deliberate trade-off, see list-SID. |
-| `coven` | array of string, `pattern: "^[a-z][a-z0-9-]*$"`, `min_items: 1`, `unique: true` | required | — | A set of stable Coven tags. At least one tag. When listed, `sid` applies to each SID. |
+| `coven` | array of string, `pattern: "^[a-z][a-z0-9-]*$"`, `unique: true` | optional | `[]` | A set of **real stable** Coven tags (cluster / project / environment / datacenter). **May be empty** — membership no longer lives in `coven[]`, so a bind needs no coven tag. When listed, `sid` applies to each SID. |
 | `mode` | string, `enum: [append, replace, remove]` | optional | `append` | Strategy for applying the `coven` set to existing labels (see below). |
 | `refresh_soulprint` | boolean | optional | `false` | **Implemented (S2/S3 [ADR-061](../adr/0061-onboarding-await-and-midrun-reresolve.md)).** `true` - the step becomes a passage-defining boundary (Stratify), after its success, the scenario-runner will re-resolve the roster before the next Passage (live snapshot); output `refreshed` echoes the value of the flag. **Together with `await_online: true`** further tightens the barrier: SID is only counted when online **and** typed soulprint is written to PG (see facts-wait, amendment 2026-07-02). |
 | `await_online` | boolean | optional | `false` | **Onboarding Barrier** ([ADR-061](../adr/0061-onboarding-await-and-midrun-reresolve.md)). `true` - after recording `souls`+coven for all SIDs, the step **blocking** waits for the registered Souls to be ready. Readiness: online by **Redis SID-lease** (live EventStream, **not** PG `souls.status`); with `refresh_soulprint: true` - additionally recorded first typed soulprint (`souls.soulprint_facts`). Requires a configured presence checker on the keeper: `await_online: true` without it → step `failed`. |
@@ -80,10 +81,10 @@ In list form `sid` (see list-SID), the passed set `coven` is applied to **each**
 | `mode` | The final set of coven at `sid` | Edge behavior | Idempotency |
 |---|---|---|---|
 | `append` (default) | existing ∪ passed | empty intersecting set → no-op | yes: calling again with the same `coven` does not change anything |
-| `replace` | passed (existing, not mentioned, deleted) | empty `coven: []` - **error** (double protection from the footgun "host without root coven incarnation": schema `params.coven` `min_items: 1` + repetition at the semantic level of `mode`; intentional - so that the footgun is caught even when the schema is weakened / the contract is expanded in the future) | yes: calling again with the same set - no-op |
+| `replace` | passed (existing, not mentioned, deleted) | empty `coven: []` - **valid no-op-to-empty** (clears all stable tags); membership is untouched | yes: calling again with the same set - no-op |
 | `remove` | existing\passed | empty `coven: []` or labels that do not exist on the host - **no-op** (no error); removes only actually attached tags | yes: calling again with the same set - no-op |
 
-`replace` with a non-empty `coven` that does not contain the root `incarnation.name` - the module **does not block** at the mode semantic level (the set operation is symmetrical), but this is a user error - footgun. The "host always carries the root coven incarnation" guarantee is invariant at the `souls`+coven table/resolver level (see [storage.md](storage.md), [scenario/orchestration.md §3](../scenario/orchestration.md)), not at the level of an individual module call.
+Since membership now lives in `incarnation_membership` and **not** in `souls.coven[]` ([ADR-008 amendment 2026-07-17](../adr/0008-coven-stable-tags.md#amendment-2026-07-17-nim-124-incarnationname-is-not-a-coven--membership-is-a-first-class-relation)), **no coven operation can sever a host from its incarnation**. The former footgun guard ("a host must always carry the root coven incarnation": `params.coven` `min_items: 1` + the `mode: replace` empty-set error) is therefore **removed** — `coven[]` holds only real stable tags and may be emptied safely; the coven axis stops carrying two meanings at once.
 
 ### list-SID — registration+waiting for N hosts in one step
 
@@ -137,13 +138,13 @@ The fields `online`/`pending`/`satisfied` are present in output **only** when `a
 ### Example call from a scenario
 
 ```yaml
-- name: Register the new replica with the cluster coven labels
+- name: Bind the new replica to the incarnation
   on: keeper
   module: core.soul.registered
   register: registered
   params:
     sid:               "{{ input.host.sid }}"
-    coven:             ["{{ incarnation.name }}"]
+    # coven: optional stable tags (e.g. [prod, dc1]); membership is set implicitly
     mode:              append
     refresh_soulprint: true
 ```
@@ -161,7 +162,7 @@ Registering a list of SIDs from `core.cloud.provisioned` and blocking wait for o
   register: shards
   params:
     sid:                 "${ register.provision.hosts }"   # list of SIDs from cloud-provision
-    coven:               ["${ incarnation.name }"]
+    # coven: optional stable tags; membership is set implicitly from the run's incarnation
     mode:                append
     await_online:        true
     await_timeout:       10m                                # ≤ keeper.yml::max_await_timeout (default 30m)
@@ -173,7 +174,7 @@ The step first registers all SIDs of the list, then blocks Redis SID-lease. If t
 
 ### Relation to destiny `coven-assign`
 
-The existing destiny `coven-assign` ([examples/destiny/coven-assign/](../../examples/destiny/coven-assign/)) remains as a **thin wrapper** around this module: its `tasks/main.yml` is reduced to a single step `module: core.soul.registered` with `mode: append` (single `sid`, no barrier and without `refresh_soulprint`). `destiny.yml` `coven-assign` (input contract `sid`+`coven`) - compatible, does not change.
+After [ADR-008 amendment 2026-07-17](../adr/0008-coven-stable-tags.md#amendment-2026-07-17-nim-124-incarnationname-is-not-a-coven--membership-is-a-first-class-relation), `coven-assign` is **pure stable-tag management** — it assigns/updates the real stable Coven tags of an already-bound host and is **no longer a membership act** (assigning a tag does not make a host a member; membership is conferred by the bind, handled implicitly by `core.soul.registered` during onboarding/create). The existing destiny `coven-assign` ([examples/destiny/coven-assign/](../../examples/destiny/coven-assign/)) remains a **thin wrapper** around this module: its `tasks/main.yml` is a single step `module: core.soul.registered` with `mode: append` (single `sid`, no barrier and without `refresh_soulprint`). `destiny.yml` `coven-assign` (input contract `sid`+`coven`) - compatible, does not change.
 
 When to write a module call directly, and when to write `apply: { destiny: coven-assign }`:
 
@@ -302,6 +303,40 @@ Explicit reading of the secret from Vault KV (v1/v2, mount version is determined
 Generate-if-absent for Vault KV secrets on the keeper side ([ADR-017 amendment 2026-06-28](../adr/0017-keeper-side-core.md)). **Keeper-side**, dispatcher `on: keeper`. The same module as `kv-read`: Registry key - base `core.vault`; state `kv-present` comes from the address suffix. For each target, it guarantees the existence of a non-empty secret field: absent (no field / `null` / empty string) generates a crypto-random value (`crypto/rand`, bias-free) according to the **password-policy** described by the author (length in characters + alphabet `charset`/`allowed_chars`), present - no-op (does not overwrite). `changed=true` only during real generation; idempotent (rerun/re-create are safe). `destroy` does not clear secrets → re-create reuses the same passwords. Purpose - the service itself generates missing passwords when `create`, the operator does not need to manually pre-seed secrets `vault kv put`.
 
 **Security-invariant (ADR-010):** the generated **value** never goes into register-output / audit-payload / log / OTel / error text - only `path` + names of generated fields come out. register-output - `generated` (map path → \[fields]); audit-event `vault.kv-present` (`source: keeper_internal`) is written only with `changed=true`, payload `{paths}` - without values. Complete per-module reference with params (`targets` / `policy`) / output / security - [docs/module/core/vault/README.md](../module/core/vault/README.md#corevaultkv-present).
+
+## `core.cert.registered` / `core.cert.issued`
+
+Tracking of the incarnation's service TLS certs in the **Warrant** registry ([ADR-017 amendment 2026-07-01/2026-07-09](../adr/0017-keeper-side-core.md), [naming-rules.md → Warrant](../naming-rules.md#domain-entities)) — the basis for auto-rotation by the Reaper. **Keeper-side**, dispatcher `on: keeper`. Registry key — base `core.cert`; state (`registered` / `issued`) comes from the address suffix via `SplitModuleAddr`. Registration in `coremod` is conditional on a configured `CertStore` (same pattern as `core.choir`/`core.vault`) — otherwise the step fails with "unknown keeper-side module". This is about the **service** cert (e.g. Redis server TLS), not the Soul agent's identity cert ([SoulSeed](../soul/identity.md), rotated separately).
+
+Two states — by cert source:
+
+| State | What it does | Secret handling |
+|---|---|---|
+| `registered` | Records an **already issued** cert(s) into Warrant: reads the PEM from Vault by `vault_ref`, extracts `serial`/`fingerprint`/`not_after` from the x509 itself. For certs issued outside the module (e.g. the initial `rotate_tls`, which already placed material in Vault). | The module never touches it (only reads the cert PEM). |
+| `issued` | **Mint+enroll**: Keeper generates a keypair+CSR → signs via Vault PKI → writes cert+key to Vault (`secret/<service>/<incarnation>/tls/<kind>`) → records into Warrant. One step "issue and record". | Generated keeper-side, written to Vault, **never leaves** (R2 invariant [ADR-017](../adr/0017-keeper-side-core.md)). |
+
+Without tracking in Warrant the Reaper is **blind to certs** — the step (`registered` or `issued`) must be present in the service's create/`rotate_tls` scenarios. Both are idempotent (same fingerprint → no-op); output/audit carries only non-secret metadata (`kind`/`serial`/`fingerprint`/`not_after`), never the PEM or the secret material.
+
+### Addressing and side
+
+- Namespace `core`, module `cert`, state `registered` / `issued`.
+- Full task name: `module: core.cert.registered` / `module: core.cert.issued`.
+- Side: **Keeper-side**. The step **must** carry `on: keeper`.
+
+### Parameters (`params:`)
+
+| Parameter | Type | Required | Default | Description |
+|---|---|---|---|---|
+| `incarnation` | string | required | — | Name of the incarnation the certs belong to (FK Warrant → `incarnation`). |
+| `auto_rotate` | bool | optional | `true` | Per-cert auto-rotate flag (written to `warrant.auto_rotate`). `true` = the Reaper may rotate the cert (with the service's `certificate_rotation.enable` — this is the "default yes"); `false` = the cert is tracked but not rotated. |
+| `certs` | array of object `{kind, vault_ref}` | **`registered` only** | — | List of already issued certs to record. `kind` ∈ `cert`/`key`/`ca`; `vault_ref` — path to the material in Vault. |
+| `kind` | string | **`issued` only** | — | Type of the TLS material being issued; determines the write path `secret/<service>/<incarnation>/tls/<kind>`. |
+
+**★ `pki_role` and `scenario` are NOT params.** The Vault PKI signing role (for `issued`) and the rotation scenario name (for the Reaper) are taken from the service manifest `service.yml::certificate_rotation` ([service/manifest.md → Section `certificate_rotation`](../service/manifest.md#certificate_rotation-section)), **not** from the step's `params`. The scenario author does not choose an arbitrary PKI role: `pki_role` comes from the git-reviewed manifest, the PKI-engine mount from `keeper.yml::vault.pki_mount` ([config.md → `vault`](config.md#vault)). Reason — blast-radius ([ADR-017 amendment 2026-07-09](../adr/0017-keeper-side-core.md)).
+
+### Relation to the Reaper rule `rotate_due_certs`
+
+`core.cert.*` only **records** certs into Warrant; auto-rotation of expiring ones is driven by the Reaper rule **`rotate_due_certs`** (Reaper leader, [ADR-017 amendment 2026-07-01](../adr/0017-keeper-side-core.md)): scan `not_after < NOW()+threshold` → CAS `active→rotating` → keeper-side re-sign (Vault PKI role `pki_role` from the manifest) → `WriteKV` → spawn the rotation scenario (`certificate_rotation.scenario`) **for the whole incarnation at once**. Three rotation gates — service `certificate_rotation.enable` × per-cert `auto_rotate` × cluster `keeper.yml::reaper.rules.rotate_due_certs.enabled` (default OFF+dry_run); config-driven source of `scenario`/`pki_role` (Path B, ~60s cache pinned by `service_version`) — [ADR-017 amendment 2026-07-09](../adr/0017-keeper-side-core.md). Retention of removed certs — Reaper rule `purge_old_certs`.
 
 ## Auto-synthesis of `core.module.installed` from `service.yml::modules[]`
 

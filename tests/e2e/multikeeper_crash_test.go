@@ -56,16 +56,16 @@ func TestE2E_MultiKeeper_VoyageReclaimAfterCrash(t *testing.T) {
 	// the stream until Cleanup.
 	soulStub.SetApplyDefaultSuccess(true)
 
-	// Seed N ready incarnations; the single soul is in the coven of EVERY
-	// incarnation (roster resolves via incarnation.name in souls.coven[],
-	// ADR-008), so each per-incarnation scenario-run of the Voyage has a
-	// connected host.
+	// Seed N ready incarnations; the single soul is a member of EVERY
+	// incarnation (roster resolves via incarnation_membership, ADR-008
+	// amendment/NIM-124), so each per-incarnation scenario-run of the Voyage
+	// has a connected host.
 	incNames := make([]string, incarnCount)
 	for i := 0; i < incarnCount; i++ {
 		name := incName(i)
 		incNames[i] = name
 		stack.SeedIncarnationReady(t, name, serviceName, "main", map[string]any{})
-		stack.AddSoulToCoven(t, 0, name)
+		stack.AddMember(t, 0, name)
 	}
 
 	// Scenario-Voyage over all incarnations, batch_size=1 -> serial waves.

@@ -464,6 +464,132 @@ func TestApply_NoPkgMgr_Fails(t *testing.T) {
 	}
 }
 
+// --- apt: arch (ADR-071 multi-arch) ---
+
+// TestApt_Present_EmitsArch: arch set without gpg_key → options `[arch=...]`.
+func TestApt_Present_EmitsArch(t *testing.T) {
+	m, _ := newModule(t, util.PkgMgrApt)
+	applyTo(t, m, "present", map[string]any{
+		"name":       "nexus",
+		"uri":        "https://nexus/deb",
+		"suite":      "bookworm",
+		"components": []any{"main"},
+		"arch":       []any{"amd64"},
+	})
+	got := read(t, filepath.Join(m.AptSourcesDir, "nexus.list"))
+	want := "deb [arch=amd64] https://nexus/deb bookworm main\n"
+	if got != want {
+		t.Fatalf(".list=%q want %q", got, want)
+	}
+}
+
+// TestApt_Present_ArchMultiValue: multiple architectures → arch=amd64,arm64.
+func TestApt_Present_ArchMultiValue(t *testing.T) {
+	m, _ := newModule(t, util.PkgMgrApt)
+	applyTo(t, m, "present", map[string]any{
+		"name":  "multi",
+		"uri":   "https://m/deb",
+		"suite": "stable",
+		"arch":  []any{"amd64", "arm64"},
+	})
+	got := read(t, filepath.Join(m.AptSourcesDir, "multi.list"))
+	if !strings.Contains(got, "[arch=amd64,arm64]") {
+		t.Fatalf("multi-arch not joined by comma: %q", got)
+	}
+}
+
+// TestApt_Present_ArchWithSignedByOrder: with a key set, the option order is
+// signed-by then arch (as in the ADR-071 example).
+func TestApt_Present_ArchWithSignedByOrder(t *testing.T) {
+	m, _ := newModule(t, util.PkgMgrApt)
+	applyTo(t, m, "present", map[string]any{
+		"name": "ord", "uri": "https://m/deb", "suite": "x",
+		"arch": []any{"amd64"}, "gpg_key": "K",
+	})
+	keyPath := filepath.Join(m.AptKeyringsDir, "ord.gpg")
+	got := read(t, filepath.Join(m.AptSourcesDir, "ord.list"))
+	want := "deb [signed-by=" + keyPath + " arch=amd64] https://m/deb x\n"
+	if got != want {
+		t.Fatalf(".list=%q want %q", got, want)
+	}
+}
+
+// TestApt_Present_ArchIdempotent: same arch → repeat changed=false.
+func TestApt_Present_ArchIdempotent(t *testing.T) {
+	m, _ := newModule(t, util.PkgMgrApt)
+	params := map[string]any{
+		"name": "nexus", "uri": "https://m/deb", "suite": "bookworm", "arch": []any{"amd64"},
+	}
+	if !applyTo(t, m, "present", params).Last().Changed {
+		t.Fatal("first run: changed=false")
+	}
+	if applyTo(t, m, "present", params).Last().Changed {
+		t.Fatal("repeat run with the same arch: changed=true (not idempotent)")
+	}
+}
+
+// TestApt_Present_ArchChangeTriggersChanged: changing arch → drift (changed=true).
+func TestApt_Present_ArchChangeTriggersChanged(t *testing.T) {
+	m, _ := newModule(t, util.PkgMgrApt)
+	base := map[string]any{"name": "nexus", "uri": "https://m/deb", "suite": "x", "arch": []any{"amd64"}}
+	applyTo(t, m, "present", base)
+	base["arch"] = []any{"arm64"}
+	if !applyTo(t, m, "present", base).Last().Changed {
+		t.Fatal("changing arch should produce changed=true")
+	}
+}
+
+// TestValidate_RejectsBadArch: an architecture token with disallowed
+// characters (space/bracket/`=`/empty/upper) is rejected — protection
+// against injection into apt options.
+func TestValidate_RejectsBadArch(t *testing.T) {
+	for _, bad := range [][]any{
+		{"amd64 evil"}, {"a]b"}, {"arch=x"}, {""}, {"AMD64"},
+	} {
+		reply, _ := repo.New().Validate(context.Background(), &pluginv1.ValidateRequest{
+			State:  "present",
+			Params: mustStruct(t, map[string]any{"name": "x", "uri": "https://m", "arch": bad}),
+		})
+		if reply.Ok {
+			t.Fatalf("Validate ok=true for unsafe arch %v", bad)
+		}
+	}
+}
+
+// TestApt_Present_RedisMirrorRecipe — the acceptance scenario for
+// NIM-104/ADR-071: mirroring redis.io in Nexus is declared with a single
+// core.repo.present (uri=Nexus, arch=amd64, inline gpg key — variant B: the
+// key is brought in by core.url.fetched → ${ file() }). Checks the exact apt
+// string, the keyring, and idempotency.
+func TestApt_Present_RedisMirrorRecipe(t *testing.T) {
+	m, _ := newModule(t, util.PkgMgrApt)
+	const key = "-----BEGIN PGP PUBLIC KEY BLOCK-----\nREDISKEY\n-----END PGP PUBLIC KEY BLOCK-----\n"
+	params := map[string]any{
+		"name":       "redis",
+		"uri":        "https://nexus.internal/repository/redis-apt",
+		"suite":      "bookworm",
+		"components": []any{"main"},
+		"arch":       []any{"amd64"},
+		"gpg_key":    key,
+	}
+	first := applyTo(t, m, "present", params)
+	if !first.Last().Changed || first.Last().Failed {
+		t.Fatalf("recipe apply: changed=%v failed=%v", first.Last().Changed, first.Last().Failed)
+	}
+	keyPath := filepath.Join(m.AptKeyringsDir, "redis.gpg")
+	got := read(t, filepath.Join(m.AptSourcesDir, "redis.list"))
+	want := "deb [signed-by=" + keyPath + " arch=amd64] https://nexus.internal/repository/redis-apt bookworm main\n"
+	if got != want {
+		t.Fatalf(".list=%q\nwant %q", got, want)
+	}
+	if k := read(t, keyPath); k != key {
+		t.Fatalf("keyring bytes mismatch: %q", k)
+	}
+	if applyTo(t, m, "present", params).Last().Changed {
+		t.Fatal("recipe repeat: changed=true (not idempotent)")
+	}
+}
+
 func hasSubstr(items []string, sub string) bool {
 	for _, it := range items {
 		if strings.Contains(it, sub) {

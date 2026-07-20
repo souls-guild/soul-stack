@@ -62,6 +62,7 @@ import (
 	"github.com/souls-guild/soul-stack/soul/internal/seed"
 	"github.com/souls-guild/soul-stack/soul/internal/sigilcache"
 	"github.com/souls-guild/soul-stack/soul/internal/soulprint"
+	"github.com/souls-guild/soul-stack/soul/internal/utilization"
 
 	keeperv1 "github.com/souls-guild/soul-stack/proto/gen/go/keeper/v1"
 )
@@ -520,12 +521,27 @@ func runDaemon(args []string) int {
 		fmt.Fprintf(os.Stderr, "soul run: %v\n", err)
 		return exitError
 	}
+	if _, err := loadUtilizationInterval(cfg); err != nil {
+		fmt.Fprintf(os.Stderr, "soul run: %v\n", err)
+		return exitError
+	}
 
 	sp := soulprintPusher{
 		collector: soulprint.NewCollector(soulprint.NewSystemSource(), soulprintMetrics),
 		sid:       sid,
 		// interval isn't fixed here: handleSession reads the current
 		// soulprint.refresh_interval from the store at the start of each session (hot-reload).
+	}
+	// up — the utilization pulse (ADR-072). One collector per process: stateful (cpu%
+	// is computed as a tick delta), the delta's continuity survives a reconnect.
+	up := utilizationPusher{
+		collector: utilization.NewCollector(utilization.NewSystemSource()),
+		sid:       sid,
+		// telemetry — a durable holder for the config delivered by Keeper (NIM-87):
+		// the pointer is shared between copies of up across reconnects → the directive
+		// survives a reconnect. Default before the first directive: all collectors, pulse on.
+		telemetry: &telemetryState{collectors: allCollectorsSet()},
+		// interval is read from the store/holder at the start of each session (hot-reload).
 	}
 
 	// Soulprint facts → core modules (Variant A, ADR-018(b)): collect a host
@@ -538,7 +554,7 @@ func runDaemon(args []string) int {
 	runner.SetHostFacts(hostFactsFromSoulprint(sp.collector.Collect(ctx, sid)))
 
 	logger.Info("soul run: ready", slog.String("sid", sid), slog.Int("endpoints", len(endpoints)))
-	reconnectLoop(ctx, store, client, runner, errandRunner, sp, eventStreamMetrics, sigils, anchorSet, scheduler, logger)
+	reconnectLoop(ctx, store, client, runner, errandRunner, sp, up, eventStreamMetrics, sigils, anchorSet, scheduler, logger)
 	logger.Info("soul run: shutdown complete")
 	return exitOK
 }
@@ -769,7 +785,7 @@ func runApply(args []string) int {
 // The store snapshot has already passed semantic validation (an invalid duration
 // is rejected at the reload phase), so resolveBackoff/resolveFailback here are
 // best-effort — on a parse error they return defaults + warn, they don't panic.
-func reconnectLoop(ctx context.Context, store *config.Store[config.SoulConfig], client *soulgrpc.Client, runner *runtime.ApplyRunner, errandRunner *errandrunner.Runner, sp soulprintPusher, metrics *soulgrpc.EventStreamMetrics, sigils *sigilcache.Cache, anchors *sharedhost.AnchorSet, scheduler *beacon.Scheduler, logger *slog.Logger) {
+func reconnectLoop(ctx context.Context, store *config.Store[config.SoulConfig], client *soulgrpc.Client, runner *runtime.ApplyRunner, errandRunner *errandrunner.Runner, sp soulprintPusher, up utilizationPusher, metrics *soulgrpc.EventStreamMetrics, sigils *sigilcache.Cache, anchors *sharedhost.AnchorSet, scheduler *beacon.Scheduler, logger *slog.Logger) {
 	delay := resolveBackoff(store, logger).initial
 	// The first iteration is the initial connect; every subsequent Dial attempt is a
 	// reconnect (after a disconnect or a failed dial). soul_eventstream_
@@ -812,7 +828,7 @@ func reconnectLoop(ctx context.Context, store *config.Store[config.SoulConfig], 
 		// Successful dial — reset backoff to the current initial.
 		delay = b.initial
 		metrics.SetConnected(true)
-		handleSession(ctx, store, client, sess, runner, errandRunner, sp, sigils, anchors, scheduler, logger)
+		handleSession(ctx, store, client, sess, runner, errandRunner, sp, up, sigils, anchors, scheduler, logger)
 		// handleSession returned = session closed (clean EOF or error).
 		// The next iteration will try Dial again.
 		metrics.SetConnected(false)
@@ -866,6 +882,22 @@ func resolveSoulprintInterval(store *config.Store[config.SoulConfig], logger *sl
 	return d
 }
 
+// resolveUtilizationInterval reads utilization.interval from the current store
+// snapshot. On a nil snapshot / parse error — default 30s + warn. The 10s floor
+// is applied inside loadUtilizationInterval.
+func resolveUtilizationInterval(store *config.Store[config.SoulConfig], logger *slog.Logger) time.Duration {
+	cfg := store.Get()
+	if cfg == nil {
+		return utilizationDefaultInterval
+	}
+	d, err := loadUtilizationInterval(cfg)
+	if err != nil {
+		logger.Warn("soul run: invalid utilization.interval in reloaded config, using default", slog.Any("error", err))
+		return utilizationDefaultInterval
+	}
+	return d
+}
+
 // parseTrustAnchorSet parses the trust-anchor set from the runtime
 // [keeperv1.SigilTrustAnchors] message (R3-S6): each `pubkey_pem` element is a single
 // SPKI "PUBLIC KEY" PEM block (as written by keeper-side sigil.Signer.AnchorSetPEM). Each
@@ -908,13 +940,17 @@ type recvResult struct {
 // session is closed and replaced with a new one (zero-downtime: the new one is open before
 // the old one closes). The failback goroutine stops when handleSession
 // exits.
-func handleSession(ctx context.Context, store *config.Store[config.SoulConfig], client *soulgrpc.Client, sess *soulgrpc.StreamSession, runner *runtime.ApplyRunner, errandRunner *errandrunner.Runner, sp soulprintPusher, sigils *sigilcache.Cache, anchors *sharedhost.AnchorSet, scheduler *beacon.Scheduler, logger *slog.Logger) {
-	// failback and soulprint.refresh_interval are read from the store at the start of
-	// each session (hot-reload, ADR-021): a new session after reconnect/swap sees
-	// current values. Within a session they're fixed — a change applies
-	// at the next reconnect (sub-second latency isn't needed here).
+func handleSession(ctx context.Context, store *config.Store[config.SoulConfig], client *soulgrpc.Client, sess *soulgrpc.StreamSession, runner *runtime.ApplyRunner, errandRunner *errandrunner.Runner, sp soulprintPusher, up utilizationPusher, sigils *sigilcache.Cache, anchors *sharedhost.AnchorSet, scheduler *beacon.Scheduler, logger *slog.Logger) {
+	// failback / soulprint.refresh_interval / utilization.interval are read
+	// from the store at the start of each session (hot-reload, ADR-021): a new
+	// session after reconnect/swap sees current values. Within a session
+	// they're fixed — a change applies at the next reconnect (sub-second
+	// latency isn't needed here).
 	fb := resolveFailback(store, logger)
 	sp.interval = resolveSoulprintInterval(store, logger)
+	// Cadence precedence for utilization: delivered (a durable directive, survives a
+	// reconnect) > soul-local utilization.interval > built-in (NIM-87).
+	up.interval = effectiveStartInterval(up.telemetry, store, logger)
 
 	// failbackCtx lives for exactly one failback-loop attempt. On swap, the
 	// previous cancel is called before creating a new one — this keeps the
@@ -953,6 +989,29 @@ func handleSession(ctx context.Context, store *config.Store[config.SoulConfig], 
 	soulprintTick := make(chan struct{}, 1)
 	stopSoulprint := sp.startTicker(ctx, soulprintTick)
 	defer stopSoulprint()
+
+	// HostUtilization (ADR-072): pulse under the current effective config. The cadence/
+	// enable/collectors can change live via an incoming FromKeeper.TelemetryConfig
+	// (NIM-87) — the ticker is re-created WITHOUT restarting the process. startUtilPulse
+	// (re)raises the ticker under up.interval and does an immediate pushOnce;
+	// enabled=false → the ticker is stopped, we don't send. All Sends come from the
+	// select-loop (a single writer); a push error does NOT break the session (a volatile
+	// fact, the next tick/directive repeats it) — unlike WardRoster.
+	utilizationTick := make(chan struct{}, 1)
+	stopUtil := func() {}
+	startUtilPulse := func() {
+		stopUtil()
+		if !up.telemetry.pulseEnabled() {
+			stopUtil = func() {}
+			return
+		}
+		if err := up.pushOnce(ctx, sess); err != nil {
+			logger.Warn("utilization: report send failed", slog.Any("error", err))
+		}
+		stopUtil = up.startTicker(ctx, utilizationTick)
+	}
+	startUtilPulse()
+	defer func() { stopUtil() }()
 
 	swapCh := make(chan *soulgrpc.StreamSession)
 	startFailback := func(priority int) {
@@ -1024,6 +1083,13 @@ func handleSession(ctx context.Context, store *config.Store[config.SoulConfig], 
 			// Send error = stream broken — bail out, reconnect will re-establish it.
 			if err := sp.pushOnce(ctx, sess); err != nil {
 				logger.Warn("soulprint: report send failed (stream broken)", slog.Any("error", err))
+				return
+			}
+		case <-utilizationTick:
+			// A utilization pulse tick: gather and send from this loop (a single writer).
+			// A send error = a stream break — we exit, reconnect will raise it again.
+			if err := up.pushOnce(ctx, sess); err != nil {
+				logger.Warn("utilization: report send failed (stream broken)", slog.Any("error", err))
 				return
 			}
 		case portent := <-scheduler.Portents():
@@ -1225,6 +1291,22 @@ func handleSession(ctx context.Context, store *config.Store[config.SoulConfig], 
 				logger.Info("beacon: vigil snapshot applied (ReplaceAll)",
 					slog.Int("count", len(vigils)),
 				)
+			case *keeperv1.FromKeeper_TelemetryConfig:
+				// A live host-vitals directive (ADR-072, NIM-87): update the durable
+				// holder (survives a reconnect) and re-create the util ticker under the new
+				// cadence/collectors/enable WITHOUT restarting the process. Modeled on
+				// FromKeeper_VigilSnapshot above. The same select-loop goroutine as the
+				// tick handler and pushOnce → holder reads/writes are serialized,
+				// no mutex needed (the ticker goroutine doesn't read the holder, only signals).
+				cfg := payload.TelemetryConfig
+				up.telemetry.applyTelemetryConfig(cfg)
+				up.interval = up.telemetry.interval
+				startUtilPulse()
+				logger.Info("telemetry: config applied (live)",
+					slog.Bool("enabled", up.telemetry.enabled),
+					slog.Duration("interval", up.telemetry.interval),
+					slog.Int("collectors", len(up.telemetry.collectors)),
+				)
 			case *keeperv1.FromKeeper_SeedRotationReply:
 				logger.Info("seed_rotation_reply: ignored (M2.3+)")
 			case *keeperv1.FromKeeper_HelloReply:
@@ -1341,13 +1423,19 @@ func hostFactsFromSoulprint(rep *keeperv1.SoulprintReport) coremodutil.HostFacts
 	}
 }
 
-// startTicker runs a goroutine that signals tick every interval. tick must be
-// buffered 1: if the select-loop is busy (apply in-flight), the tick isn't
-// lost but doesn't pile up either (coalescing). Returns a stop func.
+// startTicker delegates to [startIntervalTicker].
 func (p soulprintPusher) startTicker(ctx context.Context, tick chan<- struct{}) func() {
+	return startIntervalTicker(ctx, p.interval, tick)
+}
+
+// startIntervalTicker starts a goroutine that sends a signal to tick every
+// interval. The tick channel must be buffered to 1 — if the select-loop is busy (an
+// apply in-flight), the tick is not lost, but also not piled up (coalescing: one pending
+// tick is enough). Returns a stop function to stop the goroutine.
+func startIntervalTicker(ctx context.Context, interval time.Duration, tick chan<- struct{}) func() {
 	tickerCtx, cancel := context.WithCancel(ctx)
 	go func() {
-		t := time.NewTicker(p.interval)
+		t := time.NewTicker(interval)
 		defer t.Stop()
 		for {
 			select {
@@ -1364,6 +1452,43 @@ func (p soulprintPusher) startTicker(ctx context.Context, tick chan<- struct{}) 
 	return cancel
 }
 
+// utilizationReportSink — the narrow surface of StreamSession for sending
+// HostUtilization. Carved out for testability of utilizationPusher without a live gRPC.
+type utilizationReportSink interface {
+	SendHostUtilization(*keeperv1.HostUtilization) error
+}
+
+// utilizationPusher — gathers + periodically sends HostUtilization (ADR-072),
+// a mirror of soulprintPusher. The collector is stateful (cpu% — a tick delta), so
+// it lives one per process; the ticker only signals handleSession's select-loop
+// (which is also the session's sole writer).
+type utilizationPusher struct {
+	collector *utilization.Collector
+	sid       string
+	interval  time.Duration
+	// telemetry — a durable holder for the delivered config (pointer → survives a
+	// reconnect). nil in the test harness = default: gather everything, pulse on.
+	telemetry *telemetryState
+}
+
+// pushOnce gathers utilization (only the collectors enabled in the holder) and
+// sends one HostUtilization to the sink, stamping the effective cadence into
+// interval_sec — Keeper uses it to scale UtilizationTTL (NIM-87).
+func (p utilizationPusher) pushOnce(ctx context.Context, sink utilizationReportSink) error {
+	var set utilization.CollectorSet
+	if p.telemetry != nil {
+		set = p.telemetry.collectors
+	}
+	snap := p.collector.Collect(ctx, p.sid, set)
+	snap.IntervalSec = int32(p.interval.Seconds())
+	return sink.SendHostUtilization(snap)
+}
+
+// startTicker see [startIntervalTicker].
+func (p utilizationPusher) startTicker(ctx context.Context, tick chan<- struct{}) func() {
+	return startIntervalTicker(ctx, p.interval, tick)
+}
+
 // loadSoulprintInterval — soul.yml::soulprint.refresh_interval. Default 5m
 // (docs/soul/config.md). Missing block → default.
 func loadSoulprintInterval(cfg *config.SoulConfig) (time.Duration, error) {
@@ -1376,6 +1501,120 @@ func loadSoulprintInterval(cfg *config.SoulConfig) (time.Duration, error) {
 		return 0, fmt.Errorf("soulprint.refresh_interval: %w", err)
 	}
 	return d, nil
+}
+
+// utilizationInterval* — the utilization pulse cadence (ADR-072). The range [floor,
+// ceiling]: too frequent a pulse warms up the presence channel, and a rarer one (> ceiling)
+// would outlive the Keeper-side UtilizationTTL (90s = 3× ceiling) → a healthy host
+// would go stale. A larger interval will become possible once NIM-87 learns to carry/
+// scale the TTL.
+const (
+	utilizationDefaultInterval = 30 * time.Second
+	utilizationFloorInterval   = 10 * time.Second
+	utilizationCeilingInterval = 30 * time.Second
+)
+
+// loadUtilizationInterval — soul.yml::utilization.interval. Default 30s; the value
+// is clamped into [floor 10s, ceiling 30s]. Missing block → default.
+func loadUtilizationInterval(cfg *config.SoulConfig) (time.Duration, error) {
+	if cfg.Utilization == nil || cfg.Utilization.Interval == "" {
+		return utilizationDefaultInterval, nil
+	}
+	d, err := config.ParseDuration(cfg.Utilization.Interval)
+	if err != nil {
+		return 0, fmt.Errorf("utilization.interval: %w", err)
+	}
+	if d < utilizationFloorInterval {
+		return utilizationFloorInterval, nil
+	}
+	if d > utilizationCeilingInterval {
+		return utilizationCeilingInterval, nil
+	}
+	return d, nil
+}
+
+// utilizationDeliveredCeiling — the ceiling for the interval delivered via the
+// FromKeeper.TelemetryConfig directive (NIM-87). Differs from the soul-local ceiling (30s,
+// loadUtilizationInterval): keeper is allowed to set a larger cadence, since soul carries
+// interval_sec in the payload and keeper scales the TTL. A sanity bound on the TTL (ADR-072).
+const utilizationDeliveredCeiling = 3600 * time.Second
+
+// telemetryState — a durable snapshot of the telemetry directive delivered by Keeper
+// (FromKeeper.TelemetryConfig, ADR-072/NIM-87). Lives one per process (a pointer
+// field of utilizationPusher, shared between copies of up across reconnects) → the delivered
+// config survives a reconnect. Read/written only from handleSession's select-loop
+// (the session's sole writer/reader), no synchronization needed.
+type telemetryState struct {
+	delivered  bool // whether at least one directive has been delivered
+	enabled    bool
+	interval   time.Duration // clamped to [floor,ceiling]
+	collectors utilization.CollectorSet
+}
+
+// applyTelemetryConfig merges the directive into the durable state. interval is clamped
+// to [floor 10s, ceiling 3600s] (defense-in-depth: keeper already clamps it); an empty
+// Collectors → all 5; unknown names are ignored.
+func (s *telemetryState) applyTelemetryConfig(cfg *keeperv1.TelemetryConfig) {
+	if cfg == nil {
+		return
+	}
+	s.delivered = true
+	s.enabled = cfg.GetEnabled()
+	s.interval = clampUtilizationInterval(time.Duration(cfg.GetIntervalSec()) * time.Second)
+	s.collectors = collectorSetFromNames(cfg.GetCollectors())
+}
+
+// pulseEnabled — whether to send the pulse. nil-holder / nothing delivered → yes (default);
+// otherwise by the delivered enabled flag.
+func (s *telemetryState) pulseEnabled() bool {
+	return s == nil || !s.delivered || s.enabled
+}
+
+// clampUtilizationInterval clamps the delivered interval into [floor 10s, ceiling
+// 3600s] (NIM-87).
+func clampUtilizationInterval(d time.Duration) time.Duration {
+	switch {
+	case d < utilizationFloorInterval:
+		return utilizationFloorInterval
+	case d > utilizationDeliveredCeiling:
+		return utilizationDeliveredCeiling
+	default:
+		return d
+	}
+}
+
+// collectorSetFromNames builds a CollectorSet from the directive's names: an empty
+// list → all 5 (config.KnownCollectors), otherwise only the valid ones (config.IsKnownCollector).
+func collectorSetFromNames(names []string) utilization.CollectorSet {
+	if len(names) == 0 {
+		return allCollectorsSet()
+	}
+	set := make(utilization.CollectorSet, len(names))
+	for _, n := range names {
+		if config.IsKnownCollector(n) {
+			set[n] = true
+		}
+	}
+	return set
+}
+
+// allCollectorsSet — a set with all known collectors (the default without a directive).
+func allCollectorsSet() utilization.CollectorSet {
+	set := make(utilization.CollectorSet, len(config.KnownCollectors))
+	for _, n := range config.KnownCollectors {
+		set[n] = true
+	}
+	return set
+}
+
+// effectiveStartInterval — cadence precedence at session start: delivered
+// (a durable directive, survives a reconnect) > soul-local utilization.interval >
+// built-in 30s.
+func effectiveStartInterval(ts *telemetryState, store *config.Store[config.SoulConfig], logger *slog.Logger) time.Duration {
+	if ts != nil && ts.delivered {
+		return ts.interval
+	}
+	return resolveUtilizationInterval(store, logger)
 }
 
 func loadFailback(cfg *config.SoulConfig) (failbackParams, error) {

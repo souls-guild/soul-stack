@@ -54,9 +54,10 @@ func TraitsFromSpec(spec map[string]any) (map[string]any, error) {
 
 // SyncTraitsToHosts — sync-hook of Trait relocation (ADR-060 amend, R1): projects
 // `incarnation.traits` MATERIALIZED into `souls.traits` of ALL member hosts
-// of incarnation `incName`. Member of incarnation = host whose incarnation name exists
-// in coven[] (ADR-008: incarnation.name is root Coven label), expressed by
-// [soul.BulkSelector.Incarnation].
+// of incarnation `incName`. Membership is resolved via `incarnation_membership`
+// (ADR-008 amendment 2026-07-17/NIM-124), expressed by
+// [soul.BulkSelector.Incarnation]. Runs on the bind path AFTER membership is
+// written, so a newly bound host is already a member here.
 //
 // Hookpoints (sync-hook):
 //   - incarnation create (CreateTyped) — after row insert;

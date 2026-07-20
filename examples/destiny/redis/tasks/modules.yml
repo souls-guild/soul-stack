@@ -14,13 +14,13 @@
 # .so → server won't start), no version-matrix.
 
 # Directory for .so modules <data_dir>/modules. core.file.rendered/url.fetched only create
-# the file, not the parent directory. We create it explicitly with declarative core.file.directory.
+# the file, not the parent directory. We create it explicitly with declarative core.directory.present.
 # owner redis: the service reads the .so. parents:true — data_dir can be overridden by the operator
 # (may be a deep path with a nonexistent parent); we preserve the implicit mkdir -p
-# behavior of the former install -d (core.file.directory defaults to parents:false and would fail on a
+# behavior of the former install -d (core.directory.present defaults to parents:false and would fail on a
 # missing intermediate directory).
 - name: Ensure the redis modules directory exists
-  module: core.file.directory
+  module: core.directory.present
   params:
     path: "${ vars.redis_modules_dir }"
     parents: true

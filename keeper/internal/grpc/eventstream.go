@@ -197,6 +197,13 @@ type EventStreamDeps struct {
 	// pool as OracleDeps.DB).
 	VigilSource VigilSource
 
+	// TelemetrySource — resolver of the effective per-SID host-vitals telemetry
+	// config for the connect-time cadence/collectors broadcast (ADR-072, NIM-87).
+	// nil → broadcast no-op (dev / unit / push harness). Production wire-up
+	// (`keeper run`) passes telemetrySource over the shared pool + serviceRegistry +
+	// serviceLoader + essenceResolver.
+	TelemetrySource TelemetrySource
+
 	// TollNotifier is the Toll cluster-detector hook (ADR-038): the handler
 	// calls it whenever the receive loop exits (disconnect event). nil →
 	// Toll is not wired up (single-instance/dev without Redis): the hook is
@@ -242,6 +249,18 @@ type TollNotifier interface {
 // transport [keeperv1.VigilDef] values.
 type VigilSource interface {
 	ActiveVigilsForSID(ctx context.Context, sid string) ([]*keeperv1.VigilDef, error)
+}
+
+// TelemetrySource — the narrow surface for resolving a host's effective
+// telemetry config (manifest `telemetry:` + essence-override), needed by the
+// connect-time broadcast ([broadcastTelemetryConfig], ADR-072, NIM-87). Narrowing
+// to one method isolates the EventStream handler from the soul->incarnation->
+// service-artifact->essence chain and allows a fake in unit tests. Implementation
+// — [telemetrySource] (events_telemetry.go). (nil, nil) = "no config" (host
+// without an incarnation): the broadcast is skipped, Soul keeps its soul-local
+// cadence (unlike Vigil/Sigil ReplaceAll, where an empty set is still sent).
+type TelemetrySource interface {
+	ResolveForSID(ctx context.Context, sid string) (*keeperv1.TelemetryConfig, error)
 }
 
 // SigilStore is the narrow surface of the plugin_sigils registry needed by
@@ -646,6 +665,13 @@ func (h *eventStreamHandler) EventStream(stream grpclib.BidiStreamingServer[keep
 	// its entire local Vigil set with this list (S1). Best-effort — see
 	// [broadcastVigils].
 	h.broadcastVigils(ctx, stream, sid, sessionID)
+
+	// Connect-time broadcast of the effective host-vitals telemetry config (ADR-072,
+	// NIM-87): in the same goroutine after VigilSnapshot, BEFORE the send-loop
+	// starts — direct stream.Send (order guaranteed). Resolve per-SID (manifest
+	// `telemetry:` + essence-override). No incarnation -> skip (Soul stays on its
+	// soul-local cadence, not an empty config). Best-effort — see [broadcastTelemetryConfig].
+	h.broadcastTelemetryConfig(ctx, stream, sid, sessionID)
 
 	// The stream counts as open after a successful handshake (HelloReply
 	// delivered). Inc/Dec is the active-streams gauge; Dec in a defer
@@ -1316,6 +1342,8 @@ func (h *eventStreamHandler) dispatch(ctx context.Context, sid, sessionID string
 		h.handleRunResult(ctx, sid, sessionID, p.RunResult)
 	case *keeperv1.FromSoul_SoulprintReport:
 		h.handleSoulprintReport(ctx, sid, sessionID, p.SoulprintReport)
+	case *keeperv1.FromSoul_HostUtilization:
+		h.handleHostUtilization(ctx, sid, sessionID, p.HostUtilization)
 	case *keeperv1.FromSoul_SeedRotationRequest:
 		h.handleSeedRotationRequest(ctx, sid, sessionID, p.SeedRotationRequest)
 	case *keeperv1.FromSoul_AugurRequest:

@@ -237,7 +237,7 @@ func (r *VoyageCommandPGResolver) ResolveSIDsInScope(ctx context.Context, filter
 		return ScopedSIDs{}, err
 	}
 
-	if scope.Unrestricted {
+	if scope.Unrestricted() {
 		out := make([]string, len(pairs))
 		for i := range pairs {
 			out[i] = pairs[i].sid
@@ -250,16 +250,18 @@ func (r *VoyageCommandPGResolver) ResolveSIDsInScope(ctx context.Context, filter
 		explicit[sid] = struct{}{}
 	}
 
-	// Empty (fail-closed) or a scope-eval error → no visible host. Explicitly-named
-	// existing SIDs become DeniedExplicit (handler → 403).
-	if scope.Empty {
+	// Empty (fail-closed) → no visible host. Explicitly-named existing SIDs become
+	// DeniedExplicit (handler → 403).
+	if scope.Empty() {
 		return scopedFromPairs(pairs, explicit, func(string, []string) bool { return false }), nil
 	}
-	compiled, cerr := soulpurview.CompileScope(scope)
-	if cerr != nil {
-		return scopedFromPairs(pairs, explicit, func(string, []string) bool { return false }), nil
-	}
-	return scopedFromPairs(pairs, explicit, compiled.Visible), nil
+	// Boolean-scope membership per host (NIM-128): coven/host dimensions decide
+	// visibility. traits are not fetched into the pairs, so a trait-only scope
+	// fails closed here (under-show, safe) — a full trait-aware voyage target
+	// filter is a follow-up when the S4 slice migrates.
+	return scopedFromPairs(pairs, explicit, func(sid string, covens []string) bool {
+		return soulpurview.InScope(scope, sid, covens, nil)
+	}), nil
 }
 
 // scopedFromPairs splits the resolved (sid, covens) pairs by the visibility predicate

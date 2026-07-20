@@ -40,7 +40,7 @@ type RoleCreateRequest struct {
 	Name         string   `json:"name" required:"true" pattern:"^[a-z][a-z0-9-]*$" doc:"role name (kebab-case), unique in cluster"`
 	Description  string   `json:"description,omitempty" doc:"human-readable role description for UI/audit"`
 	Permissions  []string `json:"permissions,omitempty" doc:"set of permission strings for role (e.g., incarnation.run, soul.*, *)"`
-	DefaultScope *string  `json:"default_scope,omitempty" doc:"role scope selector of form key=v1,v2,… (service/coven/incarnation/host); omitted/null → role without scope"`
+	DefaultScope *string  `json:"default_scope,omitempty" doc:"role scope: boolean predicate over coven/service/incarnation/host/trait (e.g. coven in (a, b) AND host matches redis-*); omitted/null → role without scope"`
 }
 
 // roleCreateOutput — huma output (FULL-TYPED). Status=201; no Body (legacy contract:
@@ -168,7 +168,7 @@ type roleUpdatePermissionsInput struct {
 // order in the contract name).
 type RolePermissionsUpdateRequest struct {
 	Permissions  []string         `json:"permissions" required:"true" doc:"complete new set of permission strings (replace)"`
-	DefaultScope Optional[string] `json:"default_scope" required:"false" doc:"scope selector: omitted → scope untouched; present (incl. null) → replaces (null removes scope)"`
+	DefaultScope Optional[string] `json:"default_scope" required:"false" doc:"scope: boolean predicate over coven/service/incarnation/host/trait; omitted → scope untouched; present (incl. null) → replaces (null removes scope)"`
 }
 
 // roleUpdatePermissionsOperation — PATCH /v1/roles/{name}/permissions.

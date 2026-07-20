@@ -49,4 +49,4 @@ Closed beta, best-effort support (no SLA).
 
 ## License
 
-[Apache License 2.0](LICENSE). Open core: enterprise features live in separate repositories under a separate commercial license, pulling this core in as a dependency ([ADR-016](docs/adr/0016-parity-license.md)).
+Core (this repository) — [Business Source License 1.1](LICENSE) (fair-code): source is open, production use is allowed, **except** reselling Soul Stack to third parties as a hosted/managed service; each version automatically becomes [Apache 2.0](https://www.apache.org/licenses/LICENSE-2.0) after 2 years (Change Date). SDK, examples and plugins remain Apache 2.0; enterprise features — separate commercial license ([ADR-016](docs/adr/0016-parity-license.md)). Plain-language summary of what you can do — [LICENSING.md](LICENSING.md).

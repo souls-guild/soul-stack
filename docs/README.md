@@ -44,7 +44,7 @@ Production installation operational runbook. Reference, not a tutorial. All file
 
 | Document | What is it / purpose |
 |---|---|
-| [guides/day-2.md](guides/day-2.md) | **Operator work cycle (Day-2).** Step-by-step practices: drift-check and reconcile, Service and Soul upgrades, fleet scaling, incidents and recovery, automation of regular operations. A bridge between initial deployments and day-to-day operations. |
+| [guides/operator-workflow.md](guides/operator-workflow.md) | **Operator work cycle.** Step-by-step practices: drift-check and reconcile, Service and Soul upgrades, souls scaling, incidents and recovery, automation of regular operations. A bridge between initial deployments and day-to-day operations. |
 | [operations/monitoring.md](operations/monitoring.md) | Cluster monitoring: Prometheus, OTel metrics, what and how to monitor. |
 | [operations/scaling.md](operations/scaling.md) | Horizontal scaling of a stateless-Keeper cluster for a large fleet. |
 | [operations/upgrade.md](operations/upgrade.md) | Updating the cluster and services: order, compatibility, migrations. |
@@ -138,7 +138,7 @@ Design, invariants, rationales and safety boundaries.
 | Document | What is this |
 |---|---|
 | [known-limitations.md](known-limitations.md) | What is NOT included in the closed beta: cloud-provisioning without REST/MCP/UI, incomplete MCP coverage, audit-scaling on large fleets, supply-chain signature, JWT-only identity, push / recovery / Redis profile. Each point with a link to the canon - so that the absence of a feature is not mistaken for a bug. |
-| [backlog.md](backlog.md) | **Backlog of deferred major epics**: deliberately paused features with a fixed impact, pragmatic workaround and resumption conditions (not open Q, not design). Now: per-service uniqueness of the incarnation name (detachment of `incarnation.name` from the Coven label). |
+| [backlog.md](backlog.md) | **Backlog of deferred major epics**: deliberately paused features with a fixed impact, pragmatic workaround and resumption conditions (not open Q, not design). Now: per-service uniqueness of the incarnation name (the name is still a global PK). |
 | [prod-readiness.md](prod-readiness.md) | **GA-gap roadmap**: what is not ready for production / GA (based on audit code results). P0-blockers (e2e-live blocking, clean-room onboarding, release-distribution + cosign, Shepherd, recovery-lease live, external pentest, remove `continue-on-error`), P1-hardening, P2 + strong points and proven load. The source of truth for GA-limits is on par with known-limitations.md; **not to be confused with drifting roadmap.md**. |
 
 **Status.** MVP feature-complete: three binaries (`keeper` / `soul` / `soul-lint`) implemented, Keeper HA cluster (Postgres + Redis) proven on a live testbed; **released `v0.1.0-beta.1` (closed beta, private repos `souls-guild`)**. Build / lint / tests - targets [`Makefile`](../Makefile) (`make build` / `make test` / `make check`). All architectural decisions go through ADR ([adr/](adr/README.md)); documentation is ahead of the code - a design change is an edit of the corresponding ADR, and not "new code as it happens."

@@ -15,6 +15,10 @@ import (
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
+
+	"github.com/souls-guild/soul-stack/keeper/internal/certissue"
+	"github.com/souls-guild/soul-stack/keeper/internal/certpolicy"
+	"github.com/souls-guild/soul-stack/shared/audit"
 )
 
 // --- fake pool/tx for CertRotator ---
@@ -203,15 +207,18 @@ func (r certErrRow) Scan(_ ...any) error { return r.err }
 // --- fake PKI signer / vault writer / csrgen ---
 
 type fakeSigner struct {
-	err  error
-	cert []byte
+	err      error
+	cert     []byte
+	gotMount string // captures the args of the last SignCSR call (for asserting mount/role)
+	gotRole  string
 }
 
-func (s *fakeSigner) SignCSR(_ context.Context, _, _, _ string) (*SignedCert, error) {
+func (s *fakeSigner) SignCSR(_ context.Context, mount, role, _ string) (*certissue.SignedCert, error) {
+	s.gotMount, s.gotRole = mount, role
 	if s.err != nil {
 		return nil, s.err
 	}
-	return &SignedCert{
+	return &certissue.SignedCert{
 		CertificatePEM: s.cert,
 		SerialNumber:   "0a0b0c",
 		NotAfter:       time.Now().Add(365 * 24 * time.Hour),
@@ -257,25 +264,48 @@ func fakeCSRGen(_ string, _ []string) (privateKeyPEM, csrPEM []byte, err error) 
 
 // dueRow builds a due scan row with selectDueCertsSQL columns.
 func dueRow(certID, incarnation string, notAfter time.Time) []any {
-	return []any{certID, incarnation, "cert", "secret/redis/x/tls/cert#cert", "old-serial", strings.Repeat("a", 64), notAfter, nil, nil}
+	return []any{certID, incarnation, "cert", "secret/redis/x/tls/cert#cert", "old-serial", strings.Repeat("a", 64), notAfter, nil}
 }
 
 func testRotatorCfg() CertRotatorConfig {
 	return CertRotatorConfig{
 		Threshold:           30 * 24 * time.Hour,
 		DefaultPKIMount:     "pki",
-		DefaultPKIRole:      "service-tls",
 		MaxRotationsPerTick: 20,
 	}
 }
 
-// buildRotator builds CertRotator over fakes.
-func buildRotator(db *fakeCertDB, signer PKISigner, vw CertVaultWriter, cfg CertRotatorConfig) *CertRotator {
+// fakePolicyResolver returns a given policy/error (a stand-in for certpolicy.Resolver).
+type fakePolicyResolver struct {
+	pol certpolicy.Policy
+	err error
+}
+
+func (f *fakePolicyResolver) Resolve(_ context.Context, _ string) (certpolicy.Policy, error) {
+	return f.pol, f.err
+}
+
+// enabledCertPolicy is the default enabled policy: scenario = rotateTLSScenario
+// (and it is in KnownScenarios), pki_role is set. The rotator's happy path passes all skips.
+func enabledCertPolicy() certpolicy.Policy {
+	return certpolicy.Policy{
+		Service:        "redis",
+		Present:        true,
+		Enabled:        true,
+		Scenario:       rotateTLSScenario,
+		PKIRole:        "service-tls",
+		KnownScenarios: []string{rotateTLSScenario},
+	}
+}
+
+// buildRotator assembles a CertRotator on top of fakes with an enabled policy.
+func buildRotator(db *fakeCertDB, signer certissue.Signer, vw CertVaultWriter, cfg CertRotatorConfig) *CertRotator {
 	return newCertRotatorFromDB(db, CertRotatorDeps{
 		Signer: signer,
 		Vault:  vw,
 		CSRGen: fakeCSRGen,
 		Cfg:    func() CertRotatorConfig { return cfg },
+		Policy: &fakePolicyResolver{pol: enabledCertPolicy()},
 		Logger: silentLogger(),
 	})
 }
@@ -318,10 +348,56 @@ func TestCertRotator_HappyRotation(t *testing.T) {
 	}
 }
 
-// TestCertRotator_SingleWinner_LostCAS guards single-winner behavior
-// (design.md): if CAS active->rotating returns 0 because another tick/instance
-// intercepted it, rotation does NOT happen: no Voyage, no Vault writes, no
-// inserts. Two ticks for one due cert must not spawn two rotations.
+// TestCertRotator_EmitsRotatedAudit_NoSecretLeak - GUARD (NIM-99 QA G3): the happy path
+// of rotation emits cert.rotated with a NON-secret payload (incarnation/fingerprint/
+// serial/not_after/voyage/superseded), but WITHOUT the private key or PEM (symmetric with
+// the issued-audit).
+func TestCertRotator_EmitsRotatedAudit_NoSecretLeak(t *testing.T) {
+	db := &fakeCertDB{
+		dueRows:    [][]any{dueRow("cert-1", "redis-prod", time.Now().Add(24*time.Hour))},
+		casResults: []int64{1},
+	}
+	fa := &fakeAuditWriter{}
+	r := newCertRotatorFromDB(db, CertRotatorDeps{
+		Signer: &fakeSigner{cert: makeTestCertPEM(t)},
+		Vault:  &fakeVaultWriter{},
+		CSRGen: fakeCSRGen,
+		Cfg:    func() CertRotatorConfig { return testRotatorCfg() },
+		Policy: &fakePolicyResolver{pol: enabledCertPolicy()},
+		Audit:  fa,
+		Logger: silentLogger(),
+	})
+
+	if _, err := r.Run(context.Background(), 0, 0); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if len(fa.events) != 1 {
+		t.Fatalf("expected 1 cert.rotated event, got %d", len(fa.events))
+	}
+	ev := fa.events[0]
+	if ev.EventType != audit.EventCertRotated {
+		t.Errorf("EventType = %q, want %q", ev.EventType, audit.EventCertRotated)
+	}
+	if ev.Source != audit.SourceKeeperInternal {
+		t.Errorf("Source = %q, want keeper_internal", ev.Source)
+	}
+	for _, k := range []string{"incarnation", "fingerprint", "serial_number", "not_after", "voyage_id", "superseded_cert_id"} {
+		if _, ok := ev.Payload[k]; !ok {
+			t.Errorf("payload does not contain non-secret key %q", k)
+		}
+	}
+	// The private key/PEM must not leak into the payload.
+	for _, k := range []string{"key", "key_pem", "KeyPEM", "cert_pem", "cert", "private_key", "pem"} {
+		if _, leaked := ev.Payload[k]; leaked {
+			t.Errorf("payload must not carry secret %q", k)
+		}
+	}
+}
+
+// TestCertRotator_SingleWinner_LostCAS - GUARD single-winner (design.md): if
+// the active->rotating CAS returned 0 (another tick/instance grabbed it), rotation does NOT
+// happen - no Voyage, no Vault writes, no inserts. Two ticks on one
+// due-cert do not spawn two rotations.
 func TestCertRotator_SingleWinner_LostCAS(t *testing.T) {
 	certPEM := makeTestCertPEM(t)
 	db := &fakeCertDB{
@@ -437,7 +513,6 @@ func TestCertRotator_Jitter_SpreadsSameExpiry(t *testing.T) {
 		Threshold:           30 * 24 * time.Hour,
 		JitterWindow:        20 * 24 * time.Hour,
 		DefaultPKIMount:     "pki",
-		DefaultPKIRole:      "svc",
 		MaxRotationsPerTick: 100,
 	}
 	// not_after = now + threshold + 10d: without jitter NOBODY is due

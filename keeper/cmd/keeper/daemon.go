@@ -35,6 +35,8 @@ import (
 	keeperoidc "github.com/souls-guild/soul-stack/keeper/internal/auth/oidc"
 	"github.com/souls-guild/soul-stack/keeper/internal/bootstrap"
 	"github.com/souls-guild/soul-stack/keeper/internal/cadence"
+	"github.com/souls-guild/soul-stack/keeper/internal/certissue"
+	"github.com/souls-guild/soul-stack/keeper/internal/certpolicy"
 	"github.com/souls-guild/soul-stack/keeper/internal/cloudinit"
 	"github.com/souls-guild/soul-stack/keeper/internal/conductor"
 	"github.com/souls-guild/soul-stack/keeper/internal/coremod"
@@ -177,6 +179,24 @@ type daemon struct {
 	// redis_settings editor). Per-keeper, not cluster-wide -- read-only
 	// catalog (parity with serviceDependencies).
 	serviceDirectives *serviceregistry.DirectivesCache
+
+	// serviceCertPolicy — TTL cache of the `certificate_rotation:` section of the
+	// Service manifest (parity with serviceStateSchema); feeds certPolicyResolver.
+	// Per-keeper, read-only.
+	serviceCertPolicy *serviceregistry.CertPolicyCache
+
+	// certPolicyResolver — resolver of the effective cert-rotation policy of an
+	// incarnation (incarnation → pinned service snapshot → certificate_rotation
+	// section). Shared input for reaper.CertRotator (who to rotate) and
+	// core.cert.issued (signing role).
+	certPolicyResolver *certpolicy.Resolver
+
+	// serviceTelemetry — TTL cache of the default (per-service, no essence)
+	// host-vitals telemetry config from the manifest of the Service git-repo
+	// snapshot for `GET /v1/services/{name}/telemetry` (UI editor, ADR-042/072).
+	// Per-keeper, not cluster-wide — read-only config (parity with
+	// serviceDirectives).
+	serviceTelemetry *serviceregistry.TelemetryCache
 
 	// --- augur (ADR-025) ---
 	// augurSvc -- management CRUD for the Omen / Rite registries (OpenAPI/MCP).
@@ -984,9 +1004,24 @@ func (d *daemon) setupCoreModules(ctx context.Context) error {
 		// Keeper daemon runtime wiring note.
 		CertStore: coremodcert.NewPGStore(d.pool),
 		KID:       cfg.KID,
-		// Keeper daemon runtime wiring note.
-		// Keeper daemon runtime wiring note.
-		// Keeper daemon runtime wiring note.
+		// Cert* — state `core.cert.issued` (NIM-99): shares signer/writer/csrgen
+		// with reaper.CertRotator. CertPolicy — lazy (the resolver is built in
+		// setupScenarioDeps AFTER this step); PKIMount — hot-reload keeper.yml
+		// snapshot.
+		CertSigner:      certPKISignerAdapter{vc: d.vc},
+		CertVaultWriter: d.vc,
+		CertPolicy:      lazyCertPolicy{d: d},
+		CertCSRGen:      certServiceCSRGen,
+		CertPKIMount: func() string {
+			if c := d.store.Get(); c != nil {
+				return c.Vault.PKIMount
+			}
+			return ""
+		},
+		// `core.bootstrap.delivered` teleport mode (ADR-063 amendment): dialer
+		// from keeper.yml::push.teleport. nil/"" → direct, and since the direct
+		// set (providers/host-CA) is not filled in here, the module does not
+		// register.
 		BootstrapTransport: bootstrapTransport,
 		BootstrapDial:      bootstrapDial,
 		// Keeper daemon runtime wiring note.
@@ -1409,6 +1444,34 @@ func (d *daemon) setupScenarioDeps(_ context.Context) error {
 	// Keeper daemon runtime wiring note.
 	// Keeper daemon runtime wiring note.
 	// Keeper daemon runtime wiring note.
+
+	// TTL cache of the default host-vitals telemetry config for
+	// `GET /v1/services/{name}/telemetry` (ADR-042/072). The lister loads the
+	// snapshot via d.serviceLoader.Load → effective manifest defaults `telemetry:`
+	// (essence=nil → pure per-service default) + snapshot SHA1 (ETag). Parity
+	// with serviceDirectives.
+	d.serviceTelemetry = serviceregistry.NewTelemetryCache(
+		serviceregistry.TelemetryListerFunc(func(ctx context.Context, name, gitURL, ref string) (*serviceregistry.TelemetryCatalog, error) {
+			art, err := d.serviceLoader.Load(ctx, artifact.ServiceRef{Name: name, Git: gitURL, Ref: ref})
+			if err != nil {
+				return nil, err
+			}
+			var mt *config.TelemetryConfig
+			if art.Manifest != nil {
+				mt = art.Manifest.Telemetry
+			}
+			return &serviceregistry.TelemetryCatalog{
+				SHA1:      art.SHA1,
+				Telemetry: essence.ResolveEffectiveTelemetry(mt, nil),
+			}, nil
+		}),
+		0, // 0 → default TelemetryTTL
+	)
+
+	// topologyResolver is assembled below, in setupGRPCEventStream: its presence
+	// phase (Variant A, ADR-006(a)) derives "Soul online" from the live Redis
+	// SID-lease, and d.redisClient is only brought up in setupRedis (after this
+	// step).
 	d.essenceResolver = essence.NewResolver(logger)
 	celEngine, err := cel.New(cel.WithVault(d.vc))
 	if err != nil {
@@ -1421,9 +1484,19 @@ func (d *daemon) setupScenarioDeps(_ context.Context) error {
 	// Keeper daemon runtime wiring note.
 	// Keeper daemon runtime wiring note.
 	d.serviceRegistry = scenario.NewServiceRegistry(d.serviceHolder)
-	// Keeper daemon runtime wiring note.
-	// Keeper daemon runtime wiring note.
-	// Keeper daemon runtime wiring note.
+	// serviceCertPolicy + certPolicyResolver (NIM-99): TTL cache of the
+	// certificate_rotation manifest section (parity with the other service*
+	// caches) and the resolver of the effective incarnation policy. Feed
+	// reaper.CertRotator (who to rotate) and core.cert.issued (PKI signing role
+	// from the manifest).
+	d.serviceCertPolicy = serviceregistry.NewCertPolicyCache(
+		serviceregistry.CertPolicyListerFunc(func(ctx context.Context, name, gitURL, ref string) (*artifact.CertPolicyInfo, error) {
+			return d.serviceLoader.LoadCertPolicy(ctx, artifact.ServiceRef{Name: name, Git: gitURL, Ref: ref})
+		}), 0)
+	d.certPolicyResolver = certpolicy.NewResolver(d.pool, d.serviceRegistry, d.serviceCertPolicy)
+	// Source of destiny artifacts for apply:destiny (ADR-009): git-URL —
+	// default_destiny_source + {name} (read LAZILY from serviceHolder, so the
+	// scalar hot-reload takes effect), ref — service.yml::destiny[].
 	destinyLoader := artifact.NewDestinyLoader(destinyCacheRoot(cfg), logger)
 	d.destinySource = scenario.NewDestinySource(destinyLoader, d.serviceHolder)
 	return nil
@@ -2909,6 +2982,17 @@ func (d *daemon) setupGRPCEventStream(ctx context.Context) error {
 		// Keeper daemon runtime wiring note.
 		// Keeper daemon runtime wiring note.
 		// Keeper daemon runtime wiring note.
+		// Connect-time broadcast of the effective host-vitals telemetry config
+		// (ADR-072, NIM-87): per-SID resolve (souls→incarnation→service-artifact
+		// manifest `telemetry:` + essence-override) on top of the shared pool +
+		// service registry (git coordinates by name) + Service loader + essence
+		// resolver. No incarnation → broadcast is skipped (Soul stays on its
+		// soul-local cadence).
+		TelemetrySource: keepergrpc.NewTelemetrySource(d.pool, d.serviceRegistry, d.serviceLoader, d.essenceResolver, logger),
+		// Toll cluster-detector hook (ADR-038): NotifyDisconnect is invoked on
+		// every exit of the EventStream handler (Recv-error / ctx-cancel). With
+		// Toll disabled, d.tollWatcher = nil → handler-side hook no-op (see
+		// notifyTollDisconnect in eventstream.go).
 		TollNotifier: tollNotifierOrNil(d.tollWatcher),
 		// Keeper daemon runtime wiring note.
 		// Keeper daemon runtime wiring note.
@@ -4062,6 +4146,35 @@ func (d *daemon) setupAPIServer(ctx context.Context) error {
 		return errSetupFailed
 	}
 
+	// exchange_ttl — the short TTL of the Bearer issued by POST /auth/token
+	// (NIM-77, Variant B). Separate from ttl_default (24h): the refresh exchange
+	// hands out a short-lived token, default 10m, floor 1m (clampExchangeTTL).
+	exchangeTTL, err := parseTTL(d.cfg.Auth.JWT.ExchangeTTL, "auth.jwt.exchange_ttl", 10*time.Minute)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "keeper run: %v\n", err)
+		return errSetupFailed
+	}
+	if clamped := clampExchangeTTL(exchangeTTL); clamped != exchangeTTL {
+		if d.logger != nil {
+			d.logger.Warn("auth.jwt.exchange_ttl below minimum, raised to floor",
+				slog.Duration("configured", exchangeTTL), slog.Duration("floor", minExchangeTTL))
+		}
+		exchangeTTL = clamped
+	}
+	// AuthToken — session-cookie→short Bearer exchange (NIM-77): the same shared
+	// verifier/issuer as RequireJWT/login; revoked check against the in-memory
+	// RBAC snapshot (d.rbacHolder, map-lookup, not SQL).
+	authTokenDeps := &api.AuthTokenDeps{
+		Verifier: d.verifier,
+		Issuer:   d.issuer,
+		TTL:      exchangeTTL,
+		Revoked:  d.rbacHolder,
+		Logger:   d.logger,
+	}
+	// AuthMethods — booleans for the public GET /auth/methods (UI login form):
+	// password is always available; ldap/oidc — based on actual configuration.
+	authMethods := api.AuthMethodsDeps{Password: true, LDAP: ldapAuth != nil, OIDC: oidcAuth != nil}
+
 	srv, err := api.NewServer(cfg.Listen.OpenAPI, api.Deps{
 		JWTVerifier:         d.verifier,
 		JWTIssuer:           d.issuer,
@@ -4079,6 +4192,7 @@ func (d *daemon) setupAPIServer(ctx context.Context) error {
 		ServiceStateSchema:  d.serviceStateSchema,
 		ServiceDependencies: d.serviceDependencies,
 		ServiceDirectives:   d.serviceDirectives,
+		ServiceTelemetry:    d.serviceTelemetry,
 		AugurSvc:            d.augurSvc,
 		OracleSvc:           d.oracleSvc,
 		OperatorDB:          d.pool,
@@ -4099,9 +4213,14 @@ func (d *daemon) setupAPIServer(ctx context.Context) error {
 		// Keeper daemon runtime wiring note.
 		// Keeper daemon runtime wiring note.
 		SoulPresence: soulPresence,
-		// Keeper daemon runtime wiring note.
-		// Keeper daemon runtime wiring note.
-		// Keeper daemon runtime wiring note.
+		// UtilizationReader — host-vitals from Redis for the telemetry endpoints
+		// (NIM-86). Value adapter (not a typed-nil interface): with nil-Redis
+		// (single-Keeper dev), the internal nil-guard returns stale/empty.
+		UtilizationReader: utilizationReader{rc: d.redisClient},
+		// SoulStatsStaleFn — hot-reload disconnect threshold for stale_count in
+		// GET /v1/souls/stats (the same mark_disconnected.stale_after that flushes
+		// last_seen_at and the Reaper): reads a fresh cfg snapshot on every
+		// request.
 		SoulStatsStaleFn: func() time.Duration {
 			return reaper.ResolveMarkDisconnectedStale(d.store.Get().Reaper)
 		},
@@ -4207,9 +4326,16 @@ func (d *daemon) setupAPIServer(ctx context.Context) error {
 		// Keeper daemon runtime wiring note.
 		// Keeper daemon runtime wiring note.
 		OIDCAuth: oidcAuth,
-		// Keeper daemon runtime wiring note.
-		// Keeper daemon runtime wiring note.
-		// Keeper daemon runtime wiring note.
+		// AuthToken / AuthMethods — session-cookie→Bearer exchange (POST
+		// /auth/token, NIM-77 Variant B) + public GET /auth/methods.
+		// /auth/methods is always mounted; /auth/token — when AuthToken is
+		// non-nil.
+		AuthToken:   authTokenDeps,
+		AuthMethods: authMethods,
+		// LoginGuard / LoginLimitCfg — anti-bruteforce for public login
+		// endpoints (ADR-058(g), HIGH-3). nil-guard (no Redis /
+		// auth.rate_limit.enabled=false) → login without throttle (passthrough).
+		// loginGuardOrNil — typed-nil-guard.
 		LoginGuard:    loginGuardOrNil(d.loginGuard),
 		LoginLimitCfg: d.loginLimitCfg(),
 		// Keeper daemon runtime wiring note.
@@ -4740,9 +4866,30 @@ func (c topologyLeaseChecker) SoulsStreamAlive(ctx context.Context, sids []strin
 	return keeperredis.SoulsStreamAlive(ctx, c.rc, sids)
 }
 
-// Keeper daemon runtime wiring note.
-// Keeper daemon runtime wiring note.
-// Keeper daemon runtime wiring note.
+// utilizationReader adapts a Redis client into the host-vitals reader for the
+// telemetry endpoints (NIM-86, [handlers.UtilizationReader]). Mirrors
+// topologyLeaseChecker; nil-Redis (dev/unit without Redis) → stale/empty, does
+// not panic.
+type utilizationReader struct{ rc *keeperredis.Client }
+
+func (u utilizationReader) ReadUtilization(ctx context.Context, sid string) (keeperredis.UtilizationSnapshot, bool, error) {
+	if u.rc == nil {
+		return keeperredis.UtilizationSnapshot{}, false, nil
+	}
+	return keeperredis.ReadUtilization(ctx, u.rc, sid)
+}
+
+func (u utilizationReader) ReadUtilizationWindow(ctx context.Context, sid string, limit int) ([]keeperredis.UtilizationPoint, error) {
+	if u.rc == nil {
+		return nil, nil
+	}
+	return keeperredis.ReadUtilizationWindow(ctx, u.rc, sid, limit)
+}
+
+// clusterRegistryAdapter adapts a Redis client into the Conclave read surface
+// for `GET /v1/cluster` ([handlers.ClusterRegistry]). A narrow shim to keep
+// the api package isolated from keeperredis (the handler depends on the
+// interface, not the client).
 type clusterRegistryAdapter struct{ rc *keeperredis.Client }
 
 func (a clusterRegistryAdapter) LiveKIDs(ctx context.Context) ([]string, error) {
@@ -4809,11 +4956,25 @@ func (p lazySoulPresence) SoulsStreamAlive(ctx context.Context, sids []string) (
 	return keeperredis.SoulsStreamAlive(ctx, p.d.redisClient, sids)
 }
 
-// Keeper daemon runtime wiring note.
-// Keeper daemon runtime wiring note.
-// Keeper daemon runtime wiring note.
-// Keeper daemon runtime wiring note.
-// Keeper daemon runtime wiring note.
+// lazyCertPolicy — the cert-rotation policy resolver for `core.cert.issued`,
+// reading d.certPolicyResolver LAZILY: setupCoreModules assembles coremod.Deps
+// BEFORE setupScenarioDeps, where the resolver is constructed. nil-resolver →
+// an explicit error (issued step fails), not a panic.
+type lazyCertPolicy struct{ d *daemon }
+
+func (l lazyCertPolicy) Resolve(ctx context.Context, name string) (certpolicy.Policy, error) {
+	if l.d.certPolicyResolver == nil {
+		return certpolicy.Policy{}, fmt.Errorf("cert policy resolver not ready")
+	}
+	return l.d.certPolicyResolver.Resolve(ctx, name)
+}
+
+// leaseOwnerChecker adapts a Redis client into the multi-keeper guard for the
+// old dispatch path of the scenario runner (footgun acolytes=0): returns the
+// KID owner of the SID lease. A narrow shim to keep the scenario package
+// isolated from keeperredis (the runner depends on the
+// [scenario.LeaseOwnerChecker] interface, not directly on the client) — the
+// same approach as topologyLeaseChecker.
 type leaseOwnerChecker struct{ rc *keeperredis.Client }
 
 func (c leaseOwnerChecker) SoulLeaseOwner(ctx context.Context, sid string) (string, bool, error) {
@@ -5508,14 +5669,9 @@ func (d *daemon) setupReaper(ctx context.Context) error {
 			certRotator = reaper.NewCertRotator(d.pool, reaper.CertRotatorDeps{
 				Signer: certPKISignerAdapter{vc: d.vc},
 				Vault:  d.vc,
-				CSRGen: func(cn string, dns []string) ([]byte, []byte, error) {
-					g, gerr := keepervault.GenerateServiceCSR(keepervault.CSRParams{CommonName: cn, DNSNames: dns})
-					if gerr != nil {
-						return nil, nil, gerr
-					}
-					return g.PrivateKeyPEM, g.CSRPEM, nil
-				},
+				CSRGen: certServiceCSRGen,
 				Cfg:    func() reaper.CertRotatorConfig { return resolveCertRotatorConfig(d.store.Get(), logger) },
+				Policy: d.certPolicyResolver,
 				Audit:  d.auditWriter,
 				Logger: logger,
 				KID:    cfg.KID,
@@ -5576,17 +5732,19 @@ func (d *daemon) setupReaper(ctx context.Context) error {
 	return nil
 }
 
-// Keeper daemon runtime wiring note.
-// Keeper daemon runtime wiring note.
-// Keeper daemon runtime wiring note.
+// certPKISignerAdapter adapts *keepervault.Client to certissue.Signer:
+// vault.SignCSR returns *vault.SignedCertificate, certissue expects
+// *certissue.SignedCert (certissue does not import the vault package for the
+// sake of the result type — see certissue/issue.go). Shared signer for
+// reaper.CertRotator and core.cert.issued.
 type certPKISignerAdapter struct{ vc *keepervault.Client }
 
-func (a certPKISignerAdapter) SignCSR(ctx context.Context, mount, role, csrPEM string) (*reaper.SignedCert, error) {
+func (a certPKISignerAdapter) SignCSR(ctx context.Context, mount, role, csrPEM string) (*certissue.SignedCert, error) {
 	signed, err := a.vc.SignCSR(ctx, mount, role, csrPEM)
 	if err != nil {
 		return nil, err
 	}
-	return &reaper.SignedCert{
+	return &certissue.SignedCert{
 		CertificatePEM: signed.CertificatePEM,
 		CAChainPEM:     signed.CAChainPEM,
 		SerialNumber:   signed.SerialNumber,
@@ -5594,25 +5752,32 @@ func (a certPKISignerAdapter) SignCSR(ctx context.Context, mount, role, csrPEM s
 	}, nil
 }
 
-// Keeper daemon runtime wiring note.
-// Keeper daemon runtime wiring note.
-// Keeper daemon runtime wiring note.
-// Keeper daemon runtime wiring note.
-// Keeper daemon runtime wiring note.
-// Keeper daemon runtime wiring note.
-// Keeper daemon runtime wiring note.
-// Keeper daemon runtime wiring note.
-// Keeper daemon runtime wiring note.
-// Keeper daemon runtime wiring note.
-// Keeper daemon runtime wiring note.
-// Keeper daemon runtime wiring note.
+// certServiceCSRGen generates a keypair+CSR (keeper-side, R2) via
+// vault.GenerateServiceCSR. A package-level function (not an inline closure):
+// a single source for reaper.CertRotator and core.cert.issued
+// (coremod.Deps.CertCSRGen).
+func certServiceCSRGen(cn string, dns []string) ([]byte, []byte, error) {
+	g, gerr := keepervault.GenerateServiceCSR(keepervault.CSRParams{CommonName: cn, DNSNames: dns})
+	if gerr != nil {
+		return nil, nil, gerr
+	}
+	return g.PrivateKeyPEM, g.CSRPEM, nil
+}
+
+// resolveCertRotatorConfig assembles the rotate_due_certs rule policy from a
+// fresh keeper.yml snapshot (called on every tick — hot-reload).
+// rotate_threshold/rotate_jitter are parsed via config.ParseDuration
+// (convention `<N>d`, like all reaper rules), NOT via stdlib
+// time.ParseDuration — otherwise `30d` fails to parse, Threshold collapses to
+// 0, and the rule SILENTLY stops rotating even with enabled:true (a quiet
+// security failure). An invalid format is not swallowed: warn-log + the field
+// stays zero (the rule is inert), symmetric with runDurationRule.
 func resolveCertRotatorConfig(cfg *config.KeeperConfig, logger *slog.Logger) reaper.CertRotatorConfig {
 	out := reaper.CertRotatorConfig{}
 	if cfg == nil {
 		return out
 	}
 	out.DefaultPKIMount = cfg.Vault.PKIMount
-	out.DefaultPKIRole = cfg.Vault.PKIRole
 	if cfg.Reaper == nil || cfg.Reaper.Rules == nil {
 		return out
 	}

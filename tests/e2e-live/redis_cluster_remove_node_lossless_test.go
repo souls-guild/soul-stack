@@ -93,7 +93,7 @@ func TestL3cRedisClusterRemoveNode_SlotMigrationLossless(t *testing.T) {
 	defer stack.Cleanup()
 
 	for i := range stack.SoulContainers {
-		stack.AddSoulToCoven(t, i, incName)
+		stack.AddMember(t, i, incName)
 		stack.WaitSoulprintReported(t, i, 60)
 	}
 	stack.MaterializeDestinies(t, "v1.0.0", "redis")

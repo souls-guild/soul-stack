@@ -66,10 +66,11 @@ type incarnationCreateOutput struct {
 // "scenario runner is not configured" (mirrors REST Run/Upgrade without deps).
 //
 // RBAC — body-scoped OR-Check (parity with REST IncarnationCreateScopeSelector
-// + RequirePermissionMulti): scope = covens ∪ {name} (declared env tags + name
-// as the root Coven label, ADR-008). Without this, a coven-scoped operator
-// could bypass REST protection via MCP (least-privilege: scope `coven=dev`
-// must NOT create an incarnation with covens=[prod]). bare/`*` matches any
+// + RequirePermissionMulti): scope = the declared covens, plus the
+// `incarnation=<name>` dimension (ADR-008 amendment 2026-07-17/NIM-124: name is
+// NOT a coven). Without this, a coven-scoped operator could bypass REST
+// protection via MCP (least-privilege: scope `coven=dev` must NOT create an
+// incarnation with covens=[prod]). bare/`*` matches any
 // (as before). audit: EventIncarnationCreated {name, service, covens,
 // apply_id}, source=mcp.
 func (h *Handler) callIncarnationCreate(ctx context.Context, claims *jwt.Claims, req jsonRPCRequest, args json.RawMessage) jsonRPCResponse {

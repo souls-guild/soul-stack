@@ -200,6 +200,7 @@ func collectRoutes(t *testing.T) map[route]struct{} {
 		stubOperatorHandler(t),
 		handlers.NewIncarnationHandler(nil, nil, nil, nil, nil, nil, nil, nil, nil),
 		handlers.NewSoulHandler(nil, nil, nil, nil),
+		handlers.TelemetrySpecStub(), // telemetryH — telemetry routes are non-opt-in; a non-nil stub makes them appear in chi.Walk (matches the spec)
 		stubRoleHandler(t),
 		stubSynodHandler(t),
 		stubSigilHandler(t),
@@ -230,11 +231,13 @@ func collectRoutes(t *testing.T) map[route]struct{} {
 		nil,                                  // tollDegradedReader — DegradedMiddleware skips when nil (router.go)
 		nil,                                  // tempoLimiter — nil → RateLimit middleware passthrough (router.go)
 		nil,                                  // tempoMetrics — nil → emit no-op (router.go)
-		nil,                                  // tempoVoyageCreateLimits — nil is fine (RateLimit doesn't call the provider when the limiter is nil)
-		nil,                                  // tempoVoyagePreviewLimits — nil is fine (RateLimit doesn't call the provider when the limiter is nil)
+		nil,                                  // tempoVoyageCreateLimits — nil is fine (RateLimit does not call the provider on a nil limiter)
+		nil,                                  // tempoVoyagePreviewLimits — nil is fine (RateLimit does not call the provider on a nil limiter)
 		false,                                // webUIEnabled — /ui is outside /v1, the drift-walker doesn't see it; keep it off for perimeter cleanliness
-		nil,                                  // ldapAuth (LDAP isn't configured in the test)
-		nil,                                  // oidcAuth (OIDC isn't configured in the test)
+		nil,                                  // ldapAuth (LDAP is not configured in the test)
+		nil,                                  // oidcAuth (OIDC is not configured in the test)
+		authTokenSpecStub(),                  // authToken — /auth/token is mounted (NIM-77); in both the spec AND the router → no allowlist entry needed
+		AuthMethodsDeps{Password: true},      // authMethods — /auth/methods is mounted unconditionally
 		nil,                                  // loginGuard (anti-bruteforce off in the test)
 		apimiddleware.AuthLoginLimitConfig{}, // loginLimitCfg
 		nil,                                  // soulStatsStaleFn (default 90s in the test)
@@ -349,7 +352,7 @@ func stubServiceHandler(t *testing.T) *handlers.ServiceHandler {
 	if err != nil {
 		t.Fatalf("serviceregistry.NewService(stub): %v", err)
 	}
-	return handlers.NewServiceHandler(svc, nil, nil, nil, nil, nil, nil)
+	return handlers.NewServiceHandler(svc, nil, nil, nil, nil, nil, nil, nil)
 }
 
 type stubServicePool struct{ serviceregistry.ServicePool }

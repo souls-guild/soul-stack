@@ -1,18 +1,19 @@
 # core.file
 
-File and directory management: creation with specified content/permissions/owner,
-deletion, rendering from text/template template, creating a directory. **Soul-side**,
-is statically built into the `soul` binary. Implementation -
+File management: creation with specified content/permissions/owner, deletion,
+rendering from text/template template. **Soul-side**, is statically built into
+the `soul` binary. Implementation -
 [`soul/internal/coremod/file/file.go`](../../../../soul/internal/coremod/file/file.go)
-(present/absent), [`soul/internal/coremod/file/rendered.go`](../../../../soul/internal/coremod/file/rendered.go)
-(rendered) and [`soul/internal/coremod/file/directory.go`](../../../../soul/internal/coremod/file/directory.go)
-(directory).
+(present/absent) and [`soul/internal/coremod/file/rendered.go`](../../../../soul/internal/coremod/file/rendered.go)
+(rendered).
 
 `core.file` intentionally covers multiple roles: `present` with inline-`content`
 replaces `core.copy`, `rendered` replaces `core.template`
 ([ADR-015](../../../adr/0015-core-modules-mvp.md): these modules
-are not separately allocated), `directory` declaratively creates a directory instead
-`core.exec.run` with `install -d`.
+are not separately allocated). Directory management is a separate top-level module
+[`core.directory`](../directory/README.md) ([ADR-015 Amendment
+2026-07-17](../../../adr/0015-core-modules-mvp.md); hard rename, the former
+`core.file.directory` state is removed).
 
 ## States
 
@@ -21,7 +22,6 @@ are not separately allocated), `directory` declaratively creates a directory ins
 | `present` | The file exists with `content` (inline) **or** `src` (host copy) given, plus `mode` / `owner` / `group`. | `changed=true`, if there was no file or the contents are different (verification according to SHA-256 - for `src` this is `sha256(src bytes)`), `mode` or owner/group. Everything coincided - `changed=false`. |
 | `absent` | The file has been deleted. | `changed=true`, if the file was deleted. There is no file - `changed=false`. |
 | `rendered` | File = text/template template rendering result ([ADR-010](../../../adr/0010-templating.md)). | Render to memory → SHA-256 is checked against existing file → write only when diff. `changed=true` if at least one of the content/mode/owner has changed. The entry is atomic (temp + rename in the same directory). |
-| `directory` | The directory exists with `mode` / `owner` / `group` specified. | `changed=true` if the directory was not created (created) or `mode` or owner/group is drifting (fixed - chmod/chown). Everything coincided - `changed=false`. The path is occupied by a file - error, no overwriting. |
 
 ## present — params
 
@@ -74,32 +74,6 @@ is written (TOCTOU protection between reconciliation and write).
 |---|---|---|---|
 | `path` | string | required | Path of the file to be deleted. |
 
-## directory — params
-
-| Param | Type | Required/default | Meaning |
-|---|---|---|---|
-| `path` | string | required | Target directory path. |
-| `mode` | string | optional | Rights in octal form (`"0755"`, `"0750"`). If set, it is applied during creation and verified/repaired during drift; if not specified, mode when created depends on umask and is not checked. |
-| `owner` | string | optional | Owner (username). Resolves through `/etc/passwd`, drift is repaired `chown`. |
-| `group` | string | optional | Group (name). Resolves through `/etc/group`, drift is repaired `chown`. |
-| `parents` | bool | optional (default `false`) | `true` — create intermediate directories (semantics `mkdir -p`). `false` - A missing parent results in an error. |
-
-Idempotency: the directory exists and `mode`/`owner`/`group` are the same → `changed=false`;
-there is no directory → created (`changed=true`, in `output` - `created: true`); catalog
-there is, but the attributes are drifting → `chmod`/`chown` fixes, `changed=true`; the way is busy
-**file** (not directory) → error, existing file **not** overwritten.
-`recurse` (recursive content rights setting) in MVP **not** supported -
-only the directory itself is managed.
-
-**Difference from `core.exec.run install -d`.** `install -d` - imperative
-shell call: executed every run, `changed` is not defined by the module
-(`core.exec.run` itself always "executed the command"), drift verification/repair
-there is no owner and mode, dry-run (Scry) is impossible. `core.file.directory` —
-declarative: idempotent by `mode`/`owner`/`group`, fixes drift, returns
-honest `changed`, the conflict with the file does not mask, and supports Plan/Scry
-([ADR-031](../../../adr/0031-scry-drift.md#adr-031-scry--drift-detection-declarative-dry-run-reconcile)) - `planDirectory` reports the same
-`changed` what Apply would do without touching the host.
-
 ## rendered — params
 
 Param-contract **destiny level** (as the author of the problem writes) differs from
@@ -149,11 +123,11 @@ will not work (there is no value under this key).
 
 ## Capabilities / side-effects
 
-- **Changes the file system:** creates / overwrites / deletes a file, creates
-directory, ruled by mode and owner. For system paths (`/etc/...`) requires
-relevant rights - in practice `run_as_root`.
-- **Does not execute subprocesses** for present/absent/rendered/directory (render,
-entry, `mkdir`/`chmod`/`chown` - in-process, without shell).
+- **Changes the file system:** creates / overwrites / deletes a file, ruled by
+mode and owner. For system paths (`/etc/...`) requires relevant rights - in
+practice `run_as_root`.
+- **Does not execute subprocesses** for present/absent/rendered (render, entry,
+`chmod`/`chown` - in-process, without shell).
 - `rendered` uses the built-in text/template engine (`shared/tmpl`,
 sprig-allowlist; no access to FS/network/environment - three sandbox barriers
 [ADR-010](../../../adr/0010-templating.md)).
@@ -162,8 +136,6 @@ sprig-allowlist; no access to FS/network/environment - three sandbox barriers
 
 `present` and `rendered` give `{ path, sha256, mode, installed: true }`, where
 `sha256` is a hash of the recorded content. `absent` - `{ path, installed: false }`.
-`directory` - `{ path, mode, created }`, where `created` - whether the directory was created in
-this run (`false`, if the attributes already existed and were just being repaired).
 `register:` on a rendered task is typically used as an anchor `onchanges:` for
 service restart when the config changes.
 
@@ -180,20 +152,6 @@ service restart when the config changes.
     mode: "0644"
     owner: root
     group: root
-```
-
-`directory` (replacement `core.exec.run install -d`); `parents: true` creates all
-directory chain:
-
-```yaml
-- name: Ensure exporter data directory
-  module: core.file.directory
-  params:
-    path: /var/lib/node_exporter/textfile
-    parents: true
-    mode: "0755"
-    owner: node_exporter
-    group: node_exporter
 ```
 
 `rendered` from template (role `core.template`); `register` - to restart the service
@@ -271,6 +229,7 @@ practice requires root - the module is executed with process privileges
 ## See also
 
 - [README.md](../../README.md) - directory of core modules.
+- [core/directory/README.md](../directory/README.md) - `core.directory` (directory management, split out of the former `core.file.directory`).
 - [templating.md](../../../templating.md) - standard template engine spec (CEL + text/template).
 - [soul/modules.md](../../../soul/modules.md) - host side of modules and cache.
 - [naming-rules.md → Destiny Modules](../../../naming-rules.md) - a dictionary of names.

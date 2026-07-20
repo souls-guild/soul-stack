@@ -7,6 +7,11 @@
 //   - stopped:   service is stopped.
 //   - restarted: unconditional restart (changed is always true).
 //   - enabled:   autostart on boot (orthogonal to active state).
+//   - disabled:  autostart off (mirror of enabled; orthogonal to stopped — a
+//     disabled unit may still be running).
+//   - masked:    unit masked (systemctl mask, symlink → /dev/null); start
+//     impossible manually or as a dependency; strictly stronger than disabled.
+//     systemd-only (openrc/sysv → fatal error). Disables before masking.
 //
 // Backend is chosen from the soulprint init_system fact (primary, ADR-018(b));
 // the same source as CEL `soulprint.self.os.init_system`, so module and
@@ -132,9 +137,42 @@ func (m *Module) Plan(req *pluginv1.PlanRequest, stream grpc.ServerStreamingServ
 		}
 		// drift: autostart is disabled (Apply would enable it).
 		return util.SendPlanFinal(stream, !enabled)
+	case "disabled":
+		enabled, eerr := m.isEnabled(ctx, init, name)
+		if eerr != nil {
+			return util.PlanFailed(eerr.Error())
+		}
+		// drift: autostart is enabled (Apply would disable it). Mirror of enabled.
+		return util.SendPlanFinal(stream, enabled)
+	case "masked":
+		return m.planMasked(ctx, stream, init, name)
 	default:
 		return util.PlanFailed(fmt.Sprintf("unknown state %q", req.State))
 	}
+}
+
+// planMasked computes pure-read drift for state masked (systemd-only): drift =
+// unit not masked OR (masked but still enabled — applyMasked's disable-before-
+// mask would act). On non-systemd it's a plan error (fail-closed, symmetric
+// with applyMasked), never a false-clean.
+func (m *Module) planMasked(ctx context.Context, stream grpc.ServerStreamingServer[pluginv1.PlanEvent], init util.InitSystem, name string) error {
+	if init != util.InitSystemSystemd {
+		return util.PlanFailed("masked is only supported on systemd")
+	}
+	masked, merr := m.isMasked(ctx, name)
+	if merr != nil {
+		return util.PlanFailed(merr.Error())
+	}
+	if !masked {
+		return util.SendPlanFinal(stream, true)
+	}
+	// A masked unit is normally not enabled; check anyway for parity with
+	// applyMasked's disable step (drift if somehow still enabled).
+	enabled, eerr := m.isEnabled(ctx, init, name)
+	if eerr != nil {
+		return util.PlanFailed(eerr.Error())
+	}
+	return util.SendPlanFinal(stream, enabled)
 }
 
 // planRunning computes pure-read drift for state running: drift = service not
@@ -185,6 +223,10 @@ func (m *Module) Apply(req *pluginv1.ApplyRequest, stream grpc.ServerStreamingSe
 		return m.applyRestarted(ctx, stream, init, name, req)
 	case "enabled":
 		return m.applyEnabled(ctx, stream, init, name, req)
+	case "disabled":
+		return m.applyDisabled(ctx, stream, init, name)
+	case "masked":
+		return m.applyMasked(ctx, stream, init, name)
 	default:
 		return util.SendFailed(stream, fmt.Sprintf("unknown state %q", req.State))
 	}
@@ -304,6 +346,47 @@ func (m *Module) applyEnabled(ctx context.Context, stream grpc.ServerStreamingSe
 	return util.SendFinal(stream, changed, output)
 }
 
+// applyDisabled ensures boot-autostart is off (mirror of applyEnabled).
+// Orthogonal to stopped: a disabled unit may still be running — this touches
+// only the autostart symlinks, never the runtime state. Idempotent via
+// isEnabled: already-disabled → changed=false. daemon_reload is not needed
+// (disable neither starts nor reads a changed unit). Backend-agnostic.
+func (m *Module) applyDisabled(ctx context.Context, stream grpc.ServerStreamingServer[pluginv1.ApplyEvent], init util.InitSystem, name string) error {
+	changed, err := m.ensureEnabled(ctx, init, name, false)
+	if err != nil {
+		return util.SendFailed(stream, err.Error())
+	}
+	return util.SendFinal(stream, changed, map[string]any{"name": name, "enabled": false})
+}
+
+// applyMasked ensures the unit is masked (systemd-only). openrc/sysv → fatal
+// error, NOT a no-op: a silent no-op would give a false sense of a security
+// control. Disable-before-mask: systemd errors when masking an enabled unit
+// ("symlink already exists"), so ensureEnabled(false) runs first (parity with
+// Salt/Ansible). changed = disable-step changed OR mask-step changed;
+// already-masked → mask skipped (idempotent via isMasked).
+func (m *Module) applyMasked(ctx context.Context, stream grpc.ServerStreamingServer[pluginv1.ApplyEvent], init util.InitSystem, name string) error {
+	if init != util.InitSystemSystemd {
+		return util.SendFailed(stream, "masked is only supported on systemd")
+	}
+	disableChanged, err := m.ensureEnabled(ctx, init, name, false)
+	if err != nil {
+		return util.SendFailed(stream, err.Error())
+	}
+	masked, err := m.isMasked(ctx, name)
+	if err != nil {
+		return util.SendFailed(stream, err.Error())
+	}
+	maskChanged := false
+	if !masked {
+		if err := m.mask(ctx, name); err != nil {
+			return util.SendFailed(stream, err.Error())
+		}
+		maskChanged = true
+	}
+	return util.SendFinal(stream, disableChanged || maskChanged, map[string]any{"name": name, "masked": true})
+}
+
 // ensureEnabled idempotently brings the unit's autostart state to want (true =
 // enable, false = disable): reads isEnabled first, acts only on drift. Returns
 // changed. Shared by state `enabled` and param `enabled` in state `running`.
@@ -351,6 +434,22 @@ func (m *Module) isEnabled(ctx context.Context, init util.InitSystem, name strin
 		return r.ExitCode == 0, nil
 	}
 	return false, fmt.Errorf("isEnabled: unsupported init %q", init)
+}
+
+// isMasked reports whether the systemd unit is masked. `systemctl is-enabled`
+// (without --quiet, so stdout is preserved) prints "masked"/"masked-runtime"
+// with a non-zero exit code for a masked unit, so activity is read from stdout,
+// not the exit code. systemd-only (callers guard init == systemd).
+func (m *Module) isMasked(ctx context.Context, name string) (bool, error) {
+	r := m.Runner.Run(ctx, "systemctl", "is-enabled", name)
+	if r.Err != nil {
+		return false, fmt.Errorf("systemctl is-enabled: %v", r.Err)
+	}
+	return strings.HasPrefix(strings.TrimSpace(r.Stdout), "masked"), nil
+}
+
+func (m *Module) mask(ctx context.Context, name string) error {
+	return m.must(ctx, "systemctl", "mask", name)
 }
 
 func (m *Module) start(ctx context.Context, init util.InitSystem, name string) error {

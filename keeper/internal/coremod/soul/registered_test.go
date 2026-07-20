@@ -127,17 +127,31 @@ func TestValidate_UnknownState(t *testing.T) {
 	}
 }
 
-func TestValidate_MissingSidAndCoven(t *testing.T) {
+func TestValidate_MissingSid(t *testing.T) {
+	// coven is OPTIONAL now (NIM-124): only sid is required, so missing both
+	// yields exactly the sid error.
 	m := coremodsoul.New(newFakeStore())
 	rep, _ := m.Validate(context.Background(), &pluginv1.ValidateRequest{
 		State:  "registered",
 		Params: mustStruct(t, map[string]any{}),
 	})
 	if rep.Ok {
-		t.Fatalf("expected errors")
+		t.Fatalf("expected errors (sid required)")
 	}
-	if len(rep.Errors) < 2 {
-		t.Fatalf("expected at least 2 errors, got %v", rep.Errors)
+	if len(rep.Errors) != 1 {
+		t.Fatalf("expected exactly 1 error (sid; coven is optional), got %v", rep.Errors)
+	}
+}
+
+func TestValidate_CovenOptional(t *testing.T) {
+	// sid only, no coven → valid (NIM-124: coven optional, membership implicit).
+	m := coremodsoul.New(newFakeStore())
+	rep, _ := m.Validate(context.Background(), &pluginv1.ValidateRequest{
+		State:  "registered",
+		Params: mustStruct(t, map[string]any{"sid": "h.example.com"}),
+	})
+	if !rep.Ok {
+		t.Fatalf("expected Ok=true (coven optional), got errors %v", rep.Errors)
 	}
 }
 
@@ -294,7 +308,10 @@ func TestApply_Replace_OverwritesExisting(t *testing.T) {
 	}
 }
 
-func TestApply_Replace_EmptyCoven_Footgun(t *testing.T) {
+func TestApply_Replace_EmptyCoven_ClearsTags(t *testing.T) {
+	// NIM-124: the former "replace requires non-empty coven" footgun guard is
+	// removed — membership is a separate relation, so replace+empty coven simply
+	// clears the stable tags (it can no longer sever a host from its incarnation).
 	fs := newFakeStore()
 	fs.byID["h1.example.com"] = &keepersoul.Soul{SID: "h1.example.com", Coven: []string{"prod"}}
 
@@ -311,11 +328,11 @@ func TestApply_Replace_EmptyCoven_Footgun(t *testing.T) {
 		t.Fatalf("Apply: %v", err)
 	}
 	ev := stream.Last()
-	if !ev.Failed {
-		t.Fatalf("expected failed=true on replace+empty coven, got %+v", ev)
+	if ev.Failed {
+		t.Fatalf("replace+empty coven must succeed now (NIM-124), got failed: %+v", ev)
 	}
-	if fs.updateCalls != 0 {
-		t.Errorf("UpdateCoven should not be called on validation failure")
+	if len(fs.lastCoven) != 0 {
+		t.Errorf("saved coven = %v, want [] (cleared)", fs.lastCoven)
 	}
 }
 

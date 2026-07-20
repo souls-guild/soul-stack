@@ -102,7 +102,7 @@ Starting minimum - the exact list is maturing along with pilot implementations. 
 
 > Valid predicates `soulprint.where(...)` are `covens` / `sid` / `network.*` / `os.*`. The role (`role`) in this accessor is **not available**: declared role - only through `soulprint.hosts.where(...)` (and only for bootstrap-create), volatile role - only through probe + `where:` key. See [scenario/orchestration.md §4](scenario/orchestration.md) and [ADR-008](adr/0008-coven-stable-tags.md).
 
-> **Predicate `.where(...)` is a static string literal, not a runtime string.** It is expanded in the **compile phase** of validation: the entire expression is parsed in AST, calls to `.where("<pred>")` to `soulprint.hosts`/`soulprint.where(...)` are rewritten into the native CEL filter-comprehension (`soulprint.hosts.filter(<iter>, <pred>)`), where the predicate fields (`role`/`covens`/`os.*`/…) are qualified by the element field, and the outer context (`incarnation.*`/`input.*`/…) remains as is. The tree is compiled once. Consequences: the predicate **must** be a string literal - dynamic merging (`"'" + incarnation.name + "' in covens"`) is prohibited (understandable compile error "predicate must be a static string literal"); `.where(...)` allowed **only** on `soulprint.hosts`/`soulprint.where(...)` (generic `.where` on a custom list - validation error); nested `.where(...)` inside a predicate is not supported. The first element of the result is `[0]` (native indexing), `.first` is not entered.
+> **Predicate `.where(...)` is a static string literal, not a runtime string.** It is expanded in the **compile phase** of validation: the entire expression is parsed in AST, calls to `.where("<pred>")` to `soulprint.hosts`/`soulprint.where(...)` are rewritten into the native CEL filter-comprehension (`soulprint.hosts.filter(<iter>, <pred>)`), where the predicate fields (`role`/`covens`/`os.*`/…) are qualified by the element field, and the outer context (`incarnation.*`/`input.*`/…) remains as is. The tree is compiled once. Consequences: the predicate **must** be a string literal - dynamic merging (`"'" + input.env + "' in covens"`) is prohibited (understandable compile error "predicate must be a static string literal"); `.where(...)` allowed **only** on `soulprint.hosts`/`soulprint.where(...)` (generic `.where` on a custom list - validation error); nested `.where(...)` inside a predicate is not supported. The first element of the result is `[0]` (native indexing), `.first` is not entered.
 
 > CEL comprehension macros are available inside the predicate - `exists`/`all`/`exists_one`/`map`/`filter` (for example, an idiomatic list filter `covens.exists(c, c == 'db')`), and the macro can appear next to `.where(...)` in one expression (`size(soulprint.hosts.where("role == 'replica'")) > 0 && input.xs.exists(x, x == 2)`). The Rewrite phase parses the expression without expanding macros (so that the rewritten tree is round-trip'd back into a string), and the final compilation expands `.filter`/`.exists`/… natively. the iter variables of such macros (`c`/`x`) are local: they are **not** qualified by the `.where` element field.
 
@@ -283,8 +283,7 @@ Example (runtime operation, master is determined by a live probe):
 
 ```yaml
 - name: probe actual redis role
-  on: ["${ incarnation.name }"]
-  module: core.exec.run
+  module: core.exec.run                       # on: omitted = all member hosts
   register: redis_role
   changed_when: false
   failed_when: size(register.redis_role) < size(soulprint.hosts)
@@ -292,8 +291,7 @@ Example (runtime operation, master is determined by a live probe):
     command: "redis-cli role | head -1"
 
 - name: capture master address
-  on: ["${ incarnation.name }"]
-  where: register.redis_role.stdout == 'master'
+  where: register.redis_role.stdout == 'master'   # on: omitted = all members
   module: core.exec.run
   register: master_addr
   changed_when: false
@@ -301,8 +299,7 @@ Example (runtime operation, master is determined by a live probe):
     command: "hostname -i"
 
 - name: render redis.conf on each host
-  on: ["${ incarnation.name }"]
-  where: register.redis_role.stdout == 'slave'
+  where: register.redis_role.stdout == 'slave'    # on: omitted = all members
   module: core.file.rendered
   params:
     path: /etc/redis/redis.conf
@@ -326,7 +323,7 @@ replicaof {{ .vars.master_ip }} 6379
 # The topology is taken from the declared role through the scenario-only accessor
 # soulprint.hosts and forwarded to destiny via apply: input:.
 - name: configure redis on each declared host
-  on: ["${ incarnation.name }"]
+  # on: omitted = all member hosts
   apply: destiny/redis-configure
   input:
     role: "${ soulprint.hosts.where(\"sid == soulprint.self.sid\")[0].role }"

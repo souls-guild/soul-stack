@@ -163,7 +163,20 @@ func (h *Handler) callSoulTraitsAssign(ctx context.Context, claims *jwt.Claims, 
 		return h.toolError(req.ID, toolName, mcpCodeForbidden,
 			"operator lacks required permission soul.traits-assign")
 	}
-	scope := soul.BulkScope{Covens: pv.Covens, Unrestricted: pv.Unrestricted}
+	// Bulk mutation targets by coven → project the boolean scope onto its
+	// coven dimension (NIM-128, [rbac.Enforcer.CovenScope]): only coven-pure
+	// disjuncts contribute, host/trait-only predicates yield an empty coven set
+	// (fail-closed — no coven-keyed hosts match). The shared PurviewResolver
+	// interface only exposes ResolvePurview; the concrete resolver
+	// (rbac.Holder/Enforcer) also implements CovenScope, so we reach it via a
+	// narrow assertion (nil/absent → fail-closed internal error).
+	scoper, ok := h.deps.PurviewResolver.(covenScoper)
+	if !ok {
+		h.deps.Logger.Error("mcp: soul.traits-assign resolver lacks CovenScope")
+		return h.toolError(req.ID, toolName, mcpCodeInternalError, "traits-assign unavailable")
+	}
+	covens, unrestricted := scoper.CovenScope(claims.Subject, "soul", "traits-assign")
+	scope := soul.BulkScope{Covens: covens, Unrestricted: unrestricted}
 
 	if a.DryRun {
 		matched, err := soul.CountBulkMatched(ctx, h.deps.SoulDB, sel, scope)
@@ -211,20 +224,22 @@ func (h *Handler) callSoulTraitsAssign(ctx context.Context, claims *jwt.Claims, 
 }
 
 // holdsTraitsAssign — existence-gate over [rbac.Purview]: the operator holds
-// soul.traits-assign if the permission exists in any scope dimension
-// (unrestricted, or a non-empty coven/regex/soulprint/state) and isn't Deny
-// (revoked / explicit-deny). Equivalent to REST `RequireAction.HoldsAction`
-// without extending the MCP PermissionChecker interface: same Purview that
-// supplies gate (a)'s scope.
+// soul.traits-assign if the permission exists in any scope (unrestricted, or a
+// non-empty boolean predicate set) and isn't Deny (revoked / explicit-deny).
+// Equivalent to REST `RequireAction.HoldsAction` without extending the MCP
+// PermissionChecker interface: same Purview that supplies gate (a)'s scope.
+// [rbac.Purview.Holds] is the single source of that formula (NIM-128).
 func holdsTraitsAssign(pv rbac.Purview) bool {
-	if pv.Deny {
-		return false
-	}
-	if pv.Unrestricted {
-		return true
-	}
-	return len(pv.Covens) > 0 || len(pv.Regexes) > 0 ||
-		len(pv.SoulprintExprs) > 0 || len(pv.StateExprs) > 0
+	return pv.Holds()
+}
+
+// covenScoper is the coven-projection surface of the RBAC resolver
+// ([rbac.Enforcer.CovenScope] / [rbac.Holder.CovenScope]). The shared
+// [handlers.PurviewResolver] only declares ResolvePurview; this narrow
+// interface is asserted at the bulk-mutation call site to reach the coven
+// projection without widening the shared contract (NIM-128).
+type covenScoper interface {
+	CovenScope(aid, resource, action string) ([]string, bool)
 }
 
 // buildTraitsAssignOutput builds the output, matching REST.

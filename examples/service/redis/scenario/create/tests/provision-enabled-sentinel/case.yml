@@ -122,13 +122,12 @@ assert:
         generate_userdata: false
 
     # (c) core.soul.registered: sid — the list of SIDs of created VMs (register.provision.hosts
-    # .map(h, h.sid)); coven — the root incarnation.name (create); onboarding barrier
+    # .map(h, h.sid)); membership is implicit (incarnation_membership, no coven:); onboarding barrier
     # await_online + refresh_soulprint; await_timeout from essence (10m, input.provision
     # .await_timeout not set). The only core.soul.registered in the plan.
     - module: core.soul.registered
       params_subset:
         sid: [vm-1.example.com, vm-2.example.com, vm-3.example.com]
-        coven: [create]
         await_online: true
         refresh_soulprint: true
         await_timeout: "10m"

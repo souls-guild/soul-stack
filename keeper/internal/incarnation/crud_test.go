@@ -711,13 +711,18 @@ func TestSelectAll_ScopeWithUserFilter_AND(t *testing.T) {
 	}
 }
 
-// --- SelectAll: trait-scope SQL form (BUG #1 fix — scalar, not @>) ---------
+// --- SelectAll: LEGACY flat ScopeCondition trait-scope SQL form -----------
+//
+// These cover the flat ListScope.{Covens,StateNames,Traits} rendering of
+// ScopeCondition. In NIM-128 the incarnation List/Get handler no longer feeds
+// this path — it renders the boolean scope via rbac.PurviewSQL (a ListScope.Scope
+// closure). The flat path is retained only for legacy consumers (applyrun
+// runs-view, state_lister), so these tests pin its exact (pre-NIM-128) SQL shape.
 
-// TestSelectAll_ScopeTrait_ScalarEquality — the trait arm must be SCALAR
-// equality `traits->>$1 = $2` (key+value as separate bind parameters), NOT
-// jsonb containment `@>`: containment with a scalar RHS matches an array
-// (list-Trait), diverging from the GET path (traitScalarEquals). Values never
-// leak into the SQL text.
+// TestSelectAll_ScopeTrait_ScalarEquality — the flat trait arm renders as scalar
+// equality `traits->>$1 = $2` (key+value as separate bind parameters), values
+// never leaking into the SQL text. (Legacy flat path; the production handler uses
+// rbac.PurviewSQL's `traits ->> = ANY / ?|` form instead.)
 func TestSelectAll_ScopeTrait_ScalarEquality(t *testing.T) {
 	f := newCountQueryFakeDB()
 	_, _, err := SelectAll(context.Background(), f, ListFilter{},

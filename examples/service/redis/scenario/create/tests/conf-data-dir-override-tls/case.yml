@@ -108,7 +108,7 @@ fixtures:
 assert:
   task_present:
     # TLS dir under the conf_dir override (/opt/redis/tls, NOT /etc/redis/tls).
-    - module: core.file.directory
+    - module: core.directory.present
       params_subset:
         path: /opt/redis/tls
         owner: redis
@@ -213,7 +213,7 @@ assert:
     - module: core.file.present
       params_subset:
         path: /etc/redis/tls/redis.crt
-    - module: core.file.directory
+    - module: core.directory.present
       params_subset:
         path: /etc/redis/tls
     # "data_dir override didn't propagate" regression: the default modules path must not appear.

@@ -211,6 +211,31 @@ func registerHumaServiceDirectives(humaAPI huma.API, serviceH *handlers.ServiceH
 	})
 }
 
+// registerHumaServiceTelemetry mounts GET /v1/services/{name}/telemetry via huma
+// (READ-with-path+query, NO audit). serviceH nil → no-op. Handler:
+// ListServiceTelemetryTyped (name + optional ref) → typed output (404/502 via problem) +
+// ETag/Cache-Control (config immutable on git-ref); If-None-Match matches SHA1 → 304
+// with no body. RBAC service.list — on the group.
+func registerHumaServiceTelemetry(humaAPI huma.API, serviceH *handlers.ServiceHandler) {
+	if serviceH == nil {
+		return
+	}
+	huma.Register(humaAPI, serviceTelemetryOperation(), func(ctx context.Context, in *serviceTelemetryInput) (*serviceTelemetryOutput, error) {
+		reply, err := serviceH.ListServiceTelemetryTyped(ctx, in.Name, in.Ref)
+		if err != nil {
+			return nil, serviceProblem(err)
+		}
+		out := &serviceTelemetryOutput{ETag: etagQuote(reply.SHA1), CacheControl: directivesCacheControlFor(reply.Ref)}
+		if etagMatchesSHA1(in.IfNoneMatch, reply.SHA1) {
+			out.Status = http.StatusNotModified // huma skips the body on 304
+			return out, nil
+		}
+		out.Status = http.StatusOK
+		out.Body = reply
+		return out, nil
+	})
+}
+
 // serviceMissingClaims — a defensive response when claims are absent from the ctx
 // (unreachable: RequireJWT sets claims before huma). problem+json (parity roleMissingClaims).
 func serviceMissingClaims() huma.StatusError {
@@ -250,6 +275,7 @@ func HumaServiceSpecYAML() (string, error) {
 		registerHumaServiceStateSchema(api, stub)
 		registerHumaServiceDependencies(api, stub)
 		registerHumaServiceDirectives(api, stub)
+		registerHumaServiceTelemetry(api, stub)
 		return nil
 	})
 }

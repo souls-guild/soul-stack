@@ -117,12 +117,14 @@
 
 # (c) Register the created SIDs + a BLOCKING onboarding barrier + refresh_soulprint
 #     (on: keeper, core.soul.registered, ADR-061). sid — a LIST from register.provision.hosts
-#     (h.sid of each created VM; the list comes from a CEL expression, list-SID ADR-061). coven —
-#     the root incarnation.name (the role is targeted by it). await_online:true → the step waits
-#     until the created Souls become online (Redis SID-lease), bounded by await_timeout; B1-strict:
-#     insufficient quorum → the step fails → state isn't committed → error_locked. refresh_soulprint:
-#     true → after success the roster is re-resolved, the deploy branch sees the online set.
-#     await_timeout: input.provision.await_timeout → essence.provision_await_timeout → '10m'.
+#     (h.sid of each created VM; the list comes from a CEL expression, list-SID ADR-061). The bind
+#     makes each SID a member of this incarnation implicitly (incarnation_membership, ADR-008
+#     amendment NIM-124) — no coven: needed (membership is not a coven value). await_online:true →
+#     the step waits until the created Souls become online (Redis SID-lease), bounded by
+#     await_timeout; B1-strict: insufficient quorum → the step fails → state isn't committed →
+#     error_locked. refresh_soulprint: true → after success the roster is re-resolved, the deploy
+#     branch sees the online set. await_timeout: input.provision.await_timeout →
+#     essence.provision_await_timeout → '10m'.
 - name: Register provisioned VMs and await their onboarding
   on: keeper
   module: core.soul.registered
@@ -131,7 +133,6 @@
     - provision
   params:
     sid:               "${ register.provision.hosts.map(h, h.sid) }"
-    coven:             ["${ incarnation.name }"]
     await_online:      true
     await_timeout:     "${ default(input.provision.await_timeout, default(essence.provision_await_timeout, '10m')) }"
     refresh_soulprint: true

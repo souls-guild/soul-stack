@@ -29,3 +29,11 @@ spec:
       input:
         name: { type: string, required: true, description: "Service/unit name." }
         daemon_reload: { type: string, enum: [auto, always, never], default: auto, description: "systemctl daemon-reload before enable (systemd): auto = on NeedDaemonReload, always = unconditionally, never = opt-out. openrc/sysv — no-op (ADR-015)." }
+    disabled:
+      description: Service autostart on system boot is off (orthogonal to the running/stopped runtime state — a disabled unit may still be running).
+      input:
+        name: { type: string, required: true, description: "Service/unit name." }
+    masked:
+      description: The unit is masked (systemctl mask, symlink → /dev/null) — start is impossible manually or as a dependency. systemd-only; openrc/sysv is a fatal error. Apply disables the unit before masking (ADR-015).
+      input:
+        name: { type: string, required: true, description: "Service/unit name." }

@@ -66,9 +66,9 @@ func TestL3bRedisLive_CreateStandalone(t *testing.T) {
 		"password": "e2e-app-user-secret",
 	})
 
-	// Coven membership BEFORE Create: the roster is resolved by `incarnation.name in coven[]`
-	// (ADR-008). The bootstrap flow set status='connected', but coven is empty.
-	stack.AddSoulToCoven(t, 0, incName)
+	// Membership BEFORE Create: the roster resolves members via incarnation_membership
+	// (ADR-008 amendment/NIM-124). The bootstrap flow set status='connected', but no membership is bound.
+	stack.AddMember(t, 0, incName)
 
 	// Wait for the real soul's first SoulprintReport: redis.conf.tmpl binds to
 	// soulprint.self.network.primary_ip keeper-side during render.

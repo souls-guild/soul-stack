@@ -70,10 +70,10 @@ func TestE2EServiceRedis_CreateSentinelOnly(t *testing.T) {
 		"hostname": "soul-a",
 	})
 
-	// Coven membership BEFORE Create: the roster resolves via
-	// `incarnation.name in coven[]` (ADR-008). Without it the scenario sees
-	// no_hosts -> error_locked.
-	stack.AddSoulToCoven(t, 0, incName)
+	// Membership BEFORE Create: the roster resolves members via
+	// incarnation_membership (ADR-008 amendment, NIM-124). Without it the
+	// scenario sees no_hosts -> error_locked.
+	stack.AddMember(t, 0, incName)
 
 	// Materialize the mode-agnostic destiny `redis` (the create branches
 	// call apply: destiny: redis) + set default_destiny_source. BEFORE

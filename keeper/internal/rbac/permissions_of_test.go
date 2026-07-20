@@ -114,7 +114,7 @@ func TestPermissionsOf_ScopeIncluded(t *testing.T) {
 		t.Errorf("scope with default_scope=coven=prod should not be unrestricted: %+v", p.Scope)
 	}
 	want := []string{"prod"}
-	got := append([]string(nil), p.Scope.Covens...)
+	got := append([]string(nil), covensFromPurview(p.Scope)...)
 	sort.Strings(got)
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("covens = %v, want %v", got, want)
@@ -186,8 +186,8 @@ func TestPermissionsOf_NotRevoked_HappyPath(t *testing.T) {
 		if p.Scope.Unrestricted {
 			t.Errorf("non-revoked scoped: scope should not be unrestricted: %+v", p.Scope)
 		}
-		if !reflect.DeepEqual(p.Scope.Covens, []string{"prod"}) {
-			t.Errorf("non-revoked scoped: covens = %v, want [prod]", p.Scope.Covens)
+		if got := covensFromPurview(p.Scope); !reflect.DeepEqual(got, []string{"prod"}) {
+			t.Errorf("non-revoked scoped: covens = %v, want [prod]", got)
 		}
 	})
 }

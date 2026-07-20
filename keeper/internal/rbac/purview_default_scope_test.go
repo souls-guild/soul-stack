@@ -26,8 +26,8 @@ func TestResolvePurview_DefaultScope_Inherited(t *testing.T) {
 	if p.Deny {
 		t.Errorf("Deny=true, want false (scope was set non-empty)")
 	}
-	if !reflect.DeepEqual(p.Covens, []string{"prod"}) {
-		t.Errorf("Covens=%v, want [prod] (default_scope inheritance)", p.Covens)
+	if !reflect.DeepEqual(covensFromPurview(p), []string{"prod"}) {
+		t.Errorf("Covens=%v, want [prod] (default_scope inheritance)", covensFromPurview(p))
 	}
 }
 
@@ -43,8 +43,8 @@ func TestResolvePurview_DefaultScope_OverriddenByPerPerm(t *testing.T) {
 	if p.Unrestricted {
 		t.Errorf("Unrestricted=true, want false")
 	}
-	if !reflect.DeepEqual(p.Covens, []string{"staging"}) {
-		t.Errorf("Covens=%v, want [staging] (override, NOT prod, NOT merge)", p.Covens)
+	if !reflect.DeepEqual(covensFromPurview(p), []string{"staging"}) {
+		t.Errorf("Covens=%v, want [staging] (override, NOT prod, NOT merge)", covensFromPurview(p))
 	}
 }
 
@@ -76,8 +76,8 @@ func TestResolvePurview_NoDefaultScope_PerPermSelector(t *testing.T) {
 	if p.Unrestricted {
 		t.Errorf("Unrestricted=true, want false (per-perm coven-selector)")
 	}
-	if !reflect.DeepEqual(p.Covens, []string{"dev"}) {
-		t.Errorf("Covens=%v, want [dev]", p.Covens)
+	if !reflect.DeepEqual(covensFromPurview(p), []string{"dev"}) {
+		t.Errorf("Covens=%v, want [dev]", covensFromPurview(p))
 	}
 }
 
@@ -98,8 +98,8 @@ func TestResolvePurview_Wildcard_IgnoresDefaultScope(t *testing.T) {
 	if p.Deny {
 		t.Errorf("Deny=true, want false (`*` is always allow-all)")
 	}
-	if p.Covens != nil {
-		t.Errorf("Covens=%v, want nil (unrestricted)", p.Covens)
+	if covensFromPurview(p) != nil {
+		t.Errorf("Covens=%v, want nil (unrestricted)", covensFromPurview(p))
 	}
 }
 
@@ -116,8 +116,8 @@ func TestResolvePurview_DefaultScope_OnlyOwnPermissions(t *testing.T) {
 	if p.Unrestricted {
 		t.Errorf("Unrestricted=true, want false (role does not cover soul.coven-assign)")
 	}
-	if len(p.Covens) != 0 {
-		t.Errorf("Covens=%v, want empty (default_scope does not leak onto an unrelated resource)", p.Covens)
+	if len(covensFromPurview(p)) != 0 {
+		t.Errorf("Covens=%v, want empty (default_scope does not leak onto an unrelated resource)", covensFromPurview(p))
 	}
 }
 
@@ -139,8 +139,8 @@ func TestResolvePurview_UnionAcrossRoles_WithDefaultScope(t *testing.T) {
 	if p.Unrestricted {
 		t.Errorf("Unrestricted=true, want false")
 	}
-	if !reflect.DeepEqual(p.Covens, []string{"prod", "staging"}) {
-		t.Errorf("Covens=%v, want [prod staging] (union default_scope + per-perm)", p.Covens)
+	if !reflect.DeepEqual(covensFromPurview(p), []string{"prod", "staging"}) {
+		t.Errorf("Covens=%v, want [prod staging] (union default_scope + per-perm)", covensFromPurview(p))
 	}
 }
 
@@ -174,8 +174,8 @@ func TestResolvePurview_DefaultScope_MultiCoven(t *testing.T) {
 		permissions:  []string{"incarnation.run"},
 	})
 	p := e.ResolvePurview("archon-a", "incarnation", "run")
-	if !reflect.DeepEqual(p.Covens, []string{"prod", "stage"}) {
-		t.Errorf("Covens=%v, want [prod stage] (multi-coven default_scope)", p.Covens)
+	if !reflect.DeepEqual(covensFromPurview(p), []string{"prod", "stage"}) {
+		t.Errorf("Covens=%v, want [prod stage] (multi-coven default_scope)", covensFromPurview(p))
 	}
 }
 
@@ -207,8 +207,8 @@ func TestResolvePurview_NoDefaultScope_EquivalentToS0(t *testing.T) {
 		if p.Unrestricted != c.wantUnrestr {
 			t.Errorf("aid=%s: Unrestricted=%v, want %v", c.aid, p.Unrestricted, c.wantUnrestr)
 		}
-		if !reflect.DeepEqual(p.Covens, c.wantCovens) {
-			t.Errorf("aid=%s: Covens=%v, want %v", c.aid, p.Covens, c.wantCovens)
+		if !reflect.DeepEqual(covensFromPurview(p), c.wantCovens) {
+			t.Errorf("aid=%s: Covens=%v, want %v", c.aid, covensFromPurview(p), c.wantCovens)
 		}
 	}
 }

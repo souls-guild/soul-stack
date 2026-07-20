@@ -359,10 +359,8 @@ tasks:
     params:
       refresh_soulprint: true
       sid: "host-new.example.com"
-      coven: ["${ incarnation.name }"]
   - name: Configure redis on grown roster
     module: community.redis.config
-    on: ["${ incarnation.name }"]
     params:
       settings: {}
 `)

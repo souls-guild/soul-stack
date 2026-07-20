@@ -72,8 +72,7 @@ Working example (unit `.changed` / `.failed`):
   register: cfg
 
 - name: Restart Redis only where config actually changed
-  on: ["${ incarnation.name }"]
-  when: register.cfg.changed
+  when: register.cfg.changed          # on: omitted = all member hosts
   module: core.service.restarted
   params: { name: redis-server }
 ```
@@ -90,8 +89,7 @@ Here `register.cfg.changed` is true if at least one child task destiny `redis-co
 >   register: reload
 >
 > - name: Restart only nodes that reported config drift
->   on: ["${ incarnation.name }"]
->   where: soulprint.self.sid in register.reload.drifted_sids # output projection, not yet implemented
+>   where: soulprint.self.sid in register.reload.drifted_sids # on: omitted = all members; output projection, not yet implemented
 >   module: core.service.restarted
 >   params: { name: redis-server }
 > ```
@@ -333,13 +331,13 @@ tasks: [ ... ]
 
 ## 3. Step target - `on:`
 
-`on:` - **stable place** for step execution. Resolved by Postgres (stable layer: registry of incarnation hosts and their covens). Resolution point - **start of each Passage** ([ADR-056](../adr/0056-staged-render-passage.md)); The target `on: [incarnation.name]` (and the omitted `on:`) is stable within the Passage, but at the refresh boundary (`refresh_soulprint: true`) it will be re-resolved according to the updated roster - see §4.1 "Stability of the roster run" ([ADR-061](../adr/0061-onboarding-await-and-midrun-reresolve.md)). Three forms:
+`on:` - **stable place** for step execution. Resolved by Postgres (stable layer: the incarnation **membership** relation `incarnation_membership` and the hosts' stable covens). Resolution point - **start of each Passage** ([ADR-056](../adr/0056-staged-render-passage.md)); the omitted `on:` target is stable within the Passage, but at the refresh boundary (`refresh_soulprint: true`) it will be re-resolved according to the updated roster - see §4.1 "Stability of the roster run" ([ADR-061](../adr/0061-onboarding-await-and-midrun-reresolve.md)). Three forms:
 
 | Form | Semantics |
 |---|---|
-| **omitted** | entire incarnation: all hosts under the root coven `${ incarnation.name }` (it is implied implicitly) |
+| **omitted** | entire incarnation: all **member** hosts, resolved via the membership relation `incarnation_membership` (NOT via a coven). `incarnation.name` is not a Coven — `on: ["${ incarnation.name }"]` is a **validation error** (steering to the omitted form), see [ADR-008 amendment 2026-07-17](../adr/0008-coven-stable-tags.md#amendment-2026-07-17-nim-124-incarnationname-is-not-a-coven--membership-is-a-first-class-relation) |
 | `on: keeper` | keeper-side: local task on the keeper itself (cloud-create, vault-resolve, http-call) |
-| `on: [coven-a, coven-b]` | intersection (AND) of the listed covens; result **always ⊆ hosts incarnation** |
+| `on: [coven-a, coven-b]` | intersection (AND) of the listed **stable** covens; result **always ⊆ members** (the roster is already membership-scoped) |
 
 ```yaml
 # Entire incarnation (on: omitted)
@@ -353,17 +351,17 @@ tasks: [ ... ]
   state: created
   params: { ... }
 
-# Intersection of stable covens, ⊆ incarnation
+# Intersection of stable covens, ⊆ members
 - name: Tune kernel on bare-metal hosts of this cluster
-  on: ["${ incarnation.name }", baremetal]
+  on: [baremetal]                  # incarnation scope is implicit (roster is membership-scoped)
   apply: { destiny: kernel-tuning, input: { ... } }
 ```
 
 **Resolver contract `on:` (invariant):**
 
-1. Root coven incarnation = `${ incarnation.name }`, assigned automatically by the keeper (see [ADR-008](../adr/0008-coven-stable-tags.md)). The omitted `on:` means exactly that.
-2. List in `on:` - **AND/intersection** covens. Additional stable covens (e.g. `baremetal`, `dc-eu`, `prod`) narrow the set, but **cannot expand it beyond incarnation hosts**.
-3. **Cross-incarnation targeting is prohibited by the grammar.** The `on:` resolver cannot return a host that does not belong to the current incarnation, given any set of covens. This is a security invariant (see [ADR-008](../adr/0008-coven-stable-tags.md)), not a validation-warning.
+1. **Membership, not a name-coven.** The omitted `on:` = all **member** hosts of the incarnation, resolved via the membership relation `incarnation_membership` (NOT via `= ANY(coven)`). `incarnation.name` is **not** a Coven and is not a valid `on:` value: `on: ["${ incarnation.name }"]` is a **validation error** with a message steering to the omitted form (fail-closed — a stale scenario errors out instead of resolving to an empty set). See [ADR-008 amendment 2026-07-17](../adr/0008-coven-stable-tags.md#amendment-2026-07-17-nim-124-incarnationname-is-not-a-coven--membership-is-a-first-class-relation).
+2. List in `on:` - **AND/intersection** of **stable** covens. Additional stable covens (e.g. `baremetal`, `dc-eu`, `prod`) narrow the set, but **cannot expand it beyond the incarnation members**.
+3. **Cross-incarnation targeting is prohibited by construction.** The `on:` resolver cannot return a host that is not a member of the current incarnation, given any set of covens — the roster is membership-scoped, so a stable coven can only intersect it, never reach outside it. This is a security invariant (see [ADR-008](../adr/0008-coven-stable-tags.md#amendment-2026-07-17-nim-124-incarnationname-is-not-a-coven--membership-is-a-first-class-relation)), now enforced by the membership join rather than by the name-coven.
 4. Role (master / replica) **never Coven** and does not participate in `on:`. The volatile role is expressed only through `where:` (see §4).
 
 ## 4. Volatile predicate - `where:`
@@ -373,8 +371,7 @@ tasks: [ ... ]
 ```yaml
 # probe: who is the actual master now (see §5 - probe idiom)
 - name: Detect actual redis role per host
-  module: core.exec.run
-  on: ["${ incarnation.name }"]
+  module: core.exec.run                                        # on: omitted = all member hosts
   register: redis_role
   changed_when: false                                          # probe state does not change
   params:
@@ -382,8 +379,7 @@ tasks: [ ... ]
 
 # the next step targets the register of the previous probe, per-host
 - name: Restart only the current replicas
-  on: ["${ incarnation.name }"]
-  where: register.redis_role.stdout == 'slave'
+  where: register.redis_role.stdout == 'slave'                 # on: omitted = all members
   module: core.service.restarted
   params: { name: redis-server }
 ```
@@ -452,14 +448,13 @@ Example of shared but separate use:
 
 ```yaml
 - name: Point replicas at the master
-  on: ["${ incarnation.name }"]
-  where: register.redis_role.stdout == 'slave'   # KEY: replicas only
+  where: register.redis_role.stdout == 'slave'   # KEY: replicas only (on: omitted = all members)
   module: core.exec.run
   params:
-    command: "redis-cli replicaof ${ soulprint.where(\"incarnation.name in covens\")[0].network.primary_ip } 6379"   # FUNCTION: host data
+    command: "redis-cli replicaof ${ soulprint.hosts[0].network.primary_ip } 6379"   # FUNCTION: host data (all members = soulprint.hosts)
 ```
 
-> `soulprint.where(<predicate>)` accepts a CEL predicate **static string literal** ([templating.md §2.3](../templating.md)); keyword style (`coven=...`) is not used. Inside the predicate, the element fields (`covens`/`os.*`/`sid`) and the external context (`incarnation.*`, etc.) are available, so "by coven incarnation" is written as `soulprint.where("incarnation.name in covens")` - **without** dynamic string concatenation (`"'" + incarnation.name + "' in covens"` - prohibited, the predicate is expanded in the compile phase, see. [templating.md §2.3](../templating.md)). A common pattern "by literal coven X" is `soulprint.where("'<X>' in covens")`. Deep nesting of quotes is a well-known footgun, see [templating.md §8](../templating.md): the recommendation is to place such expressions in the `vars:` step.
+> `soulprint.where(<predicate>)` accepts a CEL predicate **static string literal** ([templating.md §2.3](../templating.md)); keyword style (`coven=...`) is not used. Inside the predicate, the element fields (`covens`/`os.*`/`sid`) and the external context (`incarnation.*`, etc.) are available. **All members of the run** are simply `soulprint.hosts` (the accessor is already incarnation-scoped) — there is **no** "by incarnation coven" predicate: `incarnation.name` is not a Coven and never appears in `covens`, so `soulprint.where("incarnation.name in covens")` is removed ([ADR-008 amendment 2026-07-17](../adr/0008-coven-stable-tags.md#amendment-2026-07-17-nim-124-incarnationname-is-not-a-coven--membership-is-a-first-class-relation)). A stable-coven filter "by literal coven X" is `soulprint.where("'<X>' in covens")` — **without** dynamic string concatenation (`"'" + some_var + "' in covens"` - prohibited, the predicate is expanded in the compile phase, see [templating.md §2.3](../templating.md)). Deep nesting of quotes is a well-known footgun, see [templating.md §8](../templating.md): the recommendation is to place such expressions in the `vars:` step.
 
 > `where:`-key - position "on which hosts". `soulprint.where(<predicate>)` - position "where to get the value from". They are independent; confusing them is a reading error, not an alternative. (Since Soulprint after [ADR-008](../adr/0008-coven-stable-tags.md) stores only stable facts, `soulprint.where(...)` operates with a stable layer; the volatile role is exclusively through probe + `where:`-key.)
 
@@ -485,10 +480,10 @@ element - **stable** host facts:
 | Element field | Type | Contents |
 |---|---|---|
 | `sid` | string | `SID` host (FQDN). |
-| `role` | string | **declared-role** from `incarnation.spec.hosts[].role` (`master`/`replica`/…). This is **declared, NOT actual**: the actual role is volatile and is taken only by a live probe + `where:` key ([ADR-008](../adr/0008-coven-stable-tags.md)). On `create` (redis is not running yet, probe has nothing to poll) declared is the only topology source. The field may be **empty/`null`** for hosts bound to incarnation **outside declared-spec** (for example, host branch `add_replica`: an existing Soul is bound to the root coven, but the operator in `incarnation.spec.hosts[]` did not declare its role). The declared role reflects the **intent in the spec** and is not auto-filled with the fact of binding; the actual role of such a host is recorded in `incarnation.state` by the script `state_changes`, not in `soulprint.hosts[].role`. Declared-role consumer - bootstrap only `create` (probe not possible); runtime operations take on the role of a probe ([ADR-008](../adr/0008-coven-stable-tags.md)). |
+| `role` | string | **declared-role** from `incarnation.spec.hosts[].role` (`master`/`replica`/…). This is **declared, NOT actual**: the actual role is volatile and is taken only by a live probe + `where:` key ([ADR-008](../adr/0008-coven-stable-tags.md)). On `create` (redis is not running yet, probe has nothing to poll) declared is the only topology source. The field may be **empty/`null`** for hosts bound to incarnation **outside declared-spec** (for example, host branch `add_replica`: an existing Soul is bound to the incarnation as a member, but the operator in `incarnation.spec.hosts[]` did not declare its role). The declared role reflects the **intent in the spec** and is not auto-filled with the fact of binding; the actual role of such a host is recorded in `incarnation.state` by the script `state_changes`, not in `soulprint.hosts[].role`. Declared-role consumer - bootstrap only `create` (probe not possible); runtime operations take on the role of a probe ([ADR-008](../adr/0008-coven-stable-tags.md)). |
 | `network` | map | stable host network facts (`network.primary_ip`, `network.fqdn`, `network.interfaces[]`) - typed scheme [ADR-018](../adr/0018-soulprint-typed.md), full spec [`docs/soul/soulprint.md → NetworkFacts`](../soul/soulprint.md#networkfacts). The same stable layer that gives off `soulprint.where(...)`. |
 | `os` | map | stable host OS facts (`os.family`, ...). |
-| `covens` | array of string | stable host Coven labels (including root `${ incarnation.name }`). |
+| `covens` | array of string | stable host Coven labels — **real stable tags only** (cluster / project / environment / datacenter). The incarnation name is **no longer** projected here ([ADR-008 amendment 2026-07-17](../adr/0008-coven-stable-tags.md#amendment-2026-07-17-nim-124-incarnationname-is-not-a-coven--membership-is-a-first-class-relation)); membership lives in `incarnation_membership`, not in `covens`. |
 
 `soulprint.hosts.where("<predicate>")` filters the list by any stable
 element attribute(`role`, `sid`, `covens`, `network.*`, `os.*`); result -
@@ -544,7 +539,7 @@ master discovery instead of sub-coven `{incarnation.name}-master`" (see §8).
 ### Stability roster run ([ADR-061](../adr/0061-onboarding-await-and-midrun-reresolve.md))
 
 Roster run (set of hosts seen by `soulprint.hosts`,
-`soulprint.where(...)`, omitted `on:` and `on: [incarnation.name]`, and
+`soulprint.where(...)`, the omitted `on:`, and
 `incarnation.host_count`, §4.2) **stable within one Passage**, but **not on
 entire run**. The exact invariant is a weakening of the previous "roster resolves once
 up-front and the entire run does not change" ([ADR-061](../adr/0061-onboarding-await-and-midrun-reresolve.md),
@@ -558,7 +553,7 @@ by `SID` (§2.2) still gives a reproducible order.
 `core.soul.registered` with `refresh_soulprint: true` ([ADR-017](../adr/0017-keeper-side-core.md),
 [ADR-061](../adr/0061-onboarding-await-and-midrun-reresolve.md)): after it
 scenario-runner will re-resolve the incarnation roster **before the next Passage**.
-Consumers roster in subsequent Passage (`soulprint.hosts`, `on: [incarnation.name]`,
+Consumers roster in subsequent Passage (`soulprint.hosts`, the omitted `on:`,
 `soulprint.self.*`) they see the already re-resolved set. Without `refresh_soulprint` step
 roster between Passage remains the same.
 - **The semantics of re-resolve is live-snapshot, NOT monotonic growth.** Re-resolve is
@@ -581,7 +576,7 @@ A typical case is a single create scenario "provision → onboarding → role":
 `core.cloud.provisioned` (`on: keeper`) creates N VM → `core.soul.registered`
 (`await_online: true`, `refresh_soulprint: true`) registers their SID and blocks
 waits for onboarding → the next Passage applies the role to already-online hosts via
-`on: [incarnation.name]` / `soulprint.hosts`. Onboarding barrier and list-SID - on
+the omitted `on:` / `soulprint.hosts`. Onboarding barrier and list-SID - on
 same module, see [ADR-061](../adr/0061-onboarding-await-and-midrun-reresolve.md)
 and [docs/keeper/modules.md](../keeper/modules.md).
 
@@ -629,8 +624,7 @@ Example (primary discovery before point reconfiguration of replicas):
 
 ```yaml
 - name: Detect actual redis primary address on existing hosts
-  module: core.exec.run
-  on: ["${ incarnation.name }"]
+  module: core.exec.run                            # on: omitted = all member hosts
   where: "!(soulprint.self.sid in input.replicas)"
   register: master_addr
   changed_when: false
@@ -638,8 +632,7 @@ Example (primary discovery before point reconfiguration of replicas):
     command: "[ \"$(redis-cli role | head -1)\" = master ] && redis-cli config get bind | awk 'NR==2{print $1}' || true"
 
 - name: Point new replicas at the actual primary
-  on: ["${ incarnation.name }"]
-  where: soulprint.self.sid in input.replicas
+  where: soulprint.self.sid in input.replicas      # on: omitted = all members
   apply:
     destiny: redis
     input:
@@ -661,8 +654,7 @@ Example (primary discovery before point reconfiguration of replicas):
 
 ```yaml
 - name: Detect actual redis role per host
-  module: core.exec.run
-  on: ["${ incarnation.name }"]
+  module: core.exec.run                                        # on: omitted = all member hosts
   register: redis_role
   changed_when: false                                          # probe state does not change
   params:

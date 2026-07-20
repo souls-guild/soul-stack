@@ -53,6 +53,7 @@ func TestHumaCadence_RestReachable_ChiCoexistence(t *testing.T) {
 		stubOperatorHandler(t),
 		handlers.NewIncarnationHandler(nil, nil, nil, nil, nil, nil, nil, nil, nil),
 		handlers.NewSoulHandler(nil, nil, nil, nil),
+		handlers.TelemetrySpecStub(),
 		stubRoleHandler(t), stubSynodHandler(t), stubSigilHandler(t), stubSigilKeyHandler(t),
 		stubServiceHandler(t), nil, stubAugurHandler(t), stubOracleHandler(t),
 		nil,                                     // pushH
@@ -82,6 +83,8 @@ func TestHumaCadence_RestReachable_ChiCoexistence(t *testing.T) {
 		false,                                // webUIEnabled — /ui is out of scope for the cadence routing test
 		nil,                                  // ldapAuth (LDAP not configured in the test)
 		nil,                                  // oidcAuth (OIDC not configured in the test)
+		nil,                                  // authToken (/auth/token exchange is not tested here)
+		AuthMethodsDeps{},                    // authMethods (/auth/methods is mounted, but not checked)
 		nil,                                  // loginGuard (anti-bruteforce off in the test)
 		apimiddleware.AuthLoginLimitConfig{}, // loginLimitCfg
 		nil,                                  // soulStatsStaleFn (default 90s in the test)

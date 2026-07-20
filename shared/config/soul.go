@@ -12,13 +12,14 @@ import (
 type SoulConfig struct {
 	SID string `yaml:"sid,omitempty"`
 
-	Paths     SoulPaths      `yaml:"paths,omitempty"`
-	Keeper    SoulKeeper     `yaml:"keeper"`
-	Soulprint *SoulSoulprint `yaml:"soulprint,omitempty"`
-	Cleanup   *SoulCleanup   `yaml:"cleanup,omitempty"`
-	Logging   SoulLogging    `yaml:"logging,omitempty"`
-	Metrics   *SoulMetrics   `yaml:"metrics,omitempty"`
-	OTel      *SoulOTel      `yaml:"otel,omitempty"`
+	Paths       SoulPaths        `yaml:"paths,omitempty"`
+	Keeper      SoulKeeper       `yaml:"keeper"`
+	Soulprint   *SoulSoulprint   `yaml:"soulprint,omitempty"`
+	Utilization *SoulUtilization `yaml:"utilization,omitempty"`
+	Cleanup     *SoulCleanup     `yaml:"cleanup,omitempty"`
+	Logging     SoulLogging      `yaml:"logging,omitempty"`
+	Metrics     *SoulMetrics     `yaml:"metrics,omitempty"`
+	OTel        *SoulOTel        `yaml:"otel,omitempty"`
 
 	PluginRuntime *PluginRuntime `yaml:"plugin_runtime,omitempty"`
 	HotReload     *HotReload     `yaml:"hot_reload,omitempty"`
@@ -115,6 +116,12 @@ type SoulKeeperTLS struct {
 // SoulSoulprint holds the periodic fact-collection parameters.
 type SoulSoulprint struct {
 	RefreshInterval string `yaml:"refresh_interval,omitempty"`
+}
+
+// SoulUtilization — parameters for periodically sending live host utilization
+// (ADR-072). `interval` — pulse cadence (default 30s, floor 10s in cmd/soul).
+type SoulUtilization struct {
+	Interval string `yaml:"interval,omitempty"`
 }
 
 // SoulCleanup is the local module-cache cleanup cycle.

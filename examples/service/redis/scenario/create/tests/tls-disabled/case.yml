@@ -149,7 +149,7 @@ assert:
   task_absent:
     # TLS disabled (tls_enable=false) → TLS dir and PEM cert are gated-placeholder-skip
     # (params_subset path won't match a placeholder). Guard "no TLS means no PEM files".
-    - module: core.file.directory
+    - module: core.directory.present
       params_subset:
         path: /etc/redis/tls
     - module: core.file.present

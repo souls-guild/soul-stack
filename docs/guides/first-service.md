@@ -117,7 +117,7 @@ Analysis by blocks.
 
 **`state_changes:` - what to record in state after success.** The key `sets` is the map `<state field>: <value>`. After **all** incarnation hosts have successfully completed the cross-host barrier, Keeper writes `incarnation.state.greeting_file = /tmp/soul-stack-hello` to Postgres. Here the value is a literal; in the general case, this is also a CEL expression (you can use `${ input.* }`, `${ register.* }`, etc.). The barrier/state-commit invariant and the grammar `state_changes` (`sets` / future `appends` / `modifies`) - [docs/scenario/orchestration.md → §7](../scenario/orchestration.md).
 
-> Why is `on:` / `where:` not here. `on:` is the target of the step (on which hosts to execute). The omitted `on:` means "entire incarnation"—all hosts under the root coven `${ incarnation.name }`. That's enough for us. Targeting by covens (`on:`) and volatile per-host predicate (`where:`) - [orchestration.md → §3–§4](../scenario/orchestration.md).
+> Why is `on:` / `where:` not here. `on:` is the target of the step (on which hosts to execute). The omitted `on:` means "entire incarnation"—all **member** hosts (via the membership relation; `incarnation.name` is not a Coven). That's enough for us. Targeting by covens (`on:`) and volatile per-host predicate (`where:`) - [orchestration.md → §3–§4](../scenario/orchestration.md).
 
 ### Script test (optional, but useful)
 

@@ -70,7 +70,6 @@ func buildBarrierRunner(t *testing.T, cfgYAML string, db *fakeCertDB) (*Runner, 
 	rot := buildRotator(db, &fakeSigner{cert: makeTestCertPEM(t)}, &fakeVaultWriter{}, CertRotatorConfig{
 		Threshold:           30 * 24 * time.Hour,
 		DefaultPKIMount:     "pki",
-		DefaultPKIRole:      "service-tls",
 		MaxRotationsPerTick: 20,
 	})
 	rn, err := NewRunner(Deps{

@@ -213,6 +213,13 @@ var writeRoutesNoAudit = map[route]string{
 	// reads the state of a single incarnation, mutates nothing. Permission
 	// incarnation.get (read pattern). audit deliberately not written.
 	{http.MethodPost, "/v1/incarnations/{name}/scenarios/{scenario}/form-prefill"}: "day-2 pre-fill of the form from incarnation.state (docs/input.md): read-only resolve of a single incarnation, without mutation - audit deliberately not written (pattern get/module.form-prep)",
+
+	// POST /auth/token — exchange of session-cookie for a short-lived Bearer (NIM-77, Option B).
+	// POST by HTTP method, but does not mutate state: reissuing a token from an already
+	// verified cookie (high-freq refresh on every tab/SPA reload).
+	// audit deliberately not written — otherwise the stream of refreshes would flood audit_log
+	// (the login itself is already recorded via operator.login on /auth/{ldap,oidc}).
+	{http.MethodPost, "/auth/token"}: "NIM-77: exchange session-cookie->short-lived Bearer, read-like refresh without state mutation - audit deliberately not written (high-freq; login already writes operator.login)",
 }
 
 // writeMethods — HTTP methods considered mutating by the guard.

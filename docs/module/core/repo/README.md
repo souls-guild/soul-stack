@@ -30,10 +30,11 @@ trust store without reference to the repository);
 |---|---|---|---|
 | `name` | string | required | Repository name. Becomes the file name (`<name>.list`/`<name>.repo`), so it is validated: only `[A-Za-z0-9._-]`, without `/`, `\` and `..` (protection against path-traversal - writes outside the target directory). |
 | `uri` | string | required (for `present`) | Base URL of the repository. Valid `http://` and `https://` (`file://`/`ftp://`/blank - error). `http://` is legitimate for the interior mirror, but gives a mandatory warning (see Security). |
-| `gpg_key` | string | optional | Contents of the GPG key inline (ASCII-armored/PEM or binary keyring - written as is). For apt, it materializes in `/etc/apt/keyrings/<name>.gpg` (mode `0644`) and connects via `signed-by=`; for dnf/yum it is written to `gpgkey=`. Downloading a key from a URL is **not** implemented in MVP (CEL can substitute the content via `${ file(...) }`/`vault`). Critical for supply-chain. |
+| `gpg_key` | string | optional | Contents of the GPG key inline (ASCII-armored/PEM or binary keyring - written as is). For apt, it materializes in `/etc/apt/keyrings/<name>.gpg` (mode `0644`) and connects via `signed-by=`; for dnf/yum it is written to `gpgkey=`. The key **by URL is deliberately not fetched in core.repo** (ADR-071 §(g), option B): network/SSRF stays in [`core.url.fetched`](../url/README.md) (network_outbound + SSRF-guard + checksum), and the content is fed in here inline via `${ file(...) }`/`vault`. Critical for supply-chain. |
 | `gpg_check` | bool | optional (default `true`) | Cryptographic packet verification. `false` - opt-out, allowed, but gives a mandatory warning (symmetry of checksum-opt-out in core.url). For dnf/yum it is written in `gpgcheck=`. |
 | `suite` | string | optional | Suite/distribution (apt: `deb <uri> <suite> <components>`). It does not affect dnf/yum/apk (apk puts the full URL in `uri`). |
 | `components` | list | optional | apt-string components (`main contrib …`). Apt only. |
+| `arch` | list | optional | Architectures of the apt line → option `[arch=amd64,arm64 …]` (after `signed-by=`). Tokens are sanitized (`[a-z0-9]`, no spaces/brackets — protection against option injection). apt only; ignored on dnf/yum/apk (like `suite`/`components`). ADR-071. |
 | `enabled` | bool | optional (default `true`) | Is the repository enabled? `false`: for apt/apk the line is commented out (`# …`), for dnf/yum - `enabled=0`. |
 
 ## absent — params
@@ -97,6 +98,46 @@ key) - field `warnings: [...]` with a list of strings (they end up in the output
     components: [main]
     gpg_key: "${ file('files/example.gpg.asc') }"
 ```
+
+### Upstream mirror in a closed network (ADR-071, option B)
+
+Connecting an internal apt mirror (e.g. redis.io in Nexus) — two steps: the key
+is brought in by `core.url.fetched` (network_outbound + SSRF-guard + checksum there),
+and `core.repo` declares the repo with an inline key via `${ file(...) }` and sets `arch`.
+core.repo does NOT touch the network (pure-FS) — the key-by-URL stays outside the module:
+
+```yaml
+# 1) redis.io key from the internal mirror (allow_private — internal Nexus, ADR-067)
+- name: Fetch redis.io signing key
+  module: core.url.fetched
+  params:
+    url: https://nexus.internal/repository/redis-raw/redis.gpg
+    path: /etc/soul-stack/keys/redis.asc
+    checksum: "sha256:<hex>"
+    allow_private: true
+
+# 2) declare the apt mirror (uri=Nexus, arch=amd64, inline key)
+- name: Declare redis.io apt mirror
+  module: core.repo.present
+  params:
+    name: redis
+    uri: https://nexus.internal/repository/redis-apt
+    suite: bookworm
+    components: [main]
+    arch: [amd64]
+    gpg_key: "${ file('/etc/soul-stack/keys/redis.asc') }"
+```
+
+Result — `/etc/apt/sources.list.d/redis.list`:
+
+```
+deb [signed-by=/etc/apt/keyrings/redis.gpg arch=amd64] https://nexus.internal/repository/redis-apt bookworm main
+```
+
+The key can be ASCII-armored (`.asc`): apt ≥ 1.4 reads an armored keyring via
+`signed-by=` directly; if a binary keyring is needed — the mirror already serves a
+dearmored key (dearmor happens outside core.repo). Installing a package from the declared
+mirror is done by `core.pkg.installed` with an `=version` pin (S3/NIM-105).
 
 `absent` (apk) - deletion matches `uri`:
 

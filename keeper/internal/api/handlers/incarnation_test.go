@@ -1276,7 +1276,9 @@ func TestIncarnation_List_Unrestricted_All(t *testing.T) {
 }
 
 // TestIncarnation_List_CovenScope_ReachesSQL — a coven-scoped operator: covens
-// reach the SQL as the []string argument of the coven∪{name} pushdown.
+// reach the SQL as the []string argument of the coven array-overlap pushdown
+// (NIM-128: `covens && $::text[]`; coven and incarnation-name are now separate
+// dimensions — NIM-124 removed the coven==name equivalence).
 func TestIncarnation_List_CovenScope_ReachesSQL(t *testing.T) {
 	var listSQL string
 	db := &fakeIncDB{
@@ -1294,83 +1296,38 @@ func TestIncarnation_List_CovenScope_ReachesSQL(t *testing.T) {
 	if !scopeArgHas(db.lastCountArgs, []string{"redis-prod"}) {
 		t.Errorf("coven-scope [redis-prod] did not reach SQL-args: %v", db.lastCountArgs)
 	}
-	// coven∪{name}: the SQL must contain both arms (covens && + name = ANY).
-	if !strings.Contains(listSQL, "covens &&") || !strings.Contains(listSQL, "name = ANY") {
-		t.Errorf("coven∪{name} SQL incomplete (need both covens && AND name = ANY): %q", listSQL)
+	// NIM-128: coven renders as an array-overlap pushdown (`covens && $::text[]`).
+	if !strings.Contains(listSQL, "covens &&") {
+		t.Errorf("coven pushdown (covens &&) not in SQL: %q", listSQL)
 	}
 }
 
-// TestIncarnation_List_StateScope_ResolvedNamesReachSQL — the state dimension of Purview
-// (StateExprs): the handler pre-resolves incarnation names via statepredicate and
-// threads them as a `name = ANY($n)` pushdown. fakeIncDB: the state-resolve pass (page
-// lister) finds redis-a (redis_version==8.0) → its name reaches scope.
-func TestIncarnation_List_StateScope_ResolvedNamesReachSQL(t *testing.T) {
-	// One fakeIncDB serves BOTH the state-resolve (page-lister SelectAll) AND
-	// the final list-SelectAll. Both go through Query/QueryRow on the same SQL
-	// signatures; the state-lister returns real rows (for CEL eval), the final
-	// list — empty (we only care about scope-args).
-	resolveRows := []staticRow{
-		incListRow("redis-a", nil, map[string]any{"redis_version": "8.0"}),
-		incListRow("redis-b", nil, map[string]any{"redis_version": "7.2"}),
-	}
-	var queryCall int
+// TestIncarnation_List_IncarnationScope_ReachesSQL — an incarnation-name-scoped
+// operator (NIM-128 `incarnation=<n>` dimension): the name reaches the SQL as the
+// []string argument of the `name = ANY($::text[])` pushdown.
+func TestIncarnation_List_IncarnationScope_ReachesSQL(t *testing.T) {
+	var listSQL string
 	db := &fakeIncDB{
-		countRow: func(_ string) pgx.Row { return staticRow{values: []any{int(len(resolveRows))}} },
-	}
-	db.listRows = func() (pgx.Rows, error) {
-		queryCall++
-		if queryCall == 1 {
-			// The first Query — the page-lister state-resolve: return rows for CEL.
-			return &incRows{rows: resolveRows}, nil
-		}
-		// The rest — the final list: empty (we care about scope-args).
-		return &emptyRows{}, nil
+		countRow:       func(_ string) pgx.Row { return staticRow{values: []any{int(0)}} },
+		listRows:       func() (pgx.Rows, error) { return &emptyRows{}, nil },
+		captureListSQL: func(sql string) { listSQL = sql },
 	}
 	h := NewIncarnationHandler(db, nil, nil, nil, nil, nil, nil,
-		fakeIncScoper{stateExprs: []string{`state.redis_version == "8.0"`}}, nil)
+		fakeIncScoper{incarnations: []string{"redis-prod"}}, nil)
 
 	rec := doIncList(t, h, "")
 	if rec.Code != http.StatusOK {
 		t.Fatalf("Code = %d, body=%s", rec.Code, rec.Body.String())
 	}
-	// The name redis-a (state-matched) must reach the final list as a scope-arg.
-	if !scopeArgHas(db.lastCountArgs, []string{"redis-a"}) {
-		t.Errorf("state-resolve: name redis-a did not reach the final list-SQL as scope-name: %v", db.lastCountArgs)
+	if !scopeArgHas(db.lastCountArgs, []string{"redis-prod"}) {
+		t.Errorf("incarnation-scope [redis-prod] did not reach SQL-args: %v", db.lastCountArgs)
+	}
+	if !strings.Contains(listSQL, "name = ANY") {
+		t.Errorf("incarnation pushdown (name = ANY) not in SQL: %q", listSQL)
 	}
 }
 
-// TestIncarnation_List_OR_CovenAndState_Union — OR of dimensions: coven ∪ state =
-// union. coven=prod + state redis8 → the final list receives BOTH scope-covens [prod]
-// AND the state-resolved names. Both arms are present in args.
-func TestIncarnation_List_OR_CovenAndState_Union(t *testing.T) {
-	resolveRows := []staticRow{incListRow("redis-8", nil, map[string]any{"redis_version": "8.0"})}
-	var queryCall int
-	db := &fakeIncDB{
-		countRow: func(_ string) pgx.Row { return staticRow{values: []any{int(1)}} },
-	}
-	db.listRows = func() (pgx.Rows, error) {
-		queryCall++
-		if queryCall == 1 {
-			return &incRows{rows: resolveRows}, nil
-		}
-		return &emptyRows{}, nil
-	}
-	h := NewIncarnationHandler(db, nil, nil, nil, nil, nil, nil,
-		fakeIncScoper{covens: []string{"prod"}, stateExprs: []string{`state.redis_version == "8.0"`}}, nil)
-
-	rec := doIncList(t, h, "")
-	if rec.Code != http.StatusOK {
-		t.Fatalf("Code = %d, body=%s", rec.Code, rec.Body.String())
-	}
-	if !scopeArgHas(db.lastCountArgs, []string{"prod"}) {
-		t.Errorf("OR-union: coven arm [prod] did not reach SQL: %v", db.lastCountArgs)
-	}
-	if !scopeArgHas(db.lastCountArgs, []string{"redis-8"}) {
-		t.Errorf("OR-union: state arm [redis-8] did not reach SQL: %v", db.lastCountArgs)
-	}
-}
-
-// --- Get scoped (ADR-047 S3b-3) ---------------------------------------
+// --- Get scoped (NIM-128 boolean scope) -------------------------------
 
 func doIncGet(t *testing.T, h *IncarnationHandler, name string) *httptest.ResponseRecorder {
 	t.Helper()
@@ -1432,9 +1389,10 @@ func TestIncarnation_Get_CovenMatch_200(t *testing.T) {
 	}
 }
 
-// TestIncarnation_Get_NameMatch_200 — coven∪{name}: an incarnation WITHOUT matching
-// covens[], but whose NAME = a scope-coven (ADR-008 root label) → 200. Regress =
-// an operator with scope coven=redis-prod does not see incarnation redis-prod.
+// TestIncarnation_Get_NameMatch_200 — the NIM-128 `incarnation=<name>` dimension:
+// an incarnation WITHOUT matching covens[], but whose name matches a scope
+// `incarnation=redis-prod` → 200. (Under NIM-124 coven and name are separate
+// dimensions; name is matched by the incarnation dimension, not by coven.)
 func TestIncarnation_Get_NameMatch_200(t *testing.T) {
 	db := &fakeIncDB{
 		selectByNameRow: func(name string) pgx.Row {
@@ -1442,10 +1400,10 @@ func TestIncarnation_Get_NameMatch_200(t *testing.T) {
 		},
 	}
 	h := NewIncarnationHandler(db, nil, nil, nil, nil, nil, nil,
-		fakeIncScoper{covens: []string{"redis-prod"}}, nil)
+		fakeIncScoper{incarnations: []string{"redis-prod"}}, nil)
 	rec := doIncGet(t, h, "redis-prod")
 	if rec.Code != http.StatusOK {
-		t.Errorf("Code = %d, want 200 (coven∪{name}: name=redis-prod matches scope coven=redis-prod)", rec.Code)
+		t.Errorf("Code = %d, want 200 (incarnation=redis-prod dimension matches name)", rec.Code)
 	}
 }
 
@@ -1462,38 +1420,6 @@ func TestIncarnation_Get_CovenMismatch_404(t *testing.T) {
 	rec := doIncGet(t, h, "redis-prod")
 	if rec.Code != http.StatusNotFound {
 		t.Errorf("Code = %d, want 404 (incarnation outside scope)", rec.Code)
-	}
-}
-
-// TestIncarnation_Get_StateMatch_200 — the state dimension: an incarnation whose state
-// satisfies a scope StateExpr → 200 (without a coven match).
-func TestIncarnation_Get_StateMatch_200(t *testing.T) {
-	db := &fakeIncDB{
-		selectByNameRow: func(name string) pgx.Row {
-			return incListRow(name, []string{"staging"}, map[string]any{"redis_version": "8.0"})
-		},
-	}
-	h := NewIncarnationHandler(db, nil, nil, nil, nil, nil, nil,
-		fakeIncScoper{stateExprs: []string{`state.redis_version == "8.0"`}}, nil)
-	rec := doIncGet(t, h, "redis-prod")
-	if rec.Code != http.StatusOK {
-		t.Errorf("Code = %d, want 200 (state-match via StateExpr)", rec.Code)
-	}
-}
-
-// TestIncarnation_Get_StateMismatch_404 — state satisfies no
-// StateExpr and there is no coven match → 404.
-func TestIncarnation_Get_StateMismatch_404(t *testing.T) {
-	db := &fakeIncDB{
-		selectByNameRow: func(name string) pgx.Row {
-			return incListRow(name, []string{"staging"}, map[string]any{"redis_version": "7.2"})
-		},
-	}
-	h := NewIncarnationHandler(db, nil, nil, nil, nil, nil, nil,
-		fakeIncScoper{stateExprs: []string{`state.redis_version == "8.0"`}}, nil)
-	rec := doIncGet(t, h, "redis-prod")
-	if rec.Code != http.StatusNotFound {
-		t.Errorf("Code = %d, want 404 (state does not match)", rec.Code)
 	}
 }
 
@@ -1515,33 +1441,6 @@ func fakeIncHistoryDB(name string, covens []string, state map[string]any) *fakeI
 		selectByNameRow: func(string) pgx.Row { return row },
 		countRow:        func(string) pgx.Row { return staticRow{values: []any{int(0)}} },
 		listRows:        func() (pgx.Rows, error) { return &emptyRows{}, nil },
-	}
-}
-
-// TestIncarnation_History_StateMatch_200 — the History gate moved to existence-
-// only RequireAction (ADR-047 §d): a state-scoped operator reaches the handler,
-// narrowing via getInScope("history"). state matches a StateExpr → 200. Regress
-// (before Fix 2) = a state-scoped operator got 403 at the Multi route-gate (the state
-// dimension does not resolve in the incarnation context → deny BEFORE the handler).
-func TestIncarnation_History_StateMatch_200(t *testing.T) {
-	db := fakeIncHistoryDB("redis-prod", []string{"staging"}, map[string]any{"redis_version": "8.0"})
-	h := NewIncarnationHandler(db, nil, nil, nil, nil, nil, nil,
-		fakeIncScoper{stateExprs: []string{`state.redis_version == "8.0"`}}, nil)
-	rec := doIncHistory(t, h, "redis-prod")
-	if rec.Code != http.StatusOK {
-		t.Errorf("Code = %d, want 200 (state-scoped sees the history of its own incarnation)", rec.Code)
-	}
-}
-
-// TestIncarnation_History_StateMismatch_404 — state matches no StateExpr, no
-// coven match → 404 (another's incarnation history is not revealed).
-func TestIncarnation_History_StateMismatch_404(t *testing.T) {
-	db := fakeIncHistoryDB("redis-prod", []string{"staging"}, map[string]any{"redis_version": "7.2"})
-	h := NewIncarnationHandler(db, nil, nil, nil, nil, nil, nil,
-		fakeIncScoper{stateExprs: []string{`state.redis_version == "8.0"`}}, nil)
-	rec := doIncHistory(t, h, "redis-prod")
-	if rec.Code != http.StatusNotFound {
-		t.Errorf("Code = %d, want 404 (state does not match -- history hidden)", rec.Code)
 	}
 }
 
@@ -1582,31 +1481,56 @@ func hasCovenCtx(ctxs []map[string]string, name, service, coven string) bool {
 	return false
 }
 
-func TestIncarnationCovenContexts_DeclaredPlusName(t *testing.T) {
-	ctxs := incarnationCovenContexts("redis-prod", "redis", []string{"prod", "dc1"})
-	// covens ∪ {name} = {prod, dc1, redis-prod}, service in all.
-	if len(ctxs) != 3 {
-		t.Fatalf("len = %d, want 3: %v", len(ctxs), ctxs)
+// hasIncOnlyCtx — whether the set contains a context with no coven key (the
+// incarnation/service dimension only), matching name+service.
+func hasIncOnlyCtx(ctxs []map[string]string, name, service string) bool {
+	for _, c := range ctxs {
+		if _, hasCoven := c["coven"]; hasCoven {
+			continue
+		}
+		if c["incarnation"] == name && c["service"] == service {
+			return true
+		}
 	}
-	for _, coven := range []string{"prod", "dc1", "redis-prod"} {
+	return false
+}
+
+// hasAnyCovenValue — whether any context carries coven==v (used to prove the
+// incarnation name is NOT injected as a coven, NIM-124).
+func hasAnyCovenValue(ctxs []map[string]string, v string) bool {
+	for _, c := range ctxs {
+		if c["coven"] == v {
+			return true
+		}
+	}
+	return false
+}
+
+func TestIncarnationCovenContexts_DeclaredCovensNoName(t *testing.T) {
+	ctxs := incarnationCovenContexts("redis-prod", "redis", []string{"prod", "dc1"})
+	// NIM-124: only the declared covens {prod, dc1}, name is NOT a coven.
+	if len(ctxs) != 2 {
+		t.Fatalf("len = %d, want 2 (declared covens only, no name-coven): %v", len(ctxs), ctxs)
+	}
+	for _, coven := range []string{"prod", "dc1"} {
 		if !hasCovenCtx(ctxs, "redis-prod", "redis", coven) {
 			t.Errorf("missing context for coven=%q: %v", coven, ctxs)
 		}
 	}
-}
-
-func TestIncarnationCovenContexts_NameDedup(t *testing.T) {
-	// name is already in covens → not duplicated.
-	ctxs := incarnationCovenContexts("prod", "redis", []string{"prod"})
-	if len(ctxs) != 1 {
-		t.Fatalf("len = %d, want 1 (dedup): %v", len(ctxs), ctxs)
+	if hasAnyCovenValue(ctxs, "redis-prod") {
+		t.Errorf("incarnation name must NOT appear as a coven value: %v", ctxs)
 	}
 }
 
-func TestIncarnationCovenContexts_EmptyCovens_NameOnly(t *testing.T) {
+func TestIncarnationCovenContexts_EmptyCovens_IncarnationOnly(t *testing.T) {
+	// NIM-124: no declared covens → a single incarnation/service context (scope
+	// by the name is the incarnation= dimension, not coven=).
 	ctxs := incarnationCovenContexts("foo", "redis", nil)
-	if len(ctxs) != 1 || !hasCovenCtx(ctxs, "foo", "redis", "foo") {
-		t.Fatalf("want single name-as-coven context, got %v", ctxs)
+	if len(ctxs) != 1 || !hasIncOnlyCtx(ctxs, "foo", "redis") {
+		t.Fatalf("want single incarnation-only context, got %v", ctxs)
+	}
+	if hasAnyCovenValue(ctxs, "foo") {
+		t.Errorf("incarnation name must NOT appear as a coven value: %v", ctxs)
 	}
 }
 
@@ -1635,10 +1559,11 @@ func TestIncarnationScopeSelector_ReadsRow(t *testing.T) {
 	sel := IncarnationScopeSelector(db)
 	req := newChiRequest(http.MethodGet, "/v1/incarnations/redis-prod", nil, "name", "redis-prod")
 	ctxs := sel(req)
-	for _, coven := range []string{"prod", "redis-prod"} {
-		if !hasCovenCtx(ctxs, "redis-prod", "redis", coven) {
-			t.Errorf("missing coven=%q in %v", coven, ctxs)
-		}
+	if !hasCovenCtx(ctxs, "redis-prod", "redis", "prod") {
+		t.Errorf("missing coven=prod in %v", ctxs)
+	}
+	if hasAnyCovenValue(ctxs, "redis-prod") {
+		t.Errorf("NIM-124: incarnation name must NOT appear as a coven value: %v", ctxs)
 	}
 }
 
@@ -1664,10 +1589,11 @@ func TestIncarnationCreateScopeSelector_FromBody(t *testing.T) {
 	body := bytes.NewReader([]byte(`{"name":"redis-prod","service":"redis","covens":["prod"]}`))
 	req := httptest.NewRequest(http.MethodPost, "/v1/incarnations", body)
 	ctxs := IncarnationCreateScopeSelector(req)
-	for _, coven := range []string{"prod", "redis-prod"} {
-		if !hasCovenCtx(ctxs, "redis-prod", "redis", coven) {
-			t.Errorf("missing coven=%q in %v", coven, ctxs)
-		}
+	if !hasCovenCtx(ctxs, "redis-prod", "redis", "prod") {
+		t.Errorf("missing coven=prod in %v", ctxs)
+	}
+	if hasAnyCovenValue(ctxs, "redis-prod") {
+		t.Errorf("NIM-124: incarnation name must NOT appear as a coven value: %v", ctxs)
 	}
 	// The body is restored for the handler.
 	rest, _ := io.ReadAll(req.Body)
@@ -1717,13 +1643,17 @@ func (f *fakeResolver) Resolve(service string) (artifact.ServiceRef, bool) {
 	return artifact.ServiceRef{Name: service, Ref: "v1"}, f.ok
 }
 
-// fakeIncScoper — a mock [PurviewResolver] for scoped List/Get tests (ADR-047
-// S3b-3). The fields map into [rbac.Purview]: covens → Covens, stateExprs → StateExprs,
-// traitExprs → TraitExprs (ADR-060 §7 slice 1, `key:value` pairs).
-// empty=true → Purview{} (fail-closed). Symmetric with soul_test.fakeScoper.
+// fakeIncScoper — a mock [PurviewResolver] for scoped List/Get tests (NIM-128
+// boolean scope). Fields are lowered into rbac.Purview.Exprs (the OR-set of
+// scope predicates): covens → `coven=<c>`, incarnations → `incarnation=<n>`,
+// traitExprs (`key:value`) → `trait.<key>="<value>"` (the value is double-quoted
+// so injection-probe values with special characters still parse — the grammar
+// accepts any non-`"` byte inside quotes). empty=true → Purview{} (fail-closed);
+// unrestricted=true → Unrestricted. The `state` dimension was REMOVED in NIM-128
+// (no longer part of RBAC scope). Symmetric with soul_test.fakeScoper.
 type fakeIncScoper struct {
 	covens       []string
-	stateExprs   []string
+	incarnations []string
 	traitExprs   []string
 	unrestricted bool
 	empty        bool
@@ -1733,12 +1663,22 @@ func (s fakeIncScoper) ResolvePurview(_, _, _ string) rbac.Purview {
 	if s.empty {
 		return rbac.Purview{}
 	}
-	return rbac.Purview{
-		Covens:       s.covens,
-		StateExprs:   s.stateExprs,
-		TraitExprs:   s.traitExprs,
-		Unrestricted: s.unrestricted,
+	if s.unrestricted {
+		return rbac.Purview{Unrestricted: true}
 	}
+	var exprs []*rbac.ScopeExpr
+	for _, c := range s.covens {
+		exprs = append(exprs, mustScopeExpr("coven="+c))
+	}
+	for _, n := range s.incarnations {
+		exprs = append(exprs, mustScopeExpr("incarnation="+n))
+	}
+	for _, te := range s.traitExprs {
+		if k, v, ok := strings.Cut(te, ":"); ok {
+			exprs = append(exprs, mustScopeExpr("trait."+k+`="`+v+`"`))
+		}
+	}
+	return rbac.Purview{Exprs: exprs}
 }
 
 // unrestrictedScoper — a typical Unrestricted scoper for existing List/Get

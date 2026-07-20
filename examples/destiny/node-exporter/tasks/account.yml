@@ -25,12 +25,12 @@
     group: "${ input.group }"
     shell: /usr/sbin/nologin
 
-# textfile directory. Declarative state core.file.directory: idempotent on
+# textfile directory. Declarative state core.directory.present: idempotent on
 # mode/owner/group, fixes drift, supports dry-run (unlike the imperative
 # core.exec.run install -d). owner/group — the service account (oneshot collectors
 # write there as root, the main daemon reads).
 - name: Ensure textfile collector directory exists
-  module: core.file.directory
+  module: core.directory.present
   params:
     path:  "${ input.textfile_dir }"
     owner: "${ input.user }"

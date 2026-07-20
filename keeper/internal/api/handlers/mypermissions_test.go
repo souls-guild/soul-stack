@@ -55,36 +55,37 @@ func TestMyPermissions_Wildcard(t *testing.T) {
 	}
 }
 
-// TestMyPermissions_StateScope — guard for the state dimension of scope (ADR-047 S2c):
-// a permission with a per-perm `state='...'` selector must carry the predicate down to
-// the domain shape under the State field (the native projection in api puts it under
-// snake_case `state`; wire byte-exact is checked by golden huma_catalog_reply_test.go).
-func TestMyPermissions_StateScope(t *testing.T) {
+// TestMyPermissions_HostScope — guard for a boolean scope predicate (NIM-128):
+// a permission with a per-perm `on host matches <glob>` selector must carry the
+// canonical predicate string down to the domain shape under Exprs (the native
+// projection in api puts it under snake_case `exprs`; wire byte-exact is checked
+// by golden huma_catalog_reply_test.go).
+func TestMyPermissions_HostScope(t *testing.T) {
 	e := rbactest.MustEnforcer(t, &rbactest.Config{Roles: []rbactest.Role{
 		{
-			Name:        "state-scoped",
-			Operators:   []string{"archon-state"},
-			Permissions: []string{`incarnation.run on state='state.redis_version == "8.0"'`},
+			Name:        "host-scoped",
+			Operators:   []string{"archon-host"},
+			Permissions: []string{`incarnation.run on host matches web-*`},
 		},
 	}})
 	h := NewMyPermissionsHandler(e, nil)
 
-	resp := h.GetTyped("archon-state")
+	resp := h.GetTyped("archon-host")
 	p, ok := findMyPermission(resp.Permissions, "incarnation", "run")
 	if !ok || p.Scope == nil {
 		t.Fatalf("incarnation.run without scope: %+v", resp.Permissions)
 	}
-	if len(p.Scope.State) != 1 || p.Scope.State[0] != `state.redis_version == "8.0"` {
-		t.Errorf("scope.State = %v, expected a single state predicate", p.Scope.State)
+	if len(p.Scope.Exprs) != 1 || p.Scope.Exprs[0] != "host matches web-*" {
+		t.Errorf("scope.Exprs = %v, expected a single host-glob predicate", p.Scope.Exprs)
 	}
 	if p.Scope.Unrestricted {
-		t.Errorf("scope with a state selector must not be unrestricted: %+v", p.Scope)
+		t.Errorf("scope with a host selector must not be unrestricted: %+v", p.Scope)
 	}
 }
 
 func TestMyPermissions_ScopeIncluded(t *testing.T) {
 	// default_scope=coven=prod on the role → bare incarnation.run inherits scope:
-	// covens=[prod], unrestricted=false.
+	// exprs=[coven=prod], unrestricted=false.
 	snap := rbactest.Snapshot(&rbactest.Config{Roles: []rbactest.Role{
 		{Name: "prod-runner", Operators: []string{"archon-prod"}, Permissions: []string{"incarnation.run"}},
 	}})
@@ -98,12 +99,12 @@ func TestMyPermissions_ScopeIncluded(t *testing.T) {
 		t.Fatalf("incarnation.run missing: %+v", resp.Permissions)
 	}
 	if p.Scope == nil {
-		t.Fatalf("scope not assembled, expected covens=[prod]: %+v", p)
+		t.Fatalf("scope not assembled, expected exprs=[coven=prod]: %+v", p)
 	}
 	if p.Scope.Unrestricted {
 		t.Errorf("scope with coven=prod must not be unrestricted: %+v", p.Scope)
 	}
-	if len(p.Scope.Covens) != 1 || p.Scope.Covens[0] != "prod" {
-		t.Errorf("Covens = %v, expected [prod]", p.Scope.Covens)
+	if len(p.Scope.Exprs) != 1 || p.Scope.Exprs[0] != "coven=prod" {
+		t.Errorf("Exprs = %v, expected [coven=prod]", p.Scope.Exprs)
 	}
 }

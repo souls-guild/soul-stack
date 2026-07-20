@@ -7,8 +7,15 @@
 //
 // Mode semantics:
 //   - append (default): existing ∪ provided.
-//   - replace: provided (empty set is an error, footgun protection).
+//   - replace: provided (may be empty — clears all stable tags).
 //   - remove: existing \ provided.
+//
+// `coven` is OPTIONAL (ADR-008 amendment 2026-07-17/NIM-124): it carries only
+// real stable tags now and may be empty/omitted. Membership no longer lives in
+// coven[] — it is a first-class relation written by the bind act (keeper
+// dispatch, `incarnation_membership`) — so no coven operation can sever a host
+// from its incarnation, and the former "replace requires non-empty coven"
+// footgun guard is removed.
 //
 // Side-effect: if there is no record in `souls` for sid, the module creates it
 // with status: pending (new host added by scenario — host branch add_replica
@@ -135,7 +142,7 @@ func (m *Module) Validate(_ context.Context, req *pluginv1.ValidateRequest) (*pl
 	if err != nil {
 		errs = append(errs, err.Error())
 	}
-	if _, err := util.StringSliceParam(req.Params, "coven"); err != nil {
+	if _, err := util.OptStringSliceParam(req.Params, "coven"); err != nil {
 		errs = append(errs, err.Error())
 	}
 	if mode, err := util.OptStringParam(req.Params, "mode"); err != nil {
@@ -173,7 +180,10 @@ func (m *Module) Apply(req *pluginv1.ApplyRequest, stream grpc.ServerStreamingSe
 			return util.SendFailed(stream, fmt.Sprintf("invalid sid %q", sid))
 		}
 	}
-	wanted, err := util.StringSliceParam(req.Params, "coven")
+	// coven is OPTIONAL now (ADR-008 amendment 2026-07-17/NIM-124): only real
+	// stable tags, may be empty/omitted. Membership is written separately by the
+	// keeper dispatch (incarnation_membership), not via a coven value.
+	wanted, err := util.OptStringSliceParam(req.Params, "coven")
 	if err != nil {
 		return util.SendFailed(stream, err.Error())
 	}
@@ -220,11 +230,6 @@ func (m *Module) Apply(req *pluginv1.ApplyRequest, stream grpc.ServerStreamingSe
 	// presence alone does not guarantee it (first report write is async).
 	if awaitCfg != nil {
 		awaitCfg.requireFacts = refreshSoulprint
-	}
-
-	// replace + empty coven is an error (double footgun protection).
-	if modeParam == ModeReplace && len(wanted) == 0 {
-		return util.SendFailed(stream, "mode=replace requires non-empty coven (footgun protection: host must keep at least one coven label)")
 	}
 
 	// Register all SIDs (common coven set applies to each).

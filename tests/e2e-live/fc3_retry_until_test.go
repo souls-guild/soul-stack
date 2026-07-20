@@ -72,9 +72,9 @@ func TestFC3RetryUntil_HealthGateOnRealTiming(t *testing.T) {
 
 	const incName = "fc3-retry-until"
 
-	// Coven membership BEFORE Create: the roster resolves via `incarnation.name ∈ coven[]`
-	// (ADR-008). Without it the scenario sees no_hosts -> zero apply_runs rows.
-	stack.AddSoulToCoven(t, 0, incName)
+	// Membership BEFORE Create: the roster resolves members via incarnation_membership
+	// (ADR-008 amendment/NIM-124). Without it the scenario sees no_hosts -> zero apply_runs rows.
+	stack.AddMember(t, 0, incName)
 
 	// POST /v1/incarnations auto-runs the create scenario and returns apply_id.
 	inc, applyID := stack.CreateIncarnationWithApply(t, incName, "fc3-retry-until@main", nil)

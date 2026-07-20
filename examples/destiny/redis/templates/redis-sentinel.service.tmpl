@@ -23,20 +23,30 @@ Group={{ .vars.redis_group }}
 RuntimeDirectory=redis
 RuntimeDirectoryMode=0755
 
-# systemd hardening (symmetric to the redis-server hardening drop-in). conf_dir in RW paths
-# is REQUIRED: redis-sentinel rewrites sentinel.conf at runtime (persisting topology:
-# master/replicas/epoch/known-sentinels), unlike redis-server on create.
+# systemd-hardening UNIFIED with the redis-server drop-in (NIM-97; guard —
+# TestSentinelUnit_HardeningParity). conf_dir in ReadWritePaths is REQUIRED:
+# redis-sentinel rewrites sentinel.conf at runtime (persisting topology —
+# master/replicas/epoch/known-sentinels). MDWE=yes/UMask=007/LimitNOFILE/AF_UNIX —
+# rationale in hardening.conf.tmpl (AF_UNIX is critical: Type=notify sd_notify goes
+# over a unix socket).
+NoNewPrivileges=yes
 ProtectSystem=strict
-ReadWritePaths={{ .vars.data_dir }} {{ .vars.log_dir }} {{ .vars.run_dir }} {{ .vars.conf_dir }}
+ReadWritePaths={{ .vars.data_dir }} {{ .vars.run_dir }} {{ .vars.log_dir }} {{ .vars.conf_dir }}
 ProtectHome=yes
 PrivateTmp=yes
+PrivateDevices=yes
 ProtectKernelTunables=yes
 ProtectKernelModules=yes
 ProtectControlGroups=yes
-LockPersonality=yes
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+RestrictNamespaces=yes
 RestrictRealtime=yes
 RestrictSUIDSGID=yes
-NoNewPrivileges=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+UMask=007
+CapabilityBoundingSet=
+LimitNOFILE=65535
 
 [Install]
 WantedBy=multi-user.target

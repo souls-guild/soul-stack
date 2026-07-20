@@ -116,6 +116,7 @@ func fullSpecGroups() []specGroup {
 			registerHumaIncarnationCreate(api, stub)
 			registerHumaIncarnationList(api, stub)
 			registerHumaIncarnationGet(api, stub)
+			registerHumaIncarnationTelemetry(api, handlers.TelemetrySpecStub())
 			registerHumaIncarnationUpgradePaths(api, stub)
 			registerHumaIncarnationFormPrefill(api, stub)
 			registerHumaIncarnationHistory(api, stub)
@@ -165,6 +166,7 @@ func fullSpecGroups() []specGroup {
 			registerHumaSoulGet(api, stub)
 			registerHumaSoulSoulprint(api, stub)
 			registerHumaSoulHistory(api, stub)
+			registerHumaSoulTelemetry(api, handlers.TelemetrySpecStub())
 			registerHumaSoulIssueToken(api, stub)
 			registerHumaSoulSshTarget(api, stub)
 			registerHumaSoulExec(api, handlers.ErrandSpecStub())
@@ -197,6 +199,7 @@ func fullSpecGroups() []specGroup {
 			registerHumaServiceStateSchema(api, stub)
 			registerHumaServiceDependencies(api, stub)
 			registerHumaServiceDirectives(api, stub)
+			registerHumaServiceTelemetry(api, stub)
 			return nil
 		}},
 		{"/v1/provisioning-policy", func(api huma.API) error {
@@ -349,6 +352,14 @@ func fullSpecGroups() []specGroup {
 		// its own paths (LDAP-POST and OIDC-GET do not overlap by path).
 		{"/auth", func(api huma.API) error {
 			registerHumaOIDCLogin(api, oidcAuthSpecStub())
+			return nil
+		}},
+		// NIM-77: public GET /auth/methods (always) + POST /auth/token (session-cookie->Bearer
+		// exchange, Option B). Separate group - paths do not overlap
+		// with ldap/oidc; prefix "/auth" (Operation.Path is relative: /methods, /token).
+		{"/auth", func(api huma.API) error {
+			registerHumaAuthMethods(api, authMethodsSpecStub())
+			registerHumaAuthTokenExchange(api, authTokenSpecStub())
 			return nil
 		}},
 	}

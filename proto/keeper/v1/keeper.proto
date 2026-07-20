@@ -10,6 +10,7 @@ import "keeper/v1/sigil.proto";
 import "keeper/v1/augur.proto";
 import "keeper/v1/beacon.proto";
 import "keeper/v1/errand.proto";
+import "keeper/v1/utilization.proto";
 
 option go_package = "github.com/souls-guild/soul-stack/proto/gen/go/keeper/v1;keeperv1";
 
@@ -51,6 +52,7 @@ message FromSoul {
     PortentEvent portent_event = 7;
     WardRoster ward_roster = 8;
     ErrandResult errand_result = 9;
+    HostUtilization host_utilization = 10;
   }
 }
 
@@ -68,5 +70,6 @@ message FromKeeper {
     VigilSnapshot vigil_snapshot = 9;
     ErrandRequest errand_request = 10;
     CancelErrand cancel_errand = 11;
+    TelemetryConfig telemetry_config = 12;
   }
 }

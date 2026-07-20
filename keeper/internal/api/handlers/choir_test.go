@@ -35,7 +35,8 @@ type fakeChoirDB struct {
 	insertChoirErr error
 	// AddVoice: QueryRow(selectChoirForUpdateSQL).Scan(&dummy).
 	choirLockRows pgx.Row // nil → success (returns 1); errRow{pgx.ErrNoRows} → ErrChoirNotFound
-	// AddVoice: Query(membershipSQL) — which SIDs are actually members of the incarnation.
+	// AddVoice: Query(membershipSQL over incarnation_membership) — which SIDs are
+	// actually members of the incarnation (NIM-124).
 	memberSIDs []string
 	// AddVoice: QueryRow(insertVoiceSQL).Scan(&AddedAt).
 	insertVoiceErr error
@@ -81,7 +82,7 @@ func (f *fakeChoirDB) QueryRow(_ context.Context, sql string, _ ...any) pgx.Row 
 
 func (f *fakeChoirDB) Query(_ context.Context, sql string, _ ...any) (pgx.Rows, error) {
 	switch {
-	case strings.Contains(sql, "FROM souls"):
+	case strings.Contains(sql, "FROM incarnation_membership"):
 		rows := make([][]any, 0, len(f.memberSIDs))
 		for _, s := range f.memberSIDs {
 			rows = append(rows, []any{s})

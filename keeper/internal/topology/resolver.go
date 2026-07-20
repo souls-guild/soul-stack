@@ -58,9 +58,10 @@ func NewResolver(pool *pgxpool.Pool, lease SoulLeaseChecker, logger *slog.Logger
 	return &Resolver{pool: pool, lease: lease, logger: logger}
 }
 
-// rosterSQL — phase 1 (SQL): targeting candidates — souls where
-// `incarnation.name` is present in `coven[]` (ADR-008: root Coven label) and
-// whose status is NOT terminal/onboarding.
+// rosterSQL — phase 1 (SQL): targeting candidates — members of the incarnation
+// (join on `incarnation_membership`, ADR-008 amendment 2026-07-17/NIM-124: no
+// longer `incarnation.name = ANY(coven)`) whose status is NOT terminal/onboarding.
+// The per-host `coven` field is projected as-is (real stable tags only now).
 //
 // Presence (online/offline) is NOT filtered here: authority for "Soul online" —
 // live Redis SID-lease, checked by phase 2 ([Resolver.filterAlive]). Status
@@ -72,12 +73,13 @@ func NewResolver(pool *pgxpool.Pool, lease SoulLeaseChecker, logger *slog.Logger
 // ORDER BY sid — deterministic order (scenario/orchestration.md §:
 // lexicographically by SID; otherwise destructive operations are not reproducible).
 const rosterSQL = `
-SELECT sid, coven, traits, status,
-       soulprint_facts, soulprint_collected_at, soulprint_received_at
-FROM souls
-WHERE $1 = ANY(coven)
-  AND status NOT IN ('pending', 'revoked', 'expired', 'destroyed')
-ORDER BY sid ASC
+SELECT s.sid, s.coven, s.traits, s.status,
+       s.soulprint_facts, s.soulprint_collected_at, s.soulprint_received_at
+FROM souls s
+JOIN incarnation_membership m ON m.sid = s.sid
+WHERE m.incarnation_name = $1
+  AND s.status NOT IN ('pending', 'revoked', 'expired', 'destroyed')
+ORDER BY s.sid ASC
 `
 
 // incarnationSpecSQL reads spec of one incarnation to extract declared roles
@@ -105,12 +107,12 @@ ORDER BY sid ASC, choir_name ASC
 `
 
 // LoadIncarnationHosts resolves scenario run hosts for incarnation
-// `incarnationName`: online-souls with this Coven label + last-reported
-// soulprint + declared role from `incarnation.spec.hosts[].role`.
+// `incarnationName`: online member souls + last-reported soulprint + declared
+// role from `incarnation.spec.hosts[].role`.
 //
 // Two-phase (ADR-006(a)):
-//   - Phase 1 (SQL, [rosterSQL]): candidates by Coven membership + non-terminal/
-//     non-onboarding status. Presence is NOT decided here.
+//   - Phase 1 (SQL, [rosterSQL]): candidates by incarnation_membership +
+//     non-terminal/non-onboarding status. Presence is NOT decided here.
 //   - Phase 2 (Redis, [Resolver.filterAlive]): filtering candidates without live
 //     SID-lease (presence = online ⇔ lease is alive). nil-lease (unit / single-
 //     instance dev) → fallback to SQL-presence (status='connected').
@@ -118,8 +120,8 @@ ORDER BY sid ASC, choir_name ASC
 // Semantics:
 //   - Nonexistent incarnation / no online hosts → empty slice, NOT
 //     error (PM-decision #3).
-//   - Cross-incarnation isolation: only souls with Coven label
-//     `incarnationName` and spec of exactly this incarnation are read (ADR-008, PM-decision #4).
+//   - Cross-incarnation isolation: only member souls of `incarnationName` and
+//     spec of exactly this incarnation are read (membership join, PM-decision #4).
 //   - Stale soulprint (`received_at < now - 10m`) → warn to logger,
 //     run is not blocked (ADR-018, PM-decision #2).
 func (r *Resolver) LoadIncarnationHosts(ctx context.Context, incarnationName string) ([]*HostFacts, error) {

@@ -658,3 +658,121 @@ mystery: 42
 		t.Fatalf("expected unknown_key for non-deprecated unknown top-level field")
 	}
 }
+
+// TestLoadServiceManifest_TelemetryAbsent — without a telemetry block the getters give
+// defaults (nil-safe), the manifest parses without errors (backcompat, NIM-87).
+func TestLoadServiceManifest_TelemetryAbsent(t *testing.T) {
+	src := "name: svc-golden\nstate_schema_version: 1\nstate_schema:\n  type: object\n"
+	cfg, _, diags, _ := LoadServiceManifestFromBytes("service.yml", []byte(src), ValidateOptions{})
+	if diag.HasErrors(diags) {
+		dump(t, diags)
+		t.Fatal("unexpected errors without a telemetry block")
+	}
+	if cfg.Telemetry != nil {
+		t.Error("Telemetry must be nil without a block")
+	}
+	if !cfg.Telemetry.EnabledOrDefault() {
+		t.Error("nil block → EnabledOrDefault()=true")
+	}
+	if got := cfg.Telemetry.IntervalOrDefault(); got != "30s" {
+		t.Errorf("nil block → IntervalOrDefault()=30s, got %q", got)
+	}
+	if got := cfg.Telemetry.CollectorsOrDefault(); len(got) != len(KnownCollectors) {
+		t.Errorf("nil block → CollectorsOrDefault()=all %d, got %v", len(KnownCollectors), got)
+	}
+}
+
+// TestLoadServiceManifest_Telemetry — set values are read into *bool/*string/[]string.
+func TestLoadServiceManifest_Telemetry(t *testing.T) {
+	src := `name: svc-golden
+state_schema_version: 1
+state_schema:
+  type: object
+telemetry:
+  enabled: false
+  interval: "45s"
+  collectors: [cpu, mem]
+`
+	cfg, _, diags, _ := LoadServiceManifestFromBytes("service.yml", []byte(src), ValidateOptions{})
+	if diag.HasErrors(diags) {
+		dump(t, diags)
+		t.Fatal("a valid telemetry block produced errors")
+	}
+	if cfg.Telemetry == nil {
+		t.Fatal("Telemetry nil, expected a parsed block")
+	}
+	if cfg.Telemetry.EnabledOrDefault() {
+		t.Error("enabled=false → EnabledOrDefault()=false")
+	}
+	if got := cfg.Telemetry.IntervalOrDefault(); got != "45s" {
+		t.Errorf("IntervalOrDefault()=45s, got %q", got)
+	}
+	if got := cfg.Telemetry.CollectorsOrDefault(); len(got) != 2 || got[0] != "cpu" || got[1] != "mem" {
+		t.Errorf("CollectorsOrDefault()=[cpu mem], got %v", got)
+	}
+}
+
+// TestLoadServiceManifest_TelemetryBadCollector — unknown collector → unknown_collector.
+func TestLoadServiceManifest_TelemetryBadCollector(t *testing.T) {
+	src := `name: svc-golden
+state_schema_version: 1
+state_schema:
+  type: object
+telemetry:
+  collectors: [cpu, foobar]
+`
+	_, _, diags, _ := LoadServiceManifestFromBytes("service.yml", []byte(src), ValidateOptions{})
+	if !hasCodeAt(diags, "unknown_collector", "$.telemetry.collectors") {
+		dump(t, diags)
+		t.Fatal("expected unknown_collector for foobar")
+	}
+}
+
+// TestLoadServiceManifest_TelemetryIntervalFloor — interval < 10s → value_out_of_range.
+func TestLoadServiceManifest_TelemetryIntervalFloor(t *testing.T) {
+	src := `name: svc-golden
+state_schema_version: 1
+state_schema:
+  type: object
+telemetry:
+  interval: "3s"
+`
+	_, _, diags, _ := LoadServiceManifestFromBytes("service.yml", []byte(src), ValidateOptions{})
+	if !hasCodeAt(diags, "value_out_of_range", "$.telemetry.interval") {
+		dump(t, diags)
+		t.Fatal("expected value_out_of_range for interval 3s (< floor)")
+	}
+}
+
+// TestLoadServiceManifest_TelemetryIntervalInvalid — interval fails to parse → duration_invalid.
+func TestLoadServiceManifest_TelemetryIntervalInvalid(t *testing.T) {
+	src := `name: svc-golden
+state_schema_version: 1
+state_schema:
+  type: object
+telemetry:
+  interval: "nonsense"
+`
+	_, _, diags, _ := LoadServiceManifestFromBytes("service.yml", []byte(src), ValidateOptions{})
+	if !hasCodeAt(diags, "duration_invalid", "$.telemetry.interval") {
+		dump(t, diags)
+		t.Fatal("expected duration_invalid for interval nonsense")
+	}
+}
+
+// TestLoadServiceManifest_TelemetryUnknownKey — a typo under telemetry is caught
+// by the reflect-walker as unknown_key (auto, TelemetryConfig is not in the stop types).
+func TestLoadServiceManifest_TelemetryUnknownKey(t *testing.T) {
+	src := `name: svc-golden
+state_schema_version: 1
+state_schema:
+  type: object
+telemetry:
+  bogus: 1
+`
+	_, _, diags, _ := LoadServiceManifestFromBytes("service.yml", []byte(src), ValidateOptions{})
+	if !hasCodeAt(diags, "unknown_key", "$.telemetry.bogus") {
+		dump(t, diags)
+		t.Fatal("expected unknown_key for the bogus typo under telemetry")
+	}
+}

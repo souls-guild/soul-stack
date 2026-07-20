@@ -492,9 +492,21 @@ func parseTTL(raw, fieldName string, def time.Duration) (time.Duration, error) {
 	return d, nil
 }
 
-// Keeper command runtime helper note.
-// Keeper command runtime helper note.
-// Keeper command runtime helper note.
+// minExchangeTTL is a floor on auth.jwt.exchange_ttl: a lower value is raised
+// to it (protection from a misconfig that would make the cookie->Bearer exchange pointless).
+const minExchangeTTL = 1 * time.Minute
+
+// clampExchangeTTL raises d to minExchangeTTL if it is below the floor.
+func clampExchangeTTL(d time.Duration) time.Duration {
+	if d < minExchangeTTL {
+		return minExchangeTTL
+	}
+	return d
+}
+
+// envTruthy reads an env variable as a boolean flag via [strconv.ParseBool]
+// (accepts 1/t/T/true/TRUE etc). An empty or invalid string -> false:
+// an env-override must not "accidentally" enable a mode due to a typo/garbage.
 func envTruthy(name string) bool {
 	v := os.Getenv(name)
 	if v == "" {

@@ -217,6 +217,164 @@ func TestIntegration_Subset_DefaultScope_UnrestrictedCaller_AnyScope_OK(t *testi
 	}
 }
 
+// ---- default_scope widening via UpdateRolePermissions (NIM-130) ----
+
+// setupScopedUpdater sets up a caller scoped to coven=prod holding bare
+// incarnation.run (effective scope covens[prod]) plus role.update. alice is
+// cluster-admin (a second admin against self-lockout). Mirrors
+// setupScopedCaller but for the update path.
+func setupScopedUpdater(t *testing.T) (sub, alice string) {
+	t.Helper()
+	ctx := context.Background()
+	seedOperator(t, "archon-alice", nil)
+	a := "archon-alice"
+	seedOperator(t, "archon-sub", &a)
+	if err := GrantOperator(ctx, integrationPool, "cluster-admin", "archon-alice", nil); err != nil {
+		t.Fatalf("grant alice→cluster-admin: %v", err)
+	}
+	insertRoleScoped(t, "prod-updaters", "coven=prod", "incarnation.run", "role.update")
+	if err := GrantOperator(ctx, integrationPool, "prod-updaters", "archon-sub", &a); err != nil {
+		t.Fatalf("grant sub→prod-updaters: %v", err)
+	}
+	return "archon-sub", a
+}
+
+// roleScope reads a role's raw default_scope for assertions.
+func roleScope(t *testing.T, name string) *string {
+	t.Helper()
+	scope, err := roleDefaultScope(context.Background(), integrationPool, name)
+	if err != nil {
+		t.Fatalf("roleScope %q: %v", name, err)
+	}
+	return scope
+}
+
+// ESCALATION: caller scope=prod keeps a role's permission set unchanged
+// (added=∅) but WIDENS its default_scope prod→staging. The bare permission
+// re-scopes to coven=staging, outside the caller's scope → must be DENIED and
+// the scope left untouched. Before the fix, the added-only gate saw an empty
+// delta and the widening slipped through.
+func TestIntegration_Subset_UpdateRole_WidenScope_Denied(t *testing.T) {
+	resetRBAC(t)
+	sub, _ := setupScopedUpdater(t)
+	insertRoleScoped(t, "target", "coven=prod", "incarnation.run")
+	s := newService(t)
+
+	staging := "coven=staging"
+	err := s.UpdateRolePermissions(context.Background(), UpdateRolePermissionsInput{
+		Name:            "target",
+		Permissions:     []string{"incarnation.run"},
+		SetDefaultScope: true,
+		DefaultScope:    &staging,
+		CallerAID:       sub,
+	})
+	if !errors.Is(err, ErrPermissionNotHeld) {
+		t.Fatalf("err = %v, want ErrPermissionNotHeld (widening prod→staging)", err)
+	}
+	if got := roleScope(t, "target"); got == nil || *got != "coven=prod" {
+		t.Errorf("default_scope = %v, want coven=prod (rollback)", got)
+	}
+}
+
+// ESCALATION: same, but the new default_scope is nil (unrestricted). The bare
+// permission becomes unrestricted, which the scoped caller doesn't hold →
+// DENIED, scope untouched.
+func TestIntegration_Subset_UpdateRole_ClearScope_Denied(t *testing.T) {
+	resetRBAC(t)
+	sub, _ := setupScopedUpdater(t)
+	insertRoleScoped(t, "target", "coven=prod", "incarnation.run")
+	s := newService(t)
+
+	err := s.UpdateRolePermissions(context.Background(), UpdateRolePermissionsInput{
+		Name:            "target",
+		Permissions:     []string{"incarnation.run"},
+		SetDefaultScope: true,
+		DefaultScope:    nil,
+		CallerAID:       sub,
+	})
+	if !errors.Is(err, ErrPermissionNotHeld) {
+		t.Fatalf("err = %v, want ErrPermissionNotHeld (clearing scope to unrestricted)", err)
+	}
+	if got := roleScope(t, "target"); got == nil || *got != "coven=prod" {
+		t.Errorf("default_scope = %v, want coven=prod (rollback)", got)
+	}
+}
+
+// caller scope=prod re-sets the SAME scope (prod→prod) on unchanged perms →
+// OK (the resulting grant stays within the caller's scope).
+func TestIntegration_Subset_UpdateRole_SameScope_OK(t *testing.T) {
+	resetRBAC(t)
+	sub, _ := setupScopedUpdater(t)
+	insertRoleScoped(t, "target", "coven=prod", "incarnation.run")
+	s := newService(t)
+
+	prod := "coven=prod"
+	if err := s.UpdateRolePermissions(context.Background(), UpdateRolePermissionsInput{
+		Name:            "target",
+		Permissions:     []string{"incarnation.run"},
+		SetDefaultScope: true,
+		DefaultScope:    &prod,
+		CallerAID:       sub,
+	}); err != nil {
+		t.Fatalf("UpdateRolePermissions (same scope=prod): %v", err)
+	}
+	if got := roleScope(t, "target"); got == nil || *got != "coven=prod" {
+		t.Errorf("default_scope = %v, want coven=prod", got)
+	}
+}
+
+// caller scope=prod NARROWS a role's scope into its own scope (staging→prod)
+// → OK: the resulting grant is fully within the caller's prod scope.
+func TestIntegration_Subset_UpdateRole_ReScopeIntoScope_OK(t *testing.T) {
+	resetRBAC(t)
+	sub, _ := setupScopedUpdater(t)
+	insertRoleScoped(t, "target", "coven=staging", "incarnation.run")
+	s := newService(t)
+
+	prod := "coven=prod"
+	if err := s.UpdateRolePermissions(context.Background(), UpdateRolePermissionsInput{
+		Name:            "target",
+		Permissions:     []string{"incarnation.run"},
+		SetDefaultScope: true,
+		DefaultScope:    &prod,
+		CallerAID:       sub,
+	}); err != nil {
+		t.Fatalf("UpdateRolePermissions (re-scope staging→prod): %v", err)
+	}
+	if got := roleScope(t, "target"); got == nil || *got != "coven=prod" {
+		t.Errorf("default_scope = %v, want coven=prod", got)
+	}
+}
+
+// REGRESSION: SetDefaultScope=false + trimming a permission the caller doesn't
+// hold (added=∅) → OK. The PATCH-trim path must stay byte-for-byte: the scope
+// is untouched, only the added set is gated, and a pure removal isn't
+// escalation.
+func TestIntegration_Subset_UpdateRole_TrimNoScope_OK(t *testing.T) {
+	resetRBAC(t)
+	sub, _ := setupScopedUpdater(t)
+	insertRoleScoped(t, "target", "coven=prod", "incarnation.run", "operator.create")
+	s := newService(t)
+
+	// sub doesn't hold operator.create; trimming it (SetDefaultScope=false) is
+	// a removal, not escalation.
+	if err := s.UpdateRolePermissions(context.Background(), UpdateRolePermissionsInput{
+		Name:            "target",
+		Permissions:     []string{"incarnation.run"},
+		SetDefaultScope: false,
+		CallerAID:       sub,
+	}); err != nil {
+		t.Fatalf("UpdateRolePermissions (trim, no scope change): %v", err)
+	}
+	got := rolePerms(t, "target")
+	if len(got) != 1 || got[0] != "incarnation.run" {
+		t.Errorf("permissions = %v, want [incarnation.run]", got)
+	}
+	if scope := roleScope(t, "target"); scope == nil || *scope != "coven=prod" {
+		t.Errorf("default_scope = %v, want coven=prod (untouched)", scope)
+	}
+}
+
 // ---- CreateRole subset check ----
 
 // suboperator tries to create a role with `*` → denied (escalation to cluster-admin).

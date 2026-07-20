@@ -158,7 +158,7 @@ assert:
     # users.acl render. Regression "conf-dir hardcoded to /etc/redis or override is dead" =
     # a task with path /etc/redis (see task_absent) OR its absence. Disambiguator from
     # modules-dir/tls-dir/socket-dir — path /opt/redis.
-    - module: core.file.directory
+    - module: core.directory.present
       params_subset:
         path: /opt/redis
         owner: redis
@@ -167,7 +167,7 @@ assert:
         parents: true
 
     # modules-dir under the data_dir override. Disambiguator from systemd-dropin-dir — path.
-    - module: core.file.directory
+    - module: core.directory.present
       params_subset:
         path: /srv/redis-data/modules
         owner: redis
@@ -193,7 +193,7 @@ assert:
         path: /var/lib/redis/modules/redisearch.so
     # The conf-dir task under the DEFAULT path must NOT appear (conf_dir override → task
     # on /opt/redis, not /etc/redis). Regression "conf-dir hardcoded to /etc/redis bypassing override".
-    - module: core.file.directory
+    - module: core.directory.present
       params_subset:
         path: /etc/redis
 

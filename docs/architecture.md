@@ -81,7 +81,7 @@ Moved to [`docs/adr/0007-versioning-git-ref.md`](adr/0007-versioning-git-ref.md)
 
 ### [ADR-008. Coven - stable logical tags only](adr/0008-coven-stable-tags.md)
 
-Moved to [`docs/adr/0008-coven-stable-tags.md`](adr/0008-coven-stable-tags.md). Coven - only stable logical tags (cluster / project / environment / data center); `incarnation.name` remains the root Coven label; convention `{incarnation.name}-{role}` deleted; role NOT Coven (declared in spec / actual via probe); essence role-agnostic. Amendments: environment = special case Coven (first-class `Environment` rejected, per-Coven RBAC-scope implemented); cross-incarnation was lifted at the Voyage layer; Choir ≠ coven.
+Moved to [`docs/adr/0008-coven-stable-tags.md`](adr/0008-coven-stable-tags.md). Coven - only stable logical tags (cluster / project / environment / data center); convention `{incarnation.name}-{role}` deleted; role NOT Coven (declared in spec / actual via probe); essence role-agnostic. Amendments: environment = special case Coven (first-class `Environment` rejected, per-Coven RBAC-scope implemented); cross-incarnation was lifted at the Voyage layer; Choir ≠ coven. **[2026-07-17 (NIM-124): `incarnation.name` is NO LONGER a Coven — incarnation membership is a first-class relation `incarnation_membership`; the `on:` resolver / RBAC / bulk-select decouple from `coven==name`; `on: ["${ incarnation.name }"]` is a validation error.](adr/0008-coven-stable-tags.md#amendment-2026-07-17-nim-124-incarnationname-is-not-a-coven--membership-is-a-first-class-relation)**
 
 ### [ADR-009. Scenario - a complete DSL of destiny tasks; border with destiny - recommendation](adr/0009-scenario-dsl.md)
 
@@ -109,11 +109,11 @@ Moved to [`docs/adr/0014-operator-identity.md`](adr/0014-operator-identity.md). 
 
 ### [ADR-015. Core MVP modules: exact list](adr/0015-core-modules-mvp.md)
 
-Moved to [`docs/adr/0015-core-modules-mvp.md`](adr/0015-core-modules-mvp.md). 17 Soul-side core modules (`core.pkg`/`core.file`/`core.service`/`core.user`/`core.group`/`core.exec`/`core.cmd`/`core.cron`/`core.mount`/`core.git`/`core.archive`/`core.sysctl`/`core.url`/`core.line`/`core.repo`/`core.firewall`/`core.http`) + 3 Keeper-side (`core.soul.registered`/`core.cloud.provisioned`/`core.vault.kv-read`); `core.template`/`core.copy` are NOT deliberately highlighted; `core.line`/`core.repo`/`core.firewall`/`core.http` accepted post-facto (in-place/read-probe MVP).
+Moved to [`docs/adr/0015-core-modules-mvp.md`](adr/0015-core-modules-mvp.md). 18 Soul-side core modules (`core.pkg`/`core.file`/`core.directory`/`core.service`/`core.user`/`core.group`/`core.exec`/`core.cmd`/`core.cron`/`core.mount`/`core.git`/`core.archive`/`core.sysctl`/`core.url`/`core.line`/`core.repo`/`core.firewall`/`core.http`) + 3 Keeper-side (`core.soul.registered`/`core.cloud.provisioned`/`core.vault.kv-read`); `core.template`/`core.copy` are NOT deliberately highlighted; `core.line`/`core.repo`/`core.firewall`/`core.http` accepted post-facto (in-place/read-probe MVP). Amendment 2026-07-17: `core.file.directory` split out into the standalone `core.directory` (`present`/`absent`, hard rename); `core.service` gains `disabled`/`masked`.
 
 ### [ADR-016. Parity strategy with SaltStack/Ansible and Soul Stack license](adr/0016-parity-license.md)
 
-Moved to [`docs/adr/0016-parity-license.md`](adr/0016-parity-license.md). License - Apache 2.0 (open core / freemium: enterprise features in separate repo). The parity strategy is a hybrid without a wrapper: core MVP is our Go rewrite, exotic is community plugins via SDK; wrapper Ansible is prohibited (GPLv3 + Python-runtime). Amendments: Plugin SDK Phase 2 (10 official `soul-mod-*`, namespace `official`, template mechanism).
+Moved to [`docs/adr/0016-parity-license.md`](adr/0016-parity-license.md). License - **BSL 1.1** for the core (this repo) and frontend (`soul-stack-web`): fair-code, Change License Apache 2.0, Change Date 2 years (Amendment 2026-07-09); SDK/examples/plugins - Apache 2.0; enterprise features - separate commercial license. The parity strategy is a hybrid without a wrapper: core MVP is our Go rewrite, exotic is community plugins via SDK; wrapper Ansible is prohibited (GPLv3 + Python-runtime). Amendments: Plugin SDK Phase 2 (10 official `soul-mod-*`, namespace `official`, template mechanism); fair-code/BSL (license).
 
 ### [ADR-017. Keeper-side core modules expanded: `core.cloud.provisioned`, `core.vault.kv-read`](adr/0017-keeper-side-core.md)
 
@@ -307,7 +307,7 @@ This section applies to both **pull** and **push** transports. This is a single 
 
 ### Structure
 
-- **Core modules** - statically built into the `soul` binary. Cover the vast majority of Destiny: the exact list is fixed [ADR-015](#adr-015-core-mvp-modules-exact-list) – 17 Soul-side (`pkg`/`file`/`service`/`user`/`group`/`exec`/`cmd`/`cron`/`mount`/`git`/`archive`/`sysctl`/`url`/`line`/`repo`/`firewall`/`http`) + 3 Keeper-sides (`soul.registered`/`cloud.provisioned`/`vault.kv-read`, the last two are [ADR-017](#adr-017-keeper-side-core-modules-expanded-corecloudprovisioned-corevaultkv-read)). They work always, everywhere, and do not require additional delivery. By addressing, all built-in modules live in namespace `core`. Files from templates are rendered by `core.file.rendered` (see [ADR-010](#adr-010-template-engine-cel-for-yaml-expressions-go-texttemplate-for-files)) - a separate module `core.template` is NOT allocated.
+- **Core modules** - statically built into the `soul` binary. Cover the vast majority of Destiny: the exact list is fixed [ADR-015](#adr-015-core-mvp-modules-exact-list) – 18 Soul-side (`pkg`/`file`/`directory`/`service`/`user`/`group`/`exec`/`cmd`/`cron`/`mount`/`git`/`archive`/`sysctl`/`url`/`line`/`repo`/`firewall`/`http`; `directory` split from `file` per Amendment 2026-07-17, `service` also gains `disabled`/`masked`) + 3 Keeper-sides (`soul.registered`/`cloud.provisioned`/`vault.kv-read`, the last two are [ADR-017](#adr-017-keeper-side-core-modules-expanded-corecloudprovisioned-corevaultkv-read)). They work always, everywhere, and do not require additional delivery. By addressing, all built-in modules live in namespace `core`. Files from templates are rendered by `core.file.rendered` (see [ADR-010](#adr-010-template-engine-cel-for-yaml-expressions-go-texttemplate-for-files)) - a separate module `core.template` is NOT allocated.
 - **Custom modules** - separate executable files `soul-mod-<name>`, located in `/var/lib/soul-stack/modules/`. The `soul` binary runs them as a sub-process with the stdio protocol (see below). By addressing they live in the namespace of their collection (`wb`, `community`, ...).
 
 > **Soul-side vs Keeper-side core modules.** The vast majority of core modules (`pkg`, `file`, `service`, `user`, `exec`, `template`, …) are **Soul-side**: executed on the host `soul`-binary. Some of the core modules are **Keeper-side**: they operate on the keeper's registries (Postgres souls+coven, Redis cache, logs) and are executed on the keeper itself. The first Keeper-side core is `core.soul.registered` (SID binding to coven tags of the souls registry; full specification is [`docs/keeper/modules.md`](keeper/modules.md)). Dispatcher - scenario key `on:` ([`docs/scenario/orchestration.md §3`](scenario/orchestration.md)): for Soul-side core `on:` is omitted or contains coven tags; for Keeper-side core `on: keeper`. The addressing (`<namespace>.<module>.<state>`) and the SoulModule contract are the same for both parties.
@@ -554,6 +554,10 @@ Moved to [`docs/adr/0067-vector-log-shipping.md`](adr/0067-vector-log-shipping.m
 
 Moved to [`docs/adr/0070-secret-reveal-path.md`](adr/0070-secret-reveal-path.md). **READ-double [ADR-064](adr/0064-secret-write-path.md)** (secret write-path): ADR-064 accepts the plaintext secret **FROM** the operator and writes to the Vault keeper-side, this ADR is the reverse direction: it gives the plaintext **BACK** to the operator under explicit permission. **Declarative registry `revealable_secrets[]`** in the manifest `service.yml` (generic, NOT redis hardcode in the kernel): entry `{id, label, enumerate: state.<array>, vault_ref: "secret/…/{incarnation}/…/{key}#field"}` - the service itself declares that its incarnations are disclosed. **Restricted placeholders `{incarnation}`/`{key}`** - literal substitution of validated values, **not CEL** (less attack-surface than computable language in the path to the secret): `key` is obliged ∈ enumerate-array **current** state (anti-arbitrariness), manifest version is always `incarnation.ServiceVersion` (anti version-craft), the result is run through `vault.ParseRef` (traversal-guard `..`). **Endpoints:** `POST /v1/incarnations/{name}/secrets/reveal` `{secret_id, key}` → `{value}` (self-audit `incarnation.secret_revealed` - `{name, secret_id, key, path}` **WITHOUT value**) + discovery `GET /v1/incarnations/{name}/secrets/revealable` → `{items: [{secret_id, label, state_path, keys}]}` (READ, no audit). Authorized expansion → 200-DTO **past `MaskSecrets`** (the only point where the value exits the domain). **★ Security trade-off** (mirror ADR-064: plaintext Keeper→wire operator, TLS) WITH mandatory mitigation blockers: RBAC-gate `incarnation.view-secrets` (scope `coven=`/`service=`/`incarnation=`, fail-closed **404** outside scope) / fact audit WITHOUT value + leak-guard tests for each sink / no body-logging (plaintext with response body only) / key-in-state / traversal-guard / vault-policy read-prefix (`secret/data/redis/*`). The right **`incarnation.view-secrets`** is a new scoped right ([ADR-047](adr/0047-purview.md)), **strictly more privileged than `incarnation.get`**; MCP-tool **no** (REST-only, like `form-prefill`). Rejected: redis-specific hardcode endpoint (in favor of generic registry); CEL in `vault_ref` (in favor of limited placeholders); reuse `incarnation.get`. Deferred (post-MVP): singleton secrets without `enumerate` (admin-password `secret/redis/{incarnation}#password`); the live manifest `community.redis` carries a follow-up section in the module repo. Implemented **NIM-74**. **Amends [ADR-064](adr/0064-secret-write-path.md) / [ADR-047](adr/0047-purview.md).**
 
+### [ADR-072. Host-Utilization — lightweight host-utilization telemetry over the presence channel](adr/0072-host-utilization.md)
+
+Moved to [`docs/adr/0072-host-utilization.md`](adr/0072-host-utilization.md). **Live host utilization** (CPU%/load/mem/disk/uptime) for the operator when opening an incarnation — "is the instance choking **right now**" — **without deploying Prometheus**. A third cheap **push layer** on top of the Soul→Keeper presence stream, independent of the **static** Soulprint ([ADR-018](adr/0018-soulprint-typed.md), refresh 5m, `soulprint.self.*` targeting facts) and the expensive pull-node-exporter; precedent of an independent observability layer — [ADR-067](adr/0067-vector-log-shipping.md). **Transport — Variant B:** new `FromSoul.host_utilization = 10` (message `HostUtilization`, file `proto/keeper/v1/utilization.proto`); alternative A (reserved fields 8-14 in `SoulprintFacts`) rejected — semantic violation (static→live), slow 5m cadence, pollutes the `soulprint` CEL namespace; only-add per [ADR-012(c)](adr/0012-keeper-soul-grpc.md). **Economical pulse** — 30s default / floor 10s (anti-DoS clamp+warn), single-writer via `handleSession`. **Redis-only storage** (hot data, not PG — [ADR-006](adr/0006-cache-redis.md)): latest Hash `soul:<sid>:util` + TTL 3x interval + list-ring `soul:<sid>:util:win` (`LPUSH`/`LTRIM`, N=60 sparklines) — **not RedisTimeSeries** (portable to `redis:7-alpine` and DragonFly, which lack the module). **Invariants:** liveness does NOT depend on utilization (authority — lease [ADR-006](adr/0006-cache-redis.md), graceful degrade when data is missing); freshness — the API returns `stale` (stale data is never presented as fresh, mirroring the Soulprint `collected_at`/`received_at` skew pattern); authenticity — SID comes only from the mTLS peer cert, NEVER from the payload. **API:** `GET /v1/souls/{sid}/telemetry` (latest + window + freshness) + `GET /v1/incarnations/{name}/telemetry` (aggregate across hosts `coven && ARRAY[name]`). **Defers:** delivering config to the agent + essence-override + collector toggles (**NIM-87**), the web HostsTab panel (**NIM-88**), collector extensibility (only-add new fields). **Amends [ADR-024](adr/0024-observability.md)** (a lightweight utilization layer alongside pull metrics / OTel traces / [ADR-067](adr/0067-vector-log-shipping.md) push logs). Layer name — `Host-Utilization`, proto message — `HostUtilization`, in [naming-rules](naming-rules.md). **Amendment 2026-07-18 (NIM-127):** +network throughput (`net_rx_bps`/`net_tx_bps`/`net_err_ps`, aggregate physical-NIC rate) + inode per-mount (`DiskUtilization.inodes_used`/`inodes_total`) + collector `net`; server-side worst-case `IncarnationRollup`; two-tier read UX (soul-page Overview strip + `Utilization` tab, incarnation curated columns + rollup); disk-IO deferred.
+
 ## Plugin infrastructure
 
 Soul Stack has three categories of extensions: **Destiny modules**, **cloud providers**, and **SSH push providers**. All three use **single plugin infrastructure** - the same handshake mechanism, protocol, requirements for the artifact. Only the service contract (gRPC service) that the plugin implements changes.
@@ -786,7 +790,7 @@ tasks:
       count:    "${ input.spawn.count }"
 
   - name: install-redis
-    on: ["${ incarnation.name }"]     # the whole incarnation (you could have omitted on:)
+    # on: omitted = the whole incarnation (all member hosts)
     apply:
       destiny: redis
       input:
@@ -914,7 +918,7 @@ Incarnation is a specific **instance** of a service in reality (one Redis cluste
 | Field | Type | Meaning |
 |---|---|---|
 | `incarnation_id` | UUID | primary key |
-| `name` | text UNIQUE | name incarnation, also known as root Coven label |
+| `name` | text UNIQUE | incarnation name (global PK). **Not** a Coven — membership lives in `incarnation_membership` ([ADR-008 amendment 2026-07-17](adr/0008-coven-stable-tags.md#amendment-2026-07-17-nim-124-incarnationname-is-not-a-coven--membership-is-a-first-class-relation)) |
 | `service` | text | service name |
 | `service_version` | text | pin version (git-tag) of the service under which incarnation runs |
 | `state_schema_version` | integer | version of state_schema under which state is structured |
@@ -984,18 +988,16 @@ Rewritten under [ADR-008](#adr-008-coven---stable-logical-tags-only). The full r
 
 ### Coven - stable logical tags
 
-Coven - **only stable** logical tags (cluster / project / environment / data center / hardware type). When an incarnation is created, its name becomes the **root Coven label** of all its hosts:
+Coven - **only stable** logical tags (cluster / project / environment / data center / hardware type). `incarnation.name` is **not** a Coven ([ADR-008 amendment 2026-07-17](adr/0008-coven-stable-tags.md#amendment-2026-07-17-nim-124-incarnationname-is-not-a-coven--membership-is-a-first-class-relation)): incarnation **membership** is a first-class relation `incarnation_membership(incarnation_name, sid)`, not the fact that a host carries a coven equal to the incarnation name. Coven and membership are two separate axes.
 
-- `incarnation.name = test-cache-redis-cl-dev` → coven `test-cache-redis-cl-dev`.
-
-**There are no more sub-covens by role (`{incarnation.name}-{role}`)** - convention removed ([ADR-008](adr/0008-coven-stable-tags.md)). The role (master / replica) **not Coven**: it is volatile (failover) and is not suitable for a stable label. Covens are assigned automatically by **keeper**; additional stable covens (for example, `baremetal`, `prod`) are assigned declaratively via incarnation, the operator does not make separate "tag host" API calls.
+**There are no more sub-covens by role (`{incarnation.name}-{role}`)** - convention removed ([ADR-008](adr/0008-coven-stable-tags.md)). The role (master / replica) **not Coven**: it is volatile (failover) and is not suitable for a stable label. Stable covens (for example, `baremetal`, `prod`) are assigned declaratively via incarnation; the operator does not make separate "tag host" API calls.
 
 ### `on:` - stable step target
 
 Scenario step target - key **`on:`**, resolved by Postgres (stable layer):
 
 ```yaml
-# Entire incarnation (on: omitted - root coven implied)
+# Entire incarnation (on: omitted - all member hosts via the membership relation)
 - name: Apply base config everywhere
   apply: { destiny: redis-base, input: { ... } }
 
@@ -1006,13 +1008,13 @@ Scenario step target - key **`on:`**, resolved by Postgres (stable layer):
   state: created
   params: { ... }
 
-# Intersection (AND) of stable covens, always ⊆ incarnation hosts
+# Intersection (AND) of stable covens, always ⊆ members
 - name: Tune kernel on bare-metal hosts of this cluster
-  on: ["${ incarnation.name }", baremetal]
+  on: [baremetal]                  # incarnation scope is implicit (roster is membership-scoped)
   apply: { destiny: kernel-tuning, input: { ... } }
 ```
 
-**Resolver contract** (invariant): list in `on:` - AND/intersection covens; result **always ⊆ hosts incarnation**; **cross-incarnation targeting is prohibited by the grammar** (security invariant); role in `on:` is not involved. Completely - [`docs/scenario/orchestration.md §3`](scenario/orchestration.md).
+**Resolver contract** (invariant): the omitted `on:` = all **members** (via `incarnation_membership`); `on: ["${ incarnation.name }"]` is a **validation error** (`incarnation.name` is not a Coven); a list in `on:` - AND/intersection of stable covens, result **always ⊆ members**; **cross-incarnation targeting is prohibited by construction** (enforced by the membership roster); role in `on:` is not involved. Completely - [`docs/scenario/orchestration.md §3`](scenario/orchestration.md).
 
 ### `where:` - volatile role via probe + register
 
@@ -1020,16 +1022,13 @@ The volatile role (who is now master) is not stored anywhere stably. The scenari
 
 ```yaml
 - name: Detect actual redis role per host
-  module: core.exec.run
-  on: ["${ incarnation.name }"]
+  module: core.exec.run                # on: omitted = all member hosts
   register: redis_role
   changed_when: false
-  failed_when: size(register.redis_role) < incarnation.host_count
   params: { command: "redis-cli role | head -1" }
 
 - name: Restart only the current replicas
-  on: ["${ incarnation.name }"]
-  where: register.redis_role.stdout == 'slave'
+  where: register.redis_role.stdout == 'slave'   # on: omitted = all members
   module: core.service.restarted
   params: { name: redis-server }
 ```
@@ -1050,10 +1049,10 @@ In the template context of the scenario, the following are always available:
 When a host needs data from another host (what is done in Salt via Mine, in Ansible via `hostvars[X]`), the `soulprint.where(<predicate>)` function is used on the **stable** layer (the CEL predicate is a static string literal):
 
 ```yaml
-master_addr: "${ soulprint.where(\"incarnation.name in covens\")[0].network.primary_ip }"
+master_addr: "${ soulprint.hosts[0].network.primary_ip }"
 ```
 
-The request goes to Postgres + Redis hot layer. Soulprint after [ADR-008](#adr-008-coven---stable-logical-tags-only) stores **only stable** facts, so `soulprint.where(...)` operates on a stable layer; volatile role (who is now master) - exclusively through probe + `where:`-key, not through Soulprint. The predicate `.where(...)` is a static string literal, expanded at the compile phase into the native CEL filter-comprehension (not runtime; dynamic merging of the predicate is prohibited, the first element is `[0]`, see [ADR-010](#adr-010-template-engine-cel-for-yaml-expressions-go-texttemplate-for-files)). Cross-host master discovery - through the accessor `soulprint.hosts` (`soulprint.hosts.where("role == 'primary'")[0].network.primary_ip`), the declared role is taken from `incarnation.spec.hosts[].role`, a probe is defined on the runtime master (as in `restart`); normative - [`docs/scenario/orchestration.md §4.1`](scenario/orchestration.md) (the former open Q is closed there, see [§8](scenario/orchestration.md)).
+All members of the run are simply `soulprint.hosts` (the accessor is incarnation-scoped); a stable-coven filter is `soulprint.where("'<X>' in covens")`. `incarnation.name` is not a Coven, so `soulprint.where("incarnation.name in covens")` is removed ([ADR-008 amendment 2026-07-17](adr/0008-coven-stable-tags.md#amendment-2026-07-17-nim-124-incarnationname-is-not-a-coven--membership-is-a-first-class-relation)). The request goes to Postgres + Redis hot layer. Soulprint after [ADR-008](#adr-008-coven---stable-logical-tags-only) stores **only stable** facts, so `soulprint.where(...)` operates on a stable layer; volatile role (who is now master) - exclusively through probe + `where:`-key, not through Soulprint. The predicate `.where(...)` is a static string literal, expanded at the compile phase into the native CEL filter-comprehension (not runtime; dynamic merging of the predicate is prohibited, the first element is `[0]`, see [ADR-010](#adr-010-template-engine-cel-for-yaml-expressions-go-texttemplate-for-files)). Cross-host master discovery - through the accessor `soulprint.hosts` (`soulprint.hosts.where("role == 'primary'")[0].network.primary_ip`), the declared role is taken from `incarnation.spec.hosts[].role`, a probe is defined on the runtime master (as in `restart`); normative - [`docs/scenario/orchestration.md §4.1`](scenario/orchestration.md) (the former open Q is closed there, see [§8](scenario/orchestration.md)).
 
 ## Versioning and state_schema migrations
 

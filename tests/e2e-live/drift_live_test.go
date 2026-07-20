@@ -56,9 +56,9 @@ func TestL3bDriftLive_HelloWorld(t *testing.T) {
 
 	const incName = "test-hello-drift"
 
-	// Coven membership BEFORE Create: the roster resolves via `incarnation.name ∈ coven[]`
-	// (ADR-008, topology/resolver.go::rosterSQL); without it the scenario sees no_hosts.
-	stack.AddSoulToCoven(t, 0, incName)
+	// Membership BEFORE Create: the roster resolves members via incarnation_membership
+	// (ADR-008 amendment/NIM-124, topology/resolver.go::rosterSQL); without it the scenario sees no_hosts.
+	stack.AddMember(t, 0, incName)
 
 	// POST /v1/incarnations auto-runs create and returns its apply_id.
 	// A separate RunScenario(create) would be rejected by the lock gate ("incarnation

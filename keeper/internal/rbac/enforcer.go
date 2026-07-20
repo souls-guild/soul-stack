@@ -27,11 +27,11 @@ type Role struct {
 	Name        string
 	Permissions []Permission
 
-	// DefaultScope is the parsed role default_scope (ADR-047 S1), inherited by
-	// the role's permissions that have no selector of their own. nil = NULL =
-	// the dimension is NOT introduced (bare-permission roles → unrestricted,
-	// backcompat). Same shape as [Permission.Selector] — same closed key enum.
-	DefaultScope map[string][]string
+	// DefaultScope is the parsed role default_scope (ADR-047 S1, NIM-128
+	// boolean scope), inherited by the role's permissions that have no scope of
+	// their own. nil = NULL = the dimension is NOT introduced (bare-permission
+	// roles → unrestricted, backcompat).
+	DefaultScope *ScopeExpr
 }
 
 // Enforcer is an in-memory snapshot of the RBAC catalog. Safe for concurrent
@@ -158,13 +158,24 @@ func (e *Enforcer) Check(aid, resource, action string, context map[string]string
 		ErrPermissionDenied, aid, resource, action, joinRoleNames(roles))
 }
 
-// HasWildcard reports whether AID has at least one `*` permission (through
-// any role). Used by the self-lockout invariant — "cannot revoke the last
-// cluster-admin" (rbac.md → self-lockout invariant).
+// IsRevoked — whether the snapshot holds the AID in the revoked projection (ADR-014 Amendment).
+// A cheap map lookup without role/permission logic; the cookie→Bearer exchange
+// (POST /auth/token, NIM-77) rejects a revoked Archon in-memory, not via SQL.
+func (e *Enforcer) IsRevoked(aid string) bool {
+	_, ok := e.revoked[aid]
+	return ok
+}
+
+// HasWildcard — true if the AID has at least one `*`-permission
+// (through any of its roles). Used by the self-lockout invariant —
+// "cannot revoke the last cluster-admin" (rbac.md → Self-lockout invariant).
 func (e *Enforcer) HasWildcard(aid string) bool {
 	for _, role := range e.rolesByAID[aid] {
 		for _, p := range role.Permissions {
-			if p.IsWildcard {
+			// Only a BARE `*` is cluster-admin for self-lockout. A scoped
+			// `* on X` (NIM-128) is bounded and does NOT count — revoking the
+			// last such operator can't lock the cluster out of RBAC.
+			if p.IsWildcard && p.Scope == nil {
 				return true
 			}
 		}
@@ -235,7 +246,44 @@ func (e *Enforcer) ClusterAdmins() []string {
 // [Enforcer.ResolvePurview] and [Permission.Matches].
 func (e *Enforcer) CovenScope(aid, resource, action string) (covens []string, unrestricted bool) {
 	p := e.ResolvePurview(aid, resource, action)
-	return p.Covens, p.Unrestricted
+	if p.Unrestricted {
+		return nil, true
+	}
+	return covensFromPurview(p), false
+}
+
+// covensFromPurview conservatively extracts the coven labels an operator may
+// bulk-assign/target (NIM-128). A coven value counts ONLY when it appears in a
+// DNF disjunct that constrains coven ALONE — a disjunct mixing coven with
+// another dimension (`coven=a AND host matches x`) narrows below "any host in
+// coven a", so projecting it to just `a` would OVER-permit a bulk coven
+// mutation. Such mixed disjuncts are dropped (fail-closed). Order-stable.
+func covensFromPurview(p Purview) []string {
+	set := make(map[string]struct{})
+	for _, expr := range p.Exprs {
+		dnf, err := toDNF(expr)
+		if err != nil {
+			continue // too complex → contribute nothing (fail-closed)
+		}
+		for _, conj := range dnf {
+			pureCoven := true
+			for _, c := range conj {
+				if c.Dim != dimCoven || c.Match != MatchIn {
+					pureCoven = false
+					break
+				}
+			}
+			if !pureCoven {
+				continue
+			}
+			for _, c := range conj {
+				for _, v := range c.Values {
+					set[v] = struct{}{}
+				}
+			}
+		}
+	}
+	return sortedKeys(set)
 }
 
 // HoldsAction is the existence gate for read endpoints (ADR-047 §d amendment
@@ -272,11 +320,7 @@ func (e *Enforcer) HoldsAction(aid, resource, action string) bool {
 //   - otherwise bare/`*` (Unrestricted) OR any populated dimension
 //     (coven/regex/soulprint/state/trait) → true.
 func holdsFromPurview(p Purview) bool {
-	if p.Deny {
-		return false
-	}
-	return p.Unrestricted ||
-		len(p.Covens)+len(p.Regexes)+len(p.SoulprintExprs)+len(p.StateExprs)+len(p.TraitExprs) > 0
+	return p.Holds()
 }
 
 // RolesOf returns the names of the roles bound to AID. Used by `IssueToken`
@@ -353,20 +397,37 @@ func (e *Enforcer) PermissionsOf(aid string) []EffectivePermission {
 		return nil
 	}
 
-	// Dedup by (resource, action). Full-`*` is handled by a separate early
-	// branch — it never enters seen.
+	// Dedup by (resource, action). A BARE `*` is the unrestricted cluster-admin
+	// marker (dominates everything). A scoped `* on X` (NIM-128) is surfaced as
+	// a wildcard entry carrying its scope — "all actions, capped to X" — the
+	// ceiling for any (resource, action) not otherwise listed.
 	type pair struct{ resource, action string }
 	seen := make(map[pair]struct{})
+	seenWild := make(map[string]struct{})
+	var wildExprs []*ScopeExpr
 	for _, role := range roles {
 		for _, p := range role.Permissions {
 			if p.IsWildcard {
-				return []EffectivePermission{{Wildcard: true}}
+				if p.Scope == nil {
+					return []EffectivePermission{{Wildcard: true}}
+				}
+				if k := p.Scope.String(); k != "" {
+					if _, dup := seenWild[k]; !dup {
+						seenWild[k] = struct{}{}
+						wildExprs = append(wildExprs, p.Scope)
+					}
+				}
+				continue
 			}
 			seen[pair{p.Resource, p.Action}] = struct{}{}
 		}
 	}
 
-	out := make([]EffectivePermission, 0, len(seen))
+	out := make([]EffectivePermission, 0, len(seen)+1)
+	if len(wildExprs) > 0 {
+		sort.Slice(wildExprs, func(i, j int) bool { return wildExprs[i].String() < wildExprs[j].String() })
+		out = append(out, EffectivePermission{Wildcard: true, Scope: Purview{Exprs: wildExprs}})
+	}
 	for pr := range seen {
 		out = append(out, EffectivePermission{
 			Resource: pr.resource,

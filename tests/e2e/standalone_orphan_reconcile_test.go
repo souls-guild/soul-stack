@@ -81,7 +81,7 @@ func TestE2E_MultiKeeper_StandaloneOrphanReconcileAfterCrash(t *testing.T) {
 
 	// Ready incarnation with a single connected host in its coven.
 	stack.SeedIncarnationReady(t, incarnation, serviceName, "main", map[string]any{})
-	stack.AddSoulToCoven(t, 0, incarnation)
+	stack.AddMember(t, 0, incarnation)
 
 	// star DIRECT incarnation.run(create) -- standalone path (NOT Voyage; no
 	// voyage_targets back-link). lockRun on keeper-A writes applying + epoch
