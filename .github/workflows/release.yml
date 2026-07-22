@@ -58,7 +58,7 @@ jobs:
         uses: docker/setup-qemu-action@v3
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
+        uses: docker/setup-buildx-action@v4
 
       # Push target for the GHCR images. GITHUB_TOKEN has packages:write here.
       - name: Log in to GHCR
