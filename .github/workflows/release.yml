@@ -78,7 +78,7 @@ jobs:
       # Single GoReleaser run drives builds → packages → images → sign → SBOM →
       # GitHub Release. Keyless cosign uses the job's OIDC id-token (no secret key).
       - name: Run GoReleaser
-        uses: goreleaser/goreleaser-action@v6
+        uses: goreleaser/goreleaser-action@v7
         with:
           distribution: goreleaser
           version: "~> v2"
