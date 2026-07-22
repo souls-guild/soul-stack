@@ -1,0 +1,51 @@
+# L0 harness for destiny redis-exporter (Trial, ADR-023). Minimal scenario whose
+# sole job is apply:destiny redis-exporter, to give destiny
+# render-only L0. Canonical wrapper layout (ADR-023): subdirectory of the
+# destiny itself - `redis-exporter/_trial/scenario/apply/`. The L0 resolver mirrors
+# prod (slice A, ADR-023): apply:destiny resolves by name from
+# `_trial/service.yml::destiny[]` + URL from `default_destiny_source` of the test case.
+name: apply
+description: >-
+  Trial harness: delegates installing redis_exporter to destiny redis-exporter
+  via apply:destiny. Not a service - a wrapper around L0-render destiny.
+
+input:
+  version:
+    type: string
+    default: "1.62.0"
+    pattern: "^[0-9]+\\.[0-9]+\\.[0-9]+$"
+  sha256:
+    type: string
+    required: true   # fail-closed: placeholder default removed (BUG-2)
+    pattern: "^sha256:[0-9a-f]{64}$"
+  arch:
+    type: string
+    default: amd64
+    enum: [amd64, arm64]
+  redis_socket:
+    type: string
+    default: /var/run/redis/redis-server.sock
+    pattern: "^/[A-Za-z0-9._/-]+$"
+  redis_password:
+    type: string
+    required: true
+    secret: true
+    min_length: 16
+  # base_url_override - optional pass-through of a mirror/nexus into destiny.base_url.
+  # Empty (default "") -> destiny uses its own default (GitHub Releases). Needed
+  # for the L0 case base-url-override (node-exporter mirror).
+  base_url_override:
+    type: string
+    default: ""
+
+tasks:
+  - name: Apply redis-exporter destiny
+    apply:
+      destiny: redis-exporter
+      input:
+        version:        "${ input.version }"
+        sha256:         "${ input.sha256 }"
+        arch:           "${ input.arch }"
+        redis_socket:   "${ input.redis_socket }"
+        redis_password: "${ input.redis_password }"
+        base_url:       "${ input.base_url_override != '' ? input.base_url_override : 'https://github.com/oliver006/redis_exporter/releases/download' }"

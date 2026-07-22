@@ -1,0 +1,32 @@
+from_version: 13
+to_version: 14
+
+description: >-
+  state_schema v13 → v14: mandatory log-shipping of the data plane (Slice V-I, redis pilot,
+  ADR-067). state is EXTENDED with a read-model object logging — the fixed version/sink/
+  sources of the vector agent deployed by the create run on every host (symmetric to v12→v13
+  monitoring: metrics exporters). The collector access secret (sink_auth_ref) is NOT
+  stored in state (security — it lives in Vault, like tls.*_ref and the monitoring ACL user password).
+
+  Forward-only (down: not supported; recovery is via state_history). Existing
+  v13 incarnations were deployed BEFORE log-shipping was introduced (no vector agent yet) → conservative
+  default: version empty ('' = "not deployed", best-effort like monitoring in 012_to_013),
+  sink_type console (safe default with no external infra), sink_endpoint '' , log_sources []
+  (the next create will overwrite them with values from essence.vector_*). ONE flat set with
+  a has()-guard on the WHOLE object (CEL map-literal-default): logging already present → kept as is
+  (idempotency of a repeat run), otherwise the default is set. Mirrors the v12→v13 object-guard
+  (monitoring) and 008_to_009 (seeded_from). The rest of the state (redis_config/redis_users/tls/
+  monitoring/namedfields/topology) is NOT touched.
+
+transform:
+  - set:
+      path: state.logging
+      value: >-
+        ${ has(state.logging)
+             ? state.logging
+             : {
+                 'vector_version':       '',
+                 'vector_sink_type':     'console',
+                 'vector_sink_endpoint': '',
+                 'vector_log_sources':   []
+               } }

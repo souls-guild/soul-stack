@@ -1,0 +1,3 @@
+name: module-without-params
+tasks:
+  - module: core.exec.run

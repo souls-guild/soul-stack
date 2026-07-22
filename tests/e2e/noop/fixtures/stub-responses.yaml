@@ -1,0 +1,12 @@
+# Response script for the soul-stub in noop::create.
+#
+# scenario/create/main.yml contains one task, core.exec.run echo hello,
+# `changed_when: "false"` → no-op: the scenario's state_changes is empty,
+# incarnation.state is not mutated.
+scenarios:
+  create:
+    apply_responses:
+      - task_name: "Echo hello on every host of the incarnation"
+        run_result:
+          status: success
+          changed: false

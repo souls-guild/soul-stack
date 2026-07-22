@@ -1,0 +1,61 @@
+# L0 test for destroy (teardown, ADR-061) — the incarnation WAS provisioned by cloud (default-on
+# create path). fixtures.state carries provisioned_* (as recorded by create with provision):
+# provider/vm_ids/sids. destroy reads them back (a keeper task sees the pre-run snapshot of
+# incarnation.state.<path>) and emits ONE keeper-side step core.cloud.destroyed with params from state.
+#
+# Guard `when: size(provisioned_vm_ids) > 0` on the destroyed task: state carries 4 vm_id → 4 > 0 →
+# task IS PLANNED (NOT group-drop). The sids↔vm_ids parity assert (4 == 4) passes run-level BEFORE
+# dispatch. Soul-side teardown (stop services + remove artifacts) is ALSO emitted — it
+# is unconditional (safely runs on a provisioned incarnation's VMs, which cloud-destroy removes anyway).
+#
+# Paired with teardown-package/teardown-binary (non-provisioned: cloud-destroy group-drop). This
+# case proves DragonFly's cloud-cascade flow (mirrors redis destroy-provisioned, decision
+# 2026-07-01): address is EXACTLY core.cloud.destroyed, params taken from incarnation.state.
+name: destroy of a provisioned dragonfly emits core.cloud.destroyed with params from state
+
+fixtures:
+  # destroy carries no apply:destiny (keeper-only cloud-cascade + Soul-side file/service) —
+  # the source is not touched, but the harness keeps the key for consistency of roster resolution.
+  default_destiny_source: "file://../../destiny/{name}"
+  hosts:
+    - sid: vm-1.example.com
+      covens: [destroy]
+      soulprint:
+        network: { primary_ip: 10.0.0.1 }
+        os: { arch: amd64 }
+
+  # ★ Soul-side teardown reads essence (install_method/conf_dir, v1→v2 moved out of state).
+  essence:
+    install_method: package
+    conf_dir: /etc/dragonfly
+
+  # incarnation.state BEFORE the run: the FACT of provisioning, recorded by the create run
+  # (provisioned_vm_ids — provider-side id; provisioned_sids — Keeper-side SID;
+  # provisioned_provider — Provider name). destroy reads them into the destroyed params.
+  # Lengths of sids and vm_ids match (4 == 4) — the parity assert passes.
+  state:
+    df_version: "1.39.0"
+    df_config:
+      maxmemory: "256mb"
+    provisioned_vm_ids: [i-aaa111, i-bbb222, i-ccc333, i-ddd444]
+    provisioned_sids: [vm-1.example.com, vm-2.example.com, vm-3.example.com, vm-4.example.com]
+    provisioned_provider: example-dev
+
+assert:
+  task_present:
+    # core.cloud.destroyed (on: keeper): provider/vm_ids/sids taken from incarnation.state.
+    # Address is EXACTLY destroyed (base core.cloud + state destroyed).
+    - module: core.cloud.destroyed
+      params_subset:
+        provider: example-dev
+        vm_ids: [i-aaa111, i-bbb222, i-ccc333, i-ddd444]
+        sids: [vm-1.example.com, vm-2.example.com, vm-3.example.com, vm-4.example.com]
+
+    # Soul-side teardown is ALSO active (unconditional): stop service + remove package +
+    # remove our config artifacts.
+    - module: core.service.stopped
+      params_subset:
+        name: dragonfly
+    - module: core.pkg.absent
+      params_subset:
+        name: dragonfly

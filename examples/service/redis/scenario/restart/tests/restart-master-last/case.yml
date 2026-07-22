@@ -1,0 +1,80 @@
+# L0 test for restart: restarting the master (probe→where master, run_once). Paired
+# with rolling-restart-replicas — covers the master branch of where probe→role. Roster — 2
+# hosts; mocks.register.redis_role.role = master → block descendants (where slave) —
+# placeholder-skip, master-restart (where master, run_once) is rendered.
+#
+# ★ Probe — community.redis.role (go-redis INFO replication), NOT raw redis-cli:
+# field register.redis_role.role (plugin Output), NOT .stdout.
+#
+# What we assert:
+#   1. probe (community.redis.role) renders connection params (addr localhost,
+#      password from vault, plaintext branch).
+#   2. block descendants (Restart + Wait-PONG) — placeholder-skip (Params == nil): on the
+#      master payload where slave does not match.
+#   3. master-restart (core.service.restarted, where master, run_once) is rendered
+#      (Params != nil): restarts the current master last.
+#
+# NOTE L0 limitation: mocks.register — a SINGLE payload for the whole roster (see
+# rolling-restart-replicas). On the master payload both hosts are "master" → master-restart
+# run_once targets ONE deterministic host (first by SID). The layout is proven by the
+# render assert TargetSIDs (TestAcceptance_RestartBlockFanOut).
+name: restart the current master last
+
+fixtures:
+  hosts:
+    - sid: node-1.example.com
+      covens: [restart]
+      soulprint:
+        network: { primary_ip: 10.0.0.1 }
+        os: { arch: amd64 }
+    - sid: node-2.example.com
+      covens: [restart]
+      soulprint:
+        network: { primary_ip: 10.0.0.2 }
+        os: { arch: amd64 }
+
+  input:
+    reason: "restart master for L0"
+
+  # Redis password — probe resolves vault('secret/redis/restart/users/default_admin#password')
+  # (incarnation.name == scenario name == restart). ★ REDESIGN default_admin (2026-06-30):
+  # connects as the system default_admin (username → AUTH), password from the users/default_admin
+  # branch (the former secret/redis/<inc>#password is DROPPED). state is NOT set in the fixture →
+  # has(incarnation.state) false → tls_on false → plaintext connection branch
+  # (the v3 discriminator reads state.tls.enable, not essence).
+  vault:
+    secret/redis/restart/users/default_admin:
+      password: default-admin-secret-pass
+
+mocks:
+  register:
+    redis_role:
+      role: master
+
+assert:
+  task_present:
+    # ── probe (community.redis.role): go-redis INFO replication, no redis-cli ──
+    # The only community.redis.role in the plan.
+    - module: community.redis.role
+      params_subset:
+        addr: "127.0.0.1:6379"
+        username: default_admin
+        password: default-admin-secret-pass
+        tls: false
+        tls_ca: ""
+
+  # ── master-restart is INEXPRESSIBLE in presence (go/no-go, see report) ──────────────
+  # The case's main guard is that it is exactly the MASTER that restarts (where=master, run_once),
+  # as a SEPARATE task AFTER the slave block. The plan has TWO identical
+  # core.service.restarted name=redis-server tasks (replica block-restart + master-restart),
+  # both with empty when/id and the same params; the discriminator is the block/task `where`
+  # (TargetSIDs), which the presence matcher does NOT see (taskMatches only looks at
+  # module/params_subset/when/id). A bare task_present would match BOTH → collision-fail.
+  # So master-restart stays in positional form (forms coexist): index 4 —
+  # master-restart (after synth-install[0] (ADR-065, service.yml::modules[]) +
+  # probe[1] + block Restart[2] + replica-synced[3]).
+  rendered_tasks:
+    - index: 4
+      module: core.service.restarted
+      params:
+        name: redis-server

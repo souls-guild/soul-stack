@@ -1,0 +1,15 @@
+from_version: 11
+to_version: 12
+
+description: >-
+  v11->v12: moves install + host-layout (conf_dir/data_dir/modules_base_url)
+  out of incarnation.state into essence. install is a read-model with no
+  readers; layout - operational scenarios switched to essence reads (Option A,
+  user decision 2026-06-30: desync risk accepted). Forward-only, delete is a
+  no-op on incarnations without the fields.
+
+transform:
+  - delete: { path: state.install }
+  - delete: { path: state.conf_dir }
+  - delete: { path: state.data_dir }
+  - delete: { path: state.modules_base_url }

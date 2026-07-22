@@ -1,0 +1,63 @@
+name: create
+# create: true — the starting scenario (Phase 2: the create set = EXACTLY {scenario with the flag}).
+create: true
+description: >-
+  FC-3 retry:+until: health-gate against real timing (L3b capstone).
+
+  No Passage plan (a single Passage): both tasks have no where:/register dependencies.
+
+  Task 0 (prepare gate): writes TO THE HOST two epoch markers — the start moment
+  (/tmp/fc3-start) and a ready epoch IN THE FUTURE (now + GATE_DELAY → /tmp/fc3-ready-at).
+  A deterministic gate with no background process/race: "ready" = wall-clock time
+  has caught up to the ready epoch.
+
+  Task 1 (probe health-gate): core.cmd.shell with retry:{count,delay,until}.
+  On each attempt the probe compares now with the ready epoch: while now < ready-at →
+  it prints NOTYET (until: == 'READY' false → delay → next attempt); as
+  soon as now >= ready-at → it prints READY AND writes ITS OWN done epoch to
+  /tmp/fc3-done. until: register.self.stdout == 'READY' matches ONLY on the
+  attempt that passed the gate. Since the gate is in the future relative to prepare, the 1st
+  probe attempt MUST see NOTYET → a real retry of ≥2 attempts.
+
+# Focus scenario: state doesn't change (commit state — a separate invariant).
+state_changes: {}
+
+tasks:
+  # ── Task 0: set up a deterministic health-gate ───────────────────
+  # printf epoch markers ONTO THE HOST. GATE_DELAY=6s, probe delay=2s → the probe can't
+  # match earlier than the ~3rd attempt (now>=ready-at unreachable on attempts 1-2).
+  # rm clears markers from a previous run (a repeated create on the same incarnation).
+  - name: Prepare health-gate epochs
+    module: core.cmd.shell
+    changed_when: "false"
+    params:
+      cmd: |
+        rm -f /tmp/fc3-done
+        now=$(date +%s)
+        printf '%s' "$now" > /tmp/fc3-start
+        printf '%s' "$((now + 6))" > /tmp/fc3-ready-at
+
+  # ── Task 1: probe with retry:+until: hammers the gate ────────────────────────
+  # changed_when:false — the probe is a pure health-read, not a change. retry budget
+  # 20×2s=40s with a big margin over gate=6s. until: is evaluated AFTER each
+  # attempt against register.self.stdout (a fresh per-attempt register). failed_when
+  # duplicates the until condition as a safety net against "exhausted but OK".
+  - name: Wait until health-gate opens
+    module: core.cmd.shell
+    register: probe
+    changed_when: "false"
+    retry:
+      count: 20
+      delay: 2s
+      until: register.self.stdout == 'READY'
+    failed_when: register.self.stdout != 'READY'
+    params:
+      cmd: |
+        now=$(date +%s)
+        want=$(cat /tmp/fc3-ready-at 2>/dev/null || echo 0)
+        if [ "$now" -ge "$want" ]; then
+          printf '%s' "$now" > /tmp/fc3-done
+          printf READY
+        else
+          printf NOTYET
+        fi

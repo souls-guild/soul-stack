@@ -1,0 +1,99 @@
+# L0 trial for add_user: operational addition of an ACL user WITHOUT a restart (ACL LOAD).
+# The operator adds user alice; the scenario merges it into the DEPLOYED state.df_users, renders
+# the FULL users.acl (alice + previously deployed bob) through the `dragonfly` destiny and RELOADS via
+# community.redis.acl (ACL LOAD). Render-only, hermetic. Plaintext (addr 6379).
+#
+# essence.system_acl_users is NOT set → system top-up = default({}) → vars.users carries
+# ONLY operator-extra (alice+bob) — a clean assert of the operator layer. (System top-up
+# is checked by a separate case modeled on redis/add_user, here the focus is on the merge of alice+bob.)
+#
+# What we assert:
+#   1. users.acl (core.file.rendered, path /etc/dragonfly/users.acl): vars.users carries BOTH
+#      users (alice new + bob preserved) with per-user passwords from Vault (convention
+#      secret/dragonfly/<inc>/users/<name>#password). The password is hashed in .tmpl (outside L0).
+#   2. hot-reload (community.redis.acl): addr 127.0.0.1:6379 (plain), tls=false, password from vault.
+#   3. state_changes: df_users carries bob+alice (AclUser array, WITHOUT the password — write-model).
+name: add_user merges new ACL user and hot-reloads via ACL LOAD (plaintext)
+
+fixtures:
+  default_destiny_source: "file://../../destiny/{name}"
+  soulprint:
+    network: { primary_ip: 10.0.0.5 }
+    os: { arch: amd64 }
+
+  # Deployed incarnation.state (v2: install/conf_dir/data_dir moved to essence): already has
+  # user bob; add_user adds alice.
+  state:
+    df_version: "1.39.0"
+    tls:
+      enable:   false
+      cert_ref: ""
+      key_ref:  ""
+      ca_ref:   ""
+    df_config:
+      maxmemory:        "256mb"
+    df_users:
+      - { name: bob, perms: "~app:* +@read", state: "on" }
+
+  input:
+    user:
+      name: alice
+      perms: "~* +@all"
+      state: "on"
+
+  # Vault: default_admin (masterauth top-up into flagfile + ACL LOAD-AUTH read it unconditionally) +
+  # per-user passwords for operator-extra. The main secret/dragonfly/add_user#password no longer exists
+  # (requirepass removed — default_admin redesign).
+  vault:
+    secret/dragonfly/add_user/users/default_admin:
+      password: dfadmin-add-user-pass
+    secret/dragonfly/add_user/users/alice:
+      password: alice-user-secret-pass
+    secret/dragonfly/add_user/users/bob:
+      password: bob-user-secret-pass
+
+assert:
+  task_present:
+    # 1. users.acl is re-rendered with BOTH users (alice new + bob preserved), each with its
+    #    OWN vault password (no cross-leak). vars.users — deep-compare.
+    - module: core.file.rendered
+      params_subset:
+        path: /etc/dragonfly/users.acl
+        render_context:
+          vars:
+            users:
+              alice:
+                perms: "~* +@all"
+                state: "on"
+                password: alice-user-secret-pass
+              bob:
+                perms: "~app:* +@read"
+                state: "on"
+                password: bob-user-secret-pass
+          self:
+            sid: trial-host
+            covens: [add_user]
+            choirs: []
+            traits: {}
+            role: ""
+            network:
+              primary_ip: 10.0.0.5
+            os:
+              arch: amd64
+          role: ""
+          essence: {}
+
+    # 2. HOT-RELOAD ACL: community.redis.acl to the live instance over a LOCAL UNIX socket
+    #    (WITHOUT tls/tls_ca — UDS is not a network path). AUTH as default_admin (requirepass removed).
+    - module: community.redis.acl
+      params_subset:
+        addr: "unix:/var/run/dragonfly/dragonfly.sock"
+        username: default_admin
+        password: dfadmin-add-user-pass
+
+  # state_changes: df_users carries bob+alice WITHOUT password (AclUser array). Order = array-upsert:
+  # preserved bob FIRST (filter kept it), new alice APPENDED at the end.
+  state_changes:
+    df_users:
+      - { name: bob, perms: "~app:* +@read", state: "on" }
+      - { name: alice, perms: "~* +@all", state: "on" }

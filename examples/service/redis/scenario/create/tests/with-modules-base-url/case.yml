@@ -1,0 +1,224 @@
+# L0 test create (sentinel, Redis < 8) - NON-EMPTY modules_base_url = THE FULL SET.
+# Positive control paired with empty-modules-base-url (vanilla): when modules_base_url is set on
+# Redis < 8, the FULL set of modules is deployed - all four .so are fetched, loadmodule
+# for all four appear in redis.conf, the modules-dir is created. Confirms that the base_url gate
+# (fix 2026-06-28) did not break the normal modules path.
+#
+# ALL-OR-NOTHING directive: base_url set -> THE WHOLE set (this case), empty -> NONE.
+# version 7.4.1 < 8 -> version-guard not active; base_url non-empty -> modules enabled.
+#
+# Gate root (DESTINY): vars.redis_modules_enabled = !redis8 && modules_base_url != ''
+#   - include modules.yml -> deploy_redis && redis_modules_enabled -> both true -> group in
+#     the plan (modules-dir + 4 fetch present);
+#   - loadmodules cell of redis.conf: redis_modules_enabled -> paths of ALL four .so.
+# URL is arch-specific per-host (x86_64 - uname-m mapping soulprint.self.os.arch=amd64; L0 carries self of the first host by SID).
+name: non-empty modules_base_url deploys all modules with loadmodule and .so fetch
+
+fixtures:
+  default_destiny_source: "file://../../destiny/{name}"
+  hosts:
+    - sid: node-3.example.com
+      covens: [create, redis]
+      soulprint:
+        network: { primary_ip: 10.0.0.3 }
+        os: { arch: amd64 }
+    - sid: node-1.example.com
+      covens: [create, redis]
+      soulprint:
+        network: { primary_ip: 10.0.0.1 }
+        os: { arch: amd64 }
+    - sid: node-2.example.com
+      covens: [create, redis]
+      soulprint:
+        network: { primary_ip: 10.0.0.2 }
+        os: { arch: amd64 }
+  vault:
+    secret/redis/create:
+      password: s3cr3t-redis-pass-create
+    # star REDESIGN default_admin (2026-06-30): default_admin is the system user
+    # for in-cluster AUTH (auth_pass/PING deploy steps read it via the users/<name> branch).
+    secret/redis/create/users/default_admin:
+      password: default-admin-secret-pass
+    secret/redis/create/users/replica:
+      password: replica-sys-secret-pass
+    secret/redis/create/users/monitoring:
+      password: monitoring-sys-secret-pass
+    secret/redis/create/users/sentinel:
+      password: sentinel-sys-secret-pass
+    secret/redis/create/users/haproxy:
+      password: haproxy-sys-secret-pass
+  essence:
+    # install_method - in essence (author-context, 2026-06-28): the install method is
+    # NOT operator input. compute.install reads default(essence.install_method, 'binary').
+    install_method: package
+    redis_type: sentinel
+    sentinel_master_name: master
+    # star Redesign: substrate for per-master sentinel defaults (under input.sentinel_master_settings).
+    sentinel_master_defaults:
+      down-after-milliseconds: "5000"
+      failover-timeout:        "60000"
+    # star base_url IS SET -> THE FULL set of modules (counterpoint to empty-modules-base-url).
+    modules_base_url: "https://artifacts.example.com/redis/modules/7.2"
+    memory_reserve_percent: 75
+    persistence_presets:
+      rdb:
+        save: "900 1 300 10 60 10000"
+        appendonly: "no"
+    redis_config:
+      maxmemory:        "256mb"
+      maxmemory-policy: allkeys-lru
+      maxclients:       10000
+      timeout:          300
+
+    system_acl_users:
+      default_admin: "~* &* +@all"
+      replica:    "+psync +replconf +ping"
+      monitoring: "-@all +@connection +client +ping +info +config|get +cluster|info +slowlog +latency +memory +select +command|count +command|docs"
+      sentinel:   "allchannels +multi +slaveof +ping +exec +subscribe +config|rewrite +role +publish +info +client|setname +client|kill +script|kill"
+      haproxy:    "-@all +auth +client|getname +client|id +client|setname +command +hello +ping +role +info +cluster|info"
+    system_acl_users_sentinel:
+      default_admin: "allchannels allkeys +@all"
+      monitoring: "-@all +@connection -command +client -hello +info -auth +sentinel|masters +sentinel|replicas +sentinel|slaves +sentinel|sentinels +sentinel|ckquorum"
+      sentinel:   "allchannels -@all +auth +client|getname +client|id +client|setname +command +hello +ping +sentinel|is-master-down-by-addr +publish +role +sentinel|get-master-addr-by-name +sentinel|master +sentinel|myid +sentinel|replicas +sentinel|sentinels"
+      haproxy:    "-@all +auth +client|getname +client|id +client|setname +command +hello +ping +role +sentinel|get-master-addr-by-name +sentinel|master +sentinel|myid +sentinel|replicas +sentinel|sentinels"
+  input:
+    # star provision disabled (default-on: an omitted section = ENABLED; the case deploys onto
+    # a READY roster, cloud-create is not needed) -> include redis-provision.yml group-drop.
+    provision:
+      enabled: false
+    redis_type: sentinel
+    # version - an ENUM of builds published to Nexus; 7.4.1 is in the enum (major < 8 -> module
+    # version-gate not active -> modules are gated purely by base_url).
+    version: "7.4.1"
+    # install_method=package EXPLICITLY (redesign default is binary): this case is about the
+    # modules-gate, not install - the package branch yields state.install.method=package.
+    replicas_per_master: 2
+
+assert:
+  task_present:
+    # -- redis.conf WITH loadmodules (base_url set, Redis < 8 -> paths of all four .so) --
+    # render_context.self = first host by SID (node-1).
+    # Disambiguator from users.acl/hardening (same core.file.rendered) - path.
+    - module: core.file.rendered
+      params_subset:
+        path: /etc/redis/redis.conf
+        template_content: "<present>"
+        mode: "0640"
+        owner: redis
+        group: redis
+        render_context:
+          vars:
+            conf_dir: /etc/redis
+            data_dir: /var/lib/redis
+            port: 6379
+            run_dir: /var/run/redis
+            log_dir: /var/log/redis
+            # star THE FULL loadmodule set (Go sort of aliases: bloom, json, search, timeseries).
+            loadmodules:
+              - /var/lib/redis/modules/redisbloom.so
+              - /var/lib/redis/modules/rejson.so
+              - /var/lib/redis/modules/redisearch.so
+              - /var/lib/redis/modules/redistimeseries.so
+            config:
+              # star REDESIGN default_admin: replica->master AUTH (masteruser/
+              # masterauth) arrives as ORDINARY config directives (the sentinel
+              # deploy body adds them via vault() in the cell) -> redis.conf ranges over
+              # them as any other directive -> they statically survive a restart.
+              masteruser:       "default_admin"
+              masterauth:       "default-admin-secret-pass"
+              maxmemory:        "256mb"
+              maxmemory-policy: allkeys-lru
+              maxclients:       10000
+              timeout:          300
+              save:             "900 1 300 10 60 10000"
+              appendonly:       "no"
+          self:
+            sid: node-1.example.com
+            covens: [create, redis]
+            choirs: []
+            traits: {}
+            role: ""
+            network:
+              primary_ip: 10.0.0.1
+            os:
+              arch: amd64
+          role: ""
+          essence: {}
+
+    # -- modules-dir is created (include modules.yml active) --
+    # Disambiguator from systemd-dropin-dir (same core.directory.present) - path.
+    - module: core.directory.present
+      params_subset:
+        path: /var/lib/redis/modules
+        owner: redis
+        group: redis
+        mode: "0750"
+
+    # -- .so are fetched - ALL four (Go sort: bloom, json, search, timeseries). URL is arch-
+    # specific (x86_64 - uname-m mapping soulprint amd64 of the first host). checksum NOT passed (content-idempotent).
+    - module: core.url.fetched
+      params_subset:
+        url: "https://artifacts.example.com/redis/modules/7.2/x86_64/redisbloom.so"
+        path: /var/lib/redis/modules/redisbloom.so
+        mode: "0750"
+        owner: redis
+        group: redis
+    - module: core.url.fetched
+      params_subset:
+        url: "https://artifacts.example.com/redis/modules/7.2/x86_64/rejson.so"
+        path: /var/lib/redis/modules/rejson.so
+        mode: "0750"
+        owner: redis
+        group: redis
+    - module: core.url.fetched
+      params_subset:
+        url: "https://artifacts.example.com/redis/modules/7.2/x86_64/redisearch.so"
+        path: /var/lib/redis/modules/redisearch.so
+        mode: "0750"
+        owner: redis
+        group: redis
+    - module: core.url.fetched
+      params_subset:
+        url: "https://artifacts.example.com/redis/modules/7.2/x86_64/redistimeseries.so"
+        path: /var/lib/redis/modules/redistimeseries.so
+        mode: "0750"
+        owner: redis
+        group: redis
+
+  state_changes:
+    redis_type: sentinel
+    redis_version: "7.4.1"
+    redis_config:
+      maxmemory:        "256mb"
+      maxmemory-policy: allkeys-lru
+      maxclients:       10000
+      timeout:          300
+      save:             "900 1 300 10 60 10000"
+      appendonly:       "no"
+    redis_users: []
+    redis_hosts: []
+    # star read-model (redesign): timings in master_settings (effective per-master
+    # dict = essence.sentinel_master_defaults over the operator dict, unset -> defaults);
+    # settings are the global sentinel directives (unset -> {}).
+    redis_sentinel:
+      master_name: master
+      quorum: 0
+      master_settings:
+        down-after-milliseconds: "5000"
+        failover-timeout: "60000"
+      settings: {}
+    replicas: 2
+    sentinel_quorum: 0
+    shards: 0
+    persistence: rdb
+    maxmemory_policy: ""
+    tls:
+      enable:   false
+      only:     false
+      port:     7379
+      cert_ref: ""
+      key_ref:  ""
+      ca_ref:   ""
+    memory_mb: 0
+    modules: [bloom, json, search, timeseries]
+    sysctl_settings: {}

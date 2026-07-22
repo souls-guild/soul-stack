@@ -1,0 +1,7 @@
+name: bad-state-changes-key
+state_changes:
+  unexpected: [foo]
+tasks:
+  - module: core.exec.run
+    params:
+      command: "true"

@@ -1,0 +1,43 @@
+# L0 destroy trial (teardown, ADR-061) — the incarnation was deployed WITHOUT cloud
+# provisioning (deploy onto existing VMs). incarnation.state carries no provisioned
+# vm_ids/sids (or they're empty — the conservative default from create without provision: []/'').
+# destroy on such VMs makes no sense (the machines aren't ours), so the core.cloud.destroyed
+# task is group-dropped.
+#
+# The `when: size(provisioned_vm_ids) > 0` guard on the destroyed task is a static
+# predicate (incarnation.* only, isStaticWhen) → render-phase GROUP-DROP: with an
+# empty provisioned_vm_ids (0 > 0 = false), the task is physically excluded from the plan
+# (NOT a placeholder-skip). The sids↔vm_ids parity assert (0 == 0) trivially passes,
+# not blocking teardown without provisioning.
+#
+# Paired with destroy-provisioned: there state carries vm_ids → the task is in the plan.
+# This case proves that an incarnation without provisioning passes teardown WITHOUT a
+# cloud call (no stray core.cloud.destroyed).
+name: destroy of a non-provisioned incarnation drops core.cloud.destroyed (group-drop)
+
+fixtures:
+  default_destiny_source: "file://../../destiny/{name}"
+  hosts:
+    - sid: node-solo.example.com
+      covens: [destroy]
+      soulprint:
+        network: { primary_ip: 10.0.0.5 }
+        os: { arch: amd64 }
+
+  # incarnation.state without provisioned_* (the incarnation was deployed onto existing VMs).
+  # The provision fields are empty (as create without provision writes them: [] / ''). default()
+  # in when/assert catches both a fully missing key (back-compat until v7/v8) and an empty
+  # array — both give size 0.
+  state:
+    redis_type: sentinel
+    redis_config: {}
+    provisioned_vm_ids: []
+    provisioned_sids: []
+    provisioned_provider: ""
+
+assert:
+  task_absent:
+    # core.cloud.destroyed group-drop: an empty provisioned_vm_ids → when 0 > 0 false
+    # → the task is excluded from the plan (render-phase group-drop, not a placeholder). On
+    # a non-provisioned incarnation, teardown doesn't call cloud-destroy.
+    - module: core.cloud.destroyed

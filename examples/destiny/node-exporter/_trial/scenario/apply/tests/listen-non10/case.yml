@@ -1,0 +1,82 @@
+# L0 case: primary_ip outside 10.0.0.0/8.
+#
+# soulprint.self.network.primary_ip=192.168.1.5 (not 10.*) -> apply:input
+# CEL ternary yields an empty host -> listen = ":9100" (bind on all interfaces +
+# port). Contrast with render-defaults (primary_ip 10.0.0.5 -> listen "10.0.0.5:9100").
+# Proves the internal-bind logic: outside 10/8 the host is empty.
+#
+# listen ends up in render_context.input.listen of the main unit step (Variant B,
+# ADR-010 §3.2 amendment: operator-input flows into render_context.input
+# directly, without passthrough via params.vars). We assert the whole
+# render_context of the unit task — it's deterministic for the synthetic L0 host; the
+# key value is input.listen = ":9100". vars carries the REFERENCE file-var bin_path
+# (the template reads it as `.vars.bin_path` directly) — other file-vars from vars.yml
+# are not read.
+name: node-exporter binds to all interfaces when primary_ip is non-10
+
+fixtures:
+  default_destiny_source: "file://../../{name}"
+  input:
+    version: "1.11.1"
+    collectors: [smartmon, nvme, ipmi]
+  soulprint:
+    os:
+      arch: amd64
+    network:
+      primary_ip: "192.168.1.5"
+
+assert:
+  task_present:
+    # Disambiguator from the collector-rendered task — path of the main unit.
+    - module: core.file.rendered
+      params_subset:
+        path: /etc/systemd/system/node_exporter.service
+        # template_content is present (the literal .tmpl was delivered Keeper->Soul);
+        # exact character-for-character template comparison is skipped (fragile), see presentMarker.
+        template_content: "<present>"
+        # render_context.input.listen = ":9100" — empty host (primary_ip is not 10.*).
+        # Variant B: operator-input (resolved destiny-input + defaults) goes into
+        # render_context.input as a whole; vars carries the REFERENCE file-var bin_path
+        # (the template reads `.vars.bin_path` directly) — other file-vars from vars.yml
+        # aren't read by the template, and aren't in render_context.vars (pointwise injection).
+        render_context:
+          vars:
+            bin_path: /usr/local/bin/node_exporter
+          input:
+            # apply:input passthrough (version/listen/collectors/base_url/
+            # collector_options/web_telemetry_path) + destiny-schema defaults.
+            version: "1.11.1"
+            base_url: "https://github.com/prometheus/node_exporter/releases/download"
+            allow_private: false
+            listen: ":9100"
+            collectors: [smartmon, nvme, ipmi]
+            bin_dir: /usr/local/bin
+            textfile_dir: /var/lib/node_exporter
+            user: node_exporter
+            group: node_exporter
+            # Daemon prod parameters — destiny defaults (the flag in ExecStart will NOT be added:
+            # gomaxprocs 0, empty list/string values omit the flag via conditional .tmpl rendering).
+            gomaxprocs: 0
+            disabled_collectors: []
+            enabled_collectors: []
+            collector_options: {}
+            log_level: info
+            log_format: logfmt
+            web_telemetry_path: "/metrics"
+            fs_mount_points_exclude: ""
+            netdev_device_exclude: ""
+          self:
+            choirs: []
+            # traits — registry projection (ADR-060), an empty object without labels.
+            traits: {}
+            # covens carries the incarnation.name label (scenario name = apply) —
+            # mirrors the prod roster `WHERE $1 = ANY(coven)` (harness single-host sugar).
+            covens: [apply]
+            network:
+              primary_ip: "192.168.1.5"
+            os:
+              arch: amd64
+            role: ""
+            sid: trial-host
+          role: ""
+          essence: {}

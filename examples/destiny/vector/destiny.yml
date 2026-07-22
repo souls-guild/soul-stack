@@ -1,0 +1,175 @@
+name: vector
+description: >-
+  Install Vector (vectordotdev/vector) log-shipping agent from a pinned GitHub
+  release tarball and run it as a hardened systemd service under a stable system
+  account (vector, persistent disk-buffer needs a stable uid — NOT DynamicUser),
+  tailing service log files and forwarding them to a central collector
+  (loki / elasticsearch / vector / console sink).
+
+# Destiny version is a git ref (ADR-007). No top-level `version:` field. Task
+# list is in tasks/main.yml. Core modules only -> required_modules: not needed.
+#
+# * Observability: Vector is the log plane (sources->transforms->sinks, PUSH of
+# logs), it COMPLEMENTS node-exporter (host metrics, pull) and redis-exporter
+# (Redis metrics), does NOT replace them. Three distinct observability layers
+# (ADR-067 amends ADR-024).
+#
+# The layout clones node-exporter (install tarball from GitHub + sha256 ->
+# extract -> file.present binary + stable system account + hardened systemd
+# unit + service.running + restarted onchanges). Difference from
+# node-exporter/redis-exporter: Vector's tarball arch is encoded as
+# <arch>-unknown-linux-gnu (Rust triplet), so soulprint.self.os.arch
+# (amd64/arm64) is mapped to x86_64/aarch64 via CEL.
+#
+# * Stable service account (NOT DynamicUser): Vector's persistent disk buffer
+# (data_dir) - the on-disk queue survives restarts and requires a fixed
+# owner uid (prod convention §2, stateful branch - like node-exporter's
+# textfile directory). DynamicUser doesn't fit here.
+
+input:
+  # REQUIRED with no default: artifact version is a deliberate operator choice, not "any".
+  version:
+    type: string
+    required: true
+    pattern: "^[0-9]+\\.[0-9]+\\.[0-9]+$"
+    description: >-
+      Vector version (GitHub Releases vectordotdev/vector, no v prefix).
+
+  # Checksum of the Vector tarball (<arch>-unknown-linux-gnu). core.url.fetched
+  # verifies it BEFORE publishing the file. REQUIRED, no default (fail-closed):
+  # no hash -> a clean refusal rather than a fetch with a placeholder that
+  # verification would reject anyway. Value comes from sha256sums.txt of the
+  # vectordotdev/vector GitHub release for the (version, arch) pair for
+  # vector-<v>-<triplet>.tar.gz.
+  sha256:
+    type: string
+    required: true
+    pattern: "^sha256:[0-9a-f]{64}$"
+    description: >-
+      SHA-256 of the Vector tarball (form "sha256:<hex>"). Must match the
+      version + arch pair; taken from sha256sums.txt of the vectordotdev/vector
+      GitHub release.
+
+  # https-only (core.url rejects http:// at Validate without allow_http). Full
+  # tarball URL is assembled via CEL in tasks/install.yml from base_url + version + triplet.
+  base_url:
+    type: string
+    default: "https://github.com/vectordotdev/vector/releases/download"
+    pattern: "^https://[A-Za-z0-9._/:-]+$"
+    description: >-
+      Root of Vector release downloads. Defaults to GitHub Releases;
+      override for an internal mirror/nexus proxy.
+
+  # SSRF-guard opt-out for private-resolve base_url - the pattern from redis destiny.yml install.allow_private.
+  allow_private:
+    type: boolean
+    default: false
+    description: >-
+      Lift the core.url SSRF guard for the tarball fetch (allow dial to RFC1918/
+      loopback - legitimate for an internal Nexus). Needed when base_url resolves
+      to a private address. Default false - guard stays on (github-public back-compat).
+
+  bin_dir:
+    type: string
+    default: /usr/local/bin
+    pattern: "^/[A-Za-z0-9._/-]+$"
+    description: Directory where the vector binary is placed.
+
+  user:
+    type: string
+    default: vector
+    pattern: "^[a-z_][a-z0-9_-]*$"
+    description: >-
+      System service account for vector. A stable uid is needed: the persistent
+      disk buffer (data_dir) survives restarts (prod convention §2, stateful branch).
+
+  group:
+    type: string
+    default: vector
+    pattern: "^[a-z_][a-z0-9_-]*$"
+    description: >-
+      Primary group of the vector service account and owner of data_dir. Set
+      independently of user (defaults to matching the account name).
+
+  data_dir:
+    type: string
+    default: /var/lib/vector
+    pattern: "^/[A-Za-z0-9._/-]+$"
+    description: >-
+      Vector data directory (global data_dir): persistent disk buffer of file
+      read offsets and the sink queue. Survives restart -> owned by the service
+      account (stable uid).
+
+  log_level:
+    type: string
+    default: info
+    enum: [trace, debug, info, warn, error]
+    description: Log level of Vector itself (env VECTOR_LOG). Defaults to info.
+
+  # -- sink: central log collector -----------------------------------------------
+  # The agent's only sink. The type selects the render section of vector.yaml
+  # (conditional range over sink_type in templates/vector.yaml.tmpl): loki
+  # (Grafana Loki push API) / elasticsearch (bulk API) / vector (vector-to-vector
+  # gRPC to an aggregator) / console (stdout, for debugging - no endpoint needed).
+  sink_type:
+    type: string
+    default: console
+    enum: [loki, elasticsearch, vector, console]
+    description: >-
+      Sink type (where logs are sent). loki - Grafana Loki (endpoint = push API
+      URL); elasticsearch - ES bulk (endpoint = URL); vector - vector-to-vector
+      gRPC to a central aggregator (endpoint = host:port); console - stdout for
+      debugging (endpoint ignored). Default console (safe, no external infra).
+
+  # Empty -> only valid for sink_type=console (debugging). For loki/elasticsearch/
+  # vector - address of the central collector. Validity (network vs URL) is not
+  # checked by the schema: different sink types accept different forms (URL / host:port).
+  sink_endpoint:
+    type: string
+    default: ""
+    description: >-
+      Address of the central log collector. Form depends on sink_type: loki/
+      elasticsearch - URL (https://...); vector - host:port of the gRPC aggregator;
+      console - unused. Empty is only valid for console.
+
+  # ACL/access token for the collector. Secret: masked in logs/traces/UI.
+  # Passed to vector.yaml via Environment=VECTOR_SINK_TOKEN (not in the config
+  # file itself in the open, symmetric with REDIS_PASSWORD in redis-exporter).
+  # Empty -> sink without authentication (console / open internal collector).
+  # Accepts either an already-resolved secret OR a vault-ref (cascade: the
+  # service passes a vault-ref, resolved Soul-side).
+  sink_auth_ref:
+    type: string
+    default: ""
+    secret: true
+    description: >-
+      Token/password for accessing the log collector (Bearer/basic). Masked in
+      logs/traces/UI. Passed to the unit via Environment=VECTOR_SINK_TOKEN.
+      Empty means no sink authentication.
+
+  # -- log sources ----------------------------------------------------------------
+  # List of service log file paths/globs that Vector reads (source type file,
+  # read_from end). Each item is a path or glob (/var/log/redis/*.log). Combined
+  # into a SINGLE file-source `service_logs` (include: [...]). Empty -> the
+  # source doesn't render (agent starts but reads nothing - a valid degenerate config).
+  log_sources:
+    type: array
+    default: []
+    items:
+      type: string
+      pattern: "^/[A-Za-z0-9._/*-]+$"
+    description: >-
+      Service log file paths/globs to read (source type file, read_from end).
+      Each item is an absolute path or glob (/var/log/redis/*.log). Empty -
+      Vector starts without a file-source.
+
+  # Additionally pull the system journal (source type journald). A separate
+  # flag: journald-source doesn't require paths (reads systemd-journal),
+  # enabled independently of the file-based log_sources. false -> the
+  # journald-source isn't rendered.
+  journald:
+    type: boolean
+    default: false
+    description: >-
+      Read the systemd journal (source type journald) in addition to file-based
+      log_sources. Disabled by default (files only).

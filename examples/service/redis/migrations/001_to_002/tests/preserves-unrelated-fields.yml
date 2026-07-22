@@ -1,0 +1,33 @@
+name: preserves-unrelated-fields
+description: >
+  State fields outside redis_users (redis_config / redis_hosts / redis_sentinel)
+  are untouched by the migration; they carry over as-is.
+
+state_before:
+  redis_users: ["app"]
+  redis_type: sentinel
+  redis_version: "7.2.4"
+  redis_config:
+    maxmemory: "256mb"
+    maxmemory-policy: allkeys-lru
+  redis_hosts:
+    - { sid: node-1.example.com, role: primary }
+    - { sid: node-2.example.com, role: replica }
+  redis_sentinel:
+    master_name: mymaster
+    quorum: 2
+
+state_after:
+  redis_users:
+    app: { perms: "off ~* &* +@all", state: "off" }
+  redis_type: sentinel
+  redis_version: "7.2.4"
+  redis_config:
+    maxmemory: "256mb"
+    maxmemory-policy: allkeys-lru
+  redis_hosts:
+    - { sid: node-1.example.com, role: primary }
+    - { sid: node-2.example.com, role: replica }
+  redis_sentinel:
+    master_name: mymaster
+    quorum: 2

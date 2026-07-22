@@ -1,0 +1,17 @@
+name: fc3-retry-until
+state_schema_version: 1
+description: >-
+  FC-3 L3b: prove the retry:+until: health-gate on REAL timing (real-apply).
+  The L3a stub returns the final RunResult immediately - the retry loop isn't
+  observable from outside and it isn't proven that until is evaluated against
+  the real service coming up. Here the probe (core.cmd.shell) with
+  retry:{count,delay,until} hits a gate that is physically not ready on the
+  1st attempt (the ready epoch is written into the future by the prepare
+  task), so until MUST take >=2 attempts before it matches.
+
+# state_schema_version=1 -> the migrations/ catalog isn't required (ADR-019).
+# The focus scenario doesn't mutate incarnation.state (commit state is a
+# separate invariant, covered by other L3a/L3b tests).
+state_schema:
+  type: object
+  properties: {}

@@ -1,0 +1,61 @@
+# L0 trial for destroy: teardown of an incarnation deployed via the BINARY method (Nexus tarball).
+# Render-only, hermetic. Lifecycle terminal flow (destroy — a lifecycle phase).
+#
+# What we assert:
+#   1. mongod is stopped (core.service.stopped).
+#   2. mongod is removed via the BINARY branch (core.file.absent /usr/local/bin/mongod + its own unit) —
+#      the binary branch is active (essence.install_method=binary → static gate group-keep).
+#   3. Our config artifacts are removed (core.file.absent mongod.conf + sysctl drop-in).
+#   4. The PACKAGE branch is dropped (group-drop): core.pkg.absent is ABSENT (on a binary incarnation).
+#   5. data_dir/log_dir are NOT touched (data is irreversible — MVP boundary).
+name: destroy tears down a binary-installed mongo (stop + remove binary/unit + remove configs)
+
+fixtures:
+  hosts:
+    - sid: node-solo.example.com
+      covens: [destroy]
+      soulprint:
+        network: { primary_ip: 10.0.0.5 }
+        os: { arch: amd64 }
+
+  essence:
+    install_method: binary
+    conf_dir: /etc/mongodb
+
+  # incarnation.state (install/conf_dir are in essence, not in state).
+  state:
+    mongo_version: "8.0.4"
+    mongo_config:
+      net: { bindIp: "0.0.0.0", port: 27017 }
+      security: { authorization: enabled }
+
+assert:
+  task_present:
+    # 1. Stop mongod.
+    - module: core.service.stopped
+      params_subset:
+        name: mongod
+    # 2. BINARY branch: binary + its own unit are removed.
+    - module: core.file.absent
+      params_subset:
+        path: /usr/local/bin/mongod
+    - module: core.file.absent
+      params_subset:
+        path: /etc/systemd/system/mongod.service
+    # 3. Our config artifacts are removed.
+    - module: core.file.absent
+      params_subset:
+        path: /etc/mongodb/mongod.conf
+    - module: core.file.absent
+      params_subset:
+        path: /etc/sysctl.d/30-mongodb.conf
+
+  task_absent:
+    # 4. PACKAGE branch group-drop on a binary incarnation.
+    - module: core.pkg.absent
+      params_subset:
+        name: mongodb-org
+    # 5. data_dir/log_dir are NOT removed (data is irreversible).
+    - module: core.file.absent
+      params_subset:
+        path: /var/lib/mongodb

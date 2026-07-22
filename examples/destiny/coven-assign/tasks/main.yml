@@ -1,0 +1,22 @@
+# coven-assign — binds a Soul (input.sid) to a set of Coven labels
+# (input.coven) in the keeper-side souls/coven registry.
+#
+# Thin wrapper around the keeper-side core module `core.soul.registered`
+# (full spec — docs/keeper/modules.md). destiny.yml itself
+# (input contract sid + coven) is unchanged and stays compatible.
+#
+# mode: append — destiny does not clear existing labels, it only adds
+# the given ones (idempotently). replace/remove modes are only available
+# via a direct module call from a scenario.
+#
+# refresh_soulprint: false — destiny is invoked outside a scenario context,
+# there is no run-level `soulprint.hosts` to refresh.
+
+- name: Register Soul with the requested coven labels
+  on: keeper
+  module: core.soul.registered
+  params:
+    sid:               "${ input.sid }"
+    coven:             "${ input.coven }"
+    mode:              append
+    refresh_soulprint: false

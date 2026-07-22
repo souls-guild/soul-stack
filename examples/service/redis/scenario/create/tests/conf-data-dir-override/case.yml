@@ -1,0 +1,209 @@
+# L0 trial: create (standalone) — OVERRIDE conf_dir/data_dir (directive B). Guard:
+# the operator overrides the base Redis config and data directories, and these paths
+# REACH the destiny `redis` file tasks. Regression case for the MAJOR: before the fix,
+# scenario create did NOT declare conf_dir/data_dir in input and did NOT pass them into
+# apply.input → destiny only took the default (the override was DEAD). Fix: the scenario
+# declares conf_dir/data_dir (default = the current path) and passes it into apply.input on
+# all branches; destiny builds redis.conf/users.acl/tls/.so/modules-dir paths from them.
+#
+# Override: conf_dir=/opt/redis, data_dir=/srv/redis-data. Expected:
+#   - redis.conf, users.acl → /opt/redis/* (under conf_dir);
+#   - modules-dir + .so → /srv/redis-data/modules/* (under data_dir);
+#   - loadmodules in redis.conf → /srv/redis-data/modules/*.so (data_dir);
+#   - redis.conf render_context carries the conf_dir/data_dir override → the template
+#     outputs `dir` from data_dir (/srv/redis-data) and `aclfile` from conf_dir
+#     (/opt/redis/users.acl), and NOT the hardcoded /var/lib/redis ÷ /etc/redis/users.acl
+#     (directive B, fix of the dir/aclfile hardcode in redis.conf.tmpl bypassing override);
+#   - the host-layout override travels via essence (conf_dir/data_dir), NOT state —
+#     add_node reads it from essence.conf_dir/data_dir (see the state_changes assert below).
+# version=5:6.2.7 (< 8) → modules active (.so under data_dir is checkable). TLS off
+# (this case is about the FILE paths of destiny tasks). TLS directives in redis.conf under
+# the conf_dir override are covered by a separate case conf-data-dir-override-tls (qa fix of
+# the /etc/redis/tls hardcode in compute.redis_config).
+name: conf_dir and data_dir override flow through to destiny file paths
+
+fixtures:
+  default_destiny_source: "file://../../destiny/{name}"
+  hosts:
+    - sid: node-solo.example.com
+      covens: [create]
+      soulprint:
+        network: { primary_ip: 10.0.0.5 }
+        os: { arch: amd64 }
+  vault:
+    secret/redis/create:
+      password: s3cr3t-redis-pass-create
+    # Per-user secrets of system users (secret/redis/<inc>/users/<name>#password) —
+    # resolved by keeper-side vault() when topping up system_acl_users into apply.input.users.
+    # ★ REDESIGN default_admin (2026-06-30): default_admin is the system user for
+    # in-cluster AUTH (auth_pass/PING deploy steps read it via the users/<name> branch).
+    secret/redis/create/users/default_admin:
+      password: default-admin-secret-pass
+    secret/redis/create/users/replica:
+      password: replica-sys-secret-pass
+    secret/redis/create/users/monitoring:
+      password: monitoring-sys-secret-pass
+    secret/redis/create/users/sentinel:
+      password: sentinel-sys-secret-pass
+    secret/redis/create/users/haproxy:
+      password: haproxy-sys-secret-pass
+  essence:
+    redis_type: sentinel
+    sentinel_master_name: master
+    modules_base_url: "https://artifacts.example.com/redis/modules/6.2"
+    memory_reserve_percent: 75
+    persistence_presets:
+      rdb:
+        save: "900 1 300 10 60 10000"
+        appendonly: "no"
+    redis_config:
+      maxmemory: "256mb"
+
+    # ★ #2 OVERRIDE host-layout: non-standard conf/data directories via essence
+    # (spec.essence of the incarnation). compute.conf_dir/data_dir read them from here and
+    # push into destiny + persist into state.
+    conf_dir: /opt/redis
+    data_dir: /srv/redis-data
+
+    # System ACL users for redis-server + the sentinel daemon (1:1 from essence/_default.yaml).
+    # BOTH ARE MANDATORY: the create/sentinel.yml guard (assert 1b) breaks render if either
+    # set is empty (silent fail-open is unacceptable — without them replication/sentinel↔redis
+    # AUTH would break).
+    system_acl_users:
+      default_admin: "~* &* +@all"
+      replica:    "+psync +replconf +ping"
+      monitoring: "-@all +@connection +client +ping +info +config|get +cluster|info +slowlog +latency +memory +select +command|count +command|docs"
+      sentinel:   "allchannels +multi +slaveof +ping +exec +subscribe +config|rewrite +role +publish +info +client|setname +client|kill +script|kill"
+      haproxy:    "-@all +auth +client|getname +client|id +client|setname +command +hello +ping +role +info +cluster|info"
+    system_acl_users_sentinel:
+      default_admin: "allchannels allkeys +@all"
+      monitoring: "-@all +@connection -command +client -hello +info -auth +sentinel|masters +sentinel|replicas +sentinel|slaves +sentinel|sentinels +sentinel|ckquorum"
+      sentinel:   "allchannels -@all +auth +client|getname +client|id +client|setname +command +hello +ping +sentinel|is-master-down-by-addr +publish +role +sentinel|get-master-addr-by-name +sentinel|master +sentinel|myid +sentinel|replicas +sentinel|sentinels"
+      haproxy:    "-@all +auth +client|getname +client|id +client|setname +command +hello +ping +role +sentinel|get-master-addr-by-name +sentinel|master +sentinel|myid +sentinel|replicas +sentinel|sentinels"
+  input:
+    # ★ provision disabled (default-on: an omitted section = ENABLED; this case deploys onto
+    # a READY roster, cloud-create not needed) → include redis-provision.yml group-drop.
+    provision:
+      enabled: false
+    redis_type: sentinel
+    version: "7.4.1"
+    persistence: rdb
+    # single-host sentinel roster (1 host) → no replicas (size-guard 1+0).
+    replicas_per_master: 0
+
+assert:
+  task_present:
+    # redis.conf under the conf_dir override (/opt/redis), and loadmodules → under the
+    # data_dir override (/srv/redis-data/modules). Regression "override is dead" =
+    # /etc/redis/redis.conf + loadmodules /var/lib/redis/modules. Disambiguator from
+    # users.acl/hardening — path.
+    - module: core.file.rendered
+      params_subset:
+        path: /opt/redis/redis.conf
+        template_content: "<present>"
+        mode: "0640"
+        owner: redis
+        group: redis
+        render_context:
+          vars:
+            # ★ GUARD host-layout (directive B): conf_dir/data_dir reach the render_context
+            # of the redis.conf template → `dir` is rendered from data_dir (/srv/redis-data),
+            # `aclfile` from conf_dir (${conf_dir}/users.acl → /opt/redis/users.acl).
+            # Regression "dir/aclfile hardcoded to /var/lib/redis ÷ /etc/redis/users.acl
+            # bypassing override" = these keys are missing/= default → deepEqualJSON
+            # render_context FAIL.
+            conf_dir: /opt/redis
+            data_dir: /srv/redis-data
+            port: 6379
+            run_dir: /var/run/redis
+            log_dir: /var/log/redis
+            loadmodules:
+              - /srv/redis-data/modules/redisbloom.so
+              - /srv/redis-data/modules/rejson.so
+              - /srv/redis-data/modules/redisearch.so
+              - /srv/redis-data/modules/redistimeseries.so
+            config:
+              # ★ REDESIGN default_admin: replica→master AUTH (masteruser/
+              # masterauth) arrives as ORDINARY config directives (the sentinel
+              # deploy-body tops them up via vault()-in-cell) → redis.conf ranges
+              # over them like any other directive → statically survives a restart.
+              masteruser:       "default_admin"
+              masterauth:       "default-admin-secret-pass"
+              maxmemory: "256mb"
+              save: "900 1 300 10 60 10000"
+              appendonly: "no"
+          self:
+            sid: node-solo.example.com
+            covens: [create]
+            choirs: []
+            # traits — registry projection (ADR-060), an empty object without labels.
+            traits: {}
+            role: ""
+            network:
+              primary_ip: 10.0.0.5
+            os:
+              arch: amd64
+          role: ""
+          essence: {}
+
+    # users.acl under the conf_dir override. Disambiguator from redis.conf — path.
+    - module: core.file.rendered
+      params_subset:
+        path: /opt/redis/users.acl
+        mode: "0640"
+        owner: redis
+        group: redis
+
+    # conf-dir under the conf_dir override (/opt/redis): created BEFORE the redis.conf/
+    # users.acl render. Regression "conf-dir hardcoded to /etc/redis or override is dead" =
+    # a task with path /etc/redis (see task_absent) OR its absence. Disambiguator from
+    # modules-dir/tls-dir/socket-dir — path /opt/redis.
+    - module: core.directory.present
+      params_subset:
+        path: /opt/redis
+        owner: redis
+        group: redis
+        mode: "0750"
+        parents: true
+
+    # modules-dir under the data_dir override. Disambiguator from systemd-dropin-dir — path.
+    - module: core.directory.present
+      params_subset:
+        path: /srv/redis-data/modules
+        owner: redis
+        group: redis
+        mode: "0750"
+
+    # .so fetch under the data_dir override; URL is arch-specific (x86_64 — uname-m mapping of soulprint amd64). Disambiguator — path.
+    - module: core.url.fetched
+      params_subset:
+        url: "https://artifacts.example.com/redis/modules/6.2/x86_64/redisearch.so"
+        path: /srv/redis-data/modules/redisearch.so
+        mode: "0750"
+        owner: redis
+        group: redis
+
+  task_absent:
+    # Regression "override didn't reach, default was used": default paths must NOT appear.
+    - module: core.file.rendered
+      params_subset:
+        path: /etc/redis/redis.conf
+    - module: core.url.fetched
+      params_subset:
+        path: /var/lib/redis/modules/redisearch.so
+    # The conf-dir task under the DEFAULT path must NOT appear (conf_dir override → task
+    # on /opt/redis, not /etc/redis). Regression "conf-dir hardcoded to /etc/redis bypassing override".
+    - module: core.directory.present
+      params_subset:
+        path: /etc/redis
+
+  state_changes:
+    redis_type: sentinel
+    redis_version: "7.4.1"
+    modules: [bloom, json, search, timeseries]
+    # ★ conf_dir/data_dir moved out of state into essence (v11→v12, Variant A): the override
+    # no longer persists into state (not present in state_changes — fields not in
+    # state_schema). The host-layout override lives in spec.essence of the incarnation;
+    # add_node reads it from there (default(essence.conf_dir/data_dir, ...)). The destiny
+    # tasks above already verify that the override reached the redis.conf/data-dir paths on
+    # THIS create run.

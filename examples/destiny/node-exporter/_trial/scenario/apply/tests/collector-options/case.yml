@@ -1,0 +1,81 @@
+# L0 case: collector sub-options (collector_options, format B1).
+#
+# Proves CEL passthrough of input.collector_options as a native type (map<string,
+# map<string,string>>) into render_context.input of the main unit step (Variant B,
+# ADR-010 §3.2 amendment: operator-input goes straight into render_context.input).
+# The actual double-range over SORTED keys (determinism of ExecStart flags) is
+# performed by the text/template phase and is covered by a keeper/internal/render
+# unit test (TestNodeExporterService_CollectorOptionsDeterministic) — L0 doesn't
+# run text/template, so this fixture only pins down correct map delivery into
+# render_context.
+#
+# render_context is checked deep-equal wholesale (harness), so input is listed
+# in full (like listen-non10); the key value is collector_options. Insertion
+# order of keys is intentionally non-lexicographic — render determinism is
+# guaranteed by the range phase, not by the order in this fixture.
+name: node-exporter renders collector sub-options (collector_options map)
+
+fixtures:
+  default_destiny_source: "file://../../{name}"
+  input:
+    version: "1.11.1"
+    collectors: [smartmon]
+    collector_options:
+      systemd:
+        unit-include: ".+\\.service"
+        enable-restarts-metrics: "true"
+      cpu:
+        info: "true"
+  soulprint:
+    os:
+      arch: amd64
+    network:
+      primary_ip: "10.0.0.5"
+
+assert:
+  task_present:
+    # Main unit step (disambiguator — path). collector_options arrived in
+    # render_context.input as a native map, key-for-key.
+    - module: core.file.rendered
+      params_subset:
+        path: /etc/systemd/system/node_exporter.service
+        template_content: "<present>"
+        render_context:
+          vars:
+            bin_path: /usr/local/bin/node_exporter
+          input:
+            version: "1.11.1"
+            base_url: "https://github.com/prometheus/node_exporter/releases/download"
+            allow_private: false
+            listen: "10.0.0.5:9100"
+            collectors: [smartmon]
+            bin_dir: /usr/local/bin
+            textfile_dir: /var/lib/node_exporter
+            user: node_exporter
+            group: node_exporter
+            gomaxprocs: 0
+            disabled_collectors: []
+            enabled_collectors: []
+            collector_options:
+              systemd:
+                unit-include: ".+\\.service"
+                enable-restarts-metrics: "true"
+              cpu:
+                info: "true"
+            log_level: info
+            log_format: logfmt
+            web_telemetry_path: "/metrics"
+            fs_mount_points_exclude: ""
+            netdev_device_exclude: ""
+          self:
+            choirs: []
+            traits: {}
+            covens: [apply]
+            network:
+              primary_ip: "10.0.0.5"
+            os:
+              arch: amd64
+            role: ""
+            sid: trial-host
+          role: ""
+          essence: {}

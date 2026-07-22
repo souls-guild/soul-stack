@@ -1,0 +1,6 @@
+kind: soul_module
+protocol_version: 1
+namespace: x
+name: y
+spec:
+  states: {}

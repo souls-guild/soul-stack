@@ -1,0 +1,22 @@
+module github.com/souls-guild/soul-stack/keeper/internal/coremod/cloud/testdata/cloud-plugin-fqdn
+
+go 1.26.4
+
+require (
+	github.com/souls-guild/soul-stack/proto/plugin v0.0.0
+	github.com/souls-guild/soul-stack/sdk v0.0.0
+	google.golang.org/grpc v1.82.1
+)
+
+require (
+	golang.org/x/net v0.56.0 // indirect
+	golang.org/x/sys v0.46.0 // indirect
+	golang.org/x/text v0.39.0 // indirect
+	google.golang.org/genproto/googleapis/rpc v0.0.0-20260615183401-62b3387ff324 // indirect
+	google.golang.org/protobuf v1.36.11 // indirect
+)
+
+replace (
+	github.com/souls-guild/soul-stack/proto/plugin => ../../../../../../proto/plugin
+	github.com/souls-guild/soul-stack/sdk => ../../../../../../sdk
+)

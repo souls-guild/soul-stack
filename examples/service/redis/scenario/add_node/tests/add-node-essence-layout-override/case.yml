@@ -1,0 +1,82 @@
+# L0 test for add_node — host-layout is read FROM ESSENCE (v11→v12, Option A, paired
+# with add-node-legacy-state-defaults). Guard: when essence OVERRIDES conf_dir/
+# data_dir/modules_base_url, add_node places redis.conf/.so under THOSE paths (not the
+# defaults) — the new node gets the SAME layout as the cluster. Regression "add_node
+# ignores the essence override layout" (reads default or state instead of essence) =
+# redis.conf/.so diverge from the cluster → node unreachable/missing modules.
+#
+# essence with override: conf_dir=/opt/redis, data_dir=/srv/redis-data, non-empty
+# modules_base_url (redis_version="" < 8 → modules active, .so under the data_dir override).
+# Expected:
+#   - redis.conf → /opt/redis/redis.conf (conf_dir override from essence);
+#   - modules-dir → /srv/redis-data/modules (data_dir override from essence);
+#   - the add-node plugin builds endpoints from the roster as usual.
+name: add_node reads host-layout override from essence
+
+fixtures:
+  default_destiny_source: "file://../../destiny/{name}"
+  hosts:
+    - sid: node-1.example.com
+      covens: [add_node, redis]
+      soulprint:
+        network: { primary_ip: 10.0.0.1 }
+        os: { arch: amd64 }
+    - sid: node-9.example.com
+      covens: [add_node, redis]
+      soulprint:
+        network: { primary_ip: 10.0.0.9 }
+        os: { arch: amd64 }
+  vault:
+    secret/redis/add_node/users/default_admin:
+      password: default-admin-secret-pass
+  # ★ host-layout is OVERRIDDEN by the operator in essence (v11→v12): a repeat run must read
+  # EXACTLY these paths (not the defaults), so the new node lands in the same layout as the cluster.
+  essence:
+    conf_dir: /opt/redis
+    data_dir: /srv/redis-data
+    modules_base_url: "https://artifacts.example.com/redis/modules"
+  state:
+    redis_type: cluster
+    redis_version: ""
+    redis_config:
+      maxmemory: "256mb"
+      cluster-enabled: "yes"
+      cluster-config-file: "nodes.conf"
+      cluster-node-timeout: "5000"
+    redis_users: []
+    redis_hosts: []
+
+  input:
+    new_node_sid: node-9.example.com
+    seed_sid: node-1.example.com
+    role: master
+
+assert:
+  task_present:
+    # redis.conf under the conf_dir OVERRIDE from essence (/opt/redis, NOT the /etc/redis
+    # default): proves default(essence.conf_dir, '/etc/redis') returned the essence override.
+    # Disambiguator — path.
+    - module: core.file.rendered
+      params_subset:
+        path: /opt/redis/redis.conf
+    # modules-dir under the data_dir OVERRIDE from essence (/srv/redis-data/modules): a
+    # non-empty essence.modules_base_url activates the modules group (redis < 8), .so under
+    # the data_dir override — proves default(essence.data_dir,...) + default(essence.
+    # modules_base_url,...) were read from essence. Disambiguator — path.
+    - module: core.directory.present
+      params_subset:
+        path: /srv/redis-data/modules
+    # ADD-NODE plugin: empty master_sid → master.addr empty (role=master). Endpoints
+    # from the roster. Proves a repeat run reached the end (render did not fail).
+    - module: community.redis.cluster
+      params_subset:
+        action: add-node
+        role: master
+        username: default_admin
+        password: default-admin-secret-pass
+        new_node:
+          addr: "10.0.0.9:6379"
+        seed:
+          addr: "10.0.0.1:6379"
+        master:
+          addr: ""

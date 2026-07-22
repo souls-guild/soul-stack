@@ -1,0 +1,61 @@
+name: tls-extracted
+description: >
+  redis_config carries TLS directives (tls-port + port 0) → tls.enable=true,
+  tls.only=true (plain closed). tls.port=7379 — NOT extracted from redis_config['tls-port']
+  (DSL limit: migration-CEL has no string→int, see 002_to_003.yml), but the role default 7379;
+  it coincidentally matches redis_config['tls-port']="7379" (non-default port, see
+  non-default-tls-port). cert/key/ca_ref → '' (Vault paths were not present in v2-state).
+  maxmemory_policy is extracted from redis_config.
+
+state_before:
+  redis_type: standalone
+  redis_version: "7.2.4"
+  redis_config:
+    port: "0"
+    tls-port: "7379"
+    tls-cert-file: /etc/redis/tls/redis.crt
+    tls-key-file: /etc/redis/tls/redis.key
+    tls-ca-cert-file: /etc/redis/tls/ca.crt
+    tls-replication: "yes"
+    maxmemory: "256mb"
+    maxmemory-policy: allkeys-lru
+    save: "900 1 300 10 60 10000"
+    appendonly: "no"
+  redis_users: {}
+  redis_hosts: []
+  redis_sentinel: {}
+
+state_after:
+  redis_type: standalone
+  redis_version: "7.2.4"
+  redis_config:
+    port: "0"
+    tls-port: "7379"
+    tls-cert-file: /etc/redis/tls/redis.crt
+    tls-key-file: /etc/redis/tls/redis.key
+    tls-ca-cert-file: /etc/redis/tls/ca.crt
+    tls-replication: "yes"
+    maxmemory: "256mb"
+    maxmemory-policy: allkeys-lru
+    save: "900 1 300 10 60 10000"
+    appendonly: "no"
+  redis_users: {}
+  redis_hosts: []
+  redis_sentinel: {}
+  tls:
+    enable: true
+    only: true
+    port: 7379
+    cert_ref: ""
+    key_ref: ""
+    ca_ref: ""
+  install:
+    method: package
+  persistence: rdb
+  maxmemory_policy: allkeys-lru
+  memory_mb: 0
+  modules: []
+  sysctl_settings: {}
+  shards: 0
+  replicas: 0
+  sentinel_quorum: 0

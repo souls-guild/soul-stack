@@ -1,0 +1,7 @@
+name: bad-on-uppercase
+tasks:
+  - name: on must be lowercase kebab-case coven
+    on: [PROD]
+    module: core.exec.run
+    params:
+      command: "true"

@@ -1,0 +1,51 @@
+# L0 harness for the vector destiny (Trial, ADR-023). Minimal scenario whose only
+# job is apply:destiny vector, to give the destiny a render-only L0. Canonical
+# wrapper layout (ADR-023): the destiny's own subdirectory is `vector/_trial/scenario/apply/`.
+# The L0 resolver mirrors prod (slice A): apply:destiny resolves by name from
+# `_trial/service.yml::destiny[]` + the URL from the test case's `default_destiny_source`.
+name: apply
+description: >-
+  Trial harness: delegates installing Vector into the vector destiny via apply:destiny.
+  Not a service - a wrapper for L0-render of the destiny.
+
+input:
+  version:
+    type: string
+    required: true
+    pattern: "^[0-9]+\\.[0-9]+\\.[0-9]+$"
+  sha256:
+    type: string
+    required: true
+    pattern: "^sha256:[0-9a-f]{64}$"
+  sink_type:
+    type: string
+    default: console
+    enum: [loki, elasticsearch, vector, console]
+  sink_endpoint:
+    type: string
+    default: ""
+  sink_auth_ref:
+    type: string
+    default: ""
+    secret: true
+  log_sources:
+    type: array
+    default: []
+    items:
+      type: string
+  journald:
+    type: boolean
+    default: false
+
+tasks:
+  - name: Apply vector destiny
+    apply:
+      destiny: vector
+      input:
+        version:       "${ input.version }"
+        sha256:        "${ input.sha256 }"
+        sink_type:     "${ input.sink_type }"
+        sink_endpoint: "${ input.sink_endpoint }"
+        sink_auth_ref: "${ input.sink_auth_ref }"
+        log_sources:   "${ input.log_sources }"
+        journald:      "${ input.journald }"

@@ -1,0 +1,50 @@
+from_version: 9
+to_version: 10
+
+description: >-
+  state_schema v9 → v10: seeded_from is EXTENDED WITH REFERENCES to the external
+  source's credentials (S1 pilot migrate_cluster, prod fix for the detach-under-AUTH blocker):
+    - source_password_ref (string) — a Vault PATH to the EXTERNAL source's credential password;
+    - source_tls_ca_ref   (string) — a Vault PATH to the CA for a TLS connection to the source.
+  These are REFERENCES (Vault paths), NOT secrets — no PEM/password lands in state (security, symmetry
+  with tls.*_ref). migrate_cluster PERSISTS them from input.source.password_ref/tls_ca_ref;
+  day-2 detach_source reads them via vault() keeper-side for the final offset-gate to the
+  source. Before v10 the source's credentials were NOT stored in state (only in migrate_cluster's
+  input contract) → detach against an AUTH/TLS source failed to connect → it NEVER
+  passed (error_locked). Now detach authenticates to the protected source.
+
+  Forward-only (down: not supported; recovery via state_history).
+  Existing v9 incarnations (and a plain create) get a conservative default: empty
+  refs '' (source without AUTH/TLS, as before the fix — detach with an empty ref sends
+  source_password='', matching S1 pilot behavior bit-for-bit).
+
+  ★ DSL form: migration-CEL sandbox (ADR-019) — ONLY `state` + stdlib (NO merge()/
+  default()). seeded_from is rebuilt with ONE flat set using a CEL ternary:
+    - outer guard has(state.seeded_from): the object is absent (theoretically an invalid
+      v9 state) → set the full default for all 4 fields;
+    - otherwise (normal v9, seeded_from guaranteed by 008_to_009) → a map literal
+      PRESERVING source_endpoints/detached via a has() guard + two new ref fields,
+      also under a has() guard (idempotency of a repeated run: an already-added ref
+      is preserved, not overwritten by the ''-default).
+  ★ LEAF guard (has() on EACH field), NOT an object-guard like 008_to_009: there seeded_from
+  was INTRODUCED whole (objects-guard); here FIELDS are being added to an ALREADY-existing
+  seeded_from — overwriting the whole object would wipe source_endpoints/detached. Mirrors
+  the leaf pattern of 006_to_007 (has() on each new field). The rest of state is untouched.
+
+transform:
+  - set:
+      path:  state.seeded_from
+      value: >-
+        ${ has(state.seeded_from)
+             ? {
+                 'source_endpoints':    has(state.seeded_from.source_endpoints) ? state.seeded_from.source_endpoints : [],
+                 'detached':            has(state.seeded_from.detached) ? state.seeded_from.detached : false,
+                 'source_password_ref': has(state.seeded_from.source_password_ref) ? state.seeded_from.source_password_ref : '',
+                 'source_tls_ca_ref':   has(state.seeded_from.source_tls_ca_ref) ? state.seeded_from.source_tls_ca_ref : ''
+               }
+             : {
+                 'source_endpoints':    [],
+                 'detached':            false,
+                 'source_password_ref': '',
+                 'source_tls_ca_ref':   ''
+               } }

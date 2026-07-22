@@ -1,0 +1,75 @@
+syntax = "proto3";
+
+package soulstack.keeper.v1;
+
+import "keeper/v1/onboarding.proto";
+import "keeper/v1/lifecycle.proto";
+import "keeper/v1/apply.proto";
+import "keeper/v1/soulprint.proto";
+import "keeper/v1/sigil.proto";
+import "keeper/v1/augur.proto";
+import "keeper/v1/beacon.proto";
+import "keeper/v1/errand.proto";
+import "keeper/v1/utilization.proto";
+
+option go_package = "github.com/souls-guild/soul-stack/proto/gen/go/keeper/v1;keeperv1";
+
+// Keeper is the Keeper<->Soul contract per ADR-012.
+service Keeper {
+  // Pilot RPC, kept for generation smoke-tests and health checks.
+  rpc Ping(PingRequest) returns (PingReply);
+
+  // Onboarding: unary RPC, server-only TLS, a separate Keeper listener.
+  // Triggered once by the `soul init` command.
+  rpc Bootstrap(BootstrapRequest) returns (BootstrapReply);
+
+  // EventStream: a long-lived bidirectional gRPC stream with mTLS.
+  // The only communication channel after onboarding (ADR-002, ADR-012(a)).
+  rpc EventStream(stream FromSoul) returns (stream FromKeeper);
+
+  // FetchModule: server-streaming delivery of a SoulModule plugin's bytes by
+  // content-addressed sha256 (epic core.module.installed, S2). Same mTLS listener
+  // as EventStream; a separate HTTP/2 stream keeps the control plane free. Keeper
+  // only ever serves a sigil-allowed binary (fail-closed).
+  rpc FetchModule(PluginFetchRequest) returns (stream PluginChunk);
+}
+
+message PingRequest {}
+
+message PingReply {
+  string version = 1;
+}
+
+// FromSoul is the wrapper message for Soul -> Keeper messages on EventStream.
+message FromSoul {
+  oneof payload {
+    Hello hello = 1;
+    TaskEvent task_event = 2;
+    RunResult run_result = 3;
+    SoulprintReport soulprint_report = 4;
+    SeedRotationRequest seed_rotation_request = 5;
+    AugurRequest augur_request = 6;
+    PortentEvent portent_event = 7;
+    WardRoster ward_roster = 8;
+    ErrandResult errand_result = 9;
+    HostUtilization host_utilization = 10;
+  }
+}
+
+// FromKeeper is the wrapper message for Keeper -> Soul messages on EventStream.
+message FromKeeper {
+  oneof payload {
+    HelloReply hello_reply = 1;
+    ApplyRequest apply_request = 2;
+    CancelApply cancel_apply = 3;
+    SeedRotationReply seed_rotation_reply = 4;
+    PluginSigil plugin_sigil = 5;
+    AugurReply augur_reply = 6;
+    SigilSnapshot sigil_snapshot = 7;
+    SigilTrustAnchors sigil_trust_anchors = 8;
+    VigilSnapshot vigil_snapshot = 9;
+    ErrandRequest errand_request = 10;
+    CancelErrand cancel_errand = 11;
+    TelemetryConfig telemetry_config = 12;
+  }
+}

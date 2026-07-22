@@ -1,0 +1,29 @@
+# L0 test of the validate-guard for add_user (system-ACL-users): the operator CANNOT add a
+# user with the name of a SYSTEM one (default_admin/replica/monitoring/sentinel/haproxy). The
+# operator sets user.name=sentinel — reserved (added on top from essence OVER operator-extra →
+# would silently override sentinel-perms). The validate rule in add_user/main.yml catches this
+# at INPUT validation (422 BEFORE applying). Rule false → expect_render_error.
+name: add_user with reserved system name aborts at input validation
+
+fixtures:
+  default_destiny_source: "file://../../destiny/{name}"
+  soulprint:
+    network: { primary_ip: 10.0.0.5 }
+    os: { arch: amd64 }
+
+  # state v2: install/conf_dir/data_dir moved to essence (not in state).
+  state:
+    df_version: "1.39.0"
+    df_config:
+      maxmemory: "256mb"
+    df_users:
+      - { name: bob, perms: "~app:* +@read", state: "on" }
+
+  # The operator tries to add a user with the reserved name sentinel.
+  input:
+    user:
+      name: sentinel
+      perms: "~* +@all"
+      state: "on"
+
+expect_render_error: "reserved for a system"

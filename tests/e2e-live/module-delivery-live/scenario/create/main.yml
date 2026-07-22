@@ -1,0 +1,26 @@
+name: create
+# create: true — the starting scenario (Phase 2: create-set = EXACTLY {scenario with the flag}).
+create: true
+description: >-
+  Bring up redis with core modules (apt + systemd) WITHOUT the community.redis consumer.
+  Negative assertion for NIM-32: the module is declared in service.yml::modules[], but create
+  does NOT use it → keeper does not synthesize core.module.installed in the create plan
+  (ADR-065(e): a module without consumers is not synthesized).
+
+# Focus scenario: state does not change (commit state is a separate invariant).
+state_changes: {}
+
+tasks:
+  # apt redis-server (retry against a flapping apt-mirror, like smoke-nginx-live).
+  # Default Debian redis: 127.0.0.1:6379 without auth — PING target in the operational scenario.
+  - name: Install redis-server package
+    module: core.pkg.installed
+    retry: { count: 3, delay: 10s }
+    params:
+      name: redis-server
+
+  - name: Ensure redis-server is running and enabled at boot
+    module: core.service.running
+    params:
+      name: redis-server
+      enabled: true

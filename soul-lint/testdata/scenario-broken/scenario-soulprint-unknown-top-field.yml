@@ -1,0 +1,7 @@
+name: bad-soulprint-typo
+tasks:
+  - name: typo in top-level soulprint.self field
+    where: soulprint.self.memmory.total_mb > 0
+    module: core.exec.run
+    params:
+      command: "true"

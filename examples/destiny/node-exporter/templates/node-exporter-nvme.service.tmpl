@@ -1,0 +1,42 @@
+{{/*
+  oneshot collector for NVMe SMART metrics for node_exporter. Go text/template strict
+  (ADR-010). .vars.bin_dir (script nvme_metrics.sh), .vars.textfile_dir (output .prom).
+
+  * User=root: nvme-cli requires access to char devices /dev/nvme*. Strict sandbox
+  (spec, collectors section): write only to the textfile directory, no network, DeviceAllow on char-nvme,
+  capabilities CAP_SYS_ADMIN/CAP_SYS_RAWIO.
+
+  ConditionPathExistsGlob=/dev/nvme[0-9]* - without an NVMe device the collector does not start (the
+  same Condition in .timer).
+*/}}
+[Unit]
+Description=Collect NVMe metrics for node_exporter
+ConditionPathExistsGlob=/dev/nvme[0-9]*
+
+[Service]
+Type=oneshot
+User=root
+ExecStart=/usr/bin/env bash -c 'set -euo pipefail; tmp="$(mktemp {{ .vars.textfile_dir }}/nvme_metrics.prom.XXXXXX)"; "{{ .vars.bin_dir }}/nvme_metrics.sh" > "$tmp"; mv "$tmp" "{{ .vars.textfile_dir }}/nvme_metrics.prom"'
+
+# systemd-hardening for a privileged oneshot (spec, collectors section).
+ReadWritePaths={{ .vars.textfile_dir }}
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateNetwork=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+LockPersonality=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+RestrictNamespaces=yes
+RestrictAddressFamilies=AF_UNIX
+NoNewPrivileges=yes
+ProtectProc=invisible
+PrivateDevices=no
+DevicePolicy=closed
+DeviceAllow=char-nvme rw
+CapabilityBoundingSet=CAP_SYS_ADMIN CAP_SYS_RAWIO

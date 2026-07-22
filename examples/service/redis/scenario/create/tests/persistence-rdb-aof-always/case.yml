@@ -1,0 +1,96 @@
+# L0 test for create — persistence: rdb_aof_always. Preset essence.persistence_presets
+# [rdb_aof_always] = {save:"900 1 300 10 60 10000", appendonly:"yes", appendfsync:"always"}
+# — RDB snapshots + AOF with fsync on EVERY write (maximum durability of both engines).
+# The case holds the invariant "rdb_aof_always → appendfsync:always + appendonly:yes + non-empty
+# save in redis.conf AND state". Difference from aof_always — non-empty save (RDB stays).
+# Sentinel single-host mode (1 master + 0 replicas).
+name: persistence rdb_aof_always merges appendfsync always plus rdb save into config and state
+
+fixtures:
+  default_destiny_source: "file://../../destiny/{name}"
+  hosts:
+    - sid: node-solo.example.com
+      covens: [create, redis]
+      soulprint:
+        network: { primary_ip: 10.0.0.5 }
+        os: { arch: amd64 }
+  vault:
+    secret/redis/create:
+      password: s3cr3t-redis-pass-create
+    # ★ REDESIGN default_admin (2026-06-30): default_admin is the system user
+    # for intra-cluster AUTH (auth_pass/PING deploy steps read it via the users/<name> branch).
+    secret/redis/create/users/default_admin:
+      password: default-admin-secret-pass
+    secret/redis/create/users/replica:
+      password: replica-sys-secret-pass
+    secret/redis/create/users/monitoring:
+      password: monitoring-sys-secret-pass
+    secret/redis/create/users/sentinel:
+      password: sentinel-sys-secret-pass
+    secret/redis/create/users/haproxy:
+      password: haproxy-sys-secret-pass
+  essence:
+    # install_method — in essence (author-context, 2026-06-28): the install method
+    # is NOT operator-input. compute.install reads default(essence.install_method, 'binary').
+    install_method: package
+    redis_type: sentinel
+    sentinel_master_name: master
+    sentinel_master_defaults:
+      down-after-milliseconds: "5000"
+      failover-timeout:        "60000"
+    modules_base_url: "https://artifacts.example.com/redis/modules"
+    memory_reserve_percent: 75
+    persistence_presets:
+      rdb_aof_always:
+        save:        "900 1 300 10 60 10000"
+        appendonly:  "yes"
+        appendfsync: "always"
+    redis_config:
+      maxmemory: "256mb"
+    system_acl_users:
+      default_admin: "~* &* +@all"
+      replica:    "+psync +replconf +ping"
+      monitoring: "-@all +@connection +client +ping +info +config|get +cluster|info +slowlog +latency +memory +select +command|count +command|docs"
+      sentinel:   "allchannels +multi +slaveof +ping +exec +subscribe +config|rewrite +role +publish +info +client|setname +client|kill +script|kill"
+      haproxy:    "-@all +auth +client|getname +client|id +client|setname +command +hello +ping +role +info +cluster|info"
+    system_acl_users_sentinel:
+      default_admin: "allchannels allkeys +@all"
+      monitoring: "-@all +@connection -command +client -hello +info -auth +sentinel|masters +sentinel|replicas +sentinel|slaves +sentinel|sentinels +sentinel|ckquorum"
+      sentinel:   "allchannels -@all +auth +client|getname +client|id +client|setname +command +hello +ping +sentinel|is-master-down-by-addr +publish +role +sentinel|get-master-addr-by-name +sentinel|master +sentinel|myid +sentinel|replicas +sentinel|sentinels"
+      haproxy:    "-@all +auth +client|getname +client|id +client|setname +command +hello +ping +role +sentinel|get-master-addr-by-name +sentinel|master +sentinel|myid +sentinel|replicas +sentinel|sentinels"
+  input:
+    # ★ provision disabled (default-on: an omitted section = ENABLED; the case deploys onto a
+    # READY roster, cloud-create is not needed) → include redis-provision.yml group-drop.
+    provision:
+      enabled: false
+    redis_type: sentinel
+    version: "7.4.1"
+    replicas_per_master: 0
+    # rdb_aof_always: RDB snapshots + AOF with appendfsync:always.
+    persistence: rdb_aof_always
+
+assert:
+  task_present:
+    - module: core.file.rendered
+      params_subset:
+        path: /etc/redis/redis.conf
+
+  state_changes:
+    redis_type: sentinel
+    redis_version: "7.4.1"
+    # Preset rdb_aof_always is merged IN FULL: non-empty save (RDB), appendonly:yes,
+    # appendfsync:always.
+    redis_config:
+      maxmemory: "256mb"
+      save: "900 1 300 10 60 10000"
+      appendonly: "yes"
+      appendfsync: "always"
+    redis_users: []
+    redis_hosts: []
+    redis_sentinel:
+      master_name: master
+      quorum: 0
+      master_settings:
+        down-after-milliseconds: "5000"
+        failover-timeout: "60000"
+      settings: {}

@@ -1,0 +1,151 @@
+# L0-trial update_config: hot-reload of redis.conf directives WITHOUT a restart.
+# The operator changes maxmemory_policy (allkeys-lru → volatile-lru); the scenario
+# recomputes the merged redis_config (on top of the EXPANDED incarnation.state.redis_config),
+# renders a new redis.conf and ACTIVATES via community.redis.config (CONFIG SET,
+# rewrite=false — the file from step 1 keeps the render). Render-only, hermetic. Plaintext (addr 6379).
+#
+# What we assert (acceptance criteria):
+#   1. redis.conf (core.file.rendered): the new merged config carries the changed directive
+#      maxmemory-policy: volatile-lru + the ones preserved from state (maxmemory/save/appendonly).
+#   2. hot-reload step (community.redis.config): addr 127.0.0.1:6379 (plain), tls=false,
+#      password from vault (masked on output, resolved value in the plan),
+#      rewrite=false (redis.conf from step 1 is the source of truth for the file; NIM-53), config carries
+#      the recomputed merged config.
+#   3. state_changes: redis_config ≡ the config passed into hot-reload (one compute,
+#      no drift); maxmemory_policy = volatile-lru (namedfield read-model).
+#
+# Idempotency (render level): the merge is deterministic (sorted keys in the
+# template) — a repeat run with the same input gives bit-for-bit the same redis.conf and the
+# same config in the hot-reload step; the plugin's CONFIG GET-diff yields no-op (changed=false) at
+# the live-instance level (L1+, outside L0-render).
+name: update_config hot-reloads changed directive without restart (plaintext)
+
+fixtures:
+  default_destiny_source: "file://../../destiny/{name}"
+  soulprint:
+    network: { primary_ip: 10.0.0.5 }
+    os: { arch: amd64 }
+
+  # essence substrate: persistence_presets + memory_reserve (to recompute maxmemory
+  # from the saved state.memory_mb) + host-layout (v11→v12: conf_dir/data_dir/
+  # modules_base_url moved from state into essence, Variant A; a repeat run reads them from here).
+  essence:
+    memory_reserve_percent: 75
+    conf_dir: /etc/redis
+    data_dir: /var/lib/redis
+    modules_base_url: "https://artifacts.example.com/redis/modules"
+    persistence_presets:
+      rdb:
+        save: "900 1 300 10 60 10000"
+        appendonly: "no"
+
+  # Expanded incarnation.state v3 (from create): plaintext (tls.enable=false), already
+  # expanded redis_config + namedfields. update_config merges the delta ON TOP of it.
+  state:
+    redis_type: sentinel
+    redis_version: "7.2.4"
+    tls:
+      enable:   false
+      only:     false
+      port:     7379
+      cert_ref: ""
+      key_ref:  ""
+      ca_ref:   ""
+    persistence: rdb
+    memory_mb: 1024
+    maxmemory_policy: allkeys-lru
+    redis_config:
+      maxmemory:        "768mb"
+      maxmemory-policy: allkeys-lru
+      save:             "900 1 300 10 60 10000"
+      appendonly:       "no"
+    redis_users: []
+
+  input:
+    # Operator delta: only the new eviction policy.
+    maxmemory_policy: volatile-lru
+
+  vault:
+    secret/redis/update_config:
+      password: upd-redis-pass-16chars
+    # ★ default_admin REDESIGN: the system admin user — password from the users/default_admin branch.
+    # Read via the masterauth merge into apply.input.config (redis.conf) AND the connection of
+    # community.redis.config (AUTH as default_admin instead of the former requirepass secret).
+    secret/redis/update_config/users/default_admin:
+      password: default-admin-secret-pass
+
+assert:
+  task_present:
+    # 1. redis.conf re-rendered with the new merged config. maxmemory-policy changed to
+    #    volatile-lru; maxmemory recomputed from state.memory_mb (1024*75/100=768mb);
+    #    save/appendonly preserved from state.redis_config (the substrate). Disambiguator —
+    #    path (from users.acl/hardening).
+    - module: core.file.rendered
+      params_subset:
+        path: /etc/redis/redis.conf
+        render_context:
+          vars:
+            conf_dir: /etc/redis
+            data_dir: /var/lib/redis
+            port: 6379
+            run_dir: /var/run/redis
+            log_dir: /var/log/redis
+            loadmodules:
+              - /var/lib/redis/modules/redisbloom.so
+              - /var/lib/redis/modules/rejson.so
+              - /var/lib/redis/modules/redisearch.so
+              - /var/lib/redis/modules/redistimeseries.so
+            config:
+              maxmemory: "768mb"
+              maxmemory-policy: volatile-lru
+              save: "900 1 300 10 60 10000"
+              appendonly: "no"
+              # ★ default_admin REDESIGN: the static replica→master AUTH is merged into
+              # apply.input.config → redis.conf carries masteruser/masterauth (on master nodes
+              # they're inert, failover-safe). masterauth — the resolved default_admin password.
+              masteruser: default_admin
+              masterauth: default-admin-secret-pass
+          self:
+            sid: trial-host
+            covens: [update_config]
+            choirs: []
+            # traits — a registry projection (ADR-060), an empty object without labels.
+            traits: {}
+            role: ""
+            network:
+              primary_ip: 10.0.0.5
+            os:
+              arch: amd64
+          role: ""
+          essence: {}
+
+    # 2. HOT-RELOAD: community.redis.config to the live plain instance. addr 6379 (plain),
+    #    tls=false, rewrite=false (NIM-53: the file is the render from step 1), config = recomputed
+    #    merged. The startup-only denylist is handled on the plugin side (here it's hot-settable).
+    - module: community.redis.config
+      params_subset:
+        addr: "127.0.0.1:6379"
+        # ★ default_admin REDESIGN: AUTH as default_admin (username + its Vault password).
+        username: default_admin
+        password: default-admin-secret-pass
+        tls: false
+        rewrite: false
+        # config — a PURE compute.redis_config WITHOUT the masterauth merge (hot-reload sends CONFIG
+        # SET for the operator delta only; masteruser/masterauth are replication material,
+        # update_config doesn't touch it on a live instance).
+        config:
+          maxmemory: "768mb"
+          maxmemory-policy: volatile-lru
+          save: "900 1 300 10 60 10000"
+          appendonly: "no"
+
+  # DRIFT-GUARD: state.redis_config ≡ the config passed into hot-reload (one compute).
+  state_changes:
+    redis_config:
+      maxmemory: "768mb"
+      maxmemory-policy: volatile-lru
+      save: "900 1 300 10 60 10000"
+      appendonly: "no"
+    persistence: rdb
+    memory_mb: 1024
+    maxmemory_policy: volatile-lru

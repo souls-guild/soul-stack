@@ -1,0 +1,68 @@
+# L0 case: overridden web_telemetry_path (!= /metrics).
+#
+# web_telemetry_path=/node/metrics -> apply:input passes it to destiny ->
+# render_context.input.web_telemetry_path of the main unit step (Variant B,
+# ADR-010 §3.2 amendment: operator-input goes directly into render_context.input).
+# Contrast with render-defaults (default /metrics). The --web.telemetry-path flag
+# is ALWAYS rendered (default is non-empty); the actual text/template render of the
+# flag is covered by the unit test keeper/internal/render (TestNodeExporterService_TelemetryPathOverride)
+# - L0 only fixes the CEL passthrough of the value into render_context.
+#
+# render_context is compared deep-equal wholesale (harness), so input is listed
+# in full (like listen-non10); the key value is web_telemetry_path.
+name: node-exporter renders overridden web telemetry path
+
+fixtures:
+  default_destiny_source: "file://../../{name}"
+  input:
+    version: "1.11.1"
+    collectors: [smartmon]
+    web_telemetry_path: "/node/metrics"
+  soulprint:
+    os:
+      arch: amd64
+    network:
+      primary_ip: "10.0.0.5"
+
+assert:
+  task_present:
+    # Main unit step (disambiguator - path). web_telemetry_path arrived in
+    # render_context.input as an override value, collector_options - default {}.
+    - module: core.file.rendered
+      params_subset:
+        path: /etc/systemd/system/node_exporter.service
+        template_content: "<present>"
+        render_context:
+          vars:
+            bin_path: /usr/local/bin/node_exporter
+          input:
+            version: "1.11.1"
+            base_url: "https://github.com/prometheus/node_exporter/releases/download"
+            allow_private: false
+            listen: "10.0.0.5:9100"
+            collectors: [smartmon]
+            bin_dir: /usr/local/bin
+            textfile_dir: /var/lib/node_exporter
+            user: node_exporter
+            group: node_exporter
+            gomaxprocs: 0
+            disabled_collectors: []
+            enabled_collectors: []
+            collector_options: {}
+            log_level: info
+            log_format: logfmt
+            web_telemetry_path: "/node/metrics"
+            fs_mount_points_exclude: ""
+            netdev_device_exclude: ""
+          self:
+            choirs: []
+            traits: {}
+            covens: [apply]
+            network:
+              primary_ip: "10.0.0.5"
+            os:
+              arch: amd64
+            role: ""
+            sid: trial-host
+          role: ""
+          essence: {}

@@ -1,0 +1,26 @@
+name: mark_a
+description: >-
+  Targets a SINGLE coven (on: [cluster-a]). Installs redis and writes a coven marker
+  only on cluster-a hosts. Validation: apply_runs appear ONLY for the cluster-a
+  SID, cluster-b/cluster-c hosts are untouched (0 apply_runs, no file).
+
+state_changes:
+  - set: marker_file
+    value: /tmp/coven-marker.txt
+  - set: last_target
+    value: "cluster-a"
+
+tasks:
+  - name: Install redis on cluster-a only
+    on: ["cluster-a"]
+    module: core.pkg.installed
+    params:
+      name: redis
+
+  - name: Write coven marker on cluster-a only
+    on: ["cluster-a"]
+    module: core.file.present
+    params:
+      path: /tmp/coven-marker.txt
+      mode: "0644"
+      content: "marked-by mark_a target=cluster-a\n"

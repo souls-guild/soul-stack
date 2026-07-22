@@ -1,0 +1,70 @@
+{{/*
+  systemd unit for Vector. Go text/template strict (ADR-010), Option B: input is read
+  directly via `.input.<name>` (user/group/data_dir/log_level/journald); the binary path
+  and config path are file-vars (.vars.bin_path/.vars.config_path). The field list lives
+  in destiny.yml input:.
+
+  * Service account - stable system-user (prod convention §2, stateful): the persistent
+  disk-buffer (data_dir) survives restarts and belongs to a fixed uid (DynamicUser won't
+  work here - after a uid change Vector can't read its own checkpoint). Doesn't run as root.
+
+  * ExecStartPre validate: Vector checks the config BEFORE starting (--config-yaml validate) -
+  a broken vector.yaml doesn't take down an already-running service on restart (fail in pre ->
+  start doesn't proceed, the old process stays up).
+  ExecReload=SIGHUP: Vector reloads its config on HUP without restarting (we don't use this -
+  service.yml handles it via restart-onchanges - but it's kept for a manual reload by the operator).
+
+  * Collector secret - Environment=VECTOR_SINK_TOKEN (.vars.sink_token, seal-masked on
+  output): vector.yaml on disk does NOT contain the secret (it references the env var
+  "${VECTOR_SINK_TOKEN}"), systemd passes the value to the process. Empty -> sink without auth
+  (console/open collector). VECTOR_LOG sets the internal log level of Vector itself.
+
+  * systemd-hardening (prod convention §3, "security first"): unprivileged Rust daemon.
+  ReadWritePaths=data_dir - the only writable path (disk-buffer); ProtectSystem=strict makes
+  / read-only (Vector READS its own service log files - read outside protected zones is
+  allowed). Network is open (sink push -> AF_INET/AF_INET6). We do NOT set
+  MemoryDenyWriteExecute: the Vector binary may need W+X for regexes/VRL (unlike the Go
+  exporters). When journald=true - SupplementaryGroups=systemd-journal grants access to the
+  system journal.
+*/}}
+[Unit]
+Description=Vector log-shipping agent
+Documentation=https://vector.dev
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=exec
+User={{ .input.user }}
+Group={{ .input.group }}
+{{- if .input.journald }}
+# Access to the system journal (source type journald).
+SupplementaryGroups=systemd-journal
+{{- end }}
+Environment=VECTOR_LOG={{ .input.log_level }}
+Environment=VECTOR_SINK_TOKEN={{ .vars.sink_token }}
+ExecStartPre={{ .vars.bin_path }} validate --no-environment --config-yaml {{ .vars.config_path }}
+ExecStart={{ .vars.bin_path }} --config-yaml {{ .vars.config_path }}
+ExecReload=/bin/kill -HUP $MAINPID
+SyslogIdentifier=vector
+Restart=on-failure
+RestartSec=5
+KillMode=mixed
+KillSignal=SIGTERM
+
+# systemd-hardening (prod convention §3).
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+ProtectKernelTunables=yes
+ProtectControlGroups=yes
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+CapabilityBoundingSet=
+LockPersonality=yes
+RestrictNamespaces=yes
+ProtectProc=invisible
+ReadWritePaths={{ .input.data_dir }}
+
+[Install]
+WantedBy=multi-user.target

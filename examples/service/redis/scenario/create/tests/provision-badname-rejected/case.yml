@@ -1,0 +1,94 @@
+# L0 test NIM-58 (domain-mismatch guard): provision is ENABLED, and the incarnation name
+# "9redis" is a valid incarnation name (^[a-z0-9][a-z0-9-]{0,62}$), but an invalid
+# VM base (^[a-z][a-z0-9-]{0,48}[a-z0-9]$: leading digit). The guard-assert, as the first step of
+# redis-provision.yml, aborts the pre-persist render (in production: 422 WITHOUT writing the
+# incarnation), so the name never reaches CloudDriver.Validate after the incarnation has
+# already been created (orphan). Proves REJECT under provision.enabled + pre-persist.
+#
+# ★ expect_render_error (mutually exclusive with assert.*): a substring of the guard-assert
+# message in redis-provision.yml. incarnation_name override (NIM-58 harness): scn.Name="create"
+# is valid as a VM base, so the "bad" name is set explicitly here.
+# ★ vault/covens are under "9redis" (not "create"): WITHOUT the guard-assert (RED phase) the render
+# pushes the whole plan through - deploy reads secret/redis/9redis/*, coven=incarnation.name.
+name: provision with a bad VM-base incarnation name is rejected before persist
+
+fixtures:
+  incarnation_name: "9redis"
+  default_destiny_source: "file://../../destiny/{name}"
+  hosts:
+    - sid: vm-1.example.com
+      covens: [9redis]
+      soulprint:
+        network: { primary_ip: 10.0.0.1 }
+        os: { arch: amd64 }
+    - sid: vm-2.example.com
+      covens: [9redis]
+      soulprint:
+        network: { primary_ip: 10.0.0.2 }
+        os: { arch: amd64 }
+    - sid: vm-3.example.com
+      covens: [9redis]
+      soulprint:
+        network: { primary_ip: 10.0.0.3 }
+        os: { arch: amd64 }
+  vault:
+    secret/redis/9redis:
+      password: s3cr3t-redis-pass-create
+    secret/redis/9redis/users/default_admin:
+      password: default-admin-secret-pass
+    secret/redis/9redis/users/replica:
+      password: replica-sys-secret-pass
+    secret/redis/9redis/users/monitoring:
+      password: monitoring-sys-secret-pass
+    secret/redis/9redis/users/sentinel:
+      password: sentinel-sys-secret-pass
+    secret/redis/9redis/users/haproxy:
+      password: haproxy-sys-secret-pass
+  essence:
+    install_method: package
+    redis_type: sentinel
+    sentinel_master_name: master
+    modules_base_url: "https://artifacts.example.com/redis/modules"
+    provision_await_timeout: "10m"
+    memory_reserve_percent: 75
+    persistence_presets:
+      rdb:
+        save: "900 1 300 10 60 10000"
+        appendonly: "no"
+    redis_config:
+      maxmemory:        "256mb"
+      maxmemory-policy: allkeys-lru
+      maxclients:       10000
+      timeout:          300
+    system_acl_users:
+      default_admin: "~* &* +@all"
+      replica:    "+psync +replconf +ping"
+      monitoring: "-@all +@connection +client +ping +info +config|get +cluster|info +slowlog +latency +memory +select +command|count +command|docs"
+      sentinel:   "allchannels +multi +slaveof +ping +exec +subscribe +config|rewrite +role +publish +info +client|setname +client|kill +script|kill"
+      haproxy:    "-@all +auth +client|getname +client|id +client|setname +command +hello +ping +role +info +cluster|info"
+    system_acl_users_sentinel:
+      default_admin: "allchannels allkeys +@all"
+      monitoring: "-@all +@connection -command +client -hello +info -auth +sentinel|masters +sentinel|replicas +sentinel|slaves +sentinel|sentinels +sentinel|ckquorum"
+      sentinel:   "allchannels -@all +auth +client|getname +client|id +client|setname +command +hello +ping +sentinel|is-master-down-by-addr +publish +role +sentinel|get-master-addr-by-name +sentinel|master +sentinel|myid +sentinel|replicas +sentinel|sentinels"
+      haproxy:    "-@all +auth +client|getname +client|id +client|setname +command +hello +ping +role +sentinel|get-master-addr-by-name +sentinel|master +sentinel|myid +sentinel|replicas +sentinel|sentinels"
+  input:
+    redis_type: sentinel
+    version: "7.4.1"
+    persistence: rdb
+    replicas_per_master: 2
+    provision:
+      enabled: true
+      provider: example-dev
+      profile: redis-small
+      ssh_provider: ssh-example
+
+mocks:
+  register:
+    provision:
+      vm_ids: [i-aaa111, i-bbb222, i-ccc333]
+      hosts:
+        - { sid: vm-1.example.com, vm_id: i-aaa111, primary_ip: 10.0.0.1, bootstrap_token: tok-vm1 }
+        - { sid: vm-2.example.com, vm_id: i-bbb222, primary_ip: 10.0.0.2, bootstrap_token: tok-vm2 }
+        - { sid: vm-3.example.com, vm_id: i-ccc333, primary_ip: 10.0.0.3, bootstrap_token: tok-vm3 }
+
+expect_render_error: "the incarnation name doesn't qualify as a base VM name"

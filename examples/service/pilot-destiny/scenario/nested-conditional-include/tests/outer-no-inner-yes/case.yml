@@ -1,0 +1,21 @@
+# L0 trial (Trial, ADR-023): ★ key cascading-drop case.
+# outer='no', inner='yes' → the outer group is dropped, and the inner-task is ABSENT even though
+# its own inner-when is true. This is the fix for the bug "nested
+# conditional-include doesn't cascade the drop": the effective include-when for inner is the conjunction
+# `(input.outer == 'yes') && (input.inner == 'yes')`, a false outer suppresses both tasks.
+name: nested conditional-include cascades drop when outer is no (inner yes)
+
+fixtures:
+  input:
+    outer: 'no'
+    inner: 'yes'
+
+assert:
+  # The whole plan is empty: both outer-direct and inner-task are absent.
+  task_absent:
+    - module: core.file.present
+      params_subset:
+        path: /etc/pilot/outer.txt
+    - module: core.file.present
+      params_subset:
+        path: /etc/pilot/inner.txt

@@ -1,0 +1,212 @@
+# tasks/install.yml — installs DragonFly + redis-tools. Dispatches by install.method
+# (block per method): package (default — distro-deb dragonfly) OR binary (upstream tarball
+# dragonfly-<arch>.tar.gz). The method gate is static (input.* only) → Keeper suppresses the
+# inactive branch with a per-child placeholder-skip (block static-skip, ADR-009): indices don't
+# shift, and children's registers stay visible from outside even when the branch is suppressed.
+#
+# ★ DragonFly vs redis: DF carries ONLY the data plane (a single dragonfly binary). DF does
+#   NOT ship redis-cli → we install the distro package redis-tools (redis-cli for the health-gate
+#   PING / REPLICAOF via the community.redis plugin against the DragonFly socket).
+#
+# ★ SENTINEL DAEMON — NOT HERE (refactor "sentinel out of destiny redis"): this destiny no
+#   longer installs the redis-server package (which carries redis-sentinel) — the sentinel
+#   plane is deployed entirely by destiny `redis` in sentinel_only mode (its install.yml
+#   installs the redis package). The service scenario issues a SECOND apply:destiny:redis.
+#   Here we keep ONLY redis-tools (the DragonFly plane needs redis-cli, which redis-tools
+#   carries, not redis-server).
+#
+# ★ The binary-branch registers (dragonfly_bin/dragonfly_unit) and their restart-onchanges live
+#   IN THIS FILE: the load-time per-file linter (validateTaskRefs, shared/config/
+#   destiny_tasks.go) validates register references in onchanges at the level of a SINGLE file —
+#   cross-file onchanges is rejected as unknown_register_reference (the node-exporter/redis
+#   invariant). Hence the binary branch carries ITS OWN dragonfly restart here.
+
+# ── redis-tools (BOTH branches, UNCONDITIONALLY) ────────────────────────────────
+# DF doesn't carry redis-cli → we install it as the distro package redis-tools in either
+# mode. redis-cli is needed by the community.redis plugin's health-gate PING / REPLICAOF
+# (connecting to the DragonFly socket). We do NOT pin the distro package's version (it's a
+# utility tool; the DF version pin lives in binary.version/distro-deb dragonfly, not here).
+# retry — against a flaky mirror.
+- name: Install redis-cli for health-gate and replication (distribution package)
+  module: core.pkg.installed
+  retry: { count: 3, delay: 10s }
+  params:
+    name: redis-tools
+
+# ── package branch for DragonFly (default): distro-deb dragonfly ───────────────
+# distro package dragonfly (the official DragonflyDB deb: the /usr/bin/dragonfly binary + its
+# own systemd unit dragonfly.service + the dfly user). A single gate install.method==package
+# for the whole branch (block static-skip): install not passed / method=='package' → active.
+# version is read as bare input.version (required_when=package guarantees its presence).
+#
+# The predicate is a has() chain (NOT default(input.install.method, …)): input.install itself
+# may be ENTIRELY absent (root) → default() would fail with "no such key: install". "package"
+# is true when: install isn't passed / method isn't set / method == 'package'.
+- name: Install DragonFly from the distribution package
+  when: "!has(input.install) || !has(input.install.method) || input.install.method == 'package'"
+  block:
+    - name: Install the dragonfly package
+      module: core.pkg.installed
+      retry: { count: 3, delay: 10s }
+      params:
+        name: dragonfly
+        version: "${ input.version }"
+
+# ── binary branch for DragonFly (opt-in, upstream tarball) ─────────────────────
+# The node-exporter/redis-binary approach (core.url.fetched → core.archive.extracted →
+# core.file.present src:). binary does NOT carry distro-deb dragonfly → it installs itself
+# what the deb gives for free: the binary in /usr/local/bin, the distro dragonfly user/group,
+# its own systemd unit dragonfly.service. arch for the URL — soulprint.self.os.arch.
+#
+# ★ DF tarball: dragonfly-<arch>.tar.gz, where arch ∈ {x86_64, aarch64} (the official
+#   releases asset; an arch suffix, WITHOUT a version in the file name). Soulprint arch is
+#   amd64/arm64 (Go GOARCH) → mapped to the DF suffix x86_64/aarch64 (below, in the URL). The
+#   binary name INSIDE the archive is dragonfly-<arch> (same suffix) → src in
+#   core.file.present.
+- name: Install DragonFly from an upstream binary tarball
+  when: "has(input.install) && has(input.install.method) && input.install.method == 'binary'"
+  block:
+    # 1. Download the tarball to a temp path. URL: base_url + '/dragonfly-' + the DF arch
+    #    suffix + '.tar.gz'. checksum is NOT passed → core.url.fetched downloads by content
+    #    idempotency (download to temp → compare SHA-256 → write only on diff), without
+    #    integrity-verify (we trust HTTPS + the source, as with node-exporter).
+    #
+    #    ★ DF arch suffix: soulprint.self.os.arch (amd64/arm64) → x86_64/aarch64 via ternary.
+    #    ★ render-safety: a has() guard on input.install.base_url/version (with method=package
+    #      the whole block is static-skip, but CEL cells are evaluated before the skip
+    #      projection — bare input.install.* would fail with no-such-key; the guard yields ''
+    #      on the dead pass).
+    - name: Fetch the DragonFly tarball
+      module: core.url.fetched
+      params:
+        url: "${ (has(input.install) && has(input.install.base_url) ? input.install.base_url : '') + '/dragonfly-' + (soulprint.self.os.arch == 'arm64' ? 'aarch64' : 'x86_64') + '.tar.gz' }"
+        path: "${ vars.dragonfly_src_dir + '.tar.gz' }"
+        mode: "0644"
+
+    # 2. Extract the tarball into a directory. format auto-detected from .tar.gz. Idempotent:
+    #    core.archive writes a marker and doesn't re-extract the same archive.
+    - name: Extract the DragonFly tarball
+      module: core.archive.extracted
+      params:
+        path: "${ vars.dragonfly_src_dir + '.tar.gz' }"
+        dest: "${ vars.dragonfly_src_dir }"
+
+    # 3. The distro dragonfly user/group (binary does NOT create them — that's the distro-deb's
+    #    job). Group BEFORE user (primary group). A system account with no login shell:
+    #    DragonFly is a service. A stable uid/gid (the stateful snapshot dir
+    #    /var/lib/dragonfly needs a stable owner across restarts). We do NOT pin uid/gid (the
+    #    OS assigns them).
+    - name: Ensure the dragonfly group exists
+      module: core.group.present
+      params:
+        name: "${ vars.dragonfly_group }"
+        system: true
+
+    - name: Ensure the dragonfly user exists
+      module: core.user.present
+      params:
+        name: "${ vars.dragonfly_user }"
+        group: "${ vars.dragonfly_group }"
+        system: true
+        shell: /usr/sbin/nologin
+        home: "${ vars.dragonfly_data_dir_eff }"
+
+    # 4. Place the SINGLE dragonfly binary into /usr/local/bin (mode 0755) from the extracted
+    #    directory via core.file.present src:. Idempotency is native: the desired hash =
+    #    sha256(contents of src), changed strictly on byte changes. src is dragonfly-<arch>
+    #    INSIDE the archive (same DF arch suffix as in the URL). register → restart (step 6).
+    #    DF carries ONLY dragonfly (no -cli/-sentinel: those come from the distro
+    #    redis-tools/redis-server above).
+    - name: Install the dragonfly binary into the local bin directory
+      module: core.file.present
+      register: dragonfly_bin
+      params:
+        path: "${ vars.dragonfly_bin_dir + '/dragonfly' }"
+        src: "${ vars.dragonfly_src_dir + '/dragonfly-' + (soulprint.self.os.arch == 'arm64' ? 'aarch64' : 'x86_64') }"
+        mode: "0755"
+        owner: "${ vars.root_owner }"
+        group: "${ vars.root_group }"
+
+    # 5. Its own systemd unit dragonfly.service (binary carries no distro unit). Type=simple +
+    #    ExecStart=/usr/local/bin/dragonfly --flagfile + hardening INSIDE the unit (DF carries
+    #    hardening in the unit itself, not a drop-in — see the template). register — restart on
+    #    change.
+    - name: Render the dragonfly systemd unit (binary install)
+      module: core.file.rendered
+      register: dragonfly_unit
+      params:
+        path: "${ vars.systemd_dir + '/' + vars.dragonfly_service_name + '.service' }"
+        template: templates/dragonfly.service.tmpl
+        mode: "${ vars.unit_file_mode }"
+        owner: "${ vars.root_owner }"
+        group: "${ vars.root_group }"
+        vars:
+          bin_dir:         "${ vars.dragonfly_bin_dir }"
+          conf_dir:        "${ vars.dragonfly_conf_dir_eff }"
+          dragonfly_user:  "${ vars.dragonfly_user }"
+          dragonfly_group: "${ vars.dragonfly_group }"
+          run_dir:         "${ vars.run_dir }"
+          data_dir:        "${ vars.dragonfly_data_dir_eff }"
+          log_dir:         "${ vars.log_dir }"
+
+    # 6. Restart dragonfly on binary/unit change (binary branch). onchanges on
+    #    [dragonfly_bin, dragonfly_unit]. All registers are declared IN THIS FILE → onchanges
+    #    resolves per-file. when carries the binary gate AND deploy_dragonfly (in the package
+    #    branch the registers are suppressed by static-skip → onchanges won't fire; outside the
+    #    data plane — sentinel_only — there's nothing to restart). id: disambiguator from the
+    #    server.yml restart.
+    - name: Restart DragonFly because the binary or unit changed
+      module: core.service.restarted
+      id: dragonfly_binary_restart
+      when: "has(input.install) && has(input.install.method) && input.install.method == 'binary' && default(input.deploy_dragonfly, true)"
+      onchanges: [dragonfly_bin, dragonfly_unit]
+      timeout: 30s
+      params:
+        name: "${ vars.dragonfly_service_name }"
+
+# ── conf-dir, data-dir and log-dir (BOTH branches, UNCONDITIONALLY) ─────────────
+# The configuration directory (/etc/dragonfly: dragonfly.conf, users.acl, tls/) MUST exist
+# BEFORE the first render of any of these files (server.yml runs AFTER this include). The
+# package branch (distro-deb) creates /etc/dragonfly itself — idempotent core.directory.present
+# = no-op/fixes drift. binary branch: there's no deb, so nobody creates it → rendering
+# users.acl/dragonfly.conf would fail with "open .../.users.acl.tmp-…: no such file or
+# directory" (the same bug class as the redis conf-dir, caught live 2026-06-29). Hence
+# UNCONDITIONALLY (NOT gated on install.method and NOT on deploy_dragonfly). owner/group
+# dragonfly (either the deb or the binary branch created them — a top-level task AFTER both
+# install blocks). mode 0750: the owner reads the config (secret files are 0640/0600), others
+# have no access. parents:true — the operator can override conf_dir (input.conf_dir may be a
+# deep path with a nonexistent parent; the default parents:false would fail on it).
+- name: Ensure the dragonfly configuration directory exists
+  module: core.directory.present
+  params:
+    path: "${ vars.dragonfly_conf_dir_eff }"
+    owner: "${ vars.dragonfly_user }"
+    group: "${ vars.dragonfly_group }"
+    mode: "0750"
+    parents: true
+
+# The data (/var/lib/dragonfly: DF's snapshot dir) and log (/var/log/dragonfly: DF's glog
+# files) directories MUST exist BEFORE dragonfly's first start. The binary branch doesn't
+# carry a package → nobody creates them (systemd RuntimeDirectory covers only the run dir, not
+# stateful data/log); the package branch (distro-deb) usually creates them — idempotent
+# core.directory.present = no-op/fixes drift. Hence UNCONDITIONALLY (NOT gated on install.method
+# and NOT on deploy_dragonfly). owner/group dragonfly (either the deb or the binary branch
+# created them — top-level tasks AFTER both install blocks). mode 0750: the owner
+# reads/writes.
+- name: Ensure the dragonfly data directory exists
+  module: core.directory.present
+  params:
+    path: "${ vars.dragonfly_data_dir_eff }"
+    owner: "${ vars.dragonfly_user }"
+    group: "${ vars.dragonfly_group }"
+    mode: "0750"
+    parents: true
+
+- name: Ensure the dragonfly log directory exists
+  module: core.directory.present
+  params:
+    path: "${ vars.log_dir }"
+    owner: "${ vars.dragonfly_user }"
+    group: "${ vars.dragonfly_group }"
+    mode: "0750"
+    parents: true

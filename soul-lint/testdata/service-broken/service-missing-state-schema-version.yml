@@ -1,0 +1,5 @@
+name: redis-cluster
+state_schema:
+  type: object
+  properties:
+    foo: { type: string }

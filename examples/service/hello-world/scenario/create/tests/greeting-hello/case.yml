@@ -1,0 +1,18 @@
+# L0 test (Trial, ADR-023) of the hello-world service's create scenario.
+#
+# Verifies that the render pipeline for input.greeting="hi" produces a single
+# core.file.present task with path=/tmp/soul-stack-hello and content="hi"
+# (CEL interpolation ${ input.greeting }).
+name: create writes greeting file with input.greeting
+
+fixtures:
+  input:
+    greeting: hi
+
+assert:
+  task_present:
+    # The only task in the plan.
+    - module: core.file.present
+      params_subset:
+        path: /tmp/soul-stack-hello
+        content: hi

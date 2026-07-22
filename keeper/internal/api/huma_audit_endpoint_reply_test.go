@@ -1,0 +1,68 @@
+// GOLDEN byte-exact wire-guard for the NATIVE wire-DTO of the AUDIT-ENDPOINT domain (handler-native T5d).
+// audit-endpoint no longer depends on the legacy generator — the golden compares the native JSON values
+// against a PINNED reference string. Both archon_aid/correlation_id branches are covered
+// (nil/non-nil), plus items non-nil [] and the source enum type. TestGoldenWire_AuditProjection checks
+// byte-exact the projection of the domain handlers.AuditListPage → native.
+package api
+
+import (
+	"encoding/json"
+	"testing"
+	"time"
+
+	"github.com/souls-guild/soul-stack/keeper/internal/api/handlers"
+)
+
+func goldenAuditWire(t *testing.T, name string, native any, want string) {
+	t.Helper()
+	got, err := json.Marshal(native)
+	if err != nil {
+		t.Fatalf("%s: marshal native: %v", name, err)
+	}
+	if string(got) != want {
+		t.Errorf("%s: WIRE DRIFT\n got  = %s\n want = %s", name, got, want)
+	}
+}
+
+func TestGoldenWire_AuditEventReply(t *testing.T) {
+	ts := time.Date(2026, 6, 14, 12, 34, 56, 0, time.UTC) // second precision (parity read-path)
+	aid := "archon-alice"
+	corr := "01J0CORRELID"
+	payload := map[string]interface{}{"role": "operator", "permission": "incarnation.run"}
+
+	// --- AuditEvent: archon_aid/correlation_id populated ---
+	goldenAuditWire(t, "AuditEvent/full",
+		AuditEvent{ArchonAID: &aid, CorrelationID: &corr, CreatedAt: ts, ID: "01J0AUDITULID", Payload: payload, Source: AuditEventSourceAPI, Type: "role.create"},
+		`{"archon_aid":"archon-alice","correlation_id":"01J0CORRELID","created_at":"2026-06-14T12:34:56Z","id":"01J0AUDITULID","payload":{"permission":"incarnation.run","role":"operator"},"source":"api","type":"role.create"}`)
+	// archon_aid/correlation_id nil → keys omitted (omitempty); payload is an empty object.
+	goldenAuditWire(t, "AuditEvent/nil_optionals",
+		AuditEvent{ArchonAID: nil, CorrelationID: nil, CreatedAt: ts, ID: "01J0AUDITULID", Payload: map[string]interface{}{}, Source: AuditEventSourceSoulGRPC, Type: "soul.applied"},
+		`{"created_at":"2026-06-14T12:34:56Z","id":"01J0AUDITULID","payload":{},"source":"soul_grpc","type":"soul.applied"}`)
+
+	// --- AuditEventListReply (envelope as top-level reply-DTO): items non-nil + offset/limit/total ---
+	evN := AuditEvent{ArchonAID: &aid, CorrelationID: &corr, CreatedAt: ts, ID: "01J0AUDITULID", Payload: payload, Source: AuditEventSourceAPI, Type: "role.create"}
+	goldenAuditWire(t, "AuditEventListReply/full",
+		AuditEventListReply{Items: []AuditEvent{evN}, Limit: 50, Offset: 0, Total: 1},
+		`{"items":[{"archon_aid":"archon-alice","correlation_id":"01J0CORRELID","created_at":"2026-06-14T12:34:56Z","id":"01J0AUDITULID","payload":{"permission":"incarnation.run","role":"operator"},"source":"api","type":"role.create"}],"limit":50,"offset":0,"total":1}`)
+	// items empty [] (ListTyped yields non-nil []) → byte-exact `[]`, not null.
+	goldenAuditWire(t, "AuditEventListReply/empty_items",
+		AuditEventListReply{Items: []AuditEvent{}, Limit: 50, Offset: 100, Total: 0},
+		`{"items":[],"limit":50,"offset":100,"total":0}`)
+}
+
+// TestGoldenWire_AuditProjection checks that the projection of the domain handlers.AuditListPage →
+// native (newAuditEventListReply) yields the byte-for-byte pinned wire.
+func TestGoldenWire_AuditProjection(t *testing.T) {
+	ts := time.Date(2026, 6, 14, 12, 0, 0, 0, time.UTC)
+	aid := "archon-bob"
+	m := map[string]interface{}{"k": "v"}
+
+	page := handlers.AuditListPage{
+		Items:  []handlers.AuditEventView{{ArchonAID: &aid, CorrelationID: nil, CreatedAt: ts, ID: "id", Payload: m, Source: "mcp", Type: "incarnation.run"}},
+		Limit:  50,
+		Offset: 0,
+		Total:  1,
+	}
+	goldenAuditWire(t, "proj/AuditEventListReply", newAuditEventListReply(page),
+		`{"items":[{"archon_aid":"archon-bob","created_at":"2026-06-14T12:00:00Z","id":"id","payload":{"k":"v"},"source":"mcp","type":"incarnation.run"}],"limit":50,"offset":0,"total":1}`)
+}

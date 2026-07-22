@@ -1,0 +1,12 @@
+# scenario-include neighbor (orchestration.md §6): included from create/main.yml.
+# Same task structure - an apply:destiny task delegating laying down the
+# marker to destiny pilot-flat. Resolved scenario-locally (scenario/create/marker.yml).
+
+- name: Apply pilot-flat marker destiny
+  apply:
+    destiny: pilot-flat
+    input:
+      # CEL is scenario-scoped: values resolve in scenario-env, and destiny
+      # only receives the result (destiny does not see scenario-input).
+      marker_file:    "${ input.path }"
+      marker_payload: "${ input.content }"

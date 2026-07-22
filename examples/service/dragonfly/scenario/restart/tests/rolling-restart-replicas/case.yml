@@ -1,0 +1,74 @@
+# L0-trial restart: rolling-restart of replicas (probe→where slave, serial:1, plaintext).
+# Roster — 2 hosts; mocks.register.df_role.role = slave → block-children (where slave)
+# render, master-restart (where master, run_once) — placeholder-skip. Render-only,
+# hermetic.
+#
+# ★ Probe — community.redis.role (go-redis INFO replication, DragonFly is redis-compatible),
+# NOT raw redis-cli: field register.df_role.role, NOT .stdout.
+#
+# What we assert:
+#   1. probe (community.redis.role) renders the connection params (addr — LOCAL UNIX socket,
+#      password from vault; WITHOUT tls/tls_ca — UDS is not a network path).
+#   2. block-child (community.redis.replica-synced health-gate) renders with the same
+#      socket-params — proves fan-out of the slave block. Bare core.service.restarted
+#      (block-restart) is presence-indistinguishable from a master restart → not asserted separately.
+#
+# WARNING L0 LIMITATION: mocks.register — a SINGLE payload for the whole roster. df_role.role =
+# slave → block-children (where slave) render, master-restart (where master) is skipped.
+name: rolling-restart replicas one at a time (plaintext)
+
+fixtures:
+  hosts:
+    - sid: node-1.example.com
+      covens: [restart]
+      soulprint:
+        network: { primary_ip: 10.0.0.1 }
+        os: { arch: amd64 }
+    - sid: node-2.example.com
+      covens: [restart]
+      soulprint:
+        network: { primary_ip: 10.0.0.2 }
+        os: { arch: amd64 }
+
+  input:
+    reason: "rolling restart for L0"
+
+  # Expanded incarnation.state without TLS. ★ Local probe/health-gate connect to their own
+  # instance via a UNIX socket regardless of TLS (UDS is not a network path) — state.tls.enable here
+  # is only a read-model. ★ tls WITHOUT only/port (DragonFly has TLS on the main port).
+  state:
+    df_version: "1.39.0"
+    tls:
+      enable:   false
+      cert_ref: ""
+      key_ref:  ""
+      ca_ref:   ""
+    df_config:
+      maxmemory:        "256mb"
+
+  # Vault: probe/health-gate connect as default_admin (requirepass removed).
+  vault:
+    secret/dragonfly/restart/users/default_admin:
+      password: dfadmin-restart-pass
+
+mocks:
+  register:
+    df_role:
+      role: slave
+
+assert:
+  task_present:
+    # probe community.redis.role: LOCAL UNIX socket (WITHOUT tls/tls_ca). AUTH as default_admin.
+    - module: community.redis.role
+      params_subset:
+        addr: "unix:/var/run/dragonfly/dragonfly.sock"
+        username: default_admin
+        password: dfadmin-restart-pass
+
+    # slave-health-gate community.redis.replica-synced (block-child, where slave): the same
+    # socket connection. The presence of the gate inside the slave block proves the block fan-out renders.
+    - module: community.redis.replica-synced
+      params_subset:
+        addr: "unix:/var/run/dragonfly/dragonfly.sock"
+        username: default_admin
+        password: dfadmin-restart-pass

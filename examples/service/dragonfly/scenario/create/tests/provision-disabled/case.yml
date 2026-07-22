@@ -1,0 +1,79 @@
+# L0 trial for provision (ADR-061, Variant A) — provision EXPLICITLY DISABLED
+# (input.provision.enabled=false). ★ With default-on (decision 2026-07-01) an OMITTED section
+# means ENABLED (top-level default {enabled: true}) — disabling ONLY via explicit enabled:
+# false. Guard: include dragonfly-provision.yml gated on `has(input.provision) &&
+# input.provision.enabled` (main.yml tasks). enabled=false → the whole provision file targets
+# no one; its keeper-side steps (core.cloud.created + core.soul.registered) are ABSENT from the plan
+# (group-drop via include-when), and the read-model provisioned_vm_ids/sids/provider — conservative
+# default ([] / '') per the state_changes ternary (gated on input.provision.enabled).
+#
+# Paired with provision-enabled-sentinel (there enabled: true → cloud steps are present). This case
+# proves that an explicit enabled: false runs the DragonFly rollout against the existing roster (the
+# former deploy-on-existing profile), no extra cloud steps are emitted (mirrors redis provision-disabled).
+name: provision explicitly disabled drops cloud-create and onboarding tasks
+
+fixtures:
+  default_destiny_source: "file://../../destiny/{name}"
+  hosts:
+    - sid: node-solo.example.com
+      covens: [create, dragonfly]
+      soulprint:
+        network: { primary_ip: 10.0.0.5 }
+        os: { arch: amd64 }
+  vault:
+    secret/dragonfly/create/users/default_admin:
+      password: dfadmin-create-pass
+    secret/dragonfly/create/users/replica:
+      password: replica-sys-secret-pass
+    secret/dragonfly/create/users/monitoring:
+      password: monitoring-sys-secret-pass
+    secret/dragonfly/create/users/sentinel:
+      password: sentinel-sys-secret-pass
+    secret/dragonfly/create/users/haproxy:
+      password: haproxy-sys-secret-pass
+  essence:
+    sentinel_master_name: master
+    memory_reserve_percent: 75
+    df_config:
+      maxmemory:        "256mb"
+      maxclients:       10000
+    system_acl_users:
+      default_admin: "~* &* +@all"
+      replica:    "+psync +replconf +ping"
+      monitoring: "-@all +@connection +client +ping +info +config|get +cluster|info +slowlog +latency +memory +select +command|count +command|docs"
+      sentinel:   "allchannels +multi +slaveof +ping +exec +subscribe +config|rewrite +role +publish +info +client|setname +client|kill +script|kill"
+      haproxy:    "-@all +auth +client|getname +client|id +client|setname +command +hello +ping +role +info +cluster|info"
+    system_acl_users_sentinel:
+      default_admin: "allchannels allkeys +@all"
+      monitoring: "-@all +@connection -command +client -hello +info -auth +sentinel|masters +sentinel|replicas +sentinel|slaves +sentinel|sentinels +sentinel|ckquorum"
+      sentinel:   "allchannels -@all +auth +client|getname +client|id +client|setname +command +hello +ping +sentinel|is-master-down-by-addr +publish +role +sentinel|get-master-addr-by-name +sentinel|master +sentinel|myid +sentinel|replicas +sentinel|sentinels"
+      haproxy:    "-@all +auth +client|getname +client|id +client|setname +command +hello +ping +role +sentinel|get-master-addr-by-name +sentinel|master +sentinel|myid +sentinel|replicas +sentinel|sentinels"
+  input:
+    version: "1.39.0"
+    # replicas_per_master=0 EXPLICITLY: single-host (node-solo), size-guard sentinel = 1+0 = 1 host.
+    replicas_per_master: 0
+    # ★ provision EXPLICITLY disabled (default-on: an omitted section = ENABLED, disabling
+    # only via explicit enabled: false) → include dragonfly-provision.yml group-drop.
+    provision:
+      enabled: false
+
+assert:
+  task_present:
+    # The run takes the regular sentinel branch against the existing roster: dragonfly.conf
+    # gets rendered. Proves that the absence of provision doesn't break the main deploy.
+    - module: core.file.rendered
+      params_subset:
+        path: /etc/dragonfly/dragonfly.conf
+
+  task_absent:
+    # provision-file steps are ABSENT (include-when input.provision.enabled false → group-drop).
+    # core.cloud.created — VM creation; core.soul.registered — onboarding barrier.
+    - module: core.cloud.created
+    - module: core.soul.registered
+
+  state_changes:
+    df_version: "1.39.0"
+    # read-model: no VMs were provisioned by this run → conservative default.
+    provisioned_vm_ids: []
+    provisioned_sids: []
+    provisioned_provider: ""

@@ -1,0 +1,311 @@
+name: migrate_cluster
+# create: true — migrate_cluster is ALSO a starter (bootstrap of a new incarnation): it
+# stands up infrastructure from scratch, like create, plus loads data from an external
+# source. The key is real — the scenario is offered to the operator to pick at POST
+# /v1/incarnations (scenario.ResolveCreateScenarios reads exactly the scenario.go::Create
+# key).
+create: true
+description: >-
+  Stand up a new Redis cluster and load it with data from the external (old) cluster via
+  native replication, waiting for the replica to catch up on offset (sentinel/cluster).
+  The source stays alive — the final detach is done by the detach_source scenario after
+  the operator manually quiesces writes.
+
+# ── extends: covenant — shared section contract (S4 rollout) ────────────────────────
+# The input / compute / state_changes / validate sections of the SHARED contract (we
+# stand up a new cluster in the SAME shape as create) are factored out into covenant.yml
+# (service-repo root) and inherited add-only: the keeper-side resolver merges covenant
+# FIRST, the migrate_cluster delta ADDS on top (it does not override covenant keys — that
+# would trigger section_key_conflict).
+#
+# ★ migrate_cluster DELTA (add-only on top of covenant) — migrate-SPECIFIC:
+#   - input  — provision (cloud-create, like create — covenant does NOT carry it) + source
+#     (external source: WHERE we migrate from) + verify (offset-lag gate). ★ install_method
+#     was REMOVED from migrate-input: the install method caught up with the create redesign
+#     (2026-06-28) — it is now the author-context essence.install_method
+#     (covenant.compute.install reads default(essence.install_method,'binary')), NOT
+#     operator-input. The former migrate field input.install_method was "a holdover from
+#     the create contract" (fixed in the old header) from BEFORE create moved it into
+#     essence; the covenant rollout brings migrate to the shared shape (field removed,
+#     fixtures now supply install_method in essence).
+#   - compute — source_master/source_password/source_tls_ca (coordinates+credentials of
+#     the external source, migrate-specific) + sentinel_monitor_now=false. ★ covenant does
+#     NOT carry sentinel_monitor_now (it diverges from create semantics by VALUE:
+#     create=true, migrate=false): during migration the new master sits in role:slave
+#     while the load is in progress, an early SENTINEL MONITOR → split-brain → MONITOR is
+#     deferred to detach_source. The value differs from create's → covenant does not carry
+#     it, both sides declare their own value in their delta.
+#   - state_changes — ONLY seeded_from (migrate-specific: the fact "loaded from an
+#     external cluster"). The create set + provisioned_* — entirely from covenant
+#     (provisioned_* is provision-aware: when enabled it reads register.provision,
+#     otherwise []/'').
+#   - validate — ONLY the source.hosts invariant (migrate-specific). The create invariant
+#     (operator-extra ACL name is not a reserved one) — from covenant.
+#   - tasks — dispatcher by redis_type + provision-include (the same shared provision body
+#     service-level scenario/redis-provision.yml that create/main.yml also includes).
+extends: covenant
+
+# ── Input contract: migrate_cluster DELTA on top of covenant.input ──────────────────
+# The shared input contract (redis_type/version/memory_mb/persistence/connection_mode/
+# users/redis_settings/sentinel_*/topology + the absence of install_method/modules*
+# fields) — in covenant.yml. Here — provision (like create) + source/verify
+# (migrate-specific).
+input:
+  # ── cloud-provision: stand up VMs for the topology BEFORE migration (ADR-061, like create) ─
+  # ★ The schema is the SAME as create/main.yml::input.provision (covenant does NOT carry
+  # it — it's a delta on both create scenarios). When set and enabled=true —
+  # migrate_cluster in ONE run (a) creates VMs via core.cloud.created, (b) delivers the
+  # per-VM bootstrap token, (c) registers the created SIDs + BLOCKS waiting for onboarding
+  # (await_online + refresh_soulprint, ADR-061), after which the roster is re-resolved and
+  # the deploy+migration (redis-deploy-sentinel.yml + seed steps) rolls out onto the
+  # already-online hosts. Not set / enabled=false → migration against the EXISTING roster
+  # (bit-for-bit the S1-pilot behavior). The shared provision body is the service-level
+  # scenario/redis-provision.yml.
+  #
+  # ★ node_count is deliberately NOT here: the VM count is derived from the TOPOLOGY (like
+  # create) — the single source of truth for cluster size. ★ teardown (destroy) — NOT here.
+  provision:
+    type: object
+    required: false
+    description: >-
+      Stand up VMs for the topology BEFORE migration in the same run (ADR-061, like
+      create). enabled=true → first cloud-create + onboarding (the await_online barrier),
+      then deploy the new cluster + load from the external source. Not set /
+      enabled=false → migration against the existing roster.
+    additional_properties: false
+    properties:
+      enabled:
+        type: boolean
+        default: false
+        description: Main provision gate. false (or the section omitted) — the provision body is a placeholder-skip.
+      provider:
+        type: string
+        description: Name of the cloud Provider in the providers registry (NOT the plugin name → soul-cloud-<provider>).
+      profile:
+        type: string
+        description: Name of the VM profile in the profiles registry (VM resources/image/network).
+      await_timeout:
+        type: string
+        pattern: "^[0-9]+[smh]$"
+        description: >-
+          Upper bound on waiting for onboarding of the created VMs (the await_online
+          barrier, ADR-061; form <N>{s|m|h}). Not set → essence.provision_await_timeout
+          (default 10m). Capped from above by keeper.yml::max_await_timeout.
+      join_wait_timeout:
+        type: string
+        pattern: "^[0-9]+[smh]$"
+        description: >-
+          Ceiling on waiting for a freshly created VM to show up in Teleport before
+          delivering the token (core.bootstrap.delivered, retry-until-join; form
+          <N>{s|m|h}). Not set → essence.provision_join_wait_timeout (default 15m).
+      ssh_provider:
+        type: string
+        description: >-
+          Name of the SshProvider plugin (keeper.yml::plugins.ssh_providers[].name) for
+          delivering the per-VM bootstrap token over SSH (core.bootstrap.delivered,
+          ADR-063).
+
+  # ── source: external (old) cluster — WHERE we migrate from ────────────────────────
+  # Coordinates and credentials of the EXTERNAL source. password_ref/tls_ca_ref are Vault
+  # PATHS (NOT values): the scenario reads them via the author channel
+  # ${ vault(input.source.<ref>) } in the render phase (templating.md §2.3/§4). ★
+  # pattern-guard secret/redis/migrate/* — BOTH refs MUST live under this prefix: the
+  # operator cannot point vault() at an arbitrary path of their own Keeper token (closes
+  # the path-injection caveat in templating.md §4 — a static ban on input-derived vault()
+  # paths). This is NOT vault_scope (that resolves a vault:-VALUE in input keeper-side
+  # BEFORE validation, docs/input.md) — here the operator gives a PATH string, and the
+  # scenario itself reads it (author channel).
+  source:
+    type: object
+    required: true
+    additional_properties: false
+    properties:
+      hosts:
+        type: array
+        items:
+          type: string
+        description: >-
+          host:port of the external nodes of the old cluster. hosts[0] — the source's
+          master (where the new cluster replicates the dataset from).
+      password_ref:
+        type: string
+        # ★ pattern: added `#` to the character class (on top of the spec form
+        # [A-Za-z0-9._/-]) — a Vault ref carries a field suffix via `#`
+        # (secret/redis/migrate/oldcluster#password, matching the whole redis convention
+        # secret/redis/<inc>#password); without `#` a valid ref would get rejected. The
+        # anchor ^secret/redis/migrate/ is KEPT — the path-injection guard is not weakened
+        # (the operator is locked into this prefix, cannot point vault() at
+        # secret/keeper/*).
+        pattern: "^secret/redis/migrate/[A-Za-z0-9._/#-]+$"
+        description: >-
+          The Vault PATH to the credential password of the EXTERNAL source (NOT the
+          value). Under the strict pattern secret/redis/migrate/* (path-injection guard; a
+          `#field` suffix is allowed). The scenario reads it via
+          vault(input.source.password_ref) in the render phase; only the resolved value
+          ships to the host (ADR-012). Not set → source without AUTH (empty password).
+      tls_ca_ref:
+        pattern: "^secret/redis/migrate/[A-Za-z0-9._/#-]+$"
+        type: string
+        description: >-
+          The Vault PATH to the PEM CA for verifying the TLS certificate of the EXTERNAL
+          source (NOT the value). Same pattern-guard (a `#field` suffix is allowed). Read
+          via vault() when source.tls=true.
+      tls:
+        type: boolean
+        default: false
+        description: >-
+          Connect to the external source over TLS. true → the replica and offset-probe
+          reach the source over TLS, the CA is taken from tls_ca_ref.
+
+  # ── verify: offset-lag gate parameters ────────────────────────────────────────
+  # The condition "the replica has caught up with the source". lag_threshold — the
+  # allowed master_repl_offset lag (0 = full sync). skip_checksum — skip the expensive
+  # dataset checksum comparison (the offset-synced plugin decides exactly how).
+  verify:
+    type: object
+    required: false
+    additional_properties: false
+    properties:
+      lag_threshold:
+        type: integer
+        default: 0
+        description: >-
+          The allowed lag of the replica behind the source in replication offset (bytes).
+          0 (default) — require full sync (offset matches).
+      skip_checksum:
+        type: boolean
+        default: false
+        description: >-
+          Skip the dataset checksum comparison in the offset-gate (faster, but a weaker
+          guarantee). Defaults to false (compare).
+
+# ── Declarative input invariants: migrate_cluster DELTA on top of covenant.validate ──
+# INPUT-ONLY (essence/soulprint are unavailable — a structural CEL barrier). The create
+# invariant (operator-extra ACL name is not a reserved one) — in covenant. Here —
+# source.hosts + the cluster_topology reject. ★ ADD-ONLY on top of covenant.validate:
+# validate sections ACCUMULATE (mergeValidateSections — append, predicate rules, not map
+# keys → section_key_conflict does NOT apply to them). covenant.validate carries the
+# create invariants (operator-extra ACL is not reserved), it does NOT duplicate this
+# reject delta (cluster_topology is valid for create/create_from_souls — there it lays out
+# shards; in migrate it does NOT apply).
+validate:
+  # ★ source.hosts is non-empty: migration without a source is meaningless.
+  # source.hosts[0] — the source's master (sentinel.yml reads it first-by-index). An empty
+  # array would pass the section's required:true, but would give a no-such-index when
+  # resolving source_master.
+  - that: "size(input.source.hosts) >= 1"
+    message: "source.hosts must contain at least one host:port of the external source (source.hosts[0] = the old cluster's master, from which the dataset is pulled)"
+
+  # ★ cluster_topology does NOT apply in migrate_cluster — a FAIL-CLOSED reject (NOT a
+  # silent no-op). covenant.input carries cluster_topology (needed by
+  # create/create_from_souls for an explicit operator shard layout), migrate inherits it
+  # via `extends: covenant` → the effective migrate input ACCEPTS the field per the
+  # schema. BUT the cluster branch of migration (cluster.yml includes
+  # redis-deploy-cluster-joinable.yml + the community.redis.cluster plugin's join-external
+  # action) does NOT read cluster_topology: the B3-pilot moves ONLY the masters onto a
+  # ready roster (the replica-guard replicas_per_master==0 — a topology with an explicit
+  # master/replica layout only makes sense with replicas, and those aren't supported here),
+  # join-external merges exactly one new node onto the old master 1:1. ★ The PREVIOUS
+  # inline-migrate DELIBERATELY excluded this field from its input (comment "cluster_topology
+  # is deliberately absent here"); the covenant rollout brought it back by inheritance → a
+  # field set by the operator would pass input validation and SILENTLY not apply (a silent
+  # green no-op, against "no silent-wrong"). This rule turns the silent no-op into an early,
+  # explicit 422 BEFORE applying. !has() — the field is optional (covenant required:false):
+  # set → reject, not set (the normal migrate case) → the rule is true, the run proceeds.
+  # Explicit shard layout — outside migration: stand up a cluster with the desired topology
+  # via create/create_from_souls.
+  - that: "!has(input.cluster_topology)"
+    message: "cluster_topology is not applied in migrate_cluster: the pilot moves only masters onto a ready roster (replicas_per_master==0); explicit shard layout is outside migration scope (set it in create/create_from_souls). Do not set this field."
+
+# ── Computed scenario vars: migrate_cluster DELTA on top of covenant.compute ────────
+# The shared compute contract (redis_config/redis_config_base/redis_config_tls/install/
+# conf_dir/data_dir/tls_*/sentinel_directives/redis_version/modules_*/…) — in covenant.yml
+# (inherited covenant-first; ★ install is now essence-driven, like create). Here —
+# migrate-specific: coordinates/credentials of the external source +
+# sentinel_monitor_now=false. ★ compute: — a top-level scenario block; covenant
+# declarations are visible to the delta by name.
+compute:
+  # ── External (old) source: coordinates + credential secrets ─────────────────────
+  # source_master — the master of the EXTERNAL cluster (hosts[0]), to which the fresh
+  # master of the new cluster attaches (REPLICAOF pointed at the external one).
+  # source_password/source_tls_ca — the author channel vault() by PATH from operator-input
+  # (input.source.password_ref/tls_ca_ref under the pattern-guard secret/redis/migrate/*;
+  # path-injection is closed by the pattern, templating.md §4). password_ref is optional →
+  # has()-guard, otherwise '' (source without AUTH); tls_ca is read ONLY when
+  # source.tls=true. Resolved keeper-side, the value is masked.
+  source_master:   "${ input.source.hosts[0] }"
+  source_password: "${ has(input.source.password_ref) ? vault(input.source.password_ref) : '' }"
+  source_tls_ca:   "${ input.source.tls ? vault(input.source.tls_ca_ref) : '' }"
+  # ── sentinel_monitor_now=false: do NOT monitor the master while loading is in progress
+  # (split-brain fix) ──
+  # ★ CONTRACT FLAG for step 4 of the deploy body (redis-deploy-sentinel.yml: proxied into
+  # a task-var and gated by when: vars.sentinel_monitor_now; via a task-var because
+  # flow-control when cannot see compute.* directly). During migration, MONITOR is
+  # DEFERRED: by deploy time the new master is NOT YET attached to the external source
+  # (REPLICAOF external — step 2 below, AFTER the deploy-body include), and once loading
+  # starts it flips the master to role:slave for the duration of the sync (> down-after
+  # 5s). If sentinel monitored it right away, it would see its own "master" as a slave and
+  # trigger a failover → split-brain/broken load. Hence false here (the sentinel daemons
+  # come up via the deploy body, but the MONITOR command is NOT issued) — the actual
+  # MONITOR is done by detach_source/sentinel.yml AFTER REPLICAOF NO ONE, once the new
+  # master is autonomous again. ★ covenant does NOT carry this flag (under create
+  # semantics it is =true) — each inheritor declares its own value in its compute delta.
+  sentinel_monitor_now: "${ false }"
+
+# ── incarnation.state mutation: migrate_cluster DELTA on top of covenant.state_changes ──
+# The create state set (redis_type/redis_version/redis_config/tls/install/persistence/…) +
+# provisioned_* — entirely from covenant (we stand up a cluster of the same shape). Here —
+# ONLY seeded_from (migrate-specific). ★ seeded_from WITHOUT a timestamp (L0 determinism,
+# shape from state_schema v10: {source_endpoints[], detached bool, source_password_ref,
+# source_tls_ca_ref}). The migration time lives in state_history (a per-change snapshot),
+# not in the state itself.
+state_changes:
+  # ★ seed-source read-model (v9–v10): the FACT "loaded by migration from an external
+  # cluster". Without a timestamp (L0 determinism; the migration time lives in
+  # state_history). detached BRANCHES by mode:
+  #   - sentinel → false: the source is still ALIVE, the detach (REPLICAOF NO ONE) is a
+  #     separate detach_source AFTER the operator manually quiesces writes;
+  #   - cluster → true: the B3 flow is ATOMIC — forget-external (dropping the old nodes)
+  #     is done in the migrate phase of THIS run (cluster.yml step 4), the source is
+  #     already detached → detached is true right away. detach_source/cluster.yml doesn't
+  #     detach anything (an honest message "forget was done in migrate_cluster").
+  # ★ source_password_ref/source_tls_ca_ref (v10) — we PERSIST the REFERENCES (Vault
+  #   PATHS, NOT values) to the external source's credentials from
+  #   input.source.password_ref/tls_ca_ref: detach_source does a final offset-gate against
+  #   the source, and without these refs the connect to the AUTH/TLS source would fail
+  #   (the credential is not in detach's input contract, the secret does not land in state
+  #   — infosec). detach reads them via vault() keeper-side. Both are optional in the
+  #   input → default('') (source without AUTH/TLS). We store the PATH string (ref), NOT
+  #   the result of vault() — symmetric with tls.*_ref (state holds the reference, not the
+  #   PEM).
+  - set: seeded_from
+    value: >-
+      ${ {
+           'source_endpoints':    input.source.hosts,
+           'detached':            input.redis_type == 'cluster',
+           'source_password_ref': default(input.source.password_ref, ''),
+           'source_tls_ca_ref':   default(input.source.tls_ca_ref, '')
+         } }
+
+# Run body — dispatcher branches by redis_type (CONDITIONAL-INCLUDE, like create).
+# S1 pilot: sentinel is implemented, cluster — the B3 flow (S4-3b).
+tasks:
+  # ── provision (ADR-061, like create): cloud-create + onboarding BEFORE deploy+migration ──
+  # CONDITIONAL-INCLUDE redis-provision.yml STRICTLY BEFORE the cluster/sentinel branch:
+  # when enabled=true its steps (a) create VMs, (b) register+wait for onboarding with
+  # refresh_soulprint → the roster is re-resolved, and ONLY THEN does the sentinel branch
+  # (deploy of the new cluster + load from the external source) see the created hosts in
+  # soulprint.hosts. ★ THE SAME SHARED PROVISION BODY service-level
+  # (scenario/redis-provision.yml) that create/main.yml also includes — no duplicate
+  # (scenario-include falls back to the service-level file name, orchestration.md §6). when
+  # on input.provision is NOT static (object-input, not an enum) → the placeholder-skip
+  # form of include-when (not group-drop): at enabled=false/an omitted section the body's
+  # steps target no one. has()-guard — the section is optional (no-such-key without it). ★
+  # teardown is NOT here.
+  - include: redis-provision.yml
+    when: "has(input.provision) && input.provision.enabled"
+
+  - include: cluster.yml
+    when: "input.redis_type == 'cluster'"
+  - include: sentinel.yml
+    when: "input.redis_type == 'sentinel'"

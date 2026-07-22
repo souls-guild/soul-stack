@@ -1,0 +1,42 @@
+// L0 unit skeleton: mocks the pluginv1 stream server + sanity-checks Apply.
+// Full L0/L1/L3b tests live in tests/ and docs/module-author-guide.md.
+package {{.NamePackage}}
+
+import (
+	"context"
+	"testing"
+
+	pluginv1 "github.com/souls-guild/soul-stack/proto/plugin/gen/go/v1"
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/metadata"
+)
+
+// fakeApplyStream is a minimal stream-server stub for unit-testing Apply.
+// Implements grpc.ServerStreamingServer[pluginv1.ApplyEvent] via no-op
+// gRPC metadata and a buffer of sent events.
+type fakeApplyStream struct {
+	grpc.ServerStream
+	ctx    context.Context
+	events []*pluginv1.ApplyEvent
+}
+
+func (f *fakeApplyStream) Context() context.Context     { return f.ctx }
+func (f *fakeApplyStream) SetHeader(metadata.MD) error  { return nil }
+func (f *fakeApplyStream) SendHeader(metadata.MD) error { return nil }
+func (f *fakeApplyStream) SetTrailer(metadata.MD)       {}
+func (f *fakeApplyStream) Send(e *pluginv1.ApplyEvent) error {
+	f.events = append(f.events, e)
+	return nil
+}
+
+func TestApply_NoopByDefault(t *testing.T) {
+	m := &{{.NamePascal}}Module{}
+	stream := &fakeApplyStream{ctx: context.Background()}
+
+	if err := m.Apply(&pluginv1.ApplyRequest{}, stream); err != nil {
+		t.Fatalf("Apply: unexpected error: %v", err)
+	}
+
+	// TODO: once Apply is implemented, replace with an assertion on the correct state_change.
+	_ = stream.events
+}

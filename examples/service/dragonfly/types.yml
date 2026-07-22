@@ -1,0 +1,60 @@
+# Reusable named input types for the dragonfly service (ADR-062, named input types).
+# Resolution is service-level: `$type: <Name>` in any `input:` of a scenario OF THIS
+# service is replaced by the expanded schema from here at the input stage
+# (cycle-checked). Type name is PascalCase (visually and in the parser distinguishes
+# a type reference from a snake_case parameter).
+#
+# ★ REUSE from service redis 1:1 (DragonFly is redis-compatible: ACL format and perms
+# tokens are identical). In PILOT (sentinel-only, create) AclUser is read ONLY by create
+# (input.users array); add_user/update_users — day-2, NEXT slice.
+types:
+  # AclUser — a single DragonFly ACL user record (operator-extra). create reads an
+  # array of such records (input.users). Single perms-pattern (token-shape filter re2,
+  # DragonFly accepts redis-ACL syntax).
+  #
+  # ★ Wave 1b (2026-06-26): ONLY current fields (name/perms/state). keys/channels/
+  # commands — wave 2 (structural ACL instead of a single perms string), not introduced here.
+  AclUser:
+    type: object
+    additional_properties: false
+    required: [name, perms]
+    properties:
+      # ACL username. Pattern stricter than the previous inline variant (lowercase start):
+      # Redis ACL names are case-sensitive, but the role convention is a lowercase identifier.
+      name:
+        type: string
+        pattern: "^[a-z][a-z0-9_-]*$"
+        description: >-
+          DragonFly ACL username (unique within the users array). Rendered into
+          users.acl; the password is resolved keeper-side from Vault by the convention
+          secret/dragonfly/<incarnation>/users/<name>#password.
+      # FULL ACL permission string (not an alias): Redis ACL directives as-is.
+      #
+      # pattern — NOT a full Redis parser, but a token-shape filter (re2): rejects
+      # arbitrary text, newlines, spaces inside a token, shell injections
+      # (`;`/`|`-outside-a-subcommand/`&&`/backticks/`$()`) and unknown sigils;
+      # Redis finishes the semantic validation on `ACL SETUSER`. The list of allowed token
+      # forms — in the description below. The pattern itself allows an empty string, but perms
+      # in the object-level required → the required logic strips the empty value BEFORE the pattern;
+      # a permission-less user is expressed by the token `off`, not an empty string.
+      # Passwords inside the perms string are masked on output (logs/UI) by the common secret masking.
+      perms:
+        type: string
+        pattern: "^(?:(?:(?:on|off|nopass|resetpass|reset|clearselectors|sanitize-payload|skip-sanitize-payload|nosanitize-payload|allkeys|allchannels|allcommands|nocommands)|(?:%R~|%W~|%RW~|~)[A-Za-z0-9:_.*?\\[\\]{}\\\\-]+|&[A-Za-z0-9:_.*?\\[\\]{}\\\\-]+|[+-](?:@[a-z][a-z0-9-]*|[a-z][a-z0-9-]*(?:\\|[a-z][a-z0-9-]*)?)|[><][A-Za-z0-9:_.@%/+=-]+|[#!][0-9a-fA-F]{64}|\\([^()]*\\))(?: (?:(?:on|off|nopass|resetpass|reset|clearselectors|sanitize-payload|skip-sanitize-payload|nosanitize-payload|allkeys|allchannels|allcommands|nocommands)|(?:%R~|%W~|%RW~|~)[A-Za-z0-9:_.*?\\[\\]{}\\\\-]+|&[A-Za-z0-9:_.*?\\[\\]{}\\\\-]+|[+-](?:@[a-z][a-z0-9-]*|[a-z][a-z0-9-]*(?:\\|[a-z][a-z0-9-]*)?)|[><][A-Za-z0-9:_.@%/+=-]+|[#!][0-9a-fA-F]{64}|\\([^()]*\\)))*)?$"
+        description: >-
+          Redis ACL: permissions as one string, tokens space-separated. Example:
+          `~app:* +@read +@write -@dangerous` (keys app:* + read/write, minus
+          dangerous). Token forms: keys `~<pat>`/`%R~`/`%W~`/`%RW~`/`allkeys`;
+          channels `&<pat>`/`allchannels`; commands `+<cmd>`/`-<cmd>`/`+@<cat>`/
+          `-@<cat>`/`+<cmd>|<sub>`/`allcommands`/`nocommands`; passwords
+          `><pwd>`/`#<hex64>`; service tokens `on`/`off`/`nopass`/`reset`. Written to
+          users.acl as-is; syntax is validated (garbage/injections are rejected).
+      # State: on (active) / off (locked, rule is kept). default on.
+      # Not in object-level required → optional; default filled at the input stage.
+      state:
+        type: string
+        default: "on"
+        enum: [on, off]
+        description: >-
+          User state: on (active) / off (locked, but the rule is
+          kept). Default is on.

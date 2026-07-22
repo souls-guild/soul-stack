@@ -1,0 +1,133 @@
+# L0 guard (NIM-53 bug #2): update_config changes io_threads via the dedicated field -> io-threads
+# reaches both the rendered redis.conf AND state.redis_config with the operator's value, while hot-reload
+# runs with rewrite=false. Regression (live): io-threads (startup-only) was rendered into redis.conf
+# by step 1, but task-2 CONFIG REWRITE overwrote the file from the LIVE config (io-threads live=1 -
+# the plugin skips startup-only on CONFIG SET) -> redis.conf reverted to io-threads 1.
+# Fix: rewrite=false (the file is the step-1 render) + dedicated io_threads (read-model state.io_threads).
+#
+# Asserting: (1) redis.conf (core.file.rendered) config carries io-threads:"2"; (2) hot-reload
+# (community.redis.config) rewrite=false + config carries io-threads:"2" (the plugin will skip it
+# on the live one - startup-only, it takes effect on the next restart); (3) state_changes:
+# redis_config['io-threads']="2" AND io_threads:2 (namedfield read-model is consistent).
+# Plaintext, render-only, hermetic.
+name: update_config changes io_threads and it reaches redis.conf and state (rewrite=false)
+
+fixtures:
+  default_destiny_source: "file://../../destiny/{name}"
+  soulprint:
+    network: { primary_ip: 10.0.0.5 }
+    os: { arch: amd64 }
+
+  essence:
+    memory_reserve_percent: 75
+    conf_dir: /etc/redis
+    data_dir: /var/lib/redis
+    modules_base_url: "https://artifacts.example.com/redis/modules"
+    persistence_presets:
+      rdb:
+        save: "900 1 300 10 60 10000"
+        appendonly: "no"
+
+  # Deployed state (create): io-threads is NOT in redis_config (io_threads=0 on create -
+  # the covenant has-guard >0 does not write the directive). update_config adds io-threads=2.
+  state:
+    redis_type: sentinel
+    redis_version: "7.4.1"
+    tls:
+      enable:   false
+      only:     false
+      port:     7379
+      cert_ref: ""
+      key_ref:  ""
+      ca_ref:   ""
+    persistence: rdb
+    memory_mb: 1024
+    maxmemory_policy: allkeys-lru
+    io_threads: 0
+    redis_config:
+      maxmemory:        "768mb"
+      maxmemory-policy: allkeys-lru
+      save:             "900 1 300 10 60 10000"
+      appendonly:       "no"
+    redis_users: []
+
+  input:
+    # Delta: ONLY io_threads (dedicated) - checks both validate "io_threads is a mutable
+    # field" and the propagation of the operator's value into redis.conf/state.
+    io_threads: 2
+
+  vault:
+    secret/redis/update_config:
+      password: upd-redis-pass-16chars
+    secret/redis/update_config/users/default_admin:
+      password: default-admin-secret-pass
+
+assert:
+  task_present:
+    # 1. redis.conf is re-rendered with io-threads:"2" (for the next restart). The other directives
+    #    are the state substrate (maxmemory/policy/save/appendonly). masteruser/masterauth are added.
+    - module: core.file.rendered
+      params_subset:
+        path: /etc/redis/redis.conf
+        render_context:
+          vars:
+            conf_dir: /etc/redis
+            data_dir: /var/lib/redis
+            port: 6379
+            run_dir: /var/run/redis
+            log_dir: /var/log/redis
+            loadmodules:
+              - /var/lib/redis/modules/redisbloom.so
+              - /var/lib/redis/modules/rejson.so
+              - /var/lib/redis/modules/redisearch.so
+              - /var/lib/redis/modules/redistimeseries.so
+            config:
+              maxmemory: "768mb"
+              maxmemory-policy: allkeys-lru
+              save: "900 1 300 10 60 10000"
+              appendonly: "no"
+              io-threads: "2"
+              masteruser: default_admin
+              masterauth: default-admin-secret-pass
+          self:
+            sid: trial-host
+            covens: [update_config]
+            choirs: []
+            traits: {}
+            role: ""
+            network:
+              primary_ip: 10.0.0.5
+            os:
+              arch: amd64
+          role: ""
+          essence: {}
+
+    # 2. HOT-RELOAD: rewrite=false (the file is the step-1 render). config carries io-threads:"2" -
+    #    the plugin will skip it on the live one (startup-only denylist), the value takes effect on restart.
+    - module: community.redis.config
+      params_subset:
+        addr: "127.0.0.1:6379"
+        username: default_admin
+        password: default-admin-secret-pass
+        tls: false
+        rewrite: false
+        config:
+          maxmemory: "768mb"
+          maxmemory-policy: allkeys-lru
+          save: "900 1 300 10 60 10000"
+          appendonly: "no"
+          io-threads: "2"
+
+  # 3. state read-model is consistent: redis_config carries io-threads:"2" (write-model) AND
+  #    io_threads:2 (namedfield). Regression - io_threads stayed 0, diverging from redis_config.
+  state_changes:
+    redis_config:
+      maxmemory: "768mb"
+      maxmemory-policy: allkeys-lru
+      save: "900 1 300 10 60 10000"
+      appendonly: "no"
+      io-threads: "2"
+    persistence: rdb
+    memory_mb: 1024
+    maxmemory_policy: allkeys-lru
+    io_threads: 2

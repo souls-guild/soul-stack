@@ -1,0 +1,86 @@
+# L2 fixture (docker stand), harness MVP does not execute — ADR-023 post-MVP.
+name: install-and-ping
+description: |
+  Basic scenario of the mode-agnostic destiny redis (standalone) life on a clean
+  host:
+    1. apply destiny redis  — install redis-server and bring up the service with
+       the rendered redis.conf (TCP 6379 + opt. unix socket, requirepass).
+    2. ping                 — make sure it responds PONG (via redis-cli or
+       community.redis.command — the latter in the service scenario).
+
+  The test runs on an ephemeral stand (see the `stand:` block below), which has
+  neither a redis-server nor configs. After the run the stand is destroyed.
+
+# ─── Stand ────────────────────────────────────────────────────────────────────
+stand:
+  driver: docker                       # docker | podman | cloud:<provider> — open Q
+  image:  ubuntu:24.04                 # base image of the sandbox host
+  mode:   push                         # push | pull — how destiny reaches the stand
+
+# ─── What we apply ────────────────────────────────────────────────────────────
+# Target destiny — ../../destiny.yml (mode-agnostic brick).
+# The name is taken from the parent manifest; in case it's enough to specify input.
+# Contract of the new destiny (see destiny.yml): version? / password (secret) /
+# config (object — READY merged redis.conf, WITHOUT top-level maxmemory/socket:
+# those are regular keys inside config) / users? / sentinel_enabled? / sentinel?.
+# In a real run config is merged by the service scenario; here we pass a ready map.
+# action-DSL removed in the redis consolidation.
+input:
+  version:  "7.2.4"
+  password: "vault:test/redis/password"
+  config:
+    maxmemory:  256mb
+    maxclients: 10000
+    timeout:    300
+    # unixsocket — a regular merged-config key (not a separate top-level field). If set
+    # → destiny creates the socket directory (task gated on config.unixsocket) and redis
+    # listens on the socket; the verify below pings exactly through it. If not set → ping over TCP.
+    unixsocket: /var/run/redis/redis-server.sock
+
+# Double run: the framework will apply destiny with this input once more and check
+# that the second application made no changes in any step (idempotency).
+expect_idempotent: true
+
+# ─── Result checks ──────────────────────────────────────────────────────
+verify:
+  - name: redis-binary-installed
+    apply:
+      destiny: core.exec.run
+      input:
+        cmd: redis-server
+        args: ["--version"]
+    expect:
+      exit_code: 0
+      stdout_contains: "v=7.2.4"        # exact `expect:` keys — open Q #8
+
+  - name: redis-service-active
+    apply:
+      destiny: core.exec.run
+      input:
+        cmd: systemctl
+        args: ["is-active", "redis-server"]
+    expect:
+      stdout: "active"
+      exit_code: 0
+
+  - name: redis-config-deployed
+    apply:
+      destiny: core.cmd.shell          # `&&` chain test+stat — shell semantics
+      input:
+        cmd: "test -f /etc/redis/redis.conf && stat -c '%a %U:%G' /etc/redis/redis.conf"
+    expect:
+      stdout: "640 redis:redis"
+
+  - name: redis-responds-to-ping
+    # Pinging over the unix socket is valid ONLY because config.unixsocket is set in the input
+    # above (destiny created the socket directory, redis listens on the socket). Without config.unixsocket
+    # there is no socket file → need to check over TCP (redis-cli -h 127.0.0.1 -p 6379).
+    apply:
+      destiny: core.cmd.shell          # redis-cli over the socket — a self-consistent check
+      input:
+        cmd: "redis-cli -s /var/run/redis/redis-server.sock -a vault:test/redis/password PING"
+    expect:
+      stdout_contains: "PONG"
+
+# ─── Optional neighbors next to this file ─────────────────────────────────
+#   prepare.yml / verify.yml / cleanup.yml — see docs/destiny/testing.md.

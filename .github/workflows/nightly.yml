@@ -1,0 +1,155 @@
+# Nightly Soul Stack. Heavy targets that shouldn't block every PR,
+# but must run regularly. See ADR-039 (E2E levels) and docs/testing/.
+#
+# Contents:
+#   - race-tests:  go test -race across all modules (`make test-race`);
+#   - e2e-live:    L3b real-soul-in-container (Makefile target `e2e-live`):
+#                  real soul binary in a privileged container, full
+#                  gRPC-handshake + apply/Scry pipeline. continue-on-error —
+#                  job informational: a failure on runner infrastructure (docker-
+#                  in-docker, privileged, systemd-PID-1) files a bug, doesn't fail
+#                  the whole nightly run.
+#
+name: Nightly
+
+# Schedule (daily cron) is DELIBERATELY disabled — saves GitHub minutes
+# (limit 2000 min/month; e2e-live 60m + race-tests 30m every night ≈ 2700 min/month,
+# over the limit). GitHub CI — major releases only. Both jobs are now manual-only
+# (workflow_dispatch — manual run from UI / `gh workflow run`):
+#   - e2e-live   → moved to local pre-tag gate (RELEASING.md step e),
+#                  runs on the developer's machine before tagging, not in Actions;
+#   - race-tests → on-demand, via workflow_dispatch when needed.
+# This is NOT a forgotten cron: to restore the daily run, restore `schedule:` below.
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  # Versions in sync with ci.yml — single toolchain.
+  PROTOC_VERSION: "34.1"
+  PROTOC_GEN_GO_VERSION: "v1.36.11"
+  PROTOC_GEN_GO_GRPC_VERSION: "v1.6.2"
+  GO_VERSION: "1.26.4"
+
+jobs:
+  # Race-detector across the whole codebase. Hot pubsub/lease paths carry a
+  # chance to catch a data race not visible under normal `make test`. Job informational
+  # (continue-on-error): a race signal is a reason to file a bug, not to stop the whole
+  # nightly run (e2e-live may still hold a useful result).
+  race-tests:
+    name: go test -race (per module)
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Setup Go
+        uses: actions/setup-go@v7
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache-dependency-path: |
+            keeper/go.sum
+            proto/go.sum
+            proto/plugin/go.sum
+            sdk/go.sum
+            shared/go.sum
+            soul/go.sum
+            soul-lint/go.sum
+            soulctl/go.sum
+
+      - name: Install protoc ${{ env.PROTOC_VERSION }}
+        run: |
+          set -euo pipefail
+          ZIP="protoc-${PROTOC_VERSION}-linux-x86_64.zip"
+          URL="https://github.com/protocolbuffers/protobuf/releases/download/v${PROTOC_VERSION}/${ZIP}"
+          curl -fsSL -o /tmp/protoc.zip "$URL"
+          sudo unzip -o -q /tmp/protoc.zip -d /usr/local
+
+      - name: Install protoc-gen-go plugins
+        run: |
+          set -euo pipefail
+          go install google.golang.org/protobuf/cmd/protoc-gen-go@${PROTOC_GEN_GO_VERSION}
+          go install google.golang.org/grpc/cmd/protoc-gen-go-grpc@${PROTOC_GEN_GO_GRPC_VERSION}
+          echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
+
+      - name: make test-race
+        run: make test-race
+
+  # L3b real-soul-in-container (ADR-039 level B). Instead of a soul-stub, runs
+  # the real `soul` binary inside a privileged container: covers the whole gRPC
+  # handshake + apply/Scry pipeline (including a real SoulModule.Plan
+  # in the drift test). Makefile target `e2e-live` is implemented; continue-on-error
+  # keeps the job informational — flakiness on runner infrastructure (docker-in-docker,
+  # privileged, systemd-PID-1) doesn't fail the whole nightly run.
+  e2e-live:
+    name: e2e-live (L3b real-soul-in-container)
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    timeout-minutes: 60
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Setup Go
+        uses: actions/setup-go@v7
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache-dependency-path: |
+            keeper/go.sum
+            proto/go.sum
+            proto/plugin/go.sum
+            sdk/go.sum
+            shared/go.sum
+            soul/go.sum
+            soul-lint/go.sum
+            soulctl/go.sum
+            tests/e2e/go.sum
+
+      - name: Install protoc ${{ env.PROTOC_VERSION }}
+        run: |
+          set -euo pipefail
+          ZIP="protoc-${PROTOC_VERSION}-linux-x86_64.zip"
+          URL="https://github.com/protocolbuffers/protobuf/releases/download/v${PROTOC_VERSION}/${ZIP}"
+          curl -fsSL -o /tmp/protoc.zip "$URL"
+          sudo unzip -o -q /tmp/protoc.zip -d /usr/local
+
+      - name: Install protoc-gen-go plugins
+        run: |
+          set -euo pipefail
+          go install google.golang.org/protobuf/cmd/protoc-gen-go@${PROTOC_GEN_GO_VERSION}
+          go install google.golang.org/grpc/cmd/protoc-gen-go-grpc@${PROTOC_GEN_GO_GRPC_VERSION}
+          echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
+
+      - name: make build (needs a built soul + keeper for L3b)
+        run: make build
+
+      # Target `e2e-live` is implemented (Makefile) — run the live suite. The grep
+      # guard is left as insurance against accidentally dropping the target: when it's
+      # missing, prints diagnostics instead of `make: *** No rule`. grep on start-of-line +
+      # `:` catches exactly the target declaration, not a mention in comments.
+      - name: make e2e-live
+        env:
+          KEEPER_BIN: ${{ github.workspace }}/keeper/bin/keeper
+        run: |
+          set -euo pipefail
+          if grep -q '^e2e-live:' Makefile; then
+            make e2e-live
+          else
+            echo "make e2e-live: target missing from Makefile — check for a regression" >&2
+            exit 1
+          fi
+
+      - name: Upload e2e-live artifacts on failure
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: e2e-live-logs
+          if-no-files-found: ignore
+          path: |
+            tests/e2e/_artifacts/
+            /tmp/keeper-*.log
+            /tmp/keeper-dev/

@@ -1,0 +1,13 @@
+from_version: 1
+to_version: 2
+
+description: >-
+  Demo migration NIM-34: state_schema v1 -> v2 (ADR-019). A flat set - marks
+  the fact of the v2 transition via the schema_v2 field (read-model).
+  has()-guard back-compat: a repeat run does not overwrite it. Forward-only
+  (down: not supported, recovery via state_history).
+
+transform:
+  - set:
+      path:  state.schema_v2
+      value: "${ has(state.schema_v2) ? state.schema_v2 : true }"

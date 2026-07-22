@@ -1,0 +1,13 @@
+# gitleaks configuration for soul-stack.
+# Extends the built-in default ruleset and allowlists test-scope fixtures
+# (unit-test signing material and scenario TLS test vectors) that are
+# deterministic, non-production, and never compiled into shipped binaries.
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Test-scope fixtures: unit-test signing keys/passwords and scenario TLS test vectors (not production secrets)"
+paths = [
+  '''.*_test\.go$''',
+  '''examples/service/.*/tests/.*/case\.yml$''',
+]

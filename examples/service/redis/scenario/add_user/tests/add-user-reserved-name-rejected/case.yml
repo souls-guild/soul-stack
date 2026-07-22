@@ -1,0 +1,44 @@
+# L0 test for the validate-guard add_user (system-ACL-users d2): the operator CANNOT
+# add a user with the name of a SYSTEM user (default/replica/monitoring/sentinel/haproxy).
+# The operator sets username=sentinel — reserved (topped up from essence ON TOP OF
+# operator-extra → would silently override sentinel-perms). The validate rule add_user/main.yml
+# catches this at INPUT validation (422 BEFORE applying). Rule false → expect_render_error.
+name: add_user with reserved system name aborts at input validation
+
+fixtures:
+  default_destiny_source: "file://../../destiny/{name}"
+  soulprint:
+    network: { primary_ip: 10.0.0.5 }
+    os: { arch: amd64 }
+
+  state:
+    redis_type: sentinel
+    redis_version: "7.2.4"
+    redis_config:
+      maxmemory: "256mb"
+    redis_users:
+      - { name: bob, perms: "~app:* +@read", state: "on" }
+
+  essence:
+    # host-layout — in essence (v11→v12, Variant A). The guard aborts render before the deploy body,
+    # layout is here for fixture fidelity (v12 state shape without layout keys).
+    conf_dir: /etc/redis
+    data_dir: /var/lib/redis
+    system_acl_users:
+      replica:    "+psync +replconf +ping"
+      monitoring: "-@all +@connection +client +ping +info +config|get +cluster|info +slowlog +latency +memory +select +command|count +command|docs"
+      sentinel:   "allchannels +multi +slaveof +ping +exec +subscribe +config|rewrite +role +publish +info +client|setname +client|kill +script|kill"
+      haproxy:    "-@all +auth +client|getname +client|id +client|setname +command +hello +ping +role +info +cluster|info"
+
+  # The operator tries to add a user with the reserved name sentinel.
+  input:
+    user:
+      name: sentinel
+      perms: "~* +@all"
+      state: "on"
+
+  vault:
+    secret/redis/add_user:
+      password: addusr-redis-pass-16ch
+
+expect_render_error: "is reserved for a service"

@@ -1,0 +1,96 @@
+syntax = "proto3";
+
+package soulstack.plugin.v1;
+
+import "google/protobuf/struct.proto";
+
+option go_package = "github.com/souls-guild/soul-stack/proto/plugin/gen/go/v1;pluginv1";
+
+// SoulModule — service contract for `kind: soul_module` plugins
+// (ADR-020, docs/keeper/plugins.md → SoulModule service contract).
+//
+// Host is the `soul` binary. Plugin binaries are soul-mod-<name>.
+// Destiny step addressing is <namespace>.<name>.<state>.
+//
+// rpc Manifest() is NOT introduced in MVP — the host reads the manifest
+// from a static `manifest.yaml` (ADR-020(a)).
+service SoulModule {
+  // Runtime parameter checks: semantics that need access to the host
+  // system. The full input schema is already checked by `soul-lint`
+  // against manifest.spec.states.<state>.input.
+  rpc Validate(ValidateRequest) returns (ValidateReply);
+
+  // Dry-run: computes changes without applying them. Streams diagnostic
+  // events.
+  rpc Plan(PlanRequest) returns (stream PlanEvent);
+
+  // Applies changes. Progress events are aggregated on the Soul; only the
+  // final result goes out via TaskEvent (ADR-012, MVP).
+  rpc Apply(ApplyRequest) returns (stream ApplyEvent);
+}
+
+// ValidateRequest — the Validate request.
+message ValidateRequest {
+  // State name from manifest.spec.states (`installed` / `running` / …).
+  string state = 1;
+
+  // Destiny task params, aligned to the state's input schema.
+  google.protobuf.Struct params = 2;
+}
+
+// ValidateReply — the Validate result.
+message ValidateReply {
+  bool ok = 1;
+  repeated string errors = 2;
+}
+
+// PlanRequest — the Plan request.
+message PlanRequest {
+  string state = 1;
+  google.protobuf.Struct params = 2;
+}
+
+// PlanEvent — an event from the Plan stream.
+//
+// Plan is a pure-read dry-run (ADR-031 Scry): the module reads the
+// resource's current state (the same read Apply starts with) and reports
+// whether it has drifted from the desired state, WITHOUT mutating the
+// host. The final event carries the machine-readable `changed` field
+// (mirroring ApplyEvent.changed); intermediate ones are diagnostic
+// messages.
+message PlanEvent {
+  string message = 1;
+
+  // changed — whether the resource has drifted from the desired state.
+  // true = Apply would change the host; false = the resource is already in
+  // the desired state (clean). Semantics and shape mirror
+  // ApplyEvent.changed (only-add, ADR-012(c)). An old module without this
+  // field sends changed=false via the wire default — so the host does NOT
+  // treat "no PlanEvent" / "old module" as clean: drift on dry_run is only
+  // computed for modules that declare the read-safe capability (ADR-031
+  // default-deny); others get an explicit refusal, not a false clean.
+  bool changed = 2;
+}
+
+// ApplyRequest — the Apply request.
+message ApplyRequest {
+  string state = 1;
+  google.protobuf.Struct params = 2;
+}
+
+// ApplyEvent — an event from the Apply stream.
+// The final event carries the task outcome (changed/failed + output);
+// intermediate ones are diagnostic messages.
+//
+// changed/failed/output semantics come from the DSL core register.<task>.*
+// (docs/destiny/tasks.md); aggregated on the Soul into TaskEvent (see
+// keeper-proto).
+message ApplyEvent {
+  string message = 1;
+  bool changed = 2;
+  bool failed = 3;
+
+  // Output declared via destiny's output: block.
+  // Passed into register.<task>.* and into RunResult.state_changes.
+  google.protobuf.Struct output = 4;
+}

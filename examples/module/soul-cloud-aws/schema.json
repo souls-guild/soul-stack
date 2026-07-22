@@ -1,0 +1,39 @@
+{
+  "type": "object",
+  "required": ["region", "instance_type", "ami"],
+  "properties": {
+    "region": {
+      "type": "string",
+      "pattern": "^[a-z]{2}-[a-z]+-[0-9]+$"
+    },
+    "instance_type": {
+      "type": "string",
+      "examples": ["t3.medium", "m5.large"]
+    },
+    "ami": {
+      "type": "string",
+      "pattern": "^ami-[0-9a-f]{8,17}$"
+    },
+    "disk": {
+      "type": "object",
+      "properties": {
+        "size_gb": { "type": "integer", "minimum": 8 },
+        "type": { "type": "string", "enum": ["gp3", "io2", "st1"] }
+      }
+    },
+    "network": {
+      "type": "object",
+      "properties": {
+        "subnet": { "type": "string" },
+        "security_groups": {
+          "type": "array",
+          "items": { "type": "string", "pattern": "^sg-[0-9a-f]+$" }
+        }
+      }
+    },
+    "tags": {
+      "type": "object",
+      "additionalProperties": { "type": "string" }
+    }
+  }
+}

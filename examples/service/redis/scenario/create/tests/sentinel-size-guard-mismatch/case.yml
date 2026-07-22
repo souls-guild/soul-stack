@@ -1,0 +1,88 @@
+# L0 test for create in sentinel mode — the FAIL branch of size-guard (topology != roster).
+# Mirror of sentinel-create-1master-2replica (same happy-path input replicas_per_master=2),
+# but the roster DELIBERATELY does not match the declared topology: replicas_per_master=2 →
+# expects exactly 1+2=3 hosts, but fixtures.hosts carries 2. size-guard in create/sentinel.yml
+# (assert, keeper-side render-time, ADR-009 amendment 2026-06-23) must ABORT render BEFORE
+# any dispatch — otherwise master election (first by SID) and SENTINEL MONITOR/REPLICAOF
+# would diverge from the declared topology: one host would SILENTLY become an undeclared replica.
+
+#
+# Paired with sentinel-create-1master-2replica (there roster==topology → render succeeds,
+# size-guard PASS) and symmetric with cluster-size-guard-mismatch (formula there is
+# shards*(1+replicas_per_master)).
+#
+# Render-only, hermetic. The create dispatcher includes cluster.yml + sentinel.yml; on a
+# sentinel run the cluster branch is group-dropped (static-when input.redis_type != 'cluster'),
+# sentinel.yml expands, and the first task is the size-guard assert (does NOT emit a RenderedTask).
+name: sentinel create with roster size not matching replicas aborts at render (size-guard)
+
+fixtures:
+  default_destiny_source: "file://../../destiny/{name}"
+  # A roster of 2 hosts — ONE FEWER than the declared topology (replicas=2 → 1+2=3).
+  # The order is deliberately not sorted: size-guard operates on size(), not position.
+  hosts:
+    - sid: node-2.example.com
+      covens: [create, redis]
+      soulprint:
+        network: { primary_ip: 10.0.0.2 }
+        os: { arch: amd64 }
+    - sid: node-1.example.com
+      covens: [create, redis]
+      soulprint:
+        network: { primary_ip: 10.0.0.1 }
+        os: { arch: amd64 }
+  vault:
+    secret/redis/create:
+      password: s3cr3t-redis-pass-create
+    # ★ default_admin redesign (2026-06-30): default_admin is the system user for
+    # intra-cluster AUTH (deploy's auth_pass/PING steps read it from the users/<name> branch).
+    secret/redis/create/users/default_admin:
+      password: default-admin-secret-pass
+    secret/redis/create/users/replica:
+      password: replica-sys-secret-pass
+    secret/redis/create/users/monitoring:
+      password: monitoring-sys-secret-pass
+    secret/redis/create/users/sentinel:
+      password: sentinel-sys-secret-pass
+    secret/redis/create/users/haproxy:
+      password: haproxy-sys-secret-pass
+  essence:
+    redis_type: sentinel
+    sentinel_master_name: master
+    modules_base_url: "https://artifacts.example.com/redis/modules"
+    memory_reserve_percent: 75
+    persistence_presets:
+      rdb:
+        save: "900 1 300 10 60 10000"
+        appendonly: "no"
+    redis_config:
+      maxmemory:        "256mb"
+      maxmemory-policy: allkeys-lru
+      maxclients:       10000
+      timeout:          300
+    system_acl_users:
+      default_admin: "~* &* +@all"
+      replica:    "+psync +replconf +ping"
+      monitoring: "-@all +@connection +client +ping +info +config|get +cluster|info +slowlog +latency +memory +select +command|count +command|docs"
+      sentinel:   "allchannels +multi +slaveof +ping +exec +subscribe +config|rewrite +role +publish +info +client|setname +client|kill +script|kill"
+      haproxy:    "-@all +auth +client|getname +client|id +client|setname +command +hello +ping +role +info +cluster|info"
+    system_acl_users_sentinel:
+      default_admin: "allchannels allkeys +@all"
+      monitoring: "-@all +@connection -command +client -hello +info -auth +sentinel|masters +sentinel|replicas +sentinel|slaves +sentinel|sentinels +sentinel|ckquorum"
+      sentinel:   "allchannels -@all +auth +client|getname +client|id +client|setname +command +hello +ping +sentinel|is-master-down-by-addr +publish +role +sentinel|get-master-addr-by-name +sentinel|master +sentinel|myid +sentinel|replicas +sentinel|sentinels"
+      haproxy:    "-@all +auth +client|getname +client|id +client|setname +command +hello +ping +role +sentinel|get-master-addr-by-name +sentinel|master +sentinel|myid +sentinel|replicas +sentinel|sentinels"
+  input:
+    # ★ provision disabled (default-on: an omitted section = ENABLED; this case deploys onto a
+    # READY roster, no cloud-create needed) → include redis-provision.yml group-drop.
+    provision:
+      enabled: false
+    redis_type: sentinel
+    # version from the enum (bump from 7.2.4) — so input validation passes and render REACHES
+    # the size-guard assert (the case's EXPECTED error), instead of failing earlier on version-enum.
+    version: "7.4.1"
+    # replicas_per_master=2 → expects 1+2=3 hosts, but the roster above = 2 → 2 != 1+2.
+    replicas_per_master: 2
+
+# The run aborts at render: the size-guard assert "Guard sentinel roster size matches
+# replicas" is false (2 != 1+2). Substring — the message of the create/sentinel.yml assert rule.
+expect_render_error: "roster host count must be exactly 1+replicas_per_master"

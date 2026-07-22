@@ -1,0 +1,107 @@
+# L0 test for update_users ON a TLS instance. Paired guard to bulk-replace-removes-user —
+# covers the TLS branch of the discriminator (compute.tls_on=true). Render-only, hermetic.
+#
+# ★ Invariant (convention §7a): when state.tls.enable=true, the ACL LOAD step
+# (community.redis.acl) must connect over TLS (addr on state.tls.port, tls=true,
+# tls_ca = PEM CA from vault(state.tls.ca_ref)) — otherwise a plaintext connect to
+# TLS-only Redis fails ACL LOAD. CA comes from the NAMED state.tls.ca_ref (current after
+# rotate_tls), NOT from the essence default.
+#
+# What we assert:
+#   1. users.acl re-rendered with the new set {alice} (bulk-replace, no system users in state).
+#   2. hot-reload (community.redis.acl): addr 127.0.0.1:7379 (TLS port), tls=true,
+#      tls_ca = PEM CA (from state.tls.ca_ref).
+#   3. state_changes: redis_users = {alice}.
+name: update_users over TLS hot-reloads ACL on tls-port from incarnation.state
+
+fixtures:
+  default_destiny_source: "file://../../destiny/{name}"
+  soulprint:
+    network: { primary_ip: 10.0.0.6 }
+    os: { arch: amd64 }
+
+  # host-layout — in essence (v11→v12, Option A): moved out of state, re-run reads it from there.
+  essence:
+    conf_dir: /etc/redis
+    data_dir: /var/lib/redis
+    modules_base_url: "https://artifacts.example.com/redis/modules"
+
+  # Deployed incarnation.state v6 with TLS; previously bob, new set = {alice}.
+  # state.tls.ca_ref — the connection's CA source (vault() resolves the path into PEM).
+  state:
+    redis_type: sentinel
+    redis_version: "7.2.4"
+    tls:
+      enable:   true
+      only:     false
+      port:     7379
+      cert_ref: "secret/services/redis/tls#cert"
+      key_ref:  "secret/services/redis/tls#key"
+      ca_ref:   "secret/services/redis/tls#ca"
+    redis_config:
+      maxmemory:        "256mb"
+      maxmemory-policy: allkeys-lru
+      save:             "900 1 300 10 60 10000"
+      appendonly:       "no"
+      tls-port:         "7379"
+      tls-cert-file:    /etc/redis/tls/redis.crt
+      tls-key-file:     /etc/redis/tls/redis.key
+      tls-ca-cert-file: /etc/redis/tls/ca.crt
+      tls-replication:  "yes"
+    redis_users:
+      - { name: bob, perms: "~app:* +@read", state: "on" }
+
+  input:
+    users:
+      - { name: alice, perms: "~app:* +@read +@write", state: "on" }
+
+  vault:
+    secret/redis/update_users:
+      password: updusr-redis-pass-16ch
+    # ★ default_admin REDESIGN: the system admin user — password from the users/default_admin branch
+    # (masterauth layered into config + AUTH community.redis.acl over TLS).
+    secret/redis/update_users/users/default_admin:
+      password: default-admin-secret-pass
+    secret/redis/update_users/users/alice:
+      password: alice-user-secret-pass
+    secret/services/redis/tls:
+      ca: "-----BEGIN CERTIFICATE-----\nCACERT\n-----END CERTIFICATE-----"
+
+assert:
+  task_present:
+    - module: core.file.rendered
+      params_subset:
+        path: /etc/redis/users.acl
+        render_context:
+          vars:
+            users:
+              alice:
+                perms: "~app:* +@read +@write"
+                state: "on"
+                password: alice-user-secret-pass
+          self:
+            sid: trial-host
+            covens: [update_users]
+            choirs: []
+            traits: {}
+            role: ""
+            network:
+              primary_ip: 10.0.0.6
+            os:
+              arch: amd64
+          role: ""
+          essence: {}
+
+    # HOT-RELOAD ACL OVER TLS: addr on the tls port, tls=true, tls_ca = PEM CA.
+    # ★ default_admin REDESIGN: AUTH as default_admin (username + its Vault password).
+    - module: community.redis.acl
+      params_subset:
+        addr: "127.0.0.1:7379"
+        username: default_admin
+        password: default-admin-secret-pass
+        tls: true
+        tls_ca: "-----BEGIN CERTIFICATE-----\nCACERT\n-----END CERTIFICATE-----"
+
+  state_changes:
+    redis_users:
+      - { name: alice, perms: "~app:* +@read +@write", state: "on" }

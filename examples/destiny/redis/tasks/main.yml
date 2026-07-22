@@ -1,0 +1,67 @@
+# tasks/main.yml — entry point of destiny redis. Only an include list: logical
+# groups are split across sibling files, expanded inline BEFORE render (docs/destiny/
+# tasks.md §4 — within-destiny include expands into a flat list). Sees ONLY
+# its own input: (isolation, ADR-009).
+#
+# Mode-agnostic per-host brick (standalone/cluster/sentinel/sentinel_only):
+# the mode is chosen by the service scenario by passing flags and cluster-/sentinel-
+# directives into config; the destiny itself does not know the mode. The config arrives
+# ALREADY merged as a map via apply: input: config: — the destiny does not merge anything
+# (merging is done by the scenario).
+#
+# Pipeline overview (include order = task order). The mode-gate sits ON include
+# (conditional-include, ADR-009 amendment): a static input-predicate on an include-
+# task REALLY excludes the group from the plan (render-phase group-drop), rather than
+# suppressing it with a placeholder-skip. So a disabled include (sentinel outside
+# sentinel-mode, server in sentinel_only) is PHYSICALLY absent — its tasks are not
+# rendered, no indices are reserved. L0-cases assert with a presence-matcher
+# (task_present/task_absent), for which group-drop is safe (positional indices don't
+# matter).
+#
+#   install.yml  — install redis binaries (UNCONDITIONAL): dispatch by install.method
+#                  (package default / binary opt-in) + unix-socket directory. The method-gate
+#                  is in-block (package is always active, including sentinel_only); it is
+#                  NOT moved to include. The binary-branch carries ITS OWN restart here
+#                  (per-file linter forbids cross-file register onchanges);
+#   server.yml   — redis-server data-plane (gated deploy_redis ON include): PEM →
+#                  users.acl → redis.conf → hardening drop-in → core.service. sentinel_only
+#                  (deploy_redis=false) → group-drop;
+#   sentinel.yml — sentinel daemon (gated sentinel_enabled ON include). Outside sentinel-
+#                  mode — group-drop;
+#   extras.yml   — host-tuning (THP unit / logrotate / sysctl), all UNCONDITIONAL;
+#   modules.yml  — .so directory + FOUR EXPLICIT fetch-tasks for ALL Redis modules
+#                  (directive "modules ALWAYS ALL"); gated ON include on deploy_redis AND
+#                  NOT redis8. sentinel_only / Redis 8+ → group-drop;
+#
+# Include-gates are static input-predicates (conditional-include requires
+# input./essence./incarnation./vars.; register./soulprint. on include are forbidden).
+# All three mode-gates for redis are input-based. The has()-guard in each is a
+# render-safety measure for an absent dict (sentinel in standalone, tls in sentinel_only):
+# when must not fail with no-such-key, even though the corresponding dict is present
+# whenever the include is actually true.
+#
+# There are no explicit daemon-reload steps: core.service (daemon_reload: auto, default)
+# itself reloads the systemd configuration BEFORE start/restart whenever the unit file
+# changes.
+
+- include: install.yml
+
+- include: server.yml
+  when: "default(input.deploy_redis, true)"
+
+- include: sentinel.yml
+  when: "default(input.sentinel_enabled, false)"
+
+- include: extras.yml
+
+# Modules ALL-OR-NOTHING (directive C): download the WHOLE set, but ONLY where there is
+# a data-plane (sentinel_only — no redis-server, modules have nowhere to load), Redis < 8
+# (built-in on 8+), AND modules_base_url is set (source of the .so; empty → vanilla redis
+# without modules). The two-part version+base_url gate is encapsulated in
+# vars.redis_modules_enabled — the SINGLE source shared with loadmodules (server.yml):
+# otherwise loadmodule in redis.conf would reference a .so that was not downloaded.
+# conditional-include allows vars. in the predicate → the group is REALLY excluded from
+# the plan (group-drop); the .so fetch-tasks are physically not included when base_url is
+# empty.
+- include: modules.yml
+  when: "default(input.deploy_redis, true) && vars.redis_modules_enabled"

@@ -1,0 +1,37 @@
+# The create_from_souls dispatcher branch - cluster mode (honest hash-slot Redis Cluster,
+# 16384 slots). Included from main.yml via CONDITIONAL-INCLUDE: `when: input.redis_type
+# == 'cluster'` sits ON the include - on a sentinel run the whole file group-drops (tasks
+# are physically not rendered), on a cluster run it expands into a flat list BEFORE render.
+#
+# * THIN DISPATCHER: the deploy body is service-level. size-guard below + include the shared
+# scenario/redis-deploy-cluster.yml. This file is a COPY of create/cluster.yml (without provision
+# the size-guard does not differ): scenario.include resolves `scenario/<name>/<file>`, so
+# create_from_souls needs its OWN local branch (create/cluster.yml would only cover
+# create). The actual deploy body (redis-deploy-cluster.yml) is service-level, shared without
+# duplication. The copy's drift-risk is noted in main.yml::description.
+#
+# * INVARIANT (see the header of redis-deploy-cluster.yml): the includer MUST declare in its own
+# compute: the set that the body reads (redis_config/conf_dir/data_dir/install/
+# modules_base_url/redis_version/tls_*). All of them are declared in create_from_souls/main.yml::compute
+# (an inline copy of create). soul-lint does NOT catch cross-file drift.
+
+# -- 0. SIZE-GUARD (topology) - keeper-side render-time assert -----------------------
+# The roster size MUST be exactly shards*(1+replicas_per_master) - otherwise the plugin
+# community.redis.cluster (action create) will derive the shard count FROM the node count and SILENTLY
+# ignore the declared input.shards. The predicate is computed KEEPER-SIDE at RENDER time - there
+# soulprint.hosts is available. false ABORTS the render with a message BEFORE any dispatch. assert does NOT
+# emit a RenderedTask. It sits BEFORE the include of the deploy body - a mismatch aborts the run fail-fast.
+# * EXPLICIT TOPOLOGY (cluster_topology): when the operator has given a shard list, the size-guard
+# checks the roster against the SUM of shard sizes (the node count across the whole declared topology).
+# Without cluster_topology - the old formula. The gate is has(input.cluster_topology).
+# * WHY assert, not validate: the size-guard needs soulprint.hosts (roster), while the validate
+# context is INPUT-ONLY (a structural CEL barrier). The requiredness of shards itself (its presence
+# in cluster mode) is a separate required_when in main.yml, cutting off BEFORE render; here it is only
+# a check of the topology against the already-present shards. Identical to create/cluster.yml:30-33.
+- name: Guard cluster roster size matches shards and replicas
+  assert:
+    that:
+      - "has(input.cluster_topology) ? (size(soulprint.hosts) == size(merge(input.cluster_topology.map(s, merge(s.map(x, {x: 0})))))) : (size(soulprint.hosts) == int(input.shards) * (1 + int(input.replicas_per_master)))"
+    message: "the run's roster host count must be exactly shards*(1+replicas_per_master) - or, when cluster_topology is given, exactly the sum of the declared shard sizes (the node count across the whole topology); target as many souls as there are nodes in the declared topology, otherwise the plugin would derive the shard count from the node count and ignore the declared layout"
+
+- include: redis-deploy-cluster.yml

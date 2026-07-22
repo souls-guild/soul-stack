@@ -1,0 +1,51 @@
+# L0 test B-flat (self_onboard omitted = false): input without self_onboard.
+# Flow: (1) core.cloud.created with generate_userdata: true (userdata WITHOUT tokens),
+# (2) core.bootstrap.delivered delivers a per-VM token over SSH, (3) core.soul.registered
+# await_online. Step (2) IS PRESENT (when: !self_onboard — STATIC true when
+# self_onboard is omitted). self_onboard=false / name omitted.
+#
+# Paired with self-onboard-true (there deliver is skipped, self_onboard/generate_userdata
+# are inverted). Covers the when=true branch of the deliver step.
+name: b-flat (self_onboard omitted) emits generate_userdata cloud-create and deliver
+
+fixtures:
+  hosts:
+    - sid: vm-1.example.com
+      covens: [self-onboard-inc]
+      soulprint:
+        network: { primary_ip: 10.0.0.1 }
+        os: { arch: amd64 }
+  input:
+    provider: example-prod
+    profile: redis-small
+    count: 1
+    ssh_provider: ssh-example
+
+mocks:
+  register:
+    provision:
+      vm_ids: [i-aaa]
+      hosts:
+        - { sid: vm-1.example.com, vm_id: i-aaa, primary_ip: 10.0.0.1, bootstrap_token: tok-vm1 }
+
+assert:
+  task_present:
+    # (1) core.cloud.created: generate_userdata=true (B-flat, userdata without tokens);
+    # self_onboard=false (self_onboard omitted → CEL yields false).
+    - module: core.cloud.created
+      params_subset:
+        provider: example-prod
+        count: 1
+        self_onboard: false
+        generate_userdata: true
+
+    # (2) core.bootstrap.delivered IS PRESENT (B-flat token delivery over SSH).
+    - module: core.bootstrap.delivered
+      params_subset:
+        ssh_provider: ssh-example
+
+    # (3) core.soul.registered barrier.
+    - module: core.soul.registered
+      params_subset:
+        sid: [vm-1.example.com]
+        await_online: true

@@ -1,0 +1,7 @@
+name: on-incarnation-name
+tasks:
+  - name: Target the whole incarnation the wrong way
+    on: ["${ incarnation.name }"]
+    module: core.exec.run
+    params:
+      command: "true"

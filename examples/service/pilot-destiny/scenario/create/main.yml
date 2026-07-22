@@ -1,0 +1,34 @@
+name: create
+description: >
+  Delegates laying down a marker file to the flat destiny pilot-flat via
+  apply:destiny. apply.input — what the scenario passes to destiny (literals + CEL over
+  scenario-scope); inside destiny ONLY this input is visible (isolation, ADR-009).
+
+  Demonstrates scenario-include (slice B, orchestration.md §6): the apply task
+  is extracted into a sibling marker.yml and included via include: — it expands into a
+  flat list BEFORE render (two-level resolve scenario-local → service-level).
+
+# scenario-input: the operator sets the marker's path and content.
+input:
+  path:
+    type: string
+    required: true
+    pattern: "^/[A-Za-z0-9._/-]+$"
+    description: Path of the marker file on the host.
+  content:
+    type: string
+    required: true
+    description: Content of the marker file.
+
+# What we record into incarnation.state after a successful apply (ADR-009 §7.1).
+state_changes:
+  - set: marker_path
+    value: "${ input.path }"
+  - set: marker_content
+    value: "${ input.content }"
+
+tasks:
+  # scenario-include: the sibling file marker.yml is expanded inline BEFORE render.
+  # Inside — an apply:destiny task (expanded by an isolated render pass of
+  # destiny into N of its tasks with end-to-end indices).
+  - include: marker.yml

@@ -1,0 +1,26 @@
+# nfpm config for the `soul-lint` package (deb + rpm). ADR-004 — offline linter (CLI).
+#
+# Build: `make pkg`. Version from the VERSION environment variable (see Makefile).
+# The binary is built BEFORE packaging (`make build`) — placed at soul-lint/bin/soul-lint.
+#
+# Unlike keeper/soul — NOT a daemon: no systemd unit, no env file, no
+# config. Just the binary in /usr/local/bin (run manually by the operator).
+name: soul-stack-soul-lint
+arch: ${ARCH}
+platform: linux
+version: ${VERSION}
+section: devel
+priority: optional
+maintainer: Soul Stack <noreply@soul-stack.com>
+description: |
+  Soul Stack soul-lint — offline validator for artifacts (ADR-004): destiny /
+  service / manifest / scenario. CLI, no daemon and no config.
+vendor: Soul Stack
+homepage: https://github.com/souls-guild/soul-stack
+license: BUSL-1.1
+
+contents:
+  - src: ./soul-lint/bin/soul-lint
+    dst: /usr/local/bin/soul-lint
+    file_info:
+      mode: 0755

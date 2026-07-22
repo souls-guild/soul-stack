@@ -1,0 +1,54 @@
+# L0 test for destroy: teardown of an incarnation deployed the PACKAGE way (distro package
+# mongodb-org). Render-only, hermetic.
+#
+# What we assert:
+#   1. mongod is stopped (core.service.stopped).
+#   2. MongoDB is removed via PACKAGE (core.pkg.absent name=mongodb-org) — package branch active
+#      (essence.install_method=package -> static gate group-keep).
+#   3. Our config artifacts are removed (core.file.absent mongod.conf + sysctl drop-in).
+#   4. BINARY branch is dropped (group-drop): core.file.absent for the binary/binary-unit are ABSENT.
+name: destroy tears down a package-installed mongo (stop + pkg.absent + remove configs)
+
+fixtures:
+  hosts:
+    - sid: node-solo.example.com
+      covens: [destroy]
+      soulprint:
+        network: { primary_ip: 10.0.0.5 }
+        os: { arch: amd64 }
+
+  essence:
+    install_method: package
+    conf_dir: /etc/mongodb
+
+  state:
+    mongo_version: "6.0.19"
+    mongo_config:
+      net: { bindIp: "0.0.0.0", port: 27017 }
+
+assert:
+  task_present:
+    # 1. Stop mongod.
+    - module: core.service.stopped
+      params_subset:
+        name: mongod
+    # 2. MongoDB is removed via package (package branch).
+    - module: core.pkg.absent
+      params_subset:
+        name: mongodb-org
+    # 3. Our config artifacts are removed.
+    - module: core.file.absent
+      params_subset:
+        path: /etc/mongodb/mongod.conf
+    - module: core.file.absent
+      params_subset:
+        path: /etc/sysctl.d/30-mongodb.conf
+
+  task_absent:
+    # 4. BINARY branch group-drop on a package incarnation: binary and binary-unit are NOT touched.
+    - module: core.file.absent
+      params_subset:
+        path: /usr/local/bin/mongod
+    - module: core.file.absent
+      params_subset:
+        path: /etc/systemd/system/mongod.service

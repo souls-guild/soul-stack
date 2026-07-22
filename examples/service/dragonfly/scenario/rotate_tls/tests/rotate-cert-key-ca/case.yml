@@ -1,0 +1,182 @@
+# L0 test for rotate_tls: day-2 TLS material rotation WITHOUT restart. Operator supplies NEW
+# Vault refs for cert/key/ca; the scenario re-renders the PEM into ${conf_dir}/tls/ from the new refs and sends
+# three CONFIG SET tls_*_file (UNDERSCORE — DragonFly form!) via community.redis.command under
+# an onchanges gate (DragonFly recreates SSL_CTX and re-reads live). Render-only, hermetic.
+# The instance is ALREADY on TLS (state.tls.enable=true; rotate only applies to TLS).
+#
+# ** CRITICAL underscore-flag guard: args = CONFIG SET tls_cert_file / tls_key_file /
+# tls_ca_cert_file (NOT dash-form like redis). Regression to dash (tls-cert-file) → DragonFly
+# would reject CONFIG SET → assert fails red. Confirmed by DragonFly src investigation.
+#
+# What we assert:
+#   1. PEM re-rendered (core.file.present): dragonfly.crt/dragonfly.key/ca.crt in
+#      /etc/dragonfly/tls/, content = vault(NEW ref), mode 0600 owner dragonfly.
+#   2. applier-register tls_certs MATERIALIZED (core.noop.run id:tls_certs) — onchanges anchor.
+#   3. reload re-read (three community.redis.command): addr = LOCAL UNIX socket (WITHOUT tls/tls_ca),
+#      args = CONFIG SET tls_cert_file/tls_key_file/tls_ca_cert_file (UNDERSCORE).
+#   4. state_changes: state.tls carries NEW refs; enable is preserved (WITHOUT only/port — DF has no tls port).
+#
+# * Idempotency guard: forced changed:true from the reload tasks REMOVED (task_absent catches the regression).
+name: rotate_tls re-renders PEM from new refs and re-reads via onchanges-gated CONFIG SET (underscore flags)
+
+fixtures:
+  default_destiny_source: "file://../../destiny/{name}"
+  soulprint:
+    network: { primary_ip: 10.0.0.5 }
+    os: { arch: amd64 }
+
+  # Deployed incarnation.state with TLS ENABLED (rotate precondition). Current refs are OLD;
+  # input supplies the new ones. The connection CA (compute.tls_ca) resolves from state.tls.ca_ref (PRE-RUN snapshot)
+  # — on THIS run the connection uses the OLD CA, the three CONFIG SET calls swap in the material themselves.
+  # state v2: install/conf_dir/data_dir moved into essence (not in state). rotate_tls's conf_dir
+  # is read from essence (default /etc/dragonfly), and PEM is written there too.
+  state:
+    df_version: "1.39.0"
+    tls:
+      enable:   true
+      cert_ref: "secret/services/dragonfly/tls#cert"
+      key_ref:  "secret/services/dragonfly/tls#key"
+      ca_ref:   "secret/services/dragonfly/tls#ca"
+    df_config:
+      maxmemory:        "256mb"
+      tls:              "true"
+      tls_cert_file:    /etc/dragonfly/tls/dragonfly.crt
+      tls_key_file:     /etc/dragonfly/tls/dragonfly.key
+      tls_ca_cert_file: /etc/dragonfly/tls/ca.crt
+      tls_replication:  "true"
+    df_users: []
+
+  input:
+    # New refs (rotating all three).
+    cert_ref: "secret/services/dragonfly/tls-v2#cert"
+    key_ref:  "secret/services/dragonfly/tls-v2#key"
+    ca_ref:   "secret/services/dragonfly/tls-v2#ca"
+
+  vault:
+    # default_admin: the 3 CONFIG SET tls_*_file calls connect as this user (requirepass removed).
+    secret/dragonfly/rotate_tls/users/default_admin:
+      password: dfadmin-rotate-tls-pass
+    # Connection CA (state.tls.ca_ref pre-run) — current trust for this run.
+    secret/services/dragonfly/tls:
+      ca: "-----BEGIN CERTIFICATE-----\nCACERT\n-----END CERTIFICATE-----"
+    # NEW TLS material (from input refs) — rendered into files for DragonFly.
+    secret/services/dragonfly/tls-v2:
+      cert: "-----BEGIN CERTIFICATE-----\nNEWCERT\n-----END CERTIFICATE-----"
+      key:  "-----BEGIN PRIVATE KEY-----\nNEWKEY\n-----END PRIVATE KEY-----"
+      ca:   "-----BEGIN CERTIFICATE-----\nNEWCA\n-----END CERTIFICATE-----"
+
+assert:
+  task_present:
+    # 1. PEM re-rendered from the NEW refs (content = new PEM). owner dragonfly (NOT redis).
+    - module: core.file.present
+      params_subset:
+        path: /etc/dragonfly/tls/dragonfly.crt
+        content: "-----BEGIN CERTIFICATE-----\nNEWCERT\n-----END CERTIFICATE-----"
+        mode: "0600"
+        owner: dragonfly
+        group: dragonfly
+    - module: core.file.present
+      params_subset:
+        path: /etc/dragonfly/tls/dragonfly.key
+        content: "-----BEGIN PRIVATE KEY-----\nNEWKEY\n-----END PRIVATE KEY-----"
+        mode: "0600"
+        owner: dragonfly
+        group: dragonfly
+    - module: core.file.present
+      params_subset:
+        path: /etc/dragonfly/tls/ca.crt
+        content: "-----BEGIN CERTIFICATE-----\nNEWCA\n-----END CERTIFICATE-----"
+        mode: "0600"
+        owner: dragonfly
+        group: dragonfly
+
+    # 1c. * GUARD replica→master AUTH: rotate_tls re-renders the WHOLE dragonfly destiny brick
+    #     (incl. the dragonfly.conf flagfile), so the config map MUST carry masteruser/masterauth —
+    #     otherwise the on-disk flagfile would lose the static replica→master AUTH and after a
+    #     restart replica replication would hit NOAUTH. The addition mirrors add_user/update_users
+    #     (merge(state.df_config, {masteruser, masterauth})). WITHOUT this addition this assert FAILS
+    #     (config map would not contain the AUTH pair) — catches the "rotate loses masterauth" regression.
+    #     render_context is compared as a whole (reflect.DeepEqual): config = df_config + AUTH pair.
+    - module: core.file.rendered
+      params_subset:
+        path: /etc/dragonfly/dragonfly.conf
+        render_context:
+          vars:
+            conf_dir: /etc/dragonfly
+            data_dir: /var/lib/dragonfly
+            port: 6379
+            run_dir: /var/run/dragonfly
+            log_dir: /var/log/dragonfly
+            config:
+              maxmemory: "256mb"
+              tls: "true"
+              tls_cert_file: /etc/dragonfly/tls/dragonfly.crt
+              tls_key_file: /etc/dragonfly/tls/dragonfly.key
+              tls_ca_cert_file: /etc/dragonfly/tls/ca.crt
+              tls_replication: "true"
+              masteruser: default_admin
+              masterauth: dfadmin-rotate-tls-pass
+          self:
+            sid: trial-host
+            covens: [rotate_tls]
+            choirs: []
+            traits: {}
+            role: ""
+            network:
+              primary_ip: 10.0.0.5
+            os:
+              arch: amd64
+          role: ""
+          essence: {}
+
+    # 2. APPLIER-REGISTER MATERIALIZED: terminal core.noop.run(register=tls_certs) — onchanges gate
+    #    anchor (id-disambiguator). Without it onchanges:[tls_certs] would not resolve.
+    - module: core.noop.run
+      id: tls_certs
+
+    # 3. RE-READ UNDER the onchanges GATE: three community.redis.command (CONFIG SET tls_*_file —
+    #    UNDERSCORE), addr — LOCAL UNIX socket (WITHOUT tls/tls_ca — UDS is not a network path), args target
+    #    paths under /etc/dragonfly/tls/. Args disambiguate the three calls AND guard the underscore names.
+    - module: community.redis.command
+      params_subset:
+        addr: "unix:/var/run/dragonfly/dragonfly.sock"
+        username: default_admin
+        password: dfadmin-rotate-tls-pass
+        args: ["CONFIG", "SET", "tls_cert_file", "/etc/dragonfly/tls/dragonfly.crt"]
+    - module: community.redis.command
+      params_subset:
+        addr: "unix:/var/run/dragonfly/dragonfly.sock"
+        username: default_admin
+        password: dfadmin-rotate-tls-pass
+        args: ["CONFIG", "SET", "tls_key_file", "/etc/dragonfly/tls/dragonfly.key"]
+    - module: community.redis.command
+      params_subset:
+        addr: "unix:/var/run/dragonfly/dragonfly.sock"
+        username: default_admin
+        password: dfadmin-rotate-tls-pass
+        args: ["CONFIG", "SET", "tls_ca_cert_file", "/etc/dragonfly/tls/ca.crt"]
+
+  # * Idempotency GUARD (render level): forced changed:true from the reload tasks REMOVED. Any
+  #   community.redis.command CONFIG SET-tls with changed:true → regression back to the non-idempotent
+  #   force path. task_absent catches it (>=1 match → fail). Covers ALL THREE reload tasks.
+  task_absent:
+    - module: community.redis.command
+      params_subset:
+        changed: true
+        args: ["CONFIG", "SET", "tls_cert_file", "/etc/dragonfly/tls/dragonfly.crt"]
+    - module: community.redis.command
+      params_subset:
+        changed: true
+        args: ["CONFIG", "SET", "tls_key_file", "/etc/dragonfly/tls/dragonfly.key"]
+    - module: community.redis.command
+      params_subset:
+        changed: true
+        args: ["CONFIG", "SET", "tls_ca_cert_file", "/etc/dragonfly/tls/ca.crt"]
+
+  # state_changes: state.tls carries NEW refs; enable is preserved (WITHOUT only/port — DF has no tls port).
+  state_changes:
+    tls:
+      enable:   true
+      cert_ref: "secret/services/dragonfly/tls-v2#cert"
+      key_ref:  "secret/services/dragonfly/tls-v2#key"
+      ca_ref:   "secret/services/dragonfly/tls-v2#ca"

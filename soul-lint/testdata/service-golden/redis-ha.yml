@@ -1,0 +1,40 @@
+name: redis-ha
+state_schema_version: 2                 # версия структуры incarnation.state (для миграций), не версия сервиса — см. ADR-007
+description: Redis HA cluster with rolling updates and failover
+
+# Структура incarnation.state в БД (per-incarnation hold)
+state_schema:
+  type: object
+  required: [redis_version, redis_users, redis_config, redis_hosts]
+  properties:
+    redis_version: { type: string }
+    redis_users:
+      type: object
+      additionalProperties:
+        type: object
+        required: [acl, state]
+        properties:
+          acl:   { type: string }
+          state: { type: string, enum: [on, off] }
+    redis_config:
+      type: object
+      additionalProperties: { type: string }
+    redis_hosts:
+      type: array
+      items:
+        type: object
+        properties:
+          sid:  { type: string }
+          role: { type: string, enum: [primary, replica] }
+
+# Зависимости-кирпичики (auto-resolve по default_destiny_source + override).
+# Версия зависимости — git ref (tag или branch), никаких semver-range. См. ADR-007.
+destiny:
+  - { name: redis,                    ref: v2.0.0 }
+  - { name: redis-replication-config, ref: v1.0.0 }
+  # cloud-provision удалён: после ADR-017 это core-модуль core.cloud.provisioned,
+  # не custom destiny. Core-модули в required_modules не перечисляются (ADR-009).
+
+# Custom-модули, нужные сервису (двухуровневая форма <namespace>.<module>)
+modules:
+  - { name: acme.redis-failover, ref: v1.2.0 }

@@ -1,0 +1,66 @@
+# L0 test for create MongoDB standalone — PACKAGE method (distro package mongodb-org).
+# Covers: the package branch (core.pkg.installed mongodb-org =version-pin) + group-drop of the
+# binary branch (no url.fetched/mongod binary/binary unit). The package carries its own systemd unit.
+name: mongo create standalone via distribution package (mongodb-org)
+
+fixtures:
+  hosts:
+    - sid: node-solo.example.com
+      covens: [create, mongo]
+      soulprint:
+        network: { primary_ip: 10.0.0.7 }
+        os: { arch: amd64, version: "12" }
+
+  vault:
+    secret/mongo/create/users/default_admin:
+      password: mongoadmin-create-pass
+
+  essence:
+    install_method: package
+    conf_dir: /etc/mongodb
+    data_dir: /var/lib/mongodb
+    log_dir:  /var/log/mongodb
+    net_port: 27017
+    memory_reserve_percent: 50
+    system_users:
+      default_admin:
+        - { role: root, db: admin }
+    mongo_config:
+      net:
+        maxIncomingConnections: 65536
+
+  input:
+    version: "6.0.19"
+
+assert:
+  task_present:
+    # PACKAGE branch: distro package mongodb-org with =version-pin.
+    - module: core.pkg.installed
+      params_subset:
+        name: mongodb-org
+        version: "6.0.19"
+    # render mongod.conf + start + bootstrap — common to both branches.
+    - module: core.file.rendered
+      params_subset:
+        path: /etc/mongodb/mongod.conf
+    - module: community.mongo.user
+      params_subset:
+        name: default_admin
+        state: present
+
+  task_absent:
+    # BINARY branch group-drop on the package incarnation: binary/tarball/binary unit are NOT touched.
+    - module: core.url.fetched
+    - module: core.file.present
+      params_subset:
+        path: /usr/local/bin/mongod
+    - module: core.file.rendered
+      params_subset:
+        path: /etc/systemd/system/mongod.service
+    # * Restarting mongod (binary-only onchanges) is absent on the package incarnation.
+    - module: core.service.restarted
+      params_subset:
+        name: mongod
+
+  state_changes:
+    mongo_version: "6.0.19"

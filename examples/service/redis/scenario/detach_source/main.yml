@@ -1,0 +1,90 @@
+name: detach_source
+description: >-
+  Detach the external source from an incarnation seeded via migrate_cluster: a final
+  offset check (fail-closed) and switching the master to standalone mode (REPLICAOF NO
+  ONE). Precondition — the operator has stopped writes to the old cluster.
+
+# There is NO operator input contract: detach_source takes no parameters — the source,
+# mode, and connection data come from incarnation.state (seeded_from/redis_type/tls/…),
+# written by migrate_cluster and earlier scenarios. The operator only RUNS the scenario
+# (after manually quiescing writes to the source, see description).
+
+# ── Computed scenario-vars (compute:) ─────────────────────────────────────────
+# Run-level context (incarnation/essence — without soulprint). source_master — the master
+# of the EXTERNAL source from state (written by migrate_cluster: seeded_from.source_endpoints[0]).
+# tls_* — the connection discriminator to the LOCAL instance from state.tls (like all maintenance scenarios:
+# add_user/update_users/restart).
+#
+# ★ source_password/source_tls_ca (v10 production fix) — the EXTERNAL source's credentials for
+# the final offset gate, recovered from the REFS in state. migrate_cluster PERSISTS
+# Vault PATHS (seeded_from.source_password_ref/source_tls_ca_ref), detach reads them
+# via vault() keeper-side and authenticates to the source. Before v10 the credentials were NOT
+# stored in state → the gate to an AUTH/TLS source failed to connect → detach NEVER succeeded
+# (error_locked). Now the full migrate→detach cycle works with a protected source.
+# An empty ref (a source without AUTH/TLS, or state predating the v10 fix) → '' (the gate sends
+# source_password='', matching the S1-pilot behavior bit-for-bit — we don't break detach without AUTH).
+# The default('')-guard on the ref itself is defensive back-compat (v10 guarantees the ref, but edge
+# state without it shouldn't break eager-compute). Resolved keeper-side, the value is masked.
+#
+# ★ source_master fail-soft on an empty source_endpoints: the compute block resolves AS A WHOLE
+# and EAGERLY once per run (render/compute.go), BEFORE tasks. A bare [0] on an empty list
+# would fail with an OPAQUE `index out of bounds: 0` error EARLIER than render reaches the
+# assert-guard in sentinel.yml — the operator wouldn't understand that the incarnation simply
+# hasn't been migrated. The guard `size(...) >= 1 ? [0] : ''` returns '' on empty (compute doesn't
+# fail), and the assert task in sentinel.yml gives a CLEAR rejection instead (it's FIRST in the
+# branch, cutting off non-migrated incarnations before the probe). The same '' for
+# source_password/source_tls_ca on an incarnation that hasn't passed migration (empty ref) —
+# the assert-guard still cuts it off before the gate either way.
+compute:
+  source_master: "${ size(default(incarnation.state.seeded_from.source_endpoints, [])) >= 1 ? incarnation.state.seeded_from.source_endpoints[0] : '' }"
+  source_password: "${ default(default(incarnation.state.seeded_from, {}).source_password_ref, '') != '' ? vault(incarnation.state.seeded_from.source_password_ref) : '' }"
+  source_tls_ca:   "${ default(default(incarnation.state.seeded_from, {}).source_tls_ca_ref, '') != '' ? vault(incarnation.state.seeded_from.source_tls_ca_ref) : '' }"
+  tls_on:   "${ has(incarnation.state) && has(incarnation.state.tls) && default(incarnation.state.tls.enable, false) }"
+  tls_port: "${ compute.tls_on ? string(incarnation.state.tls.port) : '' }"
+  tls_ca:   "${ compute.tls_on ? vault(incarnation.state.tls.ca_ref) : '' }"
+  # ── sentinel MONITOR AFTER detach (split-brain fix): directives/version from STATE ──
+  # ★ The SENTINEL MONITOR step (sentinel.yml, moved here from migrate_cluster's deploy body:
+  # it can't run while the new master is still replicating the source — sentinel would see
+  # role:slave and trigger a failover → split-brain. After REPLICAOF NO ONE the master is
+  # standalone again, safe to monitor). The scenario takes everything from incarnation.state (detach
+  # has no input contract):
+  #   - sentinel_directives — the same per-master timings that create/migrate wrote into
+  #     sentinel.conf, but from state.redis_sentinel (down_after_ms/failover_timeout_ms/
+  #     master_name) rather than from input. The key form `sentinel <opt> <master>` is identical
+  #     to create/main.yml::compute.sentinel_directives (the classifyConfig plugin lays out
+  #     per-master). The default()-guard on redis_sentinel — the object is guaranteed on a v9 incarnation,
+  #     but the defaults (5000/60000/'master') protect legacy/incomplete state.
+  #   - redis_version — for the community.redis.sentinel plugin (command version-gating), from
+  #     state.redis_version (written by create/migrate).
+  sentinel_master_name: "${ default(default(incarnation.state.redis_sentinel, {}).master_name, 'master') }"
+  redis_version:        "${ default(incarnation.state.redis_version, '') }"
+  sentinel_directives: >-
+    ${ {
+         'sentinel down-after-milliseconds ' + compute.sentinel_master_name: string(int(default(default(incarnation.state.redis_sentinel, {}).down_after_ms, 5000))),
+         'sentinel failover-timeout '         + compute.sentinel_master_name: string(int(default(default(incarnation.state.redis_sentinel, {}).failover_timeout_ms, 60000)))
+       } }
+
+# ── incarnation.state mutation ─────────────────────────────────────────────────
+# Mark the source detached: seeded_from.detached := true (source_endpoints
+# IS PRESERVED — a historical record of "where we migrated from"). ★ seeded_from is a scalar
+# OBJECT, not a collection, so ADR-057's `modify` (a match predicate over collection
+# ELEMENTS) doesn't apply to it — an object field patch is expressed via a full `set`:
+# merge() the old object with {detached: true} (shallow last-wins, templating.md §2.3) —
+# preserves source_endpoints (and any future seeded_from fields), changes only detached.
+# The seeded_from object is guaranteed on v9 incarnations (migration 008_to_009), BUT with an EMPTY
+# source_endpoints for those that never went through migrate_cluster (the migration gives every v9
+# {source_endpoints:[], detached:false}). detach is an ordinary maintenance scenario (no runnable:false),
+# an operator can run it on a freshly-created incarnation — the assert-guard
+# in sentinel.yml (size(source_endpoints) >= 1) cuts that off; it never reaches this merge.
+state_changes:
+  - set: seeded_from
+    value: "${ merge(incarnation.state.seeded_from, {'detached': true}) }"
+
+# The run body — dispatcher branches on incarnation.state.redis_type. S1 pilot: sentinel
+# is implemented, cluster is a fail-closed stub (S4). when on state.redis_type —
+# a mode gate (like the create dispatcher on input.redis_type, but the source is state).
+tasks:
+  - include: cluster.yml
+    when: "incarnation.state.redis_type == 'cluster'"
+  - include: sentinel.yml
+    when: "incarnation.state.redis_type == 'sentinel'"

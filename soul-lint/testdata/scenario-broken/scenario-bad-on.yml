@@ -1,0 +1,7 @@
+name: bad-on
+tasks:
+  - name: on must be string keeper or sequence of coven-id
+    on: 42
+    module: core.exec.run
+    params:
+      command: "true"

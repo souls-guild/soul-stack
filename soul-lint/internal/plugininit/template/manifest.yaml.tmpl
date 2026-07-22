@@ -1,0 +1,107 @@
+# Plugin manifest (ADR-020 + ADR-026 Sigil-trust).
+# Full spec: docs/keeper/plugins.md -> Manifest.
+kind: soul_module
+protocol_version: {{.ProtocolVersion}}
+namespace: {{.Namespace}}
+name: {{.Name}}
+
+# capabilities that the module declares it needs to request from the host (closed enum:
+# run_as_root / network_outbound / network_inbound / vault_access /
+# fs_write_root / exec_subprocess). soul-lint checks this against the host's
+# plugin_runtime; undeclared capabilities block startup (default-deny).
+required_capabilities: []
+
+# Declaration of observable effects (closed enum of types: service / file /
+# package / port / user / group / directory / cron / mount). Used by
+# Augur-RBAC and by the audit. TODO: fill in with the module's real resources.
+side_effects: []
+
+spec:
+  # spec.states.<state>.input - description of the module's input parameters for each
+  # state. Used by soul-lint when validating a destiny step's `params:` against
+  # the manifest AND by the backend to build the module's form in the UI (ADR-045).
+  # type in {string, int, bool, list, map}. required/secret/default - optional flags.
+  # See docs/keeper/plugins.md -> spec.soul_module, docs/input.md -> param-DSL.
+  #
+  # IMPORTANT (semantic rule input_secret_without_vault_pattern,
+  # shared/plugin/manifest.go): any secret parameter MUST have
+  # pattern: "^vault:.*" - without it, validate-manifest fails with an error.
+  # The only allowed pattern for secret is exactly `^vault:.*`.
+  states:
+    present:
+      description: "Resource exists with the requested parameters"
+      input:
+        name:
+          type: string
+          required: true
+          description: "Resource name"
+
+        # --- Sample param-DSL for the module's form (ADR-045) ---
+        # Below are live examples of all form fields. The backend builds the form from them:
+        # dropdown / cluster-picker / typed-list / textarea. Delete what you do not need,
+        # substitute your own parameters. See the commented-out blocks at the end.
+
+        # enum - closed-set: the UI renders a dropdown, the validator rejects values outside the list.
+        mode:
+          type: string
+          enum: [strict, relaxed]
+          default: strict
+          description: "Application mode (closed-set: strict|relaxed)."
+
+        # pattern - regex validation of a free-form string.
+        owner:
+          type: string
+          pattern: "^[a-z_][a-z0-9_-]*$"
+          description: "Resource owner (unix-username-like)."
+
+        # format + source - cluster-aware picker. format: sid gives FQDN validation,
+        # source points to the catalog of values (incarnation_hosts - all SIDs of the incarnation;
+        # alternative - choir: <name>, see the commented-out example below).
+        target_host:
+          type: string
+          format: sid
+          source: { incarnation_hosts: true }
+          description: "SID (FQDN) of the target host; the UI provides a picker over the incarnation's hosts."
+
+        # items - typed list (list[int]): the UI renders a list of int fields,
+        # not a free-form list of strings. For list/array, items is the type of the ELEMENT.
+        ports:
+          type: list
+          items: { type: int }
+          description: "List of ports (typed list[int])."
+
+        # items on a map - the type of the VALUE (map[string]string): KEY->VALUE pairs.
+        labels:
+          type: map
+          items: { type: string }
+          description: "Arbitrary labels (KEY: VALUE)."
+
+        # multiline + example - a large textarea with a placeholder hint.
+        # Purely UI hints (not checked by the validator), but they help the operator.
+        script:
+          type: string
+          multiline: true
+          example: "set -euo pipefail\necho hello"
+          description: "Apply script (multiline)."
+
+        # Example of a secret parameter (vault-ref is mandatory, pattern exactly ^vault:.*):
+        # password:
+        #   type: string
+        #   required: true
+        #   secret: true
+        #   pattern: "^vault:.*"
+        #   description: "Vault-ref for password (format: vault:secret/<path>#<key>)"
+        #
+        # Alternative source - a specific Choir party of the incarnation (ADR-044):
+        # primary:
+        #   type: string
+        #   format: sid
+        #   source: { choir: writers }
+        #   description: "SID from the Choir party 'writers' (cluster-aware picker)."
+    absent:
+      description: "Resource is absent"
+      input:
+        name:
+          type: string
+          required: true
+          description: "Resource name"

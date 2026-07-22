@@ -1,0 +1,28 @@
+kind: soul_module
+protocol_version: 1
+namespace: core
+name: repo
+
+required_capabilities:
+  - fs_write_root
+
+spec:
+  states:
+    present:
+      description: Package repository declared (description file + GPG key); apt/dnf/yum/apk. ADR-015/ADR-016.
+      input:
+        name:       { type: string, required: true, description: "Repository name (= description file name, [A-Za-z0-9._-])." }
+        uri:        { type: string, required: true, description: "Repository URL (http/https; http produces a mandatory warning)." }
+        gpg_key:      { type: string, description: "GPG key (supply-chain): apt - inline armored/binary keyring; dnf/yum - URL or path in gpgkey=. Key-by-URL for apt - via core.url.fetched (ADR-071 option B)." }
+        gpg_key_path: { type: string, description: "Path to a GPG key already present on the host: apt -> signed-by=<path>, dnf/yum -> gpgkey=<path>. The module only references it (no copy) and guards its existence on plan/apply. Mutually exclusive with gpg_key; deliver the key first (core.url.fetched/core.file). Not for apk." }
+        dest:         { type: string, description: "Absolute path of the repo description file, overriding the backend default (apt /etc/apt/sources.list.d/<name>.list; dnf/yum /etc/yum.repos.d/<name>.repo). Not for apk (single repositories file)." }
+        gpg_check:  { type: bool,   description: "Verify package signatures (default true; opt-out produces a warning)." }
+        suite:      { type: string, description: "apt suite/distribution (e.g. stable)." }
+        components: { type: list,   items: { type: string }, description: "apt components (e.g. [main, contrib])." }
+        arch:       { type: list,   items: { type: string }, description: "apt repo architectures (e.g. [amd64]) -> arch= in options; apt only, [a-z0-9]." }
+        enabled:    { type: bool,   description: "Repository is enabled (default true)." }
+    absent:
+      description: Repository description removed (GPG key is not touched).
+      input:
+        name: { type: string, required: true, description: "Repository name (= description file name)." }
+        dest: { type: string, description: "Absolute path of the repo description file to remove, if it was created with a custom dest (apt/dnf/yum)." }

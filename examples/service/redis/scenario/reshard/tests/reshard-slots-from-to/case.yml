@@ -1,0 +1,68 @@
+# L0 trial reshard: move N slots from master `from` to master `to`. Run roster —
+# 3 hosts (3-master cluster); from=node-1, to=node-2, slots=100.
+# The scenario builds a READY topology map (from/to = primary_ip:6379 by SID from the
+# roster) and calls the plugin run_once. The SELECTION of the first N source slots and the
+# actual transfer (SETSLOT/MIGRATE/SETSLOT NODE) is done by the PLUGIN at runtime via
+# CLUSTER NODES — invisible at L0 (render does not execute Redis); ordering/losslessness are
+# proven by plugin tests (cluster_test.go). ★ reshard is NOT idempotent — it's imperative,
+# L0 does not "prove" this (see per-module doc); here we check the render contract.
+name: reshard slots from source to target master
+
+fixtures:
+  default_destiny_source: "file://../../destiny/{name}"
+  hosts:
+    - sid: node-1.example.com
+      covens: [reshard, redis]
+      soulprint:
+        network: { primary_ip: 10.0.0.1 }
+        os: { arch: amd64 }
+    - sid: node-2.example.com
+      covens: [reshard, redis]
+      soulprint:
+        network: { primary_ip: 10.0.0.2 }
+        os: { arch: amd64 }
+    - sid: node-3.example.com
+      covens: [reshard, redis]
+      soulprint:
+        network: { primary_ip: 10.0.0.3 }
+        os: { arch: amd64 }
+  # ★ REDESIGN default_admin (2026-06-30): connecting to cluster nodes is done under the
+  # system default_admin (username → AUTH), its password from the
+  # secret/redis/<inc>/users/default_admin#password branch. The previous main secret
+  # secret/redis/<inc>#password is DROPPED.
+  vault:
+    secret/redis/reshard/users/default_admin:
+      password: default-admin-secret-pass
+  state:
+    redis_type: cluster
+    redis_version: ""
+    redis_config:
+      maxmemory: "256mb"
+      cluster-enabled: "yes"
+      cluster-config-file: "nodes.conf"
+      cluster-node-timeout: "5000"
+    redis_users: []
+    redis_hosts: []
+
+  input:
+    from_sid: node-1.example.com
+    to_sid: node-2.example.com
+    slots: 100
+
+assert:
+  # GUARD — assert: (from != to, both in roster → that[0] true → render passes,
+  # task not emitted into the plan).
+  task_present:
+    # RESHARD run_once: endpoints from the roster by SID. from=node-1, to=node-2,
+    # slots=100 (int() → native number). password from vault. The only
+    # community.redis.cluster in the plan.
+    - module: community.redis.cluster
+      params_subset:
+        action: reshard
+        username: default_admin
+        password: default-admin-secret-pass
+        slots: 100
+        from:
+          addr: "10.0.0.1:6379"
+        to:
+          addr: "10.0.0.2:6379"

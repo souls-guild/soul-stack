@@ -1,0 +1,256 @@
+# Soul Stack CI. The gate lives in the Makefile (`make check`), the workflow only
+# reproduces the environment and runs the targets. The decision is fixed in the project
+# CLAUDE.md (CI locally in the Makefile, GH Actions is a thin wrapper).
+#
+# Portability: owner/repo is not hardcoded anywhere (the repository is temporary, it will
+# move later). module-path in go.mod is a placeholder, go.work resolves modules locally
+# from the checkout, no rename needed.
+name: CI
+
+on:
+  push:
+  pull_request:
+    branches: [main]
+
+# Cancel stale runs on the same branch/PR — saves runners.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  # Codegen toolchain is pinned against the committed `proto/gen/go` — otherwise `check-gen`
+  # catches drift. Versions are taken from the headers of the generated code:
+  #   protoc        v7.34.1  (libprotoc 34.1)
+  #   protoc-gen-go v1.36.11
+  #   protoc-gen-go-grpc v1.6.2
+  # protoc-gen-go writes the string `protoc vX` right into the .pb.go header, so
+  # the apt version of protoc (older) would break idempotency — we install exactly 34.1.
+  PROTOC_VERSION: "34.1"
+  PROTOC_GEN_GO_VERSION: "v1.36.11"
+  PROTOC_GEN_GO_GRPC_VERSION: "v1.6.2"
+  GO_VERSION: "1.26.4"
+
+jobs:
+  # Main required gate. Fully reproduces `make check`:
+  # check-fmt vet build test check-gen check-openapi lint.
+  check:
+    name: check (make check)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Setup Go
+        uses: actions/setup-go@v7
+        with:
+          # Explicit version from go.work (toolchain 1.26.4). go-version-file: go.work
+          # is also supported by setup-go, but an explicit pin is clearer and doesn't depend on
+          # parsing the `toolchain` string.
+          go-version: ${{ env.GO_VERSION }}
+          # setup-go caches ~/go/pkg/mod and the build cache keyed by the go.sum hash of all
+          # go.work modules — built-in cache, no separate actions/cache needed.
+          cache-dependency-path: |
+            keeper/go.sum
+            proto/go.sum
+            proto/plugin/go.sum
+            sdk/go.sum
+            shared/go.sum
+            soul/go.sum
+            soul-lint/go.sum
+            soulctl/go.sum
+            tests/e2e/go.sum
+
+      # protoc is needed by the `check-gen` target (via `gen`). Version is pinned: otherwise
+      # the `protoc vX` header in generated code would diverge from the committed one.
+      - name: Install protoc ${{ env.PROTOC_VERSION }}
+        run: |
+          set -euo pipefail
+          ZIP="protoc-${PROTOC_VERSION}-linux-x86_64.zip"
+          URL="https://github.com/protocolbuffers/protobuf/releases/download/v${PROTOC_VERSION}/${ZIP}"
+          curl -fsSL -o /tmp/protoc.zip "$URL"
+          sudo unzip -o -q /tmp/protoc.zip -d /usr/local
+          protoc --version
+
+      # protoc plugins — via go install of pinned versions; they land in
+      # $(go env GOPATH)/bin, which the Makefile forwards into PATH itself.
+      - name: Install protoc-gen-go plugins
+        run: |
+          set -euo pipefail
+          go install google.golang.org/protobuf/cmd/protoc-gen-go@${PROTOC_GEN_GO_VERSION}
+          go install google.golang.org/grpc/cmd/protoc-gen-go-grpc@${PROTOC_GEN_GO_GRPC_VERSION}
+          echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
+
+      - name: make check
+        run: make check
+
+  # L3a fast-loop E2E (ADR-039): testcontainers (PG+Redis+Vault) + Keeper process +
+  # soul-stub. Depends on check (no point running e2e if the base gate failed) and
+  # requires a built keeper binary (harness/stack.go spawns a sub-process, the path
+  # is read from env KEEPER_BIN — see tests/e2e/harness/stack.go). Docker is available
+  # out of the box on ubuntu-latest — testcontainers bring up dependent services.
+  #
+  # Skip semantics of the pilot scaffold: without docker harness.NewStack does t.Skip; in
+  # CI docker is present → tests run for real. If e2e is still skeleton-only at this stage —
+  # `make e2e` returns 0 on an empty test list, the gate stays green.
+  e2e:
+    name: e2e (L3a fast-loop)
+    runs-on: ubuntu-latest
+    needs: check
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Setup Go
+        uses: actions/setup-go@v7
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache-dependency-path: |
+            keeper/go.sum
+            proto/go.sum
+            proto/plugin/go.sum
+            sdk/go.sum
+            shared/go.sum
+            soul/go.sum
+            soul-lint/go.sum
+            soulctl/go.sum
+            tests/e2e/go.sum
+
+      # protoc + plugins: `make build` pulls in `make gen` for modules whose
+      # packages include committed .pb.go (committed, but re-gen on a fresh checkout
+      # is not performed — pure build). Not actually needed for build, but we
+      # keep the environment complete — committed code builds anyway. Steps below
+      # are kept for symmetry with the check job (in case `make gen` is added to a
+      # pre-step). If it becomes a time bottleneck, it can be removed.
+      - name: Install protoc ${{ env.PROTOC_VERSION }}
+        run: |
+          set -euo pipefail
+          ZIP="protoc-${PROTOC_VERSION}-linux-x86_64.zip"
+          URL="https://github.com/protocolbuffers/protobuf/releases/download/v${PROTOC_VERSION}/${ZIP}"
+          curl -fsSL -o /tmp/protoc.zip "$URL"
+          sudo unzip -o -q /tmp/protoc.zip -d /usr/local
+          protoc --version
+
+      - name: Install protoc-gen-go plugins
+        run: |
+          set -euo pipefail
+          go install google.golang.org/protobuf/cmd/protoc-gen-go@${PROTOC_GEN_GO_VERSION}
+          go install google.golang.org/grpc/cmd/protoc-gen-go-grpc@${PROTOC_GEN_GO_GRPC_VERSION}
+          echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
+
+      # Keeper binary is needed by the harness (sub-process spawn). Build it explicitly before e2e.
+      - name: make build (keeper + soul + soul-lint + soulctl)
+        run: make build
+
+      - name: make e2e
+        env:
+          # The harness reads KEEPER_BIN (see tests/e2e/harness/stack.go).
+          # `make build` puts the binary at keeper/bin/keeper, GITHUB_WORKSPACE is
+          # the checkout root.
+          KEEPER_BIN: ${{ github.workspace }}/keeper/bin/keeper
+        run: make e2e
+
+      # Test artifacts on failure — keeper process logs, fixture dumps, etc.
+      # The directories are created by the harness (if it writes them); if absent — upload
+      # skips the step (if-no-files-found: ignore).
+      - name: Upload e2e artifacts on failure
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: e2e-logs
+          if-no-files-found: ignore
+          path: |
+            tests/e2e/_artifacts/
+            /tmp/keeper-*.log
+            /tmp/keeper-dev/
+
+  # Integration tests under the `integration` build tag (testcontainers-go).
+  # Docker is available on ubuntu-latest → testcontainers bring up containers themselves
+  # (postgres:16-alpine etc.). Separate job so as not to slow down the required gate.
+  #
+  # COVERAGE: runs the entire `make test-integration` (go test -tags=integration
+  # -race -count=1 across all go.work modules). Tests that need NON-testcontainers
+  # infra (a pre-started Vault/Redis cluster etc.) must skip themselves on
+  # missing environment (t.Skip). If such a test hard-fails in a clean CI run —
+  # that's a signal for the test author to add a skip-guard, not a reason to fix the workflow.
+  # Job BLOCKING: integration is part of the required gate (P0-7).
+  #
+  # The earlier "6 flaky" note was wrong: these were NOT flakes but deterministic
+  # test↔contract desyncs (history tests) + a contract bug of PascalCase-wire in three
+  # list/history handlers (an untagged domain *View went straight to Body, bypassing the projection →
+  # PascalCase JSON keys instead of the snake_case schema). All six were fixed deterministically
+  # (4 stale test↔contract + 2 history) + a guard TestIntegration_ListEndpoints_
+  # SnakeCaseWire catches the whole class going forward → continue-on-error removed.
+  integration:
+    name: integration tests (testcontainers)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Setup Go
+        uses: actions/setup-go@v7
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache-dependency-path: |
+            keeper/go.sum
+            proto/go.sum
+            proto/plugin/go.sum
+            sdk/go.sum
+            shared/go.sum
+            soul/go.sum
+            soul-lint/go.sum
+            soulctl/go.sum
+            tests/e2e/go.sum
+
+      - name: make test-integration
+        run: make test-integration
+
+  # Vulnerability scanner across Go modules. Blocking: a supply-chain advisory must
+  # stop the merge (P0-7, docs/prod-readiness.md). At the time of enabling,
+  # govulncheck is clean across all modules (`make check-vuln` is green) — the gate doesn't
+  # mask existing findings. A transient vuln-DB failure is fixed by rerunning the
+  # job, not by ignoring the result.
+  govulncheck:
+    name: govulncheck
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Setup Go
+        uses: actions/setup-go@v7
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache-dependency-path: |
+            keeper/go.sum
+            proto/go.sum
+            proto/plugin/go.sum
+            sdk/go.sum
+            shared/go.sum
+            soul/go.sum
+            soul-lint/go.sum
+            soulctl/go.sum
+
+      - name: Install govulncheck
+        run: go install golang.org/x/vuln/cmd/govulncheck@latest
+
+      # govulncheck doesn't understand go.work directly — we run it per module.
+      # The module list stays in sync with MODULES in the Makefile. A module without
+      # Go packages (empty `go list ./...`) is skipped, otherwise govulncheck fails on
+      # "no packages".
+      - name: Run govulncheck per module
+        run: |
+          set -euo pipefail
+          export PATH="$(go env GOPATH)/bin:$PATH"
+          for m in proto proto/plugin shared sdk keeper soul soul-lint soulctl; do
+            if [ -z "$(cd "$m" && go list ./... 2>/dev/null)" ]; then
+              echo "skip $m (no Go packages)"
+              continue
+            fi
+            echo "govulncheck ./... in $m"
+            (cd "$m" && govulncheck ./...)
+          done

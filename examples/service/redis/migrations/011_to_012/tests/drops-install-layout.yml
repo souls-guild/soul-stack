@@ -1,0 +1,43 @@
+name: drops-install-layout
+description: >
+  The v11 incarnation carries install + host-layout (conf_dir/data_dir/modules_base_url) in
+  state. The migration REMOVES all four fields (moved to essence, Variant A). The rest of the
+  state (redis_type/redis_config/redis_users/tls/persistence/topology) passes
+  through bit-for-bit.
+
+state_before:
+  redis_type: "cluster"
+  redis_config:
+    maxmemory: "256mb"
+    appendonly: "yes"
+  redis_users:
+    - { name: "app", perms: "~* +@all", state: "on" }
+  tls:
+    enable: true
+    only: false
+    port: 7379
+  persistence: "rdb_aof_1sec"
+  install:
+    method: "binary"
+    base_url: "https://artifacts.example.com/redis/binaries"
+    version: "8.0.1"
+  conf_dir: "/opt/redis"
+  data_dir: "/srv/redis-data"
+  modules_base_url: "https://artifacts.example.com/redis/modules"
+  shards: 3
+  replicas: 1
+
+state_after:
+  redis_type: "cluster"
+  redis_config:
+    maxmemory: "256mb"
+    appendonly: "yes"
+  redis_users:
+    - { name: "app", perms: "~* +@all", state: "on" }
+  tls:
+    enable: true
+    only: false
+    port: 7379
+  persistence: "rdb_aof_1sec"
+  shards: 3
+  replicas: 1

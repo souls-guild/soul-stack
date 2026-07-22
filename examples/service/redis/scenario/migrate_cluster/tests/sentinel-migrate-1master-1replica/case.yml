@@ -1,0 +1,300 @@
+# L0 test of migrate_cluster in sentinel mode (S1 pilot, happy-path, existing target).
+# Multi-host roster of 2 hosts (replicas_per_master=1 -> topology 1+1=2). Master
+# election: first by SID (node-1) = master of the new cluster; node-2 = replica.
+# External source is the old cluster at 10.9.0.1:6379 (source.hosts[0]).
+#
+# Render-only, hermetic. The migrate_cluster dispatcher includes cluster.yml +
+# sentinel.yml via CONDITIONAL-INCLUDE (when: on include): on the sentinel run
+# the cluster branch is a group-drop (statically-false when), sentinel.yml
+# expands. sentinel.yml includes the SHARED service-level deploy body
+# (scenario/redis-deploy-sentinel.yml, the same one create/sentinel.yml shares)
+# + adds 2 migration steps.
+#
+# What we assert (slice acceptance criterion):
+#   1. deploy tasks (from redis-deploy-sentinel.yml = deploying the new
+#      cluster): redis.conf render, IN-cluster community.redis.replica (where
+#      master-excluded) - the cluster is actually raised (migration = create +
+#      seeding from outside).
+#   1b. * SPLIT-BRAIN FIX: SENTINEL MONITOR (community.redis.sentinel) does NOT
+#       execute during migration (task_absent). The deploy body proxies
+#       compute.sentinel_monitor_now into a task-var and gates step 4 on
+#       when: vars.sentinel_monitor_now; for migrate_cluster=false ->
+#       static-when placeholder-skip (Params=nil) -> the presence matcher does
+#       NOT fire on it (skip != present). sentinel daemons still come up
+#       (step 1), but the MONITOR command isn't issued: while the new master
+#       replicates the external source, it's in role:slave - an early MONITOR
+#       would trigger a failover. The actual MONITOR is issued by
+#       detach_source AFTER REPLICAOF NO ONE (see the detach case
+#       sentinel-detach-source).
+#   2. * MIGRATION: community.redis.replica with source_external:true,
+#      master_addr=external source (10.9.0.1:6379), master_password =
+#      vault(source.password_ref). DIFFERS from the in-cluster replica by
+#      master_addr/source_external (presence disambiguates).
+#   3. * offset-gate: community.redis.offset-synced, source_addr=external
+#      source, lag_threshold=0 (default verify).
+#   4. state_changes: create set + seeded_from {source_endpoints:[source], detached:false}.
+#
+# NOTE L0 limitation (like sentinel-create): apply.input is host-invariant in
+# the pilot (resolved on the FIRST targeted host) -> render_context.self in
+# destiny = node-1 (master).
+name: sentinel migrate raises a new cluster and seeds it from an external source
+
+fixtures:
+  default_destiny_source: "file://../../destiny/{name}"
+  # Order deliberately unsorted (2, 1) - the harness and master-election sort by SID.
+  hosts:
+    - sid: node-2.example.com
+      covens: [migrate_cluster, redis]
+      soulprint:
+        network: { primary_ip: 10.0.0.2 }
+        os: { arch: amd64 }
+    - sid: node-1.example.com
+      covens: [migrate_cluster, redis]
+      soulprint:
+        network: { primary_ip: 10.0.0.1 }
+        os: { arch: amd64 }
+  vault:
+    secret/redis/migrate_cluster:
+      password: s3cr3t-redis-pass-migrate
+    # * default_admin REDESIGN (2026-06-30): default_admin is the system user
+    # for in-cluster AUTH (auth_pass/PING deploy steps read it via the users/<name> branch).
+    secret/redis/migrate_cluster/users/default_admin:
+      password: default-admin-secret-pass
+    secret/redis/migrate_cluster/users/replica:
+      password: replica-sys-secret-pass
+    secret/redis/migrate_cluster/users/monitoring:
+      password: monitoring-sys-secret-pass
+    secret/redis/migrate_cluster/users/sentinel:
+      password: sentinel-sys-secret-pass
+    secret/redis/migrate_cluster/users/haproxy:
+      password: haproxy-sys-secret-pass
+    # * Credentials of the EXTERNAL source under the pattern-guard
+    # secret/redis/migrate/*. Read via the author channel
+    # vault(input.source.password_ref) - password_ref = below in input.
+    secret/redis/migrate/oldcluster:
+      password: old-cluster-source-pass
+  essence:
+    # install_method is in essence (author-context): install method is NOT
+    # operator-input (covenant.compute.install reads
+    # default(essence.install_method, 'binary')). package explicitly - distro
+    # pin =version, as the case checked before the covenant rollout (the field
+    # moved input->essence together with migrate, catching up with the
+    # create redesign 2026-06-28).
+    install_method: package
+    redis_type: sentinel
+    sentinel_master_name: master
+    modules_base_url: "https://artifacts.example.com/redis/modules"
+    memory_reserve_percent: 75
+    # * Redesign: substrate for per-master sentinel directives
+    # (compute.sentinel_directives / state.redis_sentinel.master_settings).
+    # Defaults for the removed fields sentinel_down_after_ms=5000 /
+    # sentinel_failover_timeout_ms=60000 moved here.
+    sentinel_master_defaults:
+      down-after-milliseconds: "5000"
+      failover-timeout: "60000"
+    persistence_presets:
+      rdb:
+        save: "900 1 300 10 60 10000"
+        appendonly: "no"
+    redis_config:
+      maxmemory:        "256mb"
+      maxmemory-policy: allkeys-lru
+      maxclients:       10000
+      timeout:          300
+    system_acl_users:
+      default_admin: "~* &* +@all"
+      replica:    "+psync +replconf +ping"
+      monitoring: "-@all +@connection +client +ping +info +config|get +cluster|info +slowlog +latency +memory +select +command|count +command|docs"
+      sentinel:   "allchannels +multi +slaveof +ping +exec +subscribe +config|rewrite +role +publish +info +client|setname +client|kill +script|kill"
+      haproxy:    "-@all +auth +client|getname +client|id +client|setname +command +hello +ping +role +info +cluster|info"
+    system_acl_users_sentinel:
+      default_admin: "allchannels allkeys +@all"
+      monitoring: "-@all +@connection -command +client -hello +info -auth +sentinel|masters +sentinel|replicas +sentinel|slaves +sentinel|sentinels +sentinel|ckquorum"
+      sentinel:   "allchannels -@all +auth +client|getname +client|id +client|setname +command +hello +ping +sentinel|is-master-down-by-addr +publish +role +sentinel|get-master-addr-by-name +sentinel|master +sentinel|myid +sentinel|replicas +sentinel|sentinels"
+      haproxy:    "-@all +auth +client|getname +client|id +client|setname +command +hello +ping +role +sentinel|get-master-addr-by-name +sentinel|master +sentinel|myid +sentinel|replicas +sentinel|sentinels"
+  input:
+    redis_type: sentinel
+    # * version - enum of builds rolled out to Nexus (redesign). 7.4.1 (major
+    # 7 < 8 -> module version-gate not active, .so's load). install_method
+    # moved to essence (above) - NOT operator-input after the covenant rollout.
+    version: "7.4.1"
+    replicas_per_master: 1
+    # connection_mode omitted -> plain (default): TLS off, plain port.
+    # sentinel_settings/sentinel_master_settings omitted ->
+    # compute.sentinel_directives = essence defaults
+    # (down-after-milliseconds=5000/failover-timeout=60000).
+    # * External source: coordinates + Vault PATH to the password (under pattern-guard).
+    source:
+      hosts:
+        - "10.9.0.1:6379"
+        - "10.9.0.2:6379"
+      password_ref: "secret/redis/migrate/oldcluster#password"
+      tls: false
+    # verify omitted -> lag_threshold default 0, skip_checksum default false.
+
+assert:
+  task_present:
+    # -- redis-deploy-sentinel.yml (deploying the new cluster): redis.conf render --
+    # render_context.self = node-1 (master, apply.input host-invariant).
+    # Disambiguator from users.acl/sentinel.conf/hardening (same core.file.rendered) - path.
+    - module: core.file.rendered
+      params_subset:
+        path: /etc/redis/redis.conf
+        template_content: "<present>"
+        mode: "0640"
+        owner: redis
+        group: redis
+        render_context:
+          vars:
+            conf_dir: /etc/redis
+            data_dir: /var/lib/redis
+            port: 6379
+            run_dir: /var/run/redis
+            log_dir: /var/log/redis
+            loadmodules:
+              - /var/lib/redis/modules/redisbloom.so
+              - /var/lib/redis/modules/rejson.so
+              - /var/lib/redis/modules/redisearch.so
+              - /var/lib/redis/modules/redistimeseries.so
+            config:
+              # * default_admin REDESIGN: replica->master AUTH (masteruser/
+              # masterauth) arrives as ORDINARY config directives (the
+              # sentinel deploy body fills them in via vault()-in-cell) ->
+              # redis.conf ranges over them like any directive -> statically
+              # survives restart.
+              masteruser:       "default_admin"
+              masterauth:       "default-admin-secret-pass"
+              maxmemory:        "256mb"
+              maxmemory-policy: allkeys-lru
+              maxclients:       10000
+              timeout:          300
+              save:             "900 1 300 10 60 10000"
+              appendonly:       "no"
+          self:
+            sid: node-1.example.com
+            covens: [migrate_cluster, redis]
+            choirs: []
+            traits: {}
+            role: ""
+            network:
+              primary_ip: 10.0.0.1
+            os:
+              arch: amd64
+          role: ""
+          essence: {}
+
+    # -- deploy body: IN-cluster REPLICAOF (community.redis.replica) --------------
+    # addr=127.0.0.1:6379 (per-host local), master_addr=10.0.0.1:6379
+    # (master-election node-1). where: master-excluded -> only on node-2 (the
+    # replica). DIFFERS from source-replica (step below) by master_addr
+    # (10.0.0.1 INTERNAL vs 10.9.0.1 EXTERNAL) and lack of source_external -
+    # presence disambiguates both by params_subset.
+    - module: community.redis.replica
+      params_subset:
+        addr: "127.0.0.1:6379"
+        master_addr: "10.0.0.1:6379"
+        # * default_admin REDESIGN: in-cluster replica->master AUTH under default_admin.
+        username: default_admin
+        password: default-admin-secret-pass
+
+    # -- MIGRATION: REPLICAOF to the EXTERNAL source (community.redis.replica, source_external) --
+    # run_once on node-1 (master of the new cluster). master_addr=10.9.0.1:6379
+    # (source.hosts[0]), source_external:true, master_password =
+    # vault(source.password_ref). Disambiguator from the in-cluster replica -
+    # source_external:true + master_addr=external.
+    - module: community.redis.replica
+      params_subset:
+        addr: "127.0.0.1:6379"
+        master_addr: "10.9.0.1:6379"
+        source_external: true
+        # * default_admin REDESIGN: LOCAL connection under default_admin
+        # (username/password); master_username/master_password are the
+        # credentials of the EXTERNAL source (its requirepass).
+        username: default_admin
+        password: default-admin-secret-pass
+        master_password: old-cluster-source-pass
+        master_tls: false
+
+    # -- MIGRATION: offset-gate (community.redis.offset-synced) -------------------
+    # run_once on node-1. source_addr=10.9.0.1:6379 (external),
+    # lag_threshold=0 (default verify), skip_checksum=false.
+    # source_password = vault(source.password_ref).
+    - module: community.redis.offset-synced
+      params_subset:
+        addr: "127.0.0.1:6379"
+        source_addr: "10.9.0.1:6379"
+        # * default_admin REDESIGN: LOCAL connection under default_admin; source_password is the source.
+        username: default_admin
+        password: default-admin-secret-pass
+        source_password: old-cluster-source-pass
+        lag_threshold: 0
+        skip_checksum: false
+
+  # * SPLIT-BRAIN FIX (1b): SENTINEL MONITOR does NOT execute during
+  # migration. The deploy body gates step 4 on when:
+  # vars.sentinel_monitor_now (=compute.sentinel_monitor_now=false for
+  # migrate_cluster) -> static-when placeholder-skip (Params=nil) -> the
+  # presence matcher does NOT fire on it (skip != present). Proves that the
+  # new master is NOT monitored by sentinel while it replicates the external
+  # source (otherwise failover -> split-brain). MONITOR moved to
+  # detach_source (sentinel-detach-source case).
+  task_absent:
+    - module: community.redis.sentinel
+
+  # create set state + seed-source read-model. redis_config WITHOUT cluster
+  # directives (sentinel). seeded_from: source_endpoints = source.hosts IN
+  # FULL, detached:false (source still alive - detach_source will detach it).
+  # WITHOUT timestamp (L0 determinism).
+  state_changes:
+    redis_type: sentinel
+    redis_version: "7.4.1"
+    redis_config:
+      maxmemory:        "256mb"
+      maxmemory-policy: allkeys-lru
+      maxclients:       10000
+      timeout:          300
+      save:             "900 1 300 10 60 10000"
+      appendonly:       "no"
+    redis_users: []
+    redis_hosts: []
+    # * Redesign: redis_sentinel carries GENERALIZED maps (master_settings/settings)
+    # instead of named down_after_ms/failover_timeout_ms. master_settings =
+    # essence defaults (input.sentinel_master_settings not set) ->
+    # down-after-milliseconds=5000/failover-timeout=60000; settings={}
+    # (sentinel_settings not set). quorum=0 (AUTO).
+    redis_sentinel:
+      master_name: master
+      quorum: 0
+      master_settings:
+        down-after-milliseconds: "5000"
+        failover-timeout: "60000"
+      settings: {}
+    replicas: 1
+    sentinel_quorum: 0
+    shards: 0
+    persistence: rdb
+    maxmemory_policy: ""
+    # connection_mode=plain (default, TLS off); io_threads=0 (default, directive not written).
+    connection_mode: plain
+    io_threads: 0
+    tls:
+      enable:   false
+      only:     false
+      port:     7379
+      cert_ref: ""
+      key_ref:  ""
+      ca_ref:   ""
+    memory_mb: 0
+    modules: [bloom, json, search, timeseries]
+    sysctl_settings: {}
+    # * seed-source read-model (v10): where migrated from + detached:false +
+    # REFS to the source credentials. source_password_ref =
+    # input.source.password_ref (persisted for detach-gate);
+    # source_tls_ca_ref='' (input.source.tls_ca_ref not set, tls:false).
+    seeded_from:
+      source_endpoints:
+        - "10.9.0.1:6379"
+        - "10.9.0.2:6379"
+      detached: false
+      source_password_ref: "secret/redis/migrate/oldcluster#password"
+      source_tls_ca_ref: ""

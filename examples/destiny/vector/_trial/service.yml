@@ -1,0 +1,18 @@
+# service.yml of the destiny vector L0-wrapper (Trial, ADR-023).
+#
+# The wrapper is not a real service: its only role is to give the standalone destiny vector
+# a render-only L0-check via scenario apply:destiny. The apply:destiny resolution mirrors
+# PROD (slice A): name -> service.yml::destiny[] + URL from default_destiny_source
+# (case.yml). So even the wrapper needs a service.yml with a declared dependency.
+name: trial-vector
+state_schema_version: 1
+description: >-
+  L0-harness for destiny vector (ADR-023). Not a service - a scenario wrapper for render-only
+  Trial. state_schema here is nominal (Trial L0 doesn't assert it). destiny arch comes
+  directly from soulprint.self.os.arch (apply:input doesn't pass it).
+
+state_schema:
+  type: object
+
+destiny:
+  - { name: vector, ref: v1.0.0 }

@@ -1,0 +1,49 @@
+# tasks/main.yml - destiny dragonfly entry point. Include-list only: logical
+# groups are split into sibling files, expanded inline BEFORE render (docs/destiny/
+# tasks.md §4 - within-destiny include is expanded into a flat list). Sees ONLY its own
+# input: (isolation, ADR-009).
+#
+# Per-host brick for DragonFly (data plane of a single instance): install DragonFly + render
+# flagfile/users.acl/PEM + service + host-tuning. Config arrives as a READY merged map via
+# apply: input: config: - destiny does not merge anything (merge is done by scenario).
+#
+# * DragonFly vs redis: structure mirrors redis-main WITHOUT data-plane extras -
+#   no modules.yml (DragonFly does not load redis .so modules) and no Redis 8+ version-guard.
+#
+# * SENTINEL - NOT HERE (refactor "sentinel out of destiny redis"): DragonFly does not carry
+#   redis-sentinel; instead a distributed sentinel daemon deploys destiny `redis` in full
+#   in sentinel_only mode (deploy_redis=false). The dragonfly service scenario makes a SECOND
+#   apply:destiny:redis alongside this one (two apply:destiny in one scenario, ADR-009). Hence
+#   sentinel.yml/sentinel-templates/sentinel-input from THIS destiny are REMOVED (duplicate dropped) -
+#   the `dragonfly` brick is strictly responsible for the DragonFly data plane.
+#
+# Pipeline overview (include order = task order). The mode-gate sits ON the include
+# (conditional-include, ADR-009 amendment): a static input-predicate on the include-task
+# REALLY excludes the group from the plan (render-phase group-drop), rather than a placeholder
+# skip. So a disabled include (server when deploy_dragonfly=false) is PHYSICALLY
+# absent. L0-cases assert via presence matcher (task_present/task_absent), for which
+# group-drop is safe (positional indices don't matter).
+#
+#   install.yml  - DragonFly install (dispatched by install.method: package distro-deb
+#                  dragonfly / binary upstream-tarball) + redis-tools (redis-cli for
+#                  health-gate / REPLICAOF plugin, DragonFly doesn't carry it). The binary branch
+#                  carries ITS OWN restart here (per-file linter forbids cross-file
+#                  register onchanges);
+#   server.yml   - dragonfly data plane (gated deploy_dragonfly ON include): PEM ->
+#                  users.acl -> dragonfly.conf (flagfile) -> core.service. deploy_dragonfly=false
+#                  -> group-drop;
+#   extras.yml   - host-tuning (THP-unit / logrotate / sysctl), all UNCONDITIONAL;
+#
+# Include gates are static input-predicates (conditional-include requires input./essence./
+# incarnation./vars.; register./soulprint. on include is forbidden). has()-guard in each one -
+# render-safety for an absent dict (tls in plaintext mode).
+#
+# No explicit daemon-reload steps: core.service (daemon_reload: auto, default) itself rereads
+# the systemd configuration when the unit file changes BEFORE start/restart.
+
+- include: install.yml
+
+- include: server.yml
+  when: "default(input.deploy_dragonfly, true)"
+
+- include: extras.yml

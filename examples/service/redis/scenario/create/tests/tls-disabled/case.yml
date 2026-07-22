@@ -1,0 +1,180 @@
+# L0 trial (ADR-023): TLS DISABLED (default). Guard: with tls_enable=false
+# (essence doesn't set tls_enable) TLS-render tasks are placeholder-skipped (not rendered,
+# files /etc/redis/tls/* are NOT created), and the merged config carries NO tls-* directives and
+# does NOT set port 0 (plain open). This is back-compat: an install without TLS is unchanged.
+name: tls disabled keeps plaintext config without tls directives or pem files
+
+fixtures:
+  default_destiny_source: "file://../../destiny/{name}"
+  hosts:
+    - sid: node-solo.example.com
+      covens: [create]
+      soulprint:
+        network: { primary_ip: 10.0.0.5 }
+        os: { arch: amd64 }
+  vault:
+    secret/redis/create:
+      password: s3cr3t-redis-pass-create
+    # Per-user secrets of system users (secret/redis/<inc>/users/<name>#password) —
+    # resolved by keeper-side vault() when merging system_acl_users into apply.input.users.
+    # ★ default_admin REDESIGN (2026-06-30): default_admin — the system user for
+    # intra-cluster AUTH (the deploy's auth_pass/PING steps read it via the users/<name> branch).
+    secret/redis/create/users/default_admin:
+      password: default-admin-secret-pass
+    secret/redis/create/users/replica:
+      password: replica-sys-secret-pass
+    secret/redis/create/users/monitoring:
+      password: monitoring-sys-secret-pass
+    secret/redis/create/users/sentinel:
+      password: sentinel-sys-secret-pass
+    secret/redis/create/users/haproxy:
+      password: haproxy-sys-secret-pass
+  essence:
+    redis_type: sentinel
+    sentinel_master_name: master
+    # ★ Redesign: per-master sentinel defaults substrate (under input.sentinel_master_settings).
+    sentinel_master_defaults:
+      down-after-milliseconds: "5000"
+      failover-timeout:        "60000"
+    modules_base_url: "https://artifacts.example.com/redis/modules"
+    # install_method — in essence (author-context, 2026-06-28): install method is NOT
+    # operator input. This case is about TLS directives, not install → package is set EXPLICITLY
+    # (distro redis-server, no binary URL; shorter redis.conf plan).
+    install_method: package
+    memory_reserve_percent: 75
+    persistence_presets:
+      rdb:
+        save: "900 1 300 10 60 10000"
+        appendonly: "no"
+    redis_config:
+      maxmemory:        "256mb"
+      maxmemory-policy: allkeys-lru
+      maxclients:       10000
+      timeout:          300
+    # tls_enable NOT set → default false. tls_*_ref not needed (vault not called).
+
+    # System ACL users for redis-server + the sentinel daemon (1:1 from essence/_default.yaml).
+    # BOTH ARE REQUIRED: guard create/sentinel.yml (assert 1b) aborts render if either
+    # set is empty (silent fail-open is not acceptable — without them replication/sentinel↔redis
+    # AUTH would break).
+    # ★ default_admin REDESIGN (2026-06-30): default_admin — the system user with full
+    # access (~* &* +@all) in BOTH sets (replaced the former requirepass default).
+    system_acl_users:
+      default_admin: "~* &* +@all"
+      replica:    "+psync +replconf +ping"
+      monitoring: "-@all +@connection +client +ping +info +config|get +cluster|info +slowlog +latency +memory +select +command|count +command|docs"
+      sentinel:   "allchannels +multi +slaveof +ping +exec +subscribe +config|rewrite +role +publish +info +client|setname +client|kill +script|kill"
+      haproxy:    "-@all +auth +client|getname +client|id +client|setname +command +hello +ping +role +info +cluster|info"
+    system_acl_users_sentinel:
+      default_admin: "allchannels allkeys +@all"
+      monitoring: "-@all +@connection -command +client -hello +info -auth +sentinel|masters +sentinel|replicas +sentinel|slaves +sentinel|sentinels +sentinel|ckquorum"
+      sentinel:   "allchannels -@all +auth +client|getname +client|id +client|setname +command +hello +ping +sentinel|is-master-down-by-addr +publish +role +sentinel|get-master-addr-by-name +sentinel|master +sentinel|myid +sentinel|replicas +sentinel|sentinels"
+      haproxy:    "-@all +auth +client|getname +client|id +client|setname +command +hello +ping +role +sentinel|get-master-addr-by-name +sentinel|master +sentinel|myid +sentinel|replicas +sentinel|sentinels"
+  input:
+    # ★ provision disabled (default-on: an omitted section = ENABLED; the case deploys onto a
+    # READY roster, cloud-create is not needed) → include redis-provision.yml group-drop.
+    provision:
+      enabled: false
+    redis_type: sentinel
+    # version REQUIRED: enum of builds shipped to Nexus (major < 8 → the version-gate
+    # for modules is not active). 7.4.1 — the 7.x series, like the former distro pin 7.2.4.
+    version: "7.4.1"
+    persistence: rdb
+    # single-host (1 host) → 0 replicas (redesign-2 default): size-guard sentinel = 1+0.
+    replicas_per_master: 0
+
+assert:
+  task_present:
+    # redis.conf: merged config WITHOUT tls-* and WITHOUT port 0 (plain open).
+    # Disambiguator from users.acl/hardening (same core.file.rendered) — path.
+    - module: core.file.rendered
+      params_subset:
+        path: /etc/redis/redis.conf
+        render_context:
+          vars:
+            # ★ default_admin REDESIGN: .vars.password is NO LONGER passed to the redis.conf
+            # template (requirepass removed from server.yml). AUTH is via default_admin (users.acl).
+            conf_dir: /etc/redis
+            data_dir: /var/lib/redis
+            port: 6379
+            run_dir: /var/run/redis
+            log_dir: /var/log/redis
+            # Exactly the default directives — NOT A SINGLE tls-* and NO port key (the plain
+            # port is set by redis.conf.tmpl statically as `port 6379`, not via a config key).
+            loadmodules:
+              - /var/lib/redis/modules/redisbloom.so
+              - /var/lib/redis/modules/rejson.so
+              - /var/lib/redis/modules/redisearch.so
+              - /var/lib/redis/modules/redistimeseries.so
+            config:
+              # ★ default_admin REDESIGN: replica→master AUTH (masteruser/
+              # masterauth) arrives as ORDINARY config directives (the sentinel
+              # deploy body merges them in via a vault()-in-cell) → redis.conf ranges
+              # over them like any directive → they statically survive a restart.
+              masteruser:       "default_admin"
+              masterauth:       "default-admin-secret-pass"
+              maxmemory: "256mb"
+              maxmemory-policy: allkeys-lru
+              maxclients: 10000
+              timeout: 300
+              save: "900 1 300 10 60 10000"
+              appendonly: "no"
+          self:
+            sid: node-solo.example.com
+            covens: [create]
+            choirs: []
+            # traits — registry projection (ADR-060), an empty object without labels.
+            traits: {}
+            role: ""
+            network:
+              primary_ip: 10.0.0.5
+            os:
+              arch: amd64
+          role: ""
+          essence: {}
+
+    # PING: tls=false (plain, no tls_ca), addr on 6379 (plain open). cluster/sentinel
+    # PING — placeholder-skip; disambiguator addr/args.
+    # ★ default_admin REDESIGN: AUTH via default_admin (username + its password from the
+    # users/default_admin branch), requirepass removed.
+    - module: community.redis.command
+      params_subset:
+        addr: "127.0.0.1:6379"
+        username: default_admin
+        password: default-admin-secret-pass
+        tls: false
+        tls_ca: ""
+        args: ["PING"]
+
+  task_absent:
+    # TLS disabled (tls_enable=false) → TLS dir and PEM cert are gated-placeholder-skip
+    # (params_subset path won't match a placeholder). Guard "no TLS means no PEM files".
+    - module: core.directory.present
+      params_subset:
+        path: /etc/redis/tls
+    - module: core.file.present
+      params_subset:
+        path: /etc/redis/tls/redis.crt
+
+  state_changes:
+    redis_type: sentinel
+    redis_version: "7.4.1"
+    # WITHOUT tls-* directives — symmetry with apply.input.config (drift-guard).
+    redis_config:
+      maxmemory: "256mb"
+      maxmemory-policy: allkeys-lru
+      maxclients: 10000
+      timeout: 300
+      save: "900 1 300 10 60 10000"
+      appendonly: "no"
+    redis_users: []
+    redis_hosts: []
+    # ★ Redesign: failover timings in master_settings (essence.sentinel_master_defaults);
+    # settings — global sentinel directives (not set → {}).
+    redis_sentinel:
+      master_name: master
+      quorum: 0
+      master_settings:
+        down-after-milliseconds: "5000"
+        failover-timeout: "60000"
+      settings: {}

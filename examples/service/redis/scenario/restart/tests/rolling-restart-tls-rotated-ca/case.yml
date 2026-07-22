@@ -1,0 +1,111 @@
+# L0-GUARD for the fix of a latent bug "CA from essence instead of state" (audit 2026-06-26).
+# Scenario-after-rotate_tls: state.tls.ca_ref has ALREADY been rewritten to the NEW Vault path
+# (rotate_tls changed the CA material and recorded the new ref in state). essence.tls_ca_ref
+# meanwhile stayed at the author default (rotate does NOT touch it) — it points at the OLD CA.
+#
+# ★ VERIFIED INVARIANT: the connect (compute.tls_ca) must resolve the CA from the
+# NAMED incarnation.state.tls.ca_ref (CURRENT, new), NOT from essence.tls_ca_ref
+# (stale). Before the fix tls_ca = vault(essence.tls_ca_ref) → connect with the OLD CA to a server
+# with a NEW cert → TLS verify fails → step failed → error_locked. This case catches the regression:
+# the state-ref and essence-ref DELIBERATELY point at DIFFERENT Vault paths with DIFFERENT PEM.
+#
+# state.tls.ca_ref → secret/services/redis/tls-v2#ca → NEW-CA (current).
+# essence.tls_ca_ref → secret/services/redis/tls#ca   → OLD-CA (stale).
+# The probe/health-gate assert: tls_ca == NEW-CA. If the code reverts to essence → the assert
+# would see OLD-CA → FAIL. Render-only, hermetic. Roster — 2 hosts, probe-role = slave.
+name: rolling-restart over TLS after rotate reads CA from state.tls.ca_ref not essence
+
+fixtures:
+  hosts:
+    - sid: node-1.example.com
+      covens: [restart]
+      soulprint:
+        network: { primary_ip: 10.0.0.1 }
+        os: { arch: amd64 }
+    - sid: node-2.example.com
+      covens: [restart]
+      soulprint:
+        network: { primary_ip: 10.0.0.2 }
+        os: { arch: amd64 }
+
+  input:
+    reason: "rolling restart after CA rotation for L0 guard"
+
+  # Deployed incarnation.state v3 AFTER rotate_tls: state.tls.ca_ref — the NEW path
+  # (tls-v2). This is the connect's source of truth (read-model v3). port=7379 INTEGER.
+  state:
+    redis_type: sentinel
+    redis_version: "7.2.4"
+    tls:
+      enable:   true
+      only:     false
+      port:     7379
+      cert_ref: "secret/services/redis/tls-v2#cert"
+      key_ref:  "secret/services/redis/tls-v2#key"
+      ca_ref:   "secret/services/redis/tls-v2#ca"
+    redis_config:
+      maxmemory:        "256mb"
+      maxmemory-policy: allkeys-lru
+      tls-port:         "7379"
+      tls-cert-file:    /etc/redis/tls/redis.crt
+      tls-key-file:     /etc/redis/tls/redis.key
+      tls-ca-cert-file: /etc/redis/tls/ca.crt
+      tls-replication:  "yes"
+
+  # essence.tls_ca_ref — the author default, POINTS AT THE OLD CA (tls#ca). After the fix
+  # a repeat run does NOT read it; it's present here PRECISELY to prove that the connect does NOT
+  # pick it up (regress-trap: if the code reverted to essence — it would see OLD-CA, the assert would fail).
+  essence:
+    tls_ca_ref: "secret/services/redis/tls#ca"
+
+  # Password (incarnation.name == restart; ★ default_admin REDESIGN — connect under the system
+  # default_admin, users/default_admin branch; the old secret/redis/<inc>#password is DROPPED)
+  # + TWO DIFFERENT CA-PEMs:
+  #   secret/services/redis/tls-v2#ca → NEW-CA (current, per state.tls.ca_ref);
+  #   secret/services/redis/tls#ca    → OLD-CA (stale, per essence.tls_ca_ref).
+  vault:
+    secret/redis/restart/users/default_admin:
+      password: default-admin-secret-pass
+    secret/services/redis/tls-v2:
+      ca: "-----BEGIN CERTIFICATE-----\nNEW-CA\n-----END CERTIFICATE-----"
+    secret/services/redis/tls:
+      ca: "-----BEGIN CERTIFICATE-----\nOLD-CA\n-----END CERTIFICATE-----"
+
+mocks:
+  register:
+    redis_role:
+      role: slave
+
+assert:
+  task_present:
+    # ── probe (community.redis.role): tls_ca = NEW-CA (state.tls.ca_ref) ──
+    # MAIN guard: the connect resolves the CA from the state-ref (current), NOT from the essence-ref.
+    # NEW-CA proves that after rotate, restart verifies the server with the new CA.
+    - module: community.redis.role
+      params_subset:
+        addr: "127.0.0.1:7379"
+        username: default_admin
+        password: default-admin-secret-pass
+        tls: true
+        tls_ca: "-----BEGIN CERTIFICATE-----\nNEW-CA\n-----END CERTIFICATE-----"
+
+    # ── slave-health-gate (community.redis.replica-synced): the same NEW-CA ──
+    # The resync gate inside the slave-block connects with the same current CA from the state-ref.
+    - module: community.redis.replica-synced
+      params_subset:
+        addr: "127.0.0.1:7379"
+        username: default_admin
+        password: default-admin-secret-pass
+        tls: true
+        tls_ca: "-----BEGIN CERTIFICATE-----\nNEW-CA\n-----END CERTIFICATE-----"
+
+  # ── REGRESS-TRAP: OLD-CA (essence.tls_ca_ref) must NOT make it into the connect ──
+  # If compute.tls_ca reverted to vault(essence.tls_ca_ref) — probe/health-gate would carry
+  # OLD-CA. task_absent catches ANY task with OLD-CA: ≥1 match → FAIL.
+  task_absent:
+    - module: community.redis.role
+      params_subset:
+        tls_ca: "-----BEGIN CERTIFICATE-----\nOLD-CA\n-----END CERTIFICATE-----"
+    - module: community.redis.replica-synced
+      params_subset:
+        tls_ca: "-----BEGIN CERTIFICATE-----\nOLD-CA\n-----END CERTIFICATE-----"

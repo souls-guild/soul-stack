@@ -1,0 +1,28 @@
+name: validate-precondition
+description: >-
+  Golden-сценарий с top-level validate:-блоком (ADR-009 amendment 2026-06-23, DSL
+  wave 2): декларативные input-инварианты [{that, message}]. that — input-only
+  CEL-bool-предикат (essence/soulprint/register/vault/now недоступны), message —
+  строка причины для 422. Валидный validate: проходит линт (ExitOK) — guard против
+  регресса, где soul-lint поднимал бы unknown_key на «validate».
+
+input:
+  tls:
+    type: boolean
+    required: false
+    default: false
+  port:
+    type: integer
+    required: false
+    default: 0
+    min: 0
+
+validate:
+  - that: "input.tls || input.port > 0"
+    message: "either enable tls or set a positive port"
+
+tasks:
+  - name: install package
+    module: core.pkg.installed
+    params:
+      name: redis-server

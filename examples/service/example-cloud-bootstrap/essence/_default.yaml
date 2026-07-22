@@ -1,0 +1,6 @@
+# Default service parameters - Provider/Profile in the `providers`/`profiles`
+# registry (created ahead of time via OpenAPI/MCP, see docs/keeper/cloud.md).
+# The operator overrides them in incarnation.spec.essence.
+provider: aws-prod         # row name in the providers registry (NOT plugin name)
+profile:  example-tiny     # row name in the profiles registry
+count:    1

@@ -1,0 +1,16 @@
+# Souls fixture for L3a long-runner::create.
+#
+# scenario create — a simple write marker; the actual "long runs" (staggered,
+# serial_waves) are separate scenarios, checked by a separate slice. Here it's
+# just a minimal happy-path init.
+- sid: soul-a.example.com
+  status: connected
+  covens: [runner]
+  soulprint:
+    os:
+      family: debian
+      distro: debian
+      version: "12"
+      pkg_mgr: apt
+      init_system: systemd
+    hostname: soul-a

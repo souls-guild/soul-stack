@@ -1,0 +1,40 @@
+name: create
+# create: true — starting scenario (Phase 2: create-set = EXACTLY {scenario with the flag}).
+create: true
+description: >-
+  Staged-render probe→where on a real soul fleet (ADR-056 §S5, L3b capstone).
+  Passage 0: probe each host's role (core.cmd.shell printf master|slave based on
+  hostname) → register: role. Passage 1: core.file.present creates a marker file
+  ONLY where register.role.stdout == 'master' — keeper stratifies the
+  consumer into a Passage strictly AFTER probe (N=2) and resolves where with a fresh
+  per-host register, collected by the Passage 0 barrier.
+
+# Focus scenario: state does not change (commit state is a separate invariant).
+state_changes: {}
+
+tasks:
+  # ── Passage 0: probe per-host role ───────────────────────────────────────
+  # printf (NOT echo) — no trailing newline, otherwise register.role.stdout would be
+  # "master\n" and where: == 'master' would not match (the cmd module stdout is NOT trimmed).
+  # Container hostname = SID (SpawnSoulContainer Hostname:sid), so the role is
+  # deterministic by host: soul-live-a → master, the rest → slave.
+  - name: Probe role per host
+    module: core.cmd.shell
+    register: role
+    changed_when: "false"
+    params:
+      cmd: |
+        if [ "$(hostname)" = "soul-live-a.example.com" ]; then printf master; else printf slave; fi
+
+  # ── Passage 1: action ONLY on master via the FRESH register ──────────────
+  # where: register.role.stdout — keeper stratifies this task into Passage 1
+  # (strictly after probe Passage 0) and resolves where with the collected per-host register.
+  # Marker file — observable proof of targeting (AssertHostFileExists
+  # on master, absence on slave).
+  - name: Mark the master host
+    module: core.file.present
+    where: "register.role.stdout == 'master'"
+    params:
+      path: /tmp/acted-on-master
+      content: "passage-1 ran here\n"
+      mode: "0644"

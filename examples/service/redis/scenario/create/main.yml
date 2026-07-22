@@ -1,0 +1,404 @@
+name: create
+# create: true — the scenario qualifies as the STARTING one (bootstrap of a new incarnation), i.e.
+# it is selected on POST /v1/incarnations (scenario.ResolveCreateScenarios reads the flag,
+# scenario.go::Create). Membership in the create-set is DECLARATIVE and data-driven:
+# the set of starting scenarios = EXACTLY {scenario with `create: true`}. The former hardcoded union
+# in keeper (name `create` always in the set as default) is removed (Phase 2 accepted) — `create`
+# qualifies as bootstrap not because of its name, but because it carries this flag.
+create: true
+description: >-
+  Deploy Redis from scratch in sentinel or cluster mode: VMs are provisioned for the
+  required topology via cloud-provision in the same run. The operator sets simple concepts
+  (mode, memory, persistence, eviction, ACL users, shards), and the scenario expands them
+  into a full redis.conf.
+
+# ── extends: covenant — shared section contract (S4 pilot) ───────────────────────────
+# Sections input (EXCEPT the provision-delta below) / compute / state_changes / validate
+# are factored out into covenant.yml (service-repo root) and inherited add-only: the keeper-side
+# resolver merges covenant FIRST, the create delta ADDS on top (without overriding
+# covenant keys — otherwise section_key_conflict). create carries ONLY its own delta:
+# input.provision (cloud-create in the same run, ADR-061), form (presentation —
+# NOT merged, purely local), and tasks (run body — dispatcher by redis_type).
+extends: covenant
+
+# ── Input contract: create's DELTA on top of covenant.input ──────────────────────────
+# The shared input contract (redis_type/version/memory_mb/persistence/connection_mode/
+# users/… + absence of modules*-fields) lives in covenant.yml. Here — ONLY provision,
+# which covenant does NOT carry (add-only: covenant.input + this field = effective input).
+input:
+  # ── cloud-provision: bring up VMs for the topology in the same run (ADR-061, Option A) ─
+  # ★ provision (FLAG section name, propose-and-wait): object-input "create machines".
+  # When enabled=true (DEFAULT, see default-on below) — create in ONE run (a) creates VMs
+  # via core.cloud.created (on: keeper), (b) delivers a per-VM bootstrap token
+  # (illustrative), (c) registers the created SIDs + BLOCKINGLY awaits onboarding
+  # (core.soul.registered await_online + refresh_soulprint, ADR-061), after which the roster
+  # is re-resolved and the cluster/sentinel branch rolls the redis role onto the now-online hosts.
+  # enabled=false — provision.yml group-drop, the run works against the EXISTING roster.
+  #
+  # ★ provider/profile/await_timeout/ssh_provider — the operator may leave these UNSET; they
+  # fall back to essence.provision_* (redis-provision.yml: default(input.provision.X,
+  # essence.provision_X)). By default the operator does NOT pick them manually (the form is hidden).
+  #
+  # ★ FORM: provision is DELIBERATELY NOT in form.sections (decision 2026-06-30) — the section is
+  # hidden from the Run form. soul-lint emits a form_field_uncovered WARNING for this field (the UI
+  # draws it into the default section) — this is EXPECTED, not an error.
+  #
+  # ★ node_count is DELIBERATELY absent here: the VM count is derived from the TOPOLOGY (cluster:
+  # shards*(1+replicas_per_master); sentinel: 1+replicas_per_master) — the single source of truth
+  # for cluster size. A separate node_count would drift out of sync with the size-guard branches.
+  # ★ teardown (destroy) — NOT here (a separate scenario).
+  provision:
+    type: object
+    required: false
+    # ★ DEFAULT-ON (user decision 2026-06-30): provision is ENABLED by default.
+    # top-level default of the object = {enabled: true} → an operator who does NOT pass the
+    # provision section gets cloud-create (the standard create path — bring up VMs for the
+    # topology). To roll onto a READY roster without provision, the operator sets
+    # provision: {enabled: false} EXPLICITLY, or uses the create_from_souls scenario (a twin
+    # without the provision section). default-on is ONLY on create; create_from_souls does not
+    # carry a provision section. The default is duplicated on the nested enabled (a flat
+    # mergeInputDefaults does not descend into properties of a partially-set object — the
+    # duplicate keeps the "default on" semantics uniformly readable).
+    default:
+      enabled: true
+    description: >-
+      Bring up VMs for the topology in the same create run (ADR-061). enabled=true →
+      first cloud-create + onboarding (the await_online barrier), then the redis role on
+      the created hosts. Unset / enabled=false → the run works against the existing roster.
+    additional_properties: false
+    properties:
+      enabled:
+        type: boolean
+        default: true
+        description: Main gate for provision. DEFAULT true (default-on). false — provision.yml group-drop.
+      provider:
+        type: string
+        description: >-
+          Name of the cloud Provider in the providers registry (NOT the plugin name → soul-cloud-<provider>).
+          Unset → essence.provision_provider.
+      profile:
+        type: string
+        description: >-
+          Name of the VM profile in the profiles registry (VM resources/image/network). Unset →
+          essence.provision_profile.
+      await_timeout:
+        type: string
+        pattern: "^[0-9]+[smh]$"
+        description: >-
+          Upper bound on waiting for the created VMs to onboard (the await_online barrier,
+          ADR-061; form <N>{s|m|h}). Unset → essence.provision_await_timeout (default
+          10m). Capped from above by keeper.yml::max_await_timeout.
+      join_wait_timeout:
+        type: string
+        pattern: "^[0-9]+[smh]$"
+        description: >-
+          Ceiling on waiting for a freshly created VM to appear in Teleport before delivering
+          the token (core.bootstrap.delivered, retry-until-join; form <N>{s|m|h}). Unset →
+          essence.provision_join_wait_timeout (default 15m).
+      ssh_provider:
+        type: string
+        description: >-
+          Name of the SshProvider plugin (keeper.yml::plugins.ssh_providers[].name) for
+          delivering the per-VM bootstrap token over SSH (core.bootstrap.delivered, ADR-063).
+          Unset → essence.provision_ssh_provider.
+
+# ── Computed scenario-vars: create's DELTA on top of covenant.compute ────────────────
+# The shared compute contract (redis_config/install/conf_dir/data_dir/tls_*/sentinel_directives/
+# redis_version/modules_*/…) lives in covenant.yml, inherited add-only (covenant-first). Here —
+# ONLY sentinel_monitor_now: covenant does NOT carry it (it diverges from migrate_cluster in
+# value, section_key_conflict on merge). Under create semantics it's =true UNCONDITIONALLY:
+# node-1 is a real master, there's no role:slave seeding phase → sentinel monitors it right away
+# (the redis-deploy-sentinel.yml deploy body proxies the flag into the step-4 task-var). See the header of redis-deploy-sentinel.yml.
+compute:
+  sentinel_monitor_now: "${ true }"
+
+# ── Form presentation layer (form:, top-level scenario key) ───────────────────
+# form: — PURE PRESENTATION: how the UI groups and labels input fields in the Run form.
+# The input contract (types/validation/requiredness) lives EXCLUSIVELY in input: above —
+# form references fields by name, duplicates or changes nothing. Optional:
+# drop the block → the UI renders input flat (forward-compat). soul-lint checks
+# invariants (every name ∈ input:, each name in one section, key is unique); an input field
+# without a section — WARNING (the UI draws it into the default section at the end), not an error.
+form:
+  sections:
+    # 1. Redis parameters — mode, connection channel, version.
+    # install_method removed from the form (2026-06-28): install method is fixed in
+    # essence (binary), the operator doesn't set it.
+    - key: redis
+      title: "Redis parameters"
+      description: "Deployment mode, connection channel and version"
+      fields:
+        - { name: redis_type, label: "Deployment mode" }
+        - { name: connection_mode, label: "Connection channel" }
+        - { name: version, label: "Redis version" }
+
+    # 2. Topology — replicas (both modes) + cluster specifics.
+    - key: topology
+      title: "Topology"
+      description: "Replicas (both modes) and Cluster parameters"
+      fields:
+        - name: replicas_per_master
+          label: "Replicas per master"
+          placeholder: "2"
+          hint: "Replicas per each master. Default 2 (master + 2 replicas). 0 = no replicas."
+        # cluster-specific fields: visible ONLY in cluster mode. show_when —
+        # presentation, not a gate: shards.required_when on input validation still
+        # applies independently (defence-in-depth).
+        - name: shards
+          label: "Number of master shards (cluster)"
+          show_when: "input.redis_type == 'cluster'"
+          placeholder: "3"
+          hint: "16384 hash slots are split evenly across shards (min 3). The run's roster must be shards*(1+replicas)."
+        - name: cluster_node_timeout
+          label: "Gossip timeout, ms (cluster)"
+          show_when: "input.redis_type == 'cluster'"
+          placeholder: "5000"
+          hint: "Gossip timeout between cluster nodes (cluster-node-timeout). Unset → 5000."
+        - name: cluster_topology
+          label: "Explicit shard topology (cluster)"
+          show_when: "input.redis_type == 'cluster'"
+          hint: "List of shards; each shard is a list of SIDs [master, replica, …] (the first is the master). The operator lays out VMs across zones themselves. Unset → the plugin assigns roles by sorted SID automatically."
+
+    # 3. Resources — memory, I/O threads, eviction policy.
+    - key: resources
+      title: "Resources"
+      fields:
+        - name: memory_mb
+          label: "Data volume, MB"
+          placeholder: "1024"
+          hint: "Memory budget for Redis on the host. maxmemory is computed as a share of it (minus the OS reserve). Unset → maxmemory from the essence substrate."
+        - name: io_threads
+          label: "I/O threads"
+          placeholder: "0"
+          hint: "Number of Redis I/O threads (io-threads). 0 = single-threaded I/O. >0 is typically core count - 1."
+        - { name: maxmemory_policy, label: "Eviction policy" }
+
+    # 4. Persistence — save mode.
+    - key: persistence
+      title: "Persistence"
+      fields:
+        - { name: persistence, label: "Persistence mode" }
+
+    # 5. Users — ACL.
+    - key: users
+      title: "Users"
+      fields:
+        - { name: users, label: "ACL users" }
+
+    # 6. Configuration — passthrough directives for redis.conf and sentinel.conf.
+    - key: config
+      title: "Configuration"
+      description: "Passthrough directives for redis.conf and sentinel.conf"
+      collapsed: true
+      fields:
+        - { name: redis_settings, label: "redis.conf directives" }
+        # sentinel-specific dicts: visible ONLY in sentinel mode.
+        - name: sentinel_settings
+          label: "sentinel.conf directives (global)"
+          show_when: "input.redis_type == 'sentinel'"
+          hint: "Global sentinel.conf directives (resolve-hostnames, announce-port, …)."
+        - name: sentinel_master_settings
+          label: "Sentinel directives (per-master)"
+          show_when: "input.redis_type == 'sentinel'"
+          hint: "Per-master options (down-after-milliseconds, failover-timeout, parallel-syncs, …). Defaults: down-after 5000, failover-timeout 60000."
+
+    # ★ The provision section is DELIBERATELY REMOVED from the form (user decision 2026-06-30):
+    # provision default-on (input.provision.default {enabled: true}), provider/profile come from
+    # essence — the operator does NOT pick them in the Run form. The input.provision field is not
+    # covered by the form → soul-lint form_field_uncovered WARNING (the UI draws it into the
+    # default section) — EXPECTED, not an error. If it's ever needed again (per-Coven/ENV-override
+    # provider) — bring the section back here. ★ TODO: prod/dev provider switch (ENV keeper / Coven-overlay) — a separate ADR.
+
+# Run body — dispatcher branches, one per mode (CONDITIONAL-INCLUDE, orchestration.md §6,
+# Option B group-drop). include order — cluster, sentinel; indices don't matter (the branches
+# are mutually exclusive by enum). There's no separate mode-guard: an unknown redis_type
+# is rejected by Keeper's input validation on the enum BEFORE render.
+tasks:
+  # ── Generate passwords in Vault BEFORE any secret reads (core.vault.kv-present) ──
+  # ★ SECRET GENERATION BY THE SERVICE (2026-06-28): the operator no longer pre-seeds passwords
+  # into Vault — create generates missing ones itself, cryptographically at random
+  # (generate-if-absent). The keeper-side step (on: keeper, core.vault.kv-present): for each
+  # target it reads the path and, if the field is missing — writes a crypto/rand value per
+  # policy; if present — no-op (does NOT overwrite; rotation is a separate scenario).
+  # changed=true only on an actual generation.
+  #
+  # ★★ PASSAGE INVARIANT (critical): this step MUST execute (apply, write to Vault)
+  # BEFORE the render phase of tasks that read the same secrets via ${ vault(...) } (apply redis +
+  # community.redis.* in the cluster/sentinel branches). The staged-render model (ADR-056): passage
+  # N fully applies BEFORE render of passage N+1. vault() in render with a missing secret
+  # ABORTS render (vault_resolve: "field is missing"), so generate MUST be in an EARLIER
+  # passage than read.
+  #
+  # HOW the order is guaranteed (FACT, without decorative register edges):
+  #   - this step is `on: keeper` WITHOUT a roster dependency (vault() is NOT a register edge,
+  #     soulprint.* in targets is NOT read) → Stratify keeps it in passage 0;
+  #   - the deploy read-tasks (redis-deploy-{sentinel,cluster}.yml) ALL read the run's roster
+  #     (apply.input/params carry soulprint.hosts / soulprint.self) → they are
+  #     roster-CONSUMERS (passage_refresh.go::taskReadsRoster);
+  #   - the provision body (redis-provision.yml, included ABOVE in program order) carries
+  #     `core.soul.registered` with `refresh_soulprint: true` — a refresh-EMITTER (ADR-0061
+  #     §S2). It's physically in the plan BEFORE the group-drop by include-when (Stratify works
+  #     on the FULL flat list, branch-dropping happens later at render phase), so the
+  #     roster-refresh edge pushes ALL deploy read-tasks into a passage STRICTLY AFTER generate
+  #     (measured: generate=passage 0, any vault()-reading deploy task=passage 2).
+  # vault() itself does NOT determine the passage (it's not a register reference or a roster
+  # read) — so the generate→read edge carries the roster axis (refresh-emitter + deploy's
+  # roster consumption), NOT register. The load-bearing invariant (generate in a passage
+  # STRICTLY BEFORE any vault()-read) is pinned by the guard test
+  # keeper/internal/render/redis_create_secrets_passage_test.go.
+  #
+  # targets are COMPUTED from the SAME essence/input as the read-tasks (drift between "what we
+  # generate" and "what we read" = a bug, so the user list is NOT hardcoded): the main
+  # secret/redis/<inc> #password + per-user union(system_acl_users, system_acl_users_sentinel)
+  # WITHOUT default (sentinel default → the main secret) + operator-extra input.users. policy
+  # alphanumeric/32 (redis.conf/ACL-safe). register is DELIBERATELY ABSENT (the passage edge
+  # carries the roster axis, not register).
+  - name: Ensure redis passwords exist in Vault (generate if absent)
+    on: keeper
+    module: core.vault.kv-present
+    params:
+      # policy is a REAL YAML map (not a CEL string): module.params type-check expects a
+      # MappingNode under a map-param. length/charset are set explicitly — "spelled-out rules".
+      policy:
+        length: 32
+        charset: alphanumeric
+      # targets is a SINGLE-LINE quoted-string ${…} (NOT a block-scalar): module.params
+      # type-check only passes the CEL-wrap through for a StringNode. Union of keys
+      # system_acl_users ∪ system_acl_users_sentinel WITHOUT default + operator-extra input.users.
+      targets: "${ [{ 'path': 'secret/redis/' + incarnation.name, 'field': 'password' }] + merge(default(essence.system_acl_users, {}).map(n, { n: 0 }) + default(essence.system_acl_users_sentinel, {}).map(n, { n: 0 })).map(name, name).filter(name, name != 'default').map(name, { 'path': 'secret/redis/' + incarnation.name + '/users/' + name, 'field': 'password' }) + (has(input.users) ? input.users.map(u, { 'path': 'secret/redis/' + incarnation.name + '/users/' + u.name, 'field': 'password' }) : []) }"
+
+  # ── Version-aware validator for redis_settings directive names (assert, #6) ─────────────
+  # ★ #6 (2026-06-26): redis_settings — passthrough KEY→VALUE: the input schema lets
+  # ANY key through (additional_properties: {type: string}). Without a check the operator would
+  # silently drag in a typo (`maxmemoyr 512mb`) or a directive from a different version → the
+  # redis-server fails to start on the host (a late, confusing failure). This assert checks
+  # EVERY redis_settings directive NAME against the catalog of valid names FOR THE SELECTED
+  # version (essence.redis_directives[<series>], generated from the upstream src/config.c) — the
+  # first unknown key aborts render (422 assert-failed) BEFORE applying, with a clear message.
+  #
+  # WHY assert and not validate: the catalog lives in essence, and the validate context is
+  # INPUT-ONLY (essence is unavailable, a structural CEL barrier). assert sees
+  # essence+input+compute (the full scenario context) — the only mechanism that can reach the
+  # catalog. Run-level (once per run), soulprint.hosts isn't needed (the check is
+  # host-invariant), but it's available.
+  #
+  # VERSION — compute.redis_version (= input.version, an enum of Nexus-published builds;
+  # ★ redesign: ONE for both install methods — binary downloads binaries of this version, package
+  # installs a =version pin; the former cascade "binary → essence.binary_version" is removed).
+  # The version carries a major.minor series → assert matches it against the catalog keys.
+  #
+  # version→series MECHANICS WITHOUT split (StdLib CEL has no .split/.substring): we iterate
+  # the catalog keys (.all(s, …)) and match the version against the series with a regex
+  # `^([0-9]+:)?<s>[.]` (the trailing `[.]` is the series boundary, so 7.0 doesn't catch 7.04;
+  # the epoch prefix `5:` in the regex is optional — back-compat with old distro pins,
+  # even though input.version is now a clean enum `8.6.1`). For series the version does NOT
+  # belong to, the predicate is vacuously true (short-circuited by the ternary) — the check runs
+  # only against "its own" series. A version that falls into NO catalog series (the series
+  # is absent from the catalog — e.g. 8.4 not generated yet) → assert skip: we validate
+  # ONLY known series. default(input.redis_settings, {}) — the field is optional; .all over {} = true.
+  - name: Validate redis_settings directive names against the catalog for the chosen Redis version
+    assert:
+      # that[] and message must be SCALAR strings (not folded `>-`/`|`):
+      # soul-lint requires *ast.StringNode (quoted/plain), a block-scalar = type_mismatch.
+      # The predicate is one line (CEL-normalize collapses whitespace): for each redis_settings
+      # key k — for each catalog series s that the version belongs to
+      # (regex `^([0-9]+:)?<s>[.]`), k must be in essence.redis_directives[s]; series
+      # not matching the version are vacuously true (ternary), a version outside the catalog →
+      # no series matches → skip.
+      #
+      # `!has(essence.redis_directives) || …` — EMPTY-CATALOG-SKIP: the catalog is optional.
+      # If essence doesn't carry it (minimal L0-case fixtures, or an operator's essence
+      # without a catalog) — assert skip (nothing to validate against). With a catalog — full check.
+      that:
+        - "!has(essence.redis_directives) || default(input.redis_settings, {}).all(k, essence.redis_directives.all(s, compute.redis_version.matches('^([0-9]+:)?' + s + '[.]') ? (k in essence.redis_directives[s]) : true))"
+      message: "redis_settings contains an unknown redis.conf directive for the selected Redis version (input.version): check the name against the catalog of valid directives for this version (essence.redis_directives[<major.minor>]) — typo or a directive from a different Redis version. The catalog is generated by scripts/gen-redis-catalog.sh from src/config.c."
+
+  # ── provision (ADR-061, Option A): cloud-create + onboarding BEFORE the role branch ──────
+  # CONDITIONAL-INCLUDE redis-provision.yml STRICTLY BEFORE cluster/sentinel: when enabled=true
+  # its steps (a) create VMs, (c) register+await onboarding with refresh_soulprint → the roster
+  # is re-resolved, and ONLY THEN does the cluster/sentinel branch see the created hosts in
+  # soulprint.hosts. ★ SHARED PROVISION BODY at service-level (scenario/redis-provision.yml, the
+  # same one migrate_cluster/main.yml includes — no duplicate; scenario-include falls back to
+  # the file name at service-level, orchestration.md §6). when on input.provision is static
+  # (only input.*, no register/soulprint) → group-drop include-when: on enabled=false / an
+  # omitted section, the whole provision body (incl. the NIM-58 name-guard) is dropped from the
+  # plan. has()-guard — the section is optional (no-such-key without it). ★ teardown is NOT here.
+  - include: redis-provision.yml
+    when: "has(input.provision) && input.provision.enabled"
+
+  - include: cluster.yml
+    when: "input.redis_type == 'cluster'"
+  - include: sentinel.yml
+    when: "input.redis_type == 'sentinel'"
+
+  # ── MANDATORY data-plane monitoring (Slice I) ──────────────────────────────
+  # AFTER the deploy branch (cluster/sentinel), create UNCONDITIONALLY (no when-gate) deploys
+  # two metrics exporters onto EVERY incarnation host by COMPOSING reusable
+  # standalone destinies via apply:destiny (isolated render for each, ADR-009). Monitoring
+  # is not an operator choice but a data-service invariant (contract=A: versions/ports/checksum in
+  # essence, covenant.input/form are NOT touched).
+  #
+  # ★ ORDER (staged-render Passage stratifies this itself): both tasks read the run's roster
+  # (arch/password resolve per-host, apply.input carries soulprint.self) → they are
+  # roster-CONSUMERS and land in a passage STRICTLY AFTER deploy (redis-server is up, the
+  # monitoring ACL user is seeded, the unix socket is listening). No separate register edge is
+  # needed — the roster axis (provision's refresh-emitter + deploy's roster-read) pushes them
+  # into a later passage, same as deploy's vault()-read.
+  - name: Apply node-exporter destiny (host metrics)
+    apply:
+      destiny: node-exporter
+      input:
+        version: "${ default(essence.node_exporter_version, '1.8.2') }"
+        # arch is NOT passed: the destiny takes it directly from soulprint.self.os.arch (available
+        # in destiny-CEL) — an incarnation may mix amd64/arm64 hosts.
+        listen: "${ default(essence.node_exporter_listen, ':9100') }"
+        # Download root: an essence-override for an internal mirror/nexus-proxy (hosts without
+        # access to github.com); default is GitHub Releases (back-compat).
+        base_url: "${ default(essence.node_exporter_base_url, 'https://github.com/prometheus/node_exporter/releases/download') }"
+        # SSRF-guard opt-out for private-resolve base_url (the binary_allow_private pattern); default false — the guard stays on.
+        allow_private: "${ default(essence.node_exporter_allow_private, false) }"
+
+  # redis-exporter: Redis metrics over a unix socket (--redis.addr=unix://<socket>). ★ Finding B:
+  # redis on ACL WITHOUT requirepass (the default_admin redesign removed requirepass) → the
+  # exporter MUST authenticate as the monitoring ACL user (redis_user), otherwise WRONGPASS. The
+  # password resolves via keeper-side vault() from secret/redis/<inc>/users/monitoring#password
+  # (the same ACL user as essence.system_acl_users.monitoring, password generated by kv-present
+  # ABOVE) — only the VALUE reaches the host (ADR-012). redis_socket is NOT passed — the
+  # destiny's default (/var/run/redis/redis-server.sock) matches redis.conf's unixsocket.
+  - name: Apply redis-exporter destiny (redis metrics)
+    apply:
+      destiny: redis-exporter
+      input:
+        version: "${ default(essence.redis_exporter_version, '1.62.0') }"
+        sha256:  "${ default(essence.redis_exporter_sha256, '') }"
+        listen:  "${ default(essence.redis_exporter_listen, ':9121') }"
+        base_url: "${ default(essence.redis_exporter_base_url, 'https://github.com/oliver006/redis_exporter/releases/download') }"
+        # SSRF-guard opt-out for private-resolve base_url (the binary_allow_private pattern); default false — the guard stays on.
+        allow_private: "${ default(essence.redis_exporter_allow_private, false) }"
+        redis_user:     monitoring
+        redis_password: "${ vault('secret/redis/' + incarnation.name + '/users/monitoring#password') }"
+
+  # ── MANDATORY data-plane log shipping (Slice V-I, ADR-067) ──────────────────
+  # AFTER the exporters, create UNCONDITIONALLY (no when-gate) deploys vector (a log-shipping
+  # agent) onto EVERY incarnation host by COMPOSING a reusable standalone destiny via
+  # apply:destiny (isolated render, ADR-009). vector COMPLEMENTS node/redis-exporter
+  # (metrics, pull) with the log plane (redis logs, push) — not an operator choice but a
+  # data-service invariant (contract=A: versions/checksum/sink in essence). arch is taken by the
+  # destiny itself from soulprint.self.os.arch. sink_auth_ref is a Vault ref OR a value: the
+  # caller (essence) passes a ref, resolved Soul-side (the secret doesn't land in state, InfoSec).
+  # log_sources — redis logs from essence (/var/log/redis/*.log). Order: doesn't read the roster
+  # (arch is a soulprint destiny-fact), but apply.input carries soulprint.self → roster-consumer
+  # → passage AFTER deploy, same as the exporters.
+  - name: Apply vector destiny (log shipping)
+    apply:
+      destiny: vector
+      input:
+        version:       "${ default(essence.vector_version, '0.40.0') }"
+        sha256:        "${ default(essence.vector_sha256, '') }"
+        base_url:      "${ default(essence.vector_base_url, 'https://github.com/vectordotdev/vector/releases/download') }"
+        # SSRF-guard opt-out for private-resolve base_url (the binary_allow_private pattern); default false — the guard stays on.
+        allow_private: "${ default(essence.vector_allow_private, false) }"
+        sink_type:     "${ default(essence.vector_sink_type, 'console') }"
+        sink_endpoint: "${ default(essence.vector_sink_endpoint, '') }"
+        sink_auth_ref: "${ default(essence.vector_sink_auth_ref, '') }"
+        log_sources:   "${ default(essence.vector_log_sources, []) }"

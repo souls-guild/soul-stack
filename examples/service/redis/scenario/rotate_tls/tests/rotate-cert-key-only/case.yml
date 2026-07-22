@@ -1,0 +1,272 @@
+# L0 test for rotate_tls (cert+key-only branch): TYPICAL rotation — the operator sets new
+# refs for cert+key ONLY, ca_ref is NOT set → CA is not rotated. Paired case to rotate-cert-key-ca
+# (CA-rollover). Here compute.tls_ca MUST remain a SINGLE current CA (NOT a bundle):
+# the server cert changes, but the trusted CA stays the same — all three CONFIG SET
+# reconnects trust the SAME CA. Render-only, hermetic. The instance is ALREADY on TLS
+# (state.tls.enable=true).
+#
+# What we assert (differences from rotate-cert-key-ca marked *ONLY):
+#   1. PEM: redis.crt/redis.key = NEW material (tls-v2), *ONLY ca.crt = OLD CA (CACERT):
+#      ca_ref is not rotated → compute.ca_ref falls back to state.tls.ca_ref, the current CA is rendered.
+#   1b. users.acl is re-rendered with the system users appended (same redis destiny brick).
+#   1c. redis.conf carries masteruser/masterauth (guard replica→master AUTH; see rotate-cert-key-ca).
+#   2. applier-register tls_certs is MATERIALIZED (onchanges-gate anchor).
+#   3. three community.redis.command CONFIG SET tls-*-file: *ONLY tls_ca = SINGLE old CA
+#      (CACERT, NOT a bundle) — GUARD for the branch "no CA-rollover doesn't turn into a bundle":
+#      compareParams = reflect.DeepEqual by value → a bundle string would NOT match a single one.
+#      changed=true (force) is REMOVED (task_absent, onchanges idempotency).
+#   4. state_changes: cert_ref/key_ref = NEW (tls-v2), *ONLY ca_ref = OLD (tls#ca).
+#
+# * IDEMPOTENCY (guard invariant, identical to rotate-cert-key-ca). reload is gated by
+# onchanges:[tls_certs] instead of force changed:true: re-read SSL_CTX ONLY when the PEM
+# changed; a repeat run with the same material → aggregate changed=false → all three CONFIG
+# SET calls skipped. L0 (render-only) proves the STRUCTURAL premise: the tls_certs anchor
+# (core.noop.run) exists, force changed:true is REMOVED from the reload tasks (task_absent).
+# Runtime gating is Soul-side (L3).
+name: rotate_tls cert+key-only rotation keeps a SINGLE CA (no bundle) in CONFIG SET reconnects
+
+fixtures:
+  default_destiny_source: "file://../../destiny/{name}"
+  soulprint:
+    network: { primary_ip: 10.0.0.5 }
+    os: { arch: amd64 }
+
+  # System ACL users are appended to users.acl on re-render; host-layout is in essence
+  # (v11→v12, Variant A). Identical to rotate-cert-key-ca.
+  essence:
+    conf_dir: /etc/redis
+    data_dir: /var/lib/redis
+    modules_base_url: "https://artifacts.example.com/redis/modules"
+    system_acl_users:
+      default_admin: "~* &* +@all"
+      replica:    "+psync +replconf +ping"
+      monitoring: "-@all +@connection +client +ping +info +config|get +cluster|info +slowlog +latency +memory +select +command|count +command|docs"
+      sentinel:   "allchannels +multi +slaveof +ping +exec +subscribe +config|rewrite +role +publish +info +client|setname +client|kill +script|kill"
+      haproxy:    "-@all +auth +client|getname +client|id +client|setname +command +hello +ping +role +info +cluster|info"
+
+  # * cert+key-only case: input rotates cert_ref/key_ref (tls-v2), while ca_ref is NOT set →
+  # compute.ca_ref = state.tls.ca_ref (tls#ca), compute.tls_ca = SINGLE current CA
+  # (has(input.ca_ref)=false → no concatenation). CA material does not change: ca.crt is
+  # rendered with the current CA (CACERT) and ca_ref in state_changes stays the old one.
+  state:
+    redis_type: sentinel
+    redis_version: "7.2.4"
+    tls:
+      enable:   true
+      only:     false
+      port:     7379
+      cert_ref: "secret/services/redis/tls#cert"
+      key_ref:  "secret/services/redis/tls#key"
+      ca_ref:   "secret/services/redis/tls#ca"
+    redis_config:
+      maxmemory:        "256mb"
+      maxmemory-policy: allkeys-lru
+      save:             "900 1 300 10 60 10000"
+      appendonly:       "no"
+      tls-port:         "7379"
+      tls-cert-file:    /etc/redis/tls/redis.crt
+      tls-key-file:     /etc/redis/tls/redis.key
+      tls-ca-cert-file: /etc/redis/tls/ca.crt
+      tls-replication:  "yes"
+    redis_users: []
+
+  input:
+    # Rotation of ONLY cert+key; ca_ref is NOT set (CA is not rotated).
+    cert_ref: "secret/services/redis/tls-v2#cert"
+    key_ref:  "secret/services/redis/tls-v2#key"
+
+  vault:
+    secret/redis/rotate_tls:
+      password: rot-redis-pass-16chars
+    secret/redis/rotate_tls/users/default_admin:
+      password: default-admin-secret-pass
+    secret/redis/rotate_tls/users/replica:
+      password: replica-sys-secret-pass
+    secret/redis/rotate_tls/users/monitoring:
+      password: monitoring-sys-secret-pass
+    secret/redis/rotate_tls/users/sentinel:
+      password: sentinel-sys-secret-pass
+    secret/redis/rotate_tls/users/haproxy:
+      password: haproxy-sys-secret-pass
+    # Current CA (state.tls.ca_ref, tls#ca) — BOTH the connection trust AND the ca.crt content
+    # (ca_ref is not rotated → ca.crt is rendered with this same CA).
+    secret/services/redis/tls:
+      ca: "-----BEGIN CERTIFICATE-----\nCACERT\n-----END CERTIFICATE-----"
+    # NEW cert+key (per input refs). ca is NOT set HERE — CA is not rotated, tls-v2#ca is not read.
+    secret/services/redis/tls-v2:
+      cert: "-----BEGIN CERTIFICATE-----\nNEWCERT\n-----END CERTIFICATE-----"
+      key:  "-----BEGIN PRIVATE KEY-----\nNEWKEY\n-----END PRIVATE KEY-----"
+
+assert:
+  task_present:
+    # 1. redis.crt/redis.key = NEW material (tls-v2). Disambiguator — path.
+    - module: core.file.present
+      params_subset:
+        path: /etc/redis/tls/redis.crt
+        content: "-----BEGIN CERTIFICATE-----\nNEWCERT\n-----END CERTIFICATE-----"
+        mode: "0600"
+        owner: redis
+        group: redis
+    - module: core.file.present
+      params_subset:
+        path: /etc/redis/tls/redis.key
+        content: "-----BEGIN PRIVATE KEY-----\nNEWKEY\n-----END PRIVATE KEY-----"
+        mode: "0600"
+        owner: redis
+        group: redis
+    # *ONLY ca.crt = OLD CA (CACERT): ca_ref is not rotated → compute.ca_ref = state.tls.ca_ref
+    #   → the current CA is rendered (in rotate-cert-key-ca this was NEWCA). Disambiguator — path.
+    - module: core.file.present
+      params_subset:
+        path: /etc/redis/tls/ca.crt
+        content: "-----BEGIN CERTIFICATE-----\nCACERT\n-----END CERTIFICATE-----"
+        mode: "0600"
+        owner: redis
+        group: redis
+
+    # 1b. users.acl is re-rendered with the system users appended (identical to rotate-cert-key-ca).
+    - module: core.file.rendered
+      params_subset:
+        path: /etc/redis/users.acl
+        template_content: "<present>"
+        mode: "0640"
+        owner: redis
+        group: redis
+        render_context:
+          vars:
+            users:
+              default_admin:
+                perms: "~* &* +@all"
+                state: "on"
+                password: default-admin-secret-pass
+              replica:
+                perms: "+psync +replconf +ping"
+                state: "on"
+                password: replica-sys-secret-pass
+              monitoring:
+                perms: "-@all +@connection +client +ping +info +config|get +cluster|info +slowlog +latency +memory +select +command|count +command|docs"
+                state: "on"
+                password: monitoring-sys-secret-pass
+              sentinel:
+                perms: "allchannels +multi +slaveof +ping +exec +subscribe +config|rewrite +role +publish +info +client|setname +client|kill +script|kill"
+                state: "on"
+                password: sentinel-sys-secret-pass
+              haproxy:
+                perms: "-@all +auth +client|getname +client|id +client|setname +command +hello +ping +role +info +cluster|info"
+                state: "on"
+                password: haproxy-sys-secret-pass
+          self:
+            sid: trial-host
+            covens: [rotate_tls]
+            choirs: []
+            traits: {}
+            role: ""
+            network:
+              primary_ip: 10.0.0.5
+            os:
+              arch: amd64
+          role: ""
+          essence: {}
+
+    # 1c. GUARD replica→master AUTH: config-map carries masteruser/masterauth (see rotate-cert-key-ca).
+    - module: core.file.rendered
+      params_subset:
+        path: /etc/redis/redis.conf
+        render_context:
+          vars:
+            conf_dir: /etc/redis
+            data_dir: /var/lib/redis
+            port: 6379
+            run_dir: /var/run/redis
+            log_dir: /var/log/redis
+            loadmodules:
+              - /var/lib/redis/modules/redisbloom.so
+              - /var/lib/redis/modules/rejson.so
+              - /var/lib/redis/modules/redisearch.so
+              - /var/lib/redis/modules/redistimeseries.so
+            config:
+              maxmemory: "256mb"
+              maxmemory-policy: allkeys-lru
+              save: "900 1 300 10 60 10000"
+              appendonly: "no"
+              tls-port: "7379"
+              tls-cert-file: /etc/redis/tls/redis.crt
+              tls-key-file: /etc/redis/tls/redis.key
+              tls-ca-cert-file: /etc/redis/tls/ca.crt
+              tls-replication: "yes"
+              masteruser: default_admin
+              masterauth: default-admin-secret-pass
+          self:
+            sid: trial-host
+            covens: [rotate_tls]
+            choirs: []
+            traits: {}
+            role: ""
+            network:
+              primary_ip: 10.0.0.5
+            os:
+              arch: amd64
+          role: ""
+          essence: {}
+
+    # 2. APPLIER-REGISTER MATERIALIZED: terminal core.noop.run(register=tls_certs) —
+    #    onchanges-gate anchor (id disambiguator).
+    - module: core.noop.run
+      id: tls_certs
+
+    # 3. *ONLY "no bundle" GUARD: all three community.redis.command CONFIG SET tls-*-file carry
+    #    tls_ca = SINGLE old CA (CACERT), NOT a concatenation. has(input.ca_ref)=false → the
+    #    single branch. compareParams = reflect.DeepEqual by value: a bundle string (CACERT+NEWCA)
+    #    would NOT match → the regression "CA-rollover branch fired without a rollover" is
+    #    caught here. Args — disambiguator of the three calls.
+    - module: community.redis.command
+      params_subset:
+        addr: "127.0.0.1:7379"
+        username: default_admin
+        password: default-admin-secret-pass
+        tls: true
+        tls_ca: "-----BEGIN CERTIFICATE-----\nCACERT\n-----END CERTIFICATE-----"
+        args: ["CONFIG", "SET", "tls-cert-file", "/etc/redis/tls/redis.crt"]
+    - module: community.redis.command
+      params_subset:
+        addr: "127.0.0.1:7379"
+        username: default_admin
+        password: default-admin-secret-pass
+        tls: true
+        tls_ca: "-----BEGIN CERTIFICATE-----\nCACERT\n-----END CERTIFICATE-----"
+        args: ["CONFIG", "SET", "tls-key-file", "/etc/redis/tls/redis.key"]
+    - module: community.redis.command
+      params_subset:
+        addr: "127.0.0.1:7379"
+        username: default_admin
+        password: default-admin-secret-pass
+        tls: true
+        tls_ca: "-----BEGIN CERTIFICATE-----\nCACERT\n-----END CERTIFICATE-----"
+        args: ["CONFIG", "SET", "tls-ca-cert-file", "/etc/redis/tls/ca.crt"]
+
+  # * Idempotency GUARD (render level): force changed:true is REMOVED from the reload tasks.
+  #    ALL THREE reload tasks (cert/key/ca) are covered. Args disambiguator.
+  task_absent:
+    - module: community.redis.command
+      params_subset:
+        changed: true
+        args: ["CONFIG", "SET", "tls-cert-file", "/etc/redis/tls/redis.crt"]
+    - module: community.redis.command
+      params_subset:
+        changed: true
+        args: ["CONFIG", "SET", "tls-key-file", "/etc/redis/tls/redis.key"]
+    - module: community.redis.command
+      params_subset:
+        changed: true
+        args: ["CONFIG", "SET", "tls-ca-cert-file", "/etc/redis/tls/ca.crt"]
+
+  # state_changes: cert_ref/key_ref NEW (tls-v2); *ONLY ca_ref OLD (tls#ca — not rotated);
+  # enable/only/port unchanged.
+  state_changes:
+    tls:
+      enable:   true
+      only:     false
+      port:     7379
+      cert_ref: "secret/services/redis/tls-v2#cert"
+      key_ref:  "secret/services/redis/tls-v2#key"
+      ca_ref:   "secret/services/redis/tls#ca"

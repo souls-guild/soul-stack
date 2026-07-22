@@ -1,0 +1,47 @@
+kind: ssh_provider
+protocol_version: 1                    # plugin-protocol compat flag (ADR-020(c))
+namespace: ssh                         # example third-party SshProvider collection
+name: static
+
+# Closed enum per ADR-020(f).
+# Static-key reads the private key from a file on the keeper host (or from Vault
+# KV, if params.vault_ref is set). vault_access is only needed for the second
+# case; we declare it because the provider IS ABLE to reach Vault (declaration,
+# not runtime — docs/keeper/plugins.md → required_capabilities).
+required_capabilities:
+  - vault_access                       # optional key resolution from Vault KV
+
+# SshProvider does not touch local host resources (the key lives in
+# keeper.push memory for the session's duration), example from docs/keeper/plugins.md.
+side_effects: []
+
+spec:
+  # provider_kind — open string (ADR-020(e)); convention from docs/keeper/plugins.md.
+  provider_kind: static_key
+  # JSON Schema draft 2020-12 (format for kind: ssh_provider — see
+  # docs/keeper/plugins.md → spec.params_schema). Embedded from schema.json.
+  params_schema:
+    type: object
+    # exactly one of the key sources: file path OR Vault KV reference
+    oneOf:
+      - required: [key_path]
+      - required: [vault_ref]
+    properties:
+      key_path:
+        type: string
+        description: Absolute path to the private SSH key on the keeper host.
+        examples: [/etc/soul-stack-keeper/ssh/id_ed25519]
+      vault_ref:
+        type: string
+        description: Reference to a Vault KV secret containing the private key (field `private_key`).
+        examples: ["secret/keeper/push/static-key"]
+      deny:
+        type: array
+        description: >-
+          Deny-list of (host, user) pairs; by default the provider is allow-all (dev/test).
+          Each entry is `{host?, user?}`; an empty field means wildcard on that dimension.
+        items:
+          type: object
+          properties:
+            host: { type: string, format: hostname }
+            user: { type: string }

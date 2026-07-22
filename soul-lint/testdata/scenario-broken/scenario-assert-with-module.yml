@@ -1,0 +1,9 @@
+name: assert-with-module
+tasks:
+  - name: assert is a discriminator, cannot coexist with module
+    module: core.exec.run
+    params:
+      command: "true"
+    assert:
+      that:
+        - "size(soulprint.hosts) == 1"

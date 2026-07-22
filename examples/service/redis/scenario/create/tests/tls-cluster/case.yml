@@ -1,0 +1,197 @@
+# L0 test: TLS cluster (only-TLS). Guard: with tls_enable+tls_only in cluster mode,
+# the merged config carries TLS directives INCLUDING tls-cluster yes (the cluster
+# bus is encrypted) + port 0 (plain is closed); the cluster-build plugin connects to
+# nodes OVER TLS (tls=true, tls_ca, addrs on tls_port). cert/CA/port — a host
+# invariant (one per cluster) → via apply.input (resolving on targeted[0] is correct).
+name: tls cluster adds tls-cluster directive and builds over TLS on tls_only
+
+fixtures:
+  default_destiny_source: "file://../../destiny/{name}"
+  hosts:
+    - sid: node-b.example.com
+      covens: [create, redis]
+      soulprint:
+        network: { primary_ip: 10.0.0.2 }
+        os: { arch: amd64 }
+    - sid: node-c.example.com
+      covens: [create, redis]
+      soulprint:
+        network: { primary_ip: 10.0.0.3 }
+        os: { arch: amd64 }
+    - sid: node-a.example.com
+      covens: [create, redis]
+      soulprint:
+        network: { primary_ip: 10.0.0.1 }
+        os: { arch: amd64 }
+  vault:
+    secret/redis/create:
+      password: s3cr3t-redis-pass-create
+    # Per-user secrets of system users (secret/redis/<inc>/users/<name>#password) —
+    # resolved by keeper-side vault() when adding system_acl_users into apply.input.users.
+    # ★ default_admin REDESIGN (2026-06-30): default_admin is the system user of intra-cluster
+    # AUTH (PING/cluster-build/masterauth of the deploy read its password from the same
+    # users/<name> branch).
+    secret/redis/create/users/default_admin:
+      password: default-admin-secret-pass
+    secret/redis/create/users/replica:
+      password: replica-sys-secret-pass
+    secret/redis/create/users/monitoring:
+      password: monitoring-sys-secret-pass
+    secret/redis/create/users/sentinel:
+      password: sentinel-sys-secret-pass
+    secret/redis/create/users/haproxy:
+      password: haproxy-sys-secret-pass
+    secret/services/redis/tls:
+      cert: "-----BEGIN CERTIFICATE-----\nSERVERCERT\n-----END CERTIFICATE-----"
+      key:  "-----BEGIN PRIVATE KEY-----\nSERVERKEY\n-----END PRIVATE KEY-----"
+      ca:   "-----BEGIN CERTIFICATE-----\nCACERT\n-----END CERTIFICATE-----"
+  essence:
+    # install_method — in essence (author-context, 2026-06-28): the install method is
+    # NOT operator-input. compute.install reads default(essence.install_method, 'binary').
+    install_method: package
+    redis_type: cluster
+    modules_base_url: "https://artifacts.example.com/redis/modules"
+    memory_reserve_percent: 75
+    persistence_presets:
+      rdb:
+        save: "900 1 300 10 60 10000"
+        appendonly: "no"
+    redis_config:
+      maxmemory:        "256mb"
+      maxmemory-policy: allkeys-lru
+      maxclients:       10000
+      timeout:          300
+    # ★ #5: port/refs — in essence; the channel mode is input.connection_mode (tls = only-TLS).
+    tls_port:   7379
+    tls_cert_ref: "secret/services/redis/tls#cert"
+    tls_key_ref:  "secret/services/redis/tls#key"
+    tls_ca_ref:   "secret/services/redis/tls#ca"
+
+    # System ACL users of redis-server (1:1 from essence/_default.yaml). MANDATORY:
+    # the create/cluster.yml guard (assert 1b) breaks the render on an empty system_acl_users
+    # (a silent fail-open is unacceptable — replication/health-check would break without them).
+    # ★ default_admin REDESIGN (2026-06-30): default_admin is the system user of full access
+    # (~* &* +@all), under which cluster intra-cluster AUTH runs (replaced requirepass-default).
+    system_acl_users:
+      default_admin: "~* &* +@all"
+      replica:    "+psync +replconf +ping"
+      monitoring: "-@all +@connection +client +ping +info +config|get +cluster|info +slowlog +latency +memory +select +command|count +command|docs"
+      sentinel:   "allchannels +multi +slaveof +ping +exec +subscribe +config|rewrite +role +publish +info +client|setname +client|kill +script|kill"
+      haproxy:    "-@all +auth +client|getname +client|id +client|setname +command +hello +ping +role +info +cluster|info"
+  input:
+    # ★ provision disabled (default-on: an omitted section = ENABLED; the case deploys onto a
+    # READY roster, cloud-create isn't needed) → include redis-provision.yml group-drop.
+    provision:
+      enabled: false
+    redis_type: cluster
+    # version is MANDATORY: enum of builds published to Nexus (major < 8 → module
+    # version-gate isn't active). 7.4.1 — the 7.x series, like the former distro pin 7.2.4.
+    version: "7.4.1"
+    shards: 3
+    replicas_per_master: 0
+    cluster_node_timeout: 5000
+    # ★ Redesign: connection_mode=tls — only-TLS (plain closed, port 0, tls-cluster yes).
+    connection_mode: tls
+
+assert:
+  # size-guard PASS — assert: (ADR-009 amendment), not emitted into the plan.
+  task_present:
+    # redis.conf: merged config with cluster + TLS (incl. tls-cluster yes) + port 0.
+    # Disambiguator from users.acl/hardening — path.
+    - module: core.file.rendered
+      params_subset:
+        path: /etc/redis/redis.conf
+        render_context:
+          vars:
+            conf_dir: /etc/redis
+            data_dir: /var/lib/redis
+            port: 6379
+            run_dir: /var/run/redis
+            log_dir: /var/log/redis
+            loadmodules:
+              - /var/lib/redis/modules/redisbloom.so
+              - /var/lib/redis/modules/rejson.so
+              - /var/lib/redis/modules/redisearch.so
+              - /var/lib/redis/modules/redistimeseries.so
+            config:
+              # ★ default_admin REDESIGN: replica→master AUTH (masteruser/masterauth)
+              # arrives as ORDINARY config directives (the cluster deploy-body adds them
+              # via a vault()-in-cell). In only-TLS, replication runs over TLS (tls-replication
+              # yes above), masterauth is masked by the seal layer.
+              masteruser:       "default_admin"
+              masterauth:       "default-admin-secret-pass"
+              port: "0"
+              tls-port: "7379"
+              tls-cert-file: /etc/redis/tls/redis.crt
+              tls-key-file: /etc/redis/tls/redis.key
+              tls-ca-cert-file: /etc/redis/tls/ca.crt
+              tls-replication: "yes"
+              tls-auth-clients: "no"
+              tls-cluster: "yes"
+              maxmemory:        "256mb"
+              maxmemory-policy: allkeys-lru
+              maxclients:       10000
+              timeout:          300
+              save:             "900 1 300 10 60 10000"
+              appendonly:       "no"
+              cluster-enabled:      "yes"
+              cluster-config-file:  "nodes.conf"
+              cluster-node-timeout: "5000"
+          self:
+            sid: node-a.example.com
+            covens: [create, redis]
+            choirs: []
+            # traits — a registry projection (ADR-060), an empty object without labels.
+            traits: {}
+            role: ""
+            network:
+              primary_ip: 10.0.0.1
+            os:
+              arch: amd64
+          role: ""
+          essence: {}
+
+    # cluster-build: nodes MAP on tls_port (7379), tls=true + tls_ca (plugin over TLS) +
+    # mTLS client-cert (tls_cert/tls_key for the mutual cluster bus, tls-cluster yes).
+    # The only community.redis.cluster in the plan.
+    - module: community.redis.cluster
+      params_subset:
+        action: create
+        replicas_per_shard: 0
+        # ★ default_admin REDESIGN: connects as default_admin (username → AUTH). The former
+        # primary secret is DROPPED — password comes from the users/default_admin branch.
+        username: default_admin
+        password: default-admin-secret-pass
+        tls: true
+        tls_ca: "-----BEGIN CERTIFICATE-----\nCACERT\n-----END CERTIFICATE-----"
+        tls_cert: "-----BEGIN CERTIFICATE-----\nSERVERCERT\n-----END CERTIFICATE-----"
+        tls_key: "-----BEGIN PRIVATE KEY-----\nSERVERKEY\n-----END PRIVATE KEY-----"
+        nodes:
+          node-a.example.com: { addr: "10.0.0.1:7379" }
+          node-b.example.com: { addr: "10.0.0.2:7379" }
+          node-c.example.com: { addr: "10.0.0.3:7379" }
+
+  state_changes:
+    redis_type: cluster
+    redis_version: "7.4.1"
+    connection_mode: tls
+    redis_config:
+      port: "0"
+      tls-port: "7379"
+      tls-cert-file: /etc/redis/tls/redis.crt
+      tls-key-file: /etc/redis/tls/redis.key
+      tls-ca-cert-file: /etc/redis/tls/ca.crt
+      tls-replication: "yes"
+      tls-auth-clients: "no"
+      tls-cluster: "yes"
+      maxmemory:        "256mb"
+      maxmemory-policy: allkeys-lru
+      maxclients:       10000
+      timeout:          300
+      save:             "900 1 300 10 60 10000"
+      appendonly:       "no"
+      cluster-enabled:      "yes"
+      cluster-config-file:  "nodes.conf"
+      cluster-node-timeout: "5000"
+    redis_users: []
+    redis_hosts: []

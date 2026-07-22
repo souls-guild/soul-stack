@@ -1,0 +1,22 @@
+// {{.BinaryName}} is the entry point for the {{.Namespace}}.{{.Name}} SoulModule plugin.
+//
+// The plugin is launched by the host (the Soul daemon) as a sub-process via
+// gRPC-stdio handshake (ADR-020). The actual Apply / Plan / Validate
+// implementation lives in internal/{{.NamePackage}}/.
+package main
+
+import (
+	"log"
+	"os"
+
+	"{{.GoModulePath}}/internal/{{.NamePackage}}"
+	"github.com/souls-guild/soul-stack/sdk/module"
+)
+
+func main() {
+	impl := &{{.NamePackage}}.{{.NamePascal}}Module{}
+	if err := module.Serve(impl); err != nil {
+		log.Printf("{{.BinaryName}}: %v", err)
+		os.Exit(1)
+	}
+}

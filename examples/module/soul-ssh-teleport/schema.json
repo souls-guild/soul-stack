@@ -1,0 +1,31 @@
+{
+  "type": "object",
+  "required": ["proxy_addr"],
+  "properties": {
+    "proxy_addr": {
+      "type": "string",
+      "examples": ["teleport.example.com:3023", "tp-proxy.internal:3023"]
+    },
+    "cluster_name": { "type": "string" },
+    "identity_file": { "type": "string" },
+    "tbot_socket":   { "type": "string" },
+    "roles": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "valid_principals": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "deny": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "host": { "type": "string" },
+          "user": { "type": "string" }
+        }
+      }
+    }
+  }
+}

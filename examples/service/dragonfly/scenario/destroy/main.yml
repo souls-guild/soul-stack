@@ -1,0 +1,201 @@
+name: destroy
+description: >-
+  Teardown DragonFly: remove from EVERY host of the incarnation what create installed — systemd
+  services + config artifacts — BEFORE deleting the incarnation. Lifecycle scenario (NOT runnable from
+  the Run form — a terminal flow DELETE /v1/incarnations/{name}, like create is bootstrap): keeper
+  treats the name `destroy` as a lifecycle phase (scenario.LifecycleScenarioNames),
+  runs in TerminalDestroy mode.
+
+  ★ DragonFly TWO-MODE teardown (user decision 2026-07-01: DragonFly cloud-provision
+  MODELED ON redis; provision is required in the base create — default-on): destroy carries BOTH branches.
+    (1) CLOUD-CASCADE (symmetric with redis/destroy): when create PROVISIONED a VM (provisioned_vm_ids/
+        sids in state — the default-on path), destroy tears down the cloud VMs (core.cloud.destroyed,
+        on: keeper) + cascades keeper registries (souls→destroyed/seeds→orphaned/tokens→burned).
+        Gate `when: size(provisioned_vm_ids) > 0` (static → group-drop) keeps this task ONLY
+        on provisioned incarnations. Assert sids↔vm_ids pairing BEFORE destroy (like redis).
+    (2) SOUL-SIDE teardown (the older DragonFly profile): when create ran against EXISTING
+        hosts (provision: {enabled: false} — not provisioned) — the VM isn't ours, there's nothing
+        to tear down in the cloud, so we clean up Soul-side: stop services + remove our /etc
+        artifacts. These steps are idempotent and UNCONDITIONAL (no when gate), but the ORDER
+        relative to cloud-destroy differs per branch. On a PROVISIONED incarnation, cloud.destroyed
+        (a keeper task), by the keeper invariant "keeper tasks run FIRST in their Passage,"
+        removes these hosts via cascade (souls→destroyed) BEFORE host-fan-out — host-teardown
+        steps then dispatch to an already-removed host, and keeper treats those as a benign
+        terminal no_match (NIM-56 reconcile: the host was removed by its OWN destroy cascade), NOT
+        dispatch_failed/failure (a real disconnect/revocation remains a failure, fail-closed). On a
+        NOT-provisioned incarnation, cloud.destroyed group-drops → host-teardown is the only branch and
+        runs normally on the live hosts.
+  Both branches in one scenario: cloud-cascade group-drops on non-provisioned incarnations, Soul-side
+  is always active. REUSE of the redis/destroy lifecycle skeleton (input: {}, terminal, no state_changes).
+
+  ★ TEARDOWN BOUNDARY (conservative MVP — remove "systemd + files", NOT data/general-purpose
+  packages):
+    - services dragonfly + redis-sentinel + disable-thp are STOPPED (core.service.stopped,
+      idempotent — no service → no-op). redis-sentinel is brought up by destiny `redis` (sentinel
+      from the redis plane, refactor) — but the systemd unit name is the same, stopping it stays valid;
+    - DragonFly is REMOVED by ITS install method (essence.install_method, static gate → group-drop):
+      the binary branch removes /usr/local/bin/dragonfly + its own unit file; the package branch removes
+      the distro deb dragonfly (core.pkg.absent — the package cleanly takes its systemd unit with it, no separate
+      daemon-reload needed);
+    - OUR DragonFly config artifacts in ${conf_dir} and /etc (users.acl, dragonfly.conf, TLS PEM,
+      logrotate/sysctl drop-in, disable-thp unit) are REMOVED — they're always ours, safe in both
+      branches;
+    - ★ SENTINEL ARTIFACTS (sentinel.conf/sentinel-users.acl/redis-sentinel unit, the
+      redis-server package) are NOT removed HERE — they're deployed by destiny `redis` (sentinel_only) in
+      ITS conf_dir (/etc/redis), not /etc/dragonfly. Full sentinel teardown is a separate slice
+      (apply destiny `redis` teardown / explicit /etc/redis paths). Not critical for PILOT: the
+      redis-sentinel unit is stopped (above), an orphaned config is harmless on a host being deleted;
+    - data_dir (DragonFly snapshot data), the redis-tools package (redis-cli — general purpose,
+      installed UNCONDITIONALLY), the distro dragonfly user — are NOT TOUCHED (deleting data is destructive
+      and irreversible; removing shared packages would affect neighboring services). This is a deliberate MVP
+      boundary — extending the "depth" (purging data, removing packages) is a separate decision.
+
+  ★ state_changes are ABSENT on purpose: destroy is terminal — the incarnation is being deleted
+  (auto_destroy), clearing state is pointless (it goes away with the incarnation). Mirror of create,
+  where state is POPULATED; here we don't touch it.
+
+  Targeting — the whole incarnation (on omitted, ADR-008/009): teardown runs on EVERY host of the
+  incarnation (Soul-side, not keeper — host operations over systemd/files).
+
+# ── Operator input contract ────────────────────────────────────────────────
+# Empty: destroy takes no operator input. What to remove is a FACT from incarnation.state
+# (provisioned_provider/vm_ids/sids for cloud-cascade) + the install method and conf_dir from essence
+# (install_method/conf_dir for Soul-side teardown), not an operator choice at teardown time.
+# The operator only initiates the deletion (DELETE /v1/incarnations/{name}).
+input: {}
+
+tasks:
+  # ── CLOUD-CASCADE branch (provisioned VMs, symmetric with redis/destroy, ADR-061) ────
+  # ★ sids↔vm_ids pairing invariant BEFORE destroy (architect): provisioned_sids and
+  # provisioned_vm_ids are read as a PAIR — a cascade without sids would leave orphaned
+  # souls/seeds/tokens (vm_ids tear down VMs at the provider, sids clean up registries;
+  # a length mismatch = orphan). create writes both with ONE guard from
+  # register.provision.hosts (a single source of truth for size), so normally the lengths
+  # match; the assert catches state corruption (manual edit / partial migration / bug) BEFORE
+  # an irreversible destroy. RUN-LEVEL precondition (computed keeper-side during the render phase,
+  # ONCE, BEFORE dispatching destroyed). On a non-provisioned incarnation, both sides default
+  # to [] → 0 == 0 → vacuously true (the assert doesn't block Soul-side teardown without provisioning).
+  # default(...) — the fields are back-compat-optional (incarnations before v3/v4 lack them).
+  - name: Assert provisioned sids and vm_ids were captured as a pair before teardown
+    assert:
+      that:
+        - "size(default(incarnation.state.provisioned_sids, [])) == size(default(incarnation.state.provisioned_vm_ids, []))"
+      message: "provisioned_sids and provisioned_vm_ids in incarnation.state are mismatched: a cascade-destroy without the full SID set would leave orphaned souls/seeds/bootstrap_tokens records (anti-replay violation) — the lengths must match (both sets are written by create with a single guard from register.provision.hosts)"
+
+  # Removing VMs + cascading keeper registries (core.cloud.destroyed, on: keeper). ★ The address
+  # is EXACTLY core.cloud.destroyed (base core.cloud + state destroyed): applyDestroyed →
+  # PluginHost.Destroy(vm_ids) THEN cascade(sids). params come from incarnation.state (the keeper
+  # task sees a pre-run snapshot). GROUP-DROP on non-provisioned: when is static
+  # (incarnation.* only, isStaticWhen) → an empty provisioned_vm_ids excludes the task from
+  # the plan (render-phase, not placeholder-skip). Incarnations without provisioning go through teardown
+  # without a cloud call (only Soul-side below).
+  - name: Destroy provisioned VMs and cascade their keeper registry records
+    on: keeper
+    module: core.cloud.destroyed
+    when: "size(default(incarnation.state.provisioned_vm_ids, [])) > 0"
+    params:
+      provider: "${ incarnation.state.provisioned_provider }"
+      vm_ids:   "${ incarnation.state.provisioned_vm_ids }"
+      sids:     "${ incarnation.state.provisioned_sids }"
+
+  # ── SOUL-SIDE teardown (the older DragonFly profile, always active) ────────────
+  # ── 1. Stop the DragonFly services (idempotent) ───────────────────────────
+  # core.service.stopped brings the unit to "not running": no service (already removed
+  # or never installed) means no-op. Stop BEFORE removing files/package, since pulling
+  # the config out from under a running daemon is a race. Three units: dragonfly (data
+  # plane), redis-sentinel (the sentinel daemon, deployed by destiny `redis`, though the
+  # unit name is the same), disable-thp (oneshot THP, RemainAfterExit; stop clears the
+  # active marker).
+  - name: Stop the dragonfly service
+    module: core.service.stopped
+    params:
+      name: dragonfly
+
+  - name: Stop the redis-sentinel service
+    module: core.service.stopped
+    params:
+      name: redis-sentinel
+
+  - name: Stop the disable-thp service
+    module: core.service.stopped
+    params:
+      name: disable-thp
+
+  # ── 2a. Remove DragonFly: BINARY branch (upstream-tarball install) ────────────
+  # Gate is static (essence.install_method only → isStaticWhen) → render-phase GROUP-DROP:
+  # on a package incarnation these tasks are physically excluded from the plan. ★ v1→v2:
+  # the install method was MOVED out of state into essence (install is no longer in
+  # state), so the gate reads essence.install_method (the same source as compute.install
+  # in create). binary create put the binary in /usr/local/bin and ITS OWN unit in
+  # /etc/systemd/system: both are ours, remove them.
+  - name: Remove the dragonfly binary (binary install)
+    module: core.file.absent
+    when: "default(essence.install_method, 'package') == 'binary'"
+    params:
+      path: /usr/local/bin/dragonfly
+
+  - name: Remove the dragonfly systemd unit (binary install)
+    module: core.file.absent
+    when: "default(essence.install_method, 'package') == 'binary'"
+    params:
+      path: /etc/systemd/system/dragonfly.service
+
+  # ── 2b. Remove DragonFly: PACKAGE branch (distro deb dragonfly) ───────────────
+  # Gate is static (group-drop on binary incarnations). package create installed the
+  # distro deb dragonfly with its own systemd unit; remove it via the PACKAGE
+  # (core.pkg.absent) so the package cleanly takes its unit with it (no separate
+  # daemon-reload needed, since apt/dpkg reconciles systemd itself). ★ v1→v2: install
+  # method from essence.install_method (package is the default): "method != binary".
+  - name: Remove the dragonfly distribution package (package install)
+    module: core.pkg.absent
+    when: "default(essence.install_method, 'package') != 'binary'"
+    params:
+      name: dragonfly
+
+  # ── 3. Remove OUR DragonFly config artifacts (both branches, always ours) ───────
+  # ${conf_dir} files (users.acl, dragonfly.conf, TLS PEM) + /etc drop-ins (logrotate,
+  # sysctl, disable-thp unit). conf_dir from essence (default /etc/dragonfly).
+  # core.file.absent is idempotent (no file → no-op). Remove the TLS PEM unconditionally:
+  # on a plaintext incarnation these files don't exist → no-op (no need to gate it).
+  # ★ sentinel.conf/sentinel-users.acl are NOT REMOVED HERE: they're deployed by destiny
+  # `redis` (sentinel_only) in /etc/redis, not /etc/dragonfly (the "sentinel out of redis"
+  # refactor); their teardown is a separate slice (see the header).
+  - name: Remove the dragonfly users.acl
+    module: core.file.absent
+    params:
+      path: "${ default(essence.conf_dir, '/etc/dragonfly') + '/users.acl' }"
+
+  - name: Remove the dragonfly.conf flagfile
+    module: core.file.absent
+    params:
+      path: "${ default(essence.conf_dir, '/etc/dragonfly') + '/dragonfly.conf' }"
+
+  - name: Remove the TLS server certificate
+    module: core.file.absent
+    params:
+      path: "${ default(essence.conf_dir, '/etc/dragonfly') + '/tls/dragonfly.crt' }"
+
+  - name: Remove the TLS server private key
+    module: core.file.absent
+    params:
+      path: "${ default(essence.conf_dir, '/etc/dragonfly') + '/tls/dragonfly.key' }"
+
+  - name: Remove the TLS CA certificate
+    module: core.file.absent
+    params:
+      path: "${ default(essence.conf_dir, '/etc/dragonfly') + '/tls/ca.crt' }"
+
+  - name: Remove the dragonfly logrotate config
+    module: core.file.absent
+    params:
+      path: /etc/logrotate.d/dragonfly
+
+  - name: Remove the dragonfly sysctl drop-in
+    module: core.file.absent
+    params:
+      path: /etc/sysctl.d/30-dragonfly.conf
+
+  - name: Remove the disable-thp systemd unit
+    module: core.file.absent
+    params:
+      path: /etc/systemd/system/disable-thp.service

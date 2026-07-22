@@ -1,0 +1,225 @@
+# L0 trial for create (cluster, multi-host) — Redis MODULES on a cluster (the
+# "modules ALWAYS ALL" directive). Guard that in cluster mode (3 hosts, shards=3)
+# the FULL module set is deployed (.so of all four are fetched, loadmodule directives
+# for all four go into redis.conf alongside the cluster directives). Per-host arch in
+# URL: all hosts amd64 (homogeneous), arch from soulprint.self.os.arch — render_context
+# L0 carries the self of the first host by SID (node-a), but the .tmpl LAYER on Soul takes
+# the arch of EACH host (mixed-arch is correct — URL builds destiny per-host, not apply.input).
+# input.modules is no longer set (set-invariant in destiny vars.redis_modules).
+# .so are fetched WITHOUT checksum (content idempotency, sha256 inputs removed 2026-06-25).
+name: cluster modules fetch every .so and add loadmodule alongside cluster directives
+
+fixtures:
+  default_destiny_source: "file://../../destiny/{name}"
+  hosts:
+    - sid: node-b.example.com
+      covens: [create, redis]
+      soulprint:
+        network: { primary_ip: 10.0.0.2 }
+        os: { arch: amd64 }
+    - sid: node-c.example.com
+      covens: [create, redis]
+      soulprint:
+        network: { primary_ip: 10.0.0.3 }
+        os: { arch: amd64 }
+    - sid: node-a.example.com
+      covens: [create, redis]
+      soulprint:
+        network: { primary_ip: 10.0.0.1 }
+        os: { arch: amd64 }
+  vault:
+    secret/redis/create:
+      password: s3cr3t-redis-pass-create
+    # Per-user secrets of system users (secret/redis/<inc>/users/<name>#password) —
+    # resolved by keeper-side vault() when topping up system_acl_users into apply.input.users.
+    # ★ default_admin REDESIGN (2026-06-30): default_admin — system user for intra-cluster
+    # AUTH (PING/cluster-build/masterauth of the deploy read its password from the same users/<name> branch).
+    secret/redis/create/users/default_admin:
+      password: default-admin-secret-pass
+    secret/redis/create/users/replica:
+      password: replica-sys-secret-pass
+    secret/redis/create/users/monitoring:
+      password: monitoring-sys-secret-pass
+    secret/redis/create/users/sentinel:
+      password: sentinel-sys-secret-pass
+    secret/redis/create/users/haproxy:
+      password: haproxy-sys-secret-pass
+  essence:
+    # install_method — in essence (author-context, 2026-06-28): install method
+    # is NOT operator-input. compute.install reads default(essence.install_method, 'binary').
+    install_method: package
+    redis_type: cluster
+    modules_base_url: "https://artifacts.example.com/redis/modules/6.2"
+    memory_reserve_percent: 75
+    persistence_presets:
+      off:
+        save: ""
+        appendonly: "no"
+      aof_1sec:
+        save: ""
+        appendonly: "yes"
+      rdb:
+        save: "900 1 300 10 60 10000"
+        appendonly: "no"
+      rdb_aof_1sec:
+        save: "900 1 300 10 60 10000"
+        appendonly: "yes"
+    redis_config:
+      maxmemory:        "256mb"
+      maxmemory-policy: allkeys-lru
+      maxclients:       10000
+      timeout:          300
+
+    # System ACL users of redis-server (1:1 from essence/_default.yaml). REQUIRED:
+    # guard create/cluster.yml (assert 1b) breaks the render on empty system_acl_users
+    # (silent fail-open is unacceptable — without them replication/health-check would break).
+    # ★ default_admin REDESIGN (2026-06-30): default_admin — full-access system user
+    # (~* &* +@all), under it intra-cluster AUTH cluster (replaced requirepass-default).
+    system_acl_users:
+      default_admin: "~* &* +@all"
+      replica:    "+psync +replconf +ping"
+      monitoring: "-@all +@connection +client +ping +info +config|get +cluster|info +slowlog +latency +memory +select +command|count +command|docs"
+      sentinel:   "allchannels +multi +slaveof +ping +exec +subscribe +config|rewrite +role +publish +info +client|setname +client|kill +script|kill"
+      haproxy:    "-@all +auth +client|getname +client|id +client|setname +command +hello +ping +role +info +cluster|info"
+  input:
+    # ★ provision disabled (default-on: an omitted section = ENABLED; the case deploys onto a
+    # READY roster, cloud-create isn't needed) → include redis-provision.yml group-drop.
+    provision:
+      enabled: false
+    redis_type: cluster
+    version: "7.4.1"
+    # install_method=package EXPLICITLY (redesign default is binary): the case is about modules
+    # (fetching .so), not about the install model; the package branch is active but not asserted.
+    shards: 3
+    replicas_per_master: 0
+    cluster_node_timeout: 5000
+    # input.modules is not set (set-invariant). .so are fetched via content
+    # idempotency (without checksum).
+
+assert:
+  task_present:
+    # redis.conf carries cluster directives + vars.loadmodules ([rejson.so]).
+    # Disambiguator from users.acl/hardening (same core.file.rendered) — path.
+    - module: core.file.rendered
+      params_subset:
+        path: /etc/redis/redis.conf
+        template_content: "<present>"
+        mode: "0640"
+        owner: redis
+        group: redis
+        render_context:
+          vars:
+            conf_dir: /etc/redis
+            data_dir: /var/lib/redis
+            port: 6379
+            run_dir: /var/run/redis
+            log_dir: /var/log/redis
+            loadmodules:
+              - /var/lib/redis/modules/redisbloom.so
+              - /var/lib/redis/modules/rejson.so
+              - /var/lib/redis/modules/redisearch.so
+              - /var/lib/redis/modules/redistimeseries.so
+            config:
+              # ★ default_admin REDESIGN: replica→master AUTH (masteruser/masterauth)
+              # arrives as REGULAR config directives (cluster deploy-body tops them up
+              # via vault()-in-cell).
+              masteruser:       "default_admin"
+              masterauth:       "default-admin-secret-pass"
+              maxmemory:        "256mb"
+              maxmemory-policy: allkeys-lru
+              maxclients:       10000
+              timeout:          300
+              save:             "900 1 300 10 60 10000"
+              appendonly:       "no"
+              cluster-enabled:      "yes"
+              cluster-config-file:  "nodes.conf"
+              cluster-node-timeout: "5000"
+          self:
+            sid: node-a.example.com
+            covens: [create, redis]
+            choirs: []
+            # traits — registry projection (ADR-060), empty object without labels.
+            traits: {}
+            role: ""
+            network:
+              primary_ip: 10.0.0.1
+            os:
+              arch: amd64
+          role: ""
+          essence: {}
+
+    # modules-dir directory — gated-include on deploy_redis && !redis8, active.
+    # Disambiguator from systemd-dropin-dir (same core.directory.present) — path.
+    - module: core.directory.present
+      params_subset:
+        path: /var/lib/redis/modules
+        owner: redis
+        group: redis
+        mode: "0750"
+
+    # fetch .so — ALL four (Go-sort: bloom, json, search, timeseries). URL is arch-
+    # specific (x86_64 — uname-m mapping of soulprint amd64 of the first host in L0). checksum is NOT passed —
+    # content idempotency. tarball-fetch (binary install) — placeholder.
+    - module: core.url.fetched
+      params_subset:
+        url: "https://artifacts.example.com/redis/modules/6.2/x86_64/redisbloom.so"
+        path: /var/lib/redis/modules/redisbloom.so
+        mode: "0750"
+        owner: redis
+        group: redis
+
+    - module: core.url.fetched
+      params_subset:
+        url: "https://artifacts.example.com/redis/modules/6.2/x86_64/rejson.so"
+        path: /var/lib/redis/modules/rejson.so
+        mode: "0750"
+        owner: redis
+        group: redis
+
+    - module: core.url.fetched
+      params_subset:
+        url: "https://artifacts.example.com/redis/modules/6.2/x86_64/redisearch.so"
+        path: /var/lib/redis/modules/redisearch.so
+        mode: "0750"
+        owner: redis
+        group: redis
+
+    - module: core.url.fetched
+      params_subset:
+        url: "https://artifacts.example.com/redis/modules/6.2/x86_64/redistimeseries.so"
+        path: /var/lib/redis/modules/redistimeseries.so
+        mode: "0750"
+        owner: redis
+        group: redis
+
+    # cluster-build: the only community.redis.cluster in the plan.
+    - module: community.redis.cluster
+      params_subset:
+        action: create
+        replicas_per_shard: 0
+        # ★ default_admin REDESIGN: connect as default_admin (username → AUTH). The previous
+        # master secret is DROPPED — password comes from the users/default_admin branch.
+        username: default_admin
+        password: default-admin-secret-pass
+        nodes:
+          node-a.example.com: { addr: "10.0.0.1:6379" }
+          node-b.example.com: { addr: "10.0.0.2:6379" }
+          node-c.example.com: { addr: "10.0.0.3:6379" }
+
+  state_changes:
+    redis_type: cluster
+    redis_version: "7.4.1"
+    redis_config:
+      maxmemory:        "256mb"
+      maxmemory-policy: allkeys-lru
+      maxclients:       10000
+      timeout:          300
+      save:             "900 1 300 10 60 10000"
+      appendonly:       "no"
+      cluster-enabled:      "yes"
+      cluster-config-file:  "nodes.conf"
+      cluster-node-timeout: "5000"
+    redis_users: []
+    redis_hosts: []
+    # Redis 6 (< 8) → the full set is deployed (modules always all).
+    modules: [bloom, json, search, timeseries]

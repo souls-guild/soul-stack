@@ -1,0 +1,77 @@
+kind: ssh_provider
+protocol_version: 1                    # plugin-protocol compat flag (ADR-020(c))
+namespace: ssh                         # SshProvider collection in this repo
+name: teleport
+
+# Closed enum per ADR-020(f). Teleport provider:
+#   network_outbound — gRPC calls to the Teleport Auth API (via Teleport proxy).
+# vault_access is NOT needed — Teleport is not Vault. The plugin authenticates
+# to Teleport via identity-file (or tbot socket; PM decision creds-flow=B: the
+# plugin authenticates to Teleport itself via identity-file/profile/credentials
+# in env). These artifacts are resolved outside the Vault channel.
+required_capabilities:
+  - network_outbound
+
+# SshProvider doesn't touch local host resources (the cert lives in memory
+# during the keeper.push session — Keeper-ephemeral mode, see docs/keeper/push.md).
+side_effects: []
+
+spec:
+  # provider_kind — open string (ADR-020(e)); convention from docs/keeper/plugins.md.
+  provider_kind: teleport
+  # JSON Schema draft 2020-12 (format for kind: ssh_provider — see
+  # docs/keeper/plugins.md → spec.params_schema). Embedded from schema.json.
+  params_schema:
+    type: object
+    required: [proxy_addr]
+    properties:
+      proxy_addr:
+        type: string
+        description: >-
+          Teleport proxy endpoint (`host:port`, usually :3023 for SSH proxy).
+          Goes into SignReply.proxy_jump for later use by
+          keeper.push (dispatcher proxy_jump support — S3, see docs/keeper/push.md).
+        examples: ["teleport.example.com:3023", "tp-proxy.internal:3023"]
+      cluster_name:
+        type: string
+        description: >-
+          Teleport cluster name (opt.). Used with a multi-cluster
+          Teleport configuration (trust between root and leaf clusters).
+      identity_file:
+        type: string
+        description: >-
+          Path to the Teleport identity-file (usually issued by `tctl auth sign`
+          or `tbot`). Alternative — tbot_socket. One of the two sources is
+          required.
+      tbot_socket:
+        type: string
+        description: >-
+          Path to the `tbot` daemon's Unix socket, if used (renewable
+          credentials without an identity-file on disk). Mutually exclusive with
+          identity_file (oneOf).
+      roles:
+        type: array
+        description: >-
+          List of Teleport roles under which certificates for the end user
+          are requested. Empty list = default roles assigned to the
+          identity-file/tbot-bot.
+        items: { type: string }
+      valid_principals:
+        type: array
+        description: >-
+          Allowlist of principals (Linux users) that the plugin allows
+          to place in the signed cert. Empty list = accept any
+          `req.user` (if the Teleport role allows it). Hard
+          restriction for production.
+        items: { type: string }
+      deny:
+        type: array
+        description: >-
+          Deny-list of (host, user) pairs; the provider is allow-all by
+          default (dev/test). Each entry — `{host?, user?}`; an empty field = wildcard
+          on that dimension (symmetric with soul-ssh-static / soul-ssh-vault).
+        items:
+          type: object
+          properties:
+            host: { type: string, format: hostname }
+            user: { type: string }

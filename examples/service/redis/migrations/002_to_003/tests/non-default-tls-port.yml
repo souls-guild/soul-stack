@@ -1,0 +1,57 @@
+name: non-default-tls-port
+description: >
+  GUARD: redis_config['tls-port']="9999" (non-default TLS port) → state.tls.port=7379
+  (role default), NOT 9999. Locks in the documented best-effort behavior as a regression
+  guard: the migration-CEL sandbox (ADR-019) has no string->int, so tls.port is NOT
+  extracted from the string redis_config['tls-port'], but is set to the role default 7379
+  (see 002_to_003.yml, set state.tls.port: 7379). The exact port is restored on the
+  next create-override. ★ If someone adds int(string) to the sandbox and starts
+  extracting tls-port — this test WILL FAIL (state_after expects 7379, not 9999), signaling a
+  contract change. tls.enable=true (tls-port is present), tls.only=true (port == '0').
+
+state_before:
+  redis_type: standalone
+  redis_version: "7.2.4"
+  redis_config:
+    port: "0"
+    tls-port: "9999"
+    tls-cert-file: /etc/redis/tls/redis.crt
+    tls-key-file: /etc/redis/tls/redis.key
+    tls-ca-cert-file: /etc/redis/tls/ca.crt
+    save: "900 1 300 10 60 10000"
+    appendonly: "no"
+  redis_users: {}
+  redis_hosts: []
+  redis_sentinel: {}
+
+state_after:
+  redis_type: standalone
+  redis_version: "7.2.4"
+  redis_config:
+    port: "0"
+    tls-port: "9999"
+    tls-cert-file: /etc/redis/tls/redis.crt
+    tls-key-file: /etc/redis/tls/redis.key
+    tls-ca-cert-file: /etc/redis/tls/ca.crt
+    save: "900 1 300 10 60 10000"
+    appendonly: "no"
+  redis_users: {}
+  redis_hosts: []
+  redis_sentinel: {}
+  tls:
+    enable: true
+    only: true
+    port: 7379
+    cert_ref: ""
+    key_ref: ""
+    ca_ref: ""
+  install:
+    method: package
+  persistence: rdb
+  maxmemory_policy: ""
+  memory_mb: 0
+  modules: []
+  sysctl_settings: {}
+  shards: 0
+  replicas: 0
+  sentinel_quorum: 0

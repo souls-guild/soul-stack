@@ -1,0 +1,155 @@
+# L0 test for create in cluster mode — a SINGLE-NODE cluster (shards=1,
+# replicas_per_shard=0 → 1 host, size-guard PASS: 1 == 1*(1+0)). Edge case:
+# the minimal valid cluster topology. Proves that the cluster branch is correct
+# even with a single-host roster (size-guard doesn't require ≥2 hosts), the nodes MAP contains
+# exactly one entry, cluster directives render as usual.
+#
+# This host is simultaneously the only one by SID, so render_context.self ==
+# the nodes-MAP entry (announce-ip in the .tmpl comes from its own .self.network.primary_ip).
+name: cluster create single-node (1 shard, 0 replicas)
+
+fixtures:
+  default_destiny_source: "file://../../destiny/{name}"
+  hosts:
+    - sid: node-solo.example.com
+      covens: [create, redis]
+      soulprint:
+        network: { primary_ip: 10.0.0.9 }
+        os: { arch: amd64 }
+  vault:
+    secret/redis/create:
+      password: s3cr3t-redis-pass-create
+    # Per-user secrets for system users (secret/redis/<inc>/users/<name>#password) —
+    # resolved by keeper-side vault() when filling system_acl_users into apply.input.users.
+    # ★ default_admin redesign (2026-06-30): default_admin is the system user for intra-cluster
+    # AUTH (deploy's PING/cluster-build/masterauth read its password from the same users/<name> branch).
+    secret/redis/create/users/default_admin:
+      password: default-admin-secret-pass
+    secret/redis/create/users/replica:
+      password: replica-sys-secret-pass
+    secret/redis/create/users/monitoring:
+      password: monitoring-sys-secret-pass
+    secret/redis/create/users/sentinel:
+      password: sentinel-sys-secret-pass
+    secret/redis/create/users/haproxy:
+      password: haproxy-sys-secret-pass
+  essence:
+    redis_type: cluster
+    modules_base_url: "https://artifacts.example.com/redis/modules"
+    memory_reserve_percent: 75
+    persistence_presets:
+      rdb:
+        save: "900 1 300 10 60 10000"
+        appendonly: "no"
+    redis_config:
+      maxmemory:        "256mb"
+      maxmemory-policy: allkeys-lru
+      maxclients:       10000
+      timeout:          300
+
+    # System redis-server ACL users (1:1 from essence/_default.yaml). REQUIRED:
+    # the guard in create/cluster.yml (assert 1b) aborts render if system_acl_users is empty
+    # (silent fail-open is unacceptable — replication/health-check would break without them).
+    # ★ default_admin redesign (2026-06-30): default_admin is the full-access system user
+    # (~* &* +@all), used for intra-cluster AUTH (replaced the requirepass default).
+    system_acl_users:
+      default_admin: "~* &* +@all"
+      replica:    "+psync +replconf +ping"
+      monitoring: "-@all +@connection +client +ping +info +config|get +cluster|info +slowlog +latency +memory +select +command|count +command|docs"
+      sentinel:   "allchannels +multi +slaveof +ping +exec +subscribe +config|rewrite +role +publish +info +client|setname +client|kill +script|kill"
+      haproxy:    "-@all +auth +client|getname +client|id +client|setname +command +hello +ping +role +info +cluster|info"
+  input:
+    # ★ provision disabled (default-on: an omitted section = ENABLED; this case deploys onto a
+    # READY roster, no cloud-create needed) → include redis-provision.yml group-drop.
+    provision:
+      enabled: false
+    redis_type: cluster
+    # version is REQUIRED (user directive 2026-06-23): a fixed
+    # distro-native pin (major < 8 → module version-gate not active).
+    version: "7.4.1"
+    shards: 1
+    replicas_per_master: 0
+    cluster_node_timeout: 5000
+
+assert:
+  # size-guard PASS: 1 == 1*(1+0) → assert that[0] true (assert:, not a task,
+  # ADR-009 amendment), not emitted into the plan.
+  task_present:
+    # redis.conf: cluster directives; render_context.self = the only host.
+    # Disambiguator from users.acl/hardening — path.
+    - module: core.file.rendered
+      params_subset:
+        path: /etc/redis/redis.conf
+        template_content: "<present>"
+        mode: "0640"
+        owner: redis
+        group: redis
+        render_context:
+          vars:
+            conf_dir: /etc/redis
+            data_dir: /var/lib/redis
+            port: 6379
+            run_dir: /var/run/redis
+            log_dir: /var/log/redis
+            loadmodules:
+              - /var/lib/redis/modules/redisbloom.so
+              - /var/lib/redis/modules/rejson.so
+              - /var/lib/redis/modules/redisearch.so
+              - /var/lib/redis/modules/redistimeseries.so
+            config:
+              # ★ default_admin redesign: replica→master AUTH (masteruser/masterauth)
+              # comes as REGULAR config directives (cluster deploy-body fills them in as
+              # vault()-in-cell). Always filled in (failover-safe; single-node: inert).
+              masteruser:       "default_admin"
+              masterauth:       "default-admin-secret-pass"
+              maxmemory:        "256mb"
+              maxmemory-policy: allkeys-lru
+              maxclients:       10000
+              timeout:          300
+              save:             "900 1 300 10 60 10000"
+              appendonly:       "no"
+              cluster-enabled:      "yes"
+              cluster-config-file:  "nodes.conf"
+              cluster-node-timeout: "5000"
+          self:
+            sid: node-solo.example.com
+            covens: [create, redis]
+            choirs: []
+            # traits — registry projection (ADR-060), an empty object with no labels.
+            traits: {}
+            role: ""
+            network:
+              primary_ip: 10.0.0.9
+            os:
+              arch: amd64
+          role: ""
+          essence: {}
+
+    # cluster-build: nodes MAP with a single entry. The only
+    # community.redis.cluster in the plan → no disambiguator needed.
+    - module: community.redis.cluster
+      params_subset:
+        action: create
+        replicas_per_shard: 0
+        # ★ default_admin redesign: connect as default_admin (username → AUTH). The old
+        # top-level secret is DROPPED — password comes from the users/default_admin branch.
+        username: default_admin
+        password: default-admin-secret-pass
+        nodes:
+          node-solo.example.com: { addr: "10.0.0.9:6379" }
+
+  state_changes:
+    redis_type: cluster
+    redis_version: "7.4.1"
+    redis_config:
+      maxmemory:        "256mb"
+      maxmemory-policy: allkeys-lru
+      maxclients:       10000
+      timeout:          300
+      save:             "900 1 300 10 60 10000"
+      appendonly:       "no"
+      cluster-enabled:      "yes"
+      cluster-config-file:  "nodes.conf"
+      cluster-node-timeout: "5000"
+    redis_users: []
+    redis_hosts: []

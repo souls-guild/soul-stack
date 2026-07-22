@@ -1,0 +1,17 @@
+kind: cloud_driver
+protocol_version: 1
+namespace: cloud
+name: aws
+required_capabilities:
+  - network_outbound
+  - vault_access
+side_effects: []
+spec:
+  provider_kind: aws
+  profile_schema:
+    type: object
+    required: [region, instance_type, ami]
+    properties:
+      region: { type: string }
+      instance_type: { type: string }
+      ami: { type: string }

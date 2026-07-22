@@ -1,0 +1,61 @@
+# tasks/extras.yml — host-tuning extras: THP unit + logrotate +
+# sysctl. Mode-AGNOSTIC (equally useful for standalone/sentinel). All three are UNCONDITIONAL
+# (recommendation for in-memory-store / hardening — not an operator choice): tasks without
+# when: are ALWAYS rendered. REUSE from redis-extras (THP/sysctl — the same kernel
+# recommendations for an in-memory-store; DragonFly benefits equally from disabled THP and
+# network tuning).
+#
+# disable-thp daemon-reload REMOVED: core.service (daemon_reload: auto) itself re-reads the
+# unit when disable-thp.service changes BEFORE enable/start.
+
+# transparent-hugepages: oneshot unit disabling THP before DragonFly starts. UNCONDITIONAL (THP
+# causes latency spikes on fork snapshot — a recommendation for in-memory-store). Template REUSE
+# from redis (disable-thp.service.tmpl, the unit name disable-thp is neutral).
+- name: Render disable-thp systemd unit
+  module: core.file.rendered
+  params:
+    path: /etc/systemd/system/disable-thp.service
+    template: templates/disable-thp.service.tmpl
+    mode: "${ vars.unit_file_mode }"
+    owner: "${ vars.root_owner }"
+    group: "${ vars.root_group }"
+
+# core.service re-reads the unit itself (daemon_reload: auto) when disable-thp.service changes,
+# before enable/start. disable-thp is oneshot RemainAfterExit, runs once.
+- name: Ensure disable-thp is running and enabled at boot
+  module: core.service.running
+  params:
+    name: disable-thp
+    enabled: true
+
+# logrotate: rotates DragonFly log files in /etc/logrotate.d/dragonfly. UNCONDITIONAL (like
+# THP — host-tuning is not an operator choice). mode 0644 owner/group root — logrotate.d
+# standard.
+# * Template covers ONLY DragonFly glog (refactor "sentinel out of destiny redis": the
+# sentinel-daemon logs are rotated by destiny `redis`'s logrotate) — see logrotate.tmpl.
+- name: Render the dragonfly logrotate config
+  module: core.file.rendered
+  params:
+    path: /etc/logrotate.d/dragonfly
+    template: templates/logrotate.tmpl
+    mode: "${ vars.unit_file_mode }"
+    owner: "${ vars.root_owner }"
+    group: "${ vars.root_group }"
+    vars:
+      # glob for DragonFly (glog) log files under the system log directory.
+      log_dir: "${ vars.log_dir }"
+
+# sysctl: a bulk set of kernel parameters for an in-memory-store in a SINGLE drop-in
+# /etc/sysctl.d/30-dragonfly.conf. UNCONDITIONAL (like THP/logrotate). core.sysctl.applied
+# owns the drop-in itself: writes a deterministic file (sorted keys → no false change),
+# reactively re-reads it with `sysctl -p <file>` on change (reload: auto). In containers some
+# vm.* keys are read-only — ignore_failures makes it `sysctl -e -p` (--ignore silences
+# read-only/nonexistent keys). sysctl_settings — a map kernel-parameter→value, passed by the
+# service scenario via apply.input (defaults — essence.sysctl_settings).
+- name: Apply dragonfly sysctl kernel parameters
+  module: core.sysctl.applied
+  params:
+    filename: 30-dragonfly
+    reload: auto
+    ignore_failures: true
+    settings: "${ default(input.sysctl_settings, {}) }"

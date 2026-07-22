@@ -1,0 +1,335 @@
+# L0 trial (Trial, ADR-023) of the create scenario of the redis service (sentinel single-
+# host mode = 1 master + 0 replicas, standalone-equivalent; redis consolidation into a
+# unified service). The MAIN guard of this slice — translating a SIMPLE typed
+# operator input into a detailed redis.conf via merge() (SHALLOW last-wins) + rendering
+# users.acl with full ACL strings.
+#
+# Render-only, hermetic. Plan = destiny `redis` tasks (isolated
+# render pass, ADR-009; including sentinel.conf/daemon) + community.redis.command
+# (PING health-gate). Isolation is visible from destiny params being assembled from its
+# own apply.input, not from scenario-scope.
+#
+# What we assert (slice acceptance criteria):
+#   1. COMPUTED maxmemory: memory_mb=1024 * reserve=75 / 100 = 768 → "768mb"
+#      (the computed layer overrode the essence default "256mb").
+#   2. save/appendonly from the persistence preset (rdb): save non-empty, appendonly no.
+#   3. LAST-WINS on a CONFLICTING key: timeout exists both in the essence default (300) and
+#      in the operator's redis_settings (60) → merged is 60 (passthrough beats default).
+#   4. maxmemory-policy from input (volatile-lru) overrode essence (allkeys-lru).
+#   5. passthrough redis_settings (tcp-backlog) made it into merged.
+#   6. users.acl was rendered with the operator's FULL ACL string; the user password —
+#      keeper-side vault() resolve per the convention secret/redis/<inc>/users/<name>.
+#
+# Passwords are resolved KEEPER-SIDE via CEL vault() in the render phase (templating.md
+# §2.3/§4): requirepass — secret/redis/<inc>#password; per-user —
+# secret/redis/<inc>/users/<name>#password. incarnation.name in L0 = the scenario name
+# (create). fixtures.vault mocks Vault KV → the plan already has the VALUE (ADR-012).
+name: create translates simple input to merged redis.conf + users.acl
+
+fixtures:
+  default_destiny_source: "file://../../destiny/{name}"
+  hosts:
+    - sid: node-solo.example.com
+      covens: [create]
+      soulprint:
+        network: { primary_ip: 10.0.0.5 }
+        os: { arch: amd64 }
+  # Mock Vault KV: requirepass + the app ACL-user password. The secret/-prefix is stripped
+  # by fixtureVault normalization; the #-field is the key inside the secret.
+  vault:
+    secret/redis/create:
+      password: s3cr3t-redis-pass-create
+    # Per-user secrets of system users (secret/redis/<inc>/users/<name>#password) —
+    # resolved by keeper-side vault() when merging system_acl_users into apply.input.users.
+    # ★ default_admin REDESIGN (2026-06-30): default_admin is the system user
+    # for intra-cluster AUTH (deploy's auth_pass/PING steps read it via the users/<name> branch).
+    secret/redis/create/users/default_admin:
+      password: default-admin-secret-pass
+    secret/redis/create/users/replica:
+      password: replica-sys-secret-pass
+    secret/redis/create/users/monitoring:
+      password: monitoring-sys-secret-pass
+    secret/redis/create/users/sentinel:
+      password: sentinel-sys-secret-pass
+    secret/redis/create/users/haproxy:
+      password: haproxy-sys-secret-pass
+    secret/redis/create/users/app:
+      password: app-user-secret-pass
+  # essence — the translation layer: persistence_presets (data-table),
+  # memory_reserve_percent (OS reserve), redis_config (default-merge substrate).
+  essence:
+    # install_method — in essence (author-context, 2026-06-28): the install method
+    # is NOT operator-input. compute.install reads default(essence.install_method, 'binary').
+    install_method: package
+    redis_type: sentinel
+    sentinel_master_name: master
+    # ★ Redesign: per-master sentinel-defaults substrate (backing input.sentinel_master_settings).
+    sentinel_master_defaults:
+      down-after-milliseconds: "5000"
+      failover-timeout:        "60000"
+    modules_base_url: "https://artifacts.example.com/redis/modules"
+    memory_reserve_percent: 75
+    persistence_presets:
+      off:
+        save: ""
+        appendonly: "no"
+      aof_1sec:
+        save: ""
+        appendonly: "yes"
+      rdb:
+        save: "900 1 300 10 60 10000"
+        appendonly: "no"
+      rdb_aof_1sec:
+        save: "900 1 300 10 60 10000"
+        appendonly: "yes"
+    redis_config:
+      maxmemory:        "256mb"
+      maxmemory-policy: allkeys-lru
+      maxclients:       10000
+      timeout:          300
+
+# Simple typed operator input. memory_mb + persistence + policy + one
+# ACL-user with a full ACL string + passthrough redis_settings with a CONFLICTING
+# key (timeout).
+    # System ACL users of redis-server + the sentinel daemon (1:1 from essence/_default.yaml).
+    # BOTH ARE REQUIRED: the create/sentinel.yml guard (assert 1b) breaks the render if either
+    # set is empty (a silent fail-open is not acceptable — without them replication/sentinel↔redis
+    # AUTH would break).
+    system_acl_users:
+      default_admin: "~* &* +@all"
+      replica:    "+psync +replconf +ping"
+      monitoring: "-@all +@connection +client +ping +info +config|get +cluster|info +slowlog +latency +memory +select +command|count +command|docs"
+      sentinel:   "allchannels +multi +slaveof +ping +exec +subscribe +config|rewrite +role +publish +info +client|setname +client|kill +script|kill"
+      haproxy:    "-@all +auth +client|getname +client|id +client|setname +command +hello +ping +role +info +cluster|info"
+    system_acl_users_sentinel:
+      default_admin: "allchannels allkeys +@all"
+      monitoring: "-@all +@connection -command +client -hello +info -auth +sentinel|masters +sentinel|replicas +sentinel|slaves +sentinel|sentinels +sentinel|ckquorum"
+      sentinel:   "allchannels -@all +auth +client|getname +client|id +client|setname +command +hello +ping +sentinel|is-master-down-by-addr +publish +role +sentinel|get-master-addr-by-name +sentinel|master +sentinel|myid +sentinel|replicas +sentinel|sentinels"
+      haproxy:    "-@all +auth +client|getname +client|id +client|setname +command +hello +ping +role +sentinel|get-master-addr-by-name +sentinel|master +sentinel|myid +sentinel|replicas +sentinel|sentinels"
+  input:
+    # ★ provision disabled (default-on: an omitted section = ENABLED; this case deploys onto an
+    # EXISTING roster, cloud-create not needed) → include redis-provision.yml group-drop.
+    provision:
+      enabled: false
+    redis_type: sentinel
+    version: "7.4.1"
+    # single-host sentinel roster (1 host) → no replicas (size-guard 1+0).
+    replicas_per_master: 0
+    memory_mb: 1024
+    persistence: rdb
+    maxmemory_policy: volatile-lru
+    users:
+      - { name: app, perms: "~app:* +@read +@write -@dangerous", state: "on" }
+    redis_settings:
+      timeout: 60
+      tcp-backlog: 511
+
+# PRESENCE form (assert-by-presence, PILOT of the new L0 model): we assert the PRESENCE
+# of a task call in the plan, not its POSITION (indices are fragile — they shift with any
+# destiny edit). Each task is identified by module + a distinguishing subset of
+# params (path/name) via params_subset; full params aren't needed in presence,
+# matching is partial by-key (extra render keys don't break the match). The disabled
+# include sentinel.yml (sentinel in standalone mode) — task_absent: its tasks are
+# group-dropped (physically absent, conditional-include group-drop), so they don't
+# match — guard "the sentinel daemon does NOT get deployed in standalone".
+assert:
+  task_present:
+    # ── destiny redis (standalone) ──────────────────────────────────────────
+    # core.cmd.shell mode-guard (dispatcher by redis_type) and socket-dir
+    # (when: config.unixsocket — static-skip, no unixsocket) are NOT asserted: the first
+    # is a no-op "true", the second is a disabled branch.
+    - module: core.pkg.installed
+      params_subset:
+        name: redis-server
+        version: "7.4.1"
+
+    # users.acl: MAP name→{perms,state,password} with a FULL ACL string +
+    # keeper-side vault() password. WHY a map and not a list: ranging over a map in the
+    # template sorts keys → deterministic line ordering (regress-guard on the tiling bug
+    # 2026-06-22; the direct order-guard is destiny_redis_tmpl_test.go). Disambiguator
+    # from the redis.conf task — path in params_subset (both are core.file.rendered with the
+    # same when), plus an explicit register-anchor redis_acl.
+    - module: core.file.rendered
+      id: redis_acl
+      params_subset:
+        path: /etc/redis/users.acl
+        template_content: "<present>"
+        mode: "0640"
+        owner: redis
+        group: redis
+        render_context:
+          vars:
+            # SYSTEM (4, from essence.system_acl_users, MANDATORY merge — guard 1b)
+            # + operator-extra app (last-wins). app doesn't overlap system names.
+            users:
+              default_admin:
+                perms: "~* &* +@all"
+                state: "on"
+                password: default-admin-secret-pass
+              replica:
+                perms: "+psync +replconf +ping"
+                state: "on"
+                password: replica-sys-secret-pass
+              monitoring:
+                perms: "-@all +@connection +client +ping +info +config|get +cluster|info +slowlog +latency +memory +select +command|count +command|docs"
+                state: "on"
+                password: monitoring-sys-secret-pass
+              sentinel:
+                perms: "allchannels +multi +slaveof +ping +exec +subscribe +config|rewrite +role +publish +info +client|setname +client|kill +script|kill"
+                state: "on"
+                password: sentinel-sys-secret-pass
+              haproxy:
+                perms: "-@all +auth +client|getname +client|id +client|setname +command +hello +ping +role +info +cluster|info"
+                state: "on"
+                password: haproxy-sys-secret-pass
+              app:
+                perms: "~app:* +@read +@write -@dangerous"
+                state: "on"
+                # Per-user password — keeper-side vault() resolve (plaintext in the plan,
+                # already sha256-hashed in the template). The assert catches resolve regressions.
+                password: app-user-secret-pass
+          self:
+            sid: node-solo.example.com
+            covens: [create]
+            choirs: []
+            # traits — registry projection (ADR-060), empty object with no labels.
+            traits: {}
+            role: ""
+            network:
+              primary_ip: 10.0.0.5
+            os:
+              arch: amd64
+          role: ""
+          essence: {}
+
+    # redis.conf: the RESULT of merge(). This is where the main translation guard lives. Disambiguator
+    # from users.acl — register-anchor redis_conf + path.
+    - module: core.file.rendered
+      id: redis_conf
+      params_subset:
+        path: /etc/redis/redis.conf
+        template_content: "<present>"
+        mode: "0640"
+        owner: redis
+        group: redis
+        render_context:
+          vars:
+            conf_dir: /etc/redis
+            data_dir: /var/lib/redis
+            port: 6379
+            run_dir: /var/run/redis
+            log_dir: /var/log/redis
+            loadmodules:
+              - /var/lib/redis/modules/redisbloom.so
+              - /var/lib/redis/modules/rejson.so
+              - /var/lib/redis/modules/redisearch.so
+              - /var/lib/redis/modules/redistimeseries.so
+            config:
+              # ★ default_admin REDESIGN: replica→master AUTH (masteruser/
+              # masterauth) arrives as REGULAR config directives (the sentinel
+              # deploy-body merges them in a vault()-cell) → redis.conf ranges
+              # over them like any directive → statically survive a restart.
+              masteruser:       "default_admin"
+              masterauth:       "default-admin-secret-pass"
+              # computed: 1024*75/100=768 → "768mb" (overrode essence "256mb").
+              maxmemory: "768mb"
+              # input.maxmemory_policy overrode essence allkeys-lru.
+              maxmemory-policy: volatile-lru
+              # essence default, no conflict.
+              maxclients: 10000
+              # LAST-WINS: redis_settings.timeout (60) overrode essence (300).
+              timeout: 60
+              # persistence preset rdb.
+              save: "900 1 300 10 60 10000"
+              appendonly: "no"
+              # passthrough redis_settings made it through.
+              tcp-backlog: 511
+          self:
+            sid: node-solo.example.com
+            covens: [create]
+            choirs: []
+            # traits — registry projection (ADR-060), empty object with no labels.
+            traits: {}
+            role: ""
+            network:
+              primary_ip: 10.0.0.5
+            os:
+              arch: amd64
+          role: ""
+          essence: {}
+
+    # redis-server: enabled-at-boot. Disambiguator from the sentinel daemon
+    # (core.service.running redis-sentinel — sentinel.yml is also active in
+    # sentinel mode) — name.
+    - module: core.service.running
+      params_subset:
+        name: redis-server
+        enabled: true
+
+    - module: core.service.restarted
+      params_subset:
+        name: redis-server
+
+    # ── community.redis.command (PING health-gate) ──────────────────────────
+    # addr localhost, password — the same requirepass vault() resolve, args [PID]. the cluster
+    # PING branch — placeholder-skip (no params), disambiguator — args/addr in
+    # params_subset. (sentinel PING on :26379 is a separate task, not matched by this addr.)
+    - module: community.redis.command
+      params_subset:
+        addr: "127.0.0.1:6379"
+        username: default_admin
+        password: default-admin-secret-pass
+        args: ["PING"]
+
+  # A regression guard on the "state_changes drifts from render" bug class + a check of the
+  # translation RESULT written into incarnation.state (the same merge() that went into
+  # rendering redis.conf — a single source of truth).
+  #
+  # DRIFT-GUARD: the redis_config below MUST be BIT-FOR-BIT equal to apply.input.config
+  # (index 3 above) — both are assembled by the same inline-merge() in scenario create. If they
+  # diverge (e.g. editing one merge without the other), an operations scenario will see a
+  # false drift "state ≠ live config". Duplicating values in the assert is deliberate:
+  # this is exactly the guard for keeping the two inline-merges in sync.
+  state_changes:
+    redis_type: sentinel
+    redis_version: "7.4.1"
+    redis_config:
+      maxmemory: "768mb"
+      maxmemory-policy: volatile-lru
+      maxclients: 10000
+      timeout: 60
+      save: "900 1 300 10 60 10000"
+      appendonly: "no"
+      tcp-backlog: 511
+    redis_users:
+      - { name: app, perms: "~app:* +@read +@write -@dangerous", state: "on" }
+    redis_hosts: []
+    # sentinel single-host (standalone-equivalent). ★ Redesign: failover timings in
+    # master_settings (the effective per-master map of essence.sentinel_master_defaults over
+    # input.sentinel_master_settings; operator dict not set → defaults 5000/60000). settings —
+    # global sentinel directives (not set → {}).
+    redis_sentinel:
+      master_name: master
+      quorum: 0
+      master_settings:
+        down-after-milliseconds: "5000"
+        failover-timeout: "60000"
+      settings: {}
+    # ── namedfields (read-model, v3): NON-ZERO/NON-EMPTY guard. memory_mb=1024 and
+    # maxmemory_policy=volatile-lru are set by the operator → exactly these values (the read-model
+    # stores INTENT, not the computed maxmemory "768mb"). persistence=rdb.
+    memory_mb: 1024
+    maxmemory_policy: volatile-lru
+    persistence: rdb
+    tls:
+      enable:   false
+      only:     false
+      port:     7379
+      cert_ref: ""
+      key_ref:  ""
+      ca_ref:   ""
+    modules: [bloom, json, search, timeseries]
+    sysctl_settings: {}
+    shards: 0
+    replicas: 0
+    sentinel_quorum: 0

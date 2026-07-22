@@ -1,0 +1,8 @@
+name: wait-deprecated
+wait:
+  condition: "true"
+  timeout: 30s
+tasks:
+  - module: core.exec.run
+    params:
+      command: "true"

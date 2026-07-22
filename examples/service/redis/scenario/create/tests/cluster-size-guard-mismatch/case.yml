@@ -1,0 +1,87 @@
+# L0 trial for create in cluster mode — the FAIL branch of the size-guard (topology != roster).
+# Mirrors cluster-create-3shards (same happy-path input), but the roster DELIBERATELY does NOT
+# match the declared topology: shards=3, replicas_per_master=0 → expects exactly
+# 3*(1+0)=3 hosts, but fixtures.hosts has 4. The size-guard in create/cluster.yml (assert,
+# keeper-side render-time, ADR-009 amendment 2026-06-23) must ABORT render BEFORE any
+# dispatch — otherwise the community.redis.cluster plugin (action create) would derive shard count from
+# node count (4 → a different slot split) and SILENTLY ignore the declared shards=3.
+#
+# Paired with cluster-create-3shards (there roster==topology → render passes, cluster-build
+# happens) and the symmetric migrate_cluster size-guard. DIFFERENCE from cluster-shards-guard-
+# missing: there shards isn't set at all → aborts on input validation (required_when) BEFORE render;
+# here shards is set, but the roster size doesn't match → aborts on render (assert).
+#
+# Render-only, hermetic. The create dispatcher includes cluster.yml + sentinel.yml; on the
+# cluster run the sentinel branch is group-dropped (static-when input.redis_type != 'sentinel'),
+# cluster.yml expands, and the first task is the size-guard assert (does NOT emit a RenderedTask).
+name: cluster create with roster size not matching shards aborts at render (size-guard)
+
+fixtures:
+  default_destiny_source: "file://../../destiny/{name}"
+  # Roster of 4 hosts — ONE MORE than the declared topology (shards=3, replicas=0 → 3).
+  # Order deliberately unsorted: the size-guard operates on size(), not position.
+  hosts:
+    - sid: node-b.example.com
+      covens: [create, redis]
+      soulprint:
+        network: { primary_ip: 10.0.0.2 }
+        os: { arch: amd64 }
+    - sid: node-c.example.com
+      covens: [create, redis]
+      soulprint:
+        network: { primary_ip: 10.0.0.3 }
+        os: { arch: amd64 }
+    - sid: node-a.example.com
+      covens: [create, redis]
+      soulprint:
+        network: { primary_ip: 10.0.0.1 }
+        os: { arch: amd64 }
+    - sid: node-d.example.com
+      covens: [create, redis]
+      soulprint:
+        network: { primary_ip: 10.0.0.4 }
+        os: { arch: amd64 }
+  vault:
+    secret/redis/create:
+      password: s3cr3t-redis-pass-create
+    secret/redis/create/users/replica:
+      password: replica-sys-secret-pass
+    secret/redis/create/users/monitoring:
+      password: monitoring-sys-secret-pass
+    secret/redis/create/users/sentinel:
+      password: sentinel-sys-secret-pass
+    secret/redis/create/users/haproxy:
+      password: haproxy-sys-secret-pass
+  essence:
+    redis_type: cluster
+    modules_base_url: "https://artifacts.example.com/redis/modules"
+    memory_reserve_percent: 75
+    persistence_presets:
+      rdb:
+        save: "900 1 300 10 60 10000"
+        appendonly: "no"
+    redis_config:
+      maxmemory:        "256mb"
+      maxmemory-policy: allkeys-lru
+      maxclients:       10000
+      timeout:          300
+    system_acl_users:
+      replica:    "+psync +replconf +ping"
+      monitoring: "-@all +@connection +client +ping +info +config|get +cluster|info +slowlog +latency +memory +select +command|count +command|docs"
+      sentinel:   "allchannels +multi +slaveof +ping +exec +subscribe +config|rewrite +role +publish +info +client|setname +client|kill +script|kill"
+      haproxy:    "-@all +auth +client|getname +client|id +client|setname +command +hello +ping +role +info +cluster|info"
+  input:
+    # ★ provision is off (default-on: an omitted section = ENABLED; the case deploys onto
+    # a READY roster, cloud-create not needed) → include redis-provision.yml group-drop.
+    provision:
+      enabled: false
+    redis_type: cluster
+    version: "7.4.1"
+    # shards=3 IS SET (required_when passes), but the roster above = 4 → 4 != 3*(1+0).
+    shards: 3
+    replicas_per_master: 0
+    cluster_node_timeout: 5000
+
+# The run aborts on render: size-guard assert "Guard cluster roster size matches shards
+# and replicas" false (4 != 3*(1+0)). Substring — the message of the assert rule in create/cluster.yml.
+expect_render_error: "host count must be exactly shards*(1+replicas_per_master)"

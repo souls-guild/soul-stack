@@ -1,0 +1,79 @@
+# L2 harness for destiny node-exporter (Trial, ADR-023, "Variant A" design).
+#
+# Purpose — give destiny node-exporter a HERMETIC E2E check on a real
+# Linux stand (docker) with real core modules, WITHOUT the two dependencies of the
+# production destiny that are impossible to satisfy hermetically for a pilot:
+#   - core.url.fetched pulls a tarball from GitHub (https-only, network) — supply-chain,
+#     not hermetic in an ephemeral container without internet;
+#   - core.service.* requires systemd-PID1 (is-active/enable) — not present in a vanilla
+#     ubuntu container without a --privileged systemd image.
+# (see docs/destiny/testing.md §L2 / open Q #3.)
+#
+# So the L2 pilot applies a SUBSET of the node-exporter pipeline that's executable
+# hermetically: rendering the launch script from .tmpl (core.file.rendered — demonstrates
+# the Keeper→Soul handoff template_content + text/template on the host, exactly like
+# the systemd-unit node_exporter.service in production) + laying out the configuration
+# (core.file.present, inline-content, content-based idempotency). Running the actual
+# listener and probing port :9100 happens in the case's verify block (the binary starts directly,
+# WITHOUT systemctl, spec §6).
+#
+# This is NOT a new destiny entity and NOT a new service: a harness wrapper in the _trial/
+# tree of destiny itself, symmetric to the existing _trial/scenario/apply (L0-render).
+name: verify-l2
+description: >-
+  L2 harness for node-exporter (ADR-023, Variant A): hermetic E2E check of core.file
+  on a docker stand. Starting the listener and probing the port — in the case's verify (no systemd).
+
+# input of the harness scenario. Subset of the production destiny node-exporter contract
+# (version/listen/collectors/bin_dir), executable hermetically. Real
+# fetch/systemd are NOT engaged — only the fields needed by the core.file
+# subset are taken (listen → launch script + config, bin_dir → script path).
+input:
+  version:
+    type: string
+    default: "1.11.1"
+    pattern: "^[0-9]+\\.[0-9]+\\.[0-9]+$"
+    description: Version of node_exporter (contract passthrough; not downloaded in L2).
+  listen:
+    type: string
+    default: ":9100"
+    pattern: "^[A-Za-z0-9._-]*:[0-9]{1,5}$"
+    description: Listen address of the node_exporter mock listener (host:port, default :9100).
+  collectors:
+    type: array
+    default: []
+    items:
+      type: string
+      enum: [smartmon, nvme, ipmi]
+    description: >-
+      Hardware textfile collectors. On the L2 container (a VM, no hardware) — empty:
+      collectors are gated by a systemd Condition, their setup is not checked here.
+  bin_dir:
+    type: string
+    default: /usr/local/bin
+    pattern: "^/[A-Za-z0-9._/-]+$"
+    description: Directory for the listener's launch script.
+
+tasks:
+  # 1. Listener launch script from .tmpl. core.file.rendered: Keeper delivers
+  #    literal template_content + render_context {vars,self,role,essence},
+  #    the Soul side renders text/template on the host (ADR-010) — the same path as
+  #    the systemd-unit node_exporter.service in production. listen comes from input → vars.
+  - name: Render node_exporter launch script
+    module: core.file.rendered
+    register: launch_script
+    params:
+      path: "${ input.bin_dir + '/node_exporter-mock' }"
+      template: templates/node_exporter_launch.sh.tmpl
+      mode: "0755"
+      vars:
+        listen: "${ input.listen }"
+
+  # 2. Laying out the listener's config file. core.file.present with inline-content:
+  #    content-based idempotency (re-applying the same content → changed=false).
+  - name: Deploy node_exporter mock config
+    module: core.file.present
+    params:
+      path: /etc/node_exporter-mock.conf
+      content: "listen=${ input.listen }\n"
+      mode: "0644"

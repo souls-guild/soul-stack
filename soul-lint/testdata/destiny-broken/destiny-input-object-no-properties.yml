@@ -1,0 +1,5 @@
+name: redis
+input:
+  weird:
+    type: object
+    additional_properties: false

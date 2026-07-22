@@ -1,0 +1,128 @@
+# L0-trial for provision (ADR-061, Variant A) — DragonFly sentinel, provision ENABLED.
+# input.provision.enabled=true → include dragonfly-provision.yml expands (the placeholder-
+# skip form of include-when is lifted: when has(input.provision) && input.provision.enabled
+# is true → steps target the roster). Flow: (a) core.cloud.created spins up VMs, (c)
+# core.soul.registered registers the created SIDs + await_online barrier + refresh_soulprint.
+#
+# * register.provision in L0 — from mocks.register (probe/cloud are not executed, ADR-023):
+# steps (b)/(c) of provision.yml and state_changes read register.provision.{vm_ids,hosts}
+# from here. This is the L0 pass-through of the ready register-payload of core.cloud.created.
+#
+# The NUMBER of VMs from the sentinel topology = 1 + replicas_per_master. replicas_per_master=2
+# → count=3 (one master + 2 replicas). The run's roster — 3 hosts (in production refresh_soulprint
+# provides them after onboarding; in L0 mid-run re-resolve is a stub, roster = a static fixture →
+# set the 3 hosts manually).
+#
+# Paired with provision-disabled (there enabled:false → cloud steps group-drop). Proves the
+# main DragonFly provision flow (mirrors redis provision-enabled-sentinel, decision 2026-07-01).
+name: provision enabled in sentinel mode emits cloud-create and onboarding (count = 1 + replicas)
+
+fixtures:
+  default_destiny_source: "file://../../destiny/{name}"
+  hosts:
+    - sid: vm-1.example.com
+      covens: [create, dragonfly]
+      soulprint:
+        network: { primary_ip: 10.0.0.1 }
+        os: { arch: amd64 }
+    - sid: vm-2.example.com
+      covens: [create, dragonfly]
+      soulprint:
+        network: { primary_ip: 10.0.0.2 }
+        os: { arch: amd64 }
+    - sid: vm-3.example.com
+      covens: [create, dragonfly]
+      soulprint:
+        network: { primary_ip: 10.0.0.3 }
+        os: { arch: amd64 }
+  # Vault: default_admin (intra-cluster AUTH) + system users (default_admin redesign).
+  vault:
+    secret/dragonfly/create/users/default_admin:
+      password: dfadmin-create-pass
+    secret/dragonfly/create/users/replica:
+      password: replica-sys-secret-pass
+    secret/dragonfly/create/users/monitoring:
+      password: monitoring-sys-secret-pass
+    secret/dragonfly/create/users/sentinel:
+      password: sentinel-sys-secret-pass
+    secret/dragonfly/create/users/haproxy:
+      password: haproxy-sys-secret-pass
+  essence:
+    sentinel_master_name: master
+    provision_await_timeout: "10m"
+    memory_reserve_percent: 75
+    df_config:
+      maxmemory:        "256mb"
+      maxclients:       10000
+    system_acl_users:
+      default_admin: "~* &* +@all"
+      replica:    "+psync +replconf +ping"
+      monitoring: "-@all +@connection +client +ping +info +config|get +cluster|info +slowlog +latency +memory +select +command|count +command|docs"
+      sentinel:   "allchannels +multi +slaveof +ping +exec +subscribe +config|rewrite +role +publish +info +client|setname +client|kill +script|kill"
+      haproxy:    "-@all +auth +client|getname +client|id +client|setname +command +hello +ping +role +info +cluster|info"
+    system_acl_users_sentinel:
+      default_admin: "allchannels allkeys +@all"
+      monitoring: "-@all +@connection -command +client -hello +info -auth +sentinel|masters +sentinel|replicas +sentinel|slaves +sentinel|sentinels +sentinel|ckquorum"
+      sentinel:   "allchannels -@all +auth +client|getname +client|id +client|setname +command +hello +ping +sentinel|is-master-down-by-addr +publish +role +sentinel|get-master-addr-by-name +sentinel|master +sentinel|myid +sentinel|replicas +sentinel|sentinels"
+      haproxy:    "-@all +auth +client|getname +client|id +client|setname +command +hello +ping +role +sentinel|get-master-addr-by-name +sentinel|master +sentinel|myid +sentinel|replicas +sentinel|sentinels"
+  input:
+    version: "1.39.0"
+    replicas_per_master: 2
+    provision:
+      enabled: true
+      provider: example-dev
+      profile: dragonfly-small
+      ssh_provider: ssh-example
+
+# register.provision — the ready payload of core.cloud.created (L0 pass-through, step (a) is
+# not executed): vm_ids of created VMs + hosts[{sid,...,bootstrap_token}]. Steps (b)/(c) and
+# state_changes read it. sids of the created VMs = the roster's SIDs (in production
+# refresh_soulprint would add them; here the roster already carries them).
+mocks:
+  register:
+    provision:
+      vm_ids: [i-aaa111, i-bbb222, i-ccc333]
+      hosts:
+        - { sid: vm-1.example.com, vm_id: i-aaa111, primary_ip: 10.0.0.1, bootstrap_token: tok-vm1 }
+        - { sid: vm-2.example.com, vm_id: i-bbb222, primary_ip: 10.0.0.2, bootstrap_token: tok-vm2 }
+        - { sid: vm-3.example.com, vm_id: i-ccc333, primary_ip: 10.0.0.3, bootstrap_token: tok-vm3 }
+
+assert:
+  task_present:
+    # (a) core.cloud.created: count = 1 + replicas_per_master = 3, generate_userdata: false
+    # (VM without cloud-init, setup does step (b) install: true). The only one in the plan.
+    - module: core.cloud.created
+      params_subset:
+        provider: example-dev
+        profile: dragonfly-small
+        count: 3
+        # name — the batch run-identity = incarnation.name (here "create"): the driver names
+        # VMs <name>-<seq> + label soulstack-run=<name> (run idempotency, NIM-16).
+        name: create
+        generate_userdata: false
+
+    # (c) core.soul.registered: sid — the list of SIDs of the created VMs (register.provision.hosts
+    # .map(h, h.sid)); membership is implicit (incarnation_membership, no coven:); the onboarding barrier
+    # await_online + refresh_soulprint; await_timeout from essence (10m, input.provision
+    # .await_timeout not set). The only one in the plan.
+    - module: core.soul.registered
+      params_subset:
+        sid: [vm-1.example.com, vm-2.example.com, vm-3.example.com]
+        await_online: true
+        refresh_soulprint: true
+        await_timeout: "10m"
+
+    # The main sentinel-body deploy rolls out after provision (dragonfly.conf is rendered).
+    - module: core.file.rendered
+      params_subset:
+        path: /etc/dragonfly/dragonfly.conf
+
+  state_changes:
+    df_version: "1.39.0"
+    # read-model: the FACT "these VMs were raised by this run" — vm_ids from register.provision,
+    # provider from input.provision (gated by input.provision.enabled, ternary in state_changes).
+    provisioned_vm_ids: [i-aaa111, i-bbb222, i-ccc333]
+    # provisioned_sids: SID of each created VM (register.provision.hosts[].sid) — for
+    # cascade-destroy teardown. The same guard+shape as provisioned_vm_ids.
+    provisioned_sids: [vm-1.example.com, vm-2.example.com, vm-3.example.com]
+    provisioned_provider: example-dev

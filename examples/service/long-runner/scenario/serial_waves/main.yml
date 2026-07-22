@@ -1,0 +1,28 @@
+name: serial_waves
+description: >-
+  serial wave execution. serial: 3 -> target hosts (sorted by SID) roll out in
+  waves of <=3 hosts; parallel within a wave, waves strictly sequential. Each
+  host sleeps a fixed ~12s and writes a wave marker with its completion time.
+
+  Validation (TEST B): polling shows at most 3 hosts applying at once (wave
+  width); the next wave doesn't start until the current one has closed (marker
+  timestamps come in blocks of 3). state is committed ONCE after all waves
+  (serial does NOT split the commit - section 2.2.1 invariant).
+
+state_changes:
+  - set: last_run
+    value: "serial_waves"
+  - set: runner_marker
+    value: /tmp/long-runner-wave.txt
+
+tasks:
+  - name: Serial wave sleep then write wave marker
+    # Whole incarnation (all members) = omitted on: (ADR-008 amendment NIM-124:
+    # incarnation.name is not a Coven).
+    serial: 3
+    module: core.cmd.shell
+    params:
+      cmd: >-
+        sleep 12;
+        echo "wave-done on $(hostname) at $(date -u +%H:%M:%S)" > /tmp/long-runner-wave.txt;
+        true

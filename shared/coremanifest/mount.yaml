@@ -1,0 +1,34 @@
+kind: soul_module
+protocol_version: 1
+namespace: core
+name: mount
+
+required_capabilities:
+  - run_as_root
+  - exec_subprocess
+  - fs_write_root
+
+spec:
+  states:
+    present:
+      description: Entry in /etc/fstab + mounted (ADR-015).
+      input:
+        path:   { type: string, required: true, description: "Mount point (target)." }
+        source: { type: string, required: true, description: "Source (device/UUID/network resource)." }
+        fstype: { type: string, required: true, description: "Filesystem type (ext4/nfs/...)." }
+        opts:   { type: string, description: "Mount options (default \"defaults\")." }
+    absent:
+      description: Unmounted + removed from /etc/fstab.
+      input:
+        path: { type: string, required: true, description: "Mount point (target)." }
+    mounted:
+      description: Only mounted "as is" (without editing fstab) - runtime-mount.
+      input:
+        path:   { type: string, required: true, description: "Mount point (target)." }
+        source: { type: string, required: true, description: "Source (device/UUID/network resource)." }
+        fstype: { type: string, required: true, description: "Filesystem type (ext4/nfs/...)." }
+        opts:   { type: string, description: "Mount options (default \"defaults\")." }
+    unmounted:
+      description: Only unmounted (entry in fstab remains).
+      input:
+        path: { type: string, required: true, description: "Mount point (target)." }

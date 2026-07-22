@@ -1,0 +1,218 @@
+# L0 test for create in sentinel mode WITH operator-extra ACL USERS — a mirror of
+# cluster-acl-users (qa 2026-06-28, drift-guard "generate ≡ read"). Locks in with a
+# permanent case the combination sentinel mode + input.users: targets of the
+# core.vault.kv-present (generate) step are assembled from the union
+# system_acl_users ∪ system_acl_users_sentinel (WITHOUT a built-in default) ∪ input.users;
+# the same paths are read by keeper-side vault() in redis-deploy-sentinel.yml. The drift
+# sentinel + operator-extra guard (Go-guard TestRedisCreate_GeneratedSecretsCoverVaultReads_*)
+# relies on this case as the source of fixtures/plan.
+#
+# What we prove (mirroring cluster-acl-users, sentinel mode):
+#   1. users.acl is rendered from a MAP name→{perms,state,password}: SYSTEM
+#      (system_acl_users default_admin/replica/monitoring/sentinel/haproxy) + operator-extra
+#      zeta/alpha. operator-extra names do not overlap with the system ones.
+#   2. sentinel mode: NO cluster directives in redis.conf; the sentinel daemon and
+#      sentinel.conf ARE PRESENT (unlike cluster, where they are absent).
+#   3. per-user password is resolved by keeper-side vault() using the convention
+#      secret/redis/<inc>/users/<name>#password. ★ REDESIGN default_admin: the system
+#      default_admin — intra-cluster AUTH (~* &* +@all), its password comes from the same
+#      users/default_admin branch (the old "default → main secret" model was removed). Two
+#      operator users (zeta/alpha) with DIFFERENT passwords: the assert catches resolution and cross-leak.
+#
+# PRESENCE form: tasks are identified by module + params_subset (the path
+# disambiguates users.acl↔redis.conf); indices are not compared. render_context.vars.users
+# is compared wholesale (deep-compare over the map): per-user passwords are isolated.
+#
+# Topology: replicas_per_master=2 → 1+2=3 hosts (size-guard PASS). master election:
+# the first host by SID (node-1). render_context.self = node-1 (apply.input is host-invariant).
+name: sentinel create renders per-user acl with operator-extra users
+
+fixtures:
+  default_destiny_source: "file://../../destiny/{name}"
+  hosts:
+    - sid: node-3.example.com
+      covens: [create, redis]
+      soulprint:
+        network: { primary_ip: 10.0.0.3 }
+        os: { arch: amd64 }
+    - sid: node-1.example.com
+      covens: [create, redis]
+      soulprint:
+        network: { primary_ip: 10.0.0.1 }
+        os: { arch: amd64 }
+    - sid: node-2.example.com
+      covens: [create, redis]
+      soulprint:
+        network: { primary_ip: 10.0.0.2 }
+        os: { arch: amd64 }
+  vault:
+    secret/redis/create:
+      password: s3cr3t-redis-pass-create
+    # Per-user secrets of system users (union system_acl_users ∪
+    # system_acl_users_sentinel, WITHOUT a built-in default).
+    # ★ REDESIGN default_admin (2026-06-30): default_admin — the system user for
+    # intra-cluster AUTH (auth_pass/PING deploy steps read it via the users/<name> branch).
+    secret/redis/create/users/default_admin:
+      password: default-admin-secret-pass
+    secret/redis/create/users/replica:
+      password: replica-sys-secret-pass
+    secret/redis/create/users/monitoring:
+      password: monitoring-sys-secret-pass
+    secret/redis/create/users/sentinel:
+      password: sentinel-sys-secret-pass
+    secret/redis/create/users/haproxy:
+      password: haproxy-sys-secret-pass
+    # Operator-extra secrets — DIFFERENT values: cross-leak is detected by the assert.
+    secret/redis/create/users/zeta:
+      password: zeta-user-secret-pass
+    secret/redis/create/users/alpha:
+      password: alpha-user-secret-pass
+  essence:
+    # install_method — in essence (author-context, 2026-06-28): install method is
+    # NOT operator-input. compute.install reads default(essence.install_method, 'binary').
+    install_method: package
+    redis_type: sentinel
+    sentinel_master_name: master
+    # ★ Redesign: backing per-master sentinel defaults (under input.sentinel_master_settings).
+    sentinel_master_defaults:
+      down-after-milliseconds: "5000"
+      failover-timeout:        "60000"
+    modules_base_url: "https://artifacts.example.com/redis/modules"
+    memory_reserve_percent: 75
+    persistence_presets:
+      rdb:
+        save: "900 1 300 10 60 10000"
+        appendonly: "no"
+    redis_config:
+      maxmemory:        "256mb"
+      maxmemory-policy: allkeys-lru
+      maxclients:       10000
+      timeout:          300
+
+    # System ACL users of redis-server + the sentinel daemon (1:1 from essence/_default.yaml).
+    # BOTH ARE REQUIRED: the create/sentinel.yml guard breaks the render if either set is empty.
+    # ★ REDESIGN default_admin (2026-06-30): default_admin — the full-access system
+    # user (~* &* +@all) in BOTH sets (replaced the old requirepass default).
+    system_acl_users:
+      default_admin: "~* &* +@all"
+      replica:    "+psync +replconf +ping"
+      monitoring: "-@all +@connection +client +ping +info +config|get +cluster|info +slowlog +latency +memory +select +command|count +command|docs"
+      sentinel:   "allchannels +multi +slaveof +ping +exec +subscribe +config|rewrite +role +publish +info +client|setname +client|kill +script|kill"
+      haproxy:    "-@all +auth +client|getname +client|id +client|setname +command +hello +ping +role +info +cluster|info"
+    system_acl_users_sentinel:
+      default_admin: "allchannels allkeys +@all"
+      monitoring: "-@all +@connection -command +client -hello +info -auth +sentinel|masters +sentinel|replicas +sentinel|slaves +sentinel|sentinels +sentinel|ckquorum"
+      sentinel:   "allchannels -@all +auth +client|getname +client|id +client|setname +command +hello +ping +sentinel|is-master-down-by-addr +publish +role +sentinel|get-master-addr-by-name +sentinel|master +sentinel|myid +sentinel|replicas +sentinel|sentinels"
+      haproxy:    "-@all +auth +client|getname +client|id +client|setname +command +hello +ping +role +sentinel|get-master-addr-by-name +sentinel|master +sentinel|myid +sentinel|replicas +sentinel|sentinels"
+  input:
+    # ★ provision is disabled (default-on: an omitted section = ENABLED; the case deploys onto a
+    # READY roster, cloud-create is not needed) → include redis-provision.yml group-drop.
+    provision:
+      enabled: false
+    redis_type: sentinel
+    version: "7.4.1"
+    replicas_per_master: 2
+    users:
+      - { name: zeta, perms: "~* +@all", state: "on" }
+      - { name: alpha, perms: "~app:* +@read +@write", state: "on" }
+
+assert:
+  task_present:
+    # redis-server users.acl: MAP name→{perms,state,password} with per-user vault
+    # passwords. SYSTEM ones from system_acl_users (default_admin/replica/monitoring/sentinel/
+    # haproxy — the redis-server set) + operator-extra zeta/alpha.
+    # ★ REDESIGN default_admin (2026-06-30): .vars.password is NO LONGER passed (requirepass
+    # was removed from server.yml). default_admin — the full-access system user (~* &* +@all),
+    # arrives in the `users` map via range, like the other system users (Vault password from the
+    # users/default_admin branch). The built-in default is rendered `off` by the template (it's not in the map).
+    # the sentinel set (system_acl_users_sentinel) goes into a SEPARATE sentinel-users.acl, not here.
+    - module: core.file.rendered
+      id: redis_acl
+      params_subset:
+        path: /etc/redis/users.acl
+        template_content: "<present>"
+        mode: "0640"
+        owner: redis
+        group: redis
+        render_context:
+          vars:
+            users:
+              default_admin:
+                perms: "~* &* +@all"
+                state: "on"
+                password: default-admin-secret-pass
+              replica:
+                perms: "+psync +replconf +ping"
+                state: "on"
+                password: replica-sys-secret-pass
+              monitoring:
+                perms: "-@all +@connection +client +ping +info +config|get +cluster|info +slowlog +latency +memory +select +command|count +command|docs"
+                state: "on"
+                password: monitoring-sys-secret-pass
+              sentinel:
+                perms: "allchannels +multi +slaveof +ping +exec +subscribe +config|rewrite +role +publish +info +client|setname +client|kill +script|kill"
+                state: "on"
+                password: sentinel-sys-secret-pass
+              haproxy:
+                perms: "-@all +auth +client|getname +client|id +client|setname +command +hello +ping +role +info +cluster|info"
+                state: "on"
+                password: haproxy-sys-secret-pass
+              zeta:
+                perms: "~* +@all"
+                state: "on"
+                password: zeta-user-secret-pass
+              alpha:
+                perms: "~app:* +@read +@write"
+                state: "on"
+                password: alpha-user-secret-pass
+          self:
+            sid: node-1.example.com
+            covens: [create, redis]
+            choirs: []
+            traits: {}
+            role: ""
+            network:
+              primary_ip: 10.0.0.1
+            os:
+              arch: amd64
+          role: ""
+          essence: {}
+
+  state_changes:
+    redis_type: sentinel
+    redis_version: "7.4.1"
+    redis_config:
+      maxmemory:        "256mb"
+      maxmemory-policy: allkeys-lru
+      maxclients:       10000
+      timeout:          300
+      save:             "900 1 300 10 60 10000"
+      appendonly:       "no"
+    # operator-extra ACL users in state — an ARRAY of AclUser [{name,perms,state}] (WITHOUT
+    # the password; it's keeper-side vault). System users are topped up keeper-side in apply, NOT in state.
+    redis_users:
+      - { name: zeta, perms: "~* +@all", state: "on" }
+      - { name: alpha, perms: "~app:* +@read +@write", state: "on" }
+    redis_hosts: []
+    redis_sentinel:
+      master_name: master
+      quorum: 0
+      master_settings:
+        down-after-milliseconds: "5000"
+        failover-timeout: "60000"
+      settings: {}
+    replicas: 2
+    sentinel_quorum: 0
+    shards: 0
+    persistence: rdb
+    maxmemory_policy: ""
+    tls:
+      enable:   false
+      only:     false
+      port:     7379
+      cert_ref: ""
+      key_ref:  ""
+      ca_ref:   ""
+    memory_mb: 0
+    modules: [bloom, json, search, timeseries]
+    sysctl_settings: {}

@@ -1,0 +1,27 @@
+{
+  "apply_id": "01J8ZK7Q9WGF3M2N7P4R5S6FA1",
+  "scenario": "create",
+  "status": "failed",
+  "started_at": "2026-07-06T10:00:00.000000000Z",
+  "finished_at": "2026-07-06T10:01:12.000000000Z",
+  "started_by_aid": "archon-alice",
+  "hosts": [
+    {
+      "sid": "redis-auto-1.ns.vm.example",
+      "status": "failed",
+      "passage": 0,
+      "failed_task_idx": 2,
+      "failed_plan_index": 5,
+      "error_summary": "core.pkg.installed redis-server: apt-get exit 100",
+      "attempt": 1,
+      "cancel_requested": false
+    },
+    {
+      "sid": "redis-auto-2.ns.vm.example",
+      "status": "success",
+      "passage": 0,
+      "attempt": 1,
+      "cancel_requested": false
+    }
+  ]
+}

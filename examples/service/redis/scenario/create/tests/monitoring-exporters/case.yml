@@ -1,0 +1,155 @@
+# L0 test for create: MANDATORY data-plane monitoring (Slice I, redis pilot).
+# After the deploy branch (sentinel/cluster), create UNCONDITIONALLY (no when-gate) deploys
+# two exporters via COMPOSITION of reusable standalone destinies through apply:destiny:
+#   - node-exporter  — host metrics (version/listen from essence, arch — soulprint.self);
+#   - redis-exporter — Redis metrics via unix socket, authorizes with the monitoring ACL user.
+#
+# What we prove:
+#   1. node-exporter is deployed: binary install to /usr/local/bin/node_exporter (marker
+#      of sub-destiny presence; version/arch → in url/extract, not checked here);
+#   2. redis-exporter is deployed: its systemd unit is built from vars, where
+#      redis_user=monitoring (* finding B: an ACL instance without requirepass → without
+#      --redis.user the exporter would get WRONGPASS), redis_addr=unix://<socket> and
+#      password — the resolved keeper-side password of the monitoring ACL user
+#      (secret/redis/<inc>/users/monitoring#password);
+#   3. the read-model state.monitoring carries recorded exporter versions/ports (symmetric
+#      with the install/tls read-model); password/user are NOT materialized in state (security).
+#
+# Topology: sentinel, replicas_per_master=0 → 1 host (size-guard PASS). provision is disabled
+# (the case deploys onto a ready roster). render_context.self = the single host (node-a).
+name: create deploys mandatory node and redis exporters after deploy with monitoring ACL user
+
+fixtures:
+  default_destiny_source: "file://../../destiny/{name}"
+  hosts:
+    - sid: node-a.example.com
+      covens: [create, redis]
+      soulprint:
+        network: { primary_ip: 10.0.0.1 }
+        os: { arch: amd64 }
+  vault:
+    secret/redis/create:
+      password: s3cr3t-redis-pass-create
+    secret/redis/create/users/default_admin:
+      password: default-admin-secret-pass
+    secret/redis/create/users/replica:
+      password: replica-sys-secret-pass
+    # * password of the monitoring ACL user — redis-exporter authorizes with it (passed into the unit).
+    secret/redis/create/users/monitoring:
+      password: monitoring-sys-secret-pass
+    secret/redis/create/users/sentinel:
+      password: sentinel-sys-secret-pass
+    secret/redis/create/users/haproxy:
+      password: haproxy-sys-secret-pass
+  essence:
+    redis_type: sentinel
+    sentinel_master_name: master
+    modules_base_url: "https://artifacts.example.com/redis/modules"
+    memory_reserve_percent: 75
+    persistence_presets:
+      rdb:
+        save: "900 1 300 10 60 10000"
+        appendonly: "no"
+    redis_config:
+      maxmemory:        "256mb"
+      maxmemory-policy: allkeys-lru
+      maxclients:       10000
+      timeout:          300
+    # * New monitoring essence keys (Slice I): exporter versions/ports/sha.
+    node_exporter_version: "1.8.2"
+    node_exporter_listen: ":9100"
+    redis_exporter_version: "1.62.0"
+    redis_exporter_sha256: "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+    redis_exporter_listen: ":9121"
+    # * log-shipping essence keys (Slice V-I, ADR-067): version/checksum/sink of the vector agent.
+    # console sink (default) — endpoint/auth not needed; log_sources = redis logs.
+    vector_version: "0.40.0"
+    vector_sha256: "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+    vector_sink_type: console
+    vector_sink_endpoint: ""
+    vector_sink_auth_ref: ""
+    vector_log_sources: ["/var/log/redis/*.log"]
+    system_acl_users:
+      default_admin: "~* &* +@all"
+      replica:    "+psync +replconf +ping"
+      monitoring: "-@all +@connection +client +ping +info +config|get +cluster|info +slowlog +latency +memory +select +command|count +command|docs"
+      sentinel:   "allchannels +multi +slaveof +ping +exec +subscribe +config|rewrite +role +publish +info +client|setname +client|kill +script|kill"
+      haproxy:    "-@all +auth +client|getname +client|id +client|setname +command +hello +ping +role +info +cluster|info"
+    system_acl_users_sentinel:
+      monitoring: "-@all +@connection -command +client -hello +info -auth +sentinel|masters +sentinel|replicas +sentinel|slaves +sentinel|sentinels +sentinel|ckquorum"
+
+  input:
+    provision:
+      enabled: false
+    redis_type: sentinel
+    version: "7.4.1"
+    replicas_per_master: 0
+
+assert:
+  task_present:
+    # 1. node-exporter is deployed (apply:destiny node-exporter → binary install). Marker
+    #    of sub-destiny presence: the single core.file.present with the node_exporter binary path.
+    - module: core.file.present
+      params_subset:
+        path: /usr/local/bin/node_exporter
+        mode: "0755"
+
+    # 2. redis-exporter is deployed (apply:destiny redis-exporter → render systemd unit).
+    #    * redis_user=monitoring — the key assert for finding B (without it, WRONGPASS on the ACL).
+    #    redis_addr — unix socket (destiny default), password — the resolved keeper-side
+    #    password of the monitoring ACL user. render_context is checked FULLY (deep-compare
+    #    of the nested map): vars carries all 6 file vars, self is the single host, essence
+    #    is empty (sub-destiny isolation, ADR-009). Disambiguator from the node_exporter unit — path.
+    - module: core.file.rendered
+      params_subset:
+        path: /etc/systemd/system/redis_exporter.service
+        template_content: "<present>"
+        mode: "0644"
+        owner: root
+        group: root
+        render_context:
+          vars:
+            bin_dir: /usr/local/bin
+            listen: ":9121"
+            redis_addr: "unix:///var/run/redis/redis-server.sock"
+            password: monitoring-sys-secret-pass
+            redis_user: monitoring
+            extra_args: []
+          self:
+            sid: node-a.example.com
+            covens: [create, redis]
+            choirs: []
+            traits: {}
+            role: ""
+            network:
+              primary_ip: 10.0.0.1
+            os:
+              arch: amd64
+          role: ""
+          essence: {}
+
+    # 3. vector is deployed (apply:destiny vector → binary install). Marker of presence of
+    #    the log-shipping sub-destiny (Slice V-I): the single core.file.present with the
+    #    vector binary path. version/arch → in url/extract, sink console (default) — not checked here.
+    - module: core.file.present
+      params_subset:
+        path: /usr/local/bin/vector
+        mode: "0755"
+
+  state_changes:
+    redis_type: sentinel
+    redis_version: "7.4.1"
+    # monitoring read-model: exporter versions/ports (symmetric with install/tls). Password/user
+    # are NOT in state (security) — intentionally absent here.
+    monitoring:
+      node_exporter_version: "1.8.2"
+      redis_exporter_version: "1.62.0"
+      node_exporter_listen: ":9100"
+      redis_exporter_listen: ":9121"
+    # log-shipping read-model (Slice V-I, ADR-067): vector agent version/sink/sources.
+    # sink_auth_ref (collector token) is NOT in state (security) — intentionally absent.
+    logging:
+      vector_version: "0.40.0"
+      vector_sink_type: console
+      vector_sink_endpoint: ""
+      vector_log_sources: ["/var/log/redis/*.log"]

@@ -1,0 +1,23 @@
+name: module-delivery-live
+state_schema_version: 1
+description: >-
+  NIM-32 S2 live gate for SoulModule plugin delivery (ADR-065 S5, live guarantee
+  for NIM-8). The service DECLARES community.redis in modules[] and does NOT
+  contain an explicit install step anywhere. create provisions redis with
+  core modules without a plugin consumer (negative: no synthesis in the
+  create plan); the operational-scenario verify_live calls community.redis.command
+  — keeper auto-synthesizes core.module.installed from this manifest
+  declaration BEFORE the consumer, and Soul in ONE run does
+  fetch→verify→atomic-rename→hot-register and immediately executes the consumer.
+
+# state_schema_version=1 → the migrations/ directory is not required (ADR-019).
+state_schema:
+  type: object
+  properties: {}
+
+# modules[] — an explicit manifest declaration of the dependency (ADR-065(e) amendment):
+# keeper synthesizes core.module.installed {name, ref} before the first consumer of
+# community.redis.* in the plan. There is NO consumer in create → no synthesis in the
+# create plan; the consumer is only in the operational-scenario verify_live.
+modules:
+  - { name: community.redis, ref: v1.0.0 }

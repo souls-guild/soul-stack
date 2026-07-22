@@ -1,0 +1,89 @@
+# L2 case (docker stand, Trial ADR-023, "Variant A" design). Runs ONLY
+# under build-tag integration: `go test -tags integration -run TestL2 ./internal/trial/...`
+# (requires docker). Default harness (make test) marks it Skipped (marker
+# stand:/verify:), like other L2 fixtures.
+#
+# End-to-end on real Linux with real core modules:
+#   1. render in-process (Keeper-side render pipeline, like L0) → ApplyRequest;
+#   2. soul apply (push-oneshot, ADR-004) on the stand applies the plan: renders the launch
+#      script (core.file.rendered) + lays down config (core.file.present);
+#   3. verify: start the listener directly (WITHOUT systemctl), probe port :9100,
+#      check the deployed artifacts;
+#   4. expect_idempotent: a repeat apply of the same plan → all register.changed==false.
+name: run-and-probe
+description: |
+  E2E node-exporter L2 harness (Variant A): core.file is applied on a docker stand,
+  the mock listener starts directly and answers on :9100. systemd is NOT used —
+  the listener is started as a process in verify (spec §6).
+
+# ─── Stand ──────────────────────────────────────────────────────────────────
+# mode: push — push-oneshot soul apply (ADR-004): Keeper renders the plan, delivers
+# soul + ApplyRequest to the host, executes. No new stand values (reuse
+# L2-fixtures destiny-redis semantics). Image python:3.12-slim — python3 is needed
+# for the listener's launch script and the verify port probe (hermetic, no network to GitHub).
+stand:
+  driver: docker
+  image:  python:3.12-slim
+  mode:   push
+
+# input for the harness scenario (L2 takes input as L0-Fixtures.Input — render doesn't
+# substitute the scenario default, so we duplicate the values that are explicitly needed). version —
+# contract passthrough (in L2 fetch/systemd are not executed); listen :9100
+# (standard node_exporter port); collectors=[] — hardware collectors are gated
+# on the VM stand.
+input:
+  version: "1.11.1"
+  listen: ":9100"
+  collectors: []
+  bin_dir: /usr/local/bin
+
+# Double run of the same ApplyRequest: the second application must not change state
+# (all register.changed==false). core.file idempotency — by content/mode.
+expect_idempotent: true
+
+# ─── Result checks ─────────────────────────────────────────────────────
+# Each verify task is a single-task ApplyRequest on the same stand (matches
+# the design: "run verify with the same docker exec soul apply"). Module — full name
+# with state suffix; expect checks register output (exit_code/stdout/stdout_contains).
+verify:
+  # 1. Launch script delivered and executable (core.file.rendered worked).
+  - name: launch-script-installed
+    apply:
+      module: core.cmd.shell
+      params:
+        cmd: "test -x /usr/local/bin/node_exporter-mock && echo OK"
+    expect:
+      exit_code: 0
+      stdout: "OK"
+
+  # 2. Config deployed with the correct content (core.file.present worked).
+  - name: config-deployed
+    apply:
+      module: core.cmd.shell
+      params:
+        cmd: "cat /etc/node_exporter-mock.conf"
+    expect:
+      exit_code: 0
+      stdout_contains: "listen=:9100"
+
+  # 3. Start the listener directly (WITHOUT systemctl), wait for the port, probe
+  #    /metrics with a python client, stop it. Port/process probe per spec §6.
+  #    The listener starts with a full detach of stdout/stderr (>/dev/null 2>&1 </dev/null),
+  #    otherwise the docker-exec-stream stays open because the background process
+  #    inherits the fd and the session never finishes. PID is killed explicitly via $!.
+  - name: listener-serves-metrics
+    apply:
+      module: core.cmd.shell
+      params:
+        cmd: >-
+          /usr/local/bin/node_exporter-mock >/dev/null 2>&1 </dev/null & LPID=$!;
+          for i in $(seq 1 50); do
+            python3 -c "import socket,sys; s=socket.socket(); s.settimeout(0.2); sys.exit(0 if s.connect_ex(('127.0.0.1',9100))==0 else 1)" && break;
+            sleep 0.1;
+          done;
+          OUT=$(python3 -c "import urllib.request; print(urllib.request.urlopen('http://127.0.0.1:9100/metrics', timeout=2).read().decode())");
+          kill "$LPID" 2>/dev/null; wait "$LPID" 2>/dev/null;
+          printf '%s\n' "$OUT"
+    expect:
+      exit_code: 0
+      stdout_contains: "node_exporter_build_info"

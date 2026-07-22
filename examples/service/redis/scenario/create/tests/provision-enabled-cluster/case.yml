@@ -1,0 +1,173 @@
+# L0 provision trial (ADR-061, Option A) — cluster mode, provision ENABLED.
+# Paired with provision-enabled-sentinel: verifies that the VM COUNT is derived from the
+# cluster topology = shards*(1+replicas_per_master), not from 1+replicas (sentinel).
+# shards=2, replicas_per_master=1 → count = 2*(1+1) = 4. This is the main guard: count
+# branches on input.redis_type (provision.yml step (a)); for cluster the shard formula
+# is used.
+#
+# ★ register.provision — from mocks.register (L0 stand-in for core.cloud.created, step (a)
+# is not executed): steps (b)/(c) and state_changes read vm_ids/hosts from here. The roster
+# is 4 hosts (in production refresh_soulprint provides them; in an L0 mid-run re-resolve is
+# stubbed, so the roster is a static fixture).
+name: provision enabled in cluster mode sizes VM count from shards (count = shards * (1 + replicas))
+
+fixtures:
+  default_destiny_source: "file://../../destiny/{name}"
+  hosts:
+    - sid: vm-1.example.com
+      covens: [create]
+      soulprint:
+        network: { primary_ip: 10.0.0.1 }
+        os: { arch: amd64 }
+    - sid: vm-2.example.com
+      covens: [create]
+      soulprint:
+        network: { primary_ip: 10.0.0.2 }
+        os: { arch: amd64 }
+    - sid: vm-3.example.com
+      covens: [create]
+      soulprint:
+        network: { primary_ip: 10.0.0.3 }
+        os: { arch: amd64 }
+    - sid: vm-4.example.com
+      covens: [create]
+      soulprint:
+        network: { primary_ip: 10.0.0.4 }
+        os: { arch: amd64 }
+  vault:
+    secret/redis/create:
+      password: s3cr3t-redis-pass-create
+    # ★ default_admin REDESIGN (2026-06-30): default_admin is the system user for
+    # intra-cluster AUTH; cluster-build (community.redis.cluster) and the deploy's
+    # masteruser/masterauth read its password from the users/default_admin branch (the main
+    # secret is DROPPED from the deploy body).
+    secret/redis/create/users/default_admin:
+      password: default-admin-secret-pass
+    secret/redis/create/users/replica:
+      password: replica-sys-secret-pass
+    secret/redis/create/users/monitoring:
+      password: monitoring-sys-secret-pass
+    secret/redis/create/users/sentinel:
+      password: sentinel-sys-secret-pass
+    secret/redis/create/users/haproxy:
+      password: haproxy-sys-secret-pass
+  essence:
+    # install_method — in essence (author-context, 2026-06-28): the install method is
+    # NOT operator input. compute.install reads default(essence.install_method, 'binary').
+    install_method: package
+    redis_type: cluster
+    modules_base_url: "https://artifacts.example.com/redis/modules"
+    provision_await_timeout: "10m"
+    provision_join_wait_timeout: "55m"
+    memory_reserve_percent: 75
+    persistence_presets:
+      rdb:
+        save: "900 1 300 10 60 10000"
+        appendonly: "no"
+    redis_config:
+      maxmemory:        "256mb"
+      maxmemory-policy: allkeys-lru
+      maxclients:       10000
+      timeout:          300
+    system_acl_users:
+      replica:    "+psync +replconf +ping"
+      monitoring: "-@all +@connection +client +ping +info +config|get +cluster|info +slowlog +latency +memory +select +command|count +command|docs"
+      sentinel:   "allchannels +multi +slaveof +ping +exec +subscribe +config|rewrite +role +publish +info +client|setname +client|kill +script|kill"
+      haproxy:    "-@all +auth +client|getname +client|id +client|setname +command +hello +ping +role +info +cluster|info"
+  input:
+    redis_type: cluster
+    version: "7.4.1"
+    # install_method=package EXPLICITLY: this case is about the provision flow (count from
+    # the cluster topology), not about install. The redesign's default is binary → the
+    # package branch here (the assert checks cloud/cluster).
+    shards: 2
+    replicas_per_master: 1
+    provision:
+      enabled: true
+      provider: example-dev
+      profile: redis-small
+      await_timeout: "5m"
+      ssh_provider: ssh-example
+
+# register.provision — the ready-made core.cloud.created payload (L0 stand-in). 4 VMs for
+# the cluster topology (2 shards * 2). sids = the roster's SIDs. bootstrap_token is per-VM
+# one-time (in production it's masked by audit.MaskSecrets on every output; needed here
+# because core.bootstrap.delivered step (b) reads
+# register.provision.hosts[].bootstrap_token).
+mocks:
+  register:
+    provision:
+      vm_ids: [i-aaa111, i-bbb222, i-ccc333, i-ddd444]
+      hosts:
+        - { sid: vm-1.example.com, vm_id: i-aaa111, primary_ip: 10.0.0.1, bootstrap_token: tok-vm1 }
+        - { sid: vm-2.example.com, vm_id: i-bbb222, primary_ip: 10.0.0.2, bootstrap_token: tok-vm2 }
+        - { sid: vm-3.example.com, vm_id: i-ccc333, primary_ip: 10.0.0.3, bootstrap_token: tok-vm3 }
+        - { sid: vm-4.example.com, vm_id: i-ddd444, primary_ip: 10.0.0.4, bootstrap_token: tok-vm4 }
+
+assert:
+  task_present:
+    # (a) core.cloud.created: count = shards*(1+replicas) = 2*(1+1) = 4 (NOT 1+replicas).
+    # generate_userdata: false — VMs without cloud-init; step (b) install: true handles setup.
+    - module: core.cloud.created
+      params_subset:
+        provider: example-dev
+        profile: redis-small
+        count: 4
+        # name — the batch run-identity = incarnation.name (here "create"): the driver names
+        # VMs <name>-<seq> + label soulstack-run=<name> (run idempotency, NIM-16).
+        name: create
+        generate_userdata: false
+
+    # (b) core.bootstrap.delivered: install + per-VM bootstrap-token delivery over SSH
+    # (ADR-063, provision.yml step (b)). Guards the PRESENCE of the step + install: true
+    # (VMs without cloud-init, setup is delivered over SSH) + the shape of hosts:
+    # ${ register.provision.hosts } (the whole register payload, 4 VMs with bootstrap_token)
+    # + ssh_provider from input.provision. If the delivery contract changes (module name /
+    # install / hosts shape / ssh_provider) this assert breaks — without it a regression
+    # would pass silently (no provision test checked this step). The only
+    # core.bootstrap.delivered in the plan → no disambiguator needed.
+    - module: core.bootstrap.delivered
+      params_subset:
+        ssh_provider: ssh-example
+        install: true
+        # join_wait_timeout — from essence.provision_join_wait_timeout (input.provision
+        # doesn't set it). Guard: the essence default reaches the step (not hardcoded), a
+        # duration string.
+        join_wait_timeout: "55m"
+        hosts:
+          - { sid: vm-1.example.com, vm_id: i-aaa111, primary_ip: 10.0.0.1, bootstrap_token: tok-vm1 }
+          - { sid: vm-2.example.com, vm_id: i-bbb222, primary_ip: 10.0.0.2, bootstrap_token: tok-vm2 }
+          - { sid: vm-3.example.com, vm_id: i-ccc333, primary_ip: 10.0.0.3, bootstrap_token: tok-vm3 }
+          - { sid: vm-4.example.com, vm_id: i-ddd444, primary_ip: 10.0.0.4, bootstrap_token: tok-vm4 }
+
+    # (c) core.soul.registered: sid — the list of SIDs of the created VMs; await_online +
+    # refresh_soulprint; await_timeout from input.provision (5m, overrides the essence
+    # default).
+    - module: core.soul.registered
+      params_subset:
+        sid: [vm-1.example.com, vm-2.example.com, vm-3.example.com, vm-4.example.com]
+        await_online: true
+        refresh_soulprint: true
+        await_timeout: "5m"
+
+    # (d) core.module.installed: delivers the community.redis SoulModule plugin to the
+    # created hosts BEFORE the first community.redis.* task of the deploy branch (ADR-065).
+    - module: core.module.installed
+      params_subset:
+        name: community.redis
+
+    # cluster-build rolls out after provision (nodes-MAP of all 4 hosts).
+    - module: community.redis.cluster
+      params_subset:
+        action: create
+        replicas_per_shard: 1
+
+  state_changes:
+    redis_type: cluster
+    redis_version: "7.4.1"
+    provisioned_vm_ids: [i-aaa111, i-bbb222, i-ccc333, i-ddd444]
+    # provisioned_sids: the SID of each created VM (register.provision.hosts[].sid) — for
+    # cascade-destroy teardown (souls→destroyed/seeds→orphaned/tokens→burned).
+    # Same guard+shape as provisioned_vm_ids (input.provision.enabled → .map(h, h.sid)).
+    provisioned_sids: [vm-1.example.com, vm-2.example.com, vm-3.example.com, vm-4.example.com]
+    provisioned_provider: example-dev

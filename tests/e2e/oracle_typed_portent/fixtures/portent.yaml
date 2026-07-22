@@ -1,0 +1,15 @@
+# Portent that the Soul-stub emits after opening the EventStream.
+# In V5-1 typed-payload mode, the stub sends BOTH branches (legacy data + typed
+# file_changed) — backward-compat during the hand-off period.
+portent:
+  beacon_name: file-watch-etc
+  sid: soul-oracle-0.example.com
+  # Typed payload (V5-1).
+  payload:
+    kind: file_changed
+    path: /etc/nginx.conf
+    sha256: deadbeef0123456789
+  # Legacy data (deprecated, dual-write).
+  data:
+    path: /etc/nginx.conf
+    sha256: deadbeef0123456789

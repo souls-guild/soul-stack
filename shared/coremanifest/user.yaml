@@ -1,0 +1,25 @@
+kind: soul_module
+protocol_version: 1
+namespace: core
+name: user
+
+required_capabilities:
+  - run_as_root
+  - exec_subprocess
+
+spec:
+  states:
+    present:
+      description: User exists (present-or-create, no reconcile of an existing user; ADR-015).
+      input:
+        name:   { type: string, required: true, description: "User name." }
+        uid:    { type: int,    description: "Explicit uid (useradd -u). Applies only on creation." }
+        shell:  { type: string, description: "Login shell (useradd -s). Applies only on creation." }
+        home:   { type: string, description: "Home directory (useradd -d). Applies only on creation." }
+        groups: { type: list,   items: { type: string }, description: "Supplementary groups (useradd -G). Applies only on creation." }
+        system: { type: bool,   description: "System account (useradd -r) for service accounts. Only on creation." }
+        group:  { type: string, description: "Primary group (useradd -g); must already exist. Only on creation." }
+    absent:
+      description: User removed.
+      input:
+        name: { type: string, required: true, description: "User name." }

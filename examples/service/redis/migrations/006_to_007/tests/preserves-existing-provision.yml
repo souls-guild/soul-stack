@@ -1,0 +1,15 @@
+name: preserves-existing-provision
+description: >
+  Idempotency: an incarnation whose provision fields ALREADY exist (a repeat
+  migration run / inline-seed) keeps their values as is (the has()-guard
+  returns the current value, does not overwrite it with the default).
+
+state_before:
+  redis_type: "cluster"
+  provisioned_vm_ids: ["vm-aaa", "vm-bbb", "vm-ccc"]
+  provisioned_provider: "aws-prod"
+
+state_after:
+  redis_type: "cluster"
+  provisioned_vm_ids: ["vm-aaa", "vm-bbb", "vm-ccc"]
+  provisioned_provider: "aws-prod"

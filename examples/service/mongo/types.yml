@@ -1,0 +1,73 @@
+# Reusable named input types for the mongo service (ADR-062, named input types).
+# Resolution — service-level: `$type: <Name>` in any `input:` of a scenario belonging
+# to THIS service is replaced with the expanded schema from here at the input stage
+# (cycle-checked). Type name — PascalCase (distinguishes a type reference from a
+# snake_case parameter visually and in the parser).
+types:
+  # MongoUser — a single MongoDB user record (operator-extra). create reads an array
+  # of such records (input.users). ★ MongoDB vs redis AclUser: mongo does NOT have a
+  # single perms string, but an ARRAY of roles {role, db} (the exact mongo model — a
+  # user gets a set of named roles, each in a specific DB). The password is resolved
+  # keeper-side from Vault by convention secret/mongo/<incarnation>/users/<name>#password
+  # (symmetry with redis/dragonfly).
+  MongoUser:
+    type: object
+    additional_properties: false
+    required: [name, roles]
+    properties:
+      # MongoDB username. lowercase identifier (convention; mongo names are case-
+      # sensitive, but lowercase is a simple consistent rule, same as redis AclUser).
+      name:
+        type: string
+        pattern: "^[a-z][a-z0-9_-]*$"
+        description: >-
+          MongoDB username (unique within the users array). Created via
+          createUser; the password is resolved keeper-side from Vault by convention
+          secret/mongo/<incarnation>/users/<name>#password.
+      # database — the DB in whose context the user is created (login DB). Roles
+      # without an explicit db inherit it. Default admin (system users). User-defined
+      # roles are usually in their own application DB.
+      database:
+        type: string
+        default: admin
+        pattern: "^[A-Za-z0-9_$-]+$"
+        description: >-
+          The DB in which the user is created (login/roles context). Roles without an
+          explicit db inherit this DB. Defaults to admin.
+      # roles — an ARRAY of roles {role, db}. The exact mongo model (a user = a set of
+      # named roles, each in a specific DB). No enum hint is hardcoded (there are many
+      # mongo roles: built-in root/readWrite/dbAdmin/clusterAdmin/backup/… plus custom)
+      # — we validate only the shape (a non-empty role identifier); the semantics are
+      # enforced by mongod on createUser.
+      roles:
+        type: array
+        items:
+          type: object
+          additional_properties: false
+          required: [role]
+          properties:
+            role:
+              type: string
+              pattern: "^[A-Za-z][A-Za-z0-9_]*$"
+              description: >-
+                MongoDB role name (built-in: read/readWrite/dbAdmin/clusterAdmin/
+                backup/root/… or custom). Shape is validated; semantics are enforced
+                by mongod on createUser.
+            db:
+              type: string
+              pattern: "^[A-Za-z0-9_$-]+$"
+              description: >-
+                DB of the role. If unset → inherits the user's database. For
+                cluster-wide roles (clusterAdmin/root/backup) — admin.
+        description: >-
+          User roles (array of {role, db}). The exact mongo model: a user gets a set
+          of named roles, each in a specific DB. db without a value inherits the
+          user's database.
+      # State: present (create) / absent (delete). default present.
+      state:
+        type: string
+        default: present
+        enum: [present, absent]
+        description: >-
+          User state: present (create if missing) / absent (delete if
+          present). Defaults to present.

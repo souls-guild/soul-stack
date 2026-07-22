@@ -1,0 +1,24 @@
+kind: soul_module
+protocol_version: 1
+namespace: core
+name: http
+
+required_capabilities:
+  - network_outbound
+
+spec:
+  states:
+    probe:
+      description: Read-probe of an HTTP endpoint (GET/HEAD); read-only, changed is always false. ADR-015/ADR-016, https-only.
+      input:
+        url:           { type: string, required: true, description: "Target URL (https:// only; SSRF-guard on the resolved IP)." }
+        method:        { type: string, enum: [GET, HEAD], default: GET, description: "HTTP method GET|HEAD (default GET); mutating methods are forbidden." }
+        # headers is sensitive-by-construction (ADR-010 §7.4): values are not logged,
+        # only the list of keys is returned in output. The secret DSL flag is not set (it
+        # forces a `^vault:.*` ref, but headers is an arbitrary map). Masking is a runtime aspect.
+        headers:       { type: map,    items: { type: string }, description: "HTTP headers (values are secret, excluded from output)." }
+        status_codes:  { type: list,   items: { type: int }, description: "Expected response codes (list of int); defaults to 2xx." }
+        allow_private: { type: bool,   description: "Lift the SSRF-guard for internal health-checks (default false)." }
+        allow_http:    { type: bool,   description: "Allow http:// (lift https-only); file:// remains forbidden. Does not open up SSRF (default false)." }
+        insecure_skip_verify: { type: bool, description: "Disable TLS verification (self-signed / internal CA); MITM risk (default false)." }
+        timeout:       { type: string, format: duration, description: "Probe timeout (Soul Stack duration, e.g. \"30s\")." }

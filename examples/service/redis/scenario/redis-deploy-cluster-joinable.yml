@@ -1,0 +1,183 @@
+# ╔══════════════════════════════════════════════════════════════════════════════╗
+# ║ JOINABLE DEPLOY-BODY for cluster nodes (service-level include, reusable)       ║
+# ╚══════════════════════════════════════════════════════════════════════════════╝
+# Bring-up of cluster-mode nodes that DO NOT FORM THEIR OWN CLUSTER: per-host install +
+# render redis.conf (with cluster directives, cluster-enabled yes) / users.acl + systemd +
+# PING-gate — AND THAT'S IT. ★ The CLUSTER MEET/ADDSLOTS/REPLICATE step (plugin community.redis.cluster
+# action create) IS DELIBERATELY ABSENT: the nodes do NOT form their own cluster — they
+# WILL JOIN the OLD one via `cluster action: join-external` (a separate plugin step in
+# migrate_cluster/cluster.yml). This way the cluster-mode migration attaches new nodes to
+# the existing cluster instead of spawning a second, empty one.
+#
+# Symmetric to redis-deploy-cluster.yml (creating a new empty cluster) — this is the SAME
+# deploy-body MINUS the final build. Lives at service-level (scenario/<file>) and
+# gets included by consumers by file name: scenario-include resolves `scenario/<name>/<file>`,
+# then falls back to `scenario/<file>` (orchestration.md §6, include.go).
+#
+#   Consumers (as of 2026-06-27):
+#     - (NONE yet) — migrate_cluster/cluster.yml (slot-aware join of the existing cluster)
+#       will include this body at S4-3b; until then the file exists but is NOT included
+#       from ANYWHERE (does not affect the render corpus — a dead service-level include).
+#
+# ★★ PASSWORD PRECONDITION (B3, the operator aligns it manually) ★★
+#   ★ REDESIGN default_admin (2026-06-30): intra-cluster AUTH goes through the system ACL user
+#   default_admin (requirepass removed). The default_admin password of the NEW cluster
+#   (secret/redis/<inc>/users/default_admin#password) MUST be aligned == the password of the same
+#   user in the OLD cluster (operator precondition): after join-external the nodes connect to the
+#   old cluster with the same username=default_admin + password (migrate.go keeps a single
+#   username/password for both the new nodes AND the source seed). The B3 pilot migrates onto a
+#   cluster of the same essence (source == new cluster, same default_admin set), so alignment
+#   comes naturally. If the operator did NOT align it — join-external (the plugin step) will fail on AUTH;
+#   this is outside the responsibility of this body (it only brings up cluster-mode nodes).
+#
+# ★★ INCLUDING-FILE INVARIANT (manual drift-guard — soul-lint does NOT catch cross-file) ★★
+#   This file REFERENCES compute.<name>, but does NOT declare them (compute: is a top-level
+#   scenario block, one per scenario, orchestration.md §2.4; declared in the main.yml of the
+#   INCLUDING file). Any scenario that includes this file MUST declare in its own
+#   compute: the ENTIRE set that this body reads, WITH THE SAME SEMANTICS:
+#       redis_config  conf_dir  data_dir  install  modules_base_url  redis_version
+#       tls_on  tls_only_on  tls_port  tls_cert_ref  tls_key_ref  tls_ca_ref
+#   Also read from the including file's context: input.version (opt., package pin)/
+#   input.users (opt.), essence.system_acl_users/sysctl_settings, incarnation.name
+#   (Vault paths). soulprint.hosts is NOT read HERE (no CLUSTER-BUILD run_once on the
+#   bootstrap node — no topology MAP is built). Omitting/renaming any
+#   compute.<name> in the including file is NOT caught statically (cross-file drift is invisible to soul-lint)
+#   — it will show up as a render failure. The source of truth for the set and semantics is create/main.yml::compute.
+#
+# ★ ANTI-TILING (boundary between apply.input and the .self template): host-invariant values
+#   are resolved via run_once / apply.input (resolveApplyInput takes the first host by SID, targeted[0]
+#   — correct for a host-invariant value). The per-host cluster-announce-ip is
+#   NOT here, it is rendered by destiny `redis` in redis.conf.tmpl from .self.network.primary_ip
+#   of EACH host (via apply.input it would get pinned to the first node's IP → the cluster bus behind
+#   NAT/in the cloud would break). Laying out master/replica roles and slots on JOIN is done by the
+#   PLUGIN in the join-external step (outside this body) deterministically — the scenario does NOT build the topology.
+
+# 1. Per-host install + render redis.conf (with cluster directives) + render users.acl +
+#    systemd. The same destiny `redis` (mode-agnostic) as cluster/sentinel, but the merged
+#    config is EXTENDED with cluster directives on top of the base merge (they are just regular
+#    keys of the config map, destiny ranges over them into redis.conf): cluster-enabled yes / cluster-config-file
+#    nodes.conf / cluster-node-timeout (ms). All three are HOST-INVARIANT → it's correct to drive them
+#    via apply.input.config (resolved ONCE, on the first host by SID, targeted[0]).
+#    cluster-announce-ip is DELIBERATELY NOT HERE: a per-host directive (IP of THIS node), it is
+#    rendered by destiny `redis` in redis.conf.tmpl from {{ .self.network.primary_ip }} under the
+#    cluster-enabled gate. compute.redis_config is host-invariant → apply.input.
+- name: Apply redis destiny (cluster install + render redis.conf/users.acl + systemd)
+  apply:
+    destiny: redis
+    input:
+      # version: distro pin (package). For binary version it comes from essence.binary_version
+      # in state (compute.redis_version); destiny does not install a distro package → has()-guard ''.
+      version:  "${ has(input.version) ? input.version : '' }"
+      # install: the install method {method, base_url, version} — compute.install built from
+      # install_method + essence.binary_* (#1). as-is into the destiny dispatcher install.yml.
+      install:  "${ compute.install }"
+      # conf_dir/data_dir: host-layout from essence (#2). compute.conf_dir/data_dir
+      # (default = the current path, back-compat). HOST-INVARIANT → apply.input.
+      conf_dir: "${ compute.conf_dir }"
+      data_dir: "${ compute.data_dir }"
+      # ★ REDESIGN default_admin (2026-06-30): input.password REMOVED (requirepass removed).
+      # Authentication — via the system default_admin, its password arrives in users below.
+      # A single compute.redis_config (declared ONCE in the including file's main.yml, ADR-009):
+      # the same map that goes into state_changes.redis_config — the "state ≡ live config" drift
+      # is eliminated by compute itself. For cluster = base merge + cluster directives (cluster-
+      # enabled/config-file/node-timeout) + tls-cluster yes when TLS is on. HOST-INVARIANT →
+      # apply.input on targeted[0] is correct.
+      #
+      # ★ REDESIGN default_admin: STATIC replica→master AUTH in redis.conf — masteruser/
+      # masterauth are TOPPED UP into config as REGULAR directives (on top of compute.redis_config).
+      # CRITICAL for join-external: these nodes JOIN the old cluster as REPLICAS of its masters
+      # (migrate.go: MEET → CLUSTER REPLICATE) — the plugin does NOT set masterauth, a replica doing
+      # FULLSYNC with the old master passes AUTH ONLY via the static masterauth in redis.conf;
+      # without it, PSYNC would hit NOAUTH → the join would not catch up on data. The directive survives a
+      # restart (CONFIG SET is not persisted without REWRITE), is host-invariant (one default_admin per
+      # cluster) → apply.input. Failover-safe (inert on non-replicas). ★ DIFFERS from
+      # state_changes.redis_config: there it's PURE compute.redis_config WITHOUT masterauth (the secret is in
+      # Vault, not in state). masterauth is vault()-IN-A-CELL (seal masking, ADR-010 §7.4).
+      # admin_user = default_admin (compute.admin_user); the path is secret/redis/<inc>/users/
+      # default_admin#password (precondition: == the password of the same user in the OLD cluster).
+      config: >-
+        ${ merge(compute.redis_config, {
+             'masteruser': compute.admin_user,
+             'masterauth': vault('secret/redis/' + incarnation.name + '/users/' + compute.admin_user + '#password')
+           }) }
+      # ★ SYSTEM + operator-extra (system-ACL-users, design d2 Variant A): the built-in
+      # default_admin/replica/monitoring/sentinel/haproxy from essence.system_acl_users go
+      # FIRST, operator-extra (input.users — an ARRAY of AclUser, wave 1b) ON TOP (last-wins).
+      # ★ default_admin (redesign) — the SYSTEM full-access user (~* &* +@all), arrives
+      # from essence.system_acl_users like all the rest: intra-cluster AUTH runs through it (replaced
+      # the requirepass default — removed from redis.conf). Without the system users, replication (replica),
+      # join-external to the old cluster (default_admin) and health-check would break. The Vault
+      # password — secret/redis/<inc>/users/<name>#password. operator-extra: .map(u, {u.name:
+      # …}) (name from field u.name). Both .map calls produce a LIST of single-key maps, merge(list-of-
+      # maps) folds them into one map (templating §2.3); argument order = priority.
+      users: >-
+        ${ merge(
+             merge(default(essence.system_acl_users, {}).map(name, {
+               name: {
+                 'perms':    essence.system_acl_users[name],
+                 'state':    'on',
+                 'password': vault('secret/redis/' + incarnation.name + '/users/' + name + '#password')
+               }
+             })),
+             has(input.users)
+               ? merge(input.users.map(u, {
+                   u.name: {
+                     'perms':    u.perms,
+                     'state':    u.state,
+                     'password': vault('secret/redis/' + incarnation.name + '/users/' + u.name + '#password')
+                   }
+                 }))
+               : {}
+           ) }
+      # Redis modules — the SET is no longer passed (directive "modules are ALWAYS ALL"): destiny
+      # unpacks the full set from vars.redis_modules itself, the Redis 8+ version-guard is also
+      # in destiny. scenario only supplies the .so source (compute.modules_base_url from essence),
+      # host-invariant → apply.input; destiny builds the arch-URL per-host, .so files are downloaded via
+      # content idempotency (no verify).
+      modules_base_url: "${ compute.modules_base_url }"
+      # ★ SSRF guard for fetching .so modules: modules_base_url can be an internal Nexus
+      # (resolves to RFC1918) → core.url.fetched blocks private IPs. compute.modules_allow_private
+      # (from essence.modules_allow_private, default true). as-is into destiny modules.yml.
+      modules_allow_private: "${ compute.modules_allow_private }"
+      # Host-tuning extras (role concept), mode-agnostic. THP/logrotate/sysctl are
+      # UNCONDITIONAL (Redis recommendation / hardening) — there are no operator flags, the
+      # destiny `redis` tasks are always active. sysctl_settings — essence, host-invariant → apply.input.
+      sysctl_settings:  "${ default(essence.sysctl_settings, {}) }"
+      # TLS — a single dict (enable/only/port + cert_ref/key_ref/ca_ref). HOST-INVARIANT →
+      # apply.input. enable/only/port — compute-vars (2 flags tls_enabled/tls_keep_plain
+      # + a port from essence, #5). cert_ref/key_ref/ca_ref — Vault PATHS (destiny reads the PEM
+      # via vault() in the content cell, seal masking); refs come only from essence.tls_*_ref.
+      tls:
+        enable:   "${ compute.tls_on }"
+        only:     "${ compute.tls_only_on }"
+        port:     "${ compute.tls_port }"
+        cert_ref: "${ compute.tls_cert_ref }"
+        key_ref:  "${ compute.tls_key_ref }"
+        ca_ref:   "${ compute.tls_ca_ref }"
+
+# 2. Per-host health-gate: PING a live Redis after startup (each node must respond BEFORE
+#    joining the cluster). community.redis.command, retry/until via retry. addr —
+#    localhost (the plugin runs on the redis host), password — keeper-side vault() resolve.
+#    ★ Security (anti-downgrade): tls/tls_ca/port are gated on compute.tls_on (TLS ENABLED), NOT
+#    tls_only (TLS enabled → the plugin MUST use TLS; when tls_only_on=false plain is still open,
+#    but an AUTH password over plaintext is unacceptable). addr uses compute.tls_port + tls_ca (CA PEM,
+#    vault(ref) during the scenario pass, sealed by the vault layer).
+- name: Wait for each cluster node to answer PING
+  module: community.redis.command
+  retry: { count: 10, delay: 3s }
+  params:
+    addr:     "${ compute.tls_on ? '127.0.0.1:' + string(compute.tls_port) : '127.0.0.1:6379' }"
+    # ★ REDESIGN default_admin: AUTH via default_admin (requirepass removed). username +
+    # its password from the new Vault branch. The community.redis plugin passes username in AUTH.
+    username: "${ compute.admin_user }"
+    password: "${ vault('secret/redis/' + incarnation.name + '/users/' + compute.admin_user + '#password') }"
+    tls:      "${ compute.tls_on }"
+    tls_ca:   "${ compute.tls_on ? vault(compute.tls_ca_ref) : '' }"
+    args:     ["PING"]
+
+# ★ THERE IS NO CLUSTER-BUILD STEP HERE (deliberately). In redis-deploy-cluster.yml step 3
+#   is community.redis.cluster action:create (run_once on the bootstrap node, builds the nodes MAP from
+#   soulprint.hosts and sends CLUSTER MEET/ADDSLOTS/REPLICATE). In the joinable body it is ABSENT:
+#   the nodes do NOT form their own cluster. Their joining the OLD cluster is done by a SEPARATE
+#   plugin step `cluster action: join-external` in migrate_cluster/cluster.yml (S4-3b) — that step
+#   also passes the address of the existing cluster and the slot-aware layout. Here — only bring-up.

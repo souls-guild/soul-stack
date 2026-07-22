@@ -1,0 +1,71 @@
+# L0 trial for create DragonFly in sentinel mode - FAIL branch of size-guard (topology != roster).
+# Mirrors create-sentinel-1master-1replica in shape, but replicas_per_master=2 (topology 1+2=3),
+# and the roster DELIBERATELY carries 2 hosts: 2 != 1+2. size-guard main.yml ("Guard sentinel roster size
+# matches replicas", assert, keeper-side render-time, ADR-009 amendment) must ABORT render BEFORE
+# any dispatch - otherwise master-election (first by SID) and SENTINEL MONITOR/REPLICAOF would diverge
+# from the declared topology: one host would SILENTLY become an undeclared replica.
+#
+# Paired with create-sentinel-1master-1replica (there roster==topology → render passes, size-guard
+# PASS) and mirrors redis create/tests/sentinel-size-guard-mismatch.
+#
+# Render-only, hermetic. The create dispatcher includes provision (group-drop on enabled=false),
+# with the first changing task being the size-guard assert (does NOT emit RenderedTask), which fails here.
+name: sentinel create with roster size not matching replicas aborts at render (size-guard)
+
+fixtures:
+  default_destiny_source: "file://../../destiny/{name}"
+  # Roster of 2 hosts - ONE LESS than the declared topology (replicas=2 → 1+2=3).
+  # Order deliberately not sorted: size-guard operates on size(), not position.
+  hosts:
+    - sid: node-2.example.com
+      covens: [create, dragonfly]
+      soulprint:
+        network: { primary_ip: 10.0.0.2 }
+        os: { arch: amd64 }
+    - sid: node-1.example.com
+      covens: [create, dragonfly]
+      soulprint:
+        network: { primary_ip: 10.0.0.1 }
+        os: { arch: amd64 }
+  # Vault: default_admin (in-cluster AUTH + masterauth) + system users. Pre-seeded by the fixture
+  # (generate step core.vault.kv-present - keeper-side write, not executed in L0).
+  vault:
+    secret/dragonfly/create/users/default_admin:
+      password: dfadmin-create-pass
+    secret/dragonfly/create/users/replica:
+      password: replica-sys-secret-pass
+    secret/dragonfly/create/users/monitoring:
+      password: monitoring-sys-secret-pass
+    secret/dragonfly/create/users/sentinel:
+      password: sentinel-sys-secret-pass
+    secret/dragonfly/create/users/haproxy:
+      password: haproxy-sys-secret-pass
+  essence:
+    sentinel_master_name: master
+    memory_reserve_percent: 75
+    df_config:
+      maxmemory:        "256mb"
+      maxclients:       10000
+    system_acl_users:
+      default_admin: "~* &* +@all"
+      replica:    "+psync +replconf +ping"
+      monitoring: "-@all +@connection +client +ping +info +config|get +cluster|info +slowlog +latency +memory +select +command|count +command|docs"
+      sentinel:   "allchannels +multi +slaveof +ping +exec +subscribe +config|rewrite +role +publish +info +client|setname +client|kill +script|kill"
+      haproxy:    "-@all +auth +client|getname +client|id +client|setname +command +hello +ping +role +info +cluster|info"
+    system_acl_users_sentinel:
+      default_admin: "allchannels allkeys +@all"
+      monitoring: "-@all +@connection -command +client -hello +info -auth +sentinel|masters +sentinel|replicas +sentinel|slaves +sentinel|sentinels +sentinel|ckquorum"
+      sentinel:   "allchannels -@all +auth +client|getname +client|id +client|setname +command +hello +ping +sentinel|is-master-down-by-addr +publish +role +sentinel|get-master-addr-by-name +sentinel|master +sentinel|myid +sentinel|replicas +sentinel|sentinels"
+      haproxy:    "-@all +auth +client|getname +client|id +client|setname +command +hello +ping +role +sentinel|get-master-addr-by-name +sentinel|master +sentinel|myid +sentinel|replicas +sentinel|sentinels"
+  input:
+    # ★ provision disabled (default-on: omitted section = ENABLED; the case deploys onto
+    # a READY roster, cloud-create not needed) → include dragonfly-provision.yml group-drop.
+    provision:
+      enabled: false
+    version: "1.39.0"
+    # replicas_per_master=2 → expects 1+2=3 hosts, but the roster above = 2 → 2 != 1+2.
+    replicas_per_master: 2
+
+# The run aborts at render: size-guard assert "Guard sentinel roster size matches replicas"
+# false (2 != 1+2). Substring - message of the assert rule in main.yml.
+expect_render_error: "roster host count must be exactly 1+replicas_per_master"

@@ -1,0 +1,113 @@
+syntax = "proto3";
+
+package soulstack.keeper.v1;
+
+import "google/protobuf/struct.proto";
+import "google/protobuf/timestamp.proto";
+
+option go_package = "github.com/souls-guild/soul-stack/proto/gen/go/keeper/v1;keeperv1";
+
+// SoulprintReport is the periodic background push of host facts (refresh_interval).
+//
+// Forward-compat: the typed schema lives in typed_facts (field 3, ADR-018);
+// facts (field 2, google.protobuf.Struct) is a deprecated stub from ADR-012(g),
+// kept for wire-compat (only-add policy, see ADR-012(c)).
+message SoulprintReport {
+  // Soul-side timestamp of when the facts were collected. Keeper-side
+  // received_at is stored separately in Postgres storage, not part of the
+  // wire format. If received_at - collected_at > 10 min, warn in OTel.
+  google.protobuf.Timestamp collected_at = 1;
+
+  // DEPRECATED: a stub from ADR-012(g). Use typed_facts instead.
+  // Kept for wire-compat (forward-compat only-add).
+  google.protobuf.Struct facts = 2 [deprecated = true];
+
+  // Typed facts per ADR-018. Populated by newer Soul agents;
+  // Keeper tolerates either field.
+  SoulprintFacts typed_facts = 3;
+}
+
+// SoulprintFacts is the root message of the typed schema (ADR-018).
+// Full spec — docs/soul/soulprint.md.
+message SoulprintFacts {
+  // Echo SID for logs; authority is the mTLS peer cert.
+  string sid = 1;
+
+  // Short hostname (no domain), uname -n.
+  string hostname = 2;
+
+  OsFacts      os      = 3;
+  KernelFacts  kernel  = 4;
+  CpuFacts     cpu     = 5;
+  MemoryFacts  memory  = 6;
+  NetworkFacts network = 7;
+
+  // field numbers 8..15 reserved:
+  //   8..14: post-MVP extensions (uptime/timezone/virtualization/cloud_provider/disks/bios);
+  //   15: reserved for an optional extra: google.protobuf.Struct for user
+  //       collectors (open Q #22, a separate ADR when it's resolved).
+  reserved 8 to 15;
+}
+
+// OsFacts holds facts about the operating system.
+// pkg_mgr and init_system are collected by the Soul agent via a
+// family+distro -> pkg_mgr/init_system mapping table. Read directly by
+// core.pkg.* and core.service.* for native pkg-mgr/init abstraction.
+message OsFacts {
+  string family      = 1;  // debian / rhel / alpine / windows / darwin
+  string distro      = 2;  // ubuntu / rocky / alpine
+  string version     = 3;  // "22.04" / "9.3" / "3.19"
+  string codename    = 4;  // "jammy" / ""
+  string arch        = 5;  // amd64 / arm64
+  string pkg_mgr     = 6;  // apt / dnf / apk / pacman
+  string init_system = 7;  // systemd / openrc / sysv / launchd
+}
+
+// KernelFacts holds facts about the kernel.
+message KernelFacts {
+  string version = 1;  // full version with distro suffix (5.15.0-101-generic)
+  string release = 2;  // kernel version only (5.15.0)
+}
+
+// CpuFacts holds facts about the CPUs.
+message CpuFacts {
+  int32  count  = 1;  // number of logical CPUs (including HT/SMT)
+  string model  = 2;  // marketing name (Intel Xeon E5-2670)
+  string vendor = 3;  // GenuineIntel / AuthenticAMD / ARM / Apple
+}
+
+// MemoryFacts holds facts about memory. All sizes are in MB, not bytes.
+message MemoryFacts {
+  int64 total_mb     = 1;  // total RAM
+  int64 available_mb = 2;  // free right now
+  int64 swap_mb      = 3;  // swap size
+}
+
+// NetworkFacts holds facts about the host's network.
+message NetworkFacts {
+  // The primary IPv4, the one bound by default.
+  // Soul agent's heuristic: the interface with the default route -> its primary IPv4.
+  // Used in 90% of cases (e.g. as a service's bind address).
+  string primary_ip = 1;
+
+  // Full FQDN (usually == SID, but tracked as a separate system fact).
+  string fqdn = 2;
+
+  // Full list of network interfaces, for multi-homed/VLAN-aware cases.
+  repeated NetworkInterface interfaces = 3;
+}
+
+// NetworkInterface is one of the host's network interfaces.
+message NetworkInterface {
+  string name = 1;  // eth0 / ens3 / wlan0 / lo
+
+  // Interface IPv4 addresses in CIDR notation (10.0.0.1/24).
+  repeated string ipv4 = 2;
+
+  // IPv6 addresses.
+  repeated string ipv6 = 3;
+
+  string mac = 4;  // MAC address
+
+  int32 mtu = 5;
+}

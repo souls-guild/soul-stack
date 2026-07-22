@@ -1,0 +1,111 @@
+# L0-test of migrate_cluster in cluster mode — the FAIL-branch cluster_topology-reject
+# (migrate does NOT apply an explicit shard layout). Mirrors cluster-migrate-2shards (the
+# same happy-path input cluster + an external source of 2 seed-nodes, replicas_per_master=0
+# → topology 2*(1+0)=2, roster of 2 hosts), BUT the operator ADDITIONALLY set
+# cluster_topology → the run aborts on input-validation (422) BEFORE render.
+#
+# ★ WHY THIS IS NEEDED (contract drift, major): covenant.input carries cluster_topology
+# (needed by create/create_from_souls for an explicit shard layout set by the operator).
+# migrate_cluster inherits it via `extends: covenant` → the effective migrate input ACCEPTS
+# the field by schema. BUT the cluster-branch of the migration (cluster.yml includes
+# redis-deploy-cluster-joinable.yml + the community.redis.cluster action join-external
+# plugin) does NOT read cluster_topology: the B3-pilot moves ONLY the masters onto a ready
+# roster (replica-guard replicas_per_master==0), join-external merges exactly one new node
+# into the old master 1:1. The previous inline-migrate DELIBERATELY excluded this field;
+# the covenant rollout brought it back through inheritance → a set field would pass
+# input-validation and SILENTLY not apply (silent green no-op). The validate-rule in
+# main.yml (`!has(input.cluster_topology)`) turns the silent no-op into an early 422.
+#
+# DIFFERENCE from cluster-migrate-replicas-rejected: that one aborts on a render-assert
+# (replica-guard cluster.yml, replicas>0). Here the abort is EARLIER — at input-validation
+# (the validate-phase runs BEFORE the render-pipeline): cluster_topology is set, replicas=0
+# (the replica-guard would pass), the roster is valid (the size-guard would pass) — the
+# case isolates SPECIFICALLY the cluster_topology-reject.
+#
+# Render-only, hermetic. The harness's validate-phase aborts the case with the rule's
+# message BEFORE render (the joinable-deploy/join/failover/forget steps don't start, the
+# dispatcher does not unfold).
+name: cluster migrate with explicit cluster_topology aborts on input validation (topology-reject)
+
+fixtures:
+  default_destiny_source: "file://../../destiny/{name}"
+  # Roster of 2 hosts = exactly shards*(1+replicas)=2*(1+0)=2 → the size-guard would pass,
+  # replicas=0 → the replica-guard would pass. The abort is EARLIER than both — at
+  # input-validation cluster_topology-reject. Order deliberately not sorted.
+  hosts:
+    - sid: node-2.example.com
+      covens: [migrate_cluster, redis]
+      soulprint:
+        network: { primary_ip: 10.0.0.2 }
+        os: { arch: amd64 }
+    - sid: node-1.example.com
+      covens: [migrate_cluster, redis]
+      soulprint:
+        network: { primary_ip: 10.0.0.1 }
+        os: { arch: amd64 }
+  vault:
+    secret/redis/migrate_cluster:
+      password: s3cr3t-redis-pass-migrate
+    secret/redis/migrate_cluster/users/replica:
+      password: replica-sys-secret-pass
+    secret/redis/migrate_cluster/users/monitoring:
+      password: monitoring-sys-secret-pass
+    secret/redis/migrate_cluster/users/sentinel:
+      password: sentinel-sys-secret-pass
+    secret/redis/migrate_cluster/users/haproxy:
+      password: haproxy-sys-secret-pass
+    secret/redis/migrate/oldcluster:
+      password: old-cluster-source-pass
+  essence:
+    # install_method — in essence (author-context): the install method is NOT operator-input
+    # (covenant.compute.install reads default(essence.install_method, 'binary')).
+    install_method: package
+    redis_type: cluster
+    sentinel_master_name: master
+    modules_base_url: "https://artifacts.example.com/redis/modules"
+    memory_reserve_percent: 75
+    persistence_presets:
+      rdb:
+        save: "900 1 300 10 60 10000"
+        appendonly: "no"
+    redis_config:
+      maxmemory:        "256mb"
+      maxmemory-policy: allkeys-lru
+      maxclients:       10000
+      timeout:          300
+    system_acl_users:
+      replica:    "+psync +replconf +ping"
+      monitoring: "-@all +@connection +client +ping +info +config|get +cluster|info +slowlog +latency +memory +select +command|count +command|docs"
+      sentinel:   "allchannels +multi +slaveof +ping +exec +subscribe +config|rewrite +role +publish +info +client|setname +client|kill +script|kill"
+      haproxy:    "-@all +auth +client|getname +client|id +client|setname +command +hello +ping +role +info +cluster|info"
+  input:
+    redis_type: cluster
+    # ★ version — enum of builds published to Nexus; a valid enum is needed so the run
+    # passes the input schema and reaches the cluster_topology-reject validate-rule instead
+    # of failing earlier on the enum.
+    version: "7.4.1"
+    shards: 2
+    # replicas_per_master=0 → the replica-guard would pass (isolating cluster_topology-reject,
+    # not the replica-guard). The size-guard would pass (2 == 2*(1+0)). The abort is earlier,
+    # at validate.
+    replicas_per_master: 0
+    cluster_node_timeout: 5000
+    # ★★ cluster_topology is SET by the operator — the field is inherited from covenant
+    # (valid for create), but is NOT applied in migrate (the B3-pilot moves only the masters
+    # onto a ready roster). The main.yml validate-rule `!has(input.cluster_topology)` rejects
+    # this with 422 BEFORE render. The layout is valid by schema (2 shards, each =
+    # [master_sid] with no replicas when replicas=0).
+    cluster_topology:
+      - ["node-1.example.com"]
+      - ["node-2.example.com"]
+    source:
+      hosts:
+        - "10.9.0.1:6379"
+        - "10.9.0.2:6379"
+      password_ref: "secret/redis/migrate/oldcluster#password"
+      tls: false
+
+# The run aborts on input-validation (the harness's validate-phase BEFORE render): the
+# cluster_topology-reject rule `!has(input.cluster_topology)` is false (the field is set).
+# Substring — the message of the main.yml validate-rule.
+expect_render_error: "cluster_topology is not applied in migrate_cluster"

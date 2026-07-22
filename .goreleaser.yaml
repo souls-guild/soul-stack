@@ -1,0 +1,302 @@
+# GoReleaser config for the Soul Stack release train (NIM-135).
+#
+# One git tag (`v*`) at the repo root = one logical version of all modules
+# (RELEASING.md invariant, ADR-011). GoReleaser reproduces on a tag what the
+# Makefile does by hand — build 3 daemon/CLI binaries + soulctl, package them
+# (deb/rpm/brew/archives), build & push GHCR images, sign everything with
+# cosign keyless, and attach a syft SBOM.
+#
+# Repo layout note: the root is a Go **workspace** (go.work, no root go.mod).
+# Each binary lives in its own module (keeper/soul/soul-lint/soulctl). Builds
+# run from the repo root with GOWORK=auto in effect, so the workspace resolves
+# the local module graph — no module proxy (`gomod.proxy` stays off, the
+# default; enabling it would break on the multi-module workspace).
+#
+# Validate locally without cutting a release: `goreleaser check`.
+# Dry-run the full pipeline offline: `goreleaser release --snapshot --clean`.
+version: 2
+
+project_name: soul-stack
+
+# Multi-module go.work: keep the proxy off (it can't resolve a workspace) and
+# leave -mod at its default (readonly) — in workspace mode `mod` is rejected.
+gomod:
+  proxy: false
+
+before:
+  hooks:
+    # Sanity-only: the workspace already vendors nothing; this just makes sure
+    # module metadata is coherent on the runner before the matrix build.
+    - go version
+
+builds:
+  # keeper — central node (ADR-004). Version → main.version (see cmd/keeper).
+  - id: keeper
+    binary: keeper
+    main: ./keeper/cmd/keeper
+    env:
+      - CGO_ENABLED=0
+    goos: [linux]
+    goarch: [amd64, arm64]
+    flags:
+      - -trimpath
+    ldflags:
+      - -s -w -X main.version={{ .Version }}
+
+  # soul — managed agent daemon. Version → main.soulVersion.
+  - id: soul
+    binary: soul
+    main: ./soul/cmd/soul
+    env:
+      - CGO_ENABLED=0
+    goos: [linux]
+    goarch: [amd64, arm64]
+    flags:
+      - -trimpath
+    ldflags:
+      - -s -w -X main.soulVersion={{ .Version }}
+
+  # soul-lint — offline artifact linter (CLI). No version var injected
+  # (mirrors the Makefile: soul-lint builds without ldflags).
+  - id: soul-lint
+    binary: soul-lint
+    main: ./soul-lint/cmd/soul-lint
+    env:
+      - CGO_ENABLED=0
+    goos: [linux]
+    goarch: [amd64, arm64]
+    flags:
+      - -trimpath
+    ldflags:
+      - -s -w
+
+  # soulctl — operator CLI. Version → main.soulctlVersion.
+  - id: soulctl
+    binary: soulctl
+    main: ./soulctl/cmd/soulctl
+    env:
+      - CGO_ENABLED=0
+    goos: [linux]
+    goarch: [amd64, arm64]
+    flags:
+      - -trimpath
+    ldflags:
+      - -s -w -X main.soulctlVersion={{ .Version }}
+
+# One bundle .tar.gz per platform holding all four binaries — matches the
+# Homebrew cask (installs keeper/soul/soul-lint/soulctl) and the curl-installer
+# (downloads the bundle, extracts the requested binary).
+archives:
+  - id: default
+    formats: [tar.gz]
+    name_template: >-
+      soul-stack_{{ .Version }}_{{ .Os }}_{{ .Arch }}
+    files:
+      - LICENSE
+      - README.md
+      - CHANGELOG.md
+
+checksum:
+  name_template: "checksums.txt"
+  algorithm: sha256
+
+# Native packages. Replicates deploy/nfpm/*.yaml (systemd units, env files,
+# example configs, maintainer scripts) so `apt install` / `dnf install` land a
+# working daemon. keeper+soul ship a unit; soul-lint is just the binary.
+nfpms:
+  - id: keeper
+    package_name: soul-stack-keeper
+    ids: [keeper]
+    vendor: Soul Stack
+    homepage: https://github.com/souls-guild/soul-stack
+    maintainer: Soul Stack <noreply@soul-stack.com>
+    description: |
+      Soul Stack Keeper — the central configuration management node (ADR-004).
+      gRPC bidi-stream over mTLS, OpenAPI/MCP for operators, Postgres + Redis.
+    license: BUSL-1.1
+    section: admin
+    priority: optional
+    formats: [deb, rpm]
+    contents:
+      - src: ./deploy/systemd/keeper.service
+        dst: /etc/systemd/system/keeper.service
+        file_info: { mode: 0644 }
+      - src: ./deploy/systemd/keeper.env
+        dst: /etc/keeper/keeper.env
+        type: "config|noreplace"
+        file_info: { mode: 0644 }
+      - src: ./examples/keeper/keeper.yml
+        dst: /etc/keeper/keeper.yml.example
+        file_info: { mode: 0640 }
+    scripts:
+      postinstall: ./deploy/nfpm/scripts/keeper.postinstall.sh
+      preremove: ./deploy/nfpm/scripts/keeper.preremove.sh
+      postremove: ./deploy/nfpm/scripts/keeper.postremove.sh
+    overrides:
+      deb:
+        dependencies: [passwd]
+      rpm:
+        dependencies: [shadow-utils]
+
+  - id: soul
+    package_name: soul-stack-soul
+    ids: [soul]
+    vendor: Soul Stack
+    homepage: https://github.com/souls-guild/soul-stack
+    maintainer: Soul Stack <noreply@soul-stack.com>
+    description: |
+      Soul Stack Soul — managed agent daemon (ADR-004). Initiates a gRPC stream
+      to Keeper over mTLS, applies Destiny via core modules.
+    license: BUSL-1.1
+    section: admin
+    priority: optional
+    formats: [deb, rpm]
+    contents:
+      - src: ./deploy/systemd/soul.service
+        dst: /etc/systemd/system/soul.service
+        file_info: { mode: 0644 }
+      - src: ./deploy/systemd/soul.env
+        dst: /etc/soul/soul.env
+        type: "config|noreplace"
+        file_info: { mode: 0644 }
+      - src: ./examples/soul/soul.yml
+        dst: /etc/soul/soul.yml.example
+        file_info: { mode: 0640 }
+    scripts:
+      postinstall: ./deploy/nfpm/scripts/soul.postinstall.sh
+      preremove: ./deploy/nfpm/scripts/soul.preremove.sh
+      postremove: ./deploy/nfpm/scripts/soul.postremove.sh
+    overrides:
+      deb:
+        dependencies: [passwd]
+      rpm:
+        dependencies: [shadow-utils]
+
+  - id: soul-lint
+    package_name: soul-stack-soul-lint
+    ids: [soul-lint]
+    vendor: Soul Stack
+    homepage: https://github.com/souls-guild/soul-stack
+    maintainer: Soul Stack <noreply@soul-stack.com>
+    description: |
+      Soul Stack soul-lint — offline validator for artifacts (ADR-004): destiny
+      / service / manifest / scenario. CLI, no daemon and no config.
+    license: BUSL-1.1
+    section: devel
+    priority: optional
+    formats: [deb, rpm]
+
+# Homebrew tap. Cask lands in the souls-guild/homebrew-tap repo; the release job
+# needs a token with write access there (HOMEBREW_TAP_GITHUB_TOKEN). Installs all
+# four binaries. `homebrew_casks` is GoReleaser's current tap mechanism (the old
+# formula `brews` block is deprecated). The tap entry is only wired up for when
+# macOS artifacts land; today's builds are linux-only, and `skip_upload: auto`
+# keeps pre-release (-beta/-rc) tags from publishing the cask.
+homebrew_casks:
+  - name: soul-stack
+    ids:
+      - default
+    binaries:
+      - keeper
+      - soul
+      - soul-lint
+      - soulctl
+    repository:
+      owner: souls-guild
+      name: homebrew-tap
+      token: "{{ .Env.HOMEBREW_TAP_GITHUB_TOKEN }}"
+    homepage: https://github.com/souls-guild/soul-stack
+    description: Soul Stack — configuration management platform (keeper/soul/soulctl).
+    skip_upload: auto
+
+# GHCR container images (dockers_v2 — the current multi-arch mechanism, replaces
+# the phased-out dockers + docker_manifests). Distroless static, built from a
+# slim Dockerfile that COPYs the goreleaser-built binary — no in-image compile.
+# One entry per image builds both arches and fuses them into a single multi-arch
+# tag automatically. Needs buildx + qemu on the runner (the workflow sets both
+# up) and a GHCR login. soul-lint has no prod image (offline CLI).
+dockers_v2:
+  - id: keeper
+    ids: [keeper]
+    dockerfile: ./deploy/docker/keeper.goreleaser.Dockerfile
+    platforms:
+      - linux/amd64
+      - linux/arm64
+    images:
+      - ghcr.io/souls-guild/soul-stack/keeper
+    tags:
+      - "{{ .Version }}"
+    labels:
+      org.opencontainers.image.title: soul-stack-keeper
+      org.opencontainers.image.version: "{{ .Version }}"
+      org.opencontainers.image.source: https://github.com/souls-guild/soul-stack
+      org.opencontainers.image.licenses: BUSL-1.1
+  - id: soul
+    ids: [soul]
+    dockerfile: ./deploy/docker/soul.goreleaser.Dockerfile
+    platforms:
+      - linux/amd64
+      - linux/arm64
+    images:
+      - ghcr.io/souls-guild/soul-stack/soul
+    tags:
+      - "{{ .Version }}"
+    labels:
+      org.opencontainers.image.title: soul-stack-soul
+      org.opencontainers.image.version: "{{ .Version }}"
+      org.opencontainers.image.source: https://github.com/souls-guild/soul-stack
+      org.opencontainers.image.licenses: BUSL-1.1
+
+# SBOM (syft). One CycloneDX SBOM per archive — the graph of what each binary
+# actually links. Runs only if `syft` is on PATH (the workflow installs it).
+sboms:
+  - id: archive
+    artifacts: archive
+    documents:
+      - "{{ .ArtifactName }}.cdx.json"
+
+# cosign keyless (sigstore). Signs the checksums file — verifying it transitively
+# covers every archive/package. In CI the workflow's OIDC token drives the
+# keyless flow (COSIGN_EXPERIMENTAL / Fulcio + Rekor), no long-lived key.
+signs:
+  - id: cosign-checksum
+    cmd: cosign
+    artifacts: checksum
+    signature: "${artifact}.sig"
+    certificate: "${artifact}.pem"
+    args:
+      - sign-blob
+      - "--yes"
+      - "--output-signature=${signature}"
+      - "--output-certificate=${certificate}"
+      - "${artifact}"
+    output: true
+
+# cosign keyless for the GHCR images (by digest). Same keyless identity as above.
+docker_signs:
+  - id: cosign-images
+    cmd: cosign
+    artifacts: manifests
+    args:
+      - sign
+      - "--yes"
+      - "${artifact}"
+    output: true
+
+release:
+  github:
+    owner: souls-guild
+    name: soul-stack
+  # Pre-release tags (v*-beta*/-rc*) publish as GitHub pre-releases.
+  prerelease: auto
+  draft: false
+
+# Pre-release tags get -beta/-rc; keep the changelog auto-generated from commits.
+changelog:
+  use: github
+  sort: asc
+  filters:
+    exclude:
+      - "^docs:"
+      - "^test:"
+      - "^chore:"

@@ -1,0 +1,102 @@
+name: sentinel-custom-timings
+description: >
+  MAIN data path of redis_sentinel RESTRUCT for v9+ sentinel: state carries CUSTOM
+  down_after_ms/failover_timeout_ms (≠ role defaults 5000/60000). has-guard BRANCH
+  "leaf is present" → master_settings is built FROM OLD VALUES (NOT from defaults),
+  int→string conversion:
+    - down_after_ms:2000  → master_settings['down-after-milliseconds']:"2000";
+    - failover_timeout_ms:30000 → master_settings['failover-timeout']:"30000";
+    - master_name/quorum preserved; old named leaves discarded (rebuild).
+  Isolates exactly this branch (plain + persistence:rdb — without tls/aof-remap noise): pairs with
+  persistence-identity-tls-only-defaults (there the leaves are ABSENT → DEFAULT branch
+  5000/60000). Covers both sides of the has-guard on timings.
+
+state_before:
+  redis_type: sentinel
+  redis_version: "7.4.1"
+  redis_config:
+    maxmemory: "256mb"
+    save: "900 1 300 10 60 10000"
+    appendonly: "no"
+  redis_users: []
+  redis_hosts: []
+  redis_sentinel:
+    master_name: master
+    quorum: 2
+    down_after_ms: 2000
+    failover_timeout_ms: 30000
+  tls:
+    enable: false
+    only: false
+    port: 7379
+    cert_ref: ""
+    key_ref: ""
+    ca_ref: ""
+  install:
+    method: package
+  persistence: rdb
+  maxmemory_policy: ""
+  memory_mb: 0
+  modules: []
+  modules_base_url: ""
+  conf_dir: /etc/redis
+  data_dir: /var/lib/redis
+  sysctl_settings: {}
+  shards: 0
+  replicas: 2
+  sentinel_quorum: 2
+  provisioned_vm_ids: []
+  provisioned_provider: ""
+  provisioned_sids: []
+  seeded_from:
+    source_endpoints: []
+    detached: false
+    source_password_ref: ""
+    source_tls_ca_ref: ""
+
+state_after:
+  redis_type: sentinel
+  redis_version: "7.4.1"
+  redis_config:
+    maxmemory: "256mb"
+    save: "900 1 300 10 60 10000"
+    appendonly: "no"
+  redis_users: []
+  redis_hosts: []
+  redis_sentinel:
+    master_name: master
+    quorum: 2
+    master_settings:
+      down-after-milliseconds: "2000"
+      failover-timeout: "30000"
+    settings: {}
+  tls:
+    enable: false
+    only: false
+    port: 7379
+    cert_ref: ""
+    key_ref: ""
+    ca_ref: ""
+  install:
+    method: package
+  persistence: rdb
+  connection_mode: plain
+  io_threads: 0
+  maxmemory_policy: ""
+  memory_mb: 0
+  modules: []
+  modules_base_url: ""
+  conf_dir: /etc/redis
+  data_dir: /var/lib/redis
+  sysctl_settings: {}
+  shards: 0
+  replicas: 2
+  sentinel_quorum: 2
+  provisioned_vm_ids: []
+  provisioned_provider: ""
+  provisioned_sids: []
+  seeded_from:
+    source_endpoints: []
+    detached: false
+    source_password_ref: ""
+    source_tls_ca_ref: ""

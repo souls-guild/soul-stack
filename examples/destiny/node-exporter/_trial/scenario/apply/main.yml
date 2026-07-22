@@ -1,0 +1,80 @@
+# L0 harness for destiny node-exporter (Trial, ADR-023).
+#
+# soul-trial L0 renders a scenario, not a standalone destiny directly (the
+# harness is tied to scenario/<name>/main.yml). This wrapper is a minimal
+# scenario whose only task is apply:destiny node-exporter, to give the destiny
+# a render-only L0 check. Canonical wrapper layout (ADR-023): subdirectory
+# of the destiny itself — `node-exporter/_trial/scenario/apply/`.
+#
+# The L0 resolver mirrors prod (slice A, ADR-023): apply: { destiny: node-exporter }
+# resolves by name from `_trial/service.yml::destiny[]`, and the URL comes from
+# `default_destiny_source` of the test case (file://, relative to service-root =
+# `_trial/`). The target destiny lives one level up — `examples/destiny/node-exporter/`.
+name: apply
+description: >-
+  Trial harness: delegates node_exporter installation to destiny node-exporter
+  via apply:destiny. Not a service — a wrapper for L0-render of the destiny.
+
+input:
+  version:
+    type: string
+    default: "1.11.1"
+    pattern: "^[0-9]+\\.[0-9]+\\.[0-9]+$"
+  collectors:
+    type: array
+    default: [smartmon, nvme, ipmi]
+    items:
+      type: string
+      enum: [smartmon, nvme, ipmi]
+  # base_url_override — optional passthrough of a mirror/nexus into destiny.base_url.
+  # Empty (default "") → destiny takes its own default (GitHub Releases); non-empty →
+  # apply:input passes it to destiny. Needed for L0 case base-url-override.
+  base_url_override:
+    type: string
+    default: ""
+  # collector_options — passthrough of collector sub-options into destiny.collector_options
+  # (format B1, map<string,map<string,string>>). Default {} → destiny applies its own.
+  # Needed for L0 case collector-options.
+  collector_options:
+    type: object
+    default: {}
+    properties: {}
+    additional_properties:
+      type: object
+      properties: {}
+      additional_properties:
+        type: string
+  # web_telemetry_path — passthrough of the metrics path into destiny.web_telemetry_path.
+  # Default /metrics (matches the destiny default). Needed for L0 case telemetry-path-override.
+  web_telemetry_path:
+    type: string
+    default: "/metrics"
+    pattern: "^/.*"
+
+tasks:
+  - name: Apply node-exporter destiny
+    apply:
+      destiny: node-exporter
+      input:
+        # CEL at scenario-scope: values resolve in scenario-env, and destiny
+        # receives the already-computed result (destiny doesn't see scenario-input, ADR-009 isolation).
+        version:    "${ input.version }"
+        # arch is NOT passed: destiny takes it directly from soulprint.self.os.arch
+        # (soulprint is available in destiny-CEL). L0 case arch-arm64 varies
+        # the soulprint.os.arch fixture — it reaches the URL through destiny, not through
+        # this apply:input.
+        # listen is bound to the internal network: primary_ip from 10.0.0.0/8 → bind to it,
+        # otherwise bind to all interfaces (empty host) + standard port :9100.
+        # L0 case listen-non10 varies primary_ip.
+        listen:     "${ (soulprint.self.network.primary_ip.startsWith('10.') ? soulprint.self.network.primary_ip : '') + ':9100' }"
+        collectors: "${ input.collectors }"
+        # base_url is passed to destiny ONLY when override is non-empty; otherwise the key
+        # is dropped via conditional merge — destiny applies its own default GitHub Releases.
+        # CEL ternary: non-empty override → its value; empty → the same
+        # destiny default (idempotent passthrough, doesn't break render-defaults).
+        base_url:   "${ input.base_url_override != '' ? input.base_url_override : 'https://github.com/prometheus/node_exporter/releases/download' }"
+        # collector_options / web_telemetry_path — passthrough of new destiny fields
+        # as native types (whole cell = one ${…}). Wrapper defaults match the
+        # destiny defaults, so existing cases render the same as before.
+        collector_options:  "${ input.collector_options }"
+        web_telemetry_path: "${ input.web_telemetry_path }"

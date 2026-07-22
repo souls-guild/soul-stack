@@ -1,0 +1,48 @@
+# L0 trial reshard: GUARD failure. from_sid == to_sid → assert-guard (ADR-009
+# amendment 2026-06-23) evaluates the that[0] predicate to FALSE at Keeper-side RENDER →
+# render ABORTS with an error and message BEFORE any dispatch (no task reaches Soul).
+# Covers the FALSE branch of the guard predicate (paired with the happy-path case). The
+# check runs KEEPER-SIDE at render time (soulprint.hosts is available); the harness asserts
+# the abort via expect_render_error (ADR-023 amendment).
+name: reshard guard fails when from equals to
+
+fixtures:
+  default_destiny_source: "file://../../destiny/{name}"
+  hosts:
+    - sid: node-1.example.com
+      covens: [reshard, redis]
+      soulprint:
+        network: { primary_ip: 10.0.0.1 }
+        os: { arch: amd64 }
+    - sid: node-2.example.com
+      covens: [reshard, redis]
+      soulprint:
+        network: { primary_ip: 10.0.0.2 }
+        os: { arch: amd64 }
+  # ★ default_admin REDESIGN (2026-06-30): vault branch for default_admin (connecting as
+  # the system admin user). The guard aborts render BEFORE the RESHARD task — the password
+  # is not resolved here, but the branch is brought to the new shape for consistency with
+  # the happy-path case.
+  vault:
+    secret/redis/reshard/users/default_admin:
+      password: default-admin-secret-pass
+  state:
+    redis_type: cluster
+    redis_version: ""
+    redis_config:
+      maxmemory: "256mb"
+      cluster-enabled: "yes"
+      cluster-config-file: "nodes.conf"
+      cluster-node-timeout: "5000"
+    redis_users: []
+    redis_hosts: []
+
+  input:
+    from_sid: node-1.example.com
+    to_sid: node-1.example.com
+    slots: 50
+
+# Render ABORTS with the guard's assert failure: we expect a render error with the
+# message from assert. expect_render_error is mutually exclusive with assert.rendered_tasks
+# (there is no plan — the run never started).
+expect_render_error: "reshard guard: from_sid/to_sid must be distinct hosts of the run roster"

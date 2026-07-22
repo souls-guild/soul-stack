@@ -1,0 +1,98 @@
+{{/*
+  dragonfly.conf - DragonFly FLAGFILE (absl flags, NOT redis.conf!). Go text/template
+  strict (ADR-010). Context: .vars (config + host-layout), .self (primary_ip
+  for bind). ★ default_admin REDESIGN: .vars.password is no longer passed (requirepass
+  removed - authentication is under the default_admin ACL user, see the --aclfile section below).
+
+  ★ FORMAT (verified against DF v1.x sources + the official tools/packaging/debian/
+  dragonfly.conf): EVERY directive is a separate line `--<flag>=<value>` (double dash,
+  `=` sign). Bool flags - WITHOUT a value, bare `--<flag>` (presence; the absl parser in DF tests
+  passes tls exactly that way: {"tls": None}). NO QUOTES around values - DF explicitly
+  rejects them ("Could it be that you put quotes in the flagfile?", server_family.cc).
+  DF flag names use an UNDERSCORE (tls_cert_file, snapshot_cron), NOT a dash like
+  redis.conf (tls-cert-file). scenario puts merged-config keys in DF form (underscore).
+
+  ★ DragonFly vs redis.conf (why a separate template, D1):
+    - NO daemonize/supervised/loadmodule/save/pidfile-in-config: process management is
+      the systemd unit (Type=simple, ExecStart --flagfile, PIDFile in the unit). DF is foreground,
+      without sd_notify (Type=simple, NOT notify). pidfile is set via the --pidfile flag (the unit
+      duplicates it with the PIDFile directive - we keep the flag for symmetry with the official deb).
+    - logging is glog (--log_dir, DF SetLogFilenameExtension(".log")), NOT redis's
+      `logfile <path>`. glog names the files in the directory itself.
+    - snapshot is DF's `--snapshot_cron` (crontab expression) + `--dbfilename`; redis-style
+      `save <points>`/`appendonly` do NOT apply to DF (whether or not they show up in the merged config
+      from scenario - we don't hardcode it here, DF's persistence model differs).
+    - cluster is OUT (sentinel-only) -> NO cluster-announce-ip/cluster-* directives.
+
+  bind + unixsocket: external access is via primary_ip; LOCAL access (health-gate,
+  REPLICAOF's own addr, ACL LOAD, CONFIG SET) is via a UNIX SOCKET. The DF --bind flag accepts
+  a SINGLE address (not a list like redis), and with --bind=primary_ip it does NOT listen on 127.0.0.1
+  (dfly_main.cc: bind_addr = primary_ip, loopback is not added) - so local
+  TCP calls to 127.0.0.1 would not connect. --unixsocket brings up a SEPARATE UDS listener
+  (dfly_main.cc AddUDSListener) independent of --bind: local calls go through it
+  (the plugin understands the unix: address prefix). --bind=primary_ip remains ONLY for external
+  access (replicas/sentinel). (An empty --bind = all interfaces - insecure; we set an explicit primary_ip.)
+
+  .vars.config - merged config from the service scenario (default -> computed -> passthrough,
+  merged via merge() in the render phase). Comes AFTER the base directives (absl is last-wins:
+  the last flag value wins), so the caller can deliberately override
+  any base directive. Empty -> the section is empty. maxmemory, tls flags, masterauth are regular keys
+  of this map (computed by scenario; values are STRINGS).
+
+  Bool flags in the merged config: an absl bool flag in the flagfile accepts BOTH the presence form
+  (just the flag name) AND the form with a true value. scenario puts the value 'true' for bool
+  directives (tls) - the range below prints a flag=value pair, which is valid for absl
+  (flag=true parses to bool true). So no separate handling of presence-flags in range
+  is needed - scenario always gives a key->value pair.
+*/}}
+--bind={{ .self.network.primary_ip }}
+--port={{ .vars.port }}
+--unixsocket={{ .vars.run_dir }}/dragonfly.sock
+
+{{- /*
+  Working directory for DF snapshots (--dir). Derived from data_dir (directive B: data-dir
+  is overridden by the operator, default /var/lib/dragonfly). The directory is owned by the dragonfly
+  user (install.yml). Without it DF writes the snapshot to the process's CWD (under systemd - /) ->
+  write failure. dbfilename is the snapshot file name (DF default is dump-{timestamp}; we set a
+  stable dump for predictable restoration).
+*/}}
+--dir={{ .vars.data_dir }}
+--dbfilename=dump
+
+{{- /*
+  ★ default_admin REDESIGN: --requirepass REMOVED. Authentication (incl. internal:
+  masterauth replication, sentinel monitor, health-PING) goes through the SYSTEM ACL user
+  default_admin (users.acl, ~* &* +@all). With --aclfile set, the built-in default
+  renders as `off` (users.acl.tmpl), so there is no passwordless built-in default access -
+  external connections go through default_admin (the community.redis plugin passes username).
+  requirepass + aclfile together are redundant (with aclfile set, DF takes default's authority from
+  the file). masteruser/masterauth (replica->master AUTH) are regular merged-config keys
+  (scenario puts them into the config map via a vault()-in-cell), printed by the config range below.
+
+  ACL users live in a separate file (--aclfile). DF accepts the redis aclfile format, including
+  a hashed password `#<sha256hex>` (DF acl/user.cc SetPasswordHash is_hashed) -> the same
+  users.acl.tmpl as redis (plaintext is never written to the file). The path is derived from conf_dir.
+*/}}
+--aclfile={{ .vars.conf_dir }}/users.acl
+
+{{- /*
+  pidfile (--pidfile): the systemd unit duplicates it with the PIDFile directive (the official deb
+  DF keeps both). The /var/run/dragonfly directory is created by the unit's RuntimeDirectory.
+  Logs: glog writes to --log_dir (DF does not write a single logfile - glog names the files itself).
+*/}}
+--pidfile={{ .vars.run_dir }}/dragonfly.pid
+--log_dir={{ .vars.log_dir }}
+
+{{/*
+  Merged config from scenario (absl is last-wins: the last --flag wins). Keys are
+  in DF form (underscore): maxmemory/tls/tls_cert_file/tls_key_file/tls_ca_cert_file/
+  tls_replication/masterauth/masteruser/maxclients/snapshot_cron/...
+  range over a MAP walks keys SORTED (templating.md section 6) -> lines are deterministic
+  across runs (no false change -> no extra restart). Values are strings; for
+  bool flags scenario puts 'true' -> `--flag=true` (valid for absl). ★ TLS on DragonFly
+  is applied on the MAIN --port (the --tls flag; DF has NO tls_port - absl FATALs on unknown),
+  so neither tls_port nor `--port=0` ever show up here (TLS does not open a second port).
+*/}}
+{{- range $key, $value := .vars.config }}
+--{{ $key }}={{ $value }}
+{{- end }}

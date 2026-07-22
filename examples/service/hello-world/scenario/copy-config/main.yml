@@ -1,0 +1,26 @@
+name: copy-config
+description: >
+  Demonstrates core.file.present with src: the target file's content is copied from
+  a regular file already on the host (typically — the result of core.archive.extracted),
+  rather than being set inline via content. src and content are mutually exclusive (ADR-015).
+  The render-only L0-case verifies that src passes through the render pipeline as an
+  absolute path unchanged (the whole cell is a literal, CEL interpolation only in the content path).
+
+# state_changes is not set: the scenario does not commit anything to incarnation.state,
+# this is a demonstration of copying file content.
+state_changes: {}
+
+input:
+  src:
+    type: string
+    required: true
+    pattern: "^/[A-Za-z0-9._/-]+$"
+    description: Absolute path of the source file on the host.
+
+tasks:
+  - name: Copy config from a host-local source file
+    module: core.file.present
+    params:
+      path: /etc/soul-stack/app.conf
+      src:  "${ input.src }"
+      mode: "0640"

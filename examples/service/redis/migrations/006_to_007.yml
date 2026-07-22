@@ -1,0 +1,26 @@
+from_version: 6
+to_version: 7
+
+description: >-
+  state_schema v6 -> v7: cloud-provision read-model (ADR-061, Option A - create
+  spins up the VM in the same run). state is EXTENDED with two independent fields:
+    - provisioned_vm_ids (array string) - provider-vm-id of VMs spun up by our
+      create run (day-2 teardown reads them for core.cloud.destroyed);
+    - provisioned_provider (string) - the cloud Provider name in the registry (same
+      destroy call).
+
+  Forward-only (down: not supported; recovery via state_history).
+  Existing incarnations deployed WITHOUT provision (hosts are a declared roster, not
+  provisioned by the service) -> conservative default: provisioned_vm_ids=[] and
+  provisioned_provider=''. TWO flat sets (fields are independent); has()-guard -
+  back-compat for incarnations without these keys (idempotency on repeated run:
+  if the key already exists - kept as-is, otherwise the default is set). The rest of
+  state (redis_config/redis_users/namedfields/topology) is NOT touched.
+
+transform:
+  - set:
+      path:  state.provisioned_vm_ids
+      value: "${ has(state.provisioned_vm_ids) ? state.provisioned_vm_ids : [] }"
+  - set:
+      path:  state.provisioned_provider
+      value: "${ has(state.provisioned_provider) ? state.provisioned_provider : '' }"

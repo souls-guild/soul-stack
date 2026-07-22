@@ -1,0 +1,62 @@
+# L0 test for self-onboard "Variant T" (ADR-017(h) amendment): input.self_onboard=true.
+# Flow: (1) core.cloud.created with self_onboard: true + name (keeper predicts the FQDN and
+# bakes per-VM tokens into userdata), (3) core.soul.registered await_online. Step (2)
+# core.bootstrap.delivered is SKIPPED (when: !self_onboard - STATIC false when
+# self_onboard=true -> placeholder-skip), since the VM onboards itself from cloud-init.
+#
+# Paired with self-onboard-false (there deliver is present, self_onboard/generate_userdata
+# are inverted).
+name: self-onboard true emits cloud-create with name+self_onboard and skips deliver
+
+fixtures:
+  hosts:
+    - sid: redis-0.ns.vm.example
+      covens: [self-onboard-inc]
+      soulprint:
+        network: { primary_ip: 10.0.0.1 }
+        os: { arch: amd64 }
+    - sid: redis-1.ns.vm.example
+      covens: [self-onboard-inc]
+      soulprint:
+        network: { primary_ip: 10.0.0.2 }
+        os: { arch: amd64 }
+  input:
+    provider: example-prod
+    profile: redis-small
+    count: 2
+    self_onboard: true
+    name: redis
+
+# register.provision - L0 passthrough of the core.cloud.created payload (step (a) is not executed).
+# In self-onboard, hosts have NO bootstrap_token (tokens are delivered via userdata, not register).
+mocks:
+  register:
+    provision:
+      vm_ids: [i-aaa, i-bbb]
+      hosts:
+        - { sid: redis-0.ns.vm.example, vm_id: i-aaa, primary_ip: 10.0.0.1 }
+        - { sid: redis-1.ns.vm.example, vm_id: i-bbb, primary_ip: 10.0.0.2 }
+
+assert:
+  task_present:
+    # (1) core.cloud.created: self_onboard=true + name=redis; generate_userdata=false
+    # (self-onboard renders userdata with tokens itself, the generate_userdata path is not needed).
+    - module: core.cloud.created
+      params_subset:
+        provider: example-prod
+        profile: redis-small
+        count: 2
+        name: redis
+        self_onboard: true
+        generate_userdata: false
+
+    # (3) core.soul.registered: SID of created VMs + await_online barrier. coven -
+    # root incarnation.name (self-onboard-inc).
+    - module: core.soul.registered
+      params_subset:
+        sid: [redis-0.ns.vm.example, redis-1.ns.vm.example]
+        await_online: true
+
+  task_absent:
+    # (2) core.bootstrap.delivered is SKIPPED when self_onboard=true (VM onboards itself).
+    - module: core.bootstrap.delivered

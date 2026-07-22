@@ -1,0 +1,122 @@
+# L0 test of the version-aware validator for redis_settings directive names
+# (assert, #6) - POSITIVE case. essence carries a redis_directives catalog for
+# the 7.4 series (subset of real directives). input.version = 7.4.1 (enum of
+# builds rolled out to Nexus) -> series 7.4. redis_settings contains a VALID
+# directive name (appendfsync in catalog[7.4]) -> assert passes, the run
+# renders normally. Paired with redis-settings-directive-unknown (there an
+# unknown name breaks the render).
+#
+# The catalog in the fixture is a SUBSET (not the full essence/_default.yaml):
+# the assert checks key membership, for a positive case it's enough that the
+# passed name IS in the series set.
+name: redis_settings with a valid directive name for the chosen version passes the catalog assert
+
+fixtures:
+  default_destiny_source: "file://../../destiny/{name}"
+  hosts:
+    - sid: node-solo.example.com
+      covens: [create]
+      soulprint:
+        network: { primary_ip: 10.0.0.5 }
+        os: { arch: amd64 }
+  vault:
+    secret/redis/create:
+      password: s3cr3t-redis-pass-create
+    # * default_admin REDESIGN (2026-06-30): default_admin is the system user
+    # for in-cluster AUTH (auth_pass/PING deploy steps read it via the users/<name> branch).
+    secret/redis/create/users/default_admin:
+      password: default-admin-secret-pass
+    secret/redis/create/users/replica:
+      password: replica-sys-secret-pass
+    secret/redis/create/users/monitoring:
+      password: monitoring-sys-secret-pass
+    secret/redis/create/users/sentinel:
+      password: sentinel-sys-secret-pass
+    secret/redis/create/users/haproxy:
+      password: haproxy-sys-secret-pass
+  essence:
+    # install_method is in essence (author-context, 2026-06-28): install method
+    # is NOT operator-input. compute.install reads default(essence.install_method, 'binary').
+    install_method: package
+    redis_type: sentinel
+    sentinel_master_name: master
+    modules_base_url: "https://artifacts.example.com/redis/modules"
+    memory_reserve_percent: 75
+    persistence_presets:
+      rdb:
+        save: "900 1 300 10 60 10000"
+        appendonly: "no"
+    redis_config:
+      maxmemory:        "256mb"
+      maxmemory-policy: allkeys-lru
+      maxclients:       10000
+      timeout:          300
+    system_acl_users:
+      default_admin: "~* &* +@all"
+      replica:    "+psync +replconf +ping"
+      monitoring: "-@all +@connection +client +ping +info +config|get +cluster|info +slowlog +latency +memory +select +command|count +command|docs"
+      sentinel:   "allchannels +multi +slaveof +ping +exec +subscribe +config|rewrite +role +publish +info +client|setname +client|kill +script|kill"
+      haproxy:    "-@all +auth +client|getname +client|id +client|setname +command +hello +ping +role +info +cluster|info"
+    system_acl_users_sentinel:
+      default_admin: "allchannels allkeys +@all"
+      monitoring: "-@all +@connection -command +client -hello +info -auth +sentinel|masters +sentinel|replicas +sentinel|slaves +sentinel|sentinels +sentinel|ckquorum"
+      sentinel:   "allchannels -@all +auth +client|getname +client|id +client|setname +command +hello +ping +sentinel|is-master-down-by-addr +publish +role +sentinel|get-master-addr-by-name +sentinel|master +sentinel|myid +sentinel|replicas +sentinel|sentinels"
+      haproxy:    "-@all +auth +client|getname +client|id +client|setname +command +hello +ping +role +sentinel|get-master-addr-by-name +sentinel|master +sentinel|myid +sentinel|replicas +sentinel|sentinels"
+
+    # Directive catalog (subset of series 7.4) - activates the assert validator.
+    redis_directives:
+      "7.4":
+        - maxmemory
+        - maxmemory-policy
+        - maxclients
+        - timeout
+        - appendonly
+        - appendfsync
+        - save
+
+  input:
+    # * provision is disabled (default-on: an omitted section means ENABLED;
+    # the case deploys onto a READY roster, cloud-create isn't needed) ->
+    # include redis-provision.yml group-drop.
+    provision:
+      enabled: false
+    redis_type: sentinel
+    version: "7.4.1"
+    # install_method=package EXPLICITLY: the case is about directives, not
+    # install. The redesign default is binary (would download binaries from
+    # Nexus) -> the package branch installs the distro package with a version
+    # pin, which is what core.pkg.installed asserts below.
+    # replicas_per_master=0 EXPLICITLY (redesign 2 default): single-host
+    # (node-solo), sentinel size-guard = 1+0 = 1 host.
+    replicas_per_master: 0
+    persistence: rdb
+    redis_settings:
+      # VALID directive name for series 7.4 (in catalog). The value isn't
+      # validated (MVP - names only). Overrides the appendfsync default (if
+      # any existed) last-wins.
+      appendfsync: everysec
+
+assert:
+  task_present:
+    - module: core.pkg.installed
+      params_subset:
+        name: redis-server
+        version: "7.4.1"
+    - module: core.file.rendered
+      params_subset:
+        path: /etc/redis/redis.conf
+
+  state_changes:
+    redis_type: sentinel
+    redis_version: "7.4.1"
+    # redis_settings (passthrough) merged into the final redis_config last-wins.
+    redis_config:
+      maxmemory: "256mb"
+      maxmemory-policy: allkeys-lru
+      maxclients: 10000
+      timeout: 300
+      save: "900 1 300 10 60 10000"
+      appendonly: "no"
+      appendfsync: everysec
+    redis_users: []
+    redis_hosts: []

@@ -1,0 +1,143 @@
+# L0 test for detach_source in sentinel mode under a PROTECTED source (v10 prod fix).
+# Operational scenario for an incarnation filled in by migrate_cluster with an AUTH+TLS
+# source: state.seeded_from carries REFERENCES to the source's account (source_password_ref/
+# source_tls_ca_ref - Vault PATHS, persisted by migrate_cluster). The final offset gate now
+# AUTHENTICATES to the source: compute.source_password = vault(seeded_from.source_password_ref),
+# source_tls is enabled based on the presence of a CA. BEFORE v10, detach under an AUTH source
+# failed to connect (source_password='') -> error_locked -> the full migrate->detach cycle
+# with a protected source was broken.
+#
+# * Companion case to sentinel-detach-source - the back-compat branch (seeded_from WITHOUT
+# ref fields -> source_password=''). This case covers the NON-EMPTY branch (ref set -> vault(ref)).
+#
+# Render-only, hermetic. Roster of 1 host (new master). Dispatched by
+# incarnation.state.redis_type -> the sentinel branch unfolds, cluster group-drop.
+#
+# What we assert (delta vs sentinel-detach-source):
+#   1. FINAL offset gate: source_password = old-cluster-source-pass (via vault on
+#      seeded_from.source_password_ref), source_tls=true + source_tls_ca = the source's PEM
+#      (via vault on seeded_from.source_tls_ca_ref). The source is really under AUTH+TLS -
+#      the gate connects with the account instead of failing.
+#   2. REPLICAOF NO ONE (community.redis.detached): local addr, our password.
+#   3. SENTINEL MONITOR (community.redis.sentinel) AFTER detach (split-brain fix).
+#   4. state_changes: seeded_from.detached := true, refs are PRESERVED (merge of the old
+#      object with {detached:true} - source_endpoints/refs pass through).
+name: sentinel detach_source authenticates the final offset gate to an AUTH+TLS source
+
+fixtures:
+  default_destiny_source: "file://../../destiny/{name}"
+  soulprint:
+    network: { primary_ip: 10.0.0.1 }
+    os: { arch: amd64 }
+
+  # incarnation.state v10: sentinel incarnation filled in by migrate_cluster with a
+  # PROTECTED source. seeded_from carries REFERENCES to the source's account (Vault
+  # PATHS, not secrets). detached=false (source still attached) - detach_source will
+  # set it to true.
+  # host-layout was moved to essence (v11->v12); detach_source does NOT read it -> not in state.
+  state:
+    redis_type: sentinel
+    redis_version: "7.2.4"
+    tls:
+      enable:   false
+      only:     false
+      port:     7379
+      cert_ref: ""
+      key_ref:  ""
+      ca_ref:   ""
+    redis_config:
+      maxmemory:        "256mb"
+      maxmemory-policy: allkeys-lru
+      save:             "900 1 300 10 60 10000"
+      appendonly:       "no"
+    redis_users: []
+    redis_sentinel:
+      master_name: master
+      quorum: 0
+      down_after_ms: 5000
+      failover_timeout_ms: 60000
+    # * seeded_from v10: refs to the EXTERNAL source's account (Vault PATHS under the
+    # pattern-guard secret/redis/migrate/*, as persisted by migrate_cluster). detach reads
+    # them via vault().
+    seeded_from:
+      source_endpoints:
+        - "10.9.0.1:6379"
+        - "10.9.0.2:6379"
+      detached: false
+      source_password_ref: "secret/redis/migrate/oldcluster#password"
+      source_tls_ca_ref: "secret/redis/migrate/oldcluster#ca"
+
+  vault:
+    secret/redis/detach_source:
+      password: detach-redis-pass-16ch
+    # * default_admin REDESIGN: detach's local connections use the default_admin ACL user.
+    secret/redis/detach_source/users/default_admin:
+      password: default-admin-secret-pass
+    # * The EXTERNAL source's account: values behind the refs from state.seeded_from.
+    secret/redis/migrate/oldcluster:
+      password: old-cluster-source-pass
+      ca: |
+        -----BEGIN CERTIFICATE-----
+        OLD-CLUSTER-SOURCE-CA-PEM
+        -----END CERTIFICATE-----
+
+assert:
+  task_present:
+    # -- FINAL offset gate BEFORE detach - AUTHENTICATED to the AUTH+TLS source --
+    # source_password = vault(seeded_from.source_password_ref) = old-cluster-source-pass.
+    # source_tls=true (CA ref non-empty), source_tls_ca = vault(seeded_from.source_tls_ca_ref).
+    - module: community.redis.offset-synced
+      params_subset:
+        addr: "127.0.0.1:6379"
+        source_addr: "10.9.0.1:6379"
+        # * default_admin REDESIGN: LOCAL connection uses default_admin; source_password - the source.
+        username: default_admin
+        password: default-admin-secret-pass
+        source_password: old-cluster-source-pass
+        source_tls: true
+        source_tls_ca: |
+          -----BEGIN CERTIFICATE-----
+          OLD-CLUSTER-SOURCE-CA-PEM
+          -----END CERTIFICATE-----
+        lag_threshold: 0
+        skip_checksum: false
+
+    # -- REPLICAOF NO ONE (community.redis.detached) -----------------------------
+    - module: community.redis.detached
+      params_subset:
+        addr: "127.0.0.1:6379"
+        # * default_admin REDESIGN: LOCAL connection uses default_admin.
+        username: default_admin
+        password: default-admin-secret-pass
+        tls: false
+
+    # -- SENTINEL MONITOR (community.redis.sentinel) AFTER detach (split-brain fix) --
+    - module: community.redis.sentinel
+      params_subset:
+        addr: "127.0.0.1:26379"
+        master_name: master
+        # * default_admin REDESIGN: CONNECTION-AUTH (username/password) + monitoring master
+        # (auth_user/auth_pass) use default_admin.
+        username: default_admin
+        password: default-admin-secret-pass
+        auth_user: default_admin
+        auth_pass: default-admin-secret-pass
+        redis_version: "7.2.4"
+        config:
+          "sentinel down-after-milliseconds master": "5000"
+          "sentinel failover-timeout master": "60000"
+        monitor:
+          ip: 10.0.0.1
+          port: 6379
+          quorum: 1
+
+  # seeded_from.detached := true; source_endpoints AND refs are PRESERVED (merge of the
+  # old object with {detached:true} - a historical record of "from where + with what" migrated).
+  state_changes:
+    seeded_from:
+      source_endpoints:
+        - "10.9.0.1:6379"
+        - "10.9.0.2:6379"
+      detached: true
+      source_password_ref: "secret/redis/migrate/oldcluster#password"
+      source_tls_ca_ref: "secret/redis/migrate/oldcluster#ca"

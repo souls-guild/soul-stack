@@ -1,0 +1,589 @@
+package push
+
+import (
+	"context"
+	"crypto/rand"
+	"errors"
+	"io"
+	"log/slog"
+	"strings"
+	"testing"
+
+	"github.com/souls-guild/soul-stack/keeper/internal/soul"
+	keeperv1 "github.com/souls-guild/soul-stack/proto/gen/go/keeper/v1"
+	pluginv1 "github.com/souls-guild/soul-stack/proto/plugin/gen/go/v1"
+	"golang.org/x/crypto/ssh"
+	"google.golang.org/protobuf/encoding/protojson"
+)
+
+// --- mocks ---
+
+type mockProvider struct {
+	authAllowed bool
+	authReason  string
+	authErr     error
+	signReply   *pluginv1.SignReply
+	signErr     error
+}
+
+func (m *mockProvider) Authorize(_ context.Context, _ *pluginv1.AuthorizeRequest) (*pluginv1.AuthorizeReply, error) {
+	if m.authErr != nil {
+		return nil, m.authErr
+	}
+	return &pluginv1.AuthorizeReply{Allowed: m.authAllowed, Reason: m.authReason}, nil
+}
+
+func (m *mockProvider) Sign(_ context.Context, _ *pluginv1.SignRequest) (*pluginv1.SignReply, error) {
+	if m.signErr != nil {
+		return nil, m.signErr
+	}
+	return m.signReply, nil
+}
+
+type mockTargets struct {
+	target SSHTarget
+	err    error
+}
+
+func (m *mockTargets) Resolve(_ context.Context, _ string) (SSHTarget, error) {
+	return m.target, m.err
+}
+
+type mockSouls struct {
+	s   *soul.Soul
+	err error
+}
+
+func (m *mockSouls) SelectBySID(_ context.Context, _ string) (*soul.Soul, error) {
+	return m.s, m.err
+}
+
+// mockSession captures stdin and returns a pre-set stdout/err.
+type mockSession struct {
+	stdout   string
+	runErr   error
+	gotStdin []byte
+	gotCmd   string
+	closed   bool
+}
+
+func (m *mockSession) Run(_ context.Context, cmd string, stdinData []byte) (string, error) {
+	m.gotCmd = cmd
+	m.gotStdin = stdinData
+	return m.stdout, m.runErr
+}
+
+func (m *mockSession) Close() error { m.closed = true; return nil }
+
+// testSigner — a real ed25519 key in PEM for the Sign response
+// (ssh.ParsePrivateKey needs to parse it). Generating it once via
+// ssh.NewSignerFromKey won't work — we need PEM, so we use a fixed generated
+// helper.
+
+func validSignReply(t *testing.T) *pluginv1.SignReply {
+	t.Helper()
+	return &pluginv1.SignReply{PrivateKey: testEd25519PEM(t), TtlSeconds: 600}
+}
+
+func sshTarget() SSHTarget {
+	return SSHTarget{Host: "host-1.example.com", Port: 22, User: "soul", SoulPath: "/usr/local/bin/soul"}
+}
+
+func sshSoul() *soul.Soul {
+	return &soul.Soul{SID: "host-1.example.com", Transport: soul.TransportSSH, Status: soul.StatusPending}
+}
+
+// testProviderName — the default SshProvider name in unit tests. Used by the
+// newTestDispatcher / testSendApply helpers to avoid repeating the literal.
+const testProviderName = "vault-ssh"
+
+// testDispatcherOpts — a short optional form for newTestDispatcher: a test
+// often configures a single provider + exactly one implementation
+// (mockProvider) and doesn't want to build map[string]ProviderEntry by hand.
+// If a ProviderEntry map is already set in Deps.Providers, it takes priority
+// (a multi-provider test builds it itself).
+type testDispatcherOpts struct {
+	provider SshProvider
+	name     string
+	closer   io.Closer
+}
+
+func newTestDispatcher(t *testing.T, d Deps, single ...testDispatcherOpts) *SshDispatcher {
+	t.Helper()
+	if d.Logger == nil {
+		d.Logger = slog.New(slog.NewTextHandler(io.Discard, nil))
+	}
+	if len(d.HostAuthorities) == 0 {
+		d.HostAuthorities = []NamedHostKeyAuthority{{
+			Name:     "default",
+			CAPubKey: testCAPub(t),
+		}}
+	}
+	if d.Providers == nil {
+		// Single-provider shortcut: if the test passed testDispatcherOpts, build
+		// the map from it, otherwise fall back to the default mockProvider.
+		var sp SshProvider
+		var closer io.Closer
+		name := testProviderName
+		if len(single) == 1 {
+			sp = single[0].provider
+			closer = single[0].closer
+			if single[0].name != "" {
+				name = single[0].name
+			}
+		}
+		if sp == nil {
+			sp = &mockProvider{authAllowed: true}
+		}
+		d.Providers = map[string]ProviderEntry{name: {Provider: sp, Closer: closer}}
+	}
+	disp, err := NewSshDispatcher(d)
+	if err != nil {
+		t.Fatalf("NewSshDispatcher: %v", err)
+	}
+	return disp
+}
+
+func successStdout(t *testing.T, applyID string) string {
+	t.Helper()
+	ev, _ := protojson.Marshal(&keeperv1.TaskEvent{ApplyId: applyID, Status: keeperv1.TaskStatus_TASK_STATUS_OK})
+	rr, _ := protojson.Marshal(&keeperv1.RunResult{ApplyId: applyID, Status: keeperv1.RunStatus_RUN_STATUS_SUCCESS})
+	return string(ev) + "\n" + string(rr) + "\n"
+}
+
+func TestSendApply_HappyPath(t *testing.T) {
+	sess := &mockSession{stdout: successStdout(t, "ap-1")}
+	var dialedCfg DialConfig
+	disp := newTestDispatcher(t, Deps{
+		Providers: map[string]ProviderEntry{testProviderName: {Provider: &mockProvider{authAllowed: true, signReply: validSignReply(t)}}},
+		Targets:   &mockTargets{target: sshTarget()},
+		Souls:     &mockSouls{s: sshSoul()},
+		Dial: func(_ context.Context, cfg DialConfig) (Session, error) {
+			dialedCfg = cfg
+			return sess, nil
+		},
+	})
+
+	req := &keeperv1.ApplyRequest{ApplyId: "ap-1", Tasks: []*keeperv1.RenderedTask{{Name: "noop", Module: "core.exec.run"}}}
+	rr, err := disp.SendApply(context.Background(), "host-1.example.com", testProviderName, req)
+	if err != nil {
+		t.Fatalf("SendApply: %v", err)
+	}
+	if rr.GetStatus() != keeperv1.RunStatus_RUN_STATUS_SUCCESS {
+		t.Errorf("RunResult.status = %v, want SUCCESS", rr.GetStatus())
+	}
+
+	// ApplyRequest must go out over stdin as protojson.
+	gotReq := &keeperv1.ApplyRequest{}
+	if err := protojson.Unmarshal(sess.gotStdin, gotReq); err != nil {
+		t.Fatalf("stdin is not protojson ApplyRequest: %v", err)
+	}
+	if gotReq.GetApplyId() != "ap-1" {
+		t.Errorf("stdin apply_id = %q", gotReq.GetApplyId())
+	}
+	if !strings.Contains(sess.gotCmd, "soul") || !strings.Contains(sess.gotCmd, "apply") {
+		t.Errorf("command = %q, expected `soul apply`", sess.gotCmd)
+	}
+	if !sess.closed {
+		t.Error("session not closed (defer Close)")
+	}
+	// CA must reach Dial (host-cert verification).
+	if len(dialedCfg.HostAuthorities) == 0 {
+		t.Error("HostAuthorities not passed to Dial")
+	}
+}
+
+func TestSendApply_FailedRunResult_NoTransportError(t *testing.T) {
+	// soul apply returned FAILED+exit1: transport is OK, RunResult was delivered.
+	ev, _ := protojson.Marshal(&keeperv1.TaskEvent{ApplyId: "ap-2", Status: keeperv1.TaskStatus_TASK_STATUS_FAILED})
+	rr, _ := protojson.Marshal(&keeperv1.RunResult{ApplyId: "ap-2", Status: keeperv1.RunStatus_RUN_STATUS_FAILED})
+	sess := &mockSession{
+		stdout: string(ev) + "\n" + string(rr) + "\n",
+		runErr: &ssh.ExitError{}, // non-empty exit
+	}
+	disp := newTestDispatcher(t, Deps{
+		Providers: map[string]ProviderEntry{testProviderName: {Provider: &mockProvider{authAllowed: true, signReply: validSignReply(t)}}},
+		Targets:   &mockTargets{target: sshTarget()},
+		Souls:     &mockSouls{s: sshSoul()},
+		Dial:      func(_ context.Context, _ DialConfig) (Session, error) { return sess, nil },
+	})
+
+	got, err := disp.SendApply(context.Background(), "host-1.example.com", testProviderName, &keeperv1.ApplyRequest{ApplyId: "ap-2"})
+	if err != nil {
+		t.Fatalf("a FAILED run with a valid RunResult must not produce a transport error: %v", err)
+	}
+	if got.GetStatus() != keeperv1.RunStatus_RUN_STATUS_FAILED {
+		t.Errorf("status = %v, want FAILED", got.GetStatus())
+	}
+}
+
+func TestSendApply_AuthorizeDeny(t *testing.T) {
+	dialed := false
+	disp := newTestDispatcher(t, Deps{
+		Providers: map[string]ProviderEntry{testProviderName: {Provider: &mockProvider{authAllowed: false, authReason: "policy deny", signReply: validSignReply(t)}}},
+		Targets:   &mockTargets{target: sshTarget()},
+		Souls:     &mockSouls{s: sshSoul()},
+		Dial:      func(_ context.Context, _ DialConfig) (Session, error) { dialed = true; return &mockSession{}, nil },
+	})
+
+	_, err := disp.SendApply(context.Background(), "host-1.example.com", testProviderName, &keeperv1.ApplyRequest{ApplyId: "ap-3"})
+	if err == nil {
+		t.Fatal("expected an error on Authorize deny")
+	}
+	if !strings.Contains(err.Error(), "Authorize refused") {
+		t.Errorf("error is not about deny: %v", err)
+	}
+	if dialed {
+		t.Error("connect must not happen after deny (fail-closed before connect)")
+	}
+}
+
+func TestSendApply_ConnectFail(t *testing.T) {
+	disp := newTestDispatcher(t, Deps{
+		Providers: map[string]ProviderEntry{testProviderName: {Provider: &mockProvider{authAllowed: true, signReply: validSignReply(t)}}},
+		Targets:   &mockTargets{target: sshTarget()},
+		Souls:     &mockSouls{s: sshSoul()},
+		Dial: func(_ context.Context, _ DialConfig) (Session, error) {
+			return nil, errors.New("connection refused")
+		},
+	})
+
+	_, err := disp.SendApply(context.Background(), "host-1.example.com", testProviderName, &keeperv1.ApplyRequest{ApplyId: "ap-4"})
+	if err == nil {
+		t.Fatal("expected an error on connect-fail")
+	}
+	if !strings.Contains(err.Error(), "connect") {
+		t.Errorf("error is not about connect: %v", err)
+	}
+}
+
+func TestSendApply_RejectsNonSSHTransport(t *testing.T) {
+	agentSoul := &soul.Soul{SID: "host-1.example.com", Transport: soul.TransportAgent, Status: soul.StatusConnected}
+	dialed := false
+	disp := newTestDispatcher(t, Deps{
+		Providers: map[string]ProviderEntry{testProviderName: {Provider: &mockProvider{authAllowed: true, signReply: validSignReply(t)}}},
+		Targets:   &mockTargets{target: sshTarget()},
+		Souls:     &mockSouls{s: agentSoul},
+		Dial:      func(_ context.Context, _ DialConfig) (Session, error) { dialed = true; return &mockSession{}, nil },
+	})
+
+	_, err := disp.SendApply(context.Background(), "host-1.example.com", testProviderName, &keeperv1.ApplyRequest{ApplyId: "ap-5"})
+	if err == nil {
+		t.Fatal("expected an error for transport=agent")
+	}
+	if !strings.Contains(err.Error(), "transport") {
+		t.Errorf("error is not about transport: %v", err)
+	}
+	if dialed {
+		t.Error("connect must not happen for a non-ssh transport")
+	}
+}
+
+func TestSendApply_NoRunResultIsTransportError(t *testing.T) {
+	// The stream was cut before RunResult (soul apply crash) → dispatch-level fail.
+	ev, _ := protojson.Marshal(&keeperv1.TaskEvent{ApplyId: "ap-6", Status: keeperv1.TaskStatus_TASK_STATUS_OK})
+	sess := &mockSession{stdout: string(ev) + "\n", runErr: &ssh.ExitError{}}
+	disp := newTestDispatcher(t, Deps{
+		Providers: map[string]ProviderEntry{testProviderName: {Provider: &mockProvider{authAllowed: true, signReply: validSignReply(t)}}},
+		Targets:   &mockTargets{target: sshTarget()},
+		Souls:     &mockSouls{s: sshSoul()},
+		Dial:      func(_ context.Context, _ DialConfig) (Session, error) { return sess, nil },
+	})
+
+	_, err := disp.SendApply(context.Background(), "host-1.example.com", testProviderName, &keeperv1.ApplyRequest{ApplyId: "ap-6"})
+	if err == nil {
+		t.Fatal("a break before RunResult must be a transport error")
+	}
+	if !errors.Is(err, ErrNoRunResult) {
+		t.Errorf("error does not wrap ErrNoRunResult: %v", err)
+	}
+}
+
+func TestSendApply_SignError(t *testing.T) {
+	disp := newTestDispatcher(t, Deps{
+		Providers: map[string]ProviderEntry{testProviderName: {Provider: &mockProvider{authAllowed: true, signErr: errors.New("vault down")}}},
+		Targets:   &mockTargets{target: sshTarget()},
+		Souls:     &mockSouls{s: sshSoul()},
+		Dial:      func(_ context.Context, _ DialConfig) (Session, error) { return &mockSession{}, nil },
+	})
+
+	_, err := disp.SendApply(context.Background(), "host-1.example.com", testProviderName, &keeperv1.ApplyRequest{ApplyId: "ap-7"})
+	if err == nil || !strings.Contains(err.Error(), "Sign") {
+		t.Fatalf("expected a Sign error, got %v", err)
+	}
+}
+
+// vaultStyleSignReply mimics the Vault SSH CA provider's response: only a
+// certificate, private_key="". The signer is the ephemeral signer generated
+// by the dispatcher. The certificate is signed by caSigner over ephPub (for
+// CA providers, host-CA and user-CA are different entities; here caSigner
+// plays the role of the user-CA).
+func vaultStyleCertOnPub(t *testing.T, ephPubAuthorized string) string {
+	t.Helper()
+	pub, _, _, _, err := ssh.ParseAuthorizedKey([]byte(ephPubAuthorized))
+	if err != nil {
+		t.Fatalf("parse eph pub: %v", err)
+	}
+	caSigner, _ := testCAKey(t)
+	cert := &ssh.Certificate{
+		Key:             pub,
+		CertType:        ssh.UserCert,
+		ValidPrincipals: []string{"soul"},
+		ValidAfter:      0,
+		ValidBefore:     ssh.CertTimeInfinity,
+	}
+	if err := cert.SignCert(rand.Reader, caSigner); err != nil {
+		t.Fatalf("sign user cert: %v", err)
+	}
+	return string(ssh.MarshalAuthorizedKey(cert))
+}
+
+// signCapturingProvider — a mock Provider that records the SignRequest to
+// verify the dispatcher put the ephemeral pubkey there, and builds its reply
+// based on the received public_key (Vault-style: a cert on that pubkey).
+type signCapturingProvider struct {
+	t         *testing.T
+	gotReq    *pluginv1.SignRequest
+	authReply *pluginv1.AuthorizeReply
+	makeReply func(t *testing.T, req *pluginv1.SignRequest) *pluginv1.SignReply
+}
+
+func (p *signCapturingProvider) Authorize(_ context.Context, _ *pluginv1.AuthorizeRequest) (*pluginv1.AuthorizeReply, error) {
+	if p.authReply != nil {
+		return p.authReply, nil
+	}
+	return &pluginv1.AuthorizeReply{Allowed: true}, nil
+}
+
+func (p *signCapturingProvider) Sign(_ context.Context, req *pluginv1.SignRequest) (*pluginv1.SignReply, error) {
+	p.gotReq = req
+	return p.makeReply(p.t, req), nil
+}
+
+// TestSendApply_VaultEphemeralMode — Vault SSH CA mode: a SignReply without
+// private_key + a certificate on the ephemeral pubkey that Keeper put in the
+// SignRequest. Should assemble without errors and reach a RunResult.
+func TestSendApply_VaultEphemeralMode(t *testing.T) {
+	sess := &mockSession{stdout: successStdout(t, "ap-vault-1")}
+	prov := &signCapturingProvider{
+		t: t,
+		makeReply: func(t *testing.T, req *pluginv1.SignRequest) *pluginv1.SignReply {
+			return &pluginv1.SignReply{
+				Certificate: vaultStyleCertOnPub(t, req.GetPublicKey()),
+				PrivateKey:  "", // canonical Vault flow
+				TtlSeconds:  1800,
+			}
+		},
+	}
+	disp := newTestDispatcher(t, Deps{
+		Providers: map[string]ProviderEntry{testProviderName: {Provider: prov}},
+		Targets:   &mockTargets{target: sshTarget()},
+		Souls:     &mockSouls{s: sshSoul()},
+		Dial:      func(_ context.Context, _ DialConfig) (Session, error) { return sess, nil },
+	})
+
+	rr, err := disp.SendApply(context.Background(), "host-1.example.com", testProviderName, &keeperv1.ApplyRequest{ApplyId: "ap-vault-1"})
+	if err != nil {
+		t.Fatalf("SendApply (vault-mode): %v", err)
+	}
+	if rr.GetStatus() != keeperv1.RunStatus_RUN_STATUS_SUCCESS {
+		t.Errorf("status = %v, want SUCCESS", rr.GetStatus())
+	}
+	// Checking the S2 invariant: the dispatcher put a non-empty OpenSSH pubkey
+	// in SignRequest.public_key (without it, Vault SSH CA can't sign).
+	if prov.gotReq == nil || prov.gotReq.GetPublicKey() == "" {
+		t.Fatal("SignRequest.public_key is empty - dispatcher did not pass the ephemeral pubkey")
+	}
+	if _, _, _, _, perr := ssh.ParseAuthorizedKey([]byte(prov.gotReq.GetPublicKey())); perr != nil {
+		t.Errorf("ephemeral pubkey does not parse as an OpenSSH authorized_key: %v", perr)
+	}
+}
+
+// TestSendApply_VaultEphemeralMode_RejectsEmptyCert — Vault style: private_key
+// is empty AND certificate is empty → fail-closed (nothing to sign the
+// handshake with).
+func TestSendApply_VaultEphemeralMode_RejectsEmptyCert(t *testing.T) {
+	dialed := false
+	disp := newTestDispatcher(t, Deps{
+		Providers: map[string]ProviderEntry{testProviderName: {Provider: &mockProvider{authAllowed: true, signReply: &pluginv1.SignReply{PrivateKey: "", Certificate: ""}}}},
+		Targets:   &mockTargets{target: sshTarget()},
+		Souls:     &mockSouls{s: sshSoul()},
+		Dial:      func(_ context.Context, _ DialConfig) (Session, error) { dialed = true; return &mockSession{}, nil },
+	})
+	_, err := disp.SendApply(context.Background(), "host-1.example.com", testProviderName, &keeperv1.ApplyRequest{ApplyId: "ap-vault-2"})
+	if err == nil {
+		t.Fatal("expected an error: a SignReply with empty private_key and certificate must be rejected (fail-closed)")
+	}
+	if dialed {
+		t.Error("connect must not happen if there is nothing to sign the handshake with")
+	}
+}
+
+// TestAuthMethodsFromSign_EphemeralPrivateKeyNotLeaked — the ephemeral
+// keypair's private key must never leak into SignRequest or into errors. We
+// check that:
+//   - SignRequest.public_key is pubkey-only (no `BEGIN PRIVATE KEY`);
+//   - the error path (a broken cert) doesn't leak the private key into the
+//     error message.
+func TestAuthMethodsFromSign_EphemeralPrivateKeyNotLeaked(t *testing.T) {
+	signer, pubAuth, err := newEphemeralEd25519()
+	if err != nil {
+		t.Fatalf("newEphemeralEd25519: %v", err)
+	}
+	if strings.Contains(pubAuth, "PRIVATE KEY") {
+		t.Errorf("ephemeral authorized-key contains PRIVATE KEY - leak: %q", pubAuth)
+	}
+	// A broken cert + valid ephSigner → the error should be about parsing the
+	// cert, with no private key in the text.
+	_, err = authMethodsFromSign(&pluginv1.SignReply{Certificate: "not a cert", PrivateKey: ""}, signer)
+	if err == nil {
+		t.Fatal("expected an error on a broken cert")
+	}
+	if strings.Contains(err.Error(), "PRIVATE KEY") || strings.Contains(err.Error(), "BEGIN OPENSSH PRIVATE") {
+		t.Errorf("error message contains the private key: %q", err.Error())
+	}
+}
+
+// TestAuthMethodsFromSign_StaticFlowIgnoresEphSigner — backward compatibility:
+// if private_key is non-empty, the dispatcher must build ssh.AuthMethod
+// values from the plugin's key and ignore ephSigner. This guarantees a
+// static provider isn't broken.
+func TestAuthMethodsFromSign_StaticFlowIgnoresEphSigner(t *testing.T) {
+	staticReply := &pluginv1.SignReply{PrivateKey: testEd25519PEM(t), Certificate: ""}
+	ephSigner, _, err := newEphemeralEd25519()
+	if err != nil {
+		t.Fatalf("newEphemeralEd25519: %v", err)
+	}
+	auth, err := authMethodsFromSign(staticReply, ephSigner)
+	if err != nil {
+		t.Fatalf("static-flow: %v", err)
+	}
+	if len(auth) != 1 {
+		t.Errorf("expected exactly one AuthMethod, got %d", len(auth))
+	}
+	// Without ephSigner the same reply should still work (explicit S0
+	// regression test).
+	if _, err := authMethodsFromSign(staticReply, nil); err != nil {
+		t.Errorf("static-flow without ephSigner broke: %v", err)
+	}
+}
+
+// TestSendApply_ProxyJumpPropagatedToDial — the dispatcher must put
+// SignReply.proxy_jump into DialConfig.ProxyJump (without touching Auth: the
+// same signed cert goes to both hops of the Teleport flow).
+func TestSendApply_ProxyJumpPropagatedToDial(t *testing.T) {
+	sess := &mockSession{stdout: successStdout(t, "ap-pj-1")}
+	prov := &signCapturingProvider{
+		t: t,
+		makeReply: func(t *testing.T, req *pluginv1.SignRequest) *pluginv1.SignReply {
+			return &pluginv1.SignReply{
+				Certificate: vaultStyleCertOnPub(t, req.GetPublicKey()),
+				ProxyJump:   "teleport.example.com:3023",
+				TtlSeconds:  1800,
+			}
+		},
+	}
+	var dialedCfg DialConfig
+	disp := newTestDispatcher(t, Deps{
+		Providers: map[string]ProviderEntry{testProviderName: {Provider: prov}},
+		Targets:   &mockTargets{target: sshTarget()},
+		Souls:     &mockSouls{s: sshSoul()},
+		Dial: func(_ context.Context, cfg DialConfig) (Session, error) {
+			dialedCfg = cfg
+			return sess, nil
+		},
+	})
+
+	_, err := disp.SendApply(context.Background(), "host-1.example.com", testProviderName, &keeperv1.ApplyRequest{ApplyId: "ap-pj-1"})
+	if err != nil {
+		t.Fatalf("SendApply: %v", err)
+	}
+	if dialedCfg.ProxyJump != "teleport.example.com:3023" {
+		t.Errorf("DialConfig.ProxyJump = %q, want %q", dialedCfg.ProxyJump, "teleport.example.com:3023")
+	}
+	if dialedCfg.Host != "host-1.example.com" || dialedCfg.Port != 22 {
+		t.Errorf("target changed: host=%q port=%d", dialedCfg.Host, dialedCfg.Port)
+	}
+	// Auth — the same set as for the direct flow (one user-cert for both hops).
+	if len(dialedCfg.Auth) != 1 {
+		t.Errorf("Auth len = %d, want 1", len(dialedCfg.Auth))
+	}
+}
+
+// TestSendApply_ProxyJumpEmpty_DirectFlow — S0 regression: an empty
+// proxy_jump in SignReply must not end up in DialConfig.ProxyJump (=> direct
+// dial).
+func TestSendApply_ProxyJumpEmpty_DirectFlow(t *testing.T) {
+	sess := &mockSession{stdout: successStdout(t, "ap-pj-empty")}
+	var dialedCfg DialConfig
+	disp := newTestDispatcher(t, Deps{
+		// PrivateKey set, ProxyJump=""
+		Providers: map[string]ProviderEntry{testProviderName: {Provider: &mockProvider{authAllowed: true, signReply: validSignReply(t)}}},
+		Targets:   &mockTargets{target: sshTarget()},
+		Souls:     &mockSouls{s: sshSoul()},
+		Dial: func(_ context.Context, cfg DialConfig) (Session, error) {
+			dialedCfg = cfg
+			return sess, nil
+		},
+	})
+
+	_, err := disp.SendApply(context.Background(), "host-1.example.com", testProviderName, &keeperv1.ApplyRequest{ApplyId: "ap-pj-empty"})
+	if err != nil {
+		t.Fatalf("SendApply: %v", err)
+	}
+	if dialedCfg.ProxyJump != "" {
+		t.Errorf("empty SignReply.proxy_jump leaked into DialConfig.ProxyJump=%q (S0-regression)", dialedCfg.ProxyJump)
+	}
+}
+
+func TestNewSshDispatcher_Validation(t *testing.T) {
+	base := Deps{
+		Providers: map[string]ProviderEntry{testProviderName: {Provider: &mockProvider{}}},
+		Targets:   &mockTargets{},
+		Souls:     &mockSouls{},
+		Logger:    slog.New(slog.NewTextHandler(io.Discard, nil)),
+		HostAuthorities: []NamedHostKeyAuthority{{
+			Name:     "default",
+			CAPubKey: testCAPub(t),
+		}},
+	}
+	if _, err := NewSshDispatcher(base); err != nil {
+		t.Fatalf("valid Deps rejected: %v", err)
+	}
+
+	noCA := base
+	noCA.HostAuthorities = nil
+	if _, err := NewSshDispatcher(noCA); err == nil {
+		t.Error("Deps without CA must be rejected (fail-closed host-cert verify)")
+	}
+
+	emptyName := base
+	emptyName.HostAuthorities = []NamedHostKeyAuthority{{Name: "", CAPubKey: testCAPub(t)}}
+	if _, err := NewSshDispatcher(emptyName); err == nil {
+		t.Error("Deps with empty CA.Name must be rejected")
+	}
+
+	nilKey := base
+	nilKey.HostAuthorities = []NamedHostKeyAuthority{{Name: "x", CAPubKey: nil}}
+	if _, err := NewSshDispatcher(nilKey); err == nil {
+		t.Error("Deps with nil CAPubKey must be rejected")
+	}
+
+	noProviders := base
+	noProviders.Providers = nil
+	if _, err := NewSshDispatcher(noProviders); err == nil {
+		t.Error("Deps without Providers must be rejected")
+	}
+
+	emptyProviders := base
+	emptyProviders.Providers = map[string]ProviderEntry{}
+	if _, err := NewSshDispatcher(emptyProviders); err == nil {
+		t.Error("Deps with an empty Providers map must be rejected")
+	}
+
+	nilProvider := base
+	nilProvider.Providers = map[string]ProviderEntry{testProviderName: {Provider: nil}}
+	if _, err := NewSshDispatcher(nilProvider); err == nil {
+		t.Error("Deps with a nil Provider entry must be rejected")
+	}
+}

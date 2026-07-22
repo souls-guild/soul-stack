@@ -1,0 +1,16 @@
+name: preserves-existing-provision
+description: >
+  Idempotency: an incarnation that ALREADY has provision fields (repeated
+  migration run / inline-seed) keeps their values as-is (has()-guard
+  returns the current value, doesn't overwrite with the default). Mirrors redis
+  006_to_007 preserves-existing-provision.
+
+state_before:
+  df_version: "1.39.0"
+  provisioned_vm_ids: ["vm-aaa", "vm-bbb", "vm-ccc"]
+  provisioned_provider: "example-prod"
+
+state_after:
+  df_version: "1.39.0"
+  provisioned_vm_ids: ["vm-aaa", "vm-bbb", "vm-ccc"]
+  provisioned_provider: "example-prod"

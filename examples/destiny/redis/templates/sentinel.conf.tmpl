@@ -1,0 +1,48 @@
+{{/*
+  sentinel.conf for the redis-sentinel daemon (sentinel mode). Go text/template strict
+  (ADR-010). Context: .vars (sentinel_config, monitor, auth, directories/port), .self
+  (primary_ip for announce-ip).
+
+  PER-HOST vs HOST-INVARIANT (TILING lesson from qa 2026-06-22):
+    - sentinel announce-ip is PER-HOST (the IP of THIS specific sentinel in gossip), taken
+      from .self.network.primary_ip, NOT from apply.input (that resolves host-invariantly on
+      the first host by SID -> all sentinels would get the same IP -> announce broken across NAT).
+    - sentinel monitor <master>: HOST-INVARIANT address (ONE master), comes from .vars.
+
+  .vars.sentinel_config - sorted map of startup directives (range over a MAP sorts
+  keys -> no false change). monitor/auth are SEPARATE lines below (need master + quorum).
+*/}}
+port {{ .vars.port }}
+
+# Managed by the redis-sentinel systemd unit (Type=notify, supervised systemd).
+daemonize no
+supervised systemd
+pidfile {{ .vars.run_dir }}/redis-sentinel.pid
+logfile {{ .vars.log_dir }}/redis-sentinel.log
+# Working directory: sentinel writes its state here.
+dir {{ .vars.data_dir }}
+
+# SECOND aclfile - ONLY for the sentinel daemon (separate set from redis-server's users.acl).
+# An empty file is valid (back-compat).
+aclfile {{ .vars.conf_dir }}/sentinel-users.acl
+
+# Startup directives from the passed map (sorted by range over keys).
+{{- range $key, $value := .vars.sentinel_config }}
+{{ $key }} {{ $value }}
+{{- end }}
+
+# PER-HOST: this sentinel announces its OWN primary_ip in gossip (symmetric to bind in redis.conf).
+sentinel announce-ip {{ .self.network.primary_ip }}
+
+# Monitored master (HOST-INVARIANT address: one master per cluster).
+# auth-user/auth-pass - for sentinel's AUTH against the master. ★ REDESIGN of default_admin (2026-06-30):
+# requirepass removed, master protected by ACL -> sentinel MUST authenticate as an ACL user. The deploy body
+# passes auth_user = default_admin (compute.admin_user) + auth_pass - the default_admin password.
+# Without auth_user, sentinel would fall back to the built-in default (now off in users.acl) -> NOAUTH.
+sentinel monitor {{ .vars.master_name }} {{ .vars.master_ip }} {{ .vars.master_port }} {{ .vars.quorum }}
+{{- if .vars.auth_user }}
+sentinel auth-user {{ .vars.master_name }} {{ .vars.auth_user }}
+{{- end }}
+{{- if .vars.auth_pass }}
+sentinel auth-pass {{ .vars.master_name }} {{ .vars.auth_pass }}
+{{- end }}

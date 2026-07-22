@@ -1,0 +1,141 @@
+# ** CRITICAL guard invariant (system-ACL-users d2): update_users does NOT WIPE system users.
+# update_users re-renders the FULL users.acl, replacing operator-extra with input.users.
+# WITHOUT re-adding system users from essence, this render WOULD WIPE replica/monitoring/
+# sentinel/haproxy -> breaking replication/sentinel/health-check on the next run. This case
+# PROVES that update_users re-adds system users from essence.system_acl_users on EVERY render,
+# even with a full replacement of operator-extra:
+#   users.acl carries the SYSTEM users (replica/monitoring/sentinel/haproxy) + the NEW
+#   operator-extra set (alice+carol), EACH with its own vault password; the old bob is removed.
+# state_changes.redis_users carries ONLY operator-extra (alice+carol) - system users are NOT
+# in state (item 7 d2). Regression "update_users wiped system users" = a mismatch in vars.users
+# (no replica/...) -> assert fails.
+name: update_users re-renders full acl WITHOUT wiping system users (preserve guard)
+
+fixtures:
+  default_destiny_source: "file://../../destiny/{name}"
+  soulprint:
+    network: { primary_ip: 10.0.0.5 }
+    os: { arch: amd64 }
+
+  # Deployed state: operator-extra bob. System users are NOT in state (re-added from essence).
+  state:
+    redis_type: sentinel
+    redis_version: "7.2.4"
+    tls:
+      enable:   false
+      only:     false
+      port:     7379
+      cert_ref: ""
+      key_ref:  ""
+      ca_ref:   ""
+    redis_config:
+      maxmemory:        "256mb"
+      maxmemory-policy: allkeys-lru
+      save:             "900 1 300 10 60 10000"
+      appendonly:       "no"
+    redis_users:
+      - { name: bob, perms: "~app:* +@read", state: "on" }
+
+  essence:
+    # host-layout (conf_dir/data_dir/modules_base_url) - in essence (v11->v12, Option A).
+    conf_dir: /etc/redis
+    data_dir: /var/lib/redis
+    modules_base_url: "https://artifacts.example.com/redis/modules"
+    # System ACLs for redis-server (perms 1:1 from the role, WITHOUT default). update_users
+    # MUST re-add them, otherwise a rerender wipes the system users.
+    system_acl_users:
+      default_admin: "~* &* +@all"
+      replica:    "+psync +replconf +ping"
+      monitoring: "-@all +@connection +client +ping +info +config|get +cluster|info +slowlog +latency +memory +select +command|count +command|docs"
+      sentinel:   "allchannels +multi +slaveof +ping +exec +subscribe +config|rewrite +role +publish +info +client|setname +client|kill +script|kill"
+      haproxy:    "-@all +auth +client|getname +client|id +client|setname +command +hello +ping +role +info +cluster|info"
+
+  # New full operator-extra set: alice + carol (bob removed).
+  input:
+    users:
+      - { name: alice, perms: "~* +@all", state: "on" }
+      - { name: carol, perms: "~cache:* +@read", state: "off" }
+
+  vault:
+    secret/redis/update_users:
+      password: updusr-redis-pass-16ch
+    secret/redis/update_users/users/alice:
+      password: alice-user-secret-pass
+    secret/redis/update_users/users/carol:
+      password: carol-user-secret-pass
+    secret/redis/update_users/users/default_admin:
+      password: default-admin-secret-pass
+    secret/redis/update_users/users/replica:
+      password: replica-sys-secret-pass
+    secret/redis/update_users/users/monitoring:
+      password: monitoring-sys-secret-pass
+    secret/redis/update_users/users/sentinel:
+      password: sentinel-sys-secret-pass
+    secret/redis/update_users/users/haproxy:
+      password: haproxy-sys-secret-pass
+
+assert:
+  task_present:
+    # users.acl carries SYSTEM users + the NEW operator-extra (alice+carol). bob is absent
+    # (bulk-replace). deep-compare catches ANY disappearance of a system user (wipe regression).
+    - module: core.file.rendered
+      params_subset:
+        path: /etc/redis/users.acl
+        render_context:
+          vars:
+            users:
+              default_admin:
+                perms: "~* &* +@all"
+                state: "on"
+                password: default-admin-secret-pass
+              replica:
+                perms: "+psync +replconf +ping"
+                state: "on"
+                password: replica-sys-secret-pass
+              monitoring:
+                perms: "-@all +@connection +client +ping +info +config|get +cluster|info +slowlog +latency +memory +select +command|count +command|docs"
+                state: "on"
+                password: monitoring-sys-secret-pass
+              sentinel:
+                perms: "allchannels +multi +slaveof +ping +exec +subscribe +config|rewrite +role +publish +info +client|setname +client|kill +script|kill"
+                state: "on"
+                password: sentinel-sys-secret-pass
+              haproxy:
+                perms: "-@all +auth +client|getname +client|id +client|setname +command +hello +ping +role +info +cluster|info"
+                state: "on"
+                password: haproxy-sys-secret-pass
+              alice:
+                perms: "~* +@all"
+                state: "on"
+                password: alice-user-secret-pass
+              carol:
+                perms: "~cache:* +@read"
+                state: "off"
+                password: carol-user-secret-pass
+          self:
+            sid: trial-host
+            covens: [update_users]
+            choirs: []
+            traits: {}
+            role: ""
+            network:
+              primary_ip: 10.0.0.5
+            os:
+              arch: amd64
+          role: ""
+          essence: {}
+
+    # hot-reload ACL LOAD - plain instance. * default_admin REDESIGN: AUTH uses default_admin.
+    - module: community.redis.acl
+      params_subset:
+        addr: "127.0.0.1:6379"
+        username: default_admin
+        password: default-admin-secret-pass
+        tls: false
+
+  # state_changes: redis_users = the NEW operator-extra set (alice+carol) WITHOUT system users,
+  # WITHOUT password (write-model). bob dropped out (bulk-replace).
+  state_changes:
+    redis_users:
+      - { name: alice, perms: "~* +@all", state: "on" }
+      - { name: carol, perms: "~cache:* +@read", state: "off" }

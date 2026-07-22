@@ -1,0 +1,252 @@
+# L0 trial create (standalone) — OVERRIDE conf_dir/data_dir + TLS. Guard for a
+# MAJOR (qa): before the fix compute.redis_config HARDCODED the redis.conf TLS
+# directives (tls-cert-file/tls-key-file/tls-ca-cert-file) to /etc/redis/tls/ — PAST the
+# conf_dir override. With override conf_dir=/opt/redis + TLS the destiny puts PEM in /opt/redis/tls/
+# (server.yml: ${conf_dir}/tls/redis.crt), while redis.conf pointed at /etc/redis/tls →
+# redis-server could not find the cert → failed to start; with tls.only (plain closed) the
+# node was completely unreachable over the network. Fix: tls-cert-file/key/ca are derived
+# from compute.conf_dir.
+#
+# Override: conf_dir=/opt/redis, data_dir=/srv/redis-data, TLS enabled+only-TLS.
+# Falsification reliability: we assert the PRESENCE of override paths (/opt/redis/tls/*) AND
+# the ABSENCE of the defaults (/etc/redis/tls/*) — a "hardcode didn't move" regression breaks both sides.
+# Expected:
+#   - redis.conf config: tls-cert-file/tls-key-file/tls-ca-cert-file → /opt/redis/tls/*
+#     (conf_dir override), port 0 (tls_only);
+#   - destiny PEM tasks put cert/key/ca → /opt/redis/tls/* (same conf_dir);
+#   - TLS dir /opt/redis/tls (not /etc/redis/tls);
+#   - redis.conf render_context carries the conf_dir/data_dir override → the template outputs `dir`
+#     from data_dir (/srv/redis-data) and `aclfile` from conf_dir (/opt/redis/users.acl), NOT
+#     the hardcoded /var/lib/redis ÷ /etc/redis/users.acl (fix for the dir/aclfile hardcode in
+#     redis.conf.tmpl bypassing override); additionally the data_dir override is visible via loadmodules
+#     (.so under /srv/redis-data/modules);
+#   - state.conf_dir/data_dir persist the override.
+# version=5:6.2.7 (< 8) → modules active (.so under data_dir override checkable).
+name: conf_dir override flows through to redis.conf TLS directives and PEM paths
+
+fixtures:
+  default_destiny_source: "file://../../destiny/{name}"
+  hosts:
+    - sid: node-solo.example.com
+      covens: [create]
+      soulprint:
+        network: { primary_ip: 10.0.0.5 }
+        os: { arch: amd64 }
+  # Mock Vault: requirepass + TLS PEM material (cert/key/ca). scenario resolves TLS refs
+  # from essence.tls_*_ref (author's trusted path); the conf_dir override does NOT touch refs —
+  # only WHERE destiny puts the PEM and where redis.conf points to them.
+  vault:
+    secret/redis/create:
+      password: s3cr3t-redis-pass-create
+    # Per-user secrets of system users (secret/redis/<inc>/users/<name>#password) —
+    # resolved by keeper-side vault() when merging system_acl_users into apply.input.users.
+    # ★ default_admin REDESIGN (2026-06-30): default_admin — the system user for
+    # intra-cluster AUTH (the deploy's auth_pass/PING steps read it via the users/<name> branch).
+    secret/redis/create/users/default_admin:
+      password: default-admin-secret-pass
+    secret/redis/create/users/replica:
+      password: replica-sys-secret-pass
+    secret/redis/create/users/monitoring:
+      password: monitoring-sys-secret-pass
+    secret/redis/create/users/sentinel:
+      password: sentinel-sys-secret-pass
+    secret/redis/create/users/haproxy:
+      password: haproxy-sys-secret-pass
+    secret/services/redis/tls:
+      cert: "-----BEGIN CERTIFICATE-----\nSERVERCERT\n-----END CERTIFICATE-----"
+      key:  "-----BEGIN PRIVATE KEY-----\nSERVERKEY\n-----END PRIVATE KEY-----"
+      ca:   "-----BEGIN CERTIFICATE-----\nCACERT\n-----END CERTIFICATE-----"
+  essence:
+    redis_type: sentinel
+    sentinel_master_name: master
+    modules_base_url: "https://artifacts.example.com/redis/modules/6.2"
+    memory_reserve_percent: 75
+    persistence_presets:
+      rdb:
+        save: "900 1 300 10 60 10000"
+        appendonly: "no"
+    redis_config:
+      maxmemory: "256mb"
+    # ★ #2/#5: host-layout override + TLS parameters — in essence. Enabling TLS/closing
+    # plain — input flags (tls_enabled/tls_keep_plain). The conf_dir override verifies that
+    # redis.conf TLS paths follow conf_dir (not hardcoded /etc/redis/tls).
+    conf_dir: /opt/redis
+    data_dir: /srv/redis-data
+    tls_port:   7379
+    tls_cert_ref: "secret/services/redis/tls#cert"
+    tls_key_ref:  "secret/services/redis/tls#key"
+    tls_ca_ref:   "secret/services/redis/tls#ca"
+
+    # System ACL users for redis-server + the sentinel daemon (1:1 from essence/_default.yaml).
+    # BOTH ARE REQUIRED: guard create/sentinel.yml (assert 1b) aborts render if either
+    # set is empty (silent fail-open is not acceptable — without them replication/sentinel↔redis
+    # AUTH would break).
+    system_acl_users:
+      default_admin: "~* &* +@all"
+      replica:    "+psync +replconf +ping"
+      monitoring: "-@all +@connection +client +ping +info +config|get +cluster|info +slowlog +latency +memory +select +command|count +command|docs"
+      sentinel:   "allchannels +multi +slaveof +ping +exec +subscribe +config|rewrite +role +publish +info +client|setname +client|kill +script|kill"
+      haproxy:    "-@all +auth +client|getname +client|id +client|setname +command +hello +ping +role +info +cluster|info"
+    system_acl_users_sentinel:
+      default_admin: "allchannels allkeys +@all"
+      monitoring: "-@all +@connection -command +client -hello +info -auth +sentinel|masters +sentinel|replicas +sentinel|slaves +sentinel|sentinels +sentinel|ckquorum"
+      sentinel:   "allchannels -@all +auth +client|getname +client|id +client|setname +command +hello +ping +sentinel|is-master-down-by-addr +publish +role +sentinel|get-master-addr-by-name +sentinel|master +sentinel|myid +sentinel|replicas +sentinel|sentinels"
+      haproxy:    "-@all +auth +client|getname +client|id +client|setname +command +hello +ping +role +sentinel|get-master-addr-by-name +sentinel|master +sentinel|myid +sentinel|replicas +sentinel|sentinels"
+  input:
+    # ★ provision disabled (default-on: an omitted section = ENABLED; the case deploys onto a
+    # READY roster, cloud-create is not needed) → include redis-provision.yml group-drop.
+    provision:
+      enabled: false
+    redis_type: sentinel
+    version: "7.4.1"
+    persistence: rdb
+    # single-host sentinel roster (1 host) → no replicas (size-guard 1+0).
+    replicas_per_master: 0
+    # ★ #5: TLS enabled + plain closed (only-TLS) — connection_mode tls.
+    connection_mode: tls
+
+assert:
+  task_present:
+    # TLS dir under the conf_dir override (/opt/redis/tls, NOT /etc/redis/tls).
+    - module: core.directory.present
+      params_subset:
+        path: /opt/redis/tls
+        owner: redis
+        group: redis
+        mode: "0750"
+
+    # PEM cert/key/ca under the conf_dir override — content = vault(ref). Disambiguator is path.
+    - module: core.file.present
+      params_subset:
+        path: /opt/redis/tls/redis.crt
+        content: "-----BEGIN CERTIFICATE-----\nSERVERCERT\n-----END CERTIFICATE-----"
+        mode: "0600"
+        owner: redis
+        group: redis
+    - module: core.file.present
+      params_subset:
+        path: /opt/redis/tls/redis.key
+        content: "-----BEGIN PRIVATE KEY-----\nSERVERKEY\n-----END PRIVATE KEY-----"
+        mode: "0600"
+        owner: redis
+        group: redis
+    - module: core.file.present
+      params_subset:
+        path: /opt/redis/tls/ca.crt
+        content: "-----BEGIN CERTIFICATE-----\nCACERT\n-----END CERTIFICATE-----"
+        mode: "0600"
+        owner: redis
+        group: redis
+
+    # ★ CORE OF THE GUARD: redis.conf TLS directives point at /opt/redis/tls/* (conf_dir
+    # override), NOT /etc/redis/tls/*. A "hardcode didn't move" regression = /etc/redis/tls/redis.crt
+    # here (deepEqualJSON config-map → FAIL). port 0 — tls_only (plain closed). loadmodules
+    # under the data_dir override (/srv/redis-data/modules) — checks the data_dir side. redis.conf
+    # under the conf_dir override; disambiguator from users.acl/tls/hardening — path.
+    - module: core.file.rendered
+      params_subset:
+        path: /opt/redis/redis.conf
+        template_content: "<present>"
+        mode: "0640"
+        owner: redis
+        group: redis
+        render_context:
+          vars:
+            # ★ GUARD host-layout (directive B): conf_dir/data_dir arrive in render_context →
+            # the template outputs `dir` from data_dir (/srv/redis-data) and `aclfile` from conf_dir
+            # (/opt/redis/users.acl), NOT the hardcoded /var/lib/redis ÷ /etc/redis/users.acl.
+            conf_dir: /opt/redis
+            data_dir: /srv/redis-data
+            port: 6379
+            run_dir: /var/run/redis
+            log_dir: /var/log/redis
+            loadmodules:
+              - /srv/redis-data/modules/redisbloom.so
+              - /srv/redis-data/modules/rejson.so
+              - /srv/redis-data/modules/redisearch.so
+              - /srv/redis-data/modules/redistimeseries.so
+            config:
+              # ★ default_admin REDESIGN: replica→master AUTH (masteruser/
+              # masterauth) arrives as ORDINARY config directives (the sentinel
+              # deploy body merges them in via a vault()-in-cell) → redis.conf ranges
+              # over them like any directive → they statically survive a restart.
+              masteruser:       "default_admin"
+              masterauth:       "default-admin-secret-pass"
+              port: "0"
+              tls-port: "7379"
+              tls-cert-file: /opt/redis/tls/redis.crt
+              tls-key-file: /opt/redis/tls/redis.key
+              tls-ca-cert-file: /opt/redis/tls/ca.crt
+              tls-replication: "yes"
+              tls-auth-clients: "no"
+              maxmemory: "256mb"
+              save: "900 1 300 10 60 10000"
+              appendonly: "no"
+          self:
+            sid: node-solo.example.com
+            covens: [create]
+            choirs: []
+            # traits — registry projection (ADR-060), an empty object without labels.
+            traits: {}
+            role: ""
+            network:
+              primary_ip: 10.0.0.5
+            os:
+              arch: amd64
+          role: ""
+          essence: {}
+
+    # PING health-gate over TLS on a conf_dir-agnostic addr (tls_port). tls_ca = CA-PEM.
+    - module: community.redis.command
+      params_subset:
+        addr: "127.0.0.1:7379"
+        username: default_admin
+        password: default-admin-secret-pass
+        tls: true
+        tls_ca: "-----BEGIN CERTIFICATE-----\nCACERT\n-----END CERTIFICATE-----"
+        args: ["PING"]
+
+  task_absent:
+    # "hardcode /etc/redis/tls didn't move" regression: the default TLS paths must NOT
+    # appear either in PEM tasks or in the TLS dir. (config directives inside the map are
+    # caught by deepEqualJSON in task_present above — task_absent checks top-level params by path.)
+    - module: core.file.present
+      params_subset:
+        path: /etc/redis/tls/redis.crt
+    - module: core.directory.present
+      params_subset:
+        path: /etc/redis/tls
+    # "data_dir override didn't propagate" regression: the default modules path must not appear.
+    - module: core.url.fetched
+      params_subset:
+        path: /var/lib/redis/modules/redisearch.so
+
+  state_changes:
+    redis_type: sentinel
+    redis_version: "7.4.1"
+    # redis_config DRIFT-GUARD: TLS directives in state bit-for-bit = redis.conf config,
+    # including the override paths /opt/redis/tls/* (host invariant → written to state).
+    redis_config:
+      port: "0"
+      tls-port: "7379"
+      tls-cert-file: /opt/redis/tls/redis.crt
+      tls-key-file: /opt/redis/tls/redis.key
+      tls-ca-cert-file: /opt/redis/tls/ca.crt
+      tls-replication: "yes"
+      tls-auth-clients: "no"
+      maxmemory: "256mb"
+      save: "900 1 300 10 60 10000"
+      appendonly: "no"
+    tls:
+      enable:   true
+      only:     true
+      port:     7379
+      cert_ref: "secret/services/redis/tls#cert"
+      key_ref:  "secret/services/redis/tls#key"
+      ca_ref:   "secret/services/redis/tls#ca"
+    modules: [bloom, json, search, timeseries]
+    # ★ conf_dir/data_dir moved out of state into essence (v11→v12, Variant A): the override
+    # is NO LONGER persisted in state (absent from state_changes — the fields are not in state_schema).
+    # The host-layout override lives in the incarnation's spec.essence; a rerun reads it from there.
+    # The destiny tasks above (incl. TLS PEM under the conf_dir override) already verify that
+    # the override propagated to the paths on THIS create run.

@@ -1,0 +1,28 @@
+{{/*
+  logrotate config for Redis log files (/etc/logrotate.d/redis). Go text/template strict
+  (ADR-010). .vars.log_dir -- redis's system log directory.
+
+  The glob {{ .vars.log_dir }}/*.log matches the logfile setting in redis.conf.tmpl and sentinel.conf.tmpl
+  (both daemons write to the same log_dir, so the glob covers both).
+
+  copytruncate: Redis keeps the log file open and doesn't know how to react to a
+  log-reopen signal, so rotation by copy+truncate (not rename+create) is the
+  only safe option without restarting/HUP-ing the service. rename+create
+  (the deb variant from redis.io) is FRAGILE for Redis - same fd, new log stays
+  empty until restart; copytruncate is pinned as the verified approach (NIM-97, guard -
+  TestRedisLogrotate_Copytruncate). daily + rotate 7:
+  daily rotation, keep a week. compress + delaycompress: compression shifted by
+  one rotation (fresh .1 stays uncompressed for quick review). missingok +
+  notifempty: the log may be missing (service hasn't started) or empty -
+  not an error.
+*/}}
+{{ .vars.log_dir }}/*.log {
+  daily
+  rotate 7
+  size 512M
+  copytruncate
+  compress
+  delaycompress
+  missingok
+  notifempty
+}

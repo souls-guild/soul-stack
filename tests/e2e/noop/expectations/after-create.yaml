@@ -1,0 +1,17 @@
+# Post-apply expectations for noop::create.
+#
+# state_changes scenario is empty → we don't check incarnation.state (empty object).
+# What remains: apply_runs, audit, metrics — minimal-flow check of the scenario-runner.
+apply_runs:
+  status: success
+
+audit_events:
+  - type: incarnation.scenario_started
+    payload:
+      incarnation: test-noop
+
+# keeper_scenario_runs_total{result="ok"} — the real metric for a successful scenario
+# run (keeper/internal/scenario/metrics.go). There is no keeper_apply_runs_total
+# metric in the code.
+metrics:
+  keeper_scenario_runs_total{result="ok"}: ">= 1"

@@ -1,0 +1,94 @@
+# L0 trial (Trial, ADR-023) of destiny redis-exporter via the harness scenario apply.
+#
+# Render-only, hermetic. What the case mainly demonstrates:
+#   - core.url.fetched: the tarball filename carries a `v` prefix before the version
+#     (redis_exporter-v<v>.linux-<arch>) — a layout difference from node_exporter;
+#   - the service account gives DynamicUser=yes in the unit (hybrid rule of the prod
+#     convention §2): no manual core.user/core.group; group access to the unix socket (770)
+#     is granted to the transient user via SupplementaryGroups=redis — static template
+#     text that does not go into render_context, so it is not visible in the L0 plan;
+#   - core.file.rendered unit: redis_addr is assembled by CEL from 'unix://' + redis_socket
+#     — connecting to Redis over a unix socket.
+name: redis-exporter destiny renders fetch/extract/install/unit/service plan
+
+# L0 render does not apply the contract defaults — we duplicate the defaults + required fields.
+#
+# apply:destiny resolves by mirroring prod (slice A, ADR-023): redis-exporter
+# is declared in _trial/service.yml::destiny[], the URL comes from default_destiny_source below
+# (file://, relative to service-root = _trial/).
+fixtures:
+  default_destiny_source: "file://../../{name}"
+  input:
+    version:        "1.62.0"
+    # sha256 is REQUIRED (required:true, the placeholder default was removed). L0 render-only —
+    # fetch is not executed; we pass a valid test 64-hex value.
+    sha256:         "sha256:2222222222222222222222222222222222222222222222222222222222222222"
+    arch:           amd64
+    redis_socket:   /var/run/redis/redis-server.sock
+    redis_password: "change-me-please-32"
+    # extra_args is not passed — we verify the destiny default []: ExecStart without extra
+    # tokens, render_context.vars.extra_args = [].
+
+assert:
+  task_present:
+    # All 4 modules in the plan are unique (url.fetched / archive.extracted / file.rendered /
+    # service.running) — presence form without disambiguators.
+    #
+    # url: the `v` prefix before the version in the filename and directory inside the tarball.
+    - module: core.url.fetched
+      params_subset:
+        url: https://github.com/oliver006/redis_exporter/releases/download/v1.62.0/redis_exporter-v1.62.0.linux-amd64.tar.gz
+        path: /tmp/redis_exporter-1.62.0.tar.gz
+        checksum: "sha256:2222222222222222222222222222222222222222222222222222222222222222"
+        mode: "0644"
+        # back-compat: github-default → the SSRF guard holds (allow_private default false).
+        allow_private: false
+
+    - module: core.archive.extracted
+      params_subset:
+        path: /tmp/redis_exporter-1.62.0.tar.gz
+        dest: /tmp/redis_exporter-1.62.0
+
+    # There are NO core.group/core.user steps: the service account gives DynamicUser=yes in the unit
+    # (hybrid rule of the prod convention §2). Group access to the socket (770) is via
+    # SupplementaryGroups=redis, static template text, not visible in the plan.
+
+    # unit: redis_addr is assembled by CEL from 'unix://' + redis_socket — connecting to
+    # Redis over a unix socket. bin_dir/listen are taken from the default destiny. extra_args
+    # is not passed → default [] (ExecStart without extra tokens).
+    - module: core.file.rendered
+      params_subset:
+        path: /etc/systemd/system/redis_exporter.service
+        # the template path is replaced with literal content delivered by Keeper (A1, ADR-012(d)).
+        template_content: "<present>"
+        mode: "0644"
+        owner: root
+        group: root
+        # The text/template root is render_context {vars,self,role,essence}
+        # (templating.md §3.2, BUG-A fix); the flat params.vars no longer exists.
+        render_context:
+          vars:
+            bin_dir: /usr/local/bin
+            listen: ":9121"
+            redis_addr: unix:///var/run/redis/redis-server.sock
+            password: change-me-please-32
+            # redis_user is not passed → default '' (requirepass model, back-compat):
+            # the --redis.user flag is NOT added to ExecStart (conditional template render).
+            redis_user: ""
+            extra_args: []
+          self:
+            sid: trial-host
+            choirs: []
+            # traits — a registry projection (ADR-060), an empty object with no labels.
+            traits: {}
+            # covens carries the incarnation.name label (scenario name = apply) —
+            # mirrors the prod roster `WHERE $1 = ANY(coven)` (harness single-host sugar).
+            covens: [apply]
+            role: ""
+          role: ""
+          essence: {}
+
+    - module: core.service.running
+      params_subset:
+        name: redis_exporter
+        enabled: true

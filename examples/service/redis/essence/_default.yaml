@@ -1,0 +1,1590 @@
+# Baseline essence of the redis service (author's fallback, the defaults-of-a-role concept).
+# The operator overrides it in the incarnation spec; on an L0 run key values
+# are duplicated in the case fixtures.
+#
+# This is the TRANSLATION LAYER for simple operator input (architect 2026-06-22): data
+# tables (persistence_presets, memory_reserve_percent) and the merge fallback
+# redis_config live here, the scenario merges them with the input via merge() (templating
+# §2.3). NONE of this translation goes into the plugin — it's only needed for the
+# redis.conf render at-create (source of truth).
+
+# Default deployment mode. Service modes — sentinel/cluster (2026-06-25);
+# sentinel with replicas_per_master=0 gives a standalone equivalent.
+redis_type: sentinel
+
+# Logical name of the monitored master in Sentinel (sentinel.conf directive SENTINEL
+# MONITOR + community.redis.sentinel master_name). Moved from operator-input to
+# essence (2026-06-25): author-context, the operator overrides it in spec.essence.
+# Default `master` (the former operator-default was `mymaster`).
+sentinel_master_name: master
+
+# Base URL of the .so Redis modules source (without the arch segment). destiny `redis` builds
+# the full per-host URL as <base_url>/<arch>/<name.so> (Redis < 8: modules are always
+# all deployed). Moved from operator-input to essence (2026-06-25): author-context,
+# the operator overrides it in spec.essence for their own mirror. Default "" — unset (Redis
+# 8+ — modules are built in, no source needed; on Redis < 8 the operator must override).
+modules_base_url: ""
+
+# ── SSRF guard for .so module fetches (allow_private, 2026-06-28) ─────────────────
+# Symmetric to binary_allow_private: modules_base_url can also be an internal Nexus
+# (resolves to RFC1918) → 4 .so-fetch destinies would fail on the core.url SSRF guard. Default TRUE
+# (trusted internal Nexus). compute.modules_allow_private forwards it into
+# apply.input.modules_allow_private → destiny modules.yml. Public-mirror — false in spec.essence.
+modules_allow_private: true
+
+# ── Redis install method: FIXED in essence, NOT operator-input (2026-06-28) ──
+# install_method was removed from the operator create contract: the install method is NOT
+# an operator choice in the Run form, but author-context. Default binary (the standard way:
+# separate binaries from Nexus). compute.install reads this value
+# (default(essence.install_method, 'binary')), symmetric to modules_base_url/binary_base_url.
+# The package branch remains vars-driven: an internal operator overrides it in spec.essence
+# (install_method: package) for a distro install, a regular operator doesn't see it.
+install_method: binary
+
+# ── Binary install method: source of Redis binaries from Nexus (redesign) ──────────
+# install_method=binary (DEFAULT) pulls SEPARATE binaries redis-server/redis-cli/
+# redis-benchmark from Nexus. base_url — author-context (the operator overrides it in
+# spec.essence for their own mirror). destiny builds the per-host path as
+# <binary_base_url>/<arch>/Debian/<distro_ver>/<version>/redis-{server,cli,benchmark}
+# from soulprint.self.os (arch, version) + input.version (cluster.yml/sentinel.yml binary branch).
+# ★ binary_version is NOT read in the create SCENARIO (the version is operator input.version,
+# an enum of published Nexus builds). BUT it is ALIVE for other service scenarios: migrate_cluster
+# (df_version cascade binary → essence.binary_version) — so it's NOT removed, left as "" as an
+# author-context fallback (the operator overrides it in spec.essence for a binary install).
+binary_base_url: "https://nexus.example.com/repository/raw/devops/dba/prod/redis"
+binary_version:  ""
+
+# ── SSRF guard for Nexus binary fetches (allow_private, 2026-06-28) ───────────────
+# The default binary_base_url above is an INTERNAL Nexus that resolves to an RFC1918 address
+# (e.g. 10.16.2.130). core.url.fetched by default (allow_private:false) blocks dialing a
+# private IP via the SSRF guard (shared/netguard) → fetching redis binaries fails on a real
+# host. Default TRUE: the default base = a trusted internal Nexus → relaxing it is legitimate.
+# compute.install (create/main.yml) forwards the value into apply.input.install.allow_private
+# → destiny install.yml's 4 fetch tasks. A public-mirror deployment (binary_base_url with an externally
+# resolvable host) sets false in the incarnation's spec.essence — the guard is restored.
+binary_allow_private: true
+
+# ── Cloud-provision defaults: provider/profile/timeout/ssh for create default-on ──
+# create brings up a VM by default (input.provision default-on, decision 2026-06-30).
+# The operator does NOT choose provider/profile in the Run form (it's hidden) — they come FROM HERE:
+# redis-provision.yml reads default(input.provision.X, essence.provision_X), the covenant
+# state_changes provisioned_provider — the same. Author-context: the operator overrides it in the
+# incarnation's spec.essence (a different provider/profile/timeout), but the default is the prod environment.
+#
+# ★ TODO: prod/dev provider switch (ENV keeper / Coven-overlay) — a separate ADR. For now
+# ONE static provider/profile pair (prod). Switching prod/dev by Keeper environment
+# or by the incarnation's Coven-overlay is NOT implemented — this is a stub for a future fork.
+provision_provider: example-prod
+provision_profile:  redis-debian-12
+# Upper bound for waiting on onboarding of created VMs (the await_online barrier, core.soul.registered
+# refresh_soulprint; form <N>{s|m|h}). Fallback for input.provision.await_timeout.
+provision_await_timeout: "8m"
+# Name of the SshProvider plugin for delivering the per-VM bootstrap token over SSH (core.bootstrap.delivered).
+provision_ssh_provider: teleport
+# Ceiling on waiting for a freshly created VM to appear in Teleport before delivering the token
+# (core.bootstrap.delivered, transport=teleport, retry-until-join; form <N>{s|m|h}).
+# fail-fast: a VM is usually online in ~5m (2x margin), a large timeout would mask an enroll failure.
+# Fallback for input.provision.join_wait_timeout.
+provision_join_wait_timeout: "10m"
+
+# ── Mandatory data-plane monitoring: metric exporters (Slice I) ───────────
+# create UNCONDITIONALLY installs node_exporter (host metrics) + redis_exporter (Redis metrics)
+# on EVERY incarnation host (AFTER the deploy branch). Versions/ports/checksum — author-context
+# (NOT operator-input, the form is hidden, contract=A): the operator overrides it in spec.essence.
+# compute drives them into apply.input of two destinies (node-exporter/redis-exporter); each
+# destiny takes arch itself from soulprint.self.os.arch. redis_exporter authenticates as the ACL user
+# monitoring (system_acl_users.monitoring, password generated by kv-present) — on an ACL instance
+# without requirepass, without --redis.user it would be WRONGPASS (see create/main.yml).
+node_exporter_version:  "1.8.2"
+node_exporter_listen:   ":9100"
+# Download root for node_exporter releases. An air-gapped host has no direct access to github.com →
+# an internal Nexus raw-proxy (mirrors the github path 1:1 behind raw-proxy-github/). The destiny default
+# remains GitHub Releases (back-compat for environments with direct GitHub access); an operator with such
+# access overrides it in spec.essence or removes the key.
+node_exporter_base_url: "https://nexus.example.com/repository/raw-proxy-github/prometheus/node_exporter/releases/download"
+# SSRF guard opt-out: the base_url above is an internal Nexus that resolves to a private IP (symmetric to
+# binary_allow_private). A public-mirror deployment — false (or remove the key) in spec.essence.
+node_exporter_allow_private: true
+redis_exporter_version: "1.62.0"
+# Checksum of the redis_exporter tarball (linux-<arch>, form "sha256:<hex>", 64 hex).
+# core.url.fetched verifies it BEFORE publishing the binary. The default is a real pinned
+# sha256 for the given pair (redis_exporter_version, arch). When changing version/arch the operator
+# MUST update the checksum for their pair from the sha256sums of the GitHub release
+# oliver006/redis_exporter in spec.essence — otherwise fail-closed (mismatch/pattern → an honest fetch refusal).
+redis_exporter_sha256:  "sha256:a09f92a6b366e37c654e50522c7b80e4a625396b2499fd42cf17e1aa91e56d5e"
+redis_exporter_listen:  ":9121"
+# Download root for redis_exporter releases — an internal Nexus raw-proxy (see node_exporter_base_url).
+redis_exporter_base_url: "https://nexus.example.com/repository/raw-proxy-github/oliver006/redis_exporter/releases/download"
+# SSRF guard opt-out for the internal Nexus private-resolve (see node_exporter_allow_private).
+redis_exporter_allow_private: true
+
+# ── Mandatory data-plane log shipping: Vector (Slice V-I, ADR-067) ─────────
+# create UNCONDITIONALLY installs vector (log shipping agent) on EVERY incarnation host
+# (AFTER the deploy branch and the exporters). SUPPLEMENTS node_exporter/redis_exporter (metrics,
+# pull) with a log plane (logs, push) — three different observability layers that do NOT overlap.
+# Versions/checksum/sink — author-context (NOT operator-input, the form is hidden, contract=A):
+# the operator overrides it in spec.essence. compute drives them into apply.input of the destiny vector
+# (create/main.yml); the destiny takes arch itself from soulprint.self.os.arch.
+vector_version:  "0.40.0"
+# Checksum of the Vector tarball (<arch>-unknown-linux-gnu, form "sha256:<hex>", 64 hex).
+# core.url.fetched verifies it BEFORE publishing the binary. The default is a real pinned
+# sha256 for the given pair (vector_version, arch). When changing version/arch the operator
+# MUST update the checksum for their pair from the sha256sums.txt of the GitHub release
+# vectordotdev/vector in spec.essence — otherwise fail-closed (mismatch/pattern → an honest fetch refusal).
+vector_sha256:   "sha256:112b047df17df46feb22fc69234e8fc2ad5a411cd2e7d369f3b70c00617a4e90"
+# Download root for Vector releases — an internal Nexus raw-proxy (see node_exporter_base_url).
+vector_base_url: "https://nexus.example.com/repository/raw-proxy-github/vectordotdev/vector/releases/download"
+# SSRF guard opt-out for the internal Nexus private-resolve (see node_exporter_allow_private).
+vector_allow_private: true
+# sink_type — where we ship logs (loki/elasticsearch/vector/console). Default console (safe,
+# no external infra: logs go to vector's own stdout). sink_endpoint — address of the central
+# collector (form depends on sink_type: loki/elasticsearch — URL, vector — host:port;
+# console — unused). Empty (default) is only valid for console. sink_auth_ref —
+# access token for the collector (a Vault ref OR a value); resolved Soul-side, does NOT
+# land in state (security, like tls.*_ref). Empty → sink without auth. The operator sets sink_type/endpoint/
+# auth_ref in spec.essence when a live collector is available (Grafana Loki etc.).
+vector_sink_type:      console
+vector_sink_endpoint:  ""
+vector_sink_auth_ref:  ""
+# Paths/globs of redis log files that vector reads (source type file). redis-server and
+# redis-sentinel write to /var/log/redis/*.log (logfile redis.conf/sentinel.conf, the glob
+# covers both daemons — in sync with logrotate destiny redis). journald is off by default
+# (files only). The operator extends the list in spec.essence as needed.
+vector_log_sources:  ["/var/log/redis/*.log"]
+
+# ── Sentinel per-master directive defaults (sentinel_master_settings fallback) ─────
+# Bottom merge() layer for input.sentinel_master_settings (compute.sentinel_directives):
+# key — the SENTINEL SET option name without the prefix/master-name, value — a string. The
+# defaults of the removed named fields sentinel_down_after_ms (=5000) and
+# sentinel_failover_timeout_ms (=60000) moved here. The operator overrides them in the Run form
+# (input.sentinel_master_settings, last-wins) or in spec.essence.
+sentinel_master_defaults:
+  down-after-milliseconds: "5000"
+  failover-timeout:        "60000"
+
+# ── Host layout: base Redis configuration and data directories (#2, 2026-06-26) ───
+# conf_dir/data_dir moved from operator-input to essence (author-context): the operator
+# overrides the layout in spec.essence for their own storage layout, not in the Run form
+# of every run. compute reads them from here and drives them into destiny (apply.input); they
+# are not persisted in state — day-2 add_node reads the layout from essence.conf_dir/data_dir
+# (has()-safe default). Default = the current path.
+conf_dir: /etc/redis
+data_dir: /var/lib/redis
+
+# Share of the memory budget (input.memory_mb) given to Redis under maxmemory; the remainder —
+# reserved for OS/overhead. scenario computes maxmemory = memory_mb*pct/100 (MB).
+memory_reserve_percent: 75
+
+# Data table for persistence: operator enum (off/aof_1sec/aof_always/rdb/
+# rdb_aof_1sec/rdb_aof_always) → redis.conf directives. scenario takes
+# presets[input.persistence] and merges it WHOLE into redis_config (appendfsync comes
+# along automatically). Values are strings (rendered into redis.conf as `<key> <value>`):
+#   - save: "" disables RDB snapshots; non-empty — a save-points policy.
+#   - appendonly: yes/no enables AOF.
+#   - appendfsync: everysec/always — the AOF fsync frequency (for AOF modes).
+# rdb_aof_* = both snapshots and AOF (double durability). aof_1sec/rdb_aof_1sec — fsync
+# once per second (durability/throughput balance); aof_always/rdb_aof_always — fsync on
+# every write (maximum durability, more expensive).
+persistence_presets:
+  off:
+    save:       ""
+    appendonly: "no"
+  aof_1sec:
+    save:        ""
+    appendonly:  "yes"
+    appendfsync: "everysec"
+  aof_always:
+    save:        ""
+    appendonly:  "yes"
+    appendfsync: "always"
+  rdb:
+    save:       "900 1 300 10 60 10000"
+    appendonly: "no"
+  rdb_aof_1sec:
+    save:        "900 1 300 10 60 10000"
+    appendonly:  "yes"
+    appendfsync: "everysec"
+  rdb_aof_always:
+    save:        "900 1 300 10 60 10000"
+    appendonly:  "yes"
+    appendfsync: "always"
+
+# TLS. PEM source —
+# Vault PATHS (not the PEM itself): scenario resolves them via ${ vault(<ref>) } in the
+# render phase and passes the WHOLE PEM to destiny/plugin. Paths are the author's trusted
+# context (essence), not operator-input → vault() accepts them as a dynamic argument
+# (templating.md §2.3). Ref form — "<mount>/<path>#<field>" (like requirepass).
+# ★ Redesign (connection_mode): TLS INTENT moved to operator-input
+# input.connection_mode (enum tls/tls_plain/plain) — the former essence flags
+# tls_enable/tls_only were REMOVED (compute.tls_on/tls_only_on are derived from the enum, not
+# from essence). Only the TECHNICAL parameters remain in essence: tls_port (7379, as in the role)
+# and the PEM Vault paths below.
+tls_port:   7379
+# Vault paths to the PEM source (fill in for the real install). Default —
+# the secret/services/redis/tls convention (a separate branch for TLS material, not to be confused with
+# secret/redis/<inc>/users/* ACL user passwords).
+tls_cert_ref: "secret/services/redis/tls#cert"
+tls_key_ref:  "secret/services/redis/tls#key"
+tls_ca_ref:   "secret/services/redis/tls#ca"
+
+# ── System ACL users for Redis ───────────────────────────────────────────────────
+# Name→ACL-perms string for the SERVICE users without which the cluster doesn't work: default_admin
+# (full permissions — intra-cluster AUTH: masterauth replication, cluster MEET, sentinel
+# monitor, health-PING; replaced the requirepass user default), replica (PSYNC replication),
+# monitoring (metrics exporter), sentinel (sentinel↔redis AUTH), haproxy (load balancer
+# health-check). perms replica/monitoring/sentinel/haproxy copied 1:1 from
+# vars/main.yml of the role (redis_system_users / redis_sentinel_system_users) — do NOT make up,
+# it's the source of truth.
+#
+# Two sets, because redis-server and the sentinel daemon have DIFFERENT command requirements
+# (sentinel commands vs regular redis commands) → TWO aclfiles: users.acl (redis-server,
+# system_acl_users) and sentinel-users.acl (sentinel daemon, system_acl_users_sentinel).
+#
+# The password for EACH system user — in Vault on the same branch as operator-extra:
+# secret/redis/<incarnation>/users/<name>#password. scenario resolves it keeper-
+# side via vault() in the render phase and adds the system users into apply.input.users ON TOP OF
+# operator-extra (last-wins; see redis-deploy-*.yml, add_user).
+#
+# ★ default_admin (REDESIGN 2026-06-30): a SYSTEM user with full permissions `~* &* +@all`,
+# always added (like replica/monitoring) — in BOTH sets. Replaced the former model
+# "default in requirepass": requirepass is DEPRECATED and removed from redis.conf, all authentication
+# (incl. internal: replication/cluster/sentinel/health-PING) goes through default_admin.
+# The community.redis plugin connects with username=default_admin (see deployment bodies). The password for
+# default_admin — secret/redis/<inc>/users/default_admin#password (the shared branch for
+# system users, NOT the former main secret/redis/<inc>#password — that one is DROPPED).
+#
+# ★ default (built-in Redis user): it's NOT in system_acl_users[_sentinel] — it's
+# rendered `off` (disabled) in users.acl/sentinel-users.acl, UNLESS the operator declared
+# it in operator-input input.users (then on with its perms). compute.admin_user
+# (covenant.yml) — the single source for the system admin user's name (default_admin), read by
+# all deployment bodies. System names = default_admin/replica/monitoring/sentinel/
+# haproxy — the validate-guard rejects operator-extra with any of them (collision). `default`
+# was REMOVED from reserved: the operator may declare the built-in default in input.users.
+#
+# redis-server set (redis_system_users of the role + default_admin):
+system_acl_users:
+  default_admin: "~* &* +@all"
+  replica:    "+psync +replconf +ping"
+  monitoring: "-@all +@connection +client +ping +info +config|get +cluster|info +slowlog +latency +memory +select +command|count +command|docs"
+  sentinel:   "allchannels +multi +slaveof +ping +exec +subscribe +config|rewrite +role +publish +info +client|setname +client|kill +script|kill"
+  haproxy:    "-@all +auth +client|getname +client|id +client|setname +command +hello +ping +role +info +cluster|info"
+
+# sentinel daemon set (redis_sentinel_system_users of the role; default→default_admin for
+# sentinel daemon auth — auth_user default_admin in sentinel.conf, full perms on :26379):
+system_acl_users_sentinel:
+  default_admin: "allchannels allkeys +@all"
+  monitoring: "-@all +@connection -command +client -hello +info -auth +sentinel|masters +sentinel|replicas +sentinel|slaves +sentinel|sentinels +sentinel|ckquorum"
+  sentinel:   "allchannels -@all +auth +client|getname +client|id +client|setname +command +hello +ping +sentinel|is-master-down-by-addr +publish +role +sentinel|get-master-addr-by-name +sentinel|master +sentinel|myid +sentinel|replicas +sentinel|sentinels"
+  haproxy:    "-@all +auth +client|getname +client|id +client|setname +command +hello +ping +role +sentinel|get-master-addr-by-name +sentinel|master +sentinel|myid +sentinel|replicas +sentinel|sentinels"
+
+# Merge fallback for redis.conf (role defaults) — the BOTTOM merge() layer: the persistence
+# preset, computed maxmemory/policy and operator passthrough are layered
+# on top. This merged result is rendered into the full redis.conf (destiny `redis`).
+redis_config:
+  maxmemory:        "256mb"
+  maxmemory-policy: allkeys-lru
+  maxclients:       10000
+  timeout:          300
+
+# Data table of kernel parameters for Redis. scenario passes this map into destiny
+# `redis` via apply.input.sysctl_settings → core.sysctl.applied builds the drop-in
+# /etc/sysctl.d/30-redis.conf and applies it with `sysctl -e -p <file>` UNCONDITIONALLY
+# (host-tuning — a Redis recommendation, not an operator choice; there is no operator
+# sysctl_enable flag). Values are STRINGS (multi-value parameters space-separated); the module
+# sorts keys when building the drop-in (determinism → no spurious reload). Not part of the
+# operator's input: tuning for Redis, not an operational choice.
+#
+# SOURCE (aligned 2026-06-23): the set and values follow the Redis admin docs
+# (background-save fork-error +
+# kernel-network-stack tuning). WITHOUT the tcp_bbr block (net.core.default_qdisc=fq +
+# net.ipv4.tcp_congestion_control=bbr) — it depends on loading the tcp_bbr kernel module
+# (not loaded by default on Debian) → deferred to a separate module-loading step.
+sysctl_settings:
+  # >>> Memory and processes (CRITICAL for RDB/AOF fork and large instances) <<<
+  # overcommit_memory=1 — a Redis recommendation: otherwise background save fails with a
+  # fork-error (redis-docs FAQ background-saving-fails). swappiness=1 — we avoid
+  # swapping except as a last resort.
+  vm.overcommit_memory:  "1"
+  vm.swappiness:         "1"
+  vm.max_map_count:      "262144"
+  vm.vfs_cache_pressure: "200"
+  # >>> Network buffers (performance under load, Redis kernel-stack tuning) <<<
+  net.core.rmem_max:     "134217728"
+  net.core.wmem_max:     "134217728"
+  net.core.rmem_default: "212992"
+  net.core.wmem_default: "212992"
+  net.ipv4.tcp_rmem:     "4096 212992 134217728"
+  net.ipv4.tcp_wmem:     "4096 212992 134217728"
+  # >>> Queues and backlogs <<<
+  net.core.somaxconn:           "65535"
+  net.core.netdev_max_backlog:  "20000"
+  net.ipv4.tcp_max_syn_backlog: "65535"
+  # >>> TCP stack (Redis kernel-network-stack tuning) <<<
+  net.ipv4.tcp_sack:           "1"
+  net.ipv4.tcp_timestamps:     "1"
+  net.ipv4.tcp_window_scaling: "1"
+  net.ipv4.tcp_syncookies:     "1"
+  net.ipv4.tcp_tw_reuse:       "1"
+  net.ipv4.tcp_fin_timeout:    "30"
+  net.ipv4.ip_local_port_range: "30000 65535"
+
+# ── Catalog of valid redis.conf directives by version (version-aware validation, #6) ──
+# ★ #6 (2026-06-26): version-aware validator of directive names for input.redis_settings.
+# redis_settings — passthrough KEY→VALUE: without validation the operator would silently drag in a typo
+# (`maxmemoyr 512mb`) or a directive from another version → redis-server fails to start on the host.
+# Catalog = a flat set of VALID directive NAMES per Redis series (major.minor).
+# scenario/create asserts that EVERY redis_settings key ∈ catalog[series of input.version]
+# → an unknown name breaks the run at render (422 assert-failed) BEFORE applying, with a clear
+# message. MVP: NAMES only (values are not validated).
+#
+# Key — major.minor series (directives are stable within a patch series). input.version —
+# a distro pin (5:7.0.15-1~deb12u7); assert extracts X.Y via regex. A series missing from the catalog
+# → assert skip (only known versions are validated; a non-cataloged version isn't blocked).
+#
+# SOURCE — the Redis upstream src/config.c (NOT redis.conf: prose comments are
+# indistinguishable from commented-out directive examples). Generated by scripts/gen-redis-catalog.sh
+# (curl config.c + extract createXConfig macro names + alias + special directives),
+# the result is COMMITTED here — no network on the render path. Regenerate when adding a
+# version: `scripts/gen-redis-catalog.sh > /tmp/x && paste it into redis_directives:` here.
+redis_directives:
+  "6.2":
+    - acl-pubsub-default
+    - aclfile
+    - acllog-max-len
+    - active-defrag-cycle-max
+    - active-defrag-cycle-min
+    - active-defrag-ignore-bytes
+    - active-defrag-max-scan-fields
+    - active-defrag-threshold-lower
+    - active-defrag-threshold-upper
+    - active-expire-effort
+    - activedefrag
+    - activerehashing
+    - always-show-logo
+    - aof-load-truncated
+    - aof-rewrite-incremental-fsync
+    - aof-use-rdb-preamble
+    - aof_rewrite_cpulist
+    - appendfilename
+    - appendfsync
+    - appendonly
+    - auto-aof-rewrite-min-size
+    - auto-aof-rewrite-percentage
+    - bgsave_cpulist
+    - bio_cpulist
+    - client-query-buffer-limit
+    - cluster-allow-reads-when-down
+    - cluster-allow-replica-migration
+    - cluster-announce-bus-port
+    - cluster-announce-ip
+    - cluster-announce-port
+    - cluster-announce-tls-port
+    - cluster-enabled
+    - cluster-migration-barrier
+    - cluster-node-timeout
+    - cluster-replica-no-failover
+    - cluster-replica-validity-factor
+    - cluster-require-full-coverage
+    - cluster-slave-no-failover
+    - cluster-slave-validity-factor
+    - crash-log-enabled
+    - crash-memcheck-enabled
+    - daemonize
+    - databases
+    - dbfilename
+    - disable-thp
+    - dynamic-hz
+    - gopher-enabled
+    - hash-max-ziplist-entries
+    - hash-max-ziplist-value
+    - hll-sparse-max-bytes
+    - hz
+    - ignore-warnings
+    - include
+    - io-threads
+    - io-threads-do-reads
+    - jemalloc-bg-thread
+    - key-load-delay
+    - latency-monitor-threshold
+    - lazyfree-lazy-eviction
+    - lazyfree-lazy-expire
+    - lazyfree-lazy-server-del
+    - lazyfree-lazy-user-del
+    - lazyfree-lazy-user-flush
+    - lfu-decay-time
+    - lfu-log-factor
+    - list-compress-depth
+    - list-max-ziplist-size
+    - loadmodule
+    - loglevel
+    - lua-enable-deprecated-api
+    - lua-replicate-commands
+    - lua-time-limit
+    - masterauth
+    - masteruser
+    - maxclients
+    - maxmemory
+    - maxmemory-eviction-tenacity
+    - maxmemory-policy
+    - maxmemory-samples
+    - min-replicas-max-lag
+    - min-replicas-to-write
+    - min-slaves-max-lag
+    - min-slaves-to-write
+    - no-appendfsync-on-rewrite
+    - oom-score-adj
+    - pidfile
+    - port
+    - proc-title-template
+    - protected-mode
+    - proto-max-bulk-len
+    - rdb-del-sync-files
+    - rdb-key-save-delay
+    - rdb-save-incremental-fsync
+    - rdbchecksum
+    - rdbcompression
+    - rename-command
+    - repl-backlog-size
+    - repl-backlog-ttl
+    - repl-disable-tcp-nodelay
+    - repl-diskless-load
+    - repl-diskless-sync
+    - repl-diskless-sync-delay
+    - repl-ping-replica-period
+    - repl-ping-slave-period
+    - repl-timeout
+    - replica-announce-ip
+    - replica-announce-port
+    - replica-announced
+    - replica-ignore-maxmemory
+    - replica-lazy-flush
+    - replica-priority
+    - replica-read-only
+    - replica-serve-stale-data
+    - requirepass
+    - sanitize-dump-payload
+    - sentinel
+    - server_cpulist
+    - set-max-intset-entries
+    - set-proc-title
+    - slave-announce-ip
+    - slave-announce-port
+    - slave-ignore-maxmemory
+    - slave-lazy-flush
+    - slave-priority
+    - slave-read-only
+    - slave-serve-stale-data
+    - slaveof
+    - slowlog-log-slower-than
+    - slowlog-max-len
+    - stop-writes-on-bgsave-error
+    - stream-node-max-bytes
+    - stream-node-max-entries
+    - supervised
+    - syslog-enabled
+    - syslog-facility
+    - syslog-ident
+    - tcp-backlog
+    - tcp-keepalive
+    - timeout
+    - tls-auth-clients
+    - tls-ca-cert-dir
+    - tls-ca-cert-file
+    - tls-cert-file
+    - tls-ciphers
+    - tls-ciphersuites
+    - tls-client-cert-file
+    - tls-client-key-file
+    - tls-client-key-file-pass
+    - tls-cluster
+    - tls-dh-params-file
+    - tls-key-file
+    - tls-key-file-pass
+    - tls-port
+    - tls-prefer-server-ciphers
+    - tls-protocols
+    - tls-replication
+    - tls-session-cache-size
+    - tls-session-cache-timeout
+    - tls-session-caching
+    - tracking-table-max-keys
+    - unixsocket
+    - use-exit-on-panic
+    - user
+    - zset-max-ziplist-entries
+    - zset-max-ziplist-value
+  "7.0":
+    - acl-pubsub-default
+    - aclfile
+    - acllog-max-len
+    - active-defrag-cycle-max
+    - active-defrag-cycle-min
+    - active-defrag-ignore-bytes
+    - active-defrag-max-scan-fields
+    - active-defrag-threshold-lower
+    - active-defrag-threshold-upper
+    - active-expire-effort
+    - activedefrag
+    - activerehashing
+    - always-show-logo
+    - aof-disable-auto-gc
+    - aof-load-truncated
+    - aof-rewrite-incremental-fsync
+    - aof-timestamp-enabled
+    - aof-use-rdb-preamble
+    - aof_rewrite_cpulist
+    - appenddirname
+    - appendfilename
+    - appendfsync
+    - appendonly
+    - auto-aof-rewrite-min-size
+    - auto-aof-rewrite-percentage
+    - bgsave_cpulist
+    - bind
+    - bind-source-addr
+    - bio_cpulist
+    - busy-reply-threshold
+    - client-output-buffer-limit
+    - client-query-buffer-limit
+    - cluster-allow-pubsubshard-when-down
+    - cluster-allow-reads-when-down
+    - cluster-allow-replica-migration
+    - cluster-announce-bus-port
+    - cluster-announce-hostname
+    - cluster-announce-ip
+    - cluster-announce-port
+    - cluster-announce-tls-port
+    - cluster-config-file
+    - cluster-enabled
+    - cluster-link-sendbuf-limit
+    - cluster-migration-barrier
+    - cluster-node-timeout
+    - cluster-port
+    - cluster-preferred-endpoint-type
+    - cluster-replica-no-failover
+    - cluster-replica-validity-factor
+    - cluster-require-full-coverage
+    - cluster-slave-no-failover
+    - cluster-slave-validity-factor
+    - crash-log-enabled
+    - crash-memcheck-enabled
+    - daemonize
+    - databases
+    - dbfilename
+    - dir
+    - disable-thp
+    - dynamic-hz
+    - enable-debug-command
+    - enable-module-command
+    - enable-protected-configs
+    - hash-max-listpack-entries
+    - hash-max-listpack-value
+    - hash-max-ziplist-entries
+    - hash-max-ziplist-value
+    - hll-sparse-max-bytes
+    - hz
+    - ignore-warnings
+    - include
+    - io-threads
+    - io-threads-do-reads
+    - jemalloc-bg-thread
+    - key-load-delay
+    - latency-monitor-threshold
+    - latency-tracking
+    - latency-tracking-info-percentiles
+    - lazyfree-lazy-eviction
+    - lazyfree-lazy-expire
+    - lazyfree-lazy-server-del
+    - lazyfree-lazy-user-del
+    - lazyfree-lazy-user-flush
+    - lfu-decay-time
+    - lfu-log-factor
+    - list-compress-depth
+    - list-max-listpack-size
+    - list-max-ziplist-size
+    - loading-process-events-interval-bytes
+    - loadmodule
+    - logfile
+    - loglevel
+    - lua-time-limit
+    - masterauth
+    - masteruser
+    - maxclients
+    - maxmemory
+    - maxmemory-clients
+    - maxmemory-eviction-tenacity
+    - maxmemory-policy
+    - maxmemory-samples
+    - min-replicas-max-lag
+    - min-replicas-to-write
+    - min-slaves-max-lag
+    - min-slaves-to-write
+    - no-appendfsync-on-rewrite
+    - notify-keyspace-events
+    - oom-score-adj
+    - oom-score-adj-values
+    - pidfile
+    - port
+    - proc-title-template
+    - propagation-error-behavior
+    - protected-mode
+    - proto-max-bulk-len
+    - rdb-del-sync-files
+    - rdb-key-save-delay
+    - rdb-save-incremental-fsync
+    - rdbchecksum
+    - rdbcompression
+    - rename-command
+    - repl-backlog-size
+    - repl-backlog-ttl
+    - repl-disable-tcp-nodelay
+    - repl-diskless-load
+    - repl-diskless-sync
+    - repl-diskless-sync-delay
+    - repl-diskless-sync-max-replicas
+    - repl-ping-replica-period
+    - repl-ping-slave-period
+    - repl-timeout
+    - replica-announce-ip
+    - replica-announce-port
+    - replica-announced
+    - replica-ignore-disk-write-errors
+    - replica-ignore-maxmemory
+    - replica-lazy-flush
+    - replica-priority
+    - replica-read-only
+    - replica-serve-stale-data
+    - replicaof
+    - requirepass
+    - sanitize-dump-payload
+    - save
+    - sentinel
+    - server_cpulist
+    - set-max-intset-entries
+    - set-proc-title
+    - shutdown-on-sigint
+    - shutdown-on-sigterm
+    - shutdown-timeout
+    - slave-announce-ip
+    - slave-announce-port
+    - slave-ignore-maxmemory
+    - slave-lazy-flush
+    - slave-priority
+    - slave-read-only
+    - slave-serve-stale-data
+    - slaveof
+    - slowlog-log-slower-than
+    - slowlog-max-len
+    - socket-mark-id
+    - stop-writes-on-bgsave-error
+    - stream-node-max-bytes
+    - stream-node-max-entries
+    - supervised
+    - syslog-enabled
+    - syslog-facility
+    - syslog-ident
+    - tcp-backlog
+    - tcp-keepalive
+    - timeout
+    - tls-auth-clients
+    - tls-ca-cert-dir
+    - tls-ca-cert-file
+    - tls-cert-file
+    - tls-ciphers
+    - tls-ciphersuites
+    - tls-client-cert-file
+    - tls-client-key-file
+    - tls-client-key-file-pass
+    - tls-cluster
+    - tls-dh-params-file
+    - tls-key-file
+    - tls-key-file-pass
+    - tls-port
+    - tls-prefer-server-ciphers
+    - tls-protocols
+    - tls-replication
+    - tls-session-cache-size
+    - tls-session-cache-timeout
+    - tls-session-caching
+    - tracking-table-max-keys
+    - unixsocket
+    - unixsocketperm
+    - use-exit-on-panic
+    - user
+    - watchdog-period
+    - zset-max-listpack-entries
+    - zset-max-listpack-value
+    - zset-max-ziplist-entries
+    - zset-max-ziplist-value
+  "7.2":
+    - acl-pubsub-default
+    - aclfile
+    - acllog-max-len
+    - active-defrag-cycle-max
+    - active-defrag-cycle-min
+    - active-defrag-ignore-bytes
+    - active-defrag-max-scan-fields
+    - active-defrag-threshold-lower
+    - active-defrag-threshold-upper
+    - active-expire-effort
+    - activedefrag
+    - activerehashing
+    - always-show-logo
+    - aof-disable-auto-gc
+    - aof-load-truncated
+    - aof-rewrite-incremental-fsync
+    - aof-timestamp-enabled
+    - aof-use-rdb-preamble
+    - aof_rewrite_cpulist
+    - appenddirname
+    - appendfilename
+    - appendfsync
+    - appendonly
+    - auto-aof-rewrite-min-size
+    - auto-aof-rewrite-percentage
+    - bgsave_cpulist
+    - bind
+    - bind-source-addr
+    - bio_cpulist
+    - busy-reply-threshold
+    - client-default-resp
+    - client-output-buffer-limit
+    - client-query-buffer-limit
+    - cluster-allow-pubsubshard-when-down
+    - cluster-allow-reads-when-down
+    - cluster-allow-replica-migration
+    - cluster-announce-bus-port
+    - cluster-announce-hostname
+    - cluster-announce-human-nodename
+    - cluster-announce-ip
+    - cluster-announce-port
+    - cluster-announce-tls-port
+    - cluster-config-file
+    - cluster-enabled
+    - cluster-link-sendbuf-limit
+    - cluster-migration-barrier
+    - cluster-node-timeout
+    - cluster-ping-interval
+    - cluster-port
+    - cluster-preferred-endpoint-type
+    - cluster-replica-no-failover
+    - cluster-replica-validity-factor
+    - cluster-require-full-coverage
+    - cluster-slave-no-failover
+    - cluster-slave-validity-factor
+    - crash-log-enabled
+    - crash-memcheck-enabled
+    - daemonize
+    - databases
+    - dbfilename
+    - dir
+    - disable-thp
+    - dynamic-hz
+    - enable-debug-command
+    - enable-module-command
+    - enable-protected-configs
+    - hash-max-listpack-entries
+    - hash-max-listpack-value
+    - hash-max-ziplist-entries
+    - hash-max-ziplist-value
+    - hll-sparse-max-bytes
+    - hz
+    - ignore-warnings
+    - include
+    - io-threads
+    - io-threads-do-reads
+    - jemalloc-bg-thread
+    - key-load-delay
+    - latency-monitor-threshold
+    - latency-tracking
+    - latency-tracking-info-percentiles
+    - lazyfree-lazy-eviction
+    - lazyfree-lazy-expire
+    - lazyfree-lazy-server-del
+    - lazyfree-lazy-user-del
+    - lazyfree-lazy-user-flush
+    - lfu-decay-time
+    - lfu-log-factor
+    - list-compress-depth
+    - list-max-listpack-size
+    - list-max-ziplist-size
+    - loading-process-events-interval-bytes
+    - loadmodule
+    - locale-collate
+    - logfile
+    - loglevel
+    - lua-enable-deprecated-api
+    - lua-time-limit
+    - masterauth
+    - masteruser
+    - maxclients
+    - maxmemory
+    - maxmemory-clients
+    - maxmemory-eviction-tenacity
+    - maxmemory-policy
+    - maxmemory-samples
+    - min-replicas-max-lag
+    - min-replicas-to-write
+    - min-slaves-max-lag
+    - min-slaves-to-write
+    - no-appendfsync-on-rewrite
+    - notify-keyspace-events
+    - oom-score-adj
+    - oom-score-adj-values
+    - pidfile
+    - port
+    - proc-title-template
+    - propagation-error-behavior
+    - protected-mode
+    - proto-max-bulk-len
+    - rdb-del-sync-files
+    - rdb-key-save-delay
+    - rdb-save-incremental-fsync
+    - rdbchecksum
+    - rdbcompression
+    - rename-command
+    - repl-backlog-size
+    - repl-backlog-ttl
+    - repl-disable-tcp-nodelay
+    - repl-diskless-load
+    - repl-diskless-sync
+    - repl-diskless-sync-delay
+    - repl-diskless-sync-max-replicas
+    - repl-ping-replica-period
+    - repl-ping-slave-period
+    - repl-timeout
+    - replica-announce-ip
+    - replica-announce-port
+    - replica-announced
+    - replica-ignore-disk-write-errors
+    - replica-ignore-maxmemory
+    - replica-lazy-flush
+    - replica-priority
+    - replica-read-only
+    - replica-serve-stale-data
+    - replicaof
+    - req-res-logfile
+    - requirepass
+    - sanitize-dump-payload
+    - save
+    - sentinel
+    - server_cpulist
+    - set-max-intset-entries
+    - set-max-listpack-entries
+    - set-max-listpack-value
+    - set-proc-title
+    - shutdown-on-sigint
+    - shutdown-on-sigterm
+    - shutdown-timeout
+    - slave-announce-ip
+    - slave-announce-port
+    - slave-ignore-maxmemory
+    - slave-lazy-flush
+    - slave-priority
+    - slave-read-only
+    - slave-serve-stale-data
+    - slaveof
+    - slowlog-log-slower-than
+    - slowlog-max-len
+    - socket-mark-id
+    - stop-writes-on-bgsave-error
+    - stream-node-max-bytes
+    - stream-node-max-entries
+    - supervised
+    - syslog-enabled
+    - syslog-facility
+    - syslog-ident
+    - tcp-backlog
+    - tcp-keepalive
+    - timeout
+    - tls-auth-clients
+    - tls-ca-cert-dir
+    - tls-ca-cert-file
+    - tls-cert-file
+    - tls-ciphers
+    - tls-ciphersuites
+    - tls-client-cert-file
+    - tls-client-key-file
+    - tls-client-key-file-pass
+    - tls-cluster
+    - tls-dh-params-file
+    - tls-key-file
+    - tls-key-file-pass
+    - tls-port
+    - tls-prefer-server-ciphers
+    - tls-protocols
+    - tls-replication
+    - tls-session-cache-size
+    - tls-session-cache-timeout
+    - tls-session-caching
+    - tracking-table-max-keys
+    - unixsocket
+    - unixsocketperm
+    - use-exit-on-panic
+    - user
+    - watchdog-period
+    - zset-max-listpack-entries
+    - zset-max-listpack-value
+    - zset-max-ziplist-entries
+    - zset-max-ziplist-value
+  "7.4":
+    - acl-pubsub-default
+    - aclfile
+    - acllog-max-len
+    - active-defrag-cycle-max
+    - active-defrag-cycle-min
+    - active-defrag-ignore-bytes
+    - active-defrag-max-scan-fields
+    - active-defrag-threshold-lower
+    - active-defrag-threshold-upper
+    - active-expire-effort
+    - activedefrag
+    - activerehashing
+    - always-show-logo
+    - aof-disable-auto-gc
+    - aof-load-truncated
+    - aof-rewrite-cpulist
+    - aof-rewrite-incremental-fsync
+    - aof-timestamp-enabled
+    - aof-use-rdb-preamble
+    - aof_rewrite_cpulist
+    - appenddirname
+    - appendfilename
+    - appendfsync
+    - appendonly
+    - auto-aof-rewrite-min-size
+    - auto-aof-rewrite-percentage
+    - bgsave-cpulist
+    - bgsave_cpulist
+    - bind
+    - bind-source-addr
+    - bio-cpulist
+    - bio_cpulist
+    - busy-reply-threshold
+    - client-default-resp
+    - client-output-buffer-limit
+    - client-query-buffer-limit
+    - cluster-allow-pubsubshard-when-down
+    - cluster-allow-reads-when-down
+    - cluster-allow-replica-migration
+    - cluster-announce-bus-port
+    - cluster-announce-hostname
+    - cluster-announce-human-nodename
+    - cluster-announce-ip
+    - cluster-announce-port
+    - cluster-announce-tls-port
+    - cluster-config-file
+    - cluster-enabled
+    - cluster-link-sendbuf-limit
+    - cluster-migration-barrier
+    - cluster-node-timeout
+    - cluster-ping-interval
+    - cluster-port
+    - cluster-preferred-endpoint-type
+    - cluster-replica-no-failover
+    - cluster-replica-validity-factor
+    - cluster-require-full-coverage
+    - cluster-slave-no-failover
+    - cluster-slave-validity-factor
+    - crash-log-enabled
+    - crash-memcheck-enabled
+    - daemonize
+    - databases
+    - dbfilename
+    - dir
+    - disable-thp
+    - dynamic-hz
+    - enable-debug-command
+    - enable-module-command
+    - enable-protected-configs
+    - hash-max-listpack-entries
+    - hash-max-listpack-value
+    - hash-max-ziplist-entries
+    - hash-max-ziplist-value
+    - hide-user-data-from-log
+    - hll-sparse-max-bytes
+    - hz
+    - ignore-warnings
+    - include
+    - io-threads
+    - io-threads-do-reads
+    - jemalloc-bg-thread
+    - key-load-delay
+    - latency-monitor-threshold
+    - latency-tracking
+    - latency-tracking-info-percentiles
+    - lazyfree-lazy-eviction
+    - lazyfree-lazy-expire
+    - lazyfree-lazy-server-del
+    - lazyfree-lazy-user-del
+    - lazyfree-lazy-user-flush
+    - lfu-decay-time
+    - lfu-log-factor
+    - list-compress-depth
+    - list-max-listpack-size
+    - list-max-ziplist-size
+    - loading-process-events-interval-bytes
+    - loadmodule
+    - locale-collate
+    - logfile
+    - loglevel
+    - lua-enable-deprecated-api
+    - lua-time-limit
+    - masterauth
+    - masteruser
+    - max-new-connections-per-cycle
+    - max-new-tls-connections-per-cycle
+    - maxclients
+    - maxmemory
+    - maxmemory-clients
+    - maxmemory-eviction-tenacity
+    - maxmemory-policy
+    - maxmemory-samples
+    - min-replicas-max-lag
+    - min-replicas-to-write
+    - min-slaves-max-lag
+    - min-slaves-to-write
+    - no-appendfsync-on-rewrite
+    - notify-keyspace-events
+    - oom-score-adj
+    - oom-score-adj-values
+    - pidfile
+    - port
+    - proc-title-template
+    - propagation-error-behavior
+    - protected-mode
+    - proto-max-bulk-len
+    - rdb-del-sync-files
+    - rdb-key-save-delay
+    - rdb-save-incremental-fsync
+    - rdbchecksum
+    - rdbcompression
+    - rename-command
+    - repl-backlog-size
+    - repl-backlog-ttl
+    - repl-disable-tcp-nodelay
+    - repl-diskless-load
+    - repl-diskless-sync
+    - repl-diskless-sync-delay
+    - repl-diskless-sync-max-replicas
+    - repl-ping-replica-period
+    - repl-ping-slave-period
+    - repl-timeout
+    - replica-announce-ip
+    - replica-announce-port
+    - replica-announced
+    - replica-ignore-disk-write-errors
+    - replica-ignore-maxmemory
+    - replica-lazy-flush
+    - replica-priority
+    - replica-read-only
+    - replica-serve-stale-data
+    - replicaof
+    - req-res-logfile
+    - requirepass
+    - sanitize-dump-payload
+    - save
+    - sentinel
+    - server-cpulist
+    - server_cpulist
+    - set-max-intset-entries
+    - set-max-listpack-entries
+    - set-max-listpack-value
+    - set-proc-title
+    - shutdown-on-sigint
+    - shutdown-on-sigterm
+    - shutdown-timeout
+    - slave-announce-ip
+    - slave-announce-port
+    - slave-ignore-maxmemory
+    - slave-lazy-flush
+    - slave-priority
+    - slave-read-only
+    - slave-serve-stale-data
+    - slaveof
+    - slowlog-log-slower-than
+    - slowlog-max-len
+    - socket-mark-id
+    - stop-writes-on-bgsave-error
+    - stream-node-max-bytes
+    - stream-node-max-entries
+    - supervised
+    - syslog-enabled
+    - syslog-facility
+    - syslog-ident
+    - tcp-backlog
+    - tcp-keepalive
+    - timeout
+    - tls-auth-clients
+    - tls-ca-cert-dir
+    - tls-ca-cert-file
+    - tls-cert-file
+    - tls-ciphers
+    - tls-ciphersuites
+    - tls-client-cert-file
+    - tls-client-key-file
+    - tls-client-key-file-pass
+    - tls-cluster
+    - tls-dh-params-file
+    - tls-key-file
+    - tls-key-file-pass
+    - tls-port
+    - tls-prefer-server-ciphers
+    - tls-protocols
+    - tls-replication
+    - tls-session-cache-size
+    - tls-session-cache-timeout
+    - tls-session-caching
+    - tracking-table-max-keys
+    - unixsocket
+    - unixsocketperm
+    - use-exit-on-panic
+    - user
+    - watchdog-period
+    - zset-max-listpack-entries
+    - zset-max-listpack-value
+    - zset-max-ziplist-entries
+    - zset-max-ziplist-value
+  "8.0":
+    - acl-pubsub-default
+    - aclfile
+    - acllog-max-len
+    - active-defrag-cycle-max
+    - active-defrag-cycle-min
+    - active-defrag-ignore-bytes
+    - active-defrag-max-scan-fields
+    - active-defrag-threshold-lower
+    - active-defrag-threshold-upper
+    - active-expire-effort
+    - activedefrag
+    - activerehashing
+    - always-show-logo
+    - aof-disable-auto-gc
+    - aof-load-truncated
+    - aof-rewrite-cpulist
+    - aof-rewrite-incremental-fsync
+    - aof-timestamp-enabled
+    - aof-use-rdb-preamble
+    - aof_rewrite_cpulist
+    - appenddirname
+    - appendfilename
+    - appendfsync
+    - appendonly
+    - auto-aof-rewrite-min-size
+    - auto-aof-rewrite-percentage
+    - bgsave-cpulist
+    - bgsave_cpulist
+    - bind
+    - bind-source-addr
+    - bio-cpulist
+    - bio_cpulist
+    - busy-reply-threshold
+    - client-default-resp
+    - client-output-buffer-limit
+    - client-query-buffer-limit
+    - cluster-allow-pubsubshard-when-down
+    - cluster-allow-reads-when-down
+    - cluster-allow-replica-migration
+    - cluster-announce-bus-port
+    - cluster-announce-hostname
+    - cluster-announce-human-nodename
+    - cluster-announce-ip
+    - cluster-announce-port
+    - cluster-announce-tls-port
+    - cluster-compatibility-sample-ratio
+    - cluster-config-file
+    - cluster-enabled
+    - cluster-link-sendbuf-limit
+    - cluster-migration-barrier
+    - cluster-node-timeout
+    - cluster-ping-interval
+    - cluster-port
+    - cluster-preferred-endpoint-type
+    - cluster-replica-no-failover
+    - cluster-replica-validity-factor
+    - cluster-require-full-coverage
+    - cluster-slave-no-failover
+    - cluster-slave-validity-factor
+    - crash-log-enabled
+    - crash-memcheck-enabled
+    - daemonize
+    - databases
+    - dbfilename
+    - dir
+    - disable-thp
+    - dynamic-hz
+    - enable-debug-command
+    - enable-module-command
+    - enable-protected-configs
+    - hash-max-listpack-entries
+    - hash-max-listpack-value
+    - hash-max-ziplist-entries
+    - hash-max-ziplist-value
+    - hide-user-data-from-log
+    - hll-sparse-max-bytes
+    - hz
+    - ignore-warnings
+    - include
+    - io-threads
+    - jemalloc-bg-thread
+    - key-load-delay
+    - latency-monitor-threshold
+    - latency-tracking
+    - latency-tracking-info-percentiles
+    - lazyfree-lazy-eviction
+    - lazyfree-lazy-expire
+    - lazyfree-lazy-server-del
+    - lazyfree-lazy-user-del
+    - lazyfree-lazy-user-flush
+    - lfu-decay-time
+    - lfu-log-factor
+    - list-compress-depth
+    - list-max-listpack-size
+    - list-max-ziplist-size
+    - loading-process-events-interval-bytes
+    - loadmodule
+    - locale-collate
+    - logfile
+    - loglevel
+    - lua-enable-deprecated-api
+    - lua-time-limit
+    - masterauth
+    - masteruser
+    - max-new-connections-per-cycle
+    - max-new-tls-connections-per-cycle
+    - maxclients
+    - maxmemory
+    - maxmemory-clients
+    - maxmemory-eviction-tenacity
+    - maxmemory-policy
+    - maxmemory-samples
+    - min-replicas-max-lag
+    - min-replicas-to-write
+    - min-slaves-max-lag
+    - min-slaves-to-write
+    - no-appendfsync-on-rewrite
+    - notify-keyspace-events
+    - oom-score-adj
+    - oom-score-adj-values
+    - pidfile
+    - port
+    - proc-title-template
+    - propagation-error-behavior
+    - protected-mode
+    - proto-max-bulk-len
+    - rdb-del-sync-files
+    - rdb-key-save-delay
+    - rdb-save-incremental-fsync
+    - rdbchecksum
+    - rdbcompression
+    - rename-command
+    - repl-backlog-size
+    - repl-backlog-ttl
+    - repl-disable-tcp-nodelay
+    - repl-diskless-load
+    - repl-diskless-sync
+    - repl-diskless-sync-delay
+    - repl-diskless-sync-max-replicas
+    - repl-ping-replica-period
+    - repl-ping-slave-period
+    - repl-rdb-channel
+    - repl-timeout
+    - replica-announce-ip
+    - replica-announce-port
+    - replica-announced
+    - replica-full-sync-buffer-limit
+    - replica-ignore-disk-write-errors
+    - replica-ignore-maxmemory
+    - replica-lazy-flush
+    - replica-priority
+    - replica-read-only
+    - replica-serve-stale-data
+    - replicaof
+    - req-res-logfile
+    - requirepass
+    - sanitize-dump-payload
+    - save
+    - sentinel
+    - server-cpulist
+    - server_cpulist
+    - set-max-intset-entries
+    - set-max-listpack-entries
+    - set-max-listpack-value
+    - set-proc-title
+    - shutdown-on-sigint
+    - shutdown-on-sigterm
+    - shutdown-timeout
+    - slave-announce-ip
+    - slave-announce-port
+    - slave-ignore-maxmemory
+    - slave-lazy-flush
+    - slave-priority
+    - slave-read-only
+    - slave-serve-stale-data
+    - slaveof
+    - slowlog-log-slower-than
+    - slowlog-max-len
+    - socket-mark-id
+    - stop-writes-on-bgsave-error
+    - stream-node-max-bytes
+    - stream-node-max-entries
+    - supervised
+    - syslog-enabled
+    - syslog-facility
+    - syslog-ident
+    - tcp-backlog
+    - tcp-keepalive
+    - timeout
+    - tls-auth-clients
+    - tls-ca-cert-dir
+    - tls-ca-cert-file
+    - tls-cert-file
+    - tls-ciphers
+    - tls-ciphersuites
+    - tls-client-cert-file
+    - tls-client-key-file
+    - tls-client-key-file-pass
+    - tls-cluster
+    - tls-dh-params-file
+    - tls-key-file
+    - tls-key-file-pass
+    - tls-port
+    - tls-prefer-server-ciphers
+    - tls-protocols
+    - tls-replication
+    - tls-session-cache-size
+    - tls-session-cache-timeout
+    - tls-session-caching
+    - tracking-table-max-keys
+    - unixsocket
+    - unixsocketperm
+    - use-exit-on-panic
+    - user
+    - watchdog-period
+    - zset-max-listpack-entries
+    - zset-max-listpack-value
+    - zset-max-ziplist-entries
+    - zset-max-ziplist-value
+  "8.2":
+    - acl-pubsub-default
+    - aclfile
+    - acllog-max-len
+    - active-defrag-cycle-max
+    - active-defrag-cycle-min
+    - active-defrag-ignore-bytes
+    - active-defrag-max-scan-fields
+    - active-defrag-threshold-lower
+    - active-defrag-threshold-upper
+    - active-expire-effort
+    - activedefrag
+    - activerehashing
+    - always-show-logo
+    - aof-disable-auto-gc
+    - aof-load-truncated
+    - aof-rewrite-cpulist
+    - aof-rewrite-incremental-fsync
+    - aof-timestamp-enabled
+    - aof-use-rdb-preamble
+    - aof_rewrite_cpulist
+    - appenddirname
+    - appendfilename
+    - appendfsync
+    - appendonly
+    - auto-aof-rewrite-min-size
+    - auto-aof-rewrite-percentage
+    - bgsave-cpulist
+    - bgsave_cpulist
+    - bind
+    - bind-source-addr
+    - bio-cpulist
+    - bio_cpulist
+    - busy-reply-threshold
+    - client-default-resp
+    - client-output-buffer-limit
+    - client-query-buffer-limit
+    - cluster-allow-pubsubshard-when-down
+    - cluster-allow-reads-when-down
+    - cluster-allow-replica-migration
+    - cluster-announce-bus-port
+    - cluster-announce-hostname
+    - cluster-announce-human-nodename
+    - cluster-announce-ip
+    - cluster-announce-port
+    - cluster-announce-tls-port
+    - cluster-compatibility-sample-ratio
+    - cluster-config-file
+    - cluster-enabled
+    - cluster-link-sendbuf-limit
+    - cluster-migration-barrier
+    - cluster-node-timeout
+    - cluster-ping-interval
+    - cluster-port
+    - cluster-preferred-endpoint-type
+    - cluster-replica-no-failover
+    - cluster-replica-validity-factor
+    - cluster-require-full-coverage
+    - cluster-slave-no-failover
+    - cluster-slave-validity-factor
+    - cluster-slot-stats-enabled
+    - crash-log-enabled
+    - crash-memcheck-enabled
+    - daemonize
+    - databases
+    - dbfilename
+    - dir
+    - disable-thp
+    - dynamic-hz
+    - enable-debug-command
+    - enable-module-command
+    - enable-protected-configs
+    - hash-max-listpack-entries
+    - hash-max-listpack-value
+    - hash-max-ziplist-entries
+    - hash-max-ziplist-value
+    - hide-user-data-from-log
+    - hll-sparse-max-bytes
+    - hz
+    - ignore-warnings
+    - include
+    - io-threads
+    - jemalloc-bg-thread
+    - key-load-delay
+    - latency-monitor-threshold
+    - latency-tracking
+    - latency-tracking-info-percentiles
+    - lazyexpire-nested-arbitrary-keys
+    - lazyfree-lazy-eviction
+    - lazyfree-lazy-expire
+    - lazyfree-lazy-server-del
+    - lazyfree-lazy-user-del
+    - lazyfree-lazy-user-flush
+    - lfu-decay-time
+    - lfu-log-factor
+    - list-compress-depth
+    - list-max-listpack-size
+    - list-max-ziplist-size
+    - loading-process-events-interval-bytes
+    - loadmodule
+    - locale-collate
+    - logfile
+    - loglevel
+    - lua-enable-deprecated-api
+    - lua-time-limit
+    - masterauth
+    - masteruser
+    - max-new-connections-per-cycle
+    - max-new-tls-connections-per-cycle
+    - maxclients
+    - maxmemory
+    - maxmemory-clients
+    - maxmemory-eviction-tenacity
+    - maxmemory-policy
+    - maxmemory-samples
+    - min-replicas-max-lag
+    - min-replicas-to-write
+    - min-slaves-max-lag
+    - min-slaves-to-write
+    - no-appendfsync-on-rewrite
+    - notify-keyspace-events
+    - oom-score-adj
+    - oom-score-adj-values
+    - pidfile
+    - port
+    - prefetch-batch-max-size
+    - proc-title-template
+    - propagation-error-behavior
+    - protected-mode
+    - proto-max-bulk-len
+    - rdb-del-sync-files
+    - rdb-key-save-delay
+    - rdb-save-incremental-fsync
+    - rdbchecksum
+    - rdbcompression
+    - rename-command
+    - repl-backlog-size
+    - repl-backlog-ttl
+    - repl-disable-tcp-nodelay
+    - repl-diskless-load
+    - repl-diskless-sync
+    - repl-diskless-sync-delay
+    - repl-diskless-sync-max-replicas
+    - repl-ping-replica-period
+    - repl-ping-slave-period
+    - repl-rdb-channel
+    - repl-timeout
+    - replica-announce-ip
+    - replica-announce-port
+    - replica-announced
+    - replica-full-sync-buffer-limit
+    - replica-ignore-disk-write-errors
+    - replica-ignore-maxmemory
+    - replica-lazy-flush
+    - replica-priority
+    - replica-read-only
+    - replica-serve-stale-data
+    - replicaof
+    - req-res-logfile
+    - requirepass
+    - sanitize-dump-payload
+    - save
+    - sentinel
+    - server-cpulist
+    - server_cpulist
+    - set-max-intset-entries
+    - set-max-listpack-entries
+    - set-max-listpack-value
+    - set-proc-title
+    - shutdown-on-sigint
+    - shutdown-on-sigterm
+    - shutdown-timeout
+    - slave-announce-ip
+    - slave-announce-port
+    - slave-ignore-maxmemory
+    - slave-lazy-flush
+    - slave-priority
+    - slave-read-only
+    - slave-serve-stale-data
+    - slaveof
+    - slowlog-log-slower-than
+    - slowlog-max-len
+    - socket-mark-id
+    - stop-writes-on-bgsave-error
+    - stream-node-max-bytes
+    - stream-node-max-entries
+    - supervised
+    - syslog-enabled
+    - syslog-facility
+    - syslog-ident
+    - tcp-backlog
+    - tcp-keepalive
+    - timeout
+    - tls-auth-clients
+    - tls-ca-cert-dir
+    - tls-ca-cert-file
+    - tls-cert-file
+    - tls-ciphers
+    - tls-ciphersuites
+    - tls-client-cert-file
+    - tls-client-key-file
+    - tls-client-key-file-pass
+    - tls-cluster
+    - tls-dh-params-file
+    - tls-key-file
+    - tls-key-file-pass
+    - tls-port
+    - tls-prefer-server-ciphers
+    - tls-protocols
+    - tls-replication
+    - tls-session-cache-size
+    - tls-session-cache-timeout
+    - tls-session-caching
+    - tracking-table-max-keys
+    - unixsocket
+    - unixsocketperm
+    - use-exit-on-panic
+    - user
+    - watchdog-period
+    - zset-max-listpack-entries
+    - zset-max-listpack-value
+    - zset-max-ziplist-entries
+    - zset-max-ziplist-value

@@ -1,0 +1,281 @@
+# Config of a single keeper-cluster instance.
+# Multiple instances with different `kid` sit behind shared Postgres + Redis.
+
+# Identity of this keeper instance
+kid: keeper-eu-west-01
+
+# Network listeners
+listen:
+  grpc:
+    bootstrap:
+      addr: "0.0.0.0:9442"
+      tls:
+        cert: /etc/keeper/tls/server.crt
+        key:  /etc/keeper/tls/server.key
+    event_stream:
+      addr: "0.0.0.0:9443"
+      tls:
+        cert: /etc/keeper/tls/server.crt
+        key:  /etc/keeper/tls/server.key
+        ca:   /etc/keeper/tls/ca.crt
+  openapi: { addr: "0.0.0.0:8080" }
+  mcp:     { addr: "0.0.0.0:8081" }
+  metrics: { addr: "0.0.0.0:9090" }
+
+# Storage
+postgres:
+  dsn_ref: vault:secret/keeper/postgres
+  pool: { min: 5, max: 50 }
+
+redis:
+  addr: "redis-cluster.internal:6379"
+  password_ref: vault:secret/keeper/redis
+
+# Vault — for PKI (SoulSeed), Essence secrets, SSH CA, cloud-driver credentials
+vault:
+  addr: "https://vault.internal:8200"
+  auth: { method: approle, role_id: keeper-prod, secret_id_file: /etc/keeper/vault-secret-id }
+  pki_mount: "pki/soulstack"
+
+# Operator JWT authentication (ADR-014)
+auth:
+  jwt:
+    signing_key_ref: vault:secret/keeper/jwt-signing-key
+    issuer: keeper-eu-west-01
+    ttl_default: 24h
+    ttl_bootstrap: 30d
+
+# Observability
+otel:
+  enabled: true
+  exporter: otlp
+  endpoint: "otel-collector.internal:4317"
+
+logging:
+  level: info
+  format: json
+  rotation:
+    max_size_mb: 100
+    max_files: 10
+    compress: true
+
+# The Service registry and the default_destiny_source scalar were moved to
+# Postgres (ADR-029). Source of truth — the DB (`service_registry` +
+# `keeper_settings`), management — via `service.*` OpenAPI/MCP (see
+# keeper/storage.md + keeper/operator-api.md). The keys `services:` /
+# `default_destiny_source:` / `default_module_source:` no longer exist in
+# keeper.yml — any of them appearing is rejected as unknown_key.
+
+# Plugins — artifact catalogs
+plugins:
+  # Root of the artifact cache on the keeper host. Must be an absolute path.
+  # Empty value / missing key — the built-in default is used
+  # (pluginhost.DefaultCacheRoot).
+  cache_root: /var/lib/soul-stack-keeper/plugins
+  # Plugin version — a git ref (tag or branch), no semver-range. See ADR-007.
+  cloud_drivers:
+    - { name: aws, source: "git@github.com:soul-stack-ecosystem/soul-cloud-aws.git", ref: v2.0.0 }
+    - { name: yc,  source: "git@github.com:our-company/soul-cloud-yc.git",          ref: v0.3.1 }
+
+  ssh_providers:
+    - { name: vault-ssh, source: "git@github.com:soul-stack-ecosystem/soul-ssh-vault.git", ref: v1.0.0 }
+    - { name: static,    source: "git@github.com:soul-stack-ecosystem/soul-ssh-static.git", ref: v0.1.0 }
+
+# Plugin lifecycle and capabilities (ADR-020)
+plugin_runtime:
+  socket_dir: /var/run/soul-stack-keeper/plugins
+  startup_timeout: 10s
+  shutdown_grace: 10s
+  allowed_capabilities:
+    - run_as_root
+    - network_outbound
+    - network_inbound
+    - vault_access
+    - fs_write_root
+    - exec_subprocess
+  conflict_policy: warn
+  enable_tls: false
+
+# Reaper — background cleanup
+reaper:
+  enabled: true
+  interval: 1h
+  dry_run: false
+  batch_size: 500
+  lock_ttl: 5m
+
+  rules:
+    expire_pending_seeds:
+      enabled: true
+      max_age: 24h
+      action: delete
+    purge_used_tokens:
+      enabled: true
+      max_age: 90d
+      action: delete
+    purge_souls:
+      enabled: true
+      statuses: [disconnected, expired]
+      max_age: 30d
+      action: delete
+    purge_old_seeds:
+      enabled: true
+      statuses: [superseded, expired, revoked]
+      max_age: 90d
+      action: delete
+    mark_disconnected:
+      enabled: true
+      stale_after: 90s
+      action: set_status
+      target_status: disconnected
+    purge_audit_old:
+      enabled: true
+      max_age: 365d
+      action: delete
+    purge_apply_runs:
+      enabled: true
+      max_age: 30d
+      action: delete
+    purge_apply_run_plan:
+      # Retention of the run task plan (apply_run_plan, migration 096, NIM-37):
+      # DELETE run-plan rows older than max_age (by created_at) WITHOUT
+      # non-terminal apply_runs. No FK cascade — without this rule the plan
+      # would grow orphans after apply_runs are removed. Window ALIGNED with
+      # purge_apply_runs (30d): the /tasks endpoint needs the plan for as long
+      # as the run itself lives.
+      enabled: true
+      max_age: 30d
+      action: delete
+    purge_voyages:
+      # Retention of the growing Voyage-run history (ADR-046 §79). DELETE
+      # finished voyages (succeeded/failed/partial_failed/cancelled) older
+      # than max_age; voyage_targets are carried away by ON DELETE CASCADE.
+      # scheduled/pending/running are NOT touched. Window ALIGNED with
+      # purge_apply_runs (30d): voyage_targets carry a soft-link apply_id to
+      # apply_runs, the "voyage → apply_runs" drill must see both sides up to
+      # the same point — changing one window without the other = desync.
+      enabled: true
+      max_age: 30d
+      action: delete
+    purge_push_runs:
+      # Retention of the growing push-run run-history (migration 076). DELETE
+      # finished push_runs (success/partial_failed/failed/cancelled) older
+      # than max_age. pending/running are NOT touched — that's the
+      # purge_orphan_push_runs rule (zombie termination, 1h). No cascade:
+      # per-host results are stored inline in push_runs.summary (jsonb), no
+      # child FKs on push_runs. Window ALIGNED with purge_apply_runs (30d) —
+      # push_runs is run-history of the same class.
+      enabled: true
+      max_age: 30d
+      action: delete
+    purge_incarnation_archive:
+      # Retention of the archive of destroyed incarnations
+      # (incarnation_archive, migration 039). DELETE rows with archived_at
+      # older than max_age. The archive is historical/compliance data of
+      # destroyed incarnations (what redis-prod had before deletion), so the
+      # window is CONSERVATIVE — 365d (a year of retention for audit), NOT
+      # 30d like run-history. The operator tunes max_age to their own
+      # compliance requirements. No child FKs on the archive (039) — no cascade.
+      enabled: true
+      max_age: 365d    # compliance window; operator tunes to audit requirements
+      action: delete
+    purge_state_history_archive:
+      # Retention of the state_history journal archive for destroyed
+      # incarnations (state_history_archive, migration 039). DELETE rows with
+      # archived_at older than max_age. Parity with purge_incarnation_archive
+      # — the same 365d compliance window, written in one transaction on destroy.
+      enabled: true
+      max_age: 365d    # compliance window; operator tunes to audit requirements
+      action: delete
+    purge_archived_state_history:
+      # Physical removal of soft-deleted snapshots (archived_at IS NOT NULL)
+      # from the LIVE state_history (migration 048). NOT to be confused with
+      # archive_state_history (049), which ONLY sets the soft-delete flag
+      # beyond the last N snapshots — this rule removes already-marked rows
+      # once the compliance window elapses, offloading the live table. Active
+      # snapshots (archived_at IS NULL) are NOT touched. Window is
+      # conservative — 365d, same as the archive tables.
+      enabled: true
+      max_age: 365d    # compliance window; operator tunes to audit requirements
+      action: delete
+    purge_apply_task_register:
+      enabled: true
+      max_age: 1h       # grace period after the apply_run terminal state; register is transient plaintext (potential secrets), needed only until the barrier
+      action: delete
+    purge_old_errands:
+      # Errand TTL retention (ADR-033). `DELETE FROM errands WHERE ttl_at < NOW()`.
+      # TTL is baked into the row at INSERT time by the dispatcher (default 7d
+      # via errand.TTLDefault). `max_age` of the rule is NOT part of the SQL
+      # predicate, kept for compatibility with the generic duration-runner.
+      # Future TTL-logic changes — a separate dispatcher field, not the
+      # reaper config.
+      enabled: true
+      max_age: 7d
+      action: delete
+    reclaim_apply_runs:
+      # Recovery scan for stale Wards (ADR-027 Phase 2): a zombie claim of a
+      # dead Acolyte (claimed/running with expired claim_expires_at) →
+      # planned for re-claim by a live Acolyte; attempt is NOT reset
+      # (fencing-epoch grows).
+      #
+      # DISABLED BY DEFAULT. Enable (enabled: true) ONLY when Soul agents
+      # carry attempt-fencing (Phase 2 complete, S-P2.2) — otherwise recovery
+      # would double-apply: re-claim sends a second ApplyRequest to the host,
+      # and without fencing Soul won't cut off the stale duplicate from the
+      # previous owner.
+      #
+      # WARN: do NOT enable with `acolytes: 0` — this is a linked pair
+      # (reclaim_apply_runs ↔ acolytes > 0). On the old synchronous path
+      # (acolytes:0) jobs are written as `running`, reclaim is unsafe there
+      # (double apply without epoch protection). The recovery-enable gate
+      # (roll out fencing-Soul → verify acolytes>0 and acolyte_lease>max-RENDER,
+      # default 30s ok → flip enabled) — docs/keeper/reaper.md → "Enabling recovery".
+      enabled: false
+      stale_after: 1m   # formal lease timeout; NOT part of the predicate (recovery compares claim_expires_at < NOW())
+      action: set_status
+      target_status: planned
+
+# Conductor — leader-elected executor of Cadence schedules (ADR-048): on its
+# own tick spawns a regular Voyage from matured Cadences. The
+# `conductor:leader` lease is independent of reaper:leader. The poll step is
+# adaptive (ADR-048 "Adaptive interval"): derived from the enabled registry
+# and clamped into the poll_floor..poll_ceiling corridor. The block is
+# optional: if absent — default-ON when Redis is configured (footgun-guard:
+# Cadence without a scheduler silently does not spawn).
+# Full description — docs/keeper/conductor.md.
+# cadence_scheduler:
+#   enabled: true     # nil/omitted → ON when Redis is present; false → OFF (read at startup)
+#   poll_floor: 30s   # lower bound of the adaptive poll step (hot-reload)
+#   poll_ceiling: 60s # upper bound of the adaptive poll step (hot-reload)
+#   poll_idle: 120s   # poll step with an empty enabled Cadence registry (hot-reload)
+#   lock_ttl: 5m      # TTL of the Redis lease conductor:leader (hot-reload)
+#   # interval: 60s   # backcompat alias for poll_ceiling; new configs write poll_*
+
+# Acolyte — worker pool for apply execution (ADR-027). Feature flag: 0
+# (default) — the pool does not start, execution goes through the old
+# run-goroutine path; >0 — starts a pool of N workers (claim planned jobs via
+# FOR UPDATE SKIP LOCKED).
+acolytes: 0
+# acolyte_lease: 30s          # TTL of a Ward claim (claim_expires_at = NOW()+lease)
+# acolyte_batch: 10           # max jobs per single claim tick (LIMIT)
+# acolyte_poll_interval: 2s   # period of the poll-fallback to the Summons signal
+
+# Watchman (isolation detection + soul-shedding S2): probe period for PG+Redis
+# and the threshold of consecutive failures before force-closing local
+# EventStream streams. An isolated instance moves its Souls to a live Keeper
+# via their failback list.
+# watchman_interval: 5s          # PG+Redis probe period (default 5s)
+# watchman_fail_threshold: 3     # consecutive failures before shedding (default 3, debounce)
+
+# Refuse-guard soul-shedding (Finding-A, ADR-027(h)): with `acolytes: 0`
+# (single-keeper-only run-goroutine path) AND the number of live Keeper
+# instances in the Conclave > 1, Keeper by default REFUSES to start —
+# otherwise apply on one Keeper with the Soul streaming on another would hang
+# forever in applying. Default false (refuse). true — a deliberate
+# single-keeper-behind-LB opt-out (migration / rolling-restart): refuse →
+# WARN. Duplicated by env KEEPER_ALLOW_UNSAFE_MULTI_KEEPER=true.
+allow_unsafe_single_path_multi_keeper: false
+
+# The RBAC catalog (roles, operator bindings, permissions) was moved to
+# Postgres (ADR-028). The `rbac:` config key no longer exists — management
+# via `role.*` API/MCP. `rbac:` appearing in keeper.yml is rejected as unknown_key.

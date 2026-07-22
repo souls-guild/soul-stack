@@ -1,0 +1,61 @@
+name: remove_node
+description: >-
+  Remove a single node from a formed Redis cluster: CLUSTER FORGET and, if the node was
+  a master, migration of its slots. Changes the live cluster topology; decommissioning the
+  host itself is outside the scenario.
+
+# ── Operator input contract (docs/input.md) ────────────────────────────────
+# Simple typed operator concepts: which SID to remove and through which
+# existing node to contact (seed for CLUSTER NODES/FORGET).
+input:
+  remove_node_sid:
+    type: string
+    required: true
+    format: fqdn
+    description: >-
+      SID (FQDN) of the node being removed from the cluster. Must be present in the run
+      roster (soulprint.hosts). If it is a master WITH slots — the plugin first migrates
+      its slots to the remaining masters, then CLUSTER FORGET.
+
+  seed_sid:
+    type: string
+    required: true
+    format: fqdn
+    description: >-
+      SID of any OTHER existing cluster node — the contact for CLUSTER NODES
+      (topology + idempotency) and FORGET. Must differ from remove_node_sid.
+
+tasks:
+  # 1. GUARD — remove_node_sid and seed_sid must be in the roster and must differ (assert:,
+  #    ADR-009 amendment 2026-06-23; same mechanism as the add_node guard). The predicate
+  #    is computed KEEPER-SIDE at RENDER time (soulprint.hosts is available there; on Soul it
+  #    is NOT). false ABORTS render with a message BEFORE any dispatch — earlier and clearer
+  #    than a shell-test on the host. assert does NOT emit a RenderedTask.
+  - name: Guard remove_node and seed are distinct members of the run roster
+    assert:
+      that:
+        - 'input.remove_node_sid != input.seed_sid && size(soulprint.hosts.where("sid == input.remove_node_sid")) == 1 && size(soulprint.hosts.where("sid == input.seed_sid")) == 1'
+      message: "remove_node guard: remove_node_sid/seed_sid must be distinct hosts of the run roster"
+
+  # 2. REMOVE-NODE — run_once. Endpoints are built from the roster (soulprint.hosts) by
+  #    SID: node (being removed) and seed = {addr: "<primary_ip>:6379"}. This is a READY
+  #    topology — the plugin does not translate anything: it reads CLUSTER NODES from the
+  #    seed itself, and for a master with slots migrates the slots to the remaining masters
+  #    (go-redis SETSLOT/MIGRATE), then CLUSTER FORGET on all remaining ones. Idempotent
+  #    (node already gone → no-op). .where("sid == ...")[0] is deterministic (single-host
+  #    roster filter; precedent in create/cluster.yml and add_node). ★ REDESIGN default_admin
+  #    (2026-06-30): connecting to nodes — under the system default_admin (username → AUTH,
+  #    requirepass removed). password comes from the new Vault branch secret/redis/<inc>/users/
+  #    default_admin#password; the plugin connects to nodes with this pair (password
+  #    is masked). The scenario body (outside covenant) hardcodes 'default_admin' directly.
+  - name: Remove the node from the cluster (slot-migration + CLUSTER FORGET)
+    run_once: true
+    module: community.redis.cluster
+    params:
+      action:   remove-node
+      username: default_admin
+      password: "${ vault('secret/redis/' + incarnation.name + '/users/default_admin#password') }"
+      node:
+        addr: "${ soulprint.hosts.where(\"sid == input.remove_node_sid\")[0].network.primary_ip + ':6379' }"
+      seed:
+        addr: "${ soulprint.hosts.where(\"sid == input.seed_sid\")[0].network.primary_ip + ':6379' }"

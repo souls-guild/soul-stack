@@ -1,0 +1,17 @@
+name: preserves-existing-sids
+description: >
+  Idempotency: an incarnation whose provisioned_sids ALREADY exist (repeat
+  migration run / inline-seed) preserves the value as-is (has()-guard
+  returns the current value, does not overwrite it with the default []).
+
+state_before:
+  redis_type: "cluster"
+  provisioned_vm_ids: ["i-aaa111", "i-bbb222"]
+  provisioned_provider: "example-dev"
+  provisioned_sids: ["vm-1.example.com", "vm-2.example.com"]
+
+state_after:
+  redis_type: "cluster"
+  provisioned_vm_ids: ["i-aaa111", "i-bbb222"]
+  provisioned_provider: "example-dev"
+  provisioned_sids: ["vm-1.example.com", "vm-2.example.com"]

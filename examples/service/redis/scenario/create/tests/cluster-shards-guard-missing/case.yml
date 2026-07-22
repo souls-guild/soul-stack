@@ -1,0 +1,61 @@
+# L0-trial for cluster-without-shards — the FAIL branch. shards stays required:false
+# without a default in the input schema (min:1 + role layout across hosts), but carries
+# required_when: "input.redis_type == 'cluster'" — conditional requirement by mode
+# (ADR-009 amendment 2026-06-23). So the ABSENCE of shards in cluster mode is a
+# meaningful operator error, not a default.
+#
+# ★ BEHAVIOR: shards-specific diagnostics come from required_when at INPUT VALIDATION
+# (config.ResolveInputValues → requireInputValues), which runs BEFORE render: the predicate
+# input.redis_type == 'cluster' is true, shards is not passed and has no default → the run
+# aborts with a clear message "input \"shards\" is required..." EARLIER than it would reach
+# render and the size-guard assert (1 != 0*1). In the trial harness this input error is
+# propagated through renderCase (config.ResolveInputValues) and caught by the same expect_render_error.
+# Previously (size-guard shell-task / without required_when) the case asserted the rendered
+# guard / abort at the size-guard "topology mismatch"; now required_when cuts it off earlier.
+#
+# Paired with cluster-single-shard (shards set): there input validation passes, render
+# proceeds, cluster-build is in place.
+name: cluster without shards aborts at input validation (required_when)
+
+fixtures:
+  default_destiny_source: "file://../../destiny/{name}"
+  hosts:
+    - sid: node-solo.example.com
+      covens: [create, redis]
+      soulprint:
+        network: { primary_ip: 10.0.0.9 }
+        os: { arch: amd64 }
+  vault:
+    secret/redis/create:
+      password: s3cr3t-redis-pass-create
+  essence:
+    redis_type: cluster
+    memory_reserve_percent: 75
+    persistence_presets:
+      rdb:
+        save: "900 1 300 10 60 10000"
+        appendonly: "no"
+    redis_config:
+      maxmemory:        "256mb"
+      maxmemory-policy: allkeys-lru
+      maxclients:       10000
+      timeout:          300
+
+  input:
+    # ★ provision disabled (default-on: an omitted section = ENABLED; the case deploys onto
+    # a READY roster, cloud-create is not needed) → include redis-provision.yml group-drop.
+    provision:
+      enabled: false
+    redis_type: cluster
+    # version is REQUIRED (user directive 2026-06-23) and is now the ENUM of builds
+    # released to Nexus — 7.4.1 ∈ enum (major < 8 → module version-gate not active).
+    # We take a valid enum deliberately: required_when for shards is checked by requireInputValues
+    # BEFORE enum validation, so an invalid version would mask the shards error.
+    version: "7.4.1"
+    # shards is NOT set deliberately — required_when (input.redis_type == 'cluster')
+    # makes it required in cluster mode → input validation aborts the run BEFORE render.
+
+# The run aborts at input validation: required_when for shards is true (cluster mode),
+# the value was not passed and has no default. The substring is the recognizable form of the
+# required message from requireInputValues (input_value.go), including the required_when predicate itself.
+expect_render_error: "\"shards\" is required"

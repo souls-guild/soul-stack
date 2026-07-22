@@ -1,0 +1,64 @@
+name: preserves-unrelated
+description: >
+  The migration touches ONLY seeded_from (fills in ref fields): the rest of
+  the state (redis_type/redis_config/redis_users/redis_sentinel/named
+  fields/topology/provisioned_*) passes through unchanged. seeded_from with
+  EMPTY source_endpoints (never-migrated v9 incarnation) -> refs get filled
+  with the ''-default, source_endpoints []/detached false are preserved,
+  everything else bit-for-bit.
+
+state_before:
+  redis_type: "sentinel"
+  redis_config:
+    maxmemory: "256mb"
+    appendonly: "yes"
+  redis_users:
+    - { name: "app", perms: "~* +@all", state: "on" }
+  redis_sentinel:
+    master_name: "master"
+    quorum: 2
+    down_after_ms: 5000
+    failover_timeout_ms: 60000
+  tls:
+    enable: true
+    only: false
+    port: 7379
+  persistence: "rdb_aof"
+  memory_mb: 1024
+  shards: 0
+  replicas: 1
+  provisioned_vm_ids: ["i-aaa111", "i-bbb222", "i-ccc333"]
+  provisioned_provider: "aws-prod"
+  provisioned_sids: ["vm-1.example.com", "vm-2.example.com", "vm-3.example.com"]
+  seeded_from:
+    source_endpoints: []
+    detached: false
+
+state_after:
+  redis_type: "sentinel"
+  redis_config:
+    maxmemory: "256mb"
+    appendonly: "yes"
+  redis_users:
+    - { name: "app", perms: "~* +@all", state: "on" }
+  redis_sentinel:
+    master_name: "master"
+    quorum: 2
+    down_after_ms: 5000
+    failover_timeout_ms: 60000
+  tls:
+    enable: true
+    only: false
+    port: 7379
+  persistence: "rdb_aof"
+  memory_mb: 1024
+  shards: 0
+  replicas: 1
+  provisioned_vm_ids: ["i-aaa111", "i-bbb222", "i-ccc333"]
+  provisioned_provider: "aws-prod"
+  provisioned_sids: ["vm-1.example.com", "vm-2.example.com", "vm-3.example.com"]
+  seeded_from:
+    source_endpoints: []
+    detached: false
+    source_password_ref: ""
+    source_tls_ca_ref: ""

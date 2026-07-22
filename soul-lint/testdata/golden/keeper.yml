@@ -1,0 +1,139 @@
+# Конфиг одного инстанса keeper-кластера.
+# Несколько инстансов с разным `kid` стоят за общими Postgres + Redis.
+
+# Идентичность этого keeper-инстанса
+kid: keeper-eu-west-01
+
+# Сетевые слушатели
+listen:
+  grpc:
+    bootstrap:
+      addr: "0.0.0.0:9442"
+      tls:
+        cert: /etc/keeper/tls/server.crt
+        key:  /etc/keeper/tls/server.key
+    event_stream:
+      addr: "0.0.0.0:8443"
+      tls:
+        cert: /etc/keeper/tls/server.crt
+        key:  /etc/keeper/tls/server.key
+        ca:   /etc/keeper/tls/ca.crt
+  openapi: { addr: "0.0.0.0:8080" }
+  mcp:     { addr: "0.0.0.0:8081" }
+  metrics: { addr: "0.0.0.0:9090" }
+
+# Хранилища
+postgres:
+  dsn_ref: vault:secret/keeper/postgres
+  pool: { min: 5, max: 50 }
+
+redis:
+  addr: "redis-cluster.internal:6379"
+  password_ref: vault:secret/keeper/redis
+
+# Vault — для PKI (SoulSeed), Essence-секретов, SSH CA, credentials cloud-driver-ов
+vault:
+  addr: "https://vault.internal:8200"
+  auth: { method: approle, role_id: keeper-prod, secret_id_file: /etc/keeper/vault-secret-id }
+  pki_mount: "pki/soulstack"
+
+# JWT-аутентификация операторов (ADR-014)
+auth:
+  jwt:
+    signing_key_ref: vault:secret/keeper/jwt-signing-key
+    issuer: keeper-eu-west-01
+    ttl_default: 24h
+    ttl_bootstrap: 30d
+
+# Observability
+otel:
+  enabled: true
+  exporter: otlp
+  endpoint: "otel-collector.internal:4317"
+
+logging:
+  level: info
+  format: json
+  rotation:
+    max_size_mb: 100
+    max_files: 10
+    compress: true
+
+# Реестр Service-ов и скаляр default_destiny_source перенесены в Postgres
+# (ADR-029): источник правды — БД, управление через `service.*` API/MCP. Ключей
+# `services:` / `default_destiny_source:` / `default_module_source:` в keeper.yml
+# больше нет — каждый отвергается как unknown_key.
+
+# Плагины — каталоги артефактов
+plugins:
+  # Корень кеша артефактов на keeper-host-е. Должен быть абсолютным путём.
+  # Пустое значение / отсутствие ключа — используется встроенный default
+  # (pluginhost.DefaultCacheRoot).
+  cache_root: /var/lib/soul-stack-keeper/plugins
+  # Версия плагина — git ref (tag или branch), без semver-range. См. ADR-007.
+  cloud_drivers:
+    - { name: aws, source: "git@github.com:soul-stack-ecosystem/soul-cloud-aws.git", ref: v2.0.0 }
+    - { name: yc,  source: "git@github.com:our-company/soul-cloud-yc.git",          ref: v0.3.1 }
+
+  ssh_providers:
+    - { name: vault-ssh, source: "git@github.com:soul-stack-ecosystem/soul-ssh-vault.git", ref: v1.0.0 }
+    - { name: static,    source: "git@github.com:soul-stack-ecosystem/soul-ssh-static.git", ref: v0.1.0 }
+
+# Lifecycle и capabilities плагинов (ADR-020)
+plugin_runtime:
+  socket_dir: /var/run/soul-stack-keeper/plugins
+  startup_timeout: 10s
+  shutdown_grace: 10s
+  allowed_capabilities:
+    - run_as_root
+    - network_outbound
+    - network_inbound
+    - vault_access
+    - fs_write_root
+    - exec_subprocess
+  conflict_policy: warn
+  enable_tls: false
+
+# Reaper — фоновая чистка
+reaper:
+  enabled: true
+  interval: 1h
+  dry_run: false
+  batch_size: 500
+  lock_ttl: 5m
+
+  rules:
+    expire_pending_seeds:
+      enabled: true
+      max_age: 24h
+      action: delete
+    purge_used_tokens:
+      enabled: true
+      max_age: 90d
+      action: delete
+    purge_souls:
+      enabled: true
+      statuses: [disconnected, expired]
+      max_age: 30d
+      action: delete
+    purge_old_seeds:
+      enabled: true
+      statuses: [superseded, expired, revoked]
+      max_age: 90d
+      action: delete
+    mark_disconnected:
+      enabled: true
+      stale_after: 90s
+      action: set_status
+      target_status: disconnected
+    purge_apply_runs:
+      enabled: true
+      max_age: 30d
+      action: delete
+    purge_apply_task_register:
+      enabled: true
+      max_age: 1h
+      action: delete
+
+# RBAC-каталог перенесён в Postgres (ADR-028); ключ `rbac:` в keeper.yml
+# больше не принимается (управление через role.* API/MCP).

@@ -1,0 +1,188 @@
+# migrate_cluster dispatcher branch — cluster mode (B3 flow, S4-3b). Migrates an honest
+# hash-slot Redis Cluster from the OLD (external) cluster onto a NEW cluster of the same
+# topology. Unlike the sentinel branch (native REPLICAOF master→master + offset-gate), cluster
+# migrates SLOT-AWARE through four atomic steps of the community.redis.cluster plugin:
+#   1. include redis-deploy-cluster-joinable.yml (S4-3a) — bring up the NEW cluster-mode
+#      nodes WITHOUT assembling their own cluster (cluster-enabled yes, but without CLUSTER MEET/ADDSLOTS).
+#   2. JOIN (action: join-external)   — merge new nodes into the OLD cluster as replicas of its
+#      masters 1:1 (MEET old-seed → REPLICATE), the new ones catch up with the old ones' data.
+#   3. FAILOVER (action: failover-takeover) — graceful promotion of the new nodes to masters
+#      (CLUSTER FAILOVER): slots move from the old masters to the new ones without losing the tail,
+#      WHILE the old master is alive.
+#   4. FORGET (action: forget-external) — throw the old nodes out of the cluster (CLUSTER
+#      FORGET on all new ones) — migration is complete, only the new cluster remains.
+# All four — in the migrate phase of ONE run → the migration is atomic (state is committed
+# only after FORGET succeeds; any fail → state is NOT committed → error_locked).
+#
+# Included from main.yml via CONDITIONAL-INCLUDE (`when: input.redis_type ==
+# 'cluster'` on the include): on a sentinel run the whole file is group-drop, on a cluster run
+# it expands into a flat list BEFORE render. compute.* (redis_config/tls_*/conf_dir/
+# data_dir/install/modules_base_url/redis_version) are declared in migrate_cluster/main.yml
+# (compute: — top-level scenario block, one per scenario, orchestration.md §2.4) and are visible
+# here as compute.<name>.
+#
+# ★★★ OPERATIONAL PRECONDITIONS (NOT included, on the operator) ★★★
+#   (1) Cluster-bus connectivity old↔new cluster on client-port+10000 (default
+#       16379) BIDIRECTIONALLY: Redis Cluster gossip runs on a separate bus; without it
+#       MEET/REPLICATE/FAILOVER will not converge. Opening both directions is on the operator
+#       (Soul Stack does not manage the network between a foreign source and the new VMs).
+#   (2) Password/TLS of the NEW cluster is ALIGNED == the OLD one (one cluster for the duration of join):
+#       ★ default_admin REDESIGN (2026-06-30): AUTH goes under the system ACL user
+#       default_admin (requirepass removed). After join-external the new nodes connect to
+#       the old cluster with the same username=default_admin + password — all cluster steps read
+#       secret/redis/<inc>/users/default_admin#password (migrate.go holds a SINGLE
+#       username/password for the new nodes AND the source-seed). The B3 pilot migrates onto a cluster of the same
+#       essence (source == new cluster, same default_admin), so the alignment is
+#       natural. If the operator didn't align it — join will fail on AUTH (outside the
+#       scenario's responsibility).
+#   (3) Graceful failover does NOT lose the data tail WHILE the old master is ALIVE: CLUSTER
+#       FAILOVER (takeover) synchronizes the candidate replica with the master BEFORE the role switch.
+#       The operator does NOT shut down the source before FAILOVER completes — otherwise a tail that
+#       didn't finish replicating would be lost.
+
+# ── 0. SIZE-GUARD (topology) - keeper-side render-time assert ─────────────────────
+# The new cluster's roster size MUST be shards*(1+replicas_per_master) (masters of the
+# new cluster plus replicas per shard), same as in create/cluster. Same mechanism as
+# the size-guard in create/reshard-guard (assert:, ADR-009 amendment 2026-06-23): the
+# predicate is evaluated KEEPER-SIDE at RENDER time - soulprint.hosts is available there
+# (it is NOT available on the Soul). false ABORTS render with a message BEFORE any
+# dispatch (earlier and clearer than a runtime plugin failure). assert does NOT emit a
+# RenderedTask. WHY assert and not validate: size-guard needs soulprint.hosts (the
+# roster), while the validate context is INPUT-ONLY (a structural CEL barrier).
+# ★ The second invariant - size(input.source.hosts) >= 1 (the source is non-empty) - is
+# already in validate: main.yml (inherited by the cluster run, no need to duplicate).
+# Only topology here.
+# ★ PROVISION-GATE (ADR-061 amendment 2026-06-29): migrate_cluster includes the SAME
+# service-level provision body (redis-provision.yml, gated on has(input.provision) &&
+# input.provision.enabled) as create - on cloud-provision the new cluster's roster is
+# STILL empty at pre-flight EvalAsserts time (VMs are created later: core.cloud.created→
+# await_online→refresh_soulprint), so size(soulprint.hosts)==N would fail BEFORE the
+# nodes exist. The `when: !provision.enabled` gate drops the size check for the
+# provision path - there the roster invariant is guaranteed by the count formula in
+# redis-provision.yml (shards*(1+replicas)) plus the await_online barrier, NOT by
+# pre-flight (symmetric with the no_hosts-bypass amendment 2026-06-28 and
+# create/cluster.yml). The predicate is STATIC (pure input → isStaticWhen): pre-flight
+# placeholder-skip means no assert runs under provision (NOT an ErrAssertFailed). On an
+# existing roster (provision omitted/false, the regular S1 pilot) when=true → size-guard
+# is active (NOT weakened). ★ The replica-guard below (replicas==0) carries no gate: it
+# is a pilot input invariant that does not depend on the roster - it correctly rejects
+# replicas>0 during provision too (otherwise extra nodes would come up for unsupported
+# replicas).
+- name: Guard cluster roster size matches shards and replicas
+  when: "!(has(input.provision) && input.provision.enabled)"
+  assert:
+    that:
+      - "size(soulprint.hosts) == int(input.shards) * (1 + int(input.replicas_per_master))"
+    message: "the run roster's host count must be exactly shards*(1+replicas_per_master) (masters of the new cluster plus replicas per shard) - target as many hosts as there are nodes in the destination topology"
+
+# ── 0b. REPLICA-GUARD (pilot): replicas_per_master == 0 ────────────────────────────
+# The B3 pilot for cluster migration migrates ONLY masters: join-external (migrate.go)
+# merges new nodes 1:1 onto old masters and runtime-asserts len(newNodes) == shards_dest
+# (exactly one new node per old master - it does NOT create replicas in the new
+# cluster). With replicas>0, the size-guard above would let through a roster of
+# shards*(1+replicas) (including replicas), but the plugin would then hit
+# len(newNodes) != shards_dest - a late runtime failure AFTER the joinable deploy
+# (error_locked). A separate assert (NOT merged into the size-guard above: that one is
+# correct for topology - at replicas=0 it reduces to size==shards, which is exactly what
+# join-external needs) turns a late runtime failure into an early, clear render failure
+# BEFORE any dispatch.
+# ★ Support for replicas in the new cluster during migration is a separate slice (it
+# touches join-external/forget-external plus the master/replica layout). create supports
+# replicas fully (this gate is cluster-MIGRATION-pilot only, create is not affected by
+# it).
+- name: Guard cluster migration pilot supports masters only (no replicas)
+  assert:
+    that:
+      - "int(default(input.replicas_per_master, 0)) == 0"
+    message: "cluster-migration (B3 pilot) supports only replicas_per_master=0 - replicas in the new cluster are not yet migrated (join-external merges exactly one new node onto each old master); replica support is a separate slice. Run with replicas_per_master=0"
+
+# ── 1. JOINABLE DEPLOY of the new cluster nodes (S4-3a) ──────────────────────────────
+# Bring up the NEW cluster-mode nodes (install + render redis.conf with cluster
+# directives/users.acl + systemd + PING gate), but WITHOUT the final CLUSTER
+# MEET/ADDSLOTS/REPLICATE - the nodes do NOT assemble their own cluster, they will join
+# the OLD one (step 2 below). ★ The SHARED joinable-deploy body is service-level
+# (scenario/redis-deploy-cluster-joinable.yml) - the same as redis-deploy-cluster.yml
+# MINUS assembly. The body references compute.* (declared in
+# migrate_cluster/main.yml::compute, an INVARIANT of the includer - see the header of the
+# joinable body; soul-lint does NOT catch cross-file drift). scenario-include resolves
+# the file name locally (scenario/migrate_cluster/) → falls back to service-level
+# (orchestration.md §6).
+- include: redis-deploy-cluster-joinable.yml
+
+# ── 2. JOIN: merge the new nodes into the old cluster as 1:1 replicas (join-external) ──
+# community.redis.cluster action: join-external, run_once on hosts[0] (the first by SID =
+# the run's bootstrap node, same as cluster-build create). The nodes-MAP is built EXACTLY
+# like redis-deploy-cluster.yml in action:create - merge(soulprint.hosts.map(h,
+# {SID: {addr}})): key = SID (sorted inside the plugin → deterministic 1:1 mapping
+# new-node↔old-master), addr = primary_ip + port (the TLS port when tls_on, otherwise
+# 6379). source_nodes are the seed nodes of the OLD cluster (input.source.hosts,
+# host:port). shards_dest is the destination shard count (int(input.shards)); the plugin
+# runtime-asserts shards_source==shards_dest (the number of old masters is not visible at
+# render time - it's a live topology). ★ default_admin REDESIGN: username=default_admin +
+# password from secret/redis/<inc>/users/default_admin#password (precondition: == the
+# password of the same user in the old cluster); the plugin holds a single
+# username/password for both the new nodes AND the source-seed (migrate.go). tls follows
+# compute.tls_on.
+# ★ Security (anti-downgrade): tls/tls_ca/port are gated on compute.tls_on (TLS ENABLED),
+# NOT tls_only - once TLS is enabled, the plugin MUST use TLS for every node AND for the
+# source-seed (otherwise AUTH to the old cluster would go out in plaintext). node
+# addresses use compute.tls_port + tls_ca.
+- name: Join new nodes into the source cluster as replicas (CLUSTER MEET/REPLICATE)
+  run_once: true
+  module: community.redis.cluster
+  register: joined
+  params:
+    action:       join-external
+    nodes:        "${ merge(soulprint.hosts.map(h, { h.sid: { 'addr': h.network.primary_ip + ':' + (compute.tls_on ? string(compute.tls_port) : '6379') } })) }"
+    shards_dest:  "${ int(input.shards) }"
+    source_nodes: "${ input.source.hosts }"
+    username:     "${ compute.admin_user }"
+    password:     "${ vault('secret/redis/' + incarnation.name + '/users/' + compute.admin_user + '#password') }"
+    tls:          "${ compute.tls_on }"
+    tls_ca:       "${ compute.tls_on ? vault(compute.tls_ca_ref) : '' }"
+
+# ── 3. FAILOVER: promote the new nodes to masters (failover-takeover) ─────────────────
+# community.redis.cluster action: failover-takeover, run_once on hosts[0], require:
+# [joined] (order: failover ONLY after a successful join - otherwise the candidates
+# haven't finished replicating data yet). register: failed_over. nodes/password/tls/
+# tls_ca are the same as JOIN (same cluster, same anti-downgrade gate on
+# compute.tls_on). Graceful FAILOVER (takeover) synchronizes the candidate with the
+# master BEFORE the role switch → the tail is not lost WHILE the old master is alive
+# (see the operational preconditions in the header). The plugin does not need
+# source_nodes at this step (failover operates on cluster nodes already joined).
+- name: Promote the new nodes to masters taking over the slots (CLUSTER FAILOVER)
+  run_once: true
+  module: community.redis.cluster
+  require: [joined]
+  register: failed_over
+  params:
+    action:   failover-takeover
+    nodes:    "${ merge(soulprint.hosts.map(h, { h.sid: { 'addr': h.network.primary_ip + ':' + (compute.tls_on ? string(compute.tls_port) : '6379') } })) }"
+    username: "${ compute.admin_user }"
+    password: "${ vault('secret/redis/' + incarnation.name + '/users/' + compute.admin_user + '#password') }"
+    tls:      "${ compute.tls_on }"
+    tls_ca:   "${ compute.tls_on ? vault(compute.tls_ca_ref) : '' }"
+
+# ── 4. FORGET: drop the old nodes from the cluster (forget-external) ──────────────────
+# community.redis.cluster action: forget-external, run_once on hosts[0], require:
+# [failed_over] (order: forget ONLY after the new nodes have become masters -
+# otherwise we'd be kicking out the slot holders). register: forgotten. nodes are the
+# new nodes (CLUSTER FORGET for the old ones is sent to them). source_nodes
+# (input.source.hosts) says exactly which old nodes to drop (the plugin resolves their
+# ids from the topology). password/tls/tls_ca use the same anti-downgrade gates. AFTER
+# FORGET succeeds the migration is complete: the old cluster is detached, only the new
+# one remains → state_changes.seeded_from.detached := true (main.yml branches on
+# redis_type).
+- name: Forget the old source nodes from the cluster (CLUSTER FORGET)
+  run_once: true
+  module: community.redis.cluster
+  require: [failed_over]
+  register: forgotten
+  params:
+    action:       forget-external
+    nodes:        "${ merge(soulprint.hosts.map(h, { h.sid: { 'addr': h.network.primary_ip + ':' + (compute.tls_on ? string(compute.tls_port) : '6379') } })) }"
+    source_nodes: "${ input.source.hosts }"
+    username:     "${ compute.admin_user }"
+    password:     "${ vault('secret/redis/' + incarnation.name + '/users/' + compute.admin_user + '#password') }"
+    tls:          "${ compute.tls_on }"
+    tls_ca:       "${ compute.tls_on ? vault(compute.tls_ca_ref) : '' }"

@@ -1,0 +1,48 @@
+# {{.BinaryName}}
+
+{{.Description}}
+
+SoulModule plugin for Soul Stack ({{.Namespace}}.{{.Name}}). Implemented via `sdk/module` on top of the gRPC-stdio handshake ([ADR-020](https://github.com/souls-guild/soul-stack/blob/main/docs/architecture.md#adr-020-plugin-infrastructure-manifest-handshake-lifecycle-format)).
+
+## States
+
+- `present` - the resource exists with the requested parameters.
+- `absent` - the resource is absent.
+
+Parameters - see `manifest.yaml::spec.states.<state>.input`.
+
+Any `secret: true` parameter must have `pattern: "^vault:.*"` - otherwise `soul-lint validate-manifest` fails with an error (semantic rule `input_secret_without_vault_pattern`).
+
+## Usage in destiny
+
+```yaml
+- module: {{.Namespace}}.{{.Name}}
+  state: present
+  name: example
+  # TODO: remaining params
+```
+
+## Build
+
+```
+make build       # -> bin/{{.BinaryName}}
+make test
+make check       # fmt + vet + test + build
+```
+
+## Sigil-trust
+
+Before publishing an official plugin to production, an Archon signs the binary's
+digest through Keeper ([ADR-026](https://github.com/souls-guild/soul-stack/blob/main/docs/architecture.md#adr-026-sigil---plugin-integrity-keeper-signed-digest-index)).
+
+## Tests
+
+- **L0** - unit tests with a mock `pluginv1.SoulModule_ApplyServer` (see `internal/{{.NamePackage}}/handler_test.go`).
+- **L1** - integration via testcontainers against a real backend resource.
+- **L3b** - real-soul-container (privileged Debian-12 + the module installed).
+
+More details - [Plugin author guide](https://github.com/souls-guild/soul-stack-plugins/blob/main/docs/module-author-guide.md).
+
+## Author
+
+{{.AuthorName}}

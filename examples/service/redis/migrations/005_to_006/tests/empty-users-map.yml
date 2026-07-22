@@ -1,0 +1,9 @@
+name: empty-users-map
+description: >
+  Empty redis_users map (no users) → empty array [] (explicit size==0 branch).
+
+state_before:
+  redis_users: {}
+
+state_after:
+  redis_users: []

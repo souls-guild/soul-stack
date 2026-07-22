@@ -1,0 +1,20 @@
+{
+  "type": "object",
+  "required": ["image_id", "flavor_id", "network_id"],
+  "properties": {
+    "region": { "type": "string" },
+    "availability_zone": { "type": "string" },
+    "image_id": { "type": "string" },
+    "flavor_id": { "type": "string" },
+    "network_id": { "type": "string" },
+    "key_name": { "type": "string" },
+    "security_groups": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "labels": {
+      "type": "object",
+      "additionalProperties": { "type": "string" }
+    }
+  }
+}

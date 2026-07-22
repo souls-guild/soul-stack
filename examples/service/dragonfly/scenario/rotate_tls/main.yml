@@ -1,0 +1,226 @@
+name: rotate_tls
+description: >-
+  Day-2: rotation of DragonFly TLS material (server cert/key + CA) WITHOUT restarting the process.
+  DragonFly re-reads cert/key/CA on the fly via CONFIG SET tls_*_file — no daemon restart
+  needed (production convention "hot-reload > restart", docs/destiny/production-
+  conventions.md §3a/§6). REUSE from redis/rotate_tls.
+
+  ★★ DragonFly vs redis (CRITICAL ADAPTATION): DragonFly TLS flag names use the UNDERSCORE form
+  (tls_cert_file / tls_key_file / tls_ca_cert_file), NOT the dash form used by redis (tls-cert-file).
+  Confirmed by reconnaissance of the DragonFly sources (src/server/tls/tls_helpers.cc:
+  ABSL_FLAG(std::string, tls_cert_file ...), tls_key_file, tls_ca_cert_file; all three
+  config_registry.RegisterMutable → mutable via CONFIG SET, server_family.cc:1229-1231).
+  The three CONFIG SET commands below carry these underscore names.
+
+  A separate scenario FOR EXPLICIT AUDIT SEMANTICS of the rotation: "TLS material changed" — a separate
+  event in state_history, with its own input (new Vault refs cert/key/ca) and its own
+  mutation of state.tls.*_ref.
+
+  The operator sets NEW Vault PATHS to the server cert/key/CA (not the PEM itself — the secret goes through
+  vault() in the content cell of the destiny, seal masking). Scenario: (1) destiny `dragonfly`
+  re-renders the PEM into ${conf_dir}/tls/{dragonfly.crt,dragonfly.key,ca.crt} from the NEW refs
+  (apply: register: tls_certs — aggregate changed over the child core.file.present); (2) three
+  community.redis.command CONFIG SET tls_cert_file / tls_key_file / tls_ca_cert_file UNDER
+  onchanges:[tls_certs] — DragonFly RECREATES the SSL_CTX and re-reads the PEM live, but ONLY
+  when the PEM actually changed (one command = one command → three steps, all on the same onchanges gate).
+
+  ★ PRECONDITION: TLS is already ENABLED on the instance (state.tls.enable=true). Rotating on a plaintext
+  instance is meaningless — the assert step breaks the run BEFORE applying. Enabling TLS on a running
+  plaintext DragonFly is a separate operation (the --tls flag switches the MAIN listener to TLS at
+  startup; hot-enabling TLS on the main port requires a restart), not rotate_tls.
+
+  ★ IDEMPOTENCY VIA onchanges: the three CONFIG SET steps are gated by onchanges:[tls_certs] (NOT force
+  changed:true), where tls_certs is the applier register of apply step 2. The engine emits a synthetic
+  core.noop.run with register_data = OR(changed) over the child destiny tasks (orchestration.md
+  §2.1.1). re-reading the SSL_CTX fires ONLY when the PEM actually changed; a repeat run with
+  the same material → files don't change → aggregate changed=false → three CONFIG SET skipped →
+  the whole scenario is a no-op.
+
+  Targeting — the whole incarnation (on is omitted, ADR-008/009): new PEM + reload go to EVERY
+  dragonfly host. TLS material is host-invariant (one cert/CA per cluster).
+
+# ── Operator input contract (docs/input.md) ────────────────────────────────
+# NEW Vault PATHS to the server cert/key/CA (form "<mount>/<path>#<field>"), NOT the PEM itself. Each
+# is optional — the operator rotates only part of it (e.g. only cert+key, same CA); an unset ref
+# takes the CURRENT one from incarnation.state.tls (fallback).
+input:
+  cert_ref:
+    type: string
+    required: false
+    description: >-
+      New Vault path to the server TLS certificate (dragonfly.crt). Not set → the current
+      state.tls.cert_ref (CA/key rotate independently).
+
+  key_ref:
+    type: string
+    required: false
+    description: >-
+      New Vault path to the server private key (dragonfly.key). Not set → the current
+      state.tls.key_ref.
+
+  ca_ref:
+    type: string
+    required: false
+    description: >-
+      New Vault path to the cluster CA certificate (ca.crt). Not set → the current state.tls.ca_ref.
+
+# ── Declarative input invariants (validate:) ───────────────────────────────────
+# (1) at least one ref set (otherwise nothing to rotate). The TLS precondition (state.tls.enable=true)
+# is NOT expressible via input (state is not available in the validate context) — it is moved to the first
+# assert step below (full scenario context with incarnation.state). Here — only "at least one ref".
+validate:
+  - that: "has(input.cert_ref) || has(input.key_ref) || has(input.ca_ref)"
+    message: "rotate_tls requires at least one new ref (cert_ref/key_ref/ca_ref)"
+
+# ── Computed scenario vars (compute:) ─────────────────────────────────────────
+# Run-level context (input/essence/incarnation — without soulprint).
+#
+# ★ DragonFly vs redis (BLOCKER fix): the three CONFIG SET tls_*_file go to the LOCAL instance
+# via a UNIX SOCKET (compute.local_addr), NOT 127.0.0.1:tls_port. DF with --bind=primary_ip does NOT
+# listen on loopback; the socket is a separate UDS listener (always locally reachable, even while the TLS
+# material is being rotated). ★ UDS is not a network path → tls/tls_ca of the connection are NOT needed: re-reading the SSL_CTX
+# (CONFIG SET tls_*_file) is executed by a command INSIDE the local connection, and the client↔server
+# handshake over the socket does not go through TLS. This removes the chicken-and-egg problem of "connecting via TLS with the old CA while
+# replacing that very CA".  run_dir is host-invariant; the default duplicates the default.
+compute:
+  local_addr: "${ 'unix:' + default(essence.run_dir, '/var/run/dragonfly') + '/dragonfly.sock' }"
+  # ★ admin_user (default_admin redesign): the 3 CONFIG SET tls_*_file connect as this user
+  # (requirepass removed). Literal (day-2 outside the covenant).
+  admin_user: "${ 'default_admin' }"
+  # ── host layout from essence (v1→v2 migration): conf_dir/data_dir/install no longer in state ──
+  # ★ conf_dir from essence (not state) — day-2 reads the actual layout; PEM is placed in
+  # ${conf_dir}/tls/. install for the rotate read-model without a real reader → package default.
+  conf_dir:   "${ default(essence.conf_dir, '/etc/dragonfly') }"
+  data_dir:   "${ default(essence.data_dir, '/var/lib/dragonfly') }"
+  install:    "${ (default(essence.install_method, 'package') == 'binary') ? { 'method': 'binary', 'base_url': default(essence.binary_base_url, ''), 'version': default(essence.binary_version, '') } : { 'method': 'package' } }"
+
+  # Effective refs: a new one from input beats the current one from state (fallback — partial rotation).
+  # has() chain (default(input, state) would fail no-such-key if input.*_ref were entirely
+  # absent — default catches a leaf, not the argument root).
+  cert_ref: "${ has(input.cert_ref) ? input.cert_ref : incarnation.state.tls.cert_ref }"
+  key_ref:  "${ has(input.key_ref)  ? input.key_ref  : incarnation.state.tls.key_ref }"
+  ca_ref:   "${ has(input.ca_ref)   ? input.ca_ref   : incarnation.state.tls.ca_ref }"
+
+# ── incarnation.state mutation ─────────────────────────────────────────
+# day-2 records the NEW Vault refs cert/key/ca (read-model state.tls.*_ref). enable does NOT change
+# (rotate only touches the material). ★ NO only/port: DragonFly TLS is on the main port (no tls_port,
+# no "TLS-only"). Same compute.*_ref that went into the PEM-rendering destiny.
+state_changes:
+  - set: tls
+    value: >-
+      ${ {
+           'enable':   incarnation.state.tls.enable,
+           'cert_ref': compute.cert_ref,
+           'key_ref':  compute.key_ref,
+           'ca_ref':   compute.ca_ref
+         } }
+
+tasks:
+  # 1. GUARD — TLS must be enabled (state.tls.enable=true). The predicate is evaluated KEEPER-SIDE
+  #    at render time (incarnation.state is available). false BREAKS the render with a message BEFORE dispatch —
+  #    earlier and clearer than failing the connection on the host. assert does NOT emit RenderedTask.
+  - name: Guard TLS is enabled on the instance before rotating its material
+    assert:
+      that:
+        - "has(incarnation.state) && has(incarnation.state.tls) && default(incarnation.state.tls.enable, false)"
+      message: "rotate_tls guard: TLS must be enabled (state.tls.enable=true); rotating material on a plaintext instance is meaningless"
+
+  # 2. Re-render the PEM into ${conf_dir}/tls/ from the NEW refs (the same destiny `dragonfly` as create).
+  #    apply.input.tls carries enable + the NEW cert_ref/key_ref/ca_ref → destiny server.yml puts
+  #    cert/key/ca via core.file.present + vault(ref) in the cell (seal masking). config —
+  #    state.df_config plus adding masteruser/masterauth (dragonfly.conf itself does not
+  #    change during rotation; tls_*_file paths stay the same), symmetric to add_user/update_users — otherwise the flagfile
+  #    on disk would lose replica→master AUTH → NOAUTH after replica restart.
+  #    version — from state; install/conf_dir/data_dir — from essence (v1→v2). register: tls_certs —
+  #    applier register gating the reload below. ★ users: SYSTEM (from essence, incl. default_admin)
+  #    + operator-extra (state.df_users) — destiny re-renders the whole users.acl, without adding
+  #    system users back it would wipe default_admin/replica/... → breaking AUTH/replication (symmetric to redis
+  #    rotate_tls). ACL is NOT reloaded here (no ACL LOAD), but the file on disk must carry ALL of them.
+  - name: Re-render TLS PEM material from the new Vault refs
+    register: tls_certs
+    apply:
+      destiny: dragonfly
+      input:
+        version:  "${ has(incarnation.state.df_version) ? incarnation.state.df_version : '' }"
+        # host layout — from essence (v1→v2, Option A): install/conf_dir/data_dir from compute
+        # (itself from essence). ★ default_admin REDESIGN: apply.input.password REMOVED (destiny
+        # no longer accepts it — requirepass removed); authentication is under the system default_admin
+        # from users below.
+        install:  "${ compute.install }"
+        conf_dir: "${ compute.conf_dir }"
+        data_dir: "${ compute.data_dir }"
+        config: >-
+          ${ merge(incarnation.state.df_config, {
+               'masteruser': compute.admin_user,
+               'masterauth': vault('secret/dragonfly/' + incarnation.name + '/users/' + compute.admin_user + '#password')
+             }) }
+        tls:
+          enable:   "${ incarnation.state.tls.enable }"
+          cert_ref: "${ compute.cert_ref }"
+          key_ref:  "${ compute.key_ref }"
+          ca_ref:   "${ compute.ca_ref }"
+        # ★ SYSTEM + operator-extra (as in the deployment body/redis rotate_tls): destiny re-renders
+        # users.acl too (the same brick) → MUST add the system users from essence.system_acl_users
+        # FIRST (default_admin/replica/monitoring/sentinel/haproxy), otherwise rotate_tls WOULD WIPE them
+        # from users.acl → break AUTH/replication. operator-extra (state.df_users — an ARRAY of
+        # AclUser) goes ON TOP (last-wins). System users are NOT in state — added back from essence on every
+        # render. Vault password on the same branch secret/dragonfly/<inc>/users/<name>#password.
+        users: >-
+          ${ merge(
+               merge(default(essence.system_acl_users, {}).map(name, {
+                 name: {
+                   'perms':    essence.system_acl_users[name],
+                   'state':    'on',
+                   'password': vault('secret/dragonfly/' + incarnation.name + '/users/' + name + '#password')
+                 }
+               })),
+               has(incarnation.state.df_users)
+                 ? merge(incarnation.state.df_users.map(u, {
+                     u.name: {
+                       'perms':    u.perms,
+                       'state':    u.state,
+                       'password': vault('secret/dragonfly/' + incarnation.name + '/users/' + u.name + '#password')
+                     }
+                   }))
+                 : {}
+             ) }
+
+  # 3. HOT-RELOAD CERT: three community.redis.command (CONFIG SET tls_cert_file / tls_key_file /
+  #    tls_ca_cert_file — UNDERSCORE, the DragonFly form) recreate the SSL_CTX on the live instance.
+  #    DragonFly RECREATES the SSL_CTX on CONFIG SET tls_*_file (RegisterMutable) → reads the fresh
+  #    PEM from disk. command (raw verb-state) bypasses the diff-skip of community.redis.config (which would
+  #    compare CONFIG GET values, consider it a no-op with the same path and not fire CONFIG SET) — raw
+  #    CONFIG SET is needed for the re-read to happen. Gate — onchanges:[tls_certs] (idempotency): one
+  #    command = one verb → three steps on the same gate. PEM paths — from conf_dir (where destiny put
+  #    the material: dragonfly.crt/dragonfly.key/ca.crt). ★ addr — LOCAL UNIX socket
+  #    (compute.local_addr); tls/tls_ca of the connection are NOT needed (UDS is not a network path — the client↔
+  #    server handshake is not TLS). CONFIG SET tls_*_file still replaces the SERVER material live.
+  - name: Re-read the rotated TLS cert when it changed (CONFIG SET tls_cert_file)
+    module: community.redis.command
+    onchanges: [tls_certs]
+    params:
+      addr:     "${ compute.local_addr }"
+      # ★ default_admin REDESIGN: AUTH as default_admin (requirepass removed). UDS without TLS.
+      username: "${ compute.admin_user }"
+      password: "${ vault('secret/dragonfly/' + incarnation.name + '/users/' + compute.admin_user + '#password') }"
+      args:     ["CONFIG", "SET", "tls_cert_file", "${ compute.conf_dir + '/tls/dragonfly.crt' }"]
+
+  - name: Re-read the rotated TLS key when it changed (CONFIG SET tls_key_file)
+    module: community.redis.command
+    onchanges: [tls_certs]
+    params:
+      addr:     "${ compute.local_addr }"
+      # ★ default_admin REDESIGN: AUTH as default_admin (requirepass removed). UDS without TLS.
+      username: "${ compute.admin_user }"
+      password: "${ vault('secret/dragonfly/' + incarnation.name + '/users/' + compute.admin_user + '#password') }"
+      args:     ["CONFIG", "SET", "tls_key_file", "${ compute.conf_dir + '/tls/dragonfly.key' }"]
+
+  - name: Re-read the rotated TLS CA cert when it changed (CONFIG SET tls_ca_cert_file)
+    module: community.redis.command
+    onchanges: [tls_certs]
+    params:
+      addr:     "${ compute.local_addr }"
+      # ★ default_admin REDESIGN: AUTH as default_admin (requirepass removed). UDS without TLS.
+      username: "${ compute.admin_user }"
+      password: "${ vault('secret/dragonfly/' + incarnation.name + '/users/' + compute.admin_user + '#password') }"
+      args:     ["CONFIG", "SET", "tls_ca_cert_file", "${ compute.conf_dir + '/tls/ca.crt' }"]

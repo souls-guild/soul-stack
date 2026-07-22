@@ -1,0 +1,63 @@
+# Reusable named input types for the redis service (ADR-062, named input types).
+# Resolution is service-level: `$type: <Name>` in any `input:` of a scenario of
+# THIS service is replaced by the expanded schema from here at the input stage
+# (cycle-checked). Type name is PascalCase (distinguishes a type reference from
+# a snake_case parameter both visually and in the parser).
+types:
+  # AclUser - one ACL user record for Redis (operator-extra). Reused by
+  # scenarios that read operator-extra ACL: create (array of such records,
+  # input.users), add_user (single record, input.user), update_users (full
+  # new set, input.users - bulk-replace). This structure used to be
+  # duplicated inline in each scenario (and diverged) - now there's a single
+  # source of truth (and a shared perms-pattern for all).
+  #
+  # * Wave 1b (2026-06-26): ONLY the current fields (name/perms/state).
+  # keys/channels/commands - wave 2 (structural ACL instead of one perms
+  # string), NOT introduced here.
+  AclUser:
+    type: object
+    additional_properties: false
+    required: [name, perms]
+    properties:
+      # ACL user name. Stricter pattern than the old inline variant
+      # (lowercase start): Redis ACL names are case-sensitive, but the role
+      # convention is a lowercase identifier.
+      name:
+        type: string
+        pattern: "^[a-z][a-z0-9_-]*$"
+        description: >-
+          Redis ACL user name (unique within the users array). Rendered into
+          users.acl; password is resolved keeper-side from Vault by the
+          convention secret/redis/<incarnation>/users/<name>#password.
+      # FULL ACL permissions string (not an alias): raw Redis ACL directives.
+      #
+      # pattern is NOT a full Redis parser, but a token-shape filter (re2):
+      # rejects arbitrary text, newlines, spaces-within-a-token, shell
+      # injections (`;`/`|`-outside-subcommand/`&&`/backticks/`$()`) and
+      # unknown sigils; the actual semantics are validated by Redis on
+      # `ACL SETUSER`. The list of allowed token forms is in the description
+      # below. The pattern itself allows an empty string, but perms is in
+      # object-level required -> the required logic rejects empty BEFORE
+      # pattern; a no-permissions user is expressed by the token `off`, not
+      # an empty string. Passwords within the perms string are masked on
+      # output (logs/UI) by the shared secret masking.
+      perms:
+        type: string
+        pattern: "^(?:(?:(?:on|off|nopass|resetpass|reset|clearselectors|sanitize-payload|skip-sanitize-payload|nosanitize-payload|allkeys|allchannels|allcommands|nocommands)|(?:%R~|%W~|%RW~|~)[A-Za-z0-9:_.*?\\[\\]{}\\\\-]+|&[A-Za-z0-9:_.*?\\[\\]{}\\\\-]+|[+-](?:@[a-z][a-z0-9-]*|[a-z][a-z0-9-]*(?:\\|[a-z][a-z0-9-]*)?)|[><][A-Za-z0-9:_.@%/+=-]+|[#!][0-9a-fA-F]{64}|\\([^()]*\\))(?: (?:(?:on|off|nopass|resetpass|reset|clearselectors|sanitize-payload|skip-sanitize-payload|nosanitize-payload|allkeys|allchannels|allcommands|nocommands)|(?:%R~|%W~|%RW~|~)[A-Za-z0-9:_.*?\\[\\]{}\\\\-]+|&[A-Za-z0-9:_.*?\\[\\]{}\\\\-]+|[+-](?:@[a-z][a-z0-9-]*|[a-z][a-z0-9-]*(?:\\|[a-z][a-z0-9-]*)?)|[><][A-Za-z0-9:_.@%/+=-]+|[#!][0-9a-fA-F]{64}|\\([^()]*\\)))*)?$"
+        description: >-
+          Redis ACL: permissions as one string, tokens space-separated.
+          Example: `~app:* +@read +@write -@dangerous` (keys app:* + read/write,
+          minus dangerous). Token forms: keys `~<pat>`/`%R~`/`%W~`/`%RW~`/`allkeys`;
+          channels `&<pat>`/`allchannels`; commands `+<cmd>`/`-<cmd>`/`+@<cat>`/
+          `-@<cat>`/`+<cmd>|<sub>`/`allcommands`/`nocommands`; passwords
+          `><pwd>`/`#<hex64>`; service tokens `on`/`off`/`nopass`/`reset`.
+          Written into users.acl as-is; syntax is validated (garbage/injections rejected).
+      # State: on (active) / off (blocked, rule is retained). default on.
+      # Not in object-level required -> optional; default is filled in at the input stage.
+      state:
+        type: string
+        default: "on"
+        enum: [on, off]
+        description: >-
+          User state: on (active) / off (blocked, but the rule is retained).
+          Defaults to on.

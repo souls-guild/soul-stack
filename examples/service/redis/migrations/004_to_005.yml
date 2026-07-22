@@ -1,0 +1,44 @@
+from_version: 4
+to_version: 5
+
+description: >-
+  state_schema v4 -> v5: sentinel failover timings (#7, 2026-06-26). redis_sentinel
+  gets named fields down_after_ms/failover_timeout_ms added (read-model day-2),
+  symmetric with the richer-state 002_to_003. Only for sentinel incarnations (redis_sentinel
+  non-empty); for cluster (redis_sentinel == {}) - no-op (no sentinel facts).
+
+  star BEST-EFFORT (honestly): the migration is a pure function of the old state (ADR-019: essence/
+  input/vault are FORBIDDEN in migration-CEL). Timings were not present in v4-state -> we set
+  role defaults:
+    - down_after_ms       <- 5000  (role/Redis default sentinel down-after-milliseconds);
+    - failover_timeout_ms <- 60000 (role/Redis default sentinel failover-timeout).
+  The exact value is restored on the next create-override (the operator supplies the
+  input again -> create overwrites redis_sentinel from its own compute). Forward-only
+  (down: not supported; recovery via state_history).
+
+  star DSL FORM: migration-CEL sandbox (ADR-019) - ONLY `state` + stdlib (NO merge()/
+  default()). So redis_sentinel is rebuilt as ONE flat set with a CEL ternary:
+    - cluster (size==0) -> return as-is ({}), no timings added;
+    - sentinel (non-empty) -> new map PRESERVING master_name/quorum via a has()-guard
+      + two new defaults (down_after_ms/failover_timeout_ms).
+  The rest of state (redis_config/redis_users/redis_hosts/namedfields) is untouched.
+
+  star BEST-EFFORT (master_ip): a rare remapped sentinel_only (003_to_004) could carry
+  redis_sentinel.master_ip - the rebuild does NOT carry it over (a map literal in migration-CEL
+  cannot do a conditional key, and an unconditional master_ip:'' would add an extra key to every sentinel
+  incarnation). In sentinel mode the master is chosen from the roster - the master_ip read-model
+  is unused day-2; it is restored on the next create-override. The loss is acceptable
+  (best-effort, like memory_mb in 002_to_003).
+
+transform:
+  - set:
+      path:  state.redis_sentinel
+      value: >-
+        ${ size(state.redis_sentinel) == 0
+             ? state.redis_sentinel
+             : {
+                 'master_name':         has(state.redis_sentinel.master_name) ? state.redis_sentinel.master_name : 'master',
+                 'quorum':              has(state.redis_sentinel.quorum) ? state.redis_sentinel.quorum : 0,
+                 'down_after_ms':       5000,
+                 'failover_timeout_ms': 60000
+               } }

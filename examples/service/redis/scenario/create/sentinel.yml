@@ -1,0 +1,55 @@
+# create dispatcher branch - sentinel mode (master-replica + sentinel daemon;
+# migrated from the earlier redis-cluster (master-replica) + redis-sentinel services).
+# Included from main.yml via CONDITIONAL-INCLUDE: `when: input.redis_type ==
+# 'sentinel'` sits ON the include - on a cluster run the whole file is group-dropped (tasks
+# are not physically rendered), on a sentinel run it expands into a flat list BEFORE
+# render. A per-task when on redis_type isn't needed (the gate is on the include).
+#
+# ★ sentinel - the BASE deploy branch (after removing the standalone branch on 2026-06-25):
+# replicas_per_master=0 gives a standalone equivalent (one master + sentinel daemon).
+#
+# ★ DEPLOY BODY MOVED to service-level (S1, 2026-06-27): install + config render +
+# intra-cluster REPLICAOF + SENTINEL MONITOR + health-gates live in the shared
+# scenario/redis-deploy-sentinel.yml and are included FROM HERE by file name (scenario-include
+# falls back scenario/<name>/<file> → scenario/<file>, orchestration.md §6). The same body
+# is shared with migrate_cluster/sentinel.yml - there's no duplicate.
+
+# ★ INVARIANT (see the header of redis-deploy-sentinel.yml): the includer MUST declare in its
+# compute: the set that the body reads (redis_config/conf_dir/data_dir/install/
+# modules_base_url/sentinel_directives/redis_version/tls_*). All of them are declared in
+# create/main.yml::compute (this scenario). soul-lint does NOT catch cross-file drift.
+
+# ── 0. SIZE-GUARD (topology) - keeper-side render-time assert ─────────────────────
+# The roster size MUST be exactly 1+replicas_per_master (one master + the master's replicas;
+# the sentinel daemon comes up on EVERY host, there are no separate sentinel nodes) - otherwise master
+# election (run_once by sorting soulprint.hosts) and SENTINEL MONITOR/REPLICAOF will drift apart from
+# the declared topology: extra hosts would silently become undeclared replicas, a shortfall -
+# would be a shortage of replicas (a silent declared↔actual desync). Symmetric to the size-guard in create/
+# cluster.yml (the formula there is shards*(1+replicas_per_master)) and migrate_cluster/sentinel.yml.
+# The predicate is computed KEEPER-SIDE at RENDER time - soulprint.hosts is available there (on the Soul it's
+# NOT available). false ABORTS the render with a message BEFORE any dispatch (earlier and clearer than a runtime
+# failure). assert does NOT emit a RenderedTask. It sits BEFORE the deploy-body include - a mismatch aborts
+# the run fail-fast, before package installation.
+# ★ WHY assert and not validate: the size-guard needs soulprint.hosts (roster), while the validate
+# context is INPUT-ONLY (a structural CEL barrier). replicas_per_master has default:0 →
+# int(input.replicas_per_master) without has() wrapping (see main.yml).
+# ★ PROVISION GATE (ADR-061 amendment 2026-06-29): during cloud-provision (input.provision
+# .enabled) the roster is STILL empty at pre-flight EvalAsserts (souls are created later by the
+# redis-provision.yml steps: core.cloud.created→VM→await_online→refresh_soulprint), so
+# size(soulprint.hosts)==N would fail at pre-flight BEFORE the cluster even exists.
+# The `when: !provision.enabled` gate removes the size check for the provision path -
+# the roster invariant is guaranteed THERE by redis-provision.yml's count formula (the number of VMs =
+# 1+replicas) + a blocking await_online barrier, NOT by pre-flight (symmetric to the
+# no_hosts-bypass amendment 2026-06-28). The predicate is STATIC (pure input, without register.*/
+# soulprint.self → isStaticWhen): pre-flight will compute it and, during provision, will placeholder-
+# skip the assert (NOT ErrAssertFailed). On an existing roster (provision omitted/false)
+# has(input.provision) gives false → when=true → the size-guard is active (NOT relaxed). The form -
+# is the inverse of redis-provision.yml's include-when (has(input.provision) && input.provision.enabled).
+- name: Guard sentinel roster size matches replicas
+  when: "!(has(input.provision) && input.provision.enabled)"
+  assert:
+    that:
+      - "size(soulprint.hosts) == 1 + int(input.replicas_per_master)"
+    message: "the run's roster host count must be exactly 1+replicas_per_master (one master + the master's replicas; the sentinel daemon runs on every host) - target as many souls as there are nodes in the declared topology, otherwise extra hosts would become undeclared replicas, and a shortfall would be a shortage of replicas"
+
+- include: redis-deploy-sentinel.yml

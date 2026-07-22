@@ -1,0 +1,19 @@
+name: seeded-from-default-back-compat
+description: >
+  An incarnation without seeded_from (a plain create, not a migration from an
+  external cluster) -> conservative default {source_endpoints: [], detached:
+  false}. has()-guard back-compat for a missing key (mirrors 007_to_008
+  provisioned_sids, but the guard covers the WHOLE nested object).
+
+state_before:
+  redis_type: "sentinel"
+  redis_config:
+    maxmemory: "256mb"
+
+state_after:
+  redis_type: "sentinel"
+  redis_config:
+    maxmemory: "256mb"
+  seeded_from:
+    source_endpoints: []
+    detached: false

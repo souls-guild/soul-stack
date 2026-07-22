@@ -1,0 +1,19 @@
+# Souls fixture for L3a smoke-nginx (ADR-039 § Part D).
+#
+# One soul-stub represents itself to Keeper under SID `soul-a.example.com`.
+# Corresponding status=connected - happy path for apply_runs lifecycle.
+#
+# soulprint: minimal Debian-12, needed by scenario-runner for
+# pkg_mgr/init_system resolution (see docs/soul/soulprint.md §3 - required
+# fields for core.pkg.installed / core.service.running).
+- sid: soul-a.example.com
+  status: connected
+  covens: [smoke]
+  soulprint:
+    os:
+      family: debian
+      distro: debian
+      version: "12"
+      pkg_mgr: apt
+      init_system: systemd
+    hostname: soul-a
