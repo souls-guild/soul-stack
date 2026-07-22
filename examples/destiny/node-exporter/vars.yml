@@ -1,0 +1,33 @@
+# vars.yml — destiny-locals for node-exporter (docs/destiny/vars.md): invariants,
+# THE SAME for all incarnations and NOT overridable from outside (not input — this is
+# the "contract vs internals" boundary). Resolved ONCE per destiny pass
+# (per-host) before tasks; a reference to input.* is allowed (vars are computed AFTER
+# input validation). The file is committed to the destiny git repo — no secrets here.
+
+# ── node_exporter systemd service name (directive "service name in vars, EVERYWHERE") ──
+# INVARIANT (vars, not input): the main unit name is the contract between the unit file,
+# core.service.running/restarted and the template's SyslogIdentifier. NOTE: this is the SERVICE
+# name (systemd) and the binary name — the values matching is coincidental; collector timer
+# names (node-exporter-smartmon.timer etc.) — SEPARATE units, not derived from this var.
+service_name: node_exporter
+
+# ── Artifact paths in the temp directory (directive "download path in vars") ─────
+# INVARIANT (vars, not input): the tarball is downloaded to /tmp and extracted alongside;
+# /tmp is fixed staging, no reason for the operator to change it. Names depend on
+# input.version (vars are computed after input validation). install.yml takes
+# ${ vars.tarball_path } (fetch.path / extract.path) and ${ vars.extract_dir }
+# (extract.dest) — a single source of truth for both derived paths.
+tarball_path: "${ '/tmp/node_exporter-' + input.version + '.tar.gz' }"
+extract_dir:  "${ '/tmp/node_exporter-' + input.version }"
+
+# ── node_exporter binary path (single source of truth for ALL references) ─────────────
+# Target path of the installed binary. Tasks take ${ vars.bin_path }, and the unit template
+# reads the file-var DIRECTLY as `.vars.bin_path` (render_context.vars carries file-vars,
+# passthrough via params.vars is not needed).
+bin_path: "${ input.bin_dir + '/node_exporter' }"
+
+# src_bin — binary path INSIDE the extracted release (vars.extract_dir, not a
+# freshly built /tmp path): inside the tarball directory there is a subdirectory
+# node_exporter-<version>.linux-<arch>/. arch — soulprint.self.os.arch (amd64/arm64,
+# proto soulprint.proto). service.yml takes ${ vars.src_bin } as core.file.present.src.
+src_bin: "${ vars.extract_dir + '/node_exporter-' + input.version + '.linux-' + soulprint.self.os.arch + '/node_exporter' }"

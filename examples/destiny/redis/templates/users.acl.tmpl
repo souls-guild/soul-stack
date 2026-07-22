@@ -1,0 +1,45 @@
+{{/*
+  users.acl - external Redis ACL file (aclfile in redis.conf). Go text/template strict
+  (ADR-010). .vars.users - MAP name→{perms, state, password}, assembled by scenario; password
+  is resolved keeper-side from Vault (ADR-012).
+
+  ORDER DETERMINISM (templating.md §6): range over a MAP walks keys SORTED →
+  lines are stable across runs (no false change → no extra onchanges restart,
+  cascading across a rolling-restart fleet). Passing a list would inherit the non-deterministic
+  iteration order of a Go map (this was exactly the tiling-critical bug).
+
+  Line format (Redis ACL convention):
+    user <name> <state> #<sha256(password)> <perms>
+  The password is written as a HASH (#<sha256hex>, sprig sha256sum), NOT plaintext: even if the
+  file leaks, the original password cannot be recovered; Redis accepts #<hash> the same as >password.
+
+  ★ default_admin REDESIGN (2026-06-30): requirepass is DEPRECATED and removed from redis.conf -
+  all authentication (incl. internal: replication/cluster/sentinel/health-PING) goes through the
+  SYSTEM user default_admin (`~* &* +@all`). default_admin comes from the MAP .vars.users via
+  range, like the other system users (replica/monitoring/sentinel/haproxy) - it is added to
+  essence.system_acl_users, scenario merges it into users with its OWN Vault password. The former
+  unconditional line `user default on #<requirepass-hash> ~* &* +@all` is REMOVED (along with
+  .vars.password, which fed it - it is no longer passed).
+
+  ★ default (built-in Redis user) → `off`, IF the operator did NOT declare it in input.users:
+  we no longer need the built-in default (its role is now taken by default_admin), but with
+  `aclfile` set, Redis would otherwise fall back to the built-in `user default on nopass ~* &*
+  +@all` (when there is no default line in the aclfile) → with `protected-mode yes` this is open
+  passwordless access. So if `default` did NOT arrive in .vars.users (the operator did not
+  declare it) - we render an EXPLICIT `user default off` (default disabled, safe default). If the
+  operator DID declare default in input.users - it landed in .vars.users (operator-extra) and is
+  rendered below via range as a regular user (its state/perms), and the explicit off-line is NOT
+  added (`index` gate: `index .vars.users "default"` on a missing MAP key gives nil with no error
+  in strict-mode, built-in text/template, same as `index .vars.config "cluster-enabled"` in
+  redis.conf.tmpl; hasKey is NOT in the sprig allowlist - shared/tmpl/sprig.go).
+
+  Other users - from the MAP .vars.users (system default_admin/replica/monitoring/sentinel/
+  haproxy + operator-extra, assembled by scenario). The minimal valid file is default_admin
+  (system, always present) + `user default off`.
+*/}}
+{{- if not (index .vars.users "default") }}
+user default off
+{{- end }}
+{{- range $name, $u := .vars.users }}
+user {{ $name }} {{ $u.state }} #{{ $u.password | sha256sum }} {{ $u.perms }}
+{{- end }}

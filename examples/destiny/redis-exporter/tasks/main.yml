@@ -1,0 +1,107 @@
+# tasks/main.yml — entry point of destiny redis-exporter (flat list of module tasks).
+# Sees ONLY its own input: (isolation, ADR-009).
+#
+# Install from release — the same "triple" as node-exporter (url.fetched →
+# archive.extracted → install). The difference is in the tarball name layout of
+# GitHub Releases for redis_exporter: the file name and the directory inside it
+# carry a `v` prefix before the version
+# (redis_exporter-v<v>.linux-<arch>).
+#
+# Connection to Redis — via a UNIX SOCKET (--redis.addr=unix://<socket>), not TCP.
+# Service account — DynamicUser=yes (production convention §2, hybrid rule): redis_exporter
+# is stateless, has no owned data-dir, manual core.user/core.group steps are not created.
+# Group access to the socket (unixsocketperm 770, owner redis:redis) is given to the
+# transient user via SupplementaryGroups=redis in the unit (see templates/...service.tmpl) —
+# DynamicUser is compatible with statically-named supplementary groups. Ownership rights
+# are NOT given to redis exporter. The redis group already exists — it is created as a
+# side effect of the redis-server PACKAGE (step core.pkg.installed in destiny redis-single:
+# the package's postinst creates the redis user/group on Debian/Ubuntu/RHEL), not an
+# explicit core.group step.
+# Order is guaranteed by the caller: apply:destiny redis-single → redis-exporter.
+
+- name: Fetch redis_exporter tarball
+  module: core.url.fetched
+  params:
+    url: "${ input.base_url + '/v' + input.version + '/redis_exporter-v' + input.version + '.linux-' + input.arch + '.tar.gz' }"
+    path: "${ '/tmp/redis_exporter-' + input.version + '.tar.gz' }"
+    checksum: "${ input.sha256 }"
+    mode: "0644"
+    # SSRF-guard opt-out for private-resolve base_url (pattern from redis destiny.yml install.allow_private).
+    allow_private: "${ input.allow_private }"
+
+- name: Extract redis_exporter tarball
+  module: core.archive.extracted
+  params:
+    path: "${ '/tmp/redis_exporter-' + input.version + '.tar.gz' }"
+    dest: "${ '/tmp/redis_exporter-' + input.version }"
+
+# Place the redis_exporter binary from the extracted directory into bin_dir.
+# core.file.present supports src: — copies the content of a regular file from the host
+# (docs/module/core/file: src is mutually exclusive with content, absolute path, Lstat
+# check for regular-file, atomic write). src carries the `v` prefix in the directory name
+# inside the tarball (redis_exporter-v<v>.linux-<arch>) — GitHub Releases layout.
+#
+# Idempotency — native, from core.file.present itself: changed=true ONLY if the
+# target file is missing or its sha256 differs from the sha256 of src (or mode/owner
+# drifts). This is strictly better than the old core.cmd.shell creates:-guard, which
+# skipped install for ANY existing file → a version upgrade did NOT reinstall the
+# binary (latent bug). core.file.present reinstalls strictly on byte changes →
+# an honest changed on upgrade. register — the restart onchanges below reacts to a
+# binary change the same way as to a unit-file change.
+- name: Install redis_exporter binary
+  module: core.file.present
+  register: redis_exporter_bin
+  params:
+    path: "${ input.bin_dir + '/redis_exporter' }"
+    src: "${ '/tmp/redis_exporter-' + input.version + '/redis_exporter-v' + input.version + '.linux-' + input.arch + '/redis_exporter' }"
+    mode: "0755"
+    owner: root
+    group: root
+
+# There is deliberately NO dedicated system user/group. redis_exporter is a
+# stateless daemon without an owned data-dir, so by the hybrid rule of the
+# production convention (docs/destiny/production-conventions.md §2) the service
+# account is given by systemd itself via DynamicUser=yes in the unit. Group access
+# to the Redis socket (770) is given to the transient user via
+# SupplementaryGroups=redis (see template) — DynamicUser is compatible with
+# statically-named supplementary groups, no manual core.user is needed. The redis
+# group itself is created as a side effect of the redis-server package (postinst in
+# core.pkg.installed of destiny redis-single), not by a separate core.group step.
+
+# systemd unit. redis_addr is assembled by CEL from 'unix://' + input.redis_socket —
+# the same socket as unixsocket in redis.conf. register, so the unit restarts on
+# file change.
+- name: Render redis_exporter systemd unit
+  module: core.file.rendered
+  register: redis_exporter_unit
+  params:
+    path: /etc/systemd/system/redis_exporter.service
+    template: templates/redis_exporter.service.tmpl
+    mode: "0644"
+    owner: root
+    group: root
+    vars:
+      bin_dir:    "${ input.bin_dir }"
+      listen:     "${ input.listen }"
+      redis_addr: "${ 'unix://' + input.redis_socket }"
+      password:   "${ input.redis_password }"
+      # ACL username (--redis.user): empty → flag omitted (requirepass model), set →
+      # AUTH under this user (ACL instance without requirepass, otherwise WRONGPASS).
+      redis_user: "${ input.redis_user }"
+      # passthrough flags for redis_exporter (--check-keys=..., --web.config.file=...
+      # etc.): go into the template as a list, range appends each as a separate
+      # ExecStart token. The whole cell = one ${…} → native list (ADR-010).
+      extra_args: "${ input.extra_args }"
+
+- name: Ensure redis_exporter is running and enabled at boot
+  module: core.service.running
+  params:
+    name: redis_exporter
+    enabled: true
+
+- name: Restart redis_exporter because the unit or binary changed
+  module: core.service.restarted
+  onchanges: [redis_exporter_unit, redis_exporter_bin]
+  timeout: 30s
+  params:
+    name: redis_exporter

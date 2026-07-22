@@ -1,0 +1,18 @@
+name: preserves-existing-sids
+description: >
+  Idempotency: an incarnation whose provisioned_sids is ALREADY set (a repeat
+  migration run / inline-seed) keeps the value as-is (the has()-guard
+  returns the current value, it does not overwrite it with the [] default).
+  Mirrors redis 007_to_008 preserves-existing-sids.
+
+state_before:
+  df_version: "1.39.0"
+  provisioned_vm_ids: ["i-aaa111", "i-bbb222"]
+  provisioned_provider: "example-prod"
+  provisioned_sids: ["vm-1.example.com", "vm-2.example.com"]
+
+state_after:
+  df_version: "1.39.0"
+  provisioned_vm_ids: ["i-aaa111", "i-bbb222"]
+  provisioned_provider: "example-prod"
+  provisioned_sids: ["vm-1.example.com", "vm-2.example.com"]

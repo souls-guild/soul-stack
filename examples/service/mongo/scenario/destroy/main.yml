@@ -1,0 +1,87 @@
+name: destroy
+description: >-
+  Teardown MongoDB: remove from the incarnation's host what create put there — the systemd
+  service + config artifacts — BEFORE the incarnation is deleted. A lifecycle scenario (NOT
+  runnable from the Run form — a terminal flow DELETE /v1/incarnations/{name}, like create — bootstrap):
+  keeper treats the name `destroy` as a lifecycle phase (scenario.LifecycleScenarioNames), running in
+  TerminalDestroy mode.
+
+  * PILOT (symmetry with dragonfly/destroy): create does NOT provision a VM (deploy onto existing hosts,
+  no provisioned_* in state) → cloud-teardown has NOTHING to remove, no keeper-registry cascade needed
+  (the hosts aren't ours, they remain Souls). So teardown is Soul-side: stop mongod + remove
+  our /etc artifacts. cloud-provision (default-on + cascade following the redis pattern) — NEXT slice.
+
+  * TEARDOWN BOUNDARY (conservative MVP — remove "systemd + files", NOT data/general-purpose
+  packages):
+    - the mongod service is STOPPED (core.service.stopped, idempotent — no service → no-op);
+    - MongoDB is REMOVED according to the install METHOD (essence.install_method, static gate → group-drop):
+      the binary branch removes /usr/local/bin/mongod + its own unit file; the package branch removes the distro
+      package mongodb-org (core.pkg.absent — the package cleanly takes its systemd unit with it);
+    - OUR MongoDB config artifacts in ${conf_dir} and /etc (mongod.conf, sysctl drop-in)
+      are REMOVED — they are always ours, safe on both branches;
+    - * data_dir (mongod's data — the DB, collections!) and log_dir are NOT TOUCHED (removing data is
+      destructive and irreversible; removing shared packages would affect neighboring services). The distro
+      user mongodb is NOT removed. This is a deliberate MVP boundary — extending the "depth" (purging data) is
+      a separate decision.
+
+  * state_changes are DELIBERATELY ABSENT: destroy is terminal — the incarnation is deleted
+  (auto_destroy), so clearing state is pointless (it disappears with the incarnation). Mirrors create,
+  where state is POPULATED; here we leave it untouched.
+
+  Targeting — the whole incarnation (on omitted, ADR-008/009): teardown runs on EVERY host of the
+  incarnation (Soul-side, not keeper — host operations on systemd/files).
+
+# ── Operator input contract ────────────────────────────────────────────────
+# Empty: destroy accepts no operator input. What to remove — the install method and conf_dir
+# come from essence (install_method/conf_dir), not an operator choice at teardown time. The operator
+# only initiates the deletion (DELETE /v1/incarnations/{name}).
+input: {}
+
+tasks:
+  # ── 1. Stop mongod (idempotent) ──────────────────────────────────────
+  # core.service.stopped — brings the unit to "not running". No service (already removed / never installed)
+  # → no-op. Stop BEFORE removing files/package: removing config under a running daemon is a race.
+  - name: Stop the mongod service
+    module: core.service.stopped
+    params:
+      name: mongod
+
+  # ── 2a. Remove MongoDB — BINARY branch (Nexus tarball install) ────────────────
+  # Static gate (essence.install_method only → isStaticWhen) → render-phase GROUP-DROP: on
+  # package incarnations these tasks are physically excluded from the plan. binary-create put the binary in
+  # /usr/local/bin and ITS OWN unit in /etc/systemd/system — both ours, remove them.
+  - name: Remove the mongod binary (binary install)
+    module: core.file.absent
+    when: "default(essence.install_method, 'binary') == 'binary'"
+    params:
+      path: /usr/local/bin/mongod
+
+  - name: Remove the mongod systemd unit (binary install)
+    module: core.file.absent
+    when: "default(essence.install_method, 'binary') == 'binary'"
+    params:
+      path: /etc/systemd/system/mongod.service
+
+  # ── 2b. Remove MongoDB — PACKAGE branch (distro package mongodb-org) ─────────────
+  # Static gate (group-drop on binary incarnations). package-create installed the distro package
+  # mongodb-org with its own systemd unit — remove it via the PACKAGE (core.pkg.absent), the package
+  # cleanly takes its unit with it (no separate daemon-reload needed — apt/dpkg reconciles systemd itself).
+  - name: Remove the mongodb distribution package (package install)
+    module: core.pkg.absent
+    when: "default(essence.install_method, 'binary') != 'binary'"
+    params:
+      name: mongodb-org
+
+  # ── 3. Remove OUR MongoDB config artifacts (both branches, always ours) ─────────
+  # ${conf_dir}/mongod.conf + /etc sysctl drop-in. conf_dir from essence (default /etc/mongodb).
+  # core.file.absent is idempotent (no file → no-op). * data_dir/log_dir are NOT touched (data +
+  # logs; removing data is irreversible — MVP boundary, see header).
+  - name: Remove the mongod.conf
+    module: core.file.absent
+    params:
+      path: "${ default(essence.conf_dir, '/etc/mongodb') + '/mongod.conf' }"
+
+  - name: Remove the mongo sysctl drop-in
+    module: core.file.absent
+    params:
+      path: /etc/sysctl.d/30-mongodb.conf

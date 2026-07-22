@@ -1,0 +1,35 @@
+{{/*
+  systemd unit that disables Transparent Huge Pages (THP) for Redis. Static unit (.vars
+  is empty). Go text/template strict (ADR-010).
+
+  WHY. Redis officially recommends disabling THP: with THP enabled, the
+  copy-on-write fork (RDB snapshot / AOF rewrite) touches large pages wholesale,
+  causing latency spikes and bloating memory. Disabling it happens at the host level, before
+  redis-server starts, so it's set up as a separate oneshot unit ahead of the service.
+
+  Type=oneshot + RemainAfterExit=yes: the unit writes `never` to sysfs once and
+  is considered "active" after it exits. ExecStart with a leading `-` (`ExecStart=-...`):
+  on kernels without THP sysfs files, the minus silences the error so the unit doesn't fail
+  the boot (on such kernels THP is disabled anyway). DefaultDependencies=no
+  + After=sysinit.target/local-fs.target: apply this as early as possible, before redis.
+
+  We deliberately do NOT set a Before/RequiredBy gate on redis-server. destiny is mode-agnostic
+  and doesn't know the main service's name in each mode; the "THP before Redis" ordering
+  is guaranteed by task position in tasks/main.yml (the unit's enable+start comes BEFORE
+  the main brick's service.running, based on trailing placement,
+  while the oneshot's own WantedBy=multi-user.target catches up on boot).
+*/}}
+[Unit]
+Description=Disable Transparent Huge Pages (THP) for Redis
+DefaultDependencies=no
+After=sysinit.target local-fs.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=-/bin/sh -c 'echo never > /sys/kernel/mm/transparent_hugepage/enabled'
+ExecStart=-/bin/sh -c 'echo never > /sys/kernel/mm/transparent_hugepage/defrag'
+ExecStart=-/bin/sh -c 'echo 0 > /sys/kernel/mm/transparent_hugepage/khugepaged/defrag'
+
+[Install]
+WantedBy=multi-user.target

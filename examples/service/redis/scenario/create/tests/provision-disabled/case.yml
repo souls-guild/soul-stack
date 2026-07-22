@@ -1,0 +1,111 @@
+# L0 test for provision (ADR-061, Variant A) — provision is EXPLICITLY DISABLED
+# (input.provision.enabled=false). ★ With default-on (decision 2026-06-30) an OMITTED section
+# means ENABLED (top-level default {enabled: true}) — disabling is now ONLY via explicit
+# enabled: false. Guard: include provision.yml is gated on `has(input.provision) &&
+# input.provision.enabled` (main.yml tasks). enabled=false → the whole provision.yml targets
+# no one; its keeper-side steps (core.cloud.created + core.soul.registered) are
+# ABSENT from the plan (group-drop via include-when), and the read-model provisioned_vm_ids/provisioned_provider
+# get the conservative default ([] / '') via the state_changes ternary (gated on input.provision.enabled).
+#
+# Paired with provision-default-on (section omitted there → default-on → cloud steps present)
+# and provision-enabled-sentinel/cluster (explicit enabled: true). This case proves that
+# an explicit enabled: false runs the deploy on the existing roster, with no extra cloud steps emitted.
+name: provision explicitly disabled drops cloud-create and onboarding tasks
+
+fixtures:
+  default_destiny_source: "file://../../destiny/{name}"
+  hosts:
+    - sid: node-solo.example.com
+      covens: [create]
+      soulprint:
+        network: { primary_ip: 10.0.0.5 }
+        os: { arch: amd64 }
+  vault:
+    secret/redis/create:
+      password: s3cr3t-redis-pass-create
+    # ★ default_admin REDESIGN (2026-06-30): default_admin is the system user
+    # for intra-cluster AUTH (deploy's auth_pass/PING steps read it via the users/<name> branch).
+    secret/redis/create/users/default_admin:
+      password: default-admin-secret-pass
+    secret/redis/create/users/replica:
+      password: replica-sys-secret-pass
+    secret/redis/create/users/monitoring:
+      password: monitoring-sys-secret-pass
+    secret/redis/create/users/sentinel:
+      password: sentinel-sys-secret-pass
+    secret/redis/create/users/haproxy:
+      password: haproxy-sys-secret-pass
+  essence:
+    # install_method is in essence (author-context, 2026-06-28): the install method
+    # is NOT operator-input. compute.install reads default(essence.install_method, 'binary').
+    install_method: package
+    redis_type: sentinel
+    sentinel_master_name: master
+    modules_base_url: "https://artifacts.example.com/redis/modules"
+    memory_reserve_percent: 75
+    persistence_presets:
+      rdb:
+        save: "900 1 300 10 60 10000"
+        appendonly: "no"
+    redis_config:
+      maxmemory:        "256mb"
+      maxmemory-policy: allkeys-lru
+      maxclients:       10000
+      timeout:          300
+    system_acl_users:
+      default_admin: "~* &* +@all"
+      replica:    "+psync +replconf +ping"
+      monitoring: "-@all +@connection +client +ping +info +config|get +cluster|info +slowlog +latency +memory +select +command|count +command|docs"
+      sentinel:   "allchannels +multi +slaveof +ping +exec +subscribe +config|rewrite +role +publish +info +client|setname +client|kill +script|kill"
+      haproxy:    "-@all +auth +client|getname +client|id +client|setname +command +hello +ping +role +info +cluster|info"
+    system_acl_users_sentinel:
+      default_admin: "allchannels allkeys +@all"
+      monitoring: "-@all +@connection -command +client -hello +info -auth +sentinel|masters +sentinel|replicas +sentinel|slaves +sentinel|sentinels +sentinel|ckquorum"
+      sentinel:   "allchannels -@all +auth +client|getname +client|id +client|setname +command +hello +ping +sentinel|is-master-down-by-addr +publish +role +sentinel|get-master-addr-by-name +sentinel|master +sentinel|myid +sentinel|replicas +sentinel|sentinels"
+      haproxy:    "-@all +auth +client|getname +client|id +client|setname +command +hello +ping +role +sentinel|get-master-addr-by-name +sentinel|master +sentinel|myid +sentinel|replicas +sentinel|sentinels"
+  input:
+    redis_type: sentinel
+    version: "7.4.1"
+    # install_method=package EXPLICITLY: this case is about the provision-gate, not install. The default
+    # redesign's binary → package branch (assert doesn't check install — the provision branch matters).
+    # replicas_per_master=0 EXPLICITLY (default of redesign 2): single-host (node-solo), size-guard
+    # sentinel = 1+0 = 1 host.
+    replicas_per_master: 0
+    persistence: rdb
+    # ★ provision is EXPLICITLY disabled (default-on: an omitted section = ENABLED, disabling
+    # only via explicit enabled: false) → include provision.yml group-drop.
+    provision:
+      enabled: false
+
+assert:
+  task_present:
+    # The run rolls the usual sentinel branch on the existing roster: redis.conf
+    # renders (disambiguator — path). Proves that a missing provision doesn't
+    # break the main deploy.
+    - module: core.file.rendered
+      params_subset:
+        path: /etc/redis/redis.conf
+
+    # ★ Synthesis from service.yml::modules[] is present even without provision (ADR-065);
+    # ref comes from the manifest record.
+    - module: core.module.installed
+      params_subset:
+        name: community.redis
+        ref: v1.0.0
+
+  task_absent:
+    # provision.yml steps are ABSENT (include-when has(input.provision) false →
+    # group-drop). core.cloud.created — VM creation; core.soul.registered — the
+    # onboarding barrier. Neither is emitted without provision.
+    - module: core.cloud.created
+    - module: core.soul.registered
+
+  state_changes:
+    redis_type: sentinel
+    redis_version: "7.4.1"
+    # read-model: no VMs were provisioned by this run → conservative default.
+    # provisioned_sids=[] covers the non-provision branch of the guard (register.provision
+    # doesn't exist on group-drop → the ternary short-circuits, sids are not read).
+    provisioned_vm_ids: []
+    provisioned_sids: []
+    provisioned_provider: ""

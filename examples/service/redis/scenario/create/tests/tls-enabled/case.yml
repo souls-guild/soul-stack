@@ -1,0 +1,270 @@
+# L0-trial (Trial, ADR-023): TLS in sentinel single-host mode. TLS is turned on FROM
+# ESSENCE (essence.tls_enable=true,
+# the operator didn't set input.tls) — back-compat: essence stays the default, input.tls is opt.
+# The main guard of this slice — when TLS is enabled:
+#   1. PEM files /etc/redis/tls/{redis.crt,redis.key,ca.crt} are laid down by
+#      core.file.present (mode 0600, owner redis), content = vault(tls.<x>_ref) →
+#      the WHOLE PEM in the content cell of the destiny task (NOT .tmpl, vault() in the cell);
+#   2. TLS directives (tls-port/tls-cert-file/tls-key-file/tls-ca-cert-file/
+#      tls-replication) end up in the merged config (ranged into redis.conf);
+#   3. tls_only → `port 0` in config (plain closed);
+#   4. health-gate PING carries tls=true + addr on tls_port + tls_ca (the plugin MUST
+#      connect over TLS, since plain is closed).
+# cert/CA/port — HOST INVARIANT (one per cluster) → via apply.input. PEM content
+# = vault(ref) in the CELL ITSELF → seal marks it sealed with the vault layer (masking in state/
+# error_summary). Masking is proven by a separate case tls-pem-sealed-masking.
+#
+# PRESENCE form (migrated from positional 2026-06-24): tasks are identified by
+# module + params_subset; indexes aren't compared (brittle). The three PEM tasks
+# (cert/key/ca) are the same module core.file.present, disambiguated by path
+# (/etc/redis/tls/{redis.crt,redis.key,ca.crt}); each carries ITS OWN content (PEM from
+# vault) + mode 0600 — a guard on both permissions and having the right material in the right file.
+name: tls enabled renders PEM files and TLS directives, port 0 on tls_only
+
+fixtures:
+  default_destiny_source: "file://../../destiny/{name}"
+  hosts:
+    - sid: node-solo.example.com
+      covens: [create]
+      soulprint:
+        network: { primary_ip: 10.0.0.5 }
+        os: { arch: amd64 }
+  # Vault mock: requirepass + TLS PEM material (cert/key/ca under secret/services/redis/tls).
+  # scenario resolves them from essence.tls_*_ref (the author's trusted path).
+  vault:
+    secret/redis/create:
+      password: s3cr3t-redis-pass-create
+    # Per-user secrets of system users (secret/redis/<inc>/users/<name>#password) —
+    # resolved keeper-side by vault() when merging system_acl_users into apply.input.users.
+    # ★ default_admin REDESIGN (2026-06-30): default_admin — the system user for
+    # intra-cluster AUTH (auth_pass/PING deploy steps read it via the users/<name> branch).
+    secret/redis/create/users/default_admin:
+      password: default-admin-secret-pass
+    secret/redis/create/users/replica:
+      password: replica-sys-secret-pass
+    secret/redis/create/users/monitoring:
+      password: monitoring-sys-secret-pass
+    secret/redis/create/users/sentinel:
+      password: sentinel-sys-secret-pass
+    secret/redis/create/users/haproxy:
+      password: haproxy-sys-secret-pass
+    secret/services/redis/tls:
+      cert: "-----BEGIN CERTIFICATE-----\nSERVERCERT\n-----END CERTIFICATE-----"
+      key:  "-----BEGIN PRIVATE KEY-----\nSERVERKEY\n-----END PRIVATE KEY-----"
+      ca:   "-----BEGIN CERTIFICATE-----\nCACERT\n-----END CERTIFICATE-----"
+  essence:
+    # install_method — in essence (author-context, 2026-06-28): the install method is
+    # NOT operator-input. compute.install reads default(essence.install_method, 'binary').
+    install_method: package
+    redis_type: sentinel
+    sentinel_master_name: master
+    # ★ Redesign: a substrate of per-master sentinel defaults (under input.sentinel_master_settings).
+    sentinel_master_defaults:
+      down-after-milliseconds: "5000"
+      failover-timeout:        "60000"
+    modules_base_url: "https://artifacts.example.com/redis/modules"
+    memory_reserve_percent: 75
+    persistence_presets:
+      rdb:
+        save: "900 1 300 10 60 10000"
+        appendonly: "no"
+    redis_config:
+      maxmemory:        "256mb"
+      maxmemory-policy: allkeys-lru
+      maxclients:       10000
+      timeout:          300
+    # ★ #5: TLS parameters (port, Vault PEM paths) — in essence. The channel mode is set by
+    # the operator enum input.connection_mode (tls = TLS-only, plain closed).
+    tls_port:   7379
+    tls_cert_ref: "secret/services/redis/tls#cert"
+    tls_key_ref:  "secret/services/redis/tls#key"
+    tls_ca_ref:   "secret/services/redis/tls#ca"
+
+    # System ACL users of redis-server + the sentinel daemon (1:1 from essence/_default.yaml).
+    # BOTH ARE MANDATORY: the guard in create/sentinel.yml (assert 1b) aborts render if
+    # either set is empty (silent fail-open is unacceptable — without them replication/sentinel↔redis
+    # AUTH would break).
+    system_acl_users:
+      default_admin: "~* &* +@all"
+      replica:    "+psync +replconf +ping"
+      monitoring: "-@all +@connection +client +ping +info +config|get +cluster|info +slowlog +latency +memory +select +command|count +command|docs"
+      sentinel:   "allchannels +multi +slaveof +ping +exec +subscribe +config|rewrite +role +publish +info +client|setname +client|kill +script|kill"
+      haproxy:    "-@all +auth +client|getname +client|id +client|setname +command +hello +ping +role +info +cluster|info"
+    system_acl_users_sentinel:
+      default_admin: "allchannels allkeys +@all"
+      monitoring: "-@all +@connection -command +client -hello +info -auth +sentinel|masters +sentinel|replicas +sentinel|slaves +sentinel|sentinels +sentinel|ckquorum"
+      sentinel:   "allchannels -@all +auth +client|getname +client|id +client|setname +command +hello +ping +sentinel|is-master-down-by-addr +publish +role +sentinel|get-master-addr-by-name +sentinel|master +sentinel|myid +sentinel|replicas +sentinel|sentinels"
+      haproxy:    "-@all +auth +client|getname +client|id +client|setname +command +hello +ping +role +sentinel|get-master-addr-by-name +sentinel|master +sentinel|myid +sentinel|replicas +sentinel|sentinels"
+  input:
+    # ★ provision is disabled (default-on: an omitted section = ENABLED; this case deploys onto
+    # an ALREADY READY roster, cloud-create isn't needed) → include redis-provision.yml group-drop.
+    provision:
+      enabled: false
+    redis_type: sentinel
+    # version is MANDATORY: the enum of builds shipped to Nexus (major < 8 → the version-gate
+    # for modules isn't active). 7.4.1 — the 7.x series, same as the former distro pin 7.2.4.
+    version: "7.4.1"
+    # install_method=package EXPLICITLY: assert expects install.method=package and redis.conf without
+    # binary binaries (this case is about TLS, not about the install method).
+    persistence: rdb
+    # single-host (1 host) → 0 replicas (default of redesign 2): sentinel size-guard = 1+0.
+    replicas_per_master: 0
+    # ★ Redesign: connection_mode=tls — TLS-only (plain closed, port 0). Replaces
+    # the former tls_enabled=true + tls_keep_plain=false.
+    connection_mode: tls
+
+assert:
+  task_present:
+    # TLS dir (core.directory.present, when tls.enable → ACTIVE): /etc/redis/tls.
+    - module: core.directory.present
+      params_subset:
+        path: /etc/redis/tls
+        owner: redis
+        group: redis
+        mode: "0750"
+
+    # TLS server cert: core.file.present, content = vault(tls.cert_ref) → the WHOLE PEM
+    # in the content cell (NOT .tmpl/render_context: PEM via vault() in the cell,
+    # seal masking with the vault layer). Disambiguator from key/ca — path.
+    - module: core.file.present
+      params_subset:
+        path: /etc/redis/tls/redis.crt
+        content: "-----BEGIN CERTIFICATE-----\nSERVERCERT\n-----END CERTIFICATE-----"
+        mode: "0600"
+        owner: redis
+        group: redis
+
+    # TLS private key: core.file.present, content = vault(tls.key_ref) → the secret PEM
+    # in the cell (sealed with the vault layer). Disambiguator from cert/ca — path.
+    - module: core.file.present
+      params_subset:
+        path: /etc/redis/tls/redis.key
+        content: "-----BEGIN PRIVATE KEY-----\nSERVERKEY\n-----END PRIVATE KEY-----"
+        mode: "0600"
+        owner: redis
+        group: redis
+
+    # TLS CA cert: core.file.present, content = vault(tls.ca_ref). Disambiguator
+    # from cert/key — path.
+    - module: core.file.present
+      params_subset:
+        path: /etc/redis/tls/ca.crt
+        content: "-----BEGIN CERTIFICATE-----\nCACERT\n-----END CERTIFICATE-----"
+        mode: "0600"
+        owner: redis
+        group: redis
+
+    # redis.conf: the merged config carries the TLS directives + port 0 (tls_only). CRITICAL:
+    # `port: "0"` — the only-TLS guarantee (plain closed). Disambiguator from users.acl/
+    # hardening — path.
+    - module: core.file.rendered
+      params_subset:
+        path: /etc/redis/redis.conf
+        render_context:
+          vars:
+            conf_dir: /etc/redis
+            data_dir: /var/lib/redis
+            port: 6379
+            run_dir: /var/run/redis
+            log_dir: /var/log/redis
+            loadmodules:
+              - /var/lib/redis/modules/redisbloom.so
+              - /var/lib/redis/modules/rejson.so
+              - /var/lib/redis/modules/redisearch.so
+              - /var/lib/redis/modules/redistimeseries.so
+            config:
+              # ★ default_admin REDESIGN: replica→master AUTH (masteruser/
+              # masterauth) comes in as ORDINARY config directives (the sentinel
+              # deploy-body merges them in via vault()-in-cell) → redis.conf ranges
+              # over them like any other directive → statically survives a restart.
+              masteruser:       "default_admin"
+              masterauth:       "default-admin-secret-pass"
+              # port 0 — plain closed (tls_only). CRITICAL: the only-TLS guarantee.
+              port: "0"
+              tls-port: "7379"
+              tls-cert-file: /etc/redis/tls/redis.crt
+              tls-key-file: /etc/redis/tls/redis.key
+              tls-ca-cert-file: /etc/redis/tls/ca.crt
+              tls-replication: "yes"
+              tls-auth-clients: "no"
+              # ordinary directives are still there too (TLS didn't push them out).
+              maxmemory: "256mb"
+              maxmemory-policy: allkeys-lru
+              maxclients: 10000
+              timeout: 300
+              save: "900 1 300 10 60 10000"
+              appendonly: "no"
+          self:
+            sid: node-solo.example.com
+            covens: [create]
+            choirs: []
+            # traits — a registry projection (ADR-060), an empty object without labels.
+            traits: {}
+            role: ""
+            network:
+              primary_ip: 10.0.0.5
+            os:
+              arch: amd64
+          role: ""
+          essence: {}
+
+    # PING health-gate: under tls_only the plugin goes over TLS (tls=true, addr on tls_port,
+    # tls_ca = CA-PEM from vault). Proves "the plugin MUST use TLS". cluster/sentinel
+    # PING — placeholder-skip; disambiguator addr/args.
+    - module: community.redis.command
+      params_subset:
+        addr: "127.0.0.1:7379"
+        username: default_admin
+        password: default-admin-secret-pass
+        tls: true
+        tls_ca: "-----BEGIN CERTIFICATE-----\nCACERT\n-----END CERTIFICATE-----"
+        args: ["PING"]
+
+  # DRIFT-GUARD: redis_config in state MUST be bit-for-bit equal to apply.input.config
+  # (redis.conf above), including the TLS directives + port 0 (host invariant → written to state).
+  state_changes:
+    redis_type: sentinel
+    redis_version: "7.4.1"
+    connection_mode: tls
+    redis_config:
+      port: "0"
+      tls-port: "7379"
+      tls-cert-file: /etc/redis/tls/redis.crt
+      tls-key-file: /etc/redis/tls/redis.key
+      tls-ca-cert-file: /etc/redis/tls/ca.crt
+      tls-replication: "yes"
+      tls-auth-clients: "no"
+      maxmemory: "256mb"
+      maxmemory-policy: allkeys-lru
+      maxclients: 10000
+      timeout: 300
+      save: "900 1 300 10 60 10000"
+      appendonly: "no"
+    redis_users: []
+    redis_hosts: []
+    # ★ Redesign: failover timings live in master_settings (essence.sentinel_master_defaults);
+    # settings — global sentinel directives (not set → {}).
+    redis_sentinel:
+      master_name: master
+      quorum: 0
+      master_settings:
+        down-after-milliseconds: "5000"
+        failover-timeout: "60000"
+      settings: {}
+    # ── namedfields (read-model, v3): from the same compute.tls_* as the TLS block of redis_config.
+    # tls enabled+only from essence → enable/only true, port 7379, refs from essence.
+    tls:
+      enable:   true
+      only:     true
+      port:     7379
+      cert_ref: "secret/services/redis/tls#cert"
+      key_ref:  "secret/services/redis/tls#key"
+      ca_ref:   "secret/services/redis/tls#ca"
+    persistence: rdb
+    memory_mb: 0
+    maxmemory_policy: ""
+    modules: [bloom, json, search, timeseries]
+    sysctl_settings: {}
+    shards: 0
+    replicas: 0
+    sentinel_quorum: 0

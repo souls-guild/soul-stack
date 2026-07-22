@@ -1,0 +1,71 @@
+package cloud
+
+import (
+	"os"
+	"strings"
+	"testing"
+
+	"github.com/souls-guild/soul-stack/keeper/internal/incarnation"
+)
+
+// nameGuardProvisionScenarios are provision bodies where NIM-58 added guard-assert.
+// Path relative to keeper/internal/coremod/cloud package (4 levels to repo root).
+var nameGuardProvisionScenarios = []string{
+	"../../../../examples/service/redis/scenario/redis-provision.yml",
+	"../../../../examples/service/dragonfly/scenario/dragonfly-provision.yml",
+}
+
+// TestProvisionScenariosPinVMNameBasePattern -- pin-guard NIM-58: every
+// provision body must check incarnation.name EXACTLY against [VMNameBasePattern]
+// (single source of the pattern). Catches YAML-literal vs Go-const drift -- the main
+// risk of variant B (the assert string and the driver silently diverging).
+func TestProvisionScenariosPinVMNameBasePattern(t *testing.T) {
+	want := "matches('" + VMNameBasePattern + "')"
+	for _, path := range nameGuardProvisionScenarios {
+		body, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatalf("read %s: %v", path, err)
+		}
+		if !strings.Contains(string(body), want) {
+			t.Errorf("%s: guard-assert %q missing — YAML literal drifted from cloud.VMNameBasePattern (NIM-58 pin-drift); sync assert in provision body with Go const", path, want)
+		}
+	}
+}
+
+// TestVMNameBaseDomainMismatch is a domain-mismatch NIM-58: incarnation.NamePattern
+// (^[a-z0-9][a-z0-9-]{0,62}$) is a SUPERSET of VMNameBasePattern. "Bad" names pass
+// incarnation create (ValidName=true), but fail driver provision (ValidVMNameBase=false) —
+// exactly the gap guard-assert closes pre-persist.
+func TestVMNameBaseDomainMismatch(t *testing.T) {
+	long51 := strings.Repeat("a", 51)       // >50 → fails VM base, but ≤63 → name ok
+	long63 := strings.Repeat("a", 63)       // max incarnation name length
+	good48 := "r" + strings.Repeat("a", 47) // exactly 48 → ok for both domains
+
+	cases := []struct {
+		name      string
+		value     string
+		validName bool // valid incarnation name (incarnation.ValidName)
+		validVM   bool // valid VM base (cloud.VMNameBaseRe)
+	}{
+		// Domain-mismatch: incarnation name ok, VM base NO (create passes, driver fails).
+		{"start-digit", "9redis", true, false},
+		{"start-digit-dash", "01-cache", true, false},
+		{"trailing-dash", "redis-cache-", true, false},
+		{"len-51", long51, true, false},
+		{"len-63", long63, true, false},
+		// Aligned: ok as incarnation name and as VM base.
+		{"plain", "redis", true, true},
+		{"with-dash", "redis-prod", true, true},
+		{"len-48", good48, true, true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := incarnation.ValidName(tc.value); got != tc.validName {
+				t.Errorf("incarnation.ValidName(%q) = %v, want %v", tc.value, got, tc.validName)
+			}
+			if got := VMNameBaseRe.MatchString(tc.value); got != tc.validVM {
+				t.Errorf("cloud.VMNameBaseRe.MatchString(%q) = %v, want %v", tc.value, got, tc.validVM)
+			}
+		})
+	}
+}

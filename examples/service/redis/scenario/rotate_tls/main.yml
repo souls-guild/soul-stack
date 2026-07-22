@@ -1,0 +1,236 @@
+name: rotate_tls
+description: >-
+  Rotation of Redis's server-side TLS material (cert/key/CA) without a restart - Redis 6.2+
+  rereads the PEM on the fly. A separate scenario for explicit "TLS changed" audit semantics;
+  precondition - TLS is already enabled on the instance.
+
+# -- Operator input contract (docs/input.md) ------------------------------------
+# NEW Vault PATHS for the server cert/key/CA (form "<mount>/<path>#<field>"), NOT the
+# PEM itself. Each is optional - the operator rotates only part (e.g. only cert+key, CA
+# stays the same); an unset ref takes the CURRENT one from incarnation.state.tls (substrate).
+input:
+  cert_ref:
+    type: string
+    required: false
+    description: >-
+      New Vault path for the server TLS certificate (redis.crt). Unset -> current
+      state.tls.cert_ref (CA/key rotate independently).
+
+  key_ref:
+    type: string
+    required: false
+    description: >-
+      New Vault path for the server private key (redis.key). Unset -> current
+      state.tls.key_ref.
+
+  ca_ref:
+    type: string
+    required: false
+    description: >-
+      New Vault path for the cluster CA certificate (ca.crt). Unset -> current
+      state.tls.ca_ref.
+
+# -- Declarative input invariants (validate:) --------------------------------------
+# (1) at least one ref is set (otherwise nothing to rotate); (2) TLS is enabled (state.tls.
+# enable=true) - rotating on plaintext is meaningless. INPUT-ONLY: the TLS precondition is NOT
+# expressible via input (state is unavailable in the validate context) - it's moved to the
+# first assert step below (full scenario context with incarnation.state). Here -
+# only "at least one ref".
+validate:
+  - that: "has(input.cert_ref) || has(input.key_ref) || has(input.ca_ref)"
+    message: "rotate_tls requires at least one new ref (cert_ref/key_ref/ca_ref)"
+
+# -- Computed scenario vars (compute:) ---------------------------------------------
+# Run-level context (input/essence/incarnation - no soulprint). tls_* is the
+# plugin connect discriminator from state.tls (like restart/update_config). Here TLS
+# is guaranteed to be enabled (assert guard below), but the discriminator is kept symmetric
+# with the other maintenance scenarios (a uniform pattern).
+compute:
+  # -- admin_user: name of the system ACL user for intra-cluster AUTH (default_admin) --
+  # * default_admin REDESIGN (2026-06-30): the CONFIG SET connect to live Redis runs as the
+  # system default_admin (requirepass was removed). rotate_tls does NOT extend covenant, so
+  # the name is hardcoded here as a literal (like covenant.compute.admin_user, scenario bodies outside
+  # covenant - see covenant.yml). Password - secret/redis/<inc>/users/default_admin#password.
+  admin_user: "${ 'default_admin' }"
+  tls_on:   "${ has(incarnation.state) && has(incarnation.state.tls) && default(incarnation.state.tls.enable, false) }"
+  tls_port: "${ compute.tls_on ? string(incarnation.state.tls.port) : '' }"
+  # tls_ca - trust store for step 3's TLS reconnects. CA rollover (input.ca_ref != state.tls.
+  # ca_ref) -> BUNDLE of old+new CA (PEM concatenated via '\n'): three CONFIG SET tls-*-file =
+  # three SEPARATE reconnects that STRADDLE the server-cert swap (CONFIG SET tls-cert-file
+  # itself makes redis serve the new cert starting with the next reconnect), so a single
+  # trust store must trust BOTH CAs - otherwise the reconnect after the swap hits an unknown
+  # authority. The plugin's x509 pool (AppendCertsFromPEM) accepts the concatenation -> no plugin changes needed.
+  # Without a rollover (ca_ref unset / == state) - the single current CA (state is a PRE-RUN snapshot,
+  # ca_ref mutates AFTER apply). plaintext -> empty.
+  tls_ca: >-
+    ${ compute.tls_on
+         ? (has(input.ca_ref) && input.ca_ref != incarnation.state.tls.ca_ref
+              ? vault(incarnation.state.tls.ca_ref) + '\n' + vault(input.ca_ref)
+              : vault(incarnation.state.tls.ca_ref))
+         : '' }
+  # * SECURITY-CRITICAL host-layout (v11->v12, Variant A): conf_dir from essence (single source
+  # with data_dir/modules_base_url below; the previous drift "conf_dir from compute, data_dir/
+  # modules_base_url from state" is eliminated). conf_dir sets WHERE destiny puts the PEM
+  # (${conf_dir}/tls/*) and where CONFIG SET tls-*-file points the redis server - both
+  # sides MUST read the SAME source, otherwise the cert lands somewhere redis isn't looking.
+  # DESYNC RISK ACCEPTED: if the operator changed essence.conf_dir AFTER create, the cert lands
+  # at the NEW path while the running redis-server still looks at the OLD one (reread only on
+  # restart) -> with connection_mode=tls (plain closed) the node becomes unreachable over the network.
+  conf_dir: "${ default(essence.conf_dir, '/etc/redis') }"
+
+  # Effective refs: a new one from input beats the current one from state (substrate - partial
+  # rotation). has() chain (default(input, state) would blow up with no-such-key if input.*_ref
+  # is missing entirely - default catches the leaf, not the root of the argument).
+  cert_ref: "${ has(input.cert_ref) ? input.cert_ref : incarnation.state.tls.cert_ref }"
+  key_ref:  "${ has(input.key_ref)  ? input.key_ref  : incarnation.state.tls.key_ref }"
+  ca_ref:   "${ has(input.ca_ref)   ? input.ca_ref   : incarnation.state.tls.ca_ref }"
+
+# -- incarnation.state mutation --------------------------------------------------
+# The scenario records the NEW Vault refs cert/key/ca (read-model state.tls.*_ref). enable/
+# only/port are NOT changed (rotate only touches the material). The same compute.*_ref that went into
+# rendering the destiny PEM. add/modify on namedfield state.tls (ADR-057): update the refs.
+state_changes:
+  - set: tls
+    value: >-
+      ${ {
+           'enable':   incarnation.state.tls.enable,
+           'only':     incarnation.state.tls.only,
+           'port':     incarnation.state.tls.port,
+           'cert_ref': compute.cert_ref,
+           'key_ref':  compute.key_ref,
+           'ca_ref':   compute.ca_ref
+         } }
+
+tasks:
+  # 1. GUARD - TLS must be enabled (state.tls.enable=true). The predicate is evaluated
+  #    KEEPER-SIDE at render time (incarnation.state is available). false ABORTS render with a
+  #    message BEFORE dispatch - earlier and clearer than a connect failure on the host. assert
+  #    does NOT emit a RenderedTask.
+  - name: Guard TLS is enabled on the instance before rotating its material
+    assert:
+      that:
+        - "has(incarnation.state) && has(incarnation.state.tls) && default(incarnation.state.tls.enable, false)"
+      message: "rotate_tls guard: TLS must be enabled (state.tls.enable=true); rotating material on a plaintext instance is meaningless"
+
+  # 2. Re-render the PEM in ${conf_dir}/tls/ from the NEW refs (the same destiny redis as
+  #    create). apply.input.tls carries enable + the NEW cert_ref/key_ref/ca_ref -> destiny
+  #    server.yml lays down cert/key/ca via core.file.present + vault(ref) inline in the cell
+  #    (seal masking). config - the current state.redis_config (redis.conf doesn't change during
+  #    rotation; the tls-*-file paths stay the same). version/users - from state; conf_dir/data_dir/
+  #    modules_base_url - from essence (host-layout, v11->v12, Variant A; see the vars header).
+  #    register: tls_certs - the applier register that gates the reload below.
+  #    * default_admin REDESIGN: apply.input.password REMOVED (destiny no longer accepts it -
+  #    requirepass was removed); authentication - via the system default_admin from users below.
+  - name: Re-render TLS PEM material from the new Vault refs
+    register: tls_certs
+    apply:
+      destiny: redis
+      input:
+        version:  "${ default(incarnation.state.redis_version, '') }"
+        # * install: REQUIRED on a repeat run (live E2E regression 2026-07-01). Without it,
+        # install.yml's dispatcher falls into the package branch on !has(input.install) ->
+        # core.pkg `apt install redis-server=<version>` (the version from Nexus-binary is
+        # ABSENT in apt -> env exited 100). We build the SAME binary structure as create
+        # (deploy-body -> compute.install from essence.install_method) - a single install
+        # method. Difference from covenant.install: version comes from the DEPLOYED state
+        # (redis_version), not input.version (a repeat run doesn't reinstall the version).
+        install: >-
+          ${ (default(essence.install_method, 'binary') == 'binary')
+               ? {
+                   'method':        'binary',
+                   'base_url':      default(essence.binary_base_url, ''),
+                   'version':       default(incarnation.state.redis_version, ''),
+                   'allow_private': default(essence.binary_allow_private, true)
+                 }
+               : { 'method': 'package' } }
+        # host-layout - a single essence source (v11->v12): conf_dir=compute.conf_dir (itself
+        # from essence.conf_dir, see the vars header), data_dir/modules_base_url straight from essence.
+        conf_dir: "${ compute.conf_dir }"
+        data_dir: "${ default(essence.data_dir, '/var/lib/redis') }"
+        # * default_admin REDESIGN: rotate_tls re-renders the WHOLE destiny redis brick
+        # (incl. redis.conf), so the static replica->master AUTH must be filled in here
+        # too - otherwise redis.conf on disk would lose masteruser/masterauth and cluster/
+        # sentinel replicas would hit NOAUTH on PSYNC after a restart (symmetric with
+        # add_user/update_users). On master nodes the directive is inert (failover-safe).
+        # masterauth - vault()-inline in the cell (seal masking); admin_user = compute.admin_user.
+        config: >-
+          ${ merge(incarnation.state.redis_config, {
+               'masteruser': compute.admin_user,
+               'masterauth': vault('secret/redis/' + incarnation.name + '/users/' + compute.admin_user + '#password')
+             }) }
+        modules_base_url: "${ default(essence.modules_base_url, '') }"
+        tls:
+          enable:   "${ incarnation.state.tls.enable }"
+          only:     "${ incarnation.state.tls.only }"
+          port:     "${ incarnation.state.tls.port }"
+          cert_ref: "${ compute.cert_ref }"
+          key_ref:  "${ compute.key_ref }"
+          ca_ref:   "${ compute.ca_ref }"
+        # * SYSTEM + operator-extra (like the deploy body): destiny redis re-renders
+        # users.acl too (the same brick) -> it MUST fill in the system ones from essence.system_acl_users
+        # FIRST (default_admin/replica/monitoring/sentinel/haproxy), otherwise rotate_tls WOULD WIPE
+        # them from users.acl. operator-extra (state.redis_users - an ARRAY of AclUser) goes ON TOP
+        # (last-wins). System users aren't in state - they're filled in from essence on every render.
+        # Vault password from the same branch secret/redis/<inc>/users/<name>#password.
+        users: >-
+          ${ merge(
+               merge(default(essence.system_acl_users, {}).map(name, {
+                 name: {
+                   'perms':    essence.system_acl_users[name],
+                   'state':    'on',
+                   'password': vault('secret/redis/' + incarnation.name + '/users/' + name + '#password')
+                 }
+               })),
+               has(incarnation.state.redis_users)
+                 ? merge(incarnation.state.redis_users.map(u, {
+                     u.name: {
+                       'perms':    u.perms,
+                       'state':    u.state,
+                       'password': vault('secret/redis/' + incarnation.name + '/users/' + u.name + '#password')
+                     }
+                   }))
+                 : {}
+             ) }
+
+  # 3. HOT-RELOAD CERT: three community.redis.command steps (CONFIG SET tls-cert-file /
+  #    tls-key-file / tls-ca-cert-file) recreate the SSL_CTX on the live instance. Redis 6.2+
+  #    RECREATES the SSL_CTX on CONFIG SET tls-*-file even when the path is unchanged -> it reads
+  #    a fresh PEM from disk. command (raw verb-state) bypasses the diff-skip of
+  #    community.redis.config (which would compare CONFIG GET values, treat it as a no-op with the same
+  #    path, and never fire CONFIG SET) - a raw CONFIG SET is needed to make the re-read happen.
+  #    Gate - onchanges:[tls_certs] (idempotency via onchanges, orchestration.md §2.1.1): one command = one
+  #    verb -> three steps, all on the same gate. PEM paths - from conf_dir (that's where destiny put
+  #    the material in step 2). addr/TLS-discriminator/password - from state.tls (compute.tls_*) +
+  #    vault(), connect over TLS (rotate only on a TLS instance).
+  - name: Re-read the rotated TLS cert when it changed (CONFIG SET tls-cert-file)
+    module: community.redis.command
+    onchanges: [tls_certs]
+    params:
+      addr:     "127.0.0.1:${ compute.tls_port }"
+      username: "${ compute.admin_user }"
+      password: "${ vault('secret/redis/' + incarnation.name + '/users/' + compute.admin_user + '#password') }"
+      tls:      "${ compute.tls_on }"
+      tls_ca:   "${ compute.tls_ca }"
+      args:     ["CONFIG", "SET", "tls-cert-file", "${ compute.conf_dir + '/tls/redis.crt' }"]
+
+  - name: Re-read the rotated TLS key when it changed (CONFIG SET tls-key-file)
+    module: community.redis.command
+    onchanges: [tls_certs]
+    params:
+      addr:     "127.0.0.1:${ compute.tls_port }"
+      username: "${ compute.admin_user }"
+      password: "${ vault('secret/redis/' + incarnation.name + '/users/' + compute.admin_user + '#password') }"
+      tls:      "${ compute.tls_on }"
+      tls_ca:   "${ compute.tls_ca }"
+      args:     ["CONFIG", "SET", "tls-key-file", "${ compute.conf_dir + '/tls/redis.key' }"]
+
+  - name: Re-read the rotated TLS CA cert when it changed (CONFIG SET tls-ca-cert-file)
+    module: community.redis.command
+    onchanges: [tls_certs]
+    params:
+      addr:     "127.0.0.1:${ compute.tls_port }"
+      username: "${ compute.admin_user }"
+      password: "${ vault('secret/redis/' + incarnation.name + '/users/' + compute.admin_user + '#password') }"
+      tls:      "${ compute.tls_on }"
+      tls_ca:   "${ compute.tls_ca }"
+      args:     ["CONFIG", "SET", "tls-ca-cert-file", "${ compute.conf_dir + '/tls/ca.crt' }"]

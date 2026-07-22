@@ -1,0 +1,25 @@
+kind: soul_module
+protocol_version: 1
+namespace: core
+name: git
+
+required_capabilities:
+  - exec_subprocess
+  - network_outbound
+
+spec:
+  states:
+    cloned:
+      description: Path contains a git repo (cloned if absent); ADR-015.
+      input:
+        repo:   { type: string, required: true, description: "Repository URL." }
+        path:   { type: string, required: true, description: "Target clone directory." }
+        branch: { type: string, description: "Branch (default main)." }
+        depth:  { type: int,    description: "Shallow clone depth (--depth)." }
+    pulled:
+      description: Clone-if-missing + git pull --ff-only. Changed only when HEAD changes.
+      input:
+        repo:   { type: string, required: true, description: "Repository URL." }
+        path:   { type: string, required: true, description: "Target clone directory." }
+        branch: { type: string, description: "Branch (default main)." }
+        depth:  { type: int,    description: "Shallow clone depth (--depth)." }

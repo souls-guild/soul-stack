@@ -1,0 +1,207 @@
+syntax = "proto3";
+
+package soulstack.keeper.v1;
+
+import "google/protobuf/struct.proto";
+import "google/protobuf/timestamp.proto";
+
+option go_package = "github.com/souls-guild/soul-stack/proto/gen/go/keeper/v1;keeperv1";
+
+// PortentEvent is an event a Soul-side check (Vigil) raises up to Keeper when a
+// host's state changes (ADR-030, beacons contour). Rides only-add in the existing
+// EventStream's FromSoul.oneof — no new RPC. On receiving a Portent, Oracle
+// (Keeper's reactor router) matches it against the Decree registry and enqueues a
+// named scenario on the work queue (ADR-027).
+//
+// SID in the payload is an ECHO for logs/correlation: the authority for Soul's
+// identity is the mTLS peer cert (ADR-012(i)). Keeper resolves SID from the
+// certificate, covens from that, and checks it against the Decree's subject
+// (coven XOR sid -> match -> action).
+//
+// A beacon event = an UNTRUSTED input (ADR-030): Soul could be compromised, so
+// action is restricted to a named-scenario whitelist (a raw command is rejected),
+// and Decree is default-deny with subject binding.
+//
+// Typed payload (V5-1, ADR-030 amendment 2026-05-26): `oneof payload` carries
+// 6 typed messages for the built-in core beacons (parity with typed Soulprint,
+// ADR-018) plus `custom: Struct` for plugin beacons (V5-2, soul_beacon kind). The
+// `data` field (Struct) is DEPRECATED, with a 1-release WARN deprecation: for one
+// production release Soul populates BOTH branches, after which `data` is removed
+// as a hard cut (parity with the push S7 deprecation decision). Oracle's CEL
+// where-clause reads `event.<typed_branch>.<field>` for typed payloads
+// (typed-field access), and keeps reading `event.data.<field>` for legacy `data`
+// (backward-compat).
+message PortentEvent {
+  // Name of the Vigil that fired (vigils.name) — which check raised the event.
+  // Oracle matches Decree (`on_vigil`) against it.
+  string beacon_name = 1;
+
+  // DEPRECATED (ADR-030 amendment 2026-05-26): legacy free-form payload. For one
+  // production release Soul populates BOTH branches (data + payload) for
+  // backward-compat with existing where-CEL `event.data.<field>`. Removed as a
+  // hard cut after that release (S5-final). New code writes to `payload`.
+  google.protobuf.Struct data = 2 [deprecated = true];
+
+  // Time the event was collected on Soul's side (like SoulprintReport.collected_at
+  // — the authoritative Soul-side time; Keeper-side received_at is tracked
+  // separately on receipt).
+  google.protobuf.Timestamp collected_at = 3;
+
+  // Host SID — ECHO for logs and correlation. NOT an identity claim: the
+  // authority is the mTLS peer cert (ADR-012(i)).
+  string sid = 4;
+
+  // Optional dedup key: during a storm of identical events, Soul/Oracle collapses
+  // repeats sharing one dedup_key (part of loop prevention, ADR-030). Empty = no dedup.
+  string dedup_key = 5;
+
+  // Optional event severity (free-form in the MVP, e.g. "info"/"warning"/
+  // "critical"). Used for prioritization/filtering in Oracle and in audit.
+  string severity = 6;
+
+  // Typed payload (V5-1, ADR-030 amendment 2026-05-26). Populated Soul-side by an
+  // emit-mapper keyed on beacon type; the oneof shape guarantees exactly one
+  // variant. Field numbers start at 7 (1-6 belong to previously declared fields),
+  // new typed messages are added only-add (ADR-012). `custom` is reserved for
+  // plugin beacons (V5-2 soul_beacon kind).
+  oneof payload {
+    FileChangedPortent     file_changed   = 7;
+    ServiceDownPortent     service_down   = 8;
+    PortClosedPortent      port_closed    = 9;
+    DiskFullPortent        disk_full      = 10;
+    ProcessAbsentPortent   process_absent = 11;
+    HttpUnhealthyPortent   http_unhealthy = 12;
+    google.protobuf.Struct custom         = 13;
+    InotifyPortent         inotify        = 14;
+  }
+}
+
+// FileChangedPortent is the typed payload from `core.beacon.file_changed`. Shape
+// matches the data fields of `soul/internal/beacon/file_changed.go::fileData`
+// (path + sha256). A missing file leaves `sha256` an empty string; the `missing`
+// state signal is carried one level up by `PortentEvent.beacon_name` (not
+// duplicated in the payload — typing the State is the scheduler's responsibility).
+message FileChangedPortent {
+  // Absolute path to the watched file (Vigil param `path`).
+  string path = 1;
+  // SHA-256 hex of the contents; empty if the file doesn't exist (state "missing").
+  string sha256 = 2;
+}
+
+// ServiceDownPortent is the typed payload from `core.beacon.service_down`. Shape
+// matches the data fields of `service_down.go::serviceData` (service + active +
+// init_system).
+message ServiceDownPortent {
+  // Unit name (Vigil param `service`).
+  string service = 1;
+  // Whether the service is active at Check time (true = "up", false = "down").
+  bool active = 2;
+  // Detected init system: "systemd" / "openrc" / "sysv" / "unknown".
+  string init_system = 3;
+}
+
+// PortClosedPortent is the typed payload from `core.beacon.port_closed`. Shape
+// matches the data fields of `port_closed.go::portData` (host + port).
+message PortClosedPortent {
+  // Target host/IP (Vigil param `host`, default 127.0.0.1).
+  string host = 1;
+  // TCP port 1..65535 (Vigil param `port`).
+  int32 port = 2;
+}
+
+// DiskFullPortent is the typed payload from `core.beacon.disk_full`. Shape
+// matches the data fields of `disk_full.go::diskData` (path + used_percent + threshold).
+message DiskFullPortent {
+  // Mount point or path within the filesystem (Vigil param `path`).
+  string path = 1;
+  // Percent used space per statfs ((Blocks - Bavail) / Blocks * 100).
+  double used_percent = 2;
+  // "Full" threshold, tripped when used_percent >= threshold (Vigil param
+  // `threshold_percent`, default 90).
+  double threshold = 3;
+}
+
+// ProcessAbsentPortent is the typed payload from `core.beacon.process_absent`.
+// Shape matches the data fields of `process_absent.go::processData` (pattern only).
+message ProcessAbsentPortent {
+  // pgrep-style process name pattern (Vigil param `pattern`).
+  string pattern = 1;
+}
+
+// HttpUnhealthyPortent is the typed payload from `core.beacon.http_unhealthy`.
+// Shape matches the data fields of `http_unhealthy.go::httpData` (url + status).
+// Response body and headers are NOT included (sensitive-by-construction,
+// ADR-010 §7.4) — the beacon never exposes payload data in Portent/logs.
+message HttpUnhealthyPortent {
+  // Target endpoint (Vigil param `url`).
+  string url = 1;
+  // HTTP response status code; 0 = transport error (DNS/TLS/timeout/SSRF guard).
+  int32 status = 2;
+}
+
+// InotifyPortent is the typed payload from `core.beacon.inotify` (V5-3, ADR-030
+// amendment 2026-05-26). Linux-only (kernel inotify syscall). Fold-adapter on the
+// Soul side: events accumulate in a background goroutine between Checks; on the
+// quiet->events state change, one Portent is emitted with the list of events
+// accumulated over the window. MVP: NOT recursive, NOT throttled (see
+// core/beacon/README.md).
+message InotifyPortent {
+  // Absolute path to the watched file or directory (Vigil param `path`).
+  string path = 1;
+  // Events accumulated over the current window (between the previous and current Check).
+  repeated InotifyEvent events = 2;
+  // How many events are in the window (len(events) after aggregation). Avoids a
+  // repeated size() call in the where-CEL predicate `event.inotify.count > 0`.
+  int32 count = 3;
+}
+
+// InotifyEvent is one kernel inotify event projected onto our semantics. The raw
+// `mask` is NOT passed through — the beacon converts flags to a stable string
+// type (`created`/`modified`/`deleted`/`moved`/`attrib`) so Decree's where-CEL
+// doesn't depend on inotify's kernel constants.
+message InotifyEvent {
+  // Event type: "created" / "modified" / "deleted" / "moved" / "attrib".
+  string type = 1;
+  // File name within the watched directory, for a directory watch; empty for a
+  // single-file watch (the kernel doesn't set the `name` field in that case).
+  string file = 2;
+  // Time the event was recorded Soul-side, in unix seconds (NOT kernel time —
+  // inotify doesn't provide an event timestamp, the beacon stamps it).
+  int64 at = 3;
+}
+
+// VigilDef is one definition of a Soul-side check (Vigil) within the set Keeper
+// hands out to a host. Read-only by construction: a Vigil observes, it does NOT
+// mutate the host. Source of truth is the `vigils` registry in Postgres (managed
+// via OpenAPI/MCP, ADR-030); the set is resolved by the host's covens and sent to
+// it via VigilSnapshot.
+message VigilDef {
+  // Vigil name (vigils.name, kebab-case) — stable identifier; sent back in
+  // PortentEvent.beacon_name.
+  string name = 1;
+
+  // Check polling interval. Format is Soul Stack's `duration` convention
+  // (Go-duration "30s"/"5m", etc.), same as Augur token_ttl / soul.yml refresh.
+  string interval = 2;
+
+  // Address of the core beacon (or soul_beacon plugin, S5) implementing the check
+  // body, e.g. "core.beacon.file_changed" / "core.beacon.service_down".
+  string check = 3;
+
+  // Check params (path / service name / threshold, etc.). Struct in the MVP —
+  // a typed params schema is deferred alongside typed payload (ADR-030).
+  google.protobuf.Struct params = 4;
+}
+
+// VigilSnapshot is the FULL active set of Vigils for this SID (replace semantics,
+// ADR-030). Rides only-add in the existing EventStream's FromKeeper.oneof.
+//
+// Soul applies it as a ReplaceAll (the same pattern as SigilSnapshot /
+// SigilTrustAnchors from ADR-026): it REPLACES its whole local Vigil set with this
+// list, it does NOT upsert. A Vigil missing from the snapshot is stopped and
+// forgotten by the Soul-side scheduler — this is how disabling/removing a Vigil
+// takes effect without restarting Soul. An empty vigils[] = no active checks on
+// the host.
+message VigilSnapshot {
+  repeated VigilDef vigils = 1;
+}

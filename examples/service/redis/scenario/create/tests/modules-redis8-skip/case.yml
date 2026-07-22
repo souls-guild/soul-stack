@@ -1,0 +1,200 @@
+# L0 test for create (standalone) — VERSION-GUARD Redis 8+: modules are BUILT INTO the
+# server → we do NOT fetch .so files and do NOT write loadmodule. Counter-case to
+# modules-no-checksum-standalone (Redis 6 → the full set is active). The "modules ALWAYS
+# ALL" directive applies to Redis < 8; on Redis 8+ — builtin-skip.
+#
+# Root of the gate (MOVED INTO DESTINY): the version-guard now lives in destiny itself
+# (previously scenario zeroed out modules). redis8 is true when the effective version
+# (input.version distro-pin OR input.install.version upstream) has a major >= 8: regex
+# ^([0-9]+:)?(8|9|two-digit major)\. At version=8.0.0:
+#   - the modules.yml include is gated on deploy_redis && !redis8 → redis8 is true →
+#     conditional-include group-drop: the WHOLE file (modules-dir + fetch-loop) is
+#     PHYSICALLY absent from the plan (not a placeholder — the tasks are not rendered,
+#     no indices are reserved);
+#   - the redis.conf loadmodules cell: redis8 → [] → no loadmodule section;
+#   - state.modules = [] (compute.redis_modules_deployed: redis8 → []).
+# The plan is identical to modules-empty (presence form — positional indices are not
+# compared).
+#
+# Simplification (brief): version-guard by version (major), we do NOT pull in the full
+# module compatibility version matrix. version unset → NOT gated (fail-closed on Redis).
+name: redis 8 version guard skips module download (modules builtin)
+
+fixtures:
+  default_destiny_source: "file://../../destiny/{name}"
+  hosts:
+    - sid: node-solo.example.com
+      covens: [create]
+      soulprint:
+        network: { primary_ip: 10.0.0.5 }
+        os: { arch: amd64 }
+  vault:
+    secret/redis/create:
+      password: s3cr3t-redis-pass-create
+    # Per-user secrets for system users (secret/redis/<inc>/users/<name>#password) —
+    # resolved keeper-side by vault() when merging system_acl_users into apply.input.users.
+    # ★ REDESIGN default_admin (2026-06-30): default_admin is the system user for
+    # intra-cluster AUTH (the auth_pass/PING deploy steps read it via the users/<name>
+    # branch).
+    secret/redis/create/users/default_admin:
+      password: default-admin-secret-pass
+    secret/redis/create/users/replica:
+      password: replica-sys-secret-pass
+    secret/redis/create/users/monitoring:
+      password: monitoring-sys-secret-pass
+    secret/redis/create/users/sentinel:
+      password: sentinel-sys-secret-pass
+    secret/redis/create/users/haproxy:
+      password: haproxy-sys-secret-pass
+  essence:
+    # install_method — in essence (author-context, 2026-06-28): the install method is
+    # NOT operator-input. compute.install reads default(essence.install_method, 'binary').
+    install_method: package
+    redis_type: sentinel
+    sentinel_master_name: master
+    # ★ Redesign: per-master sentinel defaults substrate (backing
+    # input.sentinel_master_settings).
+    sentinel_master_defaults:
+      down-after-milliseconds: "5000"
+      failover-timeout:        "60000"
+    modules_base_url: "https://artifacts.example.com/redis/modules/8.0"
+    memory_reserve_percent: 75
+    persistence_presets:
+      off:
+        save: ""
+        appendonly: "no"
+      aof:
+        save: ""
+        appendonly: "yes"
+      rdb:
+        save: "900 1 300 10 60 10000"
+        appendonly: "no"
+      rdb_aof:
+        save: "900 1 300 10 60 10000"
+        appendonly: "yes"
+    redis_config:
+      maxmemory:        "256mb"
+      maxmemory-policy: allkeys-lru
+      maxclients:       10000
+      timeout:          300
+
+    # System ACL users for redis-server + the sentinel daemon (1:1 from
+    # essence/_default.yaml). BOTH ARE MANDATORY: the create/sentinel.yml guard
+    # (assert 1b) aborts the render if either set is empty (a silent fail-open is not
+    # acceptable — without them replication/sentinel↔redis AUTH would break).
+    system_acl_users:
+      default_admin: "~* &* +@all"
+      replica:    "+psync +replconf +ping"
+      monitoring: "-@all +@connection +client +ping +info +config|get +cluster|info +slowlog +latency +memory +select +command|count +command|docs"
+      sentinel:   "allchannels +multi +slaveof +ping +exec +subscribe +config|rewrite +role +publish +info +client|setname +client|kill +script|kill"
+      haproxy:    "-@all +auth +client|getname +client|id +client|setname +command +hello +ping +role +info +cluster|info"
+    system_acl_users_sentinel:
+      default_admin: "allchannels allkeys +@all"
+      monitoring: "-@all +@connection -command +client -hello +info -auth +sentinel|masters +sentinel|replicas +sentinel|slaves +sentinel|sentinels +sentinel|ckquorum"
+      sentinel:   "allchannels -@all +auth +client|getname +client|id +client|setname +command +hello +ping +sentinel|is-master-down-by-addr +publish +role +sentinel|get-master-addr-by-name +sentinel|master +sentinel|myid +sentinel|replicas +sentinel|sentinels"
+      haproxy:    "-@all +auth +client|getname +client|id +client|setname +command +hello +ping +role +sentinel|get-master-addr-by-name +sentinel|master +sentinel|myid +sentinel|replicas +sentinel|sentinels"
+  input:
+    # ★ provision is disabled (default-on: an omitted section = ENABLED; this case
+    # deploys onto a READY roster, cloud-create is not needed) → include
+    # redis-provision.yml group-drop.
+    provision:
+      enabled: false
+    redis_type: sentinel
+    version: "8.0.3"
+    # single-host (1 host) → 0 replicas (redesign-2 default): size-guard sentinel = 1+0.
+    replicas_per_master: 0
+    # Redis 8+ → version-guard suppresses modules (built into the server).
+    # modules_base_url is set, but unused on 8+ (the URL is not built — include
+    # modules.yml group-drop).
+
+assert:
+  task_present:
+    # redis.conf WITHOUT loadmodules (version-gate → empty list): vars.loadmodules: [].
+    # Disambiguator from users.acl/hardening — path.
+    - module: core.file.rendered
+      params_subset:
+        path: /etc/redis/redis.conf
+        template_content: "<present>"
+        mode: "0640"
+        owner: redis
+        group: redis
+        render_context:
+          vars:
+            conf_dir: /etc/redis
+            data_dir: /var/lib/redis
+            port: 6379
+            run_dir: /var/run/redis
+            log_dir: /var/log/redis
+            loadmodules: []
+            config:
+              # ★ REDESIGN default_admin: replica→master AUTH (masteruser/
+              # masterauth) arrives as ORDINARY config directives (the sentinel
+              # deploy-body merges them in via a vault() cell) → redis.conf ranges
+              # over them like any other directive → they statically survive a restart.
+              masteruser:       "default_admin"
+              masterauth:       "default-admin-secret-pass"
+              maxmemory: "256mb"
+              maxmemory-policy: allkeys-lru
+              maxclients: 10000
+              timeout: 300
+              save: "900 1 300 10 60 10000"
+              appendonly: "no"
+          self:
+            sid: node-solo.example.com
+            covens: [create]
+            choirs: []
+            # traits — registry projection (ADR-060), empty object with no labels.
+            traits: {}
+            role: ""
+            network:
+              primary_ip: 10.0.0.5
+            os:
+              arch: amd64
+          role: ""
+          essence: {}
+
+    # standalone-PING: cluster/sentinel branches — placeholder-skip; disambiguator
+    # addr/args.
+    - module: community.redis.command
+      params_subset:
+        addr: "127.0.0.1:6379"
+        username: default_admin
+        password: default-admin-secret-pass
+        args: ["PING"]
+
+  task_absent:
+    # VERSION-GATE Redis 8+: the modules.yml include is gated on deploy_redis && !redis8
+    # → group-drop (modules-dir is absent from the plan). Guard "Redis 8 does NOT create
+    # modules-dir". Disambiguator from the active systemd-dropin-dir (same
+    # core.directory.present) — path.
+    - module: core.directory.present
+      params_subset:
+        path: /var/lib/redis/modules
+    # .so fetch: modules.yml include group-dropped → fetch-loop is absent from the plan.
+    # Guard "Redis 8 does NOT fetch .so". Disambiguator from the tarball-fetch
+    # placeholder — path.
+    - module: core.url.fetched
+      params_subset:
+        path: /var/lib/redis/modules/redisearch.so
+
+  state_changes:
+    redis_type: sentinel
+    redis_version: "8.0.3"
+    redis_config:
+      maxmemory: "256mb"
+      maxmemory-policy: allkeys-lru
+      maxclients: 10000
+      timeout: 300
+      save: "900 1 300 10 60 10000"
+      appendonly: "no"
+    redis_users: []
+    redis_hosts: []
+    redis_sentinel:
+      master_name: master
+      quorum: 0
+      master_settings:
+        down-after-milliseconds: "5000"
+        failover-timeout: "60000"
+      settings: {}
+    # Redis 8+ → modules are built in, .so files are not fetched → the resolved set is empty.
+    modules: []

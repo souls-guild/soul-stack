@@ -1,0 +1,75 @@
+# L0 test for restart: rolling-restart of replicas ON a TLS instance. Paired with
+# rolling-restart-replicas (plaintext). Render-only, hermetic. Roster — 2 hosts, probe role = slave.
+#
+# ★ DragonFly vs redis: local probe/health-gate connect to THEIR OWN instance via
+# a UNIX SOCKET regardless of whether the instance is on TLS or not (DF with --bind=primary_ip does NOT
+# listen on loopback; the socket is a separate UDS listener; UDS is not a network path → TLS on it is not needed). So
+# on a TLS instance the local connect params are THE SAME as in the plaintext case (addr=socket, WITHOUT
+# tls/tls_ca). state.tls.enable=true here is only a read-model (TLS on the MAIN port for external
+# clients). ★ state.tls WITHOUT only/port, df_config WITHOUT tls_port (DragonFly has no such flag).
+#
+# What we assert:
+#   1. probe (community.redis.role): addr = LOCAL UNIX socket (NOT 127.0.0.1:port), WITHOUT tls/tls_ca.
+#   2. block-child health-gate (community.redis.replica-synced) with the same socket params.
+name: rolling-restart replicas over TLS connects locally via unix socket
+
+fixtures:
+  hosts:
+    - sid: node-1.example.com
+      covens: [restart]
+      soulprint:
+        network: { primary_ip: 10.0.0.1 }
+        os: { arch: amd64 }
+    - sid: node-2.example.com
+      covens: [restart]
+      soulprint:
+        network: { primary_ip: 10.0.0.2 }
+        os: { arch: amd64 }
+
+  input:
+    reason: "rolling restart over TLS for L0"
+
+  # Expanded incarnation.state with TLS enabled: state.tls carries enable=true (TLS on the main
+  # port 6379). ★ WITHOUT only/port; df_config WITHOUT tls_port (DragonFly has no such flag).
+  state:
+    df_version: "1.39.0"
+    tls:
+      enable:   true
+      cert_ref: "secret/services/dragonfly/tls#cert"
+      key_ref:  "secret/services/dragonfly/tls#key"
+      ca_ref:   "secret/services/dragonfly/tls#ca"
+    df_config:
+      maxmemory:        "256mb"
+      tls:              "true"
+      tls_cert_file:    /etc/dragonfly/tls/dragonfly.crt
+      tls_key_file:     /etc/dragonfly/tls/dragonfly.key
+      tls_ca_cert_file: /etc/dragonfly/tls/ca.crt
+      tls_replication:  "true"
+
+  # Vault: probe/health-gate run under default_admin (requirepass removed). ★ The PEM CA is
+  # NOT needed for the local connect — probe/health-gate go over a UNIX socket (UDS without TLS), vault(ca_ref) isn't called.
+  vault:
+    secret/dragonfly/restart/users/default_admin:
+      password: dfadmin-restart-pass
+
+mocks:
+  register:
+    df_role:
+      role: slave
+
+assert:
+  task_present:
+    # probe (community.redis.role): LOCAL UNIX socket (WITHOUT tls/tls_ca, even on a TLS instance).
+    # AUTH under default_admin.
+    - module: community.redis.role
+      params_subset:
+        addr: "unix:/var/run/dragonfly/dragonfly.sock"
+        username: default_admin
+        password: dfadmin-restart-pass
+
+    # slave-health-gate (community.redis.replica-synced): same socket connect.
+    - module: community.redis.replica-synced
+      params_subset:
+        addr: "unix:/var/run/dragonfly/dragonfly.sock"
+        username: default_admin
+        password: dfadmin-restart-pass

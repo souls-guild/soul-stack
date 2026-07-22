@@ -1,0 +1,20 @@
+kind: soul_module
+protocol_version: 1
+namespace: core
+name: exec
+
+required_capabilities:
+  - exec_subprocess
+
+spec:
+  states:
+    run:
+      description: Run a process with argv without a shell (ADR-015).
+      input:
+        cmd:     { type: string, required: true, example: "/usr/local/bin/myscript", description: "Executable file name (argv[0], without shell)." }
+        args:    { type: list,   items: { type: string }, description: "argv[1:] arguments." }
+        cwd:     { type: string, description: "Process working directory." }
+        env:     { type: map,    items: { type: string }, description: "Additional environment variables (KEY: VALUE)." }
+        creates: { type: string, description: "Idempotency: if the file exists — the step is skipped (changed=false)." }
+        unless:  { type: string, description: "Idempotency: shell command; exit=0 → skip." }
+        onlyif:  { type: string, description: "Idempotency: shell command; exit≠0 → skip." }

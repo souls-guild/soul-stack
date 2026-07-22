@@ -1,0 +1,89 @@
+# Config of the soul agent on a managed host.
+
+# SID = host FQDN; auto-detected, can be overridden manually.
+# sid: redis1.cache-test-dev.example
+
+# Where artifacts live on this host
+paths:
+  modules: /var/lib/soul-stack/modules   # cache of custom modules soul-mod-<name>-<sha>
+  seed:    /var/lib/soul-stack/seed      # SoulSeed cert + private key (issued via `soul init`)
+
+# Connection to the Keeper cluster.
+# host is shared across both phases; event_stream_port (mTLS, `soul run`) and
+# bootstrap_port (server-only TLS, `soul init`) are both required.
+# priority orders both phases (see docs/soul/config.md → keeper.endpoints).
+keeper:
+  endpoints:
+    - host: k1.dc1.example
+      event_stream_port: 9443
+      bootstrap_port: 9442
+    - host: k2.dc1.example
+      event_stream_port: 9443
+      bootstrap_port: 9442
+    - host: k3.dc1.example
+      event_stream_port: 9443
+      bootstrap_port: 9442
+      priority: 2
+    - host: k4.dc1.example
+      event_stream_port: 9443
+      bootstrap_port: 9442
+      priority: 2
+    - host: k1.dc2.example
+      event_stream_port: 9443
+      bootstrap_port: 9442
+      priority: 3
+
+  retry:
+    max_attempts: 2
+    backoff:
+      initial: 1s
+      max: 30s
+      jitter: true
+    handshake_timeout: 10s
+
+  failback:
+    enabled: true
+    interval: 1h
+    spray: 10m
+
+  # mTLS materials are issued by keeper (via Vault PKI) on the first CSR
+  tls:
+    ca: /var/lib/soul-stack/seed/ca.crt
+
+# Soulprint — what we collect as facts about the host
+soulprint:
+  refresh_interval: 5m
+
+# Cleanup of the module cache on the host
+cleanup:
+  modules_ttl_days: 30
+  run_interval: 24h
+
+# Logs and metrics
+logging:
+  level: info
+  format: json
+  rotation: { max_size_mb: 50, max_files: 5, compress: true }
+
+metrics:
+  enabled: true
+  listen: "127.0.0.1:9091"
+
+otel:
+  enabled: true
+  endpoint: "k1.dc1.example:4317"
+
+# Plugin lifecycle and capabilities (ADR-020) — symmetric with keeper-side
+plugin_runtime:
+  socket_dir: /var/run/soul-stack/plugins        # for a Soul host (without the -keeper suffix)
+  startup_timeout: 10s
+  shutdown_grace: 10s
+  allowed_capabilities:
+    - run_as_root
+    - network_outbound
+    - network_inbound
+    - vault_access
+    - fs_write_root
+    - exec_subprocess
+  conflict_policy: warn
+  enable_tls: false

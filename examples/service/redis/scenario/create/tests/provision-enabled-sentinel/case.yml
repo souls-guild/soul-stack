@@ -1,0 +1,155 @@
+# L0 trial provision (ADR-061, Option A) — sentinel mode, provision ENABLED.
+# input.provision.enabled=true → the provision.yml include unfolds (the placeholder-skip
+# form of include-when is lifted: when has(input.provision) && input.provision.enabled
+# is true → steps target the roster). Flow: (a) core.cloud.created spins up VMs, (c)
+# core.soul.registered registers the created SIDs + await_online barrier +
+# refresh_soulprint.
+#
+# ★ register.provision in L0 comes from mocks.register (the probe doesn't execute, ADR-023): steps
+# (b)/(c) of provision.yml and state_changes read register.provision.{vm_ids,hosts}
+# from here. This is the L0 pass-through of the ready register payload from core.cloud.created.
+#
+# VM COUNT from sentinel topology = 1 + replicas_per_master. replicas_per_master=2 →
+# count=3 (one master + 2 replicas). The run's roster is 3 hosts (in prod they're supplied by
+# refresh_soulprint after onboarding; in L0 mid-run re-resolve is a stub, roster = a static
+# fixture, so we set 3 hosts by hand).
+#
+# Paired with provision-disabled (no section there → cloud steps group-drop) and
+# provision-enabled-cluster (count=shards*(1+replicas) there).
+name: provision enabled in sentinel mode emits cloud-create and onboarding (count = 1 + replicas)
+
+fixtures:
+  default_destiny_source: "file://../../destiny/{name}"
+  hosts:
+    - sid: vm-1.example.com
+      covens: [create]
+      soulprint:
+        network: { primary_ip: 10.0.0.1 }
+        os: { arch: amd64 }
+    - sid: vm-2.example.com
+      covens: [create]
+      soulprint:
+        network: { primary_ip: 10.0.0.2 }
+        os: { arch: amd64 }
+    - sid: vm-3.example.com
+      covens: [create]
+      soulprint:
+        network: { primary_ip: 10.0.0.3 }
+        os: { arch: amd64 }
+  vault:
+    secret/redis/create:
+      password: s3cr3t-redis-pass-create
+    # ★ default_admin REDESIGN (2026-06-30): default_admin is the system user
+    # for intra-cluster AUTH (deploy's auth_pass/PING steps read it via the users/<name> branch).
+    secret/redis/create/users/default_admin:
+      password: default-admin-secret-pass
+    secret/redis/create/users/replica:
+      password: replica-sys-secret-pass
+    secret/redis/create/users/monitoring:
+      password: monitoring-sys-secret-pass
+    secret/redis/create/users/sentinel:
+      password: sentinel-sys-secret-pass
+    secret/redis/create/users/haproxy:
+      password: haproxy-sys-secret-pass
+  essence:
+    # install_method — in essence (author-context, 2026-06-28): install method is
+    # NOT operator-input. compute.install reads default(essence.install_method, 'binary').
+    install_method: package
+    redis_type: sentinel
+    sentinel_master_name: master
+    modules_base_url: "https://artifacts.example.com/redis/modules"
+    provision_await_timeout: "10m"
+    memory_reserve_percent: 75
+    persistence_presets:
+      rdb:
+        save: "900 1 300 10 60 10000"
+        appendonly: "no"
+    redis_config:
+      maxmemory:        "256mb"
+      maxmemory-policy: allkeys-lru
+      maxclients:       10000
+      timeout:          300
+    system_acl_users:
+      default_admin: "~* &* +@all"
+      replica:    "+psync +replconf +ping"
+      monitoring: "-@all +@connection +client +ping +info +config|get +cluster|info +slowlog +latency +memory +select +command|count +command|docs"
+      sentinel:   "allchannels +multi +slaveof +ping +exec +subscribe +config|rewrite +role +publish +info +client|setname +client|kill +script|kill"
+      haproxy:    "-@all +auth +client|getname +client|id +client|setname +command +hello +ping +role +info +cluster|info"
+    system_acl_users_sentinel:
+      default_admin: "allchannels allkeys +@all"
+      monitoring: "-@all +@connection -command +client -hello +info -auth +sentinel|masters +sentinel|replicas +sentinel|slaves +sentinel|sentinels +sentinel|ckquorum"
+      sentinel:   "allchannels -@all +auth +client|getname +client|id +client|setname +command +hello +ping +sentinel|is-master-down-by-addr +publish +role +sentinel|get-master-addr-by-name +sentinel|master +sentinel|myid +sentinel|replicas +sentinel|sentinels"
+      haproxy:    "-@all +auth +client|getname +client|id +client|setname +command +hello +ping +role +sentinel|get-master-addr-by-name +sentinel|master +sentinel|myid +sentinel|replicas +sentinel|sentinels"
+  input:
+    redis_type: sentinel
+    version: "7.4.1"
+    # install_method=package EXPLICITLY: the case is about the provision flow, not install. default
+    # of the binary→package redesign (assert checks cloud/onboarding, not install).
+    persistence: rdb
+    replicas_per_master: 2
+    provision:
+      enabled: true
+      provider: example-dev
+      profile: redis-small
+      ssh_provider: ssh-example
+
+# register.provision — the ready core.cloud.created payload (L0 pass-through, step (a) doesn't
+# execute): vm_ids of created VMs + hosts[{sid,...,bootstrap_token}]. Steps (b)/(c) and
+# state_changes read it. sids of created VMs = sids of the roster (in prod refresh_soulprint
+# would have added them; here the roster already carries them).
+mocks:
+  register:
+    provision:
+      vm_ids: [i-aaa111, i-bbb222, i-ccc333]
+      hosts:
+        - { sid: vm-1.example.com, vm_id: i-aaa111, primary_ip: 10.0.0.1, bootstrap_token: tok-vm1 }
+        - { sid: vm-2.example.com, vm_id: i-bbb222, primary_ip: 10.0.0.2, bootstrap_token: tok-vm2 }
+        - { sid: vm-3.example.com, vm_id: i-ccc333, primary_ip: 10.0.0.3, bootstrap_token: tok-vm3 }
+
+assert:
+  task_present:
+    # (a) core.cloud.created: count = 1 + replicas_per_master = 3, generate_userdata: false
+    # (VM without cloud-init, setup puts step (b) install: true). The only
+    # core.cloud.created in the plan → no disambiguator needed.
+    - module: core.cloud.created
+      params_subset:
+        provider: example-dev
+        profile: redis-small
+        count: 3
+        # name — batch run-identity = incarnation.name (here "create"): the driver names VMs
+        # <name>-<seq> + label soulstack-run=<name> (run idempotency, NIM-16).
+        name: create
+        generate_userdata: false
+
+    # (c) core.soul.registered: sid — the list of SIDs of created VMs (register.provision.hosts
+    # .map(h, h.sid)); membership is implicit (incarnation_membership, no coven:); onboarding barrier
+    # await_online + refresh_soulprint; await_timeout from essence (10m, input.provision
+    # .await_timeout not set). The only core.soul.registered in the plan.
+    - module: core.soul.registered
+      params_subset:
+        sid: [vm-1.example.com, vm-2.example.com, vm-3.example.com]
+        await_online: true
+        refresh_soulprint: true
+        await_timeout: "10m"
+
+    # (d) core.module.installed: delivers the SoulModule plugin community.redis to the created
+    # hosts BEFORE the first community.redis.* task of the deploy branch (ADR-065).
+    - module: core.module.installed
+      params_subset:
+        name: community.redis
+
+    # The main sentinel-branch deploy rolls out after provision (redis.conf is rendered).
+    - module: core.file.rendered
+      params_subset:
+        path: /etc/redis/redis.conf
+
+  state_changes:
+    redis_type: sentinel
+    redis_version: "7.4.1"
+    # read-model: the FACT "these VMs were brought up by this run" — vm_ids from register.provision,
+    # provider from input.provision (gated on input.provision.enabled, state_changes ternary).
+    provisioned_vm_ids: [i-aaa111, i-bbb222, i-ccc333]
+    # provisioned_sids: SID of each created VM (register.provision.hosts[].sid) — for
+    # cascade-destroy teardown. Same guard+shape as provisioned_vm_ids.
+    provisioned_sids: [vm-1.example.com, vm-2.example.com, vm-3.example.com]
+    provisioned_provider: example-dev

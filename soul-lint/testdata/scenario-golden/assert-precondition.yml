@@ -1,0 +1,30 @@
+name: assert-precondition
+description: >-
+  Golden-сценарий с assert-задачей (ADR-009 amendment 2026-06-23): keeper-side
+  render-time precondition. that[] — CEL-bool-предикаты (валидируются как where::
+  парсятся структурно, soulprint.hosts допустим — AllowHosts=true), message —
+  строка. Валидный assert проходит линт (ExitOK).
+
+input:
+  shards:
+    type: integer
+    required: false
+    min: 1
+  replicas_per_shard:
+    type: integer
+    required: false
+    default: 0
+    min: 0
+
+tasks:
+  - name: topology size matches shards and replicas
+    when: "input.redis_type == 'cluster'"
+    assert:
+      that:
+        - "size(soulprint.hosts) == (has(input.shards) ? int(input.shards) : 0) * (1 + int(input.replicas_per_shard))"
+      message: "topology mismatch: hosts != shards*(1+replicas_per_shard)"
+
+  - name: install package
+    module: core.pkg.installed
+    params:
+      name: redis-server

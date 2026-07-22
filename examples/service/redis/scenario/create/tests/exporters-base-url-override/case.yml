@@ -1,0 +1,102 @@
+# L0 test for create: essence override of the download root for ALL three observability agents
+# (node-exporter / redis-exporter / vector) to an internal mirror/nexus-proxy.
+#
+# Hosts without access to github.com (air-gapped) pull releases through the Nexus raw-proxy,
+# mirroring the github path 1:1. We prove: essence.{node_exporter,redis_exporter,vector}_base_url
+# make it through apply:input to core.url.fetched of each sub-destiny; without an override
+# the default remains GitHub Releases (back-compat, see the other cases).
+#
+# Substrate — monitoring-exporters (sentinel, 1 host, provision off).
+name: create fetches all exporters from essence base_url mirror override
+
+fixtures:
+  default_destiny_source: "file://../../destiny/{name}"
+  hosts:
+    - sid: node-a.example.com
+      covens: [create, redis]
+      soulprint:
+        network: { primary_ip: 10.0.0.1 }
+        os: { arch: amd64 }
+  vault:
+    secret/redis/create:
+      password: s3cr3t-redis-pass-create
+    secret/redis/create/users/default_admin:
+      password: default-admin-secret-pass
+    secret/redis/create/users/replica:
+      password: replica-sys-secret-pass
+    secret/redis/create/users/monitoring:
+      password: monitoring-sys-secret-pass
+    secret/redis/create/users/sentinel:
+      password: sentinel-sys-secret-pass
+    secret/redis/create/users/haproxy:
+      password: haproxy-sys-secret-pass
+  essence:
+    redis_type: sentinel
+    sentinel_master_name: master
+    modules_base_url: "https://artifacts.example.com/redis/modules"
+    memory_reserve_percent: 75
+    persistence_presets:
+      rdb:
+        save: "900 1 300 10 60 10000"
+        appendonly: "no"
+    redis_config:
+      maxmemory:        "256mb"
+      maxmemory-policy: allkeys-lru
+      maxclients:       10000
+      timeout:          300
+    node_exporter_version: "1.8.2"
+    node_exporter_listen: ":9100"
+    redis_exporter_version: "1.62.0"
+    redis_exporter_sha256: "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+    redis_exporter_listen: ":9121"
+    vector_version: "0.40.0"
+    vector_sha256: "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+    vector_sink_type: console
+    vector_sink_endpoint: ""
+    vector_sink_auth_ref: ""
+    vector_log_sources: ["/var/log/redis/*.log"]
+    # ★ Under test: download roots of the three agents → internal mirror (github path 1:1)
+    # + allow_private (SSRF-guard lifted for private-resolve mirror, pattern from redis
+    # destiny.yml install.allow_private).
+    node_exporter_base_url: "https://nexus.internal/raw-proxy-github/prometheus/node_exporter/releases/download"
+    node_exporter_allow_private: true
+    redis_exporter_base_url: "https://nexus.internal/raw-proxy-github/oliver006/redis_exporter/releases/download"
+    redis_exporter_allow_private: true
+    vector_base_url: "https://nexus.internal/raw-proxy-github/vectordotdev/vector/releases/download"
+    vector_allow_private: true
+    system_acl_users:
+      default_admin: "~* &* +@all"
+      replica:    "+psync +replconf +ping"
+      monitoring: "-@all +@connection +client +ping +info +config|get +cluster|info +slowlog +latency +memory +select +command|count +command|docs"
+      sentinel:   "allchannels +multi +slaveof +ping +exec +subscribe +config|rewrite +role +publish +info +client|setname +client|kill +script|kill"
+      haproxy:    "-@all +auth +client|getname +client|id +client|setname +command +hello +ping +role +info +cluster|info"
+    system_acl_users_sentinel:
+      monitoring: "-@all +@connection -command +client -hello +info -auth +sentinel|masters +sentinel|replicas +sentinel|slaves +sentinel|sentinels +sentinel|ckquorum"
+
+  input:
+    provision:
+      enabled: false
+    redis_type: sentinel
+    version: "7.4.1"
+    replicas_per_master: 0
+
+assert:
+  task_present:
+    # Disambiguator between the three core.url.fetched — path (unique for each agent).
+    - module: core.url.fetched
+      params_subset:
+        url: https://nexus.internal/raw-proxy-github/prometheus/node_exporter/releases/download/v1.8.2/node_exporter-1.8.2.linux-amd64.tar.gz
+        path: /tmp/node_exporter-1.8.2.tar.gz
+        allow_private: true
+
+    - module: core.url.fetched
+      params_subset:
+        url: https://nexus.internal/raw-proxy-github/oliver006/redis_exporter/releases/download/v1.62.0/redis_exporter-v1.62.0.linux-amd64.tar.gz
+        path: /tmp/redis_exporter-1.62.0.tar.gz
+        allow_private: true
+
+    - module: core.url.fetched
+      params_subset:
+        url: https://nexus.internal/raw-proxy-github/vectordotdev/vector/releases/download/v0.40.0/vector-0.40.0-x86_64-unknown-linux-gnu.tar.gz
+        path: /tmp/vector-0.40.0.tar.gz
+        allow_private: true

@@ -1,0 +1,33 @@
+from_version: 12
+to_version: 13
+
+description: >-
+  state_schema v12 → v13: mandatory data-plane monitoring (Slice I, redis pilot).
+  state is EXTENDED with the read-model object monitoring — pinned versions and listen
+  ports of the exporters (node_exporter + redis_exporter) deployed by the create-run
+  (symmetric with the install/tls read-model). The password/user of the monitoring
+  ACL-user are NOT stored in state (security — they live in Vault, like tls.*_ref).
+
+  Forward-only (down: not supported; recovery — via state_history).
+  Existing v12-incarnations were deployed BEFORE monitoring was introduced (no exporters
+  yet) → conservative default: empty versions (''  = "not deployed", best-effort like
+  memory_mb/io_threads in 002_to_003/010_to_011), ports — conventional defaults :9100/:9121
+  (standard listen for node_exporter/redis_exporter, independent of whether deployment
+  happened; the next create will overwrite them with values from essence). ONE flat set
+  with a has()-guard on the WHOLE object (CEL-map-literal-default): monitoring already
+  present → kept as is (idempotency of a repeat run), otherwise the default is set.
+  Mirrors the object-guard of 008_to_009 (seeded_from). The rest of state (redis_config/
+  redis_users/tls/namedfields/topology) is NOT touched.
+
+transform:
+  - set:
+      path: state.monitoring
+      value: >-
+        ${ has(state.monitoring)
+             ? state.monitoring
+             : {
+                 'node_exporter_version':  '',
+                 'redis_exporter_version': '',
+                 'node_exporter_listen':   ':9100',
+                 'redis_exporter_listen':  ':9121'
+               } }

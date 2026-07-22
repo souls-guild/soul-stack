@@ -1,0 +1,74 @@
+# L0 test for the version-aware validator of redis_settings directive names in update_config
+# (assert, #6) — NEGATIVE. ★ qa-gap: update_config accepts redis_settings
+# (passthrough KEY→VALUE) — without a check a typo would silently end up in CONFIG SET / the next
+# restart. essence carries a redis_directives catalog with series 7.2; the DEPLOYED version
+# (incarnation.state.redis_version) = 7.2.4 → series 7.2. redis_settings contains
+# an UNKNOWN name (typo `maxmemoyr` — not in the catalog) → assert false → render
+# aborts on the KEEPER-SIDE (422 assert-failed) BEFORE any dispatch, with a clear message.
+#
+# Symmetric to create/tests/redis-settings-directive-unknown: the same intent (passthrough
+# doesn't silently let a garbage name through), but on a repeated run — the version is taken from state, not from
+# input. The validate phase passes (redis_settings is set → has() true), the assert causes the abort.
+name: redis_settings with an unknown directive name aborts at render (catalog assert)
+
+fixtures:
+  default_destiny_source: "file://../../destiny/{name}"
+  soulprint:
+    network: { primary_ip: 10.0.0.5 }
+    os: { arch: amd64 }
+
+  essence:
+    memory_reserve_percent: 75
+    # host-layout is in essence (v11→v12, Variant A): moved out of state, a repeated run reads it from here.
+    conf_dir: /etc/redis
+    data_dir: /var/lib/redis
+    modules_base_url: "https://artifacts.example.com/redis/modules"
+    persistence_presets:
+      rdb:
+        save: "900 1 300 10 60 10000"
+        appendonly: "no"
+    # Directive catalog (subset of series 7.2) — activates the assert validator.
+    redis_directives:
+      "7.2":
+        - maxmemory
+        - maxmemory-policy
+        - maxclients
+        - timeout
+        - appendonly
+        - appendfsync
+        - save
+
+  # Deployed incarnation.state (from create): version 7.2.4 (series 7.2). Plaintext.
+  state:
+    redis_type: sentinel
+    redis_version: "7.2.4"
+    tls:
+      enable:   false
+      only:     false
+      port:     7379
+      cert_ref: ""
+      key_ref:  ""
+      ca_ref:   ""
+    persistence: rdb
+    memory_mb: 1024
+    maxmemory_policy: allkeys-lru
+    redis_config:
+      maxmemory:        "768mb"
+      maxmemory-policy: allkeys-lru
+      save:             "900 1 300 10 60 10000"
+      appendonly:       "no"
+    redis_users: []
+
+  input:
+    # Operator delta: passthrough directive with a TYPO (should be maxmemory).
+    # validate passes (redis_settings is set); the name gets caught by the assert against catalog[7.2].
+    redis_settings:
+      maxmemoyr: "512mb"
+
+  vault:
+    secret/redis/update_config:
+      password: upd-redis-pass-16chars
+
+# The run aborts at render: assert "Validate redis_settings directive names..." false
+# (maxmemoyr not in catalog[7.2]). Substring — the assert rule's message (update_config/main.yml).
+expect_render_error: "unknown redis.conf directive"

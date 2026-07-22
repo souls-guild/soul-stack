@@ -1,0 +1,18 @@
+name: provisioned-defaults-back-compat
+description: >
+  Incarnation without provision fields (deployed before v3, WITHOUT cloud-create) →
+  conservative default: provisioned_vm_ids=[] and provisioned_provider=''.
+  has()-guard back-compat for missing keys. Mirrors redis
+  006_to_007 provisioned-defaults-back-compat.
+
+state_before:
+  df_version: "1.39.0"
+  df_config:
+    maxmemory: "256mb"
+
+state_after:
+  df_version: "1.39.0"
+  df_config:
+    maxmemory: "256mb"
+  provisioned_vm_ids: []
+  provisioned_provider: ""

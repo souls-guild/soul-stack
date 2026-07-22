@@ -1,0 +1,85 @@
+name: persistence-identity-tls-only-defaults
+description: >
+  Three invariants in one case (sentinel, v10):
+    - persistence:off → IDENTITY (off is preserved in the new enum, remap does NOT touch it:
+      the ternary branch returns state.persistence as-is). redis_config is off-consistent
+      (save:"" appendonly:"no") — the migration does not change it, but the fixture is honest
+      about the mode;
+    - tls.enable:true + tls.only:true → connection_mode → tls (TLS only, plain closed);
+    - redis_sentinel WITHOUT the old down_after_ms/failover_timeout_ms (a theoretical v10
+      before 004_to_005 timings, or a remap) → master_settings is assembled from
+      ROLE DEFAULTS 5000/60000 (has-guard for missing leaves), master_name/quorum preserved.
+  Proves: remap is idempotent for off (identity branch), the reverse fold tls→tls,
+  the default branch of master_settings timings.
+
+state_before:
+  redis_type: sentinel
+  redis_version: "7.4.1"
+  redis_config:
+    maxmemory: "256mb"
+    save: ""
+    appendonly: "no"
+  redis_users: []
+  redis_hosts: []
+  redis_sentinel:
+    master_name: master
+    quorum: 0
+  tls:
+    enable: true
+    only: true
+    port: 7379
+    cert_ref: "secret/services/redis/tls#cert"
+    key_ref: "secret/services/redis/tls#key"
+    ca_ref: "secret/services/redis/tls#ca"
+  install:
+    method: package
+  persistence: off
+  maxmemory_policy: ""
+  memory_mb: 0
+  modules: []
+  modules_base_url: ""
+  conf_dir: /etc/redis
+  data_dir: /var/lib/redis
+  sysctl_settings: {}
+  shards: 0
+  replicas: 0
+  sentinel_quorum: 0
+
+state_after:
+  redis_type: sentinel
+  redis_version: "7.4.1"
+  redis_config:
+    maxmemory: "256mb"
+    save: ""
+    appendonly: "no"
+  redis_users: []
+  redis_hosts: []
+  redis_sentinel:
+    master_name: master
+    quorum: 0
+    master_settings:
+      down-after-milliseconds: "5000"
+      failover-timeout: "60000"
+    settings: {}
+  tls:
+    enable: true
+    only: true
+    port: 7379
+    cert_ref: "secret/services/redis/tls#cert"
+    key_ref: "secret/services/redis/tls#key"
+    ca_ref: "secret/services/redis/tls#ca"
+  install:
+    method: package
+  persistence: off
+  connection_mode: tls
+  io_threads: 0
+  maxmemory_policy: ""
+  memory_mb: 0
+  modules: []
+  modules_base_url: ""
+  conf_dir: /etc/redis
+  data_dir: /var/lib/redis
+  sysctl_settings: {}
+  shards: 0
+  replicas: 0
+  sentinel_quorum: 0

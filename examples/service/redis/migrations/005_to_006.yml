@@ -1,0 +1,52 @@
+from_version: 5
+to_version: 6
+
+description: >-
+  state_schema v5 → v6: redis_users moves from map name→{perms,state} to a
+  TYPED array [{name, perms, state}] (wave 1b of the types epic, ADR-062 —
+  reusable AclUser type in input/state). The map key (username) moves into
+  the element's name field; perms/state are carried over as-is.
+
+  ★ DSL form (the INVERSE of 001_to_002, which did list→map via foreach): here
+  we need the reverse map→array fold. It's expressible as ONE flat set with a
+  CEL fold over the map:
+    state.redis_users.map(n, {'name': n, 'perms': ..., 'state': ...})
+  The native CEL macro .map() OVER A MAP iterates its KEYS (n — username),
+  which is exactly what we need: map key → element's name field. keys() is NOT
+  registered in migration-CEL (only stdlib macros map/filter/all/has/size +
+  operators), but it isn't needed either — .map() over a map yields keys
+  directly. foreach doesn't work here either: it binds the map element's
+  VALUE, but we need the KEY as name. set reads the current state.redis_users
+  (map) to compute value BEFORE overwriting the same path — applySet computes
+  the value against the current state, then setPath (keeper/internal/statemigrate/
+  apply.go).
+
+  ★ Array ORDER is NOT deterministic (cel-go's .map() over a Go map walks keys
+  in map-iteration order, it doesn't sort) — but that's NOT an invariant we
+  need: day-2 readers of state.redis_users rebuild the destiny-users MAP via
+  their own .map(u, {u.name: …}), and users.acl.tmpl ranges over the MAP with
+  sorted keys. The resulting users.acl is deterministic regardless of the
+  array element order in state. That's why migration tests
+  (single-user/empty/absent/preserves) are 0/1-element (order-immune); we do
+  not add a multi-element order-sensitive case (treating order as an invariant
+  would be wrong, and the test would be flaky). Empty/absent map → empty array
+  (an explicit ternary branch via has()+size — readable and back-compat for
+  incarnations without the key).
+
+  Forward-only (down: is not supported; recovery is via state_history).
+  The rest of state (redis_config/redis_hosts/redis_sentinel/namedfields) is
+  NOT touched.
+  The has() guard on redis_users is back-compat: incarnations without ACL
+  users (no key) get an empty array.
+
+transform:
+  - set:
+      path:  state.redis_users
+      value: >-
+        ${ (!has(state.redis_users) || size(state.redis_users) == 0)
+             ? []
+             : state.redis_users.map(n, {
+                 'name':  n,
+                 'perms': state.redis_users[n].perms,
+                 'state': state.redis_users[n].state
+               }) }

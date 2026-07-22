@@ -1,0 +1,8 @@
+name: serial-and-runonce
+tasks:
+  - name: cannot use both
+    serial: 1
+    run_once: true
+    module: core.exec.run
+    params:
+      command: "true"

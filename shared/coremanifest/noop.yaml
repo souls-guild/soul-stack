@@ -1,0 +1,13 @@
+kind: soul_module
+protocol_version: 1
+namespace: core
+name: noop
+
+# No-op performs no actions - capabilities are not required.
+required_capabilities: []
+
+spec:
+  states:
+    run:
+      description: No-op. Does nothing, always succeeds with no change (changed=false). barrier anchor / placeholder; ADR-015.
+      input: {}

@@ -1,0 +1,29 @@
+kind: soul_module
+protocol_version: 1
+namespace: core
+name: firewall
+
+required_capabilities:
+  - run_as_root
+  - exec_subprocess
+
+spec:
+  states:
+    present:
+      description: Firewall rule exists (port/proto/source/action); ufw/firewalld. ADR-015/ADR-016.
+      input:
+        # port is read as int OR string (for ${...} interpolation). The schema type is
+        # int (numeric literal); the string form passes as a CEL-wrapped value.
+        port:   { type: int,    required: true, description: "Port 1..65535." }
+        proto:  { type: string, enum: [tcp, udp],  description: "Protocol tcp|udp (default tcp)." }
+        action: { type: string, enum: [allow, deny], description: "Action allow|deny (default allow)." }
+        source: { type: string, description: "IPv4 CIDR or a single IPv4 (default any). IPv6 not supported in MVP." }
+        zone:   { type: string, description: "firewalld zone (default - default zone)." }
+    absent:
+      description: Rule removed.
+      input:
+        port:   { type: int,    required: true, description: "Port 1..65535." }
+        proto:  { type: string, enum: [tcp, udp],  description: "Protocol tcp|udp (default tcp)." }
+        action: { type: string, enum: [allow, deny], description: "Action allow|deny (default allow)." }
+        source: { type: string, description: "IPv4 CIDR or a single IPv4." }
+        zone:   { type: string, description: "firewalld zone." }

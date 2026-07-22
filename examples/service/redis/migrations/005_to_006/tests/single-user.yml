@@ -1,0 +1,11 @@
+name: single-user
+description: >
+  Single user: map with one key → array with one element.
+
+state_before:
+  redis_users:
+    app: { perms: "~* +@all", state: "on" }
+
+state_after:
+  redis_users:
+    - { name: "app", perms: "~* +@all", state: "on" }

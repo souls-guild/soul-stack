@@ -1,0 +1,20 @@
+name: provisioned-sids-default-back-compat
+description: >
+  An incarnation without provisioned_sids (deployed before v8) → conservative default:
+  provisioned_sids=[]. has()-guard back-compat for the missing key (a copy of
+  the 006_to_007 provisioned_vm_ids pattern).
+
+state_before:
+  redis_type: "sentinel"
+  redis_config:
+    maxmemory: "256mb"
+  provisioned_vm_ids: ["i-aaa111"]
+  provisioned_provider: "example-dev"
+
+state_after:
+  redis_type: "sentinel"
+  redis_config:
+    maxmemory: "256mb"
+  provisioned_vm_ids: ["i-aaa111"]
+  provisioned_provider: "example-dev"
+  provisioned_sids: []

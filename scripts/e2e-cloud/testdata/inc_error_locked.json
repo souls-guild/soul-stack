@@ -1,0 +1,25 @@
+{
+  "covens": ["redis-auto"],
+  "created_at": "2026-07-06T10:00:00.000000000Z",
+  "created_by_aid": "archon-alice",
+  "name": "redis-auto",
+  "service": "example-cloud-bootstrap",
+  "service_version": "v1.0.0",
+  "spec": {
+    "hosts": [
+      {"sid": "redis-auto-1.ns.vm.example", "role": "master"}
+    ]
+  },
+  "state": {
+    "users": [
+      {"name": "default"}
+    ]
+  },
+  "state_schema_version": 1,
+  "status": "error_locked",
+  "status_details": {
+    "last_error": "apply failed on redis-auto-1: core.pkg.installed exit 100",
+    "failed_apply_id": "01J8ZK7Q9WGF3M2N7P4R5S6FA1"
+  },
+  "updated_at": "2026-07-06T10:01:12.000000000Z"
+}

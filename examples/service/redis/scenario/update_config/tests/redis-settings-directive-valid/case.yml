@@ -1,0 +1,96 @@
+# L0 test of the version-aware validator for redis_settings directive names in update_config
+# (assert, #6) - POSITIVE case. essence carries the redis_directives catalog with the 7.2 series;
+# the DEPLOYED version (incarnation.state.redis_version) = 7.2.4 → series 7.2.
+# redis_settings contains a VALID name (appendfsync ∈ catalog[7.2]) → the assert passes,
+# the directive makes it through to hot-reload (community.redis.config) and the final redis_config.
+#
+# Paired with redis-settings-directive-unknown (there a typo breaks the render). Covers
+# the assert's true branch and proves the validator doesn't false-block a valid directive.
+name: redis_settings with a valid directive name passes the catalog assert
+
+fixtures:
+  default_destiny_source: "file://../../destiny/{name}"
+  soulprint:
+    network: { primary_ip: 10.0.0.5 }
+    os: { arch: amd64 }
+
+  essence:
+    memory_reserve_percent: 75
+    # host-layout - in essence (v11→v12, Variant A): moved out of state, a repeat run reads it from here.
+    conf_dir: /etc/redis
+    data_dir: /var/lib/redis
+    modules_base_url: "https://artifacts.example.com/redis/modules"
+    persistence_presets:
+      rdb:
+        save: "900 1 300 10 60 10000"
+        appendonly: "no"
+    redis_directives:
+      "7.2":
+        - maxmemory
+        - maxmemory-policy
+        - maxclients
+        - timeout
+        - appendonly
+        - appendfsync
+        - save
+
+  state:
+    redis_type: sentinel
+    redis_version: "7.2.4"
+    tls:
+      enable:   false
+      only:     false
+      port:     7379
+      cert_ref: ""
+      key_ref:  ""
+      ca_ref:   ""
+    persistence: rdb
+    memory_mb: 1024
+    maxmemory_policy: allkeys-lru
+    redis_config:
+      maxmemory:        "768mb"
+      maxmemory-policy: allkeys-lru
+      save:             "900 1 300 10 60 10000"
+      appendonly:       "no"
+    redis_users: []
+
+  input:
+    # Operator delta: a VALID passthrough directive (∈ catalog[7.2]). Overrides
+    # appendfsync last-wins; the assert lets it through, the directive makes it to hot-reload.
+    redis_settings:
+      appendfsync: everysec
+
+  vault:
+    secret/redis/update_config:
+      password: upd-redis-pass-16chars
+    # ★ default_admin REDESIGN: the system admin user - password from the users/default_admin branch
+    # (masterauth top-up in apply.input.config + AUTH community.redis.config).
+    secret/redis/update_config/users/default_admin:
+      password: default-admin-secret-pass
+
+assert:
+  task_present:
+    # hot-reload carries the recomputed merged config with the passthrough directive topped up.
+    # ★ default_admin REDESIGN: AUTH as default_admin (username + its Vault password).
+    - module: community.redis.config
+      params_subset:
+        addr: "127.0.0.1:6379"
+        username: default_admin
+        password: default-admin-secret-pass
+        # rewrite=false (NIM-53): step 1's redis.conf is the file's source of truth.
+        rewrite: false
+        config:
+          maxmemory: "768mb"
+          maxmemory-policy: allkeys-lru
+          save: "900 1 300 10 60 10000"
+          appendonly: "no"
+          appendfsync: everysec
+
+  state_changes:
+    # state.redis_config ≡ config hot-reload (a single compute): passthrough was topped up last-wins.
+    redis_config:
+      maxmemory: "768mb"
+      maxmemory-policy: allkeys-lru
+      save: "900 1 300 10 60 10000"
+      appendonly: "no"
+      appendfsync: everysec

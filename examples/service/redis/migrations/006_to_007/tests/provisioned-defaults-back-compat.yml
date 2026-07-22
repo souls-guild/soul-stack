@@ -1,0 +1,17 @@
+name: provisioned-defaults-back-compat
+description: >
+  An incarnation without provision fields (deployed before v7, WITHOUT cloud-create) →
+  conservative default: provisioned_vm_ids=[] and provisioned_provider=''.
+  has()-guard back-compat for missing keys.
+
+state_before:
+  redis_type: "sentinel"
+  redis_config:
+    maxmemory: "256mb"
+
+state_after:
+  redis_type: "sentinel"
+  redis_config:
+    maxmemory: "256mb"
+  provisioned_vm_ids: []
+  provisioned_provider: ""

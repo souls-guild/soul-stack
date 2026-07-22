@@ -1,0 +1,97 @@
+syntax = "proto3";
+
+package soulstack.keeper.v1;
+
+import "google/protobuf/timestamp.proto";
+
+option go_package = "github.com/souls-guild/soul-stack/proto/gen/go/keeper/v1;keeperv1";
+
+// Hello is the first Soul -> Keeper message on EventStream after the mTLS handshake.
+message Hello {
+  // SID echoed for logging only; authoritative source is the mTLS peer certificate.
+  string sid_echo = 1;
+
+  // Version of the soul binary.
+  string soul_version = 2;
+
+  // capabilities: the set of protocol features this Soul binary supports
+  // (ADR-056 §S5 forward-compat). Announced at connect time; Keeper persists it
+  // alongside presence (Redis, lifecycle = SID-lease) and checks it BEFORE
+  // dispatching feature-dependent runs.
+  //
+  // Canonical string values — naming-rules.md -> "Soul capabilities". MVP:
+  //   - "passage": Soul echoes ApplyRequest.passage in TaskEvent/RunResult, i.e. it
+  //     can take part in a staged render (N>1 Passage, ADR-056). A Soul without
+  //     this flag is rejected by keeper BEFORE dispatch under a staged scenario
+  //     (`soul_passage_unsupported`, fail-closed) — otherwise the next Passage's
+  //     barrier would wait for a terminal an old binary would never send (a hang
+  //     in applying).
+  //
+  // An empty set = an old Soul with no capability announcement (forward-compat,
+  // ADR-012(c) only-add): keeper treats it as supporting NO features at all
+  // (fail-closed for feature-dependent runs; N=1 runs remain compatible as
+  // before). Never reuse this field number.
+  repeated string capabilities = 3;
+}
+
+// HelloReply is Keeper's response carrying session metadata.
+message HelloReply {
+  // ULID, unique within the Keeper cluster. Used to trace the stream in logs/OTel.
+  string session_id = 1;
+
+  // KID of the Keeper instance serving this stream.
+  string kid = 2;
+
+  // Server time — for diagnosing clock skew between Keeper and Soul.
+  google.protobuf.Timestamp server_time = 3;
+}
+
+// SeedRotationRequest is Soul asking to issue a new SoulSeed over the live stream
+// (at not_after - 24h, see docs/soul/identity.md).
+message SeedRotationRequest {
+  // The new CSR. Public key of the new seed; Soul's private key never leaves the host.
+  bytes csr_pem = 1;
+}
+
+// SeedRotationReply is the newly issued seed.
+message SeedRotationReply {
+  bytes certificate_pem = 1;
+  bytes ca_chain_pem = 2;
+  google.protobuf.Timestamp not_after = 3;
+}
+
+// WardRoster is the Soul-reconcile mechanism (ADR-027(g), S6): a declaration of
+// apply runs Soul is minding, sent on (re)connect. Closes the dispatched-orphan
+// hole "Keeper and Soul both died right after dispatch": an apply_runs row would
+// otherwise stay stuck in `dispatched` forever (reclaim is scoped to `claimed`
+// only; we deliberately don't add a Reaper dispatched-timeout). On reconnect,
+// Soul sends a FULL snapshot (ReplaceAll) right after Hello and BEFORE the first
+// app message; Keeper uses it to terminate this SID's orphaned `dispatched` rows
+// that are missing from the set.
+//
+// An empty active[] is an explicit declaration of "no apply in flight" (e.g.
+// after a Soul process restart: the in-memory set is reset, nothing is
+// physically in flight). This is a normal signal to terminate ALL of this SID's
+// dispatched rows — and it's correct to do so.
+//
+// An old Soul without WardRoster never sends this message -> Keeper does NOT run
+// the sweep (a fail-safe hang, forward-compat only-add ADR-012(c)).
+message WardRoster {
+  repeated ActiveApply active = 1;
+}
+
+// ActiveApply is one entry in the [WardRoster] set: an apply run Soul is minding.
+message ActiveApply {
+  // apply_id of the run being minded (echo of ApplyRequest.apply_id).
+  string apply_id = 1;
+
+  // attempt: fencing epoch, an echo of the accepted ApplyRequest.attempt
+  // (ADR-027(g)). Keeper's epoch guard compares it against apply_runs.attempt: an
+  // entry in the set with a smaller attempt than the row (a re-claim happened)
+  // does NOT protect against orphaning.
+  int32 attempt = 2;
+
+  // status is reserved for future use (detailing the run's phase on Soul). NOT
+  // read by Keeper in the MVP: an apply_id's presence in the set means "the run
+  // is being minded". Never reuse field 3.
+}

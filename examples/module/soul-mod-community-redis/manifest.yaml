@@ -1,0 +1,1084 @@
+# Manifest for the soul-mod-community-redis plugin (ADR-020 plugin infrastructure).
+#
+# THE MAIN interface to a live Redis in the redis-consolidation:
+# the service scenario orchestrates order/targeting, the plugin executes ONE operation
+# against ONE Redis instance. Currently implemented states are command + pinged/role/
+# replica-synced/offset-synced (read-probe) + config + acl (ACL LOAD hot-reload) +
+# cluster (action create + add-node + remove-node + reshard + join-external +
+# failover-takeover + forget-external) + replica (REPLICAOF, incl. external source
+# source_external) + detached (REPLICAOF NO ONE, promotion) + sentinel (MONITOR/SET
+# reconcile).
+#
+# DELIBERATELY WITHOUT dry-run preview: the plugin does NOT implement PlanReadSafe - on dry_run
+# the host (Soul) applies default-deny (the task gets an honest "drift not
+# supported" instead of a false "no drift"). User decision 2026-06-22.
+kind: soul_module
+protocol_version: 1                    # compat flag of the SoulModule API; artifact version is a git ref (ADR-007)
+namespace: community
+name: redis
+
+# TLS connect. All states
+# (command/pinged/role/replica-synced/offset-synced/config/cluster/replica/detached/sentinel) accept SHARED TLS connect params:
+#   - tls             (bool, default false) - connect over TLS. In only-TLS mode
+#                     (redis `port 0`, plain closed) it is REQUIRED - otherwise the plugin
+#                     cannot reach it. tls=false -> plaintext (back-compat).
+#   - tls_ca          (string, secret, PEM) - CA to verify the server certificate
+#                     (RootCAs). Practically required with a private PKI.
+#   - tls_cert/tls_key (string, secret, PEM) - client-cert for mTLS (optional; only
+#                     TOGETHER). One without the other -> error.
+#   - tls_skip_verify (bool, default false) - EXPLICIT opt-out of certificate verification.
+#                     default secure: verification is ENABLED (security invariant).
+# PEM arrives WHOLE in params (scenario resolves it from Vault in the render phase). PEM
+# fields marked secret -> masked by the output layer by key name (shared/audit masks
+# tls_key/tls_cert/tls_ca). PEM never leaks into events/logs/errors (redactError).
+# Params are declared in each state's input (command/config below serve as the canon); cluster/
+# replica/sentinel read the same set through the shared connect path.
+#
+# Closed enum (ADR-020(f) / docs/keeper/plugins.md -> required_capabilities).
+# ONLY network_outbound: the plugin connects to Redis over TCP/unix socket (incl. TLS).
+# NO vault_access - the password AND PEM arrive ALREADY resolved by Keeper (render phase
+# vault() in scenario), the plugin needs no Vault access of its own (ADR-012, brief).
+required_capabilities:
+  - network_outbound
+
+# Strict contract of touched resources (ADR-020(g)): exactly one
+# <resource-type>: <value> pair per entry. Both states operate on the live redis service.
+side_effects:
+  - { service: redis-server }
+
+spec:
+  states:
+    # command - raw command against Redis. Imperative verb-state (precedent
+    # core.cmd.shell / core.exec.run / core.http.probe): changed=false by
+    # default (like probe). Idempotency is the operator's responsibility; the plugin merely
+    # sends the command and returns its output.
+    command:
+      description: |
+        Execute a raw command against Redis (imperative verb-state). By default
+        changed=false (like probe); the operator is responsible for idempotency.
+        No dry-run preview (the plugin does not implement PlanReadSafe).
+
+        WARNING (security): the command output is placed into Output.result IN PLAINTEXT - this
+        is Redis's response, not a plugin-managed secret, so it is NOT covered by the ADR-010
+        masks. DO NOT run read commands that return secrets through the command state
+        (CONFIG GET requirepass / masterauth, ACL GETUSER <user>, ACL LIST):
+        their result will end up in RunResult/logs/OTel/UI in plaintext. For that -
+        mark the task no_log or use a specialized state (config with a
+        secret field does not echo the value itself). params.password itself is masked
+        and does not end up in the command arguments (see the guard tests).
+      input:
+        addr:
+          type: string
+          required: true
+          description: >-
+            Redis address: host:port (TCP) or a unix socket with the
+            "unix:" prefix (e.g. unix:/var/run/redis/redis-server.sock).
+        password:
+          type: string
+          required: false
+          secret: true
+          pattern: "^vault:.*"
+          description: >-
+            Redis password (requirepass / ACL). vault-ref in operator-input;
+            keeper resolves it before Apply, the plugin gets plaintext (ADR-012).
+            Masked in logs/traces/UI (secret).
+        username:
+          type: string
+          required: false
+          description: ACL username for AUTH (if not the default user).
+        db:
+          type: int
+          required: false
+          default: 0
+          description: DB number (SELECT) before the command.
+        # TLS connect params (shared across all states, see the manifest header).
+        tls:
+          type: bool
+          required: false
+          default: false
+          description: >-
+            Connect to Redis over TLS. Required in only-TLS (port 0).
+            Default false (plaintext).
+        # secret-PEM: like password, the manifest declares the secret source via
+        # pattern "^vault:.*" (semantic rule input_secret_without_vault_pattern -
+        # the only allowed pattern for a secret). The ACTUAL value arrives as
+        # PLAINTEXT: scenario resolves the PEM via ${ vault(...) } in the render phase and
+        # puts the whole PEM into apply.input (like requirepass). pattern is a declarative
+        # marker of the secret source for audit, not a runtime regex over PEM. Masking is
+        # by key name (shared/audit masks tls_key/tls_cert/tls_ca).
+        tls_ca:
+          type: string
+          required: false
+          secret: true
+          pattern: "^vault:.*"
+          description: >-
+            PEM CA certificate to verify the server certificate (RootCAs).
+            Masked (secret). Resolved keeper-side from Vault (render phase).
+        tls_cert:
+          type: string
+          required: false
+          secret: true
+          pattern: "^vault:.*"
+          description: >-
+            PEM client certificate for mTLS (optional, only together with tls_key).
+            Masked (secret).
+        tls_key:
+          type: string
+          required: false
+          secret: true
+          pattern: "^vault:.*"
+          description: >-
+            PEM client key for mTLS (optional, only together with tls_cert).
+            Masked (secret); does not end up in events/errors.
+        tls_skip_verify:
+          type: bool
+          required: false
+          default: false
+          description: >-
+            EXPLICIT opt-out of server certificate verification. Default false
+            (verification enabled - default secure).
+        args:
+          type: list
+          required: true
+          description: >-
+            The command as an array of arguments (no shell), e.g.
+            ["CONFIG", "SET", "maxmemory", "256mb"]. The first element is the verb.
+        changed:
+          type: bool
+          required: false
+          default: false
+          description: >-
+            Mark the result as changed=true (for commands that actually mutate
+            state). Default false (probe semantics).
+    # pinged - health-probe via go-redis PING (expects PONG). Read-only,
+    # changed=false BY DESIGN (precedent core.http.probe). Replaces the idiom
+    # command args:[PING]: Output.result carries the response (PONG) for a health-gate
+    # (retry/until/failed_when on register.self.result). TLS connect params -
+    # shared (see manifest header), read through the same path as command.
+    pinged:
+      description: |
+        Health-probe Redis via go-redis PING (expects PONG). Read-only,
+        changed=false by design (probe, not a mutation). Replaces the idiom
+        command args:[PING]: Output.result == 'PONG' - the same field returned by
+        command, so register.self.result == 'PONG' in a health-gate
+        (retry/until/failed_when) works without changes. No dry-run preview.
+      input:
+        addr:
+          type: string
+          required: true
+          description: >-
+            Redis address: host:port (TCP) or a unix socket with the "unix:" prefix.
+        password:
+          type: string
+          required: false
+          secret: true
+          pattern: "^vault:.*"
+          description: >-
+            Redis password (vault-ref; keeper resolves it before Apply). Masked -
+            does not end up in events/logs. Not passed in the PING arguments.
+        username:
+          type: string
+          required: false
+          description: ACL username for AUTH (if not the default user).
+        db:
+          type: int
+          required: false
+          default: 0
+          description: DB number (SELECT) before PING.
+        # TLS connect params - shared across all states (see manifest header):
+        # tls / tls_ca / tls_cert / tls_key / tls_skip_verify are read through the
+        # same connect path as command/replica. Canonical declaration is in command.
+        tls:
+          type: bool
+          required: false
+          default: false
+          description: >-
+            Connect to Redis over TLS. Required in only-TLS (port 0).
+            Default false (plaintext).
+        tls_ca:
+          type: string
+          required: false
+          secret: true
+          pattern: "^vault:.*"
+          description: >-
+            PEM CA certificate to verify the server certificate (RootCAs).
+            Masked (secret). Resolved keeper-side from Vault (render phase).
+        tls_cert:
+          type: string
+          required: false
+          secret: true
+          pattern: "^vault:.*"
+          description: >-
+            PEM client certificate for mTLS (optional, only together with tls_key).
+            Masked (secret).
+        tls_key:
+          type: string
+          required: false
+          secret: true
+          pattern: "^vault:.*"
+          description: >-
+            PEM client key for mTLS (optional, only together with tls_cert).
+            Masked (secret); does not end up in events/errors.
+        tls_skip_verify:
+          type: bool
+          required: false
+          default: false
+          description: >-
+            EXPLICIT opt-out of server certificate verification. Default false
+            (verification enabled - default secure).
+    # role - role-probe via go-redis INFO replication (the host's volatile role).
+    # Read-only, changed=false BY DESIGN. Replaces the shell idiom
+    # `redis-cli role | head -1 | tr -d '\n'`: Output.role carries the actual role
+    # (master/slave) for where-targeting of rolling-restart (ADR-008: role is volatile,
+    # measured by a live probe before targeting, not from incarnation.state). TLS -
+    # shared connect params (as with pinged/command).
+    role:
+      description: |
+        Role-probe Redis via go-redis INFO replication. Read-only,
+        changed=false by design (probe). Output.role carries the actual
+        (volatile) instance role: "master" / "slave" - the same values returned
+        by shell `redis-cli role`. Used in where-targeting of
+        rolling-restart (register.self.role == 'master'/'slave'); the role is volatile
+        (ADR-008), taken by a live probe before targeting. No dry-run preview.
+      input:
+        addr:
+          type: string
+          required: true
+          description: >-
+            Redis address: host:port (TCP) or a unix socket with the "unix:" prefix.
+        password:
+          type: string
+          required: false
+          secret: true
+          pattern: "^vault:.*"
+          description: >-
+            Redis password (vault-ref; keeper resolves it before Apply). Masked -
+            does not end up in events/logs (INFO replication does not carry a role
+            secret, but a connect error theoretically could - redactError).
+        username:
+          type: string
+          required: false
+          description: ACL username for AUTH (if not the default user).
+        db:
+          type: int
+          required: false
+          default: 0
+          description: DB number (SELECT) before INFO.
+        # TLS connect params - shared (canonical declaration in command).
+        tls:
+          type: bool
+          required: false
+          default: false
+          description: >-
+            Connect to Redis over TLS. Required in only-TLS (port 0).
+            Default false (plaintext).
+        tls_ca:
+          type: string
+          required: false
+          secret: true
+          pattern: "^vault:.*"
+          description: >-
+            PEM CA certificate to verify the server certificate (RootCAs).
+            Masked (secret). Resolved keeper-side from Vault (render phase).
+        tls_cert:
+          type: string
+          required: false
+          secret: true
+          pattern: "^vault:.*"
+          description: >-
+            PEM client certificate for mTLS (optional, only together with tls_key).
+            Masked (secret).
+        tls_key:
+          type: string
+          required: false
+          secret: true
+          pattern: "^vault:.*"
+          description: >-
+            PEM client key for mTLS (optional, only together with tls_cert).
+            Masked (secret); does not end up in events/errors.
+        tls_skip_verify:
+          type: bool
+          required: false
+          default: false
+          description: >-
+            EXPLICIT opt-out of server certificate verification. Default false
+            (verification enabled - default secure).
+    # replica-synced - a replica restart health-gate via go-redis INFO
+    # replication: master_link_status == "up" (the replica has RESYNCED with the master).
+    # Stricter than pinged (PONG = the daemon is alive but may not yet have caught up with the master after
+    # a restart). Read-only, changed=false BY DESIGN. Output.synced bool +
+    # master_link_status as a string for diagnostics.
+    # star The master/slave boundary: the field master_link_status exists ONLY on a replica
+    # (role:slave) - a master does not have it. The state is intended for the slave path
+    # (restart block.where slave). Field absent (master/an unusual INFO) -> synced=false
+    # with an explicit reason in Message (NOT a silent success), so the replica health-gate
+    # does not pass on a non-replica. TLS - shared connect params (as with pinged/command).
+    replica-synced:
+      description: |
+        Replica restart health-gate via go-redis INFO replication: checks
+        master_link_status == "up" (the replica has caught up with the master after a restart).
+        Read-only, changed=false by design (probe). Output.synced (bool) -
+        the condition for the health-gate (until: register.self.synced == true);
+        Output.master_link_status (string) - for diagnostics. master_link_status
+        is present ONLY on a replica: on a master (field absent) synced=false with the
+        reason in Message - the state is applied on the slave path of rolling-restart.
+        No dry-run preview.
+      input:
+        addr:
+          type: string
+          required: true
+          description: >-
+            Redis address: host:port (TCP) or a unix socket with the "unix:" prefix.
+        password:
+          type: string
+          required: false
+          secret: true
+          pattern: "^vault:.*"
+          description: >-
+            Redis password (vault-ref; keeper resolves it before Apply). Masked -
+            does not end up in events/logs (INFO replication does not carry a secret, but
+            a connect error theoretically could - redactError).
+        username:
+          type: string
+          required: false
+          description: ACL username for AUTH (if not the default user).
+        db:
+          type: int
+          required: false
+          default: 0
+          description: DB number (SELECT) before INFO.
+        # TLS connect params - shared (canonical declaration in command).
+        tls:
+          type: bool
+          required: false
+          default: false
+          description: >-
+            Connect to Redis over TLS. Required in only-TLS (port 0).
+            Default false (plaintext).
+        tls_ca:
+          type: string
+          required: false
+          secret: true
+          pattern: "^vault:.*"
+          description: >-
+            PEM CA certificate to verify the server certificate (RootCAs).
+            Masked (secret). Resolved keeper-side from Vault (render phase).
+        tls_cert:
+          type: string
+          required: false
+          secret: true
+          pattern: "^vault:.*"
+          description: >-
+            PEM client certificate for mTLS (optional, only together with tls_key).
+            Masked (secret).
+        tls_key:
+          type: string
+          required: false
+          secret: true
+          pattern: "^vault:.*"
+          description: >-
+            PEM client key for mTLS (optional, only together with tls_cert).
+            Masked (secret); does not end up in events/errors.
+        tls_skip_verify:
+          type: bool
+          required: false
+          default: false
+          description: >-
+            EXPLICIT opt-out of server certificate verification. Default false
+            (verification enabled - default secure).
+    # config - apply a map of config directives via CONFIG SET (+ optional CONFIG
+    # REWRITE to persist into redis.conf). Idempotent on the Redis side: CONFIG SET
+    # again with the same value is a no-op for Redis itself. changed=true when at
+    # least one directive was applied.
+    #
+    # star STARTUP-ONLY DENYLIST: directives that can only be set at process start
+    # (port/tls-port/bind/unixsocket/io-threads/cluster-enabled/aclfile/logfile/
+    # pidfile/dir/daemonize/supervised/dbfilename/loadmodule/syslog-*/databases/...),
+    # are rejected by CONFIG SET. day-2 update_config renders the FULL redis.conf (with them -
+    # for the next process restart), so the plugin SKIPS such directives
+    # (does not fail): hot-settable directives apply as usual, the count/names of skipped ones go
+    # into Output (skippedCount/skipped). A startup-only change takes effect on the process's
+    # next restart (triggered by a change in the hardening unit, destiny redis server.yml).
+    config:
+      description: |
+        Apply a map of redis.conf directives via CONFIG SET to a live Redis.
+        Optionally CONFIG REWRITE (persist). Startup-only directives (port/dir/
+        aclfile/cluster-enabled/loadmodule/...) are skipped (CONFIG SET rejects them).
+        No dry-run preview.
+      input:
+        addr:
+          type: string
+          required: true
+          description: >-
+            Redis address: host:port (TCP) or a unix socket with the "unix:" prefix.
+        password:
+          type: string
+          required: false
+          secret: true
+          pattern: "^vault:.*"
+          description: >-
+            Redis password (vault-ref in operator-input; keeper resolves it before Apply).
+            Masked in logs/traces/UI (secret).
+        username:
+          type: string
+          required: false
+          description: ACL username for AUTH (if not the default user).
+        config:
+          type: map
+          required: true
+          description: >-
+            redis.conf directives: { maxmemory: "256mb", maxmemory-policy:
+            allkeys-lru, ... }. Each applied via CONFIG SET <key> <value>.
+        rewrite:
+          type: bool
+          required: false
+          default: false
+          description: >-
+            After CONFIG SET run CONFIG REWRITE (persist into redis.conf).
+            Default false (change stays runtime-only).
+    # acl - ACL hot-reload: ACL LOAD makes the live Redis re-read the aclfile
+    # ENTIRELY (users.acl has already been rendered by destiny BEFORE this step - core.file.rendered).
+    # Foundation of the hot-reload wave. Idempotent BY CONSTRUCTION: ACL LOAD brings the
+    # instance to the declared file regardless of current state.
+    #
+    # changed semantics: ACL LOAD itself does not report "changed", so the plugin does a
+    # cheap honest diff - ACL LIST before and after LOAD. Match -> changed=false
+    # (no-op, like config/cluster/sentinel); differ -> changed=true. Symmetric with
+    # config (also compares live state and converges to the desired one).
+    #
+    # Security: the ACL LIST output (user rules, may carry password hashes
+    # >hash/#sha256) is NOT put into Output - only the user count and the
+    # changed fact go there. No dry-run preview (the plugin does not implement PlanReadSafe).
+    #
+    # Params - connect only (addr + optional auth/TLS), like read-probe; no
+    # acl-specific fields (the file is the source of truth, rendered by destiny). TLS
+    # connect params are shared (see manifest header, canonical declaration in command).
+    acl:
+      description: |
+        Hot-reload the ACL of a live Redis via ACL LOAD (re-read the aclfile entirely).
+        users.acl is rendered by destiny BEFORE this step; acl only makes the instance
+        re-read the file. Idempotent by construction; changed is determined by a diff of
+        ACL LIST before/after LOAD (matched -> changed=false). ACL LIST output does not
+        end up in Output (may carry password hashes). No dry-run preview.
+      input:
+        addr:
+          type: string
+          required: true
+          description: >-
+            Redis address: host:port (TCP) or a unix socket with the "unix:" prefix.
+        password:
+          type: string
+          required: false
+          secret: true
+          pattern: "^vault:.*"
+          description: >-
+            Redis password (vault-ref in operator-input; keeper resolves it before Apply).
+            Masked in logs/traces/UI (secret). Not passed in ACL command arguments
+            (goes only into the connect).
+        username:
+          type: string
+          required: false
+          description: ACL username for AUTH (if not the default user).
+        db:
+          type: int
+          required: false
+          default: 0
+          description: DB number (SELECT) before ACL LOAD.
+        # TLS connect params - shared across all states (see manifest header):
+        # tls / tls_ca / tls_cert / tls_key / tls_skip_verify. Canonical declaration -
+        # in command; acl reads the same set through the shared connect path.
+        tls:
+          type: bool
+          required: false
+          default: false
+          description: >-
+            Connect to Redis over TLS. Required in only-TLS (port 0).
+            Default false (plaintext).
+        tls_ca:
+          type: string
+          required: false
+          secret: true
+          pattern: "^vault:.*"
+          description: >-
+            PEM CA certificate to verify the server certificate (RootCAs).
+            Masked (secret). Resolved keeper-side from Vault (render phase).
+        tls_cert:
+          type: string
+          required: false
+          secret: true
+          pattern: "^vault:.*"
+          description: >-
+            PEM client certificate for mTLS (optional, only together with tls_key).
+            Masked (secret).
+        tls_key:
+          type: string
+          required: false
+          secret: true
+          pattern: "^vault:.*"
+          description: >-
+            PEM client key for mTLS (optional, only together with tls_cert).
+            Masked (secret); does not end up in events/errors.
+        tls_skip_verify:
+          type: bool
+          required: false
+          default: false
+          description: >-
+            EXPLICIT opt-out of server certificate verification. Default false
+            (verification enabled - default secure).
+    # cluster - manage the Redis hash-slot cluster (16384 slots) ENTIRELY via
+    # go-redis: CLUSTER MEET / ADDSLOTS / REPLICATE + CLUSTER INFO/NODES
+    # (diagnostics and idempotency). NO redis-cli/shell at all - capability
+    # remains only network_outbound.
+    #
+    #   action=create   - build a cluster from scratch. The master/replica role layout
+    #                     and the 16384 slots are deterministic (sorting node keys).
+    #                     Idempotent: a repeat create on an already-formed
+    #                     cluster -> changed=false, no-op.
+    #   action=add-node - join ONE new node to a formed cluster
+    #                     (day-2): MEET via seed -> REPLICATE (role=replica) or an
+    #                     empty master (role=master). Idempotent: node already in
+    #                     CLUSTER NODES -> changed=false, no-op.
+    #   action=remove-node - evict ONE node from the cluster (day-2). A master WITH
+    #                     slots: first migrate slots to the remaining masters
+    #                     (SETSLOT IMPORTING/MIGRATING + GETKEYSINSLOT + MIGRATE +
+    #                     SETSLOT NODE), then CLUSTER FORGET on all the rest.
+    #                     replica / master without slots: just FORGET everywhere.
+    #                     Idempotent: node already gone from CLUSTER NODES -> no-op.
+    #   action=reshard  - move N slots from master from to master to (day-2,
+    #                     mirrors redis-cli `--cluster reshard`): the first N slots
+    #                     of the source in ascending order, each via SETSLOT IMPORTING/
+    #                     MIGRATING + GETKEYSINSLOT + MIGRATE + SETSLOT NODE.
+    #                     star NOT IDEMPOTENT (deliberately): a repeat apply will move
+    #                     N more slots - this is an imperative exec-style operation, NOT
+    #                     part of converge (the operator invokes it explicitly, like the old
+    #                     redis-cluster-live without unless).
+    #   action=join-external - merge NEW cluster-mode nodes into an ALREADY existing
+    #                     (old) cluster and make each a replica of an old master
+    #                     1:1 (day-2 migration step 1): connect to source_nodes ->
+    #                     CLUSTER NODES of the old cluster -> mapping new-node<->
+    #                     old-master (nodes by the nodes key, masters by their first
+    #                     slot) -> MEET old-seed + waitConverge + REPLICATE on
+    #                     EACH new node. THE SAME network and THE SAME password (the operator
+    #                     aligns new==old). star Fail-fast: number of old
+    #                     masters != shards_dest -> 1:1 impossible (runtime-assert
+    #                     shards_source==shards_dest, the source is not visible at the render phase).
+    #                     Idempotent: node already a replica of the right master -> no-op.
+    #                     Promoting the new nodes to masters + discarding the old ones - the next
+    #                     steps are failover-takeover + forget-external (below).
+    #   action=failover-takeover - promote new nodes (replicas of old masters
+    #                     after join-external) to masters via GRACEFUL CLUSTER
+    #                     FAILOVER (day-2 migration step 2). star FIRST a sync-gate: on
+    #                     EACH new node INFO replication master_link_status==up
+    #                     (replica caught up with the old master) - if even one has not caught up ->
+    #                     ERROR BEFORE the first failover (an early failover loses the tail).
+    #                     Then on each node GRACEFUL CLUSTER FAILOVER (no
+    #                     arguments: the master stops writes + flushes the tail,
+    #                     lossless) -> poll until role==master with slots. star FAIL-CLOSED:
+    #                     graceful did not converge within the limit -> ERROR, WITHOUT escalating to
+    #                     FORCE/TAKEOVER (split-brain). Idempotent: node already master
+    #                     -> no-op.
+    #   action=forget-external - evict old nodes from the cluster via CLUSTER
+    #                     FORGET on each new node (day-2 migration step 3, after
+    #                     failover-takeover): connect to source_nodes -> CLUSTER NODES
+    #                     of the old cluster -> ALL old node-ids (masters AND replicas) ->
+    #                     CLUSTER FORGET <old-id> on EACH new node. star WITHOUT migrating
+    #                     slots (slots are already on the new masters after failover).
+    #                     Idempotent: old id already unknown to the node -> "Unknown
+    #                     node", swallowed as a no-op.
+    #
+    # add-node does NOT move slots (role=master adds an EMPTY master); moving
+    # slots onto the new master is reshard.
+    cluster:
+      description: |
+        Manage a Redis cluster via go-redis (no redis-cli/shell).
+        action=create - build the cluster (MEET -> ADDSLOTS -> REPLICATE),
+        role layout and 16384 slots are deterministic, idempotent.
+        action=add-node - join one node to a formed cluster
+        (MEET + REPLICATE/empty-master), idempotent (node already in cluster ->
+        no-op). action=remove-node - evict one node (master with slots ->
+        migrate slots to remaining masters + FORGET; otherwise just FORGET),
+        idempotent (node already gone -> no-op). action=reshard - move N slots
+        from master from to master to (SETSLOT/MIGRATE of the first N source slots).
+        star reshard is NOT IDEMPOTENT (deliberately): a repeat apply moves N
+        more slots - an imperative exec-style day-2 operation, NOT part of converge
+        (create/add-node/remove-node, in contrast, are idempotent). action=join-external
+        - merge new cluster-mode nodes into an OLD cluster as replicas of old masters
+        1:1 (MEET old-seed + REPLICATE; nodes<->masters mapping by key/first
+        slot); fail-fast if the number of old masters != shards_dest; idempotent
+        (node already a replica of the right master -> no-op). action=failover-takeover -
+        promote these replicas to masters via GRACEFUL CLUSTER FAILOVER (first
+        a sync-gate master_link_status==up on ALL of them; fail-closed without FORCE/TAKEOVER;
+        idempotent - node already master -> no-op). action=forget-external - evict
+        old nodes (CLUSTER FORGET all old node-ids on each new node, without
+        migrating slots; idempotent - Unknown node -> no-op). No dry-run preview
+        (the plugin does not implement PlanReadSafe).
+      input:
+        action:
+          type: string
+          required: true
+          description: >-
+            Cluster operation: "create" (build a cluster from nodes),
+            "add-node" (join one node to a formed cluster),
+            "remove-node" (evict one node from the cluster), "reshard" (move N
+            slots from master from to master to; NOT idempotent), "join-external"
+            (merge new nodes as replicas of the old cluster 1:1), "failover-takeover"
+            (promote the new replicas to masters via graceful CLUSTER FAILOVER), or
+            "forget-external" (evict old nodes via CLUSTER FORGET).
+        # -- action=create / join-external / failover-takeover / forget-external --
+        nodes:
+          type: map
+          required: false
+          description: >-
+            Nodes: map of stable-key (SID/name) -> { addr: "host:port" } or
+            { ip: "10.0.0.1", port: 6379 }. addr - for connecting, ip+port - for
+            CLUSTER MEET (gossip operates on ip:port). (action=create) nodes of the
+            cluster being BUILT, keys are SORTED -> determine the master/replica layout.
+            (join-external) the NEW nodes of the joining cluster (1:1 mapping by key).
+            (failover-takeover) the NEW replica nodes being promoted to masters.
+            (forget-external) the NEW nodes on which CLUSTER FORGET runs.
+        replicas_per_shard:
+          type: int
+          required: false
+          default: 0
+          description: >-
+            (action=create) Replicas per shard. shards = len(nodes) /
+            (1 + replicas_per_shard); len(nodes) must be divisible by the shard size.
+            The first shards nodes (by key sort) are masters, the rest are
+            round-robin replicas.
+        # -- action=add-node ------------------------------------------------------
+        new_node:
+          type: map
+          required: false
+          description: >-
+            (action=add-node) The node being joined: { addr: "host:port" } or
+            { ip, port }. addr - for connecting (REPLICATE runs on it),
+            ip+port - for CLUSTER MEET.
+        seed:
+          type: map
+          required: false
+          description: >-
+            (action=add-node) Any existing cluster node (the contact for MEET
+            and the source of CLUSTER NODES): { addr: "host:port" } or { ip, port }.
+        role:
+          type: string
+          required: false
+          default: replica
+          description: >-
+            (action=add-node) Role of the new node: "replica" (CLUSTER REPLICATE to
+            the master from params.master or to the least loaded one) or "master"
+            (an empty master with no slots; a separate reshard moves the slots).
+        master:
+          type: map
+          required: false
+          description: >-
+            (action=add-node, role=replica) The master the newcomer becomes a replica of:
+            { addr: "host:port" } or { ip, port }. If unset, the plugin picks the
+            master with the fewest replicas (balancing, like redis-cli without
+            --cluster-master-id).
+        # -- action=remove-node ----------------------------------------------------
+        # seed (above) - shared with add-node: the contact for CLUSTER NODES + source
+        # of the topology for FORGET/slot migration.
+        node:
+          type: map
+          required: false
+          description: >-
+            (action=remove-node) The node being evicted: { addr: "host:port" } or
+            { ip, port }. If it is a master WITH slots, the slots are migrated first to
+            the remaining masters, then CLUSTER FORGET runs everywhere; a replica / a master
+            without slots - just FORGET. Idempotent (node already gone -> no-op).
+        # -- action=reshard ---------------------------------------------------------
+        from:
+          type: map
+          required: false
+          description: >-
+            (action=reshard) The SOURCE master slots are taken from:
+            { addr: "host:port" } or { ip, port }. Must be a master in the
+            cluster and own >= slots slots.
+        to:
+          type: map
+          required: false
+          description: >-
+            (action=reshard) The RECIPIENT master of the slots:
+            { addr: "host:port" } or { ip, port }. Must be a master in the
+            cluster and differ from from.
+        slots:
+          type: int
+          required: false
+          description: >-
+            (action=reshard) How many slots to move from from to to (>= 1).
+            The FIRST slots slots of the source, ascending, are taken. star NOT
+            idempotent: a repeat apply moves slots more slots.
+        # -- action=join-external / forget-external ----------------------------------
+        # nodes (above) - the NEW nodes: join-external maps them 1:1 onto old masters
+        # (the node count == shards_dest), forget-external runs CLUSTER
+        # FORGET of all old node-ids on each of them.
+        source_nodes:
+          type: list
+          required: false
+          description: >-
+            Seed nodes of the OLD cluster: a list of host:port. Tried in order -
+            the first one that answers CLUSTER NODES determines the result. (join-external) its
+            topology (masters + slots) determines the 1:1 mapping and serves as the MEET point for
+            the new nodes. (forget-external) its CLUSTER NODES gives ALL old node-ids
+            (masters AND replicas), which are forgotten on the new nodes. The same password/TLS
+            as the new nodes (shared cluster; the operator aligns them).
+        shards_dest:
+          type: int
+          required: false
+          description: >-
+            (action=join-external) The expected number of destination shards (>= 1).
+            Must match BOTH the number of new nodes (params.nodes) AND the number of
+            masters in the old cluster - otherwise the 1:1 mapping is impossible (fail-fast).
+            shards_source is only visible in the live source topology, so the equality assert
+            runs in Apply (not at the render phase).
+        # -- shared -------------------------------------------------------------------
+        password:
+          type: string
+          required: false
+          secret: true
+          pattern: "^vault:.*"
+          description: >-
+            Redis password (vault-ref in operator-input; keeper resolves it before Apply).
+            Applied when connecting to EACH node. Masked in logs/traces/UI.
+            (join-external) ONE password for the source-seed AND the new nodes - the shared
+            cluster password (the operator aligns new == old before migration).
+        username:
+          type: string
+          required: false
+          description: ACL username for AUTH (if not the default user).
+    # replica - attach an instance to a master (REPLICAOF) via go-redis. addr -
+    # THIS instance (locally on the redis host 127.0.0.1:6379, a per-host invariant);
+    # master_addr - the HOST-INVARIANT address of the cluster's master (ONE per cluster).
+    # Idempotent (INFO replication): already a replica of the right master with a healthy
+    # link -> no-op. A master does NOT replicate itself: addr == master_addr -> no-op
+    # (guard IN THE PLUGIN - scenario calls replica on ALL hosts, including the master).
+    replica:
+      description: |
+        Attach Redis to a master via REPLICAOF (go-redis, no redis-cli).
+        masterauth is set via CONFIG SET before REPLICAOF (the replica knows the master's password).
+        Idempotent (INFO replication -> already a replica of the right master = no-op).
+        addr == master_addr -> no-op (a master does not replicate itself, guard in the plugin).
+        No dry-run preview (the plugin does not implement PlanReadSafe).
+      input:
+        addr:
+          type: string
+          required: true
+          description: >-
+            Address of THIS instance: host:port (TCP) or a unix socket ("unix:/path").
+            Local on the redis host (127.0.0.1:6379) - the plugin runs there too.
+        master_addr:
+          type: string
+          required: true
+          description: >-
+            Address of the master host:port. HOST-INVARIANT (one per cluster) -
+            scenario resolves it run_once (soulprint.hosts[0]) and passes it via
+            apply.input. addr == master_addr -> the instance is the master, no-op.
+        password:
+          type: string
+          required: false
+          secret: true
+          pattern: "^vault:.*"
+          description: >-
+            Redis password (vault-ref; keeper resolves it before Apply). Set as
+            masterauth (CONFIG SET) before REPLICAOF. Masked. Empty -> masterauth
+            is not set (master without requirepass).
+        username:
+          type: string
+          required: false
+          description: >-
+            ACL username for replicating ITS OWN incarnation (CONFIG SET masteruser).
+            Optional. When source_external=true, masteruser is taken NOT from here but
+            from master_username (external source credentials).
+        # -- source_external: attaching to an EXTERNAL master (migration) -------
+        source_external:
+          type: bool
+          required: false
+          default: false
+          description: >-
+            master_addr points at an EXTERNAL master (a different incarnation / migration),
+            not a host of its own incarnation. true -> (1) the self-guard addr==master_addr
+            is disabled; (2) masterauth is taken from master_password (NOT password);
+            (3) masteruser - from master_username. Default false (master is its own).
+        master_password:
+          type: string
+          required: false
+          secret: true
+          pattern: "^vault:.*"
+          description: >-
+            (source_external) Password of the EXTERNAL master source (CONFIG SET
+            masterauth). vault-ref; keeper resolves it before Apply. Masked. Empty ->
+            masterauth is not set (source without requirepass).
+        master_username:
+          type: string
+          required: false
+          description: >-
+            (source_external) ACL username of the external source for replication
+            (CONFIG SET masteruser). Optional.
+        master_tls:
+          type: bool
+          required: false
+          default: false
+          description: >-
+            (source_external) The source accepts the replica over TLS. true -> the plugin
+            sets CONFIG SET tls-replication yes BEFORE REPLICAOF (the replica's outgoing
+            replication link switches to TLS). star DEPENDENCY on render: the source's
+            CA (master_tls_ca) is placed onto the replica's DISK and pointed to via
+            CONFIG SET tls-ca-cert-file/-dir (config-state) BEFORE the replica step - without
+            this, verifying the source's server-cert at handshake fails. The
+            master_tls_ca value itself is NOT converted into a path by the plugin (Redis reads the CA by path,
+            not inline; the plugin does not write files). Contract for scenario - README S3.
+        master_tls_ca:
+          type: string
+          required: false
+          secret: true
+          pattern: "^vault:.*"
+          description: >-
+            (source_external, master_tls) PEM CA of the external source to verify
+            its server-cert on the replication link. Masked (secret). star The plugin
+            does NOT apply this value directly: Redis reads the CA from disk by path
+            (tls-ca-cert-file/-dir), so render writes the PEM to a file and points the
+            path via config-state BEFORE replica (the plugin only enables tls-replication).
+        master_tls_cert:
+          type: string
+          required: false
+          secret: true
+          pattern: "^vault:.*"
+          description: >-
+            (source_external, master_tls) PEM client-cert of the replica for mTLS on
+            the replication link to the source (optional, together with master_tls_key).
+            Masked. star Applied as tls-cert-file (a path on disk) by the same
+            render that handles the instance's server-cert; the plugin does not operate on its value.
+        master_tls_key:
+          type: string
+          required: false
+          secret: true
+          pattern: "^vault:.*"
+          description: >-
+            (source_external, master_tls) PEM client-key of the replica for mTLS on
+            the replication link to the source (optional, together with master_tls_cert).
+            Masked; does not end up in events. star Applied as tls-key-file
+            (a path on disk) by render; the plugin does not operate on its value.
+    # offset-synced - a migration safety-gate from an EXTERNAL source via go-redis:
+    # "link alive != data caught up". ITS OWN INFO replication (slave_repl_offset,
+    # master_sync_in_progress, master_link_status) is compared against the EXTERNAL master
+    # (a SECOND connect to source_addr with source credentials -> master_repl_offset).
+    # Read-only, changed=false BY DESIGN (probe). caught_up=true ONLY when
+    # link up + NO full-sync in progress + (master - slave) <= lag_threshold.
+    offset-synced:
+      description: |
+        Migration safety-gate for a replica from an external source via go-redis: "link
+        alive != data caught up". Compares its own instance's slave_repl_offset with the
+        master_repl_offset of the external master (a second connect to source_addr).
+        Read-only, changed=false by design (probe). Output.caught_up (bool) -
+        the health-gate condition (until: register.self.caught_up == true): true ONLY
+        with master_link_status=up + master_sync_in_progress=0 + lag<=lag_threshold.
+        Output.lag_bytes / master_sync_in_progress - for diagnostics; when
+        !skip_checksum, optionally dbsize_source/dbsize_replica. No dry-run preview.
+      input:
+        addr:
+          type: string
+          required: true
+          description: >-
+            Address of ITS OWN instance (the replica): host:port (TCP) or "unix:/path".
+        source_addr:
+          type: string
+          required: true
+          description: >-
+            Address of the EXTERNAL master source host:port. Second connect (the source's
+            master_repl_offset is the authoritative head for the lag calculation).
+        password:
+          type: string
+          required: false
+          secret: true
+          pattern: "^vault:.*"
+          description: >-
+            Password of ITS OWN instance (vault-ref; keeper resolves it before Apply).
+            Masked - does not end up in events/logs.
+        source_password:
+          type: string
+          required: false
+          secret: true
+          pattern: "^vault:.*"
+          description: >-
+            Password of the EXTERNAL source for the second connect (vault-ref; keeper
+            resolves it before Apply). Masked - does not end up in events/logs.
+        lag_threshold:
+          type: int
+          required: false
+          default: 0
+          description: >-
+            Allowed lag (master_repl_offset - slave_repl_offset) in
+            BYTES for caught_up=true. Default 0 (strict full catch-up).
+        skip_checksum:
+          type: bool
+          required: false
+          default: false
+          description: >-
+            Skip the optional DBSIZE comparison of both instances. Default false
+            (source and replica DBSIZE are placed into Output as an auxiliary
+            signal; they do NOT affect caught_up - the offset is authoritative).
+        tls:
+          type: bool
+          required: false
+          default: false
+          description: >-
+            Connect to ITS OWN instance over TLS. Default false.
+        tls_ca:
+          type: string
+          required: false
+          secret: true
+          pattern: "^vault:.*"
+          description: >-
+            PEM CA to verify ITS OWN instance's certificate (RootCAs). Masked.
+        source_tls:
+          type: bool
+          required: false
+          default: false
+          description: >-
+            Connect to the EXTERNAL source over TLS. Default false.
+        source_tls_ca:
+          type: string
+          required: false
+          secret: true
+          pattern: "^vault:.*"
+          description: >-
+            PEM CA to verify the EXTERNAL source's certificate (RootCAs).
+            Masked (secret).
+    # detached - detach an instance from its master (REPLICAOF NO ONE) via go-redis,
+    # promoting it to a standalone master. Final step of a migration from an external
+    # source (after offset-synced confirmed catch-up). Idempotent: INFO
+    # replication -> role==master already -> changed=false, no-op (safe to repeat).
+    detached:
+      description: |
+        Detach Redis from its master via REPLICAOF NO ONE (go-redis), promoting it to a
+        standalone master. Final step of the migration (after offset-synced).
+        Idempotent: already master (INFO replication role==master) -> changed=false,
+        no-op. Output.changed + Output.previous_master (former master host:port,
+        for audit). No dry-run preview (the plugin does not implement PlanReadSafe).
+      input:
+        addr:
+          type: string
+          required: true
+          description: >-
+            Address of THIS instance: host:port (TCP) or "unix:/path".
+        password:
+          type: string
+          required: false
+          secret: true
+          pattern: "^vault:.*"
+          description: >-
+            Redis password (vault-ref; keeper resolves it before Apply). Masked - does not
+            end up in events/logs. Not passed in the REPLICAOF arguments.
+        username:
+          type: string
+          required: false
+          description: ACL username for connecting (if not the default user).
+        tls:
+          type: bool
+          required: false
+          default: false
+          description: >-
+            Connect to Redis over TLS. Required in only-TLS (port 0).
+            Default false (plaintext).
+        tls_ca:
+          type: string
+          required: false
+          secret: true
+          pattern: "^vault:.*"
+          description: >-
+            PEM CA certificate to verify the server certificate (RootCAs).
+            Masked (secret).
+        tls_cert:
+          type: string
+          required: false
+          secret: true
+          pattern: "^vault:.*"
+          description: >-
+            PEM client certificate for mTLS (optional, only together with tls_key).
+            Masked (secret).
+        tls_key:
+          type: string
+          required: false
+          secret: true
+          pattern: "^vault:.*"
+          description: >-
+            PEM client key for mTLS (optional, only together with tls_cert).
+            Masked (secret); does not end up in events/errors.
+        tls_skip_verify:
+          type: bool
+          required: false
+          default: false
+          description: >-
+            EXPLICIT opt-out of server certificate verification. Default false
+            (verification enabled - default secure).
+    # sentinel - hot reconciliation of Redis Sentinel via go-redis (no redis-cli):
+    # SENTINEL MASTERS/MASTER (diff) -> MONITOR/REMOVE+MONITOR -> SET -> CONFIG GET/SET.
+    # monitor.ip -
+    # the HOST-INVARIANT address of the master (one per cluster); idempotent (the monitor is
+    # not touched if the master is already at the right address; SET only on a real difference).
+    sentinel:
+      description: |
+        Reconcile Redis Sentinel via go-redis (no redis-cli/shell).
+        SENTINEL MONITOR/REMOVE (monitor) + SET (per-master) + CONFIG SET (globals).
+        The desired-state source is config (directives in the file form of sentinel.conf):
+        the plugin itself splits it into globals/per-master (Sentinel has no top-level CONFIG).
+        Idempotent (diff against SENTINEL MASTER/CONFIG GET). No dry-run preview.
+      input:
+        addr:
+          type: string
+          required: true
+          description: >-
+            Address of the Sentinel instance host:port (usually 127.0.0.1:26379).
+        master_name:
+          type: string
+          required: false
+          default: mymaster
+          description: Logical name of the monitored master in Sentinel.
+        monitor:
+          type: map
+          required: false
+          description: >-
+            Desired master address for monitor reconciliation: { ip, port, quorum }.
+            ip - HOST-INVARIANT (one per cluster). Unset -> the monitor is not
+            touched (only SET/CONFIG SET of parameters).
+        config:
+          type: map
+          required: false
+          description: >-
+            Desired Sentinel directives in the FILE form (as in sentinel.conf):
+            { "sentinel down-after-milliseconds mymaster": "12000",
+            "sentinel announce-ip": "10.0.0.1", "loglevel": "notice" }. The plugin itself
+            splits them into globals (SENTINEL CONFIG SET) and per-master (SENTINEL
+            SET); startup-only (dir/port/tls-*) is ignored - those change via a restart.
+        auth_user:
+          type: string
+          required: false
+          description: >-
+            Sentinel's user for AUTH on the master (SENTINEL SET auth-user).
+            Set when creating/recreating the monitor.
+        auth_pass:
+          type: string
+          required: false
+          secret: true
+          pattern: "^vault:.*"
+          description: >-
+            Sentinel's password for AUTH on the master (SENTINEL SET auth-pass). vault-ref;
+            keeper resolves it before Apply. Masked - does NOT end up in events/logs.
+        redis_version:
+          type: string
+          required: false
+          description: >-
+            Redis version for the version-gate of global parameters (loglevel available
+            in Sentinel since 7.0). Unset -> version-gated parameters are dropped.
+        password:
+          type: string
+          required: false
+          secret: true
+          pattern: "^vault:.*"
+          description: >-
+            Password for connecting TO THE SENTINEL ITSELF (requirepass of the Sentinel instance),
+            if set. vault-ref; keeper resolves it before Apply. Masked.
+        username:
+          type: string
+          required: false
+          description: ACL username for connecting to Sentinel (if not the default user).

@@ -1,0 +1,84 @@
+# L2 fixture (docker stand), harness MVP does not execute it — ADR-023 post-MVP.
+name: install-and-ping
+description: |
+  Basic life scenario of the mode-agnostic destiny dragonfly (standalone) on a clean
+  host:
+    1. apply destiny dragonfly — install DragonFly and bring up the service with a rendered
+       dragonfly.conf (FLAGFILE, TCP 6379). Authentication under the ACL user default_admin
+       (requirepass removed — default_admin redesign); users.acl carries default_admin.
+    2. ping                    — make sure it responds PONG (DragonFly is redis-compatible,
+       redis-cli from the distro package redis-tools; AUTH under default_admin).
+
+  The test runs on an ephemeral stand (see the `stand:` block), which has neither DragonFly
+  nor configs. After the run the stand is destroyed.
+
+# ─── Stand ────────────────────────────────────────────────────────────────────
+stand:
+  driver: docker
+  image:  ubuntu:24.04
+  mode:   push
+
+# ─── What we apply ────────────────────────────────────────────────────────────
+# Target destiny — ../../destiny.yml (mode-agnostic brick). config — a READY merged
+# flagfile-map (WITHOUT top-level maxmemory: it's a regular key inside config, DF underscore form).
+# In a real run config is merged by the service scenario; here we pass a ready-made map.
+input:
+  version:  "1.39.0"
+  config:
+    maxmemory:  256mb
+    maxclients: 10000
+  # ★ default_admin REDESIGN: password REMOVED (requirepass dropped). Authentication under the ACL user
+  # default_admin — comes in users with a per-user password (in a real run the scenario tops up
+  # system users from essence). The password here is a resolved value (vault: in the L2 stand).
+  users:
+    default_admin:
+      perms:    "~* &* +@all"
+      state:    "on"
+      password: "vault:test/dragonfly/password"
+
+# Double run: the framework will apply destiny with this input again and check that in the
+# second application there were no changes in any step (idempotency).
+expect_idempotent: true
+
+# ─── Result checks ──────────────────────────────────────────────────────
+verify:
+  - name: dragonfly-binary-installed
+    apply:
+      destiny: core.exec.run
+      input:
+        cmd: dragonfly
+        args: ["--version"]
+    expect:
+      exit_code: 0
+
+  - name: dragonfly-service-active
+    apply:
+      destiny: core.exec.run
+      input:
+        cmd: systemctl
+        args: ["is-active", "dragonfly"]
+    expect:
+      stdout: "active"
+      exit_code: 0
+
+  - name: dragonfly-config-deployed
+    apply:
+      destiny: core.cmd.shell
+      input:
+        cmd: "test -f /etc/dragonfly/dragonfly.conf && stat -c '%a %U:%G' /etc/dragonfly/dragonfly.conf"
+    expect:
+      stdout: "640 dragonfly:dragonfly"
+
+  - name: dragonfly-responds-to-ping
+    # DragonFly is redis-compatible: redis-cli PING over TCP (DF listens on 6379). redis-cli — from
+    # the distro package redis-tools (install.yml installs it UNCONDITIONALLY, DF doesn't ship its own cli).
+    # ★ AUTH under default_admin (requirepass dropped) — redis-cli --user/-a.
+    apply:
+      destiny: core.cmd.shell
+      input:
+        cmd: "redis-cli -h 127.0.0.1 -p 6379 --user default_admin -a vault:test/dragonfly/password PING"
+    expect:
+      stdout_contains: "PONG"
+
+# ─── Optional siblings next to this file ─────────────────────────────────
+#   prepare.yml / verify.yml / cleanup.yml — see docs/destiny/testing.md.

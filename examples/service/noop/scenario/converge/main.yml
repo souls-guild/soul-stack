@@ -1,0 +1,32 @@
+name: converge
+description: |
+  Scry scenario for drift detection (ADR-031 Slice B). Declares the DESIRED
+  final state of the noop service - for a smoke check, the mere fact that the
+  marker file /var/lib/soul-stack/noop-converged exists. Keeper runs this
+  scenario in dry_run mode during check-drift; Soul calls core.file.Plan
+  (read-safe) instead of Apply, compares desired vs actual, and returns
+  per-task changed.
+
+  A service author drops `scenario/converge/main.yml` ONLY when they want to
+  support the Scry check - this is a specialized scenario-kind (auto-discovered
+  by name). Input-resolution convention: each input field is looked up by name
+  from `incarnation.state.<name>`, or overridden by the operator in the
+  request body.
+
+# state_changes is not set: converge is a read-only declaration, the drift
+# check does not commit anything to state (Soul does not call mod.Apply at
+# all on dry_run, and Keeper does not run the state_changes phase for
+# DryRun runs).
+state_changes: {}
+
+tasks:
+  # Convergence marker: we expect the file to exist with fixed content. On a
+  # clean system the file does not exist yet -> Plan returns changed=true
+  # (drift). After a real apply (scenario create / fix) the file appears ->
+  # Plan returns changed=false (clean).
+  - name: Ensure converged marker file
+    module: core.file.present
+    params:
+      path: /var/lib/soul-stack/noop-converged
+      content: "noop converged\n"
+      mode: "0644"

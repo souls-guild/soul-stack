@@ -1,0 +1,25 @@
+# L0 case: overriding base_url to an internal mirror (mirrors the
+# node-exporter base-url-override case).
+#
+# base_url_override=https://nexus.internal/re → the harness passes it to
+# destiny.base_url → CEL assembles the url from the mirror instead of GitHub Releases.
+# Assert — the url of the core.url.fetched step starts with the mirror; the tarball
+# name layout (prefix `v`) doesn't change.
+name: redis-exporter renders download url from base_url mirror override
+
+fixtures:
+  default_destiny_source: "file://../../{name}"
+  input:
+    version:        "1.62.0"
+    sha256:         "sha256:2222222222222222222222222222222222222222222222222222222222222222"
+    arch:           amd64
+    redis_socket:   /var/run/redis/redis-server.sock
+    redis_password: "change-me-please-32"
+    base_url_override: "https://nexus.internal/re"
+
+assert:
+  task_present:
+    - module: core.url.fetched
+      params_subset:
+        url: https://nexus.internal/re/v1.62.0/redis_exporter-v1.62.0.linux-amd64.tar.gz
+        path: /tmp/redis_exporter-1.62.0.tar.gz

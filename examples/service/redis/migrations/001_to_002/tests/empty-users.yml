@@ -1,0 +1,12 @@
+name: empty-users
+description: >
+  Empty user list: rename + set {} materialize the target redis_users
+  as an empty map (intent "the list became a map"), foreach over [] is a no-op.
+
+state_before:
+  redis_users: []
+  redis_type: cluster
+
+state_after:
+  redis_users: {}
+  redis_type: cluster

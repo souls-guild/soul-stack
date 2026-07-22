@@ -1,0 +1,53 @@
+// Package {{.NamePackage}} implements the {{.Namespace}}.{{.Name}} SoulModule.
+//
+// Plugin contract: pluginv1.SoulModule (Validate / Plan / Apply). The SDK
+// (sdk/module.BaseModule) provides no-op defaults for Validate/Plan/Apply;
+// authors override Apply at minimum, and optionally Plan (for drift
+// detection, ADR-031 Scry — requires the PlanReadSafe marker).
+package {{.NamePackage}}
+
+import (
+	pluginv1 "github.com/souls-guild/soul-stack/proto/plugin/gen/go/v1"
+	"github.com/souls-guild/soul-stack/sdk/module"
+	"google.golang.org/grpc"
+)
+
+// {{.NamePascal}}Module implements the {{.Namespace}}.{{.Name}} SoulModule.
+type {{.NamePascal}}Module struct {
+	module.BaseModule
+}
+
+// Apply applies the requested state to the resource.
+//
+// Contract: idempotent. Steps:
+//  1. Parse req.Task.Input against spec.states.<state>.input (manifest).
+//  2. Read the resource's current state (resource-specific API).
+//  3. If desired == current — no-op, emit a final ApplyEvent with changed=false.
+//  4. Otherwise — apply the change, emit a stream of ApplyEvent (stdout/stderr/state_change).
+//  5. On failure — emit an ApplyEvent with exit_code != 0, or return an error.
+func (m *{{.NamePascal}}Module) Apply(req *pluginv1.ApplyRequest, stream grpc.ServerStreamingServer[pluginv1.ApplyEvent]) error {
+	// TODO: implement Apply for your resource.
+	_ = req
+	_ = stream
+	return nil
+}
+
+// Plan is a pure-read dry-run (optional). Uncomment if the module can read
+// state without mutating the host. ADR-031 Scry: the host calls Plan instead
+// of Apply for dry_run tasks; without a PlanReadSafe marker implementation,
+// the host applies default-deny (drift is left undetermined — an explicit
+// refusal, not a false "no drift").
+//
+// PlanReadSafe contract: EXACTLY ONE final PlanEvent with a machine-readable
+// `changed` before returning from the method (without an error). Returning
+// nil without an event → the host treats it as a FAILED plan.no_result.
+//
+// func (m *{{.NamePascal}}Module) Plan(req *pluginv1.PlanRequest, stream grpc.ServerStreamingServer[pluginv1.PlanEvent]) error {
+//     // TODO: read the current state, compute changed, emit the final PlanEvent.
+//     return nil
+// }
+//
+// // PlanReadSafe is a marker interface: the module DECLARES that Plan is
+// // safe for dry_run (reads, doesn't mutate). Implement ONLY after writing a
+// // pure-read Plan.
+// func (m *{{.NamePascal}}Module) PlanReadSafe() {}

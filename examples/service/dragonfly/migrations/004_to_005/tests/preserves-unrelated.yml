@@ -1,0 +1,59 @@
+name: preserves-unrelated
+description: >
+  An incarnation whose state ALREADY has monitoring (e.g. a repeat migration run, or a state
+  where monitoring is already deployed). The object's has()-guard PRESERVES the existing
+  monitoring values as-is (idempotency, does NOT overwrite with defaults); the rest of the state
+  (df_config/df_users/df_sentinel/tls/topology/provision) passes through bit-for-bit. Mirrors
+  redis 012_to_013 preserves-unrelated.
+
+state_before:
+  df_version: "1.39.0"
+  df_config:
+    maxmemory: "512mb"
+    maxclients: 10000
+  df_users:
+    - { name: "app", perms: "~app:* +@read +@write", state: "on" }
+  tls:
+    enable: true
+    cert_ref: "secret/services/dragonfly/tls#cert"
+    key_ref: "secret/services/dragonfly/tls#key"
+    ca_ref: "secret/services/dragonfly/tls#ca"
+  replicas: 2
+  sentinel_quorum: 0
+  df_sentinel:
+    master_name: master
+    quorum: 0
+    down_after_ms: 5000
+    failover_timeout_ms: 60000
+  provisioned_vm_ids: ["i-aaa111", "i-bbb222"]
+  provisioned_provider: "example-prod"
+  provisioned_sids: ["node-1.example.com", "node-2.example.com"]
+  monitoring:
+    node_exporter_version: "1.8.2"
+    node_exporter_listen: ":19100"
+
+state_after:
+  df_version: "1.39.0"
+  df_config:
+    maxmemory: "512mb"
+    maxclients: 10000
+  df_users:
+    - { name: "app", perms: "~app:* +@read +@write", state: "on" }
+  tls:
+    enable: true
+    cert_ref: "secret/services/dragonfly/tls#cert"
+    key_ref: "secret/services/dragonfly/tls#key"
+    ca_ref: "secret/services/dragonfly/tls#ca"
+  replicas: 2
+  sentinel_quorum: 0
+  df_sentinel:
+    master_name: master
+    quorum: 0
+    down_after_ms: 5000
+    failover_timeout_ms: 60000
+  provisioned_vm_ids: ["i-aaa111", "i-bbb222"]
+  provisioned_provider: "example-prod"
+  provisioned_sids: ["node-1.example.com", "node-2.example.com"]
+  monitoring:
+    node_exporter_version: "1.8.2"
+    node_exporter_listen: ":19100"

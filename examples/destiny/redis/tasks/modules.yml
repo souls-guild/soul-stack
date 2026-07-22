@@ -1,0 +1,89 @@
+# tasks/modules.yml — Redis modules (loading .so
+# RediSearch/RedisJSON/RedisTimeSeries/RedisBloom on Redis < 8). The WHOLE file is gated on
+# include (main.yml) by predicate vars.redis_modules_enabled: enabled when the data plane
+# (deploy_redis) AND Redis < 8 AND modules_base_url is NON-EMPTY; otherwise group-drop (sentinel_only —
+# modules have nowhere to load; Redis 8+ — modules built in; empty base_url — vanilla redis).
+#
+# ★ "MODULES ALWAYS ALL" DIRECTIVE (2026-06-25) = ALL-OR-NOTHING: the set is an INVARIANT of
+# vars.redis_modules, not an operator choice; when base_url is set the WHOLE set is fetched, when
+# empty — NONE (vanilla). input.modules / input.modules_dir removed; modules-dir
+# is derived from input.data_dir. Only modules_base_url remains in input (a deployment
+# artifact keyed by (version, arch); empty → the group isn't included). .so files are fetched via
+# content-idempotency. The two-part version+base_url gate lives in vars (vars.redis_modules_enabled,
+# single source with loadmodules server.yml); fail-closed happens on Redis itself (an incompatible
+# .so → server won't start), no version-matrix.
+
+# Directory for .so modules <data_dir>/modules. core.file.rendered/url.fetched only create
+# the file, not the parent directory. We create it explicitly with declarative core.directory.present.
+# owner redis: the service reads the .so. parents:true — data_dir can be overridden by the operator
+# (may be a deep path with a nonexistent parent); we preserve the implicit mkdir -p
+# behavior of the former install -d (core.directory.present defaults to parents:false and would fail on a
+# missing intermediate directory).
+- name: Ensure the redis modules directory exists
+  module: core.directory.present
+  params:
+    path: "${ vars.redis_modules_dir }"
+    parents: true
+    owner: "${ vars.redis_user }"
+    group: "${ vars.redis_group }"
+    mode: "0750"
+
+# Downloading the .so of EVERY module in the set. ★ FOUR EXPLICIT tasks (one per alias), NOT a
+# loop over vars: loop.items resolves in a host-invariant context WITHOUT access to `vars.*`
+# (loopInvariantVars, keeper/internal/render/loop.go), but the .so name and arch URL need to come FROM vars —
+# params DO HAVE the full vars context. The set is fixed (4) → explicit enumeration
+# is cheaper than extending the loop engine. Task order follows the alias (same as the Go sort of keys in
+# loadmodules) → the plan is deterministic.
+#
+# The URL IS ARCH-SPECIFIC per-host: modules_base_url + vars.redis_arch + .so name from vars.
+# vars.redis_arch — uname-m mapping of soulprint.self.os.arch (amd64→x86_64/arm64→aarch64)
+# for the Nexus path, symmetric with the binary URL in install.yml (vars.redis_binary_url_base).
+# mode 0750 owner redis. register isn't needed — loadmodule in redis.conf already triggers a restart
+# via the redis_conf register. checksum is NOT passed → content idempotency (SHA-256),
+# with no integrity-verify (same as node-exporter).
+#
+# ★ SSRF guard (allow_private): modules_base_url can be an INTERNAL Nexus (resolves to
+# RFC1918) — same as binary_base_url in install.yml. core.url.fetched blocks dialing
+# private IPs by default → .so fetch would fail. allow_private: ${ vars.redis_modules_allow_private }
+# lifts the guard (vars normalizes the flag from apply.input.modules_allow_private ←
+# essence.modules_allow_private, default true). The relaxation is SCOPED to .so fetch, deliberately
+# (essence), not a global opt-out.
+- name: Fetch the redisbloom module shared object
+  module: core.url.fetched
+  params:
+    url:   "${ input.modules_base_url + '/' + vars.redis_arch + '/' + vars.redis_modules.bloom }"
+    path:  "${ vars.redis_modules_dir + '/' + vars.redis_modules.bloom }"
+    mode:  "0750"
+    owner: "${ vars.redis_user }"
+    group: "${ vars.redis_group }"
+    allow_private: "${ vars.redis_modules_allow_private }"
+
+- name: Fetch the rejson module shared object
+  module: core.url.fetched
+  params:
+    url:   "${ input.modules_base_url + '/' + vars.redis_arch + '/' + vars.redis_modules.json }"
+    path:  "${ vars.redis_modules_dir + '/' + vars.redis_modules.json }"
+    mode:  "0750"
+    owner: "${ vars.redis_user }"
+    group: "${ vars.redis_group }"
+    allow_private: "${ vars.redis_modules_allow_private }"
+
+- name: Fetch the redisearch module shared object
+  module: core.url.fetched
+  params:
+    url:   "${ input.modules_base_url + '/' + vars.redis_arch + '/' + vars.redis_modules.search }"
+    path:  "${ vars.redis_modules_dir + '/' + vars.redis_modules.search }"
+    mode:  "0750"
+    owner: "${ vars.redis_user }"
+    group: "${ vars.redis_group }"
+    allow_private: "${ vars.redis_modules_allow_private }"
+
+- name: Fetch the redistimeseries module shared object
+  module: core.url.fetched
+  params:
+    url:   "${ input.modules_base_url + '/' + vars.redis_arch + '/' + vars.redis_modules.timeseries }"
+    path:  "${ vars.redis_modules_dir + '/' + vars.redis_modules.timeseries }"
+    mode:  "0750"
+    owner: "${ vars.redis_user }"
+    group: "${ vars.redis_group }"
+    allow_private: "${ vars.redis_modules_allow_private }"

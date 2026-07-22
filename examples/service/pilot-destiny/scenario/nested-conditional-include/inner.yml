@@ -1,0 +1,8 @@
+# Nested conditional group: included from outer.yml under `when: input.inner == 'yes'`.
+# Its effective include-when is the conjunction `(input.outer == 'yes') && (input.inner ==
+# 'yes')`, so the inner task is ABSENT if outer OR inner is false.
+- name: inner marker
+  module: core.file.present
+  params:
+    path:    /etc/pilot/inner.txt
+    content: "inner"

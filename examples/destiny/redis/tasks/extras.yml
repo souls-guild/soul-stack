@@ -1,0 +1,59 @@
+# tasks/extras.yml — host-tuning extras: THP unit +
+# logrotate + sysctl. Mode-AGNOSTIC (equally useful for standalone/cluster/
+# sentinel). All three are UNCONDITIONAL (Redis recommendation / hardening — not an operator choice):
+# tasks without when:, ALWAYS rendered. Operator flags logrotate_enable/
+# sysctl_enable are no longer in the contract.
+#
+# disable-thp daemon-reload REMOVED: core.service (daemon_reload: auto) itself
+# rereads the unit when disable-thp.service changes BEFORE enable/start.
+
+# transparent-hugepages: oneshot unit disabling THP before Redis. UNCONDITIONAL (THP causes
+# latency spikes on fork RDB/AOF — Redis recommendation, hardening for all modes).
+- name: Render disable-thp systemd unit
+  module: core.file.rendered
+  params:
+    path: /etc/systemd/system/disable-thp.service
+    template: templates/disable-thp.service.tmpl
+    mode: "${ vars.unit_file_mode }"
+    owner: "${ vars.root_owner }"
+    group: "${ vars.root_group }"
+
+# core.service itself rereads the unit (daemon_reload: auto) when disable-thp.service changes
+# before enable/start. disable-thp is a oneshot RemainAfterExit, runs once.
+- name: Ensure disable-thp is running and enabled at boot
+  module: core.service.running
+  params:
+    name: disable-thp
+    enabled: true
+
+# logrotate: rotation of redis log files in /etc/logrotate.d/redis. UNCONDITIONAL (like
+# THP — host-tuning is not an operator choice). mode 0644 owner/group root is the
+# logrotate.d standard.
+- name: Render redis logrotate config
+  module: core.file.rendered
+  params:
+    path: /etc/logrotate.d/redis
+    template: templates/logrotate.tmpl
+    mode: "${ vars.unit_file_mode }"
+    owner: "${ vars.root_owner }"
+    group: "${ vars.root_group }"
+    vars:
+      # glob of log files from the system log directory (directive "hardcode path → var").
+      log_dir: "${ vars.log_dir }"
+
+# sysctl: bulk set of kernel parameters for Redis in ONE drop-in
+# /etc/sysctl.d/30-redis.conf. UNCONDITIONAL (like THP/logrotate). core.sysctl.applied
+# owns the drop-in itself: writes a deterministic file (sorted keys → no false
+# change), reactively rereads it via `sysctl -p <file>` targeted on change
+# (reload: auto), does not mark change itself. In containers part of vm.* is read-only —
+# ignore_failures gives `sysctl -e -p` (--ignore suppresses read-only/nonexistent
+# keys, without failing the run).
+# sysctl_settings — map kernel-parameter→value, the service scenario passes it
+# through apply.input (defaults — essence.sysctl_settings).
+- name: Apply redis sysctl kernel parameters
+  module: core.sysctl.applied
+  params:
+    filename: 30-redis
+    reload: auto
+    ignore_failures: true
+    settings: "${ default(input.sysctl_settings, {}) }"

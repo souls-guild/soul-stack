@@ -1,0 +1,8 @@
+name: include-when-dynamic-soulprint
+description: >
+  Условный include с ДИНАМИЧЕСКИМ when: (soulprint.*) — отвергается офлайн как
+  include_when_dynamic_unsupported. soulprint host-вариативен и неизвестен на фазе
+  раскрытия include; допустим только статический предикат.
+tasks:
+  - include: debian.yml
+    when: soulprint.self.os.family == 'debian'

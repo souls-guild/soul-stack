@@ -1,0 +1,18 @@
+name: preserves-existing-seeded-from
+description: >
+  Idempotency: an incarnation that already has seeded_from (migration re-run /
+  inline-seed migrate_cluster) keeps the value as-is: the has() guard returns the
+  current object instead of overwriting it with the default. detached: true (source
+  already detached during operations) also passes through unchanged.
+
+state_before:
+  redis_type: "cluster"
+  seeded_from:
+    source_endpoints: ["old-1.example.com:6379", "old-2.example.com:6379"]
+    detached: true
+
+state_after:
+  redis_type: "cluster"
+  seeded_from:
+    source_endpoints: ["old-1.example.com:6379", "old-2.example.com:6379"]
+    detached: true

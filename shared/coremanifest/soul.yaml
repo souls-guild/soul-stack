@@ -1,0 +1,28 @@
+kind: soul_module
+protocol_version: 1
+namespace: core
+name: soul
+
+spec:
+  states:
+    registered:
+      description: Keeper-side (on:keeper). The bind act — a Soul with sid becomes a member of the run's incarnation (incarnation_membership) and optionally carries stable Coven tags (ADR-017; ADR-008 amendment NIM-124). Onboarding barrier — ADR-061.
+      input:
+        # sid — a string OR a list of strings (ADR-061). Declared as string for backward
+        # compatibility (a single literal string remains a valid author
+        # form). In practice a list of SIDs arrives via a CEL expression
+        # `${ register.<step>.hosts }` (e.g. hosts from core.cloud.provisioned):
+        # ${…} values are skipped by soul-lint's type-check regardless of type.
+        # The stripped-down manifest DSL does not express union string|list; the runtime
+        # (StringOrSliceParam) accepts both forms, the await barrier aggregates over
+        # the whole set. A literal list `sid: [a,b]` accordingly does NOT pass
+        # soul-lint's static type-check (it arrives via CEL) — a deliberate
+        # trade-off, see ADR-061.
+        sid:                 { type: string, required: true, description: "SID (FQDN) of the target Soul: a single string OR a list (via CEL `${ register.<step>.hosts }`) — registering N hosts in one barrier step, ADR-061." }
+        coven:               { type: list,     items: { type: string }, description: "Optional set of stable Coven tags (kebab-case), applied to all SIDs. Membership is implicit (incarnation_membership), NOT a coven value — ADR-008 amendment NIM-124." }
+        mode:                { type: string,   description: "append (default) | replace | remove." }
+        refresh_soulprint:   { type: bool,     description: "Mid-run re-resolve of the run's roster (ADR-061; stratification/re-resolve — slices S2/S3, echo refreshed:false)." }
+        await_online:        { type: bool,   description: "Onboarding barrier (ADR-061): after registration, block waiting until the created Souls become online (Redis SID lease)." }
+        await_timeout:       { type: string, format: duration, description: "Upper bound on the barrier wait. REQUIRED when await_online: true. Ceiling — keeper.yml::max_await_timeout." }
+        await_min_count:     { type: int,    description: "Minimum number of online hosts for the barrier to succeed. Default — the number of SIDs being registered (all)." }
+        await_poll_interval: { type: string, format: duration, description: "Presence polling period (default ~2s)." }

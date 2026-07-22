@@ -1,0 +1,216 @@
+package api
+
+// FULL-TYPED form of the CHOIR/VOICE domain (code-first source of OpenAPI, ADR-054 §Pattern).
+// BATCH-2f WRITE-SELF-AUDIT (choir/voice write audit INSIDE the handler via writeAuditCtx,
+// with no audit middleware — unlike the middleware-audit domains role/operator):
+// create — choir.created (201+body); delete — choir.deleted (204); add-voice — choir.
+// voice_added (201+body); remove-voice — choir.voice_removed (204); list/list-voices —
+// read (no audit). Multi-resource: voices — a sub-resource /choirs/{choir}/voices[/{sid}],
+// the huma op carries the FULL path /{name}/choirs[/...] relative to the /v1/incarnations group.
+
+import (
+	"net/http"
+
+	"github.com/danielgtaylor/huma/v2"
+)
+
+// === POST /v1/incarnations/{name}/choirs (create) — WRITE-SELF-AUDIT choir.created (201+body) ===
+
+// choirCreateInput — huma input for POST .../choirs. Name — path (incarnation name);
+// Body — typed body.
+type choirCreateInput struct {
+	Name string `path:"name" doc:"incarnation name"`
+	Body ChoirCreateRequest
+}
+
+// ChoirCreateRequest — Go form of the POST .../choirs body (code-first source of the schema
+// AND validation). created_by_aid is NOT taken from the body (it comes from JWT). The format
+// of choir_name / size-bounds is domain validation (422 in CreateTyped).
+// additionalProperties:false (huma default) → an unknown field → 400. The struct name = the
+// contract schema name (huma DefaultSchemaNamer; hand-written ChoirCreateRequest, N4).
+type ChoirCreateRequest struct {
+	ChoirName   string  `json:"choir_name" required:"true" pattern:"^[a-z][a-z0-9_-]*$" doc:"Choir name (^[a-z][a-z0-9_-]*$)"`
+	Description *string `json:"description,omitempty" doc:"human-readable description"`
+	MinSize     *int    `json:"min_size,omitempty" doc:"lower batch size bound (> 0)"`
+	MaxSize     *int    `json:"max_size,omitempty" doc:"upper batch size bound (>= min_size)"`
+}
+
+// choirCreateOutput — huma output for POST .../choirs (FULL-TYPED). Status=201; Body —
+// native 201 body (Choir; nullable fields without omitempty → null).
+type choirCreateOutput struct {
+	Status int `json:"-"`
+	Body   Choir
+}
+
+// choirCreateOperation — metadata for POST .../choirs. DefaultStatus=201. WRITE-SELF-
+// AUDIT choir.created (written by the handler). Errors: 400 unknown/malformed, 403 RBAC, 404
+// incarnation, 409 choir-exists, 422 choir_name/size validation, 500.
+func choirCreateOperation() huma.Operation {
+	return huma.Operation{
+		OperationID:   "createChoir",
+		Method:        http.MethodPost,
+		Path:          "/{name}/choirs",
+		Summary:       "Create Choir",
+		Description:   "Declared-topology of hosts inside the incarnation (ADR-044). created_by_aid from JWT. Permission choir.create. 409 - name taken.",
+		Tags:          []string{"choir"},
+		DefaultStatus: http.StatusCreated,
+		Errors:        []int{http.StatusBadRequest, http.StatusForbidden, http.StatusNotFound, http.StatusConflict, http.StatusUnprocessableEntity, http.StatusInternalServerError},
+	}
+}
+
+// === GET /v1/incarnations/{name}/choirs (list) — READ (no audit) ===
+
+// choirListInput — huma-input GET .../choirs. Name — path.
+type choirListInput struct {
+	Name string `path:"name" doc:"incarnation name"`
+}
+
+// choirListOutput — huma-output GET .../choirs (FULL-TYPED). Body — native envelope
+// (ChoirListReply: items/offset/limit/total).
+type choirListOutput struct {
+	Body ChoirListReply
+}
+
+// choirListOperation — metadata for GET .../choirs. DefaultStatus=200. READ: audit not
+// wired. Permission choir.list. Errors: 403, 422 bad name, 500.
+func choirListOperation() huma.Operation {
+	return huma.Operation{
+		OperationID:   "listChoirs",
+		Method:        http.MethodGet,
+		Path:          "/{name}/choirs",
+		Summary:       "List Choirs of the incarnation",
+		Description:   "Topology of Choirs of the incarnation (ADR-044). Permission choir.list. Nonexistent incarnation -> items=[]. Read-only, no audit.",
+		Tags:          []string{"choir"},
+		DefaultStatus: http.StatusOK,
+		Errors:        []int{http.StatusForbidden, http.StatusUnprocessableEntity, http.StatusInternalServerError},
+	}
+}
+
+// === DELETE /v1/incarnations/{name}/choirs/{choir} (delete) — WRITE-SELF-AUDIT choir.deleted (204) ===
+
+// choirDeleteInput — huma-input DELETE .../choirs/{choir}. Name/Choir — path.
+type choirDeleteInput struct {
+	Name  string `path:"name" doc:"incarnation name"`
+	Choir string `path:"choir" doc:"Choir name"`
+}
+
+// choirDeleteOutput — huma-output DELETE .../choirs/{choir} (FULL-TYPED). Status=204
+// (no body).
+type choirDeleteOutput struct {
+	Status int `json:"-"`
+}
+
+// choirDeleteOperation — metadata for DELETE .../choirs/{choir}. DefaultStatus=204.
+// WRITE-SELF-AUDIT choir.deleted. Errors: 403, 404 choir, 422 bad path, 500.
+func choirDeleteOperation() huma.Operation {
+	return huma.Operation{
+		OperationID:   "deleteChoir",
+		Method:        http.MethodDelete,
+		Path:          "/{name}/choirs/{choir}",
+		Summary:       "Delete Choir",
+		Description:   "Deletes Choir (cascading its Voices). Permission choir.delete.",
+		Tags:          []string{"choir"},
+		DefaultStatus: http.StatusNoContent,
+		Errors:        []int{http.StatusForbidden, http.StatusNotFound, http.StatusUnprocessableEntity, http.StatusInternalServerError},
+	}
+}
+
+// === POST /v1/incarnations/{name}/choirs/{choir}/voices (add-voice) — WRITE-SELF-AUDIT choir.voice_added (201+body) ===
+
+// voiceAddInput — huma-input POST .../voices. Name/Choir — path; Body — typed body.
+type voiceAddInput struct {
+	Name  string `path:"name" doc:"incarnation name"`
+	Choir string `path:"choir" doc:"Choir name"`
+	Body  VoiceAddRequest
+}
+
+// VoiceAddRequest — Go form of the POST .../voices body. added_by_aid is NOT taken from
+// the body. The format of sid / role / position ≥0 is domain validation (422).
+// additionalProperties:false → an unknown field → 400. The struct name = the contract
+// schema name (huma DefaultSchemaNamer; hand-written VoiceAddRequest, N4).
+type VoiceAddRequest struct {
+	SID      string  `json:"sid" required:"true" pattern:"^[a-z0-9][a-z0-9.-]{0,253}$" doc:"SID (FQDN) of a host - a member of the incarnation"`
+	Role     *string `json:"role,omitempty" doc:"declared-role (kebab-case, 1..63)"`
+	Position *int    `json:"position,omitempty" doc:"ordinal index in the batch (>= 0)"`
+}
+
+// voiceAddOutput — huma-output POST .../voices (FULL-TYPED). Status=201; Body —
+// native 201 body (Voice).
+type voiceAddOutput struct {
+	Status int `json:"-"`
+	Body   Voice
+}
+
+// voiceAddOperation — metadata for POST .../voices. DefaultStatus=201. WRITE-SELF-AUDIT
+// choir.voice_added. Errors: 400 unknown/malformed, 403, 404 choir, 409 voice-exists,
+// 422 sid/role/position validation / SID-not-a-member, 500.
+func voiceAddOperation() huma.Operation {
+	return huma.Operation{
+		OperationID:   "addVoice",
+		Method:        http.MethodPost,
+		Path:          "/{name}/choirs/{choir}/voices",
+		Summary:       "Add Voice to Choir",
+		Description:   "SID membership in the Choir (ADR-044). added_by_aid from JWT. Permission choir.add-voice. 409 - Voice already exists; 422 - SID is not a member of the incarnation.",
+		Tags:          []string{"choir"},
+		DefaultStatus: http.StatusCreated,
+		Errors:        []int{http.StatusBadRequest, http.StatusForbidden, http.StatusNotFound, http.StatusConflict, http.StatusUnprocessableEntity, http.StatusInternalServerError},
+	}
+}
+
+// === GET /v1/incarnations/{name}/choirs/{choir}/voices (list-voices) — READ (no audit) ===
+
+// voiceListInput — huma-input GET .../voices. Name/Choir — path.
+type voiceListInput struct {
+	Name  string `path:"name" doc:"incarnation name"`
+	Choir string `path:"choir" doc:"Choir name"`
+}
+
+// voiceListOutput — huma-output GET .../voices (FULL-TYPED). Body — native envelope
+// (VoiceListReply).
+type voiceListOutput struct {
+	Body VoiceListReply
+}
+
+// voiceListOperation — metadata for GET .../voices. DefaultStatus=200. READ: audit not
+// wired. Permission choir.list. Errors: 403, 422 bad path, 500.
+func voiceListOperation() huma.Operation {
+	return huma.Operation{
+		OperationID:   "listVoices",
+		Method:        http.MethodGet,
+		Path:          "/{name}/choirs/{choir}/voices",
+		Summary:       "List Voices of the Choir",
+		Description:   "Members of the Choir (ADR-044). Permission choir.list. Nonexistent Choir -> items=[]. Read-only, no audit.",
+		Tags:          []string{"choir"},
+		DefaultStatus: http.StatusOK,
+		Errors:        []int{http.StatusForbidden, http.StatusUnprocessableEntity, http.StatusInternalServerError},
+	}
+}
+
+// === DELETE /v1/incarnations/{name}/choirs/{choir}/voices/{sid} (remove-voice) — WRITE-SELF-AUDIT choir.voice_removed (204) ===
+
+// voiceRemoveInput — huma-input DELETE .../voices/{sid}. Name/Choir/SID — path.
+type voiceRemoveInput struct {
+	Name  string `path:"name" doc:"incarnation name"`
+	Choir string `path:"choir" doc:"Choir name"`
+	SID   string `path:"sid" pattern:"^[a-z0-9][a-z0-9.-]{0,253}$" doc:"SID (FQDN) of a host"`
+}
+
+// voiceRemoveOutput — huma-output DELETE .../voices/{sid} (FULL-TYPED). Status=204.
+type voiceRemoveOutput struct {
+	Status int `json:"-"`
+}
+
+// voiceRemoveOperation — metadata for DELETE .../voices/{sid}. DefaultStatus=204.
+// WRITE-SELF-AUDIT choir.voice_removed. Errors: 403, 404 voice, 422 bad path, 500.
+func voiceRemoveOperation() huma.Operation {
+	return huma.Operation{
+		OperationID:   "removeVoice",
+		Method:        http.MethodDelete,
+		Path:          "/{name}/choirs/{choir}/voices/{sid}",
+		Summary:       "Remove Voice from Choir",
+		Description:   "Removes SID membership in the Choir (ADR-044). Permission choir.remove-voice.",
+		Tags:          []string{"choir"},
+		DefaultStatus: http.StatusNoContent,
+		Errors:        []int{http.StatusForbidden, http.StatusNotFound, http.StatusUnprocessableEntity, http.StatusInternalServerError},
+	}
+}

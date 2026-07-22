@@ -1,0 +1,96 @@
+# L0 trial for the version-aware validator (assert, #6) — NEGATIVE "correct directive,
+# WRONG version". This is a guard on the very essence of version-awareness: directive bgsave-cpulist —
+# a REAL redis.conf directive, but it appeared in Redis 8.x (present in the catalog[8.2], NOT in
+# catalog[7.4]). The operator chose version 7.4.1 (7.4 series, enum of builds shipped to Nexus)
+# -> the assert must reject bgsave-cpulist: on redis 7.4 no such directive exists,
+# redis-server would fail to start with a config error. Verifies that the validator matches the name against
+# the SET OF THE CHOSEN SERIES, not against "any Redis version" (otherwise typos would be caught, but
+# version drift wouldn't be).
+#
+# The catalog fixture carries BOTH series (7.4 and 8.2): bgsave-cpulist is in 8.2, not in 7.4. Version
+# 7.4.1 matches only the 7.4 series (regex `^([0-9]+:)?7.4[.]`), membership is checked
+# against 7.4 -> false. The 8.2 series is vacuously-true for this version (ternary) and does NOT save it.
+name: redis_settings with a directive from a newer Redis series aborts at render (version mismatch)
+
+fixtures:
+  default_destiny_source: "file://../../destiny/{name}"
+  hosts:
+    - sid: node-solo.example.com
+      covens: [create]
+      soulprint:
+        network: { primary_ip: 10.0.0.5 }
+        os: { arch: amd64 }
+  vault:
+    secret/redis/create:
+      password: s3cr3t-redis-pass-create
+    # * default_admin REDESIGN (2026-06-30): default_admin — the system user for
+    # in-cluster AUTH (auth_pass/PING deploy steps read it via the users/<name> branch).
+    secret/redis/create/users/default_admin:
+      password: default-admin-secret-pass
+    secret/redis/create/users/replica:
+      password: replica-sys-secret-pass
+    secret/redis/create/users/monitoring:
+      password: monitoring-sys-secret-pass
+    secret/redis/create/users/sentinel:
+      password: sentinel-sys-secret-pass
+    secret/redis/create/users/haproxy:
+      password: haproxy-sys-secret-pass
+  essence:
+    redis_type: sentinel
+    sentinel_master_name: master
+    modules_base_url: "https://artifacts.example.com/redis/modules"
+    memory_reserve_percent: 75
+    persistence_presets:
+      rdb:
+        save: "900 1 300 10 60 10000"
+        appendonly: "no"
+    redis_config:
+      maxmemory:        "256mb"
+      maxmemory-policy: allkeys-lru
+      maxclients:       10000
+      timeout:          300
+    system_acl_users:
+      default_admin: "~* &* +@all"
+      replica:    "+psync +replconf +ping"
+      monitoring: "-@all +@connection +client +ping +info +config|get +cluster|info +slowlog +latency +memory +select +command|count +command|docs"
+      sentinel:   "allchannels +multi +slaveof +ping +exec +subscribe +config|rewrite +role +publish +info +client|setname +client|kill +script|kill"
+      haproxy:    "-@all +auth +client|getname +client|id +client|setname +command +hello +ping +role +info +cluster|info"
+    system_acl_users_sentinel:
+      default_admin: "allchannels allkeys +@all"
+      monitoring: "-@all +@connection -command +client -hello +info -auth +sentinel|masters +sentinel|replicas +sentinel|slaves +sentinel|sentinels +sentinel|ckquorum"
+      sentinel:   "allchannels -@all +auth +client|getname +client|id +client|setname +command +hello +ping +sentinel|is-master-down-by-addr +publish +role +sentinel|get-master-addr-by-name +sentinel|master +sentinel|myid +sentinel|replicas +sentinel|sentinels"
+      haproxy:    "-@all +auth +client|getname +client|id +client|setname +command +hello +ping +role +sentinel|get-master-addr-by-name +sentinel|master +sentinel|myid +sentinel|replicas +sentinel|sentinels"
+
+    # Catalog with TWO series: bgsave-cpulist exists only in 8.2 (introduced in Redis 8.x).
+    redis_directives:
+      "7.4":
+        - maxmemory
+        - maxmemory-policy
+        - maxclients
+        - timeout
+        - appendonly
+        - save
+      "8.2":
+        - maxmemory
+        - maxmemory-policy
+        - maxclients
+        - timeout
+        - appendonly
+        - save
+        - bgsave-cpulist
+
+  input:
+    # * provision is disabled (default-on: an omitted section = ENABLED; the case deploys to a
+    # READY roster, no cloud-create needed) -> include the redis-provision.yml group-drop.
+    provision:
+      enabled: false
+    redis_type: sentinel
+    version: "7.4.1"
+    persistence: rdb
+    redis_settings:
+      # A real directive, but from Redis 8.x — NOT present on the 7.4 series -> assert false.
+      bgsave-cpulist: "0-3"
+
+# The run aborts at render: assert "Validate redis_settings directive names..." false
+# (bgsave-cpulist not in catalog[7.4]). The substring is the assert rule's message.
+expect_render_error: "redis_settings contains an unknown redis.conf directive for the selected Redis version"

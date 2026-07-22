@@ -1,0 +1,22 @@
+kind: soul_module
+protocol_version: 1
+namespace: core
+name: cron
+
+required_capabilities:
+  - run_as_root
+  - fs_write_root
+
+spec:
+  states:
+    present:
+      description: Job file /etc/cron.d/<name> with the given schedule and command (ADR-015).
+      input:
+        name:     { type: string, required: true, description: "Job name (= file name in /etc/cron.d, [A-Za-z0-9_-])." }
+        schedule: { type: string, required: true, description: "Cron schedule (5 fields), e.g. \"0 3 * * *\"." }
+        command:  { type: string, required: true, description: "Command run on schedule." }
+        user:     { type: string, description: "User to run as (default root)." }
+    absent:
+      description: Job file removed.
+      input:
+        name: { type: string, required: true, description: "Job name (= file name in /etc/cron.d)." }

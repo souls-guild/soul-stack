@@ -1,0 +1,24 @@
+{
+  "type": "object",
+  "required": ["target_node", "template_vmid"],
+  "properties": {
+    "target_node": { "type": "string" },
+    "template_vmid": { "type": "integer", "minimum": 100 },
+    "new_vmid_start": { "type": "integer", "minimum": 100, "default": 0 },
+    "name_prefix": {
+      "type": "string",
+      "pattern": "^[a-zA-Z0-9][a-zA-Z0-9-]*$",
+      "default": "soul"
+    },
+    "full_clone": { "type": "boolean", "default": true },
+    "cores": { "type": "integer", "minimum": 1, "default": 2 },
+    "memory": { "type": "integer", "minimum": 256, "default": 2048 },
+    "storage": { "type": "string" },
+    "bridge": { "type": "string" },
+    "tags": {
+      "type": "object",
+      "additionalProperties": { "type": "string" }
+    },
+    "cicustom": { "type": "string" }
+  }
+}

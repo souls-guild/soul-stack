@@ -1,0 +1,92 @@
+name: create
+# create: true — the starting scenario (Phase 2: the create-set = EXACTLY {scenario with the flag}).
+create: true
+description: >-
+  L3b real-soul-in-container flagship-smoke (ADR-039): installs nginx via the
+  package manager, renders the site-config from a template, and brings up the
+  systemd unit. Unlike L3a smoke-nginx (soul-stub responds scripted),
+  here the destiny tasks genuinely mutate the container. The goal is to cover the end-to-end
+  flow Keeper render → ApplyRequest → Soul Apply → RunResult → apply_runs
+  success on GENUINE core modules (core.pkg / core.file.rendered /
+  core.service).
+
+# ── Input contract ─────────────────────────────────────────────────────────
+# Minimal: only the host identifier (server_name in the nginx config +
+# match in audit events). Everything else — from essence (listen port, default name).
+input:
+  hostname:
+    type: string
+    required: true
+    description: >-
+      The name of the host on which the tasks are expected to run (server_name in
+      the rendered nginx config). Taken from incarnation.spec / RunScenario
+      input, checked by the test's audit-event asserts.
+
+# ── incarnation.state mutation ────────────────────────────────────────────────
+# state_changes record the post-apply snapshot (ADR-009 §7.1, ADR-057 list form).
+# Literals, not a CEL resolve — the state is "fully deployed", with no variation.
+# A literal without ${ … } is assigned as a string (the type in state is string, matching the
+# state_schema enum). For bool we use ${ true } — a lone ${…} yields the
+# native type (ADR-010).
+state_changes:
+  - set: nginx_package
+    value: installed
+  - set: nginx_service
+    value: active
+  - set: nginx_config_managed
+    value: "${ true }"
+
+# ── Tasks (inline, ADR-009) ─────────────────────────────────────────────────
+# All three core modules go inline — there is no reuse, setting up a separate destiny
+# for smoke would be overkill (see docs/scenario/concept.md "boundary is a
+# recommendation").
+#
+# Idempotency: a repeat apply must remain changed=false at every
+# step (core.pkg.installed with no version pin → repo-latest is installed, no-op;
+# core.file.rendered compares SHA-256 against disk; core.service.running
+# checks is-active). The test in L3b-3 only checks the first run.
+tasks:
+  # 1. Package from the distro repository. No =version pin: smoke is not
+  # tied to a specific nginx build — we take whatever is in the repo.
+  # retry — against a flaky apt-mirror (same reason as in
+  # redis-single/tasks/main.yml).
+  - name: Install nginx package
+    module: core.pkg.installed
+    retry: { count: 3, delay: 10s }
+    params:
+      name: nginx
+
+  # 2. site-config /etc/nginx/sites-available/default. register +
+  # an onchanges chain to core.service.restarted below — restart only on a
+  # genuine config change (idempotency of a repeat apply).
+  # mode 0644 / owner root — the Debian nginx package standard.
+  - name: Render nginx default site-config
+    module: core.file.rendered
+    register: nginx_default_conf
+    params:
+      path: /etc/nginx/sites-available/default
+      template: templates/nginx-default.conf.tmpl
+      mode: "0644"
+      owner: root
+      group: root
+      vars:
+        server_name: "${ input.hostname }"
+        listen_port: "${ essence.nginx_listen_port }"
+
+  # 3. nginx systemd unit: enabled + active. After the package is installed the unit is
+  # already in place (Debian postinst), we just need to guarantee active+enabled.
+  - name: Ensure nginx service is running and enabled at boot
+    module: core.service.running
+    params:
+      name: nginx
+      enabled: true
+
+  # 4. Reactive restart ONLY when the site-config changes (onchanges).
+  # On the first apply: rendered changed=true → restart; on a repeat:
+  # changed=false → the step is a no-op. timeout — against a hung systemd-restart.
+  - name: Restart nginx when site-config changed
+    module: core.service.restarted
+    onchanges: [nginx_default_conf]
+    timeout: 30s
+    params:
+      name: nginx

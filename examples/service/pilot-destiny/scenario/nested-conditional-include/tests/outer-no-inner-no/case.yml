@@ -1,0 +1,18 @@
+# L0 test level (Trial, ADR-023): outer='no', inner='no' → the plan is empty (the outer
+# group is dropped, the nested one cascades). Symmetric with outer-no-inner-yes without
+# depending on the inner value: a false outer alone is enough to drop both tasks.
+name: nested conditional-include drops everything when outer is no (inner no)
+
+fixtures:
+  input:
+    outer: 'no'
+    inner: 'no'
+
+assert:
+  task_absent:
+    - module: core.file.present
+      params_subset:
+        path: /etc/pilot/outer.txt
+    - module: core.file.present
+      params_subset:
+        path: /etc/pilot/inner.txt

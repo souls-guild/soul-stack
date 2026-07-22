@@ -1,0 +1,109 @@
+# L0 test (#7, 2026-06-26): the operator sets NON-DEFAULT sentinel failover
+# timings (sentinel_down_after_ms / sentinel_failover_timeout_ms). FALSIFICATION:
+# values 12000/70000 (≠ defaults 5000/60000) MUST reach:
+#   1. the community.redis.sentinel plugin params.config with keys
+#      `sentinel down-after-milliseconds master` / `sentinel failover-timeout master`
+#      (per-master SENTINEL SET reconcile — classified by the plugin);
+#   2. state.redis_sentinel.down_after_ms / failover_timeout_ms (read-model).
+# A regression "timings hardcoded/not read from input" would mean the plugin/state got
+# the defaults 5000/60000. Single-host sentinel (1 master + 0 replicas = standalone-equivalent).
+name: operator sentinel failover timings flow to plugin config and state
+
+fixtures:
+  default_destiny_source: "file://../../destiny/{name}"
+  hosts:
+    - sid: node-solo.example.com
+      covens: [create]
+      soulprint:
+        network: { primary_ip: 10.0.0.5 }
+        os: { arch: amd64 }
+  vault:
+    secret/redis/create:
+      password: s3cr3t-redis-pass-create
+    # ★ REDESIGN default_admin (2026-06-30): default_admin is the system user for
+    # intra-cluster AUTH (the deploy's auth_pass/PING steps read it from the users/<name> branch).
+    secret/redis/create/users/default_admin:
+      password: default-admin-secret-pass
+    secret/redis/create/users/replica:
+      password: replica-sys-secret-pass
+    secret/redis/create/users/monitoring:
+      password: monitoring-sys-secret-pass
+    secret/redis/create/users/sentinel:
+      password: sentinel-sys-secret-pass
+    secret/redis/create/users/haproxy:
+      password: haproxy-sys-secret-pass
+  essence:
+    # install_method is in essence (author-context, 2026-06-28): the installation method
+    # is NOT operator-input. compute.install reads default(essence.install_method, 'binary').
+    install_method: package
+    redis_type: sentinel
+    sentinel_master_name: master
+    modules_base_url: "https://artifacts.example.com/redis/modules"
+    memory_reserve_percent: 75
+    persistence_presets:
+      rdb:
+        save: "900 1 300 10 60 10000"
+        appendonly: "no"
+    redis_config:
+      maxmemory: "256mb"
+    system_acl_users:
+      default_admin: "~* &* +@all"
+      replica:    "+psync +replconf +ping"
+      monitoring: "-@all +@connection +client +ping +info +config|get +cluster|info +slowlog +latency +memory +select +command|count +command|docs"
+      sentinel:   "allchannels +multi +slaveof +ping +exec +subscribe +config|rewrite +role +publish +info +client|setname +client|kill +script|kill"
+      haproxy:    "-@all +auth +client|getname +client|id +client|setname +command +hello +ping +role +info +cluster|info"
+    system_acl_users_sentinel:
+      default_admin: "allchannels allkeys +@all"
+      monitoring: "-@all +@connection -command +client -hello +info -auth +sentinel|masters +sentinel|replicas +sentinel|slaves +sentinel|sentinels +sentinel|ckquorum"
+      sentinel:   "allchannels -@all +auth +client|getname +client|id +client|setname +command +hello +ping +sentinel|is-master-down-by-addr +publish +role +sentinel|get-master-addr-by-name +sentinel|master +sentinel|myid +sentinel|replicas +sentinel|sentinels"
+      haproxy:    "-@all +auth +client|getname +client|id +client|setname +command +hello +ping +role +sentinel|get-master-addr-by-name +sentinel|master +sentinel|myid +sentinel|replicas +sentinel|sentinels"
+  input:
+    # ★ provision disabled (default-on: an omitted section = ENABLED; the case deploys onto a
+    # READY roster, cloud-create not needed) → include redis-provision.yml group-drop.
+    provision:
+      enabled: false
+    redis_type: sentinel
+    version: "7.4.1"
+    replicas_per_master: 0
+    # ★ #7 (redesign): non-default failover timings via a per-master dict
+    # sentinel_master_settings (≠ defaults 5000/60000). Keys are SENTINEL SET option names
+    # without prefix/master-name; values are strings. Absorbed the former named fields
+    # sentinel_down_after_ms / sentinel_failover_timeout_ms.
+    sentinel_master_settings:
+      down-after-milliseconds: "12000"
+      failover-timeout: "70000"
+
+assert:
+  task_present:
+    # ★ The plugin receives per-master timings via keys `sentinel <opt> <master>` with
+    # the OPERATOR's values (12000/70000) — proves reading from input, not hardcoded.
+    - module: community.redis.sentinel
+      params_subset:
+        addr: "127.0.0.1:26379"
+        master_name: master
+        # ★ REDESIGN default_admin: CONNECTION-AUTH to :26379 as default_admin (username/
+        # password). The NOAUTH guard is separate from auth_pass (monitoring the master).
+        username: default_admin
+        password: default-admin-secret-pass
+        config:
+          "sentinel down-after-milliseconds master": "12000"
+          "sentinel failover-timeout master": "70000"
+        monitor:
+          ip: 10.0.0.5
+          port: 6379
+          quorum: 1
+
+  state_changes:
+    redis_type: sentinel
+    redis_version: "7.4.1"
+    redis_users: []
+    redis_hosts: []
+    # ★ read-model (redesign): operator timings in master_settings (effective
+    # per-master dict = essence defaults overlaid by operator); settings are global (not set).
+    redis_sentinel:
+      master_name: master
+      quorum: 0
+      master_settings:
+        down-after-milliseconds: "12000"
+        failover-timeout: "70000"
+      settings: {}

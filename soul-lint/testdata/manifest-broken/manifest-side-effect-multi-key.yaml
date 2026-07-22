@@ -1,0 +1,11 @@
+kind: soul_module
+protocol_version: 1
+namespace: x
+name: y
+side_effects:
+  - { service: a, file: /b }
+spec:
+  states:
+    run:
+      description: x
+      input: {}

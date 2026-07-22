@@ -1,0 +1,132 @@
+# L0-trial (Trial, ADR-023): install.method=package (EXPLICIT). Mirrors install-binary.
+# sentinel single-host mode (1 master + 0 replicas = standalone-equivalent) — the install
+# branch of install.yml is mode-agnostic. Guard: with method=package the package branch
+# of install.yml is active (core.pkg.installed redis-server on index 0), while the binary
+# branch (url.fetched/archive/user/group/three core.file.present binaries/unit/restart) is
+# placeholder-skip (params empty). Explicit method=package = the default.
+name: install method package installs the distro redis-server package
+
+fixtures:
+  default_destiny_source: "file://../../destiny/{name}"
+  hosts:
+    - sid: node-solo.example.com
+      covens: [create, redis]
+      soulprint:
+        network: { primary_ip: 10.0.0.5 }
+        os: { arch: amd64 }
+  vault:
+    secret/redis/create:
+      password: s3cr3t-redis-pass-create
+    # Per-user secrets of system users (secret/redis/<inc>/users/<name>#password) —
+    # resolved by keeper-side vault() when topping up system_acl_users into apply.input.users.
+    # ★ default_admin REDESIGN (2026-06-30): default_admin is the system user for
+    # intra-cluster AUTH (the deploy's auth_pass/PING steps read it via the users/<name> branch).
+    secret/redis/create/users/default_admin:
+      password: default-admin-secret-pass
+    secret/redis/create/users/replica:
+      password: replica-sys-secret-pass
+    secret/redis/create/users/monitoring:
+      password: monitoring-sys-secret-pass
+    secret/redis/create/users/sentinel:
+      password: sentinel-sys-secret-pass
+    secret/redis/create/users/haproxy:
+      password: haproxy-sys-secret-pass
+  essence:
+    # install_method — in essence (author-context, 2026-06-28): the install method
+    # is NOT operator-input. compute.install reads default(essence.install_method, 'binary').
+    install_method: package
+    redis_type: sentinel
+    sentinel_master_name: master
+    # ★ Redesign: per-master sentinel-defaults substrate (backing input.sentinel_master_settings).
+    sentinel_master_defaults:
+      down-after-milliseconds: "5000"
+      failover-timeout:        "60000"
+    modules_base_url: "https://artifacts.example.com/redis/modules"
+    memory_reserve_percent: 75
+    persistence_presets:
+      rdb:
+        save: "900 1 300 10 60 10000"
+        appendonly: "no"
+    redis_config:
+      maxmemory: "256mb"
+
+    # System ACL users for redis-server + the sentinel daemon (1:1 from essence/_default.yaml).
+    # BOTH ARE REQUIRED: the create/sentinel.yml guard (assert 1b) breaks render if either
+    # set is empty (a silent fail-open is unacceptable — without them replication/sentinel↔redis
+    # AUTH would break).
+    system_acl_users:
+      default_admin: "~* &* +@all"
+      replica:    "+psync +replconf +ping"
+      monitoring: "-@all +@connection +client +ping +info +config|get +cluster|info +slowlog +latency +memory +select +command|count +command|docs"
+      sentinel:   "allchannels +multi +slaveof +ping +exec +subscribe +config|rewrite +role +publish +info +client|setname +client|kill +script|kill"
+      haproxy:    "-@all +auth +client|getname +client|id +client|setname +command +hello +ping +role +info +cluster|info"
+    system_acl_users_sentinel:
+      default_admin: "allchannels allkeys +@all"
+      monitoring: "-@all +@connection -command +client -hello +info -auth +sentinel|masters +sentinel|replicas +sentinel|slaves +sentinel|sentinels +sentinel|ckquorum"
+      sentinel:   "allchannels -@all +auth +client|getname +client|id +client|setname +command +hello +ping +sentinel|is-master-down-by-addr +publish +role +sentinel|get-master-addr-by-name +sentinel|master +sentinel|myid +sentinel|replicas +sentinel|sentinels"
+      haproxy:    "-@all +auth +client|getname +client|id +client|setname +command +hello +ping +role +sentinel|get-master-addr-by-name +sentinel|master +sentinel|myid +sentinel|replicas +sentinel|sentinels"
+  input:
+    # ★ provision disabled (default-on: an omitted section = ENABLED; the case deploys to a
+    # READY roster, cloud-create not needed) → include redis-provision.yml group-drop.
+    provision:
+      enabled: false
+    redis_type: sentinel
+    version: "7.4.1"
+    persistence: rdb
+    # single-host sentinel roster (1 host) → no replicas (size-guard 1+0).
+    replicas_per_master: 0
+
+assert:
+  task_present:
+    # distro package: core.pkg.installed with a distro-pin (package branch active).
+    - module: core.pkg.installed
+      params_subset:
+        name: redis-server
+        version: "7.4.1"
+
+    # ★ redis-sentinel is a SEPARATE distro package (redis-server does NOT pull it), needed
+    # on the host for the sentinel daemon (otherwise redis-sentinel.service → 203/EXEC, a defect
+    # caught live on Debian 12). sentinel mode → sentinel_enabled=true → package in the plan.
+    # version — the SAME distro-pin as redis-server (versioned together). Guard
+    # against the regression "package branch installs only redis-server". The paired negative is
+    # cluster-create-3shards (cluster + package → redis-sentinel ABSENT).
+    - module: core.pkg.installed
+      params_subset:
+        name: redis-sentinel
+        version: "7.4.1"
+
+    # redis.conf is in place. A full merged-config check is provided by full-stack; here we only
+    # verify data-plane behavior is preserved (same module/path as in default mode).
+    - module: core.file.rendered
+      params_subset:
+        path: /etc/redis/redis.conf
+
+  task_absent:
+    # the binary branch of install.yml is disabled (method=package → static-skip): tarball-fetch
+    # and binary layout are placeholder-skip without params. params_subset won't match
+    # the placeholder (Params nil) → guard "package does NOT trigger binary-install".
+    - module: core.url.fetched
+      params_subset:
+        path: "/tmp/redis-7.2.4.tar.gz"
+    - module: core.file.present
+      params_subset:
+        path: /usr/local/bin/redis-server
+
+  state_changes:
+    redis_type: sentinel
+    redis_version: "7.4.1"
+    redis_config:
+      maxmemory: "256mb"
+      save: "900 1 300 10 60 10000"
+      appendonly: "no"
+    redis_users: []
+    redis_hosts: []
+    # ★ Redesign: failover timings in master_settings (defaults from essence.sentinel_master_defaults;
+    # operator dict not set). settings — global sentinel directives (not set → {}).
+    redis_sentinel:
+      master_name: master
+      quorum: 0
+      master_settings:
+        down-after-milliseconds: "5000"
+        failover-timeout: "60000"
+      settings: {}

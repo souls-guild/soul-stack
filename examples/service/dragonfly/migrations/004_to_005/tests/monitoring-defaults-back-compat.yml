@@ -1,0 +1,48 @@
+name: monitoring-defaults-back-compat
+description: >
+  Incarnation v4 was deployed BEFORE monitoring was introduced — there is no monitoring field
+  in state. The migration ADDS a monitoring read-model with a conservative default: empty version
+  ('' = not deployed), port — the conventional :9100. ★ node-exporter-ONLY: no redis_exporter
+  fields (DragonFly reports metrics natively). The rest of the state (df_version/df_config/df_users/
+  tls/topology/provision) passes through bit-for-bit. Mirrors redis 012_to_013 monitoring-defaults-back-compat.
+
+state_before:
+  df_version: "1.39.0"
+  df_config:
+    maxmemory: "256mb"
+    maxclients: 10000
+  df_users:
+    - { name: "app", perms: "~* +@all", state: "on" }
+  tls:
+    enable: false
+    cert_ref: ""
+    key_ref: ""
+    ca_ref: ""
+  memory_mb: 1024
+  replicas: 1
+  sentinel_quorum: 0
+  provisioned_vm_ids: []
+  provisioned_provider: ""
+  provisioned_sids: []
+
+state_after:
+  df_version: "1.39.0"
+  df_config:
+    maxmemory: "256mb"
+    maxclients: 10000
+  df_users:
+    - { name: "app", perms: "~* +@all", state: "on" }
+  tls:
+    enable: false
+    cert_ref: ""
+    key_ref: ""
+    ca_ref: ""
+  memory_mb: 1024
+  replicas: 1
+  sentinel_quorum: 0
+  provisioned_vm_ids: []
+  provisioned_provider: ""
+  provisioned_sids: []
+  monitoring:
+    node_exporter_version: ""
+    node_exporter_listen: ":9100"

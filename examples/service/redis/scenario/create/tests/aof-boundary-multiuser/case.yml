@@ -1,0 +1,238 @@
+# L0 test for create (standalone) — guard against QA coverage gaps 2026-06-22:
+#   - persistence: aof  → save="" + appendonly yes (aof preset, not rdb);
+#   - memory_mb=64 (min BOUNDARY) → 64*75/100=48 → maxmemory "48mb" (NOT "0mb":
+#     exactly why min:64 exists, for a nonzero result — see input.memory_mb);
+#   - maxmemory_policy NOT set → falls back to essence (allkeys-lru), has-guard does
+#     not materialize an empty key;
+#   - ≥2 ACL users with names that VIOLATE insertion order (zeta/alpha/mike) →
+#     users renders as a MAP (deterministic line order in users.acl; direct
+#     order-guard on the rendered file — destiny_redis_tmpl_test.go).
+name: aof + memory boundary 64mb + essence policy fallback + multi-user map
+
+fixtures:
+  default_destiny_source: "file://../../destiny/{name}"
+  hosts:
+    - sid: node-solo.example.com
+      covens: [create]
+      soulprint:
+        network: { primary_ip: 10.0.0.5 }
+        os: { arch: amd64 }
+  vault:
+    secret/redis/create:
+      password: s3cr3t-redis-pass-create
+    # Per-user secrets of system users (secret/redis/<inc>/users/<name>#password) -
+    # resolved by keeper-side vault() when merging system_acl_users into apply.input.users.
+    # ★ REDESIGN default_admin (2026-06-30): default_admin is the system user
+    # for intra-cluster AUTH (auth_pass/PING deploy steps read it via the users/<name> branch).
+    secret/redis/create/users/default_admin:
+      password: default-admin-secret-pass
+    secret/redis/create/users/replica:
+      password: replica-sys-secret-pass
+    secret/redis/create/users/monitoring:
+      password: monitoring-sys-secret-pass
+    secret/redis/create/users/sentinel:
+      password: sentinel-sys-secret-pass
+    secret/redis/create/users/haproxy:
+      password: haproxy-sys-secret-pass
+    secret/redis/create/users/zeta:
+      password: zeta-secret-pass
+    secret/redis/create/users/alpha:
+      password: alpha-secret-pass
+    secret/redis/create/users/mike:
+      password: mike-secret-pass
+  essence:
+    # install_method - in essence (author context, 2026-06-28): the install method is
+    # NOT operator input. compute.install reads default(essence.install_method, 'binary').
+    install_method: package
+    redis_type: sentinel
+    sentinel_master_name: master
+    modules_base_url: "https://artifacts.example.com/redis/modules"
+    memory_reserve_percent: 75
+    persistence_presets:
+      off:
+        save: ""
+        appendonly: "no"
+      aof_1sec:
+        save: ""
+        appendonly: "yes"
+      rdb:
+        save: "900 1 300 10 60 10000"
+        appendonly: "no"
+      rdb_aof_1sec:
+        save: "900 1 300 10 60 10000"
+        appendonly: "yes"
+    redis_config:
+      maxmemory:        "256mb"
+      maxmemory-policy: allkeys-lru
+      maxclients:       10000
+      timeout:          300
+
+    # System ACL users of redis-server + the sentinel daemon (1:1 from essence/_default.yaml).
+    # BOTH ARE MANDATORY: the create/sentinel.yml guard (assert 1b) fails the render if
+    # either set is empty (a silent fail-open is not acceptable - without them
+    # replication/sentinel<->redis AUTH would break).
+    system_acl_users:
+      default_admin: "~* &* +@all"
+      replica:    "+psync +replconf +ping"
+      monitoring: "-@all +@connection +client +ping +info +config|get +cluster|info +slowlog +latency +memory +select +command|count +command|docs"
+      sentinel:   "allchannels +multi +slaveof +ping +exec +subscribe +config|rewrite +role +publish +info +client|setname +client|kill +script|kill"
+      haproxy:    "-@all +auth +client|getname +client|id +client|setname +command +hello +ping +role +info +cluster|info"
+    system_acl_users_sentinel:
+      default_admin: "allchannels allkeys +@all"
+      monitoring: "-@all +@connection -command +client -hello +info -auth +sentinel|masters +sentinel|replicas +sentinel|slaves +sentinel|sentinels +sentinel|ckquorum"
+      sentinel:   "allchannels -@all +auth +client|getname +client|id +client|setname +command +hello +ping +sentinel|is-master-down-by-addr +publish +role +sentinel|get-master-addr-by-name +sentinel|master +sentinel|myid +sentinel|replicas +sentinel|sentinels"
+      haproxy:    "-@all +auth +client|getname +client|id +client|setname +command +hello +ping +role +sentinel|get-master-addr-by-name +sentinel|master +sentinel|myid +sentinel|replicas +sentinel|sentinels"
+  input:
+    # ★ provision disabled (default-on: an omitted section = ENABLED; the case deploys onto
+    # a READY roster, cloud-create isn't needed) -> include redis-provision.yml group-drop.
+    provision:
+      enabled: false
+    redis_type: sentinel
+    # version is MANDATORY (user directive 2026-06-23): a fixed
+    # distro-native pin (major < 8 -> the module version gate is not active).
+    version: "7.4.1"
+    # single-host roster (1 host) -> no replicas (sentinel size-guard = 1+0 = 1).
+    replicas_per_master: 0
+    memory_mb: 64
+    persistence: aof_1sec
+    # maxmemory_policy is NOT set - must come from essence (allkeys-lru).
+    users:
+      - { name: zeta, perms: "~* +@all", state: "on" }
+      - { name: alpha, perms: "~app:* +@read", state: "on" }
+      - { name: mike, perms: "~m:* +@write", state: "off" }
+
+assert:
+  task_present:
+    - module: core.pkg.installed
+      params_subset:
+        name: redis-server
+        version: "7.4.1"
+
+    # users.acl: a MAP of three users. Line order is guaranteed by ranging over the map (template);
+    # here we assert only the map's COMPOSITION (values are order-independent). The disambiguator from
+    # redis.conf (the same core.file.rendered) is the path in params_subset.
+    - module: core.file.rendered
+      params_subset:
+        path: /etc/redis/users.acl
+        template_content: "<present>"
+        mode: "0640"
+        owner: redis
+        group: redis
+        render_context:
+          vars:
+            # SYSTEM (4, from essence.system_acl_users, merged in MANDATORILY - guard 1b)
+            # + operator-extra zeta/alpha/mike (last-wins). Names do not collide with system ones.
+            users:
+              default_admin:
+                perms: "~* &* +@all"
+                state: "on"
+                password: default-admin-secret-pass
+              replica:
+                perms: "+psync +replconf +ping"
+                state: "on"
+                password: replica-sys-secret-pass
+              monitoring:
+                perms: "-@all +@connection +client +ping +info +config|get +cluster|info +slowlog +latency +memory +select +command|count +command|docs"
+                state: "on"
+                password: monitoring-sys-secret-pass
+              sentinel:
+                perms: "allchannels +multi +slaveof +ping +exec +subscribe +config|rewrite +role +publish +info +client|setname +client|kill +script|kill"
+                state: "on"
+                password: sentinel-sys-secret-pass
+              haproxy:
+                perms: "-@all +auth +client|getname +client|id +client|setname +command +hello +ping +role +info +cluster|info"
+                state: "on"
+                password: haproxy-sys-secret-pass
+              zeta:
+                perms: "~* +@all"
+                state: "on"
+                password: zeta-secret-pass
+              alpha:
+                perms: "~app:* +@read"
+                state: "on"
+                password: alpha-secret-pass
+              mike:
+                perms: "~m:* +@write"
+                state: "off"
+                password: mike-secret-pass
+          self:
+            sid: node-solo.example.com
+            covens: [create]
+            choirs: []
+            # traits - a registry projection (ADR-060), an empty object with no labels.
+            traits: {}
+            role: ""
+            network:
+              primary_ip: 10.0.0.5
+            os:
+              arch: amd64
+          role: ""
+          essence: {}
+
+    # redis.conf: the RESULT of merge() - the main guard of this case.
+    - module: core.file.rendered
+      params_subset:
+        path: /etc/redis/redis.conf
+        template_content: "<present>"
+        mode: "0640"
+        owner: redis
+        group: redis
+        render_context:
+          vars:
+            conf_dir: /etc/redis
+            data_dir: /var/lib/redis
+            port: 6379
+            run_dir: /var/run/redis
+            log_dir: /var/log/redis
+            loadmodules:
+              - /var/lib/redis/modules/redisbloom.so
+              - /var/lib/redis/modules/rejson.so
+              - /var/lib/redis/modules/redisearch.so
+              - /var/lib/redis/modules/redistimeseries.so
+            config:
+              # ★ REDESIGN default_admin: replica->master AUTH (masteruser/
+              # masterauth) arrives as ORDINARY config directives (the sentinel
+              # deploy body merges them in via vault()-in-cell) -> redis.conf ranges
+              # over them like any directive -> they survive a restart statically.
+              masteruser:       "default_admin"
+              masterauth:       "default-admin-secret-pass"
+              # BOUNDARY: 64*75/100=48 -> "48mb" (NOT "0mb"). Overrode essence's "256mb".
+              maxmemory: "48mb"
+              # maxmemory_policy is NOT set in input -> comes from essence (has-guard: an empty
+              # key is not materialized, the default is not overwritten).
+              maxmemory-policy: allkeys-lru
+              maxclients: 10000
+              timeout: 300
+              # persistence preset aof: save empty, appendonly yes.
+              save: ""
+              appendonly: "yes"
+          self:
+            sid: node-solo.example.com
+            covens: [create]
+            choirs: []
+            # traits - a registry projection (ADR-060), an empty object with no labels.
+            traits: {}
+            role: ""
+            network:
+              primary_ip: 10.0.0.5
+            os:
+              arch: amd64
+          role: ""
+          essence: {}
+
+  state_changes:
+    redis_type: sentinel
+    redis_version: "7.4.1"
+    # DRIFT-GUARD: identical to apply.input.config (index 3).
+    redis_config:
+      maxmemory: "48mb"
+      maxmemory-policy: allkeys-lru
+      maxclients: 10000
+      timeout: 300
+      save: ""
+      appendonly: "yes"
+    redis_users:
+      - { name: zeta, perms: "~* +@all", state: "on" }
+      - { name: alpha, perms: "~app:* +@read", state: "on" }
+      - { name: mike, perms: "~m:* +@write", state: "off" }
+    redis_hosts: []

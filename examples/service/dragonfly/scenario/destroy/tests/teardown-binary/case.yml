@@ -1,0 +1,73 @@
+# L0 test destroy: teardown of an incarnation deployed the BINARY way (upstream-tarball).
+# Render-only, hermetic. Paired with teardown-package — covers the binary branch of the gate on
+# essence.install_method (v1→v2: install method moved out of state into essence).
+#
+# What we assert:
+#   1. Services stopped (core.service.stopped): dragonfly, redis-sentinel, disable-thp.
+#   2. BINARY artifacts removed (core.file.absent): /usr/local/bin/dragonfly + our unit
+#      /etc/systemd/system/dragonfly.service (binary branch active — state.install.method=binary).
+#   3. Our config artifacts removed (sample).
+#   4. PACKAGE branch dropped (group-drop): core.pkg.absent name=dragonfly IS ABSENT from the plan
+#      (on a binary incarnation the distro-deb dragonfly was never installed — nothing to remove via package).
+name: destroy tears down a binary-installed dragonfly (stop services + remove binary/unit + configs)
+
+fixtures:
+  default_destiny_source: "file://../../destiny/{name}"
+  hosts:
+    - sid: node-solo.example.com
+      covens: [destroy]
+      soulprint:
+        network: { primary_ip: 10.0.0.5 }
+        os: { arch: amd64 }
+
+  # ★ v1→v2: install method and conf_dir are read from essence (install/conf_dir moved out of
+  # state). binary branch of the gate — essence.install_method=binary.
+  essence:
+    install_method: binary
+    binary_base_url: "https://artifacts.example.com/dragonfly"
+    binary_version: "1.39.0"
+    conf_dir: /etc/dragonfly
+
+  # incarnation.state v2 (install/conf_dir/data_dir is no longer in state).
+  state:
+    df_version: "1.39.0"
+    df_config:
+      maxmemory: "256mb"
+
+assert:
+  task_present:
+    # 1. Stop three services.
+    - module: core.service.stopped
+      params_subset:
+        name: dragonfly
+    - module: core.service.stopped
+      params_subset:
+        name: redis-sentinel
+    - module: core.service.stopped
+      params_subset:
+        name: disable-thp
+
+    # 2. BINARY artifacts removed (binary branch active).
+    - module: core.file.absent
+      params_subset:
+        path: /usr/local/bin/dragonfly
+    - module: core.file.absent
+      params_subset:
+        path: /etc/systemd/system/dragonfly.service
+
+    # 3. Our config artifacts removed (sample).
+    - module: core.file.absent
+      params_subset:
+        path: /etc/dragonfly/users.acl
+    - module: core.file.absent
+      params_subset:
+        path: /etc/dragonfly/dragonfly.conf
+    - module: core.file.absent
+      params_subset:
+        path: /etc/sysctl.d/30-dragonfly.conf
+
+  task_absent:
+    # 4. PACKAGE branch group-drop on a binary incarnation: package is not removed.
+    - module: core.pkg.absent
+      params_subset:
+        name: dragonfly

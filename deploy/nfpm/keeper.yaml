@@ -1,0 +1,66 @@
+# nfpm config for the `keeper` package (deb + rpm). ADR-004 — central node of Soul Stack.
+#
+# Build: `make pkg` (calls nfpm package). Version comes from the VERSION
+# environment variable (see Makefile) via nfpm's ${VERSION} substitution. The binary
+# must be built BEFORE packaging (`make build`) — laid out at keeper/bin/keeper.
+#
+# The package installs: the binary in /usr/local/bin, a systemd unit + env, an example config as
+# .yml.example (does not overwrite the operator's working config on upgrade — pkg configs
+# are marked with a config-flag, but the example is deliberately shipped under a separate name).
+name: soul-stack-keeper
+arch: ${ARCH}
+platform: linux
+version: ${VERSION}
+section: admin
+priority: optional
+maintainer: Soul Stack <noreply@soul-stack.com>
+description: |
+  Soul Stack Keeper — the central configuration management node (ADR-004).
+  gRPC bidi-stream over mTLS, OpenAPI/MCP for operators, Postgres + Redis.
+vendor: Soul Stack
+homepage: https://github.com/souls-guild/soul-stack
+license: BUSL-1.1
+
+contents:
+  - src: ./keeper/bin/keeper
+    dst: /usr/local/bin/keeper
+    file_info:
+      mode: 0755
+
+  - src: ./deploy/systemd/keeper.service
+    dst: /etc/systemd/system/keeper.service
+    file_info:
+      mode: 0644
+
+  - src: ./deploy/systemd/keeper.env
+    dst: /etc/keeper/keeper.env
+    type: config|noreplace
+    file_info:
+      mode: 0644
+
+  # Example config — under a separate name, so upgrade doesn't touch the operator's
+  # working /etc/keeper/keeper.yml. Copy it by hand on first install.
+  - src: ./examples/keeper/keeper.yml
+    dst: /etc/keeper/keeper.yml.example
+    file_info:
+      mode: 0640
+
+# Maintainer scripts (deb: postinst/prerm/postrm, rpm: %post/%preun/%postun).
+# Create the soul-stack system user and keeper working directories with the
+# right owner — without this a clean install won't work (the daemon running as
+# soul-stack can't write to root-owned /var/lib/soul-stack-keeper). Bootstrap
+# of the first Archon (keeper init) remains manual.
+scripts:
+  postinstall: ./deploy/nfpm/scripts/keeper.postinstall.sh
+  preremove:   ./deploy/nfpm/scripts/keeper.preremove.sh
+  postremove:  ./deploy/nfpm/scripts/keeper.postremove.sh
+
+overrides:
+  deb:
+    # passwd — the package that provides useradd (Essential/base on Debian and Ubuntu); postinst
+    # calls it directly. There used to be adduser — it's just a wrapper over the same passwd.
+    depends:
+      - passwd
+  rpm:
+    depends:
+      - shadow-utils

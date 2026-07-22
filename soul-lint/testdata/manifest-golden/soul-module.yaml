@@ -1,0 +1,26 @@
+kind: soul_module
+protocol_version: 1
+namespace: acme
+name: redis-failover
+required_capabilities:
+  - network_outbound
+  - vault_access
+side_effects:
+  - { service: redis-server }
+  - { file: /etc/redis/sentinel.conf }
+spec:
+  states:
+    promoted:
+      description: Promote Redis replica to master.
+      input:
+        new_master_sid:
+          type: string
+          required: true
+        password:
+          type: string
+          required: true
+          secret: true
+          pattern: "^vault:.*"
+        timeout:
+          type: int
+          default: 120

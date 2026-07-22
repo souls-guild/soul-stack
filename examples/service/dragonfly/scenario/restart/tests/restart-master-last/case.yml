@@ -1,0 +1,76 @@
+# L0 test for restart: master restart (probe→where master, run_once). Paired with
+# rolling-restart-replicas — covers the master branch of where probe→role. Roster is 2 hosts;
+# mocks.register.df_role.role = master → replica descendant blocks (where slave) are
+# placeholder-skip, master-restart (where master, run_once) renders. Render-only, hermetic.
+#
+# What we assert:
+#   1. probe (community.redis.role) renders connect params (plaintext branch).
+#   2. master-restart (core.service.restarted name=dragonfly, where master, run_once)
+#      renders. ★ the unit name is dragonfly (DF data plane), NOT redis-server.
+#
+# L0 LIMITATION WARNING: mocks.register is a SINGLE payload for the whole roster. On the
+# master payload both hosts are "master" → master-restart run_once targets ONE deterministic
+# host. Replica descendant blocks (where slave) on the master payload are placeholder-skip
+# (Params==nil), but they ARE PRESENT in the plan as a placeholder → the presence matcher
+# task_absent would "find" them (placeholder in the plan ≠ node absence), so the slave block
+# is NOT asserted in task_absent (same as the redis counterpart).
+name: restart the current master last (run_once, dragonfly unit)
+
+fixtures:
+  hosts:
+    - sid: node-1.example.com
+      covens: [restart]
+      soulprint:
+        network: { primary_ip: 10.0.0.1 }
+        os: { arch: amd64 }
+    - sid: node-2.example.com
+      covens: [restart]
+      soulprint:
+        network: { primary_ip: 10.0.0.2 }
+        os: { arch: amd64 }
+
+  input:
+    reason: "restart master last for L0"
+
+  state:
+    df_version: "1.39.0"
+    tls:
+      enable:   false
+      cert_ref: ""
+      key_ref:  ""
+      ca_ref:   ""
+    df_config:
+      maxmemory:        "256mb"
+
+  # Vault: probe connects as default_admin (requirepass removed).
+  vault:
+    secret/dragonfly/restart/users/default_admin:
+      password: dfadmin-restart-pass
+
+mocks:
+  register:
+    df_role:
+      role: master
+
+assert:
+  task_present:
+    # probe community.redis.role (LOCAL UNIX socket, NO tls/tls_ca). AUTH as default_admin.
+    - module: community.redis.role
+      params_subset:
+        addr: "unix:/var/run/dragonfly/dragonfly.sock"
+        username: default_admin
+        password: dfadmin-restart-pass
+
+  # ── master-restart is NOT EXPRESSIBLE in presence (same as the redis counterpart) ──
+  # The plan has TWO identical core.service.restarted name=dragonfly entries (replica
+  # restart block + master restart), both with an empty when/id and the same params; the
+  # discriminator is the block/task `where` (TargetSIDs), which the task_present presence
+  # matcher does NOT see → it would match BOTH (collision).
+  # So master-restart is asserted positionally: index 4 (synth-install[0] (ADR-065,
+  # service.yml::modules[]) + probe[1] + Restart block[2] + replica-synced[3] +
+  # master-restart[4]).
+  rendered_tasks:
+    - index: 4
+      module: core.service.restarted
+      params:
+        name: dragonfly

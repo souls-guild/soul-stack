@@ -1,0 +1,77 @@
+# L0 trial destroy: teardown of an incarnation deployed the PACKAGE way (distro-deb dragonfly).
+# Render-only, hermetic. Lifecycle terminal flow (destroy — lifecycle phase).
+#
+# What we assert:
+#   1. Services stopped (core.service.stopped): dragonfly, redis-sentinel, disable-thp.
+#   2. DragonFly removed via PACKAGE (core.pkg.absent name=dragonfly) — package branch active
+#      (essence.install_method=package → static gate group-keep; v1→v2 method comes from essence).
+#   3. Our DragonFly config artifacts are removed (core.file.absent): users.acl/dragonfly.conf/
+#      TLS PEM in /etc/dragonfly + logrotate/sysctl/disable-thp drop-in. (sentinel.conf/
+#      sentinel-users.acl are NOT removed HERE — they're placed by the `redis` destiny in /etc/redis, a refactor artifact.)
+#   4. BINARY branch is dropped (group-drop): core.file.absent /usr/local/bin/dragonfly AND
+#      /etc/systemd/system/dragonfly.service are ABSENT from the plan (not ours on a package incarnation).
+name: destroy tears down a package-installed dragonfly (stop services + pkg.absent + remove configs)
+
+fixtures:
+  default_destiny_source: "file://../../destiny/{name}"
+  hosts:
+    - sid: node-solo.example.com
+      covens: [destroy]
+      soulprint:
+        network: { primary_ip: 10.0.0.5 }
+        os: { arch: amd64 }
+
+  # ★ v1→v2: install method and conf_dir come from essence (install_method=package, conf_dir default).
+  essence:
+    install_method: package
+    conf_dir: /etc/dragonfly
+
+  # incarnation.state v2 (install/conf_dir/data_dir no longer live in state).
+  state:
+    df_version: "1.39.0"
+    df_config:
+      maxmemory: "256mb"
+
+assert:
+  task_present:
+    # 1. Stop the three services.
+    - module: core.service.stopped
+      params_subset:
+        name: dragonfly
+    - module: core.service.stopped
+      params_subset:
+        name: redis-sentinel
+    - module: core.service.stopped
+      params_subset:
+        name: disable-thp
+
+    # 2. DragonFly removed via package (package branch).
+    - module: core.pkg.absent
+      params_subset:
+        name: dragonfly
+
+    # 3. Our config artifacts are removed (a selection of the key ones).
+    - module: core.file.absent
+      params_subset:
+        path: /etc/dragonfly/users.acl
+    - module: core.file.absent
+      params_subset:
+        path: /etc/dragonfly/dragonfly.conf
+    - module: core.file.absent
+      params_subset:
+        path: /etc/dragonfly/tls/dragonfly.key
+    - module: core.file.absent
+      params_subset:
+        path: /etc/logrotate.d/dragonfly
+    - module: core.file.absent
+      params_subset:
+        path: /etc/sysctl.d/30-dragonfly.conf
+
+  task_absent:
+    # 4. BINARY branch group-drop on a package incarnation: binary and binary-unit are NOT touched.
+    - module: core.file.absent
+      params_subset:
+        path: /usr/local/bin/dragonfly
+    - module: core.file.absent
+      params_subset:
+        path: /etc/systemd/system/dragonfly.service

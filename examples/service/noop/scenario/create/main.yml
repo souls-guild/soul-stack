@@ -1,0 +1,13 @@
+name: create
+description: No-op bootstrap - smoke call of core.exec.run for the E2E scenario runner.
+
+# The scenario writes nothing to incarnation.state: state_schema is empty.
+state_changes: {}
+
+tasks:
+  - name: Echo hello on every host of the incarnation
+    module: core.exec.run
+    params:
+      cmd: echo
+      args: ["hello"]
+    changed_when: "false"

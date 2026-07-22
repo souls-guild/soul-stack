@@ -1,0 +1,83 @@
+kind: cloud_driver
+protocol_version: 1                    # compat flag of the plugin protocol (ADR-020(c))
+namespace: cloud                       # example third-party CloudDriver collection
+name: yc
+
+# Closed enum per ADR-020(f).
+# vault_access is NOT needed: Keeper resolves credentials (A-flow, docs/keeper/cloud.md)
+# and passes them plain into CreateRequest.credentials — the driver doesn't touch Vault.
+required_capabilities:
+  - network_outbound                   # calls to Yandex Cloud API
+
+# CloudDriver runs on the keeper side and doesn't touch local host resources —
+# declaring an empty list (ADR-020(g), example from docs/keeper/plugins.md).
+side_effects: []
+
+spec:
+  provider_kind: yc                    # provider family (Yandex Cloud)
+  # JSON Schema draft 2020-12 (format for kind: cloud_driver — see
+  # docs/keeper/plugins.md → spec.profile_schema).
+  profile_schema:
+    type: object
+    required: [folder_id, zone, image_id, subnet_id]
+    properties:
+      folder_id:
+        type: string
+        description: ID of the YC folder where the VM is created.
+      zone:
+        type: string
+        examples: [ru-central1-a, ru-central1-b, ru-central1-d]
+      platform_id:
+        type: string
+        description: Platform (Intel Cascade Lake, Ice Lake, ...).
+        examples: [standard-v3, standard-v2]
+        default: standard-v3
+      resources:
+        type: object
+        required: [cores, memory_gb]
+        properties:
+          cores:
+            type: integer
+            minimum: 2
+          memory_gb:
+            type: integer
+            minimum: 1
+          core_fraction:
+            type: integer
+            minimum: 5
+            maximum: 100
+            description: Baseline core performance, % (5/20/50/100).
+      image_id:
+        type: string
+        description: ID of the boot disk image (compute.images).
+      disk:
+        type: object
+        properties:
+          size_gb:
+            type: integer
+            minimum: 10
+          type:
+            type: string
+            enum: [network-ssd, network-hdd, network-ssd-nonreplicated]
+      subnet_id:
+        type: string
+        description: ID of the VPC subnet.
+      security_group_ids:
+        type: array
+        items:
+          type: string
+      nat:
+        type: boolean
+        description: |
+          Assign a public IPv4 to the VM (one-to-one NAT). Default false — the VM
+          is reachable only from the VPC via internal-DNS.
+        default: false
+      service_account_id:
+        type: string
+        description: |
+          Optional. ID of the service account attached to the VM (for authorizing within
+          the instance).
+      labels:
+        type: object
+        additionalProperties:
+          type: string

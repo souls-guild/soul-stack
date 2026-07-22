@@ -1,0 +1,14 @@
+# Baseline essence for the monitoring service (author's substrate).
+# The operator overrides it in the incarnation spec; on pilot, key values still
+# arrive through scenario-input: (see scenario/create/main.yml).
+#
+# Exporter versions are pinned to specific releases (ADR-007: an artifact version is a
+# git-ref, but these are releases of THIRD-PARTY SOFTWARE, so here they are plain values,
+# not a ref). The redis-socket path is the debian/ubuntu redis-server convention.
+node_exporter_version:  "1.8.2"
+redis_exporter_version: "1.62.0"
+redis_socket:           "/var/run/redis/redis-server.sock"
+
+# Hardware textfile collectors for node-exporter. There is no hardware on a VM - a single policy []:
+# only the node_exporter core is installed, without oneshot collectors.
+node_exporter_collectors: []

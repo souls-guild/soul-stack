@@ -1,0 +1,21 @@
+kind: soul_module
+protocol_version: 1
+namespace: core
+name: group
+
+required_capabilities:
+  - run_as_root
+  - exec_subprocess
+
+spec:
+  states:
+    present:
+      description: Group exists (present-or-create; ADR-015).
+      input:
+        name:   { type: string, required: true, description: "Group name." }
+        gid:    { type: int,    description: "Explicit gid (groupadd -g). Only takes effect on creation." }
+        system: { type: bool,   description: "System group (groupadd -r), gid from the system range. Only on creation." }
+    absent:
+      description: Group is removed.
+      input:
+        name: { type: string, required: true, description: "Group name." }

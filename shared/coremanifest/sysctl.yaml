@@ -1,0 +1,25 @@
+kind: soul_module
+protocol_version: 1
+namespace: core
+name: sysctl
+
+required_capabilities:
+  - run_as_root
+  - exec_subprocess
+  - fs_write_root
+
+spec:
+  states:
+    present:
+      description: Kernel parameter name=value (runtime via sysctl -w + persist in /etc/sysctl.d); ADR-015.
+      input:
+        name:     { type: string, required: true, description: "Kernel parameter name (e.g. net.ipv4.ip_forward)." }
+        value:    { type: string, required: true, description: "Desired value." }
+        filename: { type: string, description: "Persist-file name in /etc/sysctl.d (default — name with '.'→'-' + .conf)." }
+    applied:
+      description: Bulk set of kernel parameters as one deterministic drop-in in /etc/sysctl.d (sorted keys) + a targeted sysctl -p <file> on change; ADR-015 amend (the module itself owns drop-in+reload+idempotency).
+      input:
+        settings:        { type: map, items: { type: string }, required: true, description: "Map of kernel parameter→value. Keys are sorted → drop-in content is deterministic." }
+        filename:        { type: string, required: true, description: "Drop-in file name in /etc/sysctl.d (e.g. 30-redis); the .conf suffix is added automatically." }
+        reload:          { type: string, enum: [auto, always, never], default: auto, description: "sysctl -p <file> after writing: auto = only when the file changed, always = unconditionally, never = opt-out. reload itself does not mark changed (reuses the core.service daemon_reload dictionary)." }
+        ignore_failures: { type: bool, default: false, description: "sysctl -e -p (--ignore): suppresses read-only/nonexistent keys in containers. Explicit opt-in." }

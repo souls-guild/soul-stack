@@ -1,0 +1,215 @@
+# L0 test of create_from_souls in sentinel mode — deploy onto an EXISTING roster (without
+# provisioning). Multi-host roster (fixtures.hosts) of 3 hosts: replicas_per_master=2 →
+# topology 1+2=3 (size-guard passes). Master election: the host first by SID (node-1) =
+# master; node-2/node-3 = replicas.
+#
+# ★ ACCEPTANCE CRITERION (difference from create): the run rolls over an existing roster WITHOUT
+# provisioning steps. task_absent asserts that core.cloud.created (VM creation) and
+# core.soul.registered (onboarding barrier) are ABSENT from the plan — create_from_souls
+# has neither an include of redis-provision.yml nor a provision section. The state-read-model
+# provisioned_vm_ids/sids/provider — constant defaults ([] / '').
+#
+# Render-only, hermetic. The dispatcher includes cluster.yml + sentinel.yml via
+# CONDITIONAL-INCLUDE (when: on include, orchestration.md §6 Option B): on a sentinel
+# run the cluster branch is DROPPED (group-drop), the sentinel branch is expanded. The deploy body
+# (redis-deploy-sentinel.yml) — service-level, same as for create.
+name: sentinel deploy on existing roster without provision
+
+fixtures:
+  default_destiny_source: "file://../../destiny/{name}"
+  # Order in YAML is deliberately unsorted (3, 1, 2) — master election sorts by SID.
+  hosts:
+    - sid: node-3.example.com
+      covens: [create_from_souls, redis]
+      soulprint:
+        network: { primary_ip: 10.0.0.3 }
+        os: { arch: amd64 }
+    - sid: node-1.example.com
+      covens: [create_from_souls, redis]
+      soulprint:
+        network: { primary_ip: 10.0.0.1 }
+        os: { arch: amd64 }
+    - sid: node-2.example.com
+      covens: [create_from_souls, redis]
+      soulprint:
+        network: { primary_ip: 10.0.0.2 }
+        os: { arch: amd64 }
+  vault:
+    secret/redis/create_from_souls:
+      password: s3cr3t-redis-pass-create-from-souls
+    # ★ default_admin REDESIGN (2026-06-30): default_admin — system user for
+    # intra-cluster AUTH (auth_pass/PING deploy steps read it via the users/<name> branch).
+    secret/redis/create_from_souls/users/default_admin:
+      password: default-admin-secret-pass
+    secret/redis/create_from_souls/users/replica:
+      password: replica-sys-secret-pass
+    secret/redis/create_from_souls/users/monitoring:
+      password: monitoring-sys-secret-pass
+    secret/redis/create_from_souls/users/sentinel:
+      password: sentinel-sys-secret-pass
+    secret/redis/create_from_souls/users/haproxy:
+      password: haproxy-sys-secret-pass
+  essence:
+    install_method: package
+    redis_type: sentinel
+    sentinel_master_name: master
+    sentinel_master_defaults:
+      down-after-milliseconds: "5000"
+      failover-timeout:        "60000"
+    modules_base_url: "https://artifacts.example.com/redis/modules"
+    memory_reserve_percent: 75
+    persistence_presets:
+      rdb:
+        save: "900 1 300 10 60 10000"
+        appendonly: "no"
+    redis_config:
+      maxmemory:        "256mb"
+      maxmemory-policy: allkeys-lru
+      maxclients:       10000
+      timeout:          300
+    system_acl_users:
+      default_admin: "~* &* +@all"
+      replica:    "+psync +replconf +ping"
+      monitoring: "-@all +@connection +client +ping +info +config|get +cluster|info +slowlog +latency +memory +select +command|count +command|docs"
+      sentinel:   "allchannels +multi +slaveof +ping +exec +subscribe +config|rewrite +role +publish +info +client|setname +client|kill +script|kill"
+      haproxy:    "-@all +auth +client|getname +client|id +client|setname +command +hello +ping +role +info +cluster|info"
+    system_acl_users_sentinel:
+      default_admin: "allchannels allkeys +@all"
+      monitoring: "-@all +@connection -command +client -hello +info -auth +sentinel|masters +sentinel|replicas +sentinel|slaves +sentinel|sentinels +sentinel|ckquorum"
+      sentinel:   "allchannels -@all +auth +client|getname +client|id +client|setname +command +hello +ping +sentinel|is-master-down-by-addr +publish +role +sentinel|get-master-addr-by-name +sentinel|master +sentinel|myid +sentinel|replicas +sentinel|sentinels"
+      haproxy:    "-@all +auth +client|getname +client|id +client|setname +command +hello +ping +role +sentinel|get-master-addr-by-name +sentinel|master +sentinel|myid +sentinel|replicas +sentinel|sentinels"
+  input:
+    redis_type: sentinel
+    version: "7.4.1"
+    replicas_per_master: 2
+
+assert:
+  task_present:
+    # -- sentinel destiny: redis.conf (sentinel mode: NO cluster directives) --
+    # render_context.self = host first by SID (node-1, host invariant apply.input).
+    - module: core.file.rendered
+      params_subset:
+        path: /etc/redis/redis.conf
+        template_content: "<present>"
+        mode: "0640"
+        owner: redis
+        group: redis
+        render_context:
+          vars:
+            conf_dir: /etc/redis
+            data_dir: /var/lib/redis
+            port: 6379
+            run_dir: /var/run/redis
+            log_dir: /var/log/redis
+            loadmodules:
+              - /var/lib/redis/modules/redisbloom.so
+              - /var/lib/redis/modules/rejson.so
+              - /var/lib/redis/modules/redisearch.so
+              - /var/lib/redis/modules/redistimeseries.so
+            config:
+              # ★ default_admin REDESIGN: replica->master AUTH (masteruser/
+              # masterauth) arrives as REGULAR config directives (the sentinel
+              # deploy-body fills them via vault()-in-cell) → redis.conf ranges over
+              # them like any directive → statically survives a restart.
+              masteruser:       "default_admin"
+              masterauth:       "default-admin-secret-pass"
+              maxmemory:        "256mb"
+              maxmemory-policy: allkeys-lru
+              maxclients:       10000
+              timeout:          300
+              save:             "900 1 300 10 60 10000"
+              appendonly:       "no"
+          self:
+            sid: node-1.example.com
+            covens: [create_from_souls, redis]
+            choirs: []
+            traits: {}
+            role: ""
+            network:
+              primary_ip: 10.0.0.1
+            os:
+              arch: amd64
+          role: ""
+          essence: {}
+
+    # -- REPLICAOF for replicas (community.redis.replica) --------------------
+    # addr=127.0.0.1:6379 (per-host local invariant), master_addr — master election
+    # (first by SID = node-1 = 10.0.0.1). The task carries where (renders only on
+    # replicas, master does NOT carry it).
+    - module: community.redis.replica
+      params_subset:
+        addr: "127.0.0.1:6379"
+        master_addr: "10.0.0.1:6379"
+        # ★ default_admin REDESIGN: replica->master AUTH as default_admin.
+        username: default_admin
+        password: default-admin-secret-pass
+
+    # -- SENTINEL MONITOR reconcile (community.redis.sentinel) ---------------
+    # monitor.ip — HOST-INVARIANT master address (master election node-1). quorum=2
+    # (AUTO: size(3)/2+1). master_name=master (essence default).
+    - module: community.redis.sentinel
+      params_subset:
+        addr: "127.0.0.1:26379"
+        master_name: master
+        # ★ default_admin REDESIGN: CONNECTION-AUTH (username/password) + master
+        # monitoring (auth_user/auth_pass) as default_admin.
+        username: default_admin
+        password: default-admin-secret-pass
+        auth_user: default_admin
+        auth_pass: default-admin-secret-pass
+        redis_version: "7.4.1"
+        config:
+          "sentinel down-after-milliseconds master": "5000"
+          "sentinel failover-timeout master": "60000"
+        monitor:
+          ip: 10.0.0.1
+          port: 6379
+          quorum: 2
+
+  task_absent:
+    # ★ create_from_souls CRITERION: provisioning steps are ABSENT from the plan. create_from_souls
+    # doesn't include redis-provision.yml and doesn't carry a provision section → neither VM creation
+    # (core.cloud.created) nor the onboarding barrier (core.soul.registered) are emitted.
+    # The run rolls over an existing roster. That's exactly the difference from create.
+    - module: core.cloud.created
+    - module: core.soul.registered
+
+  state_changes:
+    redis_type: sentinel
+    redis_version: "7.4.1"
+    redis_config:
+      maxmemory:        "256mb"
+      maxmemory-policy: allkeys-lru
+      maxclients:       10000
+      timeout:          300
+      save:             "900 1 300 10 60 10000"
+      appendonly:       "no"
+    redis_users: []
+    redis_hosts: []
+    redis_sentinel:
+      master_name: master
+      quorum: 0
+      master_settings:
+        down-after-milliseconds: "5000"
+        failover-timeout: "60000"
+      settings: {}
+    replicas: 2
+    sentinel_quorum: 0
+    shards: 0
+    persistence: rdb
+    maxmemory_policy: ""
+    tls:
+      enable:   false
+      only:     false
+      port:     7379
+      cert_ref: ""
+      key_ref:  ""
+      ca_ref:   ""
+    memory_mb: 0
+    modules: [bloom, json, search, timeseries]
+    sysctl_settings: {}
+    # ★ provision read-model: ALWAYS the conservative default — create_from_souls doesn't
+    # spin up a VM (unlike create, where register.provision is read when enabled).
+    provisioned_vm_ids: []
+    provisioned_sids: []
+    provisioned_provider: ""

@@ -1,0 +1,37 @@
+name: stagger
+description: >-
+  Staggered cross-host barrier. One core.cmd.shell task on ALL incarnation
+  hosts: each host sleeps for TIME = (number in SID) * 6 seconds, then writes
+  a done marker with the timestamp. redis-01 ~6s, redis-10 ~60s. params are
+  host-invariant (the shell itself computes the duration from hostname), as
+  the pilot constraint requires.
+
+  Validation (TEST B): polling during the run catches apply_runs where some
+  hosts already succeeded (short sleep) while others are still
+  applying/claimed (long sleep). The incarnation stays in applying until ALL
+  hosts finish; state is committed once (single-winner) after the last host
+  completes.
+
+state_changes:
+  - set: last_run
+    value: "stagger"
+  - set: runner_marker
+    value: /tmp/long-runner-done.txt
+
+tasks:
+  - name: Staggered sleep per host then write done marker
+    # Whole incarnation (all members) = omitted on: (ADR-008 amendment NIM-124:
+    # incarnation.name is not a Coven).
+    module: core.cmd.shell
+    params:
+      # Host number: trailing digits of hostname (lr-07 -> 7). Sleeps num*6 sec.
+      # WARNING: cmd MUST NOT use shell ${VAR} — the ${ } marker means CEL
+      # interpolation (ADR-010), collision. So only $VAR without braces
+      # and no ${VAR:-default}; the number is taken directly, default via ||.
+      cmd: >-
+        N=$(hostname | grep -oE '[0-9]+' | head -1 | sed 's/^0*//' || echo 1);
+        test -n "$N" || N=1;
+        SECS=$(expr $N \* 6);
+        sleep $SECS;
+        echo "done after $SECS s on $(hostname) at $(date -u +%H:%M:%S)" > /tmp/long-runner-done.txt;
+        true

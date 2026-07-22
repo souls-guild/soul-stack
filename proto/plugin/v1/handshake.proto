@@ -1,0 +1,41 @@
+syntax = "proto3";
+
+package soulstack.plugin.v1;
+
+import "v1/common.proto";
+
+option go_package = "github.com/souls-guild/soul-stack/proto/plugin/gen/go/v1;pluginv1";
+
+// Handshake — a single-line JSON string the plugin writes to stdout on
+// startup (ADR-020(b), docs/keeper/plugins.md → Handshake).
+//
+// Wire format is JSON (`protojson.Marshal`). The host ignores every line
+// before the first one carrying the magic field `soul_stack: "plugin-v1"`.
+message Handshake {
+  // Sanity marker, always `"plugin-v1"`. The host ignores all stdout lines
+  // before the first one with this field. The value doesn't depend on
+  // `protocol_version` — it's a format marker for the v1 handshake string;
+  // it only changes on a breaking change to the handshake format itself
+  // (a separate ADR).
+  string soul_stack = 1;
+
+  // Plugin protocol version. Must match manifest.protocol_version
+  // (cross-checked on the host; drift → SIGTERM, ADR-020(c)).
+  int32 protocol_version = 2;
+
+  // Must match manifest.kind (cross-checked on the host; drift → SIGTERM).
+  Kind kind = 3;
+
+  // Socket type. MVP supports only `"unix"`.
+  // `"named_pipe"` (Windows) / `"tcp"` (loopback) extensions are post-MVP,
+  // non-breaking.
+  string network = 4;
+
+  // Path to the Unix socket the plugin listens for gRPC on.
+  // Must match the value passed via the `SOUL_PLUGIN_SOCKET` env var.
+  string address = 5;
+
+  // Reserved for optional post-MVP mTLS (ADR-020(h)).
+  // Always an empty string `""` in MVP. Format is base64-PEM.
+  string server_cert = 6;
+}

@@ -1,0 +1,49 @@
+description: |
+  state_schema v1 -> v2 (consolidated redis):
+  - redis_users goes from a flat list of NAMES to a map name -> {perms, state}
+    (per-user ACL string + enabled flag - the consolidated redis schema).
+  - v1: redis_users: ["app", "monitor"]
+  - v2: redis_users: { app: {perms: "off ~* &* +@all", state: "off"},
+                       monitor: {perms: "off ~* &* +@all", state: "off"} }
+  Default perms/state are conservative (off, no resource grants): after the
+  migration the operator sets real ACLs via an operational scenario rather than
+  inheriting "everything allowed".
+
+  Migration's demo goal (ADR-019, docs/migrations.md): the rename + set +
+  foreach + delete grammar. foreach iterates over a LIST (element = user name,
+  used as a set path segment) - a form that does not need keys(), which is
+  absent from the migration-CEL sandbox (ADR-019: only state + stdlib).
+  Forward-only (down: not supported, recovery via state_history).
+
+from_version: 1
+to_version: 2
+
+transform:
+  # rename - moves the v1 list of names into a legacy key so we can iterate over
+  # it and refill the target redis_users (rename fails if to already exists -
+  # the target redis_users_legacy_v1 doesn't exist yet in state).
+  - rename:
+      from: state.redis_users
+      to:   state.redis_users_legacy_v1
+
+  # set - materializes the target map BEFORE foreach: an empty user list gives
+  # an empty map (meaningful intent "redis_users became a map"), not a missing
+  # key after rename.
+  - set:
+      path:  state.redis_users
+      value: {}
+
+  # foreach - for each v1 user name: the name is bound to user_name and used as
+  # a set path segment, the value is the default conservative ACL object.
+  - foreach: "${ state.redis_users_legacy_v1 }"
+    as: user_name
+    do:
+      - set:
+          path: "state.redis_users.${ user_name }"
+          value:
+            perms: "off ~* &* +@all"
+            state: "off"
+
+  # delete - removes the legacy snapshot (safe no-op if already absent).
+  - delete:
+      path: state.redis_users_legacy_v1

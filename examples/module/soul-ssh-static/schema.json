@@ -1,0 +1,27 @@
+{
+  "type": "object",
+  "oneOf": [
+    { "required": ["key_path"] },
+    { "required": ["vault_ref"] }
+  ],
+  "properties": {
+    "key_path": {
+      "type": "string",
+      "examples": ["/etc/soul-stack-keeper/ssh/id_ed25519"]
+    },
+    "vault_ref": {
+      "type": "string",
+      "examples": ["secret/keeper/push/static-key"]
+    },
+    "deny": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "host": { "type": "string" },
+          "user": { "type": "string" }
+        }
+      }
+    }
+  }
+}

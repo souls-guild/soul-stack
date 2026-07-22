@@ -1,0 +1,97 @@
+syntax = "proto3";
+
+package soulstack.plugin.v1;
+
+import "google/protobuf/struct.proto";
+
+option go_package = "github.com/souls-guild/soul-stack/proto/plugin/gen/go/v1;pluginv1";
+
+// SoulBeacon — service contract for `kind: soul_beacon` plugins (ADR-020
+// amendment V5-2, 2026-05-26, the fourth kind after soul_module /
+// cloud_driver / ssh_provider).
+//
+// Host is the `soul` binary (matches the "beacon observes host" semantics).
+// Plugin binaries are soul-beacon-<name>. Vigil addressing is
+// `<namespace>.<name>` in `VigilDef.check`; the Soul-side dispatcher tells
+// built-in `core.beacon.*` apart from plugin beacons by namespace.
+//
+// Lifecycle (one-shot per Spawn per ADR-020(d)): the Soul-side scheduler
+// invokes the plugin per tick (interval from VigilDef.interval) — Spawn →
+// Check → Close. The `state_cookie` field in Reply/Request lets the plugin
+// carry inotify-fd / in-memory state across ticks without a long-lived
+// process: the host passes back the previous tick's cookie on the next
+// Spawn (NULL on the first).
+//
+// Streaming forms (`Start`) are deliberately NOT introduced — ADR-030(d)'s
+// one-shot lifecycle and edge-triggered scheduler already live Soul-side;
+// streaming would duplicate scheduling responsibility.
+service SoulBeacon {
+    // Validate — runtime checks of Vigil params (what JSON Schema in the
+    // manifest can't express: path reachability, regex validity, etc.).
+    // Called by the host OPTIONALLY on first Vigil start in a snapshot;
+    // errors/Ok=false → the Vigil doesn't start (scheduler logs it, no
+    // baseline is set).
+    //
+    // Named ValidateVigilRequest/Reply, distinct from ValidateRequest/Reply
+    // in soulmodule.proto: message names must be unique within one proto
+    // package (no cross-import needed between soulmodule.proto and
+    // beacon.proto — these are different plugin kinds).
+    rpc Validate(ValidateVigilRequest) returns (ValidateVigilReply);
+
+    // Check — invoked per tick for one Vigil row. Returns state (an opaque
+    // string for edge-triggered comparison), payload (a Struct for
+    // PortentEvent.payload.custom), and state_cookie (passed back to the
+    // host for the next tick).
+    rpc Check(CheckRequest) returns (CheckReply);
+}
+
+// ValidateVigilRequest — the params phase on Vigil start.
+message ValidateVigilRequest {
+    // params — contents of VigilDef.params (Struct), supplied by the
+    // operator when creating the Vigil. params semantics are plugin-specific.
+    google.protobuf.Struct params = 1;
+}
+
+// ValidateVigilReply — result of Validate (shape mirrors
+// pluginv1.ValidateReply from soulmodule.proto: ok + errors[]).
+message ValidateVigilReply {
+    bool ok = 1;
+    repeated string errors = 2;
+}
+
+// CheckRequest — the Check request.
+message CheckRequest {
+    // params — VigilDef.params (the same Struct as in ValidateVigilRequest).
+    google.protobuf.Struct params = 1;
+
+    // state_cookie — opaque state the plugin returned on the previous tick
+    // (CheckReply.state_cookie). NULL/empty on the first tick after the
+    // Vigil starts (or after the Soul daemon restarts). The plugin picks
+    // its own encoding (CBOR / JSON / a proto-encoded message); the host
+    // does NOT interpret it.
+    bytes state_cookie = 2;
+}
+
+// CheckReply — the check result.
+message CheckReply {
+    // state — the currently observed host state. The plugin may return any
+    // string; the scheduler compares it against the per-Vigil last state
+    // for edge-triggered Portents. Conventions (not mandatory): "ok" /
+    // "alerted" / "degraded" / "unknown".
+    string state = 1;
+
+    // payload — structured data for PortentEvent.payload.custom (Struct,
+    // oneof branch, V5-1). The host wraps it in PortentEvent.payload.custom
+    // when building the event.
+    google.protobuf.Struct payload = 2;
+
+    // state_cookie — opaque state for the next tick (passback). Leave empty
+    // if the plugin doesn't need cross-tick state.
+    bytes state_cookie = 3;
+
+    // error — non-fatal error message (e.g. permission denied reading a
+    // file). The host logs it, the scheduler skips the tick (last-state is
+    // NOT updated, no Portent is emitted: a check error is not the same as
+    // a host state change — mirrors the built-in [beacon.Beacon].Check err).
+    string error = 4;
+}

@@ -1,0 +1,46 @@
+# L0 test for remove_node: GUARD failure. remove_node_sid == seed_sid → the assert guard
+# (ADR-009 amendment 2026-06-23) evaluates predicate that[0] to FALSE at RENDER time
+# Keeper-side → render ABORTS with a message BEFORE any dispatch (no task
+# reaches Soul). Covers the FALSE branch of the guard predicate (paired with the happy-path case).
+# The check is evaluated KEEPER-SIDE at render (soulprint.hosts is available);
+# the harness asserts the abort via expect_render_error (ADR-023 amendment).
+name: remove_node guard fails when remove_node equals seed
+
+fixtures:
+  default_destiny_source: "file://../../destiny/{name}"
+  hosts:
+    - sid: node-1.example.com
+      covens: [remove_node, redis]
+      soulprint:
+        network: { primary_ip: 10.0.0.1 }
+        os: { arch: amd64 }
+    - sid: node-3.example.com
+      covens: [remove_node, redis]
+      soulprint:
+        network: { primary_ip: 10.0.0.3 }
+        os: { arch: amd64 }
+  # ★ default_admin redesign (2026-06-30): default_admin vault branch (connect as the
+  # system admin user). The guard aborts render BEFORE the REMOVE task — the password isn't
+  # resolved here, but the branch is updated to the new form for consistency with the happy-path case.
+  vault:
+    secret/redis/remove_node/users/default_admin:
+      password: default-admin-secret-pass
+  state:
+    redis_type: cluster
+    redis_version: ""
+    redis_config:
+      maxmemory: "256mb"
+      cluster-enabled: "yes"
+      cluster-config-file: "nodes.conf"
+      cluster-node-timeout: "5000"
+    redis_users: []
+    redis_hosts: []
+
+  input:
+    remove_node_sid: node-3.example.com
+    seed_sid: node-3.example.com
+
+# Render ABORTS on the guard assert failure: we expect a render error with the message from
+# the assert. expect_render_error is mutually exclusive with assert.rendered_tasks (there's no plan —
+# the run never started).
+expect_render_error: "remove_node guard: remove_node_sid/seed_sid must be distinct hosts of the run roster"

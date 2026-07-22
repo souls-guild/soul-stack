@@ -1,0 +1,34 @@
+name: smoke-nginx-live
+state_schema_version: 1
+description: >-
+  L3b real-soul-in-container flagship-smoke (ADR-039): the same scenario as
+  examples/service/smoke-nginx (L3a), but going through a REAL apt install of
+  nginx in a Debian-12-soul-container. Unlike L3a (soul-stub responds with a
+  scripted RunResult), here core.pkg / core.service / core.file.rendered
+  actually mutate the container. Used by
+  tests/e2e-live/smoke_nginx_live_test.go to cover the flow
+  Keeper render -> apply gRPC -> Soul Apply -> RunResult -> apply_runs success.
+
+# state_schema_version=1 -> the migrations/ folder is not mandatory (ADR-019).
+# state_changes fix what the scenario has deployed, so the contract test can
+# validate incarnation.state after a successful apply.
+state_schema:
+  type: object
+  required: [nginx_package, nginx_service, nginx_config_managed]
+  properties:
+    nginx_package:
+      type: string
+      enum: [installed, absent]
+      description: State of the nginx package on the system.
+    nginx_service:
+      type: string
+      enum: [active, inactive]
+      description: State of the nginx systemd unit.
+    nginx_config_managed:
+      type: boolean
+      description: Flag that /etc/nginx/sites-available/default
+        was rendered from the smoke-nginx-live template (not the distro default).
+
+# No destiny dependencies: the scenario only uses core modules (ADR-015) -
+# they are not listed in destiny[] (ADR-009). The module list is fixed by
+# `module:` directly in scenario/create/main.yml.

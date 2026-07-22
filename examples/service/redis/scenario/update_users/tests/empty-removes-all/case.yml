@@ -1,0 +1,103 @@
+# L0 trial of update_users: an EMPTY set removes ALL operator-extra, system users remain.
+# Deployed state.redis_users = {bob}; the operator sets input.users: [] (empty set).
+# bulk-replace → ALL operator-extra fall out:
+#   1. users.acl is rendered with ONLY the system users (from essence) — bob is absent;
+#   2. state_changes.redis_users = [] (no operator-extra).
+# This case proves the bulk-replace edge case (empty array = clear operator-
+# extra) AND that system users are STILL added back (replication/sentinel don't break on clearing).
+name: update_users with empty set removes all operator-extra but keeps system users
+
+fixtures:
+  default_destiny_source: "file://../../destiny/{name}"
+  soulprint:
+    network: { primary_ip: 10.0.0.5 }
+    os: { arch: amd64 }
+
+  state:
+    redis_type: sentinel
+    redis_version: "7.2.4"
+    tls:
+      enable:   false
+      only:     false
+      port:     7379
+      cert_ref: ""
+      key_ref:  ""
+      ca_ref:   ""
+    redis_config:
+      maxmemory:        "256mb"
+      maxmemory-policy: allkeys-lru
+      save:             "900 1 300 10 60 10000"
+      appendonly:       "no"
+    redis_users:
+      - { name: bob, perms: "~app:* +@read", state: "on" }
+
+  essence:
+    # host layout (conf_dir/data_dir/modules_base_url) — in essence (v11→v12, Option A).
+    conf_dir: /etc/redis
+    data_dir: /var/lib/redis
+    modules_base_url: "https://artifacts.example.com/redis/modules"
+    system_acl_users:
+      default_admin: "~* &* +@all"
+      replica:    "+psync +replconf +ping"
+      monitoring: "-@all +@connection +client +ping +info +config|get +cluster|info +slowlog +latency +memory +select +command|count +command|docs"
+
+  # Empty set: remove all operator-extra.
+  input:
+    users: []
+
+  vault:
+    secret/redis/update_users:
+      password: updusr-redis-pass-16ch
+    secret/redis/update_users/users/default_admin:
+      password: default-admin-secret-pass
+    secret/redis/update_users/users/replica:
+      password: replica-sys-secret-pass
+    secret/redis/update_users/users/monitoring:
+      password: monitoring-sys-secret-pass
+
+assert:
+  task_present:
+    # users.acl carries ONLY the system users (replica/monitoring) — bob is removed. deep-compare
+    # catches a leftover operator-extra (regression "empty didn't clear") AND a missing system user.
+    - module: core.file.rendered
+      params_subset:
+        path: /etc/redis/users.acl
+        render_context:
+          vars:
+            users:
+              default_admin:
+                perms: "~* &* +@all"
+                state: "on"
+                password: default-admin-secret-pass
+              replica:
+                perms: "+psync +replconf +ping"
+                state: "on"
+                password: replica-sys-secret-pass
+              monitoring:
+                perms: "-@all +@connection +client +ping +info +config|get +cluster|info +slowlog +latency +memory +select +command|count +command|docs"
+                state: "on"
+                password: monitoring-sys-secret-pass
+          self:
+            sid: trial-host
+            covens: [update_users]
+            choirs: []
+            traits: {}
+            role: ""
+            network:
+              primary_ip: 10.0.0.5
+            os:
+              arch: amd64
+          role: ""
+          essence: {}
+
+    # ★ default_admin REDESIGN: AUTH as default_admin (username + its Vault password).
+    - module: community.redis.acl
+      params_subset:
+        addr: "127.0.0.1:6379"
+        username: default_admin
+        password: default-admin-secret-pass
+        tls: false
+
+  # state_changes: redis_users = [] (operator-extra cleared, system users not in state).
+  state_changes:
+    redis_users: []

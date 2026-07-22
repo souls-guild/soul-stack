@@ -1,0 +1,57 @@
+kind: cloud_driver
+protocol_version: 1                    # plugin protocol compat flag (ADR-020(c))
+namespace: cloud                       # example third-party CloudDriver collection
+name: openstack
+
+# Closed enum per ADR-020(f).
+# vault_access NOT needed: credentials are resolved by Keeper (A-flow, docs/keeper/cloud.md)
+# and passed as plain in CreateRequest.credentials — the driver does not talk to Vault.
+required_capabilities:
+  - network_outbound                   # calls to the OpenStack API (Keystone + Nova)
+
+# CloudDriver runs keeper-side and does not touch local host resources —
+# declaring an empty list (ADR-020(g), example from docs/keeper/plugins.md).
+side_effects: []
+
+spec:
+  provider_kind: openstack             # provider family (OpenStack / Nova compute)
+  # JSON Schema draft 2020-12 (format for kind: cloud_driver — see
+  # docs/keeper/plugins.md → spec.profile_schema). Region is not in required:
+  # some private OpenStack clouds run without regions (a single Keystone
+  # per cloud), in which case region stays empty.
+  profile_schema:
+    type: object
+    required: [image_id, flavor_id, network_id]
+    properties:
+      region:
+        type: string
+        description: |
+          OpenStack region name (RegionName in the Keystone catalog). Optional:
+          private clouds without regions leave the field empty.
+      availability_zone:
+        type: string
+        description: Compute AZ within the region (nova:default, nova:az1, ...).
+      image_id:
+        type: string
+        description: Image ID in Glance.
+      flavor_id:
+        type: string
+        description: Flavor ID (VM type) in Nova.
+      network_id:
+        type: string
+        description: Neutron network ID that the VM's primary interface attaches to.
+      key_name:
+        type: string
+        description: SSH keypair name in Nova (optional — bootstrap access).
+      security_groups:
+        type: array
+        items:
+          type: string
+        description: Names of Neutron security groups attached to the VM.
+      labels:
+        type: object
+        additionalProperties:
+          type: string
+        description: |
+          VM labels, stored in Nova server.metadata. The `soulstack-run` key
+          is used by the driver for idempotency.

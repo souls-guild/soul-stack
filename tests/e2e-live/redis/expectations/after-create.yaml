@@ -1,0 +1,44 @@
+# Post-apply expectations for redis::create (standalone mode) in L3b
+# (real-soul-in-container under examples/service/redis, redis consolidation). One Debian-12 systemd-PID-1 container
+# (soul-live-a.example.com). The create dispatcher includes the standalone
+# branch (cluster/sentinel/sentinel_only are group-dropped by static-when), which expands the
+# mode-agnostic destiny `redis`: apt redis-server + render redis.conf
+# (merged config) + render users.acl + systemd hardening drop-in. Live
+# health-gate PING — via the community.redis.command plugin.
+#
+# Exporters (redis_exporter/node_exporter) are MOVED OUT of service/redis: monitoring is
+# a separate entity (redis consolidation .pm/tasks/2026-06-22-redis-consolidation).
+#
+# apply_runs/incarnation_state/audit/metrics — the same contract checks as in
+# smoke-nginx-live. incarnation_state comes from scenario.state_changes (keeper-side
+# render from input/essence AFTER the barrier), NOT from RunResult.
+#
+# host_state — real verification via Exec inside the container: package redis-server
+# installed + systemd active, redis.conf rendered with merged directives.
+apply_runs:
+  status: success
+
+incarnation_state:
+  redis_type: standalone
+  # maxmemory = memory_mb(1024)*reserve(75)/100 = 768mb (merge translation).
+  redis_config:
+    maxmemory: 768mb
+    maxmemory-policy: volatile-lru
+
+audit_events:
+  - type: incarnation.created
+
+metrics:
+  keeper_scenario_runs_total{result="ok"}: ">= 1"
+
+host_state:
+  - soul: soul-live-a.example.com
+    packages:
+      redis-server: installed
+    services:
+      redis-server: active
+    files:
+      # redis.conf, rendered from merged redis_config (the maxmemory directive
+      # proves the merge translation of simple input reached the file on the host).
+      - path: /etc/redis/redis.conf
+        contains: "maxmemory 768mb"

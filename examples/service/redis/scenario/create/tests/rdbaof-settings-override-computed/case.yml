@@ -1,0 +1,168 @@
+# L0 create trial (standalone) - a guard for the QA coverage gap 2026-06-22:
+#   - persistence: rdb_aof_1sec -> save non-empty + appendonly yes (preset rdb_aof_1sec);
+#   - memory_mb=512 -> computed maxmemory 512*75/100=384 -> "384mb";
+#   - redis_settings.maxmemory="1gb" OVERRIDES computed "384mb" (last-wins on the
+#     COMPUTED layer, not just on the essence default): redis_settings is the rightmost
+#     merge layer, and it beats even computed keys. That's exactly what this guard checks.
+name: rdb_aof_1sec + redis_settings overrides COMPUTED maxmemory (last-wins)
+
+fixtures:
+  default_destiny_source: "file://../../destiny/{name}"
+  hosts:
+    - sid: node-solo.example.com
+      covens: [create]
+      soulprint:
+        network: { primary_ip: 10.0.0.5 }
+        os: { arch: amd64 }
+  vault:
+    secret/redis/create:
+      password: s3cr3t-redis-pass-create
+    # Per-user secrets for system users (secret/redis/<inc>/users/<name>#password) -
+    # resolved keeper-side by vault() when system_acl_users are merged into apply.input.users.
+    # * default_admin REDESIGN (2026-06-30): default_admin is the system user for
+    # in-cluster AUTH (the deploy body's auth_pass/PING steps read it via the users/<name> branch).
+    secret/redis/create/users/default_admin:
+      password: default-admin-secret-pass
+    secret/redis/create/users/replica:
+      password: replica-sys-secret-pass
+    secret/redis/create/users/monitoring:
+      password: monitoring-sys-secret-pass
+    secret/redis/create/users/sentinel:
+      password: sentinel-sys-secret-pass
+    secret/redis/create/users/haproxy:
+      password: haproxy-sys-secret-pass
+  essence:
+    # install_method is in essence (author-context, 2026-06-28): the install method is
+    # NOT operator-input. compute.install reads default(essence.install_method, 'binary').
+    install_method: package
+    redis_type: sentinel
+    sentinel_master_name: master
+    modules_base_url: "https://artifacts.example.com/redis/modules"
+    memory_reserve_percent: 75
+    persistence_presets:
+      off:
+        save: ""
+        appendonly: "no"
+      aof:
+        save: ""
+        appendonly: "yes"
+      rdb:
+        save: "900 1 300 10 60 10000"
+        appendonly: "no"
+      rdb_aof_1sec:
+        save: "900 1 300 10 60 10000"
+        appendonly: "yes"
+    redis_config:
+      maxmemory:        "256mb"
+      maxmemory-policy: allkeys-lru
+      maxclients:       10000
+      timeout:          300
+
+    # System ACL users for redis-server + the sentinel daemon (1:1 from essence/_default.yaml).
+    # BOTH ARE REQUIRED: the create/sentinel.yml guard (assert 1b) fails the render if either
+    # set is empty (silent fail-open is not acceptable - without them replication/sentinel<->redis
+    # AUTH would break).
+    system_acl_users:
+      default_admin: "~* &* +@all"
+      replica:    "+psync +replconf +ping"
+      monitoring: "-@all +@connection +client +ping +info +config|get +cluster|info +slowlog +latency +memory +select +command|count +command|docs"
+      sentinel:   "allchannels +multi +slaveof +ping +exec +subscribe +config|rewrite +role +publish +info +client|setname +client|kill +script|kill"
+      haproxy:    "-@all +auth +client|getname +client|id +client|setname +command +hello +ping +role +info +cluster|info"
+    system_acl_users_sentinel:
+      default_admin: "allchannels allkeys +@all"
+      monitoring: "-@all +@connection -command +client -hello +info -auth +sentinel|masters +sentinel|replicas +sentinel|slaves +sentinel|sentinels +sentinel|ckquorum"
+      sentinel:   "allchannels -@all +auth +client|getname +client|id +client|setname +command +hello +ping +sentinel|is-master-down-by-addr +publish +role +sentinel|get-master-addr-by-name +sentinel|master +sentinel|myid +sentinel|replicas +sentinel|sentinels"
+      haproxy:    "-@all +auth +client|getname +client|id +client|setname +command +hello +ping +role +sentinel|get-master-addr-by-name +sentinel|master +sentinel|myid +sentinel|replicas +sentinel|sentinels"
+  input:
+    # * provision is off (default-on: an omitted section = ENABLED; this case deploys onto
+    # a READY roster, no cloud-create needed) -> include redis-provision.yml group-drop.
+    provision:
+      enabled: false
+    redis_type: sentinel
+    # version is REQUIRED and now an ENUM of builds published to Nexus (7.4.1 is in the enum;
+    # major < 8 -> the modules version-gate is not active).
+    version: "7.4.1"
+    # single-host sentinel (1 host in the roster) -> 0 replicas (redesign-2 default):
+    # size-guard sentinel = 1+0 = 1.
+    replicas_per_master: 0
+    # install_method=package EXPLICITLY (redesign default is binary): this case is about
+    # last-wins maxmemory, not about install - the package branch yields core.pkg.installed redis-server.
+    memory_mb: 512
+    # persistence rdb_aof_1sec (enum [off, aof_1sec, aof_always, rdb, rdb_aof_1sec,
+    # rdb_aof_always]): RDB snapshots + AOF with fsync everysec. The preset carries save+appendonly.
+    persistence: rdb_aof_1sec
+    redis_settings:
+      # Overrides the COMPUTED maxmemory (384mb), not just the essence default.
+      maxmemory: "1gb"
+
+assert:
+  task_present:
+    - module: core.pkg.installed
+      params_subset:
+        name: redis-server
+        version: "7.4.1"
+
+    # redis.conf is the only core.file.rendered with this path (disambiguator from
+    # users.acl/hardening).
+    - module: core.file.rendered
+      params_subset:
+        path: /etc/redis/redis.conf
+        template_content: "<present>"
+        mode: "0640"
+        owner: redis
+        group: redis
+        render_context:
+          vars:
+            conf_dir: /etc/redis
+            data_dir: /var/lib/redis
+            port: 6379
+            run_dir: /var/run/redis
+            log_dir: /var/log/redis
+            loadmodules:
+              - /var/lib/redis/modules/redisbloom.so
+              - /var/lib/redis/modules/rejson.so
+              - /var/lib/redis/modules/redisearch.so
+              - /var/lib/redis/modules/redistimeseries.so
+            config:
+              # * default_admin REDESIGN: replica->master AUTH (masteruser/
+              # masterauth) arrives as ORDINARY config directives (the sentinel
+              # deploy body merges them in via a vault()-in-cell) -> redis.conf ranges
+              # over them like any other directive -> they statically survive a restart.
+              masteruser:       "default_admin"
+              masterauth:       "default-admin-secret-pass"
+              # COMPUTED was "384mb" (512*75/100), but redis_settings (the rightmost
+              # merge layer) overrode it to "1gb". LAST-WINS on the computed layer.
+              maxmemory: "1gb"
+              maxmemory-policy: allkeys-lru
+              maxclients: 10000
+              timeout: 300
+              # persistence preset rdb_aof_1sec.
+              save: "900 1 300 10 60 10000"
+              appendonly: "yes"
+          self:
+            sid: node-solo.example.com
+            covens: [create]
+            choirs: []
+            # traits is a registry projection (ADR-060), an empty object with no labels.
+            traits: {}
+            role: ""
+            network:
+              primary_ip: 10.0.0.5
+            os:
+              arch: amd64
+          role: ""
+          essence: {}
+
+  state_changes:
+    redis_type: sentinel
+    redis_version: "7.4.1"
+    # DRIFT-GUARD: identical to apply.input.config (index 3).
+    redis_config:
+      maxmemory: "1gb"
+      maxmemory-policy: allkeys-lru
+      maxclients: 10000
+      timeout: 300
+      save: "900 1 300 10 60 10000"
+      appendonly: "yes"
+    redis_users: []
+    redis_hosts: []

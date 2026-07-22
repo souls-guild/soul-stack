@@ -1,0 +1,78 @@
+# L0 test NIM-58 (domain-mismatch guard) for DragonFly: provision ENABLED, incarnation
+# name "9redis" - a valid incarnation name, but an INVALID VM-base name (leading digit).
+# The guard-assert as the FIRST step of dragonfly-provision.yml aborts render pre-persist (in
+# prod - 422 WITHOUT recording the incarnation), keeping the name from reaching CloudDriver.Validate
+# after the incarnation is created. Mirror 1:1 of redis provision-badname-rejected.
+#
+# star expect_render_error (mutually exclusive with assert.*): substring of the message from the guard-assert of
+# dragonfly-provision.yml. vault/covens under "9redis": WITHOUT the guard-assert (RED phase)
+# render pushes through the whole plan - deploy reads secret/dragonfly/9redis/*, coven=incarnation.name.
+name: dragonfly provision with a bad VM-base incarnation name is rejected before persist
+
+fixtures:
+  incarnation_name: "9redis"
+  default_destiny_source: "file://../../destiny/{name}"
+  hosts:
+    - sid: vm-1.example.com
+      covens: [9redis, dragonfly]
+      soulprint:
+        network: { primary_ip: 10.0.0.1 }
+        os: { arch: amd64 }
+    - sid: vm-2.example.com
+      covens: [9redis, dragonfly]
+      soulprint:
+        network: { primary_ip: 10.0.0.2 }
+        os: { arch: amd64 }
+    - sid: vm-3.example.com
+      covens: [9redis, dragonfly]
+      soulprint:
+        network: { primary_ip: 10.0.0.3 }
+        os: { arch: amd64 }
+  vault:
+    secret/dragonfly/9redis/users/default_admin:
+      password: dfadmin-create-pass
+    secret/dragonfly/9redis/users/replica:
+      password: replica-sys-secret-pass
+    secret/dragonfly/9redis/users/monitoring:
+      password: monitoring-sys-secret-pass
+    secret/dragonfly/9redis/users/sentinel:
+      password: sentinel-sys-secret-pass
+    secret/dragonfly/9redis/users/haproxy:
+      password: haproxy-sys-secret-pass
+  essence:
+    sentinel_master_name: master
+    provision_await_timeout: "10m"
+    memory_reserve_percent: 75
+    df_config:
+      maxmemory:        "256mb"
+      maxclients:       10000
+    system_acl_users:
+      default_admin: "~* &* +@all"
+      replica:    "+psync +replconf +ping"
+      monitoring: "-@all +@connection +client +ping +info +config|get +cluster|info +slowlog +latency +memory +select +command|count +command|docs"
+      sentinel:   "allchannels +multi +slaveof +ping +exec +subscribe +config|rewrite +role +publish +info +client|setname +client|kill +script|kill"
+      haproxy:    "-@all +auth +client|getname +client|id +client|setname +command +hello +ping +role +info +cluster|info"
+    system_acl_users_sentinel:
+      default_admin: "allchannels allkeys +@all"
+      monitoring: "-@all +@connection -command +client -hello +info -auth +sentinel|masters +sentinel|replicas +sentinel|slaves +sentinel|sentinels +sentinel|ckquorum"
+      sentinel:   "allchannels -@all +auth +client|getname +client|id +client|setname +command +hello +ping +sentinel|is-master-down-by-addr +publish +role +sentinel|get-master-addr-by-name +sentinel|master +sentinel|myid +sentinel|replicas +sentinel|sentinels"
+      haproxy:    "-@all +auth +client|getname +client|id +client|setname +command +hello +ping +role +sentinel|get-master-addr-by-name +sentinel|master +sentinel|myid +sentinel|replicas +sentinel|sentinels"
+  input:
+    version: "1.39.0"
+    replicas_per_master: 2
+    provision:
+      enabled: true
+      provider: example-dev
+      profile: dragonfly-small
+      ssh_provider: ssh-example
+
+mocks:
+  register:
+    provision:
+      vm_ids: [i-aaa111, i-bbb222, i-ccc333]
+      hosts:
+        - { sid: vm-1.example.com, vm_id: i-aaa111, primary_ip: 10.0.0.1, bootstrap_token: tok-vm1 }
+        - { sid: vm-2.example.com, vm_id: i-bbb222, primary_ip: 10.0.0.2, bootstrap_token: tok-vm2 }
+        - { sid: vm-3.example.com, vm_id: i-ccc333, primary_ip: 10.0.0.3, bootstrap_token: tok-vm3 }
+
+expect_render_error: "incarnation name is not valid as a VM-name base"

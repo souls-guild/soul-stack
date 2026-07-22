@@ -1,0 +1,24 @@
+name: mark_where
+description: >-
+  where: predicate over coven. on: targets TWO covens (cluster-a + cluster-b),
+  but where: on the stable sid fact keeps only hosts prefixed "ta-" (i.e.
+  cluster-a in the stand). Validation: with on=[cluster-a,cluster-b] the
+  resolver first gathers 6 hosts, where filters out 3 cluster-b hosts →
+  the file is applied only to cluster-a. cluster-c outside on: doesn't
+  participate at all.
+
+state_changes:
+  - set: marker_file
+    value: /tmp/coven-marker-where.txt
+  - set: last_target
+    value: "on=a,b where=ta-*"
+
+tasks:
+  - name: Write marker only on ta-* hosts (where over coven a+b)
+    on: ["cluster-a", "cluster-b"]
+    where: soulprint.self.sid.startsWith("ta-")
+    module: core.file.present
+    params:
+      path: /tmp/coven-marker-where.txt
+      mode: "0644"
+      content: "marked-by mark_where filtered=ca-only\n"

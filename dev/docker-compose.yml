@@ -1,0 +1,101 @@
+# Local dev stack for Soul Stack. Brought up via `make dev-up`, see
+# `docs/dev/local-setup.md`. Includes Postgres (for audit_log and future
+# souls/operators/incarnation registries, ADR-005), Vault in dev mode (for
+# reading the JWT signing key and other KV, ADR-014/ADR-017), and the OTel
+# stack (otel-collector + Jaeger) for receiving keeper/soul traces (ADR-024).
+#
+# IMPORTANT for security:
+#   - Postgres: account `keeper:keeper` — for local dev. In prod, managed PG
+#     with its own secrets via `vault:` references in keeper.yml.
+#   - Vault: dev-mode (`VAULT_DEV_ROOT_TOKEN_ID=root`), auto-unsealed,
+#     in-memory storage — all secrets are lost on container restart.
+#     In prod — Vault Enterprise / OSS with a persistent storage backend
+#     (raft/consul) + auto-unseal via KMS / Shamir keys, AppRole, or
+#     mTLS instead of a root token.
+#   - OTel-collector / Jaeger: receives OTLP **without TLS** (dev). keeper/soul
+#     send traces via insecure gRPC to 127.0.0.1:4317. In prod — a collector
+#     with TLS and a persistent trace backend (not all-in-one in-memory Jaeger).
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: ${STACK_PREFIX:-soul-stack}-postgres
+    environment:
+      POSTGRES_USER: keeper
+      POSTGRES_PASSWORD: keeper
+      POSTGRES_DB: keeper
+    ports:
+      - "${PG_PORT:-5434}:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U keeper -d keeper"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
+  vault:
+    image: hashicorp/vault:1.18
+    container_name: ${STACK_PREFIX:-soul-stack}-vault
+    cap_add:
+      - IPC_LOCK
+    environment:
+      VAULT_DEV_ROOT_TOKEN_ID: root
+      VAULT_DEV_LISTEN_ADDRESS: 0.0.0.0:8200
+      # VAULT_ADDR — for the `vault` CLI inside the container (healthcheck,
+      # `docker exec ... vault status`). By default the CLI goes to
+      # https://127.0.0.1:8200, but the dev listener is HTTP, without TLS.
+      VAULT_ADDR: http://127.0.0.1:8200
+    ports:
+      - "${VAULT_PORT:-8200}:8200"
+    healthcheck:
+      test: ["CMD", "vault", "status"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
+  redis:
+    image: redis:7-alpine
+    container_name: ${STACK_PREFIX:-soul-stack}-redis
+    ports:
+      - "${REDIS_PORT:-6381}:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
+  # OTLP receiver: accepts traces via gRPC :4317 from keeper/soul, forwards
+  # them to Jaeger (OTLP :4317 inside the docker network) and also duplicates
+  # to the debug log (visible via `docker compose logs otel-collector`).
+  # Pipeline config — dev/otel-collector.yaml, mounted read-only.
+  otel-collector:
+    image: otel/opentelemetry-collector-contrib:0.115.1
+    container_name: ${STACK_PREFIX:-soul-stack}-otel-collector
+    command: ["--config=/etc/otel-collector.yaml"]
+    volumes:
+      - ./otel-collector.yaml:/etc/otel-collector.yaml:ro
+    ports:
+      # OTLP gRPC — the only port of the collector exposed outward:
+      # keeper/soul send here (127.0.0.1:4317). Standard OTLP port,
+      # free on the dev stand (PG 5434 / Redis 6381 / Vault 8200 not taken).
+      - "${OTEL_PORT:-4317}:4317"
+    depends_on:
+      - jaeger
+
+  # Trace storage and UI. all-in-one: in-memory storage (traces are lost
+  # on restart — fine for dev), UI on :16686. Receives OTLP from the collector
+  # inside the docker network; only the UI port is exposed outward.
+  jaeger:
+    image: jaegertracing/all-in-one:1.62.0
+    container_name: ${STACK_PREFIX:-soul-stack}-jaeger
+    environment:
+      # Enables the Jaeger OTLP receiver (:4317/:4318 inside the container);
+      # the collector exports here via the docker DNS name `jaeger`.
+      COLLECTOR_OTLP_ENABLED: "true"
+    ports:
+      # Jaeger UI — http://127.0.0.1:16686. Standard port, free.
+      - "${JAEGER_PORT:-16686}:16686"
+
+volumes:
+  postgres_data:

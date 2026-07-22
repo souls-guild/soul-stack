@@ -1,0 +1,19 @@
+kind: soul_module
+protocol_version: 1
+namespace: core
+name: archive
+
+required_capabilities:
+  - fs_write_root
+
+spec:
+  states:
+    extracted:
+      description: Extract the archive at path into the dest directory (tar/tar.gz/tar.bz2/zip); ADR-015.
+      input:
+        path:        { type: string, required: true, description: "Path to the source archive." }
+        dest:        { type: string, required: true, description: "Extraction directory." }
+        format:      { type: string, description: "Format (tar|tar.gz|tar.bz2|zip); omitted — auto-detect by extension." }
+        max_size:    { type: string, description: "Limit on total extracted size (number of bytes or N[KiB|MiB|GiB]); default 1GiB. Zip-bomb protection." }
+        max_entries: { type: integer, description: "Limit on the number of entries in the archive; default 100000. Zip-bomb protection." }
+        max_ratio:   { type: integer, description: "Limit on the ratio of extracted to compressed bytes (compression ratio); default 100, 0 — disabled. Zip-bomb protection for a small compressed size." }

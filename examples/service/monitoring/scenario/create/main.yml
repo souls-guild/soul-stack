@@ -1,0 +1,241 @@
+name: create
+description: |
+  Deploys node_exporter and redis_exporter on every host of the incarnation
+  (Linux + systemd) by COMPOSING two reusable standalone destinies via
+  apply:destiny (isolated render for each, ADR-009):
+    - node-exporter  — host metrics;
+    - redis-exporter — connects to Redis over a unix socket
+                       (--redis.addr=unix://<socket>), the socket path is a parameter.
+
+  The service renders nothing itself — it only orchestrates the apply:destiny
+  order and passes each destiny its input. Inside each destiny ONLY the
+  apply.input passed to it is visible (isolation, ADR-009): the scenario scope does not
+  leak into the destiny env. The prod-grade install (service account — stable node_exporter for
+  node-exporter / DynamicUser=yes for redis-exporter, systemd hardening, passthrough
+  extra_args, arch from host facts) lives in the destinies themselves — drift with inline copies
+  is removed.
+
+  arch is taken NOT from a static input.arch but from soulprint.self.os.arch (a
+  host fact): one incarnation can mix amd64/arm64 hosts, the tarball must
+  match the real architecture. destiny doesn't see soulprint directly (isolation,
+  ADR-009) — the value only arrives via apply:input.
+
+# ── Input contract (docs/input.md) ──────────────────────────────────────────
+# All versions and paths have defaults; there are no required parameters — create on a clean
+# VM works with no arguments. The operator overrides selectively.
+input:
+  node_exporter_version:
+    type: string
+    default: "1.8.2"
+    pattern: "^[0-9]+\\.[0-9]+\\.[0-9]+$"
+    description: node_exporter version (GitHub Releases prometheus/node_exporter).
+
+  redis_exporter_version:
+    type: string
+    default: "1.62.0"
+    pattern: "^[0-9]+\\.[0-9]+\\.[0-9]+$"
+    description: redis_exporter version (GitHub Releases oliver006/redis_exporter).
+
+  # checksum of the redis_exporter tarball (linux-<arch>). See the note above:
+  # REQUIRED, no default (fail-closed). The value comes from the GitHub release
+  # (sha256sums file) for the pair (redis_exporter_version, arch).
+  redis_exporter_sha256:
+    type: string
+    required: true
+    pattern: "^sha256:[0-9a-f]{64}$"
+    description: >-
+      SHA-256 of the redis_exporter tarball (form "sha256:<hex>"). Must
+      match the redis_exporter_version + arch pair; taken from the sha256sums
+      of the oliver006/redis_exporter GitHub release.
+
+  bin_dir:
+    type: string
+    default: /usr/local/bin
+    pattern: "^/[A-Za-z0-9._/-]+$"
+    description: Directory where the exporter binaries are placed.
+
+  redis_socket:
+    type: string
+    default: /var/run/redis/redis-server.sock
+    pattern: "^/[A-Za-z0-9._/-]+$"
+    description: Path to the Redis unix socket that redis_exporter connects to.
+
+  node_exporter_listen:
+    type: string
+    default: ":9100"
+    pattern: "^[A-Za-z0-9._-]*:[0-9]{1,5}$"
+    description: >-
+      node_exporter listen address (--web.listen-address). Defaults to :9100
+      (the standard node_exporter port).
+
+  # Textfile hardware collectors for node-exporter. Default [] (from essence): on a VM
+  # there's no hardware, only the node_exporter core is installed without oneshot collectors.
+  node_exporter_collectors:
+    type: array
+    default: []
+    items:
+      type: string
+      enum: [smartmon, nvme, ipmi]
+    description: >-
+      List of node-exporter textfile collectors (smartmon|nvme|ipmi). [] = only
+      the node_exporter core without hardware oneshot collectors.
+
+  node_exporter_allow_private:
+    type: boolean
+    default: false
+    description: >-
+      SSRF-guard opt-out for the node-exporter destiny: allow the tarball fetch with a
+      private-resolve base_url (internal mirror). Default false — the default
+      base_url is public GitHub, the guard stays on.
+
+  redis_exporter_listen:
+    type: string
+    default: ":9121"
+    pattern: "^[A-Za-z0-9._-]*:[0-9]{1,5}$"
+    description: redis_exporter listen address (--web.listen-address). Defaults to :9121.
+
+  # Passthrough channel (prod convention §1) for ANY inline redis_exporter flags
+  # beyond the base --redis.addr and --web.listen-address: collectors (--check-keys=...,
+  # --check-single-keys=...), TLS/basic-auth (--web.config.file=<path>; web.yml itself is
+  # a separate file, §4), namespace, etc. Each element is a separate ExecStart token
+  # (not split by the template on whitespace): pass a value with a space as one
+  # element — ["--web.config.file=/etc/x.yml"]. Goes into the template as a native list
+  # (the whole cell = one ${…} → native type, ADR-010).
+  redis_exporter_extra_args:
+    type: array
+    default: []
+    items:
+      type: string
+    description: >-
+      Extra flags for the inline redis_exporter (--check-keys=...,
+      --web.config.file=<path> for TLS/basic-auth, etc). Each element is a
+      separate ExecStart argument. web.yml for TLS is a separate file.
+
+# ── incarnation.state mutation ─────────────────────────────────────────────────
+# After a successful apply, Keeper records what was deployed (ADR-009, §7.1).
+state_changes:
+  - set: node_exporter_version
+    value: "${ input.node_exporter_version }"
+  - set: redis_exporter_version
+    value: "${ input.redis_exporter_version }"
+  - set: redis_socket
+    value: "${ input.redis_socket }"
+
+tasks:
+  # ── node_exporter ───────────────────────────────────────────────────────────
+  # Delegated to the node-exporter destiny (apply:destiny, isolated render).
+  # Inside it: prod-grade install — the url.fetched→archive.extracted→install triple,
+  # a stable node_exporter service account (NOT DynamicUser — the textfile directory
+  # survives a restart) + systemd hardening. The scenario only passes its input;
+  # destiny gets arch itself from soulprint.self.os.arch (see below).
+  - name: Apply node-exporter destiny
+    apply:
+      destiny: node-exporter
+      input:
+        version: "${ input.node_exporter_version }"
+        # arch is NOT passed: destiny takes it directly from soulprint.self.os.arch
+        # (soulprint is available in destiny-CEL). One incarnation can mix
+        # amd64/arm64 hosts — destiny picks the tarball per the host fact itself.
+        bin_dir: "${ input.bin_dir }"
+        listen:  "${ input.node_exporter_listen }"
+        # collectors — a single source (input.node_exporter_collectors, default []):
+        # on a VM there's no hardware, only the core is installed. base_url/user/textfile_dir
+        # are not passed — the destiny defaults are fine.
+        collectors: "${ input.node_exporter_collectors }"
+        # SSRF-guard opt-out for a private-resolve base_url; default false — the guard stays on.
+        allow_private: "${ input.node_exporter_allow_private }"
+
+  # ── redis_exporter ──────────────────────────────────────────────────────────
+  # STAYS INLINE (NOT apply:destiny redis-exporter) — deliberately. The purpose of
+  # monitoring (see README §"Assumptions"): exporters on a host where Redis
+  # is already running (possibly without requirepass), the service itself does NOT install Redis. The prod-grade
+  # redis-exporter destiny doesn't fit this for two reasons:
+  #   1. it requires input.redis_password (required, min_length 16) and puts it into
+  #      Environment=REDIS_PASSWORD — this service has no Redis password in its input
+  #      contract at all (Redis may run without auth);
+  #   2. its unit carries Requires=redis-server.service — on a host without a local
+  #      redis-server (connecting to someone else's Redis over a socket) the unit wouldn't start.
+  # Switching over would break the prod purpose and would require expanding the scenario's
+  # public contract with a new required field. Inline here is justified (ADR-009:
+  # the destiny↔scenario boundary is a recommendation). Drift with node-exporter is removed;
+  # redis-exporter is a separate case, not a duplicate of the canonical destiny.
+  - name: Fetch redis_exporter tarball
+    module: core.url.fetched
+    params:
+      url: "${ 'https://github.com/oliver006/redis_exporter/releases/download/v' + input.redis_exporter_version + '/redis_exporter-v' + input.redis_exporter_version + '.linux-' + soulprint.self.os.arch + '.tar.gz' }"
+      path: "${ '/tmp/redis_exporter-' + input.redis_exporter_version + '.tar.gz' }"
+      checksum: "${ input.redis_exporter_sha256 }"
+      mode: "0644"
+
+  - name: Extract redis_exporter tarball
+    module: core.archive.extracted
+    params:
+      path: "${ '/tmp/redis_exporter-' + input.redis_exporter_version + '.tar.gz' }"
+      dest: "${ '/tmp/redis_exporter-' + input.redis_exporter_version }"
+
+  # Place the redis_exporter binary from the extracted directory into bin_dir via
+  # core.file.present with src: (a copy of a regular file's content from the host). Idempotency
+  # is native: changed=true ONLY when the target file is missing or its sha256 differs
+  # from src (plus mode/owner drift). The old core.cmd.shell + creates:-guard
+  # skipped install for ANY existing file → a version upgrade did NOT reinstall the
+  # binary (a latent bug). register — the onchanges restart below reacts to a binary change
+  # the same way as to a unit-file change. src carries the `v` prefix in the directory name inside the
+  # tarball (redis_exporter-v<v>.linux-<arch>) — the GitHub Releases layout.
+  - name: Install redis_exporter binary
+    module: core.file.present
+    register: redis_exporter_bin
+    params:
+      path: "${ input.bin_dir + '/redis_exporter' }"
+      src: "${ '/tmp/redis_exporter-' + input.redis_exporter_version + '/redis_exporter-v' + input.redis_exporter_version + '.linux-' + soulprint.self.os.arch + '/redis_exporter' }"
+      mode: "0755"
+      owner: root
+      group: root
+
+  # A dedicated system user for the exporter (least-privilege). Membership in the
+  # supplementary redis group gives "group" access to the unix socket (typically
+  # unixsocketperm 770, owner redis:redis); redis exporter does NOT get owner
+  # rights. Assumption: the redis group already exists on the host (created by the
+  # redis-server package — this service does NOT install Redis, see README). no-login shell.
+  - name: Create redis-exporter system user in the redis group
+    module: core.user.present
+    params:
+      name: redis-exporter
+      groups: [redis]
+      shell: /usr/sbin/nologin
+
+  # Connection to Redis over a unix socket: --redis.addr=unix://<socket>.
+  # The socket path is passed into the unit template as the redis_addr variable.
+  - name: Render redis_exporter systemd unit
+    module: core.file.rendered
+    register: redis_exporter_unit
+    params:
+      path: /etc/systemd/system/redis_exporter.service
+      template: templates/redis_exporter.service.tmpl
+      mode: "0644"
+      owner: root
+      group: root
+      vars:
+        bin_dir:    "${ input.bin_dir }"
+        listen:     "${ input.redis_exporter_listen }"
+        redis_addr: "${ 'unix://' + input.redis_socket }"
+        # passthrough redis_exporter flags (--check-keys=..., --web.config.file=...,
+        # etc): go into the template as a list, range appends each as a separate ExecStart
+        # token. The whole cell = one ${…} → a native list (ADR-010).
+        extra_args: "${ input.redis_exporter_extra_args }"
+
+  - name: Enable redis_exporter at boot
+    module: core.service.enabled
+    params:
+      name: redis_exporter
+
+  - name: Ensure redis_exporter is running
+    module: core.service.running
+    params:
+      name: redis_exporter
+
+  - name: Restart redis_exporter because the unit or binary changed
+    module: core.service.restarted
+    onchanges: [redis_exporter_unit, redis_exporter_bin]
+    timeout: 30s
+    params:
+      name: redis_exporter

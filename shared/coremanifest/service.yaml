@@ -1,0 +1,39 @@
+kind: soul_module
+protocol_version: 1
+namespace: core
+name: service
+
+required_capabilities:
+  - run_as_root
+  - exec_subprocess
+
+spec:
+  states:
+    running:
+      description: The service is running. The optional enabled controls autostart in one step (ADR-015).
+      input:
+        name:    { type: string, required: true, description: "Service/unit name." }
+        enabled: { type: bool,   description: "true → additionally enable, false → disable, omitted → leave autostart untouched." }
+        daemon_reload: { type: string, enum: [auto, always, never], default: auto, description: "systemctl daemon-reload before start (systemd): auto = on NeedDaemonReload, always = unconditionally, never = opt-out. openrc/sysv — no-op (ADR-015)." }
+    stopped:
+      description: The service is stopped.
+      input:
+        name: { type: string, required: true, description: "Service/unit name." }
+    restarted:
+      description: Unconditional restart (changed is always true).
+      input:
+        name: { type: string, required: true, description: "Service/unit name." }
+        daemon_reload: { type: string, enum: [auto, always, never], default: auto, description: "systemctl daemon-reload before restart (systemd): auto = on NeedDaemonReload, always = unconditionally, never = opt-out. openrc/sysv — no-op (ADR-015)." }
+    enabled:
+      description: Service autostart on system boot.
+      input:
+        name: { type: string, required: true, description: "Service/unit name." }
+        daemon_reload: { type: string, enum: [auto, always, never], default: auto, description: "systemctl daemon-reload before enable (systemd): auto = on NeedDaemonReload, always = unconditionally, never = opt-out. openrc/sysv — no-op (ADR-015)." }
+    disabled:
+      description: Service autostart on system boot is off (orthogonal to the running/stopped runtime state — a disabled unit may still be running).
+      input:
+        name: { type: string, required: true, description: "Service/unit name." }
+    masked:
+      description: The unit is masked (systemctl mask, symlink → /dev/null) — start is impossible manually or as a dependency. systemd-only; openrc/sysv is a fatal error. Apply disables the unit before masking (ADR-015).
+      input:
+        name: { type: string, required: true, description: "Service/unit name." }

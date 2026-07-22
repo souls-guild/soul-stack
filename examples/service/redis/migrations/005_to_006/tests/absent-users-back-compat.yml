@@ -1,0 +1,16 @@
+name: absent-users-back-compat
+description: >
+  Back-compat: incarnation WITHOUT the redis_users key (old state without
+  operator-extra ACL) -> the key is created as an empty array (has()-guard in
+  ternary). Rest of state stays intact.
+
+state_before:
+  redis_type: "cluster"
+  redis_config:
+    maxmemory: "512mb"
+
+state_after:
+  redis_type: "cluster"
+  redis_config:
+    maxmemory: "512mb"
+  redis_users: []

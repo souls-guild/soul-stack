@@ -1,0 +1,21 @@
+name: refs-default-back-compat
+description: >
+  A v9 incarnation with seeded_from WITHOUT ref fields (a regular create, or migrated before
+  the v10 fix: 008_to_009 introduced seeded_from {source_endpoints, detached}, refs didn't
+  exist yet) -> the migration backfills source_password_ref/source_tls_ca_ref with a
+  conservative default of '' (source without AUTH/TLS, the pre-fix behavior).
+  source_endpoints/detached pass through untouched (the leaf guard preserves them).
+
+state_before:
+  redis_type: "sentinel"
+  seeded_from:
+    source_endpoints: ["old-1.example.com:6379", "old-2.example.com:6379"]
+    detached: false
+
+state_after:
+  redis_type: "sentinel"
+  seeded_from:
+    source_endpoints: ["old-1.example.com:6379", "old-2.example.com:6379"]
+    detached: false
+    source_password_ref: ""
+    source_tls_ca_ref: ""

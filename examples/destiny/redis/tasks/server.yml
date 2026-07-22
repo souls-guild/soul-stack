@@ -1,0 +1,228 @@
+# tasks/server.yml — data-plane redis-server: TLS PEM + users.acl + redis.conf +
+# systemd hardening drop-in + redis-server service. THE WHOLE file is gated on deploy_redis —
+# the gate is ON the include (main.yml, conditional-include ADR-009 amendment), NOT inside
+# the file. sentinel_only (deploy_redis=false) → include is dropped entirely (group-drop).
+#
+# ★ registers (redis_tls_cert/redis_tls_key/redis_tls_ca/redis_acl/redis_conf/
+#   redis_hardening) and their onchanges-restart MUST live IN THIS file: the LOAD-TIME
+#   per-file linter (validateTaskRefs, shared/config/destiny_tasks.go) rejects
+#   cross-file onchanges as unknown_register_reference. SECURITY: moving TLS-PEM into a
+#   separate file from the restart would silently stop restarting redis on cert/key/CA rotation.
+#
+# There is no explicit daemon-reload step: core.service (daemon_reload: auto) itself
+# reloads systemd when the hardening drop-in changes BEFORE restart — so the restart goes
+# THROUGH core.service.restarted (not raw exec).
+#
+# The PARTIAL inner gate tls.enable (only the PEM tasks, not the whole file) STAYS in-block
+# (nested TLS-block below): include-when would drop the whole file, not a subset of tasks.
+
+# ── TLS PEM material ──────────────────────────────────────────────────────────────────
+# Render cert/key/CA into /etc/redis/tls/ BEFORE redis.conf and the service start: redis.conf
+# (directives tls-cert-file/tls-key-file/tls-ca-cert-file coming into config from
+# scenario) references these files — when tls.enable is set, Redis must find them at startup,
+# otherwise it fails with "can't open the TLS certificate". All four are gated on tls.enable
+# (when on the nested block) + registered → the restart is reactive to a cert change (see
+# restart-onchanges below). HOST INVARIANT (one cert/CA per cluster): the PEM PATHS
+# (tls.cert_ref/key_ref/ca_ref) come through apply.input.
+#
+# ★ The nested TLS-block with a PARTIAL gate tls.enable (subset of tasks, not the whole file):
+# in-block, because include-when would drop the whole file. On static-false, the
+# nested-block expands into per-child skip-placeholders with their OWN register —
+# the children's registers (redis_tls_cert/key/ca) are visible outside even when skipped, so
+# the onchanges-restart below resolves the same way whether tls.enable is true or false (flat-register-
+# scope is invariant under static-skip).
+#
+# ★ PEM VIA core.file.present + vault() IN THE content CELL (seal masking, ADR-010 §7.4):
+# NOT .tmpl, NOT an already-resolved PEM via apply.input. vault(ref) in the content cell →
+# the seal detector marks it sealed with the vault layer IN the destiny pass, masking hides the PEM in
+# error_summary/state. vault() resolves keeper-side; the vault client is not pulled onto Soul
+# (ADR-012). ref (input.tls.cert_ref) is a path, not a secret. The has(input.tls) guard —
+# render-safety when the tls dict is absent.
+- name: Provision redis TLS material
+  when: "has(input.tls) && default(input.tls.enable, false)"
+  block:
+    # The tls/ directory under conf_dir — idempotent on mode/owner/group, fixes drift, dry-run.
+    # mode 0750 owner redis: PEM (incl. the private key) is readable only by the service. The path
+    # is derived from input.conf_dir (directive B: conf-dir overridable by the operator).
+    - name: Ensure the redis TLS directory exists
+      module: core.directory.present
+      params:
+        path: "${ vars.redis_conf_dir_eff + '/tls' }"
+        owner: "${ vars.redis_user }"
+        group: "${ vars.redis_group }"
+        mode: "0750"
+
+    # Server certificate. mode 0600 owner redis (PEM readable only by the service). register —
+    # restart on rotation. content = vault(ref) IN THE CELL → sealed with the vault layer.
+    - name: Render TLS server certificate
+      module: core.file.present
+      register: redis_tls_cert
+      params:
+        path: "${ vars.redis_conf_dir_eff + '/tls/redis.crt' }"
+        content: "${ vault(input.tls.cert_ref) }"
+        mode: "${ vars.redis_pem_mode }"
+        owner: "${ vars.redis_user }"
+        group: "${ vars.redis_group }"
+
+    # Private key — a SECRET. mode 0600 owner redis. content = vault(key_ref) IN THE CELL
+    # → sealed with the vault layer (the private PEM key is masked). register — restart.
+    - name: Render TLS server private key
+      module: core.file.present
+      register: redis_tls_key
+      params:
+        path: "${ vars.redis_conf_dir_eff + '/tls/redis.key' }"
+        content: "${ vault(input.tls.key_ref) }"
+        mode: "${ vars.redis_pem_mode }"
+        owner: "${ vars.redis_user }"
+        group: "${ vars.redis_group }"
+
+    # Cluster CA certificate (peer validation for tls-replication/tls-cluster).
+    # content = vault(input.tls.ca_ref) IN THE CELL → sealed with the vault layer. register —
+    # restart.
+    - name: Render TLS CA certificate
+      module: core.file.present
+      register: redis_tls_ca
+      params:
+        path: "${ vars.redis_conf_dir_eff + '/tls/ca.crt' }"
+        content: "${ vault(input.tls.ca_ref) }"
+        mode: "${ vars.redis_pem_mode }"
+        owner: "${ vars.redis_user }"
+        group: "${ vars.redis_group }"
+
+# users.acl built from the passed MAP of ACL users name→{perms,state,password} (aclfile in
+# redis.conf). register, so redis restarts when the ACL changes. owner/group
+# redis, mode 0640 — the file contains password hashes, readable only by the service. The template
+# ranges over the MAP (Go sorts keys → ACL lines are deterministic across runs,
+# no false change → no extra restart) and hashes the password (sha256), never writing
+# plaintext.
+#
+# ★ default_admin REDESIGN (2026-06-30): .vars.password is NO LONGER passed (requirepass
+# removed). The system user default_admin (`~* &* +@all`) comes in the `users` map from scenario
+# (essence.system_acl_users) with its OWN Vault password and is rendered by the range. The built-in
+# `default` template renders `off` if the operator hasn't declared it in input.users (see the header
+# of users.acl.tmpl) → there is no built-in passwordless default access under protected-mode, external
+# connections go through default_admin. The minimal file is default_admin (always) + default off.
+- name: Render users.acl
+  module: core.file.rendered
+  register: redis_acl
+  params:
+    path: "${ vars.redis_conf_dir_eff + '/users.acl' }"
+    template: templates/users.acl.tmpl
+    mode: "${ vars.redis_secret_file_mode }"
+    owner: "${ vars.redis_user }"
+    group: "${ vars.redis_group }"
+    vars:
+      users: "${ default(input.users, {}) }"
+
+# redis.conf from the merged config. register, so redis only restarts on
+# a config change. owner/group redis, mode 0640 — the config is readable only by the service.
+- name: Render redis.conf
+  module: core.file.rendered
+  register: redis_conf
+  params:
+    path: "${ vars.redis_conf_dir_eff + '/redis.conf' }"
+    template: templates/redis.conf.tmpl
+    mode: "${ vars.redis_secret_file_mode }"
+    owner: "${ vars.redis_user }"
+    group: "${ vars.redis_group }"
+    vars:
+      config:   "${ default(input.config, {}) }"
+      # host-layout (directive B): the template derives `dir` from data_dir (RDB/AOF) and `aclfile`
+      # from conf_dir (the same place "Render users.acl" puts the file).
+      conf_dir: "${ vars.redis_conf_dir_eff }"
+      data_dir: "${ vars.redis_data_dir_eff }"
+      port:     "${ vars.redis_port }"
+      run_dir:  "${ vars.run_dir }"
+      log_dir:  "${ vars.log_dir }"
+      # loadmodule directives — a separate template section (NOT config-map keys: the range
+      # `{{key}} {{value}}` would leave a trailing space for a valueless loadmodule).
+      # ★ THE "modules ALWAYS ALL" DIRECTIVE = ALL-OR-NOTHING: the version-guard and the module path
+      # live in vars.yml; here it's a ternary "empty (NO loadmodule at all), otherwise paths for ALL .so".
+      # EMPTY when: Redis 8+ (modules built in) OR modules_base_url is empty (vanilla redis,
+      # no modules) — vars.redis_modules_enabled encapsulates both conditions (single source
+      # with include modules.yml, main.yml). Without the base_url gate loadmodule would be printed even for
+      # vanilla → redis aborts (no .so to load: nowhere to download them from). ORDER is an EXPLICIT
+      # sorted array literal of aliases, NOT a .map() over a map (CEL map iteration is
+      # non-deterministic → false change/restart).
+      loadmodules: >-
+        ${ !vars.redis_modules_enabled
+           ? []
+           : ['bloom', 'json', 'search', 'timeseries'].map(alias,
+               vars.redis_modules_dir + '/' + vars.redis_modules[alias]) }
+
+# systemd drop-in directory. core.file.rendered creates only the file, the parent
+# directory .service.d/ — no, and the distro redis-server package doesn't create it either.
+# Create it explicitly BEFORE the declarative core.directory.present render. The unit drop-in path
+# is assembled from vars.systemd_dir + the service name (directive A: service-name from vars).
+- name: Ensure the redis-server systemd drop-in directory exists
+  module: core.directory.present
+  params:
+    path: "${ vars.systemd_dir + '/' + vars.redis_service_name + '.service.d' }"
+    owner: "${ vars.root_owner }"
+    group: "${ vars.root_group }"
+    mode: "0755"
+
+# systemd drop-in hardening over the DISTRO unit of redis-server (it can't be
+# replaced entirely — it's updated with the package, carries ExecStart/Type=notify). The override
+# merges into [Service]. Stateful variant: ProtectSystem=strict + ReadWritePaths under the
+# actual redis write directories (data-dir/socket/pid/log). register — to
+# reactively trigger a restart only on change (daemon-reload is done by core.service
+# itself before the restart). Details — in the template.
+# ★ ONLY package-install: the drop-in merges into the DISTRO unit (override). With
+# binary-install, the redis-server's own unit is rendered in install.yml already with hardening —
+# there is no distro unit, nothing for the override to cover. The gate is the same form as
+# the package branch of install.yml (install not passed / method not set / method=='package').
+- name: Render redis-server systemd hardening drop-in
+  module: core.file.rendered
+  when: "!has(input.install) || !has(input.install.method) || input.install.method == 'package'"
+  register: redis_hardening
+  params:
+    path: "${ vars.systemd_dir + '/' + vars.redis_service_name + '.service.d/hardening.conf' }"
+    template: templates/hardening.conf.tmpl
+    mode: "${ vars.unit_file_mode }"
+    owner: "${ vars.root_owner }"
+    group: "${ vars.root_group }"
+    # ReadWritePaths from vars: data_dir follows the operator override, run_dir/log_dir are
+    # system directories socket/pid/log. conf_dir (also overridable) is needed for the day-2
+    # CONFIG REWRITE update_config: redis-server rewrites redis.conf, without conf_dir in
+    # RW strict keeps /etc read-only → REWRITE fails (see hardening.conf.tmpl).
+    vars:
+      data_dir: "${ vars.redis_data_dir_eff }"
+      run_dir:  "${ vars.run_dir }"
+      log_dir:  "${ vars.log_dir }"
+      conf_dir: "${ vars.redis_conf_dir_eff }"
+
+# core.service redis-server running. sentinel_only (deploy_redis=false) does NOT run the service
+# — the whole file is group-dropped (include-when false).
+- name: Ensure redis-server is running and enabled at boot
+  module: core.service.running
+  params:
+    name: "${ vars.redis_service_name }"
+    enabled: true
+
+# ★ RESTART NARROWED to the hardening drop-in (systemd unit-level) — the single true
+# restart case in the data-plane. A systemd unit change (ProtectSystem/ReadWritePaths/
+# ExecStart-override) only takes effect via daemon-reload + process restart:
+# CONFIG SET is powerless here (it's not a Redis runtime directive, but the process unit itself).
+# Hence redis_hardening → restart (daemon-reload is done by core.service itself before
+# the restart).
+#
+# ★ redis.conf / users.acl / TLS PEM DELIBERATELY do NOT restart (absent from onchanges). They are
+# ACTIVATED by hot-reload in the service's day-2 scenarios (the "hot-reload > restart" convention,
+# docs/destiny/production-conventions.md §3a/§6): update_config → CONFIG SET/REWRITE;
+# add_user → ACL LOAD; rotate_tls → CONFIG SET tls-*-file (Redis 6.2+ live). File
+# rendering stays HERE (lays down the desired state on disk); ACTIVATION is a day-2 step. On
+# at-create the initial start (core.service.running above) comes up already with the final
+# config/ACL/cert, no separate restart is needed.
+#
+# ★ Restart on BINARY/UNIT change of the binary branch is NOT here, but in install.yml (cross-file
+# onchanges is rejected by the per-file linter — register lives next to its consumer).
+# ★ ONLY package-install (see the hardening drop-in gate above): in the binary branch the drop-in isn't
+# rendered → redis_hardening doesn't change (its own binary unit carries hardening right away).
+- name: Restart redis-server because the systemd hardening drop-in changed
+  module: core.service.restarted
+  when: "!has(input.install) || !has(input.install.method) || input.install.method == 'package'"
+  onchanges: [redis_hardening]
+  timeout: 30s
+  params:
+    name: "${ vars.redis_service_name }"

@@ -1,0 +1,192 @@
+# L0 test (Trial, ADR-023) for the node-exporter destiny via the scenario apply harness.
+#
+# Render-only, hermetic: verifies that apply:destiny expands the node-exporter
+# destiny into the expected flat task plan (CEL phase). L0 does not download the
+# tarball, does not install packages, does not execute text/template (.tmpl) —
+# only CEL-renders YAML expressions.
+#
+# Task layout (include files expanded inline BEFORE render):
+#   install.yml    → 0 fetch, 1 extract
+#   account.yml    → 2 group, 3 user, 4 directory (core.directory.present)
+#   service.yml    → 5 install binary, 6 unit, 7 running, 8 restarted
+#   collectors.yml → smartmon 9..15, nvme 16..23, ipmi 24..32
+#                    (each collector: pkg(+jq)/script/unit/timer/running/restarted/
+#                     cron-cleanup; restarted reactively restarts .timer whenever
+#                     its .service/.timer changes — symmetric with the main unit, see below).
+name: node-exporter destiny renders fetch/extract/install/account/unit/collectors plan
+
+# L0-render takes input as-is and does NOT apply the scenario contract defaults
+# (Keeper substitutes defaults at invocation time, before the render phase). We duplicate the defaults.
+#
+# apply:destiny is resolved as a mirror of production (slice A, ADR-023): node-exporter
+# is declared in _trial/service.yml::destiny[], URL — from default_destiny_source below
+# (file://, relative to service-root = _trial/; the destiny itself lives one level up,
+# in examples/destiny/node-exporter/).
+fixtures:
+  default_destiny_source: "file://../../{name}"
+  input:
+    version: "1.11.1"
+    collectors: [smartmon, nvme, ipmi]
+  # soulprint of the synthetic L0 host: destiny takes arch directly from
+  # soulprint.self.os.arch (URL/install path), while apply:input — takes primary_ip from
+  # soulprint.self.network.primary_ip (listen expression). primary_ip from 10.0.0.0/8
+  # → bind on the internal IP.
+  soulprint:
+    os:
+      arch: amd64
+    network:
+      primary_ip: "10.0.0.5"
+
+# Presence form (2026-06-24 migration): the test checks that calls are PRESENT in the
+# plan, not their position. Duplicate modules (core.file.rendered / core.pkg.installed /
+# core.service.running / core.file.absent) are disambiguated via params_subset (path/name —
+# unique per task). params_subset comparison is a partial per-key match: extra render
+# keys do not fail the case. bin_dir/textfile_dir/user — from the default destiny.
+assert:
+  task_present:
+    # ── install.yml: fetch + extract ───────────────────────────────────────────
+    # url is assembled by CEL from base_url+version+arch (arch from soulprint.self.os.arch).
+    # checksum is NOT set (download without verification — idempotency by SHA-256
+    # of the content). The only core.url.fetched in the plan.
+    - module: core.url.fetched
+      params_subset:
+        url: https://github.com/prometheus/node_exporter/releases/download/v1.11.1/node_exporter-1.11.1.linux-amd64.tar.gz
+        path: /tmp/node_exporter-1.11.1.tar.gz
+        mode: "0644"
+        # back-compat: github-default → the SSRF guard still applies (allow_private default false).
+        allow_private: false
+
+    # The only core.archive.extracted in the plan.
+    - module: core.archive.extracted
+      params_subset:
+        path: /tmp/node_exporter-1.11.1.tar.gz
+        dest: /tmp/node_exporter-1.11.1
+
+    # ── account.yml: stable service account + textfile directory ───────────────
+    - module: core.group.present
+      params_subset:
+        name: node_exporter
+        system: true
+
+    # home is NOT asserted: core.user.present always passes useradd -M (no home
+    # directory is created), so `home:` is omitted from params — system account with no
+    # home directory.
+    - module: core.user.present
+      params_subset:
+        name: node_exporter
+        system: true
+        group: node_exporter
+        shell: /usr/sbin/nologin
+
+    # textfile directory via declarative core.directory.present (NOT core.exec.run
+    # install -d): idempotent on mode/owner/group, fixes drift, supports dry-run.
+    - module: core.directory.present
+      params_subset:
+        path: /var/lib/node_exporter
+        owner: node_exporter
+        group: node_exporter
+        mode: "0755"
+
+    # ── service.yml: install binary + unit + service ─────────────────────────────
+    # install step — core.file.present with src: (copy of node_exporter from the extracted
+    # /tmp). Idempotency is native by sha256(src) — a genuine changed only when the
+    # binary bytes change; the version-aware unless-guard of the old core.cmd.shell is not needed.
+    # The only core.file.present in the plan.
+    - module: core.file.present
+      params_subset:
+        path: /usr/local/bin/node_exporter
+        src: /tmp/node_exporter-1.11.1/node_exporter-1.11.1.linux-amd64/node_exporter
+        mode: "0755"
+        owner: root
+        group: root
+
+    # The main hardened unit. listen is assembled by CEL: primary_ip from 10.* → bind on
+    # it + port :9100. render_context is not asserted (self is host-variable).
+    # There is NO daemon-reload step: core.service reloads on its own before start/restart when
+    # the unit changes (daemon_reload: auto). Disambiguator from other rendered steps — path.
+    - module: core.file.rendered
+      params_subset:
+        path: /etc/systemd/system/node_exporter.service
+        template_content: "<present>"
+        mode: "0644"
+        owner: root
+        group: root
+
+    - module: core.service.running
+      params_subset:
+        name: node_exporter
+        enabled: true
+
+    # The main daemon is restarted reactively. params_subset: name=node_exporter
+    # disambiguates from the three collector restarted steps below (daemon name is unique).
+    - module: core.service.restarted
+      params_subset:
+        name: node_exporter
+
+    # ── collectors.yml: smartmon — module is present (when: stays in the plan,
+    #    computed on Soul). pkg is disambiguated by name. core.service.running of the timer
+    #    daemon-reloads when .timer changes (auto), but does NOT restart an already-running
+    #    .timer → a separate restarted step reactively restarts the timer whenever its
+    #    .service/.timer changes (new schedule/sandbox is picked up). ────────────────
+    - module: core.pkg.installed
+      params_subset:
+        name: smartmontools
+    - module: core.file.rendered
+      params_subset:
+        path: /etc/systemd/system/node-exporter-smartmon.service
+    - module: core.file.rendered
+      params_subset:
+        path: /etc/systemd/system/node-exporter-smartmon.timer
+    - module: core.service.running
+      params_subset:
+        name: node-exporter-smartmon.timer
+        enabled: true
+    - module: core.service.restarted
+      params_subset:
+        name: node-exporter-smartmon.timer
+    - module: core.file.absent
+      params_subset:
+        path: /etc/cron.d/node_exporter_smartmon
+
+    # ── nvme: nvme-cli + jq (two separate pkg tasks) + timer/running/restarted/
+    #    cron-cleanup ──────────────────────────────────────────────────────────────
+    - module: core.pkg.installed
+      params_subset:
+        name: nvme-cli
+    - module: core.pkg.installed
+      params_subset:
+        name: jq
+    - module: core.service.running
+      params_subset:
+        name: node-exporter-nvme.timer
+        enabled: true
+    - module: core.service.restarted
+      params_subset:
+        name: node-exporter-nvme.timer
+    - module: core.file.absent
+      params_subset:
+        path: /etc/cron.d/node_exporter_nvme
+
+    # ── ipmi: + udev rule + udev-reload + timer/running/restarted/cron-cleanup ──
+    - module: core.pkg.installed
+      params_subset:
+        name: ipmitool
+    - module: core.file.rendered
+      params_subset:
+        path: /lib/udev/rules.d/52-ipmi.rules
+        template_content: "<present>"
+        mode: "0644"
+    # The only core.exec.run in the plan (udev-reload). cmd: sh + args disambiguate it.
+    - module: core.exec.run
+      params_subset:
+        cmd: sh
+    - module: core.service.running
+      params_subset:
+        name: node-exporter-ipmitool.timer
+        enabled: true
+    - module: core.service.restarted
+      params_subset:
+        name: node-exporter-ipmitool.timer
+    - module: core.file.absent
+      params_subset:
+        path: /etc/cron.d/node_exporter_ipmitool

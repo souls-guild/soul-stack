@@ -1,0 +1,21 @@
+name: conditional-include
+description: >
+  Pilot conditional-include (ADR-009 amendment): include with a conditional STATIC
+  `when:`. base.yml is always included; cluster.yml — only when
+  `input.topology == 'cluster'`. On standalone, the cluster.yml group REALLY disappears
+  from the plan (render-phase group-drop, not a placeholder): its tasks are absent, the
+  index is not reserved. L0 cases verify this with a presence matcher (task_present/task_absent).
+
+input:
+  topology:
+    type: string
+    required: true
+    enum: [standalone, cluster]
+
+tasks:
+  # Base task — always in the plan.
+  - include: base.yml
+
+  # Cluster group — only for cluster topology (group-drop on standalone).
+  - include: cluster.yml
+    when: input.topology == 'cluster'

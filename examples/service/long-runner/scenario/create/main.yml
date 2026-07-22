@@ -1,0 +1,19 @@
+name: create
+description: >-
+  Initialization of the long-runner incarnation: writes a marker on every host. A quick
+  no-op-ish create so the incarnation exists and staggered/serial_waves can be run
+  against it later.
+
+state_changes:
+  - set: last_run
+    value: "create"
+  - set: runner_marker
+    value: /tmp/long-runner-init.txt
+
+tasks:
+  - name: Write init marker on every host
+    module: core.file.present
+    params:
+      path: /tmp/long-runner-init.txt
+      mode: "0644"
+      content: "long-runner init\n"

@@ -1,0 +1,167 @@
+# L0 trial update_config OVER a TLS instance. Paired guard to update-maxmemory-policy
+# (plaintext) — covers the TLS branch of the gate discriminator (compute.tls_on=true).
+# Render-only, hermetic.
+#
+# ★ Invariant (convention §7a, ADR-057 amendment): the TLS discriminator is read from
+# the NAMED incarnation.state.tls (state_schema v3), NOT from essence/redis_config.
+# When state.tls.enable=true, the hot-reload step (community.redis.config) must connect
+# over TLS: addr on state.tls.port, tls=true, tls_ca = PEM CA from vault(state.tls.ca_ref)
+# (current after rotate_tls, NOT the essence default). Otherwise a plaintext connect to a TLS-only
+# Redis fails CONFIG SET (and plaintext AUTH over an open plain port leaks the password).
+#
+# What we assert:
+#   1. redis.conf re-rendered with the new merged config (maxmemory changed; TLS directives
+#      PRESERVED from state.redis_config — update_config doesn't touch them, rotation is rotate_tls's job).
+#   2. hot-reload (community.redis.config): addr 127.0.0.1:7379 (TLS port from state.tls.port),
+#      tls=true, tls_ca = PEM CA, rewrite=false (NIM-53), config carries TLS directives (the plugin
+#      skips the startup-only tls-port via the denylist, applies the hot-settable tls-cert-file and
+#      regular directives).
+#   3. state_changes: redis_config ≡ the passed config (single compute).
+name: update_config over TLS hot-reloads on tls-port from incarnation.state
+
+fixtures:
+  default_destiny_source: "file://../../destiny/{name}"
+  soulprint:
+    network: { primary_ip: 10.0.0.6 }
+    os: { arch: amd64 }
+
+  # host-layout (conf_dir/data_dir/modules_base_url) — in essence (v11→v12, Option A):
+  # moved out of state, a re-run reads it from here.
+  essence:
+    memory_reserve_percent: 75
+    conf_dir: /etc/redis
+    data_dir: /var/lib/redis
+    modules_base_url: "https://artifacts.example.com/redis/modules"
+    persistence_presets:
+      rdb:
+        save: "900 1 300 10 60 10000"
+        appendonly: "no"
+
+  # Deployed incarnation.state v3 (from create with TLS): tls.enable=true + port 7379.
+  # state.tls.ca_ref — the CA source for the connection (vault() resolves the path to PEM).
+  state:
+    redis_type: sentinel
+    redis_version: "7.2.4"
+    tls:
+      enable:   true
+      only:     false
+      port:     7379
+      cert_ref: "secret/services/redis/tls#cert"
+      key_ref:  "secret/services/redis/tls#key"
+      ca_ref:   "secret/services/redis/tls#ca"
+    persistence: rdb
+    memory_mb: 1024
+    maxmemory_policy: allkeys-lru
+    redis_config:
+      maxmemory:        "768mb"
+      maxmemory-policy: allkeys-lru
+      save:             "900 1 300 10 60 10000"
+      appendonly:       "no"
+      tls-port:         "7379"
+      tls-cert-file:    /etc/redis/tls/redis.crt
+      tls-key-file:     /etc/redis/tls/redis.key
+      tls-ca-cert-file: /etc/redis/tls/ca.crt
+      tls-replication:  "yes"
+    redis_users: []
+
+  input:
+    # Delta: new memory budget (2048*75/100 = 1536mb).
+    memory_mb: 2048
+
+  vault:
+    secret/redis/update_config:
+      password: upd-redis-pass-16chars
+    # ★ default_admin REDESIGN: the system admin user — password from the users/default_admin branch
+    # (masterauth top-up into config + AUTH community.redis.config over TLS).
+    secret/redis/update_config/users/default_admin:
+      password: default-admin-secret-pass
+    secret/services/redis/tls:
+      ca: "-----BEGIN CERTIFICATE-----\nCACERT\n-----END CERTIFICATE-----"
+
+assert:
+  task_present:
+    # 1. redis.conf re-rendered: maxmemory 1536mb (new budget), TLS directives
+    #    preserved from state.redis_config (update_config doesn't touch them).
+    - module: core.file.rendered
+      params_subset:
+        path: /etc/redis/redis.conf
+        render_context:
+          vars:
+            conf_dir: /etc/redis
+            data_dir: /var/lib/redis
+            port: 6379
+            run_dir: /var/run/redis
+            log_dir: /var/log/redis
+            loadmodules:
+              - /var/lib/redis/modules/redisbloom.so
+              - /var/lib/redis/modules/rejson.so
+              - /var/lib/redis/modules/redisearch.so
+              - /var/lib/redis/modules/redistimeseries.so
+            config:
+              maxmemory: "1536mb"
+              maxmemory-policy: allkeys-lru
+              save: "900 1 300 10 60 10000"
+              appendonly: "no"
+              tls-port: "7379"
+              tls-cert-file: /etc/redis/tls/redis.crt
+              tls-key-file: /etc/redis/tls/redis.key
+              tls-ca-cert-file: /etc/redis/tls/ca.crt
+              tls-replication: "yes"
+              # ★ default_admin REDESIGN: static replica→master AUTH is topped up into
+              # apply.input.config → redis.conf carries masteruser/masterauth (failover-safe).
+              masteruser: default_admin
+              masterauth: default-admin-secret-pass
+          self:
+            sid: trial-host
+            covens: [update_config]
+            choirs: []
+            # traits — registry projection (ADR-060), an empty object with no labels.
+            traits: {}
+            role: ""
+            network:
+              primary_ip: 10.0.0.6
+            os:
+              arch: amd64
+          role: ""
+          essence: {}
+
+    # 2. HOT-RELOAD OVER TLS: community.redis.config, addr on the tls port (7379), tls=true,
+    #    tls_ca = PEM CA, rewrite=false (NIM-53: step 1's redis.conf is the file's source of truth).
+    #    config carries TLS directives — the plugin skips the startup-only tls-port (denylist),
+    #    applies hot-settable ones.
+    - module: community.redis.config
+      params_subset:
+        addr: "127.0.0.1:7379"
+        # ★ default_admin REDESIGN: AUTH under default_admin (username + its Vault password).
+        username: default_admin
+        password: default-admin-secret-pass
+        tls: true
+        tls_ca: "-----BEGIN CERTIFICATE-----\nCACERT\n-----END CERTIFICATE-----"
+        rewrite: false
+        # config — the PURE compute.redis_config WITHOUT masterauth top-up (hot-reload is only
+        # the operator delta; masteruser/masterauth are replication material, untouched).
+        config:
+          maxmemory: "1536mb"
+          maxmemory-policy: allkeys-lru
+          save: "900 1 300 10 60 10000"
+          appendonly: "no"
+          tls-port: "7379"
+          tls-cert-file: /etc/redis/tls/redis.crt
+          tls-key-file: /etc/redis/tls/redis.key
+          tls-ca-cert-file: /etc/redis/tls/ca.crt
+          tls-replication: "yes"
+
+  state_changes:
+    redis_config:
+      maxmemory: "1536mb"
+      maxmemory-policy: allkeys-lru
+      save: "900 1 300 10 60 10000"
+      appendonly: "no"
+      tls-port: "7379"
+      tls-cert-file: /etc/redis/tls/redis.crt
+      tls-key-file: /etc/redis/tls/redis.key
+      tls-ca-cert-file: /etc/redis/tls/ca.crt
+      tls-replication: "yes"
+    persistence: rdb
+    memory_mb: 2048
+    maxmemory_policy: allkeys-lru

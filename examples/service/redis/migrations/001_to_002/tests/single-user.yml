@@ -1,0 +1,10 @@
+name: single-user
+description: >
+  Single user: foreach over a one-element list, name becomes the map key.
+
+state_before:
+  redis_users: ["app"]
+
+state_after:
+  redis_users:
+    app: { perms: "off ~* &* +@all", state: "off" }

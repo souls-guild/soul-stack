@@ -1,0 +1,48 @@
+# Post-apply expectations for smoke-nginx-live::create (ADR-039 § Part D, L3b).
+#
+# apply_runs.status — the REAL enum value from keeper/internal/applyrun/applyrun.go
+# (StatusSuccess = "success"). The harness validates expectations fail-early via
+# harness.CheckApplyRunsStatusValid (see asserts.go).
+#
+# incarnation_state — deep-subset; here an exact match of state_changes.sets
+# from examples/service/smoke-nginx-live/scenario/create/main.yml.
+#
+# audit_events — at least one `incarnation.scenario_started` row matching the
+# apply_id. The exact event count isn't fixed (the apply_runs lifecycle writes
+# several audit rows, the contract test only checks presence of the key one).
+#
+# metrics — a Prometheus expression → a constraint string ('>= 1' / '== 0' / ...).
+#
+# host_state — container-side asserts (L3b-4). Read by the fixture YAML
+# loader (L3b-5, harness/expectations.go), applied via Stack.AssertExpectations:
+# packages → AssertHostPkgInstalled, services → AssertHostServiceActive,
+# files[].contains → AssertHostFileExists + AssertHostFileContent.
+apply_runs:
+  status: success
+
+incarnation_state:
+  nginx_package: installed
+  nginx_service: active
+  nginx_config_managed: true
+
+# POST /v1/incarnations auto-runs the create scenario and writes
+# `incarnation.created` (NOT scenario_started — that's only on an explicit RunScenario).
+audit_events:
+  - type: incarnation.created
+
+# keeper_scenario_runs_total{result="ok"} — the real metric of a successful run
+# (keeper/internal/scenario/metrics.go, closed enum ok/failed/locked). Parallel
+# to L3a (tests/e2e/smoke_nginx_test.go::AssertMetricGE). There is no
+# keeper_apply_runs_total metric in the code.
+metrics:
+  keeper_scenario_runs_total{result="ok"}: ">= 1"
+
+host_state:
+  - soul: soul-live-a.example.com
+    packages:
+      nginx: installed
+    services:
+      nginx: active
+    files:
+      - path: /etc/nginx/sites-available/default
+        contains: "server_name soul-live-a"

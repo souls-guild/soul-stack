@@ -1,0 +1,261 @@
+# L0 test for create in cluster mode WITH ACL USERS (coverage gap from qa
+# 2026-06-22). Proves that in cluster mode:
+#   1. users.acl renders from a MAP name->{perms,state,password} - the same
+#      deterministic map-render as standalone (range over map -> key
+#      sorting); cluster does not break the ACL pass.
+#   2. cluster directives in redis.conf COEXIST with ACL users - these are different
+#      files (users.acl and redis.conf), both rendered in one run.
+#   3. the per-user password is resolved by keeper-side vault() per the convention
+#      secret/redis/<inc>/users/<name>#password; in users.acl it is written as a HASH
+#      (sha256 in .tmpl), the plaintext password does NOT flow into config redis.conf and does NOT
+#      end up in someone else's key. Two users (zeta/alpha) with DIFFERENT passwords: the assert
+#      catches both the resolve and the absence of cross-leak.
+#
+# PRESENCE form (migrated from positional 2026-06-24): tasks are identified by
+# module + params_subset (the path disambiguator for users.acl<->redis.conf); indexes are not
+# compared (fragile - they shift on any destiny edit). render_context.vars.users
+# is compared entirely (deep-compare over the map): per-user passwords are isolated, cross-leak
+# = a value mismatch. The invariant "redis.conf has NO per-user password" holds
+# because params_subset redis.conf.vars does NOT list a single user secret -
+# the presence of the zeta/alpha password in config would only show up as an extra key
+# (the assert is partial), so a separate guard - task_absent below on the password itself
+# in a config cell is impossible (config is a map); the check runs via render_context
+# users.acl (the password must be there) + state_changes redis_users (the password
+# must NOT be there - the write-model stores only perms/state).
+#
+# Topology: shards=3, replicas_per_shard=0 -> 3 hosts (size-guard PASS).
+# render_context.self = the first host by SID (node-a, the host invariant of apply.input).
+name: cluster create renders per-user acl alongside cluster directives
+
+fixtures:
+  default_destiny_source: "file://../../destiny/{name}"
+  hosts:
+    - sid: node-b.example.com
+      covens: [create, redis]
+      soulprint:
+        network: { primary_ip: 10.0.0.2 }
+        os: { arch: amd64 }
+    - sid: node-c.example.com
+      covens: [create, redis]
+      soulprint:
+        network: { primary_ip: 10.0.0.3 }
+        os: { arch: amd64 }
+    - sid: node-a.example.com
+      covens: [create, redis]
+      soulprint:
+        network: { primary_ip: 10.0.0.1 }
+        os: { arch: amd64 }
+  vault:
+    secret/redis/create:
+      password: s3cr3t-redis-pass-create
+    # Per-user secrets of system users (secret/redis/<inc>/users/<name>#password) -
+    # resolved by keeper-side vault() when system_acl_users is merged into apply.input.users.
+    # * default_admin REDESIGN (2026-06-30): default_admin is the system user for intra-cluster
+    # AUTH (PING/cluster-build/masterauth deploy read its password from the same users/<name> branch).
+    secret/redis/create/users/default_admin:
+      password: default-admin-secret-pass
+    secret/redis/create/users/replica:
+      password: replica-sys-secret-pass
+    secret/redis/create/users/monitoring:
+      password: monitoring-sys-secret-pass
+    secret/redis/create/users/sentinel:
+      password: sentinel-sys-secret-pass
+    secret/redis/create/users/haproxy:
+      password: haproxy-sys-secret-pass
+    # Per-user secrets - DIFFERENT values: cross-leak (one user's password in another's
+    # line) is detected by asserting on the individual values.
+    secret/redis/create/users/zeta:
+      password: zeta-user-secret-pass
+    secret/redis/create/users/alpha:
+      password: alpha-user-secret-pass
+  essence:
+    redis_type: cluster
+    modules_base_url: "https://artifacts.example.com/redis/modules"
+    memory_reserve_percent: 75
+    persistence_presets:
+      rdb:
+        save: "900 1 300 10 60 10000"
+        appendonly: "no"
+    redis_config:
+      maxmemory:        "256mb"
+      maxmemory-policy: allkeys-lru
+      maxclients:       10000
+      timeout:          300
+
+    # System ACL users of redis-server (1:1 from essence/_default.yaml). REQUIRED:
+    # guard create/cluster.yml (assert 1b) aborts the render when system_acl_users is empty
+    # (a silent fail-open is unacceptable - without them replication/health-check would break).
+    # * default_admin REDESIGN (2026-06-30): default_admin is the full-access system user
+    # (~* &* +@all), it backs intra-cluster AUTH (replaced requirepass-default).
+    system_acl_users:
+      default_admin: "~* &* +@all"
+      replica:    "+psync +replconf +ping"
+      monitoring: "-@all +@connection +client +ping +info +config|get +cluster|info +slowlog +latency +memory +select +command|count +command|docs"
+      sentinel:   "allchannels +multi +slaveof +ping +exec +subscribe +config|rewrite +role +publish +info +client|setname +client|kill +script|kill"
+      haproxy:    "-@all +auth +client|getname +client|id +client|setname +command +hello +ping +role +info +cluster|info"
+  input:
+    # * provision disabled (default-on: an omitted section = ENABLED; this case deploys onto
+    # a READY roster, cloud-create is not needed) -> include redis-provision.yml group-drop.
+    provision:
+      enabled: false
+    redis_type: cluster
+    # version is REQUIRED (user directive 2026-06-23): a fixed
+    # distro-native pin (major < 8 -> the module version-gate is not active).
+    version: "7.4.1"
+    shards: 3
+    replicas_per_master: 0
+    cluster_node_timeout: 5000
+    users:
+      - { name: zeta, perms: "~* +@all", state: "on" }
+      - { name: alpha, perms: "~app:* +@read +@write", state: "on" }
+
+assert:
+  # mode-guard (cluster is implemented -> no-op) and size-guard (assert: PASS, not a task)
+  # take no positions and are NOT asserted - task presence is checked by attributes.
+  task_present:
+    # users.acl: MAP name->{perms,state,password} with per-user vault passwords.
+    # zeta/alpha - each with its OWN resolved password (no cross-leak). vars.users
+    # is compared entirely (deep-compare). Disambiguator from redis.conf (the same
+    # core.file.rendered, the same when) - path in params_subset + register anchor.
+    - module: core.file.rendered
+      id: redis_acl
+      params_subset:
+        path: /etc/redis/users.acl
+        template_content: "<present>"
+        mode: "0640"
+        owner: redis
+        group: redis
+        render_context:
+          vars:
+            # SYSTEM (5, from essence.system_acl_users, merged in MANDATORY - guard 1b)
+            # + operator-extra zeta/alpha (last-wins). Names do not overlap with system ones.
+            # * default_admin REDESIGN: default_admin (~* &* +@all) is a system user, rendered
+            # via range like the others (Vault password from the users/default_admin branch).
+            users:
+              default_admin:
+                perms: "~* &* +@all"
+                state: "on"
+                password: default-admin-secret-pass
+              replica:
+                perms: "+psync +replconf +ping"
+                state: "on"
+                password: replica-sys-secret-pass
+              monitoring:
+                perms: "-@all +@connection +client +ping +info +config|get +cluster|info +slowlog +latency +memory +select +command|count +command|docs"
+                state: "on"
+                password: monitoring-sys-secret-pass
+              sentinel:
+                perms: "allchannels +multi +slaveof +ping +exec +subscribe +config|rewrite +role +publish +info +client|setname +client|kill +script|kill"
+                state: "on"
+                password: sentinel-sys-secret-pass
+              haproxy:
+                perms: "-@all +auth +client|getname +client|id +client|setname +command +hello +ping +role +info +cluster|info"
+                state: "on"
+                password: haproxy-sys-secret-pass
+              zeta:
+                perms: "~* +@all"
+                state: "on"
+                password: zeta-user-secret-pass
+              alpha:
+                perms: "~app:* +@read +@write"
+                state: "on"
+                password: alpha-user-secret-pass
+          self:
+            sid: node-a.example.com
+            covens: [create, redis]
+            choirs: []
+            # traits - a registry projection (ADR-060), an empty object without labels.
+            traits: {}
+            role: ""
+            network:
+              primary_ip: 10.0.0.1
+            os:
+              arch: amd64
+          role: ""
+          essence: {}
+
+    # redis.conf: cluster directives COEXIST with ACL (different files). config has
+    # NO per-user password (it is only in users.acl, hashed). Disambiguator from
+    # users.acl - path + register anchor redis_conf.
+    - module: core.file.rendered
+      id: redis_conf
+      params_subset:
+        path: /etc/redis/redis.conf
+        template_content: "<present>"
+        mode: "0640"
+        owner: redis
+        group: redis
+        render_context:
+          vars:
+            conf_dir: /etc/redis
+            data_dir: /var/lib/redis
+            port: 6379
+            run_dir: /var/run/redis
+            log_dir: /var/log/redis
+            loadmodules:
+              - /var/lib/redis/modules/redisbloom.so
+              - /var/lib/redis/modules/rejson.so
+              - /var/lib/redis/modules/redisearch.so
+              - /var/lib/redis/modules/redistimeseries.so
+            config:
+              # * default_admin REDESIGN: replica->master AUTH (masteruser/masterauth)
+              # comes as REGULAR config directives (the cluster deploy-body merges them
+              # via vault()-in-cell). The per-user password is NOT in config (only in users.acl).
+              masteruser:       "default_admin"
+              masterauth:       "default-admin-secret-pass"
+              maxmemory:        "256mb"
+              maxmemory-policy: allkeys-lru
+              maxclients:       10000
+              timeout:          300
+              save:             "900 1 300 10 60 10000"
+              appendonly:       "no"
+              cluster-enabled:      "yes"
+              cluster-config-file:  "nodes.conf"
+              cluster-node-timeout: "5000"
+          self:
+            sid: node-a.example.com
+            covens: [create, redis]
+            choirs: []
+            # traits - a registry projection (ADR-060), an empty object without labels.
+            traits: {}
+            role: ""
+            network:
+              primary_ip: 10.0.0.1
+            os:
+              arch: amd64
+          role: ""
+          essence: {}
+
+  task_absent:
+    # GUARD "cluster does NOT deploy the sentinel daemon": include tasks/sentinel.yml
+    # is gated on input.sentinel_enabled (absent -> conditional-include group-drop):
+    # sentinel.conf and the daemon are PHYSICALLY absent from the plan (the include is dropped entirely, not a
+    # placeholder). presence task_absent catches the absence. A regression "sentinel leaked into
+    # cluster" = a task with real params.
+    - module: core.file.rendered
+      params_subset:
+        path: /etc/redis/sentinel.conf
+    - module: core.service.running
+      params_subset:
+        name: redis-sentinel
+
+  state_changes:
+    redis_type: cluster
+    redis_version: "7.4.1"
+    redis_config:
+      maxmemory:        "256mb"
+      maxmemory-policy: allkeys-lru
+      maxclients:       10000
+      timeout:          300
+      save:             "900 1 300 10 60 10000"
+      appendonly:       "no"
+      cluster-enabled:      "yes"
+      cluster-config-file:  "nodes.conf"
+      cluster-node-timeout: "5000"
+    # ACL users in state - an ARRAY AclUser [{name,perms,state}] (WITHOUT the password; it is
+    # keeper-side vault). wave 1b: order = order of input.users (state stores the array as-is).
+    # GUARD "per-user password NOT in state": deep-compare redis_users without password.
+    redis_users:
+      - { name: zeta, perms: "~* +@all", state: "on" }
+      - { name: alpha, perms: "~app:* +@read +@write", state: "on" }
+    redis_hosts: []

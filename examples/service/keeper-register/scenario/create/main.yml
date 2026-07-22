@@ -1,0 +1,50 @@
+name: create
+description: >-
+  Binds a Coven label to the given Soul via the keeper-side core module
+  core.soul.registered (on: keeper). The step runs on the keeper instance: it
+  doesn't target hosts, doesn't read soulprint — it takes sid/coven from input. Proves
+  keeper-side dispatch (ADR-017, docs/keeper/modules.md).
+
+# Typed input (docs/input.md).
+input:
+  # SID of the Soul the label is bound to. On E2E this is the SID of the connected
+  # soul-stub (FQDN).
+  soul_sid:
+    type: string
+    required: true
+    format: fqdn
+    description: SID of the Soul for coven binding by the keeper-side step.
+
+  # Coven label that the keeper step adds (mode: append) to the Soul's
+  # existing labels in the souls registry.
+  coven_label:
+    type: string
+    required: true
+    pattern: "^[a-z][a-z0-9-]*$"
+    description: Coven label added by the keeper-side step.
+
+# The service writes nothing to incarnation.state: the keeper step mutates the souls registry.
+state_changes: {}
+
+tasks:
+  # Keeper-side step: binds coven to the Soul in the registry. on: keeper → runs on
+  # the keeper instance. mode: append — adds the label to the ones already bound (the root
+  # coven incarnation, set during onboarding, is preserved).
+  - name: Bind the coven label to the soul on the keeper
+    on: keeper
+    module: core.soul.registered
+    register: registered
+    params:
+      sid:   "${ input.soul_sid }"
+      coven: ["${ input.coven_label }"]
+      mode:  append
+
+  # Soul-side step on incarnation hosts: gives every connected host a real
+  # task so the roster host closes success (not no_match as off-target). By
+  # itself it's a read-only no-op — the test's focus is the keeper-side step above.
+  - name: Echo on every host of the incarnation
+    module: core.exec.run
+    changed_when: "false"
+    params:
+      cmd: echo
+      args: ["keeper-register-ok"]

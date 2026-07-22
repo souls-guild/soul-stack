@@ -1,0 +1,86 @@
+# L0 test NIM-58 (ACCEPT when provision is disabled): incarnation name "9redis"
+# is an INVALID VM base name (leading digit), BUT provision.enabled=false, so
+# the include redis-provision.yml (and the guard-assert inside it) gets
+# group-dropped via include-when `has(input.provision) &&
+# input.provision.enabled`, so the guard is NOT evaluated. The run takes the
+# regular sentinel branch over the existing roster: render SUCCEEDS, no cloud
+# steps. Proves the guard gates ONLY the provision path (name-domain mismatch
+# only matters when the name actually reaches CloudDriver).
+#
+# * Paired with provision-badname-rejected (there enabled means the guard
+# blocks the render). vault/covens under "9redis": deploy reads
+# secret/redis/9redis/*, coven=incarnation.name.
+name: bad VM-base incarnation name is accepted when provision is disabled
+
+fixtures:
+  incarnation_name: "9redis"
+  default_destiny_source: "file://../../destiny/{name}"
+  hosts:
+    - sid: node-solo.example.com
+      covens: [9redis]
+      soulprint:
+        network: { primary_ip: 10.0.0.5 }
+        os: { arch: amd64 }
+  vault:
+    secret/redis/9redis:
+      password: s3cr3t-redis-pass-create
+    secret/redis/9redis/users/default_admin:
+      password: default-admin-secret-pass
+    secret/redis/9redis/users/replica:
+      password: replica-sys-secret-pass
+    secret/redis/9redis/users/monitoring:
+      password: monitoring-sys-secret-pass
+    secret/redis/9redis/users/sentinel:
+      password: sentinel-sys-secret-pass
+    secret/redis/9redis/users/haproxy:
+      password: haproxy-sys-secret-pass
+  essence:
+    install_method: package
+    redis_type: sentinel
+    sentinel_master_name: master
+    modules_base_url: "https://artifacts.example.com/redis/modules"
+    memory_reserve_percent: 75
+    persistence_presets:
+      rdb:
+        save: "900 1 300 10 60 10000"
+        appendonly: "no"
+    redis_config:
+      maxmemory:        "256mb"
+      maxmemory-policy: allkeys-lru
+      maxclients:       10000
+      timeout:          300
+    system_acl_users:
+      default_admin: "~* &* +@all"
+      replica:    "+psync +replconf +ping"
+      monitoring: "-@all +@connection +client +ping +info +config|get +cluster|info +slowlog +latency +memory +select +command|count +command|docs"
+      sentinel:   "allchannels +multi +slaveof +ping +exec +subscribe +config|rewrite +role +publish +info +client|setname +client|kill +script|kill"
+      haproxy:    "-@all +auth +client|getname +client|id +client|setname +command +hello +ping +role +info +cluster|info"
+    system_acl_users_sentinel:
+      default_admin: "allchannels allkeys +@all"
+      monitoring: "-@all +@connection -command +client -hello +info -auth +sentinel|masters +sentinel|replicas +sentinel|slaves +sentinel|sentinels +sentinel|ckquorum"
+      sentinel:   "allchannels -@all +auth +client|getname +client|id +client|setname +command +hello +ping +sentinel|is-master-down-by-addr +publish +role +sentinel|get-master-addr-by-name +sentinel|master +sentinel|myid +sentinel|replicas +sentinel|sentinels"
+      haproxy:    "-@all +auth +client|getname +client|id +client|setname +command +hello +ping +role +sentinel|get-master-addr-by-name +sentinel|master +sentinel|myid +sentinel|replicas +sentinel|sentinels"
+  input:
+    redis_type: sentinel
+    version: "7.4.1"
+    replicas_per_master: 0
+    persistence: rdb
+    provision:
+      enabled: false
+
+assert:
+  task_present:
+    # The regular sentinel branch runs over the existing roster: redis.conf is rendered.
+    - module: core.file.rendered
+      params_subset:
+        path: /etc/redis/redis.conf
+  task_absent:
+    # guard-assert is group-dropped along with all of redis-provision.yml, so no cloud steps.
+    - module: core.cloud.created
+    - module: core.soul.registered
+  state_changes:
+    redis_type: sentinel
+    redis_version: "7.4.1"
+    provisioned_vm_ids: []
+    provisioned_sids: []
+    provisioned_provider: ""

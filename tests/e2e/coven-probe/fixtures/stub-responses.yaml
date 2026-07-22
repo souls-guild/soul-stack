@@ -1,0 +1,14 @@
+# Response script for the soul-stub in coven-probe::create.
+#
+# The scenario writes the init marker /tmp/coven-init.txt via core.file.present.
+# state_changes.sets: marker_file=/tmp/coven-init.txt, last_target="create".
+scenarios:
+  create:
+    apply_responses:
+      - task_name: "Write init marker on every host of the incarnation"
+        run_result:
+          status: success
+          state_changes:
+            files:
+              - path: /tmp/coven-init.txt
+                state: present

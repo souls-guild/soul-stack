@@ -1,0 +1,309 @@
+package util_test
+
+import (
+	"context"
+	"net"
+	"net/http"
+	stdurl "net/url"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/souls-guild/soul-stack/soul/internal/coremod/util"
+)
+
+// netguardBlocked recognizes an SSRF-guard denial (netguard.blockedErr) by
+// text: a guarded dial to metadata is rejected synchronously with this
+// signature, whereas with the guard lifted, dial fails with a network
+// error/timeout without it.
+func netguardBlocked(err error) bool {
+	return err != nil && strings.Contains(err.Error(), "ssrf-guard blocked")
+}
+
+// Exhaustive coverage of the SSRF-guard logic (IP classifier,
+// guardedDialContext with rebind / multi-IP cases, redirect-downgrade,
+// https-only) lives in shared/netguard. Here — util's public wrappers for
+// core.url / core.http: delegation is wired up and working, guard plumbing
+// in NewHTTPClient is in place.
+
+// mkRedirReq builds a minimal *http.Request with just a URL — CheckRedirect
+// only looks at req.URL.Scheme/Host.
+func mkRedirReq(t *testing.T, raw string) *http.Request {
+	t.Helper()
+	u, err := stdurl.Parse(raw)
+	if err != nil {
+		t.Fatalf("parse %q: %v", raw, err)
+	}
+	return &http.Request{URL: u}
+}
+
+func TestCheckRedirect(t *testing.T) {
+	t.Run("https -> https ok", func(t *testing.T) {
+		if err := util.CheckRedirect(mkRedirReq(t, "https://ok.example/x"), nil); err != nil {
+			t.Errorf("CheckRedirect rejected a valid https: %v", err)
+		}
+	})
+
+	t.Run("https -> non-https reject", func(t *testing.T) {
+		for _, raw := range []string{
+			"http://evil.example/x",
+			"ftp://evil.example/x",
+			"file:///etc/passwd",
+		} {
+			if err := util.CheckRedirect(mkRedirReq(t, raw), nil); err == nil {
+				t.Errorf("CheckRedirect let a downgrade to %q through", raw)
+			}
+		}
+	})
+
+	t.Run("redirect limit reject", func(t *testing.T) {
+		via := make([]*http.Request, util.MaxRedirects)
+		if err := util.CheckRedirect(mkRedirReq(t, "https://ok.example/x"), via); err == nil {
+			t.Fatalf("CheckRedirect didn't stop the chain at the limit %d", util.MaxRedirects)
+		}
+		via = make([]*http.Request, util.MaxRedirects-1)
+		if err := util.CheckRedirect(mkRedirReq(t, "https://ok.example/x"), via); err != nil {
+			t.Fatalf("CheckRedirect rejected a chain shorter than the limit: %v", err)
+		}
+	})
+}
+
+func TestValidateURL(t *testing.T) {
+	t.Run("https ok", func(t *testing.T) {
+		for _, raw := range []string{"https://ok.example/x", "HTTPS://ok.example/x"} {
+			if err := util.ValidateURL(raw); err != nil {
+				t.Errorf("ValidateURL rejected a valid https %q: %v", raw, err)
+			}
+		}
+	})
+
+	t.Run("non-https reject", func(t *testing.T) {
+		for _, raw := range []string{"http://evil.example/x", "ftp://evil.example/x", "file:///etc/passwd"} {
+			if err := util.ValidateURL(raw); err == nil {
+				t.Errorf("ValidateURL let a non-https %q through", raw)
+			}
+		}
+	})
+
+	t.Run("malformed url reject", func(t *testing.T) {
+		if err := util.ValidateURL("https://ok.example/\x7f"); err == nil {
+			t.Fatal("ValidateURL let a malformed URL through")
+		}
+	})
+}
+
+func TestIsBlockedIP(t *testing.T) {
+	for _, s := range []string{"169.254.169.254", "127.0.0.1", "10.0.0.5", "100.64.0.1", "::1", "fc00::1"} {
+		if !util.IsBlockedIP(net.ParseIP(s)) {
+			t.Errorf("IsBlockedIP(%q)=false, expected a block", s)
+		}
+	}
+	for _, s := range []string{"8.8.8.8", "1.1.1.1", "2606:4700:4700::1111"} {
+		if util.IsBlockedIP(net.ParseIP(s)) {
+			t.Errorf("IsBlockedIP(%q)=true, expected a pass", s)
+		}
+	}
+}
+
+func TestNewHTTPClient_GuardWiring(t *testing.T) {
+	// Zero-value opts = the old NewHTTPClient(false): a maximally safe
+	// client. Verifying behavioral equivalence.
+	t.Run("zero opts: DialContext set + downgrade protection + TLS default", func(t *testing.T) {
+		c := util.NewHTTPClient(util.HTTPClientOpts{})
+		tr, ok := c.Transport.(*http.Transport)
+		if !ok {
+			t.Fatalf("Transport is not *http.Transport: %T", c.Transport)
+		}
+		if tr.DialContext == nil {
+			t.Fatal("AllowPrivate=false: DialContext not set - SSRF-guard disabled")
+		}
+		if tr.TLSClientConfig != nil && tr.TLSClientConfig.InsecureSkipVerify {
+			t.Fatal("zero opts: InsecureSkipVerify set without being requested")
+		}
+		if c.CheckRedirect == nil {
+			t.Fatal("CheckRedirect not set (downgrade protection disabled)")
+		}
+		if err := c.CheckRedirect(mkRedirReq(t, "http://evil.example/x"), nil); err == nil {
+			t.Fatal("NewHTTPClient.CheckRedirect let a https->http downgrade through")
+		}
+		// Guard is actually wired in: a literal metadata IP never reaches dial.
+		if _, err := tr.DialContext(context.Background(), "tcp", "169.254.169.254:443"); !netguardBlocked(err) {
+			t.Fatalf("guard didn't block a dial to metadata: %v", err)
+		}
+	})
+
+	t.Run("AllowPrivate: guard lifted, downgrade protection retained", func(t *testing.T) {
+		c := util.NewHTTPClient(util.HTTPClientOpts{AllowPrivate: true})
+		tr, ok := c.Transport.(*http.Transport)
+		if !ok {
+			t.Fatalf("Transport is not *http.Transport: %T", c.Transport)
+		}
+		// http.DefaultTransport.Clone() carries a non-nil default DialContext;
+		// with AllowPrivate=true we do NOT wrap it with netguard. Verifying
+		// behaviorally: guard lifted — the metadata IP isn't rejected at
+		// dial's check phase (the connection actually attempts to establish
+		// and fails over the network, not via a netguard block). Without the
+		// guard, the error is NOT a netguard verdict.
+		if tr.DialContext == nil {
+			t.Fatal("AllowPrivate=true: DialContext nil - default dialer lost")
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+		defer cancel()
+		_, derr := tr.DialContext(ctx, "tcp", "169.254.169.254:1")
+		if derr != nil && netguardBlocked(derr) {
+			t.Fatalf("AllowPrivate=true: guard was NOT lifted, dial rejected by netguard: %v", derr)
+		}
+		if c.CheckRedirect == nil {
+			t.Fatal("AllowPrivate=true: redirect downgrade protection lost")
+		}
+		if err := c.CheckRedirect(mkRedirReq(t, "http://evil.example/x"), nil); err == nil {
+			t.Fatal("AllowPrivate=true: https->http downgrade protection must not be lifted")
+		}
+	})
+
+	t.Run("InsecureSkipVerify: TLSClientConfig.InsecureSkipVerify=true, rest intact", func(t *testing.T) {
+		c := util.NewHTTPClient(util.HTTPClientOpts{InsecureSkipVerify: true})
+		tr, ok := c.Transport.(*http.Transport)
+		if !ok {
+			t.Fatalf("Transport is not *http.Transport: %T", c.Transport)
+		}
+		if tr.TLSClientConfig == nil || !tr.TLSClientConfig.InsecureSkipVerify {
+			t.Fatal("InsecureSkipVerify=true: transport.TLSClientConfig.InsecureSkipVerify not set")
+		}
+		if tr.DialContext == nil {
+			t.Fatal("InsecureSkipVerify must not lift the SSRF-guard")
+		}
+		if err := c.CheckRedirect(mkRedirReq(t, "http://evil.example/x"), nil); err == nil {
+			t.Fatal("InsecureSkipVerify must not lift redirect downgrade protection")
+		}
+	})
+
+	t.Run("AllowHTTPRedirect: http-hop allowed, non-http(s) rejected", func(t *testing.T) {
+		c := util.NewHTTPClient(util.HTTPClientOpts{AllowHTTPRedirect: true})
+		if c.CheckRedirect == nil {
+			t.Fatal("AllowHTTPRedirect: CheckRedirect not set")
+		}
+		if err := c.CheckRedirect(mkRedirReq(t, "http://ok.example/x"), nil); err != nil {
+			t.Fatalf("AllowHTTPRedirect=true: http-hop should be allowed, got %v", err)
+		}
+		if err := c.CheckRedirect(mkRedirReq(t, "https://ok.example/x"), nil); err != nil {
+			t.Fatalf("AllowHTTPRedirect=true: https-hop should be allowed, got %v", err)
+		}
+		if err := c.CheckRedirect(mkRedirReq(t, "file:///etc/passwd"), nil); err == nil {
+			t.Fatal("AllowHTTPRedirect=true: a non-http(s) scheme should be rejected")
+		}
+		// SSRF-guard is in place: AllowHTTPRedirect doesn't open up private.
+		tr := c.Transport.(*http.Transport)
+		if tr.DialContext == nil {
+			t.Fatal("AllowHTTPRedirect must not lift the SSRF-guard")
+		}
+	})
+
+	t.Run("AllowHTTPRedirect off: https->http downgrade rejected (netguard)", func(t *testing.T) {
+		c := util.NewHTTPClient(util.HTTPClientOpts{})
+		if err := c.CheckRedirect(mkRedirReq(t, "http://ok.example/x"), nil); err == nil {
+			t.Fatal("AllowHTTPRedirect=false: https->http downgrade should be rejected")
+		}
+	})
+}
+
+func TestValidateFetchURL(t *testing.T) {
+	t.Run("allowHTTP=false: https only", func(t *testing.T) {
+		for _, raw := range []string{"https://ok.example/x", "HTTPS://ok.example/x"} {
+			if err := util.ValidateFetchURL(raw, false); err != nil {
+				t.Errorf("ValidateFetchURL(%q, false) rejected a valid https: %v", raw, err)
+			}
+		}
+		for _, raw := range []string{"http://evil.example/x", "ftp://evil.example/x", "file:///etc/passwd"} {
+			if err := util.ValidateFetchURL(raw, false); err == nil {
+				t.Errorf("ValidateFetchURL(%q, false) let a non-https through", raw)
+			}
+		}
+	})
+
+	t.Run("allowHTTP=true: http and https ok, rest rejected", func(t *testing.T) {
+		for _, raw := range []string{"http://ok.example/x", "HTTP://ok.example/x", "https://ok.example/x", "HTTPS://ok.example/x"} {
+			if err := util.ValidateFetchURL(raw, true); err != nil {
+				t.Errorf("ValidateFetchURL(%q, true) rejected a valid http(s): %v", raw, err)
+			}
+		}
+		for _, raw := range []string{"file:///etc/passwd", "ftp://evil.example/x", "gopher://evil.example"} {
+			if err := util.ValidateFetchURL(raw, true); err == nil {
+				t.Errorf("ValidateFetchURL(%q, true) let a non-http(s) through", raw)
+			}
+		}
+	})
+
+	t.Run("allowHTTP=true: malformed URL rejected", func(t *testing.T) {
+		if err := util.ValidateFetchURL("http://ok.example/\x7f", true); err == nil {
+			t.Fatal("ValidateFetchURL let a malformed URL through")
+		}
+	})
+}
+
+func TestWarnHost(t *testing.T) {
+	t.Run("host without scheme/path/query", func(t *testing.T) {
+		if got := util.WarnHost("https://svc.internal:8443/secret?token=leak"); got != "svc.internal:8443" {
+			t.Fatalf("WarnHost=%q want svc.internal:8443", got)
+		}
+	})
+	t.Run("malformed URL -> ?", func(t *testing.T) {
+		if got := util.WarnHost("::not-a-url"); got != "?" {
+			t.Fatalf("WarnHost=%q want ?", got)
+		}
+	})
+}
+
+func TestGuardWarnings(t *testing.T) {
+	t.Run("zero flags -> nil", func(t *testing.T) {
+		if w := util.GuardWarnings("h", util.HTTPClientOpts{}); w != nil {
+			t.Fatalf("warnings without any guards lifted: %v", w)
+		}
+	})
+
+	t.Run("each flag -> its own wording with host", func(t *testing.T) {
+		cases := []struct {
+			opts util.HTTPClientOpts
+			want string
+		}{
+			{util.HTTPClientOpts{InsecureSkipVerify: true}, "TLS verification disabled (insecure_skip_verify) for host.example"},
+			{util.HTTPClientOpts{AllowHTTPRedirect: true}, "plaintext http allowed (allow_http) for host.example"},
+			{util.HTTPClientOpts{AllowPrivate: true}, "SSRF-guard disabled (allow_private) for host.example"},
+		}
+		for _, c := range cases {
+			w := util.GuardWarnings("host.example", c.opts)
+			if len(w) != 1 || w[0] != c.want {
+				t.Fatalf("GuardWarnings=%v want [%q]", w, c.want)
+			}
+		}
+	})
+
+	t.Run("all three -> deterministic order", func(t *testing.T) {
+		w := util.GuardWarnings("h", util.HTTPClientOpts{
+			AllowPrivate: true, InsecureSkipVerify: true, AllowHTTPRedirect: true,
+		})
+		want := []string{
+			"TLS verification disabled (insecure_skip_verify) for h",
+			"plaintext http allowed (allow_http) for h",
+			"SSRF-guard disabled (allow_private) for h",
+		}
+		if len(w) != len(want) {
+			t.Fatalf("len=%d want %d: %v", len(w), len(want), w)
+		}
+		for i := range want {
+			if w[i] != want[i] {
+				t.Fatalf("warnings[%d]=%q want %q", i, w[i], want[i])
+			}
+		}
+	})
+}
+
+func TestStringsToAny(t *testing.T) {
+	got := util.StringsToAny([]string{"a", "b"})
+	if len(got) != 2 || got[0] != "a" || got[1] != "b" {
+		t.Fatalf("StringsToAny=%v", got)
+	}
+	if got := util.StringsToAny(nil); len(got) != 0 {
+		t.Fatalf("StringsToAny(nil) is not empty: %v", got)
+	}
+}

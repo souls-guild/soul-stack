@@ -1,0 +1,48 @@
+{
+  "type": "object",
+  "required": ["vault_addr", "role"],
+  "properties": {
+    "vault_addr": {
+      "type": "string",
+      "pattern": "^https?://",
+      "examples": ["https://vault.internal:8200"]
+    },
+    "vault_mount": {
+      "type": "string",
+      "default": "ssh",
+      "examples": ["ssh", "ssh-client-signer"]
+    },
+    "role": {
+      "type": "string",
+      "examples": ["keeper-push"]
+    },
+    "auth_method": {
+      "type": "string",
+      "enum": ["token", "approle"],
+      "default": "token"
+    },
+    "token": { "type": "string" },
+    "approle": {
+      "type": "object",
+      "properties": {
+        "role_id":   { "type": "string" },
+        "secret_id": { "type": "string" },
+        "mount":     { "type": "string", "default": "approle" }
+      }
+    },
+    "valid_principals": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "deny": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "host": { "type": "string" },
+          "user": { "type": "string" }
+        }
+      }
+    }
+  }
+}

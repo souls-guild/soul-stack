@@ -1,0 +1,34 @@
+kind: soul_module
+protocol_version: 1
+namespace: core
+name: line
+
+required_capabilities:
+  - fs_write_root
+
+spec:
+  states:
+    present:
+      description: The line is present in the file (with regexp — replaces the first matching line); ADR-015.
+      input:
+        path:         { type: string, required: true, description: "Target file." }
+        # line is required for present, but not for absent — the cross-field invariant
+        # is checked by Module.Validate (not expressible as per-state manifest-required).
+        line:         { type: string, description: "Exact line being managed (required for present)." }
+        regexp:       { type: string, description: "RE2 pattern: the first matching line is replaced with line." }
+        insertafter:  { type: string, description: "Literal anchor or EOF — where to insert (mutually exclusive with insertbefore)." }
+        insertbefore: { type: string, description: "Literal anchor or BOF — where to insert (mutually exclusive with insertafter)." }
+        create:       { type: bool,   description: "Create the file if it doesn't exist." }
+        mode:         { type: string, description: "Permissions on create, octal form, e.g. \"0644\"." }
+        owner:        { type: string, description: "Owner on create (username)." }
+        group:        { type: string, description: "Owner group on create (group name)." }
+    absent:
+      description: Removes matching lines (by regexp — all; otherwise by exact line).
+      input:
+        path:   { type: string, required: true, description: "Target file." }
+        line:   { type: string, description: "Exact line to remove (either line or regexp is required)." }
+        regexp: { type: string, description: "RE2 pattern: all matching lines are removed." }
+        create: { type: bool,   description: "Create the file if it doesn't exist." }
+        mode:   { type: string, description: "Permissions on create, octal form." }
+        owner:  { type: string, description: "Owner on create (username)." }
+        group:  { type: string, description: "Owner group on create (group name)." }

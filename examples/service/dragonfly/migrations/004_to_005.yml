@@ -1,0 +1,29 @@
+from_version: 4
+to_version: 5
+
+description: >-
+  state_schema v4 -> v5: mandatory data-plane monitoring (Slice II, ADR-024).
+  state is AUGMENTED with the monitoring read-model object — the pinned version and
+  listen port of the host metrics exporter (node_exporter), deployed by the create run (mirrors
+  the install/tls read-model). * node-exporter-ONLY: DragonFly exposes ITS OWN metrics natively
+  (built-in prometheus endpoint) -> a data-plane exporter (analogous to redis_exporter) is NOT
+  installed, so there's no field for it in monitoring.
+
+  Forward-only (down: not supported; recovery — via state_history). Existing
+  v4 incarnations were deployed BEFORE monitoring was introduced (no exporter yet) -> conservative
+  default: an empty version ('' = "not deployed", best-effort like memory_mb), the port — the
+  conventional :9100 (node_exporter's standard listen; the next create will overwrite it with the
+  value from essence). ONE flat set with a has()-guard on the WHOLE object (CEL map-literal
+  default): monitoring already present -> kept as-is (idempotent on reruns), otherwise the
+  default is set. Mirrors redis 012_to_013 (object-guard). The rest of state is untouched.
+
+transform:
+  - set:
+      path: state.monitoring
+      value: >-
+        ${ has(state.monitoring)
+             ? state.monitoring
+             : {
+                 'node_exporter_version': '',
+                 'node_exporter_listen':  ':9100'
+               } }

@@ -1,0 +1,229 @@
+# covenant.yml — a reusable shared contract for the mongo scenario sections (PILOT).
+#
+# Carries ONLY the shared contract of the FOUR sections: input / compute / state_changes /
+# validate (shared/config ScenarioFragment). name/tasks/create/form/extends — NOT here
+# (covenant is a contract, not an executable scenario). A scenario plugs in the fragment
+# via `extends: covenant` and ADDS its own delta add-only (covenant is the BASE, the delta
+# does NOT override covenant keys, otherwise section_key_conflict). The keeper-side
+# resolver merges covenant FIRST.
+#
+# ★ PILOT (standalone): WITHOUT a provision section (deploy onto existing hosts, symmetry
+# with dragonfly PILOT). destroy — Soul-side teardown, cloud-cascade and provisioned_*
+# state fields are NOT introduced (provision default-on + dragonfly-style cascade — NEXT
+# slice).
+
+# ── Operator input contract (docs/input.md) ────────────────────────────────
+# Simple typed concepts. Translation into mongod.conf — in compute below.
+input:
+  # ── version: fixed-enum of MongoDB BINARY versions (Nexus) ────────────────────
+  # ★ Symmetry with redis: version — ENUM of fixed upstream versions from Nexus
+  # (essence.install_method=binary by default pulls EXACTLY these binaries). required
+  # (needed ALWAYS: binary is the default install method, the version determines the
+  # binary path; the package branch pins =version of the distro package of the same
+  # series). The set is the current MongoDB series.
+  version:
+    type: string
+    required: true
+    enum: ["8.0.4", "7.0.15", "6.0.19"]
+    description: >-
+      MongoDB version (fixed set of binaries from Nexus). The binary install method
+      (essence.install_method, default) pulls the mongod binary of this version from
+      Nexus; the package method pins =version of the mongodb-org distro package. The
+      list is closed — an arbitrary version is not accepted.
+
+  # memory_mb: memory budget for MongoDB. WiredTiger cacheSizeGB is computed as a share
+  # of it (essence.memory_reserve_percent). min:256 — mongod with a tiny cache is unstable.
+  # Not set → cacheSizeGB isn't written (mongod uses its own default max(0.5*(RAM-1GB), 256MB)).
+  memory_mb:
+    type: integer
+    required: false
+    min: 256
+    description: >-
+      Memory budget for MongoDB on the host, MB. WiredTiger cacheSizeGB is computed as a
+      share of it (essence.memory_reserve_percent — the remainder is reserved for the
+      OS/mongod). Not set → cacheSizeGB isn't set (mongod applies its own default).
+
+  # wiredtiger_cache_gb: EXPLICIT WiredTiger cache size, GB (overrides the value computed
+  # from memory_mb, last-wins). For operators who know exactly the cache they need. Not set →
+  # from memory_mb or the mongod default.
+  wiredtiger_cache_gb:
+    type: number
+    required: false
+    min: 0.25
+    description: >-
+      Explicit WiredTiger cache size, GB (storage.wiredTiger.engineConfig.cacheSizeGB
+      directive). Overrides the value computed from memory_mb (last-wins). Not set → from
+      memory_mb (if set) or the mongod default.
+
+  # ── operator-extra MongoDB users — a TYPED array of MongoUser (types.yml) ──
+  users:
+    type: array
+    required: false
+    items:
+      $type: MongoUser
+    description: >-
+      MongoDB users (array of MongoUser: {name, database, roles, state}). roles — an array
+      of {role, db} (exact mongo model). Created via the community.mongo.user plugin
+      (createUser); each password is resolved keeper-side from Vault by convention
+      secret/mongo/<incarnation>/users/<name>#password.
+
+  # ── mongo_settings: passthrough subtrees of mongod.conf ────────────────────────
+  # Arbitrary mongod.conf sections (net/storage/systemLog/setParameter/…) on top of
+  # defaults/computed values (last-wins at the top level of subtrees). For directives not
+  # covered by the simple fields above. ★ PILOT: names/structure are NOT validated by a
+  # catalog (mongo has no config.c-like analog as redis does); a typo shows up at mongod
+  # startup, not at render. Deliberate PILOT simplification (symmetry with dragonfly
+  # df_settings).
+  mongo_settings:
+    type: object
+    required: false
+    description: >-
+      Passthrough subtrees of mongod.conf from the operator (net/storage/systemLog/
+      setParameter/…). Override defaults in the final merge (last-wins). For directives
+      not covered by the simple fields. PILOT: structure is not validated.
+    properties: {}
+    additional_properties: true
+
+# ── Declarative input invariants (validate:, INPUT-ONLY) ────────────────────
+# validate: — cross-field preconditions on INPUT (only input.*; essence/soulprint are
+# unavailable — a structural CEL barrier). First failure → 422 validation_failed BEFORE
+# incarnation commit.
+validate:
+  # system-users guard (symmetry with redis/dragonfly default_admin): operator-extra
+  # (input.users) CANNOT take the name of the SYSTEM user (default_admin is added from
+  # essence.system_users — an operator with the same name would hijack the admin account
+  # used for in-cluster access). INPUT-ONLY (essence isn't available in validate): the
+  # reserved-names list is hardcoded here (= essence.system_users keys). ★ PILOT: only
+  # default_admin (replica/monitoring/backup — later slices).
+  - that: "!has(input.users) || input.users.all(u, u.name != 'default_admin')"
+    message: "the MongoDB username 'default_admin' is reserved for the system admin user: pick another name — default_admin is created automatically from essence"
+
+# ── Computed scenario-vars (compute:) ──────────────────────────────────────
+# compute: is resolved KEEPER-SIDE ONCE per run in the run-level context (input/essence/
+# incarnation — WITHOUT soulprint, the host-invariance barrier) and is visible as
+# compute.<name> in tasks/apply.input AND in state_changes. Removes duplication of the
+# merge() translation: declared HERE ONCE, both the body and state reference
+# ${ compute.mongo_config }.
+#
+# ★ CONFIG BOUNDARY: host-layout (dbPath → data_dir, path → log_dir, port → net_port),
+# authorization enabled and bindIp are set by the mongod.conf.tmpl TEMPLATE from vars, NOT
+# this compute (a single source, symmetry with redis dir/aclfile in the template). compute
+# only carries the merged APPLICATION config (net.maxIncomingConnections/storage.wiredTiger/
+# passthrough).
+compute:
+  # ── admin_user: name of the SYSTEM full-access user (default_admin) ──────────
+  # ★ default_admin REDESIGN (symmetry with redis/dragonfly 2026-06-30): SINGLE source of
+  # the admin user's name, under which the ENTIRE admin connection runs (createUser of
+  # the rest, health-runCommand, bootstrap of the first admin via localhost-exception).
+  # The body reads compute.admin_user in the plugin calls community.mongo.user/pinged
+  # (username/name) and in the Vault path of its password. A literal (not from
+  # input/essence): the system user's name is a service invariant. default_admin's
+  # password — secret/mongo/<inc>/users/default_admin#password.
+  admin_user: "${ 'default_admin' }"
+  # Effective MongoDB version: required enum, ONE for both install methods (binary pulls
+  # the binary of this version from Nexus; package pins =version). Declared ONCE (state +
+  # plugin + install-URL read it). required guarantees presence → bare input.version.
+  mongo_version: "${ input.version }"
+  # install: structure {method, base_url, version, allow_private} from essence.install_method +
+  # essence.binary_base_url + input.version. method always; base_url/version/allow_private when
+  # method=binary. Symmetry with redis compute.install.
+  install: >-
+    ${ (default(essence.install_method, 'binary') == 'binary')
+         ? {
+             'method':        'binary',
+             'base_url':      default(essence.binary_base_url, ''),
+             'version':       input.version,
+             'allow_private': default(essence.binary_allow_private, true)
+           }
+         : { 'method': 'package' } }
+  # Effective host-layout: conf_dir/data_dir/log_dir/net_port from essence (author-context,
+  # host invariant). The mongod.conf.tmpl template derives dbPath/path/port from them.
+  conf_dir: "${ default(essence.conf_dir, '/etc/mongodb') }"
+  data_dir: "${ default(essence.data_dir, '/var/lib/mongodb') }"
+  log_dir:  "${ default(essence.log_dir, '/var/log/mongodb') }"
+  net_port: "${ int(default(essence.net_port, 27017)) }"
+  # wiredtiger_cache_gb: effective WiredTiger cache size, GB. An explicit
+  # input.wiredtiger_cache_gb OVERRIDES the value computed from memory_mb (a ternary —
+  # explicit takes priority); otherwise memory_mb*reserve/100 / 1024. Both absent → 0.0 (no
+  # storage.wiredTiger section → mongod default max(0.5*(RAM-1GB), 256MB)).
+  wiredtiger_cache_gb: >-
+    ${ has(input.wiredtiger_cache_gb)
+         ? double(input.wiredtiger_cache_gb)
+         : (has(input.memory_mb)
+              ? double(int(input.memory_mb) * int(default(essence.memory_reserve_percent, 50)) / 100) / 1024.0
+              : 0.0) }
+  # ── mongo_config: FULL mongod.conf object (host-invariant, rendered via toYaml) ─
+  # ★ MongoDB vs redis: mongod.conf is nested YAML (net/storage/security/systemLog —
+  # subtrees), rendered WHOLESALE via toYaml (Soul Stack's own tmpl function). Hence
+  # host-layout (dbPath/port/authorization/systemLog.path) is MERGED IN HERE (not set
+  # separately in the template — mongo can't have two `net:`/`storage:` in YAML).
+  # bindIp=0.0.0.0 is host-invariant (a common MongoDB default) → the whole mongo_config
+  # is host-invariant, there's no per-host logic in the
+  # render (unlike redis's bind primary_ip). Layers are DEEP-merged (manually per section,
+  # since CEL's merge() is a SHALLOW last-wins that would wipe out the entire net/storage
+  # subtree):
+  #   - net    = essence.mongo_config.net + {bindIp, port} (maxIncomingConnections from essence is preserved);
+  #   - storage= essence.mongo_config.storage + {dbPath, engine} + WiredTiger cache (has-guard);
+  #   - security = {authorization: enabled} (PILOT: authorization is ALWAYS enabled — access
+  #                under default_admin, bootstrap via localhost-exception);
+  #   - systemLog = {destination file, path, logAppend} (host-layout log_dir);
+  #   - remaining subtrees of essence.mongo_config (operationProfiling/…) — as-is;
+  #   - input.mongo_settings — passthrough ON TOP (last-wins at the top level of subtrees;
+  #     an operator who sets a whole passthrough section takes it over — the typical path is
+  #     memory_mb/wiredtiger_cache_gb, not raw storage/net).
+  mongo_config: >-
+    ${ merge(
+         default(essence.mongo_config, {}),
+         {
+           'net': merge(
+             default(default(essence.mongo_config, {}).net, {}),
+             { 'bindIp': '0.0.0.0', 'port': compute.net_port }
+           ),
+           'storage': merge(
+             default(default(essence.mongo_config, {}).storage, {}),
+             { 'dbPath': compute.data_dir, 'engine': 'wiredTiger' },
+             compute.wiredtiger_cache_gb > 0.0
+               ? { 'wiredTiger': { 'engineConfig': { 'cacheSizeGB': compute.wiredtiger_cache_gb } } }
+               : {}
+           ),
+           'security': { 'authorization': 'enabled' },
+           'systemLog': {
+             'destination': 'file',
+             'path':        compute.log_dir + '/mongod.log',
+             'logAppend':   true
+           }
+         },
+         default(input.mongo_settings, {})
+       ) }
+
+# ── incarnation.state mutation ─────────────────────────────────────────────────
+# After a successful apply, Keeper records what was deployed (ADR-009 §7.1, ADR-057 list
+# form). mongo_config is the same compute.mongo_config that went into the mongod.conf
+# render: a repeat apply and day-2 see a single source of truth.
+state_changes:
+  - set: mongo_version
+    value: "${ compute.mongo_version }"
+  - set: mongo_config
+    value: "${ compute.mongo_config }"
+  # memory_mb: operator's memory budget (int). Not set → 0.
+  - set: memory_mb
+    value: "${ int(default(input.memory_mb, 0)) }"
+  # wiredtiger_cache_gb: effective cache size (same compute that went into mongo_config).
+  - set: wiredtiger_cache_gb
+    value: "${ compute.wiredtiger_cache_gb }"
+  # sysctl_settings: applied host tuning (the same essence.sysctl_settings that goes into the render).
+  - set: sysctl_settings
+    value: "${ default(essence.sysctl_settings, {}) }"
+  # mongo_users — array of MongoUser (passwords NOT in state, Vault). ★ database/state are
+  # added MANUALLY via .map: $type-defaults (types.yml MongoUser) are only added at the
+  # top-level input, NOT into nested array-element fields — while state_schema.mongo_users
+  # requires state (required). roles as-is (state_schema only requires role in the element;
+  # db is optional — the plugin fills in userDB if empty). name — MongoUser required → bare u.name.
+  - set: mongo_users
+    value: >-
+      ${ default(input.users, []).map(u, {
+           'name':     u.name,
+           'database': default(u.database, 'admin'),
+           'state':    default(u.state, 'present'),
+           'roles':    u.roles
+         }) }

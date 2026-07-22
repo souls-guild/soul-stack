@@ -1,0 +1,180 @@
+name: create_from_souls
+# create: true — startup scenario (bootstrap of a new incarnation): selected on
+# POST /v1/incarnations (scenario.ResolveCreateScenarios reads the flag, scenario.go::Create).
+create: true
+description: >-
+  Deploy Redis onto a ready roster of already onboarded online souls — same as create, but
+  without the cloud-provision phase: the run rolls out onto existing hosts. Same input and the
+  same translation of simple concepts into a full redis.conf.
+
+# ── extends: covenant — shared section contract (S4 rollout) ────────────────────────────
+# The input / compute / state_changes / validate sections live in covenant.yml (root of the
+# service repo) and are inherited add-only: the keeper-side resolver merges covenant FIRST,
+# and the create_from_souls delta ADDS on top (never overriding covenant keys — otherwise
+# section_key_conflict).
+#
+# ★ create_from_souls DELTA — MINIMAL (create's twin without provision):
+#   - input  — NONE: covenant does NOT carry the provision section (that's create's delta,
+#     ADR-061), and create_from_souls by definition has NO provision → covenant.input = the
+#     effective input bit-for-bit. covenant's provisioned_* sets are provision-aware (ternary on
+#     input.provision): create_from_souls does not set provision → has(input.provision)=false →
+#     vm_ids/sids=[], provider='' (exactly the old constant defaults of the inline copy — render
+#     is IDENTICAL).
+#   - compute — ONLY sentinel_monitor_now (covenant does NOT carry it: it diverges from
+#     migrate_cluster by value). On create semantics =true (node-1 is the real master, sentinel
+#     monitors it right away — no role:slave fill-in phase, unlike migrate_cluster).
+#   - state_changes / validate — NONE (covenant covers them fully; create_from_souls adds no
+#     state fact/invariant on top — provisioned_* is already provision-aware).
+#   - form / tasks — strictly local (form is NOT merged; tasks — a dispatcher by redis_type
+#     WITHOUT provision: the run rolls straight onto the existing roster).
+extends: covenant
+
+# ── Computed scenario vars: create_from_souls DELTA on top of covenant.compute ──────
+# The shared compute contract lives in covenant.yml (inherited covenant-first). Here — ONLY
+# sentinel_monitor_now: covenant does NOT carry it (section_key_conflict with migrate_cluster,
+# where the value differs). On create semantics =true UNCONDITIONALLY: node-1 is the real
+# master, there is no role:slave fill-in phase → sentinel monitors it right away (the deploy body
+# redis-deploy-sentinel.yml proxies the flag into a task-var in step 4). See the header of
+# redis-deploy-sentinel.yml.
+compute:
+  sentinel_monitor_now: "${ true }"
+
+# ── Presentation layer of the form (form:, top-level scenario key) ───────────────────
+# form: — PURE PRESENTATION. The input contract lives in covenant.input (the effective input
+# after merge). ★ There is no provision section here (unlike create) — create_from_souls carries
+# no provision field, and the form does not show one.
+form:
+  sections:
+    # 1. Redis parameters — mode, network channel, version.
+    - key: redis
+      title: "Redis Parameters"
+      description: "Deployment mode, network channel, and version"
+      fields:
+        - { name: redis_type, label: "Deployment Mode" }
+        - { name: connection_mode, label: "Network Channel" }
+        - { name: version, label: "Redis Version" }
+
+    # 2. Topology — replicas (both modes) + cluster specifics.
+    - key: topology
+      title: "Topology"
+      description: "Replicas (both modes) and Cluster parameters"
+      fields:
+        - name: replicas_per_master
+          label: "Replicas per master"
+          placeholder: "2"
+          hint: "Replicas per master. Default is 2 (master + 2 replicas). 0 = no replicas."
+        - name: shards
+          label: "Number of master shards (cluster)"
+          show_when: "input.redis_type == 'cluster'"
+          placeholder: "3"
+          hint: "16384 hash slots are split evenly across shards (min 3). The run's roster must be shards*(1+replicas)."
+        - name: cluster_node_timeout
+          label: "Gossip timeout, ms (cluster)"
+          show_when: "input.redis_type == 'cluster'"
+          placeholder: "5000"
+          hint: "Gossip timeout between cluster nodes (cluster-node-timeout). Unset -> 5000."
+        - name: cluster_topology
+          label: "Explicit shard topology (cluster)"
+          show_when: "input.redis_type == 'cluster'"
+          hint: "List of shards; each shard is a list of SIDs [master, replica, …] (first = master). The operator distributes VMs across zones themselves. Unset -> the plugin lays out roles by sorted SID automatically."
+
+    # 3. Resources — memory, I/O threads, eviction policy.
+    - key: resources
+      title: "Resources"
+      fields:
+        - name: memory_mb
+          label: "Data volume, MB"
+          placeholder: "1024"
+          hint: "Memory budget for Redis on the host. maxmemory is computed as a fraction of it (minus OS reserve). Unset -> maxmemory from the essence baseline."
+        - name: io_threads
+          label: "I/O threads"
+          placeholder: "0"
+          hint: "Number of Redis I/O threads (io-threads). 0 = single-threaded I/O. >0 — typically core count - 1."
+        - { name: maxmemory_policy, label: "Eviction Policy" }
+
+    # 4. Persistence — save mode.
+    - key: persistence
+      title: "Persistence"
+      fields:
+        - { name: persistence, label: "Persistence Mode" }
+
+    # 5. Users — ACL.
+    - key: users
+      title: "Users"
+      fields:
+        - { name: users, label: "ACL Users" }
+
+    # 6. Configuration — passthrough directives for redis.conf and sentinel.conf.
+    - key: config
+      title: "Configuration"
+      description: "Passthrough directives for redis.conf and sentinel.conf"
+      collapsed: true
+      fields:
+        - { name: redis_settings, label: "redis.conf directives" }
+        - name: sentinel_settings
+          label: "sentinel.conf directives (global)"
+          show_when: "input.redis_type == 'sentinel'"
+          hint: "Global sentinel.conf directives (resolve-hostnames, announce-port, …)."
+        - name: sentinel_master_settings
+          label: "Sentinel directives (per-master)"
+          show_when: "input.redis_type == 'sentinel'"
+          hint: "Per-master options (down-after-milliseconds, failover-timeout, parallel-syncs, …). Defaults: down-after 5000, failover-timeout 60000."
+
+# Run body — dispatcher branches, one per mode (CONDITIONAL-INCLUDE, orchestration.md §6,
+# Variant B group-drop). ★ DIFFERENCE FROM create: NO include of redis-provision.yml (there is
+# no provision phase at all) — the run rolls straight onto the existing roster. include order —
+# cluster, sentinel; indices don't matter (branches are mutually exclusive by enum). An unknown
+# redis_type is rejected by Keeper's input validation on the enum BEFORE render.
+tasks:
+  # ── Generate passwords in Vault BEFORE any secret reads (core.vault.kv-present) ──
+  # ★ SERVICE-GENERATED SECRETS (same as create): the operator does NOT pre-seed passwords —
+  # this step generates missing ones cryptographically at random (generate-if-absent).
+  # keeper-side (on: keeper), changed=true only on an actual generation; if present — no-op
+  # (does NOT overwrite).
+  #
+  # ★★ PASSAGE INVARIANT: this step MUST execute (write to Vault) BEFORE the render phase of
+  # tasks that read the same secrets via ${ vault(...) }. Staged-render model (ADR-056).
+  # DIFFERENCE FROM create in ordering guarantees: for create, the roster-refresh edge from the
+  # provision body (core.soul.registered refresh_soulprint) pushes deploy read-tasks into a
+  # later passage. HERE there is no provision body -> no roster axis (the passage.go edge is
+  # built ONLY when a refresh emitter is present). Order is kept by an INDEPENDENT
+  # vault-secrets-generated axis (ADR-056 amendment, Variant A): this very step
+  # `core.vault.kv-present` is the vault emitter, and passage.go pushes ANY vault()-reading task
+  # (the same registry of passage-defining fields: where/vars/params/apply.input/output/loop)
+  # into a passage STRICTLY AFTER it, WITHOUT involving the roster axis (see
+  # shared/config/passage_vault.go). The load-bearing invariant (generate STRICTLY before any
+  # vault()-read) is pinned by the guard test redis_create_from_souls_secrets_passage_test.go
+  # (order entirely on the vault axis).
+  #
+  # targets are COMPUTED from the SAME essence/input as the read-tasks (drift "what we generate
+  # ≡ what we read" = a bug): the main secret/redis/<inc>#password + per-user
+  # union(system_acl_users, system_acl_users_sentinel) WITHOUT default + operator-extra
+  # input.users. policy alphanumeric/32.
+  - name: Ensure redis passwords exist in Vault (generate if absent)
+    on: keeper
+    module: core.vault.kv-present
+    params:
+      policy:
+        length: 32
+        charset: alphanumeric
+      targets: "${ [{ 'path': 'secret/redis/' + incarnation.name, 'field': 'password' }] + merge(default(essence.system_acl_users, {}).map(n, { n: 0 }) + default(essence.system_acl_users_sentinel, {}).map(n, { n: 0 })).map(name, name).filter(name, name != 'default').map(name, { 'path': 'secret/redis/' + incarnation.name + '/users/' + name, 'field': 'password' }) + (has(input.users) ? input.users.map(u, { 'path': 'secret/redis/' + incarnation.name + '/users/' + u.name, 'field': 'password' }) : []) }"
+
+  # ── Version-aware validator for redis_settings directive names (assert) ─────────────────
+  # redis_settings — passthrough KEY→VALUE: the input schema accepts ANY key. This assert
+  # checks EVERY directive NAME against the catalog of valid names FOR THE CHOSEN version
+  # (essence.redis_directives[<series>]) — the first unknown key breaks render (422) BEFORE
+  # applying. assert (not validate): the catalog lives in essence, the validate context is
+  # INPUT-ONLY. Kept in sync with create. EMPTY-CATALOG-SKIP: the catalog is optional (minimal
+  # L0 fixtures).
+  - name: Validate redis_settings directive names against the catalog for the chosen Redis version
+    assert:
+      that:
+        - "!has(essence.redis_directives) || default(input.redis_settings, {}).all(k, essence.redis_directives.all(s, compute.redis_version.matches('^([0-9]+:)?' + s + '[.]') ? (k in essence.redis_directives[s]) : true))"
+      message: "redis_settings contains an unknown redis.conf directive for the chosen Redis version (input.version): check the name against the catalog of valid directives for this version (essence.redis_directives[<major.minor>]) — a typo or a directive from a different Redis version. The catalog is generated by scripts/gen-redis-catalog.sh from src/config.c."
+
+  # ── Deploy body — dispatcher branches by redis_type (no provision) ──────────────────
+  # The run rolls straight onto the existing roster (onboarded by the operator beforehand).
+  - include: cluster.yml
+    when: "input.redis_type == 'cluster'"
+  - include: sentinel.yml
+    when: "input.redis_type == 'sentinel'"

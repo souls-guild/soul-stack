@@ -1,0 +1,56 @@
+name: logging-defaults-back-compat
+description: >
+  Incarnation v5 was deployed BEFORE log-shipping was introduced — there's no logging field in state (monitoring is already
+  there, added by 004_to_005). The migration ADDS a logging read-model with a conservative default: version
+  empty ('' = not deployed), sink_type console (safe default with no infra), endpoint empty,
+  log_sources empty. The rest of the state (df_config/df_users/tls/monitoring/topology) passes
+  through bit-for-bit. Mirrors redis 013_to_014 logging-defaults-back-compat.
+
+state_before:
+  df_version: "1.39.0"
+  df_config:
+    maxmemory: "256mb"
+    maxclients: 10000
+  df_users:
+    - { name: "app", perms: "~* +@all", state: "on" }
+  tls:
+    enable: false
+    cert_ref: ""
+    key_ref: ""
+    ca_ref: ""
+  memory_mb: 1024
+  replicas: 1
+  sentinel_quorum: 0
+  provisioned_vm_ids: []
+  provisioned_provider: ""
+  provisioned_sids: []
+  monitoring:
+    node_exporter_version: "1.8.2"
+    node_exporter_listen: ":9100"
+
+state_after:
+  df_version: "1.39.0"
+  df_config:
+    maxmemory: "256mb"
+    maxclients: 10000
+  df_users:
+    - { name: "app", perms: "~* +@all", state: "on" }
+  tls:
+    enable: false
+    cert_ref: ""
+    key_ref: ""
+    ca_ref: ""
+  memory_mb: 1024
+  replicas: 1
+  sentinel_quorum: 0
+  provisioned_vm_ids: []
+  provisioned_provider: ""
+  provisioned_sids: []
+  monitoring:
+    node_exporter_version: "1.8.2"
+    node_exporter_listen: ":9100"
+  logging:
+    vector_version: ""
+    vector_sink_type: "console"
+    vector_sink_endpoint: ""
+    vector_log_sources: []

@@ -1,0 +1,348 @@
+syntax = "proto3";
+
+package soulstack.keeper.v1;
+
+import "google/protobuf/struct.proto";
+
+import "keeper/v1/common.proto";
+
+option go_package = "github.com/souls-guild/soul-stack/proto/gen/go/keeper/v1;keeperv1";
+
+// RenderedTask is a task after Keeper-side rendering (CEL and text/template phases
+// already applied, ADR-010, ADR-012(d)). Soul only executes it, never renders.
+message RenderedTask {
+  // Task name from destiny/scenario.
+  string name = 1;
+
+  // Module address: <namespace>.<module>.<state>, e.g. "core.pkg.installed".
+  string module = 2;
+
+  // Module params after render, typed per the module's manifest.
+  google.protobuf.Struct params = 3;
+
+  // If true, Soul does not log this task's params and output (DSL core no_log:, see destiny/tasks.md).
+  bool no_log = 4;
+
+  // Per-task hard limit on a single Apply attempt (DSL core timeout:, destiny/tasks.md §9).
+  // Format is Soul Stack's `duration` convention (Go-duration "30s"/"5m"/"1h30m",
+  // or a `<N>d` suffix — see docs/keeper/config.md → "Type conventions"); empty =
+  // no per-task limit (only the scenario ceiling applies).
+  // Format is validated when destiny/scenario is PARSED (config validator);
+  // render/dispatch pass the string through unchanged. Soul re-parses it with the
+  // same config.ParseDuration and, on expiry, sets TaskEvent.status =
+  // TASK_STATUS_TIMED_OUT (a non-positive duration means "no limit").
+  string timeout = 5;
+
+  // Source-task indices for DSL core `onchanges:` (destiny/tasks.md §8): they
+  // reference a RenderedTask's position in ApplyRequest.tasks[] (= TaskEvent.task_idx).
+  // Keeper-side resolves `onchanges:` register names into these indices (Variant A:
+  // names are resolved on Keeper, Soul only deals with indices — simpler for Soul,
+  // correct for single-host MVP; cross-host onchanges is separate future work).
+  // Gating semantics: the task runs only if at least one listed source has
+  // register.changed == true; empty = unconditional run.
+  repeated int32 onchanges_idx = 6;
+
+  // Flow-control CEL predicates (ADR-012(d): flow-control CEL runs Soul-side,
+  // sandboxed, no external access). Unlike params (rendered Keeper-side and
+  // arriving ready-made), these predicates depend on register.* — results of
+  // PRIOR tasks, known only to Soul during the run. So Keeper passes them through
+  // AS CEL STRINGS (does not evaluate them), and Soul evaluates them with a
+  // restricted cel-go sandbox (shared/cel.NewFlowControl). Sandbox: vault()/now()
+  // (external access/non-determinism) and soulprint.hosts/soulprint.where
+  // (cross-host, scenario-only) are forbidden — unregistered symbol → compile error.
+
+  // when: CEL predicate gating BEFORE Apply (destiny/tasks.md §9). Soul evaluates
+  // it BEFORE calling mod.Apply: false -> task SKIPPED (Apply is not called); empty
+  // = unconditional run. Combines with onchanges via AND (runs only when
+  // when && onchanges-satisfied).
+  string when = 7;
+
+  // changed_when: CEL predicate overriding register.self.changed, evaluated
+  // AFTER Apply (destiny/tasks.md §9). Keeper passes it through as a CEL string,
+  // Soul evaluates it in the sandboxed engine after module.Apply: true -> task
+  // CHANGED, false -> changed is cleared (the classic `changed_when: false` on a
+  // probe). Does NOT touch failed.
+  string changed_when = 8;
+
+  // failed_when: CEL predicate overriding register.self.failed, evaluated AFTER
+  // Apply (destiny/tasks.md §9). Keeper passes it through as a CEL string, Soul
+  // evaluates it in the sandboxed engine after changed_when: true on an otherwise-OK
+  // module -> FAILED (an artificial failure on a business condition); `failed_when:
+  // "false"` on a failed module = ignore_errors (status stays NOT FAILED, the
+  // original error is kept in register.self.ignored_error and TaskEvent.error for
+  // information, the run doesn't break). Not applied to TIMED_OUT — a timeout is
+  // infrastructural and remains a terminal fail-stop.
+  string failed_when = 9;
+
+  // flow_context: a literal per-host snapshot of the non-register part of the
+  // flow-control predicates' CEL context: { input, vars, essence, incarnation, self }.
+  // Keeper builds it in the CEL phase (same as for rendering params, MINUS
+  // soulprint.hosts and loop), Soul reads it as DATA (not code): binds
+  // soulprint.self <- flow_context.self, the rest becomes top-level activation
+  // variables. Varies per host (self is per-host), so it's excluded from the
+  // per-host params host-invariance check.
+  google.protobuf.Struct flow_context = 10;
+
+  // onfail_idx: source-task indices for DSL core `onfail:` (destiny/tasks.md §8):
+  // reference a RenderedTask's position in ApplyRequest.tasks[] (= TaskEvent.task_idx),
+  // mirroring onchanges_idx. Keeper-side resolves `onfail:` register names into
+  // these indices (Variant A, same as onchanges_idx). Gating semantics: the task
+  // runs ONLY if at least one listed source has register.failed == true
+  // (TIMED_OUT is a special case of failed and also triggers it); empty = not an
+  // onfail task (no gating applied). An onfail task (rescue/cleanup) is the only
+  // thing that still runs after the run's first failure: see the fail-stop change
+  // in applyrunner.Run (a failed task no longer breaks immediately, but the run
+  // still ends FAILED — onfail is cleanup, not an undo of the failure).
+  repeated int32 onfail_idx = 12;
+
+  // until: CEL predicate for exiting the retry loop (DSL core retry.until,
+  // destiny/tasks.md §9). Soul-side, same sandboxed engine as failed_when
+  // (shared/cel.NewFlowControl). Evaluated AFTER each attempt (after the
+  // changed_when/failed_when override): true -> exit the loop (final status = the
+  // attempt's status AS-IS, until does NOT override failed); false -> wait
+  // retry_delay and try again. After retry_count attempts all with until=false ->
+  // task FAILED (code flowcontrol.until_exhausted), EVEN if the last attempt was
+  // OK/CHANGED. Empty = no until condition (the retry loop is driven only by
+  // attempt status). until is NOT evaluated on a TIMED_OUT attempt (a timeout is
+  // "failure, retry if attempts remain").
+  string until = 11;
+
+  // retry_count: max attempts INCLUDING the first (DSL core retry.count,
+  // destiny/tasks.md §9). 0/1/empty = a single attempt (backward compatible:
+  // behaves as without retry). WITHOUT until: retries while the attempt is
+  // FAILED/TIMED_OUT, the first non-FAILED outcome (OK/CHANGED) exits; once
+  // exhausted, the final status is the LAST attempt's status (FAILED or
+  // TIMED_OUT — not collapsed into FAILED). With until: see the until field.
+  int32 retry_count = 14;
+
+  // retry_delay: pause between attempts (DSL core retry.delay, destiny/tasks.md §9).
+  // Format is Soul Stack's `duration` convention (like timeout=5: Go-duration
+  // "10s"/"5m", or a `<N>d` suffix), Soul parses it with the same
+  // config.ParseDuration. Empty/invalid = default 5s. Applied ONLY between
+  // attempts (not before the first, not after the last) and is interrupted by run
+  // cancellation (CancelApply). Not counted in the per-task timeout — there's no
+  // separate ceiling for the whole loop.
+  string retry_delay = 15;
+
+  // register: the register name for this task's result (destiny/tasks.md §6,
+  // register:). Soul builds registerByName[register] = register payload, so later
+  // tasks' flow-control predicates can reference `register.<name>.*`. Empty = the
+  // task doesn't register a result under a name (only reachable by its own idx).
+  // Distinct from TaskEvent.register_data: that's the payload, this is the NAME it's
+  // addressed by.
+  string register = 13;
+
+  // plan_index: the task's GLOBAL index across the FULL run plan (spanning ALL
+  // Passages of the staged render, ADR-056) = RenderedTask.Index on Keeper
+  // (pipeline.go). Unlike the position in ApplyRequest.tasks[] (which is LOCAL: a
+  // subset of one Passage's tasks, filtered per-host via where:), plan_index is
+  // unique across the whole plan AND independent of per-host where: — it's the
+  // stable key for register correlation on Keeper (apply_task_register.plan_index,
+  // migration 079). Soul echoes it back in TaskEvent.plan_index; for register
+  // resolution (buildRegisterByHost) Keeper maps nameByIdx[Index] against
+  // plan_index, NOT against the local task_idx — otherwise names drift apart when
+  // passage > 0 or per-host where: differs (a latent task_idx collision bug,
+  // ADR-056 §S1 fix Variant B).
+  //
+  // 0/empty = an old Soul with no echo, OR an N=1 run (single Passage, local ==
+  // global): forward-compat (ADR-012(c) only-add). For N=1, plan_index == task_idx,
+  // so correlation matches prior behavior bit-for-bit. Never reuse this field number.
+  int32 plan_index = 16;
+
+  // aggregate_of: local positions (in THIS ApplyRequest.tasks[], like
+  // onchanges_idx/onfail_idx) of the child tasks of one applier task
+  // (`apply:`+`register:`), whose combined outcome is aggregated by the TERMINAL
+  // synthetic `core.noop.run` task carrying this field (orchestration.md §2.1.1,
+  // applier-register materialization, Variant B).
+  //
+  // Why: for `apply: destiny` + `register: X`, register.X itself must reflect the
+  // COMBINED outcome of the destiny run (`.changed = OR(child.changed)`, likewise
+  // for failed/timed_out), so an external `onchanges: [X]` / `when: register.X.changed`
+  // can resolve. Keeper materializes this as a synthetic `core.noop.run` (Register=X)
+  // AFTER all of that applier's child tasks; Soul builds its register_data not from
+  // an ApplyEvent (a noop is trivially changed=false) but by aggregating over these
+  // indices: `changed = OR(registerByIdx[i].changed)`, likewise for failed/timed_out.
+  // The terminal is last in the group, so all children are already in registerByIdx
+  // by the time it runs.
+  //
+  // Indices are REMAPPED global->local when the ApplyRequest is assembled
+  // (ToProtoTasks, remapRequisites), same as onchanges_idx: they reference the
+  // LOCAL position in this slice's tasks[]. A source filtered out by where:/across
+  // passages is encoded with a sentinel (-1) — Soul treats it as changed/failed=false
+  // (zero contribution to the OR).
+  //
+  // Empty = the task doesn't aggregate (a regular task, or an applier WITHOUT
+  // register:): forward-compat (ADR-012(c) only-add). Never reuse this field number.
+  repeated int32 aggregate_of = 17;
+}
+
+// ApplyRequest is Keeper -> Soul's command to run a job.
+message ApplyRequest {
+  // ULID, the run's unique identifier.
+  string apply_id = 1;
+
+  // The task plan after Keeper-side rendering.
+  repeated RenderedTask tasks = 2;
+
+  // W3C traceparent of the parent grpc.apply_dispatch span. Soul extracts it and
+  // starts apply.run as a child span (ADR-024 cross-process trace propagation).
+  string trace_context = 3;
+
+  // attempt: this run's fencing epoch on this host (ADR-027(g), Phase 2). Echoed
+  // from apply_runs.attempt at claim time: ClaimNext increments it on every Ward
+  // acquisition, so re-claiming a stale job (a recovery scan returned it to
+  // planned -> new claim) arrives with a LARGER attempt than the original.
+  //
+  // The Soul-side guard (runtime.ApplyRunner.AcceptAttempt) rejects any
+  // ApplyRequest with attempt < the last one seen for this apply_id — this filters
+  // out a stale duplicate (a dead Ward whose apply is still in flight) without
+  // relying on module idempotency. Keeper's barrier closes out the original
+  // (larger-attempt) run with its RunResult; the rejected duplicate is silently
+  // dropped (ADR-027 barrier-B1).
+  //
+  // 0/empty = an old Keeper without fencing (forward-compat, ADR-012(c) only-add):
+  // the guard does NOT reject such a request (fencing degrades to apply_id +
+  // SID-lease protection only). Never reuse this number: a breaking change gets a
+  // new field number.
+  int32 attempt = 4;
+
+  // passage: the 0-based staged-render Passage index this job belongs to
+  // (ADR-056). A scenario run executes as N>=1 ordered Passages (render ->
+  // dispatch -> barrier -> register collection); this ApplyRequest carries a
+  // subset of tasks from ONE Passage. A per-Passage job correlates with its
+  // terminal by (apply_id, sid, passage) (echoed in TaskEvent/RunResult).
+  //
+  // 0/empty = a single Passage (forward-compat, ADR-012(c) only-add): an N=1
+  // scenario (no register dependencies) and an old Keeper without this field both
+  // send passage=0 — behavior matches pre-staged-render bit-for-bit (a single
+  // pass). Soul echoes passage back in TaskEvent/RunResult unchanged. Never reuse
+  // this field number. Stratifying into N>1 and the stage loop is S2/S3; S1 only
+  // carries the transport + schema.
+  int32 passage = 6;
+
+  // dry_run: Scry mode (ADR-031): Soul does NOT apply tasks; instead it calls
+  // SoulModule.Plan for each one (pure-read, does NOT mutate the host) and
+  // collects a machine-readable PlanEvent.changed — "would Apply change this
+  // resource?" (drift). The host is left untouched: module.Apply is never
+  // physically called on dry_run (the read-only guarantee is structural, not "the
+  // module promised"). Default-deny: for a task whose module hasn't declared a
+  // read-safe capability (custom plugin / non-core), Plan is NOT called — the
+  // task gets an explicit "drift not supported" refusal instead of a false clean.
+  //
+  // false/empty = a regular apply (forward-compat, ADR-012(c) only-add): an old
+  // Keeper that doesn't send this field means Soul runs as before. Never reuse
+  // this field number. Slice A only carries the transport + soul mechanics;
+  // the keeper-side check-drift flow (what exactly to dry-run) is Slice B.
+  bool dry_run = 5;
+}
+
+// TaskStatus is one task's final status. Corresponds to DSL core register.<name>.*.
+enum TaskStatus {
+  TASK_STATUS_UNSPECIFIED = 0;
+  TASK_STATUS_OK = 1;          // changed=false, failed=false
+  TASK_STATUS_CHANGED = 2;     // changed=true, failed=false
+  TASK_STATUS_FAILED = 3;      // failed=true
+  TASK_STATUS_TIMED_OUT = 4;   // timed_out=true (a special case of failed)
+  TASK_STATUS_SKIPPED = 5;     // task skipped by a requisite/condition (onchanges/when/onfail/require) — never ran
+  TASK_STATUS_CANCELLED = 6;   // aborted by Keeper's CancelApply (see CancelApply / RunStatus.CANCELLED)
+}
+
+// TaskEvent is one task's final result (aggregated on Soul after the SoulModule
+// sub-process finishes). Progress for long-running steps isn't sent in the MVP
+// (post-MVP).
+message TaskEvent {
+  string apply_id = 1;
+
+  // Task index in ApplyRequest.tasks[].
+  int32 task_idx = 2;
+
+  TaskStatus status = 3;
+
+  // register payload: DSL core (.changed/.failed/.timed_out) + fields declared via destiny output:.
+  google.protobuf.Struct register_data = 4;
+
+  // Populated only when status = FAILED or TIMED_OUT.
+  TaskError error = 5;
+
+  // Echo of RenderedTask.no_log — drives keeper-side audit suppression via this
+  // flag (multi-Keeper-safe: the TaskEvent may land on a different instance than
+  // the one holding []RenderedTask). When true, keeper does not write
+  // register_data/error.message to the audit log.
+  bool no_log = 6;
+
+  // passage: echo of ApplyRequest.passage (ADR-056): the 0-based Passage index
+  // this task belongs to. Soul returns it unchanged. Keeper accumulates register
+  // per (apply_id, sid, passage): rendering the next Passage reads the previous
+  // Passages' register (staged render). 0/empty = a single Passage
+  // (forward-compat, ADR-012(c) only-add) — behaves as before staged render.
+  // Never reuse this field number.
+  int32 passage = 7;
+
+  // plan_index: echo of RenderedTask.plan_index (ADR-056 §S1 fix Variant B): the
+  // task's GLOBAL index across the full run plan (spanning all Passages), used by
+  // Keeper to correlate register data (apply_task_register.plan_index, migration
+  // 079). Soul takes it from req.Tasks[idx].plan_index and echoes it back
+  // unchanged — task_idx (field 2) remains the LOCAL position in
+  // ApplyRequest.tasks[] (its semantics don't change: the online
+  // onchanges_idx/onfail_idx gating still refers to the local slice index).
+  // plan_index is a separate global key for Keeper-side register correlation
+  // across Passages.
+  //
+  // 0/empty = an old Soul with no echo, OR an N=1 run (plan_index == task_idx):
+  // forward-compat (ADR-012(c) only-add). Never reuse this field number.
+  int32 plan_index = 8;
+}
+
+// RunStatus is the whole run's final status.
+enum RunStatus {
+  RUN_STATUS_UNSPECIFIED = 0;
+  RUN_STATUS_SUCCESS = 1;
+  RUN_STATUS_FAILED = 2;
+  RUN_STATUS_CANCELLED = 3;
+  RUN_STATUS_ERROR_LOCKED = 4;
+}
+
+// RunResult is the final report of an apply run.
+// Replaces the earlier-proposed "StateReport" (conflicted with incarnation.state
+// in naming-rules).
+message RunResult {
+  string apply_id = 1;
+
+  RunStatus status = 2;
+
+  // Aggregated state_changes for Keeper's later incarnation.state commit.
+  // Structure matches docs/scenario/orchestration.md (the state_changes block).
+  google.protobuf.Struct state_changes = 3;
+
+  // attempt: the run's fencing epoch, an ECHO of ApplyRequest.attempt (ADR-027(g),
+  // gate-1 recovery redesign). Soul returns it unchanged. On receipt
+  // (correlateRunResult), Keeper compares it against apply_runs.attempt: smaller
+  // than current -> the result is from a stale attempt (a re-claim with a larger
+  // epoch exists), the state commit is REJECTED (stale-drop). Symmetric with the
+  // Soul-side AcceptAttempt: both execution and result receipt are fenced.
+  //
+  // 0/empty = an old Soul with no echo (forward-compat, ADR-012(c) only-add): the
+  // freshness check is NOT applied (degrades to an append-only single-winner
+  // guard by status). Never reuse this field number.
+  int32 attempt = 4;
+
+  // passage: echo of ApplyRequest.passage (ADR-056): the 0-based Passage index
+  // whose terminal carries this report. RunResult correlates to a run row by
+  // (apply_id, sid, passage). Each Passage's barrier waits for its own slice's
+  // terminals; the run's final outcome and the single incarnation.state commit
+  // happen after the LAST Passage's terminal (the state commit is NOT split
+  // per-Passage, ADR-056 §d / ADR-009 §7). 0/empty = a single Passage
+  // (forward-compat, ADR-012(c) only-add) — behaves as before staged render.
+  // Never reuse this field number.
+  int32 passage = 5;
+}
+
+// CancelApply is Keeper -> Soul's command to cancel the current run.
+// Soul tries to stop the in-flight SoulModule sub-process and sends a RunResult
+// with status=CANCELLED.
+message CancelApply {
+  string apply_id = 1;
+
+  // Human-readable cancellation reason (for logs/audit).
+  string reason = 2;
+}

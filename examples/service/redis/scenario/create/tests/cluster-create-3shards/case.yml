@@ -1,0 +1,246 @@
+# L0 test for create in cluster mode (redis consolidation, honest hash-slot
+# Redis Cluster). Multi-host roster (fixtures.hosts) of 3 hosts: shards=3,
+# replicas_per_shard=0 → topology exactly 3*(1+0)=3 (size-guard passes).
+#
+# Render-only, hermetic. The create dispatcher includes standalone.yml + cluster.yml;
+# on a cluster run the standalone branch is suppressed by a placeholder-skip (static-when
+# input.redis_type != 'standalone'), the cluster branch is rendered. size-guard is now
+# assert: (keeper-side render-time precondition, ADR-009 amendment 2026-06-23): it
+# does NOT emit a RenderedTask. shards-guard (core.cmd.shell, has(input.shards)) was REMOVED —
+# the requiredness of shards is now declarative via required_when in main.yml
+# (input.redis_type == 'cluster'): omitting it breaks the run at input validation BEFORE render
+# (see cluster-shards-guard-missing). Neither task (assert size-guard nor the removed
+# shards-guard) occupies a slot in the plan → cluster-branch tasks are shifted by another −1.
+# Key indices (current asserted values; the binary sub-branch of install.yml — three
+# core.file.present instead of one core.cmd.shell, +2 for everything AFTER it):
+#   index 0  — dispatcher mode-guard (core.cmd.shell, no-op on the implemented mode);
+#   index 2  — cluster destiny: core.pkg.installed (redis-server) — BEFORE the binary sub-branch,
+#              +2 does not affect it;
+#   index 18 — cluster destiny: redis.conf (core.file.rendered, cluster directives);
+#   index 33 — cluster-build (community.redis.cluster action create, nodes MAP).
+#
+# What we assert (slice acceptance criteria):
+#   1. size-guard PASS: assert that[0] (size(hosts)==shards*(1+replicas), 3==3*(1+0))
+#      → true → render succeeds, cluster-build is present; failure is caught by the mismatch case.
+#   2. HOST-INVARIANT cluster directives in render_context.vars.config: cluster-enabled
+#      yes / cluster-config-file nodes.conf / cluster-node-timeout (input or 5000).
+#      There is NO cluster-announce-ip in config — it is per-host and is rendered in the .tmpl from
+#      .self.network.primary_ip (proof of per-host announce is a separate
+#      destiny_redis_tmpl_test.go, see below).
+#   3. nodes MAP is deterministic: key=SID (sorted in the plugin), addr=primary_ip
+#      of each host + ":6379". Form merge(soulprint.hosts.map(...)).
+#   4. plugin community.redis.cluster is in the plan (action create, replicas_per_shard).
+#
+# NOTE the L0 limitation: apply.input is host-invariant in the pilot (resolved on the
+# FIRST targeted host, resolveApplyInput) → render_context here carries self of the
+# first host by SID (node-a). Per-host values (announce-ip) are NOT threaded
+# through apply.input.config, but are rendered in the template from .self of EACH host (this
+# L0-trial layer only stores the first host; per-host correctness is proven by a
+# direct tmpl render in keeper/internal/render/destiny_redis_tmpl_test.go).
+# The nodes MAP, in contrast, is built from the WHOLE roster (soulprint.hosts) and carries the
+# addresses of all three hosts.
+name: cluster create builds deterministic nodes map and cluster directives
+
+fixtures:
+  default_destiny_source: "file://../../destiny/{name}"
+  # Multi-host roster: 3 hosts, the order in YAML is deliberately not sorted
+  # (b, c, a) — the harness and the nodes MAP must sort by SID.
+  hosts:
+    - sid: node-b.example.com
+      covens: [create, redis]
+      soulprint:
+        network: { primary_ip: 10.0.0.2 }
+        os: { arch: amd64 }
+    - sid: node-c.example.com
+      covens: [create, redis]
+      soulprint:
+        network: { primary_ip: 10.0.0.3 }
+        os: { arch: amd64 }
+    - sid: node-a.example.com
+      covens: [create, redis]
+      soulprint:
+        network: { primary_ip: 10.0.0.1 }
+        os: { arch: amd64 }
+  vault:
+    secret/redis/create:
+      password: s3cr3t-redis-pass-create
+    # Per-user secrets of system users (secret/redis/<inc>/users/<name>#password) —
+    # resolved by keeper-side vault() when topping up system_acl_users into apply.input.users.
+    # ★ REDESIGN default_admin (2026-06-30): default_admin — the system user for intra-cluster
+    # AUTH (PING/cluster-build/masterauth of the deploy read its password from the same users/<name> branch).
+    secret/redis/create/users/default_admin:
+      password: default-admin-secret-pass
+    secret/redis/create/users/replica:
+      password: replica-sys-secret-pass
+    secret/redis/create/users/monitoring:
+      password: monitoring-sys-secret-pass
+    secret/redis/create/users/sentinel:
+      password: sentinel-sys-secret-pass
+    secret/redis/create/users/haproxy:
+      password: haproxy-sys-secret-pass
+  essence:
+    # install_method — in essence (author-context, 2026-06-28): install method is
+    # NOT operator-input. compute.install reads default(essence.install_method, 'binary').
+    install_method: package
+    redis_type: cluster
+    modules_base_url: "https://artifacts.example.com/redis/modules"
+    memory_reserve_percent: 75
+    persistence_presets:
+      off:
+        save: ""
+        appendonly: "no"
+      aof:
+        save: ""
+        appendonly: "yes"
+      rdb:
+        save: "900 1 300 10 60 10000"
+        appendonly: "no"
+      rdb_aof:
+        save: "900 1 300 10 60 10000"
+        appendonly: "yes"
+    redis_config:
+      maxmemory:        "256mb"
+      maxmemory-policy: allkeys-lru
+      maxclients:       10000
+      timeout:          300
+
+    # System ACL users of redis-server (1:1 from essence/_default.yaml). REQUIRED:
+    # the create/cluster.yml guard (assert 1b) breaks the render if system_acl_users is empty
+    # (silent fail-open is unacceptable — without them replication/health-check would break).
+    # ★ REDESIGN default_admin (2026-06-30): default_admin — the full-access system user
+    # (~* &* +@all), used for intra-cluster AUTH of cluster (replaced the requirepass default).
+    system_acl_users:
+      default_admin: "~* &* +@all"
+      replica:    "+psync +replconf +ping"
+      monitoring: "-@all +@connection +client +ping +info +config|get +cluster|info +slowlog +latency +memory +select +command|count +command|docs"
+      sentinel:   "allchannels +multi +slaveof +ping +exec +subscribe +config|rewrite +role +publish +info +client|setname +client|kill +script|kill"
+      haproxy:    "-@all +auth +client|getname +client|id +client|setname +command +hello +ping +role +info +cluster|info"
+  input:
+    # ★ provision is disabled (default-on: an omitted section = ENABLED; the case deploys onto a
+    # READY roster, cloud-create is not needed) → include redis-provision.yml group-drop.
+    provision:
+      enabled: false
+    redis_type: cluster
+    # version — a fixed enum of Nexus-published builds (major < 8 → the module version-gate
+    # is not active). install_method=package EXPLICITLY (redesign default is binary): the case
+    # isolates the cluster layout from the install model, the assert stays on core.pkg.installed.
+    version: "7.4.1"
+    shards: 3
+    replicas_per_master: 0
+    cluster_node_timeout: 5000
+
+assert:
+  # size-guard — assert: (3 == 3*(1+0) → render succeeds, not emitted into the plan).
+  # A size-guard failure (mismatch) is caught by cluster-size-guard-mismatch via
+  # expect_render_error; omitting shards — cluster-shards-guard-missing.
+  task_present:
+    # ── cluster destiny: package (mode-agnostic install BEFORE branching) ──────
+    - module: core.pkg.installed
+      params_subset:
+        name: redis-server
+        version: "7.4.1"
+
+    # ── cluster destiny: redis.conf with cluster directives ───────────────────
+    # the config map carries the base merge + HOST-INVARIANT cluster directives
+    # (cluster-enabled/cluster-config-file/cluster-node-timeout). There is NO
+    # cluster-announce-ip in config — it's a per-host directive, rendered by redis.conf.tmpl from
+    # .self.network.primary_ip (see destiny_redis_tmpl_test.go: per-host announce).
+    # render_context.self here = the first host by SID (node-a, apply.input is
+    # host-invariant in the pilot), but the .tmpl LAYER on Soul will take self of EACH host.
+    # Disambiguator from users.acl/hardening (the same core.file.rendered) — path.
+    - module: core.file.rendered
+      params_subset:
+        path: /etc/redis/redis.conf
+        template_content: "<present>"
+        mode: "0640"
+        owner: redis
+        group: redis
+        render_context:
+          vars:
+            conf_dir: /etc/redis
+            data_dir: /var/lib/redis
+            port: 6379
+            run_dir: /var/run/redis
+            log_dir: /var/log/redis
+            loadmodules:
+              - /var/lib/redis/modules/redisbloom.so
+              - /var/lib/redis/modules/rejson.so
+              - /var/lib/redis/modules/redisearch.so
+              - /var/lib/redis/modules/redistimeseries.so
+            config:
+              # ★ REDESIGN default_admin: replica→master AUTH (masteruser/masterauth)
+              # arrives as REGULAR config directives (the cluster deploy-body tops them up
+              # via a vault()-in-cell) → redis.conf ranges over them like any directive → they
+              # statically survive a restart. ALWAYS topped up (failover-safe; inert when
+              # replicas=0, but rendered symmetrically — no per-replicas branching).
+              masteruser:       "default_admin"
+              masterauth:       "default-admin-secret-pass"
+              maxmemory:        "256mb"
+              maxmemory-policy: allkeys-lru
+              maxclients:       10000
+              timeout:          300
+              save:             "900 1 300 10 60 10000"
+              appendonly:       "no"
+              cluster-enabled:      "yes"
+              cluster-config-file:  "nodes.conf"
+              cluster-node-timeout: "5000"
+          self:
+            sid: node-a.example.com
+            covens: [create, redis]
+            choirs: []
+            # traits — a registry projection (ADR-060), an empty object with no labels.
+            traits: {}
+            role: ""
+            network:
+              primary_ip: 10.0.0.1
+            os:
+              arch: amd64
+          role: ""
+          essence: {}
+
+    # ── cluster-build (community.redis.cluster) ─────────────────────────────
+    # nodes MAP: key=SID, addr=primary_ip+":6379". Deterministic by SID.
+    # The only community.redis.cluster in the plan → no disambiguator needed.
+    - module: community.redis.cluster
+      params_subset:
+        action: create
+        replicas_per_shard: 0
+        # ★ REDESIGN default_admin: connect to each node as the ACL user default_admin
+        # (username → AUTH). The former main secret was DROPPED — the password comes from the
+        # secret/redis/<inc>/users/default_admin branch.
+        username: default_admin
+        password: default-admin-secret-pass
+        nodes:
+          node-a.example.com: { addr: "10.0.0.1:6379" }
+          node-b.example.com: { addr: "10.0.0.2:6379" }
+          node-c.example.com: { addr: "10.0.0.3:6379" }
+
+  task_absent:
+    # ★ the redis-sentinel package is ABSENT in cluster mode: cluster does not use
+    # sentinel → sentinel_enabled is NOT set (default false) → the inner gate of the
+    # package branch of install.yml suppresses the task (conditional-include is not the
+    # cause — it's a per-task when inside the block → placeholder-skip with no params). The
+    # paired positive case — install-package (sentinel mode → package IS PRESENT). Guard against
+    # the regression "the package branch drags in redis-sentinel in every mode" (extra package in cluster).
+    - module: core.pkg.installed
+      params_subset:
+        name: redis-sentinel
+
+  # cluster facts in state: redis_type cluster + redis_config with cluster directives
+  # (no announce-ip — host-variable, not written to state) + empty users + empty
+  # redis_hosts (exact roles are laid out by the plugin, not recorded in state).
+  state_changes:
+    redis_type: cluster
+    redis_version: "7.4.1"
+    redis_config:
+      maxmemory:        "256mb"
+      maxmemory-policy: allkeys-lru
+      maxclients:       10000
+      timeout:          300
+      save:             "900 1 300 10 60 10000"
+      appendonly:       "no"
+      cluster-enabled:      "yes"
+      cluster-config-file:  "nodes.conf"
+      cluster-node-timeout: "5000"
+    redis_users: []
+    redis_hosts: []

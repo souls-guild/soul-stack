@@ -1,0 +1,8 @@
+name: redis-cluster
+state_schema_version: 1
+state_schema:
+  type: object
+  properties:
+    foo: { type: string }
+destiny:
+  - { name: x, ref: "" }

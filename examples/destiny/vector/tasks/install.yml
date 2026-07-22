@@ -1,0 +1,30 @@
+# tasks/install.yml — download and extract the Vector release tarball.
+# The install triplet is split across an include boundary because of the LOADING
+# per-file linter (validateTaskRefs, shared/config/destiny_tasks.go): cross-file onchanges
+# is rejected as unknown_register_reference, so laying out the binary (register vector_bin)
+# lives in service.yml next to the restart. Here — only fetch + extract, no register steps.
+#
+# arch for the URL — the Rust triplet vars.arch_triplet (mapping soulprint.self.os.arch →
+# <arch>-unknown-linux-gnu, see vars.yml).
+
+# 1. Download the tarball to a temp path. The URL is assembled by CEL from base_url + version +
+#    triplet. checksum is REQUIRED (fail-closed): core.url.fetched verifies the SHA-256
+#    BEFORE publishing the file (input.sha256, form "sha256:<hex>").
+- name: Fetch vector tarball
+  module: core.url.fetched
+  params:
+    url: "${ input.base_url + '/v' + input.version + '/vector-' + input.version + '-' + vars.arch_triplet + '.tar.gz' }"
+    path: "${ vars.tarball_path }"
+    checksum: "${ input.sha256 }"
+    mode: "0644"
+    # SSRF-guard opt-out for private-resolve base_url (pattern from redis destiny.yml install.allow_private).
+    allow_private: "${ input.allow_private }"
+
+# 2. Extract the tarball into a directory. format auto-detect by .tar.gz. Idempotent:
+#    core.archive writes a marker and does not re-extract the same archive. Paths — from
+#    vars (tarball_path / extract_dir), a single source of truth.
+- name: Extract vector tarball
+  module: core.archive.extracted
+  params:
+    path: "${ vars.tarball_path }"
+    dest: "${ vars.extract_dir }"

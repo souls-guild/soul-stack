@@ -1,0 +1,101 @@
+# L0 test for create: MANDATORY observability of the data plane (Slice II + V-I, dragonfly).
+# After the deploy branch (DF + sentinel plane + health gates) create UNCONDITIONALLY (no when-gate)
+# deploys, as a COMPOSITION of reusable standalone-destiny via apply:destiny:
+#   - node-exporter — host metrics (version/listen from essence, arch — soulprint.self);
+#     ★ node-exporter-ONLY: DragonFly natively exposes ITS OWN metrics → there is no redis_exporter analog;
+#   - vector        — log shipping (BOTH planes: DragonFly glog + sentinel redis daemon).
+#
+# We prove:
+#   1. node-exporter is deployed: binary installed at /usr/local/bin/node_exporter (presence
+#      marker of the sub-destiny; version/arch → in url/extract, not checked here);
+#   2. vector is deployed: binary installed at /usr/local/bin/vector (presence marker of the sub-destiny
+#      log-shipping);
+#   3. read-model state.monitoring carries the recorded node_exporter version/port (symmetric with the
+#      install/tls read-model), state.logging — vector's version/sink/sources; sink_auth_ref is
+#      NOT materialized in state (security).
+#
+# Topology: replicas_per_master=0 → 1 host (size-guard 1==1+0). provision is disabled (deploy onto a
+# ready roster). render_context.self = the single host (node-solo).
+name: create deploys mandatory node-exporter and vector after deploy (observability)
+
+fixtures:
+  default_destiny_source: "file://../../destiny/{name}"
+  hosts:
+    - sid: node-solo.example.com
+      covens: [create, dragonfly]
+      soulprint:
+        network: { primary_ip: 10.0.0.9 }
+        os: { arch: amd64 }
+  vault:
+    secret/dragonfly/create/users/default_admin:
+      password: dfadmin-create-pass
+    secret/dragonfly/create/users/replica:
+      password: replica-sys-secret-pass
+    secret/dragonfly/create/users/monitoring:
+      password: monitoring-sys-secret-pass
+    secret/dragonfly/create/users/sentinel:
+      password: sentinel-sys-secret-pass
+    secret/dragonfly/create/users/haproxy:
+      password: haproxy-sys-secret-pass
+  essence:
+    sentinel_master_name: master
+    memory_reserve_percent: 75
+    df_config:
+      maxmemory:        "256mb"
+      maxclients:       10000
+    system_acl_users:
+      default_admin: "~* &* +@all"
+      replica:    "+psync +replconf +ping"
+      monitoring: "-@all +@connection +client +ping +info +config|get +cluster|info +slowlog +latency +memory +select +command|count +command|docs"
+      sentinel:   "allchannels +multi +slaveof +ping +exec +subscribe +config|rewrite +role +publish +info +client|setname +client|kill +script|kill"
+      haproxy:    "-@all +auth +client|getname +client|id +client|setname +command +hello +ping +role +info +cluster|info"
+    system_acl_users_sentinel:
+      default_admin: "allchannels allkeys +@all"
+      monitoring: "-@all +@connection -command +client -hello +info -auth +sentinel|masters +sentinel|replicas +sentinel|slaves +sentinel|sentinels +sentinel|ckquorum"
+      sentinel:   "allchannels -@all +auth +client|getname +client|id +client|setname +command +hello +ping +sentinel|is-master-down-by-addr +publish +role +sentinel|get-master-addr-by-name +sentinel|master +sentinel|myid +sentinel|replicas +sentinel|sentinels"
+      haproxy:    "-@all +auth +client|getname +client|id +client|setname +command +hello +ping +role +sentinel|get-master-addr-by-name +sentinel|master +sentinel|myid +sentinel|replicas +sentinel|sentinels"
+    # ★ essence observability keys (Slice II + V-I): node_exporter version/port; vector version/
+    # checksum/sink/sources. console sink (default) — endpoint/auth not needed.
+    node_exporter_version: "1.8.2"
+    node_exporter_listen: ":9100"
+    vector_version: "0.40.0"
+    vector_sha256: "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+    vector_sink_type: console
+    vector_sink_endpoint: ""
+    vector_sink_auth_ref: ""
+    vector_log_sources: ["/var/log/dragonfly/*.log", "/var/log/redis/*.log"]
+  input:
+    version: "1.39.0"
+    replicas_per_master: 0
+    provision:
+      enabled: false
+
+assert:
+  task_present:
+    # 1. node-exporter is deployed (apply:destiny node-exporter → install binary). Presence
+    #    marker of the sub-destiny: core.file.present with path of the node_exporter binary.
+    - module: core.file.present
+      params_subset:
+        path: /usr/local/bin/node_exporter
+        mode: "0755"
+
+    # 2. vector is deployed (apply:destiny vector → install binary). Presence marker of the sub-destiny
+    #    log-shipping (Slice V-I): core.file.present with path of the vector binary.
+    - module: core.file.present
+      params_subset:
+        path: /usr/local/bin/vector
+        mode: "0755"
+
+  state_changes:
+    # monitoring read-model: node_exporter version/port (symmetric with install/tls). ★ node-exporter-
+    # ONLY: no redis_exporter fields. Password/user NOT in state (security).
+    monitoring:
+      node_exporter_version: "1.8.2"
+      node_exporter_listen: ":9100"
+    # log-shipping read-model (Slice V-I, ADR-067): vector's version/sink/sources. sink_auth_ref (token) is NOT
+    # in state (security) — intentionally absent. log_sources — BOTH planes (DragonFly glog + sentinel).
+    logging:
+      vector_version: "0.40.0"
+      vector_sink_type: console
+      vector_sink_endpoint: ""
+      vector_log_sources: ["/var/log/dragonfly/*.log", "/var/log/redis/*.log"]

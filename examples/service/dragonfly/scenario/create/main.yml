@@ -1,0 +1,824 @@
+name: create
+description: >-
+  Deploy DragonFly in sentinel mode (master-replica + sentinel daemon). The operator sets
+  SIMPLE typed concepts (how much memory, eviction policy, ACL users, replicas,
+  TLS), and the scenario TRANSLATES them into the dragonfly.conf flagfile. Boundary:
+
+    - simple layer = the strictly typed structural `input:` below (Named Dict);
+    - translation layer = the scenario body: a data table (memory_reserve_percent) in essence;
+      maxmemory computation — inline CEL; layer merging — the CEL function merge() (SHALLOW
+      last-wins, templating §2.3);
+    - the resulting df_config is rendered into the FULL flagfile at-CREATE (source of truth).
+
+  ★ PILOT (D1, sentinel-only — WITHOUT a dispatcher): ONE mode (sentinel; replicas_per_master=0
+  gives a standalone equivalent: one master + sentinel daemon). cluster is OUT OF SCOPE → no
+  conditional-include by mode, the run body is INLINE in this file (install + render +
+  intra-cluster REPLICAOF + SENTINEL MONITOR + health gates). The deploy body is NOT extracted
+  into a service-level include (single consumer — this create; extraction is justified when the
+  body is shared by ≥2 scenarios, as with redis create+migrate_cluster).
+
+  ★ DragonFly vs redis: the data plane is rendered by destiny `dragonfly` (flagfile instead of
+  redis.conf); the LIVE runtime is community.redis (DragonFly is redis-compatible: PING/REPLICAOF/
+  SENTINEL MONITOR/INFO replication work — the plugin needs NO changes). No redis modules (.so),
+  no cluster directives, no persistence presets (DF persistence — snapshot_cron, deferred).
+
+  Passwords are NOT in the input contract: they live in Vault, resolved KEEPER-SIDE via CEL vault() in
+  the render phase (templating §2.3/§4) — only the VALUE reaches the host (ADR-012). The path is built
+  from the trusted context (incarnation), not from input.
+
+# ── Operator input contract (docs/input.md) ────────────────────────────────
+# Simple typed concepts. Translation into the flagfile — in compute below.
+input:
+  version:
+    type: string
+    # REQUIRED ONLY for install_method=package (required_when, input-only): distro pin.
+    # With install_method=binary the binary version is in essence.binary_version. install_method
+    # has default:package → ALWAYS present → required_when without a has() guard.
+    required_when: "input.install_method == 'package'"
+    pattern: "^([0-9]+:)?[0-9][A-Za-z0-9.~+-]*$"
+    description: >-
+      dragonfly distro package version (distro-native pin). REQUIRED with
+      install_method=package. NOT used with install_method=binary (the binary version is in
+      essence.binary_version).
+
+  # ── install_method: DragonFly install method (default package) ──────────────
+  # package (default) — distro-deb dragonfly; binary — upstream tarball. The binary's URL/version —
+  # author-context (essence.binary_base_url/binary_version, the operator overrides in
+  # spec.essence). compute assembles the destiny structure install {method, base_url, version}.
+  install_method:
+    type: string
+    required: false
+    default: package
+    enum: [package, binary]
+    description: >-
+      DragonFly install method. package (default) — distro-deb dragonfly (=version pin from
+      input.version); binary — upstream tarball (URL/version from essence.binary_base_url/
+      binary_version, filename dragonfly-<arch>.tar.gz built by destiny from soulprint.self.os.arch).
+
+  memory_mb:
+    type: integer
+    required: false
+    min: 64
+    description: >-
+      Memory budget for DragonFly on the host, MB. maxmemory is computed as a share of it
+      (essence.memory_reserve_percent — reserve for the OS) with INTEGER truncation. The lower floor
+      min:64 is not arbitrary: with too small a memory_mb, truncation yields "0mb" (NO limit). Not
+      set → the maxmemory directive is taken from the essence.df_config merge substrate.
+
+  # ★ maxmemory_policy is ABSENT from input: DragonFly has NO such flag (no ABSL_FLAG;
+  # the name is a derived INFO/CONFIG field from the bool --cache_mode). Per-policy selection (redis
+  # names lru/lfu/…) is not translated by DF — eviction is out of PILOT scope. If eviction is
+  # needed later — introduce a boolean input over the real --cache_mode lever as a separate slice, NOT an enum
+  # of redis policies (7 of 8 would collapse into a single cache_mode=true, losing the choice).
+
+  # ── Replicas on master (sentinel mode) ───────────────────────────────────────
+  # replicas_per_master — master's replicas. run roster = 1 master + replicas_per_master
+  # replicas (size-guard below). 0 (default) — no replicas (standalone equivalent).
+  replicas_per_master:
+    type: integer
+    required: false
+    default: 0
+    min: 0
+    description: >-
+      Master's replicas. run roster = 1+replicas_per_master (one master + master's
+      replicas; sentinel daemon on every host). 0 (default) — no replicas (standalone equivalent).
+      size-guard verifies the roster composition.
+
+  # ── Sentinel failover timings ───────────────────────────────────────────────
+  sentinel_down_after_ms:
+    type: integer
+    required: false
+    default: 5000
+    min: 1
+    description: >-
+      How many ms master doesn't respond before sentinel considers it down (directive
+      sentinel down-after-milliseconds). Not set → 5000.
+
+  sentinel_failover_timeout_ms:
+    type: integer
+    required: false
+    default: 60000
+    min: 1
+    description: >-
+      Timeout for a single failover attempt, ms (directive sentinel failover-timeout). Not set →
+      60000.
+
+  # ── operator-extra ACL — TYPED AclUser array (types.yml, ADR-062 $type) ──
+  users:
+    type: array
+    required: false
+    items:
+      $type: AclUser
+    description: >-
+      DragonFly ACL users (AclUser array: {name, perms, state}). perms — the FULL ACL
+      string (Redis ACL syntax, which DragonFly accepts). Rendered into users.acl (destiny
+      `dragonfly`); each user's password is resolved keeper-side from Vault by the convention
+      secret/dragonfly/<incarnation>/users/<name>#password.
+
+  # ── df_settings: passthrough dragonfly.conf flags (KEY→VALUE) ─────────────────
+  # Arbitrary DF flags (underscore form) on top of defaults/computations (last-wins). The UI
+  # draws a KEY→VALUE editor (ADR-045: object + scalar value type → key→value widget).
+  # ★ PILOT: DF flag names are NOT validated against a version catalog (redis has redis_directives
+  # from config.c; for DragonFly a version-aware flag catalog is a separate slice). A typo will
+  # surface at DF startup on the host, not at render. This is a deliberate PILOT simplification.
+  df_settings:
+    type: object
+    required: false
+    description: >-
+      Passthrough dragonfly.conf flags from the operator (key→value, strings, underscore-form
+      DF flags). Override defaults in the final merge (last-wins). For flags not covered by
+      the simple fields above. UI — KEY→VALUE editor. PILOT: names are not validated.
+    properties: {}
+    additional_properties:
+      type: string
+
+  # ── TLS — a single boolean toggle ────────────────────────────────────────────────
+  # tls_enabled — enable TLS (main gate). ★ DragonFly vs redis: TLS lands on the MAIN
+  # --port (flag --tls; DF has NO tls_port — absl FATAL on unknown). So "leave
+  # plain on a separate port" doesn't apply to DF: TLS doesn't open a second listener, it converts
+  # the main one to TLS. There is NO tls_keep_plain/"TLS-only" toggle (no two ports). PEM Vault paths —
+  # author-context (essence.tls_cert_ref/tls_key_ref/tls_ca_ref).
+  tls_enabled:
+    type: boolean
+    required: false
+    default: false
+    description: >-
+      Enable DragonFly TLS (main gate). false (default) → TLS off. TLS lands on the main
+      port 6379 (DragonFly has no separate tls port). Vault paths for cert/key/ca are taken from
+      essence (tls_cert_ref/tls_key_ref/tls_ca_ref).
+
+  # ── cloud-provision: bring up VMs for the topology in the same run (ADR-061, Variant A) ─
+  # ★ provision (redis pattern, user decision 2026-07-01: DragonFly cloud-provision
+  # FOLLOWS the redis pattern; provision is required in the base create): an object input "create machines".
+  # When enabled=true (DEFAULT, see default-on below) — create in ONE run (a) creates VMs
+  # via core.cloud.created (on: keeper), (b) delivers a per-VM bootstrap token over SSH,
+  # (c) registers the created SIDs + BLOCKINGLY waits for onboarding (core.soul.registered
+  # await_online + refresh_soulprint, ADR-061), after which the roster is re-resolved and
+  # the sentinel body rolls the DragonFly role onto now-online hosts.
+  # enabled=false — dragonfly-provision.yml targets no one, the run works against the
+  # EXISTING roster (deploy onto existing souls — the previous service profile).
+  #
+  # ★ provider/profile/await_timeout/ssh_provider the operator MAY leave unset — they
+  # fall back to essence.provision_* (dragonfly-provision.yml: default(input.provision.X,
+  # essence.provision_X)). By default the operator does NOT pick them manually (form hidden).
+  #
+  # ★ There is deliberately NO node_count here: the VM count is derived from the sentinel
+  # TOPOLOGY (1+replicas_per_master) — the single source of truth for cluster size. A separate
+  # node_count would drift out of sync with size-guard (assert size(soulprint.hosts) == the same formula).
+  # ★ teardown (destroy) — NOT here (separate scenario, cascade core.cloud.destroyed).
+  provision:
+    type: object
+    required: false
+    # ★ DEFAULT-ON (redis pattern): provision is ENABLED by default. object top-level default
+    # = {enabled: true} → an operator who does NOT pass the provision section gets cloud-create
+    # (the standard create path — bring up VMs for the topology). To roll onto a READY roster without
+    # provision, the operator sets provision: {enabled: false} EXPLICITLY. The default is duplicated on
+    # the nested enabled (flat mergeInputDefaults does not descend into properties of a partially
+    # specified object — the duplicate keeps the "on by default" semantics uniformly readable).
+    default:
+      enabled: true
+    description: >-
+      Bring up VMs for the topology in the same create run (ADR-061). enabled=true →
+      first cloud-create + onboarding (await_online barrier), then the DragonFly role onto the
+      created hosts. enabled=false → run against the existing roster.
+    additional_properties: false
+    properties:
+      enabled:
+        type: boolean
+        default: true
+        description: Main provision gate. DEFAULT true (default-on). false — dragonfly-provision.yml targets no one.
+      provider:
+        type: string
+        description: >-
+          cloud-Provider name in the providers registry (NOT the plugin name → soul-cloud-<provider>).
+          Not set → essence.provision_provider.
+      profile:
+        type: string
+        description: >-
+          VM profile name in the profiles registry (VM resources/image/network). Not set →
+          essence.provision_profile.
+      await_timeout:
+        type: string
+        pattern: "^[0-9]+[smh]$"
+        description: >-
+          Upper bound for waiting on the onboarding of created VMs (await_online barrier,
+          ADR-061; form <N>{s|m|h}). Not set → essence.provision_await_timeout (default
+          10m). Capped above by keeper.yml::max_await_timeout.
+      join_wait_timeout:
+        type: string
+        pattern: "^[0-9]+[smh]$"
+        description: >-
+          Ceiling for waiting for a freshly created VM to appear in Teleport before delivering
+          the token (core.bootstrap.delivered, retry-until-join; form <N>{s|m|h}). Not set →
+          essence.provision_join_wait_timeout (default 15m).
+      ssh_provider:
+        type: string
+        description: >-
+          SshProvider plugin name (keeper.yml::plugins.ssh_providers[].name) for
+          delivering the per-VM bootstrap token over SSH (core.bootstrap.delivered, ADR-063).
+          Not set → essence.provision_ssh_provider.
+
+# ── Form presentation layer (form:) ────────────────────────────────────────
+form:
+  sections:
+    - key: mode
+      title: "Install"
+      description: "DragonFly install method"
+      fields:
+        - { name: install_method, label: "Install method" }
+        - name: version
+          label: "Package version (distro pin)"
+          hint: "Distro-native pin (=version). Required with install method \"package\"; for \"binary\" the binary version and URL are set in essence."
+
+    - key: resources
+      title: "Memory"
+      fields:
+        - name: memory_mb
+          label: "Memory budget, MB"
+          placeholder: "1024"
+          hint: "Memory budget for DragonFly. maxmemory is computed as a share of it (minus the OS reserve). Not set → maxmemory from the essence substrate."
+
+    - key: topology
+      title: "Topology (sentinel)"
+      description: "Sentinel replicas and timings"
+      collapsed: true
+      fields:
+        - name: replicas_per_master
+          label: "Replicas per master"
+          placeholder: "0"
+          hint: "0 = a single master with no replicas (standalone equivalent)."
+        - name: sentinel_down_after_ms
+          label: "down-after, ms"
+          placeholder: "5000"
+          hint: "How many ms master doesn't respond before sentinel considers it down. Not set → 5000."
+        - name: sentinel_failover_timeout_ms
+          label: "failover-timeout, ms"
+          placeholder: "60000"
+          hint: "Timeout for a single failover attempt. Not set → 60000."
+
+    - key: security
+      title: "ACL and TLS"
+      fields:
+        - { name: users, label: "ACL users" }
+        - { name: tls_enabled, label: "Enable TLS" }
+
+    - key: advanced
+      title: "Advanced"
+      collapsed: true
+      fields:
+        - { name: df_settings, label: "Passthrough dragonfly.conf flags" }
+
+# ── Declarative input invariants (validate:, INPUT-ONLY) ────────────────────
+# ★ There is NO "at least one listener" invariant: with DragonFly TLS lands on the MAIN --port (it
+# doesn't open a second port), so "disable TLS and close plain" is inexpressible — the main port
+# always listens (plain when tls_enabled=false, TLS when tls_enabled=true). See tls_enabled above.
+validate:
+  # system-ACL-users guard (default_admin redesign): operator-extra (input.users) CANNOT
+  # take a SYSTEM user's name (default_admin/replica/monitoring/sentinel/haproxy are merged
+  # in from essence last-wins ON TOP → an operator with the same name would silently override system perms;
+  # an operator `default_admin` would replace the intra-cluster AUTH admin account). INPUT-ONLY
+  # (essence is not available in validate): the reserved list is hardcoded. .all() over the
+  # AclUser array, the name — field u.name. ★ `default` was REMOVED from reserved (the built-in default is no
+  # longer the system one — its role was taken by default_admin; the operator can declare default in input.users).
+  - that: "!has(input.users) || input.users.all(u, !(u.name in ['default_admin', 'replica', 'monitoring', 'sentinel', 'haproxy']))"
+    message: "the ACL user name is reserved for a system user (default_admin/replica/monitoring/sentinel/haproxy): pick another name — system users are created automatically from essence"
+
+# ── Computed scenario vars (compute:) ──────────────────────────────────────
+# compute: resolved KEEPER-SIDE ONCE per run in the run-level context (input/
+# essence/incarnation — WITHOUT soulprint, the host-invariance barrier) and visible as compute.<name>
+# in both the body's apply.input AND state_changes. Removes duplication of the merge() translation:
+# declared HERE once, the body and state reference ${ compute.df_config }.
+#
+# ★ CONFIG BOUNDARY: the host-layout flags --dir (snapshot, → data_dir) and --aclfile (→ conf_dir)
+# are set by the destiny TEMPLATE dragonfly.flags.tmpl FROM vars, NOT this compute. The TLS flags
+# (tls_cert_file/tls_key_file/tls_ca_cert_file) are derived from compute.conf_dir (destiny puts
+# PEM into ${conf_dir}/tls/ — the flagfile must point to the SAME place).
+compute:
+  # ── admin_user: name of the SYSTEM ACL user for intra-cluster AUTH (default_admin) ──
+  # ★ default_admin REDESIGN (symmetric with redis 2026-06-30): a SINGLE source for the admin user's name,
+  # under which ALL intra-cluster authentication runs (replication masterauth, sentinel
+  # monitor/auth, health-PING) — replaced the former DragonFly requirepass. The deploy body reads
+  # compute.admin_user in community.redis.* plugin calls (username/auth_user) and in the Vault path
+  # for its password. A literal (not from input/essence): the system user's name is a service invariant, not
+  # an operator choice. default_admin's password — secret/dragonfly/<inc>/users/default_admin#password.
+  admin_user: "${ 'default_admin' }"
+  # Effective DragonFly version: package → input.version (required_when=package);
+  # binary → essence.binary_version. Declared ONCE (state + plugin read it).
+  df_version: "${ input.install_method == 'binary' ? default(essence.binary_version, '') : (has(input.version) ? input.version : '') }"
+  # Version of the sentinel DAEMON (distro redis-sentinel, NOT DragonFly) for the plugin's version gate
+  # community.redis.sentinel. SEMVER (X.Y.Z) — versionGE 7.0.0. essence-pinned (sentinel —
+  # a separate product, its version doesn't depend on df_version). default catches an absent leaf.
+  sentinel_redis_version: "${ default(essence.sentinel_redis_version, '7.2.4') }"
+  # Distro pin of the redis-server PACKAGE (carries redis-sentinel), goes into apply.input.version
+  # of the second apply:destiny:redis (sentinel_only). ★ SEPARATE from sentinel_redis_version above:
+  # this is the apt form with an optional epoch/revision (5:7.0.15-1~deb12u7), while that one is SEMVER for
+  # the plugin's version gate. Two DIFFERENT formats → two compute vars. essence-pinned; default catches
+  # an absent leaf (back-compat with old-ref essence).
+  sentinel_redis_package_version: "${ default(essence.sentinel_redis_package_version, '5:7.0.15-1~deb12u7') }"
+  # Per-master sentinel directives (failover timings): map `sentinel <opt> <master>` →
+  # value. The sentinel.conf.tmpl template ranges over it, the plugin community.redis.sentinel classifyConfig
+  # expands per-master → SENTINEL SET. A SINGLE source of truth (starting config + live).
+  sentinel_directives: >-
+    ${ {
+         'sentinel down-after-milliseconds ' + default(essence.sentinel_master_name, 'master'): string(int(input.sentinel_down_after_ms)),
+         'sentinel failover-timeout '         + default(essence.sentinel_master_name, 'master'): string(int(input.sentinel_failover_timeout_ms))
+       } }
+  # install: destiny structure {method, base_url, version} from install_method + essence.binary_*.
+  # method always; base_url/version when method=binary. The same structure in destiny (apply.input.
+  # install) and state.
+  install: >-
+    ${ (input.install_method == 'binary')
+         ? {
+             'method':   'binary',
+             'base_url': default(essence.binary_base_url, ''),
+             'version':  default(essence.binary_version, '')
+           }
+         : { 'method': 'package' } }
+  # Effective host layout: conf_dir/data_dir from essence (author-context, host invariant).
+  # ★ Flagfile TLS flags follow conf_dir: destiny puts PEM in ${conf_dir}/tls/.
+  conf_dir: "${ default(essence.conf_dir, '/etc/dragonfly') }"
+  data_dir: "${ default(essence.data_dir, '/var/lib/dragonfly') }"
+  # ★ The instance's LOCAL address is a UNIX SOCKET (NOT 127.0.0.1:port). DF with --bind=primary_ip does NOT
+  # listen on loopback, local plugin calls (health-gate, REPLICAOF's own addr, ACL LOAD)
+  # go to the socket ${run_dir}/dragonfly.sock (the same path as the --unixsocket flag in the template).
+  # The community.redis plugin understands the unix: address prefix. run_dir is a host invariant (destiny vars;
+  # the default duplicates the default /var/run/dragonfly — the scenario doesn't see destiny vars). The socket is
+  # WITHOUT TLS (local UDS) → for local calls we do NOT set tls/tls_ca even on a TLS instance.
+  local_addr:  "${ 'unix:' + default(essence.run_dir, '/var/run/dragonfly') + '/dragonfly.sock' }"
+  # TLS: one toggle + essence. tls_on = tls_enabled (main gate). ★ With DragonFly TLS lands
+  # on the main --port (no tls_port, no "TLS-only" — the main port always listens). Vault
+  # refs — from essence (default() catches an absent leaf; L0 cases without TLS don't set them).
+  tls_on:      "${ input.tls_enabled }"
+  tls_cert_ref: "${ has(essence.tls_cert_ref) ? essence.tls_cert_ref : '' }"
+  tls_key_ref:  "${ has(essence.tls_key_ref)  ? essence.tls_key_ref  : '' }"
+  tls_ca_ref:   "${ has(essence.tls_ca_ref)   ? essence.tls_ca_ref   : '' }"
+  # df_config — the RESULT of translating simple input into a flagfile map (DF flags, underscore form).
+  # Merge layers (SHALLOW last-wins, left to right): essence.df_config (defaults) → computed
+  # maxmemory (has-guard) → input.df_settings (passthrough) → TLS block (after passthrough —
+  # the operator can't break TLS). WITHOUT a persistence preset (DF persistence deferred), WITHOUT cluster
+  # directives (sentinel-only). ★ maxmemory_policy is NOT in the merge: DF has no such flag (absl
+  # FATAL on unknown) — eviction is out of PILOT scope.
+  # ★ TLS block — DF flags: tls/tls_cert_file/tls_key_file/tls_ca_cert_file/tls_replication
+  # (underscore!). Bool flags (tls/tls_replication) — value 'true' (absl accepts --flag=
+  # true). ★ There is NO tls_port (DragonFly has no such flag — absl FATAL); TLS lands on the main
+  # --port, no second port opens → neither tls_port nor `--port=0`.
+  df_config: >-
+    ${ merge(
+         essence.df_config,
+         has(input.memory_mb)
+           ? { 'maxmemory': string(int(input.memory_mb) * int(essence.memory_reserve_percent) / 100) + 'mb' }
+           : {},
+         default(input.df_settings, {}),
+         compute.tls_on
+           ? {
+               'tls':                'true',
+               'tls_cert_file':      compute.conf_dir + '/tls/dragonfly.crt',
+               'tls_key_file':       compute.conf_dir + '/tls/dragonfly.key',
+               'tls_ca_cert_file':   compute.conf_dir + '/tls/ca.crt',
+               'tls_replication':    'true'
+             }
+           : {}
+       ) }
+
+# ── incarnation.state mutation ─────────────────────────────────────────────────
+# After a successful apply, Keeper commits what was deployed (ADR-009 §7.1, ADR-057 list form).
+# df_config — the same compute.df_config that went into render: a re-apply and day-2 see
+# a single source of truth.
+state_changes:
+  - set: df_version
+    value: "${ compute.df_version }"
+  - set: df_config
+    value: "${ compute.df_config }"
+  # tls: the same compute.tls_* (cert/key/ca — Vault PATHS, not PEM). ★ WITHOUT only/port: with
+  # DragonFly TLS is on the main port (no tls_port, no "TLS-only") — day-2 connects via the socket.
+  - set: tls
+    value: >-
+      ${ {
+           'enable':   compute.tls_on,
+           'cert_ref': compute.tls_cert_ref,
+           'key_ref':  compute.tls_key_ref,
+           'ca_ref':   compute.tls_ca_ref
+         } }
+  # ★ install + host-layout (conf_dir/data_dir) moved out into essence (v1→v2, Variant A):
+  # install — a read-model without readers, layout — day-2 reads essence directly
+  # (default(essence.<x>, '<def>')). Their sets no longer exist — the keys are not in state_schema,
+  # a set would write a field outside the schema → state validation would fail.
+  - set: memory_mb
+    value: "${ int(default(input.memory_mb, 0)) }"
+  - set: sysctl_settings
+    value: "${ default(essence.sysctl_settings, {}) }"
+  # monitoring: read-model of the FACT that node_exporter was deployed (Slice II, ADR-024; symmetric
+  # with the install/tls read-model). Version/port — from essence.node_exporter_* (the same values
+  # that go into apply.input for the node-exporter destiny). ★ node-exporter-ONLY (DragonFly exposes
+  # metrics natively) — there are no redis_exporter fields here. Defaults duplicate essence/migration 004_to_005.
+  - set: monitoring
+    value: >-
+      ${ {
+           'node_exporter_version': default(essence.node_exporter_version, ''),
+           'node_exporter_listen':  default(essence.node_exporter_listen, ':9100')
+         } }
+  # logging: read-model of the FACT that log shipping was deployed (Slice V-I, ADR-067; symmetric with monitoring).
+  # Version/sink_type/endpoint/log_sources — from essence.vector_* (the same values that go into
+  # apply.input for the vector destiny). ★ vector_sink_auth_ref is NOT written HERE — it's a secret (in Vault, like
+  # tls.*_ref). Defaults duplicate essence/migration 005_to_006 (console — a safe default).
+  - set: logging
+    value: >-
+      ${ {
+           'vector_version':       default(essence.vector_version, ''),
+           'vector_sink_type':     default(essence.vector_sink_type, 'console'),
+           'vector_sink_endpoint': default(essence.vector_sink_endpoint, ''),
+           'vector_log_sources':   default(essence.vector_log_sources, [])
+         } }
+  # Topology: replicas (master's replicas), sentinel_quorum=0 (auto, not materialized).
+  - set: replicas
+    value: "${ int(default(input.replicas_per_master, 0)) }"
+  - set: sentinel_quorum
+    value: "${ 0 }"
+  # df_users — the AclUser array as-is (passwords are NOT in state, they're in Vault).
+  - set: df_users
+    value: "${ default(input.users, []) }"
+  # df_hosts empty: state_changes are rendered per-host with soulprint.SELF (AllowHosts=false,
+  # orchestration §7.1) — the soulprint.hosts roster is not available. The exact declared roles — in
+  # apply.input.sentinel, not in state.
+  - set: df_hosts
+    value: "${ [] }"
+  # df_sentinel: facts about the monitored master. master_name from essence; quorum=0 (auto); master_ip
+  # is not written (host-variant); failover timings from input.
+  - set: df_sentinel
+    value: >-
+      ${ {
+           'master_name':         default(essence.sentinel_master_name, 'master'),
+           'quorum':              0,
+           'down_after_ms':       int(input.sentinel_down_after_ms),
+           'failover_timeout_ms': int(input.sentinel_failover_timeout_ms)
+         } }
+
+  # ── cloud-provision read-model (ADR-061, Variant A) ──────────────────────────
+  # The FACT that "these VMs were created by THIS create run". ★ GUARD on input.provision (NOT
+  # has(register.provision)!): on a non-provision run dragonfly-provision.yml targets no one
+  # → there is no core.cloud.created step → register.provision does not exist → has(register
+  # .provision) would give no-such-key IN THE PREDICATE ITSELF. The gate is input.provision (an object input,
+  # has()-safe): set AND enabled → read register.provision (created by step (a)); otherwise [] / ''
+  # (hosts not provisioned by the service). The ternary short-circuits — register.provision.* is untouched
+  # on the non-provision path. Mirror of redis covenant.yml provisioned_* state_changes.
+  - set: provisioned_vm_ids
+    value: >-
+      ${ (has(input.provision) && input.provision.enabled)
+           ? register.provision.vm_ids
+           : [] }
+  # provisioned_sids: SID (FQDN) of created VMs — for cascade-destroy day-2 teardown
+  # (souls→destroyed/seeds→orphaned/tokens→burned; the Reaper does NOT remove pending VM-souls).
+  # The same GUARD on input.provision as vm_ids/provider. sids are collected from
+  # register.provision.hosts[].sid (.map — the same expression as params.sid of step (c)
+  # core.soul.registered in dragonfly-provision.yml). Otherwise [] (hosts not provisioned by the service).
+  - set: provisioned_sids
+    value: >-
+      ${ (has(input.provision) && input.provision.enabled)
+           ? register.provision.hosts.map(h, h.sid)
+           : [] }
+  # provisioned_provider — the FACT provider of created VMs. provider is read as
+  # default(input.provision.provider, essence.provision_provider): the operator usually does NOT set
+  # provider (the provision form is hidden, default-on) → falls back to essence.provision_provider
+  # (symmetric with dragonfly-provision.yml::core.cloud.created.params.provider). The gate
+  # input.provision (has()-safe) covers the non-provision path: enabled=false → '' (VMs not provisioned).
+  - set: provisioned_provider
+    value: >-
+      ${ (has(input.provision) && input.provision.enabled)
+           ? default(input.provision.provider, essence.provision_provider)
+           : '' }
+
+# ── Run body (INLINE, sentinel-only — no dispatcher/include) ──────────────
+tasks:
+  # ── Generate passwords in Vault BEFORE any secret is read (core.vault.kv-present) ──
+  # ★ SERVICE-GENERATED SECRETS (symmetric with redis 2026-06-28): the operator does NOT pre-seed passwords
+  # in Vault — create GENERATES the missing ones itself, crypto-random (generate-if-absent). A
+  # keeper-side step (on: keeper, core.vault.kv-present): for each target it reads the path and, if
+  # the field is missing — writes a crypto/rand value per policy; if present — no-op (does NOT overwrite, rotation is
+  # a separate scenario). changed=true only on actual generation.
+  #
+  # ★★ PASSAGE INVARIANT: this step MUST execute (write to Vault) BEFORE the render phase of tasks
+  # reading the same secrets via ${ vault(...) } (apply dragonfly + apply redis sentinel +
+  # community.redis.*). The staged-render model (ADR-056): passage N applies BEFORE render of passage
+  # N+1. vault() at render time with a missing secret ABORTS render, so generate MUST be in an
+  # EARLIER passage. The step — `on: keeper` WITHOUT a roster dependency → Stratify keeps it in
+  # passage 0; the deploy's read tasks read the roster (soulprint.hosts/soulprint.self) → passage > 0.
+  #
+  # targets are COMPUTED from the SAME essence/input as the read tasks (drift "what we generate ≡ what we
+  # read" = a bug, the user list is NOT hardcoded): union of keys system_acl_users ∪
+  # system_acl_users_sentinel (default_admin is in BOTH) + operator-extra input.users. policy
+  # alphanumeric/32 (ACL-safe). ★ WITHOUT the former main secret/dragonfly/<inc>#password — requirepass
+  # was removed (default_admin redesign), the admin account is now default_admin (in the sets).
+  - name: Ensure dragonfly passwords exist in Vault (generate if absent)
+    on: keeper
+    module: core.vault.kv-present
+    params:
+      policy:
+        length: 32
+        charset: alphanumeric
+      targets: "${ merge(default(essence.system_acl_users, {}).map(n, { n: 0 }) + default(essence.system_acl_users_sentinel, {}).map(n, { n: 0 })).map(name, { 'path': 'secret/dragonfly/' + incarnation.name + '/users/' + name, 'field': 'password' }) + (has(input.users) ? input.users.map(u, { 'path': 'secret/dragonfly/' + incarnation.name + '/users/' + u.name, 'field': 'password' }) : []) }"
+
+  # ── provision (ADR-061, Variant A): cloud-create + onboarding BEFORE deploy ─────
+  # CONDITIONAL-INCLUDE dragonfly-provision.yml STRICTLY BEFORE size-guard and deploy: with
+  # enabled=true its steps (a) create VMs, (b) register + wait for onboarding with
+  # refresh_soulprint → the roster is re-resolved, and ONLY THEN do size-guard/deploy see
+  # the created hosts in soulprint.hosts. ★ the SHARED PROVISION BODY is service-level
+  # (scenario/dragonfly-provision.yml): scenario-include falls back the file name to
+  # service-level (orchestration.md §6). when on input.provision is static (only
+  # input.*, without register/soulprint) → group-drop include-when: with enabled=false/an omitted
+  # section the whole provision body (incl. NIM-58 name-guard) is dropped from the plan. has()-guard — the section
+  # is optional (no-such-key without it).
+  #
+  # ★★ ORDER provision→size-guard: size-guard reads soulprint.hosts (a roster consumer),
+  # the provision body carries core.soul.registered with refresh_soulprint:true (a refresh emitter) →
+  # Stratify moves size-guard/deploy to a passage STRICTLY AFTER onboarding (the roster-refresh edge).
+  # With enabled=false there's no provision — size-guard checks the ORIGINAL declared-roster. ★ teardown is NOT here.
+  - include: dragonfly-provision.yml
+    when: "has(input.provision) && input.provision.enabled"
+
+  # ── 0. SIZE-GUARD (topology) — keeper-side render-time assert ────────────────
+  # The roster size MUST be exactly 1+replicas_per_master (one master + replicas; sentinel
+  # daemon on EVERY host). Otherwise master-election (run_once by sorting soulprint.hosts) and
+  # SENTINEL MONITOR/REPLICAOF would drift apart from the declared topology. The predicate is computed
+  # KEEPER-SIDE at RENDER (soulprint.hosts is available). false ABORTS render with a message BEFORE
+  # installation. ★ assert (not validate): needs soulprint.hosts (roster), validate is INPUT-ONLY.
+  - name: Guard sentinel roster size matches replicas
+    assert:
+      that:
+        - "size(soulprint.hosts) == 1 + int(input.replicas_per_master)"
+      message: "the run roster host count must be exactly 1+replicas_per_master (one master + master's replicas; sentinel daemon on every host) - target as many souls as there are nodes in the declared topology"
+
+  # ── 1. Per-host install + render flagfile + users.acl + sentinel.conf + units ──
+  # destiny `dragonfly` (mode-agnostic) with sentinel_enabled=true. config — a base merge
+  # (WITHOUT cluster directives). compute.df_config is host-invariant → apply.input.
+  - name: Apply dragonfly destiny (install + render dragonfly.conf/users.acl/sentinel.conf + systemd)
+    apply:
+      destiny: dragonfly
+      input:
+        # version: distro pin (package). With binary the binary version is in essence.binary_version
+        # (compute.df_version); destiny doesn't install a distro-deb → has()-guard ''.
+        version:  "${ has(input.version) ? input.version : '' }"
+        install:  "${ compute.install }"
+        conf_dir: "${ compute.conf_dir }"
+        data_dir: "${ compute.data_dir }"
+        # ★ default_admin REDESIGN: input.password is REMOVED (requirepass removed from the flagfile).
+        # Authentication runs under the system default_admin, its password arrives via users below.
+        # A single compute.df_config (the same map as state_changes.df_config — drift is removed
+        # by compute itself). Base merge (WITHOUT cluster; tls/tls_replication true with TLS — TLS
+        # on the main port, WITHOUT tls_port). HOST-INVARIANT → apply.input.
+        #
+        # ★ default_admin REDESIGN: STATIC replica→master AUTH in the flagfile — masteruser/
+        # masterauth are ADDED into config as ORDINARY flags (on top of compute.df_config). CRITICAL
+        # for PERSISTENCE across a restart: the community.redis.replica plugin (step 3) sets them
+        # via CONFIG SET at runtime, but CONFIG SET is NOT persisted → on restart DragonFly
+        # would come up without masterauth → replica master_link_status:DOWN. A static flag in
+        # the flagfile survives a restart. The directives are HOST-INVARIANT (one default_admin per
+        # cluster) → apply.input. ★ DIFFERENT from state_changes.df_config: there it's the PURE compute.df_config
+        # WITHOUT masterauth — the password does NOT go into state (secret stays in Vault). masterauth is a vault()
+        # CALL IN THE CELL (seal masking). admin_user = default_admin; path — secret/dragonfly/<inc>/users/
+        # default_admin#password. DF flag names are underscore-form (masteruser/masterauth are
+        # one word, matching redis).
+        config: >-
+          ${ merge(compute.df_config, {
+               'masteruser': compute.admin_user,
+               'masterauth': vault('secret/dragonfly/' + incarnation.name + '/users/' + compute.admin_user + '#password')
+             }) }
+        # ★ SYSTEM + operator-extra ACL: system default_admin/replica/monitoring/sentinel/
+        # haproxy from essence.system_acl_users FIRST, operator-extra (input.users — an
+        # AclUser array) ON TOP (last-wins). ★ default_admin (redesign) is a SYSTEM user with full
+        # access (~* &* +@all): intra-cluster AUTH runs under it (replaced requirepass). Without
+        # the system users, replication (replica), sentinel↔df AUTH (sentinel), and the admin connection
+        # (default_admin) would break. Vault password — secret/dragonfly/<inc>/users/<name>#password.
+        # operator-extra: .map(u, {u.name: …}).
+        users: >-
+          ${ merge(
+               merge(default(essence.system_acl_users, {}).map(name, {
+                 name: {
+                   'perms':    essence.system_acl_users[name],
+                   'state':    'on',
+                   'password': vault('secret/dragonfly/' + incarnation.name + '/users/' + name + '#password')
+                 }
+               })),
+               has(input.users)
+                 ? merge(input.users.map(u, {
+                     u.name: {
+                       'perms':    u.perms,
+                       'state':    u.state,
+                       'password': vault('secret/dragonfly/' + incarnation.name + '/users/' + u.name + '#password')
+                     }
+                   }))
+                 : {}
+             ) }
+        # Host-tuning extras (THP/logrotate/sysctl UNCONDITIONAL). sysctl_settings — essence,
+        # host-invariant → apply.input.
+        sysctl_settings:  "${ default(essence.sysctl_settings, {}) }"
+        # TLS — a single dict. enable — a compute-var (the toggle). ★ WITHOUT only/port: DragonFly TLS
+        # is on the main port (no tls_port, no "TLS-only"). cert_ref/key_ref/ca_ref — Vault
+        # PATHS (destiny reads the PEM via vault() in the cell, seal masking); refs from essence.tls_*_ref.
+        tls:
+          enable:   "${ compute.tls_on }"
+          cert_ref: "${ compute.tls_cert_ref }"
+          key_ref:  "${ compute.tls_key_ref }"
+          ca_ref:   "${ compute.tls_ca_ref }"
+        # ★ the sentinel daemon is NO LONGER installed by destiny `dragonfly` (sentinel_enabled/sentinel/
+        # sentinel_users REMOVED): DragonFly doesn't carry redis-sentinel, the distro daemon fully
+        # deploys destiny `redis` (sentinel_only-capability, a SEPARATE apply — step 1b
+        # AFTER the DF health-gate). This apply now installs ONLY the DragonFly data plane.
+
+  # ── 2. Health-gate per-host: PING a live DragonFly after startup ───────────────
+  # community.redis.command (DragonFly is redis-compatible). Every node must respond BEFORE
+  # replica binding/sentinel setup. ★ LOCAL connect — via a UNIX SOCKET
+  # (compute.local_addr): DF with --bind=primary_ip does NOT listen on 127.0.0.1, the socket is a separate
+  # UDS listener (always available locally). UDS without TLS (anti-downgrade doesn't apply — this is not a
+  # network path, the AUTH password never goes over the network): tls/tls_ca are NOT set even on a TLS instance.
+  - name: Wait for each dragonfly node to answer PING
+    module: community.redis.command
+    retry: { count: 10, delay: 3s }
+    params:
+      addr:     "${ compute.local_addr }"
+      # ★ default_admin REDESIGN: AUTH under default_admin (requirepass removed). username + its
+      # password from secret/dragonfly/<inc>/users/default_admin#password. Local UDS without
+      # TLS (not a network path) — tls/tls_ca NOT set even on a TLS instance.
+      username: "${ compute.admin_user }"
+      password: "${ vault('secret/dragonfly/' + incarnation.name + '/users/' + compute.admin_user + '#password') }"
+      args:     ["PING"]
+
+  # ── 2b. Sentinel plane via destiny `redis` (sentinel_only-capability, REUSE) ─
+  # ★ REUSE of destiny `redis` (two apply:destiny in one scenario, ADR-009): instead of
+  # DUPLICATING sentinel tasks in destiny `dragonfly` (sentinel.conf/redis-sentinel.service/
+  # sentinel-users.acl), the sentinel daemon is brought up with the SAME brick as redis — destiny `redis`
+  # in sentinel_only mode (deploy_redis=false → the redis-server data plane is NOT deployed,
+  # only the sentinel daemon over an EXTERNAL master, played here by DragonFly). DragonFly is
+  # redis-compatible on the wire → sentinel monitors it like an ordinary redis-master.
+  #
+  # ★ ORDER: AFTER the DF health-gate (PING) — the DragonFly master is already alive and responding, the sentinel
+  #   daemon is set up over a working master. SENTINEL MONITOR (step 4) comes even later —
+  #   after replica REPLICAOF.
+  #
+  # ★ sentinel_only destiny `redis` CONTRACT: install.yml installs the redis package (carries redis-
+  #   sentinel) UNCONDITIONALLY; server.yml (data plane) gated by deploy_redis → group-drop when
+  #   false; sentinel.yml gated by sentinel_enabled → active. Sentinel daemon paths (redis user,
+  #   /var/lib/redis state) — destiny `redis` defaults; data_dir is NOT passed (R1: default
+  #   /var/lib/redis under the redis user — sentinel writes state there, not into DragonFly's /var/lib/dragonfly).
+  # ★ version (R4): distro pin of the redis-server PACKAGE (essence.sentinel_redis_package_version,
+  #   apt form with epoch). required_when destiny `redis` is true (install.method=package by
+  #   default) → version is required EVEN with deploy_redis=false (the package is always installed).
+  # ★ default_admin REDESIGN (R3 reworked): input.password REMOVED from destiny `redis` —
+  #   the sentinel daemon connects to the DragonFly master as ACL user default_admin (auth_user/
+  #   auth_pass in the sentinel block), while connection-AUTH to :26379 itself is as default_admin from
+  #   the sentinel set (sentinel_users.default_admin). The old "default → the main secret" ternary is
+  #   REMOVED — all system users go through the SAME branch secret/dragonfly/<inc>/users/<name>#password.
+  - name: Apply redis destiny in sentinel_only mode (sentinel daemon monitoring the DragonFly master)
+    apply:
+      destiny: redis
+      input:
+        # sentinel_only: do NOT deploy the redis-server data plane (only the sentinel daemon).
+        deploy_redis: false
+        sentinel_enabled: true
+        # distro pin of the redis-server PACKAGE (carries redis-sentinel). apt form with epoch — SEPARATE
+        # from sentinel_redis_version (the plugin's semver version-gate). required with package-install.
+        version:  "${ compute.sentinel_redis_package_version }"
+        sentinel:
+          # master_name — the same logical name for the monitored master as the DF plane.
+          master_name: "${ default(essence.sentinel_master_name, 'master') }"
+          # master-election: the first host by SID = master (the DragonFly instance). HOST-INVARIANT.
+          master_ip:   "${ soulprint.hosts[0].network.primary_ip }"
+          master_port: 6379
+          # quorum — AUTO (majority): size(soulprint.hosts)/2+1. Computed INLINE in apply.input
+          # (NOT from compute — compute doesn't see soulprint, the host-invariance barrier).
+          quorum:      "${ int(size(soulprint.hosts)) / 2 + 1 }"
+          # ★ default_admin REDESIGN: sentinel AUTH to the DragonFly master — as ACL user
+          # default_admin (requirepass removed). auth_user + auth_pass are rendered into sentinel.conf
+          # (sentinel auth-user/auth-pass <master>). Without auth_user sentinel would connect as the
+          # built-in default (now off) → NOAUTH while monitoring the DF master.
+          auth_user:   "${ compute.admin_user }"
+          auth_pass:   "${ vault('secret/dragonfly/' + incarnation.name + '/users/' + compute.admin_user + '#password') }"
+          # starting per-master failover timings in sentinel.conf. compute.sentinel_directives
+          # is a map `sentinel <opt> <master>` → value; the template ranges over .vars.sentinel_config.
+          config:      "${ compute.sentinel_directives }"
+        # 2nd aclfile of the sentinel daemon: system users from essence.system_acl_users_sentinel
+        # (sentinel commands). ★ default_admin REDESIGN: the old "default → the MAIN secret,
+        # others → users/<name>" ternary is REMOVED — all system users (incl. default_admin) go through the SAME
+        # branch secret/dragonfly/<inc>/users/<name>#password. The sentinel daemon connects to :26379 as
+        # default_admin (its password from this branch), to the DF master as auth_user default_admin.
+        sentinel_users: >-
+          ${ merge(default(essence.system_acl_users_sentinel, {}).map(name, {
+               name: {
+                 'perms':    essence.system_acl_users_sentinel[name],
+                 'state':    'on',
+                 'password': vault('secret/dragonfly/' + incarnation.name + '/users/' + name + '#password')
+               }
+             })) }
+
+  # ── 3. REPLICAOF for replicas: community.redis.replica ONLY on replicas ───────────
+  # addr — the LOCAL instance via a UNIX SOCKET (compute.local_addr); master_addr — the HOST-
+  # INVARIANT EXTERNAL address of the master (master-election soulprint.hosts[0]). ★ master_addr
+  # stays TCP primary_ip:6379 (the external replica→master link): DragonFly TLS is on the MAIN
+  # port 6379 (no separate tls port), the replication link over TLS is enabled by the
+  # tls_replication directive in the flagfile (df_config), NOT plugin params. ★ P0-INVARIANT (a master must NOT
+  # replicate itself): `where:` excludes the elected master by SID — the task is rendered
+  # ONLY on replicas. ★ Local addr (UDS) without tls/tls_ca: the plugin's connection to its own
+  # instance goes over the socket (not a network path), TLS isn't needed there.
+  #
+  # ★ default_admin REDESIGN: replica→master AUTH as ACL user default_admin (requirepass
+  # removed). username (→ CONFIG SET masteruser) + password (→ CONFIG SET masterauth) — the plugin
+  # sets them AT RUNTIME for the initial REPLICAOF. PERSISTENCE across a restart is provided by the
+  # static masteruser/masterauth in the flagfile (apply dragonfly step 1). Password —
+  # secret/dragonfly/<inc>/users/default_admin#password (the same branch as health-PING).
+  - name: Make replicas follow the elected master (REPLICAOF)
+    where: "soulprint.self.sid != soulprint.hosts[0].sid"
+    module: community.redis.replica
+    params:
+      addr:        "${ compute.local_addr }"
+      master_addr: "${ soulprint.hosts[0].network.primary_ip + ':6379' }"
+      username:    "${ compute.admin_user }"
+      password:    "${ vault('secret/dragonfly/' + incarnation.name + '/users/' + compute.admin_user + '#password') }"
+
+  # ── 4. SENTINEL MONITOR reconcile: community.redis.sentinel on EVERY host ────
+  # addr — the local sentinel (127.0.0.1:26379); monitor.ip — the HOST-INVARIANT address of the
+  # master. quorum — majority size/2+1. auth_pass — keeper-side vault() resolve. config — the same
+  # per-master timings (compute.sentinel_directives). ★ PILOT: on create we monitor the master
+  # IMMEDIATELY (node-1 is the real master; the redis contract flag sentinel_monitor_now is only needed by
+  # migrate_cluster — not present here, MONITOR is unconditional).
+  - name: Configure each sentinel to monitor the elected master (SENTINEL MONITOR)
+    module: community.redis.sentinel
+    params:
+      addr:        "127.0.0.1:26379"
+      master_name: "${ default(essence.sentinel_master_name, 'master') }"
+      # ★ CONNECTION-AUTH to the sentinel daemon :26379 (separate from auth_pass — monitoring
+      # the master): sentinel.conf carries an aclfile sentinel-users.acl, the built-in default is rendered
+      # `off`, connection uses the SYSTEM default_admin (sentinel set, step 2b). ★ default_admin
+      # REDESIGN: username + secret/dragonfly/<inc>/users/default_admin#password (the old
+      # main secret DROPPED). password → redis.Options.Password (connection AUTH). Without it → NOAUTH.
+      username:    "${ compute.admin_user }"
+      password:    "${ vault('secret/dragonfly/' + incarnation.name + '/users/' + compute.admin_user + '#password') }"
+      auth_user:   "${ compute.admin_user }"
+      auth_pass:   "${ vault('secret/dragonfly/' + incarnation.name + '/users/' + compute.admin_user + '#password') }"
+      # ★ Version of the sentinel DAEMON (distro redis-sentinel), NOT DragonFly: this param gates
+      # version-aware sentinel features of the plugin (versionGE 7.0.0). df_version must NOT be used here —
+      # DF and the sentinel daemon are different products with different versions.
+      redis_version: "${ compute.sentinel_redis_version }"
+      config:      "${ compute.sentinel_directives }"
+      monitor:
+        ip:     "${ soulprint.hosts[0].network.primary_ip }"
+        port:   6379
+        quorum: "${ int(size(soulprint.hosts)) / 2 + 1 }"
+
+  # ── 5. Health-gate per-host: SENTINEL answers PONG on :26379 ─────────────────
+  # ★ STRICTLY same-task register.self (NOT cross-passage flow-control, ADR-056): "wait for N
+  # sentinels" is NOT expressible — we check ONLY our own local sentinel. retry/until +
+  # failed_when on register.self.result of the same task.
+  - name: Wait until each sentinel answers PONG on :26379
+    module: community.redis.command
+    changed_when: false
+    retry:
+      count: 12
+      delay: 2s
+      until: "register.self.result == 'PONG'"
+    failed_when: "register.self.result != 'PONG'"
+    params:
+      addr: "127.0.0.1:26379"
+      # ★ CONNECTION-AUTH: the sentinel daemon is protected by an aclfile (the built-in default is rendered `off`,
+      # connection uses the SYSTEM default_admin from the sentinel set). PING without AUTH → NOAUTH. ★ default_admin
+      # REDESIGN: username + secret/dragonfly/<inc>/users/default_admin#password (the old
+      # main secret DROPPED). The same pair as the connection-AUTH of step 4 (SENTINEL MONITOR to :26379).
+      username: "${ compute.admin_user }"
+      password: "${ vault('secret/dragonfly/' + incarnation.name + '/users/' + compute.admin_user + '#password') }"
+      args: ["PING"]
+
+  # ── 6. MANDATORY data-plane monitoring (Slice II, ADR-024) ──────────────
+  # AFTER the deploy branch (DF + sentinel plane + health-gates) create UNCONDITIONALLY (without a
+  # when gate) deploys node_exporter on EVERY host of the incarnation by COMPOSING a reusable
+  # standalone destiny via apply:destiny (isolated render, ADR-009). Monitoring is not an
+  # operator choice but a data-service invariant (contract=A: versions/ports in essence).
+  # ★ node-exporter-ONLY: DragonFly exposes its OWN metrics natively (built-in prometheus endpoint)
+  # → no redis_exporter counterpart is installed. destiny takes arch itself from soulprint.self.os.arch.
+  - name: Apply node-exporter destiny (host metrics)
+    apply:
+      destiny: node-exporter
+      input:
+        version: "${ default(essence.node_exporter_version, '1.8.2') }"
+        listen:  "${ default(essence.node_exporter_listen, ':9100') }"
+        # Download root: essence override to an internal mirror/nexus proxy; default — GitHub.
+        base_url: "${ default(essence.node_exporter_base_url, 'https://github.com/prometheus/node_exporter/releases/download') }"
+        # SSRF-guard opt-out for a private-resolve base_url; default false — the guard stays on.
+        allow_private: "${ default(essence.node_exporter_allow_private, false) }"
+
+  # ── 7. MANDATORY data-plane log-shipping (Slice V-I, ADR-067) ─────────────
+  # AFTER the exporter, create UNCONDITIONALLY deploys vector (a log-shipping agent) on EVERY
+  # host by COMPOSING a reusable standalone destiny via apply:destiny (ADR-009). vector
+  # COMPLEMENTS node_exporter (metrics, pull) with a log plane (logs, push). log_sources — BOTH
+  # planes: DragonFly glog (/var/log/dragonfly/*.log) + the sentinel daemon (/var/log/redis/*.log).
+  # sink_auth_ref — a Vault ref OR a value (resolved Soul-side, the secret doesn't land in state, security).
+  - name: Apply vector destiny (log shipping)
+    apply:
+      destiny: vector
+      input:
+        version:       "${ default(essence.vector_version, '0.40.0') }"
+        sha256:        "${ default(essence.vector_sha256, '') }"
+        base_url:      "${ default(essence.vector_base_url, 'https://github.com/vectordotdev/vector/releases/download') }"
+        # SSRF-guard opt-out for a private-resolve base_url; default false — the guard holds.
+        allow_private: "${ default(essence.vector_allow_private, false) }"
+        sink_type:     "${ default(essence.vector_sink_type, 'console') }"
+        sink_endpoint: "${ default(essence.vector_sink_endpoint, '') }"
+        sink_auth_ref: "${ default(essence.vector_sink_auth_ref, '') }"
+        log_sources:   "${ default(essence.vector_log_sources, []) }"

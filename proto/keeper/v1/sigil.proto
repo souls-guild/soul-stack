@@ -1,0 +1,85 @@
+syntax = "proto3";
+
+package soulstack.keeper.v1;
+
+option go_package = "github.com/souls-guild/soul-stack/proto/gen/go/keeper/v1;keeperv1";
+
+// PluginSigil transports one Sigil trust seal (ADR-026) from Keeper to Soul over
+// EventStream (only-add in FromKeeper.oneof, slice S2b).
+//
+// Self-contained for Soul-side verify (slice S6): carries everything needed to
+// re-assemble the signed block and check the ed25519 signature with the trust
+// anchor from bootstrap (BootstrapReply.sigil_pubkey_pem):
+//
+//   - namespace + name + ref: identity of the allowed plugin;
+//   - binary_sha256: hash of the binary, which Soul checks against the local binary;
+//   - signature: ed25519 signature of the block (ns, name, ref, binary_sha256, manifest);
+//   - manifest: raw bytes of manifest.yaml (M1), which Soul runs through
+//     shared/pluginhost.NormalizeManifestBytes before hashing (the S3<->S6 invariant).
+//
+// S2b introduces ONLY this contract. Keeper distributing PluginSigil messages and
+// the actual verify on Soul are slice S6.
+message PluginSigil {
+  // Plugin namespace (e.g. `core`, `community`).
+  string namespace = 1;
+
+  // Plugin name within the namespace.
+  string name = 2;
+
+  // ref: an operator-asserted version label for the grant (ADR-026 Variant C);
+  // NOT part of binary integrity, but is included in the signed block.
+  string ref = 3;
+
+  // SHA-256 of the plugin binary, hex lowercase (64 characters).
+  string binary_sha256 = 4;
+
+  // Raw ed25519 signature of the block (64 bytes, no base64/PEM).
+  bytes signature = 5;
+
+  // Raw bytes of manifest.yaml (M1). The canonical form for verify is these bytes
+  // through NormalizeManifestBytes, not the parsed form.
+  bytes manifest = 6;
+}
+
+// SigilSnapshot is the FULL active set of plugin grants (replace semantics,
+// ADR-026). Rides only-add in the existing EventStream's FromKeeper.oneof.
+//
+// Soul applies it as a ReplaceAll: it REPLACES its whole local Sigil set with
+// this list, it does NOT upsert. A grant missing from the snapshot is forgotten
+// by Soul — this is how revoke/retire takes effect: after an Archon revokes a
+// grant, Keeper sends a new snapshot without it, and near-instant revoke (S6c)
+// closes access without restarting Soul. An empty sigils[] = no plugin is granted.
+message SigilSnapshot {
+  repeated PluginSigil sigils = 1;
+}
+
+// PluginFetchRequest requests a SoulModule plugin's bytes (FetchModule, epic
+// core.module.installed S2). The authority for the grant is binary_sha256
+// (content-addressed, same format as PluginSigil.binary_sha256: hex lowercase,
+// 64 characters); namespace/name are context for Keeper's logs/audit.
+message PluginFetchRequest {
+  string namespace = 1;
+  string name = 2;
+  string binary_sha256 = 3;
+}
+
+// PluginChunk is one chunk of a binary's bytes in FetchModule's server-streaming
+// response. Soul verifies the assembled file's integrity against the request's
+// sha256 (S3); separate offset/checksum fields aren't needed (add only-add if
+// ever required).
+message PluginChunk {
+  bytes data = 1;
+}
+
+// SigilTrustAnchors is the FULL set of Sigil signing trust anchors (replace
+// semantics, ADR-026, R3 rotation). Rides only-add in FromKeeper.oneof.
+//
+// Soul applies it as a ReplaceAll under the same rules as SigilSnapshot: it
+// REPLACES its whole anchor set with this list (multi-anchor support for
+// zero-downtime signing-key rotation). An anchor missing from the set is
+// forgotten by Soul (retiring the old key). Each element is the SPKI PEM of a
+// Sigil signing public ed25519 key (same format as
+// BootstrapReply.sigil_pubkey_pem).
+message SigilTrustAnchors {
+  repeated string pubkey_pem = 1;
+}

@@ -1,0 +1,17 @@
+kind: ssh_provider
+protocol_version: 1
+namespace: ssh
+name: vault-ssh
+required_capabilities:
+  - network_outbound
+  - vault_access
+side_effects: []
+spec:
+  provider_kind: vault_ssh_ca
+  params_schema:
+    type: object
+    required: [vault_mount, role]
+    properties:
+      vault_mount: { type: string }
+      role: { type: string }
+      ttl: { type: string, default: "30m" }

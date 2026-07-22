@@ -1,0 +1,118 @@
+# L0 trial of add_user: adding an ACL user WITHOUT restarting (ACL LOAD).
+# The operator adds user alice; the scenario merges her into the DEPLOYED state.redis_users,
+# renders the FULL users.acl (alice + previously deployed bob) and RELOADS it via
+# community.redis.acl (ACL LOAD). Render-only, hermetic. Plaintext (addr 6379).
+#
+# What we assert:
+#   1. users.acl (core.file.rendered, path disambiguator): vars.users carries BOTH users
+#      (new alice + preserved bob) with per-user passwords from Vault (convention
+#      secret/redis/<inc>/users/<name>#password). The password is hashed in the .tmpl (out of scope for L0).
+#   2. hot-reload (community.redis.acl): addr 127.0.0.1:6379 (plain), tls=false,
+#      password from vault. ACL LOAD carries no args (params — connection only).
+#   3. state_changes: redis_users carries alice+bob (name→{perms,state}, WITHOUT the password —
+#      the write-model stores only perms/state).
+#
+# Idempotency (render level): merge is deterministic; a repeat run with the same
+# input → the same users.acl. ACL LOAD is idempotent by construction (diff of ACL LIST in
+# the plugin gives changed=false when live↔file match, L1+).
+name: add_user merges new ACL user and hot-reloads via ACL LOAD (plaintext)
+
+fixtures:
+  default_destiny_source: "file://../../destiny/{name}"
+  soulprint:
+    network: { primary_ip: 10.0.0.5 }
+    os: { arch: amd64 }
+
+  # host layout — in essence (v11→v12, Option A): moved out of state, a repeat run reads it from here.
+  essence:
+    conf_dir: /etc/redis
+    data_dir: /var/lib/redis
+    modules_base_url: "https://artifacts.example.com/redis/modules"
+
+  # Deployed incarnation.state v6: user bob already exists; add_user adds alice.
+  state:
+    redis_type: sentinel
+    redis_version: "7.2.4"
+    tls:
+      enable:   false
+      only:     false
+      port:     7379
+      cert_ref: ""
+      key_ref:  ""
+      ca_ref:   ""
+    redis_config:
+      maxmemory:        "256mb"
+      maxmemory-policy: allkeys-lru
+      save:             "900 1 300 10 60 10000"
+      appendonly:       "no"
+    redis_users:
+      - { name: bob, perms: "~app:* +@read", state: "on" }
+
+  input:
+    user:
+      name: alice
+      perms: "~* +@all"
+      state: "on"
+
+  vault:
+    secret/redis/add_user:
+      password: addusr-redis-pass-16ch
+    # ★ default_admin REDESIGN: the system admin user — password from the new Vault branch
+    # users/default_admin. Read via masterauth top-up in apply.input.config AND the
+    # community.redis.acl connection (AUTH as default_admin instead of the former requirepass secret).
+    secret/redis/add_user/users/default_admin:
+      password: default-admin-secret-pass
+    secret/redis/add_user/users/alice:
+      password: alice-user-secret-pass
+    secret/redis/add_user/users/bob:
+      password: bob-user-secret-pass
+
+assert:
+  task_present:
+    # 1. users.acl re-rendered with BOTH users (new alice + preserved bob),
+    #    each with ITS OWN vault password (no cross-leak). vars.users — deep-compare.
+    - module: core.file.rendered
+      params_subset:
+        path: /etc/redis/users.acl
+        render_context:
+          vars:
+            users:
+              alice:
+                perms: "~* +@all"
+                state: "on"
+                password: alice-user-secret-pass
+              bob:
+                perms: "~app:* +@read"
+                state: "on"
+                password: bob-user-secret-pass
+          self:
+            sid: trial-host
+            covens: [add_user]
+            choirs: []
+            # traits — registry projection (ADR-060), an empty object without labels.
+            traits: {}
+            role: ""
+            network:
+              primary_ip: 10.0.0.5
+            os:
+              arch: amd64
+          role: ""
+          essence: {}
+
+    # 2. HOT-RELOAD ACL: community.redis.acl to the live plain instance. ACL LOAD —
+    #    connection params only (addr/password/tls), no args.
+    - module: community.redis.acl
+      params_subset:
+        addr: "127.0.0.1:6379"
+        # ★ default_admin REDESIGN: AUTH as default_admin (username + its Vault password).
+        username: default_admin
+        password: default-admin-secret-pass
+        tls: false
+
+  # state_changes: redis_users carries bob+alice WITHOUT a password (write-model, an ARRAY of AclUser
+  # wave 1b). Order = array-upsert: preserved bob (filter kept it) FIRST, new
+  # alice APPENDED at the end (compute.users_new = filter(name != alice) + [alice]).
+  state_changes:
+    redis_users:
+      - { name: bob, perms: "~app:* +@read", state: "on" }
+      - { name: alice, perms: "~* +@all", state: "on" }

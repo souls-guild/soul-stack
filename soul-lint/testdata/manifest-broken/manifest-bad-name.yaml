@@ -1,0 +1,9 @@
+kind: soul_module
+protocol_version: 1
+namespace: x
+name: "1-leading-digit"
+spec:
+  states:
+    run:
+      description: x
+      input: {}

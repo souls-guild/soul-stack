@@ -1,0 +1,127 @@
+# L0 guard (NIM-53 bug #1, positive): update_config with a CANONICAL persistence value
+# (rdb_aof_1sec) — render does NOT fail, the save/appendonly/appendfsync preset makes it into redis_config.
+# Regression (live): update_config's enum contained the old [off,aof,rdb,rdb_aof]; the value rdb_aof
+# was ∉ essence.persistence_presets → essence.persistence_presets[compute.persistence] no-such-key
+# → render crash → incarnation error_locked. Fix: the enum was synced with presets/covenant
+# (6 values off/aof_1sec/aof_always/rdb/rdb_aof_1sec/rdb_aof_always).
+#
+# Asserting: (1) render succeeds; (2) the rdb_aof_1sec preset makes it into config (save + appendonly:yes
+# + appendfsync:everysec) — in both redis.conf and the hot-reload; (3) state.persistence=rdb_aof_1sec.
+# Plaintext, render-only, hermetic.
+name: update_config with a canonical persistence value (rdb_aof_1sec) renders and applies preset
+
+fixtures:
+  default_destiny_source: "file://../../destiny/{name}"
+  soulprint:
+    network: { primary_ip: 10.0.0.5 }
+    os: { arch: amd64 }
+
+  essence:
+    memory_reserve_percent: 75
+    conf_dir: /etc/redis
+    data_dir: /var/lib/redis
+    modules_base_url: "https://artifacts.example.com/redis/modules"
+    persistence_presets:
+      rdb:
+        save: "900 1 300 10 60 10000"
+        appendonly: "no"
+      rdb_aof_1sec:
+        save: "900 1 300 10 60 10000"
+        appendonly: "yes"
+        appendfsync: "everysec"
+
+  state:
+    redis_type: sentinel
+    redis_version: "7.4.1"
+    tls:
+      enable:   false
+      only:     false
+      port:     7379
+      cert_ref: ""
+      key_ref:  ""
+      ca_ref:   ""
+    persistence: rdb
+    memory_mb: 1024
+    maxmemory_policy: allkeys-lru
+    io_threads: 0
+    redis_config:
+      maxmemory:        "768mb"
+      maxmemory-policy: allkeys-lru
+      save:             "900 1 300 10 60 10000"
+      appendonly:       "no"
+    redis_users: []
+
+  input:
+    # Delta: a CANONICAL persistence value from the new enum (would have been no-such-key in the old presets).
+    persistence: rdb_aof_1sec
+
+  vault:
+    secret/redis/update_config:
+      password: upd-redis-pass-16chars
+    secret/redis/update_config/users/default_admin:
+      password: default-admin-secret-pass
+
+assert:
+  task_present:
+    # redis.conf is re-rendered: the rdb_aof_1sec preset makes it in (appendonly:yes, appendfsync:everysec
+    # is merged on top of the appendonly:no baseline). save/maxmemory/policy — the state baseline.
+    - module: core.file.rendered
+      params_subset:
+        path: /etc/redis/redis.conf
+        render_context:
+          vars:
+            conf_dir: /etc/redis
+            data_dir: /var/lib/redis
+            port: 6379
+            run_dir: /var/run/redis
+            log_dir: /var/log/redis
+            loadmodules:
+              - /var/lib/redis/modules/redisbloom.so
+              - /var/lib/redis/modules/rejson.so
+              - /var/lib/redis/modules/redisearch.so
+              - /var/lib/redis/modules/redistimeseries.so
+            config:
+              maxmemory: "768mb"
+              maxmemory-policy: allkeys-lru
+              save: "900 1 300 10 60 10000"
+              appendonly: "yes"
+              appendfsync: "everysec"
+              masteruser: default_admin
+              masterauth: default-admin-secret-pass
+          self:
+            sid: trial-host
+            covens: [update_config]
+            choirs: []
+            traits: {}
+            role: ""
+            network:
+              primary_ip: 10.0.0.5
+            os:
+              arch: amd64
+          role: ""
+          essence: {}
+
+    - module: community.redis.config
+      params_subset:
+        addr: "127.0.0.1:6379"
+        username: default_admin
+        password: default-admin-secret-pass
+        tls: false
+        rewrite: false
+        config:
+          maxmemory: "768mb"
+          maxmemory-policy: allkeys-lru
+          save: "900 1 300 10 60 10000"
+          appendonly: "yes"
+          appendfsync: "everysec"
+
+  state_changes:
+    redis_config:
+      maxmemory: "768mb"
+      maxmemory-policy: allkeys-lru
+      save: "900 1 300 10 60 10000"
+      appendonly: "yes"
+      appendfsync: "everysec"
+    persistence: rdb_aof_1sec
+    memory_mb: 1024
+    maxmemory_policy: allkeys-lru

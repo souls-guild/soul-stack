@@ -1,0 +1,31 @@
+{{/*
+  sentinel-users.acl - the SECOND Redis ACL file, for the sentinel daemon (aclfile in
+  sentinel.conf, SEPARATE from redis-server's users.acl). Go text/template strict (ADR-010).
+  .vars.users - a MAP name→{perms, state, password} of the sentinel daemon's system users,
+  assembled by the scenario; password is resolved keeper-side from Vault (ADR-012).
+
+  WHY A SEPARATE FILE: the sentinel daemon and redis-server have DIFFERENT command
+  requirements (sentinel|* vs regular redis commands) → system-user role/perms don't match →
+  two aclfiles. Order determinism (range over a MAP sorts keys) - same as in users.acl.tmpl.
+
+  Line format (Redis ACL convention): user <name> <state> #<sha256(password)> <perms>.
+  The password is a HASH (sprig sha256sum), NOT plaintext.
+
+  ★ default_admin REDESIGN (2026-06-30): the previous default user (allchannels allkeys
+  +@all) was REPLACED with the SYSTEM default_admin (same perms set) - it comes into
+  .vars.users from the scenario (essence.system_acl_users_sentinel) and is rendered by
+  range, like the other system users. The sentinel daemon connects to :26379 as
+  default_admin (its password is secret/redis/<inc>/users/default_admin#password), and to
+  the master as auth_user default_admin (sentinel.conf). The built-in `default` is rendered
+  as `off` (symmetric with users.acl): otherwise, with an aclfile set but no default line,
+  the sentinel daemon would leave the built-in `default on nopass` active → passwordless
+  access to :26379. The sentinel aclfile carries only SYSTEM users (operator-extra is NOT
+  merged in here) → `default` is never in the map here → the off line is always added
+  (`index` gate same as users.acl.tmpl; hasKey is not in the sprig allowlist).
+*/}}
+{{- if not (index .vars.users "default") }}
+user default off
+{{- end }}
+{{- range $name, $u := .vars.users }}
+user {{ $name }} {{ $u.state }} #{{ $u.password | sha256sum }} {{ $u.perms }}
+{{- end }}

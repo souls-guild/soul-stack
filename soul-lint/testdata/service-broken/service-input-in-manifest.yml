@@ -1,0 +1,10 @@
+name: redis-cluster
+state_schema_version: 1
+state_schema:
+  type: object
+  properties:
+    foo: { type: string }
+input:
+  user:
+    type: string
+    required: true

@@ -1,0 +1,57 @@
+# systemd unit for Soul (ADR-004) - managed agent daemon.
+#
+# Installed from the soul-stack-soul package (deb/rpm) - user soul-stack,
+# postinstall creates /etc/soul and /var/lib/soul-stack/{,seed,modules}. Manual
+# operator steps after installation:
+#   install -m0640 soul.yml /etc/soul/soul.yml
+#   soul init --token=<one-time-token>   # onboarding: CSR + CA to disk (manual)
+#   systemctl enable --now soul
+#
+# Manual installation without the package (for reference):
+#   useradd --system --no-create-home --shell /usr/sbin/nologin soul-stack
+#   install -m0755 soul/bin/soul /usr/local/bin/soul
+#   install -d -o soul-stack -g soul-stack /etc/soul /var/lib/soul-stack
+#   install -m0640 soul.yml /etc/soul/soul.yml
+#   install -m0644 deploy/systemd/soul.service /etc/systemd/system/soul.service
+#   install -m0644 deploy/systemd/soul.env     /etc/soul/soul.env
+#   systemctl daemon-reload && systemctl enable --now soul
+#
+# NOTE on hardening: Soul applies Destiny (installs packages, edits files,
+# manages services) - this requires REAL privileges on the host. The strict
+# ProtectSystem=strict / MemoryDenyWriteExecute settings appropriate for Keeper
+# would break core modules for Soul. So hardening here is softer: basic isolation
+# is in place, but writing to the system is NOT forbidden. Do not tighten without
+# verifying the apply cycle.
+
+[Unit]
+Description=Soul Stack Soul agent
+Documentation=https://github.com/souls-guild/soul-stack
+# Soul initiates the gRPC stream to Keeper (ADR-002) - needs the network up.
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=exec
+User=soul-stack
+Group=soul-stack
+
+EnvironmentFile=/etc/soul/soul.env
+ExecStart=/usr/local/bin/soul run --config=${SOUL_CONFIG}
+
+Restart=on-failure
+RestartSec=5s
+StartLimitIntervalSec=60s
+StartLimitBurst=5
+
+# --- hardening (soft profile: Soul changes the system by nature) ---
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+LockPersonality=true
+# Soul state directory: plugin/binary cache keyed by SHA-256, TLS material (SoulSeed).
+ReadWritePaths=/var/lib/soul-stack
+
+[Install]
+WantedBy=multi-user.target

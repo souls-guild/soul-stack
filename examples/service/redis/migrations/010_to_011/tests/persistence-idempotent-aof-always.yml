@@ -1,0 +1,104 @@
+name: persistence-idempotent-aof-always
+description: >
+  IDEMPOTENCY of the remap for the NEW aof_always value (fsync on every write):
+  state ALREADY carries persistence:aof_always (the operator chose it on create v11). A repeat
+  run of 010_to_011 (manual re-run / restore) must NOT break it:
+    - persistence:aof_always → identity (neither 'aof' nor 'rdb_aof' → the ternary branch
+      returns the value as-is). The migration's COMMENT explicitly notes aof_always/
+      rdb_aof_always as "theoretically absent in v10, identity branch doesn't break anything" —
+      this case catches a regression if the remap ternary ever starts touching them;
+    - connection_mode/io_threads already present → overwrite with the same value;
+    - cluster (redis_sentinel == {}) → no-op.
+  Paired case: persistence-idempotent-aof-1sec.
+
+state_before:
+  redis_type: cluster
+  redis_version: "7.4.1"
+  redis_config:
+    maxmemory: "512mb"
+    maxmemory-policy: allkeys-lru
+    save: ""
+    appendonly: "yes"
+    appendfsync: "always"
+    cluster-enabled: "yes"
+    cluster-config-file: "nodes.conf"
+    cluster-node-timeout: "5000"
+  redis_users: []
+  redis_hosts: []
+  redis_sentinel: {}
+  tls:
+    enable: false
+    only: false
+    port: 7379
+    cert_ref: ""
+    key_ref: ""
+    ca_ref: ""
+  install:
+    method: package
+  persistence: aof_always
+  connection_mode: plain
+  io_threads: 0
+  maxmemory_policy: allkeys-lru
+  memory_mb: 0
+  modules: []
+  modules_base_url: ""
+  conf_dir: /etc/redis
+  data_dir: /var/lib/redis
+  sysctl_settings: {}
+  shards: 3
+  replicas: 1
+  sentinel_quorum: 0
+  provisioned_vm_ids: []
+  provisioned_provider: ""
+  provisioned_sids: []
+  seeded_from:
+    source_endpoints: []
+    detached: false
+    source_password_ref: ""
+    source_tls_ca_ref: ""
+
+state_after:
+  redis_type: cluster
+  redis_version: "7.4.1"
+  redis_config:
+    maxmemory: "512mb"
+    maxmemory-policy: allkeys-lru
+    save: ""
+    appendonly: "yes"
+    appendfsync: "always"
+    cluster-enabled: "yes"
+    cluster-config-file: "nodes.conf"
+    cluster-node-timeout: "5000"
+  redis_users: []
+  redis_hosts: []
+  redis_sentinel: {}
+  tls:
+    enable: false
+    only: false
+    port: 7379
+    cert_ref: ""
+    key_ref: ""
+    ca_ref: ""
+  install:
+    method: package
+  persistence: aof_always
+  connection_mode: plain
+  io_threads: 0
+  maxmemory_policy: allkeys-lru
+  memory_mb: 0
+  modules: []
+  modules_base_url: ""
+  conf_dir: /etc/redis
+  data_dir: /var/lib/redis
+  sysctl_settings: {}
+  shards: 3
+  replicas: 1
+  sentinel_quorum: 0
+  provisioned_vm_ids: []
+  provisioned_provider: ""
+  provisioned_sids: []
+  seeded_from:
+    source_endpoints: []
+    detached: false
+    source_password_ref: ""
+    source_tls_ca_ref: ""

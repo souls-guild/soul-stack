@@ -1,0 +1,99 @@
+name: mongo
+state_schema_version: 1
+description: >-
+  MongoDB following a unified-service concept (PILOT, standalone). The operator sets SIMPLE
+  typed concepts (version, memory, WiredTiger cache, users), and the create scenario
+  translates them into mongod.conf. Per-host install + render + bootstrap is done by
+  the scenario INLINE via core modules (install: version-enum + Nexus binary / distro
+  package; render mongod.conf from a scenario-local template; ADR-009 B-hybrid). LIVE mongod
+  (health-ping, createUser/dropUser, raw runCommand) goes through the `community.mongo` plugin
+  (go-mongo-driver — NOT core.exec+mongosh); orchestration (order/health-gate) — in scenario.
+
+  ★ PILOT SCOPE (2026-06-30): standalone ONLY (a single mongod, security.authorization
+  enabled, admin via localhost-exception). Implemented scenarios `create` + `destroy`.
+  OUT of pilot: replica-set (replSetInitiate/add_node/remove_node), sharded (mongos/config/
+  shard + Choir), keyFile (intra-cluster SCRAM authentication), rotate_tls, separate
+  add_user/remove_user scenarios (users are only provisioned by the plugin-state user from create).
+  TLS — pilot=plain (mongo TLS on port 27017 via net.tls.mode — a separate slice).
+
+# state_schema_version = 1 → the migrations/ directory is not required (ADR-019): there is no previous
+# version, migrations will appear on the first breaking schema change. incarnation.state
+# records what has been deployed, so the operator sees the installation and repeated apply is
+# idempotent. Standalone mini-schema (without replica-set/sharding/keyfile — out of PILOT scope).
+#
+# BOUNDARY between the two config representations (as with redis/dragonfly):
+#   - mongo_config (opaque, additionalProperties:true) — the COMPUTED RESULT of translating
+#     simple input into the mongod.conf structure (what actually goes into render). Write-model
+#     "as deployed".
+#   - named fields (memory_mb/wiredtiger_cache_gb/...) — the operator's INTENT in simple
+#     typed concepts (read-model). install and host-layout (conf_dir/data_dir)
+#     are moved into essence (author-context, day-2 reads essence directly).
+# BOTH are filled from a SINGLE create compute pass — there is no desync.
+state_schema:
+  type: object
+  required: [mongo_config]
+  properties:
+    # Effective MongoDB version (upstream series for binary; distro pin for package).
+    mongo_version:
+      type: string
+    # Final mongod.conf (merged default→computed→passthrough from essence). Goes into
+    # rendering the scenario-local mongod.conf.tmpl. Structure — nested YAML mongod (net/
+    # storage/security/systemLog as subtrees).
+    mongo_config:
+      type: object
+      additionalProperties: true
+
+    # ── Named intent fields (read-model) ────────────────────────────────
+    # Memory budget for MongoDB, MB. From input.memory_mb; unset → 0. Mongo has no
+    # maxmemory equivalent (WiredTiger manages its own cache), but the memory budget determines
+    # wiredTiger cacheSizeGB (a share of memory_mb) — read-model of operator intent.
+    memory_mb:
+      type: integer
+      minimum: 256
+    # Explicit WiredTiger cache size, GB (storage.wiredTiger.engineConfig.
+    # cacheSizeGB directive). From input.wiredtiger_cache_gb; unset → 0 (computed from memory_mb
+    # or the mongod default). read-model.
+    wiredtiger_cache_gb:
+      type: number
+      minimum: 0
+    # Applied kernel parameters for MongoDB (host-tuning). From essence.sysctl_settings.
+    sysctl_settings:
+      type: object
+      additionalProperties:
+        type: string
+
+    # MongoDB users: TYPED array of MongoUser (types.yml, ADR-062).
+    # Populated by create from input.users (also an array of MongoUser); passwords are NOT in state
+    # (keeper-side Vault, ADR-012). ★ MongoDB vs redis: roles — an array of {role, db}, not
+    # a single perms string.
+    mongo_users:
+      type: array
+      items:
+        type: object
+        required: [name, roles, state]
+        additionalProperties: false
+        properties:
+          name:     { type: string }
+          database: { type: string }
+          state:    { type: string, enum: [present, absent] }
+          roles:
+            type: array
+            items:
+              type: object
+              required: [role]
+              additionalProperties: false
+              properties:
+                role: { type: string }
+                db:   { type: string }
+
+# ★ There are NO destiny dependencies: install + render mongod.conf is done by the scenario INLINE via
+# core modules (core.pkg/core.url/core.file.rendered from scenario-local templates). For
+# standalone-PILOT (the only consumer — create), extracting a separate destiny brick is not
+# justified (ADR-009: the destiny↔scenario boundary is a recommendation; inlining is allowed). Precedent —
+# monitoring/scenario/create (redis-exporter renders from scenario-local templates without destiny).
+destiny: []
+
+# Custom service modules. Two-level form <namespace>.<module>. community.mongo —
+# the MAIN interface to live MongoDB (examples/module/soul-mod-community-mongo/).
+modules:
+  - { name: community.mongo, ref: v1.0.0 }

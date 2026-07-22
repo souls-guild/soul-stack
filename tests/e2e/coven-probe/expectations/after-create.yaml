@@ -1,0 +1,23 @@
+# Post-apply expectations for coven-probe::create.
+#
+# state_changes.sets from scenario/create/main.yml:
+#   marker_file: /tmp/coven-init.txt
+#   last_target: "create"
+# -> check both fields in incarnation.state.
+apply_runs:
+  status: success
+
+incarnation_state:
+  marker_file: /tmp/coven-init.txt
+  last_target: create
+
+audit_events:
+  - type: incarnation.scenario_started
+    payload:
+      incarnation: test-coven-probe
+
+# keeper_scenario_runs_total{result="ok"} - the real metric for a successful scenario
+# run (keeper/internal/scenario/metrics.go). The metric keeper_apply_runs_total
+# does not exist in the code.
+metrics:
+  keeper_scenario_runs_total{result="ok"}: ">= 1"

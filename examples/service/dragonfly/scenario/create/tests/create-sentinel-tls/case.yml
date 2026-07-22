@@ -1,0 +1,178 @@
+# L0 trial: create DragonFly in sentinel mode WITH TLS ENABLED (tls_enabled=true). Paired
+# with create-sentinel-1master-1replica (plaintext) — covers the TLS-ON branch of compute (df_config
+# carries --tls/--tls_cert_file/.../--tls_replication, state.tls.enable=true). Multi-host roster
+# of 2 hosts: replicas_per_master=1 → topology 1+1=2. Master election: node-1 = master.
+#
+# Render-only, hermetic. What we assert (TLS + unix-socket BLOCKER fix):
+#   1. ★ BLOCKER #1: state.df_config does NOT carry tls_port (DragonFly has no such flag — absl
+#      FATAL); TLS lands on the MAIN --port. df_config carries tls/tls_cert_file/tls_key_file/
+#      tls_ca_cert_file/tls_replication (underscore, paths from conf_dir).
+#   2. ★ BLOCKER #2: health-gate PING addr = LOCAL UNIX socket (NOT 127.0.0.1:7379) — DF with
+#      --bind=primary_ip does NOT listen on loopback; the local connect goes to the socket (WITHOUT tls/tls_ca).
+#   3. ★ REPLICAOF of the replica: its own addr = unix socket; master_addr = primary_ip:6379 (EXTERNAL
+#      link to master on the MAIN port 6379, NOT 7379 — there's no separate tls port).
+#   4. state_changes.tls = {enable:true, cert_ref/key_ref/ca_ref} WITHOUT only/port.
+#   5. ★ REFACTOR "sentinel from destiny redis": the sentinel plane runs through a SECOND apply:destiny:
+#      redis (sentinel_only) — install redis-server + sentinel.conf are present in /etc/redis;
+#      the dragonfly-destiny /etc/dragonfly/sentinel.conf is absent (duplicate removed). The second
+#      apply does NOT pass tls (sentinel.conf without TLS — sentinel↔DF AUTH by password, PILOT).
+name: dragonfly create sentinel over TLS (TLS on main port, local access via unix socket)
+
+fixtures:
+  default_destiny_source: "file://../../destiny/{name}"
+  hosts:
+    - sid: node-2.example.com
+      covens: [create, dragonfly]
+      soulprint:
+        network: { primary_ip: 10.0.0.2 }
+        os: { arch: amd64 }
+    - sid: node-1.example.com
+      covens: [create, dragonfly]
+      soulprint:
+        network: { primary_ip: 10.0.0.1 }
+        os: { arch: amd64 }
+  # Vault: default_admin (in-cluster AUTH + masterauth) + system + TLS PEM. The main
+  # secret/dragonfly/create#password is gone (requirepass removed — default_admin redesign).
+  vault:
+    secret/dragonfly/create/users/default_admin:
+      password: dfadmin-create-pass
+    secret/dragonfly/create/users/replica:
+      password: replica-sys-secret-pass
+    secret/dragonfly/create/users/monitoring:
+      password: monitoring-sys-secret-pass
+    secret/dragonfly/create/users/sentinel:
+      password: sentinel-sys-secret-pass
+    secret/dragonfly/create/users/haproxy:
+      password: haproxy-sys-secret-pass
+    # TLS PEM material (via essence.tls_*_ref) — destiny reads it with vault() in the content cell.
+    secret/services/dragonfly/tls:
+      cert: "-----BEGIN CERTIFICATE-----\nDFCERT\n-----END CERTIFICATE-----"
+      key:  "-----BEGIN PRIVATE KEY-----\nDFKEY\n-----END PRIVATE KEY-----"
+      ca:   "-----BEGIN CERTIFICATE-----\nDFCA\n-----END CERTIFICATE-----"
+  essence:
+    sentinel_master_name: master
+    memory_reserve_percent: 75
+    # TLS is enabled (input.tls_enabled flag), Vault refs — author-context essence.
+    tls_cert_ref: "secret/services/dragonfly/tls#cert"
+    tls_key_ref:  "secret/services/dragonfly/tls#key"
+    tls_ca_ref:   "secret/services/dragonfly/tls#ca"
+    df_config:
+      maxmemory:        "256mb"
+      maxclients:       10000
+    system_acl_users:
+      default_admin: "~* &* +@all"
+      replica:    "+psync +replconf +ping"
+      monitoring: "-@all +@connection +client +ping +info +config|get +cluster|info +slowlog +latency +memory +select +command|count +command|docs"
+      sentinel:   "allchannels +multi +slaveof +ping +exec +subscribe +config|rewrite +role +publish +info +client|setname +client|kill +script|kill"
+      haproxy:    "-@all +auth +client|getname +client|id +client|setname +command +hello +ping +role +info +cluster|info"
+    system_acl_users_sentinel:
+      default_admin: "allchannels allkeys +@all"
+      monitoring: "-@all +@connection -command +client -hello +info -auth +sentinel|masters +sentinel|replicas +sentinel|slaves +sentinel|sentinels +sentinel|ckquorum"
+      sentinel:   "allchannels -@all +auth +client|getname +client|id +client|setname +command +hello +ping +sentinel|is-master-down-by-addr +publish +role +sentinel|get-master-addr-by-name +sentinel|master +sentinel|myid +sentinel|replicas +sentinel|sentinels"
+      haproxy:    "-@all +auth +client|getname +client|id +client|setname +command +hello +ping +role +sentinel|get-master-addr-by-name +sentinel|master +sentinel|myid +sentinel|replicas +sentinel|sentinels"
+  input:
+    version: "1.39.0"
+    replicas_per_master: 1
+    tls_enabled: true
+    # ★ provision is disabled (default-on: an omitted section = ENABLED; the case is about TLS on
+    # an ALREADY-READY roster of 2 hosts) → include dragonfly-provision.yml targets no one.
+    provision:
+      enabled: false
+
+assert:
+  task_present:
+    # ── dragonfly destiny: conf-dir is created BEFORE rendering dragonfly.conf/users.acl (both branches,
+    #    UNCONDITIONALLY). owner dragonfly, mode 0750, parents:true. Regression "binary/package doesn't
+    #    create conf-dir" = rendering dragonfly.conf fails with "open .../.dragonfly.conf.tmp-…: no
+    #    such file or directory" (same class as the redis conf-dir issue, caught live 2026-06-29).
+    #    Disambiguator from redis sentinel_only conf-dir (/etc/redis, owner redis) — path /etc/dragonfly. ──
+    - module: core.directory.present
+      params_subset:
+        path: /etc/dragonfly
+        owner: dragonfly
+        group: dragonfly
+        mode: "0750"
+        parents: true
+
+    # ── dragonfly destiny: flagfile dragonfly.conf rendered (render_context.self = node-1) ──
+    - module: core.file.rendered
+      params_subset:
+        path: /etc/dragonfly/dragonfly.conf
+        template_content: "<present>"
+        mode: "0640"
+        owner: dragonfly
+        group: dragonfly
+
+    # ── 2 (BLOCKER #2): health-gate PING — addr is the LOCAL UNIX socket (NOT 127.0.0.1:7379) ──
+    # AUTH under default_admin (requirepass removed). UDS without tls/tls_ca.
+    - module: community.redis.command
+      params_subset:
+        addr: "unix:/var/run/dragonfly/dragonfly.sock"
+        username: default_admin
+        password: dfadmin-create-pass
+        args: ["PING"]
+
+    # ── 3 (BLOCKER #1+#2): REPLICAOF of the replica — its own addr is a unix socket; master_addr is on the MAIN
+    #    port 6379 (NOT the tls port 7379, it doesn't exist). where excludes master → node-2. AUTH under default_admin. ──
+    - module: community.redis.replica
+      params_subset:
+        addr: "unix:/var/run/dragonfly/dragonfly.sock"
+        master_addr: "10.0.0.1:6379"
+        username: default_admin
+        password: dfadmin-create-pass
+
+    # ── 5. SENTINEL PLANE via destiny `redis` (sentinel_only, SECOND apply) ──
+    # install redis-server (distro pin R4, carries redis-sentinel) + sentinel.conf in /etc/redis.
+    # The second apply does NOT pass tls → sentinel.conf without TLS directives (PILOT).
+    - module: core.pkg.installed
+      params_subset:
+        name: redis-server
+        version: "5:7.0.15-1~deb12u7"
+    - module: core.file.rendered
+      params_subset:
+        path: /etc/redis/sentinel.conf
+        template_content: "<present>"
+        mode: "0640"
+        owner: redis
+        group: redis
+
+  task_absent:
+    # DUPLICATE REMOVED: dragonfly-destiny no longer renders /etc/dragonfly/sentinel.conf.
+    - module: core.file.rendered
+      params_subset:
+        path: /etc/dragonfly/sentinel.conf
+    # provision is disabled → cloud-create and the onboarding barrier are ABSENT (group-drop).
+    - module: core.cloud.created
+    - module: core.soul.registered
+
+  state_changes:
+    df_version: "1.39.0"
+    # ★ BLOCKER #1: df_config carries TLS flags WITHOUT tls_port; TLS is on the main --port.
+    df_config:
+      maxmemory:        "256mb"
+      maxclients:       10000
+      tls:              "true"
+      tls_cert_file:    /etc/dragonfly/tls/dragonfly.crt
+      tls_key_file:     /etc/dragonfly/tls/dragonfly.key
+      tls_ca_cert_file: /etc/dragonfly/tls/ca.crt
+      tls_replication:  "true"
+    df_users: []
+    df_hosts: []
+    df_sentinel:
+      master_name: master
+      quorum: 0
+      down_after_ms: 5000
+      failover_timeout_ms: 60000
+    replicas: 1
+    sentinel_quorum: 0
+    # ★ state.tls: enable + refs, WITHOUT only/port (DragonFly has TLS on the main port).
+    tls:
+      enable:   true
+      cert_ref: "secret/services/dragonfly/tls#cert"
+      key_ref:  "secret/services/dragonfly/tls#key"
+      ca_ref:   "secret/services/dragonfly/tls#ca"
+    memory_mb: 0
+    # read-model: no VMs were provisioned by this run → conservative default.
+    provisioned_vm_ids: []
+    provisioned_sids: []
+    provisioned_provider: ""

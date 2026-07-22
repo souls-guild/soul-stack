@@ -1,0 +1,78 @@
+kind: ssh_provider
+protocol_version: 1                    # plugin-protocol compat flag (ADR-020(c))
+namespace: ssh                         # SshProvider collection in this repo
+name: vault
+
+# Closed enum per ADR-020(f). Vault SSH CA provider:
+#   network_outbound — HTTP calls to the Vault API.
+#   vault_access     — variant B (PM-decision creds-flow): the plugin talks to
+#                      Vault ITSELF (token / approle / kubernetes) instead of
+#                      receiving a resolved secret from keeper.push. For ssh/sign
+#                      this is more natural than the A-flow (see docs/keeper/plugins.md →
+#                      env-convention).
+required_capabilities:
+  - network_outbound
+  - vault_access
+
+# SshProvider doesn't touch local host resources (the cert lives in the memory
+# of keeper.push for the session — Keeper-ephemeral mode, see docs/keeper/push.md).
+side_effects: []
+
+spec:
+  # provider_kind — an open string (ADR-020(e)); convention from docs/keeper/plugins.md.
+  provider_kind: vault_ssh_ca
+  # JSON Schema draft 2020-12 (format for kind: ssh_provider — see
+  # docs/keeper/plugins.md → spec.params_schema). Embedded from schema.json.
+  params_schema:
+    type: object
+    required: [vault_addr, role]
+    properties:
+      vault_addr:
+        type: string
+        description: Base URL of the Vault API (https://vault.example.com:8200).
+        examples: ["https://vault.internal:8200"]
+        format: uri
+      vault_mount:
+        type: string
+        description: Vault SSH CA mount path (no leading/trailing slash).
+        default: "ssh"
+        examples: ["ssh", "ssh-client-signer"]
+      role:
+        type: string
+        description: Name of the Vault SSH role under which the key is signed.
+        examples: ["keeper-push"]
+      auth_method:
+        type: string
+        description: Auth method the plugin uses against Vault.
+        enum: [token, approle]
+        default: token
+      token:
+        type: string
+        description: >-
+          Vault token for auth_method=token. Alternative — env VAULT_TOKEN inside
+          SOUL_SSH_VAULT_PARAMS. SENSITIVE.
+      approle:
+        type: object
+        description: Credentials for auth_method=approle.
+        properties:
+          role_id:   { type: string, description: "AppRole RoleID" }
+          secret_id: { type: string, description: "AppRole SecretID (SENSITIVE)" }
+          mount:     { type: string, default: "approle", description: "AppRole mount path" }
+      valid_principals:
+        type: array
+        description: >-
+          Allowlist of principals (Linux users) that the plugin allows to be
+          placed into the signed cert. Empty list = accept any `req.user`
+          (if the Vault role allows it). Hard restriction for production.
+        items: { type: string }
+      deny:
+        type: array
+        description: >-
+          Deny-list of (host, user) pairs; the provider defaults to allow-all (dev/test).
+          Each entry is `{host?, user?}`; an empty field means wildcard on that
+          dimension (symmetric to soul-ssh-static).
+        items:
+          type: object
+          properties:
+            host: { type: string, format: hostname }
+            user: { type: string }

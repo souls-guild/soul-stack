@@ -1,0 +1,24 @@
+kind: soul_module
+protocol_version: 1
+namespace: core
+name: pkg
+
+required_capabilities:
+  - run_as_root
+  - exec_subprocess
+
+spec:
+  states:
+    installed:
+      description: Package installed (optionally at an exact version). Idempotent (ADR-015).
+      input:
+        name:    { type: string, required: true, description: "Package name." }
+        version: { type: string, description: "Exact package version (any if omitted)." }
+    latest:
+      description: Package installed and updated to the latest available version.
+      input:
+        name: { type: string, required: true, description: "Package name." }
+    absent:
+      description: Package removed.
+      input:
+        name: { type: string, required: true, description: "Package name." }

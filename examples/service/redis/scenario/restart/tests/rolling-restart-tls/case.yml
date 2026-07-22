@@ -1,0 +1,111 @@
+# L0 test for restart: rolling-restart of replicas ON a TLS instance. A paired guard to
+# rolling-restart-replicas (plaintext) - covers the TLS branch of the gate's
+# discriminator. Render-only, hermetic. Roster - 2 hosts, probe role = slave.
+#
+# ★ Invariant (convention, docs/destiny/production-conventions.md §7a, ADR-057
+# amendment): the TLS discriminator is taken from the NAMED field of the DEPLOYED
+# incarnation.state.tls (state_schema v3), NOT from essence and NOT by parsing redis_config.
+# create wrote the operator's TLS intent (enable/port) into state.tls; restart
+# must connect via the plugin OVER TLS, otherwise a plaintext connect to TLS-only Redis will fail
+# the health-gate (and plaintext AUTH over an open plain port would leak the password). This case
+# proves that when state.tls.enable=true, the probe/health-gate render with tls:true,
+# addr on state.tls.port, tls_ca = PEM CA.
+#
+# ★ The discriminator - `default(incarnation.state.tls.enable, false)` (the NAMED
+# read-model v3, without bracket-notation for the hyphenated key). state.tls.port - INTEGER (7379)
+# → addr concatenates it via string(...). tls_ca - the PEM CA from vault(state.tls.ca_ref)
+# (the plugin expects PEM content, NOT a path): state holds the Vault PATH, vault() resolves it to PEM.
+# The source is the NAMED state.tls.ca_ref (current after rotate_tls), NOT an essence default.
+#
+# What we assert (acceptance criterion for the TLS branch of the gate):
+#   1. probe (community.redis.role): tls=true, addr 127.0.0.1:7379 (NOT plain 6379),
+#      tls_ca = PEM CA from Vault.
+#   2. block child 1: Restart redis-server (core.service.restarted).
+#   3. block child 2: health-gate (community.redis.replica-synced) with the same
+#      TLS params (tls=true, addr on the tls-port, tls_ca = PEM).
+#
+# NOTE L0 limitation: mocks.register - a SINGLE payload for the entire roster (as in
+# rolling-restart-replicas). redis_role.role = slave → block children (where slave)
+# render, master-restart (where master) - placeholder-skip.
+name: rolling-restart replicas over TLS reads tls-port from incarnation.state
+
+fixtures:
+  hosts:
+    - sid: node-1.example.com
+      covens: [restart]
+      soulprint:
+        network: { primary_ip: 10.0.0.1 }
+        os: { arch: amd64 }
+    - sid: node-2.example.com
+      covens: [restart]
+      soulprint:
+        network: { primary_ip: 10.0.0.2 }
+        os: { arch: amd64 }
+
+  input:
+    reason: "rolling restart over TLS for L0"
+
+  # The deployed incarnation.state v3 (from create with TLS enabled): the NAMED field
+  # state.tls carries enable=true + port=7379 (INTEGER). The operational gate looks HERE (not at
+  # essence, doesn't parse redis_config) - this is exactly the invariant under test. redis_config
+  # (write-model) is present too (a realistic v3 state), but the discriminator
+  # no longer reads it.
+  state:
+    redis_type: sentinel
+    redis_version: "7.2.4"
+    tls:
+      enable:   true
+      only:     false
+      port:     7379
+      cert_ref: "secret/services/redis/tls#cert"
+      key_ref:  "secret/services/redis/tls#key"
+      ca_ref:   "secret/services/redis/tls#ca"
+    redis_config:
+      maxmemory:        "256mb"
+      maxmemory-policy: allkeys-lru
+      tls-port:         "7379"
+      tls-cert-file:    /etc/redis/tls/redis.crt
+      tls-key-file:     /etc/redis/tls/redis.key
+      tls-ca-cert-file: /etc/redis/tls/ca.crt
+      tls-replication:  "yes"
+
+  # Password (secret/redis/restart/users/default_admin#password, incarnation.name == restart;
+  # ★ default_admin REDESIGN - connects as the system default_admin, the former secret/redis/
+  # <inc>#password is DROPPED) + PEM CA (secret/services/redis/tls#ca, via state.tls.ca_ref -
+  # a repeat run resolves it through vault(); the CA branch of the TLS material, not the password - doesn't change).
+  vault:
+    secret/redis/restart/users/default_admin:
+      password: default-admin-secret-pass
+    secret/services/redis/tls:
+      ca: "-----BEGIN CERTIFICATE-----\nCACERT\n-----END CERTIFICATE-----"
+
+mocks:
+  register:
+    redis_role:
+      role: slave
+
+assert:
+  task_present:
+    # ── probe (community.redis.role): OVER TLS (tls-port from state.tls.port) ──
+    # The only community.redis.role in the plan. The main TLS guard of this case: probe
+    # connects over TLS to the tls port.
+    - module: community.redis.role
+      params_subset:
+        addr: "127.0.0.1:7379"
+        username: default_admin
+        password: default-admin-secret-pass
+        tls: true
+        tls_ca: "-----BEGIN CERTIFICATE-----\nCACERT\n-----END CERTIFICATE-----"
+
+    # ── slave-health-gate (community.redis.replica-synced) OVER TLS ────────────
+    # The only community.redis.replica-synced. The second TLS guard: the resync gate is also
+    # over TLS. A bare core.service.restarted (block restart) is presence-indistinguishable from
+    # the master restart (see the observation in the report) → not asserted separately; the presence
+    # of this gate inside the slave block proves the block fan-out renders.
+    - module: community.redis.replica-synced
+      params_subset:
+        addr: "127.0.0.1:7379"
+        username: default_admin
+        password: default-admin-secret-pass
+        tls: true
+        tls_ca: "-----BEGIN CERTIFICATE-----\nCACERT\n-----END CERTIFICATE-----"

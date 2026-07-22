@@ -1,0 +1,46 @@
+# L0-GUARD for provisioned_sids ↔ provisioned_vm_ids parity (security, audit 2026-06-26).
+# Negative case for destroy-provisioned: incarnation.state carries MISMATCHED lengths —
+# 4 vm_ids, but 3 sids. This is state corruption (manual edit / partial migration / a bug in
+# the provision-guard) which destroy MUST catch BEFORE an irreversible teardown.
+#
+# * WHY THIS IS a security invariant: vm_ids remove the VM from the provider, sids clean the
+# keeper registries (souls→destroyed, soul_seeds→orphaned, bootstrap_tokens→burned).
+# A length mismatch = orphaned records: the VM is removed, but its SID (with an active
+# soul_seed + an unused bootstrap_token) stays in the registry. This is:
+#   (1) orphan souls/seeds — garbage that the Reaper does NOT remove (mark_disconnected
+#       only touches connected→disconnected, not pending-VM-souls);
+#   (2) an anti-replay violation — an UNburned bootstrap_token is reusable.
+# create writes both sets with ONE guard from register.provision.hosts (a single size
+# source), so the lengths are EQUAL under normal conditions; assert catches the corruption.
+#
+# * INVARIANT UNDER TEST: the first assert step of destroy/main.yml
+# (size(provisioned_sids) == size(provisioned_vm_ids)) is computed keeper-side in the
+# render phase ONCE, BEFORE dispatching core.cloud.destroyed. 3 != 4 → assert false →
+# render ABORTS (expect_render_error) BEFORE any cloud call and cascade. Paired with
+# destroy-provisioned (4 == 4, passes). Render-only, hermetic.
+name: destroy aborts when provisioned sids and vm_ids lengths disagree
+
+fixtures:
+  # destroy does not carry apply:destiny (keeper-only teardown), but the harness keeps
+  # the key for consistency of roster resolution (like destroy-provisioned).
+  default_destiny_source: "file://../../destiny/{name}"
+  hosts:
+    - sid: vm-1.example.com
+      covens: [destroy]
+      soulprint:
+        network: { primary_ip: 10.0.0.1 }
+        os: { arch: amd64 }
+
+  # incarnation.state with MISMATCHED provisioned sets: 4 vm_id, but 3 sid
+  # (one VM would be left without its SID's cascade → orphan soul/seed/token). the parity
+  # assert (3 == 4 → false) aborts the run BEFORE dispatching core.cloud.destroyed.
+  state:
+    redis_type: cluster
+    redis_config: {}
+    provisioned_vm_ids: [i-aaa111, i-bbb222, i-ccc333, i-ddd444]
+    provisioned_sids: [vm-1.example.com, vm-2.example.com, vm-3.example.com]
+    provisioned_provider: example-dev
+
+# The run aborts at the parity assert step (destroy/main.yml tasks[0]).
+# Substring — the rule's message (lengths must match).
+expect_render_error: "lengths must match"

@@ -1,0 +1,63 @@
+# Create-dispatcher branch — cluster mode (honest hash-slot Redis Cluster, 16384 slots).
+# Included from main.yml via CONDITIONAL-INCLUDE: `when: input.redis_type ==
+# 'cluster'` sits ON the include — on a sentinel run the whole file is group-dropped (tasks
+# are never physically rendered); on a cluster run it expands into a flat list BEFORE render.
+# Per-task when on redis_type is no longer needed (the gate is on the include). See sentinel.yml — the
+# same dispatcher mechanism.
+#
+# ★ DEPLOY BODY MOVED to service level (S4-0, 2026-06-27, symmetric to S1 sentinel):
+# install + render redis.conf (with cluster directives)/users.acl + systemd + PING gate +
+# CLUSTER MEET/ADDSLOTS/REPLICATE live in the shared scenario/redis-deploy-cluster.yml and
+# are included FROM HERE by file name (scenario-include falls back to scenario/<name>/<file> →
+# scenario/<file>, orchestration.md §6). The layout of master/replica roles and slots is done
+# by the PLUGIN (community.redis.cluster action create) deterministically by sorting the node
+# keys — the scenario only builds the topology MAP (SID→addr) and calls the plugin run_once.
+#
+# ★ INVARIANT (see the header of redis-deploy-cluster.yml): the including file MUST declare in its
+# compute: the set that the body reads (redis_config/conf_dir/data_dir/install/
+# modules_base_url/redis_version/tls_*). All of them are declared in create/main.yml::compute
+# (this scenario). soul-lint does NOT catch cross-file drift.
+
+# ── 0. SIZE GUARD (topology) — keeper-side render-time assert ─────────────────────
+# The roster size MUST be exactly shards*(1+replicas_per_master) (cluster masters +
+# replicas per shard) — otherwise the plugin community.redis.cluster (action create) would derive
+# the shard count FROM the node count and SILENTLY ignore the declared input.shards (a silent mismatch
+# between declared↔actual). Same mechanism as the size guard in migrate_cluster/cluster.yml (assert:,
+# ADR-009 amendment 2026-06-23): the predicate is computed KEEPER-SIDE at RENDER time — that's where
+# soulprint.hosts is available (it's NOT available on the Soul). false ABORTS the render with a message BEFORE
+# any dispatch (earlier and clearer than a runtime failure/silent plugin no-op). assert does NOT emit a RenderedTask.
+# Placed BEFORE the deploy-body include — a mismatch aborts the run fail-fast, before installing packages.
+# ★ WHY assert, not validate: the size guard needs soulprint.hosts (roster), while the validate
+# context is INPUT-ONLY (a structural CEL barrier). shards being required (present) in cluster
+# mode is a separate required_when in main.yml, cutting it off BEFORE render (see
+# cluster-shards-guard-missing); this only checks the topology against the already-present shards.
+# ★ EXPLICIT TOPOLOGY (cluster_topology): when the operator supplied a shard list, the size guard
+# checks the roster against the SUM of shard sizes (the total node count across the whole declared
+# topology), instead of the formula shards*(1+replicas) — shard sizes are now arbitrary (the operator
+# set them themselves). Without cluster_topology — the old formula (plugin auto-layout by node count).
+# The gate — has(input.cluster_topology) (the field is optional). SUM of sizes without reduce (the StdLib
+# CEL has no fold/sum): each shard → map{sid:0}, merging all maps collapses them into one
+# (templating §2.3 SHALLOW), size = number of unique SIDs = the sum of shard sizes (no duplicates
+# exist — the plugin rejects them fail-fast; on a duplicate the sum would only undercount → the guard would
+# only fire sooner, the protection is not weakened).
+# ★ PROVISION GATE (ADR-061 amendment 2026-06-29): during cloud provisioning (input.provision
+# .enabled) the roster is STILL empty at pre-flight EvalAsserts (souls are created later by the
+# redis-provision.yml steps: core.cloud.created→VM→await_online→refresh_soulprint), so
+# size(soulprint.hosts)==N would fail pre-flight BEFORE the cluster even exists.
+# The gate `when: !provision.enabled` drops the size check for the provision path —
+# the roster invariant is guaranteed THERE by the count formula in redis-provision.yml (VM count = the
+# same shards*(1+replicas)) + a blocking await_online barrier, NOT the pre-flight
+# (symmetric to the no_hosts-bypass amendment 2026-06-28). The predicate is STATIC (pure input,
+# no register.*/soulprint.self → isStaticWhen): pre-flight evaluates it, and with provision the
+# placeholder-skip gives no assert (NOT ErrAssertFailed). On an existing roster (provision
+# omitted/false) has(input.provision) gives false → when=true → the size guard is active (NOT
+# weakened). The form — an inversion of the redis-provision.yml include-when (has(input.provision) &&
+# input.provision.enabled).
+- name: Guard cluster roster size matches shards and replicas
+  when: "!(has(input.provision) && input.provision.enabled)"
+  assert:
+    that:
+      - "has(input.cluster_topology) ? (size(soulprint.hosts) == size(merge(input.cluster_topology.map(s, merge(s.map(x, {x: 0})))))) : (size(soulprint.hosts) == int(input.shards) * (1 + int(input.replicas_per_master)))"
+    message: "the run roster's host count must be exactly shards*(1+replicas_per_master) — or, when cluster_topology is set, exactly the sum of the declared shard sizes (the total node count across the whole declared topology); target as many souls as there are nodes in the declared topology, otherwise the plugin would derive the shard count from the node count and ignore the declared layout"
+
+- include: redis-deploy-cluster.yml

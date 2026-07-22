@@ -1,0 +1,53 @@
+# L0-test for the validate-guard (system-ACL-users d2): operator-extra (input.users) is
+# NOT allowed to take a SYSTEM user's name. The operator sets input.users.replica — this
+# name is reserved for the system user (topped up from essence.system_acl_users with
+# last-wins OVER the system one → an operator `replica` would silently override the
+# replication replica-perms). The validate-rule in create/main.yml catches this at
+# INPUT-validation (422 BEFORE applying) with a clear rejection. INPUT-ONLY (essence is
+# not available in validate): the list of names is hardcoded. Rule false →
+# expect_render_error by a substring of the message.
+name: operator extra user with reserved system name aborts at input validation
+
+fixtures:
+  default_destiny_source: "file://../../destiny/{name}"
+  soulprint:
+    network:
+      primary_ip: 10.0.0.5
+    os:
+      arch: amd64
+  vault:
+    secret/redis/create:
+      password: s3cr3t-redis-pass-create
+  essence:
+    redis_type: sentinel
+    memory_reserve_percent: 75
+    persistence_presets:
+      rdb:
+        save: "900 1 300 10 60 10000"
+        appendonly: "no"
+    redis_config:
+      maxmemory:        "256mb"
+      maxmemory-policy: allkeys-lru
+      maxclients:       10000
+      timeout:          300
+    system_acl_users:
+      replica:    "+psync +replconf +ping"
+      monitoring: "-@all +@connection +client +ping +info +config|get +cluster|info +slowlog +latency +memory +select +command|count +command|docs"
+      sentinel:   "allchannels +multi +slaveof +ping +exec +subscribe +config|rewrite +role +publish +info +client|setname +client|kill +script|kill"
+      haproxy:    "-@all +auth +client|getname +client|id +client|setname +command +hello +ping +role +info +cluster|info"
+
+  # The operator tries to create a user with the reserved name replica.
+  input:
+    # ★ provision is off (default-on: an omitted section = ON; the case deploys onto a
+    # READY roster, cloud-create is not needed) → include redis-provision.yml group-drop.
+    provision:
+      enabled: false
+    redis_type: sentinel
+    version: "7.4.1"
+    persistence: rdb
+    users:
+      - { name: replica, perms: "~* +@all", state: "on" }
+
+# The run aborts on validate: rule "name is reserved for a system user" is false.
+# Substring — the rule's message (create/main.yml validate).
+expect_render_error: "reserved for a system user"

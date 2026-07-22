@@ -1,0 +1,187 @@
+# L0 trial (Trial, ADR-023) for destiny vector via the scenario-apply harness.
+#
+# Render-only, hermetic: verifies that apply:destiny expands destiny vector into
+# the expected flat plan (CEL phase). L0 does not download the tarball, does not run
+# text/template (.tmpl) — only CEL-render of YAML expressions.
+#
+# What this case demonstrates:
+#   - core.url.fetched: arch is encoded as a Rust triplet x86_64-unknown-linux-gnu
+#     (soulprint.self.os.arch=amd64 -> vars.arch_triplet), file name vector-<v>-<triplet>;
+#     checksum is REQUIRED (input.sha256, fail-closed);
+#   - stable service account (NOT DynamicUser): core.group + core.user vector + data_dir
+#     0700 (persistent disk-buffer, stateful branch §2 — unlike redis-exporter);
+#   - core.file.present of the binary: src is vector-<triplet>/bin/vector inside the unpacked
+#     archive;
+#   - core.file.rendered vector.yaml: render_context.input carries log_sources (redis logs) +
+#     console sink (default). The template path is replaced by Keeper with literal content.
+name: vector destiny renders fetch/extract/account/install/config/unit/service plan
+
+# L0-render does not apply contract defaults — we duplicate the defaults + required fields.
+# apply:destiny resolves against a prod mirror (slice A): vector is declared in
+# _trial/service.yml::destiny[], URL comes from default_destiny_source (file://, relative to
+# service-root = _trial/; the destiny itself is one level up, in examples/destiny/vector/).
+fixtures:
+  default_destiny_source: "file://../../{name}"
+  input:
+    version: "0.40.0"
+    # sha256 is REQUIRED (required:true). L0 render-only — fetch does not run; valid 64-hex.
+    sha256: "sha256:1111111111111111111111111111111111111111111111111111111111111111"
+    # console sink (default) — no endpoint needed; log_sources = redis logs; journald off.
+    log_sources: ["/var/log/redis/*.log"]
+  # soulprint of the synthetic L0 host: destiny reads arch directly from soulprint.self.os.arch
+  # (URL/install path via vars.arch_triplet).
+  soulprint:
+    os:
+      arch: amd64
+
+assert:
+  task_present:
+    # ── install.yml: fetch + extract ───────────────────────────────────────────
+    # url is assembled by CEL: base_url + version + Rust triplet (x86_64-unknown-linux-gnu).
+    # checksum is set (fail-closed verification). The only core.url.fetched in the plan.
+    - module: core.url.fetched
+      params_subset:
+        url: https://github.com/vectordotdev/vector/releases/download/v0.40.0/vector-0.40.0-x86_64-unknown-linux-gnu.tar.gz
+        path: /tmp/vector-0.40.0.tar.gz
+        checksum: "sha256:1111111111111111111111111111111111111111111111111111111111111111"
+        mode: "0644"
+        # back-compat: github-default — SSRF guard still holds (allow_private default false).
+        allow_private: false
+
+    - module: core.archive.extracted
+      params_subset:
+        path: /tmp/vector-0.40.0.tar.gz
+        dest: /tmp/vector-0.40.0
+
+    # ── account.yml: stable service account + data_dir + config_dir ─────────────
+    - module: core.group.present
+      params_subset:
+        name: vector
+        system: true
+
+    - module: core.user.present
+      params_subset:
+        name: vector
+        system: true
+        group: vector
+        shell: /usr/sbin/nologin
+
+    # data_dir 0700 — persistent disk-buffer, owner is the service account (stateful branch
+    # §2, unlike stateless redis-exporter). Disambiguator vs config_dir is path.
+    - module: core.directory.present
+      params_subset:
+        path: /var/lib/vector
+        owner: vector
+        group: vector
+        mode: "0700"
+
+    # config_dir 0750 owner root group vector (root writes the config, the service reads via group).
+    - module: core.directory.present
+      params_subset:
+        path: /etc/vector
+        owner: root
+        group: vector
+        mode: "0750"
+
+    # ── service.yml: binary + config + unit + service ───────────────────────────
+    # install step is core.file.present with src: (vector from the unpacked vector-<triplet>/bin/).
+    # The only core.file.present in the plan.
+    - module: core.file.present
+      params_subset:
+        path: /usr/local/bin/vector
+        src: /tmp/vector-0.40.0/vector-x86_64-unknown-linux-gnu/bin/vector
+        mode: "0755"
+        owner: root
+        group: root
+
+    # vector.yaml (main config). render_context.input carries log_sources + console sink
+    # (default) — proof that sources/sinks are built from input (Option B, ADR-010).
+    # render_context is checked IN FULL (deep-compare every key): input — all fields after
+    # defaults (sink_auth_ref="" is not stripped when empty), vars is empty (config reads
+    # only .input, does not use file-vars), self — synthetic L0 host, essence is empty
+    # (sub-destiny isolation, ADR-009). Disambiguator vs unit is path (/etc/vector/vector.yaml).
+    - module: core.file.rendered
+      params_subset:
+        path: /etc/vector/vector.yaml
+        template_content: "<present>"
+        mode: "0640"
+        owner: root
+        group: vector
+        render_context:
+          input:
+            version: "0.40.0"
+            sha256: "sha256:1111111111111111111111111111111111111111111111111111111111111111"
+            base_url: "https://github.com/vectordotdev/vector/releases/download"
+            allow_private: false
+            bin_dir: /usr/local/bin
+            user: vector
+            group: vector
+            data_dir: /var/lib/vector
+            log_level: info
+            sink_type: console
+            sink_endpoint: ""
+            sink_auth_ref: ""
+            log_sources: ["/var/log/redis/*.log"]
+            journald: false
+          vars: {}
+          self:
+            sid: trial-host
+            covens: [apply]
+            choirs: []
+            traits: {}
+            role: ""
+            os:
+              arch: amd64
+          role: ""
+          essence: {}
+
+    # systemd-unit. render_context.vars carries file-vars (bin_path/config_path) + sink_token
+    # (the collector's resolved secret — empty in this case, sink has no auth). input — all
+    # fields (Option B: unit reads .input.user/group/data_dir/log_level/journald). Disambiguator
+    # vs config — path (.service).
+    - module: core.file.rendered
+      params_subset:
+        path: /etc/systemd/system/vector.service
+        template_content: "<present>"
+        mode: "0644"
+        owner: root
+        group: root
+        render_context:
+          vars:
+            bin_path: /usr/local/bin/vector
+            config_path: /etc/vector/vector.yaml
+            sink_token: ""
+          input:
+            version: "0.40.0"
+            sha256: "sha256:1111111111111111111111111111111111111111111111111111111111111111"
+            base_url: "https://github.com/vectordotdev/vector/releases/download"
+            allow_private: false
+            bin_dir: /usr/local/bin
+            user: vector
+            group: vector
+            data_dir: /var/lib/vector
+            log_level: info
+            sink_type: console
+            sink_endpoint: ""
+            sink_auth_ref: ""
+            log_sources: ["/var/log/redis/*.log"]
+            journald: false
+          self:
+            sid: trial-host
+            covens: [apply]
+            choirs: []
+            traits: {}
+            role: ""
+            os:
+              arch: amd64
+          role: ""
+          essence: {}
+
+    - module: core.service.running
+      params_subset:
+        name: vector
+        enabled: true
+
+    - module: core.service.restarted
+      params_subset:
+        name: vector

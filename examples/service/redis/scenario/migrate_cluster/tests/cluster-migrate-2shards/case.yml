@@ -1,0 +1,279 @@
+# L0 test for migrate_cluster in cluster mode (B3 flow S4-3b, happy-path, existing
+# target). Multi-host roster of 2 hosts: shards=2, replicas_per_master=0 → topology
+# exactly 2*(1+0)=2 (size-guard passes). Both hosts are masters of the new cluster. The
+# external source is an old Redis Cluster of 2 seed nodes (source.hosts, shards_dest=2
+# matches).
+#
+# Render-only, hermetic. The migrate_cluster dispatcher includes cluster.yml + sentinel.yml
+# via CONDITIONAL-INCLUDE (when: on include): on a cluster run the sentinel branch is a
+# group-drop (statically-false when), cluster.yml is expanded. cluster.yml: size-guard
+# assert (does NOT emit a RenderedTask) → include redis-deploy-cluster-joinable.yml
+# (joinable deploy of new nodes WITHOUT building its own cluster) → 3 steps of the
+# community.redis.cluster plugin (join-external → failover-takeover → forget-external,
+# run_once on hosts[0]).
+#
+# ★ make trial may fail on this case UNTIL S4-2 merges the failover-takeover/
+# forget-external actions into the plugin (unknown action) — this is EXPECTED; soul-lint
+# structural + presence form of the case do not depend on this (the presence matcher
+# checks params, not runtime).
+#
+# What we assert (slice acceptance criterion):
+#   1. JOINABLE DEPLOY (from redis-deploy-cluster-joinable.yml): redis.conf render with
+#      cluster directives (cluster-enabled yes / cluster-config-file nodes.conf /
+#      cluster-node-timeout) — new nodes come up in cluster-mode, but WITHOUT CLUSTER MEET/
+#      ADDSLOTS (no building of its own cluster — presence of community.redis.cluster
+#      action:create is ABSENT, verified separately by the plan containing only join/
+#      failover/forget actions).
+#   2. ★ JOIN: community.redis.cluster action:join-external, nodes-MAP is deterministic
+#      (SID→{addr:primary_ip+":6379"}), shards_dest=2, source_nodes=external source.
+#   3. ★ FAILOVER: community.redis.cluster action:failover-takeover, same nodes-MAP.
+#   4. ★ FORGET: community.redis.cluster action:forget-external, nodes-MAP + source_nodes.
+#   5. state_changes: create-set (cluster) + seeded_from {source_endpoints:[source],
+#      detached:TRUE} — cluster B3 is atomic, forget happens in the migrate phase →
+#      detached is immediately true (unlike sentinel, where detached:false and detach is
+#      a follow-up scenario).
+#
+# NOTE the L0 limitation (same as create/cluster-3shards): apply.input is host-invariant
+# in the pilot (resolved on the FIRST targeted host) → render_context.self in destiny =
+# node-1. Per-host cluster-announce-ip is NOT in config, it's rendered in .tmpl from
+# .self.network.primary_ip of each host (proven by destiny_redis_tmpl_test.go). The
+# nodes-MAP, conversely, is built from the WHOLE roster (soulprint.hosts) and carries
+# addresses of both hosts.
+name: cluster migrate joins source cluster then fails over and forgets old nodes
+
+fixtures:
+  default_destiny_source: "file://../../destiny/{name}"
+  # Multi-host roster: 2 hosts, order in YAML intentionally unsorted (2, 1) —
+  # the harness and nodes-MAP must sort by SID (node-1 = bootstrap for run_once).
+  hosts:
+    - sid: node-2.example.com
+      covens: [migrate_cluster, redis]
+      soulprint:
+        network: { primary_ip: 10.0.0.2 }
+        os: { arch: amd64 }
+    - sid: node-1.example.com
+      covens: [migrate_cluster, redis]
+      soulprint:
+        network: { primary_ip: 10.0.0.1 }
+        os: { arch: amd64 }
+  vault:
+    secret/redis/migrate_cluster:
+      password: s3cr3t-redis-pass-migrate
+    # ★ default_admin REDESIGN (2026-06-30): default_admin is the system user for
+    # in-cluster AUTH; the plugin's join/failover/forget (community.redis.cluster
+    # username/password) and the joinable deploy's masteruser/masterauth read its
+    # password from the users/default_admin path. migrate.go holds a SINGLE
+    # username/password (== the password of the same user in the source cluster).
+    secret/redis/migrate_cluster/users/default_admin:
+      password: default-admin-secret-pass
+    secret/redis/migrate_cluster/users/replica:
+      password: replica-sys-secret-pass
+    secret/redis/migrate_cluster/users/monitoring:
+      password: monitoring-sys-secret-pass
+    secret/redis/migrate_cluster/users/sentinel:
+      password: sentinel-sys-secret-pass
+    secret/redis/migrate_cluster/users/haproxy:
+      password: haproxy-sys-secret-pass
+    # ★ Credentials for the EXTERNAL source under the pattern-guard secret/redis/migrate/*.
+    # In cluster B3 the source == the new cluster (aligned password), but source.password_ref
+    # is still declared in input (required:true in the source section). On the plugin's
+    # cluster steps the password is the SHARED secret/redis/migrate_cluster#password (the
+    # operator aligned old == new).
+    secret/redis/migrate/oldcluster:
+      password: old-cluster-source-pass
+  essence:
+    # install_method — in essence (author-context): install method is NOT operator-input
+    # (covenant.compute.install reads default(essence.install_method, 'binary')). package
+    # explicitly — a distro-pin =version (the field moved input→essence along with migrate,
+    # replicated from covenant).
+    install_method: package
+    redis_type: cluster
+    sentinel_master_name: master
+    modules_base_url: "https://artifacts.example.com/redis/modules"
+    memory_reserve_percent: 75
+    persistence_presets:
+      rdb:
+        save: "900 1 300 10 60 10000"
+        appendonly: "no"
+    redis_config:
+      maxmemory:        "256mb"
+      maxmemory-policy: allkeys-lru
+      maxclients:       10000
+      timeout:          300
+    system_acl_users:
+      replica:    "+psync +replconf +ping"
+      monitoring: "-@all +@connection +client +ping +info +config|get +cluster|info +slowlog +latency +memory +select +command|count +command|docs"
+      sentinel:   "allchannels +multi +slaveof +ping +exec +subscribe +config|rewrite +role +publish +info +client|setname +client|kill +script|kill"
+      haproxy:    "-@all +auth +client|getname +client|id +client|setname +command +hello +ping +role +info +cluster|info"
+  input:
+    redis_type: cluster
+    # ★ version — enum of builds shipped to Nexus (redesign). install_method moved to
+    # essence (above) — NOT operator-input after covenant replication. connection_mode
+    # omitted → plain.
+    version: "7.4.1"
+    shards: 2
+    replicas_per_master: 0
+    cluster_node_timeout: 5000
+    # ★ External source: 2 seed nodes of the old cluster (shards_dest=2 matches) +
+    # Vault PATH to the password under pattern-guard. On cluster B3 the password is
+    # aligned == the new one.
+    source:
+      hosts:
+        - "10.9.0.1:6379"
+        - "10.9.0.2:6379"
+      password_ref: "secret/redis/migrate/oldcluster#password"
+      tls: false
+
+assert:
+  task_present:
+    # ── redis-deploy-cluster-joinable.yml: redis.conf with cluster directives ─────
+    # render_context.self = node-1 (host-invariant apply.input). config carries the base
+    # merge + cluster directives (cluster-enabled/config-file/node-timeout). cluster-
+    # announce-ip is NOT in config — per-host, rendered in .tmpl. Disambiguator from
+    # users.acl/hardening (same core.file.rendered) — path.
+    - module: core.file.rendered
+      params_subset:
+        path: /etc/redis/redis.conf
+        template_content: "<present>"
+        mode: "0640"
+        owner: redis
+        group: redis
+        render_context:
+          vars:
+            conf_dir: /etc/redis
+            data_dir: /var/lib/redis
+            port: 6379
+            run_dir: /var/run/redis
+            log_dir: /var/log/redis
+            loadmodules:
+              - /var/lib/redis/modules/redisbloom.so
+              - /var/lib/redis/modules/rejson.so
+              - /var/lib/redis/modules/redisearch.so
+              - /var/lib/redis/modules/redistimeseries.so
+            config:
+              # ★ default_admin REDESIGN: replica→master AUTH (masteruser/masterauth) arrives
+              # as ordinary config directives (the joinable deploy-body adds them via a
+              # vault()-in-cell). Password — the users/default_admin path; it's NOT in
+              # state_changes.redis_config.
+              masteruser:       "default_admin"
+              masterauth:       "default-admin-secret-pass"
+              maxmemory:        "256mb"
+              maxmemory-policy: allkeys-lru
+              maxclients:       10000
+              timeout:          300
+              save:             "900 1 300 10 60 10000"
+              appendonly:       "no"
+              cluster-enabled:      "yes"
+              cluster-config-file:  "nodes.conf"
+              cluster-node-timeout: "5000"
+          self:
+            sid: node-1.example.com
+            covens: [migrate_cluster, redis]
+            choirs: []
+            traits: {}
+            role: ""
+            network:
+              primary_ip: 10.0.0.1
+            os:
+              arch: amd64
+          role: ""
+          essence: {}
+
+    # ── JOIN: community.redis.cluster action:join-external ───────────────────────
+    # nodes-MAP is deterministic (key=SID, addr=primary_ip+":6379"), shards_dest=2,
+    # source_nodes=external source (both seeds). password=shared (aligned old==new).
+    # Disambiguator from failover/forget (same module) — action.
+    - module: community.redis.cluster
+      params_subset:
+        action: join-external
+        shards_dest: 2
+        # ★ default_admin REDESIGN: a single username/password for the new nodes AND the
+        # source seed (migrate.go). The old primary secret is DROPPED — password from
+        # the users/default_admin path.
+        username: default_admin
+        password: default-admin-secret-pass
+        source_nodes:
+          - "10.9.0.1:6379"
+          - "10.9.0.2:6379"
+        nodes:
+          node-1.example.com: { addr: "10.0.0.1:6379" }
+          node-2.example.com: { addr: "10.0.0.2:6379" }
+
+    # ── FAILOVER: community.redis.cluster action:failover-takeover ───────────────
+    # same nodes-MAP. source_nodes is NOT needed by the plugin (it operates on already-
+    # joined nodes). Disambiguator from join/forget — action.
+    - module: community.redis.cluster
+      params_subset:
+        action: failover-takeover
+        username: default_admin
+        password: default-admin-secret-pass
+        nodes:
+          node-1.example.com: { addr: "10.0.0.1:6379" }
+          node-2.example.com: { addr: "10.0.0.2:6379" }
+
+    # ── FORGET: community.redis.cluster action:forget-external ───────────────────
+    # nodes-MAP + source_nodes (which old nodes to drop). Disambiguator from join/
+    # failover — action.
+    - module: community.redis.cluster
+      params_subset:
+        action: forget-external
+        username: default_admin
+        password: default-admin-secret-pass
+        source_nodes:
+          - "10.9.0.1:6379"
+          - "10.9.0.2:6379"
+        nodes:
+          node-1.example.com: { addr: "10.0.0.1:6379" }
+          node-2.example.com: { addr: "10.0.0.2:6379" }
+
+  # cluster state-set + seed-source read-model. redis_config with cluster directives.
+  # redis_sentinel empty (cluster), shards=2. seeded_from: source_endpoints = source.hosts
+  # IN FULL, detached:TRUE (cluster B3 is atomic — forget happens in the migrate phase →
+  # detached immediately true, unlike sentinel's detached:false). NO timestamp (L0
+  # determinism).
+  state_changes:
+    redis_type: cluster
+    redis_version: "7.4.1"
+    redis_config:
+      maxmemory:        "256mb"
+      maxmemory-policy: allkeys-lru
+      maxclients:       10000
+      timeout:          300
+      save:             "900 1 300 10 60 10000"
+      appendonly:       "no"
+      cluster-enabled:      "yes"
+      cluster-config-file:  "nodes.conf"
+      cluster-node-timeout: "5000"
+    redis_users: []
+    redis_hosts: []
+    redis_sentinel: {}
+    replicas: 0
+    sentinel_quorum: 0
+    shards: 2
+    persistence: rdb
+    maxmemory_policy: ""
+    # connection_mode=plain (default); io_threads=0 (default).
+    connection_mode: plain
+    io_threads: 0
+    tls:
+      enable:   false
+      only:     false
+      port:     7379
+      cert_ref: ""
+      key_ref:  ""
+      ca_ref:   ""
+    memory_mb: 0
+    modules: [bloom, json, search, timeseries]
+    sysctl_settings: {}
+    # ★ seed-source read-model (v10): where it migrated from + detached:TRUE (B3 is
+    # atomic) + REFERENCES to the source credentials. source_password_ref =
+    # input.source.password_ref; source_tls_ca_ref='' (tls:false, tls_ca_ref not set).
+    # ★ cluster detached:true → detach_source/cluster.yml detaches nothing, the refs are
+    # unused but are persisted symmetrically with sentinel (unified seeded_from v10 form).
+    seeded_from:
+      source_endpoints:
+        - "10.9.0.1:6379"
+        - "10.9.0.2:6379"
+      detached: true
+      source_password_ref: "secret/redis/migrate/oldcluster#password"
+      source_tls_ca_ref: ""

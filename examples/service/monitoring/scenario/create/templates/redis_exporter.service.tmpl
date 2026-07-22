@@ -1,0 +1,67 @@
+{{/*
+  systemd unit for redis_exporter. Render context (docs/templating.md §3.2):
+    .vars  - explicitly passed into core.file.rendered (bin_dir, listen, redis_addr,
+             extra_args);
+    .self  - stable host facts (unused here).
+
+  Connecting to Redis - via a unix socket: --redis.addr=unix:///<path>
+  (.vars.redis_addr already includes the unix:// prefix, assembled in the scenario from
+   input.redis_socket).
+
+  SERVICE ACCOUNT. A dedicated system user redis-exporter (User/Group),
+  NOT DynamicUser - deliberately, unlike the reference destiny redis-exporter. This
+  service connects to an ALREADY running Redis (possibly someone else's/without auth), and
+  does NOT install Redis itself (see README §"Assumptions"), so it stays on the inline model with
+  a manual core.user. redis-exporter is a member of the supplementary redis group (created
+  by the core.user step in the scenario, before startup) for group access to the unix socket (typically
+  unixsocketperm 770, owner redis:redis). DynamicUser doesn't fit here: an ephemeral
+  systemd UID would not be a member of the redis group -> the 770 socket would be inaccessible (EACCES).
+  Least-privilege: only group membership, not owner rights. Assumption: the redis
+  group already exists on the host (created by the redis-server package).
+
+  systemd-hardening (prod convention §3, "security first",
+  requirements.md): NoNewPrivileges + ProtectSystem=strict (entire / read-only)
+  + isolation of home/tmp/kernel/cgroups + RestrictAddressFamilies with AF_UNIX (exporter
+  reaches Redis via a unix socket - without AF_UNIX connect() would hit the address
+  family block; prod convention §3 - AF_UNIX only for daemons that actually use a
+  socket) + empty CapabilityBoundingSet. The extended block (MemoryDenyWriteExecute,
+  SystemCallFilter=@system-service, RestrictNamespaces, LockPersonality) - same as the
+  reference destiny: exporter is a static Go binary with no JIT and no namespace use.
+
+  .vars.extra_args - a passthrough channel (prod convention §1) for any
+  redis_exporter flags beyond --redis.addr/--web.listen-address: extra collectors
+  (--check-keys=...), TLS/basic-auth (--web.config.file=<path>; web.yml itself is
+  a separate file, not from this scenario, §4). range appends each element as
+  a separate ExecStart argument (not split on whitespace).
+*/}}
+[Unit]
+Description=Prometheus Redis Exporter
+Documentation=https://github.com/oliver006/redis_exporter
+After=network-online.target redis-server.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=redis-exporter
+Group=redis-exporter
+ExecStart={{ .vars.bin_dir }}/redis_exporter --redis.addr={{ .vars.redis_addr }} --web.listen-address={{ .vars.listen }}{{ range .vars.extra_args }} {{ . }}{{ end }}
+Restart=on-failure
+RestartSec=5
+
+# systemd-hardening (prod convention §3). AF_UNIX added alongside AF_INET/AF_INET6 -
+# redis_exporter connects to Redis via a unix socket (--redis.addr=unix://...).
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+ProtectKernelTunables=yes
+ProtectControlGroups=yes
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+CapabilityBoundingSet=
+MemoryDenyWriteExecute=yes
+SystemCallFilter=@system-service
+RestrictNamespaces=yes
+LockPersonality=yes
+
+[Install]
+WantedBy=multi-user.target

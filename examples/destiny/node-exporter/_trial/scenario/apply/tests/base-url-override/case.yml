@@ -1,0 +1,28 @@
+# L0 case: base_url override to an internal mirror.
+#
+# base_url_override=https://nexus.internal/ne -> scenario apply:input passes it
+# into destiny.base_url -> CEL builds the url from this mirror instead of GitHub Releases.
+# Proves that the mirror/nexus replaces the download root (prod convention:
+# base_url is overridden to an internal proxy). Assert - the core.url.fetched
+# step's url starts with the mirror.
+name: node-exporter renders download url from base_url mirror override
+
+fixtures:
+  default_destiny_source: "file://../../{name}"
+  input:
+    version: "1.11.1"
+    collectors: [smartmon, nvme, ipmi]
+    base_url_override: "https://nexus.internal/ne"
+  soulprint:
+    os:
+      arch: amd64
+    network:
+      primary_ip: "10.0.0.5"
+
+assert:
+  task_present:
+    # The only core.url.fetched in the plan.
+    - module: core.url.fetched
+      params_subset:
+        url: https://nexus.internal/ne/v1.11.1/node_exporter-1.11.1.linux-amd64.tar.gz
+        path: /tmp/node_exporter-1.11.1.tar.gz

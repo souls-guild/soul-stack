@@ -1,0 +1,5 @@
+description: A destiny without a name field
+input:
+  action:
+    type: string
+    required: true

@@ -1,0 +1,147 @@
+# L0-guard pattern on AclUser.perms (positive): a valid rich ACL string
+# PASSES input validation and reaches state. Operator sets two users with
+# valid but "broad" perms: `allkeys +@all` (full rights) and `~app:* +@read
+# -@dangerous` (fine-grained). Both are correct Redis-ACL syntax → the pattern lets them through,
+# users end up in state_changes.redis_users (write-model: name/perms/state, without password).
+# Proves that the pattern does NOT false-positive on legitimate rights (including allkeys/+@all).
+# Topology cluster shards=3 replicas=0 → 3 hosts (size-guard PASS).
+name: valid wide acl perms pass input validation and reach state
+
+fixtures:
+  default_destiny_source: "file://../../destiny/{name}"
+  hosts:
+    - sid: node-b.example.com
+      covens: [create, redis]
+      soulprint:
+        network: { primary_ip: 10.0.0.2 }
+        os: { arch: amd64 }
+    - sid: node-c.example.com
+      covens: [create, redis]
+      soulprint:
+        network: { primary_ip: 10.0.0.3 }
+        os: { arch: amd64 }
+    - sid: node-a.example.com
+      covens: [create, redis]
+      soulprint:
+        network: { primary_ip: 10.0.0.1 }
+        os: { arch: amd64 }
+  vault:
+    secret/redis/create:
+      password: s3cr3t-redis-pass-create
+    # ★ default_admin REDESIGN (2026-06-30): default_admin is the system user for intra-cluster
+    # AUTH; masteruser/masterauth of the cluster deploy read its password from the users/default_admin branch.
+    secret/redis/create/users/default_admin:
+      password: default-admin-secret-pass
+    secret/redis/create/users/replica:
+      password: replica-sys-secret-pass
+    secret/redis/create/users/monitoring:
+      password: monitoring-sys-secret-pass
+    secret/redis/create/users/sentinel:
+      password: sentinel-sys-secret-pass
+    secret/redis/create/users/haproxy:
+      password: haproxy-sys-secret-pass
+    secret/redis/create/users/admin:
+      password: admin-user-secret-pass
+    secret/redis/create/users/app:
+      password: app-user-secret-pass
+  essence:
+    redis_type: cluster
+    modules_base_url: "https://artifacts.example.com/redis/modules"
+    memory_reserve_percent: 75
+    persistence_presets:
+      rdb:
+        save: "900 1 300 10 60 10000"
+        appendonly: "no"
+    redis_config:
+      maxmemory:        "256mb"
+      maxmemory-policy: allkeys-lru
+      maxclients:       10000
+      timeout:          300
+    system_acl_users:
+      replica:    "+psync +replconf +ping"
+      monitoring: "-@all +@connection +client +ping +info +config|get +cluster|info +slowlog +latency +memory +select +command|count +command|docs"
+      sentinel:   "allchannels +multi +slaveof +ping +exec +subscribe +config|rewrite +role +publish +info +client|setname +client|kill +script|kill"
+      haproxy:    "-@all +auth +client|getname +client|id +client|setname +command +hello +ping +role +info +cluster|info"
+  input:
+    # ★ provision disabled (default-on: an omitted section = ENABLED; the case deploys onto a
+    # READY roster, cloud-create is not needed) → include redis-provision.yml group-drop.
+    provision:
+      enabled: false
+    redis_type: cluster
+    version: "7.4.1"
+    shards: 3
+    replicas_per_master: 0
+    cluster_node_timeout: 5000
+    users:
+      - { name: admin, perms: "allkeys +@all", state: "on" }
+      - { name: app, perms: "~app:* +@read -@dangerous", state: "on" }
+
+assert:
+  # users.acl: system (4, from essence) + admin (allkeys +@all) + app (fine-grained).
+  # Direct proof that valid "broad" perms passed the pattern and reached
+  # render_context.vars.users (deep-compare map) with per-user vault passwords. Disambiguator
+  # from redis.conf is path + register anchor.
+  task_present:
+    - module: core.file.rendered
+      id: redis_acl
+      params_subset:
+        path: /etc/redis/users.acl
+        render_context:
+          vars:
+            users:
+              replica:
+                perms: "+psync +replconf +ping"
+                state: "on"
+                password: replica-sys-secret-pass
+              monitoring:
+                perms: "-@all +@connection +client +ping +info +config|get +cluster|info +slowlog +latency +memory +select +command|count +command|docs"
+                state: "on"
+                password: monitoring-sys-secret-pass
+              sentinel:
+                perms: "allchannels +multi +slaveof +ping +exec +subscribe +config|rewrite +role +publish +info +client|setname +client|kill +script|kill"
+                state: "on"
+                password: sentinel-sys-secret-pass
+              haproxy:
+                perms: "-@all +auth +client|getname +client|id +client|setname +command +hello +ping +role +info +cluster|info"
+                state: "on"
+                password: haproxy-sys-secret-pass
+              admin:
+                perms: "allkeys +@all"
+                state: "on"
+                password: admin-user-secret-pass
+              app:
+                perms: "~app:* +@read -@dangerous"
+                state: "on"
+                password: app-user-secret-pass
+          self:
+            sid: node-a.example.com
+            covens: [create, redis]
+            choirs: []
+            traits: {}
+            role: ""
+            network:
+              primary_ip: 10.0.0.1
+            os:
+              arch: amd64
+          role: ""
+          essence: {}
+
+  # Both users passed the pattern in input validation and ended up in write-model state.
+  # redis_users is an ARRAY of AclUser [{name,perms,state}] WITHOUT password (keeper-side vault).
+  state_changes:
+    redis_type: cluster
+    redis_version: "7.4.1"
+    redis_config:
+      maxmemory:        "256mb"
+      maxmemory-policy: allkeys-lru
+      maxclients:       10000
+      timeout:          300
+      save:             "900 1 300 10 60 10000"
+      appendonly:       "no"
+      cluster-enabled:      "yes"
+      cluster-config-file:  "nodes.conf"
+      cluster-node-timeout: "5000"
+    redis_users:
+      - { name: admin, perms: "allkeys +@all", state: "on" }
+      - { name: app, perms: "~app:* +@read -@dangerous", state: "on" }
+    redis_hosts: []

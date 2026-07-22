@@ -1,0 +1,17 @@
+kind: soul_module
+protocol_version: 1
+namespace: core
+name: vault
+
+spec:
+  states:
+    kv-read:
+      description: Keeper-side (on:keeper). Explicit read of Vault KV with an audit-event (ADR-017).
+      input:
+        path:   { type: string, required: true, description: "Vault KV path (mount-relative)." }
+        fields: { type: list,   items: { type: string }, description: "Which keys to extract; empty -> the whole secret." }
+    kv-present:
+      description: Keeper-side (on:keeper). Generate-if-absent - guarantees the secret exists (generates the missing crypto/rand per policy; if present - no-op, never returns values).
+      input:
+        policy:  { type: map,  description: "Step-level default policy for all targets: length (8..1024, default 32), charset (alphanumeric|hex|base64url|ascii-printable-safe) OR allowed_chars (mutually exclusive)." }
+        targets: { type: list, required: true, items: { type: map }, description: "Non-empty list of targets {path: <Vault KV path without #field>, field?: <field name, default password>, policy?: <per-target override>}." }

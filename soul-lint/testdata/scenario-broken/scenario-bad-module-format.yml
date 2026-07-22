@@ -1,0 +1,6 @@
+name: bad-module-format
+tasks:
+  - name: two-level form is not valid for scenario module addressing
+    module: core.exec
+    params:
+      command: "true"

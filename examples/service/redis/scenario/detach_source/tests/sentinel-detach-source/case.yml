@@ -1,0 +1,134 @@
+# L0 test for detach_source in sentinel mode (S1 pilot, happy path). A maintenance scenario for
+# an incarnation previously seeded by migrate_cluster (incarnation.state.seeded_from with detached:false,
+# source 10.9.0.1:6379). Roster of 1 host (the new master). Dispatched by
+# incarnation.state.redis_type (detach reads the mode from state).
+#
+# Render-only, hermetic. The dispatcher includes cluster.yml + sentinel.yml via
+# CONDITIONAL-INCLUDE (when: on the include based on state.redis_type): a sentinel incarnation →
+# the cluster branch is group-dropped, sentinel.yml expands.
+#
+# What we assert:
+#   1. FINAL offset gate BEFORE detach (community.redis.offset-synced): source_addr=
+#      the external source from state (seeded_from.source_endpoints[0]=10.9.0.1:6379),
+#      lag_threshold=0 (hard — detach is a point of no return). * source_password='' here is a
+#      back-compat branch (v10): this incarnation's seeded_from has NO ref fields (the form before
+#      the v10 fix) → compute.source_password resolves to '' (source without AUTH). The case with a
+#      NON-EMPTY ref (the gate authenticates to an AUTH source) is sentinel-detach-source-auth.
+#   2. REPLICAOF NO ONE (community.redis.detached): local addr, our password.
+#   3. * SPLIT-BRAIN FIX: SENTINEL MONITOR (community.redis.sentinel) IS PRESENT — it was
+#      MOVED HERE from the migrate_cluster deploy body (there it was a placeholder-skip, to avoid
+#      monitoring the master during seeding → to avoid triggering a failover). Runs AFTER
+#      REPLICAOF NO ONE (master is autonomous): monitor.ip=10.0.0.1 (master election, roster
+#      = the new master), quorum=1 (size(1)/2+1), master_name/timings/version from state
+#      (compute.sentinel_master_name/sentinel_directives/redis_version). Symmetric with
+#      migrate cases, where this same module is in task_absent.
+#   4. state_changes: seeded_from.detached := true (source_endpoints ARE PRESERVED).
+name: sentinel detach_source runs final offset gate then detaches the external source
+
+fixtures:
+  default_destiny_source: "file://../../destiny/{name}"
+  soulprint:
+    network: { primary_ip: 10.0.0.1 }
+    os: { arch: amd64 }
+
+  # Deployed incarnation.state v9: a sentinel incarnation seeded by migrate_cluster.
+  # seeded_from.detached=false (source still attached) — detach_source will set it to true.
+  # host-layout moved into essence (v11→v12); detach_source does NOT read it → absent from state.
+  state:
+    redis_type: sentinel
+    redis_version: "7.2.4"
+    tls:
+      enable:   false
+      only:     false
+      port:     7379
+      cert_ref: ""
+      key_ref:  ""
+      ca_ref:   ""
+    redis_config:
+      maxmemory:        "256mb"
+      maxmemory-policy: allkeys-lru
+      save:             "900 1 300 10 60 10000"
+      appendonly:       "no"
+    redis_users: []
+    # * redis_sentinel (state_schema v9): sentinel timings/master_name. REQUIRED for the
+    # SENTINEL MONITOR that was moved here (split-brain fix): compute.sentinel_directives/
+    # sentinel_master_name are assembled FROM IT (detach has no input contract).
+    redis_sentinel:
+      master_name: master
+      quorum: 0
+      down_after_ms: 5000
+      failover_timeout_ms: 60000
+    seeded_from:
+      source_endpoints:
+        - "10.9.0.1:6379"
+        - "10.9.0.2:6379"
+      detached: false
+
+  vault:
+    secret/redis/detach_source:
+      password: detach-redis-pass-16ch
+    # * default_admin REDESIGN (2026-06-30): local connections in detach_source (offset-gate/
+    # detached/SENTINEL MONITOR) run under the ACL user default_admin, its password is this entry.
+    secret/redis/detach_source/users/default_admin:
+      password: default-admin-secret-pass
+
+assert:
+  task_present:
+    # ── FINAL offset gate BEFORE detach ──────────────────────────────────────
+    # source_addr from state (seeded_from.source_endpoints[0]). lag_threshold=0 (hard).
+    # source_password='' — back-compat (seeded_from without ref fields → compute.source_password=''
+    # → source without AUTH). source_tls=false (no CA ref). password — our local one.
+    - module: community.redis.offset-synced
+      params_subset:
+        addr: "127.0.0.1:6379"
+        source_addr: "10.9.0.1:6379"
+        # * default_admin REDESIGN: LOCAL connection under default_admin; source_password — the source.
+        username: default_admin
+        password: default-admin-secret-pass
+        source_password: ""
+        source_tls: false
+        lag_threshold: 0
+        skip_checksum: false
+
+    # ── REPLICAOF NO ONE (community.redis.detached) ─────────────────────────────
+    - module: community.redis.detached
+      params_subset:
+        addr: "127.0.0.1:6379"
+        # * default_admin REDESIGN: LOCAL connection under default_admin.
+        username: default_admin
+        password: default-admin-secret-pass
+        tls: false
+
+    # ── SENTINEL MONITOR (community.redis.sentinel) — * MOVED HERE (split-brain fix) ──
+    # Runs AFTER REPLICAOF NO ONE (master is autonomous again). monitor.ip=10.0.0.1
+    # (master election: roster = the new master), quorum=1 (size(1)/2+1=1). master_name=master,
+    # redis_version=7.2.4, config (timings 5000/60000) — all from incarnation.state (compute
+    # .sentinel_master_name/redis_version/sentinel_directives, detach has no input). auth_pass —
+    # our secret/redis/<inc>#password. The only community.redis.sentinel in the plan.
+    - module: community.redis.sentinel
+      params_subset:
+        addr: "127.0.0.1:26379"
+        master_name: master
+        # * default_admin REDESIGN: CONNECTION-AUTH (username/password) + monitoring the master
+        # (auth_user/auth_pass) under default_admin.
+        username: default_admin
+        password: default-admin-secret-pass
+        auth_user: default_admin
+        auth_pass: default-admin-secret-pass
+        redis_version: "7.2.4"
+        config:
+          "sentinel down-after-milliseconds master": "5000"
+          "sentinel failover-timeout master": "60000"
+        monitor:
+          ip: 10.0.0.1
+          port: 6379
+          quorum: 1
+
+  # seeded_from.detached := true (source_endpoints PRESERVED — merge of the old object
+  # with {detached:true}). detach_source does not touch the rest of state.
+  state_changes:
+    seeded_from:
+      source_endpoints:
+        - "10.9.0.1:6379"
+        - "10.9.0.2:6379"
+      detached: true

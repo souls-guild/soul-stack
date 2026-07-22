@@ -1,0 +1,7 @@
+# vars.yml with a CYCLE a → b → c → a (vars.md, ADR-009/ADR-010 amendment 2026-06-24):
+# var→var is allowed within a layer, but a cycle is unresolvable by topological sort → render aborts
+# with var_cycle and a trace. This file exists SPECIFICALLY for the negative L0 case
+# (pilot-destiny::vars-cycle, expect_render_error: var_cycle).
+a: "${ vars.b }"
+b: "${ vars.c }"
+c: "${ vars.a }"

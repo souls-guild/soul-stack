@@ -1,0 +1,5 @@
+name: BadName_With_Underscore
+tasks:
+  - module: core.exec.run
+    params:
+      command: "true"

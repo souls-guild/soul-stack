@@ -1,0 +1,14 @@
+# Build-context exclusions for docker build (deploy/docker/*.Dockerfile).
+# Context is the monorepo root; no need to drag in .git/local artifacts.
+.git
+.gitignore
+.pm
+.claude
+*/bin/
+bin/
+dev
+docs
+examples
+*.md
+.dockerignore
+deploy

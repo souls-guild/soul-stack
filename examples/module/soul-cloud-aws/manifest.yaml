@@ -1,0 +1,55 @@
+kind: cloud_driver
+protocol_version: 1                    # plugin-protocol compat flag (ADR-020(c))
+namespace: cloud                       # example third-party CloudDriver collection
+name: aws
+
+# Closed enum per ADR-020(f).
+# vault_access is NOT needed: Keeper resolves credentials (A-flow, docs/keeper/cloud.md)
+# and passes them plain into CreateRequest.credentials — the driver never talks to Vault.
+required_capabilities:
+  - network_outbound                   # AWS API calls
+
+# CloudDriver runs on the keeper side and doesn't touch local host resources —
+# declare an empty list (ADR-020(g), example from docs/keeper/plugins.md).
+side_effects: []
+
+spec:
+  provider_kind: aws                   # informational provider-family field
+  # JSON Schema draft 2020-12 (format for kind: cloud_driver — see
+  # docs/keeper/plugins.md → spec.profile_schema).
+  profile_schema:
+    type: object
+    required: [region, instance_type, ami]
+    properties:
+      region:
+        type: string
+        pattern: "^[a-z]{2}-[a-z]+-[0-9]+$"
+      instance_type:
+        type: string
+        examples: [t3.medium, m5.large]
+      ami:
+        type: string
+        pattern: "^ami-[0-9a-f]{8,17}$"
+      disk:
+        type: object
+        properties:
+          size_gb:
+            type: integer
+            minimum: 8
+          type:
+            type: string
+            enum: [gp3, io2, st1]
+      network:
+        type: object
+        properties:
+          subnet:
+            type: string
+          security_groups:
+            type: array
+            items:
+              type: string
+              pattern: "^sg-[0-9a-f]+$"
+      tags:
+        type: object
+        additionalProperties:
+          type: string

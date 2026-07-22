@@ -1,0 +1,137 @@
+# tasks/server.yml — data-plane DragonFly: TLS PEM + users.acl + dragonfly.conf
+# (FLAGFILE) + the dragonfly service. The ENTIRE file is gated on deploy_dragonfly — the gate
+# sits ON the include (main.yml, conditional-include ADR-009 amendment), NOT inside the file.
+# deploy_dragonfly=false → the include is dropped whole (group-drop). In the dragonfly service
+# the flag is always true (data plane is required); false is kept for brick flexibility.
+#
+# * register's (dragonfly_tls_cert/dragonfly_tls_key/dragonfly_tls_ca/dragonfly_acl/
+#   dragonfly_conf) MUST live IN THIS file: the LOAD-TIME per-file linter (validateTaskRefs,
+#   shared/config/destiny_tasks.go) rejects cross-file onchanges as
+#   unknown_register_reference. SECURITY: keep TLS PEM in a separate file from the restart —
+#   rotating cert/key/CA would silently stop restarting DragonFly.
+#
+# * DragonFly vs redis (D1): NO hardening drop-in (redis hardening arrives as a drop-in
+#   on top of the distro unit). DF's binary branch carries hardening INSIDE its own unit
+#   (install.yml, template dragonfly.service.tmpl); the package branch installs the distro deb
+#   dragonfly with its own unit (untouched). So there are NEITHER hardening-drop-in tasks NOR
+#   onchanges-restart against it here (unlike redis-server.yml). At-create the initial start
+#   (core.service.running) comes up with the final flagfile/ACL/cert already in place — a
+#   separate restart isn't needed. dragonfly.conf/users.acl/TLS PEM DELIBERATELY do NOT restart
+#   (hot-reload day-2 — NEXT slice): rendering puts desired state on disk, activation is a
+#   day-2 step.
+#
+# The PARTIAL inner-gate tls.enable (only the PEM tasks, not the whole file) stays in-block
+# (nested TLS block below): an include-when would drop the whole file, not a subset of tasks.
+
+# ── TLS PEM material ───────────────────────────────────────────────────────────
+# Render cert/key/CA into ${conf_dir}/tls/ BEFORE dragonfly.conf and service start: the flagfile
+# (flags --tls_cert_file/--tls_key_file/--tls_ca_cert_file come into config from the scenario)
+# references these files — with tls.enable DragonFly must find them at startup. All four are
+# gated on tls.enable (when on the nested block) + registered. HOST INVARIANT (one
+# cert/CA per cluster): PEM PATHS (tls.cert_ref/key_ref/ca_ref) come through apply.input.
+#
+# * PEM VIA core.file.present + vault() IN THE content CELL (seal masking, ADR-010 §7.4):
+# NOT .tmpl, NOT an already-resolved PEM through apply.input. vault(ref) in the content cell →
+# the seal detector marks it as sealed by the vault layer, masking hides the PEM in error_summary/state.
+# vault() resolves keeper-side; the vault client is never pulled onto Soul (ADR-012). ref (input.tls.
+# cert_ref) is a path, not a secret. has(input.tls)-guard — render safety when the tls dict is absent.
+# Owner of the PEM is the dragonfly user (DragonFly reads cert/key as the service).
+- name: Provision DragonFly TLS material
+  when: "has(input.tls) && default(input.tls.enable, false)"
+  block:
+    # The tls/ directory under conf_dir — idempotent on mode/owner/group, fixes drift, dry-run.
+    # mode 0750 owner dragonfly: only the service can read PEM (incl. the private key).
+    - name: Ensure the dragonfly TLS directory exists
+      module: core.directory.present
+      params:
+        path: "${ vars.dragonfly_conf_dir_eff + '/tls' }"
+        owner: "${ vars.dragonfly_user }"
+        group: "${ vars.dragonfly_group }"
+        mode: "0750"
+
+    # Server certificate. mode 0600 owner dragonfly. content = vault(ref) IN THE CELL →
+    # sealed by the vault layer. register — restart on rotation (day-2, NEXT slice).
+    - name: Render the TLS server certificate
+      module: core.file.present
+      register: dragonfly_tls_cert
+      params:
+        path: "${ vars.dragonfly_conf_dir_eff + '/tls/dragonfly.crt' }"
+        content: "${ vault(input.tls.cert_ref) }"
+        mode: "${ vars.dragonfly_pem_mode }"
+        owner: "${ vars.dragonfly_user }"
+        group: "${ vars.dragonfly_group }"
+
+    # Private key — a SECRET. mode 0600 owner dragonfly. content = vault(key_ref) IN THE CELL
+    # → sealed by the vault layer (the private PEM key is masked). register — restart.
+    - name: Render the TLS server private key
+      module: core.file.present
+      register: dragonfly_tls_key
+      params:
+        path: "${ vars.dragonfly_conf_dir_eff + '/tls/dragonfly.key' }"
+        content: "${ vault(input.tls.key_ref) }"
+        mode: "${ vars.dragonfly_pem_mode }"
+        owner: "${ vars.dragonfly_user }"
+        group: "${ vars.dragonfly_group }"
+
+    # Cluster CA certificate (peer validation for tls_replication). content =
+    # vault(input.tls.ca_ref) IN THE CELL → sealed by the vault layer. register — restart.
+    - name: Render the TLS CA certificate
+      module: core.file.present
+      register: dragonfly_tls_ca
+      params:
+        path: "${ vars.dragonfly_conf_dir_eff + '/tls/ca.crt' }"
+        content: "${ vault(input.tls.ca_ref) }"
+        mode: "${ vars.dragonfly_pem_mode }"
+        owner: "${ vars.dragonfly_user }"
+        group: "${ vars.dragonfly_group }"
+
+# users.acl from the passed MAP of ACL users name→{perms,state,password} (--aclfile in the
+# flagfile). register for day-2 (restart on change — NEXT slice). owner/group
+# dragonfly, mode 0640 — the file holds password hashes, only the service reads it. The template
+# ranges the MAP (Go sorts keys → determinism) and hashes the password (sha256). DF
+# accepts the redis-format aclfile with `#<sha256hex>` (acl/user.cc SetPasswordHash is_hashed).
+- name: Render users.acl
+  module: core.file.rendered
+  register: dragonfly_acl
+  params:
+    path: "${ vars.dragonfly_conf_dir_eff + '/users.acl' }"
+    template: templates/users.acl.tmpl
+    mode: "${ vars.dragonfly_secret_file_mode }"
+    owner: "${ vars.dragonfly_user }"
+    group: "${ vars.dragonfly_group }"
+    vars:
+      users: "${ default(input.users, {}) }"
+
+# dragonfly.conf (FLAGFILE) from the merged config. register for day-2. owner/group dragonfly,
+# mode 0640 — the flagfile carries masterauth/password hashes, only the service reads it. The template prints
+# base --flags + ranges the merged config (see dragonfly.flags.tmpl). * default_admin REDESIGN:
+# vars.password REMOVED (requirepass removed from the flagfile) — authentication is under the ACL user
+# default_admin (users.acl), masteruser/masterauth arrive as regular config-map keys.
+- name: Render dragonfly.conf
+  module: core.file.rendered
+  register: dragonfly_conf
+  params:
+    path: "${ vars.dragonfly_conf_dir_eff + '/dragonfly.conf' }"
+    template: templates/dragonfly.flags.tmpl
+    mode: "${ vars.dragonfly_secret_file_mode }"
+    owner: "${ vars.dragonfly_user }"
+    group: "${ vars.dragonfly_group }"
+    vars:
+      config:   "${ default(input.config, {}) }"
+      # host-layout (directive B): the template derives --dir from data_dir (snapshot) and --aclfile
+      # from conf_dir (the same place "Render users.acl" puts the file).
+      conf_dir: "${ vars.dragonfly_conf_dir_eff }"
+      data_dir: "${ vars.dragonfly_data_dir_eff }"
+      port:     "${ vars.dragonfly_port }"
+      run_dir:  "${ vars.run_dir }"
+      log_dir:  "${ vars.log_dir }"
+
+# core.service dragonfly running. At-create the initial start comes up with the final
+# flagfile/ACL/cert (the render above is already on disk) — there is no separate restart (DF hardening lives in
+# the unit itself, there is no drop-in-restart case; config/acl/tls hot-reload is day-2, NEXT slice).
+# deploy_dragonfly=false does NOT keep the service — the whole file is group-dropped.
+- name: Ensure DragonFly is running and enabled at boot
+  module: core.service.running
+  params:
+    name: "${ vars.dragonfly_service_name }"
+    enabled: true

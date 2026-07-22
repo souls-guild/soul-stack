@@ -1,0 +1,12 @@
+name: create
+description: |
+  A trivial auto-create scenario (POST /v1/incarnations auto-runs create).
+  One step without register/where — staged-render is not exercised here (N=1). The real
+  2-passage proof is in scenario/failover, launched by a separate RunScenario.
+state_changes: {}
+tasks:
+  - name: Init marker
+    module: core.exec.run
+    changed_when: "false"
+    params:
+      cmd: init-marker

@@ -1,0 +1,63 @@
+syntax = "proto3";
+
+package soulstack.keeper.v1;
+
+import "google/protobuf/timestamp.proto";
+
+option go_package = "github.com/souls-guild/soul-stack/proto/gen/go/keeper/v1;keeperv1";
+
+// HostUtilization — a snapshot of live host resource utilization (CPU%/load/mem/disk/uptime),
+// a lightweight periodic pulse Soul→Keeper over the presence channel (ADR-072). A layer separate
+// from SoulprintFacts (static grains, ADR-018): utilization is volatile, not a targeting fact,
+// with its own cadence (~30s). Stored in Redis only (hot, not PG). only-add per ADR-012(c).
+message HostUtilization {
+  // Soul-side collection moment; Keeper-side received_at is stored separately (freshness).
+  google.protobuf.Timestamp collected_at = 1;
+
+  double cpu_pct = 2;   // 0..100, whole host, load delta since the previous collection
+  double load1   = 3;
+  double load5   = 4;
+  double load15  = 5;
+
+  int64 mem_used_mb  = 6;   // used = total - available
+  int64 mem_total_mb = 7;
+  int64 swap_used_mb = 8;
+
+  // Utilization of non-virtual mount points (tmpfs/proc/sys/cgroup are filtered out).
+  repeated DiskUtilization disks = 9;
+
+  int64 uptime_sec = 10;
+
+  // Effective pulse cadence; the Keeper scales Redis key TTLs by it (ADR-072, NIM-87).
+  int32 interval_sec = 11;
+
+  // Network throughput — aggregate over physical NICs (lo + virtual ifaces filtered out),
+  // rate = delta of /proc/net/dev byte counters over wall time between samples (stateful,
+  // like cpu_pct). First tick after (re)start reports 0 (no baseline yet). Aggregate, not
+  // per-interface — bound size, no per-NIC explosion (ADR-072 amendment 2026-07-18, NIM-127).
+  int64 net_rx_bps = 12;   // received bytes/sec
+  int64 net_tx_bps = 13;   // transmitted bytes/sec
+  int64 net_err_ps = 14;   // combined NIC errors+drops per sec (rx+tx), a single health blip
+}
+
+// DiskUtilization — the usage of a single mount point. Sizes in MB (like MemoryFacts).
+message DiskUtilization {
+  string mount    = 1;
+  int64  used_mb  = 2;
+  int64  total_mb = 3;
+
+  // Inode utilization from the same statvfs already taken for space (zero extra syscall):
+  // used = f_files - f_ffree, total = f_files. total=0 → the FS does not report inodes
+  // (ADR-072 amendment 2026-07-18, NIM-127).
+  int64 inodes_used  = 4;
+  int64 inodes_total = 5;
+}
+
+// TelemetryConfig — the effective host-vitals collection config, resolved by
+// the Keeper (manifest telemetry: + essence override) and delivered to Soul via
+// FromKeeper for hot-reload of cadence/collectors without a restart (ADR-072, NIM-87).
+message TelemetryConfig {
+  bool enabled = 1;
+  int32 interval_sec = 2;
+  repeated string collectors = 3;   // subset of {cpu,mem,disk,load,uptime}
+}

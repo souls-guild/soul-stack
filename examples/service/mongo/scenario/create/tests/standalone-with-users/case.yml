@@ -1,0 +1,80 @@
+# L0 test for create MongoDB standalone WITH operator users. Covers: loop over input.users
+# (community.mongo.user for each), password split (connect as default_admin, createUser
+# with the new user's password - user_password), MongoUser $type ($type-resolve roles array {role, db}
+# + default database/state), state_changes.mongo_users.
+name: mongo create standalone with operator users (loop + user_password split)
+
+fixtures:
+  hosts:
+    - sid: node-solo.example.com
+      covens: [create, mongo]
+      soulprint:
+        network: { primary_ip: 10.0.0.7 }
+        os: { arch: amd64, version: "12" }
+
+  # Vault: default_admin (bootstrap + admin connect) + appuser (operator user, own password).
+  vault:
+    secret/mongo/create/users/default_admin:
+      password: mongoadmin-create-pass
+    secret/mongo/create/users/appuser:
+      password: appuser-secret-pass
+
+  essence:
+    install_method: binary
+    binary_base_url: "https://nexus.example/mongodb"
+    binary_allow_private: true
+    conf_dir: /etc/mongodb
+    data_dir: /var/lib/mongodb
+    log_dir:  /var/log/mongodb
+    net_port: 27017
+    memory_reserve_percent: 50
+    system_users:
+      default_admin:
+        - { role: root, db: admin }
+    mongo_config:
+      net:
+        maxIncomingConnections: 65536
+    sysctl_settings:
+      vm.max_map_count: "262144"
+
+  input:
+    version: "7.0.15"
+    users:
+      - name: appuser
+        database: appdb
+        roles:
+          - { role: readWrite, db: appdb }
+
+assert:
+  task_present:
+    # gen passwords: default_admin + appuser (operator user made it into targets).
+    - module: core.vault.kv-present
+
+    # bootstrap default_admin (localhost-exception).
+    - module: community.mongo.user
+      params_subset:
+        name: default_admin
+        username: default_admin
+        state: present
+
+    # * operator user appuser (loop): connect as default_admin (username/password =
+    # admin creds), createUser with appuser's password (user_password), roles from MongoUser.
+    - module: community.mongo.user
+      params_subset:
+        name: appuser
+        database: appdb
+        state: present
+        username: default_admin
+        password: mongoadmin-create-pass
+        user_password: appuser-secret-pass
+
+  state_changes:
+    mongo_version: "7.0.15"
+    # mongo_users: array of MongoUser with defaults filled in (database/state from $type). roles - an array
+    # {role, db}. * default state=present fills in $type MongoUser (types.yml).
+    mongo_users:
+      - name: appuser
+        database: appdb
+        state: present
+        roles:
+          - { role: readWrite, db: appdb }

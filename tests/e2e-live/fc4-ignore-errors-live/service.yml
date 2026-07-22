@@ -1,0 +1,20 @@
+name: fc4-ignore-errors-live
+state_schema_version: 1
+description: >-
+  FC-4 L3b: prove that failed_when:false = ignore_errors on a REAL module failure
+  during real-apply. core.exec.run of a nonexistent binary REALLY fails on
+  the Soul (fork/exec: file not found -> SendFailed -> last.failed=true), and
+  failed_when:false overrides the failure to OK while preserving the original error in
+  register.<name>.ignored_error (applyrunner.go buildRegisterData/ignore_errors
+  audit). Two mirror scenarios:
+   - create:   failure + failed_when:false -> run SUCCESS, ignored_error non-empty.
+   - fail_hard: the same task WITHOUT failed_when -> run FAILED (contrast,
+     proves that the suppression is done by failed_when itself, not by the module).
+  The L3a-stub doesn't compute failed_when -> best-effort semantics on a real failure
+  and mapping the real stderr/exit-code into ignored_error are not proven there.
+
+# state_schema_version=1 -> the migrations/ folder is not mandatory (ADR-019).
+# Focus is the flow-control outcome of the run and register, not mutation of incarnation.state.
+state_schema:
+  type: object
+  properties: {}

@@ -1,0 +1,18 @@
+name: upgrade-demo
+state_schema_version: 2
+description: >-
+  Demo service NIM-34 (upgrade v2, ADR-0068), tag v2.0.0. Differences from v1.0.0:
+  state_schema_version=2 + migrations/001_to_002.yml (state migration ADR-019) +
+  upgrade/to_v2/main.yml with top-level from: ["v1.0.0"] (self-describing
+  upgrade scenario). Transition v1.0.0 -> v2.0.0 = FOUND mode: upgrade-paths?to=v2.0.0
+  returns mode=found + slug=to_v2 + reachable=true + state_migrations [001->002].
+
+# state_schema v2: field schema_v2 is added by migration 001_to_002 (flags the
+# fact of the upgrade, read-model). note is inherited from v1.
+state_schema:
+  type: object
+  properties:
+    note:
+      type: string
+    schema_v2:
+      type: boolean

@@ -1,0 +1,17 @@
+# Souls fixture for L3a hello-world (extends the smoke-nginx pilot pattern).
+#
+# A single soul-stub presents itself to the Keeper under SID `soul-a.example.com`.
+# scenario/create uses core.file.present — it only requires the base soulprint
+# (pkg_mgr/init_system aren't formally needed for core.file, but we give a
+# minimal consistent set, same as smoke-nginx).
+- sid: soul-a.example.com
+  status: connected
+  covens: [hello]
+  soulprint:
+    os:
+      family: debian
+      distro: debian
+      version: "12"
+      pkg_mgr: apt
+      init_system: systemd
+    hostname: soul-a

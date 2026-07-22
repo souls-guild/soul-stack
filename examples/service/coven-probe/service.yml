@@ -1,0 +1,16 @@
+name: coven-probe
+state_schema_version: 1
+description: >-
+  Probe service for validating coven-targeting of the on:/coven resolver (Phase-2 TEST A).
+  Each scenario installs redis and writes a coven marker file to the targeted
+  subset of hosts, so that apply_runs (PG) and the presence of the file (reality) can
+  verify: exactly the targeted covens were touched, non-targeted ones stay clean.
+  Only core modules (core.pkg / core.file), no custom modules or destiny.
+
+state_schema:
+  type: object
+  properties:
+    marker_file:
+      type: string
+    last_target:
+      type: string

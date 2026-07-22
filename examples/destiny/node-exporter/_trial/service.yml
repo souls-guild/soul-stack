@@ -1,0 +1,26 @@
+# service.yml of the destiny node-exporter L0-wrapper (Trial, ADR-023).
+#
+# The wrapper is not a real service: its only role is to give standalone
+# destiny node-exporter a render-only L0-check via scenario apply:destiny.
+# apply:destiny resolution mirrors PROD (slice A): name → service.yml::destiny[]
+# + URL from default_destiny_source (case.yml). So even the wrapper needs a
+# service.yml with a declared dependency — otherwise apply:destiny would
+# reject it as undeclared.
+name: trial-node-exporter
+state_schema_version: 1
+description: >-
+  L0-harness for destiny node-exporter (ADR-023). Not a service — a
+  scenario-wrapper for render-only Trial. state_schema here is nominal
+  (Trial L0 does not assert it). destiny arch is taken directly from
+  soulprint.self.os.arch (apply:input does not pass it).
+
+# state_schema is nominal: L0 render-only does not use it, but service.yml
+# requires a non-empty object schema.
+state_schema:
+  type: object
+
+# Declared destiny dependency: apply:destiny resolves it by name (an
+# undeclared one would be rejected, mirroring prod). The git URL comes from
+# default_destiny_source case.yml (file://, relative to service-root = _trial/).
+destiny:
+  - { name: node-exporter, ref: v1.0.0 }

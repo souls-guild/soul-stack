@@ -1,0 +1,148 @@
+# L0 test of create cluster: SYSTEM ACL users (system-ACL-users d2) are added into
+# users.acl OVER the lower layer from essence.system_acl_users, operator-extra (app)
+# layers on top. This proves:
+#   1. users.acl carries ALL system redis-server users (default_admin/replica/monitoring/
+#      sentinel/haproxy) from essence.system_acl_users with perms 1:1 from essence + state:'on';
+#   2. operator-extra (app) coexists with the system users in the same file;
+#   3. EACH system user has its OWN vault password secret/redis/<inc>/users/<name>#password
+#      (the same branch as operator-extra) — no cross-leak;
+#   4. ★ default_admin REDESIGN (2026-06-30): the built-in default renders as `off` (it's NOT
+#      in the .vars.users map), while intra-cluster AUTH runs under the system default_admin —
+#      it IS present in the .vars.users map like the other system users (~* &* +@all,
+#      password from users/default_admin). The former "default from
+#      render_context.vars.password = requirepass" model is removed
+#      (requirepass dropped from server.yml);
+#   5. state_changes.redis_users carries ONLY operator-extra (app) — the system users are NOT in
+#      state (item 7 d2: added on top from essence on every render).
+#
+# Topology: shards=1, replicas_per_master=0 → 1 host (size-guard PASS). render_context
+# .self = the first host by SID (node-a, host invariant of apply.input).
+name: cluster create merges system ACL users into users.acl above operator extras
+
+fixtures:
+  default_destiny_source: "file://../../destiny/{name}"
+  hosts:
+    - sid: node-a.example.com
+      covens: [create, redis]
+      soulprint:
+        network: { primary_ip: 10.0.0.1 }
+        os: { arch: amd64 }
+  vault:
+    secret/redis/create:
+      password: s3cr3t-redis-pass-create
+    # Per-user secrets of system users — DIFFERENT values (cross-leak detected by an assert).
+    # ★ default_admin REDESIGN (2026-06-30): default_admin is the system user of intra-cluster
+    # AUTH (its password is under the same users/<name> branch).
+    secret/redis/create/users/default_admin:
+      password: default-admin-secret-pass
+    secret/redis/create/users/replica:
+      password: replica-sys-secret-pass
+    secret/redis/create/users/monitoring:
+      password: monitoring-sys-secret-pass
+    secret/redis/create/users/sentinel:
+      password: sentinel-sys-secret-pass
+    secret/redis/create/users/haproxy:
+      password: haproxy-sys-secret-pass
+    secret/redis/create/users/app:
+      password: app-user-secret-pass
+  essence:
+    redis_type: cluster
+    modules_base_url: "https://artifacts.example.com/redis/modules"
+    memory_reserve_percent: 75
+    persistence_presets:
+      rdb:
+        save: "900 1 300 10 60 10000"
+        appendonly: "no"
+    redis_config:
+      maxmemory:        "256mb"
+      maxmemory-policy: allkeys-lru
+      maxclients:       10000
+      timeout:          300
+    # System ACL users of redis-server (perms 1:1 from vars/main.yml of the redis_system_users role).
+    # ★ default_admin REDESIGN (2026-06-30): default_admin (~* &* +@all) is the system user of
+    # intra-cluster AUTH (replaced the former requirepass-default). Source of truth for adding
+    # system users into users.acl.
+    system_acl_users:
+      default_admin: "~* &* +@all"
+      replica:    "+psync +replconf +ping"
+      monitoring: "-@all +@connection +client +ping +info +config|get +cluster|info +slowlog +latency +memory +select +command|count +command|docs"
+      sentinel:   "allchannels +multi +slaveof +ping +exec +subscribe +config|rewrite +role +publish +info +client|setname +client|kill +script|kill"
+      haproxy:    "-@all +auth +client|getname +client|id +client|setname +command +hello +ping +role +info +cluster|info"
+
+  input:
+    # ★ provision disabled (default-on: an omitted section = ENABLED; the case deploys onto a
+    # READY roster, cloud-create isn't needed) → include redis-provision.yml group-drop.
+    provision:
+      enabled: false
+    redis_type: cluster
+    version: "7.4.1"
+    shards: 1
+    replicas_per_master: 0
+    cluster_node_timeout: 5000
+    users:
+      - { name: app, perms: "~app:* +@read +@write", state: "on" }
+
+assert:
+  task_present:
+    # users.acl: system users (default_admin/replica/monitoring/sentinel/haproxy) with perms from
+    # essence + operator-extra (app). EACH with ITS OWN vault password. ★ default_admin REDESIGN:
+    # default_admin IS in the .vars.users map (system, ~* &* +@all); the built-in default renders
+    # as `off` via the template and is ABSENT from the map (a deep-compare of the whole map catches
+    # it as extraneous).
+    - module: core.file.rendered
+      id: redis_acl
+      params_subset:
+        path: /etc/redis/users.acl
+        template_content: "<present>"
+        mode: "0640"
+        owner: redis
+        group: redis
+        render_context:
+          vars:
+            users:
+              default_admin:
+                perms: "~* &* +@all"
+                state: "on"
+                password: default-admin-secret-pass
+              replica:
+                perms: "+psync +replconf +ping"
+                state: "on"
+                password: replica-sys-secret-pass
+              monitoring:
+                perms: "-@all +@connection +client +ping +info +config|get +cluster|info +slowlog +latency +memory +select +command|count +command|docs"
+                state: "on"
+                password: monitoring-sys-secret-pass
+              sentinel:
+                perms: "allchannels +multi +slaveof +ping +exec +subscribe +config|rewrite +role +publish +info +client|setname +client|kill +script|kill"
+                state: "on"
+                password: sentinel-sys-secret-pass
+              haproxy:
+                perms: "-@all +auth +client|getname +client|id +client|setname +command +hello +ping +role +info +cluster|info"
+                state: "on"
+                password: haproxy-sys-secret-pass
+              app:
+                perms: "~app:* +@read +@write"
+                state: "on"
+                password: app-user-secret-pass
+          self:
+            sid: node-a.example.com
+            covens: [create, redis]
+            choirs: []
+            traits: {}
+            role: ""
+            network:
+              primary_ip: 10.0.0.1
+            os:
+              arch: amd64
+          role: ""
+          essence: {}
+
+  state_changes:
+    redis_type: cluster
+    redis_version: "7.4.1"
+    # ★ GUARD "system users NOT in state": redis_users carries ONLY operator-extra (app),
+    # WITHOUT replica/monitoring/sentinel/haproxy (they're added from essence, deep-compare
+    # catches an extraneous system element as a mismatch). wave 1b: ARRAY of AclUser.
+    redis_users:
+      - { name: app, perms: "~app:* +@read +@write", state: "on" }
+    redis_hosts: []

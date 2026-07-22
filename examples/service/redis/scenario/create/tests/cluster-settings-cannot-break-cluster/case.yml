@@ -1,0 +1,179 @@
+# L0 test of create in cluster mode — GUARD on merge ORDER (coverage gap
+# qa 2026-06-22). INTENT: cluster directives (especially cluster-enabled) MUST
+# win over the operator's redis_settings — the operator canNOT accidentally/intentionally
+# break cluster mode via redis_settings passthrough.
+#
+# Mechanism: in the merge() of the cluster.yml branch, layer order (LEFT TO RIGHT, SHALLOW
+# last-wins):
+#   1. essence.redis_config
+#   2. persistence_presets[persistence]
+#   3. computed maxmemory/policy
+#   4. input.redis_settings          ← operator passthrough
+#   5. { cluster-enabled, cluster-config-file, cluster-node-timeout }  ← LAST
+# the cluster block (layer 5) comes AFTER redis_settings (layer 4) → last-wins: even if
+# the operator supplied cluster-enabled: "no" in redis_settings, the final merged carries
+# cluster-enabled: "yes". This case supplies a HOSTILE redis_settings (cluster-enabled
+# no / cluster-node-timeout 99 / cluster-config-file evil.conf) and asserts that in
+# the end all three cluster directives are CANONICAL, not the operator's.
+#
+# Also: a harmless operator passthrough (tcp-backlog) makes it through (not a cluster key
+# → not overwritten), proving the guard cuts ONLY cluster directives, not the whole
+# redis_settings.
+#
+# Topology: shards=3, replicas_per_shard=0 → 3 hosts (size-guard PASS).
+name: cluster directives beat operator redis_settings (cannot break cluster)
+
+fixtures:
+  default_destiny_source: "file://../../destiny/{name}"
+  hosts:
+    - sid: node-b.example.com
+      covens: [create, redis]
+      soulprint:
+        network: { primary_ip: 10.0.0.2 }
+        os: { arch: amd64 }
+    - sid: node-c.example.com
+      covens: [create, redis]
+      soulprint:
+        network: { primary_ip: 10.0.0.3 }
+        os: { arch: amd64 }
+    - sid: node-a.example.com
+      covens: [create, redis]
+      soulprint:
+        network: { primary_ip: 10.0.0.1 }
+        os: { arch: amd64 }
+  vault:
+    secret/redis/create:
+      password: s3cr3t-redis-pass-create
+    # Per-user secrets of system users (secret/redis/<inc>/users/<name>#password) —
+    # resolved by keeper-side vault() when injecting system_acl_users into apply.input.users.
+    # ★ default_admin REDESIGN (2026-06-30): default_admin is the system user for intra-cluster
+    # AUTH (deploy's PING/cluster-build/masterauth read its password from the same users/<name> branch).
+    secret/redis/create/users/default_admin:
+      password: default-admin-secret-pass
+    secret/redis/create/users/replica:
+      password: replica-sys-secret-pass
+    secret/redis/create/users/monitoring:
+      password: monitoring-sys-secret-pass
+    secret/redis/create/users/sentinel:
+      password: sentinel-sys-secret-pass
+    secret/redis/create/users/haproxy:
+      password: haproxy-sys-secret-pass
+  essence:
+    redis_type: cluster
+    modules_base_url: "https://artifacts.example.com/redis/modules"
+    memory_reserve_percent: 75
+    persistence_presets:
+      rdb:
+        save: "900 1 300 10 60 10000"
+        appendonly: "no"
+    redis_config:
+      maxmemory:        "256mb"
+      maxmemory-policy: allkeys-lru
+      maxclients:       10000
+      timeout:          300
+
+    # System ACL users of redis-server (1:1 from essence/_default.yaml). REQUIRED:
+    # the create/cluster.yml guard (assert 1b) aborts render on an empty system_acl_users
+    # (a silent fail-open is unacceptable — without them replication/health-check would break).
+    # ★ default_admin REDESIGN (2026-06-30): default_admin is the full-access system user
+    # (~* &* +@all), under it the cluster's intra-cluster AUTH (replaced requirepass-default).
+    system_acl_users:
+      default_admin: "~* &* +@all"
+      replica:    "+psync +replconf +ping"
+      monitoring: "-@all +@connection +client +ping +info +config|get +cluster|info +slowlog +latency +memory +select +command|count +command|docs"
+      sentinel:   "allchannels +multi +slaveof +ping +exec +subscribe +config|rewrite +role +publish +info +client|setname +client|kill +script|kill"
+      haproxy:    "-@all +auth +client|getname +client|id +client|setname +command +hello +ping +role +info +cluster|info"
+  input:
+    # ★ provision disabled (default-on: an omitted section = ENABLED; this case deploys onto
+    # a READY roster, cloud-create not needed) → include redis-provision.yml group-drop.
+    provision:
+      enabled: false
+    redis_type: cluster
+    # version is REQUIRED (user directive 2026-06-23): a fixed
+    # distro-native pin (major < 8 → module version-gate not active).
+    version: "7.4.1"
+    shards: 3
+    replicas_per_master: 0
+    cluster_node_timeout: 7000
+    # HOSTILE passthrough: the operator tries to break cluster mode. The cluster block's
+    # merge() comes AFTER → last-wins canonical values. tcp-backlog (not a
+    # cluster key) makes it through untouched.
+    redis_settings:
+      cluster-enabled: "no"
+      cluster-config-file: "evil.conf"
+      cluster-node-timeout: "99"
+      tcp-backlog: 511
+
+assert:
+  # size-guard PASS — assert: (ADR-009 amendment) is NOT a task.
+  task_present:
+    # redis.conf: the cluster block WON over the hostile redis_settings (last-wins).
+    # Disambiguator from users.acl/hardening (same core.file.rendered) — path.
+    - module: core.file.rendered
+      params_subset:
+        path: /etc/redis/redis.conf
+        template_content: "<present>"
+        mode: "0640"
+        owner: redis
+        group: redis
+        render_context:
+          vars:
+            conf_dir: /etc/redis
+            data_dir: /var/lib/redis
+            port: 6379
+            run_dir: /var/run/redis
+            log_dir: /var/log/redis
+            loadmodules:
+              - /var/lib/redis/modules/redisbloom.so
+              - /var/lib/redis/modules/rejson.so
+              - /var/lib/redis/modules/redisearch.so
+              - /var/lib/redis/modules/redistimeseries.so
+            config:
+              # ★ default_admin REDESIGN: replica→master AUTH (masteruser/masterauth) comes as
+              # REGULAR config directives (the cluster deploy body injects them via vault()-in-cell,
+              # password from the users/default_admin branch). They're NOT in state_changes.redis_config.
+              masteruser:       "default_admin"
+              masterauth:       "default-admin-secret-pass"
+              maxmemory:        "256mb"
+              maxmemory-policy: allkeys-lru
+              maxclients:       10000
+              timeout:          300
+              save:             "900 1 300 10 60 10000"
+              appendonly:       "no"
+              # CANONICAL cluster directives — NOT the operator's "no"/"evil.conf"/"99".
+              # cluster-node-timeout = 7000 from input.cluster_node_timeout (not 99 from settings).
+              cluster-enabled:      "yes"
+              cluster-config-file:  "nodes.conf"
+              cluster-node-timeout: "7000"
+              # Harmless passthrough (not a cluster key) made it through.
+              tcp-backlog: 511
+          self:
+            sid: node-a.example.com
+            covens: [create, redis]
+            choirs: []
+            # traits — registry projection (ADR-060), empty object with no labels.
+            traits: {}
+            role: ""
+            network:
+              primary_ip: 10.0.0.1
+            os:
+              arch: amd64
+          role: ""
+          essence: {}
+
+  state_changes:
+    redis_type: cluster
+    redis_version: "7.4.1"
+    redis_config:
+      maxmemory:        "256mb"
+      maxmemory-policy: allkeys-lru
+      maxclients:       10000
+      timeout:          300
+      save:             "900 1 300 10 60 10000"
+      appendonly:       "no"
+      cluster-enabled:      "yes"
+      cluster-config-file:  "nodes.conf"
+      cluster-node-timeout: "7000"
+      tcp-backlog: 511
+    redis_users: []
+    redis_hosts: []

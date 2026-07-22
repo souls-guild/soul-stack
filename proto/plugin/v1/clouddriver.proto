@@ -1,0 +1,277 @@
+syntax = "proto3";
+
+package soulstack.plugin.v1;
+
+import "google/protobuf/struct.proto";
+
+option go_package = "github.com/souls-guild/soul-stack/proto/plugin/gen/go/v1;pluginv1";
+
+// CloudDriver — service contract for `kind: cloud_driver` plugins
+// (ADR-020, docs/keeper/plugins.md → CloudDriver service contract).
+//
+// Host is `keeper` (module `keeper.cloud`, docs/keeper/cloud.md).
+// Plugin binaries are soul-cloud-<provider> (soul-cloud-aws, soul-cloud-yc, …).
+//
+// Cloud-create is embedded in scenarios as an `on: keeper` step
+// (module core.cloud.provisioned, ADR-017).
+service CloudDriver {
+  // Publishes profile_schema (must match manifest.spec.profile_schema).
+  // Used when creating a Profile via OpenAPI/MCP for validation.
+  rpc Schema(SchemaRequest) returns (SchemaReply);
+
+  // Runtime checks of profile parameters: quotas, image availability,
+  // subnet validity — whatever JSON Schema can't express.
+  rpc Validate(ValidateProfileRequest) returns (ValidateProfileReply);
+
+  // Creates VM(s) (one or N), streaming progress.
+  rpc Create(CreateRequest) returns (stream CreateEvent);
+
+  // Deletes a VM. Guard-railed — see docs/keeper/cloud.md → Destroy safety.
+  rpc Destroy(DestroyRequest) returns (stream DestroyEvent);
+
+  // Resizes VM resources: cpu_cores / ram_mb / disk_gb (our units; the
+  // driver converts to provider-native ones). The driver encapsulates the
+  // whole sequence (quota-check → stop → update → start for cpu/ram +
+  // online disk-add) — Keeper stays agnostic to stop/start. Streams
+  // progress by phase, like Create.
+  //
+  // forward-compat only-add (ADR-012(c)/ADR-020): a new RPC, no field-number
+  // reuse, no removals. An old driver without the `Resizable`
+  // capability-marker (sdk/clouddriver) → host returns resize.unsupported
+  // instead of a raw Unimplemented.
+  rpc Resize(ResizeRequest) returns (stream ResizeEvent);
+
+  // Polls the state of one VM.
+  rpc Status(StatusRequest) returns (StatusReply);
+
+  // Lists VMs known to the provider.
+  rpc List(ListRequest) returns (stream VmInfo);
+}
+
+// SchemaRequest — the Schema request. No parameters; a separate message for
+// forward-compat (fields can be added without breaking).
+message SchemaRequest {}
+
+// SchemaReply — the VM profile JSON Schema (draft 2020-12).
+message SchemaReply {
+  google.protobuf.Struct profile_schema = 1;
+}
+
+// ValidateProfileRequest — the Validate request for CloudDriver.
+// Named differently from ValidateRequest in soulmodule.proto so the
+// `soulstack.plugin.v1` package has no type collision.
+message ValidateProfileRequest {
+  // VM profile parameters, matching profile_schema.
+  google.protobuf.Struct profile = 1;
+}
+
+// ValidateProfileReply — the Validate result for CloudDriver.
+message ValidateProfileReply {
+  bool ok = 1;
+  repeated string errors = 2;
+}
+
+// CreateRequest — the Create request.
+message CreateRequest {
+  // VM profile parameters (matching profile_schema).
+  google.protobuf.Struct profile = 1;
+
+  // How many VMs to create. Default 1.
+  int32 count = 2;
+
+  // Provider credentials, resolved by Keeper from the Provider registry
+  // (credentials A-flow, docs/keeper/cloud.md → Credentials flow): Keeper
+  // reads `providers.credentials_ref` (vault:<mount>/<path>) and places the
+  // plain secret here; the driver never talks to Vault. Contents are
+  // provider-specific (AWS: access_key_id/secret_access_key/session_token;
+  // YC: service-account-key, etc.). Keeper also puts `region` from the
+  // Provider registry here — it's a provider-specific parameter
+  // (Proxmox/OpenStack have no `region` of their own), so it lives inside
+  // the credentials/profile Struct rather than as a separate field.
+  // forward-compat only-add (ADR-012(c) style): added v1.
+  google.protobuf.Struct credentials = 3;
+
+  // Cloud-init userdata for bootstrapping the soul agent on a fresh VM
+  // (PM decision: cloud-init userdata). Raw userdata blob the driver passes
+  // to the provider on create (AWS RunInstances UserData). Applied
+  // identically to every VM in the batch.
+  //
+  // Self-onboard (ADR-017(h) amendment "Variant T"): when Keeper sets
+  // `name` (below) and knows the provider's FQDN suffix, it PREDICTS each
+  // VM's FQDN (`<name>-<index>.<suffix>`) BEFORE create and bakes per-VM
+  // bootstrap tokens into this userdata (the shared blob carries an
+  // FQDN→token map; cloud-init on the VM picks its own token by hostname).
+  // Without self-onboard, userdata carries no tokens (B-flat, the token is
+  // delivered via a separate core.bootstrap.delivered step).
+  // forward-compat only-add: added v1.
+  string userdata = 4;
+
+  // Base name for the VM batch, set by Keeper (self-onboard "Variant T",
+  // ADR-017(h) amendment). The driver MUST name the batch's i-th VM
+  // `<name>-<index>` (0-based index) so the FQDN (`<name>-<index>.<suffix>`)
+  // is PREDICTABLE by Keeper BEFORE create — this removes the chicken-egg
+  // problem of "SID=FQDN is known only after create" and lets per-VM
+  // tokens be baked into userdata.
+  //
+  // Empty (default) → the driver names VMs however it likes (previous
+  // behavior: auto-slug/timestamp) — self-onboard is then unavailable. The
+  // name must fit the provider's naming constraints (Keeper doesn't know
+  // per-provider limits — the scenario/provider author owns the format).
+  // forward-compat only-add: added v1.
+  string name = 5;
+}
+
+// CreateEvent — an event from the Create stream.
+// The final event carries the created VMs (vms[]); intermediate ones are
+// diagnostic messages.
+message CreateEvent {
+  string message = 1;
+
+  // Populated only in the final event — the list of created VMs.
+  repeated VmInfo vms = 2;
+
+  // Populated on error. The stream closes after the first failed=true.
+  bool failed = 3;
+}
+
+// DestroyRequest — the Destroy request.
+message DestroyRequest {
+  // VM identifiers to delete (provider-specific format).
+  repeated string vm_ids = 1;
+
+  // Provider credentials, resolved by Keeper from the Provider registry —
+  // see CreateRequest.credentials (same A-flow). Without them the driver
+  // can't authenticate to the provider API for TerminateInstances.
+  // forward-compat only-add (ADR-012(c) style): added v1.
+  google.protobuf.Struct credentials = 2;
+}
+
+// DestroyEvent — an event from the Destroy stream.
+message DestroyEvent {
+  string message = 1;
+  string vm_id = 2;
+  bool failed = 3;
+}
+
+// StatusRequest — the Status request.
+message StatusRequest {
+  string vm_id = 1;
+
+  // Provider credentials, resolved by Keeper from the Provider registry —
+  // see CreateRequest.credentials (same A-flow). Without them the driver
+  // can't authenticate to the provider API for a DescribeInstances/Get
+  // operation.
+  // forward-compat only-add (ADR-012(c) style): added v1.
+  google.protobuf.Struct credentials = 2;
+}
+
+// StatusReply — the Status result.
+message StatusReply {
+  // VM state in provider terms (provider-specific string).
+  // Normalizing to a common enum is a separate keeper.cloud task (post-MVP).
+  string state = 1;
+
+  // Additional provider-specific information.
+  google.protobuf.Struct attributes = 2;
+}
+
+// ListRequest — the List request.
+message ListRequest {
+  // Provider-specific filter (tags, region, etc.); empty = all.
+  google.protobuf.Struct filter = 1;
+
+  // Provider credentials, resolved by Keeper from the Provider registry —
+  // see CreateRequest.credentials (same A-flow). Before v1 this field didn't
+  // exist and drivers worked around it by stuffing creds inside filter; the
+  // migration removed that workaround so the 5 replicated drivers wouldn't
+  // each repeat it.
+  // forward-compat only-add (ADR-012(c) style): added v1.
+  google.protobuf.Struct credentials = 2;
+}
+
+// ResizeSpec — target VM resources. Units are OUR canonical ones (the
+// driver converts to provider-native units, etc.):
+//   - cpu_cores: target vCPU count (cores).
+//   - ram_mb: target RAM size in MEGABYTES.
+//   - disk_gb: target ABSOLUTE disk size in GIGABYTES (NOT a delta) —
+//     idempotent: resizing again to the same size is a no-op.
+//
+// All fields are optional: 0 = "don't change this dimension." The driver
+// only changes fields that are set (>0). Splitting cpu/ram (which need
+// stop/start on some providers) from disk (online add) is the driver's job.
+message ResizeSpec {
+  int32 cpu_cores = 1;
+  int64 ram_mb = 2;
+  int64 disk_gb = 3;
+}
+
+// ResizeRequest — the Resize request.
+message ResizeRequest {
+  // VM identifiers to resize (provider-specific format). One batch — the
+  // same target applied to every VM (like userdata in Create).
+  repeated string vm_ids = 1;
+
+  // Target resources (our units). Fields left at 0 are unchanged.
+  ResizeSpec desired = 2;
+
+  // Whether downtime is allowed (stop/start the VM to apply cpu/ram
+  // changes). false → the driver must refuse (or apply only what's online,
+  // e.g. disk-add) instead of an unplanned restart. caused_downtime in the
+  // per-vm result reports whether downtime actually happened.
+  bool allow_downtime = 3;
+
+  // Provider credentials, resolved by Keeper from the Provider registry —
+  // see CreateRequest.credentials (same A-flow). Without them the driver
+  // can't authenticate to the provider API for the update operation.
+  google.protobuf.Struct credentials = 4;
+}
+
+// VmResizeResult — per-VM resize result (in the final ResizeEvent).
+message VmResizeResult {
+  // Provider-specific VM identifier.
+  string vm_id = 1;
+
+  // true if applying the change required a VM stop/start.
+  bool caused_downtime = 2;
+
+  // Populated on a per-VM error (the provider rejected this particular VM).
+  // Empty = success. Stream-level failure (ResizeEvent.failed) means the
+  // whole operation failed.
+  string error = 3;
+}
+
+// ResizeEvent — an event from the Resize stream. Intermediate events are
+// diagnostic messages per phase (quota-check / stopping / updating /
+// starting); the final one carries per-vm results (results[]).
+message ResizeEvent {
+  // Diagnostic phase message (optional) — for long-running resize progress.
+  string message = 1;
+
+  // Current phase name (optional, machine-readable: "quota" / "stop" /
+  // "update" / "start"). Set on intermediate progress events.
+  string phase = 2;
+
+  // Populated only in the final event — per-vm results.
+  repeated VmResizeResult results = 3;
+
+  // Populated when the whole operation fails. The stream closes after the
+  // first failed=true (per-VM failures are carried in VmResizeResult.error
+  // without a stream-level failed).
+  bool failed = 4;
+}
+
+// VmInfo — describes a single VM (used in Create and List).
+message VmInfo {
+  // Provider-specific VM identifier (instance-id for AWS, id for GCP, etc.).
+  string vm_id = 1;
+
+  // FQDN, if the provider assigned one — used as the SID when onboarding
+  // the Soul.
+  string fqdn = 2;
+
+  // Primary IP address.
+  string primary_ip = 3;
+
+  // Provider-specific additional attributes.
+  google.protobuf.Struct attributes = 4;
+}

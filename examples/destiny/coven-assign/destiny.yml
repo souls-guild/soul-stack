@@ -1,0 +1,36 @@
+name: coven-assign
+description: Bind a Soul to a set of stable Coven labels in the keeper registry
+
+# Destiny version — git ref that the file is committed under (see ADR-007 in
+# docs/architecture.md). The top-level `version:` field is deliberately absent.
+#
+# The task list is NOT in this file. It lives in tasks/main.yml; here we only
+# have the manifest: the input contract and (if any) required_modules.
+#
+# coven-assign — core-destiny with a keeper-side operation over the souls/coven
+# registry (see docs/keeper/cloud.md: cloud-provision "assigns coven by
+# role_distribution" through the same path — a write to the souls registry).
+# Uses only core modules, so required_modules: is not needed.
+#
+# The coven-assign contract does NOT write the declared role (see
+# docs/scenario/orchestration.md §4.1: the declared role lives in
+# incarnation.spec.hosts[].role, actual host binding outside spec — in
+# incarnation.state via scenario state_changes, not here). So input: only has
+# sid + coven, deliberately no role field.
+
+input:
+  sid:
+    type: string
+    required: true
+    format: fqdn                 # SID = FQDN (see ADR "Soul Identity")
+    description: SID (FQDN) of the Soul that coven labels are being assigned to.
+
+  coven:
+    type: array
+    required: true
+    items:
+      type: string
+      pattern: "^[a-z][a-z0-9-]*$"
+    min_items: 1
+    unique: true
+    description: Set of stable Coven labels to bind to the Soul.

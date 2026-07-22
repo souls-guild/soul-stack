@@ -1,0 +1,64 @@
+syntax = "proto3";
+
+package soulstack.plugin.v1;
+
+option go_package = "github.com/souls-guild/soul-stack/proto/plugin/gen/go/v1;pluginv1";
+
+// Kind — plugin type discriminator (ADR-020(e)).
+// Matches the `kind:` field in `manifest.yaml` and the handshake string.
+// Closed enum: extending it goes through a PR to
+// `proto/plugin/vN/manifest.proto`, non-breaking (docs/keeper/plugins.md →
+// Extending the manifest).
+enum Kind {
+  KIND_UNSPECIFIED = 0;
+  KIND_SOUL_MODULE = 1;   // Soul-side: soul-mod-<name> binary, implements Destiny steps.
+  KIND_CLOUD_DRIVER = 2;  // Keeper-side: soul-cloud-<provider> binary, creates/deletes VMs.
+  KIND_SSH_PROVIDER = 3;  // Keeper-side: soul-ssh-<provider> binary, SSH credentials for push.
+  KIND_SOUL_BEACON = 4;   // Soul-side: soul-beacon-<name> binary, observes host state (ADR-030 V5-2).
+}
+
+// Capability — closed enum of plugin capabilities (ADR-020(f),
+// docs/keeper/plugins.md → required_capabilities table).
+// The plugin declares what it needs from the host system;
+// `soul-lint` checks this against `plugin_runtime.allowed_capabilities`.
+enum Capability {
+  CAPABILITY_UNSPECIFIED = 0;
+  CAPABILITY_RUN_AS_ROOT = 1;       // host process must run as UID 0.
+  CAPABILITY_NETWORK_OUTBOUND = 2;  // outbound network calls (cloud API, vault, mirror).
+  CAPABILITY_NETWORK_INBOUND = 3;   // plugin listens on a port.
+  CAPABILITY_VAULT_ACCESS = 4;      // talks to Vault via the client helper SDK.
+  CAPABILITY_FS_WRITE_ROOT = 5;     // writes outside /var/lib/soul-stack/.
+  CAPABILITY_EXEC_SUBPROCESS = 6;   // spawns external commands via os/exec.
+}
+
+// ResourceType — closed enum of resource types in `side_effects` (ADR-020(g),
+// docs/keeper/plugins.md → side_effects table).
+// Strict contract of touched resources: a runtime violation (plugin touches
+// a resource not listed in side_effects) marks the step failed, reason
+// `policy_violation`.
+enum ResourceType {
+  RESOURCE_TYPE_UNSPECIFIED = 0;
+  RESOURCE_TYPE_SERVICE = 1;    // service name (haproxy).
+  RESOURCE_TYPE_FILE = 2;       // absolute file path.
+  RESOURCE_TYPE_PACKAGE = 3;    // OS package name.
+  RESOURCE_TYPE_PORT = 4;       // tcp/udp port (value is decimal in SideEffect.value).
+  RESOURCE_TYPE_USER = 5;       // OS user name.
+  RESOURCE_TYPE_GROUP = 6;      // OS group name.
+  RESOURCE_TYPE_DIRECTORY = 7;  // absolute directory path.
+  RESOURCE_TYPE_CRON = 8;       // cron job name.
+  RESOURCE_TYPE_MOUNT = 9;      // mountpoint.
+}
+
+// SideEffect — one (type, value) pair from the manifest's `side_effects`
+// list. Grammar: a YAML entry is an object with exactly one
+// <resource_type>: <value> pair; multiple different resources = multiple
+// entries (CG-6 / ADR-020(g), docs/keeper/plugins.md → side_effects entry
+// grammar).
+//
+// value — a string representation; for PORT it's a decimal number as a
+// string (value's type is unified at this level; numeric parsing is the
+// host's job).
+message SideEffect {
+  ResourceType type = 1;
+  string value = 2;
+}

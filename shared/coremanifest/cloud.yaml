@@ -1,0 +1,30 @@
+kind: soul_module
+protocol_version: 1
+namespace: core
+name: cloud
+
+spec:
+  states:
+    created:
+      description: Keeper-side (on:keeper). Cloud VMs created through a CloudDriver plugin (ADR-017).
+      input:
+        provider:          { type: string, required: true, description: "Name of the cloud Provider in the registry (driver + credentials + region)." }
+        profile:           { type: map,    description: "VM profile parameters (backend-specific)." }
+        count:             { type: int,    description: "How many VMs to create (default 1, >= 1)." }
+        userdata:          { type: string, description: "Cloud-init userdata (mutually exclusive with generate_userdata and self_onboard)." }
+        generate_userdata: { type: bool,   description: "Generate userdata from keeper.yml cloud_init (ADR-017(h))." }
+        name:              { type: string, description: "Base name for the VM batch (self-onboard Variant T): keeper predicts FQDN=<name>-<index>.<suffix>. Required with self_onboard." }
+        self_onboard:      { type: bool,   description: "The VM onboards itself from cloud-init (Variant T, ADR-017(h)): keeper predicts the FQDN and bakes per-VM tokens into userdata. Requires name + providers.fqdn_suffix." }
+    destroyed:
+      description: Keeper-side (on:keeper). Cloud VMs destroyed, registries cascade-updated (ADR-017).
+      input:
+        provider: { type: string, required: true, description: "Name of the cloud Provider in the registry." }
+        vm_ids:   { type: list,   required: true, items: { type: string }, description: "List of provider-vm-ids to destroy." }
+        sids:     { type: list,   items: { type: string }, description: "SIDs for cascade-updating registries (souls/seeds/tokens)." }
+    resized:
+      description: Keeper-side (on:keeper). Cloud VM resources changed to an absolute target size via CloudDriver.Resize (capability Resizable).
+      input:
+        provider:       { type: string, required: true, description: "Name of the cloud Provider in the registry." }
+        vm_ids:         { type: list,   required: true, items: { type: string }, description: "provider-vm-ids to resize (one target for the whole batch)." }
+        desired:        { type: map,    required: true, description: "Target resources in our units: cpu_cores (cores) / ram_mb (MB) / disk_gb (GB). At least one > 0; fields with 0 are unchanged." }
+        allow_downtime: { type: bool,   description: "Allow downtime (stop/start) for cpu/ram resize. Required when changing cpu/ram; disk-only is online (default false)." }

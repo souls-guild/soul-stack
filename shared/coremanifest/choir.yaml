@@ -1,0 +1,21 @@
+kind: soul_module
+protocol_version: 1
+namespace: core
+name: choir
+
+spec:
+  states:
+    present:
+      description: Keeper-side (on:keeper). The Voice with sid is present in the run's Choir (ADR-044).
+      input:
+        incarnation: { type: string, required: true, description: "Name of the incarnation whose Choir is managed." }
+        choir:       { type: string, required: true, description: "Name of the Choir part within the incarnation." }
+        sid:         { type: string, required: true, format: sid, description: "SID (FQDN) of the Soul whose Voice is added to the Choir.", source: { incarnation_hosts: true } }
+        role:        { type: string, description: "Free-form role label of the voice in the choir." }
+        position:    { type: int,    description: "Position of the Voice within the part (>= 0)." }
+    absent:
+      description: Keeper-side (on:keeper). The Voice with sid is absent from the run's Choir (ADR-044).
+      input:
+        incarnation: { type: string, required: true, description: "Name of the incarnation whose Choir is managed." }
+        choir:       { type: string, required: true, description: "Name of the Choir part within the incarnation." }
+        sid:         { type: string, required: true, format: sid, description: "SID (FQDN) of the Soul whose Voice is removed from the Choir.", source: { incarnation_hosts: true } }
