@@ -1,0 +1,55 @@
+# Mirror the release .deb assets into the Cloudflare R2 apt repo (NIM-174). This runs
+# on a SELF-HOSTED runner on purpose: publishing needs the R2 write key + the apt
+# signing GPG key, which we keep off GitHub-hosted CI (see release.yml / RELEASING.md).
+# The trusted runner already holds those in its rclone remote + GPG keyring, so this job
+# only downloads the release's .deb assets and runs deploy/apt-r2/publish-apt.sh.
+#
+# Activation (one-time): register a self-hosted runner labelled `apt-publisher` with
+# rclone (R2 remote), gpg (signing key), apt-ftparchive (apt-utils) and gh installed,
+# then set repo variables APT_GPG_KEY_ID and RCLONE_REMOTE. Until such a runner is
+# online the job just queues — it never blocks the release. See deploy/apt-r2/README.md.
+name: Publish apt (R2)
+
+on:
+  release:
+    types: [published]
+  # Manual (re-)publish for an already-released tag.
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag to mirror (e.g. v0.1.0-beta.1)"
+        required: true
+
+permissions:
+  contents: read # download the release .deb assets
+
+# One publish at a time; a newer run supersedes an in-flight one.
+concurrency:
+  group: apt-publish
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    name: mirror .deb → R2 apt pool
+    runs-on: [self-hosted, apt-publisher]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Resolve release tag
+        id: tag
+        run: echo "tag=${{ github.event.release.tag_name || inputs.tag }}" >> "$GITHUB_OUTPUT"
+
+      - name: Download release .deb assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          rm -rf dist/pkg && mkdir -p dist/pkg
+          gh release download "${{ steps.tag.outputs.tag }}" \
+            -R "${{ github.repository }}" -p '*.deb' -D dist/pkg
+
+      - name: Publish to R2
+        env:
+          APT_GPG_KEY_ID: ${{ vars.APT_GPG_KEY_ID }}
+          RCLONE_REMOTE: ${{ vars.RCLONE_REMOTE }}
+        run: deploy/apt-r2/publish-apt.sh

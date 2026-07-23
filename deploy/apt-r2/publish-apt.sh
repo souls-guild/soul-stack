@@ -49,7 +49,7 @@ for arch in $ARCHS; do
   bindir="$WORK_DIR/dists/$SUITE/$COMPONENT/binary-$arch"
   mkdir -p "$bindir"
   ( cd "$WORK_DIR" && apt-ftparchive --arch "$arch" packages "pool/$COMPONENT" ) > "$bindir/Packages"
-  gzip -9c "$bindir/Packages" > "$bindir/Packages.gz"
+  gzip -9nc "$bindir/Packages" > "$bindir/Packages.gz"   # -n: reproducible, stable hash across no-op runs
   cat > "$bindir/Release" <<EOF
 Archive: $SUITE
 Component: $COMPONENT
@@ -60,17 +60,36 @@ EOF
 done
 
 # 3. Top-level Release over the whole suite (checksums of every index).
+# The generator config lives in a temp file so it never lands in the published tree.
 archs_csv=$(echo "$ARCHS" | tr ' ' ' ')
 relfile="$WORK_DIR/dists/$SUITE/Release"
-cat > "$WORK_DIR/apt-ftparchive-release.conf" <<EOF
+relconf="$(mktemp)"; trap 'rm -f "$relconf"' EXIT
+cat > "$relconf" <<EOF
 APT::FTPArchive::Release::Origin "Soul Stack";
 APT::FTPArchive::Release::Label "Soul Stack";
 APT::FTPArchive::Release::Suite "$SUITE";
 APT::FTPArchive::Release::Codename "$SUITE";
 APT::FTPArchive::Release::Components "$COMPONENT";
 APT::FTPArchive::Release::Architectures "$archs_csv";
+APT::FTPArchive::Release::Acquire-By-Hash "yes";
 EOF
-( cd "$WORK_DIR/dists/$SUITE" && apt-ftparchive -c ../../apt-ftparchive-release.conf release . ) > "$relfile"
+( cd "$WORK_DIR/dists/$SUITE" && apt-ftparchive -c "$relconf" release . ) > "$relfile"
+
+# 3b. by-hash: content-addressed copies of each index under every digest the Release
+# advertises (apt fetches by the strongest — SHA512 — so all must exist, or it 404s
+# and falls back to the plain path). These hash-named URLs have no cacheable extension
+# and are immutable, so a CDN edge can never serve a stale index against the fresh
+# Release. Built AFTER the Release so its checksums cover only the canonical paths.
+for arch in $ARCHS; do
+  bindir="$WORK_DIR/dists/$SUITE/$COMPONENT/binary-$arch"
+  for f in Packages Packages.gz Release; do
+    [ -f "$bindir/$f" ] || continue
+    for algo in MD5Sum:md5sum SHA1:sha1sum SHA256:sha256sum SHA512:sha512sum; do
+      mkdir -p "$bindir/by-hash/${algo%%:*}"
+      cp -f "$bindir/$f" "$bindir/by-hash/${algo%%:*}/$(${algo##*:} "$bindir/$f" | cut -d' ' -f1)"
+    done
+  done
+done
 
 # 4. Sign: detached Release.gpg + inline InRelease. apt verifies both forms.
 gpg --batch --yes --local-user "$APT_GPG_KEY_ID" -abs -o "$WORK_DIR/dists/$SUITE/Release.gpg" "$relfile"
@@ -81,8 +100,12 @@ gpg --armor --export "$APT_GPG_KEY_ID" > "$WORK_DIR/soul-stack.gpg.key"
 
 # 6. Sync the whole tree to R2. --checksum: skip unchanged blobs; the pool is
 # content-addressed by filename+version so re-uploads are cheap.
+# --s3-no-check-bucket: scoped R2 tokens can't HeadBucket/CreateBucket at account scope.
+# --delete-before: prune stale objects up front; rclone skips its default post-run
+# delete pass whenever an upload reports an IO error (harmless R2 retry noise), which
+# would otherwise leave removed packages lingering in the bucket forever.
 echo "publish-apt: syncing to $RCLONE_REMOTE"
-rclone sync "$WORK_DIR" "$RCLONE_REMOTE" --checksum --transfers 8 --fast-list
+rclone sync "$WORK_DIR" "$RCLONE_REMOTE" --checksum --transfers 8 --fast-list --s3-no-check-bucket --delete-before
 
 echo "publish-apt: done. Clients add:"
 echo "  deb [signed-by=/usr/share/keyrings/soul-stack.gpg] https://<r2-public-host>/ $SUITE $COMPONENT"
