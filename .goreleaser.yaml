@@ -2,9 +2,10 @@
 #
 # One git tag (`v*`) at the repo root = one logical version of all modules
 # (RELEASING.md invariant, ADR-011). GoReleaser reproduces on a tag what the
-# Makefile does by hand — build 3 daemon/CLI binaries + soulctl, package them
-# (deb/rpm/brew/archives), build & push GHCR images, sign everything with
-# cosign keyless, and attach a syft SBOM.
+# Makefile does by hand — build the six keeper/soul/soul-lint/soulctl/soul-trial/
+# soul-legion binaries, package them (deb/rpm/apk/brew/archives), build & push
+# GHCR images (keeper+soul), sign everything with cosign keyless, and attach a
+# syft SBOM.
 #
 # Repo layout note: the root is a Go **workspace** (go.work, no root go.mod).
 # Each binary lives in its own module (keeper/soul/soul-lint/soulctl). Builds
@@ -63,32 +64,71 @@ builds:
     main: ./soul-lint/cmd/soul-lint
     env:
       - CGO_ENABLED=0
-    goos: [linux]
+    goos: [linux, darwin, windows]
     goarch: [amd64, arm64]
     flags:
       - -trimpath
     ldflags:
       - -s -w
 
-  # soulctl — operator CLI. Version → main.soulctlVersion.
+  # soulctl — operator CLI. Version → main.soulctlVersion. Cross-OS: operators
+  # drive Keeper from any desktop (linux/macOS/windows).
   - id: soulctl
     binary: soulctl
     main: ./soulctl/cmd/soulctl
     env:
       - CGO_ENABLED=0
-    goos: [linux]
+    goos: [linux, darwin, windows]
     goarch: [amd64, arm64]
     flags:
       - -trimpath
     ldflags:
       - -s -w -X main.soulctlVersion={{ .Version }}
 
-# One bundle .tar.gz per platform holding all four binaries — matches the
-# Homebrew cask (installs keeper/soul/soul-lint/soulctl) and the curl-installer
+  # soul-trial — offline Trial runner (CLI, ADR-023). Second binary of the keeper
+  # module (imports keeper/internal/trial). No version var injected — mirrors the
+  # Makefile (built without ldflags) and soul-lint.
+  - id: soul-trial
+    binary: soul-trial
+    main: ./keeper/cmd/soul-trial
+    env:
+      - CGO_ENABLED=0
+    goos: [linux, darwin, windows]
+    goarch: [amd64, arm64]
+    flags:
+      - -trimpath
+    ldflags:
+      - -s -w
+
+  # soul-legion — load generator (tests/load module, ADR-004). Shipped as a CLI
+  # dev tool across all OSes. No version var injected (built without ldflags in
+  # the Makefile), so mirror soul-lint/soul-trial.
+  - id: soul-legion
+    binary: soul-legion
+    main: ./tests/load/cmd/soul-legion
+    env:
+      - CGO_ENABLED=0
+    goos: [linux, darwin, windows]
+    goarch: [amd64, arm64]
+    flags:
+      - -trimpath
+    ldflags:
+      - -s -w
+
+# One bundle per platform holding every binary that builds for it: linux carries
+# all six (keeper/soul/soul-lint/soulctl/soul-trial/soul-legion); macOS/windows
+# carry the four cross-OS CLIs only (keeper/soul are linux-only daemons). tar.gz
+# everywhere, zip on windows. Matches the Homebrew cask and the curl-installer
 # (downloads the bundle, extracts the requested binary).
 archives:
   - id: default
+    # linux bundles carry all six binaries; macOS/windows carry the four CLIs
+    # only (keeper/soul are linux daemons) — an intentional per-OS difference.
+    allow_different_binary_count: true
     formats: [tar.gz]
+    format_overrides:
+      - goos: windows
+        formats: [zip]
     name_template: >-
       soul-stack_{{ .Version }}_{{ .Os }}_{{ .Arch }}
     files:
@@ -116,7 +156,7 @@ nfpms:
     license: BUSL-1.1
     section: admin
     priority: optional
-    formats: [deb, rpm]
+    formats: [deb, rpm, apk]
     contents:
       - src: ./deploy/systemd/keeper.service
         dst: /etc/systemd/system/keeper.service
@@ -150,7 +190,7 @@ nfpms:
     license: BUSL-1.1
     section: admin
     priority: optional
-    formats: [deb, rpm]
+    formats: [deb, rpm, apk]
     contents:
       - src: ./deploy/systemd/soul.service
         dst: /etc/systemd/system/soul.service
@@ -184,7 +224,53 @@ nfpms:
     license: BUSL-1.1
     section: devel
     priority: optional
-    formats: [deb, rpm]
+    formats: [deb, rpm, apk]
+
+  # soulctl / soul-trial / soul-legion — CLI tools (no daemon, no config, no
+  # maintainer scripts). GoReleaser drops each binary at /usr/bin by default;
+  # apk joins deb+rpm. Only the linux builds of each id get packaged (nfpm is
+  # linux-only) — the darwin/windows builds ship via the archives.
+  - id: soulctl
+    package_name: soul-stack-soulctl
+    ids: [soulctl]
+    vendor: Soul Stack
+    homepage: https://github.com/souls-guild/soul-stack
+    maintainer: Soul Stack <noreply@soul-stack.com>
+    description: |
+      Soul Stack soulctl — operator CLI for Keeper (ADR-004): a thin wrapper over
+      the OpenAPI / MCP surface. No daemon, no config.
+    license: BUSL-1.1
+    section: admin
+    priority: optional
+    formats: [deb, rpm, apk]
+
+  - id: soul-trial
+    package_name: soul-stack-soul-trial
+    ids: [soul-trial]
+    vendor: Soul Stack
+    homepage: https://github.com/souls-guild/soul-stack
+    maintainer: Soul Stack <noreply@soul-stack.com>
+    description: |
+      Soul Stack soul-trial — offline Trial runner for Destiny / Scenario
+      (ADR-023). CLI, no daemon and no config.
+    license: BUSL-1.1
+    section: devel
+    priority: optional
+    formats: [deb, rpm, apk]
+
+  - id: soul-legion
+    package_name: soul-stack-soul-legion
+    ids: [soul-legion]
+    vendor: Soul Stack
+    homepage: https://github.com/souls-guild/soul-stack
+    maintainer: Soul Stack <noreply@soul-stack.com>
+    description: |
+      Soul Stack soul-legion — load generator for Keeper (tests/load, ADR-004).
+      CLI dev tool, no daemon and no config.
+    license: BUSL-1.1
+    section: devel
+    priority: optional
+    formats: [deb, rpm, apk]
 
 # Homebrew tap. Cask lands in the souls-guild/homebrew-tap repo; the release job
 # needs a token with write access there (HOMEBREW_TAP_GITHUB_TOKEN). Installs all
