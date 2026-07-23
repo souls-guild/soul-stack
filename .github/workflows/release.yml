@@ -12,6 +12,11 @@ on:
   push:
     tags:
       - "v*"
+  # Manual (re-)run for an already-pushed tag. Moving an existing tag does not
+  # re-fire the push trigger, and tag deletion is blocked by a ruleset, so this
+  # is the supported way to build a release for a tag: dispatch against the tag
+  # ref, e.g. `gh workflow run release.yml --ref v0.1.0-beta.1`.
+  workflow_dispatch:
 
 # Least-privilege, scoped to what GoReleaser needs on a tag:
 #   contents: write  — create the GitHub Release + upload assets
