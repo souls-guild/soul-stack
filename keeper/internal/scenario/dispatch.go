@@ -157,6 +157,7 @@ func (r *Runner) dispatchPlanned(ctx context.Context, spec RunSpec, log *slog.Lo
 			Scenario:        spec.ScenarioName,
 			StartedByAID:    startedByPtr(spec.StartedByAID),
 			Recipe:          recipe,
+			Input:           spec.inputSnapshot,
 		}); err != nil {
 			return fmt.Errorf("scenario: insert planned apply_run (%s): %w", h.SID, err)
 		}
@@ -260,6 +261,7 @@ func (r *Runner) dispatchWave(ctx context.Context, spec RunSpec, log *slog.Logge
 			Status:          applyrun.StatusRunning,
 			StartedByAID:    startedByPtr(spec.StartedByAID),
 			Passage:         passage,
+			Input:           spec.inputSnapshot,
 		}); err != nil {
 			return dispatched, fmt.Errorf("scenario: insert apply_run (%s): %w", sid, err)
 		}

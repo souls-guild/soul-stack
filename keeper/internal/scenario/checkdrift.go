@@ -323,6 +323,7 @@ func (r *Runner) CheckDrift(ctx context.Context, spec CheckDriftSpec) (*DriftRep
 		DryRun:       true,
 		FromUpgrade:  false, // converge is an operational scenario/, never upgrade/ (ADR-0068)
 	}
+	driftInput := maskedInputSnapshot(spec.InputOverride) // masked run-history snapshot (migration 101)
 	for _, h := range hosts {
 		if err := applyrun.InsertPlanned(ctx, r.deps.DB, &applyrun.ApplyRun{
 			ApplyID:         spec.ApplyID,
@@ -331,6 +332,7 @@ func (r *Runner) CheckDrift(ctx context.Context, spec CheckDriftSpec) (*DriftRep
 			Scenario:        ConvergeScenarioName,
 			StartedByAID:    startedBy,
 			Recipe:          recipe,
+			Input:           driftInput,
 		}); err != nil {
 			span.RecordError(err)
 			return nil, fmt.Errorf("scenario: check-drift insert planned (%s): %w", h.SID, err)

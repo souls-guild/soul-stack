@@ -12,7 +12,10 @@
 // `sid` per fan-out host → composite PK `(apply_id, sid)`.
 package applyrun
 
-import "time"
+import (
+	"encoding/json"
+	"time"
+)
 
 // Status — apply_runs row status. Closed enum (PM decision 1), matches the
 // `apply_runs_status_valid` CHECK constraint from migration 018.
@@ -135,6 +138,14 @@ type ApplyRun struct {
 	Attempt        int        `json:"attempt"`
 
 	Recipe *Recipe `json:"recipe,omitempty"`
+
+	// Input — masked snapshot of the operator input for this run (jsonb column,
+	// migration 101). Masked on the write path (scenario.maskedInputSnapshot via
+	// audit.MaskSecrets) BEFORE Insert/InsertPlanned — secrets never land in PG
+	// (invariant A). nil -> NULL: keeper-side/sentinel rows, and rows written
+	// before migration 101. Run-invariant (identical across all host/passage rows
+	// of an apply_id); the read view (SelectRunDetail) takes the first non-null.
+	Input json.RawMessage `json:"input,omitempty"`
 }
 
 // ActiveApply — one entry of the set of apply runs a Soul is tracking, from

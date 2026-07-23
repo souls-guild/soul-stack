@@ -25,6 +25,7 @@ package scenario
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"log/slog"
 	"regexp"
@@ -229,6 +230,11 @@ type RunSpec struct {
 	Input           map[string]any
 	StartedByAID    string
 	TerminalMode    TerminalMode
+
+	// inputSnapshot — the masked operator-input snapshot (maskedInputSnapshot of
+	// Input), computed once at run start and written to apply_runs.input on every
+	// row (migration 101). Unexported: set by run(), not by the API caller.
+	inputSnapshot json.RawMessage
 
 	// FromLocked — run starts from an already-reserved applying status
 	// (rerun-last: incarnation.UnlockForRerun under FOR UPDATE moved
