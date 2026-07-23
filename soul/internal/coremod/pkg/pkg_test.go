@@ -37,12 +37,14 @@ func aptInstalled(name, version string) *internaltest.Runner {
 }
 
 // Expected apt-command forms: install/remove/update are non-interactive
-// (`env DEBIAN_FRONTEND=noninteractive apt-get …`), and install carries
-// Dpkg::Options force-confdef/force-confold — conffile prompts ("keep or
-// replace?") on re-apply are no longer possible, so the Soul agent's empty
-// stdin doesn't hit EOF (live Debian 12 bug). Strings match how
-// internaltest.Runner joins name+args with spaces.
-const aptNonInteractive = "env DEBIAN_FRONTEND=noninteractive apt-get"
+// (`env DEBIAN_FRONTEND=noninteractive apt-get …`) and carry
+// `-o DPkg::Lock::Timeout` (apt waits for the dpkg lock instead of failing
+// fast, NIM-171); install additionally carries Dpkg::Options
+// force-confdef/force-confold — conffile prompts ("keep or replace?") on
+// re-apply are no longer possible, so the Soul agent's empty stdin doesn't
+// hit EOF (live Debian 12 bug). Strings match how internaltest.Runner joins
+// name+args with spaces.
+const aptNonInteractive = "env DEBIAN_FRONTEND=noninteractive apt-get -o DPkg::Lock::Timeout=300"
 
 // aptInstallCmd — expected install command (target = name or `name=version`).
 // confold keeps our rendered conffile, confdef is the default for the rest.
@@ -94,7 +96,7 @@ func TestApply_Installed_AlreadyPresent(t *testing.T) {
 	}
 	// No apt-get install call expected.
 	for _, c := range r.Calls {
-		if strings.Contains(c, "apt-get install") {
+		if strings.Contains(c, "install") {
 			t.Fatalf("unexpected install call: %q", c)
 		}
 	}
@@ -339,7 +341,7 @@ func TestApply_Apt_Install_NonInteractive_ConffileSafe(t *testing.T) {
 
 	var install string
 	for _, c := range r.Calls {
-		if strings.Contains(c, "apt-get install") {
+		if strings.Contains(c, "install") {
 			install = c
 			break
 		}
@@ -373,7 +375,7 @@ func TestApply_Apt_RemoveAndUpdate_NonInteractive(t *testing.T) {
 	}, stream); err != nil {
 		t.Fatalf("Apply absent: %v", err)
 	}
-	assertAptNonInteractive(t, r, "apt-get remove")
+	assertAptNonInteractive(t, r, "remove")
 
 	// index update (via install on an absent package).
 	r2 := internaltest.NewRunner()
@@ -390,7 +392,7 @@ func TestApply_Apt_RemoveAndUpdate_NonInteractive(t *testing.T) {
 	}, stream2); err != nil {
 		t.Fatalf("Apply installed: %v", err)
 	}
-	assertAptNonInteractive(t, r2, "apt-get update")
+	assertAptNonInteractive(t, r2, "update")
 }
 
 // assertAptNonInteractive — fails if an apt command with this subcommand was
@@ -401,6 +403,63 @@ func assertAptNonInteractive(t *testing.T, r *internaltest.Runner, subcmd string
 		if strings.Contains(c, subcmd) && !strings.Contains(c, "DEBIAN_FRONTEND=noninteractive") {
 			t.Fatalf("%q called without DEBIAN_FRONTEND=noninteractive: %q", subcmd, c)
 		}
+	}
+}
+
+// TestApply_Apt_LockTimeout_AllCommands — guards NIM-171: apt-get
+// update/install/remove all carry `-o DPkg::Lock::Timeout`, so apt WAITS for
+// /var/lib/dpkg/lock-frontend instead of failing fast. On a fresh Debian VM
+// first-boot unattended-upgrades holds that lock for minutes; a fail-fast
+// install breaks the first provision→deploy. Checks the captured commands
+// (not the helper form): a refactor dropping the option gets caught.
+func TestApply_Apt_LockTimeout_AllCommands(t *testing.T) {
+	// fresh install → update + install both run.
+	ri := internaltest.NewRunner()
+	ri.Fallback = util.Result{ExitCode: 1}
+	ri.On("command -v apt-get", util.Result{ExitCode: 0})
+	ri.On(aptUpdateCmd, util.Result{ExitCode: 0})
+	ri.On("dpkg-query -W -f=${Status} ${Version} redis-server", util.Result{ExitCode: 1})
+	ri.On(aptInstallCmd("redis-server"), util.Result{ExitCode: 0})
+	mi := &pkg.Module{Runner: ri}
+	if err := mi.Apply(&pluginv1.ApplyRequest{
+		State:  "installed",
+		Params: mustStruct(t, map[string]any{"name": "redis-server"}),
+	}, &internaltest.ApplyStream{}); err != nil {
+		t.Fatalf("Apply installed: %v", err)
+	}
+	assertAptLockTimeout(t, ri, "update")
+	assertAptLockTimeout(t, ri, "install")
+
+	// installed package → remove runs.
+	rr := aptInstalled("redis-server", "7:7.0.0-1")
+	rr.On(aptRemoveCmd("redis-server"), util.Result{ExitCode: 0})
+	mr := &pkg.Module{Runner: rr}
+	if err := mr.Apply(&pluginv1.ApplyRequest{
+		State:  "absent",
+		Params: mustStruct(t, map[string]any{"name": "redis-server"}),
+	}, &internaltest.ApplyStream{}); err != nil {
+		t.Fatalf("Apply absent: %v", err)
+	}
+	assertAptLockTimeout(t, rr, "remove")
+}
+
+// assertAptLockTimeout — every apt-get call carrying this verb must also carry
+// `-o DPkg::Lock::Timeout` (apt waits for the dpkg lock, NIM-171). Fails if no
+// such call was captured, so the check can't pass vacuously.
+func assertAptLockTimeout(t *testing.T, r *internaltest.Runner, verb string) {
+	t.Helper()
+	seen := false
+	for _, c := range r.Calls {
+		if !strings.Contains(c, "apt-get") || !strings.Contains(c, verb) {
+			continue
+		}
+		seen = true
+		if !strings.Contains(c, "DPkg::Lock::Timeout") {
+			t.Fatalf("apt-get %q lacks DPkg::Lock::Timeout (fail-fast on the dpkg lock): %q", verb, c)
+		}
+	}
+	if !seen {
+		t.Fatalf("no apt-get %q call captured, calls=%v", verb, r.Calls)
 	}
 }
 
@@ -545,7 +604,7 @@ func TestApply_Apt_RefreshFails_NoInstall(t *testing.T) {
 		t.Fatal("failed=false, want true (refresh failed)")
 	}
 	for _, c := range r.Calls {
-		if strings.Contains(c, "apt-get install") {
+		if strings.Contains(c, "install") {
 			t.Fatalf("install should not be called after refresh failure: %q", c)
 		}
 	}
@@ -569,7 +628,7 @@ func TestApply_Absent_NotPresent_NoOp(t *testing.T) {
 		t.Fatal("changed=true for not-installed absent")
 	}
 	for _, c := range r.Calls {
-		if strings.Contains(c, "apt-get remove") {
+		if strings.Contains(c, "remove") {
 			t.Fatalf("unexpected remove call: %q", c)
 		}
 	}
@@ -1245,7 +1304,7 @@ func TestApply_DpkgStatus_RemovedButConfigFiles(t *testing.T) {
 		t.Fatal("changed=true, want false (config-files != installed → absent no-op)")
 	}
 	for _, c := range r.Calls {
-		if strings.Contains(c, "apt-get remove") {
+		if strings.Contains(c, "remove") {
 			t.Fatalf("remove should not be called for a config-files-only package: %q", c)
 		}
 	}
