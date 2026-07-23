@@ -34,6 +34,11 @@ func (r *Runner) run(ctx context.Context, spec RunSpec) {
 		slog.String("scenario", spec.ScenarioName),
 	)
 
+	// Masked operator-input snapshot persisted on every apply_runs row of this run
+	// (migration 101): computed once, threaded via spec into all dispatch/insert
+	// paths below (secrets never land in PG — see maskedInputSnapshot).
+	spec.inputSnapshot = maskedInputSnapshot(spec.Input)
+
 	// In-process span for the whole scenario run. incarnation/scenario name are
 	// trace attributes for filtering (can't be metric labels — cardinality,
 	// ADR-024 §2.2); carry no secrets. apply_id correlates with RunResult/
@@ -1178,6 +1183,7 @@ func (r *Runner) ensureTerminalApplyRun(ctx context.Context, spec RunSpec, reaso
 			Status:          terminal,
 			ErrorSummary:    &summary,
 			StartedByAID:    startedByPtr(spec.StartedByAID),
+			Input:           spec.inputSnapshot,
 		}
 		if ierr := applyrun.Insert(wctx, r.deps.DB, &run); ierr != nil {
 			log.Warn("scenario: inserting apply_runs sentinel row failed - run without a terminal row",

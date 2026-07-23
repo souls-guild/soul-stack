@@ -153,6 +153,7 @@ func TestRunDetailTyped_PerHostMapping_OK(t *testing.T) {
 					taskIdx: &failedIdx, failedPlan: &failedPlan, errorSummary: &errSummary,
 					attempt: 1, cancelRequested: false,
 					scenario: "scale", startedAt: now, finishedAt: &now, startedBy: strp("archon-alice"),
+					input: []byte(`{"version":"7.2","db_password":"***MASKED***"}`),
 				},
 				{ // host-b: succeeded
 					sid: "host-b", status: "success", passage: 0,
@@ -198,6 +199,16 @@ func TestRunDetailTyped_PerHostMapping_OK(t *testing.T) {
 	if hb.FailedTaskIdx != nil || hb.FailedPlanIndex != nil || hb.ErrorSummary != nil {
 		t.Errorf("Hosts[1] carries failed-task details on success: %+v", hb)
 	}
+	// masked run input snapshot projects through (run-invariant, first non-null).
+	if d.Input == nil {
+		t.Fatal("RunDetailView.Input nil, want masked snapshot")
+	}
+	if d.Input["version"] != "7.2" {
+		t.Errorf("Input[version] = %v, want 7.2 (non-secret intact)", d.Input["version"])
+	}
+	if d.Input["db_password"] != "***MASKED***" {
+		t.Errorf("Input[db_password] = %v, want ***MASKED***", d.Input["db_password"])
+	}
 }
 
 // requireProblemStatus checks that err is a domain *problemError with the expected
@@ -218,7 +229,7 @@ func requireProblemStatus(t *testing.T, err error, want int) {
 
 // applyRunHostRow — one apply_runs host row for the detail-rows-stub (column order and
 // types of selectRunHostsSQL: sid/status/passage/task_idx/failed_plan_index/
-// error_summary/attempt/cancel_requested/scenario/started_at/finished_at/started_by).
+// error_summary/attempt/cancel_requested/scenario/started_at/finished_at/started_by/input).
 type applyRunHostRow struct {
 	sid             string
 	status          string
@@ -232,6 +243,7 @@ type applyRunHostRow struct {
 	startedAt       time.Time
 	finishedAt      *time.Time
 	startedBy       *string
+	input           []byte
 }
 
 // applyRunsHostRows — a pgx.Rows stub over a set of apply_runs host rows. Scan
@@ -255,6 +267,7 @@ func (r *applyRunsHostRows) Scan(dest ...any) error {
 	vals := []any{
 		row.sid, row.status, row.passage, row.taskIdx, row.failedPlan, row.errorSummary,
 		row.attempt, row.cancelRequested, row.scenario, row.startedAt, row.finishedAt, row.startedBy,
+		row.input,
 	}
 	for i, d := range dest {
 		if err := scanApplyRunCol(d, vals[i]); err != nil {
@@ -292,6 +305,12 @@ func scanApplyRunCol(dest, v any) error {
 		*d = v.(*string)
 	case **time.Time:
 		*d = v.(*time.Time)
+	case *[]byte:
+		if v == nil {
+			*d = nil
+		} else {
+			*d = v.([]byte)
+		}
 	default:
 		return errors.New("applyRunsHostRows.Scan: unsupported dest type")
 	}

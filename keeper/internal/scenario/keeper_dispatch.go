@@ -69,6 +69,7 @@ func (r *Runner) dispatchKeeperTasks(ctx context.Context, spec RunSpec, log *slo
 		Status:          applyrun.StatusRunning,
 		StartedByAID:    startedByPtr(spec.StartedByAID),
 		Passage:         passage,
+		Input:           spec.inputSnapshot,
 	}); err != nil {
 		return fmt.Errorf("scenario: insert keeper apply_run (passage %d): %w", passage, err)
 	}

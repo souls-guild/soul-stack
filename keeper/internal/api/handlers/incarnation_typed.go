@@ -1247,6 +1247,8 @@ type RunHostStatusView struct {
 }
 
 // RunDetailView — FLAT domain projection of the run details (header + per-host slice).
+// Input — masked snapshot of the operator input for the run (already masked on the
+// write path; nil for old runs / input-less paths).
 type RunDetailView struct {
 	ApplyID      string
 	Scenario     string
@@ -1255,6 +1257,7 @@ type RunDetailView struct {
 	FinishedAt   *time.Time
 	StartedByAID *string
 	Hosts        []RunHostStatusView
+	Input        map[string]any
 }
 
 // IncarnationRunsReply — typed envelope of GET /v1/incarnations/{name}/runs (handler-native:
@@ -1354,6 +1357,7 @@ func (h *IncarnationHandler) RunDetailTyped(ctx context.Context, name, applyID s
 		FinishedAt:   d.FinishedAt,
 		StartedByAID: d.StartedByAID,
 		Hosts:        hosts,
+		Input:        d.Input,
 	}, nil
 }
 

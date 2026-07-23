@@ -2,6 +2,7 @@ package applyrun
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"time"
 )
@@ -87,6 +88,10 @@ type RunDetail struct {
 	FinishedAt   *time.Time
 	StartedByAID *string
 	Hosts        []RunHostStatus
+	// Input — masked snapshot of the operator input for the run (apply_runs.input,
+	// migration 101; masked on the write path). Run-invariant across host rows; the
+	// projection takes the first non-null. nil for old runs / input-less paths.
+	Input map[string]any
 }
 
 // AggregateRunStatus collapses the statuses of host rows for a run into [RunStatus].
@@ -183,7 +188,8 @@ func ListRunsByIncarnation(ctx context.Context, db ExecQueryRower, incarnationNa
 
 const selectRunHostsSQL = `
 SELECT sid, status, passage, task_idx, failed_plan_index, error_summary,
-       attempt, cancel_requested, scenario, started_at, finished_at, started_by_aid
+       attempt, cancel_requested, scenario, started_at, finished_at, started_by_aid,
+       input
 FROM apply_runs
 WHERE apply_id = $1 AND incarnation_name = $2
 ORDER BY sid ASC, passage ASC
@@ -218,11 +224,13 @@ func SelectRunDetail(ctx context.Context, db ExecQueryRower, applyID, incarnatio
 			rowStarted   time.Time
 			rowFinished  *time.Time
 			rowStartedBy *string
+			rowInput     []byte
 		)
 		if err := rows.Scan(
 			&hs.SID, &statusStr, &hs.Passage, &hs.FailedTaskIdx, &hs.FailedPlanIndex,
 			&hs.ErrorSummary, &hs.Attempt, &hs.CancelRequested,
 			&rowScenario, &rowStarted, &rowFinished, &rowStartedBy,
+			&rowInput,
 		); err != nil {
 			return nil, fmt.Errorf("applyrun: scan run host: %w", err)
 		}
@@ -232,6 +240,14 @@ func SelectRunDetail(ctx context.Context, db ExecQueryRower, applyID, incarnatio
 			detail.Scenario = rowScenario
 			detail.StartedAt = rowStarted
 			detail.StartedByAID = rowStartedBy
+		}
+		// input is run-invariant (written identically on every row); take the
+		// first non-null (old rows / keeper-side/sentinel rows carry NULL).
+		if detail.Input == nil && len(rowInput) > 0 {
+			var in map[string]any
+			if err := json.Unmarshal(rowInput, &in); err == nil {
+				detail.Input = in
+			}
 		}
 		if rowStarted.Before(detail.StartedAt) {
 			detail.StartedAt = rowStarted

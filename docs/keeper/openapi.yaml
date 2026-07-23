@@ -2784,6 +2784,9 @@ components:
           type:
             - array
             - "null"
+        input:
+          additionalProperties: {}
+          type: object
         scenario:
           type: string
         started_at:

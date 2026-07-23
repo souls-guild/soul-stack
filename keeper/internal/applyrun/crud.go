@@ -58,8 +58,8 @@ var (
 const insertSQL = `
 INSERT INTO apply_runs (
     apply_id, sid, incarnation_name, scenario, task_idx, status,
-    error_summary, started_by_aid, passage
-) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+    error_summary, started_by_aid, passage, input
+) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
 RETURNING started_at
 `
 
@@ -108,6 +108,12 @@ func Insert(ctx context.Context, db ExecQueryRower, run *ApplyRun) error {
 	if run.StartedByAID != nil {
 		startedByArg = *run.StartedByAID
 	}
+	// jsonb input snapshot (migration 101), already masked on the write path.
+	// nil/empty -> NULL (untyped nil interface, not a typed nil []byte).
+	var inputArg any
+	if len(run.Input) > 0 {
+		inputArg = run.Input
+	}
 
 	row := db.QueryRow(ctx, insertSQL,
 		run.ApplyID,
@@ -119,6 +125,7 @@ func Insert(ctx context.Context, db ExecQueryRower, run *ApplyRun) error {
 		errorSummaryArg,
 		startedByArg,
 		run.Passage,
+		inputArg,
 	)
 	if err := row.Scan(&run.StartedAt); err != nil {
 		return mapInsertError(err)
@@ -128,8 +135,8 @@ func Insert(ctx context.Context, db ExecQueryRower, run *ApplyRun) error {
 
 const insertPlannedSQL = `
 INSERT INTO apply_runs (
-    apply_id, sid, incarnation_name, scenario, status, started_by_aid, recipe
-) VALUES ($1, $2, $3, $4, 'planned', $5, $6)
+    apply_id, sid, incarnation_name, scenario, status, started_by_aid, recipe, input
+) VALUES ($1, $2, $3, $4, 'planned', $5, $6, $7)
 RETURNING started_at
 `
 
@@ -181,6 +188,11 @@ func InsertPlanned(ctx context.Context, db ExecQueryRower, run *ApplyRun) error 
 	if run.StartedByAID != nil {
 		startedByArg = *run.StartedByAID
 	}
+	// jsonb input snapshot (migration 101), already masked on the write path.
+	var inputArg any
+	if len(run.Input) > 0 {
+		inputArg = run.Input
+	}
 
 	row := db.QueryRow(ctx, insertPlannedSQL,
 		run.ApplyID,
@@ -189,6 +201,7 @@ func InsertPlanned(ctx context.Context, db ExecQueryRower, run *ApplyRun) error 
 		run.Scenario,
 		startedByArg,
 		recipeJSON,
+		inputArg,
 	)
 	if err := row.Scan(&run.StartedAt); err != nil {
 		return mapInsertError(err)

@@ -2,6 +2,7 @@ package applyrun
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"strings"
 	"testing"
@@ -165,11 +166,14 @@ func TestInsert_HappyPath(t *testing.T) {
 	if !strings.Contains(f.queryRowSQL, "INSERT INTO apply_runs") {
 		t.Errorf("SQL = %q", f.queryRowSQL)
 	}
-	if len(f.queryRowArgs) != 9 {
-		t.Fatalf("args len = %d, want 9", len(f.queryRowArgs))
+	if len(f.queryRowArgs) != 10 {
+		t.Fatalf("args len = %d, want 10", len(f.queryRowArgs))
 	}
 	if f.queryRowArgs[8] != 0 {
 		t.Errorf("args[8] passage = %v, want 0 (default Passage)", f.queryRowArgs[8])
+	}
+	if f.queryRowArgs[9] != nil {
+		t.Errorf("args[9] input = %v, want nil (no input snapshot)", f.queryRowArgs[9])
 	}
 	if f.queryRowArgs[0] != "01HAPPLY0000000000000000" {
 		t.Errorf("args[0] apply_id = %v", f.queryRowArgs[0])
@@ -228,6 +232,60 @@ func TestInsert_TaskIdxPropagated(t *testing.T) {
 	}
 	if f.queryRowArgs[4] != 3 {
 		t.Errorf("args[4] task_idx = %v, want 3", f.queryRowArgs[4])
+	}
+}
+
+// TestInsert_InputPropagated: the masked input snapshot (migration 101) is written
+// as the last Insert arg into the jsonb input column.
+func TestInsert_InputPropagated(t *testing.T) {
+	f := &fakeDB{
+		queryRowFunc: func(_ string) pgx.Row {
+			return staticRow{values: []any{time.Now()}}
+		},
+	}
+	snap := json.RawMessage(`{"version":"7.2","db_password":"***MASKED***"}`)
+	run := &ApplyRun{
+		ApplyID: "a", SID: "s", IncarnationName: "i", Scenario: "sc",
+		Status: StatusRunning, Input: snap,
+	}
+	if err := Insert(context.Background(), f, run); err != nil {
+		t.Fatalf("Insert: %v", err)
+	}
+	if !strings.Contains(f.queryRowSQL, "input") {
+		t.Errorf("insert SQL missing input column: %q", f.queryRowSQL)
+	}
+	got, ok := f.queryRowArgs[9].(json.RawMessage)
+	if !ok {
+		t.Fatalf("args[9] input type = %T, want json.RawMessage", f.queryRowArgs[9])
+	}
+	if string(got) != string(snap) {
+		t.Errorf("args[9] input = %s, want %s", got, snap)
+	}
+}
+
+// TestInsertPlanned_InputPropagated: the masked input snapshot is written as the
+// last InsertPlanned arg (after recipe) into the jsonb input column.
+func TestInsertPlanned_InputPropagated(t *testing.T) {
+	f := &fakeDB{
+		queryRowFunc: func(_ string) pgx.Row {
+			return staticRow{values: []any{time.Now()}}
+		},
+	}
+	snap := json.RawMessage(`{"x":"***MASKED***"}`)
+	run := &ApplyRun{
+		ApplyID: "a", SID: "s", IncarnationName: "i", Scenario: "sc",
+		Recipe: &Recipe{ScenarioName: "create"}, Input: snap,
+	}
+	if err := InsertPlanned(context.Background(), f, run); err != nil {
+		t.Fatalf("InsertPlanned: %v", err)
+	}
+	// args: apply_id, sid, incarnation_name, scenario, started_by_aid, recipe, input.
+	if len(f.queryRowArgs) != 7 {
+		t.Fatalf("args len = %d, want 7", len(f.queryRowArgs))
+	}
+	got, ok := f.queryRowArgs[6].(json.RawMessage)
+	if !ok || string(got) != string(snap) {
+		t.Errorf("args[6] input = %v, want %s", f.queryRowArgs[6], snap)
 	}
 }
 

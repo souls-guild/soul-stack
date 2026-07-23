@@ -336,14 +336,18 @@ type RunHostStatusEntry struct {
 // RunDetailReply — native body for GET /v1/incarnations/{name}/runs/{apply_id}: run
 // header (apply_id/scenario/status/time/initiator) + a slice of hosts. hosts is non-nil
 // (an empty run with no host rows is impossible — SelectRunDetail would return not-found).
+// input omitempty — the masked snapshot of the operator input for the run (secret
+// masking on the write path, ***MASKED*** for secrets); nil for old runs / input-less
+// paths.
 type RunDetailReply struct {
-	ApplyID      string               `json:"apply_id" pattern:"^[0-9A-HJKMNP-TV-Z]{26}$"`
-	Scenario     string               `json:"scenario"`
-	Status       string               `json:"status" enum:"applying,success,failed,cancelled"`
-	StartedAt    time.Time            `json:"started_at"`
-	FinishedAt   *time.Time           `json:"finished_at,omitempty"`
-	StartedByAID *string              `json:"started_by_aid,omitempty" pattern:"^[a-z0-9][a-z0-9._@-]{1,127}$"`
-	Hosts        []RunHostStatusEntry `json:"hosts"`
+	ApplyID      string                  `json:"apply_id" pattern:"^[0-9A-HJKMNP-TV-Z]{26}$"`
+	Scenario     string                  `json:"scenario"`
+	Status       string                  `json:"status" enum:"applying,success,failed,cancelled"`
+	StartedAt    time.Time               `json:"started_at"`
+	FinishedAt   *time.Time              `json:"finished_at,omitempty"`
+	StartedByAID *string                 `json:"started_by_aid,omitempty" pattern:"^[a-z0-9][a-z0-9._@-]{1,127}$"`
+	Hosts        []RunHostStatusEntry    `json:"hosts"`
+	Input        *map[string]interface{} `json:"input,omitempty"`
 }
 
 // newRunSummaryEntry projects the domain handlers.RunSummaryView into native.
@@ -375,6 +379,10 @@ func newRunDetailReply(v handlers.RunDetailView) RunDetailReply {
 			CancelRequested: hs.CancelRequested,
 		}
 	}
+	var input *map[string]interface{}
+	if v.Input != nil {
+		input = &v.Input
+	}
 	return RunDetailReply{
 		ApplyID:      v.ApplyID,
 		Scenario:     v.Scenario,
@@ -383,6 +391,7 @@ func newRunDetailReply(v handlers.RunDetailView) RunDetailReply {
 		FinishedAt:   v.FinishedAt,
 		StartedByAID: v.StartedByAID,
 		Hosts:        hosts,
+		Input:        input,
 	}
 }
 
