@@ -272,28 +272,36 @@ nfpms:
     priority: optional
     formats: [deb, rpm, apk]
 
-# Homebrew tap. Cask lands in the souls-guild/homebrew-tap repo; the release job
-# needs a token with write access there (HOMEBREW_TAP_GITHUB_TOKEN). Installs all
-# four binaries. `homebrew_casks` is GoReleaser's current tap mechanism (the old
-# formula `brews` block is deprecated). The tap entry is only wired up for when
-# macOS artifacts land; today's builds are linux-only, and `skip_upload: auto`
-# keeps pre-release (-beta/-rc) tags from publishing the cask.
+# Homebrew tap. The cask lands in the souls-guild/homebrew-tap repo; the release
+# job needs a token with write access there (HOMEBREW_TAP_GITHUB_TOKEN).
+#
+# A Homebrew cask is macOS-only, so it can only carry the binaries that build for
+# darwin: the four cross-OS CLIs (soulctl/soul-lint/soul-trial/soul-legion). The
+# keeper and soul daemons are linux-only (goos:[linux]) and never enter the macOS
+# archive — they ship as .deb/.rpm/.apk packages and GHCR images instead (the
+# caveats point macOS users there). `homebrew_casks` is GoReleaser's current tap
+# mechanism (the old formula `brews` block is deprecated). `skip_upload: false`
+# publishes the cask on every tag, pre-release included, so the public beta is
+# `brew install`-able.
 homebrew_casks:
   - name: soul-stack
     ids:
       - default
     binaries:
-      - keeper
-      - soul
-      - soul-lint
       - soulctl
+      - soul-lint
+      - soul-trial
+      - soul-legion
     repository:
       owner: souls-guild
       name: homebrew-tap
       token: "{{ .Env.HOMEBREW_TAP_GITHUB_TOKEN }}"
     homepage: https://github.com/souls-guild/soul-stack
-    description: Soul Stack — configuration management platform (keeper/soul/soulctl).
-    skip_upload: auto
+    description: Operator CLIs for the Soul Stack config-management platform
+    caveats: |
+      The keeper and soul daemons are Linux-only. Install them via the .deb/.rpm
+      packages or the ghcr.io/souls-guild/soul-stack container images.
+    skip_upload: false
 
 # GHCR container images (dockers_v2 — the current multi-arch mechanism, replaces
 # the phased-out dockers + docker_manifests). Distroless static, built from a
