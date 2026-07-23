@@ -32,6 +32,11 @@ import (
 // Name is the canonical address prefix (core.<this>.<state>).
 const Name = "core.pkg"
 
+// aptLockTimeoutSeconds caps apt-get's wait for the dpkg lock
+// (`-o DPkg::Lock::Timeout`) instead of failing fast: a fresh Debian VM's
+// first-boot unattended-upgrades holds the lock for minutes (NIM-171).
+const aptLockTimeoutSeconds = 300
+
 // Module implements sdk/module.SoulModule. Runner is swapped out in tests;
 // production uses util.OSRunner{}.
 //
@@ -385,13 +390,20 @@ func (m *Module) runLatest(ctx context.Context, mgr util.PkgMgr, name string) er
 // `DEBIAN_FRONTEND=noninteractive` puts debconf into non-interactive mode
 // (no prompts, defaults are used).
 //
+// `-o DPkg::Lock::Timeout` makes apt wait aptLockTimeoutSeconds for the dpkg
+// lock instead of failing fast; it lives here so every apt call
+// (update/install/remove) inherits it (NIM-171).
+//
 // env is passed through the `env KEY=VAL apt-get …` wrapper, NOT via
 // RunOptions.Env: the latter is a full replace of cmd.Env (see
 // util.OSRunner.RunOpts), which would wipe PATH/HOME and break apt. The
 // `env` wrapper adds one variable on top of the inherited environment
 // without losing anything.
 func (m *Module) aptGet(ctx context.Context, args ...string) error {
-	full := append([]string{"DEBIAN_FRONTEND=noninteractive", "apt-get"}, args...)
+	full := append([]string{
+		"DEBIAN_FRONTEND=noninteractive", "apt-get",
+		"-o", fmt.Sprintf("DPkg::Lock::Timeout=%d", aptLockTimeoutSeconds),
+	}, args...)
 	return m.must(ctx, "env", full...)
 }
 
