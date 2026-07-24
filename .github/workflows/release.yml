@@ -94,6 +94,11 @@ jobs:
           # pre-release tag GoReleaser skips the tap upload (skip_upload: auto),
           # so this may be unset for betas without failing the run.
           HOMEBREW_TAP_GITHUB_TOKEN: ${{ secrets.HOMEBREW_TAP_GITHUB_TOKEN }}
+          # Wired up ahead of time: the winget pipe is dormant (skip_upload: true),
+          # so this secret is expected to be unset and the tag run only renders the
+          # manifests. Publishing needs a classic PAT with `public_repo` — a
+          # fine-grained token cannot open a PR outside its owner's account.
+          WINGET_GITHUB_TOKEN: ${{ secrets.WINGET_GITHUB_TOKEN }}
           # Enables cosign keyless (Fulcio/Rekor via the OIDC token above).
           COSIGN_EXPERIMENTAL: "1"
 

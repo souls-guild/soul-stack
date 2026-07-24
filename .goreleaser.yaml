@@ -303,6 +303,81 @@ homebrew_casks:
       packages or the ghcr.io/souls-guild/soul-stack container images.
     skip_upload: false
 
+# Windows Package Manager (winget). Unlike every other channel here, publishing
+# is not ours to complete: GoReleaser renders the three manifest files, commits
+# them to our fork of microsoft/winget-pkgs on a per-version branch, and opens a
+# pull request upstream — which Microsoft reviews by hand. A failure to open the
+# PR is logged, not fatal, so a winget hiccup never fails a release.
+#
+# The Windows zip carries the four cross-OS CLIs only (keeper and soul are
+# linux-only daemons), so the manifest is a portable multi-binary package: winget
+# unpacks the zip and aliases soulctl/soul-lint/soul-trial/soul-legion onto PATH.
+#
+# `skip_upload: true` — DORMANT ON PURPOSE, not a leftover. Every tag renders the
+# manifests into dist/ (so this config stays exercised and provably valid), but
+# nothing is pushed and no pull request is opened. Windows is not an audience we
+# have yet: the soul agent is linux-only, so a winget package can only ever serve
+# operators driving Keeper from a Windows desktop. Until enough of them exist,
+# spending a Microsoft reviewer's time — and ours on the token and the fork — buys
+# nothing.
+#
+# To turn it on: flip this to `false` (or `auto` to hold pre-release tags back),
+# fork microsoft/winget-pkgs into the owner named below (GoReleaser syncs the fork
+# but never creates it), and add a WINGET_GITHUB_TOKEN repository secret — a
+# **classic** PAT with the `public_repo` scope. Fine-grained tokens cannot open a
+# pull request against a repository outside their owner's account, which rules
+# them out for winget-pkgs.
+winget:
+  - name: SoulStack
+    package_name: Soul Stack
+    package_identifier: SoulsGuild.SoulStack
+    ids:
+      - default
+    publisher: SoulsGuild
+    publisher_url: https://github.com/souls-guild
+    publisher_support_url: https://github.com/souls-guild/soul-stack/issues
+    author: Soul Stack Authors
+    homepage: https://github.com/souls-guild/soul-stack
+    short_description: Operator CLIs for the Soul Stack config-management platform
+    description: |
+      Soul Stack is a configuration management platform: a Keeper node renders
+      Destiny for the Souls it manages, over a mutually authenticated gRPC
+      stream, with RBAC, audit and an OpenAPI/MCP surface built in.
+
+      This package installs the cross-platform operator CLIs — soulctl (drives
+      Keeper), soul-lint (offline artifact linter), soul-trial (offline Destiny
+      and Scenario runner) and soul-legion (load generator).
+    license: BUSL-1.1
+    license_url: https://github.com/souls-guild/soul-stack/blob/main/LICENSE
+    copyright: (c) 2026 the Soul Stack Authors
+    copyright_url: https://github.com/souls-guild/soul-stack/blob/main/LICENSE
+    release_notes_url: https://github.com/souls-guild/soul-stack/releases/tag/{{ .Tag }}
+    installation_notes: |
+      The keeper and soul daemons are Linux-only and are not part of this
+      package. Run them from the .deb/.rpm/.apk packages or the
+      ghcr.io/souls-guild/soul-stack container images.
+    tags:
+      - configuration-management
+      - devops
+      - infrastructure-as-code
+      - cli
+      - golang
+    repository:
+      owner: souls-guild
+      name: winget-pkgs
+      # Must differ from the upstream base branch; one branch per version keeps
+      # concurrent releases from stacking onto a single pull request.
+      branch: soul-stack-{{ .Version }}
+      token: "{{ .Env.WINGET_GITHUB_TOKEN }}"
+      pull_request:
+        enabled: true
+        draft: false
+        base:
+          owner: microsoft
+          name: winget-pkgs
+          branch: master
+    skip_upload: true
+
 # GHCR container images (dockers_v2 — the current multi-arch mechanism, replaces
 # the phased-out dockers + docker_manifests). Distroless static, built from a
 # slim Dockerfile that COPYs the goreleaser-built binary — no in-image compile.

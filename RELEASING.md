@@ -106,7 +106,7 @@ and [`.github/workflows/release.yml`](.github/workflows/release.yml). One tag
 run yields:
 
 - binaries + `.tar.gz` archives (linux amd64/arm64), `.deb` + `.rpm` (nfpm),
-  a Homebrew tap entry, and a `checksums.txt`;
+  a Homebrew tap entry, winget manifests, and a `checksums.txt`;
 - multi-arch GHCR images `ghcr.io/souls-guild/soul-stack/{keeper,soul}`;
 - **cosign keyless** signatures (checksums blob + images) via the workflow's
   OIDC token — no long-lived key;
@@ -122,3 +122,15 @@ they need credentials we keep off GitHub Actions:
   [`deploy/apt-r2/publish-apt.sh`](deploy/apt-r2/README.md) after the release.
 - **curl-installer** — `scripts/install.sh` pulls a released binary by tag and
   verifies its checksum (`curl -fsSL …/install.sh | sh`).
+
+**winget is configured but dormant.** Every tag renders the winget manifests into
+`dist/`, and nothing else: `skip_upload: true` in [`.goreleaser.yaml`](.goreleaser.yaml)
+holds back the pull request against `microsoft/winget-pkgs`. The soul agent is
+linux-only, so a winget package serves only operators driving Keeper from a
+Windows desktop — an audience worth a Microsoft reviewer's time once it exists,
+not before. Turning it on takes three things: flip `skip_upload` to `false`, fork
+`microsoft/winget-pkgs` into the owner named in the config, and add a
+`WINGET_GITHUB_TOKEN` repository secret (a **classic** PAT with `public_repo` —
+fine-grained tokens cannot open a pull request outside their owner's account).
+The first submission is reviewed by hand; later version bumps go through the
+repository's automated validation.
