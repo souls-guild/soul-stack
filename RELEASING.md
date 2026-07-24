@@ -107,6 +107,8 @@ run yields:
 
 - binaries + `.tar.gz` archives (linux amd64/arm64), `.deb` + `.rpm` (nfpm),
   a Homebrew tap entry, winget manifests, and a `checksums.txt`;
+- the AUR package [`soul-stack-bin`](https://aur.archlinux.org/packages/soul-stack-bin)
+  (`yay -S soul-stack-bin`), pushed over SSH with the `AUR_KEY` secret;
 - multi-arch GHCR images `ghcr.io/souls-guild/soul-stack/{keeper,soul}`;
 - **cosign keyless** signatures (checksums blob + images) via the workflow's
   OIDC token — no long-lived key;
@@ -142,3 +144,12 @@ A tag whose release is already published cannot be re-run to emit this PR:
 0.1.0-beta.1 submission was therefore made once by hand from these same generated
 manifests (upstream PR
 [#407547](https://github.com/microsoft/winget-pkgs/pull/407547)).
+
+**AUR publishes every tag, betas included** — Arch users track the beta on
+purpose, and `pkgver` stays legal because GoReleaser rewrites `-` as `_`. Its
+`skip_upload` is gated on `AUR_KEY` being present, so a missing secret skips the
+push instead of failing the tag. The same already-published-tag limitation applies
+(AUR runs after `release.Pipe` too), so `soul-stack-bin` 0.1.0_beta.1 was pushed
+once by hand from the PKGBUILD this config generates; later tags publish on their
+own. The package must install the binaries explicitly — GoReleaser's guessed
+`package()` would ship only the first one.

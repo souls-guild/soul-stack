@@ -99,6 +99,12 @@ jobs:
           # a PR outside its owner's account. Unset on pre-release tags is fine:
           # skip_upload: auto keeps the pipe from publishing them.
           WINGET_GITHUB_TOKEN: ${{ secrets.WINGET_GITHUB_TOKEN }}
+          # Passphrase-less SSH private key for aur.archlinux.org — GoReleaser
+          # pushes the `soul-stack-bin` PKGBUILD there. If the secret is unset
+          # the AUR block skips its upload rather than failing the tag (see
+          # `skip_upload` in .goreleaser.yaml), so the rest of the release still
+          # goes out.
+          AUR_KEY: ${{ secrets.AUR_KEY }}
           # Enables cosign keyless (Fulcio/Rekor via the OIDC token above).
           COSIGN_EXPERIMENTAL: "1"
 
