@@ -72,3 +72,11 @@ Endpoints: `/v1/synods` (`synod.create` POST / `synod.list` GET / `synod.delete`
 - **Group-scope** (`synods.default_scope`, narrowing the group's roles) — (a).
 - **Nested Synods** (a group within a group) — (b).
 - Both are extensible without a breaking change on top of the three MVP tables.
+
+## Amendment (2026-07-24, NIM-179 — a Synod cannot be a parent)
+
+[ADR-078](0078-rbac-derived-roles.md) adds **derived roles**: a role may name another role as its ceiling via `rbac_roles.parent_role`. Derivation is **role → role only** — a Synod cannot be a parent, and a role cannot derive from one.
+
+The reason is this ADR's own design: a Synod bundles roles for Archons and deliberately carries **no `default_scope` of its own** (§ the group-scope deferral), so there is no scope to attenuate against; and a Synod's effective rights are the *union* of its bundled roles, which is wider than any single one of them — exactly the shape [ADR-078(e)](0078-rbac-derived-roles.md) rejects when it requires a parent to be ONE named role.
+
+Nothing in the three tables or in the direct ∪ via-Synod resolution changes. The security invariants of §f are unaffected: least-privilege still reads the caller's effective rights as direct ∪ via Synod, and self-lockout still counts a bare `*` arriving by either path.

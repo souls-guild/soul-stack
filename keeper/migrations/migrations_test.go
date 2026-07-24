@@ -231,6 +231,8 @@ func TestEmbed_ContainsExpectedMigrations(t *testing.T) {
 		"100_rbac_drop_pattern_selectors.up.sql",
 		"101_add_apply_runs_input.down.sql",
 		"101_add_apply_runs_input.up.sql",
+		"102_rbac_roles_parent_role.down.sql",
+		"102_rbac_roles_parent_role.up.sql",
 	}
 	if len(names) != len(want) {
 		t.Fatalf("got %d files, want %d: %v", len(names), len(want), names)

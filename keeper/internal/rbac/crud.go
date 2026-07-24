@@ -255,11 +255,14 @@ func CreateRole(ctx context.Context, db ExecQueryRower, name, description string
 //
 // Errors:
 //   - [ErrRoleNotFound] on 0 affected rows.
+//   - [ErrRoleHasChildren] when the role is still someone's `parent_role`: the
+//     self-FK is ON DELETE RESTRICT (ADR-078 orphan policy), so the DELETE aborts
+//     rather than silently re-shaping a child's ceiling.
 //   - a wrapped pgx error on a transport failure.
 func DeleteRole(ctx context.Context, db ExecQueryRower, name string) error {
 	tag, err := db.Exec(ctx, deleteRoleSQL, name)
 	if err != nil {
-		return fmt.Errorf("rbac: delete role %q: %w", name, wrapPgErr(err))
+		return fmt.Errorf("rbac: delete role %q: %w", name, mapRoleDeleteError(err))
 	}
 	if tag.RowsAffected() == 0 {
 		return ErrRoleNotFound
@@ -499,8 +502,12 @@ func roleDefaultScope(ctx context.Context, tx ExecQueryRower, name string) (*str
 // mapRoleError maps pgx INSERT errors to the package's sentinels, following
 // the [operator.mapInsertError] pattern:
 //   - 23505 (UNIQUE) → [ErrRoleAlreadyExists] (multi-wrap: sentinel + original).
+//   - SS001 / SS002 — the parent-chain guard trigger (ADR-078, migration 102):
+//     a cycle (including a role naming itself) / a chain past
+//     [maxRoleChainDepth]. Translated here so any write path that sets
+//     `parent_role` reports the model rule rather than a raw SQLSTATE.
 //   - 23503 (FK) → wrapped with the constraint name (created_by_aid /
-//     role_name / aid reference a non-existent row).
+//     role_name / aid / parent_role reference a non-existent row).
 //   - anything else → wrapped with the SQLSTATE.
 func mapRoleError(err error) error {
 	var pgErr *pgconn.PgError
@@ -508,11 +515,35 @@ func mapRoleError(err error) error {
 		switch pgErr.Code {
 		case pgErrCodeUniqueViolation:
 			return fmt.Errorf("%w (constraint %s): %w", ErrRoleAlreadyExists, pgErr.ConstraintName, err)
+		case pgErrCodeRoleParentCycle:
+			return fmt.Errorf("%w: %w", ErrRoleParentCycle, err)
+		case pgErrCodeRoleChainTooDeep:
+			return fmt.Errorf("%w: %w", ErrRoleChainTooDeep, err)
 		case pgErrCodeForeignKeyViolation:
 			return fmt.Errorf("rbac: FK violation on %s: %w", pgErr.ConstraintName, err)
 		}
 	}
 	return fmt.Errorf("rbac: %w", wrapPgErr(err))
+}
+
+// roleParentFKConstraint — the self-FK `rbac_roles.parent_role → rbac_roles(name)`
+// (migration 102). On DELETE it is the RESTRICT that refuses to orphan children;
+// the constraint name is how that case is told apart from the other FK violations
+// a role DELETE could raise.
+const roleParentFKConstraint = "rbac_roles_parent_role_fk"
+
+// mapRoleDeleteError maps the DELETE-path pgx errors: an FK violation on the
+// parent self-FK means the role still has derived children, which is the
+// fail-closed orphan policy firing ([ErrRoleHasChildren], ADR-078). Everything
+// else keeps the previous wrapping.
+func mapRoleDeleteError(err error) error {
+	var pgErr *pgconn.PgError
+	if errors.As(err, &pgErr) &&
+		pgErr.Code == pgErrCodeForeignKeyViolation &&
+		pgErr.ConstraintName == roleParentFKConstraint {
+		return fmt.Errorf("%w: %w", ErrRoleHasChildren, err)
+	}
+	return wrapPgErr(err)
 }
 
 // mapGrantError maps a pgx INSERT-membership error (grant-operator path).

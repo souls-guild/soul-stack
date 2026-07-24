@@ -78,7 +78,7 @@ func (p *roleFakePool) Query(_ context.Context, sql string, _ ...any) (pgx.Rows,
 	case strings.Contains(sql, "FROM rbac_role_operators") && strings.Contains(sql, "FOR UPDATE"):
 		// lockRoleOperator / self-lockout probe: return a row (membership exists).
 		return &roleRows{single: []string{"archon-keeper"}}, nil
-	case strings.Contains(sql, "SELECT name, description, builtin, default_scope FROM rbac_roles"):
+	case strings.Contains(sql, "SELECT name, description, builtin, default_scope, parent_role FROM rbac_roles"):
 		return &roleViewRows{views: p.views}, nil
 	case strings.Contains(sql, "FROM rbac_role_permissions WHERE role_name"):
 		// rolePermissions(name) — without `*` (mutations don't trigger self-lockout).
@@ -172,7 +172,7 @@ func (r *roleRows) Values() ([]any, error)                       { return nil, n
 func (r *roleRows) RawValues() [][]byte                          { return nil }
 func (r *roleRows) Conn() *pgx.Conn                              { return nil }
 
-// roleViewRows — SELECT name, description, builtin, default_scope (list).
+// roleViewRows — SELECT name, description, builtin, default_scope, parent_role (list).
 type roleViewRows struct {
 	views []rbac.RoleView
 	idx   int
@@ -190,15 +190,22 @@ func (r *roleViewRows) Scan(dest ...any) error {
 	*dest[0].(*string) = v.Name
 	*dest[1].(*string) = v.Description
 	*dest[2].(*bool) = v.Builtin
-	// default_scope nullable (ADR-047 S1): empty string → NULL (*string=nil).
-	scopeDest := dest[3].(**string)
-	if v.DefaultScope != "" {
-		s := v.DefaultScope
-		*scopeDest = &s
-	} else {
-		*scopeDest = nil
-	}
+	// default_scope (ADR-047 S1) and parent_role (ADR-078) are both nullable:
+	// an empty string stands in for NULL (*string=nil).
+	assignNullableRoleField(dest[3].(**string), v.DefaultScope)
+	assignNullableRoleField(dest[4].(**string), v.ParentRole)
 	return nil
+}
+
+// assignNullableRoleField writes a non-empty value into a nullable *string dest,
+// or NULL when it is empty — the stub's stand-in for a NULL column.
+func assignNullableRoleField(dest **string, value string) {
+	if value == "" {
+		*dest = nil
+		return
+	}
+	v := value
+	*dest = &v
 }
 func (r *roleViewRows) Err() error                                   { return nil }
 func (r *roleViewRows) Close()                                       {}

@@ -45,6 +45,12 @@ type Snapshot struct {
 	// unrestricted, backcompat).
 	RoleScopes map[string]string
 
+	// RoleParents maps a DERIVED role's name to its parent's (ADR-078,
+	// `rbac_roles.parent_role`). Only roles with a non-NULL parent appear here;
+	// a missing key means a plain role. Validated as a graph by
+	// [validateRoleGraph] when the enforcer is built.
+	RoleParents map[string]string
+
 	// Membership maps AID to the names of roles bound to it
 	// (rbac_role_operators).
 	Membership map[string][]string
@@ -57,11 +63,12 @@ type Snapshot struct {
 }
 
 const (
-	// selectRolesSQL — every catalog role with its default_scope (ADR-047 S1).
-	// A role with no permissions still ends up in the snapshot (a LEFT JOIN
-	// below would give us that too, but a separate SELECT is simpler and
-	// needs no dedup). default_scope NULL → scanned into *string=nil.
-	selectRolesSQL = `SELECT name, default_scope FROM rbac_roles`
+	// selectRolesSQL — every catalog role with its default_scope (ADR-047 S1)
+	// and its parent_role (ADR-078). A role with no permissions still ends up
+	// in the snapshot (a LEFT JOIN below would give us that too, but a separate
+	// SELECT is simpler and needs no dedup). A NULL column → scanned into
+	// *string=nil.
+	selectRolesSQL = `SELECT name, default_scope, parent_role FROM rbac_roles`
 
 	// selectRolePermissionsSQL — every (role_name, permission) pair.
 	selectRolePermissionsSQL = `SELECT role_name, permission FROM rbac_role_permissions`
@@ -107,10 +114,11 @@ const (
 // when the Enforcer is assembled).
 func LoadSnapshot(ctx context.Context, db ExecQueryRower) (*Snapshot, error) {
 	snap := &Snapshot{
-		Roles:      make(map[string][]string),
-		RoleScopes: make(map[string]string),
-		Membership: make(map[string][]string),
-		Revoked:    make(map[string]time.Time),
+		Roles:       make(map[string][]string),
+		RoleScopes:  make(map[string]string),
+		RoleParents: make(map[string]string),
+		Membership:  make(map[string][]string),
+		Revoked:     make(map[string]time.Time),
 	}
 
 	if err := loadRoles(ctx, db, snap); err != nil {
@@ -141,8 +149,9 @@ func loadRoles(ctx context.Context, db ExecQueryRower, snap *Snapshot) error {
 		var (
 			name         string
 			defaultScope *string
+			parentRole   *string
 		)
-		if err := rows.Scan(&name, &defaultScope); err != nil {
+		if err := rows.Scan(&name, &defaultScope, &parentRole); err != nil {
 			return fmt.Errorf("rbac: scan role: %w", err)
 		}
 		if _, ok := snap.Roles[name]; !ok {
@@ -154,6 +163,11 @@ func loadRoles(ctx context.Context, db ExecQueryRower, snap *Snapshot) error {
 		// dimension" in the coven MVP — see the S1 Deny writeup).
 		if defaultScope != nil && *defaultScope != "" {
 			snap.RoleScopes[name] = *defaultScope
+		}
+		// NULL parent_role → key absent = a plain role (ADR-078). An empty
+		// string is treated as NULL for the same reason as above.
+		if parentRole != nil && *parentRole != "" {
+			snap.RoleParents[name] = *parentRole
 		}
 	}
 	if err := rows.Err(); err != nil {
@@ -323,14 +337,17 @@ type RoleView struct {
 	// DefaultScope — the role's RAW default_scope (ADR-047 S1); empty string
 	// means NULL (role has no scope restriction). For the list endpoint.
 	DefaultScope string
+	// ParentRole — the role this one derives from (ADR-078); empty string means
+	// NULL (a plain role). Surfacing it on the API is NIM-181.
+	ParentRole string
 }
 
 const (
 	// selectRoleViewsSQL — the role catalog with description/builtin/
-	// default_scope (unlike [selectRolesSQL], which reads name+default_scope
-	// for the enforcer snapshot). ORDER BY name gives a deterministic list
+	// default_scope/parent_role (unlike [selectRolesSQL], which reads only what
+	// the enforcer snapshot needs). ORDER BY name gives a deterministic list
 	// order.
-	selectRoleViewsSQL = `SELECT name, description, builtin, default_scope FROM rbac_roles ORDER BY name`
+	selectRoleViewsSQL = `SELECT name, description, builtin, default_scope, parent_role FROM rbac_roles ORDER BY name`
 )
 
 // LoadRoleViews assembles the API role catalog with three SELECTs (roles /
@@ -371,12 +388,16 @@ func loadRoleViewRows(ctx context.Context, db ExecQueryRower) ([]RoleView, map[s
 		var (
 			v            RoleView
 			defaultScope *string
+			parentRole   *string
 		)
-		if err := rows.Scan(&v.Name, &v.Description, &v.Builtin, &defaultScope); err != nil {
+		if err := rows.Scan(&v.Name, &v.Description, &v.Builtin, &defaultScope, &parentRole); err != nil {
 			return nil, nil, fmt.Errorf("rbac: scan role view: %w", err)
 		}
 		if defaultScope != nil {
 			v.DefaultScope = *defaultScope
+		}
+		if parentRole != nil {
+			v.ParentRole = *parentRole
 		}
 		views = append(views, v)
 	}

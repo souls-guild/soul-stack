@@ -290,7 +290,7 @@ func (listOnePool) QueryRow(context.Context, string, ...any) pgx.Row {
 }
 func (listOnePool) Query(_ context.Context, sql string, _ ...any) (pgx.Rows, error) {
 	switch {
-	case strings.Contains(sql, "SELECT name, description, builtin, default_scope FROM rbac_roles"):
+	case strings.Contains(sql, "SELECT name, description, builtin, default_scope, parent_role FROM rbac_roles"):
 		return &roleViewRows{}, nil
 	case strings.Contains(sql, "permission"):
 		return &roleStrRows{}, nil // role has no permissions
@@ -304,7 +304,7 @@ func (listOnePool) BeginTx(context.Context, pgx.TxOptions) (pgx.Tx, error) {
 }
 
 // roleViewRows — one row of the LoadRoleViews catalog: name=ops, description="",
-// builtin=false, default_scope=NULL.
+// builtin=false, default_scope=NULL, parent_role=NULL (a plain role).
 type roleViewRows struct{ done bool }
 
 func (r *roleViewRows) Next() bool {
@@ -319,6 +319,7 @@ func (r *roleViewRows) Scan(dest ...any) error {
 	*dest[1].(*string) = ""    // description
 	*dest[2].(*bool) = false   // builtin
 	*dest[3].(**string) = nil  // default_scope NULL
+	*dest[4].(**string) = nil  // parent_role NULL (plain role)
 	return nil
 }
 func (r *roleViewRows) Err() error                                   { return nil }

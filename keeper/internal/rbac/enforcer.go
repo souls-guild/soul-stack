@@ -31,7 +31,18 @@ type Role struct {
 	// boolean scope), inherited by the role's permissions that have no scope of
 	// their own. nil = NULL = the dimension is NOT introduced (bare-permission
 	// roles → unrestricted, backcompat).
+	//
+	// On a DERIVED role (ParentRole set) this is the attenuating DELTA rather
+	// than the role's absolute scope: effective = parent's effective AND this
+	// (ADR-078). With no parent the parent side is the unrestricted top, so the
+	// formula collapses to plain ADR-047.
 	DefaultScope *ScopeExpr
+
+	// ParentRole is the name of the role this one derives from (ADR-078,
+	// `rbac_roles.parent_role`); "" = a plain role. Carried through the snapshot
+	// so the catalog is complete; NOT yet consulted when a permission is checked
+	// — flattening the chain into effective rights is NIM-180.
+	ParentRole string
 }
 
 // Enforcer is an in-memory snapshot of the RBAC catalog. Safe for concurrent
@@ -79,9 +90,24 @@ func NewEnforcerFromSnapshot(snap *Snapshot) (*Enforcer, error) {
 	// (the caller, Holder, always builds a fresh enforcer after Refresh).
 	e.revoked = snap.Revoked
 
+	// Parent graph (ADR-078): validated BEFORE any role is built, so a snapshot
+	// with a cycle / an over-deep chain / a dangling parent never becomes an
+	// enforcer. Fail-closed on the same terms as an unparseable permission below
+	// — [Holder] keeps the previous enforcer on a TTL refresh, refuses to start
+	// on a cold one. The DB guards (migration 102) make this unreachable through
+	// any normal write path; it catches drift (a hand-edited row, a restore, an
+	// older binary).
+	names := make(map[string]struct{}, len(snap.Roles))
+	for name := range snap.Roles {
+		names[name] = struct{}{}
+	}
+	if err := validateRoleGraph(names, snap.RoleParents); err != nil {
+		return nil, err
+	}
+
 	byName := make(map[string]*Role, len(snap.Roles))
 	for name, rawPerms := range snap.Roles {
-		role := &Role{Name: name}
+		role := &Role{Name: name, ParentRole: snap.RoleParents[name]}
 		for _, raw := range rawPerms {
 			p, err := ParsePermission(raw)
 			if err != nil {

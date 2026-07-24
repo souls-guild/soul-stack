@@ -17,8 +17,10 @@ import (
 // Rolling our own stub here is a single file with no shared helpers; the
 // boilerplate is duplicated on purpose.
 type snapPool struct {
-	roles      []string             // selectRolesSQL (name); default_scope NULL
-	roleScopes map[string]string    // OPTIONAL: name → default_scope (ADR-047 S1)
+	roles       []string          // selectRolesSQL (name); default_scope/parent_role NULL
+	roleScopes  map[string]string // OPTIONAL: name → default_scope (ADR-047 S1)
+	roleParents map[string]string // OPTIONAL: name → parent_role (ADR-078)
+
 	perms      []rolePermRow        // selectRolePermissionsSQL
 	membership []membershipRow      // selectRoleOperatorsSQL
 	revoked    []revokedOperatorRow // selectRevokedOperatorsSQL
@@ -57,7 +59,7 @@ func (p *snapPool) Query(_ context.Context, sql string, _ ...any) (pgx.Rows, err
 	case contains(sql, "FROM synod_roles"):
 		return &snapSynodRoleRows{values: p.synodRoles}, nil
 	case contains(sql, "FROM rbac_roles"):
-		return &snapRoleRows{names: p.roles, scopes: p.roleScopes}, nil
+		return &snapRoleRows{names: p.roles, scopes: p.roleScopes, parents: p.roleParents}, nil
 	case contains(sql, "FROM rbac_role_permissions"):
 		return &snapPermRows{values: p.perms}, nil
 	case contains(sql, "FROM rbac_role_operators"):
@@ -77,13 +79,15 @@ func contains(s, sub string) bool {
 	return false
 }
 
-// snapRoleRows — for selectRolesSQL (name, default_scope). default_scope is
-// nullable (ADR-047 S1): scope comes from the scopes map, a missing key →
+// snapRoleRows — for selectRolesSQL (name, default_scope, parent_role). Both
+// trailing columns are nullable: default_scope (ADR-047 S1) comes from the scopes
+// map and parent_role (ADR-078) from the parents map; a missing key →
 // NULL (*string=nil).
 type snapRoleRows struct {
-	names  []string
-	scopes map[string]string
-	idx    int
+	names   []string
+	scopes  map[string]string
+	parents map[string]string
+	idx     int
 }
 
 func (r *snapRoleRows) Next() bool {
@@ -94,19 +98,25 @@ func (r *snapRoleRows) Next() bool {
 	return true
 }
 func (r *snapRoleRows) Scan(dest ...any) error {
-	if len(dest) != 2 {
-		return errors.New("snapRoleRows: expected 2 dest (name, default_scope)")
+	if len(dest) != 3 {
+		return errors.New("snapRoleRows: expected 3 dest (name, default_scope, parent_role)")
 	}
 	name := r.names[r.idx-1]
 	*(dest[0].(*string)) = name
-	scopeDest := dest[1].(**string)
-	if s, ok := r.scopes[name]; ok {
-		v := s
-		*scopeDest = &v
-	} else {
-		*scopeDest = nil
-	}
+	assignNullable(dest[1].(**string), r.scopes, name)
+	assignNullable(dest[2].(**string), r.parents, name)
 	return nil
+}
+
+// assignNullable writes src[key] into a nullable *string dest, or NULL when the
+// key is absent — the stub's stand-in for a NULL column.
+func assignNullable(dest **string, src map[string]string, key string) {
+	if v, ok := src[key]; ok {
+		val := v
+		*dest = &val
+		return
+	}
+	*dest = nil
 }
 func (r *snapRoleRows) Err() error                                   { return nil }
 func (r *snapRoleRows) Close()                                       {}

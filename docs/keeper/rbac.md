@@ -12,7 +12,7 @@ RBAC materialized in Postgres ([ADR-028(a)](../adr/0028-rbac-storage.md#adr-028-
 
 | Table | Columns | Role |
 |---|---|---|
-| **`rbac_roles`** | `name` PK (kebab-case, CHECK on format), `description`, `builtin` BOOL, `created_at`, `created_by_aid` FK→`operators(aid)` NULL-able | Directory of roles. `builtin=true` disables `role.delete` / `role.update` (built-in role - `cluster-admin`, see § Built-in Roles). `created_by_aid IS NULL` - seed roles without an Archon initiator. |
+| **`rbac_roles`** | `name` PK (kebab-case, CHECK on format), `description`, `builtin` BOOL, `created_at`, `created_by_aid` FK→`operators(aid)` NULL-able, `default_scope` TEXT NULL-able ([ADR-047](../adr/0047-purview.md)), `parent_role` TEXT NULL-able self-FK→`rbac_roles(name)` `ON DELETE RESTRICT` ([ADR-078](../adr/0078-rbac-derived-roles.md)) | Directory of roles. `builtin=true` disables `role.delete` / `role.update` (built-in role - `cluster-admin`, see § Built-in Roles). `created_by_aid IS NULL` - seed roles without an Archon initiator. `parent_role IS NULL` - a **plain** role (see § Derived roles). |
 | **`rbac_role_permissions`** | `role_name` FK→`rbac_roles(name)` `ON DELETE CASCADE`, `permission` TEXT, PK `(role_name, permission)` | Role permissions. `permission` is stored as a **RAW string** and parsed by `ParsePermission` (§ Permissions format) - the database does not interpret the string. |
 | **`rbac_role_operators`** | `role_name` FK→`rbac_roles(name)` `ON DELETE CASCADE`, `aid` FK→`operators(aid)`, `granted_at`, `granted_by_aid` FK→`operators(aid)` NULL-able, PK `(role_name, aid)` | **Membership** "role ↔ operator". The absence of this layer used to be the cause of BUG-1 - membership had nowhere to persistently live so that it could be seen by both `keeper init` and the enforcer on all nodes. |
 
@@ -231,6 +231,61 @@ Separate from self-lockout protection - against **vertical escalation of privile
 - Violation → `403 forbidden` (REST `TypeForbidden` / MCP `forbidden`), sentinel `ErrPermissionNotHeld` - separate from `ErrPermissionDenied` ("no right to the operation itself", checked by middleware/tool before Service).
 
 Self-lockout and least-privilege **coexist**: the first prohibits locking the admin-set "down", the second prohibits granting the "up" right. They check different things and don't conflict in order.
+
+### Derived roles (`parent_role`)
+
+A role may name another role in **`rbac_roles.parent_role`** ([ADR-078](../adr/0078-rbac-derived-roles.md)). The named role is its **parent**; the naming role is **derived** from it and can never exceed it. `parent_role IS NULL` is a **plain** role — what every role is today, with unchanged semantics.
+
+A derived role is a role, not a new entity: same table, same `role.*` family, same endpoints. It stores the parent's name plus a **delta**, and the delta is the role's existing `default_scope` (§ Selector grammar) read differently:
+
+| Role | Meaning of its `default_scope` |
+|---|---|
+| plain (`parent_role IS NULL`) | the role's **absolute** scope ([ADR-047 §a](../adr/0047-purview.md)) |
+| derived (`parent_role` set) | the **attenuating delta**, conjoined with the parent's effective scope |
+
+```
+effective_scope(role) = effective_scope(parent) AND default_scope(role)
+effective_perms(role) = own_perms(role) ∩ effective_perms(parent)
+```
+
+A plain role's parent side is the unrestricted top, so the same formula gives plain ADR-047 behaviour. `∩` is the containment of § Invariant least-privilege (so `incarnation.*` covers `incarnation.get`) — one definition of "⊆" for the whole subsystem.
+
+**Example.** Parent `dba` holds `redis.restart` + `redis.read` at `coven=dba`; child `dba-aboba` sets `parent_role: dba`, keeps only `redis.read`, and adds the delta `trait.project=aboba` → its effective right is `redis.read` at `coven=dba AND trait.project=aboba`. Move the parent to `coven=dbaas` and the child follows. **The delta stores only the ADDED narrowing** and never repeats the parent's predicate — a child that restated `coven=dba` would resolve to the empty set the moment the parent moved.
+
+**Why the conjunction and the intersection.** The scope grammar has no `NOT`, so `AND`-ing only narrows: attenuation of scope is structural rather than a rule to remember. The permission side is an **intersection, not a copy**: a child's rows are never implicitly the parent's, because a permission added to the parent would then appear on every descendant — a widening cascade. Narrowing cascades and only narrowing: remove a permission from the parent and it drops out of every descendant at the next snapshot build.
+
+**Resolution.** The chain is flattened **once**, when the enforcer snapshot is built (§ How the enforcer resolves) — never walked per request, so a check costs the same as today. Cascade needs no extra machinery: the snapshot is already rebuilt on any role mutation ([ADR-028(d)](../adr/0028-rbac-storage.md#adr-028-rbac-storage--postgres) TTL poll + `rbac:invalidate`).
+
+**Graph rules**, enforced in the schema ([migration 102](../../keeper/migrations/102_rbac_roles_parent_role.up.sql)) so they hold for every write path, and re-checked in Go at snapshot build:
+
+| Rule | Behaviour on violation |
+|---|---|
+| a role cannot be its own parent | refused (`SS001`) |
+| a chain cannot close on itself (`A → B → A`) | refused (`SS001`) |
+| a chain cannot exceed **4 roles** (3 parent hops) | refused (`SS002`) |
+| the parent must exist | refused (self-FK) |
+| **deleting a role that is still someone's parent** | refused — `ON DELETE RESTRICT`, `ErrRoleHasChildren` → `409` |
+
+Re-parenting is checked from both ends — the ancestors above the moved role and the subtree already hanging below it. A catalog whose graph is somehow broken (a hand-edited row, a restore) builds **no** enforcer, degrading exactly as an unparseable permission already does: on a TTL refresh the previous enforcer is kept with a warn, at startup the Keeper refuses to come up.
+
+**The orphan policy is fail-closed on purpose.** Clearing the parent would turn the child's delta into an absolute scope and drop the parent's narrowing — a **widening**, i.e. escalation; re-rooting to the grandparent widens by definition; cascading the delete silently strips membership. Refusing is the only option that changes nobody's rights unasked. The operator re-parents or deletes the children explicitly.
+
+**Least-privilege still applies on top.** Creating or updating a derived role must satisfy **both** `child ⊆ parent` (structural) **and** the caller holding the parent (§ Invariant least-privilege, unchanged) — otherwise an operator with `role.create` could derive from a role far above their own rights.
+
+**Several roles on one operator — derivation narrows a ROLE, not an OPERATOR.** An operator's effective rights remain the **union** across their roles (§ Semantics of conflict — OR among allows). A derived role resolves to its attenuated rights first and then joins that union like any other role, so a child can never carry in more than its parent allows.
+
+The consequence is the opposite of what "I gave them the narrow role" suggests, and is worth stating plainly:
+
+| Operator holds | Effective rights |
+|---|---|
+| only `dba-aboba` (derived from `dba`) | `dba`'s rights ∩ the child's own rows, at `coven=dba AND trait.project=aboba` |
+| **both** `dba` and `dba-aboba` | **`dba`'s full rights** — the narrow role adds nothing and restricts nothing |
+
+To actually confine an operator, revoke the wide parent from them; adding a narrower derived role on top is **not** a restriction mechanism. Attenuation bounds what a role may contain, not what its holder ends up with.
+
+This is also why a new derived role's parent is **one explicitly chosen role**, never "the caller's rights": a caller's union is wider than any single role they hold, so deriving against the union would mint a role broader than any role they could point at. The UI shows the ceiling of the **selected parent** for the same reason.
+
+> **Status.** The column, its guards and the plumbing that carries `parent_role` into the snapshot and the role catalog are in place (NIM-179). **Chain resolution is not**: nothing reads `parent_role` when a permission is checked yet, so a derived role currently grants only its own rows — narrower than the semantics above, never wider. Flattening, the extended subset check and the API/UI land in NIM-180 / NIM-181 / NIM-182.
 
 ### Builtin-border
 

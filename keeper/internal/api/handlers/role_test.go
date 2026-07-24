@@ -587,10 +587,10 @@ type listFakePool struct{ rbacFakePool }
 
 func (p *listFakePool) Query(_ context.Context, sql string, _ ...any) (pgx.Rows, error) {
 	switch {
-	case contains(sql, "SELECT name, description, builtin, default_scope FROM rbac_roles"):
-		return &roleViewRows{rows: [][4]any{
-			{"admins", "cluster admins", true, nil},
-			{"ops", "ops team", false, ptrStr("coven=prod")},
+	case contains(sql, "SELECT name, description, builtin, default_scope, parent_role FROM rbac_roles"):
+		return &roleViewRows{rows: [][5]any{
+			{"admins", "cluster admins", true, nil, nil},
+			{"ops", "ops team", false, ptrStr("coven=prod"), nil},
 		}}, nil
 	case contains(sql, "SELECT role_name, permission FROM rbac_role_permissions"):
 		return &pairRows{rows: [][2]string{{"admins", "*"}, {"ops", "soul.list"}}}, nil
@@ -640,10 +640,10 @@ func TestRoleHandler_List_200(t *testing.T) {
 // ptrStr — a *string literal for the nullable default_scope in fixtures.
 func ptrStr(s string) *string { return &s }
 
-// roleViewRows — four-column rows (name, description, builtin,
-// default_scope). default_scope is nullable: row[3] == nil → NULL.
+// roleViewRows — five-column rows (name, description, builtin, default_scope,
+// parent_role). The trailing two are nullable: a nil cell → NULL.
 type roleViewRows struct {
-	rows [][4]any
+	rows [][5]any
 	idx  int
 }
 
@@ -653,13 +653,19 @@ func (r *roleViewRows) Scan(dest ...any) error {
 	*dest[0].(*string) = row[0].(string)
 	*dest[1].(*string) = row[1].(string)
 	*dest[2].(*bool) = row[2].(bool)
-	scopeDest := dest[3].(**string)
-	if row[3] == nil {
-		*scopeDest = nil
-	} else {
-		*scopeDest = row[3].(*string)
-	}
+	assignNullableCell(dest[3].(**string), row[3])
+	assignNullableCell(dest[4].(**string), row[4])
 	return nil
+}
+
+// assignNullableCell writes a nullable stub cell into a *string dest: a nil cell
+// stands in for a NULL column.
+func assignNullableCell(dest **string, cell any) {
+	if cell == nil {
+		*dest = nil
+		return
+	}
+	*dest = cell.(*string)
 }
 func (r *roleViewRows) Err() error                                   { return nil }
 func (r *roleViewRows) Close()                                       {}

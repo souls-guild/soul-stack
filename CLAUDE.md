@@ -10,7 +10,7 @@ All source changes are in **English** — code, comments, log/error strings, tes
 
 Soul Stack is a working configuration-management system, built out across several release trains. Its three binaries — `keeper`, `soul`, `soul-lint` — carry real logic across implemented `internal/` subsystems. In the repo:
 
-- **Documentation and ADRs** — 71 ADRs in [docs/adr/](docs/adr/README.md) (one ADR = one file `NNNN-<slug>.md`); [docs/architecture.md](docs/architecture.md) — overview + stub links to ADR; `docs/`-areas cover input / templating / destiny / scenario / soul[+soulprint] / keeper / destiny-output / migrations and more.
+- **Documentation and ADRs** — 72 ADRs in [docs/adr/](docs/adr/README.md) (one ADR = one file `NNNN-<slug>.md`); [docs/architecture.md](docs/architecture.md) — overview + stub links to ADR; `docs/`-areas cover input / templating / destiny / scenario / soul[+soulprint] / keeper / destiny-output / migrations and more.
 - **Go workspace** per [ADR-011](docs/adr/0011-go-layout.md): `go.work` + 7 modules (`proto/`, `proto/plugin/`, `shared/`, `sdk/`, `keeper/`, `soul/`, `soul-lint/`), each with implemented `internal/` subsystems.
 - **`keeper`** — stateless, horizontally-scalable cluster over Postgres + Redis: the gRPC Keeper↔Soul stream ([ADR-012](docs/adr/0012-keeper-soul-grpc.md)), Destiny render (CEL + Go text/template), Soul- and Keeper-side core modules, the Reaper, RBAC and operator identity (Archon / JWT), cloud provisioning via CloudDriver plugins, Vault integration, plus OpenAPI + MCP surfaces.
 - **`soul`** — daemon/oneshot agent that applies rendered tasks, reports typed Soulprint facts ([ADR-018](docs/adr/0018-soulprint-typed.md)) and runs state migrations ([ADR-019](docs/adr/0019-state-migration-dsl.md)); isolated from `keeper` by construction. **`soul-lint`** — offline linter for Destiny/scenario.
@@ -151,7 +151,7 @@ The rule applies to both small names and large ones. Changing names later is exp
 ## Mandatory reading before any work
 
 - [docs/README.md](docs/README.md) - index of documentation and "where to write what."
-- [docs/architecture.md](docs/architecture.md) - architecture review + stub links to ADR, end-to-end script, sections about connection/push/Reaper, open questions. Full ADRs - in [docs/adr/](docs/adr/README.md) (71 files + index with statuses).
+- [docs/architecture.md](docs/architecture.md) - architecture review + stub links to ADR, end-to-end script, sections about connection/push/Reaper, open questions. Full ADRs - in [docs/adr/](docs/adr/README.md) (72 files + index with statuses).
 - [docs/naming-rules.md](docs/naming-rules.md) - dictionary of names (including `Archon`/`AID`, Soulprint fields, proto Keeper↔Soul messages).
 - [docs/requirements.md](docs/requirements.md) - product requirements.
 - [docs/destiny/](docs/destiny/README.md) - destiny index folder (incl. [output.md](docs/destiny/output.md) - general mechanism `output:`).

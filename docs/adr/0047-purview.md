@@ -129,3 +129,15 @@ Two follow-ups to the boolean-scope amendment above (backend implemented, guard-
 - Guard tests: bare-`*`→scoped-`*` grant ok; scoped-`*`→bare-`*` grant deny; `* on X` issuing `* on X'`/`resource.action on Y` only under `⊆`; out-of-scope context deny; context-less cluster-op deny under scoped `*`.
 
 **(B) `incarnation matches <glob>`.** The glob condition, until now `host`-only, is extended to `incarnation`: `incarnation matches "prod-*"` is a valid scope atom. Evaluation, `PurviewSQL` (a `LIKE` pushdown over `incarnation.name`, same anchored-glob→`LIKE` translation as `host`) and least-privilege subset (the same per-atom glob containment: `incarnation = x ⊆ incarnation matches g` iff `g` matches `x`, equal globs only) all reuse the `host`-glob machinery. `coven` / `service` stay **exact / `in`-list only** (no glob) — matching by name-pattern is meaningful only for the two identity dimensions (`host` SID, `incarnation` name).
+
+## Amendment (2026-07-24, NIM-179 — `default_scope` as a delta on a derived role)
+
+[ADR-078](0078-rbac-derived-roles.md) introduces `rbac_roles.parent_role`, and with it a second reading of the `default_scope` defined in §a. On a **plain** role (no parent — every role until now) the field keeps its meaning here verbatim: the role's absolute scope, inherited by its bare permissions. On a **derived** role the same field is the **attenuating delta**, conjoined with the parent's effective scope:
+
+```
+effective_scope(r) = effective_scope(parent(r)) AND default_scope(r)
+```
+
+A plain role's parent side is the unrestricted top, so the formula collapses to §a and nothing about existing roles changes. No second column is introduced — the delta reuses the field that already exists.
+
+The consequence worth stating: since the boolean grammar has no `NOT`, conjunction can only ever narrow, so **attenuation of scope is structural** rather than a rule that has to be enforced. The permission side is bounded by an intersection over the same containment predicate the least-privilege subset check already uses (`own_perms ∩ parent's effective`), so "a child never exceeds its parent" holds on every snapshot build, not only at write time. The least-privilege floor of `subset.go` is preserved on top and unchanged: a derived role must satisfy `child ⊆ parent` **AND** caller-holds-parent.
