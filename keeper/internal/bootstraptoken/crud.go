@@ -293,6 +293,13 @@ func BurnAllForSID(ctx context.Context, db ExecQueryRower, sid, usedByKID string
 // differs from a valid KID (`keeper-XXX`) — collisions are excluded.
 const SystemKIDForceReissue = "system-force-reissue"
 
+// SystemKIDCloudReprovision is the special `used_by_kid` value for a token
+// invalidated because its SID is being provisioned again (NIM-170): the VM the
+// token was baked for never onboarded, and the replacement VM gets a fresh
+// token. Same mechanism as force-reissue, distinct marker so audit can tell a
+// re-provision from an operator's manual reissue.
+const SystemKIDCloudReprovision = "system-cloud-reprovision"
+
 // expireActiveBySIDSQL invalidates a SID's still-active token on
 // force-reissue. Sets `used_at = NOW()`, which both (1) makes the token
 // ineligible for Burn (the WHERE `used_at IS NULL` no longer matches) and

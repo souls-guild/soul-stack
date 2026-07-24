@@ -10,6 +10,7 @@ import (
 
 	"github.com/souls-guild/soul-stack/keeper/internal/applybus"
 	"github.com/souls-guild/soul-stack/keeper/internal/applyrun"
+	coremodutil "github.com/souls-guild/soul-stack/keeper/internal/coremod/util"
 	"github.com/souls-guild/soul-stack/keeper/internal/incarnation"
 	"github.com/souls-guild/soul-stack/keeper/internal/render"
 	keeperv1 "github.com/souls-guild/soul-stack/proto/gen/go/keeper/v1"
@@ -75,7 +76,7 @@ func (r *Runner) dispatchKeeperTasks(ctx context.Context, spec RunSpec, log *slo
 	}
 
 	for _, rt := range keeperTasks {
-		changed, failed, output, msg := r.applyKeeperTask(ctx, rt)
+		changed, failed, output, msg := r.applyKeeperTask(ctx, spec, rt)
 		log.Info("scenario: keeper-side task executed",
 			slog.String("module", rt.Module),
 			slog.Int("task_idx", rt.Index),
@@ -260,7 +261,11 @@ func keeperTaskStatus(changed, failed bool) keeperv1.TaskStatus {
 // (`created`) goes into ApplyRequest.state. A malformed address or a module
 // not found in the Registry → failed (like Soul on an unknown module). Apply
 // returning a gRPC error (not a failed event) → failed with the error text.
-func (r *Runner) applyKeeperTask(ctx context.Context, rt *render.RenderedTask) (changed, failed bool, output map[string]any, message string) {
+//
+// The run's incarnation travels on the module context (coremod/util runctx):
+// ApplyRequest carries no run context, and a keeper-side module needs the owner
+// to tell its own leftovers from another incarnation's hosts (NIM-170).
+func (r *Runner) applyKeeperTask(ctx context.Context, spec RunSpec, rt *render.RenderedTask) (changed, failed bool, output map[string]any, message string) {
 	base, state, ok := config.SplitModuleAddr(rt.Module)
 	if !ok {
 		return false, true, nil, fmt.Sprintf("invalid keeper-side module address %q (want <namespace>.<module>.<state>)", rt.Module)
@@ -274,7 +279,7 @@ func (r *Runner) applyKeeperTask(ctx context.Context, rt *render.RenderedTask) (
 		State:  state,
 		Params: rt.Params,
 	}
-	sink := newKeeperApplyStream(ctx)
+	sink := newKeeperApplyStream(coremodutil.WithIncarnation(ctx, spec.IncarnationName))
 	if err := mod.Apply(req, sink); err != nil {
 		return false, true, nil, err.Error()
 	}

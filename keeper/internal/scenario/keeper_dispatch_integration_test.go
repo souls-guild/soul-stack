@@ -69,7 +69,9 @@ func (fakeHost) Create(_ context.Context, _ string, _, _ map[string]any, count i
 
 type fakeCloudSouls struct{}
 
-func (fakeCloudSouls) Insert(_ context.Context, _ *keepersoul.Soul) error { return nil }
+func (fakeCloudSouls) EnsureProvisionable(_ context.Context, _ *keepersoul.Soul, _ string) (bool, error) {
+	return false, nil
+}
 func (fakeCloudSouls) UpdateStatus(_ context.Context, _ string, _ keepersoul.Status, _ *string) error {
 	return nil
 }
@@ -83,7 +85,8 @@ func (fakeCloudTokens) Generate() (bootstraptoken.PlainToken, error) {
 func (fakeCloudTokens) Insert(_ context.Context, sid, _ string, _ *string) (*bootstraptoken.Record, error) {
 	return &bootstraptoken.Record{SID: sid}, nil
 }
-func (fakeCloudTokens) DeleteByTokenID(_ context.Context, _ string) error { return nil }
+func (fakeCloudTokens) DeleteByTokenID(_ context.Context, _ string) error    { return nil }
+func (fakeCloudTokens) ExpireActiveForSID(_ context.Context, _ string) error { return nil }
 
 // --- fake choir-Store ---------------------------------------------------------
 
@@ -125,7 +128,7 @@ func TestApplyKeeperTask_RealCloud_CreatedResolves(t *testing.T) {
 			"count":    float64(1),
 		}),
 	}
-	changed, failed, output, msg := r.applyKeeperTask(context.Background(), rt)
+	changed, failed, output, msg := r.applyKeeperTask(context.Background(), RunSpec{}, rt)
 	if failed {
 		t.Fatalf("core.cloud.created failed: %q (Lookup(core.cloud) hit + state=created should have passed)", msg)
 	}
@@ -144,7 +147,7 @@ func TestApplyKeeperTask_RealCloud_CreatedResolves(t *testing.T) {
 func TestApplyKeeperTask_RealCloud_BadStateFails(t *testing.T) {
 	r := &Runner{keeperModules: realKeeperRegistry()}
 	rt := &render.RenderedTask{Index: 0, Module: "core.cloud.provisioned", Params: mustStructI(t, map[string]any{"provider": "fake"})}
-	_, failed, _, msg := r.applyKeeperTask(context.Background(), rt)
+	_, failed, _, msg := r.applyKeeperTask(context.Background(), RunSpec{}, rt)
 	if !failed {
 		t.Fatalf("core.cloud.provisioned must fail (unknown state provisioned), got success")
 	}
@@ -164,7 +167,7 @@ func TestApplyKeeperTask_RealChoir_PresentResolves(t *testing.T) {
 			"sid":         "h1.example.com",
 		}),
 	}
-	changed, failed, output, msg := r.applyKeeperTask(context.Background(), rt)
+	changed, failed, output, msg := r.applyKeeperTask(context.Background(), RunSpec{}, rt)
 	if failed {
 		t.Fatalf("core.choir.present failed: %q (Lookup(core.choir) hit + state=present should have passed)", msg)
 	}

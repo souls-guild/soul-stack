@@ -100,7 +100,7 @@ func TestApplyKeeperTask_Success(t *testing.T) {
 	r := &Runner{keeperModules: fakeKeeperRegistry{"core.soul": mod}}
 
 	rt := &render.RenderedTask{Index: 0, Module: "core.soul.registered", Params: mustStruct(t, map[string]any{"sid": "n1"})}
-	changed, failed, output, _ := r.applyKeeperTask(context.Background(), rt)
+	changed, failed, output, _ := r.applyKeeperTask(context.Background(), RunSpec{}, rt)
 	if !changed || failed {
 		t.Fatalf("changed=%v failed=%v, want true/false", changed, failed)
 	}
@@ -116,7 +116,7 @@ func TestApplyKeeperTask_FailedEvent(t *testing.T) {
 	mod := &fakeKeeperModule{final: &pluginv1.ApplyEvent{Failed: true, Message: "invalid coven"}}
 	r := &Runner{keeperModules: fakeKeeperRegistry{"core.soul": mod}}
 
-	_, failed, _, msg := r.applyKeeperTask(context.Background(), &render.RenderedTask{Module: "core.soul.registered"})
+	_, failed, _, msg := r.applyKeeperTask(context.Background(), RunSpec{}, &render.RenderedTask{Module: "core.soul.registered"})
 	if !failed {
 		t.Fatalf("failed=false, want true")
 	}
@@ -127,7 +127,7 @@ func TestApplyKeeperTask_FailedEvent(t *testing.T) {
 
 func TestApplyKeeperTask_UnknownModule(t *testing.T) {
 	r := &Runner{keeperModules: fakeKeeperRegistry{}}
-	_, failed, _, msg := r.applyKeeperTask(context.Background(), &render.RenderedTask{Module: "core.soul.registered"})
+	_, failed, _, msg := r.applyKeeperTask(context.Background(), RunSpec{}, &render.RenderedTask{Module: "core.soul.registered"})
 	if !failed {
 		t.Fatalf("failed=false, want true (module not found in Registry)")
 	}
@@ -139,7 +139,7 @@ func TestApplyKeeperTask_UnknownModule(t *testing.T) {
 func TestApplyKeeperTask_ApplyError(t *testing.T) {
 	mod := &fakeKeeperModule{applyErr: fmt.Errorf("ctx canceled")}
 	r := &Runner{keeperModules: fakeKeeperRegistry{"core.soul": mod}}
-	_, failed, _, msg := r.applyKeeperTask(context.Background(), &render.RenderedTask{Module: "core.soul.registered"})
+	_, failed, _, msg := r.applyKeeperTask(context.Background(), RunSpec{}, &render.RenderedTask{Module: "core.soul.registered"})
 	if !failed || msg != "ctx canceled" {
 		t.Fatalf("failed=%v msg=%q, want true/'ctx canceled'", failed, msg)
 	}
@@ -154,7 +154,7 @@ func TestApplyKeeperTask_NoFinalEvent(t *testing.T) {
 	mod := &fakeKeeperModule{} // final=nil, applyErr=nil → Apply sends nothing
 	r := &Runner{keeperModules: fakeKeeperRegistry{"core.soul": mod}}
 
-	_, failed, output, msg := r.applyKeeperTask(context.Background(), &render.RenderedTask{Module: "core.soul.registered"})
+	_, failed, output, msg := r.applyKeeperTask(context.Background(), RunSpec{}, &render.RenderedTask{Module: "core.soul.registered"})
 	if !failed {
 		t.Fatalf("failed=false, want true (module sent no final event)")
 	}

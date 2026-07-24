@@ -81,6 +81,23 @@ What `core.cloud` (state `created`) does:
 
 Steps 4-5 - **B-flat (default)** mode. With `self_onboard: true`, the order is different: tokens are issued **BEFORE** create and baked in userdata - VM onboards itself, the delivery step is not needed (see Self-onboard "Option T").
 
+#### Re-running `create` (provision idempotency, NIM-170)
+
+Step 4 registers the VM idempotently ([ADR-017 amendment 2026-07-24](../adr/0017-keeper-side-core.md)) - a second `create` over the same incarnation does not collide with the `souls` rows the first attempt left behind. This matters because the rows survive by design: `destroy` turns them into `destroyed` tombstones (forensic > GC) and `unlock` does not touch the registry at all, so before this every retry after a partially-finished provision died with `SID already exists (constraint souls_pkey)` and had to be unblocked by deleting rows from PG by hand.
+
+What the module does with an already-taken SID:
+
+| Registry row for the SID | Behavior |
+|---|---|
+| absent | inserted as `pending` (normal first run) |
+| `pending` / `destroyed`, member of THIS incarnation or of none yet | **reused**: re-armed for onboarding (`status → pending`, `last_seen_*` cleared), the previous still-active bootstrap token is invalidated and a fresh one issued |
+| `connected` / `disconnected` / `revoked` / `expired` | **refused**: a live registration is never re-provisioned - the step fails naming the status and the owning incarnations |
+| `pending` / `destroyed`, but member ONLY of other incarnations | **refused**: the row is not this run's leftover |
+
+The `created` output carries `reused` - how many records were taken over (`0` on a clean run). The owner is the incarnation of the current run: the runner passes it to keeper-side modules on the module context (`coremod/util`), it is not a scenario parameter.
+
+> **Not VM reuse.** This is registry idempotency only. A re-run over hosts that are alive and onboarded still stops (with an actionable message instead of a PK error): re-creating a VM behind a live SID means reconciling against the cloud provider, which is the separate "idempotent reuse of live VMs" work (NIM-16). Unblocked here: the retry after a provision that never reached onboarding, and the re-create after a `destroy`.
+
 State `destroyed` is symmetrical: Keeper resolves the same Provider (for credentials) and calls `CloudDriver.Destroy(vm_ids, credentials)`, then the cascade transaction of registries ([ADR-017](../adr/0017-keeper-side-core.md)).
 
 ### Credentials-flow

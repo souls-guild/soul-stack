@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -22,11 +23,14 @@ import (
 //   - ErrSoulprintNotReceived → 410 gone (`GET /v1/souls/{sid}/soulprint`):
 //     the Soul record exists but SoulprintReport has never arrived — empty
 //     `soulprint_facts IS NULL`. Distinct from 404: the Soul itself exists.
+//   - ErrSoulNotProvisionable → 409 (provision re-run over a taken SID, see
+//     [EnsureProvisionable]).
 var (
 	ErrSoulAlreadyExists    = errors.New("soul: SID already exists")
 	ErrSoulNotFound         = errors.New("soul: SID not found")
 	ErrSoulCreatorNotFound  = errors.New("soul: created_by AID not found in operators registry")
 	ErrSoulprintNotReceived = errors.New("soul: soulprint not yet received")
+	ErrSoulNotProvisionable = errors.New("soul: SID is held by a registration a provision run must not take over")
 )
 
 const (
@@ -59,6 +63,64 @@ INSERT INTO souls (
     COALESCE($6, NOW()), $7, $8,
     $9, COALESCE($10, NOW()), $11)
 RETURNING registered_at, requested_at
+`
+
+// insertIfFreeSQL — [insertSQL] that yields no row instead of a PK error when
+// the SID is taken (NIM-170, phase 1 of [EnsureProvisionable]): empty RETURNING
+// means "already registered", and the caller decides whether that row is a
+// leftover it may reuse.
+const insertIfFreeSQL = `
+INSERT INTO souls (
+    sid, transport, status, coven, traits,
+    registered_at, last_seen_at, last_seen_by_kid,
+    created_by_aid, requested_at, note
+) VALUES ($1, $2, $3, $4, COALESCE($5, '{}'::jsonb),
+    COALESCE($6, NOW()), $7, $8,
+    $9, COALESCE($10, NOW()), $11)
+ON CONFLICT (sid) DO NOTHING
+RETURNING registered_at, requested_at
+`
+
+// reuseForProvisionSQL — phase 2 of [EnsureProvisionable] (NIM-170): re-arm the
+// row an earlier provision attempt left behind, for a fresh onboarding.
+// Reusable = the row carries no live registration (`pending` never onboarded,
+// `destroyed` is a cascade tombstone) AND it is this run's own — a member of $2,
+// or a member of nothing yet (souls are registered before core.soul.registered
+// binds them). A row that belongs only to OTHER incarnations is somebody else's;
+// an empty $2 (incarnation unknown) therefore leaves only unbound rows reusable.
+// The predicate lives in the statement itself: an UPDATE that matches nothing
+// is the atomic "refuse to take over" answer, no read-then-write window.
+const reuseForProvisionSQL = `
+UPDATE souls
+SET status           = 'pending',
+    transport        = $3,
+    requested_at     = NOW(),
+    last_seen_at     = NULL,
+    last_seen_by_kid = NULL
+WHERE sid = $1
+  AND status IN ('pending', 'destroyed')
+  AND (
+      NOT EXISTS (
+          SELECT 1 FROM incarnation_membership m WHERE m.sid = souls.sid
+      )
+      OR EXISTS (
+          SELECT 1 FROM incarnation_membership m
+           WHERE m.sid = souls.sid AND m.incarnation_name = $2
+      )
+  )
+RETURNING registered_at, requested_at
+`
+
+// describeTakenSIDSQL reports why a SID could not be provisioned: current
+// status + every incarnation the row belongs to (M:N, migration 099).
+const describeTakenSIDSQL = `
+SELECT s.status,
+       COALESCE(array_agg(m.incarnation_name ORDER BY m.incarnation_name)
+                FILTER (WHERE m.incarnation_name IS NOT NULL), '{}')
+FROM souls s
+LEFT JOIN incarnation_membership m ON m.sid = s.sid
+WHERE s.sid = $1
+GROUP BY s.status
 `
 
 const selectBySIDSQL = `
@@ -140,23 +202,37 @@ WHERE sid = $1
 // (docs/soul/onboarding.md). After Insert, s.RequestedAt holds the actual
 // value (`RETURNING requested_at`).
 func Insert(ctx context.Context, db ExecQueryRower, s *Soul) error {
+	args, err := insertArgs(s)
+	if err != nil {
+		return err
+	}
+	row := db.QueryRow(ctx, insertSQL, args...)
+	if err := row.Scan(&s.RegisteredAt, &s.RequestedAt); err != nil {
+		return mapInsertError(err)
+	}
+	return nil
+}
+
+// insertArgs validates s, applies the enum defaults in place and builds the
+// ordered argument list shared by [Insert] and [EnsureProvisionable].
+func insertArgs(s *Soul) ([]any, error) {
 	if s == nil {
-		return fmt.Errorf("soul: nil soul")
+		return nil, fmt.Errorf("soul: nil soul")
 	}
 	if !ValidSID(s.SID) {
-		return fmt.Errorf("soul: invalid SID %q (must match %s)", s.SID, SIDPattern)
+		return nil, fmt.Errorf("soul: invalid SID %q (must match %s)", s.SID, SIDPattern)
 	}
 	if s.Transport == "" {
 		s.Transport = TransportAgent
 	}
 	if !validTransport(s.Transport) {
-		return fmt.Errorf("soul: invalid transport %q", s.Transport)
+		return nil, fmt.Errorf("soul: invalid transport %q", s.Transport)
 	}
 	if s.Status == "" {
 		s.Status = StatusPending
 	}
 	if !validStatus(s.Status) {
-		return fmt.Errorf("soul: invalid status %q", s.Status)
+		return nil, fmt.Errorf("soul: invalid status %q", s.Status)
 	}
 
 	coven := s.Coven
@@ -172,7 +248,7 @@ func Insert(ctx context.Context, db ExecQueryRower, s *Soul) error {
 	if len(s.Traits) > 0 {
 		b, err := json.Marshal(s.Traits)
 		if err != nil {
-			return fmt.Errorf("soul: marshal traits: %w", err)
+			return nil, fmt.Errorf("soul: marshal traits: %w", err)
 		}
 		traitsArg = b
 	}
@@ -202,7 +278,7 @@ func Insert(ctx context.Context, db ExecQueryRower, s *Soul) error {
 		noteArg = s.Note
 	}
 
-	row := db.QueryRow(ctx, insertSQL,
+	return []any{
 		s.SID,
 		string(s.Transport),
 		string(s.Status),
@@ -214,11 +290,89 @@ func Insert(ctx context.Context, db ExecQueryRower, s *Soul) error {
 		createdByAIDArg,
 		requestedAtArg,
 		noteArg,
-	)
-	if err := row.Scan(&s.RegisteredAt, &s.RequestedAt); err != nil {
-		return mapInsertError(err)
+	}, nil
+}
+
+// EnsureProvisionable registers the SID of a VM being provisioned, tolerating a
+// re-run over a half-finished provision (NIM-170). Plain [Insert] is not
+// idempotent: `destroy`/`unlock` leave the souls rows behind, so a second
+// `create` used to die on the PK (`SQLSTATE 23505`) and the operator had to
+// clean PG by hand.
+//
+// Outcomes:
+//   - SID free → inserted as a fresh pending record, reused=false.
+//   - SID held by a leftover of an earlier provision (status `pending` — never
+//     onboarded — or `destroyed` — cascade tombstone) that is this run's own
+//     (member of incarnationName, or not bound yet) → the row is re-armed for
+//     onboarding, reused=true.
+//   - SID held by anything else (a live/registered host, or a row bound to
+//     another incarnation) → [ErrSoulNotProvisionable], row untouched.
+//
+// `incarnationName` is the incarnation of the current run ("" when unknown,
+// which makes any membership block the reuse). reused=true means the row
+// predates this run: the caller's orphan-cleanup must NOT delete it.
+func EnsureProvisionable(ctx context.Context, db ExecQueryRower, s *Soul, incarnationName string) (bool, error) {
+	args, err := insertArgs(s)
+	if err != nil {
+		return false, err
 	}
-	return nil
+	// Two statements rather than one upsert: each is atomic on its own, and an
+	// empty RETURNING answers exactly one question (phase 1 "was the SID free",
+	// phase 2 "was the leftover reusable"). Retried once because the row may be
+	// deleted between the phases (concurrent rollback of another run).
+	for attempt := 0; attempt < 2; attempt++ {
+		err := db.QueryRow(ctx, insertIfFreeSQL, args...).Scan(&s.RegisteredAt, &s.RequestedAt)
+		if err == nil {
+			return false, nil
+		}
+		if !errors.Is(err, pgx.ErrNoRows) {
+			return false, mapInsertError(err)
+		}
+
+		err = db.QueryRow(ctx, reuseForProvisionSQL, s.SID, incarnationName, string(s.Transport)).
+			Scan(&s.RegisteredAt, &s.RequestedAt)
+		if err == nil {
+			return true, nil
+		}
+		if !errors.Is(err, pgx.ErrNoRows) {
+			return false, fmt.Errorf("soul: reuse provision record %q: %w", s.SID, err)
+		}
+
+		status, incarnations, derr := describeTakenSID(ctx, db, s.SID)
+		if errors.Is(derr, ErrSoulNotFound) {
+			continue // row vanished between the phases — the SID is free again
+		}
+		if derr != nil {
+			return false, derr
+		}
+		return false, notProvisionableError(s.SID, status, incarnations)
+	}
+	return false, fmt.Errorf("%w: %q kept changing hands during provisioning", ErrSoulNotProvisionable, s.SID)
+}
+
+// describeTakenSID reads the status + incarnation memberships of an existing
+// SID, to explain a refused provision. [ErrSoulNotFound] when the row is gone.
+func describeTakenSID(ctx context.Context, db ExecQueryRower, sid string) (Status, []string, error) {
+	var status string
+	var incarnations []string
+	if err := db.QueryRow(ctx, describeTakenSIDSQL, sid).Scan(&status, &incarnations); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return "", nil, ErrSoulNotFound
+		}
+		return "", nil, fmt.Errorf("soul: describe taken SID %q: %w", sid, err)
+	}
+	return Status(status), incarnations, nil
+}
+
+// notProvisionableError spells out for the operator WHY the SID cannot be
+// re-provisioned — status alone doesn't say who holds it.
+func notProvisionableError(sid string, status Status, incarnations []string) error {
+	owner := "not a member of any incarnation"
+	if len(incarnations) > 0 {
+		owner = "member of incarnation " + strings.Join(incarnations, ", ")
+	}
+	return fmt.Errorf("%w: %q is already registered with status %q (%s); provisioning it now would take over that host — destroy it first, or run against the existing roster",
+		ErrSoulNotProvisionable, sid, status, owner)
 }
 
 // DeleteBySID deletes a souls row by SID. FK bootstrap_tokens.sid and

@@ -21,8 +21,8 @@ type SoulPG struct {
 
 func NewSoulPG(db keepersoul.ExecQueryRower) *SoulPG { return &SoulPG{DB: db} }
 
-func (s *SoulPG) Insert(ctx context.Context, soul *keepersoul.Soul) error {
-	return keepersoul.Insert(ctx, s.DB, soul)
+func (s *SoulPG) EnsureProvisionable(ctx context.Context, soul *keepersoul.Soul, incarnationName string) (bool, error) {
+	return keepersoul.EnsureProvisionable(ctx, s.DB, soul, incarnationName)
 }
 
 func (s *SoulPG) UpdateStatus(ctx context.Context, sid string, status keepersoul.Status, kid *string) error {
@@ -61,6 +61,13 @@ func (t *TokenPG) Insert(ctx context.Context, sid, tokenHash string, createdByAI
 
 func (t *TokenPG) DeleteByTokenID(ctx context.Context, tokenID string) error {
 	return bootstraptoken.DeleteByTokenID(ctx, t.DB, tokenID)
+}
+
+// ExpireActiveForSID frees the one-active-token-per-SID slot before a
+// re-provision issues a fresh token (NIM-170). No active token → no-op.
+func (t *TokenPG) ExpireActiveForSID(ctx context.Context, sid string) error {
+	_, _, err := bootstraptoken.ExpireActiveBySID(ctx, t.DB, sid, bootstraptoken.SystemKIDCloudReprovision)
+	return err
 }
 
 // PoolBeginner is narrow subset of `*pgxpool.Pool` needed for cascade-tx

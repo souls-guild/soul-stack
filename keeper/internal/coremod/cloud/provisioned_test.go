@@ -10,6 +10,7 @@ import (
 	"github.com/souls-guild/soul-stack/keeper/internal/bootstraptoken"
 	coremodcloud "github.com/souls-guild/soul-stack/keeper/internal/coremod/cloud"
 	"github.com/souls-guild/soul-stack/keeper/internal/coremod/internaltest"
+	"github.com/souls-guild/soul-stack/keeper/internal/coremod/util"
 	keepersoul "github.com/souls-guild/soul-stack/keeper/internal/soul"
 	"github.com/souls-guild/soul-stack/shared/audit"
 
@@ -120,22 +121,36 @@ func (r *fakeResolver) ResolveProfile(_ context.Context, profileName string) (ma
 }
 
 type fakeSouls struct {
-	inserted     []*keepersoul.Soul
-	deleted      []string // SID for which DeleteBySID was called (orphan-cleanup)
-	updateCalls  []string
-	updateStatus keepersoul.Status
-	insertErr    error
-	updateErr    error
-	deleteErr    error
+	inserted []*keepersoul.Soul
+	deleted  []string // SID for which DeleteBySID was called (orphan-cleanup)
+	// existing emulates registry rows a previous provision attempt left behind
+	// (NIM-170): SID → nil (reusable leftover) or error (refused, e.g. live host
+	// / foreign incarnation).
+	existing        map[string]error
+	reused          []string // SIDs taken over instead of inserted
+	lastIncarnation string
+	updateCalls     []string
+	updateStatus    keepersoul.Status
+	insertErr       error
+	updateErr       error
+	deleteErr       error
 }
 
-func (s *fakeSouls) Insert(_ context.Context, soul *keepersoul.Soul) error {
+func (s *fakeSouls) EnsureProvisionable(_ context.Context, soul *keepersoul.Soul, incarnationName string) (bool, error) {
+	s.lastIncarnation = incarnationName
 	if s.insertErr != nil {
-		return s.insertErr
+		return false, s.insertErr
+	}
+	if err, ok := s.existing[soul.SID]; ok {
+		if err != nil {
+			return false, err
+		}
+		s.reused = append(s.reused, soul.SID)
+		return true, nil
 	}
 	cp := *soul
 	s.inserted = append(s.inserted, &cp)
-	return nil
+	return false, nil
 }
 
 func (s *fakeSouls) UpdateStatus(_ context.Context, sid string, status keepersoul.Status, _ *string) error {
@@ -174,10 +189,20 @@ func (s *fakeSouls) DeleteBySID(_ context.Context, sid string) error {
 type fakeTokens struct {
 	inserted  []string // SIDs for which tokens were issued
 	deleted   []string // token-id for which DeleteByTokenID was called (orphan-cleanup)
+	expired   []string // SIDs whose still-active token was invalidated (re-provision)
 	plain     bootstraptoken.PlainToken
 	insertErr error
 	genErr    error
 	deleteErr error
+	expireErr error
+}
+
+func (t *fakeTokens) ExpireActiveForSID(_ context.Context, sid string) error {
+	if t.expireErr != nil {
+		return t.expireErr
+	}
+	t.expired = append(t.expired, sid)
+	return nil
 }
 
 func newFakeTokens() *fakeTokens {
@@ -1407,6 +1432,166 @@ func TestApply_Resized_StubHost_FailsCleanly(t *testing.T) {
 	}
 	if !stream.Last().Failed {
 		t.Fatal("expected failed=true from StubHost")
+	}
+}
+
+// --- provision idempotency (NIM-170) -----------------------------------------
+
+// TestApply_Created_SelfOnboard_RerunReusesLeftoverSouls — GUARD (NIM-170): a
+// second `create` over an incarnation whose previous attempt already left
+// pending souls behind must take those records over, not die on the souls PK
+// ("SID already exists (constraint souls_pkey): SQLSTATE 23505"). Live repro:
+// create → deploy fails → error_locked → rerun-last → duplicate SID.
+func TestApply_Created_SelfOnboard_RerunReusesLeftoverSouls(t *testing.T) {
+	fp := &fakePlugins{createResp: []*pluginv1.VmInfo{
+		{VmId: "i-aaa", Fqdn: "redis-0.ns.vm.example", PrimaryIp: "10.0.0.1"},
+		{VmId: "i-bbb", Fqdn: "redis-1.ns.vm.example", PrimaryIp: "10.0.0.2"},
+	}}
+	// Both predicted FQDNs are already in the registry from the failed attempt.
+	fs := &fakeSouls{existing: map[string]error{
+		"redis-0.ns.vm.example": nil,
+		"redis-1.ns.vm.example": nil,
+	}}
+	ft := newFakeTokens()
+	fu := &fakeUserdata{selfOnboardOut: "#cloud-config\n"}
+	fr := &fakeResolver{driver: "example", fqdnSuffix: "ns.vm.example"}
+	m := coremodcloud.New(fp, fr, fs, ft, nil, &fakeAudit{}).WithUserdata(fu)
+
+	stream := internaltest.NewApplyStream()
+	if err := m.Apply(&pluginv1.ApplyRequest{
+		State: "created",
+		Params: mustStruct(t, map[string]any{
+			"provider":     "example-prod",
+			"name":         "redis",
+			"count":        float64(2),
+			"self_onboard": true,
+		}),
+	}, stream); err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+	ev := stream.Last()
+	if ev.Failed {
+		t.Fatalf("re-run over leftover pending souls failed: %q", ev.Message)
+	}
+	if len(fs.inserted) != 0 {
+		t.Errorf("inserted %d new souls rows, want 0 (both SIDs reused)", len(fs.inserted))
+	}
+	if len(fs.reused) != 2 {
+		t.Errorf("reused = %v, want both predicted SIDs", fs.reused)
+	}
+	// Fresh tokens ARE issued — but only after the previous attempt's still-active
+	// token is invalidated: one active token per SID (partial unique index), so
+	// skipping this turns the souls duplicate into a bootstrap_tokens duplicate.
+	if len(ft.expired) != 2 {
+		t.Errorf("expired previous tokens for %v, want both reused SIDs", ft.expired)
+	}
+	if len(ft.inserted) != 2 {
+		t.Errorf("bootstrap tokens issued = %d, want 2", len(ft.inserted))
+	}
+	if n, _ := ev.Output.AsMap()["reused"].(float64); n != 2 {
+		t.Errorf("output[reused] = %v, want 2", ev.Output.AsMap()["reused"])
+	}
+}
+
+// TestApply_Created_SelfOnboard_ReusedSoulNotRolledBack — orphan-cleanup rolls
+// back only what THIS run created. A record reused from an earlier attempt is
+// not ours: deleting it on a later failure would drop a registration (and its
+// membership) the run never made.
+func TestApply_Created_SelfOnboard_ReusedSoulNotRolledBack(t *testing.T) {
+	fp := &fakePlugins{createErr: errors.New("driver create failed: quota exceeded")}
+	fs := &fakeSouls{existing: map[string]error{"redis-0.ns.vm.example": nil}}
+	ft := newFakeTokens()
+	fu := &fakeUserdata{selfOnboardOut: "#cloud-config\n"}
+	fr := &fakeResolver{driver: "example", fqdnSuffix: "ns.vm.example"}
+	m := coremodcloud.New(fp, fr, fs, ft, nil, &fakeAudit{}).WithUserdata(fu)
+
+	stream := internaltest.NewApplyStream()
+	if err := m.Apply(&pluginv1.ApplyRequest{
+		State: "created",
+		Params: mustStruct(t, map[string]any{
+			"provider":     "example-prod",
+			"name":         "redis",
+			"count":        float64(2),
+			"self_onboard": true,
+		}),
+	}, stream); err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+	if !stream.Last().Failed {
+		t.Fatal("expected failed=true on create failure")
+	}
+	for _, sid := range fs.deleted {
+		if sid == "redis-0.ns.vm.example" {
+			t.Errorf("rolled back the REUSED souls record %q — it predates this run", sid)
+		}
+	}
+	// The record this run did insert is still rolled back.
+	if rem := fs.remaining(); len(rem) != 0 {
+		t.Errorf("orphaned souls after create-fail: %v", rem)
+	}
+	// Tokens are this run's own in both cases → all rolled back.
+	if len(ft.deleted) != len(ft.inserted) {
+		t.Errorf("orphaned tokens: inserted %v, deleted %v", ft.inserted, ft.deleted)
+	}
+}
+
+// TestApply_Created_SelfOnboard_ForeignSoulNotTakenOver — GUARD (NIM-170): a
+// SID the store refuses (live host / another incarnation) fails the task with
+// the store's reason, and no VM is created behind it.
+func TestApply_Created_SelfOnboard_ForeignSoulNotTakenOver(t *testing.T) {
+	fp := &fakePlugins{}
+	fs := &fakeSouls{existing: map[string]error{
+		"redis-0.ns.vm.example": keepersoul.ErrSoulNotProvisionable,
+	}}
+	fu := &fakeUserdata{selfOnboardOut: "#cloud-config\n"}
+	fr := &fakeResolver{driver: "example", fqdnSuffix: "ns.vm.example"}
+	m := coremodcloud.New(fp, fr, fs, newFakeTokens(), nil, &fakeAudit{}).WithUserdata(fu)
+
+	stream := internaltest.NewApplyStream()
+	if err := m.Apply(&pluginv1.ApplyRequest{
+		State: "created",
+		Params: mustStruct(t, map[string]any{
+			"provider":     "example-prod",
+			"name":         "redis",
+			"count":        float64(1),
+			"self_onboard": true,
+		}),
+	}, stream); err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+	ev := stream.Last()
+	if !ev.Failed {
+		t.Fatal("expected failed=true: the SID is held by a registration this run must not take over")
+	}
+	if !strings.Contains(ev.Message, "redis-0.ns.vm.example") {
+		t.Errorf("message = %q, want the refused SID in it", ev.Message)
+	}
+	if fp.lastCount != 0 {
+		t.Errorf("driver Create called (count=%d) despite the refused SID", fp.lastCount)
+	}
+}
+
+// TestApply_Created_PassesRunIncarnationToStore — the owner check needs to know
+// WHOSE run this is: ApplyRequest carries no run context, so the runner puts the
+// incarnation on the module context (coremod/util runctx) and the module hands
+// it to the store.
+func TestApply_Created_PassesRunIncarnationToStore(t *testing.T) {
+	fp := &fakePlugins{createResp: []*pluginv1.VmInfo{{VmId: "i-1", Fqdn: "h1.example.com"}}}
+	fs := &fakeSouls{}
+	m := coremodcloud.New(fp, &fakeResolver{driver: "example"}, fs, newFakeTokens(), nil, &fakeAudit{})
+
+	stream := internaltest.NewApplyStreamCtx(util.WithIncarnation(context.Background(), "redis-sa"))
+	if err := m.Apply(&pluginv1.ApplyRequest{
+		State:  "created",
+		Params: mustStruct(t, map[string]any{"provider": "example-prod"}),
+	}, stream); err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+	if stream.Last().Failed {
+		t.Fatalf("Apply failed: %q", stream.Last().Message)
+	}
+	if fs.lastIncarnation != "redis-sa" {
+		t.Errorf("store got incarnation %q, want redis-sa (run owner)", fs.lastIncarnation)
 	}
 }
 

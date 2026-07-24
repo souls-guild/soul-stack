@@ -43,7 +43,9 @@ func (noopSoulStore) SoulsWithSoulprint(_ context.Context, _ []string) (map[stri
 
 type noopCloudSouls struct{}
 
-func (noopCloudSouls) Insert(_ context.Context, _ *keepersoul.Soul) error { return nil }
+func (noopCloudSouls) EnsureProvisionable(_ context.Context, _ *keepersoul.Soul, _ string) (bool, error) {
+	return false, nil
+}
 func (noopCloudSouls) UpdateStatus(_ context.Context, _ string, _ keepersoul.Status, _ *string) error {
 	return nil
 }
@@ -57,7 +59,8 @@ func (noopCloudTokens) Generate() (bootstraptoken.PlainToken, error) {
 func (noopCloudTokens) Insert(_ context.Context, sid, _ string, _ *string) (*bootstraptoken.Record, error) {
 	return &bootstraptoken.Record{SID: sid}, nil
 }
-func (noopCloudTokens) DeleteByTokenID(_ context.Context, _ string) error { return nil }
+func (noopCloudTokens) DeleteByTokenID(_ context.Context, _ string) error    { return nil }
+func (noopCloudTokens) ExpireActiveForSID(_ context.Context, _ string) error { return nil }
 
 type noopVault struct{}
 

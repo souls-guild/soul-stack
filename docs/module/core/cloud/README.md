@@ -79,6 +79,11 @@ provider is billing. `created` **not idempotent** constructively
 (`changed=true` always): repeating the step creates **new** VMs rather than checking against
 existing. Manage guard replay at scenario level
 (`when:`/`changed_when:`) without relying on module idempotency.
+  The **registry** side is re-runnable, though ([ADR-017 amendment 2026-07-24](../../../adr/0017-keeper-side-core.md)): a repeated `create` re-arms the `souls`
+records its own earlier attempt left behind (`pending` / `destroyed`, this
+incarnation's or unbound) instead of dying on the PK, and refuses records that
+carry a live registration or belong to another incarnation. Re-using the live
+VMs themselves is out of scope - see [cloud.md → Re-running create](../../../keeper/cloud.md#re-running-create-provision-idempotency-nim-170).
 - **`destroyed` - destructive cascade operation.** `PluginHost.Destroy(vm_ids)`
 physically destroys instances; then (if `sids` is non-empty) one PG transaction
 translates `souls → destroyed`, active `soul_seeds → orphaned`,
@@ -123,6 +128,7 @@ billing operation should not happen silently). In audit-payload - `provider`,
 | `count` | number | Number of VMs created. |
 | `vm_ids` | array of string | Provider-side ID of the created VMs. |
 | `action` | string | `created`. |
+| `reused` | number | How many `souls` records were taken over from an earlier provision attempt instead of created; `0` on a clean run ([ADR-017 amendment 2026-07-24](../../../adr/0017-keeper-side-core.md)). |
 
 > **WARNING (security).** `hosts[].bootstrap_token` is a **plain** one-time use
 > token. It is intentionally in register-output: cloud-init flow is obliged to transfer it to
