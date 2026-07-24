@@ -235,6 +235,30 @@ Version upgrade of the incarnation to a new version of the service with optional
 | **`scenario/migrate_cluster/`** | Migration of **DATA** from an external cluster (create-scenario, native replication); `create: true` - visible in day-2 lists | Regular `scenario/` directory; [ADR-009](adr/0009-scenario-dsl.md) |
 | **`migrations/<NNN>_to_<MMM>/`** | Structural **state_schema-migration** of form `incarnation.state` (pure function, one PG-tx, forward-only) | Directory `migrations/`; [ADR-019](adr/0019-state-migration-dsl.md#adr-019-state_schema-migration-dsl), [migrations.md](migrations.md) |
 
+### Engine compat window: `compat:` / effective window ([ADR-0076](adr/0076-engine-compat-window.md))
+
+The declared range of engine versions an artifact is known to work with. Carried per entity — in `service.yml` **and** in every `destiny.yml`, since a destiny is a separate git artifact pinned at its own ref ([ADR-007](adr/0007-versioning-git-ref.md)). Name **`compat`** is a **DevOps term** (manifest section, rule "small = DevOps"): it introduces no dictionary entity, and the two neighbouring `requir*` names are already taken by different axes — [`required_modules`](#destiny-internal-terms) (destiny module dependencies) and [`required_capabilities`](#required_capabilities-enum) (host privileges of a plugin).
+
+| Name | Role |
+|---|---|
+| **`compat:`** (block, `service.yml` + `destiny.yml`) | The entity's declared engine-compatibility contract. Currently one axis — `keeper:`. A missing block = unbounded (backcompat; no migration of existing manifests). A block declaring nothing is an error. |
+| **`compat.keeper`** = **`{min, max}`** | The version window of keeper this entity was authored and tested against. **Half-open `[min, max)`** — `min` inclusive, `max` **exclusive** ("the first version I have NOT tested"). Values are plain **`MAJOR.MINOR.PATCH`**: no `v` prefix, no pre-release suffix, no `>=`/`<`/`~`/`^` operators (a range **string** was rejected — arbitrary constraints are not closed under intersection, see below). Both keys optional, at least one required. |
+| **compat window** | The window declared by **one** entity. |
+| **effective compat window** | The **intersection** of all windows in force for a run — `service.yml` plus every `destiny.yml` resolved at its pinned ref. Computed as max-of-mins / min-of-maxes ("the narrowest wins"); served through the operator API so the UI can show it before a run. |
+| **`introduced_in`** (feature / module-manifest metadata) | The keeper version in which a DSL feature or a module state first appeared. Engine-side metadata (lives in code and manifests, never per-service), used to infer the floor a plan actually needs and cross-check the declared window. Inference yields a floor only — a ceiling is undeclarable from code, which is why `compat` is the primary contract. |
+| **`keeper_version_unsupported`** (abort reason) | Fail-closed abort on the render path when the rendering keeper's version falls outside the effective window. Symmetric to [`soul_passage_unsupported`](#soul-capabilities). |
+| **`compat_window_empty`** (diag code) | The declared windows do not intersect — no keeper version can ever satisfy them. An authoring error, raised by `soul-lint` and at service registration. |
+| **`compat_floor_too_low`** (diag code) | The declared `min` is below the floor inferred from `introduced_in` — the declaration is too permissive and would break on a keeper inside the declared window. Lint/registration diagnostic, deliberately **not** a run-time block. |
+
+**Four version-shaped things — do not confuse:**
+
+| Term | What it versions | Where it lives |
+|---|---|---|
+| **git `ref:`** | The **artifact** — service / destiny / module ([ADR-007](adr/0007-versioning-git-ref.md); there is deliberately no top-level `version:` field) | git tag or branch; `service.yml → destiny[]/modules[]`, `keeper.yml` |
+| **`state_schema_version`** | The **shape of `incarnation.state`** in Postgres, for migrations ([ADR-019](adr/0019-state-migration-dsl.md)) | `service.yml`; `migrations/<NNN>_to_<MMM>/` |
+| **`protocol_version`** | The **plugin-API contract** between a plugin and its host ([ADR-020](adr/0020-plugin-infrastructure.md)) | plugin `manifest.yaml` |
+| **`compat.keeper`** | The **engine** entitled to render this artifact ([ADR-0076](adr/0076-engine-compat-window.md)) | `service.yml` + every `destiny.yml` |
+
 ### Named input types: `types:` / `$type` / `x-type` ([ADR-062](adr/0062-input-types.md))
 
 Reused named input schemes - replacing the unimplemented `$ref`/`schemas/`. Spec - [input.md → "Reused named types"](input.md#reusable-named-types-types--type).
@@ -597,6 +621,8 @@ Canonical string values `Hello.capabilities` ([repeated string], [ADR-056](adr/0
 | **`passage`** | [Passage](#domain-entities) | Soul echoes `ApplyRequest.passage` to `TaskEvent`/`RunResult`, that is, it can participate in staged-render (N > 1 Passage, [ADR-056](adr/0056-staged-render-passage.md)). Soul without this sign under the staged scenario is rejected by the keeper BEFORE dispatch (`soul_passage_unsupported`, fail-closed): otherwise the barrier of the next Passage would be waiting for the terminal, which the old binary will not send. |
 
 Set extension - a separate capability line (derived from an already fixed name) + line in this table; a new independent name - propose-and-wait.
+
+[ADR-0076](adr/0076-engine-compat-window.md) fixes this set as the **Soul-side axis of engine compatibility** (the Keeper-side axis is the declared [compat window](#engine-compat-window-compat--effective-window-adr-0076)): the announcement generalizes beyond protocol features to the modules and Soul-side features a binary actually implements, so that a plan requiring something the host does not announce is rejected per-host **before** dispatch instead of being silently ignored. The axis stays capability-based rather than a numeric min-soul-version — a version number cannot express "this binary has module X" across a fleet with differing module sets; `soul_version` remains audit-only. Concrete values land with the implementation.
 
 ### Augur: nested proto types and registries
 
