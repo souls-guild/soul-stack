@@ -228,7 +228,9 @@ func (e *WaitDeadlineError) Is(target error) bool { return target == ErrWaitDead
 
 func (e *WaitDeadlineError) Error() string {
 	var b strings.Builder
-	b.WriteString("wait-until-ready: budget exhausted after ")
+	// No "wait-until-ready:" prefix — drivers already pass that as the op to
+	// [FailMessage], and a doubled phase name reads badly in the failed event.
+	b.WriteString("wait budget exhausted after ")
 	b.WriteString(e.Elapsed.Round(time.Second).String())
 	b.WriteString(" (" + strconv.Itoa(e.Attempts) + " attempts): ")
 	b.WriteString(strconv.Itoa(e.Ready) + "/" + strconv.Itoa(e.Total) + " ready; not ready: ")
