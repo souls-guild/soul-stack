@@ -313,20 +313,21 @@ homebrew_casks:
 # linux-only daemons), so the manifest is a portable multi-binary package: winget
 # unpacks the zip and aliases soulctl/soul-lint/soul-trial/soul-legion onto PATH.
 #
-# `skip_upload: true` — DORMANT ON PURPOSE, not a leftover. Every tag renders the
-# manifests into dist/ (so this config stays exercised and provably valid), but
-# nothing is pushed and no pull request is opened. Windows is not an audience we
-# have yet: the soul agent is linux-only, so a winget package can only ever serve
-# operators driving Keeper from a Windows desktop. Until enough of them exist,
-# spending a Microsoft reviewer's time — and ours on the token and the fork — buys
-# nothing.
+# `skip_upload: auto` — stable tags only. winget-pkgs is a catalogue of shipping
+# software, and `winget upgrade` has no notion of an opt-in pre-release channel:
+# a beta published here would be offered to everyone as the newest version. Betas
+# still render their manifests into dist/, which keeps this config exercised.
 #
-# To turn it on: flip this to `false` (or `auto` to hold pre-release tags back),
-# fork microsoft/winget-pkgs into the owner named below (GoReleaser syncs the fork
-# but never creates it), and add a WINGET_GITHUB_TOKEN repository secret — a
-# **classic** PAT with the `public_repo` scope. Fine-grained tokens cannot open a
-# pull request against a repository outside their owner's account, which rules
-# them out for winget-pkgs.
+# Needs a WINGET_GITHUB_TOKEN repository secret — a **classic** PAT with the
+# `public_repo` scope. Fine-grained tokens cannot open a pull request against a
+# repository outside their owner's account, which rules them out for winget-pkgs.
+# The fork must already exist; GoReleaser syncs it with upstream but never creates
+# it.
+#
+# Note that a tag whose release is already published cannot be re-run to emit this
+# PR: `release.Pipe` fails on duplicate assets before the winget pipe is reached.
+# v0.1.0-beta.1 was therefore submitted once by hand, from the manifests this same
+# config generated. Every later version goes out with the tag.
 winget:
   - name: SoulStack
     package_name: Soul Stack
@@ -376,7 +377,7 @@ winget:
           owner: microsoft
           name: winget-pkgs
           branch: master
-    skip_upload: true
+    skip_upload: auto
 
 # GHCR container images (dockers_v2 — the current multi-arch mechanism, replaces
 # the phased-out dockers + docker_manifests). Distroless static, built from a

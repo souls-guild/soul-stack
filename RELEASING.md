@@ -123,14 +123,22 @@ they need credentials we keep off GitHub Actions:
 - **curl-installer** — `scripts/install.sh` pulls a released binary by tag and
   verifies its checksum (`curl -fsSL …/install.sh | sh`).
 
-**winget is configured but dormant.** Every tag renders the winget manifests into
-`dist/`, and nothing else: `skip_upload: true` in [`.goreleaser.yaml`](.goreleaser.yaml)
-holds back the pull request against `microsoft/winget-pkgs`. The soul agent is
-linux-only, so a winget package serves only operators driving Keeper from a
-Windows desktop — an audience worth a Microsoft reviewer's time once it exists,
-not before. Turning it on takes three things: flip `skip_upload` to `false`, fork
-`microsoft/winget-pkgs` into the owner named in the config, and add a
-`WINGET_GITHUB_TOKEN` repository secret (a **classic** PAT with `public_repo` —
-fine-grained tokens cannot open a pull request outside their owner's account).
-The first submission is reviewed by hand; later version bumps go through the
-repository's automated validation.
+**winget publishes stable tags only.** On a stable tag GoReleaser renders the
+manifests, pushes them to `souls-guild/winget-pkgs` on a per-version branch and
+opens a pull request against `microsoft/winget-pkgs`; `skip_upload: auto` holds
+pre-release tags back, because `winget upgrade` has no opt-in pre-release channel
+and would offer a beta to everyone as the newest version. Betas still render
+their manifests into `dist/`. The pipe needs a `WINGET_GITHUB_TOKEN` repository
+secret — a **classic** PAT with `public_repo`, since fine-grained tokens cannot
+open a pull request outside their owner's account. If the pull request fails to
+open, GoReleaser logs it and the release still succeeds.
+
+Landing is not instant: submissions go through the repository's automated
+validation pipeline, and a moderator steps in when it flags something. Watch the
+PR — the bot closes it after 7 days without a response.
+
+A tag whose release is already published cannot be re-run to emit this PR:
+`release.Pipe` fails on duplicate assets before the winget pipe is reached. The
+0.1.0-beta.1 submission was therefore made once by hand from these same generated
+manifests (upstream PR
+[#407547](https://github.com/microsoft/winget-pkgs/pull/407547)).
