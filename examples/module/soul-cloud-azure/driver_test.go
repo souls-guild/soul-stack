@@ -20,12 +20,13 @@ import (
 	"google.golang.org/protobuf/types/known/structpb"
 )
 
-// withFastBackoff replaces defaultBackoff with "zero" delays + the given
+// withFastBackoff replaces BOTH backoffs — API-retry defaultBackoff and
+// wait-until-ready defaultWaitBackoff — with "zero" delays + the given
 // MaxAttempts. Symmetrical with soul-cloud-aws.
 func withFastBackoff(t *testing.T, maxAttempts int) {
 	t.Helper()
-	orig := defaultBackoff
-	defaultBackoff = func() clouddriver.BackoffConfig {
+	origRetry, origWait := defaultBackoff, defaultWaitBackoff
+	fast := func() clouddriver.BackoffConfig {
 		return clouddriver.BackoffConfig{
 			Initial:     1 * time.Millisecond,
 			Max:         1 * time.Millisecond,
@@ -33,7 +34,8 @@ func withFastBackoff(t *testing.T, maxAttempts int) {
 			MaxAttempts: maxAttempts,
 		}
 	}
-	t.Cleanup(func() { defaultBackoff = orig })
+	defaultBackoff, defaultWaitBackoff = fast, fast
+	t.Cleanup(func() { defaultBackoff, defaultWaitBackoff = origRetry, origWait })
 }
 
 // withDeterministicSuffix is a stable tail for makeVMName without runTag;

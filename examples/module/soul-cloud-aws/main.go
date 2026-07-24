@@ -46,11 +46,17 @@ var profileSchemaJSON []byte
 // existing running/pending VMs are reused.
 const runTagKey = "soulstack:run"
 
-// defaultBackoff is the [clouddriver.BackoffConfig] factory for wait/retry phases.
+// defaultBackoff is the [clouddriver.BackoffConfig] factory for API-retry phases
+// (RunInstances/DescribeInstances under throttling).
 // Kept in a variable so L0 tests can replace it (small MaxAttempts,
 // short delays) without waiting through 1s→2s→4s timers. Same technique as
 // `newEC2Client` (see ec2api.go).
 var defaultBackoff = clouddriver.DefaultBackoff
+
+// defaultWaitBackoff is the factory for the wait-until-ready phase, sized for
+// VM boot rather than for an API round-trip — see [clouddriver.DefaultWaitBackoff]
+// (budget overridable via SOUL_CLOUD_WAIT_BUDGET).
+var defaultWaitBackoff = clouddriver.DefaultWaitBackoff
 
 // AwsDriver is the CloudDriver implementation for AWS EC2.
 type AwsDriver struct {
@@ -168,7 +174,7 @@ func (a *AwsDriver) Create(req *pluginv1.CreateRequest, stream grpc.ServerStream
 			_ = stream.Send(&pluginv1.CreateEvent{
 				Message: fmt.Sprintf("idempotent: %d VM already present for run %q", len(existing), prof.runTag),
 			})
-			return a.finalizeCreate(ctx, cli, stream, backoff, instanceIDs(existing))
+			return a.finalizeCreate(ctx, cli, stream, defaultWaitBackoff(), instanceIDs(existing))
 		}
 		count -= int32(len(existing))
 	}
@@ -189,13 +195,13 @@ func (a *AwsDriver) Create(req *pluginv1.CreateRequest, stream grpc.ServerStream
 		newIDs = append(newIDs, aws.ToString(inst.InstanceId))
 	}
 	allIDs := append(instanceIDs(existing), newIDs...)
-	return a.finalizeCreate(ctx, cli, stream, backoff, allIDs)
+	return a.finalizeCreate(ctx, cli, stream, defaultWaitBackoff(), allIDs)
 }
 
 // finalizeCreate waits for VM readiness (running + IP/DNS) and sends the final event.
 // Anti-orphan: on ctx-cancel/timeout, unfinished VMs still appear in the final
 // event with failed=true and vm_id filled, so Keeper can Destroy them.
-func (a *AwsDriver) finalizeCreate(ctx context.Context, cli ec2API, stream grpc.ServerStreamingServer[pluginv1.CreateEvent], backoff clouddriver.BackoffConfig, vmIDs []string) error {
+func (a *AwsDriver) finalizeCreate(ctx context.Context, cli ec2API, stream grpc.ServerStreamingServer[pluginv1.CreateEvent], waitCfg clouddriver.BackoffConfig, vmIDs []string) error {
 	probe := func(pctx context.Context, vmID string) clouddriver.ProbeResult {
 		inst, perr := a.describeOne(pctx, cli, vmID)
 		if perr != nil {
@@ -205,20 +211,22 @@ func (a *AwsDriver) finalizeCreate(ctx context.Context, cli ec2API, stream grpc.
 			}
 			return clouddriver.ProbeResult{Err: perr}
 		}
+		res := clouddriver.ProbeResult{State: string(inst.State.Name)}
 		switch inst.State.Name {
 		case ec2types.InstanceStateNameRunning:
 			if aws.ToString(inst.PrivateDnsName) != "" || aws.ToString(inst.PublicIpAddress) != "" || aws.ToString(inst.PrivateIpAddress) != "" {
-				return clouddriver.ProbeResult{Ready: true}
+				res.Ready = true
 			}
-			return clouddriver.ProbeResult{}
+			return res
 		case ec2types.InstanceStateNameTerminated, ec2types.InstanceStateNameStopping, ec2types.InstanceStateNameStopped:
-			return clouddriver.ProbeResult{Err: fmt.Errorf("instance %s entered terminal state %q", vmID, inst.State.Name)}
+			res.Err = fmt.Errorf("instance %s entered terminal state %q", vmID, inst.State.Name)
+			return res
 		default:
-			return clouddriver.ProbeResult{}
+			return res
 		}
 	}
 
-	waitResults, waitErr := clouddriver.WaitUntilReady(ctx, backoff, vmIDs, probe,
+	waitResults, waitErr := clouddriver.WaitUntilReady(ctx, waitCfg, vmIDs, probe,
 		func(msg string) { _ = stream.Send(&pluginv1.CreateEvent{Message: msg}) })
 
 	vms := make([]*pluginv1.VmInfo, 0, len(vmIDs))

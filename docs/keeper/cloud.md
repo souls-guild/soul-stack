@@ -100,6 +100,14 @@ The `created` output carries `reused` - how many records were taken over (`0` on
 
 State `destroyed` is symmetrical: Keeper resolves the same Provider (for credentials) and calls `CloudDriver.Destroy(vm_ids, credentials)`, then the cascade transaction of registries ([ADR-017](../adr/0017-keeper-side-core.md)).
 
+### Wait-until-ready budget
+
+Step 3 ends with the driver polling the new VMs until each one reports running + IP/DNS. That budget is **separate from the API-retry budget**: a provider API answers in seconds, while a fresh VM boots minutes - longer still when a cluster topology brings up several at once. The SDK ships both: `clouddriver.DefaultBackoff` for API retries (8 attempts, throttling-friendly) and `clouddriver.DefaultWaitBackoff` for the wait phase (default budget **10 min**, same 1s→30s poll shape).
+
+The operator overrides the wait budget with the env variable **`SOUL_CLOUD_WAIT_BUDGET`** (Go duration, e.g. `20m`) on the Keeper unit - Keeper passes its environment to the plugin process, so it applies to every `soul-cloud-<provider>` at once. An invalid, zero or negative value falls back to the default; anything above 2h is clamped. A driver that knows its own boot time better (from the profile) sizes the phase itself via `clouddriver.WaitBackoffFor(d)`.
+
+When the budget really does run out, the failed event tells the two cases apart: VMs whose provider state was still advancing report that the boot budget is likely too small (with the knob to raise), VMs whose state never changed once report as stuck - a larger budget will not help. Either way the event carries `vm_id` and the last observed state, so anti-orphan destroy still works.
+
 ### Credentials-flow
 
 Option **A** (fixed): **Keeper resolves the secret from Vault and passes plain to the driver; the driver does not go to Vault.**

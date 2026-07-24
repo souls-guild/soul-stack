@@ -61,6 +61,11 @@ const userdataMetaKey = "user-data"
 // `newYcClient` (see ycapi.go).
 var defaultBackoff = clouddriver.DefaultBackoff
 
+// defaultWaitBackoff is the factory for the wait-until-ready phase, sized for
+// VM boot rather than for an API round-trip — see [clouddriver.DefaultWaitBackoff]
+// (budget overridable via SOUL_CLOUD_WAIT_BUDGET).
+var defaultWaitBackoff = clouddriver.DefaultWaitBackoff
+
 // YcDriver implements CloudDriver for Yandex Cloud.
 type YcDriver struct {
 	clouddriver.BaseDriver
@@ -258,7 +263,7 @@ func (y *YcDriver) Create(req *pluginv1.CreateRequest, stream grpc.ServerStreami
 		_ = stream.Send(&pluginv1.CreateEvent{
 			Message: fmt.Sprintf("idempotent: %d VM already present for run %q", len(existing), prof.runLabel),
 		})
-		return y.finalizeCreate(ctx, cli, stream, backoff, instanceIDs(existing))
+		return y.finalizeCreate(ctx, cli, stream, defaultWaitBackoff(), instanceIDs(existing))
 	}
 
 	need := count - int32(len(existing))
@@ -281,7 +286,7 @@ func (y *YcDriver) Create(req *pluginv1.CreateRequest, stream grpc.ServerStreami
 	}
 
 	allIDs := append(instanceIDs(existing), instanceIDs(newInstances)...)
-	return y.finalizeCreate(ctx, cli, stream, backoff, allIDs)
+	return y.finalizeCreate(ctx, cli, stream, defaultWaitBackoff(), allIDs)
 }
 
 // createInstances calls CreateInstance once per name. YC creates one VM per
@@ -404,7 +409,7 @@ func gapFillNames(existing []*computev1.Instance, nameBase, runLabel string, nee
 // finalizeCreate waits for VM readiness (RUNNING + FQDN/IP) and sends the final
 // event. Anti-orphan: on ctx-cancel/timeout, unfinished VMs are included in the
 // final event with failed=true but populated vm_id, so Keeper can Destroy them.
-func (y *YcDriver) finalizeCreate(ctx context.Context, cli ycAPI, stream grpc.ServerStreamingServer[pluginv1.CreateEvent], backoff clouddriver.BackoffConfig, vmIDs []string) error {
+func (y *YcDriver) finalizeCreate(ctx context.Context, cli ycAPI, stream grpc.ServerStreamingServer[pluginv1.CreateEvent], waitCfg clouddriver.BackoffConfig, vmIDs []string) error {
 	probe := func(pctx context.Context, vmID string) clouddriver.ProbeResult {
 		inst, perr := cli.GetInstance(pctx, vmID)
 		if perr != nil {
@@ -413,21 +418,23 @@ func (y *YcDriver) finalizeCreate(ctx context.Context, cli ycAPI, stream grpc.Se
 			}
 			return clouddriver.ProbeResult{Err: perr}
 		}
+		res := clouddriver.ProbeResult{State: inst.GetStatus().String()}
 		switch inst.GetStatus() {
 		case computev1.Instance_RUNNING:
 			if inst.GetFqdn() != "" || primaryIP(inst) != "" {
-				return clouddriver.ProbeResult{Ready: true}
+				res.Ready = true
 			}
-			return clouddriver.ProbeResult{}
+			return res
 		case computev1.Instance_STOPPING, computev1.Instance_STOPPED,
 			computev1.Instance_ERROR, computev1.Instance_CRASHED, computev1.Instance_DELETING:
-			return clouddriver.ProbeResult{Err: fmt.Errorf("instance %s entered terminal state %q", vmID, inst.GetStatus())}
+			res.Err = fmt.Errorf("instance %s entered terminal state %q", vmID, inst.GetStatus())
+			return res
 		default:
-			return clouddriver.ProbeResult{}
+			return res
 		}
 	}
 
-	waitResults, waitErr := clouddriver.WaitUntilReady(ctx, backoff, vmIDs, probe,
+	waitResults, waitErr := clouddriver.WaitUntilReady(ctx, waitCfg, vmIDs, probe,
 		func(msg string) { _ = stream.Send(&pluginv1.CreateEvent{Message: msg}) })
 
 	vms := make([]*pluginv1.VmInfo, 0, len(vmIDs))

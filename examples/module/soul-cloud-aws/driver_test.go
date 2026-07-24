@@ -18,13 +18,14 @@ import (
 	"google.golang.org/protobuf/types/known/structpb"
 )
 
-// withFastBackoff replaces defaultBackoff with "zero" delays plus the specified
+// withFastBackoff replaces BOTH backoffs — API-retry defaultBackoff and
+// wait-until-ready defaultWaitBackoff — with "zero" delays plus the specified
 // MaxAttempts. Used in wait-deadline / transient-probe tests where the default
-// 1s→2s→4s would make the test slow.
+// 1s→2s→4s (and the multi-minute boot budget) would make the test slow.
 func withFastBackoff(t *testing.T, maxAttempts int) {
 	t.Helper()
-	orig := defaultBackoff
-	defaultBackoff = func() clouddriver.BackoffConfig {
+	origRetry, origWait := defaultBackoff, defaultWaitBackoff
+	fast := func() clouddriver.BackoffConfig {
 		return clouddriver.BackoffConfig{
 			Initial:     1 * time.Millisecond,
 			Max:         1 * time.Millisecond,
@@ -32,7 +33,8 @@ func withFastBackoff(t *testing.T, maxAttempts int) {
 			MaxAttempts: maxAttempts,
 		}
 	}
-	t.Cleanup(func() { defaultBackoff = orig })
+	defaultBackoff, defaultWaitBackoff = fast, fast
+	t.Cleanup(func() { defaultBackoff, defaultWaitBackoff = origRetry, origWait })
 }
 
 // fakeEC2 is a mock ec2API for L0 unit tests (without network). Behavior
@@ -420,9 +422,63 @@ func TestCreate_WaitDeadline_AntiOrphan(t *testing.T) {
 	// Anti-orphan branch differs from ctx-cancel: ctx was NOT canceled here,
 	// failed-message comes from ErrWaitDeadline (transient class after Classify
 	// conversion, but that is a taxonomy detail — the determinant here is exactly
-	// "did not become ready within MaxAttempts").
-	if !contains(last.Message, "max attempts exhausted") {
-		t.Errorf("message=%q, want max-attempts-exhausted (ErrWaitDeadline)", last.Message)
+	// "did not become ready within the wait budget"). The message must also name
+	// the VM and its last state, so a real timeout is diagnosable.
+	if !contains(last.Message, "budget exhausted") || !contains(last.Message, "i-wait") {
+		t.Errorf("message=%q, want wait-budget-exhausted naming the pending VM (WaitDeadlineError)", last.Message)
+	}
+}
+
+// TestWaitBudget_OutlivesRetryBudget: a VM boots minutes, an API call answers in
+// seconds — the wait phase must not inherit the API-retry budget.
+func TestWaitBudget_OutlivesRetryBudget(t *testing.T) {
+	if wait, retry := defaultWaitBackoff().Budget(), defaultBackoff().Budget(); wait <= retry {
+		t.Errorf("wait budget=%v, want more than the API-retry budget %v", wait, retry)
+	}
+}
+
+// TestCreate_WaitPhaseUsesWaitBudget guards the split: with distinct budgets
+// (retry=2, wait=5) and a VM stuck in pending, the poller must run the wait
+// budget's 5 rounds — 2 would mean the wait phase regressed to defaultBackoff.
+func TestCreate_WaitPhaseUsesWaitBudget(t *testing.T) {
+	const retryAttempts, waitAttempts = 2, 5
+	fast := func(n int) func() clouddriver.BackoffConfig {
+		return func() clouddriver.BackoffConfig {
+			return clouddriver.BackoffConfig{
+				Initial: time.Millisecond, Max: time.Millisecond, Factor: 1.0, MaxAttempts: n,
+			}
+		}
+	}
+	origRetry, origWait := defaultBackoff, defaultWaitBackoff
+	defaultBackoff, defaultWaitBackoff = fast(retryAttempts), fast(waitAttempts)
+	t.Cleanup(func() { defaultBackoff, defaultWaitBackoff = origRetry, origWait })
+
+	f := &fakeEC2{
+		runOut: &ec2.RunInstancesOutput{Instances: []ec2types.Instance{{InstanceId: aws.String("i-split")}}},
+		describeSeq: []*ec2.DescribeInstancesOutput{
+			describeOut(ec2types.Instance{ // never leaves pending
+				InstanceId: aws.String("i-split"),
+				State:      &ec2types.InstanceState{Name: ec2types.InstanceStateNamePending},
+			}),
+		},
+	}
+	withFakeEC2(t, f)
+
+	d := &AwsDriver{}
+	s := &createStream{}
+	if err := d.Create(&pluginv1.CreateRequest{
+		Count:       1,
+		Profile:     mustStruct(t, map[string]any{"region": "eu-west-1", "ami": "ami-0abc1234", "instance_type": "t3.medium"}),
+		Credentials: mustStruct(t, map[string]any{"region": "eu-west-1"}),
+	}, s); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if !s.last().Failed {
+		t.Fatal("expected failed=true once the wait budget runs out")
+	}
+	if f.describeN != waitAttempts {
+		t.Errorf("wait polled %d times, want %d (wait budget); %d would mean it reused the API-retry budget",
+			f.describeN, waitAttempts, retryAttempts)
 	}
 }
 

@@ -443,6 +443,7 @@ Enum extension - propose-and-wait + PR in [keeper/plugins.md → Manifest](keepe
 | **`protocol_version`** | int. Plugin protocol version (`proto/plugin/vN/`); duplicated in manifest and handshake; strict match `protocol_version: N` ↔ `proto/plugin/vN/`. This is an **compat API flag, not an artifact version** - an exception to [ADR-007](adr/0007-versioning-git-ref.md) ([ADR-020(c)](adr/0020-plugin-infrastructure.md)). |
 | **`SupportedProtocolVersions`** | The constant in the host binary (`keeper` / `soul` / `soul-lint`) is an ordered list of supported protocol versions. MVP = `[1]`. Forward-compat only-add ([ADR-020(c)](adr/0020-plugin-infrastructure.md)). |
 | **`SOUL_PLUGIN_SOCKET`** | Env-var, through which the host passes the path to the Unix-socket to the plugin. Directories - `/var/run/soul-stack/plugins/` (Soul-host) and `/var/run/soul-stack-keeper/plugins/` (Keeper-host), mode `0700`, owned by service user ([ADR-020(d)](adr/0020-plugin-infrastructure.md)). |
+| **`SOUL_CLOUD_WAIT_BUDGET`** | Env-var (Go duration, e.g. `20m`) overriding how long a CloudDriver waits for new VMs to become ready; set on the Keeper unit, inherited by every `soul-cloud-<provider>` process. Default 10 min, clamped to 2h; invalid/zero/negative falls back to the default. Separate from the API-retry backoff ([keeper/cloud.md → Wait-until-ready budget](keeper/cloud.md#wait-until-ready-budget)). |
 
 ### Plugin manifest: regex of names
 

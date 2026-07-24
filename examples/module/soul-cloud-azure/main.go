@@ -71,6 +71,11 @@ const runTagKey = "soulstack-run"
 // phases (see soul-cloud-aws). L0 tests replace it through withFastBackoff.
 var defaultBackoff = clouddriver.DefaultBackoff
 
+// defaultWaitBackoff is the factory for the wait-until-ready phase, sized for
+// VM boot rather than for an API round-trip — see [clouddriver.DefaultWaitBackoff]
+// (budget overridable via SOUL_CLOUD_WAIT_BUDGET).
+var defaultWaitBackoff = clouddriver.DefaultWaitBackoff
+
 // randomSuffix is a short random suffix for the VM name when runTag is not set.
 // It is a variable for deterministic L0 tests.
 var randomSuffix = func() string {
@@ -248,7 +253,7 @@ func (a *AzureDriver) Create(req *pluginv1.CreateRequest, stream grpc.ServerStre
 			_ = stream.Send(&pluginv1.CreateEvent{
 				Message: fmt.Sprintf("idempotent: %d VM already present for run %q", len(existing), prof.runTag),
 			})
-			return a.finalizeCreate(ctx, cli, stream, backoff, creds, existingVMIDs(existing))
+			return a.finalizeCreate(ctx, cli, stream, defaultWaitBackoff(), creds, existingVMIDs(existing))
 		}
 		count -= int32(len(existing))
 	}
@@ -278,7 +283,7 @@ func (a *AzureDriver) Create(req *pluginv1.CreateRequest, stream grpc.ServerStre
 	}
 
 	all := append(existingVMIDs(existing), newIDs...)
-	return a.finalizeCreate(ctx, cli, stream, backoff, creds, all)
+	return a.finalizeCreate(ctx, cli, stream, defaultWaitBackoff(), creds, all)
 }
 
 // createOneVM is a multi-resource transaction for one VM with rollback on
@@ -378,20 +383,20 @@ func (a *AzureDriver) createOneVM(
 func (a *AzureDriver) finalizeCreate(
 	ctx context.Context, cli azureClients,
 	stream grpc.ServerStreamingServer[pluginv1.CreateEvent],
-	backoff clouddriver.BackoffConfig, creds azureCredentials, vmIDs []string,
+	waitCfg clouddriver.BackoffConfig, creds azureCredentials, vmIDs []string,
 ) error {
 	probe := func(pctx context.Context, vmID string) clouddriver.ProbeResult {
-		ready, perr := a.probeVMReady(pctx, cli, creds.ResourceGroup, vmID)
+		ready, state, perr := a.probeVMReady(pctx, cli, creds.ResourceGroup, vmID)
 		if perr != nil {
 			if clouddriver.Classify(classifyAzure, perr).Transient() {
-				return clouddriver.ProbeResult{}
+				return clouddriver.ProbeResult{State: state}
 			}
-			return clouddriver.ProbeResult{Err: perr}
+			return clouddriver.ProbeResult{Err: perr, State: state}
 		}
-		return clouddriver.ProbeResult{Ready: ready}
+		return clouddriver.ProbeResult{Ready: ready, State: state}
 	}
 
-	waitResults, waitErr := clouddriver.WaitUntilReady(ctx, backoff, vmIDs, probe,
+	waitResults, waitErr := clouddriver.WaitUntilReady(ctx, waitCfg, vmIDs, probe,
 		func(msg string) { _ = stream.Send(&pluginv1.CreateEvent{Message: msg}) })
 
 	vms := make([]*pluginv1.VmInfo, 0, len(vmIDs))
@@ -423,42 +428,47 @@ func (a *AzureDriver) finalizeCreate(
 
 // probeVMReady is true when VM ProvisioningState=Succeeded AND InstanceView
 // contains PowerState/running. Uses one Get with Expand=InstanceView to avoid
-// hitting the API twice.
-func (a *AzureDriver) probeVMReady(ctx context.Context, cli azureClients, rg, vmName string) (bool, error) {
+// hitting the API twice. The second return value is the observed state
+// (provisioning or power), fed to the wait poller for boot diagnostics.
+func (a *AzureDriver) probeVMReady(ctx context.Context, cli azureClients, rg, vmName string) (bool, string, error) {
 	resp, err := cli.vms.Get(ctx, rg, vmName, &armcompute.VirtualMachinesClientGetOptions{
 		Expand: to.Ptr(armcompute.InstanceViewTypesInstanceView),
 	})
 	if err != nil {
-		return false, err
+		return false, "", err
 	}
 	if resp.Properties == nil {
-		return false, nil
+		return false, "", nil
 	}
-	if resp.Properties.ProvisioningState == nil || *resp.Properties.ProvisioningState != "Succeeded" {
+	state := ""
+	if resp.Properties.ProvisioningState != nil {
+		state = *resp.Properties.ProvisioningState
+	}
+	if state != "Succeeded" {
 		// Failed-ProvisioningState is terminal, not transient: return it as error,
 		// and the poller will close this VM.
-		if resp.Properties.ProvisioningState != nil && *resp.Properties.ProvisioningState == "Failed" {
-			return false, fmt.Errorf("vm %s provisioning failed", vmName)
+		if state == "Failed" {
+			return false, state, fmt.Errorf("vm %s provisioning failed", vmName)
 		}
-		return false, nil
+		return false, state, nil
 	}
 	iv := resp.Properties.InstanceView
 	if iv == nil {
-		return false, nil
+		return false, state, nil
 	}
 	for _, st := range iv.Statuses {
 		if st == nil || st.Code == nil {
 			continue
 		}
 		// PowerState status format is "PowerState/<state>".
-		if *st.Code == "PowerState/running" {
-			return true, nil
-		}
-		if *st.Code == "PowerState/deallocated" || *st.Code == "PowerState/stopped" {
-			return false, fmt.Errorf("vm %s entered terminal power state %q", vmName, *st.Code)
+		switch *st.Code {
+		case "PowerState/running":
+			return true, *st.Code, nil
+		case "PowerState/deallocated", "PowerState/stopped":
+			return false, *st.Code, fmt.Errorf("vm %s entered terminal power state %q", vmName, *st.Code)
 		}
 	}
-	return false, nil
+	return false, state, nil
 }
 
 // fillVMInfo fills VmInfo (fqdn/primary_ip/attributes) from a ready VM.

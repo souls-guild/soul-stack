@@ -16,13 +16,14 @@ import (
 	"google.golang.org/protobuf/types/known/structpb"
 )
 
-// withFastBackoff replaces defaultBackoff with "zero" delays + the specified
-// MaxAttempts. Used in wait-deadline / transient-probe tests where
-// the default 1s→2s→4s would make the test slow.
+// withFastBackoff replaces BOTH backoffs — API-retry defaultBackoff and
+// wait-until-ready defaultWaitBackoff — with "zero" delays + the specified
+// MaxAttempts. Used in wait-deadline / transient-probe tests where the default
+// 1s→2s→4s (and the multi-minute boot budget) would make the test slow.
 func withFastBackoff(t *testing.T, maxAttempts int) {
 	t.Helper()
-	orig := defaultBackoff
-	defaultBackoff = func() clouddriver.BackoffConfig {
+	origRetry, origWait := defaultBackoff, defaultWaitBackoff
+	fast := func() clouddriver.BackoffConfig {
 		return clouddriver.BackoffConfig{
 			Initial:     1 * time.Millisecond,
 			Max:         1 * time.Millisecond,
@@ -30,7 +31,8 @@ func withFastBackoff(t *testing.T, maxAttempts int) {
 			MaxAttempts: maxAttempts,
 		}
 	}
-	t.Cleanup(func() { defaultBackoff = orig })
+	defaultBackoff, defaultWaitBackoff = fast, fast
+	t.Cleanup(func() { defaultBackoff, defaultWaitBackoff = origRetry, origWait })
 }
 
 // fakeOperation is a synthetic gcpOperation that optionally returns an error
@@ -440,8 +442,8 @@ func TestCreate_WaitDeadline_AntiOrphan(t *testing.T) {
 	if len(last.Vms) != 1 || last.Vms[0].VmId != "soul-wait-0" {
 		t.Errorf("anti-orphan: final event must carry vm_id soul-wait-0, got %+v", last.Vms)
 	}
-	if !contains(last.Message, "max attempts exhausted") {
-		t.Errorf("message=%q, want max-attempts-exhausted (ErrWaitDeadline)", last.Message)
+	if !contains(last.Message, "budget exhausted") || !contains(last.Message, "soul-wait-0") {
+		t.Errorf("message=%q, want wait-budget-exhausted naming the pending VM (WaitDeadlineError)", last.Message)
 	}
 }
 

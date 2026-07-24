@@ -33,6 +33,19 @@ func DefaultBackoff() BackoffConfig {
 	}
 }
 
+// Budget is the wall-clock time the config spends waiting once every attempt
+// is used up. Both [Retry] and [WaitUntilReady] sleep between attempts, i.e.
+// MaxAttempts-1 times; MaxAttempts=0 (no limit) has no budget to report.
+// Drivers use it to size a wait phase against the real boot time of a VM (see
+// [WaitBackoffFor]).
+func (b BackoffConfig) Budget() time.Duration {
+	var total time.Duration
+	for i := 0; i < b.MaxAttempts-1; i++ {
+		total += b.next(i)
+	}
+	return total
+}
+
 // next computes the delay for attempt (0-based: attempt=0 → Initial).
 func (b BackoffConfig) next(attempt int) time.Duration {
 	d := float64(b.Initial)

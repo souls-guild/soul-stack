@@ -77,6 +77,11 @@ const runTagKey = "soulstack-run"
 // (see pveapi.go).
 var defaultBackoff = clouddriver.DefaultBackoff
 
+// defaultWaitBackoff is the factory for the wait-until-ready phase, sized for
+// VM boot rather than for an API round-trip — see [clouddriver.DefaultWaitBackoff]
+// (budget overridable via SOUL_CLOUD_WAIT_BUDGET).
+var defaultWaitBackoff = clouddriver.DefaultWaitBackoff
+
 // ProxmoxDriver implements CloudDriver for Proxmox VE.
 type ProxmoxDriver struct {
 	clouddriver.BaseDriver
@@ -214,7 +219,7 @@ func (d *ProxmoxDriver) Create(req *pluginv1.CreateRequest, stream grpc.ServerSt
 			_ = stream.Send(&pluginv1.CreateEvent{
 				Message: fmt.Sprintf("idempotent: %d VM already present for run %q", len(existing), prof.runTag),
 			})
-			return d.finalizeCreate(ctx, cli, stream, backoff, clusterVmIDs(existing))
+			return d.finalizeCreate(ctx, cli, stream, defaultWaitBackoff(), clusterVmIDs(existing))
 		}
 		count -= int32(len(existing))
 	}
@@ -247,7 +252,7 @@ func (d *ProxmoxDriver) Create(req *pluginv1.CreateRequest, stream grpc.ServerSt
 	for _, n := range newVMs {
 		all = append(all, formatVmID(n.Node, n.VMID))
 	}
-	return d.finalizeCreate(ctx, cli, stream, backoff, all)
+	return d.finalizeCreate(ctx, cli, stream, defaultWaitBackoff(), all)
 }
 
 // createdVM is a pair (node, vmid) for a freshly created VM. The driver collects
@@ -397,7 +402,7 @@ func buildConfigFields(prof vmProfile, userdata string) map[string]string {
 func (d *ProxmoxDriver) finalizeCreate(
 	ctx context.Context, cli pveAPI,
 	stream grpc.ServerStreamingServer[pluginv1.CreateEvent],
-	backoff clouddriver.BackoffConfig, vmIDs []string,
+	waitCfg clouddriver.BackoffConfig, vmIDs []string,
 ) error {
 	probe := func(pctx context.Context, vmID string) clouddriver.ProbeResult {
 		node, id, err := splitVmID(vmID)
@@ -416,11 +421,11 @@ func (d *ProxmoxDriver) finalizeCreate(
 		// - it is still in pipeline; detect this by the `lock` field.
 		if st.Lock != "" {
 			// Under locked (clone/migrate/backup), keep waiting.
-			return clouddriver.ProbeResult{}
+			return clouddriver.ProbeResult{State: st.Status + "/" + st.Lock}
 		}
 		if st.Status != "running" {
 			// VM has not started after start-RPC yet - keep polling; no terminal.
-			return clouddriver.ProbeResult{}
+			return clouddriver.ProbeResult{State: st.Status}
 		}
 		// Running. Check guest-agent -> IP.
 		ip, ipErr := cli.GetGuestAgentInterfaces(pctx, node, id)
@@ -431,21 +436,22 @@ func (d *ProxmoxDriver) finalizeCreate(
 			// returns 500/502 depending on state.
 			class := clouddriver.Classify(classifyProxmox, ipErr)
 			if class.Transient() {
-				return clouddriver.ProbeResult{}
+				return clouddriver.ProbeResult{State: st.Status}
 			}
 			return clouddriver.ProbeResult{
-				Err: fmt.Errorf("guest-agent not responding (template likely missing qemu-guest-agent): %w", ipErr),
+				State: st.Status,
+				Err:   fmt.Errorf("guest-agent not responding (template likely missing qemu-guest-agent): %w", ipErr),
 			}
 		}
 		if ip == "" {
 			// Guest-agent responded, but IP is not assigned yet (DHCP handshake in
 			// flight).
-			return clouddriver.ProbeResult{}
+			return clouddriver.ProbeResult{State: st.Status + "/no-ip"}
 		}
-		return clouddriver.ProbeResult{Ready: true}
+		return clouddriver.ProbeResult{Ready: true, State: st.Status}
 	}
 
-	waitResults, waitErr := clouddriver.WaitUntilReady(ctx, backoff, vmIDs, probe,
+	waitResults, waitErr := clouddriver.WaitUntilReady(ctx, waitCfg, vmIDs, probe,
 		func(msg string) { _ = stream.Send(&pluginv1.CreateEvent{Message: msg}) })
 
 	vms := make([]*pluginv1.VmInfo, 0, len(vmIDs))

@@ -17,13 +17,14 @@ import (
 	"github.com/souls-guild/soul-stack/sdk/clouddriver"
 )
 
-// withFastBackoff replaces defaultBackoff with "zero" delays + the given
+// withFastBackoff replaces BOTH backoffs — API-retry defaultBackoff and
+// wait-until-ready defaultWaitBackoff — with "zero" delays + the given
 // MaxAttempts. Used in wait-deadline / transient-probe tests where the default
-// 1s->2s->4s would make the test slow.
+// 1s->2s->4s (and the multi-minute boot budget) would make the test slow.
 func withFastBackoff(t *testing.T, maxAttempts int) {
 	t.Helper()
-	orig := defaultBackoff
-	defaultBackoff = func() clouddriver.BackoffConfig {
+	origRetry, origWait := defaultBackoff, defaultWaitBackoff
+	fast := func() clouddriver.BackoffConfig {
 		return clouddriver.BackoffConfig{
 			Initial:     1 * time.Millisecond,
 			Max:         1 * time.Millisecond,
@@ -31,7 +32,8 @@ func withFastBackoff(t *testing.T, maxAttempts int) {
 			MaxAttempts: maxAttempts,
 		}
 	}
-	t.Cleanup(func() { defaultBackoff = orig })
+	defaultBackoff, defaultWaitBackoff = fast, fast
+	t.Cleanup(func() { defaultBackoff, defaultWaitBackoff = origRetry, origWait })
 }
 
 // fakeOS is a mock osAPI for L0 unit tests (without network). Behavior is
@@ -556,8 +558,8 @@ func TestCreate_CtxCancel_AntiOrphan(t *testing.T) {
 	}
 }
 
-// Wait-deadline (NOT ctx-cancel): MaxAttempts exhausted - failed event with vm_id
-// + "max attempts exhausted" text.
+// Wait-deadline (NOT ctx-cancel): the wait budget is exhausted - failed event with
+// vm_id + "budget exhausted" diagnostics.
 func TestCreate_WaitDeadline_AntiOrphan(t *testing.T) {
 	withFastBackoff(t, 2)
 	f := &fakeOS{
@@ -582,8 +584,8 @@ func TestCreate_WaitDeadline_AntiOrphan(t *testing.T) {
 	if !last.Failed {
 		t.Fatal("expected failed=true on wait-deadline exhaustion")
 	}
-	if !strings.Contains(last.Message, "max attempts exhausted") {
-		t.Errorf("message=%q, want max-attempts-exhausted (ErrWaitDeadline)", last.Message)
+	if !strings.Contains(last.Message, "budget exhausted") {
+		t.Errorf("message=%q, want wait-budget-exhausted (WaitDeadlineError)", last.Message)
 	}
 }
 

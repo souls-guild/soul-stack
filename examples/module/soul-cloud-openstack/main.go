@@ -65,6 +65,11 @@ const (
 // (see osapi.go).
 var defaultBackoff = clouddriver.DefaultBackoff
 
+// defaultWaitBackoff is the factory for the wait-until-ready phase, sized for
+// VM boot rather than for an API round-trip — see [clouddriver.DefaultWaitBackoff]
+// (budget overridable via SOUL_CLOUD_WAIT_BUDGET).
+var defaultWaitBackoff = clouddriver.DefaultWaitBackoff
+
 // OpenstackDriver implements CloudDriver for OpenStack.
 type OpenstackDriver struct {
 	clouddriver.BaseDriver
@@ -193,7 +198,7 @@ func (o *OpenstackDriver) Create(req *pluginv1.CreateRequest, stream grpc.Server
 		_ = stream.Send(&pluginv1.CreateEvent{
 			Message: fmt.Sprintf("idempotent: %d VM already present for run %q", len(existing), prof.runLabel),
 		})
-		return o.finalizeCreate(ctx, cli, stream, backoff, serverIDs(existing))
+		return o.finalizeCreate(ctx, cli, stream, defaultWaitBackoff(), serverIDs(existing))
 	}
 
 	need := count - int32(len(existing))
@@ -216,7 +221,7 @@ func (o *OpenstackDriver) Create(req *pluginv1.CreateRequest, stream grpc.Server
 	}
 
 	allIDs := append(serverIDs(existing), serverIDs(newServers)...)
-	return o.finalizeCreate(ctx, cli, stream, backoff, allIDs)
+	return o.finalizeCreate(ctx, cli, stream, defaultWaitBackoff(), allIDs)
 }
 
 // createServers calls servers.Create once for each name (OpenStack creates one
@@ -310,7 +315,7 @@ func gapFillNames(existing []servers.Server, nameBase, runLabel string, need int
 // finalizeCreate waits for VM readiness (ACTIVE + IP) and sends the final event.
 // Anti-orphan: on ctx-cancel/timeout, unfinished VMs go into the final event with
 // failed=true but populated vm_id - Keeper can Destroy them.
-func (o *OpenstackDriver) finalizeCreate(ctx context.Context, cli osAPI, stream grpc.ServerStreamingServer[pluginv1.CreateEvent], backoff clouddriver.BackoffConfig, vmIDs []string) error {
+func (o *OpenstackDriver) finalizeCreate(ctx context.Context, cli osAPI, stream grpc.ServerStreamingServer[pluginv1.CreateEvent], waitCfg clouddriver.BackoffConfig, vmIDs []string) error {
 	probe := func(pctx context.Context, vmID string) clouddriver.ProbeResult {
 		srv, perr := cli.GetServer(pctx, vmID)
 		if perr != nil {
@@ -319,23 +324,25 @@ func (o *OpenstackDriver) finalizeCreate(ctx context.Context, cli osAPI, stream 
 			}
 			return clouddriver.ProbeResult{Err: perr}
 		}
+		res := clouddriver.ProbeResult{State: srv.Status}
 		switch srv.Status {
 		case statusActive:
 			if primaryAddress(srv) != "" {
-				return clouddriver.ProbeResult{Ready: true}
+				res.Ready = true
 			}
 			// ACTIVE without an address - keep waiting (Neutron may not have bound
 			// the port yet). Not Ready and not Err: poller will retry.
-			return clouddriver.ProbeResult{}
+			return res
 		case statusBuild, statusRebuild:
-			return clouddriver.ProbeResult{}
+			return res
 		default:
 			// ERROR / SHUTOFF / DELETED / PAUSED / SUSPENDED / … — terminal.
-			return clouddriver.ProbeResult{Err: fmt.Errorf("server %s entered terminal status %q", vmID, srv.Status)}
+			res.Err = fmt.Errorf("server %s entered terminal status %q", vmID, srv.Status)
+			return res
 		}
 	}
 
-	waitResults, waitErr := clouddriver.WaitUntilReady(ctx, backoff, vmIDs, probe,
+	waitResults, waitErr := clouddriver.WaitUntilReady(ctx, waitCfg, vmIDs, probe,
 		func(msg string) { _ = stream.Send(&pluginv1.CreateEvent{Message: msg}) })
 
 	vms := make([]*pluginv1.VmInfo, 0, len(vmIDs))

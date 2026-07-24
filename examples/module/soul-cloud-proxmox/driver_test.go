@@ -13,13 +13,14 @@ import (
 	"google.golang.org/protobuf/types/known/structpb"
 )
 
-// withFastBackoff replaces defaultBackoff with "zero" delays + the given
+// withFastBackoff replaces BOTH backoffs — API-retry defaultBackoff and
+// wait-until-ready defaultWaitBackoff — with "zero" delays + the given
 // MaxAttempts. Used in wait-deadline / transient-probe tests where the default
-// 1s->2s->4s would make the test slow.
+// 1s->2s->4s (and the multi-minute boot budget) would make the test slow.
 func withFastBackoff(t *testing.T, maxAttempts int) {
 	t.Helper()
-	orig := defaultBackoff
-	defaultBackoff = func() clouddriver.BackoffConfig {
+	origRetry, origWait := defaultBackoff, defaultWaitBackoff
+	fast := func() clouddriver.BackoffConfig {
 		return clouddriver.BackoffConfig{
 			Initial:     1 * time.Millisecond,
 			Max:         1 * time.Millisecond,
@@ -27,7 +28,8 @@ func withFastBackoff(t *testing.T, maxAttempts int) {
 			MaxAttempts: maxAttempts,
 		}
 	}
-	t.Cleanup(func() { defaultBackoff = orig })
+	defaultBackoff, defaultWaitBackoff = fast, fast
+	t.Cleanup(func() { defaultBackoff, defaultWaitBackoff = origRetry, origWait })
 }
 
 // fakePVE is a mock pveAPI for L0 unit tests (without network). Behavior is
@@ -516,8 +518,8 @@ func TestCreate_WaitDeadline_AntiOrphan(t *testing.T) {
 	if len(last.Vms) != 1 || last.Vms[0].VmId != "pve1/10000" {
 		t.Errorf("anti-orphan: final event must carry vm_id pve1/10000, got %+v", last.Vms)
 	}
-	if !strings.Contains(last.Message, "max attempts exhausted") {
-		t.Errorf("message=%q, want max-attempts-exhausted (ErrWaitDeadline)", last.Message)
+	if !strings.Contains(last.Message, "budget exhausted") || !strings.Contains(last.Message, "pve1/10000") {
+		t.Errorf("message=%q, want wait-budget-exhausted naming the pending VM (WaitDeadlineError)", last.Message)
 	}
 }
 

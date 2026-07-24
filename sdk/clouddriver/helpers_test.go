@@ -3,6 +3,8 @@ package clouddriver
 import (
 	"context"
 	"errors"
+	"strconv"
+	"strings"
 	"testing"
 	"time"
 )
@@ -216,5 +218,212 @@ func TestWaitUntilReady_MaxAttemptsDeadline(t *testing.T) {
 	}
 	if len(res) != 1 || res[0].Ready {
 		t.Errorf("res=%+v, want one not-ready entry", res)
+	}
+}
+
+// TestBackoffBudget_MatchesSleepCount pins the contract Budget() states: both
+// Retry and WaitUntilReady sleep MaxAttempts-1 times, so the budget is the sum
+// of exactly that many delays.
+func TestBackoffBudget_MatchesSleepCount(t *testing.T) {
+	cfg := BackoffConfig{Initial: time.Second, Max: 30 * time.Second, Factor: 2, MaxAttempts: 4}
+	if got, want := cfg.Budget(), 1*time.Second+2*time.Second+4*time.Second; got != want {
+		t.Errorf("Budget()=%v, want %v", got, want)
+	}
+	for _, n := range []int{0, 1} {
+		c := cfg
+		c.MaxAttempts = n
+		if got := c.Budget(); got != 0 {
+			t.Errorf("MaxAttempts=%d: Budget()=%v, want 0", n, got)
+		}
+	}
+}
+
+// TestWaitBackoffFor_CoversBudget: the wait backoff must cover the requested
+// wall-clock budget and be minimal — one attempt less must fall short.
+func TestWaitBackoffFor_CoversBudget(t *testing.T) {
+	for _, budget := range []time.Duration{30 * time.Second, 3 * time.Minute, 10 * time.Minute, time.Hour} {
+		cfg := WaitBackoffFor(budget)
+		if got := cfg.Budget(); got < budget {
+			t.Errorf("budget %v: WaitBackoffFor covers only %v", budget, got)
+		}
+		shorter := cfg
+		shorter.MaxAttempts--
+		if got := shorter.Budget(); got >= budget {
+			t.Errorf("budget %v: MaxAttempts=%d is not minimal (%d attempts already cover %v)",
+				budget, cfg.MaxAttempts, shorter.MaxAttempts, got)
+		}
+	}
+}
+
+func TestWaitBackoffFor_NonPositiveBudget(t *testing.T) {
+	for _, budget := range []time.Duration{0, -time.Minute} {
+		if got := WaitBackoffFor(budget).MaxAttempts; got != 1 {
+			t.Errorf("budget %v: MaxAttempts=%d, want 1 (single probe, no waiting)", budget, got)
+		}
+	}
+}
+
+// TestDefaultWaitBackoff_OutlivesRetryBudget is the NIM-173 guard: a fresh VM
+// boots minutes (more when a cluster topology brings up 3+ at once), so the
+// wait phase must not be capped by the API-retry budget it used to share.
+func TestDefaultWaitBackoff_OutlivesRetryBudget(t *testing.T) {
+	wait, retry := DefaultWaitBackoff(), DefaultBackoff()
+	if wait.MaxAttempts <= retry.MaxAttempts {
+		t.Errorf("wait MaxAttempts=%d, want more than retry's %d", wait.MaxAttempts, retry.MaxAttempts)
+	}
+	if got := wait.Budget(); got < DefaultWaitBudget {
+		t.Errorf("wait budget=%v, want at least %v", got, DefaultWaitBudget)
+	}
+	if retry.Budget() >= wait.Budget() {
+		t.Errorf("retry budget %v must stay well under the wait budget %v", retry.Budget(), wait.Budget())
+	}
+}
+
+func TestDefaultWaitBackoff_EnvOverride(t *testing.T) {
+	cases := []struct {
+		env  string
+		want time.Duration // minimum budget the resulting backoff must cover
+	}{
+		{"20m", 20 * time.Minute},
+		{"45s", 45 * time.Second},
+		{"not-a-duration", DefaultWaitBudget}, // garbage → default, never zero
+		{"0s", DefaultWaitBudget},
+		{"-5m", DefaultWaitBudget},
+		{"", DefaultWaitBudget},
+	}
+	for _, tc := range cases {
+		t.Setenv(WaitBudgetEnv, tc.env)
+		if got := DefaultWaitBackoff().Budget(); got < tc.want {
+			t.Errorf("%s=%q: budget=%v, want at least %v", WaitBudgetEnv, tc.env, got, tc.want)
+		}
+	}
+	// A typo like "100h" must not park a provisioning run for days.
+	t.Setenv(WaitBudgetEnv, "100h")
+	if got := DefaultWaitBackoff().Budget(); got > MaxWaitBudget+30*time.Second {
+		t.Errorf("budget=%v, want clamped to %v", got, MaxWaitBudget)
+	}
+}
+
+// TestWaitUntilReady_ReadyOnFinalAttempt covers the success side of the
+// deadline boundary: a VM that becomes ready on the very last allowed probe is
+// a success, not a false "did not make it".
+func TestWaitUntilReady_ReadyOnFinalAttempt(t *testing.T) {
+	cfg := BackoffConfig{Initial: time.Millisecond, Max: time.Millisecond, Factor: 2, MaxAttempts: 4}
+	polls := 0
+	probe := func(_ context.Context, _ string) ProbeResult {
+		polls++
+		return ProbeResult{Ready: polls >= cfg.MaxAttempts, State: "creating"}
+	}
+	res, err := WaitUntilReady(context.Background(), cfg, []string{"i-1"}, probe, nil)
+	if err != nil {
+		t.Fatalf("WaitUntilReady: %v", err)
+	}
+	if polls != cfg.MaxAttempts {
+		t.Errorf("polls=%d, want %d (the last allowed attempt must still be probed)", polls, cfg.MaxAttempts)
+	}
+	if !res[0].Ready {
+		t.Errorf("res=%+v, want ready", res[0])
+	}
+}
+
+// TestWaitUntilReady_DeadlineDiagnostics_Stuck: a VM whose observed state never
+// moves is diagnosed as stuck — a bigger budget would not have helped.
+func TestWaitUntilReady_DeadlineDiagnostics_Stuck(t *testing.T) {
+	cfg := BackoffConfig{Initial: time.Millisecond, Max: time.Millisecond, Factor: 2, MaxAttempts: 3}
+	probe := func(_ context.Context, vmID string) ProbeResult {
+		if vmID == "i-ok" {
+			return ProbeResult{Ready: true, State: "running"}
+		}
+		return ProbeResult{State: "creating"}
+	}
+	_, err := WaitUntilReady(context.Background(), cfg, []string{"i-ok", "i-stuck"}, probe, nil)
+	if !errors.Is(err, ErrWaitDeadline) {
+		t.Fatalf("err=%v, want ErrWaitDeadline", err)
+	}
+	var de *WaitDeadlineError
+	if !errors.As(err, &de) {
+		t.Fatalf("err=%T, want *WaitDeadlineError", err)
+	}
+	if de.Ready != 1 || de.Total != 2 || de.Attempts != cfg.MaxAttempts {
+		t.Errorf("ready=%d total=%d attempts=%d, want 1/2 after %d attempts", de.Ready, de.Total, de.Attempts, cfg.MaxAttempts)
+	}
+	if de.Elapsed <= 0 {
+		t.Error("Elapsed must report how long the wait actually ran")
+	}
+	if len(de.Pending) != 1 || de.Pending[0].VMID != "i-stuck" {
+		t.Fatalf("pending=%+v, want only i-stuck", de.Pending)
+	}
+	if de.Pending[0].LastState != "creating" || de.Pending[0].Progressed {
+		t.Errorf("pending=%+v, want last state creating and no progress", de.Pending[0])
+	}
+	if msg := err.Error(); !strings.Contains(msg, "i-stuck") || !strings.Contains(msg, "stuck") {
+		t.Errorf("message=%q, want it to name the stuck VM and say it is stuck", msg)
+	}
+	if msg := err.Error(); strings.Contains(msg, WaitBudgetEnv) {
+		t.Errorf("message=%q, must not suggest raising the budget for a stuck VM", msg)
+	}
+}
+
+// TestWaitUntilReady_DeadlineDiagnostics_Progressing: a VM still moving between
+// states when the budget runs out is diagnosed as too-slow-for-the-budget, and
+// the message points at the knob that fixes it.
+func TestWaitUntilReady_DeadlineDiagnostics_Progressing(t *testing.T) {
+	cfg := BackoffConfig{Initial: time.Millisecond, Max: time.Millisecond, Factor: 2, MaxAttempts: 3}
+	states := []string{"queued", "creating", "booting"}
+	polls := 0
+	probe := func(_ context.Context, _ string) ProbeResult {
+		s := states[min(polls, len(states)-1)]
+		polls++
+		return ProbeResult{State: s}
+	}
+	_, err := WaitUntilReady(context.Background(), cfg, []string{"i-slow"}, probe, nil)
+	var de *WaitDeadlineError
+	if !errors.As(err, &de) {
+		t.Fatalf("err=%v (%T), want *WaitDeadlineError", err, err)
+	}
+	if len(de.Pending) != 1 || !de.Pending[0].Progressed || de.Pending[0].LastState != "booting" {
+		t.Fatalf("pending=%+v, want i-slow progressed with last state booting", de.Pending)
+	}
+	if msg := err.Error(); !strings.Contains(msg, WaitBudgetEnv) {
+		t.Errorf("message=%q, want a hint at %s for a VM that was still progressing", msg, WaitBudgetEnv)
+	}
+}
+
+// TestWaitDeadlineError_CapsPendingList: a mass provision must not print a wall
+// of ids into the failed event — the message names a few and counts the rest,
+// while Pending keeps every VM for the caller's anti-orphan handling.
+func TestWaitDeadlineError_CapsPendingList(t *testing.T) {
+	cfg := BackoffConfig{Initial: time.Millisecond, Max: time.Millisecond, Factor: 2, MaxAttempts: 2}
+	ids := make([]string, 0, 12)
+	for i := range 12 {
+		ids = append(ids, "i-"+strconv.Itoa(i))
+	}
+	probe := func(_ context.Context, _ string) ProbeResult { return ProbeResult{State: "creating"} }
+	_, err := WaitUntilReady(context.Background(), cfg, ids, probe, nil)
+	var de *WaitDeadlineError
+	if !errors.As(err, &de) {
+		t.Fatalf("err=%v, want *WaitDeadlineError", err)
+	}
+	if len(de.Pending) != len(ids) {
+		t.Errorf("Pending len=%d, want all %d VMs", len(de.Pending), len(ids))
+	}
+	if msg := err.Error(); !strings.Contains(msg, "+7 more") {
+		t.Errorf("message=%q, want the tail summarised as \"+7 more\"", msg)
+	}
+}
+
+// TestWaitUntilReady_ProgressReportsBudget: the per-round progress line carries
+// attempt/budget context, so a slow boot is visible in the Create event stream
+// before it turns into a failure.
+func TestWaitUntilReady_ProgressReportsBudget(t *testing.T) {
+	cfg := BackoffConfig{Initial: time.Millisecond, Max: time.Millisecond, Factor: 2, MaxAttempts: 3}
+	var msgs []string
+	probe := func(_ context.Context, _ string) ProbeResult { return ProbeResult{State: "creating"} }
+	_, _ = WaitUntilReady(context.Background(), cfg, []string{"i-1"}, probe, func(m string) { msgs = append(msgs, m) })
+	if len(msgs) == 0 {
+		t.Fatal("no progress messages")
+	}
+	if !strings.Contains(msgs[0], "0/1 ready") || !strings.Contains(msgs[0], "/3") {
+		t.Errorf("progress=%q, want ready counter and attempt/MaxAttempts", msgs[0])
 	}
 }

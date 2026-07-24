@@ -59,6 +59,11 @@ const userDataMetadataKey = "user-data"
 // `newGcpInstancesClient` (see gcpapi.go).
 var defaultBackoff = clouddriver.DefaultBackoff
 
+// defaultWaitBackoff is the factory for the wait-until-ready phase, sized for
+// VM boot rather than for an API round-trip — see [clouddriver.DefaultWaitBackoff]
+// (budget overridable via SOUL_CLOUD_WAIT_BUDGET).
+var defaultWaitBackoff = clouddriver.DefaultWaitBackoff
+
 // GcpDriver is the CloudDriver implementation for Google Compute Engine.
 type GcpDriver struct {
 	clouddriver.BaseDriver
@@ -187,7 +192,7 @@ func (g *GcpDriver) Create(req *pluginv1.CreateRequest, stream grpc.ServerStream
 			_ = stream.Send(&pluginv1.CreateEvent{
 				Message: fmt.Sprintf("idempotent: %d VM already present for run %q", len(existing), prof.runTag),
 			})
-			return g.finalizeCreate(ctx, cli, stream, backoff, prof, instanceNames(existing))
+			return g.finalizeCreate(ctx, cli, stream, defaultWaitBackoff(), prof, instanceNames(existing))
 		}
 		count -= int32(len(existing))
 	}
@@ -210,14 +215,14 @@ func (g *GcpDriver) Create(req *pluginv1.CreateRequest, stream grpc.ServerStream
 	}
 
 	allNames := append(instanceNames(existing), newNames...)
-	return g.finalizeCreate(ctx, cli, stream, backoff, prof, allNames)
+	return g.finalizeCreate(ctx, cli, stream, defaultWaitBackoff(), prof, allNames)
 }
 
 // finalizeCreate waits for VM readiness (RUNNING + internal IP) and sends the final
 // event. Anti-orphan: on ctx-cancel/timeout, unfinished VMs appear in the
 // final event with failed=true and vm_id filled, so Keeper can
 // Destroy.
-func (g *GcpDriver) finalizeCreate(ctx context.Context, cli gcpInstancesAPI, stream grpc.ServerStreamingServer[pluginv1.CreateEvent], backoff clouddriver.BackoffConfig, prof vmProfile, vmNames []string) error {
+func (g *GcpDriver) finalizeCreate(ctx context.Context, cli gcpInstancesAPI, stream grpc.ServerStreamingServer[pluginv1.CreateEvent], waitCfg clouddriver.BackoffConfig, prof vmProfile, vmNames []string) error {
 	probe := func(pctx context.Context, name string) clouddriver.ProbeResult {
 		inst, perr := cli.Get(pctx, &computepb.GetInstanceRequest{
 			Project:  prof.project,
@@ -232,21 +237,23 @@ func (g *GcpDriver) finalizeCreate(ctx context.Context, cli gcpInstancesAPI, str
 			return clouddriver.ProbeResult{Err: perr}
 		}
 		status := inst.GetStatus()
+		res := clouddriver.ProbeResult{State: status}
 		switch status {
 		case "RUNNING":
 			if primaryIP(inst) != "" {
-				return clouddriver.ProbeResult{Ready: true}
+				res.Ready = true
 			}
-			return clouddriver.ProbeResult{}
+			return res
 		case "TERMINATED", "STOPPING", "STOPPED", "SUSPENDED", "SUSPENDING":
-			return clouddriver.ProbeResult{Err: fmt.Errorf("instance %s entered terminal state %q", name, status)}
+			res.Err = fmt.Errorf("instance %s entered terminal state %q", name, status)
+			return res
 		default:
 			// PROVISIONING / STAGING / REPAIRING — keep waiting.
-			return clouddriver.ProbeResult{}
+			return res
 		}
 	}
 
-	waitResults, waitErr := clouddriver.WaitUntilReady(ctx, backoff, vmNames, probe,
+	waitResults, waitErr := clouddriver.WaitUntilReady(ctx, waitCfg, vmNames, probe,
 		func(msg string) { _ = stream.Send(&pluginv1.CreateEvent{Message: msg}) })
 
 	vms := make([]*pluginv1.VmInfo, 0, len(vmNames))
