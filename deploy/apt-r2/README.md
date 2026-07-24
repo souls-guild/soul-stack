@@ -5,27 +5,32 @@ Soul Stack publishes its `.deb` packages — `soul-stack-keeper`, `soul-stack-so
 `soul-stack-soul-legion` — through a plain, flat apt repository hosted on a
 **Cloudflare R2** bucket fronted by the public domain `https://apt.soul-stack.com`.
 The GitHub release workflow (`.github/workflows/release.yml`) produces the `.deb`
-assets; mirroring them into the apt pool is a **separate, out-of-band step** — it needs
-R2 credentials and the repository signing key, which we deliberately keep off GitHub
-Actions.
+assets; a **separate** workflow ([`apt-publish.yml`](../../.github/workflows/apt-publish.yml))
+mirrors them into the apt pool after each release.
 
-`publish-apt.sh` does the mirroring; this file is the one-time setup and the per-release
-runbook.
+`publish-apt.sh` does the mirroring — the CI workflow just runs it, and an operator can
+run the same script by hand as a fallback. This file is the one-time setup and the
+per-release reference.
 
-## Why out of band
+## Credentials & security
 
-- **Credentials scope.** GitHub OIDC signs release artifacts (cosign keyless), but the
-  apt pool lives in R2 — an S3-compatible bucket with its own access keys. Putting
-  long-lived R2 keys into Actions widens the blast radius; instead an operator runs
-  `publish-apt.sh` from a trusted machine.
-- **Signing key custody.** The apt `Release` file is signed with a dedicated GPG key.
-  That private key never touches the public repo or hosted CI.
+Mirroring needs two credentials that release CI (cosign keyless / GitHub OIDC) does not
+provide:
 
-Publishing is automated on a **self-hosted runner** — see
-[Automation](#automation-self-hosted-runner) below. That runner is a trusted machine
-already holding the R2 remote and the signing key, so nothing sensitive lives in
-GitHub-hosted CI. Running `publish-apt.sh` by hand from any such machine is the
-equivalent bootstrap / fallback (the first publish, or before the runner is registered).
+- an **R2 access key** to write the bucket, and
+- the **GPG key** that signs the apt `Release`.
+
+Both live as **repo secrets** and are injected into the publish workflow. This is a
+deliberate, bounded trade-off for a public repo:
+
+- The repo is **public**, so GitHub-hosted runners are free and unmetered — no
+  self-hosted machine to own, and no metered minutes.
+- On a public repo, **secrets are not exposed to workflows from forked PRs**, and both
+  triggers (`release: published`, `workflow_dispatch`) require write access — so
+  untrusted contributors can never read them.
+- The R2 token is **scoped to Object Read & Write on the single apt bucket** (not the
+  whole account), and the signing key is a **dedicated apt key**, not a personal one.
+  Blast radius is one bucket + one rotatable signing key.
 
 ## One-time setup
 
@@ -35,55 +40,68 @@ equivalent bootstrap / fallback (the first publish, or before the runner is regi
 2. Attach a public custom domain (R2 → Settings → Public access → custom domain), e.g.
    `apt.soul-stack.com`. Objects then serve at `https://apt.soul-stack.com/<key>`.
 3. Create an R2 API token (Account → R2 → Manage API Tokens) with **Object Read &
-   Write** scoped to that bucket. Note the access key id / secret and the account-scoped
-   S3 endpoint `https://<accountid>.r2.cloudflarestorage.com`.
+   Write** scoped to that bucket. Note the access key id / secret and the account id (the
+   S3 endpoint is `https://<accountid>.r2.cloudflarestorage.com`).
 
-### 2. rclone remote
+### 2. Signing GPG key
 
-`publish-apt.sh` syncs with [rclone](https://rclone.org). Configure a remote against the
-R2 S3 endpoint:
-
-```ini
-# ~/.config/rclone/rclone.conf
-[r2]
-type = s3
-provider = Cloudflare
-access_key_id = <R2_ACCESS_KEY_ID>
-secret_access_key = <R2_SECRET_ACCESS_KEY>
-endpoint = https://<accountid>.r2.cloudflarestorage.com
-```
-
-Point `RCLONE_REMOTE` at the bucket path, e.g. `RCLONE_REMOTE=r2:soul-stack-apt`.
-
-The script passes `--s3-no-check-bucket` because a bucket-scoped R2 token cannot
-`HeadBucket`/`CreateBucket` at the account level, so the default bucket probe would
-`403`. (rclone against R2 may also log a one-off `501 NotImplemented` on the first
-`PutObject` of a run and then succeed on retry — harmless.)
-
-### 3. Signing GPG key
-
-Generate a dedicated repo-signing key (once), back up the private key securely, and let
-the script publish the public half so clients can trust the repo:
+Generate a dedicated repo-signing key (once) and back up the private key securely:
 
 ```sh
 gpg --quick-generate-key "Soul Stack apt signing <noreply@soul-stack.com>" rsa4096 sign never
 ```
 
 Use its long key id (or uid) as `APT_GPG_KEY_ID`. `publish-apt.sh` exports the public
-key to `soul-stack.gpg.key` in the bucket root on every run.
+half to `soul-stack.gpg.key` in the bucket root on every run, so clients can trust it.
 
-## Per-release runbook
+### 3. Wire up the workflow secrets/variables
 
-After a `v*` release finishes (deb assets attached to the GitHub Release):
+The [`apt-publish.yml`](../../.github/workflows/apt-publish.yml) workflow reads:
+
+| Kind | Name | Value |
+|------|------|-------|
+| secret | `R2_ACCESS_KEY_ID` | R2 token access key id |
+| secret | `R2_SECRET_ACCESS_KEY` | R2 token secret |
+| secret | `APT_GPG_PRIVATE_KEY` | ASCII-armored **private** signing key (`gpg --armor --export-secret-keys <id>`) |
+| variable | `R2_ACCOUNT_ID` | Cloudflare account id (for the S3 endpoint) |
+| variable | `APT_GPG_KEY_ID` | signing key id, e.g. `noreply@soul-stack.com` |
+| variable | `RCLONE_REMOTE` | `r2_soul_stack_apt:soul-stack-apt` |
 
 ```sh
-# 1. Collect the release .deb assets into ./dist/pkg (default DEB_DIR).
-gh release download vX.Y.Z -R souls-guild/soul-stack -p '*.deb' -D dist/pkg
-#    (or reuse the .deb goreleaser leaves under dist/ and set DEB_DIR accordingly)
+gh secret   set R2_ACCESS_KEY_ID     -R souls-guild/soul-stack
+gh secret   set R2_SECRET_ACCESS_KEY -R souls-guild/soul-stack
+gh secret   set APT_GPG_PRIVATE_KEY  -R souls-guild/soul-stack < apt-signing-private.asc
+gh variable set R2_ACCOUNT_ID  -R souls-guild/soul-stack -b <accountid>
+gh variable set APT_GPG_KEY_ID -R souls-guild/soul-stack -b noreply@soul-stack.com
+gh variable set RCLONE_REMOTE  -R souls-guild/soul-stack -b r2_soul_stack_apt:soul-stack-apt
+```
 
-# 2. Mirror + sign + sync.
-export APT_GPG_KEY_ID="<key-id>"
-export RCLONE_REMOTE="r2:soul-stack-apt"
+The workflow creates its rclone remote named `r2_soul_stack_apt`, so `RCLONE_REMOTE`
+is identical in CI and on any operator machine.
+
+## Automation
+
+[`apt-publish.yml`](../../.github/workflows/apt-publish.yml) runs on `ubuntu-latest` when
+a GitHub Release is **published**, and can be re-run by hand for a given tag:
+
+```sh
+gh workflow run apt-publish.yml -R souls-guild/soul-stack -f tag=v0.1.0-beta.1
+```
+
+It installs `apt-utils`/`rclone`, configures the R2 remote from the secrets above,
+imports the signing key, downloads the release's `*.deb` assets, and runs
+`publish-apt.sh`.
+
+## Manual publish (fallback)
+
+From a machine with `rclone` (remote `r2_soul_stack_apt` configured), `gpg` (signing key
+imported) and `apt-ftparchive` (apt-utils):
+
+```sh
+gh release download vX.Y.Z -R souls-guild/soul-stack -p '*.deb' -D dist/pkg
+
+export APT_GPG_KEY_ID="noreply@soul-stack.com"
+export RCLONE_REMOTE="r2_soul_stack_apt:soul-stack-apt"
 deploy/apt-r2/publish-apt.sh
 ```
 
@@ -93,26 +111,13 @@ The script builds `pool/main/` + `dists/stable/…` indexes (including per-diges
 whole tree to the bucket. It is idempotent — re-running re-indexes and re-syncs, and
 `--delete-before` prunes packages dropped from a release.
 
+It passes `--s3-no-check-bucket` because a bucket-scoped R2 token cannot
+`HeadBucket`/`CreateBucket` at the account level (the default probe would `403`). rclone
+against R2 may also log a one-off `501 NotImplemented` on the first `PutObject` of a run
+and then succeed on retry — harmless.
+
 Tunables (env): `APT_SUITE` (default `stable`), `APT_COMPONENT` (`main`), `APT_ARCHS`
 (`amd64 arm64`), `DEB_DIR` (`./dist/pkg`), `WORK_DIR` (`./dist/apt-repo`).
-
-## Automation (self-hosted runner)
-
-[`.github/workflows/apt-publish.yml`](../../.github/workflows/apt-publish.yml) runs the
-runbook above automatically when a GitHub Release is published (and on manual
-`workflow_dispatch` for a given tag). It runs on a **self-hosted** runner on purpose: the
-R2 write key and the GPG signing key stay on that trusted machine and never enter
-GitHub-hosted CI.
-
-One-time activation:
-
-1. Register a self-hosted runner (repo → Settings → Actions → Runners) labelled
-   `apt-publisher`, on a machine that has `rclone` (R2 remote configured), `gpg` (signing
-   key imported), `apt-ftparchive` (apt-utils) and `gh`.
-2. Set two repo **variables** (Settings → Secrets and variables → Actions → Variables —
-   not secrets; these are not sensitive): `APT_GPG_KEY_ID` and `RCLONE_REMOTE`.
-3. Publish a release (or dispatch the workflow against a tag). Until a matching runner is
-   online the job simply queues; it never blocks the release workflow.
 
 ## CDN caching & `by-hash`
 

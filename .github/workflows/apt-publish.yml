@@ -1,13 +1,10 @@
-# Mirror the release .deb assets into the Cloudflare R2 apt repo (NIM-174). This runs
-# on a SELF-HOSTED runner on purpose: publishing needs the R2 write key + the apt
-# signing GPG key, which we keep off GitHub-hosted CI (see release.yml / RELEASING.md).
-# The trusted runner already holds those in its rclone remote + GPG keyring, so this job
-# only downloads the release's .deb assets and runs deploy/apt-r2/publish-apt.sh.
-#
-# Activation (one-time): register a self-hosted runner labelled `apt-publisher` with
-# rclone (R2 remote), gpg (signing key), apt-ftparchive (apt-utils) and gh installed,
-# then set repo variables APT_GPG_KEY_ID and RCLONE_REMOTE. Until such a runner is
-# online the job just queues — it never blocks the release. See deploy/apt-r2/README.md.
+# Mirror the release .deb assets into the Cloudflare R2 apt repo (NIM-174). Runs on a
+# GitHub-hosted runner: the repo is public, so hosted minutes are free and unmetered,
+# and there is no self-hosted machine to keep online. The R2 write key and the apt
+# signing key live in repo secrets; on a public repo they are unavailable to fork PRs,
+# and both triggers below require write access, so untrusted forks can never read them.
+# The R2 token is scoped to write only the apt bucket, and the GPG key is a dedicated
+# apt-signing key (not a personal key) — a bounded, rotatable blast radius.
 name: Publish apt (R2)
 
 on:
@@ -23,7 +20,7 @@ on:
 permissions:
   contents: read # download the release .deb assets
 
-# One publish at a time; a newer run supersedes an in-flight one.
+# One publish at a time; a newer run waits rather than racing the bucket.
 concurrency:
   group: apt-publish
   cancel-in-progress: false
@@ -31,10 +28,31 @@ concurrency:
 jobs:
   publish:
     name: mirror .deb → R2 apt pool
-    runs-on: [self-hosted, apt-publisher]
+    runs-on: ubuntu-latest
     steps:
       - name: Checkout
         uses: actions/checkout@v7
+
+      - name: Install tooling (apt-utils, rclone, gnupg)
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq apt-utils rclone gnupg
+
+      - name: Configure rclone remote for R2
+        env:
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          R2_ACCOUNT_ID: ${{ vars.R2_ACCOUNT_ID }}
+        run: |
+          rclone config create r2_soul_stack_apt s3 \
+            provider=Cloudflare \
+            access_key_id="$R2_ACCESS_KEY_ID" \
+            secret_access_key="$R2_SECRET_ACCESS_KEY" \
+            endpoint="https://${R2_ACCOUNT_ID}.r2.cloudflarestorage.com" \
+            --non-interactive >/dev/null
+
+      - name: Import apt signing key
+        env:
+          APT_GPG_PRIVATE_KEY: ${{ secrets.APT_GPG_PRIVATE_KEY }}
+        run: printf '%s' "$APT_GPG_PRIVATE_KEY" | gpg --batch --import
 
       - name: Resolve release tag
         id: tag

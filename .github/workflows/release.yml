@@ -97,7 +97,7 @@ jobs:
           # Enables cosign keyless (Fulcio/Rekor via the OIDC token above).
           COSIGN_EXPERIMENTAL: "1"
 
-# apt repo on Cloudflare R2 is published OUT OF BAND from this workflow (it needs
-# R2 credentials, not GitHub OIDC): after the release, the .deb assets are
-# mirrored into the apt pool by deploy/apt-r2/publish-apt.sh. See
-# deploy/apt-r2/README.md for the process.
+# The apt repo on Cloudflare R2 is published by a SEPARATE workflow, not this one:
+# .github/workflows/apt-publish.yml fires on `release: published` and mirrors the .deb
+# assets into the R2 apt pool via deploy/apt-r2/publish-apt.sh (it needs R2 + GPG
+# secrets, which release CI does not carry). See deploy/apt-r2/README.md.
