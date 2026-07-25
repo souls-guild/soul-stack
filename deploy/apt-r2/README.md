@@ -1,8 +1,9 @@
 # apt repository on Cloudflare R2
 
-Soul Stack publishes its `.deb` packages — `soul-stack-keeper`, `soul-stack-soul`,
-`soul-stack-soul-lint`, `soul-stack-soulctl` and `soul-stack-soul-trial` —
-through a plain, flat apt repository hosted on a
+Soul Stack publishes its `.deb` packages — the `soul-stack-keeper` and
+`soul-stack-soul` daemons, the `soul-stack-soulctl`, `soul-stack-lint` and
+`soul-stack-trial` CLIs, plus the `soul-stack-tools` meta package that pulls the
+three CLIs in at once — through a plain, flat apt repository hosted on a
 **Cloudflare R2** bucket fronted by the public domain `https://apt.soul-stack.com`.
 The GitHub release workflow (`.github/workflows/release.yml`) produces the `.deb`
 assets; a **separate** workflow ([`apt-publish.yml`](../../.github/workflows/apt-publish.yml))
@@ -152,7 +153,12 @@ echo "deb [signed-by=/usr/share/keyrings/soul-stack.gpg] https://apt.soul-stack.
   | sudo tee /etc/apt/sources.list.d/soul-stack.list
 
 sudo apt update
-sudo apt install soul-stack-keeper   # or soul / soul-lint / soulctl / soul-trial
+
+# A workstation that authors Destiny / scenarios — all three CLIs in one step:
+sudo apt install soul-stack-tools     # soulctl + soul-lint + soul-trial
+
+# A server — install just the daemon it runs:
+sudo apt install soul-stack-keeper    # or soul-stack-soul
 ```
 
 ## Layout in the bucket

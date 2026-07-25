@@ -5,7 +5,13 @@
 #
 # Unlike keeper/soul — NOT a daemon: no systemd unit, no env file, no
 # config. Just the binary in /usr/local/bin (run manually by the operator).
-name: soul-stack-soul-lint
+name: soul-stack-lint
+# Renamed from soul-stack-soul-lint (the doubled "soul-" read as a stutter); the
+# binary is unchanged. These retire the old package on upgrade, matching the
+# soul-lint entry in .goreleaser.yaml.
+provides: [soul-stack-soul-lint]
+replaces: [soul-stack-soul-lint]
+conflicts: [soul-stack-soul-lint]
 arch: ${ARCH}
 platform: linux
 version: ${VERSION}

@@ -59,7 +59,7 @@ Three packages (`make pkg` builds deb + rpm into `dist/`):
 |---|---|---|
 | `soul-stack-keeper` | central node (1+ instance) | `keeper` + systemd-unit + env + example config |
 | `soul-stack-soul` | each managed host | `soul` + systemd-unit + env + example config |
-| `soul-stack-soul-lint` | operator/CI workstation | `soul-lint` only (CLI, no daemon/config) |
+| `soul-stack-lint` | operator/CI workstation | `soul-lint` only (CLI, no daemon/config) |
 
 ### Keeper (on the central node)
 

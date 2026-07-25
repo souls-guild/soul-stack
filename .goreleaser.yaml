@@ -203,8 +203,14 @@ nfpms:
         dependencies: [shadow-utils]
 
   - id: soul-lint
-    package_name: soul-stack-soul-lint
+    package_name: soul-stack-lint
     ids: [soul-lint]
+    # Renamed from soul-stack-soul-lint — the doubled "soul-" read as a stutter.
+    # The binary is still soul-lint; only the package name changed. The three
+    # fields below retire the old name on upgrade instead of orphaning it.
+    provides: [soul-stack-soul-lint]
+    replaces: [soul-stack-soul-lint]
+    conflicts: [soul-stack-soul-lint]
     vendor: Soul Stack
     homepage: https://github.com/souls-guild/soul-stack
     maintainer: Soul Stack <noreply@soul-stack.com>
@@ -235,14 +241,45 @@ nfpms:
     formats: [deb, rpm, apk]
 
   - id: soul-trial
-    package_name: soul-stack-soul-trial
+    package_name: soul-stack-trial
     ids: [soul-trial]
+    # Renamed from soul-stack-soul-trial, same reasoning as soul-stack-lint.
+    provides: [soul-stack-soul-trial]
+    replaces: [soul-stack-soul-trial]
+    conflicts: [soul-stack-soul-trial]
     vendor: Soul Stack
     homepage: https://github.com/souls-guild/soul-stack
     maintainer: Soul Stack <noreply@soul-stack.com>
     description: |
       Soul Stack soul-trial — offline Trial runner for Destiny / Scenario
       (ADR-023). CLI, no daemon and no config.
+    license: BUSL-1.1
+    section: devel
+    priority: optional
+    formats: [deb, rpm, apk]
+
+  # soul-stack-tools — meta package: one install for the whole authoring-side CLI
+  # set (soulctl + soul-lint + soul-trial — the same three binaries the Homebrew
+  # cask and the winget manifest carry). Ships no files of its own, it only pulls
+  # the three in. The keeper and soul daemons stay deliberately out: a server
+  # should not drag in authoring tools, and each daemon is installed on its own.
+  # `ids` anchors the arch matrix to one build (meta:true drops its binary), so
+  # the meta package is emitted once per linux arch.
+  - id: tools
+    package_name: soul-stack-tools
+    meta: true
+    ids: [soulctl]
+    dependencies:
+      - soul-stack-soulctl
+      - soul-stack-lint
+      - soul-stack-trial
+    vendor: Soul Stack
+    homepage: https://github.com/souls-guild/soul-stack
+    maintainer: Soul Stack <noreply@soul-stack.com>
+    description: |
+      Soul Stack tools — meta package installing the operator and authoring CLIs
+      in one step: soulctl, soul-lint and soul-trial. Contains no files itself;
+      the keeper and soul daemons are separate packages.
     license: BUSL-1.1
     section: devel
     priority: optional

@@ -5,6 +5,21 @@ Artifact versioning — via git ref ([ADR-007](docs/adr/0007-versioning-git-ref.
 
 ## [Unreleased]
 
+### Added
+
+- `soul-stack-tools` — meta package installing the whole authoring-side CLI set
+  (`soulctl` + `soul-lint` + `soul-trial`) in one step. Carries no files itself.
+  The `keeper` and `soul` daemons stay separate packages on purpose: a server
+  installs only what it runs.
+
+### Changed
+
+- Package renames, dropping a doubled `soul-`: `soul-stack-soul-lint` →
+  **`soul-stack-lint`**, `soul-stack-soul-trial` → **`soul-stack-trial`**. The
+  binaries (`soul-lint`, `soul-trial`) are unchanged. Both packages declare
+  `Provides`/`Replaces`/`Conflicts` on their old names, so `apt`/`dnf` retire the
+  old package on upgrade rather than leaving it orphaned.
+
 ### Removed
 
 - `soul-legion` is no longer published. It is an internal load-test harness
