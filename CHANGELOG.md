@@ -5,7 +5,13 @@ Artifact versioning — via git ref ([ADR-007](docs/adr/0007-versioning-git-ref.
 
 ## [Unreleased]
 
-Backlog after `v0.1.0-beta.1`. Empty for now.
+### Removed
+
+- `soul-legion` is no longer published. It is an internal load-test harness
+  (`tests/load/`, "test-only, NOT a shipped binary" per the Makefile) and is not
+  one of the artifacts in [ADR-004](docs/adr/0004-binaries.md); its flag defaults
+  point at a developer box. `v0.1.0-beta.1` shipped it by mistake. Build it on
+  demand with `make stress` / `go build ./tests/load/cmd/soul-legion`.
 
 ---
 

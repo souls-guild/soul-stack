@@ -1,8 +1,8 @@
 # apt repository on Cloudflare R2
 
 Soul Stack publishes its `.deb` packages — `soul-stack-keeper`, `soul-stack-soul`,
-`soul-stack-soul-lint`, `soul-stack-soulctl`, `soul-stack-soul-trial`,
-`soul-stack-soul-legion` — through a plain, flat apt repository hosted on a
+`soul-stack-soul-lint`, `soul-stack-soulctl` and `soul-stack-soul-trial` —
+through a plain, flat apt repository hosted on a
 **Cloudflare R2** bucket fronted by the public domain `https://apt.soul-stack.com`.
 The GitHub release workflow (`.github/workflows/release.yml`) produces the `.deb`
 assets; a **separate** workflow ([`apt-publish.yml`](../../.github/workflows/apt-publish.yml))
@@ -152,7 +152,7 @@ echo "deb [signed-by=/usr/share/keyrings/soul-stack.gpg] https://apt.soul-stack.
   | sudo tee /etc/apt/sources.list.d/soul-stack.list
 
 sudo apt update
-sudo apt install soul-stack-keeper   # or soul / soul-lint / soulctl / soul-trial / soul-legion
+sudo apt install soul-stack-keeper   # or soul / soul-lint / soulctl / soul-trial
 ```
 
 ## Layout in the bucket
