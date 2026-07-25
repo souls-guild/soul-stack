@@ -29,19 +29,36 @@ Documentation=https://github.com/souls-guild/soul-stack
 # Soul initiates the gRPC stream to Keeper (ADR-002) - needs the network up.
 After=network-online.target
 Wants=network-online.target
+# Restart rate limit - [Unit], not [Service]: systemd ignores these keys in
+# [Service] ("Unknown key name ... ignoring"), which left the limiter dead.
+StartLimitIntervalSec=60s
+StartLimitBurst=5
 
 [Service]
-Type=exec
+# Type=notify: `systemctl start soul` returns once the agent signalled READY=1,
+# i.e. after SoulSeed + modules + metrics are wired up. Readiness is NOT gated on
+# reaching Keeper - the reconnect loop retries forever by design, so a Keeper
+# outage would otherwise fail every agent's unit start. The live connection state
+# shows up as the STATUS= line in `systemctl status`.
+Type=notify
+NotifyAccess=main
 User=soul-stack
 Group=soul-stack
 
 EnvironmentFile=/etc/soul/soul.env
 ExecStart=/usr/local/bin/soul run --config=${SOUL_CONFIG}
+# Config hot-reload (ADR-021(b)): `systemctl reload soul` re-reads soul.yml
+# without dropping the Keeper session.
+ExecReload=/bin/kill -HUP $MAINPID
 
 Restart=on-failure
 RestartSec=5s
-StartLimitIntervalSec=60s
-StartLimitBurst=5
+# Watchdog: the agent pings WATCHDOG=1 every WatchdogSec/2. A process that is
+# alive but wedged (deadlock, stuck syscall) misses the deadline - systemd kills
+# it and Restart=on-failure brings it back. Drop this line to opt out; the binary
+# reads WATCHDOG_USEC at startup and stays silent without it.
+WatchdogSec=60s
+TimeoutStartSec=90s
 
 # --- hardening (soft profile: Soul changes the system by nature) ---
 NoNewPrivileges=true

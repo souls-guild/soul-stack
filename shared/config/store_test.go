@@ -324,6 +324,77 @@ func TestWatchSIGHUP_FireAndDelivery(t *testing.T) {
 	}
 }
 
+// Reload hooks bracket the reload (systemd RELOADING=1 / READY=1, NIM-157):
+// `before` runs first, `after` only once the snapshot has settled.
+func TestWatchSIGHUP_ReloadHooksBracketReload(t *testing.T) {
+	path := fixtureKeeperPath(t)
+	store, _, err := LoadKeeperStore(path, ValidateOptions{})
+	if err != nil {
+		t.Fatalf("LoadKeeperStore: %v", err)
+	}
+
+	events := make(chan string, 4)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	out := WatchSIGHUP(ctx, store, WithReloadHooks(
+		func() { events <- "before" },
+		func() { events <- "after" },
+	))
+
+	time.Sleep(20 * time.Millisecond)
+	if err := syscall.Kill(syscall.Getpid(), syscall.SIGHUP); err != nil {
+		t.Fatalf("kill SIGHUP: %v", err)
+	}
+
+	select {
+	case <-out:
+	case <-time.After(2 * time.Second):
+		t.Fatal("no ReloadResult received within timeout")
+	}
+
+	for _, want := range []string{"before", "after"} {
+		select {
+		case got := <-events:
+			if got != want {
+				t.Fatalf("hook order: got %q, want %q", got, want)
+			}
+		case <-time.After(time.Second):
+			t.Fatalf("hook %q did not fire", want)
+		}
+	}
+}
+
+// Nil hooks (and no options at all) keep the watcher working — the daemons pass
+// hooks only when they run under systemd.
+func TestWatchSIGHUP_NilReloadHooks(t *testing.T) {
+	path := fixtureKeeperPath(t)
+	store, _, err := LoadKeeperStore(path, ValidateOptions{})
+	if err != nil {
+		t.Fatalf("LoadKeeperStore: %v", err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	out := WatchSIGHUP(ctx, store, WithReloadHooks(nil, nil))
+
+	time.Sleep(20 * time.Millisecond)
+	if err := syscall.Kill(syscall.Getpid(), syscall.SIGHUP); err != nil {
+		t.Fatalf("kill SIGHUP: %v", err)
+	}
+
+	select {
+	case res, ok := <-out:
+		if !ok {
+			t.Fatal("channel closed before delivering result")
+		}
+		if !res.Swapped {
+			t.Error("Swapped=false on golden fixture reload")
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("no ReloadResult received within timeout")
+	}
+}
+
 func TestWatchSIGHUP_ContextCancelClosesChannel(t *testing.T) {
 	path := fixtureKeeperPath(t)
 	store, _, err := LoadKeeperStore(path, ValidateOptions{})

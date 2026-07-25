@@ -439,20 +439,36 @@ func runDaemon(args []string) int {
 		// Keeper command runtime helper note.
 		d.setupConductor,
 	}
-	for _, step := range steps {
+	for i, step := range steps {
 		if err := step(ctx); err != nil {
 			return exitError
 		}
+		// systemd (NIM-157): each finished step buys the start job another
+		// budget, so TimeoutStartSec= bounds a single hung step instead of the
+		// whole sequence (Vault, migrations and the plugin cache are slow on a
+		// cold host). The step counter also shows up in `systemctl status`.
+		d.notifier.ExtendTimeout(startupStepBudget)
+		d.notifier.Status(fmt.Sprintf("starting: step %d/%d", i+1, len(steps)))
 	}
 
 	// Keeper command runtime helper note.
 	// Keeper command runtime helper note.
 	// Keeper command runtime helper note.
+	// systemd readiness (NIM-157): the operator API is the last listener to
+	// bind, so READY=1 goes out from inside Start — once it is serving,
+	// `systemctl start keeper` returns and dependent units may follow. A bind
+	// failure still fails the start, since Start returns the error before
+	// anything is notified.
+	d.apiServer.SetOnListening(func(addr string) {
+		d.notifier.Ready(keeperStatus(addr, d.streamManager))
+		go runStatusReporter(ctx, d.notifier, addr, d.streamManager, statusRefreshInterval)
+	})
 	if err := d.apiServer.Start(ctx); err != nil {
 		fmt.Fprintf(os.Stderr, "keeper run: HTTP server: %v\n", err)
 		return exitError
 	}
 
+	d.notifier.Stopping("shutting down")
 	d.logger.Info("keeper run: shutdown complete")
 	return exitOK
 }

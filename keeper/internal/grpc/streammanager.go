@@ -186,6 +186,15 @@ func (m *StreamManager) SIDs() []string {
 	return out
 }
 
+// Count returns how many Souls hold an active stream on this Keeper instance
+// (the systemd status line, NIM-157) — cheaper than len(SIDs()), which copies
+// the whole key set.
+func (m *StreamManager) Count() int {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return len(m.entries)
+}
+
 // CloseAll force-closes ALL local streams — cancels the per-stream ctx of
 // every registered entry (soul-shedding S2, Watchman). Returns the number
 // of streams whose cancel was invoked (for the caller's log/metric).

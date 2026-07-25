@@ -49,6 +49,7 @@ import (
 	shlog "github.com/souls-guild/soul-stack/shared/log"
 	"github.com/souls-guild/soul-stack/shared/obs"
 	sharedhost "github.com/souls-guild/soul-stack/shared/pluginhost"
+	"github.com/souls-guild/soul-stack/shared/sdnotify"
 	"github.com/souls-guild/soul-stack/soul/internal/augur"
 	"github.com/souls-guild/soul-stack/soul/internal/beacon"
 	soulbootstrap "github.com/souls-guild/soul-stack/soul/internal/bootstrap"
@@ -301,13 +302,22 @@ func runDaemon(args []string) int {
 		}
 	})
 
+	// systemd supervision (NIM-157): enabled by the unit (Type=notify /
+	// WatchdogSec=), a no-op anywhere else — in docker/k8s liveness stays with
+	// the orchestrator.
+	notifier := sdnotify.New(logger)
+	go notifier.RunWatchdog(ctx)
+
 	// SIGHUP reload (ADR-021(b)): separate signal channel inside WatchSIGHUP,
 	// SIGHUP doesn't get mixed up with SIGINT/SIGTERM from signalContext. Only
 	// runs when hot_reload.enable_signal (default true). Push mode (soul apply)
 	// is unaffected by hot-reload — it's one-shot. No audit on the Soul side
 	// (no audit_log DB), reload is only logged.
 	if cfg.HotReload.SignalEnabled() {
-		reloadCh := config.WatchSIGHUP(ctx, store)
+		reloadCh := config.WatchSIGHUP(ctx, store, config.WithReloadHooks(
+			notifier.Reloading,
+			func() { notifier.Ready("") },
+		))
 		go config.LogReloads(reloadCh, logger)
 		logger.Info("soul run: SIGHUP config reload enabled")
 	} else {
@@ -556,7 +566,13 @@ func runDaemon(args []string) int {
 	runner.SetHostFacts(hostFactsFromSoulprint(sp.collector.Collect(ctx, sid)))
 
 	logger.Info("soul run: ready", slog.String("sid", sid), slog.Int("endpoints", len(endpoints)))
-	reconnectLoop(ctx, store, client, runner, errandRunner, consoleMetrics, sp, up, eventStreamMetrics, sigils, anchorSet, scheduler, logger)
+	// READY=1 on wire-up, not on the first successful Dial: the reconnect loop
+	// retries forever by design, so gating readiness on Keeper being reachable
+	// would turn a Keeper outage into failed unit starts (StartLimitBurst) on
+	// every host. The live connection state goes out as STATUS= instead.
+	notifier.Ready(fmt.Sprintf("connecting: sid=%s endpoints=%d", sid, len(endpoints)))
+	reconnectLoop(ctx, store, client, runner, errandRunner, consoleMetrics, sp, up, eventStreamMetrics, sigils, anchorSet, scheduler, notifier, logger)
+	notifier.Stopping("shutting down")
 	logger.Info("soul run: shutdown complete")
 	return exitOK
 }
@@ -787,7 +803,7 @@ func runApply(args []string) int {
 // The store snapshot has already passed semantic validation (an invalid duration
 // is rejected at the reload phase), so resolveBackoff/resolveFailback here are
 // best-effort — on a parse error they return defaults + warn, they don't panic.
-func reconnectLoop(ctx context.Context, store *config.Store[config.SoulConfig], client *soulgrpc.Client, runner *runtime.ApplyRunner, errandRunner *errandrunner.Runner, consoleMetrics *consolerunner.Metrics, sp soulprintPusher, up utilizationPusher, metrics *soulgrpc.EventStreamMetrics, sigils *sigilcache.Cache, anchors *sharedhost.AnchorSet, scheduler *beacon.Scheduler, logger *slog.Logger) {
+func reconnectLoop(ctx context.Context, store *config.Store[config.SoulConfig], client *soulgrpc.Client, runner *runtime.ApplyRunner, errandRunner *errandrunner.Runner, consoleMetrics *consolerunner.Metrics, sp soulprintPusher, up utilizationPusher, metrics *soulgrpc.EventStreamMetrics, sigils *sigilcache.Cache, anchors *sharedhost.AnchorSet, scheduler *beacon.Scheduler, notifier *sdnotify.Notifier, logger *slog.Logger) {
 	delay := resolveBackoff(store, logger).initial
 	// The first iteration is the initial connect; every subsequent Dial attempt is a
 	// reconnect (after a disconnect or a failed dial). soul_eventstream_
@@ -821,6 +837,7 @@ func reconnectLoop(ctx context.Context, store *config.Store[config.SoulConfig], 
 				slog.Bool("lease_held", leaseHeld),
 				slog.Any("error", err),
 			)
+			notifier.Status(fmt.Sprintf("disconnected: dial failed, retry in %s (lease_held=%t)", delay, leaseHeld))
 			if !sleepCtx(ctx, withJitter(delay, b.jitter)) {
 				return
 			}
@@ -830,10 +847,12 @@ func reconnectLoop(ctx context.Context, store *config.Store[config.SoulConfig], 
 		// Successful dial — reset backoff to the current initial.
 		delay = b.initial
 		metrics.SetConnected(true)
+		notifier.Status(fmt.Sprintf("connected: keeper=%s priority=%d session=%s", sess.KID(), sess.Priority(), sess.SessionID()))
 		handleSession(ctx, store, client, sess, runner, errandRunner, consoleMetrics, sp, up, sigils, anchors, scheduler, logger)
 		// handleSession returned = session closed (clean EOF or error).
 		// The next iteration will try Dial again.
 		metrics.SetConnected(false)
+		notifier.Status("disconnected: session closed, reconnecting")
 	}
 }
 

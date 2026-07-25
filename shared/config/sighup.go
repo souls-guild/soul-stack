@@ -28,6 +28,26 @@ const reloadChanBuf = 1
 // from the `os/signal` godoc.
 const sighupChanBuf = 1
 
+// WatchOption customizes [WatchSIGHUP].
+type WatchOption func(*watchOptions)
+
+type watchOptions struct {
+	before func()
+	after  func()
+}
+
+// WithReloadHooks runs `before` just before a SIGHUP reload and `after` once it
+// settles (on success and on a rejected snapshot alike — the daemon keeps
+// serving the previous one). The daemons pair it with systemd RELOADING=1 /
+// READY=1. Either hook may be nil; both run on the watcher goroutine, so they
+// must not block.
+func WithReloadHooks(before, after func()) WatchOption {
+	return func(o *watchOptions) {
+		o.before = before
+		o.after = after
+	}
+}
+
 // WatchSIGHUP starts a goroutine that, on each SIGHUP, calls
 // `store.Reload(ctx, "signal")` and publishes a `ReloadResult` to the returned
 // channel.
@@ -46,13 +66,18 @@ const sighupChanBuf = 1
 //   - SIGHUP is available on unix systems; on Windows the constant
 //     `syscall.SIGHUP` exists for compatibility but there is no real SIGHUP
 //     source — the watcher simply receives no notifications.
-func WatchSIGHUP[T any](ctx context.Context, store *Store[T]) <-chan ReloadResult {
+func WatchSIGHUP[T any](ctx context.Context, store *Store[T], opts ...WatchOption) <-chan ReloadResult {
 	// Fail-fast in the caller's stack: a nil store is a guaranteed footgun
 	// (e.g. `LoadKeeperStore` returned `(nil, diags, err)` on a missing config
 	// and the operator forgot to check err). Without this check the panic would
 	// arrive asynchronously from the watcher goroutine on the first SIGHUP.
 	if store == nil {
 		panic("config.WatchSIGHUP: store is nil")
+	}
+
+	var o watchOptions
+	for _, opt := range opts {
+		opt(&o)
 	}
 
 	out := make(chan ReloadResult, reloadChanBuf)
@@ -69,7 +94,13 @@ func WatchSIGHUP[T any](ctx context.Context, store *Store[T]) <-chan ReloadResul
 			case <-ctx.Done():
 				return
 			case <-sig:
+				if o.before != nil {
+					o.before()
+				}
 				res := store.Reload(ctx, ReloadSourceSignal)
+				if o.after != nil {
+					o.after()
+				}
 				select {
 				case out <- res:
 				default:

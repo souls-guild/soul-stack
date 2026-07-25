@@ -72,7 +72,7 @@ Package ([`deploy/nfpm/keeper.yaml`](../../deploy/nfpm/keeper.yaml)) decomposes:
 | Path | What | Note |
 |---|---|---|
 | `/usr/local/bin/keeper` | binary, `0755` | — |
-| `/etc/systemd/system/keeper.service` | systemd-unit | `Type=exec`, `User=soul-stack`, hardening (`ProtectSystem=strict`, single writable `/var/lib/keeper`) |
+| `/etc/systemd/system/keeper.service` | systemd-unit | `Type=notify` + `WatchdogSec=60s` (see [deployment.md → Readiness and watchdog](deployment.md#readiness-and-watchdog-typenotify)), `User=soul-stack`, hardening (`ProtectSystem=strict`, single writable `/var/lib/keeper`) |
 | `/etc/keeper/keeper.env` | env file, `config|noreplace` | sets `KEEPER_CONFIG=/etc/keeper/keeper.yml`; upgrade doesn't erase it |
 | `/etc/keeper/keeper.yml.example` | example config, `0640` | **working config is created by operator** by copying (step 5) |
 
@@ -84,7 +84,7 @@ Package ([`deploy/nfpm/keeper.yaml`](../../deploy/nfpm/keeper.yaml)) decomposes:
 sudo dpkg -i soul-stack-soul_<version>_amd64.deb
 ```
 
-Package ([`deploy/nfpm/soul.yaml`](../../deploy/nfpm/soul.yaml)) decomposes symmetrically: `/usr/local/bin/soul`, `/etc/systemd/system/soul.service`, `/etc/soul/soul.env` (`SOUL_CONFIG=/etc/soul/soul.yml`), `/etc/soul/soul.yml.example`.
+Package ([`deploy/nfpm/soul.yaml`](../../deploy/nfpm/soul.yaml)) decomposes symmetrically: `/usr/local/bin/soul`, `/etc/systemd/system/soul.service` (also `Type=notify` + watchdog), `/etc/soul/soul.env` (`SOUL_CONFIG=/etc/soul/soul.yml`), `/etc/soul/soul.yml.example`.
 
 > **Hardening soul unit is softer than keeper.** Soul uses Destiny (installs packages, edits files, manages services) - this requires real privileges on the host, so hard `ProtectSystem=strict` / `MemoryDenyWriteExecute` are **not** set for it ([`deploy/systemd/soul.service`](../../deploy/systemd/soul.service), comment in the header). The only writable path is `/var/lib/soul-stack` (SHA-256 + SoulSeed module cache).
 

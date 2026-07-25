@@ -389,10 +389,18 @@ After=network-online.target
 Wants=network-online.target
 
 [Service]
-Type=simple
+# Type=notify + WatchdogSec (NIM-157): the unit start completes on READY=1 and a
+# wedged agent (alive but not scheduling) is restarted by systemd - the only
+# supervision an unattended VM has. The binary autodetects both: the same build
+# stays silent in docker/k8s.
+Type=notify
+NotifyAccess=main
 ExecStart=%s run --config %s
+ExecReload=/bin/kill -HUP $MAINPID
 Restart=on-failure
 RestartSec=5s
+WatchdogSec=60s
+TimeoutStartSec=90s
 
 [Install]
 WantedBy=multi-user.target

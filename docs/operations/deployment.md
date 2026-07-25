@@ -146,13 +146,25 @@ systemctl daemon-reload && systemctl enable --now keeper
 
 Accordingly for the Soul host with `deploy/systemd/soul.service`.
 
-Units have moved the path to the config to `EnvironmentFile` (`/etc/keeper/keeper.env` → `KEEPER_CONFIG=…`) - the operator changes the file, does not edit the unit. `Restart=on-failure` + `StartLimit{IntervalSec=60s,Burst=5}` - restart if it crashes, don't get stuck in a broken config.
+Units have moved the path to the config to `EnvironmentFile` (`/etc/keeper/keeper.env` → `KEEPER_CONFIG=…`) - the operator changes the file, does not edit the unit. `Restart=on-failure` + `StartLimit{IntervalSec=60s,Burst=5}` (in `[Unit]` - systemd ignores both keys in `[Service]`) - restart if it crashes, don't get stuck in a broken config.
+
+### Readiness and watchdog (`Type=notify`)
+
+Both units are `Type=notify` with `NotifyAccess=main` and `WatchdogSec=60s`:
+
+- **`systemctl start` blocks until the daemon is really up.** Keeper reports `READY=1` when the operator API socket is bound and serving (the last listener to come up), so units ordered after it do not race the startup. Soul reports `READY=1` when its wire-up is done - SoulSeed, modules, metrics - and **not** when it reaches Keeper: the reconnect loop retries forever by design, and gating readiness on Keeper would fail the unit start on every agent during a Keeper outage.
+- **A slow start is not a hung start.** Keeper extends the start job after every startup step (`EXTEND_TIMEOUT_USEC`) and publishes `starting: step N/M`, so `TimeoutStartSec=120s` bounds a single step - a cold Vault/PG/plugin-cache start takes as long as it needs, a step that really hangs still fails the unit.
+- **A wedged process is restarted.** Each daemon pings `WATCHDOG=1` every `WatchdogSec/2`; a process that is alive but stuck (deadlock, hung syscall) misses the deadline, systemd kills it with `SIGABRT` and `Restart=on-failure` brings it back. The ping is a liveness signal of the process itself - deliberately not a Postgres/Redis health check, so a storage outage does not restart the whole cluster. Remove `WatchdogSec=` from the unit (or a drop-in) to opt out.
+- **`systemctl status` shows a live line.** Keeper: `serving: api=<addr> souls=<n>`, refreshed every 30s. Soul: the current session (`connected: keeper=<kid> priority=<n> …`) or the reconnect state.
+- **Shutdown is not a failure.** `SIGTERM` → `STOPPING=1` → clean exit.
+
+Everything above is runtime autodetect from `NOTIFY_SOCKET` / `WATCHDOG_USEC`: **one binary for every distribution**, no build tags. In docker/k8s these variables are absent, the mechanism switches itself off, and liveness stays with the orchestrator (`HEALTHCHECK` / `livenessProbe` on `/healthz`).
 
 ### Hot-reload via SIGHUP
 
 Config changes are applied on the fly via `systemctl reload keeper` ([ADR-021](../adr/0021-hot-reload-config.md)). Per-block policy - which fields are reloadable and which require a restart - in [`docs/keeper/config.md` → Hot-reload](../keeper/config.md#hot-reload).
 
-If the reload is successful - audit-event `config.reload_succeeded` (`source=signal`), if it fails - `config.reload_failed` (the old snapshot remains active, error in the logs).
+If the reload is successful - audit-event `config.reload_succeeded` (`source=signal`), if it fails - `config.reload_failed` (the old snapshot remains active, error in the logs). `systemctl reload` works because the units declare `ExecReload=/bin/kill -HUP $MAINPID`; during the reload the daemon holds the unit in `reloading` (`RELOADING=1` → `READY=1`), so the operator sees the transition instead of a silent no-op.
 
 ## Config `keeper.yml` - required minimum
 

@@ -466,7 +466,15 @@ type Server struct {
 	mu     sync.Mutex
 	addr   string
 	logger *slog.Logger
+
+	// onListening fires once the socket is bound and serving; the daemon hangs
+	// systemd readiness off it (NIM-157). Set before Start, read inside it.
+	onListening func(addr string)
 }
+
+// SetOnListening registers a callback invoked by [Server.Start] once the
+// listener is up. Call it before Start.
+func (s *Server) SetOnListening(fn func(addr string)) { s.onListening = fn }
 
 // OperatorService returns the [operator.Service] encapsulated in the server's
 // inner OperatorHandler. Used by the MCP listener wire-up
@@ -870,6 +878,10 @@ func (s *Server) Start(ctx context.Context) error {
 		}
 		errCh <- nil
 	}()
+
+	if s.onListening != nil {
+		s.onListening(actual)
+	}
 
 	select {
 	case <-ctx.Done():

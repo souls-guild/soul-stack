@@ -10,6 +10,7 @@ require (
 
 require (
 	github.com/Masterminds/sprig/v3 v3.3.0
+	github.com/coreos/go-systemd/v22 v22.7.0
 	github.com/cyphar/filepath-securejoin v0.7.0
 	github.com/google/cel-go v0.29.2
 	github.com/oklog/ulid/v2 v2.1.1

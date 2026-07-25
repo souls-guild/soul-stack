@@ -37,6 +37,7 @@ Multi-keeper cluster allows you to update instances one at a time, without downt
    ```
 
 **What happens** during a restart:
+   - the package refreshed `/etc/systemd/system/keeper.service` and postinstall ran `daemon-reload`, so the restart is what actually picks up the new unit. Since the unit is `Type=notify`, `systemctl restart keeper` returns only when the new instance is serving - the command itself is the "is it up" check, before the probes in step 3.
    - graceful shutdown of the current version: Acolyte-drain (`acolyte_drain_grace`), Conclave-snap, EventStream streams are closed → Souls failback for the remaining instances.
    - start of new version: `state_schema` migrations are applied (see [§ State_schema migrations](#state_schema-migrations)), Conclave-presence is written anew.
 

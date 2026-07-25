@@ -84,6 +84,7 @@ import (
 	shlog "github.com/souls-guild/soul-stack/shared/log"
 	"github.com/souls-guild/soul-stack/shared/obs"
 	sharedhost "github.com/souls-guild/soul-stack/shared/pluginhost"
+	"github.com/souls-guild/soul-stack/shared/sdnotify"
 )
 
 // errSetupFailed -- sentinel error for a setupX step: means "stderr has
@@ -125,6 +126,10 @@ type daemon struct {
 
 	// --- observability (early: logger) ---
 	logger *slog.Logger
+
+	// --- systemd supervision (NIM-157) ---
+	// Disabled no-op outside a Type=notify unit.
+	notifier *sdnotify.Notifier
 
 	// --- vault ---
 	vc *keepervault.Client
@@ -544,6 +549,12 @@ func (d *daemon) setupObservabilityEarly(ctx context.Context) error {
 	logger, logLevel := shlog.NewWithLevel(shlog.FromKeeper(cfg.Logging))
 	d.logger = logger
 
+	// systemd supervision (NIM-157): enabled by the unit (Type=notify /
+	// WatchdogSec=), a no-op in docker/k8s, where liveness is the
+	// orchestrator's job (HEALTHCHECK / livenessProbe on /healthz).
+	d.notifier = sdnotify.New(logger)
+	go d.notifier.RunWatchdog(ctx)
+
 	// Keeper daemon runtime wiring note.
 	// Keeper daemon runtime wiring note.
 	// Keeper daemon runtime wiring note.
@@ -561,7 +572,10 @@ func (d *daemon) setupObservabilityEarly(ctx context.Context) error {
 	// Keeper daemon runtime wiring note.
 	// Keeper daemon runtime wiring note.
 	if cfg.HotReload.SignalEnabled() {
-		reloadCh := config.WatchSIGHUP(ctx, d.store)
+		reloadCh := config.WatchSIGHUP(ctx, d.store, config.WithReloadHooks(
+			d.notifier.Reloading,
+			func() { d.notifier.Ready("") },
+		))
 		go config.LogReloads(reloadCh, logger)
 		logger.Info("keeper run: SIGHUP config reload enabled")
 	} else {
