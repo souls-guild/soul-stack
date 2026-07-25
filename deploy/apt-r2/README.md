@@ -161,6 +161,11 @@ sudo apt install soul-stack-tools     # soulctl + soul-lint + soul-trial
 sudo apt install soul-stack-keeper    # or soul-stack-soul
 ```
 
+> The package names above land with the **next** release. The published
+> `v0.1.0-beta.1` predates the rename: it carries `soul-stack-soul-lint` /
+> `soul-stack-soul-trial` and has no `soul-stack-tools`. Upgrades migrate
+> themselves — the renamed packages replace the old ones.
+
 ## Layout in the bucket
 
 ```
