@@ -58,6 +58,7 @@ import (
 	soulgrpc "github.com/souls-guild/soul-stack/soul/internal/grpc"
 	"github.com/souls-guild/soul-stack/soul/internal/pluginhost"
 	"github.com/souls-guild/soul-stack/soul/internal/runtime"
+	"github.com/souls-guild/soul-stack/soul/internal/runtime/consolerunner"
 	"github.com/souls-guild/soul-stack/soul/internal/runtime/errandrunner"
 	"github.com/souls-guild/soul-stack/soul/internal/seed"
 	"github.com/souls-guild/soul-stack/soul/internal/sigilcache"
@@ -408,6 +409,7 @@ func runDaemon(args []string) int {
 	soulprintMetrics := soulprint.RegisterSoulprintMetrics(reg)
 	beaconMetrics := beacon.RegisterBeaconMetrics(reg)
 	errandMetrics := errandrunner.Register(reg)
+	consoleMetrics := consolerunner.Register(reg)
 
 	// `/metrics` — listener on cfg.Metrics.Listen (loopback 127.0.0.1:9091
 	// by default). Optional HTTP Basic-auth via metrics.basic_auth: the password
@@ -554,7 +556,7 @@ func runDaemon(args []string) int {
 	runner.SetHostFacts(hostFactsFromSoulprint(sp.collector.Collect(ctx, sid)))
 
 	logger.Info("soul run: ready", slog.String("sid", sid), slog.Int("endpoints", len(endpoints)))
-	reconnectLoop(ctx, store, client, runner, errandRunner, sp, up, eventStreamMetrics, sigils, anchorSet, scheduler, logger)
+	reconnectLoop(ctx, store, client, runner, errandRunner, consoleMetrics, sp, up, eventStreamMetrics, sigils, anchorSet, scheduler, logger)
 	logger.Info("soul run: shutdown complete")
 	return exitOK
 }
@@ -785,7 +787,7 @@ func runApply(args []string) int {
 // The store snapshot has already passed semantic validation (an invalid duration
 // is rejected at the reload phase), so resolveBackoff/resolveFailback here are
 // best-effort — on a parse error they return defaults + warn, they don't panic.
-func reconnectLoop(ctx context.Context, store *config.Store[config.SoulConfig], client *soulgrpc.Client, runner *runtime.ApplyRunner, errandRunner *errandrunner.Runner, sp soulprintPusher, up utilizationPusher, metrics *soulgrpc.EventStreamMetrics, sigils *sigilcache.Cache, anchors *sharedhost.AnchorSet, scheduler *beacon.Scheduler, logger *slog.Logger) {
+func reconnectLoop(ctx context.Context, store *config.Store[config.SoulConfig], client *soulgrpc.Client, runner *runtime.ApplyRunner, errandRunner *errandrunner.Runner, consoleMetrics *consolerunner.Metrics, sp soulprintPusher, up utilizationPusher, metrics *soulgrpc.EventStreamMetrics, sigils *sigilcache.Cache, anchors *sharedhost.AnchorSet, scheduler *beacon.Scheduler, logger *slog.Logger) {
 	delay := resolveBackoff(store, logger).initial
 	// The first iteration is the initial connect; every subsequent Dial attempt is a
 	// reconnect (after a disconnect or a failed dial). soul_eventstream_
@@ -828,7 +830,7 @@ func reconnectLoop(ctx context.Context, store *config.Store[config.SoulConfig], 
 		// Successful dial — reset backoff to the current initial.
 		delay = b.initial
 		metrics.SetConnected(true)
-		handleSession(ctx, store, client, sess, runner, errandRunner, sp, up, sigils, anchors, scheduler, logger)
+		handleSession(ctx, store, client, sess, runner, errandRunner, consoleMetrics, sp, up, sigils, anchors, scheduler, logger)
 		// handleSession returned = session closed (clean EOF or error).
 		// The next iteration will try Dial again.
 		metrics.SetConnected(false)
@@ -898,6 +900,42 @@ func resolveUtilizationInterval(store *config.Store[config.SoulConfig], logger *
 	return d
 }
 
+// resolveConsoleLimits reads the `console:` block from the current store
+// snapshot into the runner's envelope. An absent block means "enabled, built-in
+// defaults" — a console is part of the product, not an opt-in.
+//
+// Read once per EventStream session (like failback / soulprint.refresh_interval),
+// so a hot-reload (ADR-021) takes effect on the next reconnect. A live console
+// keeps the envelope it started with: retuning limits under a running pty would
+// change nothing useful and would complicate teardown.
+//
+// A bad kill_grace is a warn + default, never a refusal to serve: the schema
+// phase already rejects it at load time, so reaching here means a hot-reloaded
+// file went bad, and losing consoles over it would be a worse outcome.
+func resolveConsoleLimits(store *config.Store[config.SoulConfig], logger *slog.Logger) consolerunner.Limits {
+	cfg := store.Get()
+	if cfg == nil || cfg.Console == nil {
+		return consolerunner.Limits{}
+	}
+	c := cfg.Console
+	limits := consolerunner.Limits{
+		Disabled:        !c.ConsoleEnabled(),
+		MaxSessions:     c.MaxSessions,
+		RateBytesPerSec: c.RateLimitKBps * 1024,
+		Shell:           c.Shell,
+	}
+	if c.KillGrace != "" {
+		d, err := time.ParseDuration(c.KillGrace)
+		if err != nil || d <= 0 {
+			logger.Warn("soul run: invalid console.kill_grace in reloaded config, using default",
+				slog.String("value", c.KillGrace), slog.Any("error", err))
+		} else {
+			limits.KillGrace = d
+		}
+	}
+	return limits
+}
+
 // parseTrustAnchorSet parses the trust-anchor set from the runtime
 // [keeperv1.SigilTrustAnchors] message (R3-S6): each `pubkey_pem` element is a single
 // SPKI "PUBLIC KEY" PEM block (as written by keeper-side sigil.Signer.AnchorSetPEM). Each
@@ -940,7 +978,7 @@ type recvResult struct {
 // session is closed and replaced with a new one (zero-downtime: the new one is open before
 // the old one closes). The failback goroutine stops when handleSession
 // exits.
-func handleSession(ctx context.Context, store *config.Store[config.SoulConfig], client *soulgrpc.Client, sess *soulgrpc.StreamSession, runner *runtime.ApplyRunner, errandRunner *errandrunner.Runner, sp soulprintPusher, up utilizationPusher, sigils *sigilcache.Cache, anchors *sharedhost.AnchorSet, scheduler *beacon.Scheduler, logger *slog.Logger) {
+func handleSession(ctx context.Context, store *config.Store[config.SoulConfig], client *soulgrpc.Client, sess *soulgrpc.StreamSession, runner *runtime.ApplyRunner, errandRunner *errandrunner.Runner, consoleMetrics *consolerunner.Metrics, sp soulprintPusher, up utilizationPusher, sigils *sigilcache.Cache, anchors *sharedhost.AnchorSet, scheduler *beacon.Scheduler, logger *slog.Logger) {
 	// failback / soulprint.refresh_interval / utilization.interval are read
 	// from the store at the start of each session (hot-reload, ADR-021): a new
 	// session after reconnect/swap sees current values. Within a session
@@ -1033,6 +1071,15 @@ func handleSession(ctx context.Context, store *config.Store[config.SoulConfig], 
 	// to survive a reconnect.
 	augurClient := augur.NewClient(sess)
 
+	// The console runner is bound to a specific session for the same reason as
+	// the Augur client: its sink is this stream. Sessions are pty processes on
+	// the host, so the binding is also a safety property — a console must never
+	// outlive the stream that authorized it. The defer below (and the swap
+	// branch) call CloseAll, which kills each pty's whole process group and
+	// WAITS for the reaping: kill-on-disconnect, no orphaned root shells.
+	consoleLimits := resolveConsoleLimits(store, logger)
+	consoleRunner := consolerunner.New(sess, consoleLimits, logger, consoleMetrics)
+
 	// The reader goroutine reads the current sess; on swap it's restarted on
 	// the new sess. recvCh is unbuffered — a gate through which the
 	// reader reports each Recv's outcome; select-loop dispatches on it.
@@ -1069,6 +1116,10 @@ func handleSession(ctx context.Context, store *config.Store[config.SoulConfig], 
 	startReader(sess, augurClient)
 
 	defer func() {
+		// Consoles die BEFORE the stream is closed: CloseAll still gets to send
+		// each ConsoleExit, so Keeper learns the sessions ended instead of
+		// inferring it from the disconnect.
+		consoleRunner.CloseAll(keeperv1.ConsoleExitReason_CONSOLE_EXIT_REASON_SOUL_SHUTDOWN)
 		augurClient.Close()
 		_ = sess.Close()
 		<-readerDone
@@ -1114,8 +1165,10 @@ func handleSession(ctx context.Context, store *config.Store[config.SoulConfig], 
 			// open before closing the old one → zero-downtime.
 			oldSess := sess
 			oldAugur := augurClient
+			oldConsole := consoleRunner
 			sess = newSess
 			augurClient = augur.NewClient(sess)
+			consoleRunner = consolerunner.New(sess, consoleLimits, logger, consoleMetrics)
 			logger.Info("eventstream: failback swap",
 				slog.Int("new_priority", newSess.Priority()),
 				slog.String("session_id", newSess.SessionID()),
@@ -1123,6 +1176,11 @@ func handleSession(ctx context.Context, store *config.Store[config.SoulConfig], 
 			// Close the old Augur client (pending Fetches on the old session
 			// get ErrClientClosed) — the old stream is about to be closed.
 			oldAugur.Close()
+			// Consoles do NOT survive a failback swap: their session_ids were
+			// minted by the old stream's Keeper session-manager, and a pty left
+			// running while its authorizing stream goes away is exactly the
+			// orphan we refuse to create. The operator reopens on the new stream.
+			oldConsole.CloseAll(keeperv1.ConsoleExitReason_CONSOLE_EXIT_REASON_SOUL_SHUTDOWN)
 			_ = oldSess.Close()
 			<-readerDone
 			readerDone = make(chan struct{})
@@ -1224,6 +1282,31 @@ func handleSession(ctx context.Context, store *config.Store[config.SoulConfig], 
 							slog.Any("error", sendErr))
 					}
 				}(errReq)
+			case *keeperv1.FromKeeper_ConsoleOpen:
+				// Interactive pty session. Unlike apply (which blocks this loop
+				// by the one-in-flight invariant of ADR-012(a)) and unlike
+				// Errand (which forks a goroutine per request), a console is
+				// long-lived: Open only spawns the pty and returns, while the
+				// session's own goroutines pump output and send every message.
+				// So all four console cases are non-blocking by construction —
+				// a live terminal must never delay apply dispatch.
+				openReq := payload.ConsoleOpen
+				logger.Info("console: open received",
+					slog.String("session_id", openReq.GetSessionId()),
+					slog.String("shell", openReq.GetShell()),
+					slog.Int("cols", int(openReq.GetCols())),
+					slog.Int("rows", int(openReq.GetRows())),
+				)
+				consoleRunner.Open(openReq)
+			case *keeperv1.FromKeeper_ConsoleStdin:
+				// Keystrokes: a bounded write into the pty master. Not logged —
+				// this is operator input, and it is recorded Keeper-side by the
+				// session recording (audit), not duplicated into Soul's log.
+				consoleRunner.Stdin(payload.ConsoleStdin)
+			case *keeperv1.FromKeeper_ConsoleResize:
+				consoleRunner.Resize(payload.ConsoleResize)
+			case *keeperv1.FromKeeper_ConsoleClose:
+				consoleRunner.Close(payload.ConsoleClose)
 			case *keeperv1.FromKeeper_SigilSnapshot:
 				// The full active grant set (ADR-026(h), Variant A): applied
 				// as ReplaceAll — replaces the ENTIRE cache with this set. A grant missing from the

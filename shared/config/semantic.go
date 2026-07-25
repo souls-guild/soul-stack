@@ -2,6 +2,7 @@ package config
 
 import (
 	"fmt"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"time"
@@ -199,6 +200,36 @@ func semanticValidateSoul(c *SoulConfig, root *ast.MappingNode) []diag.Diagnosti
 	}
 	if c.Soulprint != nil {
 		out = append(out, checkDuration(root, "$.soulprint.refresh_interval", c.Soulprint.RefreshInterval)...)
+	}
+	if c.Console != nil {
+		out = append(out, checkDuration(root, "$.console.kill_grace", c.Console.KillGrace)...)
+		// 0 means "unset, take the default" (same convention as
+		// keeper.max_apply_size_mb); a negative value is a typo, not a policy.
+		// Forbidding consoles is `enabled: false`, which is unambiguous.
+		if c.Console.MaxSessions < 0 {
+			out = append(out, atPath(root, "$.console.max_sessions", diag.Diagnostic{
+				Level: diag.LevelError, Phase: diag.PhaseSemanticValidate,
+				Code:    "value_out_of_range",
+				Message: fmt.Sprintf("console.max_sessions must be >= 0, got %d", c.Console.MaxSessions),
+				Hint:    "0/omitted takes the default (8); use `console.enabled: false` to forbid consoles on this host",
+			}))
+		}
+		if c.Console.RateLimitKBps < 0 {
+			out = append(out, atPath(root, "$.console.rate_limit_kbps", diag.Diagnostic{
+				Level: diag.LevelError, Phase: diag.PhaseSemanticValidate,
+				Code:    "value_out_of_range",
+				Message: fmt.Sprintf("console.rate_limit_kbps must be >= 0, got %d", c.Console.RateLimitKBps),
+				Hint:    "0/omitted takes the default (1024 KB/s per session)",
+			}))
+		}
+		if c.Console.Shell != "" && !filepath.IsAbs(c.Console.Shell) {
+			out = append(out, atPath(root, "$.console.shell", diag.Diagnostic{
+				Level: diag.LevelError, Phase: diag.PhaseSemanticValidate,
+				Code:    "console_shell_not_absolute",
+				Message: fmt.Sprintf("console.shell %q must be an absolute path", c.Console.Shell),
+				Hint:    "a bare name would be resolved through PATH, letting a shadowed binary become the console",
+			}))
+		}
 	}
 	if c.Cleanup != nil {
 		out = append(out, checkDuration(root, "$.cleanup.run_interval", c.Cleanup.RunInterval)...)

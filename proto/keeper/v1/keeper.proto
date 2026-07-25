@@ -11,6 +11,7 @@ import "keeper/v1/augur.proto";
 import "keeper/v1/beacon.proto";
 import "keeper/v1/errand.proto";
 import "keeper/v1/utilization.proto";
+import "keeper/v1/console.proto";
 
 option go_package = "github.com/souls-guild/soul-stack/proto/gen/go/keeper/v1;keeperv1";
 
@@ -53,6 +54,11 @@ message FromSoul {
     WardRoster ward_roster = 8;
     ErrandResult errand_result = 9;
     HostUtilization host_utilization = 10;
+    // Interactive console (PTY), only-add: a living pty session multiplexed on
+    // this stream by session_id. See console.proto.
+    ConsoleOpened console_opened = 11;
+    ConsoleChunk console_chunk = 12;
+    ConsoleExit console_exit = 13;
   }
 }
 
@@ -71,5 +77,11 @@ message FromKeeper {
     ErrandRequest errand_request = 10;
     CancelErrand cancel_errand = 11;
     TelemetryConfig telemetry_config = 12;
+    // Interactive console (PTY), only-add: control plane of a living pty
+    // session, multiplexed on this stream by session_id. See console.proto.
+    ConsoleOpen console_open = 13;
+    ConsoleStdin console_stdin = 14;
+    ConsoleResize console_resize = 15;
+    ConsoleClose console_close = 16;
   }
 }

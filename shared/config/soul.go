@@ -16,6 +16,7 @@ type SoulConfig struct {
 	Keeper      SoulKeeper       `yaml:"keeper"`
 	Soulprint   *SoulSoulprint   `yaml:"soulprint,omitempty"`
 	Utilization *SoulUtilization `yaml:"utilization,omitempty"`
+	Console     *SoulConsole     `yaml:"console,omitempty"`
 	Cleanup     *SoulCleanup     `yaml:"cleanup,omitempty"`
 	Logging     SoulLogging      `yaml:"logging,omitempty"`
 	Metrics     *SoulMetrics     `yaml:"metrics,omitempty"`
@@ -122,6 +123,52 @@ type SoulSoulprint struct {
 // (ADR-072). `interval` — pulse cadence (default 30s, floor 10s in cmd/soul).
 type SoulUtilization struct {
 	Interval string `yaml:"interval,omitempty"`
+}
+
+// SoulConsole — the host's policy for interactive console (PTY) sessions
+// (docs/soul/console.md). Every field is optional; an absent `console:` block
+// means "enabled, with the built-in defaults".
+//
+// This is deliberately host-side policy, not just tuning. A console is an
+// interactive shell running as the Soul daemon's user, so an operator must be
+// able to forbid it outright on a sensitive host (`enabled: false`) or allow
+// exactly one at a time (`max_sessions: 1`) regardless of what Keeper-side RBAC
+// permits. Soul is the last word on its own host.
+//
+// Read at the start of each EventStream session, so a hot-reload (ADR-021)
+// applies on the next reconnect; sessions already running keep the envelope they
+// started with.
+type SoulConsole struct {
+	// Enabled gates the feature. nil/omitted → true: consoles are part of the
+	// product, so they work out of the box. An explicit `false` makes Soul refuse
+	// every ConsoleOpen with a terminal ConsoleExit — Keeper learns immediately
+	// instead of waiting out a timeout.
+	Enabled *bool `yaml:"enabled,omitempty"`
+
+	// MaxSessions caps concurrent consoles ON THIS HOST (not per operator: a
+	// multi-console wall over 10 hosts is one session on each). 0/omitted →
+	// default 8. Use `enabled: false` to forbid consoles, not `max_sessions: 0`.
+	MaxSessions int `yaml:"max_sessions,omitempty"`
+
+	// RateLimitKBps paces one session's output. 0/omitted → default 1024 (1 MiB/s).
+	RateLimitKBps int `yaml:"rate_limit_kbps,omitempty"`
+
+	// KillGrace is how long a session may take to die at each teardown step
+	// before the next, stronger one. 0/omitted → default 2s.
+	KillGrace string `yaml:"kill_grace,omitempty"`
+
+	// Shell overrides the default console program. Must be an absolute path.
+	// Empty → $SHELL, then /bin/bash, then /bin/sh.
+	Shell string `yaml:"shell,omitempty"`
+}
+
+// ConsoleEnabled reports whether consoles are allowed, resolving both the absent
+// block and the absent key to the default (true).
+func (c *SoulConsole) ConsoleEnabled() bool {
+	if c == nil || c.Enabled == nil {
+		return true
+	}
+	return *c.Enabled
 }
 
 // SoulCleanup is the local module-cache cleanup cycle.

@@ -116,6 +116,9 @@ type FromSoul struct {
 	//	*FromSoul_WardRoster
 	//	*FromSoul_ErrandResult
 	//	*FromSoul_HostUtilization
+	//	*FromSoul_ConsoleOpened
+	//	*FromSoul_ConsoleChunk
+	//	*FromSoul_ConsoleExit
 	Payload       isFromSoul_Payload `protobuf_oneof:"payload"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -248,6 +251,33 @@ func (x *FromSoul) GetHostUtilization() *HostUtilization {
 	return nil
 }
 
+func (x *FromSoul) GetConsoleOpened() *ConsoleOpened {
+	if x != nil {
+		if x, ok := x.Payload.(*FromSoul_ConsoleOpened); ok {
+			return x.ConsoleOpened
+		}
+	}
+	return nil
+}
+
+func (x *FromSoul) GetConsoleChunk() *ConsoleChunk {
+	if x != nil {
+		if x, ok := x.Payload.(*FromSoul_ConsoleChunk); ok {
+			return x.ConsoleChunk
+		}
+	}
+	return nil
+}
+
+func (x *FromSoul) GetConsoleExit() *ConsoleExit {
+	if x != nil {
+		if x, ok := x.Payload.(*FromSoul_ConsoleExit); ok {
+			return x.ConsoleExit
+		}
+	}
+	return nil
+}
+
 type isFromSoul_Payload interface {
 	isFromSoul_Payload()
 }
@@ -292,6 +322,20 @@ type FromSoul_HostUtilization struct {
 	HostUtilization *HostUtilization `protobuf:"bytes,10,opt,name=host_utilization,json=hostUtilization,proto3,oneof"`
 }
 
+type FromSoul_ConsoleOpened struct {
+	// Interactive console (PTY), only-add: a living pty session multiplexed on
+	// this stream by session_id. See console.proto.
+	ConsoleOpened *ConsoleOpened `protobuf:"bytes,11,opt,name=console_opened,json=consoleOpened,proto3,oneof"`
+}
+
+type FromSoul_ConsoleChunk struct {
+	ConsoleChunk *ConsoleChunk `protobuf:"bytes,12,opt,name=console_chunk,json=consoleChunk,proto3,oneof"`
+}
+
+type FromSoul_ConsoleExit struct {
+	ConsoleExit *ConsoleExit `protobuf:"bytes,13,opt,name=console_exit,json=consoleExit,proto3,oneof"`
+}
+
 func (*FromSoul_Hello) isFromSoul_Payload() {}
 
 func (*FromSoul_TaskEvent) isFromSoul_Payload() {}
@@ -312,6 +356,12 @@ func (*FromSoul_ErrandResult) isFromSoul_Payload() {}
 
 func (*FromSoul_HostUtilization) isFromSoul_Payload() {}
 
+func (*FromSoul_ConsoleOpened) isFromSoul_Payload() {}
+
+func (*FromSoul_ConsoleChunk) isFromSoul_Payload() {}
+
+func (*FromSoul_ConsoleExit) isFromSoul_Payload() {}
+
 // FromKeeper is the wrapper message for Keeper -> Soul messages on EventStream.
 type FromKeeper struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
@@ -329,6 +379,10 @@ type FromKeeper struct {
 	//	*FromKeeper_ErrandRequest
 	//	*FromKeeper_CancelErrand
 	//	*FromKeeper_TelemetryConfig
+	//	*FromKeeper_ConsoleOpen
+	//	*FromKeeper_ConsoleStdin
+	//	*FromKeeper_ConsoleResize
+	//	*FromKeeper_ConsoleClose
 	Payload       isFromKeeper_Payload `protobuf_oneof:"payload"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -479,6 +533,42 @@ func (x *FromKeeper) GetTelemetryConfig() *TelemetryConfig {
 	return nil
 }
 
+func (x *FromKeeper) GetConsoleOpen() *ConsoleOpen {
+	if x != nil {
+		if x, ok := x.Payload.(*FromKeeper_ConsoleOpen); ok {
+			return x.ConsoleOpen
+		}
+	}
+	return nil
+}
+
+func (x *FromKeeper) GetConsoleStdin() *ConsoleStdin {
+	if x != nil {
+		if x, ok := x.Payload.(*FromKeeper_ConsoleStdin); ok {
+			return x.ConsoleStdin
+		}
+	}
+	return nil
+}
+
+func (x *FromKeeper) GetConsoleResize() *ConsoleResize {
+	if x != nil {
+		if x, ok := x.Payload.(*FromKeeper_ConsoleResize); ok {
+			return x.ConsoleResize
+		}
+	}
+	return nil
+}
+
+func (x *FromKeeper) GetConsoleClose() *ConsoleClose {
+	if x != nil {
+		if x, ok := x.Payload.(*FromKeeper_ConsoleClose); ok {
+			return x.ConsoleClose
+		}
+	}
+	return nil
+}
+
 type isFromKeeper_Payload interface {
 	isFromKeeper_Payload()
 }
@@ -531,6 +621,24 @@ type FromKeeper_TelemetryConfig struct {
 	TelemetryConfig *TelemetryConfig `protobuf:"bytes,12,opt,name=telemetry_config,json=telemetryConfig,proto3,oneof"`
 }
 
+type FromKeeper_ConsoleOpen struct {
+	// Interactive console (PTY), only-add: control plane of a living pty
+	// session, multiplexed on this stream by session_id. See console.proto.
+	ConsoleOpen *ConsoleOpen `protobuf:"bytes,13,opt,name=console_open,json=consoleOpen,proto3,oneof"`
+}
+
+type FromKeeper_ConsoleStdin struct {
+	ConsoleStdin *ConsoleStdin `protobuf:"bytes,14,opt,name=console_stdin,json=consoleStdin,proto3,oneof"`
+}
+
+type FromKeeper_ConsoleResize struct {
+	ConsoleResize *ConsoleResize `protobuf:"bytes,15,opt,name=console_resize,json=consoleResize,proto3,oneof"`
+}
+
+type FromKeeper_ConsoleClose struct {
+	ConsoleClose *ConsoleClose `protobuf:"bytes,16,opt,name=console_close,json=consoleClose,proto3,oneof"`
+}
+
 func (*FromKeeper_HelloReply) isFromKeeper_Payload() {}
 
 func (*FromKeeper_ApplyRequest) isFromKeeper_Payload() {}
@@ -555,14 +663,22 @@ func (*FromKeeper_CancelErrand) isFromKeeper_Payload() {}
 
 func (*FromKeeper_TelemetryConfig) isFromKeeper_Payload() {}
 
+func (*FromKeeper_ConsoleOpen) isFromKeeper_Payload() {}
+
+func (*FromKeeper_ConsoleStdin) isFromKeeper_Payload() {}
+
+func (*FromKeeper_ConsoleResize) isFromKeeper_Payload() {}
+
+func (*FromKeeper_ConsoleClose) isFromKeeper_Payload() {}
+
 var File_keeper_v1_keeper_proto protoreflect.FileDescriptor
 
 const file_keeper_v1_keeper_proto_rawDesc = "" +
 	"\n" +
-	"\x16keeper/v1/keeper.proto\x12\x13soulstack.keeper.v1\x1a\x1akeeper/v1/onboarding.proto\x1a\x19keeper/v1/lifecycle.proto\x1a\x15keeper/v1/apply.proto\x1a\x19keeper/v1/soulprint.proto\x1a\x15keeper/v1/sigil.proto\x1a\x15keeper/v1/augur.proto\x1a\x16keeper/v1/beacon.proto\x1a\x16keeper/v1/errand.proto\x1a\x1bkeeper/v1/utilization.proto\"\r\n" +
+	"\x16keeper/v1/keeper.proto\x12\x13soulstack.keeper.v1\x1a\x1akeeper/v1/onboarding.proto\x1a\x19keeper/v1/lifecycle.proto\x1a\x15keeper/v1/apply.proto\x1a\x19keeper/v1/soulprint.proto\x1a\x15keeper/v1/sigil.proto\x1a\x15keeper/v1/augur.proto\x1a\x16keeper/v1/beacon.proto\x1a\x16keeper/v1/errand.proto\x1a\x1bkeeper/v1/utilization.proto\x1a\x17keeper/v1/console.proto\"\r\n" +
 	"\vPingRequest\"%\n" +
 	"\tPingReply\x12\x18\n" +
-	"\aversion\x18\x01 \x01(\tR\aversion\"\xf3\x05\n" +
+	"\aversion\x18\x01 \x01(\tR\aversion\"\xd1\a\n" +
 	"\bFromSoul\x122\n" +
 	"\x05hello\x18\x01 \x01(\v2\x1a.soulstack.keeper.v1.HelloH\x00R\x05hello\x12?\n" +
 	"\n" +
@@ -577,8 +693,11 @@ const file_keeper_v1_keeper_proto_rawDesc = "" +
 	"wardRoster\x12H\n" +
 	"\rerrand_result\x18\t \x01(\v2!.soulstack.keeper.v1.ErrandResultH\x00R\ferrandResult\x12Q\n" +
 	"\x10host_utilization\x18\n" +
-	" \x01(\v2$.soulstack.keeper.v1.HostUtilizationH\x00R\x0fhostUtilizationB\t\n" +
-	"\apayload\"\xaf\a\n" +
+	" \x01(\v2$.soulstack.keeper.v1.HostUtilizationH\x00R\x0fhostUtilization\x12K\n" +
+	"\x0econsole_opened\x18\v \x01(\v2\".soulstack.keeper.v1.ConsoleOpenedH\x00R\rconsoleOpened\x12H\n" +
+	"\rconsole_chunk\x18\f \x01(\v2!.soulstack.keeper.v1.ConsoleChunkH\x00R\fconsoleChunk\x12E\n" +
+	"\fconsole_exit\x18\r \x01(\v2 .soulstack.keeper.v1.ConsoleExitH\x00R\vconsoleExitB\t\n" +
+	"\apayload\"\xd7\t\n" +
 	"\n" +
 	"FromKeeper\x12B\n" +
 	"\vhello_reply\x18\x01 \x01(\v2\x1f.soulstack.keeper.v1.HelloReplyH\x00R\n" +
@@ -595,7 +714,11 @@ const file_keeper_v1_keeper_proto_rawDesc = "" +
 	"\x0eerrand_request\x18\n" +
 	" \x01(\v2\".soulstack.keeper.v1.ErrandRequestH\x00R\rerrandRequest\x12H\n" +
 	"\rcancel_errand\x18\v \x01(\v2!.soulstack.keeper.v1.CancelErrandH\x00R\fcancelErrand\x12Q\n" +
-	"\x10telemetry_config\x18\f \x01(\v2$.soulstack.keeper.v1.TelemetryConfigH\x00R\x0ftelemetryConfigB\t\n" +
+	"\x10telemetry_config\x18\f \x01(\v2$.soulstack.keeper.v1.TelemetryConfigH\x00R\x0ftelemetryConfig\x12E\n" +
+	"\fconsole_open\x18\r \x01(\v2 .soulstack.keeper.v1.ConsoleOpenH\x00R\vconsoleOpen\x12H\n" +
+	"\rconsole_stdin\x18\x0e \x01(\v2!.soulstack.keeper.v1.ConsoleStdinH\x00R\fconsoleStdin\x12K\n" +
+	"\x0econsole_resize\x18\x0f \x01(\v2\".soulstack.keeper.v1.ConsoleResizeH\x00R\rconsoleResize\x12H\n" +
+	"\rconsole_close\x18\x10 \x01(\v2!.soulstack.keeper.v1.ConsoleCloseH\x00R\fconsoleCloseB\t\n" +
 	"\apayload2\xda\x02\n" +
 	"\x06Keeper\x12H\n" +
 	"\x04Ping\x12 .soulstack.keeper.v1.PingRequest\x1a\x1e.soulstack.keeper.v1.PingReply\x12W\n" +
@@ -631,22 +754,29 @@ var file_keeper_v1_keeper_proto_goTypes = []any{
 	(*WardRoster)(nil),          // 11: soulstack.keeper.v1.WardRoster
 	(*ErrandResult)(nil),        // 12: soulstack.keeper.v1.ErrandResult
 	(*HostUtilization)(nil),     // 13: soulstack.keeper.v1.HostUtilization
-	(*HelloReply)(nil),          // 14: soulstack.keeper.v1.HelloReply
-	(*ApplyRequest)(nil),        // 15: soulstack.keeper.v1.ApplyRequest
-	(*CancelApply)(nil),         // 16: soulstack.keeper.v1.CancelApply
-	(*SeedRotationReply)(nil),   // 17: soulstack.keeper.v1.SeedRotationReply
-	(*PluginSigil)(nil),         // 18: soulstack.keeper.v1.PluginSigil
-	(*AugurReply)(nil),          // 19: soulstack.keeper.v1.AugurReply
-	(*SigilSnapshot)(nil),       // 20: soulstack.keeper.v1.SigilSnapshot
-	(*SigilTrustAnchors)(nil),   // 21: soulstack.keeper.v1.SigilTrustAnchors
-	(*VigilSnapshot)(nil),       // 22: soulstack.keeper.v1.VigilSnapshot
-	(*ErrandRequest)(nil),       // 23: soulstack.keeper.v1.ErrandRequest
-	(*CancelErrand)(nil),        // 24: soulstack.keeper.v1.CancelErrand
-	(*TelemetryConfig)(nil),     // 25: soulstack.keeper.v1.TelemetryConfig
-	(*BootstrapRequest)(nil),    // 26: soulstack.keeper.v1.BootstrapRequest
-	(*PluginFetchRequest)(nil),  // 27: soulstack.keeper.v1.PluginFetchRequest
-	(*BootstrapReply)(nil),      // 28: soulstack.keeper.v1.BootstrapReply
-	(*PluginChunk)(nil),         // 29: soulstack.keeper.v1.PluginChunk
+	(*ConsoleOpened)(nil),       // 14: soulstack.keeper.v1.ConsoleOpened
+	(*ConsoleChunk)(nil),        // 15: soulstack.keeper.v1.ConsoleChunk
+	(*ConsoleExit)(nil),         // 16: soulstack.keeper.v1.ConsoleExit
+	(*HelloReply)(nil),          // 17: soulstack.keeper.v1.HelloReply
+	(*ApplyRequest)(nil),        // 18: soulstack.keeper.v1.ApplyRequest
+	(*CancelApply)(nil),         // 19: soulstack.keeper.v1.CancelApply
+	(*SeedRotationReply)(nil),   // 20: soulstack.keeper.v1.SeedRotationReply
+	(*PluginSigil)(nil),         // 21: soulstack.keeper.v1.PluginSigil
+	(*AugurReply)(nil),          // 22: soulstack.keeper.v1.AugurReply
+	(*SigilSnapshot)(nil),       // 23: soulstack.keeper.v1.SigilSnapshot
+	(*SigilTrustAnchors)(nil),   // 24: soulstack.keeper.v1.SigilTrustAnchors
+	(*VigilSnapshot)(nil),       // 25: soulstack.keeper.v1.VigilSnapshot
+	(*ErrandRequest)(nil),       // 26: soulstack.keeper.v1.ErrandRequest
+	(*CancelErrand)(nil),        // 27: soulstack.keeper.v1.CancelErrand
+	(*TelemetryConfig)(nil),     // 28: soulstack.keeper.v1.TelemetryConfig
+	(*ConsoleOpen)(nil),         // 29: soulstack.keeper.v1.ConsoleOpen
+	(*ConsoleStdin)(nil),        // 30: soulstack.keeper.v1.ConsoleStdin
+	(*ConsoleResize)(nil),       // 31: soulstack.keeper.v1.ConsoleResize
+	(*ConsoleClose)(nil),        // 32: soulstack.keeper.v1.ConsoleClose
+	(*BootstrapRequest)(nil),    // 33: soulstack.keeper.v1.BootstrapRequest
+	(*PluginFetchRequest)(nil),  // 34: soulstack.keeper.v1.PluginFetchRequest
+	(*BootstrapReply)(nil),      // 35: soulstack.keeper.v1.BootstrapReply
+	(*PluginChunk)(nil),         // 36: soulstack.keeper.v1.PluginChunk
 }
 var file_keeper_v1_keeper_proto_depIdxs = []int32{
 	4,  // 0: soulstack.keeper.v1.FromSoul.hello:type_name -> soulstack.keeper.v1.Hello
@@ -659,31 +789,38 @@ var file_keeper_v1_keeper_proto_depIdxs = []int32{
 	11, // 7: soulstack.keeper.v1.FromSoul.ward_roster:type_name -> soulstack.keeper.v1.WardRoster
 	12, // 8: soulstack.keeper.v1.FromSoul.errand_result:type_name -> soulstack.keeper.v1.ErrandResult
 	13, // 9: soulstack.keeper.v1.FromSoul.host_utilization:type_name -> soulstack.keeper.v1.HostUtilization
-	14, // 10: soulstack.keeper.v1.FromKeeper.hello_reply:type_name -> soulstack.keeper.v1.HelloReply
-	15, // 11: soulstack.keeper.v1.FromKeeper.apply_request:type_name -> soulstack.keeper.v1.ApplyRequest
-	16, // 12: soulstack.keeper.v1.FromKeeper.cancel_apply:type_name -> soulstack.keeper.v1.CancelApply
-	17, // 13: soulstack.keeper.v1.FromKeeper.seed_rotation_reply:type_name -> soulstack.keeper.v1.SeedRotationReply
-	18, // 14: soulstack.keeper.v1.FromKeeper.plugin_sigil:type_name -> soulstack.keeper.v1.PluginSigil
-	19, // 15: soulstack.keeper.v1.FromKeeper.augur_reply:type_name -> soulstack.keeper.v1.AugurReply
-	20, // 16: soulstack.keeper.v1.FromKeeper.sigil_snapshot:type_name -> soulstack.keeper.v1.SigilSnapshot
-	21, // 17: soulstack.keeper.v1.FromKeeper.sigil_trust_anchors:type_name -> soulstack.keeper.v1.SigilTrustAnchors
-	22, // 18: soulstack.keeper.v1.FromKeeper.vigil_snapshot:type_name -> soulstack.keeper.v1.VigilSnapshot
-	23, // 19: soulstack.keeper.v1.FromKeeper.errand_request:type_name -> soulstack.keeper.v1.ErrandRequest
-	24, // 20: soulstack.keeper.v1.FromKeeper.cancel_errand:type_name -> soulstack.keeper.v1.CancelErrand
-	25, // 21: soulstack.keeper.v1.FromKeeper.telemetry_config:type_name -> soulstack.keeper.v1.TelemetryConfig
-	0,  // 22: soulstack.keeper.v1.Keeper.Ping:input_type -> soulstack.keeper.v1.PingRequest
-	26, // 23: soulstack.keeper.v1.Keeper.Bootstrap:input_type -> soulstack.keeper.v1.BootstrapRequest
-	2,  // 24: soulstack.keeper.v1.Keeper.EventStream:input_type -> soulstack.keeper.v1.FromSoul
-	27, // 25: soulstack.keeper.v1.Keeper.FetchModule:input_type -> soulstack.keeper.v1.PluginFetchRequest
-	1,  // 26: soulstack.keeper.v1.Keeper.Ping:output_type -> soulstack.keeper.v1.PingReply
-	28, // 27: soulstack.keeper.v1.Keeper.Bootstrap:output_type -> soulstack.keeper.v1.BootstrapReply
-	3,  // 28: soulstack.keeper.v1.Keeper.EventStream:output_type -> soulstack.keeper.v1.FromKeeper
-	29, // 29: soulstack.keeper.v1.Keeper.FetchModule:output_type -> soulstack.keeper.v1.PluginChunk
-	26, // [26:30] is the sub-list for method output_type
-	22, // [22:26] is the sub-list for method input_type
-	22, // [22:22] is the sub-list for extension type_name
-	22, // [22:22] is the sub-list for extension extendee
-	0,  // [0:22] is the sub-list for field type_name
+	14, // 10: soulstack.keeper.v1.FromSoul.console_opened:type_name -> soulstack.keeper.v1.ConsoleOpened
+	15, // 11: soulstack.keeper.v1.FromSoul.console_chunk:type_name -> soulstack.keeper.v1.ConsoleChunk
+	16, // 12: soulstack.keeper.v1.FromSoul.console_exit:type_name -> soulstack.keeper.v1.ConsoleExit
+	17, // 13: soulstack.keeper.v1.FromKeeper.hello_reply:type_name -> soulstack.keeper.v1.HelloReply
+	18, // 14: soulstack.keeper.v1.FromKeeper.apply_request:type_name -> soulstack.keeper.v1.ApplyRequest
+	19, // 15: soulstack.keeper.v1.FromKeeper.cancel_apply:type_name -> soulstack.keeper.v1.CancelApply
+	20, // 16: soulstack.keeper.v1.FromKeeper.seed_rotation_reply:type_name -> soulstack.keeper.v1.SeedRotationReply
+	21, // 17: soulstack.keeper.v1.FromKeeper.plugin_sigil:type_name -> soulstack.keeper.v1.PluginSigil
+	22, // 18: soulstack.keeper.v1.FromKeeper.augur_reply:type_name -> soulstack.keeper.v1.AugurReply
+	23, // 19: soulstack.keeper.v1.FromKeeper.sigil_snapshot:type_name -> soulstack.keeper.v1.SigilSnapshot
+	24, // 20: soulstack.keeper.v1.FromKeeper.sigil_trust_anchors:type_name -> soulstack.keeper.v1.SigilTrustAnchors
+	25, // 21: soulstack.keeper.v1.FromKeeper.vigil_snapshot:type_name -> soulstack.keeper.v1.VigilSnapshot
+	26, // 22: soulstack.keeper.v1.FromKeeper.errand_request:type_name -> soulstack.keeper.v1.ErrandRequest
+	27, // 23: soulstack.keeper.v1.FromKeeper.cancel_errand:type_name -> soulstack.keeper.v1.CancelErrand
+	28, // 24: soulstack.keeper.v1.FromKeeper.telemetry_config:type_name -> soulstack.keeper.v1.TelemetryConfig
+	29, // 25: soulstack.keeper.v1.FromKeeper.console_open:type_name -> soulstack.keeper.v1.ConsoleOpen
+	30, // 26: soulstack.keeper.v1.FromKeeper.console_stdin:type_name -> soulstack.keeper.v1.ConsoleStdin
+	31, // 27: soulstack.keeper.v1.FromKeeper.console_resize:type_name -> soulstack.keeper.v1.ConsoleResize
+	32, // 28: soulstack.keeper.v1.FromKeeper.console_close:type_name -> soulstack.keeper.v1.ConsoleClose
+	0,  // 29: soulstack.keeper.v1.Keeper.Ping:input_type -> soulstack.keeper.v1.PingRequest
+	33, // 30: soulstack.keeper.v1.Keeper.Bootstrap:input_type -> soulstack.keeper.v1.BootstrapRequest
+	2,  // 31: soulstack.keeper.v1.Keeper.EventStream:input_type -> soulstack.keeper.v1.FromSoul
+	34, // 32: soulstack.keeper.v1.Keeper.FetchModule:input_type -> soulstack.keeper.v1.PluginFetchRequest
+	1,  // 33: soulstack.keeper.v1.Keeper.Ping:output_type -> soulstack.keeper.v1.PingReply
+	35, // 34: soulstack.keeper.v1.Keeper.Bootstrap:output_type -> soulstack.keeper.v1.BootstrapReply
+	3,  // 35: soulstack.keeper.v1.Keeper.EventStream:output_type -> soulstack.keeper.v1.FromKeeper
+	36, // 36: soulstack.keeper.v1.Keeper.FetchModule:output_type -> soulstack.keeper.v1.PluginChunk
+	33, // [33:37] is the sub-list for method output_type
+	29, // [29:33] is the sub-list for method input_type
+	29, // [29:29] is the sub-list for extension type_name
+	29, // [29:29] is the sub-list for extension extendee
+	0,  // [0:29] is the sub-list for field type_name
 }
 
 func init() { file_keeper_v1_keeper_proto_init() }
@@ -700,6 +837,7 @@ func file_keeper_v1_keeper_proto_init() {
 	file_keeper_v1_beacon_proto_init()
 	file_keeper_v1_errand_proto_init()
 	file_keeper_v1_utilization_proto_init()
+	file_keeper_v1_console_proto_init()
 	file_keeper_v1_keeper_proto_msgTypes[2].OneofWrappers = []any{
 		(*FromSoul_Hello)(nil),
 		(*FromSoul_TaskEvent)(nil),
@@ -711,6 +849,9 @@ func file_keeper_v1_keeper_proto_init() {
 		(*FromSoul_WardRoster)(nil),
 		(*FromSoul_ErrandResult)(nil),
 		(*FromSoul_HostUtilization)(nil),
+		(*FromSoul_ConsoleOpened)(nil),
+		(*FromSoul_ConsoleChunk)(nil),
+		(*FromSoul_ConsoleExit)(nil),
 	}
 	file_keeper_v1_keeper_proto_msgTypes[3].OneofWrappers = []any{
 		(*FromKeeper_HelloReply)(nil),
@@ -725,6 +866,10 @@ func file_keeper_v1_keeper_proto_init() {
 		(*FromKeeper_ErrandRequest)(nil),
 		(*FromKeeper_CancelErrand)(nil),
 		(*FromKeeper_TelemetryConfig)(nil),
+		(*FromKeeper_ConsoleOpen)(nil),
+		(*FromKeeper_ConsoleStdin)(nil),
+		(*FromKeeper_ConsoleResize)(nil),
+		(*FromKeeper_ConsoleClose)(nil),
 	}
 	type x struct{}
 	out := protoimpl.TypeBuilder{

@@ -17,6 +17,14 @@ const (
 	// dispatch (soul_passage_unsupported, fail-closed): otherwise the next Passage's
 	// barrier would wait for a terminal the old binary never sends.
 	CapabilityPassage = "passage"
+
+	// CapabilityConsole — Soul understands the only-add `console_*` messages and
+	// can host an interactive pty session. Keeper checks it BEFORE minting a
+	// console session: an old binary would drop ConsoleOpen into the default
+	// branch of its recv-loop and never answer, leaving the operator staring at a
+	// dead terminal until an idle timeout. Same fail-closed shape as
+	// CapabilityPassage.
+	CapabilityConsole = "console"
 )
 
 // SoulCapabilities is the set of capabilities THIS soul-binary build supports
@@ -24,5 +32,5 @@ const (
 // keeper, so the set is static; forward-safety is for future mixed-version fleets
 // where an old binary sends an empty/reduced set.
 func SoulCapabilities() []string {
-	return []string{CapabilityPassage}
+	return []string{CapabilityPassage, CapabilityConsole}
 }

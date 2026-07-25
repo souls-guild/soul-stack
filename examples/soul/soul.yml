@@ -54,6 +54,15 @@ keeper:
 soulprint:
   refresh_interval: 5m
 
+# Interactive console (PTY) policy for this host — see docs/soul/console.md.
+# The whole block is optional; omitted means enabled with the defaults below.
+console:
+  enabled: true              # false → forbid interactive consoles on this host
+  max_sessions: 8            # concurrent consoles ON THIS HOST; 1 → one at a time
+  rate_limit_kbps: 1024      # output ceiling per session
+  kill_grace: 2s             # per step of the teardown escalation
+  # shell: /bin/bash         # opt.: absolute path only; default $SHELL → bash → sh
+
 # Cleanup of the module cache on the host
 cleanup:
   modules_ttl_days: 30

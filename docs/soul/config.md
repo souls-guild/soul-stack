@@ -45,6 +45,8 @@ keeper:
 soulprint:
   refresh_interval: 5m
 
+console: {...}                                 # interactive PTY policy; omitted → enabled with defaults
+
 cleanup:
   modules_ttl_days: 30
   run_interval: 24h
@@ -120,6 +122,22 @@ The parameters of assembling the Soulprint (facts about the host). The typed sch
 | `soulprint.refresh_interval` | `duration` | `5m` | How often Soul reassembles the facts and (for pull) emits an update over the stream via `SoulprintReport`. |
 
 The set of `SoulprintFacts` fields is normative in [`soulprint.md`](soulprint.md); it is collected by the Soul agent by a fixed table (`os.family`/`pkg_mgr`/`init_system`, etc.) and is **not declared** in the config. User-collectors (`/etc/soul/soulprint.d/*`) are deferred, see [open Q №22](../architecture.md) (requires decisions on the sandbox/rights/collector format — a separate ADR).
+
+### `console:`
+
+The host's policy for interactive console (PTY) sessions — see [`console.md`](console.md) for the mechanism. The whole block is optional; when it is absent, consoles work with the defaults below.
+
+This is **policy, not tuning**. A console is an interactive shell running as the Soul daemon's user, so the host must be able to forbid it regardless of what Keeper-side RBAC permits: Soul is the last word on its own machine. A refused session is answered with a terminal `ConsoleExit`, so Keeper learns at once instead of holding an operator's terminal open until a timeout.
+
+| Field | Type | Default | Meaning |
+|---|---|---|---|
+| `console.enabled` | `bool` | `true` | `false` forbids interactive consoles on this host outright. Omitting the key inside an otherwise-present block leaves consoles **enabled** — tuning one knob never silently disables the feature. |
+| `console.max_sessions` | `int` | `8` | Concurrent consoles **on this host**. `1` means one console at a time. Note this is per-machine, not per-operator: a multi-console wall over 10 hosts is one session on each. `0`/omitted takes the default — to forbid consoles use `enabled: false`, which is unambiguous. |
+| `console.rate_limit_kbps` | `int` (KB/s) | `1024` | Output ceiling for one session. A human terminal produces far less; the cap keeps a runaway `yes` from crowding the EventStream that also carries apply traffic. Output over budget is dropped and reported to Keeper, never silently lost. |
+| `console.kill_grace` | `duration` | `2s` | How long a session may take to die at each teardown step before the next, stronger one (SIGHUP → pty hangup + SIGKILL → session sweep). |
+| `console.shell` | `path` | `$SHELL` → `/bin/bash` → `/bin/sh` | The console program. **Must be an absolute path**: a bare name would be resolved through `PATH`, letting a shadowed binary in the daemon's environment become the console. |
+
+Chunk size and the output queue depth are deliberately **not** configurable — they are internal flow-control tuning with no operator-visible policy meaning.
 
 ### `cleanup:`
 
@@ -276,6 +294,7 @@ Config hot-reload with write-back of the changed value to disk is a cross-cuttin
 | `keeper.tls.ca` | — | yes | TLS-context init. |
 | `keeper.max_apply_size_mb` | — | yes | The recv limit is set by a dial option of the open gRPC stream; the new value is picked up on the next reconnect. |
 | `soulprint.refresh_interval` | yes | — | Applied to the next collection iteration. |
+| `console.*` | yes | — | Read at the start of each EventStream session, so a new value applies on the next reconnect. A console already running keeps the envelope it started with — retuning limits under a live pty would change nothing useful and would complicate teardown. |
 | `cleanup.modules_ttl_days` / `cleanup.run_interval` | yes | — | In-memory cleanup loop. |
 | `logging.level` | yes | — | An in-memory variable. |
 | `logging.format` / `logging.file` / `logging.rotation.*` | — | yes | Re-init the log writer. |
@@ -350,6 +369,13 @@ keeper:
 
 soulprint:
   refresh_interval: 5m
+
+console:                     # opt.: whole block; omitted → enabled with defaults
+  enabled: true              # false → no interactive consoles on this host
+  max_sessions: 8            # concurrent consoles ON THIS HOST; 1 → one at a time
+  rate_limit_kbps: 1024      # output ceiling per session
+  kill_grace: 2s             # per step of the teardown escalation
+  # shell: /bin/bash         # opt.: absolute path only; default $SHELL → bash → sh
 
 cleanup:
   modules_ttl_days: 30

@@ -1,0 +1,146 @@
+syntax = "proto3";
+
+package soulstack.keeper.v1;
+
+option go_package = "github.com/souls-guild/soul-stack/proto/gen/go/keeper/v1;keeperv1";
+
+// Interactive console (PTY) messages for the Keeper<->Soul EventStream.
+//
+// A console is a LIVING pty session, not an Errand: an Errand is
+// `request -> one final blob <= 64 KiB` (ADR-033), while a console is a
+// bidirectional byte stream that lasts until the shell exits or Keeper closes
+// it. Both ride the same EventStream, added strictly only-add to the existing
+// `oneof payload` (ADR-012(c)); no new RPC.
+//
+// Session lifecycle (session_id is a ULID minted by Keeper, unique per stream):
+//
+//	Keeper -> Soul: ConsoleOpen    -> Soul spawns a shell under a pty
+//	Soul -> Keeper: ConsoleOpened  (pid) | ConsoleExit (open failed)
+//	Keeper -> Soul: ConsoleStdin   (keystrokes) / ConsoleResize (TIOCSWINSZ)
+//	Soul -> Keeper: ConsoleChunk   (pty output, paced by Soul flow control)
+//	Keeper -> Soul: ConsoleClose   -> Soul kills the process group
+//	Soul -> Keeper: ConsoleExit    (terminal, exactly once per session)
+//
+// A console never outlives its EventStream session: on stream teardown (Keeper
+// gone, failback swap, daemon shutdown) Soul kills every live pty. That is the
+// kill-on-disconnect invariant — an orphaned pty is a zombie root shell.
+
+// ConsoleOpen is Keeper -> Soul: start an interactive pty session.
+//
+// `shell` is optional; empty means Soul picks its default (see the Soul-side
+// consolerunner). A non-empty value MUST be an absolute path — Soul rejects a
+// relative one with ConsoleExit{reason: OPEN_FAILED} instead of resolving it
+// through PATH (defense-in-depth: no PATH-shadowing of the console binary).
+//
+// cols/rows seed the initial winsize; 0 means Soul's built-in default (80x24).
+message ConsoleOpen {
+  string session_id = 1;   // ULID, minted by Keeper; unique within the EventStream session.
+  string target_sid = 2;   // Echo for logs only; authority is the mTLS peer cert (ADR-012(i)).
+  uint32 cols = 3;         // Initial terminal width; 0 -> Soul default.
+  uint32 rows = 4;         // Initial terminal height; 0 -> Soul default.
+  string shell = 5;        // Optional absolute path; empty -> Soul default.
+}
+
+// ConsoleStdin is Keeper -> Soul: raw bytes to write into the pty master
+// (keystrokes, including control characters such as ^C/^D). Not line-oriented
+// and not echoed back by Keeper — the pty's own echo comes back as a
+// ConsoleChunk, which is what makes the session a true terminal.
+//
+// An unknown session_id is silently ignored (the session already exited and
+// its ConsoleExit is in flight — a benign race).
+message ConsoleStdin {
+  string session_id = 1;
+  bytes data = 2;
+}
+
+// ConsoleResize is Keeper -> Soul: a new terminal geometry, applied to the pty
+// via TIOCSWINSZ. The foreground process group gets SIGWINCH, so full-screen
+// programs (top/vim) reflow. Zero cols/rows are ignored (a resize is never a
+// request for a 0-sized terminal).
+message ConsoleResize {
+  string session_id = 1;
+  uint32 cols = 2;
+  uint32 rows = 3;
+}
+
+// ConsoleClose is Keeper -> Soul: end the session. Soul terminates the whole
+// process group (the shell plus everything it spawned), reaps it and replies
+// with ConsoleExit{reason: CLOSED_BY_KEEPER}. Idempotent: closing an unknown
+// or already-closed session is a no-op.
+message ConsoleClose {
+  string session_id = 1;
+  string reason = 2;       // Free-form, for the Soul-side log (idle timeout, operator, RBAC revoke).
+}
+
+// ConsoleOpened is Soul -> Keeper: the pty is live. Sent exactly once, before
+// any ConsoleChunk of that session.
+message ConsoleOpened {
+  string session_id = 1;
+  int32 pid = 2;           // Shell pid; it is also the process-group/session leader id.
+  string shell = 3;        // The path Soul actually started (the resolved default when ConsoleOpen.shell was empty).
+}
+
+// ConsoleChunk is Soul -> Keeper: a slice of pty output.
+//
+// A pty MERGES the child's stdout and stderr onto one file descriptor — that is
+// what a terminal is. So in practice `stream` is always STDOUT; the enum exists
+// so a future non-pty exec mode can split the channels without a wire break
+// (only-add). Consumers must not rely on ever seeing STDERR here.
+//
+// Flow control (Soul-side, mandatory): the pty reader and the stream sender are
+// decoupled by a bounded queue, so a `yes`-style flood can never block Send and
+// wedge the EventStream's shared write mutex (apply's TaskEvent/RunResult travel
+// on the same stream). The sender paces output with a token bucket; when the
+// queue overflows, output is DROPPED and the byte count is reported in
+// `dropped_bytes` of the next chunk. `seq` is a per-session monotonic counter
+// starting at 1, so Keeper/web can render an explicit gap marker instead of
+// silently splicing a corrupted ANSI stream.
+message ConsoleChunk {
+  string session_id = 1;
+  ConsoleStream stream = 2;
+  bytes data = 3;
+  uint64 seq = 4;             // Per-session, monotonic from 1. Gaps are impossible; drops are reported below.
+  uint64 dropped_bytes = 5;   // Bytes discarded by Soul flow control immediately BEFORE this chunk; 0 in the normal case.
+}
+
+// ConsoleExit is Soul -> Keeper: the terminal event of a session, sent exactly
+// once. After it, the session_id is dead and any further ConsoleStdin for it is
+// ignored. Keeper must treat a missing ConsoleExit on stream teardown as an
+// implicit close (the pty is guaranteed dead — it cannot outlive its stream).
+message ConsoleExit {
+  string session_id = 1;
+  int32 exit_code = 2;             // Shell exit status; 128+N when killed by signal N; -1 when unknown (open failed).
+  ConsoleExitReason reason = 3;
+  string error_message = 4;        // Populated for OPEN_FAILED / LIMIT_EXCEEDED; empty on a normal exit.
+}
+
+// ConsoleStream marks which channel a ConsoleChunk carries. A pty session only
+// ever produces STDOUT (stdout and stderr share the terminal fd); STDERR is
+// reserved for a future non-pty exec mode.
+enum ConsoleStream {
+  CONSOLE_STREAM_UNSPECIFIED = 0;
+  CONSOLE_STREAM_STDOUT = 1;
+  CONSOLE_STREAM_STDERR = 2;
+}
+
+// ConsoleExitReason is the closed set of reasons a console session ended.
+// UNSPECIFIED is a forward-compat marker and never appears in a real
+// ConsoleExit.
+enum ConsoleExitReason {
+  CONSOLE_EXIT_REASON_UNSPECIFIED = 0;
+  // The shell exited on its own (`exit`, ^D, or a signal). exit_code carries it.
+  CONSOLE_EXIT_REASON_PROCESS_EXITED = 1;
+  // Keeper sent ConsoleClose; Soul killed the process group.
+  CONSOLE_EXIT_REASON_CLOSED_BY_KEEPER = 2;
+  // The pty or the shell could not be started (bad shell path, fork failure).
+  // No ConsoleOpened was sent for this session.
+  CONSOLE_EXIT_REASON_OPEN_FAILED = 3;
+  // The EventStream session ended (Keeper gone, failback swap, daemon
+  // shutdown) and Soul killed the pty — the kill-on-disconnect invariant.
+  // Best-effort: the stream is usually already broken, so Keeper normally
+  // infers this from the teardown rather than receiving the message.
+  CONSOLE_EXIT_REASON_SOUL_SHUTDOWN = 4;
+  // Refused by a Soul-side resource limit (too many live consoles on this
+  // host). No ConsoleOpened was sent for this session.
+  CONSOLE_EXIT_REASON_LIMIT_EXCEEDED = 5;
+}
