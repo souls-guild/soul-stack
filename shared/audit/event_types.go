@@ -1091,6 +1091,22 @@ const (
 	// must be audited.
 	EventProvisioningPolicyChanged EventType = "provisioning.policy_changed"
 
+	// EventSettingUpdated / EventSettingDeleted — an Archon overrode or dropped
+	// a Keeper runtime setting through `PUT` / `DELETE /v1/settings/{key}`
+	// (the `cfg_*` overlay of keeper_settings, ADR-0073(i)). `source: api`,
+	// `archon_aid` is the initiator. Payload: `{key, value?, previous?}` —
+	// operational tunables (a threshold, a rate), never a secret: the overlay is
+	// closed to security gates by admission rule (j.2). Two events rather than
+	// one `setting.changed`, so "an override was set" and "an override was
+	// dropped, the file value is back in effect" stay distinguishable in the
+	// audit trail without parsing the payload.
+	//
+	// The PROPAGATION of the change on the other nodes is a separate, already
+	// existing event: `config.reload_succeeded` with `source: keeper_internal`
+	// (ADR-0073(k)) — there the swap has no initiating Archon.
+	EventSettingUpdated EventType = "setting.updated"
+	EventSettingDeleted EventType = "setting.deleted"
+
 	// EventOperatorLogin — an operator successfully passed federated
 	// authentication (LDAP search-bind, ADR-058) and obtained an internal JWT
 	// via `POST /auth/ldap/login`. Written by the endpoint AFTER the JWT is

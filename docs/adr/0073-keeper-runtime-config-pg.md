@@ -69,6 +69,8 @@
 
   Exact endpoint paths, the permission-family name and the audit-event name are **propose-and-wait** ([ADR-029(d)](0029-service-registry.md)) and get fixed in the implementation tickets.
 
+  **Fixed by the pilot (NIM-140, propose-and-wait passed):** `GET /v1/settings` (catalog), `PUT /v1/settings/{key}`, `DELETE /v1/settings/{key}`; permission family `setting.read` / `setting.update` / `setting.delete`; audit events `setting.updated` / `setting.deleted` — two names rather than one `setting.changed`, so setting and dropping an override stay distinguishable in the trail without parsing the payload. Reads are not audited (the `provisioning.read` / `audit.read` precedent). The pilot ships the API, RBAC and audit surface; the MCP tool and the web-UI form follow in the full version ([ADR-0073(j)](0073-keeper-runtime-config-pg.md) phase A3), and the catalog they need is already served by `GET /v1/settings`. `requires_restart` is not in the catalog yet — every admitted key of the pilot has a live apply path, so the flag has nothing to mark until the ‡ group starts moving.
+
   **(j) Admission — enumerated per phase, growing toward the floor.** The set of overlay keys is explicit (a key is in the field-registry or it does not exist), but it is *meant to grow*: each phase moves more of `keeper.yml` into Postgres until only the residue of (b) is left. What gates a key is not caution about the mechanism but these four properties:
 
   1. it is marked reload-able-without-restart in the per-block table of [`docs/keeper/config.md`](../keeper/config.md);

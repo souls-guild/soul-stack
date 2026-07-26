@@ -723,6 +723,16 @@ Runtime policy management of **CREATE** operator methods (`provisioning_allowed_
 
 Catalog - [keeper/rbac.md → Provisioning](keeper/rbac.md#provisioning-2--adr-058).
 
+### Permission-family `setting.*` ([ADR-0073(i)](adr/0073-keeper-runtime-config-pg.md))
+
+The [SettingsStore](#modules-and-subsystems-inside-keeper) overlay — the `cfg_*` rows of `keeper_settings` merged onto `keeper.yml`. NoSelector — settings are cluster-level (as `provisioning.*` / `role.*`). A family of its own rather than `service.*`, even though both live in `keeper_settings`: editing a cluster-wide runtime tunable is a different privilege from registering a Service, and an operator may be granted it without any other cluster-admin power.
+
+- **`setting.read`** — `GET /v1/settings` (the catalog: type, range bounds, default, effective value and `source ∈ {default, file, pg}` per key; read-only, WITHOUT audit).
+- **`setting.update`** — `PUT /v1/settings/{key}` (override a key cluster-wide; unknown key → 404, unparsable/out-of-range value → 422 with the row unwritten; writes audit `setting.updated`).
+- **`setting.delete`** — `DELETE /v1/settings/{key}` (drop the override so the file value or built-in default is back in effect; no override → 404; writes audit `setting.deleted`).
+
+Catalog - [keeper/rbac.md → Settings](keeper/rbac.md#settings--adr-0073).
+
 ### Permission `incarnation.update-hosts` (deprecated-alias `incarnation.update`)
 
 The canonical permission name for editing declared `spec.hosts[]` (`PATCH /v1/incarnations/{name}/hosts`, ADR-008) is **`incarnation.update-hosts`**. The former name **`incarnation.update`** is **deprecated-alias**: canonicalized in `incarnation.update-hosts` on the load of the enforcer snapshot, existing roles do not break and do not require migration ([rbac.md → permissions directory, Incarnation](keeper/rbac.md)). Action - kebab (`update-hosts`), because grammar permission - exactly `<resource>.<action>` (pattern `soul.ssh-target-update`); MCP-tool - 3-segment `keeper.incarnation.hosts.update`.
@@ -837,6 +847,8 @@ Starting set of names already recorded in regulatory ADRs. Column "Category" - `
 | **`service.updated`** | `api` / `mcp` | Service registry (ADR-028-pattern RBAC-storage) | After `PATCH /v1/services/{name}` (200, replace mutable fields) or MCP-tool `keeper.service.update`. | `archon.aid`, `name`, `git`, `ref`. |
 | **`service.deregistered`** | `api` / `mcp` | Service registry (ADR-028-pattern RBAC-storage) | After `DELETE /v1/services/{name}` (204) or MCP-tool `keeper.service.deregister`. | `archon.aid`, `name`. |
 | **`provisioning.policy_changed`** | `api` / `mcp` | Operator Provisioning Policy ([ADR-058(i)](adr/0058-operator-auth-ldap-oidc.md)) | After `PUT /v1/provisioning-policy` (200, replace semantics of policy `provisioning_allowed_methods`). read(`GET`) is NOT audited. | `archon.aid`, `allowed_methods` (the new CSV list of allowed creation methods is not a secret). |
+| **`setting.updated`** | `api` / `mcp` | [SettingsStore](#modules-and-subsystems-inside-keeper) overlay ([ADR-0073(i)](adr/0073-keeper-runtime-config-pg.md)) | After `PUT /v1/settings/{key}` (200) — an Archon overrode a Keeper runtime setting cluster-wide. A rejected value (422) writes nothing. | `archon.aid`, `key`, `value` (the new value), `previous` (the prior override, if any). Operational tunables only — the overlay is closed to security gates, so no secrets. |
+| **`setting.deleted`** | `api` / `mcp` | [SettingsStore](#modules-and-subsystems-inside-keeper) overlay ([ADR-0073(i)](adr/0073-keeper-runtime-config-pg.md)) | After `DELETE /v1/settings/{key}` (200) — the override was dropped, so the `keeper.yml` value or the built-in default is back in effect. | `archon.aid`, `key`, `previous` (the override that was dropped). |
 | **`operator.provisioned`** | `api` / `mcp` | federated auto-provision ([ADR-058(d)](adr/0058-operator-auth-ldap-oidc.md)) | The first federated login created the string `operators` (`created_via='ldap'`\|`'oidc'`, `created_by_aid=NULL`). Writes Mapper. `archon_aid: NULL` (initiator is an external IdP, not an operator). | `aid` (derived), `auth_method` (`ldap`\|`oidc`), `roles` (from `group_role_map`). |
 | **`operator.login`** | `api` / `mcp` | federated-login ([ADR-058(f)](adr/0058-operator-auth-ldap-oidc.md)) | After releasing an internal JWT on `POST /auth/ldap/login` or `GET /auth/oidc/callback` (one event per login). | `method` (`ldap`\|`oidc`), `aid`, `provisioned` (bool - created in this login) - WITHOUT password/bind-creds/JWT/tokens. |
 | **`omen.created`** | `api` / `mcp` | Augur Omen registry ([ADR-025](adr/0025-augur.md), [keeper/augur.md](keeper/augur.md)) | After `POST /v1/augur/omens` (201) or MCP-tool `keeper.augur.omen.create`. | `archon.aid`, `name`, `source_type`, `endpoint` (URL is not a secret), `auth_ref` (vault-ref is not a secret; master-cred is not in the entry), `created_by_aid`. |
@@ -905,6 +917,8 @@ The names below are **convention examples** illustrating how event-types are sor
 **Area `operator.*`** - Archon life cycle ([ADR-013](adr/0013-bootstrap-archon.md), [ADR-014](adr/0014-operator-identity.md)): `operator.created`, `operator.revoked`, `operator.token_issued`, `operator.access_denied` (attempt to call endpoint without permission). Registered above (federated [ADR-058](adr/0058-operator-auth-ldap-oidc.md)): `operator.provisioned` (auto-provision created string `operators`), `operator.login` (releasing internal JWT on federated login).
 
 **Area `provisioning.*`** - Operator CREATION method policy ([ADR-058(i)](adr/0058-operator-auth-ldap-oidc.md)). Registered above: `provisioning.policy_changed` (`api`/`mcp` - `PUT /v1/provisioning-policy`, replace policy `provisioning_allowed_methods`; read is NOT audited).
+
+**Area `setting.*`** - the [SettingsStore](#modules-and-subsystems-inside-keeper) overlay of reload-able Keeper settings ([ADR-0073(i)](adr/0073-keeper-runtime-config-pg.md)). Registered above: `setting.updated` (`PUT /v1/settings/{key}`), `setting.deleted` (`DELETE /v1/settings/{key}`); read is NOT audited. Two names rather than one `setting.changed`, so "an override was set" and "an override was dropped" stay distinguishable without parsing the payload. The **propagation** of the change on the other instances is not a `setting.*` event: it is `config.reload_succeeded` with `source: keeper_internal`, where the swap has no initiating Archon.
 
 **Area `role.*`** - RBAC-CRUD: roles, their permissions and membership ([keeper/rbac.md](keeper/rbac.md), [ADR-022](adr/0022-audit-pipeline.md#adr-022-audit-pipeline-storage-schema-retention) - authorization changes must be audited). Registered above: `role.created`, `role.deleted`, `role.permissions-updated`, `role.operator-granted`, `role.operator-revoked`. `role.list` - read-only, not written to audit.
 

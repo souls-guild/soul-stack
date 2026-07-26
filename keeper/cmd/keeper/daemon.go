@@ -69,6 +69,7 @@ import (
 	"github.com/souls-guild/soul-stack/keeper/internal/scenario"
 	"github.com/souls-guild/soul-stack/keeper/internal/secretwrite"
 	"github.com/souls-guild/soul-stack/keeper/internal/serviceregistry"
+	"github.com/souls-guild/soul-stack/keeper/internal/settingsstore"
 	"github.com/souls-guild/soul-stack/keeper/internal/sigil"
 	"github.com/souls-guild/soul-stack/keeper/internal/toll"
 	"github.com/souls-guild/soul-stack/keeper/internal/topology"
@@ -152,6 +153,11 @@ type daemon struct {
 	// destinySource, S4) read from it. serviceSvc -- CRUD facade (OpenAPI/MCP, S3).
 	serviceHolder *serviceregistry.Holder
 	serviceSvc    *serviceregistry.Service
+
+	// settings -- SettingsStore (ADR-0073): the `cfg_*` overlay of
+	// keeper_settings merged onto keeper.yml by `shared/config`. nil when the
+	// break-glass KEEPER_CONFIG_SOURCE=file is set.
+	settings *settingsstore.Store
 	// serviceRefs -- TTL cache of the git-ls-remote tag/branch listing for
 	// `GET /v1/services/{name}/refs` (UI Upgrade-modal dropdown). Per-keeper,
 	// not cluster-wide (refs are read-only; lag between instances does not
@@ -665,6 +671,68 @@ func (d *daemon) setupStorage(ctx context.Context) error {
 	if err := migrate.Apply(ctx, dsn, migrations.FS, "."); err != nil {
 		fmt.Fprintf(os.Stderr, "keeper run: apply migrations: %v\n", err)
 		return errSetupFailed
+	}
+	return nil
+}
+
+// setupSettingsStore wires the SettingsStore overlay (ADR-0073): the `cfg_*`
+// rows of keeper_settings are merged onto keeper.yml inside `config.Store`, so
+// every `Get()`/`OnReload` consumer downstream picks up cluster-wide values
+// without a single edit of its own.
+//
+// Runs right after storage and BEFORE every consumer setup, because a restarted
+// instance must come up on the effective config — `d.cfg` is the startup
+// snapshot the later steps read (Toll takes its initial threshold from it).
+//
+// Fail-soft (ADR-0073(h)): Postgres being unreachable here is a WARN, not a
+// fatal — the instance runs on the pure file base. A runtime tunable must not
+// become a new hard dependency for the cluster to start.
+func (d *daemon) setupSettingsStore(ctx context.Context) error {
+	return d.initSettingsStore(ctx, d.pool)
+}
+
+// initSettingsStore is the body of setupSettingsStore over an explicit querier
+// (the pool in production, a fake in tests).
+func (d *daemon) initSettingsStore(ctx context.Context, db settingsstore.Querier) error {
+	if os.Getenv(settingsstore.EnvConfigSource) == settingsstore.ConfigSourceFileOnly {
+		d.logger.Warn("keeper run: settings overlay disabled by break-glass, running off keeper.yml only",
+			slog.String("env", settingsstore.EnvConfigSource))
+		return nil
+	}
+
+	d.settings = settingsstore.New(db, d.store, settingsstore.DefaultRefreshInterval, d.logger)
+	d.store.SetOverlaySource(d.settings)
+
+	if err := d.settings.Refresh(ctx); err != nil {
+		d.logger.Warn("keeper run: settings overlay unavailable at startup, running off keeper.yml",
+			slog.Any("error", err))
+	}
+	// The merged snapshot becomes the startup config for the setup steps below.
+	if cfg := d.store.Get(); cfg != nil {
+		d.cfg = cfg
+	}
+	go d.settings.Run(ctx)
+
+	d.logger.Info("keeper run: settings overlay active",
+		slog.Int("overrides", len(d.settings.Overlay())))
+	return nil
+}
+
+// settingsOverlayOrNil keeps a nil *settingsstore.Store from becoming a
+// non-nil interface holding a nil pointer (the tempoLimiterOrNil pattern).
+func settingsOverlayOrNil(s *settingsstore.Store) handlers.SettingsOverlayReader {
+	if s == nil {
+		return nil
+	}
+	return s
+}
+
+// setupSettingsInvalidation subscribes the overlay to the cluster invalidation
+// channel it shares with the service registry (ADR-0073(g)) — a change on one
+// node reaches the others in milliseconds instead of waiting for the TTL poll.
+func (d *daemon) setupSettingsInvalidation(ctx context.Context) error {
+	if d.settings != nil && d.redisClient != nil {
+		go d.settings.WatchInvalidations(ctx, serviceInvalidationSource{redis: d.redisClient, kid: d.cfg.KID, logger: d.logger})
 	}
 	return nil
 }
@@ -4359,6 +4427,12 @@ func (d *daemon) setupAPIServer(ctx context.Context) error {
 		// Keeper daemon runtime wiring note.
 		// Keeper daemon runtime wiring note.
 		ProvisioningPolicyReader: d.serviceHolder,
+		// /v1/settings mounts only with a live overlay: under the break-glass
+		// KEEPER_CONFIG_SOURCE=file d.settings is nil, and editing cluster-wide
+		// values through an instance that deliberately ignores them would be a
+		// lie (an explicit nil, not a typed nil in the interface).
+		SettingsConfig:  d.store,
+		SettingsOverlay: settingsOverlayOrNil(d.settings),
 	}, logger)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "keeper run: build HTTP server: %v\n", err)

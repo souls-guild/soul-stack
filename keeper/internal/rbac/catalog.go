@@ -330,6 +330,21 @@ var AllowedPermissions = map[string]struct{}{
 	"provisioning.read":   {},
 	"provisioning.update": {},
 
+	// setting.* — the Keeper runtime settings overlay (`cfg_*` rows of
+	// keeper_settings, ADR-0073): read the catalog with effective values
+	// (`GET /v1/settings`), override a key (`PUT /v1/settings/{key}`), drop
+	// an override back to the file value (`DELETE /v1/settings/{key}`).
+	// resource is `setting`; a family of its own rather than `service.*`,
+	// even though both live in keeper_settings: editing a cluster-wide
+	// tunable is a different privilege from registering a Service, and an
+	// operator may be granted it without any other cluster-admin power.
+	// Selector — NoSelector: settings are cluster-level (like provisioning.*
+	// / role.*). Mutations are audited (`setting.updated` /
+	// `setting.deleted`), read is not.
+	"setting.read":   {},
+	"setting.update": {},
+	"setting.delete": {},
+
 	// audit.* — read-only access to `audit_log` (`GET /v1/audit`). Selector
 	// — NoSelector in the MVP: filtering by archon_aid is done via a query
 	// param, and per-AID/coven scope for the audit trail isn't introduced

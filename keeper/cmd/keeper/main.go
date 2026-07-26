@@ -328,6 +328,9 @@ func runDaemon(args []string) int {
 		// Keeper command runtime helper note.
 		// Keeper command runtime helper note.
 		d.setupSigil,
+		// setupSettingsStore before every consumer: they take their startup
+		// values from d.cfg, which the overlay replaces with the effective one.
+		d.setupSettingsStore,
 		d.setupOperatorBootstrapGuard,
 		d.setupJWT,
 		d.setupRBAC,
@@ -390,6 +393,7 @@ func runDaemon(args []string) int {
 		d.setupConclaveRefuseGuard,
 		d.setupRBACInvalidation,
 		d.setupServiceRegistryInvalidation,
+		d.setupSettingsInvalidation,
 		// Keeper command runtime helper note.
 		// Keeper command runtime helper note.
 		// Keeper command runtime helper note.

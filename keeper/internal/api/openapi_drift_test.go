@@ -36,6 +36,7 @@ import (
 	"github.com/souls-guild/soul-stack/keeper/internal/rbac"
 	"github.com/souls-guild/soul-stack/keeper/internal/serviceregistry"
 	"github.com/souls-guild/soul-stack/keeper/internal/sigil"
+	"github.com/souls-guild/soul-stack/shared/config"
 )
 
 // route — a normalized route key for set comparison.
@@ -207,6 +208,7 @@ func collectRoutes(t *testing.T) map[route]struct{} {
 		stubSigilKeyHandler(t),
 		stubServiceHandler(t),
 		stubProvisioningPolicyHandler(t),
+		stubSettingsHandler(t),
 		stubAugurHandler(t),
 		stubOracleHandler(t),
 		nil, // pushH — push.*-routes are wired only when pushH is non-nil (router.go); currently in the allowlist
@@ -369,6 +371,29 @@ func stubProvisioningPolicyHandler(t *testing.T) *handlers.ProvisioningPolicyHan
 	}
 	return handlers.NewProvisioningPolicyHandler(stubProvisioningReader{}, svc, nil)
 }
+
+// stubSettingsHandler builds a SettingsHandler over stub readers + a stub
+// serviceregistry.Service. Nothing is called while walking the tree — it only
+// needs to be non-nil so the /v1/settings routes register (drift
+// router<->full-spec). ADR-0073.
+func stubSettingsHandler(t *testing.T) *handlers.SettingsHandler {
+	t.Helper()
+	svc, err := serviceregistry.NewService(serviceregistry.ServiceDeps{Pool: stubServicePool{}})
+	if err != nil {
+		t.Fatalf("serviceregistry.NewService(stub): %v", err)
+	}
+	return handlers.NewSettingsHandler(stubSettingsConfig{}, stubSettingsOverlay{}, svc, nil)
+}
+
+type stubSettingsConfig struct{}
+
+func (stubSettingsConfig) Get() *config.KeeperConfig  { return nil }
+func (stubSettingsConfig) Document() *config.Document { return nil }
+
+type stubSettingsOverlay struct{}
+
+func (stubSettingsOverlay) Values() map[string]any        { return nil }
+func (stubSettingsOverlay) Refresh(context.Context) error { return nil }
 
 type stubProvisioningReader struct{}
 

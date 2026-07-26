@@ -228,6 +228,22 @@ func (s *Service) SetSetting(ctx context.Context, in SetSettingInput) (*Setting,
 	return set, nil
 }
 
+// DeleteSetting removes a cluster-wide setting by key and invalidates the
+// cluster. [ErrSettingNotFound] if the key doesn't exist.
+//
+// For the SettingsStore overlay (ADR-0073(f)) deleting the row is the clean
+// revert to the file value — that is why the write path needs a delete at all.
+func (s *Service) DeleteSetting(ctx context.Context, key string) error {
+	if !ValidSettingKey(key) {
+		return fmt.Errorf("%w: %q must match %s", ErrInvalidSettingKey, key, SettingKeyPattern)
+	}
+	if err := DeleteSetting(ctx, s.pool, key); err != nil {
+		return err
+	}
+	s.invalidate(ctx)
+	return nil
+}
+
 // validateFields — shared application-level validation of Service record
 // fields (create/update): name format, non-empty git/ref, refresh format via
 // config.ParseDuration (if set). Duplicates DB CHECKs for a better error

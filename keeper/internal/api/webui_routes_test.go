@@ -39,7 +39,7 @@ func webUIRouter(t *testing.T, verifier *keeperjwt.Verifier, webUIEnabled bool) 
 		handlers.NewSoulHandler(nil, nil, nil, nil),
 		handlers.TelemetrySpecStub(),
 		stubRoleHandler(t), stubSynodHandler(t), stubSigilHandler(t), stubSigilKeyHandler(t),
-		stubServiceHandler(t), nil, stubAugurHandler(t), stubOracleHandler(t),
+		stubServiceHandler(t), nil, nil, stubAugurHandler(t), stubOracleHandler(t),
 		nil, // pushH
 		nil, // pushProviderH
 		nil, // providerH

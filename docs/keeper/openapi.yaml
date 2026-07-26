@@ -3346,6 +3346,63 @@ components:
         - ref
         - updated_at
       type: object
+    SettingReply:
+      additionalProperties: false
+      properties:
+        bounds:
+          description: accepted range, e.g. (0, 1]
+          type: string
+        default: {}
+        description:
+          type: string
+        key:
+          type: string
+        source:
+          enum:
+            - default
+            - file
+            - pg
+          type: string
+        type:
+          enum:
+            - float
+            - int
+          type: string
+        value:
+          description: effective value on this instance
+        yaml_path:
+          type: string
+      required:
+        - key
+        - yaml_path
+        - type
+        - bounds
+        - default
+        - value
+        - source
+        - description
+      type: object
+    SettingUpdateRequest:
+      additionalProperties: false
+      properties:
+        value:
+          description: new value in text form (e.g. "0.5"); parsed and range-checked by the field registry
+          type: string
+      required:
+        - value
+      type: object
+    SettingsCatalogReply:
+      additionalProperties: false
+      properties:
+        items:
+          items:
+            $ref: "#/components/schemas/SettingReply"
+          type:
+            - array
+            - "null"
+      required:
+        - items
+      type: object
     SigilKeyIntroduceReply:
       additionalProperties: false
       properties:
@@ -11030,6 +11087,135 @@ paths:
       summary: default host-vitals telemetry config of a Service + allowed collectors
       tags:
         - service
+  /v1/settings:
+    get:
+      description: Every admitted runtime setting with its type, range bounds, built-in default, the EFFECTIVE value on this instance and its source (default < file < pg, ADR-0073). Renders the settings form without hardcoding the field list in the UI. Permission setting.read. Read-only, no audit.
+      operationId: listSettings
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SettingsCatalogReply"
+          description: OK
+        "403":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/HumaProblemError"
+          description: Forbidden
+        "500":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/HumaProblemError"
+          description: Internal Server Error
+      summary: Keeper runtime settings catalog
+      tags:
+        - settings
+  /v1/settings/{key}:
+    delete:
+      description: Removes the keeper_settings row, so the keeper.yml value (or the built-in default) is back in effect cluster-wide — the clean revert of ADR-0073(f). Permission setting.delete. 404 - the key is not in the registry, or there is no override to drop.
+      operationId: deleteSetting
+      parameters:
+        - description: setting key whose override is dropped
+          in: path
+          name: key
+          required: true
+          schema:
+            description: setting key whose override is dropped
+            type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SettingReply"
+          description: OK
+        "403":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/HumaProblemError"
+          description: Forbidden
+        "404":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/HumaProblemError"
+          description: Not Found
+        "422":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/HumaProblemError"
+          description: Unprocessable Entity
+        "500":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/HumaProblemError"
+          description: Internal Server Error
+      summary: Drop a Keeper runtime setting override
+      tags:
+        - settings
+    put:
+      description: Writes a cluster-wide override into keeper_settings and invalidates the other Keeper nodes, which re-merge it onto their keeper.yml without a restart (ADR-0073). Permission setting.update. 404 - the key is not in the registry; 422 - unparsable or out-of-range value, nothing is written.
+      operationId: updateSetting
+      parameters:
+        - description: setting key from GET /v1/settings (cfg_* namespace of keeper_settings)
+          in: path
+          name: key
+          required: true
+          schema:
+            description: setting key from GET /v1/settings (cfg_* namespace of keeper_settings)
+            type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SettingUpdateRequest"
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SettingReply"
+          description: OK
+        "400":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/HumaProblemError"
+          description: Bad Request
+        "403":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/HumaProblemError"
+          description: Forbidden
+        "404":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/HumaProblemError"
+          description: Not Found
+        "422":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/HumaProblemError"
+          description: Unprocessable Entity
+        "500":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/HumaProblemError"
+          description: Internal Server Error
+      summary: Override a Keeper runtime setting
+      tags:
+        - settings
   /v1/sigil/keys:
     get:
       description: Active trust-anchor signing keys (primary first, without vault_ref, ADR-026(h)). Permission sigil.key-list. Read-only, no audit.

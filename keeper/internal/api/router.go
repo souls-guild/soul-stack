@@ -147,7 +147,7 @@ const (
 // chi.NotFound and chi.MethodNotAllowed are replaced with problem+json
 // handlers, so 404/405 do not come back in stdlib's text/plain default
 // format.
-func buildRouter(verifier *jwt.Verifier, healthH *health.Handler, opH *handlers.OperatorHandler, incH *handlers.IncarnationHandler, soulH *handlers.SoulHandler, telemetryH *handlers.TelemetryHandler, roleH *handlers.RoleHandler, synodH *handlers.SynodHandler, sigilH *handlers.SigilHandler, sigilKeyH *handlers.SigilKeyHandler, serviceH *handlers.ServiceHandler, provisioningPolicyH *handlers.ProvisioningPolicyHandler, augurH *handlers.AugurHandler, oracleH *handlers.OracleHandler, pushH *handlers.PushHandler, pushProviderH *handlers.PushProviderHandler, providerH *handlers.ProviderHandler, profileH *handlers.ProfileHandler, errandH *handlers.ErrandHandler, voyageH *handlers.VoyageHandler, cadenceH *handlers.CadenceHandler, auditH *handlers.AuditHandler, choirH *handlers.ChoirHandler, heraldH *handlers.HeraldHandler, moduleCatalogH *handlers.ModuleCatalogHandler, moduleFormPrepH *handlers.ModuleFormPrepHandler, permCatalogH *handlers.PermissionCatalogHandler, eventTypeCatalogH *handlers.EventTypeCatalogHandler, heraldTypeCatalogH *handlers.HeraldTypeCatalogHandler, meH *handlers.MyPermissionsHandler, enforcer RBACProvider, auditWriter audit.Writer, metricsHTTP *obs.HTTPMetrics, tollDegraded toll.DegradedReader, tempoLimiter apimiddleware.RateLimiter, tempoMetrics apimiddleware.RateLimitMetrics, tempoVoyageCreateLimits func() apimiddleware.RateLimitLimits, tempoVoyagePreviewLimits func() apimiddleware.RateLimitLimits, webUIEnabled bool, ldapAuth *LDAPAuthDeps, oidcAuth *OIDCAuthDeps, authToken *AuthTokenDeps, authMethods AuthMethodsDeps, loginGuard apimiddleware.LoginGuard, loginLimitCfg apimiddleware.AuthLoginLimitConfig, soulStatsStaleFn func() time.Duration, clusterH *handlers.ClusterHandler, runEventsDeps *runEventsDeps, logger *slog.Logger) http.Handler {
+func buildRouter(verifier *jwt.Verifier, healthH *health.Handler, opH *handlers.OperatorHandler, incH *handlers.IncarnationHandler, soulH *handlers.SoulHandler, telemetryH *handlers.TelemetryHandler, roleH *handlers.RoleHandler, synodH *handlers.SynodHandler, sigilH *handlers.SigilHandler, sigilKeyH *handlers.SigilKeyHandler, serviceH *handlers.ServiceHandler, provisioningPolicyH *handlers.ProvisioningPolicyHandler, settingsH *handlers.SettingsHandler, augurH *handlers.AugurHandler, oracleH *handlers.OracleHandler, pushH *handlers.PushHandler, pushProviderH *handlers.PushProviderHandler, providerH *handlers.ProviderHandler, profileH *handlers.ProfileHandler, errandH *handlers.ErrandHandler, voyageH *handlers.VoyageHandler, cadenceH *handlers.CadenceHandler, auditH *handlers.AuditHandler, choirH *handlers.ChoirHandler, heraldH *handlers.HeraldHandler, moduleCatalogH *handlers.ModuleCatalogHandler, moduleFormPrepH *handlers.ModuleFormPrepHandler, permCatalogH *handlers.PermissionCatalogHandler, eventTypeCatalogH *handlers.EventTypeCatalogHandler, heraldTypeCatalogH *handlers.HeraldTypeCatalogHandler, meH *handlers.MyPermissionsHandler, enforcer RBACProvider, auditWriter audit.Writer, metricsHTTP *obs.HTTPMetrics, tollDegraded toll.DegradedReader, tempoLimiter apimiddleware.RateLimiter, tempoMetrics apimiddleware.RateLimitMetrics, tempoVoyageCreateLimits func() apimiddleware.RateLimitLimits, tempoVoyagePreviewLimits func() apimiddleware.RateLimitLimits, webUIEnabled bool, ldapAuth *LDAPAuthDeps, oidcAuth *OIDCAuthDeps, authToken *AuthTokenDeps, authMethods AuthMethodsDeps, loginGuard apimiddleware.LoginGuard, loginLimitCfg apimiddleware.AuthLoginLimitConfig, soulStatsStaleFn func() time.Duration, clusterH *handlers.ClusterHandler, runEventsDeps *runEventsDeps, logger *slog.Logger) http.Handler {
 	r := chi.NewRouter()
 
 	// huma error-override (ADR-054, FULL-TYPED): global huma.NewError →
@@ -1147,6 +1147,37 @@ func buildRouter(verifier *jwt.Verifier, healthH *health.Handler, opH *handlers.
 					apimiddleware.RequirePermission(enforcer, "provisioning", "update", apimiddleware.NoSelector),
 				).Group(func(r chi.Router) {
 					registerHumaProvisioningPolicyPut(newHumaProvisioningAPI(r, auditWriter, audit.EventProvisioningPolicyChanged, logger), provisioningPolicyH)
+				})
+			})
+		}
+
+		// /v1/settings — Keeper runtime settings overlay (the `cfg_*` rows of
+		// keeper_settings merged onto keeper.yml, ADR-0073). Mounted only when
+		// settingsH is wired (Deps.SettingsConfig + SettingsOverlay + ServiceSvc);
+		// the break-glass KEEPER_CONFIG_SOURCE=file leaves the group absent.
+		// Selector — NoSelector: settings are cluster-level.
+		//
+		// GET — read (permission setting.read, no audit). PUT/DELETE — WRITE+AUDIT
+		// variant B, each on its OWN chi group with its own RBAC and its own event
+		// type (setting.updated / setting.deleted).
+		if settingsH != nil {
+			r.Route("/settings", func(r chi.Router) {
+				r.With(
+					apimiddleware.RequirePermission(enforcer, "setting", "read", apimiddleware.NoSelector),
+				).Group(func(r chi.Router) {
+					registerHumaSettingsList(newHumaCadenceAPI(r), settingsH)
+				})
+
+				r.With(
+					apimiddleware.RequirePermission(enforcer, "setting", "update", apimiddleware.NoSelector),
+				).Group(func(r chi.Router) {
+					registerHumaSettingPut(newHumaSettingsAPI(r, auditWriter, audit.EventSettingUpdated, logger), settingsH)
+				})
+
+				r.With(
+					apimiddleware.RequirePermission(enforcer, "setting", "delete", apimiddleware.NoSelector),
+				).Group(func(r chi.Router) {
+					registerHumaSettingDelete(newHumaSettingsAPI(r, auditWriter, audit.EventSettingDeleted, logger), settingsH)
 				})
 			})
 		}

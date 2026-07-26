@@ -19,6 +19,12 @@ import (
 // (deferred to M0.2.5).
 var ErrPathNotFound = errors.New("yaml path not found")
 
+// errPathUnresolved — the path exists syntactically but does not resolve in this
+// document (a scalar or a null where a mapping was expected). Distinct from
+// [ErrPathNotFound] for the caller, identical for create-on-write: both mean
+// "there is nothing to patch here" (see [PatchKeeperOrCreate]).
+var errPathUnresolved = errors.New("config: cannot resolve path")
+
 // PatchKeeper mutates the value at `yamlPath` in a KeeperConfig document.
 //
 // Contract:
@@ -89,7 +95,7 @@ func patchOne(doc *Document, yamlPath string, value any) error {
 		if yaml.IsNotFoundNodeError(err) {
 			return fmt.Errorf("%w: %s", ErrPathNotFound, yamlPath)
 		}
-		return fmt.Errorf("config: cannot resolve path %q: %w", yamlPath, err)
+		return fmt.Errorf("%w %q: %w", errPathUnresolved, yamlPath, err)
 	}
 
 	// Reject non-scalar target (mapping/sequence/anchor/...). The PatchKeeper/

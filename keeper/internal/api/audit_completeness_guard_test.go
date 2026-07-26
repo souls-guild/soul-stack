@@ -135,6 +135,12 @@ var auditedWriteRoutes = map[route]auditedRoute{
 	// provisioning-policy (middleware-audit; PUT mutating, GET — read). ADR-058 Part B.
 	{http.MethodPut, "/v1/provisioning-policy"}: {events: []audit.EventType{audit.EventProvisioningPolicyChanged}},
 
+	// settings (middleware-audit; PUT/DELETE mutating, GET — read). The
+	// SettingsStore overlay, ADR-0073(i): separate events so "an override was
+	// set" and "an override was dropped" stay distinguishable in the trail.
+	{http.MethodPut, "/v1/settings/{key}"}:    {events: []audit.EventType{audit.EventSettingUpdated}},
+	{http.MethodDelete, "/v1/settings/{key}"}: {events: []audit.EventType{audit.EventSettingDeleted}},
+
 	// augur (middleware-audit).
 	{http.MethodPost, "/v1/augur/omens"}:          {events: []audit.EventType{audit.EventOmenCreated}},
 	{http.MethodDelete, "/v1/augur/omens/{name}"}: {events: []audit.EventType{audit.EventOmenRevoked}},

@@ -232,6 +232,22 @@ func SetSetting(ctx context.Context, db ExecQueryRower, s *Setting) error {
 	return nil
 }
 
+const deleteSettingSQL = `DELETE FROM keeper_settings WHERE key = $1`
+
+// DeleteSetting removes a setting row by PK. [ErrSettingNotFound] if the row
+// didn't exist — an absent row is a meaningful answer here, not a no-op: for an
+// overlay key it means "there was nothing overriding the file".
+func DeleteSetting(ctx context.Context, db ExecQueryRower, key string) error {
+	tag, err := db.Exec(ctx, deleteSettingSQL, key)
+	if err != nil {
+		return fmt.Errorf("serviceregistry: delete setting: %w", wrapPgErr(err))
+	}
+	if tag.RowsAffected() == 0 {
+		return ErrSettingNotFound
+	}
+	return nil
+}
+
 func mapSettingWriteError(err error) error {
 	var pgErr *pgconn.PgError
 	if errors.As(err, &pgErr) {

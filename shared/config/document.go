@@ -3,6 +3,7 @@ package config
 import (
 	"sync"
 
+	"github.com/goccy/go-yaml"
 	"github.com/goccy/go-yaml/ast"
 )
 
@@ -23,4 +24,24 @@ type Document struct {
 	path    string
 	mu      sync.Mutex
 	mutated bool
+}
+
+// HasPath reports whether the document explicitly sets `yamlPath`. The settings
+// API answers `source ∈ {default, file, pg}` from evidence, and this is the
+// evidence for `file` — an effective value that merely equals the built-in
+// default is not the same as one the operator wrote down.
+//
+// A syntactically invalid path or an unparsed document is simply "not set".
+func (d *Document) HasPath(yamlPath string) bool {
+	if d == nil || d.file == nil {
+		return false
+	}
+	p, err := yaml.PathString(yamlPath)
+	if err != nil {
+		return false
+	}
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	node, err := p.FilterFile(d.file)
+	return err == nil && node != nil
 }

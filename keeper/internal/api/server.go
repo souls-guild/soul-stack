@@ -428,6 +428,15 @@ type Deps struct {
 	// ProvisioningPolicyReader is non-nil AND ServiceSvc is non-nil (both needed: read +
 	// write). nil → the group isn't wired (unit tests without serviceregistry).
 	ProvisioningPolicyReader handlers.ProvisioningPolicyReader
+
+	// SettingsConfig / SettingsOverlay — the SettingsStore surfaces behind
+	// /v1/settings (ADR-0073): the live config store (effective snapshot + file
+	// document) and the overlay store (which keys Postgres overrides, plus the
+	// post-write local re-read). The routes are mounted only when both are
+	// non-nil AND ServiceSvc is wired (read + write); nil → the group is absent,
+	// which is also what the break-glass KEEPER_CONFIG_SOURCE=file produces.
+	SettingsConfig  handlers.SettingsConfigReader
+	SettingsOverlay handlers.SettingsOverlayReader
 }
 
 // RBACProvider — the common rbac-service surface needed by both the middleware
@@ -657,6 +666,14 @@ func NewServer(cfg config.KeeperListenSimple, deps Deps, logger *slog.Logger) (*
 		provisioningPolicyH = handlers.NewProvisioningPolicyHandler(deps.ProvisioningPolicyReader, deps.ServiceSvc, logger)
 	}
 
+	// settingsH is optional: the catalog needs the live config store, the
+	// overlay store and the same ServiceSvc write path (+ cluster-invalidate).
+	// When any is nil the /v1/settings routes aren't mounted (ADR-0073).
+	var settingsH *handlers.SettingsHandler
+	if deps.SettingsConfig != nil && deps.SettingsOverlay != nil && deps.ServiceSvc != nil {
+		settingsH = handlers.NewSettingsHandler(deps.SettingsConfig, deps.SettingsOverlay, deps.ServiceSvc, logger)
+	}
+
 	// augurH is optional: when nil AugurSvc the augur.* routes aren't wired
 	// (the production wire-up in `keeper run` passes *augur.Service). Symmetric to
 	// serviceH.
@@ -828,7 +845,7 @@ func NewServer(cfg config.KeeperListenSimple, deps Deps, logger *slog.Logger) (*
 	// via the `*/events` chain (fetch-streaming, A0); there is no separate minting endpoint.
 	runEventsDeps := newRunEventsDeps(deps.ApplyBus, deps.IncarnationDB, deps.RBAC, logger)
 
-	handler := buildRouter(deps.JWTVerifier, healthH, opH, incH, soulH, telemetryH, roleH, synodH, sigilH, sigilKeyH, serviceH, provisioningPolicyH, augurH, oracleH, pushH, pushProviderH, providerH, profileH, errandH, voyageH, cadenceH, auditH, choirH, heraldH, moduleCatalogH, deps.ModuleFormPrepH, permCatalogH, eventTypeCatalogH, heraldTypeCatalogH, meH, deps.RBAC, deps.AuditWriter, deps.MetricsHTTP, deps.TollDegraded, deps.TempoLimiter, deps.TempoMetrics, tempoVoyageCreateLimits, tempoVoyagePreviewLimits, deps.WebUIEnabled, deps.LDAPAuth, deps.OIDCAuth, deps.AuthToken, deps.AuthMethods, deps.LoginGuard, deps.LoginLimitCfg, deps.SoulStatsStaleFn, clusterH, runEventsDeps, logger)
+	handler := buildRouter(deps.JWTVerifier, healthH, opH, incH, soulH, telemetryH, roleH, synodH, sigilH, sigilKeyH, serviceH, provisioningPolicyH, settingsH, augurH, oracleH, pushH, pushProviderH, providerH, profileH, errandH, voyageH, cadenceH, auditH, choirH, heraldH, moduleCatalogH, deps.ModuleFormPrepH, permCatalogH, eventTypeCatalogH, heraldTypeCatalogH, meH, deps.RBAC, deps.AuditWriter, deps.MetricsHTTP, deps.TollDegraded, deps.TempoLimiter, deps.TempoMetrics, tempoVoyageCreateLimits, tempoVoyagePreviewLimits, deps.WebUIEnabled, deps.LDAPAuth, deps.OIDCAuth, deps.AuthToken, deps.AuthMethods, deps.LoginGuard, deps.LoginLimitCfg, deps.SoulStatsStaleFn, clusterH, runEventsDeps, logger)
 
 	srv := &http.Server{
 		Addr:              cfg.Addr,

@@ -554,6 +554,16 @@ Runtime policy management of **CREATE** operator methods - key `provisioning_all
 | `provisioning.read` | Read the current statement creation method policy (`GET /v1/provisioning-policy`). `policy_set=false` → policy is not set (default: everything is allowed). |
 | `provisioning.update` | Change policy (`PUT /v1/provisioning-policy`, replace semantics). Empty list → 422 (anti-lockout); method outside `{user,ldap,oidc}` → 422. Audited (`provisioning.policy_changed`). |
 
+### Settings — [ADR-0073](../adr/0073-keeper-runtime-config-pg.md)
+
+The SettingsStore overlay of reload-able Keeper parameters — the `cfg_*` rows of `keeper_settings` merged onto each instance's `keeper.yml` and propagated cluster-wide without a restart. A family of its own rather than `service.*`, even though both live in `keeper_settings`: editing a cluster-wide runtime tunable is a different privilege from registering a Service, so an operator can be granted it without any other cluster-admin power. The selector is **NoSelector** (cluster-level, like `provisioning.*` / `role.*`). Mutations are audited (`setting.updated` / `setting.deleted`), read is not. The admitted keys and their ranges are in [config.md → SettingsStore](config.md#settingsstore--the-admitted-keys-and-their-operator-surface).
+
+| Permission | Semantics |
+|---|---|
+| `setting.read` | Read the settings catalog (`GET /v1/settings`): per key its type, range bounds, default, the **effective** value on the answering instance and its `source ∈ {default, file, pg}`. |
+| `setting.update` | Override a key cluster-wide (`PUT /v1/settings/{key}`). Unknown key → 404 (admission is enumerated); unparsable or out-of-range value → 422 with `keeper_settings` unchanged. Audited (`setting.updated`). |
+| `setting.delete` | Drop an override (`DELETE /v1/settings/{key}`), so the `keeper.yml` value or the built-in default is back in effect. No override → 404. Audited (`setting.deleted`). |
+
 ### Audit (1) — [ADR-022](../adr/0022-audit-pipeline.md#adr-022-audit-pipeline-storage-schema-retention)
 
 Read-only access to the audit event feed (`audit_log`) via `GET /v1/audit` (UI iteration 2). The very fact of reading the audit table is NOT written to audit (we avoid recursion - each GET would double the table).

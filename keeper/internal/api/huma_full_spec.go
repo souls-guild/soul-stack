@@ -208,6 +208,13 @@ func fullSpecGroups() []specGroup {
 			registerHumaProvisioningPolicyPut(api, stub)
 			return nil
 		}},
+		{"/v1/settings", func(api huma.API) error {
+			stub := handlers.SettingsSpecStub()
+			registerHumaSettingsList(api, stub)
+			registerHumaSettingPut(api, stub)
+			registerHumaSettingDelete(api, stub)
+			return nil
+		}},
 		{"/v1/modules", func(api huma.API) error {
 			stub := handlers.ModuleCatalogSpecStub()
 			registerHumaModuleList(api, stub)

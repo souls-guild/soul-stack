@@ -124,6 +124,16 @@ type Store[T any] struct {
 	kind storeKind
 	opts ValidateOptions
 
+	// overlay is the optional [OverlaySource] injected by [SetOverlaySource]
+	// (ADR-0073(c)). nil = today's behavior exactly: the snapshot is the file
+	// and nothing else. Guarded by `mu`.
+	overlay OverlaySource
+
+	// appliedOverlay is the entry set merged into the current snapshot — the
+	// baseline of the idempotence guard in [Store.RefreshOverlay]
+	// (ADR-0073(g)). Guarded by `mu`.
+	appliedOverlay []OverlayEntry
+
 	// auditWriter is an optional [audit.Writer]. If non-nil, each Reload emits a
 	// `config.reload_succeeded`/`config.reload_failed` event via
 	// [audit.Writer.Write] (best-effort; a write error is logged via slog.Warn
@@ -332,6 +342,15 @@ func (s *Store[T]) Path() string {
 // the old snapshot stays in effect. See [ReloadCallback] for the argument
 // contract.
 func (s *Store[T]) Reload(ctx context.Context, source ReloadSource) ReloadResult {
+	return s.reloadWith(ctx, source, s.overlayEntries(), nil)
+}
+
+// reloadWith is the body shared by [Store.Reload] and [Store.RefreshOverlay]:
+// span → reload (file + overlay merge) → audit → notify. `entries` is the
+// overlay to merge on top of the file base (nil = pure file); `changedPaths`
+// is carried into the audit event (populated only on the overlay path, where
+// the field-registry knows exactly which keys differ — ADR-0073(k)).
+func (s *Store[T]) reloadWith(ctx context.Context, source ReloadSource, entries []OverlayEntry, changedPaths []string) ReloadResult {
 	// In-process span over the whole hot-reload (parse → validation → semantic →
 	// swap) — ADR-024. source matches the reload audit event
 	// (config.reload_succeeded/failed); the span is a separate observability
@@ -347,7 +366,8 @@ func (s *Store[T]) Reload(ctx context.Context, source ReloadSource) ReloadResult
 	defer span.End()
 
 	prev := s.snapshot.Load()
-	res := s.reload(source)
+	res := s.reload(source, entries)
+	res.ChangedPaths = changedPaths
 	s.emitAudit(ctx, res)
 	if res.Swapped {
 		span.SetAttributes(attribute.String("outcome", "ok"))
@@ -451,7 +471,7 @@ func (s *Store[T]) notify(old, new *T) {
 // emitAudit wraps a single ReloadResult instead of being duplicated on every
 // return branch. This body doesn't need ctx (validation is synchronous in M0.3);
 // the audit call gets ctx from the Reload wrapper.
-func (s *Store[T]) reload(source ReloadSource) ReloadResult {
+func (s *Store[T]) reload(source ReloadSource, entries []OverlayEntry) ReloadResult {
 	res := ReloadResult{
 		Source:        source,
 		CorrelationID: newCorrelationID(),
@@ -469,6 +489,21 @@ func (s *Store[T]) reload(source ReloadSource) ReloadResult {
 		}}
 		res.Timestamp = time.Now()
 		return res
+	}
+
+	// ADR-0073(d): the overlay is merged into the in-memory Document and the
+	// MERGED bytes go through the very same parse → schema → semantic pipeline
+	// as a plain file reload, so cross-field checks see the effective config.
+	fileSrc := src
+	if len(entries) > 0 {
+		merged, odiags := applyOverlay(s.path, src, entries)
+		if len(odiags) > 0 {
+			res.Diagnostics = odiags
+			res.Phase = firstErrorPhase(odiags)
+			res.Timestamp = time.Now()
+			return res
+		}
+		src = merged
 	}
 
 	var (
@@ -505,6 +540,15 @@ func (s *Store[T]) reload(source ReloadSource) ReloadResult {
 		return res
 	}
 
+	// ADR-0073(d) ★: Document stays the FILE document, never the merged one —
+	// otherwise write-back would persist Postgres values into `keeper.yml` and
+	// the file↔pg precedence would become unobservable.
+	if len(entries) > 0 {
+		if fileDoc, derr := parseDocumentOnly(s.path, fileSrc); derr == nil {
+			newDoc = fileDoc
+		}
+	}
+
 	s.mu.Lock()
 	switch s.kind {
 	case storeKindKeeper:
@@ -515,6 +559,7 @@ func (s *Store[T]) reload(source ReloadSource) ReloadResult {
 		s.snapshot.Store(any(newCfgSoul).(*T))
 	}
 	s.doc = newDoc
+	s.appliedOverlay = entries
 	s.mu.Unlock()
 
 	res.Swapped = true

@@ -1007,6 +1007,28 @@ Hot-reload of the config with rewriting the changed value back to disk - end-to-
 - **Direction of travel:** this file is meant to **shrink toward the bootstrap floor** — `postgres` / `vault` / `redis` (chicken-and-egg), `kid` and `listen` (per-instance), `logging` (must work before Postgres), `hot_reload` (governs the mechanism), plus the security-critical `auth.jwt.signing_key_ref` / `metrics.auth`. Everything outside that residue is a migration candidate, phased by whether a live hot-apply path exists for it. Settings that have moved are edited through the API / MCP / web UI under their own RBAC permission, not by editing this file.
 - **Everything else** - unchanged: each Keeper instance of the HA cluster ([ADR-002](../adr/0002-transport-grpc-ha.md#adr-002-transport-keeper--souls--grpc-bidirectional-stream-over-mtls-ha-keeper-cluster)) reloads its own `keeper.yml` independently, and keeping the files consistent across hosts stays an operational concern (CI / SSH rollout).
 
+### SettingsStore — the admitted keys and their operator surface
+
+Admitted so far (the pilot phase; the set grows as `keeper.yml` shrinks toward the bootstrap floor):
+
+| `keeper_settings` key | YAML path | Type | Accepted range | Built-in default |
+|---|---|---|---|---|
+| `cfg_toll_threshold` | `toll.threshold` | float | `(0, 1]` | `0.20` |
+| `cfg_tempo_voyage_create_rate` | `tempo.voyage_create.rate` | float | `(0, 10000]` | `10` |
+| `cfg_tempo_voyage_create_burst` | `tempo.voyage_create.burst` | int | `[1, 10000]` | `20` |
+
+Operator API (RBAC family `setting.*`, cluster-level, no selector):
+
+| Route | Permission | Audit event |
+|---|---|---|
+| `GET /v1/settings` | `setting.read` | — (read) |
+| `PUT /v1/settings/{key}` — body `{"value": "0.5"}` | `setting.update` | `setting.updated` |
+| `DELETE /v1/settings/{key}` — drop the override | `setting.delete` | `setting.deleted` |
+
+`GET` returns, per key, the type, the range bounds, the default, the **effective** value on the answering instance and its `source ∈ {default, file, pg}` — that catalog is what the web UI renders the form from ([ADR-042](../adr/0042-backend-driven-ui.md)), so a newly admitted key needs no front-end change. The value travels in its text form and goes through the same field-registry parse + range check the loader uses: an out-of-range value is a `422` and the row is **not** written. `DELETE` removes the row, so the value below (this file, or the built-in default) is back in effect cluster-wide.
+
+Propagation on the other instances is the ordinary reload pipeline and shows up as `config.reload_succeeded` with `source: keeper_internal` and the changed YAML paths — there the swap has no initiating Archon ([ADR-0073(k)](../adr/0073-keeper-runtime-config-pg.md)).
+
 **Audit-events** - two names, directory in [`docs/naming-rules.md → Audit-events`](../naming-rules.md#audit-events):
 - `config.reload_succeeded` — fields `source ∈ {signal, api}`, `archon.aid` (for API-path), `changed_paths` (list of YAML-paths), `correlation_id`.
 - `config.reload_failed` - fields `source`, `archon.aid` (if applicable), `validation_errors[]`, `phase ∈ {parse, schema_validate, semantic_validate}`.
