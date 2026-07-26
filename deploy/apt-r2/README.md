@@ -2,8 +2,9 @@
 
 Soul Stack publishes its `.deb` packages — the `soul-stack-keeper` and
 `soul-stack-soul` daemons, the `soul-stack-soulctl`, `soul-stack-lint` and
-`soul-stack-trial` CLIs, plus the `soul-stack-tools` meta package that pulls the
-three CLIs in at once — through a plain, flat apt repository hosted on a
+`soul-stack-trial` CLIs, the `soul-stack-tools` meta package that pulls those
+three in at once, and the `soul-stack-legion` load generator — through a plain,
+flat apt repository hosted on a
 **Cloudflare R2** bucket fronted by the public domain `https://apt.soul-stack.com`.
 The GitHub release workflow (`.github/workflows/release.yml`) produces the `.deb`
 assets; a **separate** workflow ([`apt-publish.yml`](../../.github/workflows/apt-publish.yml))
@@ -159,6 +160,9 @@ sudo apt install soul-stack-tools     # soulctl + soul-lint + soul-trial
 
 # A server — install just the daemon it runs:
 sudo apt install soul-stack-keeper    # or soul-stack-soul
+
+# Sizing a bench cluster (needs its DB credentials + a Vault PKI token):
+sudo apt install soul-stack-legion
 ```
 
 > The package names above land with the **next** release. The published

@@ -2,8 +2,8 @@
 #
 # One git tag (`v*`) at the repo root = one logical version of all modules
 # (RELEASING.md invariant, ADR-011). GoReleaser reproduces on a tag what the
-# Makefile does by hand — build the five keeper/soul/soul-lint/soulctl/soul-trial
-# binaries, package them (deb/rpm/apk/brew/archives), build & push
+# Makefile does by hand — build the six keeper/soul/soul-lint/soulctl/soul-trial/
+# soul-legion binaries, package them (deb/rpm/apk/brew/archives), build & push
 # GHCR images (keeper+soul), sign everything with cosign keyless, and attach a
 # syft SBOM.
 #
@@ -100,19 +100,30 @@ builds:
     ldflags:
       - -s -w
 
-# soul-legion (load generator, ./tests/load/cmd/soul-legion) is deliberately NOT
-# built here: it is an internal benchmark harness, not a product binary — absent
-# from ADR-004's artifact list, and its flag defaults point at a developer box
-# (/tmp/keeper-dev CA, a localhost dev DSN). Build it ad hoc with `go build`.
+  # soul-legion — the load generator (ADR-004 Amendment 2026-07-26). Its code
+  # lives in the tests/load module, but it ships: operators size a cluster with
+  # it. Version is injected like soulctl's, so `soul-legion --version` matches
+  # the release.
+  - id: soul-legion
+    binary: soul-legion
+    main: ./tests/load/cmd/soul-legion
+    env:
+      - CGO_ENABLED=0
+    goos: [linux, darwin, windows]
+    goarch: [amd64, arm64]
+    flags:
+      - -trimpath
+    ldflags:
+      - -s -w -X main.legionVersion={{ .Version }}
 
 # One bundle per platform holding every binary that builds for it: linux carries
-# all five (keeper/soul/soul-lint/soulctl/soul-trial); macOS/windows
-# carry the three cross-OS CLIs only (keeper/soul are linux-only daemons). tar.gz
+# all six (keeper/soul/soul-lint/soulctl/soul-trial/soul-legion); macOS/windows
+# carry the four cross-OS CLIs only (keeper/soul are linux-only daemons). tar.gz
 # everywhere, zip on windows. Matches the Homebrew cask and the curl-installer
 # (downloads the bundle, extracts the requested binary).
 archives:
   - id: default
-    # linux bundles carry all five binaries; macOS/windows carry the three CLIs
+    # linux bundles carry all six binaries; macOS/windows carry the four CLIs
     # only (keeper/soul are linux daemons) — an intentional per-OS difference.
     allow_different_binary_count: true
     formats: [tar.gz]
@@ -222,7 +233,7 @@ nfpms:
     priority: optional
     formats: [deb, rpm, apk]
 
-  # soulctl / soul-trial — CLI tools (no daemon, no config, no
+  # soulctl / soul-trial / soul-legion — CLI tools (no daemon, no config, no
   # maintainer scripts). GoReleaser drops each binary at /usr/bin by default;
   # apk joins deb+rpm. Only the linux builds of each id get packaged (nfpm is
   # linux-only) — the darwin/windows builds ship via the archives.
@@ -253,6 +264,21 @@ nfpms:
     description: |
       Soul Stack soul-trial — offline Trial runner for Destiny / Scenario
       (ADR-023). CLI, no daemon and no config.
+    license: BUSL-1.1
+    section: devel
+    priority: optional
+    formats: [deb, rpm, apk]
+
+  - id: soul-legion
+    package_name: soul-stack-legion
+    ids: [soul-legion]
+    vendor: Soul Stack
+    homepage: https://github.com/souls-guild/soul-stack
+    maintainer: Soul Stack <noreply@soul-stack.com>
+    description: |
+      Soul Stack soul-legion — load generator for sizing a Keeper cluster: holds
+      N stub-Soul mTLS streams and reports the cliff point. Needs cluster DB
+      credentials and a Vault PKI token; run it against a bench cluster.
     license: BUSL-1.1
     section: devel
     priority: optional
@@ -289,7 +315,7 @@ nfpms:
 # job needs a token with write access there (HOMEBREW_TAP_GITHUB_TOKEN).
 #
 # A Homebrew cask is macOS-only, so it can only carry the binaries that build for
-# darwin: the three cross-OS CLIs (soulctl/soul-lint/soul-trial). The
+# darwin: the four cross-OS CLIs (soulctl/soul-lint/soul-trial/soul-legion). The
 # keeper and soul daemons are linux-only (goos:[linux]) and never enter the macOS
 # archive — they ship as .deb/.rpm/.apk packages and GHCR images instead (the
 # caveats point macOS users there). `homebrew_casks` is GoReleaser's current tap
@@ -304,6 +330,7 @@ homebrew_casks:
       - soulctl
       - soul-lint
       - soul-trial
+      - soul-legion
     repository:
       owner: souls-guild
       name: homebrew-tap
@@ -321,9 +348,9 @@ homebrew_casks:
 # pull request upstream — which Microsoft reviews by hand. A failure to open the
 # PR is logged, not fatal, so a winget hiccup never fails a release.
 #
-# The Windows zip carries the three cross-OS CLIs only (keeper and soul are
+# The Windows zip carries the four cross-OS CLIs only (keeper and soul are
 # linux-only daemons), so the manifest is a portable multi-binary package: winget
-# unpacks the zip and aliases soulctl/soul-lint/soul-trial onto PATH.
+# unpacks the zip and aliases soulctl/soul-lint/soul-trial/soul-legion onto PATH.
 #
 # `skip_upload: auto` — stable tags only. winget-pkgs is a catalogue of shipping
 # software, and `winget upgrade` has no notion of an opt-in pre-release channel:
@@ -358,8 +385,8 @@ winget:
       stream, with RBAC, audit and an OpenAPI/MCP surface built in.
 
       This package installs the cross-platform operator CLIs — soulctl (drives
-      Keeper), soul-lint (offline artifact linter) and soul-trial (offline
-      Destiny and Scenario runner).
+      Keeper), soul-lint (offline artifact linter), soul-trial (offline Destiny
+      and Scenario runner) and soul-legion (cluster load generator).
     license: BUSL-1.1
     license_url: https://github.com/souls-guild/soul-stack/blob/main/LICENSE
     copyright: (c) 2026 the Soul Stack Authors
@@ -426,7 +453,7 @@ aurs:
     skip_upload: '{{ if index .Env "AUR_KEY" }}false{{ else }}true{{ end }}'
     # Archives are flat (no wrap_in_directory), so binaries and LICENSE sit at the
     # tarball root. GoReleaser's guessed package() installs only the first binary —
-    # spell out all five. No systemd units here: they are not in the archive, they
+    # spell out all six. No systemd units here: they are not in the archive, they
     # ship with the deb/rpm (nfpm above).
     package: |-
       install -Dm755 "./keeper" "${pkgdir}/usr/bin/keeper"
@@ -434,6 +461,7 @@ aurs:
       install -Dm755 "./soul-lint" "${pkgdir}/usr/bin/soul-lint"
       install -Dm755 "./soulctl" "${pkgdir}/usr/bin/soulctl"
       install -Dm755 "./soul-trial" "${pkgdir}/usr/bin/soul-trial"
+      install -Dm755 "./soul-legion" "${pkgdir}/usr/bin/soul-legion"
       install -Dm644 "./LICENSE" "${pkgdir}/usr/share/licenses/soul-stack-bin/LICENSE"
 
 # GHCR container images (dockers_v2 — the current multi-arch mechanism, replaces

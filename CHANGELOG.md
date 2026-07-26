@@ -20,13 +20,18 @@ Artifact versioning — via git ref ([ADR-007](docs/adr/0007-versioning-git-ref.
   `Provides`/`Replaces`/`Conflicts` on their old names, so `apt`/`dnf` retire the
   old package on upgrade rather than leaving it orphaned.
 
-### Removed
+- `soul-legion` is now a supported artifact ([ADR-004 Amendment
+  2026-07-26](docs/adr/0004-binaries.md)), shipped as **`soul-stack-legion`**, so
+  operators can size their own clusters instead of trusting the projection table.
+  It gained `--version`, and every environment flag (`--keeper-endpoint`, `--ca`,
+  `--pg`, `--vault`, `--openapi`) is now **required with no default** — it used to
+  fall back to a developer box (`/tmp/keeper-dev` CA, a localhost DSN, Vault token
+  `root`), which is not something a released binary may do.
 
-- `soul-legion` is no longer published. It is an internal load-test harness
-  (`tests/load/`, "test-only, NOT a shipped binary" per the Makefile) and is not
-  one of the artifacts in [ADR-004](docs/adr/0004-binaries.md); its flag defaults
-  point at a developer box. `v0.1.0-beta.1` shipped it by mistake. Build it on
-  demand with `make stress` / `go build ./tests/load/cmd/soul-legion`.
+  It is **not** a black-box benchmark: it writes the stub souls' identity straight
+  into the cluster (`souls`/`soul_seeds`) and mints their certs from Vault PKI, so
+  it needs cluster database credentials and a PKI-issue token. Run it against a
+  bench cluster, never production.
 
 ---
 
