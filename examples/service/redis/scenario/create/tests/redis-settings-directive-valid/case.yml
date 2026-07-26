@@ -74,6 +74,11 @@ fixtures:
         - appendfsync
         - save
 
+    # Mandatory tarball checksums of the exporter/agent destinies (their input:
+    # declares sha256 required). L0 downloads nothing — an all-zero placeholder
+    # satisfying the sha256:<64 hex> pattern, same as monitoring-exporters/case.yml.
+    redis_exporter_sha256: "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+    vector_sha256: "sha256:0000000000000000000000000000000000000000000000000000000000000000"
   input:
     # * provision is disabled (default-on: an omitted section means ENABLED;
     # the case deploys onto a READY roster, cloud-create isn't needed) ->

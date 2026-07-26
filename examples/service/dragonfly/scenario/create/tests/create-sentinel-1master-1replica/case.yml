@@ -71,6 +71,11 @@ fixtures:
       monitoring: "-@all +@connection -command +client -hello +info -auth +sentinel|masters +sentinel|replicas +sentinel|slaves +sentinel|sentinels +sentinel|ckquorum"
       sentinel:   "allchannels -@all +auth +client|getname +client|id +client|setname +command +hello +ping +sentinel|is-master-down-by-addr +publish +role +sentinel|get-master-addr-by-name +sentinel|master +sentinel|myid +sentinel|replicas +sentinel|sentinels"
       haproxy:    "-@all +auth +client|getname +client|id +client|setname +command +hello +ping +role +sentinel|get-master-addr-by-name +sentinel|master +sentinel|myid +sentinel|replicas +sentinel|sentinels"
+    # Mandatory tarball checksums of the exporter/agent destinies (their input:
+    # declares sha256 required). L0 downloads nothing — an all-zero placeholder
+    # satisfying the sha256:<64 hex> pattern, same as monitoring-exporters/case.yml.
+    redis_exporter_sha256: "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+    vector_sha256: "sha256:0000000000000000000000000000000000000000000000000000000000000000"
   input:
     version: "1.39.0"
     replicas_per_master: 1

@@ -2,6 +2,7 @@ package render
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	"google.golang.org/protobuf/types/known/structpb"
@@ -9,6 +10,27 @@ import (
 	"github.com/souls-guild/soul-stack/keeper/internal/topology"
 	"github.com/souls-guild/soul-stack/shared/config"
 )
+
+// ErrDestinyInputInvalid — the values an apply: task passed to a destiny violate
+// that destiny's `input:` contract: a required (or required_when) param is
+// missing with no default, or a value does not match its declared
+// type/enum/pattern/format/length. The destiny render is rejected before any
+// task reaches a host (ADR-009 amendment 2026-07-26, NIM-167).
+//
+// Symmetric with scenario.ErrInputInvalid, but the gate sits at RENDER, not on
+// the API request path: destiny input is computed by the scenario, so this
+// catches a scenario handing its destiny bad values — the operator never typed
+// them.
+var ErrDestinyInputInvalid = errors.New("render: destiny input invalid")
+
+// ErrDestinyValidateFailed — a rule of the destiny's top-level `validate:`
+// section evaluated to false for the passed input (ADR-009 amendment
+// 2026-07-26). Separate from [ErrDestinyInputInvalid] for the same reason
+// scenario splits ErrValidateFailed from ErrInputInvalid: "the values do not
+// match the schema" and "the values violate a declared invariant" are different
+// diagnoses. The wrapped [config.ValidateRuleFailure] carries the rule's
+// `message:`.
+var ErrDestinyValidateFailed = errors.New("render: destiny validate rule failed")
 
 // ResolvedDestiny is a materialized destiny for an apply task: parsed tasks
 // plus the `input:` contract. Returned by [DestinyResolver]. The isolated
@@ -23,6 +45,11 @@ type ResolvedDestiny struct {
 	// Input is the `destiny.yml` input: schema, for a defense-in-depth check
 	// of apply.input against the contract.
 	Input config.InputSchemaMap
+	// Validate is the `destiny.yml` validate: section — declarative invariants
+	// over Input (ADR-009 amendment 2026-07-26). Evaluated by resolveApplyInput
+	// after the values themselves check out. nil means the destiny declares no
+	// invariants.
+	Validate []config.ValidateRule
 	// Vars holds raw destiny locals from `vars.yml` (docs/destiny/vars.md),
 	// unvalidated (vars are untyped). CEL expressions `${ … }` in values
 	// resolve inside the destiny pass (renderApplyDestiny) over
@@ -362,9 +389,9 @@ func (p *Pipeline) resolveDestinyVars(destinyIn RenderInput, raw map[string]any,
 // apply.input is literals/CEL in scenario env (the parent decides what to
 // pass to the destiny). We resolve it in the parent's context
 // (input/incarnation/soulprint.self of the first targeted host, or empty),
-// then check the result against the destiny's input: schema (defense in
-// depth, ADR-009): required params present, missing ones with a default get
-// filled in.
+// then run the result through the destiny's FULL input contract (defense in
+// depth, ADR-009): defaults, required/required_when, value validation
+// (type/enum/pattern/format/length) and the `validate:` invariants.
 //
 // apply.input is host-invariant in the pilot: values are computed once (on
 // the first targeted host), same as module-task params (host variance is
@@ -392,37 +419,27 @@ func (p *Pipeline) resolveApplyInput(
 		rendered[name] = val
 	}
 
-	if err := applyInputContract(rendered, resolved.Input, apply.Destiny); err != nil {
-		return nil, err
+	merged, err := config.ResolveInputContract(resolved.Input, resolved.Validate, rendered)
+	if err != nil {
+		return nil, destinyInputError(apply.Destiny, err)
 	}
-	return rendered, nil
+	return merged, nil
 }
 
-// applyInputContract checks the resolved apply.input against the destiny's
-// input: schema (defense in depth, ADR-009): fills in defaults for missing
-// params, rejects a missing required param with no default.
-//
-// Full type/pattern/enum validation of values against the schema is a
-// separate validator (doesn't exist yet for either scenario-input or
-// destiny-input in this project); this is the minimal required+default
-// contract needed for a correct destiny CEL render.
-func applyInputContract(values map[string]any, schema config.InputSchemaMap, destiny string) error {
-	for name, sc := range schema {
-		if sc == nil {
-			continue
-		}
-		if _, ok := values[name]; ok {
-			continue
-		}
-		if sc.Default != nil {
-			values[name] = sc.Default
-			continue
-		}
-		if sc.Required {
-			return fmt.Errorf("render: apply destiny %q: required input %q not passed and has no default", destiny, name)
-		}
+// destinyInputError classifies a destiny input-contract failure into the render
+// layer's sentinels, keeping the underlying message (which names the offending
+// field or carries the failing rule's `message:`) verbatim — an operator must
+// not have to guess which input broke the contract.
+func destinyInputError(destiny string, err error) error {
+	var fail *config.ValidateRuleFailure
+	switch {
+	case errors.As(err, &fail):
+		return fmt.Errorf("%w: destiny %q: %w", ErrDestinyValidateFailed, destiny, err)
+	case errors.Is(err, config.ErrValidateRuleEval):
+		return fmt.Errorf("render: apply destiny %q: %w", destiny, err)
+	default:
+		return fmt.Errorf("%w: destiny %q: %w", ErrDestinyInputInvalid, destiny, err)
 	}
-	return nil
 }
 
 // guardDestinyTask rejects nested DSL constructs outside pilot scope

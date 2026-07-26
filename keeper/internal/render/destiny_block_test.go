@@ -28,7 +28,7 @@ import (
 func blockDestiny(name string, tasks ...config.Task) *ResolvedDestiny {
 	return &ResolvedDestiny{
 		Name:  name,
-		Input: config.InputSchemaMap{"enabled": {Type: "bool", Default: true}},
+		Input: config.InputSchemaMap{"enabled": {Type: "boolean", Default: true}},
 		Tasks: tasks,
 	}
 }

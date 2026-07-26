@@ -36,6 +36,7 @@ The root file is **only** the manifest. There is no list of tasks in it; he live
 | `description:` | recommended | One or two phrases in English: what destiny does on the host. Visible in UI Keeper, MCP directory, output `soul-lint`. |
 | `input:` | yes (if there are parameters) | Entry contract. Format - general standard [`docs/input.md`](../input.md); destiny-specifics - in [input.md](input.md). |
 | `output:` | no (yes = destiny returns the result to the caller) | Exit contract. **Symmetrical to `input:`** in shape - same general standard [`docs/input.md`](../input.md); destiny-specifics - in [output.md](output.md). Optional: if destiny doesn't publish anything to the outside, the block is omitted. |
+| `validate:` | no | Declarative **input invariants**: a list of `[{that: <CEL-bool>, message: <str>}]` rules over the destiny's own `input:` ([ADR-009](../adr/0009-scenario-dsl.md) amendment 2026-07-26). Same grammar, same input-only sandbox and same validator as the scenario section ([scenario/orchestration.md §2.5](../scenario/orchestration.md)). Enforced at render — see ["Where is validated"](input.md#where-is-validated). |
 | `compat:` | no | Declared **engine-compatibility window** — which keeper versions this destiny was tested against ([ADR-0076](../adr/0076-engine-compat-window.md)). One key today: `keeper: {min, max}`. No block → unbounded. See ["`compat` Section"](#compat-section). |
 | `required_modules:` | no | List of **custom** modules (two-level form `<namespace>.<module>`) required by tasks. Core modules **are not listed** - they are always available. See [architecture.md → "Addressing modules"](../architecture.md). |
 
@@ -65,7 +66,17 @@ input:
     type: string
     secret: true
     min_length: 16
+  port:
+    type: integer
+    # Conditional requiredness - a pure function of the rest of the input.
+    required_when: "input.action == 'apply'"
   # ... other parameters - see examples/destiny/redis/destiny.yml
+
+# Cross-field invariants no single input: key can express. A false rule rejects
+# the render with its own message:, before anything reaches a host.
+validate:
+  - that: "input.action != 'apply' || input.version != ''"
+    message: "action=apply requires an explicit version"
 
 # This destiny uses only core modules → required_modules is not needed.
 # Appears only when custom modules from third-party collections are needed:

@@ -109,25 +109,25 @@ func ValidateInput(ctx context.Context, loader InputScenarioLoader, ref artifact
 		return fmt.Errorf("scenario: validate input: %s is invalid: %s", rel, firstError(diags))
 	}
 
-	// merge defaults + required + value validation (type/enum/pattern/length,
-	// recursively into array/object). vault-ref isn't resolved (string pass-through).
-	merged, verr := config.ResolveInputValues(scn.Input, provided)
-	if verr != nil {
-		return fmt.Errorf("%w: %v", ErrInputInvalid, verr)
-	}
-
-	// validate: — declarative input invariants over the merged input
-	// (input-only CEL sandbox). no-op for scenarios without a validate section.
-	fail, evErr := config.EvalValidateRules(scn.Validate, merged)
-	if evErr != nil {
-		// Compile/eval failure (nearly impossible after schema validation — the
-		// config validator already compiled `that` input-only; non-bool `that`
-		// is rejected at load) — an internal pre-flight failure (handler → 500),
-		// NOT validation_failed.
-		return fmt.Errorf("scenario: validate rules %s/%s: %w", scenarioName, rel, evErr)
-	}
-	if fail != nil {
-		return fmt.Errorf("%w: %s", ErrValidateFailed, fail.Error())
+	// The full input gate in one call (config.ResolveInputContract, shared with
+	// the destiny render pass): merge defaults + required/required_when + value
+	// validation (type/enum/pattern/length, recursively into array/object), then
+	// the `validate:` invariants over the merged input. vault-ref isn't resolved
+	// (string pass-through).
+	if _, err := config.ResolveInputContract(scn.Input, scn.Validate, provided); err != nil {
+		var fail *config.ValidateRuleFailure
+		switch {
+		case errors.As(err, &fail):
+			return fmt.Errorf("%w: %s", ErrValidateFailed, fail.Error())
+		case errors.Is(err, config.ErrValidateRuleEval):
+			// Compile/eval failure (nearly impossible after schema validation — the
+			// config validator already compiled `that` input-only; non-bool `that`
+			// is rejected at load) — an internal pre-flight failure (handler → 500),
+			// NOT validation_failed.
+			return fmt.Errorf("scenario: validate rules %s/%s: %w", scenarioName, rel, err)
+		default:
+			return fmt.Errorf("%w: %v", ErrInputInvalid, err)
+		}
 	}
 	return nil
 }

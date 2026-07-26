@@ -86,6 +86,7 @@ func (r *pushDestinyResolver) Resolve(ctx context.Context, name string) (*render
 		Name:      art.Manifest.Name,
 		Tasks:     art.Tasks,
 		Input:     art.Manifest.Input,
+		Validate:  art.Manifest.Validate,
 		Templates: templates,
 	}, nil
 }

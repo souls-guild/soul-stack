@@ -149,22 +149,23 @@ func renderCase(ctx context.Context, c *Case, caseFile string) (renderedCase, er
 	}
 	destiny := newFixtureDestinyResolver(serviceRootFor(caseFile), c.Fixtures.DefaultDestinySource, deps)
 
-	// Effective input mirroring prod (scenario.run §4.5): merge defaults
-	// scenario `input:` + required + value validation. L0 now does not mask
-	// absence of merge phase — case may provide only required input.
-	effectiveInput, err := config.ResolveInputValues(scn.Input, c.Fixtures.Input)
+	// Effective input mirroring prod (scenario.run §4.5) through the SHARED gate
+	// config.ResolveInputContract: merge defaults + required/required_when + value
+	// validation, then the `validate:` invariants (ADR-009 amendment, DSL wave 2)
+	// over the merged input. Same single composition the prod pre-flight gate
+	// (scenario.ValidateInput) and the destiny render pass use — L0 cannot drift
+	// from prod on what a contract means. The first failure aborts the case
+	// (testable via expect_render_error).
+	effectiveInput, err := config.ResolveInputContract(scn.Input, scn.Validate, c.Fixtures.Input)
 	if err != nil {
+		var fail *config.ValidateRuleFailure
+		if errors.As(err, &fail) {
+			return rc, fmt.Errorf("trial: validate %s: %s", scn.Name, fail.Error())
+		}
+		if errors.Is(err, config.ErrValidateRuleEval) {
+			return rc, fmt.Errorf("trial: validate %s: %w", scn.Name, err)
+		}
 		return rc, fmt.Errorf("trial: input %s: %w", scn.Name, err)
-	}
-
-	// validate: — declarative input invariants (ADR-009 amendment, DSL wave 2),
-	// mirror of prod pre-flight gate (scenario.ValidateInput). Input-only eval over
-	// merged input; first failure aborts case with same error as
-	// required_when (testable via expect_render_error). no-op without validate section.
-	if fail, evErr := config.EvalValidateRules(scn.Validate, effectiveInput); evErr != nil {
-		return rc, fmt.Errorf("trial: validate %s: %w", scn.Name, evErr)
-	} else if fail != nil {
-		return rc, fmt.Errorf("trial: validate %s: %s", scn.Name, fail.Error())
 	}
 
 	// Templates: reader of .tmpl snapshot of case service (two-level resolution

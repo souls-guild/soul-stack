@@ -535,3 +535,85 @@ input:
 		t.Fatalf("expected input_param_name_invalid for `with.dot`")
 	}
 }
+
+// TestLoadDestinyManifest_ValidateBlock — `validate:` is a first-class top-level
+// key of destiny.yml (NIM-167, ADR-009 amendment 2026-07-26), decoded into
+// DestinyManifest.Validate and checked by the SAME validator as scenario/covenant.
+func TestLoadDestinyManifest_ValidateBlock(t *testing.T) {
+	src := `name: redis
+input:
+  redis_type: { type: string, enum: [standalone, cluster] }
+  cluster_nodes: { type: array, items: { type: string } }
+validate:
+  - that: "input.redis_type != 'cluster' || size(input.cluster_nodes) >= 3"
+    message: "cluster requires at least 3 nodes"
+`
+	cfg, _, diags, err := LoadDestinyManifestFromBytes("destiny.yml", []byte(src), ValidateOptions{})
+	if err != nil {
+		t.Fatalf("io error: %v", err)
+	}
+	if diag.HasErrors(diags) {
+		dump(t, diags)
+		t.Fatalf("valid destiny validate: block must not raise diagnostics")
+	}
+	if len(cfg.Validate) != 1 {
+		t.Fatalf("len(Validate) = %d, want 1", len(cfg.Validate))
+	}
+	if cfg.Validate[0].Message != "cluster requires at least 3 nodes" {
+		t.Errorf("Validate[0].Message = %q", cfg.Validate[0].Message)
+	}
+}
+
+// TestLoadDestinyManifest_ValidateBlockRejectsBadRule — the destiny block is held
+// to the scenario grammar: `that` compiles input-only, `message` is required.
+func TestLoadDestinyManifest_ValidateBlockRejectsBadRule(t *testing.T) {
+	cases := []struct {
+		name string
+		src  string
+		code string
+	}{
+		{
+			name: "that references scenario scope",
+			src: `name: redis
+validate:
+  - that: "register.probe.changed"
+    message: "leaks scenario scope"
+`,
+			code: "validate_rule_invalid",
+		},
+		{
+			name: "message missing",
+			src: `name: redis
+validate:
+  - that: "input.port > 0"
+`,
+			code: "missing_required_field",
+		},
+		{
+			name: "unknown key inside a rule",
+			src: `name: redis
+validate:
+  - that: "input.port > 0"
+    message: "positive"
+    severity: warn
+`,
+			code: "unknown_key",
+		},
+		{
+			name: "empty list",
+			src: `name: redis
+validate: []
+`,
+			code: "empty_value",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			_, _, diags, _ := LoadDestinyManifestFromBytes("destiny.yml", []byte(tc.src), ValidateOptions{})
+			if !hasCode(diags, tc.code) {
+				dump(t, diags)
+				t.Fatalf("expected %s", tc.code)
+			}
+		})
+	}
+}

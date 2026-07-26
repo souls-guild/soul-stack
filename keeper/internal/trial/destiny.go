@@ -129,7 +129,14 @@ func (r *fixtureDestinyResolver) Resolve(_ context.Context, name string) (*rende
 		func(rel string) ([]byte, error) { return readWithin(dir, rel) },
 		"",
 	)
-	return &render.ResolvedDestiny{Name: manifest.Name, Tasks: expanded, Input: manifest.Input, Vars: vars, Templates: templates}, nil
+	return &render.ResolvedDestiny{
+		Name:      manifest.Name,
+		Tasks:     expanded,
+		Input:     manifest.Input,
+		Validate:  manifest.Validate,
+		Vars:      vars,
+		Templates: templates,
+	}, nil
 }
 
 // locate resolves destiny directory by name: name → destiny[] entry → file:// URL

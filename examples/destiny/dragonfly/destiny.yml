@@ -195,7 +195,10 @@ input:
   # catches PEM in error_summary/state.
   tls:
     type: object
-    required: [cert_ref, key_ref, ca_ref]
+    # cert_ref/key_ref/ca_ref are required only when TLS is actually ON: an object-level
+    # `required:` cannot express the condition and would fire on every TLS-off run (callers
+    # legitimately pass the dict with empty refs). The invariant lives in the top-level
+    # `validate:` block below (ADR-009 amendment 2026-07-26).
     additional_properties: false
     description: >-
       DragonFly TLS parameters. Empty/not passed -> TLS off (PEM-task block placeholder-skip,
@@ -228,3 +231,14 @@ input:
       Passed by the service scenario (defaults - essence.sysctl_settings).
     properties: {}
     additional_properties: true
+
+# ── Input invariants (ADR-009 amendment 2026-07-26) ───────────────────────────
+# Cross-field preconditions that no single `input:` key can express. Evaluated by
+# the render pass over the destiny's own input (input-only CEL, no topology): a
+# false rule rejects the render with `message:` before anything reaches a host.
+# `that`/`message` are plain scalars (a block scalar is not accepted by the DSL).
+validate:
+  # TLS on => all three Vault paths present. Off => callers legitimately pass the
+  # dict with empty refs (compute.tls_*_ref -> ''), so the check is gated on enable.
+  - that: "!has(input.tls) || !has(input.tls.enable) || !input.tls.enable || (has(input.tls.cert_ref) && input.tls.cert_ref != '' && has(input.tls.key_ref) && input.tls.key_ref != '' && has(input.tls.ca_ref) && input.tls.ca_ref != '')"
+    message: "tls.enable requires non-empty tls.cert_ref, tls.key_ref and tls.ca_ref (Vault paths to the server cert, key and CA)"

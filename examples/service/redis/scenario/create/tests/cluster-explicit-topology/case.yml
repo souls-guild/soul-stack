@@ -78,6 +78,11 @@ fixtures:
       monitoring: "-@all +@connection +client +ping +info +config|get +cluster|info +slowlog +latency +memory +select +command|count +command|docs"
       sentinel:   "allchannels +multi +slaveof +ping +exec +subscribe +config|rewrite +role +publish +info +client|setname +client|kill +script|kill"
       haproxy:    "-@all +auth +client|getname +client|id +client|setname +command +hello +ping +role +info +cluster|info"
+    # Mandatory tarball checksums of the exporter/agent destinies (their input:
+    # declares sha256 required). L0 downloads nothing — an all-zero placeholder
+    # satisfying the sha256:<64 hex> pattern, same as monitoring-exporters/case.yml.
+    redis_exporter_sha256: "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+    vector_sha256: "sha256:0000000000000000000000000000000000000000000000000000000000000000"
   input:
     # ★ provision disabled (default-on: an omitted section = ENABLED; the case deploys onto a
     # READY roster, cloud-create not needed) → include redis-provision.yml group-drop.

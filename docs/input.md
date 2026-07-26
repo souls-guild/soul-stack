@@ -11,7 +11,7 @@ This document is the **mandatory standard** for the `input:` block format in Sou
 
 | Where | File | Block | Template link | Validated |
 |---|---|---|---|---|
-| destiny | `destiny.yml` | `input:` | `{{ input.<name> }}` | Keeper upon invocation + soul before apply ([destiny/input.md → Where is validated](destiny/input.md)) |
+| destiny | `destiny.yml` | `input:` | `{{ input.<name> }}` | Keeper at render of the calling `apply:` + soul before apply ([destiny/input.md → Where is validated](destiny/input.md)) |
 | scenario | `scenario/<name>/main.yml` | `input:` | `{{ input.<name> }}` | Keeper at script start |
 | module manifest | manifest in the module itself (see ["Module Manifest"](architecture.md#module-manifest)) | `input:` inside each `state` | n/a (validated before Apply) | soul before calling the module state form |
 
@@ -115,7 +115,9 @@ input:
 
 > **Why not shell-guard.** Previously, the conditional requirement was written with a guard task on the host (`core.cmd.shell` with `test "${ has(input.X) }" = true || exit 1`) - an arbitrary shell for the sake of control-flow, executed on Soul. `required_when` transfers the check to the input stage of the Keeper declaratively: the operator receives an error before the start of the run, the attack-surface of an arbitrary shell does not grow.
 
-> **`required_when` (presence) vs `validate:` (ratio).** `required_when` answers "is this field required?" When you need to check the **correlation of several input fields** ("`sentinel_quorum` is not more than `1 + replicas`"), this is not about presence - for this, the script has a top-level section `validate:` (declarative input-invariants, the same input-only context, the same 422 `validation-failed`). Speca - [scenario/orchestration.md §2.5](scenario/orchestration.md).
+> **`required_when` (presence) vs `validate:` (ratio).** `required_when` answers "is this field required?" When you need to check the **correlation of several input fields** ("`sentinel_quorum` is not more than `1 + replicas`"), this is not about presence - for this there is a top-level section `validate:` (declarative input-invariants, the same input-only context). Spec - [scenario/orchestration.md §2.5](scenario/orchestration.md).
+>
+> **`required_when` and `validate:` are artifact-agnostic.** Both work identically in **scenario**, in a **covenant fragment** and in **destiny** ([ADR-009](adr/0009-scenario-dsl.md) amendment 2026-07-26) - one validator, one grammar, one input-only sandbox. Only the enforcement point differs: scenario/covenant are gated pre-flight on the request path (422 `validation-failed`, before the incarnation commit), destiny is gated at **render** of the calling `apply:` task, since its input is computed by the scenario rather than typed by an operator ([destiny/input.md → Where is validated](destiny/input.md)).
 
 ### Pre-fill from state: `prefill_from_state`
 

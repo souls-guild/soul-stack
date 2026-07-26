@@ -371,6 +371,18 @@ func validateValueAt(path string, s *InputSchema, v any) error {
 		return nil
 	}
 
+	// An empty string for a string field without allow_empty is "not passed"
+	// (docs/input.md §"Empty strings") — there is no value to check against
+	// enum/pattern/format/length. At top level such a value never reaches here
+	// (mergeInputDefaults drops it); applying the same rule at every level keeps
+	// nested object properties and array items consistent with it instead of
+	// pattern-checking a value the schema calls absent. Required-ness is a
+	// separate phase (requireInputValues / validateObjectFields → isMissingField),
+	// so this does not let a missing mandatory field through.
+	if isAbsentValue(v, s) {
+		return nil
+	}
+
 	// A string-expression is exempt from this level's value checks (enum +
 	// pattern) — its final form is unknown here. The "string" type is still
 	// formally satisfied, so it passes the type check below normally.

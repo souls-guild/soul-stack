@@ -249,12 +249,12 @@ input:
   # be masked. Hence the contract is specifically a Vault ref, vault() in the cell.
   tls:
     type: object
-    # cert_ref/key_ref/ca_ref are required WHEN the dict is passed (object-level required:
-    # a list of sub-keys): without paths, PEM tasks have nothing to read. One `required`
-    # key carries EITHER a bool (field optionality) OR a list of required sub-keys —
-    # here the list form is chosen (like `sentinel`), so `required: false`
-    # is absent: field optionality is achieved by omitting the field-level required.
-    required: [cert_ref, key_ref, ca_ref]
+    # cert_ref/key_ref/ca_ref are required only when TLS is actually ON: without paths
+    # the PEM tasks have nothing to read, but with `enable: false` the callers pass the
+    # dict with empty refs (compute.tls_*_ref → '') and that is legitimate. An
+    # object-level `required: [cert_ref, key_ref, ca_ref]` cannot express the condition
+    # — it fires on every TLS-off run — so the invariant lives in the top-level
+    # `validate:` block below (ADR-009 amendment 2026-07-26).
     additional_properties: false
     description: >-
       Redis TLS parameters (redis_tls_* role concept). Empty/not passed → TLS off
@@ -380,3 +380,18 @@ input:
         type: object
         properties: {}
         additional_properties: true
+
+# ── Input invariants (ADR-009 amendment 2026-07-26) ───────────────────────────
+# Cross-field preconditions that no single `input:` key can express. Evaluated by
+# the render pass over the destiny's own input (input-only CEL, no topology): a
+# false rule rejects the render with `message:` before anything reaches a host.
+# Topology/register checks stay in `assert:` tasks — validate: complements them.
+# `that`/`message` are plain scalars (a block scalar is not accepted by the DSL).
+validate:
+  # TLS on => all three Vault paths present. Off => callers legitimately pass the
+  # dict with empty refs (compute.tls_*_ref -> ''), so the check is gated on enable.
+  - that: "!has(input.tls) || !has(input.tls.enable) || !input.tls.enable || (has(input.tls.cert_ref) && input.tls.cert_ref != '' && has(input.tls.key_ref) && input.tls.key_ref != '' && has(input.tls.ca_ref) && input.tls.ca_ref != '')"
+    message: "tls.enable requires non-empty tls.cert_ref, tls.key_ref and tls.ca_ref (Vault paths to the server cert, key and CA)"
+  # tls.only closes the plain port (`port 0`) - pointless, and unreachable, without TLS itself.
+  - that: "!has(input.tls) || !has(input.tls.only) || !input.tls.only || (has(input.tls.enable) && input.tls.enable)"
+    message: "tls.only closes the plain port and requires tls.enable: true, otherwise the instance has no listener"

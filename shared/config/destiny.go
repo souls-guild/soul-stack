@@ -17,11 +17,21 @@ import (
 // `vars:` in `vars.yml`; the manifest has neither section (see deprecated keys
 // below).
 type DestinyManifest struct {
-	Name            string         `yaml:"name"`
-	Description     string         `yaml:"description,omitempty"`
-	Input           InputSchemaMap `yaml:"input,omitempty"`
-	Output          InputSchemaMap `yaml:"output,omitempty"`
-	RequiredModules []string       `yaml:"required_modules,omitempty"`
+	Name        string         `yaml:"name"`
+	Description string         `yaml:"description,omitempty"`
+	Input       InputSchemaMap `yaml:"input,omitempty"`
+	Output      InputSchemaMap `yaml:"output,omitempty"`
+
+	// Validate — declarative invariants over the destiny's own `input:`, the same
+	// `[{that, message}]` grammar and input-only CEL sandbox as scenario
+	// (ADR-009 amendment 2026-07-26, NIM-167). Enforced by the render pass when
+	// the parent apply: task hands over its input, so a scenario passing a
+	// contract-violating value fails the render instead of reaching the hosts.
+	// `assert:` tasks stay for topology/register checks — validate: complements
+	// them, it does not replace them.
+	Validate []ValidateRule `yaml:"validate,omitempty"`
+
+	RequiredModules []string `yaml:"required_modules,omitempty"`
 
 	// Compat — optional engine-compatibility window (ADR-0076). A destiny is a
 	// separate git artifact pinned at its own ref (ADR-007), so it states its own
@@ -125,6 +135,12 @@ func schemaValidateDestiny(path string, root *ast.MappingNode, m *DestinyManifes
 	}
 	if topKeys["output"] {
 		out = append(out, validateInputSchemaMap(m.Output, findInputMapping(root, "output"), "$.output")...)
+	}
+
+	// 4a) `validate:` — top-level input invariants, shared validator with
+	// scenario/covenant (only when the key is present).
+	if topKeys["validate"] {
+		out = append(out, validateValidateBlock(root, "$.validate")...)
 	}
 
 	// 5) compat: — optional engine-compatibility window (ADR-0076). Same grammar

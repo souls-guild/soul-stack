@@ -16,7 +16,9 @@ func loopDestiny() *ResolvedDestiny {
 	return &ResolvedDestiny{
 		Name: "pilot-loop",
 		Input: config.InputSchemaMap{
-			"changes": {Type: "array", Required: true},
+			// map name→{acl: …}, like the real redis destiny's `users:` — the loop
+			// ranges it with index_as binding the key.
+			"changes": {Type: "object", Required: true},
 		},
 		Tasks: []config.Task{
 			{
@@ -81,7 +83,9 @@ func TestRender_ApplyDestiny_Loop_Expands(t *testing.T) {
 // and AFTER: contiguous indices continue across the destiny-loop boundary (as
 // they do across apply:destiny).
 func TestRender_ApplyDestiny_Loop_MixedPlan(t *testing.T) {
-	res := &stubDestinyResolver{resolved: loopDestiny()}
+	d := loopDestiny()
+	d.Input["changes"] = &config.InputSchema{Type: "array", Required: true} // list-shaped loop
+	res := &stubDestinyResolver{resolved: d}
 	scn := &config.ScenarioManifest{
 		Name: "create",
 		Tasks: []config.Task{
@@ -186,6 +190,7 @@ func TestRender_ApplyDestiny_Loop_RegisterIsolation(t *testing.T) {
 // surprises and indices stay intact.
 func TestRender_ApplyDestiny_Loop_OnChanges(t *testing.T) {
 	d := loopDestiny()
+	d.Input["changes"] = &config.InputSchema{Type: "array", Required: true} // list-shaped loop
 	d.Tasks[0].Register = "acl_patch"
 	d.Tasks = append(d.Tasks, config.Task{
 		Name:      "Notify after patch",
