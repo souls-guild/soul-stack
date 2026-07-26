@@ -13,13 +13,13 @@ package rbac
 import "sort"
 
 // AllowedPermissions — the catalog of permission names from rbac.md →
-// §Catalog of permissions. 103 names (sum of the categories below):
+// §Catalog of permissions. 104 names (sum of the categories below):
 //
 //   - operator (5): create / revoke / issue-token / list / read;
 //   - role (6): create / delete / list / update / grant-operator / revoke-operator;
 //   - synod (8): create / update / delete / list / add-operator / remove-operator / grant-role / revoke-role (ADR-049);
 //   - incarnation (14): create / rerun-last / run / get / list / history / unlock / upgrade / destroy / check-drift / update-hosts / update (deprecated alias) / traits-set / view-secrets;
-//   - soul (6): list / create / issue-token / coven-assign / traits-assign / ssh-target-update;
+//   - soul (7): list / create / issue-token / coven-assign / traits-assign / ssh-target-update / console (ADR-0074);
 //   - plugin (3): allow / revoke / list;
 //   - sigil (4): key-introduce / key-retire / key-list / key-set-primary;
 //   - service (4): register / update / list / deregister;
@@ -165,6 +165,20 @@ var AllowedPermissions = map[string]struct{}{
 	// MCP tool, not a permission; pattern: `sigil.key-introduce` ↔
 	// `keeper.sigil.key.introduce`).
 	"soul.ssh-target-update": {},
+	// soul.console — opens an interactive PTY session on a host (WebSocket
+	// `/v1/console`, ADR-0074). STRICTLY MORE PRIVILEGED than `errand.run`,
+	// and neither right implies the other: an Errand is one named module call
+	// with declared params, capped output and a fixed end, while a console is
+	// an unbounded interactive shell running as the Soul daemon's user
+	// (typically root) whose commands are not knowable in advance and cannot
+	// be checked against a module allow-list. Selectors — `host=<sid>` /
+	// `coven=<label>` (same as errand.run); bare — unrestricted. No selector
+	// key of its own: scope intersection reuses the existing Purview
+	// dimensions (ADR-047 §S4). The right is checked TWICE (rbac.md §Console):
+	// NoSelector at the WebSocket upgrade (may this Archon open consoles at
+	// all — refusal is 403 before a socket exists) and `host=<sid>` per `open`
+	// frame, because the target SID arrives in the frame rather than the URL.
+	"soul.console": {},
 
 	// plugin.* — management of Sigil's plugin-integrity allow-list
 	// (ADR-026, rbac.md → §Catalog of permissions → Plugin Sigil).
