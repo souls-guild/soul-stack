@@ -68,9 +68,40 @@ func (roleSuccessPool) Query(_ context.Context, sql string, _ ...any) (pgx.Rows,
 		return &roleNullStrRows{}, nil // NULL parent → a plain role (ADR-078)
 	case strings.Contains(sql, "SELECT 1 FROM rbac_role_operators"):
 		return &roleIntRows{values: []int{1}}, nil // membership exists (revoke)
+	case strings.Contains(sql, "WITH RECURSIVE chain"):
+		// resolveRoleChain (ADR-078): the parent `dba`, a root granting
+		// incarnation.run — enough for a derived role asking for the same right.
+		return &roleChainRows{}, nil
 	}
 	return nil, errStrictUnexpectedSQL
 }
+
+// roleChainRows — one row of the parent-chain query: role `dba`, no parent, no
+// default_scope, one permission.
+type roleChainRows struct{ done bool }
+
+func (r *roleChainRows) Next() bool {
+	if r.done {
+		return false
+	}
+	r.done = true
+	return true
+}
+func (r *roleChainRows) Scan(dest ...any) error {
+	perm := "incarnation.run"
+	*dest[0].(*string) = "dba"  // name
+	*dest[1].(**string) = nil   // parent_role NULL (a root)
+	*dest[2].(**string) = nil   // default_scope NULL
+	*dest[3].(**string) = &perm // permission
+	return nil
+}
+func (r *roleChainRows) Err() error                                   { return nil }
+func (r *roleChainRows) Close()                                       {}
+func (r *roleChainRows) CommandTag() pgconn.CommandTag                { return pgconn.CommandTag{} }
+func (r *roleChainRows) FieldDescriptions() []pgconn.FieldDescription { return nil }
+func (r *roleChainRows) Values() ([]any, error)                       { return nil, nil }
+func (r *roleChainRows) RawValues() [][]byte                          { return nil }
+func (r *roleChainRows) Conn() *pgx.Conn                              { return nil }
 func (roleSuccessPool) BeginTx(context.Context, pgx.TxOptions) (pgx.Tx, error) {
 	return roleSuccessTx{}, nil
 }
@@ -277,6 +308,48 @@ func TestHumaAudit_RoleCreate_RecordsOnSuccess(t *testing.T) {
 	assertAuditWritten(t, auditCap, audit.EventRoleCreated, map[string]any{"name": "ops", "created_by_aid": "archon-alice"})
 }
 
+// TestHumaAudit_RoleCreate_CarriesDerivation — the derivation of a created role
+// reaches the audit record through the REAL route (body → huma → domain → carrier →
+// middleware). Without parent_role the record does not say what bounds the role, and
+// without default_scope it does not say what the delta narrows to — on a derived role
+// the permission list alone is not the authorization change (ADR-078).
+func TestHumaAudit_RoleCreate_CarriesDerivation(t *testing.T) {
+	auditCap := &auditCaptureWriter{}
+	r := humaRoleRouter(t, strictAllowAll{}, auditCap, roleSuccessPool{})
+
+	body := `{"name":"dba-aboba","permissions":["incarnation.run"],"parent_role":"dba","default_scope":"trait.project=aboba"}`
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/v1/roles", strings.NewReader(body))
+	r.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("status = %d, want 201; body=%s", rec.Code, rec.Body.String())
+	}
+	evs := auditCap.Events()
+	if len(evs) == 0 {
+		t.Fatalf("audit NOT recorded for role.create")
+	}
+	assertAuditStrPtr(t, evs[0].Payload, "parent_role", "dba")
+	assertAuditStrPtr(t, evs[0].Payload, "default_scope", "trait.project=aboba")
+}
+
+// assertAuditStrPtr checks a *string audit-payload field against a wanted value
+// (the derivation fields are nullable, so they travel as pointers).
+func assertAuditStrPtr(t *testing.T, payload map[string]any, key, want string) {
+	t.Helper()
+	v, present := payload[key]
+	if !present {
+		t.Fatalf("audit payload missing %q (payload=%+v)", key, payload)
+	}
+	got, ok := v.(*string)
+	if !ok || got == nil {
+		t.Fatalf("audit payload[%q] = %v, want %q", key, v, want)
+	}
+	if *got != want {
+		t.Errorf("audit payload[%q] = %q, want %q", key, *got, want)
+	}
+}
+
 // === LIST (READ pilot-1, no audit) ===
 
 // listOnePool — a minimal pool for GET /v1/roles: one role `ops` with empty
@@ -334,9 +407,10 @@ func (r *roleViewRows) Conn() *pgx.Conn                              { return ni
 
 // TestHumaRole_List_GoldenWire — GOLDEN wire-guard of the READ route: 200 body
 // byte-for-byte. Pins toRoleView semantics: Description present even as
-// "" (no omitempty), DefaultScope omitted on NULL, permissions/operators —
-// []-not-null (emptyIfNil), items — an array. Drift (huma injecting $schema / a field
-// losing its [] form) breaks the bytes.
+// "" (no omitempty), DefaultScope omitted on NULL, permissions/operators/
+// effective_permissions — []-not-null (emptyIfNil), parent_role/effective_scope
+// omitted on a plain unscoped role, items — an array. Drift (huma injecting
+// $schema / a field losing its [] form) breaks the bytes.
 func TestHumaRole_List_GoldenWire(t *testing.T) {
 	r := humaRoleRouter(t, strictAllowAll{}, nil, listOnePool{})
 
@@ -354,7 +428,7 @@ func TestHumaRole_List_GoldenWire(t *testing.T) {
 		t.Fatalf("reply not a JSON object: %v; body=%s", err, rec.Body.String())
 	}
 	out, _ := json.Marshal(m)
-	const golden = `{"items":[{"builtin":false,"description":"","name":"ops","operators":[],"permissions":[]}]}`
+	const golden = `{"items":[{"builtin":false,"description":"","effective_permissions":[],"name":"ops","operators":[],"permissions":[]}]}`
 	if got := string(out); got != golden {
 		t.Errorf("GOLDEN wire drift role.list:\n got  = %s\n want = %s", got, golden)
 	}
@@ -492,16 +566,27 @@ func TestHumaAudit_RoleUpdatePermissions_NoAudit_OnReject(t *testing.T) {
 // ONLY when SetDefaultScope=true (key present in the body), with arg=NULL on reset (null)
 // or a RAW string on set. Intercepting args[1] of this Exec proves that
 // (SetDefaultScope, DefaultScope) reached the domain correctly from Optional[string].
+// parent_role (ADR-078) is captured the same way off UpdateRoleParent, so the two
+// presence envelopes are guarded by one pool.
 type scopeCapturePool struct {
 	scopeUpdateCalled bool // whether the Exec UPDATE default_scope ran (== SetDefaultScope)
 	scopeArg          any  // args[1] of this Exec: nil (NULL/reset) or a string (set)
+
+	parentUpdateCalled bool // whether the Exec UPDATE parent_role ran (== SetParentRole)
+	parentArg          any  // args[1]: nil (NULL → plain again) or a string (re-rooted)
 }
 
 func (p *scopeCapturePool) Exec(ctx context.Context, sql string, args ...any) (pgconn.CommandTag, error) {
-	if strings.Contains(sql, "UPDATE rbac_roles SET default_scope") {
+	switch {
+	case strings.Contains(sql, "UPDATE rbac_roles SET default_scope"):
 		p.scopeUpdateCalled = true
 		if len(args) >= 2 {
 			p.scopeArg = args[1]
+		}
+	case strings.Contains(sql, "UPDATE rbac_roles SET parent_role"):
+		p.parentUpdateCalled = true
+		if len(args) >= 2 {
+			p.parentArg = args[1]
 		}
 	}
 	return pgconn.NewCommandTag("OK 1"), nil
@@ -574,6 +659,45 @@ func TestHumaRole_UpdatePermissions_ScopePresence(t *testing.T) {
 			}
 			if tc.wantScopeWrite && pool.scopeArg != tc.wantScopeArg {
 				t.Errorf("default_scope arg = %v, want %v (DefaultScope presence envelope broken)", pool.scopeArg, tc.wantScopeArg)
+			}
+		})
+	}
+}
+
+// TestHumaRole_UpdatePermissions_ParentPresence — the same presence envelope for
+// parent_role (ADR-078), and it carries more weight than the scope one: an omitted
+// key that reached the domain as an explicit null would CLEAR the role's parent,
+// turning its delta into an absolute scope and dropping the parent's narrowing —
+// a widening, which is why the orphan policy refuses that transition when asked for
+// it directly.
+func TestHumaRole_UpdatePermissions_ParentPresence(t *testing.T) {
+	cases := []struct {
+		name            string
+		body            string
+		wantParentWrite bool
+		wantParentArg   any
+	}{
+		{"omitted_do_not_touch", `{"permissions":["incarnation.run"]}`, false, nil},
+		{"null_makes_it_plain", `{"permissions":["incarnation.run"],"parent_role":null}`, true, nil},
+		{"value_reroots", `{"permissions":["incarnation.run"],"parent_role":"dba"}`, true, "dba"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			pool := &scopeCapturePool{}
+			r := humaRoleRouter(t, strictAllowAll{}, nil, pool)
+
+			rec := httptest.NewRecorder()
+			req := httptest.NewRequest(http.MethodPatch, "/v1/roles/ops/permissions", strings.NewReader(tc.body))
+			r.ServeHTTP(rec, req)
+
+			if rec.Code != http.StatusNoContent {
+				t.Fatalf("status = %d, want 204; body=%s", rec.Code, rec.Body.String())
+			}
+			if pool.parentUpdateCalled != tc.wantParentWrite {
+				t.Fatalf("UPDATE parent_role called=%v, want %v (SetParentRole presence envelope broken)", pool.parentUpdateCalled, tc.wantParentWrite)
+			}
+			if tc.wantParentWrite && pool.parentArg != tc.wantParentArg {
+				t.Errorf("parent_role arg = %v, want %v (ParentRole presence envelope broken)", pool.parentArg, tc.wantParentArg)
 			}
 		})
 	}

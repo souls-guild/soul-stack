@@ -2,8 +2,8 @@
 
 - **Status.** Active. J1 (NIM-179) landed the model, storage and graph guards;
   J2 (NIM-180) landed chain resolution, the write-time attenuation gate and the
-  self-lockout correction of §(i). The API surface for `parent_role` is NIM-181,
-  the web selector NIM-182.
+  self-lockout correction of §(i); J3 (NIM-181) landed the API surface. The web
+  selector is NIM-182.
 
 - **Context.** Roles are flat. An operator who runs the `dba` team can already be
   scoped — `default_scope: coven=dba` ([ADR-047 §a](0047-purview.md)) — but there is no way
@@ -242,9 +242,17 @@
     and the self-lockout correction (i). From here a stored `parent_role` is
     authoritative at the decision layer.
   - **J3 (NIM-181).** The API surface: `parent_role` on the role endpoints and MCP
-    tools, and the parent in `GET /v1/roles`. The transport error mapping for
-    `role-has-children`, "derived role exceeds its parent" and the graph sentinels
-    is already in place.
+    tools (create takes it, update takes it with the PATCH presence of
+    `default_scope`), and the catalog returning each role in both forms — as stored
+    and as resolved (`effective_permissions` / `effective_scope`). The read side
+    resolves through the same code the enforcer runs, so no consumer re-derives
+    inheritance and none can arrive at a wider answer than the decision layer; a
+    catalog whose graph does not resolve fails the read rather than publishing the
+    unattenuated rows. The audit records of `role.created` /
+    `role.permissions-updated` carry the ceiling and the delta, not only the
+    permission list, since on a derived role the list alone is not the
+    authorization change. The transport error mapping for `role-has-children`,
+    "derived role exceeds its parent" and the graph sentinels was already in place.
   - **J4 (NIM-182).** The web selector and the "you inherit X, you cannot widen it"
     panel.
 

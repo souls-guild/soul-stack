@@ -175,17 +175,32 @@ func assertCallerCovers(callerPerms, required []Permission) error {
 	return nil
 }
 
-// permString is a diagnostic rendering of a permission for subset error
-// messages.
+// permString renders a permission back into the canonical grammar
+// [ParsePermission] accepts — used both for subset error messages and for the
+// resolved permissions the role catalog publishes (NIM-181).
+//
+// A scoped wildcard keeps its scope: `* on coven=dba` is a super-admin BOUNDED to
+// that scope (NIM-128), and a derived role's `*` carries its parent's ceiling
+// (ADR-078(d)). Rendering either as a bare `*` would read as unrestricted.
 func permString(p Permission) string {
-	if p.IsWildcard {
-		return "*"
-	}
 	s := p.Resource + "." + p.Action
+	if p.IsWildcard {
+		s = "*"
+	}
 	if p.Scope != nil {
 		s += " on " + p.Scope.String()
 	}
 	return s
+}
+
+// permStrings renders a permission set, preserving order. A nil set yields an
+// empty (non-nil) slice — a role that grants nothing is `[]`, not `null`.
+func permStrings(perms []Permission) []string {
+	out := make([]string, 0, len(perms))
+	for _, p := range perms {
+		out = append(out, permString(p))
+	}
+	return out
 }
 
 // callerHolds reports whether the caller's effective set covers granting req

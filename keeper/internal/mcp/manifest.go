@@ -83,7 +83,7 @@ var catalogManifest = []toolEntry{
 		status: toolStatusImplemented,
 		decl: toolDeclaration{
 			Name:         "keeper.role.create",
-			Description:  "Creates an RBAC role with a set of permissions. Permission: role.create. Fails with code=role-already-exists if name is taken, and validation-failed on a malformed name/permission.",
+			Description:  "Creates an RBAC role with a set of permissions. Permission: role.create. Optional parent_role derives the role from another one (ADR-078), bounding it by that role. Fails with code=role-already-exists if name is taken, not-found for an unknown parent_role, forbidden when the role would exceed its parent or the caller's own rights, and validation-failed on a malformed name/permission.",
 			InputSchema:  schemaRoleCreateInput,
 			OutputSchema: schemaEmptyObject,
 		},
@@ -101,7 +101,7 @@ var catalogManifest = []toolEntry{
 		status: toolStatusImplemented,
 		decl: toolDeclaration{
 			Name:         "keeper.role.list",
-			Description:  "Lists RBAC roles with expanded permissions and assigned Archons (AID). Permission: role.list.",
+			Description:  "Lists RBAC roles with expanded permissions and assigned Archons (AID). Permission: role.list. Each role comes both AS STORED (permissions/default_scope) and AS RESOLVED against its derivation chain (effective_permissions/effective_scope, ADR-078) — do not re-derive inheritance from parent_role.",
 			InputSchema:  schemaEmptyObject,
 			OutputSchema: schemaRoleListOutput,
 		},
@@ -110,7 +110,7 @@ var catalogManifest = []toolEntry{
 		status: toolStatusImplemented,
 		decl: toolDeclaration{
 			Name:         "keeper.role.update",
-			Description:  "Replaces the role's set of permissions (replace semantics). Permission: role.update. Fails with code=role-builtin for a builtin role and would-lock-out-cluster when removing the last `*`.",
+			Description:  "Replaces the role's set of permissions (replace semantics). Permission: role.update. default_scope and parent_role follow PATCH presence — an absent key leaves them untouched. Fails with code=role-builtin for a builtin role, forbidden when the result would exceed its parent role (ADR-078), and would-lock-out-cluster when removing the last `*` — including by making that role derived.",
 			InputSchema:  schemaRoleUpdateInput,
 			OutputSchema: schemaEmptyObject,
 		},
@@ -1112,7 +1112,8 @@ var (
 "name":{"type":"string","pattern":"^[a-z][a-z0-9-]*$","description":"Role name (kebab-case)."},
 "description":{"type":"string","description":"Human-readable role description."},
 "permissions":{"type":"array","items":{"type":"string"},"description":"Permission strings '<resource>.<action>' (+ optional ' on <selector>')."},
-"default_scope":{"type":["string","null"],"description":"ADR-047 S1: scope selector (per-perm selector syntax, e.g. 'coven=prod,stage'), inherited by all of the role's permissions without their own selector. null/omitted = role without a scope restriction (bare-perms unrestricted)."}}}`)
+"default_scope":{"type":["string","null"],"description":"ADR-047 S1: scope selector (per-perm selector syntax, e.g. 'coven=prod,stage'), inherited by all of the role's permissions without their own selector. null/omitted = role without a scope restriction (bare-perms unrestricted). With parent_role set this is the attenuating DELTA, conjoined with the parent's effective scope - write only the ADDED narrowing."},
+"parent_role":{"type":["string","null"],"pattern":"^[a-z][a-z0-9-]*$","description":"ADR-078: derive from this role - it becomes the ceiling and the new role can never exceed it (permissions outside it are refused, its scope is conjoined onto every permission). null/omitted = a plain role. Requires the caller to hold the parent's rights."}}}`)
 
 	schemaRoleDeleteInput = json.RawMessage(`{
 "$schema":"https://json-schema.org/draft/2020-12/schema",
@@ -1130,7 +1131,8 @@ var (
 "properties":{
 "name":{"type":"string","pattern":"^[a-z][a-z0-9-]*$"},
 "permissions":{"type":"array","items":{"type":"string"},"description":"New set of permissions (replace semantics)."},
-"default_scope":{"type":["string","null"],"description":"ADR-047 S1: replace the role's default_scope (null clears the scope). Key ABSENT -> scope is left untouched (PATCH semantics)."}}}`)
+"default_scope":{"type":["string","null"],"description":"ADR-047 S1: replace the role's default_scope (null clears the scope). Key ABSENT -> scope is left untouched (PATCH semantics)."},
+"parent_role":{"type":["string","null"],"pattern":"^[a-z][a-z0-9-]*$","description":"ADR-078: re-root the role's derivation (null makes it plain again). Key ABSENT -> derivation left untouched (PATCH semantics). The ceiling is re-checked on every update: the result must stay within the parent and the caller must hold it."}}}`)
 
 	schemaRoleGrantOperatorInput = json.RawMessage(`{
 "$schema":"https://json-schema.org/draft/2020-12/schema",
@@ -1159,14 +1161,17 @@ var (
 "roles":{"type":"array","items":{
 "type":"object",
 "additionalProperties":false,
-"required":["name","description","builtin","permissions","operators"],
+"required":["name","description","builtin","permissions","operators","effective_permissions"],
 "properties":{
 "name":{"type":"string"},
 "description":{"type":"string"},
 "builtin":{"type":"boolean"},
-"permissions":{"type":"array","items":{"type":"string"}},
+"permissions":{"type":"array","items":{"type":"string"},"description":"Permissions AS STORED. On a derived role these are its own rows, not its rights - read effective_permissions instead."},
 "operators":{"type":"array","items":{"type":"string"}},
-"default_scope":{"type":"string","description":"ADR-047 S1: the role's default_scope (empty = role without scope)."}}}}}}`)
+"default_scope":{"type":"string","description":"ADR-047 S1: the role's default_scope AS STORED (empty = role without scope). On a derived role this is only the attenuating delta - see effective_scope."},
+"parent_role":{"type":"string","description":"ADR-078: the role this one derives from - its ceiling. Empty = a plain role."},
+"effective_permissions":{"type":"array","items":{"type":"string"},"description":"ADR-078: permissions AS RESOLVED against the derivation chain (own INTERSECT the parent's effective, every scope capped by the chain's ceiling). Equals permissions on a plain role. Read THIS instead of walking parent_role."},
+"effective_scope":{"type":"string","description":"ADR-078: the resolved scope - the parent's effective scope AND this role's delta. Empty = unrestricted. Bare permissions inherit it, as on a plain role."}}}}}}`)
 
 	schemaSynodCreateInput = json.RawMessage(`{
 "$schema":"https://json-schema.org/draft/2020-12/schema",

@@ -46,14 +46,8 @@ func roleByName(t *testing.T, e *Enforcer, name string) *Role {
 	return nil
 }
 
-// permStrings renders a role's effective permissions for comparison.
-func permStrings(r *Role) []string {
-	out := make([]string, 0, len(r.Permissions))
-	for _, p := range r.Permissions {
-		out = append(out, permString(p))
-	}
-	return out
-}
+// rolePermStrings renders a role's effective permissions for comparison.
+func rolePermStrings(r *Role) []string { return permStrings(r.Permissions) }
 
 // TestFlatten_ParentScopeCascadesIntoChild — the headline behaviour: the child
 // stores only its added narrowing, and its effective scope is the parent's AND
@@ -114,7 +108,7 @@ func TestFlatten_ChildCannotAddAPermission(t *testing.T) {
 		map[string]string{"dba-aboba": "dba"})
 
 	child := roleByName(t, e, "dba-aboba")
-	if got, want := permStrings(child), []string{"incarnation.get"}; len(got) != 1 || got[0] != want[0] {
+	if got, want := rolePermStrings(child), []string{"incarnation.get"}; len(got) != 1 || got[0] != want[0] {
 		t.Fatalf("child effective permissions = %v, want %v", got, want)
 	}
 	if err := e.Check("archon-alice", "incarnation", "destroy", map[string]string{"coven": "dba"}); err == nil {
@@ -155,7 +149,7 @@ func TestFlatten_ChildCannotWidenScope(t *testing.T) {
 				map[string][]string{"dba": {tc.parentPerm}, "child": {tc.childPerm}},
 				nil,
 				map[string]string{"child": "dba"})
-			if got := permStrings(roleByName(t, e, "child")); len(got) != 0 {
+			if got := rolePermStrings(roleByName(t, e, "child")); len(got) != 0 {
 				t.Errorf("child kept %v, want nothing (the parent does not cover it)", got)
 			}
 		})
@@ -171,7 +165,7 @@ func TestFlatten_ChildNarrowsWithinParentIsKept(t *testing.T) {
 		map[string]string{"dba": "coven=dba"},
 		map[string]string{"child": "dba"})
 
-	got := permStrings(roleByName(t, e, "child"))
+	got := rolePermStrings(roleByName(t, e, "child"))
 	want := "incarnation.get on coven=dba AND trait.project=aboba"
 	if len(got) != 1 || got[0] != want {
 		t.Fatalf("child effective permissions = %v, want [%q]", got, want)
@@ -198,7 +192,7 @@ func TestFlatten_WildcardIsBoundedByTheParentCeiling(t *testing.T) {
 
 	child := roleByName(t, e, "admin-dba")
 	if len(child.Permissions) != 1 {
-		t.Fatalf("child effective permissions = %v, want one wildcard", permStrings(child))
+		t.Fatalf("child effective permissions = %v, want one wildcard", rolePermStrings(child))
 	}
 	if child.Permissions[0].Scope == nil {
 		t.Fatal("the derived `*` came out UNRESTRICTED — the parent's ceiling was not applied")
@@ -220,7 +214,7 @@ func TestFlatten_WildcardWithoutAParentWildcardIsDropped(t *testing.T) {
 		map[string]string{"dba": "coven=dba"},
 		map[string]string{"sneaky": "dba"})
 
-	if got := permStrings(roleByName(t, e, "sneaky")); len(got) != 0 {
+	if got := rolePermStrings(roleByName(t, e, "sneaky")); len(got) != 0 {
 		t.Errorf("child kept %v, want nothing — the parent holds no `*`", got)
 	}
 }
@@ -240,7 +234,7 @@ func TestFlatten_ParentIsOneRoleNotTheUnion(t *testing.T) {
 		map[string]string{"narrow": "coven=dba"},
 		map[string]string{"child": "narrow"})
 
-	got := permStrings(roleByName(t, e, "child"))
+	got := rolePermStrings(roleByName(t, e, "child"))
 	if len(got) != 1 || got[0] != "incarnation.get" {
 		t.Errorf("child effective permissions = %v, want only incarnation.get — "+
 			"the ceiling is `narrow`, not the union with `wide`", got)
@@ -261,7 +255,7 @@ func TestFlatten_UndecidableGlobFailsClosed(t *testing.T) {
 		nil,
 		map[string]string{"child": "fleet"})
 
-	if got := permStrings(roleByName(t, e, "child")); len(got) != 0 {
+	if got := rolePermStrings(roleByName(t, e, "child")); len(got) != 0 {
 		t.Errorf("child kept %v, want nothing (glob containment is not decided)", got)
 	}
 }
@@ -327,7 +321,7 @@ func TestFlatten_PlainRolesAreUntouched(t *testing.T) {
 		t.Errorf("plain role scope = %q, want %q", got, want)
 	}
 	want := []string{"incarnation.get", "incarnation.run on coven=prod", "*"}
-	got := permStrings(role)
+	got := rolePermStrings(role)
 	if len(got) != len(want) {
 		t.Fatalf("plain role permissions = %v, want %v", got, want)
 	}

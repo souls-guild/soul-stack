@@ -293,7 +293,22 @@ To actually confine an operator, revoke the wide parent from them; adding a narr
 
 This is also why a new derived role's parent is **one explicitly chosen role**, never "the caller's rights": a caller's union is wider than any single role they hold, so deriving against the union would mint a role broader than any role they could point at. The UI shows the ceiling of the **selected parent** for the same reason.
 
-> **Status.** The model, its guards, chain resolution and the write-time gate are all in place (NIM-179 + NIM-180) — a stored `parent_role` is authoritative at the decision layer. What is **not** yet in place is the API surface: no endpoint or MCP tool accepts `parent_role` and `GET /v1/roles` does not return it, so a derived role can currently only be created through the service layer. That lands in NIM-181, the web selector in NIM-182.
+**API surface.** Derivation is not a separate entity, so it adds no endpoint and no `role.*` permission — the existing role surface carries two more fields ([ADR-078(a)](../adr/0078-rbac-derived-roles.md)):
+
+| Where | Field | Semantics |
+|---|---|---|
+| `POST /v1/roles`, `keeper.role.create` | `parent_role` | omitted/null → a plain role; a name → derive from it. `default_scope` then means the **delta** |
+| `PATCH /v1/roles/{name}/permissions`, `keeper.role.update` | `parent_role` | PATCH presence, mirroring `default_scope`: **key absent** → derivation untouched; present → replaced (`null` makes the role plain again) |
+| `GET /v1/roles`, `keeper.role.list` | `parent_role` | the role's ceiling; absent/empty → a plain role |
+| `GET /v1/roles`, `keeper.role.list` | `effective_permissions`, `effective_scope` | the role **as resolved** against its chain |
+
+The read side returns each role in **both** forms — as stored (`permissions` / `default_scope`) and as resolved (`effective_*`) — and the difference between them is exactly what an operator needs to see: a stored row the parent does not cover is present in the first and absent from the second, i.e. written but granting nothing. Resolution runs the same code the enforcer runs, so no consumer re-derives inheritance from `parent_role` and none can arrive at a wider answer than the decision layer. A catalog whose graph does not resolve fails the read rather than serving the unattenuated rows.
+
+Refusals on the write side: `404` for a parent outside the catalog, `403` for a role beyond its parent (`ErrRoleExceedsParent`) or beyond the caller's own rights, `422` for a cycle / an over-deep chain / an unresolvable scope, `409` on deleting a role that still has children.
+
+The audit records of `role.created` / `role.permissions-updated` carry the derivation, not just the permission list — on a derived role the list is the delta and the ceiling lives in `parent_role`. On create both `parent_role` and `default_scope` are always present (`null` on a plain role); on update they appear only when the request sent them, so an absent key reads as "untouched" and a present `null` as "cleared".
+
+> **Status.** The model, its guards, chain resolution, the write-time gate and the API surface are all in place (NIM-179 + NIM-180 + NIM-181). Remaining: the web selector and the "you inherit X, you cannot widen it" panel (NIM-182) — until then a derived role is created through the API rather than the UI.
 
 ### Builtin-border
 

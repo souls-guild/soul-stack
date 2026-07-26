@@ -40,7 +40,8 @@ type RoleCreateRequest struct {
 	Name         string   `json:"name" required:"true" pattern:"^[a-z][a-z0-9-]*$" doc:"role name (kebab-case), unique in cluster"`
 	Description  string   `json:"description,omitempty" doc:"human-readable role description for UI/audit"`
 	Permissions  []string `json:"permissions,omitempty" doc:"set of permission strings for role (e.g., incarnation.run, soul.*, *)"`
-	DefaultScope *string  `json:"default_scope,omitempty" doc:"role scope: boolean predicate over coven/service/incarnation/host/trait (e.g. coven in (a, b) AND host matches redis-*); omitted/null → role without scope"`
+	DefaultScope *string  `json:"default_scope,omitempty" doc:"role scope: boolean predicate over coven/service/incarnation/host/trait (e.g. coven in (a, b) AND host matches redis-*); omitted/null → role without scope. On a DERIVED role (parent_role set) this is the attenuating delta, conjoined with the parent's effective scope — write only the ADDED narrowing"`
+	ParentRole   *string  `json:"parent_role,omitempty" pattern:"^[a-z][a-z0-9-]*$" doc:"derive from this role (ADR-078): it becomes the ceiling and the new role can never exceed it — permissions outside it are refused, its scope is conjoined onto every permission. Omitted/null → a plain role. Requires the caller to hold the parent's rights"`
 }
 
 // roleCreateOutput — huma output (FULL-TYPED). Status=201; no Body (legacy contract:
@@ -64,10 +65,10 @@ func roleCreateOperation() huma.Operation {
 		Method:        http.MethodPost,
 		Path:          "/",
 		Summary:       "Create role",
-		Description:   "Creates RBAC role with set of permissions (ADR-022). Permission role.create. 409 — name already taken.",
+		Description:   "Creates RBAC role with set of permissions (ADR-022). Permission role.create. Optional parent_role derives the role from another one (ADR-078), bounding it by that role. 409 — name already taken; 404 — parent_role not found; 403 — beyond the parent or beyond the caller's own rights.",
 		Tags:          []string{"role"},
 		DefaultStatus: http.StatusCreated,
-		Errors:        []int{http.StatusBadRequest, http.StatusForbidden, http.StatusConflict, http.StatusUnprocessableEntity, http.StatusInternalServerError},
+		Errors:        []int{http.StatusBadRequest, http.StatusForbidden, http.StatusNotFound, http.StatusConflict, http.StatusUnprocessableEntity, http.StatusInternalServerError},
 	}
 }
 
@@ -106,7 +107,7 @@ func roleListOperation() huma.Operation {
 		Method:        http.MethodGet,
 		Path:          "/",
 		Summary:       "List roles",
-		Description:   "Catalog of RBAC roles with full permissions and operator membership (ADR-022). Permission role.list. Read-only, no audit.",
+		Description:   "Catalog of RBAC roles with full permissions and operator membership (ADR-022). Permission role.list. Each role comes both AS STORED (permissions/default_scope) and AS RESOLVED against its derivation chain (effective_permissions/effective_scope, ADR-078) — consumers must not re-derive inheritance from parent_role. Read-only, no audit.",
 		Tags:          []string{"role"},
 		DefaultStatus: http.StatusOK,
 		Errors:        []int{http.StatusInternalServerError},
@@ -168,7 +169,8 @@ type roleUpdatePermissionsInput struct {
 // order in the contract name).
 type RolePermissionsUpdateRequest struct {
 	Permissions  []string         `json:"permissions" required:"true" doc:"complete new set of permission strings (replace)"`
-	DefaultScope Optional[string] `json:"default_scope" required:"false" doc:"scope: boolean predicate over coven/service/incarnation/host/trait; omitted → scope untouched; present (incl. null) → replaces (null removes scope)"`
+	DefaultScope Optional[string] `json:"default_scope" required:"false" doc:"scope: boolean predicate over coven/service/incarnation/host/trait; omitted → scope untouched; present (incl. null) → replaces (null removes scope). On a derived role it is the attenuating delta"`
+	ParentRole   Optional[string] `json:"parent_role" required:"false" doc:"re-root the role's derivation (ADR-078); omitted → untouched; present (incl. null) → replaces (null makes the role plain again). The ceiling is re-checked on every update: the result must stay within the parent and the caller must hold it"`
 }
 
 // roleUpdatePermissionsOperation — PATCH /v1/roles/{name}/permissions.
@@ -179,7 +181,7 @@ func roleUpdatePermissionsOperation() huma.Operation {
 		Method:        http.MethodPatch,
 		Path:          "/{name}/permissions",
 		Summary:       "Replace role permissions",
-		Description:   "Replace semantics: set completely replaces existing (ADR-022). Permission role.update. 409 — builtin/last-admin.",
+		Description:   "Replace semantics: set completely replaces existing (ADR-022). Permission role.update. default_scope/parent_role follow PATCH presence (omitted → untouched). 409 — builtin/last-admin; 403 — beyond the parent role (ADR-078).",
 		Tags:          []string{"role"},
 		DefaultStatus: http.StatusNoContent,
 		Errors:        []int{http.StatusBadRequest, http.StatusForbidden, http.StatusNotFound, http.StatusConflict, http.StatusUnprocessableEntity, http.StatusInternalServerError},

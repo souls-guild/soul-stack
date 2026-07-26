@@ -17,10 +17,12 @@ Creating a role + its permissions. Permission: `role.create`. Endpoint: `POST /v
 | `name` | `string` (regex `^[a-z][a-z0-9-]*$`) | yes | Role name (kebab-case). |
 | `description` | `string` | optional | Human-readable description of the role. |
 | `permissions` | `array<string>` | yes | Permission lines `<resource>.<action>` (+ opt. ` on <selector>`), [rbac.md → Permissions format](../rbac.md). |
+| `default_scope` | `string\|null` | optional | Role scope ([ADR-047](../../adr/0047-purview.md)), inherited by permissions without their own selector. With `parent_role` set it is the attenuating **delta** — write only the ADDED narrowing. |
+| `parent_role` | `string\|null` | optional | Derive from this role ([ADR-078](../../adr/0078-rbac-derived-roles.md)): it becomes the ceiling and the new role can never exceed it. Omitted/`null` → a plain role. |
 
 **Output:** empty object (`{}`). Corresponds to HTTP `201 Created`.
 
-Errors: `role-already-exists` (`name` busy), `validation-failed` (broken `name` or `permission`).
+Errors: `role-already-exists` (`name` busy), `validation-failed` (broken `name` / `permission` / a cycle or over-deep chain), `not-found` (`parent_role` outside the catalog), `forbidden` (the role would exceed its parent, or the caller's own rights).
 
 #### `keeper.role.delete`
 
@@ -46,7 +48,9 @@ Listing roles with expanded permissions and assigned Archons. Permission: `role.
 
 | Field | Type | Meaning |
 |---|---|---|
-| `roles` | `array<object>` | Elements - `{name, description, builtin, permissions[], operators[]}`; `permissions` / `operators` - non-nil arrays (role without entries → `[]`). |
+| `roles` | `array<object>` | Elements - `{name, description, builtin, permissions[], operators[], default_scope, parent_role, effective_permissions[], effective_scope}`; `permissions` / `operators` / `effective_permissions` - non-nil arrays (role without entries → `[]`). |
+
+Each role comes in **both** forms ([ADR-078](../../adr/0078-rbac-derived-roles.md)): as stored (`permissions` / `default_scope` — on a derived role these are its own rows and its delta, not its rights) and as resolved against its derivation chain (`effective_permissions` / `effective_scope` — `own ∩ the parent's effective`, every scope capped by the chain's ceiling). On a plain role the two coincide. **Read the effective fields**: re-deriving inheritance from `parent_role` is a second implementation of the attenuation rules, free to disagree with the enforcer.
 
 #### `keeper.role.update`
 
@@ -58,10 +62,12 @@ Replacing the set of role permissions (replace semantics). Permission: `role.upd
 |---|---|---|---|
 | `name` | `string` | yes | Role name. |
 | `permissions` | `array<string>` | yes | New set of permissions (completely replaces the existing one). |
+| `default_scope` | `string\|null` | optional | **Key ABSENT** → scope untouched; present → replaces it (`null` clears it). |
+| `parent_role` | `string\|null` | optional | Same presence rule: **key ABSENT** → derivation untouched; present → replaces it (`null` makes the role plain again), [ADR-078](../../adr/0078-rbac-derived-roles.md). |
 
 **Output:** empty object (`{}`). Corresponds to HTTP `204 No Content`.
 
-Errors: `role-not-found`, `role-builtin`, `would-lock-out-cluster` (removing the last `*`), `validation-failed` (broken `permission`).
+Errors: `role-not-found`, `role-builtin`, `would-lock-out-cluster` (removing the last `*` — including by making that role derived), `validation-failed` (broken `permission`, a cycle or over-deep chain), `forbidden` (the result would exceed its parent role). The ceiling is re-checked on **every** update, not only the one that sets `parent_role`.
 
 #### `keeper.role.grant-operator`
 

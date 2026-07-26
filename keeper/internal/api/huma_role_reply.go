@@ -33,12 +33,15 @@ import (
 // WITH omitempty (nil → key omitted), operators/permissions — `[]string` WITHOUT
 // omitempty (an empty array, not nil).
 type RoleView struct {
-	Builtin      bool     `json:"builtin"`
-	DefaultScope *string  `json:"default_scope,omitempty" doc:"role scope: boolean predicate over coven/service/incarnation/host/trait (e.g. coven in (a, b) AND host matches redis-*); omitted → role without scope"`
-	Description  *string  `json:"description,omitempty"`
-	Name         string   `json:"name" pattern:"^[a-z][a-z0-9-]*$"` // ← rbac.RoleNamePattern
-	Operators    []string `json:"operators"`
-	Permissions  []string `json:"permissions"`
+	Builtin              bool     `json:"builtin"`
+	DefaultScope         *string  `json:"default_scope,omitempty" doc:"role scope AS STORED: boolean predicate over coven/service/incarnation/host/trait (e.g. coven in (a, b) AND host matches redis-*); omitted → role without scope. On a derived role this is only the attenuating delta — see effective_scope"`
+	Description          *string  `json:"description,omitempty"`
+	EffectivePermissions []string `json:"effective_permissions" doc:"permissions AS RESOLVED against the derivation chain (ADR-078): own ∩ the parent's effective, every scope capped by the chain's ceiling. Equals permissions on a plain role. Consumers read THIS instead of walking parent_role"`
+	EffectiveScope       *string  `json:"effective_scope,omitempty" doc:"role scope AS RESOLVED: the parent's effective scope AND this role's delta; omitted → unrestricted. Bare permissions inherit it, as on a plain role"`
+	Name                 string   `json:"name" pattern:"^[a-z][a-z0-9-]*$"` // ← rbac.RoleNamePattern
+	Operators            []string `json:"operators"`
+	ParentRole           *string  `json:"parent_role,omitempty" pattern:"^[a-z][a-z0-9-]*$" doc:"the role this one derives from (ADR-078) — its ceiling; omitted → a plain role"`
+	Permissions          []string `json:"permissions"`
 }
 
 // === projection of domain handlers.RoleView (flat fields) → native wire-DTO ===
@@ -50,14 +53,21 @@ type RoleView struct {
 func newRoleView(v handlers.RoleView) RoleView {
 	desc := v.Description
 	out := RoleView{
-		Builtin:     v.Builtin,
-		Description: &desc,
-		Name:        v.Name,
-		Operators:   v.Operators,
-		Permissions: v.Permissions,
+		Builtin:              v.Builtin,
+		Description:          &desc,
+		EffectivePermissions: v.EffectivePermissions,
+		Name:                 v.Name,
+		Operators:            v.Operators,
+		Permissions:          v.Permissions,
 	}
 	if v.DefaultScope != "" {
 		out.DefaultScope = &v.DefaultScope
+	}
+	if v.EffectiveScope != "" {
+		out.EffectiveScope = &v.EffectiveScope
+	}
+	if v.ParentRole != "" {
+		out.ParentRole = &v.ParentRole
 	}
 	return out
 }

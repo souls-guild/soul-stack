@@ -14,10 +14,13 @@ import (
 // name + permissions are required. permissions is the new set (replace
 // semantics). default_scope (ADR-047 S1) is optional: key ABSENT → scope
 // untouched; present (including null) → replaces it (null clears scope).
+// parent_role (ADR-078) follows the same presence rule — null makes the role
+// plain again. REST parity: PATCH /v1/roles/{name}/permissions takes both.
 type roleUpdateArgs struct {
 	Name         string   `json:"name"`
 	Permissions  []string `json:"permissions"`
 	DefaultScope *string  `json:"default_scope"`
+	ParentRole   *string  `json:"parent_role"`
 }
 
 // callRoleUpdate — mutating tool keeper.role.update. Transport over
@@ -52,10 +55,11 @@ func (h *Handler) callRoleUpdate(ctx context.Context, claims *jwt.Claims, req js
 		return h.toolError(req.ID, toolName, mcpCodeValidationFailed, "field 'name' is required")
 	}
 
-	// presence of the default_scope key in raw args: omitted (leave scope
-	// alone) vs explicit (replace, including null → clear). *string alone
-	// can't distinguish these.
+	// presence of the default_scope / parent_role keys in raw args: omitted (leave
+	// as is) vs explicit (replace, including null → clear). *string alone can't
+	// distinguish these.
 	hasScope := rawArgHasKey(args, "default_scope")
+	hasParent := rawArgHasKey(args, "parent_role")
 
 	err := h.deps.RBACRoles.UpdateRolePermissions(ctx, rbac.UpdateRolePermissionsInput{
 		Name:            a.Name,
@@ -63,6 +67,8 @@ func (h *Handler) callRoleUpdate(ctx context.Context, claims *jwt.Claims, req js
 		CallerAID:       claims.Subject,
 		SetDefaultScope: hasScope,
 		DefaultScope:    a.DefaultScope,
+		SetParentRole:   hasParent,
+		ParentRole:      a.ParentRole,
 	})
 	if err != nil {
 		code, detail := mapRoleErrorToMCP(err)
@@ -76,12 +82,22 @@ func (h *Handler) callRoleUpdate(ctx context.Context, claims *jwt.Claims, req js
 		return h.toolError(req.ID, toolName, code, detail)
 	}
 
-	// Audit — parallels the HTTP handler (authorization change, ADR-022):
-	// payload {name, permissions} (new set). Permission strings aren't secret.
-	h.writeAudit(audit.EventRolePermissionsUpdated, claims.Subject, map[string]any{
+	// Audit — parallels the HTTP handler (authorization change, ADR-022): payload
+	// {name, permissions} (new set), plus parent_role/default_scope ONLY when the
+	// call carried them. An absent key means "untouched", a present null means
+	// "cleared", and the two are different authorization changes (ADR-078).
+	// Permission strings aren't secret.
+	payload := map[string]any{
 		"name":        a.Name,
 		"permissions": a.Permissions,
-	})
+	}
+	if hasParent {
+		payload["parent_role"] = a.ParentRole
+	}
+	if hasScope {
+		payload["default_scope"] = a.DefaultScope
+	}
+	h.writeAudit(audit.EventRolePermissionsUpdated, claims.Subject, payload)
 
 	return h.toolResult(req.ID, struct{}{})
 }

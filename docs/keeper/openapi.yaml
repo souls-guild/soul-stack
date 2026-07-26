@@ -2719,13 +2719,17 @@ components:
       additionalProperties: false
       properties:
         default_scope:
-          description: "role scope: boolean predicate over coven/service/incarnation/host/trait (e.g. coven in (a, b) AND host matches redis-*); omitted/null → role without scope"
+          description: "role scope: boolean predicate over coven/service/incarnation/host/trait (e.g. coven in (a, b) AND host matches redis-*); omitted/null → role without scope. On a DERIVED role (parent_role set) this is the attenuating delta, conjoined with the parent's effective scope — write only the ADDED narrowing"
           type: string
         description:
           description: human-readable role description for UI/audit
           type: string
         name:
           description: role name (kebab-case), unique in cluster
+          pattern: ^[a-z][a-z0-9-]*$
+          type: string
+        parent_role:
+          description: "derive from this role (ADR-078): it becomes the ceiling and the new role can never exceed it — permissions outside it are refused, its scope is conjoined onto every permission. Omitted/null → a plain role. Requires the caller to hold the parent's rights"
           pattern: ^[a-z][a-z0-9-]*$
           type: string
         permissions:
@@ -2755,7 +2759,12 @@ components:
       additionalProperties: false
       properties:
         default_scope:
-          description: "scope: boolean predicate over coven/service/incarnation/host/trait; omitted → scope untouched; present (incl. null) → replaces (null removes scope)"
+          description: "scope: boolean predicate over coven/service/incarnation/host/trait; omitted → scope untouched; present (incl. null) → replaces (null removes scope). On a derived role it is the attenuating delta"
+          type:
+            - string
+            - "null"
+        parent_role:
+          description: "re-root the role's derivation (ADR-078); omitted → untouched; present (incl. null) → replaces (null makes the role plain again). The ceiling is re-checked on every update: the result must stay within the parent and the caller must hold it"
           type:
             - string
             - "null"
@@ -2775,9 +2784,19 @@ components:
         builtin:
           type: boolean
         default_scope:
-          description: "role scope: boolean predicate over coven/service/incarnation/host/trait (e.g. coven in (a, b) AND host matches redis-*); omitted → role without scope"
+          description: "role scope AS STORED: boolean predicate over coven/service/incarnation/host/trait (e.g. coven in (a, b) AND host matches redis-*); omitted → role without scope. On a derived role this is only the attenuating delta — see effective_scope"
           type: string
         description:
+          type: string
+        effective_permissions:
+          description: "permissions AS RESOLVED against the derivation chain (ADR-078): own ∩ the parent's effective, every scope capped by the chain's ceiling. Equals permissions on a plain role. Consumers read THIS instead of walking parent_role"
+          items:
+            type: string
+          type:
+            - array
+            - "null"
+        effective_scope:
+          description: "role scope AS RESOLVED: the parent's effective scope AND this role's delta; omitted → unrestricted. Bare permissions inherit it, as on a plain role"
           type: string
         name:
           pattern: ^[a-z][a-z0-9-]*$
@@ -2788,6 +2807,10 @@ components:
           type:
             - array
             - "null"
+        parent_role:
+          description: the role this one derives from (ADR-078) — its ceiling; omitted → a plain role
+          pattern: ^[a-z][a-z0-9-]*$
+          type: string
         permissions:
           items:
             type: string
@@ -2796,6 +2819,7 @@ components:
             - "null"
       required:
         - builtin
+        - effective_permissions
         - name
         - operators
         - permissions
@@ -10130,7 +10154,7 @@ paths:
         - push
   /v1/roles:
     get:
-      description: Catalog of RBAC roles with full permissions and operator membership (ADR-022). Permission role.list. Read-only, no audit.
+      description: Catalog of RBAC roles with full permissions and operator membership (ADR-022). Permission role.list. Each role comes both AS STORED (permissions/default_scope) and AS RESOLVED against its derivation chain (effective_permissions/effective_scope, ADR-078) — consumers must not re-derive inheritance from parent_role. Read-only, no audit.
       operationId: listRoles
       responses:
         "200":
@@ -10149,7 +10173,7 @@ paths:
       tags:
         - role
     post:
-      description: Creates RBAC role with set of permissions (ADR-022). Permission role.create. 409 — name already taken.
+      description: Creates RBAC role with set of permissions (ADR-022). Permission role.create. Optional parent_role derives the role from another one (ADR-078), bounding it by that role. 409 — name already taken; 404 — parent_role not found; 403 — beyond the parent or beyond the caller's own rights.
       operationId: createRole
       requestBody:
         content:
@@ -10172,6 +10196,12 @@ paths:
               schema:
                 $ref: "#/components/schemas/HumaProblemError"
           description: Forbidden
+        "404":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/HumaProblemError"
+          description: Not Found
         "409":
           content:
             application/problem+json:
@@ -10353,7 +10383,7 @@ paths:
         - role
   /v1/roles/{name}/permissions:
     patch:
-      description: "Replace semantics: set completely replaces existing (ADR-022). Permission role.update. 409 — builtin/last-admin."
+      description: "Replace semantics: set completely replaces existing (ADR-022). Permission role.update. default_scope/parent_role follow PATCH presence (omitted → untouched). 409 — builtin/last-admin; 403 — beyond the parent role (ADR-078)."
       operationId: updateRolePermissions
       parameters:
         - description: role name

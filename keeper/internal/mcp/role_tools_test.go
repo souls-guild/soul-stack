@@ -46,9 +46,20 @@ type roleFakePool struct {
 	// distinguishes "not set" (default `*`) from "set empty" (caller with no rights).
 	callerPerms         []string
 	callerPermsExplicit bool
+
+	// parentChain — rows of the WITH RECURSIVE chain query (resolveRoleChain,
+	// ADR-078). Empty → the named parent is not in the catalog.
+	parentChain []roleChainRow
+
+	// parentUpdates — args of every UPDATE rbac_roles SET parent_role, so a test
+	// can tell "the tool did not send the field" from "it sent null".
+	parentUpdates []any
 }
 
-func (p *roleFakePool) Exec(_ context.Context, sql string, _ ...any) (pgconn.CommandTag, error) {
+func (p *roleFakePool) Exec(_ context.Context, sql string, args ...any) (pgconn.CommandTag, error) {
+	if strings.Contains(sql, "UPDATE rbac_roles SET parent_role") && len(args) >= 2 {
+		p.parentUpdates = append(p.parentUpdates, args[1])
+	}
 	if p.execErr != nil &&
 		(strings.HasPrefix(strings.TrimSpace(sql), "INSERT") ||
 			strings.HasPrefix(strings.TrimSpace(sql), "DELETE")) {
@@ -60,6 +71,9 @@ func (p *roleFakePool) Exec(_ context.Context, sql string, _ ...any) (pgconn.Com
 
 func (p *roleFakePool) Query(_ context.Context, sql string, _ ...any) (pgx.Rows, error) {
 	switch {
+	case strings.Contains(sql, "WITH RECURSIVE chain"):
+		// resolveRoleChain (ADR-078): the named parent plus its ancestors.
+		return &roleChainRows{rows: p.parentChain}, nil
 	case strings.Contains(sql, "SELECT rp.permission"):
 		// caller-perms (subset check): defaults to `["*"]` (caller=cluster-admin)
 		// if the test hasn't set an explicit set. The `rp.permission` marker is
@@ -214,6 +228,44 @@ func (r *roleViewRows) FieldDescriptions() []pgconn.FieldDescription { return ni
 func (r *roleViewRows) Values() ([]any, error)                       { return nil, nil }
 func (r *roleViewRows) RawValues() [][]byte                          { return nil }
 func (r *roleViewRows) Conn() *pgx.Conn                              { return nil }
+
+// roleChainRow — one row of the parent-chain query (resolveRoleChain, ADR-078):
+// role name, its parent (empty = a root), its RAW default_scope (empty = NULL) and
+// ONE of its permissions (empty = the LEFT JOIN miss, a role granting nothing).
+type roleChainRow struct {
+	name       string
+	parent     string
+	scope      string
+	permission string
+}
+
+type roleChainRows struct {
+	rows []roleChainRow
+	idx  int
+}
+
+func (r *roleChainRows) Next() bool {
+	if r.idx >= len(r.rows) {
+		return false
+	}
+	r.idx++
+	return true
+}
+func (r *roleChainRows) Scan(dest ...any) error {
+	row := r.rows[r.idx-1]
+	*dest[0].(*string) = row.name
+	assignNullableRoleField(dest[1].(**string), row.parent)
+	assignNullableRoleField(dest[2].(**string), row.scope)
+	assignNullableRoleField(dest[3].(**string), row.permission)
+	return nil
+}
+func (r *roleChainRows) Err() error                                   { return nil }
+func (r *roleChainRows) Close()                                       {}
+func (r *roleChainRows) CommandTag() pgconn.CommandTag                { return pgconn.CommandTag{} }
+func (r *roleChainRows) FieldDescriptions() []pgconn.FieldDescription { return nil }
+func (r *roleChainRows) Values() ([]any, error)                       { return nil, nil }
+func (r *roleChainRows) RawValues() [][]byte                          { return nil }
+func (r *roleChainRows) Conn() *pgx.Conn                              { return nil }
 
 // rolePermRows / roleOpRows — (role_name, permission|aid) for assembling the list.
 type rolePermRows struct {
@@ -712,3 +764,172 @@ func requireSingleAudit(t *testing.T, rec *recordingAudit, wantType string) *aud
 // claims-helper / callTool / mustToolErrorData / fakeIssuer / recordingAudit
 // are defined in handler_test.go (same package).
 var _ = keeperjwt.Claims{}
+
+// --- Derived roles (ADR-078, NIM-181): MCP parity with the REST surface ---
+//
+// The write gate lives in rbac.Service; what these pin is that the TOOL reaches it.
+// A tool that dropped parent_role would create a plain role where the operator asked
+// for a bounded one, and every refusal below would silently become a success.
+
+// dbaChain — the parent `dba`: a root role granting incarnation.get at coven=dba.
+var dbaChain = []roleChainRow{{name: "dba", scope: "coven=dba", permission: "incarnation.get"}}
+
+func TestRoleCreate_Derived_Success(t *testing.T) {
+	pool := &roleFakePool{parentChain: dbaChain}
+	h, rec := newRoleHandlerRec(t, roleAdminCfg(), pool)
+	resp := callTool(t, h, "archon-alice", "keeper.role.create",
+		`{"name":"dba-aboba","permissions":["incarnation.get"],"parent_role":"dba","default_scope":"trait.project=aboba"}`)
+	if resp.Error != nil {
+		t.Fatalf("unexpected error: %+v", resp.Error)
+	}
+
+	// The audit record of an authorization change must carry BOTH halves: on a
+	// derived role the permission list is the delta, and the ceiling is the parent.
+	ev := requireSingleAudit(t, rec, "role.created")
+	assertAuditParent(t, ev.Payload, "parent_role", "dba")
+	assertAuditParent(t, ev.Payload, "default_scope", "trait.project=aboba")
+}
+
+// TestRoleCreate_BeyondParent_Forbidden — a permission the chosen parent does not
+// hold is refused through the tool, on the same terms as through REST.
+func TestRoleCreate_BeyondParent_Forbidden(t *testing.T) {
+	pool := &roleFakePool{parentChain: dbaChain}
+	h := newRoleHandler(t, roleAdminCfg(), pool)
+	resp := callTool(t, h, "archon-alice", "keeper.role.create",
+		`{"name":"dba-aboba","permissions":["incarnation.destroy"],"parent_role":"dba"}`)
+	if resp.Error == nil {
+		t.Fatal("expected error: incarnation.destroy is not the parent's to give")
+	}
+	if data := mustToolErrorData(t, resp.Error.Data); data.Code != mcpCodeForbidden {
+		t.Errorf("code = %q, want forbidden", data.Code)
+	}
+}
+
+// TestRoleCreate_UnknownParent_NotFound — a parent outside the catalog is a
+// not-found about the parent, not a role with a dangling ceiling.
+func TestRoleCreate_UnknownParent_NotFound(t *testing.T) {
+	h := newRoleHandler(t, roleAdminCfg(), &roleFakePool{}) // no chain rows
+	resp := callTool(t, h, "archon-alice", "keeper.role.create",
+		`{"name":"orphan","permissions":["incarnation.get"],"parent_role":"ghost"}`)
+	if resp.Error == nil {
+		t.Fatal("expected error")
+	}
+	if data := mustToolErrorData(t, resp.Error.Data); data.Code != mcpCodeNotFound {
+		t.Errorf("code = %q, want not-found", data.Code)
+	}
+}
+
+// TestRoleUpdate_ParentPresence — the PATCH-presence envelope of parent_role over
+// MCP (rawArgHasKey), where the distinction has teeth: an omitted key that reached
+// the domain as an explicit null would CLEAR the role's parent, turning its delta
+// into an absolute scope and dropping the parent's narrowing — a widening.
+func TestRoleUpdate_ParentPresence(t *testing.T) {
+	cases := []struct {
+		name       string
+		args       string
+		wantWrite  bool
+		wantArg    any
+		wantAudit  bool
+		wantAuditV any
+	}{
+		{"omitted_do_not_touch", `{"name":"ops","permissions":["incarnation.get"]}`, false, nil, false, nil},
+		{"null_makes_it_plain", `{"name":"ops","permissions":["incarnation.get"],"parent_role":null}`, true, nil, true, nil},
+		{"value_reroots", `{"name":"ops","permissions":["incarnation.get"],"parent_role":"dba"}`, true, "dba", true, "dba"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			pool := &roleFakePool{parentChain: dbaChain}
+			h, rec := newRoleHandlerRec(t, roleAdminCfg(), pool)
+			resp := callTool(t, h, "archon-alice", "keeper.role.update", tc.args)
+			if resp.Error != nil {
+				t.Fatalf("unexpected error: %+v", resp.Error)
+			}
+
+			if got := len(pool.parentUpdates) > 0; got != tc.wantWrite {
+				t.Fatalf("UPDATE parent_role called=%v, want %v (SetParentRole presence envelope broken)", got, tc.wantWrite)
+			}
+			if tc.wantWrite && pool.parentUpdates[0] != tc.wantArg {
+				t.Errorf("parent_role arg = %v, want %v", pool.parentUpdates[0], tc.wantArg)
+			}
+
+			ev := requireSingleAudit(t, rec, "role.permissions-updated")
+			v, present := ev.Payload["parent_role"]
+			if present != tc.wantAudit {
+				t.Fatalf("audit parent_role present=%v, want %v — an absent key means untouched, a null means cleared", present, tc.wantAudit)
+			}
+			if !tc.wantAudit {
+				return
+			}
+			if tc.wantAuditV == nil {
+				if p, _ := v.(*string); p != nil {
+					t.Errorf("audit parent_role = %v, want null", *p)
+				}
+				return
+			}
+			assertAuditParent(t, ev.Payload, "parent_role", tc.wantAuditV.(string))
+		})
+	}
+}
+
+// assertAuditParent checks a nullable *string audit field against a wanted value.
+func assertAuditParent(t *testing.T, payload map[string]any, key, want string) {
+	t.Helper()
+	v, present := payload[key]
+	if !present {
+		t.Fatalf("audit payload missing %q (payload=%+v)", key, payload)
+	}
+	got, ok := v.(*string)
+	if !ok || got == nil {
+		t.Fatalf("audit payload[%q] = %v, want %q", key, v, want)
+	}
+	if *got != want {
+		t.Errorf("audit payload[%q] = %q, want %q", key, *got, want)
+	}
+}
+
+// TestRoleList_ResolvesTheChain — role.list publishes the resolved form next to the
+// stored one (ADR-078), so an agent reading the catalog never re-derives inheritance
+// — and never reads a derived role's stored rows as its rights.
+func TestRoleList_ResolvesTheChain(t *testing.T) {
+	pool := &roleFakePool{views: []rbac.RoleView{
+		{Name: "dba", Permissions: []string{"incarnation.get"}, DefaultScope: "coven=dba"},
+		{Name: "dba-aboba", ParentRole: "dba", DefaultScope: "trait.project=aboba",
+			Permissions: []string{"incarnation.get", "incarnation.destroy"}},
+	}}
+	h := newRoleHandler(t, roleAdminCfg(), pool)
+	resp := callTool(t, h, "archon-alice", "keeper.role.list", `{}`)
+	if resp.Error != nil {
+		t.Fatalf("unexpected error: %+v", resp.Error)
+	}
+	var res toolsCallResult
+	if err := json.Unmarshal(resp.Result, &res); err != nil {
+		t.Fatalf("unmarshal result: %v", err)
+	}
+	var out roleListOutput
+	if err := json.Unmarshal(res.StructuredContent, &out); err != nil {
+		t.Fatalf("unmarshal structured: %v", err)
+	}
+
+	var child roleView
+	for _, r := range out.Roles {
+		if r.Name == "dba-aboba" {
+			child = r
+		}
+	}
+	if child.ParentRole != "dba" {
+		t.Fatalf("parent_role = %q, want dba", child.ParentRole)
+	}
+	if len(child.EffectivePermissions) != 1 || child.EffectivePermissions[0] != "incarnation.get" {
+		t.Errorf("effective_permissions = %v, want [incarnation.get] — incarnation.destroy is not the parent's to give",
+			child.EffectivePermissions)
+	}
+	if len(child.Permissions) != 2 {
+		t.Errorf("permissions = %v, want both stored rows", child.Permissions)
+	}
+	if want := "coven=dba AND trait.project=aboba"; child.EffectiveScope != want {
+		t.Errorf("effective_scope = %q, want %q", child.EffectiveScope, want)
+	}
+	if child.DefaultScope != "trait.project=aboba" {
+		t.Errorf("default_scope = %q, want the delta alone", child.DefaultScope)
+	}
+}

@@ -21,11 +21,16 @@ const roleManagementNotConfigured = "role management is not configured"
 // (schemaRoleCreateInput): name + permissions are required, description is
 // optional. permissions are '<resource>.<action>' permission strings
 // (validated in rbac.Service).
+//
+// parent_role derives the role from another one (ADR-078); with it set,
+// default_scope is the attenuating delta rather than an absolute scope. REST
+// parity: POST /v1/roles takes the same two fields.
 type roleCreateArgs struct {
 	Name         string   `json:"name"`
 	Description  string   `json:"description"`
 	Permissions  []string `json:"permissions"`
 	DefaultScope *string  `json:"default_scope,omitempty"`
+	ParentRole   *string  `json:"parent_role,omitempty"`
 }
 
 // callRoleCreate — mutating-tool keeper.role.create. A transport layer over
@@ -68,6 +73,7 @@ func (h *Handler) callRoleCreate(ctx context.Context, claims *jwt.Claims, req js
 		Permissions:  a.Permissions,
 		CallerAID:    claims.Subject,
 		DefaultScope: a.DefaultScope,
+		ParentRole:   a.ParentRole,
 	})
 	if err != nil {
 		code, detail := mapRoleErrorToMCP(err)
@@ -81,12 +87,16 @@ func (h *Handler) callRoleCreate(ctx context.Context, claims *jwt.Claims, req js
 		return h.toolError(req.ID, toolName, code, detail)
 	}
 
-	// Audit — mirrors the HTTP handler (authorization change, ADR-022):
-	// payload {name, permissions, created_by_aid}. permission strings aren't secret.
+	// Audit — mirrors the HTTP handler (authorization change, ADR-022): payload
+	// {name, permissions, created_by_aid, parent_role, default_scope}. The last two
+	// are always present, null included: on a derived role the permission list alone
+	// does not say what it grants (ADR-078). Permission strings aren't secret.
 	h.writeAudit(audit.EventRoleCreated, claims.Subject, map[string]any{
 		"name":           a.Name,
 		"permissions":    a.Permissions,
 		"created_by_aid": claims.Subject,
+		"parent_role":    a.ParentRole,
+		"default_scope":  a.DefaultScope,
 	})
 
 	return h.toolResult(req.ID, struct{}{})

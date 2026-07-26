@@ -13,13 +13,20 @@ import (
 // expanded permissions and assigned Archons (AID). Permissions/Operators are
 // non-nil slices (a role with no entries serializes as [], not null), for
 // predictable JSON output.
+//
+// A role comes in BOTH forms (ADR-078): as stored (Permissions/DefaultScope — the
+// delta on a derived role) and as resolved against its chain (Effective*). An agent
+// reading this catalog must not re-derive inheritance from ParentRole.
 type roleView struct {
-	Name         string   `json:"name"`
-	Description  string   `json:"description"`
-	Builtin      bool     `json:"builtin"`
-	Permissions  []string `json:"permissions"`
-	Operators    []string `json:"operators"`
-	DefaultScope string   `json:"default_scope,omitempty"`
+	Name                 string   `json:"name"`
+	Description          string   `json:"description"`
+	Builtin              bool     `json:"builtin"`
+	Permissions          []string `json:"permissions"`
+	Operators            []string `json:"operators"`
+	DefaultScope         string   `json:"default_scope,omitempty"`
+	ParentRole           string   `json:"parent_role,omitempty"`
+	EffectivePermissions []string `json:"effective_permissions"`
+	EffectiveScope       string   `json:"effective_scope,omitempty"`
 }
 
 // roleListOutput is the output of keeper.role.list: an array of roles under
@@ -68,12 +75,15 @@ func (h *Handler) callRoleList(ctx context.Context, claims *jwt.Claims, req json
 	out := roleListOutput{Roles: make([]roleView, 0, len(views))}
 	for _, v := range views {
 		out.Roles = append(out.Roles, roleView{
-			Name:         v.Name,
-			Description:  v.Description,
-			Builtin:      v.Builtin,
-			Permissions:  nonNilStrings(v.Permissions),
-			Operators:    nonNilStrings(v.Operators),
-			DefaultScope: v.DefaultScope,
+			Name:                 v.Name,
+			Description:          v.Description,
+			Builtin:              v.Builtin,
+			Permissions:          nonNilStrings(v.Permissions),
+			Operators:            nonNilStrings(v.Operators),
+			DefaultScope:         v.DefaultScope,
+			ParentRole:           v.ParentRole,
+			EffectivePermissions: nonNilStrings(v.EffectivePermissions),
+			EffectiveScope:       v.EffectiveScope,
 		})
 	}
 	return h.toolResult(req.ID, out)

@@ -336,10 +336,26 @@ type RoleView struct {
 	Operators   []string
 	// DefaultScope — the role's RAW default_scope (ADR-047 S1); empty string
 	// means NULL (role has no scope restriction). For the list endpoint.
+	//
+	// On a DERIVED role this is only the attenuating DELTA (ADR-078(b)) — what the
+	// role actually resolves to is [RoleView.EffectiveScope].
 	DefaultScope string
 	// ParentRole — the role this one derives from (ADR-078); empty string means
-	// NULL (a plain role). Surfacing it on the API is NIM-181.
+	// NULL (a plain role).
 	ParentRole string
+
+	// EffectivePermissions / EffectiveScope — the role in RESOLVED form
+	// (ADR-078(c)/(d)), filled by [resolveRoleViews]: `own ∩ the parent's
+	// effective` with every scope capped by the chain's ceiling. On a plain role
+	// they are its own rows, canonically rendered.
+	//
+	// The catalog resolves the chain so no consumer has to: a UI that re-derived
+	// inheritance from parent_role would be a second implementation of the
+	// attenuation rules, free to disagree with the enforcer.
+	EffectivePermissions []string
+	// EffectiveScope is the resolved default scope — `the parent's effective AND
+	// own delta` — canonically rendered; empty means unrestricted.
+	EffectiveScope string
 }
 
 const (
@@ -359,6 +375,11 @@ const (
 // anyone). Permission rows and membership rows referencing a role outside
 // the catalog are dropped (the FK guarantees consistency, but we still guard
 // against drift — same as [LoadSnapshot]).
+//
+// Derivation chains are resolved here rather than at the caller ([resolveRoleViews],
+// ADR-078): the effective form is part of what a role IS, and a caller that
+// forgot to resolve would publish a derived role's unattenuated rows — a
+// SUPERSET of what it grants.
 func LoadRoleViews(ctx context.Context, db ExecQueryRower) ([]RoleView, error) {
 	views, index, err := loadRoleViewRows(ctx, db)
 	if err != nil {
@@ -368,6 +389,9 @@ func LoadRoleViews(ctx context.Context, db ExecQueryRower) ([]RoleView, error) {
 		return nil, err
 	}
 	if err := loadRoleViewOperators(ctx, db, index); err != nil {
+		return nil, err
+	}
+	if err := resolveRoleViews(views); err != nil {
 		return nil, err
 	}
 	return views, nil

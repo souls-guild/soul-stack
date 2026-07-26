@@ -60,12 +60,21 @@ type RoleCreateInput struct {
 	Description  string
 	Permissions  []string
 	DefaultScope *string
+	// ParentRole names the role this one derives from (ADR-078); nil creates a
+	// plain role. On a derived role DefaultScope is the attenuating DELTA, not an
+	// absolute scope.
+	ParentRole *string
 }
 
 // RoleView — the FLAT domain projection of a role (GET /v1/roles items[]), handler-
 // native T5d. The api package projects it into the native RoleView schema (register-func).
 // DefaultScope/Description — a RAW string from the domain (empty = NULL/no value);
 // the nullable wire form (omitempty) is held by the native type in api.
+//
+// The role comes in BOTH forms (ADR-078): as stored (Permissions/DefaultScope —
+// the delta on a derived role) and as resolved (Effective*). Publishing the
+// resolved form is what keeps inheritance out of the consumer: a UI that walked
+// ParentRole itself would be a second implementation of the attenuation rules.
 type RoleView struct {
 	Name         string
 	Description  string
@@ -73,6 +82,13 @@ type RoleView struct {
 	Permissions  []string
 	Operators    []string
 	DefaultScope string
+	// ParentRole — the role this one derives from; empty = a plain role.
+	ParentRole string
+	// EffectivePermissions / EffectiveScope — the role resolved against its chain
+	// (`own ∩ the parent's effective`, scopes conjoined). Equal to the stored form
+	// on a plain role.
+	EffectivePermissions []string
+	EffectiveScope       string
 }
 
 // RoleListPage — the domain list of roles for GET /v1/roles (handler-native T5d). The api
@@ -100,15 +116,26 @@ type RoleCreateReply struct {
 	Name         string
 	Permissions  []string
 	CreatedByAID string
+	// ParentRole / DefaultScope — the derivation of the created role (ADR-078):
+	// its ceiling and its delta. nil = none.
+	ParentRole   *string
+	DefaultScope *string
 }
 
 // AuditPayload assembles the audit-payload of the create route (parity with the legacy
 // SetAuditPayload). The SINGLE source for huma variant B.
+//
+// parent_role and default_scope are ALWAYS present, null included: on a derived role
+// the permission list alone does not say what the role grants — the ceiling and the
+// delta are half of the answer, and an audit record of an authorization change has to
+// carry both (ADR-078).
 func (r RoleCreateReply) AuditPayload() middleware.AuditPayload {
 	return middleware.AuditPayload{
 		"name":           r.Name,
 		"permissions":    r.Permissions,
 		"created_by_aid": r.CreatedByAID,
+		"parent_role":    r.ParentRole,
+		"default_scope":  r.DefaultScope,
 	}
 }
 
@@ -133,6 +160,7 @@ func (h *RoleHandler) CreateTyped(ctx context.Context, claims *jwt.Claims, req R
 		Permissions:  perms,
 		CallerAID:    claims.Subject,
 		DefaultScope: req.DefaultScope,
+		ParentRole:   req.ParentRole,
 	})
 	switch {
 	case err == nil:
@@ -164,6 +192,8 @@ func (h *RoleHandler) CreateTyped(ctx context.Context, claims *jwt.Claims, req R
 		Name:         req.Name,
 		Permissions:  perms,
 		CreatedByAID: claims.Subject,
+		ParentRole:   req.ParentRole,
+		DefaultScope: req.DefaultScope,
 	}, nil
 }
 
@@ -232,13 +262,45 @@ type UpdatePermissionsInput struct {
 	Permissions     []string
 	SetDefaultScope bool
 	DefaultScope    *string
+	// SetParentRole / ParentRole — re-rooting, with the same PATCH-presence
+	// semantics as the scope pair (ADR-078): omitted → the role's derivation is
+	// untouched; present → replaced (null makes the role plain again).
+	SetParentRole bool
+	ParentRole    *string
 }
 
 // RolePermissionsReply — the result of [RoleHandler.UpdatePermissionsTyped]:
-// METADATA for the audit-payload (role name + new permission set). The 204 body is empty.
+// METADATA for the audit-payload (role name + new permission set, plus whichever of
+// the derivation fields the request actually sent). The 204 body is empty.
 type RolePermissionsReply struct {
 	Name        string
 	Permissions []string
+
+	// SetParentRole / ParentRole / SetDefaultScope / DefaultScope mirror the
+	// request's PATCH presence, so the audit record says what the mutation
+	// CHANGED rather than restating fields it left alone.
+	SetParentRole   bool
+	ParentRole      *string
+	SetDefaultScope bool
+	DefaultScope    *string
+}
+
+// AuditPayload assembles the audit-payload of the update route. name/permissions
+// always; parent_role/default_scope only when the request carried them — an absent
+// key means "untouched", a present null means "cleared", and the two are different
+// authorization changes (ADR-078: re-rooting a role rewrites its ceiling).
+func (r RolePermissionsReply) AuditPayload() middleware.AuditPayload {
+	p := middleware.AuditPayload{
+		"name":        r.Name,
+		"permissions": r.Permissions,
+	}
+	if r.SetParentRole {
+		p["parent_role"] = r.ParentRole
+	}
+	if r.SetDefaultScope {
+		p["default_scope"] = r.DefaultScope
+	}
+	return p
 }
 
 // UpdatePermissionsTyped — the extracted domain function PATCH /v1/roles/{name}/
@@ -254,6 +316,8 @@ func (h *RoleHandler) UpdatePermissionsTyped(ctx context.Context, claims *jwt.Cl
 		CallerAID:       claims.Subject,
 		SetDefaultScope: in.SetDefaultScope,
 		DefaultScope:    in.DefaultScope,
+		SetParentRole:   in.SetParentRole,
+		ParentRole:      in.ParentRole,
 	})
 	switch {
 	case err == nil:
@@ -277,7 +341,14 @@ func (h *RoleHandler) UpdatePermissionsTyped(ctx context.Context, claims *jwt.Cl
 		)
 		return zero, &problemError{problem.New(problem.TypeInternalError, "", "update role permissions failed")}
 	}
-	return RolePermissionsReply{Name: in.Name, Permissions: in.Permissions}, nil
+	return RolePermissionsReply{
+		Name:            in.Name,
+		Permissions:     in.Permissions,
+		SetParentRole:   in.SetParentRole,
+		ParentRole:      in.ParentRole,
+		SetDefaultScope: in.SetDefaultScope,
+		DefaultScope:    in.DefaultScope,
+	}, nil
 }
 
 // RoleOperatorReply — the result of grant/revoke-operator: METADATA for the audit-payload
@@ -397,12 +468,15 @@ func isInvalidDerivation(err error) bool {
 // in api (newRoleView). Permissions/Operators — a non-nil slice (`[]`, not `null`).
 func toRoleView(v rbac.RoleView) RoleView {
 	return RoleView{
-		Name:         v.Name,
-		Description:  v.Description,
-		Builtin:      v.Builtin,
-		Permissions:  emptyIfNil(v.Permissions),
-		Operators:    emptyIfNil(v.Operators),
-		DefaultScope: v.DefaultScope,
+		Name:                 v.Name,
+		Description:          v.Description,
+		Builtin:              v.Builtin,
+		Permissions:          emptyIfNil(v.Permissions),
+		Operators:            emptyIfNil(v.Operators),
+		DefaultScope:         v.DefaultScope,
+		ParentRole:           v.ParentRole,
+		EffectivePermissions: emptyIfNil(v.EffectivePermissions),
+		EffectiveScope:       v.EffectiveScope,
 	}
 }
 

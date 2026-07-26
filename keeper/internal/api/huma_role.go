@@ -53,13 +53,14 @@ func registerHumaRole(humaAPI huma.API, roleH *handlers.RoleHandler) {
 			Description:  in.Body.Description,
 			Permissions:  in.Body.Permissions,
 			DefaultScope: in.Body.DefaultScope,
+			ParentRole:   in.Body.ParentRole,
 		})
 		if err != nil {
 			return nil, roleProblem(err)
 		}
 		// Audit-payload on huma-ctx: humaAuditMiddleware (variant B) seeds carrier
-		// BEFORE next, reads payload AFTER. Fields — parity with legacy SetAuditPayload
-		// (name + permissions + created_by_aid; without secrets, ADR-022).
+		// BEFORE next, reads payload AFTER. Fields — name + permissions +
+		// created_by_aid + the derivation pair (ADR-078); without secrets, ADR-022.
 		apimiddleware.SetHumaAuditPayload(ctx, apimiddleware.AuditPayload(reply.AuditPayload()))
 		return &roleCreateOutput{Status: http.StatusCreated}, nil
 	})
@@ -101,8 +102,8 @@ func registerHumaRoleDelete(humaAPI huma.API, roleH *handlers.RoleHandler) {
 
 // registerHumaRoleUpdatePermissions mounts PATCH /v1/roles/{name}/permissions
 // via huma (WRITE+AUDIT — event role.permissions-updated). roleH nil → no-op.
-// Handler: claims → envelope presence default_scope from [Optional] to domain
-// SetDefaultScope/DefaultScope (omitted→Set=false do not touch; null→Set=true reset;
+// Handler: claims → envelope presence default_scope and parent_role from [Optional]
+// to the domain Set*/value pairs (omitted→Set=false do not touch; null→Set=true reset;
 // value→Set=true set) → UpdatePermissionsTyped → audit-payload → 204.
 func registerHumaRoleUpdatePermissions(humaAPI huma.API, roleH *handlers.RoleHandler) {
 	if roleH == nil {
@@ -118,14 +119,13 @@ func registerHumaRoleUpdatePermissions(humaAPI huma.API, roleH *handlers.RoleHan
 			Permissions:     in.Body.Permissions,
 			SetDefaultScope: in.Body.DefaultScope.Set,
 			DefaultScope:    optionalToPtr(in.Body.DefaultScope),
+			SetParentRole:   in.Body.ParentRole.Set,
+			ParentRole:      optionalToPtr(in.Body.ParentRole),
 		})
 		if err != nil {
 			return nil, roleProblem(err)
 		}
-		apimiddleware.SetHumaAuditPayload(ctx, apimiddleware.AuditPayload{
-			"name":        reply.Name,
-			"permissions": reply.Permissions,
-		})
+		apimiddleware.SetHumaAuditPayload(ctx, apimiddleware.AuditPayload(reply.AuditPayload()))
 		return &roleNoContentOutput{Status: http.StatusNoContent}, nil
 	})
 }

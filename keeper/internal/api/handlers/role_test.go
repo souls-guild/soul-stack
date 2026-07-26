@@ -51,6 +51,11 @@ type rbacFakePool struct {
 	// tests default). Set explicitly by the default_scope-escalation scenario.
 	roleScope *string
 
+	// parentChain — rows of the WITH RECURSIVE chain query (resolveRoleChain,
+	// ADR-078): the named parent and its ancestors. Empty → the parent is not in
+	// the catalog (ErrRoleNotFound), which is what the non-derived scenarios want.
+	parentChain []chainRow
+
 	// insertRoleErr — error from INSERT INTO rbac_roles (Create): unique → 409.
 	insertRoleErr error
 
@@ -92,6 +97,9 @@ func (p *rbacFakePool) Exec(_ context.Context, sql string, _ ...any) (pgconn.Com
 		return pgconn.NewCommandTag("DELETE 1"), nil
 	case contains(sql, "DELETE FROM rbac_roles"):
 		return pgconn.NewCommandTag("DELETE 1"), nil
+	case contains(sql, "UPDATE rbac_roles SET"):
+		// default_scope (ADR-047) / parent_role (ADR-078) writes.
+		return pgconn.NewCommandTag("UPDATE 1"), nil
 	// Synod branches (ADR-049) — SynodHandler transport tests share this fake.
 	case contains(sql, "INSERT INTO synods"):
 		if p.insertSynodErr != nil {
@@ -154,6 +162,10 @@ func (p *rbacFakePool) Query(_ context.Context, sql string, _ ...any) (pgx.Rows,
 		// roleParent (ADR-078): NULL → a plain role, which is what these
 		// transport tests exercise. Derivation is covered against a real DB.
 		return &nullStringRows{value: nil}, nil
+	case contains(sql, "WITH RECURSIVE chain"):
+		// resolveRoleChain (ADR-078): the named parent plus its ancestors, one
+		// row per (role, permission). Empty → the parent isn't in the catalog.
+		return &chainRows{rows: p.parentChain}, nil
 	case contains(sql, "SELECT builtin FROM synods"):
 		// lockSynod: empty → ErrSynodNotFound; else a single bool row.
 		if !p.lockSynodFound {
@@ -318,6 +330,48 @@ func (r *nullStringRows) FieldDescriptions() []pgconn.FieldDescription { return 
 func (r *nullStringRows) Values() ([]any, error)                       { return nil, nil }
 func (r *nullStringRows) RawValues() [][]byte                          { return nil }
 func (r *nullStringRows) Conn() *pgx.Conn                              { return nil }
+
+// chainRow — one row of the parent-chain query (resolveRoleChain, ADR-078):
+// role name, its parent (empty = a root), its RAW default_scope (empty = NULL) and
+// ONE of its permissions (empty = the LEFT JOIN miss, a role granting nothing).
+type chainRow struct {
+	name       string
+	parent     string
+	scope      string
+	permission string
+}
+
+// chainRows — four-column rows over []chainRow, with the empty-string-as-NULL
+// convention of chainRow.
+type chainRows struct {
+	rows []chainRow
+	idx  int
+}
+
+func (r *chainRows) Next() bool { r.idx++; return r.idx <= len(r.rows) }
+func (r *chainRows) Scan(dest ...any) error {
+	row := r.rows[r.idx-1]
+	*dest[0].(*string) = row.name
+	*dest[1].(**string) = nullable(row.parent)
+	*dest[2].(**string) = nullable(row.scope)
+	*dest[3].(**string) = nullable(row.permission)
+	return nil
+}
+
+// nullable maps the empty string to a NULL column.
+func nullable(s string) *string {
+	if s == "" {
+		return nil
+	}
+	return &s
+}
+func (r *chainRows) Err() error                                   { return nil }
+func (r *chainRows) Close()                                       {}
+func (r *chainRows) CommandTag() pgconn.CommandTag                { return pgconn.CommandTag{} }
+func (r *chainRows) FieldDescriptions() []pgconn.FieldDescription { return nil }
+func (r *chainRows) Values() ([]any, error)                       { return nil, nil }
+func (r *chainRows) RawValues() [][]byte                          { return nil }
+func (r *chainRows) Conn() *pgx.Conn                              { return nil }
 
 // newRoleHandler assembles a RoleHandler over rbac.Service on a fake pool.
 func newRoleHandler(t *testing.T, pool *rbacFakePool) *RoleHandler {
@@ -741,4 +795,250 @@ func TestRoleHandler_GrantOperator_PermissionNotHeld_403(t *testing.T) {
 	h := newRoleHandler(t, pool)
 	_, err := h.GrantOperatorTyped(context.Background(), claimsFor("archon-sub"), "powerful", "archon-victim")
 	wantProblem(t, err, problem.TypeForbidden)
+}
+
+// --- Derived roles (ADR-078, NIM-181) ---
+//
+// The API surface for parent_role. The attenuation rules themselves belong to
+// rbac.Service (guarded in rbac/attenuate_integration_test.go against a real DB);
+// what these pin is that the surface REACHES them — a handler that quietly dropped
+// ParentRole would create a plain role where the operator asked for a bounded one,
+// and every refusal below would silently turn into a 201.
+
+// dbaChain — the parent `dba`: a root role granting incarnation.get at coven=dba
+// through its default_scope.
+var dbaChain = []chainRow{{name: "dba", scope: "coven=dba", permission: "incarnation.get"}}
+
+// dbaPermScopedChain — the same rights, narrowed in the PERMISSION rather than in
+// default_scope. The parent then has no ceiling to conjoin, so only the set
+// intersection can refuse a child that reaches outside it (ADR-078(d): the two
+// mechanisms, neither sufficient alone).
+var dbaPermScopedChain = []chainRow{{name: "dba", permission: "incarnation.get on coven=dba"}}
+
+func TestRoleHandler_Create_DerivedWithinParent_201(t *testing.T) {
+	pool := &rbacFakePool{parentChain: dbaChain}
+	h := newRoleHandler(t, pool)
+	parent, delta := "dba", "trait.project=aboba"
+	_, err := h.CreateTyped(context.Background(), claimsFor("archon-alice"),
+		RoleCreateInput{Name: "dba-aboba", Permissions: []string{"incarnation.get"}, DefaultScope: &delta, ParentRole: &parent})
+	if err != nil {
+		t.Fatalf("CreateTyped: %v", err)
+	}
+}
+
+// TestRoleHandler_Create_BeyondParent_403 — the headline guard of the ticket: a
+// permission the chosen parent does not hold is refused at the new surface, not
+// stored and silently dropped later.
+func TestRoleHandler_Create_BeyondParent_403(t *testing.T) {
+	pool := &rbacFakePool{parentChain: dbaChain}
+	h := newRoleHandler(t, pool)
+	parent := "dba"
+	_, err := h.CreateTyped(context.Background(), claimsFor("archon-alice"),
+		RoleCreateInput{Name: "dba-aboba", Permissions: []string{"incarnation.destroy"}, ParentRole: &parent})
+	wantProblem(t, err, problem.TypeForbidden)
+}
+
+// TestRoleHandler_Create_WiderScopeThanParent_403 — the same refusal by the other
+// mechanism: the permission is the parent's, the AREA is not. Against a parent whose
+// narrowing lives in a per-permission scope there is no ceiling to conjoin, so a
+// child reaching sideways — or dropping the scope entirely — is refused by the set
+// intersection instead.
+func TestRoleHandler_Create_WiderScopeThanParent_403(t *testing.T) {
+	tests := []struct {
+		name string
+		perm string
+	}{
+		{"wider value set", "incarnation.get on coven in (dba, prod)"},
+		{"bare against a scoped parent", "incarnation.get"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			pool := &rbacFakePool{parentChain: dbaPermScopedChain}
+			h := newRoleHandler(t, pool)
+			parent := "dba"
+			_, err := h.CreateTyped(context.Background(), claimsFor("archon-alice"),
+				RoleCreateInput{Name: "dba-prod", Permissions: []string{tc.perm}, ParentRole: &parent})
+			wantProblem(t, err, problem.TypeForbidden)
+		})
+	}
+}
+
+// TestRoleHandler_Create_UnknownParent_404 — a parent that isn't in the catalog is a
+// 404 about the parent, not a 201 for a role with a dangling ceiling.
+func TestRoleHandler_Create_UnknownParent_404(t *testing.T) {
+	pool := &rbacFakePool{} // no chain rows → the parent doesn't exist
+	h := newRoleHandler(t, pool)
+	parent := "ghost"
+	_, err := h.CreateTyped(context.Background(), claimsFor("archon-alice"),
+		RoleCreateInput{Name: "orphan", Permissions: []string{"incarnation.get"}, ParentRole: &parent})
+	wantProblem(t, err, problem.TypeRoleNotFound)
+}
+
+// TestRoleHandler_Create_SelfParent_422 — a role naming itself has no root, so there
+// is no ceiling to attenuate against: malformed input (422), not a missing right.
+func TestRoleHandler_Create_SelfParent_422(t *testing.T) {
+	h := newRoleHandler(t, &rbacFakePool{})
+	self := "loop"
+	_, err := h.CreateTyped(context.Background(), claimsFor("archon-alice"),
+		RoleCreateInput{Name: "loop", Permissions: []string{"incarnation.get"}, ParentRole: &self})
+	wantProblem(t, err, problem.TypeValidationFailed)
+}
+
+// TestRoleHandler_Create_AuditCarriesParentAndDelta — an audit record of an
+// authorization change must answer what the role is bounded by. The permission list
+// alone does not: on a derived role it is the delta, and the ceiling lives in
+// parent_role. Both keys are present even for a plain role (null), so a reader never
+// has to guess whether the field was omitted or the role was not derived.
+func TestRoleHandler_Create_AuditCarriesParentAndDelta(t *testing.T) {
+	pool := &rbacFakePool{parentChain: dbaChain}
+	h := newRoleHandler(t, pool)
+	parent, delta := "dba", "trait.project=aboba"
+	reply, err := h.CreateTyped(context.Background(), claimsFor("archon-alice"),
+		RoleCreateInput{Name: "dba-aboba", Permissions: []string{"incarnation.get"}, DefaultScope: &delta, ParentRole: &parent})
+	if err != nil {
+		t.Fatalf("CreateTyped: %v", err)
+	}
+
+	payload := reply.AuditPayload()
+	gotParent, ok := payload["parent_role"].(*string)
+	if !ok || gotParent == nil || *gotParent != "dba" {
+		t.Errorf("audit parent_role = %v, want dba", payload["parent_role"])
+	}
+	gotScope, ok := payload["default_scope"].(*string)
+	if !ok || gotScope == nil || *gotScope != "trait.project=aboba" {
+		t.Errorf("audit default_scope = %v, want trait.project=aboba", payload["default_scope"])
+	}
+
+	plain, err := h.CreateTyped(context.Background(), claimsFor("archon-alice"),
+		RoleCreateInput{Name: "ops", Permissions: []string{"incarnation.get"}})
+	if err != nil {
+		t.Fatalf("CreateTyped (plain): %v", err)
+	}
+	for _, key := range []string{"parent_role", "default_scope"} {
+		v, present := plain.AuditPayload()[key]
+		if !present {
+			t.Errorf("audit %s missing on a plain role, want an explicit null", key)
+		}
+		if p, _ := v.(*string); p != nil {
+			t.Errorf("audit %s = %v on a plain role, want null", key, *p)
+		}
+	}
+}
+
+// TestRoleHandler_Update_BeyondParent_403 — the gate re-runs on update (ADR-078(h)):
+// otherwise the create check would be one PATCH wide.
+func TestRoleHandler_Update_BeyondParent_403(t *testing.T) {
+	pool := &rbacFakePool{lockRoleFound: true, parentChain: dbaChain}
+	h := newRoleHandler(t, pool)
+	parent := "dba"
+	_, err := h.UpdatePermissionsTyped(context.Background(), claimsFor("archon-alice"),
+		UpdatePermissionsInput{
+			Name:          "dba-aboba",
+			Permissions:   []string{"incarnation.destroy"},
+			SetParentRole: true,
+			ParentRole:    &parent,
+		})
+	wantProblem(t, err, problem.TypeForbidden)
+}
+
+// TestRoleHandler_Update_AuditRecordsOnlyWhatWasSent — PATCH presence in the audit
+// record: an absent key means "untouched", a present null means "cleared", and the
+// two are different authorization changes (clearing a parent turns the child's delta
+// into an absolute scope). Recording an untouched field as null would report a
+// re-rooting that never happened.
+func TestRoleHandler_Update_AuditRecordsOnlyWhatWasSent(t *testing.T) {
+	pool := &rbacFakePool{lockRoleFound: true, survivors: []string{"archon-root"}}
+	h := newRoleHandler(t, pool)
+
+	untouched, err := h.UpdatePermissionsTyped(context.Background(), claimsFor("archon-alice"),
+		UpdatePermissionsInput{Name: "ops", Permissions: []string{"incarnation.get"}})
+	if err != nil {
+		t.Fatalf("UpdatePermissionsTyped: %v", err)
+	}
+	for _, key := range []string{"parent_role", "default_scope"} {
+		if _, present := untouched.AuditPayload()[key]; present {
+			t.Errorf("audit carries %s for a request that did not send it", key)
+		}
+	}
+
+	cleared, err := h.UpdatePermissionsTyped(context.Background(), claimsFor("archon-alice"),
+		UpdatePermissionsInput{
+			Name: "ops", Permissions: []string{"incarnation.get"},
+			SetParentRole: true, ParentRole: nil,
+			SetDefaultScope: true, DefaultScope: nil,
+		})
+	if err != nil {
+		t.Fatalf("UpdatePermissionsTyped (cleared): %v", err)
+	}
+	for _, key := range []string{"parent_role", "default_scope"} {
+		v, present := cleared.AuditPayload()[key]
+		if !present {
+			t.Fatalf("audit missing %s for an explicit clear", key)
+		}
+		if p, _ := v.(*string); p != nil {
+			t.Errorf("audit %s = %v, want null", key, *p)
+		}
+	}
+}
+
+// derivedListPool — a catalog with a two-hop chain: `dba` (root, coven=dba) →
+// `dba-aboba` (delta trait.project=aboba, one row the parent covers and one it
+// does not).
+type derivedListPool struct{ rbacFakePool }
+
+func (p *derivedListPool) Query(_ context.Context, sql string, _ ...any) (pgx.Rows, error) {
+	switch {
+	case contains(sql, "SELECT name, description, builtin, default_scope, parent_role FROM rbac_roles"):
+		return &roleViewRows{rows: [][5]any{
+			{"dba", "", false, ptrStr("coven=dba"), nil},
+			{"dba-aboba", "", false, ptrStr("trait.project=aboba"), ptrStr("dba")},
+		}}, nil
+	case contains(sql, "SELECT role_name, permission FROM rbac_role_permissions"):
+		return &pairRows{rows: [][2]string{
+			{"dba", "incarnation.get"},
+			{"dba-aboba", "incarnation.get"},
+			{"dba-aboba", "incarnation.destroy"},
+		}}, nil
+	case contains(sql, "SELECT role_name, aid FROM rbac_role_operators"):
+		return &pairRows{}, nil
+	}
+	return nil, errors.New("derivedListPool.Query: unexpected SQL: " + sql)
+}
+
+// TestRoleHandler_List_ResolvesTheChain — role.list publishes the resolved form
+// alongside the stored one (ADR-078), so a consumer never re-derives inheritance.
+// The two must DIFFER here: the child's stored rows include one the parent does not
+// hold, and its stored scope is only the delta.
+func TestRoleHandler_List_ResolvesTheChain(t *testing.T) {
+	svc, err := rbac.NewService(rbac.ServiceDeps{Pool: &derivedListPool{}})
+	if err != nil {
+		t.Fatalf("NewService: %v", err)
+	}
+	page, err := NewRoleHandler(svc, nil).ListTyped(context.Background())
+	if err != nil {
+		t.Fatalf("ListTyped: %v", err)
+	}
+
+	var child RoleView
+	for _, v := range page.Items {
+		if v.Name == "dba-aboba" {
+			child = v
+		}
+	}
+	if child.ParentRole != "dba" {
+		t.Fatalf("parent_role = %q, want dba", child.ParentRole)
+	}
+	if len(child.EffectivePermissions) != 1 || child.EffectivePermissions[0] != "incarnation.get" {
+		t.Errorf("effective permissions = %v, want [incarnation.get] — incarnation.destroy is not the parent's to give",
+			child.EffectivePermissions)
+	}
+	if len(child.Permissions) != 2 {
+		t.Errorf("stored permissions = %v, want both rows as written", child.Permissions)
+	}
+	if want := "coven=dba AND trait.project=aboba"; child.EffectiveScope != want {
+		t.Errorf("effective scope = %q, want %q", child.EffectiveScope, want)
+	}
+	if child.DefaultScope != "trait.project=aboba" {
+		t.Errorf("stored default_scope = %q, want the delta alone", child.DefaultScope)
+	}
 }
