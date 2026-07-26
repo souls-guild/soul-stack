@@ -111,8 +111,8 @@ func TestSoulCapabilities_SetAndHas(t *testing.T) {
 	ctx := context.Background()
 	sid := "host.example.com"
 
-	if err := SetSoulCapabilities(ctx, c, sid, []string{"passage"}); err != nil {
-		t.Fatalf("SetSoulCapabilities: %v", err)
+	if err := SetSoulAnnouncement(ctx, c, sid, []string{"passage"}, "0.1.0"); err != nil {
+		t.Fatalf("SetSoulAnnouncement: %v", err)
 	}
 	has, err := SoulHasCapability(ctx, c, sid, "passage")
 	if err != nil {
@@ -134,12 +134,12 @@ func TestSoulCapabilities_EmptySetOverwrites(t *testing.T) {
 	ctx := context.Background()
 	sid := "host.example.com"
 
-	if err := SetSoulCapabilities(ctx, c, sid, []string{"passage"}); err != nil {
-		t.Fatalf("SetSoulCapabilities(passage): %v", err)
+	if err := SetSoulAnnouncement(ctx, c, sid, []string{"passage"}, "0.1.0"); err != nil {
+		t.Fatalf("SetSoulAnnouncement(passage): %v", err)
 	}
 	// Same SID reconnected with the old binary — empty set.
-	if err := SetSoulCapabilities(ctx, c, sid, nil); err != nil {
-		t.Fatalf("SetSoulCapabilities(nil): %v", err)
+	if err := SetSoulAnnouncement(ctx, c, sid, nil, ""); err != nil {
+		t.Fatalf("SetSoulAnnouncement(nil): %v", err)
 	}
 	has, _ := SoulHasCapability(ctx, c, sid, "passage")
 	if has {
@@ -166,10 +166,10 @@ func TestSoulHasCapability_MissingFailClosed(t *testing.T) {
 func TestSoulsLackingCapability_Batch(t *testing.T) {
 	c, _ := newClientMR(t)
 	ctx := context.Background()
-	if err := SetSoulCapabilities(ctx, c, "host-a", []string{"passage"}); err != nil {
+	if err := SetSoulAnnouncement(ctx, c, "host-a", []string{"passage"}, "0.1.0"); err != nil {
 		t.Fatalf("set a: %v", err)
 	}
-	if err := SetSoulCapabilities(ctx, c, "host-b", nil); err != nil {
+	if err := SetSoulAnnouncement(ctx, c, "host-b", nil, ""); err != nil {
 		t.Fatalf("set b: %v", err)
 	}
 	// host-c — no key at all.
@@ -196,7 +196,7 @@ func TestSoulsLackingCapability_AllCapable(t *testing.T) {
 	c, _ := newClientMR(t)
 	ctx := context.Background()
 	for _, sid := range []string{"host-a", "host-b"} {
-		if err := SetSoulCapabilities(ctx, c, sid, []string{"passage"}); err != nil {
+		if err := SetSoulAnnouncement(ctx, c, sid, []string{"passage"}, "0.1.0"); err != nil {
 			t.Fatalf("set %s: %v", sid, err)
 		}
 	}
@@ -206,5 +206,51 @@ func TestSoulsLackingCapability_AllCapable(t *testing.T) {
 	}
 	if len(lacking) != 0 {
 		t.Errorf("lacking = %v, want [] (all passage-capable)", lacking)
+	}
+}
+
+// TestSoulVersion_PersistedWithCapabilities — the announced version lands in the
+// SAME Hash as the capability set and by the SAME write (ADR-0076(l)): the
+// provenance stamp (NIM-162) must never pair a version with a capability set from
+// a different connection. Audit-only — no gate reads it (ADR-0076(n)).
+func TestSoulVersion_PersistedWithCapabilities(t *testing.T) {
+	c, _ := newClientMR(t)
+	ctx := context.Background()
+	sid := "host.example.com"
+
+	if err := SetSoulAnnouncement(ctx, c, sid, []string{"passage", "module:core.pkg"}, "v0.2.0-beta.3"); err != nil {
+		t.Fatalf("SetSoulAnnouncement: %v", err)
+	}
+	ver, err := ReadSoulVersion(ctx, c, sid)
+	if err != nil {
+		t.Fatalf("ReadSoulVersion: %v", err)
+	}
+	if ver != "v0.2.0-beta.3" {
+		t.Errorf("version = %q, want the raw announced string", ver)
+	}
+
+	// Reconnect of an older binary overwrites BOTH fields — a stale version must
+	// not outlive the capability set it was announced with.
+	if err := SetSoulAnnouncement(ctx, c, sid, nil, ""); err != nil {
+		t.Fatalf("SetSoulAnnouncement(old binary): %v", err)
+	}
+	if ver, _ := ReadSoulVersion(ctx, c, sid); ver != "" {
+		t.Errorf("version = %q after an unversioned reconnect, want empty", ver)
+	}
+	if has, _ := SoulHasCapability(ctx, c, sid, "module:core.pkg"); has {
+		t.Error("stale capability survived the reconnect - fail-closed broken")
+	}
+}
+
+// TestReadSoulVersion_MissingIsNotAnError — a host that never announced is "no
+// version", not a failure: the value is audit-only and no caller may gate on it.
+func TestReadSoulVersion_MissingIsNotAnError(t *testing.T) {
+	c, _ := newClientMR(t)
+	ver, err := ReadSoulVersion(context.Background(), c, "ghost.example.com")
+	if err != nil {
+		t.Fatalf("ReadSoulVersion: %v", err)
+	}
+	if ver != "" {
+		t.Errorf("version = %q, want empty", ver)
 	}
 }

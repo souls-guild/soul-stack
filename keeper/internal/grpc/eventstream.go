@@ -701,15 +701,16 @@ func (h *eventStreamHandler) EventStream(stream grpclib.BidiStreamingServer[keep
 	// already held, the Soul is visible immediately.
 	h.touchSeen(ctx, sid)
 
-	// Persist the announced capabilities (ADR-056 §S5) alongside presence —
-	// the staged gate in run.go checks them BEFORE dispatch. Always written
-	// (including an empty set from an old binary), by overwrite: otherwise
-	// an old Soul reconnecting after a newer one would inherit a stale
-	// "passage" flag. Best-effort (like the heartbeat): without Redis
-	// (dev/unit) the gate degrades fail-closed to staged.
+	// Persist what this binary announced (ADR-056 §S5, ADR-0076(i)) alongside
+	// presence — the gates in run.go check the capabilities BEFORE dispatch, and
+	// the version travels with them for the provenance stamp (audit-only,
+	// ADR-0076(n)). Always written (including an empty set from an old binary), by
+	// overwrite: otherwise an old Soul reconnecting after a newer one would
+	// inherit a stale capability set. Best-effort (like the heartbeat): without
+	// Redis (dev/unit) the gates degrade fail-closed.
 	if h.deps.Redis != nil {
-		if err := keeperredis.SetSoulCapabilities(ctx, h.deps.Redis, sid, hello.GetCapabilities()); err != nil {
-			h.logger.Debug("eventstream: persist soul capabilities failed",
+		if err := keeperredis.SetSoulAnnouncement(ctx, h.deps.Redis, sid, hello.GetCapabilities(), hello.GetSoulVersion()); err != nil {
+			h.logger.Debug("eventstream: persist soul announcement failed",
 				slog.String("sid", sid), slog.Any("error", err))
 		}
 	}

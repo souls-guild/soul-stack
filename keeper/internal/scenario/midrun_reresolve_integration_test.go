@@ -89,7 +89,7 @@ func (d *rosterTargetDispatcher) targets(passage int) []string {
 }
 
 // newRunnerKeeperStaged builds a Runner with a keeper-side Registry AND
-// stubPassageCap (the staged gate S5 requires passage-capability). A combination
+// stubSoulCap (the staged gate S5 requires passage-capability). A combination
 // not covered by existing constructors: re-resolve tests carry BOTH a keeper
 // task (refresh emitter) AND staged stratification (Count=2 at the refresh
 // boundary).
@@ -107,7 +107,7 @@ func newRunnerKeeperStaged(t *testing.T, disp ApplyDispatcher, keepers KeeperMod
 		Outbound:      disp,
 		KeeperModules: keepers,
 		DB:            integrationPool,
-		PassageCap:    stubPassageCap{},
+		SoulCap:       stubSoulCap{},
 		PollInterval:  20 * time.Millisecond,
 		RunTimeout:    20 * time.Second,
 	})
@@ -383,7 +383,7 @@ func newRunnerKeeperStagedTimeout(t *testing.T, disp ApplyDispatcher, keepers Ke
 		Outbound:          disp,
 		KeeperModules:     keepers,
 		DB:                integrationPool,
-		PassageCap:        stubPassageCap{},
+		SoulCap:           stubSoulCap{},
 		PollInterval:      20 * time.Millisecond,
 		RunTimeout:        base,
 		MaxAwaitTimeoutFn: func() time.Duration { return ceiling },

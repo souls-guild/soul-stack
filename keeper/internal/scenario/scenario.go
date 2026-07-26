@@ -318,29 +318,30 @@ type LeaseOwnerChecker interface {
 	SoulLeaseOwner(ctx context.Context, sid string) (kid string, ok bool, err error)
 }
 
-// PassageCapabilityChecker is the narrow Redis-check surface for "which SIDs
-// have NOT announced passage capability" (ADR-056 §S5 forward-compat). An
-// interface (not a direct keeper/internal/redis import) keeps scenario-runner
-// independent of the Redis client — same approach as [LeaseOwnerChecker] /
-// [SummonsPublisher].
+// SoulCapabilityChecker is the narrow Redis-check surface for "which SIDs have
+// NOT announced capability X" (ADR-056 §S5 forward-compat, generalized by
+// ADR-0076(i)). An interface (not a direct keeper/internal/redis import) keeps
+// scenario-runner independent of the Redis client — same approach as
+// [LeaseOwnerChecker] / [SummonsPublisher].
 //
-// Needed ONLY by run.go's staged gate: BEFORE dispatching a scenario
-// stratified into N>1 Passages, it verifies EVERY target host can echo
-// ApplyRequest.passage. A host lacking the capability → run rejected
-// (soul_passage_unsupported, fail-closed): otherwise the next Passage's
-// barrier would wait for a terminal state an old binary never sends (hangs
-// in applying).
+// Two gates in run.go use it, both fail-closed BEFORE dispatch:
+//   - staged (ADR-056 §S5): every target host must echo ApplyRequest.passage,
+//     otherwise the next Passage's barrier would wait for a terminal state an old
+//     binary never sends (hangs in applying);
+//   - plan requirements (ADR-0076(i)): every host must announce the modules and
+//     Soul-side DSL features the tasks targeting IT use, otherwise an old binary
+//     reports OK/CHANGED with no effect (the silent-ignore mode).
 //
 // Returns the subset of passed SIDs LACKING the capability (empty/nil → all
-// support it). Error — Redis network failure: the staged gate must reject the
-// run (rather than guess support), so the error propagates up.
+// support it). Error — Redis network failure: the gate must reject the run
+// (rather than guess support), so the error propagates up.
 //
-// nil in Deps → the gate degrades fail-closed: a staged run without a checker
-// (no Redis / unit test) is rejected outright (can't confirm support, can't
-// send N>1). Implemented by a thin wrapper over
-// [redis.SoulsLackingCapability] at wire-up.
-type PassageCapabilityChecker interface {
-	SoulsLackingPassage(ctx context.Context, sids []string) ([]string, error)
+// nil in Deps → the gates degrade fail-closed: without a presence source there
+// is nothing to confirm support against. Implemented by a thin wrapper over
+// [redis.SoulsLackingCapability] at wire-up, parameterized by capability name —
+// the Redis layer is already generic.
+type SoulCapabilityChecker interface {
+	SoulsLackingCapability(ctx context.Context, sids []string, capability string) ([]string, error)
 }
 
 // KeeperModuleRegistry is the narrow keeper-side core Registry surface
@@ -458,11 +459,11 @@ type Deps struct {
 	// (single-keeper-only footgun of the acolytes=0 default).
 	LeaseOwner LeaseOwnerChecker
 
-	// PassageCap — passage-capability checker for target hosts, used by
-	// run.go's staged gate (ADR-056 §S5). nil → a staged run (N>1 Passage) is
-	// rejected outright (fail-closed: can't confirm support without Redis).
-	// Set at wire-up with a thin wrapper over redis.SoulsLackingCapability.
-	PassageCap PassageCapabilityChecker
+	// SoulCap — soul-capability checker for target hosts, used by run.go's staged
+	// gate (ADR-056 §S5) and by the plan-requirement gate (ADR-0076(i)). nil →
+	// both reject fail-closed (can't confirm support without Redis). Set at
+	// wire-up with a thin wrapper over redis.SoulsLackingCapability.
+	SoulCap SoulCapabilityChecker
 
 	// KeeperVersion — the raw build version of THIS keeper instance, checked
 	// against the `compat:` window declared by the service and by every destiny a
@@ -520,10 +521,10 @@ type Runner struct {
 	// guard disabled.
 	leaseOwner LeaseOwnerChecker
 
-	// passageCap — passage-capability checker for target hosts (copy of
-	// Deps.PassageCap) for run.go's staged gate (ADR-056 §S5). nil → staged
-	// run is rejected fail-closed.
-	passageCap PassageCapabilityChecker
+	// soulCap — soul-capability checker for target hosts (copy of Deps.SoulCap)
+	// for run.go's staged gate (ADR-056 §S5) and plan-requirement gate
+	// (ADR-0076(i)). nil → both reject fail-closed.
+	soulCap SoulCapabilityChecker
 
 	// keeperModules — keeper-side core Registry (copy of Deps.KeeperModules)
 	// for local execution of `on: keeper` tasks (run.go::dispatchKeeperTasks).
@@ -564,7 +565,7 @@ func NewRunner(deps Deps) *Runner {
 		acolyteEnabled:    deps.AcolyteEnabled,
 		kid:               deps.KID,
 		leaseOwner:        deps.LeaseOwner,
-		passageCap:        deps.PassageCap,
+		soulCap:           deps.SoulCap,
 		keeperModules:     deps.KeeperModules,
 		active:            make(map[string]context.CancelFunc),
 	}

@@ -45,6 +45,15 @@ func HeartbeatKey(sid string) string { return "soul:" + sid + ":hb" }
 // reconnecting after a newer one would inherit a stale "passage" flag.
 const heartbeatCapsField = "caps"
 
+// heartbeatVersionField is the field of the `soul:<sid>:hb` Hash holding the raw
+// Hello.soul_version string of the connected binary (ADR-0076(l)). Audit-only —
+// the gate is capability-based (ADR-0076(n)), a version number cannot express
+// "this binary has module X" across a fleet with differing module sets. It lives
+// next to `caps` and is written by the SAME Hello overwrite, so the version and
+// the capability set a run is judged against can never describe two different
+// binaries. The provenance stamp on apply_runs reads it (NIM-162).
+const heartbeatVersionField = "ver"
+
 // TouchHeartbeat atomically updates the heartbeat cache for a SID. Writes
 // `at = now` (UTC, RFC3339Nano) and `kid = <kid>` in a single HSET call.
 //
@@ -74,26 +83,50 @@ func TouchHeartbeat(ctx context.Context, c *Client, sid, kid string, now time.Ti
 	return nil
 }
 
-// SetSoulCapabilities overwrites the SID's capability set in the heartbeat Hash
-// (field [heartbeatCapsField]) with a single HSET. Called on Hello — ALWAYS,
-// including with an empty set (explicit overwrite of a stale flag on an old
+// SetSoulAnnouncement overwrites what the SID announced at connect time — its
+// capability set ([heartbeatCapsField]) and its raw version string
+// ([heartbeatVersionField]) — in a single HSET. Called on Hello ALWAYS, including
+// with an empty set/version (explicit overwrite of a stale flag on an old
 // binary's reconnect).
 //
 // caps is normalized (deduplicated, sorted, empties dropped) and serialized
 // comma-joined. An empty set writes an empty string — [SoulHasCapability] treats
 // it as "no capabilities" (fail-closed for feature-dependent runs).
-func SetSoulCapabilities(ctx context.Context, c *Client, sid string, caps []string) error {
+func SetSoulAnnouncement(ctx context.Context, c *Client, sid string, caps []string, soulVersion string) error {
 	if c == nil {
-		return errors.New("redis.SetSoulCapabilities: nil client")
+		return errors.New("redis.SetSoulAnnouncement: nil client")
 	}
 	if sid == "" {
-		return errors.New("redis.SetSoulCapabilities: empty sid")
+		return errors.New("redis.SetSoulAnnouncement: empty sid")
 	}
-	err := c.underlying().HSet(ctx, HeartbeatKey(sid), heartbeatCapsField, joinCaps(caps)).Err()
+	err := c.underlying().HSet(ctx, HeartbeatKey(sid),
+		heartbeatCapsField, joinCaps(caps),
+		heartbeatVersionField, soulVersion,
+	).Err()
 	if err != nil {
-		return fmt.Errorf("redis.SetSoulCapabilities: HSET %q: %w", HeartbeatKey(sid), err)
+		return fmt.Errorf("redis.SetSoulAnnouncement: HSET %q: %w", HeartbeatKey(sid), err)
 	}
 	return nil
+}
+
+// ReadSoulVersion returns the raw version string the SID announced on Hello.
+// A missing key/field → ("", nil): "never announced", not an error — the value is
+// audit-only (ADR-0076(n)) and no caller may gate on it.
+func ReadSoulVersion(ctx context.Context, c *Client, sid string) (string, error) {
+	if c == nil {
+		return "", errors.New("redis.ReadSoulVersion: nil client")
+	}
+	if sid == "" {
+		return "", errors.New("redis.ReadSoulVersion: empty sid")
+	}
+	v, err := c.underlying().HGet(ctx, HeartbeatKey(sid), heartbeatVersionField).Result()
+	if err != nil {
+		if errors.Is(err, redis.Nil) {
+			return "", nil
+		}
+		return "", fmt.Errorf("redis.ReadSoulVersion: HGET %q[%s]: %w", HeartbeatKey(sid), heartbeatVersionField, err)
+	}
+	return v, nil
 }
 
 // SoulHasCapability reports whether the SID's active stream announced the given

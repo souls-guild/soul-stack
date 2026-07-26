@@ -305,7 +305,7 @@ func newRunnerAcolyte(t *testing.T, disp ApplyDispatcher, gitURL string) *Runner
 		AcolyteEnabled: true,
 		KID:            "keeper-acolyte-staged-test",
 		// Staged gate (ADR-056 §S5): test hosts are passage-capable (see newRunnerWithDestiny).
-		PassageCap:   stubPassageCap{},
+		SoulCap:      stubSoulCap{},
 		PollInterval: 20 * time.Millisecond,
 		RunTimeout:   20 * time.Second,
 	})
@@ -331,14 +331,14 @@ func newRunnerWithDestiny(t *testing.T, disp ApplyDispatcher, destinySrc *Destin
 		// empty) — otherwise the fail-closed reject would reject all staged
 		// tests. The forward-compat reject is verified by a separate stub in
 		// TestIntegration_StagedOldSoul_Rejected.
-		PassageCap:   stubPassageCap{},
+		SoulCap:      stubSoulCap{},
 		PollInterval: 20 * time.Millisecond,
 		RunTimeout:   20 * time.Second,
 	})
 }
 
 // newRunnerWithAuditStaged — staged variant of [newRunnerWithAudit] (real
-// auditpg.Writer/Reader like production daemon.go) + PassageCap=stubPassageCap{}
+// auditpg.Writer/Reader like production daemon.go) + SoulCap=stubSoulCap{}
 // (both hosts passage-aware, otherwise the S5 gate would reject staged). Needed
 // for the cross-passage gate (ADR-056 R3): it reads CHANGED/FAILED facts of
 // earlier Passages from the audit log via AuditReader.
@@ -357,30 +357,17 @@ func newRunnerWithAuditStaged(t *testing.T, disp ApplyDispatcher) *Runner {
 		DB:           integrationPool,
 		Audit:        auditpg.NewWriter(integrationPool),
 		AuditReader:  auditpg.NewReader(integrationPool),
-		PassageCap:   stubPassageCap{},
+		SoulCap:      stubSoulCap{},
 		PollInterval: 20 * time.Millisecond,
 		RunTimeout:   20 * time.Second,
 	})
 }
 
-// stubPassageCap — a controllable [PassageCapabilityChecker] for tests.
-// lacking — SIDs that do NOT support passage (default nil → everyone
-// supports it, like a single-version beta fleet). err — simulates a Redis
-// failure.
-type stubPassageCap struct {
-	lacking []string
-	err     error
-}
-
-func (s stubPassageCap) SoulsLackingPassage(_ context.Context, _ []string) ([]string, error) {
-	return s.lacking, s.err
-}
-
-// newRunnerWithPassageCap — a Runner with an explicit [PassageCapabilityChecker]
-// (forward-compat guard test, ADR-056 §S5): cap=nil → the gate's fail-closed
-// branch; cap with lacking → reject. Otherwise like newRunnerWithDestiny
-// (without Destiny).
-func newRunnerWithPassageCap(t *testing.T, disp ApplyDispatcher, cap PassageCapabilityChecker) *Runner {
+// newRunnerWithSoulCap — a Runner with an explicit [SoulCapabilityChecker]
+// (forward-compat guard tests, ADR-056 §S5 / ADR-0076(i)): cap=nil → the gates'
+// fail-closed branch; cap with lacking → reject. Otherwise like
+// newRunnerWithDestiny (without Destiny).
+func newRunnerWithSoulCap(t *testing.T, disp ApplyDispatcher, cap SoulCapabilityChecker) *Runner {
 	t.Helper()
 	engine, err := cel.New()
 	if err != nil {
@@ -393,7 +380,7 @@ func newRunnerWithPassageCap(t *testing.T, disp ApplyDispatcher, cap PassageCapa
 		Render:       render.NewPipeline(nil, engine, nil, nil),
 		Outbound:     disp,
 		DB:           integrationPool,
-		PassageCap:   cap,
+		SoulCap:      cap,
 		PollInterval: 20 * time.Millisecond,
 		RunTimeout:   20 * time.Second,
 	})
@@ -2173,6 +2160,9 @@ func newRunnerWithKeeper(t *testing.T, disp ApplyDispatcher, keepers KeeperModul
 		t.Fatalf("cel.New: %v", err)
 	}
 	return NewRunner(Deps{
+		// Soul-capability gates (ADR-056 §S5 / ADR-0076(i)): these hosts announce
+		// everything the plan asks of them; the fail-closed branches have their own guards.
+		SoulCap:       stubSoulCap{},
 		Loader:        artifact.NewServiceLoader(t.TempDir(), nil),
 		Topology:      topology.NewResolver(integrationPool, nil, nil),
 		Essence:       essence.NewResolver(nil),
@@ -2734,7 +2724,7 @@ func TestIntegration_MixedKeeperAndHost_Refresh_RunsToDispatch(t *testing.T) {
 
 	disp := &mockDispatcher{t: t, result: applyrun.StatusSuccess}
 	// staged Runner: the refresh boundary yields Count=2 → needs a
-	// passage-capability checker (stubPassageCap, ADR-056 §S5). Empty starting
+	// passage-capability checker (stubSoulCap, ADR-056 §S5). Empty starting
 	// roster → the presence gate on an empty SID set = no-op (nobody lacking),
 	// staged mechanics pass through.
 	r := newRunnerKeeperStaged(t, disp, keepers)

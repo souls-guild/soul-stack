@@ -46,6 +46,9 @@ func newRunnerWithAudit(t *testing.T, disp ApplyDispatcher) *Runner {
 		t.Fatalf("cel.New: %v", err)
 	}
 	return NewRunner(Deps{
+		// Soul-capability gates (ADR-056 §S5 / ADR-0076(i)): these hosts announce
+		// everything the plan asks of them; the fail-closed branches have their own guards.
+		SoulCap:      stubSoulCap{},
 		Loader:       artifact.NewServiceLoader(t.TempDir(), nil),
 		Topology:     topology.NewResolver(integrationPool, nil, nil),
 		Essence:      essence.NewResolver(nil),

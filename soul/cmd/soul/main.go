@@ -486,6 +486,7 @@ func runDaemon(args []string) int {
 		CAPath:             seedPaths.CA,
 		HandshakeTimeout:   handshakeTimeout,
 		SoulVersion:        soulVersion,
+		Capabilities:       config.SoulCapabilities(coremod.Names()),
 		SID:                sid,
 		MaxRecvMsgSize:     cfg.Keeper.ResolvedMaxApplySize(),
 		MaxAttempts:        resolveMaxAttempts(cfg),

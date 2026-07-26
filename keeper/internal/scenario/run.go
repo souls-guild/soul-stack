@@ -483,13 +483,13 @@ func (r *Runner) run(ctx context.Context, spec RunSpec) {
 		for i, h := range hosts {
 			sids[i] = h.SID
 		}
-		if r.passageCap == nil {
+		if r.soulCap == nil {
 			abort("soul_passage_unsupported", fmt.Errorf(
 				"scenario %s/%s: staged run (%d Passage) requires confirmation of host passage-capability, but the presence checker is unavailable (no Redis) - fail-closed rejection (ADR-056 §S5)",
 				spec.IncarnationName, spec.ScenarioName, passage.Count))
 			return
 		}
-		lacking, lerr := r.passageCap.SoulsLackingPassage(ctx, sids)
+		lacking, lerr := r.soulCap.SoulsLackingCapability(ctx, sids, config.CapabilityPassage)
 		if lerr != nil {
 			abort("soul_passage_unsupported", fmt.Errorf(
 				"scenario %s/%s: staged run host passage-capability check failed - fail-closed rejection (ADR-056 §S5): %w",
@@ -566,6 +566,14 @@ func (r *Runner) run(ctx context.Context, spec RunSpec) {
 		// NIM-37 (H1): persist the Passage 0 plan (all non-staged tasks are in
 		// it) before dispatch.
 		r.persistRunPlan(ctx, spec, tasks, 0, sealed.Paths(), log)
+		// Soul-side compat gate (ADR-0076(i)) on the whole plan: the Acolyte path is
+		// non-staged, so the step-5 render already resolved every task's targets and
+		// one pass covers the run — before the keeper-side tasks, so a run that
+		// cannot be applied does not provision the cloud VMs it would apply to.
+		if err := r.gateSoulCapabilities(ctx, spec.IncarnationName, spec.ScenarioName, requiredSoulCapabilities(tasks, plans)); err != nil {
+			abort(reasonSoulCapabilityUnsupported, err)
+			return
+		}
 		if err := r.dispatchKeeperTasks(ctx, spec, log, 0, tasks, plans); err != nil {
 			abort("keeper_dispatch_failed", err)
 			return
@@ -667,6 +675,23 @@ func (r *Runner) run(ctx context.Context, spec RunSpec) {
 			// non-overlapping passage slices → accumulates, doesn't overwrite.
 			r.persistRunPlan(ctx, spec, passageTasks, p, sealed.Paths(), log)
 
+			pTasks, pPlans := tasksForPassage(passageTasks, passagePlans, p)
+
+			// Soul-side compat gate for Passage p (ADR-0076(i)): every host this
+			// Passage targets must announce the modules and Soul-side features ITS
+			// tasks use, or applying them there would be silently ignored. Inside the
+			// loop rather than once up front, because a staged run's Passage>0 targets
+			// are placeholders at step-5 render (where: register.* is unresolved until
+			// the earlier Passages ran) — this is the earliest point where the plan's
+			// requirements are attributable per host. N=1 (the common case) has one
+			// iteration, so the gate still fires before ANY dispatch. Ahead of the
+			// keeper-side tasks below, not just of the host-dispatch: a Passage that
+			// cannot be applied must not provision the cloud VMs it would apply to.
+			if err := r.gateSoulCapabilities(ctx, spec.IncarnationName, spec.ScenarioName, requiredSoulCapabilities(pTasks, pPlans)); err != nil {
+				abort(reasonSoulCapabilityUnsupported, err)
+				return
+			}
+
 			// Keeper-side tasks for THIS Passage (Slice 2): run on tasks RE-rendered
 			// at ActivePassage=p (passageTasks), STRICTLY BEFORE this Passage's
 			// host-dispatch. At step-5 render / p>0 re-render, a Passage p keeper
@@ -687,7 +712,6 @@ func (r *Runner) run(ctx context.Context, spec RunSpec) {
 				return
 			}
 
-			pTasks, pPlans := tasksForPassage(passageTasks, passagePlans, p)
 			// Cross-passage requisite gate for Passage p (ADR-056 R3): for p>0, load
 			// CHANGED/FAILED facts from Passage < p (from the audit log) and resolve
 			// per-host onchanges/onfail links whose source is an earlier Passage.

@@ -109,3 +109,10 @@ func (r *Registry) Names() []string {
 	}
 	return out
 }
+
+// Names is the canonical set of core modules THIS soul binary carries, for the
+// Hello.capabilities announcement (ADR-0076(i)). Built from [Default] with zero
+// install deps: the set of registered names doesn't depend on host wiring (the
+// zero value only makes core.module fail-closed at apply time), so the
+// announcement can't drift from the registry that actually serves Lookup.
+func Names() []string { return Default(installmod.Deps{}).Names() }

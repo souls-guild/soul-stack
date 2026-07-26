@@ -1,10 +1,12 @@
 package coremod_test
 
 import (
+	"reflect"
 	"sort"
 	"testing"
 
 	"github.com/souls-guild/soul-stack/sdk/module"
+	"github.com/souls-guild/soul-stack/shared/config"
 	"github.com/souls-guild/soul-stack/soul/internal/coremod"
 	installmod "github.com/souls-guild/soul-stack/soul/internal/coremod/module"
 	"github.com/souls-guild/soul-stack/soul/internal/coremod/pkg"
@@ -66,5 +68,41 @@ func TestNewRegistry_CopiesInput(t *testing.T) {
 	delete(src, "core.pkg")
 	if _, ok := r.Lookup("core.pkg"); !ok {
 		t.Fatal("Registry shares storage with caller's map")
+	}
+}
+
+// TestNames_MatchesDefaultRegistry — the Hello announcement is built from
+// [coremod.Names] (ADR-0076(i)) while dispatch resolves through the wired-up
+// Default registry. If the two ever diverge, keeper gates on a set the binary
+// does not actually serve — either rejecting runs it could do, or (worse)
+// admitting one it cannot.
+func TestNames_MatchesDefaultRegistry(t *testing.T) {
+	announced := coremod.Names()
+	registered := coremod.Default(installmod.Deps{
+		// Non-zero deps: the announced set must not depend on host wiring.
+		ModulesRoot: "/var/lib/soul-stack/modules",
+	}).Names()
+	sort.Strings(announced)
+	sort.Strings(registered)
+	if len(announced) == 0 {
+		t.Fatal("Names() is empty - a soul announcing no modules is rejected for every run")
+	}
+	if !reflect.DeepEqual(announced, registered) {
+		t.Fatalf("Names() = %v, registry = %v", announced, registered)
+	}
+}
+
+// TestSoulCapabilities_CoversEveryRegisteredModule — end-to-end of the
+// announcement: every module the binary can dispatch is named in what it tells
+// keeper.
+func TestSoulCapabilities_CoversEveryRegisteredModule(t *testing.T) {
+	announced := map[string]bool{}
+	for _, c := range config.SoulCapabilities(coremod.Names()) {
+		announced[c] = true
+	}
+	for _, name := range coremod.Default(installmod.Deps{}).Names() {
+		if !announced[config.ModuleCapability(name)] {
+			t.Errorf("module %q is registered but not announced", name)
+		}
 	}
 }

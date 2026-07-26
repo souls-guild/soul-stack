@@ -621,16 +621,32 @@ Names of message types in `proto/keeper/v1/*.proto`. Fixed [ADR-012](adr/0012-ke
 
 ### Soul-capabilities
 
-Canonical string values `Hello.capabilities` ([repeated string], [ADR-056](adr/0056-staged-render-passage.md) §S5 forward-compat): Soul announces supported features of the Keeper↔Soul protocol when connecting, Keeper persists set next to presence (Redis, lifecycle = SID-lease) and checks BEFORE dispatch feature-dependent runs. Empty set = old Soul without announcement (forward-compat [ADR-012(c)](adr/0012-keeper-soul-grpc.md) only-add) → does not support any features (fail-closed). Constants - `shared/config/soul_capability.go` (one line on the keeper and soul side).
+Canonical string values `Hello.capabilities` ([repeated string], [ADR-056](adr/0056-staged-render-passage.md) §S5 forward-compat): Soul announces what it supports when connecting, Keeper persists the set next to presence (Redis, lifecycle = SID-lease) and checks it BEFORE dispatch. Empty set = old Soul without announcement (forward-compat [ADR-012(c)](adr/0012-keeper-soul-grpc.md) only-add) → does not support any features (fail-closed). Constants - `shared/config/soul_capability.go` (one line on the keeper and soul side).
+
+[ADR-0076](adr/0076-engine-compat-window.md) fixes this set as the **Soul-side axis of engine compatibility** (the Keeper-side axis is the declared [compat window](#engine-compat-window-compat--effective-window-adr-0076)): the announcement generalizes beyond protocol features to the modules and Soul-side features a binary actually implements, so that a plan requiring something the host does not announce is rejected per-host **before** dispatch instead of being silently ignored. The axis stays capability-based rather than a numeric min-soul-version — a version number cannot express "this binary has module X" across a fleet with differing module sets; `soul_version` remains audit-only (persisted next to the set, field `ver` of the heartbeat Hash).
+
+**Protocol features** — one value per Keeper↔Soul message-level feature:
 
 | Value | Derived from | Meaning |
 |---|---|---|
 | **`passage`** | [Passage](#domain-entities) | Soul echoes `ApplyRequest.passage` to `TaskEvent`/`RunResult`, that is, it can participate in staged-render (N > 1 Passage, [ADR-056](adr/0056-staged-render-passage.md)). Soul without this sign under the staged scenario is rejected by the keeper BEFORE dispatch (`soul_passage_unsupported`, fail-closed): otherwise the barrier of the next Passage would be waiting for the terminal, which the old binary will not send. |
 | **`console`** | [`ConsoleOpen`](#messages-proto-keepersoul) | Soul understands the only-add `console_*` messages and can host an interactive pty session ([soul/console.md](soul/console.md)). Keeper checks it BEFORE minting a console session (fail-closed, same shape as `passage`): an old binary drops `ConsoleOpen` into the default branch of its recv-loop and never answers, which would leave the operator watching a dead terminal until an idle timeout. |
 
-Set extension - a separate capability line (derived from an already fixed name) + line in this table; a new independent name - propose-and-wait.
+**Soul-side DSL features** — the parts of a `RenderedTask` that Keeper only *threads through* and Soul is what enforces. A binary that ignores one runs the task anyway and reports the raw outcome, which is the silent-wrong-result [ADR-0076](adr/0076-engine-compat-window.md) closes:
 
-[ADR-0076](adr/0076-engine-compat-window.md) fixes this set as the **Soul-side axis of engine compatibility** (the Keeper-side axis is the declared [compat window](#engine-compat-window-compat--effective-window-adr-0076)): the announcement generalizes beyond protocol features to the modules and Soul-side features a binary actually implements, so that a plan requiring something the host does not announce is rejected per-host **before** dispatch instead of being silently ignored. The axis stays capability-based rather than a numeric min-soul-version — a version number cannot express "this binary has module X" across a fleet with differing module sets; `soul_version` remains audit-only. Concrete values land with the implementation.
+| Value | Derived from | Meaning |
+|---|---|---|
+| **`flow_control`** | [flow-control CEL](adr/0012-keeper-soul-grpc.md) (d) | Soul evaluates `when:` / `changed_when:` / `failed_when:` itself — Keeper passes them as CEL strings because they read `register.*`, known only during the run. |
+| **`retry`** | `retry:` ([destiny/tasks.md §9](destiny/tasks.md)) | Soul enforces the retry loop (count/delay) and its `until:` exit predicate. Required only for a real loop — `retry: {count: 1}` is one attempt, which a binary without the loop does anyway. |
+| **`dry_run`** | [Scry](adr/0031-scry-drift.md) | Soul honors `ApplyRequest.dry_run` by calling `SoulModule.Plan` instead of `Apply`. Required of every roster host by check-drift, where an unannounced binary would MUTATE hosts during an operation that promised a pure read. |
+
+**Modules** — one value per core module the binary carries, `module:<address without state suffix>` (`module:core.pkg`, not `module:core.pkg.installed`: the registry key is the module, states are dispatched inside its implementation). Announced from the Soul-side registry (`soul/internal/coremod`), so it states what the binary actually serves rather than what the catalog describes. Keeper requires one per task in the rendered plan, attributed to the hosts that task targets. **Plugin modules are deliberately outside the axis**: `core.module.installed` can install one mid-run ([ADR-065](adr/0065-core-module-installed.md)), long after the announcement was made at connect time, so gating on one would reject a legitimate install-then-use scenario; that hole stays with param-level strictness (NIM-163).
+
+| Value | Role |
+|---|---|
+| **`soul_capability_unsupported`** (abort reason) | Fail-closed abort before dispatch when a target host did not announce a module or Soul-side feature the plan needs from it. Sibling of `soul_passage_unsupported` (same axis, narrower question) and of [`keeper_version_unsupported`](#engine-compat-window-compat--effective-window-adr-0076) (the other axis). The message names every host and what each is missing, so a fleet is upgraded in one round. |
+
+Set extension - a separate capability line (derived from an already fixed name) + line in this table; a new independent name - propose-and-wait.
 
 ### Augur: nested proto types and registries
 

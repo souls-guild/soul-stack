@@ -305,10 +305,25 @@ func (r *Runner) CheckDrift(ctx context.Context, spec CheckDriftSpec) (*DriftRep
 	if r.deps.Destiny != nil {
 		renderIn.Destiny = r.deps.Destiny.resolverFor(art.Manifest, r.deps.KeeperVersion, log)
 	}
-	tasks, _, err := r.deps.Render.Render(ctx, renderIn)
+	tasks, plans, err := r.deps.Render.Render(ctx, renderIn)
 	if err != nil {
 		span.RecordError(err)
 		return nil, fmt.Errorf("scenario: check-drift render: %w", err)
+	}
+
+	// 4.5. Soul-side compat gate (ADR-0076(i)), with `dry_run` required of EVERY
+	//      roster host — check-drift plans a job for all of them, and this is the
+	//      one place where an unannounced capability is worse than a wrong result:
+	//      a binary ignoring ApplyRequest.dry_run would MUTATE hosts during an
+	//      operation that promised a pure read (ADR-031).
+	sids := make([]string, 0, len(hosts))
+	for _, h := range hosts {
+		sids = append(sids, h.SID)
+	}
+	required := withRunCapability(requiredSoulCapabilities(tasks, plans), sids, config.CapabilityDryRun)
+	if err := r.gateSoulCapabilities(ctx, spec.IncarnationName, ConvergeScenarioName, required); err != nil {
+		span.RecordError(err)
+		return nil, fmt.Errorf("scenario: check-drift: %w", err)
 	}
 
 	// 5. Dispatch planned for EVERY roster host with DryRun=true. Recipe.Input

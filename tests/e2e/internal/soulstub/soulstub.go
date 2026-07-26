@@ -26,6 +26,7 @@ import (
 
 	keeperv1 "github.com/souls-guild/soul-stack/proto/gen/go/keeper/v1"
 	"github.com/souls-guild/soul-stack/shared/config"
+	"github.com/souls-guild/soul-stack/shared/coremanifest"
 )
 
 // ErrAlreadyOpen is returned when Open is called second time without Close.
@@ -367,13 +368,20 @@ func (s *Stub) dialAndHandshake(ctx context.Context, addr string, sendWardRoster
 			Hello: &keeperv1.Hello{
 				SidEcho:     s.SID,
 				SoulVersion: "soulstub-l3a",
-				// Protocol feature announcement (ADR-056 S5): same canonical list
-				// sent by real Soul (soul/internal/grpc/client.go). Without
-				// "passage", keeper rejects the stub under staged scenario
-				// (N>1 Passage) fail-closed (soul_passage_unsupported, run.go),
-				// although respondToApply echoes passage in TaskEvent/RunResult (S3);
-				// capability must match behavior.
-				Capabilities: config.SoulCapabilities(),
+				// Capability announcement (ADR-056 S5, ADR-0076(i)): same shape the
+				// real Soul sends (soul/internal/grpc/client.go). Without "passage",
+				// keeper rejects the stub under a staged scenario (N>1 Passage)
+				// fail-closed (soul_passage_unsupported, run.go), although
+				// respondToApply echoes passage in TaskEvent/RunResult (S3); capability
+				// must match behavior. Same for the modules: an unannounced one is a
+				// per-host reject before dispatch.
+				//
+				// The module list comes from the embedded core catalog rather than a
+				// soul registry (soul/internal/... is unimportable from here), so the
+				// stub claims every core module including the keeper-side ones. That is
+				// deliberate for a test double: it answers whatever the fixtures ask of
+				// it, and keeper never asks a Soul for an `on: keeper` module anyway.
+				Capabilities: config.SoulCapabilities(coremanifest.Default().Names()),
 			},
 		},
 	}); err != nil {

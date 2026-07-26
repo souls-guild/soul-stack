@@ -2971,9 +2971,9 @@ func (d *daemon) setupGRPCEventStream(ctx context.Context) error {
 	// Keeper daemon runtime wiring note.
 	// Keeper daemon runtime wiring note.
 	// Keeper daemon runtime wiring note.
-	var passageCap scenario.PassageCapabilityChecker
+	var soulCap scenario.SoulCapabilityChecker
 	if d.redisClient != nil {
-		passageCap = passageCapChecker{rc: d.redisClient}
+		soulCap = soulCapChecker{rc: d.redisClient}
 	}
 
 	// Keeper daemon runtime wiring note.
@@ -3018,7 +3018,7 @@ func (d *daemon) setupGRPCEventStream(ctx context.Context) error {
 		KeeperVersion: version,
 		Summons:       summons,
 		LeaseOwner:    leaseOwner,
-		PassageCap:    passageCap,
+		SoulCap:       soulCap,
 		// Keeper daemon runtime wiring note.
 		// Keeper daemon runtime wiring note.
 		// Keeper daemon runtime wiring note.
@@ -5128,10 +5128,10 @@ func (c leaseOwnerChecker) SoulLeaseOwner(ctx context.Context, sid string) (stri
 // Keeper daemon runtime wiring note.
 // Keeper daemon runtime wiring note.
 // leaseOwnerChecker.
-type passageCapChecker struct{ rc *keeperredis.Client }
+type soulCapChecker struct{ rc *keeperredis.Client }
 
-func (c passageCapChecker) SoulsLackingPassage(ctx context.Context, sids []string) ([]string, error) {
-	return keeperredis.SoulsLackingCapability(ctx, c.rc, sids, config.CapabilityPassage)
+func (c soulCapChecker) SoulsLackingCapability(ctx context.Context, sids []string, capability string) ([]string, error) {
+	return keeperredis.SoulsLackingCapability(ctx, c.rc, sids, capability)
 }
 
 // Keeper daemon runtime wiring note.

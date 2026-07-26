@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -121,7 +122,7 @@ func TestDestinyCompatWindow_InsideAndOutside(t *testing.T) {
 			// otherwise the operator is back to guessing (ADR-0076(g)).
 			msg := err.Error()
 			for _, want := range []string{"destiny", "redis", "[0.1.0, 0.3.0)", tc.version} {
-				if !contains(msg, want) {
+				if !strings.Contains(msg, want) {
 					t.Fatalf("rejection %q is missing %q", msg, want)
 				}
 			}
@@ -231,7 +232,7 @@ func TestCompatIntersection_ServiceAndDestiny(t *testing.T) {
 	if !errors.Is(err, config.ErrKeeperVersionUnsupported) {
 		t.Fatalf("destiny window excludes 0.4.1, want rejection, got %v", err)
 	}
-	if !contains(err.Error(), "cluster") {
+	if !strings.Contains(err.Error(), "cluster") {
 		t.Fatalf("rejection %q must blame the destiny that set the bound", err.Error())
 	}
 }
@@ -252,13 +253,4 @@ func TestDestinyCompatWindow_MalformedBlockRejectedAtLoad(t *testing.T) {
 			t.Fatalf("destiny with malformed compat block %q loaded, want a manifest error", block)
 		}
 	}
-}
-
-func contains(haystack, needle string) bool {
-	for i := 0; i+len(needle) <= len(haystack); i++ {
-		if haystack[i:i+len(needle)] == needle {
-			return true
-		}
-	}
-	return len(needle) == 0
 }

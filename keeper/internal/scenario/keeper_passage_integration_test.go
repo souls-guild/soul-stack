@@ -7,8 +7,8 @@
 // the stage-loop, per-Passage, on tasks re-rendered at ActivePassage=p.
 //
 // Runs go through run()+PG (Start → waitRunDone) with a keeper-Registry stub, real
-// auditpg, and stubPassageCap (the staged gate in ADR-056 §S5 requires
-// passage-aware hosts; roster is empty for all-keeper, but a nil passageCap makes
+// auditpg, and stubSoulCap (the staged gate in ADR-056 §S5 requires
+// passage-aware hosts; roster is empty for all-keeper, but a nil soulCap makes
 // the fail-closed gate reject staged — prod always runs with Redis, so the stub
 // mirrors prod).
 
@@ -32,7 +32,7 @@ import (
 	"github.com/souls-guild/soul-stack/shared/diag"
 )
 
-// Slice 2 guards reuse newRunnerKeeperStaged (keeper-Registry + stubPassageCap)
+// Slice 2 guards reuse newRunnerKeeperStaged (keeper-Registry + stubSoulCap)
 // from midrun_reresolve_integration_test.go — same "keeper-task + staged
 // stratification" combo.
 

@@ -59,6 +59,14 @@ type ClientConfig struct {
 	HandshakeTimeout time.Duration
 	// SoulVersion — put into Hello.soul_version for audit.
 	SoulVersion string
+	// Capabilities — what this binary announces in Hello.capabilities
+	// (ADR-056 §S5, ADR-0076(i)): protocol + DSL features and one entry per core
+	// module it implements. Built at wire-up from the module registry
+	// ([config.SoulCapabilities]) rather than here, because the registry is
+	// assembled in cmd/soul. Empty → an announcement-less binary, which keeper
+	// treats as supporting nothing (fail-closed) — never leave it unset outside
+	// tests that assert exactly that.
+	Capabilities []string
 	// SID — put into Hello.sid_echo (authoritative source is the mTLS peer cert).
 	SID string
 	// MaxRecvMsgSize — cap on incoming FromKeeper size in bytes (mainly
@@ -364,11 +372,12 @@ func (c *Client) dialOne(ctx context.Context, addr string, creds credentials.Tra
 		hello := &keeperv1.Hello{
 			SidEcho:     c.cfg.SID,
 			SoulVersion: c.cfg.SoulVersion,
-			// Protocol feature announcement (ADR-056 §S5): keeper persists the set
-			// alongside presence and checks it BEFORE dispatching a staged scenario.
-			// Without "passage", this Soul is rejected fail-closed under N>1 Passage
-			// instead of hanging.
-			Capabilities: config.SoulCapabilities(),
+			// Capability announcement (ADR-056 §S5, ADR-0076(i)): keeper persists the
+			// set alongside presence and checks it BEFORE dispatch. Without "passage"
+			// this Soul is rejected fail-closed under N>1 Passage instead of hanging;
+			// without a `module:` entry, any run using that module is rejected per-host
+			// instead of being silently ignored by a binary that lacks it.
+			Capabilities: c.cfg.Capabilities,
 		}
 		if err := stream.Send(&keeperv1.FromSoul{Payload: &keeperv1.FromSoul_Hello{Hello: hello}}); err != nil {
 			hsDone <- fmt.Errorf("send Hello: %w", err)

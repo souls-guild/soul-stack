@@ -899,7 +899,7 @@ func TestIntegration_Staged3Passage_ReprobeRetargets(t *testing.T) {
 // ONE target host didn't announce passage support. ASSERT: incarnation →
 // ERROR_LOCKED, reason = soul_passage_unsupported, NO ApplyRequest at all
 // (fail-closed rejection BEFORE dispatch, not a hang). Symmetric to
-// StagedNilPassageCap_FailClosed (also fail-closed before dispatch).
+// StagedNilSoulCap_FailClosed (also fail-closed before dispatch).
 func TestIntegration_StagedOldSoul_Rejected(t *testing.T) {
 	resetAll(t)
 	seedOperator(t, "archon-alice")
@@ -913,7 +913,7 @@ func TestIntegration_StagedOldSoul_Rejected(t *testing.T) {
 		"host-b.example.com": "slave",
 	})
 	// host-b is an "old" Soul without passage capability (doesn't echo passage).
-	r := newRunnerWithPassageCap(t, disp, stubPassageCap{lacking: []string{"host-b.example.com"}})
+	r := newRunnerWithSoulCap(t, disp, stubSoulCap{lacking: []string{"host-b.example.com"}})
 
 	applyID := audit.NewULID()
 	if err := r.Start(context.Background(), RunSpec{
@@ -938,12 +938,12 @@ func TestIntegration_StagedOldSoul_Rejected(t *testing.T) {
 	}
 }
 
-// TestIntegration_StagedNilPassageCap_FailClosed — ★ FAIL-CLOSED without Redis
-// (ADR-056 §S5). passageCap=nil (no presence source for capability) → a staged
+// TestIntegration_StagedNilSoulCap_FailClosed — ★ FAIL-CLOSED without Redis
+// (ADR-056 §S5). soulCap=nil (no presence source for capability) → a staged
 // run does NOT guess support, it's rejected outright: sending N>1 blind carries
 // the same hang risk. N=1 runs don't hit this gate (see other tests). ASSERT:
 // ERROR_LOCKED, reason = soul_passage_unsupported, no ApplyRequest at all.
-func TestIntegration_StagedNilPassageCap_FailClosed(t *testing.T) {
+func TestIntegration_StagedNilSoulCap_FailClosed(t *testing.T) {
 	resetAll(t)
 	seedOperator(t, "archon-alice")
 	seedIncarnation(t, "redis-prod")
@@ -955,7 +955,7 @@ func TestIntegration_StagedNilPassageCap_FailClosed(t *testing.T) {
 		"host-a.example.com": "master",
 		"host-b.example.com": "slave",
 	})
-	r := newRunnerWithPassageCap(t, disp, nil) // no Redis checker.
+	r := newRunnerWithSoulCap(t, disp, nil) // no Redis checker.
 
 	applyID := audit.NewULID()
 	if err := r.Start(context.Background(), RunSpec{
@@ -970,10 +970,10 @@ func TestIntegration_StagedNilPassageCap_FailClosed(t *testing.T) {
 
 	inc := waitRunDone(t, "redis-prod", applyID, incarnation.StatusErrorLocked)
 	if inc.StatusDetails["reason"] != "soul_passage_unsupported" {
-		t.Fatalf("reason = %v, want soul_passage_unsupported (nil passageCap → fail-closed)", inc.StatusDetails["reason"])
+		t.Fatalf("reason = %v, want soul_passage_unsupported (nil soulCap → fail-closed)", inc.StatusDetails["reason"])
 	}
 	if p0 := disp.targets(0); len(p0) != 0 {
-		t.Fatalf("* Passage 0 targets = %v, want [] (nil passageCap -> reject BEFORE dispatch)", p0)
+		t.Fatalf("* Passage 0 targets = %v, want [] (nil soulCap -> reject BEFORE dispatch)", p0)
 	}
 }
 

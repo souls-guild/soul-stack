@@ -151,6 +151,8 @@ compat:
 
 **Builds with no version.** A pre-release keeper is compared by its release core (`0.1.0-beta.1` sits inside `[0.1.0, 0.3.0)`), and a `make build` standing past a tag is enforced as the release it is based on. Only a build carrying no version at all — the un-injected `0.0.0-dev` from a plain `go build`, or a tagless checkout's bare commit hash — is exempt: the window is then **not enforced**, and that is said out loud in the keeper log and in the API view rather than reported as a pass.
 
+**The soul side is not declared here.** `compat:` bounds the engine that *renders*; the engine that *applies* is gated separately and needs nothing in the manifest. Each Soul announces its module set and the Soul-side DSL features it enforces when it connects ([Soul-capabilities](../naming-rules.md#soul-capabilities)), keeper derives what a run needs from the plan it just rendered, and a host that did not announce something targeting it aborts the run before dispatch with reason `soul_capability_unsupported` — naming every host to update. A version number is deliberately not used there: the soul estate is heterogeneous, and "this binary has module X" is not something a version can express. This is what turns the dangerous case — an old agent that reads the params it knows and reports OK with no effect — into an honest refusal.
+
 ### `certificate_rotation` Section
 
 An optional top-level section that enables **auto-rotation** of the incarnation's service TLS certs (Redis server TLS, etc.) by the background Reaper ([ADR-017](../adr/0017-keeper-side-core.md); [Warrant](../naming-rules.md#domain-entities) registry, Reaper rule `rotate_due_certs`). This is about the **service** cert, not the Soul agent's identity cert (that's SoulSeed, rotated separately).
