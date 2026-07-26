@@ -124,10 +124,14 @@ type fakeSouls struct {
 	inserted []*keepersoul.Soul
 	deleted  []string // SID for which DeleteBySID was called (orphan-cleanup)
 	// existing emulates registry rows a previous provision attempt left behind
-	// (NIM-170): SID → nil (reusable leftover) or error (refused, e.g. live host
-	// / foreign incarnation).
-	existing        map[string]error
+	// (NIM-170): SID → nil (reusable leftover) or error (refused, e.g. a foreign
+	// incarnation).
+	existing map[string]error
+	// onboarded emulates hosts that were already up before this run (NIM-189):
+	// EnsureProvisionable passes them through untouched.
+	onboarded       map[string]bool
 	reused          []string // SIDs taken over instead of inserted
+	passedThrough   []string // SIDs already onboarded, left as they were
 	lastIncarnation string
 	updateCalls     []string
 	updateStatus    keepersoul.Status
@@ -136,21 +140,26 @@ type fakeSouls struct {
 	deleteErr       error
 }
 
-func (s *fakeSouls) EnsureProvisionable(_ context.Context, soul *keepersoul.Soul, incarnationName string) (bool, error) {
+func (s *fakeSouls) EnsureProvisionable(_ context.Context, soul *keepersoul.Soul, incarnationName string) (keepersoul.ProvisionOutcome, error) {
 	s.lastIncarnation = incarnationName
 	if s.insertErr != nil {
-		return false, s.insertErr
+		return "", s.insertErr
+	}
+	if s.onboarded[soul.SID] {
+		s.passedThrough = append(s.passedThrough, soul.SID)
+		soul.Status = keepersoul.StatusConnected
+		return keepersoul.ProvisionExisting, nil
 	}
 	if err, ok := s.existing[soul.SID]; ok {
 		if err != nil {
-			return false, err
+			return "", err
 		}
 		s.reused = append(s.reused, soul.SID)
-		return true, nil
+		return keepersoul.ProvisionReused, nil
 	}
 	cp := *soul
 	s.inserted = append(s.inserted, &cp)
-	return false, nil
+	return keepersoul.ProvisionInserted, nil
 }
 
 func (s *fakeSouls) UpdateStatus(_ context.Context, sid string, status keepersoul.Status, _ *string) error {
@@ -937,6 +946,109 @@ func TestApply_Created_SelfOnboard_PredictsFQDNAndBakesTokens(t *testing.T) {
 	}
 	if so, _ := out["self_onboard"].(bool); !so {
 		t.Error("output must mark self_onboard=true")
+	}
+}
+
+// TestApply_Created_AlreadyOnboardedHost_NoTokenButStillReported — B-flat side of
+// NIM-189: a VM the driver handed back because it is already up gets no bootstrap
+// token (it holds an identity already), but it still lands in hosts[]/vm_ids —
+// the day-2 state is built from those. `onboarded: true` is what tells
+// core.bootstrap.delivered to skip it instead of dying on the missing token.
+func TestApply_Created_AlreadyOnboardedHost_NoTokenButStillReported(t *testing.T) {
+	fp := &fakePlugins{createResp: []*pluginv1.VmInfo{
+		{VmId: "i-aaa", Fqdn: "redis-0.example.com", PrimaryIp: "10.0.0.1"},
+		{VmId: "i-bbb", Fqdn: "redis-1.example.com", PrimaryIp: "10.0.0.2"},
+	}}
+	fs := &fakeSouls{onboarded: map[string]bool{"redis-0.example.com": true}}
+	ft := newFakeTokens()
+	m := coremodcloud.New(fp, &fakeResolver{driver: "example"}, fs, ft, nil, &fakeAudit{})
+
+	stream := internaltest.NewApplyStream()
+	if err := m.Apply(&pluginv1.ApplyRequest{
+		State:  "created",
+		Params: mustStruct(t, map[string]any{"provider": "example-prod", "count": float64(2)}),
+	}, stream); err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+	ev := stream.Last()
+	if ev.Failed {
+		t.Fatalf("create over an already-onboarded host failed: %s", ev.Message)
+	}
+	if len(ft.inserted) != 1 || ft.inserted[0] != "redis-1.example.com" {
+		t.Errorf("tokens issued for %v, want only the host that still has to onboard", ft.inserted)
+	}
+	if len(ft.expired) != 0 {
+		t.Errorf("ExpireActiveForSID called for %v — an onboarded host's tokens are not this run's to touch", ft.expired)
+	}
+	out := ev.Output.AsMap()
+	if out["existing"] != float64(1) || out["reused"] != float64(0) {
+		t.Errorf("output existing=%v reused=%v, want 1/0", out["existing"], out["reused"])
+	}
+	if ids, _ := out["vm_ids"].([]any); len(ids) != 2 {
+		t.Errorf("output[vm_ids] = %v, want both VMs (day-2 destroy reads this)", out["vm_ids"])
+	}
+	hosts, _ := out["hosts"].([]any)
+	if len(hosts) != 2 {
+		t.Fatalf("hosts=%d, want 2", len(hosts))
+	}
+	onboardedEntry := hosts[0].(map[string]any)
+	if ob, _ := onboardedEntry["onboarded"].(bool); !ob {
+		t.Errorf("hosts[0][onboarded] = %v, want true", onboardedEntry["onboarded"])
+	}
+	if _, has := onboardedEntry["bootstrap_token"]; has {
+		t.Error("an already-onboarded host must not be handed a bootstrap token")
+	}
+	if _, has := hosts[1].(map[string]any)["bootstrap_token"]; !has {
+		t.Error("the host that still has to onboard lost its bootstrap token")
+	}
+}
+
+// TestApply_Created_SelfOnboard_AllOnboarded_SkipsUserdataRender — a re-create
+// over a fully live incarnation: there is no token left to bake, and rendering
+// self-onboard userdata out of an empty map is an error by contract. The driver
+// is still called — it is what confirms the VMs exist and returns the vm_ids.
+func TestApply_Created_SelfOnboard_AllOnboarded_SkipsUserdataRender(t *testing.T) {
+	fp := &fakePlugins{createResp: []*pluginv1.VmInfo{
+		{VmId: "i-aaa", Fqdn: "redis-0.ns.vm.example", PrimaryIp: "10.0.0.1"},
+	}}
+	fs := &fakeSouls{onboarded: map[string]bool{"redis-0.ns.vm.example": true}}
+	ft := newFakeTokens()
+	fu := &fakeUserdata{selfOnboardOut: "#cloud-config\n"}
+	fr := &fakeResolver{driver: "example", fqdnSuffix: "ns.vm.example"}
+	m := coremodcloud.New(fp, fr, fs, ft, nil, &fakeAudit{}).WithUserdata(fu)
+
+	stream := internaltest.NewApplyStream()
+	if err := m.Apply(&pluginv1.ApplyRequest{
+		State: "created",
+		Params: mustStruct(t, map[string]any{
+			"provider": "example-prod", "name": "redis", "count": float64(1), "self_onboard": true,
+		}),
+	}, stream); err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+	ev := stream.Last()
+	if ev.Failed {
+		t.Fatalf("self-onboard re-create over a live incarnation failed: %s", ev.Message)
+	}
+	if fu.lastTokens != nil {
+		t.Errorf("self-onboard userdata rendered with %v — nothing to bake when every host is up", fu.lastTokens)
+	}
+	if fp.lastUserdata != "" {
+		t.Errorf("driver got userdata=%q, want empty (the reused VMs will not run cloud-init again)", fp.lastUserdata)
+	}
+	if len(ft.inserted) != 0 || len(fs.inserted) != 0 {
+		t.Errorf("tokens=%v souls=%d, want none issued for a host that already onboarded", ft.inserted, len(fs.inserted))
+	}
+	if len(fs.deleted) != 0 || len(ft.deleted) != 0 {
+		t.Errorf("rollback touched souls=%v tokens=%v — a passed-through host is not ours to delete", fs.deleted, ft.deleted)
+	}
+	out := ev.Output.AsMap()
+	if out["existing"] != float64(1) {
+		t.Errorf("output[existing] = %v, want 1", out["existing"])
+	}
+	host := out["hosts"].([]any)[0].(map[string]any)
+	if ob, _ := host["onboarded"].(bool); !ob {
+		t.Errorf("hosts[0][onboarded] = %v, want true", host["onboarded"])
 	}
 }
 

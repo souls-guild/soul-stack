@@ -43,8 +43,8 @@ func (noopSoulStore) SoulsWithSoulprint(_ context.Context, _ []string) (map[stri
 
 type noopCloudSouls struct{}
 
-func (noopCloudSouls) EnsureProvisionable(_ context.Context, _ *keepersoul.Soul, _ string) (bool, error) {
-	return false, nil
+func (noopCloudSouls) EnsureProvisionable(_ context.Context, _ *keepersoul.Soul, _ string) (keepersoul.ProvisionOutcome, error) {
+	return keepersoul.ProvisionInserted, nil
 }
 func (noopCloudSouls) UpdateStatus(_ context.Context, _ string, _ keepersoul.Status, _ *string) error {
 	return nil

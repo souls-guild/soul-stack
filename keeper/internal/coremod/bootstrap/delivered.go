@@ -14,7 +14,9 @@
 // verify) → write the token to `token_path` (★token over STDIN, not argv) →
 // soul init (see initSoulCmdFmt) → optional daemon-reload + enable + start.
 // A failure on any host aborts the step (B1-strict): state isn't committed, the
-// run goes to error_locked.
+// run goes to error_locked. A host flagged `onboarded: true` by
+// core.cloud.created (already up when provisioning ran, NIM-189) carries no
+// token and is skipped, not failed.
 //
 // install mode (optional param `install: true`, transport=teleport only, ADR-063
 // amendment "full-install over SSH"): a platform without cloud-init userdata (e.g.
@@ -235,10 +237,15 @@ func (m *Module) teleport() bool { return m.Transport == TransportTeleport }
 
 // hostInput is one VM from param `hosts` (= register.<provision>.hosts from
 // core.cloud.created): SID, IP for connection, and plain bootstrap token.
+//
+// onboarded marks a host that was already up when provisioning ran (NIM-189):
+// core.cloud.created passed it through instead of creating it and issued no
+// token, so there is nothing to deliver — the host is skipped, not failed.
 type hostInput struct {
 	sid       string
 	primaryIP string
 	token     string
+	onboarded bool
 }
 
 // connectTarget is the connection address for diagnostics (direct → primary_ip; teleport
@@ -403,7 +410,21 @@ func (m *Module) applyDelivered(req *pluginv1.ApplyRequest, stream grpc.ServerSt
 
 	results := make([]any, 0, len(hosts))
 	sids := make([]any, 0, len(hosts))
+	skipped := 0
 	for _, h := range hosts {
+		if h.onboarded {
+			// Already onboarded before this run (NIM-189): no token was issued for
+			// it, and `soul init` would be a no-op behind the seed-guard anyway.
+			skipped++
+			results = append(results, map[string]any{
+				"sid":       h.sid,
+				"delivered": false,
+				"started":   false,
+				"onboarded": true,
+			})
+			sids = append(sids, h.sid)
+			continue
+		}
 		started, err := m.deliverHost(ctx, prov, h, sshUser, int(sshPort), script, initCmd, installSteps, startSoul, joinWait)
 		if err != nil {
 			// B1-strict: error of any host fails entire step. maskErr protects against
@@ -440,10 +461,12 @@ func (m *Module) applyDelivered(req *pluginv1.ApplyRequest, stream grpc.ServerSt
 
 	// ★ WITHOUT token in output: register.<name>.hosts[] carries only {sid, delivered,
 	// started}. count is number of successfully processed hosts (== len(hosts), else
-	// step would have failed).
+	// step would have failed); skipped counts the hosts that were already onboarded
+	// and needed no delivery (NIM-189).
 	return util.SendFinal(stream, true, map[string]any{
-		"hosts": results,
-		"count": float64(len(hosts)),
+		"hosts":   results,
+		"count":   float64(len(hosts)),
+		"skipped": float64(skipped),
 	})
 }
 
@@ -706,6 +729,16 @@ func hostFromStruct(s *structpb.Struct, idx int) (hostInput, error) {
 	ip, err := util.StringParam(s, "primary_ip")
 	if err != nil {
 		return hostInput{}, fmt.Errorf("param %q[%d].%w", "hosts", idx, err)
+	}
+	// `onboarded: true` (NIM-189) is the ONLY case where a host legitimately
+	// carries no token: it was already up when provisioning ran. Everywhere else
+	// a missing token is still a hard error — a host we cannot onboard.
+	onboarded, _, err := util.OptBoolParam(s, "onboarded")
+	if err != nil {
+		return hostInput{}, fmt.Errorf("param %q[%d].%w", "hosts", idx, err)
+	}
+	if onboarded {
+		return hostInput{sid: sid, primaryIP: ip, onboarded: true}, nil
 	}
 	tok, err := util.StringParam(s, "bootstrap_token")
 	if err != nil {

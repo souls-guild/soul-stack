@@ -69,8 +69,8 @@ func (fakeHost) Create(_ context.Context, _ string, _, _ map[string]any, count i
 
 type fakeCloudSouls struct{}
 
-func (fakeCloudSouls) EnsureProvisionable(_ context.Context, _ *keepersoul.Soul, _ string) (bool, error) {
-	return false, nil
+func (fakeCloudSouls) EnsureProvisionable(_ context.Context, _ *keepersoul.Soul, _ string) (keepersoul.ProvisionOutcome, error) {
+	return keepersoul.ProvisionInserted, nil
 }
 func (fakeCloudSouls) UpdateStatus(_ context.Context, _ string, _ keepersoul.Status, _ *string) error {
 	return nil

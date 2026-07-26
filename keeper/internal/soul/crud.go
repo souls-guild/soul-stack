@@ -81,24 +81,13 @@ ON CONFLICT (sid) DO NOTHING
 RETURNING registered_at, requested_at
 `
 
-// reuseForProvisionSQL — phase 2 of [EnsureProvisionable] (NIM-170): re-arm the
-// row an earlier provision attempt left behind, for a fresh onboarding.
-// Reusable = the row carries no live registration (`pending` never onboarded,
-// `destroyed` is a cascade tombstone) AND it is this run's own — a member of $2,
-// or a member of nothing yet (souls are registered before core.soul.registered
-// binds them). A row that belongs only to OTHER incarnations is somebody else's;
-// an empty $2 (incarnation unknown) therefore leaves only unbound rows reusable.
-// The predicate lives in the statement itself: an UPDATE that matches nothing
-// is the atomic "refuse to take over" answer, no read-then-write window.
-const reuseForProvisionSQL = `
-UPDATE souls
-SET status           = 'pending',
-    transport        = $3,
-    requested_at     = NOW(),
-    last_seen_at     = NULL,
-    last_seen_by_kid = NULL
-WHERE sid = $1
-  AND status IN ('pending', 'destroyed')
+// ownedByRunSQL — the ownership half of the provision predicate, shared by the
+// reuse and pass-through phases of [EnsureProvisionable]. The row is this run's
+// own when it belongs to incarnation $2, or to no incarnation at all (souls are
+// registered before core.soul.registered binds them). A row that belongs only to
+// OTHER incarnations is somebody else's; an empty $2 (incarnation unknown)
+// therefore leaves only unbound rows.
+const ownedByRunSQL = `
   AND (
       NOT EXISTS (
           SELECT 1 FROM incarnation_membership m WHERE m.sid = souls.sid
@@ -107,9 +96,38 @@ WHERE sid = $1
           SELECT 1 FROM incarnation_membership m
            WHERE m.sid = souls.sid AND m.incarnation_name = $2
       )
-  )
+  )`
+
+// reuseForProvisionSQL — phase 2 of [EnsureProvisionable] (NIM-170): re-arm the
+// row an earlier provision attempt left behind, for a fresh onboarding.
+// Reusable = the row never completed an onboarding (`pending`) or is a cascade
+// tombstone (`destroyed`) AND it is this run's own ([ownedByRunSQL]).
+// The predicate lives in the statement itself: an UPDATE that matches nothing
+// is the atomic "not a leftover of mine" answer, no read-then-write window.
+const reuseForProvisionSQL = `
+UPDATE souls
+SET status           = 'pending',
+    transport        = $3,
+    requested_at     = NOW(),
+    last_seen_at     = NULL,
+    last_seen_by_kid = NULL
+WHERE sid = $1
+  AND status IN ('pending', 'destroyed')` + ownedByRunSQL + `
 RETURNING registered_at, requested_at
 `
+
+// existingProvisionSQL — phase 3 of [EnsureProvisionable] (NIM-189): the SID
+// already carries a registration this run onboarded itself. Converge semantics —
+// re-provisioning is a no-op over it, so this phase only READS: status,
+// `last_seen_*` and the host's identity are left exactly as they are (re-arming
+// a live host to `pending` would wipe its presence and cost it its token).
+// `disconnected` counts as onboarded too — the stream is closed, but the seed on
+// the host is valid and the Soul may return.
+const existingProvisionSQL = `
+SELECT status, registered_at, requested_at
+FROM souls
+WHERE sid = $1
+  AND status IN ('connected', 'disconnected')` + ownedByRunSQL
 
 // describeTakenSIDSQL reports why a SID could not be provisioned: current
 // status + every incarnation the row belongs to (M:N, migration 099).
@@ -293,61 +311,94 @@ func insertArgs(s *Soul) ([]any, error) {
 	}, nil
 }
 
+// ProvisionOutcome is what [EnsureProvisionable] did with the SID.
+type ProvisionOutcome string
+
+const (
+	// ProvisionInserted — the SID was free; a fresh pending record was written.
+	ProvisionInserted ProvisionOutcome = "inserted"
+	// ProvisionReused — a leftover of an earlier attempt was re-armed for a
+	// fresh onboarding. The record predates this run: the caller's
+	// orphan-cleanup must NOT delete it, and its still-active bootstrap token
+	// has to be invalidated before a replacement is issued.
+	ProvisionReused ProvisionOutcome = "reused"
+	// ProvisionExisting — the SID already carries a registration this run
+	// onboarded; the row was left untouched. The host needs no bootstrap token
+	// (it already holds an identity) and must not be rolled back.
+	ProvisionExisting ProvisionOutcome = "existing"
+)
+
 // EnsureProvisionable registers the SID of a VM being provisioned, tolerating a
-// re-run over a half-finished provision (NIM-170). Plain [Insert] is not
-// idempotent: `destroy`/`unlock` leave the souls rows behind, so a second
-// `create` used to die on the PK (`SQLSTATE 23505`) and the operator had to
-// clean PG by hand.
+// re-run over an incarnation this run already provisioned (NIM-170, NIM-189).
+// Plain [Insert] is not idempotent: `destroy`/`unlock` leave the souls rows
+// behind, so a second `create` used to die on the PK (`SQLSTATE 23505`) and the
+// operator had to clean PG by hand.
 //
 // Outcomes:
-//   - SID free → inserted as a fresh pending record, reused=false.
+//   - SID free → inserted as a fresh pending record, [ProvisionInserted].
 //   - SID held by a leftover of an earlier provision (status `pending` — never
 //     onboarded — or `destroyed` — cascade tombstone) that is this run's own
 //     (member of incarnationName, or not bound yet) → the row is re-armed for
-//     onboarding, reused=true.
-//   - SID held by anything else (a live/registered host, or a row bound to
+//     onboarding, [ProvisionReused].
+//   - SID held by a host this run already onboarded (`connected` /
+//     `disconnected`, same ownership rule) → [ProvisionExisting]: the row is
+//     read back into s and left as it is. Converge semantics — provisioning an
+//     existing host is a no-op, the rest of the run brings its config to the
+//     target state (NIM-189).
+//   - SID held by anything else (`revoked` / `expired`, or a row bound only to
 //     another incarnation) → [ErrSoulNotProvisionable], row untouched.
 //
 // `incarnationName` is the incarnation of the current run ("" when unknown,
-// which makes any membership block the reuse). reused=true means the row
-// predates this run: the caller's orphan-cleanup must NOT delete it.
-func EnsureProvisionable(ctx context.Context, db ExecQueryRower, s *Soul, incarnationName string) (bool, error) {
+// which makes any membership block both reuse and pass-through).
+func EnsureProvisionable(ctx context.Context, db ExecQueryRower, s *Soul, incarnationName string) (ProvisionOutcome, error) {
 	args, err := insertArgs(s)
 	if err != nil {
-		return false, err
+		return "", err
 	}
-	// Two statements rather than one upsert: each is atomic on its own, and an
-	// empty RETURNING answers exactly one question (phase 1 "was the SID free",
-	// phase 2 "was the leftover reusable"). Retried once because the row may be
-	// deleted between the phases (concurrent rollback of another run).
+	// Separate statements rather than one upsert: each is atomic on its own, and
+	// an empty RETURNING answers exactly one question (phase 1 "was the SID
+	// free", phase 2 "was it a leftover of mine", phase 3 "is it a host of mine
+	// that is already up"). Retried once because the row may be deleted between
+	// the phases (concurrent rollback of another run).
 	for attempt := 0; attempt < 2; attempt++ {
 		err := db.QueryRow(ctx, insertIfFreeSQL, args...).Scan(&s.RegisteredAt, &s.RequestedAt)
 		if err == nil {
-			return false, nil
+			return ProvisionInserted, nil
 		}
 		if !errors.Is(err, pgx.ErrNoRows) {
-			return false, mapInsertError(err)
+			return "", mapInsertError(err)
 		}
 
 		err = db.QueryRow(ctx, reuseForProvisionSQL, s.SID, incarnationName, string(s.Transport)).
 			Scan(&s.RegisteredAt, &s.RequestedAt)
 		if err == nil {
-			return true, nil
+			return ProvisionReused, nil
 		}
 		if !errors.Is(err, pgx.ErrNoRows) {
-			return false, fmt.Errorf("soul: reuse provision record %q: %w", s.SID, err)
+			return "", fmt.Errorf("soul: reuse provision record %q: %w", s.SID, err)
 		}
 
-		status, incarnations, derr := describeTakenSID(ctx, db, s.SID)
+		var status string
+		err = db.QueryRow(ctx, existingProvisionSQL, s.SID, incarnationName).
+			Scan(&status, &s.RegisteredAt, &s.RequestedAt)
+		if err == nil {
+			s.Status = Status(status) // s now mirrors the untouched row
+			return ProvisionExisting, nil
+		}
+		if !errors.Is(err, pgx.ErrNoRows) {
+			return "", fmt.Errorf("soul: read existing provision record %q: %w", s.SID, err)
+		}
+
+		takenStatus, incarnations, derr := describeTakenSID(ctx, db, s.SID)
 		if errors.Is(derr, ErrSoulNotFound) {
 			continue // row vanished between the phases — the SID is free again
 		}
 		if derr != nil {
-			return false, derr
+			return "", derr
 		}
-		return false, notProvisionableError(s.SID, status, incarnations)
+		return "", notProvisionableError(s.SID, takenStatus, incarnations)
 	}
-	return false, fmt.Errorf("%w: %q kept changing hands during provisioning", ErrSoulNotProvisionable, s.SID)
+	return "", fmt.Errorf("%w: %q kept changing hands during provisioning", ErrSoulNotProvisionable, s.SID)
 }
 
 // describeTakenSID reads the status + incarnation memberships of an existing
@@ -371,7 +422,7 @@ func notProvisionableError(sid string, status Status, incarnations []string) err
 	if len(incarnations) > 0 {
 		owner = "member of incarnation " + strings.Join(incarnations, ", ")
 	}
-	return fmt.Errorf("%w: %q is already registered with status %q (%s); provisioning it now would take over that host — destroy it first, or run against the existing roster",
+	return fmt.Errorf("%w: %q is already registered with status %q (%s); a host of THIS incarnation that is simply up is converged in place, this one is not — destroy it first, or run against the existing roster",
 		ErrSoulNotProvisionable, sid, status, owner)
 }
 

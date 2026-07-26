@@ -81,9 +81,12 @@ What `core.cloud` (state `created`) does:
 
 Steps 4-5 - **B-flat (default)** mode. With `self_onboard: true`, the order is different: tokens are issued **BEFORE** create and baked in userdata - VM onboards itself, the delivery step is not needed (see Self-onboard "Option T").
 
-#### Re-running `create` (provision idempotency, NIM-170)
+#### Re-running `create` (provision idempotency, NIM-170 / NIM-189)
 
-Step 4 registers the VM idempotently ([ADR-017 amendment 2026-07-24](../adr/0017-keeper-side-core.md)) - a second `create` over the same incarnation does not collide with the `souls` rows the first attempt left behind. This matters because the rows survive by design: `destroy` turns them into `destroyed` tombstones (forensic > GC) and `unlock` does not touch the registry at all, so before this every retry after a partially-finished provision died with `SID already exists (constraint souls_pkey)` and had to be unblocked by deleting rows from PG by hand.
+Re-running `create` over an incarnation **converges** rather than collides ([ADR-017 amendments 2026-07-24 and 2026-07-26](../adr/0017-keeper-side-core.md)). Two layers make that work, and they are independent:
+
+- **VM layer (the driver).** `CloudDriver.Create` scans the provider for the VMs of this run, reuses the ones that are alive, creates only the missing ones and returns `VmInfo` for all of them. So a re-run adds no machines and orphans none - the `vm_ids` that come back always cover the whole roster.
+- **Registry layer (step 4).** Registering the VM in `souls` tolerates the rows the earlier attempt left behind. Those rows survive by design: `destroy` turns them into `destroyed` tombstones (forensic > GC) and `unlock` does not touch the registry at all, so before this every retry after a partially-finished provision died with `SID already exists (constraint souls_pkey)` and had to be unblocked by deleting rows from PG by hand.
 
 What the module does with an already-taken SID:
 
@@ -91,12 +94,18 @@ What the module does with an already-taken SID:
 |---|---|
 | absent | inserted as `pending` (normal first run) |
 | `pending` / `destroyed`, member of THIS incarnation or of none yet | **reused**: re-armed for onboarding (`status → pending`, `last_seen_*` cleared), the previous still-active bootstrap token is invalidated and a fresh one issued |
-| `connected` / `disconnected` / `revoked` / `expired` | **refused**: a live registration is never re-provisioned - the step fails naming the status and the owning incarnations |
-| `pending` / `destroyed`, but member ONLY of other incarnations | **refused**: the row is not this run's leftover |
+| `connected` / `disconnected`, member of THIS incarnation or of none yet | **existing**: the host is already up - the row is passed through **untouched** (status, `last_seen_*` and identity all kept) and **no bootstrap token is issued**. Provisioning is a no-op for it; the rest of the run brings its config to the target state |
+| `revoked` / `expired` | **refused**: neither a leftover this run may re-arm nor a host it may adopt - `revoked` was cut off by an operator on purpose, `expired` is a pending record the Reaper timed out |
+| member ONLY of other incarnations (any status) | **refused**: the row is not this run's - the step fails naming the status and the owning incarnations |
 
-The `created` output carries `reused` - how many records were taken over (`0` on a clean run). The owner is the incarnation of the current run: the runner passes it to keeper-side modules on the module context (`coremod/util`), it is not a scenario parameter.
+The `created` output carries `reused` (records taken over) and `existing` (hosts already up, passed through) - both `0` on a clean run. The owner is the incarnation of the current run: the runner passes it to keeper-side modules on the module context (`coremod/util`), it is not a scenario parameter.
 
-> **Not VM reuse.** This is registry idempotency only. A re-run over hosts that are alive and onboarded still stops (with an actionable message instead of a PK error): re-creating a VM behind a live SID means reconciling against the cloud provider, which is the separate "idempotent reuse of live VMs" work (NIM-16). Unblocked here: the retry after a provision that never reached onboarding, and the re-create after a `destroy`.
+Two consequences worth knowing:
+
+- **A passed-through host carries `onboarded: true` in `hosts[]` and no `bootstrap_token`.** In B-flat the delivery step `core.bootstrap.delivered` **skips** such a host (nothing to write, and `soul init` would be a no-op behind the seed-guard) and counts it in its `skipped` output. In self-onboard, a re-run where every host is already up bakes no tokens at all and the userdata render is skipped - the reused VMs will not run cloud-init a second time anyway.
+- **`vm_ids` and `hosts[].sid` stay whole.** `covenant.yml` writes both into `incarnation.state` (`provisioned_vm_ids` / `provisioned_sids`) unconditionally whenever provision is enabled. A re-run that reported only the hosts it touched would strand the rest at the provider (billing orphans) and lose the SIDs cascade-destroy needs - so the passed-through hosts are reported like any other.
+
+> **Boundary: this converges config, it does not repair identity.** If a host's `souls` row says `connected`/`disconnected` but its VM was deleted out of band, the driver gap-fills a replacement - and that replacement gets no token, because the registry still believes the host onboarded. It will not self-onboard. Recovery is the explicit route: `destroy` the incarnation (cascade leaves `destroyed` tombstones) and `create` again, which re-arms the rows and mints fresh tokens.
 
 State `destroyed` is symmetrical: Keeper resolves the same Provider (for credentials) and calls `CloudDriver.Destroy(vm_ids, credentials)`, then the cascade transaction of registries ([ADR-017](../adr/0017-keeper-side-core.md)).
 

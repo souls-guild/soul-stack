@@ -1,11 +1,14 @@
 //go:build integration
 
-// Integration guards for provision idempotency (NIM-170) against a real
+// Integration guards for provision idempotency (NIM-170, NIM-189) against a real
 // Postgres: `core.cloud.created` re-run over an incarnation whose previous
 // attempt already registered souls. Live repro (WB stand, 2026-07-22): create →
 // deploy fails → error_locked → rerun-last → `insert soul "<name>-N": soul: SID
 // already exists (constraint souls_pkey): SQLSTATE 23505`, unblockable only by
 // deleting rows from PG by hand.
+//
+// NIM-170 covered the records that never reached onboarding; NIM-189 covers the
+// hosts that did — provisioning converges over them instead of refusing.
 //
 // The souls PK is the point of the exercise, so these run against PG rather
 // than the store fakes in provisioned_test.go. Container/pool/migrations come
@@ -16,6 +19,7 @@ package cloud_test
 import (
 	"context"
 	"errors"
+	"slices"
 	"testing"
 	"time"
 
@@ -90,6 +94,82 @@ func soulStatus(t *testing.T, sid string) keepersoul.Status {
 		t.Fatalf("select soul %q: %v", sid, err)
 	}
 	return got.Status
+}
+
+func soulLastSeen(t *testing.T, sid string) *time.Time {
+	t.Helper()
+	got, err := keepersoul.SelectBySID(context.Background(), integrationPool, sid)
+	if err != nil {
+		t.Fatalf("select soul %q: %v", sid, err)
+	}
+	return got.LastSeenAt
+}
+
+// activeTokens counts the still-redeemable bootstrap tokens of one SID
+// (`used_at IS NULL`, the partial unique index caps it at one).
+func activeTokens(t *testing.T, sid string) int {
+	t.Helper()
+	var n int
+	err := integrationPool.QueryRow(context.Background(),
+		`SELECT count(*) FROM bootstrap_tokens WHERE sid = $1 AND used_at IS NULL`, sid).Scan(&n)
+	if err != nil {
+		t.Fatalf("count active tokens of %q: %v", sid, err)
+	}
+	return n
+}
+
+// onboardSoul brings a seeded record to the state a host reaches once it has
+// actually onboarded: a live status plus the presence stamp that a pass-through
+// must leave alone. PG timestamptz keeps microseconds, so does the expectation.
+func onboardSoul(t *testing.T, sid string, status keepersoul.Status) time.Time {
+	t.Helper()
+	ctx := context.Background()
+	if err := keepersoul.UpdateStatus(ctx, integrationPool, sid, status, nil); err != nil {
+		t.Fatalf("set status %q on %q: %v", status, sid, err)
+	}
+	seen := time.Now().UTC().Add(-time.Minute).Truncate(time.Microsecond)
+	if err := keepersoul.UpdateLastSeen(ctx, integrationPool, sid, "kid-test", seen); err != nil {
+		t.Fatalf("stamp last_seen on %q: %v", sid, err)
+	}
+	return seen
+}
+
+// createdHosts unpacks `output.hosts` by SID.
+func createdHosts(t *testing.T, ev *pluginv1.ApplyEvent) map[string]map[string]any {
+	t.Helper()
+	raw, ok := ev.GetOutput().AsMap()["hosts"].([]any)
+	if !ok {
+		t.Fatalf("output carries no hosts list: %v", ev.GetOutput().AsMap())
+	}
+	out := make(map[string]map[string]any, len(raw))
+	for i, h := range raw {
+		hm, ok := h.(map[string]any)
+		if !ok {
+			t.Fatalf("hosts[%d] is %T, want an object", i, h)
+		}
+		sid, _ := hm["sid"].(string)
+		out[sid] = hm
+	}
+	return out
+}
+
+// createdVMIDs unpacks `output.vm_ids` — what covenant.yml writes into
+// incarnation.state.provisioned_vm_ids.
+func createdVMIDs(t *testing.T, ev *pluginv1.ApplyEvent) []string {
+	t.Helper()
+	raw, ok := ev.GetOutput().AsMap()["vm_ids"].([]any)
+	if !ok {
+		t.Fatalf("output carries no vm_ids list: %v", ev.GetOutput().AsMap())
+	}
+	out := make([]string, 0, len(raw))
+	for i, v := range raw {
+		s, ok := v.(string)
+		if !ok {
+			t.Fatalf("vm_ids[%d] is %T, want a string", i, v)
+		}
+		out = append(out, s)
+	}
+	return out
 }
 
 // provisionModule wires the module over the real PG stores; the cloud driver
@@ -195,26 +275,121 @@ func TestIntegration_Created_RerunAfterDestroy_ReusesTombstone(t *testing.T) {
 	}
 }
 
-// TestIntegration_Created_LiveSoulNotTakenOver — a SID that carries a LIVE
-// registration is never re-provisioned: the run fails with a reason an operator
-// can act on, and the registration keeps its status.
-func TestIntegration_Created_LiveSoulNotTakenOver(t *testing.T) {
+// TestIntegration_Created_RerunOverLiveSoul_PassesThrough — THE guard of
+// NIM-189, the inversion of the NIM-170 boundary: a SID carrying a live
+// registration of THIS incarnation no longer stops the run. Provisioning
+// converges over it — the row is left exactly as it is, no bootstrap token is
+// minted, and the run goes on to its remaining steps.
+func TestIntegration_Created_RerunOverLiveSoul_PassesThrough(t *testing.T) {
 	resetProvision(t)
 	seedIncarnation(t, provIncarnation)
 	seedSoul(t, provSID0, keepersoul.StatusPending)
-	if err := keepersoul.UpdateStatus(context.Background(), integrationPool,
-		provSID0, keepersoul.StatusConnected, nil); err != nil {
-		t.Fatalf("connect the soul: %v", err)
-	}
+	seen := onboardSoul(t, provSID0, keepersoul.StatusConnected)
 	seedProvisionMembership(t, provIncarnation, provSID0)
 
 	fp := &fakePlugins{createResp: createdVMs()[:1]}
 	ev := runCreate(t, provisionModule(fp), provIncarnation, 1)
+	if ev.GetFailed() {
+		t.Fatalf("create over a live host of its own incarnation failed: %s — a re-create must be a no-op, not a refusal", ev.GetMessage())
+	}
+	if fp.lastCount != 1 {
+		t.Errorf("driver Create called with count=%d, want 1 (the driver is what reuses the live VM)", fp.lastCount)
+	}
+	if st := soulStatus(t, provSID0); st != keepersoul.StatusConnected {
+		t.Errorf("soul status = %q, want connected (a live host must not be re-armed to pending)", st)
+	}
+	if got := soulLastSeen(t, provSID0); got == nil || !got.Equal(seen) {
+		t.Errorf("last_seen_at = %v, want %v (presence must survive a re-run)", got, seen)
+	}
+	if n := activeTokens(t, provSID0); n != 0 {
+		t.Errorf("active bootstrap tokens = %d, want 0 (an onboarded host holds an identity; a token would be a capability with nothing to redeem)", n)
+	}
+	out := ev.GetOutput().AsMap()
+	if out["existing"] != float64(1) || out["reused"] != float64(0) {
+		t.Errorf("output existing=%v reused=%v, want 1/0", out["existing"], out["reused"])
+	}
+	host := createdHosts(t, ev)[provSID0]
+	if host == nil {
+		t.Fatalf("output.hosts is missing %q", provSID0)
+	}
+	if ob, _ := host["onboarded"].(bool); !ob {
+		t.Errorf("hosts[%q][onboarded] = %v, want true — core.bootstrap.delivered skips on this flag, without it the delivery step dies on the missing token",
+			provSID0, host["onboarded"])
+	}
+}
+
+// TestIntegration_Created_RerunMixedRoster_StateStaysComplete — the day-2
+// regression guard. covenant.yml writes `output.vm_ids` and `output.hosts[].sid`
+// into incarnation.state (provisioned_vm_ids / provisioned_sids) unconditionally
+// whenever provision is enabled, so a re-run that reported only the hosts it
+// touched would strand the rest at the provider (billing orphans) and lose the
+// SIDs cascade-destroy needs. Both lists must stay whole across a mixed roster.
+func TestIntegration_Created_RerunMixedRoster_StateStaysComplete(t *testing.T) {
+	resetProvision(t)
+	seedIncarnation(t, provIncarnation)
+	// -0 already onboarded, -1 a leftover of the attempt that never came up.
+	seedSoul(t, provSID0, keepersoul.StatusPending)
+	onboardSoul(t, provSID0, keepersoul.StatusConnected)
+	seedSoul(t, provSID1, keepersoul.StatusPending)
+	seedProvisionMembership(t, provIncarnation, provSID0)
+	seedProvisionMembership(t, provIncarnation, provSID1)
+
+	ev := runCreate(t, provisionModule(&fakePlugins{createResp: createdVMs()}), provIncarnation, 2)
+	if ev.GetFailed() {
+		t.Fatalf("re-run over a partly live roster failed: %s", ev.GetMessage())
+	}
+	out := ev.GetOutput().AsMap()
+	if out["existing"] != float64(1) || out["reused"] != float64(1) {
+		t.Errorf("output existing=%v reused=%v, want 1/1", out["existing"], out["reused"])
+	}
+	if got := createdVMIDs(t, ev); !slices.Equal(got, []string{"i-aaa", "i-bbb"}) {
+		t.Errorf("output[vm_ids] = %v, want both VMs — day-2 destroy reads this into provisioned_vm_ids", got)
+	}
+	hosts := createdHosts(t, ev)
+	if len(hosts) != 2 || hosts[provSID0] == nil || hosts[provSID1] == nil {
+		t.Fatalf("output.hosts covers %d SID(s), want both — cascade-destroy reads these into provisioned_sids", len(hosts))
+	}
+	if n := soulsCount(t); n != 2 {
+		t.Errorf("souls rows = %d, want 2 (a re-run must not add rows)", n)
+	}
+	// The live host keeps its registration; the leftover is re-armed for onboarding.
+	if st := soulStatus(t, provSID0); st != keepersoul.StatusConnected {
+		t.Errorf("live soul status = %q, want connected", st)
+	}
+	if st := soulStatus(t, provSID1); st != keepersoul.StatusPending {
+		t.Errorf("leftover soul status = %q, want pending (re-armed)", st)
+	}
+	if n := activeTokens(t, provSID0); n != 0 {
+		t.Errorf("live host holds %d active token(s), want 0", n)
+	}
+	if n := activeTokens(t, provSID1); n != 1 {
+		t.Errorf("re-armed host holds %d active token(s), want 1", n)
+	}
+}
+
+// TestIntegration_Created_ForeignLiveSoulNotTakenOver — the security boundary
+// NIM-189 keeps: converging in place is only for hosts of THIS incarnation. A
+// live host that belongs to another one is still refused — passing through it
+// would fold somebody else's machine into this incarnation's roster and deploy
+// onto it.
+func TestIntegration_Created_ForeignLiveSoulNotTakenOver(t *testing.T) {
+	resetProvision(t)
+	seedIncarnation(t, provIncarnation)
+	seedIncarnation(t, "redis-other")
+	seedSoul(t, provSID0, keepersoul.StatusPending)
+	seen := onboardSoul(t, provSID0, keepersoul.StatusConnected)
+	seedProvisionMembership(t, "redis-other", provSID0)
+
+	fp := &fakePlugins{createResp: createdVMs()[:1]}
+	ev := runCreate(t, provisionModule(fp), provIncarnation, 1)
 	if !ev.GetFailed() {
-		t.Fatal("create took over a connected host — a live registration must never be re-provisioned")
+		t.Fatal("create took over a live host of another incarnation")
 	}
 	if st := soulStatus(t, provSID0); st != keepersoul.StatusConnected {
 		t.Errorf("soul status = %q, want connected (untouched)", st)
+	}
+	if got := soulLastSeen(t, provSID0); got == nil || !got.Equal(seen) {
+		t.Errorf("last_seen_at = %v, want %v (a refused provision must not touch the row)", got, seen)
 	}
 	if fp.lastCount != 0 {
 		t.Errorf("driver Create called (count=%d) although the SID was refused", fp.lastCount)
@@ -252,17 +427,32 @@ func TestIntegration_Created_ForeignIncarnationNotTakenOver(t *testing.T) {
 }
 
 // TestIntegration_EnsureProvisionable_StatusMatrix pins the CRUD contract the
-// module relies on: which registry states a provision run may re-arm, and which
-// it must refuse.
+// module relies on: which registry states a provision run re-arms, which it
+// converges over in place, and which it must refuse.
+//
+//   - reused      — never completed an onboarding (`pending`) or is a cascade
+//     tombstone (`destroyed`): re-armed for a fresh onboarding (NIM-170).
+//   - passthrough — the host onboarded and its identity stands (`connected` /
+//     `disconnected`): the row is read back and left alone (NIM-189).
+//   - refused     — `revoked` (an operator cut the host off deliberately) and
+//     `expired` (a pending record the Reaper timed out): neither a leftover this
+//     run may re-arm nor a host it may adopt.
 func TestIntegration_EnsureProvisionable_StatusMatrix(t *testing.T) {
-	reusable := []keepersoul.Status{keepersoul.StatusPending, keepersoul.StatusDestroyed}
-	refused := []keepersoul.Status{
-		keepersoul.StatusConnected, keepersoul.StatusDisconnected,
-		keepersoul.StatusRevoked, keepersoul.StatusExpired,
+	want := map[keepersoul.Status]keepersoul.ProvisionOutcome{
+		keepersoul.StatusPending:      keepersoul.ProvisionReused,
+		keepersoul.StatusDestroyed:    keepersoul.ProvisionReused,
+		keepersoul.StatusConnected:    keepersoul.ProvisionExisting,
+		keepersoul.StatusDisconnected: keepersoul.ProvisionExisting,
+		keepersoul.StatusRevoked:      "",
+		keepersoul.StatusExpired:      "",
 	}
 	ctx := context.Background()
 
-	for _, st := range append(append([]keepersoul.Status{}, reusable...), refused...) {
+	for _, st := range []keepersoul.Status{
+		keepersoul.StatusPending, keepersoul.StatusDestroyed,
+		keepersoul.StatusConnected, keepersoul.StatusDisconnected,
+		keepersoul.StatusRevoked, keepersoul.StatusExpired,
+	} {
 		t.Run(string(st), func(t *testing.T) {
 			resetProvision(t)
 			seedSoul(t, provSID0, keepersoul.StatusPending)
@@ -273,19 +463,25 @@ func TestIntegration_EnsureProvisionable_StatusMatrix(t *testing.T) {
 			}
 
 			s := &keepersoul.Soul{SID: provSID0, Transport: keepersoul.TransportAgent, Status: keepersoul.StatusPending}
-			reused, err := keepersoul.EnsureProvisionable(ctx, integrationPool, s, provIncarnation)
+			got, err := keepersoul.EnsureProvisionable(ctx, integrationPool, s, provIncarnation)
 
-			wantReuse := st == keepersoul.StatusPending || st == keepersoul.StatusDestroyed
-			switch {
-			case wantReuse && err != nil:
-				t.Fatalf("status %q: err = %v, want reuse", st, err)
-			case wantReuse && !reused:
-				t.Errorf("status %q: reused = false, want true", st)
-			case !wantReuse && !errors.Is(err, keepersoul.ErrSoulNotProvisionable):
-				t.Fatalf("status %q: err = %v, want ErrSoulNotProvisionable", st, err)
+			switch expect := want[st]; {
+			case expect == "":
+				if !errors.Is(err, keepersoul.ErrSoulNotProvisionable) {
+					t.Fatalf("status %q: err = %v, want ErrSoulNotProvisionable", st, err)
+				}
+			case err != nil:
+				t.Fatalf("status %q: err = %v, want outcome %q", st, err, expect)
+			case got != expect:
+				t.Errorf("status %q: outcome = %q, want %q", st, got, expect)
 			}
-			if !wantReuse && soulStatus(t, provSID0) != st {
-				t.Errorf("status %q was modified by a refused provision", st)
+
+			// Only a re-arm may rewrite the row; refusal and pass-through leave it.
+			if want[st] != keepersoul.ProvisionReused && soulStatus(t, provSID0) != st {
+				t.Errorf("status %q was modified by a provision that must not write", st)
+			}
+			if want[st] == keepersoul.ProvisionExisting && s.Status != st {
+				t.Errorf("pass-through returned soul.Status = %q, want the row's own %q", s.Status, st)
 			}
 			if n := soulsCount(t); n != 1 {
 				t.Errorf("souls rows = %d, want 1", n)
@@ -298,12 +494,12 @@ func TestIntegration_EnsureProvisionable_StatusMatrix(t *testing.T) {
 func TestIntegration_EnsureProvisionable_FreeSID(t *testing.T) {
 	resetProvision(t)
 	s := &keepersoul.Soul{SID: provSID0, Transport: keepersoul.TransportAgent, Status: keepersoul.StatusPending}
-	reused, err := keepersoul.EnsureProvisionable(context.Background(), integrationPool, s, provIncarnation)
+	got, err := keepersoul.EnsureProvisionable(context.Background(), integrationPool, s, provIncarnation)
 	if err != nil {
 		t.Fatalf("EnsureProvisionable on a free SID: %v", err)
 	}
-	if reused {
-		t.Error("reused = true on a free SID, want false (freshly inserted)")
+	if got != keepersoul.ProvisionInserted {
+		t.Errorf("outcome = %q on a free SID, want %q", got, keepersoul.ProvisionInserted)
 	}
 	if soulStatus(t, provSID0) != keepersoul.StatusPending {
 		t.Error("inserted record is not pending")

@@ -2,9 +2,12 @@
 // (ADR-017, docs/keeper/cloud.md).
 //
 // States:
-//   - created: CloudDriver.Create via PluginHost → []VmInfo → INSERT into
-//     souls (status: pending) + INSERT bootstrap_tokens (one per VM).
-//     Output: hosts: [{sid, vm_id, primary_ip, attributes}].
+//   - created: CloudDriver.Create via PluginHost → []VmInfo → idempotent
+//     registration in souls (status: pending) + INSERT bootstrap_tokens (one per
+//     VM that needs one). Re-running over the same incarnation converges rather
+//     than collides: leftovers of an earlier attempt are re-armed (NIM-170) and
+//     hosts that are already up are passed through untouched, without a token
+//     (NIM-189). Output: hosts: [{sid, vm_id, primary_ip, attributes}].
 //   - destroyed: PluginHost.Destroy(vm_ids) → cascade in single PG transaction
 //     (ADR-017 cascade): souls→destroyed + active soul_seeds→orphaned +
 //     active bootstrap_tokens→burned. Output: destroyed_vm_ids + sids +
@@ -65,10 +68,12 @@ const (
 //
 // EnsureProvisionable, not a plain INSERT (NIM-170): a re-run over a
 // half-finished provision must reuse the records the previous attempt left
-// behind instead of dying on the souls PK. reused=true marks a record that
-// predates this run — orphan-cleanup leaves those alone.
+// behind instead of dying on the souls PK, and a re-run over hosts that are
+// already up must pass through them (NIM-189). Anything but
+// [keepersoul.ProvisionInserted] marks a record that predates this run —
+// orphan-cleanup leaves those alone.
 type SoulStore interface {
-	EnsureProvisionable(ctx context.Context, soul *keepersoul.Soul, incarnationName string) (reused bool, err error)
+	EnsureProvisionable(ctx context.Context, soul *keepersoul.Soul, incarnationName string) (keepersoul.ProvisionOutcome, error)
 	UpdateStatus(ctx context.Context, sid string, status keepersoul.Status, kid *string) error
 	DeleteBySID(ctx context.Context, sid string) error
 }
@@ -375,7 +380,7 @@ func (m *Module) applyCreated(req *pluginv1.ApplyRequest, stream grpc.ServerStre
 	incarnationName := util.IncarnationFrom(ctx)
 	hosts := make([]any, 0, len(vms))
 	vmIDs := make([]any, 0, len(vms))
-	reused := 0
+	reused, existing := 0, 0
 	for _, vm := range vms {
 		sid := vm.GetFqdn()
 		if sid == "" {
@@ -387,26 +392,12 @@ func (m *Module) applyCreated(req *pluginv1.ApplyRequest, stream grpc.ServerStre
 			Status:    keepersoul.StatusPending,
 		}
 		// B-flat registers AFTER create: a reused record here is a leftover of an
-		// earlier attempt at the same FQDN (NIM-170), a refusal means the provider
-		// handed us the FQDN of a host that is already registered.
-		wasReused, err := m.Souls.EnsureProvisionable(ctx, soul, incarnationName)
+		// earlier attempt at the same FQDN (NIM-170), an existing one is a host of
+		// this incarnation the driver handed back instead of creating (NIM-189),
+		// and a refusal means the provider handed us the FQDN of a host we don't own.
+		outcome, err := m.Souls.EnsureProvisionable(ctx, soul, incarnationName)
 		if err != nil {
 			return util.SendFailed(stream, fmt.Sprintf("register provisioned soul %q: %v", sid, err))
-		}
-		if wasReused {
-			reused++
-			// The record we took over may still hold the active token of the
-			// previous attempt — one active token per SID (NIM-170).
-			if err := m.Tokens.ExpireActiveForSID(ctx, sid); err != nil {
-				return util.SendFailed(stream, fmt.Sprintf("invalidate previous bootstrap token for %q: %v", sid, err))
-			}
-		}
-		tok, err := m.Tokens.Generate()
-		if err != nil {
-			return util.SendFailed(stream, fmt.Sprintf("generate bootstrap token for %q: %v", sid, err))
-		}
-		if _, err := m.Tokens.Insert(ctx, sid, tok.Hash(), nil); err != nil {
-			return util.SendFailed(stream, fmt.Sprintf("insert bootstrap token for %q: %v", sid, err))
 		}
 
 		hostEntry := map[string]any{
@@ -417,18 +408,44 @@ func (m *Module) applyCreated(req *pluginv1.ApplyRequest, stream grpc.ServerStre
 		if attrs := vm.GetAttributes(); attrs != nil {
 			hostEntry["attributes"] = attrs.AsMap()
 		}
-		// WARNING (security, H1): plain bootstrap-token is intentionally placed in
-		// register-output — cloud-init flow requires sending it to VM on initial boot.
-		// This is the only moment when plain-token is visible; database stores only
-		// hash, token cannot be recovered later.
-		//
-		// Secrecy of key `bootstrap_token` is ensured on ALL register-output outlets
-		// (audit-log / OTel / SSE / any logs): key matches substring-filter
-		// [audit.MaskSecrets] (`token` fragment). Any new register-output channel MUST
-		// pass payload through audit.MaskSecrets — else risk one-time token leak (see
-		// .pm/tasks/2026-05-22-security-review). Cannot change key name without
-		// filter verification.
-		hostEntry["bootstrap_token"] = tok.Reveal()
+
+		switch outcome {
+		case keepersoul.ProvisionExisting:
+			existing++
+			// No token for a host that already holds an identity — a bootstrap
+			// token is a capability, and this one has nothing to redeem it for.
+			// The flag makes core.bootstrap.delivered skip the host instead of
+			// failing on the missing `bootstrap_token` (NIM-189).
+			hostEntry["onboarded"] = true
+		default:
+			if outcome == keepersoul.ProvisionReused {
+				reused++
+				// The record we took over may still hold the active token of the
+				// previous attempt — one active token per SID (NIM-170).
+				if err := m.Tokens.ExpireActiveForSID(ctx, sid); err != nil {
+					return util.SendFailed(stream, fmt.Sprintf("invalidate previous bootstrap token for %q: %v", sid, err))
+				}
+			}
+			tok, err := m.Tokens.Generate()
+			if err != nil {
+				return util.SendFailed(stream, fmt.Sprintf("generate bootstrap token for %q: %v", sid, err))
+			}
+			if _, err := m.Tokens.Insert(ctx, sid, tok.Hash(), nil); err != nil {
+				return util.SendFailed(stream, fmt.Sprintf("insert bootstrap token for %q: %v", sid, err))
+			}
+			// WARNING (security, H1): plain bootstrap-token is intentionally placed in
+			// register-output — cloud-init flow requires sending it to VM on initial boot.
+			// This is the only moment when plain-token is visible; database stores only
+			// hash, token cannot be recovered later.
+			//
+			// Secrecy of key `bootstrap_token` is ensured on ALL register-output outlets
+			// (audit-log / OTel / SSE / any logs): key matches substring-filter
+			// [audit.MaskSecrets] (`token` fragment). Any new register-output channel MUST
+			// pass payload through audit.MaskSecrets — else risk one-time token leak (see
+			// .pm/tasks/2026-05-22-security-review). Cannot change key name without
+			// filter verification.
+			hostEntry["bootstrap_token"] = tok.Reveal()
+		}
 		hosts = append(hosts, hostEntry)
 		vmIDs = append(vmIDs, vm.GetVmId())
 	}
@@ -445,6 +462,9 @@ func (m *Module) applyCreated(req *pluginv1.ApplyRequest, stream grpc.ServerStre
 		// How many souls records this run took over from an earlier attempt
 		// instead of creating (NIM-170) — 0 on a clean first run.
 		"reused": float64(reused),
+		// How many hosts were already up and were passed through untouched
+		// (NIM-189) — 0 on a clean first run.
+		"existing": float64(existing),
 	})
 }
 
@@ -471,9 +491,10 @@ func (m *Module) applyCreatedSelfOnboard(ctx context.Context, stream grpc.Server
 	// 008/009), but token rolled back explicitly — don't rely on schema and cover
 	// case soul-insert-ok / token-insert-fail.
 	//
-	// ownSoul=false — the record was reused from an earlier attempt (NIM-170)
+	// ownSoul=false — the record predates this run (reused leftover, NIM-170)
 	// and is NOT ours to delete: rolling it back would erase a registration this
-	// run did not create.
+	// run did not create. Hosts that were already up never reach this list at
+	// all — nothing was issued for them (NIM-189).
 	type provisionedRecord struct {
 		sid, tokenID string
 		ownSoul      bool
@@ -503,7 +524,8 @@ func (m *Module) applyCreatedSelfOnboard(ctx context.Context, stream grpc.Server
 	incarnationName := util.IncarnationFrom(ctx)
 	predicted := make([]string, count)
 	tokens := make(map[string]string, count)
-	reused := 0
+	onboarded := make(map[string]bool, count)
+	reused, existing := 0, 0
 	for i := 0; i < count; i++ {
 		sid := fmt.Sprintf("%s-%d.%s", name, i, resolved.FQDNSuffix)
 		if !keepersoul.ValidSID(sid) {
@@ -513,14 +535,22 @@ func (m *Module) applyCreatedSelfOnboard(ctx context.Context, stream grpc.Server
 
 		// Re-run over a half-finished provision reuses the pending/destroyed
 		// record of the same predicted FQDN instead of failing on the PK
-		// (NIM-170); a record held by a live host or another incarnation is
+		// (NIM-170); a host of this incarnation that is already up is passed
+		// through untouched (NIM-189); a record held by another incarnation is
 		// refused, not taken over.
 		soul := &keepersoul.Soul{SID: sid, Transport: keepersoul.TransportAgent, Status: keepersoul.StatusPending}
-		wasReused, err := m.Souls.EnsureProvisionable(ctx, soul, incarnationName)
+		outcome, err := m.Souls.EnsureProvisionable(ctx, soul, incarnationName)
 		if err != nil {
 			return util.SendFailed(stream, fmt.Sprintf("register provisioned soul %q: %v", sid, err))
 		}
-		if wasReused {
+		if outcome == keepersoul.ProvisionExisting {
+			existing++
+			onboarded[sid] = true
+			// Nothing to issue and nothing to roll back: the host holds its own
+			// seed, and its cloud-init ran on the boot that onboarded it (NIM-189).
+			continue
+		}
+		if outcome == keepersoul.ProvisionReused {
 			reused++
 			// The record we took over may still hold the active token baked into
 			// the userdata of the VM that never came up — one active token per SID
@@ -529,25 +559,35 @@ func (m *Module) applyCreatedSelfOnboard(ctx context.Context, stream grpc.Server
 				return util.SendFailed(stream, fmt.Sprintf("invalidate previous bootstrap token for %q: %v", sid, err))
 			}
 		}
+		ownSoul := outcome == keepersoul.ProvisionInserted
 		tok, err := m.Tokens.Generate()
 		if err != nil {
 			// soul record already in place — roll back via defer (token-id empty,
 			// DeleteByTokenID on non-existent id is safe).
-			provisioned = append(provisioned, provisionedRecord{sid: sid, ownSoul: !wasReused})
+			provisioned = append(provisioned, provisionedRecord{sid: sid, ownSoul: ownSoul})
 			return util.SendFailed(stream, fmt.Sprintf("generate bootstrap token for %q: %v", sid, err))
 		}
 		rec, err := m.Tokens.Insert(ctx, sid, tok.Hash(), nil)
 		if err != nil {
-			provisioned = append(provisioned, provisionedRecord{sid: sid, ownSoul: !wasReused})
+			provisioned = append(provisioned, provisionedRecord{sid: sid, ownSoul: ownSoul})
 			return util.SendFailed(stream, fmt.Sprintf("insert bootstrap token for %q: %v", sid, err))
 		}
-		provisioned = append(provisioned, provisionedRecord{sid: sid, tokenID: rec.TokenID, ownSoul: !wasReused})
+		provisioned = append(provisioned, provisionedRecord{sid: sid, tokenID: rec.TokenID, ownSoul: ownSoul})
 		tokens[sid] = tok.Reveal()
 	}
 
-	userdata, err := m.Userdata.GenerateUserdataSelfOnboard(ctx, tokens)
-	if err != nil {
-		return util.SendFailed(stream, fmt.Sprintf("cloud created: generate self-onboard userdata: %s", maskErr(err)))
+	// An empty token map means every predicted host is already up (a re-run over
+	// a fully live incarnation): there is nothing to bake, and the VMs the driver
+	// hands back will not run cloud-init again. Create is still called — the
+	// driver is what confirms the VMs exist and returns the vm_ids day-2 destroy
+	// needs (NIM-189).
+	userdata := ""
+	if len(tokens) > 0 {
+		rendered, gerr := m.Userdata.GenerateUserdataSelfOnboard(ctx, tokens)
+		if gerr != nil {
+			return util.SendFailed(stream, fmt.Sprintf("cloud created: generate self-onboard userdata: %s", maskErr(gerr)))
+		}
+		userdata = rendered
 	}
 
 	vms, err := m.Plugins.Create(ctx, resolved.Driver, profileMap, resolved.Credentials, int32(count), userdata, name)
@@ -583,6 +623,10 @@ func (m *Module) applyCreatedSelfOnboard(ctx context.Context, stream grpc.Server
 		if attrs := vm.GetAttributes(); attrs != nil {
 			hostEntry["attributes"] = attrs.AsMap()
 		}
+		if onboarded[sid] {
+			// Passed through: the host was already up before this run (NIM-189).
+			hostEntry["onboarded"] = true
+		}
 		hosts = append(hosts, hostEntry)
 		vmIDs = append(vmIDs, vm.GetVmId())
 	}
@@ -601,6 +645,8 @@ func (m *Module) applyCreatedSelfOnboard(ctx context.Context, stream grpc.Server
 		"self_onboard": true,
 		// Souls records taken over from an earlier attempt (NIM-170).
 		"reused": float64(reused),
+		// Hosts already up, passed through untouched (NIM-189).
+		"existing": float64(existing),
 	})
 }
 

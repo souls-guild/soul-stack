@@ -466,6 +466,109 @@ func TestApply_HostError_FailsStep_B1Strict(t *testing.T) {
 	}
 }
 
+// onboardedHostEntry is a host core.cloud.created passed through because it was
+// already up (NIM-189): no bootstrap_token, `onboarded: true` in its place.
+func onboardedHostEntry(sid, ip string) map[string]any {
+	return map[string]any{"sid": sid, "primary_ip": ip, "onboarded": true}
+}
+
+// TestApply_OnboardedHost_SkippedNotDelivered — NIM-189: a host that was already
+// up when provisioning ran carries no token, so there is nothing to deliver. It
+// must be skipped (never dialed), not treated as a malformed host — before the
+// flag existed, the missing `bootstrap_token` was a hard parse error and the
+// whole re-run died at this step.
+func TestApply_OnboardedHost_SkippedNotDelivered(t *testing.T) {
+	prov := &fakeProvider{allow: true}
+	dialer := &dialRecorder{sess: &fakeSession{}}
+	aud := &fakeAudit{}
+	m := newModule(t, prov, dialer.dial, aud)
+
+	stream := internaltest.NewApplyStream()
+	if err := m.Apply(deliverReq(t, map[string]any{
+		"ssh_provider": "ssh-static",
+		"hosts": []any{
+			onboardedHostEntry("vm1.example.com", "10.0.0.1"),
+			hostEntry("vm2.example.com", "10.0.0.2", "tok"),
+		},
+	}), stream); err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+	last := stream.Last()
+	if last == nil || last.GetFailed() {
+		t.Fatalf("delivery over an already-onboarded host failed: %+v", last)
+	}
+	if dialer.dialCnt != 1 {
+		t.Errorf("dialed %d host(s), want 1 — the onboarded host must not be connected to", dialer.dialCnt)
+	}
+	if dialer.lastCfg.Host != "10.0.0.2" {
+		t.Errorf("dialed %q, want the host that still needs its token", dialer.lastCfg.Host)
+	}
+	out := last.GetOutput().AsMap()
+	if out["skipped"] != float64(1) || out["count"] != float64(2) {
+		t.Errorf("output skipped=%v count=%v, want 1/2", out["skipped"], out["count"])
+	}
+	hosts, _ := out["hosts"].([]any)
+	if len(hosts) != 2 {
+		t.Fatalf("hosts=%d, want 2 (a skipped host is still reported)", len(hosts))
+	}
+	skipped := hosts[0].(map[string]any)
+	if d, _ := skipped["delivered"].(bool); d {
+		t.Error("skipped host reported as delivered")
+	}
+	if ob, _ := skipped["onboarded"].(bool); !ob {
+		t.Errorf("skipped host lost its onboarded marker: %v", skipped)
+	}
+	if len(aud.events) != 1 {
+		t.Errorf("audit events = %d, want 1", len(aud.events))
+	}
+}
+
+// TestApply_AllOnboarded_NothingToDeliver — the full converge case: every host of
+// the incarnation was already up, so the step succeeds without a single SSH
+// session and the run moves on.
+func TestApply_AllOnboarded_NothingToDeliver(t *testing.T) {
+	dialer := &dialRecorder{sess: &fakeSession{}}
+	m := newModule(t, &fakeProvider{allow: true}, dialer.dial, &fakeAudit{})
+
+	stream := internaltest.NewApplyStream()
+	if err := m.Apply(deliverReq(t, map[string]any{
+		"ssh_provider": "ssh-static",
+		"hosts":        []any{onboardedHostEntry("vm1.example.com", "10.0.0.1")},
+	}), stream); err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+	last := stream.Last()
+	if last == nil || last.GetFailed() {
+		t.Fatalf("delivery over a fully onboarded roster failed: %+v", last)
+	}
+	if dialer.dialCnt != 0 {
+		t.Errorf("dialed %d host(s), want 0", dialer.dialCnt)
+	}
+	if out := last.GetOutput().AsMap(); out["skipped"] != float64(1) {
+		t.Errorf("output[skipped] = %v, want 1", out["skipped"])
+	}
+}
+
+// TestApply_MissingToken_WithoutOnboardedFlag_Fails — `onboarded: true` is the
+// ONLY thing that excuses a missing token. Without it a tokenless host is still
+// a host we cannot onboard, and silently skipping it would leave the incarnation
+// short of a member with no error to show for it.
+func TestApply_MissingToken_WithoutOnboardedFlag_Fails(t *testing.T) {
+	dialer := &dialRecorder{sess: &fakeSession{}}
+	m := newModule(t, &fakeProvider{allow: true}, dialer.dial, &fakeAudit{})
+
+	stream := internaltest.NewApplyStream()
+	if err := m.Apply(deliverReq(t, map[string]any{
+		"ssh_provider": "ssh-static",
+		"hosts":        []any{map[string]any{"sid": "vm1.example.com", "primary_ip": "10.0.0.1"}},
+	}), stream); err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+	if last := stream.Last(); last == nil || !last.GetFailed() {
+		t.Fatalf("expected failed event for a tokenless host without onboarded=true, got %+v", last)
+	}
+}
+
 func TestApply_UnknownProvider_Fails(t *testing.T) {
 	prov := &fakeProvider{allow: true}
 	dialer := &dialRecorder{sess: &fakeSession{}}

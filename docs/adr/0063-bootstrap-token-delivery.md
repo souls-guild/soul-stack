@@ -41,7 +41,7 @@ The module places on the VM **ONLY the token** (everything else — the soul bin
 
 | Parameter | Type | Req. | Default | Semantics |
 |---|---|---|---|---|
-| `hosts` | array of object `{sid, primary_ip, bootstrap_token}` | required | — | List of VMs. In practice comes as the CEL expression `${ register.<provision>.hosts }` (output of `core.cloud.created`). An empty list → `failed`. |
+| `hosts` | array of object `{sid, primary_ip, bootstrap_token}` | required | — | List of VMs. In practice comes as the CEL expression `${ register.<provision>.hosts }` (output of `core.cloud.created`). An empty list → `failed`. An entry marked `onboarded: true` carries no token and is skipped — see the 2026-07-26 amendment. |
 | `ssh_provider` | string | required | — | Name of the SshProvider plugin (`keeper.yml::plugins.ssh_providers[].name`) for SSH authentication. **★ In `transport: teleport` it does NOT determine the transport** (Authorize/Sign are not called) — the operator passes the name, but it goes ONLY into the audit payload. Dropping the required status per transport is post-MVP optional. |
 | `token_path` | string | — | `/etc/soul/token` | Path of the token file on the VM. |
 | `ssh_user` | string | — | `root` | SSH user. |
@@ -50,7 +50,7 @@ The module places on the VM **ONLY the token** (everything else — the soul bin
 
 ## Output contract (module `output:`)
 
-`register.<name>.*`: `hosts[] = {sid, delivered, started}` + `count` (number of processed hosts). Plus the standard `.changed` (always `true` on success) / `.failed` of the DSL core.
+`register.<name>.*`: `hosts[] = {sid, delivered, started}` + `count` (number of processed hosts) + `skipped` (hosts that were already onboarded and needed no delivery, see the 2026-07-26 amendment). Plus the standard `.changed` (always `true` on success) / `.failed` of the DSL core.
 
 **★ NO token in output.** The plain token itself is visible only in the register of the previous step (`core.cloud.created`, key `bootstrap_token`, masked by `audit.MaskSecrets` on all outputs) — in the `core.bootstrap.delivered` output it is absent entirely.
 
@@ -152,3 +152,14 @@ test -e /var/lib/soul-stack/seed/current/cert.pem || SOUL_BOOTSTRAP_TOKEN="$(cat
 - **Closes BUG#2 cloud-provision** (the `keeper.push.applied` keeper-side stub did not exist).
 - **The name `keeper.push.applied` is rejected** as a keeper-side core address: `push.applied` is the audit-event type of an operator-initiated Destiny push run (`POST /v1/push/apply`), not a keeper-side token-delivery module. The coincidence was an illustrative scenario stub that was misleading.
 - **A separate bin-doc** — [docs/keeper/modules.md → `core.bootstrap.delivered`](../keeper/modules.md#corebootstrapdelivered).
+
+## Amendment 2026-07-26 — a host that was already onboarded is skipped, not failed (NIM-189)
+
+Follows from [ADR-017 amendment 2026-07-26](0017-keeper-side-core.md): a re-`create` over an incarnation whose hosts are already up passes those hosts through and issues **no** bootstrap token for them (a token is a one-time capability, and a host holding a seed has nothing to redeem it against). `core.cloud.created` marks such entries **`onboarded: true`** in `hosts[]`.
+
+Without a matching rule here the delivery step would die on them: `hosts[i].bootstrap_token` was unconditionally required, so a missing token was a parse-level hard error and the whole re-run failed at delivery.
+
+- **`onboarded: true` → skip.** The host is not dialed at all — nothing to write, and `soul init` would be a no-op behind the seed-guard (`test -e <SeedCertPath>`) anyway. It is still REPORTED: `hosts[] = {sid, delivered: false, started: false, onboarded: true}`.
+- **The flag is the only exemption.** A host with neither a token nor `onboarded: true` is still a hard error, exactly as before. Skipping it silently would leave the incarnation short of a member with nothing in the output to show for it.
+- **Output gains `skipped`** — how many hosts needed no delivery (`0` on a clean run). `count` keeps its meaning: the total number of hosts in the list. B1-strict is untouched for every host that IS delivered to.
+- Audit `bootstrap.delivered` still carries `{action, ssh_provider, count, sids}` with skipped hosts included in `sids` — they are part of the roster this step accounted for.

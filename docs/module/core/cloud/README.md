@@ -75,15 +75,20 @@ not a host plugin). The launch of such a scenario is regulated by the RBAC opera
 ([rbac.md](../../../keeper/rbac.md)); the created records `souls` are written with
   `CreatedByAID: null` (keeper-internal action).
 - **Real financial side-effect (`created`).** Step creates real VMs
-provider is billing. `created` **not idempotent** constructively
-(`changed=true` always): repeating the step creates **new** VMs rather than checking against
-existing. Manage guard replay at scenario level
-(`when:`/`changed_when:`) without relying on module idempotency.
-  The **registry** side is re-runnable, though ([ADR-017 amendment 2026-07-24](../../../adr/0017-keeper-side-core.md)): a repeated `create` re-arms the `souls`
-records its own earlier attempt left behind (`pending` / `destroyed`, this
-incarnation's or unbound) instead of dying on the PK, and refuses records that
-carry a live registration or belong to another incarnation. Re-using the live
-VMs themselves is out of scope - see [cloud.md → Re-running create](../../../keeper/cloud.md#re-running-create-provision-idempotency-nim-170).
+provider is billing. `created` reports `changed=true` always, but a re-run
+**converges** rather than duplicating ([ADR-017 amendments 2026-07-24 and
+2026-07-26](../../../adr/0017-keeper-side-core.md)) - on both layers:
+  - **VM layer (driver):** `CloudDriver.Create` scans the provider for this run's
+machines, reuses the live ones, creates only what is missing and returns
+`VmInfo` for the whole roster.
+  - **Registry layer:** a repeated `create` re-arms the `souls` records its own
+earlier attempt left behind (`pending` / `destroyed`, this incarnation's or
+unbound) instead of dying on the PK, and passes through - untouched and without
+a new bootstrap token - the hosts of this incarnation that are already up
+(`connected` / `disconnected`). Records that are `revoked`/`expired`, or belong
+to another incarnation, are refused.
+
+  Full table - see [cloud.md → Re-running create](../../../keeper/cloud.md#re-running-create-provision-idempotency-nim-170--nim-189).
 - **`destroyed` - destructive cascade operation.** `PluginHost.Destroy(vm_ids)`
 physically destroys instances; then (if `sids` is non-empty) one PG transaction
 translates `souls → destroyed`, active `soul_seeds → orphaned`,
@@ -124,11 +129,12 @@ billing operation should not happen silently). In audit-payload - `provider`,
 
 | Field | Type | Description |
 |---|---|---|
-| `hosts` | array of objects | One entry per VM: `{sid, vm_id, primary_ip, attributes?, bootstrap_token}`. |
-| `count` | number | Number of VMs created. |
-| `vm_ids` | array of string | Provider-side ID of the created VMs. |
+| `hosts` | array of objects | One entry per VM: `{sid, vm_id, primary_ip, attributes?, bootstrap_token}`. A host that was already up when the run started carries `onboarded: true` and **no** `bootstrap_token` - the delivery step skips it ([ADR-017 amendment 2026-07-26](../../../adr/0017-keeper-side-core.md)). |
+| `count` | number | Number of VMs in the roster (created plus reused by the driver). |
+| `vm_ids` | array of string | Provider-side ID of every VM of the roster - including the ones that were already there. `covenant.yml` writes this into `incarnation.state.provisioned_vm_ids`, so a short list would strand VMs at the provider on day-2 destroy. |
 | `action` | string | `created`. |
 | `reused` | number | How many `souls` records were taken over from an earlier provision attempt instead of created; `0` on a clean run ([ADR-017 amendment 2026-07-24](../../../adr/0017-keeper-side-core.md)). |
+| `existing` | number | How many hosts were already up and were passed through untouched, without a new bootstrap token; `0` on a clean run ([ADR-017 amendment 2026-07-26](../../../adr/0017-keeper-side-core.md)). |
 
 > **WARNING (security).** `hosts[].bootstrap_token` is a **plain** one-time use
 > token. It is intentionally in register-output: cloud-init flow is obliged to transfer it to

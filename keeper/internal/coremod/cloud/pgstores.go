@@ -21,7 +21,7 @@ type SoulPG struct {
 
 func NewSoulPG(db keepersoul.ExecQueryRower) *SoulPG { return &SoulPG{DB: db} }
 
-func (s *SoulPG) EnsureProvisionable(ctx context.Context, soul *keepersoul.Soul, incarnationName string) (bool, error) {
+func (s *SoulPG) EnsureProvisionable(ctx context.Context, soul *keepersoul.Soul, incarnationName string) (keepersoul.ProvisionOutcome, error) {
 	return keepersoul.EnsureProvisionable(ctx, s.DB, soul, incarnationName)
 }
 
