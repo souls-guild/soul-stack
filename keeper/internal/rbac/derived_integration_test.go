@@ -300,15 +300,21 @@ func TestIntegration_ParentRole_MultipleRolesUnion(t *testing.T) {
 	}
 }
 
-// TestIntegration_ParentRole_NotYetResolved pins the J1 boundary: storing a
-// parent grants the child NOTHING extra yet. Resolving a chain into effective
-// rights (attenuation + cascade) is NIM-180, and until it lands an unresolved
-// parent must fail in the safe direction — the child holds only its own rows,
-// which is narrower than the intended semantics, never wider.
+// TestIntegration_ParentRole_InheritsNothingImplicitly — a derived role with no
+// rows of its own grants NOTHING, however much its parent holds.
 //
-// NIM-180 is expected to invert this test rather than delete it: once the chain
-// resolves, the child inherits within its parent's ceiling.
-func TestIntegration_ParentRole_NotYetResolved(t *testing.T) {
+// This began life as the J1 boundary marker ("the chain is not resolved yet") and
+// survives NIM-180 with the same assertion and a different reason, which is
+// exactly why it was inverted rather than deleted. Resolution
+// ([flattenRoleGraph]) INTERSECTS the child's own rows with the parent's
+// effective set — it does not COPY them down. An empty intersection is empty.
+//
+// The distinction is the anti-escalation core of ADR-078(c): were inheritance a
+// copy, a permission added to a parent would silently appear on every descendant —
+// a widening cascade. Only narrowing cascades. The sibling case, where the child
+// DOES hold rows and follows its parent's scope, is
+// TestIntegration_Derived_CascadeThroughTheSnapshot.
+func TestIntegration_ParentRole_InheritsNothingImplicitly(t *testing.T) {
 	resetRBAC(t)
 	seedOperator(t, "archon-child", nil)
 	insertRole(t, "dba", "incarnation.get")
@@ -330,6 +336,7 @@ func TestIntegration_ParentRole_NotYetResolved(t *testing.T) {
 	}
 
 	if err := e.Check("archon-child", "incarnation", "get", nil); !errors.Is(err, ErrPermissionDenied) {
-		t.Fatalf("Check via an empty derived role = %v, want ErrPermissionDenied (J1 does not resolve the chain)", err)
+		t.Fatalf("Check via a derived role with no own rows = %v, want ErrPermissionDenied "+
+			"(inheritance intersects, it does not copy the parent's permissions down)", err)
 	}
 }
