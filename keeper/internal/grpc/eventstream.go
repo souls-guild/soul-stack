@@ -112,6 +112,12 @@ type EventStreamDeps struct {
 	KID          string
 	SoulLeaseTTL time.Duration
 
+	// KeeperVersion — the build version of this instance, announced in
+	// HelloReply (ADR-0076(h)). Diagnostic only: the engine-compat window is
+	// enforced Keeper-side at render, the Soul axis is capability-based. Empty →
+	// the field goes out empty, which is what a pre-ADR-0076 keeper looked like.
+	KeeperVersion string
+
 	// LastSeenFlushInterval throttles the `souls.last_seen_at` PG flush
 	// (ADR-006(a)). The live stream refreshes the heartbeat in Redis on
 	// every app message, but the PG snapshot is written no more than once
@@ -627,9 +633,10 @@ func (h *eventStreamHandler) EventStream(stream grpclib.BidiStreamingServer[keep
 
 	sessionID := audit.NewULID()
 	reply := &keeperv1.HelloReply{
-		SessionId:  sessionID,
-		Kid:        h.deps.KID,
-		ServerTime: timestamppb.Now(),
+		SessionId:     sessionID,
+		Kid:           h.deps.KID,
+		ServerTime:    timestamppb.Now(),
+		KeeperVersion: h.deps.KeeperVersion,
 	}
 	if err := stream.Send(&keeperv1.FromKeeper{
 		Payload: &keeperv1.FromKeeper_HelloReply{HelloReply: reply},

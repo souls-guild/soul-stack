@@ -74,6 +74,15 @@ func RenderForHost(ctx context.Context, deps Deps, recipe *applyrun.Recipe, inca
 	if err != nil {
 		return nil, nil, fmt.Errorf("scenario: RenderForHost: load service: %w", err)
 	}
+	// Engine-compat gate (ADR-0076(f)): the Acolyte renders on a DIFFERENT keeper
+	// instance than the one that started the run, and during a rolling upgrade the
+	// two run different versions — so the claiming instance re-checks the window
+	// against itself rather than trusting the orchestrator's verdict. Before the
+	// scenario body is parsed, for the same reason as the run-goroutine path.
+	if err := checkKeeperCompat(deps.KeeperVersion, serviceCompatEntity(art), depsLogger(deps)); err != nil {
+		return nil, nil, err
+	}
+
 	// The Acolyte mirrors the run-goroutine path: an upgrade run loads
 	// upgrade/<slug>/ (recipe.FromUpgrade), a regular run loads scenario/<name>/ (ADR-0068).
 	scn, err := parseScenarioFromArtifact(deps.Loader, art, recipe.ScenarioName, recipe.FromUpgrade)
@@ -157,7 +166,7 @@ func RenderForHost(ctx context.Context, deps Deps, recipe *applyrun.Recipe, inca
 		),
 	}
 	if deps.Destiny != nil {
-		renderIn.Destiny = deps.Destiny.resolverFor(art.Manifest)
+		renderIn.Destiny = deps.Destiny.resolverFor(art.Manifest, deps.KeeperVersion, depsLogger(deps))
 	}
 	tasks, plans, err := deps.Render.Render(ctx, renderIn)
 	if err != nil {

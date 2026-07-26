@@ -426,6 +426,43 @@ func serviceTelemetryOperation() huma.Operation {
 	}
 }
 
+// === GET /v1/services/{name}/compat (get-compat) — READ-with-path+query (no audit) ===
+
+// serviceCompatInput — huma-input GET /v1/services/{name}/compat. Name — path;
+// Ref — optional query-override; If-None-Match — conditional-GET (304 on match with
+// ETag=snapshot SHA1).
+type serviceCompatInput struct {
+	Name        string `path:"name" doc:"Service name"`
+	Ref         string `query:"ref" doc:"optional git-ref override (omitted -> ref from registry)"`
+	IfNoneMatch string `header:"If-None-Match" doc:"conditional GET: 304 if it matches ETag (snapshot SHA1)"`
+}
+
+// serviceCompatOutput — huma-output GET /v1/services/{name}/compat (FULL-TYPED).
+// Body — handlers.ServiceCompatReply. ETag/Cache-Control — response headers
+// (header tags; json:"-"). Status=304 -> huma does not write a body.
+type serviceCompatOutput struct {
+	Status       int    `json:"-"`
+	ETag         string `header:"ETag" json:"-"`
+	CacheControl string `header:"Cache-Control" json:"-"`
+	Body         handlers.ServiceCompatReply
+}
+
+// serviceCompatOperation — metadata for GET /v1/services/{name}/compat.
+// DefaultStatus=200. READ route: audit is NOT attached. Permission service.list. Errors:
+// 403 RBAC, 404 not-found, 500 (no lister / registry failure), 502 loader failed.
+func serviceCompatOperation() huma.Operation {
+	return huma.Operation{
+		OperationID:   "getServiceCompat",
+		Method:        http.MethodGet,
+		Path:          "/{name}/compat",
+		Summary:       "engine-compat window of a Service (declared keeper versions) + this keeper's version",
+		Description:   "Effective keeper-version window of the service (ADR-0076): the intersection of the `compat:` block declared by service.yml and by EVERY destiny the service pulls at its pinned ref - the narrowest wins. `entities[]` carries each contribution so a narrow bound is attributable to the artifact that set it; `effective_window` is null when nothing declares one (unbounded - existing services keep working). `status` is a backend catalog value the UI renders as-is: ok | unsupported (a run on this instance is rejected with keeper_version_unsupported) | not_enforced (this build carries no comparable version, e.g. 0.0.0-dev) | window_empty (the declarations do not overlap - an authoring error). `keeper_version` is the raw build string of the instance serving the request, `keeper_release` the release core actually compared - during a rolling upgrade instances differ, and enforcement belongs to the instance that renders. Permission service.list. Read-only, no audit. ETag=snapshot SHA1; If-None-Match -> 304. Cache-Control: immutable+year for a pinned commit-SHA ref, otherwise no-cache. 502 - loader failed (service or destiny repo unreachable).",
+		Tags:          []string{"service"},
+		DefaultStatus: http.StatusOK,
+		Errors:        []int{http.StatusForbidden, http.StatusNotFound, http.StatusInternalServerError, http.StatusBadGateway},
+	}
+}
+
 // etagQuote wraps the snapshot SHA1 in a strong ETag (`"<sha1>"`, RFC 7232).
 func etagQuote(sha1 string) string {
 	return `"` + sha1 + `"`

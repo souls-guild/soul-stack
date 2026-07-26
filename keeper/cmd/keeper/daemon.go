@@ -202,6 +202,12 @@ type daemon struct {
 	// core.cert.issued (signing role).
 	certPolicyResolver *certpolicy.Resolver
 
+	// serviceCompat — TTL cache of the engine-compat contributions of a Service
+	// snapshot (`compat:` of service.yml + one entry per declared destiny at its
+	// pinned ref) for `GET /v1/services/{name}/compat` (ADR-0076). Per-keeper,
+	// read-only view.
+	serviceCompat *serviceregistry.CompatCache
+
 	// serviceTelemetry — TTL cache of the default (per-service, no essence)
 	// host-vitals telemetry config from the manifest of the Service git-repo
 	// snapshot for `GET /v1/services/{name}/telemetry` (UI editor, ADR-042/072).
@@ -1581,6 +1587,46 @@ func (d *daemon) setupScenarioDeps(_ context.Context) error {
 	// scalar hot-reload takes effect), ref — service.yml::destiny[].
 	destinyLoader := artifact.NewDestinyLoader(destinyCacheRoot(cfg), logger)
 	d.destinySource = scenario.NewDestinySource(destinyLoader, d.serviceHolder)
+
+	// TTL cache of the engine-compat window for `GET /v1/services/{name}/compat`
+	// (ADR-0076(h)). Built here, after destinySource: the window is per ENTITY, so
+	// the lister reads `service.yml` AND every destiny the service declares, each at
+	// its own pinned ref. Both loaders reuse their materialized snapshots by sha1,
+	// and the TTL keeps a Service Detail open from re-walking the repos.
+	d.serviceCompat = serviceregistry.NewCompatCache(
+		serviceregistry.CompatListerFunc(func(ctx context.Context, name, gitURL, ref string) (*serviceregistry.CompatCatalog, error) {
+			art, err := d.serviceLoader.Load(ctx, artifact.ServiceRef{Name: name, Git: gitURL, Ref: ref})
+			if err != nil {
+				return nil, err
+			}
+			out := &serviceregistry.CompatCatalog{SHA1: art.SHA1}
+			svc := config.CompatEntity{Kind: config.CompatEntityService, Name: name, Ref: ref}
+			if art.Manifest != nil {
+				svc.Window = art.Manifest.Compat.KeeperWindow()
+			}
+			out.Entities = append(out.Entities, svc)
+			if art.Manifest == nil {
+				return out, nil
+			}
+			// Every declared destiny contributes: a stale destiny narrows the whole
+			// service, and that is the point — hiding it in one service-level field
+			// would make the bound unattributable (ADR-0076 trade-offs).
+			for _, dep := range art.Manifest.Destiny {
+				dm, derr := d.destinySource.LoadManifest(ctx, dep)
+				if derr != nil {
+					return nil, fmt.Errorf("compat: destiny %q (ref %s): %w", dep.Name, dep.Ref, derr)
+				}
+				out.Entities = append(out.Entities, config.CompatEntity{
+					Kind:   config.CompatEntityDestiny,
+					Name:   dep.Name,
+					Ref:    dep.Ref,
+					Window: dm.Compat.KeeperWindow(),
+				})
+			}
+			return out, nil
+		}),
+		0, // 0 → default CompatTTL
+	)
 	return nil
 }
 
@@ -2337,13 +2383,14 @@ func (d *daemon) setupGRPCBootstrap(ctx context.Context) error {
 	// Keeper daemon runtime wiring note.
 	grpcDone := make(chan struct{})
 	bootstrapDeps := keepergrpc.BootstrapDeps{
-		Pool:        d.pool,
-		VaultClient: d.vc,
-		AuditWriter: d.auditWriter,
-		KID:         cfg.KID,
-		PKIMount:    cfg.Vault.PKIMount,
-		PKIRole:     cfg.Vault.PKIRole,
-		Metrics:     d.grpcMetrics,
+		Pool:          d.pool,
+		VaultClient:   d.vc,
+		AuditWriter:   d.auditWriter,
+		KID:           cfg.KID,
+		PKIMount:      cfg.Vault.PKIMount,
+		PKIRole:       cfg.Vault.PKIRole,
+		Metrics:       d.grpcMetrics,
+		KeeperVersion: version,
 	}
 	// Keeper daemon runtime wiring note.
 	// Keeper daemon runtime wiring note.
@@ -2966,9 +3013,12 @@ func (d *daemon) setupGRPCEventStream(ctx context.Context) error {
 		// Keeper daemon runtime wiring note.
 		AcolyteEnabled: cfg.Acolytes > 0,
 		KID:            cfg.KID,
-		Summons:        summons,
-		LeaseOwner:     leaseOwner,
-		PassageCap:     passageCap,
+		// Engine-compat window enforcement is per rendering instance (ADR-0076(f)):
+		// the build version of THIS process, not a cluster-wide value.
+		KeeperVersion: version,
+		Summons:       summons,
+		LeaseOwner:    leaseOwner,
+		PassageCap:    passageCap,
 		// Keeper daemon runtime wiring note.
 		// Keeper daemon runtime wiring note.
 		// Keeper daemon runtime wiring note.
@@ -3045,6 +3095,7 @@ func (d *daemon) setupGRPCEventStream(ctx context.Context) error {
 		Redis:                 d.redisClient,
 		AuditWriter:           d.auditWriter,
 		KID:                   cfg.KID,
+		KeeperVersion:         version,
 		Manager:               streamManager,
 		ApplyBus:              d.applyBus,
 		ApplyRunDB:            d.pool,
@@ -4275,6 +4326,8 @@ func (d *daemon) setupAPIServer(ctx context.Context) error {
 		ServiceDependencies: d.serviceDependencies,
 		ServiceDirectives:   d.serviceDirectives,
 		ServiceTelemetry:    d.serviceTelemetry,
+		ServiceCompat:       d.serviceCompat,
+		KeeperVersion:       version,
 		AugurSvc:            d.augurSvc,
 		OracleSvc:           d.oracleSvc,
 		OperatorDB:          d.pool,
@@ -4878,6 +4931,7 @@ func (d *daemon) setupAcolyte(ctx context.Context) error {
 			Vault:          d.vc,
 			Audit:          d.auditWriter,
 			InputDenyPaths: cfg.Vault.InputDenyPaths,
+			KeeperVersion:  version,
 		},
 		KID:   cfg.KID,
 		Lease: acolyteLease(cfg),

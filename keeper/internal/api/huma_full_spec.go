@@ -200,6 +200,7 @@ func fullSpecGroups() []specGroup {
 			registerHumaServiceDependencies(api, stub)
 			registerHumaServiceDirectives(api, stub)
 			registerHumaServiceTelemetry(api, stub)
+			registerHumaServiceCompat(api, stub)
 			return nil
 		}},
 		{"/v1/provisioning-policy", func(api huma.API) error {

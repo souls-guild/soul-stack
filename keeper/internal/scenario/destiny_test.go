@@ -110,7 +110,7 @@ func TestDestinyResolver_RefFromManifest(t *testing.T) {
 			{Name: "pilot-flat", Ref: "v1.0.0"},
 		},
 	}
-	r := src.resolverFor(manifest)
+	r := src.resolverFor(manifest, "", nil)
 
 	if got := r.deps["pilot-flat"].Ref; got != "v1.0.0" {
 		t.Errorf("ref = %q, want v1.0.0", got)
@@ -133,7 +133,7 @@ func TestDestinyResolver_GitOverrideFromManifest(t *testing.T) {
 			{Name: "pilot-flat", Ref: "v1.0.0", Git: "git@github.com:custom/destiny-special.git"},
 		},
 	}
-	r := src.resolverFor(manifest)
+	r := src.resolverFor(manifest, "", nil)
 
 	dep := r.deps["pilot-flat"]
 	got, err := r.source.resolveURL(dep.Name, dep.Git)

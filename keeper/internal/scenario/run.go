@@ -180,6 +180,22 @@ func (r *Runner) run(ctx context.Context, spec RunSpec) {
 		abort("scenario_load_failed", fmt.Errorf("scenario: load service: %w", err))
 		return
 	}
+
+	// 2.1. Engine-compat gate for the service manifest (ADR-0076(f)): this
+	//      instance renders, so this instance's version must sit inside the window
+	//      the definition declares. Fail-closed BEFORE any dispatch, symmetric to
+	//      the soul_passage_unsupported gate below — and BEFORE the scenario body
+	//      is parsed: a keeper below the declared floor may not understand the
+	//      definition's DSL at all, and "you need keeper X" beats a parse error on
+	//      a construct this build never implemented. Each destiny is checked as
+	//      render resolves it (destinyResolver.Resolve): the per-entity check is
+	//      equivalent to checking the intersection and names the artifact that set
+	//      the bound.
+	if err := checkKeeperCompat(r.deps.KeeperVersion, serviceCompatEntity(art), log); err != nil {
+		abort("keeper_version_unsupported", err)
+		return
+	}
+
 	scn, err := r.parseScenario(art, spec.ScenarioName, spec.FromUpgrade)
 	if err != nil {
 		abort("scenario_load_failed", err)
@@ -337,7 +353,7 @@ func (r *Runner) run(ctx context.Context, spec RunSpec) {
 		Sealed: sealed,
 	}
 	if r.deps.Destiny != nil {
-		renderIn.Destiny = r.deps.Destiny.resolverFor(art.Manifest)
+		renderIn.Destiny = r.deps.Destiny.resolverFor(art.Manifest, r.deps.KeeperVersion, log)
 	}
 
 	// 4.9. Stratify the run by register dependency (staged-render, ADR-056 §b) —
@@ -497,6 +513,14 @@ func (r *Runner) run(ctx context.Context, spec RunSpec) {
 
 	tasks, plans, err = r.deps.Render.Render(ctx, renderIn)
 	if err != nil {
+		// A destiny resolved mid-render declared a window this keeper is outside
+		// of (ADR-0076(f)/(g)). Reported under its own reason code so the operator
+		// sees the versioned rejection rather than a generic `render_failed` —
+		// this is exactly the opaque UX the ADR replaces.
+		if errors.Is(err, config.ErrKeeperVersionUnsupported) {
+			abort("keeper_version_unsupported", err)
+			return
+		}
 		abort("render_failed", err)
 		return
 	}

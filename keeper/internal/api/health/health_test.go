@@ -44,6 +44,44 @@ func TestHealthz_AlwaysOK(t *testing.T) {
 	}
 }
 
+// TestHealthz_CarriesKeeperVersion — ADR-0076(h): the build version must be
+// reachable at runtime, and from the instance actually answering (a rolling
+// upgrade means instances differ). Liveness stays dependency-free: the version
+// is a build-time constant.
+func TestHealthz_CarriesKeeperVersion(t *testing.T) {
+	h := NewHandler(Deps{KeeperVersion: "v0.2.0-beta.1"})
+	rec := httptest.NewRecorder()
+	h.Healthz(rec, httptest.NewRequest(http.MethodGet, "/healthz", nil))
+
+	var body map[string]string
+	if err := json.NewDecoder(rec.Body).Decode(&body); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if body["version"] != "v0.2.0-beta.1" {
+		t.Errorf("version = %q, want the raw build string v0.2.0-beta.1", body["version"])
+	}
+	if body["status"] != "ok" {
+		t.Errorf("status = %q, want ok", body["status"])
+	}
+}
+
+// TestHealthz_OmitsVersionWhenUnwired — a wire-up without a version stays valid
+// (the key is absent rather than an empty string, so a client cannot mistake ""
+// for a real version).
+func TestHealthz_OmitsVersionWhenUnwired(t *testing.T) {
+	h := NewHandler(Deps{})
+	rec := httptest.NewRecorder()
+	h.Healthz(rec, httptest.NewRequest(http.MethodGet, "/healthz", nil))
+
+	var body map[string]string
+	if err := json.NewDecoder(rec.Body).Decode(&body); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if _, ok := body["version"]; ok {
+		t.Errorf("version key present without a wired version: %v", body)
+	}
+}
+
 func TestReadyz_AllUp(t *testing.T) {
 	h := NewHandler(Deps{PG: stubPinger{}, Redis: stubPinger{}, Vault: stubPinger{}})
 	rec := httptest.NewRecorder()

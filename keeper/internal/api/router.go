@@ -1121,6 +1121,17 @@ func buildRouter(verifier *jwt.Verifier, healthH *health.Handler, opH *handlers.
 				).Group(func(r chi.Router) {
 					registerHumaServiceTelemetry(newHumaCadenceAPI(r), serviceH)
 				})
+
+				// /compat — engine-compat window of the service (ADR-0076): the
+				// intersection of the `compat:` declared by service.yml and by every
+				// destiny it pulls, plus THIS instance's build version and the
+				// verdict. permission service.list. ETag=snapshot SHA1. 502 → the
+				// service or a destiny repo is unreachable.
+				r.With(
+					apimiddleware.RequirePermission(enforcer, "service", "list", apimiddleware.NoSelector),
+				).Group(func(r chi.Router) {
+					registerHumaServiceCompat(newHumaCadenceAPI(r), serviceH)
+				})
 			})
 		}
 

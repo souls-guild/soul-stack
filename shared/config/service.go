@@ -61,6 +61,13 @@ type ServiceManifest struct {
 	// Dereference via the nil-safe getters [TelemetryConfig.EnabledOrDefault] /
 	// [TelemetryConfig.IntervalOrDefault] / [TelemetryConfig.CollectorsOrDefault].
 	Telemetry *TelemetryConfig `yaml:"telemetry,omitempty"`
+
+	// Compat — optional engine-compatibility window (ADR-0076): the keeper
+	// versions this definition was authored and tested against. A missing block
+	// (nil) = unbounded, so existing manifests keep working with no migration.
+	// The window in force for a run is the intersection with every destiny the
+	// run resolves. Read via the nil-safe [CompatConfig.KeeperWindow].
+	Compat *CompatConfig `yaml:"compat,omitempty"`
 }
 
 // LifecycleConfig — the `lifecycle:` block of the service manifest. Both flags
@@ -374,6 +381,10 @@ func schemaValidateService(path string, root *ast.MappingNode, m *ServiceManifes
 			}
 		}
 	}
+
+	// 9) compat: — optional engine-compatibility window (ADR-0076). A nil block
+	// is valid (unbounded); the same grammar applies to destiny.yml.
+	out = append(out, validateCompat(root, m.Compat)...)
 
 	return out
 }

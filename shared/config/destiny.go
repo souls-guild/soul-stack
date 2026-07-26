@@ -22,6 +22,13 @@ type DestinyManifest struct {
 	Input           InputSchemaMap `yaml:"input,omitempty"`
 	Output          InputSchemaMap `yaml:"output,omitempty"`
 	RequiredModules []string       `yaml:"required_modules,omitempty"`
+
+	// Compat — optional engine-compatibility window (ADR-0076). A destiny is a
+	// separate git artifact pinned at its own ref (ADR-007), so it states its own
+	// tested keeper range; the run's effective window is the intersection with
+	// the service's. A missing block (nil) = unbounded. Read via the nil-safe
+	// [CompatConfig.KeeperWindow].
+	Compat *CompatConfig `yaml:"compat,omitempty"`
 }
 
 // reDestinyName — canonical kebab-case destiny name (`redis`, `cert-rotation`).
@@ -119,6 +126,10 @@ func schemaValidateDestiny(path string, root *ast.MappingNode, m *DestinyManifes
 	if topKeys["output"] {
 		out = append(out, validateInputSchemaMap(m.Output, findInputMapping(root, "output"), "$.output")...)
 	}
+
+	// 5) compat: — optional engine-compatibility window (ADR-0076). Same grammar
+	// as service.yml; a nil block is valid (unbounded).
+	out = append(out, validateCompat(root, m.Compat)...)
 
 	return out
 }

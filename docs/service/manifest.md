@@ -74,6 +74,7 @@ The root file contains only the service metadata and the contract for the runtim
 | `state_schema` | yes | JSON Schema object | Structure of `incarnation.state` JSONB fields in Postgres. Format - JSON Schema (`type: object` at root), draft-07 compatible. See "`state_schema` Format" below. |
 | `destiny` | yes (if there are dependencies) | array<{name, ref, git?}> | List of destiny dependencies. Each entry: `{ name: <kebab-case>, ref: <git-tag-or-branch> }` + opt. `git: <full-URL>` (override source, see below). Core modules **are not listed** - they are always available ([ADR-009](../adr/0009-scenario-dsl.md)). |
 | `modules` | yes (if there are dependencies) | array<{name, ref}> | List of custom modules `{ name: <namespace>.<module>, ref: <git-tag-or-branch> }`. Core modules **not listed** ([ADR-015](../adr/0015-core-modules-mvp.md)). From the Keeper entries **auto-synthesizes** install steps `core.module.installed` into the run plan - see below. |
+| `compat` | no | object | Declared **engine-compatibility window**: which keeper versions this definition was authored and tested against ([ADR-0076](../adr/0076-engine-compat-window.md)). One key today — `keeper: {min, max}`. No section → unbounded (existing services keep working). Semantics and example — ["`compat` Section"](#compat-section). |
 | `certificate_rotation` | no | object | Enables and configures **auto-rotation** of the incarnation's service TLS certs by the background Reaper ([ADR-017](../adr/0017-keeper-side-core.md)): fields `enable`/`scenario`/`threshold`/`pki_role`. No section (or `enable: false`) → rotation off. Semantics and example — ["`certificate_rotation` Section"](#certificate_rotation-section). |
 
 ### What is NOT in `service.yml`
@@ -129,6 +130,26 @@ Other field extensions (`enabled`, `optional`, etc.) are a separate propose-and-
 - **MVP limitation:** consumers are defined by `module:` script tasks; a module used only inside destiny (via `apply:`) is not considered a consumer - it requires an explicit install step.
 
 Full mechanics (synthesis points, position, token name, idempotency) - [`docs/keeper/modules.md → Auto-synthesis`](../keeper/modules.md).
+
+### `compat` Section
+
+An optional top-level section declaring the **keeper versions this definition is known to work with** ([ADR-0076](../adr/0076-engine-compat-window.md)). Keeper renders the DSL, and its grammar and module catalog evolve; without a declaration a version mismatch is only discovered by its symptoms — an opaque render failure that names the construct but never the version that would render it.
+
+```yaml
+# service.yml
+compat:
+  keeper:
+    min: "0.1.0"   # inclusive: the oldest keeper this definition was tested on
+    max: "0.3.0"   # EXCLUSIVE: the first keeper version NOT tested
+```
+
+**Grammar.** Plain `MAJOR.MINOR.PATCH` — no `v` prefix, no pre-release suffix, no `>=`/`<` operators. Both keys are optional (a one-sided window is fine: `{min: "0.1.0"}` = "0.1.0 and up"); a `compat:` block declaring neither bound is an error (`compat_window_incomplete`). `max` is **exclusive** so it reads as "the first version I have not tested" — the boundary an author can actually state — and `{min: "0.1.0", max: "0.3.0"}` covers the whole `0.1.x`–`0.2.x` band without a bump on every patch. `min` at or above `max` can never be satisfied and is rejected as `compat_window_empty`.
+
+**Per entity, intersected.** Every `destiny.yml` the service pulls declares its own window ([`docs/destiny/manifest.md`](../destiny/manifest.md#compat-section)) — a destiny is a separate git artifact pinned at its own `ref:`, so only it can state its own tested range. The window in force for a run is the **intersection**: `min` = the highest declared min, `max` = the lowest declared max. The narrowest declaration wins, and a single stale destiny narrows the whole service — deliberately, since a definition assembled from independently-versioned artifacts is only as compatible as its narrowest part.
+
+**Enforcement.** The keeper instance that **renders** checks its own version and, when it falls outside, aborts the run before any dispatch with reason `keeper_version_unsupported` and a message naming the artifact, its window and the running version. Service registration and a pin change (`POST`/`PATCH /v1/services`) do the same check early as a convenience `422` — the render path stays the authority, because a rolling cluster upgrade means instances differ in version. `GET /v1/services/{name}/compat` serves the effective window, every per-entity contribution and this instance's version, so the state is visible without attempting a run.
+
+**Builds with no version.** A pre-release keeper is compared by its release core (`0.1.0-beta.1` sits inside `[0.1.0, 0.3.0)`), and a `make build` standing past a tag is enforced as the release it is based on. Only a build carrying no version at all — the un-injected `0.0.0-dev` from a plain `go build`, or a tagless checkout's bare commit hash — is exempt: the window is then **not enforced**, and that is said out loud in the keeper log and in the API view rather than reported as a pass.
 
 ### `certificate_rotation` Section
 

@@ -114,7 +114,7 @@ func newServiceHandler(t *testing.T, pool *svcFakePool) *ServiceHandler {
 	if err != nil {
 		t.Fatalf("serviceregistry.NewService: %v", err)
 	}
-	return NewServiceHandler(svc, nil, nil, nil, nil, nil, nil, nil)
+	return NewServiceHandler(svc, nil, nil, nil, nil, nil, nil, nil, "", nil)
 }
 
 // newServiceHandlerWith assembles a ServiceHandler on top of pool + arbitrary listers.
@@ -124,7 +124,7 @@ func newServiceHandlerWith(t *testing.T, pool *svcFakePool, refs ServiceRefsList
 	if err != nil {
 		t.Fatalf("serviceregistry.NewService: %v", err)
 	}
-	return NewServiceHandler(svc, refs, scen, ss, deps, nil, nil, nil)
+	return NewServiceHandler(svc, refs, scen, ss, deps, nil, nil, nil, "", nil)
 }
 
 // newServiceHandlerWithDirectives assembles a ServiceHandler on top of pool + a directives
@@ -135,7 +135,7 @@ func newServiceHandlerWithDirectives(t *testing.T, pool *svcFakePool, directives
 	if err != nil {
 		t.Fatalf("serviceregistry.NewService: %v", err)
 	}
-	return NewServiceHandler(svc, nil, nil, nil, nil, directives, nil, nil)
+	return NewServiceHandler(svc, nil, nil, nil, nil, directives, nil, nil, "", nil)
 }
 
 // newServiceHandlerWithTelemetry assembles a ServiceHandler on top of pool + the
@@ -146,7 +146,7 @@ func newServiceHandlerWithTelemetry(t *testing.T, pool *svcFakePool, telemetry S
 	if err != nil {
 		t.Fatalf("serviceregistry.NewService: %v", err)
 	}
-	return NewServiceHandler(svc, nil, nil, nil, nil, nil, telemetry, nil)
+	return NewServiceHandler(svc, nil, nil, nil, nil, nil, telemetry, nil, "", nil)
 }
 
 func serviceRow(name, git, ref string) []any {

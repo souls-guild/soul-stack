@@ -94,6 +94,28 @@ func (l *DestinyLoader) Load(ctx context.Context, ref DestinyRef) (*DestinyArtif
 	return art, nil
 }
 
+// LoadManifest materializes the snapshot and parses ONLY `destiny.yml`, skipping
+// `tasks/main.yml` and `vars.yml`. Returns the manifest plus the snapshot SHA1.
+//
+// The engine-compat window needs exactly this (ADR-0076): the `compat:` block
+// lives in the manifest — a small, stable position in the schema — precisely so a
+// keeper that CANNOT parse the destiny's task body can still read which versions
+// the destiny claims to support, and answer "you need keeper X" instead of
+// failing on the body. [Load] parses the body first, so it can never produce that
+// answer. Also used by the compat view, which must stay serviceable for a
+// definition this keeper is too old to render.
+func (l *DestinyLoader) LoadManifest(ctx context.Context, ref DestinyRef) (*config.DestinyManifest, string, error) {
+	sha1, dir, err := l.snap.snapshot(ctx, ref.Name, ref.Git, ref.Ref, "destiny")
+	if err != nil {
+		return nil, "", err
+	}
+	manifest, err := l.parseManifest(&DestinyArtifact{Ref: ref, SHA1: sha1, LocalDir: dir})
+	if err != nil {
+		return nil, sha1, err
+	}
+	return manifest, sha1, nil
+}
+
 // parseVars reads the snapshot's optional `vars.yml` (destiny locals,
 // docs/destiny/vars.md). File absent → nil (destiny without locals).
 // securejoin clamps escapes outside the snapshot; for not-exist it returns

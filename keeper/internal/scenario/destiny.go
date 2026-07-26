@@ -3,6 +3,7 @@ package scenario
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"strings"
 
 	"github.com/souls-guild/soul-stack/keeper/internal/artifact"
@@ -72,16 +73,37 @@ func (s *DestinySource) resolveURL(name, gitOverride string) (string, error) {
 	return strings.ReplaceAll(template, destinyNamePlaceholder, name), nil
 }
 
+// LoadManifest materializes the destiny snapshot for one `service.yml →
+// destiny[]` entry and returns its parsed `destiny.yml`. Exported for the
+// compat-window view (ADR-0076(h)), which must read every destiny's DECLARED
+// window without running a render pass; the git URL follows the same hybrid rule
+// as resolution (per-entry `git` override → `default_destiny_source` + name).
+func (s *DestinySource) LoadManifest(ctx context.Context, dep config.DependencyRef) (*config.DestinyManifest, error) {
+	gitURL, err := s.resolveURL(dep.Name, dep.Git)
+	if err != nil {
+		return nil, err
+	}
+	manifest, _, err := s.loader.LoadManifest(ctx, artifact.DestinyRef{Name: dep.Name, Git: gitURL, Ref: dep.Ref})
+	if err != nil {
+		return nil, fmt.Errorf("scenario: load destiny manifest %q: %w", dep.Name, err)
+	}
+	return manifest, nil
+}
+
 // resolverFor builds a per-run [render.DestinyResolver] from the destiny[]
 // dependencies of a specific service snapshot. ref/git come from
 // manifest.Destiny[] by name; a destiny not declared in service.yml::destiny[]
 // is rejected (apply:destiny can only reference a declared dependency, ADR-007).
-func (s *DestinySource) resolverFor(manifest *config.ServiceManifest) *destinyResolver {
+//
+// keeperVersion is the raw build version of THIS instance, checked against each
+// resolved destiny's declared `compat:` window (ADR-0076(f)). Empty → the gate is
+// inert (nothing to compare), which is what unit paths without a wire-up get.
+func (s *DestinySource) resolverFor(manifest *config.ServiceManifest, keeperVersion string, log *slog.Logger) *destinyResolver {
 	deps := make(map[string]config.DependencyRef, len(manifest.Destiny))
 	for _, dep := range manifest.Destiny {
 		deps[dep.Name] = dep
 	}
-	return &destinyResolver{source: s, deps: deps}
+	return &destinyResolver{source: s, deps: deps, keeperVersion: keeperVersion, logger: log}
 }
 
 // destinyResolver — per-run implementation of [render.DestinyResolver]: knows
@@ -90,6 +112,13 @@ func (s *DestinySource) resolverFor(manifest *config.ServiceManifest) *destinyRe
 type destinyResolver struct {
 	source *DestinySource
 	deps   map[string]config.DependencyRef
+
+	// keeperVersion / logger — the engine-compat gate (ADR-0076): a destiny is a
+	// separately pinned artifact declaring its own window, so it is checked when
+	// the render phase resolves it, not upfront (resolving every declared destiny
+	// eagerly would clone repos a run never touches).
+	keeperVersion string
+	logger        *slog.Logger
 }
 
 // Resolve loads a destiny by name: ref from service.yml::destiny[], git URL by
@@ -104,7 +133,28 @@ func (r *destinyResolver) Resolve(ctx context.Context, name string) (*render.Res
 	if err != nil {
 		return nil, err
 	}
-	art, err := r.source.loader.Load(ctx, artifact.DestinyRef{Name: name, Git: gitURL, Ref: dep.Ref})
+	destinyRef := artifact.DestinyRef{Name: name, Git: gitURL, Ref: dep.Ref}
+
+	// Engine-compat gate (ADR-0076(f)), BEFORE the task body is parsed: the window
+	// lives in `destiny.yml` exactly so a keeper that cannot parse a newer DSL body
+	// can still answer "you need keeper X" rather than choke on the body. The
+	// snapshot is materialized once and reused by sha1, so the manifest-only pass
+	// costs one small YAML parse.
+	manifest, _, err := r.source.loader.LoadManifest(ctx, destinyRef)
+	if err != nil {
+		return nil, fmt.Errorf("scenario: load destiny manifest %q: %w", name, err)
+	}
+	entity := config.CompatEntity{
+		Kind:   config.CompatEntityDestiny,
+		Name:   name,
+		Ref:    dep.Ref,
+		Window: manifest.Compat.KeeperWindow(),
+	}
+	if err := checkKeeperCompat(r.keeperVersion, entity, r.logger); err != nil {
+		return nil, err
+	}
+
+	art, err := r.source.loader.Load(ctx, destinyRef)
 	if err != nil {
 		return nil, fmt.Errorf("scenario: load destiny %q: %w", name, err)
 	}

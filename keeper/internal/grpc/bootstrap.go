@@ -91,6 +91,11 @@ type BootstrapDeps struct {
 	// Sigil existed). Implemented in the daemon as an atomic holder
 	// (trustAnchorHolder), updated by the `sigil:anchors-changed` watcher.
 	SigilAnchorSource TrustAnchorSource
+
+	// KeeperVersion — the build version of this instance, returned by the Ping
+	// RPC (ADR-0076(h)). Empty → Ping answers with an empty version, which is
+	// exactly what a pre-ADR-0076 keeper looked like on the wire.
+	KeeperVersion string
 }
 
 func (d BootstrapDeps) validate() error {
@@ -132,8 +137,13 @@ func newBootstrapHandler(deps BootstrapDeps, logger *slog.Logger) *bootstrapHand
 
 // Ping — health-check RPC, available without authorization (server-only TLS
 // already restricts callers on its own).
+//
+// Version carries the keeper BUILD version (ADR-0076(h)). It used to return the
+// KID — a field-name/value drift: the KID identifies the instance, not its
+// version, and it is already delivered by HelloReply.kid. Nothing in-repo read
+// the field, so correcting it breaks no consumer.
 func (h *bootstrapHandler) Ping(_ context.Context, _ *keeperv1.PingRequest) (*keeperv1.PingReply, error) {
-	return &keeperv1.PingReply{Version: h.deps.KID}, nil
+	return &keeperv1.PingReply{Version: h.deps.KeeperVersion}, nil
 }
 
 // Bootstrap — implements the unary onboarding RPC per [docs/soul/onboarding.md].

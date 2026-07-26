@@ -162,8 +162,8 @@ func TestBootstrapServer_StartShutdown(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Ping: %v", err)
 	}
-	if reply.GetVersion() != "kid-test" {
-		t.Errorf("Ping.Version = %q, want kid-test", reply.GetVersion())
+	if reply.GetVersion() != "v0.2.0" {
+		t.Errorf("Ping.Version = %q, want the build version v0.2.0 (ADR-0076(h): the field is not the KID)", reply.GetVersion())
 	}
 
 	cancel()
@@ -227,12 +227,13 @@ func TestBootstrapServer_RejectsPlaintextClient(t *testing.T) {
 // called in these tests (only Ping).
 func fakeValidDeps() BootstrapDeps {
 	return BootstrapDeps{
-		Pool:        fakeTxBeginner{},
-		VaultClient: fakeSigner{},
-		AuditWriter: nopAudit{},
-		KID:         "kid-test",
-		PKIMount:    "pki",
-		PKIRole:     "soul-seed",
+		Pool:          fakeTxBeginner{},
+		VaultClient:   fakeSigner{},
+		AuditWriter:   nopAudit{},
+		KID:           "kid-test",
+		PKIMount:      "pki",
+		PKIRole:       "soul-seed",
+		KeeperVersion: "v0.2.0",
 	}
 }
 

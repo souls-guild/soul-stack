@@ -89,6 +89,17 @@ type ServiceTelemetryLister interface {
 	ListServiceTelemetry(ctx context.Context, name, gitURL, ref string) (*serviceregistry.TelemetryCatalog, error)
 }
 
+// ServiceCompatLister — read surface for the engine-compat contributions of a
+// service snapshot: the `compat:` window declared by `service.yml` plus one entry
+// per `destiny[]` dependency at its own pinned ref, and the snapshot SHA1 (for
+// ETag). Symmetric to [ServiceTelemetryLister]: the handler takes a minimal
+// dependency, and the git-clone of the service repo AND of every declared destiny
+// lives inside the implementation (TTL cache + loaders). With nil,
+// `GET /v1/services/{name}/compat` returns 500 "not configured".
+type ServiceCompatLister interface {
+	ListServiceCompat(ctx context.Context, name, gitURL, ref string) (*serviceregistry.CompatCatalog, error)
+}
+
 // ServiceHandler — the Service registry endpoints (register / list / get /
 // update / deregister / list-refs / list-scenarios / list-state-schema).
 // Delegates business logic to [serviceregistry.Service]; /refs / /scenarios /
@@ -105,21 +116,29 @@ type ServiceHandler struct {
 	dependencies ServiceDependenciesLister
 	directives   ServiceDirectivesLister
 	telemetry    ServiceTelemetryLister
+	compat       ServiceCompatLister
 	logger       *slog.Logger
+
+	// keeperVersion — the raw build version of THIS instance, reported by the
+	// compat endpoint (ADR-0076(f)): during a rolling upgrade cluster instances
+	// differ, and the verdict must come from the instance answering the request.
+	keeperVersion string
 }
 
 // NewServiceHandler creates the handler. svc is required (panics on nil —
 // the single misconfiguration point, the caller must pass non-nil). refs /
-// scenarios / stateSchema / dependencies / directives / telemetry are optional: when
-// nil, the corresponding endpoint responds 500 (feature not configured).
-func NewServiceHandler(svc *serviceregistry.Service, refs ServiceRefsLister, scenarios ServiceScenarioLister, stateSchema ServiceStateSchemaLister, dependencies ServiceDependenciesLister, directives ServiceDirectivesLister, telemetry ServiceTelemetryLister, logger *slog.Logger) *ServiceHandler {
+// scenarios / stateSchema / dependencies / directives / telemetry / compat are
+// optional: when nil, the corresponding endpoint responds 500 (feature not configured).
+// keeperVersion may be empty — the compat endpoint then reports the window as not
+// enforced (nothing to compare), which is the honest answer for such a wire-up.
+func NewServiceHandler(svc *serviceregistry.Service, refs ServiceRefsLister, scenarios ServiceScenarioLister, stateSchema ServiceStateSchemaLister, dependencies ServiceDependenciesLister, directives ServiceDirectivesLister, telemetry ServiceTelemetryLister, compat ServiceCompatLister, keeperVersion string, logger *slog.Logger) *ServiceHandler {
 	if svc == nil {
 		panic("handlers.NewServiceHandler: serviceregistry.Service is nil")
 	}
 	if logger == nil {
 		logger = slog.New(slog.NewJSONHandler(io.Discard, nil))
 	}
-	return &ServiceHandler{svc: svc, refs: refs, scenarios: scenarios, stateSchema: stateSchema, dependencies: dependencies, directives: directives, telemetry: telemetry, logger: logger}
+	return &ServiceHandler{svc: svc, refs: refs, scenarios: scenarios, stateSchema: stateSchema, dependencies: dependencies, directives: directives, telemetry: telemetry, compat: compat, keeperVersion: keeperVersion, logger: logger}
 }
 
 // ServiceSpecStub — a non-empty *ServiceHandler stub for generating the huma OpenAPI
@@ -198,6 +217,12 @@ func (r ServiceRegisterReply) AuditPayload() middleware.AuditPayload {
 func (h *ServiceHandler) RegisterTyped(ctx context.Context, claims *jwt.Claims, req ServiceRegisterInput) (ServiceRegisterReply, error) {
 	var zero ServiceRegisterReply
 	callerAID := claims.Subject
+	// Engine-compat convenience check (ADR-0076(f)): reject an obviously
+	// incompatible pin NOW, while the operator can still choose another ref. The
+	// authority stays on the render path; an unreachable repo is allowed through.
+	if err := h.EarlyCompatCheck(ctx, "service.register", req.Name, req.Git, req.Ref); err != nil {
+		return zero, err
+	}
 	entry, err := h.svc.CreateService(ctx, serviceregistry.CreateServiceInput{
 		Name:      req.Name,
 		Git:       req.Git,
@@ -282,6 +307,11 @@ func (r ServiceUpdateReply) AuditPayload() middleware.AuditPayload {
 func (h *ServiceHandler) UpdateTyped(ctx context.Context, claims *jwt.Claims, name string, req ServiceUpdateInput) (ServiceUpdateReply, error) {
 	var zero ServiceUpdateReply
 	callerAID := claims.Subject
+	// Same convenience check as register: a pin change is the other moment an
+	// operator can still pick a different ref (ADR-0076(f)).
+	if err := h.EarlyCompatCheck(ctx, "service.update", name, req.Git, req.Ref); err != nil {
+		return zero, err
+	}
 	entry, err := h.svc.UpdateService(ctx, serviceregistry.UpdateServiceInput{
 		Name:      name,
 		Git:       req.Git,
@@ -298,6 +328,7 @@ func (h *ServiceHandler) UpdateTyped(ctx context.Context, claims *jwt.Claims, na
 	h.invalidateDependencies(entry.Name)
 	h.invalidateDirectives(entry.Name)
 	h.invalidateTelemetry(entry.Name)
+	h.invalidateCompat(entry.Name)
 
 	return ServiceUpdateReply{
 		Body: toServiceResponse(entry),
@@ -340,6 +371,7 @@ func (h *ServiceHandler) DeregisterTyped(ctx context.Context, name string) (Serv
 	h.invalidateDependencies(name)
 	h.invalidateDirectives(name)
 	h.invalidateTelemetry(name)
+	h.invalidateCompat(name)
 	return ServiceNameReply{Name: name}, nil
 }
 
@@ -420,6 +452,18 @@ func (h *ServiceHandler) invalidateTelemetry(name string) {
 		return
 	}
 	if inv, ok := h.telemetry.(interface{ Invalidate(string) }); ok {
+		inv.Invalidate(name)
+	}
+}
+
+// invalidateCompat — best-effort compat-cache invalidation by name (paired
+// semantics with [invalidateTelemetry]). A git-URL/ref change repoints the
+// service at different manifests, so the cached window must disappear.
+func (h *ServiceHandler) invalidateCompat(name string) {
+	if h.compat == nil {
+		return
+	}
+	if inv, ok := h.compat.(interface{ Invalidate(string) }); ok {
 		inv.Invalidate(name)
 	}
 }

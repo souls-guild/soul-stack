@@ -464,6 +464,14 @@ type Deps struct {
 	// Set at wire-up with a thin wrapper over redis.SoulsLackingCapability.
 	PassageCap PassageCapabilityChecker
 
+	// KeeperVersion — the raw build version of THIS keeper instance, checked
+	// against the `compat:` window declared by the service and by every destiny a
+	// run resolves (ADR-0076(f)): the rendering instance is the authority, since
+	// a rolling upgrade means cluster instances differ in version. Empty (or any
+	// string carrying no version, e.g. `0.0.0-dev`) → the window is NOT enforced
+	// and the skip is logged; unit paths without a wire-up behave as before.
+	KeeperVersion string
+
 	// PollInterval / RunTimeout — override the defaults (for tests). Zero
 	// value → default.
 	PollInterval time.Duration

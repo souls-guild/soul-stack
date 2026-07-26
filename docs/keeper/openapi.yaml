@@ -533,6 +533,37 @@ components:
         - self_kid
         - self_health
       type: object
+    CompatEntityView:
+      additionalProperties: false
+      properties:
+        compatible:
+          type: boolean
+        kind:
+          type: string
+        name:
+          type: string
+        ref:
+          type: string
+        window:
+          $ref: "#/components/schemas/CompatWindowView"
+      required:
+        - kind
+        - name
+        - window
+        - compatible
+      type: object
+    CompatWindowView:
+      additionalProperties: false
+      properties:
+        display:
+          type: string
+        max:
+          type: string
+        min:
+          type: string
+      required:
+        - display
+      type: object
     DecreeCreateRequest:
       additionalProperties: false
       properties:
@@ -3110,6 +3141,43 @@ components:
           type: string
       required:
         - key
+      type: object
+    ServiceCompatReply:
+      additionalProperties: false
+      properties:
+        detail:
+          type: string
+        effective_window:
+          $ref: "#/components/schemas/CompatWindowView"
+        enforced:
+          type: boolean
+        entities:
+          items:
+            $ref: "#/components/schemas/CompatEntityView"
+          type:
+            - array
+            - "null"
+        keeper_release:
+          type: string
+        keeper_version:
+          type: string
+        ref:
+          type: string
+        service:
+          type: string
+        sha1:
+          type: string
+        status:
+          type: string
+      required:
+        - service
+        - ref
+        - sha1
+        - keeper_version
+        - enforced
+        - status
+        - effective_window
+        - entities
       type: object
     ServiceDependenciesReply:
       additionalProperties: false
@@ -10705,6 +10773,78 @@ paths:
                 $ref: "#/components/schemas/HumaProblemError"
           description: Internal Server Error
       summary: Update a Service (replace mutable-fields)
+      tags:
+        - service
+  /v1/services/{name}/compat:
+    get:
+      description: "Effective keeper-version window of the service (ADR-0076): the intersection of the `compat:` block declared by service.yml and by EVERY destiny the service pulls at its pinned ref - the narrowest wins. `entities[]` carries each contribution so a narrow bound is attributable to the artifact that set it; `effective_window` is null when nothing declares one (unbounded - existing services keep working). `status` is a backend catalog value the UI renders as-is: ok | unsupported (a run on this instance is rejected with keeper_version_unsupported) | not_enforced (this build carries no comparable version, e.g. 0.0.0-dev) | window_empty (the declarations do not overlap - an authoring error). `keeper_version` is the raw build string of the instance serving the request, `keeper_release` the release core actually compared - during a rolling upgrade instances differ, and enforcement belongs to the instance that renders. Permission service.list. Read-only, no audit. ETag=snapshot SHA1; If-None-Match -> 304. Cache-Control: immutable+year for a pinned commit-SHA ref, otherwise no-cache. 502 - loader failed (service or destiny repo unreachable)."
+      operationId: getServiceCompat
+      parameters:
+        - description: Service name
+          in: path
+          name: name
+          required: true
+          schema:
+            description: Service name
+            type: string
+        - description: optional git-ref override (omitted -> ref from registry)
+          explode: false
+          in: query
+          name: ref
+          schema:
+            description: optional git-ref override (omitted -> ref from registry)
+            type: string
+        - description: "conditional GET: 304 if it matches ETag (snapshot SHA1)"
+          in: header
+          name: If-None-Match
+          schema:
+            description: "conditional GET: 304 if it matches ETag (snapshot SHA1)"
+            type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ServiceCompatReply"
+          description: OK
+          headers:
+            Cache-Control:
+              schema:
+                type: string
+            ETag:
+              schema:
+                type: string
+        "403":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/HumaProblemError"
+          description: Forbidden
+        "404":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/HumaProblemError"
+          description: Not Found
+        "422":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/HumaProblemError"
+          description: Unprocessable Entity
+        "500":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/HumaProblemError"
+          description: Internal Server Error
+        "502":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/HumaProblemError"
+          description: Bad Gateway
+      summary: engine-compat window of a Service (declared keeper versions) + this keeper's version
       tags:
         - service
   /v1/services/{name}/dependencies:

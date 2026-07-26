@@ -44,6 +44,20 @@ message HelloReply {
 
   // Server time — for diagnosing clock skew between Keeper and Soul.
   google.protobuf.Timestamp server_time = 3;
+
+  // keeper_version: the build version of the Keeper instance serving this
+  // stream, verbatim as the binary reports it (ADR-0076(h)). The cluster is
+  // horizontally scalable and rolling-upgraded, so instances differ in version;
+  // a Soul that logs the value can tell WHICH keeper it is talking to.
+  //
+  // The raw git-describe string (`v0.1.0-beta.1`, `v0.1.0-beta.1-12-gabc1234`,
+  // `0.0.0-dev` for a build without ldflags) — not normalized on the wire: the
+  // engine-compat window is enforced Keeper-side (ADR-0076(f)), the Soul side is
+  // capability-based (n), so this field is diagnostic, never a gate.
+  //
+  // An empty value = an older Keeper that predates the field (forward-compat
+  // only-add, ADR-012(c)). Never reuse this field number.
+  string keeper_version = 4;
 }
 
 // SeedRotationRequest is Soul asking to issue a new SoulSeed over the live stream

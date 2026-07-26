@@ -303,7 +303,7 @@ func (r *Runner) CheckDrift(ctx context.Context, spec CheckDriftSpec) (*DriftRep
 		),
 	}
 	if r.deps.Destiny != nil {
-		renderIn.Destiny = r.deps.Destiny.resolverFor(art.Manifest)
+		renderIn.Destiny = r.deps.Destiny.resolverFor(art.Manifest, r.deps.KeeperVersion, log)
 	}
 	tasks, _, err := r.deps.Render.Render(ctx, renderIn)
 	if err != nil {

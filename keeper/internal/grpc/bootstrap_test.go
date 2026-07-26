@@ -390,15 +390,16 @@ func TestBootstrap_EarlyReject_WrongSID(t *testing.T) {
 }
 
 // TestBootstrap_Ping — Ping is implemented independently of Bootstrap; it
-// must pass even without working deps.
+// must pass even without working deps. Version carries the BUILD version, not
+// the KID (the field used to return the KID — corrected by ADR-0076(h)).
 func TestBootstrap_Ping(t *testing.T) {
-	h := newBootstrapHandler(BootstrapDeps{KID: "kid-x"}, discardLogger(t))
+	h := newBootstrapHandler(BootstrapDeps{KID: "kid-x", KeeperVersion: "v0.2.0"}, discardLogger(t))
 	reply, err := h.Ping(context.Background(), &keeperv1.PingRequest{})
 	if err != nil {
 		t.Fatalf("Ping err: %v", err)
 	}
-	if reply.GetVersion() != "kid-x" {
-		t.Errorf("Ping.Version = %q, want kid-x", reply.GetVersion())
+	if reply.GetVersion() != "v0.2.0" {
+		t.Errorf("Ping.Version = %q, want the build version v0.2.0 (not the KID)", reply.GetVersion())
 	}
 }
 

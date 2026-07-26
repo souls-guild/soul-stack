@@ -36,6 +36,7 @@ The root file is **only** the manifest. There is no list of tasks in it; he live
 | `description:` | recommended | One or two phrases in English: what destiny does on the host. Visible in UI Keeper, MCP directory, output `soul-lint`. |
 | `input:` | yes (if there are parameters) | Entry contract. Format - general standard [`docs/input.md`](../input.md); destiny-specifics - in [input.md](input.md). |
 | `output:` | no (yes = destiny returns the result to the caller) | Exit contract. **Symmetrical to `input:`** in shape - same general standard [`docs/input.md`](../input.md); destiny-specifics - in [output.md](output.md). Optional: if destiny doesn't publish anything to the outside, the block is omitted. |
+| `compat:` | no | Declared **engine-compatibility window** — which keeper versions this destiny was tested against ([ADR-0076](../adr/0076-engine-compat-window.md)). One key today: `keeper: {min, max}`. No block → unbounded. See ["`compat` Section"](#compat-section). |
 | `required_modules:` | no | List of **custom** modules (two-level form `<namespace>.<module>`) required by tasks. Core modules **are not listed** - they are always available. See [architecture.md → "Addressing modules"](../architecture.md). |
 
 ### What is NOT in `destiny.yml`
@@ -73,6 +74,22 @@ input:
 ```
 
 A working example with a complete `input:` block is in [examples/destiny/redis/destiny.yml](../../examples/destiny/redis/destiny.yml).
+
+## `compat` Section
+
+An optional top-level section declaring the **keeper versions this destiny is known to work with** ([ADR-0076](../adr/0076-engine-compat-window.md)).
+
+```yaml
+# redis/destiny.yml
+compat:
+  keeper:
+    min: "0.1.0"   # inclusive
+    max: "0.3.0"   # EXCLUSIVE - the first keeper version NOT tested
+```
+
+The grammar is identical to the service manifest's — plain `MAJOR.MINOR.PATCH`, no `v` prefix, no pre-release suffix, no operators; both keys optional, a block with neither is `compat_window_incomplete`, and `min >= max` is `compat_window_empty`. Full semantics, the intersection rule and the enforcement points: [`docs/service/manifest.md → compat Section`](../service/manifest.md#compat-section).
+
+**Why the destiny declares its own.** A destiny is a separate git artifact pinned at its own `ref:` ([ADR-007](../adr/0007-versioning-git-ref.md)): it is authored, tested and upgraded independently of the service that consumes it, so only it can state its own tested range. The window in force for a run is the intersection of the service's and every destiny's — the narrowest wins. Keeper checks each declaration as it resolves the destiny, so the rejection names **this** destiny and its ref rather than the service as a whole.
 
 ## When you need neighbors `tasks/main.yml`
 

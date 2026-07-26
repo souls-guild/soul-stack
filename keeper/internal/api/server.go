@@ -146,6 +146,20 @@ type Deps struct {
 	// essence.ResolveEffectiveTelemetry.
 	ServiceTelemetry handlers.ServiceTelemetryLister
 
+	// ServiceCompat — TTL cache of the engine-compat contributions of a Service
+	// snapshot (the `compat:` window of `service.yml` + one entry per declared
+	// destiny at its pinned ref) for `GET /v1/services/{name}/compat` (ADR-0076(h)).
+	// Optional: when nil the /compat endpoint responds 500 (feature not configured);
+	// service CRUD itself stays operational. Production wire-up in `keeper run`
+	// passes *serviceregistry.CompatCache over CompatListerFunc.
+	ServiceCompat handlers.ServiceCompatLister
+
+	// KeeperVersion — the raw build version of THIS instance, reported by
+	// `/healthz` and by the compat endpoint's verdict (ADR-0076(f)/(h)): a rolling
+	// upgrade means instances differ, so the answer must come from the instance
+	// serving the request. Empty → the window reads as not enforced.
+	KeeperVersion string
+
 	// AugurSvc — the Augur registry management logic (omen.create/list/delete +
 	// rite.create/list/delete, ADR-025). When nil the augur.* routes aren't wired
 	// (the production wire-up in `keeper run` passes the same *augur.Service as MCP).
@@ -573,9 +587,10 @@ func NewServer(cfg config.KeeperListenSimple, deps Deps, logger *slog.Logger) (*
 	}
 
 	healthH := health.NewHandler(health.Deps{
-		PG:    deps.PGPinger,
-		Redis: deps.RedisPinger,
-		Vault: deps.VaultPinger,
+		PG:            deps.PGPinger,
+		Redis:         deps.RedisPinger,
+		Vault:         deps.VaultPinger,
+		KeeperVersion: deps.KeeperVersion,
 	})
 	opH := handlers.NewOperatorHandler(deps.OperatorDB, deps.JWTIssuer, deps.RBAC, deps.TTLDefault, logger)
 	// Gate for the provisioning_allowed_methods policy on POST /v1/operators (ADR-058
@@ -655,7 +670,7 @@ func NewServer(cfg config.KeeperListenSimple, deps Deps, logger *slog.Logger) (*
 	// Symmetric to roleH / sigilH.
 	var serviceH *handlers.ServiceHandler
 	if deps.ServiceSvc != nil {
-		serviceH = handlers.NewServiceHandler(deps.ServiceSvc, deps.ServiceRefs, deps.ServiceScenarios, deps.ServiceStateSchema, deps.ServiceDependencies, deps.ServiceDirectives, deps.ServiceTelemetry, logger)
+		serviceH = handlers.NewServiceHandler(deps.ServiceSvc, deps.ServiceRefs, deps.ServiceScenarios, deps.ServiceStateSchema, deps.ServiceDependencies, deps.ServiceDirectives, deps.ServiceTelemetry, deps.ServiceCompat, deps.KeeperVersion, logger)
 	}
 
 	// provisioningPolicyH is optional: GET reads the policy snapshot (Holder), PUT

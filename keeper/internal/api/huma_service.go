@@ -236,6 +236,34 @@ func registerHumaServiceTelemetry(humaAPI huma.API, serviceH *handlers.ServiceHa
 	})
 }
 
+// registerHumaServiceCompat mounts GET /v1/services/{name}/compat via huma
+// (READ-with-path+query, NO audit). serviceH nil → no-op. Handler:
+// ListServiceCompatTyped (name + optional ref + THIS instance's build version) →
+// typed output (404/502 via problem) + ETag/Cache-Control (the declared windows are
+// immutable on a pinned git-ref); If-None-Match matches SHA1 → 304 with no body.
+// RBAC service.list — on the group. The verdict carries the build version of the
+// instance serving the request (held by the handler): enforcement belongs to the
+// rendering instance (ADR-0076(f)), not to a cluster-wide constant.
+func registerHumaServiceCompat(humaAPI huma.API, serviceH *handlers.ServiceHandler) {
+	if serviceH == nil {
+		return
+	}
+	huma.Register(humaAPI, serviceCompatOperation(), func(ctx context.Context, in *serviceCompatInput) (*serviceCompatOutput, error) {
+		reply, err := serviceH.ListServiceCompatTyped(ctx, in.Name, in.Ref)
+		if err != nil {
+			return nil, serviceProblem(err)
+		}
+		out := &serviceCompatOutput{ETag: etagQuote(reply.SHA1), CacheControl: directivesCacheControlFor(reply.Ref)}
+		if etagMatchesSHA1(in.IfNoneMatch, reply.SHA1) {
+			out.Status = http.StatusNotModified // huma skips the body on 304
+			return out, nil
+		}
+		out.Status = http.StatusOK
+		out.Body = reply
+		return out, nil
+	})
+}
+
 // serviceMissingClaims — a defensive response when claims are absent from the ctx
 // (unreachable: RequireJWT sets claims before huma). problem+json (parity roleMissingClaims).
 func serviceMissingClaims() huma.StatusError {
@@ -276,6 +304,7 @@ func HumaServiceSpecYAML() (string, error) {
 		registerHumaServiceDependencies(api, stub)
 		registerHumaServiceDirectives(api, stub)
 		registerHumaServiceTelemetry(api, stub)
+		registerHumaServiceCompat(api, stub)
 		return nil
 	})
 }

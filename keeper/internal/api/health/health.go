@@ -44,6 +44,13 @@ type Deps struct {
 	PG    Pinger
 	Redis Pinger
 	Vault Pinger
+
+	// KeeperVersion — the build version of THIS instance, reported by `/healthz`
+	// (ADR-0076(h)). The engine-compat window is enforced per rendering instance,
+	// and during a rolling upgrade instances differ in version — so an operator
+	// (and the UI) needs a version answer from the instance actually serving.
+	// Empty → the field is omitted from the body (a wire-up without it stays valid).
+	KeeperVersion string
 }
 
 // Handler holds the assembled health endpoints, registered on the router.
@@ -58,10 +65,16 @@ func NewHandler(deps Deps) *Handler {
 	return &Handler{deps: deps}
 }
 
-// Healthz writes 200 OK with a fixed body. Does not depend on the state of
-// external systems (by definition of liveness — "the process responds").
+// Healthz writes 200 OK with `{"status":"ok"}` plus this instance's build
+// version when one was wired (ADR-0076(h)). Does not depend on the state of
+// external systems (by definition of liveness — "the process responds"), so
+// adding the version keeps it dependency-free: it is a build-time constant.
 func (h *Handler) Healthz(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+	body := map[string]string{"status": "ok"}
+	if h.deps.KeeperVersion != "" {
+		body["version"] = h.deps.KeeperVersion
+	}
+	writeJSON(w, http.StatusOK, body)
 }
 
 // Readyz checks all non-nil dependencies in parallel, each under the

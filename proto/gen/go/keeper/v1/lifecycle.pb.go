@@ -110,7 +110,20 @@ type HelloReply struct {
 	// KID of the Keeper instance serving this stream.
 	Kid string `protobuf:"bytes,2,opt,name=kid,proto3" json:"kid,omitempty"`
 	// Server time — for diagnosing clock skew between Keeper and Soul.
-	ServerTime    *timestamppb.Timestamp `protobuf:"bytes,3,opt,name=server_time,json=serverTime,proto3" json:"server_time,omitempty"`
+	ServerTime *timestamppb.Timestamp `protobuf:"bytes,3,opt,name=server_time,json=serverTime,proto3" json:"server_time,omitempty"`
+	// keeper_version: the build version of the Keeper instance serving this
+	// stream, verbatim as the binary reports it (ADR-0076(h)). The cluster is
+	// horizontally scalable and rolling-upgraded, so instances differ in version;
+	// a Soul that logs the value can tell WHICH keeper it is talking to.
+	//
+	// The raw git-describe string (`v0.1.0-beta.1`, `v0.1.0-beta.1-12-gabc1234`,
+	// `0.0.0-dev` for a build without ldflags) — not normalized on the wire: the
+	// engine-compat window is enforced Keeper-side (ADR-0076(f)), the Soul side is
+	// capability-based (n), so this field is diagnostic, never a gate.
+	//
+	// An empty value = an older Keeper that predates the field (forward-compat
+	// only-add, ADR-012(c)). Never reuse this field number.
+	KeeperVersion string `protobuf:"bytes,4,opt,name=keeper_version,json=keeperVersion,proto3" json:"keeper_version,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -164,6 +177,13 @@ func (x *HelloReply) GetServerTime() *timestamppb.Timestamp {
 		return x.ServerTime
 	}
 	return nil
+}
+
+func (x *HelloReply) GetKeeperVersion() string {
+	if x != nil {
+		return x.KeeperVersion
+	}
+	return ""
 }
 
 // SeedRotationRequest is Soul asking to issue a new SoulSeed over the live stream
@@ -400,14 +420,15 @@ const file_keeper_v1_lifecycle_proto_rawDesc = "" +
 	"\x05Hello\x12\x19\n" +
 	"\bsid_echo\x18\x01 \x01(\tR\asidEcho\x12!\n" +
 	"\fsoul_version\x18\x02 \x01(\tR\vsoulVersion\x12\"\n" +
-	"\fcapabilities\x18\x03 \x03(\tR\fcapabilities\"z\n" +
+	"\fcapabilities\x18\x03 \x03(\tR\fcapabilities\"\xa1\x01\n" +
 	"\n" +
 	"HelloReply\x12\x1d\n" +
 	"\n" +
 	"session_id\x18\x01 \x01(\tR\tsessionId\x12\x10\n" +
 	"\x03kid\x18\x02 \x01(\tR\x03kid\x12;\n" +
 	"\vserver_time\x18\x03 \x01(\v2\x1a.google.protobuf.TimestampR\n" +
-	"serverTime\".\n" +
+	"serverTime\x12%\n" +
+	"\x0ekeeper_version\x18\x04 \x01(\tR\rkeeperVersion\".\n" +
 	"\x13SeedRotationRequest\x12\x17\n" +
 	"\acsr_pem\x18\x01 \x01(\fR\x06csrPem\"\x97\x01\n" +
 	"\x11SeedRotationReply\x12'\n" +
