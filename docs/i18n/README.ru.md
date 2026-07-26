@@ -84,6 +84,9 @@ OpenAPI, MCP, фоновый Reaper), `soul` (агент-демон на упр�
 
 ## С чего начать
 
+- **[docs/install.md](../install.md)** — установка released-бинарей: apt, Homebrew,
+  AUR, архивы релиза (с проверкой cosign) и контейнерные образы, плюс заметка про
+  карантин macOS.
 - **[docs/getting-started.md](../getting-started.md)** — поднять один Keeper и
   инфраструктуру (Postgres + Redis + Vault через `dev/docker-compose.yml`),
   забутстрапить первого Archon, онбордить один Soul и применить простой сценарий.

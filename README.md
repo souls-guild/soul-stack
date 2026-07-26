@@ -84,6 +84,9 @@ infrastructure tier is **Postgres + Redis + Vault**
 
 ## Where to start
 
+- **[docs/install.md](docs/install.md)** — install the released binaries: apt,
+  Homebrew, AUR, release archives (with cosign verification) and container images,
+  plus the macOS quarantine note.
 - **[docs/getting-started.md](docs/getting-started.md)** — bring up a single Keeper
   plus infra (Postgres + Redis + Vault via `dev/docker-compose.yml`), bootstrap the
   first Archon, onboard one Soul, and apply a simple scenario. ~30 minutes.
