@@ -328,13 +328,19 @@ func (s *Service) RevokeRole(ctx context.Context, in RevokeRoleInput) error {
 		return err
 	}
 
-	// Self-lockout is only needed if the revoked role grants `*`: otherwise
-	// removing it doesn't shrink the admin set.
+	// Self-lockout is only needed if the revoked role is a cluster-admin SOURCE —
+	// a bare `*` on a PLAIN role (ADR-078(i): a derived `*` is capped by its
+	// parent and the probes never counted it). Otherwise removing it doesn't
+	// shrink the admin set.
 	perms, err := rolePermissions(ctx, tx, in.RoleName)
 	if err != nil {
 		return err
 	}
-	if roleGivesWildcard(perms) {
+	parent, err := roleParent(ctx, tx, in.RoleName)
+	if err != nil {
+		return err
+	}
+	if grantsClusterAdmin(perms, parent) {
 		if err := s.assertNotLastWildcardSynodRole(ctx, tx, in.SynodName, in.RoleName); err != nil {
 			return err
 		}

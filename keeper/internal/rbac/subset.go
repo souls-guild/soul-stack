@@ -78,13 +78,9 @@ func requiredPermissions(rawPerms []string, rawScope *string) ([]Permission, err
 			return nil, fmt.Errorf("rbac: granted role default_scope %q: %w", *rawScope, err)
 		}
 	}
-	perms := make([]Permission, 0, len(rawPerms))
-	for _, raw := range rawPerms {
-		p, err := ParsePermission(raw)
-		if err != nil {
-			return nil, fmt.Errorf("rbac: invalid permission %q: %w", raw, err)
-		}
-		perms = append(perms, p)
+	perms, err := parsePermissions(rawPerms)
+	if err != nil {
+		return nil, err
 	}
 	return effectivePermissions(perms, scope), nil
 }

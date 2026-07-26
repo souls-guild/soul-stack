@@ -64,6 +64,8 @@ func (p synodSuccessPool) Query(_ context.Context, sql string, _ ...any) (pgx.Ro
 		return &synodStrRows{}, nil // the role has no permissions (grant/revoke-role: grants no `*`)
 	case strings.Contains(sql, "default_scope FROM rbac_roles"):
 		return &synodEmptyRows{}, nil // the role has no scope (grant-role: roleDefaultScope → nil)
+	case strings.Contains(sql, "parent_role FROM rbac_roles"):
+		return &synodEmptyRows{}, nil // no parent row → a plain role (ADR-078, roleParent → nil)
 	case strings.Contains(sql, "FROM synods ORDER BY name"):
 		return &synodViewRows{rows: p.listRows}, nil
 	case strings.Contains(sql, "FROM synod_roles"):

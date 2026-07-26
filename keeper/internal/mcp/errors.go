@@ -50,6 +50,9 @@ const (
 	// validation-failed / forbidden are the common codes.
 	mcpCodeRoleExists  = "role-already-exists"
 	mcpCodeRoleBuiltin = "role-builtin"
+	// role-has-children — role.delete refused because roles derive from it
+	// (ADR-078(g), REST TypeRoleHasChildren).
+	mcpCodeRoleHasChildren = "role-has-children"
 
 	// Synod codes (ADR-049, parity with REST /v1/synods*). synod-already-exists —
 	// UNIQUE violation on synods.name (REST TypeSynodExists); synod-not-found —
@@ -291,7 +294,10 @@ func mapIncarnationErrorToMCP(err error) (code, detail string) {
 //     (shared code with operator self-lockout).
 //   - ErrInvalidRoleName + wrapped ParsePermission error              → validation-failed.
 //   - ErrPermissionNotHeld (least-privilege subset check)             → forbidden.
+//   - ErrRoleExceedsParent (derived role beyond its parent, ADR-078)  → forbidden.
 //   - ErrPermissionDenied                                             → forbidden.
+//   - ErrRoleHasChildren (delete refused by the self-FK, ADR-078(g))  → role-has-children.
+//   - ErrRoleParentCycle / ErrRoleChainTooDeep / ErrRoleScopeTooComplex → validation-failed.
 //
 // Unknown errors → internal-error + generic detail (raw err.Error() isn't
 // forwarded — oracle-attack protection, as in the neighboring mappers).
@@ -315,8 +321,18 @@ func mapRoleErrorToMCP(err error) (code, detail string) {
 		return mcpCodeValidationFailed, "invalid role name"
 	case errors.Is(err, rbac.ErrPermissionNotHeld):
 		return mcpCodeForbidden, "cannot grant a permission you do not hold yourself"
+	case errors.Is(err, rbac.ErrRoleExceedsParent):
+		return mcpCodeForbidden, "a derived role may not exceed its parent role"
 	case errors.Is(err, rbac.ErrPermissionDenied):
 		return mcpCodeForbidden, "operator lacks required permission"
+	case errors.Is(err, rbac.ErrRoleHasChildren):
+		return mcpCodeRoleHasChildren, "role is a parent of derived roles — re-parent or delete them first"
+	case errors.Is(err, rbac.ErrRoleParentCycle):
+		return mcpCodeValidationFailed, "role derivation chain would form a cycle"
+	case errors.Is(err, rbac.ErrRoleChainTooDeep):
+		return mcpCodeValidationFailed, "role derivation chain too deep"
+	case errors.Is(err, rbac.ErrRoleScopeTooComplex):
+		return mcpCodeValidationFailed, "resolved role scope is too complex"
 	}
 	// A malformed permission is a wrapped ParsePermission error prefixed
 	// "rbac: invalid permission …" (formed in one place — service.go/crud.go).

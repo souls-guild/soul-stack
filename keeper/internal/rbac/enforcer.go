@@ -23,25 +23,34 @@ var ErrOperatorRevoked = errors.New("rbac: operator revoked")
 // Role is the runtime form of a role from the DB snapshot (after parsing
 // permissions). Not exported via API (handlers only see Enforcer); external
 // code learns an operator's "roles" through [Enforcer.RolesOf].
+//
+// A Role reached through an [Enforcer] is always in its EFFECTIVE form: a derived
+// role's chain has been resolved by [flattenRoleGraph] at construction, so no
+// reader has to know whether it was derived to read its rights correctly.
 type Role struct {
-	Name        string
+	Name string
+
+	// Permissions is the role's EFFECTIVE permission set. On a plain role that is
+	// its own rows; on a derived one it is `own ∩ parent's effective` with each
+	// per-permission scope already capped by the chain's ceiling (ADR-078(c)) —
+	// rows the parent does not cover are gone, not filtered later.
 	Permissions []Permission
 
-	// DefaultScope is the parsed role default_scope (ADR-047 S1, NIM-128
-	// boolean scope), inherited by the role's permissions that have no scope of
-	// their own. nil = NULL = the dimension is NOT introduced (bare-permission
-	// roles → unrestricted, backcompat).
+	// DefaultScope is the role's EFFECTIVE default scope (ADR-047 S1, NIM-128
+	// boolean scope), inherited by the permissions that have no scope of their
+	// own. nil = unrestricted.
 	//
-	// On a DERIVED role (ParentRole set) this is the attenuating DELTA rather
-	// than the role's absolute scope: effective = parent's effective AND this
-	// (ADR-078). With no parent the parent side is the unrestricted top, so the
+	// On a derived role the stored `default_scope` is only the attenuating DELTA;
+	// what lands here is the resolved conjunction `parent's effective AND delta`
+	// (ADR-078(b)). With no parent the parent side is the unrestricted top, so the
 	// formula collapses to plain ADR-047.
 	DefaultScope *ScopeExpr
 
 	// ParentRole is the name of the role this one derives from (ADR-078,
-	// `rbac_roles.parent_role`); "" = a plain role. Carried through the snapshot
-	// so the catalog is complete; NOT yet consulted when a permission is checked
-	// — flattening the chain into effective rights is NIM-180.
+	// `rbac_roles.parent_role`); "" = a plain role. After flattening it is no
+	// longer needed to READ the role's rights — it is kept because derivedness is
+	// itself a fact the self-lockout invariant depends on ([Enforcer.HasWildcard]:
+	// a derived role never counts as a source of cluster-admin).
 	ParentRole string
 }
 
@@ -129,6 +138,14 @@ func NewEnforcerFromSnapshot(snap *Snapshot) (*Enforcer, error) {
 		e.roles = append(e.roles, role)
 	}
 
+	// Chain resolution (ADR-078(d), NIM-180): each derived role is rewritten into
+	// its effective form — own permissions ∩ the parent's, scopes conjoined down
+	// the chain — ONCE, here. Everything below this line, and every per-request
+	// check, reads the flattened catalog and never walks a parent.
+	if err := flattenRoleGraph(byName); err != nil {
+		return nil, err
+	}
+
 	for aid, roleNames := range snap.Membership {
 		for _, name := range roleNames {
 			role, ok := byName[name]
@@ -197,6 +214,15 @@ func (e *Enforcer) IsRevoked(aid string) bool {
 // "cannot revoke the last cluster-admin" (rbac.md → Self-lockout invariant).
 func (e *Enforcer) HasWildcard(aid string) bool {
 	for _, role := range e.rolesByAID[aid] {
+		// A DERIVED role never counts as a source of cluster-admin (ADR-078(i)),
+		// even when its chain currently resolves to an unrestricted `*`: that
+		// depends on a parent whose scope any other mutation may narrow. Counting
+		// it would let the last REAL admin be removed on the strength of an
+		// admin-ness that a re-scope elsewhere silently revokes. Skipping is the
+		// conservative direction — it can only refuse a mutation, never permit one.
+		if role.ParentRole != "" {
+			continue
+		}
 		for _, p := range role.Permissions {
 			// Only a BARE `*` is cluster-admin for self-lockout. A scoped
 			// `* on X` (NIM-128) is bounded and does NOT count — revoking the

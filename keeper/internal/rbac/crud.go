@@ -93,6 +93,12 @@ VALUES ($1, $2, false, $3, $4)
 	// for bare perms). Used by UpdateRole's replace semantics.
 	updateRoleDefaultScopeSQL = `UPDATE rbac_roles SET default_scope = $2 WHERE name = $1`
 
+	// updateRoleParentSQL — sets/clears a role's parent_role (ADR-078). NULL
+	// makes the role plain again. A separate statement rather than a column on
+	// [insertRoleSQL] so create and update share one write path — and one place
+	// where the `rbac_roles_parent_chain_guard` trigger (cycles, depth) fires.
+	updateRoleParentSQL = `UPDATE rbac_roles SET parent_role = $2 WHERE name = $1`
+
 	// insertRolePermissionSQL — INSERT of a single role-permission row.
 	// ON CONFLICT DO NOTHING makes the batch insert idempotent on
 	// duplicates within the set (a dup within one role.create isn't a DB
@@ -148,6 +154,17 @@ ON CONFLICT (role_name, permission) DO NOTHING
 	// Do NOT unify this back onto the enforcer snapshot — that would
 	// reopen hole (1).
 	//
+	// DERIVED ROLES DO NOT COUNT (ADR-078(i)): the join to `rbac_roles` exists
+	// solely for `r.parent_role IS NULL`. A `*` sitting in a derived role is
+	// capped by a parent whose scope any other mutation may narrow, so counting
+	// it would overstate the admin set and let the real last admin be removed on
+	// the strength of an admin-ness that a re-scope elsewhere silently revokes.
+	// `rbac_roles` is in the FOR UPDATE list for the same reason the other three
+	// tables are: without the row lock, "delete the last `*` role" and "turn the
+	// last `*` role into a derived one" run concurrently, each sees the other's
+	// role as the surviving admin, and both commit. That mutation writes only
+	// `rbac_roles`, so no other locked table would catch it.
+	//
 	// NO DISTINCT: PostgreSQL forbids `FOR UPDATE` with `DISTINCT`
 	// (SQLSTATE 0A000). Deduping AIDs that hold `*` via multiple roles is
 	// done in Go ([dedupAIDs]); this changes neither the row lock nor the
@@ -168,9 +185,10 @@ ON CONFLICT (role_name, permission) DO NOTHING
 SELECT ro.aid
 FROM rbac_role_operators ro
 JOIN rbac_role_permissions rp ON rp.role_name = ro.role_name
+JOIN rbac_roles r ON r.name = rp.role_name
 JOIN operators o ON o.aid = ro.aid
-WHERE rp.permission = '*' AND o.revoked_at IS NULL
-FOR UPDATE OF ro, rp, o
+WHERE rp.permission = '*' AND r.parent_role IS NULL AND o.revoked_at IS NULL
+FOR UPDATE OF ro, rp, r, o
 `
 
 	// synodClusterAdminsForUpdateSQL — the SYNOD branch of the self-lockout
@@ -187,15 +205,18 @@ FOR UPDATE OF ro, rp, o
 	// Taken as the SECOND query after [directClusterAdminsForUpdateSQL]
 	// (see the lock-order invariant there). The combined set is deduped in
 	// Go ([dedupAIDs]): an AID holding `*` both directly and via Synod must
-	// be counted once.
+	// be counted once. Derived roles are excluded on the same terms as in the
+	// direct branch — a group bundling a derived role confers its attenuated
+	// rights, not cluster-admin.
 	synodClusterAdminsForUpdateSQL = `
 SELECT so.aid
 FROM synod_operators so
 JOIN synod_roles sr ON sr.synod_name = so.synod_name
 JOIN rbac_role_permissions rp ON rp.role_name = sr.role_name
+JOIN rbac_roles r ON r.name = sr.role_name
 JOIN operators o ON o.aid = so.aid
-WHERE rp.permission = '*' AND o.revoked_at IS NULL
-FOR UPDATE OF so, sr, rp, o
+WHERE rp.permission = '*' AND r.parent_role IS NULL AND o.revoked_at IS NULL
+FOR UPDATE OF so, sr, rp, r, o
 `
 )
 
@@ -430,6 +451,21 @@ func UpdateRoleDefaultScope(ctx context.Context, db ExecQueryRower, name string,
 	return nil
 }
 
+// UpdateRoleParent sets or clears a role's parent_role (ADR-078; NULL makes the
+// role plain). The role must exist — the existence guard (locking the role) is
+// done by the service before this call, as with [UpdateRoleDefaultScope].
+//
+// The graph rules are the DB's ([rbac_roles_parent_chain_guard], the self-FK and
+// the not-self CHECK of migration 102), so a cycle, an over-deep chain or an
+// unknown parent surfaces here as a mapped sentinel via [mapRoleError] rather
+// than being re-derived in Go: one gate, every write path.
+func UpdateRoleParent(ctx context.Context, db ExecQueryRower, name string, parentRole *string) error {
+	if _, err := db.Exec(ctx, updateRoleParentSQL, name, parentRoleArg(parentRole)); err != nil {
+		return fmt.Errorf("rbac: update parent_role of role %q: %w", name, mapRoleError(err))
+	}
+	return nil
+}
+
 // defaultScopeArg converts a *string default_scope into an args value: nil
 // → PG NULL (a role with no scope restriction), otherwise the dereferenced
 // RAW string. An empty string is treated as NULL — an "entered empty" value
@@ -439,6 +475,16 @@ func defaultScopeArg(scope *string) any {
 		return nil
 	}
 	return *scope
+}
+
+// parentRoleArg converts a *string parent_role into an args value: nil (or an
+// empty string, treated the same way [loadRoles] reads it back) → PG NULL, i.e.
+// a plain role.
+func parentRoleArg(parent *string) any {
+	if parent == nil || *parent == "" {
+		return nil
+	}
+	return *parent
 }
 
 // roleGivesWildcard is true if a role's set of permission strings contains
@@ -451,6 +497,17 @@ func roleGivesWildcard(permissions []string) bool {
 		}
 	}
 	return false
+}
+
+// grantsClusterAdmin reports whether a role is a SOURCE of unrestricted
+// cluster-admin for the self-lockout invariant: it must hold a bare `*` AND be
+// plain. A derived role is excluded even when its chain currently resolves to an
+// unrestricted `*` (ADR-078(i)) — mirrors [Enforcer.HasWildcard], and the
+// `parent_role IS NULL` filter the lockout probes apply in SQL. The two must
+// agree: the probe decides who SURVIVES a mutation, this decides whether the
+// mutation needs probing at all.
+func grantsClusterAdmin(permissions []string, parentRole *string) bool {
+	return roleGivesWildcard(permissions) && parentRoleArg(parentRole) == nil
 }
 
 // rolePermissions reads a role's permission strings (no lock) — needed by
@@ -497,6 +554,29 @@ func roleDefaultScope(ctx context.Context, tx ExecQueryRower, name string) (*str
 		return nil, fmt.Errorf("rbac: iter default_scope of role %q: %w", name, err)
 	}
 	return scope, nil
+}
+
+// roleParent reads a role's RAW parent_role (ADR-078); nil = NULL = a plain
+// role. Needed on every role mutation for two decisions: whether the role counts
+// as a cluster-admin source ([grantsClusterAdmin]) and, on a PATCH that leaves
+// the field untouched, which parent the resulting role must stay within. The
+// role is already locked by [lockRole] in the same tx.
+func roleParent(ctx context.Context, tx ExecQueryRower, name string) (*string, error) {
+	rows, err := tx.Query(ctx, `SELECT parent_role FROM rbac_roles WHERE name = $1`, name)
+	if err != nil {
+		return nil, fmt.Errorf("rbac: read parent_role of role %q: %w", name, wrapPgErr(err))
+	}
+	defer rows.Close()
+	var parent *string
+	if rows.Next() {
+		if err := rows.Scan(&parent); err != nil {
+			return nil, fmt.Errorf("rbac: scan parent_role of role %q: %w", name, err)
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("rbac: iter parent_role of role %q: %w", name, err)
+	}
+	return parent, nil
 }
 
 // mapRoleError maps pgx INSERT errors to the package's sentinels, following

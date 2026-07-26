@@ -58,13 +58,19 @@ const (
 	TypeRoleNotFound          = "https://soul-stack.com/errors/role-not-found"
 	TypeRoleExists            = "https://soul-stack.com/errors/role-already-exists"
 	TypeRoleBuiltin           = "https://soul-stack.com/errors/role-builtin"
-	TypeSynodNotFound         = "https://soul-stack.com/errors/synod-not-found"
-	TypeSynodExists           = "https://soul-stack.com/errors/synod-already-exists"
-	TypeSynodBuiltin          = "https://soul-stack.com/errors/synod-builtin"
-	TypeSigilActive           = "https://soul-stack.com/errors/sigil-already-active"
-	TypeSigilNotFound         = "https://soul-stack.com/errors/sigil-not-found"
-	TypePluginNotInCache      = "https://soul-stack.com/errors/plugin-not-in-cache"
-	TypeServiceExists         = "https://soul-stack.com/errors/service-already-exists"
+	// TypeRoleHasChildren — deleting a role is blocked by roles derived from it
+	// (self-FK rbac_roles_parent_role_fk ON DELETE RESTRICT, migration 102,
+	// ADR-078(g)). 409 Conflict, the same shape as TypeProviderHasProfiles: the
+	// operator re-parents or deletes the children first. Clearing the link
+	// instead would turn each child's delta into an absolute scope — a widening.
+	TypeRoleHasChildren  = "https://soul-stack.com/errors/role-has-children"
+	TypeSynodNotFound    = "https://soul-stack.com/errors/synod-not-found"
+	TypeSynodExists      = "https://soul-stack.com/errors/synod-already-exists"
+	TypeSynodBuiltin     = "https://soul-stack.com/errors/synod-builtin"
+	TypeSigilActive      = "https://soul-stack.com/errors/sigil-already-active"
+	TypeSigilNotFound    = "https://soul-stack.com/errors/sigil-not-found"
+	TypePluginNotInCache = "https://soul-stack.com/errors/plugin-not-in-cache"
+	TypeServiceExists    = "https://soul-stack.com/errors/service-already-exists"
 	// Augur — the Omen / Rite registry (ADR-025, augur.md). omen-already-exists —
 	// UNIQUE on omens.name (409). not-found Omen / Rite — the shared TypeNotFound.
 	TypeOmenExists = "https://soul-stack.com/errors/omen-already-exists"
@@ -184,6 +190,7 @@ var titles = map[string]string{
 	TypeRoleNotFound:               "Role not found",
 	TypeRoleExists:                 "Role already exists",
 	TypeRoleBuiltin:                "Role is builtin",
+	TypeRoleHasChildren:            "Role has derived roles",
 	TypeSynodNotFound:              "Synod not found",
 	TypeSynodExists:                "Synod already exists",
 	TypeSynodBuiltin:               "Synod is builtin",
@@ -275,6 +282,7 @@ var statuses = map[string]int{
 	TypeRoleNotFound:               http.StatusNotFound,
 	TypeRoleExists:                 http.StatusConflict,
 	TypeRoleBuiltin:                http.StatusConflict,
+	TypeRoleHasChildren:            http.StatusConflict,
 	TypeSynodNotFound:              http.StatusNotFound,
 	TypeSynodExists:                http.StatusConflict,
 	TypeSynodBuiltin:               http.StatusConflict,

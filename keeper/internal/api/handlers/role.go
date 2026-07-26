@@ -139,11 +139,17 @@ func (h *RoleHandler) CreateTyped(ctx context.Context, claims *jwt.Claims, req R
 		// fall through to reply.
 	case errors.Is(err, rbac.ErrRoleAlreadyExists):
 		return zero, &problemError{problem.New(problem.TypeRoleExists, "", "role "+req.Name+" already exists")}
+	case errors.Is(err, rbac.ErrRoleNotFound):
+		// Only reachable for a named parent_role (ADR-078) — the role being
+		// created cannot itself be missing.
+		return zero, &problemError{problem.New(problem.TypeRoleNotFound, "", err.Error())}
 	case errors.Is(err, rbac.ErrInvalidRoleName):
 		return zero, &problemError{problem.New(problem.TypeValidationFailed, "", err.Error())}
 	case errors.Is(err, rbac.ErrPermissionNotHeld):
 		return zero, &problemError{problem.New(problem.TypeForbidden, "", "cannot grant a permission you do not hold yourself")}
-	case isInvalidPermission(err) || isInvalidDefaultScope(err):
+	case errors.Is(err, rbac.ErrRoleExceedsParent):
+		return zero, &problemError{problem.New(problem.TypeForbidden, "", "a derived role may not exceed its parent role")}
+	case isInvalidPermission(err) || isInvalidDefaultScope(err) || isInvalidDerivation(err):
 		return zero, &problemError{problem.New(problem.TypeValidationFailed, "", err.Error())}
 	default:
 		h.logger.Error("role.create: service failed",
@@ -203,6 +209,8 @@ func (h *RoleHandler) DeleteTyped(ctx context.Context, name string) (RoleNameRep
 		return zero, &problemError{problem.New(problem.TypeRoleBuiltin, "", "role "+name+" is builtin and cannot be deleted")}
 	case errors.Is(err, rbac.ErrWouldLockOutCluster):
 		return zero, &problemError{problem.New(problem.TypeWouldLockOutCluster, "", "deleting role "+name+" would lock out the cluster")}
+	case errors.Is(err, rbac.ErrRoleHasChildren):
+		return zero, &problemError{problem.New(problem.TypeRoleHasChildren, "", "role "+name+" is a parent of derived roles — re-parent or delete them first")}
 	default:
 		h.logger.Error("role.delete: service failed",
 			slog.String("name", name),
@@ -258,7 +266,9 @@ func (h *RoleHandler) UpdatePermissionsTyped(ctx context.Context, claims *jwt.Cl
 		return zero, &problemError{problem.New(problem.TypeWouldLockOutCluster, "", "updating role "+in.Name+" would lock out the cluster")}
 	case errors.Is(err, rbac.ErrPermissionNotHeld):
 		return zero, &problemError{problem.New(problem.TypeForbidden, "", "cannot grant a permission you do not hold yourself")}
-	case isInvalidPermission(err) || isInvalidDefaultScope(err):
+	case errors.Is(err, rbac.ErrRoleExceedsParent):
+		return zero, &problemError{problem.New(problem.TypeForbidden, "", "a derived role may not exceed its parent role")}
+	case isInvalidPermission(err) || isInvalidDefaultScope(err) || isInvalidDerivation(err):
 		return zero, &problemError{problem.New(problem.TypeValidationFailed, "", err.Error())}
 	default:
 		h.logger.Error("role.update: service failed",
@@ -369,6 +379,16 @@ func isInvalidPermission(err error) bool {
 // "invalid default_scope". Maps to 422.
 func isInvalidDefaultScope(err error) bool {
 	return err != nil && strings.Contains(err.Error(), "invalid default_scope")
+}
+
+// isInvalidDerivation reports a parent-graph rule violation (ADR-078(f)): a chain
+// that closes on itself, one past the depth cap, or a scope conjunction too
+// complex to normalize. All three are malformed input rather than a missing
+// right — 422, not 403.
+func isInvalidDerivation(err error) bool {
+	return errors.Is(err, rbac.ErrRoleParentCycle) ||
+		errors.Is(err, rbac.ErrRoleChainTooDeep) ||
+		errors.Is(err, rbac.ErrRoleScopeTooComplex)
 }
 
 // toRoleView converts [rbac.RoleView] into the FLAT domain [RoleView] (handler-

@@ -150,6 +150,10 @@ func (p *rbacFakePool) Query(_ context.Context, sql string, _ ...any) (pgx.Rows,
 	case contains(sql, "SELECT default_scope FROM rbac_roles"):
 		// roleDefaultScope (subset-check granted side): a single nullable row.
 		return &nullStringRows{value: p.roleScope}, nil
+	case contains(sql, "SELECT parent_role FROM rbac_roles"):
+		// roleParent (ADR-078): NULL → a plain role, which is what these
+		// transport tests exercise. Derivation is covered against a real DB.
+		return &nullStringRows{value: nil}, nil
 	case contains(sql, "SELECT builtin FROM synods"):
 		// lockSynod: empty → ErrSynodNotFound; else a single bool row.
 		if !p.lockSynodFound {
@@ -179,8 +183,9 @@ func (p *rbacFakePool) Query(_ context.Context, sql string, _ ...any) (pgx.Rows,
 		// query over synod_operators. These handler-unit scenarios don't model
 		// group admins — empty; rbac integration-guard tests cover them.
 		return &roleStringRows{}, nil
-	case contains(sql, "FOR UPDATE OF ro, rp, o"):
-		// direct self-lockout probe (excluding role / pair / core).
+	case contains(sql, "FOR UPDATE OF ro, rp, r, o"):
+		// direct self-lockout probe (excluding role / pair / core). `r` is
+		// rbac_roles, joined in to skip derived roles (ADR-078(i)).
 		return &roleStringRows{values: p.survivors}, nil
 	}
 	return nil, errors.New("rbacFakePool.Query: unexpected SQL: " + sql)

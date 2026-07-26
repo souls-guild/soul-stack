@@ -1,6 +1,9 @@
 # ADR-078. Derived roles — `parent_role`, attenuation and cascade
 
-- **Status.** Active (J1 — model, storage and guards; chain resolution is NIM-180).
+- **Status.** Active. J1 (NIM-179) landed the model, storage and graph guards;
+  J2 (NIM-180) landed chain resolution, the write-time attenuation gate and the
+  self-lockout correction of §(i). The API surface for `parent_role` is NIM-181,
+  the web selector NIM-182.
 
 - **Context.** Roles are flat. An operator who runs the `dba` team can already be
   scoped — `default_scope: coven=dba` ([ADR-047 §a](0047-purview.md)) — but there is no way
@@ -80,11 +83,36 @@
 
   **(d) Resolution is flattened once, at snapshot build.** The chain is not walked
   per request. `NewEnforcerFromSnapshot` resolves each role's effective permissions
-  and scope once, and every subsequent check reads the flattened form — the same cost
-  as today. Cascade needs no propagation machinery: the snapshot is already rebuilt
+  and scope once ([`flatten.go`](../../keeper/internal/rbac/flatten.go)), and every
+  subsequent check reads the flattened form — the same cost as today. Cascade needs no
+  propagation machinery: the snapshot is already rebuilt
   on a role mutation (TTL poll + the `rbac:invalidate` pub/sub of
   [ADR-028(d)](0028-rbac-storage.md)), so a change to a parent reaches its children by
   the same path that already carries every other role change.
+
+  Resolution applies the two rules above as two distinct mechanisms, and both are
+  needed. The **scope ceiling** (b) is conjoined onto every permission of the child,
+  including a per-permission `on <expr>` and a `*`; the **set intersection** (c)
+  drops what the parent does not hold at all. Neither subsumes the other: a parent
+  whose narrowing lives in per-permission scopes has no `default_scope` for the
+  ceiling to conjoin, and a child that merely re-scopes needs no dropping.
+
+  This draws one line the flat model did not have to: **`default_scope` is a
+  default, the parent's effective scope is a ceiling.** A per-permission scope
+  overrides the role's own `default_scope` ([ADR-047 §b](0047-purview.md)) and a
+  `*` ignores it entirely (ADR-047(b) #1) — but neither escapes the parent's
+  ceiling, which is conjoined regardless. A `*` on a role derived from a scoped
+  parent is therefore a *scoped* super-admin, not an unrestricted one. A **bare**
+  permission is the one case left untouched: it stays bare and inherits the role's
+  resolved scope through `ResolvePurview` exactly as on a plain role, because
+  writing the ceiling onto it would replace — and so discard — the child's own
+  delta.
+
+  Everything not **provably** within the parent is dropped rather than clipped:
+  an undecidable glob containment (`host matches web-0?` inside `host matches
+  web-*`, left conservative by NIM-128 §C.5) costs the child that permission. A
+  chain whose conjoined scope cannot be normalized within the DNF caps fails the
+  snapshot build outright, on the same terms as (f).
 
   **(e) The parent is ONE named role.** Not the union of the caller's roles, which
   would be wider than any single one of them, and not multiple parents. Choosing a
@@ -137,16 +165,49 @@
   themselves the result. The safe rule is the conjunction:
   **`child ⊆ parent AND caller-holds-parent`**.
 
-  **(i) Self-lockout is untouched, with one obligation for NIM-180.** The invariant
+  Note what "holds the parent" means and why it is the parent rather than the
+  child: the caller must cover the **parent's** effective rights, because the
+  cascade will carry every later widening of that parent into the child. Covering
+  only what the child asks for today would let an operator mint a role that tracks
+  a ceiling above their own. Both halves live in
+  [`attenuate.go`](../../keeper/internal/rbac/attenuate.go) and re-run on **every**
+  role update, not only the one that sets `parent_role` — otherwise the create gate
+  would be a formality one PATCH wide.
+
+  The gate resolves the parent's chain inside the mutation's transaction but does
+  **not** lock it. Deliberate: a parent narrowed concurrently is absorbed by
+  re-resolution at the next snapshot build, since (c) recomputes the intersection
+  every time. The write gate exists to refuse early and explain why, not to be the
+  boundary — the boundary is the decision layer.
+
+  **(i) Self-lockout counts PLAIN roles only.** The invariant
   "the last active operator with a bare `*` cannot be removed"
   ([ADR-013](0013-bootstrap-archon.md)) counts only **bare, unrestricted** `*`
-  ([ADR-047 amendment, NIM-128](0047-purview.md)). Once chains resolve, a `*` sitting
-  in a **derived** role is capped by its parent and is therefore *not* an unrestricted
-  cluster-admin; counting it would overstate the number of admins and could let the
-  real last one be removed. The self-lockout queries
-  ([`crud.go`](../../keeper/internal/rbac/crud.go)) must exclude derived roles as part
-  of NIM-180 — in this ADR's J1 state nothing resolves, every role stands alone, and
-  the current queries are correct as they are.
+  ([ADR-047 amendment, NIM-128](0047-purview.md)). A `*` sitting in a **derived**
+  role is capped by its parent and is therefore *not* an unrestricted cluster-admin;
+  counting it would overstate the number of admins and could let the real last one be
+  removed. So a derived role **never** counts as a source of cluster-admin — including
+  when its chain happens to resolve to an unrestricted `*` right now, because that
+  depends on a parent any other mutation may narrow. Skipping is the conservative
+  direction: it can only refuse a mutation, never permit one.
+
+  The rule has two halves, and both are required:
+  - **who survives** — every self-lockout probe joins `rbac_roles` and filters
+    `parent_role IS NULL` ([`crud.go`](../../keeper/internal/rbac/crud.go),
+    [`service.go`](../../keeper/internal/rbac/service.go)); `Enforcer.HasWildcard`
+    applies the same filter in memory.
+  - **when to probe** — a role STOPS being a source not only by losing `*` but by
+    **becoming derived**. Setting `parent_role` on the last `*`-granting role
+    therefore runs the same lockout check that removing its `*` would, and is
+    refused on the same terms. Without this half the invariant is trivially
+    bypassable: keep the permission set identical, add a parent, and the cluster is
+    locked out with no rule having visibly fired.
+
+  `rbac_roles` is in the probes' `FOR UPDATE` list for that second half. Turning a
+  role derived writes only `rbac_roles`, so without the row lock "delete the last
+  `*` role" and "re-root the last `*` role" run concurrently, each sees the other's
+  role as the survivor, and both commit — a race none of the previously locked
+  tables would catch.
 
   **(j) Several roles on one operator — derivation narrows a ROLE, not an OPERATOR.**
   An operator's effective rights stay what they are today: the **union** across their
@@ -169,13 +230,23 @@
   broader than any role they could point at. The UI must therefore show the ceiling of
   the **selected parent**, not the caller's union — the correction tracked in NIM-182.
 
-- **Scope of J1 (this ticket, NIM-179).** The column, its guards, and the plumbing
-  that carries `parent_role` into the enforcer snapshot and the role catalog. Nothing
-  reads `parent_role` when a permission is checked yet. That direction is the safe
-  one: an unresolved parent means a child grants only its own rows — narrower than the
-  intended semantics, never wider — so the gate can land before the resolver without
-  opening a window. NIM-180 adds flattening, the `∩`/`AND` resolution above and the
-  extended subset check; NIM-181 the API; NIM-182 the web selector.
+- **Delivery.**
+  - **J1 (NIM-179).** The column, its guards, and the plumbing that carries
+    `parent_role` into the enforcer snapshot and the role catalog. Nothing read
+    `parent_role` when a permission was checked — the safe direction: an unresolved
+    parent means a child grants only its own rows, narrower than the intended
+    semantics, never wider, so the gate landed before the resolver without opening a
+    window.
+  - **J2 (NIM-180).** Flattening at snapshot build (d), the `∩`/`AND` resolution,
+    the write-time gate (h) with `ParentRole` on the service's create/update inputs,
+    and the self-lockout correction (i). From here a stored `parent_role` is
+    authoritative at the decision layer.
+  - **J3 (NIM-181).** The API surface: `parent_role` on the role endpoints and MCP
+    tools, and the parent in `GET /v1/roles`. The transport error mapping for
+    `role-has-children`, "derived role exceeds its parent" and the graph sentinels
+    is already in place.
+  - **J4 (NIM-182).** The web selector and the "you inherit X, you cannot widen it"
+    panel.
 
 - **Consequences.**
   - `rbac_roles` grows one nullable column; every existing role reads back as plain,

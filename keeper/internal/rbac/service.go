@@ -110,7 +110,19 @@ type CreateRoleInput struct {
 	// DefaultScope is the role's default_scope (ADR-047 S1), inherited by the
 	// role's permissions that don't have their own selector. nil means the
 	// role has no scope restriction (backcompat).
+	//
+	// On a DERIVED role (ParentRole set) it is the attenuating DELTA instead:
+	// effective = the parent's effective scope AND this (ADR-078(b)). Write only
+	// the ADDED narrowing — restating the parent's own predicate resolves to the
+	// empty set the moment the parent moves.
 	DefaultScope *string
+
+	// ParentRole names the role this one derives from (ADR-078); nil creates a
+	// plain role, which is every role that existed before derivation. A derived
+	// role is bounded by its parent both structurally (`child ⊆ parent`) and by
+	// least-privilege (the caller must hold the parent) — see
+	// [Service.assertDerivedWithinParent].
+	ParentRole *string
 }
 
 // CreateRole creates a role along with its permissions. Validating the name
@@ -137,6 +149,9 @@ func (s *Service) CreateRole(ctx context.Context, in CreateRoleInput) error {
 		if _, err := ParseDefaultScope(*in.DefaultScope); err != nil {
 			return fmt.Errorf("rbac: invalid default_scope %q: %w", *in.DefaultScope, err)
 		}
+	}
+	if in.ParentRole != nil && !reRoleName.MatchString(*in.ParentRole) {
+		return fmt.Errorf("%w: parent %q must match %s", ErrInvalidRoleName, *in.ParentRole, reRoleName.String())
 	}
 
 	var createdBy *string
@@ -165,8 +180,25 @@ func (s *Service) CreateRole(ctx context.Context, in CreateRoleInput) error {
 		return err
 	}
 
+	// Derived role (ADR-078): the structural ceiling ON TOP of the floor above,
+	// never instead of it — `child ⊆ parent AND caller-holds-parent`.
+	if in.ParentRole != nil {
+		if err := s.assertDerivedWithinParent(ctx, tx, in.Name, *in.ParentRole,
+			in.Permissions, in.DefaultScope, in.CallerAID); err != nil {
+			return err
+		}
+	}
+
 	if err := CreateRole(ctx, tx, in.Name, in.Description, in.Permissions, createdBy, in.DefaultScope); err != nil {
 		return err
+	}
+	// After the INSERT, so the chain-guard trigger sees the row it is judging.
+	// NO self-lockout check: creating a role only ADDS to the catalog, and a new
+	// derived role that grants nothing to nobody cannot remove an admin.
+	if in.ParentRole != nil {
+		if err := UpdateRoleParent(ctx, tx, in.Name, in.ParentRole); err != nil {
+			return err
+		}
 	}
 	if err := tx.Commit(ctx); err != nil {
 		return fmt.Errorf("rbac: commit tx: %w", err)
@@ -205,12 +237,22 @@ func (s *Service) DeleteRole(ctx context.Context, name string) error {
 	if err != nil {
 		return err
 	}
-	if roleGivesWildcard(perms) {
+	parent, err := roleParent(ctx, tx, name)
+	if err != nil {
+		return err
+	}
+	// Only a PLAIN `*` role is a cluster-admin source (ADR-078(i)) — a derived one
+	// was never counted by the probes, so deleting it cannot lock anyone out and
+	// checking would only produce a false 409.
+	if grantsClusterAdmin(perms, parent) {
 		if err := s.assertNotLastWildcardRole(ctx, tx, name); err != nil {
 			return err
 		}
 	}
 
+	// Deleting a role that is still someone's parent is refused by the self-FK
+	// (ADR-078(g), [ErrRoleHasChildren]) — the orphan policy is fail-closed
+	// RESTRICT, since every alternative re-shapes a child's ceiling unasked.
 	if err := DeleteRole(ctx, tx, name); err != nil {
 		return err
 	}
@@ -234,6 +276,13 @@ type UpdateRolePermissionsInput struct {
 	SetDefaultScope bool
 	// DefaultScope is the new default_scope value when SetDefaultScope=true.
 	DefaultScope *string
+
+	// SetParentRole — when true, parent_role is REPLACED with ParentRole (nil
+	// makes the role plain again). PATCH semantics, mirroring SetDefaultScope: a
+	// caller that doesn't send the field doesn't re-root the role.
+	SetParentRole bool
+	// ParentRole is the new parent_role when SetParentRole=true (ADR-078).
+	ParentRole *string
 }
 
 // UpdateRolePermissions replaces a role's permission set (replace
@@ -243,10 +292,12 @@ type UpdateRolePermissionsInput struct {
 //  1. lock the role; missing → [ErrRoleNotFound].
 //  2. builtin=true → [ErrRoleBuiltin] (before lockout).
 //  3. validate the new set via [ParsePermission].
-//  4. if the old set granted `*` and the new one doesn't → a self-lockout
-//     check (will admins with `*` remain through a role OTHER than the one
-//     being updated); none → [ErrWouldLockOutCluster].
-//  5. replace.
+//  4. if the resulting role is derived → `child ⊆ parent` and the caller holds
+//     the parent (ADR-078(h), [Service.assertDerivedWithinParent]).
+//  5. if the role STOPS being a cluster-admin source — `*` removed, or the role
+//     turned derived — a self-lockout check (will admins with `*` remain through
+//     a PLAIN role other than this one); none → [ErrWouldLockOutCluster].
+//  6. replace.
 func (s *Service) UpdateRolePermissions(ctx context.Context, in UpdateRolePermissionsInput) error {
 	tx, err := s.pool.BeginTx(ctx, pgx.TxOptions{})
 	if err != nil {
@@ -271,6 +322,9 @@ func (s *Service) UpdateRolePermissions(ctx context.Context, in UpdateRolePermis
 		if _, err := ParseDefaultScope(*in.DefaultScope); err != nil {
 			return fmt.Errorf("rbac: invalid default_scope %q: %w", *in.DefaultScope, err)
 		}
+	}
+	if in.SetParentRole && in.ParentRole != nil && !reRoleName.MatchString(*in.ParentRole) {
+		return fmt.Errorf("%w: parent %q must match %s", ErrInvalidRoleName, *in.ParentRole, reRoleName.String())
 	}
 
 	// rolePermissions reads the old set without a separate lock on
@@ -300,6 +354,24 @@ func (s *Service) UpdateRolePermissions(ctx context.Context, in UpdateRolePermis
 	//     ADDED permissions can escalate. Bare perms inherit the role's EXISTING
 	//     scope. Removing permissions isn't escalation (an operator can trim
 	//     someone else's role without holding those perms).
+	oldScope, err := roleDefaultScope(ctx, tx, in.Name)
+	if err != nil {
+		return err
+	}
+	oldParent, err := roleParent(ctx, tx, in.Name)
+	if err != nil {
+		return err
+	}
+	// The role as it will look AFTER this PATCH — an untouched field keeps its
+	// stored value. Both guards below judge that shape, not the request.
+	newScope, newParent := oldScope, oldParent
+	if in.SetDefaultScope {
+		newScope = in.DefaultScope
+	}
+	if in.SetParentRole {
+		newParent = in.ParentRole
+	}
+
 	var required []Permission
 	if in.SetDefaultScope {
 		required, err = requiredPermissions(in.Permissions, in.DefaultScope)
@@ -308,11 +380,7 @@ func (s *Service) UpdateRolePermissions(ctx context.Context, in UpdateRolePermis
 		}
 	} else {
 		added := addedPermissions(oldPerms, in.Permissions)
-		grantedScope, scopeErr := roleDefaultScope(ctx, tx, in.Name)
-		if scopeErr != nil {
-			return scopeErr
-		}
-		required, err = requiredPermissions(added, grantedScope)
+		required, err = requiredPermissions(added, oldScope)
 		if err != nil {
 			return err
 		}
@@ -321,10 +389,23 @@ func (s *Service) UpdateRolePermissions(ctx context.Context, in UpdateRolePermis
 		return err
 	}
 
-	// The self-lockout check is only needed when `*` is being removed: the
-	// old set granted `*`, the new one doesn't. If the new set still grants
-	// `*`, the cluster can't get locked out.
-	if roleGivesWildcard(oldPerms) && !roleGivesWildcard(in.Permissions) {
+	// Derived role (ADR-078): the resulting role must still fit inside its parent.
+	// Re-checked on EVERY update, not just one that sets parent_role — adding a
+	// permission or widening the delta of an existing derived role is the same
+	// escalation attempt as creating it that way.
+	if newParent != nil {
+		if err := s.assertDerivedWithinParent(ctx, tx, in.Name, *newParent,
+			in.Permissions, newScope, in.CallerAID); err != nil {
+			return err
+		}
+	}
+
+	// The self-lockout check is needed when the role STOPS being a cluster-admin
+	// source. Two ways to stop, and the second one is why ADR-078(i) exists: `*`
+	// is removed from the permission set, or the role becomes DERIVED — a derived
+	// `*` is capped by its parent, so the probes no longer count it and the
+	// cluster could be left with none.
+	if grantsClusterAdmin(oldPerms, oldParent) && !grantsClusterAdmin(in.Permissions, newParent) {
 		if err := s.assertNotLastWildcardRole(ctx, tx, in.Name); err != nil {
 			return err
 		}
@@ -335,6 +416,11 @@ func (s *Service) UpdateRolePermissions(ctx context.Context, in UpdateRolePermis
 	}
 	if in.SetDefaultScope {
 		if err := UpdateRoleDefaultScope(ctx, tx, in.Name, in.DefaultScope); err != nil {
+			return err
+		}
+	}
+	if in.SetParentRole {
+		if err := UpdateRoleParent(ctx, tx, in.Name, in.ParentRole); err != nil {
 			return err
 		}
 	}
@@ -388,11 +474,16 @@ func (s *Service) RevokeOperator(ctx context.Context, in RevokeOperatorInput) er
 	if err != nil {
 		return err
 	}
-	if roleGivesWildcard(perms) {
+	parent, err := roleParent(ctx, tx, in.RoleName)
+	if err != nil {
+		return err
+	}
+	if grantsClusterAdmin(perms, parent) {
 		// Are we removing the last admin with `*`? The probe query, run
 		// UNDER FOR UPDATE, excludes the target (RoleName, AID) pair: if the
 		// AID also holds `*` via other roles, it stays in the result set and
-		// lockout doesn't trigger.
+		// lockout doesn't trigger. A DERIVED role is not a source at all
+		// (ADR-078(i)), so revoking one never needs the probe.
 		if err := s.assertNotLastWildcardOperator(ctx, tx, in.RoleName, in.AID); err != nil {
 			return err
 		}
@@ -569,18 +660,20 @@ func (s *Service) lockWildcardAdminsExcludingRole(ctx context.Context, tx ExecQu
 SELECT ro.aid
 FROM rbac_role_operators ro
 JOIN rbac_role_permissions rp ON rp.role_name = ro.role_name
+JOIN rbac_roles r ON r.name = rp.role_name
 JOIN operators o ON o.aid = ro.aid
-WHERE rp.permission = '*' AND o.revoked_at IS NULL AND ro.role_name <> $1
-FOR UPDATE OF ro, rp, o
+WHERE rp.permission = '*' AND r.parent_role IS NULL AND o.revoked_at IS NULL AND ro.role_name <> $1
+FOR UPDATE OF ro, rp, r, o
 `
 	const synodQ = `
 SELECT so.aid
 FROM synod_operators so
 JOIN synod_roles sr ON sr.synod_name = so.synod_name
 JOIN rbac_role_permissions rp ON rp.role_name = sr.role_name
+JOIN rbac_roles r ON r.name = sr.role_name
 JOIN operators o ON o.aid = so.aid
-WHERE rp.permission = '*' AND o.revoked_at IS NULL AND sr.role_name <> $1
-FOR UPDATE OF so, sr, rp, o
+WHERE rp.permission = '*' AND r.parent_role IS NULL AND o.revoked_at IS NULL AND sr.role_name <> $1
+FOR UPDATE OF so, sr, rp, r, o
 `
 	direct, err := scanAIDs(ctx, tx, directQ, excludeRole)
 	if err != nil {
@@ -615,19 +708,21 @@ func (s *Service) lockWildcardAdminsExcludingPair(ctx context.Context, tx ExecQu
 SELECT ro.aid
 FROM rbac_role_operators ro
 JOIN rbac_role_permissions rp ON rp.role_name = ro.role_name
+JOIN rbac_roles r ON r.name = rp.role_name
 JOIN operators o ON o.aid = ro.aid
-WHERE rp.permission = '*' AND o.revoked_at IS NULL
+WHERE rp.permission = '*' AND r.parent_role IS NULL AND o.revoked_at IS NULL
   AND NOT (ro.role_name = $1 AND ro.aid = $2)
-FOR UPDATE OF ro, rp, o
+FOR UPDATE OF ro, rp, r, o
 `
 	const synodQ = `
 SELECT so.aid
 FROM synod_operators so
 JOIN synod_roles sr ON sr.synod_name = so.synod_name
 JOIN rbac_role_permissions rp ON rp.role_name = sr.role_name
+JOIN rbac_roles r ON r.name = sr.role_name
 JOIN operators o ON o.aid = so.aid
-WHERE rp.permission = '*' AND o.revoked_at IS NULL
-FOR UPDATE OF so, sr, rp, o
+WHERE rp.permission = '*' AND r.parent_role IS NULL AND o.revoked_at IS NULL
+FOR UPDATE OF so, sr, rp, r, o
 `
 	direct, err := scanAIDs(ctx, tx, directQ, excludeRole, excludeAID)
 	if err != nil {
@@ -715,9 +810,10 @@ SELECT so.aid
 FROM synod_operators so
 JOIN synod_roles sr ON sr.synod_name = so.synod_name
 JOIN rbac_role_permissions rp ON rp.role_name = sr.role_name
+JOIN rbac_roles r ON r.name = sr.role_name
 JOIN operators o ON o.aid = so.aid
-WHERE rp.permission = '*' AND o.revoked_at IS NULL AND so.synod_name <> $1
-FOR UPDATE OF so, sr, rp, o
+WHERE rp.permission = '*' AND r.parent_role IS NULL AND o.revoked_at IS NULL AND so.synod_name <> $1
+FOR UPDATE OF so, sr, rp, r, o
 `
 	direct, err := scanAIDs(ctx, tx, directClusterAdminsForUpdateSQL)
 	if err != nil {
@@ -740,10 +836,11 @@ SELECT so.aid
 FROM synod_operators so
 JOIN synod_roles sr ON sr.synod_name = so.synod_name
 JOIN rbac_role_permissions rp ON rp.role_name = sr.role_name
+JOIN rbac_roles r ON r.name = sr.role_name
 JOIN operators o ON o.aid = so.aid
-WHERE rp.permission = '*' AND o.revoked_at IS NULL
+WHERE rp.permission = '*' AND r.parent_role IS NULL AND o.revoked_at IS NULL
   AND NOT (sr.synod_name = $1 AND sr.role_name = $2)
-FOR UPDATE OF so, sr, rp, o
+FOR UPDATE OF so, sr, rp, r, o
 `
 	direct, err := scanAIDs(ctx, tx, directClusterAdminsForUpdateSQL)
 	if err != nil {
@@ -766,10 +863,11 @@ SELECT so.aid
 FROM synod_operators so
 JOIN synod_roles sr ON sr.synod_name = so.synod_name
 JOIN rbac_role_permissions rp ON rp.role_name = sr.role_name
+JOIN rbac_roles r ON r.name = sr.role_name
 JOIN operators o ON o.aid = so.aid
-WHERE rp.permission = '*' AND o.revoked_at IS NULL
+WHERE rp.permission = '*' AND r.parent_role IS NULL AND o.revoked_at IS NULL
   AND NOT (so.synod_name = $1 AND so.aid = $2)
-FOR UPDATE OF so, sr, rp, o
+FOR UPDATE OF so, sr, rp, r, o
 `
 	direct, err := scanAIDs(ctx, tx, directClusterAdminsForUpdateSQL)
 	if err != nil {

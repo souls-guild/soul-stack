@@ -168,7 +168,7 @@ Interface `PermissionChecker.Check` **does not go to Postgres for every request*
 
 - **The source of the snapshot is the database.** The snapshot is built by three SELECTs using `rbac_roles` ⋈ `rbac_role_permissions` ⋈ `rbac_role_operators` (instead of the previous parsing `keeper.yml::rbac`). Permission lines are parsed `ParsePermission` when creating a snapshot.
 - **Updating the snapshot - B2 (implemented).** The snapshot is invalidated via Redis pub/sub: each mutation of the role / permissions / membership publishes a signal to the topic **`rbac:invalidate`** (envelope `{origin_kid, at}`), and all nodes re-read the snapshot from the database. **Self-filter by KID**: the node ignores its own signal (pattern `applybus` - the publishing node has already updated the snapshot in the same mutation transaction). **B1 TTL-poll remains fallback**: background goroutine (`rbac.Holder`) rereads the snapshot from the database at a fixed interval (`DefaultRefreshInterval` = 10s) - best-effort insurance in case of Redis being unavailable/lost signal; If the reread fails, the previous snapshot remains + warn. The aging window (seconds until the next TTL reread when the signal is lost) is acceptable: role/membership mutations are rare.
-- **Self-lockout checks - from the database, not from the snapshot.** The invariant "≥1 active `*`-admin will remain" (see § Built-in roles) is checked **not** by the enforcer's in-memory snapshot, but by direct SQL under `SELECT … FOR UPDATE` on `rbac_role_operators` / `rbac_role_permissions` / `operators` in the same transaction as the mutation. The snapshot becomes obsolete in the TTL window - a solution to it would give a staleness hole (you can remove the last admin if the snapshot still "remembers" the already-revoked second one); `FOR UPDATE` additionally serializes concurrent lockout operations on different nodes. See § Role Management.
+- **Self-lockout checks - from the database, not from the snapshot.** The invariant "≥1 active `*`-admin will remain" (see § Built-in roles) is checked **not** by the enforcer's in-memory snapshot, but by direct SQL under `SELECT … FOR UPDATE` on `rbac_role_operators` / `rbac_role_permissions` / `rbac_roles` / `operators` in the same transaction as the mutation (`rbac_roles` both filters out derived roles and locks against a concurrent re-rooting — see § Derived roles). The snapshot becomes obsolete in the TTL window - a solution to it would give a staleness hole (you can remove the last admin if the snapshot still "remembers" the already-revoked second one); `FOR UPDATE` additionally serializes concurrent lockout operations on different nodes. See § Role Management.
 - **RBAC outside the hot-reload-config-path.** The snapshot is rebuilt from the database (Redis pub/sub-invalidation via topic `rbac:invalidate` + TTL-poll fallback), **not** by `SIGHUP` / config-swap ([ADR-021](../adr/0021-hot-reload-config.md), clarified [ADR-028](../adr/0028-rbac-storage.md#adr-028-rbac-storage--postgres)). Revocation of role/membership (`role.revoke-operator` / `role.delete`) - `DELETE` in the database + re-reads the snapshot, effect for all future checks no later than the TTL window (separate from the irrevocability of the active JWT until `exp` - [ADR-014(d)](../adr/0014-operator-identity.md)).
 - **`Check` interface is unchanged** - only the source of the snapshot and the mechanism for updating it change, not the verification signature.
 
@@ -204,9 +204,11 @@ Invariant [ADR-028(f)](../adr/0028-rbac-storage.md#adr-028-rbac-storage--postgre
 | Path | When the check is triggered | What counts as "survivors" |
 |---|---|---|
 | `operator.revoke` | Review of the Archon holding `*` ([ADR-013(c)](../adr/0013-bootstrap-archon.md)). | Active `*`-admins, except the revoked AID. |
-| `role.delete` | The role being removed gives `*`. | Active `*`-admins through **other** roles (≠ to be deleted). |
-| `role.update` | The old role set gave `*`, the new one did not (removing `*`). | Active `*`-admins through other roles. If the new set also gives `*`, no check is needed. |
-| `role.revoke-operator` | The role is given `*` and membership is removed. | Active `*`-admins after excluding exactly the pair `(role, aid)` - AID remains if it holds `*` through another role; the role remains for other AIDs. |
+| `role.delete` | The role being removed is a **source**: bare `*` on a **plain** role. | Active `*`-admins through **other** plain roles (≠ to be deleted). |
+| `role.update` | The role **stops** being a source: `*` removed from the set, **or** the role becomes derived (`parent_role` set). | Active `*`-admins through other plain roles. If the result is still a plain `*` role, no check is needed. |
+| `role.revoke-operator` | The role is a source and membership is removed. | Active `*`-admins after excluding exactly the pair `(role, aid)` - AID remains if it holds `*` through another role; the role remains for other AIDs. |
+
+A **source** is a bare `*` on a role with `parent_role IS NULL`. A derived role never counts, in either column — see § Derived roles.
 
 Violation → `409 would-lock-out-cluster` (common problem-type for operator and role paths, [naming-rules.md → Error codes](../naming-rules.md#error-codes)). Self-lockout - "downward" protection (you cannot lock admin-set). A separate § Invariant least-privilege; `role.create` / `role.grant-operator` obey it, although self-lockout does not.
 
@@ -256,6 +258,10 @@ A plain role's parent side is the unrestricted top, so the same formula gives pl
 
 **Resolution.** The chain is flattened **once**, when the enforcer snapshot is built (§ How the enforcer resolves) — never walked per request, so a check costs the same as today. Cascade needs no extra machinery: the snapshot is already rebuilt on any role mutation ([ADR-028(d)](../adr/0028-rbac-storage.md#adr-028-rbac-storage--postgres) TTL poll + `rbac:invalidate`).
 
+`default_scope` is a **default**; the parent's effective scope is a **ceiling**. A per-permission `on <expr>` overrides the role's own `default_scope` (§ Selector grammar) and a `*` ignores it entirely — but neither escapes the parent's ceiling, which is conjoined onto every permission of a derived role. A `*` on a role derived from a scoped parent is therefore a **scoped** super-admin, not an unrestricted one. A bare permission is the exception: it stays bare and inherits the role's resolved scope, because writing the ceiling onto it would replace — and so discard — the child's own delta.
+
+Anything not **provably** inside the parent is dropped rather than clipped. An undecidable glob containment (`host matches web-0?` inside `host matches web-*`, left conservative by NIM-128 §C.5) costs the child that permission; a chain whose conjoined scope cannot be normalized within the DNF caps builds no enforcer at all.
+
 **Graph rules**, enforced in the schema ([migration 102](../../keeper/migrations/102_rbac_roles_parent_role.up.sql)) so they hold for every write path, and re-checked in Go at snapshot build:
 
 | Rule | Behaviour on violation |
@@ -270,7 +276,9 @@ Re-parenting is checked from both ends — the ancestors above the moved role an
 
 **The orphan policy is fail-closed on purpose.** Clearing the parent would turn the child's delta into an absolute scope and drop the parent's narrowing — a **widening**, i.e. escalation; re-rooting to the grandparent widens by definition; cascading the delete silently strips membership. Refusing is the only option that changes nobody's rights unasked. The operator re-parents or deletes the children explicitly.
 
-**Least-privilege still applies on top.** Creating or updating a derived role must satisfy **both** `child ⊆ parent` (structural) **and** the caller holding the parent (§ Invariant least-privilege, unchanged) — otherwise an operator with `role.create` could derive from a role far above their own rights.
+**Least-privilege still applies on top.** Creating or updating a derived role must satisfy **both** `child ⊆ parent` (structural) **and** the caller holding the parent (§ Invariant least-privilege, unchanged) — otherwise an operator with `role.create` could derive from a role far above their own rights. It is the **parent** the caller must cover, not merely what the child asks for today: the cascade will carry every later widening of that parent into the child. Both halves re-run on **every** role update, not only the one that sets `parent_role` — otherwise the create gate would be one PATCH wide. A child beyond its parent → `403` (`ErrRoleExceedsParent`).
+
+**Self-lockout counts PLAIN roles only.** A derived role is **never** a source of cluster-admin (§ Self-lockout invariant), including when its chain happens to resolve to an unrestricted `*` right now — that depends on a parent any other mutation may narrow. Two halves: the lockout probes filter `parent_role IS NULL` when counting survivors, and a role that **becomes derived** runs the same lockout check that removing its `*` would. Without the second half the invariant is trivially bypassable — keep the permission set identical, add a parent, and the cluster is locked out with no rule visibly firing.
 
 **Several roles on one operator — derivation narrows a ROLE, not an OPERATOR.** An operator's effective rights remain the **union** across their roles (§ Semantics of conflict — OR among allows). A derived role resolves to its attenuated rights first and then joins that union like any other role, so a child can never carry in more than its parent allows.
 
@@ -285,7 +293,7 @@ To actually confine an operator, revoke the wide parent from them; adding a narr
 
 This is also why a new derived role's parent is **one explicitly chosen role**, never "the caller's rights": a caller's union is wider than any single role they hold, so deriving against the union would mint a role broader than any role they could point at. The UI shows the ceiling of the **selected parent** for the same reason.
 
-> **Status.** The column, its guards and the plumbing that carries `parent_role` into the snapshot and the role catalog are in place (NIM-179). **Chain resolution is not**: nothing reads `parent_role` when a permission is checked yet, so a derived role currently grants only its own rows — narrower than the semantics above, never wider. Flattening, the extended subset check and the API/UI land in NIM-180 / NIM-181 / NIM-182.
+> **Status.** The model, its guards, chain resolution and the write-time gate are all in place (NIM-179 + NIM-180) — a stored `parent_role` is authoritative at the decision layer. What is **not** yet in place is the API surface: no endpoint or MCP tool accepts `parent_role` and `GET /v1/roles` does not return it, so a derived role can currently only be created through the service layer. That lands in NIM-181, the web selector in NIM-182.
 
 ### Builtin-border
 

@@ -64,6 +64,8 @@ func (roleSuccessPool) Query(_ context.Context, sql string, _ ...any) (pgx.Rows,
 		return &roleStrRows{values: []string{"*"}}, nil // caller=cluster-admin
 	case strings.Contains(sql, "SELECT default_scope FROM rbac_roles"):
 		return &roleNullStrRows{}, nil // NULL scope
+	case strings.Contains(sql, "SELECT parent_role FROM rbac_roles"):
+		return &roleNullStrRows{}, nil // NULL parent → a plain role (ADR-078)
 	case strings.Contains(sql, "SELECT 1 FROM rbac_role_operators"):
 		return &roleIntRows{values: []int{1}}, nil // membership exists (revoke)
 	}
