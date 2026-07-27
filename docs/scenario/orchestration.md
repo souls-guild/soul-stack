@@ -2,7 +2,7 @@
 
 This document is a **normative specification of the delta scenario** on top of the destiny task DSL core. The source of truth when implementing a scenario orchestrator.
 
-**DSL task core is NOT duplicated here.** All task blocks (`module:`, `include:`, `block:`, `params:`, task-level `vars:`, `when:`, `parallel:`, `loop:`, `register:`, `output:`, `no_log:`, `onchanges:`, `onfail:`, `require:`, `changed_when:`, `failed_when:`, `retry:`, `timeout:`), their semantics, barriers, requisites and template context - **are fully described in [destiny/tasks.md](../destiny/tasks.md)** and are inherited by the scenario as is. This document covers **only what destiny doesn't**: targeting, cross-host coordination, `apply: { destiny: … }`, `incarnation.state` entry, resource resolution, script tests.
+**DSL task core is NOT duplicated here.** All task blocks (`module:`, `include:`, `block:`, `params:`, task-level `vars:`, `when:`, `async:`, `loop:`, `register:`, `output:`, `no_log:`, `onchanges:`, `onfail:`, `require:`, `changed_when:`, `failed_when:`, `retry:`, `timeout:`), their semantics, barriers, requisites and template context - **are fully described in [destiny/tasks.md](../destiny/tasks.md)** and are inherited by the scenario as is. This document covers **only what destiny doesn't**: targeting, cross-host coordination, `apply: { destiny: … }`, `incarnation.state` entry, resource resolution, script tests.
 
 Any key not described here and not described in [destiny/tasks.md](../destiny/tasks.md) is a scenario validation error.
 
@@ -140,17 +140,17 @@ for `run_once:`) **deterministic**: lexicographically by `SID`.
 Non-deterministic order is prohibited - it breaks reproducibility
 destructive operations and topology assertions in script tests (§6).
 
-This axis is **orthogonal** to `parallel:` and `loop:` DSL cores - do not confuse:
+This axis is **orthogonal** to `async:` and `loop:` DSL cores - do not confuse:
 
 | Mechanism | Axis | Source | Semantics |
 |---|---|---|---|
-| `parallel:` (tasks.md §6) | threads on ONE host | — | fire-and-forget, flow does not wait |
+| `async:` (tasks.md §6) | concurrent flows on ONE host | — | fire-and-forget, the flow does not wait; barriers are `require:` / a register reference / the end of the run |
 | `loop:` (tasks.md §7) | data collection | `input.*` / `vars.*` | repeat step by element |
 | `serial:` | Target HOSTS | resolve `on:`/`where:` | waves across ≤N hosts, waves sequentially |
 | `run_once:` | Target HOSTS | resolve `on:`/`where:` | exactly one (first by SID) target host |
 
 Combinable: step with `loop:` under `serial:` runs the entire loop on each
-wave host; `parallel:` inside the host works regardless of waves.
+wave host; `async:` inside the host works regardless of waves.
 
 > **Discovery phase of `loop:` (normative).** `loop:` is expanded in
 > **render phase** - one task gives **N `RenderedTask`** for elements `items:`,
@@ -822,7 +822,7 @@ tasks: [ ... ]
 
 Commit `incarnation.state` (applying `state_changes` script) is **cross-host final-barrier**:
 
-1. The script unconditionally waits for the completion of **all** parallel tasks of **all** run hosts (final-barrier extension from [destiny/tasks.md §6](../destiny/tasks.md#6-parallelism-parallel-true) from one host to the cross-host scenario level).
+1. The script unconditionally waits for the completion of **all** async tasks of **all** run hosts (final-barrier extension from [destiny/tasks.md §6](../destiny/tasks.md#6-asynchronous-tasks-async-true) from one host to the cross-host scenario level). Per-host, that final barrier is the end of the host's `ApplyRequest` - i.e. the end of its current Passage ([ADR-0075](../adr/0075-intra-host-async-tasks.md)); the cross-host barrier here is the outer one, over the last Passage of every host.
 2. Only **after** this barrier `state_changes` are committed to `incarnation.state` (Postgres).
 3. If at least one task on at least one host is finally-failed → `state` **NOT committed** → incarnation goes to `status: error_locked` ([architecture.md → "Incarnation"](../architecture.md)).
 
@@ -1099,7 +1099,7 @@ step targeting for `create` is not entered; `where:`-invariant
 ## 9. See also
 
 - [concept.md](concept.md) - what is a scenario, border with destiny, declared vs actual role, role-agnostic essence.
-- [destiny/tasks.md](../destiny/tasks.md) - **DSL task core**, inherited by scenario entirely (source of truth according to `module`/`include`/`block`/`parallel`/`loop`/`register`/requisites/`retry`/`timeout`/`changed_when`/`failed_when`/template context).
+- [destiny/tasks.md](../destiny/tasks.md) - **DSL task core**, inherited by scenario entirely (source of truth according to `module`/`include`/`block`/`async`/`loop`/`register`/requisites/`retry`/`timeout`/`changed_when`/`failed_when`/template context).
 - [architecture.md → ADR-008](../adr/0008-coven-stable-tags.md), [ADR-009](../adr/0009-scenario-dsl.md).
 - [architecture.md → "Targeting and host communication"](../architecture.md) - `on:`/`where:`, resolver contract, probe.
 - [architecture.md → "Service - structure and manifest"](../architecture.md) - service repo layout and `scenario/<name>/main.yml`.

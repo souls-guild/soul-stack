@@ -10,7 +10,7 @@ Folder `scenario/<name>/` in the service git repo, entry point `main.yml`. Versi
 
 Before [ADR-009](../adr/0009-scenario-dsl.md), the invariant "scenario only `apply: { destiny: … }`, without `module:`" was in effect. **This invariant has been removed.** Scenario receives:
 
-- **Complete DSL core of destiny tasks** - entirely from [destiny/tasks.md](../destiny/tasks.md): `module:` (including modifying modules, not only read-only), `templates`, task-level `vars:`, `register:`, `loop:`, `block:`, `parallel:`, `onchanges:`/`onfail:`/`require:`, `changed_when:`/`failed_when:`, `retry:`, `timeout:`. This kernel is **not duplicated** in the scenario spec - there is only one source of truth.
+- **Complete DSL core of destiny tasks** - entirely from [destiny/tasks.md](../destiny/tasks.md): `module:` (including modifying modules, not only read-only), `templates`, task-level `vars:`, `register:`, `loop:`, `block:`, `async:`, `onchanges:`/`onfail:`/`require:`, `changed_when:`/`failed_when:`, `retry:`, `timeout:`. This kernel is **not duplicated** in the scenario spec - there is only one source of truth.
 - **The orchestration layer on top** is something that destiny doesn't have: targeting (`on:`/`where:`), cross-host coordination, `apply: { destiny: … }`, writing `incarnation.state` via `state_changes`. The delta regulatory specification is [orchestration.md](orchestration.md).
 
 destiny **remains** an independent entity (see border below): reusable, independently-versionable (git ref, [ADR-007](../adr/0007-versioning-git-ref.md)), isolated, molecule-testable brick of "how to bring one host into state X".

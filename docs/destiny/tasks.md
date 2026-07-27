@@ -20,7 +20,7 @@ A list element is **one** of three types, discriminated by the presence of exact
 | **Include-task** | `include:` | Includes the adjacent file `tasks/<name>.yml` (expands inline) |
 | **Block** | `block:` | Inline task group with common `when:` / requisites (see §6.5) |
 
-Parallel execution - `parallel: true` flag on any task, **not** a separate view. See §6.
+Asynchronous execution - `async: true` flag on any task, **not** a separate view. See §6.
 
 ## 3. Complete list of task blocks
 
@@ -35,7 +35,7 @@ Pivot table. Semantics, validation and examples are in §4-§8.
 | `params:` | map | module-task | required if `module:` |
 | `vars:` | map | everyone | optional |
 | `when:` | string (template-expr) | everyone (on include there is only a **static** predicate, see §4) | optional |
-| `parallel:` | bool | everyone | optional, default `false` |
+| `async:` | bool | everyone | optional, default `false` |
 | `loop:` | map | module-task | optional (on include - **deferred**, see §7) |
 | `register:` | string (identifier) | module-task | optional |
 | `id:` | string (identifier) | module-task (pilot) | optional |
@@ -115,7 +115,7 @@ cascade behave exactly as at the top level (see §6.5);
 infinite recursion;
   - `name:` on the include task works as **group header** in the apply log;
   - on an include task are allowed **only** `include:`/`name:`/`when:`; any other
-modifier (`vars:`/`loop:`/`register:`/`parallel:`/scenario-delta) - error
+modifier (`vars:`/`loop:`/`register:`/`async:`/scenario-delta) - error
 `include_modifier_unsupported` (disclosure whitelist so that scope is not lost silently).
 - **Conditional include (`when:` on the include task) - render-phase group-drop.** On
 include-task allow `when:` - then the connected task group is included in the plan
@@ -146,9 +146,11 @@ so the drop does not leave dangling register links.
 
 See §6.5 - inline task group with common `when:` / requisites.
 
-### `parallel:`
+### `async:`
 
 Flag on the task - see §6. Not a separate type of task.
+
+> `parallel:` is **reserved** and is not a valid key ([ADR-0075](../adr/0075-intra-host-async-tasks.md)): it is held for a future concurrent **group with a join**, which is a different construct from asynchrony. Writing it is an `unknown_key` error.
 
 ## 5. Naming convention `name:`
 
@@ -172,79 +174,98 @@ The specific max length will be fixed along with the lint rule.
 
 > The capital letter rule is fixed **only for destiny tasks**. For scenario and tests - a separate solution.
 
-## 6. Parallelism (`parallel: true`)
+## 6. Asynchronous tasks (`async: true`)
 
-`parallel:` - **flag** on a normal task (`bool`, default `false`). Not a separate type of task and **not a grouping mechanism**. Semantics - fire-and-forget: the task starts in a separate flow/thread, the main flow goes further without waiting for its completion.
+`async:` - **flag** on a normal task (`bool`, default `false`). Not a separate type of task and **not a grouping mechanism**. Semantics - fire-and-forget: the task starts in its own flow, the main flow goes on without waiting for its completion. Fixed by [ADR-0075](../adr/0075-intra-host-async-tasks.md).
+
+> **`parallel:` is reserved, not a synonym.** It is held for a future concurrent **group with a join** - a bounded set of tasks with a group-scoped outcome - which is a different construct from asynchrony. Today `parallel:` is not a valid key (`unknown_key`).
 
 ```yaml
-- name: Ping redis             # starts in thread A → flow moves on
-  module: core.exec.run
-  parallel: true
-  register: ping
-  params: { command: "redis-cli ping" }
+- name: Render nginx vhost         # starts in its own flow → flow moves on
+  module: core.file.rendered
+  async: true
+  register: vhost
+  params: { src: vhost.conf.tmpl, path: /etc/nginx/sites-enabled/app.conf }
 
-- name: Read replication state # starts in thread B → flow moves on
-  module: core.exec.run
-  parallel: true
-  register: repl
-  params: { command: "redis-cli INFO replication" }
+- name: Render app config          # starts in its own flow → flow moves on
+  module: core.file.rendered
+  async: true
+  register: appconf
+  params: { src: app.yml.tmpl, path: /etc/app/config.yml }
 
-- name: Read memory usage      # starts in thread C → flow moves on
-  module: core.exec.run
-  parallel: true
-  register: mem
-  params: { command: "redis-cli INFO memory" }
+- name: Fetch release bundle       # starts in its own flow → flow moves on
+  module: core.url.fetched
+  async: true
+  register: bundle
+  params: { url: "${ input.bundle_url }", path: /var/cache/app/bundle.tar.gz }
 
-- name: Collect diagnose result    # accesses register.ping/repl/mem →
-  module: core.noop.run            # implicit barrier: waiting for all three threads
-  params: {}
-  output:
-    ping:        "${ register.ping.stdout }"
-    replication: "${ register.repl.stdout }"   # parsing INFO replication - on the caller side scenario
-    memory:      "${ register.mem.stdout }"
+- name: Restart nginx              # explicit barrier: waits for the three above
+  module: core.service.restarted
+  require: [vhost, appconf, bundle]
+  onchanges: [vhost, appconf]      # ...and restarts only if a config actually changed
+  params: { name: nginx }
 ```
+
+`require:` answers **when** the task may start, `onchanges:` answers **whether** it should run at all. They are separate keys and combine by AND - see §8.
 
 ### Barriers
 
-Parallel tasks **MUST wait for completion** - but strictly in two moments: when referring to their `register:` and at the very end of destiny. There are no automatic barriers at the `include:` / `block:` boundaries: parallel tasks freely "flow" across these boundaries and continue to work in the background.
+An async task is **always waited for** - the question is only where. There are three barriers, and the explicit one is the form to reach for.
 
-1. **Implicit barrier - access to `register.<name>`.** If a subsequent task (via `when:`, `params:`, `output:`, `onchanges:`, `onfail:`, `require:`) references `register: <name>` parallel tasks - it blocks until this parallel task completes. The barrier is local: only for a specific `register: <name>`; the remaining parallel tasks continue to execute in the background.
+1. **Explicit - `require: [<register>, …]` or `require: all`.** The task does not start until the named async tasks have finished; `all` waits for every async task started earlier in this run. This is the **primary** form: the dependency is written in the plan, so a reader, `soul-lint` and a diff all see what waits for what. Details - §8.
 
-2. **Final barrier - the end of destiny.** At the very end of the destiny run, the framework certainly waits for **still** running parallel tasks. Destiny is not considered complete until all threads are finalized, and if at least one thread fails, destiny is considered failed. This is required behavior, not optional.
+2. **Implicit - a reference to `register.<name>` of an async task.** Works, but the *kind* of wait depends on **which key** the reference sits in (see the table below) - a difference that comes from where each key is resolved, not from a policy choice.
 
-3. **Explicit barrier - `require:` or `require: all`.** You can create a barrier task that waits for the mentioned parallel tasks (according to the register-id list) or **all** active parallel tasks (`require: all`). Details - §8.
+3. **Final - the end of the run.** The run does not complete until every async task is finalized. If at least one ends failed, the run is failed. This is required behaviour, not optional.
 
-### Parallel task leakage across boundaries
+#### Which reference produces which barrier
 
-`parallel: true` on the task inside `include:` or `block:` a thread starts **in the common run-context destiny**. When the include / block ends, the main flow moves on - parallel tasks continue to work in the background until their natural completion or until the final barrier.
+| Reference sits in | Resolved | Barrier |
+|---|---|---|
+| `when:` · `changed_when:` · `failed_when:` · `retry.until:` · `onchanges:` · `onfail:` · `require:` | Soul-side, inside one `ApplyRequest` | **local** - waits for that one task; the other async tasks keep running |
+| `where:` · `vars:` · `params:` · `apply.input:` · `output:` · `loop.items:` · `loop.when:` | Keeper-side, **before** dispatch | **full** - these keys define a Passage boundary ([ADR-056](../adr/0056-staged-render-passage.md)), so the reading task waits for the *entire* previous Passage on *every* host of the run |
+
+Practical consequence: `onchanges: [vhost]` waits for `vhost` alone, while `params: { path: "${ register.vhost.dest }" }` waits for everything. If a local wait is what you want, address the async task through a requisite or a flow-control predicate.
+
+### An async task does not outlive its Passage
+
+The unit of dispatch is one `ApplyRequest` per host **per Passage**, closed by its run result. An async flow cannot survive the message that carried it, so the final barrier is the end of the **current Passage**, not the end of the destiny.
+
+On an unstratified plan (one Passage - no cross-task register dependency in a Passage-defining key, the common case) the two coincide and the distinction is invisible. It becomes visible as soon as a probe splits the run into Passages: async work started in the probe Passage is finalized before the next Passage begins.
+
+### Concurrency limit
+
+There is **no limit in the DSL**: no per-task field and no default cap. The ceiling is a host-side setting, because how much concurrency a machine tolerates is not something the plan's author can judge:
 
 ```yaml
-# tasks/main.yml
-- name: Run background warmup
-  include: warmup.yml         # there are `parallel: true` tasks inside
-
-- name: Render main config    # starts immediately after include - does not wait for warmup
-  module: core.file.present
-  params: { ... }
-
-- name: Verify warmup complete
-  require: all                # explicit barrier - wait for all parallel tasks
-  module: core.noop.run
-  params: {}
+# soul.yml
+async:
+  max_concurrent: 0     # 0 / unset = unlimited; >0 = at most N async tasks in flight
 ```
 
-If this behavior is not desired (e.g. warmup should finish before render-config) - this is an explicit dependency via `require:`, not the implicit semantics of include.
+Above the ceiling an async task waits for a slot - it is never dropped and never fails for want of one. A run is correct at any setting, only slower.
+
+### ⚠️ Shared OS resources are the author's responsibility
+
+The framework does **not** serialize modules and modules do not declare whether they are safe under concurrency. Marking tasks `async:` that contend for the same OS resource is an authoring error, and the most obvious use of concurrency is the one that does **not** pay off:
+
+- **`core.pkg.*` gains nothing.** `core.pkg.installed` takes a single `name`, so N packages are N tasks; on Debian/Ubuntu apt is invoked with `-o DPkg::Lock::Timeout=300`, so concurrent installs do not fail - they **queue on the dpkg lock**. The result is the original serial duration plus lock-wait overhead, and outright failures once the queue exceeds the timeout. On `dnf`/`yum`/`apk` there is no wait flag, so contention surfaces as an error instead. Install packages sequentially.
+- **Same-target tasks conflict** whatever the module: two `core.file.*` on one path, two `core.service.*` on one unit, `core.line.*` in one file.
+- **Where the win actually is:** independent paths and independent endpoints - `core.file.rendered` over different destinations, `core.url.fetched`, read-only probes via `core.exec.run`.
+
+A declared per-module concurrency class is a deferred extension ([ADR-0075](../adr/0075-intra-host-async-tasks.md)), not a current guarantee.
 
 ### Rules
 
-- **No grouping.** `parallel: true` on two adjacent tasks **does not** mean "execute together". Each one simply runs in its own thread independently. Neighbors can be anything - other parallel tasks, regular (non-parallel) tasks, include, block.
-- **Failure semantics by default.** If the parallel task fails, `register.<name>.failed = true` is written. The main flow is **not** interrupted at the moment of fail - it learns about failure only with an implicit barrier (or in a final barrier). At the final barrier, destiny: if at least one parallel task is finally-failed → the entire destiny is considered failed.
-- **Cancel on first failure** — open Q (see §12). Now: a failed parallel task does not cancel the others.
-- **`when: false`** - the task is skipped, the thread does not start, `register.<name>` is missing, subsequent calls to it result in a validation error.
-- **Requisites via `register.<name>`** - they work, and the implicit barrier is implemented through them. `onchanges: [ping]` after `parallel: true ping` is correct: the framework waits for `ping` to complete, checks `register.ping.changed`, then executes/skips the current one.
-- **`include:` with `parallel: true`** - the entire connected file is executed in one thread (tasks inside are sequential, as usual); the main flow goes further. At the include boundary **there is no implicit barrier** - parallel tasks from the included file continue to run in the background until their natural completion / final barrier / explicit `require:`.
-- **`block:` with `parallel: true`** - block is executed in one thread (tasks inside are sequential); the main flow goes further. Through the block border - the same rule as for include: there is no barrier.
-- **`loop:` + `parallel: true`** - each iteration runs in a separate thread, the main flow goes on. Details - §7.
+- **No grouping.** `async: true` on two adjacent tasks **does not** mean "execute together". Each simply runs in its own flow independently. Neighbours can be anything - other async tasks, ordinary tasks, include, block. A construct that *does* group is the reserved `parallel:` (not implemented).
+- **Failure is observed where it is awaited.** A failed async task writes `register.<name>.failed = true` and **does not** interrupt the main flow at the moment it fails. The flow learns about it exactly where it reaches for it - an explicit `require:`, an implicit reference, or the final barrier - and there the ordinary fail-stop of §8 engages: the run is irreversibly failed, subsequent ordinary tasks are skipped, only the `onfail:` rescue tail runs.
+- **Siblings are never cancelled.** Async tasks already in flight run to completion and are collected by the final barrier. This is deliberate: cancelling would make the set of tasks that actually ran depend on scheduling timing and leave the host in a state no one declared. The cost is accepted - a doomed run may keep working as long as its slowest in-flight task. An opt-in cancel is a deferred extension ([ADR-0075](../adr/0075-intra-host-async-tasks.md)).
+- **Gating stays sequential.** The async task's own `when:` / `onchanges:` / `onfail:` are evaluated **in the main flow at its position in the plan**, before it is launched. So *whether* a task runs never depends on timing - only *when* it finishes does.
+- **`when: false`** - the task is skipped, the flow does not start, `register.<name>` is missing, subsequent calls to it result in a validation error.
+- **Requisites via `register.<name>`** work as usual and are the local-barrier form. `onchanges: [ping]` after an `async: true` task registering `ping` is correct: the framework waits for `ping`, checks `register.ping.changed`, then executes or skips the current task.
+- **The apply log is no longer in plan order.** Task events from async flows interleave; each carries its plan index and the UI orders by it, not by arrival. Nothing is lost - the order is not the plan's.
+- **`loop:` + `async: true`** - each iteration runs in its own flow, the main flow goes on. Details - §7.
+- **`include:` / `block:` with `async: true`** - **deferred** (see §6.5). Design intent: the whole connected group runs in one flow (tasks inside stay sequential) and the main flow goes on, with no implicit barrier at the group boundary. Gated fail-closed until a slice implements it (`async_on_block_invalid`).
 
 ## 6.5. Block - inline task group
 
@@ -279,7 +300,7 @@ All three tasks are executed only when `input.action == 'apply'`; if false, all 
 - **Internal `when:`** are valid and can be combined with an external one by AND: the internal task is executed only if the external `when:` block is truthy AND its own `when:` truthy.
 - **`register:`** on the block task itself does not make sense and is **disabled** - block does not call the module, there is nothing to register. Tasks inside can have their own `register:` names; they are available after the block.
 - **`name:` block tasks** - group header in the apply log, like the `include:` task. The naming convention is the same (§5).
-- **Parallelism:** `parallel: true` on the block task - **post-pilot** (parallel is entirely deferred - no prod-consumer; gate fail-closed, see error code `parallel_on_block_invalid`). Design Intent: `parallel: true` marks **the entire group** as a member of the current level parallel group; within the block, tasks are performed among themselves according to their own rules. Not implemented in pilot C1.
+- **Asynchrony:** `async: true` on the block task - **deferred** (gate fail-closed, error code `async_on_block_invalid`). Design intent ([ADR-0075](../adr/0075-intra-host-async-tasks.md)): the **entire group** runs in one async flow - tasks inside stay sequential among themselves - and the main flow goes on with no implicit barrier at the block boundary. Not implemented.
 - **`loop:`** on the block task - **post-pilot** (block+loop combination is deferred). Design intent: block is expanded N times with different values of the iteration variable, inside `${ <as>.* }` (or naked `<as>.*` in expression-keys) is available. Not implemented in pilot C1.
 - **Nesting.** Block inside block is allowed, depth is not strictly limited. In practice, 2 levels cover all realistic cases.
 
@@ -296,7 +317,7 @@ The specification above is the full design intent of `block:`. The implementatio
 
 **Post-pilot (spec saved as design intent, pilot C1 implementation does not support):**
 
-- `parallel: true` on block - parallel is entirely deferred (no prod-consumer; gate fail-closed `parallel_on_block_invalid`).
+- `async: true` on block - deferred (gate fail-closed `async_on_block_invalid`); design intent in §6.
 - `loop:` on block - block+loop combination delayed.
 
 ### `block:` inside the destiny-passage (apply:destiny)
@@ -306,7 +327,7 @@ The specification above is the full design intent of `block:`. The implementatio
 **Destiny-block key boundary** (stricter than scenario-block): scenario orchestration on destiny-block or its descendant is **prohibited** (`ErrUnsupportedDSL`) - in destiny it is meaningless (no roster resolution on the descendant, no nested `apply:`):
 
 - `where:` / `on:` / `serial:` / `run_once:` - targeting and waves live on the scenario-applier task, not inside destiny;
-- `parallel:` - parallel is entirely deferred (as in scenario-block);
+- `async:` - deferred on a block (as in scenario-block);
 - `loop:` — block+loop combination deferred;
 - `apply:`-child - nested `apply:` in destiny is prohibited (the same boundary as a flat destiny-task).
 
@@ -359,12 +380,13 @@ active branch), otherwise one placeholder for the entire task.
 **Static-when precedes DSL validation.** The same static-when-gate is triggered
 **before** checking support for DSL task constructs (`guardPilotDSL`/
 `guardDestinyTask`): statically-false task gated off is skipped even if it carries
-design not yet supported in the pilot (`parallel:`/`block:`). Therefore
+design not yet supported in the pilot (a deferred construct such as `async:` on a
+block, or `loop:` on an include). Therefore
 inactive branch multi-action destiny does not block rendering of active branch - unsupported
 DSL is rejected `unsupported_dsl` ONLY when that branch is activated (per-action
-validation). This is not a disguise: the task is not physically executed until `parallel:`
-the stream does not reach. Example: `diagnose`-branch with `parallel: true` +
-`when: input.action == 'diagnose'` silently boils at `action: update_acls`, and
+validation). This is not a disguise: the task is never physically executed, because
+the flow does not reach it. Example: a `diagnose`-branch carrying a deferred construct +
+`when: input.action == 'diagnose'` passes silently at `action: update_acls`, and
 with `action: diagnose` is rejected as unsupported.
 
 ### Basic syntax
@@ -389,7 +411,7 @@ with `action: diagnose` is rejected as unsupported.
 | `index_as:` | string | — | Variable name for index/key (optional) |
 | `when:` | template-expr | — | Element filter: Iterate only if the expression is truthy for a particular element |
 
-Parallelism of iterations is controlled by task-level `parallel: true`, not by a separate `loop.parallel:`. See subsection "`loop:` + `parallel: true`" below.
+Concurrency of iterations is controlled by task-level `async: true`, not by a separate `loop.async:`. See subsection "`loop:` + `async: true`" below.
 
 > **Pilot:** `items:` and `loop.when:` are calculated **once per run in
 > host-invariant context** (`input`/`register`/`incarnation` + loop-
@@ -424,13 +446,13 @@ Design intent (not implemented):
 
 The contents of `ensure-user.yml` would be executed N times, at each iteration `${ user.* }` (in lines) / `user.*` (in expression-keys) is available in the file's tasks.
 
-### `loop:` + `parallel: true`
+### `loop:` + `async: true`
 
-If the task has `parallel: true` **and** `loop:`, each iteration runs **in its own thread** (fire-and-forget). The main flow moves on after all iterations have started, without waiting.
+If the task has `async: true` **and** `loop:`, each iteration runs **in its own flow** (fire-and-forget). The main flow moves on after all iterations have started, without waiting.
 
 All iterations are written to the same `register: <name>` as an array of results (`register.<name>[0]`, `register.<name>[1]`, …). There are no special barrier semantics on the loop - the general rule §6 applies: the link to `register.<name>` waits for the completion of the **entire** task (that is, all iterations), because there is only one register by this name and is filled with the entire task.
 
-Use with caution: modules must be thread-safe relative to host state. For example, `core.pkg.installed` of two different packages in parallel is a conflict via apt-lock (apt holds a global lock). `core.exec.run` independent redis commands - usually safe.
+This is the widest fan-out the DSL can produce from one task, so §6's warning about shared OS resources applies hardest here. `core.pkg.installed` over a list of packages is the canonical mistake: apt serializes on the dpkg lock, so the iterations queue instead of overlapping and past `DPkg::Lock::Timeout` they start failing. A loop over independent destinations (`core.file.rendered`) or independent endpoints (`core.url.fetched`) is where the win is.
 
 ### What is not available
 
@@ -520,9 +542,10 @@ By default, the run operates in **fail-stop** mode: the first failed task (`fail
 
 - **Type:** **array of register-id** OR **string `"all"`**.
 - **Applies to:** all types of problems.
-- **Semantics:** the task does not start until the mentioned parallel tasks are completed. In a linear flow without `parallel:` the requirement is redundant (order is already guaranteed).
-- **Form 1 - `require: [a, b, c]`.** Wait for the listed tasks by their `register:`-id. The barrier is local - only for these three, the remaining parallel tasks continue to be executed.
-- **Form 2 - `require: all`.** Special meaning: wait for **all** active parallel tasks started earlier in this destiny run. Used as an explicit "synchronization barrier" - for example, before a task that wants to see a consistent state after several parallel phases. Mixed (`require: [a, "all"]`) - validation error; the form is strictly one of two.
+- **Semantics:** the task does not start until the mentioned async tasks have finished. In a linear flow without `async:` the requirement is redundant (order is already guaranteed).
+- **Form 1 - `require: [a, b, c]`.** Wait for the listed tasks by their `register:`-id. The barrier is local - only for these three, the remaining async tasks keep running.
+- **Form 2 - `require: all`.** Special meaning: wait for **all** active async tasks started earlier in this run. Used as an explicit "synchronization barrier" - for example, before a task that wants to see a consistent state after several async phases. Mixed (`require: [a, "all"]`) - validation error; the form is strictly one of two.
+- **This is the preferred way to depend on an async task** ([ADR-0075](../adr/0075-intra-host-async-tasks.md) §6): the dependency is stated in the plan and is readable statically, unlike an implicit wait created by referencing `register.<name>` somewhere in the task body - which, depending on the key it sits in, may be a local wait or a full Passage barrier (table in §6).
 
 ```yaml
 # Point Barrier
@@ -531,7 +554,7 @@ By default, the run operates in **fail-stop** mode: the first failed task (`fail
   require: [collect_cpu, collect_memory]
   params: { command: "report-send.sh" }
 
-# Global barrier - wait for all parallel tasks
+# Global barrier - wait for all async tasks
 - name: Final consistency check
   module: core.exec.run
   require: all
@@ -689,7 +712,7 @@ Dry-run is a **mode for running the entire destiny**, not a flag for a separate 
 - There are no side-effects on the host - modules in `Plan` only read/parse.
 - Render templates, validation `input:` / `params:`, verification `when:` / `onchanges:` - performed as in a real run.
 - `register.<name>` is filled with the planned values (the module returns them to `PlanReply`).
-- Task parameters that affect flow (`retry`, `timeout`, `parallel`) are **ignored** in dry-run: retry does not repeat (`Plan` is deterministic), timeout does not limit (but the framework sets a general timeout safety), parallel does not launch real threads (execution is sequential for a predictable report).
+- Task parameters that affect flow (`retry`, `timeout`, `async`) are **ignored** in dry-run: retry does not repeat (`Plan` is deterministic), timeout does not limit (but the framework sets a general timeout safety), `async` does not start real concurrent flows (execution is sequential for a predictable report).
 
 There is no special field for dry-run at the task level. If a task needs the behavior "do something special only in dry-run", this can be solved through the template context: `run.mode == 'dry_run'` (top-level expression-key, CEL without a wrapper) - open Q, whether such a variable should be entered (see §12).
 
@@ -707,7 +730,7 @@ Available in both positions:
 | `input.<name>` | Destiny parameters from the caller, declared in `destiny.yml → input:` and validated ([input.md](input.md)). |
 | `vars.<name>` | Destiny locals. Resolves according to the rule **task-level `vars:` beats file-level `vars.yml`** - the more local scope wins. More details: [vars.md](vars.md), task-level - §9. |
 | `soulprint.self.<…>` | Facts about the current host: `soulprint.self.os.family`, `soulprint.self.network.primary_ip`, `soulprint.self.memory.total_mb`, … ([ADR-018](../adr/0018-soulprint-typed.md), [`docs/soul/soulprint.md`](../soul/soulprint.md)). Bare `soulprint.<path>` without `.self` - validation error `soul-lint`. Cross-host requests (`soulprint.where(...)`, `soulprint.hosts`) - scenario level, **not destiny**. |
-| `register.<name>.*` | Results of previous tasks (per `register:`). Standard fields: `.changed`, `.failed`, `.timed_out` + fields from `output:` task. On a parallel task, calling `register.<name>` creates an **implicit barrier** (see §6). In a scenario, the probe step is executed on each target host → `register.<name>` is a per-host **map** `sid → payload`, not a scalar; convolution to one value - [scenario/orchestration.md §4.3](../scenario/orchestration.md). |
+| `register.<name>.*` | Results of previous tasks (per `register:`). Standard fields: `.changed`, `.failed`, `.timed_out` + fields from `output:` task. On an async task, referencing `register.<name>` creates an **implicit barrier** whose kind depends on the key it sits in (see the table in §6). In a scenario, the probe step is executed on each target host → `register.<name>` is a per-host **map** `sid → payload`, not a scalar; convolution to one value - [scenario/orchestration.md §4.3](../scenario/orchestration.md). |
 | `register.self.*` | Own result of the task. Available **in all expression-key task contexts** - `changed_when:` / `failed_when:` / `until:` (destiny + scenario), as well as `where:` (scenario-only, see [orchestration.md §4](../scenario/orchestration.md)). |
 | `soulprint.hosts` | **Scenario-only.** List of run hosts; element - stable facts `sid` / `role` (declared) / `network` / `os` / `covens`. `.where("<pred>")` filters by any attribute (predicate-string). In destiny **not available** (like any cross-host `soulprint` request); destiny receives topology only through `apply: input:`. Specification - [scenario/orchestration.md §4.1](../scenario/orchestration.md). |
 | `incarnation.host_count` | **Scenario-only.** Number of hosts in the run target. Used in the probe idiom of completeness (`failed_when: size(register.<p>) < incarnation.host_count`, [scenario/orchestration.md §5](../scenario/orchestration.md)). Not available in destiny (part of `incarnation.*`, scenario-scope). The formal definition is [`docs/scenario/orchestration.md §4.2`](../scenario/orchestration.md). |
@@ -789,12 +812,19 @@ Resolved before or during implementation, fixed by editing this document.
 - **Coverage semantics of `loop:`.** Is each iteration a separate coverage-hit, or "task with loop = one hit with N≥1"? Affects the coverage formula in [testing.md](testing.md).
 - **Max length for `name:`.** Specific number + what to do with excess (warn / error).
 
-### Parallel
-- **Cancel on first failure.** When a parallel task fails, should the remaining in-flights be canceled via host-side cancel, or should they be allowed to finish (current behavior)?
-- **Concurrency limit.** Is it worth introducing max-concurrent-tasks for destiny (protection from a barrage of threads)? Now there is no limit.
-- **Final-barrier timeout.** Global limit on the final wait at the end of destiny. Currently absent - destiny waits for parallel tasks indefinitely (the modules themselves can give up on `timeout:` tasks).
-- **`require: all` scope.** Currently "all active parallel tasks started earlier in this run." To clarify: should we count already completed ones (for consistency, so that failure-state is available), or only in-flight? Now only in-flight is expected.
-- **Addressing a specific iteration in `loop` + `parallel:`.** Now the reference to `register.<name>` is waiting for the entire task (all iterations). If someone wants to wait for a specific `register.<name>[i]` - should it be a local barrier on the iteration? Or does this turn the loop into a DAG, which is what we're intentionally avoiding?
+### Async
+
+Closed by [ADR-0075](../adr/0075-intra-host-async-tasks.md): the key is `async:` (fire-and-forget), `parallel:` is reserved for a future group-with-join; a failure is observed at the barrier that awaits it and **siblings are never cancelled** (a cancel policy would make the executed set depend on scheduling timing); there is **no DSL concurrency limit** - the ceiling is host-side `async.max_concurrent` in `soul.yml`, unlimited unless set; module concurrency safety is the author's, documented per §6.
+
+Still open:
+
+- **Opt-in cancel on first failure.** The default is settled (do not cancel). Whether to offer an explicit per-task or per-run opt-out for cases where a doomed run should stop paying for its in-flight work.
+- **The `parallel:` group-with-join construct.** A bounded set of tasks with a group-scoped outcome and error boundary. Reserved, not specified.
+- **`async:` on `include:` / `block:`.** Design intent recorded in §6; gated fail-closed (`async_on_block_invalid`) until a slice implements it.
+- **Final-barrier timeout.** Global limit on the final wait at the end of a run. Currently absent - the run waits for its async tasks indefinitely (the tasks themselves can give up on their own `timeout:`).
+- **`require: all` scope.** Currently "all active async tasks started earlier in this run." To clarify: should already-finished ones count (for consistency, so failure-state is available), or only in-flight? Now only in-flight is expected.
+- **Addressing a specific iteration in `loop:` + `async:`.** Now the reference to `register.<name>` waits for the entire task (all iterations). If someone wants to wait for a specific `register.<name>[i]` - should it be a local barrier on the iteration? Or does this turn the loop into a DAG, which is what we're intentionally avoiding?
+- **A declared per-module concurrency class.** The closed `side_effects` resource enum exists only in the plugin manifest; the statically-built core modules have none, so a resource-aware validator needs its own ADR and sweep.
 
 ### Requisites
 - **`prereq:`** - the reverse of `require:` (A waits for changes in B; if B is about to change, A is executed first). Is it necessary?
