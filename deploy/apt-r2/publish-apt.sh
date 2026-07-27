@@ -40,7 +40,13 @@ debs=$(find "$DEB_DIR" -maxdepth 1 -name '*.deb' | wc -l)
 echo "publish-apt: mirroring $debs package(s) into suite=$SUITE component=$COMPONENT"
 
 # 1. Layout: pool/<component>/ holds the .deb blobs; dists/ holds the indexes.
+# The pool is rebuilt from DEB_DIR every run: WORK_DIR persists between runs, so a
+# package dropped from the release would otherwise linger here and be re-uploaded
+# forever — the remote prune below can only remove what the staging tree no longer
+# has. dists/ is left alone so old by-hash copies survive as a grace window for
+# clients that read InRelease just before a publish.
 pool="$WORK_DIR/pool/$COMPONENT"
+rm -rf "$pool"
 mkdir -p "$pool"
 cp -f "$DEB_DIR"/*.deb "$pool/"
 

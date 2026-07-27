@@ -1002,8 +1002,10 @@ trial: build
 	@echo "trial: L0 trials of the examples/service/ + examples/destiny/ corpus passed"
 
 # --- Load testing (soul-legion) ---
-# One-button run of the soul-legion load generator (tests/load/, ADR-004:
-# test-only, NOT a shipped binary; outside MODULES -- `make check` doesn't touch it).
+# One-button run of the soul-legion load generator against the local dev stand.
+# soul-legion is a shipped binary (ADR-004 Amendment 2026-07-26); it carries no
+# localhost defaults of its own, so every endpoint below is passed explicitly.
+# Still outside MODULES -- `make check` doesn't lint/vet it yet.
 # Full plan/methodology/measured numbers -- docs/testing/load-testing.md.
 #
 # Precondition: a running dev stand (keeper event-stream :9443 / metrics :9090 /
@@ -1053,6 +1055,10 @@ OPENAPI         ?= http://127.0.0.1:8080
 METRICS         ?= http://127.0.0.1:9090
 PG              ?= postgres://keeper:keeper@localhost:5434/keeper?sslmode=disable
 VAULT           ?= http://127.0.0.1:8200
+VAULT_TOKEN     ?= root
+# The dev Keeper cert is issued for "localhost", while KEEPER_ENDPOINT dials
+# 127.0.0.1 -- pass SNI explicitly so verification still matches.
+SERVER_NAME     ?= localhost
 # root CA of the Keeper server cert -- same path as listen.event_stream.tls.ca in
 # dev/keeper.dev.yml (Vault PKI root, CN=soul-stack).
 STRESS_CA       ?= /tmp/keeper-dev/tls/vault-ca.crt
@@ -1083,10 +1089,12 @@ stress:
 	echo "stress: running soul-legion (count=$(COUNT) ramp=$(RAMP)/$(RAMP_INTERVAL) duration=$(DURATION) coven=$(COVEN) api=$(API) voyage=$(VOYAGE) write=$(WRITE))"; \
 	./tests/load/bin/soul-legion \
 		--keeper-endpoint='$(KEEPER_ENDPOINT)' \
+		--server-name='$(SERVER_NAME)' \
 		--metrics='$(METRICS)' \
 		--openapi='$(OPENAPI)' \
 		--pg='$(PG)' \
 		--vault='$(VAULT)' \
+		--vault-token='$(VAULT_TOKEN)' \
 		--ca='$(STRESS_CA)' \
 		--coven='$(COVEN)' \
 		--count=$(COUNT) \

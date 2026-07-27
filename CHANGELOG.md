@@ -5,7 +5,33 @@ Artifact versioning — via git ref ([ADR-007](docs/adr/0007-versioning-git-ref.
 
 ## [Unreleased]
 
-Backlog after `v0.1.0-beta.1`. Empty for now.
+### Added
+
+- `soul-stack-tools` — meta package installing the whole authoring-side CLI set
+  (`soulctl` + `soul-lint` + `soul-trial`) in one step. Carries no files itself.
+  The `keeper` and `soul` daemons stay separate packages on purpose: a server
+  installs only what it runs.
+
+### Changed
+
+- Package renames, dropping a doubled `soul-`: `soul-stack-soul-lint` →
+  **`soul-stack-lint`**, `soul-stack-soul-trial` → **`soul-stack-trial`**. The
+  binaries (`soul-lint`, `soul-trial`) are unchanged. Both packages declare
+  `Provides`/`Replaces`/`Conflicts` on their old names, so `apt`/`dnf` retire the
+  old package on upgrade rather than leaving it orphaned.
+
+- `soul-legion` is now a supported artifact ([ADR-004 Amendment
+  2026-07-26](docs/adr/0004-binaries.md)), shipped as **`soul-stack-legion`**, so
+  operators can size their own clusters instead of trusting the projection table.
+  It gained `--version`, and every environment flag (`--keeper-endpoint`, `--ca`,
+  `--pg`, `--vault`, `--openapi`) is now **required with no default** — it used to
+  fall back to a developer box (`/tmp/keeper-dev` CA, a localhost DSN, Vault token
+  `root`), which is not something a released binary may do.
+
+  It is **not** a black-box benchmark: it writes the stub souls' identity straight
+  into the cluster (`souls`/`soul_seeds`) and mints their certs from Vault PKI, so
+  it needs cluster database credentials and a PKI-issue token. Run it against a
+  bench cluster, never production.
 
 ---
 

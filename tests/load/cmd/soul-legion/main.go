@@ -1,17 +1,25 @@
-// Command soul-legion -- load stub generator (Phase 0, docs/testing/load-testing.md).
+// Command soul-legion -- the Soul Stack load generator (docs/testing/load-testing.md,
+// ADR-004 Amendment 2026-07-26).
 //
-// Test-only artifact (NOT a shipped binary, ADR-004): brings up N concurrent
-// fake-Soul streams (gRPC bidi over mTLS EventStream) to a live Keeper,
-// measures achieved-N / connect latency / Keeper resource usage, and
+// Brings up N concurrent fake-Soul streams (gRPC bidi over mTLS EventStream) to a
+// live Keeper, measures achieved-N / connect latency / Keeper resource usage, and
 // compares against the scaling.md projection table.
 //
-// Example (dev stand):
+// NOT a black-box client: to make the stub souls acceptable to the Keeper it
+// writes their identity straight into the cluster (INSERT into souls/soul_seeds
+// over --pg) and mints their leaf certs from Vault PKI (--vault, --vault-token),
+// then removes them again by --sid-prefix on exit. It therefore needs cluster
+// database credentials and a PKI-issue token, and belongs on a bench cluster —
+// never point it at a production Keeper.
+//
+// Every environment flag is required and has no default: a benchmark that
+// silently talks to localhost is worse than one that refuses to start.
 //
 //	soul-legion \
-//	  --keeper-endpoint=127.0.0.1:9443 --metrics=http://127.0.0.1:9090 \
-//	  --pg=postgres://keeper:keeper@localhost:5434/keeper?sslmode=disable \
-//	  --vault=http://127.0.0.1:8200 --vault-token=root \
-//	  --ca=/tmp/keeper-dev/tls/vault-ca.crt \
+//	  --keeper-endpoint=keeper.bench:9443 --server-name=keeper.bench \
+//	  --ca=/etc/soul-stack/bench-ca.crt \
+//	  --pg='postgres://keeper:...@pg.bench:5432/keeper' \
+//	  --vault=https://vault.bench:8200 --vault-token="$VAULT_TOKEN" \
 //	  --count=1000 --ramp=200 --ramp-interval=500ms --duration=30s
 package main
 
@@ -30,17 +38,68 @@ import (
 	"github.com/souls-guild/soul-stack/tests/load/legion"
 )
 
+// legionVersion is the binary version, injected via
+// -ldflags '-X main.legionVersion=...' (symmetric with soulctlVersion). On a bare
+// build without ldflags it stays "0.0.0-dev".
+var legionVersion = "0.0.0-dev"
+
+// flagRequirements carries the flags whose necessity depends on the enabled axes.
+type flagRequirements struct {
+	keeperEP, caPath, pgDSN, vaultAddr, vaultToken, openAPI string
+	register, api, voyage, write                            bool
+}
+
+// missingFlags reports the required flags left empty, so the binary can refuse to
+// start with one clear message instead of failing mid-ramp.
+func missingFlags(r flagRequirements) []string {
+	var missing []string
+	if r.keeperEP == "" {
+		missing = append(missing, "--keeper-endpoint")
+	}
+	if r.caPath == "" {
+		missing = append(missing, "--ca")
+	}
+	// The setup phase fabricates the stub souls' identity: DSN to write them into
+	// souls/soul_seeds, Vault to mint their certs. Without --register the caller
+	// brought its own identities, so neither is needed.
+	if r.register {
+		if r.pgDSN == "" {
+			missing = append(missing, "--pg")
+		}
+		if r.vaultAddr == "" {
+			missing = append(missing, "--vault")
+		}
+		if r.vaultToken == "" {
+			missing = append(missing, "--vault-token (or $VAULT_TOKEN)")
+		}
+	}
+	if (r.api || r.voyage || r.write) && r.openAPI == "" {
+		missing = append(missing, "--openapi")
+	}
+	return missing
+}
+
+// hostOf strips the port from a host:port endpoint, for the default SNI name.
+func hostOf(endpoint string) string {
+	if i := strings.LastIndex(endpoint, ":"); i > 0 {
+		return endpoint[:i]
+	}
+	return endpoint
+}
+
 func main() {
 	var (
-		keeperEP   = flag.String("keeper-endpoint", "127.0.0.1:9443", "Keeper event_stream host:port (mTLS)")
-		serverName = flag.String("server-name", "localhost", "SNI/server-cert verification (dev: localhost)")
-		metricsURL = flag.String("metrics", "http://127.0.0.1:9090", "Keeper /metrics base URL (empty -> no scraping)")
-		pgDSN      = flag.String("pg", "postgres://keeper:keeper@localhost:5434/keeper?sslmode=disable", "PG DSN of the Keeper cluster for the setup phase")
-		vaultAddr  = flag.String("vault", "http://127.0.0.1:8200", "Vault addr (dev-PKI)")
-		vaultToken = flag.String("vault-token", "root", "Vault token")
+		// Environment flags: no defaults on purpose (see the package doc). The dev
+		// stand supplies them from the `make stress` target, not from this binary.
+		keeperEP   = flag.String("keeper-endpoint", "", "REQUIRED. Keeper event_stream host:port (mTLS)")
+		serverName = flag.String("server-name", "", "SNI/server-cert verification (default: host part of --keeper-endpoint)")
+		metricsURL = flag.String("metrics", "", "Keeper /metrics base URL (empty -> no scraping)")
+		pgDSN      = flag.String("pg", "", "REQUIRED with --register. PG DSN of the Keeper cluster for the setup phase")
+		vaultAddr  = flag.String("vault", "", "REQUIRED with --register. Vault addr issuing the stub souls' certs")
+		vaultToken = flag.String("vault-token", "", "Vault token (falls back to $VAULT_TOKEN)")
 		pkiMount   = flag.String("pki-mount", "pki", "Vault PKI mount")
 		pkiRole    = flag.String("pki-role", "soul-seed", "Vault PKI role")
-		caPath     = flag.String("ca", "/tmp/keeper-dev/tls/vault-ca.crt", "root CA of the Keeper server cert (PEM)")
+		caPath     = flag.String("ca", "", "REQUIRED. Root CA of the Keeper server cert (PEM)")
 		count      = flag.Int("count", 100, "number of fake-Soul streams N")
 		domain     = flag.String("domain", "example.com", "SID domain: legion-<NNNNN>.<domain>")
 		sidPrefix  = flag.String("sid-prefix", "legion-", "SID prefix (isolation from the real fleet + cleanup)")
@@ -55,7 +114,7 @@ func main() {
 		issueConc  = flag.Int("issue-concurrency", 32, "Vault-issue concurrency in the setup phase")
 
 		// -- axis B (API load) + axis C (a single Voyage), on top of a live legion --
-		openAPI    = flag.String("openapi", "http://127.0.0.1:8080", "OpenAPI listener base URL (/v1 handlers)")
+		openAPI    = flag.String("openapi", "", "REQUIRED with --api/--voyage/--write. OpenAPI listener base URL (/v1 handlers)")
 		jwt        = flag.String("jwt", "", "admin-Archon-JWT for /v1 (Bearer); empty -> axis B/C skipped (operator: TOKEN=$(make dev-jwt))")
 		apiLoad    = flag.Bool("api", false, "axis B: round-robin run over all safe /v1 handlers on top of the legion")
 		apiConc    = flag.Int("api-concurrency", 16, "number of parallel API workers (axis B)")
@@ -69,8 +128,32 @@ func main() {
 		writeLoad = flag.Bool("write", false, "axis write: create->delete cycles of safe entities (synod/role/push-provider/herald), write+audit path profile")
 		writeConc = flag.Int("write-concurrency", 8, "number of parallel write workers (write is heavier than read -> fewer workers)")
 		writeDur  = flag.Duration("write-duration", 0, "duration of the write run (0 -> takes --api-duration)")
+
+		showVersion = flag.Bool("version", false, "print the version and exit")
 	)
 	flag.Parse()
+
+	if *showVersion {
+		fmt.Printf("soul-legion %s\n", legionVersion)
+		return
+	}
+
+	if *vaultToken == "" {
+		*vaultToken = os.Getenv("VAULT_TOKEN")
+	}
+	if *serverName == "" {
+		*serverName = hostOf(*keeperEP)
+	}
+	if missing := missingFlags(flagRequirements{
+		keeperEP: *keeperEP, caPath: *caPath, pgDSN: *pgDSN, vaultAddr: *vaultAddr,
+		vaultToken: *vaultToken, openAPI: *openAPI,
+		register: *register, api: *apiLoad, voyage: *voyageRun, write: *writeLoad,
+	}); len(missing) > 0 {
+		fmt.Fprintf(os.Stderr, "soul-legion: missing required flag(s): %s\n", strings.Join(missing, ", "))
+		fmt.Fprintln(os.Stderr, "soul-legion: this is a load generator for a bench cluster; it has no localhost defaults.")
+		fmt.Fprintln(os.Stderr, "soul-legion: run with --help for the full list.")
+		os.Exit(2)
+	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()

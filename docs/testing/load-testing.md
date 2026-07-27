@@ -48,7 +48,7 @@ Harness is built **on the foundation of the existing soulstub** ([`tests/e2e/int
 
 ### Component 1 - `soul-legion` (mass of streams)
 
-Tool name is **`soul-legion`** ([naming-rules.md → Soul Legion](../naming-rules.md#soul-legion); metaphor "legion" = many souls). Test-only artifact: package/binary `soul-legion` in directory `tests/load/` (next to `tests/e2e/`/`tests/e2e-live/`/`tests/e2e-k8s/`), **NOT** shipping binary ([ADR-004](../adr/0004-binaries.md#adr-004-binary-layout--keeper-soul-soul-lint-push-mode-as-a-module-inside-keeper) captures only `keeper`/`soul`/`soul-lint`).
+Tool name is **`soul-legion`** ([naming-rules.md → Soul Legion](../naming-rules.md#soul-legion); metaphor "legion" = many souls). Package/binary `soul-legion` lives in `tests/load/` (next to `tests/e2e/`/`tests/e2e-live/`/`tests/e2e-k8s/`) but **is a shipped artifact** ([ADR-004 Amendment 2026-07-26](../adr/0004-binaries.md#adr-004-binary-layout--keeper-soul-soul-lint-push-mode-as-a-module-inside-keeper)): operators size their own clusters with it. It needs cluster DB credentials and a Vault PKI token (it fabricates the stub souls' identity), so it belongs on a bench cluster, never in production.
 
 - **Foundation** - `soulstub`: move it out of `//go:build e2e` into reusable code on which `soul-legion` stands.
 - **Emulation contract (same as soulstub):** `Hello`/`EventStream`/heartbeat/`SoulprintReport`/`RunResult`. `soul-legion` **DOES NOT parse Destiny and DOES NOT apply** - this is deliberate: the A/C axis measures the load **on the Keeper**, and not the realism of apply on the host (realism - L3b, real-soul-in-container). Otherwise, the load host itself will become a bottleneck and the measurements will be about it, and not about Keeper.

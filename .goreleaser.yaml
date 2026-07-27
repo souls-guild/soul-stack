@@ -100,9 +100,10 @@ builds:
     ldflags:
       - -s -w
 
-  # soul-legion — load generator (tests/load module, ADR-004). Shipped as a CLI
-  # dev tool across all OSes. No version var injected (built without ldflags in
-  # the Makefile), so mirror soul-lint/soul-trial.
+  # soul-legion — the load generator (ADR-004 Amendment 2026-07-26). Its code
+  # lives in the tests/load module, but it ships: operators size a cluster with
+  # it. Version is injected like soulctl's, so `soul-legion --version` matches
+  # the release.
   - id: soul-legion
     binary: soul-legion
     main: ./tests/load/cmd/soul-legion
@@ -113,7 +114,7 @@ builds:
     flags:
       - -trimpath
     ldflags:
-      - -s -w
+      - -s -w -X main.legionVersion={{ .Version }}
 
 # One bundle per platform holding every binary that builds for it: linux carries
 # all six (keeper/soul/soul-lint/soulctl/soul-trial/soul-legion); macOS/windows
@@ -213,8 +214,14 @@ nfpms:
         dependencies: [shadow-utils]
 
   - id: soul-lint
-    package_name: soul-stack-soul-lint
+    package_name: soul-stack-lint
     ids: [soul-lint]
+    # Renamed from soul-stack-soul-lint — the doubled "soul-" read as a stutter.
+    # The binary is still soul-lint; only the package name changed. The three
+    # fields below retire the old name on upgrade instead of orphaning it.
+    provides: [soul-stack-soul-lint]
+    replaces: [soul-stack-soul-lint]
+    conflicts: [soul-stack-soul-lint]
     vendor: Soul Stack
     homepage: https://github.com/souls-guild/soul-stack
     maintainer: Soul Stack <noreply@soul-stack.com>
@@ -245,8 +252,12 @@ nfpms:
     formats: [deb, rpm, apk]
 
   - id: soul-trial
-    package_name: soul-stack-soul-trial
+    package_name: soul-stack-trial
     ids: [soul-trial]
+    # Renamed from soul-stack-soul-trial, same reasoning as soul-stack-lint.
+    provides: [soul-stack-soul-trial]
+    replaces: [soul-stack-soul-trial]
+    conflicts: [soul-stack-soul-trial]
     vendor: Soul Stack
     homepage: https://github.com/souls-guild/soul-stack
     maintainer: Soul Stack <noreply@soul-stack.com>
@@ -259,14 +270,42 @@ nfpms:
     formats: [deb, rpm, apk]
 
   - id: soul-legion
-    package_name: soul-stack-soul-legion
+    package_name: soul-stack-legion
     ids: [soul-legion]
     vendor: Soul Stack
     homepage: https://github.com/souls-guild/soul-stack
     maintainer: Soul Stack <noreply@soul-stack.com>
     description: |
-      Soul Stack soul-legion — load generator for Keeper (tests/load, ADR-004).
-      CLI dev tool, no daemon and no config.
+      Soul Stack soul-legion — load generator for sizing a Keeper cluster: holds
+      N stub-Soul mTLS streams and reports the cliff point. Needs cluster DB
+      credentials and a Vault PKI token; run it against a bench cluster.
+    license: BUSL-1.1
+    section: devel
+    priority: optional
+    formats: [deb, rpm, apk]
+
+  # soul-stack-tools — meta package: one install for the whole authoring-side CLI
+  # set (soulctl + soul-lint + soul-trial — the same three binaries the Homebrew
+  # cask and the winget manifest carry). Ships no files of its own, it only pulls
+  # the three in. The keeper and soul daemons stay deliberately out: a server
+  # should not drag in authoring tools, and each daemon is installed on its own.
+  # `ids` anchors the arch matrix to one build (meta:true drops its binary), so
+  # the meta package is emitted once per linux arch.
+  - id: tools
+    package_name: soul-stack-tools
+    meta: true
+    ids: [soulctl]
+    dependencies:
+      - soul-stack-soulctl
+      - soul-stack-lint
+      - soul-stack-trial
+    vendor: Soul Stack
+    homepage: https://github.com/souls-guild/soul-stack
+    maintainer: Soul Stack <noreply@soul-stack.com>
+    description: |
+      Soul Stack tools — meta package installing the operator and authoring CLIs
+      in one step: soulctl, soul-lint and soul-trial. Contains no files itself;
+      the keeper and soul daemons are separate packages.
     license: BUSL-1.1
     section: devel
     priority: optional
@@ -313,20 +352,21 @@ homebrew_casks:
 # linux-only daemons), so the manifest is a portable multi-binary package: winget
 # unpacks the zip and aliases soulctl/soul-lint/soul-trial/soul-legion onto PATH.
 #
-# `skip_upload: true` — DORMANT ON PURPOSE, not a leftover. Every tag renders the
-# manifests into dist/ (so this config stays exercised and provably valid), but
-# nothing is pushed and no pull request is opened. Windows is not an audience we
-# have yet: the soul agent is linux-only, so a winget package can only ever serve
-# operators driving Keeper from a Windows desktop. Until enough of them exist,
-# spending a Microsoft reviewer's time — and ours on the token and the fork — buys
-# nothing.
+# `skip_upload: auto` — stable tags only. winget-pkgs is a catalogue of shipping
+# software, and `winget upgrade` has no notion of an opt-in pre-release channel:
+# a beta published here would be offered to everyone as the newest version. Betas
+# still render their manifests into dist/, which keeps this config exercised.
 #
-# To turn it on: flip this to `false` (or `auto` to hold pre-release tags back),
-# fork microsoft/winget-pkgs into the owner named below (GoReleaser syncs the fork
-# but never creates it), and add a WINGET_GITHUB_TOKEN repository secret — a
-# **classic** PAT with the `public_repo` scope. Fine-grained tokens cannot open a
-# pull request against a repository outside their owner's account, which rules
-# them out for winget-pkgs.
+# Needs a WINGET_GITHUB_TOKEN repository secret — a **classic** PAT with the
+# `public_repo` scope. Fine-grained tokens cannot open a pull request against a
+# repository outside their owner's account, which rules them out for winget-pkgs.
+# The fork must already exist; GoReleaser syncs it with upstream but never creates
+# it.
+#
+# Note that a tag whose release is already published cannot be re-run to emit this
+# PR: `release.Pipe` fails on duplicate assets before the winget pipe is reached.
+# v0.1.0-beta.1 was therefore submitted once by hand, from the manifests this same
+# config generated. Every later version goes out with the tag.
 winget:
   - name: SoulStack
     package_name: Soul Stack
@@ -346,7 +386,7 @@ winget:
 
       This package installs the cross-platform operator CLIs — soulctl (drives
       Keeper), soul-lint (offline artifact linter), soul-trial (offline Destiny
-      and Scenario runner) and soul-legion (load generator).
+      and Scenario runner) and soul-legion (cluster load generator).
     license: BUSL-1.1
     license_url: https://github.com/souls-guild/soul-stack/blob/main/LICENSE
     copyright: (c) 2026 the Soul Stack Authors
@@ -376,7 +416,53 @@ winget:
           owner: microsoft
           name: winget-pkgs
           branch: master
-    skip_upload: true
+    skip_upload: auto
+
+# AUR (Arch User Repository). `soul-stack-bin` is a binary package: it fetches the
+# released linux tarball and drops the six binaries into /usr/bin — no compile on
+# the user's machine. Publishing is a plain git push over SSH to aur.archlinux.org,
+# so the release job needs AUR_KEY: a **passphrase-less** private key whose public
+# half sits in the AUR account profile (GoReleaser cannot answer a prompt). The AUR
+# package is created by the first push — nothing to pre-register. The pipe filters
+# to linux archives itself, so the darwin/windows bundles never reach it. Unlike the
+# Homebrew cask there is no `skip_upload: auto`: the public beta is meant to be
+# installable with `yay -S soul-stack-bin`, so pre-release tags publish too
+# (GoReleaser rewrites `-` to `_` in pkgver, which PKGBUILD forbids).
+aurs:
+  - name: soul-stack-bin
+    ids:
+      - default
+    homepage: https://github.com/souls-guild/soul-stack
+    description: Soul Stack — configuration management platform (keeper/soul/soulctl)
+    license: BUSL-1.1
+    maintainers:
+      - Soul Stack <ops@soul-stack.com>
+    # `-bin` convention: supersedes a source-built `soul-stack` package.
+    provides:
+      - soul-stack
+    conflicts:
+      - soul-stack
+    git_url: ssh://aur@aur.archlinux.org/soul-stack-bin.git
+    private_key: "{{ .Env.AUR_KEY }}"
+    # Publish only when the key is actually configured. GoReleaser evaluates
+    # skip_upload before it touches private_key, so a missing secret skips AUR
+    # with a logged reason instead of failing the tag — and it would fail *after*
+    # the GitHub Release and the GHCR images are already out (release runs before
+    # aur in the publish phase), which re-running cannot repair: duplicate assets
+    # are rejected unless replace_existing_artifacts is set.
+    skip_upload: '{{ if index .Env "AUR_KEY" }}false{{ else }}true{{ end }}'
+    # Archives are flat (no wrap_in_directory), so binaries and LICENSE sit at the
+    # tarball root. GoReleaser's guessed package() installs only the first binary —
+    # spell out all six. No systemd units here: they are not in the archive, they
+    # ship with the deb/rpm (nfpm above).
+    package: |-
+      install -Dm755 "./keeper" "${pkgdir}/usr/bin/keeper"
+      install -Dm755 "./soul" "${pkgdir}/usr/bin/soul"
+      install -Dm755 "./soul-lint" "${pkgdir}/usr/bin/soul-lint"
+      install -Dm755 "./soulctl" "${pkgdir}/usr/bin/soulctl"
+      install -Dm755 "./soul-trial" "${pkgdir}/usr/bin/soul-trial"
+      install -Dm755 "./soul-legion" "${pkgdir}/usr/bin/soul-legion"
+      install -Dm644 "./LICENSE" "${pkgdir}/usr/share/licenses/soul-stack-bin/LICENSE"
 
 # GHCR container images (dockers_v2 — the current multi-arch mechanism, replaces
 # the phased-out dockers + docker_manifests). Distroless static, built from a

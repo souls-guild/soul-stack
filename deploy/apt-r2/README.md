@@ -1,8 +1,10 @@
 # apt repository on Cloudflare R2
 
-Soul Stack publishes its `.deb` packages — `soul-stack-keeper`, `soul-stack-soul`,
-`soul-stack-soul-lint`, `soul-stack-soulctl`, `soul-stack-soul-trial`,
-`soul-stack-soul-legion` — through a plain, flat apt repository hosted on a
+Soul Stack publishes its `.deb` packages — the `soul-stack-keeper` and
+`soul-stack-soul` daemons, the `soul-stack-soulctl`, `soul-stack-lint` and
+`soul-stack-trial` CLIs, the `soul-stack-tools` meta package that pulls those
+three in at once, and the `soul-stack-legion` load generator — through a plain,
+flat apt repository hosted on a
 **Cloudflare R2** bucket fronted by the public domain `https://apt.soul-stack.com`.
 The GitHub release workflow (`.github/workflows/release.yml`) produces the `.deb`
 assets; a **separate** workflow ([`apt-publish.yml`](../../.github/workflows/apt-publish.yml))
@@ -142,16 +144,31 @@ served fresh from origin.
 ## Client install
 
 ```sh
-# Trust the repo key (keyring form; apt-key is deprecated).
+# Trust the repo key (keyring form; apt-key is deprecated). Only `tee` is elevated:
+# piping straight into `sudo gpg` can leave an empty keyring, because a sudo password
+# prompt may swallow the piped key — and apt then fails to verify the repo.
 curl -fsSL https://apt.soul-stack.com/soul-stack.gpg.key \
-  | sudo gpg --dearmor -o /usr/share/keyrings/soul-stack.gpg
+  | gpg --dearmor | sudo tee /usr/share/keyrings/soul-stack.gpg >/dev/null
 
 echo "deb [signed-by=/usr/share/keyrings/soul-stack.gpg] https://apt.soul-stack.com/ stable main" \
   | sudo tee /etc/apt/sources.list.d/soul-stack.list
 
 sudo apt update
-sudo apt install soul-stack-keeper   # or soul / soul-lint / soulctl / soul-trial / soul-legion
+
+# A workstation that authors Destiny / scenarios — all three CLIs in one step:
+sudo apt install soul-stack-tools     # soulctl + soul-lint + soul-trial
+
+# A server — install just the daemon it runs:
+sudo apt install soul-stack-keeper    # or soul-stack-soul
+
+# Sizing a bench cluster (needs its DB credentials + a Vault PKI token):
+sudo apt install soul-stack-legion
 ```
+
+> The package names above land with the **next** release. The published
+> `v0.1.0-beta.1` predates the rename: it carries `soul-stack-soul-lint` /
+> `soul-stack-soul-trial` and has no `soul-stack-tools`. Upgrades migrate
+> themselves — the renamed packages replace the old ones.
 
 ## Layout in the bucket
 

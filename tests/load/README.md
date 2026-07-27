@@ -1,9 +1,19 @@
 # soul-legion - Soul Stack load generator
 
-Test-only tool (NOT a shipped binary - [ADR-004](../../docs/adr/0004-binaries.md)
-only pins `keeper`/`soul`/`soul-lint`). Spins up N concurrent
+Shipped binary ([ADR-004 Amendment 2026-07-26](../../docs/adr/0004-binaries.md)) —
+package `soul-stack-legion`, also in the cross-OS archives — although its code lives
+here next to the other test harnesses. Spins up N concurrent
 fake-Soul streams (gRPC bidi over mTLS `EventStream`) against a live Keeper and measures
 load **on the Keeper**, not the realism of apply on the host.
+
+> **Bench clusters only.** To get its stub souls past the Keeper's seed-fingerprint
+> check, soul-legion writes their identity straight into the cluster (`INSERT` into
+> `souls`/`soul_seeds` via `--pg`) and mints their certs from Vault PKI (`--vault`),
+> then deletes them by `--sid-prefix` on exit. It needs cluster database credentials
+> and a PKI-issue token. Never point it at a production Keeper.
+
+Every environment flag is required — there are no localhost defaults, the binary
+refuses to start without them. `make stress` supplies the dev-stand values.
 
 Normative plan, methodology and measured numbers - [docs/testing/load-testing.md](../../docs/testing/load-testing.md).
 This README is only about running it.
