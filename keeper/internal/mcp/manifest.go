@@ -322,9 +322,14 @@ var catalogManifest = []toolEntry{
 		},
 	},
 
-	// --- Soul (6) — create + issue-token + coven-assign + traits-assign +
-	// ssh-target.update implemented (parity with REST POST /v1/souls +
-	// issue-token + coven + traits + ssh-target); list stays a stub (awaits M2). ---
+	// --- Soul (7) — create + issue-token + coven-assign + traits-assign +
+	// ssh-target.update + run-command implemented (parity with REST POST
+	// /v1/souls + issue-token + coven + traits + ssh-target); list stays a stub
+	// (awaits M2).
+	//
+	// run-command is the exception to the `keeper.soul.<action>` ↔
+	// `soul.<action>` pairing and has no REST twin: it is the non-interactive
+	// console (ADR-0074 amendment, NIM-147), gated by soul.console. ---
 	{
 		status: toolStatusImplemented,
 		decl: toolDeclaration{
@@ -377,6 +382,15 @@ var catalogManifest = []toolEntry{
 			Description:  "Updates per-host SSH credentials for the push flow (souls.ssh_target jsonb, ADR-032 amendment 2026-05-26, S7-1): ssh_port/ssh_user/soul_path. Source-of-truth for PGFallbackTargetResolver; keeper.yml::push.targets[] - legacy fallback under the push.allow_legacy_push_targets flag. Permission: soul.ssh-target-update; selector host=<sid>. Fails with code=not-found if the SID isn't in the souls registry.",
 			InputSchema:  schemaSoulSshTargetUpdateInput,
 			OutputSchema: schemaSoulSshTargetUpdateOutput,
+		},
+	},
+	{
+		status: toolStatusImplemented,
+		decl: toolDeclaration{
+			Name:         "keeper.soul.run-command",
+			Description:  "Runs ONE command line on a host and returns a machine-readable result: split stdout/stderr, an integer exit_code, masked and capped at 64 KiB per channel. This is the non-interactive console (ADR-0074), not an Errand: the command is arbitrary and runs as the Soul daemon's user, typically root. Permission: soul.console; selector host=<sid> - the same right the interactive WebSocket console needs, NOT errand.run. Use keeper.soul.errand.run instead when a named module with declared params does the job. Async: possible (server-cap 30s; async=true with status=running -> poll keeper.errand.get by errand_id). Fails with code=not-found if the Soul isn't connected to the cluster; validation-failed on an empty sid/command or timeout_seconds outside [1,300].",
+			InputSchema:  schemaRunCommandInput,
+			OutputSchema: schemaRunCommandOutput,
 		},
 	},
 
@@ -2232,6 +2246,36 @@ var (
 "duration_ms":{"type":"integer"},
 "error_message":{"type":"string"},
 "output":{"type":"object"}}}`)
+
+	schemaRunCommandInput = json.RawMessage(`{
+"$schema":"https://json-schema.org/draft/2020-12/schema",
+"type":"object",
+"additionalProperties":false,
+"required":["sid","command"],
+"properties":{
+"sid":{"type":"string","pattern":"^[a-z0-9][a-z0-9.-]{0,253}$","description":"FQDN of the target Soul."},
+"command":{"type":"string","minLength":1,"description":"Shell line, executed as sh -c on the host. Pipes, redirects and globs work; there is no allow-list, which is why the tool needs soul.console."},
+"cwd":{"type":"string","description":"Working directory of the command."},
+"env":{"type":"object","additionalProperties":{"type":"string"},"description":"Extra environment variables for the command."},
+"timeout_seconds":{"type":"integer","minimum":1,"maximum":300,"description":"Server-cap of the overall timeout. Default 30."}}}`)
+
+	schemaRunCommandOutput = json.RawMessage(`{
+"$schema":"https://json-schema.org/draft/2020-12/schema",
+"type":"object",
+"additionalProperties":false,
+"required":["errand_id","sid","status","async"],
+"properties":{
+"errand_id":{"type":"string","description":"Run id; also the key for keeper.errand.get when async=true."},
+"sid":{"type":"string"},
+"status":{"type":"string","enum":["running","success","failed","timed_out","cancelled","module_not_allowed"]},
+"async":{"type":"boolean","description":"true -> server-cap exceeded, follow up via keeper.errand.get."},
+"exit_code":{"type":"integer","description":"Exit status of the command. A non-zero code is a normal result, not a tool error."},
+"stdout":{"type":"string","description":"Masked, capped at 64 KiB."},
+"stderr":{"type":"string","description":"Masked, capped at 64 KiB."},
+"stdout_truncated":{"type":"boolean"},
+"stderr_truncated":{"type":"boolean"},
+"duration_ms":{"type":"integer"},
+"error_message":{"type":"string","description":"Masked reason for failed / timed_out."}}}`)
 
 	schemaErrandListInput = json.RawMessage(`{
 "$schema":"https://json-schema.org/draft/2020-12/schema",

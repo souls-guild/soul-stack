@@ -489,6 +489,10 @@ func (h *Handler) handleToolsCall(ctx context.Context, claims *jwt.Claims, req j
 		return h.callSoulTraitsAssign(ctx, claims, req, p.Arguments), false
 	case "keeper.soul.ssh-target.update":
 		return h.callSoulSshTargetUpdate(ctx, claims, req, p.Arguments), false
+	// The one Soul-tool NOT paired with soul.<action>: run-command is the
+	// non-interactive console, so it is gated by soul.console (ADR-0074).
+	case "keeper.soul.run-command":
+		return h.callSoulRunCommand(ctx, claims, req, p.Arguments), false
 
 	// Plugin-tools (Sigil allow-list, S4b). 1:1 with REST POST/GET/DELETE
 	// /v1/plugins/sigils* and permission (keeper.plugin.<action> ↔ plugin.<action>).

@@ -7,6 +7,30 @@ Artifact versioning — via git ref ([ADR-007](docs/adr/0007-versioning-git-ref.
 
 ### Added
 
+- **MCP `keeper.soul.run-command` — the non-interactive console**
+  ([ADR-0074](docs/adr/0074-interactive-console-pty.md), amendment 2026-07-27).
+  An agent needs what an operator needs — run this on that host — but cannot use
+  a terminal: a pty merges stdout and stderr onto one fd, echoes what was typed
+  and reports only the shell's exit status. So the MCP form is request/response:
+  one command line in, split channels and an integer `exit_code` out, masked and
+  capped at 64 KiB per channel.
+
+  **It needs `soul.console`, not `errand.run`** — dropping the tty removes the
+  echo, not the privilege, and the command is still arbitrary and still runs as
+  the Soul daemon's user, typically root. The check is the same scope-aware
+  `host=<sid>` one the WebSocket console runs per pane. The Errand stack is only
+  the transport, with the module pinned to `core.cmd.shell` and deliberately not
+  exposed as an argument. Every run writes `console.command` (`{sid, status}`,
+  correlated by `errand_id`) — the command line is not in the payload, exactly as
+  `console.opened` holds no keystrokes.
+
+  Known gap, unchanged by this and tracked separately: `core.cmd.shell` and
+  `core.exec.run` are on the Errand runner's hardcoded allow-list, so
+  `keeper.soul.errand.run`, `POST /v1/souls/{sid}/exec` and a `kind=command`
+  Voyage still reach an arbitrary shell under `errand.run` alone. Until those
+  choke-points are aligned, a role that must not hand out shells withholds
+  `errand.run` as well as `soul.console`.
+
 - **`introduced_in` engine metadata and the compat cross-check** ([ADR-0076](docs/adr/0076-engine-compat-window.md)).
   A `compat:` window is written by hand and can go stale — declaring `min: 0.1.0`
   while using something that only exists from `0.3.0` promises a keeper that would

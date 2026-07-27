@@ -331,6 +331,14 @@ off, because a console is the most privileged thing an operator can do: the pty
 inherits the Soul daemon's user, typically root, and its commands cannot be
 checked against a module allow-list the way an Errand's can.
 
+The **non-interactive** sibling of this plane — the MCP tool
+`keeper.soul.run-command` ([mcp-tools/souls.md](mcp-tools/souls.md), NIM-147) —
+carries the same right and audits the same way, under `console.command`. It does
+not go through this session manager at all: a one-shot command wants
+request/response, so it rides the Errand transport with the module pinned. What
+it shares with a socket is the gate and the record, which is the part that
+matters.
+
 | Metric | Meaning |
 |---|---|
 | `keeper_console_sessions_active` | Live sessions on this instance. The leak signal — it must return to zero after every operator disconnects. |

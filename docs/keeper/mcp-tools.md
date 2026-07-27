@@ -187,9 +187,11 @@ Moved to a domain file - [mcp-tools/synods.md](mcp-tools/synods.md): `keeper.syn
 
 Moved to a domain file - [mcp-tools/incarnations.md](mcp-tools/incarnations.md): `keeper.incarnation.create`, `keeper.incarnation.rerun-last`, `keeper.incarnation.run`, `keeper.incarnation.get`, `keeper.incarnation.list`, `keeper.incarnation.history`, `keeper.incarnation.unlock`, `keeper.incarnation.upgrade`, `keeper.incarnation.check-drift`, `keeper.incarnation.destroy`, `keeper.incarnation.traits-set` - eleven tools with MCP pairing to REST routes [operator-api.md → Incarnation (17)](operator-api.md). Six REST-only routes do not have an MCP tool: `PATCH /v1/incarnations/{name}/hosts`, `POST …/scenarios/{scenario}/form-prefill`, `GET …/runs`, `GET …/runs/{apply_id}`, `POST …/secrets/reveal`, `GET …/secrets/revealable`; global `GET /v1/runs` + `/v1/runs/stats` ([operator-api.md → Runs (2)](operator-api.md)) - also REST-only. The source of truth for semantics is [operator-api/incarnations.md](operator-api/incarnations.md).
 
-### Soul (5)
+### Soul (6)
 
-Moved to a domain file - [mcp-tools/souls.md](mcp-tools/souls.md): `keeper.soul.create`, `keeper.soul.issue-token`, `keeper.soul.coven-assign`, `keeper.soul.list`, `keeper.soul.ssh-target.update`. The source of truth for semantics is [operator-api/souls.md](operator-api/souls.md). Read registry routes (`GET /v1/souls/{sid}`, `/soulprint`, `/history`) - REST-only (no MCP tools).
+Moved to a domain file - [mcp-tools/souls.md](mcp-tools/souls.md): `keeper.soul.create`, `keeper.soul.issue-token`, `keeper.soul.coven-assign`, `keeper.soul.list`, `keeper.soul.ssh-target.update`, `keeper.soul.run-command`. The source of truth for semantics is [operator-api/souls.md](operator-api/souls.md). Read registry routes (`GET /v1/souls/{sid}`, `/soulprint`, `/history`) - REST-only (no MCP tools).
+
+`keeper.soul.run-command` is the exception in this family: it has no REST twin and is gated by `soul.console`, not by a `soul.<action>` permission - it is the non-interactive console ([ADR-0074](../adr/0074-interactive-console-pty.md) amendment, NIM-147).
 
 ### Plugin (3)
 

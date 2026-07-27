@@ -1,10 +1,12 @@
 # Soul — MCP-tools host registry
 
-Domain section [MCP-tools directory](../mcp-tools.md): tools `keeper.soul.*` (host registration, bootstrap tokens, bulk assignment of Coven tags). Transport, auth, tool declaration format, async-convention, error mapping - in the root [mcp-tools.md](../mcp-tools.md). The source of truth in semantics is [operator-api.md → Soul](../operator-api/souls.md).
+Domain section [MCP-tools directory](../mcp-tools.md): tools `keeper.soul.*` (host registration, bootstrap tokens, bulk assignment of Coven tags, one-shot command execution). Transport, auth, tool declaration format, async-convention, error mapping - in the root [mcp-tools.md](../mcp-tools.md). The source of truth in semantics is [operator-api.md → Soul](../operator-api/souls.md).
 
-### Soul (5)
+### Soul (6)
 
-`keeper.soul.list` remains the transport of the future M2 registry (in `manifest.go` it is marked stub); the other four are Implemented. The `manifest.go` directory contains five Soul-tools (`create` / `issue-token` / `coven-assign` / `list` / `ssh-target.update`). Read registry routes (`GET /v1/souls/{sid}`, `/soulprint`, `/history`) - **REST-only** (there are no MCP tools, covered by permission `soul.list`).
+`keeper.soul.list` remains the transport of the future M2 registry (in `manifest.go` it is marked stub); the others are Implemented. The `manifest.go` directory contains six Soul-tools (`create` / `issue-token` / `coven-assign` / `list` / `ssh-target.update` / `run-command`). Read registry routes (`GET /v1/souls/{sid}`, `/soulprint`, `/history`) - **REST-only** (there are no MCP tools, covered by permission `soul.list`).
+
+`keeper.soul.run-command` is the one Soul-tool NOT paired with a `soul.<action>` permission and the one with no REST twin: it is the non-interactive console ([ADR-0074](../../adr/0074-interactive-console-pty.md) amendment, NIM-147) and is gated by `soul.console`.
 
 #### `keeper.soul.create`
 
@@ -125,3 +127,43 @@ Updates per-host SSH push-flow details (`souls.ssh_target` jsonb: `ssh_port`/`ss
 | `soul_path` | `string` (abs. Unix path `^/.+`) | yes | Path to the `soul` binary on the host. |
 
 **Output:** `{sid, ssh_target: {ssh_port, ssh_user, soul_path}}`. Errors: `not-found` (SID missing from registry `souls`).
+
+#### `keeper.soul.run-command`
+
+Runs ONE command line on a host and returns a machine-readable result. This is the **non-interactive console** ([ADR-0074](../../adr/0074-interactive-console-pty.md) amendment, NIM-147), not an Errand: the command is arbitrary and executes as the Soul daemon's user, typically **root**. Permission: **`soul.console`**; selector `host=<sid>` - the same right and the same scope-aware check the interactive WebSocket [`/v1/console`](../console.md) runs per `open` frame, **not `errand.run`**. No REST twin. Async: **possible** (server-cap 30s; `async=true` with `status=running` → poll `keeper.errand.get` by `errand_id`).
+
+Use `keeper.soul.errand.run` instead whenever a named module with declared params does the job: that one can be authorized by what it is about to do, this one cannot.
+
+The command is carried on the Errand transport with the module pinned to `core.cmd.shell` ([core.cmd](../../module/core/cmd/README.md)) - request/response is what makes the answer machine-readable (split channels, an integer exit code, the 64 KiB cap and its truncation flags), none of which a pty can express. The module is **not an argument**; an unknown argument is a `malformed-request`. The scenario-only idempotency guards of `core.cmd.shell` (`creates`/`unless`/`onlyif`) are not exposed - a one-shot agent call has no desired state to converge on.
+
+**Input:**
+
+| Field | Type | Required | Meaning |
+|---|---|---|---|
+| `sid` | `string` (regex SID) | yes | FQDN of the target Soul. |
+| `command` | `string` (≥1) | yes | Shell line, executed as `sh -c` on the host. Pipes, redirects and globs work; there is no allow-list, which is why the tool needs `soul.console`. |
+| `cwd` | `string` | optional | Working directory of the command. |
+| `env` | `object<string,string>` | optional | Extra environment variables. |
+| `timeout_seconds` | `integer` (1..300) | optional | Full timeout. Default 30. |
+
+**Output:**
+
+| Field | Type | Meaning |
+|---|---|---|
+| `errand_id` | `string` (ULID) | Run id; also the key for `keeper.errand.get` when `async=true`. |
+| `sid` | `string` | Mirror input. |
+| `status` | `string` | `running` / `success` / `failed` / `timed_out` / `module_not_allowed`. |
+| `async` | `boolean` | `true` → server-cap exceeded, follow up via `keeper.errand.get`. |
+| `exit_code` | `integer` | Exit status of the command. A non-zero code is a normal result, not a tool error. |
+| `stdout`, `stderr` | `string` | Masked output (cap 64 KiB per channel). |
+| `stdout_truncated`, `stderr_truncated` | `boolean` | Cap exceeded. |
+| `duration_ms` | `integer` | Duration on the Soul side. |
+| `error_message` | `string` | Masked reason for `failed` / `timed_out`. |
+
+The command line is **not echoed back** in the response: the caller already has it, and a request field mirrored into a response is one more channel for a credential typed into an argument to travel through.
+
+Errors: `forbidden` (no `soul.console`, or not on this host), `not-found` (Soul is not connected to the cluster), `validation-failed` (empty `sid`/`command`, malformed SID, `timeout_seconds` outside [1, 300]), `malformed-request` (unknown argument), `internal-error` (errand stack not configured - reported only **after** the permission check passes).
+
+**Masking.** stdout/stderr/`error_message` are masked on this boundary as well as on the transport's ([ADR-010 §7.4](../../adr/0010-templating.md)): an agent reply is an observable channel like a log line. The bound is worth stating - on a free-form byte stream only the content layer (vault provenance, any KV mount) can fire; a credential the command prints in plaintext is indistinguishable from any other text, since recognizing it would require knowing in advance what the command was going to do.
+
+**Audit.** Every execution writes **`console.command`** (`source: mcp`, `archon_aid`, `correlation_id` = `errand_id`, payload `{sid, status}`) on top of the transport's own `errand.invoked` / `errand.completed` chain. The command line is not in the payload, exactly as `console.opened` holds no keystrokes.

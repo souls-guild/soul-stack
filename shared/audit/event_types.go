@@ -1172,4 +1172,16 @@ const (
 	// `reason` is either the Keeper-side cause (operator detach, socket closed,
 	// idle timeout) or `soul:<console-exit-reason>` when the shell itself ended.
 	EventConsoleClosed EventType = "console.closed"
+
+	// EventConsoleCommand — an Archon ran a one-shot command on a host through
+	// the MCP tool `keeper.soul.run-command` (ADR-0074 amendment, NIM-147).
+	// `source: mcp`, `archon_aid` is the initiator, `correlation_id` is the
+	// errand id the run was carried on. Payload: `{sid, status}`.
+	//
+	// Recorded beside the transport's own `errand.*` trail because the two
+	// answer different questions: `errand.invoked` says a module ran, this says
+	// an ARBITRARY command ran and that `soul.console` — not `errand.run` —
+	// authorized it. The command line itself is not in the payload, the same
+	// way `console.opened` holds no keystrokes.
+	EventConsoleCommand EventType = "console.command"
 )
