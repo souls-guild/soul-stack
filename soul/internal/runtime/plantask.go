@@ -70,6 +70,16 @@ func (r *ApplyRunner) planTask(ctx context.Context, applyID string, idx int32, t
 		return ev
 	}
 
+	// ADR-0076, mirroring runTask: a dry_run that skipped the check would report
+	// "no drift" for a param the module never reads — a false clean is exactly
+	// what ADR-031 forbids.
+	if perr := r.checkParams(modName, state, task.GetName(), task.GetParams()); perr != nil {
+		ev.Status = keeperv1.TaskStatus_TASK_STATUS_FAILED
+		ev.Error = perr
+		ev.RegisterData = buildRegisterData(ev.GetStatus(), nil)
+		return ev
+	}
+
 	// Default-deny: a module without the read-safe capability is NOT queried on
 	// dry_run. We return an explicit refusal (FAILED) rather than a false-clean
 	// — an unknown module must not report "no drift" (ADR-031).

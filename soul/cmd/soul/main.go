@@ -680,7 +680,10 @@ func buildRegistry(cfg *config.SoulConfig, logger *slog.Logger, logPrefix string
 	)
 	beaconLookup := beacon.NewCompositeRegistry(beacon.Default(), beaconPluginReg, logger)
 
-	return runtime.NewCompositeRegistry(core, pluginReg), host.SigilAnchors, beaconLookup, nil
+	// NewCoreParamSchema gives the core layer its embedded input contract, so a
+	// param this binary does not implement fails the task instead of being read
+	// past (ADR-0076).
+	return runtime.NewCompositeRegistry(runtime.NewCoreParamSchema(core), pluginReg), host.SigilAnchors, beaconLookup, nil
 }
 
 // beaconHostAdapter is a narrow bridge *pluginhost.Host → beacon.PluginBeaconSpawner.

@@ -99,7 +99,10 @@ type StateDef struct {
 // values), pattern (regex constraint), format+source (cluster-aware picker, e.g.
 // sid), items (list element type / map value type), multiline+example (textarea
 // UI hints). The rest of the full schema (object with properties, numeric bounds)
-// is allowed — the parser keeps unknown keys in `Extra`, does not validate them.
+// is NOT expressible here: parsing is `yaml.Strict()`, so an unrecognized key is
+// a decode error, not a passthrough. That is also why adding a field to this
+// struct is a forward-compat event for plugin manifests — an older soul reading
+// a newer manifest fails on the key it does not know (ADR-0076(i)/(q)).
 type InputParamDef struct {
 	Type        string `yaml:"type,omitempty"`
 	Required    bool   `yaml:"required,omitempty"`
@@ -122,12 +125,25 @@ type InputParamDef struct {
 	Multiline bool   `yaml:"multiline,omitempty"`
 	Example   string `yaml:"example,omitempty"`
 
+	// IntroducedIn / Deprecated — the two ends of a param's life, and the two
+	// halves of ADR-0076's answer to changing a module contract: what a
+	// definition using this param requires of an engine, and how long an engine
+	// keeps honoring it. `unknown_param` is what both converge on — before
+	// IntroducedIn and at or after Deprecated.RemovedIn the very same task text
+	// is rejected, in between it works.
+
 	// IntroducedIn — the engine release that added this parameter (ADR-0076(i)).
 	// The finest granularity of the three and the one that matters most: a new
 	// parameter on a state that has existed for releases is invisible to an
 	// author, and an older engine rejects it as `unknown_param`. See
 	// [Manifest.IntroducedIn].
 	IntroducedIn string `yaml:"introduced_in,omitempty"`
+
+	// Deprecated — the param is still honored but is on its way out (ADR-0076
+	// deprecation policy, see deprecation.go). Warning-only for the whole
+	// declared window; at removed_in the key leaves the manifest and becomes
+	// unknown_param at both gates.
+	Deprecated *DeprecatedDef `yaml:"deprecated,omitempty"`
 
 	// Items — list element type or map value type (ADR-045 S7 + amend). A recursive
 	// *InputParamDef, mirror of `config.InputSchema.Items`:
@@ -535,6 +551,18 @@ func validateSoulModuleSpec(root *ast.MappingNode, m *Manifest) []diag.Diagnosti
 		for paramName, p := range def.Input {
 			paramPath := statePath + ".input." + paramName
 			out = append(out, validateInputParam(root, paramPath, paramName, p)...)
+			// `use:` must name a param of the SAME state — a replacement that
+			// does not exist sends the author looking for it.
+			if p.Deprecated != nil && p.Deprecated.Use != "" {
+				if _, ok := def.Input[p.Deprecated.Use]; !ok {
+					out = append(out, atPath(root, paramPath+".deprecated.use", diag.Diagnostic{
+						Level: diag.LevelError, Phase: diag.PhaseSemanticValidate,
+						Code:    "deprecated_replacement_unknown",
+						Message: fmt.Sprintf("input parameter %q points at replacement %q, which state %q does not declare", paramName, p.Deprecated.Use, state),
+						Hint:    "name a param declared in the same spec.states.<state>.input, or drop use: when there is no successor",
+					}))
+				}
+			}
 		}
 	}
 	return out
@@ -661,6 +689,8 @@ func validateInputParam(root *ast.MappingNode, path, name string, p InputParamDe
 			}))
 		}
 	}
+
+	out = append(out, validateDeprecated(root, path, name, p.Deprecated)...)
 
 	// source — structural validity of the discriminator (exactly one active source:
 	// incarnation_hosts XOR choir). Mirror of config.validateSource — only the

@@ -23,6 +23,31 @@ Artifact versioning — via git ref ([ADR-007](docs/adr/0007-versioning-git-ref.
   version, so features are stamped when a release is cut (see
   [RELEASING.md](RELEASING.md) step c2).
 
+- **Param-level strictness on the agent, and a deprecation policy for module
+  params** ([ADR-0076](docs/adr/0076-engine-compat-window.md), amendment
+  2026-07-26). A Soul reads a task's params by key, so a key it did not know was
+  simply never read: an agent older than the param did its old job and reported
+  OK/CHANGED while what the author asked for never happened. It now checks the
+  task against the manifest **compiled into that binary** before Apply — and
+  before `Plan`, so a `dry_run` cannot answer "no drift" for a param it never
+  reads — and rejects an undeclared key with `module.unknown_param` without
+  running the module. Core modules are enforced; custom modules **report but do
+  not fail** — their manifests were never enforced before and under-declare in
+  practice, so gating them would break scenarios that work today.
+
+  The counterpart is that a module contract can now shrink safely: a param is
+  never removed outright but marked `deprecated: {since, removed_in, use?}`
+  (`removed_in` **exclusive**, like `compat.keeper.max`) and honored for **at
+  least 2 minor releases** — deprecated in `X.Y.0`, removable no earlier than
+  `X.(Y+2).0`, which is exactly the window an author may declare in `compat:`.
+  Authors get a `deprecated_param` **warning**, never an error, naming the
+  deadline and the replacement; at `removed_in` the same task text becomes
+  `unknown_param`.
+
+  **Upgrade order: souls first, then keeper** — adding a param to a core module
+  is now a loud per-host failure on agents that predate it, rather than a silent
+  mis-apply. Same order the capability gate already requires.
+
 - `soul-stack-tools` — meta package installing the whole authoring-side CLI set
   (`soulctl` + `soul-lint` + `soul-trial`) in one step. Carries no files itself.
   The `keeper` and `soul` daemons stay separate packages on purpose: a server

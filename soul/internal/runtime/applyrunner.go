@@ -839,6 +839,15 @@ func (r *ApplyRunner) runTask(ctx context.Context, applyID string, idx int32, ta
 		return ev, nil
 	}
 
+	// ADR-0076: a param this binary's manifest does not declare must not be
+	// dropped on the floor while the task reports success. Before Apply, so the
+	// host is untouched when it fires.
+	if perr := r.checkParams(modName, state, task.GetName(), task.GetParams()); perr != nil {
+		ev.Status = keeperv1.TaskStatus_TASK_STATUS_FAILED
+		ev.Error = perr
+		return ev, nil
+	}
+
 	// Per-task timeout (DSL-core timeout:, destiny/tasks.md §9): a context
 	// child of ctx with a deadline for one Apply attempt. taskCtx is a CHILD of
 	// runCtx — when its deadline expires, runCtx.Err() stays nil, so the cancel

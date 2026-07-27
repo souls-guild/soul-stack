@@ -133,6 +133,21 @@ Implementation:
 - The manifest describes the **author-facing** contract — what the operator writes in `params:`. For `core.file.rendered` this is `template:` (the path to the `.tmpl`) + `vars:`, and **not** the runtime form `template_content`+`render_context` that Keeper substitutes after the CEL/text-template phases ([ADR-010](../adr/0010-templating.md), [ADR-012](../adr/0012-keeper-soul-grpc.md)). Therefore the runtime `Module.Validate` of modules with a handoff transformation of params (rendered) validates its runtime form separately; for modules without a handoff (`core.exec`) the runtime `Validate` delegates to the same manifest registry — a single source of per-field checks.
 - Keeper-side core (`core.soul`/`core.cloud`/`core.vault`, [ADR-017](../adr/0017-keeper-side-core.md)) is added to the registry by the same mechanism (a new `<module>.yaml`).
 
+### Param strictness before Apply
+
+The same embedded registry is also the **runtime** gate, not just the linter's ([ADR-0076](../adr/0076-engine-compat-window.md), amendment (o–q)). Before calling a module, the Soul checks the task's params against the contract **compiled into that binary**: a key the manifest does not declare fails the task with `module.unknown_param` and the module never runs.
+
+The failure mode it closes: a Soul reads params by key, so a key it does not know is simply never read — an older agent receiving a task with a newer param used to do its old job and report OK/CHANGED while what the author asked for never happened. The [capability gate](../adr/0076-engine-compat-window.md) covers "this agent does not have the module"; this covers "it has the module but not that param".
+
+- **The contract is this binary's, never Keeper's.** The manifest ships in the same artifact as the module (`go:embed`), so declaration and implementation cannot drift, and on a heterogeneous estate what matters is what *this* host carries.
+- **The check runs on `dry_run` too.** A `Plan` that skipped it would answer "no drift" for a param it never reads — the false-clean [ADR-031](../adr/0031-scry-drift.md) forbids.
+- **Transport keys are exempt on the state that owns them.** `core.file.rendered` receives `template_content`/`render_context` instead of the author's `template:`/`vars:`; those two keys are accepted on that state and nowhere else.
+- **A module with no embedded manifest is unchecked** (`core.augur`) — absence of a declaration is not a declaration of absence.
+- **Custom modules are advisory, not enforced.** Their manifests live beside the binary, were never enforced before, and under-declare in practice; an undeclared param is logged rather than rejected. See [ADR-0076](../adr/0076-engine-compat-window.md) (q) for the measured reason and what flipping it requires.
+- **Only the unknown direction is checked here.** A missing required param stays with Keeper's static check, which sees the author's text with a line and column before a run exists.
+
+Adding a param to a core module is therefore a Soul-side compat event: an agent that predates the param now fails loudly instead of mis-applying silently, so upgrade **souls first, then keeper** — the same order the capability gate already imposes. Shrinking a contract goes the other way, through [param deprecation](../keeper/plugins.md#deprecating-a-param).
+
 ## See also
 
 - [config.md](config.md) — where `paths.modules` and `cleanup.*` are set.

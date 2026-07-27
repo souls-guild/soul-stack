@@ -101,6 +101,19 @@ func checkUnknownAndType(def plugin.StateDef, paramsNode *ast.MappingNode, pathP
 			}))
 			continue
 		}
+		// ADR-0076 deprecation policy: the author's primary surface. A warning,
+		// never an error — the param is still honored for the whole declared
+		// window, and the point is to reach the author before removal, not to
+		// break the definition that already works.
+		if p.Deprecated != nil {
+			out = append(out, diagAt(tok.Position.Line, tok.Position.Column, diag.Diagnostic{
+				Level: diag.LevelWarning, Phase: diag.PhaseSemanticValidate,
+				Code:     "deprecated_param",
+				Message:  p.Deprecated.Notice(name),
+				Hint:     "migrate before removed_in - after that release the param is rejected as unknown_param",
+				YAMLPath: pathPrefix + ".params." + name,
+			}))
+		}
 		out = append(out, checkParamType(p, name, kv.Value, pathPrefix)...)
 	}
 	return out

@@ -58,6 +58,36 @@ The input schema format inside `spec:` depends on `kind:`. For `soul_module` - S
 | `spec.states.<name>.description` | `string` (optional) | — | Human-readable description for documentation/UI. |
 | `spec.states.<name>.introduced_in` | `string` (optional) | — | The engine release that added **this state**, same grammar as the top-level field. |
 | `spec.states.<name>.input.<param>.introduced_in` | `string` (optional) | — | The engine release that added **this parameter**. The granularity that matters most: a new parameter on a long-standing state is invisible to an author, and an older engine rejects it as `unknown_param`. |
+| `spec.states.<name>.input.<param>.deprecated` | `{since, removed_in, use?}` (optional) | — | The param is still honored but is on its way out ([ADR-0076](../adr/0076-engine-compat-window.md), amendment (r)). See [Deprecating a param](#deprecating-a-param). |
+
+#### Deprecating a param
+
+A param is **never removed outright** — that would break definitions that were valid yesterday. It is first marked deprecated, keeps working for the whole declared window, and only then leaves the manifest:
+
+```yaml
+input:
+  addr:    { type: string }
+  address:
+    type: string
+    deprecated: { since: "0.4.0", removed_in: "0.6.0", use: "addr" }
+```
+
+| Field | Type | Default | Meaning |
+|---|---|---|---|
+| `since` | `string` (`MAJOR.MINOR.PATCH`) | — | Release that marked the param deprecated (inclusive). |
+| `removed_in` | `string` (`MAJOR.MINOR.PATCH`) | — | First release that no longer honors it — **EXCLUSIVE**, exactly like `compat.keeper.max`. |
+| `use` | `string` (optional) | — | Replacement param **in the same state**; omit when there is no successor. |
+
+Rules, all checked by `validate-manifest`:
+
+- **Both bounds are required** (`deprecated_bound_missing`). An open-ended deprecation is a warning that never resolves — an author cannot plan a migration against it.
+- **The window is at least 2 minor releases** (`deprecation_window_too_short`): deprecated in `X.Y.0` → removable no earlier than `X.(Y+2).0`. That is the same interval as the half-open window `{min: X.Y.0, max: X.(Y+2).0}` in `compat:`, and it guarantees at least one release where the old param and its replacement both work. A **major** bump is exempt — it is the declared breaking-change boundary.
+- **Same grammar as `compat:`** (`deprecated_version_invalid`): plain `MAJOR.MINOR.PATCH`, no `v` prefix, no operators.
+- **`use:` must name a param of the same state** (`deprecated_replacement_unknown`).
+
+What an author sees while the param is live: a **`deprecated_param` warning** — never an error, since the param still works — naming the deadline and the replacement. At `removed_in` the key leaves the manifest and the identical task text becomes `unknown_param`.
+
+`introduced_in` and `deprecated` are the two ends of the same axis, and `unknown_param` is what both converge on: before `introduced_in` and from `removed_in` onward the very same task text is rejected, in between it works.
 
 ### `spec` for `kind: cloud_driver`
 

@@ -10,6 +10,7 @@ import (
 
 	pluginv1 "github.com/souls-guild/soul-stack/proto/plugin/gen/go/v1"
 	"github.com/souls-guild/soul-stack/sdk/module"
+	"github.com/souls-guild/soul-stack/shared/plugin"
 	"github.com/souls-guild/soul-stack/soul/internal/pluginhost"
 	"google.golang.org/grpc"
 )
@@ -128,6 +129,26 @@ func (r *PluginRegistry) Lookup(name string) (module.SoulModule, bool) {
 	}, true
 }
 
+// StateInput serves the input contract from the manifest discovered beside the
+// plugin binary — the only place a custom module's params are described at all
+// (keeper's static check covers namespace `core` only). Advisory, not enforced:
+// these manifests predate any enforcement and under-declare in practice, so an
+// unknown param is reported without failing the task (ADR-0076 amendment,
+// [ParamStrictness]).
+func (r *PluginRegistry) StateInput(module, state string) (map[string]plugin.InputParamDef, ParamStrictness) {
+	r.mu.RLock()
+	d, ok := r.mods[module]
+	r.mu.RUnlock()
+	if !ok || d.Manifest == nil {
+		return nil, ParamsUnchecked
+	}
+	def, ok := d.Manifest.Spec.States[state]
+	if !ok {
+		return nil, ParamsUnchecked
+	}
+	return def.Input, ParamsAdvisory
+}
+
 // pluginSoulModule adapts one-shot spawning to sdk/module.SoulModule. An
 // Apply call does spawn → Apply (stream) → forwards ApplyEvents into the
 // caller's stream → Close. Any stage error becomes an error for the runner
@@ -193,4 +214,21 @@ func (c *CompositeRegistry) Lookup(name string) (module.SoulModule, bool) {
 		}
 	}
 	return nil, false
+}
+
+// StateInput forwards to the layer that actually SERVES this module — the first
+// whose Lookup succeeds, the same order Lookup itself resolves in. Asking every
+// layer instead would let a shadowed custom module's manifest describe params
+// for the static core module that really runs.
+func (c *CompositeRegistry) StateInput(module, state string) (map[string]plugin.InputParamDef, ParamStrictness) {
+	for _, l := range c.layers {
+		if _, ok := l.Lookup(module); !ok {
+			continue
+		}
+		if ps, ok := l.(ParamSchema); ok {
+			return ps.StateInput(module, state)
+		}
+		return nil, ParamsUnchecked
+	}
+	return nil, ParamsUnchecked
 }
