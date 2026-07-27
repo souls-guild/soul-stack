@@ -881,11 +881,16 @@ touched (separate scenarios exist for those). `state` records the new
 `AclUser` pattern** as in create (blocks day-2 garbage: an invalid ACL string is cut
 off at input validation, never reaching `users.acl`). The password is **not** in the
 input - it lives in Vault under the convention
-`secret/redis/<incarnation>/users/<name>#password`, resolved keeper-side. Bulk
+`secret/redis/<incarnation>/users/<name>#password`, resolved keeper-side, and the
+scenario **generates it itself** (no manual `vault kv put` before the run - see
+[★ Password generation and re-runs](#-password-generation-and-re-runs)). Bulk
 editing of the **entire** operator-extra set is a separate scenario
 [`update_users`](#update_users-day-2-bulk-edit-the-set-of-acl-users)
-(bulk-replace). Two steps:
+(bulk-replace). Three steps:
 
+0. **generate the password** (`core.vault.kv-present`, `on: keeper`) at
+   `secret/redis/<incarnation>/users/<name>#password` - crypto-random, **only if
+   absent** (details below).
 1. **re-render** `users.acl` to disk with the new set: the **system** service users
    (from `essence.system_acl_users`) + operator-extra (`state.redis_users` plus the
    one being added, upsert by name). The re-render writes the **whole** file, so
@@ -903,6 +908,41 @@ editing of the **entire** operator-extra set is a separate scenario
 password - security; the type is from [`types.yml`](types.yml), ADR-062). One user
 per run (an atomic operation). `acl` state params - in the
 [per-module doc](../../../docs/module/community/redis/README.md#acl--params).
+
+#### ★ Password generation and re-runs
+
+Step 0 is [`core.vault.kv-present`](../../../docs/keeper/modules.md#corevaultkv-present)
+(keeper-side, **generate-if-absent**), the same mechanism `create` uses for its own
+users. What it fixes: `add_user` used to abort at render (`vault_resolve`) unless the
+operator had run `vault kv put` for the new user first - a manual step in front of the
+most frequent day-2 action.
+
+- **Path** - deterministic, the same convention the render reads:
+  `secret/redis/<incarnation>/users/<name>#password`. `<name>` is `input.user.name`.
+- **Value** - `crypto/rand`, 32 characters, `alphanumeric` (redis.conf / `users.acl`-safe).
+  It **never** leaves the Keeper: not in the register, audit payload, logs, OTel or the
+  UI - only the path and the field name are reported (ADR-010; the rendered cells that
+  *read* it are sealed/masked). It is not written to `state` either.
+- **Scope - the user being added, and nothing else.** `default_admin`, the system users
+  (`replica`/`monitoring`/`sentinel`/`haproxy`) and previously added operator users are
+  **not** regenerated: they are the credentials the **live** instance and its replicas
+  already authenticate with (the `ACL LOAD` connection AUTHs as `default_admin` *before*
+  the new file is applied). If one of them is missing from Vault the incarnation is
+  broken, and the run fails loudly rather than minting a password nobody knows.
+- **Re-run** - generate-if-absent, so re-running `add_user` for an **existing** user
+  updates `perms`/`state` only and **keeps** their password in sync with what clients
+  already hold. Rotation is deliberately **not** part of `add_user`: to rotate, write the
+  new value to the same Vault path and re-run - the generate step no-ops on a present
+  field, the render picks the new value up and `ACL LOAD` applies it.
+- **Ordering** - the generate step must *apply* before the *render* of the two steps that
+  read the same path. `add_user` has no provision body, so the roster axis is inactive and
+  the order rests entirely on the **vault axis** (ADR-056 amendment): a
+  `core.vault.kv-present` emitter pushes every later `vault()`-reading task into a strictly
+  later Passage. `add_user` is therefore a **2-Passage** run. Pinned by
+  `keeper/internal/trial/redis_add_user_secrets_test.go`.
+
+> [`update_users`](#update_users-day-2-bulk-edit-the-set-of-acl-users) generates passwords the
+> same way, fanned out over the whole `input.users` array.
 
 ### `update_users` (day-2: bulk edit the set of ACL users)
 
@@ -924,13 +964,23 @@ operator-extra users - `input.users` (an array of `AclUser`, the same
   [★ Re-merging on day-2](#-re-merging-on-day-2-invariant)). Bulk-replacing operator-extra
   removes it; a system name in `input.users` is rejected by the `validate`-guard (422).
 
-Two steps (like `add_user`): **re-render** the full `users.acl` (system users from essence +
+The same three steps as `add_user`: **generate** the missing passwords
+(`core.vault.kv-present`, see [★ Password generation and re-runs](#-password-generation-and-re-runs))
++ **re-render** the full `users.acl` (system users from essence +
 operator-extra = `input.users` entirely, per-user passwords from Vault) + **hot-reload**
 (`community.redis.acl`, `ACL LOAD` - the live instance re-reads `aclfile`; users removed from
 the set disappear from `ACL LIST`). `state.redis_users` is mutated **entirely**
 (`set: redis_users` = `input.users`, **without** the password - security). The connection's
 TLS discriminator - from `state.tls` (like `add_user`/`restart`). `acl` state params - in
 [per-module doc](../../../docs/module/community/redis/README.md#acl--params).
+
+Generation differs from `add_user` in two ways: targets fan out over the **whole**
+`input.users` array (a user already in the set keeps their password - generate-**if-absent**;
+only newly appearing ones get a fresh value), and the step is **skipped entirely** on an empty
+set (`input.users: []`, the "remove all operator-extra" run) via a static
+`when: size(input.users) > 0` - there is nothing to generate, and the module rejects an empty
+target list. Asserted by `task_absent` in
+[`empty-removes-all`](scenario/update_users/tests/empty-removes-all/case.yml).
 
 ### `rotate_tls` (day-2: rotate TLS cert/key/CA without a restart)
 

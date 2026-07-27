@@ -1,20 +1,18 @@
 name: update_users
 description: >-
-  ★ Before running, seed Vault with the password of EVERY user in the set at path
-  secret/redis/<incarnation>/users/<name>#password - passwords are NOT in the input form
-  (Vault convention), otherwise the run fails with an error like "secret ... not found in Vault"
-  (then seed the missing secrets and run again).
-
-
   Replace the entire set of operator ACL users on a live Redis without a restart.
   A user missing from the new set is removed; system service users are not
-  touched.
+  touched. Passwords are NOT in the input form: the scenario generates the missing
+  ones itself into Vault at secret/redis/<incarnation>/users/<name>#password
+  (keeper-side, crypto-random, only when absent), so a newly added user needs no
+  manual seeding. Users already in the set KEEP their password.
 
 # ── Operator input contract (docs/input.md) ────────────────────────────────
 # The FULL NEW set of operator-extra ACL users (AclUser array, types.yml/ADR-062 $type)
 # - the same type as the create input.users element. The array entirely replaces state.redis_users
 # (bulk-replace). Empty/omitted array = remove ALL operator-extra (system users
-# stay, merged in from essence). Password is NOT in the input (Vault convention, see description).
+# stay, merged in from essence). Password is NOT in the input (Vault convention) and needs
+# no manual pre-seed either — the first task generates the missing ones (see below).
 #
 # ★ Why an array, not a single user (like add_user): update_users is about the SET ("fix them all"),
 # not a targeted addition. Each element's perms is validated against the AclUser re2 pattern
@@ -87,6 +85,42 @@ state_changes:
     value: "${ input.users }"
 
 tasks:
+  # ── Generate missing passwords of the new set in Vault BEFORE any secret read ──
+  # ★ NIM-172 (symmetric with add_user): the operator no longer pre-seeds `vault kv put` for
+  # every user newly appearing in the set — the scenario generates the missing ones itself
+  # (core.vault.kv-present, on: keeper, generate-if-absent, crypto/rand per policy). Paths use the
+  # SAME convention the render below reads: secret/redis/<inc>/users/<name>#password. The
+  # generated VALUE never leaves the keeper (ADR-010).
+  #
+  # ★★ SCOPE — input.users ONLY, deliberately NOT default_admin / system users: those are the
+  # credentials the LIVE instance and its replicas authenticate with (community.redis.acl AUTHs as
+  # default_admin BEFORE ACL LOAD applies the new file). A missing one means a broken incarnation
+  # and must fail loudly at vault_resolve.
+  #
+  # ★★ RE-RUN SEMANTICS: generate-if-absent, so a user already in the set KEEPS their password —
+  # bulk-replace rewrites perms/state, never the credential. Rotation is not part of update_users:
+  # write the new value to the same Vault path and re-run.
+  #
+  # ★★ EMPTY SET: input.users: [] is the legitimate "remove ALL operator-extra" case, but
+  # kv-present rejects an empty targets list. The static `when` (input-only → evaluated
+  # keeper-side at render, group-drop; same pattern as destroy's cloud-destroyed gate) drops the
+  # step entirely — nothing to generate when the set is empty.
+  #
+  # ★★ PASSAGE INVARIANT: this step must APPLY before the RENDER of the tasks below that read the
+  # same paths via ${ vault(...) }. update_users has no provision body → no refresh emitter → the
+  # order rests ENTIRELY on the vault axis (ADR-056 amendment), same as add_user. Pinned by
+  # keeper/internal/trial/redis_add_user_secrets_test.go.
+  - name: Generate missing passwords of the new ACL user set in Vault
+    on: keeper
+    when: "size(input.users) > 0"
+    module: core.vault.kv-present
+    params:
+      # Same policy as create/add_user: 32 chars, alphanumeric — redis.conf/users.acl-safe.
+      policy:
+        length: 32
+        charset: alphanumeric
+      targets: "${ input.users.map(u, { 'path': 'secret/redis/' + incarnation.name + '/users/' + u.name, 'field': 'password' }) }"
+
   # 1. Re-render users.acl on disk with the NEW user set (the same mode-agnostic
   #    destiny redis as create/add_user/add_node). vars.users is the merged set with per-user
   #    passwords from Vault (keeper-side vault(), .tmpl hashes them, no plaintext is written).

@@ -98,6 +98,13 @@ assert:
         password: default-admin-secret-pass
         tls: false
 
+  task_absent:
+    # ★ NIM-172: the password-generate step is group-dropped on an EMPTY set (static
+    # `when: size(input.users) > 0`). There is nothing to generate, and kv-present rejects an
+    # empty targets list — without the gate this legitimate "remove ALL operator-extra" run
+    # would fail on the generate step.
+    - module: core.vault.kv-present
+
   # state_changes: redis_users = [] (operator-extra cleared, system users not in state).
   state_changes:
     redis_users: []

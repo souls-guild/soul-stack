@@ -46,13 +46,13 @@ func TestL3bRedisLive_Day2AddUser(t *testing.T) {
 	)
 
 	// Vault seed: main password + default_admin (used both by the community.redis.acl plugin
-	// AUTH and by the redis-cli assert - requirepass is dropped, so default_admin is re-designated) +
-	// the new user (add_user resolves secret/redis/<inc>/users/<name>#password keeper-side,
-	// create doesn't know about it -> pre-seed it). Other system users (replica/monitoring/...)
-	// create generates itself (core.vault.kv-present generate-if-absent). rel WITHOUT mount/data prefix.
+	// AUTH and by the redis-cli assert - requirepass is dropped, so default_admin is re-designated).
+	// The new user is DELIBERATELY NOT seeded (NIM-172): add_user generates
+	// secret/redis/<inc>/users/<name>#password itself via core.vault.kv-present, so this run is the
+	// live proof that no manual pre-seed is needed. Other system users (replica/monitoring/...)
+	// create generates itself the same way. rel WITHOUT mount/data prefix.
 	harness.SeedVaultKV(t, stack, "redis/"+incName, map[string]any{"password": "e2e-redis-main"})
 	harness.SeedVaultKV(t, stack, "redis/"+incName+"/users/"+adminUser, map[string]any{"password": adminPass})
-	harness.SeedVaultKV(t, stack, "redis/"+incName+"/users/"+newUser, map[string]any{"password": "e2e-appuser-secret"})
 
 	// Membership BEFORE Create (roster via incarnation_membership, NIM-124) + wait
 	// for the first SoulprintReport (redis.conf.tmpl binds to soulprint.self.network.primary_ip).
@@ -91,7 +91,8 @@ func TestL3bRedisLive_Day2AddUser(t *testing.T) {
 	stack.WaitIncarnationReady(t, inc, 300)
 
 	// Day-2 add_user: this is where install community.redis -> FetchModule -> Sigil-verify
-	// -> hot-register -> community.redis.acl (ACL LOAD) gets synthesized. The new user's password is NOT in the input (Vault).
+	// -> hot-register -> community.redis.acl (ACL LOAD) gets synthesized. The new user's password is
+	// neither in the input nor in Vault yet - add_user generates it (NIM-172).
 	addApply := stack.RunScenario(t, inc, "add_user", map[string]any{
 		"user": map[string]any{
 			"name":  newUser,

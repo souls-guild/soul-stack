@@ -7,17 +7,15 @@ package e2e_live_test
 
 import (
 	"testing"
-
-	"github.com/souls-guild/soul-stack/tests/e2e-live/harness"
 )
 
 func TestL3bRedisLive_Day2UpdateUsers(t *testing.T) {
 	stack, inc, adminPass := setupRedisStandalone(t, "rdb", "volatile-lru", 1024)
 	c := plainConn(adminPass)
 
-	// New users' passwords go in Vault (update_users resolves them keeper-side, input doesn't carry them).
-	harness.SeedVaultKV(t, stack, "redis/"+inc+"/users/alice", map[string]any{"password": "e2e-alice-secret"})
-	harness.SeedVaultKV(t, stack, "redis/"+inc+"/users/bob", map[string]any{"password": "e2e-bob-secret"})
+	// alice/bob are DELIBERATELY not seeded into Vault (NIM-172): update_users generates the
+	// missing passwords itself via core.vault.kv-present, so run 1 is the live proof that a user
+	// newly appearing in the set needs no manual seeding.
 
 	// Run 1: full set {alice, bob} - both get created.
 	add := stack.RunScenario(t, inc, "update_users", map[string]any{

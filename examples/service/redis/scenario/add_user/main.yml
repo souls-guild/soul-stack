@@ -1,20 +1,18 @@
 name: add_user
 description: >-
-  ★ Before running, seed the password of the user being added into Vault at
-  secret/redis/<incarnation>/users/<name>#password: it is NOT in the input
-  form (Vault convention), otherwise the run fails with an error like "secret
-  ... not found in Vault" (then seed the secret and run again).
-
-
   Add or override a single ACL user on a live Redis without a restart. The
-  password comes from Vault; the scenario renders the full users.acl and
-  applies it to the live instance.
+  password is NOT in the input form: the scenario generates it itself into Vault
+  at secret/redis/<incarnation>/users/<name>#password (keeper-side, crypto-random,
+  only when absent), then renders the full users.acl and applies it to the live
+  instance. Re-running for an existing user updates perms/state only and KEEPS
+  their password.
 
 # ── Operator input contract (docs/input.md) ────────────────────────────────
 # ONE AclUser record (types.yml, ADR-062 $type): user name, its ACL rights, on/off.
 # The same type as an element of the create input.users array: a single source of
 # truth for the form and validation (perms pattern). The password is NOT in the input
-# (Vault convention, see description). One user per run is an atomic maintenance
+# (Vault convention) and needs no manual pre-seed either — the first task generates it
+# (see "Generate the new user's password"). One user per run is an atomic maintenance
 # operation "add a user" (bulk editing of the set → update_users, bulk-replace).
 #
 # ★ wave 2 (2026-06-26): the former untyped {username, perms, state} was replaced by a
@@ -96,6 +94,47 @@ state_changes:
     value: "${ compute.users_new }"
 
 tasks:
+  # ── Generate the new user's password in Vault BEFORE any secret read ──────────
+  # ★ NIM-172: the operator no longer pre-seeds `vault kv put` before every add_user —
+  # the scenario generates the password itself (core.vault.kv-present, on: keeper,
+  # generate-if-absent, crypto/rand per policy; a present field is a no-op). Path is the
+  # SAME convention the render below reads: secret/redis/<inc>/users/<name>#password.
+  # The generated VALUE never leaves the keeper (ADR-010: not in register-output/audit/
+  # logs/OTel — only the path and the field name).
+  #
+  # ★★ SCOPE — ONLY input.user, deliberately NOT default_admin / system users /
+  # already-deployed operator users. Those are the credentials the LIVE instance and its
+  # replicas authenticate with: create generated them, and minting a fresh one here would
+  # either not match the running instance (community.redis.acl AUTHs as default_admin
+  # BEFORE ACL LOAD applies the new file) or silently rotate a working client's password.
+  # A missing one means a broken incarnation and must fail loudly at vault_resolve.
+  #
+  # ★★ RE-RUN SEMANTICS: generate-if-absent, so an add_user re-run on an EXISTING user
+  # upserts perms/state only and KEEPS the password in sync with what clients already
+  # hold. Rotation is not part of add_user: write the new value to the same Vault path
+  # and re-run — kv-present no-ops on a present field, the render picks the new value up
+  # and ACL LOAD applies it.
+  #
+  # ★★ PASSAGE INVARIANT: this step must APPLY before the RENDER of the tasks below that
+  # read the same path via ${ vault(...) } — a missing secret aborts render (vault_resolve).
+  # Unlike create/, add_user has NO provision body → no refresh emitter → the roster axis
+  # is inactive; the order rests ENTIRELY on the vault axis (ADR-056 amendment: a
+  # core.vault.kv-present emitter pushes every later vault()-reading task into a strictly
+  # later Passage), same as create_from_souls. Pinned by
+  # keeper/internal/trial/redis_add_user_secrets_test.go.
+  - name: Generate the new user's password in Vault (if absent)
+    on: keeper
+    module: core.vault.kv-present
+    params:
+      # Same policy as create: 32 chars, alphanumeric — redis.conf/users.acl-safe.
+      policy:
+        length: 32
+        charset: alphanumeric
+      # Single-line quoted ${…} (module.params type-check passes the CEL-wrap through for
+      # a StringNode only). register is DELIBERATELY absent — the passage edge is the
+      # vault axis, not register.
+      targets: "${ [{ 'path': 'secret/redis/' + incarnation.name + '/users/' + input.user.name, 'field': 'password' }] }"
+
   # 1. Re-render users.acl to disk with the NEW user set (the same mode-agnostic
   #    destiny redis as create/add_node). vars.users is the merged set with per-user
   #    passwords from Vault (keeper-side vault(), the .tmpl hashes it, no plaintext
