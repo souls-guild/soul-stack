@@ -149,6 +149,13 @@ type EventStreamDeps struct {
 	// the pool.
 	ApplyRunDB applyrun.ExecQueryRower
 
+	// ConsoleHub is the session manager of the interactive console plane
+	// (NIM-143). The three Soul→Keeper `console_*` payloads are handed to it;
+	// it owns the mapping to the operator's WebSocket, including when that
+	// socket lives on another Keeper instance. nil → console frames are dropped
+	// (a build/deployment without the console endpoint wired).
+	ConsoleHub ConsoleHub
+
 	// Metrics holds the keeper_grpc_* collectors (ADR-024). nil →
 	// instrumentation disabled (nil-safe [GRPCMetrics] methods are no-ops):
 	// unit tests and dev builds without observability. Production wire-up
@@ -1362,6 +1369,8 @@ func (h *eventStreamHandler) dispatch(ctx context.Context, sid, sessionID string
 		h.handleWardRoster(ctx, sid, sessionID, p.WardRoster)
 	case *keeperv1.FromSoul_ErrandResult:
 		h.handleErrandResult(ctx, sid, sessionID, p.ErrandResult)
+	case *keeperv1.FromSoul_ConsoleOpened, *keeperv1.FromSoul_ConsoleChunk, *keeperv1.FromSoul_ConsoleExit:
+		h.handleConsoleUpstream(ctx, sid, sessionID, msg)
 	default:
 		h.logger.Warn("eventstream: unknown payload type",
 			slog.String("sid", sid),

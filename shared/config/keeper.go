@@ -102,6 +102,13 @@ type KeeperConfig struct {
 	// Redis is configured.
 	CadenceScheduler *KeeperCadenceScheduler `yaml:"cadence_scheduler,omitempty"`
 
+	// Console is the operator-facing envelope of the interactive console plane
+	// (NIM-143, docs/keeper/console.md). Optional; absent means the built-in
+	// defaults. Distinct from `console:` in soul.yml, which is HOST policy
+	// (may a shell run here at all): this is OPERATOR policy — how many
+	// terminals one Archon may hold and how long an abandoned one lives.
+	Console *KeeperConsole `yaml:"console,omitempty"`
+
 	// Acolytes is the number of workers in the apply execution pool (ADR-027,
 	// Acolyte). Feature flag: 0 (default) — pool does not start, execution runs
 	// the old scenario-runner run-goroutine path; >0 — pool active. Cutover to
@@ -769,6 +776,30 @@ type KeeperTollWebhook struct {
 }
 
 // KeeperListen holds the four Keeper listeners.
+// KeeperConsole is the Keeper-side policy for interactive console (PTY)
+// sessions. Every field is optional; a zero value resolves to the default.
+//
+// The Soul side caps consoles PER HOST (`max_sessions` in soul.yml, default 8).
+// These cap them PER OPERATOR and per Keeper instance — a question no single
+// host can answer, since a multi-console wall of 30 hosts is one session on
+// each of them.
+type KeeperConsole struct {
+	// MaxSessionsPerArchon caps live consoles one Archon may hold. 0/omitted →
+	// default 30, which covers the walls the operator UI is built for.
+	MaxSessionsPerArchon int `yaml:"max_sessions_per_archon,omitempty"`
+
+	// MaxSessionsGlobal caps live consoles on THIS Keeper instance across all
+	// operators — a backstop when many operators each stay within their own
+	// limit. 0/omitted → default 256.
+	MaxSessionsGlobal int `yaml:"max_sessions_global,omitempty"`
+
+	// IdleTimeout closes a session with no operator input for this long. Output
+	// does not count as activity: a `tail -f` left running overnight is exactly
+	// the abandoned root shell this reaps. Type `duration`; 0/omitted →
+	// default 30m, `0s` explicitly disables the sweep.
+	IdleTimeout string `yaml:"idle_timeout,omitempty"`
+}
+
 type KeeperListen struct {
 	GRPC    KeeperListenGRPC   `yaml:"grpc"`
 	OpenAPI KeeperListenSimple `yaml:"openapi"`

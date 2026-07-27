@@ -105,6 +105,7 @@ The exact summary of "what we think" and the source of truth (registry in the co
 | Document | What is it / for whom |
 |---|---|
 | [keeper/](keeper/README.md) | Keeper-side index folder: Postgres + Redis, push, Reaper, plugins (Cloud / SSH), cloud integration, `keeper.yml` format. |
+| [keeper/console.md](keeper/console.md) | **Interactive console plane**: the WebSocket `/v1/console` (the only one in Keeper), the session manager over the Keeper↔Soul EventStream, backpressure, kill-on-disconnect, cross-Keeper routing, operator session caps. Soul half — [soul/console.md](soul/console.md). |
 | [keeper/rbac.md](keeper/rbac.md) | RBAC: roles and permissions, unified application to OpenAPI / MCP / push, bootstrap of the first Archon. |
 | [soul/](soul/README.md) | Soul-side index folder: identity, bootstrap token onboarding, connection algorithm, `soul.yml` format, module cache on the host. |
 | [keeper/run-flavors.md](keeper/run-flavors.md) | Summary of entry-points for starting work: scenario via agent, batch via Voyage, single-Errand, push via SSH. Which endpoint API for which task. |

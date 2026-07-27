@@ -12,6 +12,7 @@ require (
 	github.com/golang-jwt/jwt/v5 v5.3.1
 	github.com/golang-migrate/migrate/v4 v4.19.1
 	github.com/google/cel-go v0.29.2
+	github.com/gorilla/websocket v1.5.3
 	github.com/gravitational/teleport/api v0.0.0-20260526093338-eadd0803064f
 	github.com/hashicorp/vault/api v1.23.0
 	github.com/jackc/pgx/v5 v5.10.0

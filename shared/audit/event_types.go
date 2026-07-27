@@ -1154,4 +1154,22 @@ const (
 	// `DELETE /v1/profiles/{name}` or the MCP tool `keeper.profile.delete`.
 	// `source: api`/`mcp`, `archon_aid` is the initiator. Payload: `{name}`.
 	EventProfileDeleted EventType = "profile.deleted"
+
+	// EventConsoleOpened — an Archon opened an interactive console (PTY) on a
+	// host over the WebSocket `/v1/console` (ADR-0074, docs/keeper/console.md).
+	// `source: api`, `archon_aid` is the initiator, `correlation_id` is the
+	// Keeper-minted session id. Payload: `{sid, session_id}`.
+	//
+	// Audited on its own, apart from the keystroke recording of session
+	// playback: a console is an interactive shell running as the Soul daemon's
+	// user, so WHO opened a shell WHERE is a fact the audit log must hold even
+	// where recording is off.
+	EventConsoleOpened EventType = "console.opened"
+
+	// EventConsoleClosed — a console session ended. `source: api`, `archon_aid`
+	// is the operator that held it, `correlation_id` is the same session id as
+	// the matching `console.opened`. Payload: `{sid, session_id, reason}` —
+	// `reason` is either the Keeper-side cause (operator detach, socket closed,
+	// idle timeout) or `soul:<console-exit-reason>` when the shell itself ended.
+	EventConsoleClosed EventType = "console.closed"
 )

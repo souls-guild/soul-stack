@@ -260,6 +260,19 @@ acolytes: 0
 # acolyte_batch: 10           # max jobs per single claim tick (LIMIT)
 # acolyte_poll_interval: 2s   # period of the poll-fallback to the Summons signal
 
+# Interactive console plane (NIM-143, docs/keeper/console.md). Operator policy
+# for the WebSocket `/v1/console` — distinct from `console:` in soul.yml, which
+# is HOST policy (may a shell run on this machine at all). A host cannot answer
+# "how many terminals may this Archon hold": a wall of 30 hosts is one session
+# on each of them. Absent block = the defaults below.
+# console:
+#   max_sessions_per_archon: 30   # live consoles one Archon may hold (default 30)
+#   max_sessions_global: 256      # live consoles on THIS keeper instance (default 256)
+#   idle_timeout: 30m             # close after this long with no operator INPUT
+#                                 # (output does not count: a `tail -f` left running
+#                                 # overnight is exactly the abandoned root shell
+#                                 # this reaps). `0s` disables the sweep.
+
 # Watchman (isolation detection + soul-shedding S2): probe period for PG+Redis
 # and the threshold of consecutive failures before force-closing local
 # EventStream streams. An isolated instance moves its Souls to a live Keeper

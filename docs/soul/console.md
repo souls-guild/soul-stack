@@ -5,8 +5,9 @@ Keeper over the existing EventStream. Implementation —
 `soul/internal/runtime/consolerunner/`.
 
 This document covers the **Soul side and the wire contract**. Keeper's session
-manager and the browser transport (WebSocket `/v1/console`), the `soul.console`
-permission and session recording are separate slices.
+manager and the browser transport (WebSocket `/v1/console`) are
+[keeper/console.md](../keeper/console.md); the `soul.console` permission and
+session recording are separate slices.
 
 ## 1. Why it is not an Errand
 

@@ -109,6 +109,7 @@ func metaRouter(t *testing.T, verifier *keeperjwt.Verifier) http.Handler {
 		nil,                                  // soulStatsStaleFn (default 90s in the test)
 		nil,                                  // clusterH (cluster-view not mounted in the test)
 		nil,                                  // runEventsDeps (ADR-068 §A3 — not tested here)
+		nil,                                  // consoleWSDeps (console WebSocket not tested here)
 		nil,                                  // logger
 	)
 }

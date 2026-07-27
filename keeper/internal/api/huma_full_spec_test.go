@@ -201,6 +201,9 @@ func TestFullSpec_CoversAllRoutes(t *testing.T) {
 		if isHealthMetaRoute(r) {
 			continue // outside /v1, not a huma domain
 		}
+		if isNonSpecRoute(r) {
+			continue // inside /v1 but not describable as an OpenAPI operation
+		}
 		realSet[r] = struct{}{}
 	}
 	for r := range pathAllowlist {
@@ -289,6 +292,21 @@ func TestFullSpec_NoTechnicalSchemaNames(t *testing.T) {
 // isHealthMetaRoute — health/meta/docs endpoints outside /v1 (not part of the huma
 // domains, absent from the aggregate spec). /docs/assets/* ends with /* → filtered
 // out earlier as a wildcard.
+// isNonSpecRoute — /v1 routes that legitimately carry NO OpenAPI operation.
+//
+// The only member is the console WebSocket (NIM-143): OpenAPI 3.0 models a
+// request/response pair, while an upgrade replaces the response with a raw
+// bidirectional socket. Describing it as `GET` returning 101 would document a
+// contract nobody can call from a generated client, and the real contract (the
+// JSON frames on the socket) has no place in the spec at all — it lives in
+// docs/keeper/console.md and its client mirror consoleProtocol.ts.
+//
+// Deliberately a closed list rather than a predicate: a NEW route landing here
+// by accident must go red, exactly like the pathAllowlist it mirrors.
+func isNonSpecRoute(r route) bool {
+	return r.method == "GET" && r.path == "/v1/console"
+}
+
 func isHealthMetaRoute(r route) bool {
 	switch r.path {
 	case "/healthz", "/readyz", "/openapi.yaml", "/openapi.json", "/docs":

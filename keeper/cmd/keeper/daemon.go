@@ -39,6 +39,7 @@ import (
 	"github.com/souls-guild/soul-stack/keeper/internal/certpolicy"
 	"github.com/souls-guild/soul-stack/keeper/internal/cloudinit"
 	"github.com/souls-guild/soul-stack/keeper/internal/conductor"
+	"github.com/souls-guild/soul-stack/keeper/internal/console"
 	"github.com/souls-guild/soul-stack/keeper/internal/coremod"
 	coremodcert "github.com/souls-guild/soul-stack/keeper/internal/coremod/cert"
 	coremodchoir "github.com/souls-guild/soul-stack/keeper/internal/coremod/choir"
@@ -403,6 +404,8 @@ type daemon struct {
 	// Keeper daemon runtime wiring note.
 	streamManager  *keepergrpc.StreamManager
 	outbound       *keepergrpc.Outbound
+	consoleHub     *console.Hub
+	consoleMetrics *console.Metrics
 	scenarioRunner *scenario.Runner
 
 	// Keeper daemon runtime wiring note.
@@ -1286,6 +1289,7 @@ func (d *daemon) setupMetricsRegistry(_ context.Context) error {
 	// Keeper daemon runtime wiring note.
 	// Keeper daemon runtime wiring note.
 	d.grpcMetrics = keepergrpc.RegisterGRPCMetrics(metricsReg)
+	d.consoleMetrics = console.RegisterMetrics(metricsReg)
 	// Keeper daemon runtime wiring note.
 	// Keeper daemon runtime wiring note.
 	d.scenarioMetrics = scenario.RegisterScenarioMetrics(metricsReg)
@@ -2945,6 +2949,28 @@ func (d *daemon) setupGRPCEventStream(ctx context.Context) error {
 	}
 	d.outbound = outbound
 
+	// Interactive console plane (NIM-143). The Hub sits between the operator's
+	// WebSocket and this EventStream; Outbound is its downstream dispatcher, so
+	// consoles inherit cluster routing for free. The upstream direction needs
+	// its own bridge — pty output arrives on whichever Keeper holds the stream,
+	// while the socket lives on whichever the load balancer picked.
+	consoleBridge := console.NewClusterBridge(d.redisClient, cfg.KID, logger)
+	consoleHub, err := console.NewHub(console.HubDeps{
+		Dispatcher:   outbound,
+		Capabilities: console.NewRedisCapabilityChecker(d.redisClient),
+		Cluster:      consoleBridge,
+		AuditWriter:  d.auditWriter,
+		Limits:       consoleLimits(cfg),
+		Metrics:      d.consoleMetrics,
+		Logger:       logger,
+	})
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "keeper run: build console hub: %v\n", err)
+		return errSetupFailed
+	}
+	d.consoleHub = consoleHub
+	d.startConsoleBackground(ctx, consoleBridge)
+
 	// Keeper daemon runtime wiring note.
 	// Keeper daemon runtime wiring note.
 	// Keeper daemon runtime wiring note.
@@ -3099,6 +3125,7 @@ func (d *daemon) setupGRPCEventStream(ctx context.Context) error {
 		Manager:               streamManager,
 		ApplyBus:              d.applyBus,
 		ApplyRunDB:            d.pool,
+		ConsoleHub:            consoleHub,
 		Metrics:               d.grpcMetrics,
 		LastSeenFlushInterval: lastSeenFlushInterval,
 		SigilStore:            sigilStore,
@@ -4337,6 +4364,11 @@ func (d *daemon) setupAPIServer(ctx context.Context) error {
 		// Keeper daemon runtime wiring note.
 		// Keeper daemon runtime wiring note.
 		ApplyBus: d.applyBus,
+		// Interactive console plane (NIM-143). nil hub → GET /v1/console is not
+		// mounted; the hub is built in setupGRPCEventStream, which runs before
+		// the API server.
+		ConsoleHub:     d.consoleHub,
+		ConsoleMetrics: d.consoleMetrics,
 		// Keeper daemon runtime wiring note.
 		// Keeper daemon runtime wiring note.
 		// Keeper daemon runtime wiring note.

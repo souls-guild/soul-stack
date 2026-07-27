@@ -684,6 +684,30 @@ acolytes: 0
 > an already existing SID-lease with a KID owner remains as insurance after the start (for example.
 > the second instance rose after passing the refuse-guard of the first).
 
+## `console`
+
+Operator-facing policy of the interactive console plane
+([console.md](console.md), NIM-143). Optional; without the block the defaults
+apply.
+
+Distinct from `console:` in `soul.yml`, which is **host** policy (may a shell run
+on this machine at all, how many at once). These are **operator** policy — a host
+cannot answer "how many terminals may this Archon hold", since a multi-console
+wall of 30 hosts is one session on each of them.
+
+```yaml
+# console:
+#   max_sessions_per_archon: 30   # live consoles one Archon may hold
+#   max_sessions_global: 256      # live consoles on THIS keeper instance
+#   idle_timeout: 30m             # close after this long without operator input
+```
+
+| Field | Type | Default | Meaning |
+|---|---|---|---|
+| `max_sessions_per_archon` | `int` (≥0) | `30` | Live consoles one Archon may hold across all their sockets. Covers the walls the operator UI is built for; past that an operator is not reading output but running a fan-out, which is what an Errand is for. Exceeding it gives the pane `error{code: "limit_exceeded"}`. `0`/omitted → default. |
+| `max_sessions_global` | `int` (≥0) | `256` | Live consoles on ONE Keeper instance across all operators — a backstop when many operators each stay within their own limit. Every session costs a pty on some host plus a socket buffer here. `0`/omitted → default. |
+| `idle_timeout` | `duration` | `30m` | Close a session with no operator **input** for this long. Output does NOT count as activity: a `tail -f` left running overnight is exactly the abandoned root shell this reaps. `0s` disables the sweep; empty/omitted → default. |
+
 ## `allow_unsafe_single_path_multi_keeper` (top-level)
 
 Explicit **opt-out** from refuse-guard soul-shedding (Finding-A, [ADR-027](../adr/0027-apply-work-queue.md)). By default, Keeper with `acolytes == 0` and the number of living Keeper instances in **Conclave** (presence registry in Redis, keys `keeper:instance:<kid>`, TTL 30s) is more than one - **refuses to start** (see HA invariant above). `true` removes the ban: refuse is replaced by a loud `WARN`, the start continues.

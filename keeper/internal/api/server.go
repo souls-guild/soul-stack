@@ -21,6 +21,7 @@ import (
 	"github.com/souls-guild/soul-stack/keeper/internal/applybus"
 	"github.com/souls-guild/soul-stack/keeper/internal/auditpg"
 	"github.com/souls-guild/soul-stack/keeper/internal/augur"
+	"github.com/souls-guild/soul-stack/keeper/internal/console"
 	"github.com/souls-guild/soul-stack/keeper/internal/errand"
 	"github.com/souls-guild/soul-stack/keeper/internal/herald"
 	"github.com/souls-guild/soul-stack/keeper/internal/jwt"
@@ -184,6 +185,16 @@ type Deps struct {
 	// grpc handlers + the scenario-runner (publishers). When nil the SSE route is not
 	// mounted (opt-in wire-up, VoyageDB pattern).
 	ApplyBus *applybus.EventBus
+
+	// ConsoleHub — the session manager of the interactive console plane
+	// (NIM-143, GET /v1/console). Holds the WebSocket<->EventStream mapping and
+	// the operator session caps. When nil the WebSocket route is not mounted
+	// (opt-in wire-up, the ApplyBus pattern).
+	ConsoleHub *console.Hub
+
+	// ConsoleMetrics — the keeper_console_* collectors. nil → console
+	// instrumentation disabled (nil-safe no-ops).
+	ConsoleMetrics *console.Metrics
 
 	// ChoirDB — the CRUD surface of the Choir/Voice registry (ADR-044, S-T3). When nil
 	// the choir.* routes aren't wired (PushProviderSvc pattern).
@@ -860,7 +871,20 @@ func NewServer(cfg config.KeeperListenSimple, deps Deps, logger *slog.Logger) (*
 	// via the `*/events` chain (fetch-streaming, A0); there is no separate minting endpoint.
 	runEventsDeps := newRunEventsDeps(deps.ApplyBus, deps.IncarnationDB, deps.RBAC, logger)
 
-	handler := buildRouter(deps.JWTVerifier, healthH, opH, incH, soulH, telemetryH, roleH, synodH, sigilH, sigilKeyH, serviceH, provisioningPolicyH, settingsH, augurH, oracleH, pushH, pushProviderH, providerH, profileH, errandH, voyageH, cadenceH, auditH, choirH, heraldH, moduleCatalogH, deps.ModuleFormPrepH, permCatalogH, eventTypeCatalogH, heraldTypeCatalogH, meH, deps.RBAC, deps.AuditWriter, deps.MetricsHTTP, deps.TollDegraded, deps.TempoLimiter, deps.TempoMetrics, tempoVoyageCreateLimits, tempoVoyagePreviewLimits, deps.WebUIEnabled, deps.LDAPAuth, deps.OIDCAuth, deps.AuthToken, deps.AuthMethods, deps.LoginGuard, deps.LoginLimitCfg, deps.SoulStatsStaleFn, clusterH, runEventsDeps, logger)
+	// WebSocket console — opt-in: without a session-manager hub (no Outbound
+	// wired, i.e. a build with no EventStream) the route is not mounted, so an
+	// operator gets a 404 rather than a socket that answers nothing.
+	var consoleDeps *consoleWSDeps
+	if deps.ConsoleHub != nil {
+		consoleDeps = &consoleWSDeps{
+			Hub:      deps.ConsoleHub,
+			Enforcer: deps.RBAC,
+			Metrics:  deps.ConsoleMetrics,
+			Logger:   logger,
+		}
+	}
+
+	handler := buildRouter(deps.JWTVerifier, healthH, opH, incH, soulH, telemetryH, roleH, synodH, sigilH, sigilKeyH, serviceH, provisioningPolicyH, settingsH, augurH, oracleH, pushH, pushProviderH, providerH, profileH, errandH, voyageH, cadenceH, auditH, choirH, heraldH, moduleCatalogH, deps.ModuleFormPrepH, permCatalogH, eventTypeCatalogH, heraldTypeCatalogH, meH, deps.RBAC, deps.AuditWriter, deps.MetricsHTTP, deps.TollDegraded, deps.TempoLimiter, deps.TempoMetrics, tempoVoyageCreateLimits, tempoVoyagePreviewLimits, deps.WebUIEnabled, deps.LDAPAuth, deps.OIDCAuth, deps.AuthToken, deps.AuthMethods, deps.LoginGuard, deps.LoginLimitCfg, deps.SoulStatsStaleFn, clusterH, runEventsDeps, consoleDeps, logger)
 
 	srv := &http.Server{
 		Addr:              cfg.Addr,

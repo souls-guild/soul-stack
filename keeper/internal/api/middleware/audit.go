@@ -1,8 +1,10 @@
 package middleware
 
 import (
+	"bufio"
 	"context"
 	"log/slog"
+	"net"
 	"net/http"
 
 	"github.com/souls-guild/soul-stack/shared/audit"
@@ -158,6 +160,15 @@ func (s *StatusRecorder) Flush() {
 	if f, ok := s.ResponseWriter.(http.Flusher); ok {
 		f.Flush()
 	}
+}
+
+// NIM-143: WebSocket upgrade passthrough. Embedding http.ResponseWriter hides
+// the socket's Hijack, and the console Upgrader would fail with 500.
+func (s *StatusRecorder) Hijack() (net.Conn, *bufio.ReadWriter, error) {
+	if h, ok := s.ResponseWriter.(http.Hijacker); ok {
+		return h.Hijack()
+	}
+	return nil, nil, http.ErrNotSupported
 }
 
 // recorderCtxKey — non-exported context key for the shared [StatusRecorder]

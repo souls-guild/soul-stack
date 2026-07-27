@@ -18,6 +18,7 @@ package middleware
 // it was by IP or by username, locked or throttled.
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
@@ -289,4 +290,12 @@ func (s *statusRecorder) Flush() {
 	if f, ok := s.ResponseWriter.(http.Flusher); ok {
 		f.Flush()
 	}
+}
+
+// NIM-143: WebSocket upgrade passthrough, see [StatusRecorder.Hijack].
+func (s *statusRecorder) Hijack() (net.Conn, *bufio.ReadWriter, error) {
+	if h, ok := s.ResponseWriter.(http.Hijacker); ok {
+		return h.Hijack()
+	}
+	return nil, nil, http.ErrNotSupported
 }

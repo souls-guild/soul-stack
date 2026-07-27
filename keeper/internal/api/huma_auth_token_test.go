@@ -87,6 +87,7 @@ func authTokenRouter(t *testing.T, verifier *jwt.Verifier, enforcer RBACProvider
 		nil,              // soulStatsStaleFn
 		nil,              // clusterH
 		&runEventsDeps{}, // runEventsDeps
+		nil,              // consoleWSDeps (console WebSocket not tested here)
 		nil,              // logger
 	)
 }

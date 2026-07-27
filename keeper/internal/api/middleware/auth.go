@@ -31,6 +31,17 @@ import (
 // URL would leak into access logs / referer / history.
 const sseQueryTokenParam = "access_token"
 
+// wsBearerSubprotocolPrefix — the `Sec-WebSocket-Protocol` element through
+// which the WebSocket console channel carries its JWT.
+//
+// EXCEPTION for the browser WebSocket API, symmetric to [sseQueryTokenParam]:
+// the constructor takes only a URL and a subprotocol list, so a custom
+// `Authorization` header is impossible. The subprotocol is preferred over a
+// query-param here because it keeps the token out of access logs, `Referer`
+// and browser history — the failure mode the SSE exception has to live with.
+// Accepted strictly on a WebSocket handshake (see [isWebSocketUpgrade]).
+const wsBearerSubprotocolPrefix = "bearer."
+
 // claimsCtxKey — a non-exported type for the context key to avoid
 // accidental cross-package collisions (the Go idiom for context keys).
 type claimsCtxKey struct{}
@@ -91,6 +102,11 @@ func extractToken(r *http.Request) (string, bool) {
 			return tok, true
 		}
 	}
+	if isWebSocketUpgrade(r) {
+		if tok, ok := bearerSubprotocol(r.Header.Values("Sec-WebSocket-Protocol")); ok {
+			return tok, true
+		}
+	}
 	return "", false
 }
 
@@ -106,6 +122,42 @@ func isSSERequest(r *http.Request) bool {
 		return true
 	}
 	return strings.HasSuffix(r.URL.Path, "/events")
+}
+
+// isWebSocketUpgrade — true for a WebSocket handshake: GET plus the RFC 6455
+// `Connection: Upgrade` / `Upgrade: websocket` pair. A subprotocol token is
+// accepted strictly on such a request — on a plain GET carrying the same header
+// the exception would degrade into a general header-shaped auth bypass.
+func isWebSocketUpgrade(r *http.Request) bool {
+	if r.Method != http.MethodGet {
+		return false
+	}
+	if !strings.EqualFold(r.Header.Get("Upgrade"), "websocket") {
+		return false
+	}
+	// `Connection` is a comma-separated list ("keep-alive, Upgrade" is legal).
+	for _, tok := range strings.Split(r.Header.Get("Connection"), ",") {
+		if strings.EqualFold(strings.TrimSpace(tok), "upgrade") {
+			return true
+		}
+	}
+	return false
+}
+
+// bearerSubprotocol picks the `bearer.<jwt>` element out of the offered
+// subprotocol list. Values is used rather than Get because a client may split
+// the offer across repeated headers, and each header is itself an RFC 7230
+// comma-separated list with optional whitespace.
+func bearerSubprotocol(headers []string) (string, bool) {
+	for _, h := range headers {
+		for _, proto := range strings.Split(h, ",") {
+			proto = strings.TrimSpace(proto)
+			if tok, ok := strings.CutPrefix(proto, wsBearerSubprotocolPrefix); ok && tok != "" {
+				return tok, true
+			}
+		}
+	}
+	return "", false
 }
 
 // ClaimsFromContext returns the claims placed by [RequireJWT] in the context.
