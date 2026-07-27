@@ -158,6 +158,7 @@ func (r *destinyResolver) Resolve(ctx context.Context, name string) (*render.Res
 	if err != nil {
 		return nil, fmt.Errorf("scenario: load destiny %q: %w", name, err)
 	}
+	warnCompatFloorTooLow(entity, config.KeeperFeaturesOfDestiny(art.Manifest, art.Tasks), r.logger)
 	// .tmpl files of a destiny live in ITS OWN snapshot (art.LocalDir), not the
 	// service snapshot. Single-level resolve (destiny has no scenario-local
 	// layer): empty prefix.

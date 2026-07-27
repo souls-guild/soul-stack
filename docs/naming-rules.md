@@ -251,6 +251,7 @@ The declared range of engine versions an artifact is known to work with. Carried
 | **`compat_window_empty`** (diag code) | The declared windows do not intersect — no keeper version can ever satisfy them. An authoring error, raised by `soul-lint` and at service registration. |
 | **`compat_window_incomplete`** (diag code) | A `compat:` block that declares no engine axis, or a `compat.keeper` that declares neither `min` nor `max`. An empty declaration is an error rather than a silent "unbounded" — omit the block instead. |
 | **`compat_version_invalid`** (diag code) | A bound that is not plain `MAJOR.MINOR.PATCH` — a `v` prefix, a pre-release suffix or a `>=`/`<` operator. One syntax only. |
+| **`introduced_in_invalid`** (diag code) | An `introduced_in` in a module manifest that is not plain `MAJOR.MINOR.PATCH` — same one-syntax rule as a compat bound, since the two are compared against each other. |
 | **`compat_floor_too_low`** (diag code) | The declared `min` is below the floor inferred from `introduced_in` — the declaration is too permissive and would break on a keeper inside the declared window. Lint/registration diagnostic, deliberately **not** a run-time block. |
 
 **Four version-shaped things — do not confuse:**

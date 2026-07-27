@@ -303,3 +303,72 @@ func TestModuleCatalog_GetTyped_NotFound(t *testing.T) {
 		t.Fatalf("expected not-found (404), problem.Type = %q", got)
 	}
 }
+
+// introducedInManifest — a module carrying ADR-0076(i) metadata at both
+// granularities: the module itself and a parameter added later than the state it
+// hangs on.
+const introducedInManifest = `kind: soul_module
+protocol_version: 1
+namespace: official
+name: postgres-user
+introduced_in: "1.4.0"
+spec:
+  states:
+    present:
+      description: ensure user exists
+      input:
+        username:
+          type: string
+          required: true
+        selinux_context:
+          type: string
+          introduced_in: "2.5.0"
+`
+
+// The catalog is where an author looks up what a module implies before declaring
+// a compat: window against it (ADR-0076(i)), so introduced_in has to reach the
+// wire — module-level and param-level.
+func TestModuleCatalog_IntroducedInIsPublished(t *testing.T) {
+	h := NewModuleCatalogHandler(fakeCatalogPlugins{
+		entries: []PluginCatalogEntry{
+			{Namespace: "official", Name: "postgres-user", Ref: "v1.0.0", ManifestRaw: []byte(introducedInManifest)},
+		},
+	}, nil)
+
+	resp, err := h.ListTyped(context.Background(), false)
+	if err != nil {
+		t.Fatalf("ListTyped: %v", err)
+	}
+	it, ok := findItem(resp.Items, "official.postgres-user")
+	if !ok {
+		t.Fatal("plugin module missing from the catalog")
+	}
+	if it.IntroducedIn != "1.4.0" {
+		t.Errorf("module introduced_in = %q, want 1.4.0", it.IntroducedIn)
+	}
+	got := map[string]string{}
+	for _, p := range it.Params {
+		got[p.Name] = p.IntroducedIn
+	}
+	if got["selinux_context"] != "2.5.0" {
+		t.Errorf("param introduced_in = %q, want 2.5.0", got["selinux_context"])
+	}
+	if got["username"] != "" {
+		t.Errorf("a param with no metadata must stay empty, got %q", got["username"])
+	}
+}
+
+// Core modules are unstamped today (the catalog has not changed since the
+// baseline release) — the field must be absent rather than invented.
+func TestModuleCatalog_CoreCarriesNoIntroducedInYet(t *testing.T) {
+	h := NewModuleCatalogHandler(nil, nil)
+	resp, err := h.ListTyped(context.Background(), false)
+	if err != nil {
+		t.Fatalf("ListTyped: %v", err)
+	}
+	for _, it := range resp.Items {
+		if it.IntroducedIn != "" {
+			t.Errorf("core module %s claims introduced_in=%q; stamp it in RELEASING when that becomes true", it.Name, it.IntroducedIn)
+		}
+	}
+}

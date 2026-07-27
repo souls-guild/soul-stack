@@ -90,6 +90,10 @@ type moduleParam struct {
 	// UI to build a typed list (e.g. list[int]) rather than a free-form list of
 	// strings.
 	Items *moduleParam `json:"items,omitempty"`
+
+	// IntroducedIn — the engine release that added this parameter (ADR-0076(i)).
+	// omitempty — a parameter that has been there since the baseline says nothing.
+	IntroducedIn string `json:"introduced_in,omitempty"`
 }
 
 // moduleCatalogItem — one catalog entry. The type name = the contract schema name
@@ -103,6 +107,14 @@ type moduleCatalogItem struct {
 	States      []string      `json:"states"`
 	ErrandSafe  bool          `json:"errand_safe"`
 	Params      []moduleParam `json:"params"`
+
+	// IntroducedIn — the engine release that added this module (ADR-0076(i)),
+	// carried outward so an author can see the floor a module implies before
+	// declaring a `compat:` window against it. omitempty — a module that predates
+	// the metadata says nothing. Per-STATE versions are not surfaced here: the
+	// `states` field is a flat name list, and widening it into objects would break
+	// the contract the UI reads.
+	IntroducedIn string `json:"introduced_in,omitempty"`
 }
 
 // moduleCatalogReply — the body of `GET /v1/modules`. The type name = the contract
@@ -173,19 +185,20 @@ func (h *ModuleCatalogHandler) GetTyped(ctx context.Context, name string) (Modul
 func (h *ModuleCatalogHandler) buildCatalog(ctx context.Context) ([]moduleCatalogItem, error) {
 	items := make([]moduleCatalogItem, 0, len(coreModuleDocs))
 	for _, c := range coreModuleDocs {
-		var params []moduleParam
+		params := []moduleParam{}
+		introducedIn := ""
 		if m, ok := coremanifest.Default().Lookup(c.Name); ok {
 			params = manifestToParams(m.Spec)
-		} else {
-			params = []moduleParam{}
+			introducedIn = m.IntroducedIn
 		}
 		items = append(items, moduleCatalogItem{
-			Name:        c.Name,
-			Kind:        "core",
-			Description: c.Description,
-			States:      c.States,
-			ErrandSafe:  len(c.ErrandSafeStates) > 0,
-			Params:      params,
+			Name:         c.Name,
+			Kind:         "core",
+			Description:  c.Description,
+			States:       c.States,
+			ErrandSafe:   len(c.ErrandSafeStates) > 0,
+			Params:       params,
+			IntroducedIn: introducedIn,
 		})
 	}
 
@@ -232,6 +245,7 @@ func pluginCatalogItem(e PluginCatalogEntry) moduleCatalogItem {
 	sort.Strings(states)
 	it.States = states
 	it.Params = manifestToParams(m.Spec)
+	it.IntroducedIn = m.IntroducedIn
 	return it
 }
 
@@ -245,6 +259,7 @@ func pluginCatalogItem(e PluginCatalogEntry) moduleCatalogItem {
 func manifestToParams(spec plugin.ManifestSpec) []moduleParam {
 	type pdef struct {
 		typ, desc, pattern, format, example string
+		introducedIn                        string
 		required, secret, multiline         bool
 		enum                                []any
 		source                              *plugin.InputSource
@@ -252,7 +267,15 @@ func manifestToParams(spec plugin.ManifestSpec) []moduleParam {
 	}
 	seen := make(map[string]*pdef)
 	order := make([]string, 0)
-	for _, def := range spec.States {
+	// States are visited in name order: "the first state where a field is set"
+	// only means something with a fixed traversal, and map order is not one.
+	stateNames := make([]string, 0, len(spec.States))
+	for state := range spec.States {
+		stateNames = append(stateNames, state)
+	}
+	sort.Strings(stateNames)
+	for _, state := range stateNames {
+		def := spec.States[state]
 		for pname, p := range def.Input {
 			cur, ok := seen[pname]
 			if !ok {
@@ -284,6 +307,9 @@ func manifestToParams(spec plugin.ManifestSpec) []moduleParam {
 			if p.Example != "" {
 				cur.example = p.Example
 			}
+			if cur.introducedIn == "" {
+				cur.introducedIn = p.IntroducedIn
+			}
 			cur.required = cur.required || p.Required
 			cur.secret = cur.secret || p.Secret
 			cur.multiline = cur.multiline || p.Multiline
@@ -295,18 +321,19 @@ func manifestToParams(spec plugin.ManifestSpec) []moduleParam {
 	for _, pname := range order {
 		d := seen[pname]
 		params = append(params, moduleParam{
-			Name:        pname,
-			Type:        d.typ,
-			Required:    d.required,
-			Secret:      d.secret,
-			Description: d.desc,
-			Enum:        d.enum,
-			Pattern:     d.pattern,
-			Format:      d.format,
-			Source:      toModuleInputSource(d.source),
-			Multiline:   d.multiline,
-			Example:     d.example,
-			Items:       toModuleParamItems(d.items),
+			Name:         pname,
+			Type:         d.typ,
+			Required:     d.required,
+			Secret:       d.secret,
+			Description:  d.desc,
+			Enum:         d.enum,
+			Pattern:      d.pattern,
+			Format:       d.format,
+			Source:       toModuleInputSource(d.source),
+			Multiline:    d.multiline,
+			Example:      d.example,
+			Items:        toModuleParamItems(d.items),
+			IntroducedIn: d.introducedIn,
 		})
 	}
 	return params

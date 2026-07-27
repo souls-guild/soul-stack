@@ -7,6 +7,22 @@ Artifact versioning — via git ref ([ADR-007](docs/adr/0007-versioning-git-ref.
 
 ### Added
 
+- **`introduced_in` engine metadata and the compat cross-check** ([ADR-0076](docs/adr/0076-engine-compat-window.md)).
+  A `compat:` window is written by hand and can go stale — declaring `min: 0.1.0`
+  while using something that only exists from `0.3.0` promises a keeper that would
+  break. Keeper now derives the floor a definition **actually** needs from its
+  body (DSL grammar plus the module / state / parameter metadata of the core
+  catalog) and compares it with the declared one: `soul-lint` reports
+  `compat_floor_too_low` on the manifest that declared the window, and keeper logs
+  it at render, where it means another instance of a rolling-upgraded cluster
+  would fail this same definition. Deliberately not a run-time block — the
+  rendering keeper carries the feature, and refusing a run that would succeed is
+  the worse failure. Inference yields a floor only; the ceiling stays the author's
+  to declare. `introduced_in` parses on module manifests (module, state and
+  parameter level) and is published by `GET /v1/modules`; it names a RELEASED
+  version, so features are stamped when a release is cut (see
+  [RELEASING.md](RELEASING.md) step c2).
+
 - `soul-stack-tools` — meta package installing the whole authoring-side CLI set
   (`soulctl` + `soul-lint` + `soul-trial`) in one step. Carries no files itself.
   The `keeper` and `soul` daemons stay separate packages on purpose: a server

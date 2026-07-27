@@ -45,7 +45,20 @@ type Manifest struct {
 	Name                 string          `yaml:"name"`
 	RequiredCapabilities []string        `yaml:"required_capabilities,omitempty"`
 	SideEffects          []SideEffectRaw `yaml:"side_effects,omitempty"`
-	Spec                 ManifestSpec    `yaml:"spec"`
+
+	// IntroducedIn — the engine release in which this module first appeared
+	// (ADR-0076(i)), plain MAJOR.MINOR.PATCH. Empty = at or before the baseline,
+	// which contributes no floor. Declared per module, per state and per input
+	// parameter, whichever granularity the addition actually had: a new parameter
+	// on an old state is exactly the case an author cannot see.
+	//
+	// Read for CORE modules, whose manifests are embedded in the binary so
+	// metadata and parser always ship together. On a plugin manifest the key
+	// parses (an external artifact carrying it must not break) but states nothing
+	// about a keeper release - a plugin has its own version line.
+	IntroducedIn string `yaml:"introduced_in,omitempty"`
+
+	Spec ManifestSpec `yaml:"spec"`
 }
 
 // ManifestSpec is the kind-specific block. It structurally unions the fields of
@@ -71,6 +84,10 @@ type ManifestSpec struct {
 type StateDef struct {
 	Description string                   `yaml:"description,omitempty"`
 	Input       map[string]InputParamDef `yaml:"input,omitempty"`
+
+	// IntroducedIn — the engine release that added this state (ADR-0076(i)). See
+	// [Manifest.IntroducedIn] for the grammar and the core/plugin boundary.
+	IntroducedIn string `yaml:"introduced_in,omitempty"`
 }
 
 // InputParamDef is the formal description of one parameter in a manifest input.
@@ -104,6 +121,13 @@ type InputParamDef struct {
 	// textarea + placeholder), not checked by the validator.
 	Multiline bool   `yaml:"multiline,omitempty"`
 	Example   string `yaml:"example,omitempty"`
+
+	// IntroducedIn — the engine release that added this parameter (ADR-0076(i)).
+	// The finest granularity of the three and the one that matters most: a new
+	// parameter on a state that has existed for releases is invisible to an
+	// author, and an older engine rejects it as `unknown_param`. See
+	// [Manifest.IntroducedIn].
+	IntroducedIn string `yaml:"introduced_in,omitempty"`
 
 	// Items — list element type or map value type (ADR-045 S7 + amend). A recursive
 	// *InputParamDef, mirror of `config.InputSchema.Items`:
@@ -194,6 +218,10 @@ var (
 	reNamespace = regexp.MustCompile(`^[a-z][a-z0-9-]{0,62}$`)
 	reName      = regexp.MustCompile(`^[a-z][a-z0-9-]{0,62}$`)
 	reStateName = regexp.MustCompile(`^[a-z][a-z0-9-]{0,62}$`)
+	// reIntroducedIn — same plain MAJOR.MINOR.PATCH grammar as a compat bound
+	// (ADR-0076(c)); the two are compared against each other, so one syntax only.
+	// Duplicated rather than imported: `shared/config` imports this package.
+	reIntroducedIn = regexp.MustCompile(`^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$`)
 )
 
 // validInputFormats — the closed set of string formats for a form field
@@ -426,6 +454,9 @@ func validateManifest(path string, root *ast.MappingNode, m *Manifest) []diag.Di
 		}
 	}
 
+	// (4a) introduced_in — optional engine-release metadata (ADR-0076(i)).
+	out = append(out, validateIntroducedIn(root, "$.introduced_in", m.IntroducedIn)...)
+
 	// (5) side_effects[] — closed enum keys, exactly one pair per entry.
 	for i, e := range m.SideEffects {
 		switch len(e) {
@@ -500,6 +531,7 @@ func validateSoulModuleSpec(root *ast.MappingNode, m *Manifest) []diag.Diagnosti
 				Hint:    "human-readable description helps operators and UI",
 			}))
 		}
+		out = append(out, validateIntroducedIn(root, statePath+".introduced_in", def.IntroducedIn)...)
 		for paramName, p := range def.Input {
 			paramPath := statePath + ".input." + paramName
 			out = append(out, validateInputParam(root, paramPath, paramName, p)...)
@@ -508,8 +540,25 @@ func validateSoulModuleSpec(root *ast.MappingNode, m *Manifest) []diag.Diagnosti
 	return out
 }
 
+// validateIntroducedIn checks the optional `introduced_in` metadata (ADR-0076(i)):
+// empty is valid (at or before the baseline), anything else must be a plain
+// MAJOR.MINOR.PATCH — the same grammar as a compat bound, since the two are
+// compared against each other.
+func validateIntroducedIn(root *ast.MappingNode, path, value string) []diag.Diagnostic {
+	if value == "" || reIntroducedIn.MatchString(value) {
+		return nil
+	}
+	return []diag.Diagnostic{atPath(root, path, diag.Diagnostic{
+		Level: diag.LevelError, Phase: diag.PhaseSchemaValidate,
+		Code:    "introduced_in_invalid",
+		Message: fmt.Sprintf("introduced_in=%q is not a plain MAJOR.MINOR.PATCH version", value),
+		Hint:    "use 0.3.0 - no v prefix, no pre-release suffix, and only a RELEASED version (ADR-0076)",
+	})}
+}
+
 func validateInputParam(root *ast.MappingNode, path, name string, p InputParamDef) []diag.Diagnostic {
 	var out []diag.Diagnostic
+	out = append(out, validateIntroducedIn(root, path+".introduced_in", p.IntroducedIn)...)
 	if p.Type == "" {
 		out = append(out, atPath(root, path+".type", diag.Diagnostic{
 			Level: diag.LevelError, Phase: diag.PhaseSchemaValidate,

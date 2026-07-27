@@ -26,6 +26,15 @@ Here are docker-dependent levels up to L3a. Long-term L3b (`make e2e-live`) is a
 
 In [CHANGELOG.md](CHANGELOG.md) (Keep a Changelog format) transfer what has been accumulated from `[Unreleased]` to the new version section `[vX.Y.Z-beta.N]`, put the date (or the note "the date is fixed with the tag" - according to the file style), list the known-limitations of the release in a separate block. `[Unreleased]` remains empty after this (for post-release backlog). The CHANGELOG change is included in the release commit before the tag.
 
+### (c2) Stamp `introduced_in` with the version being cut
+
+**Required step before tag creation.** Everything added since the previous tag has no `introduced_in` yet: an engine feature carries the release it first shipped in, and until the number exists there is nothing to write ([ADR-0076(i)](docs/adr/0076-engine-compat-window.md)). Now it exists — so every keeper-side feature added in this cycle gets stamped `X.Y.Z` (the version of THIS release):
+
+- **DSL grammar** — the rows marked `Unreleased` in `keeperDSLFeatures` ([`shared/config/introduced.go`](shared/config/introduced.go)); add a row for any grammar element this cycle introduced and does not have one.
+- **Core modules** — `introduced_in:` on the module, the state or the parameter in [`shared/coremanifest/*.yaml`](shared/coremanifest), for every module / state / parameter that did not exist in the previous release.
+
+The value is what the tag will be, without the `v` prefix and without the pre-release suffix (`v0.2.0-beta.1` → `0.2.0`) — a window is declared at release granularity. Getting this wrong is not cosmetic: a missing stamp silently disables the cross-check that catches a `compat:` window promising more than the definition can deliver, and a stamp naming an unreleased version would reject definitions that render correctly today.
+
 ### (d) Verifying the relevance of documentation (docs-currency gate)
 
 **Required step before tag creation.** `docs-writer` audits

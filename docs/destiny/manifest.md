@@ -100,6 +100,8 @@ compat:
 
 The grammar is identical to the service manifest's — plain `MAJOR.MINOR.PATCH`, no `v` prefix, no pre-release suffix, no operators; both keys optional, a block with neither is `compat_window_incomplete`, and `min >= max` is `compat_window_empty`. Full semantics, the intersection rule and the enforcement points: [`docs/service/manifest.md → compat Section`](../service/manifest.md#compat-section).
 
+**The declaration is cross-checked against the body.** `soul-lint validate-destiny` weighs the declared window against what `destiny.yml` and its `tasks/main.yml` actually use — a `min` below the version that introduced a used feature is `compat_floor_too_low` ([`docs/service/manifest.md → compat Section`](../service/manifest.md#compat-section)). A diagnostic, not a run-time block.
+
 **Why the destiny declares its own.** A destiny is a separate git artifact pinned at its own `ref:` ([ADR-007](../adr/0007-versioning-git-ref.md)): it is authored, tested and upgraded independently of the service that consumes it, so only it can state its own tested range. The window in force for a run is the intersection of the service's and every destiny's — the narrowest wins. Keeper checks each declaration as it resolves the destiny, so the rejection names **this** destiny and its ref rather than the service as a whole.
 
 ## When you need neighbors `tasks/main.yml`

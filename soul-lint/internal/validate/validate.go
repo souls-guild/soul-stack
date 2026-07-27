@@ -81,7 +81,11 @@ func Run(opts Options, out io.Writer, errOut io.Writer) int {
 			}}
 		}
 	case KindDestiny:
-		_, _, diags, _ = config.LoadDestinyManifestFromBytes(opts.Path, src, config.ValidateOptions{})
+		var dm *config.DestinyManifest
+		dm, _, diags, _ = config.LoadDestinyManifestFromBytes(opts.Path, src, config.ValidateOptions{})
+		// Cross-check of the declared window against the floor this destiny
+		// actually needs (ADR-0076(k)): the manifest grammar plus its task file.
+		diags = append(diags, destinyCompatFloorDiags(opts.Path, dm)...)
 		// Cross-file check for destiny-local collisions: sibling `vars.yml`
 		// (file-level vars) vs. task-level `vars:` in `tasks/main.yml`. Variant A
 		// (vars.md) is deterministic, but name collisions are a common source of
@@ -90,7 +94,9 @@ func Run(opts Options, out io.Writer, errOut io.Writer) int {
 		// manifest linter doesn't fail on that).
 		diags = append(diags, destinyVarsCollisionDiags(opts.Path)...)
 	case KindService:
-		_, _, diags, _ = config.LoadServiceManifestFromBytes(opts.Path, src, config.ValidateOptions{})
+		var svc *config.ServiceManifest
+		svc, _, diags, _ = config.LoadServiceManifestFromBytes(opts.Path, src, config.ValidateOptions{})
+		diags = append(diags, serviceCompatFloorDiags(opts.Path, svc)...)
 	case KindScenario:
 		var scn *config.ScenarioManifest
 		var scnDoc *config.Document
@@ -122,6 +128,10 @@ func Run(opts Options, out io.Writer, errOut io.Writer) int {
 		if scn != nil {
 			diags = append(diags, onIncarnationNameDiagnostics(opts.Path, scn.Tasks)...)
 		}
+		// A scenario renders under the window its service declares (it has no
+		// compat: block of its own) — so its features are weighed against
+		// `../../service.yml` (ADR-0076(k)).
+		diags = append(diags, scenarioCompatFloorDiags(opts.Path, scn)...)
 	case KindManifest:
 		_, diags = sharedplugin.LoadFromBytes(opts.Path, src)
 	default:

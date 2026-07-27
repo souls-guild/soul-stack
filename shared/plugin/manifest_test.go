@@ -611,3 +611,62 @@ spec:
 
 // Ensure strings import is used (linter satisfaction).
 var _ = strings.Contains
+
+// introduced_in (ADR-0076(i)) parses at all three granularities and keeps the
+// compat grammar: a released MAJOR.MINOR.PATCH, nothing else. The key is
+// optional — an unstamped manifest predates the metadata and stays valid.
+func TestManifest_IntroducedIn(t *testing.T) {
+	cases := []struct {
+		name     string
+		module   string
+		state    string
+		param    string
+		wantCode string
+	}{
+		{name: "all three stamped", module: "1.4.0", state: "2.0.0", param: "2.5.0"},
+		{name: "unstamped is valid"},
+		{name: "v prefix on the module", module: "v1.4.0", wantCode: "introduced_in_invalid"},
+		{name: "pre-release on a state", state: "2.0.0-beta.1", wantCode: "introduced_in_invalid"},
+		{name: "range operator on a param", param: ">=2.5.0", wantCode: "introduced_in_invalid"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			raw := []byte("kind: soul_module\nprotocol_version: 1\nnamespace: acme\nname: redis\n" +
+				optionalKey("introduced_in", tc.module, "") +
+				"spec:\n  states:\n    present:\n      description: ensure\n" +
+				optionalKey("introduced_in", tc.state, "      ") +
+				"      input:\n        path:\n          type: string\n" +
+				optionalKey("introduced_in", tc.param, "          "))
+
+			m, diags := LoadFromBytes("test.yaml", raw)
+			if m == nil {
+				t.Fatalf("Manifest nil (diags=%v)", diagCodes(diags))
+			}
+			if tc.wantCode == "" {
+				if diag.HasErrors(diags) {
+					t.Fatalf("unexpected errors: %v", diagCodes(diags))
+				}
+				if tc.module != "" && m.IntroducedIn != tc.module {
+					t.Errorf("module introduced_in = %q, want %q", m.IntroducedIn, tc.module)
+				}
+				if tc.state != "" && m.Spec.States["present"].IntroducedIn != tc.state {
+					t.Errorf("state introduced_in = %q, want %q", m.Spec.States["present"].IntroducedIn, tc.state)
+				}
+				if tc.param != "" && m.Spec.States["present"].Input["path"].IntroducedIn != tc.param {
+					t.Errorf("param introduced_in = %q, want %q", m.Spec.States["present"].Input["path"].IntroducedIn, tc.param)
+				}
+				return
+			}
+			if !containsStr(diagCodes(diags), tc.wantCode) {
+				t.Fatalf("expected %s, got %v", tc.wantCode, diagCodes(diags))
+			}
+		})
+	}
+}
+
+func optionalKey(key, value, indent string) string {
+	if value == "" {
+		return ""
+	}
+	return indent + key + ": \"" + value + "\"\n"
+}

@@ -217,6 +217,12 @@ func (r *Runner) run(ctx context.Context, spec RunSpec) {
 	// (ADR-065): AFTER ExpandIncludes (consumers in branches are visible), BEFORE
 	// Stratify (a synthesized step is a roster task, stratified like its
 	// consumer).
+	// The automatic half of the same axis (ADR-0076(k)): now that the body is
+	// parsed, check the DECLARED floor against the one the body actually needs.
+	// A warning, not an abort - see warnCompatFloorTooLow.
+	warnCompatFloorTooLow(serviceCompatEntity(art),
+		append(config.KeeperFeaturesOfService(art.Manifest), config.KeeperFeaturesOfTasks(scn.Tasks)...), log)
+
 	if synthed, names := config.SynthesizeModuleInstalls(scn.Tasks, art.Manifest.Modules); len(names) > 0 {
 		scn.Tasks = synthed
 		log.Info("scenario: synthesized module install steps from manifest.modules[] (ADR-065)",

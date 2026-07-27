@@ -43,6 +43,7 @@ Operator command: `soul-lint validate-manifest <path> [--json]`. Does: parse YAM
 | `name` | `string` (kebab-case) | — | The name of the plugin inside the collection. Addressing is `<namespace>.<name>.<state>` for modules. |
 | `required_capabilities` | `list<enum>` | `[]` | Closed enum, see [capabilities table](#required_capabilities-table). `soul-lint` checks with `plugin_runtime.allowed_capabilities` host. |
 | `side_effects` | `list<map<enum,value>>` | `[]` | Strict contract of touched resources, see [side_effects table](#side_effects-table). Runtime violation (the plugin touches a resource not declared in `side_effects`) → the step is marked `failed`, the reason `policy_violation` is reflected in the diagnostic channel `TaskEvent` / `RunResult` (the exact form of the field is a separate audit-pipeline standardization task for `side_effects`, see backlog). |
+| `introduced_in` | `string` (`MAJOR.MINOR.PATCH`) | `""` | Optional: the **engine release** in which this module first appeared ([ADR-0076(i)](../adr/0076-engine-compat-window.md)). Same grammar as a `compat:` bound — no `v` prefix, no pre-release suffix — and only a **released** version (a feature that has not shipped carries none). Empty = at or before the baseline. Read from **core** manifests, whose metadata ships with the parser; on a plugin manifest the key parses but states nothing about a keeper release (a plugin has its own version line). Published by `GET /v1/modules`. |
 | `spec` | kind-specific block | — | Kind-specific fields; the form depends on `kind:` (see below). |
 | `binary_sha256` | `string` (hex64) | `""` (optional) | SHA-256 fingerprint of the plugin binary (hex lowercase, exactly 64 characters). Optional - empty until signature **Sigil** ([ADR-026](../adr/0026-sigil.md)); used to verify-against-Sigil before `exec` (see [Integrity-model](#integrity-model)). Type `string` (hex), not `bytes` - consistent with `plugin_sigils.sha256` (TEXT CHECK hex64). |
 
@@ -55,6 +56,8 @@ The input schema format inside `spec:` depends on `kind:`. For `soul_module` - S
 | `spec.states` | `map<state-name, {input, description?}>` | — | Map of supported states (or verb forms). The key is the state name (`installed` / `running` / `run` / ...). |
 | `spec.states.<name>.input` | input-schema (see [`docs/input.md`](../input.md)) | `{}` | Contract parameters for this state. `soul-lint` validates `params:` of each destiny task against this schema. |
 | `spec.states.<name>.description` | `string` (optional) | — | Human-readable description for documentation/UI. |
+| `spec.states.<name>.introduced_in` | `string` (optional) | — | The engine release that added **this state**, same grammar as the top-level field. |
+| `spec.states.<name>.input.<param>.introduced_in` | `string` (optional) | — | The engine release that added **this parameter**. The granularity that matters most: a new parameter on a long-standing state is invisible to an author, and an older engine rejects it as `unknown_param`. |
 
 ### `spec` for `kind: cloud_driver`
 

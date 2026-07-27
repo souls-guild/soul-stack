@@ -57,3 +57,35 @@ func checkKeeperCompat(rawVersion string, entity config.CompatEntity, log *slog.
 	}
 	return config.NewKeeperCompatError(entity, rawVersion)
 }
+
+// warnCompatFloorTooLow reports a declaration that promises more than the body
+// can deliver: the declared `min` sits below the floor the body actually needs
+// (ADR-0076(k), `compat_floor_too_low`).
+//
+// A log, never an abort — deliberately. This instance evidently understands the
+// feature, since it just parsed it, so rejecting a run that would succeed is the
+// worse failure. It still matters here rather than only in soul-lint: the cluster
+// is rolling-upgraded (ADR-0076(f)), so the next run of this same definition may
+// land on an OLDER instance — exactly the one the stale declaration promised
+// would work, and there it fails with the opaque error this axis exists to
+// replace.
+//
+// Called AFTER the body is parsed, which is why it is a separate pass and not
+// part of checkKeeperCompat: the window gate must stay ahead of the parse.
+func warnCompatFloorTooLow(entity config.CompatEntity, used []config.KeeperFeature, log *slog.Logger) {
+	if log == nil {
+		return
+	}
+	d := config.CompatFloorDiagnostic(entity.Window, config.InferKeeperFloor(used))
+	if d == nil {
+		return
+	}
+	log.Warn("compat: declared window is below the floor this definition needs (ADR-0076)",
+		slog.String("code", d.Code),
+		slog.String("entity_kind", entity.Kind),
+		slog.String("entity", entity.Name),
+		slog.String("ref", entity.Ref),
+		slog.String("detail", d.Message),
+		slog.String("hint", d.Hint),
+	)
+}
