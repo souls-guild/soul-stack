@@ -234,16 +234,46 @@ running mixed versions mid-upgrade routes consoles unchanged.
 
 **Upstream** (pty output) is addressed by owner:
 
-1. the socket owner claims `console:owner:<session_id> → <kid>` (TTL 15 min,
-   refreshed every 5 min while the session lives);
+1. the socket owner claims `console:owner:<session_id> → <kid>|<sid>` (TTL 90 s,
+   refreshed every 30 s while the session lives);
 2. the stream holder, seeing a session it does not hold, resolves that claim
    **once** and caches it — a Redis GET per pty chunk would put the cluster cache
    in the path of every keystroke echo;
-3. it republishes the frame to `console:<owner-kid>` — one channel per instance,
-   subscribed once at startup rather than one subscription per open terminal.
+3. it checks the frame's authenticated SID against the claimed one and drops a
+   mismatch (see below), then republishes to `console:<owner-kid>` — one channel
+   per instance, subscribed once at startup rather than one subscription per open
+   terminal.
 
 A frame that arrived over the bridge is delivered locally or dropped, never
 re-forwarded: otherwise a stale route would bounce it between instances.
+
+### The check runs on the publisher
+
+The claim carries the SID, not just the KID, because the ownership check of §8
+has to survive the bridge — and only the publishing instance can make it. A
+bridged frame carries no SID at all, so the receiver would otherwise be taking
+the publisher's word for a session id it cannot attribute: a Soul authenticated
+as `host-evil` could name any session id it learned and have forged output
+rendered in that operator's pane, or end the session with a terminal frame.
+
+Two consequences are deliberate:
+
+- **The pub/sub envelope is untouched.** Carrying the SID in the message is the
+  obvious fix and the wrong one: a new instance would publish what an old one
+  cannot parse, so every cross-instance console breaks for the length of a
+  rolling upgrade. Paying an outage per upgrade for defence-in-depth is a bad
+  trade. The claim is read by the same instance that wrote it, one version at a
+  time, so it can change shape freely.
+- **A claim without a SID routes as before.** Mid-upgrade an old instance is
+  still writing `<kid>`, and refusing what cannot be checked would cause the
+  outage the previous point avoids. The window shuts by itself: claims live 90 s,
+  so the check is fully live a minute and a half after the last old instance
+  restarts — no flag to remember to flip.
+
+A refused frame is dropped and is **not** reported as an orphan. Treating it as
+one would send a `ConsoleClose` for the named session, handing the forger the
+reap it was reaching for; for the same reason the refused frame's route is never
+cached, so it cannot seed the orphan sweep either.
 
 With no Redis this degrades to single-instance operation: a console whose socket
 and stream landed together still works.
@@ -320,7 +350,9 @@ the mTLS peer cert ([ADR-012(i)](../adr/0012-keeper-soul-grpc.md)). Attaching to
 an unknown or foreign id therefore buys nothing: nothing is ever routed to it.
 
 The same check now guards the EventStream carrier, where an upstream frame naming
-another host's session used to be delivered on the session id alone.
+another host's session used to be delivered on the session id alone. Across
+instances it runs on the publishing side instead — a bridged frame carries no
+SID, so the receiver has nothing to check (§6).
 
 ## 9. Audit and metrics
 
@@ -358,15 +390,6 @@ matters.
   §6 "When the socket's Keeper dies".) NIM-188 narrows this: a session on the
   dedicated transport gets a synthesized `ConsoleExit` when its console stream
   dies, so the gap now covers only a Soul still on the EventStream carrier.
-- **Cross-instance upstream is not SID-checked** (NIM-196). The ownership check
-  in §8 applies where the frame is authenticated. A frame that arrived over the
-  cluster bridge carries no SID, so the receiving instance takes the publisher's
-  word for it — closing that by changing the pub/sub envelope would break routing
-  during a mixed-version upgrade. The publisher does authenticate the SID; what
-  it cannot check is that the session belongs to it, because the claim
-  (`console:owner:<session_id>`) records only the owning instance. Binding the
-  SID into that claim and checking on the publishing side closes it without
-  touching the envelope.
 - **Cross-instance chunk loss** is silent in one case: a bridged frame dropped by
   a congested Redis forward channel is logged but not counted in
   `dropped_bytes`, since the accounting lives on the socket side.

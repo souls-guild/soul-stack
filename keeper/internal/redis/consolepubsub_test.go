@@ -26,27 +26,71 @@ func TestConsoleSessionClaimLifecycle(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ReadConsoleSessionOwner: %v", err)
 	}
-	if owner != "" {
-		t.Fatalf("owner = %q, want empty", owner)
+	if owner.KID != "" {
+		t.Fatalf("owner = %+v, want empty", owner)
 	}
 
-	if err := ClaimConsoleSession(ctx, c, "s1", "kid-a"); err != nil {
+	if err := ClaimConsoleSession(ctx, c, "s1", "kid-a", "host-x"); err != nil {
 		t.Fatalf("ClaimConsoleSession: %v", err)
 	}
 	owner, err = ReadConsoleSessionOwner(ctx, c, "s1")
 	if err != nil {
 		t.Fatalf("ReadConsoleSessionOwner: %v", err)
 	}
-	if owner != "kid-a" {
-		t.Fatalf("owner = %q, want kid-a", owner)
+	if owner.KID != "kid-a" || owner.SID != "host-x" {
+		t.Fatalf("owner = %+v, want {kid-a host-x}", owner)
 	}
 
 	if err := ReleaseConsoleSession(ctx, c, "s1"); err != nil {
 		t.Fatalf("ReleaseConsoleSession: %v", err)
 	}
 	owner, _ = ReadConsoleSessionOwner(ctx, c, "s1")
-	if owner != "" {
-		t.Fatalf("owner after release = %q, want empty", owner)
+	if owner.KID != "" {
+		t.Fatalf("owner after release = %+v, want empty", owner)
+	}
+}
+
+// The claim binds a session to the host it was opened against (NIM-196): a
+// publisher checks a frame's authenticated SID against this, so a claim that
+// lost the binding would silently disable the check.
+func TestConsoleSessionClaimCarriesTheSID(t *testing.T) {
+	c, _ := newClientMR(t)
+	ctx := context.Background()
+
+	// A KID is operator-set and may contain the separator; a SID is an FQDN and
+	// cannot — so the split has to be anchored at the END of the value.
+	if err := ClaimConsoleSession(ctx, c, "s1", "kid|weird", "db-07.example.com"); err != nil {
+		t.Fatalf("ClaimConsoleSession: %v", err)
+	}
+	owner, err := ReadConsoleSessionOwner(ctx, c, "s1")
+	if err != nil {
+		t.Fatalf("ReadConsoleSessionOwner: %v", err)
+	}
+	if owner.KID != "kid|weird" || owner.SID != "db-07.example.com" {
+		t.Fatalf("owner = %+v, want {kid|weird db-07.example.com}", owner)
+	}
+}
+
+// A claim written before the SID binding existed must read back as "host
+// unknown", not as a corrupt or mismatched one: mid-rolling-upgrade an old
+// instance is still writing these, and reading one as a mismatch would break
+// every cross-instance console until the last node restarts.
+func TestConsoleSessionClaimLegacyFormatHasNoSID(t *testing.T) {
+	c, _ := newClientMR(t)
+	ctx := context.Background()
+
+	if err := c.underlying().Set(ctx, ConsoleOwnerKey("s1"), "kid-a", ConsoleOwnerTTL).Err(); err != nil {
+		t.Fatalf("seed legacy claim: %v", err)
+	}
+	owner, err := ReadConsoleSessionOwner(ctx, c, "s1")
+	if err != nil {
+		t.Fatalf("ReadConsoleSessionOwner: %v", err)
+	}
+	if owner.KID != "kid-a" {
+		t.Fatalf("owner.KID = %q, want kid-a", owner.KID)
+	}
+	if owner.SID != "" {
+		t.Fatalf("owner.SID = %q, want empty for a pre-binding claim", owner.SID)
 	}
 }
 
@@ -56,7 +100,7 @@ func TestConsoleSessionClaimExpires(t *testing.T) {
 	c, mr := newClientMR(t)
 	ctx := context.Background()
 
-	if err := ClaimConsoleSession(ctx, c, "s1", "kid-a"); err != nil {
+	if err := ClaimConsoleSession(ctx, c, "s1", "kid-a", "host-x"); err != nil {
 		t.Fatalf("ClaimConsoleSession: %v", err)
 	}
 	mr.FastForward(ConsoleOwnerTTL + time.Second)
@@ -65,8 +109,8 @@ func TestConsoleSessionClaimExpires(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ReadConsoleSessionOwner: %v", err)
 	}
-	if owner != "" {
-		t.Fatalf("owner after TTL = %q, want empty", owner)
+	if owner.KID != "" {
+		t.Fatalf("owner after TTL = %+v, want empty", owner)
 	}
 }
 
@@ -74,14 +118,19 @@ func TestConsoleClaimRejectsBadArgs(t *testing.T) {
 	c, _ := newClientMR(t)
 	ctx := context.Background()
 
-	if err := ClaimConsoleSession(ctx, nil, "s", "k"); err == nil {
+	if err := ClaimConsoleSession(ctx, nil, "s", "k", "host-x"); err == nil {
 		t.Fatal("nil client accepted")
 	}
-	if err := ClaimConsoleSession(ctx, c, "", "k"); err == nil {
+	if err := ClaimConsoleSession(ctx, c, "", "k", "host-x"); err == nil {
 		t.Fatal("empty sessionID accepted")
 	}
-	if err := ClaimConsoleSession(ctx, c, "s", ""); err == nil {
+	if err := ClaimConsoleSession(ctx, c, "s", "", "host-x"); err == nil {
 		t.Fatal("empty kid accepted")
+	}
+	// A claim with no SID would be indistinguishable from a pre-binding one and
+	// would silently opt its session out of the publisher-side check.
+	if err := ClaimConsoleSession(ctx, c, "s", "k", ""); err == nil {
+		t.Fatal("empty sid accepted")
 	}
 	if _, err := ReadConsoleSessionOwner(ctx, c, ""); err == nil {
 		t.Fatal("empty sessionID accepted by the reader")

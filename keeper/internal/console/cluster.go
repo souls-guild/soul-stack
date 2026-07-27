@@ -50,7 +50,20 @@ type ClusterBridge struct {
 // reap addressable, since an upstream frame carries only the session id.
 type bridgedSession struct {
 	ownerKID string
-	sid      string
+	// sid is the host this session belongs to: taken from the claim when its
+	// owner wrote one (NIM-196), and from the frame that first resolved the
+	// route otherwise.
+	sid string
+	// bound marks a sid that came from the claim. Only that one may refuse a
+	// frame — a sid inferred from a frame would just be agreeing with itself.
+	bound bool
+}
+
+// SessionClaim is a session's routing claim: its id and the host it was opened
+// against. Both halves are needed to re-stamp the claim.
+type SessionClaim struct {
+	SessionID string
+	SID       string
 }
 
 // negativeOwnerTTL is how long a "no claim" answer is trusted. Short enough
@@ -83,11 +96,11 @@ func NewClusterBridge(rdb *keeperredis.Client, kid string, logger *slog.Logger) 
 // Best-effort: a failed claim degrades that one console to same-instance
 // operation, which is exactly the pre-bridge behaviour, so it must not fail the
 // open.
-func (b *ClusterBridge) ClaimSession(ctx context.Context, sessionID string) {
+func (b *ClusterBridge) ClaimSession(ctx context.Context, sessionID, sid string) {
 	if b == nil {
 		return
 	}
-	if err := keeperredis.ClaimConsoleSession(ctx, b.redis, sessionID, b.kid); err != nil {
+	if err := keeperredis.ClaimConsoleSession(ctx, b.redis, sessionID, b.kid, sid); err != nil {
 		b.logger.Warn("console: cluster claim failed — session limited to this instance",
 			slog.String("session_id", sessionID),
 			slog.Any("error", err),
@@ -98,14 +111,14 @@ func (b *ClusterBridge) ClaimSession(ctx context.Context, sessionID string) {
 // RefreshClaims re-stamps the TTL of the given sessions' claims. Called on a
 // ticker by the socket owner: a console outliving [keeperredis.ConsoleOwnerTTL]
 // would otherwise become unroutable to a holder that has not cached it yet.
-func (b *ClusterBridge) RefreshClaims(ctx context.Context, sessionIDs []string) {
+func (b *ClusterBridge) RefreshClaims(ctx context.Context, claims []SessionClaim) {
 	if b == nil {
 		return
 	}
-	for _, id := range sessionIDs {
-		if err := keeperredis.ClaimConsoleSession(ctx, b.redis, id, b.kid); err != nil {
+	for _, c := range claims {
+		if err := keeperredis.ClaimConsoleSession(ctx, b.redis, c.SessionID, b.kid, c.SID); err != nil {
 			b.logger.Debug("console: cluster claim refresh failed",
-				slog.String("session_id", id), slog.Any("error", err))
+				slog.String("session_id", c.SessionID), slog.Any("error", err))
 		}
 	}
 }
@@ -134,11 +147,16 @@ func (b *ClusterBridge) ReleaseSession(ctx context.Context, sessionID string) {
 // A transient Redis failure returns false: it is indistinguishable from a
 // healthy owner behind a flaky cache, and killing an operator's live shell over
 // a blip would be far worse than one dropped chunk.
+//
+// This is also where the cross-instance half of the ownership check lives
+// (NIM-196). The receiving instance cannot make it — a bridged frame carries no
+// SID — so the publisher, which does hold the authenticated one, refuses the
+// frame before it ever reaches the wire.
 func (b *ClusterBridge) Forward(ctx context.Context, sid, sessionID string, msg *keeperv1.FromSoul) (ownerGone bool) {
 	if b == nil {
 		return false
 	}
-	owner, found, err := b.resolveOwner(ctx, sid, sessionID)
+	route, found, err := b.resolveOwner(ctx, sid, sessionID)
 	if err != nil {
 		return false // transient — say nothing about the owner
 	}
@@ -147,7 +165,21 @@ func (b *ClusterBridge) Forward(ctx context.Context, sid, sessionID string, msg 
 		// since died. Either way nobody is receiving this session.
 		return true
 	}
-	if owner == b.kid {
+	if route.bound && route.sid != sid {
+		// The session id names a host other than the one whose authenticated
+		// stream this frame arrived on. A session id is a route, not a
+		// credential (ADR-0074) — the authority is the peer cert (ADR-012(i)).
+		//
+		// NOT an orphan: the session is alive on its own host, and reporting it
+		// gone would hand a forger the reap it was reaching for.
+		b.logger.Warn("console: upstream frame for a session that belongs to another sid — dropping",
+			slog.String("session_id", sessionID),
+			slog.String("frame_sid", sid),
+			slog.String("session_sid", route.sid),
+		)
+		return false
+	}
+	if route.ownerKID == b.kid {
 		// Our own claim, but no local session: the socket closed between the
 		// claim and this frame. Dropping is right — there is nobody to show it
 		// to, and republishing to ourselves would loop.
@@ -155,11 +187,11 @@ func (b *ClusterBridge) Forward(ctx context.Context, sid, sessionID string, msg 
 		return true
 	}
 
-	n, err := keeperredis.PublishConsoleUpstream(ctx, b.redis, owner, b.kid, msg)
+	n, err := keeperredis.PublishConsoleUpstream(ctx, b.redis, route.ownerKID, b.kid, msg)
 	if err != nil {
 		b.logger.Warn("console: upstream publish failed",
 			slog.String("session_id", sessionID),
-			slog.String("owner_kid", owner),
+			slog.String("owner_kid", route.ownerKID),
 			slog.Any("error", err),
 		)
 		return false // transient
@@ -196,43 +228,55 @@ func (b *ClusterBridge) ShouldReap(sessionID string) bool {
 	return true
 }
 
-// resolveOwner returns the owning KID for a session, consulting the cache
-// first.
+// resolveOwner returns the route for a session, consulting the cache first.
 //
 // found=false means the claim is genuinely absent — an orphan signal. A non-nil
 // error means the lookup itself failed, which says NOTHING about the owner and
 // must never be read as "gone".
-func (b *ClusterBridge) resolveOwner(ctx context.Context, sid, sessionID string) (owner string, found bool, err error) {
+func (b *ClusterBridge) resolveOwner(ctx context.Context, sid, sessionID string) (route bridgedSession, found bool, err error) {
 	b.mu.RLock()
 	cached, isCached := b.ownerOf[sessionID]
 	missAt, missed := b.notFound[sessionID]
 	b.mu.RUnlock()
 
 	if isCached {
-		return cached.ownerKID, true, nil
+		return cached, true, nil
 	}
 	if missed && time.Since(missAt) < negativeOwnerTTL {
-		return "", false, nil
+		return bridgedSession{}, false, nil
 	}
 
-	owner, err = keeperredis.ReadConsoleSessionOwner(ctx, b.redis, sessionID)
+	owner, err := keeperredis.ReadConsoleSessionOwner(ctx, b.redis, sessionID)
 	if err != nil {
 		b.logger.Warn("console: owner lookup failed — dropping frame",
 			slog.String("session_id", sessionID), slog.Any("error", err))
-		return "", false, err
+		return bridgedSession{}, false, err
 	}
-	if owner == "" {
+	if owner.KID == "" {
 		b.mu.Lock()
 		b.notFound[sessionID] = time.Now()
 		b.mu.Unlock()
-		return "", false, nil
+		return bridgedSession{}, false, nil
+	}
+
+	route = bridgedSession{ownerKID: owner.KID, sid: sid}
+	if owner.SID != "" {
+		// The claim knows the host; prefer it over the frame's for the gate AND
+		// for the reap address, since the frame's is only ever a guess.
+		route.sid, route.bound = owner.SID, true
+	}
+	if route.bound && route.sid != sid {
+		// Resolved by a frame with no business with this session — hand the
+		// route back for the refusal, but do not remember it: `ownerOf` is what
+		// the orphan sweep walks, and a forger must not be able to seed it.
+		return route, true, nil
 	}
 
 	b.mu.Lock()
-	b.ownerOf[sessionID] = bridgedSession{ownerKID: owner, sid: sid}
+	b.ownerOf[sessionID] = route
 	delete(b.notFound, sessionID)
 	b.mu.Unlock()
-	return owner, true, nil
+	return route, true, nil
 }
 
 // Orphan is a bridged session whose socket owner has vanished.
@@ -271,7 +315,7 @@ func (b *ClusterBridge) SweepOrphans(ctx context.Context) []Orphan {
 				slog.String("session_id", sessionID), slog.Any("error", err))
 			continue
 		}
-		if owner == bs.ownerKID {
+		if owner.KID == bs.ownerKID {
 			continue // owner still refreshing its claim
 		}
 		// Either the claim lapsed (the instance died) or another instance took
@@ -279,7 +323,7 @@ func (b *ClusterBridge) SweepOrphans(ctx context.Context) []Orphan {
 		// happen for a live console (the claim is written once at open and only
 		// refreshed by its owner), so a changed owner means the id was reused
 		// after our session already ended.
-		if owner == "" && b.ShouldReap(sessionID) {
+		if owner.KID == "" && b.ShouldReap(sessionID) {
 			orphans = append(orphans, Orphan{SessionID: sessionID, SID: bs.sid})
 		}
 		// Drop the stale route but KEEP the reap mark: a dying pty usually emits

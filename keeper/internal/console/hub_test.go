@@ -545,9 +545,9 @@ func TestClusterBridge_NilIsSafe(t *testing.T) {
 	var b *ClusterBridge
 	ctx := context.Background()
 
-	b.ClaimSession(ctx, "s")
+	b.ClaimSession(ctx, "s", "host-x")
 	b.ReleaseSession(ctx, "s")
-	b.RefreshClaims(ctx, []string{"s"})
+	b.RefreshClaims(ctx, []SessionClaim{{SessionID: "s", SID: "host-x"}})
 	b.Forward(ctx, "host-x", "s", &keeperv1.FromSoul{})
 
 	if NewClusterBridge(nil, "kid", testLogger()) != nil {

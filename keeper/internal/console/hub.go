@@ -253,7 +253,7 @@ func (h *Hub) Open(ctx context.Context, req OpenRequest) (*Session, error) {
 	// arrive on another Keeper instance within milliseconds, and it can only be
 	// forwarded here once this claim is visible.
 	if h.deps.Cluster != nil {
-		h.deps.Cluster.ClaimSession(ctx, sess.KeeperID)
+		h.deps.Cluster.ClaimSession(ctx, sess.KeeperID, sess.SID)
 	}
 
 	err := h.deps.Dispatcher.SendConsoleOpen(ctx, req.SID, &keeperv1.ConsoleOpen{
@@ -710,8 +710,8 @@ func (h *Hub) auditOrphanReaped(ctx context.Context, sid, sessionID string) {
 
 // RefreshClaims re-stamps the cluster routing claims of the given sessions.
 // A no-op in single-instance mode.
-func (h *Hub) RefreshClaims(ctx context.Context, sessionIDs []string) {
-	h.deps.Cluster.RefreshClaims(ctx, sessionIDs)
+func (h *Hub) RefreshClaims(ctx context.Context, claims []SessionClaim) {
+	h.deps.Cluster.RefreshClaims(ctx, claims)
 }
 
 // Count returns the number of live sessions on this instance.

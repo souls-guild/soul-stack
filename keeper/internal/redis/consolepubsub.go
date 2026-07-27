@@ -14,11 +14,18 @@ package redis
 // socket.
 //
 // Addressing is by OWNER, not by session. The socket owner publishes a claim
-// `console:owner:<session_id> -> <kid>`; the holder resolves it ONCE per session
-// and caches it, then publishes every frame to `console:<owner-kid>` — one
-// channel per Keeper instance, subscribed once at startup. The alternative
+// `console:owner:<session_id> -> <kid>|<sid>`; the holder resolves it ONCE per
+// session and caches it, then publishes every frame to `console:<owner-kid>` —
+// one channel per Keeper instance, subscribed once at startup. The alternative
 // (a channel per session) would cost one Redis subscription per open terminal,
 // i.e. hundreds on a busy cluster, to carry the same bytes.
+//
+// The claim carries the SID as well as the KID (NIM-196) so the publisher can
+// check that an authenticated frame names a session belonging to the host it
+// arrived from. That check has to live here, on the claim, because the pub/sub
+// envelope is deliberately left alone: adding a field to it would make a new
+// instance publish what an old one cannot read, breaking every cross-instance
+// console for the length of a rolling upgrade.
 //
 // The claim TTL is deliberately short: it only has to survive the window
 // between ConsoleOpen and the first upstream frame (milliseconds in practice).
@@ -32,6 +39,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"strings"
 	"time"
 
 	"github.com/redis/go-redis/v9"
@@ -69,15 +77,35 @@ func ConsoleUpstreamChannelKey(kid string) string {
 	return "console:" + kid
 }
 
-// ClaimConsoleSession records this Keeper as the owner of a session's socket.
-func ClaimConsoleSession(ctx context.Context, c *Client, sessionID, kid string) error {
+// ConsoleSessionOwner is a resolved claim: the Keeper holding the operator's
+// socket, and the host the session was opened against.
+//
+// SID carries the binding a publisher checks a frame against (NIM-196). It is
+// empty for a claim written before that binding existed — mid-upgrade the
+// reader must read that as "unknown", never as a mismatch.
+type ConsoleSessionOwner struct {
+	KID string
+	SID string
+}
+
+// consoleClaimSep joins the halves of a claim value. Split on its LAST
+// occurrence: a SID is an FQDN and cannot contain it, an operator-set KID can.
+const consoleClaimSep = "|"
+
+// ClaimConsoleSession records this Keeper as the owner of a session's socket,
+// bound to the host the session was authorised against.
+func ClaimConsoleSession(ctx context.Context, c *Client, sessionID, kid, sid string) error {
 	if c == nil {
 		return errors.New("redis.ClaimConsoleSession: nil client")
 	}
 	if sessionID == "" || kid == "" {
 		return errors.New("redis.ClaimConsoleSession: empty sessionID or kid")
 	}
-	if err := c.underlying().Set(ctx, ConsoleOwnerKey(sessionID), kid, ConsoleOwnerTTL).Err(); err != nil {
+	if sid == "" {
+		return errors.New("redis.ClaimConsoleSession: empty sid")
+	}
+	value := kid + consoleClaimSep + sid
+	if err := c.underlying().Set(ctx, ConsoleOwnerKey(sessionID), value, ConsoleOwnerTTL).Err(); err != nil {
 		return fmt.Errorf("redis.ClaimConsoleSession: SET %q: %w", ConsoleOwnerKey(sessionID), err)
 	}
 	return nil
@@ -97,23 +125,28 @@ func ReleaseConsoleSession(ctx context.Context, c *Client, sessionID string) err
 	return nil
 }
 
-// ReadConsoleSessionOwner returns the KID owning a session's socket, or "" when
-// no claim exists (the session is gone, or was never bridged).
-func ReadConsoleSessionOwner(ctx context.Context, c *Client, sessionID string) (string, error) {
+// ReadConsoleSessionOwner returns the claim on a session's socket. A zero KID
+// means no claim exists (the session is gone, or was never bridged); a zero SID
+// means the claim predates the binding and says nothing about the host.
+func ReadConsoleSessionOwner(ctx context.Context, c *Client, sessionID string) (ConsoleSessionOwner, error) {
 	if c == nil {
-		return "", errors.New("redis.ReadConsoleSessionOwner: nil client")
+		return ConsoleSessionOwner{}, errors.New("redis.ReadConsoleSessionOwner: nil client")
 	}
 	if sessionID == "" {
-		return "", errors.New("redis.ReadConsoleSessionOwner: empty sessionID")
+		return ConsoleSessionOwner{}, errors.New("redis.ReadConsoleSessionOwner: empty sessionID")
 	}
 	v, err := c.underlying().Get(ctx, ConsoleOwnerKey(sessionID)).Result()
 	if errors.Is(err, redis.Nil) {
-		return "", nil
+		return ConsoleSessionOwner{}, nil
 	}
 	if err != nil {
-		return "", fmt.Errorf("redis.ReadConsoleSessionOwner: GET %q: %w", ConsoleOwnerKey(sessionID), err)
+		return ConsoleSessionOwner{}, fmt.Errorf("redis.ReadConsoleSessionOwner: GET %q: %w", ConsoleOwnerKey(sessionID), err)
 	}
-	return v, nil
+	i := strings.LastIndex(v, consoleClaimSep)
+	if i < 0 {
+		return ConsoleSessionOwner{KID: v}, nil // pre-NIM-196 claim
+	}
+	return ConsoleSessionOwner{KID: v[:i], SID: v[i+len(consoleClaimSep):]}, nil
 }
 
 // consoleUpstreamEnvelope wraps one published frame. `OriginKID` lets a

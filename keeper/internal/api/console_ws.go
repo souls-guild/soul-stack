@@ -467,11 +467,11 @@ func (c *consoleConn) creditDropped(clientID string, n uint64) {
 
 // refreshClaims re-stamps the cluster routing claims of this socket's sessions.
 func (c *consoleConn) refreshClaims() {
-	ids := c.sessionKeeperIDs()
-	if len(ids) == 0 {
+	claims := c.sessionClaims()
+	if len(claims) == 0 {
 		return
 	}
-	c.hub.RefreshClaims(context.Background(), ids)
+	c.hub.RefreshClaims(context.Background(), claims)
 }
 
 // --- console.Sink ---
@@ -568,14 +568,14 @@ func (c *consoleConn) takeAllSessions() []*console.Session {
 	return out
 }
 
-func (c *consoleConn) sessionKeeperIDs() []string {
+func (c *consoleConn) sessionClaims() []console.SessionClaim {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	ids := make([]string, 0, len(c.sessions))
+	claims := make([]console.SessionClaim, 0, len(c.sessions))
 	for _, sess := range c.sessions {
-		ids = append(ids, sess.KeeperID)
+		claims = append(claims, console.SessionClaim{SessionID: sess.KeeperID, SID: sess.SID})
 	}
-	return ids
+	return claims
 }
 
 // droppedCounter returns the per-session drop accumulator, tolerating a chunk

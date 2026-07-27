@@ -2,6 +2,7 @@ package console
 
 import (
 	"context"
+	"encoding/base64"
 	"sync"
 	"testing"
 	"time"
@@ -23,6 +24,14 @@ import (
 
 func newSharedRedis(t *testing.T) *keeperredis.Client {
 	t.Helper()
+	c, _ := newSharedRedisMR(t)
+	return c
+}
+
+// newSharedRedisMR also hands back the server, for a test that has to plant a
+// raw key the client API deliberately cannot write (a pre-NIM-196 claim).
+func newSharedRedisMR(t *testing.T) (*keeperredis.Client, *miniredis.Miniredis) {
+	t.Helper()
 	mr := miniredis.RunT(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
@@ -31,7 +40,7 @@ func newSharedRedis(t *testing.T) *keeperredis.Client {
 		t.Fatalf("redis NewClient: %v", err)
 	}
 	t.Cleanup(func() { _ = c.Close() })
-	return c
+	return c, mr
 }
 
 // keeperNode is one instance of the cluster in a test.
@@ -173,6 +182,131 @@ func TestCluster_UpstreamReachesTheSocketOwner(t *testing.T) {
 	waitSink(t, "the owner to release the session", func() bool { return nodeA.hub.Count() == 0 })
 }
 
+// A Soul authenticated as one host must not be able to paint into a console
+// opened against another. NIM-188 closed that locally; across instances the
+// receiving side has nothing to check against — a bridged frame carries no SID
+// — so the refusal has to happen on the publisher, which holds the
+// authenticated one (NIM-196, ADR-0074).
+//
+// The stand is deliberately two-node: on one process the local check already
+// catches this, and the test would prove nothing about the path that was open.
+func TestCluster_UpstreamFromAnotherSIDIsRefused(t *testing.T) {
+	rdb := newSharedRedis(t)
+	nodeA := newKeeperNode(t, rdb, "kid-a") // owns the operator socket
+	nodeB := newKeeperNode(t, rdb, "kid-b") // holds the hosts' EventStreams
+	nodeA.startUpstream(t, rdb, "kid-a")
+
+	sink := &captureSink{}
+	sess := mustOpen(t, nodeA.hub, "pane-1", "host-a", "archon-a", sink)
+
+	// host-evil is fully authenticated — it just names somebody else's session.
+	nodeB.hub.Deliver(context.Background(), "host-evil", &keeperv1.FromSoul{
+		Payload: &keeperv1.FromSoul_ConsoleChunk{ConsoleChunk: &keeperv1.ConsoleChunk{
+			SessionId: sess.KeeperID,
+			Stream:    keeperv1.ConsoleStream_CONSOLE_STREAM_STDOUT,
+			Data:      []byte("forged"),
+		}},
+	})
+
+	// Flush behind it. A frame from the real host takes the same channel to the
+	// same subscriber, so once THIS one lands, anything published before it
+	// already would have — which turns "nothing arrives" into a positive check
+	// rather than a sleep.
+	nodeB.hub.Deliver(context.Background(), "host-a", &keeperv1.FromSoul{
+		Payload: &keeperv1.FromSoul_ConsoleChunk{ConsoleChunk: &keeperv1.ConsoleChunk{
+			SessionId: sess.KeeperID,
+			Stream:    keeperv1.ConsoleStream_CONSOLE_STREAM_STDOUT,
+			Data:      []byte("real"),
+		}},
+	})
+	real := base64.StdEncoding.EncodeToString([]byte("real"))
+	waitSink(t, "the legitimate chunk to cross the bridge", func() bool {
+		sink.mu.Lock()
+		defer sink.mu.Unlock()
+		for _, c := range sink.chunks {
+			if c.Data == real {
+				return true
+			}
+		}
+		return false
+	})
+
+	sink.mu.Lock()
+	defer sink.mu.Unlock()
+	if len(sink.chunks) != 1 {
+		t.Fatalf("operator pane got %d chunks, want only the legitimate one", len(sink.chunks))
+	}
+	if got := sink.chunks[0].Data; got != real {
+		t.Fatalf("operator pane got %q, want the legitimate payload %q", got, real)
+	}
+}
+
+// The refusal must not hand the forger the very thing it was reaching for.
+// Reporting a refused frame as an orphan would reap the victim's shell, and
+// caching its route would seed the orphan sweep on an instance with no business
+// in that session at all.
+func TestCluster_RefusedUpstreamIsNotAnOrphanSignal(t *testing.T) {
+	rdb := newSharedRedis(t)
+	nodeA := newKeeperNode(t, rdb, "kid-a")
+	nodeB := newKeeperNode(t, rdb, "kid-b")
+	nodeA.startUpstream(t, rdb, "kid-a")
+
+	sess := mustOpen(t, nodeA.hub, "pane-1", "host-a", "archon-a", &captureSink{})
+
+	// Forward decides inline, so the verdict is settled once Deliver returns.
+	nodeB.hub.Deliver(context.Background(), "host-evil", &keeperv1.FromSoul{
+		Payload: &keeperv1.FromSoul_ConsoleChunk{ConsoleChunk: &keeperv1.ConsoleChunk{
+			SessionId: sess.KeeperID,
+			Stream:    keeperv1.ConsoleStream_CONSOLE_STREAM_STDOUT,
+			Data:      []byte("forged"),
+		}},
+	})
+
+	if got := nodeB.disp.closeCount(); got != 0 {
+		t.Fatalf("dispatched %d ConsoleClose for a refused frame, want 0 — that would reap the victim", got)
+	}
+	if nodeB.bridge.tracks(sess.KeeperID) {
+		t.Fatal("a refused frame seeded the route cache the orphan sweep walks")
+	}
+	if n := nodeB.hub.SweepOrphans(context.Background()); n != 0 {
+		t.Fatalf("sweep reaped %d sessions after a refused frame, want 0", n)
+	}
+}
+
+// A claim written before the SID binding existed must keep routing.
+//
+// Mid-rolling-upgrade an old instance is still writing them, and refusing what
+// cannot be checked would take every cross-instance console down for the length
+// of the upgrade. The compatibility window closes on its own: the claim TTL is
+// 90s, so the check is live a minute and a half after the last old instance is
+// gone, with no flag to remember to flip.
+func TestCluster_LegacyClaimWithoutSIDStillRoutes(t *testing.T) {
+	rdb, mr := newSharedRedisMR(t)
+	nodeA := newKeeperNode(t, rdb, "kid-a")
+	nodeB := newKeeperNode(t, rdb, "kid-b")
+	nodeA.startUpstream(t, rdb, "kid-a")
+
+	sink := &captureSink{}
+	sess := mustOpen(t, nodeA.hub, "pane-1", "host-x", "archon-a", sink)
+
+	// Roll the claim back to what a pre-NIM-196 instance would have written.
+	if err := mr.Set(keeperredis.ConsoleOwnerKey(sess.KeeperID), "kid-a"); err != nil {
+		t.Fatalf("seed legacy claim: %v", err)
+	}
+
+	nodeB.hub.Deliver(context.Background(), "host-x", &keeperv1.FromSoul{
+		Payload: &keeperv1.FromSoul_ConsoleChunk{ConsoleChunk: &keeperv1.ConsoleChunk{
+			SessionId: sess.KeeperID,
+			Stream:    keeperv1.ConsoleStream_CONSOLE_STREAM_STDOUT,
+			Data:      []byte("legacy"),
+		}},
+	})
+	waitSink(t, "a chunk behind a pre-binding claim to cross the bridge", func() bool {
+		_, chunks, _, _ := sink.counts()
+		return chunks == 1
+	})
+}
+
 // The claim is what makes the session findable from another instance; without
 // it the frame has nowhere to go.
 func TestCluster_ClaimIsPublishedAndReleased(t *testing.T) {
@@ -186,14 +320,19 @@ func TestCluster_ClaimIsPublishedAndReleased(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ReadConsoleSessionOwner: %v", err)
 	}
-	if owner != "kid-a" {
-		t.Fatalf("claim owner = %q, want kid-a", owner)
+	if owner.KID != "kid-a" {
+		t.Fatalf("claim owner = %q, want kid-a", owner.KID)
+	}
+	// The claim also binds the session to its host — that binding is the whole
+	// basis of the publisher-side check (NIM-196).
+	if owner.SID != "host-x" {
+		t.Fatalf("claim sid = %q, want host-x", owner.SID)
 	}
 
 	node.hub.Close(ctx, sess, "operator detached")
 	owner, _ = keeperredis.ReadConsoleSessionOwner(ctx, rdb, sess.KeeperID)
-	if owner != "" {
-		t.Fatalf("claim owner after close = %q, want it released", owner)
+	if owner.KID != "" {
+		t.Fatalf("claim owner after close = %q, want it released", owner.KID)
 	}
 }
 

@@ -72,7 +72,7 @@
 
 - **Deferred.** Session recording and playback (NIM-145); a liveness probe for the owner side when the stream holder restarts mid-session; recording retention policy; the approval-gate under the re-open condition in (h); aligning the `errand.run`-gated route to `core.cmd.shell` with `soul.console` (see the amendment's known gap). *The MCP surface for command execution is no longer deferred — NIM-147, see the amendment.*
 
-- **Impl.** NIM-142 (proto contract + Soul pty runner) · NIM-143 (Keeper WS, session manager, backpressure, cross-instance routing) · **NIM-144 (this ADR + the `soul.console` right)** · NIM-145 (recording) · NIM-146 (web terminal wall) · NIM-147 (MCP `keeper.soul.run-command`, the surface amendment below) · NIM-188 (the transport amendment below).
+- **Impl.** NIM-142 (proto contract + Soul pty runner) · NIM-143 (Keeper WS, session manager, backpressure, cross-instance routing) · **NIM-144 (this ADR + the `soul.console` right)** · NIM-145 (recording) · NIM-146 (web terminal wall) · NIM-147 (MCP `keeper.soul.run-command`, the surface amendment below) · NIM-188 (the transport amendment below) · NIM-196 (the cross-instance ownership check, below).
 
 **Amends [ADR-033](0033-errand.md)** (an interactive console is explicitly outside Errand, not a variant of it) and **extends [ADR-012(c)](0012-keeper-soul-grpc.md)** (a fourth only-add family on the existing stream).
 
@@ -100,6 +100,20 @@ The stated cost — "would double the connection budget" — was wrong on its ow
 **Backpressure, revised.** On a session's own stream the queue **blocks instead of dropping**: with no shared write mutex and a private HTTP/2 flow-control window, a slow reader throttles the pty at the source, which is what a terminal over a slow line has always done. `dropped_bytes` therefore reads 0 there — the field stays (only-add) and keeps its meaning for the EventStream carrier and for the browser↔Keeper half, where dropping remains correct and remains accounted.
 
 **What is NOT claimed.** This buys isolation, not fairness: two console sessions on one host still share the connection-level flow-control window, and a Keeper instance still serves them from one process. The per-SID cap on console streams (16) bounds a misbehaving Soul, not a busy one.
+
+## Amendment 2026-07-27 (NIM-196) — the ownership check crosses instances
+
+**What changed.** The routing claim `console:owner:<session_id>` now records `<kid>|<sid>` rather than `<kid>`, and the instance republishing an upstream frame refuses it when the claimed SID is not the SID the frame authenticated as.
+
+**Why.** "The session id is a route, not a credential" was enforced only where a SID exists. It does not on the cross-instance path: the two connections of a console land independently (socket by load balancer, EventStream by SoulLease), so in a cluster of N they are on different instances about (N−1)/N of the time — the normal case, not an edge. The receiving instance has nothing to check with, because the pub/sub message is a bare `FromSoul`. A Soul authenticated as one host could therefore name any session id it learned and have forged output rendered in that operator's pane, or end the session with a terminal frame. Preconditions are steep (a valid seed cert, a leaked 26-character session ULID, a victim on another instance) and the reverse direction was never open — keystrokes are addressed by the session's SID — so this is defence-in-depth. It is worth 30 lines anyway: a console is the most privileged thing an operator does, and forging its output attacks precisely what the feature is for.
+
+**Where the check goes, and why not the obvious place.** On the **publisher**, which holds the authenticated SID; the claim carries the binding it checks against. Putting the SID in the pub/sub envelope is the obvious fix and the wrong one — a new instance would publish what an old one cannot parse, breaking every cross-instance console for the length of a rolling upgrade. The claim is written and read one version at a time, so it can change shape freely. This closes the boundary completely: the trust boundary is Soul↔Keeper, the publisher sits on it, and instances trust each other by construction (any of them can already publish to `console:<kid>`).
+
+**Compatibility is self-closing.** A claim with no SID reads as "host unknown" and routes as before, so a mixed-version cluster keeps working; once every instance writes the new form the check is live. No flag: the claim TTL is 90 s, so the window shuts a minute and a half after the last old instance restarts.
+
+**A refused frame is dropped, not reported as an orphan** — reporting one would send a `ConsoleClose` for the named session, which is the reap the forgery was reaching for. Its route is not cached either, so it cannot seed the orphan sweep.
+
+**Impl** — NIM-196.
 
 ## Amendment 2026-07-27 (NIM-147) — the non-interactive console: MCP `keeper.soul.run-command`
 
