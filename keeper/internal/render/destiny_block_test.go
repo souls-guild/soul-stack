@@ -20,8 +20,10 @@ import (
 //	    register stays visible outside (flat register scope is invariant under
 //	    static-skip); +c2 onchanges outside still resolves, +c3 a register typo
 //	    still fails;
-//	(d) where/serial/run_once/on/parallel/loop/include/apply on a destiny-block
-//	    or its child → ErrUnsupportedDSL;
+//	(d) where/serial/run_once/on/parallel/loop/apply on a destiny-block or its
+//	    child → ErrUnsupportedDSL; an UNEXPANDED include child →
+//	    ErrUnexpandedInclude (defense-in-depth — within-block include is
+//	    supported and expands before render);
 //	(e) a nested block expands as a cascade with sequential Index.
 
 // blockDestiny — a destiny with one block task inside tasks[].
@@ -237,9 +239,9 @@ func TestRenderDestinyBlock_RejectsScenarioKeys(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			d := blockDestiny("rej", tc.block)
 			_, _, err := renderBlockDestiny(t, d, map[string]any{})
-			// include gives ErrUnexpandedInclude (an expansion bug), everything
-			// else gives ErrUnsupportedDSL. Both are rejections; we check the
-			// specific family.
+			// An unexpanded include gives ErrUnexpandedInclude (an expander bug,
+			// not a DSL boundary), everything else gives ErrUnsupportedDSL. Both
+			// are rejections; we check the specific family.
 			wantInclude := tc.name == "include_on_child"
 			switch {
 			case wantInclude && !errors.Is(err, ErrUnexpandedInclude):

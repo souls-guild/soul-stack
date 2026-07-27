@@ -106,6 +106,10 @@ live together). Extending this to cross-file addressing is open Q §12.
 resolve strictly inside the snapshot directory `tasks/` (securejoin-clamp);
   - the included file has the same structure (top-level list of tasks);
   - nested `include:` are allowed (expanded recursively);
+  - an `include:` may sit **inside a `block:`** — it is spliced among the block's
+children in place, at any nesting depth (`block` → `include` → `block` → `include`);
+a block is not an expansion boundary, so cycle/depth detection and the conditional-include
+cascade behave exactly as at the top level (see §6.5);
   - **cycles** (`a → b → a`, direct self-include) are detected along the resolved path
 (error `include_cycle`), depth limited by hard ceiling - not
 infinite recursion;
@@ -268,7 +272,8 @@ All three tasks are executed only when `input.action == 'apply'`; if false, all 
 
 ### Rules
 
-- **Contents** `block:` - top-level list of tasks, the same format and the same set of fields as in `tasks/main.yml`. In pilot C1, `module:`-tasks, `apply:`-tasks and nested `block:` are allowed inside. Within-block `include:` (include-child) - **post-pilot** (within-block include is deferred; within block there are currently only `module:`, `apply:` and nested `block:`); the design intent is preserved, the implementation of pilot C1 does not support it.
+- **Contents** `block:` - top-level list of tasks, the same format and the same set of fields as in `tasks/main.yml`. Allowed inside: `module:`-tasks, `apply:`-tasks, nested `block:` and `include:`. A within-block `include:` is spliced among the block's children **before render** (the same `ExpandIncludes` phase as a top-level include), so the tasks it brings in are indistinguishable from hand-written siblings: they inherit the block's `when:` / requisites / `vars:` on the same rules. Nesting is unlimited (`block` → `include` → `block` → `include`), cycles and the depth ceiling are detected through the block boundary.
+- **Conditional `include:` inside a block - two independent axes.** An include child may carry its own static `when:` (conditional include, §4). Its group-drop and the block's `when:` compose, and group-drop is decided **first**: a false include-when removes the spliced tasks **physically** (no placeholder, no index), while a static-false block `when:` leaves each surviving child a skip-placeholder with its `register:`. So "the block is off" and "the include was not taken" stay distinguishable in the plan.
 - **`when:` block tasks** is a wrapping condition. Falsy → all tasks are skipped. The `when:` block task is ANDed into **each child** (see inheritance below), so the `skipped: when` mark is placed on **each child**, rather than as a single entry on the block task. This is an invariant: `register:` of children remains visible from the outside even with skip (see "register of children is visible from the outside").
 - **`onchanges:` / `onfail:` / `require:` block tasks** - apply to the entire group in the same way as to a single task: if the condition is not met, the entire group is skipped.
 - **Internal `when:`** are valid and can be combined with an external one by AND: the internal task is executed only if the external `when:` block is truthy AND its own `when:` truthy.
@@ -284,7 +289,7 @@ The specification above is the full design intent of `block:`. The implementatio
 
 **Implemented in pilot C1:**
 
-- `module:`-descendants, `apply:`-descendants (delegation to destiny with inherited `serial:`-window) and nested `block:` inside block.
+- `module:`-descendants, `apply:`-descendants (delegation to destiny with inherited `serial:`-window), nested `block:` and `include:`-descendants inside block.
 - Inheritance from a block task to its descendants: `when:` (combined with internal AND), `where:`, `serial:`, requisites (`onchanges:` / `onfail:` / `require:`), `vars:`.
 - Static-skip of the entire group by `when:` (falsy → all tasks are skipped). Expands into **per-descendant** skip-placeholders: block.`when:` is poured into each child via AND, static-when each one becomes false, and each child carries its own `skipped: when` + its own `register:`. `register:` of children is visible outside block and with static-skip (flat-register-scope is invariant with respect to truthy/falsy - see below).
 - Fail-closed failure of module-specific keys at the block level (codes `*_on_block_invalid`, see [naming-rules.md → Error codes](../naming-rules.md)).
@@ -293,19 +298,19 @@ The specification above is the full design intent of `block:`. The implementatio
 
 - `parallel: true` on block - parallel is entirely deferred (no prod-consumer; gate fail-closed `parallel_on_block_invalid`).
 - `loop:` on block - block+loop combination delayed.
-- Within-block `include:` (include-descendant) - inside the block so far there is only `module:` and nested `block:`.
 
 ### `block:` inside the destiny-passage (apply:destiny)
 
-`block:` is supported not only in scenario, but also **within destiny**, rendered via `apply: { destiny: … }` ([ADR-009 amendment](../adr/0009-scenario-dsl.md)). Previously, `block:` in the destiny pass was rejected by the pilot restriction (`ErrUnsupportedDSL`) - the restriction was **removed**. Mirror scenario-block in destiny semantics: inheritance `when:` (AND-merge with internal), `vars:` (base→override), requisites (`onchanges:` / `onfail:` / `require:` - union), nested `block:`; descendants - `module:` or nested `block:`.
+`block:` is supported not only in scenario, but also **within destiny**, rendered via `apply: { destiny: … }` ([ADR-009 amendment](../adr/0009-scenario-dsl.md)). Previously, `block:` in the destiny pass was rejected by the pilot restriction (`ErrUnsupportedDSL`) - the restriction was **removed**. Mirror scenario-block in destiny semantics: inheritance `when:` (AND-merge with internal), `vars:` (base→override), requisites (`onchanges:` / `onfail:` / `require:` - union), nested `block:`; descendants - `module:`, nested `block:` or `include:` (expanded before render, see §6.5). Within-block `include:` behaves identically in both layers - the expander is shared, only the render-time key boundary differs.
 
 **Destiny-block key boundary** (stricter than scenario-block): scenario orchestration on destiny-block or its descendant is **prohibited** (`ErrUnsupportedDSL`) - in destiny it is meaningless (no roster resolution on the descendant, no nested `apply:`):
 
 - `where:` / `on:` / `serial:` / `run_once:` - targeting and waves live on the scenario-applier task, not inside destiny;
 - `parallel:` - parallel is entirely deferred (as in scenario-block);
 - `loop:` — block+loop combination deferred;
-- `include:` - within-block include deferred;
 - `apply:`-child - nested `apply:` in destiny is prohibited (the same boundary as a flat destiny-task).
+
+`include:` is **not** on this list: a within-block include is expanded before render, so no include node reaches the destiny-block guard. If one does, that is an expander bug and the render fails with `ErrUnexpandedInclude` (defense-in-depth), not with the "outside pilot scope" `ErrUnsupportedDSL`.
 
 Roster is inherited by the **entire** block (block does NOT narrow down hosts - unlike the scenario where `where:` of the child narrows down); `serial:` - the applier task window is extended to all descendants. `register:` of the descendant block is visible to tasks **outside** block (flat register-scope: descendants are pasted into the general plan of the destiny pass with end-to-end indexes - a typical case "TLS tasks in `block.when`, restart-`onchanges:` reads them from the outside `register:`"). **Static-false `when:` block is expanded into per-child skip-placeholders** (NOT one placeholder for the entire block): block.`when:` is poured into each child via AND, and each child emits its own skip-placeholder with its `register:`. Therefore, `register:` descendants of the static-false block are visible from the outside through these placeholders - **flat-register-scope is invariant with respect to static-skip** (does not depend on the truthy/falsy outcome of `when:`); restart-`onchanges:` outside resolves the same way both when the block is active and when the block is extinguished.
 

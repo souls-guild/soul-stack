@@ -1,0 +1,34 @@
+# L0 trial (ADR-023): a conditional include INSIDE a block is group-dropped.
+#
+# Reverse of splice-and-inherit on the topology axis: with topology=standalone the
+# cluster.yml group is excluded from the plan while the rest of the block —
+# unconditionally spliced tasks and the hand-written sibling — renders as usual.
+# This is the composition guard: a false include-when must not take the block down
+# with it, and the block's own gate must not resurrect the dropped group.
+name: conditional include inside a block drops on standalone
+
+fixtures:
+  input:
+    manage_acl: true
+    topology: standalone
+
+assert:
+  task_present:
+    - module: core.file.present
+      when: "input.manage_acl"
+      params_subset:
+        path: /etc/pilot/acl.txt
+    - module: core.file.present
+      when: "input.manage_acl"
+      params_subset:
+        path: /etc/pilot/acl-nested.txt
+    - module: core.file.present
+      when: "input.manage_acl"
+      params_subset:
+        path: /etc/pilot/block-local.txt
+
+  # The conditional group is gone entirely.
+  task_absent:
+    - module: core.file.present
+      params_subset:
+        path: /etc/pilot/cluster.txt

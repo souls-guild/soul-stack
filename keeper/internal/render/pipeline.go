@@ -140,12 +140,11 @@ func (p *Pipeline) Render(ctx context.Context, in RenderInput) (_ []*RenderedTas
 	plans := make([]DispatchPlan, 0, len(in.Scenario.Tasks))
 	idx := 0
 
-	// includeGroupKeep caches the conditional-include (group-drop) decision:
-	// group id (Task.IncludeGroupID, set by ExpandIncludes) → keep/drop.
-	// Computed once per group (include-when is host-invariant — static
-	// input./essence./incarnation./vars.), all tasks in the group share the
-	// outcome. Unconditional tasks (IncludeGroupID==0) never hit this map.
-	includeGroupKeep := map[int]bool{}
+	// includeGroupKeep caches the conditional-include (group-drop) decision for
+	// this pass — see [Pipeline.keepIncludeGroup]. Threaded into
+	// renderBlockTask so a within-block include group is decided once for the
+	// whole pass, at both nesting levels.
+	includeGroupKeep := includeGroupCache{}
 
 	// passageStart marks where the current top-level task's RenderedTask
 	// output begins, so its whole output (including apply:destiny/loop
@@ -160,30 +159,17 @@ func (p *Pipeline) Render(ctx context.Context, in RenderInput) (_ []*RenderedTas
 		passageStart := len(tasks)
 
 		// Conditional-include group-drop (ADR-009 amendment) — before
-		// emitStaticWhenSkip. IncludeGroupID!=0 (set by config.ExpandIncludes)
-		// means this task's include was expanded under a static `when:`.
-		// include-when is computed once per group (cached by IncludeGroupID) via
-		// the same isStaticWhen/evalStaticWhen as static-when-skip. false → real
-		// drop: continue without emitting a RenderedTask and without idx++
-		// (index isn't reserved, the task disappears from the plan entirely) —
-		// unlike emitStaticWhenSkip's placeholder-with-idx++. true → renders
-		// normally. Safe: cross-file register of a dropped group is already
-		// lint-forbidden (per-file validateTaskRefs + ErrUnexpandedInclude), so
-		// an external onchanges can't reference it → resolveOnChanges never hits
-		// ErrOnChangesUnknownRegister.
-		if task.IncludeGroupID != 0 {
-			keep, ok := includeGroupKeep[task.IncludeGroupID]
-			if !ok {
-				k, derr := p.evalIncludeWhen(in, task.IncludeWhen)
-				if derr != nil {
-					return nil, nil, derr
-				}
-				keep = k
-				includeGroupKeep[task.IncludeGroupID] = keep
-			}
-			if !keep {
-				continue // group-drop: no RenderedTask, no idx — a real exclusion.
-			}
+		// emitStaticWhenSkip. A false include-when is a real drop: continue
+		// without emitting a RenderedTask and without idx++ (index isn't
+		// reserved, the task disappears from the plan entirely) — unlike
+		// emitStaticWhenSkip's placeholder-with-idx++. Safe: cross-file register
+		// of a dropped group is already lint-forbidden (per-file
+		// validateTaskRefs), so an external onchanges can't reference it →
+		// resolveOnChanges never hits ErrOnChangesUnknownRegister.
+		if keep, kerr := p.keepIncludeGroup(in, task, includeGroupKeep); kerr != nil {
+			return nil, nil, kerr
+		} else if !keep {
+			continue
 		}
 
 		// assert task (ADR-009 amendment 2026-06-23) — keeper-side render-time
@@ -328,7 +314,7 @@ func (p *Pipeline) Render(ctx context.Context, in RenderInput) (_ []*RenderedTas
 		// register/requisites (keeps flat-register-scope intact on skip —
 		// otherwise descendant registers would be lost).
 		if task.Block != nil {
-			bt, bp, berr := p.renderBlockTask(ctx, in, task, idx, targeted)
+			bt, bp, berr := p.renderBlockTask(ctx, in, task, idx, targeted, includeGroupKeep)
 			if berr != nil {
 				return nil, nil, berr
 			}
@@ -712,6 +698,40 @@ func (p *Pipeline) evalIncludeWhen(in RenderInput, when string) (bool, error) {
 	return keep, nil
 }
 
+// includeGroupCache memoizes the conditional-include group-drop decision for ONE
+// render pass: group id (config.Task.IncludeGroupID, stamped by
+// config.ExpandIncludes) → keep/drop. include-when is static and therefore
+// host-invariant, so one evaluation per group covers every task carrying that
+// id. Each pass keeps its OWN cache — a destiny pass evaluates in the isolated
+// destiny env, never the scenario one.
+type includeGroupCache map[int]bool
+
+// keepIncludeGroup reports whether a task's conditional-include group stays in
+// the plan (ADR-009 amendment, conditional-include). The single source of truth
+// for group-drop, shared by every task walk: the scenario loop, the destiny
+// loop, the assert pre-flight and block descendants (a within-block include
+// splices its group INTO a block, so walkBlockChildren gates children with the
+// same cache).
+//
+// An unconditional task (IncludeGroupID==0 — the normal path) is always kept and
+// never touches the cache. keep=false is a REAL drop: the caller continues
+// without emitting a RenderedTask and without advancing idx (no index reserved),
+// unlike a static-when placeholder.
+func (p *Pipeline) keepIncludeGroup(in RenderInput, task config.Task, cache includeGroupCache) (bool, error) {
+	if task.IncludeGroupID == 0 {
+		return true, nil
+	}
+	if keep, ok := cache[task.IncludeGroupID]; ok {
+		return keep, nil
+	}
+	keep, err := p.evalIncludeWhen(in, task.IncludeWhen)
+	if err != nil {
+		return false, err
+	}
+	cache[task.IncludeGroupID] = keep
+	return keep, nil
+}
+
 // emitStaticWhenSkip is an early static-when placeholder-skip, run at the
 // START of the task-iteration loop, before guardPilotDSL/guardDestinyTask
 // (ADR-012(d), extending the static-when invariant). If `when:` is static
@@ -870,34 +890,24 @@ func (p *Pipeline) EvalAsserts(ctx context.Context, in RenderInput) error {
 	in.Compute = computed
 
 	// includeGroupKeep — conditional-include (group-drop) decision cache,
-	// mirroring [Render]: group id (Task.IncludeGroupID, set by
-	// ExpandIncludes) → keep/drop, computed once per group. Without it, an
+	// mirroring [Render] (see [Pipeline.keepIncludeGroup]). Without it, an
 	// assert from a conditionally-included file (cluster.yml under `when:
 	// input.redis_type=='cluster'`) would evaluate even under a mismatched
 	// mode (a sentinel run → CEL no-such-key: shards), whereas Render/Trial
 	// drop that group before the assert. This restores a single source of
 	// truth: pre-flight applies include-when to asserts the same way
 	// run-render does.
-	includeGroupKeep := map[int]bool{}
+	includeGroupKeep := includeGroupCache{}
 	for i := range in.Scenario.Tasks {
 		task := in.Scenario.Tasks[i]
 
 		// Conditional-include group-drop — before IsAssertTask, as in
 		// [Render]: a false group include-when physically excludes the task
 		// from the plan, its assert is never evaluated.
-		if task.IncludeGroupID != 0 {
-			keep, ok := includeGroupKeep[task.IncludeGroupID]
-			if !ok {
-				k, derr := p.evalIncludeWhen(in, task.IncludeWhen)
-				if derr != nil {
-					return derr
-				}
-				keep = k
-				includeGroupKeep[task.IncludeGroupID] = keep
-			}
-			if !keep {
-				continue
-			}
+		if keep, kerr := p.keepIncludeGroup(in, task, includeGroupKeep); kerr != nil {
+			return kerr
+		} else if !keep {
+			continue
 		}
 
 		if !IsAssertTask(task) {

@@ -33,8 +33,14 @@ import (
 //   - nested block: → recursive renderBlockTask (cascading inheritance);
 //   - apply: → renderApplyDestiny (inherited width);
 //   - module: → renderTask;
-//   - loop: on a descendant → REJECTED (outside pilot C1 scope, clear error);
-//   - parallel:/include: on a descendant → REJECTED (guardPilotBlockChild).
+//   - loop:/parallel: on a descendant → REJECTED (guardPilotBlockChild);
+//   - include: on a descendant → already expanded by config.ExpandIncludes
+//     (within-block include), so it never reaches here; the guard keeps the case
+//     as defense-in-depth.
+//
+// includeGroups is the pass's conditional-include decision cache, threaded from
+// the caller: a within-block include splices its group INTO the block, so
+// descendants carry IncludeGroupID and are gated by walkBlockChildren.
 //
 // Static-when-false descendant: emitStaticWhenSkip at the top of the loop emits
 // placeholder(s) BEFORE guard/render — symmetric with the top-level Render loop
@@ -52,6 +58,7 @@ func (p *Pipeline) renderBlockTask(
 	blockTask config.Task,
 	startIndex int,
 	targeted []*topology.HostFacts,
+	includeGroups includeGroupCache,
 ) ([]*RenderedTask, []DispatchPlan, error) {
 	width := serialWidth(blockTask.Serial, len(targeted))
 
@@ -63,9 +70,9 @@ func (p *Pipeline) renderBlockTask(
 	}
 	// childRecurse: a nested block → recursion into the same renderBlockTask.
 	childRecurse := func(child config.Task, idx int, childTargeted []*topology.HostFacts) ([]*RenderedTask, []DispatchPlan, error) {
-		return p.renderBlockTask(ctx, in, child, idx, childTargeted)
+		return p.renderBlockTask(ctx, in, child, idx, childTargeted, includeGroups)
 	}
-	return p.walkBlockChildren(ctx, in, blockTask, startIndex, width, guardPilotBlockChild, childTarget, childRecurse)
+	return p.walkBlockChildren(ctx, in, blockTask, startIndex, width, includeGroups, guardPilotBlockChild, childTarget, childRecurse)
 }
 
 // blockChildGuard — checks a block descendant's kind before rendering. The
@@ -93,9 +100,16 @@ type blockChildRecurser func(child config.Task, idx int, childTargeted []*topolo
 // renderDestinyBlock (major drift risk):
 //
 //	mergeBlockInheritance(blockTask, child)   — merge in when/where/vars/requisites
+//	→ keepIncludeGroup(child)                 — conditional-include group-drop
 //	→ emitStaticWhenSkip(child)               — the AND-when may have become static-false
 //	→ guard(child)                            — layer's key boundary (callback)
 //	→ render: nested block (recurse) / apply / module
+//
+// The two gates are independent axes and compose in that order, mirroring the
+// top-level loops: group-drop removes a child PHYSICALLY (no placeholder, no
+// index — the include never happened), static-when skip keeps its index and
+// register. A within-block include stamps its group onto the spliced children,
+// so a child can carry both a group id and the block's AND-merged when:.
 //
 // The per-layer difference is factored into three callbacks:
 //   - guard: which descendant kinds/keys are allowed (scenario vs destiny boundary);
@@ -117,6 +131,7 @@ func (p *Pipeline) walkBlockChildren(
 	blockTask config.Task,
 	startIndex int,
 	width int,
+	includeGroups includeGroupCache,
 	guard blockChildGuard,
 	target blockChildTargeter,
 	recurse blockChildRecurser,
@@ -126,6 +141,17 @@ func (p *Pipeline) walkBlockChildren(
 	idx := startIndex
 	for i := range blockTask.Block.Block {
 		child := mergeBlockInheritance(blockTask, blockTask.Block.Block[i])
+
+		// Conditional-include group-drop of a child spliced by a within-block
+		// include — BEFORE the static-when skip, as in the top-level loops. A
+		// dropped child leaves no placeholder and reserves no index; block
+		// inheritance (mergeBlockInheritance) doesn't touch IncludeGroupID/
+		// IncludeWhen, so the two axes stay independent.
+		if keep, kerr := p.keepIncludeGroup(in, child, includeGroups); kerr != nil {
+			return nil, nil, kerr
+		} else if !keep {
+			continue
+		}
 
 		// Static-when-false descendant: placeholder(s) BEFORE guard/render (like the
 		// top-level Render loop). idx advances by the number of emitted placeholders.
@@ -297,8 +323,13 @@ func unionNames(blockNames, childNames []string) []string {
 // reaches here). Outside the pilot:
 //   - loop: on a descendant (render-time fan-out inside a block is deferred);
 //   - parallel: on a descendant (parallel in a block — a later slice);
-//   - include: (must expand BEFORE render — ErrUnexpandedInclude);
 //   - an empty task (no discriminator).
+//
+// include: on a descendant is NOT a pilot boundary — within-block include is
+// supported and config.ExpandIncludes splices it before render, so no include
+// child survives to here. The case stays as defense-in-depth: reaching it means
+// the expander was skipped or is broken (ErrUnexpandedInclude), never "outside
+// pilot scope".
 //
 // A block descendant (child.Block != nil) never reaches here — renderBlockTask
 // branches into recursion BEFORE the guard. parallel/loop on the block ITSELF

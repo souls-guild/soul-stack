@@ -178,9 +178,9 @@ func passagePlanSummary(plan config.Passage) string {
 // group-drop, ADR-009 amendment). Target resolution is NOT needed — this is a
 // property of the include node itself (the predicate), so offline static
 // validation is complete and independent of the service layer. The walk
-// recurses through block: (an include child of a block is rejected earlier
-// in the pilot as ErrUnexpandedInclude, but the walk stays symmetric in case
-// of future support). IsStaticIncludeWhen is the same criterion prod's
+// recurses through block: — a within-block include is expanded like any other,
+// so its conditional when: needs the same offline check.
+// IsStaticIncludeWhen is the same criterion prod's
 // ExpandIncludes uses (input./essence./incarnation./vars. — allowed;
 // register./soulprint. — not).
 func dynamicIncludeWhenDiagnostics(scenarioPath string, tasks []config.Task) []diag.Diagnostic {

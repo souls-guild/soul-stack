@@ -1,0 +1,13 @@
+# Included from the block in main.yml (within-block include): these tasks are
+# spliced among the block's children and inherit its `when:` like hand-written
+# siblings. The nested block below carries another include — the expansion
+# recursion goes through a block boundary as many times as needed.
+- name: acl rules marker
+  module: core.file.present
+  params:
+    path:    /etc/pilot/acl.txt
+    content: "acl rules"
+
+- name: acl nested group
+  block:
+    - include: nested.yml

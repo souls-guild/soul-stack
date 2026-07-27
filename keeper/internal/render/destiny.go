@@ -177,44 +177,31 @@ func (p *Pipeline) renderApplyDestiny(
 	idx := startIndex
 
 	// includeGroupKeep caches the conditional-include decision inside a
-	// destiny (group-drop, ADR-009 amendment): group id (Task.IncludeGroupID,
-	// set by ExpandIncludes) → keep/drop. Separate from the scenario cache
-	// (pipeline.go) — the destiny pass is isolated, its own env. include-when
-	// is evaluated ONCE per group over destinyIn (isolated destiny input),
-	// host-invariant. Unconditional tasks (IncludeGroupID==0) never land here.
-	includeGroupKeep := map[int]bool{}
+	// destiny (group-drop, see [Pipeline.keepIncludeGroup]). Separate from the
+	// scenario cache (pipeline.go) — the destiny pass is isolated, its own env:
+	// include-when is evaluated over destinyIn (isolated destiny input).
+	// Threaded into renderDestinyBlock so a within-block include group is
+	// decided once for the whole pass.
+	includeGroupKeep := includeGroupCache{}
 
 	for i := range resolved.Tasks {
 		task := resolved.Tasks[i]
 
 		// Conditional-include group-drop (ADR-009 amendment) — mirrors the
 		// scenario loop (pipeline.go), runs BEFORE emitStaticWhenSkip and
-		// block handling. A task with IncludeGroupID!=0 had its include
-		// expanded under a static `when:` by config.ExpandIncludes.
-		// include-when evaluates ONCE per group in the ISOLATED destiny env
-		// (destinyIn: input = resolved apply.input + schema defaults, not
-		// scenario scope) — never parentIn. include-when false is a REAL
-		// drop: continue without emitting a RenderedTask and without idx++
-		// (no index reserved, the task physically disappears).
-		// IncludeGroupID is orthogonal to block: group-drop sits ABOVE the
-		// block branch, so keep=false drops the whole group (including a
-		// block task and its children) before renderDestinyBlock runs.
-		// includeGroupKeep is a separate cache from scenario's; register
-		// isolation matches scenario (cross-file register on a dropped group
-		// is lint-forbidden offline, so onchanges can't break).
-		if task.IncludeGroupID != 0 {
-			keep, ok := includeGroupKeep[task.IncludeGroupID]
-			if !ok {
-				k, derr := p.evalIncludeWhen(destinyIn, task.IncludeWhen)
-				if derr != nil {
-					return nil, nil, derr
-				}
-				keep = k
-				includeGroupKeep[task.IncludeGroupID] = keep
-			}
-			if !keep {
-				continue // group-drop: no RenderedTask, no idx — a real exclusion.
-			}
+		// block handling. include-when evaluates ONCE per group in the
+		// ISOLATED destiny env (destinyIn: input = resolved apply.input +
+		// schema defaults, not scenario scope) — never parentIn. false is a
+		// REAL drop: no RenderedTask, no idx++ (the task physically
+		// disappears). IncludeGroupID is orthogonal to block: group-drop sits
+		// ABOVE the block branch, so keep=false drops the whole group
+		// (including a block task and its children) before renderDestinyBlock
+		// runs; a group spliced INSIDE a block is gated by walkBlockChildren
+		// with this same cache.
+		if keep, kerr := p.keepIncludeGroup(destinyIn, task, includeGroupKeep); kerr != nil {
+			return nil, nil, kerr
+		} else if !keep {
+			continue
 		}
 
 		// Static-when PRECEDES guardDestinyTask (ADR-012(d), same invariant as
@@ -251,7 +238,7 @@ func (p *Pipeline) renderApplyDestiny(
 		// skip — children's register is visible outside via
 		// resolveOnChanges).
 		if task.Block != nil {
-			bt, bp, berr := p.renderDestinyBlock(ctx, destinyIn, task, idx, targeted, serialWidth)
+			bt, bp, berr := p.renderDestinyBlock(ctx, destinyIn, task, idx, targeted, serialWidth, includeGroupKeep)
 			if berr != nil {
 				return nil, nil, berr
 			}
@@ -521,6 +508,7 @@ func (p *Pipeline) renderDestinyBlock(
 	startIndex int,
 	targeted []*topology.HostFacts,
 	width int,
+	includeGroups includeGroupCache,
 ) ([]*RenderedTask, []DispatchPlan, error) {
 	// Key boundary on the block node ITSELF. A top-level block PASSES
 	// guardDestinyTask (which skips it via `case task.Block`, see above) but
@@ -539,9 +527,9 @@ func (p *Pipeline) renderDestinyBlock(
 	}
 	// nested block → recurse into the same destiny layer (cascading inheritance).
 	childRecurse := func(child config.Task, idx int, childTargeted []*topology.HostFacts) ([]*RenderedTask, []DispatchPlan, error) {
-		return p.renderDestinyBlock(ctx, destinyIn, child, idx, childTargeted, width)
+		return p.renderDestinyBlock(ctx, destinyIn, child, idx, childTargeted, width, includeGroups)
 	}
-	return p.walkBlockChildren(ctx, destinyIn, blockTask, startIndex, width, guardDestinyBlockChild, childTarget, childRecurse)
+	return p.walkBlockChildren(ctx, destinyIn, blockTask, startIndex, width, includeGroups, guardDestinyBlockChild, childTarget, childRecurse)
 }
 
 // guardDestinyBlockChild is the key boundary for a destiny block (render
@@ -549,12 +537,17 @@ func (p *Pipeline) renderDestinyBlock(
 // valid there). Rejects scenario orchestration on a destiny block child with
 // an explicit [ErrUnsupportedDSL]:
 //
-//	where / serial / run_once / on / parallel / loop / include / apply
+//	where / serial / run_once / on / parallel / loop / apply
 //
 // — all meaningless in a destiny (no per-child roster resolve, no nested
 // destiny). VALID (env-agnostic inheritance + flat core): when (AND-merge),
 // name, vars, onchanges/onfail/require (union), nested block:; a child is
 // module: or a nested block:.
+//
+// include: on a child is NOT a boundary — within-block include is supported and
+// expands before render (config.ExpandIncludes). The case stays as
+// defense-in-depth with [ErrUnexpandedInclude]: an include child reaching here
+// means the expander was skipped or is broken.
 //
 // Mirrors guardPilotBlockChild (scenario layer) but stricter: scenario
 // allows apply/serial/run_once/where/on on a child, destiny does not.

@@ -32,6 +32,12 @@ const maxIncludeDepth = 32
 // within-destiny) and I/O. The included file is parsed by the same task parser
 // ([LoadDestinyTasksFromBytes]) — a top-level YAML task list without a wrapper.
 //
+// Within-block include: a `block:` is not an expansion boundary — its children
+// are walked with the same visited-stack and ancestor-when, so an include among
+// them splices into the block's children at any nesting depth (block → include →
+// block → include). The block node itself survives expansion (render merges its
+// when:/requisites into every child, spliced ones included).
+//
 // Cycles (a→b→a, direct self-include) are detected by display path via a
 // visited-stack: re-entry of a path into the active chain → `include_cycle` error
 // (not infinite recursion). Depth is bounded by [maxIncludeDepth].
@@ -144,11 +150,20 @@ func (e *includeExpander) expand(tasks []Task, stack []string, ancestorWhen stri
 	for i := range tasks {
 		task := tasks[i]
 
-		// Non-include or block: no splice needed. block is expanded in the render
-		// phase (renderBlockTask, like loop) — passthrough here. within-block
-		// include isn't supported in pilot C1 (guardPilotBlockChild rejects an
-		// include child as ErrUnexpandedInclude) — no block recursion needed here.
+		// Non-include: no splice at this node. A block is expanded in the render
+		// phase (renderBlockTask, like loop), but its children are a task list of
+		// the same shape — recurse so a within-block include is spliced too. The
+		// stack/ancestorWhen are passed UNCHANGED (a block is not an include
+		// boundary): cycle/depth detection and the conditional-include cascade
+		// behave identically at any nesting depth. BlockTask is copied — the
+		// caller's manifest outlives expansion (Trial re-renders it per case) and
+		// must not be spliced in place.
 		if task.Include == nil {
+			if task.Block != nil {
+				block := *task.Block
+				block.Block = e.expand(task.Block.Block, stack, ancestorWhen)
+				task.Block = &block
+			}
 			out = append(out, task)
 			continue
 		}

@@ -575,11 +575,11 @@ func TestRenderBlock_LoopChildRejected(t *testing.T) {
 	}
 }
 
-// TestRenderBlock_IncludeChildRejected (QA gap #10a) — an include child in a
-// block is rejected before render (must be expanded by ExpandIncludes
-// earlier). The grammar allows include inside a block body, but pilot C1
-// doesn't support within-block include (docs/destiny/tasks.md §6.5) —
-// guardPilotBlockChild raises ErrUnexpandedInclude.
+// TestRenderBlock_IncludeChildRejected (QA gap #10a) — defense-in-depth: an
+// include child that reaches render UNEXPANDED is rejected. Within-block include
+// IS supported (docs/destiny/tasks.md §6.5) and config.ExpandIncludes splices it
+// beforehand, so this state means the expander was skipped — guardPilotBlockChild
+// raises ErrUnexpandedInclude rather than silently rendering nothing.
 func TestRenderBlock_IncludeChildRejected(t *testing.T) {
 	inner := config.Task{Name: "inc", Include: &config.IncludeTask{Include: "sub.yml"}}
 	task := config.Task{
@@ -594,7 +594,7 @@ func TestRenderBlock_IncludeChildRejected(t *testing.T) {
 	}
 	_, _, err := p.Render(context.Background(), in)
 	if !errors.Is(err, ErrUnexpandedInclude) {
-		t.Fatalf("err = %v, want ErrUnexpandedInclude (include child of block out of pilot scope)", err)
+		t.Fatalf("err = %v, want ErrUnexpandedInclude (unexpanded include child of a block)", err)
 	}
 }
 

@@ -1,0 +1,36 @@
+name: within-block-include
+description: >
+  Pilot within-block include (ADR-009 amendment 2026-07-26): `include:` among the
+  children of a `block:`. acl.yml is spliced in place and its tasks inherit the
+  block's `when:` exactly like the hand-written sibling next to them; acl.yml in
+  turn holds a block with another include, so the chain block -> include -> block
+  -> include is expanded end to end. cluster.yml is a CONDITIONAL include inside
+  the same block: on standalone its group is dropped from the plan entirely, while
+  the rest of the block renders. L0 cases check both with task_present/task_absent.
+
+input:
+  manage_acl:
+    type: boolean
+    required: true
+  topology:
+    type: string
+    required: true
+    enum: [standalone, cluster]
+
+tasks:
+  - name: acl group
+    when: input.manage_acl
+    block:
+      # Within-block include: spliced in place among the siblings below.
+      - include: acl.yml
+
+      # Conditional include inside the block — two independent gates: this group
+      # is dropped on standalone, the block's when: gates what survives.
+      - include: cluster.yml
+        when: input.topology == 'cluster'
+
+      - name: block-local marker
+        module: core.file.present
+        params:
+          path:    /etc/pilot/block-local.txt
+          content: "block-local"

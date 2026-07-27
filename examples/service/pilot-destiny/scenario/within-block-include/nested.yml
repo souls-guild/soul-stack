@@ -1,0 +1,8 @@
+# The deepest level of block -> include -> block -> include. Reached only if the
+# expander recurses through BOTH block boundaries; the leaf still inherits the
+# outermost block's `when:`.
+- name: acl nested marker
+  module: core.file.present
+  params:
+    path:    /etc/pilot/acl-nested.txt
+    content: "nested"
