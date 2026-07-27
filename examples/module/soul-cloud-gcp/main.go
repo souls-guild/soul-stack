@@ -356,35 +356,42 @@ func (g *GcpDriver) Destroy(req *pluginv1.DestroyRequest, stream grpc.ServerStre
 	}
 
 	backoff := defaultBackoff()
-	for _, name := range req.GetVmIds() {
-		err := clouddriver.Retry(ctx, backoff, classifyGCP, func() error {
-			op, derr := cli.Delete(ctx, &computepb.DeleteInstanceRequest{
+	// A finished delete-Operation is not proof the instance is gone; confirm it
+	// with a read — see [clouddriver.ConfirmDestroy].
+	del := func(dctx context.Context, name string) error {
+		return clouddriver.Retry(dctx, backoff, classifyGCP, func() error {
+			op, derr := cli.Delete(dctx, &computepb.DeleteInstanceRequest{
 				Project:  creds.Project,
 				Zone:     creds.Zone,
 				Instance: name,
 			})
 			if derr != nil {
+				// not_found on Destroy is success by definition (idempotency).
+				if clouddriver.Classify(classifyGCP, derr) == clouddriver.FailNotFound {
+					return nil
+				}
 				return derr
 			}
-			return op.Wait(ctx)
+			return op.Wait(dctx)
 		})
-		if err != nil {
-			class := clouddriver.Classify(classifyGCP, err)
-			if class == clouddriver.FailNotFound {
-				// not_found on Destroy is success by definition (idempotency).
-				_ = stream.Send(&pluginv1.DestroyEvent{VmId: name, Message: "already absent"})
-				continue
-			}
-			_ = stream.Send(&pluginv1.DestroyEvent{
-				VmId:    name,
-				Message: clouddriver.FailMessage(class, "Delete", err),
-				Failed:  true,
-			})
-			continue
-		}
-		_ = stream.Send(&pluginv1.DestroyEvent{VmId: name, Message: "terminated"})
 	}
-	return nil
+	probe := func(pctx context.Context, name string) clouddriver.GoneResult {
+		inst, perr := cli.Get(pctx, &computepb.GetInstanceRequest{
+			Project: creds.Project, Zone: creds.Zone, Instance: name,
+		})
+		if perr != nil {
+			if clouddriver.Classify(classifyGCP, perr) == clouddriver.FailNotFound {
+				return clouddriver.GoneResult{Gone: true}
+			}
+			// Transient read error: keep polling.
+			return clouddriver.GoneResult{}
+		}
+		return clouddriver.GoneResult{State: inst.GetStatus()}
+	}
+
+	results, phaseErr := clouddriver.ConfirmDestroy(ctx, defaultWaitBackoff(), req.GetVmIds(), del, probe,
+		func(msg string) { _ = stream.Send(&pluginv1.DestroyEvent{Message: msg}) })
+	return clouddriver.ReportDestroy(stream, results, phaseErr, classifyGCP)
 }
 
 // Status polls one VM (Get). credentials arrive through the separate

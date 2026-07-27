@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"strings"
 
 	"github.com/souls-guild/soul-stack/keeper/internal/pluginhost"
 	pluginv1 "github.com/souls-guild/soul-stack/proto/plugin/gen/go/v1"
@@ -172,9 +173,15 @@ func collectCreateVMs(stream createEventStream) ([]*pluginv1.VmInfo, error) {
 }
 
 // Destroy is the [PluginHost.Destroy] implementation. One-shot spawn,
-// server-stream Read until EOF, aggregating `vm_id` from every event —
-// these are the "actually deleted" ones (the provider may reject a
-// subset, see the contract).
+// server-stream Read until EOF, aggregating `vm_id` from every SUCCESSFUL
+// event — those are the confirmed-deleted ones.
+//
+// A failed event is NOT a deleted VM (NIM-191): drivers report a teardown they
+// could not confirm with failed=true and the vm_id filled in, so the operator
+// can chase it. Counting those as destroyed would run the ADR-017 cascade
+// (souls→destroyed) over VMs that are still alive and billed. Any failure
+// fails the whole call — [applyDestroyed] then leaves the registry untouched,
+// which is the conservative side to err on.
 func (a *PluginAdapter) Destroy(ctx context.Context, driver string, credentials map[string]any, vmIDs []string) ([]string, error) {
 	d, ok := a.providers[driver]
 	if !ok {
@@ -201,19 +208,55 @@ func (a *PluginAdapter) Destroy(ctx context.Context, driver string, credentials 
 		return nil, fmt.Errorf("cloud adapter: destroy rpc %s: %w", d.Manifest.Address(), err)
 	}
 
+	destroyed, collectErr := collectDestroyed(stream, len(vmIDs))
+	if collectErr != nil {
+		return destroyed, fmt.Errorf("cloud adapter: destroy %s: %w (stderr-tail: %s)",
+			d.Manifest.Address(), collectErr, plugin.StderrTail())
+	}
+	return destroyed, nil
+}
+
+// destroyEventStream is a narrow subset of
+// grpc.ServerStreamingClient[DestroyEvent] (Recv only), so [collectDestroyed]
+// is unit-testable without a live gRPC plugin. Symmetric with
+// [createEventStream].
+type destroyEventStream interface {
+	Recv() (*pluginv1.DestroyEvent, error)
+}
+
+// collectDestroyed reads the driver's Destroy stream until EOF and returns the
+// vm_ids the driver CONFIRMED gone. Events with failed=true are collected as
+// failures, never as deletions (NIM-191) — a driver reports an unconfirmed
+// teardown that way, and treating it as a deletion would cascade
+// souls→destroyed over VMs that are still running. total is the requested VM
+// count, for the error message only.
+func collectDestroyed(stream destroyEventStream, total int) ([]string, error) {
 	var destroyed []string
+	var failures []string
 	for {
 		ev, recvErr := stream.Recv()
 		if errors.Is(recvErr, io.EOF) {
 			break
 		}
 		if recvErr != nil {
-			return nil, fmt.Errorf("cloud adapter: destroy stream %s: %w (stderr-tail: %s)",
-				d.Manifest.Address(), recvErr, plugin.StderrTail())
+			return destroyed, recvErr
 		}
-		if id := ev.GetVmId(); id != "" {
+		id := ev.GetVmId()
+		if ev.GetFailed() {
+			what := id
+			if what == "" {
+				what = "<no vm_id>"
+			}
+			failures = append(failures, fmt.Sprintf("%s: %s", what, ev.GetMessage()))
+			continue
+		}
+		if id != "" {
 			destroyed = append(destroyed, id)
 		}
+	}
+	if len(failures) > 0 {
+		return destroyed, fmt.Errorf("%d of %d VM not confirmed destroyed: %s",
+			len(failures), total, strings.Join(failures, "; "))
 	}
 	return destroyed, nil
 }

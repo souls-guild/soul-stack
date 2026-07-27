@@ -525,28 +525,32 @@ func (y *YcDriver) Destroy(req *pluginv1.DestroyRequest, stream grpc.ServerStrea
 	}
 
 	backoff := defaultBackoff()
-	for _, id := range req.GetVmIds() {
-		vmID := id
-		err := clouddriver.Retry(ctx, backoff, classifyYC, func() error {
-			return cli.DeleteInstance(ctx, vmID)
-		})
-		if err == nil {
-			_ = stream.Send(&pluginv1.DestroyEvent{VmId: vmID, Message: "deleted"})
-			continue
-		}
-		class := clouddriver.Classify(classifyYC, err)
-		if class == clouddriver.FailNotFound {
-			// not_found on Destroy is idempotent success (the VM is already gone).
-			_ = stream.Send(&pluginv1.DestroyEvent{VmId: vmID, Message: "already absent"})
-			continue
-		}
-		_ = stream.Send(&pluginv1.DestroyEvent{
-			VmId:    vmID,
-			Message: clouddriver.FailMessage(class, "DeleteInstance", err),
-			Failed:  true,
+	// DeleteInstance starts an async operation; confirm the instance actually
+	// disappeared — see [clouddriver.ConfirmDestroy].
+	del := func(dctx context.Context, vmID string) error {
+		return clouddriver.Retry(dctx, backoff, classifyYC, func() error {
+			derr := cli.DeleteInstance(dctx, vmID)
+			// not_found on Destroy is idempotent success (already gone).
+			if derr != nil && clouddriver.Classify(classifyYC, derr) == clouddriver.FailNotFound {
+				return nil
+			}
+			return derr
 		})
 	}
-	return nil
+	probe := func(pctx context.Context, vmID string) clouddriver.GoneResult {
+		inst, perr := cli.GetInstance(pctx, vmID)
+		if perr != nil {
+			if clouddriver.Classify(classifyYC, perr) == clouddriver.FailNotFound {
+				return clouddriver.GoneResult{Gone: true}
+			}
+			return clouddriver.GoneResult{}
+		}
+		return clouddriver.GoneResult{State: inst.GetStatus().String()}
+	}
+
+	results, phaseErr := clouddriver.ConfirmDestroy(ctx, defaultWaitBackoff(), req.GetVmIds(), del, probe,
+		func(msg string) { _ = stream.Send(&pluginv1.DestroyEvent{Message: msg}) })
+	return clouddriver.ReportDestroy(stream, results, phaseErr, classifyYC)
 }
 
 // Status polls one VM (GetInstance). credentials arrive in the separate

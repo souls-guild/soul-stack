@@ -728,6 +728,78 @@ func TestDestroy_NotFoundIsIdempotent(t *testing.T) {
 	}
 }
 
+// TestDestroy_UnconfirmedIsNotSuccess (NIM-191): TerminateInstances only
+// ACCEPTS the request. An instance that never leaves `running` must be
+// reported as a failure — otherwise Keeper's cascade marks the soul destroyed
+// while the VM is alive and billed.
+func TestDestroy_UnconfirmedIsNotSuccess(t *testing.T) {
+	withFastBackoff(t, 2)
+	f := &fakeEC2{
+		termOut: &ec2.TerminateInstancesOutput{},
+		describeSeq: []*ec2.DescribeInstancesOutput{
+			describeOut(ec2types.Instance{ // still alive after the accepted terminate
+				InstanceId: aws.String("i-stuck"),
+				State:      &ec2types.InstanceState{Name: ec2types.InstanceStateNameRunning},
+			}),
+		},
+	}
+	withFakeEC2(t, f)
+	d := &AwsDriver{}
+	s := &destroyStream{}
+	if err := d.Destroy(&pluginv1.DestroyRequest{
+		VmIds:       []string{"i-stuck"},
+		Credentials: mustStruct(t, map[string]any{"region": "eu-west-1"}),
+	}, s); err != nil {
+		t.Fatalf("Destroy: %v", err)
+	}
+	var failed *pluginv1.DestroyEvent
+	for _, ev := range s.sent {
+		if ev.Failed {
+			failed = ev
+			break
+		}
+	}
+	if failed == nil {
+		t.Fatalf("an unconfirmed teardown must not be reported as success; events=%+v", s.sent)
+	}
+	if failed.VmId != "i-stuck" && !contains(failed.Message, "i-stuck") {
+		t.Errorf("failed event=%+v, want the VM identified for follow-up", failed)
+	}
+}
+
+// TestDestroy_ConfirmedWhenTerminated: the happy path still succeeds once the
+// instance actually reaches `terminated`.
+func TestDestroy_ConfirmedWhenTerminated(t *testing.T) {
+	withFastBackoff(t, 5)
+	f := &fakeEC2{
+		termOut: &ec2.TerminateInstancesOutput{},
+		describeSeq: []*ec2.DescribeInstancesOutput{
+			describeOut(ec2types.Instance{
+				InstanceId: aws.String("i-bye"),
+				State:      &ec2types.InstanceState{Name: ec2types.InstanceStateNameShuttingDown},
+			}),
+			describeOut(ec2types.Instance{
+				InstanceId: aws.String("i-bye"),
+				State:      &ec2types.InstanceState{Name: ec2types.InstanceStateNameTerminated},
+			}),
+		},
+	}
+	withFakeEC2(t, f)
+	d := &AwsDriver{}
+	s := &destroyStream{}
+	if err := d.Destroy(&pluginv1.DestroyRequest{
+		VmIds:       []string{"i-bye"},
+		Credentials: mustStruct(t, map[string]any{"region": "eu-west-1"}),
+	}, s); err != nil {
+		t.Fatalf("Destroy: %v", err)
+	}
+	for _, ev := range s.sent {
+		if ev.Failed {
+			t.Fatalf("confirmed teardown reported a failure: %+v", ev)
+		}
+	}
+}
+
 func TestClassifyAWS_Codes(t *testing.T) {
 	cases := map[string]clouddriver.FailClass{
 		"AuthFailure":              clouddriver.FailAuth,

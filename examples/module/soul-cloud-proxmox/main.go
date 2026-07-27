@@ -543,10 +543,11 @@ func (d *ProxmoxDriver) Destroy(req *pluginv1.DestroyRequest, stream grpc.Server
 		return nil
 	}
 
-	backoff := defaultBackoff()
+	// A malformed vm_id is a caller error, not a teardown outcome: report it as
+	// invalid_params and keep it out of the confirm loop.
+	ids := make([]string, 0, len(req.GetVmIds()))
 	for _, vmIDStr := range req.GetVmIds() {
-		node, id, perr := splitVmID(vmIDStr)
-		if perr != nil {
+		if _, _, perr := splitVmID(vmIDStr); perr != nil {
 			_ = stream.Send(&pluginv1.DestroyEvent{
 				VmId:    vmIDStr,
 				Message: clouddriver.FailMessage(clouddriver.FailInvalidParams, "parse-vm_id", perr),
@@ -554,54 +555,65 @@ func (d *ProxmoxDriver) Destroy(req *pluginv1.DestroyRequest, stream grpc.Server
 			})
 			continue
 		}
+		ids = append(ids, vmIDStr)
+	}
 
-		// Stop. not_found at this step is ok; VM may have already been deleted.
-		stopErr := clouddriver.Retry(ctx, backoff, classifyProxmox, func() error {
-			_, e := cli.StopVM(ctx, node, id)
+	backoff := defaultBackoff()
+	// Stop+delete are Proxmox tasks: the API returns a task id, the VM goes away
+	// afterwards. Confirm it really did — see [clouddriver.ConfirmDestroy].
+	del := func(dctx context.Context, vmIDStr string) error {
+		node, id, perr := splitVmID(vmIDStr)
+		if perr != nil {
+			return perr
+		}
+		// Stop. not_found is fine (already deleted); "VM is not running" too.
+		stopErr := clouddriver.Retry(dctx, backoff, classifyProxmox, func() error {
+			_, e := cli.StopVM(dctx, node, id)
 			return e
 		})
 		if stopErr != nil {
 			class := clouddriver.Classify(classifyProxmox, stopErr)
 			if class == clouddriver.FailNotFound {
-				_ = stream.Send(&pluginv1.DestroyEvent{VmId: vmIDStr, Message: "already absent"})
-				continue
+				// Already gone — nothing left to delete.
+				return nil
 			}
-			// Proxmox may return 500 "VM is not running" - that is success for us.
-			// The classifier maps it to transient, but Retry has already exhausted
-			// attempts; recognize by body text.
-			if isNotRunning(stopErr) {
-				// continue to delete
-			} else {
-				_ = stream.Send(&pluginv1.DestroyEvent{
-					VmId:    vmIDStr,
-					Message: clouddriver.FailMessage(class, "stop", stopErr),
-					Failed:  true,
-				})
-				continue
+			// Proxmox answers 500 "VM is not running" for a stopped VM: fine, delete it.
+			if !isNotRunning(stopErr) {
+				return stopErr
 			}
 		}
-
-		// Delete. not_found -> idempotent success.
-		delErr := clouddriver.Retry(ctx, backoff, classifyProxmox, func() error {
-			_, e := cli.DeleteVM(ctx, node, id)
+		delErr := clouddriver.Retry(dctx, backoff, classifyProxmox, func() error {
+			_, e := cli.DeleteVM(dctx, node, id)
 			return e
 		})
-		if delErr != nil {
-			class := clouddriver.Classify(classifyProxmox, delErr)
-			if class == clouddriver.FailNotFound {
-				_ = stream.Send(&pluginv1.DestroyEvent{VmId: vmIDStr, Message: "already absent"})
-				continue
-			}
-			_ = stream.Send(&pluginv1.DestroyEvent{
-				VmId:    vmIDStr,
-				Message: clouddriver.FailMessage(class, "delete", delErr),
-				Failed:  true,
-			})
-			continue
+		// not_found -> idempotent success.
+		if delErr != nil && clouddriver.Classify(classifyProxmox, delErr) == clouddriver.FailNotFound {
+			return nil
 		}
-		_ = stream.Send(&pluginv1.DestroyEvent{VmId: vmIDStr, Message: "deleted"})
+		return delErr
 	}
-	return nil
+	probe := func(pctx context.Context, vmIDStr string) clouddriver.GoneResult {
+		node, id, perr := splitVmID(vmIDStr)
+		if perr != nil {
+			return clouddriver.GoneResult{Err: perr}
+		}
+		st, serr := cli.GetVMStatus(pctx, node, id)
+		if serr != nil {
+			if clouddriver.Classify(classifyProxmox, serr) == clouddriver.FailNotFound {
+				return clouddriver.GoneResult{Gone: true}
+			}
+			return clouddriver.GoneResult{}
+		}
+		state := st.Status
+		if st.Lock != "" {
+			state += "/" + st.Lock
+		}
+		return clouddriver.GoneResult{State: state}
+	}
+
+	results, phaseErr := clouddriver.ConfirmDestroy(ctx, defaultWaitBackoff(), ids, del, probe,
+		func(msg string) { _ = stream.Send(&pluginv1.DestroyEvent{Message: msg}) })
+	return clouddriver.ReportDestroy(stream, results, phaseErr, classifyProxmox)
 }
 
 // isNotRunning checks for "VM is not running" in the stop error body. Proxmox

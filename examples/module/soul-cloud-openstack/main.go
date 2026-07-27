@@ -57,6 +57,7 @@ const (
 	statusActive  = "ACTIVE"
 	statusBuild   = "BUILD"
 	statusRebuild = "REBUILD"
+	statusError   = "ERROR"
 )
 
 // defaultBackoff is the [clouddriver.BackoffConfig] factory for wait/retry
@@ -431,27 +432,38 @@ func (o *OpenstackDriver) Destroy(req *pluginv1.DestroyRequest, stream grpc.Serv
 	}
 
 	backoff := defaultBackoff()
-	for _, id := range req.GetVmIds() {
-		vmID := id
-		err := clouddriver.Retry(ctx, backoff, classifyOS, func() error {
-			return cli.DeleteServer(ctx, vmID)
-		})
-		if err == nil {
-			_ = stream.Send(&pluginv1.DestroyEvent{VmId: vmID, Message: "deleted"})
-			continue
-		}
-		class := clouddriver.Classify(classifyOS, err)
-		if class == clouddriver.FailNotFound {
-			_ = stream.Send(&pluginv1.DestroyEvent{VmId: vmID, Message: "already absent"})
-			continue
-		}
-		_ = stream.Send(&pluginv1.DestroyEvent{
-			VmId:    vmID,
-			Message: clouddriver.FailMessage(class, "servers.Delete", err),
-			Failed:  true,
+	// servers.Delete only schedules the deletion; Nova removes the server
+	// asynchronously and can park it in ERROR. Confirm it is really gone —
+	// see [clouddriver.ConfirmDestroy].
+	del := func(dctx context.Context, vmID string) error {
+		return clouddriver.Retry(dctx, backoff, classifyOS, func() error {
+			derr := cli.DeleteServer(dctx, vmID)
+			// not_found on Destroy is idempotent success (already gone).
+			if derr != nil && clouddriver.Classify(classifyOS, derr) == clouddriver.FailNotFound {
+				return nil
+			}
+			return derr
 		})
 	}
-	return nil
+	probe := func(pctx context.Context, vmID string) clouddriver.GoneResult {
+		srv, perr := cli.GetServer(pctx, vmID)
+		if perr != nil {
+			if clouddriver.Classify(classifyOS, perr) == clouddriver.FailNotFound {
+				return clouddriver.GoneResult{Gone: true}
+			}
+			return clouddriver.GoneResult{}
+		}
+		// ERROR after a delete request means Nova gave up on the teardown; it
+		// will not retry by itself.
+		return clouddriver.GoneResult{
+			State:        srv.Status,
+			DeleteFailed: srv.Status == statusError,
+		}
+	}
+
+	results, phaseErr := clouddriver.ConfirmDestroy(ctx, defaultWaitBackoff(), req.GetVmIds(), del, probe,
+		func(msg string) { _ = stream.Send(&pluginv1.DestroyEvent{Message: msg}) })
+	return clouddriver.ReportDestroy(stream, results, phaseErr, classifyOS)
 }
 
 // Status polls one VM (servers.Get). credentials come in a separate

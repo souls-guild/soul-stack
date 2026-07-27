@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -82,6 +83,11 @@ func (f *fakeOS) GetServer(_ context.Context, id string) (*servers.Server, error
 	f.getN++
 	if f.getFn != nil {
 		return f.getFn(call)
+	}
+	// Model reality for the teardown probe: a server already deleted reads back
+	// as not-found (NIM-191 confirms deletions).
+	if slices.Contains(f.lastDeleted, id) {
+		return nil, gophercloud.ErrUnexpectedResponseCode{Actual: 404}
 	}
 	if f.getErr != nil {
 		return nil, f.getErr
@@ -862,8 +868,8 @@ func TestDestroy_NotFoundIsIdempotent(t *testing.T) {
 	if len(s.sent) != 1 || s.sent[0].Failed {
 		t.Errorf("not-found destroy must be idempotent (success), got %+v", s.sent)
 	}
-	if !strings.Contains(s.sent[0].Message, "already absent") {
-		t.Errorf("message=%q, want already-absent", s.sent[0].Message)
+	if !strings.Contains(s.sent[0].Message, "destroyed") {
+		t.Errorf("message=%q, want a confirmed-destroyed message", s.sent[0].Message)
 	}
 }
 

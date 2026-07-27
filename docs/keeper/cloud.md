@@ -117,6 +117,19 @@ The operator overrides the wait budget with the env variable **`SOUL_CLOUD_WAIT_
 
 When the budget really does run out, the failed event tells the two cases apart: VMs whose provider state was still advancing report that the boot budget is likely too small (with the knob to raise), VMs whose state never changed once report as stuck - a larger budget will not help. Either way the event carries `vm_id` and the last observed state, so anti-orphan destroy still works.
 
+### Confirmed teardown
+
+Deleting is asynchronous the same way creating is: a successful `Delete`/`Terminate` call means the provider **accepted** the request, not that the VM is gone. A VM deleted while it is still being created is the awkward case - WB parks it in `DELETE_FAILED`, and it never leaves that state on its own.
+
+So the destroy path does not trust the accepted call: `clouddriver.ConfirmDestroy` issues the delete, polls until the provider reports the VM missing, and **re-issues the delete** whenever the probe reports the deletion itself failed. It runs on the same `SOUL_CLOUD_WAIT_BUDGET` as the wait phase (tearing down a VM stuck mid-create means waiting out its creation first).
+
+Two consequences worth knowing:
+
+- **An unconfirmed teardown is a failure, not a success.** The driver emits `failed=true` with the `vm_id`, and Keeper does **not** count that VM as destroyed - so the ADR-017 cascade (`souls→destroyed` + seeds orphaned + tokens burned) does not run over VMs that are still alive. The `core.cloud.destroyed` step fails instead and leaves the registry untouched; re-running it is safe, since delete is idempotent.
+- **The diagnosis distinguishes the two failure modes.** VMs the provider kept refusing to delete are reported as still alive and billed (a bigger budget will not help); VMs whose teardown was merely still in flight point at the budget knob.
+
+This is exactly the case anti-orphan cleanup exists for - the VMs it removes are the ones caught mid-create - so a silently-ignored `DELETE_FAILED` used to defeat it.
+
 ### Credentials-flow
 
 Option **A** (fixed): **Keeper resolves the secret from Vault and passes plain to the driver; the driver does not go to Vault.**

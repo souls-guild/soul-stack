@@ -3,6 +3,8 @@ package main
 import (
 	"context"
 	"errors"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 	"io"
 	"net"
 	"testing"
@@ -152,7 +154,9 @@ func TestL1_StatusOverGRPC(t *testing.T) {
 }
 
 func TestL1_DestroyOverGRPC(t *testing.T) {
-	f := &fakeYC{}
+	withFastBackoff(t, 5)
+	// Teardown is confirmed by a read; the instance is gone after the delete.
+	f := &fakeYC{getErr: status.Error(codes.NotFound, "gone")}
 	withFakeYC(t, f)
 
 	client, teardown := serveDriverGRPC(t, &YcDriver{})

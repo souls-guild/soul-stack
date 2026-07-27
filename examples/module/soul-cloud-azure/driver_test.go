@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"errors"
 	"net/http"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -89,11 +90,17 @@ func (f *fakeVMs) DeleteAndWait(_ context.Context, _, name string) error {
 	return f.deleteErr
 }
 
-func (f *fakeVMs) Get(_ context.Context, _, _ string, _ *armcompute.VirtualMachinesClientGetOptions) (armcompute.VirtualMachinesClientGetResponse, error) {
+func (f *fakeVMs) Get(_ context.Context, _, name string, _ *armcompute.VirtualMachinesClientGetOptions) (armcompute.VirtualMachinesClientGetResponse, error) {
 	call := f.getN
 	f.getN++
 	if f.getFn != nil {
 		return f.getFn(call)
+	}
+	// Model reality for the teardown probe: a VM already deleted reads back as
+	// not-found. Without this the fake would claim every destroyed VM is still
+	// there (NIM-191 confirms deletions).
+	if slices.Contains(f.deleteCalls, name) {
+		return armcompute.VirtualMachinesClientGetResponse{}, &azcore.ResponseError{StatusCode: 404}
 	}
 	if len(f.getSeq) == 0 {
 		return armcompute.VirtualMachinesClientGetResponse{}, nil
@@ -639,8 +646,8 @@ func TestDestroy_NotFoundIsIdempotent(t *testing.T) {
 	if len(s.sent) != 1 || s.sent[0].Failed {
 		t.Errorf("not-found destroy must be idempotent (success), got %+v", s.sent)
 	}
-	if s.sent[0].Message != "already absent" {
-		t.Errorf("message=%q, want already absent", s.sent[0].Message)
+	if s.sent[0].Message != "destroyed" {
+		t.Errorf("message=%q, want a confirmed-destroyed message", s.sent[0].Message)
 	}
 }
 

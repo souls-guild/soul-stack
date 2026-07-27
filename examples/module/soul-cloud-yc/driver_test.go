@@ -910,7 +910,9 @@ func TestList_RequiresFolderID(t *testing.T) {
 }
 
 func TestDestroy_PerVM(t *testing.T) {
-	f := &fakeYC{}
+	withFastBackoff(t, 5)
+	// The teardown is confirmed by a read: after the delete the instance is gone.
+	f := &fakeYC{getErr: status.Error(codes.NotFound, "gone")}
 	withFakeYC(t, f)
 	d := &YcDriver{}
 	s := &destroyStream{}
@@ -934,7 +936,11 @@ func TestDestroy_PerVM(t *testing.T) {
 }
 
 func TestDestroy_NotFoundIsIdempotent(t *testing.T) {
-	f := &fakeYC{deleteErr: status.Error(codes.NotFound, "gone")}
+	withFastBackoff(t, 5)
+	f := &fakeYC{
+		deleteErr: status.Error(codes.NotFound, "gone"),
+		getErr:    status.Error(codes.NotFound, "gone"),
+	}
 	withFakeYC(t, f)
 	d := &YcDriver{}
 	s := &destroyStream{}
@@ -947,8 +953,32 @@ func TestDestroy_NotFoundIsIdempotent(t *testing.T) {
 	if len(s.sent) != 1 || s.sent[0].Failed {
 		t.Errorf("not-found destroy must be idempotent (success), got %+v", s.sent)
 	}
-	if !strings.Contains(s.sent[0].Message, "absent") {
-		t.Errorf("message=%q, want 'absent'-style", s.sent[0].Message)
+	if !strings.Contains(s.sent[0].Message, "destroyed") {
+		t.Errorf("message=%q, want a confirmed-destroyed message", s.sent[0].Message)
+	}
+}
+
+// TestDestroy_UnconfirmedIsNotSuccess (NIM-191): DeleteInstance only starts an
+// async operation. An instance still readable afterwards must be reported as a
+// failure, not as a destroyed VM.
+func TestDestroy_UnconfirmedIsNotSuccess(t *testing.T) {
+	withFastBackoff(t, 2)
+	f := &fakeYC{} // GetInstance keeps returning the instance
+	withFakeYC(t, f)
+	d := &YcDriver{}
+	s := &destroyStream{}
+	if err := d.Destroy(&pluginv1.DestroyRequest{
+		VmIds:       []string{"epd-stuck"},
+		Credentials: mustStruct(t, validCredsIAM()),
+	}, s); err != nil {
+		t.Fatalf("Destroy: %v", err)
+	}
+	failed := false
+	for _, ev := range s.sent {
+		failed = failed || ev.Failed
+	}
+	if !failed {
+		t.Fatalf("an unconfirmed teardown must not be reported as success; events=%+v", s.sent)
 	}
 }
 

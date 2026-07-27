@@ -20,6 +20,7 @@ import (
 	_ "embed"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"time"
@@ -326,10 +327,14 @@ func (a *AwsDriver) describeOne(ctx context.Context, cli ec2API, vmID string) (e
 	}
 	insts := flattenInstances(out)
 	if len(insts) == 0 {
-		return ec2types.Instance{}, fmt.Errorf("instance %s not found", vmID)
+		return ec2types.Instance{}, fmt.Errorf("instance %s: %w", vmID, errInstanceGone)
 	}
 	return insts[0], nil
 }
+
+// errInstanceGone marks "the API has no such instance" — success for the
+// teardown probe, which must not confuse it with an unreadable instance.
+var errInstanceGone = errors.New("instance not found")
 
 // Destroy: TerminateInstances, streaming per-VM events.
 func (a *AwsDriver) Destroy(req *pluginv1.DestroyRequest, stream grpc.ServerStreamingServer[pluginv1.DestroyEvent]) error {
@@ -342,36 +347,38 @@ func (a *AwsDriver) Destroy(req *pluginv1.DestroyRequest, stream grpc.ServerStre
 	}
 
 	backoff := defaultBackoff()
-	out, err := func() (*ec2.TerminateInstancesOutput, error) {
-		var o *ec2.TerminateInstancesOutput
-		rerr := clouddriver.Retry(ctx, backoff, classifyAWS, func() error {
-			var e error
-			o, e = cli.TerminateInstances(ctx, &ec2.TerminateInstancesInput{InstanceIds: req.GetVmIds()})
+	// TerminateInstances only ACCEPTS the request; the instance dies
+	// asynchronously. Confirm it actually reached `terminated` — see
+	// [clouddriver.ConfirmDestroy].
+	del := func(dctx context.Context, vmID string) error {
+		return clouddriver.Retry(dctx, backoff, classifyAWS, func() error {
+			_, e := cli.TerminateInstances(dctx, &ec2.TerminateInstancesInput{InstanceIds: []string{vmID}})
+			// not_found on Destroy is success by definition (already gone).
+			if e != nil && clouddriver.Classify(classifyAWS, e) == clouddriver.FailNotFound {
+				return nil
+			}
 			return e
 		})
-		return o, rerr
-	}()
-	if err != nil {
-		class := clouddriver.Classify(classifyAWS, err)
-		// not_found on Destroy is success by definition (VM is already gone): send per-VM
-		// terminated, not failed (destroy idempotency).
-		if class == clouddriver.FailNotFound {
-			for _, id := range req.GetVmIds() {
-				_ = stream.Send(&pluginv1.DestroyEvent{VmId: id, Message: "already absent"})
+	}
+	probe := func(pctx context.Context, vmID string) clouddriver.GoneResult {
+		inst, perr := a.describeOne(pctx, cli, vmID)
+		if perr != nil {
+			if errors.Is(perr, errInstanceGone) || clouddriver.Classify(classifyAWS, perr) == clouddriver.FailNotFound {
+				return clouddriver.GoneResult{Gone: true}
 			}
-			return nil
+			// Transient read error: keep polling.
+			return clouddriver.GoneResult{}
 		}
-		_ = stream.Send(&pluginv1.DestroyEvent{Message: clouddriver.FailMessage(class, "TerminateInstances", err), Failed: true})
-		return nil
+		state := string(inst.State.Name)
+		return clouddriver.GoneResult{
+			Gone:  inst.State.Name == ec2types.InstanceStateNameTerminated,
+			State: state,
+		}
 	}
 
-	for _, st := range out.TerminatingInstances {
-		_ = stream.Send(&pluginv1.DestroyEvent{
-			VmId:    aws.ToString(st.InstanceId),
-			Message: fmt.Sprintf("terminating (%s)", st.CurrentState.Name),
-		})
-	}
-	return nil
+	results, phaseErr := clouddriver.ConfirmDestroy(ctx, defaultWaitBackoff(), req.GetVmIds(), del, probe,
+		func(msg string) { _ = stream.Send(&pluginv1.DestroyEvent{Message: msg}) })
+	return clouddriver.ReportDestroy(stream, results, phaseErr, classifyAWS)
 }
 
 // Status polls one VM (DescribeInstances). credentials arrive through the separate

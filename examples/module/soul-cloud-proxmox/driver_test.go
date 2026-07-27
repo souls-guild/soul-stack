@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"errors"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -54,8 +55,9 @@ type fakePVE struct {
 	stopErr   error
 	stopCalls int
 
-	deleteErr   error
-	deleteCalls int
+	deleteErr    error
+	deleteCalls  int
+	deletedVMIDs []int
 
 	// statusSeq returns values in order for each call; the last element sticks.
 	statusSeq []VMStatus
@@ -123,11 +125,12 @@ func (f *fakePVE) StopVM(_ context.Context, _ string, _ int) (string, error) {
 	return "UPID:test:stop", nil
 }
 
-func (f *fakePVE) DeleteVM(_ context.Context, _ string, _ int) (string, error) {
+func (f *fakePVE) DeleteVM(_ context.Context, _ string, vmid int) (string, error) {
 	f.deleteCalls++
 	if f.deleteErr != nil {
 		return "", f.deleteErr
 	}
+	f.deletedVMIDs = append(f.deletedVMIDs, vmid)
 	return "UPID:test:delete", nil
 }
 
@@ -136,6 +139,11 @@ func (f *fakePVE) GetVMStatus(_ context.Context, node string, vmid int) (VMStatu
 	f.statusN++
 	if f.statusFn != nil {
 		return f.statusFn(call, node, vmid)
+	}
+	// Model reality for the teardown probe: a VM already deleted reads back as
+	// not-found (NIM-191 confirms deletions).
+	if slices.Contains(f.deletedVMIDs, vmid) {
+		return VMStatus{}, &pveHTTPError{Status: 404, Body: "no such vm"}
 	}
 	if f.statusErr != nil {
 		return VMStatus{}, f.statusErr
@@ -688,8 +696,11 @@ func TestDestroy_PerVM(t *testing.T) {
 // TestDestroy_NotFoundIsIdempotent - Proxmox 500 "does not exist" on stop ->
 // idempotent success, without passing to delete.
 func TestDestroy_NotFoundIsIdempotent(t *testing.T) {
+	withFastBackoff(t, 5)
 	f := &fakePVE{
-		stopErr: &pveHTTPError{Status: 500, Body: "VM 999 does not exist"},
+		// The VM does not exist: both the stop and the confirming status read say so.
+		stopErr:   &pveHTTPError{Status: 500, Body: "VM 999 does not exist"},
+		statusErr: &pveHTTPError{Status: 500, Body: "VM 999 does not exist"},
 	}
 	withFakePVE(t, f)
 	d := &ProxmoxDriver{}
@@ -815,6 +826,33 @@ func TestList_UsesCredentialsField(t *testing.T) {
 	}
 	if len(s.sent) != 2 {
 		t.Errorf("list events=%d, want 2 (qemu+run-list match)", len(s.sent))
+	}
+}
+
+// TestDestroy_UnconfirmedIsNotSuccess (NIM-191): stop+delete are Proxmox
+// tasks — the API returning a task id is not proof the VM is gone. One still
+// readable afterwards must be reported as a failure.
+func TestDestroy_UnconfirmedIsNotSuccess(t *testing.T) {
+	withFastBackoff(t, 2)
+	// The VM survives the delete task — the status read keeps returning it.
+	f := &fakePVE{statusFn: func(_ int, node string, vmid int) (VMStatus, error) {
+		return VMStatus{Node: node, VMID: vmid, Status: "running"}, nil
+	}}
+	withFakePVE(t, f)
+	d := &ProxmoxDriver{}
+	s := &destroyStream{}
+	if err := d.Destroy(&pluginv1.DestroyRequest{
+		VmIds:       []string{"pve1/10001"},
+		Credentials: mustStruct(t, baseCreds()),
+	}, s); err != nil {
+		t.Fatalf("Destroy: %v", err)
+	}
+	failed := false
+	for _, ev := range s.sent {
+		failed = failed || ev.Failed
+	}
+	if !failed {
+		t.Fatalf("an unconfirmed teardown must not be reported as success; events=%+v", s.sent)
 	}
 }
 

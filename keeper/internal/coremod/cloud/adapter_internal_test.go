@@ -138,3 +138,72 @@ func TestCollectCreateVMs_RecvError(t *testing.T) {
 		t.Fatalf("err = %v, want wrap of %v", err, wantErr)
 	}
 }
+
+// fakeDestroyStream replays a canned DestroyEvent sequence, then EOF.
+type fakeDestroyStream struct {
+	events []*pluginv1.DestroyEvent
+	i      int
+}
+
+func (f *fakeDestroyStream) Recv() (*pluginv1.DestroyEvent, error) {
+	if f.i < len(f.events) {
+		ev := f.events[f.i]
+		f.i++
+		return ev, nil
+	}
+	return nil, io.EOF
+}
+
+// TestCollectDestroyed_FailedIsNotDeleted is the keeper half of NIM-191: a
+// driver that could not confirm a teardown sends failed=true WITH the vm_id.
+// Counting that id as destroyed would cascade souls→destroyed (ADR-017) over a
+// VM that is still alive and billed.
+func TestCollectDestroyed_FailedIsNotDeleted(t *testing.T) {
+	stream := &fakeDestroyStream{events: []*pluginv1.DestroyEvent{
+		{VmId: "vm-ok", Message: "destroyed"},
+		{VmId: "vm-stuck", Failed: true, Message: "destroy not confirmed: the VM is still present"},
+	}}
+
+	destroyed, err := collectDestroyed(stream, 2)
+	if err == nil {
+		t.Fatal("an unconfirmed teardown must fail the call, not pass silently")
+	}
+	if len(destroyed) != 1 || destroyed[0] != "vm-ok" {
+		t.Fatalf("destroyed=%v, want only the confirmed vm-ok", destroyed)
+	}
+	for _, want := range []string{"vm-stuck", "1 of 2"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("err=%q, want it to mention %q", err, want)
+		}
+	}
+}
+
+// TestCollectDestroyed_AllConfirmed: the ordinary path still returns every id
+// with no error.
+func TestCollectDestroyed_AllConfirmed(t *testing.T) {
+	stream := &fakeDestroyStream{events: []*pluginv1.DestroyEvent{
+		{Message: "confirm-destroy: 0/2 gone (attempt 1/25)"}, // progress, no vm_id
+		{VmId: "vm-1", Message: "destroyed"},
+		{VmId: "vm-2", Message: "destroyed"},
+	}}
+
+	destroyed, err := collectDestroyed(stream, 2)
+	if err != nil {
+		t.Fatalf("collectDestroyed: %v", err)
+	}
+	if len(destroyed) != 2 {
+		t.Fatalf("destroyed=%v, want both VMs", destroyed)
+	}
+}
+
+// TestCollectDestroyed_PhaseFailureWithoutVMID: a stream-level failure event
+// (no vm_id) must still fail the call rather than read as "nothing to do".
+func TestCollectDestroyed_PhaseFailureWithoutVMID(t *testing.T) {
+	stream := &fakeDestroyStream{events: []*pluginv1.DestroyEvent{
+		{Failed: true, Message: "auth: wb-client: token expired"},
+	}}
+
+	if _, err := collectDestroyed(stream, 1); err == nil {
+		t.Fatal("a driver-level destroy failure must surface as an error")
+	}
+}

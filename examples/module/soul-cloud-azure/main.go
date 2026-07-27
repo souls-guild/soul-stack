@@ -522,27 +522,32 @@ func (a *AzureDriver) Destroy(req *pluginv1.DestroyRequest, stream grpc.ServerSt
 	}
 
 	backoff := defaultBackoff()
-	for _, vmName := range req.GetVmIds() {
-		names := makeResourceNames(vmName)
-		allMissing, stepErr := a.destroyOne(ctx, cli, backoff, creds.ResourceGroup, names)
-		if stepErr != nil {
-			class := clouddriver.Classify(classifyAzure, stepErr)
-			_ = stream.Send(&pluginv1.DestroyEvent{
-				VmId:    vmName,
-				Message: clouddriver.FailMessage(class, "destroy", stepErr),
-				Failed:  true,
-			})
-			continue
-		}
-		// All three steps returned not-found => resources are already absent =>
-		// idempotent. Otherwise at least one was actually deleted => "terminated".
-		msg := "terminated"
-		if allMissing {
-			msg = "already absent"
-		}
-		_ = stream.Send(&pluginv1.DestroyEvent{VmId: vmName, Message: msg})
+	// destroyOne deletes VM + NIC + disk; confirm the VM itself is really gone
+	// afterwards — see [clouddriver.ConfirmDestroy].
+	del := func(dctx context.Context, vmName string) error {
+		_, stepErr := a.destroyOne(dctx, cli, backoff, creds.ResourceGroup, makeResourceNames(vmName))
+		return stepErr
 	}
-	return nil
+	probe := func(pctx context.Context, vmName string) clouddriver.GoneResult {
+		resp, perr := cli.vms.Get(pctx, creds.ResourceGroup, vmName, nil)
+		if perr != nil {
+			if clouddriver.Classify(classifyAzure, perr) == clouddriver.FailNotFound {
+				return clouddriver.GoneResult{Gone: true}
+			}
+			return clouddriver.GoneResult{}
+		}
+		state := ""
+		if resp.Properties != nil && resp.Properties.ProvisioningState != nil {
+			state = *resp.Properties.ProvisioningState
+		}
+		// A failed provisioning state after a delete request means the teardown
+		// itself failed; ARM will not retry on its own.
+		return clouddriver.GoneResult{State: state, DeleteFailed: state == "Failed"}
+	}
+
+	results, phaseErr := clouddriver.ConfirmDestroy(ctx, defaultWaitBackoff(), req.GetVmIds(), del, probe,
+		func(msg string) { _ = stream.Send(&pluginv1.DestroyEvent{Message: msg}) })
+	return clouddriver.ReportDestroy(stream, results, phaseErr, classifyAzure)
 }
 
 // destroyOne performs VM -> NIC -> PIP, each through Retry. not-found at any step

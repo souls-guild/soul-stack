@@ -665,6 +665,32 @@ func TestDestroy_NotFoundIsIdempotent(t *testing.T) {
 	}
 }
 
+// TestDestroy_UnconfirmedIsNotSuccess (NIM-191): a finished delete-Operation
+// is not proof the instance is gone. One still readable afterwards must be
+// reported as a failure, not silently counted as destroyed.
+func TestDestroy_UnconfirmedIsNotSuccess(t *testing.T) {
+	withFastBackoff(t, 2)
+	f := &fakeInstances{getSeq: []*computepb.Instance{
+		{Name: proto.String("soul-stuck"), Status: proto.String("RUNNING")},
+	}}
+	withFakeInstances(t, f)
+	d := &GcpDriver{}
+	s := &destroyStream{}
+	if err := d.Destroy(&pluginv1.DestroyRequest{
+		VmIds:       []string{"soul-stuck"},
+		Credentials: mustStruct(t, map[string]any{"project": "my-project", "zone": "europe-west1-b"}),
+	}, s); err != nil {
+		t.Fatalf("Destroy: %v", err)
+	}
+	failed := false
+	for _, ev := range s.sent {
+		failed = failed || ev.Failed
+	}
+	if !failed {
+		t.Fatalf("an unconfirmed teardown must not be reported as success; events=%+v", s.sent)
+	}
+}
+
 func TestClassifyGCP_Codes(t *testing.T) {
 	cases := []struct {
 		name string
