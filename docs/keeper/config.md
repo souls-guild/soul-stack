@@ -602,7 +602,7 @@ reaper:
 | `reaper.enabled` | `bool` | `true` | Turn on the Reaper. |
 | `reaper.interval` | `duration` | `1h` | Passage interval. |
 | `reaper.dry_run` | `bool` | `false` | Dry run without mutations. |
-| `reaper.batch_size` | `int` | `500` | Batch size of one pass. |
+| `reaper.batch_size` | `int` | `1000` | Batch size of one pass. The built-in default applies when the field is absent or `0`; the example `keeper.yml` sets `500` explicitly, which is why the two numbers differ. |
 | `reaper.lock_ttl` | `duration` | `5m` | TTL Redis-lease for leadership ([ADR-006](../adr/0006-cache-redis.md)). |
 | `reaper.rules` | `map<string, object>` | — | Cleaning rules. The structure of each rule (fields, types, conditional mandatoryness according to `action`) is normatively defined in [reaper.md → Rule structure](reaper.md); directory of predefined rules and binding to tables - [reaper.md → Rules](reaper.md). The `reclaim_apply_runs` rule is **disabled** by default and is enabled only under the gate - see [reaper.md → Enabling recovery](reaper.md) (WARN: do not enable when `acolytes: 0`). Cadence spawn (`spawn_due_cadence` / `action: spawn`) **is no longer in Reaper** - it went to the [Conductor](conductor.md) subsystem ([ADR-048](../adr/0048-conductor.md)); see block [`cadence_scheduler`](#cadence_scheduler). |
 
@@ -1027,19 +1027,49 @@ Hot-reload of the config with rewriting the changed value back to disk - end-to-
 
 **Multi-host coordination** - **split by parameter class** ([ADR-0073](../adr/0073-keeper-runtime-config-pg.md), amending [ADR-021(f)](../adr/0021-hot-reload-config.md)).
 
-- **Keys admitted to the `SettingsStore` overlay** (reload-able ∧ not a security gate ∧ scalar ∧ outside the bootstrap/require-restart classes) are stored cluster-wide in `keeper_settings` under the reserved `cfg_*` prefix and propagate to every instance over the `service:invalidate` Redis channel, with a ≤10s TTL-poll as the fallback - **no `SIGHUP`, no per-host file edit**. Precedence per key: built-in default < this file < Postgres; **no value is ever seeded from this file into Postgres**, so a key with no row simply keeps the value below. Setting such a key through the API writes it to Postgres, **not** back into `keeper.yml` (write-back stays a file-path mechanism). Break-glass `KEEPER_CONFIG_SOURCE=file` makes an instance ignore the overlay entirely.
+- **Keys admitted to the `SettingsStore` overlay** (reload-able ∧ not a security gate ∧ scalar ∧ outside the bootstrap/require-restart classes) are stored cluster-wide in `keeper_settings` under the reserved `cfg_*` prefix and propagate to every instance over the `service:invalidate` Redis channel, with a ≤10s TTL-poll as the fallback - **no `SIGHUP`, no per-host file edit**. Precedence per key: built-in default < Postgres < **this file** ([ADR-0073(b)](../adr/0073-keeper-runtime-config-pg.md), amended 2026-07-27) — a key this file sets explicitly keeps its local value, and the cluster value applies wherever this file is silent. **No value is ever seeded from this file into Postgres**, so a key with no row simply keeps the value below. Where the local file shadows a cluster value, `GET /v1/settings` reports it (`cluster_value` + `overridden_locally`), so the override is visibly ignored rather than silently. Setting such a key through the API writes it to Postgres, **not** back into `keeper.yml` (write-back stays a file-path mechanism). Break-glass `KEEPER_CONFIG_SOURCE=file` makes an instance ignore the overlay entirely.
 - **Direction of travel:** this file is meant to **shrink toward the bootstrap floor** — `postgres` / `vault` / `redis` (chicken-and-egg), `kid` and `listen` (per-instance), `logging` (must work before Postgres), `hot_reload` (governs the mechanism), plus the security-critical `auth.jwt.signing_key_ref` / `metrics.auth`. Everything outside that residue is a migration candidate, phased by whether a live hot-apply path exists for it. Settings that have moved are edited through the API / MCP / web UI under their own RBAC permission, not by editing this file.
 - **Everything else** - unchanged: each Keeper instance of the HA cluster ([ADR-002](../adr/0002-transport-grpc-ha.md#adr-002-transport-keeper--souls--grpc-bidirectional-stream-over-mtls-ha-keeper-cluster)) reloads its own `keeper.yml` independently, and keeping the files consistent across hosts stays an operational concern (CI / SSH rollout).
 
 ### SettingsStore — the admitted keys and their operator surface
 
-Admitted so far (the pilot phase; the set grows as `keeper.yml` shrinks toward the bootstrap floor):
+Admitted so far (the set grows as `keeper.yml` shrinks toward the bootstrap floor):
 
 | `keeper_settings` key | YAML path | Type | Accepted range | Built-in default |
 |---|---|---|---|---|
 | `cfg_toll_threshold` | `toll.threshold` | float | `(0, 1]` | `0.20` |
+| `cfg_toll_window_size` | `toll.window_size` | duration | `[1s, 1h]` | `1m` |
+| `cfg_toll_degraded_ttl` | `toll.degraded_ttl` | duration | `[1s, 24h]` | `1m` |
+| `cfg_toll_clear_grace` | `toll.clear_grace` | duration | `[1s, 1h]` | `1m` |
 | `cfg_tempo_voyage_create_rate` | `tempo.voyage_create.rate` | float | `(0, 10000]` | `10` |
 | `cfg_tempo_voyage_create_burst` | `tempo.voyage_create.burst` | int | `[1, 10000]` | `20` |
+| `cfg_tempo_voyage_preview_rate` | `tempo.voyage_preview.rate` | float | `(0, 10000]` | `30` |
+| `cfg_tempo_voyage_preview_burst` | `tempo.voyage_preview.burst` | int | `[1, 10000]` | `60` |
+| `cfg_reaper_interval` | `reaper.interval` | duration | `[1m, 24h]` | `1h` |
+| `cfg_reaper_batch_size` | `reaper.batch_size` | int | `[1, 100000]` | `1000` |
+| `cfg_reaper_dry_run` | `reaper.dry_run` | bool | `true \| false` | `false` |
+| `cfg_cadence_scheduler_poll_floor` | `cadence_scheduler.poll_floor` | duration | `[30s, 1h]` | `30s` |
+| `cfg_cadence_scheduler_poll_ceiling` | `cadence_scheduler.poll_ceiling` | duration | `[30s, 1h]` | `1m` |
+| `cfg_cadence_scheduler_poll_idle` | `cadence_scheduler.poll_idle` | duration | `[30s, 24h]` | `2m` |
+| `cfg_cadence_scheduler_lock_ttl` | `cadence_scheduler.lock_ttl` | duration | `[30s, 1h]` | `5m` |
+| `cfg_max_await_timeout` | `max_await_timeout` | duration | `[1m, 24h]` | `30m` |
+| `cfg_logging_level` | `logging.level` | string | `debug \| info \| warn \| error` | `info` |
+| `cfg_cloud_init_bootstrap_endpoint` | `cloud_init.bootstrap_endpoint` | string | non-empty | — |
+| `cfg_cloud_init_event_stream_port` | `cloud_init.event_stream_port` | int | `[1, 65535]` | — (`0` → the bootstrap port) |
+| `cfg_cloud_init_tls_ca_ref` | `cloud_init.tls_ca_ref` | string | vault-ref | — |
+| `cfg_cloud_init_soul_binary_url` | `cloud_init.soul_binary_url` | string | non-empty | — |
+| `cfg_cloud_init_soul_binary_ca` | `cloud_init.soul_binary_ca` | string | non-empty | — |
+| `cfg_cloud_init_soul_version` | `cloud_init.soul_version` | string | non-empty | — |
+
+A `duration` value is stored and returned in its normalized form (`120m` is accepted and kept as `2h`), so the catalog and the file spell the same value the same way. A key with no built-in default (`—` above) simply has no value until someone sets one; `DELETE` is the way back to that state, since an empty value is refused on write.
+
+**`logging.level` is admitted, the rest of `logging.*` is not.** The level has a live apply path (the daemon's reload callback switches the running logger) and turning debug on across the whole cluster is the single most common operation this store exists for. The [ADR-0073(b)](../adr/0073-keeper-runtime-config-pg.md) reason for keeping `logging.*` in the file — logging must work *before* Postgres — covers building the writer (`format` / `file` / `rotation`), which stays file-only.
+
+**`cloud_init.*` is admitted by explicit decision, ahead of a redesign of the block.** Note what it means operationally: these fields decide where a freshly created VM downloads its `soul` binary and which CA it trusts, so granting `setting.update` grants the ability to redirect that download — a supply-chain surface rather than an operational tunable in the sense of [ADR-0073(j.2)](../adr/0073-keeper-runtime-config-pg.md). `tls_ca_ref` holds a **vault-ref**, a pointer; the certificate material itself never enters `keeper_settings`. Until the redesign, treat `setting.update` as a privilege on the same level as provisioning.
+
+**Admission requires a LIVE apply path, not just a reload-able label.** Every key above has a consumer that re-resolves it from the current `config.Store` snapshot — a per-tick read (Reaper, Conductor), a per-request read (Tempo), a per-step read (`max_await_timeout`) or an `OnReload` callback (Toll). A key whose consumer reads it once at startup is deliberately left out, even when this file marks its block reload-able: the overlay would accept the edit and silently change nothing until the next restart, which is worse than not offering the field at all. On top of the four ADR-0073(j) rules, that is what keeps `plugins.*`, `plugin_runtime.*`, `postgres.pool.*`, `sigil_anchors_reload_interval` and `audit.*` out of the registry for now — their values are read while the process starts (and the `audit.*` block currently has no runtime consumer at all); making them genuinely hot is tracked as its own work, after which they become admission candidates. `auth.*`, `vault.*`, `metrics.auth.*` and the rest of the bootstrap floor stay out for the ADR-0073(b/j.2) reasons instead — a fail-soft overlay has no business holding a security gate.
+
+Cross-field invariants are enforced **before the row is written**: `PUT` merges the candidate override set onto the file and runs the full validation pipeline, so `poll_floor: 10m` against a `poll_ceiling: 1m` is a `422` and Postgres is untouched. The check runs twice — as this instance sees the merge, and as an instance whose file does not set that key would see it — because under the file-wins precedence a value the answering node ignores would otherwise be committed and then rejected by every node that applies it. `DELETE` is validated the same way — dropping an override can break an invariant the override was holding up. Without that gate a per-field-valid row would be rejected by every reader as a whole (all-or-nothing) and the cluster would sit on its last-good overlay.
 
 Operator API (RBAC family `setting.*`, cluster-level, no selector):
 

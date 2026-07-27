@@ -44,9 +44,12 @@ const LeaderLeaseKey = "reaper:leader"
 // Defaults for empty fields in keeper.yml (parser leaves zero-value).
 // Match docs/keeper/reaper.md (Config).
 const (
-	defaultInterval       = time.Hour
+	// Interval and rule batch live in shared/config next to the other
+	// keeper.yml defaults: the SettingsStore registry resolves the effective
+	// value the same way this Runner does (ADR-0073(b)).
+	defaultInterval       = config.DefaultReaperInterval
 	defaultLockTTL        = 5 * time.Minute
-	defaultRuleBatch      = 1000
+	defaultRuleBatch      = config.DefaultReaperBatchSize
 	defaultPurgeMaxAge    = 365 * 24 * time.Hour
 	defaultAcquireBackoff = 5 * time.Second
 

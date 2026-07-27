@@ -27,6 +27,7 @@ import (
 	"github.com/souls-guild/soul-stack/keeper/internal/serviceregistry"
 	"github.com/souls-guild/soul-stack/keeper/internal/settingsstore"
 	"github.com/souls-guild/soul-stack/shared/config"
+	"github.com/souls-guild/soul-stack/shared/diag"
 )
 
 // SettingsConfigReader — the live config surface: the effective snapshot plus
@@ -36,18 +37,21 @@ import (
 type SettingsConfigReader interface {
 	Get() *config.KeeperConfig
 	Document() *config.Document
+	ValidateOverlay(entries []config.OverlayEntry) []diag.Diagnostic
 }
 
 // SettingsOverlayReader — the SettingsStore surface: which keys Postgres
-// currently overrides, and a synchronous re-read after a write. Implemented by
-// *settingsstore.Store.
+// currently overrides, the entries as the merge sees them, and a synchronous
+// re-read after a write. Implemented by *settingsstore.Store.
 type SettingsOverlayReader interface {
 	Values() map[string]any
+	Overlay() []config.OverlayEntry
 	Refresh(ctx context.Context) error
 }
 
-// Value sources, reported per key (ADR-0073(b)): built-in default < file <
-// Postgres.
+// Value sources, reported per key (ADR-0073(b), amended): built-in default <
+// Postgres < this instance's file — a local decision on a host outranks the
+// cluster-wide one.
 const (
 	SettingSourceDefault = "default"
 	SettingSourceFile    = "file"
@@ -90,6 +94,11 @@ func SettingsSpecStub() *SettingsHandler {
 // SettingView — FLAT domain body of one catalog entry. Type/Bounds/Default
 // describe the field so the UI renders the form from the backend catalog
 // instead of hardcoding it (ADR-042); Value/Source describe the here-and-now.
+//
+// ClusterValue/OverriddenLocally are set only when this instance's keeper.yml
+// shadows an existing cluster override (ADR-0073(b), amended — the file wins):
+// the pair is what lets the UI say "the cluster asks for X, this host runs Y
+// because its file says so" instead of silently showing the local value.
 type SettingView struct {
 	Key         string
 	YAMLPath    string
@@ -99,6 +108,9 @@ type SettingView struct {
 	Value       any
 	Source      string
 	Description string
+
+	ClusterValue      any
+	OverriddenLocally bool
 }
 
 // ListTyped — GET /v1/settings (READ, no audit): the whole registry with the
@@ -158,6 +170,9 @@ func (h *SettingsHandler) PutTyped(ctx context.Context, claims *jwt.Claims, key,
 	if err != nil {
 		return zero, &problemError{problem.New(problem.TypeValidationFailed, "", err.Error())}
 	}
+	if err := h.validateCandidate(withOverride(h.overlay.Overlay(), f.YAMLPath, v)); err != nil {
+		return zero, err
+	}
 
 	previous := h.overlay.Values()[key]
 
@@ -192,6 +207,11 @@ func (h *SettingsHandler) DeleteTyped(ctx context.Context, key string) (SettingU
 			"unknown setting key "+key+" (see GET /v1/settings for the catalog)")}
 	}
 	previous := h.overlay.Values()[key]
+	// Dropping an override is a config change like any other: the layer below
+	// may well break an invariant the override was holding up.
+	if err := h.validateCandidate(withoutOverride(h.overlay.Overlay(), f.YAMLPath)); err != nil {
+		return zero, err
+	}
 
 	if err := h.svc.DeleteSetting(ctx, f.Key); err != nil {
 		if errors.Is(err, serviceregistry.ErrSettingNotFound) {
@@ -207,6 +227,54 @@ func (h *SettingsHandler) DeleteTyped(ctx context.Context, key string) (SettingU
 		Key:      f.Key,
 		Previous: previous,
 	}, nil
+}
+
+// validateCandidate dry-runs the whole prospective overlay through the config
+// pipeline before anything is written (ADR-0073(i)). The per-field range check
+// cannot see cross-field invariants — `poll_floor <= poll_ceiling` exists only on
+// the merged config — and a row that passes PUT but fails the merge would be
+// rejected by every reader as a whole (all-or-nothing, ADR-0073(h)): the cluster
+// would keep its last-good overlay while a restarting instance came up on the
+// file base. Fail-closed: 422, nothing written.
+func (h *SettingsHandler) validateCandidate(entries []config.OverlayEntry) error {
+	diags := h.cfg.ValidateOverlay(entries)
+	if !diag.HasErrors(diags) {
+		return nil
+	}
+	return &problemError{problem.New(problem.TypeValidationFailed, "",
+		"the resulting configuration is invalid: "+firstError(diags))}
+}
+
+// withOverride returns entries with path set to value (replacing any existing
+// entry for it). The input is never mutated — it is the live snapshot.
+func withOverride(entries []config.OverlayEntry, path string, value any) []config.OverlayEntry {
+	out := make([]config.OverlayEntry, 0, len(entries)+1)
+	for _, e := range entries {
+		if e.Path != path {
+			out = append(out, e)
+		}
+	}
+	return append(out, config.OverlayEntry{Path: path, Value: value})
+}
+
+// withoutOverride returns entries with path removed.
+func withoutOverride(entries []config.OverlayEntry, path string) []config.OverlayEntry {
+	out := make([]config.OverlayEntry, 0, len(entries))
+	for _, e := range entries {
+		if e.Path != path {
+			out = append(out, e)
+		}
+	}
+	return out
+}
+
+func firstError(diags []diag.Diagnostic) string {
+	for _, d := range diags {
+		if d.Level == diag.LevelError {
+			return d.Message
+		}
+	}
+	return "unknown validation error"
 }
 
 // refreshLocal re-reads the overlay on THIS node right after a write: the
@@ -239,17 +307,26 @@ func (h *SettingsHandler) writeProblem(err error, callerAID, msg string) error {
 }
 
 // settingView renders one catalog entry. `source` is answered from evidence
-// rather than guessed: an override in Postgres, else an explicit path in the
-// file document, else the built-in default.
+// rather than guessed, in the precedence order of ADR-0073(b) as amended: an
+// explicit path in THIS instance's file wins, else the cluster override, else
+// the built-in default.
+//
+// When the file wins over an existing cluster value, ClusterValue carries what
+// Postgres holds — otherwise the operator would see their PUT accepted and this
+// instance quietly ignoring it, with nothing in the catalog to explain why.
 func settingView(f settingsstore.Field, cfg *config.KeeperConfig, doc *config.Document, overridden map[string]any) SettingView {
+	inFile := doc != nil && doc.HasPath(f.YAMLPath)
+	clusterValue, inPG := overridden[f.Key]
+
 	source := SettingSourceDefault
 	switch {
-	case hasKey(overridden, f.Key):
-		source = SettingSourcePG
-	case doc != nil && doc.HasPath(f.YAMLPath):
+	case inFile:
 		source = SettingSourceFile
+	case inPG:
+		source = SettingSourcePG
 	}
-	return SettingView{
+
+	view := SettingView{
 		Key:         f.Key,
 		YAMLPath:    f.YAMLPath,
 		Type:        string(f.Kind),
@@ -259,6 +336,11 @@ func settingView(f settingsstore.Field, cfg *config.KeeperConfig, doc *config.Do
 		Source:      source,
 		Description: f.Description,
 	}
+	if inFile && inPG {
+		view.ClusterValue = clusterValue
+		view.OverriddenLocally = true
+	}
+	return view
 }
 
 func hasKey(m map[string]any, k string) bool {

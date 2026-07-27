@@ -3445,13 +3445,18 @@ components:
       additionalProperties: false
       properties:
         bounds:
-          description: accepted range, e.g. (0, 1]
+          description: accepted range, e.g. (0, 1] or [30s, 1h]; an enum ("debug | info | warn | error") or "true | false" where a range makes no sense
           type: string
+        cluster_value:
+          description: value stored cluster-wide, present only when this instance's file shadows it
         default: {}
         description:
           type: string
         key:
           type: string
+        overridden_locally:
+          description: true when keeper.yml on this instance wins over the cluster value
+          type: boolean
         source:
           enum:
             - default
@@ -3462,6 +3467,9 @@ components:
           enum:
             - float
             - int
+            - duration
+            - bool
+            - string
           type: string
         value:
           description: effective value on this instance
@@ -11262,7 +11270,7 @@ paths:
         - service
   /v1/settings:
     get:
-      description: Every admitted runtime setting with its type, range bounds, built-in default, the EFFECTIVE value on this instance and its source (default < file < pg, ADR-0073). Renders the settings form without hardcoding the field list in the UI. Permission setting.read. Read-only, no audit.
+      description: Every admitted runtime setting with its type, range bounds, built-in default, the EFFECTIVE value on this instance and its source (default < pg < file, ADR-0073 — the instance's own keeper.yml wins). Where the file shadows a cluster override the entry also carries cluster_value + overridden_locally. Renders the settings form without hardcoding the field list in the UI. Permission setting.read. Read-only, no audit.
       operationId: listSettings
       responses:
         "200":
@@ -11333,7 +11341,7 @@ paths:
       tags:
         - settings
     put:
-      description: Writes a cluster-wide override into keeper_settings and invalidates the other Keeper nodes, which re-merge it onto their keeper.yml without a restart (ADR-0073). Permission setting.update. 404 - the key is not in the registry; 422 - unparsable or out-of-range value, nothing is written.
+      description: Writes a cluster-wide override into keeper_settings and invalidates the other Keeper nodes, which re-merge it onto their keeper.yml without a restart (ADR-0073). An instance whose own keeper.yml sets the key keeps its local value; the catalog then reports cluster_value + overridden_locally. Permission setting.update. 404 - the key is not in the registry; 422 - unparsable value, out of range, or a cross-field invariant broken either here or on a node whose file is silent about the key; nothing is written.
       operationId: updateSetting
       parameters:
         - description: setting key from GET /v1/settings (cfg_* namespace of keeper_settings)

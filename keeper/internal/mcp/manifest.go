@@ -505,6 +505,40 @@ var catalogManifest = []toolEntry{
 		},
 	},
 
+	// --- SettingsStore (3) — Keeper runtime settings overlay (ADR-0073) ---
+	//
+	// The same catalog / override / revert surface as GET|PUT|DELETE
+	// /v1/settings, over the SAME handler instance: the field-registry gate
+	// (type, range bounds, cross-field dry-run merge) cannot differ between the
+	// two transports. Cluster-level, no selector.
+	{
+		status: toolStatusImplemented,
+		decl: toolDeclaration{
+			Name:         "keeper.setting.list",
+			Description:  "Lists the Keeper runtime settings catalog: per key its yaml path, type, accepted range, built-in default, the EFFECTIVE value on the answering instance and its source (default < pg < file — the instance's own keeper.yml wins). Permission: setting.read. Use this before setting anything — admission is enumerated, a key outside the catalog does not exist.",
+			InputSchema:  schemaEmptyObject,
+			OutputSchema: schemaSettingListOutput,
+		},
+	},
+	{
+		status: toolStatusImplemented,
+		decl: toolDeclaration{
+			Name:         "keeper.setting.update",
+			Description:  "Sets a cluster-wide override for one runtime setting; it reaches every Keeper instance without a restart, except where that instance's own keeper.yml sets the key and wins (the reply then carries cluster_value + overridden_locally). Permission: setting.update. The value is text in the field's own notation (\"0.5\", \"20\", \"2h\", \"true\"). Fails with code=not-found for a key outside the catalog and validation-failed when the value is out of range or would break a cross-field invariant — in both cases nothing is written.",
+			InputSchema:  schemaSettingUpdateInput,
+			OutputSchema: schemaSettingView,
+		},
+	},
+	{
+		status: toolStatusImplemented,
+		decl: toolDeclaration{
+			Name:         "keeper.setting.delete",
+			Description:  "Drops the cluster-wide override of one setting: every instance falls back to its own keeper.yml where that file sets the key, and to the built-in default otherwise. Permission: setting.delete. Fails with code=not-found when the key is unknown or has no override, and validation-failed when dropping it would leave an invalid configuration.",
+			InputSchema:  schemaSettingDeleteInput,
+			OutputSchema: schemaSettingView,
+		},
+	},
+
 	// --- Augur (6) — Omen/Rite registries, implemented (ADR-025) ---
 	//
 	// 4-segment tool-name keeper.augur.<resource>.<action> ↔ 2-segment
@@ -1734,6 +1768,64 @@ var (
 "updated_by_aid":{"type":"string"},
 "created_at":{"type":"string","format":"date-time"},
 "updated_at":{"type":"string","format":"date-time"}}}`)
+
+	// SettingsStore (ADR-0073). `value` / `default` are typed JSON scalars — a
+	// number, a duration string ("30s") or a boolean, per the entry's `type`.
+	schemaSettingView = json.RawMessage(`{
+"$schema":"https://json-schema.org/draft/2020-12/schema",
+"type":"object",
+"additionalProperties":false,
+"required":["key","yaml_path","type","bounds","default","value","source","description"],
+"properties":{
+"key":{"type":"string"},
+"yaml_path":{"type":"string"},
+"type":{"type":"string","enum":["float","int","duration","bool","string"]},
+"bounds":{"type":"string"},
+"default":{},
+"value":{},
+"source":{"type":"string","enum":["default","file","pg"]},
+"description":{"type":"string"},
+"cluster_value":{},
+"overridden_locally":{"type":"boolean"}}}`)
+
+	schemaSettingListOutput = json.RawMessage(`{
+"$schema":"https://json-schema.org/draft/2020-12/schema",
+"type":"object",
+"additionalProperties":false,
+"required":["settings"],
+"properties":{
+"settings":{"type":"array","items":{
+"type":"object",
+"additionalProperties":false,
+"required":["key","yaml_path","type","bounds","default","value","source","description"],
+"properties":{
+"key":{"type":"string"},
+"yaml_path":{"type":"string"},
+"type":{"type":"string","enum":["float","int","duration","bool","string"]},
+"bounds":{"type":"string"},
+"default":{},
+"value":{},
+"source":{"type":"string","enum":["default","file","pg"]},
+"description":{"type":"string"},
+"cluster_value":{},
+"overridden_locally":{"type":"boolean"}}}}}}`)
+
+	schemaSettingUpdateInput = json.RawMessage(`{
+"$schema":"https://json-schema.org/draft/2020-12/schema",
+"type":"object",
+"additionalProperties":false,
+"required":["key","value"],
+"properties":{
+"key":{"type":"string"},
+"value":{"type":"string"}}}`)
+
+	schemaSettingDeleteInput = json.RawMessage(`{
+"$schema":"https://json-schema.org/draft/2020-12/schema",
+"type":"object",
+"additionalProperties":false,
+"required":["key"],
+"properties":{
+"key":{"type":"string"}}}`)
 
 	schemaServiceListOutput = json.RawMessage(`{
 "$schema":"https://json-schema.org/draft/2020-12/schema",

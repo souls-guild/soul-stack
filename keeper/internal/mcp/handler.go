@@ -107,6 +107,13 @@ type HandlerDeps struct {
 	// (match/enqueue), which resolves a Portent from a Soul over gRPC.
 	OracleSvc *oracle.Service
 
+	// Settings — the SettingsStore operator surface
+	// ([handlers.SettingsHandler], ADR-0073). The SAME instance REST mounts, so
+	// the write-gate cannot differ between transports. nil → setting.*-tools
+	// dispatch but return internal-error "not configured" (ServiceSvc pattern):
+	// the overlay is unwired under the break-glass switch.
+	Settings *handlers.SettingsHandler
+
 	AuditWriter AuditWriter
 	Logger      *slog.Logger
 
@@ -520,6 +527,14 @@ func (h *Handler) handleToolsCall(ctx context.Context, claims *jwt.Claims, req j
 		return h.callServiceList(ctx, claims, req, p.Arguments), false
 	case "keeper.service.deregister":
 		return h.callServiceDeregister(ctx, claims, req, p.Arguments), false
+
+	// SettingsStore — the runtime settings overlay (ADR-0073).
+	case "keeper.setting.list":
+		return h.callSettingList(ctx, claims, req, p.Arguments), false
+	case "keeper.setting.update":
+		return h.callSettingUpdate(ctx, claims, req, p.Arguments), false
+	case "keeper.setting.delete":
+		return h.callSettingDelete(ctx, claims, req, p.Arguments), false
 
 	// Augur-tools (Omen / Rite registries, ADR-025). 2-segment resource in
 	// permission (omen.<action> / rite.<action>) ↔ 4-segment tool name

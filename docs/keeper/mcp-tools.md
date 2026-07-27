@@ -165,7 +165,7 @@ Full list of error codes - stable URN suffixes from [operator-api.md → Error t
 
 Extending the code list - only-add symmetrically Operator API.
 
-## Catalog 89 MCP-tool
+## Catalog 93 MCP-tool
 
 1:1 with HTTP endpoints from [operator-api.md → Mapping endpoint ↔ MCP-tool ↔ permission](operator-api.md#mapping-endpoint--mcp-tool--permission). For each tool: input schema (short table of fields), output schema, cross-link to the endpoint section of operator-api.md as a source of truth for semantics.
 
@@ -262,6 +262,53 @@ Removes a Service entry from `service_registry` by name. Permission: `service.de
 **Output:** empty object (REST equivalent - 204 No Content).
 
 Errors: `not-found` (no entry). Audit: `service.deregistered`.
+
+### Setting (3)
+
+Keeper runtime settings overlay ([ADR-0073](../adr/0073-keeper-runtime-config-pg.md)): the `cfg_*` rows of `keeper_settings` merged onto `keeper.yml`, cluster-wide and without a restart. 1:1 with REST `GET /v1/settings`, `PUT|DELETE /v1/settings/{key}` and permission (`keeper.setting.<action>` ↔ `setting.<action>`, selector - NoSelector). The tools run over the **same** `SettingsHandler` instance REST mounts, so the write-gate (field-registry parse, range bounds, cross-field dry-run merge) cannot differ between transports. When the overlay is unwired (break-glass `KEEPER_CONFIG_SOURCE=file`, or a Postgres-less start), a call returns `internal-error` ("settings store is not configured").
+
+#### `keeper.setting.list`
+
+Catalog of the admitted runtime settings with the effective value on the answering instance. Permission: `setting.read`. Endpoint: [`GET /v1/settings`](config.md#settingsstore--the-admitted-keys-and-their-operator-surface). Async: no.
+
+**Input:** empty object.
+
+**Output:**
+
+| Field | Type | Meaning |
+|---|---|---|
+| `settings` | `array<SettingView>` | Items - `{key, yaml_path, type ∈ {float,int,duration,bool,string}, bounds, default, value, source ∈ {default,file,pg}, description}` + `cluster_value` / `overridden_locally` where this instance's `keeper.yml` shadows a cluster override. |
+
+Reads are not audited. Admission is enumerated: a key outside this catalog does not exist, so read it before writing.
+
+#### `keeper.setting.update`
+
+Sets a cluster-wide override for one setting; it reaches every instance over the `service:invalidate` channel (TTL-poll as the fallback), with no restart and no per-host file edit. It does **not** take effect on an instance whose own `keeper.yml` sets that key - the local file wins ([ADR-0073(b)](../adr/0073-keeper-runtime-config-pg.md), amended) - and the reply says so via `source: file` + `cluster_value`. Permission: `setting.update`. Endpoint: [`PUT /v1/settings/{key}`](config.md#settingsstore--the-admitted-keys-and-their-operator-surface). Async: no.
+
+**Input:**
+
+| Field | Type | Required | Meaning |
+|---|---|---|---|
+| `key` | `string` | yes | Catalog key (`cfg_*`). |
+| `value` | `string` | yes | Value in the field's own notation: `"0.5"`, `"20"`, `"2h"`, `"true"`. A duration is normalized (`120m` is stored as `2h`). |
+
+**Output:** `SettingView` - the entry as it now reads on this instance.
+
+Errors: `not-found` (key outside the catalog), `validation-failed` (out of range, or the resulting configuration would not validate - e.g. `poll_floor` above `poll_ceiling`). In both cases nothing is written. Audit: `setting.updated`.
+
+#### `keeper.setting.delete`
+
+Drops the override, so the value below (`keeper.yml`, or the built-in default) is back in effect cluster-wide. Permission: `setting.delete`. Endpoint: [`DELETE /v1/settings/{key}`](config.md#settingsstore--the-admitted-keys-and-their-operator-surface). Async: no.
+
+**Input:**
+
+| Field | Type | Required | Meaning |
+|---|---|---|---|
+| `key` | `string` | yes | Catalog key (`cfg_*`). |
+
+**Output:** `SettingView` - the entry after the revert.
+
+Errors: `not-found` (unknown key, or no override to drop), `validation-failed` (dropping it would leave an invalid configuration - the layer below can break an invariant the override was holding up). Audit: `setting.deleted`.
 
 ### Augur (6)
 

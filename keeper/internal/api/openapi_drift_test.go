@@ -37,6 +37,7 @@ import (
 	"github.com/souls-guild/soul-stack/keeper/internal/serviceregistry"
 	"github.com/souls-guild/soul-stack/keeper/internal/sigil"
 	"github.com/souls-guild/soul-stack/shared/config"
+	"github.com/souls-guild/soul-stack/shared/diag"
 )
 
 // route — a normalized route key for set comparison.
@@ -390,11 +391,15 @@ type stubSettingsConfig struct{}
 
 func (stubSettingsConfig) Get() *config.KeeperConfig  { return nil }
 func (stubSettingsConfig) Document() *config.Document { return nil }
+func (stubSettingsConfig) ValidateOverlay([]config.OverlayEntry) []diag.Diagnostic {
+	return nil
+}
 
 type stubSettingsOverlay struct{}
 
-func (stubSettingsOverlay) Values() map[string]any        { return nil }
-func (stubSettingsOverlay) Refresh(context.Context) error { return nil }
+func (stubSettingsOverlay) Values() map[string]any         { return nil }
+func (stubSettingsOverlay) Overlay() []config.OverlayEntry { return nil }
+func (stubSettingsOverlay) Refresh(context.Context) error  { return nil }
 
 type stubProvisioningReader struct{}
 

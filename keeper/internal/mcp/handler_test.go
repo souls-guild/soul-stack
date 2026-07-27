@@ -920,8 +920,8 @@ func TestDispatch_ToolsList_HasAllTools(t *testing.T) {
 	if err := json.Unmarshal(resp.Result, &res); err != nil {
 		t.Fatalf("unmarshal: %v", err)
 	}
-	if len(res.Tools) != 90 {
-		t.Errorf("tool count = %d, want 90", len(res.Tools))
+	if len(res.Tools) != 93 {
+		t.Errorf("tool count = %d, want 93", len(res.Tools))
 	}
 	// Names must stay stable (spec — mcp-tools.md).
 	names := map[string]bool{}

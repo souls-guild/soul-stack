@@ -21,6 +21,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"sort"
 	"time"
 
@@ -33,7 +34,9 @@ import (
 // OverlayEntry is one override: a goccy yaml path plus the scalar to place
 // there. Path syntax matches [PatchKeeper] (`$.toll.threshold`); an absent path
 // is created ([PatchKeeperOrCreate]) — optional blocks are legal, so a key
-// inside a block the file never mentions must still be overridable.
+// inside a block the file never mentions must still be overridable, and that is
+// precisely where the cluster value applies: a path the file DOES set keeps its
+// local value (ADR-0073(b), amended — the file wins).
 //
 // Value must be a comparable scalar (ADR-0073(j.3) — structural values are
 // deferred): the idempotence guard compares entries by ==.
@@ -48,7 +51,8 @@ type OverlayEntry struct {
 // that cannot produce a trustworthy snapshot returns its last good one, or
 // nothing at all.
 //
-// A nil/empty result means "no overrides": the file layer shows through.
+// A nil/empty result means "no overrides": the built-in defaults show through
+// wherever the file is silent.
 type OverlaySource interface {
 	Overlay() []OverlayEntry
 }
@@ -110,10 +114,73 @@ func (s *Store[T]) RefreshOverlay(ctx context.Context) ReloadResult {
 	return s.reloadWith(ctx, audit.SourceKeeperInternal, entries, changed)
 }
 
-// AppliedOverlay reports the overrides merged into the current snapshot, keyed
-// by yaml path. Read surface for the settings API, which answers with the
-// effective value plus its source ∈ {default, file, pg} — the discoverability
-// that replaces seeding the table from the file (ADR-0073(f)).
+// ValidateOverlay dry-runs a candidate override set: it merges the entries onto
+// the file base and pushes the result through the full validation pipeline
+// WITHOUT swapping the snapshot. Errors mean "this set would be rejected".
+//
+// The write-gate needs it because a per-field range check cannot see cross-field
+// invariants (ADR-0073(i)): `poll_floor <= poll_ceiling` only exists on the
+// merged config. A value that passed PUT but failed the merge would be rejected
+// by every reader as a whole (all-or-nothing, ADR-0073(h)), leaving the cluster
+// stuck on its last-good overlay while a restarting instance came up on the file
+// base — a split the write path must prevent, not discover afterwards.
+func (s *Store[T]) ValidateOverlay(entries []OverlayEntry) []diag.Diagnostic {
+	src, err := os.ReadFile(s.path)
+	if err != nil {
+		return []diag.Diagnostic{{
+			Level:   diag.LevelError,
+			Phase:   diag.PhaseParse,
+			File:    s.path,
+			Code:    "io_error",
+			Message: err.Error(),
+		}}
+	}
+
+	// Two questions, because the answer differs per instance once the file wins
+	// (b): "what does this do HERE", where a locally-set key is skipped, and
+	// "what does it do on an instance whose file is silent", which applies the
+	// whole set. Judging only the first would let a value this node happens to
+	// ignore be committed and then rejected — as a whole, all-or-nothing (h) —
+	// by every node that does apply it.
+	for _, force := range []bool{false, true} {
+		if diags := s.validateMerged(src, entries, force); diag.HasErrors(diags) {
+			return diags
+		}
+	}
+	return nil
+}
+
+func (s *Store[T]) validateMerged(src []byte, entries []OverlayEntry, force bool) []diag.Diagnostic {
+	if len(entries) > 0 {
+		merged, odiags := applyOverlayWith(s.path, src, entries, force)
+		if len(odiags) > 0 {
+			return odiags
+		}
+		src = merged
+	}
+	switch s.kind {
+	case storeKindKeeper:
+		_, _, diags, _ := LoadKeeperFromBytes(s.path, src, s.opts)
+		return diags
+	case storeKindSoul:
+		_, _, diags, _ := LoadSoulFromBytes(s.path, src, s.opts)
+		return diags
+	default:
+		return []diag.Diagnostic{{
+			Level:   diag.LevelError,
+			Phase:   diag.PhaseParse,
+			File:    s.path,
+			Code:    "io_error",
+			Message: fmt.Sprintf("config: Store has unknown kind %d", s.kind),
+		}}
+	}
+}
+
+// AppliedOverlay reports the override set the current snapshot was merged from,
+// keyed by yaml path. Note that an entry here was not necessarily APPLIED: one
+// whose path the file also sets was skipped by the merge, because the file wins
+// (ADR-0073(b), amended). The settings API answers `source` from the file
+// document rather than from this map for exactly that reason.
 func (s *Store[T]) AppliedOverlay() map[string]any {
 	s.mu.Lock()
 	applied := s.appliedOverlay
@@ -130,12 +197,28 @@ func (s *Store[T]) AppliedOverlay() map[string]any {
 // bytes. All-or-nothing: a single unusable entry rejects the whole overlay
 // (ADR-0073(h)) — a partial merge would leave the cluster in a state no
 // operator asked for.
+//
+// ★ Precedence (ADR-0073(b), amended): the LOCAL FILE WINS. A path this
+// instance's `keeper.yml` sets explicitly is left alone — the cluster value
+// applies only where the file is silent. A local decision on a host is a
+// deliberate act by whoever administers that host, and a cluster-wide default
+// must not silently override it.
 func applyOverlay(path string, src []byte, entries []OverlayEntry) ([]byte, []diag.Diagnostic) {
+	return applyOverlayWith(path, src, entries, false)
+}
+
+// applyOverlayWith is the body of [applyOverlay]. With force, the file-wins rule
+// is suspended and every entry is applied — used only by [Store.ValidateOverlay]
+// to judge a candidate the way an instance whose file is silent would see it.
+func applyOverlayWith(path string, src []byte, entries []OverlayEntry, force bool) ([]byte, []diag.Diagnostic) {
 	doc, err := parseDocumentOnly(path, src)
 	if err != nil {
 		return nil, []diag.Diagnostic{overlayDiag(path, err)}
 	}
 	for _, e := range entries {
+		if !force && doc.HasPath(e.Path) {
+			continue
+		}
 		if err := PatchKeeperOrCreate(doc, e.Path, e.Value); err != nil {
 			return nil, []diag.Diagnostic{overlayDiag(path, fmt.Errorf("overlay %s: %w", e.Path, err))}
 		}

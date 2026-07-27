@@ -510,6 +510,18 @@ Permission mapping: `POST`→`service.register`, `GET`(list + get-`{name}`)→`s
 
 **The scenario directory `GET /v1/services/{name}/scenarios`** contains for each scenario the field **`runnable: bool`** - the sign "launched by the operator from the Run-form". Marked by Keeper according to the canon of the scenario package (`IsRunnableScenario`), not from the manifest: `create` = `true`, `destroy` = `false` (special deletion flow via `DELETE /v1/incarnations/{name}`), operational scenarios (including `converge`) = `true`. The UI filters the Run-form by `runnable`, and not by the name hardcode ([ADR-042](../adr/0042-backend-driven-ui.md), [architecture.md → Service](../architecture.md)).
 
+### Setting (3) - SettingsStore, the runtime settings overlay, [ADR-0073](../adr/0073-keeper-runtime-config-pg.md)
+
+| Method | Path | Permission | MCP-tool |
+|---|---|---|---|
+| `GET` | `/v1/settings` | `setting.read` | `keeper.setting.list` |
+| `PUT` | `/v1/settings/{key}` | `setting.update` | `keeper.setting.update` |
+| `DELETE` | `/v1/settings/{key}` | `setting.delete` | `keeper.setting.delete` |
+
+Cluster-wide overrides of reload-able Keeper parameters (the `cfg_*` rows of `keeper_settings` merged onto each instance's `keeper.yml`), propagated over the `service:invalidate` channel with a ≤10s TTL-poll fallback - **no restart, no per-host file edit**. Selector - NoSelector (settings are cluster-level). `GET` is a read (no audit) and returns per key its type, range bounds, default, the **effective** value on the answering instance and its `source ∈ {default, file, pg}` - the catalog the web UI renders the form from. Precedence is `default < pg < file` ([ADR-0073(b)](../adr/0073-keeper-runtime-config-pg.md), amended): a key this instance's `keeper.yml` sets keeps its local value, and where the file shadows an existing cluster override the entry also carries `cluster_value` + `overridden_locally`, so a `PUT` that does not take effect here is visible rather than silent ([ADR-042](../adr/0042-backend-driven-ui.md)), so a newly admitted key needs no front-end change. Mutations are audited (`setting.updated` / `setting.deleted`).
+
+Both mutations are fail-closed: the value goes through the field-registry (type + range bounds) **and** a dry-run merge of the whole resulting override set through the full config-validation pipeline, so a cross-field violation (`poll_floor` above `poll_ceiling`) is a `422` with `keeper_settings` unchanged. `DELETE` is validated the same way - the layer below can break an invariant the override was holding up. A key outside the registry is a `404`: admission is enumerated, not pattern-matched. The admitted keys and their ranges - [config.md → SettingsStore](config.md#settingsstore--the-admitted-keys-and-their-operator-surface). Routes are mounted only when the overlay is wired (break-glass `KEEPER_CONFIG_SOURCE=file` leaves them off).
+
 ### Sigil-key (4) - rotation of Sigil signature keys, [ADR-026(h)](../adr/0026-sigil.md) / R3
 
 | Method | Path | Permission | MCP-tool |

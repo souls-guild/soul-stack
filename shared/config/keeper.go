@@ -1571,6 +1571,14 @@ func resolveDuration(val string, fallback time.Duration) time.Duration {
 	return d
 }
 
+// Reaper defaults for an empty field (the parser leaves the zero value). The
+// Runner resolves them on every tick, so they are also the bottom layer of the
+// SettingsStore precedence for `cfg_reaper_*` (ADR-0073(b)).
+const (
+	DefaultReaperInterval  = time.Hour
+	DefaultReaperBatchSize = 1000
+)
+
 // KeeperReaper is the background cleanup.
 type KeeperReaper struct {
 	Enabled   bool                  `yaml:"enabled"`
@@ -1579,6 +1587,24 @@ type KeeperReaper struct {
 	BatchSize int                   `yaml:"batch_size,omitempty"`
 	LockTTL   string                `yaml:"lock_ttl,omitempty"`
 	Rules     map[string]ReaperRule `yaml:"rules,omitempty"`
+}
+
+// ResolvedInterval returns the effective pass interval: empty/invalid/
+// non-positive → [DefaultReaperInterval].
+func (r *KeeperReaper) ResolvedInterval() time.Duration {
+	if r == nil {
+		return DefaultReaperInterval
+	}
+	return resolveDuration(r.Interval, DefaultReaperInterval)
+}
+
+// ResolvedBatchSize returns the effective batch size of one pass: <= 0 →
+// [DefaultReaperBatchSize].
+func (r *KeeperReaper) ResolvedBatchSize() int {
+	if r == nil || r.BatchSize <= 0 {
+		return DefaultReaperBatchSize
+	}
+	return r.BatchSize
 }
 
 // ReaperRule is one Reaper rule. The rule schema is loosely typed because the 5

@@ -4799,7 +4799,10 @@ func (d *daemon) setupMCPServer(ctx context.Context) error {
 			// Keeper daemon runtime wiring note.
 			// api.Deps.OracleSvc (single source of truth, ADR-030). nil →
 			// Keeper daemon runtime wiring note.
-			OracleSvc:   d.oracleSvc,
+			OracleSvc: d.oracleSvc,
+			// The SettingsStore handler REST already mounted (ADR-0073): one
+			// write-gate, two transports. nil under the break-glass switch.
+			Settings:    d.apiServer.SettingsHandler(),
 			AuditWriter: d.auditWriter,
 			Logger:      logger,
 			// Keeper daemon runtime wiring note.

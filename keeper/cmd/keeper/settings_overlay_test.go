@@ -12,6 +12,7 @@ import (
 	"io"
 	"log/slog"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -56,15 +57,65 @@ func (r *overlayRows) RawValues() [][]byte                          { return nil
 func (r *overlayRows) Conn() *pgx.Conn                              { return nil }
 
 type overlayDB struct {
+	mu   sync.Mutex
 	rows [][2]string
 	err  error
 }
 
 func (d *overlayDB) Query(context.Context, string, ...any) (pgx.Rows, error) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
 	if d.err != nil {
 		return nil, d.err
 	}
-	return &overlayRows{rows: d.rows}, nil
+	rows := make([][2]string, len(d.rows))
+	copy(rows, d.rows)
+	return &overlayRows{rows: rows}, nil
+}
+
+// set upserts one `cfg_*` row — what a PUT on the other node commits.
+func (d *overlayDB) set(key, value string) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	for i := range d.rows {
+		if d.rows[i][0] == key {
+			d.rows[i][1] = value
+			return
+		}
+	}
+	d.rows = append(d.rows, [2]string{key, value})
+}
+
+// fakeInvalidations stands in for the shared `service:invalidate` channel: it
+// keeps the subscriber callback so the test can deliver a cluster event.
+type fakeInvalidations struct {
+	mu sync.Mutex
+	cb func()
+}
+
+func (f *fakeInvalidations) Watch(ctx context.Context, onInvalidate func()) error {
+	f.mu.Lock()
+	f.cb = onInvalidate
+	f.mu.Unlock()
+	<-ctx.Done()
+	return ctx.Err()
+}
+
+// publish delivers one invalidation, as the mutating node's publish would.
+func (f *fakeInvalidations) publish(t *testing.T) {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		f.mu.Lock()
+		cb := f.cb
+		f.mu.Unlock()
+		if cb != nil {
+			cb()
+			return
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	t.Fatal("nobody subscribed to the invalidation channel")
 }
 
 func discardLogger() *slog.Logger { return slog.New(slog.NewTextHandler(io.Discard, nil)) }
@@ -145,6 +196,112 @@ func TestSettingsOverlay_TempoLimitsReadLiveValues(t *testing.T) {
 	rate, burst := limits()
 	if rate != 1 || burst != 2 {
 		t.Errorf("post-overlay limits = (%v, %d), want (1, 2)", rate, burst)
+	}
+}
+
+// ★ The cluster property, on two instances: node A commits a row, node B is
+// told over the shared invalidation channel and re-merges — no SIGHUP, no
+// restart, no file edit on B. Node B here is a SEPARATE config.Store over its
+// own copy of keeper.yml, exactly as a second VM would be.
+func TestSettingsOverlay_ReachesTheOtherNodeWithoutRestart(t *testing.T) {
+	db := &overlayDB{}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	// Node A — the one taking the write.
+	storeA, _ := keeperFixtureStore(t)
+	nodeA := &daemon{store: storeA, logger: discardLogger(), cfg: storeA.Get()}
+	if err := nodeA.initSettingsStore(ctx, db); err != nil {
+		t.Fatalf("node A initSettingsStore: %v", err)
+	}
+
+	// Node B — its own file, its own store, subscribed to the shared channel.
+	storeB, _ := keeperFixtureStore(t)
+	nodeB := &daemon{store: storeB, logger: discardLogger(), cfg: storeB.Get()}
+	if err := nodeB.initSettingsStore(ctx, db); err != nil {
+		t.Fatalf("node B initSettingsStore: %v", err)
+	}
+	bus := &fakeInvalidations{}
+	go nodeB.settings.WatchInvalidations(ctx, bus)
+
+	// Keys the golden keeper.yml does NOT set — the file wins where it speaks
+	// (ADR-0073(b), amended), so a cluster value can only be observed on a key
+	// the local file leaves alone.
+	db.set("cfg_cadence_scheduler_poll_idle", "5m")
+	db.set("cfg_toll_threshold", "0.42")
+	if err := nodeA.settings.Refresh(ctx); err != nil {
+		t.Fatalf("node A refresh: %v", err)
+	}
+	if got := storeA.Get().CadenceScheduler.ResolvedPollIdle(); got != 5*time.Minute {
+		t.Fatalf("node A poll_idle = %v, want 5m", got)
+	}
+
+	bus.publish(t)
+
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		cfg := storeB.Get()
+		if cfg.CadenceScheduler.ResolvedPollIdle() == 5*time.Minute &&
+			cfg.Toll != nil && cfg.Toll.Threshold == 0.42 {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	cfg := storeB.Get()
+	t.Fatalf("node B never picked the overlay up: poll_idle=%v toll=%+v",
+		cfg.CadenceScheduler.ResolvedPollIdle(), cfg.Toll)
+}
+
+// ★ The other half of the same rule, end to end in the daemon: this instance's
+// keeper.yml sets `reaper.interval: 1h`, so a cluster override of the same key
+// is stored, reported — and NOT applied here (ADR-0073(b), amended).
+func TestSettingsOverlay_LocalFileWinsOverCluster(t *testing.T) {
+	store, _ := keeperFixtureStore(t)
+	d := &daemon{store: store, logger: discardLogger(), cfg: store.Get()}
+
+	if err := d.initSettingsStore(context.Background(), &overlayDB{rows: [][2]string{
+		{"cfg_reaper_interval", "2h"},
+		{"cfg_toll_threshold", "0.42"},
+	}}); err != nil {
+		t.Fatalf("initSettingsStore: %v", err)
+	}
+
+	if got := store.Get().Reaper.ResolvedInterval(); got != time.Hour {
+		t.Errorf("reaper.interval = %v, want the local 1h from keeper.yml", got)
+	}
+	// The override is still in the snapshot — the catalog has to be able to say
+	// "the cluster asks for 2h, this host runs 1h".
+	if got := d.settings.Values()["cfg_reaper_interval"]; got != "2h" {
+		t.Errorf("cluster value = %v, want 2h to remain visible", got)
+	}
+	// A key the file leaves alone takes the cluster value on the same instance.
+	if cfg := store.Get(); cfg.Toll == nil || cfg.Toll.Threshold != 0.42 {
+		t.Errorf("toll.threshold not applied from the cluster: %+v", cfg.Toll)
+	}
+}
+
+// A wake-up that changes nothing must not reconfigure anything: the shared
+// channel also carries service-registry events and the TTL poll fires every 10s,
+// so without the idempotence guard every consumer would be reconfigured (and an
+// audit event written) on a heartbeat (ADR-0073(g)).
+func TestSettingsOverlay_UnrelatedInvalidationIsANoOp(t *testing.T) {
+	db := &overlayDB{rows: [][2]string{{"cfg_reaper_interval", "2h"}}}
+	store, _ := keeperFixtureStore(t)
+	d := &daemon{store: store, logger: discardLogger(), cfg: store.Get()}
+	if err := d.initSettingsStore(context.Background(), db); err != nil {
+		t.Fatalf("initSettingsStore: %v", err)
+	}
+
+	var reloads atomic.Int64
+	store.OnReload(func(_, _ *config.KeeperConfig) { reloads.Add(1) })
+
+	for i := 0; i < 3; i++ {
+		if err := d.settings.Refresh(context.Background()); err != nil {
+			t.Fatalf("refresh %d: %v", i, err)
+		}
+	}
+	if n := reloads.Load(); n != 0 {
+		t.Errorf("%d config swaps on unchanged overlay, want 0", n)
 	}
 }
 

@@ -14,6 +14,7 @@ import (
 	keeperjwt "github.com/souls-guild/soul-stack/keeper/internal/jwt"
 	"github.com/souls-guild/soul-stack/keeper/internal/serviceregistry"
 	"github.com/souls-guild/soul-stack/shared/config"
+	"github.com/souls-guild/soul-stack/shared/diag"
 )
 
 // setPool — fake ServicePool recording every write that reached Postgres.
@@ -63,24 +64,37 @@ func (setScanRow) Scan(dest ...any) error {
 	return nil
 }
 
-// fakeSettingsConfig — a config reader over an inline keeper.yml.
+// fakeSettingsConfig — a config reader over an inline keeper.yml. validate
+// stands in for the dry-run merge; nil means "any candidate is fine", which is
+// what every test that is not about the write-gate wants.
 type fakeSettingsConfig struct {
-	cfg *config.KeeperConfig
-	doc *config.Document
+	cfg      *config.KeeperConfig
+	doc      *config.Document
+	validate func([]config.OverlayEntry) []diag.Diagnostic
 }
 
 func (f fakeSettingsConfig) Get() *config.KeeperConfig  { return f.cfg }
 func (f fakeSettingsConfig) Document() *config.Document { return f.doc }
 
+func (f fakeSettingsConfig) ValidateOverlay(entries []config.OverlayEntry) []diag.Diagnostic {
+	if f.validate == nil {
+		return nil
+	}
+	return f.validate(entries)
+}
+
 // fakeOverlay — the SettingsStore surface: which keys PG overrides + a refresh
 // counter.
 type fakeOverlay struct {
 	values   map[string]any
+	entries  []config.OverlayEntry
 	refreshN atomic.Int64
 	err      error
 }
 
 func (f *fakeOverlay) Values() map[string]any { return f.values }
+
+func (f *fakeOverlay) Overlay() []config.OverlayEntry { return f.entries }
 
 func (f *fakeOverlay) Refresh(context.Context) error {
 	f.refreshN.Add(1)
@@ -160,6 +174,45 @@ func TestSettingsList_ReportsSourcePerKey(t *testing.T) {
 	}
 	if burst.Bounds == "" || burst.Type == "" || burst.Default == nil {
 		t.Errorf("catalog entry is not self-describing: %+v", burst)
+	}
+}
+
+// ★ ADR-0073(b), amended: when both layers hold the key, the FILE wins — and the
+// catalog says so out loud, carrying the cluster value alongside. Without that
+// pair an operator would see a PUT accepted and this instance quietly running
+// something else, with nothing to explain the gap.
+func TestSettingsList_FileWinsAndTheClusterValueStaysVisible(t *testing.T) {
+	h, _, _ := settingsFixture(t, settingsYML, map[string]any{
+		"cfg_toll_threshold":           0.4,
+		"cfg_tempo_voyage_create_rate": 3.0,
+	})
+	views := h.ListTyped()
+
+	thr, ok := findSetting(views, "cfg_toll_threshold")
+	if !ok {
+		t.Fatal("threshold missing from the catalog")
+	}
+	if thr.Source != SettingSourceFile {
+		t.Errorf("source = %q, want file (keeper.yml sets it)", thr.Source)
+	}
+	if thr.Value != 0.9 {
+		t.Errorf("effective value = %v, want the local 0.9", thr.Value)
+	}
+	if !thr.OverriddenLocally || thr.ClusterValue != 0.4 {
+		t.Errorf("the shadowed cluster value is not reported: %+v", thr)
+	}
+
+	// A key the file leaves alone: the cluster value is the effective one, and
+	// there is nothing to flag.
+	rate, ok := findSetting(views, "cfg_tempo_voyage_create_rate")
+	if !ok {
+		t.Fatal("rate missing from the catalog")
+	}
+	if rate.Source != SettingSourcePG {
+		t.Errorf("rate source = %q, want pg", rate.Source)
+	}
+	if rate.OverriddenLocally || rate.ClusterValue != nil {
+		t.Errorf("rate is not shadowed, but reports as if it were: %+v", rate)
 	}
 }
 

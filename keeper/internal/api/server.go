@@ -497,6 +497,11 @@ type Server struct {
 	// the Operator-CRUD business logic (M0.7, PM-decision delegation.md #6).
 	operatorHandler *handlers.OperatorHandler
 
+	// settingsHandler is held for the same reason: the MCP listener mounts the
+	// setting.*-tools over the SAME handler, so the field-registry write-gate
+	// cannot differ between the two transports (ADR-0073).
+	settingsHandler *handlers.SettingsHandler
+
 	mu     sync.Mutex
 	addr   string
 	logger *slog.Logger
@@ -521,6 +526,11 @@ func (s *Server) OperatorService() *operator.Service {
 	}
 	return s.operatorHandler.Service()
 }
+
+// SettingsHandler returns the SettingsStore operator handler, or nil when the
+// overlay is unwired (break-glass, or Postgres-less start). Used by the MCP
+// listener wire-up in keeper/cmd/keeper, the OperatorService pattern.
+func (s *Server) SettingsHandler() *handlers.SettingsHandler { return s.settingsHandler }
 
 // maxHeaderBytes — the limit on HTTP header size (request-line + headers).
 // stdlib default is 1 MiB; the Operator API never has headers that big
@@ -900,6 +910,7 @@ func NewServer(cfg config.KeeperListenSimple, deps Deps, logger *slog.Logger) (*
 		srv:             srv,
 		configAddr:      cfg.Addr,
 		operatorHandler: opH,
+		settingsHandler: settingsH,
 		addr:            cfg.Addr,
 		logger:          logger,
 	}, nil

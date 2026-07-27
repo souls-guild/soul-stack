@@ -58,24 +58,61 @@ func overlayStore(t *testing.T, extra string) (*Store[KeeperConfig], *fakeOverla
 	return store, src, w
 }
 
-// Postgres beats the file for the same key, and only for that key: a sibling
-// from the file layer shows through (ADR-0073(b), per-key layering).
-func TestOverlay_PostgresWinsOverFile(t *testing.T) {
-	store, src, _ := overlayStore(t, "\ntoll:\n  threshold: 0.9\n  window_size: 45s\n")
+// ★ The local file beats the cluster for a key it sets, and the layering is
+// per key, not per block: a sibling the file leaves out still takes the cluster
+// value (ADR-0073(b), amended).
+func TestOverlay_FileWinsOverPostgres(t *testing.T) {
+	store, src, _ := overlayStore(t, "\ntoll:\n  threshold: 0.9\n")
 	if got := store.Get().Toll.Threshold; got != 0.9 {
 		t.Fatalf("file value not loaded: %v", got)
 	}
 
-	src.set(OverlayEntry{Path: "$.toll.threshold", Value: 0.5})
+	src.set(
+		OverlayEntry{Path: "$.toll.threshold", Value: 0.5},
+		OverlayEntry{Path: "$.toll.window_size", Value: "45s"},
+	)
 	res := store.RefreshOverlay(context.Background())
 	if !res.Swapped {
 		t.Fatalf("overlay not applied: %+v", res.Diagnostics)
 	}
-	if got := store.Get().Toll.Threshold; got != 0.5 {
-		t.Errorf("threshold = %v, want 0.5 (pg wins)", got)
+	if got := store.Get().Toll.Threshold; got != 0.9 {
+		t.Errorf("threshold = %v, want the local 0.9 (the file wins)", got)
 	}
 	if got := store.Get().Toll.WindowSize; got != "45s" {
-		t.Errorf("window_size = %q, want 45s (file shows through)", got)
+		t.Errorf("window_size = %q, want 45s (the file is silent here, so the cluster applies)", got)
+	}
+}
+
+// Removing the key from the file hands the decision back to the cluster: the
+// same override that was shadowed a moment ago now takes effect, with no change
+// on the Postgres side at all.
+func TestOverlay_ClusterTakesOverWhenTheFileStopsSettingTheKey(t *testing.T) {
+	store, src, _ := overlayStore(t, "\ntoll:\n  threshold: 0.9\n")
+	src.set(OverlayEntry{Path: "$.toll.threshold", Value: 0.5})
+	if res := store.RefreshOverlay(context.Background()); !res.Swapped {
+		t.Fatalf("overlay not applied: %+v", res.Diagnostics)
+	}
+	if got := store.Get().Toll.Threshold; got != 0.9 {
+		t.Fatalf("precondition: file value should win, got %v", got)
+	}
+
+	data, err := os.ReadFile(store.Path())
+	if err != nil {
+		t.Fatalf("read fixture: %v", err)
+	}
+	trimmed := strings.Replace(string(data), "\ntoll:\n  threshold: 0.9\n", "\n", 1)
+	if trimmed == string(data) {
+		t.Fatal("fixture edit did not match")
+	}
+	if err := os.WriteFile(store.Path(), []byte(trimmed), 0o644); err != nil {
+		t.Fatalf("write fixture: %v", err)
+	}
+
+	if res := store.Reload(context.Background(), audit.SourceSignal); !res.Swapped {
+		t.Fatalf("reload after the file edit: %+v", res.Diagnostics)
+	}
+	if got := store.Get().Toll.Threshold; got != 0.5 {
+		t.Errorf("threshold = %v, want the cluster 0.5 once the file stopped setting it", got)
 	}
 }
 
@@ -250,7 +287,7 @@ func TestOverlay_UnusableEntryIsRejectedWhole(t *testing.T) {
 // is a property of the store, not of the trigger.
 func TestOverlay_SurvivesFileReload(t *testing.T) {
 	store, src, _ := overlayStore(t, "\ntoll:\n  threshold: 0.9\n")
-	src.set(OverlayEntry{Path: "$.toll.threshold", Value: 0.5})
+	src.set(OverlayEntry{Path: "$.toll.window_size", Value: "45s"})
 	if res := store.RefreshOverlay(context.Background()); !res.Swapped {
 		t.Fatalf("overlay not applied: %+v", res.Diagnostics)
 	}
@@ -258,8 +295,11 @@ func TestOverlay_SurvivesFileReload(t *testing.T) {
 	if res := store.Reload(context.Background(), ReloadSourceSignal); !res.Swapped {
 		t.Fatalf("file reload did not swap: %+v", res.Diagnostics)
 	}
-	if got := store.Get().Toll.Threshold; got != 0.5 {
-		t.Errorf("overlay dropped by a file reload: %v", got)
+	if got := store.Get().Toll.WindowSize; got != "45s" {
+		t.Errorf("overlay dropped by a file reload: %q", got)
+	}
+	if got := store.Get().Toll.Threshold; got != 0.9 {
+		t.Errorf("threshold = %v, want the local 0.9 across the reload", got)
 	}
 }
 
