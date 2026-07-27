@@ -112,7 +112,7 @@ func (h *Handler) callIncarnationRun(ctx context.Context, claims *jwt.Claims, re
 	// enqueue (parity with REST Run, both modes). nil loader → degrades to no
 	// validation. Invalid input → validation-failed; snapshot failure → internal.
 	if h.deps.ServiceLoader != nil {
-		if err := scenario.ValidateInput(ctx, h.deps.ServiceLoader, serviceRef, a.Scenario, a.Input); err != nil {
+		if _, err := scenario.ValidateInput(ctx, h.deps.ServiceLoader, serviceRef, a.Scenario, a.Input); err != nil {
 			if errors.Is(err, scenario.ErrInputInvalid) {
 				return h.toolError(req.ID, toolName, mcpCodeValidationFailed,
 					"input_invalid: "+err.Error())

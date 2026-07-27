@@ -1256,9 +1256,9 @@ var (
 "$schema":"https://json-schema.org/draft/2020-12/schema",
 "type":"object",
 "additionalProperties":false,
-"required":["name","service"],
+"required":["service"],
 "properties":{
-"name":{"type":"string","pattern":"^[a-z][a-z0-9-]*$"},
+"name":{"type":"string","pattern":"^[a-z][a-z0-9-]*$","description":"Instance name (kebab-case). Omit when the chosen create scenario declares name_template (ADR-0079) - the name is then composed server-side from input components, and sending it is a validation error. Required whenever nothing composes one."},
 "service":{"type":"string"},
 "covens":{"type":"array","items":{"type":"string","pattern":"^[a-z][a-z0-9]*(-[a-z0-9]+)*$"},"description":"Declared env-Coven labels for the incarnation (ADR-008 amendment a). Affect RBAC create-scope: an operator with scoped-permission incarnation.create on coven=X can only create an incarnation with covens within their scope."},
 "input":{"type":"object"},

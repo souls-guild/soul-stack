@@ -30,13 +30,19 @@ type incCreateInput struct {
 	Body IncarnationCreateRequest
 }
 
-// IncarnationCreateRequest — Go form of the POST /v1/incarnations body. name/service
-// required; covens/input optional. Format of name/service/coven — domain validation
+// IncarnationCreateRequest — Go form of the POST /v1/incarnations body. service
+// required; name/covens/input optional. Format of name/service/coven — domain validation
 // (422 in CreateTyped). additionalProperties:false (huma default) → unknown field → 400.
 // Struct name = contract schema name in OpenAPI (huma DefaultSchemaNamer takes
 // reflect.Type.Name() directly) — aligned to the committed hand-written spec (T4b pilot).
+//
+// `name` lost `required:"true"` with ADR-0079: a create scenario declaring
+// `name_template` composes the name server-side from input components, and whether
+// it does is only known once the service snapshot resolves — past the schema layer.
+// The domain still rejects an omitted name when nothing composes one (422
+// "field 'name' is required"), so the contract did not loosen, it moved one layer in.
 type IncarnationCreateRequest struct {
-	Name    string         `json:"name" required:"true" pattern:"^[a-z0-9][a-z0-9-]{0,62}$" doc:"new instance name (kebab-case), root Coven tag"`
+	Name    string         `json:"name,omitempty" pattern:"^[a-z0-9][a-z0-9-]{0,62}$" doc:"new instance name (kebab-case); omit when the create scenario declares name_template (ADR-0079) — then it is composed server-side from input components"`
 	Service string         `json:"service" required:"true" pattern:"^[a-z0-9][a-z0-9-]{0,62}$" doc:"service name from registry (ADR-029)"`
 	Covens  []string       `json:"covens,omitempty" pattern:"^[a-z][a-z0-9]*(-[a-z0-9]+)*$" maxLength:"63" doc:"declared environment tags (ADR-008 amendment a)"`
 	Input   map[string]any `json:"input,omitempty" doc:"input for selected create scenario"`

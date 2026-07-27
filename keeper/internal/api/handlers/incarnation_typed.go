@@ -39,6 +39,7 @@ import (
 	"github.com/souls-guild/soul-stack/keeper/internal/soul"
 	sharedapi "github.com/souls-guild/soul-stack/shared/api"
 	"github.com/souls-guild/soul-stack/shared/audit"
+	"github.com/souls-guild/soul-stack/shared/config"
 )
 
 // IncarnationSpecStub — a non-empty *IncarnationHandler stub for generating the huma
@@ -97,10 +98,12 @@ func (h *IncarnationHandler) CreateTyped(ctx context.Context, claims *jwt.Claims
 
 	covens := req.Covens
 	input := req.Input
-	if req.Name == "" {
-		return zero, incProblem(problem.TypeValidationFailed, "field 'name' is required")
-	}
-	if !incarnation.ValidName(req.Name) {
+	// `name` is optional at this point (ADR-0079): a create scenario with a
+	// `name_template` composes it from input components, and only the resolved plan
+	// knows whether there is one. A NON-EMPTY name is still format-checked up front
+	// (garbage never reaches the plan); "name is required" moves below, after the
+	// plan resolves and the composed name is known.
+	if req.Name != "" && !incarnation.ValidName(req.Name) {
 		return zero, incProblem(problem.TypeValidationFailed, "field 'name' must match "+incarnation.NamePattern)
 	}
 	if req.Service == "" {
@@ -133,6 +136,11 @@ func (h *IncarnationHandler) CreateTyped(ctx context.Context, claims *jwt.Claims
 	// in runner.Start); created_scenario is written via createScenarioCol (NULL when
 	// bareNoScenario).
 	createScenario := scenario.CreateScenarioName
+	// name — the EFFECTIVE incarnation name: the operator's `name`, or the one the
+	// create scenario composed from `name_template` (ADR-0079). Everything past the
+	// plan resolve (insert / traits sync / bootstrap run / audit / reply) uses it,
+	// never req.Name.
+	name := req.Name
 	if runScenario {
 		ref, ok := h.services.Resolve(req.Service)
 		if !ok {
@@ -154,6 +162,14 @@ func (h *IncarnationHandler) CreateTyped(ctx context.Context, claims *jwt.Claims
 		createScenario = plan.CreateScenario
 		bareNoScenario = plan.BareNoScenario
 		autoCreate = plan.AutoCreate
+		name = plan.EffectiveName(req.Name)
+	}
+
+	// Deferred "name is required" (see the top of the function): reached when the
+	// operator sent no name and the chosen create scenario composes none — bare
+	// incarnations and stub mode included.
+	if name == "" {
+		return zero, incProblem(problem.TypeValidationFailed, "field 'name' is required")
 	}
 
 	spec := map[string]any{}
@@ -185,7 +201,7 @@ func (h *IncarnationHandler) CreateTyped(ctx context.Context, claims *jwt.Claims
 
 	creator := claims.Subject
 	inc := &incarnation.Incarnation{
-		Name:               req.Name,
+		Name:               name,
 		Service:            req.Service,
 		ServiceVersion:     serviceVersion,
 		StateSchemaVersion: 1,
@@ -199,10 +215,10 @@ func (h *IncarnationHandler) CreateTyped(ctx context.Context, claims *jwt.Claims
 	}
 	if err := incarnation.Create(ctx, h.db, inc); err != nil {
 		if errors.Is(err, incarnation.ErrIncarnationAlreadyExists) {
-			return zero, incProblem(problem.TypeIncarnationExists, "incarnation "+req.Name+" already exists")
+			return zero, incProblem(problem.TypeIncarnationExists, "incarnation "+name+" already exists")
 		}
 		h.logger.Error("incarnation.create: insert failed",
-			slog.String("name", req.Name), slog.String("service", req.Service),
+			slog.String("name", name), slog.String("service", req.Service),
 			slog.String("by_aid", claims.Subject), slog.Any("error", err))
 		return zero, incProblem(problem.TypeInternalError, "insert incarnation failed")
 	}
@@ -215,9 +231,9 @@ func (h *IncarnationHandler) CreateTyped(ctx context.Context, claims *jwt.Claims
 	// create on a projection error (best-effort, logged): the incarnation is already created, sync
 	// converges on the next bind/create retry.
 	if len(traits) > 0 {
-		if serr := incarnation.SyncTraitsToHosts(ctx, h.db, req.Name, traits); serr != nil {
+		if serr := incarnation.SyncTraitsToHosts(ctx, h.db, name, traits); serr != nil {
 			h.logger.Warn("incarnation.create: sync traits -> souls failed (best-effort)",
-				slog.String("name", req.Name), slog.Any("error", serr))
+				slog.String("name", name), slog.Any("error", serr))
 		}
 	}
 
@@ -238,20 +254,20 @@ func (h *IncarnationHandler) CreateTyped(ctx context.Context, claims *jwt.Claims
 	if runCreate {
 		if err := h.runner.Start(ctx, scenario.RunSpec{
 			ApplyID:         applyID,
-			IncarnationName: req.Name,
+			IncarnationName: name,
 			ServiceRef:      serviceRef,
 			ScenarioName:    createScenario,
 			Input:           input,
 			StartedByAID:    claims.Subject,
 		}); err != nil {
 			h.logger.Error("incarnation.create: scenario start failed",
-				slog.String("name", req.Name), slog.String("apply_id", applyID), slog.Any("error", err))
+				slog.String("name", name), slog.String("apply_id", applyID), slog.Any("error", err))
 			return zero, incProblem(problem.TypeInternalError, "start scenario create failed")
 		}
 	}
 
 	var auditApplyID any
-	body := IncarnationCreateView{Incarnation: req.Name}
+	body := IncarnationCreateView{Incarnation: name}
 	if applyID != "" {
 		auditApplyID = applyID
 		body.ApplyID = &applyID
@@ -259,7 +275,7 @@ func (h *IncarnationHandler) CreateTyped(ctx context.Context, claims *jwt.Claims
 	return IncarnationCreateReply{
 		Body: body,
 		AuditPayload: apimiddleware.AuditPayload{
-			"name":     req.Name,
+			"name":     name,
 			"service":  req.Service,
 			"covens":   coalesceCoven(covens),
 			"apply_id": auditApplyID,
@@ -323,7 +339,7 @@ func (h *IncarnationHandler) RunTyped(ctx context.Context, claims *jwt.Claims, n
 	}
 
 	if h.loader != nil {
-		if err := scenario.ValidateInput(ctx, h.loader, serviceRef, scenarioName, input); err != nil {
+		if _, err := scenario.ValidateInput(ctx, h.loader, serviceRef, scenarioName, input); err != nil {
 			if errors.Is(err, scenario.ErrInputInvalid) {
 				return zero, incProblem(problem.TypeValidationFailed, "input_invalid: "+err.Error())
 			}
@@ -1538,6 +1554,15 @@ func (h *IncarnationHandler) mapCreatePlanError(name, service string, err error)
 		return incProblem(problem.TypeValidationFailed, "validation_failed: "+err.Error())
 	case errors.Is(err, scenario.ErrAssertFailed):
 		return incProblem(problem.TypeAssertFailed, err.Error())
+	// Name composition (ADR-0079) — all three are the operator's doing (sent `name`
+	// against a composing scenario / components that render to garbage / a name over
+	// the 63-char ceiling), so 422, not 500.
+	case errors.Is(err, scenario.ErrNameNotComposable):
+		return incProblem(problem.TypeValidationFailed, "name_not_composable: "+err.Error())
+	case errors.Is(err, scenario.ErrComposedNameInvalid):
+		return incProblem(problem.TypeValidationFailed, "composed_name_invalid: "+err.Error())
+	case errors.Is(err, config.ErrNameTemplateRender):
+		return incProblem(problem.TypeValidationFailed, "name_template_failed: "+err.Error())
 	}
 	h.logger.Error("incarnation.create: resolve create plan failed",
 		slog.String("name", name), slog.String("service", service), slog.Any("error", err))

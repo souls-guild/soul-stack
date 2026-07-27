@@ -41,6 +41,16 @@ var ErrInputInvalid = errors.New("scenario: input invalid")
 // config.EvalValidateRules).
 var ErrValidateFailed = errors.New("scenario: validate rule failed")
 
+// InputGate is what the pre-flight input pass of [ValidateInput] produced beyond
+// "it is valid": the EFFECTIVE input (defaults merged, vault-refs still unresolved
+// strings) and the scenario's `name_template` (empty when the scenario does not
+// compose names, ADR-0079). Both are read by [ResolveCreatePlan] to compose the
+// incarnation name from input components without a second snapshot load/parse.
+type InputGate struct {
+	Merged       map[string]any
+	NameTemplate string
+}
+
 // InputScenarioLoader — the narrow [artifact.ServiceLoader] surface
 // [ValidateInput] needs: materialize a service-ref snapshot and read
 // scenario/<name>/main.yml. *artifact.ServiceLoader satisfies it; unit tests
@@ -77,24 +87,25 @@ type InputScenarioLoader interface {
 // schema/required/type first, then validate invariants — `that` rules are
 // written assuming correct types (input.port > 0 is meaningless if port isn't
 // a number).
-func ValidateInput(ctx context.Context, loader InputScenarioLoader, ref artifact.ServiceRef, scenarioName string, provided map[string]any) error {
+func ValidateInput(ctx context.Context, loader InputScenarioLoader, ref artifact.ServiceRef, scenarioName string, provided map[string]any) (InputGate, error) {
+	var zero InputGate
 	if loader == nil {
 		// Without a loader, sync validation is impossible — do NOT silently skip
 		// it (that was the original gap). Return an explicit config error; the
 		// handler decides (in prod the loader is always wired up together with
 		// the runner).
-		return fmt.Errorf("scenario: validate input: loader is not configured")
+		return zero, fmt.Errorf("scenario: validate input: loader is not configured")
 	}
 
 	art, err := loader.Load(ctx, ref)
 	if err != nil {
-		return fmt.Errorf("scenario: validate input: load service: %w", err)
+		return zero, fmt.Errorf("scenario: validate input: load service: %w", err)
 	}
 
 	rel := fmt.Sprintf(scenarioMainFile, scenarioName)
 	data, err := loader.ReadFile(art, rel)
 	if err != nil {
-		return fmt.Errorf("scenario: validate input: read %s: %w", rel, err)
+		return zero, fmt.Errorf("scenario: validate input: read %s: %w", rel, err)
 	}
 	// $type references in the input schema are resolved HERE (at load time) so
 	// that config.ResolveInputValues below validates a submitted $type field
@@ -103,10 +114,10 @@ func ValidateInput(ctx context.Context, loader InputScenarioLoader, ref artifact
 	// validation skipped).
 	scn, _, diags, err := artifact.LoadScenarioManifestResolved(art, rel, data)
 	if err != nil {
-		return fmt.Errorf("scenario: validate input: parse %s: %w", rel, err)
+		return zero, fmt.Errorf("scenario: validate input: parse %s: %w", rel, err)
 	}
 	if diag.HasErrors(diags) {
-		return fmt.Errorf("scenario: validate input: %s is invalid: %s", rel, firstError(diags))
+		return zero, fmt.Errorf("scenario: validate input: %s is invalid: %s", rel, firstError(diags))
 	}
 
 	// The full input gate in one call (config.ResolveInputContract, shared with
@@ -114,20 +125,21 @@ func ValidateInput(ctx context.Context, loader InputScenarioLoader, ref artifact
 	// validation (type/enum/pattern/length, recursively into array/object), then
 	// the `validate:` invariants over the merged input. vault-ref isn't resolved
 	// (string pass-through).
-	if _, err := config.ResolveInputContract(scn.Input, scn.Validate, provided); err != nil {
+	merged, err := config.ResolveInputContract(scn.Input, scn.Validate, provided)
+	if err != nil {
 		var fail *config.ValidateRuleFailure
 		switch {
 		case errors.As(err, &fail):
-			return fmt.Errorf("%w: %s", ErrValidateFailed, fail.Error())
+			return zero, fmt.Errorf("%w: %s", ErrValidateFailed, fail.Error())
 		case errors.Is(err, config.ErrValidateRuleEval):
 			// Compile/eval failure (nearly impossible after schema validation — the
 			// config validator already compiled `that` input-only; non-bool `that`
 			// is rejected at load) — an internal pre-flight failure (handler → 500),
 			// NOT validation_failed.
-			return fmt.Errorf("scenario: validate rules %s/%s: %w", scenarioName, rel, err)
+			return zero, fmt.Errorf("scenario: validate rules %s/%s: %w", scenarioName, rel, err)
 		default:
-			return fmt.Errorf("%w: %v", ErrInputInvalid, err)
+			return zero, fmt.Errorf("%w: %v", ErrInputInvalid, err)
 		}
 	}
-	return nil
+	return InputGate{Merged: merged, NameTemplate: scn.NameTemplate}, nil
 }

@@ -451,3 +451,56 @@ input:
 		t.Errorf("scenario A field leaked into scenario B (cross-scenario aliasing): %#v", b.Input)
 	}
 }
+
+// name_template referencing a component declared in the COVENANT must resolve
+// post-merge (ADR-0079): checked in the semantic phase it would report a false
+// name_template_input_unknown, since m.Input then holds only the local delta. Same
+// gate as `form:`.
+func TestResolveCovenant_NameTemplateResolvesAgainstMergedInput(t *testing.T) {
+	root := t.TempDir()
+	writeCovenant(t, root, "base", `input:
+  project:
+    type: string
+`)
+	writeScenario(t, root, "create", `name: create
+create: true
+extends: base
+name_template: "${input.name}-${input.project}"
+input:
+  name:
+    type: string
+tasks: []
+`)
+
+	_, diags := loadResolved(t, root, "create")
+	if hasCode(diags, "name_template_input_unknown") {
+		t.Fatalf("covenant-declared component reported as unknown: %v", diagCodes(diags))
+	}
+	if diag.HasErrors(diags) {
+		t.Fatalf("unexpected resolve errors: %v", diagCodes(diags))
+	}
+}
+
+// The post-merge check still CATCHES a genuinely undeclared component — the gate
+// defers the check, it does not disable it for covenant scenarios.
+func TestResolveCovenant_NameTemplateUnknownComponentStillCaught(t *testing.T) {
+	root := t.TempDir()
+	writeCovenant(t, root, "base", `input:
+  project:
+    type: string
+`)
+	writeScenario(t, root, "create", `name: create
+create: true
+extends: base
+name_template: "${input.name}-${input.nowhere}"
+input:
+  name:
+    type: string
+tasks: []
+`)
+
+	_, diags := loadResolved(t, root, "create")
+	if !hasCode(diags, "name_template_input_unknown") {
+		t.Fatalf("expected name_template_input_unknown, got %v", diagCodes(diags))
+	}
+}

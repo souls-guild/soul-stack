@@ -461,6 +461,44 @@ barrier).
 
 ## Scenarios
 
+### Two create scenarios, two naming styles
+
+The service offers two bootstrap scenarios, and they deliberately differ in **who names
+the incarnation** — the corpus carries one of each so both paths stay exercised:
+
+| Scenario | VMs | Name |
+|---|---|---|
+| [`create`](scenario/create/main.yml) | provisions them (ADR-061) | operator types `name` (free text, as before) |
+| [`create_from_souls`](scenario/create_from_souls/main.yml) | rolls onto a ready roster | **composed** from input components ([ADR-079](../../../docs/adr/0079-incarnation-name-template.md)) |
+
+`create_from_souls` declares
+
+```yaml
+name_template: "${input.name}-${input.project}-${input.subproject}-redis-${input.service_type}"
+```
+
+so `{name: cache, project: billing, subproject: invoices}` (with `service_type`
+defaulting to `cache`) is created as **`cache-billing-invoices-redis-cache`**. `name` in
+`POST /v1/incarnations` is then **optional**, and sending it against this scenario is a
+422 — the name is derived, not negotiated.
+
+Three things worth copying when you write your own template:
+
+- **The 63-character ceiling is real.** `incarnation.name` is a `TEXT PRIMARY KEY`,
+  kebab-case, ≤63 characters, and immutable — there is no rename. The literal text in the
+  template costs 9 of those, so the four components carry an explicit `max_length` each.
+  Overflow is a 422 quoting the composed string and its length, never a truncation: a
+  shortened name would be a *different* identity.
+- **Validate the parts, not the whole.** `${ … }` blocks are stringified as-is, so an
+  underscore or a capital in a component composes an illegal name. Each component carries
+  a kebab `pattern` — the cheap place to catch it, since soul-lint cannot (the values are
+  the operator's). Note `service_type` is the instance's *purpose* (`cache`/`queue`/…),
+  not its topology: `redis_type` values like `sentinel_only` contain `_` and would not be
+  legal in a name.
+- **Name components are write-once identity.** The template is read only on the create
+  path; running a day-2 scenario later with a different `project` changes what that run
+  does, not what the incarnation is called.
+
 ### `create` (single entry point, dispatched by `redis_type`)
 
 The operator always calls **`create`**; the `redis_type` field selects the mode.

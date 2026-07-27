@@ -11,6 +11,7 @@ import (
 	"github.com/souls-guild/soul-stack/keeper/internal/scenario"
 	"github.com/souls-guild/soul-stack/keeper/internal/soul"
 	"github.com/souls-guild/soul-stack/shared/audit"
+	"github.com/souls-guild/soul-stack/shared/config"
 )
 
 // incarnationCreateArgs — arguments for keeper.incarnation.create
@@ -83,10 +84,11 @@ func (h *Handler) callIncarnationCreate(ctx context.Context, claims *jwt.Claims,
 				"invalid arguments: "+err.Error())
 		}
 	}
-	if a.Name == "" {
-		return h.toolError(req.ID, toolName, mcpCodeValidationFailed, "field 'name' is required")
-	}
-	if !incarnation.ValidName(a.Name) {
+	// `name` is optional here (ADR-0079, parity with REST CreateTyped): a create
+	// scenario carrying a `name_template` composes it from input components, and
+	// only the resolved plan knows whether there is one. A non-empty name is
+	// format-checked up front; "name is required" is deferred until after the plan.
+	if a.Name != "" && !incarnation.ValidName(a.Name) {
 		return h.toolError(req.ID, toolName, mcpCodeValidationFailed,
 			"field 'name' must match "+incarnation.NamePattern)
 	}
@@ -147,6 +149,13 @@ func (h *Handler) callIncarnationCreate(ctx context.Context, claims *jwt.Claims,
 	createScenario := plan.CreateScenario
 	bareNoScenario := plan.BareNoScenario
 	autoCreate := plan.AutoCreate
+	// name — the EFFECTIVE incarnation name (ADR-0079): the operator's `name`, or
+	// the one the create scenario composed from `name_template`. Everything past
+	// this point uses it, never a.Name.
+	name := plan.EffectiveName(a.Name)
+	if name == "" {
+		return h.toolError(req.ID, toolName, mcpCodeValidationFailed, "field 'name' is required")
+	}
 
 	// Write spec.input only when input is non-empty — otherwise scenario-runner
 	// would see `"input": null` (key present) instead of "operator didn't pass
@@ -178,7 +187,7 @@ func (h *Handler) callIncarnationCreate(ctx context.Context, claims *jwt.Claims,
 
 	creator := claims.Subject
 	inc := &incarnation.Incarnation{
-		Name:               a.Name,
+		Name:               name,
 		Service:            a.Service,
 		ServiceVersion:     serviceRef.Ref,
 		StateSchemaVersion: 1,
@@ -193,10 +202,10 @@ func (h *Handler) callIncarnationCreate(ctx context.Context, claims *jwt.Claims,
 	if err := incarnation.Create(ctx, h.deps.IncarnationDB, inc); err != nil {
 		if errors.Is(err, incarnation.ErrIncarnationAlreadyExists) {
 			return h.toolError(req.ID, toolName, mcpCodeIncarnationExists,
-				"incarnation "+a.Name+" already exists")
+				"incarnation "+name+" already exists")
 		}
 		h.deps.Logger.Error("mcp: incarnation.create insert failed",
-			slog.String("name", a.Name),
+			slog.String("name", name),
 			slog.String("service", a.Service),
 			slog.String("by_aid", claims.Subject),
 			slog.Any("error", err),
@@ -212,9 +221,9 @@ func (h *Handler) callIncarnationCreate(ctx context.Context, claims *jwt.Claims,
 	// Best-effort (log, don't fail create): the incarnation is already
 	// created, sync will converge on the next bind.
 	if len(traits) > 0 {
-		if serr := incarnation.SyncTraitsToHosts(ctx, h.deps.IncarnationDB, a.Name, traits); serr != nil {
+		if serr := incarnation.SyncTraitsToHosts(ctx, h.deps.IncarnationDB, name, traits); serr != nil {
 			h.deps.Logger.Warn("mcp: incarnation.create sync traits -> souls failed (best-effort)",
-				slog.String("name", a.Name), slog.Any("error", serr))
+				slog.String("name", name), slog.Any("error", serr))
 		}
 	}
 
@@ -230,7 +239,7 @@ func (h *Handler) callIncarnationCreate(ctx context.Context, claims *jwt.Claims,
 		applyID = audit.NewULID()
 		if err := h.deps.ScenarioRunner.Start(ctx, scenario.RunSpec{
 			ApplyID:         applyID,
-			IncarnationName: a.Name,
+			IncarnationName: name,
 			ServiceRef:      serviceRef,
 			ScenarioName:    createScenario,
 			Input:           a.Input,
@@ -239,7 +248,7 @@ func (h *Handler) callIncarnationCreate(ctx context.Context, claims *jwt.Claims,
 			// Row already inserted (status=ready), the run didn't start. Log it;
 			// internal-error so the operator retries (parity with REST 500).
 			h.deps.Logger.Error("mcp: incarnation.create scenario start failed",
-				slog.String("name", a.Name),
+				slog.String("name", name),
 				slog.String("apply_id", applyID),
 				slog.Any("error", err),
 			)
@@ -254,13 +263,13 @@ func (h *Handler) callIncarnationCreate(ctx context.Context, claims *jwt.Claims,
 		auditCovens = []string{}
 	}
 	var auditApplyID any
-	out := incarnationCreateOutput{Incarnation: a.Name}
+	out := incarnationCreateOutput{Incarnation: name}
 	if applyID != "" {
 		auditApplyID = applyID
 		out.ApplyID = &applyID
 	}
 	h.writeAudit(audit.EventIncarnationCreated, claims.Subject, map[string]any{
-		"name":     a.Name,
+		"name":     name,
 		"service":  a.Service,
 		"covens":   auditCovens,
 		"apply_id": auditApplyID,
@@ -289,6 +298,14 @@ func (h *Handler) createPlanToolError(req jsonRPCRequest, toolName, name, servic
 		return h.toolError(req.ID, toolName, mcpCodeValidationFailed, "validation_failed: "+err.Error())
 	case errors.Is(err, scenario.ErrAssertFailed):
 		return h.toolError(req.ID, toolName, mcpCodeValidationFailed, "assert_failed: "+err.Error())
+	// Name composition (ADR-0079, parity with REST mapCreatePlanError): operator
+	// error → validation-failed, same detail prefixes.
+	case errors.Is(err, scenario.ErrNameNotComposable):
+		return h.toolError(req.ID, toolName, mcpCodeValidationFailed, "name_not_composable: "+err.Error())
+	case errors.Is(err, scenario.ErrComposedNameInvalid):
+		return h.toolError(req.ID, toolName, mcpCodeValidationFailed, "composed_name_invalid: "+err.Error())
+	case errors.Is(err, config.ErrNameTemplateRender):
+		return h.toolError(req.ID, toolName, mcpCodeValidationFailed, "name_template_failed: "+err.Error())
 	}
 	h.deps.Logger.Error("mcp: incarnation.create resolve create plan failed",
 		slog.String("name", name),

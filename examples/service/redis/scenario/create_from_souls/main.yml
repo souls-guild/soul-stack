@@ -39,12 +39,77 @@ extends: covenant
 compute:
   sentinel_monitor_now: "${ true }"
 
+# ── Composed incarnation name (name_template, ADR-0079) ──────────────────────────────
+# The operator does NOT type a name: it is assembled Keeper-side from the identity
+# components below, over the RESOLVED input (defaults merged) and BEFORE the row is
+# inserted. `name` in POST /v1/incarnations is then optional — and sending it against
+# this scenario is a 422 (the name is derived, not negotiated).
+#
+# ★ 63-CHARACTER CEILING. incarnation.name is a TEXT PRIMARY KEY, kebab-case, at most
+# 63 characters, and IMMUTABLE — there is no rename. The literal text here costs 9 of
+# those characters ("-", "-", "-redis-"), so the four components share what is left;
+# that is why each carries an explicit max_length below (12+12+12+7 + 9 = 52, with
+# headroom). Overflow is a 422 naming the composed string and its length, NEVER a
+# truncation — a shortened name would be a DIFFERENT identity.
+#
+# ★ Components are WRITE-ONCE IDENTITY. The template is read only on the create path;
+# running a day-2 scenario later with a different `project` changes what that run does,
+# not what the incarnation is called. Nothing renames an incarnation.
+#
+# ★ The pattern on each component is what actually keeps the name legal: `${ … }` blocks
+# are stringified as-is, so an underscore or a capital in a component would compose an
+# invalid name and be rejected at create. Validating the PARTS is the cheap place to
+# catch it (soul-lint cannot — the values are the operator's).
+name_template: "${input.name}-${input.project}-${input.subproject}-redis-${input.service_type}"
+
+# ── Input: create_from_souls DELTA on top of covenant.input ──────────────────────────
+# The shared contract (redis_type/version/memory_mb/persistence/users/…) lives in
+# covenant.yml and is merged add-only. Here — ONLY the four identity components that
+# feed name_template; covenant does not carry them (they are about WHO the instance is,
+# not HOW Redis is configured).
+input:
+  name:
+    type: string
+    required: true
+    pattern: "^[a-z0-9][a-z0-9-]*$"
+    max_length: 12
+    description: Instance role within the subproject, first segment of the name (e.g. cache, sessions).
+  project:
+    type: string
+    required: true
+    pattern: "^[a-z0-9][a-z0-9-]*$"
+    max_length: 12
+    description: Owning project, second segment of the name (e.g. billing).
+  subproject:
+    type: string
+    required: true
+    pattern: "^[a-z0-9][a-z0-9-]*$"
+    max_length: 12
+    description: Subsystem within the project, third segment of the name (e.g. invoices).
+  service_type:
+    type: string
+    default: cache
+    enum: [cache, queue, session, lock]
+    description: What this Redis is FOR — the trailing segment of the name. Purpose, not topology (topology is redis_type).
+
 # ── Presentation layer of the form (form:, top-level scenario key) ───────────────────
 # form: — PURE PRESENTATION. The input contract lives in covenant.input (the effective input
 # after merge). ★ There is no provision section here (unlike create) — create_from_souls carries
 # no provision field, and the form does not show one.
 form:
   sections:
+    # 0. Identity — the components name_template composes the incarnation name from.
+    # ★ These are NOT settings: they are write-once identity (see name_template above),
+    # so the UI shows them once, at create, with a live preview of the composed name.
+    - key: identity
+      title: "Identity"
+      description: "The name is composed from these: {name}-{project}-{subproject}-redis-{service_type}"
+      fields:
+        - { name: name, label: "Instance", placeholder: "cache" }
+        - { name: project, label: "Project", placeholder: "billing" }
+        - { name: subproject, label: "Subproject", placeholder: "invoices" }
+        - { name: service_type, label: "Purpose" }
+
     # 1. Redis parameters — mode, network channel, version.
     - key: redis
       title: "Redis Parameters"

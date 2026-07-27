@@ -8,6 +8,8 @@ import (
 	"sort"
 
 	"github.com/souls-guild/soul-stack/keeper/internal/artifact"
+	"github.com/souls-guild/soul-stack/keeper/internal/incarnation"
+	"github.com/souls-guild/soul-stack/shared/config"
 )
 
 // ErrCreateScenarioNotEligible: the operator-chosen start scenario
@@ -25,6 +27,24 @@ var ErrCreateScenarioNotEligible = errors.New("scenario: chosen create_scenario 
 // from [ErrCreateScenarioNotEligible] (there a choice WAS made but is
 // ineligible) — here no choice was made against a non-empty set.
 var ErrCreateScenarioRequired = errors.New("scenario: create_scenario is required (service offers create scenarios)")
+
+// ErrNameNotComposable: the chosen create scenario composes the incarnation name
+// from `name_template` (ADR-0079), but the request also carried an explicit
+// `name`. Rejected rather than silently ignored or silently overridden: with a
+// template the name is a function of the input components, and letting a request
+// field disagree with the row that gets inserted would make the RBAC
+// `incarnation=<name>` dimension checked on the request a different name than the
+// one created. Handler → 422.
+var ErrNameNotComposable = errors.New("scenario: create_scenario composes the incarnation name from name_template; the request must not carry `name`")
+
+// ErrComposedNameInvalid: the name assembled from `name_template` does not match
+// the incarnation name grammar — most often it overflows the 63-character ceiling
+// once the operator's components are substituted. Deliberately NOT truncated: a
+// silently shortened name is a different identity (the name is the immutable
+// primary key). Handler → 422 with the offending name and its length, so the
+// operator shortens a component. Distinct sentinel from
+// [config.ErrNameTemplateRender] (there the template itself misfired).
+var ErrComposedNameInvalid = errors.New("scenario: name composed from name_template is not a valid incarnation name")
 
 // CreateScenarioLoader is the narrow [artifact.ServiceLoader] surface needed
 // to resolve the create set: materialize the service-ref snapshot (its
@@ -147,10 +167,28 @@ type AssertPreflighter interface {
 //   - AutoCreate is the target service's lifecycle.auto_create policy (default
 //     true): false → incarnation ready with no run, but created_scenario is
 //     non-empty (run deferred, not bare).
+//   - ComposedName is the incarnation name assembled from the chosen scenario's
+//     `name_template` over the resolved input (ADR-0079). Empty when the scenario
+//     declares no template — then the operator-supplied `name` stands, exactly as
+//     before. Non-empty, it is already validated against the incarnation name
+//     grammar and is THE name: the caller inserts it, targets the bootstrap run at
+//     it and audits it.
 type CreatePlan struct {
 	CreateScenario string
 	BareNoScenario bool
 	AutoCreate     bool
+	ComposedName   string
+}
+
+// EffectiveName is the name the incarnation is created under: the composed name
+// when the create scenario declares a `name_template`, otherwise the
+// operator-supplied requested name. Single source for both callers so REST and MCP
+// cannot drift on which name wins.
+func (p CreatePlan) EffectiveName(requested string) string {
+	if p.ComposedName != "" {
+		return p.ComposedName
+	}
+	return requested
 }
 
 // ResolveCreatePlan is the shared resolve of the create start scenario, input
@@ -169,13 +207,21 @@ type CreatePlan struct {
 //  2. loader != nil → [ValidateCreateScenarioChoice] (chosen in set / required /
 //     bare). On bare, return immediately (no ValidateInput/lifecycle — no run).
 //  3. non-bare → [ValidateInput] (required/type/validate against the CHOSEN
-//     scenario's `input:` schema) + lifecycle.auto_create from the snapshot.
+//     scenario's `input:` schema) + name composition from `name_template` over the
+//     resolved input (ADR-0079, [composeIncarnationName]) + lifecycle.auto_create
+//     from the snapshot.
 //  4. !bare && autoCreate → [AssertPreflighter.PreflightAssert] (no-op unless
-//     preflighter implements the interface, as with a ScenarioStarter fake).
+//     preflighter implements the interface, as with a ScenarioStarter fake) — on
+//     the COMPOSED name when there is one.
+//
+// incarnationName is the name the operator REQUESTED; with a `name_template` it
+// must be empty and the effective name comes back in [CreatePlan.ComposedName]
+// (see [CreatePlan.EffectiveName]).
 //
 // Errors (for the caller's errors.Is): [ErrCreateScenarioRequired] /
 // [ErrCreateScenarioNotEligible] / [ErrInputInvalid] / [ErrValidateFailed] /
-// [ErrAssertFailed] are domain errors (422); everything else (snapshot
+// [ErrAssertFailed] / [ErrNameNotComposable] / [ErrComposedNameInvalid] /
+// [config.ErrNameTemplateRender] are domain errors (422); everything else (snapshot
 // load/parse, eval failure) is wrapped via fmt.Errorf (handler → 500).
 func ResolveCreatePlan(
 	ctx context.Context,
@@ -204,8 +250,21 @@ func ResolveCreatePlan(
 		// bare (no create scenario): skip ValidateInput / lifecycle resolve —
 		// there's no run, and nothing to validate input against.
 		if !isBare {
-			if err := ValidateInput(ctx, loader, serviceRef, chosen, input); err != nil {
+			gate, err := ValidateInput(ctx, loader, serviceRef, chosen, input)
+			if err != nil {
 				return CreatePlan{}, err
+			}
+			// Name composition (ADR-0079) sits HERE — after the input gate (the
+			// template renders over the EFFECTIVE input, defaults merged) and before
+			// the pre-flight assert, so the assert and the bootstrap run already see
+			// the final name.
+			if gate.NameTemplate != "" {
+				composed, cerr := composeIncarnationName(gate.NameTemplate, gate.Merged, incarnationName)
+				if cerr != nil {
+					return CreatePlan{}, cerr
+				}
+				plan.ComposedName = composed
+				incarnationName = composed
 			}
 			art, err := loader.Load(ctx, serviceRef)
 			if err != nil {
@@ -238,6 +297,35 @@ func ResolveCreatePlan(
 	}
 
 	return plan, nil
+}
+
+// composeIncarnationName renders `name_template` over the resolved input and
+// validates the result against the incarnation name grammar (ADR-0079).
+//
+// requested is the `name` the operator sent: with a template it MUST be empty
+// ([ErrNameNotComposable]) — the name is derived, not negotiated.
+//
+// The length ceiling is where this realistically fails: four components plus the
+// template's literal text overrun 63 characters easily. The error names the
+// composed string and its length so the operator knows WHICH way to shorten,
+// instead of getting a truncated name that silently becomes a different identity.
+func composeIncarnationName(template string, merged map[string]any, requested string) (string, error) {
+	if requested != "" {
+		return "", fmt.Errorf("%w (composed from %q)", ErrNameNotComposable, template)
+	}
+	composed, err := config.RenderNameTemplate(template, merged)
+	if err != nil {
+		return "", err
+	}
+	if incarnation.ValidName(composed) {
+		return composed, nil
+	}
+	if len(composed) > config.IncarnationNameMaxLen {
+		return "", fmt.Errorf("%w: %q is %d characters, the ceiling is %d — shorten the input components feeding name_template",
+			ErrComposedNameInvalid, composed, len(composed), config.IncarnationNameMaxLen)
+	}
+	return "", fmt.Errorf("%w: %q does not match %s — check the input components feeding name_template",
+		ErrComposedNameInvalid, composed, incarnation.NamePattern)
 }
 
 // sortedNames returns a deterministic sorted name list for the

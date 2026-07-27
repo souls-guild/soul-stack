@@ -82,7 +82,7 @@ func TestValidateInput_TypeRef_NonObjectElement_Rejected(t *testing.T) {
 	root := writeServiceWithTypes(t, scenarioUsersOfType, typesAclUser)
 	loader := &dirInputLoader{root: root}
 
-	err := ValidateInput(context.Background(), loader, artifact.ServiceRef{Name: "svc"}, "create",
+	_, err := ValidateInput(context.Background(), loader, artifact.ServiceRef{Name: "svc"}, "create",
 		map[string]any{"users": []any{"not-an-object"}})
 	if err == nil {
 		t.Fatal("submitted non-object for $type:AclUser should be rejected, got nil ($type resolution not wired?)")
@@ -100,7 +100,7 @@ func TestValidateInput_TypeRef_MissingRequired_Rejected(t *testing.T) {
 	root := writeServiceWithTypes(t, scenarioUsersOfType, typesAclUser)
 	loader := &dirInputLoader{root: root}
 
-	err := ValidateInput(context.Background(), loader, artifact.ServiceRef{Name: "svc"}, "create",
+	_, err := ValidateInput(context.Background(), loader, artifact.ServiceRef{Name: "svc"}, "create",
 		map[string]any{"users": []any{map[string]any{"read_only": true}}})
 	if err == nil {
 		t.Fatal("AclUser without required name should be rejected, got nil")
@@ -117,7 +117,7 @@ func TestValidateInput_TypeRef_ValidElement_OK(t *testing.T) {
 	root := writeServiceWithTypes(t, scenarioUsersOfType, typesAclUser)
 	loader := &dirInputLoader{root: root}
 
-	err := ValidateInput(context.Background(), loader, artifact.ServiceRef{Name: "svc"}, "create",
+	_, err := ValidateInput(context.Background(), loader, artifact.ServiceRef{Name: "svc"}, "create",
 		map[string]any{"users": []any{map[string]any{"name": "alice", "read_only": true}}})
 	if err != nil {
 		t.Fatalf("valid AclUser should pass after $type resolution: %v", err)
@@ -138,7 +138,7 @@ tasks: []
 	root := writeServiceWithTypes(t, scn, typesAclUser)
 	loader := &dirInputLoader{root: root}
 
-	err := ValidateInput(context.Background(), loader, artifact.ServiceRef{Name: "svc"}, "create",
+	_, err := ValidateInput(context.Background(), loader, artifact.ServiceRef{Name: "svc"}, "create",
 		map[string]any{"owner": "not-an-object"})
 	if err == nil {
 		t.Fatal("standalone $type:AclUser field with a non-object should be rejected, got nil")
@@ -192,7 +192,7 @@ func TestValidateInput_AclUserPerms_GarbageRejected(t *testing.T) {
 	}
 	for name, perms := range cases {
 		t.Run(name, func(t *testing.T) {
-			err := ValidateInput(context.Background(), loader, artifact.ServiceRef{Name: "svc"}, "create",
+			_, err := ValidateInput(context.Background(), loader, artifact.ServiceRef{Name: "svc"}, "create",
 				map[string]any{"users": []any{map[string]any{"name": "app", "perms": perms, "state": "on"}}})
 			if err == nil {
 				t.Fatalf("garbage perms %q should be rejected by the pattern, got nil", perms)
@@ -229,7 +229,7 @@ func TestValidateInput_AclUserPerms_ValidAccepted(t *testing.T) {
 		"off",
 	}
 	for _, perms := range valid {
-		err := ValidateInput(context.Background(), loader, artifact.ServiceRef{Name: "svc"}, "create",
+		_, err := ValidateInput(context.Background(), loader, artifact.ServiceRef{Name: "svc"}, "create",
 			map[string]any{"users": []any{map[string]any{"name": "app", "perms": perms, "state": "on"}}})
 		if err != nil {
 			t.Fatalf("valid perms %q should pass the pattern, got %v", perms, err)
@@ -270,7 +270,7 @@ func TestValidateInput_TypeRef_RequiredField_Omitted_Rejected(t *testing.T) {
 	root := writeServiceWithTypes(t, scenarioRequiredTypeField, typesAclUserPerms)
 	loader := &dirInputLoader{root: root}
 
-	err := ValidateInput(context.Background(), loader, artifact.ServiceRef{Name: "svc"}, "create",
+	_, err := ValidateInput(context.Background(), loader, artifact.ServiceRef{Name: "svc"}, "create",
 		map[string]any{}) // user omitted
 	if err == nil {
 		t.Fatal("required $type:AclUser field without a value should be rejected, got nil (required enforcement removed?)")
@@ -288,7 +288,7 @@ func TestValidateInput_TypeRef_OptionalField_Omitted_OK(t *testing.T) {
 	root := writeServiceWithTypes(t, scenarioOptionalTypeField, typesAclUserPerms)
 	loader := &dirInputLoader{root: root}
 
-	err := ValidateInput(context.Background(), loader, artifact.ServiceRef{Name: "svc"}, "create",
+	_, err := ValidateInput(context.Background(), loader, artifact.ServiceRef{Name: "svc"}, "create",
 		map[string]any{}) // user omitted — legal for an optional field
 	if err != nil {
 		t.Fatalf("optional $type:AclUser field without a value should pass, got %v", err)

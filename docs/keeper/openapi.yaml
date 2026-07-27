@@ -1251,7 +1251,7 @@ components:
           description: input for selected create scenario
           type: object
         name:
-          description: new instance name (kebab-case), root Coven tag
+          description: new instance name (kebab-case); omit when the create scenario declares name_template (ADR-0079) — then it is composed server-side from input components
           pattern: ^[a-z0-9][a-z0-9-]{0,62}$
           type: string
         service:
@@ -1263,7 +1263,6 @@ components:
           description: operator-set trait labels (key → scalar|list of scalars), ADR-060
           type: object
       required:
-        - name
         - service
       type: object
     IncarnationDestroyReply:

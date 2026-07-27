@@ -329,6 +329,40 @@ tasks: [ ... ]
 >
 > `validate:` ADDITIONS, does not replace: "is port required?" → `required_when`; "does quorum exceed the number of sentinels?" → `validate:`; "Is the roster suitable for an N-shard cluster?" → `assert:`.
 
+### 2.6. `name_template:` — composed incarnation name (create only)
+
+`name_template:` — **top-level** scenario key (next to `input:`), read **only on the create path** ([ADR-079](../adr/0079-incarnation-name-template.md)): a `${ … }` template that composes the incarnation's name from that scenario's own `input:` components, instead of the operator typing it as free text.
+
+```yaml
+name: create
+create: true
+name_template: "${input.name}-${input.project}-${input.subproject}-redis-${input.service_type}"
+input:
+  name:         { type: string, required: true }
+  project:      { type: string, required: true }
+  subproject:   { type: string, required: true }
+  service_type: { type: string, default: sentinel }
+tasks: [ ... ]
+```
+
+`{name: cache, project: billing, subproject: inv}` → incarnation `cache-billing-inv-redis-sentinel` (`service_type` comes from its schema default — the template renders over the **resolved** input, not over the raw request).
+
+**Why.** In a fleet of similar instances the name is never actually free text: it follows a house convention, retyped by hand every time and drifting every time. The name is `incarnation.name` — a `TEXT PRIMARY KEY`, globally unique and **immutable** (no rename; changing it is destroy + recreate), so a typo is not repairable in place.
+
+**Composition is server-side, before the insert.** Rendered by the Keeper in `scenario.ResolveCreatePlan` — the shared path of `POST /v1/incarnations` and `keeper.incarnation.create` — after the input gate and **before** the pre-flight `assert:`, so the assert and the bootstrap run already see the final name. No new run phase, no DB migration. `compute:` (§2.4) is not a candidate: it resolves RUN-LEVEL, i.e. after the row exists.
+
+**Context is INPUT-ONLY.** Each block compiles against the same narrow cel-go sandbox as `required_when` and `validate:` (§2.5): a reference to `essence.*`/`soulprint.*`/`register.*`/`vault()`/`now()` is an undeclared-reference compile error. A name must be a pure function of the request. Unlike ordinary interpolation ([ADR-010 §5(a)](../adr/0010-templating.md)), a single block does **not** yield a native type here — a name is a string, so every block is stringified and concatenated with the literal text; a block evaluating to a list or map is an error.
+
+**`name` in the request becomes optional — and forbidden when a template exists.** Sending both is **422 `name_not_composable`**: not silently ignored (the RBAC `incarnation=<name>` dimension would then be checked against one name while another is inserted) and not an override (that would defeat the convention). With no template in play, nothing changes — `name` is required exactly as before.
+
+**Overflow refuses, it never truncates.** The composed string is checked against the incarnation name grammar `^[a-z0-9][a-z0-9-]{0,62}$` before the insert. Four components plus literal text pass 63 characters easily, so this is the failure operators actually hit: **422 `composed_name_invalid`** quoting the composed string and its length, so it is clear which component to shorten. A silently truncated name would be a *different* immutable identity.
+
+**Name components are write-once identity.** Composition runs only on create, and `incarnation.spec.input` is written once and never rewritten — a later run passing a different `project` changes what that run does, not what the incarnation is called. Nothing renames an incarnation.
+
+**soul-lint** catches the class offline: `name_template_input_unknown` (ERROR — `${input.X}` with X not declared in `input:`; it would fail for every operator), `name_template_invalid` (ERROR — a block outside the input sandbox, or the index form `input['x']`, which hides the component name from static analysis), `name_template_too_long` (ERROR — the literal skeleton alone exceeds 63 characters), `name_template_constant` (WARNING — no block at all, so every incarnation composes to the same name) and `name_template_ignored` (WARNING — the scenario is not a `create: true` starter, so the key is dead config). Under `extends:` (§6.1) the reference check runs **post-merge**, exactly like `form:` — before the covenant merge a component declared in the fragment would look undeclared.
+
+> **Known limitation (RBAC).** `POST /v1/incarnations` scopes its permission check from the request body before the handler runs, so a request with no `name` yields an empty context set — which admits only bare/`*` roles (MCP behaves the same way). A **scoped** operator therefore cannot create a templated incarnation yet. Fail-closed, so it can only refuse, never over-grant; scoping a create whose name is unknown until the service snapshot resolves needs its own decision.
+
 ## 3. Step target - `on:`
 
 `on:` - **stable place** for step execution. Resolved by Postgres (stable layer: the incarnation **membership** relation `incarnation_membership` and the hosts' stable covens). Resolution point - **start of each Passage** ([ADR-056](../adr/0056-staged-render-passage.md)); the omitted `on:` target is stable within the Passage, but at the refresh boundary (`refresh_soulprint: true`) it will be re-resolved according to the updated roster - see §4.1 "Stability of the roster run" ([ADR-061](../adr/0061-onboarding-await-and-midrun-reresolve.md)). Three forms:
