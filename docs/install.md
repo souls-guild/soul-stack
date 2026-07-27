@@ -31,18 +31,29 @@ echo "deb [signed-by=/usr/share/keyrings/soul-stack.gpg] https://apt.soul-stack.
   | sudo tee /etc/apt/sources.list.d/soul-stack.list
 
 sudo apt update
-sudo apt install soul-stack-keeper
+sudo apt install soul-stack-keeper   # a server runs one daemon
+sudo apt install soul-stack-tools    # a workstation gets the whole CLI set
 ```
-
-Packages published in `v0.1.0-beta.1`:
 
 | Package | Contents |
 |---|---|
 | `soul-stack-keeper` | `keeper` daemon + systemd unit + `/etc/keeper/keeper.yml.example` |
 | `soul-stack-soul` | `soul` agent daemon + systemd unit + `/etc/soul/soul.yml.example` |
 | `soul-stack-soulctl` | `soulctl` operator CLI |
-| `soul-stack-soul-lint` | `soul-lint` offline artifact linter |
-| `soul-stack-soul-trial` | `soul-trial` offline Destiny / Scenario runner |
+| `soul-stack-lint` | `soul-lint` offline artifact linter |
+| `soul-stack-trial` | `soul-trial` offline Destiny / Scenario runner |
+| `soul-stack-tools` | meta package — pulls in `soulctl` + `lint` + `trial`, ships no files itself |
+
+The daemons stay out of `soul-stack-tools` on purpose: a server should not drag in
+authoring tools, and each daemon is installed on its own. (There is also
+`soul-stack-legion`, a load generator for sizing a Keeper cluster — it needs cluster
+DB credentials and a Vault PKI token, so run it against a bench cluster, not
+production.)
+
+> **Package names changed after `v0.1.0-beta.1`.** The published beta still carries
+> `soul-stack-soul-lint` / `soul-stack-soul-trial` and has no `soul-stack-tools`.
+> The renamed packages declare `Provides`/`Replaces`/`Conflicts` on the old names,
+> so an upgrade migrates itself — there is nothing to uninstall by hand.
 
 The keeper and soul packages install a systemd unit and a config template, and
 create their service user; they do not start a daemon that has no config yet.
