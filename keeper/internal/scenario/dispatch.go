@@ -262,6 +262,12 @@ func (r *Runner) dispatchWave(ctx context.Context, spec RunSpec, log *slog.Logge
 			StartedByAID:    startedByPtr(spec.StartedByAID),
 			Passage:         passage,
 			Input:           spec.inputSnapshot,
+			// Engine provenance (ADR-0076(l)). This path renders inline in the run
+			// goroutine, so this instance IS the renderer; the soul version is the
+			// one this host announced on the connection the apply is about to
+			// travel — the same announcement its capability set came from.
+			KeeperVersion: r.deps.KeeperVersion,
+			SoulVersion:   r.announcedSoulVersion(ctx, sid, log),
 		}); err != nil {
 			return dispatched, fmt.Errorf("scenario: insert apply_run (%s): %w", sid, err)
 		}

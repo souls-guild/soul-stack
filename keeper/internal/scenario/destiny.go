@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log/slog"
 	"strings"
+	"sync"
 
 	"github.com/souls-guild/soul-stack/keeper/internal/artifact"
 	"github.com/souls-guild/soul-stack/keeper/internal/render"
@@ -119,6 +120,43 @@ type destinyResolver struct {
 	// eagerly would clone repos a run never touches).
 	keeperVersion string
 	logger        *slog.Logger
+
+	// mu / resolved — the destiny contributions to the effective window, recorded
+	// as they are checked (ADR-0076(l)). Lazy resolution is exactly why they must
+	// be accumulated here: only the resolver knows which destinies a run actually
+	// touched, and the effective window is the intersection over those, not over
+	// everything service.yml declares. Guarded because a resolver instance is
+	// shared across a run's render passes.
+	mu       sync.Mutex
+	resolved []config.CompatEntity
+}
+
+// compatEntities returns the destiny contributions collected so far, in
+// resolution order. Safe on a nil receiver — a run without a destiny source
+// contributes none.
+func (r *destinyResolver) compatEntities() []config.CompatEntity {
+	if r == nil {
+		return nil
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	out := make([]config.CompatEntity, len(r.resolved))
+	copy(out, r.resolved)
+	return out
+}
+
+// recordCompat appends a destiny's contribution, deduplicated by name+ref: a
+// staged run resolves the same destiny once per Passage, and the window must be
+// counted once.
+func (r *destinyResolver) recordCompat(e config.CompatEntity) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for _, seen := range r.resolved {
+		if seen.Name == e.Name && seen.Ref == e.Ref {
+			return
+		}
+	}
+	r.resolved = append(r.resolved, e)
 }
 
 // Resolve loads a destiny by name: ref from service.yml::destiny[], git URL by
@@ -153,6 +191,7 @@ func (r *destinyResolver) Resolve(ctx context.Context, name string) (*render.Res
 	if err := checkKeeperCompat(r.keeperVersion, entity, r.logger); err != nil {
 		return nil, err
 	}
+	r.recordCompat(entity)
 
 	art, err := r.source.loader.Load(ctx, destinyRef)
 	if err != nil {

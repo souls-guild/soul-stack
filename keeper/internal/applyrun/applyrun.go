@@ -146,6 +146,20 @@ type ApplyRun struct {
 	// before migration 101. Run-invariant (identical across all host/passage rows
 	// of an apply_id); the read view (SelectRunDetail) takes the first non-null.
 	Input json.RawMessage `json:"input,omitempty"`
+
+	// KeeperVersion / SoulVersion — engine provenance of this row (ADR-0076(l),
+	// migration 103): the raw build version of the keeper that RENDERED it and
+	// the raw Hello.soul_version of the agent it was dispatched to. Facts only —
+	// no gate reads them (the version window and the capability set gate
+	// elsewhere, NIM-159 / NIM-161).
+	//
+	// Empty string ↔ SQL NULL in both directions: a version is either recorded
+	// verbatim or not recorded at all, and "" is not a version. Empty for
+	// keeper-side/sentinel rows (no agent), for a planned row not yet claimed (no
+	// renderer yet), for a host that never announced, and for rows predating
+	// migration 103.
+	KeeperVersion string `json:"keeper_version,omitempty"`
+	SoulVersion   string `json:"soul_version,omitempty"`
 }
 
 // ActiveApply — one entry of the set of apply runs a Soul is tracking, from

@@ -69,7 +69,10 @@ func NewClaimRunner(deps ClaimDeps) *ClaimRunner {
 // NOT propagate up — they move the row to failed (the run-goroutine barrier
 // counts it), otherwise it would hang until runTimeout.
 func (c *ClaimRunner) Claim(ctx context.Context) error {
-	claimed, err := applyrun.ClaimNext(ctx, c.deps.Deps.DB, c.deps.KID, c.deps.Lease, c.deps.Batch)
+	// KeeperVersion goes into the claim itself (ADR-0076(l)): this instance is the
+	// one that will render the claimed jobs, and stamping on claim covers every
+	// outcome of that render — dispatched, no_match, or failed.
+	claimed, err := applyrun.ClaimNext(ctx, c.deps.Deps.DB, c.deps.KID, c.deps.Lease, c.deps.Batch, c.deps.Deps.KeeperVersion)
 	if err != nil {
 		return fmt.Errorf("scenario: claim next: %w", err)
 	}
@@ -200,7 +203,12 @@ func (c *ClaimRunner) execute(ctx context.Context, run *applyrun.ApplyRun) {
 	// re-claims it); nothing was sent — no double apply. Races/repeat
 	// transitions are cut off by the status='claimed' filter inside
 	// MarkDispatched.
-	if err := applyrun.MarkDispatched(ctx, c.deps.Deps.DB, run.ApplyID, run.SID); err != nil {
+	//
+	// The version this host announced rides along (ADR-0076(l)): this is the last
+	// point before handoff at which the target is known, and it is still the same
+	// connection the capability gate judged.
+	soulVersion := readAnnouncedSoulVersion(ctx, c.deps.Deps.SoulVersion, run.SID, log)
+	if err := applyrun.MarkDispatched(ctx, c.deps.Deps.DB, run.ApplyID, run.SID, soulVersion); err != nil {
 		log.Error("scenario: claimed -> dispatched not recorded, SendApply not called (Ward left claimed for recovery)", slog.Any("error", err))
 		return
 	}

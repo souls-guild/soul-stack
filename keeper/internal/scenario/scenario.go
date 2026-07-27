@@ -344,6 +344,21 @@ type SoulCapabilityChecker interface {
 	SoulsLackingCapability(ctx context.Context, sids []string, capability string) ([]string, error)
 }
 
+// SoulVersionReader reads the raw version a SID announced on its current
+// connection (heartbeat Hash field `ver`, written by the same Hello overwrite as
+// `caps`). Feeds the engine provenance stamp on apply_runs (ADR-0076(l)) and
+// nothing else — no gate may read it (ADR-0076(n)).
+//
+// A host that never announced returns ("", nil): "not recorded", not an error.
+// A Redis failure returns an error, and unlike [SoulCapabilityChecker] the
+// caller does NOT fail closed on it — a lost audit field must never cost an
+// apply. nil in Deps degrades the same way.
+//
+// Implemented by a thin wrapper over [redis.ReadSoulVersion] at wire-up.
+type SoulVersionReader interface {
+	ReadSoulVersion(ctx context.Context, sid string) (string, error)
+}
+
 // KeeperModuleRegistry is the narrow keeper-side core Registry surface
 // (keeper/internal/coremod) scenario-runner needs for local execution of
 // `on: keeper` tasks (ADR-017, docs/keeper/modules.md). An interface (not a
@@ -465,6 +480,13 @@ type Deps struct {
 	// wire-up with a thin wrapper over redis.SoulsLackingCapability.
 	SoulCap SoulCapabilityChecker
 
+	// SoulVersion — reader of the version a target host announced on its current
+	// connection, for the engine provenance stamp on apply_runs (ADR-0076(l)).
+	// nil → nothing is stamped: the stamp is audit-only (ADR-0076(n)), so its
+	// absence degrades the record, never the run. Set at wire-up with a thin
+	// wrapper over redis.ReadSoulVersion.
+	SoulVersion SoulVersionReader
+
 	// KeeperVersion — the raw build version of THIS keeper instance, checked
 	// against the `compat:` window declared by the service and by every destiny a
 	// run resolves (ADR-0076(f)): the rendering instance is the authority, since
@@ -526,6 +548,11 @@ type Runner struct {
 	// (ADR-0076(i)). nil → both reject fail-closed.
 	soulCap SoulCapabilityChecker
 
+	// soulVersion — announced-version reader (copy of Deps.SoulVersion) for the
+	// engine provenance stamp on dispatch (ADR-0076(l)). nil → the stamp is
+	// simply not written; audit-only, never a gate.
+	soulVersion SoulVersionReader
+
 	// keeperModules — keeper-side core Registry (copy of Deps.KeeperModules)
 	// for local execution of `on: keeper` tasks (run.go::dispatchKeeperTasks).
 	// nil → `on: keeper` tasks are rejected ([ErrKeeperModulesNotConfigured]).
@@ -566,6 +593,7 @@ func NewRunner(deps Deps) *Runner {
 		kid:               deps.KID,
 		leaseOwner:        deps.LeaseOwner,
 		soulCap:           deps.SoulCap,
+		soulVersion:       deps.SoulVersion,
 		keeperModules:     deps.KeeperModules,
 		active:            make(map[string]context.CancelFunc),
 	}

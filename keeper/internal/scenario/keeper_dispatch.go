@@ -71,6 +71,9 @@ func (r *Runner) dispatchKeeperTasks(ctx context.Context, spec RunSpec, log *slo
 		StartedByAID:    startedByPtr(spec.StartedByAID),
 		Passage:         passage,
 		Input:           spec.inputSnapshot,
+		// Engine provenance (ADR-0076(l)): keeper-side tasks are rendered AND
+		// executed by this instance. No soul version — no agent is involved.
+		KeeperVersion: r.deps.KeeperVersion,
 	}); err != nil {
 		return fmt.Errorf("scenario: insert keeper apply_run (passage %d): %w", passage, err)
 	}

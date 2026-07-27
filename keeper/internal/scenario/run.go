@@ -358,9 +358,18 @@ func (r *Runner) run(ctx context.Context, spec RunSpec) {
 		// seal-aware masking. Pointer shared across passages (accumulates).
 		Sealed: sealed,
 	}
+	var destinyRes *destinyResolver
 	if r.deps.Destiny != nil {
-		renderIn.Destiny = r.deps.Destiny.resolverFor(art.Manifest, r.deps.KeeperVersion, log)
+		destinyRes = r.deps.Destiny.resolverFor(art.Manifest, r.deps.KeeperVersion, log)
+		renderIn.Destiny = destinyRes
 	}
+
+	// Engine provenance (ADR-0076(l)): from here on the run accumulates what it
+	// is being executed BY — this instance's version, the windows every entity it
+	// resolves declares, and the capability set its plan requires — and stamps it
+	// onto the state it produces. Pure recording; the gates that reject on those
+	// same facts already ran above and per-Passage below.
+	prov := newRunProvenance(r.deps.KeeperVersion, serviceCompatEntity(art), destinyRes)
 
 	// 4.9. Stratify the run by register dependency (staged-render, ADR-056 §b) —
 	//      BEFORE the first Render: a task reading register.X in
@@ -576,7 +585,9 @@ func (r *Runner) run(ctx context.Context, spec RunSpec) {
 		// non-staged, so the step-5 render already resolved every task's targets and
 		// one pass covers the run — before the keeper-side tasks, so a run that
 		// cannot be applied does not provision the cloud VMs it would apply to.
-		if err := r.gateSoulCapabilities(ctx, spec.IncarnationName, spec.ScenarioName, requiredSoulCapabilities(tasks, plans)); err != nil {
+		required := requiredSoulCapabilities(tasks, plans)
+		prov.observeRequired(required)
+		if err := r.gateSoulCapabilities(ctx, spec.IncarnationName, spec.ScenarioName, required); err != nil {
 			abort(reasonSoulCapabilityUnsupported, err)
 			return
 		}
@@ -693,7 +704,9 @@ func (r *Runner) run(ctx context.Context, spec RunSpec) {
 			// iteration, so the gate still fires before ANY dispatch. Ahead of the
 			// keeper-side tasks below, not just of the host-dispatch: a Passage that
 			// cannot be applied must not provision the cloud VMs it would apply to.
-			if err := r.gateSoulCapabilities(ctx, spec.IncarnationName, spec.ScenarioName, requiredSoulCapabilities(pTasks, pPlans)); err != nil {
+			pRequired := requiredSoulCapabilities(pTasks, pPlans)
+			prov.observeRequired(pRequired)
+			if err := r.gateSoulCapabilities(ctx, spec.IncarnationName, spec.ScenarioName, pRequired); err != nil {
 				abort(reasonSoulCapabilityUnsupported, err)
 				return
 			}
@@ -833,7 +846,7 @@ func (r *Runner) run(ctx context.Context, spec RunSpec) {
 		abort("state_changes_apply_failed", err)
 		return
 	}
-	if err := r.commitSuccess(ctx, spec, stateBefore, stateAfter); err != nil {
+	if err := r.commitSuccess(ctx, spec, stateBefore, stateAfter, prov.stamp()); err != nil {
 		// Single-winner (ADR-027(j) W1): the incarnation was already moved out
 		// of applying by another committer (recovery takeover / parallel
 		// finish) — NOT a failure. We don't abort (don't overwrite someone
@@ -1139,6 +1152,10 @@ func (r *Runner) lockIncarnation(ctx context.Context, spec RunSpec, stateBefore 
 			failStatus, details,
 			startedByPtr(spec.StartedByAID),
 			historyID,
+			// No engine stamp on a failure terminal (ADR-0076(l)): state did not
+			// change, so the engines that produced it did not change either — the
+			// last successful run's stamp stays (COALESCE).
+			nil,
 		)
 	})
 	if err != nil {
@@ -1238,6 +1255,11 @@ func (r *Runner) ensureTerminalApplyRun(ctx context.Context, spec RunSpec, reaso
 			ErrorSummary:    &summary,
 			StartedByAID:    startedByPtr(spec.StartedByAID),
 			Input:           spec.inputSnapshot,
+			// Engine provenance (ADR-0076(l)): the sentinel closes a run that never
+			// reached a host, so only the keeper that tried is recordable — and it
+			// is worth recording, since an abort at render is exactly the failure a
+			// version mismatch produces.
+			KeeperVersion: r.deps.KeeperVersion,
 		}
 		if ierr := applyrun.Insert(wctx, r.deps.DB, &run); ierr != nil {
 			log.Warn("scenario: inserting apply_runs sentinel row failed - run without a terminal row",
@@ -1320,7 +1342,12 @@ func destroyForce(inc *incarnation.Incarnation) bool {
 // commitSuccess records a successful run: state_changes are committed into
 // incarnation.state, status → ready, a snapshot goes to state_history. One PG
 // transaction (FOR UPDATE inside UpdateStateFromRun).
-func (r *Runner) commitSuccess(ctx context.Context, spec RunSpec, stateBefore, stateAfter map[string]any) error {
+//
+// engineCompat is the run's provenance stamp (ADR-0076(l)), written to both the
+// incarnation and its state_history row. This is the ONLY commit path that
+// stamps: a successful run is the one that produced the state, so it is the one
+// entitled to say which engines produced it.
+func (r *Runner) commitSuccess(ctx context.Context, spec RunSpec, stateBefore, stateAfter map[string]any, engineCompat *incarnation.EngineCompat) error {
 	historyID := audit.NewULID()
 	return pgx.BeginFunc(ctx, r.deps.DB, func(tx pgx.Tx) error {
 		return incarnation.UpdateStateFromRun(
@@ -1330,6 +1357,7 @@ func (r *Runner) commitSuccess(ctx context.Context, spec RunSpec, stateBefore, s
 			incarnation.StatusReady, nil,
 			startedByPtr(spec.StartedByAID),
 			historyID,
+			engineCompat,
 		)
 	})
 }

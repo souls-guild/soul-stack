@@ -787,6 +787,13 @@ var finalizableStatuses = map[Status]struct{}{
 // (`source: soul_grpc`, see ADR-022). Non-nil allowed for future
 // case when run triggered via Operator API and AID known.
 //
+// `engineCompat` — the engine provenance stamp of this transition
+// ([EngineCompat], ADR-0076(l), migration 103). Written verbatim to the
+// state_history row; on the incarnation it goes through COALESCE, so a caller
+// with nothing to stamp (a failed run locking the row, a path that never
+// rendered) leaves the last successful stamp standing rather than relabelling
+// state it did not produce. nil = don't stamp.
+//
 // Returns:
 //   - [ErrIncarnationNotFound]  — no row with this name at all.
 //   - [ErrAlreadyFinalized]     — row exists but status no longer applying/
@@ -802,6 +809,7 @@ func UpdateStateFromRun(
 	statusDetails map[string]any,
 	changedByAID *string,
 	historyID string,
+	engineCompat *EngineCompat,
 ) error {
 	if !ValidName(name) {
 		return fmt.Errorf("incarnation: invalid name %q", name)
@@ -836,15 +844,26 @@ func UpdateStateFromRun(
 	if changedByAID != nil {
 		changedByArg = *changedByAID
 	}
+	// Engine provenance (ADR-0076(l)): nil / empty stamp → NULL, so "not
+	// recorded" never reads as an engine contract of zeroes.
+	var engineCompatArg any
+	if !engineCompat.IsZero() {
+		b, err := json.Marshal(engineCompat)
+		if err != nil {
+			return fmt.Errorf("incarnation: marshal engine_compat: %w", err)
+		}
+		engineCompatArg = b
+	}
 
 	const historyInsertSQL = `
 INSERT INTO state_history (
     history_id, incarnation_name, scenario, state_before, state_after,
-    changed_by_aid, apply_id
-) VALUES ($1, $2, $3, $4, $5, $6, $7)
+    changed_by_aid, apply_id, engine_compat
+) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
 `
 	if _, err := tx.Exec(ctx, historyInsertSQL,
 		historyID, name, scenario, stateBeforeBytes, stateAfterBytes, changedByArg, applyID,
+		engineCompatArg,
 	); err != nil {
 		return fmt.Errorf("incarnation: insert state_history: %w", err)
 	}
@@ -866,6 +885,7 @@ UPDATE incarnation
 SET state             = $2,
     status            = $3,
     status_details    = $4,
+    engine_compat     = COALESCE($5, engine_compat),
     applying_apply_id = NULL,
     applying_attempt  = NULL,
     applying_by_kid   = NULL,
@@ -875,7 +895,7 @@ WHERE name = $1 AND status IN ('applying', 'destroying')
 RETURNING name
 `
 	var returnedName string
-	err = tx.QueryRow(ctx, updateSQL, name, stateAfterBytes, string(status), statusDetailsArg).Scan(&returnedName)
+	err = tx.QueryRow(ctx, updateSQL, name, stateAfterBytes, string(status), statusDetailsArg, engineCompatArg).Scan(&returnedName)
 	if err == nil {
 		return nil
 	}

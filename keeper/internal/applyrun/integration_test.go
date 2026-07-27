@@ -1046,7 +1046,7 @@ func TestIntegration_ClaimNext_PlannedToClaimed(t *testing.T) {
 
 	seedPlanned(t, "01HCLAIM", "host-a")
 
-	claimed, err := ClaimNext(ctx, integrationPool, "keeper-1", 30*time.Second, 10)
+	claimed, err := ClaimNext(ctx, integrationPool, "keeper-1", 30*time.Second, 10, "")
 	if err != nil {
 		t.Fatalf("ClaimNext: %v", err)
 	}
@@ -1093,7 +1093,7 @@ func TestIntegration_ClaimNext_NoPlanned(t *testing.T) {
 	// Noise running row must not be claimed (planned only).
 	seedApplyRun(t, "01HRUN", "host-a")
 
-	claimed, err := ClaimNext(ctx, integrationPool, "keeper-1", 30*time.Second, 10)
+	claimed, err := ClaimNext(ctx, integrationPool, "keeper-1", 30*time.Second, 10, "")
 	if err != nil {
 		t.Fatalf("ClaimNext: %v", err)
 	}
@@ -1113,7 +1113,7 @@ func TestIntegration_ClaimNext_BatchLimit(t *testing.T) {
 		seedPlanned(t, "01HBATCH", sid)
 	}
 
-	first, err := ClaimNext(ctx, integrationPool, "keeper-1", 30*time.Second, 2)
+	first, err := ClaimNext(ctx, integrationPool, "keeper-1", 30*time.Second, 2, "")
 	if err != nil {
 		t.Fatalf("ClaimNext#1: %v", err)
 	}
@@ -1122,14 +1122,14 @@ func TestIntegration_ClaimNext_BatchLimit(t *testing.T) {
 	}
 
 	// Remainder (3 planned) is claimed by next claims with the same limit 2: 2, then 1.
-	second, err := ClaimNext(ctx, integrationPool, "keeper-1", 30*time.Second, 2)
+	second, err := ClaimNext(ctx, integrationPool, "keeper-1", 30*time.Second, 2, "")
 	if err != nil {
 		t.Fatalf("ClaimNext#2: %v", err)
 	}
 	if len(second) != 2 {
 		t.Fatalf("second batch len = %d, want 2", len(second))
 	}
-	third, err := ClaimNext(ctx, integrationPool, "keeper-1", 30*time.Second, 2)
+	third, err := ClaimNext(ctx, integrationPool, "keeper-1", 30*time.Second, 2, "")
 	if err != nil {
 		t.Fatalf("ClaimNext#3: %v", err)
 	}
@@ -1168,7 +1168,7 @@ func TestIntegration_ClaimNext_Concurrent(t *testing.T) {
 			defer wg.Done()
 			// Each worker claims in batches until planned rows run out.
 			for {
-				batch, err := ClaimNext(ctx, integrationPool, kids[idx], 60*time.Second, 5)
+				batch, err := ClaimNext(ctx, integrationPool, kids[idx], 60*time.Second, 5, "")
 				if err != nil {
 					results[idx].err = err
 					return
@@ -1227,7 +1227,7 @@ func TestIntegration_ClaimNext_AttemptIncrements(t *testing.T) {
 
 	seedPlanned(t, "01HEPOCH", "host-a")
 
-	first, err := ClaimNext(ctx, integrationPool, "keeper-1", 30*time.Second, 10)
+	first, err := ClaimNext(ctx, integrationPool, "keeper-1", 30*time.Second, 10, "")
 	if err != nil {
 		t.Fatalf("ClaimNext#1: %v", err)
 	}
@@ -1244,7 +1244,7 @@ func TestIntegration_ClaimNext_AttemptIncrements(t *testing.T) {
 		t.Fatalf("recovery reset: %v", err)
 	}
 
-	second, err := ClaimNext(ctx, integrationPool, "keeper-2", 30*time.Second, 10)
+	second, err := ClaimNext(ctx, integrationPool, "keeper-2", 30*time.Second, 10, "")
 	if err != nil {
 		t.Fatalf("ClaimNext#2: %v", err)
 	}
@@ -1263,13 +1263,13 @@ func TestIntegration_ClaimNext_AttemptIncrements(t *testing.T) {
 // are rejected before going to DB.
 func TestIntegration_ClaimNext_Validation(t *testing.T) {
 	ctx := context.Background()
-	if _, err := ClaimNext(ctx, integrationPool, "", time.Second, 1); err == nil {
+	if _, err := ClaimNext(ctx, integrationPool, "", time.Second, 1, ""); err == nil {
 		t.Error("empty kid: expected error")
 	}
-	if _, err := ClaimNext(ctx, integrationPool, "keeper-1", 0, 1); err == nil {
+	if _, err := ClaimNext(ctx, integrationPool, "keeper-1", 0, 1, ""); err == nil {
 		t.Error("zero lease: expected error")
 	}
-	if _, err := ClaimNext(ctx, integrationPool, "keeper-1", time.Second, 0); err == nil {
+	if _, err := ClaimNext(ctx, integrationPool, "keeper-1", time.Second, 0, ""); err == nil {
 		t.Error("zero batch: expected error")
 	}
 }
@@ -1282,11 +1282,11 @@ func TestIntegration_MarkDispatched_Ok(t *testing.T) {
 	ctx := context.Background()
 
 	seedPlanned(t, "01HMARK", "host-a")
-	if _, err := ClaimNext(ctx, integrationPool, "keeper-1", 30*time.Second, 10); err != nil {
+	if _, err := ClaimNext(ctx, integrationPool, "keeper-1", 30*time.Second, 10, ""); err != nil {
 		t.Fatalf("ClaimNext: %v", err)
 	}
 
-	if err := MarkDispatched(ctx, integrationPool, "01HMARK", "host-a"); err != nil {
+	if err := MarkDispatched(ctx, integrationPool, "01HMARK", "host-a", ""); err != nil {
 		t.Fatalf("MarkDispatched: %v", err)
 	}
 	got, err := SelectByApplyID(ctx, integrationPool, "01HMARK", "host-a")
@@ -1310,31 +1310,31 @@ func TestIntegration_MarkDispatched_GuardRejectsNonClaimed(t *testing.T) {
 
 	// running -> dispatched: guard (running outside claimed).
 	seedApplyRun(t, "01HG", "host-running") // Inserts StatusRunning.
-	if err := MarkDispatched(ctx, integrationPool, "01HG", "host-running"); !errors.Is(err, ErrApplyRunNotClaimed) {
+	if err := MarkDispatched(ctx, integrationPool, "01HG", "host-running", ""); !errors.Is(err, ErrApplyRunNotClaimed) {
 		t.Errorf("running→dispatched: err = %v, want ErrApplyRunNotClaimed", err)
 	}
 
 	// planned → dispatched: guard.
 	seedPlanned(t, "01HG", "host-planned")
-	if err := MarkDispatched(ctx, integrationPool, "01HG", "host-planned"); !errors.Is(err, ErrApplyRunNotClaimed) {
+	if err := MarkDispatched(ctx, integrationPool, "01HG", "host-planned", ""); !errors.Is(err, ErrApplyRunNotClaimed) {
 		t.Errorf("planned→dispatched: err = %v, want ErrApplyRunNotClaimed", err)
 	}
 
 	// Absent row -> NotFound.
-	if err := MarkDispatched(ctx, integrationPool, "01HG", "ghost"); !errors.Is(err, ErrApplyRunNotFound) {
+	if err := MarkDispatched(ctx, integrationPool, "01HG", "ghost", ""); !errors.Is(err, ErrApplyRunNotFound) {
 		t.Errorf("ghost: err = %v, want ErrApplyRunNotFound", err)
 	}
 
 	// Repeated MarkDispatched after a successful transition (already dispatched)
 	// is also guarded: idempotency means the second call does not reconfirm it.
 	seedPlanned(t, "01HG", "host-twice")
-	if _, err := ClaimNext(ctx, integrationPool, "keeper-1", 30*time.Second, 10); err != nil {
+	if _, err := ClaimNext(ctx, integrationPool, "keeper-1", 30*time.Second, 10, ""); err != nil {
 		t.Fatalf("ClaimNext: %v", err)
 	}
-	if err := MarkDispatched(ctx, integrationPool, "01HG", "host-twice"); err != nil {
+	if err := MarkDispatched(ctx, integrationPool, "01HG", "host-twice", ""); err != nil {
 		t.Fatalf("MarkDispatched#1: %v", err)
 	}
-	if err := MarkDispatched(ctx, integrationPool, "01HG", "host-twice"); !errors.Is(err, ErrApplyRunNotClaimed) {
+	if err := MarkDispatched(ctx, integrationPool, "01HG", "host-twice", ""); !errors.Is(err, ErrApplyRunNotClaimed) {
 		t.Errorf("repeated MarkDispatched: err = %v, want ErrApplyRunNotClaimed", err)
 	}
 }
@@ -1384,7 +1384,7 @@ func TestIntegration_InsertPlanned_WithRecipe(t *testing.T) {
 	}
 
 	// recipe travels through claim: ClaimNext.RETURNING carries recipe -> run.Recipe.
-	claimed, err := ClaimNext(ctx, integrationPool, "keeper-1", 30*time.Second, 10)
+	claimed, err := ClaimNext(ctx, integrationPool, "keeper-1", 30*time.Second, 10, "")
 	if err != nil {
 		t.Fatalf("ClaimNext: %v", err)
 	}
@@ -1430,10 +1430,10 @@ func dispatchRow(t *testing.T, applyID, sid string) int {
 	t.Helper()
 	ctx := context.Background()
 	seedPlanned(t, applyID, sid)
-	if _, err := ClaimNext(ctx, integrationPool, "keeper-1", 30*time.Second, 10); err != nil {
+	if _, err := ClaimNext(ctx, integrationPool, "keeper-1", 30*time.Second, 10, ""); err != nil {
 		t.Fatalf("ClaimNext(%s/%s): %v", applyID, sid, err)
 	}
-	if err := MarkDispatched(ctx, integrationPool, applyID, sid); err != nil {
+	if err := MarkDispatched(ctx, integrationPool, applyID, sid, ""); err != nil {
 		t.Fatalf("MarkDispatched(%s/%s): %v", applyID, sid, err)
 	}
 	got, err := SelectByApplyID(ctx, integrationPool, applyID, sid)

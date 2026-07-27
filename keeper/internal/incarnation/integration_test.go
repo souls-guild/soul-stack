@@ -1040,7 +1040,7 @@ func TestIntegration_UpdateStateFromRun_ClearsEpoch_OnSuccess(t *testing.T) {
 	hist := "01HEPOCHHIST00000000001"
 	if err := UpdateStateFromRun(ctx, integrationPool, name, "deploy", applyID,
 		map[string]any{"primary": name + "-01"}, stateAfter,
-		StatusReady, nil, nil, hist); err != nil {
+		StatusReady, nil, nil, hist, nil); err != nil {
 		t.Fatalf("UpdateStateFromRun: %v", err)
 	}
 
@@ -1074,7 +1074,7 @@ func TestIntegration_UpdateStateFromRun_ClearsEpoch_OnFail(t *testing.T) {
 	stateBefore := map[string]any{"primary": name + "-01"}
 	if err := UpdateStateFromRun(ctx, integrationPool, name, "deploy", applyID,
 		stateBefore, stateBefore, // state not changed on failure
-		StatusErrorLocked, map[string]any{"reason": "boom"}, nil, "01HEPOCHHIST00000000002"); err != nil {
+		StatusErrorLocked, map[string]any{"reason": "boom"}, nil, "01HEPOCHHIST00000000002", nil); err != nil {
 		t.Fatalf("UpdateStateFromRun (fail): %v", err)
 	}
 

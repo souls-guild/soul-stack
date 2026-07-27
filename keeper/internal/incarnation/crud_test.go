@@ -1354,6 +1354,7 @@ func TestUpdateStateFromRun_HappyPath(t *testing.T) {
 		map[string]any{"replicas": 3.0},
 		StatusReady, nil, nil,
 		"01HHIST00000000000000000",
+		nil,
 	)
 	if err != nil {
 		t.Fatalf("UpdateStateFromRun: %v", err)
@@ -1383,7 +1384,7 @@ func TestUpdateStateFromRun_SingleWinner_CommitsFromApplying(t *testing.T) {
 		"redis-prod", "scale", "apply-id",
 		map[string]any{"replicas": 1.0},
 		map[string]any{"replicas": 3.0},
-		StatusReady, nil, nil, "hist-id")
+		StatusReady, nil, nil, "hist-id", nil)
 	if err != nil {
 		t.Fatalf("commit from applying: %v", err)
 	}
@@ -1405,7 +1406,7 @@ func TestUpdateStateFromRun_SingleWinner_AlreadyFinalized(t *testing.T) {
 		}
 		err := UpdateStateFromRun(context.Background(), f,
 			"redis-prod", "scale", "apply-id",
-			nil, nil, StatusReady, nil, nil, "hist-id")
+			nil, nil, StatusReady, nil, nil, "hist-id", nil)
 		if !errors.Is(err, ErrAlreadyFinalized) {
 			t.Errorf("status=%s: err = %v, want ErrAlreadyFinalized", st, err)
 		}
@@ -1426,7 +1427,7 @@ func TestUpdateStateFromRun_NotFound(t *testing.T) {
 	}
 	err := UpdateStateFromRun(context.Background(), f,
 		"ghost", "noop", "apply-id",
-		nil, nil, StatusReady, nil, nil, "hist-id")
+		nil, nil, StatusReady, nil, nil, "hist-id", nil)
 	if !errors.Is(err, ErrIncarnationNotFound) {
 		t.Errorf("err = %v, want ErrIncarnationNotFound", err)
 	}
@@ -1435,7 +1436,7 @@ func TestUpdateStateFromRun_NotFound(t *testing.T) {
 func TestUpdateStateFromRun_RejectsBadName(t *testing.T) {
 	f := &multiExecFake{}
 	err := UpdateStateFromRun(context.Background(), f,
-		"BAD_NAME", "s", "a", nil, nil, StatusReady, nil, nil, "h")
+		"BAD_NAME", "s", "a", nil, nil, StatusReady, nil, nil, "h", nil)
 	if err == nil {
 		t.Fatal("invalid name returned nil err")
 	}
@@ -1447,7 +1448,7 @@ func TestUpdateStateFromRun_RejectsBadName(t *testing.T) {
 func TestUpdateStateFromRun_RejectsBadStatus(t *testing.T) {
 	f := &multiExecFake{}
 	err := UpdateStateFromRun(context.Background(), f,
-		"redis-prod", "s", "a", nil, nil, Status("frobnicated"), nil, nil, "h")
+		"redis-prod", "s", "a", nil, nil, Status("frobnicated"), nil, nil, "h", nil)
 	if err == nil {
 		t.Fatal("invalid status returned nil err")
 	}
@@ -1456,7 +1457,7 @@ func TestUpdateStateFromRun_RejectsBadStatus(t *testing.T) {
 func TestUpdateStateFromRun_RejectsEmptyApplyID(t *testing.T) {
 	f := &multiExecFake{}
 	if err := UpdateStateFromRun(context.Background(), f,
-		"redis-prod", "s", "", nil, nil, StatusReady, nil, nil, "h"); err == nil {
+		"redis-prod", "s", "", nil, nil, StatusReady, nil, nil, "h", nil); err == nil {
 		t.Fatal("empty apply_id returned nil err")
 	}
 }
@@ -1471,7 +1472,7 @@ func TestUpdateStateFromRun_ErrorLockedWithDetails(t *testing.T) {
 		"redis-prod", "scale", "apply-id",
 		map[string]any{"replicas": 1.0},
 		map[string]any{"replicas": 1.0},
-		StatusErrorLocked, details, nil, "hist-id")
+		StatusErrorLocked, details, nil, "hist-id", nil)
 	if err != nil {
 		t.Fatalf("UpdateStateFromRun: %v", err)
 	}

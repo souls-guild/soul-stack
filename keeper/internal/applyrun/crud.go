@@ -58,10 +58,31 @@ var (
 const insertSQL = `
 INSERT INTO apply_runs (
     apply_id, sid, incarnation_name, scenario, task_idx, status,
-    error_summary, started_by_aid, passage, input
-) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+    error_summary, started_by_aid, passage, input,
+    keeper_version, soul_version
+) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
 RETURNING started_at
 `
+
+// nullableVersion maps a provenance version string to its SQL argument: empty →
+// NULL (untyped nil, not an empty string). "" is not a version, and a row that
+// records one must be distinguishable from a row that records none (ADR-0076(l),
+// migration 103).
+func nullableVersion(v string) any {
+	if v == "" {
+		return nil
+	}
+	return v
+}
+
+// derefVersion is the read half of [nullableVersion]: a NULL provenance column
+// is "not recorded", which the domain carries as an empty string.
+func derefVersion(v *string) string {
+	if v == nil {
+		return ""
+	}
+	return *v
+}
 
 // Insert inserts a run row. [StatusRunning] survives here ONLY for the old
 // synchronous path (dispatchWave with acolytes:0): it renders and sends
@@ -126,6 +147,10 @@ func Insert(ctx context.Context, db ExecQueryRower, run *ApplyRun) error {
 		startedByArg,
 		run.Passage,
 		inputArg,
+		// Engine provenance (ADR-0076(l)): this path renders inline in the run
+		// goroutine, so the caller's own build version IS the renderer's.
+		nullableVersion(run.KeeperVersion),
+		nullableVersion(run.SoulVersion),
 	)
 	if err := row.Scan(&run.StartedAt); err != nil {
 		return mapInsertError(err)
@@ -152,6 +177,12 @@ RETURNING started_at
 // writes `planned` — render/SendApply are deferred to the Acolyte at claim
 // time. Invariant A (ADR-027): the recipe carries the vault ref AS-IS,
 // secrets never land in PG.
+//
+// Engine provenance (ADR-0076(l)) is deliberately NOT written here: nothing has
+// rendered yet, and the instance writing this row need not be the one that will
+// (the cluster runs mixed versions during a rolling upgrade). keeper_version is
+// stamped by [ClaimNext] — the claiming instance is the one that renders —
+// and soul_version by [MarkDispatched], at the moment the target is known.
 //
 // Pre-conditions: non-empty ApplyID / SID / IncarnationName / Scenario;
 // non-nil run.Recipe (an Acolyte can't render a planned task without one).
@@ -325,23 +356,31 @@ func UpdateStatus(ctx context.Context, db ExecQueryRower, applyID, sid string, p
 const selectByApplyIDSQL = `
 SELECT apply_id, sid, incarnation_name, scenario, task_idx, status,
        error_summary, started_at, finished_at, started_by_aid,
-       claim_by_kid, claim_at, claim_expires_at, attempt, recipe
+       claim_by_kid, claim_at, claim_expires_at, attempt, recipe,
+       keeper_version, soul_version
 FROM apply_runs
 WHERE apply_id = $1 AND sid = $2
 `
 
 // SelectByApplyID reads a run row by composite PK, including the Ward-claim
-// columns (claim_by_kid/claim_at/claim_expires_at/attempt, migration 025)
-// and recipe (migration 029). [ErrApplyRunNotFound] on pgx.ErrNoRows.
+// columns (claim_by_kid/claim_at/claim_expires_at/attempt, migration 025),
+// recipe (migration 029) and the engine provenance stamp (migration 103).
+// [ErrApplyRunNotFound] on pgx.ErrNoRows.
+//
+// A NULL provenance column reads back as an empty string — a row written before
+// migration 103, or one whose renderer/target was never recorded, is an ordinary
+// row with nothing stamped, not a scan failure.
 func SelectByApplyID(ctx context.Context, db ExecQueryRower, applyID, sid string) (*ApplyRun, error) {
 	row := db.QueryRow(ctx, selectByApplyIDSQL, applyID, sid)
 	var (
-		run          ApplyRun
-		statusStr    string
-		taskIdx      *int
-		errorSummary *string
-		startedBy    *string
-		recipeJSON   []byte
+		run           ApplyRun
+		statusStr     string
+		taskIdx       *int
+		errorSummary  *string
+		startedBy     *string
+		recipeJSON    []byte
+		keeperVersion *string
+		soulVersion   *string
 	)
 	err := row.Scan(
 		&run.ApplyID,
@@ -359,6 +398,8 @@ func SelectByApplyID(ctx context.Context, db ExecQueryRower, applyID, sid string
 		&run.ClaimExpiresAt,
 		&run.Attempt,
 		&recipeJSON,
+		&keeperVersion,
+		&soulVersion,
 	)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -370,6 +411,8 @@ func SelectByApplyID(ctx context.Context, db ExecQueryRower, applyID, sid string
 	run.TaskIdx = taskIdx
 	run.ErrorSummary = errorSummary
 	run.StartedByAID = startedBy
+	run.KeeperVersion = derefVersion(keeperVersion)
+	run.SoulVersion = derefVersion(soulVersion)
 	recipe, err := UnmarshalRecipe(recipeJSON)
 	if err != nil {
 		return nil, err
@@ -608,6 +651,13 @@ func SelectCancelRequested(ctx context.Context, db ExecQueryRower, applyID, sid 
 //	$1 claim_by_kid   — KID of the claiming Acolyte
 //	$2 lease          — interval until claim_expires_at (NOW() + $2)
 //	$3 batch          — LIMIT of the claimed batch
+//	$4 keeper_version — build version of the claiming instance (provenance)
+//
+// keeper_version is stamped HERE rather than at dispatch (ADR-0076(l)): the
+// claiming instance is the one that renders the task just-in-time, and stamping
+// on claim covers every outcome of that render — dispatched, no_match, or
+// failed. A recovery re-claim overwrites the stamp with whoever actually
+// re-rendered, which is the honest answer to "what rendered this row".
 //
 // passage-aware claim — S3: claim by `(apply_id, sid)` is unique as long as
 // every row carries passage=0 (S1/S2: stratification computes passage
@@ -622,7 +672,8 @@ SET status           = 'claimed',
     claim_by_kid     = $1,
     claim_at         = NOW(),
     claim_expires_at = NOW() + $2::interval,
-    attempt          = r.attempt + 1
+    attempt          = r.attempt + 1,
+    keeper_version   = COALESCE($4, r.keeper_version)
 WHERE (r.apply_id, r.sid) IN (
     SELECT c.apply_id, c.sid
     FROM apply_runs AS c
@@ -633,20 +684,25 @@ WHERE (r.apply_id, r.sid) IN (
 )
 RETURNING apply_id, sid, incarnation_name, scenario, task_idx, status,
           error_summary, started_at, finished_at, started_by_aid,
-          claim_by_kid, claim_at, claim_expires_at, attempt, recipe
+          claim_by_kid, claim_at, claim_expires_at, attempt, recipe,
+          keeper_version, soul_version
 `
 
 // ClaimNext atomically claims up to batch planned tasks for Acolyte kid,
 // moving them planned → claimed: stamps claim_by_kid/claim_at,
-// claim_expires_at = NOW()+lease, and increments attempt (fencing epoch).
-// Race-freedom between competing Acolytes on different instances is
-// guaranteed by `FOR UPDATE SKIP LOCKED` (locked rows are skipped). FIFO by
-// started_at.
+// claim_expires_at = NOW()+lease, keeper_version (engine provenance,
+// ADR-0076(l)), and increments attempt (fencing epoch). Race-freedom between
+// competing Acolytes on different instances is guaranteed by `FOR UPDATE SKIP
+// LOCKED` (locked rows are skipped). FIFO by started_at.
+//
+// keeperVersion is the claiming instance's raw build version; empty (a caller
+// with no version wired up) leaves whatever the column already held rather than
+// erasing a stamp with nothing.
 //
 // Returns the claimed rows (already in `claimed` status, attempt
 // incremented). An empty slice (not an error) means no planned tasks exist,
 // or they were all already claimed by competitors.
-func ClaimNext(ctx context.Context, db ExecQueryRower, kid string, lease time.Duration, batch int) ([]*ApplyRun, error) {
+func ClaimNext(ctx context.Context, db ExecQueryRower, kid string, lease time.Duration, batch int, keeperVersion string) ([]*ApplyRun, error) {
 	if kid == "" {
 		return nil, fmt.Errorf("applyrun: empty kid")
 	}
@@ -657,7 +713,7 @@ func ClaimNext(ctx context.Context, db ExecQueryRower, kid string, lease time.Du
 		return nil, fmt.Errorf("applyrun: non-positive batch %d", batch)
 	}
 
-	rows, err := db.Query(ctx, claimNextSQL, kid, pgutil.Interval(lease), batch)
+	rows, err := db.Query(ctx, claimNextSQL, kid, pgutil.Interval(lease), batch, nullableVersion(keeperVersion))
 	if err != nil {
 		return nil, fmt.Errorf("applyrun: claim next: %w", err)
 	}
@@ -684,9 +740,11 @@ func ClaimNext(ctx context.Context, db ExecQueryRower, kid string, lease time.Du
 // claim) → nil Recipe.
 func scanClaimedRow(row pgx.Row) (*ApplyRun, error) {
 	var (
-		run        ApplyRun
-		statusStr  string
-		recipeJSON []byte
+		run           ApplyRun
+		statusStr     string
+		recipeJSON    []byte
+		keeperVersion *string
+		soulVersion   *string
 	)
 	if err := row.Scan(
 		&run.ApplyID,
@@ -704,10 +762,14 @@ func scanClaimedRow(row pgx.Row) (*ApplyRun, error) {
 		&run.ClaimExpiresAt,
 		&run.Attempt,
 		&recipeJSON,
+		&keeperVersion,
+		&soulVersion,
 	); err != nil {
 		return nil, err
 	}
 	run.Status = Status(statusStr)
+	run.KeeperVersion = derefVersion(keeperVersion)
+	run.SoulVersion = derefVersion(soulVersion)
 	recipe, err := UnmarshalRecipe(recipeJSON)
 	if err != nil {
 		return nil, err
@@ -718,7 +780,8 @@ func scanClaimedRow(row pgx.Row) (*ApplyRun, error) {
 
 const markDispatchedSQL = `
 UPDATE apply_runs
-SET status = 'dispatched'
+SET status       = 'dispatched',
+    soul_version = COALESCE($3, soul_version)
 WHERE apply_id = $1 AND sid = $2 AND status = 'claimed'
 `
 
@@ -737,10 +800,17 @@ WHERE apply_id = $1 AND sid = $2 AND status = 'claimed'
 // are left alone — the fencing epoch was already fixed by ClaimNext and
 // rides along in ApplyRequest.attempt.
 //
+// soulVersion — the raw version the target agent announced on the connection
+// this apply is about to travel (engine provenance, ADR-0076(l)). Stamped here
+// because this is the last moment before handoff at which the target is known
+// and still the same connection the capability gate judged. Empty (host never
+// announced / no Redis) leaves the column as it was — audit-only, so a missing
+// version never blocks the handoff.
+//
 // Returns:
 //   - [ErrApplyRunNotFound]   — no row at all.
 //   - [ErrApplyRunNotClaimed] — the row exists but isn't in `claimed` status.
-func MarkDispatched(ctx context.Context, db ExecQueryRower, applyID, sid string) error {
+func MarkDispatched(ctx context.Context, db ExecQueryRower, applyID, sid, soulVersion string) error {
 	if applyID == "" {
 		return fmt.Errorf("applyrun: empty apply_id")
 	}
@@ -748,7 +818,7 @@ func MarkDispatched(ctx context.Context, db ExecQueryRower, applyID, sid string)
 		return fmt.Errorf("applyrun: empty sid")
 	}
 
-	tag, err := db.Exec(ctx, markDispatchedSQL, applyID, sid)
+	tag, err := db.Exec(ctx, markDispatchedSQL, applyID, sid, nullableVersion(soulVersion))
 	if err != nil {
 		return fmt.Errorf("applyrun: mark dispatched: %w", err)
 	}

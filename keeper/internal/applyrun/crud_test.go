@@ -166,14 +166,21 @@ func TestInsert_HappyPath(t *testing.T) {
 	if !strings.Contains(f.queryRowSQL, "INSERT INTO apply_runs") {
 		t.Errorf("SQL = %q", f.queryRowSQL)
 	}
-	if len(f.queryRowArgs) != 10 {
-		t.Fatalf("args len = %d, want 10", len(f.queryRowArgs))
+	if len(f.queryRowArgs) != 12 {
+		t.Fatalf("args len = %d, want 12", len(f.queryRowArgs))
 	}
 	if f.queryRowArgs[8] != 0 {
 		t.Errorf("args[8] passage = %v, want 0 (default Passage)", f.queryRowArgs[8])
 	}
 	if f.queryRowArgs[9] != nil {
 		t.Errorf("args[9] input = %v, want nil (no input snapshot)", f.queryRowArgs[9])
+	}
+	// Provenance unset on this run → NULL, not "" (migration 103).
+	if f.queryRowArgs[10] != nil {
+		t.Errorf("args[10] keeper_version = %v, want nil", f.queryRowArgs[10])
+	}
+	if f.queryRowArgs[11] != nil {
+		t.Errorf("args[11] soul_version = %v, want nil", f.queryRowArgs[11])
 	}
 	if f.queryRowArgs[0] != "01HAPPLY0000000000000000" {
 		t.Errorf("args[0] apply_id = %v", f.queryRowArgs[0])
@@ -597,6 +604,8 @@ func TestSelectByApplyID_HappyPath(t *testing.T) {
 				nil,            // claim_expires_at (**time.Time)
 				0,              // attempt (*int)
 				nil,            // recipe (*[]byte) NULL → nil Recipe
+				"v0.2.0",       // keeper_version (**string)
+				"v0.1.9",       // soul_version (**string)
 			}}
 		},
 	}
@@ -619,6 +628,9 @@ func TestSelectByApplyID_HappyPath(t *testing.T) {
 	if run.StartedByAID == nil || *run.StartedByAID != "archon-alice" {
 		t.Errorf("started_by_aid = %v", run.StartedByAID)
 	}
+	if run.KeeperVersion != "v0.2.0" || run.SoulVersion != "v0.1.9" {
+		t.Errorf("provenance = (%q, %q), want (v0.2.0, v0.1.9)", run.KeeperVersion, run.SoulVersion)
+	}
 }
 
 func TestSelectByApplyID_NullableNils(t *testing.T) {
@@ -638,6 +650,8 @@ func TestSelectByApplyID_NullableNils(t *testing.T) {
 				nil, // claim_expires_at NULL
 				0,   // attempt
 				nil, // recipe NULL
+				nil, // keeper_version NULL (row predating migration 103)
+				nil, // soul_version NULL
 			}}
 		},
 	}
@@ -647,6 +661,11 @@ func TestSelectByApplyID_NullableNils(t *testing.T) {
 	}
 	if run.TaskIdx != nil || run.ErrorSummary != nil || run.FinishedAt != nil || run.StartedByAID != nil {
 		t.Errorf("nullable not nil: %+v", run)
+	}
+	// An unstamped row reads back as empty strings, not a scan failure — the
+	// nullable discipline that lets rows written before migration 103 be read.
+	if run.KeeperVersion != "" || run.SoulVersion != "" {
+		t.Errorf("provenance on an unstamped row = (%q, %q), want empty", run.KeeperVersion, run.SoulVersion)
 	}
 	if run.Status != StatusRunning {
 		t.Errorf("status = %q, want running", run.Status)
@@ -847,7 +866,7 @@ func TestClaimNext_Validation(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			if _, err := ClaimNext(context.Background(), f, tc.kid, tc.lease, tc.batch); err == nil {
+			if _, err := ClaimNext(context.Background(), f, tc.kid, tc.lease, tc.batch, ""); err == nil {
 				t.Fatal("expected validation error")
 			}
 		})
@@ -863,7 +882,7 @@ func TestClaimNext_QueryShape(t *testing.T) {
 			return nil, errors.New("stop after capturing args")
 		},
 	}
-	_, _ = ClaimNext(context.Background(), f, "keeper-1", 30*time.Second, 7)
+	_, _ = ClaimNext(context.Background(), f, "keeper-1", 30*time.Second, 7, "v0.2.0")
 	if f.queryCalls != 1 {
 		t.Fatalf("queryCalls = %d, want 1", f.queryCalls)
 	}
@@ -873,8 +892,8 @@ func TestClaimNext_QueryShape(t *testing.T) {
 	if !strings.Contains(f.querySQL, "attempt          = r.attempt + 1") {
 		t.Errorf("SQL does not increment attempt: %q", f.querySQL)
 	}
-	if len(f.queryArgs) != 3 {
-		t.Fatalf("args len = %d, want 3", len(f.queryArgs))
+	if len(f.queryArgs) != 4 {
+		t.Fatalf("args len = %d, want 4", len(f.queryArgs))
 	}
 	if f.queryArgs[0] != "keeper-1" {
 		t.Errorf("args[0] kid = %v, want keeper-1", f.queryArgs[0])
@@ -882,16 +901,41 @@ func TestClaimNext_QueryShape(t *testing.T) {
 	if f.queryArgs[2] != 7 {
 		t.Errorf("args[2] batch = %v, want 7", f.queryArgs[2])
 	}
+	// Provenance rides the claim itself: the claiming instance is the renderer
+	// (ADR-0076(l)). COALESCE so an empty version can't erase an earlier stamp.
+	if f.queryArgs[3] != "v0.2.0" {
+		t.Errorf("args[3] keeper_version = %v, want v0.2.0", f.queryArgs[3])
+	}
+	if !strings.Contains(f.querySQL, "keeper_version   = COALESCE($4, r.keeper_version)") {
+		t.Errorf("SQL does not stamp keeper_version: %q", f.querySQL)
+	}
+}
+
+// An Acolyte wired without a build version must not blank an earlier stamp:
+// the argument goes to NULL and COALESCE keeps what the column already held.
+func TestClaimNext_EmptyKeeperVersionIsNull(t *testing.T) {
+	f := &fakeDB{
+		queryFunc: func(_ string) (pgx.Rows, error) {
+			return nil, errors.New("stop after capturing args")
+		},
+	}
+	_, _ = ClaimNext(context.Background(), f, "keeper-1", 30*time.Second, 7, "")
+	if len(f.queryArgs) != 4 {
+		t.Fatalf("args len = %d, want 4", len(f.queryArgs))
+	}
+	if f.queryArgs[3] != nil {
+		t.Errorf("args[3] keeper_version = %v, want nil (NULL, not \"\")", f.queryArgs[3])
+	}
 }
 
 // --- MarkDispatched (validation + guard shape, no DB) -----------------
 
 func TestMarkDispatched_Validation(t *testing.T) {
 	f := &fakeDB{}
-	if err := MarkDispatched(context.Background(), f, "", "s"); err == nil {
+	if err := MarkDispatched(context.Background(), f, "", "s", ""); err == nil {
 		t.Error("empty apply_id: expected error")
 	}
-	if err := MarkDispatched(context.Background(), f, "a", ""); err == nil {
+	if err := MarkDispatched(context.Background(), f, "a", "", ""); err == nil {
 		t.Error("empty sid: expected error")
 	}
 	if f.execCalls != 0 {
@@ -902,17 +946,37 @@ func TestMarkDispatched_Validation(t *testing.T) {
 func TestMarkDispatched_GuardFilter(t *testing.T) {
 	// Exec touched the row → ok, no probe SELECT needed.
 	f := &fakeDB{execTag: pgconn.NewCommandTag("UPDATE 1"), execTagSet: true}
-	if err := MarkDispatched(context.Background(), f, "a", "s"); err != nil {
+	if err := MarkDispatched(context.Background(), f, "a", "s", "v0.1.9"); err != nil {
 		t.Fatalf("MarkDispatched: %v", err)
 	}
 	if !strings.Contains(f.execSQL, "status = 'claimed'") {
 		t.Errorf("guard filter status='claimed' missing from SQL: %q", f.execSQL)
 	}
-	if !strings.Contains(f.execSQL, "status = 'dispatched'") {
+	if !strings.Contains(f.execSQL, "'dispatched'") {
 		t.Errorf("target status dispatched missing from SQL: %q", f.execSQL)
+	}
+	// The target's announced version is stamped by the SAME statement as the
+	// deliver-once marker (ADR-0076(l)) — no extra round trip before the handoff.
+	if !strings.Contains(f.execSQL, "soul_version = COALESCE($3, soul_version)") {
+		t.Errorf("SQL does not stamp soul_version: %q", f.execSQL)
+	}
+	if len(f.execArgs) != 3 || f.execArgs[2] != "v0.1.9" {
+		t.Errorf("exec args = %v, want soul_version v0.1.9 in $3", f.execArgs)
 	}
 	if f.queryRowCalls != 0 {
 		t.Errorf("queryRowCalls = %d, want 0 (successful UPDATE doesn't add status)", f.queryRowCalls)
+	}
+}
+
+// A host that never announced (or an unreachable Redis) must not blank an
+// earlier stamp, and must never block the handoff: the argument goes to NULL.
+func TestMarkDispatched_EmptySoulVersionIsNull(t *testing.T) {
+	f := &fakeDB{execTag: pgconn.NewCommandTag("UPDATE 1"), execTagSet: true}
+	if err := MarkDispatched(context.Background(), f, "a", "s", ""); err != nil {
+		t.Fatalf("MarkDispatched: %v", err)
+	}
+	if len(f.execArgs) != 3 || f.execArgs[2] != nil {
+		t.Errorf("exec args = %v, want nil (NULL, not \"\") in $3", f.execArgs)
 	}
 }
 
@@ -925,7 +989,7 @@ func TestMarkDispatched_ZeroRows_NotFound(t *testing.T) {
 			return errRow{err: pgx.ErrNoRows}
 		},
 	}
-	if err := MarkDispatched(context.Background(), f, "a", "s"); !errors.Is(err, ErrApplyRunNotFound) {
+	if err := MarkDispatched(context.Background(), f, "a", "s", ""); !errors.Is(err, ErrApplyRunNotFound) {
 		t.Errorf("err = %v, want ErrApplyRunNotFound", err)
 	}
 }
@@ -939,7 +1003,7 @@ func TestMarkDispatched_ZeroRows_NotClaimed(t *testing.T) {
 			return staticRow{values: []any{"dispatched"}}
 		},
 	}
-	if err := MarkDispatched(context.Background(), f, "a", "s"); !errors.Is(err, ErrApplyRunNotClaimed) {
+	if err := MarkDispatched(context.Background(), f, "a", "s", ""); !errors.Is(err, ErrApplyRunNotClaimed) {
 		t.Errorf("err = %v, want ErrApplyRunNotClaimed", err)
 	}
 }

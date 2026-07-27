@@ -3002,6 +3002,15 @@ func (d *daemon) setupGRPCEventStream(ctx context.Context) error {
 		soulCap = soulCapChecker{rc: d.redisClient}
 	}
 
+	// Announced-version reader for the engine provenance stamp (ADR-0076(l)).
+	// Same Hash, same Hello write as the capability set above — so a stamped
+	// version and the capabilities a run was gated against always describe the
+	// same connection. No Redis → nothing stamped; the stamp is audit-only.
+	var soulVersion scenario.SoulVersionReader
+	if d.redisClient != nil {
+		soulVersion = soulVersionReader{rc: d.redisClient}
+	}
+
 	// Keeper daemon runtime wiring note.
 	// Keeper daemon runtime wiring note.
 	// Keeper daemon runtime wiring note.
@@ -3045,6 +3054,7 @@ func (d *daemon) setupGRPCEventStream(ctx context.Context) error {
 		Summons:       summons,
 		LeaseOwner:    leaseOwner,
 		SoulCap:       soulCap,
+		SoulVersion:   soulVersion,
 		// Keeper daemon runtime wiring note.
 		// Keeper daemon runtime wiring note.
 		// Keeper daemon runtime wiring note.
@@ -5164,6 +5174,12 @@ type soulCapChecker struct{ rc *keeperredis.Client }
 
 func (c soulCapChecker) SoulsLackingCapability(ctx context.Context, sids []string, capability string) ([]string, error) {
 	return keeperredis.SoulsLackingCapability(ctx, c.rc, sids, capability)
+}
+
+type soulVersionReader struct{ rc *keeperredis.Client }
+
+func (r soulVersionReader) ReadSoulVersion(ctx context.Context, sid string) (string, error) {
+	return keeperredis.ReadSoulVersion(ctx, r.rc, sid)
 }
 
 // Keeper daemon runtime wiring note.

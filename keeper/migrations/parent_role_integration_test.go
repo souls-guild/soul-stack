@@ -87,13 +87,15 @@ func TestMigration102_AppliesAndRollsBack(t *testing.T) {
 		t.Errorf("rbac_roles_parent_role_fk ON DELETE = %q, want %q (RESTRICT)", delRule, "r")
 	}
 
-	if err := m.Steps(-1); err != nil {
-		t.Fatalf("Steps(-1) (down 102): %v", err)
+	// Absolute versions, not Steps(±1): the head moves with every migration the
+	// release adds, and a relative step would roll back somebody else's.
+	if err := m.Migrate(101); err != nil && !errors.Is(err, migrate.ErrNoChange) {
+		t.Fatalf("Migrate(101) (down through 102): %v", err)
 	}
 	assertParentRoleObjects(t, pool, false, "after down")
 
-	if err := m.Steps(1); err != nil {
-		t.Fatalf("Steps(1) (re-apply 102): %v", err)
+	if err := m.Migrate(102); err != nil && !errors.Is(err, migrate.ErrNoChange) {
+		t.Fatalf("Migrate(102) (re-apply 102): %v", err)
 	}
 	assertParentRoleObjects(t, pool, true, "after re-apply")
 }

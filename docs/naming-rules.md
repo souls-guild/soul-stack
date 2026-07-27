@@ -269,6 +269,15 @@ The declared range of engine versions an artifact is known to work with. Carried
 | **`deprecation_window_too_short`** / **`deprecated_bound_missing`** / **`deprecated_version_invalid`** / **`deprecated_replacement_unknown`** (diag codes) | Manifest-authoring errors on the `deprecated:` block: a window below the policy minimum; a missing `since`/`removed_in` (an open-ended deprecation cannot be planned against); a bound that is not plain `MAJOR.MINOR.PATCH`; a `use:` naming a param the same state does not declare. |
 | **`module.unknown_param`** (TaskError code) | Soul-side, before Apply: the task carries a param the module's manifest **in this binary** does not declare, so the task FAILS instead of running with the key silently unread. The param-level sibling of [`soul_capability_unsupported`](#soul-capabilities) (module-level) — enforced for core modules, advisory for custom ones ([ADR-0076](adr/0076-engine-compat-window.md) (o–q)). |
 
+**Engine provenance stamp** ([ADR-0076(l)](adr/0076-engine-compat-window.md), migration 103) — the recorded fact of which engines executed a run, as opposed to the declared contract above. State-side only; **no gate reads it**, and none may (the gates are `keeper_version_unsupported` and `soul_capability_unsupported`). Names are **DevOps terms** (PG columns), introducing no dictionary entity.
+
+| Name | Role |
+|---|---|
+| **`apply_runs.keeper_version`** | Raw build version of the keeper instance that **rendered** that per-host row. The renderer, not the dispatcher: the inline path stamps at insert, the Acolyte path at claim (a rolling upgrade means the claiming instance may differ from the one that planned the run, [ADR-0076(f)](adr/0076-engine-compat-window.md)). |
+| **`apply_runs.soul_version`** | Raw `Hello.soul_version` of the agent the row was dispatched to, read at dispatch from the heartbeat Hash field `ver` — the same announcement the [capability gate](#soul-capabilities) judged. Audit-only ([ADR-0076(n)](adr/0076-engine-compat-window.md)); NULL for keeper-side rows and the run sentinel. |
+| **`engine_compat`** (jsonb, `incarnation` + `state_history`) | The engine contract the state was produced under: `keeper_version`, the [effective compat window](#engine-compat-window-compat--effective-window-adr-0076), `window_enforced`, and the union of required [soul capabilities](#soul-capabilities). Written on the **successful** state commit only; a failed run leaves the previous stamp (it changed no state, so it produced none). |
+| **`window_enforced`** (field of `engine_compat`) | Whether the window was actually compared against that build: true iff a window was declared **and** the build carried a comparable version. False covers both "nothing declared" (read with a null window) and the version-less build that renders unenforced by design ([ADR-0076(e)](adr/0076-engine-compat-window.md)) — so an unchecked run never later reads as a checked one. |
+
 **Four version-shaped things — do not confuse:**
 
 | Term | What it versions | Where it lives |

@@ -152,14 +152,14 @@ func TestIntegration_RecoveryReclaim_StaleRunResultDropped_LiveAttempt2Commits(t
 	}
 
 	// 2) ClaimNext → attempt 0→1; MarkDispatched → claimed→dispatched.
-	claimed, err := applyrun.ClaimNext(ctx, integrationPool, "keeper-dead", 30*time.Second, 10)
+	claimed, err := applyrun.ClaimNext(ctx, integrationPool, "keeper-dead", 30*time.Second, 10, "")
 	if err != nil {
 		t.Fatalf("ClaimNext#1: %v", err)
 	}
 	if len(claimed) != 1 || claimed[0].Attempt != 1 {
 		t.Fatalf("first claim: len=%d attempt=%v, want 1/1", len(claimed), claimed)
 	}
-	if err := applyrun.MarkDispatched(ctx, integrationPool, applyID, sid); err != nil {
+	if err := applyrun.MarkDispatched(ctx, integrationPool, applyID, sid, ""); err != nil {
 		t.Fatalf("MarkDispatched: %v", err)
 	}
 	if got := readApplyStatus(t, ctx, applyID, sid); got != string(applyrun.StatusDispatched) {
@@ -199,7 +199,7 @@ func TestIntegration_RecoveryReclaim_StaleRunResultDropped_LiveAttempt2Commits(t
 	}
 
 	// 4) ClaimNext again → attempt 1→2 (fencing epoch increased: new owner).
-	reclaim, err := applyrun.ClaimNext(ctx, integrationPool, "keeper-live", 30*time.Second, 10)
+	reclaim, err := applyrun.ClaimNext(ctx, integrationPool, "keeper-live", 30*time.Second, 10, "")
 	if err != nil {
 		t.Fatalf("ClaimNext#2: %v", err)
 	}
@@ -210,7 +210,7 @@ func TestIntegration_RecoveryReclaim_StaleRunResultDropped_LiveAttempt2Commits(t
 		t.Fatalf("repeat claim attempt=%d, want 2 (1→2 via re-claim)", reclaim[0].Attempt)
 	}
 	// Drive it to dispatched, as a live Acolyte would before SendApply.
-	if err := applyrun.MarkDispatched(ctx, integrationPool, applyID, sid); err != nil {
+	if err := applyrun.MarkDispatched(ctx, integrationPool, applyID, sid, ""); err != nil {
 		t.Fatalf("MarkDispatched#2: %v", err)
 	}
 

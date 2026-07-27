@@ -303,6 +303,10 @@ func commitRunState(
 			status, details,
 			nil, // soul_grpc — no Archon AID.
 			historyID,
+			// No engine stamp (ADR-0076(l)): this path commits a RunResult without
+			// a scenario-runner, so it never rendered and has no engine facts of
+			// its own to record. The per-host versions are on the apply_runs rows.
+			nil,
 		)
 	})
 }
