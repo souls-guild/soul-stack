@@ -24,7 +24,7 @@ Artifact versioning — via git ref ([ADR-007](docs/adr/0007-versioning-git-ref.
   correlated by `errand_id`) — the command line is not in the payload, exactly as
   `console.opened` holds no keystrokes.
 
-  Known gap, unchanged by this and tracked separately: `core.cmd.shell` and
+  Known gap, unchanged by this and tracked as NIM-197: `core.cmd.shell` and
   `core.exec.run` are on the Errand runner's hardcoded allow-list, so
   `keeper.soul.errand.run`, `POST /v1/souls/{sid}/exec` and a `kind=command`
   Voyage still reach an arbitrary shell under `errand.run` alone. Until those
