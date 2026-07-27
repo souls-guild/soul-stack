@@ -519,7 +519,7 @@ func (o *Outbound) RebroadcastTrustAnchors(ctx context.Context, pubkeyPEM []stri
 // seed-rotation-reply).
 func (o *Outbound) deliver(ctx context.Context, sid string, msg *keeperv1.FromKeeper, kind, applyID string) error {
 	if entry := o.manager.lookup(sid); entry != nil {
-		if !entry.send(msg) {
+		if !o.manager.deliverLocal(sid, msg, entry) {
 			o.logger.Warn("outbound: deliver dropped (queue full or closed)",
 				slog.String("sid", sid),
 				slog.String("kind", kind),

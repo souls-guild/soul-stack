@@ -296,12 +296,14 @@ func (c *consoleConn) handleOpen(ctx context.Context, f *console.ClientFrame) {
 
 // dispatchErrorCode distinguishes a congested queue from an absent Soul.
 //
-// The console shares its per-SID outbound queue with the apply cycle, so a burst
-// of keystrokes across many consoles on ONE host can fill it. Reporting that as
-// `soul_offline` would send the operator hunting for a dead agent when the host
-// is perfectly healthy and the right move is to type again.
+// Both congestion cases are the same story for the operator: the host is
+// healthy and the right move is to type again. Reporting either as
+// `soul_offline` would send them hunting for a dead agent instead. The queue is
+// the session's own console stream once it is up (NIM-188), and the pre-`opened`
+// park before that ([console.ErrSessionNotReady]); a Soul still on the
+// EventStream transport fills the per-SID outbound queue it shares with apply.
 func dispatchErrorCode(err error) string {
-	if errors.Is(err, keepergrpc.ErrOutboundQueueFull) {
+	if errors.Is(err, keepergrpc.ErrOutboundQueueFull) || errors.Is(err, console.ErrSessionNotReady) {
 		return console.ErrCodeBusy
 	}
 	return console.ErrCodeSoulOffline

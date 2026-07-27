@@ -55,6 +55,12 @@ type fakeSoul struct {
 	resizes []*keeperv1.ConsoleResize
 	closes  []*keeperv1.ConsoleClose
 
+	// sidOf remembers which host each session was opened on. Upstream frames
+	// must arrive on that host's own stream — the Hub drops a frame whose sid
+	// does not own the session, since a session id is a route and the peer cert
+	// is the authority (ADR-012(i)).
+	sidOf map[string]string
+
 	// autoOpen answers every ConsoleOpen with ConsoleOpened, like a healthy host.
 	autoOpen bool
 	// openErr makes the dispatch fail (a Soul that is not connected).
@@ -71,6 +77,10 @@ func (f *fakeSoul) SendConsoleOpen(ctx context.Context, sid string, msg *keeperv
 		return err
 	}
 	f.opens = append(f.opens, msg)
+	if f.sidOf == nil {
+		f.sidOf = make(map[string]string)
+	}
+	f.sidOf[msg.GetSessionId()] = sid
 	auto := f.autoOpen
 	f.mu.Unlock()
 
@@ -139,9 +149,20 @@ func (f *fakeSoul) stdinBytes() [][]byte {
 	return append([][]byte(nil), f.stdin...)
 }
 
+// sidFor is the host a session was opened on; unknown ids fall back to the
+// default fixture host.
+func (f *fakeSoul) sidFor(sessionID string) string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if sid, ok := f.sidOf[sessionID]; ok {
+		return sid
+	}
+	return "host-a"
+}
+
 // sendChunk pushes pty output up through the Hub.
 func (f *fakeSoul) sendChunk(sessionID string, data []byte, seq uint64, dropped uint64) {
-	f.hub.Deliver(context.Background(), "host-a", &keeperv1.FromSoul{
+	f.hub.Deliver(context.Background(), f.sidFor(sessionID), &keeperv1.FromSoul{
 		Payload: &keeperv1.FromSoul_ConsoleChunk{ConsoleChunk: &keeperv1.ConsoleChunk{
 			SessionId:    sessionID,
 			Stream:       keeperv1.ConsoleStream_CONSOLE_STREAM_STDOUT,
@@ -153,7 +174,7 @@ func (f *fakeSoul) sendChunk(sessionID string, data []byte, seq uint64, dropped 
 }
 
 func (f *fakeSoul) sendExit(sessionID string, code int32, reason keeperv1.ConsoleExitReason) {
-	f.hub.Deliver(context.Background(), "host-a", &keeperv1.FromSoul{
+	f.hub.Deliver(context.Background(), f.sidFor(sessionID), &keeperv1.FromSoul{
 		Payload: &keeperv1.FromSoul_ConsoleExit{ConsoleExit: &keeperv1.ConsoleExit{
 			SessionId: sessionID,
 			ExitCode:  code,

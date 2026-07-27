@@ -632,6 +632,345 @@ func (x *ConsoleExit) GetErrorMessage() string {
 	return ""
 }
 
+// ConsoleAttach is Soul -> Keeper: the FIRST frame on a dedicated console
+// stream, naming the session the stream belongs to. Keeper registers the
+// stream under that id and routes every later Keeper -> Soul frame of the
+// session down it.
+//
+// The session id is not a credential: the authority for "whose session is
+// this" is the mTLS peer cert of the dialing Soul (ADR-012(i)), so a stream
+// that names another host's session is registered against its OWN sid and
+// simply never receives anything.
+type ConsoleAttach struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	SessionId     string                 `protobuf:"bytes,1,opt,name=session_id,json=sessionId,proto3" json:"session_id,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ConsoleAttach) Reset() {
+	*x = ConsoleAttach{}
+	mi := &file_keeper_v1_console_proto_msgTypes[7]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ConsoleAttach) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ConsoleAttach) ProtoMessage() {}
+
+func (x *ConsoleAttach) ProtoReflect() protoreflect.Message {
+	mi := &file_keeper_v1_console_proto_msgTypes[7]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ConsoleAttach.ProtoReflect.Descriptor instead.
+func (*ConsoleAttach) Descriptor() ([]byte, []int) {
+	return file_keeper_v1_console_proto_rawDescGZIP(), []int{7}
+}
+
+func (x *ConsoleAttach) GetSessionId() string {
+	if x != nil {
+		return x.SessionId
+	}
+	return ""
+}
+
+// ConsoleFromSoul is the Soul -> Keeper direction of the [ConsoleStream] RPC.
+// The payloads are the same messages the EventStream carries — the console
+// plane moved to its own stream, it did not change shape.
+type ConsoleFromSoul struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// Types that are valid to be assigned to Payload:
+	//
+	//	*ConsoleFromSoul_ConsoleAttach
+	//	*ConsoleFromSoul_ConsoleOpened
+	//	*ConsoleFromSoul_ConsoleChunk
+	//	*ConsoleFromSoul_ConsoleExit
+	Payload       isConsoleFromSoul_Payload `protobuf_oneof:"payload"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ConsoleFromSoul) Reset() {
+	*x = ConsoleFromSoul{}
+	mi := &file_keeper_v1_console_proto_msgTypes[8]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ConsoleFromSoul) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ConsoleFromSoul) ProtoMessage() {}
+
+func (x *ConsoleFromSoul) ProtoReflect() protoreflect.Message {
+	mi := &file_keeper_v1_console_proto_msgTypes[8]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ConsoleFromSoul.ProtoReflect.Descriptor instead.
+func (*ConsoleFromSoul) Descriptor() ([]byte, []int) {
+	return file_keeper_v1_console_proto_rawDescGZIP(), []int{8}
+}
+
+func (x *ConsoleFromSoul) GetPayload() isConsoleFromSoul_Payload {
+	if x != nil {
+		return x.Payload
+	}
+	return nil
+}
+
+func (x *ConsoleFromSoul) GetConsoleAttach() *ConsoleAttach {
+	if x != nil {
+		if x, ok := x.Payload.(*ConsoleFromSoul_ConsoleAttach); ok {
+			return x.ConsoleAttach
+		}
+	}
+	return nil
+}
+
+func (x *ConsoleFromSoul) GetConsoleOpened() *ConsoleOpened {
+	if x != nil {
+		if x, ok := x.Payload.(*ConsoleFromSoul_ConsoleOpened); ok {
+			return x.ConsoleOpened
+		}
+	}
+	return nil
+}
+
+func (x *ConsoleFromSoul) GetConsoleChunk() *ConsoleChunk {
+	if x != nil {
+		if x, ok := x.Payload.(*ConsoleFromSoul_ConsoleChunk); ok {
+			return x.ConsoleChunk
+		}
+	}
+	return nil
+}
+
+func (x *ConsoleFromSoul) GetConsoleExit() *ConsoleExit {
+	if x != nil {
+		if x, ok := x.Payload.(*ConsoleFromSoul_ConsoleExit); ok {
+			return x.ConsoleExit
+		}
+	}
+	return nil
+}
+
+type isConsoleFromSoul_Payload interface {
+	isConsoleFromSoul_Payload()
+}
+
+type ConsoleFromSoul_ConsoleAttach struct {
+	ConsoleAttach *ConsoleAttach `protobuf:"bytes,1,opt,name=console_attach,json=consoleAttach,proto3,oneof"`
+}
+
+type ConsoleFromSoul_ConsoleOpened struct {
+	ConsoleOpened *ConsoleOpened `protobuf:"bytes,2,opt,name=console_opened,json=consoleOpened,proto3,oneof"`
+}
+
+type ConsoleFromSoul_ConsoleChunk struct {
+	ConsoleChunk *ConsoleChunk `protobuf:"bytes,3,opt,name=console_chunk,json=consoleChunk,proto3,oneof"`
+}
+
+type ConsoleFromSoul_ConsoleExit struct {
+	ConsoleExit *ConsoleExit `protobuf:"bytes,4,opt,name=console_exit,json=consoleExit,proto3,oneof"`
+}
+
+func (*ConsoleFromSoul_ConsoleAttach) isConsoleFromSoul_Payload() {}
+
+func (*ConsoleFromSoul_ConsoleOpened) isConsoleFromSoul_Payload() {}
+
+func (*ConsoleFromSoul_ConsoleChunk) isConsoleFromSoul_Payload() {}
+
+func (*ConsoleFromSoul_ConsoleExit) isConsoleFromSoul_Payload() {}
+
+// ConsoleAttached is Keeper -> Soul: the acknowledgement of a ConsoleAttach,
+// sent exactly once and before any other frame of the session.
+//
+// It exists so the fallback is decided by an answer rather than by a timeout. A
+// Keeper that predates this RPC fails the call, and the Soul cannot tell that
+// apart from "the ack has not arrived yet" without a positive signal — it would
+// have to guess, and guessing wrong means the operator watches a terminal that
+// never opens.
+type ConsoleAttached struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	SessionId     string                 `protobuf:"bytes,1,opt,name=session_id,json=sessionId,proto3" json:"session_id,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ConsoleAttached) Reset() {
+	*x = ConsoleAttached{}
+	mi := &file_keeper_v1_console_proto_msgTypes[9]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ConsoleAttached) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ConsoleAttached) ProtoMessage() {}
+
+func (x *ConsoleAttached) ProtoReflect() protoreflect.Message {
+	mi := &file_keeper_v1_console_proto_msgTypes[9]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ConsoleAttached.ProtoReflect.Descriptor instead.
+func (*ConsoleAttached) Descriptor() ([]byte, []int) {
+	return file_keeper_v1_console_proto_rawDescGZIP(), []int{9}
+}
+
+func (x *ConsoleAttached) GetSessionId() string {
+	if x != nil {
+		return x.SessionId
+	}
+	return ""
+}
+
+// ConsoleToSoul is the Keeper -> Soul direction of the [ConsoleStream] RPC.
+// ConsoleOpen is absent by design: it is the message that makes the Soul dial
+// this stream, so it can only travel on EventStream.
+type ConsoleToSoul struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// Types that are valid to be assigned to Payload:
+	//
+	//	*ConsoleToSoul_ConsoleStdin
+	//	*ConsoleToSoul_ConsoleResize
+	//	*ConsoleToSoul_ConsoleClose
+	//	*ConsoleToSoul_ConsoleAttached
+	Payload       isConsoleToSoul_Payload `protobuf_oneof:"payload"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ConsoleToSoul) Reset() {
+	*x = ConsoleToSoul{}
+	mi := &file_keeper_v1_console_proto_msgTypes[10]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ConsoleToSoul) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ConsoleToSoul) ProtoMessage() {}
+
+func (x *ConsoleToSoul) ProtoReflect() protoreflect.Message {
+	mi := &file_keeper_v1_console_proto_msgTypes[10]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ConsoleToSoul.ProtoReflect.Descriptor instead.
+func (*ConsoleToSoul) Descriptor() ([]byte, []int) {
+	return file_keeper_v1_console_proto_rawDescGZIP(), []int{10}
+}
+
+func (x *ConsoleToSoul) GetPayload() isConsoleToSoul_Payload {
+	if x != nil {
+		return x.Payload
+	}
+	return nil
+}
+
+func (x *ConsoleToSoul) GetConsoleStdin() *ConsoleStdin {
+	if x != nil {
+		if x, ok := x.Payload.(*ConsoleToSoul_ConsoleStdin); ok {
+			return x.ConsoleStdin
+		}
+	}
+	return nil
+}
+
+func (x *ConsoleToSoul) GetConsoleResize() *ConsoleResize {
+	if x != nil {
+		if x, ok := x.Payload.(*ConsoleToSoul_ConsoleResize); ok {
+			return x.ConsoleResize
+		}
+	}
+	return nil
+}
+
+func (x *ConsoleToSoul) GetConsoleClose() *ConsoleClose {
+	if x != nil {
+		if x, ok := x.Payload.(*ConsoleToSoul_ConsoleClose); ok {
+			return x.ConsoleClose
+		}
+	}
+	return nil
+}
+
+func (x *ConsoleToSoul) GetConsoleAttached() *ConsoleAttached {
+	if x != nil {
+		if x, ok := x.Payload.(*ConsoleToSoul_ConsoleAttached); ok {
+			return x.ConsoleAttached
+		}
+	}
+	return nil
+}
+
+type isConsoleToSoul_Payload interface {
+	isConsoleToSoul_Payload()
+}
+
+type ConsoleToSoul_ConsoleStdin struct {
+	ConsoleStdin *ConsoleStdin `protobuf:"bytes,1,opt,name=console_stdin,json=consoleStdin,proto3,oneof"`
+}
+
+type ConsoleToSoul_ConsoleResize struct {
+	ConsoleResize *ConsoleResize `protobuf:"bytes,2,opt,name=console_resize,json=consoleResize,proto3,oneof"`
+}
+
+type ConsoleToSoul_ConsoleClose struct {
+	ConsoleClose *ConsoleClose `protobuf:"bytes,3,opt,name=console_close,json=consoleClose,proto3,oneof"`
+}
+
+type ConsoleToSoul_ConsoleAttached struct {
+	ConsoleAttached *ConsoleAttached `protobuf:"bytes,4,opt,name=console_attached,json=consoleAttached,proto3,oneof"`
+}
+
+func (*ConsoleToSoul_ConsoleStdin) isConsoleToSoul_Payload() {}
+
+func (*ConsoleToSoul_ConsoleResize) isConsoleToSoul_Payload() {}
+
+func (*ConsoleToSoul_ConsoleClose) isConsoleToSoul_Payload() {}
+
+func (*ConsoleToSoul_ConsoleAttached) isConsoleToSoul_Payload() {}
+
 var File_keeper_v1_console_proto protoreflect.FileDescriptor
 
 const file_keeper_v1_console_proto_rawDesc = "" +
@@ -675,7 +1014,25 @@ const file_keeper_v1_console_proto_rawDesc = "" +
 	"session_id\x18\x01 \x01(\tR\tsessionId\x12\x1b\n" +
 	"\texit_code\x18\x02 \x01(\x05R\bexitCode\x12>\n" +
 	"\x06reason\x18\x03 \x01(\x0e2&.soulstack.keeper.v1.ConsoleExitReasonR\x06reason\x12#\n" +
-	"\rerror_message\x18\x04 \x01(\tR\ferrorMessage*e\n" +
+	"\rerror_message\x18\x04 \x01(\tR\ferrorMessage\".\n" +
+	"\rConsoleAttach\x12\x1d\n" +
+	"\n" +
+	"session_id\x18\x01 \x01(\tR\tsessionId\"\xc7\x02\n" +
+	"\x0fConsoleFromSoul\x12K\n" +
+	"\x0econsole_attach\x18\x01 \x01(\v2\".soulstack.keeper.v1.ConsoleAttachH\x00R\rconsoleAttach\x12K\n" +
+	"\x0econsole_opened\x18\x02 \x01(\v2\".soulstack.keeper.v1.ConsoleOpenedH\x00R\rconsoleOpened\x12H\n" +
+	"\rconsole_chunk\x18\x03 \x01(\v2!.soulstack.keeper.v1.ConsoleChunkH\x00R\fconsoleChunk\x12E\n" +
+	"\fconsole_exit\x18\x04 \x01(\v2 .soulstack.keeper.v1.ConsoleExitH\x00R\vconsoleExitB\t\n" +
+	"\apayload\"0\n" +
+	"\x0fConsoleAttached\x12\x1d\n" +
+	"\n" +
+	"session_id\x18\x01 \x01(\tR\tsessionId\"\xce\x02\n" +
+	"\rConsoleToSoul\x12H\n" +
+	"\rconsole_stdin\x18\x01 \x01(\v2!.soulstack.keeper.v1.ConsoleStdinH\x00R\fconsoleStdin\x12K\n" +
+	"\x0econsole_resize\x18\x02 \x01(\v2\".soulstack.keeper.v1.ConsoleResizeH\x00R\rconsoleResize\x12H\n" +
+	"\rconsole_close\x18\x03 \x01(\v2!.soulstack.keeper.v1.ConsoleCloseH\x00R\fconsoleClose\x12Q\n" +
+	"\x10console_attached\x18\x04 \x01(\v2$.soulstack.keeper.v1.ConsoleAttachedH\x00R\x0fconsoleAttachedB\t\n" +
+	"\apayload*e\n" +
 	"\rConsoleStream\x12\x1e\n" +
 	"\x1aCONSOLE_STREAM_UNSPECIFIED\x10\x00\x12\x19\n" +
 	"\x15CONSOLE_STREAM_STDOUT\x10\x01\x12\x19\n" +
@@ -701,26 +1058,38 @@ func file_keeper_v1_console_proto_rawDescGZIP() []byte {
 }
 
 var file_keeper_v1_console_proto_enumTypes = make([]protoimpl.EnumInfo, 2)
-var file_keeper_v1_console_proto_msgTypes = make([]protoimpl.MessageInfo, 7)
+var file_keeper_v1_console_proto_msgTypes = make([]protoimpl.MessageInfo, 11)
 var file_keeper_v1_console_proto_goTypes = []any{
-	(ConsoleStream)(0),     // 0: soulstack.keeper.v1.ConsoleStream
-	(ConsoleExitReason)(0), // 1: soulstack.keeper.v1.ConsoleExitReason
-	(*ConsoleOpen)(nil),    // 2: soulstack.keeper.v1.ConsoleOpen
-	(*ConsoleStdin)(nil),   // 3: soulstack.keeper.v1.ConsoleStdin
-	(*ConsoleResize)(nil),  // 4: soulstack.keeper.v1.ConsoleResize
-	(*ConsoleClose)(nil),   // 5: soulstack.keeper.v1.ConsoleClose
-	(*ConsoleOpened)(nil),  // 6: soulstack.keeper.v1.ConsoleOpened
-	(*ConsoleChunk)(nil),   // 7: soulstack.keeper.v1.ConsoleChunk
-	(*ConsoleExit)(nil),    // 8: soulstack.keeper.v1.ConsoleExit
+	(ConsoleStream)(0),      // 0: soulstack.keeper.v1.ConsoleStream
+	(ConsoleExitReason)(0),  // 1: soulstack.keeper.v1.ConsoleExitReason
+	(*ConsoleOpen)(nil),     // 2: soulstack.keeper.v1.ConsoleOpen
+	(*ConsoleStdin)(nil),    // 3: soulstack.keeper.v1.ConsoleStdin
+	(*ConsoleResize)(nil),   // 4: soulstack.keeper.v1.ConsoleResize
+	(*ConsoleClose)(nil),    // 5: soulstack.keeper.v1.ConsoleClose
+	(*ConsoleOpened)(nil),   // 6: soulstack.keeper.v1.ConsoleOpened
+	(*ConsoleChunk)(nil),    // 7: soulstack.keeper.v1.ConsoleChunk
+	(*ConsoleExit)(nil),     // 8: soulstack.keeper.v1.ConsoleExit
+	(*ConsoleAttach)(nil),   // 9: soulstack.keeper.v1.ConsoleAttach
+	(*ConsoleFromSoul)(nil), // 10: soulstack.keeper.v1.ConsoleFromSoul
+	(*ConsoleAttached)(nil), // 11: soulstack.keeper.v1.ConsoleAttached
+	(*ConsoleToSoul)(nil),   // 12: soulstack.keeper.v1.ConsoleToSoul
 }
 var file_keeper_v1_console_proto_depIdxs = []int32{
-	0, // 0: soulstack.keeper.v1.ConsoleChunk.stream:type_name -> soulstack.keeper.v1.ConsoleStream
-	1, // 1: soulstack.keeper.v1.ConsoleExit.reason:type_name -> soulstack.keeper.v1.ConsoleExitReason
-	2, // [2:2] is the sub-list for method output_type
-	2, // [2:2] is the sub-list for method input_type
-	2, // [2:2] is the sub-list for extension type_name
-	2, // [2:2] is the sub-list for extension extendee
-	0, // [0:2] is the sub-list for field type_name
+	0,  // 0: soulstack.keeper.v1.ConsoleChunk.stream:type_name -> soulstack.keeper.v1.ConsoleStream
+	1,  // 1: soulstack.keeper.v1.ConsoleExit.reason:type_name -> soulstack.keeper.v1.ConsoleExitReason
+	9,  // 2: soulstack.keeper.v1.ConsoleFromSoul.console_attach:type_name -> soulstack.keeper.v1.ConsoleAttach
+	6,  // 3: soulstack.keeper.v1.ConsoleFromSoul.console_opened:type_name -> soulstack.keeper.v1.ConsoleOpened
+	7,  // 4: soulstack.keeper.v1.ConsoleFromSoul.console_chunk:type_name -> soulstack.keeper.v1.ConsoleChunk
+	8,  // 5: soulstack.keeper.v1.ConsoleFromSoul.console_exit:type_name -> soulstack.keeper.v1.ConsoleExit
+	3,  // 6: soulstack.keeper.v1.ConsoleToSoul.console_stdin:type_name -> soulstack.keeper.v1.ConsoleStdin
+	4,  // 7: soulstack.keeper.v1.ConsoleToSoul.console_resize:type_name -> soulstack.keeper.v1.ConsoleResize
+	5,  // 8: soulstack.keeper.v1.ConsoleToSoul.console_close:type_name -> soulstack.keeper.v1.ConsoleClose
+	11, // 9: soulstack.keeper.v1.ConsoleToSoul.console_attached:type_name -> soulstack.keeper.v1.ConsoleAttached
+	10, // [10:10] is the sub-list for method output_type
+	10, // [10:10] is the sub-list for method input_type
+	10, // [10:10] is the sub-list for extension type_name
+	10, // [10:10] is the sub-list for extension extendee
+	0,  // [0:10] is the sub-list for field type_name
 }
 
 func init() { file_keeper_v1_console_proto_init() }
@@ -728,13 +1097,25 @@ func file_keeper_v1_console_proto_init() {
 	if File_keeper_v1_console_proto != nil {
 		return
 	}
+	file_keeper_v1_console_proto_msgTypes[8].OneofWrappers = []any{
+		(*ConsoleFromSoul_ConsoleAttach)(nil),
+		(*ConsoleFromSoul_ConsoleOpened)(nil),
+		(*ConsoleFromSoul_ConsoleChunk)(nil),
+		(*ConsoleFromSoul_ConsoleExit)(nil),
+	}
+	file_keeper_v1_console_proto_msgTypes[10].OneofWrappers = []any{
+		(*ConsoleToSoul_ConsoleStdin)(nil),
+		(*ConsoleToSoul_ConsoleResize)(nil),
+		(*ConsoleToSoul_ConsoleClose)(nil),
+		(*ConsoleToSoul_ConsoleAttached)(nil),
+	}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_keeper_v1_console_proto_rawDesc), len(file_keeper_v1_console_proto_rawDesc)),
 			NumEnums:      2,
-			NumMessages:   7,
+			NumMessages:   11,
 			NumExtensions: 0,
 			NumServices:   0,
 		},

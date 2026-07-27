@@ -18,12 +18,14 @@ types into a real terminal. Only a pty makes `top`, `vim` and `cd` behave —
 programs detect a tty and switch to full-screen, line editing and job control.
 So the console gets its own runner and never reuses `errandrunner`.
 
-## 2. Transport: only-add on the existing stream
+## 2. Transport: a stream per session, with the EventStream as fallback
 
-There is **no new RPC**. The messages ride the bidi
-`EventStream(stream FromSoul) returns (stream FromKeeper)`
-([ADR-012](../adr/0012-keeper-soul-grpc.md)) as only-add members of the existing
-`oneof payload`, defined in `proto/keeper/v1/console.proto`.
+Two carriers exist, and the message shapes are the same on both. Which one a
+session uses is decided once, before its first frame — see §2.1.
+
+The messages are defined in `proto/keeper/v1/console.proto` as only-add members
+of the `EventStream(stream FromSoul) returns (stream FromKeeper)` `oneof payload`
+([ADR-012](../adr/0012-keeper-soul-grpc.md)):
 
 | Direction | Message | Field | Role |
 |---|---|---|---|
@@ -49,6 +51,52 @@ free its own state unconditionally.
 survive a reconnect (see §4). `target_sid` in `ConsoleOpen` is an echo for logs —
 identity is the mTLS peer cert ([ADR-012(i)](../adr/0012-keeper-soul-grpc.md)).
 
+### 2.1 The dedicated console stream (NIM-188)
+
+`service Keeper` has a fifth RPC:
+
+```proto
+rpc ConsoleStream(stream ConsoleFromSoul) returns (stream ConsoleToSoul);
+```
+
+Soul dials **one stream per console session**, on the same mTLS connection it
+already holds — the same shape `FetchModule` uses for plugin bytes
+([ADR-065](../adr/0065-core-module-installed.md)). No new port, no new
+handshake, no firewall change.
+
+The reason is contention, and it runs both ways. Upstream, every `FromSoul` goes
+through one write mutex (§3), so pty output and a run's `TaskEvent`/`RunResult`
+take turns. Downstream, keystrokes share the 10-slot per-SID outbound queue with
+apply dispatch, so a large paste can fail a run's `ApplyRequest` with
+`ErrOutboundQueueFull`. A private HTTP/2 stream removes both.
+
+The handshake:
+
+1. Keeper sends `ConsoleOpen` **on EventStream** — always. Only a client may open
+   a gRPC stream, so the Soul has to be told to dial before it can. It is also
+   what keeps a `ConsoleClose` ordered behind its open: both ride the one stream
+   the recv-loop reads serially.
+2. Soul dials `ConsoleStream` and sends `ConsoleAttach{session_id}` as its first
+   frame.
+3. Keeper registers the stream under that id and answers `ConsoleAttached`.
+4. Everything else for that session travels on it: `ConsoleOpened`/
+   `ConsoleChunk`/`ConsoleExit` up, `ConsoleStdin`/`ConsoleResize`/
+   `ConsoleClose` down.
+
+**The ack is not ceremony.** Without a positive answer, a Soul cannot tell "this
+Keeper has no such RPC" from "the answer has not arrived yet" — and the wrong
+guess leaves an operator watching a terminal that never opens. If the ack does
+not arrive within 3s, or the dial fails, or the Keeper answers `Unimplemented`,
+the session falls back to the EventStream carrier and behaves exactly as a
+pre-NIM-188 Soul did. The choice is made **once per session and before the first
+frame**: mixing carriers mid-session would mean two independent HTTP/2 streams
+with no ordering between them.
+
+**The stream is the session's lifeline.** If it breaks, the pty is killed — the
+same kill-on-disconnect rule as §4, now per session. Keeper does the mirror
+image: a console stream that ends without a `ConsoleExit` gets one synthesized,
+so the operator's pane never pretends to be alive.
+
 ### Capability
 
 Soul announces `console` in `Hello.capabilities`
@@ -57,6 +105,12 @@ Soul announces `console` in `Hello.capabilities`
 minting a session: an older binary drops `ConsoleOpen` into the default branch of
 its recv-loop and never answers, which would leave the operator watching a dead
 terminal until a timeout. Fail-closed, like every other capability gate.
+
+A binary that dials the RPC in §2.1 also announces **`console_stream`**. That one
+is *not* a gate — it informs. Compatibility does not depend on it in either
+direction: a Soul without it is served over EventStream, and a Soul with it falls
+back on `Unimplemented`. Keeper uses it to know whether to expect an attach and to
+report which carrier a session ended up on.
 
 ### stdout and stderr
 
@@ -67,23 +121,32 @@ without a wire break; consumers must not wait for `STDERR`.
 
 ## 3. Flow control
 
-The console and the apply cycle share **one** write mutex on the EventStream
-(`soul/internal/grpc/client.go`). If a flooding console could block its sender, it
-would hold that mutex and stall apply's `TaskEvent`/`RunResult` on the same
-stream. So on the Soul side the pty reader and the stream sender are separate
-goroutines joined by a bounded queue:
+On both carriers the pty reader and the stream sender are separate goroutines
+joined by a bounded queue, and the sender paces output through a token bucket
+(1 MiB/s sustained, 256 KiB burst by default). What differs is what happens when
+the queue fills, and the difference follows from the transport.
 
-- the reader never blocks on the stream — when the queue is full the output is
-  **dropped**, not buffered;
-- the sender paces output through a token bucket (1 MiB/s sustained, 256 KiB
-  burst by default);
-- dropped bytes are reported in `ConsoleChunk.dropped_bytes` of the next chunk,
-  and `seq` is a gap-free per-session counter from 1.
+**On the EventStream carrier the queue drops.** The console and the apply cycle
+share **one** write mutex there (`soul/internal/grpc/client.go`). A flooding
+console that could block its sender would hold that mutex and stall apply's
+`TaskEvent`/`RunResult` on the same stream, so the reader never blocks: when the
+queue is full the output is **dropped**, not buffered. Dropped bytes are reported
+in `ConsoleChunk.dropped_bytes` of the next chunk, and `seq` stays a gap-free
+per-session counter from 1. Loss is possible, but it is always **visible** —
+Keeper and the web terminal render an explicit gap marker instead of silently
+splicing a corrupted ANSI stream, and
+`soul_console_dropped_bytes_total` exposes the same signal to monitoring.
 
-That pairing is deliberate: loss is possible under a flood, but it is always
-**visible**. Keeper and the web terminal render an explicit gap marker instead of
-silently splicing a corrupted ANSI stream. `soul_console_dropped_bytes_total`
-exposes the same signal to monitoring.
+**On the session's own stream the queue blocks** (NIM-188). There is no shared
+mutex and no shared flow-control window left to protect, so a slow reader
+throttles the pty instead: the reader stops draining, the kernel buffer fills,
+and the flooding process is slowed at the source — which is what a terminal over
+a slow line has always done. `dropped_bytes` therefore reads 0 there, and the
+operator sees all of the output rather than most of it.
+
+The block is never unbounded. Teardown releases a parked reader immediately, and
+a session still wedged after the full kill escalation has its stream cancelled
+(§4) — a console must never be able to hold up the daemon's shutdown.
 
 ## 4. Lifecycle and the kill-on-disconnect invariant
 
@@ -103,6 +166,10 @@ Teardown escalates, because killing the shell is not enough:
    holding the slave open would otherwise keep parked.
 3. **Sweep the terminal session.** `SIGKILL` to every process whose session id
    equals the shell's pid (resolved from `/proc/<pid>/stat`).
+4. **Cut the transport** (dedicated stream only). Every process is dead by now, so
+   a session that still has not finished is a sender blocked in `Send` on a Keeper
+   that stopped reading — and cancelling the RPC is the only thing that releases
+   gRPC flow control.
 
 Step 3 is not belt-and-braces. A shell attached to a pty is **interactive**, so it
 turns job control on and puts every job in its **own** process group — the `top`

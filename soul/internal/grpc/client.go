@@ -595,6 +595,20 @@ func (s *StreamSession) FetchModule(ctx context.Context, req *keeperv1.PluginFet
 	return keeperv1.NewKeeperClient(s.conn).FetchModule(ctx, req)
 }
 
+// ConsoleStream dials one interactive console session onto its own bidi stream
+// over the same mTLS ClientConn (ADR-0074 amendment 2026-07-27, NIM-188), for
+// the same reason FetchModule has one: a separate HTTP/2 stream keeps the
+// control plane free.
+//
+// It does NOT take writeMu, and that is the entire point of the ticket — pty
+// output no longer queues behind (or ahead of) TaskEvent/RunResult, so an
+// interactive session and a running apply stop stalling each other. A Keeper
+// that predates the RPC answers Unimplemented on the first Recv; the caller
+// falls back to the EventStream members.
+func (s *StreamSession) ConsoleStream(ctx context.Context) (grpc.BidiStreamingClient[keeperv1.ConsoleFromSoul, keeperv1.ConsoleToSoul], error) {
+	return keeperv1.NewKeeperClient(s.conn).ConsoleStream(ctx)
+}
+
 // Close cleanly ends the session: CloseSend → cancel ctx → conn.Close.
 // Idempotent.
 func (s *StreamSession) Close() error {

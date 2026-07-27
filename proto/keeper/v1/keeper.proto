@@ -33,6 +33,17 @@ service Keeper {
   // as EventStream; a separate HTTP/2 stream keeps the control plane free. Keeper
   // only ever serves a sigil-allowed binary (fail-closed).
   rpc FetchModule(PluginFetchRequest) returns (stream PluginChunk);
+
+  // ConsoleStream: the interactive console plane on its own bidirectional
+  // stream (ADR-0074 amendment 2026-07-27, NIM-188). Same mTLS listener and
+  // the same client connection as EventStream, one stream per console
+  // session, dialed by the Soul when Keeper sends it a ConsoleOpen.
+  //
+  // The split is the point: pty bytes get their own HTTP/2 flow-control
+  // window and their own writer, so an interactive session and the run's
+  // event stream can no longer stall each other. ADR-012(c) only-add —
+  // EventStream keeps its `console_*` members for Souls that predate this.
+  rpc ConsoleStream(stream ConsoleFromSoul) returns (stream ConsoleToSoul);
 }
 
 message PingRequest {}

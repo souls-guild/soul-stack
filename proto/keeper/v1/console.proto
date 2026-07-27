@@ -4,17 +4,33 @@ package soulstack.keeper.v1;
 
 option go_package = "github.com/souls-guild/soul-stack/proto/gen/go/keeper/v1;keeperv1";
 
-// Interactive console (PTY) messages for the Keeper<->Soul EventStream.
+// Interactive console (PTY) messages for the Keeper<->Soul plane.
 //
 // A console is a LIVING pty session, not an Errand: an Errand is
 // `request -> one final blob <= 64 KiB` (ADR-033), while a console is a
 // bidirectional byte stream that lasts until the shell exits or Keeper closes
-// it. Both ride the same EventStream, added strictly only-add to the existing
-// `oneof payload` (ADR-012(c)); no new RPC.
+// it.
+//
+// Transport (ADR-0074 amendment 2026-07-27, NIM-188). The message shapes below
+// travel over two carriers, and which one is used is decided per session:
+//
+//   - `ConsoleStream` RPC — the default for a Soul that announces the
+//     `console_stream` capability. One bidi stream per console session, dialed
+//     by the Soul on the SAME mTLS connection as EventStream. pty bytes then
+//     have their own HTTP/2 flow-control window and their own writer, so they
+//     never queue behind apply traffic (and cannot starve it).
+//   - EventStream `oneof payload` — the original NIM-142 carrier, kept for
+//     Souls that do not announce the capability and as the fallback when the
+//     Keeper does not implement the RPC. ADR-012(c) only-add: nothing was
+//     removed, no field number reused.
+//
+// ConsoleOpen rides EventStream in BOTH modes: only a client may open a gRPC
+// stream, so the Soul has to be told to dial before it can.
 //
 // Session lifecycle (session_id is a ULID minted by Keeper, unique per stream):
 //
-//	Keeper -> Soul: ConsoleOpen    -> Soul spawns a shell under a pty
+//	Keeper -> Soul: ConsoleOpen    -> Soul spawns a shell under a pty  [EventStream]
+//	Soul -> Keeper: ConsoleAttach  (dials ConsoleStream for this session_id)
 //	Soul -> Keeper: ConsoleOpened  (pid) | ConsoleExit (open failed)
 //	Keeper -> Soul: ConsoleStdin   (keystrokes) / ConsoleResize (TIOCSWINSZ)
 //	Soul -> Keeper: ConsoleChunk   (pty output, paced by Soul flow control)
@@ -23,7 +39,9 @@ option go_package = "github.com/souls-guild/soul-stack/proto/gen/go/keeper/v1;ke
 //
 // A console never outlives its EventStream session: on stream teardown (Keeper
 // gone, failback swap, daemon shutdown) Soul kills every live pty. That is the
-// kill-on-disconnect invariant — an orphaned pty is a zombie root shell.
+// kill-on-disconnect invariant — an orphaned pty is a zombie root shell. The
+// dedicated console stream does not weaken it: it is a child of the same
+// connection, and its own death is likewise terminal for the session.
 
 // ConsoleOpen is Keeper -> Soul: start an interactive pty session.
 //
@@ -121,6 +139,55 @@ enum ConsoleStream {
   CONSOLE_STREAM_UNSPECIFIED = 0;
   CONSOLE_STREAM_STDOUT = 1;
   CONSOLE_STREAM_STDERR = 2;
+}
+
+// ConsoleAttach is Soul -> Keeper: the FIRST frame on a dedicated console
+// stream, naming the session the stream belongs to. Keeper registers the
+// stream under that id and routes every later Keeper -> Soul frame of the
+// session down it.
+//
+// The session id is not a credential: the authority for "whose session is
+// this" is the mTLS peer cert of the dialing Soul (ADR-012(i)), so a stream
+// that names another host's session is registered against its OWN sid and
+// simply never receives anything.
+message ConsoleAttach {
+  string session_id = 1;
+}
+
+// ConsoleFromSoul is the Soul -> Keeper direction of the [ConsoleStream] RPC.
+// The payloads are the same messages the EventStream carries — the console
+// plane moved to its own stream, it did not change shape.
+message ConsoleFromSoul {
+  oneof payload {
+    ConsoleAttach console_attach = 1;
+    ConsoleOpened console_opened = 2;
+    ConsoleChunk console_chunk = 3;
+    ConsoleExit console_exit = 4;
+  }
+}
+
+// ConsoleAttached is Keeper -> Soul: the acknowledgement of a ConsoleAttach,
+// sent exactly once and before any other frame of the session.
+//
+// It exists so the fallback is decided by an answer rather than by a timeout. A
+// Keeper that predates this RPC fails the call, and the Soul cannot tell that
+// apart from "the ack has not arrived yet" without a positive signal — it would
+// have to guess, and guessing wrong means the operator watches a terminal that
+// never opens.
+message ConsoleAttached {
+  string session_id = 1;
+}
+
+// ConsoleToSoul is the Keeper -> Soul direction of the [ConsoleStream] RPC.
+// ConsoleOpen is absent by design: it is the message that makes the Soul dial
+// this stream, so it can only travel on EventStream.
+message ConsoleToSoul {
+  oneof payload {
+    ConsoleStdin console_stdin = 1;
+    ConsoleResize console_resize = 2;
+    ConsoleClose console_close = 3;
+    ConsoleAttached console_attached = 4;
+  }
 }
 
 // ConsoleExitReason is the closed set of reasons a console session ended.

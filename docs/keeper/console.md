@@ -123,9 +123,11 @@ without breaking an older UI.
 Console output must never become Keeper's memory or stall anything else. Two
 properties are non-negotiable:
 
-- **Delivery is non-blocking.** Frames arrive on the EventStream goroutine, which
-  the apply cycle shares. A console that could block there would stall
-  `TaskEvent`/`RunResult` for that host.
+- **Delivery is non-blocking.** A console that could block the goroutine it
+  arrives on would stall whatever else uses it. Since NIM-188 that goroutine is
+  the session's own `ConsoleStream` handler for most hosts, but a Soul on the
+  EventStream carrier still shares one with the apply cycle — so the rule holds
+  either way, and the socket half below never depended on which.
 - **Loss is visible.** A bounded queue means a flooding terminal loses output;
   hiding that would splice a corrupted ANSI stream and the operator would read
   a screen that never existed.
@@ -142,24 +144,38 @@ So each socket has one bounded queue (256 frames) drained by a single writer:
   and — if the flood has ENDED and there is no next chunk — flushed within 250 ms
   as a marker chunk with empty `data`.
 
-`dropped_bytes` sums BOTH stages: the Soul-side token bucket
-(`ConsoleChunk.dropped_bytes`, 1 MiB/s per session) and this queue.
-`keeper_console_dropped_bytes_total` against `soul_console_dropped_bytes_total`
-says which side is the bottleneck.
+`dropped_bytes` sums BOTH stages: the Soul-side flow control
+(`ConsoleChunk.dropped_bytes`) and this queue. On the dedicated transport the
+Soul-side term is 0 by construction — it throttles the pty rather than discarding
+([soul/console.md §3](../soul/console.md)) — so a non-zero
+`keeper_console_dropped_bytes_total` against a zero
+`soul_console_dropped_bytes_total` now points at the browser being the slow
+reader, not the host.
 
 ### The other direction: keystrokes
 
-Downstream has a bound too, and it is not the console's own: `ConsoleStdin`
-shares the per-SID outbound queue (depth 10) with the apply cycle. A burst that
-overflows it is refused with `error{code: "soul_busy"}` — deliberately NOT
-`soul_offline`, since the host is healthy and the operator should retry rather
-than go hunting for a dead agent.
+Downstream is bounded too, and where that bound lives depends on the carrier.
 
-The defaults are self-consistent: the Soul-side host cap is 8 consoles, so even
-every terminal on one host typing at the same instant stays under the queue. It
-takes a synthetic burst — more consoles on ONE host than the queue is deep, all
-sending at once — to hit it. Raising `console.max_sessions` on a host well past 8
-is what would make this reachable in practice.
+On the dedicated transport (NIM-188) each session has its **own** 64-slot queue
+and its own HTTP/2 window, so a paste can no longer reach the apply cycle at all.
+On the EventStream carrier `ConsoleStdin` still shares the per-SID outbound queue
+(depth 10) with apply dispatch, which is what the split was for: the Soul-side
+host cap is 8 consoles, so hitting it took a synthetic burst — more consoles on
+ONE host than the queue is deep, all sending at once — but a run's `ApplyRequest`
+losing to a keystroke was the wrong failure mode at any probability.
+
+A burst that overflows either queue is refused with `error{code: "soul_busy"}` —
+deliberately NOT `soul_offline`, since the host is healthy and the operator should
+retry rather than go hunting for a dead agent.
+
+**Input typed before the pty answers is held, not sent.** Until `ConsoleOpened`
+arrives, nobody knows which carrier the session ended up on, and a keystroke on
+one carrier followed by a keystroke on the other is two independent HTTP/2
+streams with no ordering between them. So Keeper parks pre-`opened` input (64
+frames; overflow is `soul_busy`) and releases it in order the moment that frame
+lands. A `close` is never parked — a session closed before it opened would never
+send the `ConsoleOpened` that releases it, and the pty would outlive the intent to
+kill it.
 
 ## 5. Lifecycle
 
@@ -170,6 +186,13 @@ drops — a close frame, a dead TCP connection, a failed ping — every session
 behind it gets a `ConsoleClose` and the Soul kills the whole process group. This
 mirrors the Soul-side invariant (a console never outlives its EventStream): an
 orphaned interactive root shell is the worst failure this feature can produce.
+
+The dedicated transport is held to the same rule from both ends. A SID's console
+streams are closed when its EventStream ends, and a console stream that dies on
+its own is terminal for that session: Keeper synthesizes the `ConsoleExit` the
+operator would otherwise never receive, and the Soul kills the pty. The exit
+carries `SOUL_SHUTDOWN` — the kill-on-disconnect family, which the client already
+renders.
 
 The client acts on the same rule — it marks every session closed on disconnect
 and never resumes; a reconnect opens *fresh* shells.
@@ -201,7 +224,13 @@ picked, the host's EventStream on whichever won the SoulLease. With N instances
 they coincide about 1/N of the time — so this is the normal path, not an edge.
 
 **Downstream** (keystrokes) needs nothing new: `Outbound` already routes a
-`FromKeeper` to the lease holder over `outbound:<sid>`.
+`FromKeeper` to the lease holder over `outbound:<sid>`. The dedicated transport
+does not change that, deliberately. A console stream is dialed on the SAME
+connection as the SID's EventStream, so it always lands on the instance that
+already holds the lease — routing reaches the right instance exactly as before,
+and only the last hop differs (the session's own stream if one is attached, its
+EventStream otherwise). The Redis envelope stays a `FromKeeper`, so a cluster
+running mixed versions mid-upgrade routes consoles unchanged.
 
 **Upstream** (pty output) is addressed by owner:
 
@@ -274,6 +303,25 @@ an older binary drops `ConsoleOpen` into the default branch of its recv-loop and
 never answers, which would leave the operator watching a dead terminal until the
 idle timeout.
 
+`console_stream` (NIM-188) is announced alongside it but is **not** a gate.
+Nothing about compatibility depends on it: a Soul without it is served over the
+EventStream carrier, and a Soul with it falls back if this Keeper answers
+`Unimplemented`. It exists so Keeper knows whether to expect an attach, and can
+report which carrier a session ended up on.
+
+### Attaching is not authorizing
+
+A `ConsoleStream` dial cannot create a session and cannot reach a session it does
+not own. The `soul.console` right is checked at the operator's socket, before any
+session is minted ([ADR-0074(c)](../adr/0074-interactive-console-pty.md)); the RPC
+only registers a route for an id Keeper already minted. That route is handed
+frames only when the SID that dialed is the SID that owns the session — free from
+the mTLS peer cert ([ADR-012(i)](../adr/0012-keeper-soul-grpc.md)). Attaching to
+an unknown or foreign id therefore buys nothing: nothing is ever routed to it.
+
+The same check now guards the EventStream carrier, where an upstream frame naming
+another host's session used to be delivered on the session id alone.
+
 ## 9. Audit and metrics
 
 Sessions are audited as facts — `console.opened` / `console.closed`, with
@@ -299,7 +347,18 @@ checked against a module allow-list the way an Errand's can.
   frame: the stream broke, so the pty is already dead (kill-on-disconnect), but
   the operator learns only from the idle timeout. A liveness probe from the owner
   side is a follow-up. (The mirror case — the OWNER dying — is handled, see
-  §6 "When the socket's Keeper dies".)
+  §6 "When the socket's Keeper dies".) NIM-188 narrows this: a session on the
+  dedicated transport gets a synthesized `ConsoleExit` when its console stream
+  dies, so the gap now covers only a Soul still on the EventStream carrier.
+- **Cross-instance upstream is not SID-checked** (NIM-196). The ownership check
+  in §8 applies where the frame is authenticated. A frame that arrived over the
+  cluster bridge carries no SID, so the receiving instance takes the publisher's
+  word for it — closing that by changing the pub/sub envelope would break routing
+  during a mixed-version upgrade. The publisher does authenticate the SID; what
+  it cannot check is that the session belongs to it, because the claim
+  (`console:owner:<session_id>`) records only the owning instance. Binding the
+  SID into that claim and checking on the publishing side closes it without
+  touching the envelope.
 - **Cross-instance chunk loss** is silent in one case: a bridged frame dropped by
   a congested Redis forward channel is logged but not counted in
   `dropped_bytes`, since the accounting lives on the socket side.

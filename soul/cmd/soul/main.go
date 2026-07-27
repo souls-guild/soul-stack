@@ -935,6 +935,16 @@ func resolveUtilizationInterval(store *config.Store[config.SoulConfig], logger *
 // A bad kill_grace is a warn + default, never a refusal to serve: the schema
 // phase already rejects it at load time, so reaching here means a hot-reloaded
 // file went bad, and losing consoles over it would be a worse outcome.
+// consoleDialer adapts the gRPC session to [consolerunner.Dialer] (NIM-188).
+// It exists only to keep the console package free of a gRPC dependency: the
+// runner declares the narrow stream surface it needs, and the widening happens
+// here, at the wire-up.
+type consoleDialer struct{ sess *soulgrpc.StreamSession }
+
+func (d consoleDialer) ConsoleStream(ctx context.Context) (consolerunner.ConsoleStreamClient, error) {
+	return d.sess.ConsoleStream(ctx)
+}
+
 func resolveConsoleLimits(store *config.Store[config.SoulConfig], logger *slog.Logger) consolerunner.Limits {
 	cfg := store.Get()
 	if cfg == nil || cfg.Console == nil {
@@ -1101,7 +1111,8 @@ func handleSession(ctx context.Context, store *config.Store[config.SoulConfig], 
 	// branch) call CloseAll, which kills each pty's whole process group and
 	// WAITS for the reaping: kill-on-disconnect, no orphaned root shells.
 	consoleLimits := resolveConsoleLimits(store, logger)
-	consoleRunner := consolerunner.New(sess, consoleLimits, logger, consoleMetrics)
+	consoleRunner := consolerunner.New(sess, consoleLimits, logger, consoleMetrics,
+		consolerunner.WithDialer(consoleDialer{sess}))
 
 	// The reader goroutine reads the current sess; on swap it's restarted on
 	// the new sess. recvCh is unbuffered — a gate through which the
@@ -1191,7 +1202,8 @@ func handleSession(ctx context.Context, store *config.Store[config.SoulConfig], 
 			oldConsole := consoleRunner
 			sess = newSess
 			augurClient = augur.NewClient(sess)
-			consoleRunner = consolerunner.New(sess, consoleLimits, logger, consoleMetrics)
+			consoleRunner = consolerunner.New(sess, consoleLimits, logger, consoleMetrics,
+				consolerunner.WithDialer(consoleDialer{sess}))
 			logger.Info("eventstream: failback swap",
 				slog.Int("new_priority", newSess.Priority()),
 				slog.String("session_id", newSess.SessionID()),

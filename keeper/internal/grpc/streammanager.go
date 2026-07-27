@@ -80,14 +80,41 @@ type StreamManager struct {
 	mu      sync.RWMutex
 	entries map[string]*streamEntry
 	logger  *slog.Logger
+
+	// consoles is the sibling registry of dedicated console streams
+	// (NIM-188). Owned here so every caller that already holds a
+	// StreamManager routes consoles correctly without extra wire-up; it is a
+	// separate type because it is keyed by session, not by SID.
+	consoles *ConsoleStreamManager
 }
 
 // NewStreamManager assembles an empty registry.
 func NewStreamManager(logger *slog.Logger) *StreamManager {
 	return &StreamManager{
-		entries: make(map[string]*streamEntry),
-		logger:  logger,
+		entries:  make(map[string]*streamEntry),
+		logger:   logger,
+		consoles: NewConsoleStreamManager(logger),
 	}
+}
+
+// Consoles is the registry of dedicated console streams attached to this
+// instance (ADR-0074 amendment, NIM-188).
+func (m *StreamManager) Consoles() *ConsoleStreamManager { return m.consoles }
+
+// deliverLocal writes one message to the Soul's transport on THIS instance: a
+// console frame goes to its session's dedicated stream when one is attached,
+// everything else — and any console frame whose session has not attached one —
+// to the EventStream entry. false means the chosen queue is full or closed.
+//
+// Both local delivery points ([Outbound.deliver] and the pub/sub subscriber)
+// go through here, so the two agree by construction.
+func (m *StreamManager) deliverLocal(sid string, msg *keeperv1.FromKeeper, entry *streamEntry) bool {
+	if sessionID := downstreamConsoleSessionID(msg); sessionID != "" {
+		if console := m.consoles.lookup(sessionID, sid); console != nil {
+			return console.send(consoleToSoul(msg))
+		}
+	}
+	return entry.send(msg)
 }
 
 // Register registers a new stream for a SID WITHOUT a per-stream cancel
@@ -161,6 +188,15 @@ func (m *StreamManager) Unregister(sid string, owner <-chan *keeperv1.FromKeeper
 	}
 	entry.close()
 	delete(m.entries, sid)
+
+	// The console streams of this Soul die with the EventStream that
+	// authorized them (ADR-0074 kill-on-disconnect). Only on OUR teardown:
+	// after an eviction we returned above, so a reconnect cannot take the
+	// fresh connection's consoles down with the stale one.
+	if n := m.consoles.CloseAllFor(sid); n > 0 {
+		m.logger.Info("streammanager: console streams closed with their EventStream",
+			slog.String("sid", sid), slog.Int("count", n))
+	}
 }
 
 // lookup — fetches the entry under a read lock. nil if there's no stream.

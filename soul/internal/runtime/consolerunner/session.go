@@ -19,11 +19,17 @@ import (
 // session is one live pty and the two goroutines that drive it.
 //
 // Goroutine split is the whole point: `readLoop` only ever touches the pty and a
-// bounded queue, `sendLoop` only ever touches the queue and the EventStream. A
-// congested stream therefore cannot block the pty reader, and a flooding pty
-// cannot hold the stream's shared write mutex — apply's TaskEvent/RunResult keep
-// flowing while a console spews. The price is that output over budget is dropped
-// rather than buffered; the dropped byte count rides out on the next chunk.
+// bounded queue, `sendLoop` only ever touches the queue and the stream. A
+// congested stream therefore cannot block the pty reader.
+//
+// What happens when the queue fills depends on the carrier (NIM-188). On the
+// EventStream carrier the overflow is DROPPED and counted, because the
+// alternative is holding a write mutex that apply's TaskEvent/RunResult share.
+// On a session's own stream there is no such mutex and no shared window, so the
+// queue blocks instead: the pty stops being read, the kernel buffer fills, and
+// the flooding process is throttled at the source — which is what a terminal
+// over a slow line has always done, and it means the operator sees all of the
+// output rather than most of it.
 //
 // Ownership rules (they keep teardown race-free):
 //   - readLoop owns pty reads, calls cmd.Wait exactly once, then closes outQ.
@@ -37,6 +43,9 @@ type session struct {
 	ptmx   *os.File
 	limits Limits
 	logger *slog.Logger
+
+	// car is the transport this session sends on; see [carrier].
+	car carrier
 
 	// outQ carries pty output from readLoop to sendLoop. Bounded: a full queue
 	// means the console is producing faster than the stream drains, and the
@@ -70,7 +79,7 @@ type session struct {
 
 // startSession spawns the shell under a fresh pty and starts both goroutines.
 // A non-nil error means nothing was started and nothing needs cleanup.
-func startSession(id string, req *keeperv1.ConsoleOpen, limits Limits, logger *slog.Logger, sink Sink, metrics *Metrics, onFinish func()) (*session, error) {
+func startSession(id string, req *keeperv1.ConsoleOpen, limits Limits, logger *slog.Logger, car carrier, metrics *Metrics, onFinish func()) (*session, error) {
 	shell, err := resolveShell(req.GetShell(), limits.Shell)
 	if err != nil {
 		return nil, err
@@ -99,6 +108,7 @@ func startSession(id string, req *keeperv1.ConsoleOpen, limits Limits, logger *s
 		ptmx:     ptmx,
 		limits:   limits,
 		logger:   logger,
+		car:      car,
 		outQ:     make(chan []byte, limits.QueueChunks),
 		exitCode: -1,
 		draining: make(chan struct{}),
@@ -106,7 +116,7 @@ func startSession(id string, req *keeperv1.ConsoleOpen, limits Limits, logger *s
 	}
 
 	go s.readLoop()
-	go s.sendLoop(sink, metrics, onFinish)
+	go s.sendLoop(car.sink, metrics, onFinish)
 	return s, nil
 }
 
@@ -212,6 +222,15 @@ func (s *session) escalate(pid int) {
 	killed := killSession(pid, sigKILL)
 	s.logger.Warn("console: sweeping leftover processes in the pty session",
 		slog.String("session_id", s.id), slog.Int("pid", pid), slog.Int("killed", killed))
+
+	// Step 4, cut the transport. Every process is dead by now, so a session
+	// that still has not finished is a sender blocked in Send on a Keeper that
+	// stopped reading — only cancelling the RPC releases it (NIM-188).
+	if s.car.cut != nil && !s.waitDone(s.limits.KillGrace) {
+		s.logger.Warn("console: session still sending after the sweep, cutting its stream",
+			slog.String("session_id", s.id))
+		s.car.cut()
+	}
 }
 
 // waitDone reports whether the session finished within d.
@@ -257,12 +276,28 @@ func (s *session) readLoop() {
 	s.exitCode = exitCodeOf(err)
 }
 
-// enqueue hands a copy of the pty output to sendLoop, dropping it when the queue
-// is full. Dropping is deliberate: blocking here would let a flooding console
-// stall the pty and, worse, tie the reader to the stream's pace.
+// enqueue hands a copy of the pty output to sendLoop.
+//
+// On a session's own stream the queue blocks: tying the reader to the stream's
+// pace is exactly right there, because that pace is now the operator's terminal
+// and nothing else (NIM-188). On the shared EventStream carrier it drops and
+// counts instead — blocking would put a flooding console in front of apply
+// traffic on the one write mutex they share.
+//
+// Teardown releases a blocked reader through `draining`, so a console that
+// nobody is draining can never hold up the kill path.
 func (s *session) enqueue(b []byte) {
 	chunk := make([]byte, len(b))
 	copy(chunk, b)
+
+	if s.car.lossless {
+		select {
+		case s.outQ <- chunk:
+		case <-s.draining:
+		}
+		return
+	}
+
 	select {
 	case s.outQ <- chunk:
 	default:

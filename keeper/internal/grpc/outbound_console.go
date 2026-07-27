@@ -30,10 +30,12 @@ func (o *Outbound) SendConsoleOpen(ctx context.Context, sid string, msg *keeperv
 
 // SendConsoleStdin forwards operator keystrokes into the pty master.
 //
-// This is the one hot path of the four: one message per keystroke. It shares
-// the per-SID outbound queue with the apply cycle, so a burst that overflows it
-// returns [ErrOutboundQueueFull] and the caller surfaces it to the operator
-// rather than growing an unbounded backlog.
+// This is the one hot path of the four: one message per keystroke. Once the
+// session has its own console stream (NIM-188) the burst lands in that
+// session's queue and no longer competes with apply dispatch; a Soul still on
+// the EventStream transport shares the per-SID outbound queue as before. Either
+// way an overflow returns [ErrOutboundQueueFull] and the caller surfaces it to
+// the operator rather than growing an unbounded backlog.
 func (o *Outbound) SendConsoleStdin(ctx context.Context, sid string, msg *keeperv1.ConsoleStdin) error {
 	if msg == nil {
 		return errors.New("grpc: ConsoleStdin is nil")

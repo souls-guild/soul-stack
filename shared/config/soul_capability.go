@@ -35,6 +35,15 @@ const (
 	// CapabilityPassage.
 	CapabilityConsole = "console"
 
+	// CapabilityConsoleStream — Soul carries a console session on the dedicated
+	// `ConsoleStream` RPC instead of the EventStream `console_*` members
+	// (ADR-0074 amendment 2026-07-27, NIM-188). Unlike the fail-closed gates
+	// above this one only informs: a Soul without it is served over EventStream
+	// exactly as before, and a Soul with it still falls back when the Keeper it
+	// reached predates the RPC. Keeper uses the announcement to know whether to
+	// expect an attach, and reports it as the session's transport.
+	CapabilityConsoleStream = "console_stream"
+
 	// CapabilityFlowControl — Soul evaluates the per-task flow-control CEL
 	// predicates `when:`/`changed_when:`/`failed_when:` itself (ADR-012(d)): keeper
 	// threads them through as strings, so a binary that ignores them would run a
@@ -79,8 +88,9 @@ func ModuleCapability(module string) string { return CapabilityModulePrefix + mo
 // reconnects (Registry.Names() iterates a map). A nil/empty coreModules is
 // legitimate — a build with no modules announces only the feature set.
 func SoulCapabilities(coreModules []string) []string {
-	out := make([]string, 0, len(coreModules)+5)
-	out = append(out, CapabilityPassage, CapabilityConsole, CapabilityFlowControl, CapabilityRetry, CapabilityDryRun)
+	out := make([]string, 0, len(coreModules)+6)
+	out = append(out, CapabilityPassage, CapabilityConsole, CapabilityConsoleStream,
+		CapabilityFlowControl, CapabilityRetry, CapabilityDryRun)
 	seen := make(map[string]struct{}, len(coreModules))
 	for _, m := range coreModules {
 		if m == "" {

@@ -79,7 +79,7 @@ func (h *eventStreamHandler) runOutboundSubscriber(sid string, sub *keeperredis.
 				slog.String("sid", sid))
 			continue
 		}
-		if !entry.send(msg) {
+		if !h.deps.Manager.deliverLocal(sid, msg, entry) {
 			h.logger.Warn("eventstream: outbound subscriber drop — queue full or closed",
 				slog.String("sid", sid))
 		}

@@ -1,12 +1,14 @@
 // Package consolerunner is the Soul-side executor for interactive console (PTY)
 // sessions.
 //
-// A console is a LIVING pty on the host, driven over the existing Keeper↔Soul
-// EventStream through only-add `console_*` messages (ADR-012(c)); there is no new
-// RPC. It is deliberately NOT built on Errand (ADR-033): an Errand is one module
-// call answered by a single ≤64 KiB blob, whereas a console is a bidirectional
-// byte stream with no known end — a true tty, so `top`, `vim` and `cd` behave the
-// way an operator expects.
+// A console is a LIVING pty on the host. It is deliberately NOT built on Errand
+// (ADR-033): an Errand is one module call answered by a single ≤64 KiB blob,
+// whereas a console is a bidirectional byte stream with no known end — a true
+// tty, so `top`, `vim` and `cd` behave the way an operator expects.
+//
+// A session rides its own `ConsoleStream` RPC (NIM-188, transport.go), falling
+// back to the EventStream `console_*` members (ADR-012(c)) when the Keeper on the
+// other end does not serve it.
 //
 // Lifecycle, per session_id (a ULID minted by Keeper):
 //
@@ -20,15 +22,17 @@
 //   - Kill-on-disconnect. A console never outlives its EventStream session.
 //     [Runner.CloseAll] runs on stream teardown (Keeper gone, failback swap,
 //     shutdown) and WAITS for every pty to be reaped, so a broken stream cannot
-//     leave an orphaned root shell behind.
+//     leave an orphaned root shell behind. A session on its own stream dies with
+//     that stream too, which is the same rule one level down.
 //   - Flow control. The pty reader and the stream sender are decoupled by a
-//     bounded queue (see session.go). A `yes`-style flood is dropped and counted,
-//     never buffered and never allowed to block the EventStream's shared write
-//     mutex — apply traffic shares that mutex.
+//     bounded queue (see session.go). On its own stream a `yes`-style flood
+//     throttles the pty; on the EventStream carrier it is dropped and counted,
+//     because blocking there would hold the write mutex apply traffic shares.
 //
 // One Runner belongs to exactly one EventStream session (like the Augur client):
-// its Sink is that session's stream. A failback swap replaces the Runner, closing
-// the old sessions with it.
+// its Sink is that session's stream, and its Dialer opens console streams on that
+// session's connection. A failback swap replaces the Runner, closing the old
+// sessions with it.
 package consolerunner
 
 import (
@@ -53,6 +57,7 @@ type Sink interface {
 // Runner owns the live console sessions of one EventStream session.
 type Runner struct {
 	sink    Sink
+	dialer  Dialer
 	limits  Limits
 	logger  *slog.Logger
 	metrics *Metrics
@@ -62,23 +67,36 @@ type Runner struct {
 	closed   bool
 }
 
+// Option tunes a Runner at construction.
+type Option func(*Runner)
+
+// WithDialer gives the runner the dedicated console transport (NIM-188): each
+// session then dials its own stream and falls back to the Sink only when the
+// Keeper on the other end does not serve the RPC. Without it every session
+// rides the Sink, which is what a Soul built before the split did.
+func WithDialer(d Dialer) Option { return func(r *Runner) { r.dialer = d } }
+
 // New builds a Runner bound to one stream. logger=nil → slog.Default();
 // metrics=nil → no-op (the Metrics methods are nil-safe); sink is required —
 // a nil one is a wire-up bug, not runtime data.
-func New(sink Sink, limits Limits, logger *slog.Logger, metrics *Metrics) *Runner {
+func New(sink Sink, limits Limits, logger *slog.Logger, metrics *Metrics, opts ...Option) *Runner {
 	if sink == nil {
 		panic("consolerunner: sink is required")
 	}
 	if logger == nil {
 		logger = slog.Default()
 	}
-	return &Runner{
+	r := &Runner{
 		sink:     sink,
 		limits:   limits.withDefaults(),
 		logger:   logger,
 		metrics:  metrics,
 		sessions: make(map[string]*session),
 	}
+	for _, opt := range opts {
+		opt(r)
+	}
+	return r
 }
 
 // Open starts a pty session. It never blocks on the stream: the spawn itself is
@@ -135,9 +153,25 @@ func (r *Runner) Open(req *keeperv1.ConsoleOpen) {
 	r.sessions[id] = nil
 	r.mu.Unlock()
 
-	s, err := startSession(id, req, r.limits, r.logger, r.sink, r.metrics, func() { r.forget(id) })
+	// Dial before the spawn so the ack travels while the pty comes up: the
+	// transport is settled by the time the session has anything to send.
+	transport := r.dialConsoleStream(id)
+	car := carrier{sink: r.sink}
+	if transport != nil {
+		car = carrier{sink: transport, lossless: true, cut: transport.cut}
+	}
+
+	onFinish := func() { r.forget(id) }
+	if transport != nil {
+		onFinish = func() { r.forget(id); transport.close() }
+	}
+
+	s, err := startSession(id, req, r.limits, r.logger, car, r.metrics, onFinish)
 	if err != nil {
 		r.forget(id)
+		if transport != nil {
+			transport.cut()
+		}
 		r.logger.Warn("console: open failed",
 			slog.String("session_id", id), slog.Any("error", err))
 		r.rejectOpen(id, keeperv1.ConsoleExitReason_CONSOLE_EXIT_REASON_OPEN_FAILED, err.Error())
@@ -149,12 +183,21 @@ func (r *Runner) Open(req *keeperv1.ConsoleOpen) {
 		// CloseAll landed between the reservation and here; honour the teardown
 		// instead of leaving a pty that outlives its stream.
 		r.mu.Unlock()
+		if transport != nil {
+			transport.cut()
+		}
 		s.terminate(keeperv1.ConsoleExitReason_CONSOLE_EXIT_REASON_SOUL_SHUTDOWN)
 		return
 	}
 	r.sessions[id] = s
 	active := len(r.sessions)
 	r.mu.Unlock()
+
+	// Only now: a stream that breaks on its first read must find a session to
+	// kill, and the ack that settles the transport arrives on this loop.
+	if transport != nil {
+		go r.consoleStreamLoop(transport)
+	}
 
 	r.metrics.ObserveSessionStart(active)
 	r.logger.Info("console: session opened",
@@ -232,8 +275,8 @@ func (r *Runner) CloseAll(reason keeperv1.ConsoleExitReason) {
 	}
 
 	// Budget covers the full escalation (SIGHUP → pty hangup + SIGKILL → session
-	// sweep) plus slack for the final Send.
-	budget := time.NewTimer(3*r.limits.KillGrace + time.Second)
+	// sweep → cut the transport) plus slack for the final Send.
+	budget := time.NewTimer(4*r.limits.KillGrace + time.Second)
 	defer budget.Stop()
 	for _, s := range live {
 		select {

@@ -19,10 +19,11 @@ import (
 const _ = grpc.SupportPackageIsVersion9
 
 const (
-	Keeper_Ping_FullMethodName        = "/soulstack.keeper.v1.Keeper/Ping"
-	Keeper_Bootstrap_FullMethodName   = "/soulstack.keeper.v1.Keeper/Bootstrap"
-	Keeper_EventStream_FullMethodName = "/soulstack.keeper.v1.Keeper/EventStream"
-	Keeper_FetchModule_FullMethodName = "/soulstack.keeper.v1.Keeper/FetchModule"
+	Keeper_Ping_FullMethodName          = "/soulstack.keeper.v1.Keeper/Ping"
+	Keeper_Bootstrap_FullMethodName     = "/soulstack.keeper.v1.Keeper/Bootstrap"
+	Keeper_EventStream_FullMethodName   = "/soulstack.keeper.v1.Keeper/EventStream"
+	Keeper_FetchModule_FullMethodName   = "/soulstack.keeper.v1.Keeper/FetchModule"
+	Keeper_ConsoleStream_FullMethodName = "/soulstack.keeper.v1.Keeper/ConsoleStream"
 )
 
 // KeeperClient is the client API for Keeper service.
@@ -44,6 +45,16 @@ type KeeperClient interface {
 	// as EventStream; a separate HTTP/2 stream keeps the control plane free. Keeper
 	// only ever serves a sigil-allowed binary (fail-closed).
 	FetchModule(ctx context.Context, in *PluginFetchRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[PluginChunk], error)
+	// ConsoleStream: the interactive console plane on its own bidirectional
+	// stream (ADR-0074 amendment 2026-07-27, NIM-188). Same mTLS listener and
+	// the same client connection as EventStream, one stream per console
+	// session, dialed by the Soul when Keeper sends it a ConsoleOpen.
+	//
+	// The split is the point: pty bytes get their own HTTP/2 flow-control
+	// window and their own writer, so an interactive session and the run's
+	// event stream can no longer stall each other. ADR-012(c) only-add —
+	// EventStream keeps its `console_*` members for Souls that predate this.
+	ConsoleStream(ctx context.Context, opts ...grpc.CallOption) (grpc.BidiStreamingClient[ConsoleFromSoul, ConsoleToSoul], error)
 }
 
 type keeperClient struct {
@@ -106,6 +117,19 @@ func (c *keeperClient) FetchModule(ctx context.Context, in *PluginFetchRequest, 
 // This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
 type Keeper_FetchModuleClient = grpc.ServerStreamingClient[PluginChunk]
 
+func (c *keeperClient) ConsoleStream(ctx context.Context, opts ...grpc.CallOption) (grpc.BidiStreamingClient[ConsoleFromSoul, ConsoleToSoul], error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	stream, err := c.cc.NewStream(ctx, &Keeper_ServiceDesc.Streams[2], Keeper_ConsoleStream_FullMethodName, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	x := &grpc.GenericClientStream[ConsoleFromSoul, ConsoleToSoul]{ClientStream: stream}
+	return x, nil
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type Keeper_ConsoleStreamClient = grpc.BidiStreamingClient[ConsoleFromSoul, ConsoleToSoul]
+
 // KeeperServer is the server API for Keeper service.
 // All implementations must embed UnimplementedKeeperServer
 // for forward compatibility.
@@ -125,6 +149,16 @@ type KeeperServer interface {
 	// as EventStream; a separate HTTP/2 stream keeps the control plane free. Keeper
 	// only ever serves a sigil-allowed binary (fail-closed).
 	FetchModule(*PluginFetchRequest, grpc.ServerStreamingServer[PluginChunk]) error
+	// ConsoleStream: the interactive console plane on its own bidirectional
+	// stream (ADR-0074 amendment 2026-07-27, NIM-188). Same mTLS listener and
+	// the same client connection as EventStream, one stream per console
+	// session, dialed by the Soul when Keeper sends it a ConsoleOpen.
+	//
+	// The split is the point: pty bytes get their own HTTP/2 flow-control
+	// window and their own writer, so an interactive session and the run's
+	// event stream can no longer stall each other. ADR-012(c) only-add —
+	// EventStream keeps its `console_*` members for Souls that predate this.
+	ConsoleStream(grpc.BidiStreamingServer[ConsoleFromSoul, ConsoleToSoul]) error
 	mustEmbedUnimplementedKeeperServer()
 }
 
@@ -146,6 +180,9 @@ func (UnimplementedKeeperServer) EventStream(grpc.BidiStreamingServer[FromSoul, 
 }
 func (UnimplementedKeeperServer) FetchModule(*PluginFetchRequest, grpc.ServerStreamingServer[PluginChunk]) error {
 	return status.Error(codes.Unimplemented, "method FetchModule not implemented")
+}
+func (UnimplementedKeeperServer) ConsoleStream(grpc.BidiStreamingServer[ConsoleFromSoul, ConsoleToSoul]) error {
+	return status.Error(codes.Unimplemented, "method ConsoleStream not implemented")
 }
 func (UnimplementedKeeperServer) mustEmbedUnimplementedKeeperServer() {}
 func (UnimplementedKeeperServer) testEmbeddedByValue()                {}
@@ -222,6 +259,13 @@ func _Keeper_FetchModule_Handler(srv interface{}, stream grpc.ServerStream) erro
 // This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
 type Keeper_FetchModuleServer = grpc.ServerStreamingServer[PluginChunk]
 
+func _Keeper_ConsoleStream_Handler(srv interface{}, stream grpc.ServerStream) error {
+	return srv.(KeeperServer).ConsoleStream(&grpc.GenericServerStream[ConsoleFromSoul, ConsoleToSoul]{ServerStream: stream})
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type Keeper_ConsoleStreamServer = grpc.BidiStreamingServer[ConsoleFromSoul, ConsoleToSoul]
+
 // Keeper_ServiceDesc is the grpc.ServiceDesc for Keeper service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -249,6 +293,12 @@ var Keeper_ServiceDesc = grpc.ServiceDesc{
 			StreamName:    "FetchModule",
 			Handler:       _Keeper_FetchModule_Handler,
 			ServerStreams: true,
+		},
+		{
+			StreamName:    "ConsoleStream",
+			Handler:       _Keeper_ConsoleStream_Handler,
+			ServerStreams: true,
+			ClientStreams: true,
 		},
 	},
 	Metadata: "keeper/v1/keeper.proto",

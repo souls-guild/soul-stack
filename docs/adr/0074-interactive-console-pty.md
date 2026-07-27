@@ -12,6 +12,8 @@
 
   - **(b) Transport — only-add on the existing stream; exactly one new transport, and it is browser↔Keeper.** No new RPC. The control and data plane ride the existing `EventStream` `oneof payload` as only-add members ([ADR-012(c)](0012-keeper-soul-grpc.md)) defined in `proto/keeper/v1/console.proto`: `ConsoleOpen`/`ConsoleStdin`/`ConsoleResize`/`ConsoleClose` on `FromKeeper` (**13-16**), `ConsoleOpened`/`ConsoleChunk`/`ConsoleExit` on `FromSoul` (**11-13**). Field numbers are frozen and pinned by a descriptor guard test; a new console message takes the next free number and none is ever renumbered or reused.
 
+    > **Superseded in part by the amendment of 2026-07-27 (NIM-188)** — the Keeper↔Soul half now has its own RPC. The messages, their field numbers and the browser↔Keeper half are unchanged; see the amendment at the end of this ADR.
+
     The one genuinely new transport is the operator's **WebSocket `GET /v1/console`** — the only WebSocket in Keeper. It is justified by need, not preference: SSE cannot carry keystrokes back and a POST per keypress is not a terminal. It is deliberately **absent from the OpenAPI spec** (an upgrade replaces the response with a raw socket, so a `GET` returning 101 would describe a contract no generated client can call); the frame contract lives in `docs/keeper/console.md` and a guard pins the exemption so no *other* route drifts out of the spec unnoticed. Auth arrives in the `bearer.<jwt>` subprotocol rather than a query parameter — the browser `WebSocket` constructor cannot set headers, and the subprotocol keeps the token out of access logs, `Referer` and history.
 
     **Session ids are per-plane and never cross.** The browser mints its own id so it can correlate `open` with `opened` without a round trip (unique within one socket); Keeper mints a ULID for the Soul side, where uniqueness must hold per EventStream, or two operators would collide on "pane-1" against the same host. Translating between them is the session manager's job.
@@ -41,6 +43,8 @@
 
     **Backpressure drops, never buffers, and always accounts.** Console frames arrive on goroutines the apply cycle shares, so a console that could block would stall `TaskEvent`/`RunResult` for that host; both sides therefore use bounded queues where chunks are dropped under flood and lifecycle frames (`opened`/`exit`/`error`) never are. The dropped byte count is reported to the operator in `dropped_bytes` and exported as a metric on each side, so the terminal renders an explicit gap instead of silently splicing a corrupted ANSI stream — a screen that never existed is worse than a visibly incomplete one.
 
+    > **Amended 2026-07-27 (NIM-188).** The premise "console frames arrive on goroutines the apply cycle shares" no longer holds Soul→Keeper once a session has its own stream, and the drop goes with it: see the amendment. The rule stands unchanged for the browser↔Keeper half and for any session still on the EventStream carrier.
+
   - **(f) Audit records the fact of a session independently of its content.** `console.opened` / `console.closed` carry `archon_aid`, the target `sid` and the session id as `correlation_id`. **Who opened a shell where** must be in the audit log even where recording is unavailable or off — it is the one fact that survives every degradation of the recording path, and it is cheap. Recording is a separate, richer artifact (g), not a substitute for this.
 
   - **(g) Session recording is mandatory before the console is on by default.** A console is the only operator action whose effect cannot be reconstructed from its request, so an audit line saying a shell was opened, with no record of what was typed, is not an adequate trail for a production system.
@@ -59,7 +63,7 @@
 
 - **Rejected.**
   - **Reusing `errand.run`** — the gate for a declared module call cannot honestly authorize an arbitrary shell (a).
-  - **A new RPC for the console** — the bidi `EventStream` already carries both directions; a second stream per host would double the connection budget for no contract benefit (b).
+  - **A new RPC for the console** — the bidi `EventStream` already carries both directions; a second stream per host would double the connection budget for no contract benefit (b). **Reversed 2026-07-27 (NIM-188):** the benefit turned out not to be about the contract but about contention, and the cost turned out not to be connections — see the amendment.
   - **A `console` selector key** (e.g. `console-host=`) — the intersection reuses existing Purview dimensions, and RBAC selector keys stay closed at four ([ADR-047 §S4](0047-purview.md)) (c).
   - **A separate resource family (`console.open`)** to escape the `soul.*` wildcard — it would hide the right from the resource it acts on, and the wildcard consequence is a known, precedented property of the catalog rather than a defect to route around (c).
   - **Documenting the WebSocket in OpenAPI** — an upgrade has no response body to model; a fake `GET` returning 101 would describe a contract no generated client can honour (b).
@@ -68,6 +72,31 @@
 
 - **Deferred.** Session recording and playback (NIM-145 / NIM-147); the MCP surface for command execution (NIM-146 fast-follow); a liveness probe for the owner side when the stream holder restarts mid-session; recording retention policy; the approval-gate under the re-open condition in (h).
 
-- **Impl.** NIM-142 (proto contract + Soul pty runner) · NIM-143 (Keeper WS, session manager, backpressure, cross-instance routing) · **NIM-144 (this ADR + the `soul.console` right)** · NIM-145 (recording) · NIM-146 (web terminal wall).
+- **Impl.** NIM-142 (proto contract + Soul pty runner) · NIM-143 (Keeper WS, session manager, backpressure, cross-instance routing) · **NIM-144 (this ADR + the `soul.console` right)** · NIM-145 (recording) · NIM-146 (web terminal wall) · NIM-188 (the transport amendment below).
 
 **Amends [ADR-033](0033-errand.md)** (an interactive console is explicitly outside Errand, not a variant of it) and **extends [ADR-012(c)](0012-keeper-soul-grpc.md)** (a fourth only-add family on the existing stream).
+
+---
+
+## Amendment 2026-07-27 (NIM-188) — the Keeper↔Soul console gets its own RPC
+
+**What changed.** `service Keeper` gains a fifth RPC, `ConsoleStream(stream ConsoleFromSoul) returns (stream ConsoleToSoul)`. A Soul dials **one stream per console session**, on the same mTLS connection and the same listener as `EventStream`. Everything the session sends and receives afterwards rides that stream. This reverses "no new RPC" in (b) and the matching Rejected entry; it changes nothing about the messages, the field numbers, the browser↔Keeper WebSocket, the session-id translation, the right, or the caps.
+
+**Why the original reasoning did not survive contact.** (b) weighed a new RPC as a **contract** question and found no benefit. The cost that actually mattered is **contention**, and it is invisible at contract level:
+
+- Soul→Keeper, every `FromSoul` goes through one write mutex on the bidi stream. Interactive output and a run's `TaskEvent`/`RunResult` therefore take turns, and the console had to **drop** its output specifically to avoid holding that mutex — the loss in (e) was a symptom of the shared transport, not an inherent property of consoles.
+- Keeper→Soul, keystrokes share the 10-slot per-SID outbound queue with apply dispatch. A large paste could fill it and fail a run's `ApplyRequest` with `ErrOutboundQueueFull` — the same bug pointing the other way.
+
+The stated cost — "would double the connection budget" — was wrong on its own terms: it is the same TCP connection and the same mTLS handshake, one more HTTP/2 stream, and only while a console is actually open. The precedent was already in the tree: `FetchModule` ([ADR-065(a)](0065-core-module-installed.md)) took a separate stream on this connection for exactly this reason.
+
+**The shape.**
+
+- **`ConsoleOpen` still rides `EventStream`.** Only a client may open a gRPC stream, so the Soul has to be told to dial before it can. It is also what keeps a close ordered behind its open: both travel the one stream the Soul reads serially.
+- **Attach and ack.** The Soul's first frame is `ConsoleAttach{session_id}`; Keeper registers the stream under that id and answers `ConsoleAttached`. The ack is load-bearing: without a positive signal, a Soul cannot distinguish "this Keeper has no such RPC" from "the answer has not arrived yet", and would have to guess which carrier to use.
+- **The session id is a route, not a credential.** Keeper hands a stream the session's frames only when the SID that dialed it is the SID that owns the session — free from the peer cert ([ADR-012(i)](0012-keeper-soul-grpc.md)). The same check now guards the EventStream carrier, closing a gap where a Soul could name another host's session id. Attaching creates nothing: `soul.console` is checked at the operator's socket before a session is minted (c), and this RPC has no path to that.
+- **Both carriers live.** A Soul that does not announce `console_stream` is served over `EventStream` exactly as before, and a Soul that does falls back when the Keeper it reached answers `Unimplemented`. The choice is settled once per session, before the first frame — mixing carriers mid-session would mean two independent HTTP/2 streams with no ordering between them, and reordered keystrokes are worse than refused ones. For the same reason Keeper holds input typed before `ConsoleOpened` and releases it, in order, when that frame proves which carrier the session is on.
+- **A console still cannot outlive its authorization** (e). The dedicated stream is a child of the connection the EventStream runs on: when that stream ends, the console streams of that SID are closed with it. A console stream dying on its own is likewise terminal — Keeper synthesizes the `ConsoleExit` the operator would otherwise never see, and the Soul kills the pty.
+
+**Backpressure, revised.** On a session's own stream the queue **blocks instead of dropping**: with no shared write mutex and a private HTTP/2 flow-control window, a slow reader throttles the pty at the source, which is what a terminal over a slow line has always done. `dropped_bytes` therefore reads 0 there — the field stays (only-add) and keeps its meaning for the EventStream carrier and for the browser↔Keeper half, where dropping remains correct and remains accounted.
+
+**What is NOT claimed.** This buys isolation, not fairness: two console sessions on one host still share the connection-level flow-control window, and a Keeper instance still serves them from one process. The per-SID cap on console streams (16) bounds a misbehaving Soul, not a busy one.

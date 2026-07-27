@@ -89,7 +89,28 @@ type Session struct {
 	// closed guards the terminal transition, so a ConsoleExit racing an
 	// operator-initiated close cannot double-release a limiter slot.
 	closed atomic.Bool
+
+	// readyMu guards the pre-`opened` window (NIM-188). Until the Soul answers
+	// ConsoleOpened, nobody here knows which transport the session ended up on
+	// — the dedicated console stream, or EventStream for a Soul (or a Keeper)
+	// that does not have one. Input sent during that window would race the
+	// switch: a keystroke on EventStream and the next one on the console
+	// stream are two independent HTTP/2 streams, and the Soul reads them from
+	// two goroutines, so they can arrive out of order. Keystrokes must not be
+	// reordered, so they wait instead.
+	//
+	// The window is one round trip and the operator has not seen a prompt yet;
+	// what lands in it is an early resize from the terminal widget and, at
+	// most, an impatient paste.
+	readyMu sync.Mutex
+	ready   bool
+	pending []func(context.Context) error
 }
+
+// maxPendingFrames caps the pre-`opened` queue. Overflow is reported as
+// [ErrSessionNotReady] rather than dropped: silently losing keystrokes is the
+// one thing a terminal may never do.
+const maxPendingFrames = 64
 
 // touch stamps operator activity.
 func (s *Session) touch() { s.lastInput.Store(time.Now().UnixNano()) }
@@ -110,6 +131,9 @@ var (
 	ErrConsoleUnsupported = errors.New("console: soul does not support consoles")
 	// ErrSoulOffline — no EventStream for the SID anywhere in the cluster.
 	ErrSoulOffline = errors.New("console: soul is not connected")
+	// ErrSessionNotReady — too much input arrived before the Soul answered
+	// ConsoleOpened (NIM-188). Transient by nature: the operator retries.
+	ErrSessionNotReady = errors.New("console: session is not ready for input yet")
 )
 
 // HubDeps wires the session manager.
@@ -253,8 +277,29 @@ func (h *Hub) Open(ctx context.Context, req OpenRequest) (*Session, error) {
 		slog.String("session_id", sess.KeeperID),
 		slog.String("sid", sess.SID),
 		slog.String("aid", sess.AID),
+		slog.String("transport", h.transportOf(ctx, req.SID)),
 	)
 	return sess, nil
+}
+
+// transportOf reports which carrier this Soul will use, from its announcement
+// (NIM-188). Diagnostic only — nothing branches on it, both carriers work — but
+// "is this console on the shared stream" is the first question to ask about an
+// interactive session that feels slow, and the answer should not require
+// reading the Soul's version.
+func (h *Hub) transportOf(ctx context.Context, sid string) string {
+	if h.deps.Capabilities == nil {
+		return "unknown"
+	}
+	ok, err := h.deps.Capabilities.HasCapability(ctx, sid, CapabilityConsoleStream)
+	switch {
+	case err != nil:
+		return "unknown"
+	case ok:
+		return "console_stream"
+	default:
+		return "eventstream"
+	}
 }
 
 // register inserts the session under both caps. The two checks and the two
@@ -308,10 +353,54 @@ func (h *Hub) lookup(keeperID string) *Session {
 // Stdin forwards operator keystrokes to the pty.
 func (h *Hub) Stdin(ctx context.Context, sess *Session, data []byte) error {
 	sess.touch()
-	return h.deps.Dispatcher.SendConsoleStdin(ctx, sess.SID, &keeperv1.ConsoleStdin{
-		SessionId: sess.KeeperID,
-		Data:      data,
+	return h.dispatch(ctx, sess, func(ctx context.Context) error {
+		return h.deps.Dispatcher.SendConsoleStdin(ctx, sess.SID, &keeperv1.ConsoleStdin{
+			SessionId: sess.KeeperID,
+			Data:      data,
+		})
 	})
+}
+
+// dispatch sends one Keeper -> Soul frame, or parks it until the session's
+// transport is settled (see [Session.readyMu]). Ordering within a session is
+// preserved either way: everything before `opened` goes out in arrival order at
+// flush time, everything after goes straight through.
+func (h *Hub) dispatch(ctx context.Context, sess *Session, send func(context.Context) error) error {
+	sess.readyMu.Lock()
+	if sess.ready {
+		sess.readyMu.Unlock()
+		return send(ctx)
+	}
+	if len(sess.pending) >= maxPendingFrames {
+		sess.readyMu.Unlock()
+		return fmt.Errorf("%w: %d frames queued", ErrSessionNotReady, maxPendingFrames)
+	}
+	sess.pending = append(sess.pending, send)
+	sess.readyMu.Unlock()
+	return nil
+}
+
+// markReady releases the parked frames. Called once, when ConsoleOpened proves
+// the Soul is up and — on the dedicated transport — that its console stream is
+// attached, since the frame arrived on it.
+func (h *Hub) markReady(ctx context.Context, sess *Session) {
+	sess.readyMu.Lock()
+	if sess.ready {
+		sess.readyMu.Unlock()
+		return
+	}
+	sess.ready = true
+	parked := sess.pending
+	sess.pending = nil
+	sess.readyMu.Unlock()
+
+	for _, send := range parked {
+		if err := send(ctx); err != nil {
+			h.deps.Logger.Debug("console: parked frame dispatch failed",
+				slog.String("session_id", sess.KeeperID),
+				slog.Any("error", err))
+		}
+	}
 }
 
 // Resize applies a new terminal geometry. A zero dimension is dropped here
@@ -322,10 +411,12 @@ func (h *Hub) Resize(ctx context.Context, sess *Session, cols, rows uint32) erro
 		return nil
 	}
 	sess.touch()
-	return h.deps.Dispatcher.SendConsoleResize(ctx, sess.SID, &keeperv1.ConsoleResize{
-		SessionId: sess.KeeperID,
-		Cols:      cols,
-		Rows:      rows,
+	return h.dispatch(ctx, sess, func(ctx context.Context) error {
+		return h.deps.Dispatcher.SendConsoleResize(ctx, sess.SID, &keeperv1.ConsoleResize{
+			SessionId: sess.KeeperID,
+			Cols:      cols,
+			Rows:      rows,
+		})
 	})
 }
 
@@ -337,6 +428,12 @@ func (h *Hub) Resize(ctx context.Context, sess *Session, cols, rows uint32) erro
 // make the client show an exit code that no shell produced. The one case that
 // does need synthesis — the socket dying, where nobody is left to receive a
 // frame — is handled by [Hub.CloseAllFor].
+//
+// Unlike input, a close is NEVER parked (see [Hub.dispatch]): parking it would
+// wait for a ConsoleOpened that a session closed before it opened will never
+// send, and the pty would outlive the operator's intent to kill it. It rides
+// EventStream, the same stream that carried ConsoleOpen, so the Soul processes
+// the two in order and a close can never overtake the open it belongs to.
 func (h *Hub) Close(ctx context.Context, sess *Session, reason string) {
 	if !sess.closed.CompareAndSwap(false, true) {
 		return
@@ -402,6 +499,18 @@ func (h *Hub) Deliver(ctx context.Context, sid string, msg *keeperv1.FromSoul) {
 		}
 		return
 	}
+	if sess.SID != sid {
+		// The session id names a host other than the one whose authenticated
+		// stream this frame arrived on. A session id is a route, not a
+		// credential — the authority is the peer cert (ADR-012(i)) — so a Soul
+		// naming somebody else's session gets nothing.
+		h.deps.Logger.Warn("console: frame for a session that belongs to another sid — dropping",
+			slog.String("session_id", sessionID),
+			slog.String("frame_sid", sid),
+			slog.String("session_sid", sess.SID),
+		)
+		return
+	}
 	h.deliverLocal(ctx, sess, msg)
 }
 
@@ -464,6 +573,9 @@ func (h *Hub) deliverLocal(ctx context.Context, sess *Session, msg *keeperv1.Fro
 	switch p := msg.GetPayload().(type) {
 	case *keeperv1.FromSoul_ConsoleOpened:
 		sess.sink.DeliverOpened(NewOpened(sess.ClientID, sess.SID, p.ConsoleOpened.GetPid()))
+		// The pty is up and its transport is settled — release anything the
+		// operator typed while it was coming up, in order.
+		h.markReady(ctx, sess)
 
 	case *keeperv1.FromSoul_ConsoleChunk:
 		c := p.ConsoleChunk

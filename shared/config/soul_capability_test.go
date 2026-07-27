@@ -14,7 +14,7 @@ import (
 func TestSoulCapabilities_FeaturesAndModules(t *testing.T) {
 	got := SoulCapabilities([]string{"core.pkg", "core.file"})
 	want := []string{
-		"console", "dry_run", "flow_control",
+		"console", "console_stream", "dry_run", "flow_control",
 		"module:core.file", "module:core.pkg",
 		"passage", "retry",
 	}
@@ -41,7 +41,7 @@ func TestSoulCapabilities_StableAcrossRegistryOrder(t *testing.T) {
 // two groups are independent.
 func TestSoulCapabilities_NoModules(t *testing.T) {
 	got := SoulCapabilities(nil)
-	want := []string{"console", "dry_run", "flow_control", "passage", "retry"}
+	want := []string{"console", "console_stream", "dry_run", "flow_control", "passage", "retry"}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("SoulCapabilities(nil) = %v, want %v", got, want)
 	}

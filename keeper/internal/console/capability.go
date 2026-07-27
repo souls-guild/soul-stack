@@ -10,7 +10,15 @@ import (
 // CapabilityConsole is the capability a Soul announces in Hello when its binary
 // can host a pty session. The literal lives in shared/config so Keeper and Soul
 // reference the same string — a desync here is a silent fail-closed.
-const CapabilityConsole = config.CapabilityConsole
+const (
+	CapabilityConsole = config.CapabilityConsole
+
+	// CapabilityConsoleStream — the Soul carries a session on the dedicated
+	// ConsoleStream RPC (NIM-188). Read for reporting only: unlike
+	// CapabilityConsole this is not a gate, because both carriers work and a
+	// Soul that announces it still falls back against an older Keeper.
+	CapabilityConsoleStream = config.CapabilityConsoleStream
+)
 
 // redisCapabilities reads the capability set a Soul announced at connect time
 // (stored next to its heartbeat, ADR-056 §S5).

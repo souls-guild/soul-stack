@@ -149,6 +149,17 @@ func mustOpen(t *testing.T, h *Hub, clientID, sid, aid string, sink Sink) *Sessi
 	return sess
 }
 
+// markOpened delivers the ConsoleOpened that ends the pre-`opened` park
+// (NIM-188), so a test can exercise steady-state input dispatch.
+func markOpened(t *testing.T, h *Hub, sess *Session, sid string) {
+	t.Helper()
+	h.Deliver(context.Background(), sid, &keeperv1.FromSoul{
+		Payload: &keeperv1.FromSoul_ConsoleOpened{ConsoleOpened: &keeperv1.ConsoleOpened{
+			SessionId: sess.KeeperID, Pid: 4242,
+		}},
+	})
+}
+
 // The Soul side must never see the client's socket-local id: uniqueness there
 // is per EventStream, and two operators would collide on "pane-1".
 func TestHub_MintsItsOwnSessionID(t *testing.T) {
@@ -183,12 +194,12 @@ func TestHub_DeliverTranslatesIDsBack(t *testing.T) {
 	sink := &captureSink{}
 	sess := mustOpen(t, h, "pane-7", "host-a", "archon-a", sink)
 
-	h.Deliver(context.Background(), "host-x", &keeperv1.FromSoul{
+	h.Deliver(context.Background(), "host-a", &keeperv1.FromSoul{
 		Payload: &keeperv1.FromSoul_ConsoleOpened{ConsoleOpened: &keeperv1.ConsoleOpened{
 			SessionId: sess.KeeperID, Pid: 99,
 		}},
 	})
-	h.Deliver(context.Background(), "host-x", &keeperv1.FromSoul{
+	h.Deliver(context.Background(), "host-a", &keeperv1.FromSoul{
 		Payload: &keeperv1.FromSoul_ConsoleChunk{ConsoleChunk: &keeperv1.ConsoleChunk{
 			SessionId: sess.KeeperID, Data: []byte("hi"),
 		}},
@@ -432,7 +443,7 @@ func TestHub_OutputDoesNotResetIdleTimer(t *testing.T) {
 
 	deadline := time.Now().Add(60 * time.Millisecond)
 	for time.Now().Before(deadline) {
-		h.Deliver(context.Background(), "host-x", &keeperv1.FromSoul{
+		h.Deliver(context.Background(), "host-a", &keeperv1.FromSoul{
 			Payload: &keeperv1.FromSoul_ConsoleChunk{ConsoleChunk: &keeperv1.ConsoleChunk{
 				SessionId: sess.KeeperID, Data: []byte("log line\n"),
 			}},
@@ -463,6 +474,7 @@ func TestHub_SweepDisabledByZeroTimeout(t *testing.T) {
 func TestHub_ResizeIgnoresZeroGeometry(t *testing.T) {
 	h, d := newTestHub(t, HubDeps{})
 	sess := mustOpen(t, h, "pane", "host-a", "archon-a", &captureSink{})
+	markOpened(t, h, sess, "host-a")
 
 	for _, g := range [][2]uint32{{0, 24}, {80, 0}, {0, 0}} {
 		if err := h.Resize(context.Background(), sess, g[0], g[1]); err != nil {
@@ -503,7 +515,7 @@ func TestHub_ConcurrentOpenCloseKeepsCountersExact(t *testing.T) {
 				h.Close(context.Background(), sess, "done")
 				return
 			}
-			h.Deliver(context.Background(), "host-x", &keeperv1.FromSoul{
+			h.Deliver(context.Background(), "host", &keeperv1.FromSoul{
 				Payload: &keeperv1.FromSoul_ConsoleExit{ConsoleExit: &keeperv1.ConsoleExit{
 					SessionId: sess.KeeperID,
 					Reason:    keeperv1.ConsoleExitReason_CONSOLE_EXIT_REASON_PROCESS_EXITED,
