@@ -44,13 +44,15 @@ func setupRedisStandalone(t *testing.T, persistence, maxmemoryPolicy string, mem
 	harness.SeedVaultKV(t, stack, "redis/"+incName, map[string]any{"password": "e2e-redis-main"})
 	harness.SeedVaultKV(t, stack, "redis/"+incName+"/users/"+redisDay2AdminUser, map[string]any{"password": redisDay2AdminPass})
 
-	stack.AddMember(t, 0, incName)
-	stack.WaitSoulprintReported(t, 0, 60)
-
 	stack.MaterializeDestinies(t, "v1.0.0", "redis", "node-exporter", "redis-exporter", "vector")
 	stack.AllowSoulModule(t, "community", "redis", harness.CommunityRedisPluginRef)
 
-	inc, createApply := stack.CreateIncarnationWithApplyScenario(t, incName, "redis@main", "create", map[string]any{
+	// Seed the incarnation row -> bind the roster -> run create. The order is
+	// owned by CreateIncarnationOnRoster (NIM-192): membership carries an FK on
+	// incarnation(name), so it cannot precede the row, while a create run with
+	// provision off resolves the roster at run start and would abort no_hosts
+	// without it. Destinies/Sigil are registry-level and stay ahead of the run.
+	inc, createApply := stack.CreateIncarnationOnRoster(t, incName, "redis@main", "create", []int{0}, map[string]any{
 		"provision":           map[string]any{"enabled": false},
 		"redis_type":          "sentinel",
 		"version":             "7.4.1",

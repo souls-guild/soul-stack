@@ -72,12 +72,11 @@ func TestFC3RetryUntil_HealthGateOnRealTiming(t *testing.T) {
 
 	const incName = "fc3-retry-until"
 
-	// Membership BEFORE Create: the roster resolves members via incarnation_membership
-	// (ADR-008 amendment/NIM-124). Without it the scenario sees no_hosts -> zero apply_runs rows.
-	stack.AddMember(t, 0, incName)
-
-	// POST /v1/incarnations auto-runs the create scenario and returns apply_id.
-	inc, applyID := stack.CreateIncarnationWithApply(t, incName, "fc3-retry-until@main", nil)
+	// Seed row -> bind roster -> run create (CreateIncarnationOnRoster, NIM-192):
+	// the roster resolves via incarnation_membership (ADR-008 amendment/NIM-124),
+	// an unbound roster is no_hosts -> zero apply_runs rows, and membership FKs
+	// the incarnation row, so the row is seeded first.
+	inc, applyID := stack.CreateIncarnationOnRoster(t, incName, "fc3-retry-until@main", "create", []int{0}, nil)
 
 	// ── (1) probe eventually OK, apply_runs success ─────────────────────────────
 	// Budget: gate 6s + retry loop up to 40s + container cold-start. 90s with margin.

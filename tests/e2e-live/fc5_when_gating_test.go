@@ -105,14 +105,15 @@ func TestFC5WhenGating_LiveRegister(t *testing.T) {
 
 	const incName = "when-gate-live-run"
 
+	// Direct seed of a ready incarnation (state_schema is empty, the focus is gating, not state).
+	// The seed comes FIRST: membership FKs incarnation(name) (migration 099, NIM-192).
+	stack.SeedIncarnationReady(t, incName, wgService, "main", map[string]any{})
+
 	// Membership BEFORE running the scenario: the roster resolves members via
 	// incarnation_membership (ADR-008 amendment/NIM-124). Without it no_hosts -> zero apply_runs rows.
 	for i := range stack.SoulContainers {
 		stack.AddMember(t, i, incName)
 	}
-
-	// Direct seed of a ready incarnation (state_schema is empty, the focus is gating, not state).
-	stack.SeedIncarnationReady(t, incName, wgService, "main", map[string]any{})
 
 	// ── Bootstrap LIVE redis: host-0 master, host-1/2 REPLICAOF host-0 ────────
 	// Makes the probe `redis-cli role` distinguishable (master vs slave) on a real

@@ -66,14 +66,6 @@ func TestL3bRedisLive_CreateStandalone(t *testing.T) {
 		"password": "e2e-app-user-secret",
 	})
 
-	// Membership BEFORE Create: the roster resolves members via incarnation_membership
-	// (ADR-008 amendment/NIM-124). The bootstrap flow set status='connected', but no membership is bound.
-	stack.AddMember(t, 0, incName)
-
-	// Wait for the real soul's first SoulprintReport: redis.conf.tmpl binds to
-	// soulprint.self.network.primary_ip keeper-side during render.
-	stack.WaitSoulprintReported(t, 0, 60)
-
 	// Materialize the mode-agnostic `redis` destiny at git tag v1.0.0 (ref from
 	// service.yml::destiny[]) + set default_destiny_source (SeedDefaultDestinySource
 	// is gated on holderRefreshGrace - Holder will pick up the value BEFORE create-render).
@@ -81,7 +73,12 @@ func TestL3bRedisLive_CreateStandalone(t *testing.T) {
 
 	// Simple typed input: version (distro-native pin), memory_mb +
 	// persistence + maxmemory_policy -> merge-translated into redis.conf; users - typed-map.
-	inc, applyID := stack.CreateIncarnationWithApply(t, incName, "redis@main", map[string]any{
+	// Seed row -> bind roster -> wait for the first SoulprintReport (redis.conf.tmpl
+	// binds to soulprint.self.network.primary_ip keeper-side during render) -> run
+	// create. Order owned by CreateIncarnationOnRoster (NIM-192): the bootstrap flow
+	// set status='connected' but bound no membership, and membership FKs the
+	// incarnation row.
+	inc, applyID := stack.CreateIncarnationOnRoster(t, incName, "redis@main", "create", []int{0}, map[string]any{
 		"version":          "5:7.0.15-1~deb12u7",
 		"memory_mb":        1024,
 		"persistence":      "rdb",
@@ -101,8 +98,11 @@ func TestL3bRedisLive_CreateStandalone(t *testing.T) {
 	exp := harness.LoadExpectations(t, "redis/expectations/after-create.yaml")
 	stack.AssertExpectations(t, exp, applyID, inc)
 
-	// apply_id in the audit event payload is a runtime value, separate from the YAML fixture.
-	stack.AssertAuditEvent(t, "incarnation.created", map[string]any{
+	// apply_id in the audit event payload is a runtime value, separate from the YAML
+	// fixture. `scenario_started`, not `created`: the row is seeded and create is an
+	// explicit run (NIM-192 bootstrap order).
+	stack.AssertAuditEvent(t, "incarnation.scenario_started", map[string]any{
+		"scenario": "create",
 		"apply_id": applyID,
 	})
 }

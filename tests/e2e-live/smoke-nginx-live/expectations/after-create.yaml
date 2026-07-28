@@ -7,9 +7,9 @@
 # incarnation_state — deep-subset; here an exact match of state_changes.sets
 # from examples/service/smoke-nginx-live/scenario/create/main.yml.
 #
-# audit_events — at least one `incarnation.scenario_started` row matching the
-# apply_id. The exact event count isn't fixed (the apply_runs lifecycle writes
-# several audit rows, the contract test only checks presence of the key one).
+# audit_events — at least one `incarnation.scenario_started` row for the run.
+# The exact event count isn't fixed (the apply_runs lifecycle writes several
+# audit rows, the contract test only checks presence of the key one).
 #
 # metrics — a Prometheus expression → a constraint string ('>= 1' / '== 0' / ...).
 #
@@ -25,10 +25,12 @@ incarnation_state:
   nginx_service: active
   nginx_config_managed: true
 
-# POST /v1/incarnations auto-runs the create scenario and writes
-# `incarnation.created` (NOT scenario_started — that's only on an explicit RunScenario).
+# The harness seeds the incarnation row and runs create explicitly (NIM-192
+# bootstrap order: membership FKs the row, so POST /v1/incarnations — which would
+# start create in the same call — leaves no window to bind the roster). An
+# explicit run writes `incarnation.scenario_started`, not `incarnation.created`.
 audit_events:
-  - type: incarnation.created
+  - type: incarnation.scenario_started
 
 # keeper_scenario_runs_total{result="ok"} — the real metric of a successful run
 # (keeper/internal/scenario/metrics.go, closed enum ok/failed/locked). Parallel

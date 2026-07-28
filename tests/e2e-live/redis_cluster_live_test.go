@@ -59,16 +59,6 @@ func TestL3bRedisClusterCreate_ThreeNode(t *testing.T) {
 
 	const incName = "redis-clstr-create"
 
-	// Membership BEFORE Create: roster resolves members via incarnation_membership
-	// (ADR-008 amendment/NIM-124). All three Souls are bound to the incarnation; otherwise
-	// no_hosts -> zero apply_runs.
-	for i := range stack.SoulContainers {
-		stack.AddMember(t, i, incName)
-		// cluster nodes-MAP is built from soulprint.hosts (primary_ip by SID);
-		// wait for non-empty facts BEFORE create-render.
-		stack.WaitSoulprintReported(t, i, 60)
-	}
-
 	// requirepass + cluster-build password use keeper-side vault() resolution.
 	harness.SeedVaultKV(t, stack, "redis/"+incName, map[string]any{"password": "cluster-redis-secret-32b"})
 
@@ -76,8 +66,11 @@ func TestL3bRedisClusterCreate_ThreeNode(t *testing.T) {
 	// apply: destiny: redis) under git tag v1.0.0 (ref from service.yml::destiny[]).
 	stack.MaterializeDestinies(t, "v1.0.0", "redis")
 
-	// POST /v1/incarnations auto-starts create -> returns apply_id of auto-run.
-	inc, applyID := stack.CreateIncarnationWithApply(t, incName, "redis@main", map[string]any{
+	// Seed row -> bind all three Souls -> wait for their soulprints (the cluster
+	// nodes-MAP is built from soulprint.hosts, primary_ip by SID) -> run create.
+	// Order owned by CreateIncarnationOnRoster (NIM-192): membership FKs the
+	// incarnation row, an unbound roster is no_hosts -> zero apply_runs.
+	inc, applyID := stack.CreateIncarnationOnRoster(t, incName, "redis@main", "create", stack.AllSoulIndexes(), map[string]any{
 		"redis_type":         "cluster",
 		"version":            "7.2.4",
 		"shards":             3,

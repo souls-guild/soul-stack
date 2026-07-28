@@ -16,8 +16,10 @@ incarnation_state:
     cluster-enabled: "yes"
     cluster-config-file: nodes.conf
 
+# The harness seeds the incarnation row and runs create explicitly (NIM-192
+# bootstrap order) -> `incarnation.scenario_started`, not `incarnation.created`.
 audit_events:
-  - type: incarnation.created
+  - type: incarnation.scenario_started
 
 metrics:
   keeper_scenario_runs_total{result="ok"}: ">= 1"

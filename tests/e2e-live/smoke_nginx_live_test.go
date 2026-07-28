@@ -13,8 +13,9 @@
 //     debian-12 systemd-PID-1 soul container. The real Bootstrap flow is closed
 //     by the L3b-2 slice; here we rely on souls.status = 'connected' already
 //     being set after NewStack.
-//  2. CreateIncarnation `test-nginx-live` on top of the `smoke-nginx-live@main` service.
-//  3. RunScenario `create` with input.hostname=soul-live-a.example.com.
+//  2. CreateIncarnationOnRoster `test-nginx-live` on top of `smoke-nginx-live@main`:
+//     seed the incarnation row, bind the soul as a member, then
+//  3. run `create` with input.hostname=soul-live-a.example.com.
 //  4. WaitApplySuccess (timeout 300s - apt-update + install nginx can be
 //     slow on a busy CI machine, see the example's README).
 //  5. AssertApplyRunsStatus / AssertIncarnationState / AssertAuditEvent /
@@ -48,18 +49,16 @@ func TestL3bSmokeNginxLive_InstallAndStart(t *testing.T) {
 
 	const incName = "test-nginx-live"
 
-	// Membership BEFORE Create: the run's roster resolves members via
-	// incarnation_membership (ADR-008 amendment/NIM-124, topology/resolver.go::rosterSQL).
-	// The bootstrap flow set souls.status='connected', but no membership is bound -
-	// without this step the scenario sees no_hosts -> zero apply_runs rows ->
-	// WaitApplySuccess timeout. Parallel to L3a (tests/e2e/smoke_nginx_test.go::AddMember).
-	stack.AddMember(t, 0, incName)
-
-	// POST /v1/incarnations auto-launches the `create` scenario and returns its
-	// apply_id. A separate RunScenario(create) would be rejected by the lock gate
-	// ("incarnation already in applying status") and its apply_id would never get any
-	// apply_runs rows. We wait for the apply_id of the actual auto-create run (as in L3a).
-	inc, applyID := stack.CreateIncarnationWithApply(t, incName, "smoke-nginx-live@main", map[string]any{
+	// Seed the incarnation row -> bind the roster -> run `create`, all inside
+	// CreateIncarnationOnRoster (NIM-192). The bootstrap flow set
+	// souls.status='connected', but no membership is bound, and the run's roster
+	// resolves members via incarnation_membership
+	// (ADR-008 amendment/NIM-124, topology/resolver.go::rosterSQL) - an unbound
+	// roster is no_hosts -> zero apply_runs rows -> WaitApplySuccess timeout.
+	// Membership cannot precede the row (FK, migration 099), which is why the
+	// row is seeded rather than POSTed: POST /v1/incarnations would start the
+	// create run in the same call, before anything can be bound.
+	inc, applyID := stack.CreateIncarnationOnRoster(t, incName, "smoke-nginx-live@main", "create", []int{0}, map[string]any{
 		"hostname": wantSID,
 	})
 
@@ -80,12 +79,13 @@ func TestL3bSmokeNginxLive_InstallAndStart(t *testing.T) {
 	stack.AssertExpectations(t, exp, applyID, inc)
 
 	// apply_id in the audit event payload is a runtime value, not expressible via
-	// the YAML fixture; checked separately after AssertExpectations. POST
-	// /v1/incarnations auto-launches the create scenario and writes `incarnation.created`
-	// (huma_incarnation_op.go) with the auto-run's apply_id in the payload - the same apply_id
-	// as in WaitApplySuccess. `incarnation.scenario_started` is only written for an
-	// explicit RunScenario, which isn't called here (like L3a smoke_nginx_test.go).
-	stack.AssertAuditEvent(t, "incarnation.created", map[string]any{
+	// the YAML fixture; checked separately after AssertExpectations. The event is
+	// `incarnation.scenario_started`, not `incarnation.created`: the row is seeded
+	// and create is an explicit run (NIM-192 bootstrap order). POST
+	// /v1/incarnations and its `incarnation.created` payload stay covered by L3a
+	// (tests/e2e/smoke_nginx_test.go) and the handler unit tests.
+	stack.AssertAuditEvent(t, "incarnation.scenario_started", map[string]any{
+		"scenario": "create",
 		"apply_id": applyID,
 	})
 }

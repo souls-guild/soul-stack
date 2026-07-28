@@ -92,6 +92,70 @@ func (s *Stack) SeedIncarnationForCreate(t *testing.T, name, service, serviceVer
 	}
 }
 
+// AllSoulIndexes — every soul container index, for the common
+// "bind the whole stack to one incarnation" case of
+// [Stack.CreateIncarnationOnRoster].
+func (s *Stack) AllSoulIndexes() []int {
+	idx := make([]int, len(s.SoulContainers))
+	for i := range s.SoulContainers {
+		idx[i] = i
+	}
+	return idx
+}
+
+// soulprintBootstrapWaitSec — how long [Stack.CreateIncarnationOnRoster] waits
+// for each member's first SoulprintReport. A real soul sends it right after the
+// session is established, so this is a ceiling for container cold-start, not a
+// budget that gets spent.
+const soulprintBootstrapWaitSec = 60
+
+// CreateIncarnationOnRoster bootstraps an incarnation onto an ALREADY-onboarded
+// roster and returns (incarnationName, applyID of the create run).
+//
+// THE BOOTSTRAP ORDER LIVES HERE (NIM-192) — one place, not per test:
+//
+//  1. seed the `incarnation` row (status='ready', spec/state empty) — direct SQL;
+//  2. bind each soul as a member (incarnation_membership);
+//  3. wait for each member's first SoulprintReport;
+//  4. run the create scenario as an ordinary explicit run.
+//
+// Why not POST /v1/incarnations. Since NIM-124 membership is a first-class
+// relation guarded by FK incarnation_membership_incarnation_fk (migration 099),
+// a host CANNOT be bound before the incarnation row exists. POST
+// /v1/incarnations inserts that row AND starts the create run in the same call
+// (lifecycle.auto_create), leaving no window in between — and a create run that
+// rolls onto a ready roster (`provision: {enabled: false}`) resolves the roster
+// at run start, so an unbound roster aborts with `no_hosts` before dispatch
+// (run.go §3). Seeding the row first is the only order that satisfies both
+// constraints; it is the same direct-SQL escape the harness already uses for
+// paths unreachable offline (see [Stack.SeedIncarnationReady]).
+//
+// Coverage note: this path deliberately does NOT exercise POST /v1/incarnations
+// (input validation, create-scenario resolution, the `incarnation.created`
+// audit event) — that surface belongs to L3a (tests/e2e) and the handler unit
+// tests. Here create is an explicit run, so it writes
+// `incarnation.scenario_started`, not `incarnation.created`.
+//
+// serviceRef — `<service>@<ref>`; the ref is stored in
+// incarnation.service_version for readability only (the run path resolves the
+// service ref from the registry, incarnation_typed.go::RunTyped). createScenario
+// must carry `create: true`; scenarios that compose their own name via
+// name_template (ADR-0079) are NOT usable here — the name is fixed by the seed.
+func (s *Stack) CreateIncarnationOnRoster(t *testing.T, name, serviceRef, createScenario string, soulIndexes []int, input map[string]any) (string, string) {
+	t.Helper()
+	if len(soulIndexes) == 0 {
+		t.Fatalf("CreateIncarnationOnRoster(%s): no soul indexes — an empty roster aborts the create run with no_hosts", name)
+	}
+	s.SeedIncarnationReady(t, name, stripServiceRef(serviceRef), serviceRefVersion(serviceRef), map[string]any{})
+	for _, idx := range soulIndexes {
+		s.AddMember(t, idx, name)
+	}
+	for _, idx := range soulIndexes {
+		s.WaitSoulprintReported(t, idx, soulprintBootstrapWaitSec)
+	}
+	return name, s.RunScenario(t, name, createScenario, input)
+}
+
 // SeedSoulprint writes the soulprint facts of the i-th soul container directly
 // to `souls.soulprint_facts` (SoulprintFacts-JSON shape, CEL
 // `soulprint.self.<path>`, ADR-018). On L3b the real soul sends its own

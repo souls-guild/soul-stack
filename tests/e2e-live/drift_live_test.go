@@ -56,14 +56,11 @@ func TestL3bDriftLive_HelloWorld(t *testing.T) {
 
 	const incName = "test-hello-drift"
 
-	// Membership BEFORE Create: the roster resolves members via incarnation_membership
-	// (ADR-008 amendment/NIM-124, topology/resolver.go::rosterSQL); without it the scenario sees no_hosts.
-	stack.AddMember(t, 0, incName)
-
-	// POST /v1/incarnations auto-runs create and returns its apply_id.
-	// A separate RunScenario(create) would be rejected by the lock gate ("incarnation
-	// already in status applying") - we wait for the apply_id of the auto-create run specifically.
-	inc, applyID := stack.CreateIncarnationWithApply(t, incName, "hello-world@main", map[string]any{
+	// Seed row -> bind roster -> run create (CreateIncarnationOnRoster, NIM-192):
+	// the roster resolves members via incarnation_membership (ADR-008
+	// amendment/NIM-124, topology/resolver.go::rosterSQL) and an unbound roster is
+	// no_hosts, but membership FKs the incarnation row, so the row goes first.
+	inc, applyID := stack.CreateIncarnationOnRoster(t, incName, "hello-world@main", "create", []int{0}, map[string]any{
 		"greeting": greeting,
 	})
 	// hello-world - no apt: render -> core.file.present -> RunResult is fast.

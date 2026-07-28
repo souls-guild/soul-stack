@@ -79,13 +79,12 @@ func TestFC2OnchangesIdempotency(t *testing.T) {
 	const incName = "fc2-onchanges"
 	const nginxConfPath = "/etc/nginx/sites-available/default"
 
-	// Membership BEFORE Create: the roster resolves members via incarnation_membership
-	// (ADR-008 amendment/NIM-124). Without it the scenario sees no_hosts -> zero apply_runs (as in L3b-smoke).
-	stack.AddMember(t, 0, incName)
-
 	// ── Run 1: clean container ───────────────────────────────────────────
-	// POST /v1/incarnations auto-runs create and returns its apply_id.
-	inc, apply1 := stack.CreateIncarnationWithApply(t, incName, "smoke-nginx-live@main", map[string]any{
+	// Seed row -> bind roster -> run create (CreateIncarnationOnRoster, NIM-192):
+	// the roster resolves via incarnation_membership (ADR-008 amendment/NIM-124)
+	// and an unbound roster is no_hosts -> zero apply_runs (as in L3b-smoke), but
+	// membership FKs the incarnation row, so the row is seeded first.
+	inc, apply1 := stack.CreateIncarnationOnRoster(t, incName, "smoke-nginx-live@main", "create", []int{0}, map[string]any{
 		"hostname": wantSID,
 	})
 

@@ -57,16 +57,14 @@ func TestL3bRedisLive_Day2RotateTls(t *testing.T) {
 	harness.SeedVaultKV(t, stack, "redis/"+incName, map[string]any{"password": "e2e-redis-main"})
 	harness.SeedVaultKV(t, stack, "redis/"+incName+"/users/"+adminUser, map[string]any{"password": adminPass})
 
-	stack.AddMember(t, 0, incName)
-	stack.WaitSoulprintReported(t, 0, 60)
-
 	stack.MaterializeDestinies(t, "v1.0.0", "redis", "node-exporter", "redis-exporter", "vector")
 	stack.AllowSoulModule(t, "community", "redis", harness.CommunityRedisPluginRef)
 
 	// Create TLS instance: connection_mode=tls (TLS-only, plain port closed). cert/key/ca
 	// come from the default essence Vault paths (secret/services/redis/tls#{cert,key,ca}) -
-	// TLS-create requires no essence override. The rest - same as adduser (standalone-equivalent).
-	inc, createApply := stack.CreateIncarnationWithApplyScenario(t, incName, "redis@main", "create", map[string]any{
+	// TLS-create requires no essence override. The rest - same as adduser (standalone-equivalent),
+	// including the seed -> bind -> run bootstrap order owned by CreateIncarnationOnRoster (NIM-192).
+	inc, createApply := stack.CreateIncarnationOnRoster(t, incName, "redis@main", "create", []int{0}, map[string]any{
 		"provision":           map[string]any{"enabled": false},
 		"redis_type":          "sentinel",
 		"version":             "7.4.1",

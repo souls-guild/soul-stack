@@ -707,6 +707,14 @@ func (s *Stack) CreateIncarnationWithApplyScenario(t *testing.T, name, serviceRe
 // RunScenario runs a scenario on an existing incarnation.
 //
 // 202 -> returns apply_id. Any other status - t.Fatal.
+//
+// Retry on 422 "service is not registered" - the same registration<->snapshot
+// race [Stack.CreateIncarnation] documents and retries: RunTyped resolves the
+// service from the in-memory Holder snapshot (TTL poll 10s + Redis pub/sub
+// invalidation), and the FIRST run of a test flow can land in the window before
+// registerExampleService's entry is visible. Day-2 calls are long past the
+// window and never spin; the bootstrap create run
+// ([Stack.CreateIncarnationOnRoster]) is the one that needs it.
 func (s *Stack) RunScenario(t *testing.T, incarnationName string, scenarioName string, input map[string]any) string {
 	t.Helper()
 	c := s.opClient(t)
@@ -715,11 +723,25 @@ func (s *Stack) RunScenario(t *testing.T, incarnationName string, scenarioName s
 		body["input"] = input
 	}
 	path := fmt.Sprintf("/v1/incarnations/%s/scenarios/%s", incarnationName, scenarioName)
-	resp, status, err := c.post(context.Background(), path, body)
-	if err != nil {
-		t.Fatalf("RunScenario %s/%s: http: %v", incarnationName, scenarioName, err)
-	}
-	if status != http.StatusAccepted {
+
+	var resp []byte
+	var status int
+	var err error
+	deadline := time.Now().Add(15 * time.Second)
+	for {
+		resp, status, err = c.post(context.Background(), path, body)
+		if err != nil {
+			t.Fatalf("RunScenario %s/%s: http: %v", incarnationName, scenarioName, err)
+		}
+		if status == http.StatusAccepted {
+			break
+		}
+		if status == http.StatusUnprocessableEntity &&
+			strings.Contains(string(resp), "is not registered") &&
+			time.Now().Before(deadline) {
+			time.Sleep(250 * time.Millisecond)
+			continue
+		}
 		t.Fatalf("RunScenario %s/%s: status %d, body=%s", incarnationName, scenarioName, status, string(resp))
 	}
 	var out struct {
@@ -941,6 +963,16 @@ func stripServiceRef(ref string) string {
 		return ref[:i]
 	}
 	return ref
+}
+
+// serviceRefVersion — the `<ref>` half of `<service>@<ref>`, defaulting to the
+// branch registerExampleService publishes on. Only [Stack.CreateIncarnationOnRoster]
+// needs it, to fill incarnation.service_version the way the create handler would.
+func serviceRefVersion(ref string) string {
+	if i := strings.IndexByte(ref, '@'); i >= 0 && i+1 < len(ref) {
+		return ref[i+1:]
+	}
+	return "main"
 }
 
 // DB returns the pool for the test (read-only for asserts). Does not Close for

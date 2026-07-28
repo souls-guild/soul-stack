@@ -50,15 +50,12 @@ func TestL3bFC4IgnoreErrorsLive_SuppressesRealModuleFailure(t *testing.T) {
 
 	const incName = "test-fc4-ignore-errors"
 
-	// Membership BEFORE Create: the roster resolves members via incarnation_membership
-	// (ADR-008 amendment/NIM-124). Without it the scenario sees no_hosts -> zero apply_runs rows.
-	stack.AddMember(t, 0, incName)
-
 	// ── (1) create: real module failure + failed_when:false -> SUCCESS ─────
-	// POST /v1/incarnations auto-runs the create scenario. On the single host, the
-	// core.exec.run task fails (binary not found), failed_when "false" overrides the
-	// failure -> task OK -> run succeeds.
-	inc, createApplyID := stack.CreateIncarnationWithApply(t, incName, "fc4-ignore-errors-live@main", nil)
+	// Seed row -> bind roster -> run create (CreateIncarnationOnRoster, NIM-192:
+	// membership FKs the incarnation row, an unbound roster is no_hosts). On the
+	// single host, the core.exec.run task fails (binary not found), failed_when
+	// "false" overrides the failure -> task OK -> run succeeds.
+	inc, createApplyID := stack.CreateIncarnationOnRoster(t, incName, "fc4-ignore-errors-live@main", "create", []int{0}, nil)
 
 	// 120 s with margin for container cold-start (the task itself is instant - exec
 	// fails right at process start, no apt/network involved).

@@ -66,6 +66,7 @@ tests/e2e-live/
 │   ├── asserts.go                  # keeper-side + container-side asserts (AssertHost*)
 │   ├── expectations.go             # LoadExpectations / AssertExpectations (+ host_state)
 │   ├── coven.go                    # AddMember (roster via incarnation_membership)
+│   ├── seed.go                     # direct-SQL seeds + CreateIncarnationOnRoster (bootstrap order)
 │   ├── operator.go                 # Operator API HTTP client
 │   ├── vault.go                    # InitVaultTestSecrets / IssueKeeperServerCert / SeedVaultKV
 │   ├── config_builder.go           # buildKeeperYAML
@@ -83,6 +84,36 @@ tests/e2e-live/
 ├── drift_live_test.go              # TestL3bDriftLive_HelloWorld
 └── plugin_beacon_test.go           # TestE2EBeaconPlugin_FullLoop
 ```
+
+## Bootstrap order of a live stand (NIM-192)
+
+A test that brings up a NEW incarnation on already-onboarded Souls goes through
+`Stack.CreateIncarnationOnRoster` and never hand-rolls the order:
+
+1. seed the `incarnation` row (`status='ready'`, empty spec/state) — direct SQL;
+2. bind each Soul as a member (`incarnation_membership`);
+3. wait for each member's first `SoulprintReport`;
+4. run the create scenario as an ordinary explicit run.
+
+Two constraints pin that order and admit no other:
+
+- **Membership cannot come first.** Since NIM-124 membership is a first-class
+  relation with FK `incarnation_membership_incarnation_fk` → `incarnation(name)`
+  (migration 099). Binding before the row exists is `SQLSTATE 23503`.
+- **The run cannot come first.** A create run that rolls onto a ready roster
+  (`provision: {enabled: false}`) resolves the roster at run start, so an unbound
+  roster aborts with `no_hosts` before dispatch (`run.go` §3).
+
+`POST /v1/incarnations` inserts the row **and** starts the create run in the same
+call (`lifecycle.auto_create`), leaving no window between them — hence the direct
+seed. The consequence to keep in mind when writing expectations: create is an
+explicit run here, so it writes `incarnation.scenario_started`, **not**
+`incarnation.created`. POST's own create path stays covered by L3a
+(`tests/e2e`) and the handler unit tests.
+
+`AddMember` on its own remains correct for an incarnation that already exists
+(e.g. `fc5_when_gating_test.go`, which seeds a ready incarnation and runs a
+day-2 scenario); it fails fast with the order instruction if the row is missing.
 
 ## Slices
 

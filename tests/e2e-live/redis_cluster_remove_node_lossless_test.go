@@ -92,17 +92,15 @@ func TestL3cRedisClusterRemoveNode_SlotMigrationLossless(t *testing.T) {
 	})
 	defer stack.Cleanup()
 
-	for i := range stack.SoulContainers {
-		stack.AddMember(t, i, incName)
-		stack.WaitSoulprintReported(t, i, 60)
-	}
 	stack.MaterializeDestinies(t, "v1.0.0", "redis")
 	harness.SeedVaultKV(t, stack, "redis/"+incName, map[string]any{"password": remRedisPassword})
 
 	// (1) bootstrap cluster-mode redis through scenario create (redis_type=cluster).
+	//     Seed row -> bind all Souls -> run create (CreateIncarnationOnRoster,
+	//     NIM-192: membership FKs the incarnation row, an unbound roster is no_hosts).
 	//     TODO(L3c-future): need helper guaranteeing cluster_state:ok through
 	//     community.redis (plugin cluster bootstrap, not redis-cli --cluster create).
-	createID := stack.RunScenario(t, incName, "create", map[string]any{
+	_, createID := stack.CreateIncarnationOnRoster(t, incName, "redis@main", "create", stack.AllSoulIndexes(), map[string]any{
 		"redis_type":     "cluster",
 		"redis_password": "vault:secret/redis/" + incName + "#password",
 	})

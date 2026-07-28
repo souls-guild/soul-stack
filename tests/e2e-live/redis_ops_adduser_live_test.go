@@ -54,11 +54,6 @@ func TestL3bRedisLive_Day2AddUser(t *testing.T) {
 	harness.SeedVaultKV(t, stack, "redis/"+incName, map[string]any{"password": "e2e-redis-main"})
 	harness.SeedVaultKV(t, stack, "redis/"+incName+"/users/"+adminUser, map[string]any{"password": adminPass})
 
-	// Membership BEFORE Create (roster via incarnation_membership, NIM-124) + wait
-	// for the first SoulprintReport (redis.conf.tmpl binds to soulprint.self.network.primary_ip).
-	stack.AddMember(t, 0, incName)
-	stack.WaitSoulprintReported(t, 0, 60)
-
 	// Materialize ALL destinies that create composes: redis + UNCONDITIONAL
 	// node-exporter/redis-exporter/vector (Slice I / ADR-067). All ref:v1.0.0 (service.yml).
 	stack.MaterializeDestinies(t, "v1.0.0", "redis", "node-exporter", "redis-exporter", "vector")
@@ -70,10 +65,15 @@ func TestL3bRedisLive_Day2AddUser(t *testing.T) {
 
 	// Create the standalone-equivalent: sentinel + 0 replicas (standalone/sentinel_only modes
 	// have been removed from the service). provision:{enabled:false} - deploy onto a READY soul roster
-	// (otherwise provision default-on would try to go to cloud-create). create_scenario is explicit - the service has
-	// THREE create:true (create/create_from_souls/migrate_cluster) -> without it, 422. connection_mode
+	// (otherwise provision default-on would try to go to cloud-create). The create scenario is explicit -
+	// the service has THREE create:true (create/create_from_souls/migrate_cluster). connection_mode
 	// plain -> redis on 6379 without TLS (add_user connects to 127.0.0.1:6379). version - enum.
-	inc, createApply := stack.CreateIncarnationWithApplyScenario(t, incName, "redis@main", "create", map[string]any{
+	//
+	// CreateIncarnationOnRoster owns the bootstrap order (NIM-192): seed the incarnation
+	// row -> bind the roster (FK incarnation_membership_incarnation_fk needs the row) ->
+	// wait for the first SoulprintReport (redis.conf.tmpl binds to
+	// soulprint.self.network.primary_ip) -> run create against a non-empty roster.
+	inc, createApply := stack.CreateIncarnationOnRoster(t, incName, "redis@main", "create", []int{0}, map[string]any{
 		"provision":           map[string]any{"enabled": false},
 		"redis_type":          "sentinel",
 		"version":             "7.4.1",

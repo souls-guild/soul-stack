@@ -55,16 +55,12 @@ func TestL3bStagedProbeLive_WhereTargetsOnlyMaster(t *testing.T) {
 
 	const incName = "test-staged-probe"
 
-	// Membership BEFORE Create: the roster resolves members via incarnation_membership
-	// (ADR-008 amendment/NIM-124). Without it, scenario sees no_hosts -> zero apply_runs rows.
-	for i := range stack.SoulContainers {
-		stack.AddMember(t, i, incName)
-	}
-
-	// POST /v1/incarnations auto-launches the create scenario (= the staged scenario) and
-	// returns its apply_id. Both hosts announce the passage capability
-	// (one beta binary), so the forward-compat gate lets the run through.
-	inc, applyID := stack.CreateIncarnationWithApply(t, incName, "staged-probe-live@main", nil)
+	// Seed row -> bind every soul -> run create (= the staged scenario), the order
+	// owned by CreateIncarnationOnRoster (NIM-192: membership FKs the incarnation
+	// row, an unbound roster is no_hosts -> zero apply_runs rows). Both hosts
+	// announce the passage capability (one beta binary), so the forward-compat
+	// gate lets the run through.
+	inc, applyID := stack.CreateIncarnationOnRoster(t, incName, "staged-probe-live@main", "create", stack.AllSoulIndexes(), nil)
 
 	// probe (echo role) is fast; the staged loop adds one barrier. 120s with
 	// margin for container cold-start and rendering two Passages.

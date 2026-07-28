@@ -65,14 +65,11 @@ func TestL3bModuleDeliveryLive_SynthesisFetchHotRegister(t *testing.T) {
 
 	const incName = "module-delivery"
 
-	// Membership BEFORE create: the roster resolves members via incarnation_membership
-	// (ADR-008 amendment/NIM-124). WaitSoulprintReported - soul fully online before the roster resolve.
-	stack.AddMember(t, 0, incName)
-	stack.WaitSoulprintReported(t, 0, 60)
-
 	// -- create: redis via core modules, WITHOUT the community.redis consumer --
+	// Seed row -> bind roster -> run create, the order owned by CreateIncarnationOnRoster
+	// (NIM-192: membership FKs the incarnation row, the run needs the roster).
 	// 300s - apt-get update + install redis-server on a fresh Debian-12 (like redis-live).
-	inc, createApply := stack.CreateIncarnationWithApply(t, incName, "module-delivery-live@main", nil)
+	inc, createApply := stack.CreateIncarnationOnRoster(t, incName, "module-delivery-live@main", "create", []int{0}, nil)
 	stack.WaitApplySuccess(t, createApply, 300)
 	stack.WaitIncarnationReady(t, inc, 30)
 
