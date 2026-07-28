@@ -80,6 +80,16 @@ func ToProtoTasksForHost(tasks []*RenderedTask, sid string) []*keeperv1.Rendered
 			// by where: on this host / that landed in another Passage is encoded as
 			// the sentinel (-1) → its contribution to the OR is zero (changed=false).
 			AggregateOf: remapRequisites(t.AggregateOf, globalToLocal),
+			// Intra-host concurrency (ADR-0075). RequireIdx is remapped
+			// global→local with the same remapRequisites, but the sentinel (-1)
+			// means "nothing to wait for" here, not "contributes false to a gate":
+			// a source absent from this slice was filtered out by where: on this
+			// host (it never ran) or lives in an EARLIER Passage (already closed on
+			// every host). A source in a LATER Passage never reaches this point —
+			// resolveRequire rejects that plan.
+			Async:       t.Async,
+			RequireIdx:  remapRequisites(t.RequireIdx, globalToLocal),
+			RequireAll:  t.RequireAll,
 			When:        t.When,
 			ChangedWhen: t.ChangedWhen,
 			FailedWhen:  t.FailedWhen,

@@ -312,8 +312,8 @@ func includeModifierReason(task Task) string {
 		return "loop: (slice E)"
 	case len(task.Vars) > 0:
 		return "vars:"
-	case task.Parallel:
-		return "parallel:"
+	case task.Async:
+		return "async:"
 	case task.Register != "":
 		return "register:"
 	case len(task.Output) > 0:

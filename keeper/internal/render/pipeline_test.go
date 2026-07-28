@@ -792,16 +792,19 @@ func TestRender_FlowContextVarsLaunderingChangedWhen_Error(t *testing.T) {
 	}
 }
 
-// TestRender_UnsupportedDSL — pilot guard rejects parallel.
-// block is no longer included here (implemented, pilot C1 — render-time fan-out, see
-// block_test.go); serial/run_once are also implemented (slice D); loop on a
-// module task is implemented (slice E1) — positive tests in loop_test.go, and loop
-// on apply is rejected there too (TestRenderLoop_OnApplyRejected).
+// TestRender_UnsupportedDSL — what the pilot guard still rejects. block is not
+// included here (implemented, pilot C1 — render-time fan-out, see block_test.go);
+// serial/run_once are also implemented (slice D); loop on a module task is
+// implemented (slice E1) — positive tests in loop_test.go, and loop on apply is
+// rejected there too (TestRenderLoop_OnApplyRejected). async: is implemented
+// (ADR-0075, NIM-150) — positive tests in async_test.go; what stays rejected is
+// async on a NODE that cannot carry it, covered below and in async_test.go.
 func TestRender_UnsupportedDSL(t *testing.T) {
 	cases := map[string]config.Task{
 		// apply: with nil DestinyResolver (Destiny not configured) → ErrUnsupportedDSL.
-		"apply":    {Name: "t", Apply: &config.ApplyTask{Destiny: "redis"}},
-		"parallel": {Name: "t", Module: &config.ModuleTask{Module: "core.exec.run", Params: map[string]any{}}, Parallel: true},
+		"apply": {Name: "t", Apply: &config.ApplyTask{Destiny: "redis"}},
+		// no discriminator at all — not a module task.
+		"no_discriminator": {Name: "t"},
 	}
 	for name, task := range cases {
 		t.Run(name, func(t *testing.T) {

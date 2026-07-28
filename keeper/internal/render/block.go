@@ -33,7 +33,7 @@ import (
 //   - nested block: → recursive renderBlockTask (cascading inheritance);
 //   - apply: → renderApplyDestiny (inherited width);
 //   - module: → renderTask;
-//   - loop:/parallel: on a descendant → REJECTED (guardPilotBlockChild);
+//   - loop:/async: on a descendant → REJECTED (guardPilotBlockChild);
 //   - include: on a descendant → already expanded by config.ExpandIncludes
 //     (within-block include), so it never reaches here; the guard keeps the case
 //     as defense-in-depth.
@@ -322,7 +322,9 @@ func unionNames(blockNames, childNames []string) []string {
 // (renderBlockTask's recursion checks these earlier — a block descendant never
 // reaches here). Outside the pilot:
 //   - loop: on a descendant (render-time fan-out inside a block is deferred);
-//   - parallel: on a descendant (parallel in a block — a later slice);
+//   - async: on a descendant (ADR-0075 defers async inside a block along with
+//     async on the block itself — the design intent is one flow for the whole
+//     group, which no slice implements yet);
 //   - an empty task (no discriminator).
 //
 // include: on a descendant is NOT a pilot boundary — within-block include is
@@ -332,16 +334,15 @@ func unionNames(blockNames, childNames []string) []string {
 // pilot scope".
 //
 // A block descendant (child.Block != nil) never reaches here — renderBlockTask
-// branches into recursion BEFORE the guard. parallel/loop on the block ITSELF
+// branches into recursion BEFORE the guard. async/loop on the block ITSELF
 // (not the descendant) is rejected by the config validator
-// (parallel_on_block_invalid / loop validation) and by guardPilotDSL (parallel) at
-// the top level.
+// (async_on_block_invalid / loop validation).
 func guardPilotBlockChild(child config.Task, idx int, blockName string) error {
 	switch {
 	case child.Loop != nil:
 		return fmt.Errorf("%w: loop: on descendant of block %q (task[%d] %q) - outside block pilot scope", ErrUnsupportedDSL, blockName, idx, child.Name)
-	case child.Parallel:
-		return fmt.Errorf("%w: parallel: on descendant of block %q (task[%d] %q) - outside block pilot scope", ErrUnsupportedDSL, blockName, idx, child.Name)
+	case child.Async:
+		return fmt.Errorf("%w: async: on descendant of block %q (task[%d] %q) - async inside a block is a deferred slice (ADR-0075)", ErrUnsupportedDSL, blockName, idx, child.Name)
 	case child.Include != nil:
 		return fmt.Errorf("%w: include: on descendant of block %q (task[%d] %q)", ErrUnexpandedInclude, blockName, idx, child.Name)
 	case child.Module == nil && child.Apply == nil && child.Block == nil:

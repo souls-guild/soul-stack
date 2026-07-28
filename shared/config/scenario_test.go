@@ -293,7 +293,7 @@ tasks:
 
 // TestLoadScenarioManifest_BlockForbiddenKeys (guard #8) — module-specific keys
 // on a block task are cut fail-closed with code <key>_on_block_invalid
-// (destiny/tasks.md §6.5 does not mention them on block). parallel: is also rejected.
+// (destiny/tasks.md §6.5 does not mention them on block). async: is also rejected.
 func TestLoadScenarioManifest_BlockForbiddenKeys(t *testing.T) {
 	cases := map[string]string{
 		"changed_when_on_block_invalid": "changed_when: \"true\"",
@@ -303,7 +303,7 @@ func TestLoadScenarioManifest_BlockForbiddenKeys(t *testing.T) {
 		"output_on_block_invalid":       "output: { x: \"y\" }",
 		"no_log_on_block_invalid":       "no_log: true",
 		"params_on_block_invalid":       "params: { a: 1 }",
-		"parallel_on_block_invalid":     "parallel: true",
+		"async_on_block_invalid":        "async: true",
 	}
 	for wantCode, line := range cases {
 		t.Run(wantCode, func(t *testing.T) {
@@ -314,6 +314,56 @@ func TestLoadScenarioManifest_BlockForbiddenKeys(t *testing.T) {
 				t.Fatalf("expected %s", wantCode)
 			}
 		})
+	}
+}
+
+// TestLoadScenarioManifest_ParallelIsReserved — `parallel:` is no longer a task
+// key (ADR-0075): it is held for a future concurrent group with a join, which is
+// a different construct from asynchrony rather than a synonym. Writing it is the
+// ordinary fail-closed `unknown_key` of the strict manifest walker — NOT a
+// silently ignored key, which is what would let a plan claim concurrency it
+// never gets.
+func TestLoadScenarioManifest_ParallelIsReserved(t *testing.T) {
+	src := "name: x\ntasks:\n  - module: core.exec.run\n    parallel: true\n    params: { cmd: \"true\" }\n"
+	_, _, diags, _ := LoadScenarioManifestFromBytes("main.yml", []byte(src), ValidateOptions{})
+	if !hasCode(diags, "unknown_key") {
+		dump(t, diags)
+		t.Fatalf("expected unknown_key for the reserved parallel: key")
+	}
+}
+
+// TestLoadScenarioManifest_AsyncTaskKeyAccepted — the other half of the rename:
+// `async: true` on an ordinary task parses clean and lands on Task.Async.
+func TestLoadScenarioManifest_AsyncTaskKeyAccepted(t *testing.T) {
+	src := "name: x\ntasks:\n  - module: core.exec.run\n    async: true\n    register: probe\n    params: { cmd: \"true\" }\n  - module: core.exec.run\n    require: [probe]\n    params: { cmd: \"true\" }\n"
+	m, _, diags, err := LoadScenarioManifestFromBytes("main.yml", []byte(src), ValidateOptions{})
+	if err != nil {
+		t.Fatalf("LoadScenarioManifestFromBytes: %v", err)
+	}
+	for _, d := range diags {
+		if d.Level == diag.LevelError {
+			dump(t, diags)
+			t.Fatalf("async:/require: wrongly rejected: %s", d.Code)
+		}
+	}
+	if !m.Tasks[0].Async {
+		t.Error("Tasks[0].Async = false, want true")
+	}
+	all, names, ok := m.Tasks[1].RequireSpec()
+	if !ok || all || len(names) != 1 || names[0] != "probe" {
+		t.Errorf("RequireSpec() = %v/%v/%v, want false/[probe]/true", all, names, ok)
+	}
+}
+
+// TestRequireSpec_ScalarAll — the scalar form decodes to the all-barrier and
+// names no source.
+func TestRequireSpec_ScalarAll(t *testing.T) {
+	all, names, ok := Task{Require: RequireAll}.RequireSpec()
+	if !ok || !all || names != nil {
+		t.Errorf("RequireSpec() = %v/%v/%v, want true/nil/true", all, names, ok)
+	}
+	if _, _, unset := (Task{}).RequireSpec(); unset {
+		t.Error("an unset require: must decode to ok=false")
 	}
 }
 

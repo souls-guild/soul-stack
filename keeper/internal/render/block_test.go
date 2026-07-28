@@ -598,12 +598,12 @@ func TestRenderBlock_IncludeChildRejected(t *testing.T) {
 	}
 }
 
-// TestRenderBlock_ParallelChildRejected (QA gap #10b) — a parallel child in a
-// block is rejected (parallel as a whole is deferred post-pilot,
-// docs/destiny/tasks.md §6.5).
-func TestRenderBlock_ParallelChildRejected(t *testing.T) {
+// TestRenderBlock_AsyncChildRejected (QA gap #10b) — an async child in a
+// block is rejected: ADR-0075 defers async inside a block along with async on
+// the block itself (docs/destiny/tasks.md §6.5).
+func TestRenderBlock_AsyncChildRejected(t *testing.T) {
 	inner := moduleTask("inner", "core.exec.run")
-	inner.Parallel = true
+	inner.Async = true
 	task := config.Task{
 		Name:  "grp",
 		Block: &config.BlockTask{Block: []config.Task{inner}},
@@ -616,7 +616,7 @@ func TestRenderBlock_ParallelChildRejected(t *testing.T) {
 	}
 	_, _, err := p.Render(context.Background(), in)
 	if !errors.Is(err, ErrUnsupportedDSL) {
-		t.Fatalf("err = %v, want ErrUnsupportedDSL (parallel child of block out of pilot scope)", err)
+		t.Fatalf("err = %v, want ErrUnsupportedDSL (async child of a block is a deferred slice)", err)
 	}
 }
 

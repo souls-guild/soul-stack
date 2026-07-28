@@ -29,7 +29,7 @@ type Task struct {
 	Name        string         `yaml:"name,omitempty"`
 	Vars        map[string]any `yaml:"vars,omitempty"`
 	When        string         `yaml:"when,omitempty"`
-	Parallel    bool           `yaml:"parallel,omitempty"`
+	Async       bool           `yaml:"async,omitempty"` // fire-and-forget (ADR-0075); `parallel:` is reserved → unknown_key
 	Loop        *LoopSpec      `yaml:"loop,omitempty"`
 	Register    string         `yaml:"register,omitempty"`
 	ID          string         `yaml:"id,omitempty"`
@@ -121,6 +121,44 @@ type RetrySpec struct {
 	Count int    `yaml:"count"`
 	Delay string `yaml:"delay,omitempty"`
 	Until string `yaml:"until,omitempty"`
+}
+
+// RequireAll is the scalar form of `require:` — the literal "all", the barrier
+// waiting for every async task started earlier in the run (destiny/tasks.md §8).
+// Mutually exclusive with the list form; the mixed `require: [a, "all"]` is a
+// validation error (validateRequireField).
+const RequireAll = "all"
+
+// RequireSpec decodes the polymorphic `require:` into the two forms the DSL
+// allows (destiny/tasks.md §8): a list of source register names, or the scalar
+// [RequireAll]. Keeper-side render resolves the names into task indices for the
+// wire (ADR-0075(g)), so the decode lives here rather than in each consumer —
+// Task.Require is `any` because the two forms share one key.
+//
+// Unset/null → ("", nil, false). A shape the validator already rejects
+// (validateRequireField runs at parse time) also yields false: this is a decode
+// of validated input, not a second validator.
+func (t Task) RequireSpec() (all bool, names []string, ok bool) {
+	switch v := t.Require.(type) {
+	case nil:
+		return false, nil, false
+	case string:
+		return v == RequireAll, nil, v == RequireAll
+	case []string:
+		return false, v, len(v) > 0
+	case []any:
+		out := make([]string, 0, len(v))
+		for _, item := range v {
+			s, isStr := item.(string)
+			if !isStr {
+				return false, nil, false
+			}
+			out = append(out, s)
+		}
+		return false, out, len(out) > 0
+	default:
+		return false, nil, false
+	}
 }
 
 // taskCommonStringFields — a task's common string fields (DSL core §3 + scenario-
@@ -877,8 +915,9 @@ func validateBlockField(kv *ast.MappingValueNode, pathPrefix string) []diag.Diag
 // it. Each key is rejected with code `<key>_on_block_invalid` (symmetric to
 // register_on_block_invalid). `register:` is already rejected separately above.
 //
-// `parallel:` is also outside the pilot block (parallel on a block is a later slice)
-// — rejected by the same mechanism, code parallel_on_block_invalid.
+// `async:` is also rejected on a block — deferred, not forbidden by design
+// (ADR-0075: the design intent is that the whole group runs in one flow, gated
+// fail-closed until a slice implements it), code async_on_block_invalid.
 //
 // Keys inherited by a block (`when`/`where`/`vars`/`onchanges`/`onfail`/`require`/
 // `on`/`serial`/`run_once`/`name`/`loop`) are NOT in the list: §6.5 explicitly allows
@@ -891,7 +930,7 @@ var blockForbiddenKeys = []string{
 	"output",
 	"no_log",
 	"params",
-	"parallel",
+	"async",
 }
 
 // validateBlockForbiddenKeys raises `<key>_on_block_invalid` for each present module-

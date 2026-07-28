@@ -71,8 +71,10 @@ func NewPipeline(vc KVReader, engine *cel.Engine, logger *slog.Logger, metrics *
 // Pilot DSL scope: module tasks (including `core.file.rendered`), `apply:
 // destiny` (isolated render pass, V2 ADR-009), serial:/run_once: (slice D),
 // loop: (E1) and block: (C1) — all expand via render-time fan-out into the
-// flat layer — plus `on: keeper` (renderKeeperTask). Outside pilot scope:
-// parallel: → [ErrUnsupportedDSL]; unexpanded include: → [ErrUnexpandedInclude].
+// flat layer — plus `on: keeper` (renderKeeperTask) and `async:` (ADR-0075,
+// threaded into RenderedTask). Outside pilot scope: loop: on an apply: task and
+// loop:/async: on a keeper-side task → [ErrUnsupportedDSL]; unexpanded include:
+// → [ErrUnexpandedInclude].
 //
 // Index/TaskIndex is a cross-cutting index over the final plan: scenario
 // tasks and spliced-in destiny tasks share one monotonic counter (links
@@ -198,10 +200,10 @@ func (p *Pipeline) Render(ctx context.Context, in RenderInput) (_ []*RenderedTas
 		// Static-when precedes guardPilotDSL (ADR-012(d), extending the
 		// static-when invariant): a statically-false `when:` gates the task
 		// off and skips it before any eager processing, including the DSL
-		// guard. An inactive branch with unsupported DSL (`parallel:`/`block:`)
-		// doesn't block the active one — its DSL is rejected only on
-		// activation (per-action validation). Not masking a bug: the task is
-		// physically never executed (parallel: is never reached).
+		// guard. An inactive branch with unsupported DSL (`loop:` on an
+		// `apply:` task) doesn't block the active one — its DSL is rejected
+		// only on activation (per-action validation). Not masking a bug: the
+		// task is physically never executed, so the guard is never reached.
 		// isStaticWhen/staticWhenSkips are register-/soulprint-independent and
 		// build flow_context from input/vars/essence/incarnation/self, not DSL
 		// fields, so calling them before the guard is safe.
@@ -350,6 +352,12 @@ func (p *Pipeline) Render(ctx context.Context, in RenderInput) (_ []*RenderedTas
 	if err := resolveOnFail(tasks); err != nil {
 		return nil, nil, err
 	}
+	// `require:` (ADR-0075) resolves in the same pass and by the same Variant A,
+	// but additionally checks the Passage invariant — which needs every task's
+	// Passage stamped, i.e. the end of the walk.
+	if err := resolveRequire(tasks); err != nil {
+		return nil, nil, err
+	}
 
 	return tasks, plans, nil
 }
@@ -405,6 +413,7 @@ func (p *Pipeline) renderTaskIter(ctx context.Context, in RenderInput, task conf
 		onChangesNames: task.OnChanges,
 		onFailNames:    task.OnFail,
 	}
+	applyConcurrency(rt, task)
 
 	// retry: (destiny/tasks.md §9) is enforced Soul-side; Keeper just passes
 	// the fields through. nil Retry → one attempt (zero-value RetryCount=0,
@@ -738,7 +747,7 @@ func (p *Pipeline) keepIncludeGroup(in RenderInput, task config.Task, cache incl
 // (register-/soulprint-independent) and evaluates false, the task is gated
 // off: emit skip placeholder(s), mutating tasks/plans/idx through pointers,
 // and return skipped=true. The caller does `continue` without the guard and
-// without rendering — so unsupported DSL (`parallel:`/`block:`) on an
+// without rendering — so unsupported DSL (`loop:` on an `apply:` task) on an
 // inactive branch is never rejected (it's unreachable — the task never
 // executes).
 //
@@ -825,7 +834,7 @@ func (p *Pipeline) emitStaticWhenSkip(
 // staticSkipPlaceholder builds one skip placeholder for a task with a
 // statically-false when: (Params=nil — render skipped; first host's
 // flow_context; When/ID/Register/requisites passed through). Module is set
-// when a module task is present (block/parallel-without-module → empty
+// when a module task is present (a block node has none → empty
 // Module — placeholder is still valid, just never executed).
 func (p *Pipeline) staticSkipPlaceholder(task config.Task, idx int, skip *structpb.Struct) *RenderedTask {
 	rt := &RenderedTask{
@@ -842,6 +851,7 @@ func (p *Pipeline) staticSkipPlaceholder(task config.Task, idx int, skip *struct
 		onFailNames:    task.OnFail,
 		FlowContext:    skip,
 	}
+	applyConcurrency(rt, task)
 	if task.Module != nil {
 		rt.Module = task.Module.Module
 	}
@@ -1023,6 +1033,16 @@ func (p *Pipeline) renderKeeperTask(ctx context.Context, in RenderInput, task co
 	if task.Loop != nil {
 		return nil, fmt.Errorf("%w: loop: on a keeper-side task (task[%d] %q)", ErrUnsupportedDSL, idx, task.Name)
 	}
+	// async: is Soul-side task concurrency (ADR-0075): the flag rides
+	// RenderedTask to a Soul runner, and a keeper task never reaches one. It
+	// would be a silent no-op — reject, like apply:/loop: above. `require:` is
+	// NOT rejected: the keeper executor runs its tasks in plan order, so the
+	// barrier is simply already satisfied (the same redundancy a linear
+	// Soul-side flow has), and threading it keeps its names under the
+	// unknown-register check.
+	if task.Async {
+		return nil, fmt.Errorf("%w: async: on a keeper-side task (task[%d] %q)", ErrUnsupportedDSL, idx, task.Name)
+	}
 
 	resolved, err := resolveVaultRefs(ctx, p.vault, task.Module.Params)
 	if err != nil {
@@ -1062,6 +1082,7 @@ func (p *Pipeline) renderKeeperTask(ctx context.Context, in RenderInput, task co
 		onChangesNames: task.OnChanges,
 		onFailNames:    task.OnFail,
 	}
+	applyConcurrency(rt, task)
 	if task.Retry != nil {
 		rt.RetryCount = task.Retry.Count
 		rt.RetryDelay = task.Retry.Delay
@@ -1911,10 +1932,13 @@ func stateOpVars(ctx map[string]any) cel.Vars {
 // defense in depth for apply+loop that reached render).
 //
 // block: (pilot C1) isn't rejected here — it expands via render-time
-// fan-out (renderBlockTask, like loop/apply:destiny). parallel: on block is
-// still out of pilot scope (the task.Parallel case above catches a block
-// with parallel:true before the block-accept case). The guard remains for
-// parallel:, unexpanded include:, and empty tasks.
+// fan-out (renderBlockTask, like loop/apply:destiny). The guard remains for
+// unexpanded include: and empty tasks.
+//
+// async: (ADR-0075, NIM-150) is no longer rejected — it is honoured, threaded
+// into RenderedTask.Async for the Soul runner. `async:` on a block: is still
+// deferred, but it is caught EARLIER, by the config validator
+// (async_on_block_invalid), so there is nothing left to check here.
 func guardPilotDSL(task config.Task, idx int) error {
 	switch {
 	case task.Apply != nil:
@@ -1926,8 +1950,6 @@ func guardPilotDSL(task config.Task, idx int) error {
 		return nil
 	case task.Include != nil:
 		return fmt.Errorf("%w: (task[%d] %q)", ErrUnexpandedInclude, idx, task.Name)
-	case task.Parallel:
-		return fmt.Errorf("%w: parallel: (task[%d] %q)", ErrUnsupportedDSL, idx, task.Name)
 	case task.Block != nil:
 		// A block task is valid (pilot C1); module == nil is fine
 		// (discriminator is block). loop: on block is still out of pilot

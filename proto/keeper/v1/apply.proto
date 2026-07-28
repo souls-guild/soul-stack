@@ -174,6 +174,62 @@ message RenderedTask {
   // Empty = the task doesn't aggregate (a regular task, or an applier WITHOUT
   // register:): forward-compat (ADR-012(c) only-add). Never reuse this field number.
   repeated int32 aggregate_of = 17;
+
+  // Intra-host task concurrency (ADR-0075, destiny/tasks.md §6). The three
+  // fields below are one contract: `async` starts a task in its own flow,
+  // `require_idx`/`require_all` are the explicit barrier that collects it.
+  // All three are zero-value on a plan that uses neither, so a Soul that
+  // ignores them runs the whole plan sequentially in plan order — which is a
+  // CORRECT execution of any plan whose require: sources precede their
+  // consumers, only serial (ADR-012(c) only-add; same shape as retry_count=1).
+  // Never reuse these field numbers.
+
+  // async: the task is fire-and-forget (DSL core async:, destiny/tasks.md §6).
+  // Soul starts it in its own flow and the main loop moves on WITHOUT waiting.
+  // NOT a grouping mechanism: two adjacent async tasks are two independent
+  // flows, not a group (the grouping construct is the reserved `parallel:`,
+  // unspecified). The task's own gating (when/onchanges/onfail) is still
+  // evaluated in the main flow at its plan position, BEFORE it is launched, so
+  // WHETHER a task runs never depends on timing — only when it finishes does.
+  // The run does not complete until every async task is finalized, and that
+  // final barrier is the end of THIS ApplyRequest, i.e. the end of the current
+  // Passage on a staged plan (ADR-056): an async flow cannot outlive the
+  // message that carried it. false = an ordinary sequential task.
+  bool async = 18;
+
+  // require_idx: source-task indices for the DSL core `require:` list form
+  // (destiny/tasks.md §8) — the EXPLICIT barrier and the preferred way to
+  // depend on an async task. The task does not START until every listed source
+  // has finished; siblings not listed keep running. Ordering only: `require:`
+  // answers WHEN, `onchanges:`/`onfail:`/`when:` answer WHETHER, and they
+  // combine by AND.
+  //
+  // Keeper-side resolves `require:` register names into indices (Variant A,
+  // exactly like onchanges_idx/onfail_idx) and REMAPS them global->local when
+  // the ApplyRequest is assembled (ToProtoTasks, remapRequisites): they
+  // reference the LOCAL position in this slice's tasks[].
+  //
+  // ★ The sentinel (-1) means something DIFFERENT here than for
+  // onchanges_idx/onfail_idx/aggregate_of. There it is "a source that
+  // contributes false to the gate"; here it is "nothing to wait for". A source
+  // absent from this slice was either filtered out by where: on this host (it
+  // never ran, so there is nothing to await) or lives in an EARLIER Passage
+  // (already finalized — a Passage is closed on every host before the next one
+  // is dispatched). A source in a LATER Passage is not encodable: Keeper
+  // rejects that plan at render rather than shipping a barrier Soul cannot
+  // honor. Soul must therefore SKIP a -1 entry, never block on it.
+  //
+  // Empty = no explicit barrier (mutually exclusive with require_all).
+  repeated int32 require_idx = 19;
+
+  // require_all: the `require: all` form (destiny/tasks.md §8) — wait for EVERY
+  // async task started earlier in this ApplyRequest, rather than a named set.
+  // The plan-wide synchronization barrier an author reaches for before a task
+  // that wants a consistent host state after several async phases. Mutually
+  // exclusive with require_idx: `require:` is strictly one of the two forms
+  // (a mixed `require: [a, "all"]` is a config-validation error), so when this
+  // is true require_idx is empty. false = not an all-barrier.
+  bool require_all = 20;
 }
 
 // ApplyRequest is Keeper -> Soul's command to run a job.

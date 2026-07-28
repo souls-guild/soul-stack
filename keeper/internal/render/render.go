@@ -21,9 +21,11 @@
 // expanded in the render phase into a flat RenderedTask list (renderBlockTask /
 // renderLoopTask). `include:` is expanded BEFORE render (config.ExpandIncludes
 // at the loader layer), render gets a flat list; an unexpanded include: →
-// [ErrUnexpandedInclude]. Of the original trio, only `parallel:` remains
-// outside pilot scope → [ErrUnsupportedDSL] (explicit error, not a silent
-// skip).
+// [ErrUnexpandedInclude]. `async:` (ADR-0075) is honoured too — threaded into
+// RenderedTask for the Soul runner. What is left outside pilot scope is a key
+// on a node that cannot carry it (loop:/async: on an apply:/keeper task,
+// scenario orchestration inside a destiny) → [ErrUnsupportedDSL] (explicit
+// error, not a silent skip).
 //
 // [ADR-010]: docs/adr/0010-templating.md
 // [ADR-012]: docs/adr/0012-keeper-soul-grpc.md
@@ -40,11 +42,13 @@ import (
 )
 
 // ErrUnsupportedDSL — scenario uses a DSL construct outside pilot scope (in the
-// scenario layer — `parallel:`). Not a scenario-author error but a pilot
+// scenario layer — `loop:` on an apply: task, `loop:`/`async:` on a keeper-side
+// task). Not a scenario-author error but a pilot
 // implementation boundary: the caller distinguishes "unsupported in pilot" from
 // "scenario broken" (symmetric to cel.ErrUnsupported). serial:/run_once: are no
-// longer in scope — implemented (slice D); block: (C1) and loop: (E1) are also
-// implemented and excluded (renderBlockTask / renderLoopTask). include: is
+// longer in scope — implemented (slice D); block: (C1), loop: (E1) and async:
+// (ADR-0075) are also implemented and excluded (renderBlockTask /
+// renderLoopTask / RenderedTask.Async). include: is
 // excluded — it's expanded before render (config.ExpandIncludes), see
 // ErrUnexpandedInclude. on: keeper is excluded — keeper-side tasks render in
 // the keeper context (see resolveOn / renderKeeperTask).
@@ -366,6 +370,37 @@ type RenderedTask struct {
 	// onChangesNames: threaded by renderTaskIter through to the resolveOnFail
 	// pass, unused after turning into OnFailIdx.
 	onFailNames []string
+
+	// Async — the DSL core `async:` (destiny/tasks.md §6, ADR-0075): the task is
+	// fire-and-forget, Soul starts it in its own flow and the main loop moves on
+	// without waiting. Keeper only threads the flag through — every barrier is
+	// Soul-side, inside one ApplyRequest (an async flow never outlives its
+	// Passage). false = an ordinary sequential task. config.Task.Async → proto
+	// keeperv1.RenderedTask.Async.
+	Async bool
+
+	// RequireIdx / RequireAll — the DSL core `require:` (destiny/tasks.md §8),
+	// the EXPLICIT barrier and the preferred way to depend on an async task.
+	// RequireIdx holds the GLOBAL Index of each named source after resolveRequire
+	// (Variant A, mirroring OnChangesIdx); RequireAll is the `require: all` form,
+	// which names no source and waits for every async task started earlier in the
+	// ApplyRequest. The two forms are mutually exclusive (the config validator
+	// rejects a mixed list), so at most one is ever set.
+	//
+	// ★ RequireIdx is remapped global→local for the wire like OnChangesIdx, but
+	// the sentinel means the OPPOSITE thing: for a requisite, an absent source
+	// contributes false to a gate; for a barrier, an absent source is "nothing to
+	// wait for" (it was filtered out by where: on this host, or lives in an
+	// earlier Passage already closed on every host). A source in a LATER Passage
+	// is not encodable at all — resolveRequire rejects that plan rather than
+	// shipping a barrier Soul cannot honor.
+	RequireIdx []int
+	RequireAll bool
+
+	// requireNames — register names of the task's `require:` list form, mirroring
+	// onChangesNames/onFailNames: threaded through to the resolveRequire pass,
+	// unused after turning into RequireIdx.
+	requireNames []string
 
 	// AggregateOf — GLOBAL cross-cutting Index of ALL child destiny tasks of one
 	// applier task (`apply:`+`register:`), whose rolled-up result THIS synthetic

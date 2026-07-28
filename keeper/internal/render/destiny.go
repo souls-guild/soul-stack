@@ -206,11 +206,11 @@ func (p *Pipeline) renderApplyDestiny(
 
 		// Static-when PRECEDES guardDestinyTask (ADR-012(d), same invariant as
 		// the scenario loop in pipeline.go): a statically-false `when:` gates
-		// the task off before the DSL guard, so unsupported DSL (`parallel:`)
-		// in an inactive destiny branch doesn't block the active one. Fixes
-		// the multi-action redis destiny: diagnostic.yml carries
-		// `parallel: true` + `when: input.action=='diagnose'`, inactive at
-		// action=update_acls — previously guardDestinyTask rejected it with
+		// the task off before the DSL guard, so unsupported DSL (`run_once:`,
+		// a nested `apply:`) in an inactive destiny branch doesn't block the
+		// active one. Fixes the multi-action redis destiny, where a diagnostic
+		// branch gated by `when: input.action=='diagnose'` is inactive at
+		// action=update_acls — previously guardDestinyTask rejected its DSL with
 		// ErrUnsupportedDSL before static-when ran, failing the whole destiny
 		// pass.
 		if skipped, serr := p.emitStaticWhenSkip(ctx, destinyIn, task, &tasks, &plans, &idx); serr != nil {
@@ -430,7 +430,7 @@ func destinyInputError(destiny string, err error) error {
 }
 
 // guardDestinyTask rejects nested DSL constructs outside pilot scope
-// (parallel:/nested apply:) and scenario-only keys on a destiny task
+// (a nested apply:) and scenario-only keys on a destiny task
 // (serial:/run_once: — not allowed in a destiny, docs/destiny/tasks.md §3;
 // scenario-level serial: is inherited by the destiny through
 // renderApplyDestiny's parameter, not a per-task field). The pilot supports
@@ -457,8 +457,6 @@ func guardDestinyTask(task config.Task, idx int, destiny string) error {
 		return fmt.Errorf("%w: nested apply: in destiny %q (task[%d] %q)", ErrUnsupportedDSL, destiny, idx, task.Name)
 	case task.Include != nil:
 		return fmt.Errorf("%w: in destiny %q (task[%d] %q)", ErrUnexpandedInclude, destiny, idx, task.Name)
-	case task.Parallel:
-		return fmt.Errorf("%w: parallel: in destiny %q (task[%d] %q)", ErrUnsupportedDSL, destiny, idx, task.Name)
 	case task.RunOnce:
 		return fmt.Errorf("%w: run_once: in destiny %q (task[%d] %q)", ErrUnsupportedDSL, destiny, idx, task.Name)
 	case task.Serial != nil:
@@ -481,7 +479,7 @@ func guardDestinyTask(task config.Task, idx int, destiny string) error {
 // three layer-specific invariants:
 //
 //   - child guard is guardDestinyBlockChild: rejects scenario orchestration
-//     (where/serial/run_once/on/parallel/loop/include/apply) on the block or
+//     (where/serial/run_once/on/async/loop/include/apply) on the block or
 //     its children — these keys are meaningless in a destiny (no per-child
 //     roster resolve).
 //   - the roster is inherited WHOLESALE (block does NOT narrow hosts): the
@@ -537,7 +535,7 @@ func (p *Pipeline) renderDestinyBlock(
 // valid there). Rejects scenario orchestration on a destiny block child with
 // an explicit [ErrUnsupportedDSL]:
 //
-//	where / serial / run_once / on / parallel / loop / apply
+//	where / serial / run_once / on / async / loop / apply
 //
 // — all meaningless in a destiny (no per-child roster resolve, no nested
 // destiny). VALID (env-agnostic inheritance + flat core): when (AND-merge),
@@ -566,8 +564,8 @@ func guardDestinyBlockChild(child config.Task, idx int, blockName string) error 
 		return fmt.Errorf("%w: run_once: on a destiny-block child %q (task[%d] %q) - scenario orchestration in a destiny is forbidden", ErrUnsupportedDSL, blockName, idx, child.Name)
 	case child.On != nil:
 		return fmt.Errorf("%w: on: on a destiny-block child %q (task[%d] %q) - scenario orchestration in a destiny is forbidden", ErrUnsupportedDSL, blockName, idx, child.Name)
-	case child.Parallel:
-		return fmt.Errorf("%w: parallel: on a destiny-block child %q (task[%d] %q) - scenario orchestration in a destiny is forbidden", ErrUnsupportedDSL, blockName, idx, child.Name)
+	case child.Async:
+		return fmt.Errorf("%w: async: on a destiny-block child %q (task[%d] %q) - async inside a block is a deferred slice (ADR-0075)", ErrUnsupportedDSL, blockName, idx, child.Name)
 	case child.Loop != nil:
 		return fmt.Errorf("%w: loop: on a destiny-block child %q (task[%d] %q) - outside destiny block scope", ErrUnsupportedDSL, blockName, idx, child.Name)
 	case child.Include != nil:
@@ -583,7 +581,7 @@ func guardDestinyBlockChild(child config.Task, idx int, blockName string) error 
 // guardDestinyBlock is the key boundary on the destiny block node ITSELF
 // (not its children). A top-level destiny block branches in
 // renderApplyDestiny BEFORE guardDestinyTask, so serial:/on:/run_once:/
-// parallel:/loop: on it are caught by neither guardDestinyTask (block
+// async:/loop: on it are caught by neither guardDestinyTask (block
 // bypasses it) nor mergeBlockInheritance (which doesn't inherit these keys
 // to children — only where: is inherited, the rest stay on the block node).
 // We reject them here.
@@ -602,8 +600,8 @@ func guardDestinyBlock(blockTask config.Task) error {
 		return fmt.Errorf("%w: run_once: on destiny-block %q - scenario orchestration in a destiny is forbidden", ErrUnsupportedDSL, blockTask.Name)
 	case blockTask.On != nil:
 		return fmt.Errorf("%w: on: on destiny-block %q - scenario orchestration in a destiny is forbidden", ErrUnsupportedDSL, blockTask.Name)
-	case blockTask.Parallel:
-		return fmt.Errorf("%w: parallel: on destiny-block %q - scenario orchestration in a destiny is forbidden", ErrUnsupportedDSL, blockTask.Name)
+	case blockTask.Async:
+		return fmt.Errorf("%w: async: on destiny-block %q - async on a block is a deferred slice (ADR-0075)", ErrUnsupportedDSL, blockTask.Name)
 	case blockTask.Loop != nil:
 		return fmt.Errorf("%w: loop: on destiny-block %q - outside destiny block scope", ErrUnsupportedDSL, blockTask.Name)
 	}

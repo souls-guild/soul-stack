@@ -152,7 +152,7 @@ func (p *Pipeline) loopStaticSkip(
 // final resolveOnChanges/resolveOnFail wouldn't find their sources — a
 // latent requisite loss for a loop task with onchanges:/onfail:.
 func (p *Pipeline) loopSkipPlaceholder(task config.Task, idx int, skip *structpb.Struct) *RenderedTask {
-	return &RenderedTask{
+	rt := &RenderedTask{
 		Index:          idx,
 		Name:           task.Name,
 		Module:         task.Module.Module,
@@ -167,6 +167,8 @@ func (p *Pipeline) loopSkipPlaceholder(task config.Task, idx int, skip *structpb
 		onFailNames:    task.OnFail,
 		FlowContext:    skip,
 	}
+	applyConcurrency(rt, task)
+	return rt
 }
 
 // resolveLoopItems evaluates items and lays it out as an ordered list of loop

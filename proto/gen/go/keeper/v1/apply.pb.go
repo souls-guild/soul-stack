@@ -281,7 +281,51 @@ type RenderedTask struct {
 	//
 	// Empty = the task doesn't aggregate (a regular task, or an applier WITHOUT
 	// register:): forward-compat (ADR-012(c) only-add). Never reuse this field number.
-	AggregateOf   []int32 `protobuf:"varint,17,rep,packed,name=aggregate_of,json=aggregateOf,proto3" json:"aggregate_of,omitempty"`
+	AggregateOf []int32 `protobuf:"varint,17,rep,packed,name=aggregate_of,json=aggregateOf,proto3" json:"aggregate_of,omitempty"`
+	// async: the task is fire-and-forget (DSL core async:, destiny/tasks.md §6).
+	// Soul starts it in its own flow and the main loop moves on WITHOUT waiting.
+	// NOT a grouping mechanism: two adjacent async tasks are two independent
+	// flows, not a group (the grouping construct is the reserved `parallel:`,
+	// unspecified). The task's own gating (when/onchanges/onfail) is still
+	// evaluated in the main flow at its plan position, BEFORE it is launched, so
+	// WHETHER a task runs never depends on timing — only when it finishes does.
+	// The run does not complete until every async task is finalized, and that
+	// final barrier is the end of THIS ApplyRequest, i.e. the end of the current
+	// Passage on a staged plan (ADR-056): an async flow cannot outlive the
+	// message that carried it. false = an ordinary sequential task.
+	Async bool `protobuf:"varint,18,opt,name=async,proto3" json:"async,omitempty"`
+	// require_idx: source-task indices for the DSL core `require:` list form
+	// (destiny/tasks.md §8) — the EXPLICIT barrier and the preferred way to
+	// depend on an async task. The task does not START until every listed source
+	// has finished; siblings not listed keep running. Ordering only: `require:`
+	// answers WHEN, `onchanges:`/`onfail:`/`when:` answer WHETHER, and they
+	// combine by AND.
+	//
+	// Keeper-side resolves `require:` register names into indices (Variant A,
+	// exactly like onchanges_idx/onfail_idx) and REMAPS them global->local when
+	// the ApplyRequest is assembled (ToProtoTasks, remapRequisites): they
+	// reference the LOCAL position in this slice's tasks[].
+	//
+	// ★ The sentinel (-1) means something DIFFERENT here than for
+	// onchanges_idx/onfail_idx/aggregate_of. There it is "a source that
+	// contributes false to the gate"; here it is "nothing to wait for". A source
+	// absent from this slice was either filtered out by where: on this host (it
+	// never ran, so there is nothing to await) or lives in an EARLIER Passage
+	// (already finalized — a Passage is closed on every host before the next one
+	// is dispatched). A source in a LATER Passage is not encodable: Keeper
+	// rejects that plan at render rather than shipping a barrier Soul cannot
+	// honor. Soul must therefore SKIP a -1 entry, never block on it.
+	//
+	// Empty = no explicit barrier (mutually exclusive with require_all).
+	RequireIdx []int32 `protobuf:"varint,19,rep,packed,name=require_idx,json=requireIdx,proto3" json:"require_idx,omitempty"`
+	// require_all: the `require: all` form (destiny/tasks.md §8) — wait for EVERY
+	// async task started earlier in this ApplyRequest, rather than a named set.
+	// The plan-wide synchronization barrier an author reaches for before a task
+	// that wants a consistent host state after several async phases. Mutually
+	// exclusive with require_idx: `require:` is strictly one of the two forms
+	// (a mixed `require: [a, "all"]` is a config-validation error), so when this
+	// is true require_idx is empty. false = not an all-barrier.
+	RequireAll    bool `protobuf:"varint,20,opt,name=require_all,json=requireAll,proto3" json:"require_all,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -433,6 +477,27 @@ func (x *RenderedTask) GetAggregateOf() []int32 {
 		return x.AggregateOf
 	}
 	return nil
+}
+
+func (x *RenderedTask) GetAsync() bool {
+	if x != nil {
+		return x.Async
+	}
+	return false
+}
+
+func (x *RenderedTask) GetRequireIdx() []int32 {
+	if x != nil {
+		return x.RequireIdx
+	}
+	return nil
+}
+
+func (x *RenderedTask) GetRequireAll() bool {
+	if x != nil {
+		return x.RequireAll
+	}
+	return false
 }
 
 // ApplyRequest is Keeper -> Soul's command to run a job.
@@ -852,7 +917,7 @@ var File_keeper_v1_apply_proto protoreflect.FileDescriptor
 
 const file_keeper_v1_apply_proto_rawDesc = "" +
 	"\n" +
-	"\x15keeper/v1/apply.proto\x12\x13soulstack.keeper.v1\x1a\x1cgoogle/protobuf/struct.proto\x1a\x16keeper/v1/common.proto\"\xaa\x04\n" +
+	"\x15keeper/v1/apply.proto\x12\x13soulstack.keeper.v1\x1a\x1cgoogle/protobuf/struct.proto\x1a\x16keeper/v1/common.proto\"\x82\x05\n" +
 	"\fRenderedTask\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12\x16\n" +
 	"\x06module\x18\x02 \x01(\tR\x06module\x12/\n" +
@@ -876,7 +941,12 @@ const file_keeper_v1_apply_proto_rawDesc = "" +
 	"\bregister\x18\r \x01(\tR\bregister\x12\x1d\n" +
 	"\n" +
 	"plan_index\x18\x10 \x01(\x05R\tplanIndex\x12!\n" +
-	"\faggregate_of\x18\x11 \x03(\x05R\vaggregateOf\"\xd4\x01\n" +
+	"\faggregate_of\x18\x11 \x03(\x05R\vaggregateOf\x12\x14\n" +
+	"\x05async\x18\x12 \x01(\bR\x05async\x12\x1f\n" +
+	"\vrequire_idx\x18\x13 \x03(\x05R\n" +
+	"requireIdx\x12\x1f\n" +
+	"\vrequire_all\x18\x14 \x01(\bR\n" +
+	"requireAll\"\xd4\x01\n" +
 	"\fApplyRequest\x12\x19\n" +
 	"\bapply_id\x18\x01 \x01(\tR\aapplyId\x127\n" +
 	"\x05tasks\x18\x02 \x03(\v2!.soulstack.keeper.v1.RenderedTaskR\x05tasks\x12#\n" +

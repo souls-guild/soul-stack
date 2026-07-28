@@ -91,6 +91,19 @@ const (
 	// NIM-167). Same silent shape as required_when: parsed before, enforced only
 	// from the release that brought destiny input to full parity with scenario.
 	FeatureDestinyInputConstraints = "destiny.input.constraints"
+
+	// FeatureTaskAsync — the task key `async:` (ADR-0075, NIM-150). An older
+	// keeper has no such key and rejects the manifest as a generic `unknown_key`,
+	// which names the key but not the reason — the same bootstrap-paradox shape as
+	// `compat:` itself.
+	FeatureTaskAsync = "task.async"
+
+	// FeatureTaskRequire — the task key `require:` reaching a runtime (ADR-0075(g),
+	// NIM-150). The sharp case, like required_when: the key PARSED and was
+	// reference-checked long before, it simply resolved to nothing on the wire, so
+	// an older keeper accepts the manifest and silently drops the ordering
+	// invariant instead of refusing it.
+	FeatureTaskRequire = "task.require"
 )
 
 // keeperDSLFeatures — the registry of keeper-side grammar features that arrived
@@ -98,17 +111,18 @@ const (
 // floor: everything the baseline already understood needs no metadata, and
 // listing it would grow a table nobody can keep honest.
 //
-// There is no task-level row yet — the task DSL (`shared/config/scenario_task.go`)
-// has not changed since the baseline; module tasks are covered by the manifest
-// metadata instead (see [KeeperFeaturesOfTasks]). Theme C's `parallel:` is the
-// first expected task-level row, and lands with the feature rather than ahead of
-// it.
+// The task-level rows are the intra-host concurrency keys (ADR-0075): they are the
+// first grammar the task DSL gained since the baseline. Everything else a task can
+// carry is covered by the module manifest metadata instead (see
+// [KeeperFeaturesOfTasks]).
 var keeperDSLFeatures = map[string]dslFeature{
 	FeatureServiceCompat:            {id: FeatureServiceCompat, introducedIn: Unreleased},
 	FeatureDestinyCompat:            {id: FeatureDestinyCompat, introducedIn: Unreleased},
 	FeatureDestinyValidate:          {id: FeatureDestinyValidate, introducedIn: Unreleased},
 	FeatureDestinyInputRequiredWhen: {id: FeatureDestinyInputRequiredWhen, introducedIn: Unreleased},
 	FeatureDestinyInputConstraints:  {id: FeatureDestinyInputConstraints, introducedIn: Unreleased},
+	FeatureTaskAsync:                {id: FeatureTaskAsync, introducedIn: Unreleased},
+	FeatureTaskRequire:              {id: FeatureTaskRequire, introducedIn: Unreleased},
 }
 
 // dslFeatureUse builds a used-feature record from the registry. An id absent from
@@ -224,6 +238,16 @@ func collectTaskFeatures(tasks []Task, prefix string, reg coreModuleLookup, out 
 	for i := range tasks {
 		t := &tasks[i]
 		where := fmt.Sprintf("%s[%d]", prefix, i)
+		if t.Async {
+			if f, ok := dslFeatureUse(FeatureTaskAsync, where+".async"); ok {
+				*out = append(*out, f)
+			}
+		}
+		if _, _, hasRequire := t.RequireSpec(); hasRequire {
+			if f, ok := dslFeatureUse(FeatureTaskRequire, where+".require"); ok {
+				*out = append(*out, f)
+			}
+		}
 		if t.Module != nil {
 			*out = append(*out, coreModuleFeatures(t.Module.Module, t.Module.Params, where, reg)...)
 		}

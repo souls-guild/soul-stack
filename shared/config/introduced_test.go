@@ -117,6 +117,38 @@ func TestKeeperFeaturesOfTasks_PluginModuleIsNotOnTheKeeperAxis(t *testing.T) {
 	}
 }
 
+// The intra-host concurrency keys are the first task-level rows of the keeper DSL
+// registry (ADR-0075, NIM-150). Both must be DETECTED on a task body — `async:`
+// because an older keeper rejects the unknown key, `require:` because an older
+// keeper ACCEPTS it and silently drops the ordering invariant, which is the
+// sharper of the two.
+func TestKeeperFeaturesOfTasks_ConcurrencyKeys(t *testing.T) {
+	async := moduleTask("core.exec.run", nil)
+	async.Async = true
+	requires := moduleTask("core.exec.run", nil)
+	requires.Require = []string{"probe"}
+	all := moduleTask("core.exec.run", nil)
+	all.Require = RequireAll
+
+	got := map[string]bool{}
+	for _, f := range keeperFeaturesOfTasks([]Task{async, requires, all}, stampedRegistry()) {
+		got[f.ID] = true
+	}
+	if !got[FeatureTaskAsync] {
+		t.Errorf("async: did not register %s", FeatureTaskAsync)
+	}
+	if !got[FeatureTaskRequire] {
+		t.Errorf("require: did not register %s", FeatureTaskRequire)
+	}
+
+	plain := keeperFeaturesOfTasks([]Task{moduleTask("core.exec.run", nil)}, stampedRegistry())
+	for _, f := range plain {
+		if f.ID == FeatureTaskAsync || f.ID == FeatureTaskRequire {
+			t.Errorf("a task declaring neither key registered %s", f.ID)
+		}
+	}
+}
+
 func TestInferKeeperFloor(t *testing.T) {
 	cases := []struct {
 		name string

@@ -14,7 +14,7 @@ Scenario - unit of operation on [Incarnation](../architecture.md). Folder `scena
 
 ## Related Documents
 
-- [`docs/destiny/tasks.md`](../destiny/tasks.md) - **full specification of the DSL task core** (`module`, `include`, `block`, `parallel`, `loop`, `register`, `onchanges`/`onfail`/`require`, `retry`, `timeout`, `changed_when`/`failed_when`, template context). Scenario inherits this core entirely; [orchestration.md](orchestration.md) describes only the delta scenario on top of it.
+- [`docs/destiny/tasks.md`](../destiny/tasks.md) - **full specification of the DSL task core** (`module`, `include`, `block`, `async`, `loop`, `register`, `onchanges`/`onfail`/`require`, `retry`, `timeout`, `changed_when`/`failed_when`, template context). Scenario inherits this core entirely; [orchestration.md](orchestration.md) describes only the delta scenario on top of it.
 - [`docs/architecture.md`](../architecture.md):
   - [ADR-008](../adr/0008-coven-stable-tags.md) - Coven as stable boolean tags (not role).
   - [ADR-009](../adr/0009-scenario-dsl.md) - scenario receives the full DSL of destiny tasks; border with destiny - recommendation.

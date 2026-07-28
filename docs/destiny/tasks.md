@@ -265,7 +265,8 @@ A declared per-module concurrency class is a deferred extension ([ADR-0075](../a
 - **Requisites via `register.<name>`** work as usual and are the local-barrier form. `onchanges: [ping]` after an `async: true` task registering `ping` is correct: the framework waits for `ping`, checks `register.ping.changed`, then executes or skips the current task.
 - **The apply log is no longer in plan order.** Task events from async flows interleave; each carries its plan index and the UI orders by it, not by arrival. Nothing is lost - the order is not the plan's.
 - **`loop:` + `async: true`** - each iteration runs in its own flow, the main flow goes on. Details - §7.
-- **`include:` / `block:` with `async: true`** - **deferred** (see §6.5). Design intent: the whole connected group runs in one flow (tasks inside stay sequential) and the main flow goes on, with no implicit barrier at the group boundary. Gated fail-closed until a slice implements it (`async_on_block_invalid`).
+- **`include:` / `block:` with `async: true`** - **deferred** (see §6.5). Design intent: the whole connected group runs in one flow (tasks inside stay sequential) and the main flow goes on, with no implicit barrier at the group boundary. Gated fail-closed until a slice implements it (`async_on_block_invalid`). A task **inside** a block is deferred with it: the group is meant to become one flow, so marking one of its members async ahead of that decision is rejected too.
+- **`on: keeper` with `async: true`** - **rejected**. `async:` is Soul-side task concurrency; a keeper-side task ([keeper/modules.md](../keeper/modules.md)) executes in the Keeper's scenario runner and never reaches a Soul, so the flag would be a silent no-op. `require:` on a keeper task is accepted and simply redundant (see §8).
 
 ## 6.5. Block - inline task group
 
@@ -562,6 +563,15 @@ By default, the run operates in **fail-stop** mode: the first failed task (`fail
 ```
 
 > **Border with onchanges/onfail.** `require:` - about **order** (wait). `onchanges:`/`onfail:` - about **condition** (to fulfill or not). They can be combined: `require: [migration]` + `onfail: [migration]` = "wait for migration, execute only if it fails."
+
+**Resolution and its two rejections.** Keeper resolves the listed register names into task indices during render - the same Variant A already used by `onchanges:`/`onfail:`, so Soul deals only in indices. Two authoring mistakes are refused there rather than misfiring at run time:
+
+- **A name no task registers** - a typo would silently degrade the barrier into "wait for nothing", so it is a render error, exactly like a typo in `onchanges:`.
+- **A source in a LATER [Passage](../adr/0056-staged-render-passage.md)** - `require:` is deliberately not passage-defining (it expresses order within a Passage, not a Keeper-side data dependency), so a barrier can end up naming a task that stratification pushed into the next Passage. The two would then travel in different `ApplyRequest`s with the consumer dispatched first, and no wire form can say "wait for a task in a message you have not received". Rejected at render. Unlike a cross-Passage `onchanges:`, which Keeper *can* resolve from what the earlier Passage recorded, an ordering constraint has nothing to resolve against - the source has not run yet. The opposite direction is fine and stays silent: a source in an **earlier** Passage is already finalized, because a Passage closes on every host before the next one starts.
+
+A source that simply did not survive per-host `where:` filtering is not an error - it never ran on this host, so there is nothing to wait for and the barrier passes.
+
+> **Keeper-side tasks (`on: keeper`).** `require:` is accepted and redundant - the keeper executor runs its tasks in plan order. `async:` is **rejected**: it is Soul-side task concurrency, a keeper task never reaches a Soul runner, and honouring it would be a silent no-op.
 
 ### Addressing via `register:`, not via `name:`
 

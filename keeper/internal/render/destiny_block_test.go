@@ -224,13 +224,13 @@ func TestRenderDestinyBlock_RejectsScenarioKeys(t *testing.T) {
 		{"serial_on_block", config.Task{Name: "g", Serial: 2, Block: &config.BlockTask{Block: []config.Task{leaf()}}}},
 		{"run_once_on_block", config.Task{Name: "g", RunOnce: true, Block: &config.BlockTask{Block: []config.Task{leaf()}}}},
 		{"on_on_block", config.Task{Name: "g", On: []string{"svc"}, Block: &config.BlockTask{Block: []config.Task{leaf()}}}},
-		{"parallel_on_block", config.Task{Name: "g", Parallel: true, Block: &config.BlockTask{Block: []config.Task{leaf()}}}},
+		{"async_on_block", config.Task{Name: "g", Async: true, Block: &config.BlockTask{Block: []config.Task{leaf()}}}},
 		{"loop_on_block", config.Task{Name: "g", Loop: &config.LoopSpec{Items: "${ [1,2] }"}, Block: &config.BlockTask{Block: []config.Task{leaf()}}}},
 		{"where_on_child", config.Task{Name: "g", Block: &config.BlockTask{Block: []config.Task{withWhere(leaf(), "soulprint.self.os.family=='debian'")}}}},
 		{"serial_on_child", config.Task{Name: "g", Block: &config.BlockTask{Block: []config.Task{withSerial(leaf(), 2)}}}},
 		{"run_once_on_child", config.Task{Name: "g", Block: &config.BlockTask{Block: []config.Task{withRunOnce(leaf())}}}},
 		{"on_on_child", config.Task{Name: "g", Block: &config.BlockTask{Block: []config.Task{withOn(leaf(), []string{"svc"})}}}},
-		{"parallel_on_child", config.Task{Name: "g", Block: &config.BlockTask{Block: []config.Task{withParallel(leaf())}}}},
+		{"async_on_child", config.Task{Name: "g", Block: &config.BlockTask{Block: []config.Task{withAsync(leaf())}}}},
 		{"loop_on_child", config.Task{Name: "g", Block: &config.BlockTask{Block: []config.Task{withLoop(leaf())}}}},
 		{"apply_on_child", config.Task{Name: "g", Block: &config.BlockTask{Block: []config.Task{{Name: "ap", Apply: &config.ApplyTask{Destiny: "other"}}}}}},
 		{"include_on_child", config.Task{Name: "g", Block: &config.BlockTask{Block: []config.Task{{Name: "inc", Include: &config.IncludeTask{Include: "x.yml"}}}}}},
@@ -298,7 +298,7 @@ func withWhere(t config.Task, w string) config.Task { t.Where = w; return t }
 func withSerial(t config.Task, s int) config.Task   { t.Serial = s; return t }
 func withRunOnce(t config.Task) config.Task         { t.RunOnce = true; return t }
 func withOn(t config.Task, on []string) config.Task { t.On = on; return t }
-func withParallel(t config.Task) config.Task        { t.Parallel = true; return t }
+func withAsync(t config.Task) config.Task           { t.Async = true; return t }
 func withLoop(t config.Task) config.Task {
 	t.Loop = &config.LoopSpec{Items: "${ [1,2] }"}
 	return t

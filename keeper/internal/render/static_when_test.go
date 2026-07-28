@@ -287,21 +287,22 @@ func TestMixedWhen_NotStatic(t *testing.T) {
 }
 
 // TestStaticWhenFalse_UnsupportedDSL_PrecedesGuard — ★ layer 12: a task on an
-// inactive branch with unsupported DSL (`parallel: true`) + a
-// statically-false when: → static-when PRECEDES guardPilotDSL: the task is
-// gated off and skipped BEFORE the guard runs, instead of being rejected
+// inactive branch with unsupported DSL (`async:` on a keeper-side task) + a
+// statically-false when: → static-when PRECEDES the DSL guards: the task is
+// gated off and skipped BEFORE they run, instead of being rejected
 // with ErrUnsupportedDSL. The active branch (another task) still renders.
-// Reverse: before the fix, guardPilotDSL rejected parallel: even on an
+// Reverse: before the fix, the guard rejected the key even on an
 // inactive branch and failed the whole Render.
 func TestStaticWhenFalse_UnsupportedDSL_PrecedesGuard(t *testing.T) {
 	manifest := &config.ScenarioManifest{
-		Name: "multi-action-parallel",
+		Name: "multi-action-async",
 		Tasks: []config.Task{
 			{
-				Name:     "diagnose (parallel, gated off)",
-				When:     "input.action == 'diagnose'", // static-false at action=update_acls
-				Parallel: true,                         // unsupported DSL — the guard would have rejected it BEFORE the fix
-				Module:   &config.ModuleTask{Module: "core.exec.run", Params: map[string]any{"cmd": "redis-cli ping"}},
+				Name:   "diagnose (keeper-side async, gated off)",
+				When:   "input.action == 'diagnose'", // static-false at action=update_acls
+				On:     "keeper",
+				Async:  true, // unsupported on a keeper task — the guard would have rejected it BEFORE the fix
+				Module: &config.ModuleTask{Module: "core.soul.registered", Params: map[string]any{}},
 			},
 			{
 				Name:   "active update_acls",
@@ -319,14 +320,14 @@ func TestStaticWhenFalse_UnsupportedDSL_PrecedesGuard(t *testing.T) {
 	}
 	tasks, plans, err := p.Render(context.Background(), in)
 	if err != nil {
-		t.Fatalf("Render: static-when MUST precede guardPilotDSL - a gated-off parallel task must not fail Render, got %v", err)
+		t.Fatalf("Render: static-when MUST precede the DSL guards - a gated-off task must not fail Render, got %v", err)
 	}
 	if len(tasks) != 2 || len(plans) != 2 {
 		t.Fatalf("len(tasks)=%d len(plans)=%d, want 2,2 (skip-placeholder + active)", len(tasks), len(plans))
 	}
-	// Task 0 — gated-off parallel: skip placeholder, params weren't rendered.
+	// Task 0 — gated off: skip placeholder, params weren't rendered.
 	if tasks[0].Params != nil {
-		t.Errorf("tasks[0].Params != nil - gated-off parallel must be a skip-placeholder")
+		t.Errorf("tasks[0].Params != nil - a gated-off task must be a skip-placeholder")
 	}
 	if tasks[0].When != "input.action == 'diagnose'" {
 		t.Errorf("tasks[0].When = %q, want the passed-through predicate", tasks[0].When)
@@ -344,19 +345,20 @@ func TestStaticWhenFalse_UnsupportedDSL_PrecedesGuard(t *testing.T) {
 }
 
 // TestStaticWhenTrue_UnsupportedDSL_StillRejected — reverse check on
-// over-skip: the same parallel: + when: at action==diagnose → static-TRUE →
+// over-skip: the same task + when: at action==diagnose → static-TRUE →
 // task is ACTIVE → guard REJECTS with ErrUnsupportedDSL. Per-action
 // validation: unsupported DSL is rejected exactly when its branch activates,
 // never masked.
 func TestStaticWhenTrue_UnsupportedDSL_StillRejected(t *testing.T) {
 	manifest := &config.ScenarioManifest{
-		Name: "active-parallel",
+		Name: "active-keeper-async",
 		Tasks: []config.Task{
 			{
-				Name:     "diagnose (parallel, ACTIVE)",
-				When:     "input.action == 'diagnose'", // static-TRUE at action=diagnose
-				Parallel: true,
-				Module:   &config.ModuleTask{Module: "core.exec.run", Params: map[string]any{"cmd": "redis-cli ping"}},
+				Name:   "diagnose (keeper-side async, ACTIVE)",
+				When:   "input.action == 'diagnose'", // static-TRUE at action=diagnose
+				On:     "keeper",
+				Async:  true,
+				Module: &config.ModuleTask{Module: "core.soul.registered", Params: map[string]any{}},
 			},
 		},
 	}
@@ -369,24 +371,25 @@ func TestStaticWhenTrue_UnsupportedDSL_StillRejected(t *testing.T) {
 	}
 	_, _, err := p.Render(context.Background(), in)
 	if !errors.Is(err, ErrUnsupportedDSL) {
-		t.Fatalf("err = %v, want ErrUnsupportedDSL (active parallel task is rejected per-action)", err)
+		t.Fatalf("err = %v, want ErrUnsupportedDSL (an active unsupported task is rejected per-action)", err)
 	}
 }
 
 // TestNonStaticWhen_UnsupportedDSL_StillRejected — a non-static when:
-// (`register.x`) + parallel: → the task isn't statically-false (register is
-// known only to Soul), bypasses the early static-skip → the guard rejects
+// (`register.x`) + unsupported DSL → the task isn't statically-false (register
+// is known only to Soul), bypasses the early static-skip → the guard rejects
 // with ErrUnsupportedDSL the usual way. Guarantees the early skip doesn't
 // weaken the guard for register-/mixed-when branches.
 func TestNonStaticWhen_UnsupportedDSL_StillRejected(t *testing.T) {
 	manifest := &config.ScenarioManifest{
-		Name: "register-parallel",
+		Name: "register-keeper-async",
 		Tasks: []config.Task{
 			{
-				Name:     "parallel gated by register",
-				When:     "register.probe.changed", // not static → Soul-side
-				Parallel: true,
-				Module:   &config.ModuleTask{Module: "core.exec.run", Params: map[string]any{"cmd": "redis-cli ping"}},
+				Name:   "keeper-side async gated by register",
+				When:   "register.probe.changed", // not static → Soul-side
+				On:     "keeper",
+				Async:  true,
+				Module: &config.ModuleTask{Module: "core.soul.registered", Params: map[string]any{}},
 			},
 		},
 	}
@@ -417,10 +420,10 @@ func TestStaticWhenFalse_UnsupportedDSL_PrecedesGuard_Destiny(t *testing.T) {
 		},
 		Tasks: []config.Task{
 			{
-				Name:     "diagnose (parallel, gated off)",
-				When:     "input.action == 'diagnose'", // static-false at action=update_acls
-				Parallel: true,
-				Module:   &config.ModuleTask{Module: "core.exec.run", Params: map[string]any{"cmd": "redis-cli ping"}},
+				Name:    "diagnose (run_once, gated off)",
+				When:    "input.action == 'diagnose'", // static-false at action=update_acls
+				RunOnce: true,                         // scenario-only key — forbidden in a destiny
+				Module:  &config.ModuleTask{Module: "core.exec.run", Params: map[string]any{"cmd": "redis-cli ping"}},
 			},
 			{
 				Name:   "active update_acls",
@@ -468,10 +471,10 @@ func TestStaticWhenTrue_UnsupportedDSL_StillRejected_Destiny(t *testing.T) {
 		Input: config.InputSchemaMap{"action": {Type: "string", Required: true}},
 		Tasks: []config.Task{
 			{
-				Name:     "diagnose (parallel, ACTIVE)",
-				When:     "input.action == 'diagnose'",
-				Parallel: true,
-				Module:   &config.ModuleTask{Module: "core.exec.run", Params: map[string]any{"cmd": "redis-cli ping"}},
+				Name:    "diagnose (run_once, ACTIVE)",
+				When:    "input.action == 'diagnose'",
+				RunOnce: true,
+				Module:  &config.ModuleTask{Module: "core.exec.run", Params: map[string]any{"cmd": "redis-cli ping"}},
 			},
 		},
 	}
@@ -486,7 +489,7 @@ func TestStaticWhenTrue_UnsupportedDSL_StillRejected_Destiny(t *testing.T) {
 	}
 	_, _, err := p.Render(context.Background(), in)
 	if !errors.Is(err, ErrUnsupportedDSL) {
-		t.Fatalf("err = %v, want ErrUnsupportedDSL (active parallel destiny is rejected per-action)", err)
+		t.Fatalf("err = %v, want ErrUnsupportedDSL (an active unsupported destiny task is rejected per-action)", err)
 	}
 }
 
