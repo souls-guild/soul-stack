@@ -80,6 +80,14 @@ type ApplyRunner struct {
 	// in Run (never changes after startup), no extra sync needed.
 	hostFacts util.HostFacts
 
+	// asyncLimit caps how many `async:` tasks of one run are in flight at once
+	// (ADR-0075(e), `async.max_concurrent` in soul.yml). 0 = unlimited. The
+	// ceiling is host-side on purpose: how much concurrency a machine tolerates
+	// is not something the plan's author can judge. Set via
+	// [ApplyRunner.SetAsyncLimit] from the same goroutine that calls Run, like
+	// hostFacts — no extra sync.
+	asyncLimit int
+
 	mu     sync.Mutex
 	active map[string]context.CancelFunc
 
@@ -155,6 +163,18 @@ func NewApplyRunner(reg Registry, metrics *ApplyMetrics) *ApplyRunner {
 // modules fall back to runtime backend detection. No concurrent Run per Soul
 // (ADR-012(a)) and the value never changes after startup, so no extra sync.
 func (r *ApplyRunner) SetHostFacts(f util.HostFacts) { r.hostFacts = f }
+
+// SetAsyncLimit sets the host-side ceiling on concurrent `async:` tasks
+// (ADR-0075(e)). 0/negative = unlimited. Above the ceiling a flow waits for a
+// slot — it is never dropped and never fails for want of one, so a run is
+// correct at any setting, only slower. Called from cmd/soul with
+// `async.max_concurrent`, on the goroutine that drives Run.
+func (r *ApplyRunner) SetAsyncLimit(n int) {
+	if n < 0 {
+		n = 0
+	}
+	r.asyncLimit = n
+}
 
 // Cancel attempts to cancel the active apply with the given id. Returns true
 // if the apply was registered and cancel was called; false if it already
@@ -286,8 +306,21 @@ func (r *ApplyRunner) ActiveSet() []*keeperv1.ActiveApply {
 	return out
 }
 
-// Run executes every task in req sequentially, sending a TaskEvent for each,
+// Run executes every task in req in plan order, sending a TaskEvent for each,
 // then a RunResult with the aggregated status.
+//
+// Concurrency (ADR-0075): a task with `async: true` is started in its own flow
+// and the loop moves on without waiting — fire-and-forget, not a group. Its
+// gating is still evaluated by the main flow at its plan position, so WHETHER a
+// task runs never depends on timing; only when it finishes does. Three barriers
+// collect a flow: the explicit `require:`/`require: all`, an implicit reference
+// to its `register.<name>` from a Soul-side key, and the end of the run — which
+// is the end of THIS ApplyRequest, i.e. of the current Passage on a staged plan
+// (ADR-056). A flow cannot outlive the message that carried it. A failure is
+// observed where it is awaited, never where it happened: an async task that
+// fails does not break the main flow at that moment, and siblings are never
+// cancelled. TaskEvents from flows interleave — the apply log is no longer in
+// plan order, and Keeper orders by plan_index, not by arrival.
 //
 // Gating before Apply (ADR-012(d)): a task executes only when
 // `when && onchanges-satisfied && onfail-satisfied`. when: is evaluated by the
@@ -374,19 +407,30 @@ func (r *ApplyRunner) Run(ctx context.Context, req *keeperv1.ApplyRequest, sink 
 	start := time.Now()
 	defer func() { r.metrics.ObserveApplyDuration(time.Since(start).Seconds()) }()
 
-	// registerByIdx collects register payloads (TaskEvent.register_data) of
-	// already-run tasks BY INDEX — needed for requisite gating (`onchanges:`):
-	// a task with onchanges_idx runs only if at least one source has
-	// register.changed == true. Soul applies tasks strictly sequentially, so
-	// by gating time the sources (always earlier in the plan) are already here.
-	registerByIdx := make(map[int32]*structpb.Struct, len(req.GetTasks()))
+	// state collects register payloads (TaskEvent.register_data) of already-run
+	// tasks by INDEX (requisite gating: a task with onchanges_idx runs only if
+	// at least one source has register.changed == true) and by register NAME
+	// (flow-control predicates referencing `register.<name>.*`, ADR-012(d)).
+	// Sources of a gate always precede their consumer in the plan, so by gating
+	// time they are here — an async source only if a barrier collected it first
+	// (ADR-0075).
+	state := newRegisterIndex(len(req.GetTasks()))
 
-	// registerByName collects register payloads by register NAME
-	// (RenderedTask.register) — needed for flow-control predicates (when:/…),
-	// which reference `register.<name>.*` (ADR-012(d)). Parallel to
-	// registerByIdx (used for index-based onchanges gating). A task without a
-	// register name never enters this map (addressable only by its idx).
-	registerByName := make(map[string]any, len(req.GetTasks()))
+	// flows tracks the run's `async:` tasks (ADR-0075). Inert on a plan that
+	// uses none: nothing is launched, so every barrier resolves to nothing and
+	// the loop below is the sequential runner it has always been.
+	flows := newAsyncFlows(r.asyncLimit)
+	// Serialize sink writes — async flows finalize concurrently (see lockedSink).
+	sink = &lockedSink{sink: sink}
+	defer func() {
+		// No flow may outlive Run: one still holding the sink would write into a
+		// stream its owner has already given up on. On the normal path the final
+		// barrier below has drained them and this is a no-op; on an early return
+		// (a broken sink) it cancels the run first, so the flows wind down instead
+		// of finishing at their own pace.
+		cancel()
+		flows.wait()
+	}()
 
 	runStatus := keeperv1.RunStatus_RUN_STATUS_SUCCESS
 	// runFailed — the run has already failed (a FAILED/TIMED_OUT task occurred).
@@ -402,6 +446,33 @@ func (r *ApplyRunner) Run(ctx context.Context, req *keeperv1.ApplyRequest, sink 
 			break
 		}
 
+		// ADR-0075 barriers. What this task waits for is resolved HERE, at its
+		// plan position: a flow launched later is never in the set, which is both
+		// what `require: all` means and what keeps a forward `require:` a no-op
+		// instead of a deadlock. The gate half is awaited by the main flow even
+		// for an async task (its gating happens at the plan position); the start
+		// half is awaited by whoever is about to run the module — the main flow
+		// for an ordinary task, its own flow for an async one, so that `require:`
+		// orders the task without holding up the plan.
+		gateWait, startWait := flows.barriers(task)
+		// dry_run (Scry, ADR-031) ignores `async:`: a Plan touches nothing, so
+		// concurrency would buy only a scrambled report of a plan meant to be read
+		// in order.
+		async := task.GetAsync() && !req.GetDryRun()
+		waitFlows(gateWait)
+		if !async {
+			waitFlows(startWait)
+		}
+		// A failed async task is observed where it is awaited, not where it failed
+		// (ADR-0075(c)): the ordinary fail-stop engages at the barrier that
+		// reached for it, and the task doing the reaching skips with everything
+		// else. Flows already in flight are NOT cancelled — the final barrier
+		// collects them.
+		if anyFailed(gateWait) || (!async && anyFailed(startWait)) {
+			runStatus = keeperv1.RunStatus_RUN_STATUS_FAILED
+			runFailed = true
+		}
+
 		// After a run failure, ordinary (non-onfail) tasks don't execute: they're
 		// skipped WITHOUT evaluating when: (when: on a failed chain could produce
 		// a spurious new FAILED). Exception — onfail tasks: gating for them
@@ -414,8 +485,8 @@ func (r *ApplyRunner) Run(ctx context.Context, req *keeperv1.ApplyRequest, sink 
 		// failure — otherwise an outer onfail:[<applier>] / when:
 		// register.<applier>.failed would break (the failed aggregate would be
 		// lost under a generic skipped). Emit the aggregate immediately: children
-		// are earlier in the plan and already in registerByIdx (the terminal is
-		// last in its group).
+		// are earlier in the plan and already in state (the terminal is last in
+		// its group; an async child was collected by the gate barrier above).
 		if runFailed && len(task.GetOnfailIdx()) == 0 {
 			var ev *keeperv1.TaskEvent
 			if agg := task.GetAggregateOf(); len(agg) > 0 {
@@ -423,12 +494,12 @@ func (r *ApplyRunner) Run(ctx context.Context, req *keeperv1.ApplyRequest, sink 
 					ApplyId:      applyID,
 					TaskIdx:      int32(idx),
 					Status:       keeperv1.TaskStatus_TASK_STATUS_OK,
-					RegisterData: aggregateRegisterData(agg, registerByIdx),
+					RegisterData: aggregateRegisterData(agg, state),
 				}
 			} else {
 				ev = skippedTaskEvent(applyID, int32(idx))
 			}
-			recordRegister(registerByIdx, registerByName, int32(idx), task.GetRegister(), ev.GetRegisterData())
+			state.record(int32(idx), task.GetRegister(), ev.GetRegisterData())
 			if err := sendTaskEvent(sink, ev, task, passage); err != nil {
 				return fmt.Errorf("runtime: send TaskEvent[%d]: %w", idx, err)
 			}
@@ -446,7 +517,7 @@ func (r *ApplyRunner) Run(ctx context.Context, req *keeperv1.ApplyRequest, sink 
 		//   - when:true but onchanges/onfail not satisfied → also SKIPPED.
 		// Both paths produce the same skipped payload (changed=false — doesn't
 		// trigger onchanges downstream, same as an onchanges-skip).
-		when, whenErr := r.evalWhen(task, registerByName)
+		when, whenErr := r.evalWhen(task, state.snapshot())
 		if whenErr != nil {
 			// when: evaluation error: a runtime-error CEL (e.g. register.x missing)
 			// → task FAILED per the templating.md §10 error table; a compile-error
@@ -465,7 +536,7 @@ func (r *ApplyRunner) Run(ctx context.Context, req *keeperv1.ApplyRequest, sink 
 				},
 			}
 			ev.RegisterData = buildRegisterData(ev.GetStatus(), nil)
-			recordRegister(registerByIdx, registerByName, int32(idx), task.GetRegister(), ev.GetRegisterData())
+			state.record(int32(idx), task.GetRegister(), ev.GetRegisterData())
 			if err := sendTaskEvent(sink, ev, task, passage); err != nil {
 				return fmt.Errorf("runtime: send TaskEvent[%d]: %w", idx, err)
 			}
@@ -483,10 +554,10 @@ func (r *ApplyRunner) Run(ctx context.Context, req *keeperv1.ApplyRequest, sink 
 		// (restart only when config changed); onfail is rescue-gating: an onfail
 		// task in a normal (no-failure) run is always SKIPPED, running only when
 		// its source failed (skipOnFail). Multiple requisites combine with AND.
-		if !when || skipOnChanges(task.GetOnchangesIdx(), registerByIdx) ||
-			skipOnFail(task.GetOnfailIdx(), registerByIdx) {
+		if !when || skipOnChanges(task.GetOnchangesIdx(), state) ||
+			skipOnFail(task.GetOnfailIdx(), state) {
 			ev := skippedTaskEvent(applyID, int32(idx))
-			recordRegister(registerByIdx, registerByName, int32(idx), task.GetRegister(), ev.GetRegisterData())
+			state.record(int32(idx), task.GetRegister(), ev.GetRegisterData())
 			if err := sendTaskEvent(sink, ev, task, passage); err != nil {
 				return fmt.Errorf("runtime: send TaskEvent[%d]: %w", idx, err)
 			}
@@ -503,67 +574,52 @@ func (r *ApplyRunner) Run(ctx context.Context, req *keeperv1.ApplyRequest, sink 
 			continue
 		}
 
-		ev := r.runTaskWithRetry(runCtx, applyID, int32(idx), task, registerByName, req.GetDryRun())
-		// If cancel happened inside runTask (module honors ctx), we want a single
-		// TaskEvent with status CANCELLED and RunResult=CANCELLED. TaskError.code
-		// is kept as `apply.cancelled` for filtering in audit/logs — TaskStatus
-		// already carries the cancellation fact, but the string code makes
-		// grepping audit_log easier without enum resolution.
-		if runCtx.Err() != nil {
-			ev.Status = keeperv1.TaskStatus_TASK_STATUS_CANCELLED
-			ev.Error = &keeperv1.TaskError{
-				Code:    "apply.cancelled",
-				Module:  ev.GetError().GetModule(),
-				Message: "apply cancelled by Keeper",
-			}
-			ev.RegisterData = buildRegisterData(ev.GetStatus(), nil)
-			if err := sendTaskEvent(sink, ev, task, passage); err != nil {
-				return fmt.Errorf("runtime: send TaskEvent[%d]: %w", idx, err)
-			}
-			// A cancelled task is a terminal failure; the closed-enum
-			// soul_apply_tasks_total (ok/changed/failed) counts it as failed.
-			r.metrics.ObserveTask(applyResultFailed)
+		// Gating passed, so the task WILL run. An async one is handed to its own
+		// flow here and the loop moves on immediately (ADR-0075(a)); its start
+		// barrier travels with it. Nothing further in this iteration concerns it —
+		// its outcome reaches the run through a barrier or the final wait.
+		if async {
+			r.launchAsync(runCtx, flows, sink, applyID, passage, int32(idx), task, state, startWait)
+			continue
+		}
+
+		ev, err := r.executeTask(runCtx, sink, applyID, passage, int32(idx), task, state, req.GetDryRun())
+		if err != nil {
+			return err
+		}
+		if ev.GetStatus() == keeperv1.TaskStatus_TASK_STATUS_CANCELLED {
 			runStatus = keeperv1.RunStatus_RUN_STATUS_CANCELLED
 			break
 		}
-		// Applier-register materialization (orchestration.md §2.1.1, Variant B): a
-		// terminal core.noop.run with a non-empty aggregate_of carries the
-		// SUMMARY outcome of the applier's destiny run. Its own ApplyEvent is
-		// trivial (noop → changed=false), so register_data is OVERWRITTEN with
-		// the aggregate over child tasks (OR of changed/failed/timed_out).
-		// Children are earlier in the plan and in this same ApplyRequest (the
-		// terminal is last in its group), so they're already in registerByIdx.
-		// The override happens AFTER the cancel branch (a cancelled task keeps
-		// CANCELLED) and BEFORE sendTaskEvent/recordRegister — both the TaskEvent
-		// sent to Keeper and the register used by later gating carry the
-		// aggregate.
-		if agg := task.GetAggregateOf(); len(agg) > 0 {
-			ev.RegisterData = aggregateRegisterData(agg, registerByIdx)
-		}
-		if err := sendTaskEvent(sink, ev, task, passage); err != nil {
-			return fmt.Errorf("runtime: send TaskEvent[%d]: %w", idx, err)
-		}
-		// The finished task's register becomes available downstream: to onchanges
-		// gating (by index) and to flow-control predicates when:/… (by register
-		// name, ADR-012(d)).
-		recordRegister(registerByIdx, registerByName, int32(idx), task.GetRegister(), ev.GetRegisterData())
-		r.metrics.ObserveTask(taskResult(ev.GetStatus()))
-		if ev.GetStatus() == keeperv1.TaskStatus_TASK_STATUS_FAILED ||
-			ev.GetStatus() == keeperv1.TaskStatus_TASK_STATUS_TIMED_OUT {
+		if failedStatus(ev.GetStatus()) {
 			// Fail-stop with rescue (destiny/tasks.md §8): a failure marks
 			// RunResult FAILED irreversibly (onfail tasks are cleanup, not an undo),
 			// but the loop doesn't stop. Subsequent ordinary tasks are skipped
 			// (runFailed branch at the top of the loop); only onfail tasks whose
 			// source failed run. TIMED_OUT is a special case of failed: it also
 			// triggers rescue and marks the run failed.
-			if ev.GetStatus() == keeperv1.TaskStatus_TASK_STATUS_TIMED_OUT {
-				// Count the timeout once, on the FINAL outcome (after retries are
-				// exhausted), not per attempt — soul_apply_task_timed_out_total.
-				r.metrics.ObserveTimedOut()
-			}
 			runStatus = keeperv1.RunStatus_RUN_STATUS_FAILED
 			runFailed = true
 		}
+	}
+
+	// Final barrier (ADR-0075(b.3)): the run is not complete until every async
+	// flow is finalized. Unconditional, cancellation included — a flow cannot
+	// outlive the ApplyRequest that carried it, and Run must not return while one
+	// might still be writing to the sink. There is no timeout: a module that
+	// ignores its context hangs the run exactly as it already does in the main
+	// flow.
+	asyncFailed := flows.wait()
+	if asyncFailed && runStatus == keeperv1.RunStatus_RUN_STATUS_SUCCESS {
+		// An async failure nobody awaited still fails the run — the third barrier
+		// is where it surfaces. CANCELLED is not downgraded: cancellation is the
+		// overriding fact about the run.
+		runStatus = keeperv1.RunStatus_RUN_STATUS_FAILED
+	}
+	// A sink failure inside a flow is the same broken stream the main flow
+	// reports, only observed off the main goroutine.
+	if err := flows.err(); err != nil {
+		return err
 	}
 
 	return sink.SendRunResult(&keeperv1.RunResult{
@@ -580,6 +636,110 @@ func (r *ApplyRunner) Run(ctx context.Context, req *keeperv1.ApplyRequest, sink 
 		// as before staged rendering.
 		Passage: passage,
 	})
+}
+
+// executeTask runs one gated task's module and finalizes it: TaskEvent to the
+// sink, register into the shared index, metrics. The main flow and an async
+// flow share it verbatim (ADR-0075) — which flow a task runs in must not change
+// how its result is reported, and the run's aggregation depends on that.
+//
+// Returns the finalized event so the caller can act on its status: the main
+// flow stops on CANCELLED and engages fail-stop on a failure, an async flow only
+// records the verdict for whoever awaits it. The error is a sink I/O failure
+// (broken stream), already wrapped for return from Run.
+func (r *ApplyRunner) executeTask(runCtx context.Context, sink EventSink, applyID string, passage, idx int32, task *keeperv1.RenderedTask, state *registerIndex, dryRun bool) (*keeperv1.TaskEvent, error) {
+	var ev *keeperv1.TaskEvent
+	if runCtx.Err() != nil {
+		// Cancelled before the module could start. Only an async flow reaches this
+		// — it may have been queued behind a barrier or a concurrency slot while
+		// the main loop, which checks ctx at the top of each iteration, already
+		// stopped. The flow was launched and Keeper holds a plan_index for it, so
+		// it reports CANCELLED rather than vanishing.
+		ev = &keeperv1.TaskEvent{ApplyId: applyID, TaskIdx: idx}
+	} else {
+		ev = r.runTaskWithRetry(runCtx, applyID, idx, task, state.snapshot(), dryRun)
+	}
+
+	// If cancel happened inside runTask (module honors ctx), we want a single
+	// TaskEvent with status CANCELLED. TaskError.code is kept as
+	// `apply.cancelled` for filtering in audit/logs — TaskStatus already carries
+	// the cancellation fact, but the string code makes grepping audit_log easier
+	// without enum resolution.
+	switch agg := task.GetAggregateOf(); {
+	case runCtx.Err() != nil:
+		ev.Status = keeperv1.TaskStatus_TASK_STATUS_CANCELLED
+		ev.Error = &keeperv1.TaskError{
+			Code:    "apply.cancelled",
+			Module:  ev.GetError().GetModule(),
+			Message: "apply cancelled by Keeper",
+		}
+		ev.RegisterData = buildRegisterData(ev.GetStatus(), nil)
+	case len(agg) > 0:
+		// Applier-register materialization (orchestration.md §2.1.1, Variant B): a
+		// terminal core.noop.run with a non-empty aggregate_of carries the SUMMARY
+		// outcome of the applier's destiny run. Its own ApplyEvent is trivial
+		// (noop → changed=false), so register_data is OVERWRITTEN with the
+		// aggregate over child tasks (OR of changed/failed/timed_out). Children
+		// are earlier in the plan and in this same ApplyRequest (the terminal is
+		// last in its group), so they're already in state — an async child was
+		// collected by the gate barrier before this task was let through. The
+		// override happens AFTER the cancel branch (a cancelled task keeps
+		// CANCELLED) and BEFORE the send/record — both the TaskEvent sent to
+		// Keeper and the register used by later gating carry the aggregate.
+		ev.RegisterData = aggregateRegisterData(agg, state)
+	}
+
+	if err := sendTaskEvent(sink, ev, task, passage); err != nil {
+		return ev, fmt.Errorf("runtime: send TaskEvent[%d]: %w", idx, err)
+	}
+	// The finished task's register becomes available downstream: to onchanges
+	// gating (by index) and to flow-control predicates when:/… (by register
+	// name, ADR-012(d)).
+	state.record(idx, task.GetRegister(), ev.GetRegisterData())
+
+	if ev.GetStatus() == keeperv1.TaskStatus_TASK_STATUS_CANCELLED {
+		// A cancelled task is a terminal failure; the closed-enum
+		// soul_apply_tasks_total (ok/changed/failed) counts it as failed.
+		r.metrics.ObserveTask(applyResultFailed)
+		return ev, nil
+	}
+	r.metrics.ObserveTask(taskResult(ev.GetStatus()))
+	if ev.GetStatus() == keeperv1.TaskStatus_TASK_STATUS_TIMED_OUT {
+		// Count the timeout once, on the FINAL outcome (after retries are
+		// exhausted), not per attempt — soul_apply_task_timed_out_total.
+		r.metrics.ObserveTimedOut()
+	}
+	return ev, nil
+}
+
+// launchAsync starts a gated `async: true` task in its own flow and returns
+// immediately (ADR-0075(a)). wait is the task's start barrier, resolved by the
+// main flow at the task's plan position and honoured HERE: `require:` says when
+// the TASK may start, `async:` says it does not hold up the plan.
+//
+// The concurrency slot is taken AFTER the barrier, so a flow that is waiting
+// never occupies one — otherwise a full ceiling could wedge a run whose queued
+// flows are waiting for flows that cannot get in.
+func (r *ApplyRunner) launchAsync(runCtx context.Context, flows *asyncFlows, sink EventSink, applyID string, passage, idx int32, task *keeperv1.RenderedTask, state *registerIndex, wait []*asyncFlow) {
+	fl := &asyncFlow{idx: idx, name: task.GetRegister(), done: make(chan struct{})}
+	flows.add(fl)
+	state.markConcurrent()
+	flows.wg.Add(1)
+	go func() {
+		defer flows.wg.Done()
+		waitFlows(wait)
+		release := flows.acquire(runCtx)
+		defer release()
+
+		ev, err := r.executeTask(runCtx, sink, applyID, passage, idx, task, state, false)
+		if err != nil {
+			flows.recordSendErr(err)
+		}
+		// Written before the close, read only after: that ordering is the whole
+		// synchronization contract of a barrier.
+		fl.failed = failedStatus(ev.GetStatus())
+		close(fl.done)
+	}()
 }
 
 // sendTaskEvent stamps the TaskEvent with an echo of RenderedTask.no_log and
@@ -1188,35 +1348,22 @@ func (r *ApplyRunner) logFlowControlError(kind string, task *keeperv1.RenderedTa
 		slog.Any("error", err))
 }
 
-// recordRegister accumulates a finished/skipped task's register payload into
-// both indexes: registerByIdx (by position, for onchanges gating) and
-// registerByName (by register name, for when:/… flow-control predicates).
-// Empty name → skip registerByName (a task without register: is addressable
-// only by its idx). registerByName stores the payload as map[string]any (the
-// cel-activation form), not *structpb.Struct — cel reads Go data via adapter.
-func recordRegister(byIdx map[int32]*structpb.Struct, byName map[string]any, idx int32, name string, data *structpb.Struct) {
-	byIdx[idx] = data
-	if name != "" {
-		byName[name] = data.AsMap()
-	}
-}
-
 // skipOnChanges decides whether to skip a task per the DSL-core `onchanges:`
 // (destiny/tasks.md §8). onchangesIdx is the source tasks' indexes (register
-// names resolved by Keeper, proto onchanges_idx); registerByIdx is the
-// register of already-run tasks in this run, by index.
+// names resolved by Keeper, proto onchanges_idx); state is the register of
+// already-run tasks in this run, by index.
 //
 // Semantics: empty onchangesIdx → false (unconditional run). Otherwise skip
 // (true) UNLESS at least one source has register.changed == true — any
-// changed source → false (run). A source missing from registerByIdx is
-// treated as changed=false (it didn't run — e.g. was itself skipped): it
-// doesn't "rescue" from the skip, consistent with skipped != changed.
-func skipOnChanges(onchangesIdx []int32, registerByIdx map[int32]*structpb.Struct) bool {
+// changed source → false (run). A source missing from state is treated as
+// changed=false (it didn't run — e.g. was itself skipped): it doesn't "rescue"
+// from the skip, consistent with skipped != changed.
+func skipOnChanges(onchangesIdx []int32, state *registerIndex) bool {
 	if len(onchangesIdx) == 0 {
 		return false
 	}
 	for _, srcIdx := range onchangesIdx {
-		rd := registerByIdx[srcIdx]
+		rd := state.get(srcIdx)
 		if rd.GetFields()["changed"].GetBoolValue() {
 			return false
 		}
@@ -1227,23 +1374,23 @@ func skipOnChanges(onchangesIdx []int32, registerByIdx map[int32]*structpb.Struc
 // skipOnFail decides whether to skip an onfail task per the DSL-core `onfail:`
 // (destiny/tasks.md §8) — the rescue mirror of skipOnChanges, triggered by
 // register.failed instead of register.changed. onfailIdx is the source tasks'
-// indexes (register names resolved by Keeper, proto onfail_idx); registerByIdx
-// is the register of already-run tasks in this run, by index.
+// indexes (register names resolved by Keeper, proto onfail_idx); state is the
+// register of already-run tasks in this run, by index.
 //
 // Semantics: empty onfailIdx → false (not an onfail task — the when/onchanges/
 // runFailed branch decides execution instead). Otherwise skip (true) UNLESS at
 // least one source has register.failed == true — any failed source → false
 // (run the rescue). register.failed also covers TIMED_OUT (written to register
 // as failed==true by buildRegisterData), so a source's timeout also triggers
-// onfail. A source missing from registerByIdx is treated as failed=false (it
-// didn't run — e.g. was itself skipped): it doesn't "activate" onfail,
-// consistent with skipped != failed.
-func skipOnFail(onfailIdx []int32, registerByIdx map[int32]*structpb.Struct) bool {
+// onfail. A source missing from state is treated as failed=false (it didn't run
+// — e.g. was itself skipped): it doesn't "activate" onfail, consistent with
+// skipped != failed.
+func skipOnFail(onfailIdx []int32, state *registerIndex) bool {
 	if len(onfailIdx) == 0 {
 		return false
 	}
 	for _, srcIdx := range onfailIdx {
-		rd := registerByIdx[srcIdx]
+		rd := state.get(srcIdx)
 		if rd.GetFields()["failed"].GetBoolValue() {
 			return false
 		}
@@ -1300,9 +1447,9 @@ func buildRegisterData(status keeperv1.TaskStatus, last *pluginv1.ApplyEvent) *s
 // materialization, orchestration.md §2.1.1) as a summary of the applier's
 // child destiny tasks:
 //
-//	changed   = OR(registerByIdx[i].changed)
-//	failed    = OR(registerByIdx[i].failed)
-//	timed_out = OR(registerByIdx[i].timed_out)
+//	changed   = OR(state[i].changed)
+//	failed    = OR(state[i].failed)
+//	timed_out = OR(state[i].timed_out)
 //
 // over aggregateOf's LOCAL indexes (Keeper's ToProtoTasks did the
 // global→local remap). This mirrors register.<applier> semantics: an outer
@@ -1310,20 +1457,20 @@ func buildRegisterData(status keeperv1.TaskStatus, last *pluginv1.ApplyEvent) *s
 // this register_data. skipped is always false (the aggregate is the group's
 // real outcome, not the task itself being skipped).
 //
-// A source missing from registerByIdx (sentinel index -1 from ToProtoTasks: a
-// child task filtered out by where: on this host, or routed to a different
-// Passage) reads as nil → its changed/failed/timed_out=false (zero
-// contribution to the OR), symmetric to skipOnChanges/skipOnFail. An empty
-// aggregateOf never reaches here (the caller checks len>0); if it did, all OR
-// results would be false (a no-op applier with no children).
+// A source missing from state (sentinel index -1 from ToProtoTasks: a child
+// task filtered out by where: on this host, or routed to a different Passage)
+// reads as nil → its changed/failed/timed_out=false (zero contribution to the
+// OR), symmetric to skipOnChanges/skipOnFail. An empty aggregateOf never
+// reaches here (the caller checks len>0); if it did, all OR results would be
+// false (a no-op applier with no children).
 //
 // Child tasks' output fields are NOT projected (out of scope — propagating a
 // declared top-level output: destiny into register.<applier>.<field> is a
 // separate slice). Only DSL-core changed/failed/timed_out/skipped.
-func aggregateRegisterData(aggregateOf []int32, registerByIdx map[int32]*structpb.Struct) *structpb.Struct {
+func aggregateRegisterData(aggregateOf []int32, state *registerIndex) *structpb.Struct {
 	var changed, failed, timedOut bool
 	for _, idx := range aggregateOf {
-		rd := registerByIdx[idx]
+		rd := state.get(idx)
 		fields := rd.GetFields()
 		if fields["changed"].GetBoolValue() {
 			changed = true

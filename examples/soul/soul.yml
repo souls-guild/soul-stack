@@ -63,6 +63,11 @@ console:
   kill_grace: 2s             # per step of the teardown escalation
   # shell: /bin/bash         # opt.: absolute path only; default $SHELL → bash → sh
 
+# Ceiling on intra-host task concurrency (ADR-0075). Over the ceiling an
+# `async:` task waits for a slot — never dropped, never failed for want of one.
+async:
+  max_concurrent: 0          # 0/omitted → unlimited
+
 # Cleanup of the module cache on the host
 cleanup:
   modules_ttl_days: 30

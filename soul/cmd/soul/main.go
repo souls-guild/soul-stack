@@ -772,6 +772,9 @@ func runApply(args []string) int {
 	}
 
 	runner := runtime.NewApplyRunner(registry, nil)
+	// Same host-side async ceiling as pull mode (ADR-0075(e)); on a push host
+	// without soul.yml cfg is empty and the ceiling is unlimited.
+	runner.SetAsyncLimit(cfg.AsyncMaxConcurrent())
 	sink := runtime.NewNDJSONSink(os.Stdout)
 
 	logger.Info("soul apply: start",
@@ -1113,6 +1116,12 @@ func handleSession(ctx context.Context, store *config.Store[config.SoulConfig], 
 	consoleLimits := resolveConsoleLimits(store, logger)
 	consoleRunner := consolerunner.New(sess, consoleLimits, logger, consoleMetrics,
 		consolerunner.WithDialer(consoleDialer{sess}))
+
+	// Host-side ceiling on concurrent async: tasks (ADR-0075(e)). Read here, with
+	// the console limits, so a hot-reload (ADR-021) applies on the next
+	// reconnect; a run already under way keeps the ceiling it started with. Set
+	// from this goroutine, the one that later drives runner.Run.
+	runner.SetAsyncLimit(store.Get().AsyncMaxConcurrent())
 
 	// The reader goroutine reads the current sess; on swap it's restarted on
 	// the new sess. recvCh is unbuffered — a gate through which the

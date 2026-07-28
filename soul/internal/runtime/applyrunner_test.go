@@ -869,7 +869,7 @@ func TestSkipOnChanges(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := skipOnChanges(tt.idx, tt.reg); got != tt.want {
+			if got := skipOnChanges(tt.idx, registerIndexFrom(tt.reg)); got != tt.want {
 				t.Errorf("skipOnChanges = %v, want %v", got, tt.want)
 			}
 		})

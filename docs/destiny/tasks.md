@@ -227,6 +227,8 @@ An async task is **always waited for** - the question is only where. There are t
 
 Practical consequence: `onchanges: [vhost]` waits for `vhost` alone, while `params: { path: "${ register.vhost.dest }" }` waits for everything. If a local wait is what you want, address the async task through a requisite or a flow-control predicate.
 
+A local wait happens **before the reading task's module runs**, whichever key the reference sits in. `changed_when:`/`failed_when:`/`until:` are evaluated after the module, but their references are collected with the task's `require:` — the wait can only be earlier than the reference site, never later, so a predicate never reads a register that is still being written.
+
 ### An async task does not outlive its Passage
 
 The unit of dispatch is one `ApplyRequest` per host **per Passage**, closed by its run result. An async flow cannot survive the message that carried it, so the final barrier is the end of the **current Passage**, not the end of the destiny.
@@ -545,7 +547,7 @@ By default, the run operates in **fail-stop** mode: the first failed task (`fail
 - **Applies to:** all types of problems.
 - **Semantics:** the task does not start until the mentioned async tasks have finished. In a linear flow without `async:` the requirement is redundant (order is already guaranteed).
 - **Form 1 - `require: [a, b, c]`.** Wait for the listed tasks by their `register:`-id. The barrier is local - only for these three, the remaining async tasks keep running.
-- **Form 2 - `require: all`.** Special meaning: wait for **all** active async tasks started earlier in this run. Used as an explicit "synchronization barrier" - for example, before a task that wants to see a consistent state after several async phases. Mixed (`require: [a, "all"]`) - validation error; the form is strictly one of two.
+- **Form 2 - `require: all`.** Special meaning: wait for **every** async task started earlier in this run - including ones that have already finished, whose outcome the barrier then observes. Used as an explicit "synchronization barrier" - for example, before a task that wants to see a consistent state after several async phases. Mixed (`require: [a, "all"]`) - validation error; the form is strictly one of two.
 - **This is the preferred way to depend on an async task** ([ADR-0075](../adr/0075-intra-host-async-tasks.md) §6): the dependency is stated in the plan and is readable statically, unlike an implicit wait created by referencing `register.<name>` somewhere in the task body - which, depending on the key it sits in, may be a local wait or a full Passage barrier (table in §6).
 
 ```yaml
@@ -832,7 +834,7 @@ Still open:
 - **The `parallel:` group-with-join construct.** A bounded set of tasks with a group-scoped outcome and error boundary. Reserved, not specified.
 - **`async:` on `include:` / `block:`.** Design intent recorded in §6; gated fail-closed (`async_on_block_invalid`) until a slice implements it.
 - **Final-barrier timeout.** Global limit on the final wait at the end of a run. Currently absent - the run waits for its async tasks indefinitely (the tasks themselves can give up on their own `timeout:`).
-- **`require: all` scope.** Currently "all active async tasks started earlier in this run." To clarify: should already-finished ones count (for consistency, so failure-state is available), or only in-flight? Now only in-flight is expected.
+- **`require: all` scope - CLOSED.** Already-finished async tasks count, not only the in-flight ones. A barrier's job is as much to observe an outcome as to wait for one, and scoping `all` to whatever happens to still be running would make *whether a failure is seen at this barrier or only at the final one* depend on timing - which gating must never do. Waiting on a finished task costs nothing, so the consistent reading is also the free one.
 - **Addressing a specific iteration in `loop:` + `async:`.** Now the reference to `register.<name>` waits for the entire task (all iterations). If someone wants to wait for a specific `register.<name>[i]` - should it be a local barrier on the iteration? Or does this turn the loop into a DAG, which is what we're intentionally avoiding?
 - **A declared per-module concurrency class.** The closed `side_effects` resource enum exists only in the plugin manifest; the statically-built core modules have none, so a resource-aware validator needs its own ADR and sweep.
 

@@ -255,6 +255,17 @@ func semanticValidateSoul(c *SoulConfig, root *ast.MappingNode) []diag.Diagnosti
 			}))
 		}
 	}
+	if c.Async != nil && c.Async.MaxConcurrent < 0 {
+		// 0 means "unlimited" (ADR-0075(e)), not "forbid async": a task above the
+		// ceiling waits for a slot, so 0 slots would wedge every run using async:.
+		// A negative value is a typo.
+		out = append(out, atPath(root, "$.async.max_concurrent", diag.Diagnostic{
+			Level: diag.LevelError, Phase: diag.PhaseSemanticValidate,
+			Code:    "value_out_of_range",
+			Message: fmt.Sprintf("async.max_concurrent must be >= 0, got %d", c.Async.MaxConcurrent),
+			Hint:    "0/omitted means unlimited; >0 caps how many async: tasks of one run are in flight",
+		}))
+	}
 	if c.Cleanup != nil {
 		out = append(out, checkDuration(root, "$.cleanup.run_interval", c.Cleanup.RunInterval)...)
 		if c.Cleanup.ModulesTTLDays < 0 {

@@ -17,6 +17,7 @@ type SoulConfig struct {
 	Soulprint   *SoulSoulprint   `yaml:"soulprint,omitempty"`
 	Utilization *SoulUtilization `yaml:"utilization,omitempty"`
 	Console     *SoulConsole     `yaml:"console,omitempty"`
+	Async       *SoulAsync       `yaml:"async,omitempty"`
 	Cleanup     *SoulCleanup     `yaml:"cleanup,omitempty"`
 	Logging     SoulLogging      `yaml:"logging,omitempty"`
 	Metrics     *SoulMetrics     `yaml:"metrics,omitempty"`
@@ -169,6 +170,30 @@ func (c *SoulConsole) ConsoleEnabled() bool {
 		return true
 	}
 	return *c.Enabled
+}
+
+// SoulAsync — the host's ceiling on intra-host task concurrency (ADR-0075(e),
+// destiny/tasks.md §6).
+//
+// Host-side rather than a DSL field on purpose: the plan's author knows the
+// plan, not the machine it lands on, so a per-task number would invite tuning a
+// value they cannot evaluate. Same reasoning as the console's `max_sessions` —
+// Soul is the last word on its own host.
+type SoulAsync struct {
+	// MaxConcurrent caps how many `async:` tasks of one run are in flight at
+	// once. 0/omitted → unlimited: real fan-out is a handful of renders or
+	// fetches, so a mandatory cap would be ceremony around a non-problem. Above
+	// the ceiling a task waits for a slot — never dropped, never failed for want
+	// of one, so a run is correct at any setting, only slower.
+	MaxConcurrent int `yaml:"max_concurrent,omitempty"`
+}
+
+// AsyncMaxConcurrent resolves the effective ceiling, absent block included.
+func (c *SoulConfig) AsyncMaxConcurrent() int {
+	if c == nil || c.Async == nil {
+		return 0
+	}
+	return c.Async.MaxConcurrent
 }
 
 // SoulCleanup is the local module-cache cleanup cycle.

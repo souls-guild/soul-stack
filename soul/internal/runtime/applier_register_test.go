@@ -218,11 +218,11 @@ func TestAggregateRegisterData_OR(t *testing.T) {
 			"changed": changed, "failed": failed, "timed_out": timedOut, "skipped": false,
 		})
 	}
-	registerByIdx := map[int32]*structpb.Struct{
+	registerByIdx := registerIndexFrom(map[int32]*structpb.Struct{
 		0: rd(true, false, false),  // changed
 		1: rd(false, true, false),  // failed
 		2: rd(false, false, false), // no-op
-	}
+	})
 
 	// All three plus a missing sentinel index (-1): changed||failed||timed → all
 	// true except timed_out (no source is timed_out).
@@ -249,7 +249,7 @@ func TestAggregateRegisterData_OR(t *testing.T) {
 	// timed_out source → aggregate timed_out=true AND failed=false (timed_out
 	// isn't failed in the registerByIdx source — buildRegisterData also sets
 	// failed=true on TIMED_OUT, but here we check the pure timed_out bit).
-	registerByIdx[3] = rd(false, false, true)
+	registerByIdx.record(3, "", rd(false, false, true))
 	timed := aggregateRegisterData([]int32{3}, registerByIdx).GetFields()
 	if !timed["timed_out"].GetBoolValue() {
 		t.Errorf(".timed_out = false, want true (idx 3 timed_out)")

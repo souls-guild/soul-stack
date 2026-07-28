@@ -47,6 +47,9 @@ soulprint:
 
 console: {...}                                 # interactive PTY policy; omitted → enabled with defaults
 
+async:
+  max_concurrent: 0                            # ceiling on concurrent `async:` tasks; 0/omitted → unlimited
+
 cleanup:
   modules_ttl_days: 30
   run_interval: 24h
@@ -138,6 +141,18 @@ This is **policy, not tuning**. A console is an interactive shell running as the
 | `console.shell` | `path` | `$SHELL` → `/bin/bash` → `/bin/sh` | The console program. **Must be an absolute path**: a bare name would be resolved through `PATH`, letting a shadowed binary in the daemon's environment become the console. |
 
 Chunk size and the output queue depth are deliberately **not** configurable — they are internal flow-control tuning with no operator-visible policy meaning.
+
+### `async:`
+
+The host's ceiling on intra-host task concurrency — how many `async:` tasks of one run may be in flight at once ([ADR-0075](../adr/0075-intra-host-async-tasks.md), [destiny/tasks.md §6](../destiny/tasks.md)). The whole block is optional; absent means unlimited.
+
+The ceiling lives here rather than in the DSL because the knowledge does: the plan's author knows the plan, not the machine it lands on, so a per-task field would invite tuning a number they cannot evaluate. Same reasoning as `console.max_sessions` above.
+
+| Field | Type | Default | Meaning |
+|---|---|---|---|
+| `async.max_concurrent` | `int` | `0` (unlimited) | At most N `async:` tasks in flight per run. Above the ceiling a task **waits for a slot** — it is never dropped and never fails for want of one, so a run is correct at any setting, only slower. `0`/omitted means unlimited: real fan-out is a handful of renders or fetches, so a mandatory cap would be ceremony around a non-problem. A negative value is a typo and is rejected. |
+
+Read at the start of each EventStream session, so a [hot-reload](#hot-reload) applies on the next reconnect; a run already under way keeps the ceiling it started with. The ceiling does **not** make concurrent modules safe on shared OS resources — that stays the plan author's responsibility, with the specifics in [destiny/tasks.md §6](../destiny/tasks.md).
 
 ### `cleanup:`
 
@@ -376,6 +391,9 @@ console:                     # opt.: whole block; omitted → enabled with defau
   rate_limit_kbps: 1024      # output ceiling per session
   kill_grace: 2s             # per step of the teardown escalation
   # shell: /bin/bash         # opt.: absolute path only; default $SHELL → bash → sh
+
+async:                       # opt.: whole block; omitted → unlimited
+  max_concurrent: 0          # >0 caps `async:` tasks in flight per run; over it a task waits for a slot
 
 cleanup:
   modules_ttl_days: 30
