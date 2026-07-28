@@ -172,14 +172,29 @@ func NewEnforcerFromSnapshot(snap *Snapshot) (*Enforcer, error) {
 //
 // Algorithm per rbac.md § Conflict semantics (OR among allows):
 //  1. Find the AID's roles.
-//  2. For each permission across the roles — Matches(resource, action, context).
+//  2. For each permission across the roles —
+//     MatchesInRole(resource, action, role.DefaultScope, context).
 //  3. At least one true → allow (return nil).
 //  4. Otherwise → ErrPermissionDenied.
 //
 // context is a runtime filter passed by middleware from the request (e.g.
 // `{"service": ..., "incarnation": ...}` for incarnation endpoints). An
-// empty map is valid — it means "no context"; in that case selector
-// permissions won't match, only bare permissions and full wildcard.
+// empty map is valid — it means "no context"; in that case scoped
+// permissions won't match, only unbounded ones and a bare `*`.
+//
+// The permission is matched THROUGH its role (NIM-219): the role's
+// `default_scope` bounds its bare permissions here exactly as it does in
+// [Enforcer.ResolvePurview] — one shared rule, [effectiveScope]. Reading a
+// permission on its own (the pre-NIM-219 [Permission.Matches] call) let a bare
+// right under a scoped role pass in ANY context, so a role confined to
+// `coven=dba` on every read path could still run against any coven.
+//
+// Consequence for callers, unchanged in direction but now real: a scoped role
+// is denied when the request carries no context, because no context satisfies a
+// predicate. That is the ADR-047 §d boundary — a route gate that cannot know the
+// scope yet asks the EXISTENCE question ([Enforcer.HoldsAction] behind
+// `RequireAction`), not this one. Check is for the endpoints whose scope context
+// is known from path/body before the action.
 func (e *Enforcer) Check(aid, resource, action string, context map[string]string) error {
 	if resource == "" || action == "" {
 		return fmt.Errorf("rbac: Check called with empty resource/action")
@@ -198,7 +213,7 @@ func (e *Enforcer) Check(aid, resource, action string, context map[string]string
 	}
 	for _, role := range roles {
 		for _, p := range role.Permissions {
-			if p.Matches(resource, action, context) {
+			if p.MatchesInRole(resource, action, role.DefaultScope, context) {
 				return nil
 			}
 		}

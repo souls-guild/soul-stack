@@ -16,20 +16,28 @@ type fixtureRole struct {
 	permissions []string
 	// defaultScope is the role default_scope string (ADR-047 S1); empty = NULL
 	// (dimension NOT introduced). Same syntax as a per-permission selector:
-	// `coven=v1,v2`.
+	// `coven=v1,v2`. On a role with a parent it is the attenuating DELTA
+	// (ADR-078(b)), conjoined with the parent's effective scope.
 	defaultScope string
+	// parent is the name of the role this one derives from (ADR-078,
+	// `rbac_roles.parent_role`); empty = a plain role.
+	parent string
 }
 
 func snapshotOf(roles ...fixtureRole) *Snapshot {
 	snap := &Snapshot{
-		Roles:      make(map[string][]string, len(roles)),
-		RoleScopes: make(map[string]string),
-		Membership: make(map[string][]string),
+		Roles:       make(map[string][]string, len(roles)),
+		RoleScopes:  make(map[string]string),
+		RoleParents: make(map[string]string),
+		Membership:  make(map[string][]string),
 	}
 	for _, r := range roles {
 		snap.Roles[r.name] = r.permissions
 		if r.defaultScope != "" {
 			snap.RoleScopes[r.name] = r.defaultScope
+		}
+		if r.parent != "" {
+			snap.RoleParents[r.name] = r.parent
 		}
 		for _, aid := range r.operators {
 			snap.Membership[aid] = append(snap.Membership[aid], r.name)

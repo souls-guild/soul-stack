@@ -91,34 +91,17 @@ func (e *Enforcer) ResolvePurview(aid, resource, action string) Purview {
 	var exprs []*ScopeExpr
 	for _, role := range roles {
 		for _, p := range role.Permissions {
-			if p.IsWildcard {
-				// Bare `*` → unrestricted (cluster-admin). A scoped `* on <expr>`
-				// (NIM-128) applies its scope to EVERY (resource, action), so it
-				// contributes its predicate here like a matching permission —
-				// it does NOT lift the operator to unrestricted. Role
-				// default_scope does not touch `*` (ADR-047(b) #1).
-				if p.Scope == nil {
-					return Purview{Unrestricted: true}
-				}
-				key := p.Scope.String()
-				if _, dup := seen[key]; !dup {
-					seen[key] = struct{}{}
-					exprs = append(exprs, p.Scope)
-				}
+			// A `*` covers every (resource, action) — [Permission.covers] says so,
+			// so a scoped `* on <expr>` (NIM-128) contributes its predicate to
+			// whatever pair the caller asked about, without lifting the operator
+			// to unrestricted. Bare `*` falls out below as eff==nil.
+			if !p.covers(resource, action) {
 				continue
 			}
-			if p.Resource != resource {
-				continue
-			}
-			if p.Action != "*" && p.Action != action {
-				continue
-			}
-			// Effective scope: per-perm overrides default_scope; bare inherits
-			// the role's default_scope (nil → unrestricted).
-			eff := p.Scope
-			if eff == nil {
-				eff = role.DefaultScope
-			}
+			// Effective scope, the rule shared with [Enforcer.Check]: per-perm
+			// overrides default_scope, bare `*` ignores it, a bare permission
+			// inherits it (nil → unrestricted).
+			eff := effectiveScope(p, role.DefaultScope)
 			if eff == nil {
 				return Purview{Unrestricted: true}
 			}

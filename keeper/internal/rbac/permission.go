@@ -45,7 +45,74 @@ type ScopeInput struct {
 	Traits       map[string][]string // trait key → values (scalar → one-element)
 }
 
-// Matches reports whether the permission satisfies the request.
+// covers reports whether the permission NAMES (resource, action) at all, before
+// any scope is considered: a full `*` covers everything, `<resource>.*` covers
+// every action of that resource. Split out of the matching logic because both
+// decision paths ([Enforcer.Check] and [Enforcer.ResolvePurview]) ask this same
+// question first and then part ways over scope.
+func (p Permission) covers(resource, action string) bool {
+	if p.IsWildcard {
+		return true
+	}
+	if p.Resource != resource {
+		return false
+	}
+	return p.Action == "*" || p.Action == action
+}
+
+// effectiveScope is the ONE rule that turns a permission plus the default_scope
+// of the role it is held through into the predicate that actually bounds it
+// (ADR-047(a)/(b)). nil result = unrestricted.
+//
+//   - a per-permission scope (`on <expr>`) FULLY overrides the role's
+//     default_scope — the role sets a base, an individual permission moves it;
+//   - a BARE `*` is never bounded by default_scope (exception #1: `*` literally
+//     means everything, or the bootstrap cluster-admin locks itself out —
+//     ADR-013/ADR-014). A scoped `* on X` needs no exception: it carries its own
+//     predicate and the rule above already returns it;
+//   - a bare permission INHERITS the role's default_scope; a role that
+//     introduces no scope at all leaves it unrestricted (exception #2,
+//     backcompat — existing roles do not break).
+//
+// Both the gate ([Enforcer.Check]) and the resolver ([Enforcer.ResolvePurview])
+// read this function, so the two can no longer disagree about what a role's
+// scope covers. They did until NIM-219: Check matched permissions role-blind,
+// so a bare permission under a `default_scope`d role passed in ANY context while
+// the read path was correctly confined — the gate was the wider of the two, on
+// the side where it is more dangerous (mutating endpoints).
+func effectiveScope(p Permission, roleScope *ScopeExpr) *ScopeExpr {
+	if p.Scope != nil {
+		return p.Scope
+	}
+	if p.IsWildcard {
+		return nil
+	}
+	return roleScope
+}
+
+// MatchesInRole reports whether the permission satisfies the request when held
+// through a role whose default_scope is roleScope (nil = the role introduces no
+// scope). This is the form a decision is made on — the role's scope is inherited
+// by its bare permissions (ADR-047(a)), exactly as [Enforcer.ResolvePurview]
+// inherits it; see [effectiveScope] for the shared rule.
+//
+// Contract of resource/action/context — see [Permission.Matches].
+func (p Permission) MatchesInRole(resource, action string, roleScope *ScopeExpr, context map[string]string) bool {
+	if !p.covers(resource, action) {
+		return false
+	}
+	return evalScope(effectiveScope(p, roleScope), scopeInputFromContext(context))
+}
+
+// Matches reports whether the permission satisfies the request, read in
+// ISOLATION — as if held through a role with no default_scope. It is the
+// roleScope==nil case of [Permission.MatchesInRole].
+//
+// A permission is not a decision: the role it hangs on may carry a
+// `default_scope` that bounds it (ADR-047(a)). Anything authorizing a request
+// must therefore go through [Enforcer.Check] / [Permission.MatchesInRole] and
+// pass that scope — calling Matches with a role-held permission reads a bare
+// right as unrestricted, which is precisely the escalation NIM-219 closed.
 //
 // Contract:
 //   - resource and action are non-empty strings representing a concrete
@@ -66,25 +133,7 @@ type ScopeInput struct {
 // resolver ([EvalScope] with a full [ScopeInput]). Mutating endpoints that
 // carry coven/service/incarnation/host in the request context use this path.
 func (p Permission) Matches(resource, action string, context map[string]string) bool {
-	if p.IsWildcard {
-		// Bare `*` = cluster-admin (any context). A scoped `* on <expr>`
-		// (NIM-128) is bounded — it matches only where its scope holds,
-		// enforced against the request context like any other permission.
-		if p.Scope == nil {
-			return true
-		}
-		return evalScope(p.Scope, scopeInputFromContext(context))
-	}
-	if p.Resource != resource {
-		return false
-	}
-	if p.Action != "*" && p.Action != action {
-		return false
-	}
-	if p.Scope == nil {
-		return true
-	}
-	return evalScope(p.Scope, scopeInputFromContext(context))
+	return p.MatchesInRole(resource, action, nil, context)
 }
 
 // scopeInputFromContext builds a [ScopeInput] from the flat request context

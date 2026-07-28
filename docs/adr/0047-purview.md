@@ -152,3 +152,32 @@ comparison (the correlation is opt-in per resource, via `ScopeColumns.Membership
 This **widens** what a deployed role scoped `coven=<x>` or `trait.<k>=<v>` can read: the hosts of a matching incarnation become visible where before only
 the incarnation itself was. That is the defect being fixed — an incarnation-level label that granted nothing on its own hosts — but it lands with the
 release, not behind a flag. Role resolution, attenuation and the subset check are untouched; only the rendering of a resolved purview changed.
+
+## Amendment (2026-07-28, NIM-219 — `default_scope` is inherited at the GATE, not only in the resolver)
+
+§a says a role's `default_scope` is "a scope selector inherited by **all** permissions of the role". `ResolvePurview` implemented that; **`Enforcer.Check` did not**. It walked `role.Permissions` and asked `Permission.Matches`, which sees a permission in isolation — and a bare permission (`Scope == nil`) matches **without looking at the context**. A role's `default_scope` lives on the role, never reached that call, and so a bare right under a scoped role passed in **any** context.
+
+The two authorization paths therefore disagreed about the same role. `incarnation.run` on a role scoped `default_scope: coven=dba` was correctly confined on every read (`ResolvePurview` → `coven=dba`) and **unbounded on the write path** (`Check(…, {"coven":"web"})` → allow). This is a **privilege escalation**, and on the more dangerous side of the split: the endpoints that use the scope-aware `Check` are the mutating ones, whose scope context is known from path/body precisely so it can be enforced.
+
+**Decision — option (a) of the ticket: `Check` applies §a.** A permission is matched **through its role**: the role's `default_scope` bounds its bare permissions at the gate exactly as it does in the resolver. The inheritance rule now exists **once**, as `effectiveScope(permission, roleScope)` in [`keeper/internal/rbac/permission.go`](../../keeper/internal/rbac/permission.go), and both `Check` and `ResolvePurview` read it. The three exceptions of §b are properties of that one function and hold on both paths by construction:
+
+- a per-permission `on <expr>` **fully overrides** the role's `default_scope` (§a);
+- a **bare `*`** is never bounded by `default_scope` (§b exception #1 — otherwise the bootstrap cluster-admin locks itself out, [ADR-013](0013-bootstrap-archon.md#adr-013-bootstrap-the-first-archon)/[ADR-014](0014-operator-identity.md#adr-014-operator-identity-model-archon)). A scoped `* on X` needs no exception — it carries its own predicate, which overrides as above;
+- a bare permission on a role with **no** `default_scope` stays **unrestricted** (§b exception #2, backcompat). The overwhelming majority of deployed roles are this case and are untouched.
+
+Self-lockout is unaffected: `HasWildcard` / `ClusterAdmins` still count a cluster-admin **only via a bare `*`** ([amendment 2026-07-19](#amendment-2026-07-19-nim-128--scoped-wildcard--on-scope--incarnation-glob)), and a `default_scope` on that role does not demote it. Derived roles are unaffected in mechanism and tightened in effect: the gate reads the **resolved** `default_scope`, so `effective_scope(parent) AND delta` ([amendment 2026-07-24](#amendment-2026-07-24-nim-179--default_scope-as-a-delta-on-a-derived-role)) now binds a bare permission on the write path too.
+
+**The invariant that replaces the folklore.** The gate and the resolver answer the same question for the same flat request context:
+
+```
+Check(aid, resource, action, ctx) == nil   ⟺   ResolvePurview(aid, resource, action).Match(ctx)
+```
+
+Both sides read `effectiveScope`, so this holds by construction; a guard test ranges the equivalence over every branch of the rule (bare/scoped `*`, bare permission with and without `default_scope`, per-perm override, resource wildcard, derived chain, revoked, unknown AID) so that re-introducing a second reading of a role's scope on one path fails immediately.
+
+**Compatibility — this expands denials, deliberately.** A role that carries a `default_scope` **and** relies on a bare permission is now refused wherever the request context does not satisfy the predicate, including a request that carries **no** context at all (nothing satisfies a predicate). Two consequences to expect on upgrade:
+
+- **A context-less operation under a scoped role is denied.** `default_scope: coven=dba` + bare `operator.create` no longer creates operators: `coven=dba` is inherited onto a right that has no coven to be judged on. This is §b default-deny reaching the gate, and it is exactly what a **scoped `*`** has done since NIM-128 ("a context-less cluster-op is denied under `* on X`"). A role that needs both a scope and a cluster-level right expresses it as two roles, or writes the cluster-level right with its own overriding scope.
+- **A read route is not affected.** Read endpoints gate on **existence** (`RequireAction` → `HoldsAction` → `ResolvePurview` non-empty, § two-layer authorization above), which a scoped role still passes; the narrowing stays in the handler. The false-deny failure mode of `Check(…, nil)` on a read path (the reason that boundary exists, NIM-144) is therefore not re-opened — but any route that gates a scoped-capable action with `Check(…, nil)` was mis-gated before this change and now shows it as a 403. The fix for such a route is `RequireAction`, never a return to a role-blind `Check`.
+
+Recorded as a **security fix in release notes**, in the same class as the S4 command-path narrowing above: for `Unrestricted` / bare-`*` operators nothing changes; for **scoped roles** the write path stops being wider than the read path.
