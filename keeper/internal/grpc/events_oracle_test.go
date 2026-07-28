@@ -14,6 +14,7 @@ import (
 	"google.golang.org/protobuf/types/known/structpb"
 
 	"github.com/souls-guild/soul-stack/keeper/internal/oracle"
+	"github.com/souls-guild/soul-stack/keeper/internal/soul"
 	keeperv1 "github.com/souls-guild/soul-stack/proto/gen/go/keeper/v1"
 	"github.com/souls-guild/soul-stack/shared/audit"
 	"github.com/souls-guild/soul-stack/shared/obs"
@@ -24,15 +25,30 @@ import (
 
 // oracleFakeDB implements oracleDB. SQL routing:
 //   - Query "FROM decrees"      → set of Decree;
-//   - QueryRow "FROM souls"     → subject's covens;
+//   - QueryRow "FROM souls"     → the host's OWN covens (souls.coven[]);
+//   - QueryRow inherited-labels → covens inherited from its incarnations;
+//   - QueryRow "incarnation_membership" → the membership EXISTS gate;
 //   - QueryRow "FROM oracle_fires" → cooldown-state (last fired);
 //   - Exec "oracle_fires"       → record fire.
+//
+// The label reads and the membership read are separate on purpose: since
+// NIM-124/ADR-080 they are separate facts in the product, and a fake that
+// conflated them could not tell a member from a host merely tagged with an
+// incarnation's name — the case the Oracle's guard exists to refuse.
 type oracleFakeDB struct {
-	decreeRows  func() (pgx.Rows, error)
-	soulCoven   []string
-	soulErr     error
-	lastFired   *time.Time
-	recordedFnc func(args []any)
+	decreeRows func() (pgx.Rows, error)
+	// soulCoven — labels attached to THIS host (souls.coven[]).
+	soulCoven []string
+	// memberOf — incarnations the host is bound to (incarnation_membership).
+	// Drives both the membership gate and, since an incarnation always
+	// contributes its own name on the coven axis, the inherited label set.
+	memberOf []string
+	// incarnationCoven — extra tags carried by those incarnations
+	// (incarnation.covens[]), inherited on top of their names.
+	incarnationCoven []string
+	soulErr          error
+	lastFired        *time.Time
+	recordedFnc      func(args []any)
 
 	// circuit-breaker (ADR-030(a), S4). bumpReturns — the fire_count that
 	// BumpCircuit (RETURNING) will return. bumpCalled — records that BumpCircuit
@@ -57,7 +73,7 @@ func (f *oracleFakeDB) Exec(_ context.Context, sql string, args ...any) (pgconn.
 	return pgconn.CommandTag{}, nil
 }
 
-func (f *oracleFakeDB) QueryRow(_ context.Context, sql string, _ ...any) pgx.Row {
+func (f *oracleFakeDB) QueryRow(_ context.Context, sql string, args ...any) pgx.Row {
 	switch {
 	case strings.Contains(sql, "FROM souls"):
 		if f.soulErr != nil {
@@ -70,6 +86,16 @@ func (f *oracleFakeDB) QueryRow(_ context.Context, sql string, _ ...any) pgx.Row
 			"host-a.example.com", "agent", "connected", f.soulCoven,
 			nil, time.Now(), nil, nil, nil, nil, nil,
 		}}
+	case strings.Contains(sql, soul.InheritedLabelsQueryMarker):
+		// Each incarnation contributes its name plus its own tags (ADR-080);
+		// no traits in these fixtures.
+		return oracleValRow{vals: []any{
+			append(append([]string{}, f.memberOf...), f.incarnationCoven...),
+			[]byte("[]"),
+		}}
+	case strings.Contains(sql, "incarnation_membership"):
+		// isMemberSQL: EXISTS(… incarnation_name = $1 AND sid = $2).
+		return oracleValRow{vals: []any{f.isMemberOf(args)}}
 	case strings.Contains(sql, "FROM oracle_fires"):
 		if f.lastFired == nil {
 			return oracleErrRow{err: pgx.ErrNoRows}
@@ -81,6 +107,25 @@ func (f *oracleFakeDB) QueryRow(_ context.Context, sql string, _ ...any) pgx.Row
 		return oracleValRow{vals: []any{f.bumpReturns}}
 	}
 	return oracleErrRow{err: pgx.ErrNoRows}
+}
+
+// isMemberOf answers the EXISTS gate from memberOf, reading the incarnation
+// name out of the query args ($1) so a fixture with several memberships is
+// answered per-incarnation rather than "member of something".
+func (f *oracleFakeDB) isMemberOf(args []any) bool {
+	if len(args) == 0 {
+		return false
+	}
+	want, ok := args[0].(string)
+	if !ok {
+		return false
+	}
+	for _, inc := range f.memberOf {
+		if inc == want {
+			return true
+		}
+	}
+	return false
 }
 
 func (f *oracleFakeDB) Query(_ context.Context, sql string, _ ...any) (pgx.Rows, error) {
@@ -330,7 +375,7 @@ func TestPortent_MatchEnqueuesScenario(t *testing.T) {
 	enq := &fakeEnqueuer{}
 	aw := &recordingAudit{}
 	db := &oracleFakeDB{
-		soulCoven: []string{"web-app", "web", "prod"},
+		soulCoven: []string{"web", "prod"}, memberOf: []string{"web-app"},
 		decreeRows: decreesRows(&oracle.Decree{
 			Name: "restart-web", OnBeacon: "svc-down",
 			SubjectCoven: []string{"web"}, IncarnationName: "web-app", ActionScenario: "restart",
@@ -399,8 +444,8 @@ func TestPortent_SubjectMismatch(t *testing.T) {
 func TestPortent_MembershipMismatch(t *testing.T) {
 	enq := &fakeEnqueuer{}
 	aw := &recordingAudit{}
-	// Subject IS in coven `web` (subject-match passes), BUT the Decree's target
-	// incarnation `other-app` is NOT among the host's covens → membership-check fail-closed → skip.
+	// Subject IS in coven `web` (subject-match passes), BUT the host is bound to
+	// no incarnation → membership-check fail-closed → skip.
 	db := &oracleFakeDB{
 		soulCoven: []string{"web"},
 		decreeRows: decreesRows(&oracle.Decree{
@@ -424,13 +469,69 @@ func TestPortent_MembershipMismatch(t *testing.T) {
 	}
 }
 
+// TestPortent_IncarnationScopedDecreeMatchesMember — the NIM-224 regression at
+// unit level: a Decree scoped `subject_coven: [<incarnation name>]` matches a
+// member that carries NO coven of its own. The name reaches the host only
+// through the inherited half of the label union (ADR-080) — reading
+// `souls.coven[]` alone, as the handler did before, yields an empty
+// intersection and the rule silently never fires.
+func TestPortent_IncarnationScopedDecreeMatchesMember(t *testing.T) {
+	enq := &fakeEnqueuer{}
+	db := &oracleFakeDB{
+		memberOf: []string{"web-app"},
+		decreeRows: decreesRows(&oracle.Decree{
+			Name: "restart-web", OnBeacon: "svc-down",
+			SubjectCoven: []string{"web-app"}, IncarnationName: "web-app",
+			ActionScenario: "restart", Cooldown: "5m", Enabled: true,
+		}),
+	}
+	h := newOracleHandler(t, db, enq, &recordingAudit{})
+
+	h.handlePortentEvent(context.Background(), "host-a.example.com", "sess", portent("svc-down", nil))
+
+	if len(enq.snapshot()) != 1 {
+		t.Fatalf("incarnation-scoped Decree should match its member, got %d enqueues", len(enq.snapshot()))
+	}
+}
+
+// TestPortent_CovenTagIsNotMembership — the guard that keeps the widening
+// above from becoming an escalation. The host carries a HOST-ATTACHED tag
+// spelled exactly like the Decree's incarnation, so the subject match passes
+// on the label union, but it holds no membership row. The gate must refuse:
+// resolving membership from the union would let a coven tag hand a host the
+// right to run a foreign incarnation's scenarios (ADR-030(b)).
+func TestPortent_CovenTagIsNotMembership(t *testing.T) {
+	enq := &fakeEnqueuer{}
+	aw := &recordingAudit{}
+	db := &oracleFakeDB{
+		soulCoven: []string{"other-app"}, // a tag, not a membership
+		decreeRows: decreesRows(&oracle.Decree{
+			Name: "restart-other", OnBeacon: "svc-down",
+			SubjectCoven: []string{"other-app"}, IncarnationName: "other-app",
+			ActionScenario: "restart", Cooldown: "5m", Enabled: true,
+		}),
+	}
+	h := newOracleHandler(t, db, enq, aw)
+
+	h.handlePortentEvent(context.Background(), "host-a.example.com", "sess", portent("svc-down", nil))
+
+	if len(enq.snapshot()) != 0 {
+		t.Error("a coven tag spelled like an incarnation must not pass the membership gate")
+	}
+	for _, e := range aw.snapshot() {
+		if e.EventType == audit.EventOracleFired {
+			t.Error("non-member: audit oracle.fired must NOT be written")
+		}
+	}
+}
+
 func TestPortent_SIDDecreeEnqueues(t *testing.T) {
 	enq := &fakeEnqueuer{}
 	aw := &recordingAudit{}
-	// sid-Decree: the subject is a specific SID; incarnation membership is checked
-	// against the host's covens (incarnation_name `web-app` ∈ covens), same as coven-Decree.
+	// sid-Decree: the subject is a specific SID; incarnation membership is still
+	// checked, against `incarnation_membership`, same as for a coven-Decree.
 	db := &oracleFakeDB{
-		soulCoven: []string{"web-app"},
+		memberOf: []string{"web-app"},
 		decreeRows: decreesRows(&oracle.Decree{
 			Name: "restart-host", OnBeacon: "svc-down",
 			SubjectSID: strptr("host-a.example.com"), IncarnationName: "web-app",
@@ -462,7 +563,7 @@ func TestPortent_SIDDecreeEnqueues(t *testing.T) {
 func TestPortent_WhereCELFilters(t *testing.T) {
 	enq := &fakeEnqueuer{}
 	db := &oracleFakeDB{
-		soulCoven: []string{"web-app", "web"},
+		soulCoven: []string{"web"}, memberOf: []string{"web-app"},
 		decreeRows: decreesRows(&oracle.Decree{
 			Name: "restart-crit", OnBeacon: "svc-down",
 			SubjectCoven: []string{"web"}, IncarnationName: "web-app", ActionScenario: "restart",
@@ -490,7 +591,7 @@ func TestPortent_CooldownBlocks(t *testing.T) {
 	enq := &fakeEnqueuer{}
 	recent := time.Now().UTC().Add(-1 * time.Minute) // within the 5m window
 	db := &oracleFakeDB{
-		soulCoven: []string{"web-app", "web"},
+		soulCoven: []string{"web"}, memberOf: []string{"web-app"},
 		lastFired: &recent,
 		decreeRows: decreesRows(&oracle.Decree{
 			Name: "restart-web", OnBeacon: "svc-down",
@@ -511,7 +612,7 @@ func TestPortent_CooldownBlocks(t *testing.T) {
 func TestPortent_MetricsEnqueuePath(t *testing.T) {
 	enq := &fakeEnqueuer{}
 	db := &oracleFakeDB{
-		soulCoven: []string{"web-app", "web"},
+		soulCoven: []string{"web"}, memberOf: []string{"web-app"},
 		decreeRows: decreesRows(&oracle.Decree{
 			Name: "restart-web", OnBeacon: "svc-down",
 			SubjectCoven: []string{"web"}, IncarnationName: "web-app", ActionScenario: "restart",
@@ -540,7 +641,7 @@ func TestPortent_MetricsCooldownPath(t *testing.T) {
 	enq := &fakeEnqueuer{}
 	recent := time.Now().UTC().Add(-1 * time.Minute)
 	db := &oracleFakeDB{
-		soulCoven: []string{"web-app", "web"},
+		soulCoven: []string{"web"}, memberOf: []string{"web-app"},
 		lastFired: &recent,
 		decreeRows: decreesRows(&oracle.Decree{
 			Name: "restart-web", OnBeacon: "svc-down",
@@ -587,7 +688,7 @@ func TestPortent_MetricsDefaultDeny(t *testing.T) {
 // coven-Decree on svc-down, with configurable bumpReturns/tripWins.
 func circuitDB(bumpReturns int, tripWins bool) *oracleFakeDB {
 	return &oracleFakeDB{
-		soulCoven:   []string{"web-app", "web"},
+		soulCoven: []string{"web"}, memberOf: []string{"web-app"},
 		bumpReturns: bumpReturns,
 		tripWins:    tripWins,
 		decreeRows: decreesRows(&oracle.Decree{
@@ -709,7 +810,7 @@ func TestPortent_EnqueueFailNoFireNoAudit(t *testing.T) {
 	aw := &recordingAudit{}
 	var fireRecorded bool
 	db := &oracleFakeDB{
-		soulCoven: []string{"web-app", "web"},
+		soulCoven: []string{"web"}, memberOf: []string{"web-app"},
 		// recordedFnc signals a write to oracle_fires (RecordFire). On the fail
 		// path it must not happen.
 		recordedFnc: func([]any) { fireRecorded = true },
@@ -749,7 +850,7 @@ func TestPortent_AuditPayloadExcludesEventData(t *testing.T) {
 	enq := &fakeEnqueuer{}
 	aw := &recordingAudit{}
 	db := &oracleFakeDB{
-		soulCoven: []string{"web-app", "web"},
+		soulCoven: []string{"web"}, memberOf: []string{"web-app"},
 		decreeRows: decreesRows(&oracle.Decree{
 			Name: "restart-web", OnBeacon: "svc-down",
 			SubjectCoven: []string{"web"}, IncarnationName: "web-app", ActionScenario: "restart",
@@ -798,7 +899,7 @@ func keysOf(m map[string]any) []string {
 }
 
 // TestPortent_SIDDecreeMembershipMismatch — sid-Decree, host matched by SID, BUT
-// the Decree's target incarnation is NOT among the host's covens → membership
+// the host is not bound to the Decree's target incarnation → membership
 // barrier fail-closed → skip (qa coverage_gap #5: the second membership barrier
 // applies not only to coven-Decree but also to sid-Decree). enqueue/fire/audit are NOT written.
 func TestPortent_SIDDecreeMembershipMismatch(t *testing.T) {
@@ -806,9 +907,9 @@ func TestPortent_SIDDecreeMembershipMismatch(t *testing.T) {
 	aw := &recordingAudit{}
 	var fireRecorded bool
 	// The host's SID matches the Decree's subject_sid (subject-match passes), but
-	// incarnation `other-app` is NOT among the host's covens (`web-app`) → membership fail.
+	// the host is bound to `web-app`, not to the Decree's `other-app` → membership fail.
 	db := &oracleFakeDB{
-		soulCoven:   []string{"web-app"},
+		memberOf:    []string{"web-app"},
 		recordedFnc: func([]any) { fireRecorded = true },
 		decreeRows: decreesRows(&oracle.Decree{
 			Name: "restart-host", OnBeacon: "svc-down",
@@ -855,21 +956,33 @@ func TestActiveVigilsForSID_ConvertsToVigilDef(t *testing.T) {
 	}
 }
 
-// oracleVigilDB — fake for VigilSource: souls (covens) + vigils (set).
+// oracleVigilDB — fake for VigilSource: souls (own covens) + the inherited
+// labels of the host's incarnations + vigils (set).
 type oracleVigilDB struct {
 	soulCoven []string
-	vigils    [][]any
+	// memberOf / incarnationCoven — same split as [oracleFakeDB]: the
+	// incarnations the host is bound to (each contributing its name) and the
+	// extra tags those incarnations carry.
+	memberOf         []string
+	incarnationCoven []string
+	vigils           [][]any
 }
 
 func (f *oracleVigilDB) Exec(context.Context, string, ...any) (pgconn.CommandTag, error) {
 	return pgconn.CommandTag{}, nil
 }
 func (f *oracleVigilDB) QueryRow(_ context.Context, sql string, _ ...any) pgx.Row {
-	if strings.Contains(sql, "FROM souls") {
+	switch {
+	case strings.Contains(sql, "FROM souls"):
 		// traits jsonb (ADR-060) — slot after coven; NULL → empty map in scanSoul.
 		return oracleValRow{vals: []any{
 			"host-a.example.com", "agent", "connected", f.soulCoven,
 			nil, time.Now(), nil, nil, nil, nil, nil,
+		}}
+	case strings.Contains(sql, soul.InheritedLabelsQueryMarker):
+		return oracleValRow{vals: []any{
+			append(append([]string{}, f.memberOf...), f.incarnationCoven...),
+			[]byte("[]"),
 		}}
 	}
 	return oracleErrRow{err: pgx.ErrNoRows}

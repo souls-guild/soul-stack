@@ -12,8 +12,9 @@ import (
 // 2026-07-17, NIM-124): the source of truth for "which incarnation a host
 // belongs to", replacing the former derived fact `incarnation.name ∈
 // souls.coven[]`. The roster read (topology), the `Incarnation` bulk selector
-// (soul), the Choir member check, and form-prep host listing all resolve
-// membership through `incarnation_membership` (migration 099).
+// (soul), the Choir member check, form-prep host listing, and the Oracle's
+// cross-incarnation guard ([IsMember], NIM-224) all resolve membership through
+// `incarnation_membership` (migration 099).
 
 const insertMembershipSQL = `
 INSERT INTO incarnation_membership (incarnation_name, sid, bound_by_aid)
@@ -164,6 +165,42 @@ func ListMembers(ctx context.Context, db ExecQueryRower, incName string) ([]Memb
 		return nil, fmt.Errorf("incarnation: iter members of %q: %w", incName, err)
 	}
 	return out, nil
+}
+
+const isMemberSQL = `
+SELECT EXISTS (
+    SELECT 1 FROM incarnation_membership
+    WHERE incarnation_name = $1 AND sid = $2
+)
+`
+
+// IsMember reports whether host `sid` is bound to incarnation `incName`. The
+// single-host form of the relation, for gates that admit or refuse ONE host
+// (the Oracle's cross-incarnation guard, ADR-030(b)).
+//
+// ★ A membership gate must NOT be answered from the label layer. Since ADR-080
+// a host's effective covens are its own UNIONED with those of every incarnation
+// it belongs to, so `incName ∈ effectiveCovens` is true both for a member and
+// for a host that merely carries a host-attached tag spelled like the
+// incarnation's name — and the latter is exactly the cross-incarnation
+// escalation such gates exist to refuse. Labels answer "may this rule see the
+// host"; only this relation answers "does the host belong here".
+//
+// An invalid name is an error, not a false: it means the caller passed
+// something that could never be a member, and a gate must not read that as a
+// quiet "no".
+func IsMember(ctx context.Context, db ExecQueryRower, incName, sid string) (bool, error) {
+	if !ValidName(incName) {
+		return false, fmt.Errorf("incarnation: is-member: invalid name %q", incName)
+	}
+	if sid == "" {
+		return false, fmt.Errorf("incarnation: is-member: empty sid")
+	}
+	var member bool
+	if err := db.QueryRow(ctx, isMemberSQL, incName, sid).Scan(&member); err != nil {
+		return false, fmt.Errorf("incarnation: is-member %q in %q: %w", sid, incName, err)
+	}
+	return member, nil
 }
 
 const listMemberSIDsSQL = `

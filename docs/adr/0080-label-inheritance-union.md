@@ -79,7 +79,7 @@
      one of two deliberately-attached labels invisible, and whichever way it is
      pointed it silently revokes access somebody was granted.
 
-  4. **Both consumers of labels read the union, and they read the same one.**
+  4. **Every consumer of labels reads the union, and they all read the same one.**
 
      - **RBAC visibility** — the `coven` and `trait` dimensions of a souls-scope
        predicate become "the host's own OR inherited", rendered as a correlated
@@ -89,10 +89,25 @@
      - **Targeting** — `soulprint.self.covens` / `.traits` and
        `soulprint.hosts[].*` project the union, so a `where:` predicate and a scope
        predicate never disagree about the same host.
+     - **Reactor subject binding** ([ADR-030](0030-vigil-oracle.md), added by
+       NIM-224) — the `coven` half of a Vigil's and a Decree's subject resolves
+       over the union too, so `coven: [<incarnation>]` binds a rule to that
+       incarnation's members. This is the reading that used to come free from the
+       injected name and was lost with it; both halves of the chain read it, since
+       a Vigil that never ships emits no Portent for the Decree to match.
 
-     Keeping these two in step is the point: they were already the two readers of
-     `souls.traits`, and a union applied to only one of them would be a new class
-     of bug.
+     Keeping these in step is the point: a union applied to some readers and not
+     others is a new class of bug — one that shows up as a rule matching nothing,
+     with no error anywhere.
+
+     **Membership is not a label question, and must never be answered from the
+     union.** `incName ∈ effectiveCovens` holds both for a member and for a host
+     merely carrying a host-attached tag spelled like the incarnation's name, so
+     any gate deciding *belonging* — the Oracle's cross-incarnation guard, the
+     Choir voice invariant, the roster — reads `incarnation_membership` directly.
+     The union widens what a rule may **see**; only the relation says where a host
+     **belongs**. Conflating them turns this ADR's widening into an escalation
+     path.
 
   5. **The per-soul write path is first-class again, and gated like Coven.**
      `POST /v1/souls/traits` (permission `soul.traits-assign`, MCP
@@ -174,4 +189,7 @@
   stands), [ADR-060](0060-traits.md) (the R1 materialized projection is
   superseded; items 1–4 and 6 of its read/target mechanics remain in force),
   [ADR-047](0047-purview.md) (the `coven` and `trait` dimensions of a souls-scope
-  predicate resolve over inherited labels as well as own ones).
+  predicate resolve over inherited labels as well as own ones),
+  [ADR-030](0030-vigil-oracle.md) (the `coven` half of a Vigil/Decree subject
+  resolves over the union; the membership-check keeps reading the relation —
+  NIM-224).

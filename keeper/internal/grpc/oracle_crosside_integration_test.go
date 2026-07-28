@@ -203,7 +203,7 @@ func TestIntegration_OracleCrossSide_PortentToPlannedApplyRun(t *testing.T) {
 	creator := aid
 	if err := soul.Insert(ctx, integrationPool, &soul.Soul{
 		SID: sid, Transport: soul.TransportAgent, Status: soul.StatusConnected,
-		Coven: []string{incName, "web"}, CreatedByAID: &creator,
+		Coven: []string{"web"}, CreatedByAID: &creator,
 	}); err != nil {
 		t.Fatalf("soul.Insert: %v", err)
 	}
@@ -213,6 +213,13 @@ func TestIntegration_OracleCrossSide_PortentToPlannedApplyRun(t *testing.T) {
 		Status: incarnation.StatusReady, CreatedByAID: &creator,
 	}); err != nil {
 		t.Fatalf("incarnation.Create: %v", err)
+	}
+	// Membership is a relation, not a coven value (NIM-124): the host carries
+	// only its own tag `web`, and belongs to `web-app` through
+	// incarnation_membership. Binding comes after Create — the relation has an
+	// FK on the incarnation row.
+	if err := incarnation.AddMembers(ctx, integrationPool, incName, []string{sid}, &creator); err != nil {
+		t.Fatalf("incarnation.AddMembers: %v", err)
 	}
 	if err := oracle.InsertVigil(ctx, integrationPool, &oracle.Vigil{
 		Name: "svc-down", Coven: []string{"web"}, IntervalSpec: "30s",
@@ -323,18 +330,30 @@ func TestIntegration_OracleCrossSide_PortentToPlannedApplyRun(t *testing.T) {
 	}
 }
 
-// TestIntegration_OracleCrossSide_IncarnationNotFoundNoApplyRun —
-// fail-closed on live PG: a Decree targets an incarnation that's not in
-// the registry → the live enqueuer returns an error → the handler does
-// NOT write fire/audit and no apply_runs row is created. Completes the
-// cross-side seam with its negative case (the consumer correctly
-// suppresses the reaction when the target is unreachable).
-func TestIntegration_OracleCrossSide_IncarnationNotFoundNoApplyRun(t *testing.T) {
+// TestIntegration_OracleCrossSide_EnqueueFailureNoFireNoAudit —
+// fail-closed on live PG: the reaction passes every gate but the live
+// enqueuer errors (the incarnation's service is unknown to the resolver)
+// → the handler does NOT write fire/audit and no apply_runs row is
+// created. Completes the cross-side seam with its negative case (the
+// consumer correctly suppresses the reaction when the target is
+// unreachable).
+//
+// The failure used to be staged as "the Decree names an incarnation that
+// does not exist". That shape stopped being reachable through this
+// handler with NIM-224: the membership gate now reads
+// `incarnation_membership`, which carries an FK on `incarnation` with ON
+// DELETE CASCADE (migration 099) — a host cannot be a member of an
+// incarnation that is not in the registry, so the gate refuses long
+// before the enqueuer runs. An unresolvable service is the same failure
+// (SelectByName → Resolve, one step later) staged where it can still
+// happen.
+func TestIntegration_OracleCrossSide_EnqueueFailureNoFireNoAudit(t *testing.T) {
 	resetOracleCrossSide(t)
 	ctx := context.Background()
 	const (
-		aid = "archon-alice"
-		sid = "host-b.example.com"
+		aid     = "archon-alice"
+		sid     = "host-b.example.com"
+		incName = "ghost-app"
 	)
 	if err := operator.Insert(ctx, integrationPool, &operator.Operator{
 		AID: aid, DisplayName: aid, AuthMethod: operator.AuthMethodJWT,
@@ -342,30 +361,39 @@ func TestIntegration_OracleCrossSide_IncarnationNotFoundNoApplyRun(t *testing.T)
 		t.Fatalf("operator.Insert: %v", err)
 	}
 	creator := aid
-	// The host is in coven `ghost-app` (membership will pass), but the
-	// incarnation `ghost-app` is NOT created → SelectByName fails →
-	// enqueuer error.
 	if err := soul.Insert(ctx, integrationPool, &soul.Soul{
 		SID: sid, Transport: soul.TransportAgent, Status: soul.StatusConnected,
-		Coven: []string{"ghost-app"}, CreatedByAID: &creator,
+		Coven: []string{"ghost"}, CreatedByAID: &creator,
 	}); err != nil {
 		t.Fatalf("soul.Insert: %v", err)
 	}
+	if err := incarnation.Create(ctx, integrationPool, &incarnation.Incarnation{
+		Name: incName, Service: "unknown-svc", ServiceVersion: "v1",
+		StateSchemaVersion: 1, State: map[string]any{},
+		Status: incarnation.StatusReady, CreatedByAID: &creator,
+	}); err != nil {
+		t.Fatalf("incarnation.Create: %v", err)
+	}
+	if err := incarnation.AddMembers(ctx, integrationPool, incName, []string{sid}, &creator); err != nil {
+		t.Fatalf("incarnation.AddMembers: %v", err)
+	}
 	if err := oracle.InsertVigil(ctx, integrationPool, &oracle.Vigil{
-		Name: "svc-down", Coven: []string{"ghost-app"}, IntervalSpec: "30s",
+		Name: "svc-down", Coven: []string{"ghost"}, IntervalSpec: "30s",
 		CheckAddr: "core.beacon.service_down", Enabled: true, CreatedByAID: &creator,
 	}); err != nil {
 		t.Fatalf("InsertVigil: %v", err)
 	}
 	if err := oracle.InsertDecree(ctx, integrationPool, &oracle.Decree{
 		Name: "restart-ghost", OnBeacon: "svc-down",
-		SubjectCoven: []string{"ghost-app"}, IncarnationName: "ghost-app",
+		SubjectCoven: []string{"ghost"}, IncarnationName: incName,
 		ActionScenario: "restart_service", Cooldown: "5m", Enabled: true, CreatedByAID: &creator,
 	}); err != nil {
 		t.Fatalf("InsertDecree: %v", err)
 	}
 
-	resolver := fixedResolver{service: "any", ref: artifact.ServiceRef{Name: "any"}}
+	// The resolver knows a different service than the incarnation carries →
+	// Resolve fails → enqueuer error.
+	resolver := fixedResolver{service: "other-svc", ref: artifact.ServiceRef{Name: "other-svc"}}
 	h, aw := newCrossSideHandler(t, resolver)
 
 	h.handlePortentEvent(ctx, sid, "session-y",
@@ -377,7 +405,7 @@ func TestIntegration_OracleCrossSide_IncarnationNotFoundNoApplyRun(t *testing.T)
 		t.Fatalf("count apply_runs: %v", err)
 	}
 	if cnt != 0 {
-		t.Errorf("enqueue-fail (incarnation not found): apply_runs should be empty, got %d", cnt)
+		t.Errorf("enqueue-fail: apply_runs should be empty, got %d", cnt)
 	}
 	// audit oracle.fired is NOT written (the reaction is suppressed before
 	// fire).
@@ -415,7 +443,7 @@ func seedV5TypedFixture(t *testing.T, ctx context.Context, beaconCheck, whereCEL
 	creator := aid
 	if err := soul.Insert(ctx, integrationPool, &soul.Soul{
 		SID: sid, Transport: soul.TransportAgent, Status: soul.StatusConnected,
-		Coven: []string{incName, "web"}, CreatedByAID: &creator,
+		Coven: []string{"web"}, CreatedByAID: &creator,
 	}); err != nil {
 		t.Fatalf("soul.Insert: %v", err)
 	}
@@ -425,6 +453,9 @@ func seedV5TypedFixture(t *testing.T, ctx context.Context, beaconCheck, whereCEL
 		Status: incarnation.StatusReady, CreatedByAID: &creator,
 	}); err != nil {
 		t.Fatalf("incarnation.Create: %v", err)
+	}
+	if err := incarnation.AddMembers(ctx, integrationPool, incName, []string{sid}, &creator); err != nil {
+		t.Fatalf("incarnation.AddMembers: %v", err)
 	}
 	if err := oracle.InsertVigil(ctx, integrationPool, &oracle.Vigil{
 		Name: "watch-v5", Coven: []string{"web"}, IntervalSpec: "30s",

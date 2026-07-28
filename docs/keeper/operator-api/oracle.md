@@ -6,6 +6,15 @@ Domain section [Operator API](../operator-api.md): endpoints `/v1/vigils*` + `/v
 
 Mapping endpoint ↔ MCP-tool ↔ permission (table of 8 routes) - in the root [operator-api.md → Oracle (8)](../operator-api.md). The full request/response scheme is [`openapi.yaml`](../openapi.yaml) (`VigilCreateRequest` / `VigilView` / `VigilListReply` / `DecreeCreateRequest` / `DecreeView` / `DecreeListReply` - **source of truth in form**). `vigil.*`/`decree.*` - NoSelector. Reactor flow (Portent → match Decree → enqueue scenario) by these permissions is **NOT controlled** - machine Soul-initiated path; security is based on the Decree subject binding ([ADR-030(b)](../../adr/0030-vigil-oracle.md)).
 
+## What `coven` matches on a subject
+
+The `coven` field of a Vigil or a Decree is matched against a host's **effective** labels: the tags on the host itself (`souls.coven[]`) **plus** everything it inherits from the incarnations it belongs to — each incarnation's own tags and its **name** ([ADR-080](../../adr/0080-label-inheritance-union.md)). Two consequences worth knowing before writing a rule:
+
+- `coven: ["<incarnation-name>"]` scopes a rule to that incarnation's hosts, and keeps covering hosts bound to it later. Nothing is stamped on any host — binding a member is enough.
+- A tag put on the incarnation (`incarnation.covens[]`) reaches its members too, so `coven: ["cache"]` reaches the hosts of every incarnation tagged `cache`.
+
+Matching a subject only decides **which hosts may trigger the rule**. A Decree additionally checks that the sending host is a **member** of its `incarnation_name`, and that check reads the membership relation, not the labels above — a host merely tagged with an incarnation's name is refused (fail-closed, no fire and no `oracle.fired` audit). Bind the host to the incarnation; a coven tag is not a substitute.
+
 ### `POST /v1/vigils` - create Vigil
 
 Permission: `vigil.create`. MCP-tool: `keeper.oracle.vigil.create`. Read-only by design (observes, does not mutate the host).

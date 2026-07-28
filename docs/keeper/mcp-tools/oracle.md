@@ -6,6 +6,8 @@ Domain section [MCP-tools directory](../mcp-tools.md): tools `keeper.oracle.vigi
 
 4-segment tool-name `keeper.oracle.<resource>.<action>` ↔ 2-segment permission `<resource>.<action>` (`vigil.create` / `decree.list` / …, selector - NoSelector). Business logic (validation `name`/`interval`/`check`/subject for Vigil; `name`/`on_beacon`/`incarnation`/`scenario`/subject/`where`-CEL for Decree) lives in `oracle.Service`; tool - transport. Tools are only available when the registry is connected; when disabled, the call returns `internal-error` ("oracle registry is not configured"). **Reactor flow (Portent → match Decree → enqueue) is NOT controlled by these tools** ([rbac.md §Oracle](../rbac.md)).
 
+A subject `coven` matches a host's **effective** labels — its own plus those inherited from its incarnations, the incarnation name included — so `coven: ["<incarnation>"]` scopes a rule to that incarnation's members. The Decree's separate membership check reads the membership relation, not those labels. Details: [operator-api/oracle.md → What `coven` matches on a subject](../operator-api/oracle.md).
+
 #### `keeper.oracle.vigil.create`
 
 Creates a Vigil at `vigils` (Soul-side check beacons: `check` - core-beacon address + `interval` + subject `coven` XOR `sid`). Read-only by design. Permission: `vigil.create`. Endpoint: [`POST /v1/vigils`](../operator-api/oracle.md). Async: no.
