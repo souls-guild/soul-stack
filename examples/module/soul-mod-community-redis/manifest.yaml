@@ -35,8 +35,8 @@ name: redis
 # The set is REPEATED IN FULL in every state's input (command is the canonical wording).
 # A promise in this comment is not a declaration: param-level strictness (ADR-0076,
 # NIM-163) checks a task against `spec.states.<state>.input` and nothing else, so a
-# state that omits a key it reads has no contract for it - the key passes unnoticed
-# today and gets REJECTED once strictness leaves advisory for plugins (NIM-204).
+# state that omits a key it reads has no contract for it - since NIM-204 enforced
+# strictness for plugins too (ADR-0076(t)) such a key is REJECTED on the host.
 # Alongside TLS the shared connect path (parseConnConfig) also reads addr/username/
 # password/db, so those repeat per state too.
 #

@@ -54,11 +54,22 @@ The input schema format inside `spec:` depends on `kind:`. For `soul_module` - S
 | Field | Type | Default | Meaning |
 |---|---|---|---|
 | `spec.states` | `map<state-name, {input, description?}>` | — | Map of supported states (or verb forms). The key is the state name (`installed` / `running` / `run` / ...). |
-| `spec.states.<name>.input` | input-schema (see [`docs/input.md`](../input.md)) | `{}` | Contract parameters for this state. `soul-lint` validates `params:` of each destiny task against this schema. |
+| `spec.states.<name>.input` | input-schema (see [`docs/input.md`](../input.md)) | `{}` | Contract parameters for this state — **enforced at run time**, see [The input declaration is a contract](#the-input-declaration-is-a-contract). |
 | `spec.states.<name>.description` | `string` (optional) | — | Human-readable description for documentation/UI. |
 | `spec.states.<name>.introduced_in` | `string` (optional) | — | The engine release that added **this state**, same grammar as the top-level field. |
 | `spec.states.<name>.input.<param>.introduced_in` | `string` (optional) | — | The engine release that added **this parameter**. The granularity that matters most: a new parameter on a long-standing state is invisible to an author, and an older engine rejects it as `unknown_param`. |
 | `spec.states.<name>.input.<param>.deprecated` | `{since, removed_in, use?}` (optional) | — | The param is still honored but is on its way out ([ADR-0076](../adr/0076-engine-compat-window.md), amendment (r)). See [Deprecating a param](#deprecating-a-param). |
+
+#### The input declaration is a contract
+
+Before applying a task the Soul checks its params against the manifest that ships **beside the module binary on that host**. A key the state does not declare fails the task with `module.unknown_param` and the module never runs, so the host is untouched when it fires ([ADR-0076(o)](../adr/0076-engine-compat-window.md), amendment (t)). The same rule holds on the `dry_run` path — a plan that skipped the check would answer "no drift" for a param the module never reads.
+
+This means an under-declared manifest is a **bug in the module**, not a cosmetic omission: a param the plugin reads but does not declare stops arriving. Declare every key the module accepts on every state that accepts it — including keys shared across states, which a header comment does not declare.
+
+Two consequences for a plugin author:
+
+- **The manifest on the host is the one that gates**, not the copy in a service repo. Fixing a manifest means shipping a new plugin version.
+- **Removing a param is a breaking change** and goes through the deprecation window below. Adding one is safe in the only-add direction: an older definition passes a subset of what a newer manifest declares.
 
 #### Deprecating a param
 

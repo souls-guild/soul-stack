@@ -193,6 +193,33 @@ Artifact versioning — via git ref ([ADR-007](docs/adr/0007-versioning-git-ref.
 
 ### Changed
 
+- **BREAKING for plugin authors — a custom module's manifest now gates its
+  params** ([ADR-0076](docs/adr/0076-engine-compat-window.md), amendment (t)).
+  A param that `spec.states.<state>.input` does not declare fails the task with
+  `module.unknown_param` and the module never runs, exactly as it already did
+  for `core.*`. Until now the same key was logged and the task went on, so a
+  module quietly did its old job while the thing the author asked for never
+  happened.
+
+  **What breaks:** any plugin whose manifest under-declares — a param the module
+  reads but never listed, or a key shared across states and declared on only
+  some of them. Those tasks now fail loudly instead of silently doing nothing.
+  **What to do:** declare every key the module accepts on every state that
+  accepts it, and ship a new plugin version — the manifest that gates is the one
+  beside the binary on the host, not a copy in a service repo. The failure names
+  the offending keys and everything the host does accept, so one run is enough
+  to fix it.
+
+  There is deliberately **no opt-in flag**. A manifest carrying an unknown key
+  is not merely ungated on an older Soul — plugin discovery skips the whole slot
+  on a decode error, so the module would disappear entirely (`module.not_found`).
+  And a declaration that needs a second declaration saying "I mean it" is not a
+  declaration: `input:` is the contract in both manifest homes or in neither.
+
+  From here the contract can only shrink through the declared window: mark a
+  param `deprecated: {since, removed_in, use?}`, keep honoring it for at least
+  two minor releases, and only then drop the key.
+
 - Package renames, dropping a doubled `soul-`: `soul-stack-soul-lint` →
   **`soul-stack-lint`**, `soul-stack-soul-trial` → **`soul-stack-trial`**. The
   binaries (`soul-lint`, `soul-trial`) are unchanged. Both packages declare

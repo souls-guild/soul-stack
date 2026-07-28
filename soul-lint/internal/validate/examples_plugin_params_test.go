@@ -7,9 +7,9 @@ package validate
 // Keeper's static check (shared/config.validateModuleParams) covers namespace
 // `core` only — a plugin manifest normally lives on disk next to its binary and
 // is not resolvable while linting. In this repo both halves ARE checked in, so
-// the audit can run, and it has to: the runtime gate is advisory for plugins
-// (ADR-0076(q)), so an undeclared key is silently ignored today and becomes a
-// hard module.unknown_param the moment NIM-204 flips it to enforced. The
+// the audit can run, and it has to: since NIM-204 the runtime gate is enforced
+// for plugins too (ADR-0076(t)), so an undeclared key here is a live
+// module.unknown_param on the host, not a log line. The
 // per-plugin table guard lives with each plugin (see
 // examples/module/soul-mod-community-redis/manifest_test.go); this one catches
 // the other direction — a scenario reaching for a param no manifest declares.
@@ -70,7 +70,7 @@ func TestExamples_PluginTaskParamsAreDeclared(t *testing.T) {
 			for _, key := range sortedParamKeys(task.params) {
 				if _, declared := def.Input[key]; !declared {
 					t.Errorf("%s: %s receives param %q, which the manifest does not declare "+
-						"(silently ignored today, module.unknown_param once plugin strictness is enforced)",
+						"— this task FAILS on a host with module.unknown_param (ADR-0076(t))",
 						rel, task.module, key)
 				}
 			}

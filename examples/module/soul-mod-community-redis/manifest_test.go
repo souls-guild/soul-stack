@@ -1,9 +1,9 @@
 // Guard on the manifest ↔ implementation contract (NIM-206).
 //
 // `spec.states.<state>.input` is the ONLY thing param-level strictness reads
-// (ADR-0076, NIM-163): a key a state omits has no declaration, so today it slips
-// through unnoticed and after NIM-204 (strictness leaves advisory for plugins) a
-// legitimate call carrying it FAILS. A prose promise in the manifest header is
+// (ADR-0076, NIM-163): a key a state omits has no declaration, so since NIM-204
+// enforced strictness for plugins too (ADR-0076(t)) a legitimate call carrying
+// it FAILS with module.unknown_param. A prose promise in the manifest header is
 // not a declaration — four states used to carry that promise and declare nothing,
 // which is what this file exists to prevent from coming back.
 //

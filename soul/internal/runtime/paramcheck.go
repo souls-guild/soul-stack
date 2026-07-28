@@ -17,6 +17,7 @@ import (
 	"fmt"
 	"log/slog"
 	"sort"
+	"strings"
 
 	"google.golang.org/protobuf/types/known/structpb"
 
@@ -25,23 +26,22 @@ import (
 	"github.com/souls-guild/soul-stack/shared/plugin"
 )
 
-// ParamStrictness — what a layer's input declaration is worth at runtime. The
-// two manifest homes carry different guarantees: a core manifest is EMBEDDED
-// (go:embed), so declaration and implementation cannot drift and it is enforced;
-// a custom module's manifest sits beside its binary, was never enforced before,
-// and under-declares in practice, so it only warns (ADR-0076 amendment (q)).
+// ParamStrictness — whether a layer states an input contract for a module at
+// all. Two values, not three: a manifest either declares what the module
+// accepts or there is no manifest. A declaration that needs a second
+// declaration saying "I mean it" is not a declaration, so both manifest homes —
+// core embedded via go:embed, custom beside its binary — gate the same way
+// (ADR-0076 amendment (t)).
 type ParamStrictness int
 
 const (
-	// ParamsUnchecked — no enforceable contract here: the layer carries no
-	// manifest for the module (core.augur), or the state is unknown to it. The
-	// task dispatches unchecked, exactly as before.
+	// ParamsUnchecked — no contract here: the layer carries no manifest for the
+	// module (core.augur), or the state is unknown to it. The task dispatches
+	// unchecked — absence of a declaration is not a declaration of absence.
 	ParamsUnchecked ParamStrictness = iota
-	// ParamsAdvisory — a declaration exists but was not authored under
-	// enforcement: an unknown param is logged, the task still runs.
-	ParamsAdvisory
-	// ParamsEnforced — the declaration is complete by construction: an unknown
-	// param FAILS the task with module.unknown_param.
+	// ParamsEnforced — the manifest declares this state's input, so an unknown
+	// param FAILS the task with module.unknown_param. Shrinking that contract
+	// goes through `deprecated:` (ADR-0076(r)), never by dropping a key.
 	ParamsEnforced
 )
 
@@ -58,9 +58,7 @@ type ParamSchema interface {
 // NewCoreParamSchema decorates the static core layer with the manifest contract
 // embedded in THIS binary (shared/coremanifest) — the very declaration keeper
 // validates the author's text against, so the two gates can never disagree
-// about what a core module accepts. Enforced: go:embed puts the manifest and
-// the implementation in the same artifact, so the declaration cannot lag behind
-// the module the way an on-disk plugin manifest can.
+// about what a core module accepts.
 //
 // A core module with no embedded manifest (core.augur) yields ParamsUnchecked
 // rather than "accepts nothing" — absence of a declaration is not a declaration
@@ -88,9 +86,8 @@ var transportParams = map[string]map[string]struct{}{
 }
 
 // checkParams rejects a param that this binary's own manifest does not declare
-// (ADR-0076). Returns nil when the task is clean, when no contract exists for
-// module+state, or when the contract is advisory (the unknown param is logged
-// instead).
+// (ADR-0076). Returns nil when the task is clean or when no contract exists for
+// module+state.
 //
 // Only the UNKNOWN direction is enforced. A missing required param is left to
 // keeper's static check (shared/config.validateModuleParams) and to the module
@@ -130,22 +127,23 @@ func (r *ApplyRunner) checkParams(module, state, taskName string, params *struct
 	}
 	sort.Strings(unknown)
 
-	if strictness == ParamsAdvisory {
-		slog.Default().Warn("runtime: task carries params this module does not declare",
-			slog.String("module", addr),
-			slog.String("task", taskName),
-			slog.Any("params", unknown),
-			slog.String("hint", "the module will ignore them - declare them in its manifest input (ADR-0076)"))
-		return nil
-	}
-
 	return &keeperv1.TaskError{
 		Code:   "module.unknown_param",
 		Module: module,
 		Message: fmt.Sprintf(
-			"%s does not accept %s (task %q) - this soul implements %s; the task was NOT applied, upgrade the soul binary or drop the param (ADR-0076)",
-			addr, quoteList(unknown), taskName, quoteList(sortedKeys(declared))),
+			"%s does not accept %s (task %q) - this host implements %s; the task was NOT applied, %s or drop the param (ADR-0076)",
+			addr, quoteList(unknown), taskName, quoteList(sortedKeys(declared)), upgradeHint(module)),
 	}
+}
+
+// upgradeHint names the artifact that actually carries the contract: a core
+// manifest is embedded in the soul binary, a custom module's ships with the
+// plugin and is upgraded independently of the agent.
+func upgradeHint(module string) string {
+	if strings.HasPrefix(module, "core.") {
+		return "upgrade the soul binary"
+	}
+	return "upgrade the module (its manifest ships beside its binary)"
 }
 
 func sortedKeys(m map[string]plugin.InputParamDef) []string {

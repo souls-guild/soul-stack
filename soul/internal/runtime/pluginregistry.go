@@ -131,10 +131,11 @@ func (r *PluginRegistry) Lookup(name string) (module.SoulModule, bool) {
 
 // StateInput serves the input contract from the manifest discovered beside the
 // plugin binary — the only place a custom module's params are described at all
-// (keeper's static check covers namespace `core` only). Advisory, not enforced:
-// these manifests predate any enforcement and under-declare in practice, so an
-// unknown param is reported without failing the task (ADR-0076 amendment,
-// [ParamStrictness]).
+// (keeper's static check covers namespace `core` only). Enforced, like core:
+// the manifest IS the contract in both homes, and an opt-in "enforce me" key
+// could not be added anyway — an unknown key makes DiscoverSlot skip the whole
+// slot, so a manifest carrying it would delete the module on an older Soul
+// rather than merely fail to gate it (ADR-0076 amendment (t)).
 func (r *PluginRegistry) StateInput(module, state string) (map[string]plugin.InputParamDef, ParamStrictness) {
 	r.mu.RLock()
 	d, ok := r.mods[module]
@@ -146,7 +147,7 @@ func (r *PluginRegistry) StateInput(module, state string) (map[string]plugin.Inp
 	if !ok {
 		return nil, ParamsUnchecked
 	}
-	return def.Input, ParamsAdvisory
+	return def.Input, ParamsEnforced
 }
 
 // pluginSoulModule adapts one-shot spawning to sdk/module.SoulModule. An

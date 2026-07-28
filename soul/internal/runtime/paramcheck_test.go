@@ -205,41 +205,99 @@ func TestParams_DryRunRejectsUnknownParam(t *testing.T) {
 	}
 }
 
-// TestParams_PluginParamsAreAdvisory — a custom module's manifest was never
-// enforced anywhere and under-declares in practice, so an undeclared param must
-// NOT fail the task (ADR-0076 amendment). The day that flips, this test is the
-// one to change.
-func TestParams_PluginParamsAreAdvisory(t *testing.T) {
+// pluginLayer builds a runner over one custom module whose manifest declares
+// `input` on state `applied`, and reports whether the plugin was ever spawned.
+func pluginLayer(t *testing.T, input map[string]sharedplugin.InputParamDef) (*ApplyRunner, *fakeSpawner, *PluginRegistry) {
+	t.Helper()
 	d := makeDiscovered("acme", "widget")
 	d.Manifest.Spec.States = map[string]sharedplugin.StateDef{
-		"applied": {Description: "x", Input: map[string]sharedplugin.InputParamDef{"name": {Type: "string"}}},
+		"applied": {Description: "x", Input: input},
 	}
-	pluginReg := NewPluginRegistry(&fakeSpawner{makeSession: func() *fakeSession {
+	spawner := &fakeSpawner{makeSession: func() *fakeSession {
 		return &fakeSession{events: []*pluginv1.ApplyEvent{{Changed: true}}}
-	}}, []pluginhost.Discovered{d}, nil)
+	}}
+	reg := NewPluginRegistry(spawner, []pluginhost.Discovered{d}, nil)
+	return NewApplyRunner(NewCompositeRegistry(coreLayer(nil), reg), nil), spawner, reg
+}
 
-	r := NewApplyRunner(NewCompositeRegistry(coreLayer(nil), pluginReg), nil)
+func runPluginTask(t *testing.T, r *ApplyRunner, params map[string]any) *recordingSink {
+	t.Helper()
 	sink := &recordingSink{}
 	if err := r.Run(context.Background(), &keeperv1.ApplyRequest{
 		ApplyId: "a",
 		Tasks: []*keeperv1.RenderedTask{{
 			Name:   "t",
 			Module: "acme.widget.applied",
-			Params: mustStruct(t, map[string]any{"name": "w", "tls_ca": "PEM"}),
+			Params: mustStruct(t, params),
 		}},
 	}, sink); err != nil {
 		t.Fatalf("Run: %v", err)
 	}
-	if got := sink.taskEvents[0].GetStatus(); got == keeperv1.TaskStatus_TASK_STATUS_FAILED {
-		t.Fatalf("an undeclared plugin param failed the task: %v", sink.taskEvents[0].GetError())
+	return sink
+}
+
+// TestParams_UndeclaredPluginParamFails — THE guard of the (t) amendment: a
+// custom module's manifest gates exactly like a core one. Before this, an
+// undeclared key was logged and the task ran on, so the module quietly did its
+// old job while what the author asked for never happened.
+func TestParams_UndeclaredPluginParamFails(t *testing.T) {
+	r, spawner, reg := pluginLayer(t, map[string]sharedplugin.InputParamDef{"name": {Type: "string"}})
+	sink := runPluginTask(t, r, map[string]any{"name": "w", "tls_ca": "PEM"})
+
+	if spawner.spawnCount != 0 {
+		t.Fatal("the plugin was spawned despite an undeclared param - the host was touched")
 	}
-	// The mechanism is live even though it does not gate: the manifest resolved.
-	in, strictness := pluginReg.StateInput("acme.widget", "applied")
-	if strictness != ParamsAdvisory {
-		t.Errorf("plugin strictness = %v, want ParamsAdvisory", strictness)
+	ev := sink.taskEvents[0]
+	if ev.GetStatus() != keeperv1.TaskStatus_TASK_STATUS_FAILED {
+		t.Fatalf("status = %v, want FAILED", ev.GetStatus())
 	}
-	if _, ok := in["name"]; !ok {
-		t.Error("plugin manifest input did not resolve")
+	if got := ev.GetError().GetCode(); got != "module.unknown_param" {
+		t.Errorf("error code = %q, want module.unknown_param", got)
+	}
+	if msg := ev.GetError().GetMessage(); !strings.Contains(msg, "tls_ca") {
+		t.Errorf("message does not name the param: %q", msg)
+	}
+	// A custom module is upgraded independently of the agent, so "upgrade the
+	// soul binary" would send the operator after the wrong artifact.
+	if msg := ev.GetError().GetMessage(); strings.Contains(msg, "soul binary") {
+		t.Errorf("the message points at the soul binary for a plugin param: %q", msg)
+	}
+	if _, strictness := reg.StateInput("acme.widget", "applied"); strictness != ParamsEnforced {
+		t.Errorf("plugin strictness = %v, want ParamsEnforced", strictness)
+	}
+}
+
+// TestParams_DeclaredPluginParamsPass — the regression the flip must not cause:
+// a manifest that declares what the scenario passes still dispatches.
+func TestParams_DeclaredPluginParamsPass(t *testing.T) {
+	r, spawner, _ := pluginLayer(t, map[string]sharedplugin.InputParamDef{
+		"name":   {Type: "string"},
+		"tls":    {Type: "bool"},
+		"tls_ca": {Type: "string"},
+	})
+	sink := runPluginTask(t, r, map[string]any{"name": "w", "tls": true, "tls_ca": "PEM"})
+
+	if spawner.spawnCount != 1 {
+		t.Fatalf("a fully declared task did not reach the plugin: %v", sink.taskEvents[0].GetError())
+	}
+}
+
+// TestParams_DeprecatedPluginParamStillApplies — with the contract enforced,
+// `deprecated:` (ADR-0076(r)) is the ONLY way a plugin may shrink it: the param
+// keeps working for its whole declared window, and only leaving the manifest at
+// removed_in turns the identical task text into unknown_param. A deprecation
+// that failed on the spot would be indistinguishable from a removal.
+func TestParams_DeprecatedPluginParamStillApplies(t *testing.T) {
+	r, spawner, _ := pluginLayer(t, map[string]sharedplugin.InputParamDef{
+		"addr": {Type: "string"},
+		"address": {Type: "string", Deprecated: &sharedplugin.DeprecatedDef{
+			Since: "0.4.0", RemovedIn: "0.6.0", Use: "addr",
+		}},
+	})
+	sink := runPluginTask(t, r, map[string]any{"address": "10.0.0.1"})
+
+	if spawner.spawnCount != 1 {
+		t.Fatalf("a deprecated param was rejected instead of warned: %v", sink.taskEvents[0].GetError())
 	}
 }
 
