@@ -7,6 +7,33 @@ Artifact versioning — via git ref ([ADR-007](docs/adr/0007-versioning-git-ref.
 
 ### Added
 
+- **The `audit:` block now does what it says** ([ADR-022(i)](docs/adr/0022-audit-pipeline.md),
+  amendment 2026-07-27). `audit.enabled: false` used to turn nothing off:
+  neither it nor `otel_export` had a consumer anywhere in the write path, so the
+  config promised control over the audit trail that did not exist.
+
+  `enabled` is now enforced by a single gate over the shared `audit.Writer`
+  where that writer is assembled, so all twenty-odd initiators honor it and a new
+  one cannot forget to. `otel_export` switches a dual-write that is now actually
+  wired (`auditotel` under `auditmulti`, assembled when `otel.enabled` is set —
+  with no OTel stack there is nothing to export to). `retention_days`
+  materializes the `purge_audit_old` Reaper rule when none is declared, instead
+  of being a number nobody reads.
+
+  **Turning the audit off is itself audited.** `audit.disabled` is written
+  in-line ahead of the first event it suppresses, and the reload pair is written
+  regardless of the toggle — otherwise the config swap that stops the trail would
+  be journaled through an already-closed gate and leave no record of who stopped
+  it. `audit.enabled` marks the other end of the window. The block stays out of
+  the `SettingsStore` overlay by [ADR-0073(j.2)](docs/adr/0073-keeper-runtime-config-pg.md):
+  it is a security gate, so it stays a deliberate edit to a host's `keeper.yml`
+  rather than an API call. `keeper init` is not gated — bootstrap of the first
+  Archon must leave a record whatever the flag says.
+
+  Both fields are `*bool` now: `audit:` with only `retention_days` set used to
+  resolve to "audit off" through the Go zero value, which would have silenced the
+  pipeline the moment the flag started being honored.
+
 - **MCP `keeper.soul.run-command` — the non-interactive console**
   ([ADR-0074](docs/adr/0074-interactive-console-pty.md), amendment 2026-07-27).
   An agent needs what an operator needs — run this on that host — but cannot use

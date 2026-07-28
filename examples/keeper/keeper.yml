@@ -59,6 +59,23 @@ logging:
     max_files: 10
     compress: true
 
+# Audit pipeline (ADR-022). All three fields are hot-reloadable.
+#
+# enabled: false stops every write-path initiator — keep it true in production,
+# it is what makes the compliance trail exist. Flipping it is journaled by
+# `audit.disabled` / `audit.enabled` before the trail goes quiet, and the reload
+# events themselves are always written.
+#
+# otel_export duplicates each event into an OTel span; it needs `otel.enabled`
+# above, otherwise there is nothing to export to.
+#
+# retention_days is the day-form alias of reaper.rules.purge_audit_old.max_age
+# below — the two must agree (`audit_retention_mismatch` otherwise).
+audit:
+  enabled: true
+  otel_export: true
+  retention_days: 365
+
 # The Service registry and the default_destiny_source scalar were moved to
 # Postgres (ADR-029). Source of truth — the DB (`service_registry` +
 # `keeper_settings`), management — via `service.*` OpenAPI/MCP (see

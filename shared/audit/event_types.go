@@ -1184,4 +1184,22 @@ const (
 	// authorized it. The command line itself is not in the payload, the same
 	// way `console.opened` holds no keystrokes.
 	EventConsoleCommand EventType = "console.command"
+
+	// EventAuditDisabled — `audit.enabled` went true → false on this instance
+	// (ADR-022(i), NIM-194). `source: signal` or `keeper_internal` (whichever
+	// reload path swapped the config), `archon_aid: NULL` — the toggle lives in
+	// `keeper.yml`, not behind an Archon-facing API. Payload: `{kid}`.
+	//
+	// The write BYPASSES the gate it announces: an event recording that the
+	// trail stops must itself land in the trail, so this type is on the gate's
+	// always-write list (keeper/internal/auditgate). Without the bypass the last
+	// thing the audit log would show is an unrelated event, and the gap that
+	// follows would have no explanation in it.
+	EventAuditDisabled EventType = "audit.disabled"
+
+	// EventAuditEnabled — `audit.enabled` went false → true (ADR-022(i),
+	// NIM-194). Same source/payload as [EventAuditDisabled]; it needs no bypass
+	// (the gate is open by the time it is written) and exists so the trail
+	// bounds the blind window on both ends rather than only its start.
+	EventAuditEnabled EventType = "audit.enabled"
 )

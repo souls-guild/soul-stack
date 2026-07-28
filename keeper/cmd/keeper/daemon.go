@@ -17,6 +17,7 @@ import (
 
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/prometheus/client_golang/prometheus"
+	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/codes"
 
@@ -28,6 +29,9 @@ import (
 	"github.com/souls-guild/soul-stack/keeper/internal/applybus"
 	"github.com/souls-guild/soul-stack/keeper/internal/applyrun"
 	"github.com/souls-guild/soul-stack/keeper/internal/artifact"
+	"github.com/souls-guild/soul-stack/keeper/internal/auditgate"
+	"github.com/souls-guild/soul-stack/keeper/internal/auditmulti"
+	"github.com/souls-guild/soul-stack/keeper/internal/auditotel"
 	"github.com/souls-guild/soul-stack/keeper/internal/auditpg"
 	keeperaugur "github.com/souls-guild/soul-stack/keeper/internal/augur"
 	keeperauth "github.com/souls-guild/soul-stack/keeper/internal/auth"
@@ -907,7 +911,28 @@ func (d *daemon) setupServiceRegistry(ctx context.Context) error {
 // Keeper daemon runtime wiring note.
 // Keeper daemon runtime wiring note.
 func (d *daemon) setupAudit(_ context.Context) error {
-	auditWriter := audit.Writer(auditpg.NewWriter(d.pool))
+	pgWriter := auditpg.NewWriter(d.pool)
+	auditWriter := audit.Writer(pgWriter)
+
+	// ADR-022(f): OTel dual-write. The secondary is assembled only when the
+	// `otel:` block is on — `audit.otel_export` is a permission to export, and
+	// with no OTel stack there is nothing to export to. The per-event gate keeps
+	// the flag hot-reloadable while the chain itself is built once.
+	if d.cfg.OTel != nil && d.cfg.OTel.Enabled {
+		otelWriter := auditgate.NewSecondary(
+			auditotel.NewWriter(otel.Tracer("keeper/audit")),
+			func() bool { return d.store.Get().AuditOTelExport() },
+		)
+		multi := auditmulti.New(pgWriter, []audit.Writer{otelWriter})
+		d.cleanups.push(func() {
+			shutCtx, shutCancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer shutCancel()
+			if err := multi.Close(shutCtx); err != nil {
+				d.logger.Warn("audit multi-writer drain returned error", slog.Any("error", err))
+			}
+		})
+		auditWriter = multi
+	}
 
 	// Keeper daemon runtime wiring note.
 	// Keeper daemon runtime wiring note.
@@ -932,6 +957,16 @@ func (d *daemon) setupAudit(_ context.Context) error {
 	d.heraldTap = tap
 	d.cleanups.push(tap.Close)
 	auditWriter = audit.NewMultiWriter(auditWriter, d.logger, tap)
+
+	// ADR-022(i): the master toggle wraps everything below it — Postgres, the
+	// OTel dual-write and the herald tap alike, since a notification derived
+	// from an event that was never journaled would outlive its own record.
+	auditWriter = auditgate.New(auditgate.Config{
+		Next:    auditWriter,
+		Enabled: func() bool { return d.store.Get().AuditEnabled() },
+		KID:     d.cfg.KID,
+		Logger:  d.logger,
+	})
 
 	d.auditWriter = auditWriter
 

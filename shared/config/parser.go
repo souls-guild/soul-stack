@@ -42,6 +42,9 @@ func LoadKeeper(path string, opts ValidateOptions) (*KeeperConfig, *Document, []
 func LoadKeeperFromBytes(filename string, data []byte, opts ValidateOptions) (*KeeperConfig, *Document, []diag.Diagnostic, error) {
 	cfg := &KeeperConfig{}
 	doc, diags := parseAndValidate(filename, stripBOM(data), cfg, opts, semanticValidateKeeper)
+	// ADR-022(d): post-validation, so the alias never fabricates a rule the
+	// semantic phase would then compare against itself.
+	normalizeKeeperAudit(cfg)
 	return cfg, doc, diags, nil
 }
 

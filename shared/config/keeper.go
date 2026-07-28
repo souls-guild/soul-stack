@@ -1411,11 +1411,17 @@ type PluginRuntime struct {
 	EnableTLS           bool     `yaml:"enable_tls,omitempty"`
 }
 
-// KeeperAudit is the audit block (ADR-022).
+// KeeperAudit is the audit block (ADR-022(i)).
+//
+// Enabled and OTelExport are `*bool` to distinguish "unset" from an explicit
+// `false`: both default to ON (ADR-022(f)/(i)), and a plain `bool` would make
+// `audit: {retention_days: 365}` silently resolve to "audit off" — the exact
+// failure the compliance contract cannot afford. Resolved by
+// [KeeperConfig.AuditEnabled] / [KeeperConfig.AuditOTelExport].
 type KeeperAudit struct {
-	Enabled       bool `yaml:"enabled"`
-	OTelExport    bool `yaml:"otel_export"`
-	RetentionDays int  `yaml:"retention_days"`
+	Enabled       *bool `yaml:"enabled,omitempty"`
+	OTelExport    *bool `yaml:"otel_export,omitempty"`
+	RetentionDays int   `yaml:"retention_days,omitempty"`
 }
 
 // HotReload is the Keeper/Soul-shared block controlling reload triggers
