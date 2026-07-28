@@ -250,11 +250,17 @@ func (p *Pipeline) blockChildTargets(in RenderInput, child config.Task, targeted
 
 // mergeBlockInheritance builds a block descendant with inheritance from the
 // container merged in (destiny/tasks.md §6.5). Does NOT mutate the source
-// structs — returns a copy of child with When/Where/Vars/OnChanges/OnFail
+// structs — returns a copy of child with When/Where/Vars/OnChanges/OnFail/Require
 // rewritten. Other fields (Module/Apply/Block/Loop/Register/params/serial/run_once/…)
 // stay as in the source descendant: serial is NOT inherited by the descendant
 // (wave width is distributed via DispatchPlan in renderBlockTask, not through a
 // task field).
+//
+// Require is the third requisite and inherits like the other two: a block carries
+// no RenderedTask of its own, so a key left un-merged here is not "applied to the
+// block" — it is dropped from the plan entirely. That was harmless while
+// `require:` reached no runtime (ADR-0075 context) and became a silent loss of an
+// ordering the author declared once NIM-150 put it on the wire.
 func mergeBlockInheritance(blockTask config.Task, child config.Task) config.Task {
 	out := child
 	out.When = andMergePredicate(blockTask.When, child.When)
@@ -262,7 +268,32 @@ func mergeBlockInheritance(blockTask config.Task, child config.Task) config.Task
 	out.Vars = mergeVars(blockTask.Vars, child.Vars)
 	out.OnChanges = unionNames(blockTask.OnChanges, child.OnChanges)
 	out.OnFail = unionNames(blockTask.OnFail, child.OnFail)
+	out.Require = mergeRequire(blockTask.Require, child.Require)
 	return out
+}
+
+// mergeRequire merges a block's `require:` into a descendant's. The two forms do
+// not mix (destiny/tasks.md §8 — a mixed list is a validation error), so `all` on
+// either side absorbs the other: it waits for every async task started earlier in
+// the run, which is a superset of anything a list can name. Otherwise the lists
+// union like onchanges/onfail. Both unset → nil.
+//
+// Inheriting the barrier by EVERY descendant is what "the barrier applies to the
+// whole group" means in a sequential group: the first descendant does the
+// waiting, and for the rest the wait is already satisfied.
+func mergeRequire(blockRequire, childRequire any) any {
+	blockAll, blockNames, blockOK := config.RequireSpecOf(blockRequire)
+	childAll, childNames, childOK := config.RequireSpecOf(childRequire)
+	switch {
+	case !blockOK:
+		return childRequire
+	case !childOK:
+		return blockRequire
+	case blockAll || childAll:
+		return config.RequireAll
+	default:
+		return unionNames(blockNames, childNames)
+	}
 }
 
 // andMergePredicate joins two CEL predicates (when:/where:) by AND, preserving

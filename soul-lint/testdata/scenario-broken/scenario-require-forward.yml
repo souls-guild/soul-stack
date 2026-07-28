@@ -1,0 +1,15 @@
+name: require-forward
+tasks:
+  - name: Restart nginx once the config is written
+    module: core.service.restarted
+    require: [vhost]
+    params:
+      name: nginx
+
+  - name: Render the nginx vhost
+    module: core.file.rendered
+    async: true
+    register: vhost
+    params:
+      src: vhost.conf.tmpl
+      path: /etc/nginx/sites-enabled/app.conf

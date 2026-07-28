@@ -139,7 +139,14 @@ const RequireAll = "all"
 // (validateRequireField runs at parse time) also yields false: this is a decode
 // of validated input, not a second validator.
 func (t Task) RequireSpec() (all bool, names []string, ok bool) {
-	switch v := t.Require.(type) {
+	return RequireSpecOf(t.Require)
+}
+
+// RequireSpecOf is [Task.RequireSpec] over a bare `require:` value, for callers
+// that hold the key without the task around it (keeper-side block inheritance
+// merges two of them). One decoder for both, so the forms cannot drift.
+func RequireSpecOf(require any) (all bool, names []string, ok bool) {
+	switch v := require.(type) {
 	case nil:
 		return false, nil, false
 	case string:
@@ -570,6 +577,7 @@ func validateTaskNode(item ast.Node, pathPrefix string) []diag.Diagnostic {
 	}
 	if kv, ok := present["apply"]; ok {
 		out = append(out, validateApplyField(kv, pathPrefix)...)
+		out = append(out, validateAsyncOnApply(present, pathPrefix)...)
 	}
 	if kv, ok := present["assert"]; ok {
 		out = append(out, validateAssertField(kv, pathPrefix)...)
@@ -953,6 +961,36 @@ func validateBlockForbiddenKeys(present map[string]*ast.MappingValueNode, pathPr
 		}))
 	}
 	return out
+}
+
+// validateAsyncOnApply raises `async_on_apply_invalid` for `async:` on an
+// `apply:` task — the same deferred-group boundary as `async_on_block_invalid`,
+// at the other construct that expands into one (ADR-0075 defers a group running
+// in one flow).
+//
+// Fail-closed because render DROPS it today: an applier fans out into an
+// isolated destiny pass (keeper/internal/render.renderApplyDestiny), which never
+// sees the applier task itself, so the flag reaches no RenderedTask and the
+// group runs sequentially. Nothing fails and nothing is logged — the author gets
+// the ordinary duration back and no way to tell the key did nothing. Accepting a
+// key that has no effect is worse than refusing it, so it is refused until a
+// slice implements group asynchrony.
+//
+// Raised on the key's PRESENCE, like every `<key>_on_block_invalid`: `async:
+// false` is equally a statement about a construct that does not support the key.
+func validateAsyncOnApply(present map[string]*ast.MappingValueNode, pathPrefix string) []diag.Diagnostic {
+	kv, ok := present["async"]
+	if !ok {
+		return nil
+	}
+	tok := kv.Key.GetToken()
+	return []diag.Diagnostic{diagAt(tok.Position.Line, tok.Position.Column, diag.Diagnostic{
+		Level: diag.LevelError, Phase: diag.PhaseSchemaValidate,
+		Code:     "async_on_apply_invalid",
+		Message:  "async: is not allowed on an apply: task (asynchrony of a whole destiny group is deferred — see docs/destiny/tasks.md §6)",
+		Hint:     "an applier expands into a group of destiny tasks and render carries no flag onto them; put async: on the individual tasks inside the destiny, or wait for the group construct",
+		YAMLPath: pathPrefix + ".async",
+	})}
 }
 
 // validateOnField — `on:` literal `keeper` or a sequence of strings (coven-ids).

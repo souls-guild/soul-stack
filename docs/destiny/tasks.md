@@ -148,7 +148,7 @@ See §6.5 - inline task group with common `when:` / requisites.
 
 ### `async:`
 
-Flag on the task - see §6. Not a separate type of task.
+Flag on the task - see §6. Not a separate type of task, and not accepted on a construct that expands into a group (`block:`, `apply:` - §6 "Rules").
 
 > `parallel:` is **reserved** and is not a valid key ([ADR-0075](../adr/0075-intra-host-async-tasks.md)): it is held for a future concurrent **group with a join**, which is a different construct from asynchrony. Writing it is an `unknown_key` error.
 
@@ -260,6 +260,7 @@ A declared per-module concurrency class is a deferred extension ([ADR-0075](../a
 ### Rules
 
 - **No grouping.** `async: true` on two adjacent tasks **does not** mean "execute together". Each simply runs in its own flow independently. Neighbours can be anything - other async tasks, ordinary tasks, include, block. A construct that *does* group is the reserved `parallel:` (not implemented).
+- **Not on a construct that expands into a group.** `async:` is rejected fail-closed on a `block:` (`async_on_block_invalid`, §6.5) and on an `apply:` task (`async_on_apply_invalid`) - the two constructs that fan out into several tasks. Running a whole group in one flow is the design intent and a deferred slice ([ADR-0075](../adr/0075-intra-host-async-tasks.md)); until it lands, render carries the flag onto none of the expanded tasks, so accepting the key would hand back the ordinary sequential duration with nothing said about it. Put `async:` on the individual tasks instead - inside the block, or inside the destiny the applier invokes.
 - **Failure is observed where it is awaited.** A failed async task writes `register.<name>.failed = true` and **does not** interrupt the main flow at the moment it fails. The flow learns about it exactly where it reaches for it - an explicit `require:`, an implicit reference, or the final barrier - and there the ordinary fail-stop of §8 engages: the run is irreversibly failed, subsequent ordinary tasks are skipped, only the `onfail:` rescue tail runs.
 - **Siblings are never cancelled.** Async tasks already in flight run to completion and are collected by the final barrier. This is deliberate: cancelling would make the set of tasks that actually ran depend on scheduling timing and leave the host in a state no one declared. The cost is accepted - a doomed run may keep working as long as its slowest in-flight task. An opt-in cancel is a deferred extension ([ADR-0075](../adr/0075-intra-host-async-tasks.md)).
 - **Gating stays sequential.** The async task's own `when:` / `onchanges:` / `onfail:` are evaluated **in the main flow at its position in the plan**, before it is launched. So *whether* a task runs never depends on timing - only *when* it finishes does.
@@ -566,12 +567,15 @@ By default, the run operates in **fail-stop** mode: the first failed task (`fail
 
 > **Border with onchanges/onfail.** `require:` - about **order** (wait). `onchanges:`/`onfail:` - about **condition** (to fulfill or not). They can be combined: `require: [migration]` + `onfail: [migration]` = "wait for migration, execute only if it fails."
 
-**Resolution and its two rejections.** Keeper resolves the listed register names into task indices during render - the same Variant A already used by `onchanges:`/`onfail:`, so Soul deals only in indices. Two authoring mistakes are refused there rather than misfiring at run time:
+**Resolution and its three rejections.** Keeper resolves the listed register names into task indices during render - the same Variant A already used by `onchanges:`/`onfail:`, so Soul deals only in indices. Three authoring mistakes are refused rather than left to misfire at run time:
 
 - **A name no task registers** - a typo would silently degrade the barrier into "wait for nothing", so it is a render error, exactly like a typo in `onchanges:`.
+- **A source that is not EARLIER in the plan** (`require_forward_reference`, caught by the config validator and `soul-lint` before render) - a Soul runner resolves what a task waits for in the main flow, at that task's plan position, so only flows launched by then can be in the set. A barrier naming a source that starts later resolves to nothing: the runner does not deadlock and does not fail, it simply does not wait, and the ordering written into the plan never happens. The degenerate case - a task naming its own `register:` - is the same no-op and is refused with it. This also makes a `require:` **cycle** unrepresentable: a cycle needs at least one forward edge.
 - **A source in a LATER [Passage](../adr/0056-staged-render-passage.md)** - `require:` is deliberately not passage-defining (it expresses order within a Passage, not a Keeper-side data dependency), so a barrier can end up naming a task that stratification pushed into the next Passage. The two would then travel in different `ApplyRequest`s with the consumer dispatched first, and no wire form can say "wait for a task in a message you have not received". Rejected at render. Unlike a cross-Passage `onchanges:`, which Keeper *can* resolve from what the earlier Passage recorded, an ordering constraint has nothing to resolve against - the source has not run yet. The opposite direction is fine and stays silent: a source in an **earlier** Passage is already finalized, because a Passage closes on every host before the next one starts.
 
-A source that simply did not survive per-host `where:` filtering is not an error - it never ran on this host, so there is nothing to wait for and the barrier passes.
+A source that simply did not survive per-host `where:` filtering is not an error - it never ran on this host, so there is nothing to wait for and the barrier passes. Nor is a barrier on an ordinary (non-`async:`) predecessor: it is redundant rather than wrong, and the plan keeps working unchanged if that source later becomes `async: true`.
+
+Order is the in-order walk of the task list, descending into `block:` - a block fans out at its own position and its children take the indices straight after it, so "earlier" means exactly what the apply log shows. An `include:` splices tasks in place and cannot reorder two tasks of one file.
 
 > **Keeper-side tasks (`on: keeper`).** `require:` is accepted and redundant - the keeper executor runs its tasks in plan order. `async:` is **rejected**: it is Soul-side task concurrency, a keeper task never reaches a Soul runner, and honouring it would be a silent no-op.
 

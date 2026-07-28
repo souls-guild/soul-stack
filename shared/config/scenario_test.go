@@ -332,6 +332,45 @@ func TestLoadScenarioManifest_ParallelIsReserved(t *testing.T) {
 	}
 }
 
+// TestLoadScenarioManifest_AsyncOnApply — `async:` on an apply: task is the
+// other construct that expands into a group, and ADR-0075 defers group
+// asynchrony. Render drops the flag there (renderApplyDestiny never sees the
+// applier task), so the group would run sequentially with nothing said about
+// it — fail-closed instead, exactly like async_on_block_invalid.
+func TestLoadScenarioManifest_AsyncOnApply(t *testing.T) {
+	src := `name: x
+tasks:
+  - apply:
+      destiny: redis
+      input: {}
+    async: true
+`
+	_, _, diags, _ := LoadScenarioManifestFromBytes("main.yml", []byte(src), ValidateOptions{})
+	if !hasCodeAt(diags, "async_on_apply_invalid", "$.tasks[0].async") {
+		dump(t, diags)
+		t.Fatalf("expected async_on_apply_invalid")
+	}
+}
+
+// The negative half: the gate is about the applier, not about `async:`. An
+// ordinary module task next to an apply: one keeps the key.
+func TestLoadScenarioManifest_AsyncOnApply_ModuleTaskUnaffected(t *testing.T) {
+	src := `name: x
+tasks:
+  - module: core.exec.run
+    async: true
+    params: { cmd: "true" }
+  - apply:
+      destiny: redis
+      input: {}
+`
+	_, _, diags, _ := LoadScenarioManifestFromBytes("main.yml", []byte(src), ValidateOptions{})
+	if hasCode(diags, "async_on_apply_invalid") {
+		dump(t, diags)
+		t.Fatalf("async: on a module task must not be flagged")
+	}
+}
+
 // TestLoadScenarioManifest_AsyncTaskKeyAccepted — the other half of the rename:
 // `async: true` on an ordinary task parses clean and lands on Task.Async.
 func TestLoadScenarioManifest_AsyncTaskKeyAccepted(t *testing.T) {

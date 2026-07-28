@@ -219,6 +219,139 @@ func TestRenderBlock_RequisitesUnion(t *testing.T) {
 	}
 }
 
+// TestRenderBlock_RequireInheritance — `require:` is the third requisite and
+// inherits like the other two (destiny/tasks.md §6.5). A block emits no
+// RenderedTask of its own, so a key not merged into the descendants is not
+// "applied to the block" — it is dropped from the plan, and the ordering the
+// author declared silently never happens.
+func TestRenderBlock_RequireInheritance(t *testing.T) {
+	probe := moduleTask("probe", "core.exec.run")
+	probe.Register = "cfg"
+	probe.Async = true
+	grp := config.Task{
+		Name:    "grp",
+		Require: []string{"cfg"},
+		Block: &config.BlockTask{Block: []config.Task{
+			moduleTask("inner1", "core.service.restarted"),
+			moduleTask("inner2", "core.service.restarted"),
+		}},
+	}
+	p := NewPipeline(nil, newEngine(t), nil, nil)
+	in := RenderInput{
+		Scenario:    &config.ScenarioManifest{Name: "s", Tasks: []config.Task{probe, grp}},
+		Incarnation: IncarnationMeta{Name: "svc"},
+		Hosts:       []*topology.HostFacts{host("a", []string{"svc"}, nil)},
+	}
+	tasks, _, err := p.Render(context.Background(), in)
+	if err != nil {
+		t.Fatalf("Render: %v", err)
+	}
+	if len(tasks) != 3 {
+		t.Fatalf("len(tasks) = %d, want 3 (probe + 2 block children)", len(tasks))
+	}
+	for _, ti := range []int{1, 2} {
+		if len(tasks[ti].RequireIdx) != 1 || tasks[ti].RequireIdx[0] != 0 {
+			t.Errorf("tasks[%d].RequireIdx = %v, want [0] (resolved register cfg → index 0)", ti, tasks[ti].RequireIdx)
+		}
+	}
+}
+
+// TestRenderBlock_RequireUnion — block.require + child.require union in the
+// child, and `all` on either side absorbs the list: it waits for every async
+// task started earlier in the run, so it already covers whatever a list names.
+func TestRenderBlock_RequireUnion(t *testing.T) {
+	probeA := moduleTask("probeA", "core.exec.run")
+	probeA.Register = "a_reg"
+	probeA.Async = true
+	probeB := moduleTask("probeB", "core.exec.run")
+	probeB.Register = "b_reg"
+	probeB.Async = true
+	inner := moduleTask("inner", "core.service.restarted")
+	inner.Require = []string{"b_reg"}
+	grp := config.Task{
+		Name:    "grp",
+		Require: []string{"a_reg"},
+		Block:   &config.BlockTask{Block: []config.Task{inner}},
+	}
+	p := NewPipeline(nil, newEngine(t), nil, nil)
+	in := RenderInput{
+		Scenario:    &config.ScenarioManifest{Name: "s", Tasks: []config.Task{probeA, probeB, grp}},
+		Incarnation: IncarnationMeta{Name: "svc"},
+		Hosts:       []*topology.HostFacts{host("a", []string{"svc"}, nil)},
+	}
+	tasks, _, err := p.Render(context.Background(), in)
+	if err != nil {
+		t.Fatalf("Render: %v", err)
+	}
+	got := tasks[2].RequireIdx
+	if len(got) != 2 {
+		t.Fatalf("inner.RequireIdx = %v, want union of 2 (block a_reg + child b_reg)", got)
+	}
+	seen := map[int]bool{got[0]: true, got[1]: true}
+	if !seen[0] || !seen[1] {
+		t.Errorf("inner.RequireIdx = %v, want {0,1}", got)
+	}
+	if tasks[2].RequireAll {
+		t.Errorf("inner.RequireAll = true, want false (neither side said all)")
+	}
+}
+
+// The absorbing half of the merge: a block-level `require: all` wins over a
+// child's list rather than mixing with it (a mixed form is a validation error).
+func TestRenderBlock_RequireAllAbsorbsChildList(t *testing.T) {
+	probe := moduleTask("probe", "core.exec.run")
+	probe.Register = "cfg"
+	probe.Async = true
+	inner := moduleTask("inner", "core.service.restarted")
+	inner.Require = []string{"cfg"}
+	grp := config.Task{
+		Name:    "grp",
+		Require: config.RequireAll,
+		Block:   &config.BlockTask{Block: []config.Task{inner}},
+	}
+	p := NewPipeline(nil, newEngine(t), nil, nil)
+	in := RenderInput{
+		Scenario:    &config.ScenarioManifest{Name: "s", Tasks: []config.Task{probe, grp}},
+		Incarnation: IncarnationMeta{Name: "svc"},
+		Hosts:       []*topology.HostFacts{host("a", []string{"svc"}, nil)},
+	}
+	tasks, _, err := p.Render(context.Background(), in)
+	if err != nil {
+		t.Fatalf("Render: %v", err)
+	}
+	if !tasks[1].RequireAll {
+		t.Errorf("inner.RequireAll = false, want true (block-level require: all)")
+	}
+	if len(tasks[1].RequireIdx) != 0 {
+		t.Errorf("inner.RequireIdx = %v, want empty (the two forms do not mix)", tasks[1].RequireIdx)
+	}
+}
+
+// Negative — a block without `require:` leaves its descendants' barriers alone.
+func TestRenderBlock_NoRequireOnBlockLeavesChildAlone(t *testing.T) {
+	probe := moduleTask("probe", "core.exec.run")
+	probe.Register = "cfg"
+	probe.Async = true
+	plain := moduleTask("plain", "core.service.restarted")
+	grp := config.Task{
+		Name:  "grp",
+		Block: &config.BlockTask{Block: []config.Task{plain}},
+	}
+	p := NewPipeline(nil, newEngine(t), nil, nil)
+	in := RenderInput{
+		Scenario:    &config.ScenarioManifest{Name: "s", Tasks: []config.Task{probe, grp}},
+		Incarnation: IncarnationMeta{Name: "svc"},
+		Hosts:       []*topology.HostFacts{host("a", []string{"svc"}, nil)},
+	}
+	tasks, _, err := p.Render(context.Background(), in)
+	if err != nil {
+		t.Fatalf("Render: %v", err)
+	}
+	if len(tasks[1].RequireIdx) != 0 || tasks[1].RequireAll {
+		t.Errorf("plain barrier = %v/%v, want none", tasks[1].RequireIdx, tasks[1].RequireAll)
+	}
+}
+
 // TestRenderBlock_NestedRecursion (guard #5) — block-in-block expands with a
 // threaded Index, inheritance cascades (outer when + inner block-when + leaf
 // when → triple AND).

@@ -26,6 +26,11 @@ import (
 //     before it, an unknown register in interpolation survived to the runtime
 //     stratifier; the field set here must match the stratifier's passage-defining
 //     sources (see collectRefs).
+//  3. require_forward_reference — a `require:` barrier naming a source that is not
+//     EARLIER in the plan (validateRequireOrder, task_require_order.go). A barrier
+//     resolves at the awaiting task's plan position, so a forward one waits for
+//     nothing instead of deadlocking — the one mistyped-barrier outcome that was
+//     neither an error nor an effect.
 //
 // Why an ERROR, not a warning, for a duplicate address:
 // register names resolve to task indices via a flat name→index map over the whole
@@ -81,6 +86,7 @@ func validateTaskRefs(tasksSeq *ast.SequenceNode, pathPrefix string) []diag.Diag
 	var out []diag.Diagnostic
 	out = append(out, dupDiags...)
 	out = append(out, collectRefs(tasksSeq, pathPrefix, registers)...)
+	out = append(out, validateRequireOrder(tasksSeq, pathPrefix)...)
 	return out
 }
 

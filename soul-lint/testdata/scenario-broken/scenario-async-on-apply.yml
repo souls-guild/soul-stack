@@ -1,0 +1,8 @@
+name: async-on-apply
+tasks:
+  - name: Apply the redis destiny
+    apply:
+      destiny: redis
+      input:
+        action: apply
+    async: true
