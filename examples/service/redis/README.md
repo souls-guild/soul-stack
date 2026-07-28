@@ -52,8 +52,8 @@ operator passthrough directives, SHALLOW last-wins ([templating.md §2.3](../../
 Division of responsibilities (architect B-hybrid, ADR-009):
 
 - **destiny [`redis`](../../destiny/redis/)** - a mode-agnostic per-host brick:
-  installs `redis-server` (dispatched by `install.method`: distro package **or**
-  standalone binaries from Nexus), renders `redis.conf` from an **already merged**
+  installs `redis-server` (dispatched by `install.method`: package **or**
+  standalone binaries from a mirror), renders `redis.conf` from an **already merged**
   config, renders `users.acl`, TLS PEM (`core.file.present` + `${ vault(ref) }` in the
   cell), systemd-hardening drop-in, host-tuning extras (THP/logrotate/sysctl), starts
   the service. destiny is "dumb" - it doesn't merge or orchestrate anything itself;
@@ -151,7 +151,7 @@ installation, and so a repeated apply stays idempotent:
 | field | type | meaning |
 |---|---|---|
 | `redis_type` | enum `sentinel`/`cluster` | deployment mode (both implemented) |
-| `redis_version` | string | effective Redis version from input `version` (enum of builds published to Nexus - `8.6.1`/`8.4.0`/`8.2.2`/`8.0.3`/`7.4.1`/`6.2.21`). `install_method=binary` (default) downloads binaries of this version from Nexus; `install_method=package` pins `=version`; see input `version` / `install_method` |
+| `redis_version` | string | effective Redis version from input `version` (enum of upstream releases - `8.6.1`/`8.4.0`/`8.2.2`/`8.0.3`/`7.4.1`/`6.2.21`). `install_method=package` (default) pins the package to this version; `install_method=binary` downloads binaries of this version; see input `version` / `install_method` |
 | `connection_mode` | enum `tls`/`tls_plain`/`plain` | **(v11)** network channel mode: `plain` - plain port only (TLS off); `tls_plain` - TLS and plain simultaneously; `tls` - TLS only (plain closed, `port 0`). Day-2 read-model (replaced the boolean `tls_enabled`/`tls_keep_plain`) |
 | `io_threads` | integer | **(v11)** number of Redis I/O threads (`io-threads` directive). `0` - single-threaded I/O (directive not written) |
 | `redis_config` | object | **the translation result** - merged `redis.conf` config (default → preset → computed → passthrough; for `cluster` - plus `cluster-*` directives) |
@@ -182,8 +182,8 @@ text:
 | field | type | meaning |
 |---|---|---|
 | `redis_type` | enum `sentinel`/`cluster`, default `sentinel` | mode; selects the dispatcher branch. `sentinel` - master-replica + sentinel daemon (with `replicas_per_master: 0` - the standalone equivalent); `cluster` - honest hash-slot Redis Cluster. A value outside the enum is rejected by Keeper input validation BEFORE rendering |
-| `version` | string, **required**, enum `8.6.1`/`8.4.0`/`8.2.2`/`8.0.3`/`7.4.1`/`6.2.21` | Redis version from a fixed set of builds published to Nexus (the free-form distro pin was replaced with a closed enum - redesign). `install_method=binary` (default) downloads binaries of this version from Nexus; `install_method=package` pins `=version` with the same value. An arbitrary version is not accepted |
-| `install_method` | enum `package`/`binary`, default `binary` | redis install method. `binary` (DEFAULT) - standalone `redis-server`/`redis-cli`/`redis-benchmark`/`redis-sentinel` binaries from Nexus (`essence.binary_base_url` + per-host `arch`/`Debian`/`distro_ver`/`version` from `soulprint.self.os`; downloaded with SHA-256 content-idempotency, without integrity verification). `package` - distro package `redis-server` (`=version` pin). The binary URL/version is NOT operator input: it lives in `essence` (`binary_base_url`/`binary_version`, author context), the operator overrides it in `spec.essence`. The former object-input `install` was collapsed into a single enum field |
+| `version` | string, **required**, enum `8.6.1`/`8.4.0`/`8.2.2`/`8.0.3`/`7.4.1`/`6.2.21` | Redis version from a fixed set of upstream releases (the free-form distro pin was replaced with a closed enum - redesign). Every value is published by the official Redis apt repository (`essence.install_package.repo_uri`), so all of them install out of the box. `install_method=package` (default) pins the package to this version; `install_method=binary` downloads binaries of this version. An arbitrary version is not accepted |
+| `install_method` | enum `package`/`binary`, default `package` | redis install method. `package` (DEFAULT) - the `redis-server` package (`=version` pin) from the apt repository named by `essence.install_package.repo_uri`, by default the official Redis one, which publishes every version of the `version` enum; an empty `repo_uri` falls back to the host's own distro repository. `binary` - standalone `redis-server`/`redis-cli`/`redis-benchmark`/`redis-sentinel` binaries (`essence.binary_base_url` + per-host `arch`/`Debian`/`distro_ver`/`version` from `soulprint.self.os`; downloaded with SHA-256 content-idempotency, without integrity verification), for a fleet that publishes such builds itself. Neither the repository nor the binary URL is operator input: both live in `essence` (`install_package`, `binary_base_url`/`binary_version`, author context), the operator overrides them in `spec.essence`. The former object-input `install` was collapsed into a single enum field |
 | `memory_mb` | integer, optional, min `64` | memory budget for Redis on the host, MB; `maxmemory` is a fraction of it |
 | `io_threads` | integer, optional, default `0`, min `0` | number of Redis I/O threads (`io-threads` directive). `0` (default) - single-threaded I/O (directive not written); `>0` - Redis parallelizes socket handling (typically = core count − 1). Written to `redis.conf` only when `>0` |
 | `persistence` | enum `off`/`aof_1sec`/`aof_always`/`rdb`/`rdb_aof_1sec`/`rdb_aof_always`, default `rdb` | durability mode; translated into `save`/`appendonly`/`appendfsync`. `off` - no persistence; `aof_1sec`/`aof_always` - AOF only (fsync `everysec` / `always`); `rdb` - snapshots only; `rdb_aof_1sec`/`rdb_aof_always` - snapshots + AOF (dual durability). Extended from `[off, aof, rdb, rdb_aof]` (redesign: explicit choice of fsync frequency `1sec`/`always`) |
@@ -1326,12 +1326,11 @@ TLS and install cases under [`scenario/create/tests/`](scenario/create/tests/):
 - [`tls-cluster`](scenario/create/tests/tls-cluster/case.yml) - `connection_mode: tls`
   + cluster: `tls-replication`/`tls-cluster yes` in the merged config.
 - [`install-package`](scenario/create/tests/install-package/case.yml) -
-  `install_method: package` (set explicitly - the default is now `binary`): a distro
-  package with an `=version` pin.
+  `install_method: package` (the default): the package with an `=version` pin.
 - [`install-binary`](scenario/create/tests/install-binary/case.yml) -
-  `install_method: binary` (default): **four** `core.url.fetched` tasks download the
-  separate `redis-server`/`redis-cli`/`redis-benchmark`/`redis-sentinel` binaries from
-  Nexus (path `<base_url>/<arch>/Debian/<distro_ver>/<version>/…`) + a distro
+  `install_method: binary` (set explicitly): **four** `core.url.fetched` tasks download
+  the separate `redis-server`/`redis-cli`/`redis-benchmark`/`redis-sentinel` binaries
+  (path `<base_url>/<arch>/Debian/<distro_ver>/<version>/…`) + a distro
   user/group + its own systemd unit + `redis-check-aof`/`redis-check-rdb` symlinks;
   the package branch is placeholder-skipped.
 - [`modules-no-checksum`](scenario/create/tests/modules-no-checksum/case.yml)

@@ -21,7 +21,7 @@ survey / assertions / report are clean and covered with docker-free guard tests
 ⚠️ **This is NOT `make e2e-live` / `make e2e-live-gate`.** Those are a local docker gate
 (**L3b**): real `soul` binary in a privileged container, ephemeral stack via
 testcontainers. Local gate **deliberately NOT covering the cloud**: cloud-provision
-(`CloudDriver`), Nexus-`install_method`, sentinel-/cluster-redis topologies,
+(`CloudDriver`), `install_method=binary`, cluster-redis topology,
 multi-keeper - all this is booth territory (see.
 [testing/README.md → what the live gate does NOT cover](README.md)).
 Cloud orchestrator - **L4-adjacent operator-tooling**: live run vs.

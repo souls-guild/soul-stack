@@ -95,7 +95,7 @@ redis_arch: >-
           : (soulprint.self.os.arch == 'arm64' ? 'aarch64' : soulprint.self.os.arch))
        : '' }
 
-# ── Redis binaries base URL on Nexus (install-model redesign) ───────────────────
+# ── Redis binaries base URL on the mirror (install-model redesign) ──────────────
 # Base URL of the DIRECTORY of binaries for a specific (version, arch, distro_ver) build —
 # built in ONE place, install.yml tasks only append the filename
 # (/redis-server, /redis-cli, /redis-benchmark). URL form:
@@ -121,12 +121,46 @@ redis_binary_url_base: >-
        + '/Debian/' + (has(soulprint.self.os) && has(soulprint.self.os.version) ? soulprint.self.os.version : '')
        + '/' + (has(input.install) && has(input.install.version) ? input.install.version : '') }
 
-# ── SSRF guard for fetching Nexus binaries (core.url.fetched allow_private) ─────────
-# The service's default binary_base_url is an INTERNAL Nexus (resolves to RFC1918, e.g.
-# 10.16.2.130) → core.url.fetched by default (allow_private:false) blocks the dial via
-# SSRF guard (shared/netguard). The value comes from the scenario via
-# apply.input.install.allow_private (compute.install ← essence.binary_allow_private,
-# default true: default base = internal Nexus). The 4 binary-branch fetch tasks take the
+# ── apt repository for the package branch (install.repo_uri) ──────────────────────
+# Empty (default) → nothing is declared and redis comes from the host's own distro
+# repository. Non-empty → install.yml declares that repository first. has()-chain,
+# render-safe when install is absent entirely.
+redis_repo_uri: >-
+  ${ has(input.install) && has(input.install.repo_uri) ? input.install.repo_uri : '' }
+
+# Suite of that repository: the caller's explicit repo_suite, else this host's distro
+# codename (packages.redis.io publishes one suite per codename). The soulprint guard is
+# two-stage for the same reason as redis_arch — has() only tests the last path component.
+redis_repo_suite: >-
+  ${ (has(input.install) && has(input.install.repo_suite) && input.install.repo_suite != '')
+       ? input.install.repo_suite
+       : (has(soulprint.self.os) && has(soulprint.self.os.codename) ? soulprint.self.os.codename : '') }
+
+# Where the repository's signing key lands. INVARIANT (vars, not input): apt reads an
+# ARMORED key only from an .asc name — a .gpg name silently yields NO_PUBKEY and the whole
+# repository is dropped as unsigned. Both the fetch task and core.repo's signed-by= read
+# this one value.
+redis_repo_key_path: /etc/apt/keyrings/redis.asc
+
+# ── Effective apt version pin for the package branch ─────────────────────────────
+# Without a declared repository input.version IS the distro-native pin, passed through.
+# With one, input.version is the upstream version (the operator's enum, e.g. 7.4.1) and the
+# pin is composed in the packages.redis.io naming: <epoch>:<upstream>-1rl1~<codename>1,
+# e.g. 6:7.4.1-1rl1~bookworm1. A mirror that names its builds differently sets
+# install.version_pin to the literal pin instead (that wins over everything).
+redis_pkg_version: >-
+  ${ (has(input.install) && has(input.install.version_pin) && input.install.version_pin != '')
+       ? input.install.version_pin
+       : ((vars.redis_repo_uri != '' && default(input.version, '') != '')
+            ? '6:' + input.version + '-1rl1~' + vars.redis_repo_suite + '1'
+            : default(input.version, '')) }
+
+# ── SSRF guard for fetching binaries (core.url.fetched allow_private) ───────────────
+# A fleet's own binary mirror may resolve to an RFC1918 address → core.url.fetched by
+# default (allow_private:false) blocks the dial via the SSRF guard (shared/netguard). The
+# value comes from the scenario via apply.input.install.allow_private (compute.install ←
+# essence.binary_allow_private, default false: the guard stays up for a publicly resolvable
+# base). The 4 binary-branch fetch tasks take the
 # ready ${ vars.redis_binary_allow_private }. The has() chain is render-safe in a DEAD
 # package pass (binary block static-skip, but the file-var still resolves before tasks):
 # absent install/allow_private → false (strict default; the value in the package pass is

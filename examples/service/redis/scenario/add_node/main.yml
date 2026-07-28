@@ -75,20 +75,21 @@ tasks:
         # ★ install: REQUIRED on a repeat run (regression from live E2E 2026-07-01). A new
         # node arrives WITHOUT redis — install.yml installs it. Without an install
         # structure the dispatcher falls into the package branch via !has(input.install) →
-        # core.pkg `apt install redis-server=<version>` (the version from the Nexus binary
-        # is ABSENT in apt → env exited 100). We assemble the SAME binary structure as
-        # create (deploy-body → compute.install from essence.install_method) — the new
-        # node is installed the same way as the cluster. version — from the DEPLOYED state
-        # (the cluster's redis_version), not input.version.
+        # core.pkg `apt install redis-server=<version>` with NO repository declared, and the
+        # pinned version isn't in the host's distro repository → env exited 100. We assemble
+        # the SAME structure as create (deploy-body → compute.install from
+        # essence.install_method) — the new node is installed the same way as the cluster.
+        # The binary branch's version — from the DEPLOYED state (the cluster's
+        # redis_version), not input.version; the package branch is version-free.
         install: >-
-          ${ (default(essence.install_method, 'binary') == 'binary')
+          ${ (default(essence.install_method, 'package') == 'binary')
                ? {
                    'method':        'binary',
                    'base_url':      default(essence.binary_base_url, ''),
                    'version':       default(incarnation.state.redis_version, ''),
-                   'allow_private': default(essence.binary_allow_private, true)
+                   'allow_private': default(essence.binary_allow_private, false)
                  }
-               : { 'method': 'package' } }
+               : default(essence.install_package, {'method': 'package'}) }
         # conf_dir/data_dir: host-layout of the new node (directive B) — the SAME paths as
         # the cluster. Read from essence (v11→v12, Variant A): layout is author-context,
         # the same source as create's compute.conf_dir/data_dir. The new node must know

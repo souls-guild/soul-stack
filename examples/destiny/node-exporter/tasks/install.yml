@@ -12,6 +12,9 @@
 #    set → core.url does idempotency by SHA-256 of the content (fetched.go: branch checksum == "").
 - name: Fetch node_exporter tarball
   module: core.url.fetched
+  # retry - the download host is remote and flaps (a TLS handshake timeout against
+  # GitHub Releases failed a whole run once). Symmetric with the apt installs.
+  retry: { count: 3, delay: 10s }
   params:
     url: "${ input.base_url + '/v' + input.version + '/node_exporter-' + input.version + '.linux-' + soulprint.self.os.arch + '.tar.gz' }"
     path: "${ vars.tarball_path }"

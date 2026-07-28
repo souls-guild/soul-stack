@@ -282,7 +282,7 @@ tasks:
   # catalog. Run-level (once per run), soulprint.hosts isn't needed (the check is
   # host-invariant), but it's available.
   #
-  # VERSION — compute.redis_version (= input.version, an enum of Nexus-published builds;
+  # VERSION — compute.redis_version (= input.version, an enum of upstream releases;
   # ★ redesign: ONE for both install methods — binary downloads binaries of this version, package
   # installs a =version pin; the former cascade "binary → essence.binary_version" is removed).
   # The version carries a major.minor series → assert matches it against the catalog keys.

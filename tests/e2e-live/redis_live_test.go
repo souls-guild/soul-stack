@@ -36,7 +36,7 @@ import (
 )
 
 func TestL3bRedisLive_CreateStandalone(t *testing.T) {
-	t.Skip("redis parity is proven by a stand live-run (PHASE 2, the live create run sample), not a local gate: input version=Nexus-enum, standalone mode removed 2026-06-25, install_method=binary requires Nexus, exporter/vector destinies require egress. The local gate guarantees module-delivery MECHANICS - tests/e2e-live/module-delivery-live (NIM-32). Symmetric to redis_cluster_live_test.go::t.Skip.")
+	t.Skip("this test targets the standalone redis_type removed 2026-06-25 - NOT a coverage gap. Live redis-create IS covered by the gate: every TestL3bRedisLive_Day2* runs create end to end (sentinel with replicas_per_master=0, the standalone-equivalent) before its day-2 scenario. Rewriting this one onto the current contract is a separate task. Symmetric to redis_cluster_live_test.go::t.Skip.")
 
 	stack := harness.NewStack(t, harness.Config{
 		ExamplePath: "examples/service/redis",

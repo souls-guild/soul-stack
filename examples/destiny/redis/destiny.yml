@@ -35,8 +35,8 @@ input:
 
   version:
     type: string
-    # REQUIRED ONLY for install.method=package (required_when): the distro-native
-    # pin reads it as plain input.version (see install.yml package branch). With
+    # REQUIRED ONLY for install.method=package (required_when): the =version pin is
+    # derived from it (vars.redis_pkg_version, see install.yml package branch). With
     # install.method=binary the distro package is NOT installed — the binary version comes
     # from install.version (upstream semver), and this field is unused. required_when
     # context is input-only (default() unavailable) → absent-normalization via has()-chain:
@@ -47,11 +47,13 @@ input:
     # on a real distro (apt-get install redis-server=7.2.4 → exit 100).
     pattern: "^([0-9]+:)?[0-9][A-Za-z0-9.~+-]*$"
     description: >-
-      redis-server package version in the distro repository (distro-native pin,
-      e.g. 5:7.0.15-1~deb12u7). REQUIRED when install.method=package (user
+      redis-server package version. REQUIRED when install.method=package (user
       directive 2026-06-23): core.pkg always installs with a =version pin. The
       "latest from repo" behavior (empty version → core.pkg without a pin) is NO LONGER
-      available. With install.method=binary NOT used (the binary version is in install.version).
+      available. Without install.repo_uri this is the distro-native pin verbatim
+      (e.g. 5:7.0.15-1~deb12u7); with install.repo_uri it is the upstream version
+      (e.g. 7.4.1) and the pin is composed per host — see vars.redis_pkg_version.
+      With install.method=binary NOT used (the binary version is in install.version).
 
   # ── Host-layout paths, operator-overridable (directive B) ──────────────────
   # conf_dir/data_dir — base directories for Redis config and data. OPERATOR-
@@ -94,14 +96,53 @@ input:
     additional_properties: false
     description: >-
       Redis install method (redis_install_* role concept). method: package
-      (default) — distro redis-server package (behavior-preserving); binary — upstream
+      (default) — redis-server package; binary — upstream
       tarball (base_url + version + soulprint.self.os.arch → /usr/local/bin + its own
       systemd unit + distro redis user/group). base_url/version needed only when
-      method=binary. Empty/not passed → method=package.
+      method=binary. Empty/not passed → method=package. The package branch pulls from
+      the host's own distro repository unless repo_uri declares another apt repository
+      (e.g. the official Redis one) to install from.
     properties:
       method:
         type: string
         enum: [package, binary]
+      # ── repo_uri/gpg_key_url: install the package from a declared apt repository ──
+      # Distro repositories carry whatever redis their release froze on (Debian 12 —
+      # 7.0.15), so a caller that needs another upstream version points repo_uri at a
+      # repository that publishes it. The canonical one is the official Redis apt repo
+      # https://packages.redis.io/deb; an air-gapped fleet points this at its own mirror
+      # of it. Empty/absent → nothing is declared and the host's distro repository is
+      # used (behavior-preserving).
+      repo_uri:
+        type: string
+        description: >-
+          apt repository to declare (core.repo.present) before installing the package.
+          Empty/not passed — install from the host's own distro repository.
+      repo_suite:
+        type: string
+        description: >-
+          Suite of that repository. Empty/not passed — this host's distro codename from
+          soulprint (bookworm/jammy/…), which is how packages.redis.io lays its suites out.
+      gpg_key_url:
+        type: string
+        description: >-
+          URL of the repository's signing key, fetched to /etc/apt/keyrings/redis.asc and
+          referenced from the .list via signed-by=. Required when repo_uri is set — apt
+          rejects an unsigned repository. The key is stored ARMORED under an .asc name:
+          apt only reads armored keyrings under that extension.
+      gpg_key_sha256:
+        type: string
+        # sha256:<64 hex> — the core.url.fetched checksum form.
+        pattern: "^(sha256:[0-9a-f]{64})?$"
+        description: >-
+          Optional checksum of the signing key (form sha256:<64 hex>). Set it to pin the
+          key against a mirror swapping it out; empty — the key is trusted over HTTPS.
+      version_pin:
+        type: string
+        description: >-
+          Literal apt version pin, overriding the one composed from the top-level version.
+          Needed when repo_uri points at a repository whose package versions do not follow
+          the packages.redis.io naming (see vars.redis_pkg_version). Empty — composed.
       base_url:
         type: string
         description: >-
@@ -121,14 +162,13 @@ input:
           method=binary. SEPARATE from the top-level version (distro-epoch) — different
           formats (#4 version-pattern).
       # ── allow_private: lift the core.url SSRF guard for fetching binaries (2026-06-28) ──
-      # The service's default binary_base_url is an INTERNAL Nexus (resolves to an RFC1918 address,
-      # e.g. 10.16.2.130). core.url.fetched by default (allow_private:false) blocks
-      # dialing a private IP via the SSRF guard (shared/netguard) → binary fetch fails. This
-      # field is forwarded into every core.url.fetched task of the install.yml binary branch.
-      # Optional (only-add, forward-compat): not passed → has()-guard in vars gives
-      # false (destiny's strict default — the guard stays up). scenario create sets it
-      # from essence.binary_allow_private (default true: the default base is the internal Nexus).
-      # A public-mirror deployment (externally resolvable base) sets false.
+      # A fleet's own binary mirror may resolve to an RFC1918 address, and core.url.fetched
+      # by default (allow_private:false) blocks dialing a private IP via the SSRF guard
+      # (shared/netguard) → the binary fetch fails. This field is forwarded into every
+      # core.url.fetched task of the install.yml binary branch. Optional (only-add,
+      # forward-compat): not passed → has()-guard in vars gives false (destiny's strict
+      # default — the guard stays up). scenario create sets it from
+      # essence.binary_allow_private (default false: the guard stays up for a public base).
       allow_private:
         type: boolean
         description: >-

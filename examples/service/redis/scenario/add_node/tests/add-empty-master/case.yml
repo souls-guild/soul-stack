@@ -34,7 +34,7 @@ fixtures:
     modules_base_url: "https://artifacts.example.com/redis/modules"
   state:
     redis_type: cluster
-    redis_version: ""
+    redis_version: "7.4.1"
     redis_config:
       maxmemory: "256mb"
       cluster-enabled: "yes"

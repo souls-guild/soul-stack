@@ -35,11 +35,11 @@ fixtures:
   # essence WITHOUT conf_dir/data_dir/modules_base_url: host-layout is NOT overridden
   # by the operator → a re-run reads it via the default paths (default(essence.<x>, '<default>')).
   # The essence block is omitted entirely (empty essence) — checking has()-safe for the absence
-  # of all three keys at once. redis_version="" — no pin (< 8 effectively → modules
+  # of all three keys at once. redis_version 7.4.1 — < 8 → modules
   # go through the default paths).
   state:
     redis_type: cluster
-    redis_version: ""
+    redis_version: "7.4.1"
     redis_config:
       maxmemory: "256mb"
       cluster-enabled: "yes"

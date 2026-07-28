@@ -33,7 +33,7 @@ assert against them):
 
 | File | Tasks | Modules used |
 |---|---|---|
-| [`install.yml`](tasks/install.yml) | installing redis binaries — dispatched by `install.method`: **package** (distro default package) **or** **binary** (default — separate binaries fetched from Nexus: distro user/group → **four** `core.url.fetched` fetch `redis-server`/`redis-cli`/`redis-benchmark`/`redis-sentinel` into `/usr/local/bin` (URL `<base_url>/<arch>/Debian/<distro_ver>/<version>/…`) → symlinks `redis-check-aof`/`redis-check-rdb` → its own systemd unit + its OWN restart) + unix-socket directory (both branches) | [`core.pkg`](../../../docs/module/core/pkg/README.md), [`core.url`](../../../docs/module/core/url/README.md), [`core.cmd`](../../../docs/module/core/cmd/README.md), [`core.group`](../../../docs/module/core/group/README.md), [`core.user`](../../../docs/module/core/user/README.md), [`core.file`](../../../docs/module/core/file/README.md), [`core.service`](../../../docs/module/core/service/README.md) |
+| [`install.yml`](tasks/install.yml) | installing redis binaries — dispatched by `install.method`: **package** (default — the `redis-tools`/`redis-server`/`redis-sentinel` packages at one `=version` pin, preceded by `core.url.fetched` + `core.repo.present` declaring `install.repo_uri` when one is given) **or** **binary** (separate binaries fetched from a mirror: distro user/group → **four** `core.url.fetched` fetch `redis-server`/`redis-cli`/`redis-benchmark`/`redis-sentinel` into `/usr/local/bin` (URL `<base_url>/<arch>/Debian/<distro_ver>/<version>/…`) → symlinks `redis-check-aof`/`redis-check-rdb` → its own systemd unit + its OWN restart) + unix-socket directory (both branches) | [`core.pkg`](../../../docs/module/core/pkg/README.md), [`core.url`](../../../docs/module/core/url/README.md), [`core.cmd`](../../../docs/module/core/cmd/README.md), [`core.group`](../../../docs/module/core/group/README.md), [`core.user`](../../../docs/module/core/user/README.md), [`core.file`](../../../docs/module/core/file/README.md), [`core.service`](../../../docs/module/core/service/README.md) |
 | [`server.yml`](tasks/server.yml) | data plane `redis-server` (gated by `deploy_redis`): TLS-PEM (cert/key/ca) → `users.acl` → `redis.conf` → systemd-hardening drop-in → `core.service running/restarted` | [`core.file`](../../../docs/module/core/file/README.md), [`core.service`](../../../docs/module/core/service/README.md) |
 | [`sentinel.yml`](tasks/sentinel.yml) | sentinel daemon (gated by `sentinel_enabled`): `sentinel-users.acl` (2nd aclfile) → `sentinel.conf` → systemd unit → `core.service running/restarted` | [`core.file`](../../../docs/module/core/file/README.md), [`core.service`](../../../docs/module/core/service/README.md) |
 | [`extras.yml`](tasks/extras.yml) | host-tuning, **unconditional** (a Redis recommendation / hardening, not an operator choice): disabling THP (oneshot unit) / logrotate / sysctl kernel parameters | [`core.file`](../../../docs/module/core/file/README.md), [`core.service`](../../../docs/module/core/service/README.md), [`core.sysctl`](../../../docs/module/core/sysctl/README.md) |
@@ -62,15 +62,21 @@ how the service scenario builds and passes these values to the operator is in
   `redis-server`. `false` (the `sentinel_only` mode) mutes the whole data plane
   ([`server.yml`](tasks/server.yml)); the redis package is still installed
   regardless (it also carries the sentinel daemon).
-- **`install`** — how binaries are delivered: `{method, base_url, version}`.
-  `method=package` — a distro package; `method=binary` — **separate binaries fetched
-  from Nexus** (`redis-server`/`redis-cli`/`redis-benchmark`/`redis-sentinel` are fetched
-  per-host from `<base_url>/<arch>/Debian/<distro_ver>/<version>/…` by content-idempotency
-  SHA-256, without integrity-verify — `redis-sentinel` is a separate binary,
-  `redis-check-aof`/`redis-check-rdb` are symlinks to `redis-server`). The top-level
-  `version` (distro pin) is for the package branch; `install.version` is for the binary
-  branch. **The service-level `install_method` (default `binary`) sets the installation
-  method, while `base_url`/`version` of the binary come from `essence`** (see
+- **`install`** — how binaries are delivered:
+  `{method, repo_uri, repo_suite, gpg_key_url, gpg_key_sha256, version_pin, base_url,
+  version, allow_private}`. `method=package` — the packages, from the host's own distro
+  repository or from the one `repo_uri` declares (the key is fetched to
+  `/etc/apt/keyrings/redis.asc` — apt reads an armored keyring only under that
+  extension — and referenced from the `.list` via `signed-by=`); `method=binary` —
+  **separate binaries fetched from a mirror** (`redis-server`/`redis-cli`/`redis-benchmark`/`redis-sentinel`
+  are fetched per-host from `<base_url>/<arch>/Debian/<distro_ver>/<version>/…` by
+  content-idempotency SHA-256, without integrity-verify — `redis-sentinel` is a separate
+  binary, `redis-check-aof`/`redis-check-rdb` are symlinks to `redis-server`). The
+  top-level `version` is for the package branch (verbatim without `repo_uri`, expanded
+  into the packages.redis.io pin with it — see `vars.redis_pkg_version`);
+  `install.version` is for the binary branch. **The service-level `install_method`
+  (default `package`) sets the installation method, while the repository and the binary
+  `base_url`/`version` come from `essence`** (see
   [service-README](../../service/redis/README.md)); the destiny assembles the `install`
   struct from them.
 - **TLS.** `tls: {enable, only, port, cert_ref, key_ref, ca_ref}` — a single dict

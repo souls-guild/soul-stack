@@ -41,8 +41,8 @@ fixtures:
     # binary_base_url — the Nexus-mirror (author-context). Re-run takes it into install.base_url,
     # destiny builds the URL <base_url>/<arch>/Debian/<distro_ver>/<version>/redis-*.
     binary_base_url: "https://downloads.example.com/redis"
-    # binary_allow_private=true → lifts the core.url SSRF-guard (default base = internal
-    # Nexus in RFC1918). Re-run must pass it through into install.allow_private (otherwise fetch
+    # binary_allow_private=true → lifts the core.url SSRF-guard (this fleet's binary mirror
+    # resolves to RFC1918). Re-run must pass it through into install.allow_private (otherwise fetch
     # on a real host would hit the SSRF-block for the private IP).
     binary_allow_private: true
     persistence_presets:

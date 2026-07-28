@@ -12,6 +12,9 @@
 #    BEFORE publishing the file (input.sha256, form "sha256:<hex>").
 - name: Fetch vector tarball
   module: core.url.fetched
+  # retry - the download host is remote and flaps (a TLS handshake timeout against
+  # GitHub Releases failed a whole run once). Symmetric with the apt installs.
+  retry: { count: 3, delay: 10s }
   params:
     url: "${ input.base_url + '/v' + input.version + '/vector-' + input.version + '-' + vars.arch_triplet + '.tar.gz' }"
     path: "${ vars.tarball_path }"

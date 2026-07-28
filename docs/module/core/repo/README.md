@@ -110,43 +110,50 @@ key) - field `warnings: [...]` with a list of strings (they end up in the output
 
 ### Upstream mirror in a closed network (ADR-071, option B)
 
-Connecting an internal apt mirror (e.g. redis.io in Nexus) — two steps: the key
+Connecting an internal apt mirror (e.g. a redis.io mirror) — two steps: the key
 is brought in by `core.url.fetched` (network_outbound + SSRF-guard + checksum there),
-and `core.repo` declares the repo with an inline key via `${ file(...) }` and sets `arch`.
+and `core.repo` references it by path via `gpg_key_path` and sets `arch`.
 core.repo does NOT touch the network (pure-FS) — the key-by-URL stays outside the module:
 
 ```yaml
-# 1) redis.io key from the internal mirror (allow_private — internal Nexus, ADR-067)
+# 1) redis.io key from the internal mirror (allow_private — internal mirror, ADR-067)
 - name: Fetch redis.io signing key
   module: core.url.fetched
   params:
-    url: https://nexus.internal/repository/redis-raw/redis.gpg
-    path: /etc/soul-stack/keys/redis.asc
+    url: https://mirror.internal/repository/redis-raw/redis.gpg
+    path: /etc/apt/keyrings/redis.asc
     checksum: "sha256:<hex>"
+    mode: "0644"
     allow_private: true
 
-# 2) declare the apt mirror (uri=Nexus, arch=amd64, inline key)
+# 2) declare the apt mirror (uri=mirror, arch=amd64, key by path)
 - name: Declare redis.io apt mirror
   module: core.repo.present
   params:
     name: redis
-    uri: https://nexus.internal/repository/redis-apt
+    uri: https://mirror.internal/repository/redis-apt
     suite: bookworm
     components: [main]
     arch: [amd64]
-    gpg_key: "${ file('/etc/soul-stack/keys/redis.asc') }"
+    gpg_key_path: /etc/apt/keyrings/redis.asc
 ```
 
 Result — `/etc/apt/sources.list.d/redis.list`:
 
 ```
-deb [signed-by=/etc/apt/keyrings/redis.gpg arch=amd64] https://nexus.internal/repository/redis-apt bookworm main
+deb [signed-by=/etc/apt/keyrings/redis.asc arch=amd64] https://mirror.internal/repository/redis-apt bookworm main
 ```
 
-The key can be ASCII-armored (`.asc`): apt ≥ 1.4 reads an armored keyring via
-`signed-by=` directly; if a binary keyring is needed — the mirror already serves a
-dearmored key (dearmor happens outside core.repo). Installing a package from the declared
-mirror is done by `core.pkg.installed` with an `=version` pin (S3/NIM-105).
+⚠️ **The keyring filename decides how apt parses it.** apt reads an ASCII-armored key
+(`-----BEGIN PGP PUBLIC KEY BLOCK-----`) only from a `.asc` name, and a dearmored binary
+keyring only from a `.gpg` name. Get it the wrong way round and apt does not complain
+about the file — it reports `NO_PUBKEY <id>` and drops the whole repository as unsigned
+(verified on Debian 12). Most upstreams, redis.io included, serve the ARMORED form, so
+fetch it to a `.asc` path and reference that path — which is why this example uses
+`gpg_key_path` rather than the inline `gpg_key`: the inline key is always materialized at
+`/etc/apt/keyrings/<name>.gpg`, so it must be a dearmored keyring (dearmoring happens
+outside core.repo). Installing a package from the declared mirror is done by
+`core.pkg.installed` with an `=version` pin (S3/NIM-105).
 
 ### Referencing a key already on the host (variant B, no copy)
 

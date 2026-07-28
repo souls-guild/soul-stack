@@ -12,10 +12,11 @@
 // Difference from L3a (tests/e2e/redis_test.go, soul-stub): a real soul-in-container
 // with a real redis + a real plugin-subprocess, not scripted-success.
 //
-// * Run environment: create deploys redis (install_method=binary, essence-default ->
-// binaries from an internal Nexus) + UNCONDITIONAL node-exporter/redis-exporter/vector (fetch
-// GitHub/Nexus). The container needs access to these sources, otherwise create-apply
-// fails on fetch.
+// * Run environment: create deploys redis (install_method=package, essence-default ->
+// the official Redis apt repo) + UNCONDITIONAL node-exporter/redis-exporter/vector (fetched
+// from GitHub Releases). The container needs egress to packages.redis.io and github.com,
+// otherwise create-apply fails on fetch. Every source is public by design - see
+// docs/testing/README.md on why the gate runs against the examples corpus.
 package e2e_live_test
 
 import (

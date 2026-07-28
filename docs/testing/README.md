@@ -116,19 +116,27 @@ refused). When raising containers (infrastructure, not code regression) -
 restart the gate.
 
 **What it DOESN'T cover** (this is stand/cloud/PHASE 2/L3c-k8s, not local gate):
-cloud provision (`CloudDriver`), Nexus-binary `install_method`,
-exporter / vector-destinies (egress monitoring), sentinel and cluster redis topologies,
-multi-keeper HA.
+cloud provision (`CloudDriver`), `install_method=binary` (there is no public source of
+standalone redis binaries), cluster redis topology, multi-keeper HA.
 
-**Redis-create is NOT locally covered.** Canonical `TestL3bRedisLive_CreateStandalone`
-has **unconditional `t.Skip`** - that is, creating a redis service locally does not
-is checked at all. This is a conscious design decision (architect): local gate
-guarantees **only the module delivery mechanics**, and redis parity (input
-`version`=Nexus-enum, `install_method`=binary, sentinel-/cluster-topologies)
-provided by **bench live runs (PHASE 2)** vs real
-Redis / DragonFly, not a local docker gate. To the future reader: this is NOT a space.
-coverings. The gate checks the mechanics of module delivery through a separate light fixture
-`tests/e2e-live/module-delivery-live`, not via full redis-create.
+**Redis-create IS locally covered.** Each of the six `TestL3bRedisLive_Day2*` tests runs
+`examples/service/redis::create` end to end first - installing a real `redis-server`
+plus the node-exporter / redis-exporter / vector destinies into a Debian-12 container -
+and only then exercises its day-2 scenario against that live instance. Sentinel mode
+with `replicas_per_master: 0` (a standalone-equivalent) is what they create.
+
+This is what the examples corpus is FOR: e2e runs against `examples/service/*`, so a
+green gate is the guarantee that the documented example still works. That guarantee has
+one hard prerequisite - **the examples must install from PUBLIC sources only**. Point one
+at an internal mirror and the gate stops being runnable, the red goes unnoticed, and the
+example rots invisibly (which is exactly what happened between `22130c2b` and NIM-208:
+`examples/service/redis` pointed at an internal Nexus placeholder and nobody could run
+it). `examples/service/redis` therefore installs from the official Redis apt repository
+by default; a fleet on an internal mirror overrides `essence.install_package` in
+`spec.essence`.
+
+`TestL3bRedisLive_CreateStandalone` remains skipped for an unrelated reason: it targets
+the `standalone` redis_type removed in 2026-06-25, not any coverage gap.
 
 ## Documents by level
 

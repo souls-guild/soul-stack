@@ -33,32 +33,30 @@ input:
       (honest hash-slot Redis Cluster). redis_type selects the dispatcher branch
       (conditional-include cluster.yml / sentinel.yml + when: on redis_type on the include).
 
-  # ── version: a fixed enum of Redis BINARY versions (Nexus) ──────────────────────
-  # ★ Input-contract redesign: version is now a fixed ENUM of upstream versions
-  # published to Nexus (essence.install_method=binary by default pulls EXACTLY these
-  # binaries - see the install.yml binary branch). The former free-form distro-pin
-  # pattern is replaced by a closed list: the operator picks a version from what's
-  # published to Nexus instead of writing an arbitrary string. required (ALWAYS
-  # needed: binary is the default install method, and the version determines the
-  # binary path; the package branch pins =version with the same enum).
+  # ── version: a fixed enum of upstream Redis releases ────────────────────────────
+  # ★ Input-contract redesign: version is a fixed ENUM of upstream releases. The former
+  # free-form distro-pin pattern is replaced by a closed list: the operator picks a
+  # published release instead of writing an arbitrary string. required (ALWAYS needed:
+  # the package branch pins =version, the binary branch puts it in the binary path).
+  # Every value here is published by the official Redis apt repository
+  # (essence.package_repo_uri), so all of them are installable out of the box.
   version:
     type: string
     required: true
     enum: ["8.6.1", "8.4.0", "8.2.2", "8.0.3", "7.4.1", "6.2.21"]
     description: >-
-      Redis version (a fixed set of binaries published to Nexus). Pick one of the
-      published versions: install method binary (essence.install_method, default)
-      pulls the redis-server/redis-cli/redis-benchmark binaries of this version from
-      Nexus; install method package pins =version. The list is closed - an arbitrary
-      version is not accepted (only builds published to Nexus are available).
+      Redis version (a fixed set of upstream releases). Install method package
+      (essence.install_method, default) pins the package to this version in the
+      configured apt repository; install method binary puts it in the binary path.
+      The list is closed - an arbitrary version is not accepted.
 
   # ── install_method REMOVED from operator-input (2026-06-28) ──────────────────────
   # The redis install method is NOT an operator choice in the Run form: it's fixed in
-  # essence.install_method (default binary, author-context). compute.install reads
-  # default(essence.install_method, 'binary') - the operator no longer sees/sets this
-  # field. An internal operator overrides the method in spec.essence (install_method:
-  # package), a regular one doesn't. Symmetric with modules_base_url/binary_base_url
-  # (also essence).
+  # essence.install_method (default package, author-context). compute.install reads
+  # default(essence.install_method, 'package') - the operator no longer sees/sets this
+  # field. A fleet publishing its own redis binaries overrides the method in spec.essence
+  # (install_method: binary), a regular operator doesn't. Symmetric with
+  # modules_base_url/binary_base_url (also essence).
   #
   # ★ The conf_dir/data_dir layout is also NOT operator input (#2): the defaults moved
   # to essence (conf_dir/data_dir), compute reads them from there. Override is in the
@@ -476,9 +474,9 @@ compute:
   # repeating it. The compute context is run-level: input/essence are available,
   # soulprint isn't (TLS host-invariance).
   #
-  # ── Effective redis version: input.version (enum of builds published to Nexus) ──────
+  # ── Effective redis version: input.version (enum of upstream releases) ─────────────
   # ★ Redesign: version is a required enum, ONE for both install methods (binary
-  # pulls binaries of this version from Nexus; package pins =version). The former
+  # pulls binaries of this version; package pins =version). The former
   # "binary -> essence.binary_version" cascade is gone - the version is always
   # operator input.version. Declared ONCE: state_changes.redis_version, the plugin's
   # redis_version param, and destiny's binary URL all read it. required:true
@@ -507,11 +505,12 @@ compute:
   # default(input.modules_base_url, '').
   modules_base_url: "${ default(essence.modules_base_url, '') }"
   # ── SSRF guard for fetching .so modules (essence placeholder, 2026-06-28) ────────
-  # Symmetric with install.allow_private: modules_base_url can also be an internal Nexus
+  # Symmetric with install.allow_private: modules_base_url can be an internal mirror
   # (resolves to RFC1918) → the 4 .so-fetch destiny would trip the SSRF guard core.url. Read from
-  # essence.modules_allow_private (default true). Declared as ONE compute var, branches feed it
-  # into apply.input.modules_allow_private. default() catches a missing key on an existing essence.
-  modules_allow_private: "${ default(essence.modules_allow_private, true) }"
+  # essence.modules_allow_private (default false - the guard stays up; a fleet on an internal
+  # mirror sets true). Declared as ONE compute var, branches feed it into
+  # apply.input.modules_allow_private. default() catches a missing key on an existing essence.
+  modules_allow_private: "${ default(essence.modules_allow_private, false) }"
   # ── Per-master sentinel directives (generalized dict, redesign) ────────────────
   # ★ Previously hardcoded exactly 2 directives (down-after-milliseconds/failover-timeout) from
   # named fields. Now GENERALIZED: per-master options - dict input.sentinel_master_settings
@@ -554,30 +553,34 @@ compute:
   # A divergence by VALUE → covenant doesn't carry it (otherwise section_key_conflict on merge),
   # each inheritor declares sentinel_monitor_now in ITS OWN compute delta. See the header of
   # redis-deploy-sentinel.yml.
-  # ── install: destiny struct {method, base_url, version, allow_private} (redesign) ─
-  # Assembled from essence.install_method (default binary, author-context - NOT operator
-  # input, 2026-06-28) + essence.binary_base_url (URL) + input.version (the version -
-  # an operator enum of builds published to Nexus). method is always present; base_url/
-  # version/allow_private materialize ONLY when method=binary. destiny builds the per-host
-  # path as <base_url>/<arch>/Debian/<distro_ver>/<version>/redis-* (arch/distro_ver -
-  # soulprint.self.os; see the install.yml binary branch). The same struct goes into destiny
-  # `redis` (apply.input.install) and into state_changes.install. default(essence.install_method,
-  # 'binary') catches a missing key on an existing essence map (symmetric with modules_base_url).
+  # ── install: destiny struct, one shape per method (redesign) ──────────────────
+  # Assembled from essence.install_method (default package, author-context - NOT operator
+  # input, 2026-06-28) + the essence keys of the chosen method + input.version (the version -
+  # an operator enum of upstream releases). method is always present, the rest is
+  # method-specific. The same struct goes into destiny `redis` (apply.input.install) and into
+  # state_changes.install. default(essence.install_method, 'package') catches a missing key on
+  # an existing essence map (symmetric with modules_base_url).
   #
-  # ★ allow_private (2026-06-28): SSRF guard core.url for fetching binaries. The default
-  # binary_base_url is an INTERNAL Nexus (resolves to RFC1918) → core.url.fetched by default
-  # blocks dialing a private IP. Read from essence.binary_allow_private (default true: the default
-  # base = internal Nexus → legit). A public-mirror deploy (external-resolvable base) sets
-  # false in spec.essence. default() catches a missing key on an existing essence map.
+  # package (DEFAULT): repo_uri/gpg_key_url declare the apt repository the package comes from
+  # - by default the official Redis one, which publishes every version of the operator enum
+  # (a distro repository carries only the release's own redis). Empty repo_uri = install from
+  # the host's distro repository. destiny composes the =version pin per host from
+  # input.version (vars.redis_pkg_version), or takes version_pin literally when set.
+  #
+  # binary: base_url + version + soulprint.self.os give the per-host path
+  # <base_url>/<arch>/Debian/<distro_ver>/<version>/redis-* (see the install.yml binary
+  # branch). ★ allow_private (2026-06-28): the core.url SSRF guard blocks dialing a private IP,
+  # so a fleet whose binary_base_url is an internal mirror resolving to RFC1918 sets
+  # essence.binary_allow_private true. default() catches a missing key on an existing essence map.
   install: >-
-    ${ (default(essence.install_method, 'binary') == 'binary')
+    ${ (default(essence.install_method, 'package') == 'binary')
          ? {
              'method':        'binary',
              'base_url':      default(essence.binary_base_url, ''),
              'version':       input.version,
-             'allow_private': default(essence.binary_allow_private, true)
+             'allow_private': default(essence.binary_allow_private, false)
            }
-         : { 'method': 'package' } }
+         : default(essence.install_package, {'method': 'package'}) }
   # ── Effective host layout: conf_dir/data_dir from essence (#2) ───────────────
   # ★ #2 (2026-06-26): conf_dir/data_dir are NO LONGER operator input - the defaults
   # moved into essence (conf_dir/data_dir; the operator overrides them in spec.essence).

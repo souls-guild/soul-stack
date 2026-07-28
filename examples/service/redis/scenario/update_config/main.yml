@@ -212,20 +212,22 @@ tasks:
         version:  "${ default(incarnation.state.redis_version, '') }"
         # * install: REQUIRED on a repeat run (regression from live E2E 2026-07-01). Without it
         # the install.yml dispatcher falls back to the package branch on !has(input.install) ->
-        # core.pkg `apt install redis-server=<version>` (the version from Nexus-binary is
-        # ABSENT in apt -> env exited 100). We assemble the SAME binary structure as create
-        # (deploy-body -> compute.install from essence.install_method) - a single install
-        # method. Differs from covenant.install: version comes from the DEPLOYED state
-        # (redis_version), not input.version (a repeat run doesn't reinstall the version).
+        # core.pkg `apt install redis-server=<version>` with NO repository declared, and the
+        # pinned version isn't in the host's distro repository -> env exited 100. We assemble
+        # the SAME structure as create (deploy-body -> compute.install from
+        # essence.install_method) - a single install method. Differs from covenant.install:
+        # the binary branch's version comes from the DEPLOYED state (redis_version), not
+        # input.version (a repeat run doesn't reinstall the version); the package branch is
+        # version-free (compute.install_package).
         install: >-
-          ${ (default(essence.install_method, 'binary') == 'binary')
+          ${ (default(essence.install_method, 'package') == 'binary')
                ? {
                    'method':        'binary',
                    'base_url':      default(essence.binary_base_url, ''),
                    'version':       default(incarnation.state.redis_version, ''),
-                   'allow_private': default(essence.binary_allow_private, true)
+                   'allow_private': default(essence.binary_allow_private, false)
                  }
-               : { 'method': 'package' } }
+               : default(essence.install_package, {'method': 'package'}) }
         conf_dir: "${ default(essence.conf_dir, '/etc/redis') }"
         data_dir: "${ default(essence.data_dir, '/var/lib/redis') }"
         # * default_admin REDESIGN (2026-06-30): apply.input.password REMOVED (destiny redis

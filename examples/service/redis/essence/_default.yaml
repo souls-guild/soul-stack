@@ -26,43 +26,70 @@ sentinel_master_name: master
 modules_base_url: ""
 
 # ── SSRF guard for .so module fetches (allow_private, 2026-06-28) ─────────────────
-# Symmetric to binary_allow_private: modules_base_url can also be an internal Nexus
-# (resolves to RFC1918) → 4 .so-fetch destinies would fail on the core.url SSRF guard. Default TRUE
-# (trusted internal Nexus). compute.modules_allow_private forwards it into
-# apply.input.modules_allow_private → destiny modules.yml. Public-mirror — false in spec.essence.
-modules_allow_private: true
+# Symmetric to binary_allow_private: modules_base_url can also be an internal mirror
+# (resolves to RFC1918) → 4 .so-fetch destinies would fail on the core.url SSRF guard.
+# compute.modules_allow_private forwards it into apply.input.modules_allow_private →
+# destiny modules.yml. Default FALSE (the guard stays up, matching the empty public default
+# of modules_base_url); a fleet on an internal mirror sets true in spec.essence.
+modules_allow_private: false
 
 # ── Redis install method: FIXED in essence, NOT operator-input (2026-06-28) ──
 # install_method was removed from the operator create contract: the install method is NOT
-# an operator choice in the Run form, but author-context. Default binary (the standard way:
-# separate binaries from Nexus). compute.install reads this value
-# (default(essence.install_method, 'binary')), symmetric to modules_base_url/binary_base_url.
-# The package branch remains vars-driven: an internal operator overrides it in spec.essence
-# (install_method: package) for a distro install, a regular operator doesn't see it.
-install_method: binary
+# an operator choice in the Run form, but author-context. Default package — the version the
+# operator picks is installed from the official Redis apt repository below, which is
+# reachable from anywhere. compute.install reads this value
+# (default(essence.install_method, 'package')), symmetric to modules_base_url/binary_base_url.
+# The binary branch remains vars-driven: a fleet that publishes its own redis binaries
+# overrides it in spec.essence (install_method: binary + binary_base_url).
+install_method: package
 
-# ── Binary install method: source of Redis binaries from Nexus (redesign) ──────────
-# install_method=binary (DEFAULT) pulls SEPARATE binaries redis-server/redis-cli/
-# redis-benchmark from Nexus. base_url — author-context (the operator overrides it in
-# spec.essence for their own mirror). destiny builds the per-host path as
+# ── Package install method: which apt repository the package comes from ────────────
+# install_method=package (DEFAULT) installs the redis-server package. With an empty
+# repo_uri that is the host's own distro repository, which carries only the redis its
+# release froze on (Debian 12 — 7.0.15, none of the versions in the operator's enum). So
+# the default is the OFFICIAL Redis apt repository, which publishes every version of that
+# enum: destiny declares it (core.repo.present, signed by the key below) and pins
+# =6:<version>-1rl1~<codename>1 per host. A fleet without direct internet access overrides
+# this map in spec.essence with its own mirror of it — and version_pin too if that mirror
+# names its builds differently.
+#
+# ★ The WHOLE destiny install struct lives here as one map, because EVERY scenario that
+# re-applies destiny `redis` has to pass it (create, add_user, add_node, update_config,
+# update_users, rotate_tls) — the apply sites read essence.install_package instead of each
+# spelling the repository out, so the addresses have a single home. It is the whole map
+# that an override replaces, not individual keys.
+install_package:
+  method: package
+  repo_uri:    "https://packages.redis.io/deb"
+  gpg_key_url: "https://packages.redis.io/gpg"
+  # Optional checksum of the signing key (form sha256:<64 hex>). Empty — the key is trusted
+  # over HTTPS; set it to pin the key against a mirror swapping it out.
+  gpg_key_sha256: ""
+  # Literal apt version pin, overriding the composed one. Empty — composed from
+  # input.version in the packages.redis.io naming (see above).
+  version_pin: ""
+
+# ── Binary install method: source of Redis binaries from a fleet's own mirror ───────
+# install_method=binary pulls SEPARATE binaries redis-server/redis-cli/redis-benchmark
+# from base_url. There is no public source laid out this way, so the default is EMPTY: a
+# fleet that publishes such builds sets binary_base_url in spec.essence together with
+# install_method: binary. destiny builds the per-host path as
 # <binary_base_url>/<arch>/Debian/<distro_ver>/<version>/redis-{server,cli,benchmark}
 # from soulprint.self.os (arch, version) + input.version (cluster.yml/sentinel.yml binary branch).
-# ★ binary_version is NOT read in the create SCENARIO (the version is operator input.version,
-# an enum of published Nexus builds). BUT it is ALIVE for other service scenarios: migrate_cluster
+# ★ binary_version is NOT read in the create SCENARIO (the version is operator input.version).
+# BUT it is ALIVE for other service scenarios: migrate_cluster
 # (df_version cascade binary → essence.binary_version) — so it's NOT removed, left as "" as an
 # author-context fallback (the operator overrides it in spec.essence for a binary install).
-binary_base_url: "https://nexus.example.com/repository/raw/devops/dba/prod/redis"
+binary_base_url: ""
 binary_version:  ""
 
-# ── SSRF guard for Nexus binary fetches (allow_private, 2026-06-28) ───────────────
-# The default binary_base_url above is an INTERNAL Nexus that resolves to an RFC1918 address
-# (e.g. 10.16.2.130). core.url.fetched by default (allow_private:false) blocks dialing a
-# private IP via the SSRF guard (shared/netguard) → fetching redis binaries fails on a real
-# host. Default TRUE: the default base = a trusted internal Nexus → relaxing it is legitimate.
-# compute.install (create/main.yml) forwards the value into apply.input.install.allow_private
-# → destiny install.yml's 4 fetch tasks. A public-mirror deployment (binary_base_url with an externally
-# resolvable host) sets false in the incarnation's spec.essence — the guard is restored.
-binary_allow_private: true
+# ── SSRF guard for binary fetches (allow_private, 2026-06-28) ─────────────────────
+# core.url.fetched by default (allow_private:false) blocks dialing a private IP via the
+# SSRF guard (shared/netguard). compute.install (create/main.yml) forwards this value into
+# apply.input.install.allow_private → destiny install.yml's 4 fetch tasks. Default FALSE
+# (the guard stays up); a fleet whose binary_base_url is an internal mirror resolving to
+# RFC1918 sets true in the incarnation's spec.essence.
+binary_allow_private: false
 
 # ── Cloud-provision defaults: provider/profile/timeout/ssh for create default-on ──
 # create brings up a VM by default (input.provision default-on, decision 2026-06-30).
@@ -97,14 +124,11 @@ provision_join_wait_timeout: "10m"
 # without requirepass, without --redis.user it would be WRONGPASS (see create/main.yml).
 node_exporter_version:  "1.8.2"
 node_exporter_listen:   ":9100"
-# Download root for node_exporter releases. An air-gapped host has no direct access to github.com →
-# an internal Nexus raw-proxy (mirrors the github path 1:1 behind raw-proxy-github/). The destiny default
-# remains GitHub Releases (back-compat for environments with direct GitHub access); an operator with such
-# access overrides it in spec.essence or removes the key.
-node_exporter_base_url: "https://nexus.example.com/repository/raw-proxy-github/prometheus/node_exporter/releases/download"
-# SSRF guard opt-out: the base_url above is an internal Nexus that resolves to a private IP (symmetric to
-# binary_allow_private). A public-mirror deployment — false (or remove the key) in spec.essence.
-node_exporter_allow_private: true
+# ★ The download root is NOT set here: the scenario falls back to the destiny default,
+# GitHub Releases. An air-gapped host has no direct access to github.com → it sets
+# node_exporter_base_url in spec.essence to an internal raw-proxy mirroring the github path
+# 1:1, plus node_exporter_allow_private: true when that mirror resolves to a private IP.
+# The same holds for redis_exporter_base_url and vector_base_url below.
 redis_exporter_version: "1.62.0"
 # Checksum of the redis_exporter tarball (linux-<arch>, form "sha256:<hex>", 64 hex).
 # core.url.fetched verifies it BEFORE publishing the binary. The default is a real pinned
@@ -113,10 +137,6 @@ redis_exporter_version: "1.62.0"
 # oliver006/redis_exporter in spec.essence — otherwise fail-closed (mismatch/pattern → an honest fetch refusal).
 redis_exporter_sha256:  "sha256:a09f92a6b366e37c654e50522c7b80e4a625396b2499fd42cf17e1aa91e56d5e"
 redis_exporter_listen:  ":9121"
-# Download root for redis_exporter releases — an internal Nexus raw-proxy (see node_exporter_base_url).
-redis_exporter_base_url: "https://nexus.example.com/repository/raw-proxy-github/oliver006/redis_exporter/releases/download"
-# SSRF guard opt-out for the internal Nexus private-resolve (see node_exporter_allow_private).
-redis_exporter_allow_private: true
 
 # ── Mandatory data-plane log shipping: Vector (Slice V-I, ADR-067) ─────────
 # create UNCONDITIONALLY installs vector (log shipping agent) on EVERY incarnation host
@@ -132,10 +152,6 @@ vector_version:  "0.40.0"
 # MUST update the checksum for their pair from the sha256sums.txt of the GitHub release
 # vectordotdev/vector in spec.essence — otherwise fail-closed (mismatch/pattern → an honest fetch refusal).
 vector_sha256:   "sha256:112b047df17df46feb22fc69234e8fc2ad5a411cd2e7d369f3b70c00617a4e90"
-# Download root for Vector releases — an internal Nexus raw-proxy (see node_exporter_base_url).
-vector_base_url: "https://nexus.example.com/repository/raw-proxy-github/vectordotdev/vector/releases/download"
-# SSRF guard opt-out for the internal Nexus private-resolve (see node_exporter_allow_private).
-vector_allow_private: true
 # sink_type — where we ship logs (loki/elasticsearch/vector/console). Default console (safe,
 # no external infra: logs go to vector's own stdout). sink_endpoint — address of the central
 # collector (form depends on sink_type: loki/elasticsearch — URL, vector — host:port;

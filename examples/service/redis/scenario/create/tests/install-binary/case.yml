@@ -73,12 +73,16 @@ fixtures:
       maxmemory: "256mb"
 
     # * install_method is in essence (author-context, 2026-06-28): the install method is NOT
-    # operator-input. binary is the default; compute.install reads default(essence.install_method,
-    # 'binary'). This case guards the binary branch, so install_method: binary is set EXPLICITLY.
+    # operator-input. package is the default; compute.install reads default(essence.install_method,
+    # 'package'). This case guards the binary branch, so install_method: binary is set EXPLICITLY.
     install_method: binary
-    # * Redesign: the binaries' base_url is in essence (author-context, Nexus-mirror). The version is
-    # the operator's input.version (enum of published builds), NOT essence.binary_version.
+    # * Redesign: the binaries' base_url is in essence (author-context, a fleet's own mirror). The
+    # version is the operator's input.version (enum of releases), NOT essence.binary_version.
     binary_base_url: "https://downloads.example.com/redis"
+    # * binary_allow_private lifts the core.url SSRF guard for those fetches. The default is FALSE
+    # (public sources, guard up), so a fleet whose mirror resolves to RFC1918 sets it — which is
+    # what this case guards below (allow_private: true reaching each fetch task).
+    binary_allow_private: true
 
     # System ACL users for redis-server + the sentinel daemon (1:1 from essence/_default.yaml).
     # BOTH ARE REQUIRED: the create/sentinel.yml guard (assert 1b) breaks the render if either

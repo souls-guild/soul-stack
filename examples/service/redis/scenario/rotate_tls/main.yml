@@ -129,20 +129,22 @@ tasks:
         version:  "${ default(incarnation.state.redis_version, '') }"
         # * install: REQUIRED on a repeat run (live E2E regression 2026-07-01). Without it,
         # install.yml's dispatcher falls into the package branch on !has(input.install) ->
-        # core.pkg `apt install redis-server=<version>` (the version from Nexus-binary is
-        # ABSENT in apt -> env exited 100). We build the SAME binary structure as create
-        # (deploy-body -> compute.install from essence.install_method) - a single install
-        # method. Difference from covenant.install: version comes from the DEPLOYED state
-        # (redis_version), not input.version (a repeat run doesn't reinstall the version).
+        # core.pkg `apt install redis-server=<version>` with NO repository declared, and the
+        # pinned version isn't in the host's distro repository -> env exited 100. We build the
+        # SAME structure as create (deploy-body -> compute.install from
+        # essence.install_method) - a single install method. Difference from covenant.install:
+        # the binary branch's version comes from the DEPLOYED state (redis_version), not
+        # input.version (a repeat run doesn't reinstall the version); the package branch is
+        # version-free (compute.install_package).
         install: >-
-          ${ (default(essence.install_method, 'binary') == 'binary')
+          ${ (default(essence.install_method, 'package') == 'binary')
                ? {
                    'method':        'binary',
                    'base_url':      default(essence.binary_base_url, ''),
                    'version':       default(incarnation.state.redis_version, ''),
-                   'allow_private': default(essence.binary_allow_private, true)
+                   'allow_private': default(essence.binary_allow_private, false)
                  }
-               : { 'method': 'package' } }
+               : default(essence.install_package, {'method': 'package'}) }
         # host-layout - a single essence source (v11->v12): conf_dir=compute.conf_dir (itself
         # from essence.conf_dir, see the vars header), data_dir/modules_base_url straight from essence.
         conf_dir: "${ compute.conf_dir }"

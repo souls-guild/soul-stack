@@ -6,7 +6,7 @@
 # redis.conf/.so diverge from the cluster → node unreachable/missing modules.
 #
 # essence with override: conf_dir=/opt/redis, data_dir=/srv/redis-data, non-empty
-# modules_base_url (redis_version="" < 8 → modules active, .so under the data_dir override).
+# modules_base_url (redis_version < 8 → modules active, .so under the data_dir override).
 # Expected:
 #   - redis.conf → /opt/redis/redis.conf (conf_dir override from essence);
 #   - modules-dir → /srv/redis-data/modules (data_dir override from essence);
@@ -37,7 +37,7 @@ fixtures:
     modules_base_url: "https://artifacts.example.com/redis/modules"
   state:
     redis_type: cluster
-    redis_version: ""
+    redis_version: "7.4.1"
     redis_config:
       maxmemory: "256mb"
       cluster-enabled: "yes"
