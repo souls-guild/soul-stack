@@ -321,6 +321,33 @@ var catalogManifest = []toolEntry{
 			OutputSchema: schemaIncarnationTraitsSetOutput,
 		},
 	},
+	{
+		status: toolStatusImplemented,
+		decl: toolDeclaration{
+			Name:         "keeper.incarnation.bind-member",
+			Description:  "Binds already-onboarded, connected Souls to the incarnation's roster (incarnation_membership, ADR-008 amendment / NIM-209) so a scenario can subsequently roll onto them - the operator path that makes a create scenario over a ready roster reachable. Idempotent: re-binding a member is a no-op reported in already_member. Permission: incarnation.bind-member (scope incarnation/coven/service by name); EVERY target SID must ALSO be inside the caller's soul scope - one SID outside it rejects the whole call with code=forbidden (never a silent partial bind). Fails with code=validation-failed on an unknown SID or a host that is not connected.",
+			InputSchema:  schemaIncarnationBindMemberInput,
+			OutputSchema: schemaIncarnationBindMemberOutput,
+		},
+	},
+	{
+		status: toolStatusImplemented,
+		decl: toolDeclaration{
+			Name:         "keeper.incarnation.unbind-member",
+			Description:  "Removes a host from the incarnation's roster - it stops being a target of every FUTURE run (ADR-008 amendment / NIM-209). Idempotent: unbinding a non-member succeeds with removed=false. Permission: incarnation.unbind-member (scope incarnation/coven/service by name); the SID must ALSO be inside the caller's soul scope, else code=forbidden.",
+			InputSchema:  schemaIncarnationUnbindMemberInput,
+			OutputSchema: schemaIncarnationUnbindMemberOutput,
+		},
+	},
+	{
+		status: toolStatusImplemented,
+		decl: toolDeclaration{
+			Name:         "keeper.incarnation.members",
+			Description:  "Lists the incarnation's roster - member hosts (incarnation_membership, NIM-124) with their current status and the membership audit columns bound_at / bound_by_aid. Permission: incarnation.get (the roster needs no right of its own). Narrowed to the hosts inside the caller's soul scope, so total is what THIS operator may see.",
+			InputSchema:  schemaIncarnationMembersInput,
+			OutputSchema: schemaIncarnationMembersOutput,
+		},
+	},
 
 	// --- Soul (7) — create + issue-token + coven-assign + traits-assign +
 	// ssh-target.update + run-command implemented (parity with REST POST
@@ -1490,6 +1517,69 @@ var (
 "properties":{
 "incarnation":{"type":"string"},
 "keys":{"type":"array","items":{"type":"string"},"description":"Final set of trait keys after the replacement (sorted). Values are not echoed (secret hygiene)."}}}`)
+
+	// Membership (ADR-008 amendment 2026-07-28, NIM-209) — the operator path for
+	// the incarnation roster. bind is idempotent, so its output splits what this
+	// call wrote (bound) from what was already a member (already_member).
+	schemaIncarnationBindMemberInput = json.RawMessage(`{
+"$schema":"https://json-schema.org/draft/2020-12/schema",
+"type":"object",
+"additionalProperties":false,
+"required":["name","sids"],
+"properties":{
+"name":{"type":"string","pattern":"^[a-z0-9][a-z0-9-]{0,62}$","description":"Incarnation name."},
+"sids":{"type":"array","minItems":1,"maxItems":200,"items":{"type":"string","pattern":"^[a-z0-9][a-z0-9.-]{0,253}$"},"description":"SIDs (FQDN) of already-onboarded, connected hosts to bind. Every SID must be inside the caller's soul scope - one outside it rejects the whole call."}}}`)
+
+	schemaIncarnationBindMemberOutput = json.RawMessage(`{
+"$schema":"https://json-schema.org/draft/2020-12/schema",
+"type":"object",
+"additionalProperties":false,
+"required":["incarnation","bound","already_member"],
+"properties":{
+"incarnation":{"type":"string"},
+"bound":{"type":"array","items":{"type":"string"},"description":"SIDs written by THIS call (sorted)."},
+"already_member":{"type":"array","items":{"type":"string"},"description":"SIDs that were already members - the idempotent part of the call (sorted)."}}}`)
+
+	schemaIncarnationUnbindMemberInput = json.RawMessage(`{
+"$schema":"https://json-schema.org/draft/2020-12/schema",
+"type":"object",
+"additionalProperties":false,
+"required":["name","sid"],
+"properties":{
+"name":{"type":"string","pattern":"^[a-z0-9][a-z0-9-]{0,62}$","description":"Incarnation name."},
+"sid":{"type":"string","pattern":"^[a-z0-9][a-z0-9.-]{0,253}$","description":"SID (FQDN) of the host to unbind."}}}`)
+
+	schemaIncarnationUnbindMemberOutput = json.RawMessage(`{
+"$schema":"https://json-schema.org/draft/2020-12/schema",
+"type":"object",
+"additionalProperties":false,
+"required":["incarnation","sid","removed"],
+"properties":{
+"incarnation":{"type":"string"},
+"sid":{"type":"string"},
+"removed":{"type":"boolean","description":"false when the SID was not a member - the call is idempotent."}}}`)
+
+	schemaIncarnationMembersInput = json.RawMessage(`{
+"$schema":"https://json-schema.org/draft/2020-12/schema",
+"type":"object",
+"additionalProperties":false,
+"required":["name"],
+"properties":{
+"name":{"type":"string","pattern":"^[a-z0-9][a-z0-9-]{0,62}$","description":"Incarnation name."}}}`)
+
+	schemaIncarnationMembersOutput = json.RawMessage(`{
+"$schema":"https://json-schema.org/draft/2020-12/schema",
+"type":"object",
+"additionalProperties":false,
+"required":["incarnation","items","total"],
+"properties":{
+"incarnation":{"type":"string"},
+"items":{"type":"array","items":{"type":"object","additionalProperties":false,"required":["sid","status","bound_at"],"properties":{
+"sid":{"type":"string"},
+"status":{"type":"string","description":"The HOST's lifecycle status at read time (membership itself carries no status)."},
+"bound_at":{"type":"string","description":"RFC3339 timestamp of the bind."},
+"bound_by_aid":{"type":"string","description":"AID of the operator that bound the host; absent for a keeper-internal bind."}}}},
+"total":{"type":"integer","description":"Number of members visible to THIS operator, not the size of the whole roster."}}}`)
 
 	schemaSoulCreateInput = json.RawMessage(`{
 "$schema":"https://json-schema.org/draft/2020-12/schema",

@@ -13,12 +13,12 @@ package rbac
 import "sort"
 
 // AllowedPermissions — the catalog of permission names from rbac.md →
-// §Catalog of permissions. 106 names (sum of the categories below):
+// §Catalog of permissions. 108 names (sum of the categories below):
 //
 //   - operator (5): create / revoke / issue-token / list / read;
 //   - role (8): create / create-root / delete / list / list-all / update / grant-operator / revoke-operator;
 //   - synod (8): create / update / delete / list / add-operator / remove-operator / grant-role / revoke-role (ADR-049);
-//   - incarnation (14): create / rerun-last / run / get / list / history / unlock / upgrade / destroy / check-drift / update-hosts / update (deprecated alias) / traits-set / view-secrets;
+//   - incarnation (16): create / rerun-last / run / get / list / history / unlock / upgrade / destroy / check-drift / update-hosts / update (deprecated alias) / traits-set / view-secrets / bind-member / unbind-member (NIM-209);
 //   - soul (7): list / create / issue-token / coven-assign / traits-assign / ssh-target-update / console (ADR-0074);
 //   - plugin (3): allow / revoke / list;
 //   - sigil (4): key-introduce / key-retire / key-list / key-set-primary;
@@ -147,6 +147,31 @@ var AllowedPermissions = map[string]struct{}{
 	// incarnation.update-hosts). Same scope selector
 	// incarnation/coven/service by path-{name} as incarnation.update-hosts.
 	"incarnation.traits-set": {},
+	// incarnation.bind-member / incarnation.unbind-member — the OPERATOR
+	// path for incarnation membership (`POST /v1/incarnations/{name}/members`,
+	// `DELETE .../members/{sid}`; ADR-008 amendment 2026-07-28, NIM-209).
+	// Before them the only bind act was `core.soul.registered` INSIDE a
+	// scenario run, so an already-onboarded host could not be put into an
+	// incarnation from the outside at all — and a create scenario rolling
+	// onto a ready roster was unreachable through the API.
+	//
+	// Split in two (the choir.add-voice / choir.remove-voice pattern):
+	// unbinding is the destructive half — it drops the host out of the roster
+	// of every FUTURE run of that incarnation — so it is grantable
+	// separately from binding. Reading the roster needs no right of its own:
+	// it rides on `incarnation.get`.
+	//
+	// Scope selector — the incarnation/coven/service triple by path-{name},
+	// same as other incarnation mutations. That gate alone is NOT enough:
+	// a scope predicate on `incarnation=` is satisfied without ever looking
+	// at the host, so a holder of `incarnation.bind-member on
+	// incarnation=X` would be able to pull ANY host into X and thereby reach
+	// it with `incarnation.run`. The handler therefore applies a SECOND,
+	// per-host gate — every target SID must be inside the caller's soul
+	// visibility (`soul.list` purview, [soulpurview.InScope]) — all-or-
+	// nothing, never a silent trim. See rbac.md § Incarnation membership.
+	"incarnation.bind-member":   {},
+	"incarnation.unbind-member": {},
 	// incarnation.view-secrets — reveals the plaintext value of an
 	// incarnation secret declared in the service's `revealable_secrets`
 	// (NIM-74): POST .../secrets/reveal + discovery GET

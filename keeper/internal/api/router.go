@@ -712,6 +712,41 @@ func buildRouter(verifier *jwt.Verifier, healthH *health.Handler, opH *handlers.
 				registerHumaIncarnationSetTraits(newHumaCadenceAPI(r), incH)
 			})
 
+			// /v1/incarnations/{name}/members — the OPERATOR path for membership
+			// (ADR-008 amendment 2026-07-28, NIM-209). Before it the only bind act was
+			// `core.soul.registered` INSIDE a run, so a scenario that deploys onto a ready
+			// roster (`create_from_souls`) was unreachable: the run resolves its roster at
+			// start and aborts `no_hosts` before it can bind anything.
+			//
+			// Permissions incarnation.bind-member / .unbind-member with the same incScope
+			// selector as other incarnation mutations; the roster READ rides on
+			// incarnation.get (no right of its own). The route gate is only half the
+			// authorization — the handler additionally requires EVERY target SID to be
+			// inside the caller's soul scope (see handlers/incarnation_members.go), because
+			// an `incarnation=`-scoped predicate is satisfied without looking at the host.
+			//
+			// WRITE-SELF-AUDIT: incarnation.member_bound / .member_unbound are written by
+			// the handler itself (audit-middleware is NOT wired; newHumaCadenceAPI). The
+			// sub-resource carries the FULL path /{name}/members[/{sid}] relative to the
+			// /v1/incarnations group — the choir-voices layout.
+			r.With(
+				apimiddleware.RequirePermissionMulti(enforcer, "incarnation", "bind-member", incScope),
+			).Group(func(r chi.Router) {
+				registerHumaIncarnationBindMembers(newHumaCadenceAPI(r), incH)
+			})
+
+			r.With(
+				apimiddleware.RequirePermissionMulti(enforcer, "incarnation", "unbind-member", incScope),
+			).Group(func(r chi.Router) {
+				registerHumaIncarnationUnbindMember(newHumaCadenceAPI(r), incH)
+			})
+
+			r.With(
+				apimiddleware.RequirePermissionMulti(enforcer, "incarnation", "get", incScope),
+			).Group(func(r chi.Router) {
+				registerHumaIncarnationListMembers(newHumaCadenceAPI(r), incH)
+			})
+
 			// /v1/incarnations/{name}/choirs — CRUD of the Choir/Voice topology (ADR-044,
 			// S-T3). A Choir belongs to an incarnation → the same scope selector incScope
 			// (incarnation/service/coven by path-{name}) as incarnation mutations.

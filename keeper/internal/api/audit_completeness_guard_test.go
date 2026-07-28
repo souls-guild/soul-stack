@@ -102,6 +102,8 @@ var auditedWriteRoutes = map[route]auditedRoute{
 	{http.MethodDelete, "/v1/incarnations/{name}"}:                    {events: []audit.EventType{audit.EventIncarnationDestroyStarted}, note: "self-audit: destroy_started writes in the service layer incarnation.Destroy"},
 	{http.MethodPatch, "/v1/incarnations/{name}/hosts"}:               {events: []audit.EventType{audit.EventIncarnationHostsUpdated}, note: "self-audit: handler writes inside UpdateHostsTyped"},
 	{http.MethodPut, "/v1/incarnations/{name}/traits"}:                {events: []audit.EventType{audit.EventIncarnationTraitsChanged}, note: "self-audit: handler writes inside SetTraitsTyped"},
+	{http.MethodPost, "/v1/incarnations/{name}/members"}:              {events: []audit.EventType{audit.EventIncarnationMemberBound}, note: "self-audit: handler writes inside BindMembersTyped (NIM-209)"},
+	{http.MethodDelete, "/v1/incarnations/{name}/members/{sid}"}:      {events: []audit.EventType{audit.EventIncarnationMemberUnbound}, note: "self-audit: handler writes inside UnbindMemberTyped (NIM-209)"},
 	{http.MethodPost, "/v1/incarnations/{name}/secrets/reveal"}:       {events: []audit.EventType{audit.EventIncarnationSecretRevealed}, note: "self-audit after ReadKV"},
 
 	// choir (self-audit inside *Typed via writeAuditCtx).

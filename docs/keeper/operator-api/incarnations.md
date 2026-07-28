@@ -561,3 +561,79 @@ The per-host counterpart is `POST /v1/souls/traits` (first-class, see [Soul → 
 **RBAC:** scope selector is the same as `incarnation.update-hosts` (env-RBAC, `coven=`/`service=`/`incarnation=` by path-`name`: declared `covens ∪ {name}` + `service`). trait-**key** NOT a scope-dimension - there is no gate for keys.
 
 **Audit:** `incarnation.traits_changed` (`source: api` / `mcp`, `archon = JWT.sub`, payload `{name, old_keys, new_keys}`) - written by the handler **after** the commit. Payload carries only sorted lists of trait-**KEYS** before and after; the trait-**VALUES** themselves are NOT included in audit (secret-hygiene: trait-value can carry host infrastructure data - symmetrically `soul.traits-changed`).
+
+#### `POST /v1/incarnations/{name}/members` — bind hosts to the roster
+
+Permission: `incarnation.bind-member`. MCP-tool: `keeper.incarnation.bind-member`. Path-param: `name`. OperationID: `bindIncarnationMembers`.
+
+Binds already-onboarded, **connected** Souls to the incarnation's roster (`incarnation_membership`, [ADR-008 amendment 2026-07-28](../../adr/0008-coven-stable-tags.md), NIM-209). This is the operator half of membership: before it, the only act that wrote the relation was `core.soul.registered` **inside** a scenario run, and since a run resolves its roster at start (aborting `no_hosts` on an empty one), a create scenario that deploys onto ready hosts — such as `create_from_souls` — could not be reached through the API at all.
+
+**The operator flow it enables:**
+
+1. `POST /v1/incarnations` — the row is created. With `lifecycle.auto_create: false` (or a service offering no create scenario) no run starts, and the response carries no `apply_id`; a scenario declaring `name_template` ([ADR-0079](../../adr/0079-incarnation-name-template.md)) still composes the name server-side, which the reply echoes in `incarnation`.
+2. `POST /v1/incarnations/{name}/members` — the roster is bound.
+3. `POST /v1/incarnations/{name}/scenarios/{scenario}` — the create scenario runs against a roster that now exists.
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `sids` | `list<string>` | yes | SIDs (FQDN) of the hosts to bind, 1..200. Each must exist in the registry, be **`connected`**, and lie inside the caller's soul scope. |
+
+```jsonc
+{"sids": ["node-1.example.com", "node-2.example.com"]}
+```
+
+**Response `200 OK`** (not `201` — the call is idempotent and may create nothing):
+
+```jsonc
+{
+  "incarnation": "redis-prod",
+  "bound": ["node-2.example.com"],          // written by THIS call (sorted)
+  "already_member": ["node-1.example.com"]  // were members before it (sorted)
+}
+```
+
+**Idempotency.** Re-binding a member is a no-op that still succeeds; the split between `bound` and `already_member` is what keeps a repeat distinguishable from a first bind, in the reply and in the audit payload alike. Duplicate SIDs within one request are collapsed, not rejected.
+
+**RBAC — two gates, both required.** (a) the incarnation, by the usual `coven=`/`service=`/`incarnation=` selector on path-`name`; (b) **every** target SID must be inside the caller's soul visibility (`soul.list` purview). Gate (a) alone would be insufficient — an `incarnation=`-scoped predicate is satisfied without examining the host, so its holder could otherwise pull any host into their incarnation and reach it with `incarnation.run`. Gate (b) is **all-or-nothing**: one out-of-scope SID rejects the whole call and nothing is written. Details — [rbac.md → § Incarnation membership](../rbac.md).
+
+**Status rule.** Only a `connected` host may be bound by an operator: a `pending` host has never reported, and `disconnected`/`revoked`/`expired`/`destroyed` will not answer the run. The keeper-internal bind act is deliberately exempt — it binds hosts it has just created, in `pending`, on the provision-from-zero path.
+
+**Errors:** `400 malformed-request`, `403 forbidden` (no permission, **or** a SID outside the caller's soul scope — the message names them), `404 not-found` (incarnation does not exist), `422 validation-failed` (invalid path-`name` / malformed SID / empty or oversized `sids` / unknown SID / host not connected), `500 internal-error`.
+
+**Audit:** `incarnation.member_bound` (`source: api` / `mcp`, payload `{name, sids, bound, already_member}`) — written by the handler itself.
+
+#### `GET /v1/incarnations/{name}/members` — read the roster
+
+Permission: `incarnation.get` (the roster needs no right of its own). MCP-tool: `keeper.incarnation.members`. OperationID: `listIncarnationMembers`.
+
+Member hosts of the incarnation with the membership audit columns. `status` is the **host's** lifecycle status at read time — membership itself carries no status.
+
+```jsonc
+{
+  "items": [
+    {"sid": "node-1.example.com", "status": "connected",
+     "bound_at": "2026-07-28T09:12:44Z", "bound_by_aid": "archon-alice"}
+  ],
+  "limit": 1, "offset": 0, "total": 1
+}
+```
+
+`bound_by_aid` is absent for a keeper-internal bind (`core.soul.registered` carries no operator). The list is **narrowed to the hosts inside the caller's soul scope**, so `total` is what this operator may see, not the size of the whole roster (the two-layer read pattern, [ADR-047 §g](../../adr/0047-purview.md)).
+
+**Errors:** `403 forbidden`, `404 not-found`, `422 validation-failed` (invalid path-`name`), `500 internal-error`. Read-only — no audit.
+
+#### `DELETE /v1/incarnations/{name}/members/{sid}` — unbind a host
+
+Permission: `incarnation.unbind-member`. MCP-tool: `keeper.incarnation.unbind-member`. Path-params: `name`, `sid`. OperationID: `unbindIncarnationMember`.
+
+Removes the host from the roster — it stops being a target of **every future run** of this incarnation. A separate permission from `bind-member` (the `choir.add-voice`/`choir.remove-voice` split) precisely because it is the destructive direction.
+
+**Response `204 No Content`.**
+
+**Idempotency.** Unbinding a non-member succeeds and changes nothing. A SID absent from the registry is likewise a no-op rather than a `404`: FK `sid → souls ON DELETE CASCADE` has already removed its memberships. The audit records the attempt either way — `removed` says which it was.
+
+**RBAC:** the same two gates as `bind-member`; the SID must be inside the caller's soul scope when the host still exists.
+
+**Errors:** `403 forbidden`, `404 not-found` (incarnation does not exist), `422 validation-failed` (invalid path-`name`/`sid`), `500 internal-error`.
+
+**Audit:** `incarnation.member_unbound` (payload `{name, sid, removed}`).

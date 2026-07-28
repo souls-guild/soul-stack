@@ -67,3 +67,37 @@ The union is resolved by every reader of the coven axis — the RBAC scope predi
 Practical consequence: **prefer labelling the incarnation.** A tag there covers every host that joins it later, with no re-stamping; a tag on the host
 covers exactly one VM. The write paths are unchanged (`POST /v1/souls/coven` for a host, the incarnation's own `covens` for an incarnation), as are both
 of coven-assign's gates.
+
+## Amendment (2026-07-28, NIM-209): membership has an operator path — bind / unbind / read
+
+**Context.** The [2026-07-17 amendment](#amendment-2026-07-17-nim-124-incarnationname-is-not-a-coven--membership-is-a-first-class-relation) made membership a first-class relation and named exactly one writer: item 4, "`core.soul.registered` — the bind act sets membership implicitly from the current run's incarnation". It did not say how an operator binds a host that is **already onboarded** — and the answer turned out to be: they cannot.
+
+That gap closes a real product surface. A run resolves its roster at start and aborts `no_hosts` when it is empty (`scenario/run.go` §3, the two bypass classes do not apply). `POST /v1/incarnations` inserts the row and starts the create run in the same call when `lifecycle.auto_create` is on, so there is no window in between. Consequently a create scenario that deploys onto ready hosts — `examples/service/redis/scenario/create_from_souls`, described as "deploy onto a ready roster of already onboarded online souls" — was **unreachable through the operator API**: a roster could only come into being through cloud-provision, where `core.soul.registered` binds the SIDs it has just created. The e2e harness worked around it by seeding the incarnation row with direct SQL, which is not a path an operator has. Choirs inherited the same dead end: `AddVoice` requires existing membership (`ErrNotMembers`), so a Choir could not be built for an incarnation nothing had ever bound to.
+
+**Decision.**
+
+1. **Membership becomes an operator-visible sub-resource of the incarnation** — `POST /v1/incarnations/{name}/members`, `DELETE /v1/incarnations/{name}/members/{sid}`, `GET /v1/incarnations/{name}/members`, with the MCP twins `keeper.incarnation.bind-member` / `.unbind-member` / `.members`. The relation, its columns and its FKs are unchanged; this amendment adds the missing writer and reader, not a new model.
+
+2. **Two permissions, `incarnation.bind-member` and `incarnation.unbind-member`** (the `choir.add-voice` / `choir.remove-voice` split). Unbinding is the destructive half — it removes the host from the roster of every FUTURE run — so it is grantable separately. Reading the roster rides on `incarnation.get`: a roster is part of knowing what an incarnation is.
+
+3. **Authorization is TWO gates, and one is not enough.** Gate (a) is the ordinary incarnation selector (`incarnation=` / `coven=` / `service=` by path-`{name}`), applied by middleware on REST and by the explicit body-scoped OR-Check on MCP. Gate (b) requires **every target SID to be inside the caller's soul visibility** (the `soul.list` purview, `soulpurview.InScope`).
+
+   Gate (b) is not belt-and-braces. A scope predicate on `incarnation=X` is satisfied without ever examining the host, so a holder of `incarnation.bind-member on incarnation=X` would otherwise be able to pull **any** host in the fleet into X — and then reach it with `incarnation.run`, which is scoped to the same incarnation. Membership is therefore an escalation edge, and the host side of it must be checked on the host axis. This mirrors the lesson of NIM-198 / NIM-202: a basis wider than the rights it is derived from is an escalation, not a convenience.
+
+   Gate (b) is **all-or-nothing**: one out-of-scope SID rejects the whole call. A partial bind would report success while leaving the roster short a host, and the run would then fail somewhere else entirely.
+
+   Gate (b) is evaluated **before** the bind, and that ordering matters now that [ADR-080](0080-label-inheritance-union.md) makes a host inherit the covens of the incarnations it belongs to. A host acquires incarnation X's tags by being bound to X; if the check ran after, binding would mint the very label that authorizes it. So the caller must already see the host on some other basis — its own `souls.coven[]`, a `host=` selector, or another incarnation it is already in. In practice this means labelling the host at onboarding, or letting a provisioning scenario stamp it, and it is why the operator path is a bind of hosts you can already reach rather than a way to reach new ones.
+
+   No new selector keys: the grammar stays `{service, coven, incarnation, host}` ([rbac.md § Selector grammar](../keeper/rbac.md)).
+
+4. **The operator may bind only a `connected` host.** A `pending` host has never reported; `disconnected` / `revoked` / `expired` / `destroyed` will not answer the run. Binding them would produce a roster that looks right and fails at dispatch. The keeper-internal bind act is explicitly **not** held to this rule — `core.soul.registered` binds hosts it has itself just created, still `pending`, which is the whole point of the provision-from-zero path.
+
+5. **Both directions are idempotent, and both stay legible.** A re-bind writes nothing (`ON CONFLICT DO NOTHING`) yet the reply and the audit payload split `bound` from `already_member`, so a repeat is distinguishable from a first bind. Unbinding a non-member succeeds with `removed: false`. A host deleted from the registry is a no-op rather than a 404 — FK `sid → souls ON DELETE CASCADE` has already taken its memberships with it.
+
+6. **The FK invariant is unchanged and now visible in the API shape.** Membership requires its incarnation row to exist; the path parameter `{name}` is resolved before anything is written, so "row first, membership second" is enforced by the route rather than by a constraint violation. Unknown SIDs are rejected with a 422 that names them instead of surfacing an FK error.
+
+7. **Audit.** `incarnation.member_bound` (`{name, sids, bound, already_member}`) and `incarnation.member_unbound` (`{name, sid, removed}`), written by the handler itself. The keeper-internal bind inside a run does not emit them — it is covered by that run's own `task.executed` trail; these two events are specifically the operator path.
+
+**What this does NOT change.** The bind act inside a scenario run (item 4 of the 2026-07-17 amendment) keeps working exactly as before, including its `pending`-host behavior. The cross-incarnation prohibition stands — a bind names one incarnation, and the roster remains the boundary. `lifecycle.auto_create: false` remains a **service** policy for deferring the create run; it is not the mechanism for binding, and on its own it never was one.
+
+**Trade-off.** Membership becomes operator-mutable, which is a new way to change what a future run touches — so it is permissioned in both directions, gated on both axes and audited on both. The alternative considered was accepting a list of SIDs on `POST /v1/incarnations` and binding them in the same transaction: it is a smaller change, but it only ever works at creation time, offers no way to unbind, and would still leave Choirs unreachable for an incarnation whose roster was never built. We chose the sub-resource.

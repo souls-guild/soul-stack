@@ -134,6 +134,9 @@ func fullSpecGroups() []specGroup {
 			registerHumaIncarnationDestroy(api, stub)
 			registerHumaIncarnationUpdateHosts(api, stub)
 			registerHumaIncarnationSetTraits(api, stub)
+			registerHumaIncarnationBindMembers(api, stub)
+			registerHumaIncarnationUnbindMember(api, stub)
+			registerHumaIncarnationListMembers(api, stub)
 			registerHumaIncarnationRevealSecret(api, stub)
 			registerHumaIncarnationRevealableSecrets(api, stub)
 			return nil

@@ -595,3 +595,103 @@ func TestIntegration_LeaseAware_TerminalNotCandidate(t *testing.T) {
 		t.Fatalf("got %v, want [ok.example.com] (revoked excluded by SQL phase)", sids(hosts))
 	}
 }
+
+// TestIntegration_OperatorBoundRosterIsVisibleToTheRunner — the REACHABILITY
+// guard of NIM-209. It closes the loop the ticket is about: an operator binds
+// already-onboarded hosts, and the roster the scenario runner resolves is no
+// longer empty.
+//
+// Why it matters. A create scenario that deploys onto ready hosts
+// (`create_from_souls`, `provision: {enabled: false}`) resolves its roster at
+// run start; an unbound roster aborts with `no_hosts` before dispatch (run.go
+// §3). Until NIM-209 the only act that wrote membership was
+// `core.soul.registered` INSIDE a run — so that scenario could never be reached
+// through the operator API, and the e2e harness had to seed the rows with
+// direct SQL. This test asserts the product path now produces exactly what the
+// runner needs.
+//
+// The bind goes through [incarnation.AddMembersReporting] — the same domain call
+// the operator endpoint and its MCP twin issue; the per-host RBAC screening that
+// guards it is covered by the handler unit tests.
+func TestIntegration_OperatorBoundRosterIsVisibleToTheRunner(t *testing.T) {
+	resetAll(t)
+	ctx := context.Background()
+
+	// A bare incarnation row, no declared spec.hosts[] — this is exactly the state
+	// `POST /v1/incarnations` leaves behind when the run is deferred. The operator
+	// row is the FK target of incarnation_membership.bound_by_aid: an operator bind
+	// is attributed, unlike the keeper-internal one.
+	seedOperator(t, "archon-alice")
+	seedIncarnation(t, "redis-from-souls", map[string]any{})
+	seedSoul(t, "node-1.example.com", []string{"prod"}, soul.StatusConnected)
+	seedSoul(t, "node-2.example.com", []string{"prod"}, soul.StatusConnected)
+
+	r := NewResolver(integrationPool, nil, nil)
+
+	// BEFORE the bind: the roster is empty — this is the `no_hosts` abort.
+	before, err := r.LoadIncarnationHosts(ctx, "redis-from-souls")
+	if err != nil {
+		t.Fatalf("LoadIncarnationHosts (before bind): %v", err)
+	}
+	if len(before) != 0 {
+		t.Fatalf("roster before the bind = %d hosts, want 0 (an unbound roster is what aborts the run)", len(before))
+	}
+
+	// The operator bind.
+	aid := "archon-alice"
+	bound, err := incarnation.AddMembersReporting(ctx, integrationPool, "redis-from-souls",
+		[]string{"node-1.example.com", "node-2.example.com"}, &aid)
+	if err != nil {
+		t.Fatalf("AddMembersReporting: %v", err)
+	}
+	if len(bound) != 2 {
+		t.Fatalf("bound = %v, want both SIDs newly written", bound)
+	}
+
+	// AFTER the bind: the runner sees the roster, so the create scenario proceeds.
+	after, err := r.LoadIncarnationHosts(ctx, "redis-from-souls")
+	if err != nil {
+		t.Fatalf("LoadIncarnationHosts (after bind): %v", err)
+	}
+	if len(after) != 2 {
+		t.Fatalf("roster after the bind = %d hosts, want 2 — the run would still abort with no_hosts", len(after))
+	}
+	if after[0].SID != "node-1.example.com" || after[1].SID != "node-2.example.com" {
+		t.Fatalf("roster = %v, want both bound hosts sorted by SID",
+			[]string{after[0].SID, after[1].SID})
+	}
+
+	// The bind is idempotent: repeating it writes nothing new and leaves the
+	// roster exactly as it was.
+	again, err := incarnation.AddMembersReporting(ctx, integrationPool, "redis-from-souls",
+		[]string{"node-1.example.com", "node-2.example.com"}, &aid)
+	if err != nil {
+		t.Fatalf("re-bind must succeed unchanged: %v", err)
+	}
+	if len(again) != 0 {
+		t.Fatalf("re-bind wrote %v, want nothing (ON CONFLICT DO NOTHING)", again)
+	}
+	stable, err := r.LoadIncarnationHosts(ctx, "redis-from-souls")
+	if err != nil {
+		t.Fatalf("LoadIncarnationHosts (after re-bind): %v", err)
+	}
+	if len(stable) != 2 {
+		t.Fatalf("roster after the re-bind = %d hosts, want 2 unchanged", len(stable))
+	}
+
+	// And the unbind takes a host back out of every future run's roster.
+	removed, err := incarnation.RemoveMember(ctx, integrationPool, "redis-from-souls", "node-2.example.com")
+	if err != nil {
+		t.Fatalf("RemoveMember: %v", err)
+	}
+	if !removed {
+		t.Fatal("RemoveMember reported no removal for a bound host")
+	}
+	shrunk, err := r.LoadIncarnationHosts(ctx, "redis-from-souls")
+	if err != nil {
+		t.Fatalf("LoadIncarnationHosts (after unbind): %v", err)
+	}
+	if len(shrunk) != 1 || shrunk[0].SID != "node-1.example.com" {
+		t.Fatalf("roster after the unbind = %v, want only node-1", shrunk)
+	}
+}

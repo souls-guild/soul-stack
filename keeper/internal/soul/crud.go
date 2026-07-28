@@ -624,6 +624,46 @@ func scanSoul(row pgx.Row) (*Soul, error) {
 	return &s, nil
 }
 
+// selectBySIDsSQL — souls by an explicit SID list. Same column set as the list
+// query (scanSoul), ordered by SID. Unknown SIDs are simply absent from the
+// result — the caller diffs against what it asked for.
+const selectBySIDsSQL = `
+SELECT sid, transport, status, coven, traits,
+       registered_at, last_seen_at, last_seen_by_kid,
+       created_by_aid, requested_at, note
+FROM souls
+WHERE sid = ANY($1)
+ORDER BY sid ASC
+`
+
+// SelectBySIDs returns the souls for the given SIDs, ordered by SID. Missing
+// SIDs are omitted rather than erroring — the caller decides what an unknown
+// host means (the membership bind path, [incarnation.AddMembers], turns them
+// into a 422 listing them). An empty list → nil, no query.
+func SelectBySIDs(ctx context.Context, db ExecQueryRower, sids []string) ([]*Soul, error) {
+	if len(sids) == 0 {
+		return nil, nil
+	}
+	rows, err := db.Query(ctx, selectBySIDsSQL, sids)
+	if err != nil {
+		return nil, fmt.Errorf("soul: select by sids: %w", err)
+	}
+	defer rows.Close()
+
+	var out []*Soul
+	for rows.Next() {
+		s, err := scanSoul(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, s)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("soul: iter souls by sids: %w", err)
+	}
+	return out, nil
+}
+
 // selectIncarnationMembersSQL — member souls of an incarnation, resolved via the
 // membership relation (JOIN incarnation_membership, ADR-008 amendment
 // 2026-07-17/NIM-124 — no longer `incarnation.name = ANY(coven)`). Same column

@@ -1,6 +1,6 @@
 # Incarnation - MCP-tools for the life cycle of runtime instances
 
-Domain section [MCP-tools directory](../mcp-tools.md): tools `keeper.incarnation.*` (creating / running scripts / reading / unlock / upgrade / drift / destroy / traits-set). Transport, auth, tool declaration format, async-convention `_apply_id`, error mapping - in the root [mcp-tools.md](../mcp-tools.md). The source of truth for semantics is [operator-api.md → Incarnation](../operator-api/incarnations.md).
+Domain section [MCP-tools directory](../mcp-tools.md): tools `keeper.incarnation.*` (creating / running scripts / reading / unlock / upgrade / drift / destroy / traits-set / membership bind-member / unbind-member / members). Transport, auth, tool declaration format, async-convention `_apply_id`, error mapping - in the root [mcp-tools.md](../mcp-tools.md). The source of truth for semantics is [operator-api.md → Incarnation](../operator-api/incarnations.md).
 
 ### Incarnation (11)
 
@@ -221,3 +221,62 @@ Replaces `incarnation.traits` (jsonb - source of truth, [ADR-060](../../adr/0060
 | `keys` | `array<string>` | Sorted trait-**KEYS** after replacement (values ​​are NOT echoed - secret hygiene). |
 
 **Errors:** `validation-failed` (broken `name` / invalid key / embedded trait value), `not-found` (incarnation does not exist), `forbidden` (there is no `incarnation.traits-set` in the scope of incarnation), `internal-error`.
+
+#### `keeper.incarnation.bind-member`
+
+Binds already-onboarded, **connected** Souls to the incarnation's roster. Permission: `incarnation.bind-member`. Endpoint: [`POST /v1/incarnations/{name}/members`](../operator-api/incarnations.md). Async: **no**.
+
+The operator half of membership ([ADR-008 amendment 2026-07-28](../../adr/0008-coven-stable-tags.md), NIM-209): the relation is otherwise written only by `core.soul.registered` inside a scenario run, which makes a create scenario over a ready roster unreachable. Idempotent — a re-bind writes nothing and reports the SIDs under `already_member`.
+
+**RBAC — two gates, both required.** (a) body-scoped OR-Check over the incarnation's coven/service scope (the REST middleware mirror); (b) **every** target SID inside the caller's soul visibility (`soul.list` purview), all-or-nothing. Gate (b) is shared with REST through the same domain screening — an MCP tool that skipped it would be a bypass of a REST-only check. Details — [rbac.md → § Incarnation membership](../rbac.md).
+
+**Input:**
+
+| Field | Type | Required | Meaning |
+|---|---|---|---|
+| `name` | `string` | yes | Name instance. |
+| `sids` | `array<string>` | yes | SIDs (FQDN) to bind, 1..200. Each must exist, be `connected` and lie inside the caller's soul scope. |
+
+**Output:**
+
+| Field | Type | Meaning |
+|---|---|---|
+| `incarnation` | `string` | Name instance. |
+| `bound` | `array<string>` | SIDs written by THIS call (sorted). |
+| `already_member` | `array<string>` | SIDs that were members already — the idempotent part (sorted). |
+
+**Errors:** `validation-failed` (broken `name`/SID, empty or oversized `sids`, unknown SID, host not `connected`), `not-found` (incarnation does not exist), `forbidden` (no `incarnation.bind-member` in the incarnation's scope, **or** a SID outside the caller's soul scope), `internal-error`.
+
+#### `keeper.incarnation.unbind-member`
+
+Removes a host from the roster — it stops being a target of every FUTURE run. Permission: `incarnation.unbind-member`. Endpoint: [`DELETE /v1/incarnations/{name}/members/{sid}`](../operator-api/incarnations.md). Async: **no**.
+
+Idempotent: unbinding a non-member succeeds with `removed: false`; a SID absent from the registry is likewise a no-op (the FK cascade already removed its memberships). Same two gates as `bind-member`.
+
+**Input:** `name` (`string`, yes) — name instance; `sid` (`string`, yes) — SID (FQDN) of the host to unbind.
+
+**Output:**
+
+| Field | Type | Meaning |
+|---|---|---|
+| `incarnation` | `string` | Name instance. |
+| `sid` | `string` | The host. |
+| `removed` | `boolean` | `false` when the SID was not a member — the call is idempotent. |
+
+**Errors:** `validation-failed` (broken `name`/`sid`), `not-found`, `forbidden`, `internal-error`.
+
+#### `keeper.incarnation.members`
+
+Lists the incarnation's roster. Permission: `incarnation.get` (the roster needs no right of its own). Endpoint: [`GET /v1/incarnations/{name}/members`](../operator-api/incarnations.md). Async: **no**.
+
+**Input:** `name` (`string`, yes).
+
+**Output:**
+
+| Field | Type | Meaning |
+|---|---|---|
+| `incarnation` | `string` | Name instance. |
+| `items` | `array<object>` | `{sid, status, bound_at, bound_by_aid?}` — `status` is the HOST's lifecycle status at read time; `bound_by_aid` is absent for a keeper-internal bind. |
+| `total` | `integer` | Number of members visible to THIS operator, not the size of the whole roster (narrowed to the caller's soul scope). |
+
+**Errors:** `validation-failed` (broken `name`), `not-found`, `forbidden`, `internal-error`.

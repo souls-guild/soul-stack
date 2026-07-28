@@ -142,6 +142,27 @@ const (
 	// symmetric to `soul.traits-changed`).
 	EventIncarnationTraitsChanged EventType = "incarnation.traits_changed"
 
+	// EventIncarnationMemberBound / EventIncarnationMemberUnbound — an Archon
+	// changed the MEMBERSHIP of an incarnation through the Operator API
+	// (`POST /v1/incarnations/{name}/members`, `DELETE .../members/{sid}`) or
+	// the MCP mirror (ADR-008 amendment 2026-07-28, NIM-209). Membership is the
+	// roster: it decides which hosts every future run of that incarnation
+	// reaches, so both directions are audited. `source: api` / `mcp`,
+	// `archon_aid` is the initiator.
+	//
+	// Payload bound: `{name, sids, bound, already_member}` — `sids` is what was
+	// asked for, `bound` the SIDs newly written, `already_member` the ones that
+	// were members already (the bind is idempotent; the split keeps a re-bind
+	// distinguishable from a first bind in the trail). Payload unbound:
+	// `{name, sid, removed}` — `removed` is false when the SID was not a member
+	// (idempotent no-op, still recorded: the intent was expressed).
+	//
+	// The keeper-internal bind act (`core.soul.registered` inside a scenario
+	// run) does NOT write these — it is covered by the run's own task.executed
+	// trail; these two events are specifically the OPERATOR path.
+	EventIncarnationMemberBound   EventType = "incarnation.member_bound"
+	EventIncarnationMemberUnbound EventType = "incarnation.member_unbound"
+
 	// EventIncarnationDestroyFailed — teardown (the `destroy` scenario)
 	// failed on the hosts: the instance is NOT removed, the incarnation moves
 	// to `destroy_failed` (state stays last known-good). `source:

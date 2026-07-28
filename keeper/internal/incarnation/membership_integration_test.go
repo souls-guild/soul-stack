@@ -6,7 +6,9 @@ import (
 	"context"
 	"testing"
 
+	"github.com/souls-guild/soul-stack/keeper/internal/rbac"
 	"github.com/souls-guild/soul-stack/keeper/internal/soul"
+	"github.com/souls-guild/soul-stack/keeper/internal/soulpurview"
 )
 
 // seedMembershipSoul inserts a bare souls row (FK target for membership).
@@ -121,5 +123,154 @@ func TestIntegration_Membership_CascadeOnIncarnationDelete(t *testing.T) {
 	}
 	if n != 0 {
 		t.Fatalf("membership rows = %d, want 0 (cascade on incarnation delete)", n)
+	}
+}
+
+// TestIntegration_Membership_ListAndScreen — the operator-facing reads of the
+// membership relation against a real schema: [ListMembers] (the JOIN onto souls
+// plus the jsonb/timestamptz scan) and [ScreenBindCandidates] (the per-host gate
+// the operator bind runs before writing anything). NIM-209.
+func TestIntegration_Membership_ListAndScreen(t *testing.T) {
+	resetAll(t)
+	seedOperator(t, "archon-alice")
+	ctx := context.Background()
+
+	seedMembershipIncarnation(t, "redis-prod")
+	seedMembershipSoul(t, "node-1.example.com")
+	seedMembershipSoul(t, "node-2.example.com")
+
+	aid := "archon-alice"
+	if err := AddMembers(ctx, integrationPool, "redis-prod",
+		[]string{"node-1.example.com", "node-2.example.com"}, &aid); err != nil {
+		t.Fatalf("AddMembers: %v", err)
+	}
+
+	members, err := ListMembers(ctx, integrationPool, "redis-prod")
+	if err != nil {
+		t.Fatalf("ListMembers: %v", err)
+	}
+	if len(members) != 2 {
+		t.Fatalf("members = %d, want 2", len(members))
+	}
+	if members[0].SID != "node-1.example.com" || members[1].SID != "node-2.example.com" {
+		t.Fatalf("members = %v, want sorted by SID", members)
+	}
+	if members[0].Status != string(soul.StatusConnected) {
+		t.Errorf("status = %q, want connected (the host's status, joined from souls)", members[0].Status)
+	}
+	if members[0].BoundAt.IsZero() {
+		t.Error("bound_at is zero — the membership audit column did not scan")
+	}
+	if members[0].BoundByAID == nil || *members[0].BoundByAID != aid {
+		t.Errorf("bound_by_aid = %v, want %q", members[0].BoundByAID, aid)
+	}
+
+	// Screening with an unrestricted scope: everything passes.
+	rej, err := ScreenBindCandidates(ctx, integrationPool,
+		[]string{"node-1.example.com", "node-2.example.com"}, soulpurview.Resolve(rbac.Purview{Unrestricted: true}))
+	if err != nil {
+		t.Fatalf("ScreenBindCandidates: %v", err)
+	}
+	if !rej.Empty() {
+		t.Fatalf("screening rejected connected, in-scope hosts: %+v", rej)
+	}
+
+	// An unknown SID is caught here rather than by the FK.
+	rej, err = ScreenBindCandidates(ctx, integrationPool,
+		[]string{"ghost.example.com"}, soulpurview.Resolve(rbac.Purview{Unrestricted: true}))
+	if err != nil {
+		t.Fatalf("ScreenBindCandidates (unknown): %v", err)
+	}
+	if rej == nil || len(rej.UnknownSIDs) != 1 || rej.UnknownSIDs[0] != "ghost.example.com" {
+		t.Fatalf("unknown SID bucket = %+v, want [ghost.example.com]", rej)
+	}
+
+	// An empty purview is the fail-closed case: no host is bindable.
+	rej, err = ScreenBindCandidates(ctx, integrationPool,
+		[]string{"node-1.example.com"}, soulpurview.Resolve(rbac.Purview{}))
+	if err != nil {
+		t.Fatalf("ScreenBindCandidates (empty scope): %v", err)
+	}
+	if rej == nil || len(rej.OutOfScope) != 1 {
+		t.Fatalf("out-of-scope bucket = %+v, want the host rejected under an empty purview", rej)
+	}
+}
+
+// TestIntegration_Membership_ScreenJudgesEffectiveCovens pins the bind gate to the
+// EFFECTIVE coven set (ADR-080), not to `souls.coven` alone.
+//
+// A host may be visible purely by inheritance: it carries no tags of its own, but
+// belongs to an incarnation that carries `prod`. Every other reader of the coven
+// axis — the souls read, the roster resolver, the RBAC pushdown — already sees it
+// as prod. If this gate judged the raw column it would refuse a bind the operator
+// is plainly entitled to, and the "a where: and a scope check cannot disagree
+// about one host" invariant would hold everywhere except here.
+//
+// The second half is the boundary that must survive: an unlabelled host that
+// belongs to nothing inherits nothing, and stays invisible.
+func TestIntegration_Membership_ScreenJudgesEffectiveCovens(t *testing.T) {
+	resetAll(t)
+	seedOperator(t, "archon-alice")
+	ctx := context.Background()
+
+	labelled := &Incarnation{
+		Name:               "redis-prod",
+		Service:            "redis",
+		ServiceVersion:     "v1.0.0",
+		StateSchemaVersion: 1,
+		Status:             StatusReady,
+		Covens:             []string{"prod"},
+	}
+	if err := Create(ctx, integrationPool, labelled); err != nil {
+		t.Fatalf("seed labelled incarnation: %v", err)
+	}
+	seedMembershipIncarnation(t, "redis-staging")
+
+	// Neither host carries a coven of its own.
+	seedMembershipSoul(t, "inherits.example.com")
+	seedMembershipSoul(t, "orphan.example.com")
+
+	aid := "archon-alice"
+	if err := AddMembers(ctx, integrationPool, "redis-prod", []string{"inherits.example.com"}, &aid); err != nil {
+		t.Fatalf("AddMembers: %v", err)
+	}
+
+	expr, err := rbac.ParseScopeExpr("coven=prod")
+	if err != nil {
+		t.Fatalf("ParseScopeExpr: %v", err)
+	}
+	prodOnly := soulpurview.Resolve(rbac.Purview{Exprs: []*rbac.ScopeExpr{expr}})
+
+	// Inherited `prod` from redis-prod makes the host bindable elsewhere.
+	rej, err := ScreenBindCandidates(ctx, integrationPool, []string{"inherits.example.com"}, prodOnly)
+	if err != nil {
+		t.Fatalf("ScreenBindCandidates (inherited): %v", err)
+	}
+	if !rej.Empty() {
+		t.Fatalf("host visible only by inheritance was rejected: %+v — the gate is judging souls.coven, not the ADR-080 union", rej)
+	}
+
+	// A host that inherits nothing is still out of scope.
+	rej, err = ScreenBindCandidates(ctx, integrationPool, []string{"orphan.example.com"}, prodOnly)
+	if err != nil {
+		t.Fatalf("ScreenBindCandidates (orphan): %v", err)
+	}
+	if rej == nil || len(rej.OutOfScope) != 1 || rej.OutOfScope[0] != "orphan.example.com" {
+		t.Fatalf("out-of-scope bucket = %+v, want [orphan.example.com]", rej)
+	}
+
+	// HostInScope (the unbind path) must agree with the screening.
+	inScope, known, err := HostInScope(ctx, integrationPool, "inherits.example.com", prodOnly)
+	if err != nil {
+		t.Fatalf("HostInScope: %v", err)
+	}
+	if !known || !inScope {
+		t.Errorf("HostInScope = (%v, %v), want (true, true) — unbind disagrees with bind about one host", inScope, known)
+	}
+	if inScope, _, err = HostInScope(ctx, integrationPool, "orphan.example.com", prodOnly); err != nil {
+		t.Fatalf("HostInScope (orphan): %v", err)
+	}
+	if inScope {
+		t.Error("orphan host reported in scope")
 	}
 }

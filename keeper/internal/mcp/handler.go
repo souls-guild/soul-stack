@@ -491,6 +491,14 @@ func (h *Handler) handleToolsCall(ctx context.Context, claims *jwt.Claims, req j
 		return h.callIncarnationCheckDrift(ctx, claims, req, p.Arguments), false
 	case "keeper.incarnation.traits-set":
 		return h.callIncarnationTraitsSet(ctx, claims, req, p.Arguments), false
+	// Membership (ADR-008 amendment 2026-07-28, NIM-209) — the operator path for
+	// the incarnation roster; mirrors REST .../members.
+	case "keeper.incarnation.bind-member":
+		return h.callIncarnationBindMember(ctx, claims, req, p.Arguments), false
+	case "keeper.incarnation.unbind-member":
+		return h.callIncarnationUnbindMember(ctx, claims, req, p.Arguments), false
+	case "keeper.incarnation.members":
+		return h.callIncarnationMembers(ctx, claims, req, p.Arguments), false
 
 	// Soul-tools (parity with REST POST /v1/souls + issue-token). soul.list
 	// remains a stub (caught by status==toolStatusStub above). 1:1 with

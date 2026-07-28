@@ -517,7 +517,7 @@ Managing **Synod groups** (groups of archons, banding roles - the intermediate l
 | `synod.grant-role` | Adding a role to the bundle group (`POST /v1/synods/{name}/roles`). Idempotent. **Under least-privilege subset:** the role is issued to all members of the group - the caller must hold all effective rights of the role, otherwise `403 forbidden`. | `synod.role-granted` |
 | `synod.revoke-role` | Removing a role from the bundle group (`DELETE /v1/synods/{name}/roles/{role_name}`). **Under self-lockout:** removal takes away the rights of the role from all members - prohibited if this is the last `*`-giving role of the group and someone held `*` only through it → `409 would-lock-out-cluster`. | `synod.role-revoked` |
 
-### Incarnation (13, one of them is deprecated-alias) - [ADR-009](../adr/0009-scenario-dsl.md) / [scenario/](../scenario/README.md) / [ADR-031](../adr/0031-scry-drift.md#adr-031-scry--drift-detection-declarative-dry-run-reconcile) / [ADR-060](../adr/0060-traits.md)
+### Incarnation (16, one of them is deprecated-alias) - [ADR-009](../adr/0009-scenario-dsl.md) / [scenario/](../scenario/README.md) / [ADR-031](../adr/0031-scry-drift.md#adr-031-scry--drift-detection-declarative-dry-run-reconcile) / [ADR-060](../adr/0060-traits.md)
 
 | Permission | Semantics |
 |---|---|
@@ -535,6 +535,29 @@ Managing **Synod groups** (groups of archons, banding roles - the intermediate l
 | `incarnation.update` | **DEPRECATED-alias** `incarnation.update-hosts` (PM-decision 2026-06-02: name narrowed to accommodate future update-covens/update-spec). `ParsePermission` canonicalizes it to `incarnation.update-hosts` on the load of the enforcer snapshot - existing roles in `keeper.yml`/DB with the old name continue to work (access to `PATCH /v1/incarnations/{name}/hosts`), no migration is required. Remains in the directory forever (closed enum, removed names - never); The router mounts only the canonical name. |
 | `incarnation.traits-set` | Holistic replacement of operator-set key-value trait tags of incarnation (`incarnation.traits` jsonb - source of truth, [ADR-060](../adr/0060-traits.md) R1 slice a) via `PUT /v1/incarnations/{name}/traits`; projected by a sync hook to `souls.traits` member hosts. Transfer of operator-facing trait control from per-soul (`soul.traits-assign`, deprecated) to per-incarnation. Action - kebab (`traits-set`), grammar `<resource>.<action>` (pattern `soul.traits-assign` / `incarnation.update-hosts`). trait-**key** NOT scope-dimension RBAC - authorization with one incarnation-scope-gate (`coven=`/`service=`/`incarnation=` by path-`name`, the same selector as `incarnation.update-hosts`). Audit event `incarnation.traits_changed` (KEYS only, not values). MCP mirror - `keeper.incarnation.traits-set`. |
 | `incarnation.view-secrets` | Reveal the plaintext value of the incarnation secret declared by the `revealable_secrets` service (POST `.../secrets/reveal` + discovery GET `.../secrets/revealable`). Strictly privileged `incarnation.get` (removal of mask). Selectors - `coven=`/`service=`/`incarnation=`. Audit `incarnation.secret_revealed` (no value). |
+| `incarnation.bind-member` | Bind already-onboarded, **connected** Souls to the incarnation's roster (`POST /v1/incarnations/{name}/members`, MCP `keeper.incarnation.bind-member`; [ADR-008 amendment 2026-07-28](../adr/0008-coven-stable-tags.md), NIM-209). Selectors - `coven=`/`service=`/`incarnation=` by path-`name`, as other incarnation mutations. **The route gate is only HALF the authorization** - see § Incarnation membership below. Idempotent (re-bind → `already_member`). Audit `incarnation.member_bound`. |
+| `incarnation.unbind-member` | Remove a host from the incarnation's roster (`DELETE /v1/incarnations/{name}/members/{sid}`, MCP `keeper.incarnation.unbind-member`). Split from `bind-member` (the `choir.add-voice`/`choir.remove-voice` pattern) because it is the destructive half: the host stops being a target of every FUTURE run. Same selectors and the same second gate as `bind-member`. Idempotent (non-member → `removed:false`). Audit `incarnation.member_unbound`. **Reading the roster** (`GET .../members`, MCP `keeper.incarnation.members`) has no right of its own - it rides on `incarnation.get` and is narrowed to the caller's soul visibility. |
+
+#### Incarnation membership — two gates, not one
+
+`incarnation.bind-member` / `incarnation.unbind-member` are authorized on **two axes at once** ([ADR-008 amendment 2026-07-28](../adr/0008-coven-stable-tags.md), NIM-209). Both must pass; either one alone is a hole.
+
+| Gate | Where | Question | On refusal |
+|---|---|---|---|
+| (a) the incarnation | `RequirePermissionMulti` middleware (REST) / explicit body-scoped OR-Check (MCP) | May this Archon change the membership of **this incarnation**? Selector `incarnation=`/`coven=`/`service=` by path-`name`. | `403 forbidden` |
+| (b) each host | in-handler, `soulpurview.InScope` over the `soul.list` purview | Is **this SID** inside the Archon's soul visibility? | `403 forbidden` naming the SIDs |
+
+**Why (b) exists.** A scope predicate on `incarnation=X` is satisfied without ever examining the host — the souls table has no incarnation column, and the condition never looks at one. So a holder of `incarnation.bind-member on incarnation=X` would, with gate (a) alone, be able to pull **any** host in the fleet into X — and then reach it with `incarnation.run on incarnation=X`, which they already hold. Membership is an escalation edge, so the host side of it is checked on the host axis. Same lesson as [NIM-198 / NIM-202](../adr/0047-purview.md): a basis wider than the rights it derives from is an escalation.
+
+**All-or-nothing.** One out-of-scope SID rejects the whole call; nothing is written. A partial bind would report success while leaving the roster short a host, and the run would fail later somewhere unrelated.
+
+**Gate (b) judges effective covens, not the raw column.** Visibility resolves over the [ADR-080](../adr/0080-label-inheritance-union.md) union — the host's own `souls.coven` plus the tags (and names) of the incarnations it already belongs to — the same basis as the souls read, the roster resolver and the SQL pushdown. Judging `souls.coven` alone would refuse binds the Archon can plainly make, and this gate would be the one place where a `where:` and a scope check disagree about a host. Note the ordering: the union is taken **before** the bind, so the tags the target incarnation would confer are not yet in it. Otherwise a bind would mint the very label that authorizes it — the caller must already reach the host by some other route (its own coven, a `host=` selector, or an incarnation it is already in).
+
+**No new selector keys.** Membership reuses `{service, coven, incarnation, host}` — there is no `member=` dimension ([ADR-047 §S4](../adr/0047-purview.md)).
+
+**Refusal order does not leak state.** Screening reports unknown SIDs → out-of-scope → not-connected, in that order: an Archon who may not see a host is told "forbidden", never "that host is disconnected".
+
+**The keeper-internal bind is NOT gated by this.** `core.soul.registered` inside a scenario run binds hosts it has itself just created (still `pending`) and acts as the keeper, not as an operator — the connected-only rule and gate (b) apply to the operator path only.
 
 ### Choir (5) — [ADR-044](../adr/0044-choir.md)
 

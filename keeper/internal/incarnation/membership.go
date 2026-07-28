@@ -2,7 +2,10 @@ package incarnation
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"sort"
+	"time"
 )
 
 // Membership is a first-class M:N relation host↔incarnation (ADR-008 amendment
@@ -16,6 +19,7 @@ const insertMembershipSQL = `
 INSERT INTO incarnation_membership (incarnation_name, sid, bound_by_aid)
 SELECT $1, s, $3 FROM unnest($2::text[]) AS s
 ON CONFLICT DO NOTHING
+RETURNING sid
 `
 
 // AddMembers binds the given SIDs to incarnation `incName` (idempotent: ON
@@ -24,16 +28,65 @@ ON CONFLICT DO NOTHING
 // sids → no-op. The souls rows must already exist (FK sid → souls); the bind
 // act (`core.soul.registered`) creates the pending rows before calling this.
 func AddMembers(ctx context.Context, db ExecQueryRower, incName string, sids []string, byAID *string) error {
+	_, err := AddMembersReporting(ctx, db, incName, sids, byAID)
+	return err
+}
+
+// AddMembersReporting is [AddMembers] that also reports WHICH SIDs it actually
+// wrote — the ones absent from the relation before the call, straight out of
+// `RETURNING sid` (ON CONFLICT DO NOTHING emits no row for an existing pair).
+// The operator bind endpoint uses the split to answer bound vs already_member
+// without a second read: the bind stays idempotent, but a re-bind remains
+// distinguishable from a first bind in the reply and in the audit trail.
+//
+// The returned slice is sorted, so the reply and the audit payload are stable
+// regardless of insert order.
+func AddMembersReporting(ctx context.Context, db ExecQueryRower, incName string, sids []string, byAID *string) ([]string, error) {
 	if !ValidName(incName) {
-		return fmt.Errorf("incarnation: add members: invalid name %q", incName)
+		return nil, fmt.Errorf("incarnation: add members: invalid name %q", incName)
 	}
 	if len(sids) == 0 {
-		return nil
+		return nil, nil
 	}
-	if _, err := db.Exec(ctx, insertMembershipSQL, incName, sids, byAID); err != nil {
-		return fmt.Errorf("incarnation: add members to %q: %w", incName, err)
+	rows, err := db.Query(ctx, insertMembershipSQL, incName, sids, byAID)
+	if err != nil {
+		return nil, fmt.Errorf("incarnation: add members to %q: %w", incName, err)
 	}
-	return nil
+	defer rows.Close()
+
+	var bound []string
+	for rows.Next() {
+		var sid string
+		if err := rows.Scan(&sid); err != nil {
+			return nil, fmt.Errorf("incarnation: scan bound sid: %w", err)
+		}
+		bound = append(bound, sid)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("incarnation: iter bound sids of %q: %w", incName, err)
+	}
+	sort.Strings(bound)
+	return bound, nil
+}
+
+const removeOneMembershipSQL = `
+DELETE FROM incarnation_membership
+WHERE incarnation_name = $1 AND sid = $2
+`
+
+// RemoveMember unbinds ONE SID from incarnation `incName` and reports whether a
+// row was actually removed. Unbinding a non-member is a silent no-op (false,
+// nil) — idempotent, like the bind direction. The caller still audits the
+// no-op: the intent was expressed even when nothing changed.
+func RemoveMember(ctx context.Context, db ExecQueryRower, incName, sid string) (bool, error) {
+	if !ValidName(incName) {
+		return false, fmt.Errorf("incarnation: remove member: invalid name %q", incName)
+	}
+	tag, err := db.Exec(ctx, removeOneMembershipSQL, incName, sid)
+	if err != nil {
+		return false, fmt.Errorf("incarnation: remove member %q from %q: %w", sid, incName, err)
+	}
+	return tag.RowsAffected() > 0, nil
 }
 
 const removeMembershipSQL = `
@@ -54,6 +107,63 @@ func RemoveMembers(ctx context.Context, db ExecQueryRower, incName string, sids 
 		return fmt.Errorf("incarnation: remove members from %q: %w", incName, err)
 	}
 	return nil
+}
+
+// Member is one row of an incarnation's roster as the operator sees it: the
+// membership facts (`bound_at` / `bound_by_aid`, migration 099) joined with the
+// host facts needed to authorize and to display it (status + the scope
+// dimensions coven/traits). Not a [soul.Soul] — the read is about membership,
+// and the host columns here exist to serve it.
+type Member struct {
+	SID        string
+	Status     string
+	Covens     []string
+	Traits     map[string]any
+	BoundAt    time.Time
+	BoundByAID *string
+}
+
+const listMembersSQL = `
+SELECT m.sid, s.status, s.coven, s.traits, m.bound_at, m.bound_by_aid
+FROM incarnation_membership m
+JOIN souls s ON s.sid = m.sid
+WHERE m.incarnation_name = $1
+ORDER BY m.sid ASC
+`
+
+// ListMembers returns the roster of incarnation `incName` — membership rows
+// joined with their host's status and scope dimensions, sorted by SID. An
+// incarnation with no members → empty slice, not an error. The JOIN is inner by
+// design: FK `sid → souls ON DELETE CASCADE` means a membership row cannot
+// outlive its host, so there is no orphan to surface.
+func ListMembers(ctx context.Context, db ExecQueryRower, incName string) ([]Member, error) {
+	if !ValidName(incName) {
+		return nil, fmt.Errorf("incarnation: list members: invalid name %q", incName)
+	}
+	rows, err := db.Query(ctx, listMembersSQL, incName)
+	if err != nil {
+		return nil, fmt.Errorf("incarnation: list members of %q: %w", incName, err)
+	}
+	defer rows.Close()
+
+	out := make([]Member, 0)
+	for rows.Next() {
+		var m Member
+		var traitsJSON []byte
+		if err := rows.Scan(&m.SID, &m.Status, &m.Covens, &traitsJSON, &m.BoundAt, &m.BoundByAID); err != nil {
+			return nil, fmt.Errorf("incarnation: scan member row: %w", err)
+		}
+		if len(traitsJSON) > 0 {
+			if err := json.Unmarshal(traitsJSON, &m.Traits); err != nil {
+				return nil, fmt.Errorf("incarnation: unmarshal traits for %q: %w", m.SID, err)
+			}
+		}
+		out = append(out, m)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("incarnation: iter members of %q: %w", incName, err)
+	}
+	return out, nil
 }
 
 const listMemberSIDsSQL = `
