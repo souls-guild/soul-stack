@@ -168,27 +168,52 @@ func TestAssertCallerCovers_Selectors(t *testing.T) {
 	})
 }
 
-// TestAddedPermissions is the diff for UpdateRolePermissions (the subset
-// check applies only to added permissions; removal is unrestricted).
-func TestAddedPermissions(t *testing.T) {
+// TestWidenedRights is the diff every write gate on UpdateRolePermissions reads:
+// what a mutation newly puts into a role, measured on the rights it grants rather
+// than on the rows it stores.
+//
+// The two rows that make the difference are the last ones. A ceiling lifted off
+// unchanged rows is a widening that a row diff reports as ∅ — the NIM-230
+// escalation — and a scope narrowed onto unchanged rows is a trim that a row diff
+// would equally have called ∅, correctly, which is why the fix had to be a
+// comparison rather than a longer list of fields to watch.
+func TestWidenedRights(t *testing.T) {
 	tests := []struct {
 		name string
-		old  []string
-		new  []string
+		was  []string
+		now  []string
 		want []string
 	}{
-		{name: "nothing added", old: []string{"soul.list"}, new: []string{"soul.list"}, want: nil},
-		{name: "one added", old: []string{"soul.list"}, new: []string{"soul.list", "*"}, want: []string{"*"}},
-		{name: "removal does not count as addition", old: []string{"soul.list", "*"}, new: []string{"soul.list"}, want: nil},
-		{name: "full replacement", old: []string{"soul.list"}, new: []string{"operator.create"}, want: []string{"operator.create"}},
-		{name: "duplicates collapse", old: nil, new: []string{"soul.list", "soul.list"}, want: []string{"soul.list"}},
-		{name: "empty new set", old: []string{"*"}, new: nil, want: nil},
+		{name: "nothing new", was: []string{"soul.list"}, now: []string{"soul.list"}, want: nil},
+		{name: "a right the old form did not grant", was: []string{"soul.list"}, now: []string{"soul.list", "*"}, want: []string{"*"}},
+		{name: "removal is not a widening", was: []string{"soul.list", "*"}, now: []string{"soul.list"}, want: nil},
+		{name: "replacement reports only the new right", was: []string{"soul.list"}, now: []string{"operator.create"}, want: []string{"operator.create"}},
+		{name: "an empty result grants nothing new", was: []string{"*"}, now: nil, want: nil},
+		{name: "a wildcard covers everything under it", was: []string{"*"}, now: []string{"soul.list", "incarnation.run"}, want: nil},
+		{
+			name: "ceiling lifted off unchanged rows",
+			was:  []string{"incarnation.run on coven=prod"},
+			now:  []string{"incarnation.run"},
+			want: []string{"incarnation.run"},
+		},
+		{
+			name: "narrowing the same row is not a widening",
+			was:  []string{"incarnation.run"},
+			now:  []string{"incarnation.run on coven=prod"},
+			want: nil,
+		},
+		{
+			name: "a scope moved sideways is a widening on the new term",
+			was:  []string{"incarnation.run on coven=prod"},
+			now:  []string{"incarnation.run on coven=staging"},
+			want: []string{"incarnation.run on coven=staging"},
+		},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			got := addedPermissions(tc.old, tc.new)
+			got := permStrings(widenedRights(mustParse(t, tc.was...), mustParse(t, tc.now...)))
 			if !equalStrings(got, tc.want) {
-				t.Fatalf("addedPermissions = %v, want %v", got, tc.want)
+				t.Fatalf("widenedRights = %v, want %v", got, tc.want)
 			}
 		})
 	}

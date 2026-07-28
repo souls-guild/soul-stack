@@ -280,15 +280,10 @@ func cascadeImpact(before, after *Role, subtree []subtreeRole) (RoleCascade, err
 	return c, nil
 }
 
-// uncovered reports whether any permission in want falls outside have.
-func uncovered(have, want []Permission) bool {
-	for _, p := range want {
-		if !callerHolds(have, p) {
-			return true
-		}
-	}
-	return false
-}
+// uncovered reports whether any permission in want falls outside have — the
+// boolean form of [widenedRights], so the impact report and the write gates
+// cannot disagree about what "gained a right" means.
+func uncovered(have, want []Permission) bool { return len(widenedRights(have, want)) > 0 }
 
 // countCascadeOperators counts the distinct active operators holding any of the
 // affected roles. Zero is a legitimate answer — a derived role nobody holds yet

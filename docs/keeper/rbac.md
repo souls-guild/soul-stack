@@ -189,7 +189,7 @@ Six endpoints. RBAC check - in middleware (`role.*`-permission without selector)
 | `POST /v1/roles` | `role.create` (+ `role.create-root` when no `parent_role`) | body `{name, description?, permissions[]}` | `201` (body empty) | `403 forbidden` (least-privilege: right outside the caller set; or a parentless role without `role.create-root`, § Root roles); `409 role-already-exists`; `422 validation-failed` (broken `name` / `permission`); `400 malformed-request` |
 | `GET /v1/roles` | `role.list` | — | `200 {items: [...]}` (filtered to the caller, § Catalog visibility) | `500 internal-error` |
 | `DELETE /v1/roles/{name}` | `role.delete` | path `name` | `204` | `404 role-not-found`; `409 role-builtin`; `409 would-lock-out-cluster` |
-| `PATCH /v1/roles/{name}/permissions` | `role.update` (+ `role.create-root` when the result has no parent) | path `name` + body `{permissions[]}` (replace) | `204` | `403 forbidden` (least-privilege: added right outside the caller's set; or minting a parentless role, § Root roles); `404 role-not-found`; `409 role-builtin`; `409 would-lock-out-cluster`; `422 validation-failed`; `400 malformed-request` |
+| `PATCH /v1/roles/{name}/permissions` | `role.update` (+ `role.create-root` when the result has no parent) | path `name` + body `{permissions[]}` (replace) | `204` | `403 forbidden` (least-privilege: a right the PATCH newly grants is outside the caller's set; or minting a parentless role, § Root roles); `404 role-not-found`; `409 role-builtin`; `409 would-lock-out-cluster`; `422 validation-failed`; `400 malformed-request` |
 | `POST /v1/roles/{name}/operators` | `role.grant-operator` | path `name` + body `{aid}` | `204` | `403 forbidden` (least-privilege: role contains a right outside the caller's set); `404 role-not-found`; `404 not-found` (AID does not exist); `422 validation-failed` (empty/broken AID); `400 malformed-request` |
 | `DELETE /v1/roles/{name}/operators/{aid}` | `role.revoke-operator` | path `name`, `aid` | `204` | `404 not-found` (no pair `(name, aid)`); `409 would-lock-out-cluster`; `422 validation-failed` (broken path-AID) |
 
@@ -268,7 +268,7 @@ Separate from self-lockout protection - against **vertical escalation of privile
 | Path | What is checked against the effective dialing of a caller |
 |---|---|
 | `role.create` | **each** permission of the new role. |
-| `role.update` | **each ADDED** permission (which was not in the old set). Removing rights is **not** limited - cutting someone else's role is not escalation. |
+| `role.update` | **each right the PATCH newly grants** — the role's effective rights AFTER, compared with BEFORE by coverage. Not the rows that changed: a PATCH that moves the role's **ceiling** without touching a single row (clearing `parent_role`, replacing `default_scope`, re-pinning the delta) widens every bare permission under it, and a row diff reports that as nothing at all (NIM-230). Removing rights is **not** limited — cutting someone else's role is not escalation — and neither is narrowing them, since an operator allowed to delete a permission outright must not be refused the smaller act of confining its scope. |
 | `role.grant-operator` | **each** permission **granted role** (otherwise bypass: cluster-admin created a powerful role, suboperator with `role.grant-operator` assigned it to himself/other and rose). |
 
 - **Coverage** - the same implication semantics as `Check` (§ How enforcer resolves): caller "has" permission `P` if at least one of its permissions matches `P` (taking into account `*` → covers everything; `resource.*` → covers any action of this resource; selector `on key=a,b` → caller must cover **every** value). Only the owner of `*` can issue a full-wildcard `*`.
@@ -405,6 +405,7 @@ The least-privilege floor does not catch this — every permission in that role 
 Details:
 
 - **Gated on the SHAPE OF THE RESULT, not the verb.** It fires wherever a caller puts privilege into a role that will have no parent: on create, on a `PATCH` that clears `parent_role`, and on a `PATCH` that grows an already-plain role. Gating only creation would leave it one PATCH wide — the trap [ADR-078(h)](../adr/0078-rbac-derived-roles.md) already records for the attenuation gate.
+- **Clearing `parent_role` is judged on the WHOLE resulting set** — including when the rights come out numerically unchanged, because the child's delta already restated the parent's predicate. Before the PATCH everything the role granted was tracked; after it, nothing is, and the tracking is the entire subject of this gate. A role that was ALREADY plain is judged only on what it gained, which is why trimming one stays free (NIM-230).
 - **A parentless role that grants NOTHING is free.** There is no privilege to strand; this mirrors § Catalog visibility, where an empty role is visible to everyone.
 - **Trimming stays ungated.** Removing permissions adds nothing, so nothing is minted — unchanged from § Invariant least-privilege.
 - **`*` and `role.*` cover the action for free**, so a cluster-admin and an existing RBAC administrator need no re-grant. Only a role that enumerates `role.create` explicitly is affected.

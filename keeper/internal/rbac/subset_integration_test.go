@@ -408,6 +408,98 @@ func TestIntegration_Subset_UpdateRole_TrimNoScope_OK(t *testing.T) {
 	}
 }
 
+// A deliberate change of verdict (NIM-230), and the reason the floor had to
+// become a comparison rather than a longer list of fields to watch. Before, a
+// PATCH that only NARROWED default_scope was gated on the whole resulting set: an
+// operator could delete `operator.create` from this role outright — a removal has
+// never been escalation (TrimNoScope_OK) — yet was refused the strictly weaker act
+// of confining it to prod. The floor now measures the rights GAINED, and a
+// narrowing gains none.
+func TestIntegration_Subset_UpdateRole_NarrowScopeWithoutHoldingIt_OK(t *testing.T) {
+	resetRBAC(t)
+	sub, _ := setupScopedUpdater(t) // holds incarnation.run + role.update on coven=prod
+	insertRoleScoped(t, "target", "coven in (prod, staging)", "operator.create")
+	s := newService(t)
+
+	prod := "coven=prod"
+	if err := s.UpdateRolePermissions(context.Background(), UpdateRolePermissionsInput{
+		Name:            "target",
+		Permissions:     []string{"operator.create"},
+		SetDefaultScope: true,
+		DefaultScope:    &prod,
+		CallerAID:       sub,
+	}); err != nil {
+		t.Fatalf("narrowing the scope of a permission the caller does not hold: %v", err)
+	}
+	if got := roleScope(t, "target"); got == nil || *got != "coven=prod" {
+		t.Errorf("default_scope = %v, want coven=prod", got)
+	}
+}
+
+// ---- re-parenting: the case NIM-230 suspected and did not confirm ----
+
+// NIM-230 asked whether re-parenting onto a DIFFERENT role hides the same hole as
+// clearing the parent. It does not, and the reason is worth pinning rather than
+// re-derived: the ceiling is not removed, it is replaced, and
+// [Service.resolveParentCeiling] already requires the caller to hold the NEW
+// parent's whole effective set (ADR-078(h), caller-holds-parent). The child is
+// then refused anything that parent does not cover, so holding the parent covers
+// whatever the child comes out granting.
+//
+// Here the child moves from a prod-scoped parent to an unrestricted one — exactly
+// the widening the ticket suspected — and the scoped caller is refused before the
+// floor ever measures the result.
+func TestIntegration_Subset_UpdateRole_ReparentToWiderParent_Denied(t *testing.T) {
+	resetRBAC(t)
+	sub, _ := setupScopedUpdater(t)
+	insertRoleScoped(t, "base-prod", "coven=prod", "incarnation.run")
+	insertRole(t, "base-wide", "incarnation.run") // no scope: the whole cluster
+	insertDerived(t, "team-child", "base-prod", "", "incarnation.run")
+	s := newService(t)
+
+	wide := "base-wide"
+	err := s.UpdateRolePermissions(context.Background(), UpdateRolePermissionsInput{
+		Name:          "team-child",
+		Permissions:   []string{"incarnation.run"},
+		SetParentRole: true,
+		ParentRole:    &wide,
+		CallerAID:     sub,
+	})
+	if !errors.Is(err, ErrPermissionNotHeld) {
+		t.Fatalf("err = %v, want ErrPermissionNotHeld (the caller does not hold the wider parent)", err)
+	}
+	if got := storedParent(t, "team-child"); got == nil || *got != "base-prod" {
+		t.Errorf("parent_role = %v after a rejected PATCH, want base-prod", got)
+	}
+}
+
+// The other direction stays open: moving a child under a parent the caller holds
+// grants nothing new, so nothing refuses it. The guard exists because every fix in
+// this area widens refusals, and re-parenting inside one's own rights is the
+// sanctioned way to reshape a role (NIM-201) — it must not become collateral.
+func TestIntegration_Subset_UpdateRole_ReparentToNarrowerParent_OK(t *testing.T) {
+	resetRBAC(t)
+	sub, _ := setupScopedUpdater(t)
+	insertRoleScoped(t, "base-prod", "coven=prod", "incarnation.run", "soul.list")
+	insertRoleScoped(t, "base-prod-run", "coven=prod", "incarnation.run")
+	insertDerived(t, "team-child", "base-prod", "", "incarnation.run")
+	s := newService(t)
+
+	narrower := "base-prod-run"
+	if err := s.UpdateRolePermissions(context.Background(), UpdateRolePermissionsInput{
+		Name:          "team-child",
+		Permissions:   []string{"incarnation.run"},
+		SetParentRole: true,
+		ParentRole:    &narrower,
+		CallerAID:     sub,
+	}); err != nil {
+		t.Fatalf("re-parenting onto a role the caller holds: %v", err)
+	}
+	if got := storedParent(t, "team-child"); got == nil || *got != "base-prod-run" {
+		t.Errorf("parent_role = %v, want base-prod-run", got)
+	}
+}
+
 // ---- CreateRole subset check ----
 
 // suboperator tries to create a role with `*` → denied (escalation to cluster-admin).

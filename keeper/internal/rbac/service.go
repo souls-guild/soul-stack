@@ -393,22 +393,6 @@ func (s *Service) UpdateRolePermissions(ctx context.Context, in UpdateRolePermis
 		return err
 	}
 
-	// Least-privilege subset check. Two paths (NIM-130):
-	//
-	//   - SetDefaultScope=true: the scope is being REPLACED, so bare permissions
-	//     end up re-scoped under the NEW default_scope. A caller could keep the
-	//     permission set identical (added=∅) yet widen or clear the scope,
-	//     re-scoping every bare perm to a broader grant. That's a re-scoped grant
-	//     and must pass least-privilege in full: gate the WHOLE resulting set
-	//     under the NEW scope (symmetric with CreateRole/GrantOperator, which
-	//     always gate the whole set under the role's own scope). Gating only the
-	//     added rows here would be a no-op and let a scoped caller widen the
-	//     scope — the escalation this fix closes.
-	//
-	//   - SetDefaultScope=false (PATCH trim): the scope is untouched, so only the
-	//     ADDED permissions can escalate. Bare perms inherit the role's EXISTING
-	//     scope. Removing permissions isn't escalation (an operator can trim
-	//     someone else's role without holding those perms).
 	oldScope, err := roleDefaultScope(ctx, tx, in.Name)
 	if err != nil {
 		return err
@@ -477,30 +461,52 @@ func (s *Service) UpdateRolePermissions(ctx context.Context, in UpdateRolePermis
 		return err
 	}
 
-	// The floor's own set: the whole role under the NEW scope when the scope moves,
-	// otherwise just the added rows under the untouched one. On a derived role both
-	// are resolved against the parent's ceiling first — newScope is the delta in
-	// that case, and it equals oldScope whenever SetDefaultScope is false.
-	var required []Permission
-	if in.SetDefaultScope {
-		required, err = effectiveRoleRights(parent, in.Permissions, newScope)
-	} else {
-		required, err = effectiveRoleRights(parent, addedPermissions(oldPerms, in.Permissions), newScope)
-	}
-	if err != nil {
-		return err
-	}
+	// What the role GRANTS on either side of this PATCH, both in effective form —
+	// the currency every least-privilege comparison reads (NIM-198). `before` is
+	// what it grants TODAY, so a row its parent stopped covering is absent from it
+	// and correctly reads as new if this PATCH brings it back to life.
+	wasRights := effectivePermissions(before.Permissions, before.DefaultScope)
+	nowRights := effectivePermissions(after.Permissions, after.DefaultScope)
+
+	// The floor's own set: what this PATCH NEWLY hands out. Measured on the rights,
+	// never on which rows changed (NIM-130, then NIM-230).
+	//
+	// A row diff cannot see either thing that matters here. A PATCH that moves the
+	// role's CEILING — clears parent_role, replaces default_scope, re-pins the
+	// delta — widens every bare permission it leaves untouched, and reports an
+	// empty delta while doing it. A PATCH that rewrites rows into a narrower form
+	// reports additions that grant nothing new. NIM-130 patched the first of those
+	// for `SetDefaultScope` alone, by gating the whole set whenever the scope
+	// moved; parent_role kept escaping through the same hole until NIM-230, because
+	// a fix shaped as a list of fields is only ever as complete as the list.
+	//
+	// So there is no list: the two resolved forms are compared, and whatever moved
+	// the ceiling shows up. A pure trim, and a narrowing of any kind, resolve to
+	// nothing new and stay ungated — removing rights has never been the escalation
+	// this floor is about, and an operator allowed to delete a permission outright
+	// must not be refused the smaller act of narrowing its scope.
+	required := widenedRights(wasRights, nowRights)
 	if err := s.assertCallerMayGrant(ctx, tx, in.CallerAID, required); err != nil {
 		return err
 	}
 
-	// The result has no parent and this PATCH puts privilege into it — the same
+	// The result has no parent and this PATCH leaves privilege in it — the same
 	// minting the create gate refuses (NIM-201). Judged on the RESULTING shape, so
 	// it covers both clearing parent_role and growing a role that was already
-	// plain; `required` is empty on a pure trim, which is why removing permissions
-	// stays ungated.
+	// plain.
+	//
+	// The set is what ends up UNTRACKED and was not untracked already. A role that
+	// had a parent tracked everything it granted, so clearing the parent strands
+	// the WHOLE resulting set — including when the rights come out numerically
+	// unchanged, because what this gate is about is the tracking, and that is
+	// exactly what such a PATCH removes. A role that was already plain strands only
+	// what it gained, which is why a pure trim stays ungated.
 	if newParent == nil {
-		if err := s.assertCallerMayMintRootRole(ctx, tx, in.CallerAID, required); err != nil {
+		var wasUntracked []Permission
+		if oldParent == nil {
+			wasUntracked = wasRights
+		}
+		if err := s.assertCallerMayMintRootRole(ctx, tx, in.CallerAID, widenedRights(wasUntracked, nowRights)); err != nil {
 			return err
 		}
 	}

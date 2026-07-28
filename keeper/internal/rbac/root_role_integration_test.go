@@ -276,13 +276,8 @@ func TestIntegration_RootRole_PatchTrimmingPlainRole_Allowed(t *testing.T) {
 }
 
 // Clearing parent_role AND adding a permission in the same PATCH: the result is
-// plain and grew, so the gate fires.
-//
-// The companion case is NOT covered here and does NOT hold: clearing the parent
-// while leaving the permission rows identical makes `addedPermissions` return ∅,
-// which empties `required` and short-circuits both the floor and this gate — even
-// though the role's effective rights just escaped their parent's ceiling. Filed
-// as NIM-230; the guard for it belongs in this file once it is fixed.
+// plain and grew, so the gate fires. The companion case — clearing the parent
+// while leaving the rows alone — is the section below.
 func TestIntegration_RootRole_PatchClearingParentAndGrowing_Denied(t *testing.T) {
 	resetRBAC(t)
 	sub, _ := seedMinter(t, "runners", "incarnation.run", "soul.list", "role.create")
@@ -302,6 +297,123 @@ func TestIntegration_RootRole_PatchClearingParentAndGrowing_Denied(t *testing.T)
 	}
 	if got := storedParent(t, "team-runners"); got == nil || *got != "base-runners" {
 		t.Errorf("parent_role = %v after a rejected PATCH, want base-runners", got)
+	}
+}
+
+// ============================================================
+// UPDATE — clearing parent_role moves the ceiling on its own (NIM-230)
+// ============================================================
+
+// The escalation the ticket reproduced, and the reason both gates stopped reading
+// row diffs. This PATCH changes NOTHING about the permission rows. It drops the
+// parent, and with it the `coven=prod` ceiling every bare row was resolving under:
+// effective rights go from `incarnation.run on coven=prod` to `incarnation.run`
+// across the whole cluster, and everyone holding the role goes with them. The row
+// diff that used to feed both gates reported ∅ and waved it through.
+//
+// The floor speaks first, as everywhere: this caller cannot grant unrestricted
+// `incarnation.run` at all, which is the more actionable of the two refusals.
+func TestIntegration_RootRole_PatchClearingParentAlone_Denied(t *testing.T) {
+	resetRBAC(t)
+	sub, _ := seedMinter(t, "watchers", "soul.list")
+	insertRoleScoped(t, "base-prod", "coven=prod", "incarnation.run")
+	insertChildRole(t, "team-child", "base-prod", "incarnation.run")
+	s := newService(t)
+
+	err := s.UpdateRolePermissions(context.Background(), UpdateRolePermissionsInput{
+		Name:          "team-child",
+		Permissions:   []string{"incarnation.run"}, // unchanged — the whole point
+		SetParentRole: true,
+		ParentRole:    nil,
+		CallerAID:     sub,
+	})
+	if !errors.Is(err, ErrPermissionNotHeld) {
+		t.Fatalf("err = %v, want ErrPermissionNotHeld (un-parenting lifts the coven=prod ceiling)", err)
+	}
+	if got := storedParent(t, "team-child"); got == nil || *got != "base-prod" {
+		t.Errorf("parent_role = %v after a rejected PATCH, want base-prod", got)
+	}
+}
+
+// The same PATCH by an operator who CAN grant the result: the floor has nothing
+// to say, and what refuses is the shape gate. Un-parenting is minting — the
+// rights stop tracking the role they came from, which is the entire subject of
+// NIM-201 — so it costs the same right that creating the role plain would have.
+func TestIntegration_RootRole_PatchClearingParentAlone_DeniedForHolder(t *testing.T) {
+	resetRBAC(t)
+	sub, _ := seedMinter(t, "runners", "incarnation.run", "role.create")
+	insertRoleScoped(t, "base-prod", "coven=prod", "incarnation.run")
+	insertChildRole(t, "team-child", "base-prod", "incarnation.run")
+	s := newService(t)
+
+	err := s.UpdateRolePermissions(context.Background(), UpdateRolePermissionsInput{
+		Name:          "team-child",
+		Permissions:   []string{"incarnation.run"},
+		SetParentRole: true,
+		ParentRole:    nil,
+		CallerAID:     sub,
+	})
+	if !errors.Is(err, ErrRootRoleNotPermitted) {
+		t.Fatalf("err = %v, want ErrRootRoleNotPermitted (un-parenting strands what the role grants)", err)
+	}
+	if got := storedParent(t, "team-child"); got == nil || *got != "base-prod" {
+		t.Errorf("parent_role = %v after a rejected PATCH, want base-prod", got)
+	}
+}
+
+// The child's own delta already says `coven=prod`, so dropping a parent whose
+// ceiling said the same thing leaves the effective rights NUMERICALLY IDENTICAL.
+// The floor is silent for exactly that reason — nothing new is being granted —
+// and the shape gate still refuses, because what the PATCH removed is the
+// tracking. Narrow `base-prod` tomorrow and a derived child would have followed it
+// down (ADR-078(c)/(d)); the plain role this would leave behind never will.
+//
+// This is why the gate reads the whole resulting set when a role LOSES its parent
+// and only the growth when it was already plain: measuring the widening alone
+// would call this PATCH a no-op.
+func TestIntegration_RootRole_PatchClearingParentKeepingRights_Denied(t *testing.T) {
+	resetRBAC(t)
+	sub, _ := seedMinter(t, "prod-runners", "incarnation.run on coven=prod", "role.create")
+	insertRoleScoped(t, "base-prod", "coven=prod", "incarnation.run")
+	insertDerived(t, "team-child", "base-prod", "coven=prod", "incarnation.run")
+	s := newService(t)
+
+	err := s.UpdateRolePermissions(context.Background(), UpdateRolePermissionsInput{
+		Name:          "team-child",
+		Permissions:   []string{"incarnation.run"},
+		SetParentRole: true,
+		ParentRole:    nil,
+		CallerAID:     sub,
+	})
+	if !errors.Is(err, ErrRootRoleNotPermitted) {
+		t.Fatalf("err = %v, want ErrRootRoleNotPermitted (same rights, no longer tracking)", err)
+	}
+	if got := storedParent(t, "team-child"); got == nil || *got != "base-prod" {
+		t.Errorf("parent_role = %v after a rejected PATCH, want base-prod", got)
+	}
+}
+
+// Un-parenting is not forbidden, it is priced: the same PATCH goes through for a
+// caller holding both what the result grants and `role.create-root`. Pinned so a
+// later tightening cannot quietly turn a gated operation into an impossible one.
+func TestIntegration_RootRole_PatchClearingParentWithRight_Allowed(t *testing.T) {
+	resetRBAC(t)
+	sub, _ := seedMinter(t, "runners", "incarnation.run", "role.create", "role.create-root")
+	insertRoleScoped(t, "base-prod", "coven=prod", "incarnation.run")
+	insertChildRole(t, "team-child", "base-prod", "incarnation.run")
+	s := newService(t)
+
+	if err := s.UpdateRolePermissions(context.Background(), UpdateRolePermissionsInput{
+		Name:          "team-child",
+		Permissions:   []string{"incarnation.run"},
+		SetParentRole: true,
+		ParentRole:    nil,
+		CallerAID:     sub,
+	}); err != nil {
+		t.Fatalf("UpdateRolePermissions (caller holds the right and role.create-root): %v", err)
+	}
+	if got := storedParent(t, "team-child"); got != nil {
+		t.Errorf("parent_role = %v, want NULL (the PATCH was accepted)", *got)
 	}
 }
 

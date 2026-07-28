@@ -59,27 +59,26 @@ func (s *Service) assertCallerMayGrant(ctx context.Context, db ExecQueryRower, c
 	return assertCallerCovers(callerPerms, required)
 }
 
-// addedPermissions returns the permissions in newPerms that aren't in
-// oldPerms (the set being added). UpdateRolePermissions restricts
-// least-privilege to just these: removing permissions isn't escalation.
-func addedPermissions(oldPerms, newPerms []string) []string {
-	old := make(map[string]struct{}, len(oldPerms))
-	for _, p := range oldPerms {
-		old[p] = struct{}{}
-	}
-	seen := make(map[string]struct{}, len(newPerms))
-	var added []string
-	for _, p := range newPerms {
-		if _, inOld := old[p]; inOld {
-			continue
+// widenedRights returns the permissions in now that was does not already cover —
+// what a mutation NEWLY puts into a role. Both sides must already be in effective
+// form ([effectivePermissions]); the answer is meaningless on stored rows.
+//
+// Coverage, not string equality, and [callerHolds] is the one containment
+// predicate in the codebase (ADR-078(c)). Diffing the rows a role stores — which
+// is what this replaced (NIM-230) — answers a different question badly: a PATCH
+// can leave every row untouched and still widen the role by moving its ceiling,
+// and one that rewrites the rows can leave the rights exactly where they were.
+//
+// Fail-closed in the direction that matters: a right not PROVABLY covered by the
+// old form counts as new, so the gates judge it rather than wave it through.
+func widenedRights(was, now []Permission) []Permission {
+	var out []Permission
+	for _, p := range now {
+		if !callerHolds(was, p) {
+			out = append(out, p)
 		}
-		if _, dup := seen[p]; dup {
-			continue
-		}
-		seen[p] = struct{}{}
-		added = append(added, p)
 	}
-	return added
+	return out
 }
 
 // callerPermissions reads the caller's EFFECTIVE permissions: each string is
