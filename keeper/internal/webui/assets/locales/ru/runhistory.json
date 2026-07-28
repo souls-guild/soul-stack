@@ -83,6 +83,8 @@
   "runFailedTaskTitle": "Упавшая задача",
   "runHostsEmpty": "Хосты ещё не появились.",
   "runHostsTitle": "Хосты",
+  "runInputTitle": "Входные данные",
+  "runInputMaskedHint": "Секретные значения скрыты.",
   "runKeeperSideBadge": "keeper-side",
   "runKeeperSideHint": "Задача исполняется на keeper (on: keeper), это не Soul — страницы soul для неё нет.",
   "runLiveBadge": "live",

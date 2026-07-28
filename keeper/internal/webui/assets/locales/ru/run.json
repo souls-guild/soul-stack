@@ -1,7 +1,8 @@
 {
-  "crumbs": "unified entry-point: Scenario / Command",
+  "crumbs": "unified entry-point: Scenario / Command / Multi-console",
   "workloadScenarioDesc": "Apply scenario из service на выбранных incarnations (Voyage, pull-режим, multi-select).",
   "workloadCommandDesc": "Ad-hoc exec на выбранных Souls (Voyage, command-прогон).",
+  "workloadConsoleDesc": "Интерактивный shell на выборку душ — живая консоль на каждый хост, broadcast во все",
   "workloadPushDesc": "Push destiny по SSH без агента.",
   "stepWorkload": "Workload",
   "stepScenario": "Scenario",
