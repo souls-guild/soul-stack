@@ -21,4 +21,4 @@ Summary of 6 routes:
 
 `role.*` - NoSelector (cluster-level operation without coven/host-scope, like `operator.*` / `synod.*`). Mutating 5 routes are audited (authorization change, [ADR-022](../../adr/0022-audit-pipeline.md#adr-022-audit-pipeline-storage-schema-retention)); `role.list` - read-only, no audit.
 
-Derived roles ([ADR-078](../../adr/0078-rbac-derived-roles.md)) add **no** endpoint and no permission — a derived role is a role. The field-level surface (`parent_role` on create/update, `effective_permissions` / `effective_scope` on the catalog) and its refusals are in [rbac.md → Derived roles](../rbac.md#derived-roles-parent_role).
+Derived roles ([ADR-078](../../adr/0078-rbac-derived-roles.md)) add **no** endpoint and no permission — a derived role is a role. The field-level surface (`parent_role` / `scope_mode` on create/update, `confirm_cascade` on update, `effective_permissions` / `effective_scope` / `inert_permissions` on the catalog) and its refusals are in [rbac.md → Derived roles](../rbac.md#derived-roles-parent_role). Editing a role that has derived roles is refused with `409 role-cascade-not-confirmed` until the request confirms the cascade.

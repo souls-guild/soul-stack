@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 )
 
 // Write-time attenuation for derived roles (ADR-078(c)/(h), NIM-180).
@@ -25,6 +26,13 @@ import (
 //	                      far above their own rights: the child would be legal at
 //	                      creation, and the cascade would then carry every later
 //	                      widening of that parent straight into it.
+//
+// The child is measured in the same currency (ADR-078(h) amendment, NIM-198):
+// [effectiveRoleRights] resolves its rows against the ceiling before the floor
+// compares them, so a delegator is asked to hold what the role GRANTS rather than
+// what it stores. Reading the stored rows made the floor stricter than the
+// authorization it protects, and the workaround for that — restating the parent's
+// predicate in the delta — quietly cost the role its link to the parent.
 //
 // The parent's chain is read inside the mutation's transaction but NOT locked.
 // Deliberate: locking it would add a second lock order over `rbac_roles` on top
@@ -146,58 +154,190 @@ func resolveRoleChain(ctx context.Context, db ExecQueryRower, name string) (*Rol
 	return byName[name], nil
 }
 
-// assertDerivedWithinParent is the write gate for a role that names parentName
-// (ADR-078(h)). childPerms / childScope are the child's rows as they would be
-// stored; callerAID is the operator performing the mutation.
+// resolveParentCeiling reads the chain of parentName and enforces the
+// least-privilege half of ADR-078(h): the caller must hold the PARENT's effective
+// rights, not merely what the child asks for today, because the cascade carries
+// every later widening of that parent into the child. Returns the parent in
+// flattened form — the ceiling the child is then measured against.
 //
 // Order of refusals is deliberate — the parent's existence first (a 404 beats a
-// 403 about a role that isn't there), then caller-holds-parent, then the
-// structural check. Reporting "you may not derive from this role at all" before
-// "and by the way this permission is outside it" is the more actionable of the
-// two.
-func (s *Service) assertDerivedWithinParent(ctx context.Context, db ExecQueryRower, childName, parentName string, childPerms []string, childScope *string, callerAID string) error {
+// 403 about a role that isn't there), then caller-holds-parent. Reporting "you
+// may not derive from this role at all" before "and by the way this permission is
+// outside it" is the more actionable of the two.
+func (s *Service) resolveParentCeiling(ctx context.Context, db ExecQueryRower, childName, parentName, callerAID string) (*Role, error) {
 	if childName == parentName {
 		// The DB says the same thing (CHECK + trigger), but reaching it would
 		// mean resolving a chain that closes on itself first.
-		return fmt.Errorf("%w: role %q cannot derive from itself", ErrRoleParentCycle, childName)
+		return nil, fmt.Errorf("%w: role %q cannot derive from itself", ErrRoleParentCycle, childName)
 	}
 
 	parent, err := resolveRoleChain(ctx, db, parentName)
 	if err != nil {
 		if errors.Is(err, ErrRoleNotFound) {
-			return fmt.Errorf("%w: parent role %q", ErrRoleNotFound, parentName)
+			return nil, fmt.Errorf("%w: parent role %q", ErrRoleNotFound, parentName)
 		}
-		return err
+		return nil, err
 	}
 
-	// (h) caller holds the parent. The parent's effective rights are what the
-	// child's ceiling tracks from now on, so that is what the caller must cover —
-	// not merely what the child asks for today.
 	parentEff := effectivePermissions(parent.Permissions, parent.DefaultScope)
 	if err := s.assertCallerMayGrant(ctx, db, callerAID, parentEff); err != nil {
-		return err
+		return nil, err
 	}
+	return parent, nil
+}
 
-	// (c) child ⊆ parent, resolved exactly as the enforcer will resolve it.
+// assertWithinParent is the structural half of ADR-078(h): child ⊆ parent,
+// resolved exactly as the enforcer will resolve it. parent comes from
+// [Service.resolveParentCeiling]; childPerms / childScope are the child's rows as
+// they would be stored.
+//
+// The error names EVERY row the parent fails to cover, not just the first. A
+// child left inert by a narrowed parent (NIM-200) has to be repaired by rewriting
+// its permission set, and an operator who is told about one offending row at a
+// time cannot do that in one PATCH.
+// Returns the resolved child, so a caller that needs the role's after-state — the
+// cascade report of [Service.assertCascadeConfirmed] does — does not resolve it a
+// second time and risk a different answer.
+func assertWithinParent(parent *Role, childName string, childPerms []string, childScope *string) (*Role, error) {
+	att, err := attenuateRaw(parent, childName, childPerms, childScope)
+	if err != nil {
+		return nil, err
+	}
+	if len(att.Rejected) > 0 {
+		return nil, fmt.Errorf("%w: %q does not cover %s",
+			ErrRoleExceedsParent, parent.Name, strings.Join(permStrings(att.Rejected), ", "))
+	}
+	return &Role{Name: childName, ParentRole: parent.Name, DefaultScope: att.Scope, Permissions: att.Kept}, nil
+}
+
+// pinnedDelta materializes a parent's current effective scope into a child's
+// delta (ADR-078(k)): the stored predicate stops following the parent and starts
+// stating its own ceiling. Returns the canonical form of `parent's scope AND
+// delta`, or nil when there is nothing to write.
+//
+// An unrestricted parent pins to the delta unchanged, which is not a gap: pinning
+// only ever protects against a WIDENING, and a parent that is already unrestricted
+// has no room to widen into. Anything it later gains is a narrowing, which every
+// mode passes on.
+func pinnedDelta(parent *Role, delta *string) (*string, error) {
+	own, err := parseScopePtr(delta)
+	if err != nil {
+		return nil, err
+	}
+	pinned := andScopes(parent.DefaultScope, own)
+	if pinned == nil {
+		return nil, nil
+	}
+	if err := checkScopeResolvable(pinned); err != nil {
+		return nil, err
+	}
+	s := pinned.String()
+	return &s, nil
+}
+
+// effectiveRoleRights resolves a role's stored rows into the rights it would
+// actually grant — the form EVERY least-privilege comparison must read (NIM-198).
+//
+// On a plain role (parent == nil) that is ADR-047 S1 alone: a bare permission
+// carries the role's own default_scope. On a DERIVED role the parent's ceiling is
+// conjoined first, exactly as [attenuate] does at snapshot build.
+//
+// Comparing the STORED rows instead — what the floor did before NIM-198 — makes it
+// judge a right the role never grants. A delegator scoped to their own coven was
+// refused a child that resolves squarely inside it, and the only way past was to
+// restate the parent's predicate in the delta: a role that no longer follows its
+// parent, i.e. the documented contract of ADR-078(b) inverted, silently, as the
+// price of getting a 201.
+//
+// Rows the parent does not cover are absent from the result: they resolve to
+// nothing, so requiring the caller to hold them is the same over-strictness in a
+// smaller place. They are refused on their own terms by [assertWithinParent],
+// which every write path runs alongside this.
+func effectiveRoleRights(parent *Role, rawPerms []string, rawScope *string) ([]Permission, error) {
+	if len(rawPerms) == 0 {
+		return nil, nil
+	}
+	if parent == nil {
+		scope, err := parseScopePtr(rawScope)
+		if err != nil {
+			return nil, err
+		}
+		perms, err := parsePermissions(rawPerms)
+		if err != nil {
+			return nil, err
+		}
+		return effectivePermissions(perms, scope), nil
+	}
+	att, err := attenuateRaw(parent, "", rawPerms, rawScope)
+	if err != nil {
+		return nil, err
+	}
+	return effectivePermissions(att.Kept, att.Scope), nil
+}
+
+// attenuateRaw parses a child's stored form and resolves it against a flattened
+// parent. childName only decorates the error; pass "" when there is no role name
+// to blame yet.
+func attenuateRaw(parent *Role, childName string, childPerms []string, childScope *string) (attenuation, error) {
 	own, err := parsePermissions(childPerms)
 	if err != nil {
-		return err
+		return attenuation{}, err
 	}
-	var delta *ScopeExpr
-	if childScope != nil {
-		if delta, err = ParseDefaultScope(*childScope); err != nil {
-			return fmt.Errorf("rbac: invalid default_scope %q: %w", *childScope, err)
-		}
+	delta, err := parseScopePtr(childScope)
+	if err != nil {
+		return attenuation{}, err
 	}
 	att, err := attenuate(parent, own, delta)
 	if err != nil {
-		return fmt.Errorf("rbac: role %q: %w", childName, err)
+		if childName == "" {
+			return attenuation{}, err
+		}
+		return attenuation{}, fmt.Errorf("rbac: role %q: %w", childName, err)
 	}
-	if len(att.Rejected) > 0 {
-		return fmt.Errorf("%w: %q does not cover %s",
-			ErrRoleExceedsParent, parentName, permString(att.Rejected[0]))
+	return att, nil
+}
+
+// plainRole builds the resolved form of a role with no parent: its own rows are
+// its rights, exactly as ADR-047 has always read them. The other half of
+// [assertWithinParent]'s return, so a caller holds "the role as it will be"
+// whether or not it derives from anything.
+func plainRole(name string, rawPerms []string, rawScope *string) (*Role, error) {
+	perms, err := parsePermissions(rawPerms)
+	if err != nil {
+		return nil, err
+	}
+	scope, err := parseScopePtr(rawScope)
+	if err != nil {
+		return nil, err
+	}
+	return &Role{Name: name, DefaultScope: scope, Permissions: perms}, nil
+}
+
+// checkScopeMode rejects a mode that is not one of the three, or one set on a
+// role with no parent — where it would describe a relationship that does not
+// exist. The DB CHECKs the same pair (migration 105); this is the readable half.
+func checkScopeMode(mode ScopeMode, derived bool) error {
+	if !mode.Valid() {
+		return fmt.Errorf("%w: %q (want track or pin)", ErrInvalidScopeMode, string(mode))
+	}
+	if mode != ScopeModeNone && !derived {
+		return fmt.Errorf("%w: %q needs a parent_role — a plain role's default_scope is absolute, not a delta",
+			ErrInvalidScopeMode, string(mode))
 	}
 	return nil
+}
+
+// parseScopePtr parses an optional raw default_scope; nil stays nil (the
+// unrestricted top).
+func parseScopePtr(raw *string) (*ScopeExpr, error) {
+	if raw == nil {
+		return nil, nil
+	}
+	scope, err := ParseDefaultScope(*raw)
+	if err != nil {
+		return nil, fmt.Errorf("rbac: invalid default_scope %q: %w", *raw, err)
+	}
+	return scope, nil
 }
 
 // parsePermissions parses a role's raw permission strings. The service validates

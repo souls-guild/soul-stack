@@ -2742,6 +2742,12 @@ components:
           type:
             - array
             - "null"
+        scope_mode:
+          description: what default_scope means here (ADR-078). track (the default) keeps it a delta, so the parent's scope cascades in and moving the parent moves this role. pin materializes the parent's CURRENT effective scope into the delta, so a later WIDENING of the parent does not reach this role — narrowing still does. Requires parent_role
+          enum:
+            - track
+            - pin
+          type: string
       required:
         - name
       type: object
@@ -2761,6 +2767,9 @@ components:
     RolePermissionsUpdateRequest:
       additionalProperties: false
       properties:
+        confirm_cascade:
+          description: proceed even though this change alters the rights of roles DERIVED from this one. Without it such an update is refused 409 with the affected roles and the number of operators holding them; that refusal is what you show the operator before resending with this set
+          type: boolean
         default_scope:
           description: "scope: boolean predicate over coven/service/incarnation/host/trait; omitted → scope untouched; present (incl. null) → replaces (null removes scope). On a derived role it is the attenuating delta"
           type:
@@ -2777,6 +2786,14 @@ components:
             type: string
           type:
             - array
+            - "null"
+        scope_mode:
+          description: "the delta's intent (ADR-078); omitted → untouched. Sending pin RE-PINS: the parent's effective scope AS OF NOW is written into the delta, so later widenings of the parent stop here. Sending track drops back to following the parent"
+          enum:
+            - track
+            - pin
+          type:
+            - string
             - "null"
       required:
         - permissions
@@ -2801,6 +2818,13 @@ components:
         effective_scope:
           description: "role scope AS RESOLVED: the parent's effective scope AND this role's delta; omitted → unrestricted. Bare permissions inherit it, as on a plain role"
           type: string
+        inert_permissions:
+          description: "stored permissions the derivation chain no longer covers (ADR-078): present in permissions, granting NOTHING, because the parent lost the right or narrowed past it. Empty on a plain role. A role with a non-empty permissions list and everything in here grants no access at all"
+          items:
+            type: string
+          type:
+            - array
+            - "null"
         name:
           pattern: ^[a-z][a-z0-9-]*$
           type: string
@@ -2820,9 +2844,16 @@ components:
           type:
             - array
             - "null"
+        scope_mode:
+          description: "what default_scope means on this derived role (ADR-078): track = the delta is the added narrowing only, so the parent's scope cascades in; pin = the parent's scope was materialized into the delta, so a later WIDENING of the parent stops here. Omitted → a plain role. Narrowing always cascades, in both modes"
+          enum:
+            - track
+            - pin
+          type: string
       required:
         - builtin
         - effective_permissions
+        - inert_permissions
         - name
         - operators
         - permissions

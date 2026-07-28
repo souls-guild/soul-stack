@@ -61,6 +61,7 @@ func resolveRoleViews(views []RoleView) error {
 		resolved := byName[views[i].Name]
 		views[i].EffectivePermissions = permStrings(resolved.Permissions)
 		views[i].EffectiveScope = resolved.DefaultScope.String()
+		views[i].InertPermissions = permStrings(resolved.InertPermissions)
 	}
 	return nil
 }

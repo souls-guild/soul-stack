@@ -54,7 +54,7 @@ func (roleSuccessPool) Exec(context.Context, string, ...any) (pgconn.CommandTag,
 func (roleSuccessPool) QueryRow(context.Context, string, ...any) pgx.Row {
 	return roleErrRow{err: pgx.ErrNoRows}
 }
-func (roleSuccessPool) Query(_ context.Context, sql string, _ ...any) (pgx.Rows, error) {
+func (roleSuccessPool) Query(_ context.Context, sql string, args ...any) (pgx.Rows, error) {
 	switch {
 	case strings.Contains(sql, "SELECT builtin FROM rbac_roles"):
 		return &roleBoolRows{values: []bool{false}}, nil // role exists, not builtin
@@ -66,19 +66,36 @@ func (roleSuccessPool) Query(_ context.Context, sql string, _ ...any) (pgx.Rows,
 		return &roleNullStrRows{}, nil // NULL scope
 	case strings.Contains(sql, "SELECT parent_role FROM rbac_roles"):
 		return &roleNullStrRows{}, nil // NULL parent → a plain role (ADR-078)
+	case strings.Contains(sql, "SELECT scope_mode FROM rbac_roles"):
+		return &roleNullStrRows{}, nil // NULL mode, matching the plain role above
+	case strings.Contains(sql, "WITH RECURSIVE sub"):
+		return &roleEmptyChainRows{}, nil // no derived roles → no cascade report
 	case strings.Contains(sql, "SELECT 1 FROM rbac_role_operators"):
 		return &roleIntRows{values: []int{1}}, nil // membership exists (revoke)
 	case strings.Contains(sql, "WITH RECURSIVE chain"):
-		// resolveRoleChain (ADR-078): the parent `dba`, a root granting
-		// incarnation.run — enough for a derived role asking for the same right.
-		return &roleChainRows{}, nil
+		// resolveRoleChain (ADR-078): the queried role as a root granting
+		// incarnation.run — enough both for the parent `dba` of a derived-role
+		// create and for the role a grant resolves before its subset check.
+		return &roleChainRows{name: chainName(args)}, nil
 	}
 	return nil, errStrictUnexpectedSQL
 }
 
-// roleChainRows — one row of the parent-chain query: role `dba`, no parent, no
-// default_scope, one permission.
-type roleChainRows struct{ done bool }
+// chainName reads $1 of the chain query — the role being resolved.
+func chainName(args []any) string {
+	if len(args) == 0 {
+		return ""
+	}
+	name, _ := args[0].(string)
+	return name
+}
+
+// roleChainRows — one row of the parent-chain query: the queried role, no parent,
+// no default_scope, one permission.
+type roleChainRows struct {
+	name string
+	done bool
+}
 
 func (r *roleChainRows) Next() bool {
 	if r.done {
@@ -89,7 +106,7 @@ func (r *roleChainRows) Next() bool {
 }
 func (r *roleChainRows) Scan(dest ...any) error {
 	perm := "incarnation.run"
-	*dest[0].(*string) = "dba"  // name
+	*dest[0].(*string) = r.name // name
 	*dest[1].(**string) = nil   // parent_role NULL (a root)
 	*dest[2].(**string) = nil   // default_scope NULL
 	*dest[3].(**string) = &perm // permission
@@ -102,6 +119,20 @@ func (r *roleChainRows) FieldDescriptions() []pgconn.FieldDescription { return n
 func (r *roleChainRows) Values() ([]any, error)                       { return nil, nil }
 func (r *roleChainRows) RawValues() [][]byte                          { return nil }
 func (r *roleChainRows) Conn() *pgx.Conn                              { return nil }
+
+// roleEmptyChainRows — an empty result for the subtree query: the role has no
+// derived roles, so a mutation carries no cascade to report (NIM-199).
+type roleEmptyChainRows struct{}
+
+func (roleEmptyChainRows) Next() bool                                   { return false }
+func (roleEmptyChainRows) Scan(...any) error                            { return nil }
+func (roleEmptyChainRows) Err() error                                   { return nil }
+func (roleEmptyChainRows) Close()                                       {}
+func (roleEmptyChainRows) CommandTag() pgconn.CommandTag                { return pgconn.CommandTag{} }
+func (roleEmptyChainRows) FieldDescriptions() []pgconn.FieldDescription { return nil }
+func (roleEmptyChainRows) Values() ([]any, error)                       { return nil, nil }
+func (roleEmptyChainRows) RawValues() [][]byte                          { return nil }
+func (roleEmptyChainRows) Conn() *pgx.Conn                              { return nil }
 func (roleSuccessPool) BeginTx(context.Context, pgx.TxOptions) (pgx.Tx, error) {
 	return roleSuccessTx{}, nil
 }
@@ -365,7 +396,7 @@ func (listOnePool) QueryRow(context.Context, string, ...any) pgx.Row {
 }
 func (listOnePool) Query(_ context.Context, sql string, _ ...any) (pgx.Rows, error) {
 	switch {
-	case strings.Contains(sql, "SELECT name, description, builtin, default_scope, parent_role FROM rbac_roles"):
+	case strings.Contains(sql, "SELECT name, description, builtin, default_scope"):
 		return &roleViewRows{}, nil
 	case strings.Contains(sql, "permission"):
 		return &roleStrRows{}, nil // role has no permissions
@@ -428,7 +459,7 @@ func TestHumaRole_List_GoldenWire(t *testing.T) {
 		t.Fatalf("reply not a JSON object: %v; body=%s", err, rec.Body.String())
 	}
 	out, _ := json.Marshal(m)
-	const golden = `{"items":[{"builtin":false,"description":"","effective_permissions":[],"name":"ops","operators":[],"permissions":[]}]}`
+	const golden = `{"items":[{"builtin":false,"description":"","effective_permissions":[],"inert_permissions":[],"name":"ops","operators":[],"permissions":[]}]}`
 	if got := string(out); got != golden {
 		t.Errorf("GOLDEN wire drift role.list:\n got  = %s\n want = %s", got, golden)
 	}

@@ -52,6 +52,12 @@ type Role struct {
 	// itself a fact the self-lockout invariant depends on ([Enforcer.HasWildcard]:
 	// a derived role never counts as a source of cluster-admin).
 	ParentRole string
+
+	// InertPermissions are the role's own rows the chain does NOT cover, dropped
+	// out of Permissions by [attenuate] and kept here so the catalog can say so
+	// (ADR-078(l), NIM-200). No permission decision reads this field: a right that
+	// is not in Permissions is not held, whether or not anyone reports why.
+	InertPermissions []Permission
 }
 
 // Enforcer is an in-memory snapshot of the RBAC catalog. Safe for concurrent

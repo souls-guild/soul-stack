@@ -64,6 +64,9 @@ type RoleCreateInput struct {
 	// plain role. On a derived role DefaultScope is the attenuating DELTA, not an
 	// absolute scope.
 	ParentRole *string
+	// ScopeMode — `track` (default) or `pin` for that delta (ADR-078(k)). Only
+	// meaningful with ParentRole set.
+	ScopeMode string
 }
 
 // RoleView — the FLAT domain projection of a role (GET /v1/roles items[]), handler-
@@ -84,11 +87,17 @@ type RoleView struct {
 	DefaultScope string
 	// ParentRole — the role this one derives from; empty = a plain role.
 	ParentRole string
+	// ScopeMode — `track` / `pin` / empty on a plain role (ADR-078(k)).
+	ScopeMode string
 	// EffectivePermissions / EffectiveScope — the role resolved against its chain
 	// (`own ∩ the parent's effective`, scopes conjoined). Equal to the stored form
 	// on a plain role.
 	EffectivePermissions []string
 	EffectiveScope       string
+	// InertPermissions — stored rows the chain no longer covers (ADR-078(l)): a
+	// role can list permissions and grant none of them, and the list alone does not
+	// show it.
+	InertPermissions []string
 }
 
 // RoleListPage — the domain list of roles for GET /v1/roles (handler-native T5d). The api
@@ -120,6 +129,8 @@ type RoleCreateReply struct {
 	// its ceiling and its delta. nil = none.
 	ParentRole   *string
 	DefaultScope *string
+	// ScopeMode — whether that delta tracks the parent or pins it (ADR-078(k)).
+	ScopeMode string
 }
 
 // AuditPayload assembles the audit-payload of the create route (parity with the legacy
@@ -136,6 +147,10 @@ func (r RoleCreateReply) AuditPayload() middleware.AuditPayload {
 		"created_by_aid": r.CreatedByAID,
 		"parent_role":    r.ParentRole,
 		"default_scope":  r.DefaultScope,
+		// Always present, like the two above: on a derived role "what this delta is
+		// for" is part of the authorization change, and its absence from the record
+		// would leave a reader unable to tell a tracking role from a pinned one.
+		"scope_mode": r.ScopeMode,
 	}
 }
 
@@ -161,6 +176,7 @@ func (h *RoleHandler) CreateTyped(ctx context.Context, claims *jwt.Claims, req R
 		CallerAID:    claims.Subject,
 		DefaultScope: req.DefaultScope,
 		ParentRole:   req.ParentRole,
+		ScopeMode:    rbac.ScopeMode(req.ScopeMode),
 	})
 	switch {
 	case err == nil:
@@ -196,6 +212,7 @@ func (h *RoleHandler) CreateTyped(ctx context.Context, claims *jwt.Claims, req R
 		CreatedByAID: claims.Subject,
 		ParentRole:   req.ParentRole,
 		DefaultScope: req.DefaultScope,
+		ScopeMode:    req.ScopeMode,
 	}, nil
 }
 
@@ -272,6 +289,14 @@ type UpdatePermissionsInput struct {
 	// untouched; present → replaced (null makes the role plain again).
 	SetParentRole bool
 	ParentRole    *string
+	// SetScopeMode / ScopeMode — the delta's intent, PATCH-presence again
+	// (ADR-078(k)). Sending `pin` RE-PINS onto the parent's scope as of now.
+	SetScopeMode bool
+	ScopeMode    string
+	// ConfirmCascade — the caller has seen what this change does to the roles
+	// derived from this one and means to do it (NIM-199). Without it a mutation
+	// that moves a child's rights is refused with the report.
+	ConfirmCascade bool
 }
 
 // RolePermissionsReply — the result of [RoleHandler.UpdatePermissionsTyped]:
@@ -281,13 +306,21 @@ type RolePermissionsReply struct {
 	Name        string
 	Permissions []string
 
-	// SetParentRole / ParentRole / SetDefaultScope / DefaultScope mirror the
-	// request's PATCH presence, so the audit record says what the mutation
-	// CHANGED rather than restating fields it left alone.
+	// SetParentRole / ParentRole / SetDefaultScope / DefaultScope / SetScopeMode /
+	// ScopeMode mirror the request's PATCH presence, so the audit record says what
+	// the mutation CHANGED rather than restating fields it left alone.
 	SetParentRole   bool
 	ParentRole      *string
 	SetDefaultScope bool
 	DefaultScope    *string
+	SetScopeMode    bool
+	ScopeMode       string
+
+	// ConfirmCascade — recorded whenever it was sent, because it is the operator
+	// accepting a change to roles OTHER than the one named in the record. An audit
+	// trail that only showed the edited role would not explain why a dozen derived
+	// roles moved at the same instant.
+	ConfirmCascade bool
 }
 
 // AuditPayload assembles the audit-payload of the update route. name/permissions
@@ -304,6 +337,12 @@ func (r RolePermissionsReply) AuditPayload() middleware.AuditPayload {
 	}
 	if r.SetDefaultScope {
 		p["default_scope"] = r.DefaultScope
+	}
+	if r.SetScopeMode {
+		p["scope_mode"] = r.ScopeMode
+	}
+	if r.ConfirmCascade {
+		p["confirm_cascade"] = true
 	}
 	return p
 }
@@ -323,6 +362,9 @@ func (h *RoleHandler) UpdatePermissionsTyped(ctx context.Context, claims *jwt.Cl
 		DefaultScope:    in.DefaultScope,
 		SetParentRole:   in.SetParentRole,
 		ParentRole:      in.ParentRole,
+		SetScopeMode:    in.SetScopeMode,
+		ScopeMode:       rbac.ScopeMode(in.ScopeMode),
+		ConfirmCascade:  in.ConfirmCascade,
 	})
 	switch {
 	case err == nil:
@@ -331,6 +373,13 @@ func (h *RoleHandler) UpdatePermissionsTyped(ctx context.Context, claims *jwt.Cl
 		return zero, &problemError{problem.New(problem.TypeRoleNotFound, "", "role "+in.Name+" not found")}
 	case errors.Is(err, rbac.ErrRoleBuiltin):
 		return zero, &problemError{problem.New(problem.TypeRoleBuiltin, "", "role "+in.Name+" is builtin and cannot be updated")}
+	case errors.Is(err, rbac.ErrRoleCascadeNeedsConfirm):
+		// The report travels in `detail`: it names every derived role that moves
+		// and how many operators hold them, which is what the caller has to be
+		// shown before they can meaningfully resend with confirm_cascade.
+		return zero, &problemError{problem.New(problem.TypeRoleCascade, "",
+			"updating role "+in.Name+" changes roles derived from it — "+cascadeDetail(err)+
+				"; resend with confirm_cascade=true to proceed")}
 	case errors.Is(err, rbac.ErrWouldLockOutCluster):
 		return zero, &problemError{problem.New(problem.TypeWouldLockOutCluster, "", "updating role "+in.Name+" would lock out the cluster")}
 	case errors.Is(err, rbac.ErrPermissionNotHeld):
@@ -355,7 +404,20 @@ func (h *RoleHandler) UpdatePermissionsTyped(ctx context.Context, claims *jwt.Cl
 		ParentRole:      in.ParentRole,
 		SetDefaultScope: in.SetDefaultScope,
 		DefaultScope:    in.DefaultScope,
+		SetScopeMode:    in.SetScopeMode,
+		ScopeMode:       in.ScopeMode,
+		ConfirmCascade:  in.ConfirmCascade,
 	}, nil
+}
+
+// cascadeDetail renders the blast-radius report carried by the error, falling
+// back to the sentinel's own text if the error travelled without one.
+func cascadeDetail(err error) string {
+	var ce *rbac.CascadeError
+	if errors.As(err, &ce) {
+		return ce.Cascade.String()
+	}
+	return err.Error()
 }
 
 // RoleOperatorReply — the result of grant/revoke-operator: METADATA for the audit-payload
@@ -482,8 +544,10 @@ func toRoleView(v rbac.RoleView) RoleView {
 		Operators:            emptyIfNil(v.Operators),
 		DefaultScope:         v.DefaultScope,
 		ParentRole:           v.ParentRole,
+		ScopeMode:            string(v.ScopeMode),
 		EffectivePermissions: emptyIfNil(v.EffectivePermissions),
 		EffectiveScope:       v.EffectiveScope,
+		InertPermissions:     emptyIfNil(v.InertPermissions),
 	}
 }
 

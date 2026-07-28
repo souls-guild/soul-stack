@@ -23,14 +23,17 @@ const roleManagementNotConfigured = "role management is not configured"
 // (validated in rbac.Service).
 //
 // parent_role derives the role from another one (ADR-078); with it set,
-// default_scope is the attenuating delta rather than an absolute scope. REST
-// parity: POST /v1/roles takes the same two fields.
+// default_scope is the attenuating delta rather than an absolute scope, and
+// scope_mode says whether that delta follows the parent (`track`, the default) or
+// freezes its current scope (`pin`). REST parity: POST /v1/roles takes the same
+// three fields.
 type roleCreateArgs struct {
 	Name         string   `json:"name"`
 	Description  string   `json:"description"`
 	Permissions  []string `json:"permissions"`
 	DefaultScope *string  `json:"default_scope,omitempty"`
 	ParentRole   *string  `json:"parent_role,omitempty"`
+	ScopeMode    string   `json:"scope_mode,omitempty"`
 }
 
 // callRoleCreate — mutating-tool keeper.role.create. A transport layer over
@@ -74,6 +77,7 @@ func (h *Handler) callRoleCreate(ctx context.Context, claims *jwt.Claims, req js
 		CallerAID:    claims.Subject,
 		DefaultScope: a.DefaultScope,
 		ParentRole:   a.ParentRole,
+		ScopeMode:    rbac.ScopeMode(a.ScopeMode),
 	})
 	if err != nil {
 		code, detail := mapRoleErrorToMCP(err)
@@ -97,6 +101,7 @@ func (h *Handler) callRoleCreate(ctx context.Context, claims *jwt.Claims, req js
 		"created_by_aid": claims.Subject,
 		"parent_role":    a.ParentRole,
 		"default_scope":  a.DefaultScope,
+		"scope_mode":     a.ScopeMode,
 	})
 
 	return h.toolResult(req.ID, struct{}{})

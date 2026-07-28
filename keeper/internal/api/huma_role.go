@@ -54,6 +54,7 @@ func registerHumaRole(humaAPI huma.API, roleH *handlers.RoleHandler) {
 			Permissions:  in.Body.Permissions,
 			DefaultScope: in.Body.DefaultScope,
 			ParentRole:   in.Body.ParentRole,
+			ScopeMode:    in.Body.ScopeMode,
 		})
 		if err != nil {
 			return nil, roleProblem(err)
@@ -129,6 +130,9 @@ func registerHumaRoleUpdatePermissions(humaAPI huma.API, roleH *handlers.RoleHan
 			DefaultScope:    optionalToPtr(in.Body.DefaultScope),
 			SetParentRole:   in.Body.ParentRole.Set,
 			ParentRole:      optionalToPtr(in.Body.ParentRole),
+			SetScopeMode:    in.Body.ScopeMode.Set,
+			ScopeMode:       optionalString(in.Body.ScopeMode),
+			ConfirmCascade:  in.Body.ConfirmCascade,
 		})
 		if err != nil {
 			return nil, roleProblem(err)

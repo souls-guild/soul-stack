@@ -59,32 +59,6 @@ func (s *Service) assertCallerMayGrant(ctx context.Context, db ExecQueryRower, c
 	return assertCallerCovers(callerPerms, required)
 }
 
-// requiredPermissions expands the granted permission strings into EFFECTIVE
-// permissions under the role's default_scope (ADR-047 S1): a bare permission
-// on the role being granted inherits its scope; otherwise least-privilege
-// would compare raw values.
-//
-// rawScope is the RAW default_scope of the role being granted (nil = NULL =
-// role has no scope, bare stays unrestricted).
-func requiredPermissions(rawPerms []string, rawScope *string) ([]Permission, error) {
-	if len(rawPerms) == 0 {
-		return nil, nil
-	}
-	var scope *ScopeExpr
-	if rawScope != nil {
-		var err error
-		scope, err = ParseDefaultScope(*rawScope)
-		if err != nil {
-			return nil, fmt.Errorf("rbac: granted role default_scope %q: %w", *rawScope, err)
-		}
-	}
-	perms, err := parsePermissions(rawPerms)
-	if err != nil {
-		return nil, err
-	}
-	return effectivePermissions(perms, scope), nil
-}
-
 // addedPermissions returns the permissions in newPerms that aren't in
 // oldPerms (the set being added). UpdateRolePermissions restricts
 // least-privilege to just these: removing permissions isn't escalation.

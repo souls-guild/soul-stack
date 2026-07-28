@@ -19,10 +19,11 @@ Creating a role + its permissions. Permission: `role.create`. Endpoint: `POST /v
 | `permissions` | `array<string>` | yes | Permission lines `<resource>.<action>` (+ opt. ` on <selector>`), [rbac.md → Permissions format](../rbac.md). |
 | `default_scope` | `string\|null` | optional | Role scope ([ADR-047](../../adr/0047-purview.md)), inherited by permissions without their own selector. With `parent_role` set it is the attenuating **delta** — write only the ADDED narrowing. |
 | `parent_role` | `string\|null` | optional | Derive from this role ([ADR-078](../../adr/0078-rbac-derived-roles.md)): it becomes the ceiling and the new role can never exceed it. Omitted/`null` → a plain role. |
+| `scope_mode` | `string` | optional | `track` (default) — the delta follows the parent's scope; `pin` — the parent's CURRENT scope is materialized into the delta, so a later widening of the parent stops here (narrowing still cascades). Requires `parent_role`. |
 
 **Output:** empty object (`{}`). Corresponds to HTTP `201 Created`.
 
-Errors: `role-already-exists` (`name` busy), `validation-failed` (broken `name` / `permission` / a cycle or over-deep chain), `not-found` (`parent_role` outside the catalog), `forbidden` (the role would exceed its parent, or the caller's own rights).
+Errors: `role-already-exists` (`name` busy), `validation-failed` (broken `name` / `permission` / a cycle or over-deep chain / a `scope_mode` without a parent), `not-found` (`parent_role` outside the catalog), `forbidden` (the role would exceed its parent, or the caller's own rights).
 
 #### `keeper.role.delete`
 
@@ -48,9 +49,9 @@ Listing roles with expanded permissions and assigned Archons. Permission: `role.
 
 | Field | Type | Meaning |
 |---|---|---|
-| `roles` | `array<object>` | Elements - `{name, description, builtin, permissions[], operators[], default_scope, parent_role, effective_permissions[], effective_scope}`; `permissions` / `operators` / `effective_permissions` - non-nil arrays (role without entries → `[]`). |
+| `roles` | `array<object>` | Elements - `{name, description, builtin, permissions[], operators[], default_scope, parent_role, scope_mode, effective_permissions[], effective_scope, inert_permissions[]}`; `permissions` / `operators` / `effective_permissions` / `inert_permissions` - non-nil arrays (role without entries → `[]`). |
 
-Each role comes in **both** forms ([ADR-078](../../adr/0078-rbac-derived-roles.md)): as stored (`permissions` / `default_scope` — on a derived role these are its own rows and its delta, not its rights) and as resolved against its derivation chain (`effective_permissions` / `effective_scope` — `own ∩ the parent's effective`, every scope capped by the chain's ceiling). On a plain role the two coincide. **Read the effective fields**: re-deriving inheritance from `parent_role` is a second implementation of the attenuation rules, free to disagree with the enforcer.
+Each role comes in **both** forms ([ADR-078](../../adr/0078-rbac-derived-roles.md)): as stored (`permissions` / `default_scope` — on a derived role these are its own rows and its delta, not its rights) and as resolved against its derivation chain (`effective_permissions` / `effective_scope` — `own ∩ the parent's effective`, every scope capped by the chain's ceiling). On a plain role the two coincide. `inert_permissions` is the difference that matters operationally: stored rows the chain no longer covers, present in `permissions` and granting nothing. **Read the effective fields**: re-deriving inheritance from `parent_role` is a second implementation of the attenuation rules, free to disagree with the enforcer.
 
 #### `keeper.role.update`
 
@@ -64,10 +65,12 @@ Replacing the set of role permissions (replace semantics). Permission: `role.upd
 | `permissions` | `array<string>` | yes | New set of permissions (completely replaces the existing one). |
 | `default_scope` | `string\|null` | optional | **Key ABSENT** → scope untouched; present → replaces it (`null` clears it). |
 | `parent_role` | `string\|null` | optional | Same presence rule: **key ABSENT** → derivation untouched; present → replaces it (`null` makes the role plain again), [ADR-078](../../adr/0078-rbac-derived-roles.md). |
+| `scope_mode` | `string` | optional | Same presence rule. Sending `pin` RE-PINS onto the parent's scope as of now; sending `track` drops back to following it. |
+| `confirm_cascade` | `boolean` | optional | Proceed even though the change moves the rights of roles DERIVED from this one. Not presence-sensitive. |
 
 **Output:** empty object (`{}`). Corresponds to HTTP `204 No Content`.
 
-Errors: `role-not-found`, `role-builtin`, `would-lock-out-cluster` (removing the last `*` — including by making that role derived), `validation-failed` (broken `permission`, a cycle or over-deep chain), `forbidden` (the result would exceed its parent role). The ceiling is re-checked on **every** update, not only the one that sets `parent_role`.
+Errors: `role-not-found`, `role-builtin`, `would-lock-out-cluster` (removing the last `*` — including by making that role derived), `validation-failed` (broken `permission`, a cycle or over-deep chain, a `scope_mode` without a parent), `forbidden` (the result would exceed its parent role), `role-cascade-not-confirmed` (the change moves derived roles and `confirm_cascade` was not sent — the detail names them and how many operators hold them). The ceiling is re-checked on **every** update, not only the one that sets `parent_role`.
 
 #### `keeper.role.grant-operator`
 

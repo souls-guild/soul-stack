@@ -49,8 +49,13 @@ func (synodSuccessPool) Exec(context.Context, string, ...any) (pgconn.CommandTag
 func (synodSuccessPool) QueryRow(context.Context, string, ...any) pgx.Row {
 	return synodErrRow{err: pgx.ErrNoRows}
 }
-func (p synodSuccessPool) Query(_ context.Context, sql string, _ ...any) (pgx.Rows, error) {
+func (p synodSuccessPool) Query(_ context.Context, sql string, args ...any) (pgx.Rows, error) {
 	switch {
+	case strings.Contains(sql, "WITH RECURSIVE chain"):
+		// resolveRoleChain (ADR-078): the granted role as a plain root granting
+		// nothing — grant-role resolves it before its subset check (NIM-198), and
+		// an empty set keeps that check trivial, as the permission case below does.
+		return &synodChainRows{name: chainName(args)}, nil
 	case strings.Contains(sql, "FOR UPDATE"):
 		// lockSynod (builtin=false) / lockSynodRole / lockSynodOperator — the row
 		// exists. lockSynod scans one bool (builtin); the other locks do not read the
@@ -112,6 +117,35 @@ func (r *synodBoolRows) FieldDescriptions() []pgconn.FieldDescription { return n
 func (r *synodBoolRows) Values() ([]any, error)                       { return nil, nil }
 func (r *synodBoolRows) RawValues() [][]byte                          { return nil }
 func (r *synodBoolRows) Conn() *pgx.Conn                              { return nil }
+
+// synodChainRows — the single LEFT-JOIN-miss row of the parent-chain query: the
+// queried role, no parent, no default_scope, no permission.
+type synodChainRows struct {
+	name string
+	done bool
+}
+
+func (r *synodChainRows) Next() bool {
+	if r.done {
+		return false
+	}
+	r.done = true
+	return true
+}
+func (r *synodChainRows) Scan(dest ...any) error {
+	*dest[0].(*string) = r.name
+	*dest[1].(**string) = nil
+	*dest[2].(**string) = nil
+	*dest[3].(**string) = nil
+	return nil
+}
+func (*synodChainRows) Err() error                                   { return nil }
+func (*synodChainRows) Close()                                       {}
+func (*synodChainRows) CommandTag() pgconn.CommandTag                { return pgconn.CommandTag{} }
+func (*synodChainRows) FieldDescriptions() []pgconn.FieldDescription { return nil }
+func (*synodChainRows) Values() ([]any, error)                       { return nil, nil }
+func (*synodChainRows) RawValues() [][]byte                          { return nil }
+func (*synodChainRows) Conn() *pgx.Conn                              { return nil }
 
 type synodEmptyRows struct{}
 

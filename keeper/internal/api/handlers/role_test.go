@@ -52,9 +52,14 @@ type rbacFakePool struct {
 	roleScope *string
 
 	// parentChain — rows of the WITH RECURSIVE chain query (resolveRoleChain,
-	// ADR-078): the named parent and its ancestors. Empty → the parent is not in
-	// the catalog (ErrRoleNotFound), which is what the non-derived scenarios want.
+	// ADR-078): the named parent and its ancestors. Unset → the queried role is a
+	// PLAIN role made of rolePerms/roleScope, which is what a real catalog answers
+	// for the role a grant is resolving (NIM-198).
 	parentChain []chainRow
+	// chainMissing — the chain query answers nothing: the queried role is not in
+	// the catalog at all (ErrRoleNotFound). Explicit rather than implied by an
+	// empty parentChain, since "no fixture" now means "an ordinary plain role".
+	chainMissing bool
 
 	// insertRoleErr — error from INSERT INTO rbac_roles (Create): unique → 409.
 	insertRoleErr error
@@ -132,7 +137,7 @@ func (p *rbacFakePool) Exec(_ context.Context, sql string, _ ...any) (pgconn.Com
 	return pgconn.CommandTag{}, errors.New("rbacFakePool.Exec: unexpected SQL: " + sql)
 }
 
-func (p *rbacFakePool) Query(_ context.Context, sql string, _ ...any) (pgx.Rows, error) {
+func (p *rbacFakePool) Query(_ context.Context, sql string, args ...any) (pgx.Rows, error) {
 	switch {
 	case contains(sql, "SELECT builtin FROM rbac_roles"):
 		// lockRole: empty → ErrRoleNotFound; else a single bool row.
@@ -162,10 +167,28 @@ func (p *rbacFakePool) Query(_ context.Context, sql string, _ ...any) (pgx.Rows,
 		// roleParent (ADR-078): NULL → a plain role, which is what these
 		// transport tests exercise. Derivation is covered against a real DB.
 		return &nullStringRows{value: nil}, nil
+	case contains(sql, "SELECT scope_mode FROM rbac_roles"):
+		// roleScopeMode (ADR-078(k)): NULL, matching the plain role above.
+		return &nullStringRows{value: nil}, nil
+	case contains(sql, "WITH RECURSIVE sub"):
+		// loadRoleSubtree (NIM-199): no children → no cascade report. A role with
+		// derived roles under it is a DB-level scenario, covered in rbac's
+		// integration guards where the subtree is real.
+		return &chainRows{}, nil
 	case contains(sql, "WITH RECURSIVE chain"):
-		// resolveRoleChain (ADR-078): the named parent plus its ancestors, one
-		// row per (role, permission). Empty → the parent isn't in the catalog.
-		return &chainRows{rows: p.parentChain}, nil
+		// resolveRoleChain (ADR-078): the named role plus its ancestors, one row
+		// per (role, permission). An explicit fixture wins; otherwise the role is
+		// plain and made of rolePerms/roleScope — the shape the grant paths resolve
+		// before their subset check (NIM-198). chainMissing → not in the catalog.
+		name := queriedName(args)
+		switch {
+		case p.chainMissing:
+			return &chainRows{}, nil
+		case chainHasRoot(p.parentChain, name):
+			return &chainRows{rows: p.parentChain}, nil
+		default:
+			return &chainRows{rows: plainChain(name, p.roleScope, p.rolePerms)}, nil
+		}
 	case contains(sql, "SELECT builtin FROM synods"):
 		// lockSynod: empty → ErrSynodNotFound; else a single bool row.
 		if !p.lockSynodFound {
@@ -364,6 +387,45 @@ func nullable(s string) *string {
 		return nil
 	}
 	return &s
+}
+
+// chainHasRoot reports whether the fixture describes the role being asked about.
+// The real query is keyed by name, so a fixture for the PARENT must not be handed
+// back when the resolver asks for the CHILD — the caller would read the parent's
+// rows under the child's name.
+func chainHasRoot(rows []chainRow, name string) bool {
+	for _, r := range rows {
+		if r.name == name {
+			return true
+		}
+	}
+	return false
+}
+
+// queriedName reads $1 of the chain query — the role being resolved.
+func queriedName(args []any) string {
+	if len(args) == 0 {
+		return ""
+	}
+	name, _ := args[0].(string)
+	return name
+}
+
+// plainChain builds the chain a real catalog returns for a role with no parent:
+// one row per permission, or a single LEFT-JOIN-miss row when it grants nothing.
+func plainChain(name string, scope *string, perms []string) []chainRow {
+	raw := ""
+	if scope != nil {
+		raw = *scope
+	}
+	if len(perms) == 0 {
+		return []chainRow{{name: name, scope: raw}}
+	}
+	rows := make([]chainRow, 0, len(perms))
+	for _, p := range perms {
+		rows = append(rows, chainRow{name: name, scope: raw, permission: p})
+	}
+	return rows
 }
 func (r *chainRows) Err() error                                   { return nil }
 func (r *chainRows) Close()                                       {}
@@ -725,8 +787,8 @@ type listFakePool struct{ rbacFakePool }
 
 func (p *listFakePool) Query(_ context.Context, sql string, _ ...any) (pgx.Rows, error) {
 	switch {
-	case contains(sql, "SELECT name, description, builtin, default_scope, parent_role FROM rbac_roles"):
-		return &roleViewRows{rows: [][5]any{
+	case contains(sql, "SELECT name, description, builtin, default_scope"):
+		return &roleViewRows{rows: [][6]any{
 			{"admins", "cluster admins", true, nil, nil},
 			{"ops", "ops team", false, ptrStr("coven=prod"), nil},
 		}}, nil
@@ -781,10 +843,10 @@ func TestRoleHandler_List_200(t *testing.T) {
 // ptrStr — a *string literal for the nullable default_scope in fixtures.
 func ptrStr(s string) *string { return &s }
 
-// roleViewRows — five-column rows (name, description, builtin, default_scope,
-// parent_role). The trailing two are nullable: a nil cell → NULL.
+// roleViewRows — six-column rows (name, description, builtin, default_scope,
+// parent_role, scope_mode). The trailing three are nullable: a nil cell → NULL.
 type roleViewRows struct {
-	rows [][5]any
+	rows [][6]any
 	idx  int
 }
 
@@ -796,6 +858,7 @@ func (r *roleViewRows) Scan(dest ...any) error {
 	*dest[2].(*bool) = row[2].(bool)
 	assignNullableCell(dest[3].(**string), row[3])
 	assignNullableCell(dest[4].(**string), row[4])
+	assignNullableCell(dest[5].(**string), row[5])
 	return nil
 }
 
@@ -948,7 +1011,7 @@ func TestRoleHandler_Create_WiderScopeThanParent_403(t *testing.T) {
 // TestRoleHandler_Create_UnknownParent_404 — a parent that isn't in the catalog is a
 // 404 about the parent, not a 201 for a role with a dangling ceiling.
 func TestRoleHandler_Create_UnknownParent_404(t *testing.T) {
-	pool := &rbacFakePool{} // no chain rows → the parent doesn't exist
+	pool := &rbacFakePool{chainMissing: true} // no chain rows → the parent doesn't exist
 	h := newRoleHandler(t, pool)
 	parent := "ghost"
 	_, err := h.CreateTyped(context.Background(), claimsFor("archon-alice"),
@@ -1145,8 +1208,8 @@ type derivedListPool struct{ rbacFakePool }
 
 func (p *derivedListPool) Query(_ context.Context, sql string, _ ...any) (pgx.Rows, error) {
 	switch {
-	case contains(sql, "SELECT name, description, builtin, default_scope, parent_role FROM rbac_roles"):
-		return &roleViewRows{rows: [][5]any{
+	case contains(sql, "SELECT name, description, builtin, default_scope"):
+		return &roleViewRows{rows: [][6]any{
 			{"dba", "", false, ptrStr("coven=dba"), nil},
 			{"dba-aboba", "", false, ptrStr("trait.project=aboba"), ptrStr("dba")},
 		}}, nil

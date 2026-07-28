@@ -1161,7 +1161,8 @@ var (
 "description":{"type":"string","description":"Human-readable role description."},
 "permissions":{"type":"array","items":{"type":"string"},"description":"Permission strings '<resource>.<action>' (+ optional ' on <selector>')."},
 "default_scope":{"type":["string","null"],"description":"ADR-047 S1: scope selector (per-perm selector syntax, e.g. 'coven=prod,stage'), inherited by all of the role's permissions without their own selector. null/omitted = role without a scope restriction (bare-perms unrestricted). With parent_role set this is the attenuating DELTA, conjoined with the parent's effective scope - write only the ADDED narrowing."},
-"parent_role":{"type":["string","null"],"pattern":"^[a-z][a-z0-9-]*$","description":"ADR-078: derive from this role - it becomes the ceiling and the new role can never exceed it (permissions outside it are refused, its scope is conjoined onto every permission). null/omitted = a plain role. Requires the caller to hold the parent's rights."}}}`)
+"parent_role":{"type":["string","null"],"pattern":"^[a-z][a-z0-9-]*$","description":"ADR-078: derive from this role - it becomes the ceiling and the new role can never exceed it (permissions outside it are refused, its scope is conjoined onto every permission). null/omitted = a plain role. Requires the caller to hold the parent's rights."},
+"scope_mode":{"type":"string","enum":["track","pin"],"description":"ADR-078: what default_scope means here. track (default) keeps it a delta, so the parent's scope cascades in and moving the parent moves this role. pin materializes the parent's CURRENT effective scope into the delta, so a later WIDENING of the parent does not reach this role - narrowing still does. Requires parent_role."}}}`)
 
 	schemaRoleDeleteInput = json.RawMessage(`{
 "$schema":"https://json-schema.org/draft/2020-12/schema",
@@ -1180,7 +1181,9 @@ var (
 "name":{"type":"string","pattern":"^[a-z][a-z0-9-]*$"},
 "permissions":{"type":"array","items":{"type":"string"},"description":"New set of permissions (replace semantics)."},
 "default_scope":{"type":["string","null"],"description":"ADR-047 S1: replace the role's default_scope (null clears the scope). Key ABSENT -> scope is left untouched (PATCH semantics)."},
-"parent_role":{"type":["string","null"],"pattern":"^[a-z][a-z0-9-]*$","description":"ADR-078: re-root the role's derivation (null makes it plain again). Key ABSENT -> derivation left untouched (PATCH semantics). The ceiling is re-checked on every update: the result must stay within the parent and the caller must hold it."}}}`)
+"parent_role":{"type":["string","null"],"pattern":"^[a-z][a-z0-9-]*$","description":"ADR-078: re-root the role's derivation (null makes it plain again). Key ABSENT -> derivation left untouched (PATCH semantics). The ceiling is re-checked on every update: the result must stay within the parent and the caller must hold it."},
+"scope_mode":{"type":"string","enum":["track","pin"],"description":"ADR-078: the delta's intent. Key ABSENT -> untouched (PATCH semantics). Sending pin RE-PINS: the parent's effective scope AS OF NOW is written into the delta, so later widenings of the parent stop here. Sending track drops back to following the parent."},
+"confirm_cascade":{"type":"boolean","description":"Proceed even though this change alters the rights of roles DERIVED from this one. Without it such an update fails with code=role-cascade-not-confirmed, listing the affected roles and how many operators hold them - show that to the operator before resending with this set."}}}`)
 
 	schemaRoleGrantOperatorInput = json.RawMessage(`{
 "$schema":"https://json-schema.org/draft/2020-12/schema",
@@ -1209,7 +1212,7 @@ var (
 "roles":{"type":"array","items":{
 "type":"object",
 "additionalProperties":false,
-"required":["name","description","builtin","permissions","operators","effective_permissions"],
+"required":["name","description","builtin","permissions","operators","effective_permissions","inert_permissions"],
 "properties":{
 "name":{"type":"string"},
 "description":{"type":"string"},
@@ -1219,7 +1222,9 @@ var (
 "default_scope":{"type":"string","description":"ADR-047 S1: the role's default_scope AS STORED (empty = role without scope). On a derived role this is only the attenuating delta - see effective_scope."},
 "parent_role":{"type":"string","description":"ADR-078: the role this one derives from - its ceiling. Empty = a plain role."},
 "effective_permissions":{"type":"array","items":{"type":"string"},"description":"ADR-078: permissions AS RESOLVED against the derivation chain (own INTERSECT the parent's effective, every scope capped by the chain's ceiling). Equals permissions on a plain role. Read THIS instead of walking parent_role."},
-"effective_scope":{"type":"string","description":"ADR-078: the resolved scope - the parent's effective scope AND this role's delta. Empty = unrestricted. Bare permissions inherit it, as on a plain role."}}}}}}`)
+"effective_scope":{"type":"string","description":"ADR-078: the resolved scope - the parent's effective scope AND this role's delta. Empty = unrestricted. Bare permissions inherit it, as on a plain role."},
+"scope_mode":{"type":"string","description":"ADR-078: track (the delta follows the parent) or pin (the parent's scope was materialized into it). Empty = a plain role."},
+"inert_permissions":{"type":"array","items":{"type":"string"},"description":"ADR-078: stored permissions the derivation chain no longer covers - present in permissions, granting NOTHING, because the parent lost the right or narrowed past it. Empty on a plain role."}}}}}}`)
 
 	schemaSynodCreateInput = json.RawMessage(`{
 "$schema":"https://json-schema.org/draft/2020-12/schema",

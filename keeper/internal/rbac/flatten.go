@@ -103,6 +103,9 @@ func flattenRole(byName map[string]*Role, r *Role, done map[string]struct{}, dep
 	}
 	r.DefaultScope = att.Scope
 	r.Permissions = att.Kept
+	// Kept for the catalog, never for a decision (ADR-078(l)): a row the parent no
+	// longer covers has already stopped granting by being absent from Permissions.
+	r.InertPermissions = att.Rejected
 	done[r.Name] = struct{}{}
 	return nil
 }

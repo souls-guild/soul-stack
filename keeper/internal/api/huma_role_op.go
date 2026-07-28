@@ -42,6 +42,7 @@ type RoleCreateRequest struct {
 	Permissions  []string `json:"permissions,omitempty" doc:"set of permission strings for role (e.g., incarnation.run, soul.*, *)"`
 	DefaultScope *string  `json:"default_scope,omitempty" doc:"role scope: boolean predicate over coven/service/incarnation/host/trait (e.g. coven in (a, b) AND host matches redis-*); omitted/null → role without scope. On a DERIVED role (parent_role set) this is the attenuating delta, conjoined with the parent's effective scope — write only the ADDED narrowing"`
 	ParentRole   *string  `json:"parent_role,omitempty" pattern:"^[a-z][a-z0-9-]*$" doc:"derive from this role (ADR-078): it becomes the ceiling and the new role can never exceed it — permissions outside it are refused, its scope is conjoined onto every permission. Omitted/null → a plain role. Requires the caller to hold the parent's rights"`
+	ScopeMode    string   `json:"scope_mode,omitempty" enum:"track,pin" doc:"what default_scope means here (ADR-078). track (the default) keeps it a delta, so the parent's scope cascades in and moving the parent moves this role. pin materializes the parent's CURRENT effective scope into the delta, so a later WIDENING of the parent does not reach this role — narrowing still does. Requires parent_role"`
 }
 
 // roleCreateOutput — huma output (FULL-TYPED). Status=201; no Body (legacy contract:
@@ -171,6 +172,11 @@ type RolePermissionsUpdateRequest struct {
 	Permissions  []string         `json:"permissions" required:"true" doc:"complete new set of permission strings (replace)"`
 	DefaultScope Optional[string] `json:"default_scope" required:"false" doc:"scope: boolean predicate over coven/service/incarnation/host/trait; omitted → scope untouched; present (incl. null) → replaces (null removes scope). On a derived role it is the attenuating delta"`
 	ParentRole   Optional[string] `json:"parent_role" required:"false" doc:"re-root the role's derivation (ADR-078); omitted → untouched; present (incl. null) → replaces (null makes the role plain again). The ceiling is re-checked on every update: the result must stay within the parent and the caller must hold it"`
+	ScopeMode    Optional[string] `json:"scope_mode" required:"false" enum:"track,pin" doc:"the delta's intent (ADR-078); omitted → untouched. Sending pin RE-PINS: the parent's effective scope AS OF NOW is written into the delta, so later widenings of the parent stop here. Sending track drops back to following the parent"`
+	// ConfirmCascade is a plain bool, not an Optional: absence and false mean the
+	// same thing here (the caller has not confirmed), so PATCH presence carries no
+	// information the value does not.
+	ConfirmCascade bool `json:"confirm_cascade,omitempty" doc:"proceed even though this change alters the rights of roles DERIVED from this one. Without it such an update is refused 409 with the affected roles and the number of operators holding them; that refusal is what you show the operator before resending with this set"`
 }
 
 // roleUpdatePermissionsOperation — PATCH /v1/roles/{name}/permissions.

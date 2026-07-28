@@ -29,11 +29,16 @@ import (
 // insertDerived inserts a role with permissions, a delta scope and a parent, by
 // raw SQL — a fixture for cases whose SUBJECT is a later mutation, not the
 // creation. scope may be empty for "no delta".
+//
+// scope_mode is written as `track` because migration 105 CHECKs it NULL exactly
+// when parent_role is: a derived row without an intent is a state nothing should
+// ever be in, fixtures included.
 func insertDerived(t *testing.T, name, parent, scope string, perms ...string) {
 	t.Helper()
 	ctx := context.Background()
 	if _, err := integrationPool.Exec(ctx,
-		`INSERT INTO rbac_roles (name, builtin, default_scope, parent_role) VALUES ($1, false, NULLIF($2, ''), $3)`,
+		`INSERT INTO rbac_roles (name, builtin, default_scope, parent_role, scope_mode)
+		 VALUES ($1, false, NULLIF($2, ''), $3, 'track')`,
 		name, scope, parent); err != nil {
 		t.Fatalf("insert derived role %q: %v", name, err)
 	}
@@ -525,6 +530,176 @@ func TestIntegration_Derived_CascadeThroughTheSnapshot(t *testing.T) {
 	if err := e.Check("archon-alice", "incarnation", "get", map[string]string{"coven": "dbaas"}); err == nil {
 		t.Error("the parent no longer holds incarnation.get — the child must not either")
 	}
+}
+
+// ---- the caller floor reads the RESOLVED role, not its stored rows (NIM-198) ----
+
+// setupScopedDelegator is the operator of the NIM-198 report: `incarnation.*`
+// bounded to their own coven, plus an unscoped right to create and bind roles.
+// The parent `dba` carries the same ceiling as a role default_scope, which is the
+// shape the delegation scenario actually takes — the delegator runs a coven and
+// hands out narrower slices of it.
+func setupScopedDelegator(t *testing.T) (aid string) {
+	t.Helper()
+	ctx := context.Background()
+	seedOperator(t, "archon-alice", nil)
+	a := "archon-alice"
+	seedOperator(t, "archon-dba", &a)
+	seedClusterAdmin(t, "archon-alice")
+
+	insertRoleScoped(t, "dba-rights", "coven=dba", "incarnation.*")
+	insertRole(t, "dba-granters", "role.create", "role.grant-operator")
+	for _, r := range []string{"dba-rights", "dba-granters"} {
+		if err := GrantOperator(ctx, integrationPool, r, "archon-dba", &a); err != nil {
+			t.Fatalf("grant archon-dba→%s: %v", r, err)
+		}
+	}
+	insertRoleScoped(t, "dba", "coven=dba", "incarnation.*")
+	return "archon-dba"
+}
+
+// TestIntegration_Derived_ScopedDelegatorNeedNotRepeatTheParentScope is the
+// NIM-198 report, end to end: an operator scoped to `coven=dba` derives from a
+// parent carrying that same ceiling, WITHOUT restating it.
+//
+// Before the fix the floor compared the child's rows as stored — a bare
+// `incarnation.get`, which reads as unrestricted — against a caller who is not,
+// and refused. The only way through was to write `coven=dba` into the delta,
+// which is not a delta at all: it pins the child to the coven the parent happens
+// to be in today (ADR-078(b)), turning the documented tracking contract into its
+// opposite as the price of a 201.
+//
+// So the assertion is not merely "it succeeds": the stored default_scope must
+// still be the delta the operator wrote, empty or otherwise.
+func TestIntegration_Derived_ScopedDelegatorNeedNotRepeatTheParentScope(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		delta *string
+		want  *string
+	}{
+		{name: "no delta at all", delta: nil, want: nil},
+		{name: "a delta on another dimension", delta: ptr("trait.project=probe"), want: ptr("trait.project=probe")},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			resetRBAC(t)
+			dba := setupScopedDelegator(t)
+
+			if err := newService(t).CreateRole(context.Background(), CreateRoleInput{
+				Name:         "dba-probe",
+				Permissions:  []string{"incarnation.get"},
+				DefaultScope: tc.delta,
+				ParentRole:   ptr("dba"),
+				CallerAID:    dba,
+			}); err != nil {
+				t.Fatalf("CreateRole as a delegator scoped to the parent's own coven: %v", err)
+			}
+
+			got := scopeOf(t, "dba-probe")
+			switch {
+			case tc.want == nil && got != nil:
+				t.Fatalf("stored default_scope = %q, want NULL — the role must track its parent, not pin it", *got)
+			case tc.want != nil && (got == nil || *got != *tc.want):
+				t.Fatalf("stored default_scope = %v, want %q", got, *tc.want)
+			}
+		})
+	}
+}
+
+// TestIntegration_Derived_ScopedDelegatorMayBindWhatItCreated — creating the role
+// is half the delegation; the floor gates binding it too, and read the same stored
+// rows there. A delegator who cannot hand out the role they were just allowed to
+// create has not been delegated anything.
+func TestIntegration_Derived_ScopedDelegatorMayBindWhatItCreated(t *testing.T) {
+	resetRBAC(t)
+	dba := setupScopedDelegator(t)
+	ctx := context.Background()
+	s := newService(t)
+
+	if err := s.CreateRole(ctx, CreateRoleInput{
+		Name: "dba-probe", Permissions: []string{"incarnation.get"},
+		ParentRole: ptr("dba"), CallerAID: dba,
+	}); err != nil {
+		t.Fatalf("CreateRole: %v", err)
+	}
+	seedOperator(t, "archon-probe", &dba)
+	if err := s.GrantOperator(ctx, GrantOperatorInput{
+		RoleName: "dba-probe", AID: "archon-probe", CallerAID: &dba,
+	}); err != nil {
+		t.Fatalf("GrantOperator on the derived role just created: %v", err)
+	}
+}
+
+// TestIntegration_Derived_ResolvedFloorDoesNotReachPlainRoles — the relaxation is
+// the parent's ceiling and nothing else. A role with no parent has no ceiling to
+// resolve against, so a scoped caller writing a bare permission is still asking to
+// grant it unrestricted, and is still refused (ADR-047 S1, NIM-130).
+func TestIntegration_Derived_ResolvedFloorDoesNotReachPlainRoles(t *testing.T) {
+	resetRBAC(t)
+	dba := setupScopedDelegator(t)
+
+	err := newService(t).CreateRole(context.Background(), CreateRoleInput{
+		Name:        "unbounded",
+		Permissions: []string{"incarnation.get"},
+		CallerAID:   dba,
+	})
+	if !errors.Is(err, ErrPermissionNotHeld) {
+		t.Fatalf("err = %v, want ErrPermissionNotHeld (a plain role has no ceiling to be judged under)", err)
+	}
+	assertRoleAbsent(t, "unbounded")
+}
+
+// TestIntegration_Derived_ResolvedFloorKeepsTheParentBoundary — the floor moved to
+// the resolved form, not away. A parent OUTSIDE the caller's own area is refused
+// whatever the child asks for: caller-holds-parent is the boundary that makes the
+// relaxation safe, since the child's rights are bounded by the parent's and the
+// caller must cover those.
+func TestIntegration_Derived_ResolvedFloorKeepsTheParentBoundary(t *testing.T) {
+	resetRBAC(t)
+	dba := setupScopedDelegator(t)
+	insertRoleScoped(t, "prod", "coven=prod", "incarnation.*")
+
+	err := newService(t).CreateRole(context.Background(), CreateRoleInput{
+		Name:        "prod-probe",
+		Permissions: []string{"incarnation.get"},
+		ParentRole:  ptr("prod"),
+		CallerAID:   dba,
+	})
+	if !errors.Is(err, ErrPermissionNotHeld) {
+		t.Fatalf("err = %v, want ErrPermissionNotHeld (the caller does not hold the prod parent)", err)
+	}
+	assertRoleAbsent(t, "prod-probe")
+}
+
+// TestIntegration_Derived_ResolvedFloorStillAttenuates — the structural half is
+// untouched by the floor's move: a scoped delegator asking for a permission the
+// parent does not hold is refused on the parent, not waved through because the
+// ceiling would have narrowed it anyway.
+func TestIntegration_Derived_ResolvedFloorStillAttenuates(t *testing.T) {
+	resetRBAC(t)
+	dba := setupScopedDelegator(t)
+	insertRoleScoped(t, "dba-narrow", "coven=dba", "incarnation.get")
+
+	err := newService(t).CreateRole(context.Background(), CreateRoleInput{
+		Name:        "too-much",
+		Permissions: []string{"incarnation.get", "incarnation.destroy"},
+		ParentRole:  ptr("dba-narrow"),
+		CallerAID:   dba,
+	})
+	if !errors.Is(err, ErrRoleExceedsParent) {
+		t.Fatalf("err = %v, want ErrRoleExceedsParent", err)
+	}
+	assertRoleAbsent(t, "too-much")
+}
+
+// scopeOf reads a role's stored default_scope (nil = NULL).
+func scopeOf(t *testing.T, name string) *string {
+	t.Helper()
+	var scope *string
+	if err := integrationPool.QueryRow(context.Background(),
+		`SELECT default_scope FROM rbac_roles WHERE name = $1`, name).Scan(&scope); err != nil {
+		t.Fatalf("read default_scope of %q: %v", name, err)
+	}
+	return scope
 }
 
 // assertRoleAbsent fails if the role exists — a refused mutation must leave no

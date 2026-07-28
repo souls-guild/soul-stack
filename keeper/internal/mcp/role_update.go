@@ -15,12 +15,17 @@ import (
 // semantics). default_scope (ADR-047 S1) is optional: key ABSENT → scope
 // untouched; present (including null) → replaces it (null clears scope).
 // parent_role (ADR-078) follows the same presence rule — null makes the role
-// plain again. REST parity: PATCH /v1/roles/{name}/permissions takes both.
+// plain again, and scope_mode joins them (sending `pin` re-pins onto the parent's
+// scope as of now). confirm_cascade is NOT presence-sensitive: absent and false
+// both mean "not confirmed". REST parity: PATCH /v1/roles/{name}/permissions
+// takes all four.
 type roleUpdateArgs struct {
-	Name         string   `json:"name"`
-	Permissions  []string `json:"permissions"`
-	DefaultScope *string  `json:"default_scope"`
-	ParentRole   *string  `json:"parent_role"`
+	Name           string   `json:"name"`
+	Permissions    []string `json:"permissions"`
+	DefaultScope   *string  `json:"default_scope"`
+	ParentRole     *string  `json:"parent_role"`
+	ScopeMode      string   `json:"scope_mode"`
+	ConfirmCascade bool     `json:"confirm_cascade"`
 }
 
 // callRoleUpdate — mutating tool keeper.role.update. Transport over
@@ -60,6 +65,7 @@ func (h *Handler) callRoleUpdate(ctx context.Context, claims *jwt.Claims, req js
 	// distinguish these.
 	hasScope := rawArgHasKey(args, "default_scope")
 	hasParent := rawArgHasKey(args, "parent_role")
+	hasMode := rawArgHasKey(args, "scope_mode")
 
 	err := h.deps.RBACRoles.UpdateRolePermissions(ctx, rbac.UpdateRolePermissionsInput{
 		Name:            a.Name,
@@ -69,6 +75,9 @@ func (h *Handler) callRoleUpdate(ctx context.Context, claims *jwt.Claims, req js
 		DefaultScope:    a.DefaultScope,
 		SetParentRole:   hasParent,
 		ParentRole:      a.ParentRole,
+		SetScopeMode:    hasMode,
+		ScopeMode:       rbac.ScopeMode(a.ScopeMode),
+		ConfirmCascade:  a.ConfirmCascade,
 	})
 	if err != nil {
 		code, detail := mapRoleErrorToMCP(err)
@@ -96,6 +105,14 @@ func (h *Handler) callRoleUpdate(ctx context.Context, claims *jwt.Claims, req js
 	}
 	if hasScope {
 		payload["default_scope"] = a.DefaultScope
+	}
+	if hasMode {
+		payload["scope_mode"] = a.ScopeMode
+	}
+	// Recorded whenever sent: it is the operator accepting a change to roles OTHER
+	// than the one this record names.
+	if a.ConfirmCascade {
+		payload["confirm_cascade"] = true
 	}
 	h.writeAudit(audit.EventRolePermissionsUpdated, claims.Subject, payload)
 

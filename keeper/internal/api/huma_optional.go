@@ -99,3 +99,13 @@ func optionalToPtr[T any](o Optional[T]) *T {
 	}
 	return nil
 }
+
+// optionalString flattens an Optional[string] whose null and empty readings are
+// the same thing — an explicit null for scope_mode means "no mode", which is the
+// zero value the domain already treats as "unset".
+func optionalString(o Optional[string]) string {
+	if v, ok := o.Get(); ok {
+		return v
+	}
+	return ""
+}

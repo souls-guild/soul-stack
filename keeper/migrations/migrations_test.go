@@ -237,6 +237,8 @@ func TestEmbed_ContainsExpectedMigrations(t *testing.T) {
 		"103_add_engine_provenance.up.sql",
 		"104_console_recordings.down.sql",
 		"104_console_recordings.up.sql",
+		"105_rbac_roles_scope_mode.down.sql",
+		"105_rbac_roles_scope_mode.up.sql",
 	}
 	if len(names) != len(want) {
 		t.Fatalf("got %d files, want %d: %v", len(names), len(want), names)

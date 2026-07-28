@@ -25,6 +25,8 @@ type roleView struct {
 	Operators            []string `json:"operators"`
 	DefaultScope         string   `json:"default_scope,omitempty"`
 	ParentRole           string   `json:"parent_role,omitempty"`
+	ScopeMode            string   `json:"scope_mode,omitempty"`
+	InertPermissions     []string `json:"inert_permissions"`
 	EffectivePermissions []string `json:"effective_permissions"`
 	EffectiveScope       string   `json:"effective_scope,omitempty"`
 }
@@ -82,6 +84,8 @@ func (h *Handler) callRoleList(ctx context.Context, claims *jwt.Claims, req json
 			Operators:            nonNilStrings(v.Operators),
 			DefaultScope:         v.DefaultScope,
 			ParentRole:           v.ParentRole,
+			ScopeMode:            string(v.ScopeMode),
+			InertPermissions:     nonNilStrings(v.InertPermissions),
 			EffectivePermissions: nonNilStrings(v.EffectivePermissions),
 			EffectiveScope:       v.EffectiveScope,
 		})

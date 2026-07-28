@@ -343,6 +343,10 @@ type RoleView struct {
 	// ParentRole — the role this one derives from (ADR-078); empty string means
 	// NULL (a plain role).
 	ParentRole string
+	// ScopeMode — what DefaultScope means on this role (ADR-078(k)):
+	// [ScopeModeTrack] (the delta follows the parent) or [ScopeModePin] (the
+	// parent's scope was materialized into it). [ScopeModeNone] on a plain role.
+	ScopeMode ScopeMode
 
 	// EffectivePermissions / EffectiveScope — the role in RESOLVED form
 	// (ADR-078(c)/(d)), filled by [resolveRoleViews]: `own ∩ the parent's
@@ -356,6 +360,20 @@ type RoleView struct {
 	// EffectiveScope is the resolved default scope — `the parent's effective AND
 	// own delta` — canonically rendered; empty means unrestricted.
 	EffectiveScope string
+
+	// InertPermissions are the role's OWN rows that the chain does not cover, in
+	// resolved form (ADR-078(l), NIM-200). Stored, listed under Permissions, and
+	// granting nothing at all.
+	//
+	// A row goes inert when the parent stops covering it — the parent loses the
+	// permission, or narrows past it. The cascade working as designed, but until
+	// now indistinguishable from a role somebody deliberately emptied: the catalog
+	// showed a permission list, the effective list was short or empty, and nothing
+	// said which row had died or why. Published separately because the difference
+	// cannot be recovered by subtracting the two lists — they are in different
+	// forms, and a consumer re-deriving that would be a second implementation of
+	// the attenuation rules, which is what J3 exists to prevent.
+	InertPermissions []string
 }
 
 const (
@@ -363,7 +381,7 @@ const (
 	// default_scope/parent_role (unlike [selectRolesSQL], which reads only what
 	// the enforcer snapshot needs). ORDER BY name gives a deterministic list
 	// order.
-	selectRoleViewsSQL = `SELECT name, description, builtin, default_scope, parent_role FROM rbac_roles ORDER BY name`
+	selectRoleViewsSQL = `SELECT name, description, builtin, default_scope, parent_role, scope_mode FROM rbac_roles ORDER BY name`
 )
 
 // LoadRoleViews assembles the API role catalog with three SELECTs (roles /
@@ -413,8 +431,9 @@ func loadRoleViewRows(ctx context.Context, db ExecQueryRower) ([]RoleView, map[s
 			v            RoleView
 			defaultScope *string
 			parentRole   *string
+			scopeMode    *string
 		)
-		if err := rows.Scan(&v.Name, &v.Description, &v.Builtin, &defaultScope, &parentRole); err != nil {
+		if err := rows.Scan(&v.Name, &v.Description, &v.Builtin, &defaultScope, &parentRole, &scopeMode); err != nil {
 			return nil, nil, fmt.Errorf("rbac: scan role view: %w", err)
 		}
 		if defaultScope != nil {
@@ -422,6 +441,9 @@ func loadRoleViewRows(ctx context.Context, db ExecQueryRower) ([]RoleView, map[s
 		}
 		if parentRole != nil {
 			v.ParentRole = *parentRole
+		}
+		if scopeMode != nil {
+			v.ScopeMode = ScopeMode(*scopeMode)
 		}
 		views = append(views, v)
 	}

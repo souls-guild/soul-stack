@@ -12,7 +12,7 @@ RBAC materialized in Postgres ([ADR-028(a)](../adr/0028-rbac-storage.md#adr-028-
 
 | Table | Columns | Role |
 |---|---|---|
-| **`rbac_roles`** | `name` PK (kebab-case, CHECK on format), `description`, `builtin` BOOL, `created_at`, `created_by_aid` FK→`operators(aid)` NULL-able, `default_scope` TEXT NULL-able ([ADR-047](../adr/0047-purview.md)), `parent_role` TEXT NULL-able self-FK→`rbac_roles(name)` `ON DELETE RESTRICT` ([ADR-078](../adr/0078-rbac-derived-roles.md)) | Directory of roles. `builtin=true` disables `role.delete` / `role.update` (built-in role - `cluster-admin`, see § Built-in Roles). `created_by_aid IS NULL` - seed roles without an Archon initiator. `parent_role IS NULL` - a **plain** role (see § Derived roles). |
+| **`rbac_roles`** | `name` PK (kebab-case, CHECK on format), `description`, `builtin` BOOL, `created_at`, `created_by_aid` FK→`operators(aid)` NULL-able, `default_scope` TEXT NULL-able ([ADR-047](../adr/0047-purview.md)), `parent_role` TEXT NULL-able self-FK→`rbac_roles(name)` `ON DELETE RESTRICT` + `scope_mode` TEXT NULL-able (`track`/`pin`, NULL iff `parent_role` is) ([ADR-078](../adr/0078-rbac-derived-roles.md)) | Directory of roles. `builtin=true` disables `role.delete` / `role.update` (built-in role - `cluster-admin`, see § Built-in Roles). `created_by_aid IS NULL` - seed roles without an Archon initiator. `parent_role IS NULL` - a **plain** role (see § Derived roles). |
 | **`rbac_role_permissions`** | `role_name` FK→`rbac_roles(name)` `ON DELETE CASCADE`, `permission` TEXT, PK `(role_name, permission)` | Role permissions. `permission` is stored as a **RAW string** and parsed by `ParsePermission` (§ Permissions format) - the database does not interpret the string. |
 | **`rbac_role_operators`** | `role_name` FK→`rbac_roles(name)` `ON DELETE CASCADE`, `aid` FK→`operators(aid)`, `granted_at`, `granted_by_aid` FK→`operators(aid)` NULL-able, PK `(role_name, aid)` | **Membership** "role ↔ operator". The absence of this layer used to be the cause of BUG-1 - membership had nowhere to persistently live so that it could be seen by both `keeper init` and the enforcer on all nodes. |
 
@@ -293,7 +293,7 @@ effective_perms(role) = own_perms(role) ∩ effective_perms(parent)
 
 A plain role's parent side is the unrestricted top, so the same formula gives plain ADR-047 behaviour. `∩` is the containment of § Invariant least-privilege (so `incarnation.*` covers `incarnation.get`) — one definition of "⊆" for the whole subsystem.
 
-**Example.** Parent `dba` holds `redis.restart` + `redis.read` at `coven=dba`; child `dba-aboba` sets `parent_role: dba`, keeps only `redis.read`, and adds the delta `trait.project=aboba` → its effective right is `redis.read` at `coven=dba AND trait.project=aboba`. Move the parent to `coven=dbaas` and the child follows. **The delta stores only the ADDED narrowing** and never repeats the parent's predicate — a child that restated `coven=dba` would resolve to the empty set the moment the parent moved.
+**Example.** Parent `dba` holds `redis.restart` + `redis.read` at `coven=dba`; child `dba-aboba` sets `parent_role: dba`, keeps only `redis.read`, and adds the delta `trait.project=aboba` → its effective right is `redis.read` at `coven=dba AND trait.project=aboba`. Move the parent to `coven=dbaas` and the child follows. **On a `track` role the delta stores only the ADDED narrowing** and never repeats the parent's predicate — a child that restated `coven=dba` would resolve to the empty set the moment the parent moved. Repeating it is exactly what `pin` does, deliberately and on the record (§ Tracking vs pinning).
 
 **Why the conjunction and the intersection.** The scope grammar has no `NOT`, so `AND`-ing only narrows: attenuation of scope is structural rather than a rule to remember. The permission side is an **intersection, not a copy**: a child's rows are never implicitly the parent's, because a permission added to the parent would then appear on every descendant — a widening cascade. Narrowing cascades and only narrowing: remove a permission from the parent and it drops out of every descendant at the next snapshot build.
 
@@ -317,7 +317,9 @@ Re-parenting is checked from both ends — the ancestors above the moved role an
 
 **The orphan policy is fail-closed on purpose.** Clearing the parent would turn the child's delta into an absolute scope and drop the parent's narrowing — a **widening**, i.e. escalation; re-rooting to the grandparent widens by definition; cascading the delete silently strips membership. Refusing is the only option that changes nobody's rights unasked. The operator re-parents or deletes the children explicitly.
 
-**Least-privilege still applies on top.** Creating or updating a derived role must satisfy **both** `child ⊆ parent` (structural) **and** the caller holding the parent (§ Invariant least-privilege, unchanged) — otherwise an operator with `role.create` could derive from a role far above their own rights. It is the **parent** the caller must cover, not merely what the child asks for today: the cascade will carry every later widening of that parent into the child. Both halves re-run on **every** role update, not only the one that sets `parent_role` — otherwise the create gate would be one PATCH wide. A child beyond its parent → `403` (`ErrRoleExceedsParent`).
+**Least-privilege still applies on top.** Creating or updating a derived role must satisfy **both** `child ⊆ parent` (structural) **and** the caller holding the parent (§ Invariant least-privilege, unchanged) — otherwise an operator with `role.create` could derive from a role far above their own rights. It is the **parent** the caller must cover, not merely what the child asks for today: the cascade will carry every later widening of that parent into the child. Both halves re-run on **every** role update, not only the one that sets `parent_role` — otherwise the create gate would be one PATCH wide. A child beyond its parent → `403` (`ErrRoleExceedsParent`), naming **every** row the parent fails to cover so the role can be repaired in one PATCH.
+
+**The floor judges the role's RIGHTS, not its rows** ([ADR-078(h) amendment](../adr/0078-rbac-derived-roles.md)). On a derived role the least-privilege comparison resolves the child against its parent first: a bare `incarnation.get` under a `coven=dba` ceiling is weighed as `incarnation.get on coven=dba`, which is what the role would actually grant. Comparing the stored rows made the floor stricter than the authorization it protects — a delegator scoped to their own coven could not create a role squarely inside it, and the only way through was to restate the parent's predicate in the delta, silently turning a tracking role into a pinned one. The same resolution applies when a role is **bound** to an operator or bundled into a Synod: both confer what the role grants. A **plain** role is unaffected — with no parent there is no ceiling, and a bare permission is still a request to grant it unrestricted.
 
 **Self-lockout counts PLAIN roles only.** A derived role is **never** a source of cluster-admin (§ Self-lockout invariant), including when its chain happens to resolve to an unrestricted `*` right now — that depends on a parent any other mutation may narrow. Two halves: the lockout probes filter `parent_role IS NULL` when counting survivors, and a role that **becomes derived** runs the same lockout check that removing its `*` would. Without the second half the invariant is trivially bypassable — keep the permission set identical, add a parent, and the cluster is locked out with no rule visibly firing.
 
@@ -334,7 +336,36 @@ To actually confine an operator, revoke the wide parent from them; adding a narr
 
 This is also why a new derived role's parent is **one explicitly chosen role**, never "the caller's rights": a caller's union is wider than any single role they hold, so deriving against the union would mint a role broader than any role they could point at. The UI shows the ceiling of the **selected parent** for the same reason.
 
-**API surface.** Derivation is not a separate entity, so it adds no endpoint and no `role.*` permission — the existing role surface carries two more fields ([ADR-078(a)](../adr/0078-rbac-derived-roles.md)):
+#### Tracking vs pinning (`scope_mode`)
+
+Two opposite intentions produced an identical row, so the intent is stored explicitly in **`rbac_roles.scope_mode`** ([migration 105](../../keeper/migrations/105_rbac_roles_scope_mode.up.sql), [ADR-078(k)](../adr/0078-rbac-derived-roles.md)):
+
+| Mode | The delta holds | The parent widens | The parent narrows |
+|---|---|---|---|
+| **`track`** (default) | only the ADDED narrowing | the child widens with it | the child narrows |
+| **`pin`** | the parent's effective scope **materialized** into it at write time | the child does **not** move | the child narrows |
+
+`scope_mode` is `NULL` exactly when `parent_role` is (a CHECK holds the two together), so a plain role has no mode and cannot be given one.
+
+**Resolution does not branch on the mode** — it is `effective_scope(parent) AND default_scope(role)` for both. The modes differ only in what was written into the delta, which is why a pinned role still narrows with its parent: pinning is a defence against drift, never an escape from attenuation. Pinning against an already-unrestricted parent is vacuous (there is no room to widen into), and a pin **can** expire: move the parent sideways and the frozen predicate conjoins with the new one to the empty set — the condition § Inert permissions makes visible.
+
+Sending `pin` again RE-PINS onto the parent's scope as of now. An edit that does not mention `scope_mode` never re-pins: an ordinary permission PATCH must not quietly become an authorization change.
+
+#### The cascade is confirmed, not silent
+
+Editing a role changes every role derived from it. Any mutation that moves the **effective rights** of anything below it — either direction, any depth — is refused with `409` (`role-cascade-not-confirmed`) unless the request carries **`confirm_cascade`**. The refusal names the derived roles that would gain rights, the ones that would lose them, and how many active operators hold any of them (directly or through a Synod).
+
+Both directions are reported and neither is the safe one: widening hands out access nobody granted directly, narrowing takes access away, possibly mid-incident. A mutation the subtree does not feel passes silently — being a parent is not itself a consequence — and a role with no children is never gated. A pinned child is absent from the widening half by construction.
+
+The gate is **advisory in nature**: skipping it would produce exactly the same rights. It is a gate on the operator's attention, and it runs **last**, so a refusal about the caller's own rights is always reported before one that asks them to decide. `confirm_cascade` is recorded in the audit payload whenever it is sent — it is the operator accepting a change to roles other than the one the record names.
+
+#### Inert permissions
+
+A row the chain no longer covers stays in `permissions`, drops out of `effective_permissions`, and is published under **`inert_permissions`** ([ADR-078(l)](../adr/0078-rbac-derived-roles.md)). Without it, "a role listing two permissions and granting none" is indistinguishable from "a role somebody deliberately emptied", and the two call for opposite responses. The set is published rather than derivable: subtracting one list from the other compares a stored form against a resolved one.
+
+**The emptiness is correct.** `incarnation.*` under a parent narrowed to `incarnation.get` resolves to **nothing**, not to `incarnation.get` — clipping the wildcard to the parent's current set would mean a permission later added to the parent silently appears on every descendant holding a `*`, the widening cascade the intersection exists to forbid.
+
+**API surface.** Derivation is not a separate entity, so it adds no endpoint and no `role.*` permission — the existing role surface carries a few more fields ([ADR-078(a)](../adr/0078-rbac-derived-roles.md)):
 
 | Where | Field | Semantics |
 |---|---|---|
@@ -342,14 +373,17 @@ This is also why a new derived role's parent is **one explicitly chosen role**, 
 | `PATCH /v1/roles/{name}/permissions`, `keeper.role.update` | `parent_role` | PATCH presence, mirroring `default_scope`: **key absent** → derivation untouched; present → replaced (`null` makes the role plain again) |
 | `GET /v1/roles`, `keeper.role.list` | `parent_role` | the role's ceiling; absent/empty → a plain role |
 | `GET /v1/roles`, `keeper.role.list` | `effective_permissions`, `effective_scope` | the role **as resolved** against its chain |
+| `POST /v1/roles`, `PATCH …/permissions`, `keeper.role.create` / `.update` | `scope_mode` | `track` (default) / `pin`; on update it follows PATCH presence, and sending `pin` re-pins |
+| `PATCH …/permissions`, `keeper.role.update` | `confirm_cascade` | accept a change that moves the roles derived from this one; not presence-sensitive |
+| `GET /v1/roles`, `keeper.role.list` | `scope_mode`, `inert_permissions` | the delta's intent, and the stored rows the chain no longer covers |
 
 The read side returns each role in **both** forms — as stored (`permissions` / `default_scope`) and as resolved (`effective_*`) — and the difference between them is exactly what an operator needs to see: a stored row the parent does not cover is present in the first and absent from the second, i.e. written but granting nothing. Resolution runs the same code the enforcer runs, so no consumer re-derives inheritance from `parent_role` and none can arrive at a wider answer than the decision layer. A catalog whose graph does not resolve fails the read rather than serving the unattenuated rows.
 
-Refusals on the write side: `404` for a parent outside the catalog, `403` for a role beyond its parent (`ErrRoleExceedsParent`) or beyond the caller's own rights, `422` for a cycle / an over-deep chain / an unresolvable scope, `409` on deleting a role that still has children.
+Refusals on the write side: `404` for a parent outside the catalog, `403` for a role beyond its parent (`ErrRoleExceedsParent`) or beyond the caller's own rights, `422` for a cycle / an over-deep chain / an unresolvable scope / a `scope_mode` without a parent, `409` on deleting a role that still has children and `409` (`role-cascade-not-confirmed`) on an unconfirmed cascade.
 
-The audit records of `role.created` / `role.permissions-updated` carry the derivation, not just the permission list — on a derived role the list is the delta and the ceiling lives in `parent_role`. On create both `parent_role` and `default_scope` are always present (`null` on a plain role); on update they appear only when the request sent them, so an absent key reads as "untouched" and a present `null` as "cleared".
+The audit records of `role.created` / `role.permissions-updated` carry the derivation, not just the permission list — on a derived role the list is the delta and the ceiling lives in `parent_role`. On create `parent_role`, `default_scope` and `scope_mode` are always present (`null`/empty on a plain role); on update they appear only when the request sent them, so an absent key reads as "untouched" and a present `null` as "cleared".
 
-> **Status.** The model, its guards, chain resolution, the write-time gate and the API surface are all in place (NIM-179 + NIM-180 + NIM-181). Remaining: the web selector and the "you inherit X, you cannot widen it" panel (NIM-182) — until then a derived role is created through the API rather than the UI.
+> **Status.** The model, its guards, chain resolution, the write-time gate, the API surface, the `scope_mode` intent, the cascade confirmation and inert rows are all in place (NIM-179 + NIM-180 + NIM-181 + NIM-198/199/200). Remaining: the web selector and the "you inherit X, you cannot widen it" panel (NIM-182) — until then a derived role is created through the API rather than the UI.
 
 ### Root roles (`role.create-root`)
 

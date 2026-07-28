@@ -142,9 +142,12 @@ func TestIntegration_Catalog_RejectedRowStaysStoredButGrantsNothing(t *testing.T
 	}
 
 	// Now narrow the parent: the child's incarnation.destroy row survives in
-	// storage and drops out of its effective set at the next read.
+	// storage and drops out of its effective set at the next read. Confirmed
+	// explicitly — narrowing a parent moves the roles below it, and that is
+	// exactly what this case is arranging (ADR-078(k)).
 	if err := svc.UpdateRolePermissions(ctx, UpdateRolePermissionsInput{
 		Name: "dba", Permissions: []string{"incarnation.get"}, CallerAID: "archon-root",
+		ConfirmCascade: true,
 	}); err != nil {
 		t.Fatalf("UpdateRolePermissions(dba): %v", err)
 	}

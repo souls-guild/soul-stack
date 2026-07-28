@@ -93,11 +93,17 @@ VALUES ($1, $2, false, $3, $4)
 	// for bare perms). Used by UpdateRole's replace semantics.
 	updateRoleDefaultScopeSQL = `UPDATE rbac_roles SET default_scope = $2 WHERE name = $1`
 
-	// updateRoleParentSQL — sets/clears a role's parent_role (ADR-078). NULL
-	// makes the role plain again. A separate statement rather than a column on
-	// [insertRoleSQL] so create and update share one write path — and one place
-	// where the `rbac_roles_parent_chain_guard` trigger (cycles, depth) fires.
-	updateRoleParentSQL = `UPDATE rbac_roles SET parent_role = $2 WHERE name = $1`
+	// updateRoleParentSQL — sets/clears a role's parent_role together with its
+	// scope_mode (ADR-078, migration 105). NULL/NULL makes the role plain again. A
+	// separate statement rather than a column on [insertRoleSQL] so create and
+	// update share one write path — and one place where the
+	// `rbac_roles_parent_chain_guard` trigger (cycles, depth) fires.
+	//
+	// One statement for both columns because migration 105 CHECKs that they are
+	// NULL together: writing them separately would make the intermediate state
+	// illegal, so the constraint would have to be deferred to permit a shape
+	// nothing should ever be in.
+	updateRoleParentSQL = `UPDATE rbac_roles SET parent_role = $2, scope_mode = $3 WHERE name = $1`
 
 	// insertRolePermissionSQL — INSERT of a single role-permission row.
 	// ON CONFLICT DO NOTHING makes the batch insert idempotent on
@@ -459,11 +465,29 @@ func UpdateRoleDefaultScope(ctx context.Context, db ExecQueryRower, name string,
 // the not-self CHECK of migration 102), so a cycle, an over-deep chain or an
 // unknown parent surfaces here as a mapped sentinel via [mapRoleError] rather
 // than being re-derived in Go: one gate, every write path.
-func UpdateRoleParent(ctx context.Context, db ExecQueryRower, name string, parentRole *string) error {
-	if _, err := db.Exec(ctx, updateRoleParentSQL, name, parentRoleArg(parentRole)); err != nil {
+// mode is the role's scope intent (ADR-078(k)); it is forced to NULL alongside a
+// cleared parent, since an intent about a parent the role no longer has would be
+// a claim about nothing.
+func UpdateRoleParent(ctx context.Context, db ExecQueryRower, name string, parentRole *string, mode ScopeMode) error {
+	parent := parentRoleArg(parentRole)
+	if parent == nil {
+		mode = ScopeModeNone
+	} else if mode == ScopeModeNone {
+		mode = ScopeModeTrack
+	}
+	if _, err := db.Exec(ctx, updateRoleParentSQL, name, parent, scopeModeArg(mode)); err != nil {
 		return fmt.Errorf("rbac: update parent_role of role %q: %w", name, mapRoleError(err))
 	}
 	return nil
+}
+
+// scopeModeArg converts a [ScopeMode] into an args value: the empty mode → PG
+// NULL (a plain role).
+func scopeModeArg(mode ScopeMode) any {
+	if mode == ScopeModeNone {
+		return nil
+	}
+	return string(mode)
 }
 
 // defaultScopeArg converts a *string default_scope into an args value: nil
@@ -554,6 +578,30 @@ func roleDefaultScope(ctx context.Context, tx ExecQueryRower, name string) (*str
 		return nil, fmt.Errorf("rbac: iter default_scope of role %q: %w", name, err)
 	}
 	return scope, nil
+}
+
+// roleScopeMode reads a role's stored scope_mode (ADR-078(k), migration 105);
+// [ScopeModeNone] = NULL = a plain role. Read on a PATCH so an untouched field
+// keeps its stored intent instead of silently reverting to the default.
+func roleScopeMode(ctx context.Context, tx ExecQueryRower, name string) (ScopeMode, error) {
+	rows, err := tx.Query(ctx, `SELECT scope_mode FROM rbac_roles WHERE name = $1`, name)
+	if err != nil {
+		return ScopeModeNone, fmt.Errorf("rbac: read scope_mode of role %q: %w", name, wrapPgErr(err))
+	}
+	defer rows.Close()
+	var mode *string
+	if rows.Next() {
+		if err := rows.Scan(&mode); err != nil {
+			return ScopeModeNone, fmt.Errorf("rbac: scan scope_mode of role %q: %w", name, err)
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return ScopeModeNone, fmt.Errorf("rbac: iter scope_mode of role %q: %w", name, err)
+	}
+	if mode == nil {
+		return ScopeModeNone, nil
+	}
+	return ScopeMode(*mode), nil
 }
 
 // roleParent reads a role's RAW parent_role (ADR-078); nil = NULL = a plain

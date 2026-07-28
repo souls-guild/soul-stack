@@ -121,8 +121,15 @@ type CreateRoleInput struct {
 	// plain role, which is every role that existed before derivation. A derived
 	// role is bounded by its parent both structurally (`child ⊆ parent`) and by
 	// least-privilege (the caller must hold the parent) — see
-	// [Service.assertDerivedWithinParent].
+	// [Service.resolveParentCeiling] and [assertWithinParent].
 	ParentRole *string
+
+	// ScopeMode records what DefaultScope means on a derived role (ADR-078(k)):
+	// [ScopeModeTrack] (the default, and the empty value here) leaves it a delta
+	// that follows the parent; [ScopeModePin] materializes the parent's current
+	// effective scope into it, so a later widening of the parent stops at this
+	// role. Ignored — and stored as NULL — when ParentRole is nil.
+	ScopeMode ScopeMode
 }
 
 // CreateRole creates a role along with its permissions. Validating the name
@@ -153,6 +160,9 @@ func (s *Service) CreateRole(ctx context.Context, in CreateRoleInput) error {
 	if in.ParentRole != nil && !reRoleName.MatchString(*in.ParentRole) {
 		return fmt.Errorf("%w: parent %q must match %s", ErrInvalidRoleName, *in.ParentRole, reRoleName.String())
 	}
+	if err := checkScopeMode(in.ScopeMode, in.ParentRole != nil); err != nil {
+		return err
+	}
 
 	var createdBy *string
 	if in.CallerAID != "" {
@@ -165,14 +175,40 @@ func (s *Service) CreateRole(ctx context.Context, in CreateRoleInput) error {
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
 
+	// Derived role (ADR-078): the structural ceiling, and the floor below applied
+	// to the RESOLVED role rather than its stored rows — `child ⊆ parent AND
+	// caller-holds-parent`, both on top of least-privilege, never instead of it.
+	// The parent resolves first because the floor needs its ceiling (NIM-198).
+	var parent *Role
+	scope := in.DefaultScope
+	if in.ParentRole != nil {
+		parent, err = s.resolveParentCeiling(ctx, tx, in.Name, *in.ParentRole, in.CallerAID)
+		if err != nil {
+			return err
+		}
+		// Pinning happens BEFORE the gates, because the materialized predicate is
+		// what will be stored and therefore what they must judge. It resolves the
+		// same either way — `ceiling AND (ceiling AND delta)` is `ceiling AND delta`
+		// — so this changes what is written, never what is allowed.
+		if in.ScopeMode == ScopeModePin {
+			if scope, err = pinnedDelta(parent, scope); err != nil {
+				return err
+			}
+		}
+		if _, err := assertWithinParent(parent, in.Name, in.Permissions, scope); err != nil {
+			return err
+		}
+	}
+
 	// Least-privilege subset check (ADR-028, rbac.md → § Least-Privilege
 	// Invariant): a caller can't create a role with a permission it doesn't
 	// itself hold. Guards against vertical escalation (role.create without
 	// `*` → a role with `*` → grant it to self → cluster-admin). Granted
 	// bare perms are expanded under the role's own default_scope being
 	// created (ADR-047 S1), otherwise a caller scoped to prod could grant a
-	// role scoped to staging.
-	required, err := requiredPermissions(in.Permissions, in.DefaultScope)
+	// role scoped to staging — and on a derived role under the parent's ceiling
+	// too, so the floor judges the rights the role confers (NIM-198).
+	required, err := effectiveRoleRights(parent, in.Permissions, scope)
 	if err != nil {
 		return err
 	}
@@ -180,28 +216,26 @@ func (s *Service) CreateRole(ctx context.Context, in CreateRoleInput) error {
 		return err
 	}
 
-	// Derived role (ADR-078): the structural ceiling ON TOP of the floor above,
-	// never instead of it — `child ⊆ parent AND caller-holds-parent`.
-	if in.ParentRole != nil {
-		if err := s.assertDerivedWithinParent(ctx, tx, in.Name, *in.ParentRole,
-			in.Permissions, in.DefaultScope, in.CallerAID); err != nil {
+	// No parent: the role tracks nothing, so it needs `role.create-root` (NIM-201,
+	// root_role.go). Checked AFTER the floor — "you cannot grant that at all" is
+	// the more actionable refusal of the two. The derived branch was settled above,
+	// where the parent had to resolve before the floor could read the child in the
+	// form it will grant (NIM-198).
+	if in.ParentRole == nil {
+		if err := s.assertCallerMayMintRootRole(ctx, tx, in.CallerAID, required); err != nil {
 			return err
 		}
-	} else if err := s.assertCallerMayMintRootRole(ctx, tx, in.CallerAID, required); err != nil {
-		// No parent: the role tracks nothing, so it needs `role.create-root`
-		// (NIM-201, root_role.go). Checked AFTER the floor — "you cannot grant
-		// that at all" is the more actionable refusal of the two.
-		return err
 	}
 
-	if err := CreateRole(ctx, tx, in.Name, in.Description, in.Permissions, createdBy, in.DefaultScope); err != nil {
+	if err := CreateRole(ctx, tx, in.Name, in.Description, in.Permissions, createdBy, scope); err != nil {
 		return err
 	}
 	// After the INSERT, so the chain-guard trigger sees the row it is judging.
 	// NO self-lockout check: creating a role only ADDS to the catalog, and a new
-	// derived role that grants nothing to nobody cannot remove an admin.
+	// derived role that grants nothing to nobody cannot remove an admin. NO cascade
+	// report either: a role created this instant has no children to surprise.
 	if in.ParentRole != nil {
-		if err := UpdateRoleParent(ctx, tx, in.Name, in.ParentRole); err != nil {
+		if err := UpdateRoleParent(ctx, tx, in.Name, in.ParentRole, in.ScopeMode); err != nil {
 			return err
 		}
 	}
@@ -288,6 +322,20 @@ type UpdateRolePermissionsInput struct {
 	SetParentRole bool
 	// ParentRole is the new parent_role when SetParentRole=true (ADR-078).
 	ParentRole *string
+
+	// SetScopeMode / ScopeMode — the delta's intent (ADR-078(k)), PATCH-presence
+	// again. Sending [ScopeModePin] RE-PINS: the parent's effective scope as of
+	// now is materialized into the delta, which is the point of sending it a
+	// second time. Not sending the field leaves both the mode and the delta alone.
+	SetScopeMode bool
+	ScopeMode    ScopeMode
+
+	// ConfirmCascade — the caller has seen what this change does to the roles
+	// derived from this one and means to do it (ADR-078(k), NIM-199). Without it a
+	// mutation that moves a child's rights is refused with the report attached
+	// ([CascadeError]); with it the same mutation proceeds. It confirms nothing
+	// else: every other gate is unaffected by it.
+	ConfirmCascade bool
 }
 
 // UpdateRolePermissions replaces a role's permission set (replace
@@ -297,12 +345,14 @@ type UpdateRolePermissionsInput struct {
 //  1. lock the role; missing → [ErrRoleNotFound].
 //  2. builtin=true → [ErrRoleBuiltin] (before lockout).
 //  3. validate the new set via [ParsePermission].
-//  4. if the resulting role is derived → `child ⊆ parent` and the caller holds
-//     the parent (ADR-078(h), [Service.assertDerivedWithinParent]).
-//  5. if the role STOPS being a cluster-admin source — `*` removed, or the role
+//  4. if the resulting role is derived → the caller holds the parent
+//     ([Service.resolveParentCeiling]) and `child ⊆ parent`
+//     ([assertWithinParent]) — ADR-078(h).
+//  5. least-privilege, over the role's rights in RESOLVED form (NIM-198).
+//  6. if the role STOPS being a cluster-admin source — `*` removed, or the role
 //     turned derived — a self-lockout check (will admins with `*` remain through
 //     a PLAIN role other than this one); none → [ErrWouldLockOutCluster].
-//  6. replace.
+//  7. replace.
 func (s *Service) UpdateRolePermissions(ctx context.Context, in UpdateRolePermissionsInput) error {
 	tx, err := s.pool.BeginTx(ctx, pgx.TxOptions{})
 	if err != nil {
@@ -367,49 +417,92 @@ func (s *Service) UpdateRolePermissions(ctx context.Context, in UpdateRolePermis
 	if err != nil {
 		return err
 	}
+	oldMode, err := roleScopeMode(ctx, tx, in.Name)
+	if err != nil {
+		return err
+	}
 	// The role as it will look AFTER this PATCH — an untouched field keeps its
-	// stored value. Both guards below judge that shape, not the request.
-	newScope, newParent := oldScope, oldParent
+	// stored value. Every guard below judges that shape, not the request.
+	newScope, newParent, newMode := oldScope, oldParent, oldMode
+	rewriteScope := in.SetDefaultScope
 	if in.SetDefaultScope {
 		newScope = in.DefaultScope
 	}
 	if in.SetParentRole {
 		newParent = in.ParentRole
 	}
-
-	var required []Permission
-	if in.SetDefaultScope {
-		required, err = requiredPermissions(in.Permissions, in.DefaultScope)
-		if err != nil {
-			return err
-		}
-	} else {
-		added := addedPermissions(oldPerms, in.Permissions)
-		required, err = requiredPermissions(added, oldScope)
-		if err != nil {
-			return err
-		}
+	if in.SetScopeMode {
+		newMode = in.ScopeMode
 	}
-	if err := s.assertCallerMayGrant(ctx, tx, in.CallerAID, required); err != nil {
+	if newParent == nil {
+		newMode = ScopeModeNone
+	} else if newMode == ScopeModeNone {
+		newMode = ScopeModeTrack
+	}
+	if err := checkScopeMode(newMode, newParent != nil); err != nil {
+		return err
+	}
+
+	// The role as STORED and RESOLVED before anything changes — the baseline the
+	// cascade report is diffed against, read before the write path touches a row.
+	before, err := resolveRoleChain(ctx, tx, in.Name)
+	if err != nil {
 		return err
 	}
 
 	// Derived role (ADR-078): the resulting role must still fit inside its parent.
 	// Re-checked on EVERY update, not just one that sets parent_role — adding a
 	// permission or widening the delta of an existing derived role is the same
-	// escalation attempt as creating it that way.
+	// escalation attempt as creating it that way. Resolved BEFORE the floor, which
+	// needs the ceiling to judge the rows in the form they will grant (NIM-198).
+	var parent, after *Role
 	if newParent != nil {
-		if err := s.assertDerivedWithinParent(ctx, tx, in.Name, *newParent,
-			in.Permissions, newScope, in.CallerAID); err != nil {
+		parent, err = s.resolveParentCeiling(ctx, tx, in.Name, *newParent, in.CallerAID)
+		if err != nil {
 			return err
 		}
-	} else if err := s.assertCallerMayMintRootRole(ctx, tx, in.CallerAID, required); err != nil {
-		// The result has no parent and this PATCH puts privilege into it — the
-		// same minting the create gate refuses (NIM-201). Judged on the RESULTING
-		// shape, so it covers both clearing parent_role and growing a role that
-		// was already plain; `required` is empty on a pure trim, which is why
-		// removing permissions stays ungated.
+		// Re-pin only on an explicit request. A pinned role whose permissions are
+		// being edited must NOT quietly re-freeze onto today's parent: that would
+		// make an unrelated PATCH an authorization change nobody asked for.
+		if in.SetScopeMode && in.ScopeMode == ScopeModePin {
+			if newScope, err = pinnedDelta(parent, newScope); err != nil {
+				return err
+			}
+			rewriteScope = true
+		}
+		if after, err = assertWithinParent(parent, in.Name, in.Permissions, newScope); err != nil {
+			return err
+		}
+	} else if after, err = plainRole(in.Name, in.Permissions, newScope); err != nil {
 		return err
+	}
+
+	// The floor's own set: the whole role under the NEW scope when the scope moves,
+	// otherwise just the added rows under the untouched one. On a derived role both
+	// are resolved against the parent's ceiling first — newScope is the delta in
+	// that case, and it equals oldScope whenever SetDefaultScope is false.
+	var required []Permission
+	if in.SetDefaultScope {
+		required, err = effectiveRoleRights(parent, in.Permissions, newScope)
+	} else {
+		required, err = effectiveRoleRights(parent, addedPermissions(oldPerms, in.Permissions), newScope)
+	}
+	if err != nil {
+		return err
+	}
+	if err := s.assertCallerMayGrant(ctx, tx, in.CallerAID, required); err != nil {
+		return err
+	}
+
+	// The result has no parent and this PATCH puts privilege into it — the same
+	// minting the create gate refuses (NIM-201). Judged on the RESULTING shape, so
+	// it covers both clearing parent_role and growing a role that was already
+	// plain; `required` is empty on a pure trim, which is why removing permissions
+	// stays ungated.
+	if newParent == nil {
+		if err := s.assertCallerMayMintRootRole(ctx, tx, in.CallerAID, required); err != nil {
+			return err
+		}
 	}
 
 	// The self-lockout check is needed when the role STOPS being a cluster-admin
@@ -423,16 +516,26 @@ func (s *Service) UpdateRolePermissions(ctx context.Context, in UpdateRolePermis
 		}
 	}
 
+	// The blast radius, LAST among the gates (ADR-078(k), NIM-199): every refusal
+	// that is about the caller's own rights should be reported as such before one
+	// that asks them to take a position. A change nobody below feels passes
+	// silently — the report is about consequences, not about the graph.
+	if err := s.assertCascadeConfirmed(ctx, tx, before, after, in.ConfirmCascade); err != nil {
+		return err
+	}
+
 	if err := UpdateRolePermissions(ctx, tx, in.Name, in.Permissions); err != nil {
 		return err
 	}
-	if in.SetDefaultScope {
-		if err := UpdateRoleDefaultScope(ctx, tx, in.Name, in.DefaultScope); err != nil {
+	// newScope rather than in.DefaultScope: a re-pin rewrites the delta even when
+	// the request carried no scope of its own.
+	if rewriteScope {
+		if err := UpdateRoleDefaultScope(ctx, tx, in.Name, newScope); err != nil {
 			return err
 		}
 	}
-	if in.SetParentRole {
-		if err := UpdateRoleParent(ctx, tx, in.Name, in.ParentRole); err != nil {
+	if in.SetParentRole || in.SetScopeMode {
+		if err := UpdateRoleParent(ctx, tx, in.Name, newParent, newMode); err != nil {
 			return err
 		}
 	}
@@ -564,18 +667,11 @@ func (s *Service) GrantOperator(ctx context.Context, in GrantOperatorInput) erro
 	// subject). A subject-initiated grant from transport always carries a
 	// CallerAID (claims.Subject).
 	if in.CallerAID != nil {
-		grantedPerms, err := rolePermissions(ctx, tx, in.RoleName)
-		if err != nil {
-			return err
-		}
-		// The bare perms of the role being granted inherit its default_scope
-		// (ADR-047 S1): binding a scoped role confers the right within its
-		// scope, not unrestricted.
-		grantedScope, err := roleDefaultScope(ctx, tx, in.RoleName)
-		if err != nil {
-			return err
-		}
-		required, err := requiredPermissions(grantedPerms, grantedScope)
+		// The rights the binding actually confers: bare perms under the role's
+		// default_scope (ADR-047 S1), and on a DERIVED role the whole set resolved
+		// against its chain (NIM-198) — binding a child confers what the child
+		// grants, which is never more than its parent allows.
+		required, err := s.roleEffectivePermissions(ctx, tx, in.RoleName)
 		if err != nil {
 			return err
 		}

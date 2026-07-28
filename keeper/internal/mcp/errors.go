@@ -53,6 +53,11 @@ const (
 	// role-has-children — role.delete refused because roles derive from it
 	// (ADR-078(g), REST TypeRoleHasChildren).
 	mcpCodeRoleHasChildren = "role-has-children"
+	// mcpCodeRoleCascade — the update changes the rights of roles DERIVED from the
+	// one being edited and the call did not confirm it (ADR-078(k), NIM-199). The
+	// detail names the affected roles and how many operators hold them: it is what
+	// the agent has to relay before resending with confirm_cascade.
+	mcpCodeRoleCascade = "role-cascade-not-confirmed"
 
 	// Synod codes (ADR-049, parity with REST /v1/synods*). synod-already-exists —
 	// UNIQUE violation on synods.name (REST TypeSynodExists); synod-not-found —
@@ -298,6 +303,7 @@ func mapIncarnationErrorToMCP(err error) (code, detail string) {
 //   - ErrRootRoleNotPermitted (a plain role without role.create-root)  → forbidden.
 //   - ErrPermissionDenied                                             → forbidden.
 //   - ErrRoleHasChildren (delete refused by the self-FK, ADR-078(g))  → role-has-children.
+//   - ErrRoleCascadeNeedsConfirm (ADR-078(k))                          → role-cascade-not-confirmed.
 //   - ErrRoleParentCycle / ErrRoleChainTooDeep / ErrRoleScopeTooComplex → validation-failed.
 //
 // Unknown errors → internal-error + generic detail (raw err.Error() isn't
@@ -330,6 +336,11 @@ func mapRoleErrorToMCP(err error) (code, detail string) {
 		return mcpCodeForbidden, "operator lacks required permission"
 	case errors.Is(err, rbac.ErrRoleHasChildren):
 		return mcpCodeRoleHasChildren, "role is a parent of derived roles — re-parent or delete them first"
+	case errors.Is(err, rbac.ErrRoleCascadeNeedsConfirm):
+		// The report is the whole value of this refusal, so it is forwarded rather
+		// than replaced by a generic line: it names roles and a count, nothing about
+		// the caller's own rights, so there is no oracle to leak.
+		return mcpCodeRoleCascade, cascadeDetail(err) + "; resend with confirm_cascade=true to proceed"
 	case errors.Is(err, rbac.ErrRoleParentCycle):
 		return mcpCodeValidationFailed, "role derivation chain would form a cycle"
 	case errors.Is(err, rbac.ErrRoleChainTooDeep):
@@ -627,4 +638,14 @@ func mapTidingErrorToMCP(err error) (code, detail string) {
 		return mcpCodeValidationFailed, herald.PublicMessage(err)
 	}
 	return mcpCodeInternalError, "internal error"
+}
+
+// cascadeDetail renders the blast-radius report carried by the error, falling
+// back to the sentinel's own text if the error travelled without one.
+func cascadeDetail(err error) string {
+	var ce *rbac.CascadeError
+	if errors.As(err, &ce) {
+		return ce.Cascade.String()
+	}
+	return err.Error()
 }

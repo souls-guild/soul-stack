@@ -22,6 +22,44 @@ import (
 // snapshot whose graph is broken (an older binary, a hand-edited row, a restore)
 // must not build an enforcer.
 
+// ScopeMode is the recorded intent of a derived role's delta (ADR-078(k),
+// migration 105). It answers a question the delta string cannot: whether the
+// operator meant to FOLLOW the parent's scope or to freeze it.
+//
+// Resolution does not branch on it. Both modes resolve as
+// `effective_scope(parent) AND default_scope(role)` — they differ only in what
+// was written into the delta at write time, so a pinned role still narrows when
+// its parent narrows, and the monotone-AND argument of ADR-078(b) is untouched.
+type ScopeMode string
+
+const (
+	// ScopeModeNone — the role is plain; there is no parent and so no intent.
+	// Stored as NULL, and the DB holds it to that (migration 105 CHECKs the two
+	// columns are NULL together).
+	ScopeModeNone ScopeMode = ""
+	// ScopeModeTrack — the delta is the ADDED narrowing only, so the parent's
+	// scope cascades in. The ADR-078(b) contract and the default for a new
+	// derived role: it is what makes moving a parent move its children.
+	ScopeModeTrack ScopeMode = "track"
+	// ScopeModePin — the parent's effective scope was materialized INTO the delta
+	// when the mode was set, so a later WIDENING of the parent does not reach this
+	// role. Deliberately a write-time act rather than a resolve-time rule: a
+	// pinned role is a role whose predicate says what it means, readable without
+	// consulting its parent.
+	ScopeModePin ScopeMode = "pin"
+)
+
+// Valid reports whether m is one of the three states. Transport validates before
+// the tx opens; the DB CHECK is the authority.
+func (m ScopeMode) Valid() bool {
+	return m == ScopeModeNone || m == ScopeModeTrack || m == ScopeModePin
+}
+
+// ErrInvalidScopeMode — scope_mode is neither `track` nor `pin`, or is set on a
+// role with no parent (where it would describe a relationship that does not
+// exist). Transport maps it to 422.
+var ErrInvalidScopeMode = errors.New("rbac: invalid scope_mode")
+
 // maxRoleChainDepth caps a derivation chain, counted in ROLES: a plain role is
 // depth 1, a role with a parent is depth 2. Four roles = at most three parent
 // hops. Mirrors [maxScopeDepth] (the scope-nesting cap) and MUST stay equal to

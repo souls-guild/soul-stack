@@ -63,7 +63,16 @@ const (
 	// ADR-078(g)). 409 Conflict, the same shape as TypeProviderHasProfiles: the
 	// operator re-parents or deletes the children first. Clearing the link
 	// instead would turn each child's delta into an absolute scope — a widening.
-	TypeRoleHasChildren  = "https://soul-stack.com/errors/role-has-children"
+	TypeRoleHasChildren = "https://soul-stack.com/errors/role-has-children"
+	// TypeRoleCascade — the update would change the rights of roles DERIVED from
+	// the one being edited, and the request did not confirm the cascade
+	// (ADR-078(k), NIM-199). 409 Conflict, a sibling of TypeRoleHasChildren: both
+	// say "this role is a parent". A separate URN because the resolutions differ —
+	// that one wants the children re-parented, this one wants the same request
+	// resent with `confirm_cascade: true`. `detail` names the affected roles and
+	// how many operators hold them; it is what the operator has to be shown before
+	// confirming, so a client must surface it rather than retrying blind.
+	TypeRoleCascade      = "https://soul-stack.com/errors/role-cascade-not-confirmed"
 	TypeSynodNotFound    = "https://soul-stack.com/errors/synod-not-found"
 	TypeSynodExists      = "https://soul-stack.com/errors/synod-already-exists"
 	TypeSynodBuiltin     = "https://soul-stack.com/errors/synod-builtin"
@@ -191,6 +200,7 @@ var titles = map[string]string{
 	TypeRoleExists:                 "Role already exists",
 	TypeRoleBuiltin:                "Role is builtin",
 	TypeRoleHasChildren:            "Role has derived roles",
+	TypeRoleCascade:                "Role change cascades into derived roles",
 	TypeSynodNotFound:              "Synod not found",
 	TypeSynodExists:                "Synod already exists",
 	TypeSynodBuiltin:               "Synod is builtin",
@@ -283,6 +293,7 @@ var statuses = map[string]int{
 	TypeRoleExists:                 http.StatusConflict,
 	TypeRoleBuiltin:                http.StatusConflict,
 	TypeRoleHasChildren:            http.StatusConflict,
+	TypeRoleCascade:                http.StatusConflict,
 	TypeSynodNotFound:              http.StatusNotFound,
 	TypeSynodExists:                http.StatusConflict,
 	TypeSynodBuiltin:               http.StatusConflict,

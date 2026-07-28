@@ -38,10 +38,12 @@ type RoleView struct {
 	Description          *string  `json:"description,omitempty"`
 	EffectivePermissions []string `json:"effective_permissions" doc:"permissions AS RESOLVED against the derivation chain (ADR-078): own ∩ the parent's effective, every scope capped by the chain's ceiling. Equals permissions on a plain role. Consumers read THIS instead of walking parent_role"`
 	EffectiveScope       *string  `json:"effective_scope,omitempty" doc:"role scope AS RESOLVED: the parent's effective scope AND this role's delta; omitted → unrestricted. Bare permissions inherit it, as on a plain role"`
+	InertPermissions     []string `json:"inert_permissions" doc:"stored permissions the derivation chain no longer covers (ADR-078): present in permissions, granting NOTHING, because the parent lost the right or narrowed past it. Empty on a plain role. A role with a non-empty permissions list and everything in here grants no access at all"`
 	Name                 string   `json:"name" pattern:"^[a-z][a-z0-9-]*$"` // ← rbac.RoleNamePattern
 	Operators            []string `json:"operators"`
 	ParentRole           *string  `json:"parent_role,omitempty" pattern:"^[a-z][a-z0-9-]*$" doc:"the role this one derives from (ADR-078) — its ceiling; omitted → a plain role"`
 	Permissions          []string `json:"permissions"`
+	ScopeMode            *string  `json:"scope_mode,omitempty" enum:"track,pin" doc:"what default_scope means on this derived role (ADR-078): track = the delta is the added narrowing only, so the parent's scope cascades in; pin = the parent's scope was materialized into the delta, so a later WIDENING of the parent stops here. Omitted → a plain role. Narrowing always cascades, in both modes"`
 }
 
 // === projection of domain handlers.RoleView (flat fields) → native wire-DTO ===
@@ -56,6 +58,7 @@ func newRoleView(v handlers.RoleView) RoleView {
 		Builtin:              v.Builtin,
 		Description:          &desc,
 		EffectivePermissions: v.EffectivePermissions,
+		InertPermissions:     v.InertPermissions,
 		Name:                 v.Name,
 		Operators:            v.Operators,
 		Permissions:          v.Permissions,
@@ -68,6 +71,9 @@ func newRoleView(v handlers.RoleView) RoleView {
 	}
 	if v.ParentRole != "" {
 		out.ParentRole = &v.ParentRole
+	}
+	if v.ScopeMode != "" {
+		out.ScopeMode = &v.ScopeMode
 	}
 	return out
 }

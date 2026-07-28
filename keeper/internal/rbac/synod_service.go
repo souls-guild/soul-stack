@@ -274,12 +274,9 @@ func (s *Service) GrantRole(ctx context.Context, in GrantRoleInput) error {
 		return err
 	}
 
-	// Effective permissions of the granted role under its default_scope. The
-	// role might not exist — then rolePermissions returns an empty set,
-	// subset passes (nothing to check), and the INSERT fails with an
-	// FK-violation → ErrRoleNotFound. The order is correct: a nonexistent
-	// role is a 404, not a false subset-pass granting permissions that don't
-	// exist.
+	// The rights the granted role confers, resolved against its chain. A role that
+	// does not exist is refused here as ErrRoleNotFound — the same 404 the FK used
+	// to produce at INSERT, reached before the subset check rather than after it.
 	required, err := s.roleEffectivePermissions(ctx, tx, in.RoleName)
 	if err != nil {
 		return err
@@ -410,20 +407,20 @@ func (s *Service) synodEffectivePermissions(ctx context.Context, tx ExecQueryRow
 	return out, nil
 }
 
-// roleEffectivePermissions returns a role's effective permissions (bare
-// expanded under its default_scope). Shared helper for the grant-role /
-// add-operator subset check: exactly the same expansion
-// [Service.GrantOperator] does for the granted role.
+// roleEffectivePermissions returns the rights a role actually confers on whoever
+// holds it: its rows resolved against its derivation chain, then bare permissions
+// expanded under the resolved scope (ADR-047 S1 + ADR-078(c)). Shared by
+// grant-role / add-operator / [Service.GrantOperator] — binding a role is a grant
+// of what it grants, so all three read the same resolved form (NIM-198).
+//
+// A role that does not exist is [ErrRoleNotFound] here rather than a later FK
+// violation: the same 404 the callers already mapped, one step earlier.
 func (s *Service) roleEffectivePermissions(ctx context.Context, tx ExecQueryRower, roleName string) ([]Permission, error) {
-	perms, err := rolePermissions(ctx, tx, roleName)
+	role, err := resolveRoleChain(ctx, tx, roleName)
 	if err != nil {
 		return nil, err
 	}
-	scope, err := roleDefaultScope(ctx, tx, roleName)
-	if err != nil {
-		return nil, err
-	}
-	return requiredPermissions(perms, scope)
+	return effectivePermissions(role.Permissions, role.DefaultScope), nil
 }
 
 // callerArg converts a CallerAID string into the added_by_aid/granted_by_aid

@@ -29,9 +29,13 @@ import (
 
 // setParent points a role at a parent through raw SQL — deliberately bypassing
 // any Go-side validation, so what is under test is the schema guard itself.
+//
+// scope_mode moves with parent_role because migration 105 CHECKs the two are NULL
+// together; writing the parent alone would trip THAT guard instead of the one each
+// case is about.
 func setParent(name, parent string) error {
 	_, err := integrationPool.Exec(context.Background(),
-		`UPDATE rbac_roles SET parent_role = $2 WHERE name = $1`, name, parent)
+		`UPDATE rbac_roles SET parent_role = $2, scope_mode = 'track' WHERE name = $1`, name, parent)
 	return err
 }
 
@@ -39,7 +43,8 @@ func setParent(name, parent string) error {
 // of the guard, as opposed to setParent's UPDATE path).
 func insertDerivedRole(name, parent string) error {
 	_, err := integrationPool.Exec(context.Background(),
-		`INSERT INTO rbac_roles (name, builtin, parent_role) VALUES ($1, false, $2)`, name, parent)
+		`INSERT INTO rbac_roles (name, builtin, parent_role, scope_mode) VALUES ($1, false, $2, 'track')`,
+		name, parent)
 	return err
 }
 

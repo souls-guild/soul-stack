@@ -1,9 +1,11 @@
 # ADR-078. Derived roles — `parent_role`, attenuation and cascade
 
-- **Status.** Active. J1 (NIM-179) landed the model, storage and graph guards;
-  J2 (NIM-180) landed chain resolution, the write-time attenuation gate and the
-  self-lockout correction of §(i); J3 (NIM-181) landed the API surface. The web
-  selector is NIM-182.
+- **Status.** Active, amended 2026-07-27. J1 (NIM-179) landed the model, storage
+  and graph guards; J2 (NIM-180) landed chain resolution, the write-time
+  attenuation gate and the self-lockout correction of §(i); J3 (NIM-181) landed
+  the API surface. The web selector is NIM-182. The **2026-07-27 amendment**
+  (NIM-198 / NIM-199 / NIM-200) corrects §(h) to measure the child in its resolved
+  form, and adds §(k) `scope_mode` + the cascade report and §(l) inert rows.
 
 - **Context.** Roles are flat. An operator who runs the `dba` team can already be
   scoped — `default_scope: coven=dba` ([ADR-047 §a](0047-purview.md)) — but there is no way
@@ -174,6 +176,33 @@
   role update, not only the one that sets `parent_role` — otherwise the create gate
   would be a formality one PATCH wide.
 
+  **Amendment 2026-07-27 (NIM-198): the child is measured in its RESOLVED form.**
+  The least-privilege floor originally compared the child's rows *as stored*
+  against the caller's rights. On a derived role those are not the same currency:
+  a bare `incarnation.get` reads as unrestricted, while the role would grant it
+  only inside the parent's ceiling. The floor therefore demanded more than the
+  authorization it was protecting, and the delegation case — an operator scoped to
+  `coven=dba` deriving from a role carrying that same ceiling — was refused
+  outright. The only way through was to restate `coven=dba` in the delta, which is
+  not a delta at all: per §(b) it pins the child to the coven the parent is in
+  *today*, so the workaround silently converted a tracking role into a pinned one
+  and cost the delegation the very cascade it was for.
+
+  The floor now resolves the child against the parent first
+  (`effectiveRoleRights`) and compares what the role **grants**. This removes no
+  boundary. For a derived role the two conditions above already require the caller
+  to cover the parent's *entire* effective set, and the child is contained in that
+  set by the structural check — so caller-holds-parent dominates, and the stored-row
+  comparison was not an additional guard but a contradiction with it. A **plain**
+  role is untouched: with no parent there is no ceiling to resolve against, and a
+  bare permission is still a request to grant it unrestricted.
+
+  The same correction applies wherever a role's rights are weighed rather than its
+  rows: binding a role to an operator (`role.grant-operator`) and bundling one into
+  a Synod both confer what the role grants, and both now read the resolved form. A
+  delegator who may create a derived role but not hand it out has not been
+  delegated anything.
+
   The gate resolves the parent's chain inside the mutation's transaction but does
   **not** lock it. Deliberate: a parent narrowed concurrently is absorbed by
   re-resolution at the next snapshot build, since (c) recomputes the intersection
@@ -230,6 +259,86 @@
   broader than any role they could point at. The UI must therefore show the ceiling of
   the **selected parent**, not the caller's union — the correction tracked in NIM-182.
 
+  **(k) The delta's intent is stored, and the cascade is confirmed** (Amendment
+  2026-07-27, NIM-199). Two opposite intentions produced an identical row, and the
+  system kept neither:
+
+  - **track** — "my ceiling is the parent, whatever becomes of it". The delta
+    holds only the added narrowing; moving the parent moves the child. This is the
+    §(b) contract and remains the **default**.
+  - **pin** — "my ceiling is the parent's scope as of now". The parent's effective
+    scope is materialized **into** the delta at write time.
+
+  The difference was visible only by comparing strings, and only by guessing — a
+  child that happens to repeat its parent's predicate looks pinned whether anyone
+  chose that or not, which is precisely what the floor bug of §(h) forced operators
+  to write. **`rbac_roles.scope_mode`** ([migration
+  105](../../keeper/migrations/105_rbac_roles_scope_mode.up.sql), `track` | `pin`,
+  NULL exactly when `parent_role` is NULL, held to that by a CHECK) records it, so
+  `pin` is a property of the role rather than a convention of whichever client
+  wrote it.
+
+  **Resolution does not branch on the mode.** Effective scope is
+  `effective_scope(parent) AND default_scope(role)` for both; they differ only in
+  what was written into the delta. Two consequences follow, and both are the point:
+  a pinned role still **narrows** when its parent narrows (the monotone-AND
+  argument of §(b) is untouched, and a pin is a defence against drift, never an
+  escape from attenuation), and a pin against an already-unrestricted parent is
+  vacuous — there is no room to widen into, so nothing needs freezing.
+
+  A pin does expire in a way worth stating: if the parent moves *sideways*, the
+  frozen predicate and the parent's new one conjoin to the empty set and the role
+  grants nothing. That is the safe direction, and it is exactly the condition §(l)
+  makes visible.
+
+  **The cascade is no longer silent.** Any role mutation that changes the
+  **effective rights** of any role below it — in either direction, at any depth
+  within the cap — is refused with `ErrRoleCascadeNeedsConfirm` (409) unless the
+  request carries `confirm_cascade`. The refusal names the derived roles that would
+  gain rights, the ones that would lose them, and how many active operators hold
+  any of them (directly or through a Synod): the operator is being asked to take a
+  position, so they are handed what the position is about.
+
+  Direction is computed by the containment predicate, not by comparing rendered
+  strings, and the subtree is resolved twice — against the role as stored and
+  against the role as the mutation leaves it — using the same [`attenuate`] the
+  enforcer runs. A change nobody below feels passes silently: being a parent is not
+  itself a consequence. A pinned child is absent from the *widening* half by
+  construction, with no special case in the code — its materialized delta simply
+  leaves it unmoved.
+
+  This gate is **advisory in nature and mandatory in practice**: skipping it
+  entirely would produce exactly the same rights. It is a gate on the operator's
+  attention, not on the boundary — the boundary remains §(c)/§(h). It is placed
+  last among the write-path checks, so a refusal about the caller's own rights is
+  always reported before one that asks them to decide something.
+
+  **(l) A row the chain no longer covers is published, not hidden** (Amendment
+  2026-07-27, NIM-200). When a parent narrows past one of a child's rows, that row
+  stays in `permissions` and drops out of `effective_permissions` — the cascade
+  working as designed. The catalog now also publishes it under
+  **`inert_permissions`**, because "a role listing two permissions and granting
+  none" is indistinguishable from "a role somebody deliberately emptied", and the
+  two call for opposite responses.
+
+  The set is published rather than derivable: subtracting `effective_permissions`
+  from `permissions` compares a stored form against a resolved one, and a consumer
+  doing that arithmetic would be re-deriving the attenuation rules — the mistake
+  §J3 exists to prevent.
+
+  **The emptiness itself is correct and stays.** `incarnation.*` under a parent
+  narrowed to `incarnation.get` resolves to **nothing**, not to `incarnation.get`.
+  Clipping the wildcard down to the parent's current set would mean a permission
+  later added to the parent silently appears on every descendant holding a `*` —
+  the widening cascade §(c) exists to forbid. Everything not *provably* within the
+  parent is dropped, and a wildcard is provably within nothing.
+
+  One consequence has to be handled rather than documented: once rows go inert,
+  every later edit of the child is refused by §(c) until they are dropped, so
+  `ErrRoleExceedsParent` names **every** uncovered row rather than the first. An
+  operator told about one offending row at a time cannot repair the role in a
+  single PATCH.
+
 - **Delivery.**
   - **J1 (NIM-179).** The column, its guards, and the plumbing that carries
     `parent_role` into the enforcer snapshot and the role catalog. Nothing read
@@ -255,6 +364,11 @@
     "derived role exceeds its parent" and the graph sentinels was already in place.
   - **J4 (NIM-182).** The web selector and the "you inherit X, you cannot widen it"
     panel.
+  - **J5–J7 (NIM-198 / NIM-199 / NIM-200), one change.** The §(h) amendment, the
+    `scope_mode` column with the cascade report of §(k), and the inert rows of
+    §(l). Delivered together because they are one semantics seen from three sides:
+    the floor bug forced operators to pin, pinning was unrecorded, and the pins it
+    produced are the roles most likely to go inert.
 
 - **Amendment 2026-07-28 (NIM-202 / NIM-203) — the catalog is a read, and reads need a ceiling too.**
   J3 published each role in both forms, and did it for everyone: `role.list` answered
@@ -317,6 +431,16 @@
 - **Consequences.**
   - `rbac_roles` grows one nullable column; every existing role reads back as plain,
     with ADR-047 semantics bit-for-bit. No data migration, no backfill.
+  - `rbac_roles` grows a second nullable column, `scope_mode` (migration 105), tied
+    to `parent_role` by a CHECK. Every write path that sets a parent must set a mode
+    with it — including test fixtures and any hand-written SQL.
+  - Editing a role that has derived roles is a two-step operation whenever the edit
+    moves them: read the report, then resend confirming it. Deliberate friction on
+    the change with the widest reach, and the one the operator can least see.
+  - The default for a new derived role is `track`. With §(h) fixed there is no
+    longer a reason for a client to default to `pin` — the workaround that made it
+    necessary is gone, and defaulting to `pin` would quietly opt every role out of
+    the cascade the feature is for.
   - `default_scope` becomes context-dependent — absolute on a plain role, a delta on a
     derived one. This is the price of not adding a second scope column, and it is
     contained: the two readings differ only in what sits on the left of the `AND`.
@@ -343,6 +467,19 @@
   - **Deriving from a Synod.** A [Synod](0049-synod.md) bundles roles for operators
     and carries no scope of its own, so there is nothing to attenuate against.
     Derivation stays role → role.
+  - **A pin that stops the parent's narrowing too** (a genuinely frozen snapshot,
+    resolved without conjoining the parent). It would make `pin` an exemption from
+    §(c) rather than a defence against drift: a child would keep rights its parent
+    had lost, which is the one thing derivation exists to make impossible. Pinning
+    materializes into the delta instead, so the conjunction — and the invariant —
+    still runs (§(k)).
+  - **Clipping an inert wildcard down to the parent's set** instead of dropping it.
+    Intuitive, and a widening cascade: the child's `*` would absorb every permission
+    later added to the parent (§(l)).
+  - **Warning instead of refusing on a cascade.** A warning in the response body is
+    read after the write has happened, which is the wrong side of a change that
+    reaches roles the operator did not name. Refusing costs one extra round trip and
+    makes the acceptance explicit — and auditable (§(k)).
 
 - **Amends** [ADR-028](0028-rbac-storage.md) (the `rbac_roles` schema),
   [ADR-047](0047-purview.md) (`default_scope` gains its delta reading),
