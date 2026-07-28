@@ -86,7 +86,11 @@ var transportParams = map[string]map[string]struct{}{
 }
 
 // checkParams rejects a param that this binary's own manifest does not declare
-// (ADR-0076). Returns nil when the task is clean or when no contract exists for
+// (ADR-0076) and collects a [keeperv1.TaskNotice] for every param that is still
+// honored but on its way out. Both come back: a task can carry a deprecation and
+// an unknown param at once, and the deprecation is no less true for it.
+//
+// Returns (nil, nil) when the task is clean or when no contract exists for
 // module+state.
 //
 // Only the UNKNOWN direction is enforced. A missing required param is left to
@@ -95,25 +99,24 @@ var transportParams = map[string]map[string]struct{}{
 // diagnostic carries a line and column, and a param may legitimately arrive
 // from a manifest default. Re-deriving that here would duplicate the rule in a
 // place with worse errors and no upside.
-func (r *ApplyRunner) checkParams(module, state, taskName string, params *structpb.Struct) *keeperv1.TaskError {
+func (r *ApplyRunner) checkParams(module, state, taskName string, params *structpb.Struct) ([]*keeperv1.TaskNotice, *keeperv1.TaskError) {
 	schema, ok := r.registry.(ParamSchema)
 	if !ok {
-		return nil
+		return nil, nil
 	}
 	declared, strictness := schema.StateInput(module, state)
 	if strictness == ParamsUnchecked {
-		return nil
+		return nil, nil
 	}
 
 	addr := module + "." + state
 	transport := transportParams[addr]
 	var unknown []string
+	var deprecated []string
 	for name := range params.GetFields() {
 		if p, known := declared[name]; known {
 			if p.Deprecated != nil {
-				// The author's surface is keeper's static check; this line is
-				// for the operator reading Soul logs during a rollout.
-				slog.Default().Warn("runtime: "+p.Deprecated.Notice(name), slog.String("module", addr))
+				deprecated = append(deprecated, name)
 			}
 			continue
 		}
@@ -122,12 +125,34 @@ func (r *ApplyRunner) checkParams(module, state, taskName string, params *struct
 		}
 		unknown = append(unknown, name)
 	}
+
+	// Sorted so the notice list is stable across runs of the same task: map
+	// iteration order is not, and an operator diffing two runs should not see
+	// movement that is not there.
+	sort.Strings(deprecated)
+	notices := make([]*keeperv1.TaskNotice, 0, len(deprecated))
+	for _, name := range deprecated {
+		d := declared[name].Deprecated
+		// The rendered sentence comes from the manifest side (Notice), so the
+		// static check, the catalog and this one all say it identically. Still
+		// logged: an operator tailing the agent during a rollout keeps the
+		// surface they have today, and it is the fallback when the run's
+		// notices cannot be delivered (an old keeper drops the field).
+		slog.Default().Warn("runtime: "+d.Notice(name), slog.String("module", addr))
+		notices = append(notices, &keeperv1.TaskNotice{
+			Code:    "deprecated_param",
+			Module:  addr,
+			Param:   name,
+			Message: d.Notice(name),
+		})
+	}
+
 	if len(unknown) == 0 {
-		return nil
+		return notices, nil
 	}
 	sort.Strings(unknown)
 
-	return &keeperv1.TaskError{
+	return notices, &keeperv1.TaskError{
 		Code:   "module.unknown_param",
 		Module: module,
 		Message: fmt.Sprintf(

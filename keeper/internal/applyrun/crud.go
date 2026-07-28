@@ -2,8 +2,10 @@ package applyrun
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"sort"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -494,6 +496,110 @@ func RecordTaskFailure(ctx context.Context, db ExecQueryRower, applyID, sid stri
 		return ErrApplyRunNotFound
 	}
 	return nil
+}
+
+const appendRunNoticesSQL = `
+UPDATE apply_runs
+SET notices = notices || $3::jsonb
+WHERE apply_id = $1 AND sid = $2 AND passage = $4
+`
+
+// RunNotice — one advisory finding reported by a run (NIM-237): the task ran,
+// and something about HOW it was asked needs the operator's attention. Today the
+// only producer is the Soul-side param check (`deprecated_param`), which is the
+// only side holding the manifest the params were checked against.
+//
+// Deliberately not an error: an error means the task was refused and the host
+// left alone, while a notice rides along with work that succeeded.
+type RunNotice struct {
+	// Code — machine-readable kind, shared with the author-facing diagnostics
+	// vocabulary (shared/diag). Consumers filter on this, never on Message.
+	Code string `json:"code"`
+	// Module — the address the notice is about: <namespace>.<module>.<state>.
+	Module string `json:"module"`
+	// Param — the input param it is about; empty when it is not about one.
+	Param string `json:"param"`
+	// Message — the operator-facing sentence, rendered by the side that holds
+	// the manifest so every surface says it identically.
+	Message string `json:"message"`
+}
+
+// AppendRunNotices appends notices to row `(applyID, sid, passage)`.
+//
+// A blind append, on purpose. Notices arrive on separate TaskEvents which — on a
+// multi-Keeper cluster (ADR-002) — may land on different instances, so
+// read-modify-write would lose some of them under concurrency; `notices || $3`
+// is resolved by Postgres on the row itself. Duplicates are the expected shape
+// (one deprecated param used by twenty tasks reports twenty times) and are
+// collapsed on READ by (code, module, param) — see [DedupeNotices]. Making the
+// write side clever instead would trade a lossless append for a lock.
+//
+// Empty list → no-op (not an error): most tasks have nothing to say, and a
+// pointless UPDATE per task on a large run is not free.
+//
+// Returns [ErrApplyRunNotFound] if the row does not exist (a TaskEvent that beat
+// Insert, or an ad-hoc push with no scenario-runner) — same contract as
+// [RecordTaskFailure], and the caller treats it the same way: the notice is
+// lost, the apply stream is not.
+func AppendRunNotices(ctx context.Context, db ExecQueryRower, applyID, sid string, passage int, notices []RunNotice) error {
+	if len(notices) == 0 {
+		return nil
+	}
+	if applyID == "" {
+		return fmt.Errorf("applyrun: empty apply_id")
+	}
+	if sid == "" {
+		return fmt.Errorf("applyrun: empty sid")
+	}
+	encoded, err := json.Marshal(notices)
+	if err != nil {
+		return fmt.Errorf("applyrun: encode notices: %w", err)
+	}
+
+	tag, err := db.Exec(ctx, appendRunNoticesSQL, applyID, sid, string(encoded), passage)
+	if err != nil {
+		return fmt.Errorf("applyrun: append run notices: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return ErrApplyRunNotFound
+	}
+	return nil
+}
+
+// DedupeNotices collapses the append-only log into the set an operator acts on:
+// the same deprecated param reported by twenty tasks is ONE thing to migrate.
+// Keyed by (code, module, param) — Message is derived from those, so two entries
+// agreeing on the key but not the text would be the same finding rendered by two
+// manifest versions, and taking the first is as good as any.
+//
+// Order is stabilized by the key rather than by arrival: rows are appended by
+// whichever task finished first, which is not something a reader should see
+// change between two identical runs.
+func DedupeNotices(in []RunNotice) []RunNotice {
+	if len(in) == 0 {
+		return nil
+	}
+	type key struct{ code, module, param string }
+	seen := make(map[key]struct{}, len(in))
+	out := make([]RunNotice, 0, len(in))
+	for _, n := range in {
+		k := key{n.Code, n.Module, n.Param}
+		if _, dup := seen[k]; dup {
+			continue
+		}
+		seen[k] = struct{}{}
+		out = append(out, n)
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].Code != out[j].Code {
+			return out[i].Code < out[j].Code
+		}
+		if out[i].Module != out[j].Module {
+			return out[i].Module < out[j].Module
+		}
+		return out[i].Param < out[j].Param
+	})
+	return out
 }
 
 const selectStatusesByApplyIDSQL = `

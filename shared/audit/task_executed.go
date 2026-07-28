@@ -54,6 +54,23 @@ type TaskExecutedInput struct {
 	// in the payload (including 0) for per-Passage triage; keeper-side tasks (`on: keeper`)
 	// run before host fan-out → passage=0.
 	Passage int
+	// Notices — advisory findings about a task that ran anyway (echo of
+	// TaskEvent.notices, NIM-237): today a deprecated param. NOT suppressed by no_log,
+	// deliberately — a notice carries manifest metadata (param name, versions, the
+	// replacement's name) and never a param VALUE, so the leak no_log exists to stop
+	// cannot travel this way. Suppressing it would blind the operator precisely on the
+	// tasks that handle secrets.
+	Notices []TaskExecutedNotice
+}
+
+// TaskExecutedNotice — one advisory finding in the task.executed payload
+// (mirror of keeperv1.TaskNotice, NIM-237). Shared by both emit points so a
+// consumer reads one shape.
+type TaskExecutedNotice struct {
+	Code    string
+	Module  string
+	Param   string
+	Message string
 }
 
 // BuildTaskExecutedPayload assembles the task.executed audit-event payload from the
@@ -100,6 +117,21 @@ func BuildTaskExecutedPayload(in TaskExecutedInput) map[string]any {
 	}
 	if in.RegisterData != "" && !in.NoLog {
 		payload["register_data"] = in.RegisterData
+	}
+	// notices (NIM-237): set regardless of no_log — see TaskExecutedInput.Notices.
+	// Absent rather than empty when there is nothing to say, so a run with no
+	// deprecations writes the payload it always wrote.
+	if len(in.Notices) > 0 {
+		out := make([]map[string]any, 0, len(in.Notices))
+		for _, n := range in.Notices {
+			out = append(out, map[string]any{
+				"code":    n.Code,
+				"module":  n.Module,
+				"param":   n.Param,
+				"message": n.Message,
+			})
+		}
+		payload["notices"] = out
 	}
 	return payload
 }

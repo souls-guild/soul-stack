@@ -75,6 +75,14 @@ type RunHostStatus struct {
 	ErrorSummary    *string
 	Attempt         int32
 	CancelRequested bool
+	// Notices — advisory findings this host reported during the run (NIM-237),
+	// deduplicated by (code, module, param): the same deprecated param used by
+	// twenty tasks is one thing to migrate. Per-host rather than per-run because
+	// the contract a param is checked against is the manifest compiled into THAT
+	// agent — a park mid-upgrade legitimately answers differently host to host,
+	// and flattening that would report a fleet-wide truth nobody established.
+	// Empty for a run that had nothing to say.
+	Notices []RunNotice
 }
 
 // RunDetail represents the details of a single run (GET .../runs/{apply_id}):
@@ -189,7 +197,7 @@ func ListRunsByIncarnation(ctx context.Context, db ExecQueryRower, incarnationNa
 const selectRunHostsSQL = `
 SELECT sid, status, passage, task_idx, failed_plan_index, error_summary,
        attempt, cancel_requested, scenario, started_at, finished_at, started_by_aid,
-       input
+       input, notices
 FROM apply_runs
 WHERE apply_id = $1 AND incarnation_name = $2
 ORDER BY sid ASC, passage ASC
@@ -225,16 +233,27 @@ func SelectRunDetail(ctx context.Context, db ExecQueryRower, applyID, incarnatio
 			rowFinished  *time.Time
 			rowStartedBy *string
 			rowInput     []byte
+			rowNotices   []byte
 		)
 		if err := rows.Scan(
 			&hs.SID, &statusStr, &hs.Passage, &hs.FailedTaskIdx, &hs.FailedPlanIndex,
 			&hs.ErrorSummary, &hs.Attempt, &hs.CancelRequested,
 			&rowScenario, &rowStarted, &rowFinished, &rowStartedBy,
-			&rowInput,
+			&rowInput, &rowNotices,
 		); err != nil {
 			return nil, fmt.Errorf("applyrun: scan run host: %w", err)
 		}
 		hs.Status = Status(statusStr)
+		// notices is an append-only log (one entry per reporting task), collapsed
+		// here into the set an operator acts on. Unparseable jsonb is dropped
+		// rather than failing the read: a run's outcome must stay visible even if
+		// its advisory column is somehow malformed.
+		if len(rowNotices) > 0 {
+			var raw []RunNotice
+			if err := json.Unmarshal(rowNotices, &raw); err == nil {
+				hs.Notices = DedupeNotices(raw)
+			}
+		}
 		if detail.ApplyID == "" {
 			detail.ApplyID = applyID
 			detail.Scenario = rowScenario

@@ -98,6 +98,8 @@ Rules, all checked by `validate-manifest`:
 
 What an author sees while the param is live: a **`deprecated_param` warning** — never an error, since the param still works — naming the deadline and the replacement. At `removed_in` the key leaves the manifest and the identical task text becomes `unknown_param`.
 
+The block is also **published by `GET /v1/modules`** beside `introduced_in`, as an object (`{since, removed_in, use}`) rather than a rendered sentence — `use` is what the UI offers as the replacement, `removed_in` is what a migration is planned by, and a prose string would have to be parsed apart again to do either. That is the surface an author reads *before* writing the task; the lint warning only reaches them once the definition exists.
+
 `introduced_in` and `deprecated` are the two ends of the same axis, and `unknown_param` is what both converge on: before `introduced_in` and from `removed_in` onward the very same task text is rejected, in between it works.
 
 ### `spec` for `kind: cloud_driver`

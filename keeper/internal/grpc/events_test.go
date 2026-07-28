@@ -1051,3 +1051,106 @@ func TestHandleTaskEvent_Passage0_AccumulatesIdentically(t *testing.T) {
 		t.Errorf("task.executed payload passage = %v (ok=%v), want 0", p, ok)
 	}
 }
+
+// deprecationEvent — a task that SUCCEEDED while carrying a deprecated param.
+// The success is the interesting part: this is the whole class of runs where
+// nothing draws the operator's attention today.
+func deprecationEvent(applyID string) *keeperv1.TaskEvent {
+	return &keeperv1.TaskEvent{
+		ApplyId: applyID,
+		TaskIdx: 1,
+		Status:  keeperv1.TaskStatus_TASK_STATUS_CHANGED,
+		Notices: []*keeperv1.TaskNotice{{
+			Code:    "deprecated_param",
+			Module:  "community.redis.present",
+			Param:   "address",
+			Message: `param "address" is deprecated since 0.4.0 and stops working in 0.6.0; use "addr" instead`,
+		}},
+	}
+}
+
+// TestHandleTaskEvent_NoticesReachAudit — NIM-237: the durable half. audit_log is
+// where an operator who was not watching the run finds out at all, so a notice
+// that never lands there is a notice that only existed for whoever had the SSE
+// stream open at that second.
+func TestHandleTaskEvent_NoticesReachAudit(t *testing.T) {
+	aw := &recordingAudit{}
+	h := newTestHandler(t, aw)
+	h.handleTaskEvent(context.Background(), "host.example.com", "session-1", deprecationEvent("01HNOTICE0000000000000000"))
+
+	got := aw.snapshot()
+	if len(got) != 1 {
+		t.Fatalf("audit events = %d, want 1", len(got))
+	}
+	notices, ok := got[0].Payload["notices"].([]map[string]any)
+	if !ok || len(notices) != 1 {
+		t.Fatalf("payload.notices = %#v, want the one notice", got[0].Payload["notices"])
+	}
+	if notices[0]["param"] != "address" || notices[0]["code"] != "deprecated_param" {
+		t.Errorf("notice = %#v, want the param name and code", notices[0])
+	}
+}
+
+// TestHandleTaskEvent_NoticesReachSSE — the live half, and unlike error.message
+// the SENTENCE travels. That asymmetry is deliberate: error.message is task
+// stderr and may carry a no_log secret, while a notice is rendered from the
+// manifest. A frame saying only "deprecated_param" would send the operator
+// hunting for which param and by when.
+func TestHandleTaskEvent_NoticesReachSSE(t *testing.T) {
+	bus := applybus.NewBus(discardLogger(t))
+	h := newTestHandlerWithBus(t, &recordingAudit{}, bus)
+	const applyID = "01HNOTICESSE00000000000000"
+
+	ev, ok := collectSSE(t, bus, applyID, func() {
+		h.handleTaskEvent(context.Background(), "host.example.com", "session-1", deprecationEvent(applyID))
+	})
+	if !ok {
+		t.Fatal("no SSE frame published")
+	}
+	payload, ok := ev.Payload.(map[string]any)
+	if !ok {
+		t.Fatalf("payload type = %T, want map[string]any", ev.Payload)
+	}
+	notices, ok := payload["notices"].([]map[string]any)
+	if !ok || len(notices) != 1 {
+		t.Fatalf("SSE payload.notices = %#v, want the one notice", payload["notices"])
+	}
+	msg, _ := notices[0]["message"].(string)
+	if !strings.Contains(msg, "0.6.0") || !strings.Contains(msg, "addr") {
+		t.Errorf("SSE notice message %q names neither the deadline nor the replacement", msg)
+	}
+}
+
+// TestHandleTaskEvent_NoNoticesLeavesFramesUnchanged — a run with nothing to
+// report must produce exactly the audit payload and SSE frame it produced
+// before this field existed. An always-present empty list is a contract change
+// for every consumer, for no information.
+func TestHandleTaskEvent_NoNoticesLeavesFramesUnchanged(t *testing.T) {
+	aw := &recordingAudit{}
+	bus := applybus.NewBus(discardLogger(t))
+	h := newTestHandlerWithBus(t, aw, bus)
+	const applyID = "01HQUIET00000000000000000"
+
+	ev, ok := collectSSE(t, bus, applyID, func() {
+		h.handleTaskEvent(context.Background(), "host.example.com", "session-1", &keeperv1.TaskEvent{
+			ApplyId: applyID, TaskIdx: 0, Status: keeperv1.TaskStatus_TASK_STATUS_OK,
+		})
+	})
+	if !ok {
+		t.Fatal("no SSE frame published")
+	}
+	payload, ok := ev.Payload.(map[string]any)
+	if !ok {
+		t.Fatalf("payload type = %T, want map[string]any", ev.Payload)
+	}
+	if _, present := payload["notices"]; present {
+		t.Error("SSE frame carries a notices key on a task with no findings")
+	}
+	got := aw.snapshot()
+	if len(got) != 1 {
+		t.Fatalf("audit events = %d, want 1", len(got))
+	}
+	if _, present := got[0].Payload["notices"]; present {
+		t.Error("audit payload carries a notices key on a task with no findings")
+	}
+}

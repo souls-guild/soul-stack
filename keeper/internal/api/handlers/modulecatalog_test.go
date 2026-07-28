@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/souls-guild/soul-stack/keeper/internal/api/problem"
+	"github.com/souls-guild/soul-stack/shared/coremanifest"
 )
 
 // fakeCatalogPlugins — mock [ModuleCatalogPlugins] for the transport tests.
@@ -355,6 +356,100 @@ func TestModuleCatalog_IntroducedInIsPublished(t *testing.T) {
 	}
 	if got["username"] != "" {
 		t.Errorf("a param with no metadata must stay empty, got %q", got["username"])
+	}
+}
+
+// deprecatedManifest — a module whose param is on its way out (ADR-0076
+// deprecation policy) next to one that is not, so the catalog is proven to carry
+// the block exactly where it is declared.
+const deprecatedManifest = `kind: soul_module
+protocol_version: 1
+namespace: official
+name: postgres-user
+spec:
+  states:
+    present:
+      description: ensure user exists
+      input:
+        username:
+          type: string
+          required: true
+        address:
+          type: string
+          deprecated:
+            since: "0.4.0"
+            removed_in: "0.6.0"
+            use: "username"
+`
+
+// The catalog is the surface an author reads BEFORE writing a task, so a
+// deprecation has to reach it: learning about the deadline from a lint warning
+// means learning after the definition is already written (NIM-205). The block
+// travels as an object, not as the rendered sentence — `use` is what the UI
+// offers as the replacement and `removed_in` is what a migration is planned by.
+func TestModuleCatalog_DeprecatedIsPublished(t *testing.T) {
+	h := NewModuleCatalogHandler(fakeCatalogPlugins{
+		entries: []PluginCatalogEntry{
+			{Namespace: "official", Name: "postgres-user", Ref: "v1.0.0", ManifestRaw: []byte(deprecatedManifest)},
+		},
+	}, nil)
+
+	resp, err := h.ListTyped(context.Background(), false)
+	if err != nil {
+		t.Fatalf("ListTyped: %v", err)
+	}
+	it, ok := findItem(resp.Items, "official.postgres-user")
+	if !ok {
+		t.Fatal("plugin module missing from the catalog")
+	}
+	got := map[string]*ModuleDeprecation{}
+	for _, p := range it.Params {
+		got[p.Name] = p.Deprecated
+	}
+	d := got["address"]
+	if d == nil {
+		t.Fatal("deprecated param carries no deprecation block")
+	}
+	if d.Since != "0.4.0" || d.RemovedIn != "0.6.0" || d.Use != "username" {
+		t.Errorf("deprecation = %+v, want since=0.4.0 removed_in=0.6.0 use=username", *d)
+	}
+	if got["username"] != nil {
+		t.Errorf("a live param must carry no deprecation, got %+v", *got["username"])
+	}
+}
+
+// The addition must be invisible where nothing is deprecated: omitempty keeps
+// today's bytes identical. Proven against the PARSER rather than a hand-kept list
+// of params — a list rots silently the moment a core manifest declares its first
+// deprecation (the NIM-206 lesson), while this cross-check keeps telling the truth
+// and starts requiring the block on exactly the params that gained one.
+func TestModuleCatalog_CoreDeprecationMatchesTheManifests(t *testing.T) {
+	h := NewModuleCatalogHandler(nil, nil)
+	resp, err := h.ListTyped(context.Background(), false)
+	if err != nil {
+		t.Fatalf("ListTyped: %v", err)
+	}
+	for _, it := range resp.Items {
+		m, ok := coremanifest.Default().Lookup(it.Name)
+		if !ok {
+			continue // a core module with no embedded manifest carries no params.
+		}
+		declared := map[string]bool{}
+		for _, def := range m.Spec.States {
+			for name, p := range def.Input {
+				if p.Deprecated != nil {
+					declared[name] = true
+				}
+			}
+		}
+		for _, p := range it.Params {
+			if declared[p.Name] && p.Deprecated == nil {
+				t.Errorf("%s.%s is deprecated in the manifest but the catalog hides it", it.Name, p.Name)
+			}
+			if !declared[p.Name] && p.Deprecated != nil {
+				t.Errorf("%s.%s carries a deprecation the manifest does not declare", it.Name, p.Name)
+			}
+		}
 	}
 }
 

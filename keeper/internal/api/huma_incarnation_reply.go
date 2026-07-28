@@ -331,6 +331,23 @@ type RunHostStatusEntry struct {
 	ErrorSummary    *string `json:"error_summary,omitempty"`
 	Attempt         int32   `json:"attempt"`
 	CancelRequested bool    `json:"cancel_requested"`
+	// Notices — advisory findings this host reported during the run (NIM-237),
+	// deduplicated by (code, module, param). Unlike error_summary, INDEPENDENT of
+	// status: the task ran and succeeded, and something about how it was asked is
+	// on its way out. omitempty — a run with nothing to say looks exactly as it
+	// did before the field existed.
+	Notices []RunNoticeEntry `json:"notices,omitempty"`
+}
+
+// RunNoticeEntry — one advisory finding on a run (NIM-237): today only
+// `deprecated_param`, reported by the Soul that holds the manifest its params
+// were checked against. message carries the deadline and the replacement,
+// rendered by that same side so every surface says it identically.
+type RunNoticeEntry struct {
+	Code    string `json:"code"`
+	Module  string `json:"module"`
+	Param   string `json:"param,omitempty"`
+	Message string `json:"message"`
 }
 
 // RunDetailReply — native body for GET /v1/incarnations/{name}/runs/{apply_id}: run
@@ -368,6 +385,18 @@ func newRunSummaryEntry(v handlers.RunSummaryView) RunSummaryEntry {
 func newRunDetailReply(v handlers.RunDetailView) RunDetailReply {
 	hosts := make([]RunHostStatusEntry, len(v.Hosts))
 	for i, hs := range v.Hosts {
+		// nil rather than an empty slice when there is nothing to report:
+		// omitempty then drops the key entirely, keeping the body of an
+		// unaffected run byte-for-byte what it was.
+		var notices []RunNoticeEntry
+		for _, n := range hs.Notices {
+			notices = append(notices, RunNoticeEntry{
+				Code:    n.Code,
+				Module:  n.Module,
+				Param:   n.Param,
+				Message: n.Message,
+			})
+		}
 		hosts[i] = RunHostStatusEntry{
 			SID:             hs.SID,
 			Status:          hs.Status,
@@ -377,6 +406,7 @@ func newRunDetailReply(v handlers.RunDetailView) RunDetailReply {
 			ErrorSummary:    hs.ErrorSummary,
 			Attempt:         hs.Attempt,
 			CancelRequested: hs.CancelRequested,
+			Notices:         notices,
 		}
 	}
 	var input *map[string]interface{}

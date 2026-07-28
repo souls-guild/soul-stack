@@ -121,6 +121,11 @@ func TestBuildTaskExecutedPayload_NoParamsKey(t *testing.T) {
 			NoLog:        true,
 			Error:        &TaskExecutedError{Module: "core.vault.kv-read", Message: "plaintext"},
 			RegisterData: `{"password":"hunter2"}`},
+		{SID: "h", ApplyID: "a", TaskIdx: 3, Status: "TASK_STATUS_CHANGED",
+			Notices: []TaskExecutedNotice{{
+				Code: "deprecated_param", Module: "community.redis.present",
+				Param: "address", Message: `param "address" is deprecated`,
+			}}},
 	}
 	for _, in := range inputs {
 		p := BuildTaskExecutedPayload(in)
@@ -128,18 +133,91 @@ func TestBuildTaskExecutedPayload_NoParamsKey(t *testing.T) {
 	}
 }
 
+// noticeParamPath — the single legitimate "param"-shaped key in the payload.
+// TaskNotice.param (NIM-237) is the NAME of a manifest parameter, and the
+// invariant below is about RenderedTask.Params — the VALUES, which may carry a
+// secret. A name read out of a manifest carries none, and the operator cannot
+// act on "something is deprecated" without being told what.
+const noticeParamPath = "notices[].param"
+
 // assertNoParamKey checks that no level of the map payload has a key containing
-// "param" (case-insensitive). Recurses into nested maps (payload["error"] is a
-// nested map). The invariant is about the key, not the value: params must not
-// appear as a payload field at all.
+// "param" (case-insensitive), except [noticeParamPath]. The invariant is about
+// the key, not the value: params must not appear as a payload field at all.
+//
+// Recursion covers nested maps AND lists of maps. It used to stop at maps, so a
+// payload key that grew into a list of objects (notices did exactly that) would
+// have been waved through unread — the guard would still pass while no longer
+// guarding, which is worse than not having it.
 func assertNoParamKey(t *testing.T, m map[string]any) {
 	t.Helper()
+	assertNoParamKeyAt(t, "", m)
+}
+
+func assertNoParamKeyAt(t *testing.T, path string, m map[string]any) {
+	t.Helper()
 	for k, v := range m {
-		if strings.Contains(strings.ToLower(k), "param") {
-			t.Errorf("payload carries forbidden param-shaped key %q (RenderedTask.Params must never reach audit)", k)
+		at := k
+		if path != "" {
+			at = path + "." + k
 		}
-		if nested, ok := v.(map[string]any); ok {
-			assertNoParamKey(t, nested)
+		if strings.Contains(strings.ToLower(k), "param") && at != noticeParamPath {
+			t.Errorf("payload carries forbidden param-shaped key %q at %q (RenderedTask.Params must never reach audit)", k, at)
 		}
+		switch nested := v.(type) {
+		case map[string]any:
+			assertNoParamKeyAt(t, at, nested)
+		case []map[string]any:
+			for _, item := range nested {
+				assertNoParamKeyAt(t, at+"[]", item)
+			}
+		case []any:
+			for _, item := range nested {
+				if im, ok := item.(map[string]any); ok {
+					assertNoParamKeyAt(t, at+"[]", im)
+				}
+			}
+		}
+	}
+}
+
+// A no_log task suppresses error.message and register_data because both can
+// carry an arbitrary plaintext secret. Notices must NOT be suppressed with them:
+// they are rendered from the manifest (param name, versions, replacement) and
+// never from task output or input values, so the leak no_log exists to stop
+// cannot travel this way. Suppressing them would blind the operator on exactly
+// the tasks that handle secrets — the ones where a silent contract change is
+// least affordable.
+func TestBuildTaskExecutedPayload_NoticesSurviveNoLog(t *testing.T) {
+	p := BuildTaskExecutedPayload(TaskExecutedInput{
+		SID: "h", ApplyID: "a", TaskIdx: 0, Status: "TASK_STATUS_CHANGED",
+		NoLog:        true,
+		RegisterData: `{"password":"hunter2"}`,
+		Notices: []TaskExecutedNotice{{
+			Code: "deprecated_param", Module: "community.redis.present",
+			Param: "address", Message: `param "address" stops working in 0.6.0`,
+		}},
+	})
+
+	if _, leaked := p["register_data"]; leaked {
+		t.Fatal("no_log suppression regressed: register_data reached the payload")
+	}
+	got, ok := p["notices"].([]map[string]any)
+	if !ok || len(got) != 1 {
+		t.Fatalf("notices = %#v, want the one notice to survive no_log", p["notices"])
+	}
+	if got[0]["param"] != "address" || got[0]["code"] != "deprecated_param" {
+		t.Errorf("notice = %#v, want the param name and code intact", got[0])
+	}
+}
+
+// The other direction: a task with nothing to report writes the payload it
+// always wrote. An empty list would still be a new key for every consumer of
+// task.executed, and the changed_tasks rollup reads this shape.
+func TestBuildTaskExecutedPayload_NoNoticesKeyWhenSilent(t *testing.T) {
+	p := BuildTaskExecutedPayload(TaskExecutedInput{
+		SID: "h", ApplyID: "a", TaskIdx: 0, Status: "TASK_STATUS_OK",
+	})
+	if _, present := p["notices"]; present {
+		t.Error("a task with no findings emitted a notices key")
 	}
 }

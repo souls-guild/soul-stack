@@ -73,7 +73,12 @@ func (r *ApplyRunner) planTask(ctx context.Context, applyID string, idx int32, t
 	// ADR-0076, mirroring runTask: a dry_run that skipped the check would report
 	// "no drift" for a param the module never reads — a false clean is exactly
 	// what ADR-031 forbids.
-	if perr := r.checkParams(modName, state, task.GetName(), task.GetParams()); perr != nil {
+	notices, perr := r.checkParams(modName, state, task.GetName(), task.GetParams())
+	// A dry_run is where an operator looks BEFORE committing to a change, so it
+	// is the best possible moment to learn a param is on its way out — the
+	// notice rides back from Scry exactly as it does from a real apply.
+	ev.Notices = notices
+	if perr != nil {
 		ev.Status = keeperv1.TaskStatus_TASK_STATUS_FAILED
 		ev.Error = perr
 		ev.RegisterData = buildRegisterData(ev.GetStatus(), nil)

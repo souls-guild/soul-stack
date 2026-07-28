@@ -71,6 +71,14 @@ func (h *eventStreamHandler) handleTaskEvent(ctx context.Context, sid, sessionID
 			Message: e.GetMessage(),
 		}
 	}
+	for _, n := range ev.GetNotices() {
+		in.Notices = append(in.Notices, audit.TaskExecutedNotice{
+			Code:    n.GetCode(),
+			Module:  n.GetModule(),
+			Param:   n.GetParam(),
+			Message: n.GetMessage(),
+		})
+	}
 	if rd := ev.GetRegisterData(); rd != nil && !noLog {
 		// google.protobuf.Struct → JSON via protojson is the only way to
 		// correctly serialize NullValue / NumberValue / nested-Struct.
@@ -103,8 +111,52 @@ func (h *eventStreamHandler) handleTaskEvent(ctx context.Context, sid, sessionID
 	}
 
 	h.recordTaskFailure(ctx, sid, ev)
+	h.recordRunNotices(ctx, sid, ev)
 	h.accumulateRegister(ctx, sid, ev)
 	h.publishTaskExecuted(sid, ev)
+}
+
+// recordRunNotices appends a task's advisory findings to the host's `apply_runs`
+// row (NIM-237, migration 107), so a deprecation outlives the live SSE stream
+// and the operator who was not watching can still find it on the run.
+//
+// Storage is Postgres for the same reason as the failure reason: on a
+// multi-Keeper cluster (ADR-002) this TaskEvent may land on a different instance
+// than the one holding the run-goroutine, and a shared table survives that. The
+// write is a blind append (see applyrun.AppendRunNotices); duplicates across
+// tasks are collapsed on read.
+//
+// NOT suppressed for a no_log task, unlike error_summary and register_data: a
+// notice carries manifest metadata (param name, versions, the replacement's
+// name) and never a param VALUE, so the arbitrary-secret leak no_log exists to
+// stop cannot travel this way. Suppressing it would blind the operator exactly
+// on the tasks that handle secrets — the ones where a silent contract change is
+// least affordable.
+//
+// ApplyRunDB=nil (unit build without PG / ad-hoc push) → no-op. Errors are
+// logged and swallowed: a notice is advisory, and losing one must never fail the
+// apply stream that carries the actual work. ErrApplyRunNotFound is the ordinary
+// ad-hoc-push case and is not worth a warning of its own.
+func (h *eventStreamHandler) recordRunNotices(ctx context.Context, sid string, ev *keeperv1.TaskEvent) {
+	if h.deps.ApplyRunDB == nil || len(ev.GetNotices()) == 0 {
+		return
+	}
+	notices := make([]applyrun.RunNotice, 0, len(ev.GetNotices()))
+	for _, n := range ev.GetNotices() {
+		notices = append(notices, applyrun.RunNotice{
+			Code:    n.GetCode(),
+			Module:  n.GetModule(),
+			Param:   n.GetParam(),
+			Message: n.GetMessage(),
+		})
+	}
+	if err := applyrun.AppendRunNotices(ctx, h.deps.ApplyRunDB, ev.GetApplyId(), sid, int(ev.GetPassage()), notices); err != nil {
+		h.logger.Warn("eventstream: append run notices failed",
+			slog.String("sid", sid),
+			slog.String("apply_id", ev.GetApplyId()),
+			slog.Any("error", err),
+		)
+	}
 }
 
 // recordTaskFailure records the failure reason of the host's first failed task in
@@ -318,6 +370,23 @@ func (h *eventStreamHandler) publishTaskExecuted(sid string, ev *keeperv1.TaskEv
 			"code":   e.GetCode(),
 			"module": e.GetModule(),
 		}
+	}
+	// notices (NIM-237) carry their message, unlike error: the text is rendered
+	// from the manifest (param name, versions, replacement), never from task
+	// output, so the stderr hazard that keeps error.message off this channel does
+	// not apply. Without the sentence the frame would say "something is
+	// deprecated" and send the operator hunting for what.
+	if len(ev.GetNotices()) > 0 {
+		out := make([]map[string]any, 0, len(ev.GetNotices()))
+		for _, n := range ev.GetNotices() {
+			out = append(out, map[string]any{
+				"code":    n.GetCode(),
+				"module":  n.GetModule(),
+				"param":   n.GetParam(),
+				"message": n.GetMessage(),
+			})
+		}
+		payload["notices"] = out
 	}
 	h.deps.ApplyBus.Publish(applybus.Event{
 		ApplyID: ev.GetApplyId(),

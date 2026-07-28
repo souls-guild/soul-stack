@@ -1246,6 +1246,20 @@ type RunHostStatusView struct {
 	ErrorSummary    *string
 	Attempt         int32
 	CancelRequested bool
+	// Notices — advisory findings this host reported (NIM-237), deduplicated by
+	// (code, module, param). Independent of Status: a notice rides along with
+	// work that SUCCEEDED, which is the whole point — it is how a deprecation
+	// reaches the operator before the release that turns it into a failure.
+	Notices []RunNoticeView
+}
+
+// RunNoticeView — FLAT domain row of one advisory finding on a run
+// (mirror of applyrun.RunNotice, NIM-237).
+type RunNoticeView struct {
+	Code    string
+	Module  string
+	Param   string
+	Message string
 }
 
 // RunDetailView — FLAT domain projection of the run details (header + per-host slice).
@@ -1340,6 +1354,15 @@ func (h *IncarnationHandler) RunDetailTyped(ctx context.Context, name, applyID s
 
 	hosts := make([]RunHostStatusView, 0, len(d.Hosts))
 	for _, hs := range d.Hosts {
+		notices := make([]RunNoticeView, 0, len(hs.Notices))
+		for _, n := range hs.Notices {
+			notices = append(notices, RunNoticeView{
+				Code:    n.Code,
+				Module:  n.Module,
+				Param:   n.Param,
+				Message: n.Message,
+			})
+		}
 		hosts = append(hosts, RunHostStatusView{
 			SID:             hs.SID,
 			Status:          string(hs.Status),
@@ -1349,6 +1372,7 @@ func (h *IncarnationHandler) RunDetailTyped(ctx context.Context, name, applyID s
 			ErrorSummary:    hs.ErrorSummary,
 			Attempt:         hs.Attempt,
 			CancelRequested: hs.CancelRequested,
+			Notices:         notices,
 		})
 	}
 	return RunDetailView{

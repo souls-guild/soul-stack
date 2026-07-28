@@ -94,6 +94,48 @@ type moduleParam struct {
 	// IntroducedIn — the engine release that added this parameter (ADR-0076(i)).
 	// omitempty — a parameter that has been there since the baseline says nothing.
 	IntroducedIn string `json:"introduced_in,omitempty"`
+
+	// Deprecated — the other end of the same axis (ADR-0076 deprecation policy):
+	// the parameter still works, but there is a release where it stops. Published
+	// beside IntroducedIn because the catalog is where an author looks BEFORE
+	// writing the task — a deprecation that only reaches them as a lint warning
+	// arrives after the definition is already written. omitempty — a parameter
+	// not on its way out says nothing.
+	Deprecated *moduleDeprecation `json:"deprecated,omitempty"`
+}
+
+// moduleDeprecation — the wire shape of a param's `deprecated:` block
+// (ADR-0076 deprecation policy, mirror of [plugin.DeprecatedDef]). An object
+// rather than the rendered sentence: `use` drives the UI's "switch to this
+// instead" affordance, and `removed_in` is what an operator sorts a migration
+// plan by — a prose string would have to be parsed back apart to do either.
+//
+// The type name = the contract schema name huma derives (DefaultSchemaNamer
+// capitalizes the first letter → "ModuleDeprecation").
+type moduleDeprecation struct {
+	// Since — the release that marked the param deprecated (INCLUSIVE).
+	Since string `json:"since,omitempty"`
+	// RemovedIn — the first release that no longer honors it (EXCLUSIVE, so it
+	// reads exactly like a compat: window's max).
+	RemovedIn string `json:"removed_in,omitempty"`
+	// Use — the replacement param in the same state; empty when the param is
+	// going away with no successor.
+	Use string `json:"use,omitempty"`
+}
+
+// ModuleDeprecation — an exported alias for the deprecation wire type, through
+// which the huma route (package api) references the schema without forking the
+// wire shape (same pattern as [ModuleInputSource]).
+type ModuleDeprecation = moduleDeprecation
+
+// toModuleDeprecation projects the manifest block into the wire type. nil → nil
+// (omitempty): the overwhelming majority of params carry no deprecation, and the
+// catalog output for them stays byte-for-byte what it was.
+func toModuleDeprecation(d *plugin.DeprecatedDef) *moduleDeprecation {
+	if d == nil {
+		return nil
+	}
+	return &moduleDeprecation{Since: d.Since, RemovedIn: d.RemovedIn, Use: d.Use}
 }
 
 // moduleCatalogItem — one catalog entry. The type name = the contract schema name
@@ -253,8 +295,12 @@ func pluginCatalogItem(e PluginCatalogEntry) moduleCatalogItem {
 // deduplicated list of catalog params. Shared by core (coremanifest) and plugin: a
 // single param may appear in several states (a vault-secret in installed and
 // promoted) — we surface it in the catalog once. required/secret = true if it is so
-// in at least one state; Type/Description/Pattern/Format/Enum/Source are taken from
-// the first state where they are set (determinism thanks to sorting the order).
+// in at least one state; Type/Description/Pattern/Format/Enum/Source/IntroducedIn/
+// Deprecated are taken from the first state where they are set (determinism thanks
+// to sorting the order). Life-cycle metadata inherits that rule rather than getting
+// its own: a param deprecated on one state and live on another surfaces as
+// deprecated, which is the safe direction — the author is told to look, and the
+// per-state truth is one manifest away.
 // Returns a non-nil slice (empty when there is no input).
 func manifestToParams(spec plugin.ManifestSpec) []moduleParam {
 	type pdef struct {
@@ -264,6 +310,7 @@ func manifestToParams(spec plugin.ManifestSpec) []moduleParam {
 		enum                                []any
 		source                              *plugin.InputSource
 		items                               *plugin.InputParamDef
+		deprecated                          *plugin.DeprecatedDef
 	}
 	seen := make(map[string]*pdef)
 	order := make([]string, 0)
@@ -310,6 +357,9 @@ func manifestToParams(spec plugin.ManifestSpec) []moduleParam {
 			if cur.introducedIn == "" {
 				cur.introducedIn = p.IntroducedIn
 			}
+			if cur.deprecated == nil {
+				cur.deprecated = p.Deprecated
+			}
 			cur.required = cur.required || p.Required
 			cur.secret = cur.secret || p.Secret
 			cur.multiline = cur.multiline || p.Multiline
@@ -334,6 +384,7 @@ func manifestToParams(spec plugin.ManifestSpec) []moduleParam {
 			Example:      d.example,
 			Items:        toModuleParamItems(d.items),
 			IntroducedIn: d.introducedIn,
+			Deprecated:   toModuleDeprecation(d.deprecated),
 		})
 	}
 	return params
@@ -341,6 +392,9 @@ func manifestToParams(spec plugin.ManifestSpec) []moduleParam {
 
 // toModuleParamItems recursively propagates the list element type (ADR-045 S7)
 // into the DTO. The element's name carries no meaning in the form — left empty.
+// Life-cycle metadata (introduced_in / deprecated) is deliberately NOT carried
+// down: a version boundary belongs to the param an author writes, and a list
+// element is not separately writable — half a list cannot be deprecated.
 func toModuleParamItems(it *plugin.InputParamDef) *moduleParam {
 	if it == nil {
 		return nil

@@ -513,7 +513,15 @@ No additional fields. Reserved for the scenario-runner - in M0.7.c the publisher
   "error": {
     "code": "module.failed",
     "module": "core.pkg"
-  }
+  },
+  "notices": [
+    {
+      "code": "deprecated_param",
+      "module": "community.redis.present",
+      "param": "address",
+      "message": "param \"address\" is deprecated since 0.4.0 and stops working in 0.6.0; use \"addr\" instead"
+    }
+  ]
 }
 ```
 
@@ -522,6 +530,7 @@ No additional fields. Reserved for the scenario-runner - in M0.7.c the publisher
 | `task_idx` | integer (≥0) | yes | The task index in the `RenderedTask[]` apply-run. |
 | `task_status` | string | yes | The full name of the enum constant `TaskStatus` from proto (`TASK_STATUS_OK` / `TASK_STATUS_FAILED` / `TASK_STATUS_CANCELLED` / ...). When expanding the Soul-side enum, new values go to the payload "as is" - the SSE client must treat unknown values as the `failed` analogue for UX, and not crash. |
 | `error` | object | optional | Filled only when `task_status` ≠ OK. Structure - `{code, module}` (subset of `keeperv1.ModuleError`). **`message` (task stderr) is NOT published on SSE** (BUG-3 floor): stderr of a fallen task may carry a plaintext secret (especially `no_log: true` task), which `MaskSecrets` does not catch according to vault-ref; the `no_log` flag lives in the run-goroutine, but SSE-publish (grpc layer) on multi-Keeper does not know it (ADR-002, ADR-012(d)). The operator receives the detailed safe reason via `status_details` / `GET /v1/incarnations/<name>` (there no_log is suppressed + double `MaskSecrets`, see `scenario.failureReason`). `code`/`module` carry triage without body stderr. |
+| `notices` | array | optional | Advisory findings about a task that **ran anyway** ([ADR-0076(u)](../adr/0076-engine-compat-window.md)) — present regardless of `task_status`, and typically on a task that SUCCEEDED. Elements are `{code, module, param, message}`; `code` is `deprecated_param` today. Key omitted when the task had nothing to report, so a client that ignores the field sees exactly the frames it saw before. **Unlike `error`, the `message` IS published**: a notice is rendered from the module's manifest (param name, versions, replacement) and never from task output, so the stderr hazard that keeps `error.message` off this channel does not apply — and a frame saying only `deprecated_param` would send the operator hunting for which param and by when. For the same reason it is **not suppressed for a `no_log` task**: there is no param *value* in it, and hiding it would blind the operator precisely on the tasks that handle secrets. The durable copy lives on the run (`GET /v1/incarnations/{name}/runs/{apply_id}` → `hosts[].notices`) and in the `task.executed` audit payload. |
 
 #### `apply.completed`
 

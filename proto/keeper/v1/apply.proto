@@ -303,6 +303,39 @@ enum TaskStatus {
   TASK_STATUS_CANCELLED = 6;   // aborted by Keeper's CancelApply (see CancelApply / RunStatus.CANCELLED)
 }
 
+// TaskNotice is something the operator needs to know about a task that ran
+// ANYWAY (ADR-0076 deprecation policy, NIM-237). It is deliberately NOT a
+// TaskError: an error means the task was refused and the host untouched, while a
+// notice means the task did its job and something about HOW it was asked is on
+// its way out. Collapsing the two would force a choice between breaking a run
+// that works and staying silent, and the whole point of a deprecation window is
+// that neither is necessary.
+//
+// Why it must ride the wire at all: the contract a param is checked against is
+// the one compiled into the Soul that runs it (ADR-0076(t)), so only that host
+// knows a param is deprecated. For a `core.*` module keeper's static check tells
+// the author too; for a plugin module there is no such surface (NIM-228), which
+// makes this the only channel a plugin deprecation has.
+message TaskNotice {
+  // Machine-readable kind, sharing the vocabulary of the author-facing
+  // diagnostics (shared/diag): today only "deprecated_param". A consumer
+  // filters on this, never on the prose.
+  string code = 1;
+
+  // Module address the notice is about: <namespace>.<module>.<state>.
+  string module = 2;
+
+  // The input param the notice is about; empty for a notice that is not about
+  // one. Together with code+module this is the dedup key — the same deprecated
+  // param used by twenty tasks is one thing to migrate, not twenty.
+  string param = 3;
+
+  // The operator-facing sentence, rendered by the side that HAS the manifest
+  // (plugin.DeprecatedDef.Notice) so every surface reporting a deprecation says
+  // it identically. Carries the deadline and the replacement.
+  string message = 4;
+}
+
 // TaskEvent is one task's final result (aggregated on Soul after the SoulModule
 // sub-process finishes). Progress for long-running steps isn't sent in the MVP
 // (post-MVP).
@@ -347,6 +380,16 @@ message TaskEvent {
   // 0/empty = an old Soul with no echo, OR an N=1 run (plan_index == task_idx):
   // forward-compat (ADR-012(c) only-add). Never reuse this field number.
   int32 plan_index = 8;
+
+  // notices: advisory findings about this task, collected BEFORE Apply and sent
+  // whatever the outcome — a deprecation is equally true on a task that failed
+  // for an unrelated reason, and dropping it there would hide it exactly when
+  // the operator is already looking.
+  //
+  // Empty = an old Soul, or nothing to say (ADR-012(c) only-add): keeper treats
+  // an absent list as "no notices", which is what every run produced before this
+  // field existed. Never reuse this field number.
+  repeated TaskNotice notices = 9;
 }
 
 // RunStatus is the whole run's final status.

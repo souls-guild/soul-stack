@@ -13,6 +13,7 @@ package handlers
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -229,7 +230,8 @@ func requireProblemStatus(t *testing.T, err error, want int) {
 
 // applyRunHostRow — one apply_runs host row for the detail-rows-stub (column order and
 // types of selectRunHostsSQL: sid/status/passage/task_idx/failed_plan_index/
-// error_summary/attempt/cancel_requested/scenario/started_at/finished_at/started_by/input).
+// error_summary/attempt/cancel_requested/scenario/started_at/finished_at/started_by/
+// input/notices).
 type applyRunHostRow struct {
 	sid             string
 	status          string
@@ -244,6 +246,10 @@ type applyRunHostRow struct {
 	finishedAt      *time.Time
 	startedBy       *string
 	input           []byte
+	// notices — raw jsonb of the run's advisory findings (migration 107). nil
+	// stands for a row written before the column existed; the projection must
+	// read that as "nothing reported", not as an error.
+	notices []byte
 }
 
 // applyRunsHostRows — a pgx.Rows stub over a set of apply_runs host rows. Scan
@@ -267,7 +273,7 @@ func (r *applyRunsHostRows) Scan(dest ...any) error {
 	vals := []any{
 		row.sid, row.status, row.passage, row.taskIdx, row.failedPlan, row.errorSummary,
 		row.attempt, row.cancelRequested, row.scenario, row.startedAt, row.finishedAt, row.startedBy,
-		row.input,
+		row.input, row.notices,
 	}
 	for i, d := range dest {
 		if err := scanApplyRunCol(d, vals[i]); err != nil {
@@ -315,4 +321,58 @@ func scanApplyRunCol(dest, v any) error {
 		return errors.New("applyRunsHostRows.Scan: unsupported dest type")
 	}
 	return nil
+}
+
+// TestRunDetailTyped_NoticesReachTheView — NIM-237: the domain projection has to
+// carry advisory findings out to the API, and it must do so INDEPENDENTLY of
+// status. A run where every host succeeded is exactly the case the channel
+// exists for: nothing else on that page would tell the operator a param they
+// use stops working two releases from now.
+func TestRunDetailTyped_NoticesReachTheView(t *testing.T) {
+	now := time.Now().UTC()
+	db := &fakeIncDB{
+		selectByNameRow: func(name string) pgx.Row { return makeIncarnationRow(name) },
+		applyRunsRows: func() (pgx.Rows, error) {
+			return &applyRunsHostRows{rows: []applyRunHostRow{
+				{ // succeeded, and still has something to say
+					sid: "host-a", status: "success", passage: 0,
+					attempt: 1, scenario: "scale", startedAt: now, finishedAt: &now,
+					notices: []byte(`[
+						{"code":"deprecated_param","module":"community.redis.present","param":"address","message":"stops working in 0.6.0; use \"addr\""},
+						{"code":"deprecated_param","module":"community.redis.present","param":"address","message":"stops working in 0.6.0; use \"addr\""}
+					]`),
+				},
+				{ // an older agent on the same run reports nothing
+					sid: "host-b", status: "success", passage: 0,
+					attempt: 1, scenario: "scale", startedAt: now, finishedAt: &now,
+				},
+			}}, nil
+		},
+	}
+	h := NewIncarnationHandler(db, nil, nil, nil, nil, nil, nil, nil, nil)
+	d, err := h.RunDetailTyped(context.Background(), "redis-prod", validApplyID, allowScope)
+	if err != nil {
+		t.Fatalf("RunDetailTyped: %v", err)
+	}
+	if d.Status != "success" {
+		t.Fatalf("Status = %q, want success - notices must not be tied to failure", d.Status)
+	}
+	if len(d.Hosts) != 2 {
+		t.Fatalf("len(Hosts) = %d, want 2", len(d.Hosts))
+	}
+	// Two reports of one deprecation are one thing to migrate.
+	if got := d.Hosts[0].Notices; len(got) != 1 {
+		t.Fatalf("Hosts[0].Notices = %d, want 1 deduplicated finding: %+v", len(got), got)
+	}
+	n := d.Hosts[0].Notices[0]
+	if n.Code != "deprecated_param" || n.Param != "address" {
+		t.Errorf("notice = %+v, want deprecated_param on address", n)
+	}
+	if !strings.Contains(n.Message, "0.6.0") {
+		t.Errorf("notice message %q lost the deadline", n.Message)
+	}
+	// A park mid-upgrade legitimately answers differently host to host.
+	if got := d.Hosts[1].Notices; len(got) != 0 {
+		t.Errorf("Hosts[1] reported nothing but carries %+v", got)
+	}
 }

@@ -630,6 +630,97 @@ func (x *ApplyRequest) GetDryRun() bool {
 	return false
 }
 
+// TaskNotice is something the operator needs to know about a task that ran
+// ANYWAY (ADR-0076 deprecation policy, NIM-237). It is deliberately NOT a
+// TaskError: an error means the task was refused and the host untouched, while a
+// notice means the task did its job and something about HOW it was asked is on
+// its way out. Collapsing the two would force a choice between breaking a run
+// that works and staying silent, and the whole point of a deprecation window is
+// that neither is necessary.
+//
+// Why it must ride the wire at all: the contract a param is checked against is
+// the one compiled into the Soul that runs it (ADR-0076(t)), so only that host
+// knows a param is deprecated. For a `core.*` module keeper's static check tells
+// the author too; for a plugin module there is no such surface (NIM-228), which
+// makes this the only channel a plugin deprecation has.
+type TaskNotice struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// Machine-readable kind, sharing the vocabulary of the author-facing
+	// diagnostics (shared/diag): today only "deprecated_param". A consumer
+	// filters on this, never on the prose.
+	Code string `protobuf:"bytes,1,opt,name=code,proto3" json:"code,omitempty"`
+	// Module address the notice is about: <namespace>.<module>.<state>.
+	Module string `protobuf:"bytes,2,opt,name=module,proto3" json:"module,omitempty"`
+	// The input param the notice is about; empty for a notice that is not about
+	// one. Together with code+module this is the dedup key — the same deprecated
+	// param used by twenty tasks is one thing to migrate, not twenty.
+	Param string `protobuf:"bytes,3,opt,name=param,proto3" json:"param,omitempty"`
+	// The operator-facing sentence, rendered by the side that HAS the manifest
+	// (plugin.DeprecatedDef.Notice) so every surface reporting a deprecation says
+	// it identically. Carries the deadline and the replacement.
+	Message       string `protobuf:"bytes,4,opt,name=message,proto3" json:"message,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *TaskNotice) Reset() {
+	*x = TaskNotice{}
+	mi := &file_keeper_v1_apply_proto_msgTypes[2]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *TaskNotice) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*TaskNotice) ProtoMessage() {}
+
+func (x *TaskNotice) ProtoReflect() protoreflect.Message {
+	mi := &file_keeper_v1_apply_proto_msgTypes[2]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use TaskNotice.ProtoReflect.Descriptor instead.
+func (*TaskNotice) Descriptor() ([]byte, []int) {
+	return file_keeper_v1_apply_proto_rawDescGZIP(), []int{2}
+}
+
+func (x *TaskNotice) GetCode() string {
+	if x != nil {
+		return x.Code
+	}
+	return ""
+}
+
+func (x *TaskNotice) GetModule() string {
+	if x != nil {
+		return x.Module
+	}
+	return ""
+}
+
+func (x *TaskNotice) GetParam() string {
+	if x != nil {
+		return x.Param
+	}
+	return ""
+}
+
+func (x *TaskNotice) GetMessage() string {
+	if x != nil {
+		return x.Message
+	}
+	return ""
+}
+
 // TaskEvent is one task's final result (aggregated on Soul after the SoulModule
 // sub-process finishes). Progress for long-running steps isn't sent in the MVP
 // (post-MVP).
@@ -667,14 +758,23 @@ type TaskEvent struct {
 	//
 	// 0/empty = an old Soul with no echo, OR an N=1 run (plan_index == task_idx):
 	// forward-compat (ADR-012(c) only-add). Never reuse this field number.
-	PlanIndex     int32 `protobuf:"varint,8,opt,name=plan_index,json=planIndex,proto3" json:"plan_index,omitempty"`
+	PlanIndex int32 `protobuf:"varint,8,opt,name=plan_index,json=planIndex,proto3" json:"plan_index,omitempty"`
+	// notices: advisory findings about this task, collected BEFORE Apply and sent
+	// whatever the outcome — a deprecation is equally true on a task that failed
+	// for an unrelated reason, and dropping it there would hide it exactly when
+	// the operator is already looking.
+	//
+	// Empty = an old Soul, or nothing to say (ADR-012(c) only-add): keeper treats
+	// an absent list as "no notices", which is what every run produced before this
+	// field existed. Never reuse this field number.
+	Notices       []*TaskNotice `protobuf:"bytes,9,rep,name=notices,proto3" json:"notices,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
 
 func (x *TaskEvent) Reset() {
 	*x = TaskEvent{}
-	mi := &file_keeper_v1_apply_proto_msgTypes[2]
+	mi := &file_keeper_v1_apply_proto_msgTypes[3]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -686,7 +786,7 @@ func (x *TaskEvent) String() string {
 func (*TaskEvent) ProtoMessage() {}
 
 func (x *TaskEvent) ProtoReflect() protoreflect.Message {
-	mi := &file_keeper_v1_apply_proto_msgTypes[2]
+	mi := &file_keeper_v1_apply_proto_msgTypes[3]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -699,7 +799,7 @@ func (x *TaskEvent) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use TaskEvent.ProtoReflect.Descriptor instead.
 func (*TaskEvent) Descriptor() ([]byte, []int) {
-	return file_keeper_v1_apply_proto_rawDescGZIP(), []int{2}
+	return file_keeper_v1_apply_proto_rawDescGZIP(), []int{3}
 }
 
 func (x *TaskEvent) GetApplyId() string {
@@ -758,6 +858,13 @@ func (x *TaskEvent) GetPlanIndex() int32 {
 	return 0
 }
 
+func (x *TaskEvent) GetNotices() []*TaskNotice {
+	if x != nil {
+		return x.Notices
+	}
+	return nil
+}
+
 // RunResult is the final report of an apply run.
 // Replaces the earlier-proposed "StateReport" (conflicted with incarnation.state
 // in naming-rules).
@@ -794,7 +901,7 @@ type RunResult struct {
 
 func (x *RunResult) Reset() {
 	*x = RunResult{}
-	mi := &file_keeper_v1_apply_proto_msgTypes[3]
+	mi := &file_keeper_v1_apply_proto_msgTypes[4]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -806,7 +913,7 @@ func (x *RunResult) String() string {
 func (*RunResult) ProtoMessage() {}
 
 func (x *RunResult) ProtoReflect() protoreflect.Message {
-	mi := &file_keeper_v1_apply_proto_msgTypes[3]
+	mi := &file_keeper_v1_apply_proto_msgTypes[4]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -819,7 +926,7 @@ func (x *RunResult) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RunResult.ProtoReflect.Descriptor instead.
 func (*RunResult) Descriptor() ([]byte, []int) {
-	return file_keeper_v1_apply_proto_rawDescGZIP(), []int{3}
+	return file_keeper_v1_apply_proto_rawDescGZIP(), []int{4}
 }
 
 func (x *RunResult) GetApplyId() string {
@@ -871,7 +978,7 @@ type CancelApply struct {
 
 func (x *CancelApply) Reset() {
 	*x = CancelApply{}
-	mi := &file_keeper_v1_apply_proto_msgTypes[4]
+	mi := &file_keeper_v1_apply_proto_msgTypes[5]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -883,7 +990,7 @@ func (x *CancelApply) String() string {
 func (*CancelApply) ProtoMessage() {}
 
 func (x *CancelApply) ProtoReflect() protoreflect.Message {
-	mi := &file_keeper_v1_apply_proto_msgTypes[4]
+	mi := &file_keeper_v1_apply_proto_msgTypes[5]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -896,7 +1003,7 @@ func (x *CancelApply) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CancelApply.ProtoReflect.Descriptor instead.
 func (*CancelApply) Descriptor() ([]byte, []int) {
-	return file_keeper_v1_apply_proto_rawDescGZIP(), []int{4}
+	return file_keeper_v1_apply_proto_rawDescGZIP(), []int{5}
 }
 
 func (x *CancelApply) GetApplyId() string {
@@ -953,7 +1060,13 @@ const file_keeper_v1_apply_proto_rawDesc = "" +
 	"\rtrace_context\x18\x03 \x01(\tR\ftraceContext\x12\x18\n" +
 	"\aattempt\x18\x04 \x01(\x05R\aattempt\x12\x18\n" +
 	"\apassage\x18\x06 \x01(\x05R\apassage\x12\x17\n" +
-	"\adry_run\x18\x05 \x01(\bR\x06dryRun\"\xbe\x02\n" +
+	"\adry_run\x18\x05 \x01(\bR\x06dryRun\"h\n" +
+	"\n" +
+	"TaskNotice\x12\x12\n" +
+	"\x04code\x18\x01 \x01(\tR\x04code\x12\x16\n" +
+	"\x06module\x18\x02 \x01(\tR\x06module\x12\x14\n" +
+	"\x05param\x18\x03 \x01(\tR\x05param\x12\x18\n" +
+	"\amessage\x18\x04 \x01(\tR\amessage\"\xf9\x02\n" +
 	"\tTaskEvent\x12\x19\n" +
 	"\bapply_id\x18\x01 \x01(\tR\aapplyId\x12\x19\n" +
 	"\btask_idx\x18\x02 \x01(\x05R\ataskIdx\x127\n" +
@@ -963,7 +1076,8 @@ const file_keeper_v1_apply_proto_rawDesc = "" +
 	"\x06no_log\x18\x06 \x01(\bR\x05noLog\x12\x18\n" +
 	"\apassage\x18\a \x01(\x05R\apassage\x12\x1d\n" +
 	"\n" +
-	"plan_index\x18\b \x01(\x05R\tplanIndex\"\xd0\x01\n" +
+	"plan_index\x18\b \x01(\x05R\tplanIndex\x129\n" +
+	"\anotices\x18\t \x03(\v2\x1f.soulstack.keeper.v1.TaskNoticeR\anotices\"\xd0\x01\n" +
 	"\tRunResult\x12\x19\n" +
 	"\bapply_id\x18\x01 \x01(\tR\aapplyId\x126\n" +
 	"\x06status\x18\x02 \x01(\x0e2\x1e.soulstack.keeper.v1.RunStatusR\x06status\x12<\n" +
@@ -1002,32 +1116,34 @@ func file_keeper_v1_apply_proto_rawDescGZIP() []byte {
 }
 
 var file_keeper_v1_apply_proto_enumTypes = make([]protoimpl.EnumInfo, 2)
-var file_keeper_v1_apply_proto_msgTypes = make([]protoimpl.MessageInfo, 5)
+var file_keeper_v1_apply_proto_msgTypes = make([]protoimpl.MessageInfo, 6)
 var file_keeper_v1_apply_proto_goTypes = []any{
 	(TaskStatus)(0),         // 0: soulstack.keeper.v1.TaskStatus
 	(RunStatus)(0),          // 1: soulstack.keeper.v1.RunStatus
 	(*RenderedTask)(nil),    // 2: soulstack.keeper.v1.RenderedTask
 	(*ApplyRequest)(nil),    // 3: soulstack.keeper.v1.ApplyRequest
-	(*TaskEvent)(nil),       // 4: soulstack.keeper.v1.TaskEvent
-	(*RunResult)(nil),       // 5: soulstack.keeper.v1.RunResult
-	(*CancelApply)(nil),     // 6: soulstack.keeper.v1.CancelApply
-	(*structpb.Struct)(nil), // 7: google.protobuf.Struct
-	(*TaskError)(nil),       // 8: soulstack.keeper.v1.TaskError
+	(*TaskNotice)(nil),      // 4: soulstack.keeper.v1.TaskNotice
+	(*TaskEvent)(nil),       // 5: soulstack.keeper.v1.TaskEvent
+	(*RunResult)(nil),       // 6: soulstack.keeper.v1.RunResult
+	(*CancelApply)(nil),     // 7: soulstack.keeper.v1.CancelApply
+	(*structpb.Struct)(nil), // 8: google.protobuf.Struct
+	(*TaskError)(nil),       // 9: soulstack.keeper.v1.TaskError
 }
 var file_keeper_v1_apply_proto_depIdxs = []int32{
-	7, // 0: soulstack.keeper.v1.RenderedTask.params:type_name -> google.protobuf.Struct
-	7, // 1: soulstack.keeper.v1.RenderedTask.flow_context:type_name -> google.protobuf.Struct
+	8, // 0: soulstack.keeper.v1.RenderedTask.params:type_name -> google.protobuf.Struct
+	8, // 1: soulstack.keeper.v1.RenderedTask.flow_context:type_name -> google.protobuf.Struct
 	2, // 2: soulstack.keeper.v1.ApplyRequest.tasks:type_name -> soulstack.keeper.v1.RenderedTask
 	0, // 3: soulstack.keeper.v1.TaskEvent.status:type_name -> soulstack.keeper.v1.TaskStatus
-	7, // 4: soulstack.keeper.v1.TaskEvent.register_data:type_name -> google.protobuf.Struct
-	8, // 5: soulstack.keeper.v1.TaskEvent.error:type_name -> soulstack.keeper.v1.TaskError
-	1, // 6: soulstack.keeper.v1.RunResult.status:type_name -> soulstack.keeper.v1.RunStatus
-	7, // 7: soulstack.keeper.v1.RunResult.state_changes:type_name -> google.protobuf.Struct
-	8, // [8:8] is the sub-list for method output_type
-	8, // [8:8] is the sub-list for method input_type
-	8, // [8:8] is the sub-list for extension type_name
-	8, // [8:8] is the sub-list for extension extendee
-	0, // [0:8] is the sub-list for field type_name
+	8, // 4: soulstack.keeper.v1.TaskEvent.register_data:type_name -> google.protobuf.Struct
+	9, // 5: soulstack.keeper.v1.TaskEvent.error:type_name -> soulstack.keeper.v1.TaskError
+	4, // 6: soulstack.keeper.v1.TaskEvent.notices:type_name -> soulstack.keeper.v1.TaskNotice
+	1, // 7: soulstack.keeper.v1.RunResult.status:type_name -> soulstack.keeper.v1.RunStatus
+	8, // 8: soulstack.keeper.v1.RunResult.state_changes:type_name -> google.protobuf.Struct
+	9, // [9:9] is the sub-list for method output_type
+	9, // [9:9] is the sub-list for method input_type
+	9, // [9:9] is the sub-list for extension type_name
+	9, // [9:9] is the sub-list for extension extendee
+	0, // [0:9] is the sub-list for field type_name
 }
 
 func init() { file_keeper_v1_apply_proto_init() }
@@ -1042,7 +1158,7 @@ func file_keeper_v1_apply_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_keeper_v1_apply_proto_rawDesc), len(file_keeper_v1_apply_proto_rawDesc)),
 			NumEnums:      2,
-			NumMessages:   5,
+			NumMessages:   6,
 			NumExtensions: 0,
 			NumServices:   0,
 		},

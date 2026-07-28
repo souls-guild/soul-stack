@@ -301,6 +301,79 @@ func TestParams_DeprecatedPluginParamStillApplies(t *testing.T) {
 	}
 }
 
+// TestParams_DeprecationLeavesTheHostOnTheTaskEvent — NIM-237. The deprecation
+// window only works if the operator learns they are inside it, and this host is
+// the ONLY side that can tell them: the contract is the manifest compiled into
+// THIS binary, and for a plugin module keeper has no static check at all
+// (NIM-228). While the notice lived in slog it never left the host, so
+// removed_in arrived exactly as abruptly as if there had been no window.
+func TestParams_DeprecationLeavesTheHostOnTheTaskEvent(t *testing.T) {
+	r, spawner, _ := pluginLayer(t, map[string]sharedplugin.InputParamDef{
+		"addr": {Type: "string"},
+		"address": {Type: "string", Deprecated: &sharedplugin.DeprecatedDef{
+			Since: "0.4.0", RemovedIn: "0.6.0", Use: "addr",
+		}},
+	})
+	sink := runPluginTask(t, r, map[string]any{"address": "10.0.0.1"})
+
+	if spawner.spawnCount != 1 {
+		t.Fatalf("the task did not run: %v", sink.taskEvents[0].GetError())
+	}
+	notices := sink.taskEvents[0].GetNotices()
+	if len(notices) != 1 {
+		t.Fatalf("notices = %d, want exactly the one deprecated param", len(notices))
+	}
+	n := notices[0]
+	if n.GetCode() != "deprecated_param" {
+		t.Errorf("code = %q, want deprecated_param", n.GetCode())
+	}
+	if n.GetParam() != "address" {
+		t.Errorf("param = %q, want address", n.GetParam())
+	}
+	// The sentence is what the operator reads, so it has to carry the two things
+	// they can act on: when it stops working and what to use instead.
+	if !strings.Contains(n.GetMessage(), "0.6.0") || !strings.Contains(n.GetMessage(), "addr") {
+		t.Errorf("message %q names neither the deadline nor the replacement", n.GetMessage())
+	}
+}
+
+// TestParams_LivePluginTaskCarriesNoNotices — the other half: a task whose
+// params are all current says nothing. Without this, "notices are published"
+// could be satisfied by a channel that cries wolf on every task, which is the
+// same as no channel at all.
+func TestParams_LivePluginTaskCarriesNoNotices(t *testing.T) {
+	r, _, _ := pluginLayer(t, map[string]sharedplugin.InputParamDef{
+		"addr": {Type: "string"},
+	})
+	sink := runPluginTask(t, r, map[string]any{"addr": "10.0.0.1"})
+
+	if got := sink.taskEvents[0].GetNotices(); len(got) != 0 {
+		t.Errorf("a task with no deprecated param reported %d notices", len(got))
+	}
+}
+
+// TestParams_DeprecationSurvivesAnUnknownParamOnTheSameTask — a task can be
+// wrong in one place and merely dated in another. The unknown param fails the
+// task, and the deprecation is no less true for it: dropping the notice here
+// would hide it precisely when the operator is already reading this run.
+func TestParams_DeprecationSurvivesAnUnknownParamOnTheSameTask(t *testing.T) {
+	r, _, _ := pluginLayer(t, map[string]sharedplugin.InputParamDef{
+		"addr": {Type: "string"},
+		"address": {Type: "string", Deprecated: &sharedplugin.DeprecatedDef{
+			Since: "0.4.0", RemovedIn: "0.6.0", Use: "addr",
+		}},
+	})
+	sink := runPluginTask(t, r, map[string]any{"address": "10.0.0.1", "portt": 6379})
+
+	ev := sink.taskEvents[0]
+	if ev.GetError().GetCode() != "module.unknown_param" {
+		t.Fatalf("error code = %q, want module.unknown_param", ev.GetError().GetCode())
+	}
+	if len(ev.GetNotices()) != 1 {
+		t.Errorf("notices = %d on a failed task, want the deprecation to survive", len(ev.GetNotices()))
+	}
+}
+
 // TestParams_CompositeAsksTheServingLayer — core shadows a same-named custom
 // module in Lookup, so the schema must come from core too. Otherwise a custom
 // manifest would describe params for the static module that actually runs.

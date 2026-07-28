@@ -1002,7 +1002,13 @@ func (r *ApplyRunner) runTask(ctx context.Context, applyID string, idx int32, ta
 	// ADR-0076: a param this binary's manifest does not declare must not be
 	// dropped on the floor while the task reports success. Before Apply, so the
 	// host is untouched when it fires.
-	if perr := r.checkParams(modName, state, task.GetName(), task.GetParams()); perr != nil {
+	// Notices are attached whatever happens next (NIM-237): a deprecation is a
+	// property of how the task was ASKED, so it survives the task failing here
+	// for an unrelated reason — and hiding it there would drop it exactly when
+	// the operator is already reading this run.
+	notices, perr := r.checkParams(modName, state, task.GetName(), task.GetParams())
+	ev.Notices = notices
+	if perr != nil {
 		ev.Status = keeperv1.TaskStatus_TASK_STATUS_FAILED
 		ev.Error = perr
 		return ev, nil

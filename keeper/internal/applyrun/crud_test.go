@@ -1123,3 +1123,95 @@ func TestOrphanDispatched_PGError(t *testing.T) {
 		t.Errorf("RowsAffected = %d, want 0 on error", n)
 	}
 }
+
+// AppendRunNotices is a blind append by design: notices arrive on separate
+// TaskEvents which, on a multi-Keeper cluster (ADR-002), may land on different
+// instances, so read-modify-write would drop some under concurrency. The guard
+// is on the SQL shape - `notices || $3` and nothing that reads first.
+func TestAppendRunNotices_AppendsWithoutReading(t *testing.T) {
+	f := &fakeDB{execTag: pgconn.NewCommandTag("UPDATE 1"), execTagSet: true}
+	err := AppendRunNotices(context.Background(), f, "01HAPPLY0000000000000000", "host.example.com", 2,
+		[]RunNotice{{Code: "deprecated_param", Module: "community.redis.present", Param: "address", Message: "m"}})
+	if err != nil {
+		t.Fatalf("AppendRunNotices: %v", err)
+	}
+	if f.execCalls != 1 {
+		t.Fatalf("execCalls = %d, want 1", f.execCalls)
+	}
+	if !strings.Contains(f.execSQL, "notices || $3::jsonb") {
+		t.Errorf("SQL does not append, it may overwrite: %q", f.execSQL)
+	}
+	if f.queryRowCalls != 0 {
+		t.Errorf("the append read the row first (%d reads) - that is the race it exists to avoid", f.queryRowCalls)
+	}
+	if f.execArgs[3] != 2 {
+		t.Errorf("args[3] passage = %v, want 2 - a notice must land on ITS Passage row", f.execArgs[3])
+	}
+	var sent []RunNotice
+	if err := json.Unmarshal([]byte(f.execArgs[2].(string)), &sent); err != nil {
+		t.Fatalf("payload is not the notice list: %v", err)
+	}
+	if len(sent) != 1 || sent[0].Param != "address" {
+		t.Errorf("payload = %+v, want the one notice", sent)
+	}
+}
+
+// Most tasks have nothing to say. Issuing an UPDATE per task on a large run to
+// append nothing is pure cost, and it must not be mistaken for an error either.
+func TestAppendRunNotices_EmptyIsANoOp(t *testing.T) {
+	f := &fakeDB{execTag: pgconn.NewCommandTag("UPDATE 1"), execTagSet: true}
+	if err := AppendRunNotices(context.Background(), f, "a", "h", 0, nil); err != nil {
+		t.Fatalf("empty notices returned %v, want nil", err)
+	}
+	if f.execCalls != 0 {
+		t.Errorf("execCalls = %d, want 0 - an empty append still hit the DB", f.execCalls)
+	}
+}
+
+// The row may be missing: a TaskEvent that beat Insert, or an ad-hoc push with
+// no scenario-runner. The caller swallows this one - losing an advisory notice
+// must never fail the apply stream - so it has to be distinguishable.
+func TestAppendRunNotices_MissingRow(t *testing.T) {
+	f := &fakeDB{execTag: pgconn.NewCommandTag("UPDATE 0"), execTagSet: true}
+	err := AppendRunNotices(context.Background(), f, "a", "h", 0, []RunNotice{{Code: "deprecated_param"}})
+	if !errors.Is(err, ErrApplyRunNotFound) {
+		t.Errorf("err = %v, want ErrApplyRunNotFound", err)
+	}
+}
+
+// The append-only log is what an operator ACTS on, and they act once per thing
+// to migrate. One deprecated param used by twenty tasks is one migration, not
+// twenty lines - so the read side collapses by (code, module, param).
+func TestDedupeNotices_CollapsesRepeatsAndOrdersStably(t *testing.T) {
+	in := []RunNotice{
+		{Code: "deprecated_param", Module: "community.redis.present", Param: "tls_ca", Message: "b"},
+		{Code: "deprecated_param", Module: "community.redis.present", Param: "address", Message: "a"},
+		{Code: "deprecated_param", Module: "community.redis.present", Param: "address", Message: "a"},
+		{Code: "deprecated_param", Module: "core.pkg.installed", Param: "address", Message: "c"},
+	}
+	got := DedupeNotices(in)
+	if len(got) != 3 {
+		t.Fatalf("deduped to %d, want 3 distinct findings: %+v", len(got), got)
+	}
+	// Ordered by the key, not by arrival: rows are appended by whichever task
+	// finished first, which is not something a reader should see move between
+	// two identical runs.
+	want := []string{"community.redis.present/address", "community.redis.present/tls_ca", "core.pkg.installed/address"}
+	for i, w := range want {
+		if got[i].Module+"/"+got[i].Param != w {
+			t.Errorf("position %d = %s/%s, want %s", i, got[i].Module, got[i].Param, w)
+		}
+	}
+	// Same param on a DIFFERENT module is a different thing to migrate.
+	if got[2].Message != "c" {
+		t.Errorf("a same-named param on another module was collapsed away")
+	}
+}
+
+// Nothing reported must read as nothing, not as an empty list that a wire type
+// would then have to decide how to render.
+func TestDedupeNotices_EmptyIsNil(t *testing.T) {
+	if got := DedupeNotices(nil); got != nil {
+		t.Errorf("DedupeNotices(nil) = %+v, want nil", got)
+	}
+}
