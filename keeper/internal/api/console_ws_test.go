@@ -555,13 +555,22 @@ func TestConsoleWS_BackpressureDropsChunksAndReportsBytes(t *testing.T) {
 	// Now drain. Some chunks are gone — that is the contract — but the loss
 	// must be reported, and reported even though the flood has ENDED: the
 	// report cannot ride on "the next chunk", because there is no next chunk.
+	//
+	// The budgets are deliberately generous. flushDropped only gets a queue slot
+	// once the client has drained what is already queued, so this loop has to read
+	// out consoleOutQueueDepth frames of 64 KiB before the marker can arrive — tens
+	// of MB of JSON under -race. A tight per-read deadline turns "the box is busy"
+	// into a read error, and the assertions below would then blame the product for
+	// a report that simply had not been reached yet.
 	var totalDropped float64
 	var chunks int
-	deadline := time.Now().Add(8 * time.Second)
+	var readErr error
+	deadline := time.Now().Add(60 * time.Second)
 	for time.Now().Before(deadline) && totalDropped == 0 {
-		_ = ws.SetReadDeadline(time.Now().Add(2 * time.Second))
+		_ = ws.SetReadDeadline(time.Now().Add(10 * time.Second))
 		_, raw, err := ws.ReadMessage()
 		if err != nil {
+			readErr = err
 			break
 		}
 		var m map[string]any
@@ -584,7 +593,7 @@ func TestConsoleWS_BackpressureDropsChunksAndReportsBytes(t *testing.T) {
 		t.Fatalf("delivered %d of %d chunks - nothing was dropped, so the queue is unbounded", chunks, flood)
 	}
 	if totalDropped == 0 {
-		t.Fatal("chunks were dropped but dropped_bytes never reported it - the client would splice a corrupted stream")
+		t.Fatalf("chunks were dropped but dropped_bytes never reported it - the client would splice a corrupted stream (read %d chunks, stopped on: %v)", chunks, readErr)
 	}
 }
 
@@ -608,11 +617,23 @@ func TestConsoleWS_FloodDoesNotBlockDelivery(t *testing.T) {
 		}
 	}()
 
+	// A blocked Deliver never finishes, so the budget only has to outlast the
+	// honest cost of pushing 160 MB through the send path under -race on a busy
+	// box — being generous here costs nothing and stops a loaded machine from
+	// reading as a wedged EventStream goroutine.
 	select {
 	case <-done:
-	case <-time.After(10 * time.Second):
+	case <-time.After(60 * time.Second):
 		t.Fatal("Deliver blocked on a full socket queue - this would stall apply traffic on the shared stream")
 	}
+
+	// Tear the socket down before returning. t.Cleanup would close the client end
+	// eventually, but until the session is reaped this Keeper keeps pushing the
+	// tail of a 160 MB flood into a socket nobody reads — and the next test in the
+	// package then starts against a busy server and sees ITS socket go quiet.
+	// Leaving that to cleanup is what made the backpressure test flaky.
+	_ = ws.Close()
+	waitFor(t, "the flooded session to be reaped", func() bool { return s.hub.Count() == 0 })
 }
 
 // --- limits ---

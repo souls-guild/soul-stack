@@ -220,17 +220,16 @@ func (r *VoyageCommandPGResolver) ResolveSIDs(ctx context.Context, filter Voyage
 //   - Empty (fail-closed: the operator is entitled to no host) → SIDs empty,
 //     DeniedExplicit = all explicitly-named existing SIDs (→ 403 if they were
 //     named; otherwise 422 on empty SIDs);
-//   - coven/regex scope → host visibility = covenMatch OR regexMatch
-//     ([soulpurview.CompiledScope.Visible]); the resolved set is trimmed to the
-//     visible one. An explicitly-named (filter.SIDs) invisible host goes into
-//     DeniedExplicit (anti-escalation), a broad one (coven/where) is silently trimmed.
+//   - a boolean scope → host visibility per [soulpurview.InScope]; the resolved
+//     set is trimmed to the visible one. An explicitly-named (filter.SIDs) invisible
+//     host goes into DeniedExplicit (anti-escalation), a broad one (coven/where) is
+//     silently trimmed.
 //
-// soulprint/state dimensions (scope.Partial) are NOT computed (S3b-2b deferred) —
-// under-display (fail-closed: the operator would rather miss their own host reachable
-// ONLY via soulprint than see a foreign one). coven/regex work fully.
-//
-// A broken/too-long regex in Purview ([soulpurview.CompileScope] error) →
-// fail-closed: empty set + all explicit SIDs in DeniedExplicit (hide, not 500).
+// The coven and host dimensions decide visibility here. Traits are not fetched into
+// the pairs, so a trait-only scope fails closed (under-show: the operator would
+// rather miss their own host than see a foreign one) — a trait-aware voyage target
+// filter is a follow-up. NIM-128 removed the regex/soulprint/state dimensions this
+// path used to special-case.
 func (r *VoyageCommandPGResolver) ResolveSIDsInScope(ctx context.Context, filter VoyageCommandFilter, scope soulpurview.Scope) (ScopedSIDs, error) {
 	pairs, err := r.resolvePairs(ctx, filter)
 	if err != nil {

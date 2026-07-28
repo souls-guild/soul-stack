@@ -773,8 +773,8 @@ write/read round-trip and deletes the container on exit `TestMain`.
 
 | Team | What does |
 |---|---|
-| `make test-integration` | `go test -tags=integration -race -count=1 ./...` for all modules. Default script. |
-| `cd keeper && go test -tags=integration -race -count=1 ./internal/auditpg/` | Sighting one package. |
+| `make test-integration` | `go test -tags=integration -race -count=1 -p 4 ./...` for all modules, with `SOUL_STACK_INTEGRATION_REQUIRE_DOCKER=1`. Default script. |
+| `cd keeper && SOUL_STACK_INTEGRATION_REQUIRE_DOCKER=1 go test -tags=integration -race -count=1 ./internal/auditpg/` | Sighting one package. |
 
 Requirements:
 
@@ -782,11 +782,43 @@ Requirements:
 Desktop / OrbStack / Colima; on Linux - `dockerd` + rights to the socket.
 - `make test` / `make test-race` (without `-integration`) **do not require docker** -
 files under `//go:build integration` are excluded from the normal build.
-- `SOUL_STACK_INTEGRATION_REQUIRE_DOCKER=1` (or `true`) - variable for
-CI mode: if testcontainers could not start, the tests **fail** with
-`log.Fatalf`, not skip. The variable is not set locally, then when
-unavailable docker `TestMain` logs the reason and returns exit 0
-(tests are considered missed).
+- `SOUL_STACK_INTEGRATION_REQUIRE_DOCKER=1` (or `true`): if testcontainers could
+not start, the tests **fail** with `log.Fatalf` instead of skipping. Without it
+`TestMain` logs the reason and returns exit 0 - the package is silently not run,
+and a whole suite can report success having executed nothing. `make test-integration`
+therefore sets it itself (`make test-integration SOUL_STACK_INTEGRATION_REQUIRE_DOCKER=0`
+restores the skipping behaviour); a bare `go test -tags=integration` still needs it
+passed by hand.
+- `make test-integration INTEGRATION_PARALLEL=<n>` caps how many packages - i.e.
+how many container sets - start at once (default 4). Unbounded, the
+GOMAXPROCS-wide default start swamps the docker daemon and packages fail on the
+testcontainers reaper rather than on their own assertions.
+
+#### WSL2: `docker-credential-desktop.exe: exec format error`
+
+On WSL2 with Docker Desktop, any test that BUILDS an image (`keeper/internal/trial`
+L2 stands) can fail like this:
+
+```
+create container: build options: auth configs from Dockerfile:
+get credentials from store: execute "docker-credential-desktop.exe":
+fork/exec /usr/bin/docker-credential-desktop.exe: exec format error
+```
+
+This is machine configuration, not a code regression. Docker Desktop writes
+`"credsStore": "desktop.exe"` into `~/.docker/config.json`, so every registry auth
+lookup shells out to a **Windows** binary; that only works while WSL
+Windows-interop is registered. Check it:
+
+```bash
+ls /proc/sys/fs/binfmt_misc/     # WSLInterop present?
+```
+
+If `WSLInterop` is missing (it can disappear on a WSL restart or when
+`systemd-binfmt` re-runs) no `.exe` can be executed from this instance and the
+credential helper fails for every registry. Either re-register interop, or drop
+the `credsStore` line from `~/.docker/config.json` - the Linux docker CLI does
+not need it unless you pull from a private registry.
 
 ### Build-tags
 
@@ -804,6 +836,8 @@ pipeline:
 available out of the box; on restricted runners - configure
 Docker-in-Docker or `DOCKER_HOST`. In GitLab - explicit `DOCKER_HOST` or
   privileged runner.
-- Set `SOUL_STACK_INTEGRATION_REQUIRE_DOCKER=1` in the CI-job environment,
-so that integration tests are required (without the flag silently
-skip when docker is not available - unacceptable for CI).
+- `SOUL_STACK_INTEGRATION_REQUIRE_DOCKER=1` is already the default of
+`make test-integration`, so a CI job that calls the target needs nothing extra.
+A job that calls `go test -tags=integration` directly must set it itself -
+without the flag the tests silently skip when docker is unavailable, which is
+unacceptable for CI.

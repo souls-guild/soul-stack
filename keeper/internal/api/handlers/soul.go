@@ -528,10 +528,11 @@ func presenceSnapshotStatus(status string) bool {
 // GET /v1/souls (ListTyped) — visibility scoped by RBAC (ADR-047 S3b): an operator sees only
 // hosts within their scope boundary (`soul.list` Purview). The scope is transparent to the client —
 // derived from the JWT, NOT a query parameter; the coven query (filter) narrows WITHIN the scope (AND).
-// Two modes, the SERVER picks the mode from the Purview: coven-only/Unrestricted → offset-fast-path
-// (SQL pushdown, exact total, no next_cursor); a regex dimension → keyset mode (S3b-2a,
-// total_approximate, next_cursor). fail-closed (OPPOSITE to presence fail-SAFE): no claims /
-// nil-scoper / empty Purview / broken regex → an EMPTY list (not all souls).
+// ONE mode since NIM-128: the whole boolean purview (coven/host/trait) pushes into SQL, so this is
+// plain offset pagination with an exact total (see [SoulHandler.listOffsetTyped]) — next_cursor stays
+// null and total_approximate false, both kept on the wire for envelope compatibility. fail-closed
+// (OPPOSITE to presence fail-SAFE): no claims / nil-scoper / empty Purview → an EMPTY list
+// (not all souls).
 
 // SoulListInput — parameters of [SoulHandler.ListTyped] (FULL-TYPED). Coven/Status/Transport —
 // string filters (empty = do not apply). Page/Cursor — already parsed by the huma layer
@@ -577,11 +578,10 @@ type SoulStatsReply struct {
 //
 // fail-closed (symmetric to ListTyped): no claims / nil-scoper / empty Purview →
 // a ZERO aggregate (200, not 403) — we do not leak the existence of hosts outside the scope.
-// Errors — *problemError (500 PG). Partial-scope (soulprint/state dimensions,
-// S3b-2b) degrades to a coven aggregate: the scope-CTE aggregate does NOT apply the regex
-// dimension (coven-pushdown), so a regex-scoped operator sees an aggregate ONLY
-// over the coven part of their Purview (a strict subset, never over-show) — the same
-// behavior as the list's offset-fast-path.
+// Errors — *problemError (500 PG). Since NIM-128 the aggregate carries the SAME
+// boolean purview as the list ([soul.SelectStats] takes the scope and pushes it
+// down), so stats and list agree on what the operator may see — there is no
+// partially-applied scope left to degrade.
 func (h *SoulHandler) StatsTyped(ctx context.Context, claims *jwt.Claims, staleThreshold time.Duration) (SoulStatsReply, error) {
 	scope, ok := h.resolveListScopeForClaims(claims)
 	if !ok {

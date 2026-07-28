@@ -17,6 +17,7 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"log"
 	"log/slog"
@@ -2337,21 +2338,25 @@ func TestIntegration_Soul_List_403_NoPermission(t *testing.T) {
 	}
 }
 
-// --- ADR-047 S3b-2a: keyset mode of souls-list on a real PG (regex-scope) ---
+// --- ADR-047 S3b: scoped souls-list on a real PG (host-glob scope) ---
 
-// keysetPage — one HTTP page of the keyset mode of souls-list (next_cursor /
-// total_approximate). We extract the SIDs to verify the walk's coverage.
-type keysetPage struct {
+// soulsPage — one HTTP page of souls-list. Since NIM-128 the whole boolean
+// purview (coven/host/trait) is pushed into SQL, so this is a plain offset page
+// with an EXACT total: the server never sets next_cursor and never marks the
+// total approximate. Both fields stay on the wire for envelope compatibility
+// (guarded by huma_soul_schema_test.go), so we decode and assert them.
+type soulsPage struct {
 	Items []struct {
 		SID    string `json:"sid"`
 		Status string `json:"status"`
 	} `json:"items"`
+	Total            int     `json:"total"`
 	TotalApproximate bool    `json:"total_approximate"`
 	NextCursor       *string `json:"next_cursor"`
 }
 
-// getSoulsPage — GET /v1/souls?<query> and decode into keysetPage. Fails on non-200.
-func getSoulsPage(t *testing.T, base, tok, query string) keysetPage {
+// getSoulsPage — GET /v1/souls?<query> and decode into soulsPage. Fails on non-200.
+func getSoulsPage(t *testing.T, base, tok, query string) soulsPage {
 	t.Helper()
 	url := base + "/v1/souls"
 	if query != "" {
@@ -2368,79 +2373,90 @@ func getSoulsPage(t *testing.T, base, tok, query string) keysetPage {
 		raw, _ := io.ReadAll(resp.Body)
 		t.Fatalf("getSoulsPage(%q): status = %d, body=%s", query, resp.StatusCode, raw)
 	}
-	var page keysetPage
+	var page soulsPage
 	if err := json.NewDecoder(resp.Body).Decode(&page); err != nil {
 		t.Fatalf("getSoulsPage(%q): decode: %v", query, err)
 	}
 	return page
 }
 
-// walkSouls — a full keyset walk of souls-list via the next_cursor round-trip,
-// collects all SIDs; fails on a duplicate or on exceeding the page limit. baseQuery —
-// filters/limit (without cursor).
-func walkSouls(t *testing.T, base, tok, baseQuery string) map[string]struct{} {
+// walkSouls pages souls-list by offset with `limit` per page and collects every
+// visible SID; fails on a duplicate, on a page that disagrees with the reported
+// total, or on a walk that does not converge. baseQuery — filters (without
+// offset/limit). Returns the SID set and the total the server reported.
+//
+// A page size SMALLER than the visible set is the point: it proves the scope
+// narrowing survives pagination instead of being applied to the first page only.
+func walkSouls(t *testing.T, base, tok, baseQuery string, limit int) (map[string]struct{}, int) {
 	t.Helper()
 	seen := map[string]struct{}{}
-	cursor := ""
+	total := 0
 	for page := 0; ; page++ {
-		q := baseQuery
-		if cursor != "" {
-			if q != "" {
-				q += "&"
-			}
-			q += "cursor=" + cursor
+		q := fmt.Sprintf("offset=%d&limit=%d", page*limit, limit)
+		if baseQuery != "" {
+			q = baseQuery + "&" + q
 		}
 		p := getSoulsPage(t, base, tok, q)
-		if !p.TotalApproximate {
-			t.Errorf("keyset page %d: total_approximate=false, want true (regex-scope)", page)
+		if p.TotalApproximate {
+			t.Errorf("page %d: total_approximate=true, want false (the purview pushes into SQL, NIM-128)", page)
 		}
+		if p.NextCursor != nil {
+			t.Errorf("page %d: next_cursor=%q, want null (there is no keyset mode since NIM-128)", page, *p.NextCursor)
+		}
+		total = p.Total
 		for _, it := range p.Items {
 			if _, dup := seen[it.SID]; dup {
-				t.Fatalf("DUPLICATE %s during keyset walk via HTTP", it.SID)
+				t.Fatalf("DUPLICATE %s during the offset walk via HTTP", it.SID)
 			}
 			seen[it.SID] = struct{}{}
 		}
-		if p.NextCursor == nil {
+		if len(p.Items) < limit {
 			break
 		}
-		cursor = *p.NextCursor
 		if page > 50 {
-			t.Fatal("keyset HTTP walk does not converge (>50 pages)")
+			t.Fatal("souls-list HTTP walk does not converge (>50 pages)")
 		}
 	}
-	return seen
+	if len(seen) != total {
+		t.Errorf("walk collected %d SIDs but the server reported total=%d - the total is not exact", len(seen), total)
+	}
+	return seen, total
 }
 
-// regexScopeRBAC — a role with regex-scoped soul.list (`on regex=<pat>`): the operator
-// sees only SIDs matching the pattern (keyset mode, ADR-047 S3b-2a).
-func regexScopeRBAC(aid, pattern string) *rbactest.Config {
+// hostGlobScopeRBAC — a role with host-glob-scoped soul.list
+// (`on host matches <glob>`): the operator sees only SIDs matching the glob
+// (keyset mode, ADR-047 S3b-2a). NIM-128 removed the `regex=` dimension these
+// tests used to carry; `host matches` is its surviving equivalent — a pattern
+// over the SID that does not resolve in the flat route-gate context either.
+func hostGlobScopeRBAC(aid, glob string) *rbactest.Config {
 	return &rbactest.Config{
 		Roles: []rbactest.Role{
-			{Name: "web-ops", Operators: []string{aid}, Permissions: []string{"soul.list on regex='" + pattern + "'"}},
+			{Name: "web-ops", Operators: []string{aid}, Permissions: []string{"soul.list on host matches " + glob}},
 		},
 	}
 }
 
-// covenAndRegexScopeRBAC — two soul.list permissions: coven=<coven> + regex=<pat>.
-// Visibility = union (OR): a host in the coven OR matching the regex (keyset mode).
-func covenAndRegexScopeRBAC(aid, coven, pattern string) *rbactest.Config {
+// covenAndHostGlobScopeRBAC — two soul.list permissions: coven=<coven> +
+// host matches <glob>. Visibility = union (OR): a host in the coven OR matching
+// the glob (keyset mode).
+func covenAndHostGlobScopeRBAC(aid, coven, glob string) *rbactest.Config {
 	return &rbactest.Config{
 		Roles: []rbactest.Role{
 			{Name: "mixed-ops", Operators: []string{aid}, Permissions: []string{
 				"soul.list on coven=" + coven,
-				"soul.list on regex='" + pattern + "'",
+				"soul.list on host matches " + glob,
 			}},
 		},
 	}
 }
 
-// TestIntegration_Soul_List_Keyset_RegexScope — the keyset HTTP path on a real PG:
-// regex-scope `^web-`, souls web-*/db-* → the walk via next_cursor collects EXACTLY
-// web-* (no duplicates/gaps), total_approximate:true, top-up works (limit
-// less than the number of web hosts → a multi-page walk).
-func TestIntegration_Soul_List_Keyset_RegexScope(t *testing.T) {
+// TestIntegration_Soul_List_HostGlobScope — the souls-list HTTP path on a real PG:
+// host-glob scope `web-*`, souls web-*/db-* → the offset walk collects EXACTLY
+// web-* (no duplicates/gaps) and the reported total is exact, across a page size
+// smaller than the visible set.
+func TestIntegration_Soul_List_HostGlobScope(t *testing.T) {
 	// ADR-047 G1: the route-gate is switched to RequireAction (existence-gate) —
-	// a regex-scoped operator reaches the handler (previously rbac.Check(nil-ctx)
+	// a pattern-scoped operator reaches the handler (previously rbac.Check(nil-ctx)
 	// denied scoped soul.list BEFORE the handler). Reachable through the REAL route-gate.
 	truncateOperators(t)
 	seedOperator(t, "archon-webops", "")
@@ -2455,39 +2471,42 @@ func TestIntegration_Soul_List_Keyset_RegexScope(t *testing.T) {
 		time.Sleep(2 * time.Millisecond)
 	}
 
-	base, stop := startServer(t, regexScopeRBAC("archon-webops", "^web-"))
+	base, stop := startServer(t, hostGlobScopeRBAC("archon-webops", "web-*"))
 	defer stop()
 	tok := newValidTokenFor(t, "archon-webops", []string{"web-ops"})
 
-	// limit=2 < 3 web hosts → a multi-page walk with top-up.
-	got := walkSouls(t, base, tok, "limit=2")
+	// limit=2 < 3 web hosts → a multi-page walk.
+	got, total := walkSouls(t, base, tok, "", 2)
 	want := map[string]struct{}{
 		"web-01.example.com": {}, "web-02.example.com": {}, "web-03.example.com": {},
 	}
 	if len(got) != len(want) {
-		t.Fatalf("keyset regex-scope picked %d hosts, want %d: %v", len(got), len(want), got)
+		t.Fatalf("host-glob scope picked %d hosts, want %d: %v", len(got), len(want), got)
+	}
+	if total != len(want) {
+		t.Errorf("reported total=%d, want %d (the total must count the SCOPED set, not the registry)", total, len(want))
 	}
 	for sid := range want {
 		if _, ok := got[sid]; !ok {
-			t.Errorf("web host %s skipped by keyset walk", sid)
+			t.Errorf("web host %s skipped by the walk", sid)
 		}
 	}
 	for _, leak := range []string{"db-01.example.com", "db-02.example.com"} {
 		if _, ok := got[leak]; ok {
-			t.Errorf("db host %s visible to regex-scoped operator - leak past Purview boundary", leak)
+			t.Errorf("db host %s visible to host-glob-scoped operator - leak past Purview boundary", leak)
 		}
 	}
 }
 
-// TestIntegration_Soul_List_Keyset_CovenRegexUnion — a mixed scope coven=prod
-// + regex=^db- on a real PG: visibility = union (OR). A host-in-prod-not-db and a
+// TestIntegration_Soul_List_CovenHostGlobUnion — a mixed scope coven=prod
+// + host matches db-* on a real PG: visibility = union (OR). A host-in-prod-not-db and a
 // host-db-not-prod are both visible on the page-by-page walk; a host-neither is hidden.
-func TestIntegration_Soul_List_Keyset_CovenRegexUnion(t *testing.T) {
+func TestIntegration_Soul_List_CovenHostGlobUnion(t *testing.T) {
 	// ADR-047 G1: the route-gate RequireAction (existence-gate) admits the scoped
 	// operator to the handler; union OR + filter∩scope are computed in the handler.
 	truncateOperators(t)
 	seedOperator(t, "archon-mixed", "")
-	// app-01: prod, not db → visible by coven. db-01: staging, db-* → visible by regex.
+	// app-01: prod, not db → visible by coven. db-01: staging, db-* → visible by glob.
 	// db-02: prod, db-* → visible by both. noise-01: staging, not db → hidden.
 	seedSoulFull(t, "app-01.example.com", "agent", soul.StatusConnected, []string{"prod"}, "archon-mixed")
 	time.Sleep(2 * time.Millisecond)
@@ -2497,14 +2516,14 @@ func TestIntegration_Soul_List_Keyset_CovenRegexUnion(t *testing.T) {
 	time.Sleep(2 * time.Millisecond)
 	seedSoulFull(t, "noise-01.example.com", "agent", soul.StatusConnected, []string{"staging"}, "archon-mixed")
 
-	base, stop := startServer(t, covenAndRegexScopeRBAC("archon-mixed", "prod", "^db-"))
+	base, stop := startServer(t, covenAndHostGlobScopeRBAC("archon-mixed", "prod", "db-*"))
 	defer stop()
 	tok := newValidTokenFor(t, "archon-mixed", []string{"mixed-ops"})
 
-	got := walkSouls(t, base, tok, "limit=2")
+	got, _ := walkSouls(t, base, tok, "", 2)
 	for _, sid := range []string{"app-01.example.com", "db-01.example.com", "db-02.example.com"} {
 		if _, ok := got[sid]; !ok {
-			t.Errorf("union: %s hidden (should be visible via coven OR regex)", sid)
+			t.Errorf("union: %s hidden (should be visible via coven OR host glob)", sid)
 		}
 	}
 	if _, ok := got["noise-01.example.com"]; ok {
@@ -2515,13 +2534,13 @@ func TestIntegration_Soul_List_Keyset_CovenRegexUnion(t *testing.T) {
 	}
 }
 
-// TestIntegration_Soul_List_Keyset_FilterIntersectsScope — a BLOCKER fix on
-// a real PG: regex-scope `^web-` + `?status=connected` → ONLY the
+// TestIntegration_Soul_List_FilterIntersectsScope — a BLOCKER fix on
+// a real PG: host-glob scope `web-*` + `?status=connected` → ONLY the
 // connected web hosts are visible (filter ∩ scope, AND). A pending web host in scope is hidden
-// by the filter. Before the fix the keyset mode would have ignored the query filter.
-func TestIntegration_Soul_List_Keyset_FilterIntersectsScope(t *testing.T) {
-	// ADR-047 G1: the route-gate RequireAction (existence-gate) admits the regex-scoped
-	// operator to the handler; filter∩scope (AND) is computed by the keyset eval.
+// by the filter, and an out-of-scope host is not let in by the filter either.
+func TestIntegration_Soul_List_FilterIntersectsScope(t *testing.T) {
+	// ADR-047 G1: the route-gate RequireAction (existence-gate) admits the pattern-scoped
+	// operator to the handler; filter∩scope (AND) is computed in the pushdown.
 	truncateOperators(t)
 	seedOperator(t, "archon-webops", "")
 	seedSoulFull(t, "web-01.example.com", "agent", soul.StatusConnected, []string{"prod"}, "archon-webops")
@@ -2532,11 +2551,11 @@ func TestIntegration_Soul_List_Keyset_FilterIntersectsScope(t *testing.T) {
 	// a db-out-of-scope host with connected — must not leak through even under the filter.
 	seedSoulFull(t, "db-01.example.com", "agent", soul.StatusConnected, []string{"prod"}, "archon-webops")
 
-	base, stop := startServer(t, regexScopeRBAC("archon-webops", "^web-"))
+	base, stop := startServer(t, hostGlobScopeRBAC("archon-webops", "web-*"))
 	defer stop()
 	tok := newValidTokenFor(t, "archon-webops", []string{"web-ops"})
 
-	got := walkSouls(t, base, tok, "status=connected&limit=2")
+	got, _ := walkSouls(t, base, tok, "status=connected", 2)
 	want := map[string]struct{}{"web-01.example.com": {}, "web-03.example.com": {}}
 	if len(got) != len(want) {
 		t.Fatalf("filter∩scope picked %d, want 2 (connected web-*): %v", len(got), got)
@@ -2547,7 +2566,7 @@ func TestIntegration_Soul_List_Keyset_FilterIntersectsScope(t *testing.T) {
 		}
 	}
 	if _, ok := got["web-02.example.com"]; ok {
-		t.Error("pending web-02 visible under ?status=connected - filter NOT applied in keyset mode (BLOCKER regression)")
+		t.Error("pending web-02 visible under ?status=connected - the query filter is NOT applied (BLOCKER regression)")
 	}
 	if _, ok := got["db-01.example.com"]; ok {
 		t.Error("db-01 outside scope visible - Purview leak")
@@ -2629,34 +2648,34 @@ func TestIntegration_Soul_Get_CovenScope(t *testing.T) {
 	}
 }
 
-// TestIntegration_Soul_Get_RegexScope_ListGetConsistency — guard #3/#6 (gate-fix
-// + InScope OR-regex): a regex-scoped operator. A host visible in List (regex-eval)
+// TestIntegration_Soul_Get_HostGlobScope_ListGetConsistency — guard #3/#6 (gate-fix
+// + InScope OR-glob): a host-glob-scoped operator. A host visible in List (glob-eval)
 // is also reachable by a direct GET /{sid} (200, not 404 — the S3b-2a mismatch is fixed);
 // a non-matching host → 404. This is the key list↔get consistency guard.
-func TestIntegration_Soul_Get_RegexScope_ListGetConsistency(t *testing.T) {
-	// ADR-047 G1: the RequireAction existence-gate admits regex-scoped both to list and
-	// to single-get; the list↔get consistency (InScope OR-regex) is computed by the handler.
+func TestIntegration_Soul_Get_HostGlobScope_ListGetConsistency(t *testing.T) {
+	// ADR-047 G1: the RequireAction existence-gate admits pattern-scoped both to list and
+	// to single-get; the list↔get consistency (InScope OR-glob) is computed by the handler.
 	truncateOperators(t)
 	seedOperator(t, "archon-webops", "")
 	seedSoulFull(t, "web-01.example.com", "agent", soul.StatusConnected, []string{"prod"}, "archon-webops")
 	seedSoulFull(t, "db-01.example.com", "agent", soul.StatusConnected, []string{"prod"}, "archon-webops")
 
-	base, stop := startServer(t, regexScopeRBAC("archon-webops", "^web-"))
+	base, stop := startServer(t, hostGlobScopeRBAC("archon-webops", "web-*"))
 	defer stop()
 	tok := newValidTokenFor(t, "archon-webops", []string{"web-ops"})
 
-	// web-01 is visible in the keyset List…
-	seen := walkSouls(t, base, tok, "limit=10")
+	// web-01 is visible in List…
+	seen, _ := walkSouls(t, base, tok, "", 10)
 	if _, ok := seen["web-01.example.com"]; !ok {
-		t.Fatal("web-01 not visible in regex-scoped List - consistency-test precondition broken")
+		t.Fatal("web-01 not visible in host-glob-scoped List - consistency-test precondition broken")
 	}
 	// …and reachable by a direct GET (previously InScope coven-only → 404 on a visible host).
 	if code := getSoulStatus(t, base, tok, "web-01.example.com"); code != http.StatusOK {
-		t.Errorf("GET web-01 (visible in List via regex ^web-) = %d, want 200 (list<->get consistent)", code)
+		t.Errorf("GET web-01 (visible in List via host matches web-*) = %d, want 200 (list<->get consistent)", code)
 	}
-	// db-01 does NOT match the regex → 404 (outside Purview, does not reveal existence).
+	// db-01 does NOT match the glob → 404 (outside Purview, does not reveal existence).
 	if code := getSoulStatus(t, base, tok, "db-01.example.com"); code != http.StatusNotFound {
-		t.Errorf("GET db-01 (does not match ^web-) = %d, want 404", code)
+		t.Errorf("GET db-01 (does not match web-*) = %d, want 404", code)
 	}
 }
 
@@ -2934,22 +2953,6 @@ func incCovenScopeRBAC(aid, coven string) *rbactest.Config {
 	}
 }
 
-// incStateScopeRBAC — a role with state-scoped incarnation read rights (CEL over
-// incarnation.state). This dimension does NOT resolve in the route-gate request context
-// (state comes only from the DB row), so before Fix 1/2 the scope-aware gate
-// denied such an operator with 403 BEFORE the handler — the main latent hole of G2.
-func incStateScopeRBAC(aid, expr string) *rbactest.Config {
-	return &rbactest.Config{
-		Roles: []rbactest.Role{
-			{Name: "inc-state-ops", Operators: []string{aid}, Permissions: []string{
-				"incarnation.list on state='" + expr + "'",
-				"incarnation.get on state='" + expr + "'",
-				"incarnation.history on state='" + expr + "'",
-			}},
-		},
-	}
-}
-
 // listIncarnations — GET /v1/incarnations?<query> → (total, len(items)). Fails
 // on non-200.
 func listIncarnations(t *testing.T, base, tok, query string) (total, items int) {
@@ -2979,33 +2982,19 @@ func listIncarnations(t *testing.T, base, tok, query string) (total, items int) 
 	return out.Total, len(out.Items)
 }
 
-// TestIntegration_Incarnation_List_StateScope_NoContext_200 — the MAIN G2 win
-// (Fix 1): a state-scoped operator does GET /v1/incarnations WITHOUT extra context →
-// 200 + only the incarnations of its own state-scope (NOT 403). Before Fix 1 the route-gate
-// RequirePermission(NoSelector) → Check(aid,incarnation,list,nil) → the state
-// dimension fail-closed → deny → 403 BEFORE the handler. Regression = a scoped operator
+// TestIntegration_Incarnation_List_CovenScope_NoContext_200 — the G2 win (Fix 1)
+// via HTTP: a scoped operator does GET /v1/incarnations WITHOUT extra context →
+// 200 + only the incarnations of its own scope (NOT 403). Before Fix 1 the route-gate
+// RequirePermission(NoSelector) → Check(aid,incarnation,list,nil) → the scope
+// dimension fail-closed → deny → 403 BEFORE the handler. The existence-only gate
+// admits, the handler narrows via coven-pushdown. Regression = a scoped operator
 // again invisible via HTTP.
-func TestIntegration_Incarnation_List_StateScope_NoContext_200(t *testing.T) {
-	truncateOperators(t)
-	seedOperator(t, "archon-state", "")
-	// redis-8: state.redis_version=8.0 (in scope). redis-7: 7.2 (out of scope).
-	seedIncarnationFull(t, "redis-8", "redis", "archon-state", []string{"prod"}, map[string]any{"redis_version": "8.0"})
-	seedIncarnationFull(t, "redis-7", "redis", "archon-state", []string{"prod"}, map[string]any{"redis_version": "7.2"})
-
-	base, stop := startServer(t, incStateScopeRBAC("archon-state", `state.redis_version == "8.0"`))
-	defer stop()
-	tok := newValidTokenFor(t, "archon-state", []string{"inc-state-ops"})
-
-	total, items := listIncarnations(t, base, tok, "")
-	if total != 1 || items != 1 {
-		t.Fatalf("state-scoped list without context: total=%d items=%d, want 1/1 (redis-8 only)", total, items)
-	}
-}
-
-// TestIntegration_Incarnation_List_CovenScope_NoContext_200 — coven-scoped via
-// HTTP: the existence-only route-gate admits, the handler narrows via coven-pushdown → 200
-// + only the prod incarnation (coven-scoped was also previously denied by the NoSelector gate
-// on an empty context, like state).
+//
+// This used to have a `state='<CEL>'`-scoped twin, which carried the same
+// invariant on a dimension that cannot resolve in the flat request context at
+// all. NIM-128 (ADR-047 S5) removed the state/regex/soulprint dimensions, so the
+// twin went with them — the invariant itself is dimension-agnostic and this test
+// is now its sole guard.
 func TestIntegration_Incarnation_List_CovenScope_NoContext_200(t *testing.T) {
 	truncateOperators(t)
 	seedOperator(t, "archon-coven", "")
@@ -3035,37 +3024,12 @@ func historyIncStatus(t *testing.T, base, tok, name string) int {
 	return getReadStatus(t, base, tok, "/v1/incarnations/"+name+"/history")
 }
 
-// TestIntegration_Incarnation_Get_StateScope — Fix 2: a state-scoped operator
-// reads get/history of a matching incarnation → 200; out of state-scope → 404. Before Fix 2
-// the route-gate RequirePermissionMulti(incScope) did NOT carry the state dimension → deny → 403
-// for an operator who SHOULD see the incarnation. Now the existence-gate +
-// getInScope(state-CEL).
-func TestIntegration_Incarnation_Get_StateScope(t *testing.T) {
-	truncateOperators(t)
-	seedOperator(t, "archon-state", "")
-	seedIncarnationFull(t, "redis-8", "redis", "archon-state", []string{"prod"}, map[string]any{"redis_version": "8.0"})
-	seedIncarnationFull(t, "redis-7", "redis", "archon-state", []string{"prod"}, map[string]any{"redis_version": "7.2"})
-
-	base, stop := startServer(t, incStateScopeRBAC("archon-state", `state.redis_version == "8.0"`))
-	defer stop()
-	tok := newValidTokenFor(t, "archon-state", []string{"inc-state-ops"})
-
-	if code := getIncStatus(t, base, tok, "redis-8"); code != http.StatusOK {
-		t.Errorf("GET redis-8 (state in scope) = %d, want 200 (state-scoped sees get)", code)
-	}
-	if code := getIncStatus(t, base, tok, "redis-7"); code != http.StatusNotFound {
-		t.Errorf("GET redis-7 (state outside scope) = %d, want 404", code)
-	}
-	if code := historyIncStatus(t, base, tok, "redis-8"); code != http.StatusOK {
-		t.Errorf("history redis-8 (state in scope) = %d, want 200 (state-scoped sees history)", code)
-	}
-	if code := historyIncStatus(t, base, tok, "redis-7"); code != http.StatusNotFound {
-		t.Errorf("history redis-7 (state outside scope) = %d, want 404", code)
-	}
-}
-
-// TestIntegration_Incarnation_Get_CovenScope — coven-scoped get/history: own
-// coven → 200, foreign → 404 (parity with souls Get_CovenScope; through the full router).
+// TestIntegration_Incarnation_Get_CovenScope — Fix 2, coven-scoped get/history:
+// own coven → 200, foreign → 404 (parity with souls Get_CovenScope; through the
+// full router). Before Fix 2 the route-gate RequirePermissionMulti(incScope) denied
+// a scoped operator with 403 on a resource it SHOULD see; now it is the
+// existence-gate + getInScope. Sole guard since the `state='<CEL>'`-scoped twin
+// went away with NIM-128 — see [TestIntegration_Incarnation_List_CovenScope_NoContext_200].
 func TestIntegration_Incarnation_Get_CovenScope(t *testing.T) {
 	truncateOperators(t)
 	seedOperator(t, "archon-coven", "")

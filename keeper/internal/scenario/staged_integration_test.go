@@ -1482,7 +1482,7 @@ func TestIntegration_PerHostDifferentWhere_RegisterResolves(t *testing.T) {
 	// coven box-a is only on host-a → per-host where #0 ('box-a' in covens)
 	// passes only on host-a, giving the probe role a different local task_idx on
 	// the two hosts.
-	seedConnectedSoul(t, "host-a.example.com", []string{"redis-prod", "box-a"})
+	seedConnectedSoulInCovens(t, "host-a.example.com", []string{"box-a"}, []string{"redis-prod"})
 	seedConnectedSoul(t, "host-b.example.com", []string{"redis-prod"})
 	gitURL := perHostWhereServiceRepo(t)
 

@@ -151,7 +151,18 @@ func seedIncarnation(t *testing.T, name string) {
 // these tests; the incarnation must already exist (membership FK).
 func seedConnectedSoul(t *testing.T, sid string, incarnations []string) {
 	t.Helper()
-	s := &soul.Soul{SID: sid, Status: soul.StatusConnected}
+	seedConnectedSoulInCovens(t, sid, nil, incarnations)
+}
+
+// seedConnectedSoulInCovens is [seedConnectedSoul] for a host that ALSO carries
+// stable Coven tags. Since NIM-124 the two are different axes and must be seeded
+// separately: `incarnations` become `incarnation_membership` rows (so each one
+// must already exist — membership FK), while `covens` land in `souls.coven[]`,
+// which is what a `where:` predicate reads as `covens`. Passing a coven name in
+// the incarnation list instead is an FK violation, not a coven.
+func seedConnectedSoulInCovens(t *testing.T, sid string, covens, incarnations []string) {
+	t.Helper()
+	s := &soul.Soul{SID: sid, Status: soul.StatusConnected, Coven: covens}
 	if err := soul.Insert(context.Background(), integrationPool, s); err != nil {
 		t.Fatalf("seedConnectedSoul: %v", err)
 	}

@@ -34,26 +34,14 @@ func errandRunScopeRBAC(aid, coven string) *rbactest.Config {
 	}
 }
 
-// errandRunRegexScopeRBAC — scoped errand.run on the regex dimension (`on regex=<pat>`):
-// command-target visibility = regexMatch against the SID ([soulpurview.CompiledScope.Visible]).
-func errandRunRegexScopeRBAC(aid, pattern string) *rbactest.Config {
+// errandRunHostGlobScopeRBAC — scoped errand.run on the host dimension
+// (`on host matches <glob>`): command-target visibility = glob match against the
+// SID. NIM-128 replaced the former `regex=` dimension with this one.
+func errandRunHostGlobScopeRBAC(aid, glob string) *rbactest.Config {
 	return &rbactest.Config{
 		Roles: []rbactest.Role{
-			{Name: "cmd-regex-ops", Operators: []string{aid}, Permissions: []string{
-				"errand.run on regex='" + pattern + "'",
-			}},
-		},
-	}
-}
-
-// errandRunSoulprintScopeRBAC — scoped errand.run with the coven + soulprint dimension
-// (S3b-2b is deferred → Purview.Partial: under-showing, coven works, soulprint does not).
-func errandRunSoulprintScopeRBAC(aid, coven, soulprintExpr string) *rbactest.Config {
-	return &rbactest.Config{
-		Roles: []rbactest.Role{
-			{Name: "cmd-sp-ops", Operators: []string{aid}, Permissions: []string{
-				"errand.run on coven=" + coven,
-				"errand.run on soulprint='" + soulprintExpr + "'",
+			{Name: "cmd-glob-ops", Operators: []string{aid}, Permissions: []string{
+				"errand.run on host matches " + glob,
 			}},
 		},
 	}
@@ -208,71 +196,40 @@ func TestIntegration_Voyage_CommandScope_Unrestricted_FullResolve_202(t *testing
 	}
 }
 
-// Guard #6: regex-scoped errand.run on host=^web- → only web-* (the regex dimension
-// of Purview via Visible). target coven=prod (wide) narrows down to web-*.
-func TestIntegration_Voyage_CommandScope_RegexScope_202(t *testing.T) {
+// Guard #6: host-glob-scoped errand.run on `host matches web-*` → only web-*
+// (the pattern dimension of Purview). target coven=prod (wide) narrows down to web-*.
+//
+// Guard #7 used to sit next to this one: a soulprint-scoped Archon whose scope was
+// only PARTIALLY computable, asserting the fail-closed under-show. NIM-128
+// (ADR-047 S5) removed the soulprint/regex/state dimensions, and every surviving
+// dimension pushes down in [soulpurview.Scope.WhereSQL] — there is no partial
+// purview left to under-show, so the guard was removed rather than reworded.
+func TestIntegration_Voyage_CommandScope_HostGlobScope_202(t *testing.T) {
 	truncateOperators(t)
 	seedOperator(t, "archon-web", "")
 	seedSoulFull(t, "web-01.example.com", "agent", soul.StatusConnected, []string{"prod"}, "archon-web")
 	seedSoulFull(t, "web-02.example.com", "agent", soul.StatusConnected, []string{"prod"}, "archon-web")
 	seedSoulFull(t, "db-01.example.com", "agent", soul.StatusConnected, []string{"prod"}, "archon-web")
 
-	base, stop := startServer(t, errandRunRegexScopeRBAC("archon-web", "^web-"))
+	base, stop := startServer(t, errandRunHostGlobScopeRBAC("archon-web", "web-*"))
 	defer stop()
-	tok := newValidTokenFor(t, "archon-web", []string{"cmd-regex-ops"})
+	tok := newValidTokenFor(t, "archon-web", []string{"cmd-glob-ops"})
 
-	// A wide target coven=prod (3 hosts); regex-scope ^web- narrows it to 2 web-*.
+	// A wide target coven=prod (3 hosts); host-glob scope web-* narrows it to 2 web-*.
 	code, body := postCommandVoyage(t, base, tok,
 		`{"kind":"command","module":"core.cmd.shell","target":{"coven":["prod"]}}`)
 	if code != http.StatusAccepted {
 		t.Fatalf("status = %d, want 202; body=%s", code, body)
 	}
 	if scope := scopeSizeFromReply(t, body); scope != 2 {
-		t.Errorf("scope_size = %d, want 2 (only web-*, db-01 trimmed out by the regex)", scope)
+		t.Errorf("scope_size = %d, want 2 (only web-*, db-01 trimmed out by the glob)", scope)
 	}
 
-	// An explicit db-01 (doesn't match ^web-) → 403 (anti-escalation).
+	// An explicit db-01 (doesn't match web-*) → 403 (anti-escalation).
 	code2, body2 := postCommandVoyage(t, base, tok,
 		`{"kind":"command","module":"core.cmd.shell","target":{"sids":["db-01.example.com"]}}`)
 	if code2 != http.StatusForbidden {
-		t.Fatalf("explicit db-01 (does not match ^web-): status = %d, want 403; body=%s", code2, body2)
-	}
-}
-
-// Guard #7: soulprint-scoped (Partial — S3b-2b deferred) → under-showing: the coven
-// dimension works, soulprint is NOT evaluated (a host reachable ONLY via
-// soulprint is not caught — fail-closed, never over-show). An Archon with
-// coven=A + soulprint=... sees exactly coven-A; nothing foreign gets caught.
-func TestIntegration_Voyage_CommandScope_SoulprintPartial_UnderShow_202(t *testing.T) {
-	truncateOperators(t)
-	seedOperator(t, "archon-sp", "")
-	// Both are in shared. a-01 is also in coven-a (visible via the coven dimension). b-01 is
-	// in coven-b — it would only be reachable via soulprint (not evaluated in the MVP →
-	// Partial under-showing), it is NOT visible via coven-a → not caught.
-	seedSoulFull(t, "a-01.example.com", "agent", soul.StatusConnected, []string{"shared", "coven-a"}, "archon-sp")
-	seedSoulFull(t, "b-01.example.com", "agent", soul.StatusConnected, []string{"shared", "coven-b"}, "archon-sp")
-
-	base, stop := startServer(t, errandRunSoulprintScopeRBAC("archon-sp", "coven-a", "soulprint.self.os.family == 'debian'"))
-	defer stop()
-	tok := newValidTokenFor(t, "archon-sp", []string{"cmd-sp-ops"})
-
-	// A wide target coven=shared (2 hosts): coven-A works (a-01), soulprint
-	// under-shows (b-01 is not caught). scope_size = 1.
-	code, body := postCommandVoyage(t, base, tok,
-		`{"kind":"command","module":"core.cmd.shell","target":{"coven":["shared"]}}`)
-	if code != http.StatusAccepted {
-		t.Fatalf("status = %d, want 202; body=%s", code, body)
-	}
-	if scope := scopeSizeFromReply(t, body); scope != 1 {
-		t.Errorf("scope_size = %d, want 1 (coven-a dimension works, soulprint under-shows)", scope)
-	}
-
-	// An explicit b-01 (outside coven-A, would only be reachable via soulprint) → 403
-	// (fail-closed: under-showing hides it, an explicit reference = escalation).
-	code2, body2 := postCommandVoyage(t, base, tok,
-		`{"kind":"command","module":"core.cmd.shell","target":{"sids":["b-01.example.com"]}}`)
-	if code2 != http.StatusForbidden {
-		t.Fatalf("explicit b-01 (soulprint-only, under-shown): status = %d, want 403; body=%s", code2, body2)
+		t.Fatalf("explicit db-01 (does not match web-*): status = %d, want 403; body=%s", code2, body2)
 	}
 }
 

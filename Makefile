@@ -235,14 +235,28 @@ test-race:
 # Files tagged `integration` are NOT built by a plain `go test ./...`, so
 # we pass `-tags=integration` explicitly here. `-count=1` disables the Go test cache
 # (the container spun up is new every time - nothing to cache).
+#
+# SOUL_STACK_INTEGRATION_REQUIRE_DOCKER=1 is the point of the target: without it a
+# TestMain whose container fails to come up logs "docker unavailable" and returns 0,
+# so whole packages silently do not run while the target reports success (that is how
+# 4 packages "passed" in the NIM-221 run). Override to 0 only to reproduce the
+# skip-when-no-docker behaviour deliberately.
+#
+# INTEGRATION_PARALLEL caps how many packages - i.e. how many container sets - start
+# at once. Unbounded, the default GOMAXPROCS-wide start swamps the docker daemon and
+# packages fail on the testcontainers reaper rather than on their own assertions.
+INTEGRATION_PARALLEL ?= 4
+SOUL_STACK_INTEGRATION_REQUIRE_DOCKER ?= 1
+
 test-integration:
 	@for m in $(MODULES); do \
 		if [ -z "$$(cd $$m && go list ./... 2>/dev/null)" ]; then \
 			echo "skip $$m (no Go packages)"; \
 			continue; \
 		fi; \
-		echo "go test -tags=integration -race -count=1 ./... in $$m"; \
-		(cd $$m && go test -tags=integration -race -count=1 ./...) || exit 1; \
+		echo "go test -tags=integration -race -count=1 -p $(INTEGRATION_PARALLEL) ./... in $$m"; \
+		(cd $$m && SOUL_STACK_INTEGRATION_REQUIRE_DOCKER=$(SOUL_STACK_INTEGRATION_REQUIRE_DOCKER) \
+			go test -tags=integration -race -count=1 -p $(INTEGRATION_PARALLEL) ./...) || exit 1; \
 	done
 
 # L3a fast-loop E2E (ADR-039): the working harness - testcontainers (PG+Redis+Vault) +

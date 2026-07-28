@@ -895,13 +895,16 @@ func TestCluster_ConcurrentMixedBridgeChurn_HeldBridgeInvariant(t *testing.T) {
 	default:
 	}
 
-	// The anchor still holds the bridge.
-	if n := redisSubCount(mr, applyID); n != 1 {
-		t.Fatalf("redis subscribers = %d after churn (anchor alive), want 1 (no refs-leak, no premature close)", n)
-	}
-	if got := b.Subscribers(applyID); got != 1 {
-		t.Fatalf("local Subscribers = %d after churn, want 1 (anchor only)", got)
-	}
+	// The anchor still holds the bridge. wg.Wait above only proves every worker
+	// STOPPED subscribing — a churned subscriber is torn down by its own context,
+	// asynchronously, so the counts converge shortly after rather than at this
+	// instant. Asserting the value directly here reads a straggler as a refs leak
+	// on a loaded box; the settled value is the invariant, same as the teardown
+	// assertions below.
+	waitFor(t, 5*time.Second, func() bool { return redisSubCount(mr, applyID) == 1 },
+		"redis subscribers did not settle at 1 after churn (anchor alive): refs leak or premature close")
+	waitFor(t, 5*time.Second, func() bool { return b.Subscribers(applyID) == 1 },
+		"local subscribers did not settle at 1 after churn (anchor only)")
 
 	// Drop the anchor — the bridge must collapse (refs=0). Proves there's no
 	// refs leak: a stray increment would leave refs>0 forever.

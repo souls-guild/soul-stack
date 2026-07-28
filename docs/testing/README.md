@@ -49,8 +49,12 @@ is not added to the current slice.
 
 `make check` is deliberately docker-free, so anything that requires containers
 drops out of it and is NOT caught on every PR. Before release these targets
-**be sure to run it manually** - otherwise stale-fails accumulate unnoticed
-(6 stale-fails have already accumulated in L1, which only surfaced when running manually):
+**be sure to run it manually** - otherwise stale-fails accumulate unnoticed.
+The last inventory (NIM-221) found 15 of them at once in L1: tests still seeding
+scope selectors NIM-128 had removed, and a helper that kept binding coven names
+as incarnation memberships after NIM-124 changed the roster axis. Both are the
+same failure mode - a deliberate contract change that nothing re-ran the suite
+against.
 
 - **L1 — `make test-integration`** (build-tag `integration`, testcontainers
 PG / Redis / Vault, docker is needed). Covers keeper-integration, which
@@ -65,6 +69,10 @@ smoke on a real `soul` binary; usually nightly, but run it before release.
 One-time flask at the start of the container (testcontainers infra - for example timeout
 raising Vault) is not a code regression: rerun in isolation
 affected package (`go test -tags=integration ./<pkg>/...`) rather than rollback the changes.
+`make test-integration` caps how many packages start containers at once
+(`INTEGRATION_PARALLEL`, default 4) precisely to keep that class of noise down,
+and sets `SOUL_STACK_INTEGRATION_REQUIRE_DOCKER=1` so a container that fails to
+come up is a failure rather than a silent skip that leaves the target green.
 
 ## Local live-gate of large features (`make e2e-live-gate`)
 
