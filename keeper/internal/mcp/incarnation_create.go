@@ -213,19 +213,9 @@ func (h *Handler) callIncarnationCreate(ctx context.Context, claims *jwt.Claims,
 		return h.toolError(req.ID, toolName, mcpCodeInternalError, "insert incarnation failed")
 	}
 
-	// Sync hook (ADR-060 amend R1, parity with REST CreateTyped):
-	// incarnation.traits → member souls' souls.traits. Gated on non-empty
-	// traits (otherwise the projection would overwrite per-soul traits with
-	// `{}`). On create there are usually 0 members (onboarding happens in
-	// scenario create) → no-op; the bind hook catches hosts up later.
-	// Best-effort (log, don't fail create): the incarnation is already
-	// created, sync will converge on the next bind.
-	if len(traits) > 0 {
-		if serr := incarnation.SyncTraitsToHosts(ctx, h.deps.IncarnationDB, name, traits); serr != nil {
-			h.deps.Logger.Warn("mcp: incarnation.create sync traits -> souls failed (best-effort)",
-				slog.String("name", name), slog.Any("error", serr))
-		}
-	}
+	// No projection onto member hosts (ADR-080, parity with REST CreateTyped):
+	// the labels stay on the incarnation and reach hosts by inheritance at read
+	// time, covering hosts that join later.
 
 	// apply_id is generated only when the bootstrap run starts (runCreate). bare
 	// (no create scenario) OR auto_create=false → the incarnation stays ready

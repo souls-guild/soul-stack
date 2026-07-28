@@ -137,11 +137,11 @@ var AllowedPermissions = map[string]struct{}{
 	// roles keep access to /hosts.
 	"incarnation.update": {},
 	// incarnation.traits-set — a wholesale replacement of an incarnation's
-	// operator-set trait labels (`incarnation.traits` jsonb, ADR-060 amend
-	// R1) via `PUT /v1/incarnations/{name}/traits`. incarnation.traits is
-	// the source of truth, projected by a sync hook into `souls.traits` of
-	// member hosts; moves operator-facing trait management from per-soul
-	// (`soul.traits-assign`, deprecated) to per-incarnation. Action is
+	// operator-set trait labels (`incarnation.traits` jsonb, ADR-060) via
+	// `PUT /v1/incarnations/{name}/traits`. The labels stay on the
+	// incarnation; member hosts inherit them at read time (ADR-080), so this
+	// is the per-INSTANCE counterpart of the per-HOST `soul.traits-assign`
+	// and neither overwrites the other. Action is
 	// hyphenated (`traits-set`) since the permission grammar is exactly
 	// `<resource>.<action>` (pattern: soul.traits-assign /
 	// incarnation.update-hosts). Same scope selector
@@ -162,15 +162,18 @@ var AllowedPermissions = map[string]struct{}{
 	"soul.create":       {},
 	"soul.issue-token":  {},
 	"soul.coven-assign": {},
-	// soul.traits-assign — bulk mutation of operator-set trait labels
-	// (jsonb column `souls.traits`, ADR-060) across a selector:
+	// soul.traits-assign — bulk mutation of the trait labels attached to
+	// HOSTS (jsonb column `souls.traits`, ADR-060) across a selector:
 	// merge/replace/remove. Action is hyphenated (`traits-assign`) since
 	// the permission grammar is exactly `<resource>.<action>` (pattern:
 	// soul.coven-assign / soul.ssh-target-update). Same selector as
-	// soul.coven-assign (`coven=` / `host=` / bare): bulk trait-assign is
-	// gated by the same coven-scope (gate a, target hosts ⊆ scope) —
-	// least-privilege isn't weakened. The trait KEY is NOT a scope
-	// dimension (unlike a Coven label), so there's no gate (b) on keys.
+	// soul.coven-assign (`coven=` / `host=` / bare), and both of its gates:
+	// target hosts ⊆ the operator's coven-scope (gate a), plus — for
+	// merge/replace — every pair attached ⊆ its own trait-scope (gate b,
+	// ADR-080). Gate (b) is what stops a holder from handing a host to a
+	// foreign role by stamping its pair, now that a host-attached trait
+	// grants visibility permanently and `trait.<key>=v` is a scope
+	// dimension (NIM-128); `remove` is ungated on the pair, as with coven.
 	"soul.traits-assign": {},
 	// soul.ssh-target-update — changes per-host SSH credentials for the
 	// push flow (ADR-032 amendment 2026-05-26, S7-1). Action is hyphenated

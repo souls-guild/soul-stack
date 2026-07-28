@@ -18,7 +18,6 @@ import (
 	"github.com/souls-guild/soul-stack/keeper/internal/jwt"
 	keeperredis "github.com/souls-guild/soul-stack/keeper/internal/redis"
 	"github.com/souls-guild/soul-stack/keeper/internal/soul"
-	"github.com/souls-guild/soul-stack/keeper/internal/soulpurview"
 )
 
 // telemetryAggregateHostCap — the host ceiling in an incarnation aggregate. The souls
@@ -279,7 +278,7 @@ func (h *SoulHandler) AuthorizeReadScope(ctx context.Context, claims *jwt.Claims
 		h.logger.Error("soul.telemetry: scope select failed", slog.String("sid", sid), slog.Any("error", err))
 		return &problemError{problem.New(problem.TypeInternalError, "", "get soul failed")}
 	}
-	if !soulpurview.InScope(h.readScopeForClaims(claims), sid, s.Coven, soulpurview.TraitsInput(s.Traits)) {
+	if !h.inScopeWithInherited(ctx, claims, s) {
 		return &problemError{problem.New(problem.TypeNotFound, "", "soul "+sid+" not found")}
 	}
 	return nil
@@ -309,7 +308,11 @@ func (h *SoulHandler) SIDsInIncarnationInScope(ctx context.Context, claims *jwt.
 	}
 	out := make([]string, 0, len(items))
 	for _, s := range items {
-		if soulpurview.InScope(scope, s.SID, s.Coven, soulpurview.TraitsInput(s.Traits)) {
+		// Effective labels (ADR-080): every member inherits this incarnation's
+		// labels, and possibly another's — so the union is per host, not one
+		// lookup for the roster. Unrestricted short-circuits inside the gate,
+		// which is the case that would otherwise pay for it on every host.
+		if h.inScopeWithInherited(ctx, claims, s) {
 			out = append(out, s.SID)
 		}
 	}

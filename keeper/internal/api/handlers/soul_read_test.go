@@ -35,6 +35,12 @@ type fakeReadPool struct {
 
 	// soulMissing=true → SelectBySID and SelectSoulprint return pgx.ErrNoRows.
 	soulMissing bool
+
+	// inheritedCovens / inheritedTraits: the labels the host inherits from its
+	// incarnations (ADR-080), served to soul.LoadInheritedLabels. Zero values
+	// mean "belongs to no incarnation".
+	inheritedCovens []string
+	inheritedTraits []byte
 }
 
 func (f *fakeReadPool) BeginTx(context.Context, pgx.TxOptions) (pgx.Tx, error) {
@@ -51,6 +57,18 @@ func (f *fakeReadPool) Query(context.Context, string, ...any) (pgx.Rows, error) 
 
 func (f *fakeReadPool) QueryRow(_ context.Context, sql string, _ ...any) pgx.Row {
 	switch {
+	case strings.Contains(sql, soul.InheritedLabelsQueryMarker):
+		// soul.LoadInheritedLabels (ADR-080) — the scope gate resolves effective
+		// labels, so every single-object read issues this before deciding.
+		traits := f.inheritedTraits
+		if traits == nil {
+			traits = []byte("[]")
+		}
+		covens := f.inheritedCovens
+		if covens == nil {
+			covens = []string{}
+		}
+		return staticRow{values: []any{covens, traits}}
 	case strings.Contains(sql, "soulprint_facts") && strings.Contains(sql, "WHERE sid = $1"):
 		if f.soulMissing {
 			return errRow{err: pgx.ErrNoRows}
@@ -604,6 +622,11 @@ func (f *fakeHistoryPool) Exec(context.Context, string, ...any) (pgconn.CommandT
 }
 
 func (f *fakeHistoryPool) QueryRow(_ context.Context, sql string, _ ...any) pgx.Row {
+	// Inherited labels (ADR-080) — part of the same scope gate; this host belongs
+	// to no incarnation in these tests.
+	if strings.Contains(sql, soul.InheritedLabelsQueryMarker) {
+		return staticRow{values: []any{[]string{}, []byte("[]")}}
+	}
 	// scope-gate (SelectBySID) — a souls row with covens; runs BEFORE the history count SQL.
 	if strings.Contains(sql, "FROM souls") && strings.Contains(sql, "WHERE sid = $1") {
 		if f.soulMissing {

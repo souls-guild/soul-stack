@@ -87,11 +87,13 @@ func TestSchemaNames_Incarnation(t *testing.T) {
 	}
 }
 
-// TestTraitsRelocation_OpenAPI — gate for the Trait relocation per-soul → per-incarnation
-// (ADR-060 amend R1): (1) POST /v1/incarnations carries a top-level `traits` field;
-// (2) PUT /v1/incarnations/{name}/traits is mounted (operationId setIncarnationTraits);
-// (3) per-soul POST /v1/souls/traits is marked deprecated:true. Any rollback reddens it.
-func TestTraitsRelocation_OpenAPI(t *testing.T) {
+// TestTraitAxes_OpenAPI — gate for Trait being an axis on BOTH levels (ADR-080):
+// (1) POST /v1/incarnations carries a top-level `traits` field; (2) PUT
+// /v1/incarnations/{name}/traits is mounted (operationId setIncarnationTraits);
+// (3) per-soul POST /v1/souls/traits is present and NOT deprecated — the host is a
+// first-class place to attach a label, not a leftover of the ADR-060 relocation.
+// Losing either surface, or re-deprecating the per-soul one, reddens it.
+func TestTraitAxes_OpenAPI(t *testing.T) {
 	y, err := HumaFullSpecYAML()
 	if err != nil {
 		t.Fatalf("HumaFullSpecYAML: %v", err)
@@ -126,7 +128,7 @@ func TestTraitsRelocation_OpenAPI(t *testing.T) {
 		t.Error("operationId setIncarnationTraits missing from spec")
 	}
 
-	// (3) per-soul deprecated:true.
+	// (3) per-soul present and first-class.
 	soulTraits, ok := doc.Paths["/v1/souls/traits"]
 	if !ok {
 		t.Fatal("path /v1/souls/traits MISSING from spec")
@@ -141,8 +143,8 @@ func TestTraitsRelocation_OpenAPI(t *testing.T) {
 	if err := postNode.Decode(&op); err != nil {
 		t.Fatalf("decode soul.traits POST: %v", err)
 	}
-	if !op.Deprecated {
-		t.Error("POST /v1/souls/traits NOT marked deprecated:true (per-soul to per-incarnation relocation not reflected)")
+	if op.Deprecated {
+		t.Error("POST /v1/souls/traits marked deprecated:true -- a host is a first-class place to attach a trait (ADR-080)")
 	}
 }
 

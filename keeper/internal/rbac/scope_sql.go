@@ -15,11 +15,23 @@ import (
 // table. An empty string means the resource does not carry that dimension —
 // a condition on it renders FALSE.
 type ScopeColumns struct {
-	Coven       string // TEXT[] column (overlap), e.g. "s.coven"
-	Host        string // TEXT column matched by host, e.g. "s.sid"
+	Coven       string // TEXT[] column (overlap), e.g. "souls.coven"
+	Host        string // TEXT column matched by host, e.g. "souls.sid"
 	Service     string // TEXT column, e.g. "i.service"
 	Incarnation string // TEXT column, e.g. "i.name"
-	Traits      string // jsonb column, e.g. "s.traits"
+	Traits      string // jsonb column, e.g. "souls.traits"
+
+	// MembershipSID enables label inheritance (ADR-080): the resource's SID
+	// column, QUALIFIED (e.g. "souls.sid"), correlating a subquery over
+	// `incarnation_membership`. When set, the coven and trait conditions also
+	// match labels the row inherits from the incarnations it belongs to — a
+	// label lives only where it was attached, and the union happens here.
+	// Empty (the incarnation table, which carries its labels directly) leaves
+	// both conditions matching own columns only.
+	//
+	// MUST be table-qualified: the subquery aliases `incarnation_membership m`,
+	// so a bare "sid" would resolve to `m.sid` and correlate the row to itself.
+	MembershipSID string
 }
 
 // PurviewSQL renders a Purview into a parameterized SQL boolean expression over
@@ -90,7 +102,13 @@ func (b *scopeSQLBuilder) cond(c *ScopeCond) string {
 			return "FALSE"
 		}
 		// Array overlap: the row's coven set intersects the condition's values.
-		return fmt.Sprintf("%s && %s::text[]", b.cols.Coven, b.ph(append([]string(nil), c.Values...)))
+		vals := b.ph(append([]string(nil), c.Values...))
+		own := fmt.Sprintf("%s && %s::text[]", b.cols.Coven, vals)
+		// Inherited (ADR-080): an incarnation the host belongs to carries a
+		// matching tag. Its NAME counts as one — the incarnation-side resolver
+		// already scopes on `covens && $x OR name = ANY($x)`, so host
+		// visibility has to agree.
+		return b.orInherited(own, fmt.Sprintf("i.covens && %s::text[] OR i.name = ANY(%s::text[])", vals, vals))
 	case dimService:
 		return b.inList(b.cols.Service, c.Values)
 	case dimIncarnation:
@@ -110,10 +128,34 @@ func (b *scopeSQLBuilder) cond(c *ScopeCond) string {
 		// Scalar value: traits->>'k' ∈ values. List value: traits->'k' ?| values.
 		vals := b.ph(append([]string(nil), c.Values...))
 		key := b.ph(c.Key)
-		return fmt.Sprintf("(%s ->> %s = ANY(%s) OR %s -> %s ?| %s)",
+		own := fmt.Sprintf("(%s ->> %s = ANY(%s) OR %s -> %s ?| %s)",
 			b.cols.Traits, key, vals, b.cols.Traits, key, vals)
+		// Inherited (ADR-080): the same pair on an incarnation the host belongs
+		// to. Own and inherited are OR-ed, never ranked — `owner=dba` on the
+		// incarnation and `owner=bobik` on the host both grant.
+		return b.orInherited(own, fmt.Sprintf("i.traits ->> %s = ANY(%s) OR i.traits -> %s ?| %s",
+			key, vals, key, vals))
 	}
 	return "FALSE"
+}
+
+// orInherited widens an own-column predicate with the same predicate evaluated
+// over the incarnations the row belongs to (ADR-080 label inheritance). Returns
+// `own` untouched when the resource carries no membership correlation
+// (MembershipSID empty) — the incarnation table holds its labels directly.
+//
+// `incarnationPred` is written against the alias `i` (and may reference `m`);
+// both are local to the subquery, so an outer query using those letters is
+// unaffected.
+func (b *scopeSQLBuilder) orInherited(own, incarnationPred string) string {
+	if b.cols.MembershipSID == "" {
+		return own
+	}
+	return fmt.Sprintf(`(%s OR EXISTS (
+    SELECT 1 FROM incarnation_membership m
+    JOIN incarnation i ON i.name = m.incarnation_name
+    WHERE m.sid = %s AND (%s)
+))`, own, b.cols.MembershipSID, incarnationPred)
 }
 
 // inList renders `col = ANY($vals::text[])`, or FALSE when the column is absent.

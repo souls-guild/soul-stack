@@ -271,7 +271,9 @@ func TestAssignTraits_EmptySelector_422(t *testing.T) {
 // carries keys but NOT trait values; source=api; scope_applied reflects the scope.
 func TestAssignTraits_AuditPayload_NoValues(t *testing.T) {
 	pool := &fakeSoulPool{listCount: 1, bulkScanned: 1, bulkChanged: 1}
-	h := NewSoulHandler(pool, fakeScoper{covens: []string{"dev"}}, nil, nil)
+	// The operator is scoped on the very pair it writes, so gate (b) (ADR-080)
+	// admits it and the assertion under test stays the audit payload.
+	h := NewSoulHandler(pool, fakeScoper{covens: []string{"dev"}, exprs: []string{"trait.namespace=secret-value"}}, nil, nil)
 
 	reply, err := h.AssignTraitsTyped(context.Background(), claimsFor("archon-alice"), SoulTraitsAssignInput{
 		Mode:     "merge",
@@ -303,11 +305,11 @@ func TestAssignTraits_AuditPayload_NoValues(t *testing.T) {
 // TestAssignTraits_ScopedOperator_HostOutOfScope_0Changed — least-privilege GUARD
 // (gate a): a coven-scoped operator (scope=dev) with selector=sids[prod-host] reaches
 // the bulk layer, but the scope predicate in WHERE yields 0 hosts (fakeDB listCount=0) →
-// 200 + matched/changed=0, no UPDATE. The trait key is NOT checked by scope gate (b)
-// (it is not a scope dimension) — the only guard here is gate (a) on hosts.
+// 200 + matched/changed=0, no UPDATE. The operator is given the pair in its trait-scope
+// so gate (b) passes and gate (a) is what the test actually exercises.
 func TestAssignTraits_ScopedOperator_HostOutOfScope_0Changed(t *testing.T) {
 	pool := &fakeSoulPool{listCount: 0} // the scope filter made matched=0.
-	h := NewSoulHandler(pool, fakeScoper{covens: []string{"dev"}}, nil, nil)
+	h := NewSoulHandler(pool, fakeScoper{covens: []string{"dev"}, exprs: []string{"trait.x=y"}}, nil, nil)
 	rec := doAssignTraits(t, h, SoulTraitsAssignInput{
 		Mode:     "merge",
 		Traits:   map[string]any{"x": "y"},

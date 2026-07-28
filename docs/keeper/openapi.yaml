@@ -12100,8 +12100,7 @@ paths:
         - soul
   /v1/souls/traits:
     post:
-      deprecated: true
-      description: "DEPRECATED (ADR-060): use PUT /v1/incarnations/{name}/traits (incarnation.traits - source of truth, projected into souls.traits). Bulk merge/replace/remove operator-set trait-tags (souls.traits jsonb) on hosts under selector ∩ coven-scope. Per-soul write is overwritten by the incarnation.traits projection. Permission soul.traits-assign. partial -> 200 status:partial."
+      description: "Bulk merge/replace/remove of operator-set trait-tags attached to HOSTS (souls.traits jsonb) on hosts under selector ∩ coven-scope. A host's effective traits are these unioned with the traits of every incarnation it belongs to (ADR-080): labelling the incarnation covers hosts that join later, labelling the host covers exactly one. Permission soul.traits-assign; merge/replace additionally require every pair to lie inside the operator's own trait-scope (gate b). partial -> 200 status:partial."
       operationId: assignSoulTraits
       parameters:
         - description: count matched without UPDATE (OR with body.dry_run)
@@ -12148,7 +12147,7 @@ paths:
               schema:
                 $ref: "#/components/schemas/HumaProblemError"
           description: Internal Server Error
-      summary: Bulk assignment of trait-tags (deprecated)
+      summary: Bulk assignment of trait-tags to hosts
       tags:
         - soul
   /v1/souls/{sid}:

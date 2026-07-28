@@ -47,6 +47,23 @@ Fixed by the user (R4). The original "Decision" made `incarnation.name` the **ro
 
 **Supersedes.** The "Decision" line "`incarnation.name` remains the root Coven tag … assigned automatically by keeper" and amendment item (D) "`coven = incarnation.covens ∪ {incarnation.name}`". The removed `{incarnation.name}-{role}` sub-coven rule (already removed by the original Decision) is unaffected. The cross-incarnation prohibition (Voyage amendment above) stands — it is now enforced by the membership roster rather than by the name-coven.
 
-**Amends [ADR-060](0060-traits.md#adr-060-trait--operator-set-key-value-labels-on-the-incarnation-relocated-from-soul).** The Trait projection's member criterion ("member of incarnation = host whose incarnation name ∈ `souls.coven[]`", `soul.BulkSelector{Incarnation}`) now resolves membership via `incarnation_membership`, not via `= ANY(coven)`. The Trait read/target layer is otherwise untouched.
+**Amends [ADR-060](0060-traits.md#adr-060-trait--operator-set-key-value-labels-host-and-incarnation).** The Trait projection's member criterion ("member of incarnation = host whose incarnation name ∈ `souls.coven[]`", `soul.BulkSelector{Incarnation}`) now resolves membership via `incarnation_membership`, not via `= ANY(coven)`. The Trait read/target layer is otherwise untouched.
 
 **Trade-off.** A one-time migration cost (backfill + coven strip) and a behavior change for RBAC roles scoped by `coven=<incarnation-name>` and for scenarios using `on: ["${ incarnation.name }"]` (now the omitted form). We accept it: the coven axis stops meaning two things at once, membership becomes explicit and auditable, and `mode: replace` on coven can no longer accidentally sever a host from its incarnation.
+
+**Amendment (2026-07-27, NIM-121 — Coven is inherited from the incarnation, [ADR-080](0080-label-inheritance-union.md)).** Until now an
+incarnation-level Coven tag granted nothing on that incarnation's hosts: host visibility and targeting resolved over `souls.coven` alone. Before
+[NIM-124](#amendment-2026-07-17-nim-124--incarnationname-is-not-a-coven--membership-is-a-first-class-relation) this was papered over by injecting
+`incarnation.name` into `souls.coven[]`; splitting membership out correctly removed that copy, and with it the only path by which an incarnation tag
+reached its hosts.
+
+ADR-080 restores the reach WITHOUT restoring the copy. A host's **effective** covens are its own `souls.coven[]` unioned, at read time, with the
+`incarnation.covens[]` of every incarnation it belongs to (`incarnation_membership`) **plus those incarnations' names** — the name is already treated as
+a coven tag on the incarnation side (`covens && $x OR name = ANY($x)`), so host visibility has to agree or `coven=<incarnation>` would show the
+incarnation while hiding everything inside it. NIM-124 stands: nothing is written into `souls.coven`, and membership remains the first-class relation.
+The union is resolved by every reader of the coven axis — the RBAC scope predicate (a correlated `EXISTS`, still pushed down to SQL),
+`soulprint.self.covens` / `soulprint.hosts[].covens`, and the Voyage target filter — so a `where:` and a scope check cannot disagree about one host.
+
+Practical consequence: **prefer labelling the incarnation.** A tag there covers every host that joins it later, with no re-stamping; a tag on the host
+covers exactly one VM. The write paths are unchanged (`POST /v1/souls/coven` for a host, the incarnation's own `covens` for an incarnation), as are both
+of coven-assign's gates.

@@ -168,14 +168,11 @@ func soulTraitsAssignOperation() huma.Operation {
 		OperationID: "assignSoulTraits",
 		Method:      http.MethodPost,
 		Path:        "/traits",
-		Summary:     "Bulk assignment of trait-tags (deprecated)",
-		// DEPRECATED (ADR-060 amend R1): operator-set trait management moved
-		// per-soul → per-incarnation. The source of truth is incarnation.traits
-		// (PUT /v1/incarnations/{name}/traits), projected into souls.traits
-		// by a sync hook. A per-soul write here is overwritten by the next projection.
-		// The endpoint is kept forward-compat (NOT removed); a call writes a warn log.
-		Deprecated:    true,
-		Description:   "DEPRECATED (ADR-060): use PUT /v1/incarnations/{name}/traits (incarnation.traits - source of truth, projected into souls.traits). Bulk merge/replace/remove operator-set trait-tags (souls.traits jsonb) on hosts under selector \u2229 coven-scope. Per-soul write is overwritten by the incarnation.traits projection. Permission soul.traits-assign. partial -> 200 status:partial.",
+		Summary:     "Bulk assignment of trait-tags to hosts",
+		// First-class again (ADR-080): a host-attached label is stored on the host
+		// and nothing projects over it, so this is the per-host counterpart of
+		// PUT /v1/incarnations/{name}/traits rather than a deprecated leftover.
+		Description:   "Bulk merge/replace/remove of operator-set trait-tags attached to HOSTS (souls.traits jsonb) on hosts under selector \u2229 coven-scope. A host's effective traits are these unioned with the traits of every incarnation it belongs to (ADR-080): labelling the incarnation covers hosts that join later, labelling the host covers exactly one. Permission soul.traits-assign; merge/replace additionally require every pair to lie inside the operator's own trait-scope (gate b). partial -> 200 status:partial.",
 		Tags:          []string{"soul"},
 		DefaultStatus: http.StatusOK,
 		Errors:        []int{http.StatusBadRequest, http.StatusForbidden, http.StatusUnprocessableEntity, http.StatusInternalServerError},

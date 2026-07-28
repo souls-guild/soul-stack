@@ -316,6 +316,12 @@ func (h *Holder) CovenScope(aid, resource, action string) ([]string, bool) {
 	return h.current().CovenScope(aid, resource, action)
 }
 
+// TraitScope is AID's trait scope for (resource, action) in the current
+// snapshot. See [Enforcer.TraitScope].
+func (h *Holder) TraitScope(aid, resource, action string) (map[string][]string, bool) {
+	return h.current().TraitScope(aid, resource, action)
+}
+
 // ResolvePurview is AID's scope boundary (Purview by dimension) for
 // (resource, action) in the current snapshot. See [Enforcer.ResolvePurview].
 // Needed for scoped visibility on `GET /v1/souls` (ADR-047 S3b,

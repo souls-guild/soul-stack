@@ -13,19 +13,21 @@ import (
 )
 
 // keeper.incarnation.traits-set — parity with REST PUT
-// /v1/incarnations/{name}/traits (IncarnationHandler.SetTraitsTyped, ADR-060
-// amend R1). Wholesale REPLACES the incarnation's operator-set trait labels
-// (`incarnation.traits` is the source of truth) → persisted in one FOR
-// UPDATE tx → materialized projection into member hosts' `souls.traits`
-// ([incarnation.SyncTraitsToHosts]). Moves operator-facing trait management
-// from per-soul (keeper.soul.traits-assign, deprecated) to per-incarnation.
+// /v1/incarnations/{name}/traits (IncarnationHandler.SetTraitsTyped, ADR-060).
+// Wholesale REPLACES the incarnation's operator-set trait labels in one FOR
+// UPDATE tx. The write ends there: member hosts inherit the new set at read
+// time (ADR-080), so nothing is projected onto a host row and a label attached
+// directly to a host is never overwritten. The per-host counterpart is
+// keeper.soul.traits-assign.
 //
 // SECURITY. RBAC — body-scoped OR-Check over the incarnation's coven/service
 // scope (covens ∪ {name}, mirrors REST IncarnationScopeSelector + permission
 // incarnation.traits-set). Without it MCP would bypass REST protection (MCP
 // has no chi middleware). scope is resolved via a separate probe-SelectByName
-// (same cold RBAC round-trip as REST). trait KEYS are not a scope dimension
-// — no gate on keys.
+// (same cold RBAC round-trip as REST). No gate on trait keys here — this route
+// labels the incarnation, and the operator already holds it by scope; the
+// per-pair gate (b) belongs to the per-HOST write, where a pair can be attached
+// to a machine outside the label's own scope.
 
 type incarnationTraitsSetArgs struct {
 	Name   string         `json:"name"`
@@ -94,13 +96,8 @@ func (h *Handler) callIncarnationTraitsSet(ctx context.Context, claims *jwt.Clai
 		return h.toolError(req.ID, toolName, mcpCodeInternalError, "update incarnation traits failed")
 	}
 
-	// Sync hook (ADR-060 amend R1): incarnation.traits → member hosts'
-	// souls.traits. Best-effort (log, don't fail the tool): incarnation.traits
-	// is already written, the projection will catch up on the next bind/sync.
-	if serr := incarnation.SyncTraitsToHosts(ctx, h.deps.IncarnationDB, a.Name, res.Incarnation.Traits); serr != nil {
-		h.deps.Logger.Warn("mcp: incarnation.traits-set sync traits → souls failed (best-effort)",
-			slog.String("name", a.Name), slog.Any("error", serr))
-	}
+	// No projection (ADR-080, parity with REST): the replace lands on
+	// incarnation.traits alone; member hosts inherit the new set on the next read.
 
 	// audit: EventIncarnationTraitsChanged {name, old_keys, new_keys},
 	// source=mcp (writeAudit). trait VALUES are not included — parity with

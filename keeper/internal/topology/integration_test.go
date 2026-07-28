@@ -10,6 +10,7 @@ import (
 	"context"
 	"log"
 	"os"
+	"slices"
 	"testing"
 	"time"
 
@@ -224,6 +225,61 @@ func TestIntegration_LoadIncarnationHosts_Traits(t *testing.T) {
 	}
 	if hosts[1].Traits == nil || len(hosts[1].Traits) != 0 {
 		t.Errorf("b.Traits = %v, want empty map (no traits)", hosts[1].Traits)
+	}
+}
+
+// TestIntegration_LoadIncarnationHosts_InheritedLabels — the roster reports
+// EFFECTIVE labels (ADR-080): a host's own plus those of the incarnations it
+// belongs to. `soulprint.self.traits` / `.covens` are built from these, and they
+// must agree with the RBAC scope predicate, which resolves the same union in
+// SQL — otherwise a `where:` and a scope check would disagree about one host.
+func TestIntegration_LoadIncarnationHosts_InheritedLabels(t *testing.T) {
+	resetAll(t)
+	ctx := context.Background()
+
+	seedIncarnation(t, "redis-prod", map[string]any{})
+	if _, err := integrationPool.Exec(ctx,
+		`UPDATE incarnation SET covens = ARRAY['dba'], traits = '{"team":"dba","owner":"dba"}'::jsonb
+		 WHERE name = 'redis-prod'`); err != nil {
+		t.Fatalf("label the incarnation: %v", err)
+	}
+
+	// The host carries `owner` too, with a different value — the contested key.
+	s := &soul.Soul{
+		SID:    "a.example.com",
+		Status: soul.StatusConnected,
+		Coven:  []string{"dc1"},
+		Traits: map[string]any{"owner": "bobik"},
+	}
+	if err := soul.Insert(ctx, integrationPool, s); err != nil {
+		t.Fatalf("seed host: %v", err)
+	}
+	seedMembership(t, "redis-prod", "a.example.com")
+
+	r := NewResolver(integrationPool, nil, nil)
+	hosts, err := r.LoadIncarnationHosts(ctx, "redis-prod")
+	if err != nil {
+		t.Fatalf("LoadIncarnationHosts: %v", err)
+	}
+	if len(hosts) != 1 {
+		t.Fatalf("len(hosts) = %d, want 1", len(hosts))
+	}
+	h := hosts[0]
+
+	// Inherited-only key arrives.
+	if h.Traits["team"] != "dba" {
+		t.Errorf("traits[team] = %v, want dba (inherited from the incarnation)", h.Traits["team"])
+	}
+	// Contested key carries BOTH values, own first.
+	owner, ok := h.Traits["owner"].([]any)
+	if !ok || len(owner) != 2 || owner[0] != "bobik" || owner[1] != "dba" {
+		t.Errorf("traits[owner] = %#v, want [bobik dba] — neither side may win", h.Traits["owner"])
+	}
+	// Coven: own tag, the incarnation's tag, and the incarnation NAME.
+	for _, want := range []string{"dc1", "dba", "redis-prod"} {
+		if !slices.Contains(h.Coven, want) {
+			t.Errorf("coven = %v, missing %q", h.Coven, want)
+		}
 	}
 }
 

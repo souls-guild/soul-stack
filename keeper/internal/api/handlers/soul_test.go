@@ -46,6 +46,13 @@ type fakeSoulPool struct {
 	// active token (pgx.ErrNoRows from RETURNING).
 	activeTokenID string
 
+	// inheritedCovens / inheritedTraits: the labels a host inherits from its
+	// incarnations (ADR-080), served to soul.LoadInheritedLabels. Zero values
+	// mean "belongs to no incarnation" — the default for tests that only care
+	// about a host's own labels.
+	inheritedCovens []string
+	inheritedTraits []byte
+
 	// listCount: the COUNT(*) value for List (SelectAll). Read from
 	// QueryRow when the SQL contains "COUNT(*) FROM souls".
 	listCount int
@@ -138,6 +145,40 @@ func (s fakeScoper) CovenScope(_, _, _ string) ([]string, bool) {
 	return s.covens, false
 }
 
+// TraitScope projects the fake's trait-scope for gate (b) of the bulk
+// traits-assign path (mirrors [rbac.Enforcer.TraitScope]). It is derived from the
+// same `exprs` the purview is built from, so a test that scopes the fake with
+// `trait.owner=dba` gets a gate that admits exactly that pair — no second knob to
+// keep in sync.
+func (s fakeScoper) TraitScope(_, _, _ string) (map[string][]string, bool) {
+	if s.unrestricted {
+		return nil, true
+	}
+	return traitsFromScopeExprs(s.exprs), false
+}
+
+// traitsFromScopeExprs collects `trait.<key>=<value>` pairs out of the fake's raw
+// scope expressions. Deliberately literal (a split, not a parse): the fake mirrors
+// the enforcer's projection, and a real parser here would hide a divergence
+// between them rather than surface it.
+func traitsFromScopeExprs(exprs []string) map[string][]string {
+	out := map[string][]string{}
+	for _, e := range exprs {
+		if !strings.HasPrefix(e, "trait.") {
+			continue
+		}
+		key, value, ok := strings.Cut(strings.TrimPrefix(e, "trait."), "=")
+		if !ok {
+			continue
+		}
+		out[key] = append(out[key], value)
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
+}
+
 // mustScopeExpr parses a boolean scope expression for tests (panics on error).
 func mustScopeExpr(s string) *rbac.ScopeExpr {
 	e, err := rbac.ParseScopeExpr(s)
@@ -160,6 +201,19 @@ func (f *fakeSoulPool) Exec(_ context.Context, sql string, args ...any) (pgconn.
 
 func (f *fakeSoulPool) QueryRow(_ context.Context, sql string, args ...any) pgx.Row {
 	switch {
+	case strings.Contains(sql, soul.InheritedLabelsQueryMarker):
+		// soul.LoadInheritedLabels (ADR-080): the labels the host picks up from
+		// its incarnations. Comes FIRST — the query is a bare SELECT of two
+		// correlated subqueries and would fall through to the catch-all below.
+		traits := f.inheritedTraits
+		if traits == nil {
+			traits = []byte("[]")
+		}
+		covens := f.inheritedCovens
+		if covens == nil {
+			covens = []string{}
+		}
+		return staticRow{values: []any{covens, traits}}
 	case strings.Contains(sql, "WITH chunk AS"):
 		// Bulk chunk CTE: returns (scanned, changed, max_sid). One chunk
 		// smaller than bulkChunkSize → BulkAssignCoven finishes the iteration. This branch

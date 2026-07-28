@@ -10,17 +10,13 @@ import (
 	"github.com/souls-guild/soul-stack/keeper/internal/soul"
 )
 
-// Trait relocated per-soul → per-incarnation (ADR-060 amend, R1). Source of
-// truth is `incarnation.traits` (operator-set, given in incarnation.spec on
-// create). The read layer stays per-soul (`souls.traits`: soulprint.self.traits /
-// where:traits / soul-lint / topology) — it becomes a PROJECTION TARGET, not
-// operator-set-per-soul. This file carries two bridges between the source and
-// the target:
-//
-//   - TraitsFromSpec — operator-set (incarnation.spec.traits) → the
-//     incarnation.traits column (on the create path);
-//   - SyncTraitsToHosts — MATERIALIZED projection of incarnation.traits into
-//     souls.traits of member hosts (sync-hook on create + bind).
+// Operator-set trait labels of an incarnation (`incarnation.traits`, ADR-060).
+// They stay HERE: nothing projects them onto member hosts (ADR-080 removed the
+// materialized `SyncTraitsToHosts` hook). A host reaches them by inheritance at
+// read time — its effective traits are its own `souls.traits` unioned with those
+// of every incarnation it belongs to (soul.UnionTraits) — which is what lets an
+// incarnation label cover hosts that join later without overwriting a label
+// attached directly to a host.
 
 // TraitsFromSpec extracts operator-set traits from freeform jsonb spec of incarnation
 // (`incarnation.spec.traits`, ADR-060 amend R1). Symmetric with [readSpecHosts]
@@ -52,44 +48,6 @@ func TraitsFromSpec(spec map[string]any) (map[string]any, error) {
 	return m, nil
 }
 
-// SyncTraitsToHosts — sync-hook of Trait relocation (ADR-060 amend, R1): projects
-// `incarnation.traits` MATERIALIZED into `souls.traits` of ALL member hosts
-// of incarnation `incName`. Membership is resolved via `incarnation_membership`
-// (ADR-008 amendment 2026-07-17/NIM-124), expressed by
-// [soul.BulkSelector.Incarnation]. Runs on the bind path AFTER membership is
-// written, so a newly bound host is already a member here.
-//
-// Hookpoints (sync-hook):
-//   - incarnation create (CreateTyped) — after row insert;
-//   - host bind via core.soul.registered (keeper-dispatch) — after successful
-//     registration so newly bound host picks up traits of its incarnation.
-//
-// Idempotent and re-runnable: reuses [soul.BulkReplaceTraits] —
-// souls.traits of member hosts REPLACED entirely with incarnation.traits (empty
-// map = clear). Replace (not merge) intentional: incarnation.traits is
-// sole source of truth, projection aligns hosts to it. This also
-// overwrites per-soul bulk-write (POST /v1/souls/traits) in transition period —
-// expected until per-soul API relocate (next slice, ADR-060 amend).
-//
-// scope = Unrestricted: this is keeper-internal projection (not operator-initiated
-// bulk), not subject to operator's coven scope — otherwise member hosts outside
-// create initiator's scope wouldn't get traits of their incarnation.
-//
-// 0 member hosts (e.g., create before onboarding) → [soul.BulkReplaceTraits]
-// returns Matched=0 without error (no-op). [soul.ErrBulkEmptySelector] unreachable
-// here: selector always carries Incarnation criterion.
-func SyncTraitsToHosts(ctx context.Context, db soul.BulkPool, incName string, traits map[string]any) error {
-	if !ValidName(incName) {
-		return fmt.Errorf("incarnation: sync traits: invalid name %q", incName)
-	}
-	sel := soul.BulkSelector{Incarnation: incName}
-	scope := soul.BulkScope{Unrestricted: true}
-	if _, err := soul.BulkReplaceTraits(ctx, db, sel, scope, traits); err != nil {
-		return fmt.Errorf("incarnation: sync traits → souls of %q: %w", incName, err)
-	}
-	return nil
-}
-
 // UpdateTraitsResult — result of [UpdateTraits]: snapshots of old/new keys for audit
 // payload + full updated incarnation record for response. trait-VALUES
 // carried only by [Incarnation.Traits]; OldKeys/NewKeys — names only (secret hygiene
@@ -100,20 +58,19 @@ type UpdateTraitsResult struct {
 	Incarnation *Incarnation
 }
 
-// UpdateTraits entirely REPLACES operator-set trait labels of incarnation
-// (`incarnation.traits`, ADR-060 amend R1) — mirror of per-soul bulk replace, but at
-// source-of-truth level. Same transactional pattern as [UpdateHosts] /
+// UpdateTraits entirely REPLACES the operator-set trait labels of an incarnation
+// (`incarnation.traits`, ADR-060). Same transactional pattern as [UpdateHosts] /
 // [Unlock]: single tx SELECT … FOR UPDATE (serialization with concurrent
 // Unlock/Upgrade/Destroy/scenario-runner) → UPDATE traits/updated_at → commit.
-// Projection to `souls.traits` of member hosts done by caller with separate
-// sync-hook ([SyncTraitsToHosts]) AFTER commit — outside incarnation transaction
-// (bulk-write on other rows, idempotent and re-runnable).
+//
+// The write ends here — no member host is touched (ADR-080). Hosts see the new
+// set on their next read through inheritance, so a removed key stops granting at
+// once instead of lingering until some projection catches up.
 //
 // traits validated by caller ([soul.ValidateTraitDelta]); empty/nil map —
 // "clear labels" (column → `{}`). Returns [ErrIncarnationNotFound] (404) if
-// name doesn't exist. Status-gate intentionally absent: traits are operator-set labels,
-// not run state/spec; replace safe at any status (projection aligns
-// hosts on next bind/sync).
+// name doesn't exist. Status-gate intentionally absent: traits are operator-set
+// labels, not run state/spec; a replace is safe at any status.
 func UpdateTraits(ctx context.Context, pool TxBeginner, name string, traits map[string]any) (*UpdateTraitsResult, error) {
 	if !ValidName(name) {
 		return nil, fmt.Errorf("incarnation: invalid name %q", name)

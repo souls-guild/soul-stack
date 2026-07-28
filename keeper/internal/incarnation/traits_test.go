@@ -131,15 +131,6 @@ func TestCreate_NilTraitsBecomesEmptyObject(t *testing.T) {
 	}
 }
 
-// --- SyncTraitsToHosts: invalid incarnation name ---
-
-func TestSyncTraitsToHosts_RejectsInvalidName(t *testing.T) {
-	err := SyncTraitsToHosts(context.Background(), nil, "Bad_Name", map[string]any{"team": "dba"})
-	if err == nil {
-		t.Fatal("SyncTraitsToHosts(invalid name) returned nil")
-	}
-}
-
 // --- UpdateTraits: name-guard + traitKeys ---
 
 // TestUpdateTraits_RejectsInvalidName — an invalid name is rejected BEFORE

@@ -4,7 +4,9 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log/slog"
+	"slices"
 	"sort"
 
 	"github.com/souls-guild/soul-stack/keeper/internal/incarnation"
@@ -64,12 +66,9 @@ type soulTraitsAssignOutput struct {
 func (h *Handler) callSoulTraitsAssign(ctx context.Context, claims *jwt.Claims, req jsonRPCRequest, args json.RawMessage) jsonRPCResponse {
 	const toolName = "keeper.soul.traits-assign"
 
-	// DEPRECATED (ADR-060 amend R1): per-soul trait-write moved to
-	// per-incarnation (keeper.incarnation.traits-set). Per-soul writes get
-	// overwritten by the incarnation.traits projection. Tool kept for
-	// forward-compat; the call is logged as a signal.
-	h.deps.Logger.Warn("mcp: soul.traits-assign DEPRECATED per-soul trait-write (ADR-060) — use keeper.incarnation.traits-set",
-		slog.String("by_aid", claims.Subject))
+	// First-class again (ADR-080): a host-attached label is no longer overwritten
+	// by a projection, so this tool is the per-host counterpart of
+	// keeper.incarnation.traits-set rather than a deprecated leftover.
 
 	if h.deps.SoulDB == nil {
 		return h.toolError(req.ID, toolName, mcpCodeInternalError, "soul DB is not configured")
@@ -178,6 +177,24 @@ func (h *Handler) callSoulTraitsAssign(ctx context.Context, claims *jwt.Claims, 
 	covens, unrestricted := scoper.CovenScope(claims.Subject, "soul", "traits-assign")
 	scope := soul.BulkScope{Covens: covens, Unrestricted: unrestricted}
 
+	// Gate (b), ADR-080 (parity with REST): the attached pairs must lie inside
+	// the operator's own trait-scope. Checked before any DB access, including
+	// dry_run — otherwise dry_run would report a `matched` for a write that
+	// cannot happen.
+	if mode == soul.TraitMerge || mode == soul.TraitReplace {
+		tscoper, tok := h.deps.PurviewResolver.(traitScoper)
+		if !tok {
+			h.deps.Logger.Error("mcp: soul.traits-assign resolver lacks TraitScope")
+			return h.toolError(req.ID, toolName, mcpCodeInternalError, "traits-assign unavailable")
+		}
+		if allowed, unres := tscoper.TraitScope(claims.Subject, "soul", "traits-assign"); !unres {
+			if key, val, ok := firstTraitPairOutOfScope(a.Traits, allowed); !ok {
+				return h.toolError(req.ID, toolName, mcpCodeValidationFailed,
+					"trait "+key+"="+val+" is outside operator trait-scope")
+			}
+		}
+	}
+
 	if a.DryRun {
 		matched, err := soul.CountBulkMatched(ctx, h.deps.SoulDB, sel, scope)
 		if err != nil {
@@ -240,6 +257,47 @@ func holdsTraitsAssign(pv rbac.Purview) bool {
 // projection without widening the shared contract (NIM-128).
 type covenScoper interface {
 	CovenScope(aid, resource, action string) ([]string, bool)
+}
+
+// traitScoper is the trait-projection surface of the RBAC resolver
+// ([rbac.Enforcer.TraitScope]), asserted for gate (b) of the per-soul trait
+// write (ADR-080). Mirrors [covenScoper].
+type traitScoper interface {
+	TraitScope(aid, resource, action string) (map[string][]string, bool)
+}
+
+// firstTraitPairOutOfScope reports the first (key, value) of `traits` that the
+// operator may not attach, scanning keys in sorted order so the rejection is
+// stable. ok=true means every pair is inside scope. A list value is checked
+// element-wise — one out-of-scope element grants as much as a whole key would.
+func firstTraitPairOutOfScope(traits map[string]any, allowed map[string][]string) (key, value string, ok bool) {
+	keys := make([]string, 0, len(traits))
+	for k := range traits {
+		keys = append(keys, k)
+	}
+	slices.Sort(keys)
+	for _, k := range keys {
+		for _, v := range traitValueTexts(traits[k]) {
+			if !slices.Contains(allowed[k], v) {
+				return k, v, false
+			}
+		}
+	}
+	return "", "", true
+}
+
+// traitValueTexts renders a trait value as the text forms gate (b) compares —
+// one for a scalar, one per element for a list — matching PG's `->>`.
+func traitValueTexts(v any) []string {
+	list, isList := v.([]any)
+	if !isList {
+		return []string{fmt.Sprintf("%v", v)}
+	}
+	out := make([]string, 0, len(list))
+	for _, e := range list {
+		out = append(out, fmt.Sprintf("%v", e))
+	}
+	return out
 }
 
 // buildTraitsAssignOutput builds the output, matching REST.

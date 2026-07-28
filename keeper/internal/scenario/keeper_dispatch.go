@@ -102,13 +102,15 @@ func (r *Runner) dispatchKeeperTasks(ctx context.Context, spec RunSpec, log *slo
 			return fmt.Errorf("scenario: keeper-side task %q (%s) failed: %s", rt.Name, rt.Module, msg)
 		}
 
-		// Bind membership BEFORE the trait sync-hook (ADR-008 amendment
-		// 2026-07-17/NIM-124): core.soul.registered is the bind act — it writes
-		// incarnation membership (incarnation_membership) for its SIDs from the
-		// current run's incarnation. Authoritative: a membership write failure fails
-		// the run (a registered-but-not-a-member host would be invisible to the
-		// roster). Must precede syncTraitsOnRegistered, which now resolves members
-		// via incarnation_membership.
+		// Bind membership (ADR-008 amendment 2026-07-17/NIM-124):
+		// core.soul.registered is the bind act — it writes incarnation membership
+		// (incarnation_membership) for its SIDs from the current run's incarnation.
+		// Authoritative: a membership write failure fails the run (a
+		// registered-but-not-a-member host would be invisible to the roster).
+		//
+		// Membership is now the ONLY thing the bind does about labels: the host
+		// inherits its incarnation's covens and traits through this row (ADR-080),
+		// so there is no trait projection to run afterwards.
 		if berr := r.bindMembershipOnRegistered(ctx, spec, rt, output); berr != nil {
 			summary := composeKeeperFailure(rt, berr.Error())
 			r.recordKeeperFailure(ctx, spec.ApplyID, passage, rt, summary, log)
@@ -124,12 +126,6 @@ func (r *Runner) dispatchKeeperTasks(ctx context.Context, spec RunSpec, log *slo
 		// above); otherwise the FK would target (apply_id, keeper, 0), which for
 		// P>0 doesn't exist, and the register would be lost.
 		r.accumulateKeeperRegister(ctx, spec.ApplyID, passage, rt, changed, failed, output, log)
-
-		// Sync-hook for the bind path (ADR-060 amend, R1): once membership is
-		// written above, project incarnation.traits onto member souls.traits so the
-		// newly bound host picks up its incarnation's traits. Gated on the registered
-		// module specifically; other keeper tasks (cloud/vault) don't bind hosts.
-		r.syncTraitsOnRegistered(ctx, spec.IncarnationName, rt, log)
 	}
 
 	if err := applyrun.UpdateStatus(ctx, r.deps.DB, spec.ApplyID, render.KeeperTargetSID, passage, applyrun.StatusSuccess, nil); err != nil {
@@ -357,40 +353,6 @@ const (
 	registeredModuleBase  = "core.soul"
 	registeredModuleState = "registered"
 )
-
-// syncTraitsOnRegistered is the sync-hook for the Trait relocation bind path
-// (ADR-060 amend, R1). After core.soul.registered SUCCEEDS and membership is
-// written (bindMembershipOnRegistered), project incarnation.traits onto member
-// souls.traits so the newly bound host picks up its incarnation's traits.
-// Gated specifically on the registered module — other keeper tasks (cloud/vault)
-// don't bind hosts.
-//
-// Best-effort: empty incName (direct keeper test without an incarnation) /
-// incarnation without traits / load failure → logged, run not failed (traits
-// are an organizational label, not an apply blocker). Idempotent: a repeat
-// bind re-projects the same source.
-func (r *Runner) syncTraitsOnRegistered(ctx context.Context, incName string, rt *render.RenderedTask, log *slog.Logger) {
-	base, state, ok := config.SplitModuleAddr(rt.Module)
-	if !ok || base != registeredModuleBase || state != registeredModuleState {
-		return
-	}
-	if incName == "" || r.deps.DB == nil {
-		return
-	}
-	inc, err := incarnation.SelectByName(ctx, r.deps.DB, incName)
-	if err != nil {
-		log.Warn("scenario: bind-sync traits - loading the incarnation failed (best-effort)",
-			slog.String("incarnation", incName), slog.Any("error", err))
-		return
-	}
-	if len(inc.Traits) == 0 {
-		return
-	}
-	if serr := incarnation.SyncTraitsToHosts(ctx, r.deps.DB, incName, inc.Traits); serr != nil {
-		log.Warn("scenario: bind-sync traits -> souls failed (best-effort)",
-			slog.String("incarnation", incName), slog.Any("error", serr))
-	}
-}
 
 // recordKeeperFailure records a keeper-task failure (RecordTaskFailure +
 // apply_run → failed) for the triple (apply_id, keeper, passage). rt.Index is

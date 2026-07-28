@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
@@ -64,6 +65,15 @@ type PurviewResolver interface {
 // slice). A resolver that does not implement it → fail-closed 500.
 type covenScoper interface {
 	CovenScope(aid, resource, action string) ([]string, bool)
+}
+
+// traitScoper is the trait-projection surface of the RBAC resolver
+// ([rbac.Enforcer.TraitScope] / [rbac.Holder.TraitScope]), asserted at the bulk
+// traits-assign call site for gate (b) — the pair being written must lie inside
+// the operator's own trait scope. A resolver that does not implement it →
+// fail-closed 500.
+type traitScoper interface {
+	TraitScope(aid, resource, action string) (map[string][]string, bool)
 }
 
 // SoulPresence — a narrow surface for the batch check "is the Redis SID lease alive"
@@ -724,12 +734,41 @@ func (h *SoulHandler) GetTyped(ctx context.Context, claims *jwt.Claims, sid stri
 		h.logger.Error("soul.get: select failed", slog.String("sid", sid), slog.Any("error", err))
 		return zero, &problemError{problem.New(problem.TypeInternalError, "", "get soul failed")}
 	}
-	if !soulpurview.InScope(h.readScopeForClaims(claims), sid, s.Coven, soulpurview.TraitsInput(s.Traits)) {
+	if !h.inScopeWithInherited(ctx, claims, s) {
 		return zero, &problemError{problem.New(problem.TypeNotFound, "", "soul "+sid+" not found")}
 	}
 	dtos := []SoulListView{toSoulListView(s)}
 	h.overlayPresence(ctx, dtos)
 	return dtos[0], nil
+}
+
+// inScopeWithInherited is the single-object scope gate, resolved over the host's
+// EFFECTIVE labels (ADR-080): its own coven/traits unioned with those of every
+// incarnation it belongs to. The list endpoint resolves the same union inside
+// SQL, so doing it here too is what keeps get/soulprint/history from hiding a
+// host that the list shows.
+//
+// The membership lookup is skipped when the answer cannot depend on it — an
+// unrestricted operator sees everything, an empty purview nothing. A lookup
+// failure is fail-closed (out of scope, 404): uncertainty hides, per the
+// soulpurview contract.
+func (h *SoulHandler) inScopeWithInherited(ctx context.Context, claims *jwt.Claims, s *soul.Soul) bool {
+	scope := h.readScopeForClaims(claims)
+	if scope.Unrestricted() {
+		return true
+	}
+	if scope.Empty() {
+		return false
+	}
+	inherited, err := soul.LoadInheritedLabels(ctx, h.pool, s.SID)
+	if err != nil {
+		h.logger.Error("soul: inherited labels load failed (fail-closed)",
+			slog.String("sid", s.SID), slog.Any("error", err))
+		return false
+	}
+	return soulpurview.InScope(scope, s.SID,
+		soul.UnionCovens(s.Coven, inherited.Covens),
+		soulpurview.TraitsInput(soul.UnionTraits(s.Traits, inherited.Traits)))
 }
 
 // readScopeForClaims derives the single-read scope boundary from the operator's Purview
@@ -816,7 +855,7 @@ func (h *SoulHandler) GetSoulprintTyped(ctx context.Context, claims *jwt.Claims,
 		h.logger.Error("soul.soulprint.get: scope select failed", slog.String("sid", sid), slog.Any("error", err))
 		return zero, &problemError{problem.New(problem.TypeInternalError, "", "get soulprint failed")}
 	}
-	if !soulpurview.InScope(h.readScopeForClaims(claims), sid, s.Coven, soulpurview.TraitsInput(s.Traits)) {
+	if !h.inScopeWithInherited(ctx, claims, s) {
 		return zero, &problemError{problem.New(problem.TypeNotFound, "", "soul "+sid+" not found")}
 	}
 
@@ -951,7 +990,7 @@ func (h *SoulHandler) HistoryTyped(ctx context.Context, claims *jwt.Claims, in S
 		h.logger.Error("soul.history: scope select failed", slog.String("sid", in.SID), slog.Any("error", err))
 		return zero, &problemError{problem.New(problem.TypeInternalError, "", "get soul history failed")}
 	}
-	if !soulpurview.InScope(h.readScopeForClaims(claims), in.SID, s.Coven, soulpurview.TraitsInput(s.Traits)) {
+	if !h.inScopeWithInherited(ctx, claims, s) {
 		return zero, &problemError{problem.New(problem.TypeNotFound, "", "soul "+in.SID+" not found")}
 	}
 
@@ -1435,27 +1474,83 @@ type SoulTraitsAssignReply struct {
 	AuditPayload middleware.AuditPayload
 }
 
+// checkTraitPairsInScope is gate (b) of the per-soul trait write (ADR-080): every
+// pair the operator attaches must lie inside its own trait-scope, the mirror of
+// "the assigned coven label ∈ the operator's coven scope". A list value is checked
+// element-wise — each element is a pair in its own right, and one out-of-scope
+// element would grant just as much as a whole out-of-scope key.
+//
+// An unrestricted operator passes. Every other case resolves against
+// [rbac.Enforcer.TraitScope]; a resolver without that projection is fail-closed
+// 500, not a silently skipped gate.
+func (h *SoulHandler) checkTraitPairsInScope(claims *jwt.Claims, traits map[string]any) error {
+	scoper, ok := h.scoper.(traitScoper)
+	if !ok {
+		h.logger.Error("soul.traits-assign: resolver lacks TraitScope")
+		return &problemError{problem.New(problem.TypeInternalError, "", "traits-assign unavailable")}
+	}
+	allowed, unrestricted := scoper.TraitScope(claims.Subject, "soul", "traits-assign")
+	if unrestricted {
+		return nil
+	}
+	for _, key := range sortedMapKeys(traits) {
+		for _, elem := range traitValueElements(traits[key]) {
+			if !slices.Contains(allowed[key], elem) {
+				return &problemError{problem.New(problem.TypeValidationFailed, "",
+					"trait "+key+"="+elem+" is outside operator trait-scope")}
+			}
+		}
+	}
+	return nil
+}
+
+// traitValueElements renders a trait value as the text forms gate (b) checks — a
+// scalar yields one, a list one per element — matching how PG's `->>` renders
+// them in the scope predicate.
+func traitValueElements(v any) []string {
+	list, ok := v.([]any)
+	if !ok {
+		return []string{fmt.Sprintf("%v", v)}
+	}
+	out := make([]string, 0, len(list))
+	for _, e := range list {
+		out = append(out, fmt.Sprintf("%v", e))
+	}
+	return out
+}
+
+// sortedMapKeys — deterministic iteration so the rejected pair reported to the
+// operator is stable across calls.
+func sortedMapKeys(m map[string]any) []string {
+	out := make([]string, 0, len(m))
+	for k := range m {
+		out = append(out, k)
+	}
+	slices.Sort(out)
+	return out
+}
+
 // AssignTraitsTyped — the domain function of POST /v1/souls/traits (handler-native): bulk
-// trait-assign with scope intersection (gate a — target hosts ⊆ the operator's coven-scope).
+// trait-assign, the first-class write path for labels attached to a HOST (ADR-080; the
+// deprecation from the ADR-060 relocation is lifted — nothing overwrites this write any
+// more, because nothing projects incarnation traits onto hosts).
 // rawReq — the native input; dryRunQuery — the flag from `?dry_run=true` (OR with body.dry_run).
 //
-// SECURITY. Least-privilege holds via the same [soul.BulkScope] (the operator's coven-scope)
-// as coven-assign: bulk is not weakened. A trait KEY is NOT an RBAC scope dimension (unlike
-// a Coven label), so there is no gate (b) on keys — a coven-scoped operator cannot
-// mutate traits of hosts outside their coven-scope (gate a in the WHERE predicate), but any
-// valid key within the scope is available to them.
+// SECURITY — two gates, the same pair as coven-assign:
+//   - gate (a): target hosts ⊆ the operator's coven-scope (the shared [soul.BulkScope],
+//     enforced in the WHERE predicate);
+//   - gate (b): every pair being written ⊆ the operator's own trait-scope. Required
+//     since a host-attached trait GRANTS visibility permanently (ADR-080) and
+//     `trait.<key>=v` is a scope dimension (NIM-128) — without it any holder of this
+//     permission could hand a host to a foreign role by stamping its pair. Applied to
+//     merge/replace only, mirroring coven-assign, where `remove` is likewise ungated:
+//     clearing a label off a host already inside gate (a) grants nothing.
 //
 // Errors — *problemError (422 invalid mode / key / value / nested / XOR violation /
-// empty selector; 500 scoper nil / PG); success — [SoulTraitsAssignReply] (200 body +
-// audit-payload, including partial semantics → 200).
+// empty selector / pair outside scope; 500 scoper nil / PG); success —
+// [SoulTraitsAssignReply] (200 body + audit-payload, including partial semantics → 200).
 func (h *SoulHandler) AssignTraitsTyped(ctx context.Context, claims *jwt.Claims, rawReq SoulTraitsAssignInput, dryRunQuery bool) (SoulTraitsAssignReply, error) {
 	var zero SoulTraitsAssignReply
-	// DEPRECATED (ADR-060 amend R1): operator-set trait management moved
-	// per-soul → per-incarnation (incarnation.traits is the source of truth, PUT
-	// /v1/incarnations/{name}/traits). A per-soul write is overwritten by the next
-	// projection. The endpoint is kept forward-compat; we signal the call to the log.
-	h.logger.Warn("soul.traits-assign: DEPRECATED per-soul trait-write (ADR-060) — use PUT /v1/incarnations/{name}/traits",
-		slog.String("by_aid", claims.Subject))
 	if h.scoper == nil {
 		h.logger.Error("soul.traits-assign: scoper not configured")
 		return zero, &problemError{problem.New(problem.TypeInternalError, "", "traits-assign unavailable")}
@@ -1523,8 +1618,7 @@ func (h *SoulHandler) AssignTraitsTyped(ctx context.Context, claims *jwt.Claims,
 
 	// Bulk traits-assign narrows target hosts by coven scope (gate a) → project
 	// the operator's boolean scope onto its coven dimension via CovenScope
-	// (NIM-128), reached through the same narrow assertion as coven-assign. A
-	// trait key is NOT a scope dimension, so there is no gate (b) on the values.
+	// (NIM-128), reached through the same narrow assertion as coven-assign.
 	scoper, ok := h.scoper.(covenScoper)
 	if !ok {
 		h.logger.Error("soul.traits-assign: resolver lacks CovenScope")
@@ -1532,6 +1626,15 @@ func (h *SoulHandler) AssignTraitsTyped(ctx context.Context, claims *jwt.Claims,
 	}
 	covens, unrestricted := scoper.CovenScope(claims.Subject, "soul", "traits-assign")
 	scope := soul.BulkScope{Covens: covens, Unrestricted: unrestricted}
+
+	// Gate (b), ADR-080: the pairs being attached must lie inside the operator's
+	// own trait-scope. Checked BEFORE any DB access (as coven-assign does for
+	// replace), so a rejected write never reports a misleading dry-run `matched`.
+	if mode == soul.TraitMerge || mode == soul.TraitReplace {
+		if err := h.checkTraitPairsInScope(claims, rawReq.Traits); err != nil {
+			return zero, err
+		}
+	}
 
 	dryRun := rawReq.DryRun || dryRunQuery
 

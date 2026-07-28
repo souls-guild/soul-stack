@@ -104,7 +104,7 @@ A concretization of slice S4 ([§Slice map](#adr-047-purview--scoped-rbac-visibi
 
 Scope stops being a single `key=value` selector and becomes a **boolean expression**. Fixed by the user; realises the extended-selector intent of §c with a different shape and a **reduced** selector enum. Full spec — [rbac.md → Selector grammar](../keeper/rbac.md); grammar EBNF — [rbac.md → Format permissions](../keeper/rbac.md).
 
-**Selector enum (§c revised).** The closed set of selector types is **`{coven, service, incarnation, host, trait}`**. The pattern-matching types `regex`, `soulprint`, `state` are **removed** — RBAC visibility by SID-regex, host soulprint facts, and incarnation state is dropped as a product decision. Pattern matching on host identity moves to a `host matches <glob>` condition (glob-only, see below). `trait` moves to the dot-notation form `trait.<key>=v` (from the former `trait=key:value`, [ADR-060](0060-traits.md#adr-060-trait--operator-set-key-value-labels-on-the-incarnation-relocated-from-soul) p. 7).
+**Selector enum (§c revised).** The closed set of selector types is **`{coven, service, incarnation, host, trait}`**. The pattern-matching types `regex`, `soulprint`, `state` are **removed** — RBAC visibility by SID-regex, host soulprint facts, and incarnation state is dropped as a product decision. Pattern matching on host identity moves to a `host matches <glob>` condition (glob-only, see below). `trait` moves to the dot-notation form `trait.<key>=v` (from the former `trait=key:value`, [ADR-060](0060-traits.md#adr-060-trait--operator-set-key-value-labels-host-and-incarnation) p. 7).
 
 **Boolean scope.** Conditions combine with `AND` / `OR` and parenthesised groups. Precedence in the parser: **`AND` binds tighter than `OR`**, both left-associative, parentheses override. The UI condition-builder emits **homogeneous groups** (each group is all-`AND` or all-`OR`, mixed logic via nesting) with explicit parentheses, so a UI-authored scope round-trips 1:1; hand-written strings may rely on precedence. `OR` within one dimension is `in (a, b)`. A size cap (≤ 32 atoms, ≤ 4 nesting levels) is enforced on load. `host matches <glob>` is **glob-only** (`*`, `?`, full anchored), compiled internally to an anchored RE2 (ReDoS-safe, length cap 256) and pushed down to SQL `LIKE` where possible; RE2 syntax is not exposed.
 
@@ -141,3 +141,14 @@ effective_scope(r) = effective_scope(parent(r)) AND default_scope(r)
 A plain role's parent side is the unrestricted top, so the formula collapses to §a and nothing about existing roles changes. No second column is introduced — the delta reuses the field that already exists.
 
 The consequence worth stating: since the boolean grammar has no `NOT`, conjunction can only ever narrow, so **attenuation of scope is structural** rather than a rule that has to be enforced. The permission side is bounded by an intersection over the same containment predicate the least-privilege subset check already uses (`own_perms ∩ parent's effective`), so "a child never exceeds its parent" holds on every snapshot build, not only at write time. The least-privilege floor of `subset.go` is preserved on top and unchanged: a derived role must satisfy `child ⊆ parent` **AND** caller-holds-parent.
+
+**Amendment (2026-07-27, NIM-121 — the `coven` and `trait` dimensions resolve over INHERITED labels too, [ADR-080](0080-label-inheritance-union.md)).**
+When the resource being scoped is a **host**, the `coven` and `trait` conditions now match the host's own columns **OR** the labels of the incarnations
+it belongs to (`incarnation_membership`), the incarnation's name included on the coven axis. Rendered as a correlated `EXISTS` alongside the existing
+column predicate, so the whole purview still pushes down to SQL in one pass — offset pagination and totals stay exact, and the single-object gate
+(`soulpurview.InScope`) is fed the same union. Incarnations are unaffected: they carry their labels directly, and their predicate stays a plain column
+comparison (the correlation is opt-in per resource, via `ScopeColumns.MembershipSID`).
+
+This **widens** what a deployed role scoped `coven=<x>` or `trait.<k>=<v>` can read: the hosts of a matching incarnation become visible where before only
+the incarnation itself was. That is the defect being fixed — an incarnation-level label that granted nothing on its own hosts — but it lands with the
+release, not behind a flag. Role resolution, attenuation and the subset check are untouched; only the rendering of a resolved purview changed.

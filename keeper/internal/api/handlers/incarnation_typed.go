@@ -223,19 +223,10 @@ func (h *IncarnationHandler) CreateTyped(ctx context.Context, claims *jwt.Claims
 		return zero, incProblem(problem.TypeInternalError, "insert incarnation failed")
 	}
 
-	// Sync-hook (ADR-060 amend, R1): incarnation.traits → souls.traits of member
-	// hosts. Gated on non-empty traits — otherwise every create without traits
-	// would wipe per-soul traits to `{}` (a transitional footgun).
-	// On create there are usually 0 members (onboarding happens in scenario create) → no-op;
-	// the bind hook in keeper-dispatch catches up the hosts bound during the run. We don't fail
-	// create on a projection error (best-effort, logged): the incarnation is already created, sync
-	// converges on the next bind/create retry.
-	if len(traits) > 0 {
-		if serr := incarnation.SyncTraitsToHosts(ctx, h.db, name, traits); serr != nil {
-			h.logger.Warn("incarnation.create: sync traits -> souls failed (best-effort)",
-				slog.String("name", name), slog.Any("error", serr))
-		}
-	}
+	// No projection onto member hosts (ADR-080): incarnation.traits stays where the
+	// operator put it and reaches hosts by inheritance at read time, so it covers
+	// hosts that join later without any re-stamping — and cannot overwrite a label
+	// attached directly to a host.
 
 	// bareReady — a live runner stack, but the run is deliberately NOT started: bare
 	// incarnation (no create scenario) OR autoCreate=false (run deferred). In that case the
@@ -990,12 +981,12 @@ func (h *IncarnationHandler) UpdateHostsTyped(ctx context.Context, claims *jwt.C
 
 // SetTraitsTyped — extracted domain function PUT /v1/incarnations/{name}/traits
 // (SELF-AUDIT: the handler writes incarnation.traits_changed ITSELF — old/new keys payload
-// after UpdateTraits). Mirror of the per-soul bulk replace, but on the source of truth:
-// replaces incarnation.traits entirely → persist (one tx FOR UPDATE) → projection into
-// souls.traits of member hosts ([incarnation.SyncTraitsToHosts]) → 200 + a full
-// IncarnationGetView. traits arrives as an argument (native, bound on the huma layer).
-// An invalid set (key/value format, nested) → 422 BEFORE writing. An empty/nil
-// map = clear the labels.
+// after UpdateTraits). Replaces incarnation.traits entirely → persist (one tx FOR
+// UPDATE) → 200 + a full IncarnationGetView. Member hosts are NOT touched: they
+// inherit the new set at read time (ADR-080), which is what lets a removed key stop
+// granting at once and a host's own label survive. traits arrives as an argument
+// (native, bound on the huma layer). An invalid set (key/value format, nested) → 422
+// BEFORE writing. An empty/nil map = clear the labels.
 func (h *IncarnationHandler) SetTraitsTyped(ctx context.Context, claims *jwt.Claims, name string, traits map[string]any) (IncarnationGetView, error) {
 	var zero IncarnationGetView
 
@@ -1016,14 +1007,9 @@ func (h *IncarnationHandler) SetTraitsTyped(ctx context.Context, claims *jwt.Cla
 		return zero, incProblem(problem.TypeInternalError, "update incarnation traits failed")
 	}
 
-	// Sync-hook (ADR-060 amend, R1): incarnation.traits → souls.traits of member
-	// hosts. Best-effort (logged, does not fail the request): incarnation.traits is already
-	// written — the projection converges on the next bind/sync. Full replace, including on
-	// an empty map (clear the member hosts' labels).
-	if serr := incarnation.SyncTraitsToHosts(ctx, h.db, name, res.Incarnation.Traits); serr != nil {
-		h.logger.Warn("incarnation.set-traits: sync traits -> souls failed (best-effort)",
-			slog.String("name", name), slog.Any("error", serr))
-	}
+	// No projection (ADR-080): the replace lands on incarnation.traits alone.
+	// Member hosts pick the new set up by inheritance on the next read, and a
+	// removed key stops granting immediately — nothing to un-copy.
 
 	if h.auditW != nil {
 		_ = h.auditW.Write(ctx, &audit.Event{

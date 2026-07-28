@@ -316,7 +316,7 @@ var catalogManifest = []toolEntry{
 		status: toolStatusImplemented,
 		decl: toolDeclaration{
 			Name:         "keeper.incarnation.traits-set",
-			Description:  "Wholesale REPLACES the incarnation's operator-set trait labels (incarnation.traits jsonb - source of truth, ADR-060) and projects them onto member hosts' souls.traits. 'traits' - full key->(scalar|list of scalars) set; empty/omitted = clear labels. Replaces per-soul keeper.soul.traits-assign (deprecated). Permission: incarnation.traits-set (scope incarnation/coven/service by name). Fails with code=validation-failed on a malformed key / nested value; not-found if the incarnation doesn't exist.",
+			Description:  "Wholesale REPLACES the incarnation's operator-set trait labels (incarnation.traits jsonb, ADR-060). 'traits' - full key->(scalar|list of scalars) set; empty/omitted = clear labels. The labels stay on the incarnation and reach its member hosts by inheritance at read time (ADR-080), covering hosts that join later; the per-host counterpart is keeper.soul.traits-assign. Permission: incarnation.traits-set (scope incarnation/coven/service by name). Fails with code=validation-failed on a malformed key / nested value; not-found if the incarnation doesn't exist.",
 			InputSchema:  schemaIncarnationTraitsSetInput,
 			OutputSchema: schemaIncarnationTraitsSetOutput,
 		},
@@ -361,7 +361,7 @@ var catalogManifest = []toolEntry{
 		status: toolStatusImplemented,
 		decl: toolDeclaration{
 			Name:         "keeper.soul.traits-assign",
-			Description:  "DEPRECATED (ADR-060): use keeper.incarnation.traits-set (incarnation.traits - source of truth, projected onto souls.traits). Per-soul write gets overwritten by the projection. Bulk-assigns operator-set trait labels (souls.traits jsonb) on hosts under the selector (all/sids/coven/incarnation/status) ∩ operator coven-scope. mode=merge (default) set/overwrite keys from 'traits' (keep the rest); mode=replace replace the whole map ('traits', empty = clear); mode=remove delete keys from 'keys'. A trait value is a scalar (string/number/bool) or list of scalars (nested objects/arrays are forbidden). Permission: soul.traits-assign. dry_run=true returns matched without UPDATE. trait key is NOT a scope dimension: least-privilege is held by coven-scope (target hosts subseteq scope). Fails with code=validation-failed on an empty selector / malformed key / nested value.",
+			Description:  "Bulk-assigns operator-set trait labels attached to HOSTS (souls.traits jsonb) under the selector (all/sids/coven/incarnation/status) ∩ operator coven-scope. A host's effective traits are these unioned with those of every incarnation it belongs to (ADR-080); the per-incarnation counterpart is keeper.incarnation.traits-set. mode=merge (default) set/overwrite keys from 'traits' (keep the rest); mode=replace replace the whole map ('traits', empty = clear); mode=remove delete keys from 'keys'. A trait value is a scalar (string/number/bool) or list of scalars (nested objects/arrays are forbidden). Permission: soul.traits-assign. dry_run=true returns matched without UPDATE. Two gates: target hosts subseteq the operator coven-scope, and for merge/replace every pair must lie inside the operator's own trait-scope (a host-attached pair grants visibility). Fails with code=validation-failed on an empty selector / malformed key / nested value.",
 			InputSchema:  schemaSoulTraitsAssignInput,
 			OutputSchema: schemaSoulTraitsAssignOutput,
 		},

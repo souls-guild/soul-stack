@@ -310,6 +310,68 @@ func (e *Enforcer) CovenScope(aid, resource, action string) (covens []string, un
 	return covensFromPurview(p), false
 }
 
+// TraitScope is the trait-dimension twin of [Enforcer.CovenScope]: the trait
+// pairs an operator may attach to a host, as `key → allowed values`. Unrestricted
+// carries the same meaning (any pair).
+//
+// It backs gate (b) of the per-soul trait write (`POST /v1/souls/traits`), the
+// mirror of "the assigned coven label ∈ the operator's coven scope". That gate
+// exists because a trait pair on a host GRANTS visibility (ADR-080 made a
+// host-attached label permanent, and NIM-128 made `trait.<key>=v` a scope
+// dimension): without it, any holder of `soul.traits-assign` could hand a host to
+// a foreign role by stamping its pair.
+func (e *Enforcer) TraitScope(aid, resource, action string) (pairs map[string][]string, unrestricted bool) {
+	p := e.ResolvePurview(aid, resource, action)
+	if p.Unrestricted {
+		return nil, true
+	}
+	return traitsFromPurview(p), false
+}
+
+// traitsFromPurview extracts the trait pairs an operator may assign, on the same
+// conservative rule as [covensFromPurview]: a pair counts ONLY from a DNF
+// disjunct that constrains trait ALONE. A disjunct mixing trait with another
+// dimension narrows below "any host carrying that pair", so projecting it to the
+// bare pair would OVER-permit the write; such disjuncts are dropped
+// (fail-closed). Values are order-stable.
+func traitsFromPurview(p Purview) map[string][]string {
+	set := make(map[string]map[string]struct{})
+	for _, expr := range p.Exprs {
+		dnf, err := toDNF(expr)
+		if err != nil {
+			continue // too complex → contribute nothing (fail-closed)
+		}
+		for _, conj := range dnf {
+			pureTrait := true
+			for _, c := range conj {
+				if c.Dim != dimTrait {
+					pureTrait = false
+					break
+				}
+			}
+			if !pureTrait {
+				continue
+			}
+			for _, c := range conj {
+				if set[c.Key] == nil {
+					set[c.Key] = make(map[string]struct{})
+				}
+				for _, v := range c.Values {
+					set[c.Key][v] = struct{}{}
+				}
+			}
+		}
+	}
+	if len(set) == 0 {
+		return nil
+	}
+	out := make(map[string][]string, len(set))
+	for k, vals := range set {
+		out[k] = sortedKeys(vals)
+	}
+	return out
+}
+
 // covensFromPurview conservatively extracts the coven labels an operator may
 // bulk-assign/target (NIM-128). A coven value counts ONLY when it appears in a
 // DNF disjunct that constrains coven ALONE — a disjunct mixing coven with

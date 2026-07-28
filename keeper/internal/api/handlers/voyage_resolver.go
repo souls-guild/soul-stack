@@ -256,9 +256,11 @@ func (r *VoyageCommandPGResolver) ResolveSIDsInScope(ctx context.Context, filter
 		return scopedFromPairs(pairs, explicit, func(string, []string) bool { return false }), nil
 	}
 	// Boolean-scope membership per host (NIM-128): coven/host dimensions decide
-	// visibility. traits are not fetched into the pairs, so a trait-only scope
-	// fails closed here (under-show, safe) — a full trait-aware voyage target
-	// filter is a follow-up when the S4 slice migrates.
+	// visibility. The covens carried by the pairs are EFFECTIVE (own ∪ inherited,
+	// ADR-080), so a coven scope sees the hosts of a matching incarnation here as
+	// it does on the list. traits are still not fetched into the pairs, so a
+	// trait-only scope fails closed (under-show, safe) — a trait-aware voyage
+	// target filter remains a follow-up.
 	return scopedFromPairs(pairs, explicit, func(sid string, covens []string) bool {
 		return soulpurview.InScope(scope, sid, covens, nil)
 	}), nil
@@ -305,9 +307,26 @@ func (r *VoyageCommandPGResolver) resolvePairs(ctx context.Context, filter Voyag
 		}
 	}
 
-	const baseSQL = `SELECT sid, coven FROM souls
-WHERE status IN ('connected','dormant')
-  AND ($1::text[] IS NULL OR cardinality($1::text[]) = 0 OR sid = ANY($1::text[]))
+	// Coven resolves over EFFECTIVE labels (ADR-080): a host's own tags plus
+	// those of every incarnation it belongs to, its name included. Applied to
+	// BOTH halves — the target filter (`on: [<coven>]` must reach the hosts of a
+	// matching incarnation, as it does everywhere else) and the returned pairs
+	// (which feed the scope intersection above). Duplicates from the
+	// concatenation are harmless: `@>` and the scope check are set semantics.
+	const baseSQL = `WITH effective AS (
+    SELECT s.sid,
+           s.coven || COALESCE((
+               SELECT array_agg(DISTINCT u.c)
+               FROM incarnation_membership m
+               JOIN incarnation i ON i.name = m.incarnation_name
+               CROSS JOIN LATERAL unnest(i.covens || ARRAY[i.name]) AS u(c)
+               WHERE m.sid = s.sid
+           ), ARRAY[]::text[]) AS coven
+    FROM souls s
+    WHERE s.status IN ('connected','dormant')
+)
+SELECT sid, coven FROM effective
+WHERE ($1::text[] IS NULL OR cardinality($1::text[]) = 0 OR sid = ANY($1::text[]))
   AND ($2::text[] IS NULL OR cardinality($2::text[]) = 0 OR coven @> $2::text[])
 ORDER BY sid ASC
 `

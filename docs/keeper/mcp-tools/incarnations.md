@@ -204,7 +204,7 @@ Demolition instance. Permission: `incarnation.destroy`. Endpoint: [`DELETE /v1/i
 
 Complete replacement of operator-set trait incarnation marks. Permission: `incarnation.traits-set`. Endpoint: [`PUT /v1/incarnations/{name}/traits`](../operator-api/incarnations.md). Async: **no** (sync - replace + projection to `souls.traits`, compact summary response).
 
-Replaces `incarnation.traits` (jsonb - source of truth, [ADR-060](../../adr/0060-traits.md) R1 slice a) whole: empty/omitted `traits` = clear labels. One tx `FOR UPDATE`, then sync-hook materializes the set to `souls.traits` member hosts of the incarnation. RBAC - body-scoped OR-Check by coven/service-scope incarnation (`covens ∪ {name}`, REST mirror). Replaces per-soul [`keeper.soul.traits-assign`](souls.md) (deprecated). Audit event - `incarnation.traits_changed` (trait-**KEYS** only, not values).
+Replaces `incarnation.traits` (jsonb - source of truth, [ADR-060](../../adr/0060-traits.md) R1 slice a) whole: empty/omitted `traits` = clear labels. One tx `FOR UPDATE`; member hosts inherit the set at read time ([ADR-080](../../adr/0080-label-inheritance-union.md)), nothing is written to a host row. RBAC - body-scoped OR-Check by coven/service-scope incarnation (`covens ∪ {name}`, REST mirror). Per-host counterpart - [`keeper.soul.traits-assign`](souls.md) (first-class). Audit event - `incarnation.traits_changed` (trait-**KEYS** only, not values).
 
 **Input:**
 

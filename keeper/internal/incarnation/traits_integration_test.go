@@ -1,16 +1,16 @@
 //go:build integration
 
-// Integration guard for the Trait per-soul → per-incarnation relocation
-// (ADR-060 amend, R1): incarnation.traits round trip + sync-hook projection
-// into member hosts' souls.traits (on create-emulation and on binding a new
-// host) + the souls.traits read layer (projection target) keeps serving
-// containment targeting (where: soulprint.self.traits.<key> relies on the
-// same jsonb).
+// Integration guard for the label model of ADR-080: incarnation.traits round
+// trip, plus inheritance by membership — a host reads the labels of the
+// incarnations it belongs to WITHOUT anything being written to its own row, a
+// host in two incarnations inherits from both, a key held on both sides yields
+// both values, and an incarnation write never reaches a host row.
 
 package incarnation
 
 import (
 	"context"
+	"slices"
 	"testing"
 
 	"github.com/souls-guild/soul-stack/keeper/internal/soul"
@@ -18,10 +18,14 @@ import (
 
 // seedSoul inserts a minimal souls row with the given stable-tag coven (ADR-008).
 // NIM-124: incarnation membership is NO longer coven == incarnation name — it is
-// the `incarnation_membership` relation, seeded via seedMembership. traits is
-// empty `{}` (projection target before the sync hook).
+// the `incarnation_membership` relation, seeded via seedMembership. traits starts
+// empty; a host only carries what an operator attaches to it directly (ADR-080).
 func seedSoul(t *testing.T, sid string, coven []string) {
 	t.Helper()
+	// souls.coven is NOT NULL; pgx maps a nil slice to NULL.
+	if coven == nil {
+		coven = []string{}
+	}
 	_, err := integrationPool.Exec(context.Background(),
 		`INSERT INTO souls (sid, transport, status, coven, traits)
 		 VALUES ($1, 'agent', 'connected', $2, '{}'::jsonb)`,
@@ -31,9 +35,9 @@ func seedSoul(t *testing.T, sid string, coven []string) {
 	}
 }
 
-// seedIncarnationRow / seedMembership: NIM-124 — the trait sync projects onto
-// members resolved via `incarnation_membership` (soul.BulkSelector.Incarnation),
-// so member hosts must be bound in that table and the incarnation must exist (FK).
+// seedIncarnationRow / seedMembership: inheritance resolves through
+// `incarnation_membership` (NIM-124), so member hosts must be bound in that table
+// and the incarnation must exist (FK).
 func seedIncarnationRow(t *testing.T, name string) {
 	t.Helper()
 	inc := &Incarnation{
@@ -59,6 +63,32 @@ func soulTraits(t *testing.T, sid string) map[string]any {
 		t.Fatalf("SelectBySID(%s): %v", sid, err)
 	}
 	return got.Traits
+}
+
+// setIncarnationLabels sets an incarnation's coven tags and traits directly —
+// the labels hosts will inherit from it.
+func setIncarnationLabels(t *testing.T, name string, covens []string, traitsJSON string) {
+	t.Helper()
+	if covens == nil {
+		covens = []string{}
+	}
+	_, err := integrationPool.Exec(context.Background(),
+		`UPDATE incarnation SET covens = $2, traits = $3::jsonb WHERE name = $1`,
+		name, covens, traitsJSON)
+	if err != nil {
+		t.Fatalf("setIncarnationLabels(%s): %v", name, err)
+	}
+}
+
+// setSoulTraits attaches traits directly to a host — the per-soul write path
+// (POST /v1/souls/traits) reduced to its effect on the row.
+func setSoulTraits(t *testing.T, sid, traitsJSON string) {
+	t.Helper()
+	_, err := integrationPool.Exec(context.Background(),
+		`UPDATE souls SET traits = $2::jsonb WHERE sid = $1`, sid, traitsJSON)
+	if err != nil {
+		t.Fatalf("setSoulTraits(%s): %v", sid, err)
+	}
 }
 
 func resetSouls(t *testing.T) {
@@ -114,42 +144,108 @@ func TestIntegration_IncarnationTraits_RoundTrip(t *testing.T) {
 	}
 }
 
-// TestIntegration_SyncTraitsToHosts_ProjectsToMembers — the sync hook projects
-// incarnation.traits into souls.traits of ALL member hosts (coven ∋ incName)
-// and does NOT touch foreign hosts.
-func TestIntegration_SyncTraitsToHosts_ProjectsToMembers(t *testing.T) {
+// TestIntegration_InheritedLabels_FromMembership — a host picks up the labels of
+// the incarnation it belongs to WITHOUT anything having been written to its own
+// row: nothing is copied down, the union is resolved on read (ADR-080). The
+// incarnation's NAME comes along on the coven axis, mirroring the
+// incarnation-side resolver.
+func TestIntegration_InheritedLabels_FromMembership(t *testing.T) {
 	resetAll(t)
 	resetSouls(t)
 	ctx := context.Background()
 
-	// Two redis-prod members + one foreign host (a different incarnation).
 	seedIncarnationRow(t, "redis-prod")
+	setIncarnationLabels(t, "redis-prod", []string{"dba"}, `{"team":"dba","env":"prod"}`)
 	seedSoul(t, "host-a.example.com", []string{"dc1"})
-	seedSoul(t, "host-b.example.com", nil)
 	seedSoul(t, "outsider.example.com", []string{"other-inc"})
-	seedMembership(t, "redis-prod", "host-a.example.com", "host-b.example.com")
+	seedMembership(t, "redis-prod", "host-a.example.com")
 
-	traits := map[string]any{"team": "dba", "env": "prod"}
-	if err := SyncTraitsToHosts(ctx, integrationPool, "redis-prod", traits); err != nil {
-		t.Fatalf("SyncTraitsToHosts: %v", err)
+	got, err := soul.LoadInheritedLabels(ctx, integrationPool, "host-a.example.com")
+	if err != nil {
+		t.Fatalf("LoadInheritedLabels: %v", err)
 	}
-
-	for _, sid := range []string{"host-a.example.com", "host-b.example.com"} {
-		got := soulTraits(t, sid)
-		if got["team"] != "dba" || got["env"] != "prod" {
-			t.Errorf("%s souls.traits = %v, want team=dba env=prod (projection)", sid, got)
-		}
+	if got.Traits["team"] != "dba" || got.Traits["env"] != "prod" {
+		t.Errorf("inherited traits = %v, want team=dba env=prod", got.Traits)
 	}
-	// The foreign host is untouched.
-	if got := soulTraits(t, "outsider.example.com"); len(got) != 0 {
-		t.Errorf("outsider souls.traits = %v, want empty (outside the incarnation)", got)
+	if !slices.Contains(got.Covens, "dba") {
+		t.Errorf("inherited covens = %v, want the incarnation's tag 'dba'", got.Covens)
+	}
+	if !slices.Contains(got.Covens, "redis-prod") {
+		t.Errorf("inherited covens = %v, want the incarnation NAME as a coven tag", got.Covens)
+	}
+	// The host's own row was never written to.
+	if own := soulTraits(t, "host-a.example.com"); len(own) != 0 {
+		t.Errorf("souls.traits = %v, want empty — inheritance must not write to the host", own)
+	}
+	// A non-member inherits nothing.
+	outsider, err := soul.LoadInheritedLabels(ctx, integrationPool, "outsider.example.com")
+	if err != nil {
+		t.Fatalf("LoadInheritedLabels(outsider): %v", err)
+	}
+	if len(outsider.Traits) != 0 || len(outsider.Covens) != 0 {
+		t.Errorf("outsider inherited %v / %v, want nothing", outsider.Covens, outsider.Traits)
 	}
 }
 
-// TestIntegration_SyncTraitsToHosts_NewHostPicksUp — bind scenario: a host
-// that bound to the incarnation AFTER its create picks up its incarnation's
-// traits on a repeat sync (idempotent replace projection).
-func TestIntegration_SyncTraitsToHosts_NewHostPicksUp(t *testing.T) {
+// TestIntegration_InheritedLabels_TwoIncarnations — membership is M:N (migration
+// 099), and a host in two incarnations inherits from BOTH. This is what the
+// removed projection could not express: it replaced souls.traits wholesale per
+// incarnation, so syncing one erased what the other had projected.
+func TestIntegration_InheritedLabels_TwoIncarnations(t *testing.T) {
+	resetAll(t)
+	resetSouls(t)
+	ctx := context.Background()
+
+	seedIncarnationRow(t, "redis-prod")
+	seedIncarnationRow(t, "metrics-prod")
+	setIncarnationLabels(t, "redis-prod", nil, `{"team":"dba"}`)
+	setIncarnationLabels(t, "metrics-prod", nil, `{"tier":"gold"}`)
+	seedSoul(t, "host-a.example.com", nil)
+	seedMembership(t, "redis-prod", "host-a.example.com")
+	seedMembership(t, "metrics-prod", "host-a.example.com")
+
+	got, err := soul.LoadInheritedLabels(ctx, integrationPool, "host-a.example.com")
+	if err != nil {
+		t.Fatalf("LoadInheritedLabels: %v", err)
+	}
+	if got.Traits["team"] != "dba" || got.Traits["tier"] != "gold" {
+		t.Fatalf("inherited traits = %v, want BOTH incarnations (team=dba, tier=gold)", got.Traits)
+	}
+}
+
+// TestIntegration_InheritedLabels_ContestedKey_Unions — the same key on the host
+// and on its incarnation yields both values, in no order of precedence: either
+// one grants, so neither may be dropped.
+func TestIntegration_InheritedLabels_ContestedKey_Unions(t *testing.T) {
+	resetAll(t)
+	resetSouls(t)
+	ctx := context.Background()
+
+	seedIncarnationRow(t, "redis-prod")
+	setIncarnationLabels(t, "redis-prod", nil, `{"owner":"dba"}`)
+	seedSoul(t, "host-a.example.com", nil)
+	seedMembership(t, "redis-prod", "host-a.example.com")
+	setSoulTraits(t, "host-a.example.com", `{"owner":"bobik"}`)
+
+	inherited, err := soul.LoadInheritedLabels(ctx, integrationPool, "host-a.example.com")
+	if err != nil {
+		t.Fatalf("LoadInheritedLabels: %v", err)
+	}
+	effective := soul.UnionTraits(soulTraits(t, "host-a.example.com"), inherited.Traits)
+
+	values, ok := effective["owner"].([]any)
+	if !ok || len(values) != 2 {
+		t.Fatalf("effective owner = %#v, want both values", effective["owner"])
+	}
+	if values[0] != "bobik" || values[1] != "dba" {
+		t.Errorf("effective owner = %v, want [bobik dba] (own first, neither dropped)", values)
+	}
+}
+
+// TestIntegration_UpdateTraits_LeavesHostRowAlone — the guard against the failure
+// mode ADR-080 removes: replacing an incarnation's traits must not write to any
+// host, so a label an operator attached to a host is still there afterwards.
+func TestIntegration_UpdateTraits_LeavesHostRowAlone(t *testing.T) {
 	resetAll(t)
 	resetSouls(t)
 	ctx := context.Background()
@@ -157,55 +253,22 @@ func TestIntegration_SyncTraitsToHosts_NewHostPicksUp(t *testing.T) {
 	seedIncarnationRow(t, "redis-prod")
 	seedSoul(t, "host-a.example.com", nil)
 	seedMembership(t, "redis-prod", "host-a.example.com")
-	traits := map[string]any{"team": "dba"}
-	if err := SyncTraitsToHosts(ctx, integrationPool, "redis-prod", traits); err != nil {
-		t.Fatalf("SyncTraitsToHosts#1: %v", err)
+	setSoulTraits(t, "host-a.example.com", `{"owner":"bobik"}`)
+
+	if _, err := UpdateTraits(ctx, integrationPool, "redis-prod", map[string]any{"team": "dba"}); err != nil {
+		t.Fatalf("UpdateTraits: %v", err)
+	}
+	if got := soulTraits(t, "host-a.example.com"); got["owner"] != "bobik" {
+		t.Fatalf("souls.traits = %v, want owner=bobik intact — an incarnation write must not reach the host", got)
 	}
 
-	// A new host bound to the incarnation (bind via core.soul.registered);
-	// its souls.traits is still empty.
-	seedSoul(t, "host-c.example.com", nil)
-	seedMembership(t, "redis-prod", "host-c.example.com")
-	if got := soulTraits(t, "host-c.example.com"); len(got) != 0 {
-		t.Fatalf("new host pre-sync traits = %v, want empty", got)
+	// Clearing the incarnation's labels likewise leaves the host's own alone —
+	// the old projection cleared every member here.
+	if _, err := UpdateTraits(ctx, integrationPool, "redis-prod", nil); err != nil {
+		t.Fatalf("UpdateTraits(clear): %v", err)
 	}
-
-	// A repeat sync (bind hook) projects onto ALL members, including the new one.
-	if err := SyncTraitsToHosts(ctx, integrationPool, "redis-prod", traits); err != nil {
-		t.Fatalf("SyncTraitsToHosts#2: %v", err)
-	}
-	if got := soulTraits(t, "host-c.example.com"); got["team"] != "dba" {
-		t.Errorf("new host post-sync traits = %v, want team=dba", got)
-	}
-}
-
-// TestIntegration_ProjectedTraits_ContainmentTargeting — the read layer
-// (projection target souls.traits) keeps serving containment targeting over
-// projected traits (the foundation of where: soulprint.self.traits.<key>, the
-// same jsonb @>). Checks the PG predicate itself on projected data.
-func TestIntegration_ProjectedTraits_ContainmentTargeting(t *testing.T) {
-	resetAll(t)
-	resetSouls(t)
-	ctx := context.Background()
-
-	seedIncarnationRow(t, "redis-prod")
-	seedSoul(t, "host-a.example.com", nil)
-	seedSoul(t, "host-b.example.com", nil)
-	seedSoul(t, "outsider.example.com", []string{"other-inc"})
-	seedMembership(t, "redis-prod", "host-a.example.com", "host-b.example.com")
-
-	if err := SyncTraitsToHosts(ctx, integrationPool, "redis-prod", map[string]any{"team": "dba"}); err != nil {
-		t.Fatalf("SyncTraitsToHosts: %v", err)
-	}
-
-	var n int
-	err := integrationPool.QueryRow(ctx,
-		`SELECT count(*) FROM souls WHERE traits @> '{"team":"dba"}'::jsonb`).Scan(&n)
-	if err != nil {
-		t.Fatalf("containment query: %v", err)
-	}
-	if n != 2 {
-		t.Errorf("containment matched %d souls, want 2 (only projected members)", n)
+	if got := soulTraits(t, "host-a.example.com"); got["owner"] != "bobik" {
+		t.Fatalf("souls.traits = %v after clearing the incarnation, want owner=bobik intact", got)
 	}
 }
 

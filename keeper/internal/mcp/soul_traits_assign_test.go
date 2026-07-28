@@ -24,13 +24,16 @@ func traitsAssignAdminCfg() *rbactest.Config {
 	}
 }
 
-// traitsAssignDevScopedCfg — operator restricted to coven=dev: may only
-// change traits on dev hosts (gate a). trait-key is not a scope dimension.
+// traitsAssignDevScopedCfg — operator restricted to coven=dev: may only change
+// traits on dev hosts (gate a). The second permission carries the trait-scope
+// that gate (b) checks (ADR-080), so the pair `x=y` these tests write is
+// admitted and gate (a) is what they exercise.
 func traitsAssignDevScopedCfg() *rbactest.Config {
 	return &rbactest.Config{
 		Roles: []rbactest.Role{
 			{Name: "dev-traits-op", Operators: []string{"archon-dev"}, Permissions: []string{
 				"soul.traits-assign on coven=dev",
+				"soul.traits-assign on trait.x=y",
 			}},
 		},
 	}
@@ -248,10 +251,9 @@ func TestSoulTraitsAssign_RBACForbidden(t *testing.T) {
 }
 
 // TestSoulTraitsAssign_ScopedOperator_ScopeApplied — GUARD least-privilege
-// (gate a): a coven-scoped (dev) operator passes the permission check
-// (trait-key is not a scope dimension, no gate b), but the service layer
-// still receives coven-scope=[dev] (scope_applied=true in audit, scope array
-// in COUNT-args). Without this, bulk would bypass least-privilege.
+// (gate a): a coven-scoped (dev) operator passes both gates, and the service
+// layer still receives coven-scope=[dev] (scope_applied=true in audit, scope
+// array in COUNT-args). Without this, bulk would bypass least-privilege.
 func TestSoulTraitsAssign_ScopedOperator_ScopeApplied(t *testing.T) {
 	pool := &covenBulkFakePool{matched: 2, changed: 2}
 	h, rec := newCovenAssignHandler(t, traitsAssignDevScopedCfg(), pool)

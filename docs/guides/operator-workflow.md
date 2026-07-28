@@ -101,6 +101,27 @@ tasks:
 
 The difference between the positions of the `where:` step key and the `soulprint.where(...)` function is [orchestration.md → §4](../scenario/orchestration.md). The complete list of facts for predicates (os-family, pkg_mgr, primary_ip, ...) is [soulprint.md](../soul/soulprint.md).
 
+### Where to attach a label: on the host, or on the incarnation
+
+Both Coven tags and Traits can be attached at **two** levels, and a host sees the **union** of the two ([ADR-080](../adr/0080-label-inheritance-union.md)). Nothing is copied between them — the union is resolved when a label is read, whether by targeting or by an RBAC scope check.
+
+- **On the incarnation** — `covens` / `traits` of the instance. Every host that belongs to it inherits them, **including hosts that join later**, with no re-stamping. This is the default choice.
+- **On one host** — `POST /v1/souls/coven` / `POST /v1/souls/traits`. Use it for something true of that VM alone (`rack=b12`).
+
+A **Trait** is a key-value attribute (`owner=dba`, `product=aboba`, `namespace=dba-ns`), as opposed to a Coven, which is a flat tag ([ADR-060](../adr/0060-traits.md)). Traits target the same way covens do:
+
+```yaml
+tasks:
+  - name: DBA-owned hosts only
+    module: core.file.present
+    where: "'dba' in soulprint.self.traits.owner"
+    params: { path: /tmp/owner, content: dba }
+```
+
+Set a trait on the incarnation at create time (`traits` in `POST /v1/incarnations`) or later with `PUT /v1/incarnations/{name}/traits`; on a host with `POST /v1/souls/traits`.
+
+**A key set at both levels holds both values.** With `owner=dba` on the incarnation and `owner=bobik` on the host, that host's `owner` is the list `[bobik, dba]` — neither wins, and both grant. So write `'dba' in soulprint.self.traits.owner` rather than `soulprint.self.traits.owner == 'dba'` for any key you set in both places, or the predicate stops matching the moment the second level is used.
+
 > **Cross-incarnation targeting is prohibited by grammar** - `on:`/`where:` only hit the hosts of their incarnation. Data about other run hosts is via `soulprint.hosts` ([orchestration.md → §4.1](../scenario/orchestration.md)).
 
 ## 4. Upgrade the service version

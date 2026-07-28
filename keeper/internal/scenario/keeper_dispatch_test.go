@@ -3,7 +3,6 @@ package scenario
 import (
 	"context"
 	"fmt"
-	"io"
 	"log/slog"
 	"strings"
 	"testing"
@@ -164,35 +163,6 @@ func TestApplyKeeperTask_NoFinalEvent(t *testing.T) {
 	if !strings.Contains(msg, "no final event") {
 		t.Fatalf("message = %q, want containing 'no final event'", msg)
 	}
-}
-
-// TestSyncTraitsOnRegistered_Gating — the Trait relocation bind hook
-// (ADR-060 amend R1) filters its injection point: ONLY a successful
-// core.soul.registered triggers the projection. For other modules / empty
-// incName / nil DB — a no-op with no DB access (a Runner without Deps.DB
-// doesn't panic). The full projection is proven in integration
-// (incarnation/traits_integration_test.go).
-func TestSyncTraitsOnRegistered_Gating(t *testing.T) {
-	r := &Runner{} // Deps.DB == nil
-	log := slog.New(slog.NewTextHandler(io.Discard, nil))
-
-	// Not a registered module → early exit by address (no DB needed).
-	r.syncTraitsOnRegistered(context.Background(), "redis-prod",
-		&render.RenderedTask{Module: "core.vault.kv-read"}, log)
-	r.syncTraitsOnRegistered(context.Background(), "redis-prod",
-		&render.RenderedTask{Module: "core.cloud.provisioned"}, log)
-
-	// registered, but incName is empty (direct keeper test without an incarnation) → no-op.
-	r.syncTraitsOnRegistered(context.Background(), "",
-		&render.RenderedTask{Module: "core.soul.registered"}, log)
-
-	// registered + incName, but Deps.DB == nil → no-op (doesn't panic, doesn't touch the DB).
-	r.syncTraitsOnRegistered(context.Background(), "redis-prod",
-		&render.RenderedTask{Module: "core.soul.registered"}, log)
-
-	// Malformed module address → early exit (SplitModuleAddr !ok).
-	r.syncTraitsOnRegistered(context.Background(), "redis-prod",
-		&render.RenderedTask{Module: "bogus"}, log)
 }
 
 func TestComposeKeeperFailure(t *testing.T) {
