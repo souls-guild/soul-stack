@@ -284,11 +284,12 @@ nfpms:
     priority: optional
     formats: [deb, rpm, apk]
 
-  # soul-stack-tools — meta package: one install for the whole authoring-side CLI
-  # set (soulctl + soul-lint + soul-trial — the same three binaries the Homebrew
-  # cask and the winget manifest carry). Ships no files of its own, it only pulls
-  # the three in. The keeper and soul daemons stay deliberately out: a server
-  # should not drag in authoring tools, and each daemon is installed on its own.
+  # soul-stack-tools — meta package: one install for the whole cross-OS CLI set
+  # (soulctl + soul-lint + soul-trial + soul-legion — the same four binaries the
+  # Homebrew cask and the winget manifest carry, so the apt path lands the same
+  # tools as the other channels). Ships no files of its own, it only pulls the
+  # four in. The keeper and soul daemons stay deliberately out: a server should
+  # not drag in operator tooling, and each daemon is installed on its own.
   # `ids` anchors the arch matrix to one build (meta:true drops its binary), so
   # the meta package is emitted once per linux arch.
   - id: tools
@@ -299,13 +300,14 @@ nfpms:
       - soul-stack-soulctl
       - soul-stack-lint
       - soul-stack-trial
+      - soul-stack-legion
     vendor: Soul Stack
     homepage: https://github.com/souls-guild/soul-stack
     maintainer: Soul Stack <noreply@soul-stack.com>
     description: |
       Soul Stack tools — meta package installing the operator and authoring CLIs
-      in one step: soulctl, soul-lint and soul-trial. Contains no files itself;
-      the keeper and soul daemons are separate packages.
+      in one step: soulctl, soul-lint, soul-trial and soul-legion. Contains no
+      files itself; the keeper and soul daemons are separate packages.
     license: BUSL-1.1
     section: devel
     priority: optional

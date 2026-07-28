@@ -42,13 +42,16 @@ sudo apt install soul-stack-tools    # a workstation gets the whole CLI set
 | `soul-stack-soulctl` | `soulctl` operator CLI |
 | `soul-stack-lint` | `soul-lint` offline artifact linter |
 | `soul-stack-trial` | `soul-trial` offline Destiny / Scenario runner |
-| `soul-stack-tools` | meta package — pulls in `soulctl` + `lint` + `trial`, ships no files itself |
+| `soul-stack-legion` | `soul-legion` load generator for sizing a Keeper cluster |
+| `soul-stack-tools` | meta package — pulls in all four CLIs above, ships no files itself |
 
-The daemons stay out of `soul-stack-tools` on purpose: a server should not drag in
-authoring tools, and each daemon is installed on its own. (There is also
-`soul-stack-legion`, a load generator for sizing a Keeper cluster — it needs cluster
-DB credentials and a Vault PKI token, so run it against a bench cluster, not
-production.)
+`soul-stack-tools` carries the same four binaries as the Homebrew cask and the
+winget package, so every channel lands the same tool set. The daemons stay out of
+it on purpose: a server should not drag in operator tooling, and each daemon is
+installed on its own.
+
+`soul-legion` drives load against a cluster — it needs cluster DB credentials and a
+Vault PKI token, so point it at a bench cluster rather than production.
 
 > **Package names changed after `v0.1.0-beta.1`.** The published beta still carries
 > `soul-stack-soul-lint` / `soul-stack-soul-trial` and has no `soul-stack-tools`.
