@@ -110,9 +110,15 @@ func TestIntegration_SynodSubset_OwnedViaGroup_OK(t *testing.T) {
 		t.Fatalf("grant alice→cluster-admin: %v", err)
 	}
 	// sub has NO direct roles at all — all permissions come through the granters-grp group.
+	// `role.create-root` rides in the same group because the role minted below is
+	// PLAIN (NIM-201, root_role.go): without it the deny would come from the shape
+	// gate and this test would stop saying anything about the subset check. It also
+	// makes the point twice over — the root gate reads the caller's Synod-derived
+	// permissions through the same `callerPermissions`, so "all rights via Synod"
+	// stays literally true here.
 	seedOperator(t, "archon-sub", &alice)
 	sub := "archon-sub"
-	insertRole(t, "grp-granters", "role.create", "role.grant-operator")
+	insertRole(t, "grp-granters", "role.create", "role.grant-operator", "role.create-root")
 	seedSynod(t, "granters-grp", "grp-granters")
 	addToSynod(t, "granters-grp", sub)
 	s := newService(t)
@@ -177,12 +183,21 @@ func TestIntegration_SynodSubset_ScopedRoleViaGroup_Escalation_Denied(t *testing
 	seedOperator(t, "archon-sub", &alice)
 	sub := "archon-sub"
 	// The group grants incarnation.run+role.create under scope=coven=prod.
+	// The shape right (`role.create-root`, NIM-201) rides in a SECOND, unscoped
+	// group role rather than in grp-prod-runners: inside a scoped role it would
+	// resolve to `role.create-root on coven=prod`, and the gate demands an
+	// unrestricted holder (root_role.go, [callerHolds]). Everything still reaches
+	// the caller only through Synod, which is what this test is about; the scope
+	// assertions below are untouched because the extra role carries no scope-bearing
+	// permission.
 	insertRoleScoped(t, "grp-prod-runners", "coven=prod", "incarnation.run", "role.create")
-	seedSynod(t, "prod-grp", "grp-prod-runners")
+	insertRole(t, "grp-root-minters", "role.create-root")
+	seedSynod(t, "prod-grp", "grp-prod-runners", "grp-root-minters")
 	addToSynod(t, "prod-grp", sub)
 	s := newService(t)
 
-	// staging is outside scope=prod → denied.
+	// staging is outside scope=prod → denied. The caller now holds the shape right,
+	// so ErrPermissionNotHeld can only be the floor talking.
 	err := s.CreateRole(context.Background(), CreateRoleInput{
 		Name:        "synod-staging-esc",
 		Permissions: []string{"incarnation.run on coven=staging"},

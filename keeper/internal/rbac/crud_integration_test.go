@@ -898,9 +898,15 @@ func TestIntegration_ServiceListRoles_WithPermissionsAndOperators(t *testing.T) 
 	}
 }
 
-// An empty catalog (only the seed cluster-admin, no permissions): resetRBAC
-// re-seeds cluster-admin with `*`, so "empty catalog" meaning "no custom
-// roles" — we check that exactly cluster-admin is visible, with no operators.
+// An empty catalog (only the seed cluster-admin, no custom roles): resetRBAC
+// re-seeds cluster-admin with `*`, so "empty catalog" means "no custom roles" —
+// we check that exactly cluster-admin is visible, holding exactly the one
+// operator the fixture attaches to it.
+//
+// The viewer must itself be a cluster-admin: ListRoles is scoped to what the
+// caller could grant (NIM-202, role_visibility.go), so the only way to see the
+// `*` role is to hold it. That makes the operator list non-empty by
+// construction — archon-root appears under the very role it is looking at.
 func TestIntegration_ServiceListRoles_SeedOnly(t *testing.T) {
 	resetRBAC(t)
 	seedOperator(t, "archon-root", nil)
@@ -917,8 +923,8 @@ func TestIntegration_ServiceListRoles_SeedOnly(t *testing.T) {
 	if views[0].Name != "cluster-admin" || !views[0].Builtin {
 		t.Errorf("view = %+v, want builtin cluster-admin", views[0])
 	}
-	if len(views[0].Operators) != 0 {
-		t.Errorf("Operators = %v, want empty", views[0].Operators)
+	if len(views[0].Operators) != 1 || views[0].Operators[0] != "archon-root" {
+		t.Errorf("Operators = %v, want [archon-root] (the viewer holds cluster-admin)", views[0].Operators)
 	}
 }
 

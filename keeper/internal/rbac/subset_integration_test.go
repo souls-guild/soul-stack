@@ -22,6 +22,13 @@ import (
 // archon-alice as bootstrap-admin (`*` via cluster-admin) — so the cluster
 // isn't locked out and there's a source of "strong" rights for grant
 // scenarios.
+//
+// `role.create-root` rides along because every fixture here mints PLAIN roles
+// (NIM-201, root_role.go). That gate judges the SHAPE of the result; these tests
+// judge its CONTENT — the least-privilege floor. Handing sub the shape right
+// keeps the two separable, so a floor test fails on the floor and not on a
+// second gate standing in front of it. The gate itself is covered on its own, in
+// root_role_integration_test.go.
 func setupSuboperator(t *testing.T) (sub, alice string) {
 	t.Helper()
 	ctx := context.Background()
@@ -32,12 +39,35 @@ func setupSuboperator(t *testing.T) (sub, alice string) {
 	if err := GrantOperator(ctx, integrationPool, "cluster-admin", "archon-alice", nil); err != nil {
 		t.Fatalf("grant alice→cluster-admin: %v", err)
 	}
-	// sub gets only role.create + role.grant-operator.
-	insertRole(t, "granters", "role.create", "role.grant-operator")
+	// sub gets only role.create + role.grant-operator (+ the shape right above).
+	insertRole(t, "granters", "role.create", "role.grant-operator", "role.create-root")
 	if err := GrantOperator(ctx, integrationPool, "granters", "archon-sub", &a); err != nil {
 		t.Fatalf("grant sub→granters: %v", err)
 	}
 	return "archon-sub", a
+}
+
+// grantRootMinting gives aid the right to mint a plain role through a SEPARATE,
+// UNSCOPED role.
+//
+// It cannot ride in a scoped fixture's own role: `callerPermissions` expands a
+// bare permission under its role's `default_scope`, and the gate asks for an
+// UNRESTRICTED holder ([callerHolds] via [callerUnrestrictedOn]) — so
+// `role.create-root` inside a `default_scope: coven=prod` role resolves to
+// `role.create-root on coven=prod` and never satisfies it. That is deliberate:
+// the scope grammar has no `role=` dimension, so a scoped root right could not
+// say WHICH roles it covers (root_role.go). The consequence for fixtures is that
+// the shape right has to come from somewhere unscoped, and the consequence for
+// operators is recorded as its own guard in root_role_integration_test.go.
+//
+// The caller's other rights keep their scope, so the floor assertions are
+// untouched.
+func grantRootMinting(t *testing.T, aid, grantedBy string) {
+	t.Helper()
+	insertRole(t, "root-minters", "role.create-root")
+	if err := GrantOperator(context.Background(), integrationPool, "root-minters", aid, &grantedBy); err != nil {
+		t.Fatalf("grant %s→root-minters: %v", aid, err)
+	}
 }
 
 // insertRoleScoped is insertRole + default_scope (ADR-047 S1). A direct
@@ -77,6 +107,7 @@ func setupScopedCaller(t *testing.T) (sub, alice string) {
 	if err := GrantOperator(ctx, integrationPool, "prod-runners", "archon-sub", &a); err != nil {
 		t.Fatalf("grant sub→prod-runners: %v", err)
 	}
+	grantRootMinting(t, "archon-sub", a)
 	return "archon-sub", a
 }
 
@@ -197,8 +228,9 @@ func TestIntegration_Subset_DefaultScope_UnrestrictedCaller_AnyScope_OK(t *testi
 	if err := GrantOperator(context.Background(), integrationPool, "cluster-admin", "archon-alice", nil); err != nil {
 		t.Fatalf("grant alice→cluster-admin: %v", err)
 	}
-	// A role WITHOUT default_scope (NULL) → bare perms unrestricted.
-	insertRole(t, "unrestricted-runners", "incarnation.run", "role.create")
+	// A role WITHOUT default_scope (NULL) → bare perms unrestricted. That includes
+	// role.create-root, which is why this caller needs no separate source for it.
+	insertRole(t, "unrestricted-runners", "incarnation.run", "role.create", "role.create-root")
 	if err := GrantOperator(context.Background(), integrationPool, "unrestricted-runners", "archon-unrestricted", &a); err != nil {
 		t.Fatalf("grant→unrestricted-runners: %v", err)
 	}
@@ -236,6 +268,7 @@ func setupScopedUpdater(t *testing.T) (sub, alice string) {
 	if err := GrantOperator(ctx, integrationPool, "prod-updaters", "archon-sub", &a); err != nil {
 		t.Fatalf("grant sub→prod-updaters: %v", err)
 	}
+	grantRootMinting(t, "archon-sub", a)
 	return "archon-sub", a
 }
 
