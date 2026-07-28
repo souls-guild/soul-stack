@@ -21,6 +21,7 @@ import (
 	"github.com/souls-guild/soul-stack/keeper/internal/incarnation"
 	"github.com/souls-guild/soul-stack/keeper/internal/jwt"
 	"github.com/souls-guild/soul-stack/keeper/internal/rbac"
+	"github.com/souls-guild/soul-stack/keeper/internal/shellgate"
 	"github.com/souls-guild/soul-stack/keeper/internal/soul"
 	"github.com/souls-guild/soul-stack/keeper/internal/voyage"
 	sharedapi "github.com/souls-guild/soul-stack/shared/api"
@@ -84,7 +85,10 @@ type CadenceHandler struct {
 	scenarioResolver VoyageScenarioResolver
 	incReader        IncarnationContextReader
 	enforcer         middleware.PermissionChecker
-	auditW           audit.Writer
+	// gate — the console gate over a kind=command recipe (ADR-0074 amendment,
+	// NIM-197). nil → the deprecation window (see shellgate.Gate).
+	gate   *shellgate.Gate
+	auditW audit.Writer
 	// tidingInvalidator resets the dispatcher's TTL snapshot of Tiding rules after
 	// the cadence-tx with a notify block commits (ADR-052 §m, the same race-fix as
 	// Voyage-ephemeral): the permanent rules are inserted via a direct
@@ -114,6 +118,7 @@ func NewCadenceHandler(
 	scenarioResolver VoyageScenarioResolver,
 	incReader IncarnationContextReader,
 	enforcer middleware.PermissionChecker,
+	gate *shellgate.Gate,
 	auditW audit.Writer,
 	tidingInvalidator TidingInvalidator,
 	pollFloorSeconds int,
@@ -127,6 +132,7 @@ func NewCadenceHandler(
 		scenarioResolver:  scenarioResolver,
 		incReader:         incReader,
 		enforcer:          enforcer,
+		gate:              gate,
 		auditW:            auditW,
 		tidingInvalidator: tidingInvalidator,
 		pollFloorSeconds:  pollFloorSeconds,
@@ -322,7 +328,7 @@ func (h *CadenceHandler) CreateTyped(ctx context.Context, claims *jwt.Claims, re
 	}
 
 	// Two-tier guard (ADR-046 §7): Voyage permission by recipe kind.
-	if err := h.checkKindPermissionErr(claims.Subject, req.Kind); err != nil {
+	if err := h.checkKindPermissionErr(claims.Subject, req.Kind, &req.Module); err != nil {
 		return zero, err
 	}
 	// Per-target coven scope-check (ADR-046 §7, fail-closed).
@@ -766,7 +772,13 @@ func applyCadencePatchMaxFailures(req *cadencePatchRequest) (detail string) {
 // checkKindPermissionErr — an error-returning guard of the Voyage permission by
 // kind (FULL-TYPED ADR-054 §Pattern). nil → allowed. Unknown kind → 422, revoked →
 // 401, no-perm → 403 (like the (w,r) variant).
-func (h *CadenceHandler) checkKindPermissionErr(aid, kind string) error {
+//
+// module is the recipe's module (nil for kind=scenario). When it names a
+// verb-shell module the console gate applies on top (ADR-0074 amendment,
+// NIM-197): writing a schedule that will run an arbitrary command line every
+// hour is the same privilege as running it once, and a recipe is the only
+// surface where the grant outlives the operator's session.
+func (h *CadenceHandler) checkKindPermissionErr(aid, kind string, module *string) error {
 	resource, action := "", ""
 	switch cadence.Kind(kind) {
 	case cadence.KindScenario:
@@ -783,6 +795,35 @@ func (h *CadenceHandler) checkKindPermissionErr(aid, kind string) error {
 		}
 		return &problemError{problem.New(problem.TypeForbidden, "",
 			"cadence recipe requires Voyage-permission "+resource+"."+action+" by kind="+kind)}
+	}
+	return h.checkShellGateErr(aid, module)
+}
+
+// checkShellGateErr applies the console gate to a Cadence recipe (ADR-0074
+// amendment, NIM-197). nil/non-verb-shell module → nil without touching the
+// enforcer.
+//
+// The probe is a BARE check, mirroring the `errand.run` check above: a recipe's
+// target is declarative and is only resolved at spawn time, so there is no host
+// to scope against yet — exactly the reason kind=command settles for a bare
+// `errand.run` here ([checkTargetScopeErr]). Per-host enforcement of the console
+// right happens where the hosts exist, on the spawn path.
+//
+// nil enforcer → no probe is supplied and the gate records `unconfigured`; it
+// must not stand in for an answer either way.
+func (h *CadenceHandler) checkShellGateErr(aid string, module *string) error {
+	if module == nil || !shellgate.Required(*module) {
+		return nil
+	}
+	var check func() error
+	if h.enforcer != nil {
+		check = func() error {
+			return h.enforcer.Check(aid, "soul", "console", nil)
+		}
+	}
+	if err := h.gate.Authorize(shellgate.SurfaceCadence, *module, check); err != nil {
+		return &problemError{problem.New(problem.TypeForbidden, "",
+			"module "+*module+" runs an arbitrary command line; a cadence recipe naming it additionally requires permission soul.console")}
 	}
 	return nil
 }
@@ -1220,7 +1261,9 @@ func (h *CadenceHandler) PatchTyped(ctx context.Context, claims *jwt.Claims, id 
 	// is not changed on PATCH (taken from the loaded row c.Kind). First a bare-check
 	// of the Voyage permission by kind, then the per-target scope of the new
 	// (post-patch) target.
-	if err := h.checkKindPermissionErr(claims.Subject, string(c.Kind)); err != nil {
+	// c.Module is the POST-patch module (applyCadencePatch already ran), so a PATCH
+	// that swaps a read-safe module for a verb-shell one is gated too.
+	if err := h.checkKindPermissionErr(claims.Subject, string(c.Kind), c.Module); err != nil {
 		return zero, err
 	}
 	if err := h.checkTargetScopeErr(ctx, claims.Subject, string(c.Kind), cadenceTargetRequest(c.Target)); err != nil {

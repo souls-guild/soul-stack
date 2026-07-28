@@ -67,6 +67,13 @@ type RBACMetrics struct {
 	// before the reload runs. Self-origin signals are already filtered out
 	// by the source.
 	invalidationsTotal prometheus.Counter
+
+	// shellErrandLegacyRoles is the console-gate inventory: how many roles
+	// grant `errand.run` without `soul.console` (NIM-197,
+	// [Enforcer.ShellErrandLegacyRoles]). A gauge rather than an event because
+	// the question it answers — "will flipping the gate to enforce break
+	// anything here" — is about the catalog's shape, not about traffic.
+	shellErrandLegacyRoles prometheus.Gauge
 }
 
 // Snapshot rebuild failure phases for keeper_rbac_snapshot_rebuild_errors_total.
@@ -129,6 +136,10 @@ func RegisterRBACMetrics(reg *obs.Registry) *RBACMetrics {
 			Name: "keeper_rbac_invalidations_received_total",
 			Help: "Number of accepted cluster-wide RBAC invalidations (pub/sub signals).",
 		}),
+		shellErrandLegacyRoles: prometheus.NewGauge(prometheus.GaugeOpts{
+			Name: "keeper_rbac_shell_errand_legacy_roles",
+			Help: "Roles granting errand.run without soul.console - the grants that stop reaching a shell once the console gate enforces (NIM-197).",
+		}),
 	}
 	reg.Registerer().MustRegister(
 		m.rebuildDuration,
@@ -138,6 +149,7 @@ func RegisterRBACMetrics(reg *obs.Registry) *RBACMetrics {
 		m.operators,
 		m.checksTotal,
 		m.invalidationsTotal,
+		m.shellErrandLegacyRoles,
 	)
 	return m
 }
@@ -182,6 +194,15 @@ func (m *RBACMetrics) ObserveCheck(err error) {
 		result = checkResultDeny
 	}
 	m.checksTotal.WithLabelValues(result).Inc()
+}
+
+// ObserveShellErrandInventory publishes the console-gate inventory size from a
+// freshly rebuilt snapshot. nil receiver is a no-op.
+func (m *RBACMetrics) ObserveShellErrandInventory(n int) {
+	if m == nil {
+		return
+	}
+	m.shellErrandLegacyRoles.Set(float64(n))
 }
 
 // ObserveInvalidation increments invalidations_received_total for one

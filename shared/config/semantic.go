@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 	"time"
 
@@ -162,6 +163,18 @@ func semanticValidateKeeper(c *KeeperConfig, root *ast.MappingNode) []diag.Diagn
 	if c.Auth != nil && c.Auth.RateLimit != nil {
 		out = append(out, checkDuration(root, "$.auth.rate_limit.lockout_window", c.Auth.RateLimit.LockoutWindow)...)
 		out = append(out, checkDuration(root, "$.auth.rate_limit.lockout_backoff", c.Auth.RateLimit.LockoutBackoff)...)
+	}
+
+	// console.errand_shell_gate (ADR-0074 amendment, NIM-197): a closed enum. A
+	// typo must not silently resolve to the permissive stage.
+	if c.Console != nil && c.Console.ErrandShellGate != "" &&
+		!slices.Contains(ErrandShellGateModes, c.Console.ErrandShellGate) {
+		out = append(out, atPath(root, "$.console.errand_shell_gate", diag.Diagnostic{
+			Level: diag.LevelError, Phase: diag.PhaseSemanticValidate,
+			Code:    "value_not_in_enum",
+			Message: fmt.Sprintf("console.errand_shell_gate must be one of %v, got %q", ErrandShellGateModes, c.Console.ErrandShellGate),
+			Hint:    "omitted/`warn` keeps the deprecation window open; `enforce` denies a verb-shell Errand without soul.console",
+		}))
 	}
 
 	// Cross-field: audit.retention_days aliases reaper.rules.purge_audit_old.max_age.

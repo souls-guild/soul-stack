@@ -799,6 +799,21 @@ type KeeperConsole struct {
 	// default 30m, `0s` explicitly disables the sweep.
 	IdleTimeout string `yaml:"idle_timeout,omitempty"`
 
+	// ErrandShellGate is the stage of the console gate over the Errand path
+	// (ADR-0074 amendment, NIM-197): reaching `core.cmd.shell` / `core.exec.run`
+	// through an Errand requires `soul.console` on top of `errand.run`.
+	//
+	// `warn` (default while the deprecation window is open) records what
+	// enforcement would deny and lets the call through; `enforce` denies. The
+	// window exists because the Cadence path would otherwise break existing
+	// schedules by the clock, with no operator watching.
+	//
+	// Deliberately a keeper.yml key and NOT a SettingsStore one: this is a
+	// security gate, which ADR-0073 admission rule (j.2) keeps out of the
+	// fail-soft overlay — after a Postgres outage that overlay falls back to the
+	// more permissive value, which is the wrong direction for a gate.
+	ErrandShellGate string `yaml:"errand_shell_gate,omitempty"`
+
 	// Recording tunes where the mandatory session recording lands and how long
 	// it stays. It cannot turn recording off — see [KeeperConsoleRecording].
 	Recording *KeeperConsoleRecording `yaml:"recording,omitempty"`
@@ -825,6 +840,13 @@ type KeeperConsoleRecording struct {
 	// and never silently re-dates ones already taken.
 	Retention string `yaml:"retention,omitempty"`
 }
+
+// ErrandShellGateModes are the accepted values of `console.errand_shell_gate`,
+// in schema order. The runtime parser is `shellgate.ParseMode`; this list exists
+// so the config phase can reject a typo at load rather than at the first Errand.
+// A guard test in the keeper module pins the two sets equal — `shared/` cannot
+// import `keeper/internal/`, so the duplication is checked rather than removed.
+var ErrandShellGateModes = []string{"warn", "enforce"}
 
 type KeeperListen struct {
 	GRPC    KeeperListenGRPC   `yaml:"grpc"`

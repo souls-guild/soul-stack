@@ -46,7 +46,7 @@ func humaCadenceRouter(t *testing.T, enforcer apimiddleware.PermissionChecker, a
 	t.Helper()
 	installHumaErrorOverride()
 	store := &strictFakeCadenceStore{}
-	cadenceH := handlers.NewCadenceHandler(store, nil, nil, enforcer, auditW, nil, 0, nil)
+	cadenceH := handlers.NewCadenceHandler(store, nil, nil, enforcer, nil /*gate*/, auditW, nil, 0, nil)
 
 	r := chi.NewRouter()
 	injectClaims := func(next http.Handler) http.Handler {

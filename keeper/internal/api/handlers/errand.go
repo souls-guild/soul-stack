@@ -15,6 +15,7 @@ import (
 	"github.com/souls-guild/soul-stack/keeper/internal/api/problem"
 	"github.com/souls-guild/soul-stack/keeper/internal/errand"
 	keeperjwt "github.com/souls-guild/soul-stack/keeper/internal/jwt"
+	"github.com/souls-guild/soul-stack/keeper/internal/shellgate"
 	"github.com/souls-guild/soul-stack/keeper/internal/soul"
 	"github.com/souls-guild/soul-stack/shared/api"
 )
@@ -38,17 +39,29 @@ import (
 type ErrandHandler struct {
 	dispatcher *errand.Dispatcher
 	store      *errand.Store
-	logger     *slog.Logger
+
+	// enforcer / gate — the console gate over the exec route (ADR-0074
+	// amendment, NIM-197). The route's own middleware already checked
+	// `errand.run` with [ErrandSIDSelector]; the second right is checked HERE
+	// and not in middleware because it depends on the module, which lives in
+	// the body — the same reason the Voyage route picks its permission
+	// in-handler. nil enforcer → the gate is told nothing was verified.
+	enforcer middleware.PermissionChecker
+	gate     *shellgate.Gate
+
+	logger *slog.Logger
 }
 
 // NewErrandHandler constructs the handler. dispatcher/store are required for
 // production calls; in a drift/unit test nil is allowed only if the routes do
-// not invoke the handler.
-func NewErrandHandler(dispatcher *errand.Dispatcher, store *errand.Store, logger *slog.Logger) *ErrandHandler {
+// not invoke the handler. enforcer/gate carry the console gate (NIM-197) and are
+// nil-safe: a nil enforcer makes the gate count the decision as `unconfigured`
+// rather than silently allow or deny it.
+func NewErrandHandler(dispatcher *errand.Dispatcher, store *errand.Store, enforcer middleware.PermissionChecker, gate *shellgate.Gate, logger *slog.Logger) *ErrandHandler {
 	if logger == nil {
 		logger = slog.New(slog.NewJSONHandler(io.Discard, nil))
 	}
-	return &ErrandHandler{dispatcher: dispatcher, store: store, logger: logger}
+	return &ErrandHandler{dispatcher: dispatcher, store: store, enforcer: enforcer, gate: gate, logger: logger}
 }
 
 // ErrandSpecStub — a non-empty *ErrandHandler stub for generating the huma OpenAPI
@@ -161,6 +174,9 @@ func (h *ErrandHandler) ExecTyped(ctx context.Context, claims *keeperjwt.Claims,
 	}
 	if !soul.ValidSID(sid) {
 		return zero, &problemError{problem.New(problem.TypeValidationFailed, "", "path 'sid' must match "+soul.SIDPattern)}
+	}
+	if err := h.authorizeShell(claims.Subject, sid, req.Module); err != nil {
+		return zero, err
 	}
 
 	var input map[string]any
@@ -452,6 +468,27 @@ func validErrandStatus(s string) bool {
 		return true
 	}
 	return false
+}
+
+// authorizeShell applies the console gate to one exec call (ADR-0074 amendment,
+// NIM-197). A non-verb-shell module returns nil without touching the enforcer;
+// a verb-shell one additionally requires `soul.console` under the SAME
+// `host=<sid>` selector the route's `errand.run` middleware used.
+//
+// nil enforcer → no probe is supplied, and the gate records `unconfigured`
+// rather than assuming an answer.
+func (h *ErrandHandler) authorizeShell(aid, sid, module string) error {
+	var check func() error
+	if h.enforcer != nil {
+		check = func() error {
+			return h.enforcer.Check(aid, "soul", "console", map[string]string{"host": sid})
+		}
+	}
+	if err := h.gate.Authorize(shellgate.SurfaceREST, module, check); err != nil {
+		return &problemError{problem.New(problem.TypeForbidden, "",
+			"module "+module+" runs an arbitrary command line; it additionally requires permission soul.console")}
+	}
+	return nil
 }
 
 // ErrandSIDSelector — a middleware helper for RBAC: extracts the SID from the

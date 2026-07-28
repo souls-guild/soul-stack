@@ -19,6 +19,7 @@ import (
 	"github.com/souls-guild/soul-stack/keeper/internal/incarnation"
 	"github.com/souls-guild/soul-stack/keeper/internal/jwt"
 	"github.com/souls-guild/soul-stack/keeper/internal/rbac"
+	"github.com/souls-guild/soul-stack/keeper/internal/shellgate"
 	"github.com/souls-guild/soul-stack/keeper/internal/soul"
 	"github.com/souls-guild/soul-stack/keeper/internal/soulpurview"
 	"github.com/souls-guild/soul-stack/keeper/internal/voyage"
@@ -89,6 +90,11 @@ type VoyageHandler struct {
 	// wide (backcompat for unit tests without DB scope; production wire-up passes
 	// rbac.Holder).
 	scoper PurviewResolver
+	// gate — the console gate over the command path (ADR-0074 amendment,
+	// NIM-197): a kind=command Voyage naming a verb-shell module additionally
+	// requires `soul.console` on every resolved host. nil → the deprecation
+	// window (see shellgate.Gate).
+	gate   *shellgate.Gate
 	auditW audit.Writer
 	// tidingInvalidator flushes the dispatcher's TTL Tiding-rule snapshot after
 	// committing a voyage-tx with ephemeral notify (ADR-052(g) race-fix). nil → no-op
@@ -123,6 +129,7 @@ func NewVoyageHandler(
 	incReader IncarnationContextReader,
 	enforcer middleware.PermissionChecker,
 	scoper PurviewResolver,
+	gate *shellgate.Gate,
 	auditW audit.Writer,
 	tidingInvalidator TidingInvalidator,
 	maxScope int,
@@ -139,6 +146,7 @@ func NewVoyageHandler(
 		incReader:         incReader,
 		enforcer:          enforcer,
 		scoper:            scoper,
+		gate:              gate,
 		auditW:            auditW,
 		tidingInvalidator: tidingInvalidator,
 		maxScope:          maxScope,
@@ -852,7 +860,47 @@ func (h *VoyageHandler) resolveCommandScopeErr(ctx context.Context, claims *jwt.
 	if err := h.scopeExceedsCapErr(len(resolved)); err != nil {
 		return nil, err
 	}
+	if err := h.authorizeShellErr(claims.Subject, req.Module, resolved); err != nil {
+		return nil, err
+	}
 	return resolved, nil
+}
+
+// authorizeShellErr applies the console gate to a kind=command Voyage (ADR-0074
+// amendment, NIM-197). A non-verb-shell module returns immediately — a batch of
+// ordinary Errands is not narrowed by this gate.
+//
+// For a verb-shell module the operator must hold `soul.console` on EVERY host
+// the target resolved to, with the same `host=<sid>` selector shape the
+// single-host exec route uses. All-or-nothing rather than trimming the scope:
+// silently dropping hosts from a batch the operator submitted would answer a
+// different question than the one they asked, and the `errand.run` resolve above
+// already treats a foreign explicit host as a 403 rather than a trim.
+//
+// Runs AFTER the scope cap, so an over-sized target is still refused for its
+// size — the gate never walks a scope the request was not allowed to have.
+func (h *VoyageHandler) authorizeShellErr(aid, module string, resolved []string) error {
+	if !shellgate.Required(module) {
+		return nil
+	}
+	denied := ""
+	var check func() error
+	if h.enforcer != nil {
+		check = func() error {
+			for _, sid := range resolved {
+				if err := h.enforcer.Check(aid, "soul", "console", map[string]string{"host": sid}); err != nil {
+					denied = sid
+					return err
+				}
+			}
+			return nil
+		}
+	}
+	if err := h.gate.Authorize(shellgate.SurfaceVoyage, module, check); err != nil {
+		return &problemError{problem.New(problem.TypeForbidden, "",
+			"module "+module+" runs an arbitrary command line; it additionally requires permission soul.console on target host "+denied)}
+	}
+	return nil
 }
 
 // createCommandTyped — the kind=command branch of Create (FULL-TYPED ADR-054 §Pattern,

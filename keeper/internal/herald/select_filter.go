@@ -98,6 +98,7 @@ func eventIncarnation(et audit.EventType, payload map[string]any) string {
 func eventCadence(et audit.EventType, payload map[string]any) string {
 	switch et {
 	case audit.EventCadenceSpawned, audit.EventCadenceSkippedOverlap,
+		audit.EventCadenceSkippedForbidden,
 		audit.EventIncarnationRunCompleted:
 		return payloadStr(payload, "cadence_id")
 	case audit.EventScenarioRunCompleted, audit.EventScenarioRunFailed,

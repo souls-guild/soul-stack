@@ -45,7 +45,7 @@ func newVoyageHandlerWithInvalidator(store *fakeVoyageStore, sc VoyageScenarioRe
 		"errand.run":      true,
 		"herald.read":     true,
 	}}
-	return NewVoyageHandler(store, sc, cmd, nil /*incReader*/, enf, nil /*scoper*/, nil /*auditW*/, inv, 0, 0, nil)
+	return NewVoyageHandler(store, sc, cmd, nil /*incReader*/, enf, nil /*scoper*/, nil /*gate*/, nil /*auditW*/, inv, 0, 0, nil)
 }
 
 // TestVoyageNotify_InvalidatesAfterCommit — guard A (race fix ADR-052(g)):

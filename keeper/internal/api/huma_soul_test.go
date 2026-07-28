@@ -718,7 +718,7 @@ func (hExecOutbound) SendCancelErrand(context.Context, string, string) error    
 func humaExecRouter(t *testing.T, enforcer hSoulEnforcer, auditW audit.Writer, d *errand.Dispatcher) *chi.Mux {
 	t.Helper()
 	installHumaErrorOverride()
-	errandH := handlers.NewErrandHandler(d, nil, nil)
+	errandH := handlers.NewErrandHandler(d, nil, nil /*enforcer*/, nil /*gate*/, nil)
 	r := chi.NewRouter()
 	injectClaims := func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
@@ -979,16 +979,16 @@ func TestHumaSoul_Exec_ChiCoexistence(t *testing.T) {
 		handlers.TelemetrySpecStub(),
 		stubRoleHandler(t), stubSynodHandler(t), stubSigilHandler(t), stubSigilKeyHandler(t),
 		stubServiceHandler(t), nil, nil, stubAugurHandler(t), stubOracleHandler(t),
-		nil,                                      // pushH
-		nil,                                      // pushProviderH
-		nil,                                      // providerH
-		nil,                                      // profileH
-		handlers.NewErrandHandler(nil, nil, nil), // errandH non-nil → exec is mounted on huma
-		nil,                                      // voyageH
-		nil,                                      // cadenceH
-		nil,                                      // auditH
-		nil,                                      // choirH
-		nil,                                      // heraldH
+		nil, // pushH
+		nil, // pushProviderH
+		nil, // providerH
+		nil, // profileH
+		handlers.NewErrandHandler(nil, nil, nil /*enforcer*/, nil /*gate*/, nil), // errandH non-nil → exec is mounted on huma
+		nil, // voyageH
+		nil, // cadenceH
+		nil, // auditH
+		nil, // choirH
+		nil, // heraldH
 		handlers.NewModuleCatalogHandler(nil, nil),
 		handlers.NewModuleFormPrepHandler(nil, nil),
 		handlers.NewPermissionCatalogHandler(nil),

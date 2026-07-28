@@ -69,6 +69,11 @@ type Holder struct {
 	mu  sync.Mutex
 	cur *Enforcer
 
+	// shellErrandLegacy is the previous console-gate inventory (NIM-197), kept
+	// so the WARN line fires on change rather than on every TTL refresh. Under
+	// mu with cur — both are snapshot-derived.
+	shellErrandLegacy []string
+
 	// metrics is the keeper_rbac_* descriptor, injected via [SetMetrics]
 	// during the daemon's setup phase (after the registry is created, which
 	// comes up after NewHolder). nil until wire-up and in tests/bootstrap —
@@ -215,10 +220,44 @@ func (h *Holder) Refresh(ctx context.Context) error {
 		return err
 	}
 	m.ObserveRebuildSuccess(time.Since(start), enf.RoleCount(), enf.OperatorCount())
+	h.observeShellErrandInventory(m, enf)
 	h.mu.Lock()
 	h.cur = enf
 	h.mu.Unlock()
 	return nil
+}
+
+// observeShellErrandInventory publishes the console-gate inventory (NIM-197)
+// and names the roles in a WARN line — but only when the set CHANGES. The gauge
+// is a number an operator can alert on; the log is where they read which grants
+// the flip to `enforce` will break. Logging on every TTL refresh would bury it,
+// so the previous set is kept and compared.
+func (h *Holder) observeShellErrandInventory(m *RBACMetrics, enf *Enforcer) {
+	legacy := enf.ShellErrandLegacyRoles()
+	m.ObserveShellErrandInventory(len(legacy))
+
+	h.mu.Lock()
+	changed := !sameRoleList(h.shellErrandLegacy, legacy)
+	h.shellErrandLegacy = legacy
+	h.mu.Unlock()
+	if !changed || len(legacy) == 0 || h.logger == nil {
+		return
+	}
+	h.logger.Warn("rbac: roles grant errand.run without soul.console; the console gate will deny them once it enforces (NIM-197)",
+		slog.Int("count", len(legacy)),
+		slog.Any("roles", legacy))
+}
+
+func sameRoleList(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
 }
 
 // refresh is the internal best-effort reload for the background goroutine:

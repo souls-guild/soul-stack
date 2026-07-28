@@ -76,6 +76,7 @@ import (
 	"github.com/souls-guild/soul-stack/keeper/internal/secretwrite"
 	"github.com/souls-guild/soul-stack/keeper/internal/serviceregistry"
 	"github.com/souls-guild/soul-stack/keeper/internal/settingsstore"
+	"github.com/souls-guild/soul-stack/keeper/internal/shellgate"
 	"github.com/souls-guild/soul-stack/keeper/internal/sigil"
 	"github.com/souls-guild/soul-stack/keeper/internal/toll"
 	"github.com/souls-guild/soul-stack/keeper/internal/topology"
@@ -301,6 +302,13 @@ type daemon struct {
 	// Keeper daemon runtime wiring note.
 	providerSvc *provider.Service
 	profileSvc  *profile.Service
+
+	// shellGate — the console gate over the Errand path (ADR-0074 amendment,
+	// NIM-197), shared by the REST, MCP and Cadence-spawn choke-points so all of
+	// them read one mode. Built in setupMetricsRegistry (it needs the registry)
+	// and consumed by setupAPIServer / setupMCPServer / setupConductor, all of
+	// which run later.
+	shellGate *shellgate.Gate
 
 	// --- metrics ---
 	metricsReg      *obs.Registry
@@ -1348,6 +1356,19 @@ func (d *daemon) setupMetricsRegistry(_ context.Context) error {
 	// Keeper daemon runtime wiring note.
 	// Keeper daemon runtime wiring note.
 	d.rbacHolder.SetMetrics(rbac.RegisterRBACMetrics(metricsReg))
+	// Console gate over the Errand path (NIM-197). The mode came through config
+	// validation (closed enum), so ParseMode can only fail on a programmer error
+	// here; failing startup is still the right answer — a gate that silently
+	// resolves to the permissive stage is worse than a refused boot.
+	shellGateRaw := ""
+	if d.cfg.Console != nil {
+		shellGateRaw = d.cfg.Console.ErrandShellGate
+	}
+	shellGateMode, err := shellgate.ParseMode(shellGateRaw)
+	if err != nil {
+		return err
+	}
+	d.shellGate = shellgate.New(shellGateMode, shellgate.RegisterMetrics(metricsReg), d.logger)
 	// Keeper daemon runtime wiring note.
 	// Keeper daemon runtime wiring note.
 	// Keeper daemon runtime wiring note.
@@ -4409,6 +4430,7 @@ func (d *daemon) setupAPIServer(ctx context.Context) error {
 		VaultPinger:         d.vc,
 		AuditWriter:         d.auditWriter,
 		RBAC:                d.rbacHolder,
+		ShellGate:           d.shellGate,
 		RBACSvc:             d.rbacSvc,
 		SigilSvc:            d.sigilSvc,
 		SigilKeySvc:         d.sigilKeySvc,
@@ -4834,7 +4856,9 @@ func (d *daemon) setupMCPServer(ctx context.Context) error {
 		mcpHandler, err := mcp.NewHandler(mcp.HandlerDeps{
 			OperatorSvc: d.apiServer.OperatorService(),
 			RBAC:        d.rbacHolder,
-			RBACRoles:   d.rbacSvc,
+			// Same gate instance as REST — one mode across both surfaces (NIM-197).
+			ShellGate: d.shellGate,
+			RBACRoles: d.rbacSvc,
 			// Keeper daemon runtime wiring note.
 			// Keeper daemon runtime wiring note.
 			// Keeper daemon runtime wiring note.
@@ -6125,6 +6149,8 @@ func (d *daemon) setupConductor(ctx context.Context) error {
 		cadenceScenarioResolver{inner: handlers.NewVoyageScenarioPGResolver(d.pool)},
 		cadenceCommandResolver{inner: handlers.NewVoyageCommandPGResolver(d.pool)},
 		d.auditWriter,
+		d.rbacHolder,
+		d.shellGate,
 		logger,
 	)
 

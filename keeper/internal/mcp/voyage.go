@@ -46,6 +46,7 @@ func (h *Handler) ensureVoyageHandler() *handlers.VoyageHandler {
 		h.deps.IncarnationDB,
 		h.deps.RBAC,
 		h.deps.PurviewResolver, // scoper: target ∩ Purview command-paths (ADR-047 S4); same rbac.Holder as REST
+		h.deps.ShellGate,       // console gate over a verb-shell kind=command Voyage (NIM-197); same instance as REST
 		h.deps.AuditWriter,
 		// tidingInvalidator: the same *herald.Service as REST (single source of
 		// truth) — after committing a voyage tx with ephemeral-notify, resets the

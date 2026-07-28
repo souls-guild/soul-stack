@@ -10,6 +10,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/souls-guild/soul-stack/keeper/internal/cadence"
+	"github.com/souls-guild/soul-stack/keeper/internal/shellgate"
 	"github.com/souls-guild/soul-stack/keeper/internal/voyage"
 	"github.com/souls-guild/soul-stack/shared/audit"
 )
@@ -42,17 +43,37 @@ type CadenceSpawner struct {
 	scenarioR cadence.ScenarioResolver
 	commandR  cadence.CommandResolver
 	audit     audit.Writer
-	logger    *slog.Logger
+
+	// enforcer / gate — the console gate on the background path (ADR-0074
+	// amendment, NIM-197). This is the surface the deprecation window was built
+	// for: everywhere else an operator is waiting on an HTTP status, here the
+	// only witness is the schedule itself. Both nil-safe.
+	enforcer ConsoleChecker
+	gate     *shellgate.Gate
+
+	logger *slog.Logger
+}
+
+// ConsoleChecker is the narrow RBAC surface the spawn path needs — one
+// scope-aware permission check. Satisfied by *rbac.Holder and *rbac.Enforcer;
+// declared here so the conductor does not take the whole enforcer surface for a
+// single call.
+type ConsoleChecker interface {
+	Check(aid, resource, action string, context map[string]string) error
 }
 
 // NewCadenceSpawner constructs a spawner. resolvers are required (production
 // wire-up uses handlers' PG resolvers via an adapter); audit is nil-safe;
-// logger is nil-safe.
+// logger is nil-safe. enforcer/gate carry the console gate (NIM-197) and are
+// nil-safe: without an enforcer the gate records `unconfigured` instead of
+// deciding either way.
 func NewCadenceSpawner(
 	pool *pgxpool.Pool,
 	scenarioR cadence.ScenarioResolver,
 	commandR cadence.CommandResolver,
 	auditW audit.Writer,
+	enforcer ConsoleChecker,
+	gate *shellgate.Gate,
 	logger *slog.Logger,
 ) *CadenceSpawner {
 	return &CadenceSpawner{
@@ -60,6 +81,8 @@ func NewCadenceSpawner(
 		scenarioR: scenarioR,
 		commandR:  commandR,
 		audit:     auditW,
+		enforcer:  enforcer,
+		gate:      gate,
 		logger:    logger,
 	}
 }
@@ -82,8 +105,18 @@ type spawnedRecord struct {
 	voyageID     string // empty for a skip record
 	scheduledFor time.Time
 	scopeSize    int
-	skipped      bool // true → skipped_overlap, false → spawned
+	skipped      bool   // true → a skip event, false → spawned
+	skipReason   string // why the spawn was skipped; empty ⇒ overlap
+	module       string // verb-shell module of a gate-skipped recipe (skipReasonConsoleRequired)
 }
+
+// Skip reasons carried by [spawnedRecord]. `overlap` is the original
+// overlap_policy skip; `console_required` is the console gate refusing a recipe
+// whose creator no longer satisfies it (NIM-197).
+const (
+	skipReasonOverlap         = "overlap"
+	skipReasonConsoleRequired = "console_required"
+)
 
 // Run performs one iteration of due-cadence spawning. Returns the number of
 // spawned Voyages (skip/queue ticks don't count — affected = "how many runs
@@ -199,6 +232,7 @@ func (s *CadenceSpawner) processOne(ctx context.Context, tx pgx.Tx, c *cadence.C
 					cadenceID:    c.ID,
 					scheduledFor: scheduledFor,
 					skipped:      true,
+					skipReason:   skipReasonOverlap,
 				}, false, nil
 			}
 		}
@@ -233,6 +267,28 @@ func (s *CadenceSpawner) processOne(ctx context.Context, tx pgx.Tx, c *cadence.C
 		return nil, false, nil
 	}
 
+	// Console gate (ADR-0074 amendment, NIM-197). The spawned Voyage runs on
+	// behalf of the recipe's creator (ADR-046 §7), so the creator is who must
+	// still hold `soul.console` on the hosts the target just resolved to.
+	//
+	// A refusal is a RECORDED SKIP, never an error: an error here rolls back the
+	// whole tick and stalls every other due schedule. The schedule still advances
+	// (parity with an overlap skip) so the series does not wedge, and
+	// `cadence.skipped_forbidden` says why — the one thing this path must not do
+	// is stop working quietly.
+	if !s.authorizeShell(c, resolved) {
+		if aerr := cadence.AdvanceSchedule(ctx, tx, c.ID, nextRun, nil); aerr != nil {
+			return nil, false, aerr
+		}
+		return &spawnedRecord{
+			cadenceID:    c.ID,
+			scheduledFor: scheduledFor,
+			skipped:      true,
+			skipReason:   skipReasonConsoleRequired,
+			module:       derefStr(c.Module),
+		}, false, nil
+	}
+
 	voyageID := cadence.NewVoyageID()
 	row, targets := cadence.BuildVoyage(c, voyageID, resolved)
 	if err := voyage.Insert(ctx, tx, row); err != nil {
@@ -251,6 +307,39 @@ func (s *CadenceSpawner) processOne(ctx context.Context, tx pgx.Tx, c *cadence.C
 		scheduledFor: scheduledFor,
 		scopeSize:    len(resolved),
 	}, true, nil
+}
+
+// authorizeShell applies the console gate to one due Cadence: true = spawn may
+// proceed. A recipe that does not name a verb-shell module never reaches the
+// enforcer.
+//
+// The probe requires `soul.console` on EVERY resolved host, matching the
+// all-or-nothing rule of the interactive Voyage path — a partial spawn would
+// quietly change the recipe the operator wrote.
+func (s *CadenceSpawner) authorizeShell(c *cadence.Cadence, resolved []string) bool {
+	module := derefStr(c.Module)
+	if !shellgate.Required(module) {
+		return true
+	}
+	var check func() error
+	if s.enforcer != nil {
+		check = func() error {
+			for _, sid := range resolved {
+				if err := s.enforcer.Check(c.CreatedByAID, "soul", "console", map[string]string{"host": sid}); err != nil {
+					return err
+				}
+			}
+			return nil
+		}
+	}
+	return s.gate.Authorize(shellgate.SurfaceCadenceSpawn, module, check) == nil
+}
+
+func derefStr(s *string) string {
+	if s == nil {
+		return ""
+	}
+	return *s
 }
 
 // resolveScope resolves the Cadence recipe's declarative target into a
@@ -275,7 +364,24 @@ func (s *CadenceSpawner) emit(ctx context.Context, rec *spawnedRecord) {
 		return
 	}
 	var ev *audit.Event
-	if rec.skipped {
+	switch {
+	case rec.skipped && rec.skipReason == skipReasonConsoleRequired:
+		// A distinct event type, not `skipped_overlap` with another reason: an
+		// overlap skip is normal scheduling, this one is a schedule that has
+		// stopped running and needs an operator. The module is named because it
+		// is the actionable half — the fix is a `soul.console` grant on it.
+		ev = &audit.Event{
+			EventType:     audit.EventCadenceSkippedForbidden,
+			Source:        audit.SourceBackground,
+			CorrelationID: rec.cadenceID,
+			Payload: map[string]any{
+				"cadence_id":    rec.cadenceID,
+				"scheduled_for": rec.scheduledFor,
+				"reason":        skipReasonConsoleRequired,
+				"module":        rec.module,
+			},
+		}
+	case rec.skipped:
 		ev = &audit.Event{
 			EventType:     audit.EventCadenceSkippedOverlap,
 			Source:        audit.SourceBackground,
@@ -283,10 +389,10 @@ func (s *CadenceSpawner) emit(ctx context.Context, rec *spawnedRecord) {
 			Payload: map[string]any{
 				"cadence_id":    rec.cadenceID,
 				"scheduled_for": rec.scheduledFor,
-				"reason":        "overlap",
+				"reason":        skipReasonOverlap,
 			},
 		}
-	} else {
+	default:
 		ev = &audit.Event{
 			EventType:     audit.EventCadenceSpawned,
 			Source:        audit.SourceBackground,

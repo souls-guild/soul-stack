@@ -104,6 +104,48 @@ Artifact versioning — via git ref ([ADR-007](docs/adr/0007-versioning-git-ref.
   The `keeper` and `soul` daemons stay separate packages on purpose: a server
   installs only what it runs.
 
+### Security
+
+- **`errand.run` no longer reaches an arbitrary shell on its own**
+  ([ADR-0074](docs/adr/0074-interactive-console-pty.md), amendment 2026-07-28;
+  [ADR-033](docs/adr/0033-errand.md)). `core.cmd.shell` and `core.exec.run` sit on
+  the Errand runner's allow-list, and their declared input *is* a command line —
+  so the allow-list bounded the module, not what it carried, and the gate written
+  for "one named module with declared params" opened a root shell. That made
+  `soul.console` (added a day earlier for exactly this action) a half-control:
+  anyone holding `errand.run` walked around it in one call.
+
+  Reaching either module through an Errand now requires **`soul.console` in
+  addition to `errand.run`**, at every entry point: `POST /v1/souls/{sid}/exec`,
+  MCP `keeper.soul.errand.run`, a `kind=command` Voyage (on every resolved host,
+  all-or-nothing), a `kind=command` Cadence recipe, and the Cadence spawn.
+  `errand.run` stays necessary. The two rights remain independent in both
+  directions — `soul.console` alone still does not open the Errand path, and
+  `keeper.soul.run-command` still needs no `errand.run`. **An `ErrandReadSafe`
+  module is unaffected**: an ordinary Errand does not acquire a console
+  requirement. Cancelling a command Voyage is deliberately not gated — the
+  emergency brake must not need a stronger right than the accelerator.
+
+  **This breaks existing grants, so it ships behind a one-minor deprecation
+  window.** `console.errand_shell_gate` in `keeper.yml` defaults to `warn`: the
+  call proceeds and the would-be denial is recorded. It flips to **`enforce` in
+  the next minor**. Before flipping, check two numbers —
+  `keeper_rbac_shell_errand_legacy_roles` (roles holding `errand.run` with no
+  `soul.console`, named in a WARN line when the set changes) and
+  `keeper_rbac_shell_errand_gate_total{result="would_deny"}` (the live, scope-exact
+  answer, cut by `surface`). Both at zero for a release means the flip cannot
+  break you. The key is a `keeper.yml` edit, not a `SettingsStore` one: it is a
+  security gate, and that overlay falls back to the more permissive value after a
+  Postgres outage ([ADR-0073(j.2)](docs/adr/0073-keeper-runtime-config-pg.md)).
+
+  **Watch schedules in particular.** Every other entry point answers an operator
+  reading an HTTP status; a Cadence recipe written under the old rule would simply
+  stop producing runs, on a timer, with nobody looking. Under `enforce` the spawn
+  skips rather than errors (an error would stall every other due schedule),
+  advances `next_run_at` as an overlap skip does, and writes the new
+  **`cadence.skipped_forbidden`** audit event `{cadence_id, scheduled_for, reason,
+  module}`. Alert on it.
+
 ### Changed
 
 - Package renames, dropping a doubled `soul-`: `soul-stack-soul-lint` →

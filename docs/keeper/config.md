@@ -700,6 +700,7 @@ wall of 30 hosts is one session on each of them.
 #   max_sessions_per_archon: 30   # live consoles one Archon may hold
 #   max_sessions_global: 256      # live consoles on THIS keeper instance
 #   idle_timeout: 30m             # close after this long without operator input
+#   errand_shell_gate: warn        # warn | enforce - the console gate over the Errand path
 #   recording:                     # recording is MANDATORY - these tune it, not whether it happens
 #     max_session_bytes: 268435456 # 256 MiB; reaching it CLOSES the session
 #     retention: 2160h             # 90d, stamped into the row on creation
@@ -710,6 +711,7 @@ wall of 30 hosts is one session on each of them.
 | `max_sessions_per_archon` | `int` (≥0) | `30` | Live consoles one Archon may hold across all their sockets. Covers the walls the operator UI is built for; past that an operator is not reading output but running a fan-out, which is what an Errand is for. Exceeding it gives the pane `error{code: "limit_exceeded"}`. `0`/omitted → default. |
 | `max_sessions_global` | `int` (≥0) | `256` | Live consoles on ONE Keeper instance across all operators — a backstop when many operators each stay within their own limit. Every session costs a pty on some host plus a socket buffer here. `0`/omitted → default. |
 | `idle_timeout` | `duration` | `30m` | Close a session with no operator **input** for this long. Output does NOT count as activity: a `tail -f` left running overnight is exactly the abandoned root shell this reaps. `0s` disables the sweep; empty/omitted → default. |
+| `errand_shell_gate` | `warn` \| `enforce` | `warn` | Stage of the console gate over the Errand path ([ADR-0074 amendment](../adr/0074-interactive-console-pty.md), NIM-197): reaching `core.cmd.shell` / `core.exec.run` through an Errand requires `soul.console` on top of `errand.run`. `warn` lets the call through and records the would-be denial (`keeper_rbac_shell_errand_gate_total{result="would_deny"}`); `enforce` denies. An unknown value fails the load — a security gate must not fall back to permissive. Default flips to `enforce` in the next minor; see [rbac.md § Errand](rbac.md) for the inventory to check first. |
 | `recording.max_session_bytes` | `int` | `268435456` (256 MiB) | Cap on one session's recording. Reaching it **closes the session** — a console that can no longer be recorded may not keep running ([ADR-0074(g)](../adr/0074-interactive-console-pty.md)). Sized so that hitting it means a runaway, not a long shift: ~18 hours of a full-screen `top` redrawing, or ~4 minutes of output at the Soul's default `rate_limit_kbps`. Negative removes the cap. `0`/omitted → default. |
 | `recording.retention` | `duration` | `2160h` (90d) | How long a recording is kept before `purge_old_console_recordings` deletes it. Stamped into `console_recordings.ttl_at` on creation, so a change applies to new recordings and never re-dates ones already taken. |
 

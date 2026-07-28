@@ -415,11 +415,23 @@ func (s *recordingScoper) ResolvePurview(_, resource, action string) rbac.Purvie
 type fakeVoyageEnforcer struct {
 	allow   map[string]bool
 	revoked bool
+
+	// consoleHosts, when non-nil, bounds `soul.console` to the listed hosts
+	// (`host=<sid>` selector) instead of reading it from allow — the console
+	// gate's scope tests need a right that holds on some targets and not others.
+	// nil keeps the flat allow-map behaviour.
+	consoleHosts map[string]bool
 }
 
-func (e *fakeVoyageEnforcer) Check(_ string, resource, action string, _ map[string]string) error {
+func (e *fakeVoyageEnforcer) Check(_ string, resource, action string, ctx map[string]string) error {
 	if e.revoked {
 		return rbac.ErrOperatorRevoked
+	}
+	if e.consoleHosts != nil && resource == "soul" && action == "console" {
+		if e.consoleHosts[ctx["host"]] {
+			return nil
+		}
+		return rbac.ErrPermissionDenied
 	}
 	if e.allow[resource+"."+action] {
 		return nil
@@ -454,26 +466,26 @@ func itoa64(n int64) string {
 func newVoyageHandler(store *fakeVoyageStore, sc VoyageScenarioResolver, cmd VoyageCommandResolver, enf apimiddleware.PermissionChecker) *VoyageHandler {
 	// maxScope=0 / maxBatchSize=0 → unlimited: existing tests do not hit the cap.
 	// scoper=nil → cluster-wide command resolve (backcompat of existing tests).
-	return NewVoyageHandler(store, sc, cmd, nil /*incReader=nil → bare-check only*/, enf, nil /*scoper*/, nil, nil /*tidingInvalidator*/, 0, 0, nil)
+	return NewVoyageHandler(store, sc, cmd, nil /*incReader=nil → bare-check only*/, enf, nil /*scoper*/, nil /*gate*/, nil, nil /*tidingInvalidator*/, 0, 0, nil)
 }
 
 // newVoyageHandlerScoped is the variant with a scoper (ADR-047 S4 hybrid guard tests).
 // Command resolve goes through ResolveSIDsInScope (target ∩ Purview).
 func newVoyageHandlerScoped(store *fakeVoyageStore, cmd VoyageCommandResolver, enf apimiddleware.PermissionChecker, scoper PurviewResolver) *VoyageHandler {
-	return NewVoyageHandler(store, &fakeVoyageScenarioResolver{}, cmd, nil /*incReader*/, enf, scoper, nil, nil /*tidingInvalidator*/, 0, 0, nil)
+	return NewVoyageHandler(store, &fakeVoyageScenarioResolver{}, cmd, nil /*incReader*/, enf, scoper, nil /*gate*/, nil, nil /*tidingInvalidator*/, 0, 0, nil)
 }
 
 // newVoyageHandlerCap is the variant with an explicit maxScope (DoS-guard S-med-3 tests).
 // maxScope=0 → unlimited; >0 → cap, exceeding it yields 422 voyage_scope_too_large.
 func newVoyageHandlerCap(store *fakeVoyageStore, sc VoyageScenarioResolver, cmd VoyageCommandResolver, enf apimiddleware.PermissionChecker, maxScope int) *VoyageHandler {
-	return NewVoyageHandler(store, sc, cmd, nil /*incReader=nil → bare-check only*/, enf, nil /*scoper*/, nil, nil /*tidingInvalidator*/, maxScope, 0, nil)
+	return NewVoyageHandler(store, sc, cmd, nil /*incReader=nil → bare-check only*/, enf, nil /*scoper*/, nil /*gate*/, nil, nil /*tidingInvalidator*/, maxScope, 0, nil)
 }
 
 // newVoyageHandlerBatchCap is the variant with an explicit maxBatchSize (DoS-guard S-W4 tests).
 // maxBatchSize=0 → no limit; >0 → cap, exceeding it yields 422
 // voyage_batch_size_too_large. maxScope=0 (does not interfere with batch-cap tests).
 func newVoyageHandlerBatchCap(store *fakeVoyageStore, sc VoyageScenarioResolver, cmd VoyageCommandResolver, enf apimiddleware.PermissionChecker, maxBatchSize int) *VoyageHandler {
-	return NewVoyageHandler(store, sc, cmd, nil /*incReader=nil → bare-check only*/, enf, nil /*scoper*/, nil, nil /*tidingInvalidator*/, 0, maxBatchSize, nil)
+	return NewVoyageHandler(store, sc, cmd, nil /*incReader=nil → bare-check only*/, enf, nil /*scoper*/, nil /*gate*/, nil, nil /*tidingInvalidator*/, 0, maxBatchSize, nil)
 }
 
 func voyageReq(method, url, body string) *http.Request {

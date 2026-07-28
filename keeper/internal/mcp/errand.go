@@ -9,6 +9,7 @@ import (
 
 	"github.com/souls-guild/soul-stack/keeper/internal/errand"
 	"github.com/souls-guild/soul-stack/keeper/internal/jwt"
+	"github.com/souls-guild/soul-stack/keeper/internal/shellgate"
 	"github.com/souls-guild/soul-stack/keeper/internal/soul"
 )
 
@@ -58,10 +59,6 @@ type errandRunOutput struct {
 func (h *Handler) callSoulErrandRun(ctx context.Context, claims *jwt.Claims, req jsonRPCRequest, args json.RawMessage) jsonRPCResponse {
 	const toolName = "keeper.soul.errand.run"
 
-	if h.deps.ErrandDispatcher == nil {
-		return h.toolError(req.ID, toolName, mcpCodeInternalError, errandNotConfigured)
-	}
-
 	var a errandRunArgs
 	if len(args) > 0 {
 		if err := strictUnmarshal(args, &a); err != nil {
@@ -81,9 +78,27 @@ func (h *Handler) callSoulErrandRun(ctx context.Context, claims *jwt.Claims, req
 	}
 
 	// RBAC: errand.run, selector host=<sid> (rbac.md §Errand).
-	if err := h.deps.RBAC.Check(claims.Subject, "errand", "run", map[string]string{"host": a.SID}); err != nil {
+	selector := map[string]string{"host": a.SID}
+	if err := h.deps.RBAC.Check(claims.Subject, "errand", "run", selector); err != nil {
 		return h.toolError(req.ID, toolName, mcpCodeForbidden,
 			"operator lacks required permission errand.run")
+	}
+	// Console gate (ADR-0074 amendment, NIM-197): a verb-shell module carries an
+	// arbitrary command line, so `errand.run` stops being sufficient — the same
+	// `host=<sid>` selector must also satisfy `soul.console`. The sibling tool
+	// keeper.soul.run-command has always required it; this closes the way around.
+	if err := h.deps.ShellGate.Authorize(shellgate.SurfaceMCP, a.Module, func() error {
+		return h.deps.RBAC.Check(claims.Subject, "soul", "console", selector)
+	}); err != nil {
+		return h.toolError(req.ID, toolName, mcpCodeForbidden,
+			"module "+a.Module+" runs an arbitrary command line; it additionally requires permission soul.console")
+	}
+
+	// Nil-guard AFTER both permission checks (the keeper.soul.run-command order):
+	// whether this cluster has an errand orchestrator wired is not something an
+	// operator who may not run Errands needs to learn.
+	if h.deps.ErrandDispatcher == nil {
+		return h.toolError(req.ID, toolName, mcpCodeInternalError, errandNotConfigured)
 	}
 
 	res, err := h.deps.ErrandDispatcher.Dispatch(ctx, errand.DispatchRequest{

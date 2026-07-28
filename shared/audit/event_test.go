@@ -90,6 +90,7 @@ func TestEventType_ConstantsStable(t *testing.T) {
 		EventCadenceDeleted:           "cadence.deleted",
 		EventCadenceSpawned:           "cadence.spawned",
 		EventCadenceSkippedOverlap:    "cadence.skipped_overlap",
+		EventCadenceSkippedForbidden:  "cadence.skipped_forbidden",
 	}
 	for got, want := range voyageCases {
 		if string(got) != want {

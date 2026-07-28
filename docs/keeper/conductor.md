@@ -28,7 +28,7 @@ When an instance holds the lease `conductor:leader`, on each tick it performs th
 
 `FOR UPDATE SKIP LOCKED` + single-executor leadership give **exactly-one-spawn per tick** without a race between Keeper instances.
 
-**Authorship and audit.** The child Voyage is spawned "on behalf of" the Cadence creator (`voyages.started_by_aid` inherits the Cadence's `created_by_aid`). The spawn/skip audit event (`cadence.spawned` / `cadence.skipped_overlap`) is written with **`source: background`** and `archon_aid: NULL` — this is an autonomous background initiative of the keeper, not an operator call. The `background` source is **preserved after the move into Conductor** (a new `scheduler` source is NOT introduced, see [ADR-048 → ADR-022](../adr/0048-conductor.md)). The catalog of event types — [naming-rules.md → Audit-events](../naming-rules.md#audit-events).
+**Authorship and audit.** The child Voyage is spawned "on behalf of" the Cadence creator (`voyages.started_by_aid` inherits the Cadence's `created_by_aid`). The spawn/skip audit event (`cadence.spawned` / `cadence.skipped_overlap` / `cadence.skipped_forbidden`) is written with **`source: background`** and `archon_aid: NULL` — this is an autonomous background initiative of the keeper, not an operator call. The `background` source is **preserved after the move into Conductor** (a new `scheduler` source is NOT introduced, see [ADR-048 → ADR-022](../adr/0048-conductor.md)). The catalog of event types — [naming-rules.md → Audit-events](../naming-rules.md#audit-events).
 
 ## Adaptive poll step
 
@@ -133,3 +133,5 @@ Registered in Keeper's Prometheus registry **only in the branch where Conductor 
 - [ADR-006](../adr/0006-cache-redis.md) — Redis lease, single-executor, leader election.
 - [naming-rules.md → Modules and subsystems inside `keeper`](../naming-rules.md) — Conductor in the vocabulary.
 - [observability.md → Keeper · Conductor](../observability.md) — metrics in the general catalog.
+
+**A spawn can be refused on permission.** A `kind=command` recipe naming `core.cmd.shell` / `core.exec.run` re-checks the creator's `soul.console` on every resolved host at spawn time ([ADR-0074 amendment](../adr/0074-interactive-console-pty.md), NIM-197). A refusal is a **skip, never an error**: an error in the spawn tick rolls back the whole batch and stalls every other due schedule. The skip advances `next_run_at` as an overlap skip does and writes `cadence.skipped_forbidden` `{cadence_id, scheduled_for, reason, module}` — the only signal an operator gets that a schedule has stopped, since nobody is waiting on a response. While `console.errand_shell_gate` is `warn` (the default for one minor) nothing is refused; the would-be denials are counted in `keeper_rbac_shell_errand_gate_total{surface="cadence_spawn",result="would_deny"}`.

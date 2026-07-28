@@ -157,3 +157,31 @@ func TestKeeperConsoleRecording_RejectsAMalformedRetention(t *testing.T) {
 		t.Fatalf("a malformed retention was accepted: %+v", diags)
 	}
 }
+
+// --- errand_shell_gate (ADR-0074 amendment, NIM-197) --------------------------
+
+// The stage of the console gate over the Errand path. A closed enum: a typo must
+// fail the load rather than resolve to the permissive stage behind the
+// operator's back.
+
+func TestKeeperConsole_ErrandShellGate_Accepted(t *testing.T) {
+	for _, mode := range ErrandShellGateModes {
+		cfg := loadKeeperOrFail(t, consoleBaseConfig+`
+console:
+  errand_shell_gate: `+mode+`
+`)
+		if cfg.Console == nil || cfg.Console.ErrandShellGate != mode {
+			t.Fatalf("errand_shell_gate = %+v, want %q", cfg.Console, mode)
+		}
+	}
+}
+
+func TestKeeperConsole_ErrandShellGate_RejectsUnknownValue(t *testing.T) {
+	_, _, diags, _ := LoadKeeperFromBytes("keeper.yml", []byte(consoleBaseConfig+`
+console:
+  errand_shell_gate: off
+`), ValidateOptions{})
+	if !diag.HasErrors(diags) {
+		t.Fatal("an unknown errand_shell_gate value was accepted; a security gate must not fall back to permissive")
+	}
+}

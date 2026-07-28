@@ -1036,6 +1036,22 @@ const (
 	// Payload: `{cadence_id, scheduled_for, reason: "overlap"}`.
 	EventCadenceSkippedOverlap EventType = "cadence.skipped_overlap"
 
+	// EventCadenceSkippedForbidden — a due Cadence did NOT spawn because its
+	// creator no longer satisfies the permission the recipe needs (ADR-0074
+	// amendment / NIM-197: a kind=command recipe naming a verb-shell module
+	// requires `soul.console` on every resolved host, on top of `errand.run`).
+	// next_run_at still advances — the series must not wedge — so WITHOUT this
+	// event the schedule would simply stop producing runs, by the clock and with
+	// nobody watching. That is the whole reason it is a separate type rather than
+	// `skipped_overlap` with another reason: an overlap skip is normal
+	// scheduling, this one needs an operator.
+	// `source: background`, `correlation_id` = cadence_id (no voyage_id — there
+	// was no spawn). Payload: `{cadence_id, scheduled_for, reason:
+	// "console_required", module}` — the module is named because granting
+	// `soul.console` on it is the fix; the recipe's `input` is NOT in the payload
+	// (invariant A ADR-027).
+	EventCadenceSkippedForbidden EventType = "cadence.skipped_forbidden"
+
 	// EventHeraldDelivered — the terminal of a SUCCESSFUL notification delivery
 	// to a Herald channel (ADR-052(d), S3): the claim-queue worker did a webhook
 	// POST, the endpoint returned 2xx. at-least-once — the statuses of

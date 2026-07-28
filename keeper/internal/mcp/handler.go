@@ -23,6 +23,7 @@ import (
 	"github.com/souls-guild/soul-stack/keeper/internal/pushprovider"
 	"github.com/souls-guild/soul-stack/keeper/internal/rbac"
 	"github.com/souls-guild/soul-stack/keeper/internal/serviceregistry"
+	"github.com/souls-guild/soul-stack/keeper/internal/shellgate"
 	"github.com/souls-guild/soul-stack/keeper/internal/sigil"
 	"github.com/souls-guild/soul-stack/shared/audit"
 )
@@ -194,6 +195,12 @@ type HandlerDeps struct {
 	// internal-error "not configured" (SigilSvc pattern).
 	ErrandDispatcher *errand.Dispatcher
 	ErrandStore      *errand.Store
+
+	// ShellGate — the console gate over the Errand path (ADR-0074 amendment,
+	// NIM-197): a verb-shell module additionally requires `soul.console`. Same
+	// instance REST passes into api.Deps.ShellGate. nil → the gate resolves to
+	// the deprecation window (see shellgate.Gate).
+	ShellGate *shellgate.Gate
 
 	// ConsoleRecorder records `keeper.soul.run-command` (NIM-147), the
 	// non-interactive half of the console plane. The SAME recorder the session

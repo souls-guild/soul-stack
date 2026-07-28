@@ -463,6 +463,8 @@ CRUD named host topology inside incarnation (Choir / Voice, tables `incarnation_
 
 An [Errand](../adr/0033-errand.md) is one named module call with declared params, capped output and a fixed end - it can be reasoned about before it runs. A console is an interactive shell under a real pty, running as the Soul daemon's user (typically **root**), whose commands are not knowable in advance and therefore **cannot be checked against a module allow-list**. So it gets a right of its own, and the two rights are **independent**: `errand.run` never implies `soul.console`, and `soul.console` never implies `errand.run`. A role that should not hand out shells simply does not carry it.
 
+**Independent, and now also conjoined on one path.** Since NIM-197 the two rights are *both* required to reach `core.cmd.shell` / `core.exec.run` through an Errand (§ Errand). That is a conjunction on one code path, not an implication in either direction: `soul.console` alone still does not open the Errand path, and `keeper.soul.run-command` still needs no `errand.run`. The practical rule is unchanged and now enforced rather than advised — **a role that must not hand out shells carries neither right**.
+
 The right is checked **twice**, because the target host is not in the URL ([ADR-0074(c)](../adr/0074-interactive-console-pty.md)):
 
 | Gate | Where | Question | Refusal |
@@ -536,7 +538,25 @@ CRUD of the Push-Provider registry - per-provider env-payload params of SSH push
 
 An **interactive console is not an Errand** and is not covered by any of these three rights: it is gated by `soul.console`, which is strictly stronger (§ Console: `soul.console` is strictly stronger than `errand.run`). The same holds for the **non-interactive** console — the MCP tool `keeper.soul.run-command` runs an arbitrary command line and is gated by `soul.console` too, even though it rides the Errand transport.
 
-**Known gap.** `errand.run` alone still reaches an arbitrary shell, because `core.cmd.shell` / `core.exec.run` are on the Errand runner's hardcoded allow-list (`soul/internal/runtime/errandrunner/whitelist.go`) — so `keeper.soul.errand.run`, `POST /v1/souls/{sid}/exec` and a `kind=command` Voyage can execute one. The allow-list constrains the *module*, not the command line it carries. Aligning those choke-points with `soul.console` is an RBAC-breaking change for existing grants and is tracked as **NIM-197** ([ADR-0074 amendment → known gap](../adr/0074-interactive-console-pty.md)). Until then: a role that must not hand out shells withholds `errand.run` as well as `soul.console`.
+**`errand.run` is not enough for a verb-shell module** ([ADR-0074 amendment 2026-07-28](../adr/0074-interactive-console-pty.md), NIM-197). `core.cmd.shell` and `core.exec.run` are on the Errand runner's allow-list, and their declared input IS an arbitrary command line — so the allow-list bounds the *module*, not what it carries. Reaching either through an Errand therefore requires **`soul.console` in addition to `errand.run`**, with the same selector the entry point already resolved. `errand.run` stays necessary; it stopped being sufficient. An `ErrandReadSafe` module is unaffected — an ordinary Errand never demands a console right.
+
+| Entry point | `errand.run` selector | added `soul.console` check |
+|---|---|---|
+| `POST /v1/souls/{sid}/exec` | `host=<sid>` | `host=<sid>` |
+| MCP `keeper.soul.errand.run` | `host=<sid>` | `host=<sid>` |
+| `POST /v1/voyages`, `kind=command` | Purview over the resolved target | `host=<sid>` on **every** resolved host (all-or-nothing — the batch is not trimmed) |
+| `POST /v1/voyages/preview`, `kind=command` | same | same — preview shares the create path's resolver and refuses in the same places, so a preview never promises a run the create would refuse |
+| `POST`/`PATCH /v1/cadences`, `kind=command` | bare | bare (a recipe's target is declarative; there is no host yet) |
+| Cadence spawn (background) | — | `host=<sid>` on every resolved host, against the recipe's `created_by_aid` |
+
+`DELETE /v1/voyages/{id}` is deliberately **not** gated: cancelling is de-escalation, and the emergency brake must not need a stronger right than the accelerator.
+
+**Deprecation window.** The gate ships in two stages, set by `console.errand_shell_gate` in keeper.yml (see [config.md](config.md)): `warn` (default for one minor) lets the call through and records the would-be denial; `enforce` denies. Before flipping it, read the inventory:
+
+- `keeper_rbac_shell_errand_legacy_roles` — roles granting `errand.run` without `soul.console` at all, i.e. the grants `enforce` will break. Recomputed on every RBAC snapshot rebuild; the names appear in a WARN log line whenever the set changes. Scope-agnostic, so it is a **floor**: a role holding both rights but with a narrower console scope is not counted.
+- `keeper_rbac_shell_errand_gate_total{surface,result}` — live decisions. `result="would_deny"` is the exact answer, because it is the real check on real targets. `surface` names which entry point (`rest` / `mcp` / `voyage` / `cadence` / `cadence_spawn`).
+
+**Cadence breaks on a timer, so it is made loud.** A recipe written under the old rule keeps firing after `enforce` lands, and refusing it in the background has no operator to answer. The spawn therefore skips, still advances `next_run_at` (so the series does not wedge) and writes **`cadence.skipped_forbidden`** `{cadence_id, scheduled_for, reason, module}` — a distinct event from `cadence.skipped_overlap`, which is ordinary scheduling.
 
 ### Cadence (6) - [ADR-046](../adr/0046-cadence.md)
 

@@ -303,7 +303,7 @@ func newCadenceHandler(store *fakeCadenceStore, enf apimiddleware.PermissionChec
 	// pollFloorSeconds=0 → floor check disabled: existing CRUD tests don't hit
 	// the floor limit (checked separately by newCadenceHandlerFloor).
 	// tidingInvalidator=nil → notify invalidation is a no-op (CRUD tests without notify).
-	return NewCadenceHandler(store, &fakeVoyageScenarioResolver{out: []string{"inc-a"}}, nil, enf, nil, nil, 0, nil)
+	return NewCadenceHandler(store, &fakeVoyageScenarioResolver{out: []string{"inc-a"}}, nil, enf, nil /*gate*/, nil, nil, 0, nil)
 }
 
 // fakeTidingInvalidator — mock [TidingInvalidator]; counts calls and records the
@@ -321,21 +321,21 @@ func (f *fakeTidingInvalidator) InvalidateTidings(_ context.Context, name string
 // newCadenceHandlerNotify — handler with a tidingInvalidator for notify tests
 // (ADR-052 §m). bare scenario resolve (one incarnation), incReader=nil.
 func newCadenceHandlerNotify(store *fakeCadenceStore, enf apimiddleware.PermissionChecker, inv TidingInvalidator) *CadenceHandler {
-	return NewCadenceHandler(store, &fakeVoyageScenarioResolver{out: []string{"inc-a"}}, nil, enf, nil, inv, 0, nil)
+	return NewCadenceHandler(store, &fakeVoyageScenarioResolver{out: []string{"inc-a"}}, nil, enf, nil /*gate*/, nil, inv, 0, nil)
 }
 
 // newCadenceHandlerFloor — handler with a floor limit (ADR-046 Pass B): interval <
 // floorSeconds → 422 on Create/Patch. bare-check-only (scenarioResolver/incReader
 // as in newCadenceHandler).
 func newCadenceHandlerFloor(store *fakeCadenceStore, enf apimiddleware.PermissionChecker, floorSeconds int) *CadenceHandler {
-	return NewCadenceHandler(store, &fakeVoyageScenarioResolver{out: []string{"inc-a"}}, nil, enf, nil, nil, floorSeconds, nil)
+	return NewCadenceHandler(store, &fakeVoyageScenarioResolver{out: []string{"inc-a"}}, nil, enf, nil /*gate*/, nil, nil, floorSeconds, nil)
 }
 
 // newCadenceHandlerScoped — handler with scenarioResolver + incReader for
 // per-target coven-scope-check tests (ADR-046 §7). parity newVoyageHandler with a
 // non-empty incReader.
 func newCadenceHandlerScoped(store *fakeCadenceStore, sc VoyageScenarioResolver, incReader IncarnationContextReader, enf apimiddleware.PermissionChecker) *CadenceHandler {
-	return NewCadenceHandler(store, sc, incReader, enf, nil, nil, 0, nil)
+	return NewCadenceHandler(store, sc, incReader, enf, nil /*gate*/, nil, nil, 0, nil)
 }
 
 func cadenceReq(method, url, body string) *http.Request {

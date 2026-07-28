@@ -33,6 +33,7 @@ import (
 	"github.com/souls-guild/soul-stack/keeper/internal/pushprovider"
 	"github.com/souls-guild/soul-stack/keeper/internal/rbac"
 	"github.com/souls-guild/soul-stack/keeper/internal/serviceregistry"
+	"github.com/souls-guild/soul-stack/keeper/internal/shellgate"
 	"github.com/souls-guild/soul-stack/keeper/internal/sigil"
 	"github.com/souls-guild/soul-stack/keeper/internal/toll"
 	"github.com/souls-guild/soul-stack/shared/audit"
@@ -62,6 +63,12 @@ type Deps struct {
 	VaultPinger health.Pinger
 	AuditWriter audit.Writer
 	RBAC        RBACProvider
+
+	// ShellGate — the console gate over the Errand path (ADR-0074 amendment,
+	// NIM-197): reaching a verb-shell module through an Errand additionally
+	// requires `soul.console`. Shared with the MCP surface (mcp.HandlerDeps.
+	// ShellGate) so both stages read one mode. nil → the deprecation window.
+	ShellGate *shellgate.Gate
 
 	// RBACSvc — the RBAC-CRUD business logic (roles / permissions / membership)
 	// for the future role.* endpoints (Slice 2a). DIFFERS from RBAC above:
@@ -742,7 +749,7 @@ func NewServer(cfg config.KeeperListenSimple, deps Deps, logger *slog.Logger) (*
 	// skips registering the whole routing block (router.go).
 	var errandH *handlers.ErrandHandler
 	if deps.ErrandDispatcher != nil && deps.ErrandStore != nil {
-		errandH = handlers.NewErrandHandler(deps.ErrandDispatcher, deps.ErrandStore, logger)
+		errandH = handlers.NewErrandHandler(deps.ErrandDispatcher, deps.ErrandStore, deps.RBAC, deps.ShellGate, logger)
 	}
 
 	// auditH is optional: when nil AuditReader the audit route isn't wired (the
@@ -829,6 +836,7 @@ func NewServer(cfg config.KeeperListenSimple, deps Deps, logger *slog.Logger) (*
 			// someone else's coven). Zeroing this argument is caught by e2e in
 			// voyage_scope_integration_test.go (#2/#4/#6 turn red).
 			deps.RBAC,
+			deps.ShellGate,
 			deps.AuditWriter,
 			// tidingInvalidator: the same *herald.Service (single source of truth)
 			// that REST/MCP use for Herald/Tiding CRUD. After the commit of the
@@ -854,7 +862,7 @@ func NewServer(cfg config.KeeperListenSimple, deps Deps, logger *slog.Logger) (*
 		// CRUD — after the tx-creation of a Cadence with notify rules it drops the
 		// dispatcher's TTL snapshot (ADR-052 §m, parity voyageH). nil (dev without herald)
 		// → no-op, degrading to TTL convergence.
-		cadenceH = handlers.NewCadenceHandler(deps.CadenceDB, deps.VoyageScenarioResolver, deps.IncarnationDB, deps.RBAC, deps.AuditWriter, deps.HeraldSvc, deps.CadencePollFloorSeconds, logger)
+		cadenceH = handlers.NewCadenceHandler(deps.CadenceDB, deps.VoyageScenarioResolver, deps.IncarnationDB, deps.RBAC, deps.ShellGate, deps.AuditWriter, deps.HeraldSvc, deps.CadencePollFloorSeconds, logger)
 	}
 
 	// Tempo voyage-create/preview limits providers: when nil from the caller
