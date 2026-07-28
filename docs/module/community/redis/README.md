@@ -150,8 +150,10 @@ undefined → `caught_up=false` (abnormal input, not silent success).
 | `source_password` | string (secret) | optional | Password of the **external** source for the second connection. vault-ref, keeper resolves to Apply. Masked. |
 | `lag_threshold` | int | optional (default `0`) | Allowable backlog (`master_repl_offset − slave_repl_offset`) in **bytes** for `caught_up=true`. `0` - strict full catch-up. |
 | `skip_checksum` | bool | optional (default `false`) | Skip opt. reconciliation `DBSIZE` of both instances. By default, `DBSIZE` of the source and replica are placed in Output as an auxiliary signal (`caught_up` is **not** affected - offset authority). |
-| `tls` / `tls_ca` | — | optional | TLS connection to **your** instance (only `tls` + `tls_ca`; this state does not have an mTLS pair). |
-| `source_tls` / `source_tls_ca` | — | optional | TLS connection to an **external** source (second connection). `source_tls_ca` - PEM CA source (secret). |
+| `username` | string | optional | ACL-username for `AUTH` on **your** instance. The source connection has no username of its own - `source_password` authenticates as the source's default user. |
+| `db` | int | optional (default `0`) | Database number (`SELECT`) on **your** instance. |
+| `tls` / `tls_ca` / `tls_cert` / `tls_key` / `tls_skip_verify` | — | optional | General TLS connection parameters for **your** instance (see "TLS connection"). |
+| `source_tls` / `source_tls_ca` / `source_tls_cert` / `source_tls_key` / `source_tls_skip_verify` | — | optional | The same set for the **second** connection to the external source - its own CA and verification (the two sides may sit behind different PKI). In practice the migration pilot passes only `source_tls` + `source_tls_ca`. |
 
 **Output**: `caught_up` (bool) — final catch-up condition; `lag_bytes` (int64) —
 `master_repl_offset − slave_repl_offset` (negative clamped to `0` -
@@ -168,7 +170,9 @@ whether full-sync; with `!skip_checksum` additionally `dbsize_source` / `dbsize_
 | `config` | map | required | Directives `redis.conf`: `{ maxmemory: "256mb", maxmemory-policy: allkeys-lru }`. Each (except startup-only - see below) → `CONFIG SET <key> <value>`. They are applied in a deterministic order (by key). Numeric values ​​are stringified (`20000`, not `20000.000000`). |
 | `password` | string (secret) | optional | See "Password". |
 | `username` | string | optional | ACL-username for `AUTH`. |
+| `db` | int | optional (default `0`) | Database number (`SELECT`) before `CONFIG SET`. |
 | `rewrite` | bool | optional (default `false`) | After `CONFIG SET` execute `CONFIG REWRITE` (persist in `redis.conf`). |
+| `tls` / `tls_ca` / `tls_cert` / `tls_key` / `tls_skip_verify` | — | optional | General TLS connection parameters (see "TLS connection"). |
 
 **Honest diff (idempotency).** Before each `CONFIG SET <key>` the plugin does
 `CONFIG GET <key>` and sends `SET` **only** if there is a real discrepancy in the value.
@@ -253,6 +257,11 @@ N slots master→master);
 | `action` | string | required | `create` / `add-node` / `remove-node` / `reshard` (**NOT idempotent**) / `join-external` / `failover-takeover` / `forget-external`. |
 | `password` | string (secret) | optional | See "Password". Applies when connecting to **each** node (`create`) / to `new_node`+`seed`+`master` (`add-node`) / to `node`+`seed`+remaining masters (`remove-node`) / to `from`+`to` (`reshard`) / to the new `nodes`+`source_nodes` (`join-external`/`failover-takeover`/`forget-external` - **common** password of the old and new cluster). |
 | `username` | string | optional | ACL-username for `AUTH`. |
+| `tls` / `tls_ca` / `tls_cert` / `tls_key` / `tls_skip_verify` | — | optional | General TLS connection parameters, applied to **every** node connection incl. `source_nodes` - one cluster PKI (see "TLS connection"). |
+
+> **★ No `addr`/`db` here.** `cluster` is the one state without a single instance:
+> it connects to each node of `nodes`/`seed`/`source_nodes` in turn, so the
+> manifest declares neither `addr` nor `db` for it - only the auth+TLS keys above.
 
 ### cluster — params (`action: create`)
 
@@ -265,6 +274,7 @@ covered) gives `changed=false`, no-op.
 |---|---|---|---|
 | `nodes` | map | required (`create`) | Nodes: map stable-key (SID/name) → `{ addr: "host:port" }` or `{ ip: "10.0.0.1", port: 6379 }`. **The keys are sorted** - they determine the master/replica layout. `addr` - for connection, `ip`+`port` - for `CLUSTER MEET` (gossip operates `ip:port`, not a DNS name). |
 | `replicas_per_shard` | int | optional (default `0`) | Replica to the shard. `shards = len(nodes) / (1 + replicas_per_shard)`; `len(nodes)` must be divided by the size of the shard without a remainder. |
+| `topology` | list | optional | **Explicit** shard layout, a list of shards of `nodes` keys: `[[master-sid, replica-sid, …], …]`. Replaces the deterministic key-sort layout when the operator needs specific pairings (anti-affinity across racks/AZ). Every key of `nodes` must appear **exactly once**; the first entry of a shard is its master. With `replicas_per_shard > 0` every shard must be exactly that size; without it, shard sizes are free. |
 
 **Deterministic layout.** `nodes` keys are sorted; first `shards`
 nodes are masters, the rest are round-robin replicas to the masters (`replica j →
@@ -426,6 +436,8 @@ link → `changed=false`, no-op.
 | `master_addr` | string | required | Master address `host:port`. **HOST-INVARIANT** (one per cluster) - scenario resolves it with run_once (`soulprint.hosts[0]`). `addr == master_addr` → instance is master, `changed=false`, no-op (guard in the plugin so that the scenario calls `replica` on all hosts; with `source_external: true` guard **disabled**). |
 | `password` | string (secret) | optional | The password of the master of **his** incarnation. Placed as `masterauth` to `REPLICAOF`. Empty → `masterauth` is not placed. See "Password". With `source_external: true` `masterauth` is taken **not** from here, but from `master_password`. |
 | `username` | string | optional | ACL-username for replication of its incarnation (`CONFIG SET masteruser`). When `source_external: true` `masteruser` is taken from `master_username`. |
+| `db` | int | optional (default `0`) | Database number (`SELECT`) before `REPLICAOF`. |
+| `tls` / `tls_ca` / `tls_cert` / `tls_key` / `tls_skip_verify` | — | optional | General TLS parameters of the **plugin's own** connection to this instance (see "TLS connection"). Unrelated to `master_tls*` below, which describe the **replication link** to the source. |
 
 ### replica — params (`source_external`)
 
@@ -493,6 +505,8 @@ Reconstructs Redis Sentinel **entirely via go-redis** (without `redis-cli`):
 | `redis_version` | string | optional | Redis version for version-gate global parameters (`loglevel` available in Sentinel since 7.0). Not specified → version-gated parameters are discarded. |
 | `password` | string (secret) | optional | Password for connecting **to** Sentinel itself (its `requirepass`), if specified. See "Password". |
 | `username` | string | optional | ACL-username for connecting to Sentinel. |
+| `db` | int | optional (default `0`) | Part of the shared connection path; Sentinel has no DB namespace, so leave it at `0`. |
+| `tls` / `tls_ca` / `tls_cert` / `tls_key` / `tls_skip_verify` | — | optional | General TLS parameters of the connection **to Sentinel** (see "TLS connection"). The TLS of the master Sentinel monitors is a `sentinel.conf` directive and travels in `config`. |
 
 ## Password (IS-invariant ADR-010)
 
@@ -520,9 +534,19 @@ All states (`command`/`pinged`/`role`/`replica-synced`/`offset-synced`/`config`/
 `cluster`/`replica`/`detached`/`sentinel`) accept **general** TLS connection parameters.
 TLS is disabled by default (plaintext, back-compat); at `tls: true` the plugin connects
 to Redis over TLS. Two states have a **second** set of TLS parameters for the external link:
-`offset-synced` — `source_tls`/`source_tls_ca` (connection to an external source),
+`offset-synced` — `source_tls`/`source_tls_ca`/`source_tls_cert`/`source_tls_key`/
+`source_tls_skip_verify` (connection to an external source, its own PKI),
 `replica source_external` — `master_tls`/`master_tls_ca`/`master_tls_cert`/`master_tls_key`
 (outgoing replication link of the replica to the source; see sidebar in ["replica `source_external`"](#replica--params-source_external)).
+
+> **★ Every state declares the set in its own `input:`, and that is what counts.**
+> Param-level strictness (ADR-0076) checks a task against
+> `spec.states.<state>.input` and nothing else - a promise in this document or in
+> the manifest header is not a declaration. Four states used to omit the set
+> entirely, so an operator's typo in a TLS key passed unnoticed (NIM-206). The
+> guard is a table test over all eleven states in
+> [`manifest_test.go`](../../../../examples/module/soul-mod-community-redis/manifest_test.go).
+> `cluster` is the one exception on `addr`/`db`: it has no single instance.
 
 | Parameter | Type | Default | Destination |
 |---|---|---|---|

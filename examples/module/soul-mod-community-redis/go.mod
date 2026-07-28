@@ -12,6 +12,7 @@ require (
 
 require (
 	github.com/cespare/xxhash/v2 v2.3.0 // indirect
+	github.com/goccy/go-yaml v1.19.2 // indirect
 	go.uber.org/atomic v1.11.0 // indirect
 	golang.org/x/net v0.56.0 // indirect
 	golang.org/x/sys v0.46.0 // indirect
