@@ -256,6 +256,64 @@
   - **J4 (NIM-182).** The web selector and the "you inherit X, you cannot widen it"
     panel.
 
+- **Amendment 2026-07-28 (NIM-202 / NIM-203) — the catalog is a read, and reads need a ceiling too.**
+  J3 published each role in both forms, and did it for everyone: `role.list` answered
+  with the whole catalog. A role carries more than a name — its permission set, its
+  scope and the AIDs holding it — so the full catalog is the cluster's privilege map,
+  and a `coven`-scoped operator was reading all of it.
+
+  **A caller sees a role exactly when the caller could GRANT what that role grants.**
+  The predicate is (c)'s containment, unchanged, evaluated against the role's
+  **effective** form ([`role_visibility.go`](../../keeper/internal/rbac/role_visibility.go)).
+  Reusing the write-side rule is the whole point: it is a boundary the caller already
+  cannot cross, so what lies inside it leaks nothing, and there stays **one definition
+  of ⊆** for the subsystem. A second, read-only notion of "close enough to show" would
+  be free to disagree with the decision layer, and in this direction a disagreement is
+  a leak. A bare `*` covers everything, so the administrator's view is unchanged.
+
+  Judging the **effective** form rather than the stored rows matters here for the same
+  reason it matters in (c): a derived role carrying a row its parent stopped covering
+  grants nothing through that row, and must not be hidden on account of it.
+
+  Coverage cannot express the reader who must see roles they hold nothing of — an
+  auditor, a security review — so that is an explicit right, **`role.list-all`**: a
+  breadth modifier on `role.list`, mounted on no endpoint of its own (the
+  `operator.read` pattern). It is checked with the same containment, against the
+  caller set the filter has already loaded, so `*` and `role.*` cover it for free; the
+  required permission is bare, so only an UNRESTRICTED holder gets the full catalog —
+  a scoped `role.list-all on X` selects nothing, the grammar having no `role=`
+  dimension. Details in [rbac.md → Catalog visibility](../keeper/rbac.md).
+
+- **Amendment 2026-07-28 (NIM-201) — a PLAIN role tracks nothing, and that is an
+  action of its own.** (c)/(d) make a derived role follow its parent; a role with
+  no parent follows nothing. It is a snapshot of privilege that outlives whatever
+  its author held — revoke their `coven=dba` role and the plain role they minted
+  keeps granting `coven=dba`, with no rule having visibly fired. The write-time
+  floor of (h) does not catch it: every permission in that role WAS covered when
+  it was written. The floor bounds what may go into a role, not whether the result
+  keeps tracking the rights it came from.
+
+  So minting a parentless role that grants something requires **`role.create-root`**
+  ([`root_role.go`](../../keeper/internal/rbac/root_role.go)); `role.create` alone
+  admits a derived role. **The default becomes: derive from a role you hold, and
+  the cascade does the rest.**
+
+  The ceiling stays ONE named role, and deliberately never the creator. Binding it
+  to a person would reintroduce exactly what (e) rejects — a creator's union across
+  their roles is wider than any single role they could point at — and would make
+  every role they wrote depend on their continued employment: revoking one operator
+  would zero every role they created, and granting them a role would widen those
+  roles through `created_by_aid`, an audit field invisible in the role editor. A
+  role belongs to its parent, not to its author; the operators holding that parent
+  administer it.
+
+  The gate judges the **shape of the result**, not the verb: it fires on create, on
+  a PATCH that clears `parent_role`, and on a PATCH that grows an already-plain
+  role. Gating only creation would leave it one PATCH wide — the same trap (h)
+  records. A parentless role that grants NOTHING is free (no privilege to strand),
+  and trimming stays ungated (removal adds nothing). `*` and `role.*` cover the new
+  action for free, so only a role enumerating `role.create` explicitly is affected.
+
 - **Consequences.**
   - `rbac_roles` grows one nullable column; every existing role reads back as plain,
     with ADR-047 semantics bit-for-bit. No data migration, no backfill.

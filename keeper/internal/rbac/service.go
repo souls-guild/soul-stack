@@ -187,6 +187,11 @@ func (s *Service) CreateRole(ctx context.Context, in CreateRoleInput) error {
 			in.Permissions, in.DefaultScope, in.CallerAID); err != nil {
 			return err
 		}
+	} else if err := s.assertCallerMayMintRootRole(ctx, tx, in.CallerAID, required); err != nil {
+		// No parent: the role tracks nothing, so it needs `role.create-root`
+		// (NIM-201, root_role.go). Checked AFTER the floor — "you cannot grant
+		// that at all" is the more actionable refusal of the two.
+		return err
 	}
 
 	if err := CreateRole(ctx, tx, in.Name, in.Description, in.Permissions, createdBy, in.DefaultScope); err != nil {
@@ -398,6 +403,13 @@ func (s *Service) UpdateRolePermissions(ctx context.Context, in UpdateRolePermis
 			in.Permissions, newScope, in.CallerAID); err != nil {
 			return err
 		}
+	} else if err := s.assertCallerMayMintRootRole(ctx, tx, in.CallerAID, required); err != nil {
+		// The result has no parent and this PATCH puts privilege into it — the
+		// same minting the create gate refuses (NIM-201). Judged on the RESULTING
+		// shape, so it covers both clearing parent_role and growing a role that
+		// was already plain; `required` is empty on a pure trim, which is why
+		// removing permissions stays ungated.
+		return err
 	}
 
 	// The self-lockout check is needed when the role STOPS being a cluster-admin
@@ -592,12 +604,35 @@ func grantedByArg(callerAID *string) any {
 }
 
 // ListRoles returns the API role catalog (name / description / builtin plus
-// expanded permissions and operator AIDs). Read-only, no tx — assembled with
-// three SELECTs, no N+1 ([LoadRoleViews], mirrors [LoadSnapshot]). This is
-// an API view, not an enforcer snapshot: it carries description/builtin for
-// role.list.
-func (s *Service) ListRoles(ctx context.Context) ([]RoleView, error) {
-	return LoadRoleViews(ctx, s.pool)
+// expanded permissions and operator AIDs) AS callerAID is entitled to see it.
+// Read-only, no tx — assembled with three SELECTs, no N+1 ([LoadRoleViews],
+// mirrors [LoadSnapshot]). This is an API view, not an enforcer snapshot: it
+// carries description/builtin for role.list.
+//
+// The catalog is filtered to the roles the caller could grant (NIM-202,
+// role_visibility.go): `role.list` is the right to read the catalog, not the
+// right to read the cluster's whole privilege map. A caller holding a bare `*`
+// covers every role and so still sees everything, as does one holding
+// `role.list-all` — the explicit right to the full catalog (NIM-203).
+//
+// callerAID is required — filtering has no basis without it, and an unfiltered
+// catalog is exactly the leak this closes.
+func (s *Service) ListRoles(ctx context.Context, callerAID string) ([]RoleView, error) {
+	if callerAID == "" {
+		return nil, fmt.Errorf("%w: missing caller", ErrPermissionNotHeld)
+	}
+	views, err := LoadRoleViews(ctx, s.pool)
+	if err != nil {
+		return nil, err
+	}
+	callerPerms, err := callerPermissions(ctx, s.pool, callerAID)
+	if err != nil {
+		return nil, err
+	}
+	if callerHoldsFullCatalog(callerPerms) {
+		return views, nil
+	}
+	return visibleRoleViews(callerPerms, views)
 }
 
 // assertNotLastWildcardRole is the self-lockout guard for delete/

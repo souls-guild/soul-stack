@@ -83,7 +83,7 @@ var catalogManifest = []toolEntry{
 		status: toolStatusImplemented,
 		decl: toolDeclaration{
 			Name:         "keeper.role.create",
-			Description:  "Creates an RBAC role with a set of permissions. Permission: role.create. Optional parent_role derives the role from another one (ADR-078), bounding it by that role. Fails with code=role-already-exists if name is taken, not-found for an unknown parent_role, forbidden when the role would exceed its parent or the caller's own rights, and validation-failed on a malformed name/permission.",
+			Description:  "Creates an RBAC role with a set of permissions. Permission: role.create. Optional parent_role derives the role from another one (ADR-078), bounding it by that role. WITHOUT parent_role the role tracks nothing, so it additionally requires role.create-root — the default is to derive from a role you hold. Fails with code=role-already-exists if name is taken, not-found for an unknown parent_role, forbidden when the role would exceed its parent or the caller's own rights or is parentless without role.create-root, and validation-failed on a malformed name/permission.",
 			InputSchema:  schemaRoleCreateInput,
 			OutputSchema: schemaEmptyObject,
 		},
@@ -101,7 +101,7 @@ var catalogManifest = []toolEntry{
 		status: toolStatusImplemented,
 		decl: toolDeclaration{
 			Name:         "keeper.role.list",
-			Description:  "Lists RBAC roles with expanded permissions and assigned Archons (AID). Permission: role.list. Each role comes both AS STORED (permissions/default_scope) and AS RESOLVED against its derivation chain (effective_permissions/effective_scope, ADR-078) — do not re-derive inheritance from parent_role.",
+			Description:  "Lists RBAC roles with expanded permissions and assigned Archons (AID). Permission: role.list. SCOPED TO THE CALLER: only the roles the caller could grant themselves — a role's permissions and its operator list together are the cluster's privilege map, so role.list is not the right to read all of it. A caller holding an unrestricted `*` — or the explicit `role.list-all` right — sees every role. Each role comes both AS STORED (permissions/default_scope) and AS RESOLVED against its derivation chain (effective_permissions/effective_scope, ADR-078) — do not re-derive inheritance from parent_role.",
 			InputSchema:  schemaEmptyObject,
 			OutputSchema: schemaRoleListOutput,
 		},

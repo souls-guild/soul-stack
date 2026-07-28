@@ -182,14 +182,14 @@ Six endpoints. RBAC check - in middleware (`role.*`-permission without selector)
 
 | Method + path | Permission | Body/path | Success | Error codes |
 |---|---|---|---|---|
-| `POST /v1/roles` | `role.create` | body `{name, description?, permissions[]}` | `201` (body empty) | `403 forbidden` (least-privilege: right outside the caller set); `409 role-already-exists`; `422 validation-failed` (broken `name` / `permission`); `400 malformed-request` |
-| `GET /v1/roles` | `role.list` | — | `200 {items: [...]}` | `500 internal-error` |
+| `POST /v1/roles` | `role.create` (+ `role.create-root` when no `parent_role`) | body `{name, description?, permissions[]}` | `201` (body empty) | `403 forbidden` (least-privilege: right outside the caller set; or a parentless role without `role.create-root`, § Root roles); `409 role-already-exists`; `422 validation-failed` (broken `name` / `permission`); `400 malformed-request` |
+| `GET /v1/roles` | `role.list` | — | `200 {items: [...]}` (filtered to the caller, § Catalog visibility) | `500 internal-error` |
 | `DELETE /v1/roles/{name}` | `role.delete` | path `name` | `204` | `404 role-not-found`; `409 role-builtin`; `409 would-lock-out-cluster` |
-| `PATCH /v1/roles/{name}/permissions` | `role.update` | path `name` + body `{permissions[]}` (replace) | `204` | `403 forbidden` (least-privilege: added right outside the caller's set); `404 role-not-found`; `409 role-builtin`; `409 would-lock-out-cluster`; `422 validation-failed`; `400 malformed-request` |
+| `PATCH /v1/roles/{name}/permissions` | `role.update` (+ `role.create-root` when the result has no parent) | path `name` + body `{permissions[]}` (replace) | `204` | `403 forbidden` (least-privilege: added right outside the caller's set; or minting a parentless role, § Root roles); `404 role-not-found`; `409 role-builtin`; `409 would-lock-out-cluster`; `422 validation-failed`; `400 malformed-request` |
 | `POST /v1/roles/{name}/operators` | `role.grant-operator` | path `name` + body `{aid}` | `204` | `403 forbidden` (least-privilege: role contains a right outside the caller's set); `404 role-not-found`; `404 not-found` (AID does not exist); `422 validation-failed` (empty/broken AID); `400 malformed-request` |
 | `DELETE /v1/roles/{name}/operators/{aid}` | `role.revoke-operator` | path `name`, `aid` | `204` | `404 not-found` (no pair `(name, aid)`); `409 would-lock-out-cluster`; `422 validation-failed` (broken path-AID) |
 
-- **`GET /v1/roles` items[]** — `{name, description, builtin, permissions[], operators[]}`; `permissions` / `operators` are serialized by a non-nil array (`[]`, not `null`).
+- **`GET /v1/roles` items[]** — `{name, description, builtin, permissions[], operators[]}`; `permissions` / `operators` are serialized by a non-nil array (`[]`, not `null`). The list holds only the roles the caller may see (§ Catalog visibility) — an operator is NOT told how many were withheld.
 - **`grant-operator` idempotent** - re-binding the same pair `(name, aid)` - no-op (`204`).
 - **`granted_by_aid`** for grant is taken from the JWT-claim caller.
 
@@ -213,6 +213,47 @@ A **source** is a bare `*` on a role with `parent_role IS NULL`. A derived role 
 Violation → `409 would-lock-out-cluster` (common problem-type for operator and role paths, [naming-rules.md → Error codes](../naming-rules.md#error-codes)). Self-lockout - "downward" protection (you cannot lock admin-set). A separate § Invariant least-privilege; `role.create` / `role.grant-operator` obey it, although self-lockout does not.
 
 **Check - from the database under `FOR UPDATE`, not from the enforcer snapshot** (see § How an enforcer resolves). The control SQL takes a row-lock on `rbac_role_operators` / `rbac_role_permissions` / `operators` in the same transaction as the mutation: excludes the target role/pair from the sample and checks that ≥1 row remains. The snapshot becomes outdated on the TTL window - checking against it would be a hole; `FOR UPDATE` serializes parallel lockout operations (two txs that unlock `*` in different ways cannot both pass).
+
+### Catalog visibility (`role.list`)
+
+`role.list` is the right to read the role catalog — **not** the right to read the cluster's privilege map. The two are different because a role carries more than its name: its permission set, its scope and the AIDs holding it. Read together, a full catalog answers "who administers what", "which covens and services exist" and "which operator to attack to reach `*`". Before NIM-202 every holder of `role.list` got all of it, including a `coven`-scoped operator who administers one team.
+
+**The rule: a caller sees a role exactly when the caller could GRANT what that role grants.** Formally, `GET /v1/roles` / `keeper.role.list` return role `R` iff the caller's effective rights cover `effective_perms(R)` under `effective_scope(R)` — the same containment as § Invariant least-privilege, `callerHolds` unchanged ([`role_visibility.go`](../../keeper/internal/rbac/role_visibility.go)).
+
+| Caller | Sees |
+|---|---|
+| bare `*` (cluster-admin) | the whole catalog — the administrator's view is unchanged |
+| `role.list-all` (or `role.*`) | the whole catalog — the explicit right, below |
+| `* on <expr>` (scoped super-admin) | roles within that predicate; **not** a role with a bare `*` |
+| scoped operator (e.g. `incarnation.* on coven=dba`) | their own role, roles derived from it, other roles inside `coven=dba` |
+| an operator holding nothing | only roles that grant nothing |
+
+Why the write-side predicate rather than a visibility rule of its own:
+
+- it is already a boundary the caller cannot cross, so showing what is inside it leaks nothing — a visible role is one the caller could have created, been granted, or derived from;
+- **one definition of `⊆` for the subsystem** ([ADR-078(c)](../adr/0078-rbac-derived-roles.md)). A second, read-only notion of "close enough to show" is free to disagree with the decision layer, and in this direction a disagreement is a leak;
+- nothing has to maintain a list of "roles that are safe to show".
+
+Details that follow from the rule:
+
+- **Judged on the EFFECTIVE form**, never the stored rows: the effective form is what the role actually grants ([§ Derived roles](#derived-roles-parent_role)). A derived role carrying a row its parent stopped covering grants nothing through that row and is not hidden for carrying it.
+- **A role that grants nothing is visible to everyone.** It exposes no privilege, and any caller could create the same empty role.
+- **Filtering happens in `rbac.Service`, not in a transport**, so REST and MCP answer a given caller identically. A caller-less read is refused (`ErrPermissionNotHeld`) rather than falling back to the whole catalog.
+- **The count is not published.** A truncated list does not say how many roles were withheld; "N of M" would itself be a fact about the catalog.
+
+#### The full catalog — `role.list-all` (NIM-203)
+
+Real readers must see roles they hold nothing of: an auditor, a security review, first-line support identifying who holds what. No coverage rule can express that, so it is an explicit right.
+
+`role.list-all` is a **breadth modifier, not a route.** `role.list` still gates `GET /v1/roles` / `keeper.role.list`; `role.list-all` decides how much comes back. An auditor therefore needs **both** (or `role.*`), and granting `role.list-all` alone opens nothing. This is the `operator.read` pattern — a catalog name with no endpoint of its own.
+
+- **Checked with the ordinary containment** against the caller set the filter already loaded — no extra query, and `*` / `role.*` cover it for free, so an existing RBAC administrator needs no re-grant.
+- **NoSelector, enforced by construction.** The required permission is *bare*, so the subset check demands the caller be UNRESTRICTED on it: a scoped `role.list-all on coven=X` yields the ordinary filtered view. That is the only sound reading — the scope grammar has no `role=` dimension, so such a scope selects nothing.
+- **All of it, not a redacted form.** The full catalog means permission sets and operator lists too: an auditor who cannot see a role's rights cannot audit it, and a names-only view would still map the organisation while being useless for the job.
+- **No `rbac-auditor` builtin.** The catalog keeps exactly one builtin (`cluster-admin`); a builtin can be neither updated nor deleted (`409 role-builtin`), which is the wrong shape for a role every organisation defines differently. Build it: `role.list` + `role.list-all` + `audit.read`.
+- Appears in `GET /v1/me/permissions` like any other action (`{resource: "role", action: "list-all"}`), so the UI reads it rather than inferring it.
+
+> **Adjacent surface:** `GET /v1/synods` still publishes each group's bundled roles and members to any `synod.list` holder. That is the same class of leak, one step weaker (role NAMES, not their permission sets) — a follow-up, not fixed here. `GET /v1/operators` is unaffected: it publishes the Archon registry, not the role↔operator mapping.
 
 ### Invariant least-privilege (subset-check)
 
@@ -310,6 +351,28 @@ The audit records of `role.created` / `role.permissions-updated` carry the deriv
 
 > **Status.** The model, its guards, chain resolution, the write-time gate and the API surface are all in place (NIM-179 + NIM-180 + NIM-181). Remaining: the web selector and the "you inherit X, you cannot widen it" panel (NIM-182) — until then a derived role is created through the API rather than the UI.
 
+### Root roles (`role.create-root`)
+
+A derived role **follows** its parent: narrow the parent and the child narrows at the next snapshot build. A **plain** role follows nothing. It is a snapshot of privilege that outlives whatever its author held: revoke their `coven=dba` role tomorrow and the plain role they minted keeps granting `coven=dba` to whoever holds it, with no rule having visibly fired.
+
+The least-privilege floor does not catch this — every permission in that role **was** covered when it was written. The floor bounds what may go into a role, not whether the result keeps tracking the rights it came from. So minting a parentless role is its own action:
+
+| Caller | `POST /v1/roles` with no `parent_role` |
+|---|---|
+| bare `*`, `role.*`, or `role.create-root` | allowed |
+| any other holder of `role.create` | **`403`** (`ErrRootRoleNotPermitted`) — derive from a role you hold |
+
+**The default becomes: derive from a role you hold, and the cascade does the rest.** The ceiling is then ONE named role — an organisational object, administered by everyone who holds it — and never the creator: a creator's union across their roles is wider than any single role they could point at ([ADR-078(e)](../adr/0078-rbac-derived-roles.md)), and a person can be revoked or leave, which must not silently strip or widen the roles they once wrote.
+
+Details:
+
+- **Gated on the SHAPE OF THE RESULT, not the verb.** It fires wherever a caller puts privilege into a role that will have no parent: on create, on a `PATCH` that clears `parent_role`, and on a `PATCH` that grows an already-plain role. Gating only creation would leave it one PATCH wide — the trap [ADR-078(h)](../adr/0078-rbac-derived-roles.md) already records for the attenuation gate.
+- **A parentless role that grants NOTHING is free.** There is no privilege to strand; this mirrors § Catalog visibility, where an empty role is visible to everyone.
+- **Trimming stays ungated.** Removing permissions adds nothing, so nothing is minted — unchanged from § Invariant least-privilege.
+- **`*` and `role.*` cover the action for free**, so a cluster-admin and an existing RBAC administrator need no re-grant. Only a role that enumerates `role.create` explicitly is affected.
+
+> **What this does NOT do:** taking a parent role away from an operator does not remove the roles they derived from it. Those roles belong to the parent, not to their author, and other holders of that parent administer them.
+
 ### Builtin-border
 
 `cluster-admin` (`builtin=true`, § Built-in Roles):
@@ -388,15 +451,17 @@ Full list of permission names validated by Keeper in MVP. Names outside this dir
 | `operator.list` | Enumeration of Archons with filters (`auth_method` / `revoked`). Also covers single-archon read `GET /v1/operators/{aid}` - the one-permission-on-read pattern, like `soul.list` / `service.list`. The selector is NoSelector in MVP. |
 | `operator.read` | Registered forward-only in the directory; MVP is not used in the router (route mounts `operator.list` on both endpoints). Introduced so that role configs can specify it without `unknown_permission`. |
 
-### Role (6) — [ADR-028](../adr/0028-rbac-storage.md#adr-028-rbac-storage--postgres)
+### Role (8) — [ADR-028](../adr/0028-rbac-storage.md#adr-028-rbac-storage--postgres)
 
 RBAC management (roles, permissions, membership) via OpenAPI/MCP - RBAC-storage in Postgres (`rbac_roles` / `rbac_role_permissions` / `rbac_role_operators`, § Storage).
 
 | Permission | Semantics |
 |---|---|
-| `role.create` | Creating a role (`rbac_roles` + its permissions in `rbac_role_permissions`). You cannot enable permission outside the caller set (§ least-privilege invariant). |
+| `role.create` | Creating a role (`rbac_roles` + its permissions in `rbac_role_permissions`). You cannot enable permission outside the caller set (§ least-privilege invariant). On its own it admits a **derived** role; a role with no parent additionally needs `role.create-root` (§ Root roles). |
+| `role.create-root` | Creating a role with **no parent** that grants something — privilege that tracks nothing (§ Root roles). Mounted on **no endpoint of its own**: `role.create` still gates `POST /v1/roles`, this decides whether the result may be parentless. Also required to CLEAR `parent_role` or to grow an already-plain role via `PATCH`. NoSelector. |
 | `role.delete` | Removing a role (permissions + membership cascade). **Forbidden** over `builtin=true` (`cluster-admin`) and when the self-lockout invariant is violated (§ Built-in roles). |
-| `role.list` | Listing the roles with their permissions and membership. |
+| `role.list` | Listing the roles with their permissions and membership — **the roles the caller could grant, not the whole catalog** (§ Catalog visibility). |
+| `role.list-all` | Breadth modifier on `role.list`: see the **whole** catalog, including roles the caller holds nothing of (auditor / security review / first-line support). Mounted on **no endpoint of its own** — `role.list` still gates `GET /v1/roles`, this decides how much comes back, so an auditor needs **both**. Granting it alone opens nothing. NoSelector: scoping it is meaningless (no `role=` dimension in the grammar), and only an unrestricted holder gets the full catalog. |
 | `role.update` | Changing role permissions. **Forbidden** over `builtin=true`; you cannot remove `*` from a role that holds the only effective `*` (self-lockout); You cannot add permission outside the caller set (least-privilege). |
 | `role.grant-operator` | Binding `(role, aid)` - adding a membership string to `rbac_role_operators`. You cannot grant a role with permission outside the caller set (§ Least-privilege invariant). |
 | `role.revoke-operator` | Removing the membership line. **Disabled** if it removes the last active AID with effective `*` (self-lockout). |

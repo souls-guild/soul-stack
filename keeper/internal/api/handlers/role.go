@@ -177,6 +177,8 @@ func (h *RoleHandler) CreateTyped(ctx context.Context, claims *jwt.Claims, req R
 		return zero, &problemError{problem.New(problem.TypeForbidden, "", "cannot grant a permission you do not hold yourself")}
 	case errors.Is(err, rbac.ErrRoleExceedsParent):
 		return zero, &problemError{problem.New(problem.TypeForbidden, "", "a derived role may not exceed its parent role")}
+	case errors.Is(err, rbac.ErrRootRoleNotPermitted):
+		return zero, &problemError{problem.New(problem.TypeForbidden, "", "a role with no parent grants privilege that follows nothing - derive from a role you hold, or obtain role.create-root")}
 	case isInvalidPermission(err) || isInvalidDefaultScope(err) || isInvalidDerivation(err):
 		return zero, &problemError{problem.New(problem.TypeValidationFailed, "", err.Error())}
 	default:
@@ -202,8 +204,11 @@ func (h *RoleHandler) CreateTyped(ctx context.Context, claims *jwt.Claims, req R
 // http.ResponseWriter/*http.Request. A catalog read error → *problemError (500);
 // the huma wrapper delivers it via [AsProblemDetails]. The items wire form (Description
 // always, DefaultScope nil→omitted, []-vs-null) is built by the native projection in api.
-func (h *RoleHandler) ListTyped(ctx context.Context) (RoleListPage, error) {
-	views, err := h.svc.ListRoles(ctx)
+//
+// callerAID scopes the catalog to what that operator may see (NIM-202) — the
+// service filters, so REST and MCP get the same answer for the same caller.
+func (h *RoleHandler) ListTyped(ctx context.Context, callerAID string) (RoleListPage, error) {
+	views, err := h.svc.ListRoles(ctx, callerAID)
 	if err != nil {
 		h.logger.Error("role.list: service failed", slog.Any("error", err))
 		return RoleListPage{}, &problemError{problem.New(problem.TypeInternalError, "", "list roles failed")}
@@ -332,6 +337,8 @@ func (h *RoleHandler) UpdatePermissionsTyped(ctx context.Context, claims *jwt.Cl
 		return zero, &problemError{problem.New(problem.TypeForbidden, "", "cannot grant a permission you do not hold yourself")}
 	case errors.Is(err, rbac.ErrRoleExceedsParent):
 		return zero, &problemError{problem.New(problem.TypeForbidden, "", "a derived role may not exceed its parent role")}
+	case errors.Is(err, rbac.ErrRootRoleNotPermitted):
+		return zero, &problemError{problem.New(problem.TypeForbidden, "", "a role with no parent grants privilege that follows nothing - derive from a role you hold, or obtain role.create-root")}
 	case isInvalidPermission(err) || isInvalidDefaultScope(err) || isInvalidDerivation(err):
 		return zero, &problemError{problem.New(problem.TypeValidationFailed, "", err.Error())}
 	default:

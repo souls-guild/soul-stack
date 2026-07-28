@@ -562,6 +562,71 @@ func TestRoleList_Success(t *testing.T) {
 	}
 }
 
+// visibilityCatalog — the fixture shared with the REST guard of the same shape
+// (handlers.visibilityListPool): a cluster-admin row, a scoped team role and an
+// unrelated team's role. Both transports must answer a given caller identically
+// (NIM-202).
+func visibilityCatalog() []rbac.RoleView {
+	return []rbac.RoleView{
+		{Name: "cluster-admin", Description: "cluster admins", Builtin: true,
+			Permissions: []string{"*"}, Operators: []string{"archon-alice"}},
+		{Name: "dba", Description: "dba team", DefaultScope: "coven=dba",
+			Permissions: []string{"incarnation.get"}, Operators: []string{"archon-dba"}},
+		{Name: "payments", Description: "payments team", DefaultScope: "coven=payments",
+			Permissions: []string{"incarnation.get"}},
+	}
+}
+
+func listedMCPRoleNames(t *testing.T, resp jsonRPCResponse) []string {
+	t.Helper()
+	if resp.Error != nil {
+		t.Fatalf("unexpected error: %+v", resp.Error)
+	}
+	var res toolsCallResult
+	if err := json.Unmarshal(resp.Result, &res); err != nil {
+		t.Fatalf("unmarshal result: %v", err)
+	}
+	var out roleListOutput
+	if err := json.Unmarshal(res.StructuredContent, &out); err != nil {
+		t.Fatalf("unmarshal structured: %v", err)
+	}
+	names := make([]string, 0, len(out.Roles))
+	for _, r := range out.Roles {
+		names = append(names, r.Name)
+	}
+	return names
+}
+
+// An agent calling keeper.role.list is filtered exactly as the REST caller is:
+// the catalog is scoped in the service, not in one transport's handler.
+func TestRoleList_ScopedCallerSeesOnlyItsOwnArea(t *testing.T) {
+	pool := &roleFakePool{
+		views:               visibilityCatalog(),
+		callerPermsExplicit: true,
+		callerPerms:         []string{"incarnation.get on coven=dba"},
+	}
+	cfg := &rbactest.Config{Roles: []rbactest.Role{
+		{Name: "dba-lister", Operators: []string{"archon-dba"}, Permissions: []string{"role.list"}},
+	}}
+	h := newRoleHandler(t, cfg, pool)
+
+	got := listedMCPRoleNames(t, callTool(t, h, "archon-dba", "keeper.role.list", `{}`))
+	if len(got) != 1 || got[0] != "dba" {
+		t.Fatalf("visible roles = %v, want [dba]", got)
+	}
+}
+
+// The same catalog read by a cluster-admin comes back whole.
+func TestRoleList_ClusterAdminSeesWholeCatalog(t *testing.T) {
+	pool := &roleFakePool{views: visibilityCatalog()}
+	h := newRoleHandler(t, roleAdminCfg(), pool)
+
+	got := listedMCPRoleNames(t, callTool(t, h, "archon-alice", "keeper.role.list", `{}`))
+	if len(got) != 3 {
+		t.Fatalf("visible roles = %v, want all three", got)
+	}
+}
+
 // --- tests: mutating success + sentinel mapping ---
 
 func TestRoleCreate_Success(t *testing.T) {

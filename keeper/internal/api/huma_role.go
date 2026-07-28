@@ -70,12 +70,20 @@ func registerHumaRole(humaAPI huma.API, roleH *handlers.RoleHandler) {
 // /v1/roles (READ variant pilot-1 — full-typed output, WITHOUT audit-middleware).
 // roleH nil → no-op. Handler reads catalog (ListTyped) → envelope to typed output;
 // error reading → roleProblem (500). RBAC role.list — on group (huma inherits).
+//
+// The claims are read for the CALLER's AID: role.list gates the endpoint, the
+// caller decides its breadth (NIM-202 — the catalog is filtered to the roles
+// that operator may see).
 func registerHumaRoleList(humaAPI huma.API, roleH *handlers.RoleHandler) {
 	if roleH == nil {
 		return
 	}
 	huma.Register(humaAPI, roleListOperation(), func(ctx context.Context, _ *roleListInput) (*roleListOutput, error) {
-		reply, err := roleH.ListTyped(ctx)
+		claims, ok := apimiddleware.ClaimsFromContext(ctx)
+		if !ok {
+			return nil, roleMissingClaims()
+		}
+		reply, err := roleH.ListTyped(ctx, claims.Subject)
 		if err != nil {
 			return nil, roleProblem(err)
 		}

@@ -10165,7 +10165,7 @@ paths:
         - push
   /v1/roles:
     get:
-      description: Catalog of RBAC roles with full permissions and operator membership (ADR-022). Permission role.list. Each role comes both AS STORED (permissions/default_scope) and AS RESOLVED against its derivation chain (effective_permissions/effective_scope, ADR-078) — consumers must not re-derive inheritance from parent_role. Read-only, no audit.
+      description: "Catalog of RBAC roles with full permissions and operator membership (ADR-022). Permission role.list. SCOPED TO THE CALLER: the answer holds only the roles the caller could grant themselves — a role's permission set and its operator list together are the cluster's privilege map, so role.list is not the right to read all of it. A caller holding an unrestricted `*` — or the explicit `role.list-all` right — sees every role. Each role comes both AS STORED (permissions/default_scope) and AS RESOLVED against its derivation chain (effective_permissions/effective_scope, ADR-078) — consumers must not re-derive inheritance from parent_role. Read-only, no audit."
       operationId: listRoles
       responses:
         "200":
@@ -10184,7 +10184,7 @@ paths:
       tags:
         - role
     post:
-      description: Creates RBAC role with set of permissions (ADR-022). Permission role.create. Optional parent_role derives the role from another one (ADR-078), bounding it by that role. 409 — name already taken; 404 — parent_role not found; 403 — beyond the parent or beyond the caller's own rights.
+      description: Creates RBAC role with set of permissions (ADR-022). Permission role.create. Optional parent_role derives the role from another one (ADR-078), bounding it by that role. WITHOUT parent_role the role tracks nothing, so it additionally requires role.create-root — the default is to derive from a role you hold. 409 — name already taken; 404 — parent_role not found; 403 — beyond the parent, beyond the caller's own rights, or parentless without role.create-root.
       operationId: createRole
       requestBody:
         content:

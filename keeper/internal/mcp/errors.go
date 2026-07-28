@@ -295,6 +295,7 @@ func mapIncarnationErrorToMCP(err error) (code, detail string) {
 //   - ErrInvalidRoleName + wrapped ParsePermission error              → validation-failed.
 //   - ErrPermissionNotHeld (least-privilege subset check)             → forbidden.
 //   - ErrRoleExceedsParent (derived role beyond its parent, ADR-078)  → forbidden.
+//   - ErrRootRoleNotPermitted (a plain role without role.create-root)  → forbidden.
 //   - ErrPermissionDenied                                             → forbidden.
 //   - ErrRoleHasChildren (delete refused by the self-FK, ADR-078(g))  → role-has-children.
 //   - ErrRoleParentCycle / ErrRoleChainTooDeep / ErrRoleScopeTooComplex → validation-failed.
@@ -323,6 +324,8 @@ func mapRoleErrorToMCP(err error) (code, detail string) {
 		return mcpCodeForbidden, "cannot grant a permission you do not hold yourself"
 	case errors.Is(err, rbac.ErrRoleExceedsParent):
 		return mcpCodeForbidden, "a derived role may not exceed its parent role"
+	case errors.Is(err, rbac.ErrRootRoleNotPermitted):
+		return mcpCodeForbidden, "a role with no parent grants privilege that follows nothing — derive from a role you hold, or obtain role.create-root"
 	case errors.Is(err, rbac.ErrPermissionDenied):
 		return mcpCodeForbidden, "operator lacks required permission"
 	case errors.Is(err, rbac.ErrRoleHasChildren):

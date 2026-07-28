@@ -13,10 +13,10 @@ package rbac
 import "sort"
 
 // AllowedPermissions — the catalog of permission names from rbac.md →
-// §Catalog of permissions. 104 names (sum of the categories below):
+// §Catalog of permissions. 106 names (sum of the categories below):
 //
 //   - operator (5): create / revoke / issue-token / list / read;
-//   - role (6): create / delete / list / update / grant-operator / revoke-operator;
+//   - role (8): create / create-root / delete / list / list-all / update / grant-operator / revoke-operator;
 //   - synod (8): create / update / delete / list / add-operator / remove-operator / grant-role / revoke-role (ADR-049);
 //   - incarnation (14): create / rerun-last / run / get / list / history / unlock / upgrade / destroy / check-drift / update-hosts / update (deprecated alias) / traits-set / view-secrets;
 //   - soul (7): list / create / issue-token / coven-assign / traits-assign / ssh-target-update / console (ADR-0074);
@@ -71,6 +71,20 @@ var AllowedPermissions = map[string]struct{}{
 	"role.update":          {},
 	"role.grant-operator":  {},
 	"role.revoke-operator": {},
+	// role.create-root — create a role with NO parent, i.e. privilege that
+	// tracks nothing (rbac.md → § Root roles, NIM-201). `role.create` alone
+	// admits only a DERIVED role, whose ceiling follows the parent; without
+	// this right an operator cannot mint a snapshot that outlives the rights
+	// it came from. NoSelector, same reasoning as role.list-all.
+	"role.create-root": {},
+	// role.list-all — see the WHOLE role catalog, not only the roles the
+	// caller could grant (rbac.md → § Catalog visibility, NIM-203). A breadth
+	// modifier on `role.list`, not a route of its own: `role.list` still gates
+	// GET /v1/roles, this decides how much of it comes back. Mounted on no
+	// endpoint (the pattern of `operator.read`). Scoping it is meaningless —
+	// the grammar has no `role=` dimension — so only an UNRESTRICTED holder
+	// gets the full catalog, which the subset check enforces by itself.
+	"role.list-all": {},
 
 	// synod.* — Synod group management (ADR-049): an intermediate level
 	// Archon → Synod → Roles. 8 permissions. Selector — NoSelector (group

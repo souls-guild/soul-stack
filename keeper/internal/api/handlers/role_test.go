@@ -422,6 +422,85 @@ func TestRoleHandler_Create_Duplicate_409(t *testing.T) {
 	wantProblem(t, err, problem.TypeRoleExists)
 }
 
+// --- root roles (NIM-201) ---
+
+// A scoped operator may not mint privilege that tracks nothing: a role with no
+// parent follows no ceiling, so narrowing the creator's own rights later leaves
+// it granting what they no longer have.
+func TestRoleHandler_Create_PlainRoleNeedsCreateRoot_403(t *testing.T) {
+	pool := &rbacFakePool{
+		callerPermsExplicit: true,
+		callerPermsSet:      []string{"incarnation.get on coven=dba", "role.create"},
+	}
+	h := newRoleHandler(t, pool)
+	_, err := h.CreateTyped(context.Background(), claimsFor("archon-dba"),
+		RoleCreateInput{Name: "ops", Permissions: []string{"incarnation.get on coven=dba"}})
+	wantProblem(t, err, problem.TypeForbidden)
+}
+
+// The same request with the explicit right goes through.
+func TestRoleHandler_Create_PlainRoleWithCreateRoot_201(t *testing.T) {
+	pool := &rbacFakePool{
+		callerPermsExplicit: true,
+		callerPermsSet:      []string{"incarnation.get on coven=dba", "role.create", "role.create-root"},
+	}
+	h := newRoleHandler(t, pool)
+	if _, err := h.CreateTyped(context.Background(), claimsFor("archon-dba"),
+		RoleCreateInput{Name: "ops", Permissions: []string{"incarnation.get on coven=dba"}}); err != nil {
+		t.Fatalf("CreateTyped: %v", err)
+	}
+}
+
+// A role that grants nothing strands no privilege, so it needs no extra right —
+// mirroring the visibility rule, where an empty role is visible to everyone.
+func TestRoleHandler_Create_EmptyPlainRoleNeedsNoCreateRoot(t *testing.T) {
+	pool := &rbacFakePool{
+		callerPermsExplicit: true,
+		callerPermsSet:      []string{"role.create"},
+	}
+	h := newRoleHandler(t, pool)
+	if _, err := h.CreateTyped(context.Background(), claimsFor("archon-dba"),
+		RoleCreateInput{Name: "placeholder"}); err != nil {
+		t.Fatalf("CreateTyped: %v", err)
+	}
+}
+
+// Clearing parent_role turns a derived role into a snapshot that follows
+// nothing — the same minting, so the same gate. Without this the create gate
+// would be one PATCH wide.
+func TestRoleHandler_Update_ClearingParentNeedsCreateRoot_403(t *testing.T) {
+	pool := &rbacFakePool{
+		lockRoleFound:       true,
+		callerPermsExplicit: true,
+		callerPermsSet:      []string{"incarnation.get on coven=dba", "role.update"},
+	}
+	h := newRoleHandler(t, pool)
+	_, err := h.UpdatePermissionsTyped(context.Background(), claimsFor("archon-dba"),
+		UpdatePermissionsInput{
+			Name:            "child",
+			Permissions:     []string{"incarnation.get on coven=dba"},
+			SetDefaultScope: true,
+			SetParentRole:   true, // present + nil → cleared
+		})
+	wantProblem(t, err, problem.TypeForbidden)
+}
+
+// Trimming a plain role adds nothing, so nothing is being minted — removing
+// permissions stays ungated, as it always was.
+func TestRoleHandler_Update_TrimmingPlainRoleStaysUngated(t *testing.T) {
+	pool := &rbacFakePool{
+		lockRoleFound:       true,
+		rolePerms:           []string{"incarnation.get", "incarnation.run"},
+		callerPermsExplicit: true,
+		callerPermsSet:      []string{"role.update"},
+	}
+	h := newRoleHandler(t, pool)
+	if _, err := h.UpdatePermissionsTyped(context.Background(), claimsFor("archon-dba"),
+		UpdatePermissionsInput{Name: "ops", Permissions: []string{"incarnation.get"}}); err != nil {
+		t.Fatalf("UpdatePermissionsTyped: %v", err)
+	}
+}
+
 // --- Delete ---
 
 func TestRoleHandler_Delete_204(t *testing.T) {
@@ -656,7 +735,10 @@ func (p *listFakePool) Query(_ context.Context, sql string, _ ...any) (pgx.Rows,
 	case contains(sql, "SELECT role_name, aid FROM rbac_role_operators"):
 		return &pairRows{rows: [][2]string{{"admins", "archon-alice"}}}, nil
 	}
-	return nil, errors.New("listFakePool.Query: unexpected SQL: " + sql)
+	// The caller's own permissions (visibility filter, NIM-202) come from the
+	// embedded pool — unset there means `*`, i.e. a cluster-admin who sees the
+	// whole catalog.
+	return p.rbacFakePool.Query(context.Background(), sql)
 }
 
 func TestRoleHandler_List_200(t *testing.T) {
@@ -665,7 +747,7 @@ func TestRoleHandler_List_200(t *testing.T) {
 		t.Fatalf("NewService: %v", err)
 	}
 	h := NewRoleHandler(svc, nil)
-	page, err := h.ListTyped(context.Background())
+	page, err := h.ListTyped(context.Background(), "archon-alice")
 	if err != nil {
 		t.Fatalf("ListTyped: %v", err)
 	}
@@ -981,6 +1063,81 @@ func TestRoleHandler_Update_AuditRecordsOnlyWhatWasSent(t *testing.T) {
 	}
 }
 
+// visibilityListPool — a cluster-admin row, a scoped team role and an unrelated
+// team's role. The same fixture backs the MCP test of the same name, so the two
+// transports can be held to the same answer (NIM-202).
+type visibilityListPool struct{ rbacFakePool }
+
+func (p *visibilityListPool) Query(_ context.Context, sql string, _ ...any) (pgx.Rows, error) {
+	switch {
+	case contains(sql, "SELECT name, description, builtin, default_scope, parent_role FROM rbac_roles"):
+		return &roleViewRows{rows: [][5]any{
+			{"cluster-admin", "cluster admins", true, nil, nil},
+			{"dba", "dba team", false, ptrStr("coven=dba"), nil},
+			{"payments", "payments team", false, ptrStr("coven=payments"), nil},
+		}}, nil
+	case contains(sql, "SELECT role_name, permission FROM rbac_role_permissions"):
+		return &pairRows{rows: [][2]string{
+			{"cluster-admin", "*"},
+			{"dba", "incarnation.get"},
+			{"payments", "incarnation.get"},
+		}}, nil
+	case contains(sql, "SELECT role_name, aid FROM rbac_role_operators"):
+		return &pairRows{rows: [][2]string{
+			{"cluster-admin", "archon-alice"},
+			{"dba", "archon-dba"},
+		}}, nil
+	}
+	return p.rbacFakePool.Query(context.Background(), sql)
+}
+
+func listedRoleNames(page RoleListPage) []string {
+	out := make([]string, 0, len(page.Items))
+	for _, v := range page.Items {
+		out = append(out, v.Name)
+	}
+	return out
+}
+
+// A scoped operator gets their own team's role and nothing else — not the
+// cluster-admin row (whose `*` and operator list are the attack map), and not a
+// neighbouring team's.
+func TestRoleHandler_List_ScopedCallerSeesOnlyItsOwnArea(t *testing.T) {
+	pool := &visibilityListPool{rbacFakePool{
+		callerPermsExplicit: true,
+		callerPermsSet:      []string{"incarnation.get on coven=dba"},
+	}}
+	svc, err := rbac.NewService(rbac.ServiceDeps{Pool: pool})
+	if err != nil {
+		t.Fatalf("NewService: %v", err)
+	}
+	page, err := NewRoleHandler(svc, nil).ListTyped(context.Background(), "archon-dba")
+	if err != nil {
+		t.Fatalf("ListTyped: %v", err)
+	}
+	got := listedRoleNames(page)
+	if len(got) != 1 || got[0] != "dba" {
+		t.Fatalf("visible roles = %v, want [dba]", got)
+	}
+}
+
+// The same catalog read by a cluster-admin (`*`, the pool's default caller set)
+// comes back whole — the filter costs an administrator nothing.
+func TestRoleHandler_List_ClusterAdminSeesWholeCatalog(t *testing.T) {
+	svc, err := rbac.NewService(rbac.ServiceDeps{Pool: &visibilityListPool{}})
+	if err != nil {
+		t.Fatalf("NewService: %v", err)
+	}
+	page, err := NewRoleHandler(svc, nil).ListTyped(context.Background(), "archon-alice")
+	if err != nil {
+		t.Fatalf("ListTyped: %v", err)
+	}
+	got := listedRoleNames(page)
+	if len(got) != 3 {
+		t.Fatalf("visible roles = %v, want all three", got)
+	}
+}
+
 // derivedListPool — a catalog with a two-hop chain: `dba` (root, coven=dba) →
 // `dba-aboba` (delta trait.project=aboba, one row the parent covers and one it
 // does not).
@@ -1002,7 +1159,8 @@ func (p *derivedListPool) Query(_ context.Context, sql string, _ ...any) (pgx.Ro
 	case contains(sql, "SELECT role_name, aid FROM rbac_role_operators"):
 		return &pairRows{}, nil
 	}
-	return nil, errors.New("derivedListPool.Query: unexpected SQL: " + sql)
+	// Caller permissions for the visibility filter (NIM-202) — see listFakePool.
+	return p.rbacFakePool.Query(context.Background(), sql)
 }
 
 // TestRoleHandler_List_ResolvesTheChain — role.list publishes the resolved form
@@ -1014,7 +1172,7 @@ func TestRoleHandler_List_ResolvesTheChain(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewService: %v", err)
 	}
-	page, err := NewRoleHandler(svc, nil).ListTyped(context.Background())
+	page, err := NewRoleHandler(svc, nil).ListTyped(context.Background(), "archon-alice")
 	if err != nil {
 		t.Fatalf("ListTyped: %v", err)
 	}

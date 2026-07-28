@@ -68,7 +68,7 @@ func TestIntegration_Catalog_ResolvesAChainOfThree(t *testing.T) {
 		t.Fatalf("CreateRole(leaf): %v", err)
 	}
 
-	views, err := svc.ListRoles(ctx)
+	views, err := svc.ListRoles(ctx, "archon-root")
 	if err != nil {
 		t.Fatalf("ListRoles: %v", err)
 	}
@@ -149,7 +149,7 @@ func TestIntegration_Catalog_RejectedRowStaysStoredButGrantsNothing(t *testing.T
 		t.Fatalf("UpdateRolePermissions(dba): %v", err)
 	}
 
-	views, err := svc.ListRoles(ctx)
+	views, err := svc.ListRoles(ctx, "archon-root")
 	if err != nil {
 		t.Fatalf("ListRoles: %v", err)
 	}

@@ -60,7 +60,7 @@ func (h *Handler) callRoleList(ctx context.Context, claims *jwt.Claims, req json
 			"operator lacks required permission role.list")
 	}
 
-	views, err := h.deps.RBACRoles.ListRoles(ctx)
+	views, err := h.deps.RBACRoles.ListRoles(ctx, claims.Subject)
 	if err != nil {
 		code, detail := mapRoleErrorToMCP(err)
 		if code == mcpCodeInternalError {

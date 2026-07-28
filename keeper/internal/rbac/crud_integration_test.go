@@ -851,9 +851,17 @@ func TestIntegration_ServiceListRoles_WithPermissionsAndOperators(t *testing.T) 
 	if err := GrantOperator(context.Background(), integrationPool, "viewer", "archon-bob", &alice); err != nil {
 		t.Fatalf("grant bob: %v", err)
 	}
+	// The reader holds `*` through a role of its own, so the catalog comes back
+	// whole (NIM-202) while the builtin cluster-admin row keeps no operators —
+	// which is what the assertions below check.
+	seedOperator(t, "archon-root", nil)
+	insertRole(t, "root-admin", "*")
+	if err := GrantOperator(context.Background(), integrationPool, "root-admin", "archon-root", nil); err != nil {
+		t.Fatalf("grant root: %v", err)
+	}
 	s := newService(t)
 
-	views, err := s.ListRoles(context.Background())
+	views, err := s.ListRoles(context.Background(), "archon-root")
 	if err != nil {
 		t.Fatalf("ListRoles: %v", err)
 	}
@@ -895,9 +903,11 @@ func TestIntegration_ServiceListRoles_WithPermissionsAndOperators(t *testing.T) 
 // roles" — we check that exactly cluster-admin is visible, with no operators.
 func TestIntegration_ServiceListRoles_SeedOnly(t *testing.T) {
 	resetRBAC(t)
+	seedOperator(t, "archon-root", nil)
+	seedClusterAdmin(t, "archon-root")
 	s := newService(t)
 
-	views, err := s.ListRoles(context.Background())
+	views, err := s.ListRoles(context.Background(), "archon-root")
 	if err != nil {
 		t.Fatalf("ListRoles: %v", err)
 	}
