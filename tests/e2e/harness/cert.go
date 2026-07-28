@@ -82,7 +82,14 @@ func RegisterSoulPreAuth(t *testing.T, stack *Stack, sid string) (cert, key []by
 // (topology/resolver.go::rosterSQL). Without this an incarnation "has no
 // connected hosts" → no_hosts → error_locked.
 //
-// The incarnation row must already exist (FK incarnation_name → incarnation).
+// ORDER (NIM-210): the incarnation row must ALREADY exist — migration 099
+// carries FK incarnation_membership_incarnation_fk (incarnation_name →
+// incarnation(name)). Binding first, creating second is a hard SQLSTATE 23503
+// and was how most of the suite died on setup; the probe below turns that into
+// the instruction rather than the constraint name. For bootstrapping a NEW
+// incarnation use [Stack.CreateIncarnationOnRoster], which owns the whole order
+// in one place.
+//
 // Idempotent (ON CONFLICT DO NOTHING; PK (incarnation_name, sid)). Fatal on
 // error.
 func (s *Stack) AddMember(t *testing.T, soulIndex int, incName string) {
@@ -93,6 +100,16 @@ func (s *Stack) AddMember(t *testing.T, soulIndex int, incName string) {
 	sid := s.souls[soulIndex].SID
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
+	var exists bool
+	if err := s.db.QueryRow(ctx,
+		`SELECT EXISTS (SELECT 1 FROM incarnation WHERE name = $1)`, incName).Scan(&exists); err != nil {
+		t.Fatalf("AddMember(%s, %s): probing incarnation: %v", incName, sid, err)
+	}
+	if !exists {
+		t.Fatalf("AddMember(%s, %s): incarnation row does not exist yet — membership is bound AFTER "+
+			"the incarnation is created (FK incarnation_membership_incarnation_fk, migration 099). "+
+			"Bootstrap a new incarnation with Stack.CreateIncarnationOnRoster.", incName, sid)
+	}
 	if _, err := s.db.Exec(ctx, `
 		INSERT INTO incarnation_membership (incarnation_name, sid)
 		VALUES ($1, $2)

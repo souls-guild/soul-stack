@@ -55,12 +55,14 @@ func TestDrift_CheckDrift_DriftedAndClean(t *testing.T) {
 	stub.SetApplyDefaultSuccess(true)
 	sid := stack.SoulSID(0)
 
-	stack.AddMember(t, 0, "test-drift")
-
-	// Incarnation must be applied (status ready) — otherwise the roster is
-	// empty / status blocks the background scan; on-demand check-drift takes
+	// Seed row -> bind roster -> run create, the order owned by
+	// CreateIncarnationOnRoster (NIM-210): membership carries an FK on the
+	// incarnation row, so the host cannot be bound first.
+	//
+	// The incarnation must end up applied (status ready) — otherwise the roster
+	// is empty / status blocks the background scan; on-demand check-drift takes
 	// the roster from topology.
-	_, applyID := stack.CreateIncarnationWithApply(t, "test-drift", "noop@main", nil)
+	_, applyID := stack.CreateIncarnationOnRoster(t, "test-drift", "noop@main", "create", []int{0}, nil)
 	stack.WaitApplySuccess(t, applyID, 60)
 
 	// Step 1 — drifted: Plan returns changed=true for every converge task.

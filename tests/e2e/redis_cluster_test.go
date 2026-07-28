@@ -27,7 +27,7 @@
 //  4. ConnectSoulStub + LoadApplyScript on each host (default-success covers
 //     all tasks of the cluster branch; cluster-build run_once lands on the
 //     bootstrap node).
-//  5. CreateIncarnationWithApply(redis_type=cluster, shards=3) -> auto-create
+//  5. CreateIncarnationOnRoster(redis_type=cluster, shards=3) -> create run
 //     -> WaitApplySuccess -> WaitIncarnationReady.
 //  6. Asserts: apply_runs success / incarnation.state{redis_type=cluster,
 //     cluster directives in redis_config} / audit / metric.
@@ -57,9 +57,9 @@ func TestE2EServiceRedis_CreateCluster(t *testing.T) {
 		"password": "e2e-cluster-secret",
 	})
 
-	// soulprint + incarnation membership (roster via incarnation_membership, NIM-124) for
-	// all three. network.primary_ip is needed to render redis.conf.tmpl
-	// (cluster-announce-ip per-host) and the cluster nodes-MAP
+	// Soulprint for all three (membership is bound later, by
+	// CreateIncarnationOnRoster). network.primary_ip is needed to render
+	// redis.conf.tmpl (cluster-announce-ip per-host) and the cluster nodes-MAP
 	// (soulprint.hosts.map by SID). pkg_mgr/init_system --
 	// core.pkg/core.service keeper-side (ADR-018).
 	ips := []string{"10.0.0.1", "10.0.0.2", "10.0.0.3"}
@@ -75,7 +75,6 @@ func TestE2EServiceRedis_CreateCluster(t *testing.T) {
 			},
 			"network": map[string]any{"primary_ip": ips[i]},
 		})
-		stack.AddMember(t, i, incName)
 	}
 
 	// Materialize the mode-agnostic destiny `redis` (the cluster branch
@@ -94,11 +93,16 @@ func TestE2EServiceRedis_CreateCluster(t *testing.T) {
 		harness.LoadApplyScript(stub, "create", redisClusterCreateTasks())
 	}
 
+	// Seed row -> bind all three Souls -> run create, the order owned by
+	// CreateIncarnationOnRoster (NIM-210): membership carries an FK on the
+	// incarnation row, so the hosts cannot be bound first (roster via
+	// incarnation_membership, NIM-124).
+	//
 	// Simple typed input for cluster mode: shards=3, replicas_per_shard=0 ->
 	// topology 3*(1+0)=3, exactly matches the roster (size-guard PASS).
-	inc, applyID := stack.CreateIncarnationWithApply(t, incName, "redis@main", map[string]any{
+	inc, applyID := stack.CreateIncarnationOnRoster(t, incName, "redis@main", "create", stack.AllSoulIndexes(), map[string]any{
 		"redis_type":           "cluster",
-		"version":              "7.2.4",
+		"version":              "7.4.1",
 		"shards":               3,
 		"replicas_per_shard":   0,
 		"cluster_node_timeout": 5000,
@@ -120,7 +124,9 @@ func TestE2EServiceRedis_CreateCluster(t *testing.T) {
 			"cluster-node-timeout": "5000",
 		},
 	})
-	stack.AssertAuditEvent(t, "incarnation.created", map[string]any{
+	// create is an explicit run here (NIM-210) -> incarnation.scenario_started,
+	// not incarnation.created (the POST /v1/incarnations event).
+	stack.AssertAuditEvent(t, "incarnation.scenario_started", map[string]any{
 		"apply_id": applyID,
 	})
 	stack.AssertMetricGE(t, `keeper_scenario_runs_total{result="ok"}`, 1)

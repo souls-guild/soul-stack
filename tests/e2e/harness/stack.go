@@ -482,7 +482,9 @@ func (w *testLogWriter) Write(p []byte) (int, error) {
 // serviceVersion — the service's git ref (usually "main"); state — the
 // baseline incarnation.state (JSONB). Membership is NOT set here: the roster
 // resolves via incarnation_membership (NIM-124); bind hosts separately with
-// AddMember after this seed.
+// AddMember after this seed — never before it, the FK on incarnation(name)
+// forbids it (NIM-210). To bootstrap a new incarnation THROUGH its create
+// scenario use [Stack.CreateIncarnationOnRoster], which owns that whole order.
 // created_by_aid = NULL (seed without an operator; FK ON DELETE SET NULL
 // allows this). state_schema_version is not set explicitly, defaulting
 // from DDL (DEFAULT 1) — the mutating scenario reads state by field, not
@@ -573,6 +575,14 @@ func (s *Stack) CreateIncarnation(t *testing.T, name string, serviceRef string, 
 // starting scenario is mandatory when the service has a non-empty create
 // set; the scenario must carry `create: true`. The bare path (no run) is
 // CreateIncarnation.
+//
+// NO CURRENT CALLER (NIM-210), and it is NOT the way to bootstrap an
+// incarnation whose create scenario needs hosts: the run resolves its roster at
+// start, and members cannot be bound before this call inserts the row (FK,
+// migration 099) nor after it (the run has already started). That is a closed
+// loop — use [Stack.CreateIncarnationOnRoster]. Kept for a create run that
+// needs no roster (an all-keeper scenario, or one carrying a refresh emitter —
+// the two no_hosts bypass classes of run.go §3).
 func (s *Stack) CreateIncarnationWithApply(t *testing.T, name, serviceRef string, spec map[string]any) (string, string) {
 	t.Helper()
 	c := s.opClient(t)

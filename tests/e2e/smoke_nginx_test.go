@@ -41,12 +41,12 @@ func TestSmokeNginx_InstallAndStart(t *testing.T) {
 	stub := stack.ConnectSoulStub(t, 0)
 	stub.SetApplyDefaultSuccess(true)
 
-	// Membership: the run's roster resolves members via incarnation_membership
-	// (ADR-008 amendment, NIM-124). Without it the scenario sees
-	// no_hosts -> error_locked.
-	stack.AddMember(t, 0, "test-nginx")
-
-	inc, applyID := stack.CreateIncarnationWithApply(t, "test-nginx", "smoke-nginx@main", map[string]any{
+	// Seed row -> bind roster -> run create, the order owned by
+	// CreateIncarnationOnRoster (NIM-210): membership carries an FK on the
+	// incarnation row, so the host cannot be bound first. The run's roster
+	// resolves members via incarnation_membership (ADR-008 amendment, NIM-124);
+	// without it the scenario sees no_hosts -> error_locked.
+	inc, applyID := stack.CreateIncarnationOnRoster(t, "test-nginx", "smoke-nginx@main", "create", []int{0}, map[string]any{
 		"hostname": "web-01",
 	})
 
@@ -56,12 +56,12 @@ func TestSmokeNginx_InstallAndStart(t *testing.T) {
 		"nginx_package": "nginx",
 		"nginx_service": "nginx",
 	})
-	// Audit event: POST /v1/incarnations auto-runs the create scenario and
-	// writes `incarnation.created` (router.go) with the auto-create run's
-	// `apply_id` in the payload (incarnation.go::Create SetAuditPayload).
-	// This is the same apply_id we waited for in WaitApplySuccess -- the
-	// audit<->apply-run link.
-	stack.AssertAuditEvent(t, "incarnation.created", map[string]any{
+	// Audit event: create is an explicit run here (NIM-210), so the run
+	// endpoint's middleware writes `incarnation.scenario_started` with the
+	// run's `apply_id` in the payload -- NOT `incarnation.created`, which only
+	// the POST /v1/incarnations path emits. This is the same apply_id we waited
+	// for in WaitApplySuccess -- the audit<->apply-run link.
+	stack.AssertAuditEvent(t, "incarnation.scenario_started", map[string]any{
 		"apply_id": applyID,
 	})
 	// Successful-run metric: keeper_scenario_runs_total{result="ok"}

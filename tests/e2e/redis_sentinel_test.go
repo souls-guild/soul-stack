@@ -24,10 +24,11 @@
 //  2. Seed Vault (auth_pass for the sentinel monitor) + soulprint(os/net) + Coven.
 //  3. MaterializeDestinies(redis) + RegisterService(redis).
 //  4. ConnectSoulStub + LoadApplyScript (scripted success by task-name).
-//  5. CreateIncarnationWithApply(redis_type=sentinel_only + master_ip) ->
-//     auto-create run -> WaitApplySuccess -> WaitIncarnationReady.
+//  5. CreateIncarnationOnRoster(redis_type=sentinel_only + master_ip) ->
+//     create run -> WaitApplySuccess -> WaitIncarnationReady.
 //  6. Asserts: apply_runs success / incarnation.state{redis_type,redis_sentinel} /
-//     audit incarnation.created{apply_id} / metric keeper_scenario_runs_total.
+//     audit incarnation.scenario_started{apply_id} / metric
+//     keeper_scenario_runs_total.
 package e2e_test
 
 import (
@@ -70,11 +71,6 @@ func TestE2EServiceRedis_CreateSentinelOnly(t *testing.T) {
 		"hostname": "soul-a",
 	})
 
-	// Membership BEFORE Create: the roster resolves members via
-	// incarnation_membership (ADR-008 amendment, NIM-124). Without it the
-	// scenario sees no_hosts -> error_locked.
-	stack.AddMember(t, 0, incName)
-
 	// Materialize the mode-agnostic destiny `redis` (the create branches
 	// call apply: destiny: redis) + set default_destiny_source. BEFORE
 	// RegisterService: the invalidate from POST /v1/services will pull the
@@ -89,11 +85,19 @@ func TestE2EServiceRedis_CreateSentinelOnly(t *testing.T) {
 	stub := stack.ConnectSoulStub(t, 0)
 	harness.LoadApplyScript(stub, "create", redisSentinelOnlyTasks())
 
-	// Simple typed input: redis_type=sentinel_only + version (distro-native
-	// pin) + master_ip (REQUIRED with sentinel_only -- required_when in main.yml).
-	inc, applyID := stack.CreateIncarnationWithApply(t, incName, "redis@main", map[string]any{
+	// Seed row -> bind roster -> run create, the order owned by
+	// CreateIncarnationOnRoster (NIM-210): membership carries an FK on the
+	// incarnation row, so the host cannot be bound first. The roster resolves
+	// members via incarnation_membership (ADR-008 amendment, NIM-124); without
+	// it the scenario sees no_hosts -> error_locked.
+	//
+	// Simple typed input: redis_type=sentinel_only + version (one of the
+	// Nexus-published builds, a CLOSED enum in covenant.yml -- the former
+	// free-form distro-pin is no longer accepted) + master_ip (REQUIRED with
+	// sentinel_only -- required_when in main.yml).
+	inc, applyID := stack.CreateIncarnationOnRoster(t, incName, "redis@main", "create", []int{0}, map[string]any{
 		"redis_type":  "sentinel_only",
-		"version":     "5:7.0.15-1~deb12u7",
+		"version":     "7.4.1",
 		"master_ip":   "10.9.9.9",
 		"master_port": 6379,
 	})
@@ -113,9 +117,10 @@ func TestE2EServiceRedis_CreateSentinelOnly(t *testing.T) {
 			"master_ip":   "10.9.9.9",
 		},
 	})
-	// POST /v1/incarnations auto-runs the create scenario and writes
-	// incarnation.created with the auto-run's apply_id in the payload.
-	stack.AssertAuditEvent(t, "incarnation.created", map[string]any{
+	// create is an explicit run here (NIM-210), so the run endpoint writes
+	// incarnation.scenario_started with that run's apply_id in the payload --
+	// incarnation.created belongs to the POST /v1/incarnations path.
+	stack.AssertAuditEvent(t, "incarnation.scenario_started", map[string]any{
 		"apply_id": applyID,
 	})
 	stack.AssertMetricGE(t, `keeper_scenario_runs_total{result="ok"}`, 1)

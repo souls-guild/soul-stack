@@ -132,9 +132,12 @@ const soulprintBootstrapWaitSec = 60
 //
 // Coverage note: this path deliberately does NOT exercise POST /v1/incarnations
 // (input validation, create-scenario resolution, the `incarnation.created`
-// audit event) — that surface belongs to L3a (tests/e2e) and the handler unit
-// tests. Here create is an explicit run, so it writes
-// `incarnation.scenario_started`, not `incarnation.created`.
+// audit event) — that surface belongs to the handler unit tests and, for the
+// BARE variant (no starting scenario), to L3a (tests/e2e). L3a hit the same FK
+// ordering and moved to the same helper (NIM-210), so the AUTO-STARTED create
+// run is no longer covered end-to-end at either tier. Here create is an
+// explicit run, so it writes `incarnation.scenario_started`, not
+// `incarnation.created`.
 //
 // serviceRef — `<service>@<ref>`; the ref is stored in
 // incarnation.service_version for readability only (the run path resolves the

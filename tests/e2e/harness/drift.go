@@ -52,9 +52,14 @@ type DriftSummary struct {
 func (s *Stack) CheckDrift(t *testing.T, incarnationName string, input map[string]any) DriftReport {
 	t.Helper()
 	c := s.opClient(t)
-	var body map[string]any
+	// An EMPTY OBJECT, never a nil map: the body marshals to literal `null`
+	// otherwise, and huma validates that against the request schema instead of
+	// treating it as "no body" (the optional-body parity in
+	// huma_incarnation_op.go means zero BYTES, not a JSON null) -> 422
+	// "validation failed". Symmetric with RunScenario, which always posts `{}`.
+	body := map[string]any{}
 	if input != nil {
-		body = map[string]any{"input": input}
+		body["input"] = input
 	}
 	resp, status, err := c.post(context.Background(),
 		"/v1/incarnations/"+incarnationName+"/check-drift", body)

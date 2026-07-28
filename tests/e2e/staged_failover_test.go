@@ -48,15 +48,14 @@ func TestE2EStagedFailover_2Passage(t *testing.T) {
 	master.SetTaskRegister("Probe role", map[string]any{"stdout": "master", "changed": false, "failed": false})
 	slave.SetTaskRegister("Probe role", map[string]any{"stdout": "slave", "changed": false, "failed": false})
 
-	// Membership: both hosts are bound to the incarnation (roster via incarnation_membership, NIM-124).
-	stack.AddMember(t, 0, "test-failover")
-	stack.AddMember(t, 1, "test-failover")
-
-	inc, createApply := stack.CreateIncarnationWithApply(t, "test-failover", "staged-failover@main", nil)
-	// The auto-create run (POST /v1/incarnations) must FINISH BEFORE the
-	// failover starts -- otherwise failover would be rejected as "already
-	// applying". We wait for the create-apply_id terminal specifically,
-	// then for ready (state commit).
+	// Seed row -> bind BOTH hosts -> run create, the order owned by
+	// CreateIncarnationOnRoster (NIM-210): membership carries an FK on the
+	// incarnation row, so the hosts cannot be bound first (roster via
+	// incarnation_membership, NIM-124).
+	inc, createApply := stack.CreateIncarnationOnRoster(t, "test-failover", "staged-failover@main", "create", []int{0, 1}, nil)
+	// The create run must FINISH BEFORE the failover starts -- otherwise
+	// failover would be rejected as "already applying". We wait for the
+	// create-apply_id terminal specifically, then for ready (state commit).
 	stack.WaitApplySuccess(t, createApply, 60)
 	stack.WaitIncarnationReady(t, inc, 30)
 

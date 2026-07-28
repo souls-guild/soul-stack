@@ -2,13 +2,13 @@
 
 // L3a E2E: scenario-apply execution path (ADR-039) -- the foundation of the
 // per-section e2e coverage (Tide / push / drift / ...). Proves that the
-// apply chain RegisterService -> CreateIncarnation -> ConnectSoulStub ->
-// apply_runs success -> incarnation `ready` + state-commit works end-to-end
-// on the real stack (PG+Redis+Vault testcontainers + keeper process +
-// connected soul-stub).
+// apply chain RegisterService -> ConnectSoulStub -> CreateIncarnationOnRoster
+// (seed row -> bind roster -> run create, NIM-210) -> apply_runs success ->
+// incarnation `ready` + state-commit works end-to-end on the real stack
+// (PG+Redis+Vault testcontainers + keeper process + connected soul-stub).
 //
 // Why it catches regressions (mirrors errand_run_test.go for the apply path):
-//   - missing service-registration -> CreateIncarnation 422 "not registered";
+//   - missing service-registration -> RunScenario 422 "not registered";
 //   - acolyte pool disabled -> apply_runs stuck planned forever ->
 //     WaitApplySuccess timeout;
 //   - dispatch never reaches the Soul (no live stream / lease) -> orphaned;
@@ -50,16 +50,13 @@ func TestScenarioApply_NoopCreate_Succeeds(t *testing.T) {
 	stub := stack.ConnectSoulStub(t, 0)
 	stub.SetApplyDefaultSuccess(true)
 
-	// Membership: the run's roster resolves members via incarnation_membership
-	// (ADR-008 amendment, NIM-124). Without it the scenario sees
-	// no_hosts -> error_locked.
-	stack.AddMember(t, 0, "test-noop")
-
-	// CreateIncarnation auto-runs the scenario `create` (incarnation.go) and
-	// returns that run's apply_id. noop-create has no required input. We use
-	// the auto-create's apply_id -- a separate RunScenario(create) would be
-	// rejected ("incarnation already applying").
-	_, applyID := stack.CreateIncarnationWithApply(t, "test-noop", "noop@main", nil)
+	// Seed row -> bind roster -> run create, the order owned by
+	// CreateIncarnationOnRoster (NIM-210): membership carries an FK on the
+	// incarnation row, so the host cannot be bound first. The run's roster
+	// resolves members via incarnation_membership (ADR-008 amendment, NIM-124);
+	// without it the scenario sees no_hosts -> error_locked. noop-create has no
+	// required input.
+	_, applyID := stack.CreateIncarnationOnRoster(t, "test-noop", "noop@main", "create", []int{0}, nil)
 
 	// Reusable helper #3: blocking wait for apply_runs.status=success across
 	// all rows of the run (planned->claimed->dispatched->success).
@@ -84,9 +81,8 @@ func TestScenarioApply_SmokeNginx_StateCommit(t *testing.T) {
 
 	stub := stack.ConnectSoulStub(t, 0)
 	stub.SetApplyDefaultSuccess(true)
-	stack.AddMember(t, 0, "test-nginx-state")
-
-	inc, applyID := stack.CreateIncarnationWithApply(t, "test-nginx-state", "smoke-nginx@main", map[string]any{
+	// Bootstrap order owned by CreateIncarnationOnRoster (NIM-210).
+	inc, applyID := stack.CreateIncarnationOnRoster(t, "test-nginx-state", "smoke-nginx@main", "create", []int{0}, map[string]any{
 		"hostname": "web-01",
 	})
 

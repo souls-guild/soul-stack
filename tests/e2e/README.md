@@ -100,9 +100,14 @@ The stub (`internal/soulstub/`) responds to `ApplyRequest` with a scripted
 
 Drivers (`harness/stack.go`):
 
+- `CreateIncarnationOnRoster(name, serviceRef, createScenario, soulIndexes, input)` —
+  **the way to bootstrap a new incarnation onto connected soul-stubs**: seeds the
+  row, binds the roster, runs create (see "Bootstrap order" below).
 - `CreateIncarnation` / `CreateIncarnationWithApply` / `CreateIncarnationRaw` —
   POST `/v1/incarnations` via Operator API (with polling for the transient 422
   "service not registered" while serviceregistry.Holder warms up its snapshot).
+  `CreateIncarnationWithApply` has no current caller — it cannot bootstrap an
+  incarnation whose create run needs a roster (see below).
 - `RunScenario(inc, scenario, input)` — POST a scenario scan, returns `apply_id`.
 - `SeedIncarnationReady` — directly INSERTs a ready incarnation with a baseline
   state (for mutating scenarios whose `create` is unavailable in L3a — cloud-spawn /
@@ -128,6 +133,49 @@ enum values from the Go code only (`apply_runs.status: success`, not
 `succeeded`/`done`). `TestValidApplyRunsStatus_*` guarantees that the list of valid
 values hasn't drifted from the Go enum.
 
+## Bootstrap order of an incarnation (NIM-210)
+
+A test that brings up a NEW incarnation on connected soul-stubs goes through
+`Stack.CreateIncarnationOnRoster` and never hand-rolls the order:
+
+1. seed the `incarnation` row (`status='ready'`, empty spec/state) — direct SQL;
+2. bind each soul-stub as a member (`incarnation_membership`);
+3. run the create scenario as an ordinary explicit run.
+
+Two constraints pin that order and admit no other:
+
+- **Membership cannot come first.** Since NIM-124 membership is a first-class
+  relation with FK `incarnation_membership_incarnation_fk` → `incarnation(name)`
+  (migration 099). Binding before the row exists is `SQLSTATE 23503`.
+- **The run cannot come first.** A create run resolves its roster at run start,
+  so an unbound roster aborts with `no_hosts` before dispatch (`run.go` §3).
+
+`POST /v1/incarnations` inserts the row **and** starts the create run in the same
+call (`lifecycle.auto_create`), leaving no window between them — hence the direct
+seed. The consequence to keep in mind when writing expectations: create is an
+explicit run here, so it writes `incarnation.scenario_started`, **not**
+`incarnation.created`.
+
+Identical to the L3b helper of the same name (`tests/e2e-live/harness/seed.go`),
+deliberately: one bootstrap mechanic across both tiers, so an ordering regression
+is found once rather than twice. The only tier difference is the precondition of
+step 3 — L3b waits for each member's first `SoulprintReport`, whereas an L3a
+soul-stub reports nothing: connect it with `ConnectSoulStub` (the roster counts
+connected hosts) and, for services whose render reads facts keeper-side, write
+them with `SeedSoulprint` BEFORE calling the helper.
+
+`AddMember` on its own remains correct for an incarnation that already exists
+(e.g. `lease_force_release_test.go`, which seeds a ready incarnation and runs a
+day-2 scenario); it fails fast with the order instruction if the row is missing.
+
+**Coverage note.** This path does not exercise `POST /v1/incarnations` with a
+`create_scenario` — its input validation, create-plan resolution and the
+`incarnation.created` audit event. The bare create path (POST without a starting
+scenario) stays covered by the tests that need no roster (`hello_world` / `noop` /
+`long_runner` / `coven_probe`), and the 422 surface by `CreateIncarnationRaw`; the
+auto-started create run has no L3a coverage left, since every test that exercised
+it also needs a bound roster.
+
 ## Layout
 
 ```
@@ -136,6 +184,7 @@ tests/e2e/
 ├── go.mod / go.sum            # separate go module (testcontainers deps isolated)
 ├── harness/                   # the working L3a harness
 │   ├── stack.go               # NewStack / Cleanup / drivers (Create/Run/Wait*)
+│   ├── seed.go                # CreateIncarnationOnRoster (bootstrap order)
 │   ├── soul_stub.go           # ConnectSoulStub + LoadApplyScript
 │   ├── asserts.go             # AssertApplyRunsStatus / IncarnationState / AuditEvent / MetricGE
 │   ├── vault.go               # InitVaultTestSecrets / IssueKeeperServerCert / SeedVaultKV

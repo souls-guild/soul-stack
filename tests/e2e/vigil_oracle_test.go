@@ -7,17 +7,17 @@
 // the PG-stub bypass EmitPortent.
 //
 // Flow (real, no keeper-side mocks):
-//  1. RegisterService + CreateIncarnationWithApply (incarnation must exist --
-//     the Oracle enqueuer resolves ServiceRef from incarnation.service).
-//  2. AddMember -- binds the host to the incarnation (incarnation_membership,
-//     NIM-124) so the auto-create + reactor roster is non-empty.
-//  3. CreateVigil (core.beacon.file_changed) + CreateDecree (typed-payload
+//  1. RegisterService + CreateIncarnationOnRoster (incarnation must exist --
+//     the Oracle enqueuer resolves ServiceRef from incarnation.service; the
+//     helper seeds the row, binds the host in incarnation_membership (NIM-124)
+//     so the create + reactor roster is non-empty, then runs create).
+//  2. CreateVigil (core.beacon.file_changed) + CreateDecree (typed-payload
 //     where-CEL `event.file_changed.path.startsWith("/etc/")`, action_scenario
-//     DIFFERENT from auto-create -- `converge`, so the reactor run is
-//     distinguishable from the auto-create run by scenario+started_by_aid).
-//  4. soul-stub.SendPortent(FileChangedPortent{path:/etc/...}) over the live
+//     DIFFERENT from create -- `converge`, so the reactor run is
+//     distinguishable from the create run by scenario+started_by_aid).
+//  3. soul-stub.SendPortent(FileChangedPortent{path:/etc/...}) over the live
 //     stream.
-//  5. ASSERT via direct PG queries (real DB, real flows):
+//  4. ASSERT via direct PG queries (real DB, real flows):
 //     - WaitForOracleFires -- oracle_fires cooldown-state (decree, subject);
 //     - audit_log `oracle.fired` (decree + scenario + sid);
 //     - WaitForOracleReaction -- apply_runs(scenario=converge, started_by_aid=NULL)
@@ -59,15 +59,17 @@ func TestOracle_FileChanged_FiresScenario(t *testing.T) {
 	stub.SetApplyDefaultSuccess(true)
 	sid := stack.SoulSID(0)
 
-	// Membership binds the host to the incarnation (incarnation_membership,
-	// NIM-124): non-empty roster for both the auto-create and the reactor run.
-	stack.AddMember(t, 0, incName)
-
+	// Seed row -> bind roster -> run create, the order owned by
+	// CreateIncarnationOnRoster (NIM-210): membership carries an FK on the
+	// incarnation row, so the host cannot be bound first. Membership gives a
+	// non-empty roster for both the create and the reactor run
+	// (incarnation_membership, NIM-124).
+	//
 	// The incarnation must exist BEFORE the Portent: the enqueuer resolves
-	// ServiceRef from incarnation.service (oracle_enqueuer.go). Auto-create
-	// runs scenario `create` -- wait for success so the incarnation leaves
-	// applying and doesn't conflict with the reactor run.
-	_, createApplyID := stack.CreateIncarnationWithApply(t, incName, "noop@main", nil)
+	// ServiceRef from incarnation.service (oracle_enqueuer.go). Wait for the
+	// create run to succeed so the incarnation leaves applying and doesn't
+	// conflict with the reactor run.
+	_, createApplyID := stack.CreateIncarnationOnRoster(t, incName, "noop@main", "create", []int{0}, nil)
 	stack.WaitApplySuccess(t, createApplyID, 60)
 
 	vigilName := stack.CreateVigil(ctx, t, harness.CreateVigilOpts{

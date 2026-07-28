@@ -108,8 +108,10 @@ Two constraints pin that order and admit no other:
 call (`lifecycle.auto_create`), leaving no window between them — hence the direct
 seed. The consequence to keep in mind when writing expectations: create is an
 explicit run here, so it writes `incarnation.scenario_started`, **not**
-`incarnation.created`. POST's own create path stays covered by L3a
-(`tests/e2e`) and the handler unit tests.
+`incarnation.created`. POST's own create path stays covered by the handler unit
+tests and, for the BARE variant (no starting scenario), by L3a (`tests/e2e`) —
+L3a hit the same FK ordering and moved to the same helper (NIM-210), so the
+auto-started create run is no longer covered end-to-end at either tier.
 
 `AddMember` on its own remains correct for an incarnation that already exists
 (e.g. `fc5_when_gating_test.go`, which seeds a ready incarnation and runs a

@@ -24,9 +24,10 @@
 //  3. MaterializeDestinies(redis) + RegisterService(redis).
 //  4. ConnectSoulStub + LoadApplyScript (scripted success by task-name, incl.
 //     the community.redis.command task -- soul-stub matches by task_name, not by module).
-//  5. CreateIncarnationWithApply -> auto-create run -> WaitApplySuccess.
+//  5. CreateIncarnationOnRoster -> create run -> WaitApplySuccess.
 //  6. Asserts: apply_runs success / incarnation.state (type/version/merged-config/
-//     users/hosts) / audit incarnation.created / metric keeper_scenario_runs_total.
+//     users/hosts) / audit incarnation.scenario_started / metric
+//     keeper_scenario_runs_total.
 package e2e_test
 
 import (
@@ -74,11 +75,6 @@ func TestE2EServiceRedis_Create(t *testing.T) {
 		"hostname": "soul-a",
 	})
 
-	// Membership BEFORE Create: the roster resolves members via
-	// incarnation_membership (ADR-008 amendment, NIM-124). Without it the
-	// scenario sees no_hosts -> error_locked.
-	stack.AddMember(t, 0, incName)
-
 	// Materialize the mode-agnostic destiny `redis` into a file:// repo +
 	// set keeper_settings[default_destiny_source]. BEFORE RegisterService:
 	// the invalidate from POST /v1/services will pull the setting into the
@@ -93,12 +89,19 @@ func TestE2EServiceRedis_Create(t *testing.T) {
 	stub := stack.ConnectSoulStub(t, 0)
 	harness.LoadApplyScript(stub, "create", redisCreateTasks())
 
-	// Simple typed operator input. version -- distro-native pin (for a
-	// non-empty state.redis_version); memory_mb+persistence+policy are
-	// translated into the merged redis_config; users -- typed map with a
-	// full ACL string.
-	inc, applyID := stack.CreateIncarnationWithApply(t, incName, "redis@main", map[string]any{
-		"version":          "5:7.0.15-1~deb12u7",
+	// Seed row -> bind roster -> run create, the order owned by
+	// CreateIncarnationOnRoster (NIM-210): membership carries an FK on the
+	// incarnation row, so the host cannot be bound first. The roster resolves
+	// members via incarnation_membership (ADR-008 amendment, NIM-124); without
+	// it the scenario sees no_hosts -> error_locked.
+	//
+	// Simple typed operator input. version -- one of the Nexus-published
+	// builds (covenant.yml declares a CLOSED enum; the former free-form
+	// distro-pin is no longer accepted), giving a non-empty
+	// state.redis_version; memory_mb+persistence+policy are translated into
+	// the merged redis_config; users -- typed map with a full ACL string.
+	inc, applyID := stack.CreateIncarnationOnRoster(t, incName, "redis@main", "create", []int{0}, map[string]any{
+		"version":          "7.4.1",
 		"memory_mb":        1024,
 		"persistence":      "rdb",
 		"maxmemory_policy": "volatile-lru",
@@ -122,7 +125,7 @@ func TestE2EServiceRedis_Create(t *testing.T) {
 	// input+persistence preset, maxclients/timeout from the essence baseline.
 	stack.AssertIncarnationState(t, inc, map[string]any{
 		"redis_type":    "standalone",
-		"redis_version": "5:7.0.15-1~deb12u7",
+		"redis_version": "7.4.1",
 		"redis_config": map[string]any{
 			"maxmemory":        "768mb",
 			"maxmemory-policy": "volatile-lru",
@@ -139,9 +142,10 @@ func TestE2EServiceRedis_Create(t *testing.T) {
 		},
 		"redis_hosts": []any{},
 	})
-	// POST /v1/incarnations auto-runs the create scenario and writes
-	// incarnation.created with the auto-run's apply_id in the payload.
-	stack.AssertAuditEvent(t, "incarnation.created", map[string]any{
+	// create is an explicit run here (NIM-210), so the run endpoint writes
+	// incarnation.scenario_started with that run's apply_id in the payload --
+	// incarnation.created belongs to the POST /v1/incarnations path.
+	stack.AssertAuditEvent(t, "incarnation.scenario_started", map[string]any{
 		"apply_id": applyID,
 	})
 	stack.AssertMetricGE(t, `keeper_scenario_runs_total{result="ok"}`, 1)

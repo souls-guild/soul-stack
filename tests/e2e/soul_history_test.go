@@ -38,11 +38,11 @@ func TestSoulHistory_AggregatesScenarioAndErrand(t *testing.T) {
 	stub.SetApplyDefaultSuccess(true)
 	sid := stack.SoulSID(0)
 
-	stack.AddMember(t, 0, "test-history")
-
-	// Source #1 -- scenario: incarnation create auto-runs the scenario
-	// `create` -> an apply_runs row under this SID.
-	_, applyID := stack.CreateIncarnationWithApply(t, "test-history", "noop@main", nil)
+	// Source #1 -- scenario: the bootstrap `create` run -> an apply_runs row
+	// under this SID. Seed row -> bind roster -> run create, the order owned by
+	// CreateIncarnationOnRoster (NIM-210): membership carries an FK on the
+	// incarnation row, so the host cannot be bound first.
+	_, applyID := stack.CreateIncarnationOnRoster(t, "test-history", "noop@main", "create", []int{0}, nil)
 	stack.WaitApplySuccess(t, applyID, 60)
 
 	// Source #2 -- single Errand: an ad-hoc /exec on the same SID -> an errands row.

@@ -41,15 +41,16 @@ func TestE2EKeeperSideDispatch_CovenRegistered(t *testing.T) {
 	const incName = "test-keeper-register"
 	const covenLabel = "keeper-tagged"
 
-	// Run roster resolves via incarnation_membership (ADR-008 amendment/NIM-124):
-	// without membership the scenario sees no_hosts -> error_locked. The checked
-	// label (covenLabel) is assigned by the keeper-side step.
-	stack.AddMember(t, 0, incName)
-
-	// CreateIncarnation auto-starts scenario `create`: keeper-side
-	// core.soul.registered (on: keeper) adds covenLabel to souls.coven of this SID
-	// plus Soul-side echo on host.
-	_, applyID := stack.CreateIncarnationWithApply(t, incName, "keeper-register@main", map[string]any{
+	// Seed row -> bind roster -> run create, the order owned by
+	// CreateIncarnationOnRoster (NIM-210): membership carries an FK on the
+	// incarnation row, so the host cannot be bound first. The run roster
+	// resolves via incarnation_membership (ADR-008 amendment/NIM-124): without
+	// membership the scenario sees no_hosts -> error_locked. The checked label
+	// (covenLabel) is assigned by the keeper-side step.
+	//
+	// Scenario `create`: keeper-side core.soul.registered (on: keeper) adds
+	// covenLabel to souls.coven of this SID plus Soul-side echo on host.
+	_, applyID := stack.CreateIncarnationOnRoster(t, incName, "keeper-register@main", "create", []int{0}, map[string]any{
 		"soul_sid":    soulSID,
 		"coven_label": covenLabel,
 	})
