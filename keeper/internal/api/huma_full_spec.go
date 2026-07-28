@@ -341,6 +341,17 @@ func fullSpecGroups() []specGroup {
 			registerHumaErrandCancel(api, stub)
 			return nil
 		}},
+		// console recordings — playback of recorded sessions (ADR-0074(g),
+		// NIM-148). The console WebSocket itself stays out of the spec (an
+		// upgrade has no body to model); these are ordinary GETs and belong in
+		// it, cast body included.
+		{"/v1", func(api huma.API) error {
+			stub := handlers.ConsoleRecordingSpecStub()
+			registerHumaConsoleRecordingList(api, stub)
+			registerHumaConsoleRecordingGet(api, stub)
+			registerHumaConsoleRecordingCast(api, stub)
+			return nil
+		}},
 		// push-runs is mounted directly on /v1 (outside r.Route("/push")) — the full path
 		// /push-runs is in the Operation, a separate group from /v1/push apply/get.
 		{"/v1", func(api huma.API) error {

@@ -4457,6 +4457,11 @@ func (d *daemon) setupAPIServer(ctx context.Context) error {
 		// the API server.
 		ConsoleHub:     d.consoleHub,
 		ConsoleMetrics: d.consoleMetrics,
+		// Playback of recorded sessions (NIM-148). Its own read-only store over
+		// the same pool, NOT the recorder the Hub holds — the API can read a
+		// recording and cannot touch one, which is what keeps the playback
+		// route from ever being a path into the record.
+		ConsoleRecordings: consolepg.NewReader(d.pool),
 		// Keeper daemon runtime wiring note.
 		// Keeper daemon runtime wiring note.
 		// Keeper daemon runtime wiring note.

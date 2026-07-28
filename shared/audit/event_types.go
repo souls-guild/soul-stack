@@ -1201,6 +1201,23 @@ const (
 	// way `console.opened` holds no keystrokes.
 	EventConsoleCommand EventType = "console.command"
 
+	// EventConsoleRecordingRead — an Archon fetched the CONTENT of a recorded
+	// console session, `GET /v1/console/recordings/{id}/cast` (ADR-0074
+	// amendment, NIM-148). `source: api`, `archon_aid` is the reader,
+	// `correlation_id` is the recording id. Payload:
+	// `{recording_id, session_id, sid, kind, recorded_archon_aid}`.
+	//
+	// The listing and metadata routes are NOT audited, and the asymmetry is the
+	// point: they say a session happened, which `console.opened` already said.
+	// This one says someone read back what was typed into a root shell — and it
+	// carries `recorded_archon_aid` because reading your own session is routine
+	// while reading another operator's is the question an investigation asks.
+	//
+	// Written BEFORE the body is streamed, mirroring the record-before-deliver
+	// order of the recording itself (NIM-145): a disclosure must not depend on
+	// the handler surviving long enough to report it.
+	EventConsoleRecordingRead EventType = "console.recording-read"
+
 	// EventAuditDisabled — `audit.enabled` went true → false on this instance
 	// (ADR-022(i), NIM-194). `source: signal` or `keeper_internal` (whichever
 	// reload path swapped the config), `archon_aid: NULL` — the toggle lives in

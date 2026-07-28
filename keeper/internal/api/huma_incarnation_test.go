@@ -96,6 +96,7 @@ func TestHumaIncarnation_ChiCoexistence(t *testing.T) {
 		nil,                                  // clusterH (cluster-view not mounted in the test)
 		nil,                                  // runEventsDeps (ADR-068 §A3 — not tested here)
 		nil,                                  // consoleWSDeps (console WebSocket not tested here)
+		nil,                                  // consoleRecordingH (console recording playback not tested here)
 		nil,                                  // logger
 	)
 	routes, ok := h.(chi.Routes)

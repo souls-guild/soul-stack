@@ -465,9 +465,61 @@ store that dies can lose up to the last flush window (2 s or 32 KiB) of a
 session before the session is torn down. What cannot happen is a session that
 keeps running unrecorded.
 
+### Reading a recording back
+
+Three read routes, all `GET`, all in the OpenAPI spec (ADR-0074 amendment,
+NIM-148):
+
+| Route | Serves |
+|---|---|
+| `/v1/console/recordings` | Paged list, newest first. Filters: `sid`, `archon_aid`, `kind`, `started_after`, `started_before`. |
+| `/v1/console/recordings/{recording_id}` | Metadata of one recording, including the header geometry — a UI sizes its player from this without fetching the body. |
+| `/v1/console/recordings/{recording_id}/cast` | The asciicast v2 file, `application/x-asciicast`, streamed and sent as an attachment. |
+
+**The right is `soul.console` with the same selectors as opening a console**, and
+there is no lighter, auditor-grade right. A recording is the session's content
+moved in time, so the boundary that decides who may watch it is the boundary
+that decided who may open one — otherwise an operator refused
+`soul.console on host=db-01` could read every session ever held on db-01. The
+consequence, recorded rather than hidden: a pure auditor cannot be given
+playback without also being given shells; the fix is a narrower **scope**, not a
+weaker right. See the NIM-148 amendment for why a separate right was not minted
+here.
+
+The check splits the way §the WebSocket's does, and for the same reason — a
+listing names no host, so the route gate is the **existence** gate
+(`RequireAction`) and the per-host boundary is applied to the rows: pushed into
+SQL for the list, checked per object for the other two. A scope-aware check at
+the route would fail closed on the absent host dimension and deny exactly the
+`host=`-scoped roles this serves.
+
+Two behaviours worth knowing before you debug them:
+
+- **Out of scope answers 404, identical to an unknown id.** A 403 would confirm
+  the recording exists, which is the metadata this protects.
+- **A recording of a host since removed from the registry** stays visible to an
+  unrestricted operator and to one scoped `host=<that sid>`; a `coven=`-scoped
+  operator loses it, because the coven lived on the `souls` row that is gone.
+
+**Nothing is masked or un-masked on read.** The cast is served byte-for-byte as
+recorded — masking already ran, across chunk boundaries, when the session was
+live.
+
+Reading the **cast** writes `console.recording-read` (payload
+`{recording_id, session_id, sid, kind, recorded_archon_aid}`,
+`correlation_id` = the recording id) **before** the body starts, mirroring the
+record-before-deliver order of the recording itself. The list and metadata
+routes are not audited: they say a session happened, which `console.opened`
+already said.
+
+There is deliberately **no MCP tool** for playback — it would give an agent bulk
+access to the raw content of other operators' shells, and an agent cannot watch
+a replay. `keeper.soul.run-command` covers what an agent actually needs.
+
 ## 10. Audit and metrics
 
-Sessions are audited as facts — `console.opened` / `console.closed`, with
+Reading a recording's content is audited too, as `console.recording-read`
+(above). Sessions are audited as facts — `console.opened` / `console.closed`, with
 `archon_aid`, the target `sid` and the session id as `correlation_id`. WHO opened
 a shell WHERE belongs in the audit log independently of the recording, because
 it is the one fact that survives every degradation of the recording path
@@ -495,11 +547,9 @@ matters.
 
 ## 11. Known gaps
 
-- **Playback** — the recordings are written and readable by query, but there is
-  no operator-facing way to watch one; that is NIM-148. Until then a recording
-  is fetched with `SELECT body FROM console_recording_parts WHERE recording_id
-  = $1 ORDER BY seq`, prefixed with `console_recordings.cast_header`, and played
-  with `asciinema play`.
+- **A browser player** — the API below serves the cast; rendering a replay in
+  the operator UI is web-side work and is not built here. `asciinema play` on a
+  downloaded `.cast` works today.
 - **A holder restart mid-session** leaves the owner's pane with no terminal
   frame: the stream broke, so the pty is already dead (kill-on-disconnect), but
   the operator learns only from the idle timeout. A liveness probe from the owner

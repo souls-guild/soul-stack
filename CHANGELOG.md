@@ -7,6 +7,51 @@ Artifact versioning — via git ref ([ADR-007](docs/adr/0007-versioning-git-ref.
 
 ### Added
 
+- **Recorded console sessions can be read back**
+  ([ADR-0074](docs/adr/0074-interactive-console-pty.md), amendment 2026-07-28).
+  Recording became mandatory in the previous change; the artifact was reachable
+  only by hand-written SQL. Three read routes now serve it:
+  `GET /v1/console/recordings` (paged, filters by host, Archon, kind and time
+  window), `GET /v1/console/recordings/{id}` for metadata, and
+  `GET /v1/console/recordings/{id}/cast` for the asciicast v2 file itself —
+  `application/x-asciicast`, streamed rather than buffered, and replayable with
+  `asciinema play`, `agg` or xterm.js.
+
+  **The right is `soul.console`, with the same selectors, and no lighter
+  auditor-grade right is minted.** A recording is what an operator typed into a
+  root shell and what it printed back — the live session moved in time — so the
+  boundary that decides who may watch one has to be the boundary that decided
+  who may open one. Otherwise an operator refused `soul.console on host=db-01`
+  could read every session anyone ever held on db-01, which is most of what the
+  refusal was for.
+
+  Consequence, stated rather than hidden: a **pure auditor** — someone who
+  should read the trail without ever holding a shell — cannot be given playback
+  without also being given consoles. Withhold it by narrowing the *scope* to the
+  hosts they investigate, not by looking for a weaker right; minting one is a
+  new entry in a closed catalog and is left to its own decision.
+
+  The gate splits the way the console's own does. A listing names no host, so
+  the route can only ask "may this Archon reach consoles at all" and the
+  per-host boundary applies to the rows — pushed into SQL for the list, checked
+  per object otherwise. **An out-of-scope read answers 404**, identical to an
+  unknown id: a 403 would confirm the recording exists and turn the route into
+  an oracle for which hosts have been consoled into and by whom.
+
+  Nothing is masked or un-masked on the way out. Masking ran once, when the
+  session was recorded, carried across chunk boundaries; the cast is served
+  byte-for-byte. Fetching one writes **`console.recording-read`** before the
+  first byte leaves, carrying the Archon whose session it was — reading your own
+  shell back is routine, reading someone else's is the question an investigation
+  asks. The list and metadata routes are not audited: they only say a session
+  happened, which `console.opened` already said.
+
+  There is deliberately **no MCP tool** for playback — it would give an agent
+  bulk access to the raw content of other operators' shells, and an agent cannot
+  watch a replay. A recording of a host since removed from the registry stays
+  readable by unrestricted operators and by ones scoped to that host; a
+  `coven=`-scoped operator loses it with the host's registry row.
+
 - **The `audit:` block now does what it says** ([ADR-022(i)](docs/adr/0022-audit-pipeline.md),
   amendment 2026-07-27). `audit.enabled: false` used to turn nothing off:
   neither it nor `otel_export` had a consumer anywhere in the write path, so the

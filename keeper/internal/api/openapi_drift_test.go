@@ -247,6 +247,7 @@ func collectRoutes(t *testing.T) map[route]struct{} {
 		nil,                                  // clusterH (cluster-view isn't mounted in the test)
 		&runEventsDeps{},                     // runEventsDeps — SSE run-events is mounted (ADR-068 §A3); deps' methods aren't called while walking the tree
 		&consoleWSDeps{},                     // consoleWSDeps — the console WebSocket is mounted (NIM-143); it carries no OpenAPI operation, so it is in pathAllowlist
+		handlers.ConsoleRecordingSpecStub(),  // consoleRecordingH — playback routes (NIM-148) ARE in the spec, so they are mounted and checked as ordinary routes
 		nil,                                  // logger — nil is fine (handlers get io.Discard internally)
 	)
 

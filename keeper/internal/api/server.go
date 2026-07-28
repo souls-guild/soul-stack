@@ -203,6 +203,17 @@ type Deps struct {
 	// instrumentation disabled (nil-safe no-ops).
 	ConsoleMetrics *console.Metrics
 
+	// ConsoleRecordings — the READ half of the console recording store
+	// (ADR-0074(g), NIM-148). Deliberately separate from the recorder the Hub
+	// holds: that one can only write, this one can only read, so a playback
+	// route can never become a way into a recording. nil → the playback routes
+	// are not mounted.
+	//
+	// Independent of ConsoleHub on purpose — recordings outlive the plane that
+	// produced them, and turning the console off must not make yesterday's
+	// sessions unreadable.
+	ConsoleRecordings handlers.ConsoleRecordingReader
+
 	// ChoirDB — the CRUD surface of the Choir/Voice registry (ADR-044, S-T3). When nil
 	// the choir.* routes aren't wired (PushProviderSvc pattern).
 	// The production wire-up in `keeper run` passes the same *pgxpool.Pool as
@@ -902,7 +913,15 @@ func NewServer(cfg config.KeeperListenSimple, deps Deps, logger *slog.Logger) (*
 		}
 	}
 
-	handler := buildRouter(deps.JWTVerifier, healthH, opH, incH, soulH, telemetryH, roleH, synodH, sigilH, sigilKeyH, serviceH, provisioningPolicyH, settingsH, augurH, oracleH, pushH, pushProviderH, providerH, profileH, errandH, voyageH, cadenceH, auditH, choirH, heraldH, moduleCatalogH, deps.ModuleFormPrepH, permCatalogH, eventTypeCatalogH, heraldTypeCatalogH, meH, deps.RBAC, deps.AuditWriter, deps.MetricsHTTP, deps.TollDegraded, deps.TempoLimiter, deps.TempoMetrics, tempoVoyageCreateLimits, tempoVoyagePreviewLimits, deps.WebUIEnabled, deps.LDAPAuth, deps.OIDCAuth, deps.AuthToken, deps.AuthMethods, deps.LoginGuard, deps.LoginLimitCfg, deps.SoulStatsStaleFn, clusterH, runEventsDeps, consoleDeps, logger)
+	// Console recording playback — opt-in on the READ store alone (NIM-148).
+	// It does not consult ConsoleHub: a cluster with the console plane switched
+	// off still has recordings of the sessions it held while it was on.
+	var consoleRecordingH *handlers.ConsoleRecordingHandler
+	if deps.ConsoleRecordings != nil {
+		consoleRecordingH = handlers.NewConsoleRecordingHandler(deps.ConsoleRecordings, deps.RBAC, deps.AuditWriter, logger)
+	}
+
+	handler := buildRouter(deps.JWTVerifier, healthH, opH, incH, soulH, telemetryH, roleH, synodH, sigilH, sigilKeyH, serviceH, provisioningPolicyH, settingsH, augurH, oracleH, pushH, pushProviderH, providerH, profileH, errandH, voyageH, cadenceH, auditH, choirH, heraldH, moduleCatalogH, deps.ModuleFormPrepH, permCatalogH, eventTypeCatalogH, heraldTypeCatalogH, meH, deps.RBAC, deps.AuditWriter, deps.MetricsHTTP, deps.TollDegraded, deps.TempoLimiter, deps.TempoMetrics, tempoVoyageCreateLimits, tempoVoyagePreviewLimits, deps.WebUIEnabled, deps.LDAPAuth, deps.OIDCAuth, deps.AuthToken, deps.AuthMethods, deps.LoginGuard, deps.LoginLimitCfg, deps.SoulStatsStaleFn, clusterH, runEventsDeps, consoleDeps, consoleRecordingH, logger)
 
 	srv := &http.Server{
 		Addr:              cfg.Addr,

@@ -147,7 +147,7 @@ const (
 // chi.NotFound and chi.MethodNotAllowed are replaced with problem+json
 // handlers, so 404/405 do not come back in stdlib's text/plain default
 // format.
-func buildRouter(verifier *jwt.Verifier, healthH *health.Handler, opH *handlers.OperatorHandler, incH *handlers.IncarnationHandler, soulH *handlers.SoulHandler, telemetryH *handlers.TelemetryHandler, roleH *handlers.RoleHandler, synodH *handlers.SynodHandler, sigilH *handlers.SigilHandler, sigilKeyH *handlers.SigilKeyHandler, serviceH *handlers.ServiceHandler, provisioningPolicyH *handlers.ProvisioningPolicyHandler, settingsH *handlers.SettingsHandler, augurH *handlers.AugurHandler, oracleH *handlers.OracleHandler, pushH *handlers.PushHandler, pushProviderH *handlers.PushProviderHandler, providerH *handlers.ProviderHandler, profileH *handlers.ProfileHandler, errandH *handlers.ErrandHandler, voyageH *handlers.VoyageHandler, cadenceH *handlers.CadenceHandler, auditH *handlers.AuditHandler, choirH *handlers.ChoirHandler, heraldH *handlers.HeraldHandler, moduleCatalogH *handlers.ModuleCatalogHandler, moduleFormPrepH *handlers.ModuleFormPrepHandler, permCatalogH *handlers.PermissionCatalogHandler, eventTypeCatalogH *handlers.EventTypeCatalogHandler, heraldTypeCatalogH *handlers.HeraldTypeCatalogHandler, meH *handlers.MyPermissionsHandler, enforcer RBACProvider, auditWriter audit.Writer, metricsHTTP *obs.HTTPMetrics, tollDegraded toll.DegradedReader, tempoLimiter apimiddleware.RateLimiter, tempoMetrics apimiddleware.RateLimitMetrics, tempoVoyageCreateLimits func() apimiddleware.RateLimitLimits, tempoVoyagePreviewLimits func() apimiddleware.RateLimitLimits, webUIEnabled bool, ldapAuth *LDAPAuthDeps, oidcAuth *OIDCAuthDeps, authToken *AuthTokenDeps, authMethods AuthMethodsDeps, loginGuard apimiddleware.LoginGuard, loginLimitCfg apimiddleware.AuthLoginLimitConfig, soulStatsStaleFn func() time.Duration, clusterH *handlers.ClusterHandler, runEventsDeps *runEventsDeps, consoleDeps *consoleWSDeps, logger *slog.Logger) http.Handler {
+func buildRouter(verifier *jwt.Verifier, healthH *health.Handler, opH *handlers.OperatorHandler, incH *handlers.IncarnationHandler, soulH *handlers.SoulHandler, telemetryH *handlers.TelemetryHandler, roleH *handlers.RoleHandler, synodH *handlers.SynodHandler, sigilH *handlers.SigilHandler, sigilKeyH *handlers.SigilKeyHandler, serviceH *handlers.ServiceHandler, provisioningPolicyH *handlers.ProvisioningPolicyHandler, settingsH *handlers.SettingsHandler, augurH *handlers.AugurHandler, oracleH *handlers.OracleHandler, pushH *handlers.PushHandler, pushProviderH *handlers.PushProviderHandler, providerH *handlers.ProviderHandler, profileH *handlers.ProfileHandler, errandH *handlers.ErrandHandler, voyageH *handlers.VoyageHandler, cadenceH *handlers.CadenceHandler, auditH *handlers.AuditHandler, choirH *handlers.ChoirHandler, heraldH *handlers.HeraldHandler, moduleCatalogH *handlers.ModuleCatalogHandler, moduleFormPrepH *handlers.ModuleFormPrepHandler, permCatalogH *handlers.PermissionCatalogHandler, eventTypeCatalogH *handlers.EventTypeCatalogHandler, heraldTypeCatalogH *handlers.HeraldTypeCatalogHandler, meH *handlers.MyPermissionsHandler, enforcer RBACProvider, auditWriter audit.Writer, metricsHTTP *obs.HTTPMetrics, tollDegraded toll.DegradedReader, tempoLimiter apimiddleware.RateLimiter, tempoMetrics apimiddleware.RateLimitMetrics, tempoVoyageCreateLimits func() apimiddleware.RateLimitLimits, tempoVoyagePreviewLimits func() apimiddleware.RateLimitLimits, webUIEnabled bool, ldapAuth *LDAPAuthDeps, oidcAuth *OIDCAuthDeps, authToken *AuthTokenDeps, authMethods AuthMethodsDeps, loginGuard apimiddleware.LoginGuard, loginLimitCfg apimiddleware.AuthLoginLimitConfig, soulStatsStaleFn func() time.Duration, clusterH *handlers.ClusterHandler, runEventsDeps *runEventsDeps, consoleDeps *consoleWSDeps, consoleRecordingH *handlers.ConsoleRecordingHandler, logger *slog.Logger) http.Handler {
 	r := chi.NewRouter()
 
 	// huma error-override (ADR-054, FULL-TYPED): global huma.NewError →
@@ -1940,6 +1940,33 @@ func buildRouter(verifier *jwt.Verifier, healthH *health.Handler, opH *handlers.
 				apimiddleware.RequireAction(enforcer, "soul", "console"),
 			).Group(func(r chi.Router) {
 				registerConsoleWS(r, consoleDeps)
+			})
+		}
+
+		// GET /v1/console/recordings[…] — playback of recorded sessions
+		// (ADR-0074 amendment, NIM-148). Same right as the live console and
+		// the same selectors: watching a recording is reading, verbatim, what
+		// was typed into a root shell, so a lighter right for it would make
+		// `soul.console` decorative.
+		//
+		// RequireAction for the SAME reason the WebSocket uses it: a listing
+		// names no host, and a scope-aware check with an absent host dimension
+		// fails closed on exactly the `host=`-scoped roles this serves
+		// (ADR-047 §g G1). The per-host scope is applied inside the handler —
+		// pushed into SQL for the list, checked per object for get/cast.
+		//
+		// Mounted independently of consoleDeps: recordings outlive the plane
+		// that produced them, and turning the console off must not make the
+		// evidence of yesterday's sessions unreadable. consoleRecordingH nil →
+		// no route (the errand/push opt-in pattern).
+		if consoleRecordingH != nil {
+			r.With(
+				apimiddleware.RequireAction(enforcer, "soul", "console"),
+			).Group(func(r chi.Router) {
+				api := newHumaCadenceAPI(r)
+				registerHumaConsoleRecordingList(api, consoleRecordingH)
+				registerHumaConsoleRecordingGet(api, consoleRecordingH)
+				registerHumaConsoleRecordingCast(api, consoleRecordingH)
 			})
 		}
 
