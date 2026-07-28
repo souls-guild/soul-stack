@@ -3,7 +3,6 @@
 A human-readable explanation of the license. The [`LICENSE`](LICENSE) file text
 is the legally binding one; this document explains its practical meaning.
 
-> **Draft edition.** Wording is being finalized with legal counsel.
 > Full decision and rationale — [ADR-016](docs/adr/0016-parity-license.md).
 
 Soul Stack is **fair-code**: the source is open and available, but production use
