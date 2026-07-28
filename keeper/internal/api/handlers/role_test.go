@@ -1133,8 +1133,8 @@ type visibilityListPool struct{ rbacFakePool }
 
 func (p *visibilityListPool) Query(_ context.Context, sql string, _ ...any) (pgx.Rows, error) {
 	switch {
-	case contains(sql, "SELECT name, description, builtin, default_scope, parent_role FROM rbac_roles"):
-		return &roleViewRows{rows: [][5]any{
+	case contains(sql, "SELECT name, description, builtin, default_scope"):
+		return &roleViewRows{rows: [][6]any{
 			{"cluster-admin", "cluster admins", true, nil, nil},
 			{"dba", "dba team", false, ptrStr("coven=dba"), nil},
 			{"payments", "payments team", false, ptrStr("coven=payments"), nil},

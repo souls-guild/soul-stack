@@ -264,7 +264,9 @@ func TestListRoles_DerivedRoleJudgedByItsEffectiveForm(t *testing.T) {
 }
 
 // catalogRoleRows — selectRoleViewsSQL (name, description, builtin,
-// default_scope, parent_role); the trailing two are nullable ("" → NULL).
+// default_scope, parent_role, scope_mode); the trailing three are nullable
+// ("" → NULL). scope_mode is NULL here: resolution does not branch on it
+// (ADR-078(k)), so role visibility reads the same either way.
 type catalogRoleRows struct {
 	values []roleViewRow
 	idx    int
@@ -279,8 +281,8 @@ func (r *catalogRoleRows) Next() bool {
 }
 
 func (r *catalogRoleRows) Scan(dest ...any) error {
-	if len(dest) != 5 {
-		return errors.New("catalogRoleRows: expected 5 dest")
+	if len(dest) != 6 {
+		return errors.New("catalogRoleRows: expected 6 dest")
 	}
 	row := r.values[r.idx-1]
 	*(dest[0].(*string)) = row.name
@@ -288,6 +290,7 @@ func (r *catalogRoleRows) Scan(dest ...any) error {
 	*(dest[2].(*bool)) = row.builtin
 	assignNullableString(dest[3].(**string), row.defaultScope)
 	assignNullableString(dest[4].(**string), row.parentRole)
+	assignNullableString(dest[5].(**string), "")
 	return nil
 }
 

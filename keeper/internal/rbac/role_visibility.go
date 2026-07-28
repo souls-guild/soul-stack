@@ -71,15 +71,19 @@ func visibleRoleViews(callerPerms []Permission, views []RoleView) ([]RoleView, e
 // callerMaySeeRole reports whether callerPerms cover everything role v grants.
 //
 // Bare permissions are expanded under the role's effective scope — the same
-// normalisation [requiredPermissions] performs for a role being written
+// normalisation [effectiveRoleRights] performs for a role being written
 // (ADR-047 S1). Comparing the raw strings instead would read a bare
 // `incarnation.get` on a role scoped to `coven=prod` as unrestricted, and hide
 // the role from the very operator who owns that coven.
 //
+// The parent is nil because [RoleView.EffectivePermissions] is ALREADY resolved
+// against the chain ([resolveRoleViews]); passing one would attenuate a form
+// that has been attenuated once and narrow the role out of its owner's view.
+//
 // A role that grants nothing is visible to everyone: it exposes no privilege,
 // and any caller could create the same empty role themselves.
 func callerMaySeeRole(callerPerms []Permission, v RoleView) (bool, error) {
-	required, err := requiredPermissions(v.EffectivePermissions, effectiveScopePtr(v))
+	required, err := effectiveRoleRights(nil, v.EffectivePermissions, effectiveScopePtr(v))
 	if err != nil {
 		// Unreachable: the effective form is rendered from already-parsed
 		// permissions ([resolveRoleViews]). Fail the read rather than publish a
@@ -90,7 +94,7 @@ func callerMaySeeRole(callerPerms []Permission, v RoleView) (bool, error) {
 }
 
 // effectiveScopePtr adapts [RoleView]'s scope string ("" = unrestricted) to the
-// nullable form [requiredPermissions] takes.
+// nullable form [effectiveRoleRights] takes.
 func effectiveScopePtr(v RoleView) *string {
 	if v.EffectiveScope == "" {
 		return nil
