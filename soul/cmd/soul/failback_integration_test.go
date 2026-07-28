@@ -61,6 +61,10 @@ import (
 	"github.com/souls-guild/soul-stack/soul/internal/runtime"
 )
 
+// testSID — the SID every test here dials with; also the CN/SAN of the client
+// leaf, so the mTLS peer identity matches the handshake echo.
+const testSID = "soul-host.example"
+
 // TestReconnect_LeaseHeld_BackoffNotReset — stream is rejected with AlreadyExists
 // on handshake (SID lease still held by a live holder after the keeper crashed).
 // Soul must not hammer the surviving keeper at ~1/initial rate: backoff grows
@@ -70,7 +74,7 @@ import (
 // (cap), preserving recovery latency.
 func TestReconnect_LeaseHeld_BackoffNotReset(t *testing.T) {
 	ca, caKey := mustGenCA(t)
-	clientCertDER, clientKey := mustGenLeaf(t, ca, caKey, "soul-host.example", false)
+	clientCertDER, clientKey := mustGenLeaf(t, ca, caKey, testSID, false)
 	dir := t.TempDir()
 	caPath := writePEMBlock(t, dir, "ca.pem", "CERTIFICATE", ca.Raw)
 	clientCertPath := writePEMBlock(t, dir, "client.crt", "CERTIFICATE", clientCertDER)
@@ -89,7 +93,7 @@ func TestReconnect_LeaseHeld_BackoffNotReset(t *testing.T) {
 		SeedKey:          clientKeyPath,
 		CAPath:           caPath,
 		HandshakeTimeout: 500 * time.Millisecond,
-		SID:              "soul-host.example",
+		SID:              testSID,
 		SoulVersion:      "0.0.0-test",
 	}, logger)
 	if err != nil {
@@ -103,20 +107,7 @@ func TestReconnect_LeaseHeld_BackoffNotReset(t *testing.T) {
 	// initial=20ms/no-jitter makes this deterministic.
 	store := backoffOnlyStore(t, srv.addr, "20ms", "20ms")
 
-	runner := runtime.NewApplyRunner(coremod.Default(installmod.Deps{}), nil)
-	sp := newTestPusher("soul-host.example")
-	up := newTestUtilPusher("soul-host.example")
-
-	ctx, cancel := context.WithCancel(context.Background())
-	loopDone := make(chan struct{})
-	go func() {
-		defer close(loopDone)
-		reconnectLoop(ctx, store, cli, runner, nil, sp, up, nil, nil, nil, nil, logger)
-	}()
-	defer func() {
-		cancel()
-		<-loopDone
-	}()
+	defer startReconnectLoop(t, store, cli, logger)()
 
 	// 2s observation window. reset-to-initial(20ms) would yield ~100 attempts.
 	// Lease-held progression (20→40→80→160→320→640→1280→2560→cap=3000) gives ≤ ~8.
@@ -145,7 +136,7 @@ func TestReconnect_LeaseHeld_BackoffNotReset(t *testing.T) {
 // Guards legitimate fallback-list failover when one keeper has the lease held.
 func TestReconnect_LeaseHeld_SpraysToOtherEndpoint(t *testing.T) {
 	ca, caKey := mustGenCA(t)
-	clientCertDER, clientKey := mustGenLeaf(t, ca, caKey, "soul-host.example", false)
+	clientCertDER, clientKey := mustGenLeaf(t, ca, caKey, testSID, false)
 	dir := t.TempDir()
 	caPath := writePEMBlock(t, dir, "ca.pem", "CERTIFICATE", ca.Raw)
 	clientCertPath := writePEMBlock(t, dir, "client.crt", "CERTIFICATE", clientCertDER)
@@ -170,7 +161,7 @@ func TestReconnect_LeaseHeld_SpraysToOtherEndpoint(t *testing.T) {
 		SeedKey:          clientKeyPath,
 		CAPath:           caPath,
 		HandshakeTimeout: 500 * time.Millisecond,
-		SID:              "soul-host.example",
+		SID:              testSID,
 		SoulVersion:      "0.0.0-test",
 	}, logger)
 	if err != nil {
@@ -181,24 +172,41 @@ func TestReconnect_LeaseHeld_SpraysToOtherEndpoint(t *testing.T) {
 	// Interval is set large.
 	store := backoffOnlyStore(t, leaseHeld.addr, "20ms", "200ms")
 
-	runner := runtime.NewApplyRunner(coremod.Default(installmod.Deps{}), nil)
-	sp := newTestPusher("soul-host.example")
-	up := newTestUtilPusher("soul-host.example")
-	ctx, cancel := context.WithCancel(context.Background())
-	loopDone := make(chan struct{})
-	go func() {
-		defer close(loopDone)
-		reconnectLoop(ctx, store, cli, runner, nil, sp, up, nil, nil, nil, nil, logger)
-	}()
-	defer func() {
-		cancel()
-		<-loopDone
-	}()
+	defer startReconnectLoop(t, store, cli, logger)()
 
 	// Despite lease-held priority=1, the session comes up on the live priority=2.
 	if !waitFor(func() bool { return alive.activeStreams() >= 1 }, 3*time.Second) {
 		t.Fatalf("spray: did not connect to alive priority=2 endpoint; P1-hello=%d P2-active=%d",
 			leaseHeld.helloCount(), alive.activeStreams())
+	}
+}
+
+// startReconnectLoop runs reconnectLoop against cli in a goroutine; the returned
+// func cancels it and waits for the goroutine to exit.
+//
+// Every test here drives one path — Dial → session → failback swap — so the deps
+// outside it are nil, each a documented nil-safe receiver: errandRunner /
+// consoleMetrics (no Errand or ConsoleOpen arrives), metrics, sigils / anchors
+// (Sigil verify only runs on custom-plugin Apply), scheduler (no VigilSnapshot),
+// notifier (sd_notify is inert outside systemd).
+//
+// One call site on purpose: reconnectLoop takes 14 positional args, and these
+// tests silently drifted out of sync with it (NIM-207) because nothing built
+// this file. A signature change now breaks one line, not three.
+func startReconnectLoop(t *testing.T, store *config.Store[config.SoulConfig], cli *soulgrpc.Client, logger *slog.Logger) func() {
+	t.Helper()
+	runner := runtime.NewApplyRunner(coremod.Default(installmod.Deps{}), nil)
+	sp := newTestPusher(testSID)
+	up := newTestUtilPusher(testSID)
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		reconnectLoop(ctx, store, cli, runner, nil, nil, sp, up, nil, nil, nil, nil, nil, logger)
+	}()
+	return func() {
+		cancel()
+		<-done
 	}
 }
 
@@ -256,7 +264,7 @@ func backoffOnlyStore(t *testing.T, primaryAddr, initial, max string) *config.St
 // closes).
 func TestFailbackIntegration_TwoEndpoints(t *testing.T) {
 	ca, caKey := mustGenCA(t)
-	clientCertDER, clientKey := mustGenLeaf(t, ca, caKey, "soul-host.example", false)
+	clientCertDER, clientKey := mustGenLeaf(t, ca, caKey, testSID, false)
 	dir := t.TempDir()
 	caPath := writePEMBlock(t, dir, "ca.pem", "CERTIFICATE", ca.Raw)
 	clientCertPath := writePEMBlock(t, dir, "client.crt", "CERTIFICATE", clientCertDER)
@@ -288,14 +296,12 @@ func TestFailbackIntegration_TwoEndpoints(t *testing.T) {
 		SeedKey:          clientKeyPath,
 		CAPath:           caPath,
 		HandshakeTimeout: 500 * time.Millisecond,
-		SID:              "soul-host.example",
+		SID:              testSID,
 		SoulVersion:      "0.0.0-test",
 	}, logger)
 	if err != nil {
 		t.Fatalf("NewClient: %v", err)
 	}
-
-	runner := runtime.NewApplyRunner(coremod.Default(installmod.Deps{}), nil)
 
 	// backoff/failback are no longer passed as params — reconnectLoop reads
 	// them from the store on every iteration (hot-reload, ADR-021). Build a
@@ -303,29 +309,7 @@ func TestFailbackIntegration_TwoEndpoints(t *testing.T) {
 	// no jitter, failback interval=200ms (spray=0 for a deterministic swap).
 	store := failbackTestStore(t, srvAAddr, srvB.addr)
 
-	// soulprintPusher is a required signature arg; Pusher is real
-	// (handleSession sends an initial report on session setup). The rest of the
-	// deps are nil: the test only checks failback session swap and never
-	// reaches Apply/Errand/beacon, where they'd be needed:
-	//   - errandRunner — nil: no Errand commands arrive in this test;
-	//   - metrics — nil (nil-safe, see EventStreamMetrics.*);
-	//   - sigils/anchors — nil: Sigil verify only matters on custom-plugin Apply;
-	//   - scheduler — nil: no VigilSnapshot arrives in this test.
-	sp := newTestPusher("soul-host.example")
-	up := newTestUtilPusher("soul-host.example")
-
-	ctx, cancel := context.WithCancel(context.Background())
-	loopDone := make(chan struct{})
-	go func() {
-		defer close(loopDone)
-		// Signature: reconnectLoop(ctx, store, client, runner, errandRunner,
-		// sp, up, metrics, sigils, anchors, scheduler, logger).
-		reconnectLoop(ctx, store, cli, runner, nil, sp, up, nil, nil, nil, nil, logger)
-	}()
-	defer func() {
-		cancel()
-		<-loopDone
-	}()
+	defer startReconnectLoop(t, store, cli, logger)()
 
 	// === Phase 1: initial connect — A unreachable, fallback to B ===
 	if !waitFor(func() bool { return srvB.activeStreams() >= 1 }, 3*time.Second) {

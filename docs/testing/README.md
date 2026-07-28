@@ -32,6 +32,11 @@ and [ADR-039](../adr/0039-e2e-testing.md) (E2E).
 
 - `make check` drives L0 + L2 (via `lint`). L1 / L3a / L3b / L3c - separate
 targets on request (require docker/kind).
+- `make check` still **compiles** the levels it cannot run: `vet-tags` vets
+L1/L3a/L3b/L3c sources under their own build tags without starting anything
+(docker-free). Without it a suite goes unbuildable unnoticed between docker runs -
+NIM-207 found L1 for `soul/cmd/soul` broken for several tickets by a signature
+change that nothing rebuilt.
 - Before a batch commit of a **major** feature, a local live gate is required
 `make e2e-live-gate` (curated L3b subset, docker; see
 Local live gate for major features).

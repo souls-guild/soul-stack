@@ -30,6 +30,12 @@ GOVULNCHECK := $(GOPATH_BIN)/govulncheck
 
 MODULES := proto proto/plugin shared sdk keeper soul soul-lint soulctl
 
+# `<dir>:<tag>` pairs whose sources only build under their own tag, vetted by
+# `vet-tags` on top of the `integration` pass over $(MODULES). The tests/ modules
+# are outside $(MODULES) (their own go.mod, no non-test packages); `keeper:smoke`
+# is one legacy ad-hoc file that would otherwise never be compiled by anything.
+TAGGED_DIRS := tests/e2e:e2e tests/e2e-live:e2e_live tests/e2e-k8s:e2e_k8s keeper:smoke
+
 # Directory for built binaries relative to the root of each module with `main`.
 # Covered by `.gitignore` (`*/bin/`).
 BIN_DIR := bin
@@ -91,7 +97,7 @@ PKG_ARCH ?= amd64
 KEEPER_IMAGE ?= soul-stack/keeper
 SOUL_IMAGE   ?= soul-stack/soul
 
-.PHONY: gen build build-soulctl build-linux bin-keeper bin-soul bin-soul-lint test test-plugins test-race test-integration e2e e2e-live e2e-live-gate e2e-k8s e2e-cloud check-e2e-cloud docker-build-keeper docker-build-soul docker-keeper docker-soul tidy check check-fmt vet check-gen check-doc-links check-vuln lint trial dev-up dev-down dev-stop dev-reset dev-provision dev-smoke dev-keeper dev-jwt dev-souls dev-web dev-stand dev-stand-free gen-openapi check-openapi check-template check-stand-template check-soul-template sync-webui check-webui sbom pkg pkg-keeper pkg-soul pkg-soul-lint sign stress load-test help dev-souls-docker dev-souls-docker-down
+.PHONY: gen build build-soulctl build-linux bin-keeper bin-soul bin-soul-lint test test-plugins test-race test-integration e2e e2e-live e2e-live-gate e2e-k8s e2e-cloud check-e2e-cloud docker-build-keeper docker-build-soul docker-keeper docker-soul tidy check check-fmt vet vet-tags check-gen check-doc-links check-vuln lint trial dev-up dev-down dev-stop dev-reset dev-provision dev-smoke dev-keeper dev-jwt dev-souls dev-web dev-stand dev-stand-free gen-openapi check-openapi check-template check-stand-template check-soul-template sync-webui check-webui sbom pkg pkg-keeper pkg-soul pkg-soul-lint sign stress load-test help dev-souls-docker dev-souls-docker-down
 
 gen: gen-openapi
 	@mkdir -p $(KEEPER_PROTO_OUT) $(PLUGIN_PROTO_OUT)
@@ -842,12 +848,15 @@ sign:
 # tests (workspace + community plugins) -> drift checks -> supply-chain scan ->
 # lint the examples/ corpus -> L0 trials (soul-trial).
 # `test-integration` is NOT part of this - it requires docker (see the comment on
-# `test`); run it separately. Release/packaging targets (sbom/pkg/sign) are NOT
-# part of this - external tooling. `check-vuln` requires access to vuln.go.dev - offline
+# `test`); run it separately. `vet-tags` is the docker-free half of it: it compiles
+# the tag-guarded sets (integration/e2e/...) without running them, so they cannot
+# rot out of sight between docker runs (NIM-207). Release/packaging targets
+# (sbom/pkg/sign) are NOT part of this - external tooling.
+# `check-vuln` requires access to vuln.go.dev - offline
 # it's skipped via SKIP_VULNCHECK=1 (see the target), in CI it runs for real.
 # `test-plugins` - go.mod plugins outside go.work (GOWORK=off). `trial` - L0-render
 # over the examples/service/ corpus (catches broken case.yml assertions).
-check: check-fmt vet build test test-plugins check-gen check-openapi check-template check-stand-template check-soul-template check-webui check-doc-links check-vuln lint trial check-e2e-cloud
+check: check-fmt vet vet-tags build test test-plugins check-gen check-openapi check-template check-stand-template check-soul-template check-webui check-doc-links check-vuln lint trial check-e2e-cloud
 	@echo "check: all checks passed"
 
 # gofmt formatting across all modules. `gofmt -l` only prints files that
@@ -876,6 +885,34 @@ vet:
 		fi; \
 		echo "go vet ./... in $$m"; \
 		(cd $$m && go vet ./...) || exit 1; \
+	done
+
+# `go vet` under the build tags a plain `go vet ./...` never builds. Tag-guarded
+# files sit outside the default build, so a signature change on the other side of
+# the fence rots them silently: by NIM-207 the whole `integration` set of
+# `soul/cmd/soul` had been unbuildable for several tickets (`reconnectLoop` grew
+# from 12 to 14 params across NIM-142/144/157 and nothing updated the call), and
+# `keeper/internal/redis` the same way after `NewClient` took a password
+# resolver. Neither failed an assert -- they failed to compile, so the suites
+# could not run at all while the gate stayed green.
+#
+# vet compiles without running anything, so this stays docker-free and belongs in
+# `check` (unlike `test-integration` / `e2e`, which need containers and are
+# opt-in). One tag per pass: tags are not mutually compatible, and a combined
+# `-tags=a,b` would build files that were never meant to coexist.
+vet-tags:
+	@for m in $(MODULES); do \
+		if [ -z "$$(cd $$m && go list ./... 2>/dev/null)" ]; then \
+			echo "skip $$m (no Go packages)"; \
+			continue; \
+		fi; \
+		echo "go vet -tags=integration ./... in $$m"; \
+		(cd $$m && go vet -tags=integration ./...) || exit 1; \
+	done
+	@for spec in $(TAGGED_DIRS); do \
+		d=$${spec%%:*}; tag=$${spec##*:}; \
+		echo "go vet -tags=$$tag ./... in $$d"; \
+		(cd $$d && go vet -tags=$$tag ./...) || exit 1; \
 	done
 
 # Checks protogen idempotency (gen-drift): runs `make gen` and
@@ -1140,6 +1177,7 @@ help:
 	@echo "  check             single local CI gate (fmt+vet+build+test+test-plugins+openapi+gen+lint+trial)"
 	@echo "  check-fmt         gofmt -l across all modules (fails on unformatted)"
 	@echo "  vet               go vet ./... across all modules"
+	@echo "  vet-tags          go vet under the build tags (integration/e2e/...) - compile-only, no docker"
 	@echo "  check-gen         protogen idempotency (gen-drift in proto/gen/go)"
 	@echo "  check-doc-links   internal doc-link integrity (markdown + Go comments)"
 	@echo "  check-vuln        govulncheck supply-chain across all modules (offline: SKIP_VULNCHECK=1)"

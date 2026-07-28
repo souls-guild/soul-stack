@@ -46,9 +46,11 @@ make build     # keeper / soul / soul-lint / soulctl → <module>/bin/
 make check     # the full local gate — run this before you push
 ```
 
-`make check` is the gate. It reproduces what CI runs — formatting, `go vet`, build,
-unit + plugin tests, code generation drift, OpenAPI/template checks, the embedded web
-UI check, internal doc-link integrity, the vulnerability scan, and the linter. **A PR
+`make check` is the gate. It reproduces what CI runs — formatting, `go vet` (including
+`vet-tags`, which compiles the tag-guarded `integration`/`e2e` suites without running
+them, so they cannot drift out of sync while nothing builds them), build, unit + plugin
+tests, code generation drift, OpenAPI/template checks, the embedded web UI check,
+internal doc-link integrity, the vulnerability scan, and the linter. **A PR
 is expected to have `make check` green.** CI ([`.github/workflows/ci.yml`](.github/workflows/ci.yml))
 runs the same target plus the E2E and integration suites.
 

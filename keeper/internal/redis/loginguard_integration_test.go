@@ -27,7 +27,7 @@ func newLoginGuardInt(t *testing.T) *LoginGuard {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	c, err := NewClient(ctx, Config{Addr: integrationAddr})
+	c, err := NewClient(ctx, Config{Addr: integrationAddr}, nil)
 	if err != nil {
 		t.Fatalf("NewClient: %v", err)
 	}

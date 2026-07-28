@@ -167,6 +167,22 @@ Artifact versioning — via git ref ([ADR-007](docs/adr/0007-versioning-git-ref.
   it needs cluster database credentials and a PKI-issue token. Run it against a
   bench cluster, never production.
 
+### Fixed
+
+- **Tag-guarded tests are compiled by the gate again.** Nothing built the
+  `integration` sources on a normal PR, so they rotted out of sight: the Soul
+  failback suite still called `reconnectLoop` with 12 arguments after it grew to
+  14 (console wiring, then sd_notify), and `keeper/internal/redis` called
+  `NewClient` without the password resolver. Both broke at compile, so
+  `make test-integration` could not run those packages at all — and the one error
+  it printed looked like a build glitch rather than several suites going missing.
+
+  `make check` now runs **`vet-tags`**: `go vet` under `integration` across the
+  workspace, plus `e2e` / `e2e_live` / `e2e_k8s` / `smoke` for the sets that live
+  behind their own tags. Vet compiles without running anything, so the gate stays
+  docker-free and the container suites stay opt-in. The failback behavior itself
+  was intact — only the call had drifted — and those tests pass again.
+
 ---
 
 ## [v0.1.0-beta.1] — 2026-06-15
