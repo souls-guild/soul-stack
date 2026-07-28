@@ -484,3 +484,102 @@ tasks:
 		t.Error("HasRefreshEmitter([]) = true, want false")
 	}
 }
+
+// TestAssertReadsRoster — NIM-235 guard. The create-path pre-flight defers
+// exactly the asserts this predicate accepts, so its BOUNDARY is what decides
+// whether a topology guard reaches the operator as a 422 or as error_locked.
+//
+// The load-bearing case is "input-only": every assert carries an omitted `on:`
+// (it is run-level and targets nothing), so reusing taskReadsRoster here would
+// classify ALL asserts as roster readers and silently strip the create path of
+// the input-assert 422 that still works. The two must not converge.
+func TestAssertReadsRoster(t *testing.T) {
+	task := func(t *testing.T, src string) *Task {
+		t.Helper()
+		m, _, _, err := LoadScenarioManifestFromBytes("main.yml", []byte(src), ValidateOptions{})
+		if err != nil {
+			t.Fatalf("LoadScenarioManifestFromBytes: %v", err)
+		}
+		if len(m.Tasks) != 1 {
+			t.Fatalf("fixture must hold exactly one task, got %d", len(m.Tasks))
+		}
+		return &m.Tasks[0]
+	}
+	scenario := func(body string) string {
+		return "name: create\nstate_changes: {}\ntasks:\n" + body
+	}
+
+	// The redis/dragonfly size-guard: reads the run roster.
+	const rosterSize = `  - name: Guard roster size
+    assert:
+      that:
+        - "size(soulprint.hosts) == int(input.shards)"
+      message: "topology mismatch"
+`
+	// The redis directive-catalog guard: input + essence only, no roster.
+	const inputOnly = `  - name: Guard directives are known
+    assert:
+      that:
+        - "int(input.replicas) <= int(input.max_replicas)"
+      message: "too many replicas"
+`
+	// soulprint.where(...) is the roster under another accessor.
+	const rosterWhere = `  - name: Guard a tagged host exists
+    assert:
+      that:
+        - 'size(soulprint.where("has(covens)")) > 0'
+      message: "no tagged host"
+`
+	// Roster read hidden in the when: gate — the gate DECISION is then
+	// roster-dependent, so the whole assert must be deferred.
+	const rosterInWhen = `  - name: Guard something on a non-empty roster
+    when: "size(soulprint.hosts) > 0"
+    assert:
+      that:
+        - "int(input.replicas) > 0"
+      message: "no replicas"
+`
+	// `soulprint` inside a CEL string literal is data, not a roster read —
+	// stripping literals is what keeps a message-like predicate from being
+	// deferred for nothing.
+	const literalOnly = `  - name: Guard a label value
+    assert:
+      that:
+        - "input.mode != 'soulprint'"
+      message: "mode collides with a reserved word"
+`
+	tests := []struct {
+		name string
+		src  string
+		want bool
+	}{
+		{"roster-size", rosterSize, true},
+		{"roster-where", rosterWhere, true},
+		{"roster-in-when", rosterInWhen, true},
+		{"input-only", inputOnly, false},
+		{"soulprint-in-string-literal", literalOnly, false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := AssertReadsRoster(task(t, scenario(tt.src))); got != tt.want {
+				t.Errorf("AssertReadsRoster = %v, want %v", got, tt.want)
+			}
+		})
+	}
+
+	// A non-assert task is never an assert reader, however it targets — the
+	// predicate is about assert PREDICATES, not about task targeting.
+	const hostTask = `  - name: Echo everywhere
+    module: core.exec.run
+    changed_when: "false"
+    params:
+      cmd: echo
+      args: ["hi"]
+`
+	if AssertReadsRoster(task(t, scenario(hostTask))) {
+		t.Error("AssertReadsRoster(non-assert task) = true, want false")
+	}
+	if AssertReadsRoster(nil) {
+		t.Error("AssertReadsRoster(nil) = true, want false")
+	}
+}

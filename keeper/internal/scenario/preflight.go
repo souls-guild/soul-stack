@@ -3,6 +3,7 @@ package scenario
 import (
 	"context"
 	"fmt"
+	"log/slog"
 
 	"github.com/souls-guild/soul-stack/keeper/internal/incarnation"
 	"github.com/souls-guild/soul-stack/keeper/internal/render"
@@ -29,15 +30,20 @@ var ErrAssertFailed = render.ErrAssertFailed
 // moves from the async render phase to the synchronous request path.
 //
 // Contract:
-//   - roster resolves by the root Coven label spec.IncarnationName (req.Name
-//     for create, ADR-008): [topology.Resolver.LoadIncarnationHosts] doesn't
-//     require an existing incarnation row (rosterSQL filters by `coven[]`
-//     souls; empty declared roles for a not-yet-created incarnation is not
-//     an error). Roster-at-create = connected souls at creation time
-//     (CreateTyped starts immediately → this is the roster of the imminent
-//     run). 0 connected souls → a size==N topology assert legitimately
-//     fails → ErrAssertFailed (correct: can't create+start an N-shard
-//     cluster without N hosts).
+//   - THE ROSTER IS ONLY READABLE ONCE THE INCARNATION ROW EXISTS (NIM-235).
+//     The original contract read the roster by the root Coven label
+//     spec.IncarnationName (ADR-008) — souls carried `incarnation.name` in
+//     `souls.coven[]`, so a roster could pre-date its incarnation. NIM-124
+//     (ADR-008 amendment 2026-07-17, migration 099) moved membership onto
+//     `incarnation_membership`, whose FK requires that row. On the create path
+//     pre-flight runs BEFORE `incarnation.Create`, so the roster there is not
+//     empty-by-circumstance but IMPOSSIBLE — evaluating `size(soulprint.hosts)
+//     == N` against it rejected EVERY create carrying a topology assert.
+//     Therefore asserts that read the roster ([config.AssertReadsRoster]) are
+//     NOT evaluated when the row is absent: they are deferred to the render
+//     fail-safe, which is the first point where the roster exists. Asserts that
+//     read only input/essence/incarnation still evaluate — they lose nothing by
+//     the row being absent, and keep their 422-before-mutation.
 //   - effectiveInput merges defaults + required fields from the `input:`
 //     schema (config.ResolveInputValues, no vault resolve: ADR-027 invariant
 //     A — secrets aren't materialized on the request path; input was
@@ -47,7 +53,10 @@ var ErrAssertFailed = render.ErrAssertFailed
 //     an assert predicate referencing essence.* sees the same values as
 //     render. No incarnation row exists yet for create, so a synthetic
 //     Incarnation is built from spec (Name/Service/Spec=input) for the
-//     essence override layer.
+//     essence override layer. With no roster the representative host is empty,
+//     so the host-derived essence layers (os/coven) are empty too — an
+//     `essence.*` assert that depends on them is a weaker form of the same
+//     problem and is tracked separately.
 //   - EvalAsserts emits ONLY assert predicates (shared [render.evalAssertTask]
 //     — same source as the render branch): first false → ErrAssertFailed.
 //
@@ -88,9 +97,39 @@ func (r *Runner) PreflightAssert(ctx context.Context, spec RunSpec) error {
 		return nil
 	}
 
-	hosts, err := r.deps.Topology.LoadIncarnationHosts(ctx, spec.IncarnationName)
+	// Is the roster readable at all? Before incarnation.Create there is no row,
+	// so membership — and therefore the roster — cannot exist (NIM-124). Asking
+	// the roster in that state answers "empty" for a reason that has nothing to
+	// do with topology, which is exactly the false 422 of NIM-235.
+	rosterExists, err := r.deps.Topology.IncarnationExists(ctx, spec.IncarnationName)
 	if err != nil {
-		return fmt.Errorf("preflight: roster %s: %w", spec.IncarnationName, err)
+		return fmt.Errorf("preflight: %w", err)
+	}
+
+	var hosts []*topology.HostFacts
+	if rosterExists {
+		hosts, err = r.deps.Topology.LoadIncarnationHosts(ctx, spec.IncarnationName)
+		if err != nil {
+			return fmt.Errorf("preflight: roster %s: %w", spec.IncarnationName, err)
+		}
+	} else {
+		// Drop the asserts that read the roster; keep the rest. Dropping (rather
+		// than evaluating against an empty roster) is what makes the create path
+		// honest: the deferred assert still runs at render, where the roster of
+		// the imminent run is real — including the provision-from-zero case,
+		// where the roster is a PRODUCT of the run and could not have been
+		// checked up front under any design.
+		kept, deferred := partitionRosterAsserts(scn.Tasks)
+		if len(deferred) > 0 {
+			r.logger.Info("scenario: pre-flight defers roster asserts to render — the incarnation does not exist yet, so it has no roster (NIM-124)",
+				slog.String("incarnation", spec.IncarnationName),
+				slog.String("scenario", spec.ScenarioName),
+				slog.Any("asserts", deferred))
+		}
+		scn.Tasks = kept
+		if !hasAssertTask(scn.Tasks) {
+			return nil
+		}
 	}
 
 	// effectiveInput: defaults + required merged (vault-ref stays a string,
@@ -102,10 +141,10 @@ func (r *Runner) PreflightAssert(ctx context.Context, spec RunSpec) error {
 		return fmt.Errorf("preflight: input %s/%s: %w", spec.IncarnationName, spec.ScenarioName, err)
 	}
 
-	// essence for the representative host (mirrors run() step 4). An empty
-	// roster still fails the topology assert regardless; the essence layer is
-	// empty (essence.* isn't used in pre-flight asserts today, but this keeps
-	// symmetry with render).
+	// essence for the representative host (mirrors run() step 4). With no
+	// incarnation row there is no representative host, so the host-derived
+	// layers resolve empty — the asserts still standing at this point read
+	// input/essence, not the roster (the roster readers were deferred above).
 	synthetic := &incarnation.Incarnation{
 		Name:    spec.IncarnationName,
 		Service: art.Manifest.Name,
@@ -140,6 +179,44 @@ func (r *Runner) resolvePreflightEssence(serviceDir string, inc *incarnation.Inc
 		host = hosts[0]
 	}
 	return r.deps.Essence.Resolve(essenceInput(serviceDir, inc, host))
+}
+
+// partitionRosterAsserts splits an expanded task list into the tasks pre-flight
+// may still evaluate and the NAMES of the assert tasks it must defer to render
+// because they read the roster ([config.AssertReadsRoster]).
+//
+// Only assert tasks are ever dropped: everything else stays in place so the
+// include-group decisions [render.Pipeline.EvalAsserts] makes over this list
+// (group-drop by include-`when:`) are computed on the same shape as at render —
+// dropping a whole group's non-assert members would change which groups the
+// pass sees.
+//
+// The returned names are for the operator-facing log line; an unnamed assert is
+// reported by its `that[0]`, since a nameless task would otherwise log as an
+// empty string.
+func partitionRosterAsserts(tasks []config.Task) (kept []config.Task, deferred []string) {
+	kept = make([]config.Task, 0, len(tasks))
+	for i := range tasks {
+		if render.IsAssertTask(tasks[i]) && config.AssertReadsRoster(&tasks[i]) {
+			deferred = append(deferred, assertLabel(tasks[i]))
+			continue
+		}
+		kept = append(kept, tasks[i])
+	}
+	return kept, deferred
+}
+
+// assertLabel — the task's name, falling back to its first predicate when the
+// author left `name:` off (asserts are frequently written unnamed inside an
+// include branch).
+func assertLabel(t config.Task) string {
+	if t.Name != "" {
+		return t.Name
+	}
+	if t.Assert != nil && len(t.Assert.That) > 0 {
+		return t.Assert.That[0]
+	}
+	return "<unnamed assert>"
 }
 
 // hasAssertTask reports whether the flat task list contains at least one

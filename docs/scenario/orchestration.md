@@ -325,9 +325,11 @@ tasks: [ ... ]
 > |---|---|---|---|
 > | `required_when` (input-schema key, [docs/input.md](../input.md)) | input-only | **presence** fields provided above other input | 422 `validation-failed` |
 > | `validate:` (top-level section) | input-only | **cross-field invariant** INPUT (value relationship) | 422 `validation-failed` |
-> | `assert:` (task discriminator, §2.3) | full (`soulprint.hosts`) | **TOPOLOGY invariant** run (roster) | 422 `assert-failed` |
+> | `assert:` (task discriminator, §2.3) | full (`soulprint.hosts`) | **TOPOLOGY invariant** run (roster) | `error_locked` at render — see below |
 >
 > `validate:` ADDITIONS, does not replace: "is port required?" → `required_when`; "does quorum exceed the number of sentinels?" → `validate:`; "Is the roster suitable for an N-shard cluster?" → `assert:`.
+>
+> **Where a failing `assert:` surfaces.** Only the two input-only mechanisms answer on the request path in every case. A `assert:` that reads the roster is evaluated at RENDER, so its failure is `error_locked` (unlock, then fix and re-run), not a 422 — the create-path pre-flight gate runs BEFORE the incarnation row exists, and since membership FKs that row ([ADR-008 amendment / NIM-124](../adr/0008-coven-stable-tags.md#amendment-2026-07-17-nim-124-incarnationname-is-not-a-coven--membership-is-a-first-class-relation)) there is no roster there to measure ([ADR-009 amendment 2026-07-28 / NIM-235](../adr/0009-scenario-dsl.md#amendment-2026-07-28-nim-235-a-roster-reading-assert-has-no-pre-flight-point-at-create)). An `assert:` that reads only `input.`/`essence.`/`incarnation.` still answers 422 `assert-failed` pre-flight on create — but if the check fits input-only, `validate:` is the mechanism designed for it and reports on both the create and the run path.
 
 ### 2.6. `name_template:` — composed incarnation name (create only)
 

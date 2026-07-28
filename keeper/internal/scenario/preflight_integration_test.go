@@ -11,16 +11,19 @@
 // assert. A non-matching roster → render.ErrAssertFailed (caller handler →
 // 422); a matching one → nil (create proceeds).
 //
-// WHAT THESE TESTS COVER SINCE NIM-124. They exercise the assert side of
-// pre-flight — evaluation against the resolved roster, include expansion,
-// `when:` gating — on an incarnation whose row and membership already exist
-// ([seedIncarnationRoster]). They no longer reproduce the bootstrap-create
-// ordering: the roster now resolves through `incarnation_membership`, which FKs
-// the incarnation, so a roster CANNOT exist before Create — while
-// ResolveCreatePlan still calls PreflightAssert ahead of it. That gap (any
-// create carrying a topology assert sees an empty roster) is NIM-235, tracked
-// separately; when it is closed these tests should go back to seeding the
-// create path itself.
+// WHAT THESE TESTS COVER SINCE NIM-124. The seeded-roster tests
+// ([seedIncarnationRoster]) exercise the assert side of pre-flight — evaluation
+// against the resolved roster, include expansion, `when:` gating — on an
+// incarnation whose row and membership already exist.
+//
+// The bootstrap-create ordering is covered separately, and by
+// [ResolveCreatePlan] rather than PreflightAssert alone, since the handler's
+// entry point is what decides whether the gate runs at all. Since NIM-124 the
+// roster resolves through `incarnation_membership`, which FKs the incarnation,
+// so a roster CANNOT exist before Create — which made every create carrying a
+// topology assert resolve an empty roster and 422 unconditionally (NIM-235).
+// Those asserts are now deferred to the render fail-safe; the asserts that read
+// only input/essence keep their pre-flight 422.
 
 package scenario
 
@@ -329,21 +332,28 @@ func TestIntegration_PreflightAssert_AssertInIncludeBranch_Passes(t *testing.T) 
 	}
 }
 
-// TestIntegration_PreflightAssert_AssertInIncludeBranch_ZeroHosts_Fails —
-// preflight.go contract: 0 hosts → the topology-assert (size==N) doesn't match
-// → ErrAssertFailed. The assert here lives in the include branch (dispatcher).
-// Ensures that after the fix, 0-hosts is honestly rejected rather than
-// returning nil due to an unexpanded include.
+// TestIntegration_PreflightAssert_AssertInIncludeBranch_NoIncarnation_Defers —
+// NIM-235. With no incarnation row the roster is not empty by circumstance but
+// IMPOSSIBLE: membership FKs the incarnation (NIM-124, migration 099), and
+// pre-flight runs before Create. A topology assert therefore has nothing to
+// read, and evaluating it anyway made `size(soulprint.hosts) == N` false for
+// EVERY create — an unconditional 422 that no roster could have satisfied.
+// The assert is deferred to the render fail-safe, which is the first point
+// where the run's roster exists.
+//
+// This test previously asserted the opposite (0 hosts → ErrAssertFailed), which
+// was the bug written down as a contract: it was authored when the roster
+// resolved by the root Coven label and could pre-date its incarnation.
 //
 // This is also where the FORM-A INVARIANT still lives: nothing is seeded for
 // this name at all, so the post-condition "pre-flight created no incarnation"
 // is a real observation rather than an artifact of the fixture. The other
 // tests in this file must seed the incarnation to have a roster (NIM-124), so
 // they cannot make that claim.
-func TestIntegration_PreflightAssert_AssertInIncludeBranch_ZeroHosts_Fails(t *testing.T) {
+func TestIntegration_PreflightAssert_AssertInIncludeBranch_NoIncarnation_Defers(t *testing.T) {
 	resetAll(t)
 	seedOperator(t, "archon-alice")
-	// Neither the incarnation nor a single member — roster is empty.
+	// Neither the incarnation nor a single member — the roster cannot exist.
 	gitURL := dispatcherAssertServiceRepo(t)
 	r := newRunner(t, &mockDispatcher{t: t}, gitURL)
 
@@ -351,17 +361,178 @@ func TestIntegration_PreflightAssert_AssertInIncludeBranch_ZeroHosts_Fails(t *te
 		IncarnationName: "redis-dispatch-empty",
 		ServiceRef:      artifact.ServiceRef{Name: "redis-dispatch-guard", Git: gitURL, Ref: "master"},
 		ScenarioName:    "create",
-		Input:           map[string]any{"shards": 1, "replicas_per_shard": 1}, // expects 2, roster 0
+		Input:           map[string]any{"shards": 1, "replicas_per_shard": 1},
 		StartedByAID:    "archon-alice",
 	})
+	if err != nil {
+		t.Fatalf("PreflightAssert: a topology assert must be deferred when the incarnation has no row yet, got %v", err)
+	}
+	if cnt := countIncarnations(t, "redis-dispatch-empty"); cnt != 0 {
+		t.Errorf("incarnation created on the pre-flight path (rows=%d), want 0 — pre-flight is read-only until Create", cnt)
+	}
+}
+
+// createGuardServiceRepo is a service repo shaped like examples/service/dragonfly
+// ::create — the shape NIM-235 actually breaks. Two differences from
+// [clusterAssertServiceRepo] matter:
+//
+//   - `create: true`, so the scenario is in the create set and
+//     [ResolveCreatePlan] (the handler's real entry point, not PreflightAssert
+//     alone) reaches the pre-flight gate rather than resolving `bare`;
+//   - the topology assert carries NO `when:` gate. redis hand-writes
+//     `when: "!(has(input.provision) && input.provision.enabled)"` on its
+//     size-guards to keep them off the provision path; dragonfly does not, and
+//     a service author is not required to. An ungated roster assert must not
+//     make create unreachable.
+//
+// The second assert reads input only. It stays evaluable with no roster and is
+// what proves the gate was narrowed rather than switched off.
+func createGuardServiceRepo(t *testing.T) string {
+	t.Helper()
+	dir := t.TempDir()
+	repo, err := git.PlainInit(dir, false)
+	if err != nil {
+		t.Fatalf("PlainInit: %v", err)
+	}
+	write := func(rel, content string) {
+		full := filepath.Join(dir, rel)
+		if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
+			t.Fatalf("MkdirAll: %v", err)
+		}
+		if err := os.WriteFile(full, []byte(content), 0o644); err != nil {
+			t.Fatalf("WriteFile: %v", err)
+		}
+	}
+	write("service.yml", `name: create-guard
+state_schema_version: 1
+description: ungated topology size-guard on the create path
+state_schema:
+  type: object
+  properties: {}
+`)
+	write("scenario/create/main.yml", `name: create
+description: ungated size-guard + an input-only guard
+create: true
+state_changes: {}
+input:
+  replicas_per_master:
+    type: integer
+    default: 1
+  max_replicas:
+    type: integer
+    default: 5
+tasks:
+  - name: Guard roster size matches replicas
+    assert:
+      that:
+        - "size(soulprint.hosts) == 1 + int(input.replicas_per_master)"
+      message: "roster size must be exactly 1+replicas_per_master"
+  - name: Guard replicas_per_master is within the supported ceiling
+    assert:
+      that:
+        - "int(input.replicas_per_master) <= int(input.max_replicas)"
+      message: "replicas_per_master exceeds max_replicas"
+  - name: Echo on every host
+    module: core.exec.run
+    params:
+      cmd: echo
+      args: ["hello"]
+    changed_when: "false"
+`)
+	wt, err := repo.Worktree()
+	if err != nil {
+		t.Fatalf("Worktree: %v", err)
+	}
+	if err := wt.AddGlob("."); err != nil {
+		t.Fatalf("AddGlob: %v", err)
+	}
+	if _, err := wt.Commit("init create-guard", &git.CommitOptions{
+		Author: &object.Signature{Name: "T", Email: "t@example.test", When: time.Now()},
+	}); err != nil {
+		t.Fatalf("Commit: %v", err)
+	}
+	return "file://" + dir
+}
+
+// TestIntegration_ResolveCreatePlan_UngatedRosterAssert_Proceeds — NIM-235 on
+// the PRODUCT path. [ResolveCreatePlan] is what POST /v1/incarnations and the
+// MCP create tool both call; it runs the pre-flight gate between ValidateInput
+// and incarnation.Create. With an ungated roster assert this returned
+// ErrAssertFailed → 422 for every create of such a service, with no input the
+// operator could supply to get past it (a roster cannot be bound before the row
+// exists, and the row is inserted by this very call).
+func TestIntegration_ResolveCreatePlan_UngatedRosterAssert_Proceeds(t *testing.T) {
+	resetAll(t)
+	seedOperator(t, "archon-alice")
+	gitURL := createGuardServiceRepo(t)
+	r := newRunner(t, &mockDispatcher{t: t}, gitURL)
+	ref := artifact.ServiceRef{Name: "create-guard", Git: gitURL, Ref: "master"}
+
+	plan, err := ResolveCreatePlan(context.Background(), r.deps.Loader, r, "df-new", ref, "create",
+		map[string]any{"replicas_per_master": 2}, "archon-alice")
+	if err != nil {
+		t.Fatalf("ResolveCreatePlan: an ungated roster assert must not reject create before the incarnation exists, got %v", err)
+	}
+	if plan.CreateScenario != "create" {
+		t.Errorf("plan.CreateScenario = %q, want create", plan.CreateScenario)
+	}
+	if cnt := countIncarnations(t, "df-new"); cnt != 0 {
+		t.Errorf("incarnation rows = %d, want 0 — ResolveCreatePlan is read-only, Create is the caller's next step", cnt)
+	}
+}
+
+// TestIntegration_ResolveCreatePlan_InputAssert_StillFails — the other half of
+// the fix: pre-flight was NARROWED to the asserts it cannot evaluate, not
+// disabled. An assert reading only `input.*` loses nothing by the incarnation
+// row being absent, so it keeps its 422-before-mutation (ADR-009 amendment
+// 2026-06-23, form A) — and no row is created.
+func TestIntegration_ResolveCreatePlan_InputAssert_StillFails(t *testing.T) {
+	resetAll(t)
+	seedOperator(t, "archon-alice")
+	gitURL := createGuardServiceRepo(t)
+	r := newRunner(t, &mockDispatcher{t: t}, gitURL)
+	ref := artifact.ServiceRef{Name: "create-guard", Git: gitURL, Ref: "master"}
+
+	_, err := ResolveCreatePlan(context.Background(), r.deps.Loader, r, "df-too-many", ref, "create",
+		map[string]any{"replicas_per_master": 9, "max_replicas": 5}, "archon-alice")
 	if err == nil {
-		t.Fatal("PreflightAssert: 0 connected souls must fail the size-assert, got nil")
+		t.Fatal("ResolveCreatePlan: an input-only assert must still reject on the request path, got nil")
 	}
 	if !errors.Is(err, render.ErrAssertFailed) {
 		t.Fatalf("err is not ErrAssertFailed: %v", err)
 	}
-	if cnt := countIncarnations(t, "redis-dispatch-empty"); cnt != 0 {
-		t.Errorf("incarnation created on pre-flight-fail (rows=%d), want 0 — pre-flight is read-only until Create", cnt)
+	if !strings.Contains(err.Error(), "exceeds max_replicas") {
+		t.Errorf("error does not carry the author message: %v", err)
+	}
+	if cnt := countIncarnations(t, "df-too-many"); cnt != 0 {
+		t.Errorf("incarnation rows = %d, want 0", cnt)
+	}
+}
+
+// TestIntegration_ResolveCreatePlan_RosterAssert_EvaluatedOnceRowExists — the
+// deferral is keyed on "the incarnation has no row", NOT on "this is the create
+// path". Once the row and its members exist, the same ungated assert evaluates
+// against the real roster and fails on the merits. This is what keeps the
+// narrowing from silently swallowing topology guards on every future caller of
+// PreflightAssert.
+func TestIntegration_ResolveCreatePlan_RosterAssert_EvaluatedOnceRowExists(t *testing.T) {
+	resetAll(t)
+	seedOperator(t, "archon-alice")
+	seedIncarnationRoster(t, "df-existing", "a.example.com", "b.example.com", "c.example.com")
+	gitURL := createGuardServiceRepo(t)
+	r := newRunner(t, &mockDispatcher{t: t}, gitURL)
+	ref := artifact.ServiceRef{Name: "create-guard", Git: gitURL, Ref: "master"}
+
+	_, err := ResolveCreatePlan(context.Background(), r.deps.Loader, r, "df-existing", ref, "create",
+		map[string]any{"replicas_per_master": 1}, "archon-alice") // wants 2, roster 3
+	if err == nil {
+		t.Fatal("ResolveCreatePlan: with a real roster the topology assert must be evaluated, got nil")
+	}
+	if !errors.Is(err, render.ErrAssertFailed) {
+		t.Fatalf("err is not ErrAssertFailed: %v", err)
+	}
+	if !strings.Contains(err.Error(), "1+replicas_per_master") {
+		t.Errorf("error does not carry the author message: %v", err)
 	}
 }
 

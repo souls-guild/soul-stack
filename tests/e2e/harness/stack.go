@@ -576,13 +576,15 @@ func (s *Stack) CreateIncarnation(t *testing.T, name string, serviceRef string, 
 // set; the scenario must carry `create: true`. The bare path (no run) is
 // CreateIncarnation.
 //
-// NO CURRENT CALLER (NIM-210), and it is NOT the way to bootstrap an
-// incarnation whose create scenario needs hosts: the run resolves its roster at
-// start, and members cannot be bound before this call inserts the row (FK,
-// migration 099) nor after it (the run has already started). That is a closed
-// loop — use [Stack.CreateIncarnationOnRoster]. Kept for a create run that
-// needs no roster (an all-keeper scenario, or one carrying a refresh emitter —
-// the two no_hosts bypass classes of run.go §3).
+// It is NOT the way to bootstrap an incarnation whose create scenario needs a
+// roster it does not build itself: the run resolves its roster at start, and
+// members cannot be bound before this call inserts the row (FK, migration 099)
+// nor after it (the run has already started). That is a closed loop — use
+// [Stack.CreateIncarnationOnRoster]. This call is for a create run that builds
+// its own roster, i.e. the two no_hosts bypass classes of run.go §3: an
+// all-keeper scenario, or one carrying a refresh emitter
+// (create_roster_guard_test.go — the only path that reaches the pre-flight
+// assert gate, NIM-235).
 func (s *Stack) CreateIncarnationWithApply(t *testing.T, name, serviceRef string, spec map[string]any) (string, string) {
 	t.Helper()
 	c := s.opClient(t)

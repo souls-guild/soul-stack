@@ -182,6 +182,30 @@ func (r *Resolver) LoadIncarnationHosts(ctx context.Context, incarnationName str
 	return hosts, nil
 }
 
+// incarnationExistsSQL — presence of the incarnation row by PK. Read-only, one
+// index lookup.
+const incarnationExistsSQL = `SELECT EXISTS (SELECT 1 FROM incarnation WHERE name = $1)`
+
+// IncarnationExists reports whether the incarnation row exists — which is the
+// same question as "can this incarnation have a roster at all".
+//
+// [Resolver.LoadIncarnationHosts] deliberately collapses the two cases
+// (PM-decision #3: a nonexistent incarnation and one with no online hosts both
+// yield an empty slice), because a run does not care WHY its roster is empty.
+// The create-path pre-flight gate does care: since NIM-124 membership FKs the
+// incarnation row (migration 099), so before `incarnation.Create` a roster is
+// not merely empty but IMPOSSIBLE — a topology predicate evaluated there would
+// reject every create unconditionally instead of reporting a real mismatch
+// (NIM-235). This method un-collapses the two cases for that one caller;
+// every other reader keeps the roster and ignores the reason.
+func (r *Resolver) IncarnationExists(ctx context.Context, incarnationName string) (bool, error) {
+	var exists bool
+	if err := r.pool.QueryRow(ctx, incarnationExistsSQL, incarnationName).Scan(&exists); err != nil {
+		return false, fmt.Errorf("topology: incarnation exists %s: %w", incarnationName, err)
+	}
+	return exists, nil
+}
+
 // filterAlive — phase 2: presence filter of candidates by live Redis SID-lease
 // (ADR-006(a), Variant A). Online ⇔ lease key `soul:<sid>:lock` exists.
 //

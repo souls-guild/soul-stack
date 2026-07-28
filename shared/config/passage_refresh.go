@@ -144,6 +144,44 @@ func taskIsRefreshEmitter(t *Task) bool {
 	return isBool && b
 }
 
+// AssertReadsRoster reports whether an ASSERT task's predicates statically read
+// the run roster — i.e. whether the assert is evaluable only once the roster
+// exists. Used by the create-path pre-flight gate (NIM-235): before
+// `incarnation.Create` the roster CANNOT exist (membership FKs the incarnation
+// row, ADR-008 amendment 2026-07-17/NIM-124), so a roster-reading assert has
+// nothing to read there and is deferred to the render fail-safe.
+//
+// Deliberately NARROWER than [taskReadsRoster], which also counts an omitted
+// `on:` as a roster read. An assert is RUN-LEVEL: it emits no RenderedTask and
+// targets no hosts, so every assert carries an omitted `on:` and would be
+// classified roster-reading by that rule alone — which would sweep in asserts
+// whose predicates only touch input/essence/incarnation and are perfectly
+// evaluable pre-flight. Here only the predicate axes count: `when:` and
+// `that[]`.
+//
+// `when:` counts even though a soulprint-dependent `when:` is treated as
+// "active" by render.evalAssertTask (it can't be resolved run-level): the gate
+// decision itself is then roster-dependent, and skipping is the safe direction
+// — a deferred assert still fires at render, a wrongly evaluated one is a false
+// 422.
+//
+// Top level only, no block: recursion — parity with render.Pipeline.EvalAsserts,
+// which likewise evaluates only top-level assert tasks.
+func AssertReadsRoster(t *Task) bool {
+	if t == nil || t.Assert == nil {
+		return false
+	}
+	if exprReadsSoulprint(t.When) {
+		return true
+	}
+	for _, that := range t.Assert.That {
+		if exprReadsSoulprint(that) {
+			return true
+		}
+	}
+	return false
+}
+
 // taskReadsRoster — the task statically reads the run roster (see doc above):
 // omitted on: / soulprint.hosts / soulprint.self.*.
 // Recursively via block: (block is an atomic Passage unit; a roster read by any child

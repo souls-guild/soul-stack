@@ -41,18 +41,21 @@
 # exist — the plugin rejects them fail-fast; on a duplicate the sum would only undercount → the guard would
 # only fire sooner, the protection is not weakened).
 # ★ PROVISION GATE (ADR-061 amendment 2026-06-29): during cloud provisioning (input.provision
-# .enabled) the roster is STILL empty at pre-flight EvalAsserts (souls are created later by the
-# redis-provision.yml steps: core.cloud.created→VM→await_online→refresh_soulprint), so
-# size(soulprint.hosts)==N would fail pre-flight BEFORE the cluster even exists.
-# The gate `when: !provision.enabled` drops the size check for the provision path —
-# the roster invariant is guaranteed THERE by the count formula in redis-provision.yml (VM count = the
-# same shards*(1+replicas)) + a blocking await_online barrier, NOT the pre-flight
-# (symmetric to the no_hosts-bypass amendment 2026-06-28). The predicate is STATIC (pure input,
-# no register.*/soulprint.self → isStaticWhen): pre-flight evaluates it, and with provision the
-# placeholder-skip gives no assert (NOT ErrAssertFailed). On an existing roster (provision
-# omitted/false) has(input.provision) gives false → when=true → the size guard is active (NOT
-# weakened). The form — an inversion of the redis-provision.yml include-when (has(input.provision) &&
-# input.provision.enabled).
+# .enabled) the roster does not exist yet when the guard is authored to run — souls are created
+# later by the redis-provision.yml steps (core.cloud.created→VM→await_online→refresh_soulprint).
+# The gate `when: !provision.enabled` drops the size check for the provision path — the roster
+# invariant is guaranteed THERE by the count formula in redis-provision.yml (VM count = the same
+# shards*(1+replicas)) + a blocking await_online barrier (symmetric to the no_hosts-bypass
+# amendment 2026-06-28). The predicate is STATIC (pure input, no register.*/soulprint.self →
+# isStaticWhen), so the placeholder-skip drops the assert at BOTH eval points. On an existing
+# roster (provision omitted/false) has(input.provision) gives false → when=true → the size guard
+# is active (NOT weakened). The form — an inversion of the redis-provision.yml include-when
+# (has(input.provision) && input.provision.enabled).
+# ★ The gate is NOT what keeps create reachable. Since ADR-009 amendment 2026-07-28 (NIM-235) the
+# create-path pre-flight defers ANY roster-reading assert to render — before the incarnation row
+# exists there is no membership and hence no roster to measure (NIM-124). So an ungated guard
+# would also be fine here; this gate remains for its own reason (the provision path has no roster
+# invariant to check at all, at either point).
 - name: Guard cluster roster size matches shards and replicas
   when: "!(has(input.provision) && input.provision.enabled)"
   assert:
