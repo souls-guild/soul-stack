@@ -144,11 +144,27 @@ func seedIncarnation(t *testing.T, name string) {
 	}
 }
 
+// seedIncarnationRoster seeds an incarnation together with its roster and owns
+// THE ORDER: the `incarnation` row first, its members second. That is the only
+// order migration 099 allows — `incarnation_membership` carries an FK on the
+// incarnation, so binding a host to a name that has no row is a 23503, not an
+// empty roster (NIM-234). The e2e tiers centralise the same order in
+// Stack.CreateIncarnationOnRoster (NIM-192, NIM-210); this is its L1 shape,
+// without the run.
+func seedIncarnationRoster(t *testing.T, name string, sids ...string) {
+	t.Helper()
+	seedIncarnation(t, name)
+	for _, sid := range sids {
+		seedConnectedSoul(t, sid, []string{name})
+	}
+}
+
 // seedConnectedSoul inserts a connected Soul and binds it as a member of each
 // listed incarnation (NIM-124: the roster resolved by topology reads the
 // `incarnation_membership` relation, no longer incarnation.name in
 // souls.coven[]). souls.coven stays empty — the stable-tag axis is unused by
-// these tests; the incarnation must already exist (membership FK).
+// these tests; the incarnation must already exist (membership FK) — see
+// [seedIncarnationRoster].
 func seedConnectedSoul(t *testing.T, sid string, incarnations []string) {
 	t.Helper()
 	seedConnectedSoulInCovens(t, sid, nil, incarnations)
@@ -168,7 +184,7 @@ func seedConnectedSoulInCovens(t *testing.T, sid string, covens, incarnations []
 	}
 	for _, inc := range incarnations {
 		if err := incarnation.AddMembers(context.Background(), integrationPool, inc, []string{sid}, nil); err != nil {
-			t.Fatalf("seedConnectedSoul membership(%s): %v", inc, err)
+			t.Fatalf("seedConnectedSoul membership(%s): %v\n\tan FK violation here means the incarnation row is missing — seed it first (seedIncarnationRoster)", inc, err)
 		}
 	}
 }

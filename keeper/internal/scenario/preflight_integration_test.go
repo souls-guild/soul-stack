@@ -6,10 +6,21 @@
 // committed. Use case — redis cluster topology size-guard (connected-souls
 // count must match shards*(1+replicas_per_shard)).
 //
-// Via testcontainers PG (shared harness in integration_test.go): seed
-// connected souls in the Coven incarnation + a local-fs service repo with a
-// cluster size-guard assert. A non-matching roster → render.ErrAssertFailed
-// (caller handler → 422); a matching one → nil (create proceeds).
+// Via testcontainers PG (shared harness in integration_test.go): seed a roster
+// on the incarnation + a local-fs service repo with a cluster size-guard
+// assert. A non-matching roster → render.ErrAssertFailed (caller handler →
+// 422); a matching one → nil (create proceeds).
+//
+// WHAT THESE TESTS COVER SINCE NIM-124. They exercise the assert side of
+// pre-flight — evaluation against the resolved roster, include expansion,
+// `when:` gating — on an incarnation whose row and membership already exist
+// ([seedIncarnationRoster]). They no longer reproduce the bootstrap-create
+// ordering: the roster now resolves through `incarnation_membership`, which FKs
+// the incarnation, so a roster CANNOT exist before Create — while
+// ResolveCreatePlan still calls PreflightAssert ahead of it. That gap (any
+// create carrying a topology assert sees an empty roster) is NIM-235, tracked
+// separately; when it is closed these tests should go back to seeding the
+// create path itself.
 
 package scenario
 
@@ -100,19 +111,13 @@ tasks:
 }
 
 // TestIntegration_PreflightAssert_TopologyMismatch_Fails — the roster does NOT
-// match (4 connected souls vs. the expected shards=1*(1+1)=2) →
-// PreflightAssert → render.ErrAssertFailed with message "topology mismatch".
-// incarnation was NOT created (pre-flight is on the request path, before
-// Create); the test only seeds souls, not the incarnation — the roster
-// resolves by the root Coven label (= the future incarnation's name), so no
-// incarnation row is required for this (ADR-008).
+// match (4 members vs. the expected shards=1*(1+1)=2) → PreflightAssert →
+// render.ErrAssertFailed with message "topology mismatch".
 func TestIntegration_PreflightAssert_TopologyMismatch_Fails(t *testing.T) {
 	resetAll(t)
 	seedOperator(t, "archon-alice")
-	// 4 connected souls in the Coven incarnation, which doesn't exist YET (create pre-flight).
-	for _, sid := range []string{"a.example.com", "b.example.com", "c.example.com", "d.example.com"} {
-		seedConnectedSoul(t, sid, []string{"redis-new"})
-	}
+	seedIncarnationRoster(t, "redis-new",
+		"a.example.com", "b.example.com", "c.example.com", "d.example.com")
 	gitURL := clusterAssertServiceRepo(t)
 	r := newRunner(t, &mockDispatcher{t: t}, gitURL)
 
@@ -132,21 +137,17 @@ func TestIntegration_PreflightAssert_TopologyMismatch_Fails(t *testing.T) {
 	if !strings.Contains(err.Error(), "topology mismatch") {
 		t.Errorf("error does not carry the author message: %v", err)
 	}
-
-	// FORM-A INVARIANT: incarnation is NOT created (pre-flight writes nothing to PG).
-	if cnt := countIncarnations(t, "redis-new"); cnt != 0 {
-		t.Errorf("incarnation created on pre-flight-fail (rows=%d), want 0 - pre-flight is read-only until Create", cnt)
-	}
 }
 
 // TestIntegration_PreflightAssert_TopologyMatches_Passes — the roster matches
-// (2 connected souls == shards=1*(1+1)) → PreflightAssert → nil (create proceeds).
+// (2 members == shards=1*(1+1)) → PreflightAssert → nil (create proceeds).
+// Also the no-false-positive counterpart of the mismatch test: it proves the
+// assert reads the ACTUAL roster size, not a constant — the mismatch case would
+// pass on an empty roster too.
 func TestIntegration_PreflightAssert_TopologyMatches_Passes(t *testing.T) {
 	resetAll(t)
 	seedOperator(t, "archon-alice")
-	for _, sid := range []string{"a.example.com", "b.example.com"} {
-		seedConnectedSoul(t, sid, []string{"redis-ok"})
-	}
+	seedIncarnationRoster(t, "redis-ok", "a.example.com", "b.example.com")
 	gitURL := clusterAssertServiceRepo(t)
 	r := newRunner(t, &mockDispatcher{t: t}, gitURL)
 
@@ -169,7 +170,7 @@ func TestIntegration_PreflightAssert_TopologyMatches_Passes(t *testing.T) {
 func TestIntegration_PreflightAssert_StandaloneSkipsClusterGuard(t *testing.T) {
 	resetAll(t)
 	seedOperator(t, "archon-alice")
-	seedConnectedSoul(t, "a.example.com", []string{"redis-standalone"})
+	seedIncarnationRoster(t, "redis-standalone", "a.example.com")
 	gitURL := clusterAssertServiceRepo(t)
 	r := newRunner(t, &mockDispatcher{t: t}, gitURL)
 
@@ -284,9 +285,8 @@ tasks:
 func TestIntegration_PreflightAssert_AssertInIncludeBranch_Fails(t *testing.T) {
 	resetAll(t)
 	seedOperator(t, "archon-alice")
-	for _, sid := range []string{"a.example.com", "b.example.com", "c.example.com", "d.example.com"} {
-		seedConnectedSoul(t, sid, []string{"redis-dispatch-fail"})
-	}
+	seedIncarnationRoster(t, "redis-dispatch-fail",
+		"a.example.com", "b.example.com", "c.example.com", "d.example.com")
 	gitURL := dispatcherAssertServiceRepo(t)
 	r := newRunner(t, &mockDispatcher{t: t}, gitURL)
 
@@ -306,9 +306,6 @@ func TestIntegration_PreflightAssert_AssertInIncludeBranch_Fails(t *testing.T) {
 	if !strings.Contains(err.Error(), "topology mismatch") {
 		t.Errorf("error does not carry the author message: %v", err)
 	}
-	if cnt := countIncarnations(t, "redis-dispatch-fail"); cnt != 0 {
-		t.Errorf("incarnation created on pre-flight-fail (rows=%d), want 0", cnt)
-	}
 }
 
 // TestIntegration_PreflightAssert_AssertInIncludeBranch_Passes — no-false-positive:
@@ -316,9 +313,7 @@ func TestIntegration_PreflightAssert_AssertInIncludeBranch_Fails(t *testing.T) {
 func TestIntegration_PreflightAssert_AssertInIncludeBranch_Passes(t *testing.T) {
 	resetAll(t)
 	seedOperator(t, "archon-alice")
-	for _, sid := range []string{"a.example.com", "b.example.com"} {
-		seedConnectedSoul(t, sid, []string{"redis-dispatch-ok"})
-	}
+	seedIncarnationRoster(t, "redis-dispatch-ok", "a.example.com", "b.example.com")
 	gitURL := dispatcherAssertServiceRepo(t)
 	r := newRunner(t, &mockDispatcher{t: t}, gitURL)
 
@@ -335,14 +330,20 @@ func TestIntegration_PreflightAssert_AssertInIncludeBranch_Passes(t *testing.T) 
 }
 
 // TestIntegration_PreflightAssert_AssertInIncludeBranch_ZeroHosts_Fails —
-// preflight.go contract: 0 connected souls → the topology-assert (size==N)
-// doesn't match → ErrAssertFailed. The assert here lives in the include
-// branch (dispatcher). Ensures that after the fix, 0-hosts is honestly
-// rejected rather than returning nil due to an unexpanded include.
+// preflight.go contract: 0 hosts → the topology-assert (size==N) doesn't match
+// → ErrAssertFailed. The assert here lives in the include branch (dispatcher).
+// Ensures that after the fix, 0-hosts is honestly rejected rather than
+// returning nil due to an unexpanded include.
+//
+// This is also where the FORM-A INVARIANT still lives: nothing is seeded for
+// this name at all, so the post-condition "pre-flight created no incarnation"
+// is a real observation rather than an artifact of the fixture. The other
+// tests in this file must seed the incarnation to have a roster (NIM-124), so
+// they cannot make that claim.
 func TestIntegration_PreflightAssert_AssertInIncludeBranch_ZeroHosts_Fails(t *testing.T) {
 	resetAll(t)
 	seedOperator(t, "archon-alice")
-	// NOT A SINGLE connected soul in the Coven — roster is empty.
+	// Neither the incarnation nor a single member — roster is empty.
 	gitURL := dispatcherAssertServiceRepo(t)
 	r := newRunner(t, &mockDispatcher{t: t}, gitURL)
 
@@ -358,6 +359,9 @@ func TestIntegration_PreflightAssert_AssertInIncludeBranch_ZeroHosts_Fails(t *te
 	}
 	if !errors.Is(err, render.ErrAssertFailed) {
 		t.Fatalf("err is not ErrAssertFailed: %v", err)
+	}
+	if cnt := countIncarnations(t, "redis-dispatch-empty"); cnt != 0 {
+		t.Errorf("incarnation created on pre-flight-fail (rows=%d), want 0 — pre-flight is read-only until Create", cnt)
 	}
 }
 
