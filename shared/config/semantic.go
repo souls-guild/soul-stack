@@ -88,6 +88,17 @@ func semanticValidateKeeper(c *KeeperConfig, root *ast.MappingNode) []diag.Diagn
 		out = append(out, checkCadencePollProfile(root, c.CadenceScheduler)...)
 		out = append(out, cadenceIntervalBelowFloorWarn(root, c.CadenceScheduler)...)
 	}
+	// console (ADR-0074): operator-facing envelope of the console plane. Only
+	// format and range here; the defaults are resolved in the daemon. There is
+	// nothing to validate about WHETHER sessions are recorded — recording is not
+	// configurable (ADR-0074(g)).
+	if c.Console != nil {
+		out = append(out, checkDuration(root, "$.console.idle_timeout", c.Console.IdleTimeout)...)
+		if c.Console.Recording != nil {
+			out = append(out, checkDuration(root, "$.console.recording.retention", c.Console.Recording.Retention)...)
+		}
+	}
+
 	// Acolyte pool (ADR-027): duration format for lease/poll/drain. Range (>0) is
 	// enforced after parsing in the daemon, like other duration fields; here only format.
 	out = append(out, checkDuration(root, "$.acolyte_lease", c.AcolyteLease)...)

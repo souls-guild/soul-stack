@@ -3,8 +3,13 @@ package mcp
 import (
 	"context"
 	"errors"
+	"io"
+	"log/slog"
+	"strings"
 	"testing"
 
+	"github.com/souls-guild/soul-stack/keeper/internal/console"
+	"github.com/souls-guild/soul-stack/keeper/internal/console/consoletest"
 	"github.com/souls-guild/soul-stack/keeper/internal/errand"
 	"github.com/souls-guild/soul-stack/keeper/internal/rbac/rbactest"
 	"github.com/souls-guild/soul-stack/shared/audit"
@@ -180,9 +185,23 @@ func (r *auditRecorder) write(eventType audit.EventType, aid, correlationID stri
 }
 
 func newRunCommandFakes(res errand.DispatchResult, err error) (*fakeDispatch, *auditRecorder, runCommandDeps) {
+	d, a, deps, _ := newRunCommandFakesWithStore(res, err)
+	return d, a, deps
+}
+
+// newRunCommandFakesWithStore also hands back the recording store, for the
+// guard tests that assert on what was recorded (ADR-0074(g), NIM-145). The
+// recorder itself is the real one — only the storage is faked.
+func newRunCommandFakesWithStore(res errand.DispatchResult, err error) (*fakeDispatch, *auditRecorder, runCommandDeps, *consoletest.Store) {
 	d := &fakeDispatch{res: res, err: err}
 	a := &auditRecorder{}
-	return d, a, runCommandDeps{Dispatch: d.Dispatch, Audit: a.write}
+	store := consoletest.NewStore()
+	recorder, rerr := console.NewRecorder(store, console.RecorderConfig{},
+		slog.New(slog.NewTextHandler(io.Discard, nil)))
+	if rerr != nil {
+		panic("newRunCommandFakes: " + rerr.Error())
+	}
+	return d, a, runCommandDeps{Dispatch: d.Dispatch, Audit: a.write, Recorder: recorder}, store
 }
 
 // TestRunCommand_PinsShellModule — the module is ours, not the caller's, and the
@@ -325,5 +344,122 @@ func TestRunCommand_DispatchErrorIsNotAudited(t *testing.T) {
 	}
 	if len(rec.events) != 0 {
 		t.Errorf("audit events = %d, want 0", len(rec.events))
+	}
+}
+
+// --- mandatory recording (ADR-0074(g), NIM-145) -------------------------------
+
+// The one-shot half of the console plane leaves the same artifact the
+// interactive half does. Same right reaching the same shell, same record — the
+// tty is the only thing that differs, and it is not what recording is for.
+func TestRunCommand_IsRecorded(t *testing.T) {
+	_, _, deps, store := newRunCommandFakesWithStore(errand.DispatchResult{
+		ErrandID: "01HF7Z", Status: errand.StatusSuccess,
+		Stdout: "uid=0(root)\n", Stderr: "a warning\n",
+	}, nil)
+
+	out, err := runCommand(context.Background(), deps, "archon-alice", runCommandArgs{
+		SID: runCommandSID, Command: "id",
+	})
+	if err != nil {
+		t.Fatalf("runCommand: %v", err)
+	}
+
+	rec := store.Only()
+	if rec == nil {
+		t.Fatalf("recordings = %d, want exactly 1", store.Count())
+	}
+	if rec.Meta.Kind != console.RecordingCommand {
+		t.Errorf("recording kind = %q, want %q", rec.Meta.Kind, console.RecordingCommand)
+	}
+	if rec.Meta.SID != runCommandSID || rec.Meta.AID != "archon-alice" {
+		t.Errorf("recording meta = %+v, want the target host and the caller", rec.Meta)
+	}
+	if !rec.Closed {
+		t.Error("the recording was never finished")
+	}
+
+	body := rec.Body()
+	// The command line is recorded as operator input — it is what a person
+	// would have typed at the prompt this tool replaces.
+	if !strings.Contains(body, `"i"`) || !strings.Contains(body, "id\\n") {
+		t.Errorf("the command line is not in the recording: %q", body)
+	}
+	for _, want := range []string{"uid=0(root)", "a warning"} {
+		if !strings.Contains(body, want) {
+			t.Errorf("output %q is not in the recording: %q", want, body)
+		}
+	}
+	_ = out
+}
+
+// The audit event links the fact to the artifact, which is how a reader gets
+// from "an arbitrary command ran here" to what it printed.
+func TestRunCommand_AuditCarriesTheRecordingID(t *testing.T) {
+	_, rec, deps, store := newRunCommandFakesWithStore(errand.DispatchResult{
+		ErrandID: "01HF7Z", Status: errand.StatusSuccess,
+	}, nil)
+
+	if _, err := runCommand(context.Background(), deps, "archon-alice", runCommandArgs{
+		SID: runCommandSID, Command: "uptime",
+	}); err != nil {
+		t.Fatalf("runCommand: %v", err)
+	}
+
+	if len(rec.events) != 1 {
+		t.Fatalf("audit events = %d, want 1", len(rec.events))
+	}
+	got, _ := rec.events[0].payload["recording_id"].(string)
+	if got == "" || got != store.Only().Meta.RecordingID {
+		t.Fatalf("payload[recording_id] = %q, want the recording that was written", got)
+	}
+}
+
+// Fail-closed, and for this path it can only act BEFORE the dispatch: a command
+// that has already run cannot be un-run, so a store that is down means the
+// command does not execute at all.
+func TestRunCommand_RefusesToRunWhenItCannotBeRecorded(t *testing.T) {
+	d, rec, deps, store := newRunCommandFakesWithStore(errand.DispatchResult{
+		ErrandID: "01HF7Z", Status: errand.StatusSuccess,
+	}, nil)
+	store.FailBegin(true)
+
+	_, err := runCommand(context.Background(), deps, "archon-alice", runCommandArgs{
+		SID: runCommandSID, Command: "rm -rf /var/lib/soul-stack",
+	})
+	if !errors.Is(err, console.ErrRecordingUnavailable) {
+		t.Fatalf("err = %v, want ErrRecordingUnavailable", err)
+	}
+	if d.call != 0 {
+		t.Fatalf("the command was dispatched anyway: %+v", d.got)
+	}
+	if len(rec.events) != 0 {
+		t.Errorf("audit events = %d, want 0 — nothing ran", len(rec.events))
+	}
+}
+
+// A vault reference printed by the command is masked in the recording, and only
+// the reference is: a blanked recording would be no record at all.
+func TestRunCommand_MasksAVaultRefInTheRecording(t *testing.T) {
+	_, _, deps, store := newRunCommandFakesWithStore(errand.DispatchResult{
+		ErrandID: "01HF7Z", Status: errand.StatusSuccess,
+		Stdout: "db url is vault:secret/db/dsn here\n",
+	}, nil)
+
+	if _, err := runCommand(context.Background(), deps, "archon-alice", runCommandArgs{
+		SID: runCommandSID, Command: "cat /etc/app.conf",
+	}); err != nil {
+		t.Fatalf("runCommand: %v", err)
+	}
+
+	body := store.Only().Body()
+	if strings.Contains(body, "vault:secret/db") {
+		t.Fatalf("the vault reference is in the recording in plaintext: %q", body)
+	}
+	if !strings.Contains(body, audit.MaskedValue) {
+		t.Fatalf("nothing was masked: %q", body)
+	}
+	if !strings.Contains(body, "db url is ") {
+		t.Fatalf("masking swallowed the surrounding output: %q", body)
 	}
 }

@@ -113,7 +113,12 @@ differently from a clean `exit`.
 
 `error.code` is a closed set: `bad_frame`, `forbidden`, `soul_offline`,
 `soul_busy`, `console_unsupported`, `limit_exceeded`, `duplicate_session`,
-`internal`.
+`recording_unavailable`, `internal`.
+
+`recording_unavailable` is the one Keeper-side failure whose fix is "the audit
+store is down" (§9). It is deliberately not folded into `internal`, and
+deliberately not `soul_busy`: the host is fine and retrying will not help, so a
+terminal that closed for that reason must not look like a crashed shell.
 
 Unknown frame types are ignored by the client, so Keeper may add frames later
 without breaking an older UI.
@@ -318,8 +323,11 @@ each of them.
 | `max_sessions_per_archon` | 30 | Live consoles one Archon may hold. Covers the walls the UI is built for; past that an operator is not reading output, they are running a fan-out — which is what an Errand is for. |
 | `max_sessions_global` | 256 | Live consoles on ONE Keeper instance, across all operators. |
 | `idle_timeout` | `30m` | Close after this long without operator input. `0s` disables. |
+| `recording.max_session_bytes` | 256 MiB | Cap on one session's recording; reaching it closes the session (§9). |
+| `recording.retention` | `2160h` (90d) | How long a recording is kept. |
 
-Exceeding either cap gives `error{code: "limit_exceeded"}` on that pane only.
+Exceeding either session cap gives `error{code: "limit_exceeded"}` on that pane
+only. There is no key for whether a session is recorded — see §9.
 
 Frame-plane constants (queue depth 256, ping 60 s, max inbound frame 1 MiB) stay
 in code: they are flow-control tuning with no operator-visible policy meaning.
@@ -354,14 +362,119 @@ another host's session used to be delivered on the session id alone. Across
 instances it runs on the publishing side instead — a bridged frame carries no
 SID, so the receiver has nothing to check (§6).
 
-## 9. Audit and metrics
+## 9. Session recording
+
+**Every console session is recorded, and a session that cannot be recorded is
+not opened.** There is no `enabled` key, no request field and no per-session
+opt-out — an operator who could choose an unrecorded shell would make the
+control decorative, and `soul.console` is granted on the understanding that it
+leaves a trail ([ADR-0074(g)](../adr/0074-interactive-console-pty.md)). Policy
+decides where recordings go and how long they are kept; not whether they happen.
+
+### Where it is intercepted, and why there
+
+In the **Hub**, on the instance that holds the operator's socket — the one place
+that sees both directions of one session:
+
+- **below** it the carrier varies (a session's own `ConsoleStream` RPC or the
+  shared `EventStream`, NIM-188) and a cross-instance session arrives over the
+  Redis bridge; all of that converges on `Hub.Deliver`/`Hub.DeliverLocal`;
+- **above** it the socket may drop a chunk under backpressure (§4).
+
+So the recording holds **more than the operator saw**: a chunk is recorded
+before the socket has the chance to drop it. The reverse does not hold — output
+the *Soul* discarded never reaches Keeper, so the count it reports is written
+into the cast as a gap marker rather than silently splicing two screens.
+
+The order is `record → deliver` in both directions. The operator never sees a
+byte that is not in the record, and a keystroke that could not be recorded never
+reaches the shell.
+
+The non-interactive `keeper.soul.run-command` (NIM-147) uses the **same**
+recorder rather than a second recording path — same right reaching the same
+shell, so the same artifact. There the fail-closed check can only act *before*
+the dispatch, since a command that has already executed cannot be un-executed.
+
+### Format
+
+[asciicast v2](https://docs.asciinema.org/manual/asciicast/v2/) — a JSON header
+plus one JSON array per line, `[elapsed_seconds, code, data]`. It replays with
+`asciinema play`, converts to a GIF with `agg`, and feeds the xterm.js the
+operator UI is already built on. Codes used:
+
+| Code | Meaning |
+|---|---|
+| `o` | pty output. stdout and stderr are not separated — a tty merges them onto one fd before Keeper sees either, and a replay that split them would show a screen that never existed. |
+| `i` | operator keystrokes. |
+| `r` | terminal geometry, `"<cols>x<rows>"`. |
+| `m` | a marker, used for a gap: `"dropped <n> bytes"`. |
+
+### Storage
+
+Postgres, not a file on the Keeper's disk: Keeper is stateless (ADR-005) and the
+instance that held the socket is rarely the one that later serves the playback.
+
+| Table | Contents |
+|---|---|
+| `console_recordings` | One row per session: `recording_id`, `session_id`, `kind` (`interactive` / `command`), `sid`, `archon_aid`, `cast_header` (jsonb), `started_at` / `finished_at`, `close_reason`, `event_count`, `byte_count`, `truncated`, `ttl_at`. |
+| `console_recording_parts` | The body, appended in order. `SELECT body ... ORDER BY seq` concatenated **is** the cast, header excluded. A part never splits a line. |
+
+`console.opened` / `console.closed` and `console.command` carry `recording_id` in
+their payload — the audit log stays the index, and the recording stays the
+richer artifact hanging off it. A `finished_at` of NULL means the writer never
+got to say goodbye (the instance died); the body up to that point is complete
+and replayable.
+
+Retention is `console.recording.retention` (default 90d), baked into `ttl_at` on
+creation and enforced by the Reaper rule `purge_old_console_recordings`. A
+retention change is therefore never retroactive.
+
+### What is masked, and what is not
+
+The recording is an observable channel like a log line, so vault references are
+masked in it ([ADR-010 §7.4](../templating.md)) — **the reference only**, not the
+line it appeared in, because blanking the screen would destroy the record the
+masking exists to make safe to keep.
+
+Masking survives chunking. A pty echoes keystrokes **one byte at a time**, so an
+operator typing `vault:secret/db` produces fifteen chunks and not one of them
+matches the pattern; the recorder therefore holds back any tail that could still
+grow into a reference and masks across the boundary. Without that, masking would
+fail precisely where an operator is most likely to type a credential path.
+
+The bound is stated rather than implied, and it is the same one the MCP surface
+states (ADR-0074 amendment, NIM-147): on a free-form byte stream **only the
+content layer can fire**. There is no key for the name layer to read, and a
+credential a command simply prints in plaintext is indistinguishable from any
+other text. Recognizing it would require knowing what the command was going to
+do, which is the property a console does not have.
+
+### When recording fails
+
+Fail-closed, at every point where it can act:
+
+| When | What happens |
+|---|---|
+| The recording cannot be started | The session is refused with `error{code: "recording_unavailable"}` and **no `ConsoleOpen` is dispatched** — no pty is ever created. |
+| The store breaks mid-session | The session is closed, the pty killed, and the operator gets `recording_unavailable`. This fires even on an idle session sitting at a prompt, which is why it is a callback rather than a check on the next keystroke. |
+| `console.recording.max_session_bytes` is reached | The session is closed and the recording marked `truncated`. A console that can no longer be recorded may not keep running, or "mandatory" would mean "until it gets expensive". |
+| `run-command` cannot be recorded | The command is **not dispatched**. If its output cannot be recorded, the output is not returned — the command already ran either way, but disclosing what a root shell printed unrecorded is the leak this exists to prevent. |
+
+Bound worth stating: persistence is asynchronous behind a bounded queue, so a
+store that dies can lose up to the last flush window (2 s or 32 KiB) of a
+session before the session is torn down. What cannot happen is a session that
+keeps running unrecorded.
+
+## 10. Audit and metrics
 
 Sessions are audited as facts — `console.opened` / `console.closed`, with
 `archon_aid`, the target `sid` and the session id as `correlation_id`. WHO opened
-a shell WHERE belongs in the audit log even where session recording (NIM-145) is
-off, because a console is the most privileged thing an operator can do: the pty
-inherits the Soul daemon's user, typically root, and its commands cannot be
-checked against a module allow-list the way an Errand's can.
+a shell WHERE belongs in the audit log independently of the recording, because
+it is the one fact that survives every degradation of the recording path
+([ADR-0074(f)](../adr/0074-interactive-console-pty.md)) — and because a console
+is the most privileged thing an operator can do: the pty inherits the Soul
+daemon's user, typically root, and its commands cannot be checked against a
+module allow-list the way an Errand's can.
 
 The **non-interactive** sibling of this plane — the MCP tool
 `keeper.soul.run-command` ([mcp-tools/souls.md](mcp-tools/souls.md), NIM-147) —
@@ -378,11 +491,15 @@ matters.
 | `keeper_console_output_bytes_total` | Output forwarded toward operators. |
 | `keeper_console_dropped_bytes_total` | Output dropped by Keeper-side backpressure. |
 | `keeper_console_sockets_active` | Open operator WebSockets. |
+| `keeper_console_recording_failures_total` | Sessions refused or closed because they could not be recorded. Recording is mandatory, so any non-zero rate is actionable: operators are losing shells to the audit store rather than to the hosts they were working on. |
 
-## 10. Known gaps
+## 11. Known gaps
 
-- **Recording** — keystrokes and output are not persisted; session recording is
-  NIM-145.
+- **Playback** — the recordings are written and readable by query, but there is
+  no operator-facing way to watch one; that is NIM-148. Until then a recording
+  is fetched with `SELECT body FROM console_recording_parts WHERE recording_id
+  = $1 ORDER BY seq`, prefixed with `console_recordings.cast_header`, and played
+  with `asciinema play`.
 - **A holder restart mid-session** leaves the owner's pane with no terminal
   frame: the stream broke, so the pty is already dead (kill-on-disconnect), but
   the operator learns only from the idle timeout. A liveness probe from the owner

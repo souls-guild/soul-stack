@@ -44,6 +44,7 @@ import (
 	"github.com/souls-guild/soul-stack/keeper/internal/cloudinit"
 	"github.com/souls-guild/soul-stack/keeper/internal/conductor"
 	"github.com/souls-guild/soul-stack/keeper/internal/console"
+	"github.com/souls-guild/soul-stack/keeper/internal/consolepg"
 	"github.com/souls-guild/soul-stack/keeper/internal/coremod"
 	coremodcert "github.com/souls-guild/soul-stack/keeper/internal/coremod/cert"
 	coremodchoir "github.com/souls-guild/soul-stack/keeper/internal/coremod/choir"
@@ -410,7 +411,11 @@ type daemon struct {
 	outbound       *keepergrpc.Outbound
 	consoleHub     *console.Hub
 	consoleMetrics *console.Metrics
-	scenarioRunner *scenario.Runner
+	// consoleRecorder is shared by the two things that hold `soul.console`: the
+	// interactive session manager and the one-shot MCP `run-command` (NIM-147).
+	// One recorder, so the two cannot record differently.
+	consoleRecorder console.Recorder
+	scenarioRunner  *scenario.Runner
 
 	// Keeper daemon runtime wiring note.
 	// Keeper daemon runtime wiring note.
@@ -2990,11 +2995,26 @@ func (d *daemon) setupGRPCEventStream(ctx context.Context) error {
 	// its own bridge — pty output arrives on whichever Keeper holds the stream,
 	// while the socket lives on whichever the load balancer picked.
 	consoleBridge := console.NewClusterBridge(d.redisClient, cfg.KID, logger)
+	// Mandatory session recording (ADR-0074(g), NIM-145). The store is Postgres
+	// because Keeper is stateless: the instance that holds the socket is rarely
+	// the one that later serves the playback. There is no branch here for a
+	// missing recorder — NewHub refuses one, which is what keeps "unrecorded
+	// console" from being reachable through a deployment mistake.
+	consoleRecorder, err := console.NewRecorder(
+		consolepg.NewStore(d.pool, consoleRecordingRetention(cfg)),
+		consoleRecorderConfig(cfg),
+		logger,
+	)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "keeper run: build console recorder: %v\n", err)
+		return errSetupFailed
+	}
 	consoleHub, err := console.NewHub(console.HubDeps{
 		Dispatcher:   outbound,
 		Capabilities: console.NewRedisCapabilityChecker(d.redisClient),
 		Cluster:      consoleBridge,
 		AuditWriter:  d.auditWriter,
+		Recorder:     consoleRecorder,
 		Limits:       consoleLimits(cfg),
 		Metrics:      d.consoleMetrics,
 		Logger:       logger,
@@ -3003,6 +3023,7 @@ func (d *daemon) setupGRPCEventStream(ctx context.Context) error {
 		fmt.Fprintf(os.Stderr, "keeper run: build console hub: %v\n", err)
 		return errSetupFailed
 	}
+	d.consoleRecorder = consoleRecorder
 	d.consoleHub = consoleHub
 	d.startConsoleBackground(ctx, consoleBridge)
 
@@ -4882,6 +4903,7 @@ func (d *daemon) setupMCPServer(ctx context.Context) error {
 			// Keeper daemon runtime wiring note.
 			ErrandDispatcher: d.errandDispatcher,
 			ErrandStore:      d.errandStore,
+			ConsoleRecorder:  d.consoleRecorder,
 
 			// Keeper daemon runtime wiring note.
 			// Keeper daemon runtime wiring note.
@@ -5877,6 +5899,14 @@ func (d *daemon) setupReaper(ctx context.Context) error {
 			oldErrandsPurger = reaper.NewErrandsPurger(d.pool, logger)
 		}
 
+		// Console recording retention (ADR-0074(g), NIM-145). Recording is
+		// mandatory, so nothing an operator does stops this table growing —
+		// the purge is what keeps a control from turning into a disk problem.
+		var oldConsoleRecordingsPurger *reaper.ConsoleRecordingsPurger
+		if d.pool != nil {
+			oldConsoleRecordingsPurger = reaper.NewConsoleRecordingsPurger(d.pool, logger)
+		}
+
 		// Keeper daemon runtime wiring note.
 		// Keeper daemon runtime wiring note.
 		// Keeper daemon runtime wiring note.
@@ -5939,6 +5969,7 @@ func (d *daemon) setupReaper(ctx context.Context) error {
 			Metrics:                reaperMetrics,
 			Scry:                   scryDeps,
 			OldErrands:             oldErrandsPurger,
+			OldConsoleRecordings:   oldConsoleRecordingsPurger,
 			VoyageReclaim:          d.voyageReclaimer,
 			OrphanEphemeralTidings: orphanEphemeralTidingsPurger,
 			OrphanApplying:         orphanApplyingReconciler,

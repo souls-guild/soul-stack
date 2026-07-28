@@ -798,6 +798,32 @@ type KeeperConsole struct {
 	// the abandoned root shell this reaps. Type `duration`; 0/omitted →
 	// default 30m, `0s` explicitly disables the sweep.
 	IdleTimeout string `yaml:"idle_timeout,omitempty"`
+
+	// Recording tunes where the mandatory session recording lands and how long
+	// it stays. It cannot turn recording off — see [KeeperConsoleRecording].
+	Recording *KeeperConsoleRecording `yaml:"recording,omitempty"`
+}
+
+// KeeperConsoleRecording is the policy surface of mandatory session recording
+// (ADR-0074(g), NIM-145).
+//
+// There is deliberately NO `enabled` key, and adding one is a decision that
+// belongs in the ADR rather than in a config struct. Policy may decide where
+// recordings go and how long they are kept; it may not decide whether a session
+// is recorded, because an operator who can choose an unrecorded shell makes the
+// control decorative. A guard test pins the absence.
+type KeeperConsoleRecording struct {
+	// MaxSessionBytes caps one session's recording. Reaching it CLOSES the
+	// session — a console that can no longer be recorded may not keep running.
+	// 0/omitted → default 64 MiB, negative removes the cap for an operator who
+	// would rather grow the table than lose a terminal.
+	MaxSessionBytes int64 `yaml:"max_session_bytes,omitempty"`
+
+	// Retention is how long a recording is kept before the Reaper purges it
+	// (`purge_old_console_recordings`). Type `duration`; 0/omitted → 90d. It is
+	// stamped into the row on creation, so a change applies to new recordings
+	// and never silently re-dates ones already taken.
+	Retention string `yaml:"retention,omitempty"`
 }
 
 type KeeperListen struct {

@@ -3,11 +3,15 @@ package mcp
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"log/slog"
 	"strings"
 
+	"github.com/souls-guild/soul-stack/keeper/internal/console"
 	"github.com/souls-guild/soul-stack/keeper/internal/errand"
 	"github.com/souls-guild/soul-stack/keeper/internal/jwt"
 	"github.com/souls-guild/soul-stack/keeper/internal/soul"
+	keeperv1 "github.com/souls-guild/soul-stack/proto/gen/go/keeper/v1"
 	"github.com/souls-guild/soul-stack/shared/audit"
 )
 
@@ -67,13 +71,15 @@ type runCommandOutput struct {
 	ErrorMessage    string `json:"error_message,omitempty"`
 }
 
-// runCommandDeps is the surface [runCommand] needs, narrowed to two funcs so
-// the guard tests can drive masking and the audit trail without a live errand
-// stack (HandlerDeps.ErrandDispatcher is a concrete *errand.Dispatcher over a
-// pgxpool, and its nil-check stays on the concrete type — no typed-nil here).
+// runCommandDeps is the surface [runCommand] needs, narrowed to funcs so the
+// guard tests can drive masking, recording and the audit trail without a live
+// errand stack (HandlerDeps.ErrandDispatcher is a concrete *errand.Dispatcher
+// over a pgxpool, and its nil-check stays on the concrete type — no typed-nil
+// here).
 type runCommandDeps struct {
 	Dispatch func(context.Context, errand.DispatchRequest) (errand.DispatchResult, error)
 	Audit    func(eventType audit.EventType, aid, correlationID string, payload map[string]any)
+	Recorder console.Recorder
 }
 
 // callSoulRunCommand — mutating tool keeper.soul.run-command.
@@ -114,18 +120,41 @@ func (h *Handler) callSoulRunCommand(ctx context.Context, claims *jwt.Claims, re
 	if h.deps.ErrandDispatcher == nil {
 		return h.toolError(req.ID, toolName, mcpCodeInternalError, errandNotConfigured)
 	}
+	if h.deps.ConsoleRecorder == nil {
+		// Not a wiring detail to shrug at: `soul.console` authorizes an
+		// arbitrary command as root, and ADR-0074(g) says what makes that
+		// grantable is the record it leaves. With nowhere to record, the answer
+		// is no.
+		return h.toolError(req.ID, toolName, mcpCodeInternalError, recordingNotConfigured)
+	}
 
 	out, err := runCommand(ctx, runCommandDeps{
 		Dispatch: h.deps.ErrandDispatcher.Dispatch,
 		Audit:    h.writeAuditCorrelated,
+		Recorder: h.deps.ConsoleRecorder,
 	}, claims.Subject, a)
 	if err != nil {
+		if errors.Is(err, console.ErrRecordingUnavailable) {
+			h.deps.Logger.Error("mcp: run-command refused — session recording unavailable",
+				slog.Any("error", err))
+			return h.toolError(req.ID, toolName, mcpCodeInternalError, recordingNotConfigured)
+		}
 		return h.mapErrandDispatchError(req.ID, toolName, err)
 	}
 	return h.toolResult(req.ID, out)
 }
 
-// runCommand dispatches the command, records it and projects the result.
+// recordingNotConfigured is the public detail for a refusal on the recording
+// path. Deliberately says nothing about WHY the store is unreachable.
+const recordingNotConfigured = "console session recording is unavailable — the command was not run"
+
+// runCommand records the command, dispatches it and projects the result.
+//
+// Recording is opened BEFORE the dispatch, and its failure means the command
+// does not run (ADR-0074(g)). The order is the entire guarantee here: unlike an
+// interactive session, which can be closed the moment its recording breaks, a
+// command that has already executed cannot be un-executed — so the only moment
+// fail-closed can act is before it starts.
 func runCommand(ctx context.Context, deps runCommandDeps, aid string, a runCommandArgs) (runCommandOutput, error) {
 	input := map[string]any{"cmd": a.Command}
 	if a.Cwd != "" {
@@ -139,6 +168,26 @@ func runCommand(ctx context.Context, deps runCommandDeps, aid string, a runComma
 		input["env"] = env
 	}
 
+	rec, err := deps.Recorder.Open(ctx, console.RecordingSpec{
+		// A one-shot command has no session, so the recording is its own
+		// subject. The errand that carried it is reachable through the
+		// `console.command` audit event, which carries both ids.
+		SessionID: audit.NewULID(),
+		Kind:      console.RecordingCommand,
+		SID:       a.SID,
+		AID:       aid,
+	})
+	if err != nil {
+		return runCommandOutput{}, err
+	}
+
+	// The command line is recorded as operator input — it is what a person
+	// would have typed at the prompt this tool exists to replace.
+	if err := rec.Input([]byte(a.Command + "\n")); err != nil {
+		rec.Close(ctx, "recording unavailable")
+		return runCommandOutput{}, err
+	}
+
 	res, err := deps.Dispatch(ctx, errand.DispatchRequest{
 		SID:          a.SID,
 		Module:       runCommandModule,
@@ -147,13 +196,25 @@ func runCommand(ctx context.Context, deps runCommandDeps, aid string, a runComma
 		StartedByAID: aid,
 	})
 	if err != nil {
+		rec.Close(ctx, "dispatch failed")
 		return runCommandOutput{}, err
 	}
 
+	// Output is recorded before it is returned, the same order the interactive
+	// path uses. A caller must not learn what a root shell printed unless the
+	// record of it survives — the command has already run either way, but
+	// disclosing its output unrecorded is the leak this ADR is about.
+	if err := recordCommandOutput(rec, res); err != nil {
+		rec.Close(ctx, "recording unavailable")
+		return runCommandOutput{}, err
+	}
+	rec.Close(ctx, string(res.Status))
+
 	if deps.Audit != nil {
 		deps.Audit(audit.EventConsoleCommand, aid, res.ErrandID, map[string]any{
-			"sid":    a.SID,
-			"status": string(res.Status),
+			"sid":          a.SID,
+			"status":       string(res.Status),
+			"recording_id": rec.ID(),
 		})
 	}
 
@@ -179,4 +240,22 @@ func runCommand(ctx context.Context, deps runCommandDeps, aid string, a runComma
 		DurationMs:      res.DurationMs,
 		ErrorMessage:    errMsg,
 	}, nil
+}
+
+// recordCommandOutput writes the command's channels into the recording.
+//
+// Both land as pty output: a tty merges stdout and stderr before anyone sees
+// them, and a recording of a command should replay as the terminal session it
+// stands in for. The structured split the caller gets back is the Errand
+// transport's contribution, and it stays in the `errands` row.
+func recordCommandOutput(rec console.Recording, res errand.DispatchResult) error {
+	for _, out := range []string{res.Stdout, res.Stderr} {
+		if out == "" {
+			continue
+		}
+		if err := rec.Output(keeperv1.ConsoleStream_CONSOLE_STREAM_STDOUT, []byte(out), 0); err != nil {
+			return err
+		}
+	}
+	return nil
 }

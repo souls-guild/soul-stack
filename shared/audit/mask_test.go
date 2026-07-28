@@ -2,6 +2,7 @@ package audit
 
 import (
 	"reflect"
+	"strings"
 	"testing"
 )
 
@@ -540,5 +541,95 @@ func TestMaskSecrets_DoesNotMutateInput(t *testing.T) {
 	nested := in["nested"].(map[string]any)
 	if nested["jwt"] != "j" {
 		t.Errorf("input nested mutated: %v", nested)
+	}
+}
+
+// --- free-text masking (NIM-145) ---------------------------------------------
+
+// MaskRefsInText replaces the reference and NOTHING else. The payload masker
+// blanks a whole matching value, which is right for a field that IS the secret
+// and wrong for a console recording that merely contains one — blanking the
+// screen would destroy the record the masking exists to make safe to keep.
+func TestMaskRefsInText_ReplacesOnlyTheReference(t *testing.T) {
+	cases := []struct {
+		name string
+		in   string
+		want string
+	}{
+		{"bare ref", "vault:secret/db/password", MaskedValue},
+		{"ref in a sentence", "reading vault:secret/db now", "reading " + MaskedValue + " now"},
+		{"custom mount", "vault:kv-prod/app/key", MaskedValue},
+		{"two refs", "a vault:secret/x b vault:kv/y c", "a " + MaskedValue + " b " + MaskedValue + " c"},
+		{"no ref", "vault: KV error", "vault: KV error"},
+		{"host:port is not a ref", "https://vault:8200", "https://vault:8200"},
+		{"image tag is not a ref", "hashicorp/vault:1.18", "hashicorp/vault:1.18"},
+		{"empty", "", ""},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := MaskRefsInText(tc.in); got != tc.want {
+				t.Fatalf("MaskRefsInText(%q) = %q, want %q", tc.in, got, tc.want)
+			}
+		})
+	}
+}
+
+// SafeMaskSplit is what keeps a reference masked when it arrives in pieces — a
+// pty echoes keystrokes one byte at a time, so per-chunk masking alone would
+// mask nothing exactly where an operator types a credential path.
+func TestSafeMaskSplit_HoldsBackAPossibleReference(t *testing.T) {
+	cases := []struct {
+		name string
+		buf  string
+		want int
+	}{
+		{"nothing to hold", "plain output\n", len("plain output\n")},
+		{"one letter of the marker", "v", 0},
+		{"partial marker", "echo va", len("echo ")},
+		{"whole marker, no mount yet", "cat vault:", len("cat ")},
+		{"mount in progress", "cat vault:secret", len("cat ")},
+		{"path in progress", "cat vault:secret/db", len("cat ")},
+		{"reference terminated by a space", "cat vault:secret/db ", len("cat vault:secret/db ")},
+		{"reference terminated by a newline", "cat vault:secret/db\n", len("cat vault:secret/db\n")},
+		{"dead marker releases everything", "vault::x", len("vault::x")},
+		{"empty", "", 0},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := SafeMaskSplit([]byte(tc.buf)); got != tc.want {
+				t.Fatalf("SafeMaskSplit(%q) = %d, want %d", tc.buf, got, tc.want)
+			}
+		})
+	}
+}
+
+// The carry is bounded: a stream that happens to contain the literal `vault:`
+// followed by megabytes of reference-shaped bytes must not be held in memory
+// forever waiting for a `/` that never comes.
+func TestSafeMaskSplit_ReleasesPastTheCarryBound(t *testing.T) {
+	buf := []byte("vault:" + strings.Repeat("a", MaxMaskCarryBytes+1))
+	if got := SafeMaskSplit(buf); got != len(buf) {
+		t.Fatalf("SafeMaskSplit held back %d bytes past the bound, want a full release of %d",
+			len(buf)-got, len(buf))
+	}
+}
+
+// Feeding a reference one byte at a time through split+mask must produce the
+// same masked stream as feeding it whole — that equivalence IS the guarantee
+// the console recorder relies on.
+func TestSafeMaskSplit_ByteAtATimeMatchesWholeInput(t *testing.T) {
+	const in = "cat vault:secret/db/password && echo vault:kv/x done\n"
+
+	var carry, out []byte
+	for i := 0; i < len(in); i++ {
+		carry = append(carry, in[i])
+		split := SafeMaskSplit(carry)
+		out = append(out, MaskRefsInBytes(append([]byte(nil), carry[:split]...))...)
+		carry = carry[split:]
+	}
+	out = append(out, MaskRefsInBytes(carry)...)
+
+	if want := MaskRefsInText(in); string(out) != want {
+		t.Fatalf("streamed masking = %q, want %q", string(out), want)
 	}
 }

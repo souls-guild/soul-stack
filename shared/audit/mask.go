@@ -12,6 +12,10 @@ import (
 // (docs/keeper/operator-api.md → Secret masking).
 const maskedValue = "***MASKED***"
 
+// MaskedValue is [maskedValue] for consumers outside this package that must
+// recognize or assert on the placeholder.
+const MaskedValue = maskedValue
+
 // sensitiveKeyRe is a case-insensitive substring match on the key name. It masks
 // any key CONTAINING one of the secret fragments, not only exact matches:
 // `bootstrap_token`, `aws_secret_access_key`, `db_password`, `tls_private_key`,
@@ -87,6 +91,109 @@ const CredentialsRefPrefix = "vault:secret/"
 // mandatory `/` (the mount↔rel separator from vault.ParseRef). This closes the
 // K5 gap (custom mount) without over-masking strings that have no ref form.
 var vaultRefRe = regexp.MustCompile(`vault:[A-Za-z0-9._-]+/`)
+
+// vaultRefTokenRe matches a whole vault reference — [vaultRefRe] plus the
+// relative path that follows it, up to the first character that cannot be part
+// of one (whitespace, a quote, a shell metacharacter). Used by
+// [MaskRefsInText]; the payload masker replaces the whole value and needs only
+// to DETECT a ref, while a text masker must know where the ref ends.
+var vaultRefTokenRe = regexp.MustCompile(`vault:[A-Za-z0-9._-]+/[A-Za-z0-9._/-]*`)
+
+// MaskRefsInText replaces every vault reference inside s with [MaskedValue],
+// leaving the surrounding text intact.
+//
+// This is the free-text counterpart of [MaskSecrets], which masks a matching
+// value WHOLE. Whole-value masking is right for a payload field — the field is
+// the secret — and wrong for a byte stream that happens to contain one:
+// blanking a 32 KiB console recording chunk because a vault path appeared in it
+// destroys the record the masking exists to make safe to keep
+// ([ADR-0074(g)](../../docs/adr/0074-interactive-console-pty.md), NIM-145).
+//
+// Only the content layer fires here. A free-form stream has no key for the
+// name layer ([isSensitiveKey]) to read, and a credential a command prints in
+// plaintext is indistinguishable from any other text — the same bound the MCP
+// `run-command` surface states (ADR-0074 amendment 2026-07-27).
+func MaskRefsInText(s string) string {
+	if s == "" {
+		return s
+	}
+	return vaultRefTokenRe.ReplaceAllString(s, maskedValue)
+}
+
+// MaskRefsInBytes is [MaskRefsInText] over a byte slice. The input is never
+// mutated; when there is nothing to mask the input is returned as-is.
+func MaskRefsInBytes(b []byte) []byte {
+	if len(b) == 0 || !vaultRefTokenRe.Match(b) {
+		return b
+	}
+	return vaultRefTokenRe.ReplaceAll(b, []byte(maskedValue))
+}
+
+// vaultRefMarker is the literal every vault reference starts with. Callers of
+// [SafeMaskSplit] do not need it; it is the anchor that makes a partial match
+// recognizable without running the regexp against every suffix.
+const vaultRefMarker = "vault:"
+
+// MaxMaskCarryBytes bounds how much of a stream [SafeMaskSplit] will hold back.
+// A reference longer than this is not masked across a chunk boundary — a mount
+// plus path of 4 KiB is not a reference anybody writes, while an unbounded
+// carry would be a memory hole on a stream that happens to contain the literal
+// `vault:` followed by megabytes of base64.
+const MaxMaskCarryBytes = 4 << 10
+
+// SafeMaskSplit reports how many leading bytes of buf may be masked and written
+// out now, so that a vault reference SPLIT ACROSS chunk boundaries is still
+// masked. The remainder is the caller's carry: prepend it to the next chunk.
+//
+// Chunking is not hypothetical on a console. A pty echoes keystrokes one byte
+// at a time, so an operator typing `vault:secret/db` produces fifteen chunks
+// and not one of them matches the reference pattern. Masking each chunk in
+// isolation would therefore mask nothing at all, exactly where the operator is
+// most likely to type a credential path.
+//
+// Returns len(buf) when nothing could be in progress, and 0 when the whole
+// buffer might be. The bound is [MaxMaskCarryBytes] — past it the buffer is
+// released whole, so a complete reference inside it is still masked and only a
+// reference longer than the bound can straddle.
+func SafeMaskSplit(buf []byte) int {
+	if len(buf) == 0 {
+		return 0
+	}
+	if i := strings.LastIndex(string(buf), vaultRefMarker); i >= 0 && refTailGrowable(buf[i+len(vaultRefMarker):]) {
+		if len(buf)-i > MaxMaskCarryBytes {
+			return len(buf)
+		}
+		return i
+	}
+	// No marker in progress, but the buffer may end PART-WAY through one.
+	n := len(vaultRefMarker) - 1
+	if n > len(buf) {
+		n = len(buf)
+	}
+	for ; n > 0; n-- {
+		if strings.HasSuffix(string(buf), vaultRefMarker[:n]) {
+			return len(buf) - n
+		}
+	}
+	return len(buf)
+}
+
+// refTailGrowable reports whether every byte could still be part of the mount
+// or path of a vault reference — i.e. whether the marker before it may yet grow
+// into a full match. The class is the union of the mount and path classes of
+// [vaultRefTokenRe]; a superset is correct here, since a false "growable" only
+// delays bytes by one chunk.
+func refTailGrowable(tail []byte) bool {
+	for _, c := range tail {
+		switch {
+		case c >= 'a' && c <= 'z', c >= 'A' && c <= 'Z', c >= '0' && c <= '9':
+		case c == '.', c == '_', c == '-', c == '/':
+		default:
+			return false
+		}
+	}
+	return true
+}
 
 // MaskSecrets returns a copy of payload with sensitive values masked. The walk
 // is recursive — it descends into nested maps and slices, including typed

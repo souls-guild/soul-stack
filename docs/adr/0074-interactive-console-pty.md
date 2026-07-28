@@ -51,6 +51,8 @@
 
     The enforceable form of "mandatory": **the console plane is opt-in and off unless explicitly configured**, and it stays opt-in until recording lands (NIM-145). When it does, recording is **on for every session and not disableable per-session** — an operator must not be able to choose an unrecorded shell, or the control is decorative. A future policy switch may decide *where* recordings go and how long they are kept; it may not decide *whether* a session is recorded.
 
+    > **Landed 2026-07-27 (NIM-145).** Recording is implemented as specified; the amendment at the end of this ADR records what "mandatory" turned into in code — the interception point, the format and store, the masking bound, and what fail-closed does at each point it can act.
+
   - **(h) An approval-gate on opening a console is REJECTED for this release, and the rejection is bounded.** The proposal — a second control beyond the right, requiring another Archon to approve opening a console in a production Coven (the shape of Teleport's moderated sessions and AWS SSM session approval) — is sound in motive: recording is **detective**, and a live root shell arguably deserves a **preventive** control. It is rejected here for reasons that are structural, not merely scheduling:
 
     1. **There is nothing to attach "production" to.** A [Coven](0008-coven-stable-tags.md) is a stable label on `souls.coven[]` — there is no `covens` table, no coven entity, no environment classification anywhere in the model. A gate on "prod covens" would first have to invent coven-level metadata and an authority for who sets it, which is a larger decision than the gate itself and would be made here as a side effect.
@@ -70,9 +72,9 @@
   - **Buffering console output under flood** — unbounded memory in Keeper, and a delayed screen is a lie about the current state of the machine; dropping with a visible counter is the honest failure (e).
   - **Resuming a session across a reconnect** — the pty is killed with its stream by (e); offering resume would mean either keeping an orphaned shell alive or silently opening a *new* one under an old id.
 
-- **Deferred.** Session recording and playback (NIM-145); a liveness probe for the owner side when the stream holder restarts mid-session; recording retention policy; the approval-gate under the re-open condition in (h); aligning the `errand.run`-gated route to `core.cmd.shell` with `soul.console` (see the amendment's known gap). *The MCP surface for command execution is no longer deferred — NIM-147, see the amendment.*
+- **Deferred.** Playback of a recording in the operator UI (NIM-148); a liveness probe for the owner side when the stream holder restarts mid-session; the approval-gate under the re-open condition in (h); aligning the `errand.run`-gated route to `core.cmd.shell` with `soul.console` (see the amendment's known gap). *Session recording and its retention policy are no longer deferred — NIM-145, see the amendment below.* *The MCP surface for command execution is no longer deferred — NIM-147, see the amendment.*
 
-- **Impl.** NIM-142 (proto contract + Soul pty runner) · NIM-143 (Keeper WS, session manager, backpressure, cross-instance routing) · **NIM-144 (this ADR + the `soul.console` right)** · NIM-145 (recording) · NIM-146 (web terminal wall) · NIM-147 (MCP `keeper.soul.run-command`, the surface amendment below) · NIM-188 (the transport amendment below) · NIM-196 (the cross-instance ownership check, below).
+- **Impl.** NIM-142 (proto contract + Soul pty runner) · NIM-143 (Keeper WS, session manager, backpressure, cross-instance routing) · **NIM-144 (this ADR + the `soul.console` right)** · NIM-145 (recording, the amendment below) · NIM-146 (web terminal wall) · NIM-147 (MCP `keeper.soul.run-command`, the surface amendment below) · NIM-188 (the transport amendment below) · NIM-196 (the cross-instance ownership check, below).
 
 **Amends [ADR-033](0033-errand.md)** (an interactive console is explicitly outside Errand, not a variant of it) and **extends [ADR-012(c)](0012-keeper-soul-grpc.md)** (a fourth only-add family on the existing stream).
 
@@ -125,3 +127,41 @@ Closes the "MCP surface for command execution" line of **Deferred** (which mis-n
 - **Masking is applied on this boundary too** (`errand.MaskAndCapBytes`, [ADR-010 §7.4](0010-templating.md)), not inherited from the transport: an agent reply is an observable channel like a log line. The bound is stated rather than implied — on a free-form byte stream only the content layer (vault provenance) can fire, since there is no key for the name layer to read and a credential the command prints in plaintext is indistinguishable from any other text. Recognizing it would require knowing what the command was going to do, which is the property (a) says a console does not have.
 
 **Known gap, not closed here (follow-up).** `core.cmd.shell` and `core.exec.run` are on the Errand runner's hardcoded allow-list (`soul/internal/runtime/errandrunner/whitelist.go`), so `keeper.soul.errand.run`, `POST /v1/souls/{sid}/exec` and a `kind=command` [Voyage](0043-voyage.md) still reach an arbitrary shell under `errand.run` alone. That predates this amendment and qualifies the claim in (a) that an Errand "can be checked against a module allow-list before it runs" — true of the *module*, not of the command line it carries. Aligning those choke-points with `soul.console` is an RBAC-breaking change for existing grants across REST, Voyage and Cadence, and is tracked as **NIM-197**.
+
+## Amendment 2026-07-27 (NIM-145) — what "mandatory" turned into
+
+Closes the recording half of **(g)** and the "recording retention policy" line of **Deferred**. Nothing in the decision changes; this records the four choices (g) left open, each of which had a wrong answer that would have made the control decorative.
+
+**Enforced by construction, not by default.** `console.NewHub` refuses to build without a `Recorder`, and `keeper.yml` has no `console.recording.enabled` key — its absence is pinned by a guard test, so adding one is an amendment to this ADR rather than a config change. This matters more than it looks: "on by default" is one refactor away from "off in this deployment", while "the type cannot be constructed" is not. The same recorder serves the MCP `run-command` surface, so the two things holding `soul.console` cannot record differently.
+
+**One interception point: the Hub.** Below it the carrier varies — a session's own `ConsoleStream` RPC or the shared `EventStream` (NIM-188), local or bridged across instances (NIM-196) — and all of it converges on `Hub.Deliver`/`DeliverLocal` on the instance holding the operator's socket, the only place that sees both directions of one session. Recording at the carrier would have meant two implementations of the same guarantee, and the one that drifts is the one nobody is watching.
+
+Two consequences follow from the position, and both are properties rather than accidents:
+
+- The recording holds **more than the operator saw** — a chunk is recorded before the socket gets the chance to drop it under backpressure (e). Output the *Soul* dropped never reaches Keeper at all, so its reported count is written into the cast as a gap marker; a replay shows the hole instead of splicing two screens into one that never existed.
+- The order is **record → deliver** in both directions. An operator never sees a byte that is not in the record, and a keystroke that could not be recorded never reaches the shell.
+
+**Format is asciicast v2, store is Postgres.** The artifact exists to be watched, and asciicast already replays — `asciinema play`, `agg`, and the xterm.js the operator UI is built on — where a bespoke timestamped log would have needed a player written for it. Codes: `o` output, `i` input, `r` resize, `m` a dropped-bytes marker. stdout and stderr are **not** separated: a tty merges them onto one fd before Keeper sees either, so splitting them in a replay would show a screen that never existed.
+
+Postgres rather than a file on the Keeper's disk, because Keeper is stateless (ADR-002/ADR-005): the instance that held the socket is rarely the instance that later serves the playback, so a local file is a recording exactly one machine can read, and only until it is replaced. `console_recordings` + `console_recording_parts` (migration 104); the body is appended in parts because the writer appends while the session is live. `console.opened` / `console.closed` / `console.command` carry `recording_id`, keeping the audit log the index and the recording the artifact hanging off it — (f) unchanged.
+
+**Retention is enforced, not merely recorded.** `ttl_at` is baked into the row from `console.recording.retention` (default 90d) and swept by the Reaper rule `purge_old_console_recordings`, the shape `purge_old_errands` already had. A mandatory recorder with no purge is a disk-growth bug with an audit story attached: no operator action stops this table growing, because no operator action stops the recording. Baking the TTL in also makes retention non-retroactive — lowering it must not silently delete recordings kept under the old policy.
+
+**Masking, and the honest bound.** A recording is an observable channel like a log line, so vault references are masked in it ([ADR-010 §7.4](0010-templating.md)) — **the reference only**, not the line containing it. Whole-value masking is right for a payload field that *is* the secret and wrong here: blanking a chunk because a vault path appeared in it destroys the record the masking exists to make safe to keep.
+
+The part that is not obvious: **masking has to survive chunking**. A pty echoes keystrokes one byte at a time, so an operator typing `vault:secret/db` produces fifteen chunks and not one of them matches the pattern — per-chunk masking would mask *nothing*, precisely where an operator is most likely to type a credential path. The recorder therefore holds back any tail that could still grow into a reference and masks across the boundary, bounded at 4 KiB so a stream that merely contains the literal `vault:` cannot be held in memory forever.
+
+The bound is the same one the NIM-147 amendment states, and it is worth restating rather than implying: on a free-form byte stream **only the content layer can fire**. There is no key for the name layer to read, and a credential a command prints in plaintext is indistinguishable from any other text — recognizing it would require knowing what the command was going to do, which is the property (a) says a console does not have. What this closes is the recording becoming a hole in masking that already existed; what it does not close is a secret nothing anywhere can recognize.
+
+**Fail-closed at each point where it can act**, because a guarantee that holds only until the store hiccups is not one:
+
+| When | What happens |
+|---|---|
+| The recording cannot start | The session is refused and **no `ConsoleOpen` is dispatched** — no pty is created. Wire code `recording_unavailable`. |
+| The store breaks mid-session | The session is closed and the pty killed. Delivered as a callback rather than a check on the next keystroke, so an idle shell sitting at a prompt is closed too — that is the case that would otherwise run unrecorded for the length of the idle timeout. |
+| The per-session cap is reached | The session is closed and the recording marked `truncated`. Default 256 MiB, sized so that hitting it means a runaway rather than a long shift. |
+| `run-command` cannot be recorded | The command is **not dispatched**; if its OUTPUT cannot be recorded, the output is not returned. The command ran either way and the audit event still says so, but handing a caller what a root shell printed with no record of it is the disclosure this is about. Unlike a session, a command cannot be closed after the fact — before the dispatch is the only moment fail-closed has. |
+
+**What is NOT claimed.** Persistence is asynchronous behind a bounded queue (32 KiB or 2 s), so a Keeper instance that dies takes up to one flush window of its live sessions with it; such a recording has a NULL `finished_at`, which reads as "the writer never got to say goodbye" rather than as an empty session. What cannot happen is a session that keeps running unrecorded. Playback in the operator UI is NIM-148; until it lands a recording is read with `SELECT body FROM console_recording_parts WHERE recording_id = $1 ORDER BY seq` behind `console_recordings.cast_header`.
+
+**Impl** — NIM-145.

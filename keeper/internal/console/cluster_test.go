@@ -60,7 +60,10 @@ func newKeeperNode(t *testing.T, rdb *keeperredis.Client, kid string) *keeperNod
 		t.Fatal("NewClusterBridge returned nil with a live redis client")
 	}
 	disp := &recordingDispatcher{}
-	hub, err := NewHub(HubDeps{Dispatcher: disp, Cluster: bridge, Logger: testLogger()})
+	hub, err := NewHub(HubDeps{
+		Dispatcher: disp, Cluster: bridge, Logger: testLogger(),
+		Recorder: newTestRecorder(t, newFakeRecordingStore(), RecorderConfig{}),
+	})
 	if err != nil {
 		t.Fatalf("NewHub: %v", err)
 	}
@@ -742,6 +745,7 @@ func TestCluster_OrphanReapIsAudited(t *testing.T) {
 	disp := &recordingDispatcher{}
 	nodeB, err := NewHub(HubDeps{
 		Dispatcher: disp, Cluster: bridge, AuditWriter: audits, Logger: testLogger(),
+		Recorder: newTestRecorder(t, newFakeRecordingStore(), RecorderConfig{}),
 	})
 	if err != nil {
 		t.Fatalf("NewHub: %v", err)

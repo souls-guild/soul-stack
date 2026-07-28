@@ -40,6 +40,32 @@ func consoleLimits(cfg *config.KeeperConfig) console.Limits {
 	}
 }
 
+// consoleRecorderConfig resolves the recording envelope from keeper.yml.
+//
+// Note what it CANNOT return: "off". Recording is mandatory (ADR-0074(g)), so
+// keeper.yml has no key for it and this has no branch for it — the only thing
+// policy tunes is the per-session cap.
+func consoleRecorderConfig(cfg *config.KeeperConfig) console.RecorderConfig {
+	if cfg == nil || cfg.Console == nil || cfg.Console.Recording == nil {
+		return console.RecorderConfig{}
+	}
+	return console.RecorderConfig{MaxBytes: cfg.Console.Recording.MaxSessionBytes}
+}
+
+// consoleRecordingRetention resolves how long recordings are kept. 0 lets the
+// store apply its own default; the semantic phase already rejected a malformed
+// duration, so an unparsable value here just falls through to it.
+func consoleRecordingRetention(cfg *config.KeeperConfig) time.Duration {
+	if cfg == nil || cfg.Console == nil || cfg.Console.Recording == nil {
+		return 0
+	}
+	d, err := time.ParseDuration(cfg.Console.Recording.Retention)
+	if err != nil || d <= 0 {
+		return 0
+	}
+	return d
+}
+
 // parseConsoleIdleTimeout converts the configured duration. An unparsable value
 // resolves to 0, i.e. the package default — the semantic config phase already
 // rejects a malformed `duration`, so this is only the belt to that braces.

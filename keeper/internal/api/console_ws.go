@@ -303,10 +303,18 @@ func (c *consoleConn) handleOpen(ctx context.Context, f *console.ClientFrame) {
 // park before that ([console.ErrSessionNotReady]); a Soul still on the
 // EventStream transport fills the per-SID outbound queue it shares with apply.
 func dispatchErrorCode(err error) string {
-	if errors.Is(err, keepergrpc.ErrOutboundQueueFull) || errors.Is(err, console.ErrSessionNotReady) {
+	switch {
+	case errors.Is(err, keepergrpc.ErrOutboundQueueFull), errors.Is(err, console.ErrSessionNotReady):
 		return console.ErrCodeBusy
+	case errors.Is(err, console.ErrRecordingUnavailable), errors.Is(err, console.ErrRecordingCapped):
+		// Not a transport failure at all: the Hub already closed the session,
+		// because a console that stopped being recorded stops (ADR-0074(g)).
+		// Retrying the keystroke is the wrong advice, so it must not read as
+		// `soul_offline`.
+		return console.ErrCodeRecordingUnavailable
+	default:
+		return console.ErrCodeSoulOffline
 	}
-	return console.ErrCodeSoulOffline
 }
 
 // openErrorCode maps a Hub failure to the closed set of wire error codes.
@@ -322,6 +330,8 @@ func openErrorCode(err error) string {
 		return console.ErrCodeSoulOffline
 	case errors.Is(err, console.ErrDuplicateSession):
 		return console.ErrCodeDuplicateSession
+	case errors.Is(err, console.ErrRecordingUnavailable):
+		return console.ErrCodeRecordingUnavailable
 	default:
 		return console.ErrCodeInternal
 	}

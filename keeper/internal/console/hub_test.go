@@ -66,6 +66,18 @@ func (d *recordingDispatcher) closeCount() int {
 	return len(d.closes)
 }
 
+func (d *recordingDispatcher) openCount() int {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return len(d.opens)
+}
+
+func (d *recordingDispatcher) stdinCount() int {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return len(d.stdin)
+}
+
 func (d *recordingDispatcher) resizeCount() int {
 	d.mu.Lock()
 	defer d.mu.Unlock()
@@ -111,6 +123,16 @@ func (s *captureSink) counts() (opened, chunks, exits, errs int) {
 	return len(s.opened), len(s.chunks), len(s.exits), len(s.errs)
 }
 
+// lastErrorCode is the code of the most recent `error` frame, or "" if none.
+func (s *captureSink) lastErrorCode() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if len(s.errs) == 0 {
+		return ""
+	}
+	return s.errs[len(s.errs)-1].Code
+}
+
 // staticCapabilities answers the console-capability gate.
 type staticCapabilities struct {
 	has bool
@@ -130,6 +152,9 @@ func newTestHub(t *testing.T, deps HubDeps) (*Hub, *recordingDispatcher) {
 	}
 	if deps.Logger == nil {
 		deps.Logger = testLogger()
+	}
+	if deps.Recorder == nil {
+		deps.Recorder = newTestRecorder(t, newFakeRecordingStore(), RecorderConfig{})
 	}
 	h, err := NewHub(deps)
 	if err != nil {

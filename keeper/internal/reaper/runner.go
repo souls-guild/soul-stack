@@ -183,6 +183,13 @@ const defaultPurgeOrphanPushRunsMaxAge = time.Hour
 // for consistency with errand.TTLDefault.
 const defaultPurgeOldErrandsMaxAge = 7 * 24 * time.Hour
 
+// defaultPurgeOldConsoleRecordingsMaxAge is the formal duration argument of
+// `purge_old_console_recordings` (ADR-0074(g), NIM-145). Same shape as
+// `purge_old_errands`: the TTL lives in `console_recordings.ttl_at`, baked on
+// INSERT from `console.recording.retention`, so this value never reaches SQL.
+// Kept at the store's own default for consistency.
+const defaultPurgeOldConsoleRecordingsMaxAge = 90 * 24 * time.Hour
+
 // defaultReclaimVoyagesLease is the formal duration argument of
 // `reclaim_voyages` rule (ADR-043 S4). Recovery compares `claim_expires_at < NOW()`
 // directly (lease is baked into claim_expires_at when claimed through voyage.ClaimNext),
@@ -266,6 +273,14 @@ type Deps struct {
 	// is skipped with warn (OrphanPushRuns pattern). Production wire-up
 	// passes [*ErrandsPurger] from [NewErrandsPurger] over d.pool.
 	OldErrands *ErrandsPurger
+
+	// OldConsoleRecordings is dependency of rule
+	// `purge_old_console_recordings` (ADR-0074(g), NIM-145). Console recording
+	// is mandatory, so this table grows with every shell anybody opens and no
+	// operator action stops it — the retention has to be enforced rather than
+	// merely recorded. Optional: nil → rule skipped with warn (OldErrands
+	// pattern). Production wire-up passes [*ConsoleRecordingsPurger] over d.pool.
+	OldConsoleRecordings *ConsoleRecordingsPurger
 
 	// VoyageReclaim is dependency of rule `reclaim_voyages` (ADR-043 S4,
 	// docs/keeper/reaper.md). Optional: nil → rule in dispatch
@@ -620,6 +635,20 @@ func (r *Runner) dispatch(ctx context.Context, cfg *config.KeeperConfig) {
 			}
 			r.runDurationRule(ctx, name, rule.MaxAge, defaultPurgeOldErrandsMaxAge, batchSize, dryRun,
 				r.deps.OldErrands.Run)
+		case "purge_old_console_recordings":
+			// Console recording retention (ADR-0074(g), docs/keeper/reaper.md).
+			// `DELETE FROM console_recordings WHERE ttl_at < NOW()` — the TTL is
+			// baked into the row on INSERT from `console.recording.retention`
+			// (default 90d), so `max_age` does NOT enter the predicate and a
+			// retention change is never retroactive. nil OldConsoleRecordings →
+			// rule degrades with warn (OldErrands pattern).
+			if r.deps.OldConsoleRecordings == nil {
+				r.deps.Logger.Warn("reaper: purge_old_console_recordings skipped: OldConsoleRecordings is not configured",
+					slog.String("rule", name))
+				continue
+			}
+			r.runDurationRule(ctx, name, rule.MaxAge, defaultPurgeOldConsoleRecordingsMaxAge, batchSize, dryRun,
+				r.deps.OldConsoleRecordings.Run)
 		case "purge_orphan_ephemeral_tidings":
 			// Cleanup of orphaned ephemeral Tidings (ADR-052(g) amendment N2,
 			// docs/keeper/reaper.md). Voyage terminal should remove its one-shot

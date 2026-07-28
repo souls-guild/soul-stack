@@ -229,6 +229,17 @@ reaper:
       enabled: true
       max_age: 7d
       action: delete
+    purge_old_console_recordings:
+      # Console recording retention (ADR-0074(g), NIM-145).
+      # `DELETE FROM console_recordings WHERE ttl_at < NOW()`. Console recording
+      # is MANDATORY, so this table grows with every shell anybody opens and no
+      # operator action stops it — leaving the rule off means unbounded growth.
+      # The TTL is baked into the row at INSERT time from
+      # `console.recording.retention` (default 90d), so `max_age` is NOT part of
+      # the SQL predicate and a retention change is never retroactive.
+      enabled: true
+      max_age: 90d
+      action: delete
     reclaim_apply_runs:
       # Recovery scan for stale Wards (ADR-027 Phase 2): a zombie claim of a
       # dead Acolyte (claimed/running with expired claim_expires_at) →

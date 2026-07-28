@@ -74,6 +74,14 @@ const (
 	// explicitly NOT soul_offline: the host is healthy and the operator should
 	// retry the keystroke, not go looking for a dead agent.
 	ErrCodeBusy = "soul_busy"
+	// ErrCodeRecordingUnavailable — the session could not be recorded, so it is
+	// not opened, or an open one is closed. Recording is not optional
+	// (ADR-0074(g)) and the operator cannot retry their way past it: this is
+	// Keeper's storage being unreachable, not the host being busy. Reported as
+	// its own code rather than folded into `internal` because it is the one
+	// Keeper-side failure whose fix is "the audit store is down", and a
+	// terminal that closed for that reason must not look like a crashed shell.
+	ErrCodeRecordingUnavailable = "recording_unavailable"
 	// ErrCodeInternal — Keeper-side failure (dispatch error, no Outbound wired).
 	ErrCodeInternal = "internal"
 )

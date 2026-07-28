@@ -1,6 +1,8 @@
 package config
 
 import (
+	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/souls-guild/soul-stack/shared/diag"
@@ -96,5 +98,62 @@ console:
 	}
 	if cfg.Console.MaxSessionsPerArchon != 0 {
 		t.Fatalf("max_sessions_per_archon = %d, want 0 so the default applies", cfg.Console.MaxSessionsPerArchon)
+	}
+}
+
+// --- recording (ADR-0074(g), NIM-145) ----------------------------------------
+
+// The recording sub-block parses and carries what policy IS allowed to decide.
+func TestKeeperConsoleRecording_BlockIsParsed(t *testing.T) {
+	cfg := loadKeeperOrFail(t, consoleBaseConfig+`
+console:
+  recording:
+    max_session_bytes: 1048576
+    retention: 720h
+`)
+	if cfg.Console == nil || cfg.Console.Recording == nil {
+		t.Fatal("console.recording block was dropped")
+	}
+	if cfg.Console.Recording.MaxSessionBytes != 1048576 {
+		t.Fatalf("max_session_bytes = %d, want 1048576", cfg.Console.Recording.MaxSessionBytes)
+	}
+	if cfg.Console.Recording.Retention != "720h" {
+		t.Fatalf("retention = %q, want 720h", cfg.Console.Recording.Retention)
+	}
+}
+
+// The absence of an on/off switch is the point, so it is pinned rather than
+// assumed. Recording is mandatory (ADR-0074(g)): policy may decide WHERE
+// recordings go and HOW LONG they are kept, not WHETHER a session is recorded,
+// because an operator who can choose an unrecorded shell makes the control
+// decorative. Adding such a key is an ADR amendment, and this test is where
+// that conversation starts.
+func TestKeeperConsoleRecording_HasNoEnableSwitch(t *testing.T) {
+	forbidden := []string{"enabled", "disabled", "enable", "disable", "off", "on", "optional", "mode"}
+
+	rt := reflect.TypeOf(KeeperConsoleRecording{})
+	for i := 0; i < rt.NumField(); i++ {
+		tag := rt.Field(i).Tag.Get("yaml")
+		key, _, _ := strings.Cut(tag, ",")
+		for _, bad := range forbidden {
+			if strings.EqualFold(key, bad) {
+				t.Fatalf("console.recording.%s exists — recording is not configurable (ADR-0074(g)); "+
+					"turning it into a switch needs an ADR amendment, not a config field", key)
+			}
+		}
+	}
+}
+
+// A malformed retention is caught in the semantic phase, like every other
+// duration in this config.
+func TestKeeperConsoleRecording_RejectsAMalformedRetention(t *testing.T) {
+	_, _, diags, err := LoadKeeperFromBytes("keeper.yml",
+		[]byte(consoleBaseConfig+"\nconsole:\n  recording:\n    retention: \"forever\"\n"),
+		ValidateOptions{})
+	if err != nil {
+		t.Fatalf("LoadKeeperFromBytes: %v", err)
+	}
+	if !diag.HasErrors(diags) {
+		t.Fatalf("a malformed retention was accepted: %+v", diags)
 	}
 }

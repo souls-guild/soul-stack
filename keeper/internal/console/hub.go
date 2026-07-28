@@ -81,6 +81,11 @@ type Session struct {
 
 	sink Sink
 
+	// recording is the session's mandatory recording (ADR-0074(g), NIM-145).
+	// Never nil for a session the Hub handed out: it is opened before the
+	// session is dispatched and the open fails if it cannot be.
+	recording Recording
+
 	// lastInput is the Unix-nano stamp of the last operator keystroke, for the
 	// idle sweep. Output does not touch it: a `tail -f` left running is exactly
 	// the abandoned terminal the sweep exists to reap.
@@ -136,6 +141,28 @@ var (
 	ErrSessionNotReady = errors.New("console: session is not ready for input yet")
 )
 
+// RecordingID returns the id of the session's recording, for the audit trail
+// and for NIM-148 to fetch the body by.
+func (s *Session) RecordingID() string {
+	if s.recording == nil {
+		return ""
+	}
+	return s.recording.ID()
+}
+
+// closeRecording finishes the session's recording.
+//
+// Nil-safe for one window: the recording's own writer goroutine is running
+// before [Hub.Open] has attached it to the session, so a failure raced into the
+// teardown path could otherwise arrive at a session that has no recording yet.
+// Nothing is queued at that point, so it is insurance rather than a live case —
+// but the failure mode it insures against is a panic in a console goroutine.
+func (s *Session) closeRecording(ctx context.Context, reason string) {
+	if s.recording != nil {
+		s.recording.Close(ctx, reason)
+	}
+}
+
 // HubDeps wires the session manager.
 type HubDeps struct {
 	// Dispatcher is required — without it there is nothing to talk to.
@@ -154,9 +181,16 @@ type HubDeps struct {
 
 	// AuditWriter records session open/close as facts. An interactive root
 	// shell is the most privileged thing an operator can do, so it is audited
-	// even though the keystrokes themselves are NIM-145's job (recording).
+	// independently of the recording — the one fact that survives every
+	// degradation of the recording path (ADR-0074(f)).
 	// nil → audit disabled (unit/dev).
 	AuditWriter audit.Writer
+
+	// Recorder is REQUIRED — [NewHub] refuses to build without one. That is
+	// where "recording cannot be turned off" is enforced (ADR-0074(g)): there
+	// is no nil-means-disabled branch to reach, no config key that produces
+	// one, and no second code path for an unrecorded session.
+	Recorder Recorder
 
 	Limits  Limits
 	Metrics *Metrics
@@ -186,6 +220,12 @@ func NewHub(deps HubDeps) (*Hub, error) {
 	}
 	if deps.Logger == nil {
 		return nil, errors.New("console: Hub logger is required")
+	}
+	// ADR-0074(g): a Hub that could run without a recorder would be a Hub that
+	// can open an unrecorded console, and no amount of configuration discipline
+	// downstream would take that branch away.
+	if deps.Recorder == nil {
+		return nil, errors.New("console: Hub recorder is required — console sessions are recorded unconditionally (ADR-0074(g))")
 	}
 	return &Hub{
 		deps:       deps,
@@ -249,6 +289,31 @@ func (h *Hub) Open(ctx context.Context, req OpenRequest) (*Session, error) {
 		return nil, err
 	}
 
+	// Recording, before anything that could produce a pty (ADR-0074(g)). The
+	// order is the whole guarantee: a shell that has already started cannot be
+	// un-started, so the decision "this session will be recorded" must be
+	// settled while the only thing at stake is an error frame.
+	rec, err := h.deps.Recorder.Open(ctx, RecordingSpec{
+		SessionID: sess.KeeperID,
+		Kind:      RecordingInteractive,
+		SID:       req.SID,
+		AID:       req.AID,
+		Cols:      req.Cols,
+		Rows:      req.Rows,
+		OnFailure: func(cause error) {
+			// The recording died after the session opened. A console that is no
+			// longer being recorded is closed, not degraded — including one
+			// sitting idle at a prompt, which is why this is a callback and not
+			// a check on the next keystroke.
+			h.closeUnrecorded(context.WithoutCancel(ctx), sess, cause, true)
+		},
+	})
+	if err != nil {
+		h.unregister(sess)
+		return nil, err
+	}
+	sess.recording = rec
+
 	// Claim the upstream route before the Soul can answer: ConsoleOpened may
 	// arrive on another Keeper instance within milliseconds, and it can only be
 	// forwarded here once this claim is visible.
@@ -256,18 +321,18 @@ func (h *Hub) Open(ctx context.Context, req OpenRequest) (*Session, error) {
 		h.deps.Cluster.ClaimSession(ctx, sess.KeeperID, sess.SID)
 	}
 
-	err := h.deps.Dispatcher.SendConsoleOpen(ctx, req.SID, &keeperv1.ConsoleOpen{
+	if err := h.deps.Dispatcher.SendConsoleOpen(ctx, req.SID, &keeperv1.ConsoleOpen{
 		SessionId: sess.KeeperID,
 		TargetSid: req.SID,
 		Cols:      req.Cols,
 		Rows:      req.Rows,
 		Shell:     req.Shell,
-	})
-	if err != nil {
+	}); err != nil {
 		h.unregister(sess)
 		if h.deps.Cluster != nil {
 			h.deps.Cluster.ReleaseSession(ctx, sess.KeeperID)
 		}
+		rec.Close(ctx, "dispatch failed")
 		return nil, fmt.Errorf("%w: %v", ErrSoulOffline, err)
 	}
 
@@ -277,9 +342,37 @@ func (h *Hub) Open(ctx context.Context, req OpenRequest) (*Session, error) {
 		slog.String("session_id", sess.KeeperID),
 		slog.String("sid", sess.SID),
 		slog.String("aid", sess.AID),
+		slog.String("recording_id", rec.ID()),
 		slog.String("transport", h.transportOf(ctx, req.SID)),
 	)
 	return sess, nil
+}
+
+// closeUnrecorded ends a session whose recording can no longer be kept.
+//
+// Fail-closed is only real if it holds AFTER the shell exists: a recording that
+// stops halfway leaves exactly the trail ADR-0074(g) says is not adequate — a
+// line saying a shell was opened, and no record of what was done with it.
+//
+// `notify` is false for the callers that RETURN the error, because the socket
+// turns that into the same frame and the operator should not read the same
+// close twice. The asynchronous path — a store that broke while the operator
+// was reading — has nobody to return to, so it notifies.
+func (h *Hub) closeUnrecorded(ctx context.Context, sess *Session, cause error, notify bool) {
+	if sess.closed.Load() {
+		return
+	}
+	h.deps.Metrics.IncRecordingFailure()
+	h.deps.Logger.Warn("console: closing session — its recording could not be kept",
+		slog.String("session_id", sess.KeeperID),
+		slog.String("sid", sess.SID),
+		slog.Any("error", cause),
+	)
+	h.Close(ctx, sess, "recording unavailable")
+	if notify {
+		sess.sink.DeliverError(NewError(sess.ClientID, ErrCodeRecordingUnavailable,
+			"console closed: session recording could not be kept ("+cause.Error()+")"))
+	}
 }
 
 // transportOf reports which carrier this Soul will use, from its announcement
@@ -351,8 +444,17 @@ func (h *Hub) lookup(keeperID string) *Session {
 }
 
 // Stdin forwards operator keystrokes to the pty.
+//
+// Recorded BEFORE it is dispatched, and the same order holds in the other
+// direction (see [Hub.deliverLocal]): a byte that reached the shell but not the
+// record is precisely the gap recording exists to close, and getting the order
+// wrong would make the guarantee true only while the store was healthy.
 func (h *Hub) Stdin(ctx context.Context, sess *Session, data []byte) error {
 	sess.touch()
+	if err := sess.recording.Input(data); err != nil {
+		h.closeUnrecorded(ctx, sess, err, false)
+		return err
+	}
 	return h.dispatch(ctx, sess, func(ctx context.Context) error {
 		return h.deps.Dispatcher.SendConsoleStdin(ctx, sess.SID, &keeperv1.ConsoleStdin{
 			SessionId: sess.KeeperID,
@@ -411,6 +513,10 @@ func (h *Hub) Resize(ctx context.Context, sess *Session, cols, rows uint32) erro
 		return nil
 	}
 	sess.touch()
+	if err := sess.recording.Resize(cols, rows); err != nil {
+		h.closeUnrecorded(ctx, sess, err, false)
+		return err
+	}
 	return h.dispatch(ctx, sess, func(ctx context.Context) error {
 		return h.deps.Dispatcher.SendConsoleResize(ctx, sess.SID, &keeperv1.ConsoleResize{
 			SessionId: sess.KeeperID,
@@ -457,6 +563,7 @@ func (h *Hub) Close(ctx context.Context, sess *Session, reason string) {
 			slog.Any("error", err),
 		)
 	}
+	sess.closeRecording(ctx, reason)
 	h.auditClosed(ctx, sess, reason)
 }
 
@@ -579,6 +686,14 @@ func (h *Hub) deliverLocal(ctx context.Context, sess *Session, msg *keeperv1.Fro
 
 	case *keeperv1.FromSoul_ConsoleChunk:
 		c := p.ConsoleChunk
+		// Recorded before delivery, so the operator never sees a byte that is
+		// not in the record. The recording therefore holds MORE than the pane
+		// did: a chunk the socket drops under backpressure is already recorded
+		// by the time it is dropped.
+		if err := sess.recording.Output(c.GetStream(), c.GetData(), c.GetDroppedBytes()); err != nil {
+			h.closeUnrecorded(ctx, sess, err, true)
+			return
+		}
 		h.deps.Metrics.AddOutputBytes(len(c.GetData()))
 		sess.sink.DeliverChunk(sess.ClientID, c.GetStream(), c.GetData(), c.GetDroppedBytes())
 
@@ -594,6 +709,7 @@ func (h *Hub) deliverLocal(ctx context.Context, sess *Session, msg *keeperv1.Fro
 				h.deps.Cluster.ReleaseSession(ctx, sess.KeeperID)
 			}
 			h.deps.Metrics.IncSessionTerminal(exitReasonName(e.GetReason()))
+			sess.closeRecording(ctx, "soul:"+exitReasonName(e.GetReason()))
 			h.auditClosed(ctx, sess, "soul:"+exitReasonName(e.GetReason()))
 		}
 		sess.sink.DeliverExit(NewExit(sess.ClientID, e.GetExitCode(), e.GetReason(), e.GetErrorMessage()))
@@ -728,18 +844,23 @@ func (h *Hub) CountFor(aid string) int {
 	return h.perAID[aid]
 }
 
+// auditOpened records the fact of the session. `recording_id` is the link from
+// the fact to the artifact — the audit log stays the index, and the recording
+// stays a separate, richer record (ADR-0074(f)).
 func (h *Hub) auditOpened(ctx context.Context, sess *Session) {
 	h.writeAudit(ctx, audit.EventConsoleOpened, sess, map[string]any{
-		"sid":        sess.SID,
-		"session_id": sess.KeeperID,
+		"sid":          sess.SID,
+		"session_id":   sess.KeeperID,
+		"recording_id": sess.RecordingID(),
 	})
 }
 
 func (h *Hub) auditClosed(ctx context.Context, sess *Session, reason string) {
 	h.writeAudit(ctx, audit.EventConsoleClosed, sess, map[string]any{
-		"sid":        sess.SID,
-		"session_id": sess.KeeperID,
-		"reason":     reason,
+		"sid":          sess.SID,
+		"session_id":   sess.KeeperID,
+		"recording_id": sess.RecordingID(),
+		"reason":       reason,
 	})
 }
 

@@ -22,6 +22,7 @@ import (
 
 	apimiddleware "github.com/souls-guild/soul-stack/keeper/internal/api/middleware"
 	"github.com/souls-guild/soul-stack/keeper/internal/console"
+	"github.com/souls-guild/soul-stack/keeper/internal/console/consoletest"
 	keepergrpc "github.com/souls-guild/soul-stack/keeper/internal/grpc"
 	keeperjwt "github.com/souls-guild/soul-stack/keeper/internal/jwt"
 	keeperv1 "github.com/souls-guild/soul-stack/proto/gen/go/keeper/v1"
@@ -237,8 +238,19 @@ func newConsoleTestServer(t *testing.T, rbac consoleRBAC, limits console.Limits)
 
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 	soul := &fakeSoul{autoOpen: true}
+	// The REAL recorder over an in-memory store: recording is mandatory
+	// (ADR-0074(g)), so a socket test that skipped it would be testing a Keeper
+	// that cannot exist. The size cap is off here — the backpressure test floods
+	// far past it on purpose, and the cap has its own guard in the console
+	// package; leaving it on would make one contract's test fail on the other's.
+	recorder, err := console.NewRecorder(consoletest.NewStore(),
+		console.RecorderConfig{MaxBytes: -1}, logger)
+	if err != nil {
+		t.Fatalf("NewRecorder: %v", err)
+	}
 	hub, err := console.NewHub(console.HubDeps{
 		Dispatcher: soul,
+		Recorder:   recorder,
 		Limits:     limits,
 		Logger:     logger,
 	})

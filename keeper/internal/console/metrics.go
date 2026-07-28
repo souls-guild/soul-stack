@@ -23,6 +23,10 @@ type Metrics struct {
 	outputBytes    prometheus.Counter
 	droppedBytes   prometheus.Counter
 	socketsActive  prometheus.Gauge
+	// recordingFailures is the alert signal of the recording plane: recording
+	// is mandatory, so every increment is a console an operator could not have
+	// or lost mid-session (ADR-0074(g)).
+	recordingFailures prometheus.Counter
 }
 
 // RegisterMetrics creates the collectors and registers them on the shared
@@ -52,8 +56,13 @@ func RegisterMetrics(r *obs.Registry) *Metrics {
 			Name: "keeper_console_sockets_active",
 			Help: "Operator WebSocket connections currently open on /v1/console.",
 		}),
+		recordingFailures: prometheus.NewCounter(prometheus.CounterOpts{
+			Name: "keeper_console_recording_failures_total",
+			Help: "Console sessions refused or closed because they could not be recorded (ADR-0074(g)).",
+		}),
 	}
-	r.Registerer().MustRegister(m.sessionsActive, m.sessionsTotal, m.outputBytes, m.droppedBytes, m.socketsActive)
+	r.Registerer().MustRegister(m.sessionsActive, m.sessionsTotal, m.outputBytes,
+		m.droppedBytes, m.socketsActive, m.recordingFailures)
 	return m
 }
 
@@ -96,6 +105,15 @@ func (m *Metrics) AddOutputBytes(n int) {
 func (m *Metrics) AddDroppedBytes(n int) {
 	if m != nil && n > 0 {
 		m.droppedBytes.Add(float64(n))
+	}
+}
+
+// IncRecordingFailure counts a console refused or closed because it could not
+// be recorded. Any non-zero rate is actionable: it means operators are losing
+// shells to the audit store rather than to the hosts they were working on.
+func (m *Metrics) IncRecordingFailure() {
+	if m != nil {
+		m.recordingFailures.Inc()
 	}
 }
 

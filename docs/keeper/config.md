@@ -700,6 +700,9 @@ wall of 30 hosts is one session on each of them.
 #   max_sessions_per_archon: 30   # live consoles one Archon may hold
 #   max_sessions_global: 256      # live consoles on THIS keeper instance
 #   idle_timeout: 30m             # close after this long without operator input
+#   recording:                     # recording is MANDATORY - these tune it, not whether it happens
+#     max_session_bytes: 268435456 # 256 MiB; reaching it CLOSES the session
+#     retention: 2160h             # 90d, stamped into the row on creation
 ```
 
 | Field | Type | Default | Meaning |
@@ -707,6 +710,17 @@ wall of 30 hosts is one session on each of them.
 | `max_sessions_per_archon` | `int` (≥0) | `30` | Live consoles one Archon may hold across all their sockets. Covers the walls the operator UI is built for; past that an operator is not reading output but running a fan-out, which is what an Errand is for. Exceeding it gives the pane `error{code: "limit_exceeded"}`. `0`/omitted → default. |
 | `max_sessions_global` | `int` (≥0) | `256` | Live consoles on ONE Keeper instance across all operators — a backstop when many operators each stay within their own limit. Every session costs a pty on some host plus a socket buffer here. `0`/omitted → default. |
 | `idle_timeout` | `duration` | `30m` | Close a session with no operator **input** for this long. Output does NOT count as activity: a `tail -f` left running overnight is exactly the abandoned root shell this reaps. `0s` disables the sweep; empty/omitted → default. |
+| `recording.max_session_bytes` | `int` | `268435456` (256 MiB) | Cap on one session's recording. Reaching it **closes the session** — a console that can no longer be recorded may not keep running ([ADR-0074(g)](../adr/0074-interactive-console-pty.md)). Sized so that hitting it means a runaway, not a long shift: ~18 hours of a full-screen `top` redrawing, or ~4 minutes of output at the Soul's default `rate_limit_kbps`. Negative removes the cap. `0`/omitted → default. |
+| `recording.retention` | `duration` | `2160h` (90d) | How long a recording is kept before `purge_old_console_recordings` deletes it. Stamped into `console_recordings.ttl_at` on creation, so a change applies to new recordings and never re-dates ones already taken. |
+
+**There is no `console.recording.enabled`, and its absence is deliberate.** Every
+console session is recorded, and a session whose recording cannot be started is
+not opened at all ([ADR-0074(g)](../adr/0074-interactive-console-pty.md), §Recording
+in [console.md](console.md)). Policy may decide where recordings go and how long
+they are kept; it may not decide whether a session is recorded, because an
+operator who can choose an unrecorded shell makes the control decorative. The
+absence is pinned by a guard test — adding the key is an ADR amendment, not a
+config change.
 
 ## `allow_unsafe_single_path_multi_keeper` (top-level)
 

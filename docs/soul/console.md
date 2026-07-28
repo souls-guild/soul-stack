@@ -9,6 +9,13 @@ manager and the browser transport (WebSocket `/v1/console`) are
 [keeper/console.md](../keeper/console.md); the `soul.console` permission and
 session recording are separate slices.
 
+Nothing here records anything. Session recording is mandatory
+([ADR-0074(g)](../adr/0074-interactive-console-pty.md)) and lives entirely on
+the Keeper side, in the Hub — see [keeper/console.md §9](../keeper/console.md).
+Deliberately: the host cannot be the recorder of what an operator did to it, and
+a Soul that is one carrier of two ([NIM-188](../adr/0074-interactive-console-pty.md))
+would have to record identically on both.
+
 ## 1. Why it is not an Errand
 
 An [Errand](../../docs/naming-rules.md) ([ADR-033](../adr/0033-errand.md)) is one

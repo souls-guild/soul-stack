@@ -11,6 +11,7 @@ import (
 
 	"github.com/souls-guild/soul-stack/keeper/internal/api/handlers"
 	"github.com/souls-guild/soul-stack/keeper/internal/augur"
+	"github.com/souls-guild/soul-stack/keeper/internal/console"
 	"github.com/souls-guild/soul-stack/keeper/internal/errand"
 	"github.com/souls-guild/soul-stack/keeper/internal/herald"
 	"github.com/souls-guild/soul-stack/keeper/internal/jwt"
@@ -193,6 +194,14 @@ type HandlerDeps struct {
 	// internal-error "not configured" (SigilSvc pattern).
 	ErrandDispatcher *errand.Dispatcher
 	ErrandStore      *errand.Store
+
+	// ConsoleRecorder records `keeper.soul.run-command` (NIM-147), the
+	// non-interactive half of the console plane. The SAME recorder the session
+	// manager uses (ADR-0074(g), NIM-145): one right reaching a shell two ways
+	// must not leave two kinds of record, and a second recording path would be
+	// the one that quietly falls behind. nil → the tool refuses to run a
+	// command at all, because an unrecorded shell is what the right forbids.
+	ConsoleRecorder console.Recorder
 
 	// VoyageDB / VoyageScenarioResolver / VoyageCommandResolver — Voyage
 	// contour (ADR-043, S5) for the keeper.voyage.{start,list,get} (+ cancel)
