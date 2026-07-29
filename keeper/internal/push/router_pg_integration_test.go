@@ -19,7 +19,7 @@ package push
 
 import (
 	"context"
-	"os"
+	"github.com/souls-guild/soul-stack/keeper/internal/integrationenv"
 	"testing"
 	"time"
 
@@ -35,8 +35,7 @@ import (
 // (SOUL_STACK_INTEGRATION_REQUIRE_DOCKER=1|true). Without it an unavailable
 // docker daemon skips instead of failing — but a skip is NOT a green run.
 func requireDockerPush() bool {
-	v := os.Getenv("SOUL_STACK_INTEGRATION_REQUIRE_DOCKER")
-	return v == "1" || v == "true"
+	return integrationenv.RequireDocker()
 }
 
 // newRouterPGPool spins a migrated Postgres for one test and returns a pool.

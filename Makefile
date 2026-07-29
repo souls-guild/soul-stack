@@ -236,11 +236,15 @@ test-race:
 # we pass `-tags=integration` explicitly here. `-count=1` disables the Go test cache
 # (the container spun up is new every time - nothing to cache).
 #
-# SOUL_STACK_INTEGRATION_REQUIRE_DOCKER=1 is the point of the target: without it a
-# TestMain whose container fails to come up logs "docker unavailable" and returns 0,
-# so whole packages silently do not run while the target reports success (that is how
-# 4 packages "passed" in the NIM-221 run). Override to 0 only to reproduce the
-# skip-when-no-docker behaviour deliberately.
+# SOUL_STACK_INTEGRATION_REQUIRE_DOCKER=1 used to be the point of this target: a
+# TestMain whose container failed to come up logged "docker unavailable" and returned
+# 0, so whole packages silently did not run while the target reported success (that is
+# how 4 packages "passed" in the NIM-221 run). Since NIM-238 that is the DEFAULT
+# everywhere — `-tags=integration` is taken as the statement that you want the suites —
+# so this line no longer grants anything; it is kept because callers and CI logs still
+# name it, and because a target that says what it requires is easier to read than one
+# that relies on a default. The opt-OUT is now explicit and lives in
+# keeper/internal/integrationenv: SOUL_STACK_INTEGRATION_SKIP_DOCKER=1.
 #
 # INTEGRATION_PARALLEL caps how many packages - i.e. how many container sets - start
 # at once. Unbounded, the default GOMAXPROCS-wide start swamps the docker daemon and
@@ -994,6 +998,16 @@ check-vuln:
 # (the scenario's entry point; secondary files are resolved via include: from main.yml).
 # An empty category (no files under the glob) is skipped without error. Any
 # non-zero exit from soul-lint on a committed example fails the gate.
+#
+# LINT_MODULES_DIR feeds `validate-scenario --modules` (NIM-228): with it, a plugin
+# module's `params:` are checked against its resolved manifest by the same four checks
+# that `core.*` already gets. Without it the linter can only say
+# `plugin_params_unchecked` and move on — which is what this corpus did for every
+# `community.redis` step, even though the module manifest sits in the SAME tree
+# (NIM-294). The corpus is the one place where both halves are present, so leaving the
+# flag off meant validating it without the check it exists to demonstrate.
+LINT_MODULES_DIR ?= examples/module
+
 lint: build
 	@for f in examples/destiny/*/destiny.yml; do \
 		[ -e "$$f" ] || continue; \
@@ -1013,7 +1027,7 @@ lint: build
 	@for f in examples/service/*/scenario/*/main.yml; do \
 		[ -e "$$f" ] || continue; \
 		echo "validate-scenario $$f"; \
-		$(LINT_BIN) validate-scenario "$$f" || exit 1; \
+		$(LINT_BIN) validate-scenario "$$f" --modules $(LINT_MODULES_DIR) || exit 1; \
 	done
 	@echo "lint: examples/ corpus is valid"
 

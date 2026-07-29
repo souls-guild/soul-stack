@@ -11,6 +11,7 @@ package cadence_test
 import (
 	"context"
 	"encoding/json"
+	"github.com/souls-guild/soul-stack/keeper/internal/integrationenv"
 	"log"
 	"os"
 	"testing"
@@ -27,8 +28,7 @@ import (
 var integrationPool *pgxpool.Pool
 
 func requireDocker() bool {
-	v := os.Getenv("SOUL_STACK_INTEGRATION_REQUIRE_DOCKER")
-	return v == "1" || v == "true"
+	return integrationenv.RequireDocker()
 }
 
 func TestMain(m *testing.M) { os.Exit(run(m)) }

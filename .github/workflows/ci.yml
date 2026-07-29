@@ -31,7 +31,15 @@ env:
   PROTOC_VERSION: "34.1"
   PROTOC_GEN_GO_VERSION: "v1.36.11"
   PROTOC_GEN_GO_GRPC_VERSION: "v1.6.2"
-  GO_VERSION: "1.26.4"
+  # MUST track the `toolchain` line in go.work. It drifted one patch behind (1.26.4
+  # while go.work asked for 1.26.5) and that alone turned two jobs red on every push:
+  # GO-2026-5856 (crypto/tls ECH privacy leak) is "found in go1.26.4, fixed in
+  # go1.26.5", so `make check` (which contains check-vuln) and the govulncheck job
+  # both failed on a stdlib the repository had already moved off. Locally nobody saw
+  # it — a developer's toolchain honours go.work. A CI that is red for a reason the
+  # tree has already fixed teaches everyone to stop reading it, which is the whole
+  # problem NIM-238 is about.
+  GO_VERSION: "1.26.5"
 
 jobs:
   # Main required gate. Fully reproduces `make check`:

@@ -1,12 +1,13 @@
+//go:build integration
+
 package reaper_test
 
-import "os"
+import "github.com/souls-guild/soul-stack/keeper/internal/integrationenv"
 
-// requireDocker is true when CI requires Docker. It is used by the integration
-// test set to choose skip vs fatal. The file is intentionally not under
-// `//go:build integration`: an empty test binary without the build tag will not
-// break, and with the build tag the function is available.
+// requireDocker — package-local shim over the single policy decision
+// ([integrationenv.RequireDocker]): a container-setup failure fails this suite
+// unless a skip was asked for out loud. Kept per package so the call sites read
+// the same as before; the decision itself lives in one place (NIM-238).
 func requireDocker() bool {
-	v := os.Getenv("SOUL_STACK_INTEGRATION_REQUIRE_DOCKER")
-	return v == "1" || v == "true"
+	return integrationenv.RequireDocker()
 }

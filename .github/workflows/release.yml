@@ -29,7 +29,7 @@ permissions:
 
 env:
   # Go toolchain from go.work, synced with ci.yml.
-  GO_VERSION: "1.26.4"
+  GO_VERSION: "1.26.5"
 
 jobs:
   release:

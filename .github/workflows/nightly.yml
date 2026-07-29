@@ -31,7 +31,7 @@ env:
   PROTOC_VERSION: "34.1"
   PROTOC_GEN_GO_VERSION: "v1.36.11"
   PROTOC_GEN_GO_GRPC_VERSION: "v1.6.2"
-  GO_VERSION: "1.26.4"
+  GO_VERSION: "1.26.5"
 
 jobs:
   # Race-detector across the whole codebase. Hot pubsub/lease paths carry a

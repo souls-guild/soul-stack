@@ -20,6 +20,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/souls-guild/soul-stack/keeper/internal/integrationenv"
 	"io"
 	"log"
 	"log/slog"
@@ -87,8 +88,7 @@ func integrationRun(m *testing.M) int {
 // causes a fail instead of a skip (as in the existing
 // keeper/internal/redis/require_docker_test.go).
 func requireDocker() bool {
-	v := os.Getenv("SOUL_STACK_INTEGRATION_REQUIRE_DOCKER")
-	return v == "1" || v == "true"
+	return integrationenv.RequireDocker()
 }
 
 // integrationLogger — discard-logger, shared by all integration tests.

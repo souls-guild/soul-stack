@@ -9,6 +9,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/souls-guild/soul-stack/keeper/internal/integrationenv"
 	"log"
 	"os"
 	"strings"
@@ -28,8 +29,7 @@ var integrationPool *pgxpool.Pool
 func TestMain(m *testing.M) { os.Exit(run(m)) }
 
 func requireDocker() bool {
-	v := os.Getenv("SOUL_STACK_INTEGRATION_REQUIRE_DOCKER")
-	return v == "1" || v == "true"
+	return integrationenv.RequireDocker()
 }
 
 func run(m *testing.M) int {
