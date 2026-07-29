@@ -132,9 +132,92 @@ type outFrame struct {
 	payload []byte
 	// control marks a lifecycle frame (opened/exit/error). Control frames are
 	// never dropped — losing an `opened` strands a pane on "connecting" and
-	// losing an `exit` leaves it live forever — so a full queue closes the
-	// socket instead, and kill-on-disconnect reaps the sessions behind it.
+	// losing an `exit` leaves it live forever — so room is made by discarding
+	// queued output instead, and only a queue holding nothing but control frames
+	// costs the socket.
 	control bool
+
+	// clientID, dataLen and reported charge a frame back to its session if it is
+	// displaced before it can be written: once marshalled, the payload no longer
+	// says whose it was. `reported` is the drop count this frame was already
+	// carrying — losing the frame loses that accounting too, so it has to be
+	// handed back with the rest.
+	clientID string
+	dataLen  int
+	reported uint64
+}
+
+// outQueue is the socket's send queue: a bounded FIFO the writer drains.
+//
+// A slice under a mutex rather than a channel, because a full queue has to give
+// up its OLDEST output rather than refuse the newest, and a channel cannot be
+// looked into — its head may well be a control frame, which must never be
+// dropped. Taking one frame out of the middle leaves every other frame in the
+// order it arrived, which is the whole of what a terminal needs.
+type outQueue struct {
+	mu     sync.Mutex
+	frames []outFrame
+	max    int
+	// wake carries a single edge: "there is something to write". Buffered by one
+	// so a producer never blocks and never needs the writer to be idle.
+	wake chan struct{}
+}
+
+func newOutQueue(max int) *outQueue {
+	return &outQueue{frames: make([]outFrame, 0, max), max: max, wake: make(chan struct{}, 1)}
+}
+
+// push appends a frame, making room by discarding the oldest CHUNK when the
+// queue is full. It returns whatever it displaced, and false if it could make no
+// room at all — a queue of nothing but control frames has nothing to give, and
+// what that means is the caller's to decide.
+func (q *outQueue) push(f outFrame) (evicted outFrame, ok bool) {
+	q.mu.Lock()
+	if len(q.frames) >= q.max {
+		oldest := -1
+		for i, queued := range q.frames {
+			if !queued.control {
+				oldest = i
+				break
+			}
+		}
+		if oldest < 0 {
+			q.mu.Unlock()
+			return outFrame{}, false
+		}
+		evicted = q.frames[oldest]
+		q.frames = append(q.frames[:oldest], q.frames[oldest+1:]...)
+	}
+	q.frames = append(q.frames, f)
+	q.mu.Unlock()
+	q.signal()
+	return evicted, true
+}
+
+// pop takes the oldest frame, re-arming the writer if more remain. One frame per
+// wake-up on purpose: it keeps the writer's ping and drop-flush tickers in the
+// rotation instead of starving them behind a long backlog.
+func (q *outQueue) pop() (outFrame, bool) {
+	q.mu.Lock()
+	if len(q.frames) == 0 {
+		q.mu.Unlock()
+		return outFrame{}, false
+	}
+	f := q.frames[0]
+	q.frames = append(q.frames[:0], q.frames[1:]...)
+	more := len(q.frames) > 0
+	q.mu.Unlock()
+	if more {
+		q.signal()
+	}
+	return f, true
+}
+
+func (q *outQueue) signal() {
+	select {
+	case q.wake <- struct{}{}:
+	default:
+	}
 }
 
 // consoleConn is one operator socket multiplexing N console sessions.
@@ -155,7 +238,7 @@ type consoleConn struct {
 	// test compressed it).
 	writeWait time.Duration
 
-	out  chan outFrame
+	out  *outQueue
 	done chan struct{}
 	// closeOnce guards `done`, which both pumps may close.
 	closeOnce sync.Once
@@ -198,7 +281,7 @@ func newConsoleConn(ws *websocket.Conn, aid string, deps *consoleWSDeps) *consol
 		metrics:   deps.Metrics,
 		writeWait: writeWait,
 
-		out:      make(chan outFrame, consoleOutQueueDepth),
+		out:      newOutQueue(consoleOutQueueDepth),
 		done:     make(chan struct{}),
 		sessions: make(map[string]*console.Session),
 		dropped:  make(map[string]*atomic.Uint64),
@@ -530,7 +613,11 @@ func (c *consoleConn) writePump() {
 				websocket.FormatCloseMessage(websocket.CloseNormalClosure, ""))
 			return
 
-		case f := <-c.out:
+		case <-c.out.wake:
+			f, ok := c.out.pop()
+			if !ok {
+				continue
+			}
 			_ = c.ws.SetWriteDeadline(time.Now().Add(c.writeWait))
 			if err := c.ws.WriteMessage(websocket.TextMessage, f.payload); err != nil {
 				c.reportWriteFailure("console: operator socket write failed", err)
@@ -597,10 +684,12 @@ func (c *consoleConn) flushDropped() {
 		if err != nil {
 			continue
 		}
-		select {
-		case c.out <- outFrame{payload: payload}:
-		default:
-			// Still congested: hand the count back and try on the next tick.
+		// The marker carries the count in `reported`, not in `dataLen`: it has no
+		// output of its own, so being displaced must hand back exactly what it
+		// was going to report and nothing more.
+		if !c.enqueue(outFrame{payload: payload, clientID: pending.clientID, reported: pending.bytes}) {
+			// Nothing to give up but lifecycle frames: hand the count back and
+			// try on the next tick.
 			c.creditDropped(pending.clientID, pending.bytes)
 			return
 		}
@@ -683,14 +772,35 @@ func (c *consoleConn) DeliverChunk(sessionID string, stream keeperv1.ConsoleStre
 		return
 	}
 
-	select {
-	case c.out <- outFrame{payload: payload}:
-	default:
+	if !c.enqueue(outFrame{
+		payload:  payload,
+		clientID: sessionID,
+		dataLen:  len(data),
+		reported: pending,
+	}) {
+		// Nothing in the queue could be given up — it is all lifecycle frames.
 		// Put the accounting back: this chunk's bytes plus whatever we were
 		// already carrying belong to the next one that gets through.
 		counter.Add(pending + uint64(len(data)))
 		c.metrics.AddDroppedBytes(len(data))
 	}
+}
+
+// enqueue hands a frame to the writer, charging back whatever it displaced.
+//
+// A displaced chunk was already counted as delivered-or-not by nobody: it never
+// reached the socket, so both its own bytes and the drop count it was carrying
+// go back to its session, to be reported on the next chunk that does get out.
+func (c *consoleConn) enqueue(f outFrame) bool {
+	evicted, ok := c.out.push(f)
+	if !ok {
+		return false
+	}
+	if evicted.dataLen > 0 || evicted.reported > 0 {
+		c.creditDropped(evicted.clientID, uint64(evicted.dataLen)+evicted.reported)
+		c.metrics.AddDroppedBytes(evicted.dataLen)
+	}
+	return true
 }
 
 func (c *consoleConn) DeliverOpened(f console.OpenedFrame) { c.sendControl(f) }
@@ -707,9 +817,14 @@ func (c *consoleConn) sendControl(frame any) {
 		return
 	}
 	select {
-	case c.out <- outFrame{payload: payload, control: true}:
 	case <-c.done:
+		return
 	default:
+	}
+	if !c.enqueue(outFrame{payload: payload, control: true}) {
+		// Every frame ahead of this one is also a lifecycle frame, so there is
+		// nothing cheap left to give up. That is a peer which stopped reading
+		// entirely, not one merely behind.
 		c.logger.Warn("console: control queue full — closing socket",
 			slog.String("aid", c.aid))
 		c.shutdown(console.CloseSocketCongested)

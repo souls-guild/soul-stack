@@ -848,6 +848,105 @@ func TestConsoleWS_PtyOutputIsCompressedOnTheWire(t *testing.T) {
 	waitFor(t, "the session to be reaped", func() bool { return s.hub.Count() == 0 })
 }
 
+// --- freshness under flood (NIM-254) ---
+
+// floodUntilQueueIsFull pushes chunks past the socket queue with nobody reading,
+// and returns the session id. The dial must be the uncompressed one: with
+// permessage-deflate the writer clears repetitive output faster than this can
+// produce it, and the queue never fills at all (measured in NIM-254).
+func floodUntilQueueIsFull(t *testing.T, s *consoleTestServer, n int) string {
+	t.Helper()
+	id := s.soul.sessionIDs()[0]
+	chunk := bytes.Repeat([]byte("stale output nobody will ever read\n"), 1900)
+	for i := 0; i < n; i++ {
+		s.soul.sendChunk(id, chunk, uint64(i+1), 0)
+	}
+	return id
+}
+
+// A terminal is worth reading because it is CURRENT. Under a sustained flood the
+// socket must give up its oldest queued output rather than refuse the newest —
+// otherwise the operator is pinned to a screen from minutes ago while the host
+// races on, and the newest output, the only part they actually want, is exactly
+// what gets thrown away.
+func TestConsoleWS_FloodKeepsTheNewestOutputNotTheOldest(t *testing.T) {
+	s := newConsoleTestServer(t, allowAllRBAC{}, console.Limits{})
+	ws := s.dial(t)
+
+	writeFrame(t, ws, map[string]any{"type": "open", "session_id": "pane-1", "sid": "host-a"})
+	readFrameOfType(t, ws, "opened")
+	id := floodUntilQueueIsFull(t, s, consoleOutQueueDepth*8)
+
+	// The last thing the host said. Under drop-the-newest this is precisely the
+	// chunk that never arrives.
+	const sentinel = "THE-LATEST-LINE-THE-OPERATOR-NEEDS"
+	s.soul.sendChunk(id, []byte(sentinel), 9999, 0)
+
+	var seen bool
+	for !seen {
+		_ = ws.SetReadDeadline(time.Now().Add(10 * time.Second))
+		_, raw, err := ws.ReadMessage()
+		if err != nil {
+			break
+		}
+		var m map[string]any
+		if err := json.Unmarshal(raw, &m); err != nil {
+			t.Fatalf("decode: %v", err)
+		}
+		if m["type"] != "chunk" {
+			continue
+		}
+		data, _ := m["data"].(string)
+		decoded, err := base64.StdEncoding.DecodeString(data)
+		if err != nil {
+			t.Fatalf("decode chunk data: %v", err)
+		}
+		seen = bytes.Contains(decoded, []byte(sentinel))
+	}
+	if !seen {
+		t.Fatal("the newest chunk never reached the operator - the queue refused it and kept stale output instead")
+	}
+
+	_ = ws.Close()
+	waitFor(t, "the flooded session to be reaped", func() bool { return s.hub.Count() == 0 })
+}
+
+// Making room must never come out of a lifecycle frame, and a congested queue
+// must no longer cost the whole socket.
+//
+// `exit` is the frame that frees the pane; losing it leaves a terminal live
+// forever. Before NIM-254 a full queue could not take one at all, so the socket
+// was closed and every session behind it reaped — a flood on ONE pane killing
+// the operator's whole wall. Now the control frame displaces stale output, which
+// is the cheaper thing to lose by any measure.
+func TestConsoleWS_CongestedQueueDeliversExitInsteadOfKillingTheSocket(t *testing.T) {
+	s := newConsoleTestServer(t, allowAllRBAC{}, console.Limits{})
+	ws := s.dial(t)
+
+	writeFrame(t, ws, map[string]any{"type": "open", "session_id": "pane-1", "sid": "host-a"})
+	readFrameOfType(t, ws, "opened")
+	id := floodUntilQueueIsFull(t, s, consoleOutQueueDepth*8)
+
+	s.soul.sendExit(id, 0, keeperv1.ConsoleExitReason_CONSOLE_EXIT_REASON_PROCESS_EXITED)
+
+	var exited bool
+	for !exited {
+		_ = ws.SetReadDeadline(time.Now().Add(10 * time.Second))
+		_, raw, err := ws.ReadMessage()
+		if err != nil {
+			t.Fatalf("socket died before the exit arrived (%v) - a congested queue must not cost the socket", err)
+		}
+		var m map[string]any
+		if err := json.Unmarshal(raw, &m); err != nil {
+			t.Fatalf("decode: %v", err)
+		}
+		exited = m["type"] == "exit" && m["session_id"] == "pane-1"
+	}
+
+	_ = ws.Close()
+	waitFor(t, "the session slot to be released", func() bool { return s.hub.Count() == 0 })
+}
+
 // --- limits ---
 
 func TestConsoleWS_PerOperatorLimit(t *testing.T) {

@@ -150,11 +150,17 @@ properties are non-negotiable:
 So each socket has one bounded queue (256 frames) drained by a single writer:
 
 - **chunks** are dropped when it is full, and their byte count accumulates per
-  session;
+  session. What goes is the **oldest** queued chunk, not the arriving one: a
+  terminal is worth reading because it is current, and an operator pinned to a
+  screen from minutes ago while the newest output is discarded has a session that
+  is complete and useless (NIM-254). Nothing is hidden by it — the recording is
+  written before the socket is offered the chunk, so playback still holds
+  everything the host produced;
 - **lifecycle frames** (`opened`/`exit`/`error`) are never dropped — losing an
   `opened` strands a pane on "connecting", losing an `exit` leaves it live
-  forever. A full queue at that point means the peer stopped reading entirely, so
-  the socket is closed and its sessions reaped;
+  forever. A full queue makes room for one by discarding stale output instead.
+  Only a queue holding **nothing but** lifecycle frames closes the socket: that
+  is a peer which stopped reading entirely rather than one merely behind;
 - the accumulated drop count is reported in `dropped_bytes` on the next chunk,
   and — if the flood has ENDED and there is no next chunk — flushed within 250 ms
   as a marker chunk with empty `data`.

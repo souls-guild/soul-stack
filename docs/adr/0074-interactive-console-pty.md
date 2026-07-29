@@ -206,3 +206,19 @@ Closes the playback line of **Deferred**. NIM-145 made every session recorded an
 **What is NOT claimed.** Playback shows what Keeper recorded, which is a superset of what the operator saw (a chunk is recorded before backpressure can drop it) and a subset of what the host produced (output the Soul dropped never arrived, and appears as a gap marker). A recording with a NULL `finished_at` replays to where the writer stopped. None of that is new here — it is the recording's shape (NIM-145), and the read path neither hides nor repairs it.
 
 **Impl** — NIM-148. The browser player over this API is web-side work and is not part of this amendment.
+
+## Amendment 2026-07-29 (NIM-254) — a full queue gives up its oldest output, not its newest
+
+**What changed.** The socket's send queue no longer refuses an arriving chunk when it is full. It discards the **oldest queued chunk** and takes the new one. Lifecycle frames are still never discarded, and a queue holding nothing but lifecycle frames still closes the socket — but that is now the only case that does, where before any congestion at the moment a control frame arrived was enough.
+
+**Why.** (e) promised that loss under a flood is counted and reported, and it is. What it did not say is *which* loss, and refusing the newest turns out to be the wrong end. A terminal is worth reading because it is current: an operator pinned to a screen the host produced minutes ago, while the newest output — the only part they were waiting for — is thrown away, has a session that is complete and useless. This is what a terminal over a slow line has always done, and it is the same bargain the dedicated stream already makes at the other end (NIM-188 amendment).
+
+Nothing is hidden by it. The recording is written **before** the socket is offered the chunk, so playback still holds everything the host produced; the gap the operator saw is reported to the operator, and the audit trail is unaffected.
+
+**Measured, not assumed.** On `release/R5` with permessage-deflate already in place (NIM-274), a client that stops reading must drain a full queue before a gap can be reported to it. That drain is 22.4 MB of wire on output that does not compress — a `cat` of a binary, a base64 blob — which is 13.5 s on a 10 Mbit/s link and 67 s on a mobile one, and compression buys nothing there (×1.0). On ordinary varied terminal output it is 4.0 MB, 3.2 s and 16 s. The marker was never in the wrong *place* — it sits exactly where the gap is — so giving it a privileged path would have announced a gap ahead of the output preceding it, which for a terminal that renders in order is worse. The queue's staleness was the whole of the problem.
+
+**A control frame now displaces output rather than the socket.** `opened`/`exit`/`error` cannot be dropped: losing an `opened` strands a pane on "connecting", losing an `exit` leaves a terminal live forever. Before this, a full queue at the moment one arrived closed the whole socket and reaped every session behind it — a flood on one pane killing an operator's entire wall. Stale output is cheaper than that by any measure, so the control frame takes its place.
+
+**Cost.** The queue stops being a channel and becomes a bounded slice under a mutex: a channel cannot be looked into, and its head may be a control frame. Removing one frame from the middle leaves every other frame in arrival order, which is the whole of what a terminal needs. The writer still takes one frame per wake-up, so its ping and drop-flush tickers keep their turn instead of starving behind a backlog.
+
+**Impl** — NIM-254. Guards: the newest chunk always reaches the operator under a sustained flood; a congested queue delivers `exit` instead of killing the socket.
