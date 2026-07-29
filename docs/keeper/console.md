@@ -557,11 +557,37 @@ matters.
 | Metric | Meaning |
 |---|---|
 | `keeper_console_sessions_active` | Live sessions on this instance. The leak signal — it must return to zero after every operator disconnects. |
-| `keeper_console_sessions_total{reason}` | Terminal sessions by `ConsoleExitReason`, plus `orphan_reaped` for a console killed because its socket's Keeper died. |
+| `keeper_console_sessions_total{reason}` | Terminal sessions by reason: the `ConsoleExitReason` family for an exit the Soul reported, `orphan_reaped` for a console killed because its socket's Keeper died, and the Keeper-side reasons below for one Keeper itself closed. |
 | `keeper_console_output_bytes_total` | Output forwarded toward operators. |
 | `keeper_console_dropped_bytes_total` | Output dropped by Keeper-side backpressure. |
 | `keeper_console_sockets_active` | Open operator WebSockets. |
 | `keeper_console_recording_failures_total` | Sessions refused or closed because they could not be recorded. Recording is mandatory, so any non-zero rate is actionable: operators are losing shells to the audit store rather than to the hosts they were working on. |
+
+The Keeper-side reasons are a closed set — a label is never built from a session
+id or a host, or the family's cardinality would scale with traffic
+([ADR-024](../adr/0024-observability.md) §2.2). Each also carries a sentence,
+which is what reaches the Soul's log through `ConsoleClose`, the recording's
+`close_reason` and the audit trail:
+
+| `reason` | What happened |
+|---|---|
+| `operator_detached` | The operator closed one pane. The socket and its other sessions live on. |
+| `operator_socket_closed` | The socket ended from the read side — tab closed, page navigated away, network dropped. The ordinary end of a console. |
+| `operator_socket_write_failed` | A write to the socket failed, so every pty on it died at once. See below. |
+| `operator_socket_unreachable` | The keepalive ping could not be written — the peer is gone and TCP has not noticed yet. |
+| `operator_socket_congested` | A lifecycle frame found the outbound queue full. Control frames are never dropped, so the socket goes instead. |
+| `idle_timeout` | No operator input for `idle_timeout`. |
+| `recording_unavailable` | The session could no longer be recorded, and a console that stops being recorded stops. |
+
+`operator_socket_write_failed` is the one worth an alert, and the one an operator
+will come asking about: it takes the *whole wall* down at once, and nothing can
+be sent to the browser to explain it — the connection is unusable after a failed
+write, so there is no close frame to carry a code and the client sees only an
+abnormal closure. Keeper therefore reports it at `WARN`, with the Archon and the
+number of sessions it reaped. A write failing *during* teardown is a different
+event and stays at `DEBUG`: teardown closes the socket out from under a writer
+parked mid-frame on purpose, so that failure is Keeper's own doing and happens on
+every ordinary disconnect that had output in flight (NIM-253).
 
 ## 11. Known gaps
 
@@ -578,3 +604,11 @@ matters.
 - **Cross-instance chunk loss** is silent in one case: a bridged frame dropped by
   a congested Redis forward channel is logged but not counted in
   `dropped_bytes`, since the accounting lives on the socket side.
+- **The client is never told why a socket died on the write side.** gorilla
+  cannot reuse a connection after a failed write, so there is no close frame left
+  to carry a code and the browser sees a bare abnormal closure (1006) — it cannot
+  distinguish "you fell behind" from "Keeper went away", and neither can the
+  operator looking at the UI. The server-side answer is the `WARN` and the
+  `reason` label above. Closing that gap needs the reason to travel out of band
+  (the reconnect carrying a query for the last socket's fate, say), which is a
+  contract change on both sides.

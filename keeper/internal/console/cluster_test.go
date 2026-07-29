@@ -332,7 +332,7 @@ func TestCluster_ClaimIsPublishedAndReleased(t *testing.T) {
 		t.Fatalf("claim sid = %q, want host-x", owner.SID)
 	}
 
-	node.hub.Close(ctx, sess, "operator detached")
+	node.hub.Close(ctx, sess, CloseOperatorDetached)
 	owner, _ = keeperredis.ReadConsoleSessionOwner(ctx, rdb, sess.KeeperID)
 	if owner.KID != "" {
 		t.Fatalf("claim owner after close = %q, want it released", owner.KID)

@@ -245,8 +245,16 @@ func newConsoleTestServer(t *testing.T, rbac consoleRBAC, limits console.Limits)
 // production value. Zero keeps the default.
 func newConsoleTestServerWriteWait(t *testing.T, rbac consoleRBAC, limits console.Limits, writeWait time.Duration) *consoleTestServer {
 	t.Helper()
+	return newConsoleTestServerLogging(t, rbac, limits, writeWait,
+		slog.New(slog.NewTextHandler(io.Discard, nil)))
+}
 
-	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+// newConsoleTestServerLogging is newConsoleTestServerWriteWait with Keeper's own
+// logger supplied, for tests that assert on what the socket plane REPORTS
+// rather than on what it does.
+func newConsoleTestServerLogging(t *testing.T, rbac consoleRBAC, limits console.Limits, writeWait time.Duration, logger *slog.Logger) *consoleTestServer {
+	t.Helper()
+
 	soul := &fakeSoul{autoOpen: true}
 	// The REAL recorder over an in-memory store: recording is mandatory
 	// (ADR-0074(g)), so a socket test that skipped it would be testing a Keeper
@@ -1164,4 +1172,185 @@ func TestConsoleWS_ExitRacingCloseReleasesSlotOnce(t *testing.T) {
 			t.Fatalf("open %d returned %v, want opened - the counter was corrupted by the race", i, f)
 		}
 	}
+}
+
+// --- diagnosing a socket that died on the write side (NIM-253) ---
+
+// warnCapture collects WARN+ records, so a test can assert on what an operator
+// would actually find in the log at a production level.
+type warnCapture struct {
+	mu      sync.Mutex
+	records []slog.Record
+}
+
+func (h *warnCapture) Enabled(_ context.Context, lvl slog.Level) bool { return lvl >= slog.LevelWarn }
+
+func (h *warnCapture) Handle(_ context.Context, r slog.Record) error {
+	h.mu.Lock()
+	h.records = append(h.records, r)
+	h.mu.Unlock()
+	return nil
+}
+
+func (h *warnCapture) WithAttrs(_ []slog.Attr) slog.Handler { return h }
+func (h *warnCapture) WithGroup(_ string) slog.Handler      { return h }
+
+// find returns the first captured record whose message contains sub.
+func (h *warnCapture) find(sub string) (slog.Record, bool) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	for _, r := range h.records {
+		if strings.Contains(r.Message, sub) {
+			return r, true
+		}
+	}
+	return slog.Record{}, false
+}
+
+// dump renders everything captured, for a failure message that says what WAS
+// logged rather than only what was not.
+func (h *warnCapture) dump() string {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if len(h.records) == 0 {
+		return "(nothing at WARN or above)"
+	}
+	var b strings.Builder
+	for _, r := range h.records {
+		b.WriteString("  " + r.Level.String() + " " + r.Message)
+		r.Attrs(func(a slog.Attr) bool {
+			b.WriteString(" " + a.Key + "=" + a.Value.String())
+			return true
+		})
+		b.WriteString("\n")
+	}
+	return b.String()
+}
+
+// attr returns the value of one attribute of a record.
+func recordAttr(r slog.Record, key string) (string, bool) {
+	var out string
+	var found bool
+	r.Attrs(func(a slog.Attr) bool {
+		if a.Key == key {
+			out, found = a.Value.String(), true
+			return false
+		}
+		return true
+	})
+	return out, found
+}
+
+// A socket that dies because a write failed must say so at a level an operator
+// runs with.
+//
+// This is the event NIM-242 stopped hiding and left unexplained: the write
+// failed, so gorilla's connection is unusable, so kill-on-disconnect reaps
+// EVERY pty on that socket at once. The operator sees their whole wall die.
+// Nothing can tell them why over the socket — it is gone, and no close frame
+// can be written down a connection that just failed a write — so the log is the
+// only place the answer can exist, and it was Debug.
+func TestConsoleWS_WriteFailureIsReportedAtWarn(t *testing.T) {
+	logs := &warnCapture{}
+	// Compressed budget: the invariant is what gets REPORTED when the write
+	// gives up, and the production value is too generous to sit and wait for.
+	s := newConsoleTestServerLogging(t, allowAllRBAC{}, console.Limits{},
+		300*time.Millisecond, slog.New(logs))
+	ws := s.dial(t)
+
+	writeFrame(t, ws, map[string]any{"type": "open", "session_id": "pane-1", "sid": "host-a"})
+	readFrameOfType(t, ws, "opened")
+	id := s.soul.sessionIDs()[0]
+
+	// Past the kernel socket buffers so the writer parks on the SOCKET, but well
+	// inside the queue so nothing is dropped. The client reads nothing from here.
+	chunk := bytes.Repeat([]byte("x"), 64<<10)
+	for i := 0; i < consoleOutQueueDepth/2; i++ {
+		s.soul.sendChunk(id, chunk, uint64(i+1), 0)
+	}
+
+	waitFor(t, "the sessions to be reaped once the writer gave up",
+		func() bool { return s.hub.Count() == 0 })
+	// The reap log is written after the pumps join, which the count does not
+	// wait for.
+	waitFor(t, "the socket to report why it died", func() bool {
+		_, ok := logs.find("write failed")
+		return ok
+	})
+
+	rec, _ := logs.find("write failed")
+	if aid, ok := recordAttr(rec, "aid"); !ok || aid != consoleTestAID {
+		t.Errorf("write failure logged without the operator: aid=%q ok=%v", aid, ok)
+	}
+
+	// And the reap itself must name the cause, because that line is the one
+	// carrying how many ptys went with it.
+	reap, ok := logs.find("sessions reaped")
+	if !ok {
+		t.Fatalf("a socket that lost every session to a failed write reaped them quietly; logged:\n%s", logs.dump())
+	}
+	if reason, _ := recordAttr(reap, "reason"); reason != string(console.CloseSocketWriteFailed) {
+		t.Errorf("reap reason = %q, want %q — an operator cannot tell a stalled socket from a closed tab",
+			reason, console.CloseSocketWriteFailed)
+	}
+
+	drainAndClose(t, ws)
+}
+
+// An ordinary disconnect must stay quiet.
+//
+// This is what makes the WARN above safe, and it is not obvious: teardown
+// deliberately closes the socket out from under a writer parked mid-frame
+// (NIM-242 — otherwise every pty waits out the whole write budget), and that
+// write then fails. Reporting it would put a WARN on the most routine event
+// there is — closing a tab while output is streaming — and the noise would bury
+// the real one.
+func TestConsoleWS_OrdinaryDisconnectReportsNoFailure(t *testing.T) {
+	logs := &warnCapture{}
+	s := newConsoleTestServerLogging(t, allowAllRBAC{}, console.Limits{}, 0, slog.New(logs))
+	ws := s.dial(t)
+
+	writeFrame(t, ws, map[string]any{"type": "open", "session_id": "pane-1", "sid": "host-a"})
+	readFrameOfType(t, ws, "opened")
+	id := s.soul.sessionIDs()[0]
+
+	// Park the writer on the socket: past the kernel buffers, inside the queue,
+	// and the client reads none of it.
+	chunk := bytes.Repeat([]byte("x"), 64<<10)
+	for i := 0; i < consoleOutQueueDepth/2; i++ {
+		s.soul.sendChunk(id, chunk, uint64(i+1), 0)
+	}
+
+	// The operator closes the tab. That is a WRITE, so it lands even though this
+	// client never reads: the read pump ends while the writer is still parked,
+	// and teardown takes the socket away from it.
+	if err := ws.WriteControl(websocket.CloseMessage,
+		websocket.FormatCloseMessage(websocket.CloseNormalClosure, ""),
+		time.Now().Add(5*time.Second)); err != nil {
+		t.Fatalf("send close: %v", err)
+	}
+
+	waitFor(t, "the sessions to be reaped", func() bool { return s.hub.Count() == 0 })
+	settle(t)
+
+	if _, ok := logs.find("write failed"); ok {
+		t.Errorf("closing a tab mid-stream reported a write failure — every ordinary disconnect would; logged:\n%s", logs.dump())
+	}
+	if n := len(logs.records); n != 0 {
+		t.Errorf("an ordinary disconnect logged %d WARN+ records:\n%s", n, logs.dump())
+	}
+	_ = ws.Close()
+}
+
+// drainAndClose reads until the socket ends, then closes the client end, so the
+// next test in the package does not start against a server still pushing a
+// backlog into a socket nobody reads (NIM-221).
+func drainAndClose(t *testing.T, ws *websocket.Conn) {
+	t.Helper()
+	var err error
+	for err == nil {
+		_ = ws.SetReadDeadline(time.Now().Add(5 * time.Second))
+		_, _, err = ws.ReadMessage()
+	}
+	_ = ws.Close()
 }

@@ -368,7 +368,7 @@ func (h *Hub) closeUnrecorded(ctx context.Context, sess *Session, cause error, n
 		slog.String("sid", sess.SID),
 		slog.Any("error", cause),
 	)
-	h.Close(ctx, sess, "recording unavailable")
+	h.Close(ctx, sess, CloseRecordingUnavailable)
 	if notify {
 		sess.sink.DeliverError(NewError(sess.ClientID, ErrCodeRecordingUnavailable,
 			"console closed: session recording could not be kept ("+cause.Error()+")"))
@@ -540,7 +540,7 @@ func (h *Hub) Resize(ctx context.Context, sess *Session, cols, rows uint32) erro
 // send, and the pty would outlive the operator's intent to kill it. It rides
 // EventStream, the same stream that carried ConsoleOpen, so the Soul processes
 // the two in order and a close can never overtake the open it belongs to.
-func (h *Hub) Close(ctx context.Context, sess *Session, reason string) {
+func (h *Hub) Close(ctx context.Context, sess *Session, reason CloseReason) {
 	if !sess.closed.CompareAndSwap(false, true) {
 		return
 	}
@@ -550,10 +550,18 @@ func (h *Hub) Close(ctx context.Context, sess *Session, reason string) {
 	if h.deps.Cluster != nil {
 		h.deps.Cluster.ReleaseSession(ctx, sess.KeeperID)
 	}
+	// A Keeper-side close is terminal too, and it is the ONLY record of why a
+	// socket's sessions died: the operator's UI is gone by definition, so no
+	// frame reports it. Counting it here is also what lets the totals reconcile
+	// against the gauge — the Soul's ConsoleExit for a session closed from this
+	// side arrives after it has been unregistered, and is dropped as an orphan
+	// frame rather than counted (see [Hub.Deliver]), so this is not a second
+	// count of the same session.
+	h.deps.Metrics.IncSessionTerminal(reason.Label())
 
 	if err := h.deps.Dispatcher.SendConsoleClose(ctx, sess.SID, &keeperv1.ConsoleClose{
 		SessionId: sess.KeeperID,
-		Reason:    reason,
+		Reason:    reason.Text(),
 	}); err != nil {
 		// The pty still dies: a console never outlives its EventStream, so a
 		// Soul we cannot reach is a Soul whose consoles are already gone.
@@ -563,8 +571,8 @@ func (h *Hub) Close(ctx context.Context, sess *Session, reason string) {
 			slog.Any("error", err),
 		)
 	}
-	sess.closeRecording(ctx, reason)
-	h.auditClosed(ctx, sess, reason)
+	sess.closeRecording(ctx, reason.Text())
+	h.auditClosed(ctx, sess, reason.Text())
 }
 
 // CloseAllFor tears down every session of one socket — the kill-on-disconnect
@@ -572,7 +580,7 @@ func (h *Hub) Close(ctx context.Context, sess *Session, reason string) {
 //
 // `reason` reaches the Soul-side log, and the operator's UI is already gone by
 // definition, so no frames are emitted.
-func (h *Hub) CloseAllFor(ctx context.Context, sessions []*Session, reason string) int {
+func (h *Hub) CloseAllFor(ctx context.Context, sessions []*Session, reason CloseReason) int {
 	n := 0
 	for _, sess := range sessions {
 		if sess.closed.Load() {
@@ -759,7 +767,7 @@ func (h *Hub) SweepIdle(ctx context.Context) int {
 			slog.String("aid", sess.AID),
 			slog.Duration("idle", sess.idleFor(now)),
 		)
-		h.Close(ctx, sess, "idle timeout")
+		h.Close(ctx, sess, CloseIdleTimeout)
 		sess.sink.DeliverError(NewError(sess.ClientID, ErrCodeLimitExceeded,
 			"console closed after "+h.limits.IdleTimeout.String()+" without input"))
 	}

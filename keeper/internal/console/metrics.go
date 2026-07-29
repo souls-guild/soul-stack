@@ -80,9 +80,14 @@ func (m *Metrics) DecSessionsActive() {
 	}
 }
 
-// IncSessionTerminal counts a session that reached its terminal state. An empty
-// reason (a Keeper-side close with no ConsoleExit) is recorded as `unknown`
-// rather than skipped — the totals must reconcile against the gauge.
+// IncSessionTerminal counts a session that reached its terminal state, under
+// the Soul's `ConsoleExitReason` when the host reported one and a
+// [CloseReason] label when Keeper closed it (NIM-253). Every terminal path
+// counts, because the totals must reconcile against the gauge.
+//
+// An empty reason is recorded as `unknown` rather than skipped, for the same
+// reason — a session missing from the totals is worse than one in a vague
+// bucket.
 func (m *Metrics) IncSessionTerminal(reason string) {
 	if m == nil {
 		return

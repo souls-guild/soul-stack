@@ -159,6 +159,17 @@ type consoleConn struct {
 	done chan struct{}
 	// closeOnce guards `done`, which both pumps may close.
 	closeOnce sync.Once
+	// closeReason is why this socket is going down, recorded by whichever pump
+	// decided it. Written inside closeOnce and read only after shutdown has been
+	// called, so the Once orders it; there is no second writer to race.
+	//
+	// It exists because the reap that follows is the ONLY place the answer can
+	// be published. A socket dying on the write side cannot be told anything —
+	// the connection is unusable, so no close frame carries a code — and it
+	// takes every pty on it with it. Without this the log and the metric said
+	// "the operator's socket closed" for a stalled peer and for a closed tab
+	// alike.
+	closeReason console.CloseReason
 	// deadlineMu orders arming the read deadline against teardown slamming it.
 	// Without it a pong landing at exactly the wrong moment would re-arm a full
 	// window over the slam and re-park the read pump on a socket being torn
@@ -253,7 +264,11 @@ func (c *consoleConn) run(ctx context.Context) {
 	// Read loop is over: stop the writer, then tear down every pty. Order
 	// matters — the sessions must die even if the writer is wedged on a peer
 	// that stopped reading.
-	c.shutdown()
+	//
+	// The reason offered here is the ordinary one — the peer closed its end. If
+	// the writer already gave up on a failure, it recorded that instead and this
+	// call is a no-op: the first cause is the true one.
+	c.shutdown(console.CloseSocketClosed)
 	select {
 	case <-writerDone:
 	case <-time.After(consoleWriterGrace):
@@ -268,11 +283,30 @@ func (c *consoleConn) run(ctx context.Context) {
 	_ = c.ws.Close()
 
 	sessions := c.takeAllSessions()
-	if n := c.hub.CloseAllFor(ctx, sessions, "operator socket closed"); n > 0 {
-		c.logger.Info("console: socket closed, sessions reaped",
-			slog.String("aid", c.aid), slog.Int("sessions", n))
+	reason := c.closeReason
+	if n := c.hub.CloseAllFor(ctx, sessions, reason); n > 0 {
+		// The count belongs to THIS line and nowhere else — the writer that
+		// noticed the failure does not know how many sessions rode on the socket.
+		// A socket that ended on its own terms is routine; one that ended on a
+		// failure just killed n interactive shells the operator was using, and
+		// this is the only record of it that survives.
+		level := slog.LevelInfo
+		if socketDiedBadly(reason) {
+			level = slog.LevelWarn
+		}
+		c.logger.Log(ctx, level, "console: socket closed, sessions reaped",
+			slog.String("aid", c.aid),
+			slog.String("reason", string(reason)),
+			slog.Int("sessions", n))
 	}
 	c.metrics.DecSocketsActive()
+}
+
+// socketDiedBadly reports whether the socket ended in a failure rather than an
+// ordinary close. Only the socket's own reasons reach here, and exactly one of
+// them is not a failure.
+func socketDiedBadly(reason console.CloseReason) bool {
+	return reason != console.CloseSocketClosed
 }
 
 // shutdown signals both pumps to stop, and unparks the read pump if it is
@@ -286,13 +320,29 @@ func (c *consoleConn) run(ctx context.Context) {
 // delivered, and the root shells behind it keep running until the read deadline
 // finally fires a minute later. A deadline in the past is what makes a parked
 // syscall return, so teardown sets one.
-func (c *consoleConn) shutdown() {
+func (c *consoleConn) shutdown(reason console.CloseReason) {
 	c.closeOnce.Do(func() {
+		c.closeReason = reason
 		close(c.done)
 		c.deadlineMu.Lock()
 		defer c.deadlineMu.Unlock()
 		_ = c.ws.SetReadDeadline(time.Now())
 	})
+}
+
+// closing reports whether teardown has already begun.
+//
+// The write side needs it to read its own errors: teardown deliberately closes
+// the socket out from under a writer parked mid-frame, so a write failing AFTER
+// teardown says nothing about the peer — it is this Keeper's own doing, and the
+// real cause was recorded by whoever started the teardown.
+func (c *consoleConn) closing() bool {
+	select {
+	case <-c.done:
+		return true
+	default:
+		return false
+	}
 }
 
 // armReadDeadline gives the peer another window to be heard from, unless
@@ -457,7 +507,7 @@ func (c *consoleConn) handleClose(ctx context.Context, f *console.ClientFrame) {
 	if sess == nil {
 		return
 	}
-	c.hub.Close(ctx, sess, "operator detached the pane")
+	c.hub.Close(ctx, sess, console.CloseOperatorDetached)
 }
 
 // writePump owns the socket's write side: it drains `out`, and pings to keep
@@ -480,9 +530,8 @@ func (c *consoleConn) writePump() {
 		case f := <-c.out:
 			_ = c.ws.SetWriteDeadline(time.Now().Add(c.writeWait))
 			if err := c.ws.WriteMessage(websocket.TextMessage, f.payload); err != nil {
-				c.logger.Debug("console: socket write failed",
-					slog.String("aid", c.aid), slog.Any("error", err))
-				c.shutdown()
+				c.reportWriteFailure("console: operator socket write failed", err)
+				c.shutdown(console.CloseSocketWriteFailed)
 				return
 			}
 
@@ -492,7 +541,8 @@ func (c *consoleConn) writePump() {
 				// The peer is gone (a slept laptop keeps a half-open TCP
 				// connection for minutes); every pty behind it must die now,
 				// not when TCP eventually notices.
-				c.shutdown()
+				c.reportWriteFailure("console: operator socket keepalive write failed", err)
+				c.shutdown(console.CloseSocketUnreachable)
 				return
 			}
 
@@ -500,6 +550,30 @@ func (c *consoleConn) writePump() {
 			c.flushDropped()
 		}
 	}
+}
+
+// reportWriteFailure logs a write that failed, at the level the failure earns.
+//
+// A write failing while the socket is ALREADY being torn down is this Keeper's
+// own doing: teardown closes the connection out from under a writer parked
+// mid-frame, because one blocked write must not hold every pty on the socket
+// hostage (NIM-242). That happens on the most routine event there is — an
+// operator closing a tab while output streams — so reporting it would put a
+// warning on nearly every disconnect and bury the case below.
+//
+// A write failing FIRST is the significant one. The peer vanished or fell
+// behind past the write budget, which is the same budget the pong handler holds
+// it to, so the read side had not yet called it dead. gorilla cannot recover a
+// connection after a failed write, so kill-on-disconnect reaps EVERY pty on
+// that socket — the operator's whole wall — and nothing can be sent down the
+// socket to say why. This log is the only place the answer exists.
+func (c *consoleConn) reportWriteFailure(msg string, err error) {
+	if c.closing() {
+		c.logger.Debug(msg+" during teardown",
+			slog.String("aid", c.aid), slog.Any("error", err))
+		return
+	}
+	c.logger.Warn(msg, slog.String("aid", c.aid), slog.Any("error", err))
 }
 
 // flushDropped emits a marker chunk for every session carrying discarded bytes,
@@ -635,7 +709,7 @@ func (c *consoleConn) sendControl(frame any) {
 	default:
 		c.logger.Warn("console: control queue full — closing socket",
 			slog.String("aid", c.aid))
-		c.shutdown()
+		c.shutdown(console.CloseSocketCongested)
 	}
 }
 

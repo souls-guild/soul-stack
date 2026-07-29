@@ -392,7 +392,7 @@ func TestHub_CloseAllForReapsSessions(t *testing.T) {
 		mustOpen(t, h, "c", "host-c", "archon-a", sink),
 	}
 
-	if n := h.CloseAllFor(context.Background(), sessions, "socket closed"); n != 3 {
+	if n := h.CloseAllFor(context.Background(), sessions, CloseSocketClosed); n != 3 {
 		t.Fatalf("closed = %d, want 3", n)
 	}
 	if h.Count() != 0 {
@@ -404,7 +404,7 @@ func TestHub_CloseAllForReapsSessions(t *testing.T) {
 
 	// Repeating the teardown is a no-op, so a concurrent close cannot
 	// double-dispatch.
-	if n := h.CloseAllFor(context.Background(), sessions, "socket closed"); n != 0 {
+	if n := h.CloseAllFor(context.Background(), sessions, CloseSocketClosed); n != 0 {
 		t.Fatalf("second CloseAllFor closed %d, want 0", n)
 	}
 }
