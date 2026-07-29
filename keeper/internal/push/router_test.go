@@ -12,11 +12,14 @@ import (
 )
 
 // fakeRouterReader implements PGRouterReader for unit tests. ssh_target is
-// returned from the corresponding field; covens come from map[sid][]string.
+// returned from the corresponding field; covens are the host's own tags and
+// inherited the ones it picks up from its incarnations (ADR-080), each from
+// map[sid][]string.
 type fakeRouterReader struct {
-	target map[string]*soul.SSHTarget
-	covens map[string][]string
-	err    error
+	target    map[string]*soul.SSHTarget
+	covens    map[string][]string
+	inherited map[string][]string
+	err       error
 }
 
 func (f *fakeRouterReader) SelectSshTarget(_ context.Context, sid string) (*soul.SSHTarget, error) {
@@ -26,11 +29,11 @@ func (f *fakeRouterReader) SelectSshTarget(_ context.Context, sid string) (*soul
 	return f.target[sid], nil
 }
 
-func (f *fakeRouterReader) SelectCovens(_ context.Context, sid string) ([]string, error) {
+func (f *fakeRouterReader) SelectCovens(_ context.Context, sid string) (own, inherited []string, err error) {
 	if f.err != nil {
-		return nil, f.err
+		return nil, nil, f.err
 	}
-	return f.covens[sid], nil
+	return f.covens[sid], f.inherited[sid], nil
 }
 
 func sshTargetWithProvider(p string) *soul.SSHTarget {
@@ -158,6 +161,83 @@ func TestPGRouter_CovenAlphabeticalTiebreak(t *testing.T) {
 	}
 	if name != "a-provider" {
 		t.Errorf("got %q, want a-provider (alphabetical tiebreak)", name)
+	}
+}
+
+// TestPGRouter_Level2_InheritedCovenRoutes — GUARD (NIM-251, ADR-080): a host
+// whose only match is a label it INHERITS from its incarnation routes on the
+// per-coven default, not on the cluster fallback. Before NIM-251 Level 2 saw
+// `souls.coven[]` alone, so `coven_default_providers: {redis-prod: bastion-eu}`
+// never applied to the hosts OF incarnation `redis-prod` — the very shape an
+// operator reaches for to put a whole incarnation behind one bastion.
+func TestPGRouter_Level2_InheritedCovenRoutes(t *testing.T) {
+	r := &fakeRouterReader{
+		target:    map[string]*soul.SSHTarget{"sid-1": {SSHPort: 22, SSHUser: "root", SoulPath: "/usr/local/bin/soul"}},
+		covens:    map[string][]string{"sid-1": {"db"}},
+		inherited: map[string][]string{"sid-1": {"redis-prod"}},
+	}
+	cfg := NewStaticRouterConfigSource(RouterConfig{
+		CovenDefaultProviders:  map[string]string{"redis-prod": "bastion-eu"},
+		ClusterDefaultProvider: "static-fallback",
+	})
+	router, _ := NewPGRouter(r, cfg)
+	name, src, err := router.RouteFor(context.Background(), "sid-1")
+	if err != nil {
+		t.Fatalf("RouteFor: %v", err)
+	}
+	if name != "bastion-eu" || src != SourceCoven {
+		t.Errorf("got (%q, %v), want (bastion-eu, SourceCoven) — inherited label must reach Level 2", name, src)
+	}
+}
+
+// TestPGRouter_Level2_OwnCovenBeatsInherited — GUARD (NIM-251): the tiebreak is
+// own-then-inherited, NOT one alphabetical sort over the union. `alpha` sorts
+// before `zeta`, but `zeta` is the host's own tag and wins.
+//
+// This is what makes inheritance purely additive: a host that already routed on
+// its own tag keeps that exact route when its incarnation gains a label. Sorting
+// the union as one list would move it onto another bastion silently — a change
+// of auth perimeter nobody asked for (ADR-032: no silent provider fallback).
+func TestPGRouter_Level2_OwnCovenBeatsInherited(t *testing.T) {
+	r := &fakeRouterReader{
+		target:    map[string]*soul.SSHTarget{"sid-1": {SSHPort: 22, SSHUser: "root", SoulPath: "/usr/local/bin/soul"}},
+		covens:    map[string][]string{"sid-1": {"zeta"}},
+		inherited: map[string][]string{"sid-1": {"alpha"}},
+	}
+	cfg := NewStaticRouterConfigSource(RouterConfig{
+		CovenDefaultProviders: map[string]string{"alpha": "a-provider", "zeta": "z-provider"},
+	})
+	router, _ := NewPGRouter(r, cfg)
+	name, src, err := router.RouteFor(context.Background(), "sid-1")
+	if err != nil {
+		t.Fatalf("RouteFor: %v", err)
+	}
+	if name != "z-provider" || src != SourceCoven {
+		t.Errorf("got (%q, %v), want (z-provider, SourceCoven) — own tag outranks inherited", name, src)
+	}
+}
+
+// TestPGRouter_Level2_UnmappedOwnFallsThroughToInherited — GUARD (NIM-251): the
+// own group is a preference, not a barrier. A host carrying own tags that are
+// simply absent from the map still resolves on an inherited one.
+func TestPGRouter_Level2_UnmappedOwnFallsThroughToInherited(t *testing.T) {
+	r := &fakeRouterReader{
+		target:    map[string]*soul.SSHTarget{"sid-1": {SSHPort: 22, SSHUser: "root", SoulPath: "/usr/local/bin/soul"}},
+		covens:    map[string][]string{"sid-1": {"db", "edge"}},
+		inherited: map[string][]string{"sid-1": {"zeta", "redis-prod"}},
+	}
+	cfg := NewStaticRouterConfigSource(RouterConfig{
+		CovenDefaultProviders:  map[string]string{"redis-prod": "bastion-eu", "zeta": "z-provider"},
+		ClusterDefaultProvider: "static-fallback",
+	})
+	router, _ := NewPGRouter(r, cfg)
+	name, src, err := router.RouteFor(context.Background(), "sid-1")
+	if err != nil {
+		t.Fatalf("RouteFor: %v", err)
+	}
+	// Within the inherited group the tiebreak stays alphabetical: redis-prod < zeta.
+	if name != "bastion-eu" || src != SourceCoven {
+		t.Errorf("got (%q, %v), want (bastion-eu, SourceCoven) — inherited group, alphabetical", name, src)
 	}
 }
 

@@ -95,6 +95,14 @@
        incarnation's members. This is the reading that used to come free from the
        injected name and was lost with it; both halves of the chain read it, since
        a Vigil that never ships emits no Portent for the Decree to match.
+     - **Push provider routing** ([ADR-032](0032-push-orchestrator.md) Level 2,
+       added by NIM-251) — `push.coven_default_providers` is matched against the
+       union, so labelling an incarnation puts all of its hosts behind one
+       bastion. Routing is the one consumer that cannot take "both": it selects
+       exactly ONE provider, so it keeps a tiebreak (own tags before inherited,
+       each group alphabetical). That is an ordering of the LOOKUP, not a
+       precedence between labels — it is chosen so inheritance is purely
+       additive and no already-routed host silently changes auth perimeter.
 
      Keeping these in step is the point: a union applied to some readers and not
      others is a new class of bug — one that shows up as a rule matching nothing,
@@ -192,4 +200,5 @@
   predicate resolve over inherited labels as well as own ones),
   [ADR-030](0030-vigil-oracle.md) (the `coven` half of a Vigil/Decree subject
   resolves over the union; the membership-check keeps reading the relation —
-  NIM-224).
+  NIM-224), [ADR-032](0032-push-orchestrator.md) (Level 2 of provider routing
+  matches the union, with an own-before-inherited lookup order — NIM-251).

@@ -4,8 +4,8 @@ package push
 // pgxpool.Pool (ADR-032 amendment 2026-05-27, P2 W-3 Multi-provider routing).
 //
 // A separate type wrapping pgPoolTargetReader (see target_pg.go) adds reading
-// `souls.coven[]` for the Level 2 resolve. Kept isolated from the
-// target-reader: the latter is used broadly in PGFallbackTargetResolver (the
+// a host's effective coven labels for the Level 2 resolve. Kept isolated from
+// the target-reader: the latter is used broadly in PGFallbackTargetResolver (the
 // SendApply hot path, where coven doesn't need to be read), so merging them
 // into one type isn't worth it.
 
@@ -30,7 +30,12 @@ func (r *pgPoolRouterReader) SelectSshTarget(ctx context.Context, sid string) (*
 	return soul.SelectSshTarget(ctx, r.db, sid)
 }
 
-func (r *pgPoolRouterReader) SelectCovens(ctx context.Context, sid string) ([]string, error) {
+// SelectCovens reads the host's own `souls.coven[]` and, separately, the labels
+// it inherits from the incarnations it belongs to (ADR-080, NIM-251). Returning
+// only the column left `coven_default_providers: {redis-prod: bastion-eu}` dead
+// for the hosts OF incarnation `redis-prod` — the label an operator would most
+// naturally reach for.
+func (r *pgPoolRouterReader) SelectCovens(ctx context.Context, sid string) (own, inherited []string, err error) {
 	// SelectBySID is the only CRUD method that returns a full Soul along with
 	// coven[]. The router only needs the labels, but adding SQL dedicated to
 	// the router would complicate schema invalidation; the cost of 5 extra
@@ -38,7 +43,14 @@ func (r *pgPoolRouterReader) SelectCovens(ctx context.Context, sid string) ([]st
 	// separate SELECT.
 	s, err := soul.SelectBySID(ctx, r.db, sid)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	return s.Coven, nil
+	// The second round trip is the shared inherited-labels resolver, not a
+	// third mechanism: the RBAC predicate, the topology roster and the reactor
+	// subject all read the same one, so they cannot disagree about one host.
+	labels, err := soul.LoadInheritedLabels(ctx, r.db, sid)
+	if err != nil {
+		return nil, nil, err
+	}
+	return s.Coven, labels.Covens, nil
 }

@@ -248,7 +248,9 @@ push:
 The router (`keeper/internal/push/router.go::PGRouter`) resolves the SshProvider plugin name per-SID in three levels:
 
 1. **Level 1: `souls.ssh_target.ssh_provider`** (per-SID explicit). An optional field in the jsonb-shape `souls.ssh_target` (migration 056). When set — it always wins. `source: soul` in audit.
-2. **Level 2: `push.coven_default_providers: { <coven>: <provider_name> }`** (per-coven default). A map in `keeper.yml`, hot-reload-aware. Tiebreak on a multiple coven-match — **alphabetical order of coven names** (determinism). `source: coven`.
+2. **Level 2: `push.coven_default_providers: { <coven>: <provider_name> }`** (per-coven default). A map in `keeper.yml`, hot-reload-aware. Matched against the host's **effective** coven labels — its own `souls.coven[]` plus the ones it inherits from every incarnation it belongs to, each contributing its `covens[]` and its name ([ADR-080](../adr/0080-label-inheritance-union.md), NIM-251). Labelling the incarnation is therefore enough to put all of its hosts behind one bastion. Tiebreak on a multiple coven-match — the host's **own tags first, then the inherited ones, each group in alphabetical order** (determinism). `source: coven`.
+
+   Own-before-inherited is a routing rule, not a ranking of labels: a route is one provider, so some order is unavoidable, and this one is purely additive — a host that already matched on its own tag keeps the exact route it had, and inheritance only fills in where Level 2 used to fall through to the cluster default. One alphabetical sort over the union would instead move live hosts onto a different bastion the moment their incarnation gained a label.
 3. **Level 3: `push.cluster_default_provider: <name>`** (cluster fallback). A scalar in `keeper.yml`. `source: cluster`.
 
 All three levels empty → **`ErrProviderNotRouted`** → fail per-host (status="error", error_code="provider_not_routed"). **WITHOUT provider-chain fallback** (a security invariant: the auth perimeter of different providers differs, a silent fallback breaks trust).

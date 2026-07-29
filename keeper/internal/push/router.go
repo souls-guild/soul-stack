@@ -16,9 +16,24 @@ package push
 //	Level 2: push.coven_default_providers     (per-coven default)
 //	Level 3: push.cluster_default_provider    (cluster fallback)
 //
-// Tiebreak on multiple coven matches (a Soul in several covens, each
-// configured with its own provider): alphabetical order of coven names
-// (deterministic).
+// Level 2 reads a host's EFFECTIVE coven labels (ADR-080, NIM-251): its own
+// `souls.coven[]` plus the ones it inherits from every incarnation it belongs
+// to. Labelling an incarnation is the natural way to say "all of its hosts sit
+// behind this bastion", and before NIM-251 that label never reached the map.
+//
+// Tiebreak on multiple coven matches (a Soul in several covens, each configured
+// with its own provider): the host's OWN tags are consulted first, then the
+// inherited ones, each group in alphabetical order (deterministic).
+//
+// Own-before-inherited is a routing rule, not a ranking of labels. ADR-080
+// refuses precedence on the label axis because access is granted by ANY match —
+// but a route is ONE provider, so some order is unavoidable, and this one is the
+// only one that is purely additive: a host that already matched on its own tag
+// keeps the exact route it had, and inheritance can only fill in where Level 2
+// used to fall through to the cluster default. Sorting the union as one list
+// would instead re-route live hosts onto a different bastion the moment their
+// incarnation gained a label — the silent change of auth perimeter this ADR
+// refuses below.
 //
 // All three levels empty → ErrProviderNotRouted → fail per-host. NO
 // provider-chain fallback: different providers have different auth
@@ -89,10 +104,16 @@ var ErrProviderNotRouted = errors.New("push: SshProvider not routed (no per-SID 
 type PGRouterReader interface {
 	// SelectSshTarget reads `ssh_target.ssh_provider` (Level 1).
 	SelectSshTarget(ctx context.Context, sid string) (*soul.SSHTarget, error)
-	// SelectCovens reads a Soul's `coven` list (Level 2 lookup into the
-	// per-coven default map). Returns an empty slice when there are no
-	// labels.
-	SelectCovens(ctx context.Context, sid string) ([]string, error)
+	// SelectCovens reads a Soul's EFFECTIVE coven labels for the Level 2
+	// lookup, split by WHERE they are attached: own is `souls.coven[]`,
+	// inherited is what the host picks up from the incarnations it belongs to
+	// (ADR-080 — each contributing its `covens[]` plus its name). Either may be
+	// empty.
+	//
+	// They stay separate rather than pre-unioned because Level 2 has to pick
+	// exactly one provider and resolves own before inherited (see [PGRouter]);
+	// a flat union would have already thrown that distinction away.
+	SelectCovens(ctx context.Context, sid string) (own, inherited []string, err error)
 }
 
 // RouterConfig is a read-only snapshot of the cluster-defaults config. Passed
@@ -134,8 +155,9 @@ func (s *staticRouterConfig) Snapshot() RouterConfig { return s.cfg }
 // RouteFor algorithm:
 //
 //  1. SELECT souls.ssh_target.ssh_provider → if non-empty → SourceSoul.
-//  2. SELECT souls.coven[] → for each coven (alphabetical) look up
-//     CovenDefaultProviders → first match → SourceCoven.
+//  2. SELECT the host's own coven[] and the ones it inherits from its
+//     incarnations → look up CovenDefaultProviders over own (alphabetical),
+//     then over inherited (alphabetical) → first match → SourceCoven.
 //  3. ClusterDefaultProvider non-empty → SourceCluster.
 //  4. Otherwise ErrProviderNotRouted.
 type PGRouter struct {
@@ -169,22 +191,19 @@ func (r *PGRouter) RouteFor(ctx context.Context, sid string) (string, RouteSourc
 
 	cfg := r.Config.Snapshot()
 
-	// Level 2: per-coven default. Tiebreak is alphabetical order of coven
-	// names (deterministic). A linear sort on a short slice (a Soul is
-	// usually in 1-3 covens); the map scan is short too.
+	// Level 2: per-coven default over the host's effective labels — own tags
+	// first, then the inherited ones, each group alphabetical (see the tiebreak
+	// note at the top of this file). A read failure is propagated rather than
+	// swallowed: falling through to Level 3 on a transient PG error would move
+	// the host onto a different provider — a silent change of auth perimeter.
 	if len(cfg.CovenDefaultProviders) > 0 {
-		covens, err := r.Reader.SelectCovens(ctx, sid)
+		own, inherited, err := r.Reader.SelectCovens(ctx, sid)
 		if err != nil {
 			return "", SourceUnknown, fmt.Errorf("router: select covens %s: %w", sid, err)
 		}
-		if len(covens) > 0 {
-			sortedCovens := make([]string, len(covens))
-			copy(sortedCovens, covens)
-			sort.Strings(sortedCovens)
-			for _, c := range sortedCovens {
-				if provider, ok := cfg.CovenDefaultProviders[c]; ok && provider != "" {
-					return provider, SourceCoven, nil
-				}
+		for _, group := range [][]string{own, inherited} {
+			if provider, ok := firstConfiguredProvider(group, cfg.CovenDefaultProviders); ok {
+				return provider, SourceCoven, nil
 			}
 		}
 	}
@@ -195,4 +214,23 @@ func (r *PGRouter) RouteFor(ctx context.Context, sid string) (string, RouteSourc
 	}
 
 	return "", SourceUnknown, fmt.Errorf("%w: sid=%s", ErrProviderNotRouted, sid)
+}
+
+// firstConfiguredProvider returns the provider configured for the
+// alphabetically first coven of the group that has one. A local sort on a short
+// slice (a Soul is usually in 1-3 covens) — the caller's slice is left alone,
+// since it belongs to the reader.
+func firstConfiguredProvider(covens []string, defaults map[string]string) (string, bool) {
+	if len(covens) == 0 {
+		return "", false
+	}
+	sorted := make([]string, len(covens))
+	copy(sorted, covens)
+	sort.Strings(sorted)
+	for _, c := range sorted {
+		if provider, ok := defaults[c]; ok && provider != "" {
+			return provider, true
+		}
+	}
+	return "", false
 }
