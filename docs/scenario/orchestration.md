@@ -124,6 +124,28 @@ Here `register.cfg.changed` is true if at least one child task destiny `redis-co
 
 **Motive.** Replacing the `core.cmd.shell`-guard hack (`test "${ <cel> }" = "true" || { echo ...; exit 1; }` is an arbitrary shell on Soul for the sake of control-flow) with a declarative keeper-side check: less attack-surface (no shell execution for the sake of checking), the failure is transferred from the host to the model (earlier and clearer).
 
+#### 2.3.1. Where an `assert:` is answered — and what that costs the operator
+
+An `assert:` is evaluated at **two points from one source** (`render.evalAssertTask`): a **pre-flight** gate on the request path, and **render** as a fail-safe ([ADR-009](../adr/0009-scenario-dsl.md) amendment 2026-06-23, form A). Which point answers a given assert is **not a property of the assert alone** — it depends on what the predicate reads and on how the run was started. The difference is not cosmetic: pre-flight answers **422 with nothing mutated**, render answers **`error_locked`**, which the operator must then `unlock` before anything else can run.
+
+Two facts decide it. A roster only exists once the incarnation row does (membership FKs it, [ADR-008 amendment / NIM-124](../adr/0008-coven-stable-tags.md#amendment-2026-07-17-nim-124-incarnationname-is-not-a-coven--membership-is-a-first-class-relation)), and some plans **create their own roster mid-run** (`core.cloud.provisioned` → `core.soul.registered` with `refresh_soulprint`), so the hosts such an assert is about do not exist at request time under any design.
+
+| The predicate reads | How the run started | Answered at | A failure looks like |
+|---|---|---|---|
+| `input.` / `essence.` / `incarnation.` only | any | **pre-flight** | **422 `assert-failed`**, nothing created, nothing locked |
+| the roster (`soulprint.*`) | explicit run, plan consumes an existing roster | **pre-flight** | **422 `assert-failed`**, the run never starts |
+| the roster | `POST /v1/incarnations` (a `create: true` starter) | render | `error_locked` → `unlock` |
+| the roster | plan builds its own roster (all-keeper, or carries a refresh emitter) | render, **after** the refresh boundary | `error_locked` → `unlock` |
+
+Read the last two rows as the same rule: **pre-flight declines to measure a roster that is not the one the assert is about**, because the alternative is worse than a late answer — before this was fixed, a create carrying a topology guard was rejected 422 unconditionally, with no input that could satisfy it ([ADR-009 amendment 2026-07-28](../adr/0009-scenario-dsl.md#amendment-2026-07-28-nim-235-a-roster-reading-assert-has-no-pre-flight-point-at-create)).
+
+Practical consequences when authoring:
+
+- **If the invariant fits `input.*` alone, write it as [`validate:`](#25-validate--declarative-input-invariants) instead.** It is the mechanism built for that, and it answers 422 on every path.
+- **A roster guard in a `create: true` scenario is legitimate but late.** `soul-lint` says so at authoring time (`assert_roster_deferred_on_create`, a WARNING) rather than letting you discover it on a live stand.
+- **The same scenario reached as an explicit run does get the synchronous answer.** The operator path for deploying onto hosts you already have is: create the incarnation without a bootstrap run → bind members → run the scenario ([ADR-008 amendment / NIM-209](../adr/0008-coven-stable-tags.md#amendment-2026-07-28-nim-209-membership-has-an-operator-path--bind--unbind--read)). That is where the topology guard pays off.
+- **Render is never removed as a fail-safe.** Even when pre-flight answers, the roster can change between the request and the goroutine start (TOCTOU); the render evaluation stays.
+
 ### 2.2. Cross-host step execution model
 
 DSL core ([destiny/tasks.md](../destiny/tasks.md)) describes the execution of the step

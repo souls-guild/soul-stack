@@ -2,9 +2,11 @@ package scenario
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 
+	"github.com/souls-guild/soul-stack/keeper/internal/artifact"
 	"github.com/souls-guild/soul-stack/keeper/internal/incarnation"
 	"github.com/souls-guild/soul-stack/keeper/internal/render"
 	"github.com/souls-guild/soul-stack/keeper/internal/topology"
@@ -21,42 +23,61 @@ import (
 // shared by both points.
 var ErrAssertFailed = render.ErrAssertFailed
 
-// PreflightAssert evaluates scenario assert-predicates AT RUN CREATION (the
-// create-handler's request path, before the incarnation is committed and
-// before applying starts — ADR-027 amendment, pre-flight gate; ADR-009
-// amendment 2026-06-23, form A). Main use case: a topology mismatch (roster
-// doesn't satisfy the scenario invariant) is rejected as 422 assert_failed,
-// with NO incarnation row and NO fail status (error_locked) — the rejection
-// moves from the async render phase to the synchronous request path.
+// PreflightAssert evaluates scenario assert-predicates ON THE REQUEST PATH,
+// before anything mutates — the create handler runs it before the incarnation
+// is committed, the run handler before the scenario goroutine starts (ADR-027
+// amendment, pre-flight gate; ADR-009 amendment 2026-06-23 form A, extended to
+// the run path 2026-07-28). Main use case: a topology mismatch (roster doesn't
+// satisfy the scenario invariant) is rejected as 422 assert_failed instead of
+// becoming an `error_locked` the operator has to unlock — the rejection moves
+// from the async render phase to the synchronous request path.
 //
 // Contract:
-//   - THE ROSTER IS ONLY READABLE ONCE THE INCARNATION ROW EXISTS (NIM-235).
-//     The original contract read the roster by the root Coven label
-//     spec.IncarnationName (ADR-008) — souls carried `incarnation.name` in
-//     `souls.coven[]`, so a roster could pre-date its incarnation. NIM-124
-//     (ADR-008 amendment 2026-07-17, migration 099) moved membership onto
-//     `incarnation_membership`, whose FK requires that row. On the create path
-//     pre-flight runs BEFORE `incarnation.Create`, so the roster there is not
-//     empty-by-circumstance but IMPOSSIBLE — evaluating `size(soulprint.hosts)
-//     == N` against it rejected EVERY create carrying a topology assert.
-//     Therefore asserts that read the roster ([config.AssertReadsRoster]) are
-//     NOT evaluated when the row is absent: they are deferred to the render
-//     fail-safe, which is the first point where the roster exists. Asserts that
-//     read only input/essence/incarnation still evaluate — they lose nothing by
-//     the row being absent, and keep their 422-before-mutation.
+//
+//   - A ROSTER-READING ASSERT IS EVALUATED ONLY WHERE THE ROSTER IN FRONT OF US
+//     IS THE ONE THE ASSERT IS ABOUT. Two situations fail that test, and in
+//     both the assert ([config.AssertReadsRoster]) is deferred to the render
+//     fail-safe rather than measured against a roster that is not its subject:
+//
+//     (1) THE INCARNATION ROW DOES NOT EXIST YET (the create path, NIM-235).
+//     The original contract read the roster by the root Coven label — souls
+//     carried `incarnation.name` in `souls.coven[]`, so a roster could pre-date
+//     its incarnation. NIM-124 (ADR-008 amendment 2026-07-17, migration 099)
+//     moved membership onto `incarnation_membership`, whose FK requires that
+//     row, and pre-flight runs BEFORE `incarnation.Create`. The roster there is
+//     not empty-by-circumstance but IMPOSSIBLE, so `size(soulprint.hosts) == N`
+//     rejected EVERY create carrying a topology assert.
+//
+//     (2) THE PLAN BUILDS ITS OWN ROSTER ([planBuildsRoster], NIM-270). A
+//     provision-from-zero run creates its hosts mid-run and Stratify puts the
+//     roster consumers after the refresh boundary; the roster at request time
+//     is not a smaller version of the run's roster, it is a different thing
+//     entirely. Evaluating the assert against it is the same false 422 as (1),
+//     which is why this shares its predicate with the no_hosts bypass in
+//     [Runner.run] §3 rather than restating it.
+//
+//     Everything else DOES evaluate: an existing incarnation plus a plan that
+//     consumes its roster is exactly the case the two-point amendment was
+//     written for, and it is reached through the explicit-run path (bind
+//     members, then run — ADR-008 amendment 2026-07-28/NIM-209).
+//
+//   - Asserts reading only input/essence/incarnation always evaluate: nothing
+//     about the roster changes their verdict, so they keep their
+//     422-before-mutation on both paths.
+//
 //   - effectiveInput merges defaults + required fields from the `input:`
 //     schema (config.ResolveInputValues, no vault resolve: ADR-027 invariant
 //     A — secrets aren't materialized on the request path; input was
 //     already validated by ValidateInput upstream, so value validation here
 //     is guaranteed to pass).
-//   - essence resolves for a representative host (mirrors run() step 4), so
-//     an assert predicate referencing essence.* sees the same values as
-//     render. No incarnation row exists yet for create, so a synthetic
-//     Incarnation is built from spec (Name/Service/Spec=input) for the
-//     essence override layer. With no roster the representative host is empty,
-//     so the host-derived essence layers (os/coven) are empty too — an
-//     `essence.*` assert that depends on them is a weaker form of the same
-//     problem and is tracked separately.
+//
+//   - essence is resolved from the SAME input run() step 4 would use for this
+//     run, so an `essence.*` predicate cannot answer one way here and another
+//     at render ([Runner.resolvePreflightEssence], NIM-271). On the create path
+//     there is no row and no host, so the os overlay is genuinely unknowable —
+//     a property of creating something that does not exist yet, not a gap to
+//     paper over.
+//
 //   - EvalAsserts emits ONLY assert predicates (shared [render.evalAssertTask]
 //     — same source as the render branch): first false → ErrAssertFailed.
 //
@@ -97,33 +118,44 @@ func (r *Runner) PreflightAssert(ctx context.Context, spec RunSpec) error {
 		return nil
 	}
 
-	// Is the roster readable at all? Before incarnation.Create there is no row,
-	// so membership — and therefore the roster — cannot exist (NIM-124). Asking
-	// the roster in that state answers "empty" for a reason that has nothing to
-	// do with topology, which is exactly the false 422 of NIM-235.
-	rosterExists, err := r.deps.Topology.IncarnationExists(ctx, spec.IncarnationName)
+	// Is the roster in front of us the one a topology assert is about? Two ways
+	// it is not: the incarnation row does not exist yet, so membership cannot
+	// either (NIM-124) — or the plan provisions its own hosts, so the roster it
+	// will be measured against is created by the run itself (NIM-270). Both
+	// answer "empty" for reasons that have nothing to do with topology.
+	//
+	// The row is READ, not merely counted: when it exists it is also the source
+	// of the essence layers below (NIM-271), so one lookup answers both.
+	// `inc == nil` means "no row" — the create path.
+	inc, err := r.preflightIncarnation(ctx, spec.IncarnationName)
 	if err != nil {
-		return fmt.Errorf("preflight: %w", err)
+		return err
+	}
+	rosterIsSubject := !planBuildsRoster(scn.Tasks)
+	deferReason := "the plan builds its own roster mid-run, so the assert is about hosts that do not exist yet (NIM-270)"
+	if rosterIsSubject && inc == nil {
+		rosterIsSubject = false
+		deferReason = "the incarnation does not exist yet, so it has no roster (NIM-124)"
 	}
 
 	var hosts []*topology.HostFacts
-	if rosterExists {
+	if rosterIsSubject {
 		hosts, err = r.deps.Topology.LoadIncarnationHosts(ctx, spec.IncarnationName)
 		if err != nil {
 			return fmt.Errorf("preflight: roster %s: %w", spec.IncarnationName, err)
 		}
 	} else {
 		// Drop the asserts that read the roster; keep the rest. Dropping (rather
-		// than evaluating against an empty roster) is what makes the create path
-		// honest: the deferred assert still runs at render, where the roster of
-		// the imminent run is real — including the provision-from-zero case,
-		// where the roster is a PRODUCT of the run and could not have been
-		// checked up front under any design.
+		// than evaluating against a roster that is not the assert's subject) is
+		// what keeps the gate honest: the deferred assert still runs at render,
+		// where the run's own roster is real — for a provision-from-zero plan
+		// that is the FIRST point it exists at all.
 		kept, deferred := partitionRosterAsserts(scn.Tasks)
 		if len(deferred) > 0 {
-			r.logger.Info("scenario: pre-flight defers roster asserts to render — the incarnation does not exist yet, so it has no roster (NIM-124)",
+			r.logger.Info("scenario: pre-flight defers roster asserts to render",
 				slog.String("incarnation", spec.IncarnationName),
 				slog.String("scenario", spec.ScenarioName),
+				slog.String("reason", deferReason),
 				slog.Any("asserts", deferred))
 		}
 		scn.Tasks = kept
@@ -141,16 +173,7 @@ func (r *Runner) PreflightAssert(ctx context.Context, spec RunSpec) error {
 		return fmt.Errorf("preflight: input %s/%s: %w", spec.IncarnationName, spec.ScenarioName, err)
 	}
 
-	// essence for the representative host (mirrors run() step 4). With no
-	// incarnation row there is no representative host, so the host-derived
-	// layers resolve empty — the asserts still standing at this point read
-	// input/essence, not the roster (the roster readers were deferred above).
-	synthetic := &incarnation.Incarnation{
-		Name:    spec.IncarnationName,
-		Service: art.Manifest.Name,
-		Spec:    incarnationSpecFromInput(spec.Input),
-	}
-	essenceMap, err := r.resolvePreflightEssence(art.LocalDir, synthetic, hosts)
+	essenceMap, err := r.resolvePreflightEssence(art, spec, inc, hosts)
 	if err != nil {
 		return fmt.Errorf("preflight: essence %s: %w", spec.IncarnationName, err)
 	}
@@ -169,16 +192,60 @@ func (r *Runner) PreflightAssert(ctx context.Context, spec RunSpec) error {
 	return r.deps.Render.EvalAsserts(ctx, in)
 }
 
-// resolvePreflightEssence resolves essence for pre-flight using a
-// representative host (first roster host, or synthetic empty at 0
-// connected). Mirrors run() step 4 (essenceInput → Essence.Resolve) for the
-// read-only pre-flight path.
-func (r *Runner) resolvePreflightEssence(serviceDir string, inc *incarnation.Incarnation, hosts []*topology.HostFacts) (map[string]any, error) {
-	host := &topology.HostFacts{}
-	if len(hosts) > 0 {
-		host = hosts[0]
+// preflightIncarnation reads the incarnation the run is about, or nil when it
+// has no row yet (the create path — the operator's request IS what creates it).
+// A missing row is not an error here; every other failure is.
+func (r *Runner) preflightIncarnation(ctx context.Context, name string) (*incarnation.Incarnation, error) {
+	if r.deps.DB == nil {
+		return nil, nil
 	}
-	return r.deps.Essence.Resolve(essenceInput(serviceDir, inc, host))
+	inc, err := incarnation.SelectByName(ctx, r.deps.DB, name)
+	if err != nil {
+		if errors.Is(err, incarnation.ErrIncarnationNotFound) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("preflight: select incarnation %s: %w", name, err)
+	}
+	return inc, nil
+}
+
+// resolvePreflightEssence resolves the essence layers an assert will read,
+// choosing the SAME input run() step 4 would choose for this run (NIM-271):
+//
+//   - a real incarnation with a roster → [essenceInput] over the first host, so
+//     the os overlay is the one the run will render against;
+//   - a real incarnation with an empty roster → [keeperEssenceInput], the
+//     keeper-context form: no representative host, so no os overlay, and the
+//     coven overlay comes from the incarnation's own `covens[]`. Taking the
+//     zero-value host instead would drop the coven layer entirely and make the
+//     gate disagree with the render of the very same run;
+//   - no row at all (create) → a synthetic incarnation built from the request.
+//     The os overlay is genuinely unknowable there — no host has reported yet —
+//     and that is a property of the create path, not a defect to work around.
+//
+// On the first branch the coven overlay survives for a second reason worth
+// naming, because it is easy to break by accident: since ADR-080 the roster
+// query unions each host's own `souls.coven[]` with the covens (and name) of
+// every incarnation it belongs to, so `hosts[0].Coven` ALREADY carries this
+// incarnation's declared tags. The essence a pre-flight assert sees therefore
+// matches render's — verified, not assumed (preflight_essence_integration_test.go).
+func (r *Runner) resolvePreflightEssence(
+	art *artifact.ServiceArtifact,
+	spec RunSpec,
+	inc *incarnation.Incarnation,
+	hosts []*topology.HostFacts,
+) (map[string]any, error) {
+	if inc == nil {
+		inc = &incarnation.Incarnation{
+			Name:    spec.IncarnationName,
+			Service: art.Manifest.Name,
+			Spec:    incarnationSpecFromInput(spec.Input),
+		}
+	}
+	if len(hosts) > 0 {
+		return r.deps.Essence.Resolve(essenceInput(art.LocalDir, inc, hosts[0]))
+	}
+	return r.deps.Essence.Resolve(keeperEssenceInput(art.LocalDir, inc))
 }
 
 // partitionRosterAsserts splits an expanded task list into the tasks pre-flight

@@ -654,6 +654,12 @@ func schemaValidateScenario(path string, root *ast.MappingNode, m *ScenarioManif
 		}
 	}
 
+	// 7) Where each `assert:` can be answered — a roster-reading assert in a
+	// create scenario is deferred to render, not answered pre-flight
+	// ([validateAssertReachability], NIM-272). WARNING: the construct is legal,
+	// only the author's expectation of a 422 is not.
+	out = append(out, validateAssertReachability(tasksNode, m.Tasks, m.Create)...)
+
 	return out
 }
 

@@ -541,12 +541,14 @@ tasks:
   # SENTINEL MONITOR/REPLICAOF would drift apart from the declared topology. The predicate is computed
   # KEEPER-SIDE at RENDER (soulprint.hosts is available). false ABORTS render with a message BEFORE
   # installation. ★ assert (not validate): needs soulprint.hosts (roster), validate is INPUT-ONLY.
-  # ★ NO `when:` GATE, deliberately (unlike the redis size-guards). The guard reads the roster, so
-  # the create-path pre-flight defers it to render and evaluates it there — after the provision
-  # include's refresh boundary with enabled=true, on the original roster with enabled=false
-  # (ADR-009 amendment 2026-07-28 / NIM-235). Before that amendment an ungated roster guard made
-  # POST /v1/incarnations answer 422 for this service on EVERY request: pre-flight ran before the
-  # incarnation row existed, so the roster it measured could not exist either.
+  # ★ NO `when:` GATE, deliberately (unlike the redis size-guards) — and it costs nothing here. The
+  # guard reads the roster, so the create-path pre-flight defers it to render and evaluates it there:
+  # after the provision include's refresh boundary with enabled=true, on the original roster with
+  # enabled=false (ADR-009 amendment 2026-07-28 / NIM-235).
+  # ★ This scenario does NOT declare `create: true`, so the service's create set is empty and
+  # POST /v1/incarnations makes a BARE incarnation without a bootstrap run — the create-path gate
+  # never sees this guard at all. It is reached as an EXPLICIT run over an already-bound roster,
+  # where pre-flight answers it synchronously with 422 (NIM-270) instead of an error_locked.
   - name: Guard sentinel roster size matches replicas
     assert:
       that:

@@ -701,6 +701,30 @@ func (s *Stack) RunScenario(t *testing.T, incarnationName string, scenarioName s
 	return out.ApplyID
 }
 
+// RunScenarioRaw — low-level POST .../scenarios/{scenario}: returns
+// (responseBody, statusCode) without checking the status, the run-path twin of
+// [Stack.CreateIncarnationRaw]. For negative tests where the code IS the
+// subject — e.g. the pre-flight assert gate answering 422 assert-failed before
+// the run starts (NIM-270). Use [Stack.RunScenario] for the happy path.
+//
+// No transient-422 polling here: the caller is asserting on 422 itself, so
+// swallowing one would hide the very thing under test. Register the service and
+// let a prior RunScenario/CreateIncarnation warm the snapshot first.
+func (s *Stack) RunScenarioRaw(t *testing.T, incarnationName, scenarioName string, input map[string]any) ([]byte, int) {
+	t.Helper()
+	c := s.opClient(t)
+	body := map[string]any{}
+	if input != nil {
+		body["input"] = input
+	}
+	path := fmt.Sprintf("/v1/incarnations/%s/scenarios/%s", incarnationName, scenarioName)
+	resp, status, err := c.post(context.Background(), path, body)
+	if err != nil {
+		t.Fatalf("RunScenarioRaw %s/%s: http: %v", incarnationName, scenarioName, err)
+	}
+	return resp, status
+}
+
 // WaitApplySuccess blocks until apply_runs.status becomes success for all
 // rows of the run. PK apply_runs = (apply_id, sid) -> one run produces N
 // rows (one per Soul host). Success condition: all rows are success; any

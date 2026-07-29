@@ -127,6 +127,33 @@ func (h *Handler) callIncarnationRun(ctx context.Context, claims *jwt.Claims, re
 		}
 	}
 
+	// Pre-flight assert gate — parity with REST Run (ADR-009 amendment
+	// 2026-07-28, NIM-270): AFTER ValidateInput, BEFORE enqueue. On this path
+	// the incarnation exists and its roster is bound, so a topology assert can
+	// be answered synchronously instead of becoming an error_locked; a plan that
+	// builds its own roster is deferred inside PreflightAssert. Optional via
+	// type assertion, as on the create path.
+	if pf, ok := h.deps.ScenarioRunner.(assertPreflighter); ok {
+		if err := pf.PreflightAssert(ctx, scenario.RunSpec{
+			IncarnationName: a.Name,
+			ServiceRef:      serviceRef,
+			ScenarioName:    a.Scenario,
+			Input:           a.Input,
+			StartedByAID:    claims.Subject,
+		}); err != nil {
+			if errors.Is(err, scenario.ErrAssertFailed) {
+				return h.toolError(req.ID, toolName, mcpCodeValidationFailed, "assert_failed: "+err.Error())
+			}
+			h.deps.Logger.Error("mcp: incarnation.run pre-flight assert failed",
+				slog.String("name", a.Name),
+				slog.String("scenario", a.Scenario),
+				slog.Any("error", err),
+			)
+			return h.toolError(req.ID, toolName, mcpCodeInternalError,
+				"pre-flight assert for scenario "+a.Scenario+" failed")
+		}
+	}
+
 	applyID := audit.NewULID()
 	if err := h.deps.ScenarioRunner.Start(ctx, scenario.RunSpec{
 		ApplyID:         applyID,

@@ -274,8 +274,7 @@ func (r *Runner) run(ctx context.Context, spec RunSpec) {
 	// either signal, an empty roster is no_hosts bit-for-bit (unextended
 	// behavior). Computed over scn.Tasks AFTER ExpandIncludes — the same flat
 	// top-level list Render and Stratify see.
-	provisionsRoster := config.HasRefreshEmitter(scn.Tasks)
-	if len(hosts) == 0 && !allKeeperTasks(scn.Tasks) && !provisionsRoster {
+	if len(hosts) == 0 && !planBuildsRoster(scn.Tasks) {
 		abort("no_hosts", fmt.Errorf("incarnation %q has no connected hosts", spec.IncarnationName))
 		return
 	}
@@ -891,6 +890,32 @@ func (r *Runner) run(ctx context.Context, spec RunSpec) {
 // re-resolve sees exactly who the refresh step's barrier waited online for.
 func (r *Runner) resolveRoster(ctx context.Context, incarnationName string) ([]*topology.HostFacts, error) {
 	return r.deps.Topology.LoadIncarnationHosts(ctx, incarnationName)
+}
+
+// planBuildsRoster reports whether the plan produces its own run roster rather
+// than consuming one that already exists — the union of the TWO no_hosts bypass
+// classes (ADR-0061 amendment 2026-06-28), named once so its two readers cannot
+// drift apart:
+//
+//   - the no_hosts gate in [Runner.run] §3, which lets such a plan start on an
+//     empty roster;
+//   - the pre-flight assert gate ([Runner.PreflightAssert]), which must NOT
+//     measure a topology predicate against the roster as it stands at request
+//     time — for these plans that roster is the run's INPUT to nothing, and the
+//     one the assert is written against does not exist until the run creates it
+//     (NIM-270).
+//
+// Both readers are asking the same question in different words: "is the roster
+// I can see right now the roster this plan is about?". A plan that provisions
+// from zero answers no at both points, which is why splitting the predicate in
+// two would be a bug waiting to happen — a false 422 at the gate is the exact
+// mirror of the false no_hosts abort the bypass classes were introduced to
+// prevent.
+//
+// Computed over tasks AFTER ExpandIncludes — the same flat top-level list
+// Render and Stratify see.
+func planBuildsRoster(tasks []config.Task) bool {
+	return allKeeperTasks(tasks) || config.HasRefreshEmitter(tasks)
 }
 
 // allKeeperTasks reports whether the scenario consists ENTIRELY of keeper-side

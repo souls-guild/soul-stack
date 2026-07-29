@@ -344,6 +344,37 @@ func (h *IncarnationHandler) RunTyped(ctx context.Context, claims *jwt.Claims, n
 		}
 	}
 
+	// Pre-flight assert gate (ADR-009 amendment 2026-07-28, NIM-270): AFTER
+	// ValidateInput and BEFORE runner.Start, mirroring where it sits on the
+	// create path. THIS is the path where a topology assert can actually be
+	// answered up front — the incarnation exists and its roster is bound (the
+	// operator's bind → run flow, ADR-008 amendment/NIM-209), which is the case
+	// the two-point amendment was written for and the one create can never be.
+	// A roster-building plan is deferred inside PreflightAssert, so a
+	// provision-from-zero run still starts on an empty roster as before.
+	//
+	// Failure is 422 assert_failed and the run does NOT start: no apply_id, no
+	// `applying`, no error_locked to unlock afterwards. Optional via type
+	// assertion, as on the create path — a ScenarioStarter fake without the
+	// method makes this a no-op.
+	if pf, ok := h.runner.(AssertPreflighter); ok {
+		if err := pf.PreflightAssert(ctx, scenario.RunSpec{
+			IncarnationName: name,
+			ServiceRef:      serviceRef,
+			ScenarioName:    scenarioName,
+			Input:           input,
+			StartedByAID:    claims.Subject,
+		}); err != nil {
+			if errors.Is(err, scenario.ErrAssertFailed) {
+				return zero, incProblem(problem.TypeAssertFailed, err.Error())
+			}
+			h.logger.Error("incarnation.run: pre-flight assert failed",
+				slog.String("name", name), slog.String("scenario", scenarioName), slog.Any("error", err))
+			return zero, incProblem(problem.TypeInternalError,
+				"pre-flight assert for scenario "+scenarioName+" failed")
+		}
+	}
+
 	applyID := audit.NewULID()
 	if err := h.runner.Start(ctx, scenario.RunSpec{
 		ApplyID:         applyID,
