@@ -572,7 +572,19 @@ func runDaemon(args []string) int {
 	// would turn a Keeper outage into failed unit starts (StartLimitBurst) on
 	// every host. The live connection state goes out as STATUS= instead.
 	notifier.Ready(fmt.Sprintf("connecting: sid=%s endpoints=%d", sid, len(endpoints)))
-	reconnectLoop(ctx, store, client, runner, errandRunner, consoleMetrics, sp, up, eventStreamMetrics, sigils, anchorSet, scheduler, notifier, logger)
+	reconnectLoop(ctx, store, client, sessionDeps{
+		runner:           runner,
+		errandRunner:     errandRunner,
+		scheduler:        scheduler,
+		soulprintPush:    sp,
+		utilizationPulse: up,
+		sigils:           sigils,
+		anchors:          anchorSet,
+		consoleMetrics:   consoleMetrics,
+		streamMetrics:    eventStreamMetrics,
+		notifier:         notifier,
+		logger:           logger,
+	})
 	notifier.Stopping("shutting down")
 	logger.Info("soul run: shutdown complete")
 	return exitOK
@@ -800,6 +812,37 @@ func runApply(args []string) int {
 	return exitOK
 }
 
+// sessionDeps is every per-process dependency the reconnect loop and the
+// sessions it serves are wired with — one keyed struct instead of a positional
+// argument list.
+//
+// The list is long and mostly same-typed pointers, which is exactly what a
+// positional signature hides: a dependency inserted in the middle compiles
+// silently at every call site, and two swapped pointers compile too. That is
+// how the test harness drifted out of sync in NIM-207. `make vet-tags` only
+// catches a call that no longer builds, not one that builds and means
+// something else. With named fields a missed dependency is visible in review
+// and a swapped pair is not expressible.
+//
+// Every field is nil-safe by contract: a caller that never exercises a path
+// (tests, push mode) leaves that field zero rather than inventing a stub.
+//
+// Passed by value: handleSession tunes the soulprint/utilization cadence for
+// one session's lifetime, and that tuning must not leak back into the loop.
+type sessionDeps struct {
+	runner           *runtime.ApplyRunner
+	errandRunner     *errandrunner.Runner
+	scheduler        *beacon.Scheduler
+	soulprintPush    soulprintPusher
+	utilizationPulse utilizationPusher
+	sigils           *sigilcache.Cache
+	anchors          *sharedhost.AnchorSet
+	consoleMetrics   *consolerunner.Metrics
+	streamMetrics    *soulgrpc.EventStreamMetrics
+	notifier         *sdnotify.Notifier
+	logger           *slog.Logger
+}
+
 // reconnectLoop is the outer loop: Dial → handleSession → backoff → repeat.
 //
 // Each Dial failure increases delay exponentially (capped at backoff.max);
@@ -810,18 +853,18 @@ func runApply(args []string) int {
 // The store snapshot has already passed semantic validation (an invalid duration
 // is rejected at the reload phase), so resolveBackoff/resolveFailback here are
 // best-effort — on a parse error they return defaults + warn, they don't panic.
-func reconnectLoop(ctx context.Context, store *config.Store[config.SoulConfig], client *soulgrpc.Client, runner *runtime.ApplyRunner, errandRunner *errandrunner.Runner, consoleMetrics *consolerunner.Metrics, sp soulprintPusher, up utilizationPusher, metrics *soulgrpc.EventStreamMetrics, sigils *sigilcache.Cache, anchors *sharedhost.AnchorSet, scheduler *beacon.Scheduler, notifier *sdnotify.Notifier, logger *slog.Logger) {
-	delay := resolveBackoff(store, logger).initial
+func reconnectLoop(ctx context.Context, store *config.Store[config.SoulConfig], client *soulgrpc.Client, deps sessionDeps) {
+	delay := resolveBackoff(store, deps.logger).initial
 	// The first iteration is the initial connect; every subsequent Dial attempt is a
 	// reconnect (after a disconnect or a failed dial). soul_eventstream_
 	// reconnects_total counts re-establishment attempts only, not the initial one.
 	firstAttempt := true
 	for ctx.Err() == nil {
 		if !firstAttempt {
-			metrics.IncReconnects()
+			deps.streamMetrics.IncReconnects()
 		}
 		firstAttempt = false
-		b := resolveBackoff(store, logger)
+		b := resolveBackoff(store, deps.logger)
 		sess, err := client.Dial(ctx)
 		if err != nil {
 			// lease-held (every endpoint returned AlreadyExists, the SID lease still holds a
@@ -839,12 +882,12 @@ func reconnectLoop(ctx context.Context, store *config.Store[config.SoulConfig], 
 					delay = backoffCap
 				}
 			}
-			logger.Warn("soul run: dial failed, will retry",
+			deps.logger.Warn("soul run: dial failed, will retry",
 				slog.Duration("delay", delay),
 				slog.Bool("lease_held", leaseHeld),
 				slog.Any("error", err),
 			)
-			notifier.Status(fmt.Sprintf("disconnected: dial failed, retry in %s (lease_held=%t)", delay, leaseHeld))
+			deps.notifier.Status(fmt.Sprintf("disconnected: dial failed, retry in %s (lease_held=%t)", delay, leaseHeld))
 			if !sleepCtx(ctx, withJitter(delay, b.jitter)) {
 				return
 			}
@@ -853,13 +896,13 @@ func reconnectLoop(ctx context.Context, store *config.Store[config.SoulConfig], 
 		}
 		// Successful dial — reset backoff to the current initial.
 		delay = b.initial
-		metrics.SetConnected(true)
-		notifier.Status(fmt.Sprintf("connected: keeper=%s priority=%d session=%s", sess.KID(), sess.Priority(), sess.SessionID()))
-		handleSession(ctx, store, client, sess, runner, errandRunner, consoleMetrics, sp, up, sigils, anchors, scheduler, logger)
+		deps.streamMetrics.SetConnected(true)
+		deps.notifier.Status(fmt.Sprintf("connected: keeper=%s priority=%d session=%s", sess.KID(), sess.Priority(), sess.SessionID()))
+		handleSession(ctx, store, client, sess, deps)
 		// handleSession returned = session closed (clean EOF or error).
 		// The next iteration will try Dial again.
-		metrics.SetConnected(false)
-		notifier.Status("disconnected: session closed, reconnecting")
+		deps.streamMetrics.SetConnected(false)
+		deps.notifier.Status("disconnected: session closed, reconnecting")
 	}
 }
 
@@ -1014,7 +1057,15 @@ type recvResult struct {
 // session is closed and replaced with a new one (zero-downtime: the new one is open before
 // the old one closes). The failback goroutine stops when handleSession
 // exits.
-func handleSession(ctx context.Context, store *config.Store[config.SoulConfig], client *soulgrpc.Client, sess *soulgrpc.StreamSession, runner *runtime.ApplyRunner, errandRunner *errandrunner.Runner, consoleMetrics *consolerunner.Metrics, sp soulprintPusher, up utilizationPusher, sigils *sigilcache.Cache, anchors *sharedhost.AnchorSet, scheduler *beacon.Scheduler, logger *slog.Logger) {
+func handleSession(ctx context.Context, store *config.Store[config.SoulConfig], client *soulgrpc.Client, sess *soulgrpc.StreamSession, deps sessionDeps) {
+	logger := deps.logger
+	// The two pushers are copied out of deps because this session retunes their
+	// cadence below and that must stay session-local. deps is already a value,
+	// but the copy keeps that property from depending on how deps is passed.
+	// telemetry inside up is a pointer — the delivered directive is process-wide
+	// by design (NIM-87) and still survives a reconnect.
+	sp, up := deps.soulprintPush, deps.utilizationPulse
+
 	// failback / soulprint.refresh_interval / utilization.interval are read
 	// from the store at the start of each session (hot-reload, ADR-021): a new
 	// session after reconnect/swap sees current values. Within a session
@@ -1048,7 +1099,7 @@ func handleSession(ctx context.Context, store *config.Store[config.SoulConfig], 
 	// happens before this SID's RunResults/TaskEvents arrive. An empty set
 	// (process restart) is an explicit "nothing is tracked" declaration. Error = stream
 	// broken: bail out, reconnect will re-establish it (like the initial soulprint below).
-	if err := sess.SendWardRoster(runner.ActiveSet()); err != nil {
+	if err := sess.SendWardRoster(deps.runner.ActiveSet()); err != nil {
 		logger.Warn("ward-roster: send failed (stream broken)", slog.Any("error", err))
 		return
 	}
@@ -1114,14 +1165,14 @@ func handleSession(ctx context.Context, store *config.Store[config.SoulConfig], 
 	// branch) call CloseAll, which kills each pty's whole process group and
 	// WAITS for the reaping: kill-on-disconnect, no orphaned root shells.
 	consoleLimits := resolveConsoleLimits(store, logger)
-	consoleRunner := consolerunner.New(sess, consoleLimits, logger, consoleMetrics,
+	consoleRunner := consolerunner.New(sess, consoleLimits, logger, deps.consoleMetrics,
 		consolerunner.WithDialer(consoleDialer{sess}))
 
 	// Host-side ceiling on concurrent async: tasks (ADR-0075(e)). Read here, with
 	// the console limits, so a hot-reload (ADR-021) applies on the next
 	// reconnect; a run already under way keeps the ceiling it started with. Set
 	// from this goroutine, the one that later drives runner.Run.
-	runner.SetAsyncLimit(store.Get().AsyncMaxConcurrent())
+	deps.runner.SetAsyncLimit(store.Get().AsyncMaxConcurrent())
 
 	// The reader goroutine reads the current sess; on swap it's restarted on
 	// the new sess. recvCh is unbuffered — a gate through which the
@@ -1186,7 +1237,7 @@ func handleSession(ctx context.Context, store *config.Store[config.SoulConfig], 
 				logger.Warn("utilization: report send failed (stream broken)", slog.Any("error", err))
 				return
 			}
-		case portent := <-scheduler.Portents():
+		case portent := <-deps.scheduler.Portents():
 			// Beacon scheduler raised a Portent on a state change (ADR-030,
 			// edge-triggered). Sent from this select-loop — the session's only
 			// writer (StreamSession isn't concurrent-safe for Send). Error = stream
@@ -1211,7 +1262,7 @@ func handleSession(ctx context.Context, store *config.Store[config.SoulConfig], 
 			oldConsole := consoleRunner
 			sess = newSess
 			augurClient = augur.NewClient(sess)
-			consoleRunner = consolerunner.New(sess, consoleLimits, logger, consoleMetrics,
+			consoleRunner = consolerunner.New(sess, consoleLimits, logger, deps.consoleMetrics,
 				consolerunner.WithDialer(consoleDialer{sess}))
 			logger.Info("eventstream: failback swap",
 				slog.Int("new_priority", newSess.Priority()),
@@ -1257,7 +1308,7 @@ func handleSession(ctx context.Context, store *config.Store[config.SoulConfig], 
 				// request is silently dropped (metric + debug log inside AcceptAttempt),
 				// no RunResult is sent — Keeper's barrier will close the original apply
 				// (higher attempt) with its own RunResult, runTimeout is the backstop.
-				if !runner.AcceptAttempt(req.GetApplyId(), req.GetAttempt()) {
+				if !deps.runner.AcceptAttempt(req.GetApplyId(), req.GetAttempt()) {
 					continue
 				}
 				// Extract the W3C traceparent from ApplyRequest into ctx so apply.run
@@ -1277,13 +1328,13 @@ func handleSession(ctx context.Context, store *config.Store[config.SoulConfig], 
 				// (ADR-065): same ClientConn, separate HTTP/2 stream; mirrors the
 				// augur.WithRun pattern.
 				applyCtx = installmod.WithFetcher(applyCtx, sess)
-				if err := runner.Run(applyCtx, req, sess); err != nil {
+				if err := deps.runner.Run(applyCtx, req, sess); err != nil {
 					logger.Error("apply: send failed (stream broken)", slog.Any("error", err))
 					return
 				}
 			case *keeperv1.FromKeeper_CancelApply:
 				applyID := payload.CancelApply.GetApplyId()
-				cancelled := runner.Cancel(applyID)
+				cancelled := deps.runner.Cancel(applyID)
 				logger.Info("apply: cancel received",
 					slog.String("apply_id", applyID),
 					slog.String("reason", payload.CancelApply.GetReason()),
@@ -1295,7 +1346,7 @@ func handleSession(ctx context.Context, store *config.Store[config.SoulConfig], 
 				// Best-effort: the Errand may have already finished (race with its own
 				// terminal state) — Cancel returns false, log + silently ignore.
 				cancelReq := payload.CancelErrand
-				cancelled := errandRunner.Cancel(cancelReq.GetErrandId())
+				cancelled := deps.errandRunner.Cancel(cancelReq.GetErrandId())
 				logger.Info("errand: cancel received",
 					slog.String("errand_id", cancelReq.GetErrandId()),
 					slog.Bool("cancelled", cancelled),
@@ -1319,7 +1370,7 @@ func handleSession(ctx context.Context, store *config.Store[config.SoulConfig], 
 					slog.Int("timeout_seconds", int(errReq.GetTimeoutSeconds())),
 				)
 				go func(req *keeperv1.ErrandRequest) {
-					result := errandRunner.Run(ctx, req)
+					result := deps.errandRunner.Run(ctx, req)
 					if sendErr := sess.SendErrandResult(result); sendErr != nil {
 						logger.Warn("errand: send result failed (stream broken)",
 							slog.String("errand_id", req.GetErrandId()),
@@ -1359,7 +1410,7 @@ func handleSession(ctx context.Context, store *config.Store[config.SoulConfig], 
 				// Snapshot is the ONLY authoritative source for the set; the cache has a
 				// single writer (this recv-loop), verify-phase readers take an RLock.
 				snap := payload.SigilSnapshot.GetSigils()
-				sigils.ReplaceAll(snap)
+				deps.sigils.ReplaceAll(snap)
 				logger.Info("sigil: snapshot applied (ReplaceAll)",
 					slog.Int("count", len(snap)),
 				)
@@ -1376,7 +1427,7 @@ func handleSession(ctx context.Context, store *config.Store[config.SoulConfig], 
 				// garbage/incomplete set would open a hole in verify. An empty set
 				// (Sigil disabled on Keeper) is a valid state: the holder is cleared,
 				// any plugin verify fail-closes on no_trust_anchor.
-				if anchors == nil {
+				if deps.anchors == nil {
 					// No holder (e.g. push mode / test harness without a
 					// Host) — nowhere to distribute to; verify already fail-closes.
 					break
@@ -1390,7 +1441,7 @@ func handleSession(ctx context.Context, store *config.Store[config.SoulConfig], 
 					)
 					break
 				}
-				anchors.SetAnchors(parsed)
+				deps.anchors.SetAnchors(parsed)
 				logger.Info("sigil: trust-anchors applied (ReplaceAll)",
 					slog.Int("count", len(parsed)),
 				)
@@ -1414,7 +1465,7 @@ func handleSession(ctx context.Context, store *config.Store[config.SoulConfig], 
 				// restarting Soul), a new one starts from baseline with no Portent. ctx is the
 				// parent daemon context: the set survives the current session.
 				vigils := payload.VigilSnapshot.GetVigils()
-				scheduler.Apply(ctx, vigils)
+				deps.scheduler.Apply(ctx, vigils)
 				logger.Info("beacon: vigil snapshot applied (ReplaceAll)",
 					slog.Int("count", len(vigils)),
 				)

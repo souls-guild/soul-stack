@@ -185,24 +185,28 @@ func TestReconnect_LeaseHeld_SpraysToOtherEndpoint(t *testing.T) {
 // func cancels it and waits for the goroutine to exit.
 //
 // Every test here drives one path — Dial → session → failback swap — so the deps
-// outside it are nil, each a documented nil-safe receiver: errandRunner /
-// consoleMetrics (no Errand or ConsoleOpen arrives), metrics, sigils / anchors
-// (Sigil verify only runs on custom-plugin Apply), scheduler (no VigilSnapshot),
-// notifier (sd_notify is inert outside systemd).
+// outside it are left at their zero value, each a documented nil-safe receiver:
+// errandRunner / consoleMetrics (no Errand or ConsoleOpen arrives),
+// streamMetrics, sigils / anchors (Sigil verify only runs on custom-plugin
+// Apply), scheduler (no VigilSnapshot), notifier (sd_notify is inert outside
+// systemd). They are omitted rather than spelled out as nil: with sessionDeps
+// the unused ones are the ones absent from the literal.
 //
-// One call site on purpose: reconnectLoop takes 14 positional args, and these
-// tests silently drifted out of sync with it (NIM-207) because nothing built
-// this file. A signature change now breaks one line, not three.
+// One call site on purpose: these tests silently drifted out of sync with the
+// loop (NIM-207) because nothing built this file.
 func startReconnectLoop(t *testing.T, store *config.Store[config.SoulConfig], cli *soulgrpc.Client, logger *slog.Logger) func() {
 	t.Helper()
-	runner := runtime.NewApplyRunner(coremod.Default(installmod.Deps{}), nil)
-	sp := newTestPusher(testSID)
-	up := newTestUtilPusher(testSID)
+	deps := sessionDeps{
+		runner:           runtime.NewApplyRunner(coremod.Default(installmod.Deps{}), nil),
+		soulprintPush:    newTestPusher(testSID),
+		utilizationPulse: newTestUtilPusher(testSID),
+		logger:           logger,
+	}
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		reconnectLoop(ctx, store, cli, runner, nil, nil, sp, up, nil, nil, nil, nil, nil, logger)
+		reconnectLoop(ctx, store, cli, deps)
 	}()
 	return func() {
 		cancel()
