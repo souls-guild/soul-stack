@@ -10,6 +10,8 @@ import (
 	"sync/atomic"
 	"testing"
 
+	"github.com/spf13/cobra"
+
 	"github.com/souls-guild/soul-stack/soulctl/internal/client"
 )
 
@@ -297,5 +299,110 @@ func TestWaitForApplyBlocking(t *testing.T) {
 	}
 	if result == nil || result.FinalStatus != "error_locked" {
 		t.Errorf("waitResult: %+v", result)
+	}
+}
+
+// TestIncarnationsRunDetailCarriesNotices — the CLI half of NIM-269. The point
+// of the notice channel is that an operator learns a param is on its way out
+// WITHOUT reading the agent's log, so the client has to decode the field rather
+// than drop it on the floor: an unread field is indistinguishable from a keeper
+// that never sent one.
+func TestIncarnationsRunDetailCarriesNotices(t *testing.T) {
+	_, cl := fakeServer(t, map[string]http.HandlerFunc{
+		"/v1/incarnations/redis-prod/runs/01HX0000000000000000000000": func(w http.ResponseWriter, r *http.Request) {
+			if r.Method != "GET" {
+				t.Errorf("expected GET, got %s", r.Method)
+			}
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"apply_id": "01HX0000000000000000000000", "scenario": "scale",
+				"status": "success", "started_at": "2026-05-26T12:00:00Z",
+				"hosts": []map[string]any{
+					{
+						"sid": "host-a", "status": "success", "passage": 0, "attempt": 1,
+						"cancel_requested": false,
+						"notices": []map[string]any{{
+							"code": "deprecated_param", "module": "community.redis.present",
+							"param":   "address",
+							"message": `param "address" is deprecated since 0.4.0 and stops working in 0.6.0; use "addr" instead`,
+						}},
+					},
+					{"sid": "host-b", "status": "success", "passage": 0, "attempt": 1, "cancel_requested": false},
+				},
+			})
+		},
+	})
+	d, err := cl.Incarnations.RunDetail(context.Background(), "redis-prod", "01HX0000000000000000000000")
+	if err != nil {
+		t.Fatalf("RunDetail: %v", err)
+	}
+	if d.Status != "success" {
+		t.Fatalf("status = %q, want success - a notice must not depend on failure", d.Status)
+	}
+	if len(d.Hosts) != 2 {
+		t.Fatalf("hosts = %d, want 2", len(d.Hosts))
+	}
+	if len(d.Hosts[0].Notices) != 1 {
+		t.Fatalf("host-a notices = %d, want 1", len(d.Hosts[0].Notices))
+	}
+	n := d.Hosts[0].Notices[0]
+	if n.Code != "deprecated_param" || n.Param != "address" {
+		t.Errorf("notice = %+v, want deprecated_param on address", n)
+	}
+	if !strings.Contains(n.Message, "0.6.0") || !strings.Contains(n.Message, "addr") {
+		t.Errorf("message %q names neither the deadline nor the replacement", n.Message)
+	}
+	// A park mid-upgrade answers differently host to host; host-b's silence is
+	// data, not an omission.
+	if len(d.Hosts[1].Notices) != 0 {
+		t.Errorf("host-b reported nothing but decoded %+v", d.Hosts[1].Notices)
+	}
+}
+
+// TestPrintRunDetailShowsNoticesOnASuccessfulRun — the rendering guard. A run
+// where every host succeeded is exactly the case this exists for: nothing else
+// on the screen would tell the operator that a param they pass stops working.
+// The sentence must survive to stdout intact — it is the only place the deadline
+// and the replacement appear.
+func TestPrintRunDetailShowsNoticesOnASuccessfulRun(t *testing.T) {
+	var buf bytes.Buffer
+	cmd := &cobra.Command{}
+	cmd.SetOut(&buf)
+	err := printRunDetail(cmd, &client.RunDetail{
+		ApplyID: "01HX0000000000000000000000", Scenario: "scale", Status: "success",
+		StartedAt: "2026-05-26T12:00:00Z",
+		Hosts: []client.RunHostStatus{
+			{SID: "host-a", Status: "success", Notices: []client.RunNotice{{
+				Code: "deprecated_param", Module: "community.redis.present", Param: "address",
+				Message: `param "address" is deprecated since 0.4.0 and stops working in 0.6.0; use "addr" instead`,
+			}}},
+			{SID: "host-b", Status: "success"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("printRunDetail: %v", err)
+	}
+	got := buf.String()
+	for _, want := range []string{"notices", "host-a", "community.redis.present", "0.6.0", `use "addr"`} {
+		if !strings.Contains(got, want) {
+			t.Errorf("output is missing %q:\n%s", want, got)
+		}
+	}
+}
+
+// A run with nothing to report must print exactly what it printed before the
+// notice block existed - no empty heading, no stray blank section.
+func TestPrintRunDetailQuietWhenNoNotices(t *testing.T) {
+	var buf bytes.Buffer
+	cmd := &cobra.Command{}
+	cmd.SetOut(&buf)
+	if err := printRunDetail(cmd, &client.RunDetail{
+		ApplyID: "01HX0000000000000000000000", Scenario: "scale", Status: "success",
+		StartedAt: "2026-05-26T12:00:00Z",
+		Hosts:     []client.RunHostStatus{{SID: "host-a", Status: "success"}},
+	}); err != nil {
+		t.Fatalf("printRunDetail: %v", err)
+	}
+	if strings.Contains(buf.String(), "notices") {
+		t.Errorf("a quiet run printed a notices section:\n%s", buf.String())
 	}
 }

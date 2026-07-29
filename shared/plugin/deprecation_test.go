@@ -159,3 +159,94 @@ func TestDeprecated_CoreManifestsCarryNoStaleDeprecation(t *testing.T) {
 		t.Errorf("a patch-level removal slipped past the policy: %v", codes)
 	}
 }
+
+// The deprecation axis stops at the parameter (ADR-0076(x)): a module or a state
+// carries `introduced_in` but NOT `deprecated`. The levels differ in what
+// removal does — a parameter's removal was silent, a module's or a state's is a
+// loud, positioned diagnostic, and a plugin's module is versioned by its git ref
+// instead — so a `deprecated` there would be redundant on core and semantically
+// empty on a plugin, while costing what any new manifest key costs: a decode
+// error on an older Soul, where DiscoverSlot skips the whole slot and the module
+// VANISHES rather than losing a label.
+//
+// Proven against the PARSER rather than by reflecting over the structs: a field
+// list is a copy of the contract that can silently disagree with it, whereas
+// yaml.Strict() rejecting the key IS the contract (the NIM-206 lesson). If
+// someone later adds the field, these two fail and send them to the ADR.
+func TestDeprecated_RejectedAboveParameterLevel(t *testing.T) {
+	cases := []struct {
+		name string
+		src  string
+	}{
+		{
+			name: "module level",
+			src: `kind: soul_module
+protocol_version: 1
+namespace: acme
+name: widget
+deprecated: { since: "0.4.0", removed_in: "0.6.0" }
+spec:
+  states:
+    applied:
+      description: applies the widget
+      input:
+        addr: { type: string }
+`,
+		},
+		{
+			name: "state level",
+			src: `kind: soul_module
+protocol_version: 1
+namespace: acme
+name: widget
+spec:
+  states:
+    applied:
+      description: applies the widget
+      deprecated: { since: "0.4.0", removed_in: "0.6.0" }
+      input:
+        addr: { type: string }
+`,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			_, diags := LoadFromBytes("manifest.yaml", []byte(tc.src))
+			if !diag.HasErrors(diags) {
+				t.Fatalf("`deprecated:` at %s was accepted; if that is now intended, "+
+					"ADR-0076(x) has to be reopened first - the key is empty on a plugin "+
+					"(its introduced_in already is) and redundant on core", tc.name)
+			}
+		})
+	}
+}
+
+// The mirror of the above: `introduced_in` IS declarable at those two levels, so
+// the rejection above is specific to `deprecated` and not just "the walker
+// refuses everything up there". Without this, the guard would still pass if the
+// manifest parser broke wholesale.
+func TestIntroducedIn_AcceptedAboveParameterLevel(t *testing.T) {
+	src := `kind: soul_module
+protocol_version: 1
+namespace: acme
+name: widget
+introduced_in: "1.4.0"
+spec:
+  states:
+    applied:
+      description: applies the widget
+      introduced_in: "1.5.0"
+      input:
+        addr: { type: string }
+`
+	m, diags := LoadFromBytes("manifest.yaml", []byte(src))
+	if diag.HasErrors(diags) {
+		t.Fatalf("introduced_in above parameter level was rejected: %v", diags)
+	}
+	if m.IntroducedIn != "1.4.0" {
+		t.Errorf("module introduced_in = %q, want 1.4.0", m.IntroducedIn)
+	}
+	if got := m.Spec.States["applied"].IntroducedIn; got != "1.5.0" {
+		t.Errorf("state introduced_in = %q, want 1.5.0", got)
+	}
+}

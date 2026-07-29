@@ -32,7 +32,16 @@ View what is recorded in state and the history of runs:
 ```sh
 soulctl incarnation get hello-demo          # spec / state / status / covens
 soulctl incarnation history hello-demo      # state_history: apply_id / scenario / who launched
+soulctl incarnation runs hello-demo         # apply runs, INCLUDING the ones that failed
 ```
+
+`history` and `runs` answer different questions about the same apply. `history` is `state_history` — what the state *became*, so it carries no run status or failure reason (a failed apply shows up with empty `STATUS`/`DURATION`). `runs` reads `apply_runs`, the execution record: aggregate status, and per host the failed task's address and reason. On a run that could not start you see `failed` and `no_hosts` here and nothing at all there. Add an `apply_id` for the per-host breakdown:
+
+```sh
+soulctl incarnation runs hello-demo 01J9F0K8XA7YZ2EXAMPLEULID01
+```
+
+That view carries the failed task's address and reason per host, and — below the table — any **notices** the run reported ([ADR-0076(u)](../adr/0076-engine-compat-window.md)). A notice is not a failure: the run succeeded, and a param it passed is on its way out, naming the release that stops honoring it and what to use instead. It is printed per host on purpose — the contract a param is checked against is the manifest compiled into *that* agent, so during an agent rollout the hosts legitimately disagree, and that disagreement tells you how far the rollout has reached.
 
 Summary of all ways to start work (single run / batch via Voyage / push) - [run-flavors.md](../keeper/run-flavors.md).
 

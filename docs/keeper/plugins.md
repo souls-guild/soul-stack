@@ -102,6 +102,20 @@ The block is also **published by `GET /v1/modules`** beside `introduced_in`, as 
 
 `introduced_in` and `deprecated` are the two ends of the same axis, and `unknown_param` is what both converge on: before `introduced_in` and from `removed_in` onward the very same task text is rejected, in between it works.
 
+### Why `deprecated` exists only on a parameter
+
+`introduced_in` is declarable at three levels (module, state, parameter); `deprecated` at one. That asymmetry is deliberate ([ADR-0076(x)](../adr/0076-engine-compat-window.md)) — the levels differ in what removing them does:
+
+| Level | What removal does today | How it is announced |
+|---|---|---|
+| **Parameter** | Was **silent** — a Soul reads params by key, so a key it does not know is never read and the module reports success while nothing happened | `deprecated:` — the only mechanism that can warn |
+| **State / module (`core.`)** | **Loud, and early**: `module_state_unknown` from the static check with a line and column, `module.not_found` before dispatch | Release notes + those diagnostics; a manifest note would say less, later |
+| **State / module (plugin)** | Governed by the plugin's own version line — its **git ref** ([ADR-007](../adr/0007-versioning-git-ref.md)) | The `ref:` the author pinned; the module does not move under them |
+
+The engine-version axis genuinely does not reach a plugin's module: a plugin's `introduced_in` is read by nothing (the floor walk returns early on any namespace but `core`), which is why the table above says the key "states nothing about a keeper release". A module-level `deprecated` would inherit exactly that emptiness — while costing what any new manifest key costs: on an older Soul it is a decode error, and the whole slot is skipped, so the **module disappears** rather than merely losing a label.
+
+**Deprecating a module is therefore not unsupported — it goes through a different door.** If you are retiring a plugin module, cut a new ref and say so in its release notes; consumers move when they re-pin. If a `core.` module or state is going away, that is a release-notes event, and the author meets it as a positioned lint error rather than a silent no-op.
+
 ### `spec` for `kind: cloud_driver`
 
 | Field | Type | Default | Meaning |

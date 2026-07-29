@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
+	"strconv"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -23,6 +25,7 @@ func newIncarnationCmd() *cobra.Command {
 		newIncarnationGetCmd(),
 		newIncarnationRunCmd(),
 		newIncarnationHistoryCmd(),
+		newIncarnationRunsCmd(),
 		newIncarnationCheckDriftCmd(),
 	)
 	return c
@@ -203,6 +206,145 @@ func newIncarnationHistoryCmd() *cobra.Command {
 	c.Flags().IntVar(&limit, "limit", 0, "maximum records (1..1000, default server 50)")
 	c.Flags().IntVar(&offset, "offset", 0, "pagination offset")
 	return c
+}
+
+// newIncarnationRunsCmd — `runs <name> [apply_id]`: the applies of an
+// incarnation, and one apply in detail. Distinct from `history`, which lists
+// state_history — what the state BECAME — and therefore carries no run status
+// and no failure reason: a run that never started shows there with an empty
+// status, while here it reads `failed` with `no_hosts` against the host row.
+//
+// One command with an optional second argument rather than two: list and detail
+// are the same object at two zoom levels, and `runs <name> <apply_id>` reads as
+// the drill-down it is. `run` (singular) was not available anyway — it starts a
+// scenario.
+func newIncarnationRunsCmd() *cobra.Command {
+	var (
+		limit  int
+		offset int
+	)
+	c := &cobra.Command{
+		Use:   "runs <name> [apply_id]",
+		Short: "apply runs of an incarnation (add apply_id for per-host detail)",
+		Args:  cobra.RangeArgs(1, 2),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			cl, err := loadClient(cmd)
+			if err != nil {
+				return err
+			}
+			ctx, cancel := context.WithTimeout(cmd.Context(), 30*time.Second)
+			defer cancel()
+
+			if len(args) == 2 {
+				detail, err := cl.Incarnations.RunDetail(ctx, args[0], args[1])
+				if err != nil {
+					return renderAPIError(err)
+				}
+				if RootFlags(cmd).Output == output.FormatJSON {
+					return output.JSON(cmd.OutOrStdout(), detail)
+				}
+				return printRunDetail(cmd, detail)
+			}
+
+			reply, err := cl.Incarnations.Runs(ctx, args[0], limit, offset)
+			if err != nil {
+				return renderAPIError(err)
+			}
+			if RootFlags(cmd).Output == output.FormatJSON {
+				return output.JSON(cmd.OutOrStdout(), reply)
+			}
+			rows := make([][]string, 0, len(reply.Items))
+			for _, r := range reply.Items {
+				startedBy := ""
+				if r.StartedByAID != nil {
+					startedBy = *r.StartedByAID
+				}
+				finished := ""
+				if r.FinishedAt != nil {
+					finished = formatTimeShort(*r.FinishedAt)
+				}
+				rows = append(rows, []string{
+					r.ApplyID, r.Scenario, r.Status,
+					formatTimeShort(r.StartedAt), finished, startedBy,
+				})
+			}
+			return output.Table(cmd.OutOrStdout(),
+				[]string{"APPLY_ID", "SCENARIO", "STATUS", "STARTED_AT", "FINISHED_AT", "STARTED_BY"},
+				rows)
+		},
+	}
+	c.Flags().IntVar(&limit, "limit", 0, "maximum records (1..1000, default server 50)")
+	c.Flags().IntVar(&offset, "offset", 0, "pagination offset")
+	return c
+}
+
+// printRunDetail renders one run: header, per-host table, then the advisory
+// notices (ADR-0076(u)).
+//
+// Notices are printed AFTER the table and not as a column, because they are the
+// one thing here that is not about this run's outcome: the run succeeded, and a
+// param it passed stops working in a future release. A column would be truncated
+// to uselessness — the whole value is in the sentence, which names the deadline
+// and the replacement — and would read as a per-host defect rather than as work
+// to schedule.
+//
+// Grouped by host, because that is the granularity the data has: the contract a
+// param is checked against is the manifest compiled into THAT agent, so a park
+// mid-upgrade legitimately answers differently host to host. Collapsing them
+// would hide exactly how far the agent rollout has reached.
+func printRunDetail(cmd *cobra.Command, d *client.RunDetail) error {
+	out := cmd.OutOrStdout()
+	fmt.Fprintf(out, "apply_id:   %s\n", d.ApplyID)
+	fmt.Fprintf(out, "scenario:   %s\n", d.Scenario)
+	fmt.Fprintf(out, "status:     %s\n", d.Status)
+	fmt.Fprintf(out, "started_at: %s\n", formatTimeShort(d.StartedAt))
+	if d.FinishedAt != nil {
+		fmt.Fprintf(out, "finished:   %s\n", formatTimeShort(*d.FinishedAt))
+	}
+	if d.StartedByAID != nil {
+		fmt.Fprintf(out, "started_by: %s\n", *d.StartedByAID)
+	}
+	fmt.Fprintln(out)
+
+	rows := make([][]string, 0, len(d.Hosts))
+	for _, h := range d.Hosts {
+		errSummary := ""
+		if h.ErrorSummary != nil {
+			errSummary = *h.ErrorSummary
+		}
+		rows = append(rows, []string{
+			h.SID, h.Status, strconv.Itoa(h.Passage), errSummary,
+		})
+	}
+	if err := output.Table(out, []string{"SID", "STATUS", "PASSAGE", "ERROR"}, rows); err != nil {
+		return err
+	}
+
+	printRunNotices(out, d.Hosts)
+	return nil
+}
+
+// printRunNotices writes the deprecation block, or nothing at all when no host
+// reported anything — a quiet run must look exactly as it did before this
+// existed.
+func printRunNotices(out io.Writer, hosts []client.RunHostStatus) {
+	any := false
+	for _, h := range hosts {
+		if len(h.Notices) > 0 {
+			any = true
+			break
+		}
+	}
+	if !any {
+		return
+	}
+	fmt.Fprintln(out)
+	fmt.Fprintln(out, "notices (the run succeeded; these stop working in a future release):")
+	for _, h := range hosts {
+		for _, n := range h.Notices {
+			fmt.Fprintf(out, "  %s  %s: %s\n", h.SID, n.Module, n.Message)
+		}
+	}
 }
 
 func newIncarnationCheckDriftCmd() *cobra.Command {
