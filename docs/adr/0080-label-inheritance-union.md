@@ -105,6 +105,30 @@
        over the union, so a tag put on the incarnation reaches its members'
        essence. Which incarnation's config a host is owed in the first place is a
        membership question and is answered from the relation (see below).
+     - **The operator-facing coven filter and the bulk path** (added by NIM-250)
+       — `GET /v1/souls?coven=`, the `selector.coven` of `soul.coven-assign` /
+       `soul.traits-assign`, and **scope gate (a)** of those bulk calls ("target
+       hosts ⊆ the operator's coven-scope") all render the SAME predicate the
+       RBAC pushdown does, from one implementation (`rbac.CovenScopeSQL`). These
+       are not a fourth reader with its own opinion: the set an operator can
+       find, the set a bulk call selects, and the set authorizing that call are
+       answers to one question. Matching the raw column in them while the scope
+       resolved the union meant an operator could be granted a host, see it in
+       the list, and then neither find it by the label that made it visible nor
+       change it — `matched` came back short with nothing to explain it.
+
+       Gate (a) widening is a real change to what a deployed role may WRITE, and
+       it is deliberate: the read boundary and the write boundary of the same
+       scope must be the same set. **Gate (b) is untouched** — the label being
+       attached must still lie inside the operator's own coven-scope, so nobody
+       gains the ability to hand a host to a foreign role.
+
+       This is also where `coven=` and `incarnation=` are held apart. `coven=` is
+       a **label** question and matches the union, so a host carrying a tag
+       spelled like an incarnation matches it — it genuinely carries that label.
+       `incarnation=` is a **membership** question and keeps reading
+       `incarnation_membership` (see the boundary below); the two selectors are
+       not two spellings of one thing, and neither subsumes the other.
      - **Push provider routing** ([ADR-032](0032-push-orchestrator.md) Level 2,
        added by NIM-251) — `push.coven_default_providers` is matched against the
        union, so labelling an incarnation puts all of its hosts behind one
@@ -116,13 +140,29 @@
 
      Keeping these in step is the point: a union applied to some readers and not
      others is a new class of bug — one that shows up as a rule matching nothing,
-     with no error anywhere. It has now happened four times over the same axis
-     (NIM-224, NIM-248, NIM-249, NIM-251), which is why the union is no longer
-     open-coded per consumer: `soul.EffectiveCovens(ctx, db, sid)` is the entry
-     point, and a consumer reading `SelectBySID(...).Coven` in order to match it
-     against something an operator wrote is a bug by construction. Routing is
-     the one deliberate exception and must stay one: it needs the two halves
-     kept apart to order its lookup, so it takes them from the same
+     with no error anywhere. It has now happened five times over the same axis
+     (NIM-224, NIM-248, NIM-249, NIM-250, NIM-251), which is why the union is no
+     longer open-coded per consumer. It has **two entry points, one per layer**,
+     and a consumer that reaches past both is a bug by construction:
+
+     - **`soul.EffectiveCovens(ctx, db, sid)`** — asks "which covens does THIS
+       host carry", in Go, for one SID. Reading `SelectBySID(...).Coven` in order
+       to match it against something an operator wrote is the defect above.
+     - **`rbac.CovenScopeSQL(covenCol, membershipSID, $vals)`** — asks "which
+       ROWS carry any of these covens", as a SQL predicate (NIM-250). Set-based
+       readers — the RBAC pushdown, the souls list filter, the bulk selector and
+       bulk scope gate (a) — need the answer inside the query: they page with
+       exact offset/total and iterate by keyset, so resolving per host in Go
+       would be an N+1 and would break both. Writing `$1 = ANY(coven)` by hand is
+       the same defect wearing SQL.
+
+     These are one resolution expressed at two layers, not two policies, and they
+     are pinned to each other by tests rather than by intent: the `soul` package's
+     filter/selector/gate assertions compare against `rbac.CovenScopeSQL` output
+     verbatim, so the two cannot drift into disagreeing about a host.
+
+     Routing is the one deliberate exception to BOTH and must stay one: it needs
+     the two halves kept apart to order its lookup, so it takes them from the same
      `LoadInheritedLabels` without collapsing them. Collapsing it "for
      consistency" would destroy the own-before-inherited tiebreak.
 
@@ -183,6 +223,14 @@
     it saw the incarnation alone. This is the defect being fixed, not a
     side effect — but it is a real change to what a deployed role can read, and it
     lands with the release rather than behind a flag.
+  - **The bulk write boundary widens with it** (NIM-250). Scope gate (a) of
+    `soul.coven-assign` / `soul.traits-assign` admits the same hosts the read
+    scope admits, so a role scoped `coven=<X>` can now label the hosts of a
+    matching incarnation. This follows from the item above rather than extending
+    it: a boundary that authorizes reads over the union and writes over the raw
+    column is two different scopes wearing one name. Gate (b) still bounds WHICH
+    label may be attached, so the widening cannot be used to reach outside the
+    operator's own scope.
   - **A host label can grant visibility.** With gate (b) an operator can only
     grant within what it already holds, which is precisely the Coven guarantee —
     but "who may attach labels" is now as load-bearing for traits as it has always

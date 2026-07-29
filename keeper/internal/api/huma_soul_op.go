@@ -103,8 +103,8 @@ type SoulCovenAssignRequest struct {
 type SoulCovenAssignSelector struct {
 	All         bool     `json:"all,omitempty" doc:"no host filter (entire registry ∩ scope)"`
 	Sids        []string `json:"sids,omitempty" doc:"point list of hosts (SID = FQDN)"`
-	Coven       string   `json:"coven,omitempty" maxLength:"63" doc:"hosts with this Coven tag"`
-	Incarnation string   `json:"incarnation,omitempty" maxLength:"63" doc:"hosts of this incarnation (root Coven tag)"`
+	Coven       string   `json:"coven,omitempty" maxLength:"63" doc:"hosts carrying this Coven tag, own or inherited from an incarnation they belong to, that incarnation's name included (ADR-080)"`
+	Incarnation string   `json:"incarnation,omitempty" maxLength:"63" doc:"members of this incarnation, resolved from incarnation_membership — a membership question, never answered from the label union above (ADR-008 amendment NIM-124)"`
 	Status      string   `json:"status,omitempty" enum:"pending,connected,disconnected,revoked,expired,destroyed" doc:"Soul status in registry"`
 }
 
@@ -274,7 +274,7 @@ func soulSshTargetOperation() huma.Operation {
 // the business pagination parse is done by the register handler via ParsePageWithCursor over the same
 // query values.
 type soulListInput struct {
-	Coven     string `query:"coven" doc:"filter by Coven label (AND within scope)"`
+	Coven     string `query:"coven" doc:"filter by Coven label, own or inherited from an incarnation the host belongs to, that incarnation's name included (ADR-080); AND within scope"`
 	Status    string `query:"status" enum:"pending,connected,disconnected,revoked,expired,destroyed" doc:"filter by status; outside enum -> 422"`
 	Transport string `query:"transport" enum:"agent,ssh" doc:"filter by transport; outside enum -> 422"`
 	Cursor    string `query:"cursor" doc:"keyset continuation cursor (regex-mode scope)"`

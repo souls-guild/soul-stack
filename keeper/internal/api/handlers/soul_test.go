@@ -1613,11 +1613,21 @@ func TestSoulList_Filters_ReachSQL(t *testing.T) {
 		t.Fatalf("status = %d, body=%s", rec.Code, rec.Body.String())
 	}
 	// All three values should arrive as pgx-parameters (not concatenation).
+	// The coven filter is set-shaped since NIM-250 — it renders the same
+	// effective-labels predicate the RBAC pushdown does, which takes a text[] —
+	// so its value arrives as a one-element slice rather than a bare string.
 	want := map[string]bool{"connected": false, "agent": false, "redis-prod": false}
 	for _, a := range pool.lastListArgs {
-		if s, ok := a.(string); ok {
-			if _, tracked := want[s]; tracked {
-				want[s] = true
+		switch v := a.(type) {
+		case string:
+			if _, tracked := want[v]; tracked {
+				want[v] = true
+			}
+		case []string:
+			for _, s := range v {
+				if _, tracked := want[s]; tracked {
+					want[s] = true
+				}
 			}
 		}
 	}

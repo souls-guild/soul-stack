@@ -3880,11 +3880,11 @@ components:
           description: no host filter (entire registry ∩ scope)
           type: boolean
         coven:
-          description: hosts with this Coven tag
+          description: hosts carrying this Coven tag, own or inherited from an incarnation they belong to, that incarnation's name included (ADR-080)
           maxLength: 63
           type: string
         incarnation:
-          description: hosts of this incarnation (root Coven tag)
+          description: members of this incarnation, resolved from incarnation_membership — a membership question, never answered from the label union above (ADR-008 amendment NIM-124)
           maxLength: 63
           type: string
         sids:
@@ -12147,12 +12147,12 @@ paths:
       description: Registry of souls with scoped visibility (ADR-047) and coven/status/transport filters. offset-fast-path or keyset (mode chosen server-side from Purview). Permission soul.list. Read-only, no audit.
       operationId: listSouls
       parameters:
-        - description: filter by Coven label (AND within scope)
+        - description: filter by Coven label, own or inherited from an incarnation the host belongs to, that incarnation's name included (ADR-080); AND within scope
           explode: false
           in: query
           name: coven
           schema:
-            description: filter by Coven label (AND within scope)
+            description: filter by Coven label, own or inherited from an incarnation the host belongs to, that incarnation's name included (ADR-080); AND within scope
             type: string
         - description: filter by status; outside enum -> 422
           explode: false

@@ -101,14 +101,7 @@ func (b *scopeSQLBuilder) cond(c *ScopeCond) string {
 		if b.cols.Coven == "" {
 			return "FALSE"
 		}
-		// Array overlap: the row's coven set intersects the condition's values.
-		vals := b.ph(append([]string(nil), c.Values...))
-		own := fmt.Sprintf("%s && %s::text[]", b.cols.Coven, vals)
-		// Inherited (ADR-080): an incarnation the host belongs to carries a
-		// matching tag. Its NAME counts as one — the incarnation-side resolver
-		// already scopes on `covens && $x OR name = ANY($x)`, so host
-		// visibility has to agree.
-		return b.orInherited(own, fmt.Sprintf("i.covens && %s::text[] OR i.name = ANY(%s::text[])", vals, vals))
+		return CovenScopeSQL(b.cols.Coven, b.cols.MembershipSID, b.ph(append([]string(nil), c.Values...)))
 	case dimService:
 		return b.inList(b.cols.Service, c.Values)
 	case dimIncarnation:
@@ -137,6 +130,41 @@ func (b *scopeSQLBuilder) cond(c *ScopeCond) string {
 			key, vals, key, vals))
 	}
 	return "FALSE"
+}
+
+// CovenScopeSQL renders the coven-dimension predicate: the row carries ANY of
+// the labels bound to valuesPlaceholder (ONE placeholder holding a text[]).
+//
+// With membershipSID set it resolves EFFECTIVE labels (ADR-080) — the row's own
+// coven column OR the labels of an incarnation it belongs to, that incarnation's
+// NAME included. An empty membershipSID leaves it matching the own column alone
+// (the incarnation table carries its labels directly, with nothing to inherit
+// from).
+//
+// covenCol and membershipSID MUST be table-qualified: the subquery aliases
+// `incarnation_membership m`, so a bare `sid` would bind there and correlate
+// every row to itself. The `i` / `m` aliases are local to the subquery, so an
+// outer query using those letters is unaffected.
+//
+// Exported because this is not only the RBAC pushdown. The souls list filter,
+// the bulk selector and the bulk scope gate render the SAME predicate (NIM-250),
+// so what an operator can find, what a bulk call selects, and what authorizes
+// that call cannot drift into three different answers about one host.
+func CovenScopeSQL(covenCol, membershipSID, valuesPlaceholder string) string {
+	// Array overlap: the row's coven set intersects the condition's values.
+	own := fmt.Sprintf("%s && %s::text[]", covenCol, valuesPlaceholder)
+	if membershipSID == "" {
+		return own
+	}
+	// Inherited (ADR-080): an incarnation the row belongs to carries a matching
+	// tag. Its NAME counts as one — a host's effective covens include the names
+	// of its incarnations, so `coven=<incarnation>` reaches the hosts inside it
+	// instead of showing the container and hiding its contents.
+	return fmt.Sprintf(`(%s OR EXISTS (
+    SELECT 1 FROM incarnation_membership m
+    JOIN incarnation i ON i.name = m.incarnation_name
+    WHERE m.sid = %s AND (i.covens && %s::text[] OR i.name = ANY(%s::text[]))
+))`, own, membershipSID, valuesPlaceholder, valuesPlaceholder)
 }
 
 // orInherited widens an own-column predicate with the same predicate evaluated

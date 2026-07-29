@@ -115,6 +115,34 @@ order to act in.
   scoped roles against the new resolution before upgrading a cluster where the
   coven boundary is the security boundary.**
 
+  **The same resolution now applies to the operator-facing filter and to the
+  bulk write boundary.** `GET /v1/souls?coven=`, the `selector.coven` of
+  `soul.coven-assign` / `soul.traits-assign`, and **scope gate (a)** of those
+  bulk calls ("target hosts ⊆ the operator's coven-scope") read effective labels
+  like the scope predicate does, from one implementation. Two consequences to
+  plan for:
+
+  - **A filter returns more than it did.** `?coven=X` now also matches hosts
+    that carry `X` only through an incarnation, so saved queries, dashboards and
+    any automation that counts rows off that endpoint will see larger result
+    sets. Previously such a host was visible in the unfiltered list and
+    unfindable by the very label that made it visible.
+  - **A scoped role can now WRITE where it previously selected nothing.** A role
+    scoped `coven=X` may label the hosts of an incarnation carrying `X`; before,
+    those calls reported a short `matched` and changed nothing. This is a real
+    widening of an existing grant — the read boundary and the write boundary of
+    one scope are now the same set — so the re-read above covers your
+    `soul.coven-assign` / `soul.traits-assign` holders, not only your readers.
+    **Gate (b) is unchanged**: the label being attached must still lie inside
+    the operator's own coven-scope, so nobody gains the ability to hand a host
+    to a foreign role.
+
+  `coven=` and `incarnation=` remain different questions and neither subsumes
+  the other: `coven=` is a **label** test and matches the union (a host carrying
+  a tag spelled like an incarnation matches it — it genuinely carries that
+  label), while `incarnation=` is a **membership** test and keeps reading
+  `incarnation_membership`.
+
 - **`POST /v1/incarnations/{name}/scenarios/{scenario}` can now answer `422
   assert_failed` synchronously**, where it previously always answered `202` and
   surfaced a failed topology assert as `error_locked` plus a manual unlock. The
