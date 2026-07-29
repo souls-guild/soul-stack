@@ -47,14 +47,19 @@ func registerHumaSynodCreate(humaAPI huma.API, synodH *handlers.SynodHandler) {
 }
 
 // registerHumaSynodList mounts GET /v1/synods via huma (READ, no audit).
-// synodH nil → no-op. Handler: ListTyped → typed envelope output. RBAC synod.list —
-// on the group.
+// synodH nil → no-op. Handler: claims → ListTyped → typed envelope output. RBAC
+// synod.list — on the group; the claims subject additionally scopes WHAT comes
+// back (NIM-216).
 func registerHumaSynodList(humaAPI huma.API, synodH *handlers.SynodHandler) {
 	if synodH == nil {
 		return
 	}
 	huma.Register(humaAPI, synodListOperation(), func(ctx context.Context, _ *synodListInput) (*synodListOutput, error) {
-		reply, err := synodH.ListTyped(ctx)
+		claims, ok := apimiddleware.ClaimsFromContext(ctx)
+		if !ok {
+			return nil, synodMissingClaims()
+		}
+		reply, err := synodH.ListTyped(ctx, claims.Subject)
 		if err != nil {
 			return nil, synodProblem(err)
 		}
@@ -133,7 +138,11 @@ func registerHumaSynodRemoveOperator(humaAPI huma.API, synodH *handlers.SynodHan
 		return
 	}
 	huma.Register(humaAPI, synodRemoveOperatorOperation(), func(ctx context.Context, in *synodRemoveOperatorInput) (*synodNoContentOutput, error) {
-		reply, err := synodH.RemoveOperatorTyped(ctx, in.Name, in.AID)
+		claims, ok := apimiddleware.ClaimsFromContext(ctx)
+		if !ok {
+			return nil, synodMissingClaims()
+		}
+		reply, err := synodH.RemoveOperatorTyped(ctx, in.Name, in.AID, claims.Subject)
 		if err != nil {
 			return nil, synodProblem(err)
 		}
@@ -172,7 +181,11 @@ func registerHumaSynodRevokeRole(humaAPI huma.API, synodH *handlers.SynodHandler
 		return
 	}
 	huma.Register(humaAPI, synodRevokeRoleOperation(), func(ctx context.Context, in *synodRevokeRoleInput) (*synodNoContentOutput, error) {
-		reply, err := synodH.RevokeRoleTyped(ctx, in.Name, in.Role)
+		claims, ok := apimiddleware.ClaimsFromContext(ctx)
+		if !ok {
+			return nil, synodMissingClaims()
+		}
+		reply, err := synodH.RevokeRoleTyped(ctx, in.Name, in.Role, claims.Subject)
 		if err != nil {
 			return nil, synodProblem(err)
 		}

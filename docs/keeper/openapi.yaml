@@ -10810,7 +10810,7 @@ paths:
         - role
   /v1/roles/{name}:
     delete:
-      description: Deletes RBAC role cascade (permissions + membership). Permission role.delete. 409 — builtin/last-admin.
+      description: "Deletes RBAC role cascade (permissions + membership). Permission role.delete, which is the right to reach this endpoint and not the reach itself: the caller must also be able to ADMINISTER the role, i.e. could grant what it grants (NIM-214). Every holder of a role administers the roles derived from it; a role granting nothing is administrable by anyone; a bare `*` covers everything. 403 — the role's rights are beyond the caller's; 409 — builtin/last-admin/has derived roles."
       operationId: deleteRole
       parameters:
         - description: role name
@@ -10912,7 +10912,7 @@ paths:
         - role
   /v1/roles/{name}/operators/{aid}:
     delete:
-      description: Removes membership entry (name, aid). Permission role.revoke-operator. 409 — last-admin lock-out.
+      description: "Removes membership entry (name, aid). Permission role.revoke-operator, which is the right to reach this endpoint and not the reach itself: unbinding asks for what binding asks for — the caller must hold the role's effective rights (NIM-285). 403 — the role is beyond the caller's rights; 409 — last-admin lock-out."
       operationId: revokeRoleOperator
       parameters:
         - description: role name
@@ -10968,7 +10968,7 @@ paths:
         - role
   /v1/roles/{name}/permissions:
     patch:
-      description: "Replace semantics: set completely replaces existing (ADR-022). Permission role.update. default_scope/parent_role follow PATCH presence (omitted → untouched). 409 — builtin/last-admin; 403 — beyond the parent role (ADR-078)."
+      description: "Replace semantics: set completely replaces existing (ADR-022). Permission role.update, which is the right to reach this endpoint and not the reach itself: the caller must also be able to ADMINISTER the role, i.e. could grant what it currently grants (NIM-214) — so trimming a role beyond your rights is refused even though removing permissions grants nothing. default_scope/parent_role follow PATCH presence (omitted → untouched). 409 — builtin/last-admin/unconfirmed cascade; 403 — the role is beyond the caller's rights, the result exceeds the parent role (ADR-078), or the result would be a parentless role granting something without role.create-root."
       operationId: updateRolePermissions
       parameters:
         - description: role name
@@ -12838,7 +12838,7 @@ paths:
         - soul
   /v1/synods:
     get:
-      description: Catalog of Synod groups with role bundle and member roster (ADR-049). Permission synod.list. Read-only, no audit.
+      description: "Catalog of Synod groups with role bundle and member roster (ADR-049). Permission synod.list. SCOPED TO THE CALLER: the answer holds only the groups the caller could add someone to — a group's bundle and its roster together say which packages of privilege exist and who holds them, so synod.list is not the right to read all of it. A group is visible when the caller covers the effective rights of EVERY role it bundles (the ADR-049(f) add-operator rule, read backwards); a group that bundles nothing is visible to everyone, and a visible group comes back whole. A caller holding an unrestricted `*` — or the explicit `synod.list-all` right — sees every group. Read-only, no audit."
       operationId: listSynods
       responses:
         "200":
@@ -13064,7 +13064,7 @@ paths:
         - synod
   /v1/synods/{name}/operators/{aid}:
     delete:
-      description: Removes the membership row (name, aid). Permission synod.remove-operator. 409 - last-admin lock-out.
+      description: "Removes the membership row (name, aid). Permission synod.remove-operator, which is the right to reach this endpoint and not the reach itself: a member holds the group's WHOLE bundle, so removing one is measured against all of it, exactly as adding one is (ADR-049(f), NIM-285). 403 — the bundle is beyond the caller's rights; 409 - last-admin lock-out."
       operationId: removeSynodOperator
       parameters:
         - description: Synod group name
@@ -13173,7 +13173,7 @@ paths:
         - synod
   /v1/synods/{name}/roles/{role_name}:
     delete:
-      description: The role's permissions are revoked from all group members (ADR-049). Permission synod.revoke-role. 409 - last-admin lock-out.
+      description: "The role's permissions are revoked from all group members (ADR-049). Permission synod.revoke-role, which is the right to reach this endpoint and not the reach itself: the caller must hold the revoked role's effective rights, the same set synod.grant-role demands to put it in the bundle (NIM-285). 403 — the role is beyond the caller's rights; 409 - last-admin lock-out."
       operationId: revokeSynodRole
       parameters:
         - description: Synod group name

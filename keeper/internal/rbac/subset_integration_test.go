@@ -356,41 +356,48 @@ func TestIntegration_Subset_UpdateRole_SameScope_OK(t *testing.T) {
 	}
 }
 
-// caller scope=prod NARROWS a role's scope into its own scope (staging→prod)
-// → OK: the resulting grant is fully within the caller's prod scope.
-func TestIntegration_Subset_UpdateRole_ReScopeIntoScope_OK(t *testing.T) {
+// REVERSED BY NIM-214. Pulling a STAGING role into prod used to be allowed — the
+// result landed inside the caller's own scope, so the floor had nothing to say.
+// It is now refused a step earlier: a role granting `incarnation.run on
+// coven=staging` is outside this caller's reach, and reaching into it is exactly
+// the administration the ticket scopes. Re-scoping a role that IS within reach
+// still goes through — NarrowScopeIsNotGated_OK below.
+func TestIntegration_Subset_UpdateRole_ReScopeFromOutOfReach_Denied(t *testing.T) {
 	resetRBAC(t)
 	sub, _ := setupScopedUpdater(t)
 	insertRoleScoped(t, "target", "coven=staging", "incarnation.run")
 	s := newService(t)
 
 	prod := "coven=prod"
-	if err := s.UpdateRolePermissions(context.Background(), UpdateRolePermissionsInput{
+	err := s.UpdateRolePermissions(context.Background(), UpdateRolePermissionsInput{
 		Name:            "target",
 		Permissions:     []string{"incarnation.run"},
 		SetDefaultScope: true,
 		DefaultScope:    &prod,
 		CallerAID:       sub,
-	}); err != nil {
-		t.Fatalf("UpdateRolePermissions (re-scope staging→prod): %v", err)
+	})
+	if !errors.Is(err, ErrPermissionNotHeld) {
+		t.Fatalf("err = %v, want ErrPermissionNotHeld (a staging role is not this caller's to administer)", err)
 	}
-	if got := roleScope(t, "target"); got == nil || *got != "coven=prod" {
-		t.Errorf("default_scope = %v, want coven=prod", got)
+	if got := roleScope(t, "target"); got == nil || *got != "coven=staging" {
+		t.Errorf("default_scope = %v, want coven=staging (rollback)", got)
 	}
 }
 
-// REGRESSION: SetDefaultScope=false + trimming a permission the caller doesn't
-// hold (added=∅) → OK. The PATCH-trim path must stay byte-for-byte: the scope
-// is untouched, only the added set is gated, and a pure removal isn't
-// escalation.
+// REGRESSION: SetDefaultScope=false + trimming → OK. The PATCH-trim path must
+// stay byte-for-byte: the scope is untouched, and a pure removal is not
+// escalation, so neither the floor nor the root-role gate speaks.
+//
+// The trimmed permission is inside the caller's scope because NIM-214 requires it
+// to be able to administer the role at all — a separate question, asked first.
+// The pre-NIM-214 form trimmed a permission the caller did not hold; that case
+// now lives in RemoveForeign_Denied.
 func TestIntegration_Subset_UpdateRole_TrimNoScope_OK(t *testing.T) {
 	resetRBAC(t)
 	sub, _ := setupScopedUpdater(t)
-	insertRoleScoped(t, "target", "coven=prod", "incarnation.run", "operator.create")
+	insertRoleScoped(t, "target", "coven=prod", "incarnation.run", "role.update")
 	s := newService(t)
 
-	// sub doesn't hold operator.create; trimming it (SetDefaultScope=false) is
-	// a removal, not escalation.
 	if err := s.UpdateRolePermissions(context.Background(), UpdateRolePermissionsInput{
 		Name:            "target",
 		Permissions:     []string{"incarnation.run"},
@@ -408,31 +415,32 @@ func TestIntegration_Subset_UpdateRole_TrimNoScope_OK(t *testing.T) {
 	}
 }
 
-// A deliberate change of verdict (NIM-230), and the reason the floor had to
-// become a comparison rather than a longer list of fields to watch. Before, a
-// PATCH that only NARROWED default_scope was gated on the whole resulting set: an
-// operator could delete `operator.create` from this role outright — a removal has
-// never been escalation (TrimNoScope_OK) — yet was refused the strictly weaker act
-// of confining it to prod. The floor now measures the rights GAINED, and a
-// narrowing gains none.
-func TestIntegration_Subset_UpdateRole_NarrowScopeWithoutHoldingIt_OK(t *testing.T) {
+// The floor measures the rights GAINED (NIM-230), so a narrowing gains none and
+// is not gated by it. Pinned because the floor used to gate the WHOLE resulting
+// set whenever the scope moved, which refused narrowings that hand out nothing.
+//
+// The caller covers the role, so the NIM-214 administration gate is satisfied and
+// what this test observes is the floor alone. The pre-NIM-214 form narrowed a
+// permission the caller did NOT hold; that shape is refused now, one gate earlier
+// (ReScopeFromOutOfReach_Denied).
+func TestIntegration_Subset_UpdateRole_NarrowScopeIsNotGated_OK(t *testing.T) {
 	resetRBAC(t)
 	sub, _ := setupScopedUpdater(t) // holds incarnation.run + role.update on coven=prod
-	insertRoleScoped(t, "target", "coven in (prod, staging)", "operator.create")
+	insertRoleScoped(t, "target", "coven=prod", "incarnation.run")
 	s := newService(t)
 
-	prod := "coven=prod"
+	narrower := "coven=prod AND trait.team=web"
 	if err := s.UpdateRolePermissions(context.Background(), UpdateRolePermissionsInput{
 		Name:            "target",
-		Permissions:     []string{"operator.create"},
+		Permissions:     []string{"incarnation.run"},
 		SetDefaultScope: true,
-		DefaultScope:    &prod,
+		DefaultScope:    &narrower,
 		CallerAID:       sub,
 	}); err != nil {
-		t.Fatalf("narrowing the scope of a permission the caller does not hold: %v", err)
+		t.Fatalf("narrowing a scope hands out nothing and must not be gated: %v", err)
 	}
-	if got := roleScope(t, "target"); got == nil || *got != "coven=prod" {
-		t.Errorf("default_scope = %v, want coven=prod", got)
+	if got := roleScope(t, "target"); got == nil || *got != narrower {
+		t.Errorf("default_scope = %v, want %q", got, narrower)
 	}
 }
 
@@ -619,24 +627,54 @@ func TestIntegration_Subset_UpdateRole_AddOwned_OK(t *testing.T) {
 	}
 }
 
-// A suboperator removing a foreign permission (without adding a new one) →
-// OK: the subset check only restricts ADDED permissions. target holds a
-// permission outside sub's set; sub removes it, keeping only its own.
-func TestIntegration_Subset_UpdateRole_RemoveForeign_OK(t *testing.T) {
+// REVERSED BY NIM-214. A suboperator removing a FOREIGN permission is refused:
+// not because it escalates — it plainly does not, which is why the floor was
+// always silent here — but because it is administering a role whose rights it
+// could not grant. Demolition was the surface the least-privilege floor could
+// never see, and "cutting someone else's role is not escalation" left one holder
+// of `role.update` able to zero out the cluster.
+//
+// The pre-NIM-214 form of this test asserted the opposite and is what the ticket
+// set out to change; the positive counterpart is RemoveOwnedForeign_OK below.
+func TestIntegration_Subset_UpdateRole_RemoveForeign_Denied(t *testing.T) {
 	resetRBAC(t)
 	sub, _ := setupSuboperator(t)
 	insertRole(t, "target", "role.create", "operator.create")
 	s := newService(t)
 
-	// Removing operator.create (which sub doesn't have) is a removal, not escalation.
-	if err := s.UpdateRolePermissions(context.Background(), UpdateRolePermissionsInput{
+	err := s.UpdateRolePermissions(context.Background(), UpdateRolePermissionsInput{
 		Name:        "target",
 		Permissions: []string{"role.create"},
 		CallerAID:   sub,
-	}); err != nil {
-		t.Fatalf("UpdateRolePermissions (removing a foreign permission): %v", err)
+	})
+	if !errors.Is(err, ErrPermissionNotHeld) {
+		t.Fatalf("err = %v, want ErrPermissionNotHeld (sub may not administer a role granting operator.create)", err)
 	}
-	got := rolePerms(t, "target")
+	if got := rolePerms(t, "target"); len(got) != 2 {
+		t.Errorf("permissions = %v, want the role left untouched (2 rows)", got)
+	}
+}
+
+// The other side of the same rule: trimming stays free once the caller COVERS the
+// role. Nothing about removal became an escalation — it simply stopped being
+// something you may do to a role that is not yours to administer.
+func TestIntegration_Subset_UpdateRole_RemoveOwnedForeign_OK(t *testing.T) {
+	resetRBAC(t)
+	sub, alice := setupSuboperator(t)
+	insertRole(t, "covered", "role.create", "role.grant-operator")
+	if err := GrantOperator(context.Background(), integrationPool, "covered", sub, &alice); err != nil {
+		t.Fatalf("grant sub→covered: %v", err)
+	}
+	s := newService(t)
+
+	if err := s.UpdateRolePermissions(context.Background(), UpdateRolePermissionsInput{
+		Name:        "covered",
+		Permissions: []string{"role.create"},
+		CallerAID:   sub,
+	}); err != nil {
+		t.Fatalf("trimming a role the caller covers: %v", err)
+	}
+	got := rolePerms(t, "covered")
 	if len(got) != 1 || got[0] != "role.create" {
 		t.Errorf("permissions = %v, want [role.create]", got)
 	}

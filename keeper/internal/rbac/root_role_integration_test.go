@@ -255,11 +255,14 @@ func TestIntegration_RootRole_PatchGrowingPlainRole_Denied(t *testing.T) {
 }
 
 // A pure trim stays ungated: `required` is empty, nothing is being stranded, and
-// an operator must be able to take rights AWAY from someone else's role without
-// holding them. Removing privilege is never the escalation this gate is about.
+// removing privilege is never the escalation this gate is about.
+//
+// The caller holds the role's two permissions because NIM-214 now requires it to
+// be able to ADMINISTER the role at all; that gate runs first and is a different
+// question. Without them this test would go green on the wrong refusal.
 func TestIntegration_RootRole_PatchTrimmingPlainRole_Allowed(t *testing.T) {
 	resetRBAC(t)
-	sub, _ := seedMinter(t, "granters", "role.create")
+	sub, _ := seedMinter(t, "granters", "role.create", "soul.list", "incarnation.run")
 	insertRole(t, "team", "soul.list", "incarnation.run")
 	s := newService(t)
 
@@ -396,6 +399,10 @@ func TestIntegration_RootRole_PatchClearingParentKeepingRights_Denied(t *testing
 // Un-parenting is not forbidden, it is priced: the same PATCH goes through for a
 // caller holding both what the result grants and `role.create-root`. Pinned so a
 // later tightening cannot quietly turn a gated operation into an impossible one.
+//
+// ConfirmCascade because the same PATCH widens this role for everyone holding it,
+// which is now reported (NIM-252). That gate runs LAST, so it cannot mask the two
+// refusals this test is about.
 func TestIntegration_RootRole_PatchClearingParentWithRight_Allowed(t *testing.T) {
 	resetRBAC(t)
 	sub, _ := seedMinter(t, "runners", "incarnation.run", "role.create", "role.create-root")
@@ -404,11 +411,12 @@ func TestIntegration_RootRole_PatchClearingParentWithRight_Allowed(t *testing.T)
 	s := newService(t)
 
 	if err := s.UpdateRolePermissions(context.Background(), UpdateRolePermissionsInput{
-		Name:          "team-child",
-		Permissions:   []string{"incarnation.run"},
-		SetParentRole: true,
-		ParentRole:    nil,
-		CallerAID:     sub,
+		Name:           "team-child",
+		Permissions:    []string{"incarnation.run"},
+		SetParentRole:  true,
+		ParentRole:     nil,
+		CallerAID:      sub,
+		ConfirmCascade: true,
 	}); err != nil {
 		t.Fatalf("UpdateRolePermissions (caller holds the right and role.create-root): %v", err)
 	}

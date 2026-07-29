@@ -185,6 +185,10 @@ func (s *Service) AddOperator(ctx context.Context, in AddOperatorInput) error {
 type RemoveOperatorInput struct {
 	SynodName string
 	AID       string
+	// CallerAID — required (NIM-285). A member holds the group's WHOLE bundle, so
+	// removing one is measured against all of it, exactly as [AddOperator] measures
+	// adding one (ADR-049(f)).
+	CallerAID string
 }
 
 // RemoveOperator removes an archon from a group (synod_operators).
@@ -211,6 +215,16 @@ func (s *Service) RemoveOperator(ctx context.Context, in RemoveOperatorInput) er
 		return err
 	}
 	if _, err := lockSynod(ctx, tx, in.SynodName); err != nil {
+		return err
+	}
+
+	// What [AddOperator] would have demanded to create this membership (NIM-285):
+	// the member holds the whole bundle, so removing them is measured against it.
+	required, err := s.synodEffectivePermissions(ctx, tx, in.SynodName)
+	if err != nil {
+		return err
+	}
+	if err := s.assertCallerMayUnbind(ctx, tx, in.CallerAID, required); err != nil {
 		return err
 	}
 
@@ -299,6 +313,9 @@ func (s *Service) GrantRole(ctx context.Context, in GrantRoleInput) error {
 type RevokeRoleInput struct {
 	SynodName string
 	RoleName  string
+	// CallerAID — required (NIM-285). Measured against the revoked ROLE's rights,
+	// the same set [GrantRole] demands to put it in the bundle.
+	CallerAID string
 }
 
 // RevokeRole removes a role from a group's bundle (synod_roles).
@@ -322,6 +339,16 @@ func (s *Service) RevokeRole(ctx context.Context, in RevokeRoleInput) error {
 	defer func() { _ = tx.Rollback(ctx) }()
 
 	if err := lockSynodRole(ctx, tx, in.SynodName, in.RoleName); err != nil {
+		return err
+	}
+
+	// What [GrantRole] would have demanded to put this role in the bundle
+	// (NIM-285) — the revoked role's own effective rights.
+	required, err := s.roleEffectivePermissions(ctx, tx, in.RoleName)
+	if err != nil {
+		return err
+	}
+	if err := s.assertCallerMayUnbind(ctx, tx, in.CallerAID, required); err != nil {
 		return err
 	}
 
@@ -358,9 +385,39 @@ func (s *Service) RevokeRole(ctx context.Context, in RevokeRoleInput) error {
 }
 
 // ListSynods returns the API catalog of groups (name / description / builtin
-// + expanded roles and member AIDs). Read-only, no tx ([LoadSynodViews]).
-func (s *Service) ListSynods(ctx context.Context) ([]SynodView, error) {
-	return LoadSynodViews(ctx, s.pool)
+// + expanded roles and member AIDs) AS callerAID is entitled to see it.
+// Read-only, no tx ([LoadSynodViews]).
+//
+// Filtered to the groups the caller could add someone to (NIM-216,
+// synod_visibility.go): `synod.list` is the right to read the group catalog, not
+// the right to read who holds which bundle of privilege. A caller holding a bare
+// `*` covers every role and so still sees everything, as does one holding
+// `synod.list-all`.
+//
+// callerAID is required — filtering has no basis without it, and an unfiltered
+// catalog is exactly the leak this closes.
+func (s *Service) ListSynods(ctx context.Context, callerAID string) ([]SynodView, error) {
+	if callerAID == "" {
+		return nil, fmt.Errorf("%w: missing caller", ErrPermissionNotHeld)
+	}
+	views, err := LoadSynodViews(ctx, s.pool)
+	if err != nil {
+		return nil, err
+	}
+	callerPerms, err := callerPermissions(ctx, s.pool, callerAID)
+	if err != nil {
+		return nil, err
+	}
+	if callerHoldsFullSynodCatalog(callerPerms) {
+		return views, nil
+	}
+	// The resolved role catalog is only needed for the filtering path — a reader
+	// entitled to everything never pays for it.
+	roleViews, err := LoadRoleViews(ctx, s.pool)
+	if err != nil {
+		return nil, err
+	}
+	return visibleSynodViews(callerPerms, views, roleViewsByName(roleViews))
 }
 
 // synodGivesWildcard reports whether at least one role in the group's bundle

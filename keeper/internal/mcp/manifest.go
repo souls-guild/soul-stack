@@ -92,7 +92,7 @@ var catalogManifest = []toolEntry{
 		status: toolStatusImplemented,
 		decl: toolDeclaration{
 			Name:         "keeper.role.delete",
-			Description:  "Deletes an RBAC role (cascades permissions + membership). Permission: role.delete. Fails with code=role-builtin for a builtin role and would-lock-out-cluster if removal leaves the cluster without an admin.",
+			Description:  "Deletes an RBAC role (cascades permissions + membership). Permission: role.delete, which is the right to reach this tool and not the reach itself: the caller must also be able to ADMINISTER the role, i.e. could grant what it grants (NIM-214) — fails with code=forbidden otherwise. Every holder of a role administers the roles derived from it; a role granting nothing is administrable by anyone; a bare `*` covers everything. Also fails with code=role-builtin for a builtin role and would-lock-out-cluster if removal leaves the cluster without an admin.",
 			InputSchema:  schemaRoleDeleteInput,
 			OutputSchema: schemaEmptyObject,
 		},
@@ -110,7 +110,7 @@ var catalogManifest = []toolEntry{
 		status: toolStatusImplemented,
 		decl: toolDeclaration{
 			Name:         "keeper.role.update",
-			Description:  "Replaces the role's set of permissions (replace semantics). Permission: role.update. default_scope and parent_role follow PATCH presence — an absent key leaves them untouched. Fails with code=role-builtin for a builtin role, forbidden when the result would exceed its parent role (ADR-078), and would-lock-out-cluster when removing the last `*` — including by making that role derived.",
+			Description:  "Replaces the role's set of permissions (replace semantics). Permission: role.update, which is the right to reach this tool and not the reach itself: the caller must also be able to ADMINISTER the role, i.e. could grant what it currently grants (NIM-214) — so trimming a role beyond your rights fails with code=forbidden even though removing permissions grants nothing. default_scope and parent_role follow PATCH presence — an absent key leaves them untouched. Also fails with code=role-builtin for a builtin role, forbidden when the result would exceed its parent role (ADR-078), and would-lock-out-cluster when removing the last `*` — including by making that role derived.",
 			InputSchema:  schemaRoleUpdateInput,
 			OutputSchema: schemaEmptyObject,
 		},
@@ -172,7 +172,7 @@ var catalogManifest = []toolEntry{
 		status: toolStatusImplemented,
 		decl: toolDeclaration{
 			Name:         "keeper.synod.list",
-			Description:  "Lists Synod groups with expanded roles (bundle) and members (AID). Permission: synod.list.",
+			Description:  "Lists Synod groups with expanded roles (bundle) and members (AID). Permission: synod.list. SCOPED TO THE CALLER: only the groups the caller could add someone to — a group's bundle and its roster together say which packages of privilege exist and who holds them, so synod.list is not the right to read all of it. A group is visible when the caller covers the effective rights of every role it bundles; one that bundles nothing is visible to everyone. A caller holding an unrestricted `*` — or the explicit `synod.list-all` right — sees every group.",
 			InputSchema:  schemaEmptyObject,
 			OutputSchema: schemaSynodListOutput,
 		},

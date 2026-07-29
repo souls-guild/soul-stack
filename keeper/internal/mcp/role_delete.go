@@ -47,7 +47,7 @@ func (h *Handler) callRoleDelete(ctx context.Context, claims *jwt.Claims, req js
 		return h.toolError(req.ID, toolName, mcpCodeValidationFailed, "field 'name' is required")
 	}
 
-	if err := h.deps.RBACRoles.DeleteRole(ctx, a.Name); err != nil {
+	if err := h.deps.RBACRoles.DeleteRole(ctx, a.Name, claims.Subject); err != nil {
 		code, detail := mapRoleErrorToMCP(err)
 		if code == mcpCodeInternalError {
 			h.deps.Logger.Error("mcp: role.delete failed",

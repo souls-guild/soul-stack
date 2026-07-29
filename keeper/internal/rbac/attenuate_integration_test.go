@@ -401,15 +401,20 @@ func TestIntegration_Derived_DerivedAdminIsNotASurvivor(t *testing.T) {
 	// be revoked while carol stands.
 	svc := newService(t)
 	if err := svc.RevokeOperator(ctx, RevokeOperatorInput{
-		RoleName: "cluster-admin", AID: "archon-alice",
+		RoleName: "cluster-admin", AID: "archon-alice", CallerAID: "archon-alice",
 	}); err != nil {
 		t.Fatalf("revoke alice while carol holds `*` through a plain role: %v", err)
 	}
 
 	// Revoking carol too must now be REFUSED. bob still resolves to an
 	// unrestricted `*` through his derived role — and it does not count.
+	//
+	// carol is the caller: alice just gave up cluster-admin above and now holds
+	// nothing, so she could no longer administer a `*`-granting role (NIM-285).
+	// carol holds `*` through `ceiling` itself, which keeps the lockout probe —
+	// not the unbinding gate ahead of it — the thing that decides here.
 	if err := svc.RevokeOperator(ctx, RevokeOperatorInput{
-		RoleName: "ceiling", AID: "archon-carol",
+		RoleName: "ceiling", AID: "archon-carol", CallerAID: "archon-carol",
 	}); !errors.Is(err, ErrWouldLockOutCluster) {
 		t.Fatalf("err = %v, want ErrWouldLockOutCluster — a DERIVED `*` is not a survivor", err)
 	}
@@ -442,7 +447,7 @@ func TestIntegration_Derived_DeletingADerivedAdminNeedsNoProbe(t *testing.T) {
 	insertRole(t, "ceiling", "*")
 	insertDerived(t, "admin-copy", "ceiling", "", "*")
 
-	if err := newService(t).DeleteRole(context.Background(), "admin-copy"); err != nil {
+	if err := newService(t).DeleteRole(context.Background(), "admin-copy", "archon-alice"); err != nil {
 		t.Fatalf("deleting a DERIVED `*` role: %v (it was never an admin source)", err)
 	}
 }
@@ -458,7 +463,7 @@ func TestIntegration_Derived_OrphanPolicyIsFailClosed(t *testing.T) {
 	insertRoleScoped(t, "dba", "coven=dba", "incarnation.get")
 	insertDerived(t, "dba-aboba", "dba", "trait.project=aboba", "incarnation.get")
 
-	if err := newService(t).DeleteRole(context.Background(), "dba"); !errors.Is(err, ErrRoleHasChildren) {
+	if err := newService(t).DeleteRole(context.Background(), "dba", "archon-alice"); !errors.Is(err, ErrRoleHasChildren) {
 		t.Fatalf("err = %v, want ErrRoleHasChildren", err)
 	}
 	if p := parentOf(t, "dba-aboba"); p == nil || *p != "dba" {

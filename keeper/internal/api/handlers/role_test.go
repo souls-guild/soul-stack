@@ -548,13 +548,18 @@ func TestRoleHandler_Update_ClearingParentNeedsCreateRoot_403(t *testing.T) {
 }
 
 // Trimming a plain role adds nothing, so nothing is being minted — removing
-// permissions stays ungated, as it always was.
+// permissions stays ungated by the root-role gate and by the floor.
+//
+// The caller now also has to be able to ADMINISTER the role (NIM-214), which is
+// why it holds the two permissions the role carries; without them the refusal
+// would come from the administration gate and this test would be passing for a
+// reason that has nothing to do with minting.
 func TestRoleHandler_Update_TrimmingPlainRoleStaysUngated(t *testing.T) {
 	pool := &rbacFakePool{
 		lockRoleFound:       true,
 		rolePerms:           []string{"incarnation.get", "incarnation.run"},
 		callerPermsExplicit: true,
-		callerPermsSet:      []string{"role.update"},
+		callerPermsSet:      []string{"role.update", "incarnation.get", "incarnation.run"},
 	}
 	h := newRoleHandler(t, pool)
 	if _, err := h.UpdatePermissionsTyped(context.Background(), claimsFor("archon-dba"),
@@ -563,12 +568,44 @@ func TestRoleHandler_Update_TrimmingPlainRoleStaysUngated(t *testing.T) {
 	}
 }
 
+// The administration gate at the transport layer (NIM-214): `role.update` alone
+// no longer lets an operator rewrite a role whose rights it could not grant, even
+// when the edit only REMOVES permissions. Demolition was the one thing the floor
+// never objected to, and correctly so on its own terms — it grants nothing.
+func TestRoleHandler_Update_TrimmingAnUncoveredRole_403(t *testing.T) {
+	pool := &rbacFakePool{
+		lockRoleFound:       true,
+		rolePerms:           []string{"incarnation.get", "incarnation.run"},
+		callerPermsExplicit: true,
+		callerPermsSet:      []string{"role.update"},
+	}
+	h := newRoleHandler(t, pool)
+	_, err := h.UpdatePermissionsTyped(context.Background(), claimsFor("archon-dba"),
+		UpdatePermissionsInput{Name: "ops", Permissions: []string{"incarnation.get"}})
+	wantProblem(t, err, problem.TypeForbidden)
+}
+
+// The same gate on the delete path, which had no caller-side check of any kind
+// before NIM-214: any holder of `role.delete` could drop any non-builtin role.
+func TestRoleHandler_Delete_UncoveredRole_403(t *testing.T) {
+	pool := &rbacFakePool{
+		lockRoleFound:       true,
+		lockRoleValue:       false,
+		rolePerms:           []string{"incarnation.destroy"},
+		callerPermsExplicit: true,
+		callerPermsSet:      []string{"role.delete"},
+	}
+	h := newRoleHandler(t, pool)
+	_, err := h.DeleteTyped(context.Background(), "ops", "archon-dba")
+	wantProblem(t, err, problem.TypeForbidden)
+}
+
 // --- Delete ---
 
 func TestRoleHandler_Delete_204(t *testing.T) {
 	pool := &rbacFakePool{lockRoleFound: true, lockRoleValue: false, rolePerms: []string{"soul.list"}}
 	h := newRoleHandler(t, pool)
-	if _, err := h.DeleteTyped(context.Background(), "ops"); err != nil {
+	if _, err := h.DeleteTyped(context.Background(), "ops", "archon-alice"); err != nil {
 		t.Fatalf("DeleteTyped: %v", err)
 	}
 }
@@ -576,14 +613,14 @@ func TestRoleHandler_Delete_204(t *testing.T) {
 func TestRoleHandler_Delete_NotFound_404(t *testing.T) {
 	pool := &rbacFakePool{lockRoleFound: false}
 	h := newRoleHandler(t, pool)
-	_, err := h.DeleteTyped(context.Background(), "ghost")
+	_, err := h.DeleteTyped(context.Background(), "ghost", "archon-alice")
 	wantProblem(t, err, problem.TypeRoleNotFound)
 }
 
 func TestRoleHandler_Delete_Builtin_409(t *testing.T) {
 	pool := &rbacFakePool{lockRoleFound: true, lockRoleValue: true}
 	h := newRoleHandler(t, pool)
-	_, err := h.DeleteTyped(context.Background(), "cluster-admin")
+	_, err := h.DeleteTyped(context.Background(), "cluster-admin", "archon-alice")
 	wantProblem(t, err, problem.TypeRoleBuiltin)
 }
 
@@ -591,7 +628,7 @@ func TestRoleHandler_Delete_Lockout_409(t *testing.T) {
 	// The role grants `*`, no surviving admins → ErrWouldLockOutCluster.
 	pool := &rbacFakePool{lockRoleFound: true, lockRoleValue: false, rolePerms: []string{"*"}, survivors: nil}
 	h := newRoleHandler(t, pool)
-	_, err := h.DeleteTyped(context.Background(), "admins")
+	_, err := h.DeleteTyped(context.Background(), "admins", "archon-alice")
 	wantProblem(t, err, problem.TypeWouldLockOutCluster)
 }
 
@@ -749,21 +786,21 @@ func (t *grantSpyTx) Conn() *pgx.Conn                                        { r
 func TestRoleHandler_RevokeOperator_204(t *testing.T) {
 	pool := &rbacFakePool{lockRoleOperatorFound: true, lockRoleFound: true, rolePerms: []string{"soul.list"}}
 	h := newRoleHandler(t, pool)
-	if _, err := h.RevokeOperatorTyped(context.Background(), "ops", "archon-bob"); err != nil {
+	if _, err := h.RevokeOperatorTyped(context.Background(), "ops", "archon-bob", "archon-alice"); err != nil {
 		t.Fatalf("RevokeOperatorTyped: %v", err)
 	}
 }
 
 func TestRoleHandler_RevokeOperator_BadAID_422(t *testing.T) {
 	h := newRoleHandler(t, &rbacFakePool{})
-	_, err := h.RevokeOperatorTyped(context.Background(), "ops", "BOB")
+	_, err := h.RevokeOperatorTyped(context.Background(), "ops", "BOB", "archon-alice")
 	wantProblem(t, err, problem.TypeValidationFailed)
 }
 
 func TestRoleHandler_RevokeOperator_NotFound_404(t *testing.T) {
 	pool := &rbacFakePool{lockRoleOperatorFound: false}
 	h := newRoleHandler(t, pool)
-	_, err := h.RevokeOperatorTyped(context.Background(), "ops", "archon-bob")
+	_, err := h.RevokeOperatorTyped(context.Background(), "ops", "archon-bob", "archon-alice")
 	wantProblem(t, err, problem.TypeNotFound)
 }
 
@@ -776,7 +813,7 @@ func TestRoleHandler_RevokeOperator_Lockout_409(t *testing.T) {
 		survivors:             nil,
 	}
 	h := newRoleHandler(t, pool)
-	_, err := h.RevokeOperatorTyped(context.Background(), "admins", "archon-alice")
+	_, err := h.RevokeOperatorTyped(context.Background(), "admins", "archon-alice", "archon-alice")
 	wantProblem(t, err, problem.TypeWouldLockOutCluster)
 }
 

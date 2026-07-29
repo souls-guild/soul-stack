@@ -13,11 +13,11 @@ package rbac
 import "sort"
 
 // AllowedPermissions — the catalog of permission names from rbac.md →
-// §Catalog of permissions. 108 names (sum of the categories below):
+// §Catalog of permissions. 109 names (sum of the categories below):
 //
 //   - operator (5): create / revoke / issue-token / list / read;
 //   - role (8): create / create-root / delete / list / list-all / update / grant-operator / revoke-operator;
-//   - synod (8): create / update / delete / list / add-operator / remove-operator / grant-role / revoke-role (ADR-049);
+//   - synod (9): create / update / delete / list / list-all / add-operator / remove-operator / grant-role / revoke-role (ADR-049; list-all — NIM-216);
 //   - incarnation (16): create / rerun-last / run / get / list / history / unlock / upgrade / destroy / check-drift / update-hosts / update (deprecated alias) / traits-set / view-secrets / bind-member / unbind-member (NIM-209);
 //   - soul (7): list / create / issue-token / coven-assign / traits-assign / ssh-target-update / console (ADR-0074);
 //   - plugin (3): allow / revoke / list;
@@ -87,17 +87,24 @@ var AllowedPermissions = map[string]struct{}{
 	"role.list-all": {},
 
 	// synod.* — Synod group management (ADR-049): an intermediate level
-	// Archon → Synod → Roles. 8 permissions. Selector — NoSelector (group
+	// Archon → Synod → Roles. 9 permissions. Selector — NoSelector (group
 	// management is a cluster-level operation, no coven/host scope, same
 	// as role.* / operator.*; ADR-049 does NOT introduce group-scope).
 	// grant-role/add-operator are gated by the least-privilege subset,
 	// delete/remove-operator/revoke-role by self-lockout (ADR-049(f)).
 	// synod.update changes ONLY the description (cosmetic, grants/revokes
 	// no rights) — no subset/self-lockout check; name (PK) is immutable.
-	"synod.create":          {},
-	"synod.update":          {},
-	"synod.delete":          {},
-	"synod.list":            {},
+	"synod.create": {},
+	"synod.update": {},
+	"synod.delete": {},
+	"synod.list":   {},
+	// synod.list-all — see the WHOLE group catalog, not only the groups the
+	// caller could add someone to (rbac.md → § Synod catalog visibility,
+	// NIM-216). The mirror of role.list-all: a breadth modifier on
+	// `synod.list`, mounted on no endpoint, meaningless to scope (the grammar
+	// has no `synod=` dimension). Without it an auditor holding the full role
+	// catalog would still be blind to the groups those roles are bundled into.
+	"synod.list-all":        {},
 	"synod.add-operator":    {},
 	"synod.remove-operator": {},
 	"synod.grant-role":      {},

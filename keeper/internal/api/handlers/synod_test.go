@@ -179,7 +179,7 @@ func TestSynodHandler_RemoveOperator_204(t *testing.T) {
 	// Membership exists (lockRoleOperatorFound), the group exists, `*` doesn't bundle it.
 	pool := &rbacFakePool{lockSynodFound: true, lockRoleOperatorFound: true}
 	h := newSynodHandler(t, pool)
-	if _, err := h.RemoveOperatorTyped(context.Background(), "team", "archon-bob"); err != nil {
+	if _, err := h.RemoveOperatorTyped(context.Background(), "team", "archon-bob", "archon-alice"); err != nil {
 		t.Fatalf("RemoveOperatorTyped: %v", err)
 	}
 }
@@ -187,13 +187,13 @@ func TestSynodHandler_RemoveOperator_204(t *testing.T) {
 func TestSynodHandler_RemoveOperator_NotFound_404(t *testing.T) {
 	pool := &rbacFakePool{lockSynodFound: true, lockRoleOperatorFound: false}
 	h := newSynodHandler(t, pool)
-	_, err := h.RemoveOperatorTyped(context.Background(), "team", "archon-bob")
+	_, err := h.RemoveOperatorTyped(context.Background(), "team", "archon-bob", "archon-alice")
 	wantProblem(t, err, problem.TypeNotFound)
 }
 
 func TestSynodHandler_RemoveOperator_InvalidAID_422(t *testing.T) {
 	h := newSynodHandler(t, &rbacFakePool{})
-	_, err := h.RemoveOperatorTyped(context.Background(), "team", "BAD AID")
+	_, err := h.RemoveOperatorTyped(context.Background(), "team", "BAD AID", "archon-alice")
 	wantProblem(t, err, problem.TypeValidationFailed)
 }
 
@@ -231,7 +231,7 @@ func TestSynodHandler_RevokeRole_204(t *testing.T) {
 	// The bundle pair exists (lockRoleOperatorFound), the role doesn't grant `*` (rolePerms nil).
 	pool := &rbacFakePool{lockRoleOperatorFound: true}
 	h := newSynodHandler(t, pool)
-	if _, err := h.RevokeRoleTyped(context.Background(), "team", "viewer"); err != nil {
+	if _, err := h.RevokeRoleTyped(context.Background(), "team", "viewer", "archon-alice"); err != nil {
 		t.Fatalf("RevokeRoleTyped: %v", err)
 	}
 }
@@ -239,6 +239,6 @@ func TestSynodHandler_RevokeRole_204(t *testing.T) {
 func TestSynodHandler_RevokeRole_NotFound_404(t *testing.T) {
 	pool := &rbacFakePool{lockRoleOperatorFound: false}
 	h := newSynodHandler(t, pool)
-	_, err := h.RevokeRoleTyped(context.Background(), "team", "viewer")
+	_, err := h.RevokeRoleTyped(context.Background(), "team", "viewer", "archon-alice")
 	wantProblem(t, err, problem.TypeNotFound)
 }

@@ -71,6 +71,14 @@ func (p synodSuccessPool) Query(_ context.Context, sql string, args ...any) (pgx
 		return &synodEmptyRows{}, nil // the role has no scope (grant-role: roleDefaultScope → nil)
 	case strings.Contains(sql, "parent_role FROM rbac_roles"):
 		return &synodEmptyRows{}, nil // no parent row → a plain role (ADR-078, roleParent → nil)
+	case strings.Contains(sql, "scope_mode FROM rbac_roles ORDER BY name"):
+		// LoadRoleViews — the resolved role catalog the visibility filter reads to
+		// judge each group's bundle (NIM-216). No roles here, so every bundle in
+		// this fixture is empty and every group stays visible; the subject under
+		// test is the wire shape, not the filter (synod_visibility_integration_test.go).
+		return &synodEmptyRows{}, nil
+	case strings.Contains(sql, "FROM rbac_role_operators"):
+		return &synodEmptyRows{}, nil // LoadRoleViews membership — same fixture
 	case strings.Contains(sql, "FROM synods ORDER BY name"):
 		return &synodViewRows{rows: p.listRows}, nil
 	case strings.Contains(sql, "FROM synod_roles"):

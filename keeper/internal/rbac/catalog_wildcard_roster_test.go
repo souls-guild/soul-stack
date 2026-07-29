@@ -18,10 +18,11 @@ import (
 // `soul.traits-assign`. Adding an action to one of these resources fails here so
 // the enumeration is revisited in the same change.
 //
-// Scoped to the three resources whose wildcard expansion is a privilege question
+// Scoped to the four resources whose wildcard expansion is a privilege question
 // rather than bookkeeping — a root shell, the right to mint untracked privilege,
-// and an operation that moves a host between RBAC scopes. Other resources are
-// deliberately not pinned; this is a release-notes guard, not a catalog snapshot.
+// the delegation map, and an operation that moves a host between RBAC scopes.
+// Other resources are deliberately not pinned; this is a release-notes guard, not
+// a catalog snapshot.
 func TestCatalog_WildcardRostersPinnedForReleaseNotes(t *testing.T) {
 	want := map[string][]string{
 		// soul.console is the R5 addition: an interactive PTY as the Soul
@@ -47,6 +48,21 @@ func TestCatalog_WildcardRostersPinnedForReleaseNotes(t *testing.T) {
 			"role.list-all",
 			"role.revoke-operator",
 			"role.update",
+		},
+		// synod.list-all is the R5 addition and the mirror of role.list-all:
+		// the whole group catalog — every bundle and every roster, i.e. which
+		// packages of privilege exist and who holds them. Checked bare, so
+		// only an UNRESTRICTED synod.* covers it.
+		"synod": {
+			"synod.add-operator",
+			"synod.create",
+			"synod.delete",
+			"synod.grant-role",
+			"synod.list",
+			"synod.list-all",
+			"synod.remove-operator",
+			"synod.revoke-role",
+			"synod.update",
 		},
 		// incarnation.bind-member / unbind-member are the R5 additions: under
 		// ADR-080 a bind hands the host its incarnation's labels, so it moves

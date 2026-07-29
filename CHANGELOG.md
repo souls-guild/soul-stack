@@ -22,7 +22,7 @@ order to act in.
   fleet therefore refuses runs it would previously have mis-executed; a fleet
   newer than its Keeper is fine.
 
-- **Five new permissions land inside `<resource>.*` grants you already issued.**
+- **Six new permissions land inside `<resource>.*` grants you already issued.**
   The catalog is closed and a wildcard in the action position expands to every
   known action of that resource, so a role written before this release grants
   more after it. Same mechanism as `incarnation.*` when `incarnation.view-secrets`
@@ -42,6 +42,12 @@ order to act in.
     privilege map. Both are checked bare, so a *scoped* `role.*` covers neither:
     the grammar has no `role=` dimension to narrow them on, and an unrestricted
     holder is the only sound reading.
+  - **An unrestricted `synod.*` now grants `synod.list-all`**, which returns the
+    whole group catalog: every group's role bundle and its member roster, i.e.
+    which packages of privilege exist and who holds them. The mirror of
+    `role.list-all` and checked bare for the same reason — the grammar has no
+    `synod=` dimension — so a *scoped* `synod.*` covers it no more than a scoped
+    `role.*` covers the role catalog.
   - **`incarnation.*` now grants `incarnation.bind-member` /
     `incarnation.unbind-member`.** Under ADR-080 that is a visibility operation,
     not just bookkeeping: binding a host into an incarnation gives it that
@@ -56,8 +62,8 @@ order to act in.
   A role that must not gain these enumerates actions instead of the wildcard.
   The full `soul.*` expansion as of this release is `soul.list`, `soul.create`,
   `soul.issue-token`, `soul.coven-assign`, `soul.traits-assign`,
-  `soul.ssh-target-update`, `soul.console`. That list, and the `role.*` and
-  `incarnation.*` ones, are pinned against
+  `soul.ssh-target-update`, `soul.console`. That list, and the `role.*`,
+  `synod.*` and `incarnation.*` ones, are pinned against
   [the catalog](keeper/internal/rbac/catalog.go) by
   `TestCatalog_WildcardRostersPinnedForReleaseNotes`, so an action added later
   fails a test rather than aging this paragraph in silence.
@@ -91,6 +97,34 @@ order to act in.
   grammar has no `role=` dimension, only an unrestricted holder gets the full
   catalog.
 
+- **`GET /v1/synods` and `keeper.synod.list` no longer return the whole catalog.**
+  A caller sees a group exactly when it could add someone to it — that is, when
+  it covers the effective rights of every role the group bundles, which is the
+  rule `synod.add-operator` already enforced, read backwards. A group that
+  bundles nothing stays visible to everyone, and a visible group comes back
+  whole, roster included. An auditor needs `synod.list-all` **in addition to**
+  `synod.list`; without it, a reader granted the full role catalog was still
+  blind to the groups those roles are bundled into.
+
+- **Editing or deleting a role now requires being able to grant what it grants,
+  and so does taking a binding apart.** `role.update` and `role.delete` were
+  cluster-level: any holder could rewrite or drop any non-builtin role, and
+  `role.delete` took no caller at all. That was never escalation — removing
+  rights grants nothing, which is why trimming had been free — but it left
+  demolition open, and self-lockout only notices when the last `*` admin would
+  go. A caller may now administer a role exactly when it could grant what that
+  role grants, which makes every holder of a role the administrator of the roles
+  derived from it, leaves plain roles to whoever could have created them, and
+  leaves an empty role administrable by anyone.
+
+  **This is the one that breaks working automation:** trimming or deleting a role
+  whose rights you do not hold now answers 403, where it used to succeed.
+  `role.revoke-operator`, `synod.remove-operator` and `synod.revoke-role` carried
+  no caller at all and are gated the same way — each revoke asks for exactly what
+  its matching grant asks for, so unbinding a role weighs that role's rights and
+  removing a group member weighs the group's whole bundle. An unrestricted `*` is
+  unaffected throughout.
+
 - **Creating a parentless role that grants something now needs
   `role.create-root`.** The default is to derive from a role you hold and let the
   cascade do the rest. The gate judges the shape of the result, not the verb, so
@@ -102,7 +136,17 @@ order to act in.
   409 unless the request carries `confirm_cascade`.** Both directions, any depth;
   the refusal names the derived roles that gain rights, the ones that lose them,
   and how many operators hold each. A change nobody below feels still passes
-  silently, and a childless role is never gated.
+  silently.
+
+  **One case reports the edited role itself: a `PATCH` that takes its parent
+  away.** There the permission rows in the request can be identical to the stored
+  ones and the rights still move, because the ceiling they resolved under is
+  gone — so everyone holding that role gains access nobody granted them, and the
+  operator had no way to learn how many that is. Un-parenting therefore answers
+  409 until confirmed, even for a role with no children of its own; growing a
+  role is still never self-reported, and an un-parenting that widens nothing —
+  an unrestricted parent, or a delta that already stated the whole ceiling — is
+  not reported either.
 
 - **Coven and Trait labels are inherited by incarnation membership, and
   visibility widens with the release rather than behind a flag**

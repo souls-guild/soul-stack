@@ -59,8 +59,9 @@ func (h *Handler) callRoleRevokeOperator(ctx context.Context, claims *jwt.Claims
 	}
 
 	err := h.deps.RBACRoles.RevokeOperator(ctx, rbac.RevokeOperatorInput{
-		RoleName: a.Role,
-		AID:      a.AID,
+		RoleName:  a.Role,
+		AID:       a.AID,
+		CallerAID: claims.Subject,
 	})
 	if err != nil {
 		code, detail := mapRoleErrorToMCP(err)

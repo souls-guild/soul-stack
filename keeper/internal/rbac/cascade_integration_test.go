@@ -150,6 +150,11 @@ func TestIntegration_Cascade_UnaffectedChildrenAskNothing(t *testing.T) {
 // TestIntegration_Cascade_ChildlessRoleIsNeverGated — the common case. A role with
 // no derived roles cannot cascade anywhere, so the widest possible edit is free of
 // the question.
+//
+// "Cannot cascade anywhere" is about the SUBTREE, and this role is plain: it has
+// no parent to lose, so the one self-reported case (NIM-252, below) cannot apply
+// to it either. A childless DERIVED role losing its parent is reported — that is
+// the distinction, not childlessness on its own.
 func TestIntegration_Cascade_ChildlessRoleIsNeverGated(t *testing.T) {
 	admin := setupParentWithChild(t)
 	insertRoleScoped(t, "solo", "coven=dba", "incarnation.get")
@@ -163,6 +168,110 @@ func TestIntegration_Cascade_ChildlessRoleIsNeverGated(t *testing.T) {
 		DefaultScope:    &scope,
 	}); err != nil {
 		t.Fatalf("widening a childless role must not need confirmation: %v", err)
+	}
+}
+
+// ============================================================
+// The edited role is its own blast radius when it stops tracking (NIM-252)
+// ============================================================
+
+// `dba-probe` has NO derived roles, so before NIM-252 this PATCH produced no
+// report at all — the gate short-circuited on the empty subtree. Yet dropping the
+// parent lifts the `coven=dba` ceiling off every row the role carries, and bob,
+// who holds it, walks out of that coven without anyone granting him anything.
+//
+// The rows in the request are IDENTICAL to the stored ones, which is what makes
+// this a consequence rather than a request: nothing the operator typed says the
+// rights should move.
+func TestIntegration_Cascade_UnparentingAChildlessRoleIsReported(t *testing.T) {
+	admin := setupParentWithChild(t)
+
+	err := newService(t).UpdateRolePermissions(context.Background(), UpdateRolePermissionsInput{
+		Name:          "dba-probe",
+		Permissions:   []string{"incarnation.get"},
+		CallerAID:     admin,
+		SetParentRole: true,
+		ParentRole:    nil,
+	})
+	var ce *CascadeError
+	if !errors.As(err, &ce) {
+		t.Fatalf("err = %v, want a *CascadeError — un-parenting widens the role for its holders", err)
+	}
+	if got := ce.Cascade.Widened; len(got) != 1 || got[0] != "dba-probe" {
+		t.Errorf("widened = %v, want [dba-probe] (the edited role itself)", got)
+	}
+	if ce.Cascade.Operators != 1 {
+		t.Errorf("operators = %d, want 1 (bob holds dba-probe) — the count is what the operator weighs", ce.Cascade.Operators)
+	}
+	if got := storedParent(t, "dba-probe"); got == nil || *got != "dba" {
+		t.Errorf("parent_role = %v after a refused PATCH, want dba", got)
+	}
+}
+
+// The refusal is a question, not a verdict: the same PATCH goes through once the
+// operator has said they meant it.
+func TestIntegration_Cascade_UnparentingConfirmed_OK(t *testing.T) {
+	admin := setupParentWithChild(t)
+
+	if err := newService(t).UpdateRolePermissions(context.Background(), UpdateRolePermissionsInput{
+		Name:           "dba-probe",
+		Permissions:    []string{"incarnation.get"},
+		CallerAID:      admin,
+		SetParentRole:  true,
+		ParentRole:     nil,
+		ConfirmCascade: true,
+	}); err != nil {
+		t.Fatalf("un-parenting with confirm_cascade: %v", err)
+	}
+	if got := storedParent(t, "dba-probe"); got != nil {
+		t.Errorf("parent_role = %v, want NULL", *got)
+	}
+}
+
+// The report is about RIGHTS, not about the verb. This parent's ceiling is the
+// unrestricted top and the child adds no delta, so the role already granted
+// exactly what it will grant plain — losing the parent moves nothing, and nothing
+// is asked. Without this the gate would degenerate into "un-parenting always
+// prompts", which is a rule about the request rather than about its effect.
+func TestIntegration_Cascade_UnparentingThatWidensNothingIsNotReported(t *testing.T) {
+	ctx := context.Background()
+	resetRBAC(t)
+	seedOperator(t, "archon-alice", nil)
+	seedClusterAdmin(t, "archon-alice")
+	insertRole(t, "wide", "incarnation.get")
+	insertDerived(t, "wide-child", "wide", "", "incarnation.get")
+
+	if err := newService(t).UpdateRolePermissions(ctx, UpdateRolePermissionsInput{
+		Name:          "wide-child",
+		Permissions:   []string{"incarnation.get"},
+		CallerAID:     "archon-alice",
+		SetParentRole: true,
+		ParentRole:    nil,
+	}); err != nil {
+		t.Fatalf("un-parenting under an unrestricted parent grants nothing new: %v", err)
+	}
+	if got := storedParent(t, "wide-child"); got != nil {
+		t.Errorf("parent_role = %v, want NULL", *got)
+	}
+}
+
+// The boundary in the other direction: an ordinary edit of the role's own rows is
+// NOT self-reported, however much it widens. The operator sent that permission
+// list — it is the request, not a consequence of it. Pinned because extending the
+// report to every widening PATCH would turn routine role edits into 409s.
+func TestIntegration_Cascade_GrowingARoleIsNotSelfReported(t *testing.T) {
+	ctx := context.Background()
+	resetRBAC(t)
+	seedOperator(t, "archon-alice", nil)
+	seedClusterAdmin(t, "archon-alice")
+	insertRoleScoped(t, "solo", "coven=dba", "incarnation.get")
+
+	if err := newService(t).UpdateRolePermissions(ctx, UpdateRolePermissionsInput{
+		Name:        "solo",
+		Permissions: []string{"incarnation.get", "incarnation.run"},
+		CallerAID:   "archon-alice",
+	}); err != nil {
+		t.Fatalf("growing a role's own rows must not need confirmation: %v", err)
 	}
 }
 
@@ -324,15 +433,20 @@ func TestIntegration_ScopeMode_RejectedOnAPlainRole(t *testing.T) {
 // TestIntegration_ScopeMode_ClearedWithTheParent — making a role plain again drops
 // the intent with the relationship it described, keeping the two columns from
 // drifting into a state the CHECK forbids.
+//
+// ConfirmCascade because un-parenting lifts this role's own ceiling and is
+// reported as such (NIM-252); the subject here is the scope_mode column, so the
+// confirmation is fixture, not assertion.
 func TestIntegration_ScopeMode_ClearedWithTheParent(t *testing.T) {
 	admin := setupParentWithChild(t)
 
 	if err := newService(t).UpdateRolePermissions(context.Background(), UpdateRolePermissionsInput{
-		Name:          "dba-probe",
-		Permissions:   []string{"incarnation.get"},
-		CallerAID:     admin,
-		SetParentRole: true,
-		ParentRole:    nil,
+		Name:           "dba-probe",
+		Permissions:    []string{"incarnation.get"},
+		CallerAID:      admin,
+		SetParentRole:  true,
+		ParentRole:     nil,
+		ConfirmCascade: true,
 	}); err != nil {
 		t.Fatalf("re-root to plain: %v", err)
 	}

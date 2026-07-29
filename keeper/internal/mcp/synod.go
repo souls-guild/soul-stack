@@ -182,7 +182,7 @@ func (h *Handler) callSynodList(ctx context.Context, claims *jwt.Claims, req jso
 		return h.toolError(req.ID, toolName, mcpCodeForbidden,
 			"operator lacks required permission synod.list")
 	}
-	views, err := h.deps.RBACRoles.ListSynods(ctx)
+	views, err := h.deps.RBACRoles.ListSynods(ctx, claims.Subject)
 	if err != nil {
 		code, detail := mapSynodErrorToMCP(err)
 		if code == mcpCodeInternalError {
@@ -283,7 +283,7 @@ func (h *Handler) callSynodRemoveOperator(ctx context.Context, claims *jwt.Claim
 		return h.toolError(req.ID, toolName, mcpCodeValidationFailed, "field 'aid' must match "+operator.AIDPattern)
 	}
 	err := h.deps.RBACRoles.RemoveOperator(ctx, rbac.RemoveOperatorInput{
-		SynodName: a.Synod, AID: a.AID,
+		SynodName: a.Synod, AID: a.AID, CallerAID: claims.Subject,
 	})
 	if err != nil {
 		code, detail := mapSynodErrorToMCP(err)
@@ -373,7 +373,7 @@ func (h *Handler) callSynodRevokeRole(ctx context.Context, claims *jwt.Claims, r
 		return h.toolError(req.ID, toolName, mcpCodeValidationFailed, "field 'role' is required")
 	}
 	err := h.deps.RBACRoles.RevokeRole(ctx, rbac.RevokeRoleInput{
-		SynodName: a.Synod, RoleName: a.Role,
+		SynodName: a.Synod, RoleName: a.Role, CallerAID: claims.Subject,
 	})
 	if err != nil {
 		code, detail := mapSynodErrorToMCP(err)

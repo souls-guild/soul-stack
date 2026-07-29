@@ -31,6 +31,15 @@ import (
 //	narrowed  somebody loses access, possibly mid-incident. Cheaper to undo,
 //	          just as surprising to run into.
 //
+// The edited role is normally NOT part of its own blast radius: the operator sent
+// its permission list, so whatever it now grants is what they typed. One case
+// breaks that (NIM-252) — the role STOPS TRACKING, i.e. this PATCH takes its
+// parent away. Then the rows can be identical in the request and the rights still
+// move, because the ceiling they resolved under is gone; the holders of that role
+// gain access nobody granted them, and the operator has no way to know how many
+// they are. That is the same surprise this file exists for, one level up, so the
+// role joins its own report exactly there and nowhere else.
+//
 // Nothing here participates in a permission decision. The impact report is
 // computed from the same [attenuate] the enforcer runs, so it cannot disagree
 // with what will happen — but if it were skipped entirely, the resulting rights
@@ -43,10 +52,14 @@ import (
 // that has consequences you have to take a position on".
 var ErrRoleCascadeNeedsConfirm = errors.New("rbac: mutation cascades into derived roles (confirmation required)")
 
-// RoleCascade is what a pending mutation does to the subtree below a role: the
-// derived roles that would gain rights, the ones that would lose them, and the
-// number of distinct active operators holding any of them (directly or through a
-// Synod). Names are sorted, so a report reads the same twice.
+// RoleCascade is what a pending mutation does to the roles it moves: the ones
+// that would gain rights, the ones that would lose them, and the number of
+// distinct active operators holding any of them (directly or through a Synod).
+// Names are sorted, so a report reads the same twice.
+//
+// Normally every name here is a role DERIVED from the edited one. The edited role
+// appears only when this PATCH takes its parent away (NIM-252) — see the file
+// header for why that one case counts as a consequence rather than a request.
 //
 // A role appears in BOTH lists when a change trades one right for another — a
 // scope moved sideways from `coven=dba` to `coven=web` narrows on the first term
@@ -70,11 +83,11 @@ func (c RoleCascade) Empty() bool { return len(c.Widened) == 0 && len(c.Narrowed
 func (c RoleCascade) String() string {
 	var parts []string
 	if len(c.Widened) > 0 {
-		parts = append(parts, fmt.Sprintf("widens %d derived role(s): %s",
+		parts = append(parts, fmt.Sprintf("widens %d role(s): %s",
 			len(c.Widened), strings.Join(c.Widened, ", ")))
 	}
 	if len(c.Narrowed) > 0 {
-		parts = append(parts, fmt.Sprintf("narrows %d derived role(s): %s",
+		parts = append(parts, fmt.Sprintf("narrows %d role(s): %s",
 			len(c.Narrowed), strings.Join(c.Narrowed, ", ")))
 	}
 	return fmt.Sprintf("%s; %d operator(s) hold them", strings.Join(parts, ", "), c.Operators)
@@ -266,6 +279,21 @@ func cascadeImpact(before, after *Role, subtree []subtreeRole) (RoleCascade, err
 	}
 
 	var c RoleCascade
+	// The edited role, but only when this PATCH takes its parent away (NIM-252).
+	// Both directions are checked rather than just the widening: un-parenting alone
+	// can only widen — the ceiling is dropped, never added — but the same request
+	// may trim rows at the same time, and an operator confirming one consequence
+	// should be shown the other.
+	if before.ParentRole != "" && after.ParentRole == "" {
+		wasEff := effectivePermissions(before.Permissions, before.DefaultScope)
+		nowEff := effectivePermissions(after.Permissions, after.DefaultScope)
+		if uncovered(wasEff, nowEff) {
+			c.Widened = append(c.Widened, before.Name)
+		}
+		if uncovered(nowEff, wasEff) {
+			c.Narrowed = append(c.Narrowed, before.Name)
+		}
+	}
 	for name, nowPerms := range now {
 		wasPerms := was[name]
 		if uncovered(wasPerms, nowPerms) {
@@ -322,16 +350,15 @@ func countCascadeOperators(ctx context.Context, db ExecQueryRower, c RoleCascade
 // refuse with the report unless the caller has already said yes.
 //
 // before is the role as stored (already flattened); after is the role as the
-// pending mutation leaves it. A role with no children costs one indexed query and
-// returns immediately — the partial index of migration 102 serves exactly this
-// lookup.
+// pending mutation leaves it. A role with no children costs one indexed query —
+// the partial index of migration 102 serves exactly this lookup — and then an
+// empty walk. It no longer short-circuits on that emptiness: a role losing its
+// parent is a consequence of its own, and childlessness says nothing about it
+// (NIM-252).
 func (s *Service) assertCascadeConfirmed(ctx context.Context, db ExecQueryRower, before, after *Role, confirmed bool) error {
 	subtree, err := loadRoleSubtree(ctx, db, before.Name)
 	if err != nil {
 		return err
-	}
-	if len(subtree) == 0 {
-		return nil
 	}
 	c, err := cascadeImpact(before, after, subtree)
 	if err != nil {

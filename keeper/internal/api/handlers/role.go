@@ -249,14 +249,19 @@ type RoleNameReply struct {
 // rollout of ADR-054 §Pattern (b)): business logic without http.ResponseWriter/
 // *http.Request. name arrives as an argument (path extraction is on the calling layer);
 // errors — *problemError, success — [RoleNameReply] (audit-payload). The 204 body is empty.
-func (h *RoleHandler) DeleteTyped(ctx context.Context, name string) (RoleNameReply, error) {
+//
+// callerAID decides whether this operator may administer the role at all
+// (NIM-214) — the service refuses one whose rights the caller could not grant.
+func (h *RoleHandler) DeleteTyped(ctx context.Context, name, callerAID string) (RoleNameReply, error) {
 	var zero RoleNameReply
-	err := h.svc.DeleteRole(ctx, name)
+	err := h.svc.DeleteRole(ctx, name, callerAID)
 	switch {
 	case err == nil:
 		// fall through to reply.
 	case errors.Is(err, rbac.ErrRoleNotFound):
 		return zero, &problemError{problem.New(problem.TypeRoleNotFound, "", "role "+name+" not found")}
+	case errors.Is(err, rbac.ErrPermissionNotHeld):
+		return zero, &problemError{problem.New(problem.TypeForbidden, "", "cannot administer a role whose permissions you do not hold yourself")}
 	case errors.Is(err, rbac.ErrRoleBuiltin):
 		return zero, &problemError{problem.New(problem.TypeRoleBuiltin, "", "role "+name+" is builtin and cannot be deleted")}
 	case errors.Is(err, rbac.ErrWouldLockOutCluster):
@@ -475,15 +480,16 @@ func (h *RoleHandler) GrantOperatorTyped(ctx context.Context, claims *jwt.Claims
 // removing the membership row, without http.ResponseWriter/*http.Request. name/aid
 // arrive as arguments; errors — *problemError, success — [RoleOperatorReply]
 // (audit-payload; GrantedByAID empty — revoke does not carry it).
-func (h *RoleHandler) RevokeOperatorTyped(ctx context.Context, name, aid string) (RoleOperatorReply, error) {
+func (h *RoleHandler) RevokeOperatorTyped(ctx context.Context, name, aid, callerAID string) (RoleOperatorReply, error) {
 	var zero RoleOperatorReply
 	if !operator.ValidAID(aid) {
 		return zero, &problemError{problem.New(problem.TypeValidationFailed, "", "path 'aid' must match "+operator.AIDPattern)}
 	}
 
 	err := h.svc.RevokeOperator(ctx, rbac.RevokeOperatorInput{
-		RoleName: name,
-		AID:      aid,
+		RoleName:  name,
+		AID:       aid,
+		CallerAID: callerAID,
 	})
 	switch {
 	case err == nil:

@@ -5,7 +5,9 @@
   attenuation gate and the self-lockout correction of §(i); J3 (NIM-181) landed
   the API surface. The web selector is NIM-182. The **2026-07-27 amendment**
   (NIM-198 / NIM-199 / NIM-200) corrects §(h) to measure the child in its resolved
-  form, and adds §(k) `scope_mode` + the cascade report and §(l) inert rows.
+  form, and adds §(k) `scope_mode` + the cascade report and §(l) inert rows. The
+  **2026-07-28 amendment** (NIM-214) adds §(m): administering a role is bounded by
+  what the caller could grant, which is what finally gives `role.delete` a floor.
 
 - **Context.** Roles are flat. An operator who runs the `dba` team can already be
   scoped — `default_scope: coven=dba` ([ADR-047 §a](0047-purview.md)) — but there is no way
@@ -338,6 +340,45 @@
   `ErrRoleExceedsParent` names **every** uncovered row rather than the first. An
   operator told about one offending row at a time cannot repair the role in a
   single PATCH.
+
+  **(m) Administering a role is bounded by what the caller could grant** (Amendment
+  2026-07-28, NIM-214). Creating a role was always bounded — you cannot put in what
+  you do not hold — but EDITING and DELETING one were cluster-level: `role.update`
+  and `role.delete` are NoSelector, so any holder could rewrite or drop any
+  non-builtin role, including roles far above their own rights. `role.delete` did
+  not take a caller at all.
+
+  The least-privilege floor did not object, and correctly so on its own terms:
+  taking rights away grants nothing, which is why trimming had been free since
+  [ADR-028](0028-rbac-storage.md). What that leaves open is not escalation but
+  **demolition** — one holder of `role.update` can zero out every team's access,
+  and the self-lockout guard only notices when the last `*` admin would go.
+
+  The rule follows from a role belonging to its parent rather than to its author
+  (§(e), NIM-201):
+
+  > a caller may administer a role ⟺ the caller could **grant** what that role grants
+
+  which is the containment of §(c) once more — the same predicate the floor, the
+  catalog filter and attenuation all read. No third notion of ownership is
+  introduced, and that is the point: "administer" turns out to be an existing
+  question asked about the role's CURRENT form.
+
+  **The requested model falls out of it rather than being coded separately.** Every
+  holder of a role `P` administers the roles derived from `P`: a derived role's
+  rights are contained in its parent's, so anyone holding `P` covers them,
+  transitively and through a [Synod](0049-synod.md) like every other coverage
+  question. Roles outside any subtree are not orphaned either — a plain role is
+  administered by whoever could have created it, which is what `role.create-root`
+  already selects for, and an empty role is administrable by anyone because it
+  exposes no privilege.
+
+  **Two consequences are deliberate.** Trimming a role you do not cover is now
+  REFUSED — that reverses "cutting someone else's role is not escalation", true as
+  far as escalation goes and precisely the demolition surface this closes; trimming
+  a role you DO cover is untouched. And the route rights stay NoSelector: the
+  boundary lives in the service, so REST and MCP cannot drift, and `role.update` is
+  the right to reach the endpoint, never the reach itself.
 
 - **Delivery.**
   - **J1 (NIM-179).** The column, its guards, and the plumbing that carries

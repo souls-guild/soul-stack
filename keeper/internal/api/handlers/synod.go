@@ -161,8 +161,11 @@ func (h *SynodHandler) CreateTyped(ctx context.Context, claims *jwt.Claims, req 
 // reads the group catalog and assembles [SynodListPage] (flat SynodView) without http.
 // ResponseWriter/*http.Request. A read error → *problemError (500). The items wire shape
 // (toSynodResponse + native projection) is built by api.
-func (h *SynodHandler) ListTyped(ctx context.Context) (SynodListPage, error) {
-	views, err := h.svc.ListSynods(ctx)
+//
+// callerAID scopes the catalog to what that operator may see (NIM-216) — the
+// service filters, so REST and MCP get the same answer for the same caller.
+func (h *SynodHandler) ListTyped(ctx context.Context, callerAID string) (SynodListPage, error) {
+	views, err := h.svc.ListSynods(ctx, callerAID)
 	if err != nil {
 		h.logger.Error("synod.list: service failed", slog.Any("error", err))
 		return SynodListPage{}, &problemError{problem.New(problem.TypeInternalError, "", "list synods failed")}
@@ -328,7 +331,7 @@ func (h *SynodHandler) AddOperatorTyped(ctx context.Context, claims *jwt.Claims,
 // removing the membership row, without http.ResponseWriter/*http.Request. name/aid
 // arrive as arguments; errors — *problemError, success — [SynodOperatorReply]
 // (audit payload; AddedByAID empty — remove does not carry it).
-func (h *SynodHandler) RemoveOperatorTyped(ctx context.Context, name, aid string) (SynodOperatorReply, error) {
+func (h *SynodHandler) RemoveOperatorTyped(ctx context.Context, name, aid, callerAID string) (SynodOperatorReply, error) {
 	var zero SynodOperatorReply
 	if !operator.ValidAID(aid) {
 		return zero, &problemError{problem.New(problem.TypeValidationFailed, "", "path 'aid' must match "+operator.AIDPattern)}
@@ -337,6 +340,7 @@ func (h *SynodHandler) RemoveOperatorTyped(ctx context.Context, name, aid string
 	err := h.svc.RemoveOperator(ctx, rbac.RemoveOperatorInput{
 		SynodName: name,
 		AID:       aid,
+		CallerAID: callerAID,
 	})
 	switch {
 	case err == nil:
@@ -429,11 +433,12 @@ func (h *SynodHandler) GrantRoleTyped(ctx context.Context, claims *jwt.Claims, n
 // {role_name} (FULL-TYPED expansion, ADR-054 §Pattern (b)): removing the role from the bundle,
 // without http.ResponseWriter/*http.Request. name/role arrive as arguments; errors —
 // *problemError, success — [SynodRoleReply] (audit payload; GrantedByAID empty).
-func (h *SynodHandler) RevokeRoleTyped(ctx context.Context, name, role string) (SynodRoleReply, error) {
+func (h *SynodHandler) RevokeRoleTyped(ctx context.Context, name, role, callerAID string) (SynodRoleReply, error) {
 	var zero SynodRoleReply
 	err := h.svc.RevokeRole(ctx, rbac.RevokeRoleInput{
 		SynodName: name,
 		RoleName:  role,
+		CallerAID: callerAID,
 	})
 	switch {
 	case err == nil:

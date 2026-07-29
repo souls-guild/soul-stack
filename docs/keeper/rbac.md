@@ -188,7 +188,7 @@ Six endpoints. RBAC check - in middleware (`role.*`-permission without selector)
 |---|---|---|---|---|
 | `POST /v1/roles` | `role.create` (+ `role.create-root` when no `parent_role`) | body `{name, description?, permissions[]}` | `201` (body empty) | `403 forbidden` (least-privilege: right outside the caller set; or a parentless role without `role.create-root`, § Root roles); `409 role-already-exists`; `422 validation-failed` (broken `name` / `permission`); `400 malformed-request` |
 | `GET /v1/roles` | `role.list` | — | `200 {items: [...]}` (filtered to the caller, § Catalog visibility) | `500 internal-error` |
-| `DELETE /v1/roles/{name}` | `role.delete` | path `name` | `204` | `404 role-not-found`; `409 role-builtin`; `409 would-lock-out-cluster` |
+| `DELETE /v1/roles/{name}` | `role.delete` | path `name` | `204` | `403 forbidden` (may not administer a role whose rights the caller could not grant, § Who may administer a role); `404 role-not-found`; `409 role-builtin`; `409 would-lock-out-cluster` |
 | `PATCH /v1/roles/{name}/permissions` | `role.update` (+ `role.create-root` when the result has no parent) | path `name` + body `{permissions[]}` (replace) | `204` | `403 forbidden` (least-privilege: a right the PATCH newly grants is outside the caller's set; or minting a parentless role, § Root roles); `404 role-not-found`; `409 role-builtin`; `409 would-lock-out-cluster`; `422 validation-failed`; `400 malformed-request` |
 | `POST /v1/roles/{name}/operators` | `role.grant-operator` | path `name` + body `{aid}` | `204` | `403 forbidden` (least-privilege: role contains a right outside the caller's set); `404 role-not-found`; `404 not-found` (AID does not exist); `422 validation-failed` (empty/broken AID); `400 malformed-request` |
 | `DELETE /v1/roles/{name}/operators/{aid}` | `role.revoke-operator` | path `name`, `aid` | `204` | `404 not-found` (no pair `(name, aid)`); `409 would-lock-out-cluster`; `422 validation-failed` (broken path-AID) |
@@ -257,7 +257,7 @@ Real readers must see roles they hold nothing of: an auditor, a security review,
 - **No `rbac-auditor` builtin.** The catalog keeps exactly one builtin (`cluster-admin`); a builtin can be neither updated nor deleted (`409 role-builtin`), which is the wrong shape for a role every organisation defines differently. Build it: `role.list` + `role.list-all` + `audit.read`.
 - Appears in `GET /v1/me/permissions` like any other action (`{resource: "role", action: "list-all"}`), so the UI reads it rather than inferring it.
 
-> **Adjacent surface:** `GET /v1/synods` still publishes each group's bundled roles and members to any `synod.list` holder. That is the same class of leak, one step weaker (role NAMES, not their permission sets) — a follow-up, not fixed here. `GET /v1/operators` is unaffected: it publishes the Archon registry, not the role↔operator mapping.
+> **Adjacent surface:** `GET /v1/synods` had the same leak one step weaker — role NAMES rather than their permission sets — and is closed the same way (§ Synod catalog visibility, NIM-216). `GET /v1/operators` was never affected: it publishes the Archon registry, not the role↔operator mapping.
 
 ### Invariant least-privilege (subset-check)
 
@@ -268,7 +268,8 @@ Separate from self-lockout protection - against **vertical escalation of privile
 | Path | What is checked against the effective dialing of a caller |
 |---|---|
 | `role.create` | **each** permission of the new role. |
-| `role.update` | **each right the PATCH newly grants** — the role's effective rights AFTER, compared with BEFORE by coverage. Not the rows that changed: a PATCH that moves the role's **ceiling** without touching a single row (clearing `parent_role`, replacing `default_scope`, re-pinning the delta) widens every bare permission under it, and a row diff reports that as nothing at all (NIM-230). Removing rights is **not** limited — cutting someone else's role is not escalation — and neither is narrowing them, since an operator allowed to delete a permission outright must not be refused the smaller act of confining its scope. |
+| `role.update` | **each right the PATCH newly grants** — the role's effective rights AFTER, compared with BEFORE by coverage. Not the rows that changed: a PATCH that moves the role's **ceiling** without touching a single row (clearing `parent_role`, replacing `default_scope`, re-pinning the delta) widens every bare permission under it, and a row diff reports that as nothing at all (NIM-230). Removing rights, and narrowing them, add nothing and are not limited here — but reaching the role at all is a separate question (§ Who may administer a role). |
+| `role.delete` | nothing is granted by a deletion, so this floor has nothing to measure — the caller is bounded by § Who may administer a role instead. |
 | `role.grant-operator` | **each** permission **granted role** (otherwise bypass: cluster-admin created a powerful role, suboperator with `role.grant-operator` assigned it to himself/other and rose). |
 
 - **Coverage** - the same implication semantics as `Check` (§ How enforcer resolves): caller "has" permission `P` if at least one of its permissions matches `P` (taking into account `*` → covers everything; `resource.*` → covers any action of this resource; selector `on key=a,b` → caller must cover **every** value). Only the owner of `*` can issue a full-wildcard `*`.
@@ -278,6 +279,41 @@ Separate from self-lockout protection - against **vertical escalation of privile
 - Violation → `403 forbidden` (REST `TypeForbidden` / MCP `forbidden`), sentinel `ErrPermissionNotHeld` - separate from `ErrPermissionDenied` ("no right to the operation itself", checked by middleware/tool before Service).
 
 Self-lockout and least-privilege **coexist**: the first prohibits locking the admin-set "down", the second prohibits granting the "up" right. They check different things and don't conflict in order.
+
+### Who may administer a role (`role.update` / `role.delete`)
+
+Creating a role was always bounded — you cannot put in what you do not hold. **Editing and deleting one were not.** Both rights are `NoSelector`, so any holder could rewrite or drop any non-builtin role in the cluster, including roles far above their own rights; `role.delete` did not take a caller at all and ran no caller-side check of any kind.
+
+The least-privilege floor did not object, and correctly so on its own terms: taking rights away grants nothing, which is why trimming had been free since ADR-028. What that leaves open is not escalation but **demolition** — one holder of `role.update` can zero out every team's access, and self-lockout only notices when the last `*` admin would go.
+
+**The rule: a caller may administer a role exactly when the caller could GRANT what that role grants** ([`role_admin.go`](../../keeper/internal/rbac/role_admin.go)) — the same containment as § Invariant least-privilege and § Catalog visibility, applied to the role's **current** resolved form. Refusal → `403` (`ErrPermissionNotHeld`).
+
+The model behind it ([ADR-078 §(m)](../adr/0078-rbac-derived-roles.md), from NIM-201) is that a role belongs to its **parent**, not to its author. That model is a consequence of the rule rather than a second mechanism:
+
+| Target | Who administers it |
+|---|---|
+| a role derived from `P` | every holder of `P` — a child's rights are contained in its parent's, transitively and through a Synod |
+| a plain role | whoever could have created it (`role.create-root` already selects for that) — it is not orphaned |
+| a role that grants nothing | anyone: there is no privilege to protect, mirroring § Catalog visibility |
+| anything, for a bare `*` | unchanged — a cluster-admin covers everything |
+
+Three questions now live side by side and are deliberately **not** merged: **see** (§ Catalog visibility), **grant** (§ Invariant least-privilege) and **administer** — all three read the same `callerHolds`, asked about different things. They nest rather than conflict: administering a role implies covering it, which implies seeing it.
+
+**Two consequences are deliberate, and one is breaking.** Trimming a role you do not cover is now refused — that reverses "cutting someone else's role is not escalation", true as far as escalation goes and exactly the demolition surface this closes. Trimming a role you DO cover is untouched. And `role.update` / `role.delete` remain the right to **reach the endpoint**, never the reach itself: the boundary is in `rbac.Service`, so REST and MCP cannot drift apart.
+
+#### Taking a binding apart (NIM-285)
+
+The same surface ran one door along: `role.revoke-operator`, `synod.remove-operator` and `synod.revoke-role` carried **no caller at all** — the field was absent from the service inputs — so any holder could strip any archon of any role, or empty any group. Self-lockout was the only obstacle, and it fires when the **last** `*` admin would go.
+
+**Each revoke asks for exactly what its matching grant asks for.** Symmetry rather than a fresh judgement: the pair is one authorization surface seen from two directions, and any asymmetry between them is a gap by construction.
+
+| Revoke | Measured against | Mirrors |
+|---|---|---|
+| `role.revoke-operator` | the role's effective rights | `role.grant-operator` |
+| `synod.remove-operator` | the group's **whole** bundle — a member receives all of it ([ADR-049 §f](../adr/0049-synod.md)) | `synod.add-operator` |
+| `synod.revoke-role` | the revoked **role's** rights | `synod.grant-role` |
+
+Removing a right still grants nothing, so none of this is escalation either. It is the same demolition surface, closed by the same argument.
 
 ### Derived roles (`parent_role`)
 
@@ -359,7 +395,9 @@ Sending `pin` again RE-PINS onto the parent's scope as of now. An edit that does
 
 Editing a role changes every role derived from it. Any mutation that moves the **effective rights** of anything below it — either direction, any depth — is refused with `409` (`role-cascade-not-confirmed`) unless the request carries **`confirm_cascade`**. The refusal names the derived roles that would gain rights, the ones that would lose them, and how many active operators hold any of them (directly or through a Synod).
 
-Both directions are reported and neither is the safe one: widening hands out access nobody granted directly, narrowing takes access away, possibly mid-incident. A mutation the subtree does not feel passes silently — being a parent is not itself a consequence — and a role with no children is never gated. A pinned child is absent from the widening half by construction.
+Both directions are reported and neither is the safe one: widening hands out access nobody granted directly, narrowing takes access away, possibly mid-incident. A mutation the subtree does not feel passes silently — being a parent is not itself a consequence. A pinned child is absent from the widening half by construction.
+
+**The edited role is normally not part of its own blast radius**, and for one reason: the request carries its permission list, so whatever it ends up granting is what the operator typed. Growing a role never prompts. The exception is a `PATCH` that takes the role's **parent away** — there the rows in the request can be identical to the stored ones and the rights still move, because the ceiling they resolved under is gone. Everyone holding that role gains access nobody granted them, and the operator has no other way to learn how many that is, so the role joins its own report there and nowhere else. Childlessness does not exempt it: a derived role with no children of its own is still reported when it loses its parent (NIM-252). An un-parenting that widens nothing — an unrestricted parent, or a delta that already stated the whole ceiling — is not reported, because the gate reads rights, not verbs.
 
 The gate is **advisory in nature**: skipping it would produce exactly the same rights. It is a gate on the operator's attention, and it runs **last**, so a refusal about the caller's own rights is always reported before one that asks them to decide. `confirm_cascade` is recorded in the audit payload whenever it is sent — it is the operator accepting a change to roles other than the one the record names.
 
@@ -448,7 +486,7 @@ Eight endpoints. RBAC check - in middleware (`synod.*`-permission, NoSelector), 
 | Method + path | Permission | Body/path | Success | Error codes |
 |---|---|---|---|---|
 | `POST /v1/synods` | `synod.create` | body `{name, description?}` | `201` (body empty) | `409 synod-already-exists`; `422 validation-failed` (empty/broken `name`); `400 malformed-request` |
-| `GET /v1/synods` | `synod.list` | — | `200 {items: [...]}` | `500 internal-error` |
+| `GET /v1/synods` | `synod.list` | — | `200 {items: [...]}` (filtered to the caller, § Synod catalog visibility) | `500 internal-error` |
 | `PATCH /v1/synods/{name}` | `synod.update` | path `name` + body `{description}` (required, 1..1024 characters) | `204` | `404 synod-not-found`; `422 validation-failed` (empty `description` / limit exceeded); `400 malformed-request` (broken JSON, unknown field - including `name` in the body) |
 | `DELETE /v1/synods/{name}` | `synod.delete` | path `name` | `204` | `404 synod-not-found`; `409 synod-builtin`; `409 would-lock-out-cluster` |
 | `POST /v1/synods/{name}/operators` | `synod.add-operator` | path `name` + body `{aid}` | `204` | `403 forbidden` (least-privilege: group bundle contains a right outside the caller's set); `404 synod-not-found`; `404 not-found` (AID does not exist); `422 validation-failed` (empty/broken AID); `400 malformed-request` |
@@ -456,9 +494,26 @@ Eight endpoints. RBAC check - in middleware (`synod.*`-permission, NoSelector), 
 | `POST /v1/synods/{name}/roles` | `synod.grant-role` | path `name` + body `{role}` | `204` | `403 forbidden` (least-privilege: role contains a right outside the caller's set); `404 synod-not-found`; `404 role-not-found`; `422 validation-failed` (empty `role`); `400 malformed-request` |
 | `DELETE /v1/synods/{name}/roles/{role_name}` | `synod.revoke-role` | path `name`, `role_name` | `204` | `404 not-found` (no bundle pair `(name, role)`); `409 would-lock-out-cluster` |
 
-- **`GET /v1/synods` items[]** — `{name, description, builtin, roles[], operators[]}`; `roles` / `operators` are serialized by a non-nil array (`[]`, not `null`), sorted deterministically.
+- **`GET /v1/synods` items[]** — `{name, description, builtin, roles[], operators[]}`; `roles` / `operators` are serialized by a non-nil array (`[]`, not `null`), sorted deterministically. The list holds only the groups the caller may see (§ Synod catalog visibility) — an operator is NOT told how many were withheld.
 - **`add-operator` / `grant-role` are idempotent** - re-adding the same pair is a no-op (`204`).
 - **`added_by_aid` / `granted_by_aid`** are taken from the JWT-claim caller; for seed/bootstrap lines - `NULL`.
+
+### Synod catalog visibility (`synod.list`)
+
+`synod.list` is the right to read the group catalog — **not** the right to read the cluster's delegation structure. A group carries the two things § Catalog visibility had just taken off `role.list`: **who is in it**, the readiest answer to "who do I attack to reach X", and **which roles it bundles**, i.e. which packages of rights exist and who was handed them. After NIM-202 this was the last way to read a piece of the privilege map out of a list.
+
+The rule needs no invention, because the write side already states it. By [ADR-049(f)](../adr/0049-synod.md) `synod.add-operator` demands the caller hold the effective rights of **every** role the group bundles — a member receives the whole bundle. Read backwards:
+
+**A group is visible ⟺ the caller may see every role it bundles** — that is, "I see the group exactly when I could have put someone in it", the same shape as "I see the role exactly when I could have granted it". It is literally the role rule applied across the bundle ([`synod_visibility.go`](../../keeper/internal/rbac/synod_visibility.go)), so there is no second notion of "close enough to show" that could drift from the decision layer.
+
+Two consequences fall out rather than being decided:
+
+- **A group that bundles NOTHING is visible to everyone.** The quantifier runs over an empty bundle. Same as an empty role, and for the same reason: no privilege is exposed.
+- **A visible group comes back WHOLE**, roster included. Visibility already means the caller could add any of those members; hiding the list would be a half-truth with no boundary behind it.
+
+`synod.list-all` is the mirror of `role.list-all` and exists for the same reader: the auditor who must see every group while holding nothing any of them bundle. Without it, an auditor granted the full **role** catalog would still be blind to the groups those roles are bundled into. It is a breadth modifier on `synod.list`, mounted on no endpoint, and bare by construction — a scoped `synod.list-all on coven=X` yields the ordinary filtered view, because the scope grammar has no `synod=` dimension for it to select with.
+
+Filtering lives in `rbac.Service`, not in transport, so REST and MCP answer the same caller identically.
 
 ### Synod Security Invariants
 
@@ -498,14 +553,14 @@ RBAC management (roles, permissions, membership) via OpenAPI/MCP - RBAC-storage 
 |---|---|
 | `role.create` | Creating a role (`rbac_roles` + its permissions in `rbac_role_permissions`). You cannot enable permission outside the caller set (§ least-privilege invariant). On its own it admits a **derived** role; a role with no parent additionally needs `role.create-root` (§ Root roles). |
 | `role.create-root` | Creating a role with **no parent** that grants something — privilege that tracks nothing (§ Root roles). Mounted on **no endpoint of its own**: `role.create` still gates `POST /v1/roles`, this decides whether the result may be parentless. Also required to CLEAR `parent_role` or to grow an already-plain role via `PATCH`. NoSelector. |
-| `role.delete` | Removing a role (permissions + membership cascade). **Forbidden** over `builtin=true` (`cluster-admin`) and when the self-lockout invariant is violated (§ Built-in roles). |
+| `role.delete` | Removing a role (permissions + membership cascade). **Forbidden** over `builtin=true` (`cluster-admin`), when the self-lockout invariant is violated (§ Built-in roles), and when the caller could not grant what the role grants (§ Who may administer a role). |
 | `role.list` | Listing the roles with their permissions and membership — **the roles the caller could grant, not the whole catalog** (§ Catalog visibility). |
 | `role.list-all` | Breadth modifier on `role.list`: see the **whole** catalog, including roles the caller holds nothing of (auditor / security review / first-line support). Mounted on **no endpoint of its own** — `role.list` still gates `GET /v1/roles`, this decides how much comes back, so an auditor needs **both**. Granting it alone opens nothing. NoSelector: scoping it is meaningless (no `role=` dimension in the grammar), and only an unrestricted holder gets the full catalog. |
-| `role.update` | Changing role permissions. **Forbidden** over `builtin=true`; you cannot remove `*` from a role that holds the only effective `*` (self-lockout); You cannot add permission outside the caller set (least-privilege). |
+| `role.update` | Changing role permissions. **Forbidden** over `builtin=true`; you cannot remove `*` from a role that holds the only effective `*` (self-lockout); you cannot add permission outside the caller set (least-privilege); and you cannot touch a role whose rights you could not grant at all (§ Who may administer a role). |
 | `role.grant-operator` | Binding `(role, aid)` - adding a membership string to `rbac_role_operators`. You cannot grant a role with permission outside the caller set (§ Least-privilege invariant). |
 | `role.revoke-operator` | Removing the membership line. **Disabled** if it removes the last active AID with effective `*` (self-lockout). |
 
-### Synod (8) — [ADR-049](../adr/0049-synod.md)
+### Synod (9) — [ADR-049](../adr/0049-synod.md)
 
 Managing **Synod groups** (groups of archons, banding roles - the intermediate level of the model **Archon → Synod → Roles**, § Managing groups of archons). Selector - **NoSelector** (group management - cluster-level operation without scope by coven/host, like `role.*` / `operator.*`; group-scope ADR-049 does NOT enter). Those who mutate write audit, read-only `synod.list` - no.
 
@@ -514,7 +569,8 @@ Managing **Synod groups** (groups of archons, banding roles - the intermediate l
 | `synod.create` | Creating a Synod group (`POST /v1/synods`). An empty rights group does not issue - least-privilege/self-lockout is not applicable to create (roles are added later via `synod.grant-role`). | `synod.created` |
 | `synod.update` | Edit **ONLY `description`** group (`PATCH /v1/synods/{name}`, ADR-049 amend). `name` (PK) **immutable** - rename is deliberately not supported (would violate the invariant of immutable identifiers; symmetry with `rbac_roles.name`). **builtin-border NOT applied** - builtin-group is edited (`description` - cosmetics for UI/audit, not behavior). **Without subset-check and self-lockout** (`description` does not grant or take away rights - both invariants are not applicable); The enforcer's snapshot is not invalidated (`description` is not included in the matching). | `synod.updated` |
 | `synod.delete` | Deleting a group (cascade membership + bundle, `DELETE /v1/synods/{name}`). **Forbidden** over `builtin=true` → `409 synod-builtin` (builtin is more important than lockout, checked first); prohibited if the disappearance of the group would leave the cluster without an effective `*` admin → `409 would-lock-out-cluster` (self-lockout). | `synod.deleted` |
-| `synod.list` | Enumeration of groups with expanded roles (bundle) and AID members (`GET /v1/synods`). | — (read-only) |
+| `synod.list` | Enumeration of groups with expanded roles (bundle) and AID members (`GET /v1/synods`) — **the groups the caller could add someone to, not the whole catalog** (§ Synod catalog visibility). | — (read-only) |
+| `synod.list-all` | See the **whole** group catalog, not only the groups the caller covers (§ Synod catalog visibility). The mirror of `role.list-all`: a breadth modifier on `synod.list`, mounted on **no endpoint of its own**, NoSelector. Granting it alone opens nothing. | — (read-only) |
 | `synod.add-operator` | Adding an archon to the group (`POST /v1/synods/{name}/operators`). Idempotent. **Under the least-privilege subset:** a member receives the entire bundle of group roles - the caller must hold all effective rights of this bundle, otherwise `403 forbidden` (§ Managing archon groups). | `synod.operator-added` |
 | `synod.remove-operator` | Removing an archon from the group (`DELETE /v1/synods/{name}/operators/{aid}`). **Under self-lockout:** removal takes away the group roles from the archon (including `*`-giver) - prohibited if it orphans the last `*`-administrator → `409 would-lock-out-cluster`. | `synod.operator-removed` |
 | `synod.grant-role` | Adding a role to the bundle group (`POST /v1/synods/{name}/roles`). Idempotent. **Under least-privilege subset:** the role is issued to all members of the group - the caller must hold all effective rights of the role, otherwise `403 forbidden`. | `synod.role-granted` |
@@ -599,7 +655,7 @@ soul.list  soul.create  soul.issue-token  soul.coven-assign
 soul.traits-assign  soul.ssh-target-update  soul.console
 ```
 
-pinned against the catalog by `TestCatalog_WildcardRostersPinnedForReleaseNotes`, which fails when an added action makes this list stale. Note what the wildcard does *not* cover: `role.create-root` and `role.list-all` are checked bare, so only an **unrestricted** `role.*` reaches them. Withholding console access from a scoped role is done by narrowing the scope; there is no weaker right to grant instead (§ the recording rows above).
+pinned against the catalog by `TestCatalog_WildcardRostersPinnedForReleaseNotes`, which fails when an added action makes this list stale. Note what the wildcard does *not* cover: `role.create-root`, `role.list-all` and `synod.list-all` are checked bare, so only an **unrestricted** `role.*` / `synod.*` reaches them. Withholding console access from a scoped role is done by narrowing the scope; there is no weaker right to grant instead (§ the recording rows above).
 
 **Keeper cannot switch the console plane off.** The `console:` block in `keeper.yml` is operator envelope only — sessions per Archon, per instance, idle timeout, recording cap — and its absence means built-in defaults, not "off"; the route is mounted by any real `keeper run`. The host has the last word: `console: {enabled: false}` in `soul.yml` makes the Soul refuse every open with a terminal `ConsoleExit`, whatever this catalog permits. So a host that must never be shelled is protected by that flag first and by a withheld `soul.console` second.
 

@@ -156,7 +156,7 @@ func TestIntegration_ParentRole_DeleteParentFailsClosed(t *testing.T) {
 	svc := newService(t)
 	ctx := context.Background()
 
-	if err := svc.DeleteRole(ctx, "dba"); !errors.Is(err, ErrRoleHasChildren) {
+	if err := svc.DeleteRole(ctx, "dba", "archon-root"); !errors.Is(err, ErrRoleHasChildren) {
 		t.Fatalf("DeleteRole(parent with children) = %v, want ErrRoleHasChildren", err)
 	}
 
@@ -172,10 +172,10 @@ func TestIntegration_ParentRole_DeleteParentFailsClosed(t *testing.T) {
 
 	// Once the child is gone the parent deletes normally — RESTRICT blocks the
 	// orphaning case only, it does not make a role permanently undeletable.
-	if err := svc.DeleteRole(ctx, "dba-aboba"); err != nil {
+	if err := svc.DeleteRole(ctx, "dba-aboba", "archon-root"); err != nil {
 		t.Fatalf("DeleteRole(child): %v", err)
 	}
-	if err := svc.DeleteRole(ctx, "dba"); err != nil {
+	if err := svc.DeleteRole(ctx, "dba", "archon-root"); err != nil {
 		t.Fatalf("DeleteRole(parent, now childless): %v", err)
 	}
 }

@@ -155,7 +155,9 @@ func TestIntegration_SynodCRUD_List(t *testing.T) {
 		t.Fatalf("AddOperator: %v", err)
 	}
 
-	views, err := s.ListSynods(ctx)
+	// admin is cluster-admin, so the NIM-216 visibility filter returns everything
+	// and this test stays about the expansion of the bundle.
+	views, err := s.ListSynods(ctx, admin)
 	if err != nil {
 		t.Fatalf("ListSynods: %v", err)
 	}
@@ -408,7 +410,7 @@ func TestIntegration_SynodLockout_RemoveOperator_LastAdmin_Locked(t *testing.T) 
 	addToSynod(t, "admins-grp", "archon-grpadmin")
 	s := newService(t)
 
-	err := s.RemoveOperator(context.Background(), RemoveOperatorInput{SynodName: "admins-grp", AID: "archon-grpadmin"})
+	err := s.RemoveOperator(context.Background(), RemoveOperatorInput{SynodName: "admins-grp", AID: "archon-grpadmin", CallerAID: "archon-grpadmin"})
 	if !errors.Is(err, ErrWouldLockOutCluster) {
 		t.Fatalf("err = %v, want ErrWouldLockOutCluster (removal of the last `*` member)", err)
 	}
@@ -431,7 +433,7 @@ func TestIntegration_SynodLockout_RemoveOperator_AlsoDirect_OK(t *testing.T) {
 	addToSynod(t, "admins-grp", "archon-grpadmin")
 	s := newService(t)
 
-	if err := s.RemoveOperator(ctx, RemoveOperatorInput{SynodName: "admins-grp", AID: "archon-grpadmin"}); err != nil {
+	if err := s.RemoveOperator(ctx, RemoveOperatorInput{SynodName: "admins-grp", AID: "archon-grpadmin", CallerAID: "archon-grpadmin"}); err != nil {
 		t.Fatalf("RemoveOperator (admin still holds `*` directly): %v", err)
 	}
 	if synodOperatorCount(t, "admins-grp") != 0 {
@@ -457,7 +459,7 @@ func TestIntegration_SynodLockout_RevokeRole_LastWildcard_Locked(t *testing.T) {
 	addToSynod(t, "admins-grp", "archon-grpadmin")
 	s := newService(t)
 
-	err := s.RevokeRole(context.Background(), RevokeRoleInput{SynodName: "admins-grp", RoleName: "grp-admin-role"})
+	err := s.RevokeRole(context.Background(), RevokeRoleInput{SynodName: "admins-grp", RoleName: "grp-admin-role", CallerAID: "archon-grpadmin"})
 	if !errors.Is(err, ErrWouldLockOutCluster) {
 		t.Fatalf("err = %v, want ErrWouldLockOutCluster (removal of the group's last `*` role)", err)
 	}
@@ -478,7 +480,7 @@ func TestIntegration_SynodLockout_RevokeRole_NonWildcard_OK(t *testing.T) {
 	seedSynod(t, "team", "viewer")
 	s := newService(t)
 
-	if err := s.RevokeRole(ctx, RevokeRoleInput{SynodName: "team", RoleName: "viewer"}); err != nil {
+	if err := s.RevokeRole(ctx, RevokeRoleInput{SynodName: "team", RoleName: "viewer", CallerAID: "archon-alice"}); err != nil {
 		t.Fatalf("RevokeRole (non-`*` role): %v", err)
 	}
 	if synodRoleCount(t, "team") != 0 {
@@ -567,11 +569,13 @@ func TestIntegration_SynodCascade_DeleteClearsMembershipAndBundle(t *testing.T) 
 // non-`*` role.
 func TestIntegration_SynodCascade_RoleDeleteRemovesFromBundle(t *testing.T) {
 	resetRBAC(t)
+	seedOperator(t, "archon-alice", nil)
+	seedClusterAdmin(t, "archon-alice") // may administer the role at all (NIM-214)
 	insertRole(t, "viewer", "soul.list")
 	seedSynod(t, "team", "viewer")
 	s := newService(t)
 
-	if err := s.DeleteRole(context.Background(), "viewer"); err != nil {
+	if err := s.DeleteRole(context.Background(), "viewer", "archon-alice"); err != nil {
 		t.Fatalf("DeleteRole: %v", err)
 	}
 	if synodRoleCount(t, "team") != 0 {
@@ -610,10 +614,10 @@ func TestIntegration_Synod404_UnknownPair(t *testing.T) {
 	seedSynod(t, "team", "viewer")
 	s := newService(t)
 
-	if err := s.RemoveOperator(ctx, RemoveOperatorInput{SynodName: "team", AID: "archon-nobody"}); !errors.Is(err, ErrSynodOperatorNotFound) {
+	if err := s.RemoveOperator(ctx, RemoveOperatorInput{SynodName: "team", AID: "archon-nobody", CallerAID: "archon-alice"}); !errors.Is(err, ErrSynodOperatorNotFound) {
 		t.Errorf("RemoveOperator(unknown) = %v, want ErrSynodOperatorNotFound", err)
 	}
-	if err := s.RevokeRole(ctx, RevokeRoleInput{SynodName: "team", RoleName: "nonexistent"}); !errors.Is(err, ErrSynodRoleNotFound) {
+	if err := s.RevokeRole(ctx, RevokeRoleInput{SynodName: "team", RoleName: "nonexistent", CallerAID: "archon-alice"}); !errors.Is(err, ErrSynodRoleNotFound) {
 		t.Errorf("RevokeRole(unknown) = %v, want ErrSynodRoleNotFound", err)
 	}
 }

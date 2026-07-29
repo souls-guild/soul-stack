@@ -256,10 +256,11 @@ func TestIntegration_CreateRole_BadName(t *testing.T) {
 func TestIntegration_DeleteRole_Happy(t *testing.T) {
 	resetRBAC(t)
 	seedOperator(t, "archon-alice", nil)
+	seedClusterAdmin(t, "archon-alice") // may administer the role at all (NIM-214)
 	insertRole(t, "tmp-role", "soul.list")
 	s := newService(t)
 
-	if err := s.DeleteRole(context.Background(), "tmp-role"); err != nil {
+	if err := s.DeleteRole(context.Background(), "tmp-role", "archon-alice"); err != nil {
 		t.Fatalf("DeleteRole: %v", err)
 	}
 	if roleExists(t, "tmp-role") {
@@ -270,7 +271,7 @@ func TestIntegration_DeleteRole_Happy(t *testing.T) {
 func TestIntegration_DeleteRole_NotFound(t *testing.T) {
 	resetRBAC(t)
 	s := newService(t)
-	err := s.DeleteRole(context.Background(), "ghost-role")
+	err := s.DeleteRole(context.Background(), "ghost-role", "archon-alice")
 	if !errors.Is(err, ErrRoleNotFound) {
 		t.Fatalf("err = %v, want ErrRoleNotFound", err)
 	}
@@ -326,7 +327,7 @@ func TestIntegration_DeleteRole_Builtin(t *testing.T) {
 	resetRBAC(t)
 	s := newService(t)
 	// cluster-admin (builtin=true) exists from resetRBAC's re-seed.
-	err := s.DeleteRole(context.Background(), "cluster-admin")
+	err := s.DeleteRole(context.Background(), "cluster-admin", "archon-alice")
 	if !errors.Is(err, ErrRoleBuiltin) {
 		t.Fatalf("err = %v, want ErrRoleBuiltin", err)
 	}
@@ -344,7 +345,7 @@ func TestIntegration_DeleteRole_Cascade(t *testing.T) {
 	}
 	s := newService(t)
 
-	if err := s.DeleteRole(context.Background(), "casc-role"); err != nil {
+	if err := s.DeleteRole(context.Background(), "casc-role", "archon-alice"); err != nil {
 		t.Fatalf("DeleteRole: %v", err)
 	}
 	if permCount(t, "casc-role") != 0 {
@@ -425,8 +426,10 @@ func TestIntegration_UpdateRolePermissions_EmptySetRemovesWildcard(t *testing.T)
 	s := newService(t)
 
 	// Remove `*` from extra-admin with an empty set — alice remains admin → ok.
+	// alice is the caller: only a `*` holder may administer a `*`-granting role
+	// (NIM-214), and an absent caller is refused outright.
 	if err := s.UpdateRolePermissions(context.Background(), UpdateRolePermissionsInput{
-		Name: "extra-admin", Permissions: nil,
+		Name: "extra-admin", Permissions: nil, CallerAID: alice,
 	}); err != nil {
 		t.Fatalf("UpdateRolePermissions (empty set): %v", err)
 	}
@@ -447,7 +450,7 @@ func TestIntegration_RevokeOperator_Happy(t *testing.T) {
 	s := newService(t)
 
 	if err := s.RevokeOperator(context.Background(), RevokeOperatorInput{
-		RoleName: "viewer", AID: "archon-alice",
+		RoleName: "viewer", AID: "archon-alice", CallerAID: "archon-alice",
 	}); err != nil {
 		t.Fatalf("RevokeOperator: %v", err)
 	}
@@ -463,7 +466,7 @@ func TestIntegration_RevokeOperator_NotFound(t *testing.T) {
 	s := newService(t)
 
 	err := s.RevokeOperator(context.Background(), RevokeOperatorInput{
-		RoleName: "viewer", AID: "archon-alice",
+		RoleName: "viewer", AID: "archon-alice", CallerAID: "archon-alice",
 	})
 	if !errors.Is(err, ErrRoleOperatorNotFound) {
 		t.Fatalf("err = %v, want ErrRoleOperatorNotFound", err)
@@ -515,7 +518,7 @@ func TestIntegration_SelfLockout_DeleteRole_Last(t *testing.T) {
 	}
 	s := newService(t)
 
-	err := s.DeleteRole(context.Background(), "extra-admin")
+	err := s.DeleteRole(context.Background(), "extra-admin", "archon-alice")
 	if !errors.Is(err, ErrWouldLockOutCluster) {
 		t.Fatalf("err = %v, want ErrWouldLockOutCluster", err)
 	}
@@ -530,7 +533,7 @@ func TestIntegration_SelfLockout_DeleteRole_NotLast(t *testing.T) {
 	setupTwoAdminPaths(t)
 	s := newService(t)
 
-	if err := s.DeleteRole(context.Background(), "extra-admin"); err != nil {
+	if err := s.DeleteRole(context.Background(), "extra-admin", "archon-alice"); err != nil {
 		t.Fatalf("DeleteRole (a second admin path exists): %v", err)
 	}
 	if roleExists(t, "extra-admin") {
@@ -600,7 +603,7 @@ func TestIntegration_SelfLockout_RevokeOperator_Last(t *testing.T) {
 	s := newService(t)
 
 	err := s.RevokeOperator(context.Background(), RevokeOperatorInput{
-		RoleName: "cluster-admin", AID: "archon-alice",
+		RoleName: "cluster-admin", AID: "archon-alice", CallerAID: "archon-alice",
 	})
 	if !errors.Is(err, ErrWouldLockOutCluster) {
 		t.Fatalf("err = %v, want ErrWouldLockOutCluster", err)
@@ -617,7 +620,7 @@ func TestIntegration_SelfLockout_RevokeOperator_NotLast(t *testing.T) {
 
 	// Revoke bob from extra-admin — alice remains admin → ok.
 	if err := s.RevokeOperator(context.Background(), RevokeOperatorInput{
-		RoleName: "extra-admin", AID: "archon-bob",
+		RoleName: "extra-admin", AID: "archon-bob", CallerAID: "archon-alice",
 	}); err != nil {
 		t.Fatalf("RevokeOperator (a second admin exists): %v", err)
 	}
@@ -640,7 +643,7 @@ func TestIntegration_SelfLockout_RevokeOperator_AdminViaTwoRoles(t *testing.T) {
 
 	// Revoke alice from extra-admin — she remains admin via cluster-admin → ok.
 	if err := s.RevokeOperator(context.Background(), RevokeOperatorInput{
-		RoleName: "extra-admin", AID: "archon-alice",
+		RoleName: "extra-admin", AID: "archon-alice", CallerAID: "archon-alice",
 	}); err != nil {
 		t.Fatalf("RevokeOperator (admin via a second role): %v", err)
 	}
@@ -684,13 +687,13 @@ func TestIntegration_SelfLockout_Concurrent_TwoPaths(t *testing.T) {
 		defer wg.Done()
 		<-start
 		errs[0] = s.RevokeOperator(context.Background(), RevokeOperatorInput{
-			RoleName: "cluster-admin", AID: "archon-alice",
+			RoleName: "cluster-admin", AID: "archon-alice", CallerAID: "archon-alice",
 		})
 	}()
 	go func() {
 		defer wg.Done()
 		<-start
-		errs[1] = s.DeleteRole(context.Background(), "extra-admin")
+		errs[1] = s.DeleteRole(context.Background(), "extra-admin", "archon-alice")
 	}()
 	close(start)
 	wg.Wait()

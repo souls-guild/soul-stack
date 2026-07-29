@@ -3466,6 +3466,11 @@ func TestIntegration_Role_Delete_204(t *testing.T) {
 	truncateOperators(t)
 	truncateRBAC(t)
 	seedOperator(t, "archon-alice", "")
+	// Real membership, not just the token's claimed roles: since NIM-214 the
+	// service decides whether the caller may ADMINISTER the role, and it reads the
+	// DB rather than the JWT — a caller with 0 effective permissions covers
+	// nothing and is refused, which is the fail-closed direction.
+	seedClusterAdmin(t, "archon-alice")
 	seedRole(t, "ops", false, "soul.list")
 
 	base, stop := startServer(t, adminRBAC())

@@ -94,13 +94,19 @@ func registerHumaRoleList(humaAPI huma.API, roleH *handlers.RoleHandler) {
 
 // registerHumaRoleDelete mounts DELETE /v1/roles/{name} via huma (WRITE+AUDIT
 // variant B — event role.deleted attached newHumaAuditAPI on group). roleH nil →
-// no-op. Handler: DeleteTyped → audit-payload on huma-ctx → empty 204 output.
+// no-op. Handler: claims → DeleteTyped → audit-payload on huma-ctx → empty 204
+// output. The claims subject decides whether this operator may administer the
+// role at all (NIM-214), not merely whether it holds `role.delete`.
 func registerHumaRoleDelete(humaAPI huma.API, roleH *handlers.RoleHandler) {
 	if roleH == nil {
 		return
 	}
 	huma.Register(humaAPI, roleDeleteOperation(), func(ctx context.Context, in *roleDeleteInput) (*roleNoContentOutput, error) {
-		reply, err := roleH.DeleteTyped(ctx, in.Name)
+		claims, ok := apimiddleware.ClaimsFromContext(ctx)
+		if !ok {
+			return nil, roleMissingClaims()
+		}
+		reply, err := roleH.DeleteTyped(ctx, in.Name, claims.Subject)
 		if err != nil {
 			return nil, roleProblem(err)
 		}
@@ -175,7 +181,11 @@ func registerHumaRoleRevokeOperator(humaAPI huma.API, roleH *handlers.RoleHandle
 		return
 	}
 	huma.Register(humaAPI, roleRevokeOperatorOperation(), func(ctx context.Context, in *roleRevokeOperatorInput) (*roleNoContentOutput, error) {
-		reply, err := roleH.RevokeOperatorTyped(ctx, in.Name, in.AID)
+		claims, ok := apimiddleware.ClaimsFromContext(ctx)
+		if !ok {
+			return nil, roleMissingClaims()
+		}
+		reply, err := roleH.RevokeOperatorTyped(ctx, in.Name, in.AID, claims.Subject)
 		if err != nil {
 			return nil, roleProblem(err)
 		}

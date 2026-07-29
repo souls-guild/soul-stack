@@ -330,7 +330,7 @@ func TestIntegration_SynodLockout_DeleteRole_SurvivorViaGroup_OK(t *testing.T) {
 	s := newService(t)
 
 	// Delete the direct extra-admin role — bob remains admin via Synod → ok.
-	if err := s.DeleteRole(context.Background(), "extra-admin"); err != nil {
+	if err := s.DeleteRole(context.Background(), "extra-admin", "archon-alice"); err != nil {
 		t.Fatalf("DeleteRole (surviving admin via Synod): %v", err)
 	}
 	if roleExists(t, "extra-admin") {
@@ -350,7 +350,10 @@ func TestIntegration_SynodLockout_DeleteRole_LastViaGroup_Locked(t *testing.T) {
 	s := newService(t)
 
 	// grp-admin-role is the only path to `*` (via Synod). Deleting it → lockout.
-	err := s.DeleteRole(context.Background(), "grp-admin-role")
+	// grpadmin is the caller because only a `*` holder may administer a `*` role
+	// (NIM-214), and it holds `*` through exactly this group — so the lockout guard
+	// is what decides, not the administration gate ahead of it.
+	err := s.DeleteRole(context.Background(), "grp-admin-role", "archon-grpadmin")
 	if !errors.Is(err, ErrWouldLockOutCluster) {
 		t.Fatalf("err = %v, want ErrWouldLockOutCluster (deleting the last `*` role via Synod)", err)
 	}
@@ -403,7 +406,7 @@ func TestIntegration_SynodLockout_RevokeOperator_AdminAlsoViaGroup_OK(t *testing
 
 	// Remove the direct membership — admin remains via Synod → ok (not a lockout).
 	if err := s.RevokeOperator(context.Background(), RevokeOperatorInput{
-		RoleName: "direct-admin", AID: "archon-grpadmin",
+		RoleName: "direct-admin", AID: "archon-grpadmin", CallerAID: "archon-grpadmin",
 	}); err != nil {
 		t.Fatalf("RevokeOperator (admin still holds `*` via Synod too): %v", err)
 	}
@@ -437,7 +440,7 @@ func TestIntegration_SynodLockout_RevokeOperator_LastDirectNoGroup_Locked(t *tes
 	s := newService(t)
 
 	err := s.RevokeOperator(context.Background(), RevokeOperatorInput{
-		RoleName: "cluster-admin", AID: "archon-alice",
+		RoleName: "cluster-admin", AID: "archon-alice", CallerAID: "archon-alice",
 	})
 	if !errors.Is(err, ErrWouldLockOutCluster) {
 		t.Fatalf("err = %v, want ErrWouldLockOutCluster (last direct admin, Synod does not hold `*`)", err)

@@ -253,11 +253,14 @@ func (s *Service) CreateRole(ctx context.Context, in CreateRoleInput) error {
 //  1. lock the role row (SELECT … FOR UPDATE); missing → [ErrRoleNotFound].
 //  2. builtin=true → [ErrRoleBuiltin] (FIRST, before lockout — builtin takes
 //     priority).
-//  3. if the role grants `*` — a self-lockout check: will active admins with
+//  3. the caller must be able to administer the role — cover what it grants
+//     (NIM-214); otherwise → [ErrPermissionNotHeld]. Before this, `role.delete`
+//     had no caller-side check of any kind and dropped any non-builtin role.
+//  4. if the role grants `*` — a self-lockout check: will active admins with
 //     `*` remain through a role OTHER than the one being deleted; none →
 //     [ErrWouldLockOutCluster].
-//  4. DELETE.
-func (s *Service) DeleteRole(ctx context.Context, name string) error {
+//  5. DELETE.
+func (s *Service) DeleteRole(ctx context.Context, name, callerAID string) error {
 	tx, err := s.pool.BeginTx(ctx, pgx.TxOptions{})
 	if err != nil {
 		return fmt.Errorf("rbac: begin tx: %w", err)
@@ -270,6 +273,17 @@ func (s *Service) DeleteRole(ctx context.Context, name string) error {
 	}
 	if builtin {
 		return ErrRoleBuiltin
+	}
+
+	// Resolved against its chain, so a derived role is judged on what it GRANTS
+	// rather than on its stored delta — the same currency every other coverage
+	// question reads (NIM-198).
+	target, err := resolveRoleChain(ctx, tx, name)
+	if err != nil {
+		return err
+	}
+	if err := s.assertCallerMayAdminister(ctx, tx, callerAID, target); err != nil {
+		return err
 	}
 
 	perms, err := rolePermissions(ctx, tx, name)
@@ -434,6 +448,14 @@ func (s *Service) UpdateRolePermissions(ctx context.Context, in UpdateRolePermis
 		return err
 	}
 
+	// May the caller touch this role at all (NIM-214)? Asked FIRST, and about the
+	// role's CURRENT form: "you may not administer this role" is more actionable
+	// than any refusal about the change being made, the same ordering
+	// [Service.resolveParentCeiling] uses for a parent that is out of reach.
+	if err := s.assertCallerMayAdminister(ctx, tx, in.CallerAID, before); err != nil {
+		return err
+	}
+
 	// Derived role (ADR-078): the resulting role must still fit inside its parent.
 	// Re-checked on EVERY update, not just one that sets parent_role — adding a
 	// permission or widening the delta of an existing derived role is the same
@@ -556,6 +578,10 @@ func (s *Service) UpdateRolePermissions(ctx context.Context, in UpdateRolePermis
 type RevokeOperatorInput struct {
 	RoleName string
 	AID      string
+	// CallerAID is the operator taking the binding apart. Required (NIM-285):
+	// unbinding is measured against the same rights `role.grant-operator` demands
+	// to create the binding, so an absent caller is refused rather than trusted.
+	CallerAID string
 }
 
 // RevokeOperator removes a membership row (RoleName, AID).
@@ -591,6 +617,16 @@ func (s *Service) RevokeOperator(ctx context.Context, in RevokeOperatorInput) er
 		// ErrRoleNotFound propagates as-is.
 		return err
 	}
+	// The rights `role.grant-operator` would have demanded to create this binding
+	// (NIM-285) — unbinding is the same authorization surface in reverse.
+	required, err := s.roleEffectivePermissions(ctx, tx, in.RoleName)
+	if err != nil {
+		return err
+	}
+	if err := s.assertCallerMayUnbind(ctx, tx, in.CallerAID, required); err != nil {
+		return err
+	}
+
 	perms, err := rolePermissions(ctx, tx, in.RoleName)
 	if err != nil {
 		return err
