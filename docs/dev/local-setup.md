@@ -330,6 +330,32 @@ instead of AppRole; HTTP-Vault without TLS; TLS-leaf from Vault PKI to
 (`127.0.0.1:4317`, insecure); `services[]` point to local file:// repo.
 For prod configuration use example, not dev copy.
 
+### Push transport (`DEV_PUSH_TRANSPORT`)
+
+The stand renders `push.transport: direct` (NIM-266). That is not a preference:
+`teleport` requires `push.teleport.identity_file`, which is minted by `tctl auth
+sign` against a **live** Teleport, and nothing in the repo creates it — a
+committed `transport: teleport` made `make dev-keeper` die at startup on any
+clean machine with `build bootstrap teleport dialer: identity file could not be
+decoded`. `TestDevStand_PushTransportNeedsNoOutOfBandIdentity` keeps the
+committed default startable.
+
+Against a real Teleport, opt in through the stand profile — `dev/stand-env.sh`
+renders the `teleport:` block and `keeper-run.sh` refuses to start when the
+identity file is missing, instead of letting the daemon fail a layer deeper:
+
+```sh
+DEV_PUSH_TRANSPORT=teleport \
+DEV_TELEPORT_PROXY_ADDR=proxy.example.com:443 \
+DEV_TELEPORT_CLUSTER=example.com \
+DEV_TELEPORT_IDENTITY_FILE=/tmp/keeper-dev/keeper-push.identity \
+  make dev-keeper
+```
+
+`DEV_TELEPORT_IDENTITY_FILE` defaults to `${STAND_DEV_DIR}/keeper-push.identity`,
+so a second stand carries its own credential rather than borrowing the first
+one's.
+
 Full analysis of product differences (AppRole instead of root token, persistent Vault +
 auto-unseal, least-privilege policy, JWT signing-key rotation) - in
 [prod-setup.md](../keeper/prod-setup.md).

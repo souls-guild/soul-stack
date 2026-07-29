@@ -59,6 +59,17 @@ command -v envsubst >/dev/null 2>&1 || fail "envsubst not found (gettext package
 envsubst "${KEEPER_RENDER_WHITELIST}" < "${KEEPER_TMPL}" > "${KEEPER_CONFIG}"
 log "config rendered: ${KEEPER_CONFIG}"
 
+# 4a. Teleport push is opt-in (NIM-266) and needs an identity file this repo cannot
+# mint - `tctl auth sign` against a live Teleport. Without it keeper dies four steps
+# later with "build bootstrap teleport dialer: identity file could not be decoded",
+# which reads like a keeper defect rather than a missing credential. Say it here,
+# where the fix is obvious.
+if [ "${DEV_PUSH_TRANSPORT}" = "teleport" ] && [ ! -s "${DEV_TELEPORT_IDENTITY_FILE}" ]; then
+    fail "DEV_PUSH_TRANSPORT=teleport but no identity file at ${DEV_TELEPORT_IDENTITY_FILE} -
+       mint one with 'tctl auth sign --user=<node-access-user> --out=${DEV_TELEPORT_IDENTITY_FILE} --format=file',
+       point DEV_TELEPORT_IDENTITY_FILE elsewhere, or drop DEV_PUSH_TRANSPORT for the default 'direct' stand"
+fi
+
 # 5. Kill the old keeper of THIS stand BY PID (not pkill-by-name): pidfile + fallback
 # to the stand's metrics-port holder (port is unique per stand - won't hit neighbors).
 kill_old() {

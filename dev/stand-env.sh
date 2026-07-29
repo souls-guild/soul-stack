@@ -130,9 +130,55 @@ REDIS_ADDR="127.0.0.1:${REDIS_PORT}"
 VAULT_ADDR="http://127.0.0.1:${VAULT_PORT}"
 OTEL_ENDPOINT="127.0.0.1:${OTEL_PORT}"
 
+# Bootstrap-token delivery transport of the stand (ADR-063 amendment, NIM-266).
+#
+# `direct` by default, and that default is not a preference: `teleport` needs
+# push.teleport.identity_file, which is minted by `tctl auth sign` against a live
+# Teleport. The dev stand has none and nothing in the repo creates the file, so a
+# committed `transport: teleport` made `make dev-keeper` die at startup on every
+# clean machine ("build bootstrap teleport dialer: identity file could not be
+# decoded"). Guarded by TestDevStand_PushTransportNeedsNoOutOfBandIdentity.
+#
+# Opt in against a real Teleport with
+#   DEV_PUSH_TRANSPORT=teleport DEV_TELEPORT_PROXY_ADDR=proxy.example.com:443 \
+#   DEV_TELEPORT_CLUSTER=example.com make dev-keeper
+# after placing the identity file at DEV_TELEPORT_IDENTITY_FILE (default: inside
+# the stand dir, so a second stand does not borrow the first one's credential).
+# keeper-run.sh refuses to start when that file is missing, rather than letting
+# the daemon fail a layer deeper.
+DEV_PUSH_TRANSPORT="${DEV_PUSH_TRANSPORT:-direct}"
+case "${DEV_PUSH_TRANSPORT}" in
+    direct|teleport) ;;
+    *)
+        printf 'stand-env: invalid DEV_PUSH_TRANSPORT=%s - allowed direct|teleport\n' "${DEV_PUSH_TRANSPORT}" >&2
+        return 1 2>/dev/null || exit 1
+        ;;
+esac
+DEV_TELEPORT_PROXY_ADDR="${DEV_TELEPORT_PROXY_ADDR:-teleport.example.com:443}"
+DEV_TELEPORT_CLUSTER="${DEV_TELEPORT_CLUSTER:-teleport-example}"
+DEV_TELEPORT_IDENTITY_FILE="${DEV_TELEPORT_IDENTITY_FILE:-${STAND_DEV_DIR}/keeper-push.identity}"
+
+# PUSH_TRANSPORT / PUSH_TELEPORT_BLOCK render `push:` in keeper.dev.yml.tmpl. The
+# block is appended to the transport LINE (no leading newline of its own) so the
+# direct render carries no stray blank line and the golden file stays readable.
+PUSH_TRANSPORT="${DEV_PUSH_TRANSPORT}"
+if [ "${DEV_PUSH_TRANSPORT}" = "teleport" ]; then
+    PUSH_TELEPORT_BLOCK="
+  teleport:
+    proxy_addr: ${DEV_TELEPORT_PROXY_ADDR}
+    identity_file: ${DEV_TELEPORT_IDENTITY_FILE}
+    cluster: ${DEV_TELEPORT_CLUSTER}
+    # A proxy behind a public L7 TLS balancer (ADR-063 amendment): use_system_trust
+    # is the safety net when alpn is off, and a no-op when alpn_upgrade is true.
+    use_system_trust: true
+    alpn_upgrade: true"
+else
+    PUSH_TELEPORT_BLOCK=""
+fi
+
 # Whitelist envsubst for rendering keeper.dev.yml.tmpl - the SINGLE source for
 # keeper-run.sh, dev-smoke, and check-stand-template (anti-drift). New ${VAR} in the template -> add it here.
-KEEPER_RENDER_WHITELIST='$KID $ISSUER $OPENAPI_PORT $MCP_PORT $METRICS_PORT $BOOTSTRAP_PORT $ES_PORT $STAND_DEV_DIR $PG_DSN_REF $JWT_KEY_REF $SIGIL_KEY_REF $REDIS_ADDR $OTEL_ENDPOINT $VAULT_ADDR'
+KEEPER_RENDER_WHITELIST='$KID $ISSUER $OPENAPI_PORT $MCP_PORT $METRICS_PORT $BOOTSTRAP_PORT $ES_PORT $STAND_DEV_DIR $PG_DSN_REF $JWT_KEY_REF $SIGIL_KEY_REF $REDIS_ADDR $OTEL_ENDPOINT $VAULT_ADDR $PUSH_TRANSPORT $PUSH_TELEPORT_BLOCK'
 
 # soul-stand sid: default = the historical web-01.example.com; non-empty = namespaced
 # by slug (souls registry isolation between stands). NIM-25.
@@ -147,6 +193,8 @@ export DEV_STAND STAND_SLUG STAND_SLOT OFFSET STAND_DEV_DIR KID ISSUER \
     PG_DB VAULT_KV_PREFIX DEDICATED_INFRA STACK_PREFIX INFRA_OFFSET \
     PG_PORT VAULT_PORT REDIS_PORT OTEL_PORT JAEGER_PORT \
     PG_DSN_REF JWT_KEY_REF SIGIL_KEY_REF REDIS_ADDR VAULT_ADDR OTEL_ENDPOINT \
+    DEV_PUSH_TRANSPORT DEV_TELEPORT_PROXY_ADDR DEV_TELEPORT_CLUSTER DEV_TELEPORT_IDENTITY_FILE \
+    PUSH_TRANSPORT PUSH_TELEPORT_BLOCK \
     SOUL_SID SOUL_RENDER_WHITELIST
 
 # stand_summary - print the current stand (make-echo/logs).

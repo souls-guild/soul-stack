@@ -225,25 +225,21 @@ cadence_scheduler:
 #     shows up in Teleport after ~3-5min -> the module retries the connect
 #     (scenario-param join_wait_timeout, default 360s).
 #
-# Example of teleport mode (commented out - the dev stand has no Teleport):
-# push:
-#   transport: teleport
-#   teleport:
-#     proxy_addr: proxy.example.com:443     # gRPC sshgrpc-listener of the Teleport Proxy
-#     identity_file: /etc/soul/teleport-identity   # tctl auth sign, node access
-#     cluster: example.com                  # cluster name where node names (SID) resolve
-
+# The stand renders `direct` (NIM-266). teleport is not a matter of taste here: it
+# requires teleport.identity_file, minted by `tctl auth sign` against a live Teleport,
+# and nothing in this repo creates that file - so a committed `transport: teleport`
+# made keeper refuse to start on every clean machine ("build bootstrap teleport
+# dialer: identity file could not be decoded"), which is what the comment three
+# lines above already said would happen.
+#
+# Opt in against a real Teleport through the stand profile - dev/stand-env.sh renders
+# the teleport block, and keeper-run.sh checks the identity file exists first:
+#   DEV_PUSH_TRANSPORT=teleport \
+#   DEV_TELEPORT_PROXY_ADDR=proxy.example.com:443 \  # gRPC sshgrpc-listener of the Proxy
+#   DEV_TELEPORT_CLUSTER=example.com \               # cluster where node names (SID) resolve
+#   DEV_TELEPORT_IDENTITY_FILE=<path>                # default: /tmp/keeper-dev/keeper-push.identity
 push:
-  transport: teleport
-  teleport:
-    proxy_addr: teleport.example.com:443
-    # dedicated: identity_file is hardcoded to the default dev-dir - parameterize under STAND_DEV_DIR for full isolation (NIM-25).
-    identity_file: /tmp/keeper-dev/keeper-push.identity
-    cluster: teleport-example
-    # proxy sits behind a public L7 TLS balancer (*.teleport.example.com), ADR-063 amendment;
-    # use_system_trust - a safety net when alpn is off (a no-op when alpn_upgrade=true)
-    use_system_trust: true
-    alpn_upgrade: true
+  transport: direct
 
 # cloud-init userdata for core.cloud.provisioned (ADR-017(h));
 # dev stand: bastion tunnel 192.168.2.3, CA in Vault (field ca), artifact host :8443.
