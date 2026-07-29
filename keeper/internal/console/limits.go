@@ -42,15 +42,18 @@ const (
 	// browser's backlog become Keeper's memory leak.
 	outQueueDepth = 256
 
-	// writeWait bounds one WebSocket write. A browser that stops reading must
-	// not park the writer goroutine forever holding the socket.
-	writeWait = 10 * time.Second
-
 	// pongWait is how long the peer may stay silent before we consider the
 	// socket dead. TCP alone will not tell us: a laptop that slept keeps a
 	// half-open connection for many minutes, and every session behind it is a
 	// live root shell.
 	pongWait = 60 * time.Second
+
+	// writeWait bounds one WebSocket write, on the same budget as pongWait.
+	// Backpressure fills the socket buffer by construction, so a write parks
+	// for as long as the operator takes to drain; a shorter budget would be a
+	// second, stricter liveness rule that kills a merely slow browser and every
+	// pty behind it (NIM-242).
+	writeWait = pongWait
 
 	// pingPeriod must be shorter than pongWait, or we would time out a healthy
 	// peer between our own pings.

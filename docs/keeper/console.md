@@ -48,6 +48,16 @@ JWT out of access logs, `Referer` and browser history. The exception is scoped t
 a genuine upgrade (`middleware.isWebSocketUpgrade`) — on a plain GET the same
 header is ignored, or it would become a general header-shaped bypass.
 
+**Output is compressed on the wire.** Keeper negotiates permessage-deflate
+(RFC 7692) with any client offering it, which browsers do unprompted — no frame
+changes, and the subprotocol stays `v1`. It matters because pty output is the only
+high-volume traffic here, it is enormously redundant, and the frame carries it as
+base64 inside JSON: on real terminal output, 32 KiB leaves as about 7 KiB instead
+of 43.7 KiB. That directly reduces the drops of §4 — the writer clears the queue
+roughly six times sooner, so a flood that used to cost chunks now fits. The CPU is
+bounded by what is delivered rather than what is produced, since a chunk dropped
+under backpressure never reaches the writer at all.
+
 ### Permission
 
 Two gates, because the target host is not in the URL:
@@ -204,6 +214,14 @@ and never resumes; a reconnect opens *fresh* shells.
 
 Liveness is detected by ping/pong (60 s), not by TCP: a laptop that slept keeps a
 half-open connection alive for many minutes, and every pty behind it with it.
+
+That 60 s is the *only* liveness budget, and it bounds writes as well as reads.
+Under backpressure the socket buffer is full by construction, so a write parks
+for as long as the operator takes to drain — and the connection cannot be reused
+after a write fails. A tighter write budget would therefore be a second,
+stricter liveness rule, reaping a browser that merely went quiet for a few
+seconds (a background tab, a GC pause) along with every pty on its socket, while
+ping/pong still held that same peer to be alive (NIM-242).
 
 ### Idle timeout
 

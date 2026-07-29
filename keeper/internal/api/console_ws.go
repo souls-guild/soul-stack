@@ -43,6 +43,10 @@ type consoleWSDeps struct {
 	Enforcer middleware.PermissionChecker
 	Metrics  *console.Metrics
 	Logger   *slog.Logger
+	// WriteWait overrides the per-write budget; zero takes consoleWriteWait.
+	// Only the socket's own tests set it, to reach an expiry the production
+	// value is deliberately too generous to wait for.
+	WriteWait time.Duration
 }
 
 // consoleUpgrader turns the request into a socket.
@@ -52,11 +56,26 @@ type consoleWSDeps struct {
 // cannot obtain, so there is no CSRF surface for an Origin check to close. The
 // buffers are sized for the traffic shape — small inbound frames (keystrokes,
 // resizes) against 32 KiB pty chunks outbound.
+//
+// EnableCompression negotiates permessage-deflate (RFC 7692) with any client
+// that offers it — the browser does so on its own, so this changes no wire
+// contract and the subprotocol stays v1. It is worth having because pty output
+// is both the only high-volume traffic here and enormously redundant, while the
+// frame carries it as base64 inside JSON: measured on real terminal output at
+// gorilla's own settings (flate level 1, no context takeover), 32 KiB of output
+// goes out as 7.1 KiB rather than 43.7 KiB. Fewer bytes per frame means the
+// writer clears the queue sooner, so a flood that used to cost chunks now fits.
+//
+// The cost is self-limiting: compression happens inside WriteMessage, and a
+// chunk dropped by backpressure never reaches the writer — so it scales with
+// what is DELIVERED, which is exactly what a slow browser already bounds. Only
+// data frames are compressed, never ping or close.
 var consoleUpgrader = websocket.Upgrader{
-	ReadBufferSize:  4 << 10,
-	WriteBufferSize: 32 << 10,
-	Subprotocols:    []string{console.Subprotocol},
-	CheckOrigin:     func(*http.Request) bool { return true },
+	ReadBufferSize:    4 << 10,
+	WriteBufferSize:   32 << 10,
+	Subprotocols:      []string{console.Subprotocol},
+	CheckOrigin:       func(*http.Request) bool { return true },
+	EnableCompression: true,
 }
 
 // registerConsoleWS mounts the endpoint on a chi router.
@@ -132,10 +151,19 @@ type consoleConn struct {
 	logger  *slog.Logger
 	metrics *console.Metrics
 
+	// writeWait is this socket's per-write budget (consoleWriteWait unless a
+	// test compressed it).
+	writeWait time.Duration
+
 	out  chan outFrame
 	done chan struct{}
 	// closeOnce guards `done`, which both pumps may close.
 	closeOnce sync.Once
+	// deadlineMu orders arming the read deadline against teardown slamming it.
+	// Without it a pong landing at exactly the wrong moment would re-arm a full
+	// window over the slam and re-park the read pump on a socket being torn
+	// down — the very silence this teardown exists to end.
+	deadlineMu sync.Mutex
 
 	mu sync.Mutex
 	// sessions maps the client's socket-local id to the Hub session.
@@ -146,13 +174,19 @@ type consoleConn struct {
 }
 
 func newConsoleConn(ws *websocket.Conn, aid string, deps *consoleWSDeps) *consoleConn {
+	writeWait := deps.WriteWait
+	if writeWait <= 0 {
+		writeWait = consoleWriteWait
+	}
 	return &consoleConn{
-		ws:       ws,
-		aid:      aid,
-		hub:      deps.Hub,
-		deps:     deps,
-		logger:   deps.Logger,
-		metrics:  deps.Metrics,
+		ws:        ws,
+		aid:       aid,
+		hub:       deps.Hub,
+		deps:      deps,
+		logger:    deps.Logger,
+		metrics:   deps.Metrics,
+		writeWait: writeWait,
+
 		out:      make(chan outFrame, consoleOutQueueDepth),
 		done:     make(chan struct{}),
 		sessions: make(map[string]*console.Session),
@@ -164,10 +198,23 @@ func newConsoleConn(ws *websocket.Conn, aid string, deps *consoleWSDeps) *consol
 // rather than exported: they describe THIS socket implementation (queue depth,
 // deadlines), not the operator-facing policy the console package owns.
 const (
-	consoleOutQueueDepth  = 256
-	consoleWriteWait      = 10 * time.Second
-	consolePongWait       = 60 * time.Second
-	consolePingPeriod     = (consolePongWait * 9) / 10
+	consoleOutQueueDepth = 256
+	consolePongWait      = 60 * time.Second
+	consolePingPeriod    = (consolePongWait * 9) / 10
+	// consoleWriteWait bounds one socket write, and deliberately uses the SAME
+	// budget as consolePongWait. Backpressure fills the socket buffer by
+	// construction — it is the state the drop machinery exists for — so a write
+	// parks for however long the operator takes to drain, and gorilla's
+	// connection is unusable after a failed write. A shorter budget would
+	// therefore be a second, stricter liveness rule: a browser that stopped
+	// reading for ten seconds (a background tab, a GC pause, a lid half-closed)
+	// would lose every pty on the socket, while the read side went on holding
+	// that same peer to be alive. There is one peer, so there is one budget.
+	consoleWriteWait = consolePongWait
+	// consoleWriterGrace is how long teardown lets the writer finish its
+	// goodbye before taking the socket away from it. A writer parked mid-frame
+	// cannot see `done`, and every session here waits on it.
+	consoleWriterGrace    = time.Second
 	consoleMaxClientFrame = 1 << 20
 	// consoleClaimRefresh re-stamps cluster claims well inside their TTL, so a
 	// long-lived console stays routable — and so a LAPSED claim reliably means
@@ -189,11 +236,16 @@ func (c *consoleConn) run(ctx context.Context) {
 	// shutdown closes the listener and the socket with it.
 	ctx = context.WithoutCancel(ctx)
 
-	var wg sync.WaitGroup
-	wg.Add(1)
+	writerDone := make(chan struct{})
 	go func() {
-		defer wg.Done()
+		defer close(writerDone)
 		c.writePump()
+	}()
+
+	claimsDone := make(chan struct{})
+	go func() {
+		defer close(claimsDone)
+		c.refreshClaimsLoop()
 	}()
 
 	c.readPump(ctx)
@@ -202,7 +254,17 @@ func (c *consoleConn) run(ctx context.Context) {
 	// matters — the sessions must die even if the writer is wedged on a peer
 	// that stopped reading.
 	c.shutdown()
-	wg.Wait()
+	select {
+	case <-writerDone:
+	case <-time.After(consoleWriterGrace):
+		// The writer is parked mid-frame on a peer that stopped reading, so it
+		// cannot reach the `done` case to notice any of this. Closing the socket
+		// fails that write at once; without it every pty on this socket would
+		// stay alive for the remainder of the write budget.
+		_ = c.ws.Close()
+		<-writerDone
+	}
+	<-claimsDone
 	_ = c.ws.Close()
 
 	sessions := c.takeAllSessions()
@@ -213,20 +275,46 @@ func (c *consoleConn) run(ctx context.Context) {
 	c.metrics.DecSocketsActive()
 }
 
-// shutdown signals both pumps to stop. Idempotent.
+// shutdown signals both pumps to stop, and unparks the read pump if it is
+// already blocked on the socket. Idempotent.
+//
+// Closing `done` alone is not enough. Both pumps spend nearly all their time
+// inside a blocking socket call rather than in their select, so a read pump
+// parked in ReadMessage would sit there for a whole consolePongWait — and if
+// the writer is the one that gave up, that leaves an OPEN socket with nobody
+// writing to it: the operator's wall freezes mid-stream, no loss report can be
+// delivered, and the root shells behind it keep running until the read deadline
+// finally fires a minute later. A deadline in the past is what makes a parked
+// syscall return, so teardown sets one.
 func (c *consoleConn) shutdown() {
-	c.closeOnce.Do(func() { close(c.done) })
+	c.closeOnce.Do(func() {
+		close(c.done)
+		c.deadlineMu.Lock()
+		defer c.deadlineMu.Unlock()
+		_ = c.ws.SetReadDeadline(time.Now())
+	})
+}
+
+// armReadDeadline gives the peer another window to be heard from, unless
+// teardown has already put the deadline in the past.
+func (c *consoleConn) armReadDeadline() error {
+	c.deadlineMu.Lock()
+	defer c.deadlineMu.Unlock()
+	select {
+	case <-c.done:
+		return nil
+	default:
+	}
+	return c.ws.SetReadDeadline(time.Now().Add(consolePongWait))
 }
 
 // readPump consumes client frames until the socket dies.
 func (c *consoleConn) readPump(ctx context.Context) {
 	c.ws.SetReadLimit(consoleMaxClientFrame)
-	_ = c.ws.SetReadDeadline(time.Now().Add(consolePongWait))
-	c.ws.SetPongHandler(func(string) error {
-		// A pong proves the peer is alive; without this the deadline would fire
-		// on an idle-but-healthy terminal.
-		return c.ws.SetReadDeadline(time.Now().Add(consolePongWait))
-	})
+	_ = c.armReadDeadline()
+	// A pong proves the peer is alive; without this the deadline would fire on
+	// an idle-but-healthy terminal.
+	c.ws.SetPongHandler(func(string) error { return c.armReadDeadline() })
 
 	for {
 		_, raw, err := c.ws.ReadMessage()
@@ -376,23 +464,21 @@ func (c *consoleConn) handleClose(ctx context.Context, f *console.ClientFrame) {
 // the peer's liveness observable.
 func (c *consoleConn) writePump() {
 	ticker := time.NewTicker(consolePingPeriod)
-	claims := time.NewTicker(consoleClaimRefresh)
 	drops := time.NewTicker(consoleDropFlush)
 	defer ticker.Stop()
-	defer claims.Stop()
 	defer drops.Stop()
 
 	for {
 		select {
 		case <-c.done:
 			// Best-effort goodbye; a dead peer just makes this fail.
-			_ = c.ws.SetWriteDeadline(time.Now().Add(consoleWriteWait))
+			_ = c.ws.SetWriteDeadline(time.Now().Add(c.writeWait))
 			_ = c.ws.WriteMessage(websocket.CloseMessage,
 				websocket.FormatCloseMessage(websocket.CloseNormalClosure, ""))
 			return
 
 		case f := <-c.out:
-			_ = c.ws.SetWriteDeadline(time.Now().Add(consoleWriteWait))
+			_ = c.ws.SetWriteDeadline(time.Now().Add(c.writeWait))
 			if err := c.ws.WriteMessage(websocket.TextMessage, f.payload); err != nil {
 				c.logger.Debug("console: socket write failed",
 					slog.String("aid", c.aid), slog.Any("error", err))
@@ -401,7 +487,7 @@ func (c *consoleConn) writePump() {
 			}
 
 		case <-ticker.C:
-			_ = c.ws.SetWriteDeadline(time.Now().Add(consoleWriteWait))
+			_ = c.ws.SetWriteDeadline(time.Now().Add(c.writeWait))
 			if err := c.ws.WriteMessage(websocket.PingMessage, nil); err != nil {
 				// The peer is gone (a slept laptop keeps a half-open TCP
 				// connection for minutes); every pty behind it must die now,
@@ -409,9 +495,6 @@ func (c *consoleConn) writePump() {
 				c.shutdown()
 				return
 			}
-
-		case <-claims.C:
-			c.refreshClaims()
 
 		case <-drops.C:
 			c.flushDropped()
@@ -472,6 +555,26 @@ func (c *consoleConn) creditDropped(clientID string, n uint64) {
 	defer c.mu.Unlock()
 	if ctr, ok := c.dropped[clientID]; ok {
 		ctr.Add(n)
+	}
+}
+
+// refreshClaimsLoop re-stamps this socket's cluster claims until teardown.
+//
+// On its own goroutine, NOT the writer's. A claim is Redis state, not a socket
+// write, and serialising it behind one would let a browser that stopped reading
+// starve the refresh past [keeperredis.ConsoleOwnerTTL] — at which point
+// SweepOrphans reads the lapsed claim as "the owning Keeper died" and reaps the
+// ptys. A slow operator would have their shells killed by the orphan sweeper.
+func (c *consoleConn) refreshClaimsLoop() {
+	claims := time.NewTicker(consoleClaimRefresh)
+	defer claims.Stop()
+	for {
+		select {
+		case <-c.done:
+			return
+		case <-claims.C:
+			c.refreshClaims()
+		}
 	}
 }
 

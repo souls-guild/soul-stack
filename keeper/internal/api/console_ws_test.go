@@ -9,11 +9,13 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"runtime"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -235,6 +237,14 @@ type consoleRBAC interface {
 
 func newConsoleTestServer(t *testing.T, rbac consoleRBAC, limits console.Limits) *consoleTestServer {
 	t.Helper()
+	return newConsoleTestServerWriteWait(t, rbac, limits, 0)
+}
+
+// newConsoleTestServerWriteWait is newConsoleTestServer with the socket's write
+// budget compressed, so a test can reach its expiry without waiting out the
+// production value. Zero keeps the default.
+func newConsoleTestServerWriteWait(t *testing.T, rbac consoleRBAC, limits console.Limits, writeWait time.Duration) *consoleTestServer {
+	t.Helper()
 
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 	soul := &fakeSoul{autoOpen: true}
@@ -283,7 +293,9 @@ func newConsoleTestServer(t *testing.T, rbac consoleRBAC, limits console.Limits)
 		// Check here would deny host-scoped roles before they can name a host.
 		r.With(apimiddleware.RequireAction(rbac, "soul", "console")).
 			Group(func(r chi.Router) {
-				registerConsoleWS(r, &consoleWSDeps{Hub: hub, Enforcer: rbac, Logger: logger})
+				registerConsoleWS(r, &consoleWSDeps{
+					Hub: hub, Enforcer: rbac, Logger: logger, WriteWait: writeWait,
+				})
 			})
 	})
 
@@ -295,8 +307,15 @@ func newConsoleTestServer(t *testing.T, rbac consoleRBAC, limits console.Limits)
 // dial opens an operator socket the way the browser client does.
 func (s *consoleTestServer) dial(t *testing.T) *websocket.Conn {
 	t.Helper()
+	return s.dialWith(t, websocket.DefaultDialer)
+}
+
+// dialWith is dial with the caller's dialer, for tests that need to control the
+// handshake itself (compression, byte counting).
+func (s *consoleTestServer) dialWith(t *testing.T, d *websocket.Dialer) *websocket.Conn {
+	t.Helper()
 	url := "ws" + strings.TrimPrefix(s.srv.URL, "http") + "/v1/console"
-	ws, resp, err := websocket.DefaultDialer.Dial(url, http.Header{
+	ws, resp, err := d.Dial(url, http.Header{
 		"Sec-WebSocket-Protocol": []string{console.Subprotocol + ", " + console.BearerSubprotocolPrefix + s.tok},
 	})
 	if err != nil {
@@ -634,6 +653,191 @@ func TestConsoleWS_FloodDoesNotBlockDelivery(t *testing.T) {
 	// Leaving that to cleanup is what made the backpressure test flaky.
 	_ = ws.Close()
 	waitFor(t, "the flooded session to be reaped", func() bool { return s.hub.Count() == 0 })
+}
+
+// --- write-side liveness (NIM-242) ---
+
+// The write budget must not be a stricter liveness rule than the pong budget.
+//
+// Backpressure fills the socket buffer BY CONSTRUCTION — that is the state the
+// drop machinery exists for — so a write parks for as long as the operator
+// takes to drain. gorilla's connection is unusable after a failed write, so a
+// write budget shorter than pongWait means "a browser that stopped reading for
+// that long loses every pty on this socket", while the read side still holds
+// the very same peer to be alive. Two contradicting liveness rules, and the
+// stricter one wins silently. There is one peer, so there is one budget.
+func TestConsoleWS_WriteBudgetIsNoStricterThanTheLivenessBudget(t *testing.T) {
+	if consoleWriteWait < consolePongWait {
+		t.Fatalf("consoleWriteWait = %v is shorter than consolePongWait = %v: an operator who merely stopped reading for %v loses every session on the socket, while the read side still considers that peer alive",
+			consoleWriteWait, consolePongWait, consoleWriteWait)
+	}
+}
+
+// When the write budget DOES expire, the socket must die loudly.
+//
+// This is the NIM-242 failure itself: the writer gave up, but nothing tore the
+// socket down — the read pump stayed parked in ReadMessage, so the connection
+// stayed open with nobody writing to it. The operator's wall froze mid-stream,
+// no loss report could ever arrive, and every root shell behind it kept running
+// until the pong deadline finally noticed a minute later.
+func TestConsoleWS_WriteBudgetExpiryClosesTheSocketInsteadOfGoingSilent(t *testing.T) {
+	// Compressed budget: the invariant is what happens WHEN it expires, and the
+	// production value is deliberately too generous to sit and wait for.
+	s := newConsoleTestServerWriteWait(t, allowAllRBAC{}, console.Limits{}, 300*time.Millisecond)
+	ws := s.dial(t)
+
+	writeFrame(t, ws, map[string]any{"type": "open", "session_id": "pane-1", "sid": "host-a"})
+	readFrameOfType(t, ws, "opened")
+	id := s.soul.sessionIDs()[0]
+
+	// Past the kernel socket buffers so the writer parks, but well inside the
+	// queue so nothing is dropped: the writer has to block on the SOCKET, which
+	// is what the budget bounds. The client reads nothing from here on.
+	chunk := bytes.Repeat([]byte("x"), 64<<10)
+	for i := 0; i < consoleOutQueueDepth/2; i++ {
+		s.soul.sendChunk(id, chunk, uint64(i+1), 0)
+	}
+
+	waitFor(t, "the sessions to be reaped once the writer gave up",
+		func() bool { return s.hub.Count() == 0 })
+
+	// And the peer must SEE the socket end. Draining now yields whatever the
+	// kernel already buffered and then the close; a read timeout here means the
+	// connection was left open with a dead writer behind it.
+	var readErr error
+	for readErr == nil {
+		_ = ws.SetReadDeadline(time.Now().Add(5 * time.Second))
+		_, _, readErr = ws.ReadMessage()
+	}
+	var netErr net.Error
+	if errors.As(readErr, &netErr) && netErr.Timeout() {
+		t.Fatalf("client read timed out: the socket was left open with no writer behind it (%v)", readErr)
+	}
+	_ = ws.Close()
+}
+
+// A writer parked mid-frame must not hold the teardown hostage.
+//
+// The generous write budget above makes this half mandatory: when the READ side
+// ends first — the operator closed the tab while their socket was still backed
+// up — the ptys must not wait out that whole budget before being reaped. A
+// writer parked inside a socket write cannot reach `done` to learn any of this,
+// so teardown takes the socket away from it instead.
+func TestConsoleWS_TeardownDoesNotWaitOutAParkedWriter(t *testing.T) {
+	s := newConsoleTestServer(t, allowAllRBAC{}, console.Limits{})
+	ws := s.dial(t)
+
+	writeFrame(t, ws, map[string]any{"type": "open", "session_id": "pane-1", "sid": "host-a"})
+	readFrameOfType(t, ws, "opened")
+	id := s.soul.sessionIDs()[0]
+
+	// Park the writer on the socket: past the kernel buffers, inside the queue,
+	// and the client reads none of it.
+	chunk := bytes.Repeat([]byte("x"), 64<<10)
+	for i := 0; i < consoleOutQueueDepth/2; i++ {
+		s.soul.sendChunk(id, chunk, uint64(i+1), 0)
+	}
+
+	// The operator closes the tab. That is a WRITE, so it lands even though this
+	// client never reads: the server's read pump ends while its writer is still
+	// parked on the backlog.
+	if err := ws.WriteControl(websocket.CloseMessage,
+		websocket.FormatCloseMessage(websocket.CloseNormalClosure, ""),
+		time.Now().Add(5*time.Second)); err != nil {
+		t.Fatalf("send close: %v", err)
+	}
+
+	waitFor(t, "the sessions to be reaped without waiting out the write budget",
+		func() bool { return s.hub.Count() == 0 })
+	_ = ws.Close()
+}
+
+// --- wire compression (NIM-274) ---
+
+// countingConn tallies what actually crossed the socket, below the WebSocket
+// framing — the only place the compression is observable from a test.
+type countingConn struct {
+	net.Conn
+	read *atomic.Int64
+}
+
+func (c countingConn) Read(p []byte) (int, error) {
+	n, err := c.Conn.Read(p)
+	c.read.Add(int64(n))
+	return n, err
+}
+
+// pty output must not go out uncompressed.
+//
+// Terminal output is enormously redundant, and it is the only high-volume
+// traffic Keeper serves to a browser. Sending it as raw base64 JSON is what
+// makes an ordinary `find /` outrun the socket and start costing chunks — so
+// the drop machinery fires on a flood that would comfortably fit compressed.
+//
+// This measures bytes on the wire rather than asserting the flag, because the
+// flag is not the contract: gorilla negotiates the extension at the handshake
+// and only compresses data frames, so a change in either would leave the flag
+// set and the output uncompressed.
+func TestConsoleWS_PtyOutputIsCompressedOnTheWire(t *testing.T) {
+	s := newConsoleTestServer(t, allowAllRBAC{}, console.Limits{})
+
+	var wire atomic.Int64
+	ws := s.dialWith(t, &websocket.Dialer{
+		EnableCompression: true,
+		NetDial: func(network, addr string) (net.Conn, error) {
+			conn, err := net.Dial(network, addr)
+			if err != nil {
+				return nil, err
+			}
+			return countingConn{Conn: conn, read: &wire}, nil
+		},
+	})
+
+	writeFrame(t, ws, map[string]any{"type": "open", "session_id": "pane-1", "sid": "host-a"})
+	readFrameOfType(t, ws, "opened")
+	id := s.soul.sessionIDs()[0]
+
+	// Realistic terminal output: repetitive, which is exactly why compressing it
+	// pays. Well inside the queue so nothing is dropped — this measures the wire,
+	// not backpressure.
+	chunk := bytes.Repeat([]byte("drwxr-xr-x 2 root root 4096 Jul 28 10:31 /usr/share/doc\n"), 512)
+	const chunks = 16
+	payload := int64(len(chunk)) * chunks
+
+	start := wire.Load()
+	for i := 0; i < chunks; i++ {
+		s.soul.sendChunk(id, chunk, uint64(i+1), 0)
+	}
+	for got := 0; got < chunks; {
+		_ = ws.SetReadDeadline(time.Now().Add(10 * time.Second))
+		_, raw, err := ws.ReadMessage()
+		if err != nil {
+			t.Fatalf("read chunk %d of %d: %v", got, chunks, err)
+		}
+		var m map[string]any
+		if err := json.Unmarshal(raw, &m); err != nil {
+			t.Fatalf("decode: %v", err)
+		}
+		if m["type"] == "chunk" {
+			got++
+		}
+	}
+	onWire := wire.Load() - start
+	t.Logf("%d bytes of pty output crossed the wire as %d (x%.1f)", payload, onWire,
+		float64(payload)/float64(onWire))
+
+	// Uncompressed this would exceed the payload itself — base64 alone is 4/3 of
+	// it. Halving is a floor far below the ~6x measured on real terminal output;
+	// the guard is "compressed at all", not a benchmark.
+	if onWire > payload/2 {
+		t.Fatalf("%d bytes of pty output crossed the wire as %d bytes - not compressed (base64 JSON alone would be about %d)",
+			payload, onWire, payload*4/3)
+	}
+
+	// Tear the session down before returning, so the next test does not start
+	// against a Keeper still draining this one.
+	_ = ws.Close()
+	waitFor(t, "the session to be reaped", func() bool { return s.hub.Count() == 0 })
 }
 
 // --- limits ---
