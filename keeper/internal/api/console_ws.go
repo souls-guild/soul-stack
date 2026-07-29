@@ -205,9 +205,12 @@ func newConsoleConn(ws *websocket.Conn, aid string, deps *consoleWSDeps) *consol
 	}
 }
 
-// Frame-plane constants mirroring keeper/internal/console/limits.go. Duplicated
-// rather than exported: they describe THIS socket implementation (queue depth,
-// deadlines), not the operator-facing policy the console package owns.
+// Frame-plane constants: queue depth and deadlines describe THIS socket
+// implementation, so they live with it rather than in the console package,
+// which owns the operator-facing policy (session caps, idle timeout). They are
+// unexported because nothing outside reads them — the console package used to
+// carry an unreferenced copy, and NIM-255 removed it; its limits_test.go now
+// fails if one comes back.
 const (
 	consoleOutQueueDepth = 256
 	consolePongWait      = 60 * time.Second

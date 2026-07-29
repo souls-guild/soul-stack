@@ -31,38 +31,13 @@ const (
 	DefaultIdleTimeout = 30 * time.Minute
 )
 
-// Frame-plane constants. Unlike the values above these are not operator policy
-// but flow-control tuning, so they stay in code (same split as the Soul side,
-// where chunk size and queue depth are code constants in consolerunner/limits.go).
-const (
-	// outQueueDepth is how many frames may wait for one WebSocket writer.
-	// Sized per SOCKET, not per session: a WebSocket has a single writer, so
-	// this is the real queue. 256 frames of a 32 KiB pty chunk is ~8 MiB
-	// worst-case per operator — the point past which we drop rather than let a
-	// browser's backlog become Keeper's memory leak.
-	outQueueDepth = 256
-
-	// pongWait is how long the peer may stay silent before we consider the
-	// socket dead. TCP alone will not tell us: a laptop that slept keeps a
-	// half-open connection for many minutes, and every session behind it is a
-	// live root shell.
-	pongWait = 60 * time.Second
-
-	// writeWait bounds one WebSocket write, on the same budget as pongWait.
-	// Backpressure fills the socket buffer by construction, so a write parks
-	// for as long as the operator takes to drain; a shorter budget would be a
-	// second, stricter liveness rule that kills a merely slow browser and every
-	// pty behind it (NIM-242).
-	writeWait = pongWait
-
-	// pingPeriod must be shorter than pongWait, or we would time out a healthy
-	// peer between our own pings.
-	pingPeriod = (pongWait * 9) / 10
-
-	// maxClientFrameSize caps one inbound JSON frame. Keystrokes and resizes are
-	// tiny; a paste is the large case, and 1 MiB is far above any of them.
-	maxClientFrameSize = 1 << 20
-)
+// The frame plane — queue depth, socket deadlines, inbound frame cap — is NOT
+// here. It belongs to the WebSocket implementation in internal/api, which is
+// the only thing that reads it; this package owns operator policy, above. A
+// second copy lived here until NIM-255, referenced by nothing, and both ways it
+// could go wrong were silent: editing the dead copy did nothing, and editing
+// the live one drifted from the comment that called them mirrors. limits_test.go
+// keeps the split.
 
 // Limits is the resolved operator-facing envelope, wired from keeper.yml.
 // Zero fields resolve to the defaults above, so the zero value is usable.
