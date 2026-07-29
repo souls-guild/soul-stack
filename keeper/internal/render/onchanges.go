@@ -73,14 +73,24 @@ func resolveOnFail(tasks []*RenderedTask) error {
 	return nil
 }
 
-// registerIndex builds a register-name → Index map over all plan tasks.
+// registerIndex builds a register-name → Indexes map over all plan tasks.
 // Tasks without register: are excluded from the map (addressed only by their
 // own idx).
-func registerIndex(tasks []*RenderedTask) map[string]int {
-	byRegister := make(map[string]int, len(tasks))
+//
+// ★ One name can hold SEVERAL indexes, and that is the point (NIM-246). A
+// `loop:` fans out at render into N RenderedTask, every one of them carrying
+// the SAME `register:` — destiny/tasks.md §7 says so explicitly ("all
+// iterations are written to the same register: <name> as an array of
+// results"). While this map was name→one-index, last-wins quietly picked the
+// final iteration: `onchanges: [<loop-register>]` meant "if the LAST file
+// changed" rather than "if any of them did", and a `require:` barrier released
+// while its siblings were still writing. Order within a name is plan order,
+// so callers get a deterministic index list.
+func registerIndex(tasks []*RenderedTask) map[string][]int {
+	byRegister := make(map[string][]int, len(tasks))
 	for _, t := range tasks {
 		if t.Register != "" {
-			byRegister[t.Register] = t.Index
+			byRegister[t.Register] = append(byRegister[t.Register], t.Index)
 		}
 	}
 	return byRegister
@@ -89,16 +99,22 @@ func registerIndex(tasks []*RenderedTask) map[string]int {
 // resolveRegisterNames resolves a requisite's list of register names into
 // task indexes via the byRegister map. Unknown name → wrapped sentinel error
 // unknownErr with coordinates (task name, requisite kind, the name itself).
-// kind is "onchanges"/"onfail" for the error text.
-func resolveRegisterNames(byRegister map[string]int, names []string, taskName, kind string, unknownErr error) ([]int, error) {
+// kind is "onchanges"/"onfail"/"require" for the error text.
+//
+// A name that fanned out contributes ALL of its indexes, so the resulting list
+// is at least as long as names. Every consumer already reads it as a set:
+// skipOnChanges/skipOnFail run the task if ANY named source changed/failed, and
+// a `require:` barrier waits for ALL of them — which is exactly what a fanned-out
+// name should mean in each case, with no change on the Soul side.
+func resolveRegisterNames(byRegister map[string][]int, names []string, taskName, kind string, unknownErr error) ([]int, error) {
 	idxs := make([]int, 0, len(names))
 	for _, name := range names {
-		srcIdx, ok := byRegister[name]
+		srcIdxs, ok := byRegister[name]
 		if !ok {
 			return nil, fmt.Errorf("%w: task %q -> %s: [%s] (no task with register: %s)",
 				unknownErr, taskName, kind, name, name)
 		}
-		idxs = append(idxs, srcIdx)
+		idxs = append(idxs, srcIdxs...)
 	}
 	return idxs, nil
 }

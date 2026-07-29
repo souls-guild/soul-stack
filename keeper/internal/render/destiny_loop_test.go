@@ -223,14 +223,18 @@ func TestRender_ApplyDestiny_Loop_OnChanges(t *testing.T) {
 			t.Errorf("tasks[%d].Index = %d, want %d", i, rt.Index, i)
 		}
 	}
-	// onchanges register name acl_patch resolves to the Index of the LAST loop
-	// iteration (registerIndex: one register → last Index; semantics shared with scenario).
+	// The onchanges register name acl_patch resolves to EVERY iteration's Index
+	// (NIM-246). This assertion used to read "the Index of the last iteration",
+	// which pinned a defect rather than a contract: a loop writes all its
+	// iterations into one register (destiny/tasks.md §7), so gating on it means
+	// "if any of them changed". With one index the consumer silently ignored a
+	// change in every iteration but the final one.
 	consumer := tasks[2]
-	if len(consumer.OnChangesIdx) != 1 {
-		t.Fatalf("OnChangesIdx = %v, want 1 (register loop-task -> Index of last iteration)", consumer.OnChangesIdx)
+	if len(consumer.OnChangesIdx) != 2 {
+		t.Fatalf("OnChangesIdx = %v, want both loop iterations", consumer.OnChangesIdx)
 	}
-	if consumer.OnChangesIdx[0] != 1 {
-		t.Errorf("OnChangesIdx = %v, want [1] (remap register-name to Index of last loop-iteration)", consumer.OnChangesIdx)
+	if consumer.OnChangesIdx[0] != 0 || consumer.OnChangesIdx[1] != 1 {
+		t.Errorf("OnChangesIdx = %v, want [0 1] in plan order", consumer.OnChangesIdx)
 	}
 }
 

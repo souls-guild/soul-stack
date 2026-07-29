@@ -380,13 +380,30 @@ var reSoulprintRef = regexp.MustCompile(`\bsoulprint\b`)
 // the drop is not activated when IncludeGroupID==0). A dynamic when → false: the
 // caller (ExpandIncludes/soul-lint) raises include_when_dynamic_unsupported.
 func IsStaticIncludeWhen(when string) bool {
-	if when == "" {
-		return true
-	}
-	if len(ExtractRegisterRefs(when)) != 0 {
+	return when == "" || IsStaticPredicate(when)
+}
+
+// IsStaticPredicate reports whether a CEL predicate is computable Keeper-side
+// BEFORE dispatch — no cross-task register reference, no soulprint. Those are
+// the two things a render pass does not have: register is accumulated Soul-side
+// within an ApplyRequest, and the host layer is per-host rather than per-plan.
+// Everything else a predicate can read (input./essence./incarnation./vars.) is
+// resolved at render.
+//
+// The exported counterpart of keeper-side isStaticWhen, for the offline
+// validators that must draw the same line: a conditional include's `when:`
+// (group-drop, [IsStaticIncludeWhen]) and an applier's `when:`
+// (apply_when_dynamic_unsupported, NIM-245) are both refused when dynamic.
+// Empty is NOT static here — an absent predicate is not a predicate; callers
+// that treat "no when:" as passing say so themselves.
+func IsStaticPredicate(expr string) bool {
+	if expr == "" {
 		return false
 	}
-	return !reSoulprintRef.MatchString(when)
+	if len(ExtractRegisterRefs(expr)) != 0 {
+		return false
+	}
+	return !reSoulprintRef.MatchString(expr)
 }
 
 // ExtractRegisterRefs returns a sorted set of unique names from `register.<name>` in

@@ -101,25 +101,38 @@ type DestinyResolver interface {
 // (orchestration.md §2.2.1): inherited by all destiny tasks (the whole
 // destiny rolls as one rolling wave over hosts). 0 means serial isn't set.
 //
-// applierRegister is the applier task's own register: (parent.Register). If
-// non-empty, renderApplyDestiny emits a synthetic terminal `core.noop.run`
-// after the child tasks, with Register=applierRegister and AggregateOf=the
-// global indices of all child destiny tasks (orchestration.md §2.1.1,
-// applier-register materialization, Option B): Soul builds its register_data
-// as an aggregate (`changed=OR(child.changed)`, similarly for
-// failed/timed_out) so an external `onchanges:[<applier>]` /
-// `when: register.<applier>.changed` resolves. "" means no terminal is
-// emitted (applier without register: — no index reserved, bit-for-bit
-// unchanged behavior).
+// applier is the whole parent task, not just its `apply:` block — the
+// function that renders a task's fan-out has to see the task, or keys land
+// nowhere and no one is told (NIM-245). Two of its fields are read here:
+//
+// applier.Register — if non-empty, renderApplyDestiny emits a synthetic
+// terminal `core.noop.run` after the child tasks, with Register=applier.Register
+// and AggregateOf=the global indices of all child destiny tasks
+// (orchestration.md §2.1.1, applier-register materialization, Option B): Soul
+// builds its register_data as an aggregate (`changed=OR(child.changed)`,
+// similarly for failed/timed_out) so an external `onchanges:[<applier>]` /
+// `when: register.<applier>.changed` resolves. "" means no terminal is emitted
+// (applier without register: — no index reserved, bit-for-bit unchanged
+// behavior).
+//
+// applier's requisites (`onchanges:`/`onfail:`/`require:`) — merged into every
+// child by [mergeApplierInheritance], the same way a block passes its own down
+// (destiny/tasks.md §6.5). `when:`/`where:`/`vars:` are deliberately NOT
+// inherited: those are resolved in the SCENARIO env, while a child's flow
+// context is built in the isolated destiny env, so the same text would mean a
+// different thing on the other side of the boundary. The applier's `when:` is
+// decided before this call instead (static-when at the scenario level), and a
+// `when:` that cannot be decided there is refused by [guardApplierWhen].
 func (p *Pipeline) renderApplyDestiny(
 	ctx context.Context,
 	parentIn RenderInput,
-	apply *config.ApplyTask,
+	applier config.Task,
 	startIndex int,
 	targeted []*topology.HostFacts,
 	serialWidth int,
-	applierRegister string,
 ) ([]*RenderedTask, []DispatchPlan, error) {
+	apply := applier.Apply
+	applierRegister := applier.Register
 	if parentIn.Destiny == nil {
 		return nil, nil, fmt.Errorf("%w: apply: destiny %q - DestinyResolver not configured (RenderInput.Destiny=nil)", ErrUnsupportedDSL, apply.Destiny)
 	}
@@ -185,7 +198,7 @@ func (p *Pipeline) renderApplyDestiny(
 	includeGroupKeep := includeGroupCache{}
 
 	for i := range resolved.Tasks {
-		task := resolved.Tasks[i]
+		task := mergeApplierInheritance(applier, resolved.Tasks[i])
 
 		// Conditional-include group-drop (ADR-009 amendment) — mirrors the
 		// scenario loop (pipeline.go), runs BEFORE emitStaticWhenSkip and

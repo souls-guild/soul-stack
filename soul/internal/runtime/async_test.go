@@ -808,3 +808,85 @@ func TestAsync_RegisterIndexRace(t *testing.T) {
 }
 
 var _ module.SoulModule = (*gateModule)(nil)
+
+// TestAsync_ImplicitBarrierWaitsForEveryIterationOfOneRegister — a `loop:`
+// reaches the wire as N tasks sharing one `register:` (destiny/tasks.md §7), so
+// an implicit barrier naming it has to collect all of them. While the flow index
+// kept one flow per name, the reader waited for whichever iteration was launched
+// last and then read a register its siblings were still writing (NIM-246).
+func TestAsync_ImplicitBarrierWaitsForEveryIterationOfOneRegister(t *testing.T) {
+	t.Parallel()
+	m := newGateModule("iter-a", "iter-b", "consumer")
+	sink := &safeSink{}
+
+	// Both iterations carry the loop's single register name; only their task
+	// names (and gates) differ, exactly as render emits them.
+	iterA := gateTask("iter-a", true)
+	iterA.Register = "rendered"
+	iterB := gateTask("iter-b", true)
+	iterB.Register = "rendered"
+	consumer := gateTask("consumer", false)
+	consumer.When = "has(register.rendered)"
+
+	done := runAsync(gateRunner(m), context.Background(), &keeperv1.ApplyRequest{
+		ApplyId: "async-loop-register",
+		Tasks:   []*keeperv1.RenderedTask{iterA, iterB, consumer},
+	}, sink)
+
+	m.awaitStart(t, "iter-a")
+	m.awaitStart(t, "iter-b")
+
+	// Release only the LAST-launched iteration: under the old one-flow-per-name
+	// index that was the whole barrier, and the consumer would start here.
+	m.open("iter-b")
+	time.Sleep(100 * time.Millisecond)
+	if m.hasStarted("consumer") {
+		t.Fatal("consumer started while iter-a was still writing register.rendered")
+	}
+
+	m.open("iter-a")
+	m.awaitStart(t, "consumer")
+	m.open("consumer")
+
+	if err := awaitRun(t, done); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if sink.result.GetStatus() != keeperv1.RunStatus_RUN_STATUS_SUCCESS {
+		t.Errorf("status = %v, want SUCCESS", sink.result.GetStatus())
+	}
+}
+
+// The negative half: distinct register names still resolve to their own flow
+// only — the fix must not make one reference wait for unrelated async work.
+func TestAsync_ImplicitBarrierStillScopedToItsOwnName(t *testing.T) {
+	t.Parallel()
+	m := newGateModule("probe", "unrelated", "consumer")
+	sink := &safeSink{}
+
+	consumer := gateTask("consumer", false)
+	consumer.When = "has(register.probe)"
+
+	done := runAsync(gateRunner(m), context.Background(), &keeperv1.ApplyRequest{
+		ApplyId: "async-scoped-name",
+		Tasks: []*keeperv1.RenderedTask{
+			gateTask("probe", true),
+			gateTask("unrelated", true),
+			consumer,
+		},
+	}, sink)
+
+	m.awaitStart(t, "probe")
+	m.awaitStart(t, "unrelated")
+	// `unrelated` stays in flight: the consumer names only probe, so it must run.
+	m.open("probe")
+	m.awaitStart(t, "consumer")
+	m.open("consumer")
+	m.open("unrelated")
+
+	if err := awaitRun(t, done); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if sink.result.GetStatus() != keeperv1.RunStatus_RUN_STATUS_SUCCESS {
+		t.Errorf("status = %v, want SUCCESS", sink.result.GetStatus())
+	}
+}

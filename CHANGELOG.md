@@ -196,14 +196,76 @@ order to act in.
   the assert reads. **Clients that treat any non-202 from this route as a
   transport error need updating.**
 
-- **`soul-lint` rejects three `async:` / `require:` shapes it used to accept**, so
-  a definition that linted clean can now fail: `require_forward_reference` (a
-  barrier naming a source that starts later resolves to nothing and waits for
-  nothing), `async_on_apply_invalid` (an applier task fans out into a group that
-  runs sequentially regardless), and a `require:` on a `block:`, which was
-  documented as inherited and was in fact dropped from the plan — now merged like
-  the other block keys. Each was silent before: the key parsed, the plan
-  rendered, the run succeeded, and the ordering the author wrote never happened.
+- **`soul-lint` rejects five `async:` / `require:` / `when:` shapes it used to
+  accept**, so a definition that linted clean can now fail:
+  `require_forward_reference` (a barrier naming a source that starts later
+  resolves to nothing and waits for nothing), `async_on_apply_invalid` (an
+  applier task fans out into a group that runs sequentially regardless),
+  `apply_when_dynamic_unsupported` (below), `async_on_keeper_invalid` (`async:`
+  next to `on: keeper`, which render already refused — the refusal just moves to
+  lint time), and a `require:` on a `block:`, which was documented as inherited
+  and was in fact dropped from the plan — now merged like the other block keys.
+  Each was silent before: the key parsed, the plan rendered, the run succeeded,
+  and the ordering the author wrote never happened.
+
+- **A `when:` on an `apply:` task must be static, and a dynamic one now fails the
+  lint** (`apply_when_dynamic_unsupported`). This is the one entry here that
+  changes what a *correct-looking* definition does, so read it even if you write
+  no `async:`.
+
+  An applier's condition is answered **Keeper-side, before its destiny is
+  rendered**. A static predicate (`input.` / `essence.` / `vars.` /
+  `incarnation.`) has one answer for the whole run and keeps working exactly as
+  before — false collapses the applier into a single skip placeholder carrying
+  its `register:`. A predicate reading `register.*` or `soulprint.*` has no such
+  answer: `soulprint` differs per host and `register` does not exist yet at
+  render, while the applier expands into **one** group for the whole roster.
+  There is nowhere to put "yes" and "no" at once.
+
+  **What was happening instead:** the key was dropped and the destiny applied
+  **everywhere the applier targeted — including the hosts the author had gated
+  off**. That is configuration written where it was refused, and nothing in the
+  run said so. A run that looked clean was not.
+
+  **What to do:** the two replacements already work, and the diagnostic names
+  them. A host-variant condition is `where:` — it is the per-host targeting key
+  and reads both `register` and `soulprint`. A dependency on a source's outcome
+  is `onchanges:` / `onfail:`, which this release also makes reach the group (see
+  below).
+
+  ```yaml
+  # before — silently applied on every host
+  - apply: { destiny: redis, input: {} }
+    when: soulprint.self.os.family == 'debian'
+
+  # after
+  - apply: { destiny: redis, input: {} }
+    where: soulprint.self.os.family == 'debian'
+  ```
+
+  The restriction is on `apply:` only. The same `when:` on an ordinary `module:`
+  task is untouched and entirely legal — a module task is one task, gated
+  Soul-side at its own plan position.
+
+- **An applier's `onchanges:` / `onfail:` / `require:` now reach the destiny it
+  applies, and can widen gating that was previously not applied at all.** They
+  were dropped before — the render function that expands an applier never
+  received the task carrying them — so a scenario whose applier declared a
+  requisite ran the group unconditionally. Two consequences on upgrade: an
+  applier that names a source now genuinely waits for / gates on it, and because
+  the merge is a **union** (as on a `block:`) with `onchanges:` composing as OR,
+  an applier-level `onchanges:` **widens** the gating of a destiny task that
+  already had its own. Expressing AND needs a wire change and is tracked
+  separately; the behaviour matches the `block:` construct that already ships.
+
+- **A requisite naming a `loop:` register now covers every iteration, not the
+  last one.** A `loop:` fans out at render into N tasks sharing one `register:`
+  ([destiny/tasks.md §7](docs/destiny/tasks.md)), but the name resolved to a
+  single task index — the final iteration. So `onchanges: [<loop-register>]` meant
+  "if the **last** file changed" rather than "if any did", and a `require:`
+  barrier released while its siblings were still writing. Gating that was too
+  narrow becomes correct, which means a task that used to be skipped may now run:
+  that is the documented contract taking effect, not a new one.
 
 - **A plugin module's `params:` are now checked statically, so a definition that
   linted clean can fail.** Until now the static check covered `core.*` only and
@@ -769,6 +831,43 @@ order to act in.
   names, `all` on either side absorbing the list). All three ride
   `validateTaskRefs`, so scenario and destiny get them on the same terms, at
   parse and in `soul-lint`, with line and column.
+
+- **An `apply:` task no longer drops the keys written on it.** The function that
+  expands an applier into its destiny group was handed the `apply:` block and the
+  `register:`, never the task — so `when:` / `onchanges:` / `onfail:` /
+  `require:` reached none of the tasks it fanned out into. Where each key is
+  answered now follows from where it *can* be answered. The three requisites are
+  resolved name→index over the flat plan, so an index means the same thing on
+  both sides of the destiny boundary: they merge into every child, exactly as a
+  `block:` passes its own down. `when:` is not portable that way — a child's flow
+  context is built in the **isolated destiny env**, where `input.` / `vars.` /
+  `essence.` name different things than in the scenario the predicate was written
+  in — so a static one is decided at render as before, and a dynamic one is
+  refused (`apply_when_dynamic_unsupported` offline, `ErrUnsupportedDSL` at render
+  for the block-inherited case the offline validator cannot see). Refusing is not
+  a new restriction; it is the boundary [ADR-056](docs/adr/0056-staged-render-passage.md)
+  already draws for a cross-Passage `when:`, one level up. The restriction was
+  the silence: a gated destiny applied everywhere the applier targeted.
+
+- **A register that fanned out through `loop:` resolves to every one of its
+  tasks.** The name→index map kept one entry per register while a `loop:` emits N
+  tasks under one name, so last-wins silently picked the final iteration. The map
+  now holds every index for a name and no consumer changed: `skipOnChanges` /
+  `skipOnFail` already run a task if **any** named source changed or failed, and a
+  barrier already waits for **all** of its targets — which is what a fanned-out
+  name should mean in each case. The same last-wins on the Soul side
+  (`asyncFlows.byName`, used by the implicit barrier) is fixed with it, and
+  `resolveRequire` now walks per name: pairing a flattened index list back onto
+  names by position named the wrong source in the cross-Passage error, or ran off
+  the end of the slice.
+
+- **`async:` on `on: keeper` is refused offline** (`async_on_keeper_invalid`),
+  joining `async_on_block_invalid` and `async_on_apply_invalid` — the third and
+  last construct where the flag is meaningless, since a keeper task is executed by
+  the keeper's own runner and never reaches a Soul. Render refused it before; this
+  moves the refusal to where the author is looking. `require:` on a keeper task
+  stays legal — redundant, because the keeper executor runs its tasks in plan
+  order.
 
 - **The bundled `redis` example installs from a package repository by default.**
   `essence.install_method` defaults to `package`, and `essence.install_package`

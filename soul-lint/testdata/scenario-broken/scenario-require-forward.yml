@@ -11,5 +11,5 @@ tasks:
     async: true
     register: vhost
     params:
-      src: vhost.conf.tmpl
+      template: vhost.conf.tmpl
       path: /etc/nginx/sites-enabled/app.conf

@@ -275,7 +275,7 @@ func (p *Pipeline) Render(ctx context.Context, in RenderInput) (_ []*RenderedTas
 		// destiny tasks.
 		if task.Apply != nil {
 			width := serialWidth(task.Serial, len(targeted))
-			dt, dp, derr := p.renderApplyDestiny(ctx, in, task.Apply, idx, targeted, width, task.Register)
+			dt, dp, derr := p.renderApplyDestiny(ctx, in, task, idx, targeted, width)
 			if derr != nil {
 				return nil, nil, derr
 			}
@@ -1947,7 +1947,7 @@ func guardPilotDSL(task config.Task, idx int) error {
 		if task.Loop != nil {
 			return fmt.Errorf("%w: loop: on an apply task (task[%d] %q)", ErrUnsupportedDSL, idx, task.Name)
 		}
-		return nil
+		return guardApplierWhen(task, idx)
 	case task.Include != nil:
 		return fmt.Errorf("%w: (task[%d] %q)", ErrUnexpandedInclude, idx, task.Name)
 	case task.Block != nil:
@@ -1961,6 +1961,37 @@ func guardPilotDSL(task config.Task, idx int) error {
 		return fmt.Errorf("%w: task[%d] %q is not a module task", ErrUnsupportedDSL, idx, task.Name)
 	}
 	return nil
+}
+
+// guardApplierWhen rejects a `when:` on an apply: task that cannot be decided
+// Keeper-side (NIM-245). Fail-closed, [ErrUnsupportedDSL].
+//
+// A static `when:` never reaches here — emitStaticWhenSkip runs BEFORE the
+// guard and settles it: false collapses the whole applier into one skip
+// placeholder, true renders normally. That is the working form and stays
+// bit-for-bit.
+//
+// What is refused is the other form — a `when:` reading `register.*` or
+// `soulprint.*`. It cannot be decided at render, and it cannot be pushed onto
+// the group either: a child's flow context is built in the ISOLATED destiny env,
+// where `input.`/`vars.`/`essence.` name different things than in the scenario
+// the predicate was written in, so inheriting the text would evaluate a
+// different question. Until NIM-245 the key was simply dropped and the destiny
+// applied everywhere — including on hosts the author had gated off, which is
+// writing configuration where it was refused, not a missed optimisation.
+//
+// Both alternatives already work and the message names them: `where:` for a
+// host-variant condition (Keeper-side targeting, register- and
+// soulprint-capable through Passage stratification) and `onchanges:`/`onfail:`
+// for "only if that source changed/failed", which this same slice makes reach
+// the group. This is the boundary ADR-056 already draws for cross-Passage
+// `when:` (cross_passage_when_unsupported), one level up.
+func guardApplierWhen(task config.Task, idx int) error {
+	if task.When == "" || isStaticWhen(task.When) {
+		return nil
+	}
+	return fmt.Errorf("%w: when: %q on an apply task (task[%d] %q) reads register/soulprint - an applier's condition is decided Keeper-side, before its destiny is rendered; use where: for a host-variant condition, or onchanges:/onfail: to depend on a source's outcome",
+		ErrUnsupportedDSL, task.When, idx, task.Name)
 }
 
 // taskPassageAt returns top-level task i's passage index from the

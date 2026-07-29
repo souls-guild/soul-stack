@@ -98,6 +98,41 @@ Here `register.cfg.changed` is true if at least one child task destiny `redis-co
 
 > When to write `apply:`, and when to write inline `module:` - see the boundary recommendation in [concept.md](concept.md) ([ADR-009](../adr/0009-scenario-dsl.md)). Removing the old "scenario only `apply:`" invariant means: `module:` (including modifying modules) in scenario is now legal.
 
+#### 2.1.2. The applier's own keys - what reaches the group and what decides before it
+
+An applier expands into N destiny tasks, so each of its own keys has to be answered somewhere. Which place depends on **where the key can be resolved**, and the split is not cosmetic - a key with no place to go used to be dropped in silence (NIM-245).
+
+| Key on the applier | Where it is answered |
+|---|---|
+| `onchanges:` · `onfail:` · `require:` | **Merged into every destiny task of the group**, exactly as a `block:` passes its own down ([destiny/tasks.md §6.5](../destiny/tasks.md)). These are resolved from register **name to task index** over the whole flat plan, so an index means the same thing on both sides of the destiny boundary. |
+| `where:` · `on:` · `run_once:` | **Before the group is rendered** - they select the hosts the whole destiny lands on (§4, §2.2.2). `where:` is the register- and soulprint-capable one: use it for any host-variant condition. |
+| `serial:` | Inherited by every destiny task - the whole destiny rolls as one wave (§2.2.1). |
+| `when:` | **At render, Keeper-side** - and therefore it must be **static** (`input.` / `essence.` / `vars.` / `incarnation.`). A static-false applier collapses into a single skip placeholder carrying its own `register:`; a static-true one renders normally. |
+| `async:` | **Refused** (`async_on_apply_invalid`) - asynchrony of a whole group is deferred ([ADR-0075](../adr/0075-intra-host-async-tasks.md)). |
+
+**A `when:` that reads `register.*` or `soulprint.*` on an applier is an error** (`apply_when_dynamic_unsupported`), not a slow path. It cannot be decided at render, and it cannot be handed to the group either: a destiny task's flow context is built in the **isolated destiny env**, where `input.` / `vars.` / `essence.` name different things than in the scenario the predicate was written in - the same text would answer a different question. Until it was refused, the key was dropped and the destiny applied **everywhere, including on the hosts the author had gated off**.
+
+Both replacements work today and cover the cases in practice:
+
+```yaml
+# host-variant condition → where: (Keeper-side targeting, reads register and soulprint)
+- name: Apply the redis destiny only on debian hosts
+  where: soulprint.self.os.family == 'debian'
+  apply: { destiny: redis, input: { action: apply } }
+
+# "only if that source changed" → onchanges: (now reaches every task of the group)
+- name: Render the cluster config
+  module: core.file.rendered
+  register: cluster_conf
+  params: { src: cluster.conf.tmpl, path: /etc/redis/cluster.conf }
+
+- name: Apply the redis destiny only when the config actually changed
+  onchanges: [cluster_conf]
+  apply: { destiny: redis, input: { action: apply } }
+```
+
+★ The requisites merge as a **union**, as they do on a `block:`: an applier naming a source and a destiny task naming its own end up naming both. For `onchanges:`/`onfail:` that composes as OR - the task runs if **any** named source changed/failed - so an applier-level `onchanges:` widens, rather than narrows, the gating of a destiny task that already had one.
+
 ### 2.3. `assert:` — render-time precondition
 
 ```yaml

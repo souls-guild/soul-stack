@@ -66,15 +66,23 @@ func resolveRequire(tasks []*RenderedTask) error {
 		if len(t.requireNames) == 0 {
 			continue
 		}
-		idxs, err := resolveRegisterNames(byRegister, t.requireNames, t.Name, "require", ErrRequireUnknownRegister)
-		if err != nil {
-			return err
-		}
-		for i, srcIdx := range idxs {
-			if srcPassage := passageByIndex[srcIdx]; srcPassage > t.Passage {
-				return fmt.Errorf("%w: task %q (passage %d) -> require: [%s] (passage %d)",
-					ErrRequireCrossPassage, t.Name, t.Passage, t.requireNames[i], srcPassage)
+		// Per NAME rather than over the flattened result: a name that fanned out
+		// (`loop:`, NIM-246) contributes several indexes, so a positional pairing
+		// of idxs back onto requireNames would name the wrong source in the error
+		// — or run off the end of the slice.
+		var idxs []int
+		for _, name := range t.requireNames {
+			nameIdxs, err := resolveRegisterNames(byRegister, []string{name}, t.Name, "require", ErrRequireUnknownRegister)
+			if err != nil {
+				return err
 			}
+			for _, srcIdx := range nameIdxs {
+				if srcPassage := passageByIndex[srcIdx]; srcPassage > t.Passage {
+					return fmt.Errorf("%w: task %q (passage %d) -> require: [%s] (passage %d)",
+						ErrRequireCrossPassage, t.Name, t.Passage, name, srcPassage)
+				}
+			}
+			idxs = append(idxs, nameIdxs...)
 		}
 		t.RequireIdx = idxs
 	}

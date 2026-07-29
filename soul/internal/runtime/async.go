@@ -100,9 +100,15 @@ type asyncFlow struct {
 // no-op instead of a deadlock — rejecting that authoring mistake statically is
 // NIM-152's.
 type asyncFlows struct {
-	mu     sync.Mutex
-	byIdx  map[int32]*asyncFlow
-	byName map[string]*asyncFlow
+	mu    sync.Mutex
+	byIdx map[int32]*asyncFlow
+	// byName holds EVERY flow registered under a name, not the newest one
+	// (NIM-246). A `loop:` fans out into N tasks sharing one `register:`, so an
+	// implicit barrier — a `register.<name>` reference from a Soul-side key —
+	// has to collect all of them; keeping one meant the reader waited for
+	// whichever iteration happened to be launched last and read the register
+	// while its siblings were still writing it.
+	byName map[string][]*asyncFlow
 	order  []*asyncFlow
 
 	wg sync.WaitGroup
@@ -120,7 +126,7 @@ type asyncFlows struct {
 func newAsyncFlows(limit int) *asyncFlows {
 	f := &asyncFlows{
 		byIdx:  make(map[int32]*asyncFlow),
-		byName: make(map[string]*asyncFlow),
+		byName: make(map[string][]*asyncFlow),
 	}
 	if limit > 0 {
 		f.sem = make(chan struct{}, limit)
@@ -135,7 +141,7 @@ func (f *asyncFlows) add(fl *asyncFlow) {
 	defer f.mu.Unlock()
 	f.byIdx[fl.idx] = fl
 	if fl.name != "" {
-		f.byName[fl.name] = fl
+		f.byName[fl.name] = append(f.byName[fl.name], fl)
 	}
 	f.order = append(f.order, fl)
 }
@@ -294,7 +300,9 @@ func (s *flowSet) addNames(f *asyncFlows, expr string) {
 		return
 	}
 	for _, name := range config.ExtractRegisterRefs(expr) {
-		s.add(f.byName[name])
+		for _, fl := range f.byName[name] {
+			s.add(fl)
+		}
 	}
 }
 

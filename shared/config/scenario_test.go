@@ -371,6 +371,91 @@ tasks:
 	}
 }
 
+// TestLoadScenarioManifest_AsyncOnKeeper — the third and last construct where
+// `async:` has no meaning. Render already refused it; this moves the refusal to
+// where the author is looking (NIM-247).
+func TestLoadScenarioManifest_AsyncOnKeeper(t *testing.T) {
+	src := `name: x
+tasks:
+  - module: core.soul.registered
+    on: keeper
+    async: true
+    params: { sid: a.example.com }
+`
+	_, _, diags, _ := LoadScenarioManifestFromBytes("main.yml", []byte(src), ValidateOptions{})
+	if !hasCodeAt(diags, "async_on_keeper_invalid", "$.tasks[0].async") {
+		dump(t, diags)
+		t.Fatalf("expected async_on_keeper_invalid")
+	}
+}
+
+// Negative — `require:` on a keeper task stays legal (redundant, since the
+// keeper executor runs its tasks in plan order), and `async:` on an ordinary
+// Soul-side task is untouched by the keeper gate.
+func TestLoadScenarioManifest_AsyncOnKeeper_NeighboursUnaffected(t *testing.T) {
+	src := `name: x
+tasks:
+  - module: core.exec.run
+    async: true
+    register: probe
+    params: { cmd: "true" }
+  - module: core.soul.registered
+    on: keeper
+    require: [probe]
+    params: { sid: a.example.com }
+`
+	_, _, diags, _ := LoadScenarioManifestFromBytes("main.yml", []byte(src), ValidateOptions{})
+	if hasCode(diags, "async_on_keeper_invalid") {
+		dump(t, diags)
+		t.Fatalf("require: on a keeper task and async: on a Soul-side task must both pass")
+	}
+}
+
+// TestLoadScenarioManifest_ApplyWhenDynamic — an applier's condition is decided
+// before its destiny is rendered, so a `when:` reading register/soulprint has
+// nowhere to be evaluated. It used to be dropped and the destiny applied
+// everywhere, the author's gate included (NIM-245).
+func TestLoadScenarioManifest_ApplyWhenDynamic(t *testing.T) {
+	for name, when := range map[string]string{
+		"register":  "register.probe.changed",
+		"soulprint": "soulprint.self.os.family == 'debian'",
+	} {
+		t.Run(name, func(t *testing.T) {
+			src := "name: x\ntasks:\n  - apply:\n      destiny: redis\n      input: {}\n    when: \"" + when + "\"\n"
+			_, _, diags, _ := LoadScenarioManifestFromBytes("main.yml", []byte(src), ValidateOptions{})
+			if !hasCodeAt(diags, "apply_when_dynamic_unsupported", "$.tasks[0].when") {
+				dump(t, diags)
+				t.Fatalf("expected apply_when_dynamic_unsupported for when: %q", when)
+			}
+		})
+	}
+}
+
+// The negative half, and the one that matters most: a static `when:` on an
+// applier is the working form (render decides it) and must not be flagged.
+// Nor is a dynamic when: on an ordinary module task — that is Soul-side gating
+// and entirely legal.
+func TestLoadScenarioManifest_ApplyWhenStaticAccepted(t *testing.T) {
+	src := `name: x
+tasks:
+  - apply:
+      destiny: redis
+      input: {}
+    when: input.action == 'apply'
+  - module: core.exec.run
+    when: register.probe.changed
+    params: { cmd: "true" }
+  - module: core.exec.run
+    register: probe
+    params: { cmd: "true" }
+`
+	_, _, diags, _ := LoadScenarioManifestFromBytes("main.yml", []byte(src), ValidateOptions{})
+	if hasCode(diags, "apply_when_dynamic_unsupported") {
+		dump(t, diags)
+		t.Fatalf("a static when: on an applier and a dynamic when: on a module task must both pass")
+	}
+}
+
 // TestLoadScenarioManifest_AsyncTaskKeyAccepted — the other half of the rename:
 // `async: true` on an ordinary task parses clean and lands on Task.Async.
 func TestLoadScenarioManifest_AsyncTaskKeyAccepted(t *testing.T) {

@@ -200,7 +200,7 @@ func (p *Pipeline) walkBlockChildren(
 		// applier-register is addressable from outside as register.<child>.*
 		// (orchestration.md §2.1.1).
 		if child.Apply != nil {
-			dt, dp, derr := p.renderApplyDestiny(ctx, in, child.Apply, idx, childTargeted, width, child.Register)
+			dt, dp, derr := p.renderApplyDestiny(ctx, in, child, idx, childTargeted, width)
 			if derr != nil {
 				return nil, nil, derr
 			}
@@ -269,6 +269,29 @@ func mergeBlockInheritance(blockTask config.Task, child config.Task) config.Task
 	out.OnChanges = unionNames(blockTask.OnChanges, child.OnChanges)
 	out.OnFail = unionNames(blockTask.OnFail, child.OnFail)
 	out.Require = mergeRequire(blockTask.Require, child.Require)
+	return out
+}
+
+// mergeApplierInheritance builds a destiny-pass child with the applier task's
+// requisites merged in — the apply: half of [mergeBlockInheritance], for the
+// other construct that expands into a group of tasks (NIM-245).
+//
+// Only the three requisites travel. They are resolved NAME→INDEX over the whole
+// flat plan in Render's final pass, so they are env-agnostic: an index means the
+// same thing on both sides of the destiny boundary. `when:`/`where:`/`vars:` are
+// not, and are handled where they are written — see [renderApplyDestiny].
+//
+// Union, exactly as a block does it: an applier that names a source and a
+// destiny task that names its own end up naming both. ★ For `onchanges:`/
+// `onfail:` that composes as OR (Soul runs the task if ANY named source
+// changed/failed), which is the established behaviour of the one group
+// construct that already ships this — matching it is worth more than a second,
+// differently-shaped rule for the second construct.
+func mergeApplierInheritance(applier config.Task, child config.Task) config.Task {
+	out := child
+	out.OnChanges = unionNames(applier.OnChanges, child.OnChanges)
+	out.OnFail = unionNames(applier.OnFail, child.OnFail)
+	out.Require = mergeRequire(applier.Require, child.Require)
 	return out
 }
 
@@ -378,6 +401,14 @@ func guardPilotBlockChild(child config.Task, idx int, blockName string) error {
 		return fmt.Errorf("%w: include: on descendant of block %q (task[%d] %q)", ErrUnexpandedInclude, blockName, idx, child.Name)
 	case child.Module == nil && child.Apply == nil && child.Block == nil:
 		return fmt.Errorf("%w: task[%d] %q in block %q is not a module/apply/block task", ErrUnsupportedDSL, idx, child.Name, blockName)
+	}
+	// An apply: descendant is an applier like any other, and the block's when:
+	// is already ANDed into it by mergeBlockInheritance — so a block gated on
+	// register/soulprint turns its applier child's when: dynamic, and the same
+	// boundary applies (NIM-245). Checked after the kind switch: an empty task
+	// should be reported as such, not as a when: problem.
+	if child.Apply != nil {
+		return guardApplierWhen(child, idx)
 	}
 	return nil
 }

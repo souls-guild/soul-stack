@@ -129,6 +129,11 @@ type RetrySpec struct {
 // validation error (validateRequireField).
 const RequireAll = "all"
 
+// KeeperTarget is the only scalar form of `on:` — the keeper-side dispatcher
+// (orchestration.md §3, docs/keeper/modules.md). Any other scalar is
+// enum_invalid; a list means coven ids.
+const KeeperTarget = "keeper"
+
 // RequireSpec decodes the polymorphic `require:` into the two forms the DSL
 // allows (destiny/tasks.md §8): a list of source register names, or the scalar
 // [RequireAll]. Keeper-side render resolves the names into task indices for the
@@ -578,6 +583,7 @@ func validateTaskNode(item ast.Node, pathPrefix string) []diag.Diagnostic {
 	if kv, ok := present["apply"]; ok {
 		out = append(out, validateApplyField(kv, pathPrefix)...)
 		out = append(out, validateAsyncOnApply(present, pathPrefix)...)
+		out = append(out, validateApplyWhenStatic(present, pathPrefix)...)
 	}
 	if kv, ok := present["assert"]; ok {
 		out = append(out, validateAssertField(kv, pathPrefix)...)
@@ -606,6 +612,7 @@ func validateTaskNode(item ast.Node, pathPrefix string) []diag.Diagnostic {
 	// 1a (the common string-field check); CEL parsing deferred to M1.3.
 	if kv, ok := present["on"]; ok {
 		out = append(out, validateOnField(kv, pathPrefix)...)
+		out = append(out, validateAsyncOnKeeper(kv, present, pathPrefix)...)
 	}
 	if kv, ok := present["serial"]; ok {
 		out = append(out, validateSerialField(kv, pathPrefix)...)
@@ -993,12 +1000,82 @@ func validateAsyncOnApply(present map[string]*ast.MappingValueNode, pathPrefix s
 	})}
 }
 
+// validateAsyncOnKeeper raises `async_on_keeper_invalid` for `async:` on a
+// keeper-side task (`on: keeper`) — the third and last construct where the flag
+// has no meaning, joining `async_on_block_invalid` and `async_on_apply_invalid`
+// (NIM-247).
+//
+// `async:` is Soul-side task concurrency: a keeper task is executed by the
+// keeper's own scenario runner and never reaches a Soul runner, so honouring the
+// flag would be a no-op. Render already refuses it — this only moves the refusal
+// to where the author is looking, with a line and a column, instead of at apply
+// time. The render guard stays as defense-in-depth.
+//
+// `require:` on a keeper task is deliberately NOT touched: it is accepted and
+// redundant, since the keeper executor runs its tasks in plan order
+// (destiny/tasks.md §8).
+func validateAsyncOnKeeper(onKV *ast.MappingValueNode, present map[string]*ast.MappingValueNode, pathPrefix string) []diag.Diagnostic {
+	sn, isStr := onKV.Value.(*ast.StringNode)
+	if !isStr || sn.Value != KeeperTarget {
+		return nil
+	}
+	kv, ok := present["async"]
+	if !ok {
+		return nil
+	}
+	tok := kv.Key.GetToken()
+	return []diag.Diagnostic{diagAt(tok.Position.Line, tok.Position.Column, diag.Diagnostic{
+		Level: diag.LevelError, Phase: diag.PhaseSchemaValidate,
+		Code:     "async_on_keeper_invalid",
+		Message:  "async: is not allowed on a keeper-side task (on: keeper) — async: is Soul-side task concurrency and a keeper task never reaches a Soul runner",
+		Hint:     "drop async: here; to overlap keeper-side work with host work, put async: on the Soul-side tasks instead",
+		YAMLPath: pathPrefix + ".async",
+	})}
+}
+
+// validateApplyWhenStatic raises `apply_when_dynamic_unsupported` for a `when:`
+// on an `apply:` task that reads `register.*`/`soulprint.*` (NIM-245).
+//
+// An applier's condition is decided Keeper-side, before its destiny is rendered:
+// a static one is evaluated at render (the whole group collapses into one skip
+// placeholder when false), and a dynamic one has nowhere to go — the group is
+// rendered in the ISOLATED destiny env, where the identifiers the predicate was
+// written against do not mean the same thing. Until this was refused, the key
+// was dropped and the destiny applied everywhere, the author's gate included.
+//
+// Mirrors `include_when_dynamic_unsupported`, the same rule at the other
+// construct that is expanded before the predicate could be evaluated. The
+// alternatives are in the hint and both work today: `where:` for a host-variant
+// condition, `onchanges:`/`onfail:` for a source's outcome.
+//
+// Offline half only — a block's `when:` is ANDed into an applier descendant at
+// render, which this layer does not see; keeper-side guardApplierWhen catches
+// that one (defense-in-depth, as with within_block_register_dependency).
+func validateApplyWhenStatic(present map[string]*ast.MappingValueNode, pathPrefix string) []diag.Diagnostic {
+	kv, ok := present["when"]
+	if !ok {
+		return nil
+	}
+	sn, isStr := kv.Value.(*ast.StringNode)
+	if !isStr || sn.Value == "" || IsStaticPredicate(sn.Value) {
+		return nil
+	}
+	tok := kv.Key.GetToken()
+	return []diag.Diagnostic{diagAt(tok.Position.Line, tok.Position.Column, diag.Diagnostic{
+		Level: diag.LevelError, Phase: diag.PhaseSemanticValidate,
+		Code:     "apply_when_dynamic_unsupported",
+		Message:  fmt.Sprintf("when: %q on an apply: task reads register/soulprint — an applier's condition is decided before its destiny is rendered", sn.Value),
+		Hint:     "use where: for a host-variant condition (register- and soulprint-capable), or onchanges:/onfail: to depend on a source's outcome; a static when: (input./essence./vars.) works as written",
+		YAMLPath: pathPrefix + ".when",
+	})}
+}
+
 // validateOnField — `on:` literal `keeper` or a sequence of strings (coven-ids).
 func validateOnField(kv *ast.MappingValueNode, pathPrefix string) []diag.Diagnostic {
 	switch v := kv.Value.(type) {
 	case *ast.StringNode:
 		// `on: keeper` — the only allowed string form (orchestration.md §3).
-		if v.Value != "keeper" {
+		if v.Value != KeeperTarget {
 			tok := v.GetToken()
 			return []diag.Diagnostic{diagAt(tok.Position.Line, tok.Position.Column, diag.Diagnostic{
 				Level: diag.LevelError, Phase: diag.PhaseSchemaValidate,
