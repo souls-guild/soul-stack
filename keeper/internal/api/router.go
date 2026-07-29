@@ -820,6 +820,22 @@ func buildRouter(verifier *jwt.Verifier, healthH *health.Handler, opH *handlers.
 			})
 		})
 
+		// /v1/deprecations — fleet-wide survey of module params on their way out
+		// (ADR-0076(v), NIM-268). READ, no audit. Permission incarnation.list —
+		// the same read-tier as the incarnation catalogue, because the answer IS
+		// a projection of the incarnations the caller may see; the per-row
+		// narrowing is the very same resolveListScope, not a second rule
+		// (a duplicated scope rule is how two of them drift into a leak).
+		// RequireAction is the existence-gate; fail-closed in-handler: an empty
+		// scope yields an empty survey, never the whole estate.
+		r.Route("/deprecations", func(r chi.Router) {
+			r.With(
+				apimiddleware.RequireAction(enforcer, "incarnation", "list"),
+			).Group(func(r chi.Router) {
+				registerHumaDeprecationsList(newHumaCadenceAPI(r), incH)
+			})
+		})
+
 		// /v1/souls — onboarding + registry (M2.x): Create + List + issue-token.
 		//
 		// Selector strategy:

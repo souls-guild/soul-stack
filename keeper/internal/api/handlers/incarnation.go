@@ -156,6 +156,10 @@ type IncarnationHandler struct {
 	// motive as refs). nil → /tasks returns the plan without per-host results (unit
 	// without an audit reader).
 	runTasksAudit RunTaskAuditReader
+	// moduleManifests — the plugin-manifest catalog for the deprecation survey
+	// (NIM-228). Optional: nil means non-core modules resolve to nothing and are
+	// reported as unresolved rather than assumed clean.
+	moduleManifests artifact.PluginManifestSource
 
 	// vault — read surface of Vault KV for the secret reveal endpoint (NIM-74).
 	// Injected late-binding via [SetVaultReader] (same motive as refs). nil →
@@ -205,6 +209,19 @@ func NewIncarnationHandler(db IncarnationDB, runner ScenarioStarter, destroyer D
 // upgrade-paths returns 500. No thread safety needed (called before serving).
 func (h *IncarnationHandler) SetServiceRefs(refs ServiceRefsLister) {
 	h.refs = refs
+}
+
+// SetModuleManifests late-binds the plugin-manifest catalog (NIM-228) used by
+// [DeprecationsTyped] to resolve non-core modules. A separate setter rather than
+// a 10th positional constructor arg, for the same reason as [SetServiceRefs]:
+// NewIncarnationHandler is called from 140+ sites, most of them tests with nil
+// deps.
+//
+// nil is legal and MEANS SOMETHING: plugin modules then report as unresolved in
+// the survey rather than being counted clean, which is the honest answer for a
+// keeper with no Sigil service wired.
+func (h *IncarnationHandler) SetModuleManifests(src artifact.PluginManifestSource) {
+	h.moduleManifests = src
 }
 
 // SetRunTasksAuditReader late-binds the read-side audit_log for [RunTasksTyped]

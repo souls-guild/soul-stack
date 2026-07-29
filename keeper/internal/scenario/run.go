@@ -1098,7 +1098,7 @@ func scenarioRelPath(scenarioName string, fromUpgrade bool) string {
 // from a service snapshot. Factored out of the method so the Acolyte path
 // ([RenderForHost]) can reuse it without a Runner. Behavior is identical —
 // pure read+parse, no side effects.
-func parseScenarioFromArtifact(loader *artifact.ServiceLoader, art *artifact.ServiceArtifact, scenarioName string, fromUpgrade bool, modules config.ModuleManifestResolver) (*config.ScenarioManifest, error) {
+func parseScenarioFromArtifact(loader SnapshotReader, art *artifact.ServiceArtifact, scenarioName string, fromUpgrade bool, modules config.ModuleManifestResolver) (*config.ScenarioManifest, error) {
 	rel := scenarioRelPath(scenarioName, fromUpgrade)
 	data, err := loader.ReadFile(art, rel)
 	if err != nil {

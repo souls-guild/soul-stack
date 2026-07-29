@@ -22,7 +22,7 @@ import (
 // (§6, no merge). The display path is the resolved path inside the snapshot:
 // it's printed in diagnostics and serves as the cycle-detection key (two
 // different resolved paths = two different sources).
-func scenarioIncludeResolver(loader *artifact.ServiceLoader, art *artifact.ServiceArtifact, scenarioName string) config.IncludeResolver {
+func scenarioIncludeResolver(loader SnapshotReader, art *artifact.ServiceArtifact, scenarioName string) config.IncludeResolver {
 	localDir := path.Join("scenario", scenarioName)
 	serviceDir := "scenario"
 	return func(name string) ([]byte, string, error) {

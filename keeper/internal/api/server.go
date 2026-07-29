@@ -19,6 +19,7 @@ import (
 	"github.com/souls-guild/soul-stack/keeper/internal/api/health"
 	apimiddleware "github.com/souls-guild/soul-stack/keeper/internal/api/middleware"
 	"github.com/souls-guild/soul-stack/keeper/internal/applybus"
+	"github.com/souls-guild/soul-stack/keeper/internal/artifact"
 	"github.com/souls-guild/soul-stack/keeper/internal/auditpg"
 	"github.com/souls-guild/soul-stack/keeper/internal/augur"
 	"github.com/souls-guild/soul-stack/keeper/internal/console"
@@ -105,6 +106,11 @@ type Deps struct {
 	// passes *serviceregistry.RefsCache over artifact.RefsListerFunc(
 	// artifact.ListRefs).
 	ServiceRefs handlers.ServiceRefsLister
+
+	// ModuleManifests — the allow-listed plugin manifests (NIM-228), used by the
+	// deprecation survey to resolve non-core modules. Optional: nil means the
+	// survey reports plugin modules as unchecked instead of clean.
+	ModuleManifests artifact.PluginManifestSource
 
 	// ServiceScenarios — a TTL cache of the scenario listing from the materialized
 	// snapshot of the Service's git repo, for `GET /v1/services/{name}/scenarios` (UI
@@ -649,6 +655,13 @@ func NewServer(cfg config.KeeperListenSimple, deps Deps, logger *slog.Logger) (*
 	// AuditReader → /tasks returns the plan without per-host results.
 	if deps.AuditReader != nil {
 		incH.SetRunTasksAuditReader(deps.AuditReader)
+	}
+	// Plugin-manifest catalog for GET /v1/deprecations (NIM-268), so the survey
+	// resolves non-core modules on the same terms the static check does
+	// (NIM-228); late-binding. nil → plugin modules are reported as unresolved
+	// gaps rather than counted clean.
+	if deps.ModuleManifests != nil {
+		incH.SetModuleManifests(deps.ModuleManifests)
 	}
 	// Vault KV reader for the secret reveal endpoint (NIM-74); late-binding. nil →
 	// RevealSecretTyped answers 404 (endpoint not configured).

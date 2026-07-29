@@ -4456,19 +4456,24 @@ func (d *daemon) setupAPIServer(ctx context.Context) error {
 	authMethods := api.AuthMethodsDeps{Password: true, LDAP: ldapAuth != nil, OIDC: oidcAuth != nil}
 
 	srv, err := api.NewServer(cfg.Listen.OpenAPI, api.Deps{
-		JWTVerifier:         d.verifier,
-		JWTIssuer:           d.issuer,
-		PGPinger:            poolPinger{d.pool},
-		RedisPinger:         redisPinger,
-		VaultPinger:         d.vc,
-		AuditWriter:         d.auditWriter,
-		RBAC:                d.rbacHolder,
-		ShellGate:           d.shellGate,
-		RBACSvc:             d.rbacSvc,
-		SigilSvc:            d.sigilSvc,
-		SigilKeySvc:         d.sigilKeySvc,
-		ServiceSvc:          d.serviceSvc,
-		ServiceRefs:         d.serviceRefs,
+		JWTVerifier: d.verifier,
+		JWTIssuer:   d.issuer,
+		PGPinger:    poolPinger{d.pool},
+		RedisPinger: redisPinger,
+		VaultPinger: d.vc,
+		AuditWriter: d.auditWriter,
+		RBAC:        d.rbacHolder,
+		ShellGate:   d.shellGate,
+		RBACSvc:     d.rbacSvc,
+		SigilSvc:    d.sigilSvc,
+		SigilKeySvc: d.sigilKeySvc,
+		ServiceSvc:  d.serviceSvc,
+		ServiceRefs: d.serviceRefs,
+		// The same Sigil-backed catalog the render path checks params against
+		// (NIM-228), so GET /v1/deprecations resolves plugin modules identically
+		// - a survey judging against a different catalog than the gate would
+		// report migrations that are not due, or miss ones that are.
+		ModuleManifests:     moduleCatalogPlugins{store: sigil.NewPGStore(d.pool)},
 		ServiceScenarios:    d.serviceScenarios,
 		ServiceStateSchema:  d.serviceStateSchema,
 		ServiceDependencies: d.serviceDependencies,

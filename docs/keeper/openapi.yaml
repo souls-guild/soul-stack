@@ -766,6 +766,103 @@ components:
         - on_beacon
         - updated_at
       type: object
+    DeprecationEntry:
+      additionalProperties: false
+      properties:
+        module:
+          type: string
+        param:
+          type: string
+        removed_in:
+          type: string
+        since:
+          type: string
+        sites:
+          items:
+            $ref: "#/components/schemas/DeprecationSiteEntry"
+          type:
+            - array
+            - "null"
+        use:
+          type: string
+      required:
+        - module
+        - param
+        - sites
+      type: object
+    DeprecationGapEntry:
+      additionalProperties: false
+      properties:
+        detail:
+          type: string
+        incarnations:
+          items:
+            type: string
+          type:
+            - array
+            - "null"
+        reason:
+          type: string
+        scope:
+          enum:
+            - service
+            - module
+          type: string
+        subject:
+          type: string
+      required:
+        - scope
+        - subject
+        - reason
+        - incarnations
+      type: object
+    DeprecationSiteEntry:
+      additionalProperties: false
+      properties:
+        incarnation:
+          type: string
+        scenario:
+          type: string
+        service:
+          type: string
+        service_version:
+          type: string
+        where:
+          type: string
+      required:
+        - incarnation
+        - service
+        - scenario
+      type: object
+    DeprecationsReply:
+      additionalProperties: false
+      properties:
+        gaps:
+          items:
+            $ref: "#/components/schemas/DeprecationGapEntry"
+          type:
+            - array
+            - "null"
+        items:
+          items:
+            $ref: "#/components/schemas/DeprecationEntry"
+          type:
+            - array
+            - "null"
+        scanned_definitions:
+          format: int64
+          type: integer
+        scanned_incarnations:
+          format: int64
+          type: integer
+        truncated:
+          type: boolean
+      required:
+        - items
+        - gaps
+        - scanned_incarnations
+        - scanned_definitions
+      type: object
     DriftHostReport:
       additionalProperties: false
       properties:
@@ -6982,6 +7079,32 @@ paths:
       summary: Decree card
       tags:
         - oracle
+  /v1/deprecations:
+    get:
+      description: "Which incarnations still pass a module param marked `deprecated:` in its manifest, and the release it stops working in (ADR-0076(v)). Sourced from the DEFINITIONS the incarnations are pinned to - NOT from run history, which would miss an incarnation nobody has run lately and still list one fixed yesterday. `items` is ordered by `removed_in`: what breaks first comes first. `gaps` lists what could not be checked (most often a plugin module, whose manifest ships beside its binary rather than with the definition) - an empty `items` with a non-empty `gaps` means \"not checked\", not \"clean\". Visibility scoped by RBAC exactly as the incarnation list (fail-closed: empty scope -> empty survey). Permission incarnation.list. Read-only."
+      operationId: listDeprecations
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DeprecationsReply"
+          description: OK
+        "403":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/HumaProblemError"
+          description: Forbidden
+        "500":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/HumaProblemError"
+          description: Internal Server Error
+      summary: Deprecated params still used across the estate
+      tags:
+        - deprecations
   /v1/errands:
     get:
       description: Registry of Errands with filters and pagination (ADR-033). Permission errand.list. Read-only, no audit.

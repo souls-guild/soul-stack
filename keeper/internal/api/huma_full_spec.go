@@ -153,6 +153,10 @@ func fullSpecGroups() []specGroup {
 			registerHumaVoiceList(api, stub)
 			return nil
 		}},
+		{"/v1/deprecations", func(api huma.API) error {
+			registerHumaDeprecationsList(api, handlers.IncarnationSpecStub())
+			return nil
+		}},
 		{"/v1/runs", func(api huma.API) error {
 			stub := handlers.IncarnationSpecStub()
 			registerHumaRunsList(api, stub)
