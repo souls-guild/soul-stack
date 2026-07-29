@@ -107,10 +107,41 @@ func TestBroadcastTelemetryConfig_SendFailNoPanic(t *testing.T) {
 
 // --- telemetrySource.ResolveForSID (fake DB precedent from events_oracle_test.go) ---
 
+// telemetryFakeDB answers the three reads the resolve makes, keeping MEMBERSHIP
+// and LABELS as separate facts — a fake that served both from one field could
+// not fail the way production did (NIM-248: delivery matched incarnation names
+// against `souls.coven`, which migration 099 had emptied).
 type telemetryFakeDB struct {
+	// soulCoven — tags attached to THIS host (`souls.coven[]`).
 	soulCoven []string
-	soulErr   error   // SelectBySID → e.g. soul.ErrSoulNotFound
-	incRows   [][]any // {name, service, service_version, specBytes}
+	soulErr   error // SelectBySID → e.g. soul.ErrSoulNotFound
+	// memberRows — the incarnations this host is BOUND to, as the
+	// `incarnation_membership` join returns them ({name, service,
+	// service_version, specBytes}, ordered by name).
+	memberRows [][]any
+	// incarnationCoven — extra tags those incarnations carry; the host inherits
+	// them along with each incarnation's name (ADR-080).
+	incarnationCoven []string
+	// covenNamedRows — incarnations whose NAME merely matches one of the host's
+	// tags. Nothing in production may read these: the field exists so that a
+	// revert to the pre-NIM-248 `FROM incarnation WHERE name = ANY(<covens>)`
+	// lookup shows up as a red test instead of shipping as a silent no-op.
+	covenNamedRows [][]any
+	// hitCovenNamed records that the legacy lookup above was issued at all —
+	// asserted false by the resolve tests, so the regression is caught by its
+	// shape and not only by its effect.
+	hitCovenNamed bool
+}
+
+// memberNames — the names of the incarnations the host is bound to, which are
+// inherited labels in their own right.
+func (f *telemetryFakeDB) memberNames() []string {
+	out := make([]string, 0, len(f.memberRows))
+	for _, r := range f.memberRows {
+		name, _ := r[0].(string)
+		out = append(out, name)
+	}
+	return out
 }
 
 func (f *telemetryFakeDB) Exec(context.Context, string, ...any) (pgconn.CommandTag, error) {
@@ -118,7 +149,15 @@ func (f *telemetryFakeDB) Exec(context.Context, string, ...any) (pgconn.CommandT
 }
 
 func (f *telemetryFakeDB) QueryRow(_ context.Context, sql string, _ ...any) pgx.Row {
-	if strings.Contains(sql, "soulprint_facts") {
+	switch {
+	// Must precede any `incarnation_membership` route: the inherited-labels
+	// statement reads that table too, and only the marker tells them apart.
+	case strings.Contains(sql, soul.InheritedLabelsQueryMarker):
+		return oracleValRow{vals: []any{
+			append(f.memberNames(), f.incarnationCoven...),
+			[]byte("[]"),
+		}}
+	case strings.Contains(sql, "soulprint_facts"):
 		// SelectSoulprint: facts NULL → ErrSoulprintNotReceived (osFamily "").
 		return oracleValRow{vals: []any{"host-a.example.com", nil, nil, nil}}
 	}
@@ -133,8 +172,12 @@ func (f *telemetryFakeDB) QueryRow(_ context.Context, sql string, _ ...any) pgx.
 }
 
 func (f *telemetryFakeDB) Query(_ context.Context, sql string, _ ...any) (pgx.Rows, error) {
-	if strings.Contains(sql, "FROM incarnation") {
-		return &oracleStaticRows{rows: f.incRows}, nil
+	switch {
+	case strings.Contains(sql, "FROM incarnation_membership"):
+		return &oracleStaticRows{rows: f.memberRows}, nil
+	case strings.Contains(sql, "FROM incarnation"):
+		f.hitCovenNamed = true
+		return &oracleStaticRows{rows: f.covenNamedRows}, nil
 	}
 	return &oracleEmptyRows{}, nil
 }
@@ -157,9 +200,12 @@ func (f *telemetryFakeLoader) Load(_ context.Context, ref artifact.ServiceRef) (
 	return f.art, f.err
 }
 
-// TestResolveForSID_MergesManifestAndEssence — end-to-end resolve chain: soul
-// covens → incarnation by covens → ServiceRef(git from the registry, ref=ServiceVersion)
+// TestResolveForSID_MergesManifestAndEssence — end-to-end resolve chain:
+// membership → incarnation → ServiceRef(git from the registry, ref=ServiceVersion)
 // → load → manifest `telemetry:` merged with the essence-override from `_default.yaml`.
+//
+// The host carries NO tag of its own: being bound to the incarnation is the
+// whole reason it is owed a config (NIM-248).
 func TestResolveForSID_MergesManifestAndEssence(t *testing.T) {
 	tmp := t.TempDir()
 	essDir := filepath.Join(tmp, "essence")
@@ -181,8 +227,7 @@ func TestResolveForSID_MergesManifestAndEssence(t *testing.T) {
 	loader := &telemetryFakeLoader{art: &artifact.ServiceArtifact{LocalDir: tmp, Manifest: manifest}}
 	resolver := telemetryFakeResolver{ref: artifact.ServiceRef{Name: "web", Git: "file:///repo"}, ok: true}
 	db := &telemetryFakeDB{
-		soulCoven: []string{"web-app"},
-		incRows:   [][]any{{"web-app", "web", "v2.0.0", []byte(`{}`)}},
+		memberRows: [][]any{{"web-app", "web", "v2.0.0", []byte(`{}`)}},
 	}
 	src := NewTelemetrySource(db, resolver, loader, essence.NewResolver(discardLogger(t)), discardLogger(t))
 
@@ -203,6 +248,9 @@ func TestResolveForSID_MergesManifestAndEssence(t *testing.T) {
 	if loader.gotRef.Ref != "v2.0.0" || loader.gotRef.Git != "file:///repo" || loader.gotRef.Name != "web" {
 		t.Errorf("loader ref = %+v, want {web, file:///repo, v2.0.0}", loader.gotRef)
 	}
+	if db.hitCovenNamed {
+		t.Error("delivery looked incarnations up by coven name — the relation is the only source of membership (NIM-248)")
+	}
 }
 
 // TestResolveForSID_SoulNotFound — host not in the registry → (nil,nil) (broadcast skipped).
@@ -215,9 +263,10 @@ func TestResolveForSID_SoulNotFound(t *testing.T) {
 	}
 }
 
-// TestResolveForSID_NoIncarnation — covens exist, but there is no incarnation → (nil,nil).
-func TestResolveForSID_NoIncarnation(t *testing.T) {
-	db := &telemetryFakeDB{soulCoven: []string{"web-app"}, incRows: nil}
+// TestResolveForSID_NoMembershipNoConfig — a host bound to nothing gets no
+// config, and the Soul keeps its soul-local cadence.
+func TestResolveForSID_NoMembershipNoConfig(t *testing.T) {
+	db := &telemetryFakeDB{memberRows: nil}
 	src := NewTelemetrySource(db, telemetryFakeResolver{}, &telemetryFakeLoader{}, essence.NewResolver(discardLogger(t)), discardLogger(t))
 	cfg, err := src.ResolveForSID(context.Background(), "host-a.example.com")
 	if err != nil || cfg != nil {
@@ -225,19 +274,89 @@ func TestResolveForSID_NoIncarnation(t *testing.T) {
 	}
 }
 
-// TestIncarnationForCovens — v1 policy for selecting an incarnation by covens: ≥2 matches →
-// the first, 1 match → that one, 0 → (nil,nil). Determinism of "the first" in prod is set by
-// ORDER BY name in selectIncarnationByCovensSQL; the fake returns rows in insertion
-// order, so multi-match test data is already sorted by name (as live-PG would
-// return it) — the fake itself does not sort.
-func TestIncarnationForCovens(t *testing.T) {
+// TestResolveForSID_CovenTagIsNotMembership — a host merely TAGGED with a string
+// that spells an incarnation's name is not a member of it and is owed nothing,
+// even though an incarnation by that name exists and would have been served by
+// the pre-NIM-248 lookup (the fake answers that lookup from covenNamedRows, so a
+// revert turns this red rather than shipping a host someone else's config).
+func TestResolveForSID_CovenTagIsNotMembership(t *testing.T) {
+	loader := &telemetryFakeLoader{art: &artifact.ServiceArtifact{
+		LocalDir: t.TempDir(),
+		Manifest: &config.ServiceManifest{Name: "web", Telemetry: &config.TelemetryConfig{Interval: telStrPtr("45s")}},
+	}}
+	db := &telemetryFakeDB{
+		soulCoven:      []string{"web-app"},
+		memberRows:     nil,
+		covenNamedRows: [][]any{{"web-app", "web", "v2.0.0", []byte(`{}`)}},
+	}
+	src := NewTelemetrySource(db, telemetryFakeResolver{ref: artifact.ServiceRef{Name: "web", Git: "file:///repo"}, ok: true},
+		loader, essence.NewResolver(discardLogger(t)), discardLogger(t))
+
+	cfg, err := src.ResolveForSID(context.Background(), "host-a.example.com")
+	if err != nil {
+		t.Fatalf("ResolveForSID: %v", err)
+	}
+	if cfg != nil {
+		t.Fatalf("cfg = %+v, want nil (a coven tag is not a membership)", cfg)
+	}
+	if db.hitCovenNamed {
+		t.Error("delivery looked incarnations up by coven name — the relation is the only source of membership (NIM-248)")
+	}
+}
+
+// TestResolveForSID_InheritsIncarnationCovenIntoEssence — the other half of the
+// split: membership decides WHICH service config the host is owed, effective
+// labels decide which coven overlays of that config apply. A tag put on the
+// incarnation reaches its members' essence (ADR-080) without any tag being
+// written onto the host.
+func TestResolveForSID_InheritsIncarnationCovenIntoEssence(t *testing.T) {
+	tmp := t.TempDir()
+	covenDir := filepath.Join(tmp, "essence", "coven")
+	if err := os.MkdirAll(covenDir, 0o755); err != nil {
+		t.Fatalf("mkdir essence/coven: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(covenDir, "cache.yaml"), []byte("telemetry_interval: 15s\n"), 0o644); err != nil {
+		t.Fatalf("write coven/cache.yaml: %v", err)
+	}
+
+	manifest := &config.ServiceManifest{
+		Name:      "web",
+		Telemetry: &config.TelemetryConfig{Interval: telStrPtr("45s"), Collectors: []string{"cpu"}},
+	}
+	loader := &telemetryFakeLoader{art: &artifact.ServiceArtifact{LocalDir: tmp, Manifest: manifest}}
+	db := &telemetryFakeDB{
+		memberRows:       [][]any{{"web-app", "web", "v2.0.0", []byte(`{}`)}},
+		incarnationCoven: []string{"cache"},
+	}
+	src := NewTelemetrySource(db, telemetryFakeResolver{ref: artifact.ServiceRef{Name: "web", Git: "file:///repo"}, ok: true},
+		loader, essence.NewResolver(discardLogger(t)), discardLogger(t))
+
+	cfg, err := src.ResolveForSID(context.Background(), "host-a.example.com")
+	if err != nil {
+		t.Fatalf("ResolveForSID: %v", err)
+	}
+	if cfg == nil {
+		t.Fatal("cfg == nil, want an effective config")
+	}
+	if cfg.GetIntervalSec() != 15 {
+		t.Errorf("interval_sec = %d, want 15 (coven overlay inherited from the incarnation)", cfg.GetIntervalSec())
+	}
+}
+
+// TestIncarnationForSID — v1 policy for picking one incarnation out of a host's
+// memberships: ≥2 → the first by name, 1 → that one, 0 → (nil,nil). Determinism
+// of "the first" in prod comes from ORDER BY i.name in
+// selectIncarnationsForSIDSQL; the fake returns rows in insertion order, so the
+// multi-membership case is already sorted by name (as live PG would return it) —
+// the fake itself does not sort.
+func TestIncarnationForSID(t *testing.T) {
 	cases := []struct {
 		name     string
 		rows     [][]any
 		wantName string // "" → expect nil
 	}{
 		{
-			name: "≥2 matches → the first by name",
+			name: "≥2 memberships → the first by name",
 			rows: [][]any{
 				{"alpha", "web", "v1.0.0", []byte(`{}`)},
 				{"beta", "db", "v2.0.0", []byte(`{}`)},
@@ -245,23 +364,23 @@ func TestIncarnationForCovens(t *testing.T) {
 			wantName: "alpha",
 		},
 		{
-			name:     "exactly 1 match → it",
+			name:     "exactly 1 membership → it",
 			rows:     [][]any{{"solo", "web", "v1.0.0", []byte(`{}`)}},
 			wantName: "solo",
 		},
 		{
-			name:     "0 matches → nil",
+			name:     "no membership → nil",
 			rows:     nil,
 			wantName: "",
 		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			db := &telemetryFakeDB{soulCoven: []string{"web-app"}, incRows: tc.rows}
+			db := &telemetryFakeDB{memberRows: tc.rows}
 			s := &telemetrySource{db: db, logger: discardLogger(t)}
-			inc, err := s.incarnationForCovens(context.Background(), []string{"web-app"})
+			inc, err := s.incarnationForSID(context.Background(), "host-a.example.com")
 			if err != nil {
-				t.Fatalf("incarnationForCovens: %v", err)
+				t.Fatalf("incarnationForSID: %v", err)
 			}
 			if tc.wantName == "" {
 				if inc != nil {

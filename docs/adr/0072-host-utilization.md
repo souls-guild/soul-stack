@@ -84,4 +84,14 @@
     `Utilization` tab + Overview priority strip + incarnation Net column + rollup strip; naming-rules
     lines for the new fields.
 
+- **Amendment 2026-07-28 (NIM-248) — the config a host is owed follows MEMBERSHIP; its coven overlays follow the label union.** Delivery (`grpc.telemetrySource.ResolveForSID`) resolves the host's incarnation through **`incarnation_membership`** and the coven layers of its essence through the host's **effective** labels ([ADR-080](0080-label-inheritance-union.md)). Two questions, two sources, on purpose.
+
+  The delivery half used to ask both at once, reading `FROM incarnation WHERE name = ANY(<the host's souls.coven>)` — correct while [NIM-124](0008-coven-stable-tags.md) had not yet run, because the incarnation's name was physically copied into that column. Step (c) of [migration 099](../../keeper/migrations/099_create_incarnation_membership.up.sql) stripped the names out, so the predicate matched nothing and every host fell through the legal "no incarnation → Soul stays soul-local" branch. **The effective telemetry config reached no host of any incarnation**, and nothing said so: that branch returns `(nil, nil)` and is not an error.
+
+  What hid it was an asymmetry. The reading half (`api/handlers/telemetry.go`, the per-soul and per-incarnation endpoints of §(h)) WAS converted by NIM-124 and resolves members through the relation — so an operator opening an incarnation saw a normal aggregate over its member hosts while none of those hosts had ever been handed a config. §(h) above still describes that aggregate's scope as `coven && ARRAY[name]`; read it as the membership join.
+
+  **Membership must not be answered from the union**, here as anywhere: `incName ∈ effectiveCovens` is also true for a host merely tagged with a string spelling the incarnation's name, and serving that host the incarnation's service config is not what the operator bound. The overlay half is the opposite case and deliberately so — a tag placed on the incarnation is *meant* to reach its members' essence.
+
+  **M:N policy.** A host may legitimately belong to several incarnations while one stream carries one cadence, so the first membership by name wins. The choice is deterministic and stable across reconnects, but arbitrary among equals — it is now logged at WARN with the full membership list rather than at DEBUG. Making the selection explicit is deferred to NIM-279.
+
 - **Amends / Related.** **Amends [ADR-024](0024-observability.md)** — adds a lightweight utilization layer alongside metrics (Prometheus pull, §a) / traces (OTel bridge) / logs ([ADR-067](0067-vector-log-shipping.md), push). Related (NOT amend): [ADR-018](0018-soulprint-typed.md) (static grains — a neighboring layer, Host-Utilization neither complements nor replaces them); [ADR-012](0012-keeper-soul-grpc.md) (only-add `FromSoul` #10, SID authenticity); [ADR-006](0006-cache-redis.md) (Redis storage + lease liveness authority).

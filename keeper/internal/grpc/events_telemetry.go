@@ -51,41 +51,62 @@ func NewTelemetrySource(db soul.ExecQueryRower, resolver incarnation.ServiceReso
 	return &telemetrySource{db: db, resolver: resolver, loader: loader, essence: ess, logger: logger}
 }
 
-// selectIncarnationByCovensSQL - incarnations whose name (root Coven label,
-// ADR-008) is present in the host's covens. ORDER BY name - determinism of the v1
-// "first by name" policy.
-const selectIncarnationByCovensSQL = `
-SELECT name, service, service_version, spec
-FROM incarnation
-WHERE name = ANY($1)
-ORDER BY name
+// selectIncarnationsForSIDSQL - the incarnations host $1 is BOUND to
+// (`incarnation_membership`, migration 099). ORDER BY name - determinism of the
+// v1 "first by name" policy below.
+//
+// ★ This used to read `FROM incarnation WHERE name = ANY(<host covens>)`, the
+// derived fact NIM-124 retired: step (c) of migration 099 stripped incarnation
+// names out of `souls.coven`, so the predicate stopped matching anything and
+// every host fell through to the legal "no incarnation" branch. The effective
+// telemetry config (ADR-072) then reached nobody, without one error in the logs
+// (NIM-248). Delivery reads the relation now, the same way the reading half
+// (`api/handlers/telemetry.go`) has since NIM-124.
+//
+// Membership must NOT be answered from the label union of ADR-080: a host
+// tagged with a string that happens to spell an incarnation's name would start
+// receiving that incarnation's service config, which is not what the operator
+// bound (ADR-030 amendment 2026-07-28).
+const selectIncarnationsForSIDSQL = `
+SELECT i.name, i.service, i.service_version, i.spec
+FROM incarnation_membership m
+JOIN incarnation i ON i.name = m.incarnation_name
+WHERE m.sid = $1
+ORDER BY i.name
 `
 
 // ResolveForSID resolves the host's effective telemetry config (ADR-072, NIM-87):
 //
-//	souls.SelectBySID -> covens/soulprint -> incarnation by covens (first by name)
+//	soul.EffectiveCovens -> incarnation by MEMBERSHIP (first by name)
 //	  -> serviceRegistry.Resolve(inc.Service) (ref = inc.ServiceVersion)
 //	  -> loader.Load -> art.Manifest.Telemetry + essence.Resolve(override)
 //	  -> ResolveEffectiveTelemetry(merge+clamp).
 //
-// (nil, nil) - "no config": host not in the registry / no covens / no incarnation.
+// The two label questions are answered from different places on purpose:
+// "which incarnation's service config is this host owed" is membership
+// ([telemetrySource.incarnationForSID], the relation), while "which coven
+// overlays of that service's essence apply to it" is the effective label set
+// ([soul.EffectiveCovens], the ADR-080 union) - so a tag put on the incarnation
+// reaches its members' essence, without a tag ever conjuring a membership.
+//
+// (nil, nil) - "no config": host not in the registry / in no incarnation.
 // broadcast is skipped, Soul stays on the soul-local cadence. Any resolve failure -
 // (nil, err): broadcast swallows it as a warning, the stream stays alive.
 func (s *telemetrySource) ResolveForSID(ctx context.Context, sid string) (*keeperv1.TelemetryConfig, error) {
-	su, err := soul.SelectBySID(ctx, s.db, sid)
+	covens, err := soul.EffectiveCovens(ctx, s.db, sid)
 	if err != nil {
 		if errors.Is(err, soul.ErrSoulNotFound) {
 			return nil, nil // host not yet in the registry - no config
 		}
-		return nil, fmt.Errorf("telemetry: soul select %q: %w", sid, err)
+		return nil, fmt.Errorf("telemetry: effective covens %q: %w", sid, err)
 	}
 
-	inc, err := s.incarnationForCovens(ctx, su.Coven)
+	inc, err := s.incarnationForSID(ctx, sid)
 	if err != nil {
 		return nil, err
 	}
 	if inc == nil {
-		return nil, nil // no incarnation by covens - Soul stays soul-local
+		return nil, nil // host in no incarnation - Soul stays soul-local
 	}
 
 	ref, ok := s.resolver.Resolve(inc.Service)
@@ -106,7 +127,7 @@ func (s *telemetrySource) ResolveForSID(ctx context.Context, sid string) (*keepe
 	essenceMap, err := s.essence.Resolve(essence.ResolveInput{
 		ServiceDir:      art.LocalDir,
 		OSFamily:        s.osFamilyForSID(ctx, sid),
-		Covens:          su.Coven,
+		Covens:          covens,
 		IncarnationSpec: specEssence(inc),
 	})
 	if err != nil {
@@ -128,16 +149,25 @@ func (s *telemetrySource) ResolveForSID(ctx context.Context, sid string) (*keepe
 	return essence.ResolveEffectiveTelemetry(art.Manifest.Telemetry, essenceMap), nil
 }
 
-// incarnationForCovens returns the first-by-name incarnation whose name is in the
-// host's covens (v1 policy). Empty -> (nil, nil). >1 matches -> debug log
-// (a signal to an operator: host member of several incarnations).
-func (s *telemetrySource) incarnationForCovens(ctx context.Context, covens []string) (*incarnation.Incarnation, error) {
-	if len(covens) == 0 {
+// incarnationForSID returns the first-by-name incarnation the host is a member
+// of (v1 policy). No membership -> (nil, nil).
+//
+// A host may legitimately belong to several incarnations - membership is M:N
+// since NIM-124 - and a single stream can carry only one telemetry cadence, so
+// one of them has to win. "First by name" is kept because it is stable across
+// reconnects and across Keeper instances; what changes here is that the operator
+// is told. The ambiguity is logged at WARN, not DEBUG: the answer is arbitrary
+// among equals, and a host quietly running a co-member's cadence is exactly the
+// kind of thing nobody thinks to look for at debug level. Making the choice
+// explicit (an incarnation flag, or per-incarnation cadences) is a design
+// question rather than a bug fix - NIM-279.
+func (s *telemetrySource) incarnationForSID(ctx context.Context, sid string) (*incarnation.Incarnation, error) {
+	if sid == "" {
 		return nil, nil
 	}
-	rows, err := s.db.Query(ctx, selectIncarnationByCovensSQL, covens)
+	rows, err := s.db.Query(ctx, selectIncarnationsForSIDSQL, sid)
 	if err != nil {
-		return nil, fmt.Errorf("telemetry: incarnation-by-covens query: %w", err)
+		return nil, fmt.Errorf("telemetry: incarnations-for-sid query: %w", err)
 	}
 	defer rows.Close()
 
@@ -159,7 +189,7 @@ func (s *telemetrySource) incarnationForCovens(ctx context.Context, covens []str
 		matches = append(matches, &incCopy)
 	}
 	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("telemetry: incarnation-by-covens iter: %w", err)
+		return nil, fmt.Errorf("telemetry: incarnations-for-sid iter: %w", err)
 	}
 
 	if len(matches) == 0 {
@@ -170,7 +200,9 @@ func (s *telemetrySource) incarnationForCovens(ctx context.Context, covens []str
 		for i, m := range matches {
 			names[i] = m.Name
 		}
-		s.logger.Debug("telemetry: SID matches several incarnations - taking the first by name (v1)",
+		s.logger.Warn("telemetry: host is a member of several incarnations - serving the first by name (v1)",
+			slog.String("sid", sid),
+			slog.String("chosen", matches[0].Name),
 			slog.Any("incarnations", names))
 	}
 	return matches[0], nil

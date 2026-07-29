@@ -36,7 +36,9 @@ type ResolveInput struct {
 	// OSFamily — host's `soulprint.self.os.family` (e.g. "debian"). Empty
 	// string → the os layer is skipped.
 	OSFamily string
-	// Covens — host's Coven labels (souls.coven[]). Layers apply in
+	// Covens — the host's EFFECTIVE Coven labels: its own `souls.coven[]`
+	// unioned with the ones inherited from the incarnations it belongs to
+	// ([soul.EffectiveCovens] / the topology roster, ADR-080). Layers apply in
 	// name-sorted order for determinism.
 	Covens []string
 	// IncarnationSpec — `incarnation.spec.essence`, the operator override

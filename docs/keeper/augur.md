@@ -94,7 +94,14 @@ The Augur registry lives in Postgres, managed via OpenAPI / MCP - similar to [Pr
 | `token_ttl` | `interval` / `TEXT` (duration) `NULL` | **Only for `vault`-Omen with `delegate=true`**: TTL of the mined scoped token. `NULL` for prom/elk. |
 | `token_num_uses` | `INT NULL` | **Only for `vault`-Omen with `delegate=true`**: minable token usage limit. `NULL` for prom/elk. |
 
-**Subject is strictly XOR.** Exactly one of `coven` / `sid` is non-empty (CHECK-constraint). `coven`-Rite applies to all Souls with this tag; `sid`-Rite - to one host.
+**Subject is strictly XOR.** Exactly one of `coven` / `sid` is non-empty (CHECK-constraint). `coven`-Rite applies to all Souls carrying this label; `sid`-Rite - to one host.
+
+**A `coven`-Rite matches EFFECTIVE labels.** A host carries its own `souls.coven[]` plus everything it inherits from the incarnations it belongs to - each incarnation's `covens[]` and its **name** ([ADR-080](../adr/0080-label-inheritance-union.md)). Two consequences when writing a Rite:
+
+- `coven: <incarnation-name>` grants that incarnation's members, and keeps covering hosts bound to it later. Nothing is stamped on any host.
+- a tag on the incarnation (`incarnation.covens[]`) grants its members too, so `coven: cache` reaches the hosts of every incarnation tagged `cache`.
+
+A Rite has no incarnation dimension of its own, so it cannot tell a member from a host merely **tagged** with that incarnation's name - both carry the label. Where that distinction matters, put a dedicated tag on the incarnation and scope the Rite to it (see NIM-280).
 
 **`allow` to `source_type`:**
 
@@ -156,7 +163,7 @@ Forward-compat: new `result` options are added only-add, without reuse field num
 The decision to satisfy `AugurRequest` is made by Keeper. Algorithm:
 
 1. **Omen exists.** `omens` contains an entry with `name == omen_name`. Otherwise → `denied`.
-2. **SID → covens.** SID is taken from mTLS peer cert; covens are resolved from registry (`souls.coven[]`, [storage.md](storage.md)).
+2. **SID → covens.** SID is taken from mTLS peer cert; covens are the host's **effective** labels - its own `souls.coven[]` ([storage.md](storage.md)) unioned with those inherited from its incarnations, the incarnation name included ([ADR-080](../adr/0080-label-inheritance-union.md)).
 3. **Rite found.** There is a Rite with `omen == omen_name` and a subject matching the request: either `rites.sid == SID` or `rites.coven ∈ covens(SID)`. Otherwise → `denied`.
 4. **Query in allow-list.** `query` ∈ `Rite.allow` (in the form `source_type`: path in `paths`, query in `queries`, index in `indices`). Otherwise → `denied`.
 5. **Branching.** From `Rite.delegate` and `Omen.source_type`:

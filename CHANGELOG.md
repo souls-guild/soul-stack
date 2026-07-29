@@ -207,6 +207,26 @@ order to act in.
   host that already matched on its own tag keeps the exact route it had and
   inheritance can only fill in where the lookup used to fall through.
 
+- **Two more consumers of that same axis were on the raw column, and one of them
+  was fully dead.** Telemetry **delivery** resolved a host's incarnation with
+  `WHERE name = ANY(<the host's covens>)`, which the same migration emptied — so
+  the effective telemetry config ([ADR-072](docs/adr/0072-host-utilization.md))
+  reached **no host of any incarnation**, everything ran on soul-local defaults,
+  and nothing said so. Expect member hosts to pick up their service's declared
+  interval and collector set on their next connect: for a fleet that has been
+  running since NIM-124 this is a **change in collection cadence**, in the
+  direction the service manifest and `spec.essence` always asked for. If a host
+  belongs to several incarnations only one cadence can win — the first by name,
+  now logged at WARN with the full membership list so the choice is visible.
+
+  An Augur `coven`-Rite naming an incarnation is the second, and it failed
+  loudly rather than silently: a subject matching no Rite is default-denied, so
+  those hosts were **refused mid-apply** rather than quietly doing nothing. It
+  authorizes members again. A Rite still has no incarnation dimension, so it
+  cannot distinguish a member from a host merely *tagged* with that
+  incarnation's name — put a dedicated tag on the incarnation where that
+  distinction matters.
+
 ### Added
 
 - **The interactive console — a real terminal on a host, from the browser**
@@ -767,6 +787,30 @@ order to act in.
   tiebreak is own-then-inherited, each group alphabetical — the only order that
   is purely additive, since one flat alphabetical sort would re-route live hosts
   onto a different bastion the day their incarnation gained a label.
+
+- **The effective telemetry config had been reaching no host at all.** Delivery
+  asked which incarnation a host belonged to with `FROM incarnation WHERE name =
+  ANY(<the host's covens>)` — the derived fact NIM-124 retired — so after that
+  migration the predicate matched nothing, every host took the legal "no
+  incarnation, stay soul-local" branch, and the branch is not an error: it
+  returns no config and logs nothing. What hid it for this long is an asymmetry.
+  The **reading** half of telemetry had been converted at the time and kept
+  showing operators a healthy per-incarnation aggregate over member hosts, none
+  of which had ever been handed a config. Delivery now reads the membership
+  relation, while the coven overlays of that config's essence read the inherited
+  union — membership decides *which* config a host is owed, labels decide *how
+  much* of it applies, and a tag spelled like an incarnation's name grants
+  neither.
+
+- **An Augur `coven`-Rite naming an incarnation stopped authorizing its own
+  members**, for the same root cause as the Vigil and push cases, but this one
+  denied instead of going quiet: a subject that matches no Rite is default-denied,
+  so affected hosts failed the Augur step during a run. Rite subjects resolve over
+  the same inherited-label union as every other reader. No membership gate is
+  added here and none is implied: a Rite's subject is `coven` XOR `sid` with no
+  incarnation dimension to gate on, so an incarnation-scoped Rite cannot tell a
+  member from a host carrying a same-named tag — consistent with labels deciding
+  visibility, but worth knowing when writing one.
 
 - **A slow operator's console socket stopped writing and went quiet.** Two
   defects stacked. The write budget was a second, stricter liveness rule than

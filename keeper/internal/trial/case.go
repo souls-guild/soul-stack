@@ -88,10 +88,12 @@ type Fixtures struct {
 // (`soulprint.hosts[]`): sid/covens/role/soulprint/choirs.
 //
 // SID is required; Covens must carry incarnation.name label (scenario name
-// of the case) — mirror of prod-roster (`rosterSQL WHERE $1 = ANY(coven)`),
-// otherwise host does not get into `on:`/`where:` target. Role/Soulprint/Choirs
-// are optional. Order of roster in `soulprint.hosts` is deterministic via
-// sorting by SID (harness, not YAML order).
+// of the case), otherwise host does not get into `on:`/`where:` target. In prod
+// that label is not stored on the host: the roster joins `incarnation_membership`
+// (NIM-124) and hands each member its incarnation's name as an INHERITED coven
+// (ADR-080), which is exactly the effective set a fixture spells out by hand.
+// Role/Soulprint/Choirs are optional. Order of roster in `soulprint.hosts` is
+// deterministic via sorting by SID (harness, not YAML order).
 type HostFixture struct {
 	SID       string         `yaml:"sid"`
 	Covens    []string       `yaml:"covens,omitempty"`

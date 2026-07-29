@@ -48,6 +48,12 @@ func (r *pgPoolRouterReader) SelectCovens(ctx context.Context, sid string) (own,
 	// The second round trip is the shared inherited-labels resolver, not a
 	// third mechanism: the RBAC predicate, the topology roster and the reactor
 	// subject all read the same one, so they cannot disagree about one host.
+	//
+	// This is also why the router does NOT call [soul.EffectiveCovens], which
+	// every other consumer of the axis uses (NIM-249): that collapses the two
+	// halves into one set, and the Level 2 tiebreak below needs them apart to
+	// try own tags before inherited ones. Consolidating the two calls "for
+	// consistency" would silently change which provider a routed host lands on.
 	labels, err := soul.LoadInheritedLabels(ctx, r.db, sid)
 	if err != nil {
 		return nil, nil, err

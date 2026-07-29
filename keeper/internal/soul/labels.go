@@ -101,6 +101,42 @@ func LoadInheritedLabels(ctx context.Context, db ExecQueryRower, sid string) (In
 	return labels, nil
 }
 
+// EffectiveCovens returns the coven labels host `sid` effectively carries: its
+// own `souls.coven[]` unioned with the ones it inherits from every incarnation it
+// belongs to — each incarnation's `covens[]` plus its name (ADR-080).
+//
+// This is the one resolution every reader of the coven axis is meant to call.
+// Until NIM-124 an incarnation's name was physically copied into `souls.coven[]`,
+// so reading the bare column happened to answer the same question; NIM-124
+// removed the copy and ADR-080 replaced it with this read-time union. A consumer
+// left on the bare column keeps compiling and keeps returning rows — it just
+// matches a strictly smaller set of hosts, which is why the same defect surfaced
+// three times over (Oracle NIM-224, telemetry NIM-248, Augur NIM-249) before
+// anyone noticed. Prefer this over `SelectBySID(...).Coven` whenever the covens
+// are about to be matched against something an operator wrote.
+//
+// [ErrSoulNotFound] passes through unwrapped: what an unregistered host means is
+// the caller's policy — "no config" for telemetry, an empty match set for the
+// Oracle, an outright denial for Augur — and flattening it to an empty result
+// here would quietly make that choice for them.
+//
+// ★ Effective covens answer "which rules may see this host". They do NOT answer
+// "which incarnation does it belong to": the union deliberately admits a
+// host-attached tag spelled exactly like an incarnation's name. Membership is
+// `incarnation_membership` and nothing else — see [incarnation.IsMember] and the
+// ADR-030 amendment of 2026-07-28.
+func EffectiveCovens(ctx context.Context, db ExecQueryRower, sid string) ([]string, error) {
+	s, err := SelectBySID(ctx, db, sid)
+	if err != nil {
+		return nil, err
+	}
+	inherited, err := LoadInheritedLabels(ctx, db, sid)
+	if err != nil {
+		return nil, err
+	}
+	return UnionCovens(s.Coven, inherited.Covens), nil
+}
+
 // UnionCovens merges two coven sets preserving first-seen order (own tags first,
 // then inherited) and dropping duplicates. Order is preserved rather than sorted:
 // the operator's tag order is theirs, and every consumer treats coven as a set.

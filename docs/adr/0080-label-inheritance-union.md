@@ -95,6 +95,16 @@
        incarnation's members. This is the reading that used to come free from the
        injected name and was lost with it; both halves of the chain read it, since
        a Vigil that never ships emits no Portent for the Decree to match.
+     - **Augur subject binding** ([ADR-025](0025-augur.md), added by NIM-249) —
+       the `coven` half of a Rite's subject, on the same grounds: ADR-025 writes a
+       Rite's subject the way ADR-030 writes a Decree's. This one failed loudly
+       (a subject matching no Rite is default-denied, so hosts were refused
+       mid-apply) where the reactor failed silently.
+     - **Telemetry essence overlays** ([ADR-072](0072-host-utilization.md), added
+       by NIM-248) — the coven layers of the effective telemetry config resolve
+       over the union, so a tag put on the incarnation reaches its members'
+       essence. Which incarnation's config a host is owed in the first place is a
+       membership question and is answered from the relation (see below).
      - **Push provider routing** ([ADR-032](0032-push-orchestrator.md) Level 2,
        added by NIM-251) — `push.coven_default_providers` is matched against the
        union, so labelling an incarnation puts all of its hosts behind one
@@ -106,16 +116,30 @@
 
      Keeping these in step is the point: a union applied to some readers and not
      others is a new class of bug — one that shows up as a rule matching nothing,
-     with no error anywhere.
+     with no error anywhere. It has now happened four times over the same axis
+     (NIM-224, NIM-248, NIM-249, NIM-251), which is why the union is no longer
+     open-coded per consumer: `soul.EffectiveCovens(ctx, db, sid)` is the entry
+     point, and a consumer reading `SelectBySID(...).Coven` in order to match it
+     against something an operator wrote is a bug by construction. Routing is
+     the one deliberate exception and must stay one: it needs the two halves
+     kept apart to order its lookup, so it takes them from the same
+     `LoadInheritedLabels` without collapsing them. Collapsing it "for
+     consistency" would destroy the own-before-inherited tiebreak.
 
      **Membership is not a label question, and must never be answered from the
      union.** `incName ∈ effectiveCovens` holds both for a member and for a host
      merely carrying a host-attached tag spelled like the incarnation's name, so
      any gate deciding *belonging* — the Oracle's cross-incarnation guard, the
-     Choir voice invariant, the roster — reads `incarnation_membership` directly.
-     The union widens what a rule may **see**; only the relation says where a host
-     **belongs**. Conflating them turns this ADR's widening into an escalation
-     path.
+     Choir voice invariant, the roster, telemetry delivery — reads
+     `incarnation_membership` directly. The union widens what a rule may **see**;
+     only the relation says where a host **belongs**. Conflating them turns this
+     ADR's widening into an escalation path.
+
+     The two questions can meet inside one resolve without contradiction, and
+     telemetry is the worked example: membership picks the incarnation whose
+     service config the host is owed, then the union decides which coven overlays
+     of that config apply to it. Read the relation for *which*, the union for
+     *how much*.
 
   5. **The per-soul write path is first-class again, and gated like Coven.**
      `POST /v1/souls/traits` (permission `soul.traits-assign`, MCP
@@ -200,5 +224,9 @@
   predicate resolve over inherited labels as well as own ones),
   [ADR-030](0030-vigil-oracle.md) (the `coven` half of a Vigil/Decree subject
   resolves over the union; the membership-check keeps reading the relation —
-  NIM-224), [ADR-032](0032-push-orchestrator.md) (Level 2 of provider routing
+  NIM-224), [ADR-025](0025-augur.md) (the `coven` half of a Rite's subject
+  resolves over the union — NIM-249), [ADR-072](0072-host-utilization.md)
+  (telemetry delivery resolves the host's incarnation through
+  `incarnation_membership` and its essence coven overlays through the union —
+  NIM-248), [ADR-032](0032-push-orchestrator.md) (Level 2 of provider routing
   matches the union, with an own-before-inherited lookup order — NIM-251).

@@ -412,8 +412,10 @@ func incarnationName(scenarioName string, f Fixtures) string {
 // order by SID (soulprint.hosts projection of render engine goes in order of
 // in.Hosts, does not sort itself — we ensure determinism here). Mirror
 // of run topology: covens/role/choirs/soulprint taken from host entry as-is;
-// correctness of incarnation.name tag in covens — on case author
-// (rosterSQL `WHERE $1 = ANY(coven)`: without it host drops from target).
+// correctness of incarnation.name tag in covens — on case author (without it
+// the host drops from the target). The fixture states the EFFECTIVE label set
+// directly: prod derives the same name from `incarnation_membership` by
+// inheritance (NIM-124, ADR-080) rather than reading it off `souls.coven`.
 //
 // Single-host (fixtures.soulprint, multi not set): previous behavior
 // BIT-FOR-BIT — one synthetic host trial-host with root incarnation tag

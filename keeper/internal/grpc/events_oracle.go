@@ -258,23 +258,22 @@ func (h *eventStreamHandler) handlePortentEvent(ctx context.Context, sid, sessio
 // puts the reactor back in step with RBAC visibility and targeting, which
 // resolve the same labels the same way.
 //
+// The union itself is [soul.EffectiveCovens], shared with the other readers of
+// the axis; what stays here is the Oracle's policy for an absent host.
+//
 // ErrSoulNotFound → empty covens (the host isn't registered yet; a sid-rule can
 // still match by SID, a coven-rule cannot). Inheritance needs no separate
 // absence case: `incarnation_membership` carries an FK on `souls`, so an
 // unregistered host has no memberships to inherit from.
 func subjectCovens(ctx context.Context, db oracleDB, sid string) ([]string, error) {
-	s, err := soul.SelectBySID(ctx, db, sid)
+	covens, err := soul.EffectiveCovens(ctx, db, sid)
 	if err != nil {
 		if errors.Is(err, soul.ErrSoulNotFound) {
 			return nil, nil
 		}
 		return nil, err
 	}
-	inherited, err := soul.LoadInheritedLabels(ctx, db, sid)
-	if err != nil {
-		return nil, err
-	}
-	return soul.UnionCovens(s.Coven, inherited.Covens), nil
+	return covens, nil
 }
 
 // evaluateDecree applies one Decree to a Portent: subject match → where-CEL →
