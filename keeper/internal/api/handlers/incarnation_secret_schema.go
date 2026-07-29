@@ -155,7 +155,7 @@ func collectCreateInputSecrets(loader ServiceSnapshotLoader, art *artifact.Servi
 	if err != nil || len(data) == 0 {
 		return
 	}
-	scn, _, sdiags, perr := artifact.LoadScenarioManifestResolved(art, "scenario/create/main.yml", data)
+	scn, _, sdiags, perr := artifact.LoadScenarioManifestResolved(art, "scenario/create/main.yml", data, nil)
 	if perr != nil || scn == nil {
 		return
 	}

@@ -4,13 +4,20 @@ package validate
 // destiny in examples/ passes to a plugin module must be declared in that
 // plugin's manifest.
 //
-// Keeper's static check (shared/config.validateModuleParams) covers namespace
-// `core` only — a plugin manifest normally lives on disk next to its binary and
-// is not resolvable while linting. In this repo both halves ARE checked in, so
-// the audit can run, and it has to: since NIM-204 the runtime gate is enforced
-// for plugins too (ADR-0076(t)), so an undeclared key here is a live
-// module.unknown_param on the host, not a log line. The
-// per-plugin table guard lives with each plugin (see
+// Second echelon since NIM-228. The static check is no longer core-only: given a
+// manifest resolver (`soul-lint --modules <dir>`, or keeper's Sigil grants) the
+// parser runs the same four checks on a plugin module, so a scenario reaching for
+// an undeclared param fails with a line and column. This test stays because it
+// asks a different question in a different way — it sweeps the WHOLE corpus in
+// one pass, without depending on the flag being passed or on which files a
+// reviewer happened to lint, and it is the regression net for the resolver
+// itself: if `--modules` ever stopped indexing a plugin, the feature would go
+// quiet while this stayed loud.
+//
+// Why it mattered before the feature existed: since NIM-204 the runtime gate is
+// enforced for plugins too (ADR-0076(t)), so an undeclared key here is a live
+// module.unknown_param on the host, not a log line. The per-plugin table guard
+// lives with each plugin (see
 // examples/module/soul-mod-community-redis/manifest_test.go); this one catches
 // the other direction — a scenario reaching for a param no manifest declares.
 

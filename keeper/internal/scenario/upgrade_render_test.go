@@ -31,7 +31,7 @@ func TestParseScenarioFromArtifact_FromUpgradeSelectsUpgradeDir(t *testing.T) {
 	loader := artifact.NewServiceLoader(t.TempDir(), nil)
 	art := &artifact.ServiceArtifact{LocalDir: dir}
 
-	up, err := parseScenarioFromArtifact(loader, art, "to_v2", true)
+	up, err := parseScenarioFromArtifact(loader, art, "to_v2", true, nil)
 	if err != nil {
 		t.Fatalf("parse upgrade/: %v", err)
 	}
@@ -39,7 +39,7 @@ func TestParseScenarioFromArtifact_FromUpgradeSelectsUpgradeDir(t *testing.T) {
 		t.Errorf("fromUpgrade=true → description=%q, want from-upgrade-dir (upgrade/to_v2/main.yml)", up.Description)
 	}
 
-	sc, err := parseScenarioFromArtifact(loader, art, "to_v2", false)
+	sc, err := parseScenarioFromArtifact(loader, art, "to_v2", false, nil)
 	if err != nil {
 		t.Fatalf("parse scenario/: %v", err)
 	}

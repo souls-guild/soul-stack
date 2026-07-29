@@ -27,7 +27,7 @@ func loadRedisCreateFromSouls(t *testing.T) *config.ScenarioManifest {
 	if err != nil {
 		t.Skipf("%s unavailable (%v); guard skipped", rel, err)
 	}
-	scn, _, diags, err := LoadScenarioManifestResolved(&ServiceArtifact{LocalDir: root}, rel, data)
+	scn, _, diags, err := LoadScenarioManifestResolved(&ServiceArtifact{LocalDir: root}, rel, data, nil)
 	if err != nil {
 		t.Fatalf("LoadScenarioManifestResolved: %v", err)
 	}

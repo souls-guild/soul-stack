@@ -156,7 +156,7 @@ func (h *IncarnationHandler) prefillFieldsForScenario(ctx context.Context, inc *
 	if err != nil || len(data) == 0 {
 		return nil
 	}
-	scn, _, _, perr := artifact.LoadScenarioManifestResolved(art, "scenario/"+scenarioName+"/main.yml", data)
+	scn, _, _, perr := artifact.LoadScenarioManifestResolved(art, "scenario/"+scenarioName+"/main.yml", data, nil)
 	if perr != nil || scn == nil {
 		return nil
 	}

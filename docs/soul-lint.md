@@ -92,6 +92,46 @@ Cross-passage flow-control gating detector is connected ([ADR-056](adr/0056-stag
 
 For `on:`-literals: format (`kebab-case` / `${ ... }`-CEL / `keeper`) - implemented (codes `enum_invalid`, `name_invalid_format`, `type_mismatch`); The hook `CovenLabelValidator` (interface in `shared/config`, no-op by default) is attached to every non-CEL-wrapped coven literal via `SetCovenLabelValidator`. The real covens directory (Q1b ADR-008-amend) will replace no-op without changing the public API; Until then, the linter does not flag the "existence" of coven (this is runtime).
 
+## Plugin module params: `--modules DIR`
+
+A task's `params:` are checked against the module's manifest — unknown key, missing
+required, type mismatch, unknown state. For `core.*` the manifests are compiled into
+the linter, so this is always on. A **plugin** manifest lives beside its binary, so
+the linter has to be handed it ([ADR-0076(x–z)](adr/0076-engine-compat-window.md)):
+
+```sh
+soul-lint validate-scenario <path> --modules <dir>
+```
+
+`<dir>` is any tree containing plugin `manifest.yaml` files; they are indexed by the
+`namespace`/`name` each manifest **declares**, not by the directory it sits in — a
+plugin directory is named after its binary (`soul-mod-community-redis`) while a task
+addresses `community.redis`. Non-`soul_module` manifests (cloud drivers, SSH
+providers) in the same tree are skipped, and one unparseable manifest does not cost
+you the rest.
+
+Where a module's manifest does not resolve — no flag, or a tree that does not carry
+it — the linter emits **`plugin_params_unchecked`**, a hint, once per module address:
+
+```
+main.yml:223:13: hint: [plugin_params_unchecked] params of community.redis were not
+checked: no module manifests were supplied
+```
+
+It never fails a lint. Its job is to keep "checked and clean" from looking identical
+to "never looked", which is how the drift in NIM-206 survived long enough to be found
+by hand.
+
+A missing or unreadable `--modules` directory **is** fatal (exit 2): you asked for
+these checks, and running without them while reporting success is the failure this
+flag exists to remove.
+
+The same check runs inside Keeper, resolving from the plugins the cluster has
+allow-listed, so a definition linted here and rendered there is held to the same
+manifest. Either way an undeclared key fails the task on the host
+([ADR-0076(t)](adr/0076-engine-compat-window.md)) — the flag only moves the answer to
+where the definition is being written.
+
 ## What is NOT soul-lint
 
 Dynamic run of destiny on a test bench, measurement of runtime-coverage and verification of scripts in docker is a **separate tool**, not part of `soul-lint`. According to ADR-004 `soul-lint` is strictly offline and static. The topic is maintained in [destiny/testing.md](destiny/testing.md).

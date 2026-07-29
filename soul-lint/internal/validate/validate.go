@@ -50,6 +50,27 @@ type Options struct {
 	Path string
 	JSON bool
 	Kind Kind
+
+	// ModulesDir is the `--modules <dir>` tree of plugin `manifest.yaml`
+	// files (NIM-228). Empty means no resolver: plugin `params:` cannot be
+	// checked, and each such module is reported as `plugin_params_unchecked`
+	// rather than passing in silence.
+	ModulesDir string
+}
+
+// moduleManifests builds the resolver for this run, or nil when the caller
+// supplied no `--modules`. An unreadable tree is a fatal error rather than a
+// downgrade to "unchecked": the author asked for these checks.
+func (o Options) moduleManifests(errOut io.Writer) (config.ModuleManifestResolver, bool) {
+	if o.ModulesDir == "" {
+		return nil, true
+	}
+	r, err := LoadModuleManifests(o.ModulesDir)
+	if err != nil {
+		fmt.Fprintf(errOut, "soul-lint: %v\n", err)
+		return nil, false
+	}
+	return r, true
 }
 
 // Run performs a single validation. It prints diagnostics to `out` and
@@ -61,15 +82,21 @@ func Run(opts Options, out io.Writer, errOut io.Writer) int {
 		return ExitIOFatal
 	}
 
+	modules, ok := opts.moduleManifests(errOut)
+	if !ok {
+		return ExitIOFatal
+	}
+	cfgOpts := config.ValidateOptions{ModuleManifests: modules}
+
 	var diags []diag.Diagnostic
 	switch opts.Kind {
 	case KindConfig:
 		kind := detectKind(stripBOM(src))
 		switch kind {
 		case kindKeeper:
-			_, _, diags, _ = config.LoadKeeperFromBytes(opts.Path, src, config.ValidateOptions{})
+			_, _, diags, _ = config.LoadKeeperFromBytes(opts.Path, src, cfgOpts)
 		case kindSoul:
-			_, _, diags, _ = config.LoadSoulFromBytes(opts.Path, src, config.ValidateOptions{})
+			_, _, diags, _ = config.LoadSoulFromBytes(opts.Path, src, cfgOpts)
 		case kindIndeterminate:
 			diags = []diag.Diagnostic{{
 				Level:   diag.LevelError,
@@ -82,7 +109,7 @@ func Run(opts Options, out io.Writer, errOut io.Writer) int {
 		}
 	case KindDestiny:
 		var dm *config.DestinyManifest
-		dm, _, diags, _ = config.LoadDestinyManifestFromBytes(opts.Path, src, config.ValidateOptions{})
+		dm, _, diags, _ = config.LoadDestinyManifestFromBytes(opts.Path, src, cfgOpts)
 		// Cross-check of the declared window against the floor this destiny
 		// actually needs (ADR-0076(k)): the manifest grammar plus its task file.
 		diags = append(diags, destinyCompatFloorDiags(opts.Path, dm)...)
@@ -95,12 +122,12 @@ func Run(opts Options, out io.Writer, errOut io.Writer) int {
 		diags = append(diags, destinyVarsCollisionDiags(opts.Path)...)
 	case KindService:
 		var svc *config.ServiceManifest
-		svc, _, diags, _ = config.LoadServiceManifestFromBytes(opts.Path, src, config.ValidateOptions{})
+		svc, _, diags, _ = config.LoadServiceManifestFromBytes(opts.Path, src, cfgOpts)
 		diags = append(diags, serviceCompatFloorDiags(opts.Path, svc)...)
 	case KindScenario:
 		var scn *config.ScenarioManifest
 		var scnDoc *config.Document
-		scn, scnDoc, diags, _ = config.LoadScenarioManifestFromBytes(opts.Path, src, config.ValidateOptions{})
+		scn, scnDoc, diags, _ = config.LoadScenarioManifestFromBytes(opts.Path, src, cfgOpts)
 		// covenant resolution BEFORE semantic/cross-ref: merges covenant.yml (via
 		// scn.Extends; the linted repo root is `<service>/scenario/<name>/main.yml`
 		// → `<service>/`) and validates the form post-merge. MUST run before

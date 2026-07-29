@@ -38,8 +38,11 @@ import (
 // (the consumer checks diag.HasErrors as before). A service without
 // types.yml / a scenario without `$type` → the schema passes through
 // unchanged (back-compat).
-func LoadScenarioManifestResolved(art *ServiceArtifact, rel string, data []byte) (*config.ScenarioManifest, *config.Document, []diag.Diagnostic, error) {
-	scn, doc, diags, err := config.LoadScenarioManifestFromBytes(rel, data, config.ValidateOptions{})
+// modules is the plugin-manifest resolver for this parse (NIM-228), or nil when
+// the caller has none — see [PluginManifestSource]. Nil is not a silent pass:
+// every plugin module in the definition then reports `plugin_params_unchecked`.
+func LoadScenarioManifestResolved(art *ServiceArtifact, rel string, data []byte, modules config.ModuleManifestResolver) (*config.ScenarioManifest, *config.Document, []diag.Diagnostic, error) {
+	scn, doc, diags, err := config.LoadScenarioManifestFromBytes(rel, data, config.ValidateOptions{ModuleManifests: modules})
 	if err != nil {
 		return scn, doc, diags, err
 	}

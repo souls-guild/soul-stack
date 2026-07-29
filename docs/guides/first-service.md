@@ -166,6 +166,30 @@ Before registering a service, run the static linter - it catches structural erro
 
 Both should give exit 0 and `OK: <path>`. What exactly does the linter check (name regex, JSON Schema at the root, compliance with `state_schema_version` ↔ `migrations/`, forbidden keys) - [docs/service/manifest.md → `soul-lint validate-service`](../service/manifest.md) and [docs/soul-lint.md](../soul-lint.md).
 
+**If your service uses plugin modules, add `--modules`.** The `params:` of a `core.*`
+task are checked against the manifest compiled into the linter; a plugin's manifest
+lives beside its binary, so the linter has to be told where to find it
+([ADR-0076(x–z)](../adr/0076-engine-compat-window.md)):
+
+```sh
+./soul-lint/bin/soul-lint validate-scenario \
+    examples/service/redis/scenario/add_user/main.yml --modules examples/module
+```
+
+Without the flag those tasks are **not** checked, and the linter says so per module
+rather than passing in silence:
+
+```
+main.yml:223:13: hint: [plugin_params_unchecked] params of community.redis were not
+checked: no module manifests were supplied
+```
+
+The same check runs inside Keeper, resolving from the plugins the cluster has
+allow-listed - so a definition linted here and a definition rendered there are held
+to the same manifest. An undeclared key fails the task on the host either way
+([ADR-0076(t)](../adr/0076-engine-compat-window.md)); the point of the flag is to
+hear about it now, with a line and a column.
+
 ## 7. Register the service
 
 For Keeper to resolve a service, it must be added to the service registry: git source + ref. The version is `ref` (tag or branch), not a separate field ([ADR-007](../adr/0007-versioning-git-ref.md)). In production it is `POST /v1/services`:

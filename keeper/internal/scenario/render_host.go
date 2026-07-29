@@ -85,7 +85,7 @@ func RenderForHost(ctx context.Context, deps Deps, recipe *applyrun.Recipe, inca
 
 	// The Acolyte mirrors the run-goroutine path: an upgrade run loads
 	// upgrade/<slug>/ (recipe.FromUpgrade), a regular run loads scenario/<name>/ (ADR-0068).
-	scn, err := parseScenarioFromArtifact(deps.Loader, art, recipe.ScenarioName, recipe.FromUpgrade)
+	scn, err := parseScenarioFromArtifact(deps.Loader, art, recipe.ScenarioName, recipe.FromUpgrade, artifact.SnapshotModuleManifests(ctx, deps.ModuleManifests))
 	if err != nil {
 		return nil, nil, err
 	}

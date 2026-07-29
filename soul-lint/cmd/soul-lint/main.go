@@ -15,6 +15,13 @@
 //	plugin-init       <namespace>/<name> [flags]  scaffold a new SoulModule
 //	                                    plugin (ADR-016 amendment 2026-05-27).
 //
+// The validate-destiny / validate-service / validate-scenario subcommands also
+// take `--modules DIR`, a tree of plugin `manifest.yaml` files (NIM-228). With
+// it, the `params:` of a plugin module are checked exactly as `core.*` already
+// is; without it they cannot be, and each such module is reported as
+// `plugin_params_unchecked` rather than passing in silence. Core needs no flag —
+// its manifests are compiled in.
+//
 // Exit codes: 0 = ok, 1 = has errors, 2 = I/O fatal / usage.
 package main
 
@@ -37,11 +44,11 @@ func main() {
 	case "validate-config":
 		os.Exit(runSubcommand(sub, "validate-config <path> [--json]", validate.KindConfig, os.Args[2:]))
 	case "validate-destiny":
-		os.Exit(runSubcommand(sub, "validate-destiny <path> [--json]", validate.KindDestiny, os.Args[2:]))
+		os.Exit(runSubcommand(sub, "validate-destiny <path> [--json] [--modules DIR]", validate.KindDestiny, os.Args[2:]))
 	case "validate-service":
-		os.Exit(runSubcommand(sub, "validate-service <path> [--json]", validate.KindService, os.Args[2:]))
+		os.Exit(runSubcommand(sub, "validate-service <path> [--json] [--modules DIR]", validate.KindService, os.Args[2:]))
 	case "validate-scenario":
-		os.Exit(runSubcommand(sub, "validate-scenario <path> [--json]", validate.KindScenario, os.Args[2:]))
+		os.Exit(runSubcommand(sub, "validate-scenario <path> [--json] [--modules DIR]", validate.KindScenario, os.Args[2:]))
 	case "validate-manifest":
 		os.Exit(runSubcommand(sub, "validate-manifest <path> [--json]", validate.KindManifest, os.Args[2:]))
 	case "plugin-init":
@@ -61,21 +68,31 @@ func main() {
 func runSubcommand(sub, usage string, kind validate.Kind, args []string) int {
 	usageLine := "Usage: soul-lint " + usage
 	var (
-		jsonOut bool
-		path    string
+		jsonOut    bool
+		path       string
+		modulesDir string
+		wantModule bool // the previous arg was `--modules`, so this one is its value
 	)
 	for _, a := range args {
-		switch a {
-		case "--json", "-json":
+		if wantModule {
+			modulesDir = a
+			wantModule = false
+			continue
+		}
+		switch {
+		case a == "--json" || a == "-json":
 			jsonOut = true
-		case "-h", "--help":
+		case a == "-h" || a == "--help":
 			fmt.Fprintln(os.Stdout, usageLine)
 			return 0
+		case a == "--modules" || a == "-modules":
+			wantModule = true
+		case strings.HasPrefix(a, "--modules="):
+			modulesDir = strings.TrimPrefix(a, "--modules=")
+		case strings.HasPrefix(a, "-"):
+			fmt.Fprintf(os.Stderr, "soul-lint %s: unknown flag %q\n", sub, a)
+			return 2
 		default:
-			if strings.HasPrefix(a, "-") {
-				fmt.Fprintf(os.Stderr, "soul-lint %s: unknown flag %q\n", sub, a)
-				return 2
-			}
 			if path != "" {
 				fmt.Fprintln(os.Stderr, usageLine)
 				return 2
@@ -83,15 +100,33 @@ func runSubcommand(sub, usage string, kind validate.Kind, args []string) int {
 			path = a
 		}
 	}
+	if wantModule || (modulesDir == "" && hasBareModulesFlag(args)) {
+		fmt.Fprintf(os.Stderr, "soul-lint %s: --modules needs a directory\n", sub)
+		return 2
+	}
 	if path == "" {
 		fmt.Fprintln(os.Stderr, usageLine)
 		return 2
 	}
 	return validate.Run(validate.Options{
-		Path: path,
-		JSON: jsonOut,
-		Kind: kind,
+		Path:       path,
+		JSON:       jsonOut,
+		Kind:       kind,
+		ModulesDir: modulesDir,
 	}, os.Stdout, os.Stderr)
+}
+
+// hasBareModulesFlag reports whether `--modules=` was passed with an empty
+// value. Distinguishing it from "not passed at all" matters: an empty tree
+// silently means "check nothing", which is the failure mode this flag exists to
+// remove.
+func hasBareModulesFlag(args []string) bool {
+	for _, a := range args {
+		if a == "--modules=" || a == "-modules=" {
+			return true
+		}
+	}
+	return false
 }
 
 // runPluginInit parses flags for `plugin-init <namespace>/<name> [flags]`.
@@ -181,9 +216,13 @@ func printUsage(w *os.File) {
 	fmt.Fprintln(w, "")
 	fmt.Fprintln(w, "Commands:")
 	fmt.Fprintln(w, "  validate-config   <path> [--json]              validate keeper.yml or soul.yml")
-	fmt.Fprintln(w, "  validate-destiny  <path> [--json]              validate destiny.yml manifest")
-	fmt.Fprintln(w, "  validate-service  <path> [--json]              validate service.yml manifest")
-	fmt.Fprintln(w, "  validate-scenario <path> [--json]              validate scenario/<name>/main.yml")
+	fmt.Fprintln(w, "  validate-destiny  <path> [--json] [--modules DIR]  validate destiny.yml manifest")
+	fmt.Fprintln(w, "  validate-service  <path> [--json] [--modules DIR]  validate service.yml manifest")
+	fmt.Fprintln(w, "  validate-scenario <path> [--json] [--modules DIR]  validate scenario/<name>/main.yml")
 	fmt.Fprintln(w, "  validate-manifest <path> [--json]              validate plugin manifest.yaml")
-	fmt.Fprintln(w, "  plugin-init       <namespace>/<name> [flags]   scaffold a new SoulModule plugin")
+	fmt.Fprintln(w, "  plugin-init       <namespace>/<name> [flags]      scaffold a new SoulModule plugin")
+	fmt.Fprintln(w, "")
+	fmt.Fprintln(w, "  --modules DIR  tree of plugin manifest.yaml files. Without it the params of a")
+	fmt.Fprintln(w, "                 plugin module cannot be checked, and each such module is reported")
+	fmt.Fprintln(w, "                 as plugin_params_unchecked rather than passing silently.")
 }

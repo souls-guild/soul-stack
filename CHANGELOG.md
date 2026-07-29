@@ -133,6 +133,29 @@ order to act in.
   the other block keys. Each was silent before: the key parsed, the plan
   rendered, the run succeeded, and the ordering the author wrote never happened.
 
+- **A plugin module's `params:` are now checked statically, so a definition that
+  linted clean can fail.** Until now the static check covered `core.*` only and
+  returned on the first line for any other namespace — an author got no
+  diagnostic at all for a plugin task, and an undeclared key was discovered as
+  `module.unknown_param` on a host. The four checks (`unknown_param`,
+  `missing_required_param`, `param_type_mismatch`, `module_state_unknown`) now
+  run for any module whose manifest resolves.
+
+  **What breaks:** a definition passing a key the plugin's manifest does not
+  declare. It already failed on the host under the plugin strictness above — this
+  moves the failure to lint time, with a line and column, which is the point.
+  **What to do:** run `soul-lint validate-scenario … --modules <dir>` over your
+  definitions before upgrading Keeper, and fix what it names. There is no
+  deprecation window and none is needed: the lint runs where the definition is
+  authored, not on a host, so a definition that starts failing is fixed in the
+  same session that reported it.
+
+  **Silence now means something.** Where a manifest does **not** resolve — no
+  `--modules`, or a plugin the cluster has not allow-listed — you get
+  `plugin_params_unchecked`, a hint, once per module address. It fails nothing;
+  it exists because "no diagnostics" used to mean either "checked and clean" or
+  "never looked", and those are different answers.
+
 - **Keys absent from your `keeper.yml` are now settable cluster-wide over the
   API.** Precedence is built-in default < Postgres < `keeper.yml`, so a file that
   names a key still wins and nothing you have configured changes meaning. But
@@ -597,6 +620,35 @@ order to act in.
   From here the contract can only shrink through the declared window: mark a
   param `deprecated: {since, removed_in, use?}`, keep honoring it for at least
   two minor releases, and only then drop the key.
+
+- **The static params check is no longer core-only**
+  ([ADR-0076(x–z)](docs/adr/0076-engine-compat-window.md)). `validateModuleParams`
+  returned on the first line for any namespace but `core`, so the four checks it
+  runs — never core-specific, they read a manifest's `StateDef` — were simply
+  switched off for plugins. What core actually had was *availability*: its
+  manifests are compiled in. A plugin manifest now arrives through
+  `ValidateOptions.ModuleManifests` and is applied in a post-pass over the parsed
+  document, with the same checks and one implementation of them.
+
+  Two resolvers, because there are two moments an author can be told. **Keeper**
+  resolves from its Sigil grants — the byte-exact manifest whose signature was
+  verified, i.e. the very one that will gate the task on the host, so the check
+  cannot refuse a run the Soul would have accepted. **`soul-lint --modules
+  <dir>`** resolves from manifests on disk, for the author with no cluster, and
+  indexes by the address a manifest **declares** rather than the directory it
+  sits in — a plugin directory is named after its binary
+  (`soul-mod-community-redis`) while a task addresses `community.redis`.
+
+  The walk knows nothing about task grammar: any mapping carrying a `module:`
+  string is a module task, wherever it sits. Keying off `tasks:` / `block:` /
+  `apply:` would silently stop checking the day the grammar grows another
+  construct that holds tasks — which is the old early-return's failure mode one
+  level up.
+
+  Nothing here refuses a render for an *unresolvable* module: an author usually
+  cannot produce somebody else's manifest, and a keeper whose allow-list is
+  briefly unreadable must not turn a storage blip into a failed run. Both say
+  `plugin_params_unchecked` instead.
 
 - **A scenario run can now be refused before it starts.**
   `POST /v1/incarnations/{name}/scenarios/{scenario}` and its MCP twin evaluate a

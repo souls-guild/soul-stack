@@ -91,6 +91,7 @@ import (
 	"github.com/souls-guild/soul-stack/shared/diag"
 	shlog "github.com/souls-guild/soul-stack/shared/log"
 	"github.com/souls-guild/soul-stack/shared/obs"
+	"github.com/souls-guild/soul-stack/shared/plugin"
 	sharedhost "github.com/souls-guild/soul-stack/shared/pluginhost"
 	"github.com/souls-guild/soul-stack/shared/sdnotify"
 )
@@ -1300,6 +1301,33 @@ func moduleCatalogPluginsOrNil(d *daemon) handlers.ModuleCatalogPlugins {
 		return nil
 	}
 	return moduleCatalogPlugins{store: sigil.NewPGStore(d.pool)}
+}
+
+// ModuleManifests implements [artifact.PluginManifestSource]: a point-in-time
+// map of the plugin manifests this cluster has allow-listed, so a definition's
+// `params:` are checked against them while it is parsed (NIM-228).
+//
+// The Sigil grant is the right source and not merely a convenient one: it holds
+// the byte-exact manifest.yaml the signature was verified over, which is the very
+// manifest that gates the task on the host under ADR-0076(t). Checking against
+// anything else would risk refusing a run the Soul would have accepted.
+//
+// A manifest that no longer parses is skipped rather than fatal — it then reports
+// as `plugin_params_unchecked`, which is what actually happened.
+func (l moduleCatalogPlugins) ModuleManifests(ctx context.Context) (config.ModuleManifestResolver, error) {
+	recs, err := l.store.ListActive(ctx)
+	if err != nil {
+		return nil, err
+	}
+	out := make(artifact.ModuleManifestMap, len(recs))
+	for _, s := range recs {
+		m, diags := plugin.LoadFromBytes(plugin.FileName, s.ManifestRaw)
+		if m == nil || diag.HasErrors(diags) || m.Kind != plugin.KindSoulModule {
+			continue
+		}
+		out[m.Namespace+"."+m.Name] = m
+	}
+	return out, nil
 }
 
 func (l moduleCatalogPlugins) ActivePlugins(ctx context.Context) ([]handlers.PluginCatalogEntry, error) {
@@ -3107,9 +3135,14 @@ func (d *daemon) setupGRPCEventStream(ctx context.Context) error {
 		Outbound:      outbound,
 		Destiny:       d.destinySource,
 		KeeperModules: d.coreModules,
-		DB:            d.pool,
-		Logger:        logger,
-		Metrics:       d.scenarioMetrics,
+		// Plugin manifests for the static params check at parse time (NIM-228):
+		// same Sigil grants GET /v1/modules reads, so an author is told about an
+		// undeclared key with a line and column before the run instead of by a
+		// module.unknown_param on the host.
+		ModuleManifests: moduleCatalogPlugins{store: sigil.NewPGStore(d.pool)},
+		DB:              d.pool,
+		Logger:          logger,
+		Metrics:         d.scenarioMetrics,
 		// Keeper daemon runtime wiring note.
 		// Keeper daemon runtime wiring note.
 		// Keeper daemon runtime wiring note.

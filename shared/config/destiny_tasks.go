@@ -23,8 +23,6 @@ import (
 //     errors (the caller rejects via diag.HasErrors).
 //   - error != nil — never (reserved for I/O fatal in the file wrapper).
 func LoadDestinyTasksFromBytes(filename string, data []byte, opts ValidateOptions) ([]Task, []diag.Diagnostic, error) {
-	_ = opts // reserved
-
 	file, err := parser.ParseBytes(stripBOM(data), parser.ParseComments)
 	if err != nil {
 		return nil, []diag.Diagnostic{yamlParseDiag(filename, err)}, nil
@@ -90,6 +88,9 @@ func LoadDestinyTasksFromBytes(filename string, data []byte, opts ValidateOption
 	// Cross-task invariants over the whole list (duplicate register, unknown
 	// register references in onchanges/onfail/require). See validateTaskRefs.
 	diags = append(diags, validateTaskRefs(seq, "$")...)
+	// Plugin module params against a resolved manifest (NIM-228) — the same
+	// post-pass the mapping-rooted entry points run.
+	diags = append(diags, validatePluginModuleParams(seq, opts.ModuleManifests)...)
 	for j := range diags {
 		if diags[j].File == "" {
 			diags[j].File = filename

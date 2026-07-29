@@ -168,8 +168,6 @@ func parseAndValidate[T any](
 	opts ValidateOptions,
 	semantic func(*T, *ast.MappingNode) []diag.Diagnostic,
 ) (*Document, []diag.Diagnostic) {
-	_ = opts // reserved
-
 	file, err := parser.ParseBytes(src, parser.ParseComments)
 	if err != nil {
 		return nil, []diag.Diagnostic{yamlParseDiag(path, err)}
@@ -248,6 +246,12 @@ func parseAndValidate[T any](
 
 	// (5) semantic validation: regex, cross-field.
 	diags = append(diags, semantic(cfg, root)...)
+
+	// (6) plugin module params against a resolved manifest (NIM-228). A post-pass
+	// because the resolver arrives with the caller in opts and cannot reach
+	// `Task.UnmarshalYAML`, where the core half runs off the embedded registry.
+	diags = append(diags, validatePluginModuleParams(root, opts.ModuleManifests)...)
+
 	for i := range diags {
 		if diags[i].File == "" {
 			diags[i].File = path

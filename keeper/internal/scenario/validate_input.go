@@ -112,7 +112,12 @@ func ValidateInput(ctx context.Context, loader InputScenarioLoader, ref artifact
 	// value against the RESOLVED type shape (object/array/properties/required),
 	// instead of silently accepting it (a reference node has empty Type →
 	// validation skipped).
-	scn, _, diags, err := artifact.LoadScenarioManifestResolved(art, rel, data)
+	// No plugin-manifest resolver here (NIM-228): this entry point is package-level
+	// and carries no Deps, and it answers about the submitted INPUT rather than the
+	// task bodies. The same file is parsed with a resolver on the paths that act on
+	// those tasks - run, pre-flight and check-drift - so nothing goes unchecked; a
+	// second resolve here would only cost a read per input validation.
+	scn, _, diags, err := artifact.LoadScenarioManifestResolved(art, rel, data, nil)
 	if err != nil {
 		return zero, fmt.Errorf("scenario: validate input: parse %s: %w", rel, err)
 	}

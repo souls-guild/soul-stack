@@ -411,6 +411,12 @@ type Deps struct {
 	// are rejected at dispatch phase ([ErrKeeperModulesNotConfigured]); a
 	// pure Soul-side run works without it.
 	KeeperModules KeeperModuleRegistry
+	// ModuleManifests — source of the plugin manifests this cluster has
+	// allow-listed, so a definition's `params:` are checked against them while
+	// it is parsed (NIM-228), the same four checks `core.*` already gets from
+	// the embedded registry. nil → plugin params are not checked and each such
+	// module is reported as `plugin_params_unchecked`; the run is not affected.
+	ModuleManifests artifact.PluginManifestSource
 	// DB — pool for incarnation + applyrun CRUD (single Postgres, ADR-005).
 	DB     *pgxpool.Pool
 	Logger *slog.Logger

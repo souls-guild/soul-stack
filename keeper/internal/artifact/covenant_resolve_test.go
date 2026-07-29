@@ -31,7 +31,7 @@ func loadResolved(t *testing.T, root, scenario string) (*config.ScenarioManifest
 	if err != nil {
 		t.Fatalf("readSnapshotFile %s: %v", rel, err)
 	}
-	scn, _, diags, err := LoadScenarioManifestResolved(art, rel, data)
+	scn, _, diags, err := LoadScenarioManifestResolved(art, rel, data, nil)
 	if err != nil {
 		t.Fatalf("LoadScenarioManifestResolved %s: %v", scenario, err)
 	}

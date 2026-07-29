@@ -196,7 +196,7 @@ func (r *Runner) run(ctx context.Context, spec RunSpec) {
 		return
 	}
 
-	scn, err := r.parseScenario(art, spec.ScenarioName, spec.FromUpgrade)
+	scn, err := r.parseScenario(ctx, art, spec.ScenarioName, spec.FromUpgrade)
 	if err != nil {
 		abort("scenario_load_failed", err)
 		return
@@ -1078,8 +1078,8 @@ func (r *Runner) lockRun(ctx context.Context, spec RunSpec) (*incarnation.Incarn
 // parseScenario reads scenario/<scenarioName>/main.yml from an already
 // materialized service snapshot and parses it with the normative config
 // parser (error-level diagnostics → a load error).
-func (r *Runner) parseScenario(art *artifact.ServiceArtifact, scenarioName string, fromUpgrade bool) (*config.ScenarioManifest, error) {
-	return parseScenarioFromArtifact(r.deps.Loader, art, scenarioName, fromUpgrade)
+func (r *Runner) parseScenario(ctx context.Context, art *artifact.ServiceArtifact, scenarioName string, fromUpgrade bool) (*config.ScenarioManifest, error) {
+	return parseScenarioFromArtifact(r.deps.Loader, art, scenarioName, fromUpgrade, r.moduleManifests(ctx))
 }
 
 // scenarioRelPath builds the scenario's main YAML rel-path in the service
@@ -1098,7 +1098,7 @@ func scenarioRelPath(scenarioName string, fromUpgrade bool) string {
 // from a service snapshot. Factored out of the method so the Acolyte path
 // ([RenderForHost]) can reuse it without a Runner. Behavior is identical —
 // pure read+parse, no side effects.
-func parseScenarioFromArtifact(loader *artifact.ServiceLoader, art *artifact.ServiceArtifact, scenarioName string, fromUpgrade bool) (*config.ScenarioManifest, error) {
+func parseScenarioFromArtifact(loader *artifact.ServiceLoader, art *artifact.ServiceArtifact, scenarioName string, fromUpgrade bool, modules config.ModuleManifestResolver) (*config.ScenarioManifest, error) {
 	rel := scenarioRelPath(scenarioName, fromUpgrade)
 	data, err := loader.ReadFile(art, rel)
 	if err != nil {
@@ -1107,7 +1107,7 @@ func parseScenarioFromArtifact(loader *artifact.ServiceLoader, art *artifact.Ser
 	// Resolve $type at load time: the render pipeline and value validation
 	// below work with a self-contained input schema (see
 	// artifact.LoadScenarioManifestResolved).
-	scn, _, diags, err := artifact.LoadScenarioManifestResolved(art, rel, data)
+	scn, _, diags, err := artifact.LoadScenarioManifestResolved(art, rel, data, modules)
 	if err != nil {
 		return nil, fmt.Errorf("scenario: parse %s: %w", rel, err)
 	}
