@@ -5,7 +5,219 @@ Artifact versioning — via git ref ([ADR-007](docs/adr/0007-versioning-git-ref.
 
 ## [Unreleased]
 
+### Upgrade notes
+
+Read this before upgrading a cluster that already has roles bound to operators.
+Several changes alter what an existing grant means; some widen it, some narrow
+it, and none of them require a role edit to take effect. The order below is the
+order to act in.
+
+- **Upgrade Souls before Keeper.** Two gates now refuse a host rather than let it
+  mis-apply: the per-host capability gate (`soul_capability_unsupported` — the
+  agent never announced a core module or DSL feature the rendered plan uses) and
+  param-level strictness (`module.unknown_param` — the agent's compiled manifest
+  does not declare a key the task carries). Both are the deliberate replacement
+  for an old agent reading the params it recognizes and reporting OK/CHANGED
+  while the thing the author asked for never happened. A Keeper newer than its
+  fleet therefore refuses runs it would previously have mis-executed; a fleet
+  newer than its Keeper is fine.
+
+- **Five new permissions land inside `<resource>.*` grants you already issued.**
+  The catalog is closed and a wildcard in the action position expands to every
+  known action of that resource, so a role written before this release grants
+  more after it. Same mechanism as `incarnation.*` when `incarnation.view-secrets`
+  landed ([ADR-0070](docs/adr/0070-secret-reveal-path.md)); it is a property of
+  the catalog, not a defect. What changes:
+
+  - **`soul.*` now grants `soul.console`** — an interactive PTY on a host,
+    running as the Soul daemon's user, typically **root**. It is not only the
+    live terminal: the same right covers the MCP tool `keeper.soul.run-command`
+    and playback of **anyone's** recorded sessions over
+    `GET /v1/console/recordings…`. It is strictly stronger than `errand.run` and
+    independent of it in both directions.
+  - **An unrestricted `role.*` now grants `role.create-root`** — minting a role
+    that tracks no parent, i.e. privilege that outlives whatever its author
+    held — **and `role.list-all`**, which returns the whole role catalog: every
+    role's permission set, scope and the AIDs holding it, which is the cluster's
+    privilege map. Both are checked bare, so a *scoped* `role.*` covers neither:
+    the grammar has no `role=` dimension to narrow them on, and an unrestricted
+    holder is the only sound reading.
+  - **`incarnation.*` now grants `incarnation.bind-member` /
+    `incarnation.unbind-member`.** Under ADR-080 that is a visibility operation,
+    not just bookkeeping: binding a host into an incarnation gives it that
+    incarnation's labels, so it moves the host into the scope of every role
+    scoped to them. The widening is bounded — the handler applies a second,
+    per-host gate requiring every target SID to be inside the caller's own soul
+    visibility, all-or-nothing and never a silent trim, because a scope predicate
+    on `incarnation=` is satisfied without ever looking at the host. Unbinding is
+    grantable separately from binding: it drops a host out of the roster of every
+    future run.
+
+  A role that must not gain these enumerates actions instead of the wildcard.
+  The full `soul.*` expansion as of this release is `soul.list`, `soul.create`,
+  `soul.issue-token`, `soul.coven-assign`, `soul.traits-assign`,
+  `soul.ssh-target-update`, `soul.console`. That list, and the `role.*` and
+  `incarnation.*` ones, are pinned against
+  [the catalog](keeper/internal/rbac/catalog.go) by
+  `TestCatalog_WildcardRostersPinnedForReleaseNotes`, so an action added later
+  fails a test rather than aging this paragraph in silence.
+
+  `setting.read` / `setting.update` / `setting.delete` are a **new resource**, so
+  no `<resource>.*` covers them — only an unrestricted `*` does.
+
+- **Consoles are enabled on every host by default, and Keeper has no off switch
+  for them.** The `console:` block in `keeper.yml` is operator envelope only —
+  how many terminals one Archon holds, how long an abandoned one lives, the
+  recording cap — and its absence means built-in defaults, not "off". The route
+  is mounted by any real `keeper run`. The host-side switch is the real one:
+  `console: {enabled: false}` in `soul.yml` makes the Soul refuse every open with
+  a terminal `ConsoleExit`, whatever Keeper-side RBAC permits. Recording is
+  mandatory and has no key at all. So a host that must never be shelled is
+  protected by that flag plus withheld `soul.console`, in that order.
+
+- **A scoped role is now refused where it used to pass.** `Enforcer.Check` did
+  not apply a role's `default_scope` to the bare permissions under it, so a role
+  carrying `default_scope: coven=dba` was confined on every read and
+  **unbounded on the write path**. It is now matched through its role, which is
+  what `ResolvePurview` always did. This expands denials by design, including for
+  a context-less cluster operation, and a route that gated a scoped-capable
+  action with a context-less check was mis-gated before and now says so. Read
+  routes are unaffected — they gate on existence and narrow in the handler.
+
+- **`GET /v1/roles` and `keeper.role.list` no longer return the whole catalog.**
+  A caller sees a role exactly when the caller could grant what that role grants.
+  A reader who must see roles they hold nothing of — an auditor, a security
+  review — needs `role.list-all` **in addition to** `role.list`; because the
+  grammar has no `role=` dimension, only an unrestricted holder gets the full
+  catalog.
+
+- **Creating a parentless role that grants something now needs
+  `role.create-root`.** The default is to derive from a role you hold and let the
+  cascade do the rest. The gate judges the shape of the result, not the verb, so
+  a `PATCH` that clears `parent_role` — or grows an already-plain role — is gated
+  too. Automation that mints roles from a service account will get a 403 until
+  that account holds the right or the roles are re-parented.
+
+- **A role mutation that moves the effective rights of any role below it answers
+  409 unless the request carries `confirm_cascade`.** Both directions, any depth;
+  the refusal names the derived roles that gain rights, the ones that lose them,
+  and how many operators hold each. A change nobody below feels still passes
+  silently, and a childless role is never gated.
+
+- **Coven and Trait labels are inherited by incarnation membership, and
+  visibility widens with the release rather than behind a flag**
+  ([ADR-0080](docs/adr/0080-label-inheritance-union.md)). A host's effective labels are
+  its own unioned with those of every incarnation it belongs to (each
+  contributing its `covens[]` and its name), resolved at read time. Deployed
+  roles scoped `coven=` or `trait.` therefore also see the hosts of matching
+  incarnations. That is the defect being fixed — an incarnation-level label used
+  to grant nothing on its own hosts — but it is a widening, so **re-read your
+  scoped roles against the new resolution before upgrading a cluster where the
+  coven boundary is the security boundary.**
+
+- **`POST /v1/incarnations/{name}/scenarios/{scenario}` can now answer `422
+  assert_failed` synchronously**, where it previously always answered `202` and
+  surfaced a failed topology assert as `error_locked` plus a manual unlock. The
+  MCP twin behaves the same. The run does not start: no `apply_id`, no
+  `applying`, nothing to unlock. A plan that builds its own roster is still
+  admitted on an empty roster — the gate defers exactly when it cannot read what
+  the assert reads. **Clients that treat any non-202 from this route as a
+  transport error need updating.**
+
+- **`soul-lint` rejects three `async:` / `require:` shapes it used to accept**, so
+  a definition that linted clean can now fail: `require_forward_reference` (a
+  barrier naming a source that starts later resolves to nothing and waits for
+  nothing), `async_on_apply_invalid` (an applier task fans out into a group that
+  runs sequentially regardless), and a `require:` on a `block:`, which was
+  documented as inherited and was in fact dropped from the plan — now merged like
+  the other block keys. Each was silent before: the key parsed, the plan
+  rendered, the run succeeded, and the ordering the author wrote never happened.
+
+- **Keys absent from your `keeper.yml` are now settable cluster-wide over the
+  API.** Precedence is built-in default < Postgres < `keeper.yml`, so a file that
+  names a key still wins and nothing you have configured changes meaning. But
+  23 keys that your file leaves unset can now be changed for the whole cluster by
+  a holder of `setting.update` — which `*` covers. The catalog reports
+  `source=file` with `cluster_value` and `overridden_locally` where a file
+  shadows a cluster value, so the cost of that order is visible rather than
+  silent. `audit:` is deliberately outside the overlay.
+
+- **`errand.run` alone no longer reaches an arbitrary shell — in `warn` mode this
+  release, `enforce` the next.** See *Security* below for the two numbers to
+  check before the flip, and alert on `cadence.skipped_forbidden`: a schedule
+  written under the old rule stops producing runs on a timer with nobody looking.
+
+- **Plugin manifests now gate their params.** See *Changed* below; a plugin whose
+  manifest under-declares fails the task instead of quietly doing its old job,
+  and the fix ships as a new plugin version, since the manifest that gates is the
+  one beside the binary on the host.
+
+- **Migrations 101–107 apply automatically when the first Keeper of this version
+  starts** — `apply_runs.input` (101), `rbac_roles.parent_role` (102), engine
+  provenance columns (103), `console_recordings` (104), `rbac_roles.scope_mode`
+  (105), the prune of projected traits (106), `apply_runs.notices` (107). **106
+  rewrites data**: it removes from `souls.traits` the residue of the old
+  materialized projection, by value equality against the host's incarnations — a
+  pair sharing only a key is host-local and stays. Effective labels are unchanged
+  by the prune, only where they are stored. Take the usual snapshot first.
+
+- **The shipped systemd units are `Type=notify`** with `NotifyAccess=main`,
+  `WatchdogSec=60s` and an `ExecReload` that `systemctl reload` previously had
+  nothing to run. Enablement in the binary is runtime autodetect from
+  `NOTIFY_SOCKET` / `WATCHDOG_USEC`, so a locally-modified `Type=simple` unit
+  keeps working unchanged — it simply gets no readiness gating and no watchdog.
+  `StartLimitIntervalSec` / `StartLimitBurst` moved to `[Unit]`, where systemd
+  reads them; in `[Service]` the restart limiter was dead in both units.
+
+- **The bundled `redis` example service installs from a package repository by
+  default.** `essence.install_method` defaults to `package` and the addresses
+  live in one `install` map in essence; `install_method=binary` previously
+  pointed at `nexus.example.com`, an RFC 2606 placeholder that resolves nowhere,
+  so that path has been dead for everyone since `v0.1.0-beta.1`. A fleet on an
+  internal mirror overrides the one map in `spec.essence`.
+
+- **Two selectors start matching again**, having quietly matched nothing since
+  NIM-124 moved host↔incarnation membership out of `souls.coven[]`: a Vigil or
+  Decree scoped `coven: [<incarnation>]`, and a `coven_default_providers` entry
+  in push Level 2 naming an incarnation. Both now resolve over inherited labels.
+  Level 2 breaks its tie **own-then-inherited**, each group alphabetical, so a
+  host that already matched on its own tag keeps the exact route it had and
+  inheritance can only fill in where the lookup used to fall through.
+
 ### Added
+
+- **The interactive console — a real terminal on a host, from the browser**
+  ([ADR-0074](docs/adr/0074-interactive-console-pty.md),
+  [docs/keeper/console.md](docs/keeper/console.md)). `GET /v1/console` is a
+  WebSocket carrying many independent panes on one socket: an operator opens a
+  wall of terminals across a fleet and each is a pty on its host, run by the Soul
+  daemon under its own user. The Keeper↔Soul side is an only-add `console_*`
+  contract on its own RPC, so console traffic never queues behind an apply, and
+  the plane is cluster-routed — the instance holding the socket is rarely the one
+  holding that host's EventStream, so frames cross through Redis and a session's
+  ownership claim carries both the Keeper id and the host SID. A Soul may
+  therefore only publish frames for the session it actually holds; a mixed-version
+  cluster keeps working, since a claim with no SID reads as "host unknown" and
+  routes as before.
+
+  Backpressure is explicit rather than unbounded buffering: a slow reader gets
+  its oldest output dropped with a marked gap, not a Keeper growing a queue for
+  it. Envelope is operator policy in `keeper.yml` (`console:` — sessions per
+  Archon, per instance, idle timeout, recording cap); the host has the last word
+  through `console:` in `soul.yml`, where `enabled: false` refuses every open
+  outright. The right is `soul.console` and it is checked twice — at the socket
+  upgrade, and per `open` frame with `host=<sid>`, because the target arrives in
+  the frame rather than the URL.
+
+- **Every console session is recorded, and one that cannot be is refused**
+  ([ADR-0074(g)](docs/adr/0074-interactive-console-pty.md)). The artifact is
+  asciicast v2, written as the session runs, with masking applied once at record
+  time and carried across chunk boundaries — a secret split over two writes is
+  still masked. There is no key to turn it off: a recorder that fails to start
+  fails the session, so "unrecorded console" is not reachable through a
+  deployment mistake. Storage is Postgres (migration 104) because Keeper is
+  stateless and the instance that held the socket is rarely the one that later
+  serves the playback.
 
 - **Recorded console sessions can be read back**
   ([ADR-0074](docs/adr/0074-interactive-console-pty.md), amendment 2026-07-28).
@@ -144,6 +356,172 @@ Artifact versioning — via git ref ([ADR-007](docs/adr/0007-versioning-git-ref.
   is now a loud per-host failure on agents that predate it, rather than a silent
   mis-apply. Same order the capability gate already requires.
 
+- **Intra-host task concurrency — `async:` tasks with named barriers**
+  ([ADR-0075](docs/adr/0075-intra-host-async-tasks.md)). A `parallel:` block was
+  weighed and rejected: it would have made ordering a property of nesting, which
+  is exactly what a long-running fetch beside a long-running install does not
+  need. Instead a task marks itself `async: true` and runs concurrently with what
+  follows on the same host; a later task collects it with `require: [<name>]` or
+  `require: all`. The barrier is Soul-side, so the wait costs no round trip, and
+  the ceiling is host policy (`async.max_concurrent` in `soul.yml`) rather than a
+  number the plan's author would have to guess about a machine they have not
+  seen. `async:` and `require:` reach the wire as first-class fields on
+  `RenderedTask`; `require:` on a `block:` is inherited by its children like the
+  other block keys.
+
+- **`SettingsStore` — Keeper runtime configuration in Postgres**
+  ([ADR-0073](docs/adr/0073-keeper-runtime-config-pg.md)). 23 live reload-able
+  keys — Toll, the Tempo rate limits, the Reaper, the Cadence corridor,
+  `max_await_timeout`, `logging.level` and `cloud_init` — are settable for the
+  whole cluster over `GET`/`PUT`/`DELETE /v1/settings` and the matching
+  `keeper.setting.*` MCP tools, under the new `setting.read` / `setting.update` /
+  `setting.delete` permissions, audited as `setting.updated` / `setting.deleted`.
+  Admission is deliberately narrow: a key qualifies only if it has a **live**
+  apply path — a consumer that re-resolves it from the current snapshot — so
+  several blocks the config docs describe as reload-able are read once at start
+  and stay out. Precedence is built-in default < Postgres < `keeper.yml`: an
+  instance's own file outranks the cluster value, and where it shadows one the
+  catalog says so with `source=file`, `cluster_value` and `overridden_locally`.
+  Writes run the full validation pipeline as a dry run first, from both the
+  answering node's view and that of a node whose file is silent on the key, so a
+  cross-field invariant fails with 422 before anything reaches Postgres.
+
+- **Derived roles — one role may follow another**
+  ([ADR-0078](docs/adr/0078-rbac-derived-roles.md), migrations 102 and 105).
+  `parent_role` makes a role a delta over another: it resolves to the
+  intersection of what it lists with what its parent grants, so a delegator
+  scoped to their own coven can hand out a narrower slice of it and the child
+  narrows automatically when the parent does. `scope_mode` records which of two
+  opposite intentions a delta carries — `track` (the default; the parent's scope
+  cascades in) or `pin` (materialized at write time, so a later widening stops
+  there) — because the two produced an identical row and the difference is not
+  recoverable from it. Attenuation, the least-privilege floor and self-lockout
+  protection all judge a role by what it **grants** rather than by the rows it
+  stores; a role whose stored rows the chain no longer covers publishes them as
+  `inert_permissions` instead of silently granting nothing. A mutation that moves
+  any descendant's effective rights is refused with 409 unless the caller sends
+  `confirm_cascade`, and the refusal names who gains, who loses and how many
+  operators hold each.
+
+- **Coven and Trait are one label world, inherited by membership**
+  ([ADR-0080](docs/adr/0080-label-inheritance-union.md), migration 106). A label
+  lives only where it was attached and is never copied down. A host's effective
+  labels are its own unioned with those of every incarnation it belongs to — each
+  contributing its `covens[]` and its name — resolved at read time by both
+  readers of the layer: the RBAC scope predicate (a correlated `EXISTS`, still
+  pushed into SQL) and targeting (`soulprint.self.*`, the topology roster, the
+  push inventory, the Voyage target filter). A key held on both sides unions
+  rather than contests: `owner=dba` on the incarnation and `owner=bobik` on the
+  host yield `owner=[dba, bobik]`, and either grants. Precedence was rejected —
+  whichever way it points, it silently revokes access somebody was deliberately
+  given. The per-host trait write path is first-class again and gains the mirror
+  of coven-assign's label gate: the pair attached must lie inside the operator's
+  own trait-scope, since a host-attached trait now grants visibility permanently.
+
+- **Operators can bind an onboarded Soul to an incarnation**
+  ([ADR-008 amendment](docs/adr/0008-coven-stable-tags.md)). Until now the only
+  act that bound a host was `core.soul.registered` inside a run, so a host
+  onboarded out of band could not be adopted without one.
+  `POST /v1/incarnations/{name}/members` and
+  `DELETE /v1/incarnations/{name}/members/{sid}` do it directly under the new
+  `incarnation.bind-member` / `incarnation.unbind-member`, with the screening
+  in the domain rather than the handler so the MCP twin cannot drift from it.
+  This is the create-without-run → bind → run flow, and it is what gives a
+  topology `assert:` a roster to measure.
+
+- **`name_template` composes an incarnation's name from its input**
+  ([ADR-0079](docs/adr/0079-incarnation-name-template.md)). A service declares
+  how its instances are named — a kebab-case, 63-character name derived from the
+  components an operator already supplies — instead of asking for a name whose
+  convention lives in somebody's head.
+
+- **Destiny's input contract reaches parity with scenario's** — `validate:` and
+  `required_when` now work the same on both sides, and the gate runs at render,
+  so a destiny cannot be applied with an input its own contract rejects.
+
+- **`include:` expands inside `block:`** in both layers, so a block can pull in a
+  shared task list instead of restating it.
+
+- **A declared Keeper version window on services and destinies**
+  ([ADR-0076](docs/adr/0076-engine-compat-window.md)). `compat: {keeper: {min,
+  max}}` — half-open, `max` exclusive — states the versions an artifact was
+  tested against; the window in force for a run is the intersection of the
+  service's and each destiny's, and a missing block is unbounded, so existing
+  definitions keep working with no migration. The instance that **renders** is
+  the authority, since a rolling upgrade means instances differ, and a
+  version-caused refusal is `keeper_version_unsupported` naming the artifact, its
+  ref, the window and the running version instead of an opaque `render_failed`.
+  `GET /v1/services/{name}/compat` serves the effective window with a
+  backend-supplied status, so a UI never re-derives compatibility from two
+  numbers.
+
+- **A per-host capability gate before dispatch**
+  ([ADR-0076](docs/adr/0076-engine-compat-window.md)). A Soul announces what it
+  implements — the DSL features it enforces itself plus one entry per core module
+  in its registry — and Keeper derives from the plan it rendered what each target
+  host needs, refusing the hosts that never announced it
+  (`soul_capability_unsupported`, naming every host and what each is missing, so
+  a fleet is upgraded in one round rather than one host per retry). It runs on
+  every dispatch path including check-drift, which additionally requires
+  `dry_run` of every roster host — a binary ignoring that flag would mutate hosts
+  during an operation that promised a pure read. Plugin modules stay off the axis
+  on purpose: `core.module.installed` can install one mid-run, long after the
+  announcement was made.
+
+- **A run records the engines that executed it** (migration 103): the Keeper
+  version that rendered it and the Soul version of each host that applied it,
+  written from the same heartbeat entry as the capability set so a stamp can
+  never pair a version with capabilities from a different connection.
+  Audit-grade — no gate reads it — and it answers "what was this actually run by"
+  months later, which a rolling upgrade otherwise makes unanswerable.
+
+- **A deprecated module param is visible before it becomes a failure**
+  ([ADR-0076](docs/adr/0076-engine-compat-window.md) amendments (u)–(w),
+  migration 107). The window was only worth its surfaces, and both were thinner
+  than the ADR claimed: the operator's notice was one agent's log line, so
+  `removed_in` arrived as abruptly as if there had been no window. A
+  `TaskNotice{code, module, param, message}` now rides `TaskEvent` — collected
+  before Apply **and** before Plan, since a dry run is where an operator looks
+  before committing — and lands in three surfaces Keeper already serves: the
+  `task.executed` audit payload, the SSE frame and `apply_runs.notices`, read
+  back per host and deduplicated by `(code, module, param)`. Notices survive
+  `no_log`: they are rendered from the manifest, never from a value, and
+  suppressing them would blind the operator on exactly the tasks that handle
+  secrets. On the author's side `GET /v1/modules` now publishes `deprecated` as
+  `{since, removed_in, use}` beside `introduced_in`, which is what an author
+  reads *before* writing the task — the lint warning only arrives once the
+  definition exists.
+
+- **The `redis` example generates ACL user passwords instead of demanding a
+  pre-seed.** `add_user` and `update_users` used to abort at render unless the
+  operator had run `vault kv put` for every new user first — a manual step in
+  front of the most frequent day-2 action. Both now mint what is missing through
+  a keeper-side `core.vault.kv-present` step (32 alphanumeric characters from
+  `crypto/rand`) at the path the render already reads, and the value never leaves
+  the Keeper: only the path and field name reach output, audit, logs and OTel.
+  Scope is the operator-supplied users only — `default_admin` and the system users
+  are deliberately never regenerated, since those are the credentials the running
+  instance authenticates with, and a missing one means a broken incarnation and
+  must keep failing loudly. Semantics are generate-if-absent; rotation stays an
+  explicit write to the same path plus a re-run.
+
+- **`Type=notify` readiness and a watchdog for both daemons.** `keeper` signals
+  ready once the operator API socket is bound and serving; `soul` once wired up
+  and deliberately **not** on its first Keeper connect, since the reconnect loop
+  retries forever and gating readiness on Keeper would fail every agent's unit
+  start during a Keeper outage — connection state is reported as `STATUS=`
+  instead. A long start extends the start job per step, so `TimeoutStartSec`
+  bounds one hung step rather than a cold Vault/PG/plugin-cache start. The
+  watchdog pings liveness of the process itself and deliberately not Postgres or
+  Redis: a storage outage must not restart the cluster. Enablement is runtime
+  autodetect from `NOTIFY_SOCKET` / `WATCHDOG_USEC` — one binary for every
+  distribution, and in docker/k8s every call is a no-op with liveness left to the
+  orchestrator.
+
+- **Run history records the operator input each run was started with**
+  (migration 101), masked on the way in, so "what was this run actually asked to
+  do" survives the run.
+
 - `soul-stack-tools` — meta package installing the whole authoring-side CLI set
   (`soulctl` + `soul-lint` + `soul-trial`) in one step. Carries no files itself.
   The `keeper` and `soul` daemons stay separate packages on purpose: a server
@@ -220,6 +598,44 @@ Artifact versioning — via git ref ([ADR-007](docs/adr/0007-versioning-git-ref.
   param `deprecated: {since, removed_in, use?}`, keep honoring it for at least
   two minor releases, and only then drop the key.
 
+- **A scenario run can now be refused before it starts.**
+  `POST /v1/incarnations/{name}/scenarios/{scenario}` and its MCP twin evaluate a
+  topology `assert:` after input validation and before the runner starts, so a
+  roster that does not satisfy the scenario's invariant answers **422
+  `assert_failed`** instead of the previous unconditional 202 followed by
+  `error_locked` and a manual unlock. This is the flow the two-point gate was
+  written for and the one `create` can never be: the incarnation exists and its
+  roster is bound. A plan that builds its own roster — all-keeper, or one that
+  emits a refresh — is still admitted on an empty roster, carried by a single
+  predicate shared with the no-hosts bypass rather than restated beside it. A
+  roster-reading assert in a `create` starter is legal and now says so at lint
+  time with `assert_roster_deferred_on_create` (WARNING): the construct works,
+  only the expectation of a 422 on create was wrong, and that expectation came
+  from ADR-009 itself.
+
+- **`soul-lint` rejects three constructs that used to parse, render and do
+  nothing.** `require_forward_reference` — a barrier resolves its targets at the
+  awaiting task's plan position, so a `require:` naming a source that starts
+  later waits for nothing; rejecting it also makes a `require:` **cycle**
+  unrepresentable, since a cycle needs at least one forward edge.
+  `async_on_apply_invalid` — `async:` on an applier task reaches none of the
+  destiny tasks it fans out into, so the group runs sequentially regardless.
+  And `require:` on a `block:`, documented as inherited in three places and in
+  fact dropped from the plan, is now merged like the block's other keys (union of
+  names, `all` on either side absorbing the list). All three ride
+  `validateTaskRefs`, so scenario and destiny get them on the same terms, at
+  parse and in `soul-lint`, with line and column.
+
+- **The bundled `redis` example installs from a package repository by default.**
+  `essence.install_method` defaults to `package`, and `essence.install_package`
+  names the repository — the official Redis one by default, since it publishes
+  every version of the operator's enum while a distro repository carries only the
+  release's own. The destiny declares the repository before installing and
+  composes the per-host apt pin from the upstream version and the host codename.
+  All of it lives in one `install` map in essence, because the six scenarios that
+  re-apply the destiny each have to pass it, so a fleet on an internal mirror
+  overrides one map in `spec.essence`.
+
 - Package renames, dropping a doubled `soul-`: `soul-stack-soul-lint` →
   **`soul-stack-lint`**, `soul-stack-soul-trial` → **`soul-stack-trial`**. The
   binaries (`soul-lint`, `soul-trial`) are unchanged. Both packages declare
@@ -240,6 +656,117 @@ Artifact versioning — via git ref ([ADR-007](docs/adr/0007-versioning-git-ref.
   bench cluster, never production.
 
 ### Fixed
+
+- **A role's `default_scope` did not reach the authorization gate.**
+  `ResolvePurview` inherited it onto the role's bare permissions;
+  `Enforcer.Check` asked each permission alone, and a bare permission matches
+  without looking at the context. So the two authorization paths disagreed about
+  the same role and **the gate was the wider of the two**: `incarnation.run`
+  under `default_scope: coven=dba` was confined on every read and unbounded on
+  the write path. The inheritance rule now exists once, as
+  `effectiveScope(permission, roleScope)`, read by both, with a guard pinning
+  `Check(...) == nil ⇔ ResolvePurview(...).Match(ctx)` over every branch.
+
+- **The role catalog was the cluster's privilege map, readable by anyone holding
+  `role.list`.** A role carries its permission set, its scope and the AIDs
+  holding it, so a full catalog says who administers what, which covens and
+  services exist, and which operator to attack to reach `*` — and a coven-scoped
+  operator could read all of it. It is now filtered by the same containment
+  predicate the write side uses, judged on each role's effective form, so there
+  is one definition of "⊆" and no second implementation free to disagree with the
+  decision layer. A caller-less read is refused rather than falling back to
+  everything.
+
+- **A role `PATCH` was judged by the rows it stored, not the rights it grants.**
+  Dropping `parent_role` while leaving the permission rows identical produced an
+  empty string diff, which short-circuited both the least-privilege floor and the
+  root-role gate — even though the role's effective rights had just escaped their
+  parent's ceiling. An operator holding neither the permission nor
+  `role.create-root` could take every holder of a derived role out of
+  `coven=prod` and into the whole cluster. Both sides are now resolved into
+  effective form and compared by coverage, so any ceiling move is caught —
+  clearing the parent, replacing the scope, re-pinning the delta — while a pure
+  trim stays ungated.
+
+- **Every `create` carrying a topology `assert:` answered 422.** Pre-flight runs
+  before `incarnation.Create`, and once membership moved onto a relation whose FK
+  requires that row, the roster at pre-flight was not empty by circumstance but
+  **impossible** — so `size(soulprint.hosts) == N` was false for every request,
+  with no input an operator could send to get past it. An assert is now evaluated
+  only if it can read what it reads: one touching `soulprint` is deferred to the
+  render fail-safe when the incarnation row is absent, while an assert over
+  input, essence or incarnation keeps its 422-before-mutation. The condition is
+  "no row", not "this is the create path".
+
+- **Vigils and Decrees scoped `coven: [<incarnation>]` had silently matched
+  nothing** since host↔incarnation membership moved out of `souls.coven[]`. The
+  roster, the bulk soul selector, the Choir check and form-prep were converted at
+  the time; the Oracle was not. Its reactor subject now resolves over the same
+  inherited-label union everything else reads, and the membership gate is the
+  membership relation — never the union, or a host merely carrying a tag spelled
+  like an incarnation would escalate into it.
+
+- **Push Level 2 stopped honouring a per-coven provider default named after an
+  incarnation**, for the same reason, so `coven_default_providers: {redis-prod:
+  bastion-eu}` had quietly become a no-op and those hosts fell through to the
+  cluster default. Level 2 now resolves a host's effective coven labels through
+  the shared resolver rather than a fourth mechanism. Because a route is exactly
+  one provider, an order is unavoidable where access-by-any-match needs none: the
+  tiebreak is own-then-inherited, each group alphabetical — the only order that
+  is purely additive, since one flat alphabetical sort would re-route live hosts
+  onto a different bastion the day their incarnation gained a label.
+
+- **A slow operator's console socket stopped writing and went quiet.** Two
+  defects stacked. The write budget was a second, stricter liveness rule than
+  ping/pong — but backpressure fills the socket buffer *by construction*, so a
+  write parks for as long as the operator takes to drain, and a browser that
+  stopped reading for ten seconds (a background tab, a GC pause) lost every pty
+  on its socket while the read side went on holding that same peer to be alive.
+  There is one peer, so there is now one budget. And when the writer did give up,
+  nothing tore the socket down: `shutdown()` only closed a channel that a read
+  pump parked in `ReadMessage` cannot see, so the connection stayed open with
+  nobody writing to it — the wall froze mid-stream, no loss report could be
+  delivered, and the root shells behind it kept running until the read deadline
+  fired a minute later. Teardown now puts the read deadline in the past, ordered
+  against the pong handler re-arming it. Two consequences of the wider budget are
+  handled rather than left to grow into twins of the bug: teardown no longer
+  waits out a parked writer, and the cluster claim refresh moves off the writer
+  goroutine — a claim is Redis state, and serialized behind a socket write a slow
+  browser would have starved it past its TTL and lost its shells to the orphan
+  sweeper.
+
+- **Console output is compressed on the wire.** It is the only high-volume
+  traffic Keeper serves to a browser, enormously redundant, and carried as base64
+  inside JSON; `permessage-deflate` is negotiated by the browser unprompted, so
+  no frame, client or subprotocol changes. Measured on a real terminal listing,
+  32 KiB of output leaves as 7.1 KiB rather than 43.7 KiB — which also works
+  against the drops above, since the writer clears its queue about six times
+  sooner. Recorded consideration: compressing a TLS-carried stream is the
+  CRIME/BREACH class and secrets do cross this socket; compression without
+  context takeover confines any length inference to a single frame, and there is
+  no attacker-controlled request reflected into the response as there is in the
+  HTTP case.
+
+- **Cloud provisioning converges instead of colliding.** A second `create` over
+  an incarnation no longer dies on the `souls` rows its own first attempt left
+  behind, a re-run reconciles hosts that are already up rather than treating live
+  ones as pending, and a destroy is confirmed actually gone before it is reported
+  destroyed — the delete call is asynchronous, and reporting on its acceptance
+  meant reporting a VM that was still running. The wait-until-ready budget is
+  sized for a real VM boot, and its diagnostics name the attempt, the budget and
+  the elapsed time instead of a bare timeout.
+
+- **The embedded web UI bundle matched the companion build again.** Keeper serves
+  `/ui` from a committed copy of the companion's build, and the companion had
+  moved on without a paired re-sync, so a built Keeper served a bundle in which
+  the Russian translation keys were not merely different but absent. Why the
+  drift survived to the release is tracked separately: the companion is never
+  checked out in CI, so `check-webui` takes its silent rc=0 skip branch there and
+  in every ticket worktree.
+
+- `apt`/`dpkg` installs wait for the lock instead of failing on it
+  (`DPkg::Lock::Timeout`), so a package task no longer loses a race with an
+  unattended-upgrade run.
 
 - **Tag-guarded tests are compiled by the gate again.** Nothing built the
   `integration` sources on a normal PR, so they rotted out of sight: the Soul

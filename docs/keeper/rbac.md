@@ -592,6 +592,17 @@ An [Errand](../adr/0033-errand.md) is one named module call with declared params
 
 **Independent, and now also conjoined on one path.** Since NIM-197 the two rights are *both* required to reach `core.cmd.shell` / `core.exec.run` through an Errand (§ Errand). That is a conjunction on one code path, not an implication in either direction: `soul.console` alone still does not open the Errand path, and `keeper.soul.run-command` still needs no `errand.run`. The practical rule is unchanged and now enforced rather than advised — **a role that must not hand out shells carries neither right**.
 
+**`soul.*` carries it — a widening at upgrade, not a defect.** The catalog is closed and a wildcard in the action position expands to every known action of the resource (§ Selector Grammar), so a role written before `soul.console` existed grants it afterwards: the live tty, the MCP `keeper.soul.run-command`, and playback of anyone's recorded session. Same mechanism as `incarnation.*` when `incarnation.view-secrets` landed ([ADR-0070](../adr/0070-secret-reveal-path.md)). A role that must not hand out shells therefore **enumerates actions** instead of the wildcard; as of this release the full expansion of `soul.*` is
+
+```
+soul.list  soul.create  soul.issue-token  soul.coven-assign
+soul.traits-assign  soul.ssh-target-update  soul.console
+```
+
+pinned against the catalog by `TestCatalog_WildcardRostersPinnedForReleaseNotes`, which fails when an added action makes this list stale. Note what the wildcard does *not* cover: `role.create-root` and `role.list-all` are checked bare, so only an **unrestricted** `role.*` reaches them. Withholding console access from a scoped role is done by narrowing the scope; there is no weaker right to grant instead (§ the recording rows above).
+
+**Keeper cannot switch the console plane off.** The `console:` block in `keeper.yml` is operator envelope only — sessions per Archon, per instance, idle timeout, recording cap — and its absence means built-in defaults, not "off"; the route is mounted by any real `keeper run`. The host has the last word: `console: {enabled: false}` in `soul.yml` makes the Soul refuse every open with a terminal `ConsoleExit`, whatever this catalog permits. So a host that must never be shelled is protected by that flag first and by a withheld `soul.console` second.
+
 The right is checked **twice**, because the target host is not in the URL ([ADR-0074(c)](../adr/0074-interactive-console-pty.md)):
 
 | Gate | Where | Question | Refusal |
