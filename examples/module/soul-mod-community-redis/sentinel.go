@@ -53,6 +53,15 @@ var secretGlobalParams = map[string]bool{"sentinel-pass": true}
 func validateSentinel(f map[string]*structpb.Value) []string {
 	var errs []string
 	errs = append(errs, validateAddr(f)...)
+	// A Sentinel has no keyspace and refuses SELECT ([stateHasKeyspace]), so a
+	// non-zero db is not a misconfiguration - it makes the connection
+	// unopenable. Refused here rather than left to a connect error, which reads
+	// as an unreachable Sentinel. The key stays declared in the manifest: since
+	// NIM-204 an undeclared param fails the task, so removing it would break
+	// every scenario passing the documented `db: 0`.
+	if db := intOrDefault(f["db"], 0); db != 0 {
+		errs = append(errs, fmt.Sprintf("params.db: must be 0 on sentinel (got %d) - a Sentinel serves no keyspace and refuses SELECT", db))
+	}
 	if mon := nodeSpec(f["monitor"]); len(mon) > 0 {
 		if strings.TrimSpace(stringOrEmpty(mon["ip"])) == "" {
 			errs = append(errs, "params.monitor.ip: must be a non-empty string")

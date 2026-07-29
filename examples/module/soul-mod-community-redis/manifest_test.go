@@ -109,8 +109,18 @@ func TestManifestStatesDeclareWhatTheyAccept(t *testing.T) {
 			"from", "to", "slots", "source_nodes", "shards_dest"),
 		// master_tls_ca/cert/key are declared but NOT read by the plugin: Redis
 		// reads the replication link's PEMs from DISK by path, so render places
-		// them and the plugin only flips tls-replication. They stay declared
-		// because scenarios legitimately pass them on this state.
+		// them and the plugin only flips tls-replication.
+		//
+		// Recorded as a decision, not a leftover (NIM-229). Expressing
+		// "consumed by render" in the manifest is not implementable: parsing is
+		// yaml.Strict() and discovery skips a slot on a decode error, so a new
+		// key would make an older Soul lose the whole module rather than read
+		// the annotation - the same wall NIM-204 hit looking for an opt-in
+		// flag. Moving them out of the module's params would fail every
+		// scenario that passes them, since NIM-204 made a plugin manifest gate
+		// its input. So they stay declared, masked, and documented as
+		// render-consumed in docs/module/community/redis/README.md. This entry
+		// is the roster that keeps the exception from spreading in silence.
 		"replica": with(connectParams,
 			"master_addr", "source_external", "master_password", "master_username",
 			"master_tls", "master_tls_ca", "master_tls_cert", "master_tls_key"),
@@ -204,7 +214,10 @@ func TestConnectParamsAreRead(t *testing.T) {
 			if err != nil {
 				t.Fatalf("build params: %v", err)
 			}
-			cfg, err := parseConnConfig(s)
+			// "command" — a state that addresses a keyspace, so every key of
+			// connectParams including `db` is read (NIM-229: on `sentinel` the
+			// keyspace is dropped on purpose, covered in db_scope_test.go).
+			cfg, err := parseConnConfig("command", s)
 			if err != nil {
 				t.Fatalf("parseConnConfig: %v", err)
 			}

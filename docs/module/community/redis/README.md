@@ -465,6 +465,29 @@ incarnations are the first step in migrating data from old Redis. At `source_ext
 | `master_tls_ca` | string (secret, PEM) | optional | PEM CA of an external source (checking its server-cert on the replication link). Masked. Placed on disk by render, path via `config`-state. |
 | `master_tls_cert` / `master_tls_key` | string (secret, PEM) | optional | PEM client-cert/key replicas for mTLS on a replication link to the source (only together). Masked. Used as `tls-cert-file`/`tls-key-file` by render, not by plugin. |
 
+**Decision on the three `master_tls_*` PEMs: they stay declared, and the manifest
+does not try to say "consumed by render" (NIM-229).** The contract reads oddly on
+purpose — the module accepts a CA it never applies — so the alternatives were
+weighed rather than defaulted into:
+
+- *A new manifest field marking a param as render-consumed* is **not
+  implementable**. `manifest.yaml` parses under `yaml.Strict()`, so an unknown key
+  is a decode error, and plugin discovery skips the whole slot on one — an older
+  Soul would not see the param as ungated, it would lose the entire module
+  (`module.not_found`). This is the same wall [NIM-204](../../../adr/0076-engine-compat-window.md)
+  hit looking for an opt-in flag, and it applies to any new manifest key.
+- *Moving them out of the module's params into a render-step contract* would fail
+  every scenario that passes them today with `module.unknown_param`, since
+  NIM-204 made a plugin's manifest gate its input.
+- *Leaving them undeclared* was the pre-NIM-206 state and is what NIM-206 fixed.
+
+So the honest contract is: declared, masked, and described here and in the
+manifest as read by **render**, not by the module. The plugin's only act under
+`master_tls: true` is `CONFIG SET tls-replication yes`; the PEMs reach Redis as
+files on disk, placed by `core.file.rendered` and pointed at through `config`-state.
+Pinned by `TestManifestStatesDeclareWhatTheyAccept` in `manifest_test.go`, whose
+per-state roster keeps the exception from spreading in silence.
+
 ## detached — params
 
 Detaches the instance from the master via `REPLICAOF NO ONE` (go-redis), promoting it to
@@ -505,7 +528,7 @@ Reconstructs Redis Sentinel **entirely via go-redis** (without `redis-cli`):
 | `redis_version` | string | optional | Redis version for version-gate global parameters (`loglevel` available in Sentinel since 7.0). Not specified → version-gated parameters are discarded. |
 | `password` | string (secret) | optional | Password for connecting **to** Sentinel itself (its `requirepass`), if specified. See "Password". |
 | `username` | string | optional | ACL-username for connecting to Sentinel. |
-| `db` | int | optional (default `0`) | Part of the shared connection path; Sentinel has no DB namespace, so leave it at `0`. |
+| `db` | int | optional (default `0`) | **Must be `0`, and anything else is refused** — a Sentinel serves no keyspace and answers `SELECT` with an error, so a non-zero value makes the connection unopenable rather than merely pointless. Declared rather than dropped: the key is part of the shared connect path every scenario passes, and since [NIM-204](../../../adr/0076-engine-compat-window.md) an undeclared param fails the task. |
 | `tls` / `tls_ca` / `tls_cert` / `tls_key` / `tls_skip_verify` | — | optional | General TLS parameters of the connection **to Sentinel** (see "TLS connection"). The TLS of the master Sentinel monitors is a `sentinel.conf` directive and travels in `config`. |
 
 ## Password (IS-invariant ADR-010)

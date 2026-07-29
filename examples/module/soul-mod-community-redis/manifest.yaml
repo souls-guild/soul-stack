@@ -1319,8 +1319,11 @@ spec:
           required: false
           default: 0
           description: >-
-            DB number (SELECT) before the reconcile. Part of the shared connect path;
-            Sentinel has no DB namespace, so leave it at 0.
+            Must be 0 on this state, and refused otherwise (NIM-229). A Sentinel serves
+            no keyspace and answers SELECT with an error, so a non-zero value does not
+            misconfigure the connection - it makes it unopenable. Declared rather than
+            dropped because the key is part of the shared connect path every scenario
+            passes, and since NIM-204 an undeclared param fails the task.
         # TLS connect params - shared across all states (see manifest header):
         # tls / tls_ca / tls_cert / tls_key / tls_skip_verify. Canonical declaration -
         # in command; sentinel reads the same set through the shared connect path.

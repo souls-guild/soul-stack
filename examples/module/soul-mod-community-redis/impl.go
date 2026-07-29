@@ -145,7 +145,7 @@ func (m *RedisModule) Apply(req *pluginv1.ApplyRequest, stream grpc.ServerStream
 		return m.applyCluster(ctx, stream, req.GetParams())
 	}
 
-	cfg, err := parseConnConfig(req.GetParams())
+	cfg, err := parseConnConfig(req.GetState(), req.GetParams())
 	if err != nil {
 		return sendFailure(stream, err.Error())
 	}

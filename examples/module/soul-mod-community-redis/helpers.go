@@ -10,19 +10,46 @@ import (
 	"google.golang.org/protobuf/types/known/structpb"
 )
 
+// stateHasKeyspace reports whether a state addresses a Redis KEYSPACE, i.e.
+// whether `params.db` means anything on it (NIM-229).
+//
+// Only `sentinel` answers false, and not as a matter of taste: a Sentinel is not
+// a keyspace server and refuses SELECT, so go-redis — which issues SELECT for any
+// DB > 0 on connect — cannot open the connection at all. The value does not
+// misconfigure the module, it breaks it.
+//
+// `replica` / `detached` / `offset-synced` DO have a keyspace, so SELECT
+// succeeds there, even though REPLICAOF and INFO replication are indifferent to
+// which database is current. Inert is not the same as harmful, and dropping a
+// value the server accepts would be a second, invisible rule to remember. They
+// keep it.
+//
+// The rule lives here, once: [parseConnConfig] stops carrying the keyspace and
+// [validateSentinel] refuses the value up front, so Apply is safe on its own
+// (Validate is a separate RPC a runner need not call) and the author is told
+// before the run rather than by a connect failure.
+func stateHasKeyspace(state string) bool {
+	return state != "sentinel"
+}
+
 // parseConnConfig pulls connection parameters from params. password holds
 // separately from everything that falls into the events (IS-invariant ADR-010).
-func parseConnConfig(s *structpb.Struct) (connConfig, error) {
+// `state` decides whether `params.db` is carried — see [stateHasKeyspace].
+func parseConnConfig(state string, s *structpb.Struct) (connConfig, error) {
 	f := s.GetFields()
 	addr, _ := stringValue(f["addr"])
 	if strings.TrimSpace(addr) == "" {
 		return connConfig{}, fmt.Errorf("params.addr: must be a non-empty string")
 	}
+	db := 0
+	if stateHasKeyspace(state) {
+		db = intOrDefault(f["db"], 0)
+	}
 	return connConfig{
 		addr:     addr,
 		username: stringOrEmpty(f["username"]),
 		password: stringOrEmpty(f["password"]),
-		db:       intOrDefault(f["db"], 0),
+		db:       db,
 		tls:      parseTLS(f),
 	}, nil
 }
