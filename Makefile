@@ -351,6 +351,7 @@ PKG ?= ./...
 # so `| tee` cannot swallow a non-zero status.
 test-integration: SHELL := /bin/bash
 test-integration: $(if $(filter ./...,$(PKG)),check-integration-set,)
+	@scripts/integration-scope.sh "$(PKG)"
 	@set -o pipefail; \
 	log="$$(mktemp -t soul-stack-l1-XXXXXX.log)"; rc=0; \
 	trap 'rm -f "$$log"' EXIT; \
