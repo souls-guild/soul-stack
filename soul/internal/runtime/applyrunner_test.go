@@ -324,10 +324,26 @@ func TestRun_CancelBetweenTasks(t *testing.T) {
 }
 
 func TestRun_CancelDuringTask(t *testing.T) {
-	// Module respects ctx — blocks until cancel, returns ctx.Err().
+	// Cancel once the module is provably INSIDE Apply, not after a guessed delay.
+	//
+	// This used to poll `r.Cancel` every 5 ms until it succeeded. Cancel starts
+	// succeeding as soon as Run registers the apply-id (applyrunner.go:392),
+	// which happens BEFORE the task loop reaches the module — so a poll landing
+	// in that window cancelled a run whose task had not started, and the assert
+	// below found zero task events. Under -race the window is wide enough to hit
+	// regularly, and this test was one of the victims that made the whole
+	// integration job look flaky (NIM-349).
+	//
+	// The test is about cancelling DURING a task, so it now waits for exactly
+	// that fact. Nothing here depends on how fast the machine is.
+	entered := make(chan struct{})
+
+	// Module respects ctx — announces that Apply is running, then blocks until
+	// cancel and returns ctx.Err().
 	reg := mapRegistry{
 		"core.exec": &fakeModule{
 			applyFunc: func(req *pluginv1.ApplyRequest, stream grpc.ServerStreamingServer[pluginv1.ApplyEvent]) error {
+				close(entered)
 				<-stream.Context().Done()
 				return stream.Context().Err()
 			},
@@ -336,18 +352,13 @@ func TestRun_CancelDuringTask(t *testing.T) {
 	sink := &recordingSink{}
 	r := NewApplyRunner(reg, nil)
 
-	// Fire Cancel from a second goroutine — give Run time to enter Apply.
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		// Small wait so Apply has a chance to be called.
-		for i := 0; i < 50; i++ {
-			if r.Cancel("cancel-2") {
-				return
-			}
-			time.Sleep(5 * time.Millisecond)
+		<-entered
+		if !r.Cancel("cancel-2") {
+			t.Errorf("Cancel: apply-id not registered while the module was inside Apply")
 		}
-		t.Errorf("Cancel: apply-id never registered")
 	}()
 
 	err := r.Run(context.Background(), &keeperv1.ApplyRequest{
