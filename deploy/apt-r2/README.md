@@ -1,11 +1,11 @@
 # apt repository on Cloudflare R2
 
 Soul Stack publishes its `.deb` packages — the `soul-stack-keeper` and
-`soul-stack-soul` daemons, the `soul-stack-soulctl`, `soul-stack-lint` and
-`soul-stack-trial` CLIs, the `soul-stack-tools` meta package that pulls those
-three in at once, and the `soul-stack-legion` load generator — through a plain,
-flat apt repository hosted on a
-**Cloudflare R2** bucket fronted by the public domain `https://apt.soul-stack.com`.
+`soul-stack-soul` daemons, the `soul-stack-soulctl`, `soul-stack-lint`,
+`soul-stack-trial` and `soul-stack-legion` CLIs, and the `soul-stack-tools` meta
+package that pulls all four in at once — through a plain, flat apt repository
+hosted on a **Cloudflare R2** bucket fronted by the public domain
+`https://apt.soul-stack.com`.
 The GitHub release workflow (`.github/workflows/release.yml`) produces the `.deb`
 assets; a **separate** workflow ([`apt-publish.yml`](../../.github/workflows/apt-publish.yml))
 mirrors them into the apt pool after each release.
@@ -155,15 +155,18 @@ echo "deb [signed-by=/usr/share/keyrings/soul-stack.gpg] https://apt.soul-stack.
 
 sudo apt update
 
-# A workstation that authors Destiny / scenarios — all three CLIs in one step:
-sudo apt install soul-stack-tools     # soulctl + soul-lint + soul-trial
+# A workstation that drives a cluster — the whole CLI set in one step:
+sudo apt install soul-stack-tools     # soulctl + soul-lint + soul-trial + soul-legion
 
 # A server — install just the daemon it runs:
 sudo apt install soul-stack-keeper    # or soul-stack-soul
-
-# Sizing a bench cluster (needs its DB credentials + a Vault PKI token):
-sudo apt install soul-stack-legion
 ```
+
+`soul-stack-tools` carries the same four binaries as the Homebrew cask and the winget
+package, so every channel lands the same tool set — see [docs/install.md](../../docs/install.md)
+for the per-package table. Any of the four is also installable on its own; note that
+`soul-legion` drives load against a cluster and needs that cluster's DB credentials plus
+a Vault PKI token, so point it at a bench cluster rather than production.
 
 > The package names above land with the **next** release. The published
 > `v0.1.0-beta.1` predates the rename: it carries `soul-stack-soul-lint` /

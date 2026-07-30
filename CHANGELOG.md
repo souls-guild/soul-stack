@@ -704,10 +704,11 @@ order to act in.
   (migration 101), masked on the way in, so "what was this run actually asked to
   do" survives the run.
 
-- `soul-stack-tools` — meta package installing the whole authoring-side CLI set
-  (`soulctl` + `soul-lint` + `soul-trial`) in one step. Carries no files itself.
-  The `keeper` and `soul` daemons stay separate packages on purpose: a server
-  installs only what it runs.
+- `soul-stack-tools` — meta package installing the whole CLI set (`soulctl` +
+  `soul-lint` + `soul-trial` + `soul-legion`) in one step — the same four
+  binaries the Homebrew cask and the winget package carry, so every channel
+  lands the same tool set. Carries no files itself. The `keeper` and `soul`
+  daemons stay separate packages on purpose: a server installs only what it runs.
 
 ### Security
 

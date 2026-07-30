@@ -23,9 +23,11 @@ Packages are served from `https://apt.soul-stack.com` (suite `stable`, component
 `main`, architectures `amd64` and `arm64`).
 
 ```sh
-# Trust the repo key (keyring form; apt-key is deprecated).
+# Trust the repo key (keyring form; apt-key is deprecated). Only `tee` is elevated:
+# piping straight into `sudo gpg` can leave an empty keyring, because a sudo password
+# prompt may swallow the piped key — and apt then fails to verify the repo.
 curl -fsSL https://apt.soul-stack.com/soul-stack.gpg.key \
-  | sudo gpg --dearmor -o /usr/share/keyrings/soul-stack.gpg
+  | gpg --dearmor | sudo tee /usr/share/keyrings/soul-stack.gpg >/dev/null
 
 echo "deb [signed-by=/usr/share/keyrings/soul-stack.gpg] https://apt.soul-stack.com/ stable main" \
   | sudo tee /etc/apt/sources.list.d/soul-stack.list
