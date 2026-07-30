@@ -121,6 +121,28 @@ and then succeed on retry — harmless.
 Tunables (env): `APT_SUITE` (default `stable`), `APT_COMPONENT` (`main`), `APT_ARCHS`
 (`amd64 arm64`), `DEB_DIR` (`./dist/pkg`), `WORK_DIR` (`./dist/apt-repo`).
 
+### What the script refuses to publish
+
+`DEB_DIR` alone decides the live repository: the remote prune deletes whatever the
+staging tree no longer carries, so a directory that is missing packages does not
+publish less — it **unpublishes** the ones it lacks. Two traps make that easy to hit
+by accident: `make pkg` writes an incomplete set (3 of the 7 shipped packages) into
+that exact directory, and a tree left over from an earlier build survives there
+indefinitely. So the script vets its input before touching the bucket, printing the
+resolved `DEB_DIR` and every package with its version, and then fails closed on:
+
+- **a dev build** — any version carrying `-dirty`, `-g<sha>` or `SNAPSHOT`. Override
+  with `APT_ALLOW_UNRELEASED=1`.
+- **an incomplete set** — the expected package names are read from `.goreleaser.yaml`
+  (the same source of truth that defines a release, so renames and new packages are
+  picked up automatically). The error lists what is missing. Override with
+  `APT_ALLOW_PARTIAL=1` — legitimate when re-publishing an older tag that predates a
+  package.
+
+Before the real sync it also runs `rclone sync --dry-run` and prints the objects that
+would be **removed** from the bucket, so deletions are visible in advance rather than
+discovered afterwards.
+
 ## CDN caching & `by-hash`
 
 Cloudflare edge-caches R2 objects by file extension and **overrides the origin

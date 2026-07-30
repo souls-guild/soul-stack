@@ -74,6 +74,7 @@ VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo 0.0.
 SOUL_LDFLAGS := -X main.soulVersion=$(VERSION)
 KEEPER_LDFLAGS := -X main.version=$(VERSION)
 SOULCTL_LDFLAGS := -X main.soulctlVersion=$(VERSION)
+LEGION_LDFLAGS := -X main.legionVersion=$(VERSION)
 
 # --- Release/packaging ---
 # Root of build artifacts (SBOM, native packages). Entirely in .gitignore (dist/) -
@@ -160,6 +161,15 @@ build:
 	@echo "go build -o soul-lint/$(BIN_DIR)/soul-lint ./cmd/soul-lint in soul-lint"
 	@cd soul-lint && go build -o $(BIN_DIR)/soul-lint ./cmd/soul-lint
 	@$(MAKE) build-soulctl
+	@$(MAKE) build-soul-legion
+
+# soul-legion is a shipped artifact (ADR-004 Amendment 2026-07-26), so `build`
+# has to produce it like the rest. Its code lives in the tests/load module, which
+# is outside MODULES - a separate target keeps that seam explicit (NIM-327 tracks
+# bringing the module under the check gate).
+build-soul-legion:
+	@echo "go build -o tests/load/$(BIN_DIR)/soul-legion ./cmd/soul-legion in tests/load (VERSION=$(VERSION))"
+	@cd tests/load && go build -ldflags '$(LEGION_LDFLAGS)' -o $(BIN_DIR)/soul-legion ./cmd/soul-legion
 
 # Builds the operator's client CLI (see docs/naming-rules.md -> soulctl).
 # Cobra scaffold with no command bodies implemented yet - a separate target so it
@@ -1235,8 +1245,7 @@ stress:
 		echo "stress: no dev-CA ($(STRESS_CA)) -- run 'make dev-provision' and retry."; \
 		exit 1; \
 	fi
-	@echo "go build -o tests/load/bin/soul-legion ./cmd/soul-legion in tests/load"
-	@cd tests/load && go build -o bin/soul-legion ./cmd/soul-legion
+	@$(MAKE) build-soul-legion
 	@JWT=""; \
 	if [ "$(API)" = "1" ] || [ "$(VOYAGE)" = "1" ] || [ "$(WRITE)" = "1" ]; then \
 		echo "stress: minting admin-JWT (make dev-jwt mechanism) for axes B/C/write"; \

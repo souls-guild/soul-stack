@@ -1,12 +1,19 @@
 #!/usr/bin/env bash
 # Mirror Soul Stack .deb packages into a flat apt repository and sync it to a
-# Cloudflare R2 bucket (NIM-135). Runs OUT OF BAND from the GitHub release
-# workflow — it needs R2 credentials + the signing GPG key, which we keep off
-# GitHub Actions. Trigger it by hand (or a self-hosted runner) after a release.
+# Cloudflare R2 bucket (NIM-135). The primary caller is .github/workflows/apt-publish.yml
+# (hosted runner, R2 + GPG credentials from repo secrets), which runs on `release:
+# published`. Running it by hand is the fallback path for an operator with the same
+# credentials.
 #
-# Flow: collect .deb → build pool/ + dists/<suite>/ index → sign Release → push
+# Flow: vet DEB_DIR → build pool/ + dists/<suite>/ index → sign Release → push
 # to R2 with rclone. Idempotent: re-running re-indexes and re-syncs the whole
 # tree. See README.md for the one-time R2 + GPG + client setup.
+#
+# PUBLISHING IS OUTWARD-FACING AND HARD TO REVERSE. What lands in the bucket is
+# decided entirely by DEB_DIR: the remote prune deletes whatever the staging tree
+# no longer carries, so an incomplete DEB_DIR does not just publish less — it
+# UNPUBLISHES the packages it is missing. Hence the two gates below, both
+# fail-closed, and the dry-run preview before the real sync.
 #
 # Required env:
 #   APT_GPG_KEY_ID      key id/email used to sign the Release file
@@ -17,6 +24,8 @@
 #   APT_ARCHS           space-separated arches (default: "amd64 arm64")
 #   DEB_DIR             dir holding the .deb files to mirror (default: ./dist/pkg)
 #   WORK_DIR            local repo staging dir (default: ./dist/apt-repo)
+#   APT_ALLOW_UNRELEASED=1  publish anyway when a package version is a dev build
+#   APT_ALLOW_PARTIAL=1     publish anyway when packages are missing vs .goreleaser.yaml
 set -euo pipefail
 
 SUITE="${APT_SUITE:-stable}"
@@ -31,13 +40,63 @@ need() { command -v "$1" >/dev/null 2>&1 || die "missing tool: $1"; }
 need apt-ftparchive   # from apt-utils
 need gpg
 need rclone
+need dpkg-deb
 : "${APT_GPG_KEY_ID:?set APT_GPG_KEY_ID}"
 : "${RCLONE_REMOTE:?set RCLONE_REMOTE (rclone remote for the R2 bucket)}"
 
 [ -d "$DEB_DIR" ] || die "DEB_DIR not found: $DEB_DIR"
 debs=$(find "$DEB_DIR" -maxdepth 1 -name '*.deb' | wc -l)
 [ "$debs" -gt 0 ] || die "no .deb files in $DEB_DIR"
-echo "publish-apt: mirroring $debs package(s) into suite=$SUITE component=$COMPONENT"
+
+# 0. Vet the input before touching the bucket, and show it. `make pkg` writes an
+# incomplete set into this very directory, and a stale tree from an earlier build
+# survives there indefinitely — either one would quietly rewrite the live repo.
+echo "publish-apt: DEB_DIR=$(cd "$DEB_DIR" && pwd)"
+echo "publish-apt: $debs package(s) → suite=$SUITE component=$COMPONENT"
+
+present=""
+unreleased=""
+while IFS= read -r deb; do
+  pkg=$(dpkg-deb -f "$deb" Package)
+  ver=$(dpkg-deb -f "$deb" Version)
+  arch=$(dpkg-deb -f "$deb" Architecture)
+  printf '  %-24s %-40s %s\n' "$pkg" "$ver" "$arch"
+  present="$present $pkg"
+  # git-describe leftovers (-dirty, -g<sha>) and goreleaser snapshots are dev
+  # builds; a released tag renders a clean version. Publishing one of these puts
+  # an unreproducible binary on every user's machine.
+  if [[ "$ver" =~ (dirty|SNAPSHOT|snapshot|-g[0-9a-f]{7,}) ]]; then
+    unreleased="$unreleased $pkg=$ver"
+  fi
+done < <(find "$DEB_DIR" -maxdepth 1 -name '*.deb' | sort)
+
+if [ -n "$unreleased" ]; then
+  echo "publish-apt: dev build(s) in DEB_DIR:$unreleased" >&2
+  [ "${APT_ALLOW_UNRELEASED:-0}" = "1" ] \
+    || die "refusing to publish a dev build; set APT_ALLOW_UNRELEASED=1 to override"
+  echo "publish-apt: APT_ALLOW_UNRELEASED=1 — publishing a dev build anyway" >&2
+fi
+
+# The expected package set comes from .goreleaser.yaml, the only source of truth
+# for what a release ships — so a rename or a new package is picked up here for
+# free, without a second list to keep in sync.
+goreleaser="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)/.goreleaser.yaml"
+if [ -f "$goreleaser" ]; then
+  missing=""
+  for want in $(grep -oE 'package_name:[[:space:]]*soul-stack-[a-z-]+' "$goreleaser" \
+                | awk '{print $2}' | sort -u); do
+    case " $present " in *" $want "*) ;; *) missing="$missing $want" ;; esac
+  done
+  if [ -n "$missing" ]; then
+    echo "publish-apt: missing vs $goreleaser:$missing" >&2
+    echo "publish-apt: these would be DELETED from the live repo, not merely skipped." >&2
+    [ "${APT_ALLOW_PARTIAL:-0}" = "1" ] \
+      || die "refusing to publish an incomplete set; set APT_ALLOW_PARTIAL=1 to override (e.g. re-publishing an older tag)"
+    echo "publish-apt: APT_ALLOW_PARTIAL=1 — publishing an incomplete set anyway" >&2
+  fi
+else
+  echo "publish-apt: WARNING: $goreleaser not found — completeness gate SKIPPED" >&2
+fi
 
 # 1. Layout: pool/<component>/ holds the .deb blobs; dists/ holds the indexes.
 # The pool is rebuilt from DEB_DIR every run: WORK_DIR persists between runs, so a
@@ -110,8 +169,22 @@ gpg --armor --export "$APT_GPG_KEY_ID" > "$WORK_DIR/soul-stack.gpg.key"
 # --delete-before: prune stale objects up front; rclone skips its default post-run
 # delete pass whenever an upload reports an IO error (harmless R2 retry noise), which
 # would otherwise leave removed packages lingering in the bucket forever.
+sync_flags=(--checksum --transfers 8 --fast-list --s3-no-check-bucket --delete-before)
+
+# Preview first: deletions are the irreversible half of a sync, and they are
+# driven by what the staging tree lacks rather than by anything stated here.
+echo "publish-apt: dry run against $RCLONE_REMOTE"
+dryrun=$(rclone sync "$WORK_DIR" "$RCLONE_REMOTE" "${sync_flags[@]}" --dry-run 2>&1) || true
+deletions=$(printf '%s\n' "$dryrun" | grep -iE 'delete' || true)
+if [ -n "$deletions" ]; then
+  echo "publish-apt: objects that will be REMOVED from the bucket:"
+  printf '%s\n' "$deletions" | sed 's/^/  /'
+else
+  echo "publish-apt: no objects will be removed"
+fi
+
 echo "publish-apt: syncing to $RCLONE_REMOTE"
-rclone sync "$WORK_DIR" "$RCLONE_REMOTE" --checksum --transfers 8 --fast-list --s3-no-check-bucket --delete-before
+rclone sync "$WORK_DIR" "$RCLONE_REMOTE" "${sync_flags[@]}"
 
 echo "publish-apt: done. Clients add:"
 echo "  deb [signed-by=/usr/share/keyrings/soul-stack.gpg] https://<r2-public-host>/ $SUITE $COMPONENT"
