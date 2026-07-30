@@ -221,7 +221,7 @@ func (r *Runner) run(ctx context.Context, spec RunSpec) {
 	// parsed, check the DECLARED floor against the one the body actually needs.
 	// A warning, not an abort - see warnCompatFloorTooLow.
 	warnCompatFloorTooLow(serviceCompatEntity(art),
-		append(config.KeeperFeaturesOfService(art.Manifest), config.KeeperFeaturesOfTasks(scn.Tasks)...), log)
+		append(config.KeeperFeaturesOfService(art.Manifest), config.KeeperFeaturesOfScenario(scn)...), log)
 
 	if synthed, names := config.SynthesizeModuleInstalls(scn.Tasks, art.Manifest.Modules); len(names) > 0 {
 		scn.Tasks = synthed

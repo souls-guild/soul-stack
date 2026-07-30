@@ -73,7 +73,7 @@ func scenarioCompatFloorDiags(scenarioPath string, scn *config.ScenarioManifest)
 	if serr != nil || svc == nil {
 		return nil
 	}
-	return floorDiags(servicePath, svc.Compat.KeeperWindow(), config.KeeperFeaturesOfTasks(scn.Tasks))
+	return floorDiags(servicePath, svc.Compat.KeeperWindow(), config.KeeperFeaturesOfScenario(scn))
 }
 
 // floorDiags — the shared tail: infer the floor over the used features, compare

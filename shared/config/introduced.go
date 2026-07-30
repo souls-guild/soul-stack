@@ -104,6 +104,23 @@ const (
 	// an older keeper accepts the manifest and silently drops the ordering
 	// invariant instead of refusing it.
 	FeatureTaskRequire = "task.require"
+
+	// FeatureScenarioNameTemplate — the create-scenario key `name_template`
+	// (ADR-0079, NIM-177): the incarnation name is composed server-side from
+	// `input:` instead of being taken as free text. The first SCENARIO-level
+	// grammar to carry a floor — until it, a scenario's own manifest contributed
+	// none, only its task list did. A keeper that predates it does not compose
+	// anything: it expects `name` in the request, so a definition relying on the
+	// template cannot be created there at all.
+	FeatureScenarioNameTemplate = "scenario.name_template"
+
+	// FeatureTaskBlockInclude — an `include:` nested inside `block:` (NIM-169).
+	// Top-level `include:` is baseline grammar; what arrived this cycle is
+	// expanding one INSIDE a block, in both layers. An older keeper walks the
+	// block and produces no tasks for the nested include — it accepts the
+	// definition and quietly renders less of it, the same shape as async: and
+	// require:.
+	FeatureTaskBlockInclude = "task.block.include"
 )
 
 // keeperDSLFeatures — the registry of keeper-side grammar features that arrived
@@ -123,6 +140,8 @@ var keeperDSLFeatures = map[string]dslFeature{
 	FeatureDestinyInputConstraints:  {id: FeatureDestinyInputConstraints, introducedIn: Unreleased},
 	FeatureTaskAsync:                {id: FeatureTaskAsync, introducedIn: Unreleased},
 	FeatureTaskRequire:              {id: FeatureTaskRequire, introducedIn: Unreleased},
+	FeatureScenarioNameTemplate:     {id: FeatureScenarioNameTemplate, introducedIn: Unreleased},
+	FeatureTaskBlockInclude:         {id: FeatureTaskBlockInclude, introducedIn: Unreleased},
 }
 
 // dslFeatureUse builds a used-feature record from the registry. An id absent from
@@ -150,6 +169,27 @@ func KeeperFeaturesOfService(m *ServiceManifest) []KeeperFeature {
 		}
 	}
 	return out
+}
+
+// KeeperFeaturesOfScenario collects the keeper-side features one scenario uses:
+// its own manifest grammar plus everything its task list needs.
+//
+// Added because the scenario manifest contributed NO floor anywhere (NIM-354):
+// both callers — soul-lint's scenario path and keeper's render path — walked
+// only `scn.Tasks`, so a scenario-level key was invisible to the cross-check.
+// `name_template` is the first such key; the collector exists so the next one
+// has somewhere to go.
+func KeeperFeaturesOfScenario(m *ScenarioManifest) []KeeperFeature {
+	if m == nil {
+		return nil
+	}
+	var out []KeeperFeature
+	if m.NameTemplate != "" {
+		if f, ok := dslFeatureUse(FeatureScenarioNameTemplate, "$.name_template"); ok {
+			out = append(out, f)
+		}
+	}
+	return append(out, KeeperFeaturesOfTasks(m.Tasks)...)
 }
 
 // KeeperFeaturesOfDestiny collects the keeper-side features one destiny uses:
@@ -230,14 +270,24 @@ type coreModuleLookup interface {
 
 func keeperFeaturesOfTasks(tasks []Task, reg coreModuleLookup) []KeeperFeature {
 	var out []KeeperFeature
-	collectTaskFeatures(tasks, "$.tasks", reg, &out)
+	collectTaskFeatures(tasks, "$.tasks", false, reg, &out)
 	return out
 }
 
-func collectTaskFeatures(tasks []Task, prefix string, reg coreModuleLookup, out *[]KeeperFeature) {
+// insideBlock says whether this list is the body of a `block:`. It exists for one
+// feature — a nested `include:` — because the top-level form is baseline grammar
+// and only the nested one arrived this cycle. Carried as a parameter rather than
+// derived from the path prefix: a string match on ".block" would be a second,
+// silent definition of the same fact.
+func collectTaskFeatures(tasks []Task, prefix string, insideBlock bool, reg coreModuleLookup, out *[]KeeperFeature) {
 	for i := range tasks {
 		t := &tasks[i]
 		where := fmt.Sprintf("%s[%d]", prefix, i)
+		if insideBlock && t.Include != nil {
+			if f, ok := dslFeatureUse(FeatureTaskBlockInclude, where+".include"); ok {
+				*out = append(*out, f)
+			}
+		}
 		if t.Async {
 			if f, ok := dslFeatureUse(FeatureTaskAsync, where+".async"); ok {
 				*out = append(*out, f)
@@ -252,7 +302,7 @@ func collectTaskFeatures(tasks []Task, prefix string, reg coreModuleLookup, out 
 			*out = append(*out, coreModuleFeatures(t.Module.Module, t.Module.Params, where, reg)...)
 		}
 		if t.Block != nil {
-			collectTaskFeatures(t.Block.Block, where+".block", reg, out)
+			collectTaskFeatures(t.Block.Block, where+".block", true, reg, out)
 		}
 	}
 }
