@@ -32,27 +32,52 @@ Usage: classify-l1-failure.py <go-test-output-file>
 import re
 import sys
 
-# Signatures only the container/daemon layer produces. An assertion in this
-# repository does not print any of these.
+# The strongest signal available, and it is not a guess about library text: 38 of
+# the 39 integration suites print exactly this when their own container setup
+# fails, e.g. "toll integration: container setup failed (REQUIRE_DOCKER): …". The
+# suite is *stating* that it died before running a test. Nothing else in the tree
+# prints it, and an assertion cannot.
+SETUP_DECLARED = re.compile(r"integration: .*setup failed", re.IGNORECASE)
+
+# Container/daemon-layer text, for the suites and libraries that fail without the
+# marker above. These come from testcontainers, not from any assertion here.
+#
+# This list grows from failures actually observed, never from imagination. The
+# first version of it was guessed — it carried "reaper failed" while testcontainers
+# prints "wait for reaper" — and the result was two container failures labelled
+# REGRESSION, which is the mistake that sends someone hunting a defect that does
+# not exist. If a real failure is misfiled, add its text here; do not invent
+# entries for failures nobody has seen.
 INFRA = [
-    "wait until ready: context deadline exceeded",
+    "could not start container",
     "failed to start container",
+    "unexpected container status",
+    "wait for reaper",
+    "new reaper",
+    "could not start reaper",
+    "generic container:",
+    "started hook:",
+    "check target: retries:",
     "container startup",
     "Error response from daemon",
     "Cannot connect to the Docker daemon",
     "error during connect",
     "docker-credential-",
-    "reaper failed",
-    "could not start reaper",
-    "Reaper: failed",
     "port not found",
     "failed to get mapped port",
     "no such host",
-    "image pull",
     "manifest unknown",
     "toomanyrequests",
     "device or resource busy",
     "no space left on device",
+    # A client that speaks Redis received an HTTP response, so the mapped port it
+    # was handed belonged to a different container. Observed as
+    # `redis: ping (mode=standalone): redis: can't parse map reply:
+    # "HTTP/1.1 400 Bad Request"` inside a test body — which is why it reaches this
+    # list rather than the declared-setup marker: the collision surfaces after
+    # TestMain, dressed as an assertion. No assertion here produces it.
+    "can't parse map reply",
+    'HTTP/1.1 400 Bad Request',
 ]
 
 # Signatures either layer could produce. Named separately on purpose — see the
@@ -61,11 +86,9 @@ UNCLEAR = [
     "connection refused",
     "CLUSTERDOWN",
     "i/o timeout",
-    "EOF",
     "context deadline exceeded",
 ]
 
-FAIL_PKG = re.compile(r"^(?:FAIL|ok|---)\s")
 FAIL_LINE = re.compile(r"^FAIL\s+(\S+)")
 TEST_FAIL = re.compile(r"^\s*--- FAIL: (\S+)")
 
@@ -127,33 +150,55 @@ def main() -> int:
 
     for path, out in failing:
         blob = "\n".join(out)
+        declared = SETUP_DECLARED.search(blob)
         infra_hits = [s for s in INFRA if s in blob]
         unclear_hits = [s for s in UNCLEAR if s in blob]
         tests = TEST_FAIL.findall(blob)
 
-        if tests and not infra_hits and not unclear_hits:
+        # Order matters, and the ordering IS the design.
+        #
+        # A named `--- FAIL: Test…` line is the only thing that can make this a
+        # REGRESSION, and it is required rather than assumed: a suite that dies in
+        # TestMain prints `FAIL <pkg>` with no test name at all, so defaulting the
+        # nameless case to REGRESSION would report "fix the code" about code that
+        # was never exercised. That mistake is not symmetrical with the other one —
+        # it sends someone hunting a defect that does not exist, and after twice it
+        # teaches them to disbelieve the label — so the nameless case is UNCLEAR.
+        if declared:
+            verdict = "INFRA"
+        elif tests and not infra_hits and not unclear_hits:
             verdict = "REGRESSION"
+        elif tests:
+            verdict = "UNCLEAR"
         elif infra_hits:
             verdict = "INFRA"
-        elif unclear_hits:
-            verdict = "UNCLEAR"
         else:
-            verdict = "REGRESSION"
+            verdict = "UNCLEAR"
 
         print()
         print(f"  {verdict:<11}{path}")
         if tests:
             shown = ", ".join(tests[:4]) + (" …" if len(tests) > 4 else "")
             print(f"{'':13}failed test(s): {shown}")
-        if verdict == "INFRA":
+        if verdict == "INFRA" and declared:
+            print(f"{'':13}the suite declared it: {declared.group(0)[:90]!r}")
+        elif verdict == "INFRA":
             print(f"{'':13}matched: {', '.join(repr(s) for s in infra_hits[:3])}")
-        elif verdict == "UNCLEAR":
-            print(f"{'':13}matched: {', '.join(repr(s) for s in unclear_hits[:3])}"
+        elif verdict == "UNCLEAR" and (unclear_hits or infra_hits):
+            hits = (unclear_hits + infra_hits)[:3]
+            print(f"{'':13}matched: {', '.join(repr(s) for s in hits)}"
                   " — either layer can print these")
+        elif verdict == "UNCLEAR":
+            print(f"{'':13}no test reported a failure, so nothing here identifies the layer")
 
         pkg = import_path_to_pkg(path)
         if verdict == "REGRESSION":
-            print(f"{'':13}An assertion caught something. Fix it; rerunning changes nothing.")
+            print(f"{'':13}An assertion failed, so the code WAS exercised. A finding —")
+            print(f"{'':13}unless a solitary rerun clears it, and if it does, that is a")
+            print(f"{'':13}finding too: a test that only fails under load is the very")
+            print(f"{'':13}defect this ticket is about. Either way it is not nothing.")
+            if pkg:
+                print(f"{'':17}make test-integration PKG={pkg}")
         elif verdict == "INFRA":
             print(f"{'':13}The container layer never came up, so nothing was asserted here.")
             if pkg:
