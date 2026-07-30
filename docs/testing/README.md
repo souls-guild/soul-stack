@@ -127,6 +127,29 @@ quietly; declaring the weaker run is possible and explicit
 the default anyway, and skipping it is the thing that has to be said out loud
 (`SOUL_STACK_INTEGRATION_SKIP_DOCKER=1`).
 
+### When a stand fails to build on docker registry credentials
+
+A failure that names `docker-credential-…` is the machine, not the code, and it
+picks out exactly the suites that **build** a stand from a Dockerfile — L2 in
+`keeper/internal/trial` and L3b in `tests/e2e-live` — while every pull-based suite
+on the same machine stays green. testcontainers resolves registry credentials for
+each Dockerfile build, asking the configured helper about every registry in
+`~/.docker/config.json`, and it treats a failure there as fatal; the image-pull
+path logs the same failure and continues anonymously. So a helper that cannot run
+takes down a build whose only base image is public and needed no credentials.
+
+On WSL2 with Docker Desktop the helper is a Windows binary run through WSL interop,
+so it stops working whenever interop is not registered — `systemd-binfmt` flushes
+`binfmt_misc` and does not restore `WSLInterop`. Check with
+`cat /proc/sys/fs/binfmt_misc/WSLInterop` (must print `enabled`) and re-register by
+restarting WSL.
+
+The L2 harness no longer depends on this: it probes the credential plumbing before
+building and, when it is broken, builds without credentials and says so on stderr
+(`keeper/internal/trial/l2_registry_auth.go`). That costs nothing, because a helper
+that cannot run yields credentials for no registry anyway. L3b has no such
+pre-flight yet — see NIM-307 for the reasoning and the follow-up.
+
 ## Local live-gate of large features (`make e2e-live-gate`)
 
 `e2e-live-gate` - **mandatory local live run before batch commit of each

@@ -74,12 +74,19 @@ func StartL2Stand(ctx context.Context, stand Stand) (*L2Stand, error) {
 	if err != nil {
 		return nil, err
 	}
+	if req.FromDockerfile.Context != "" {
+		// The stand is about to be BUILT, and testcontainers resolves registry
+		// credentials for every build — including for a Dockerfile whose only base
+		// image is public. Make sure a credential helper that cannot run does not
+		// take the build down with it (l2_registry_auth.go, NIM-307).
+		ensureRegistryAuthUsable()
+	}
 	ctr, err := testcontainers.GenericContainer(ctx, testcontainers.GenericContainerRequest{
 		ContainerRequest: req,
 		Started:          true,
 	})
 	if err != nil {
-		return nil, fmt.Errorf("trial L2: start stand (init=%s): %w", stand.init(), err)
+		return nil, fmt.Errorf("trial L2: start stand (init=%s): %w", stand.init(), annotateRegistryAuthError(err))
 	}
 
 	if err := ctr.CopyFileToContainer(ctx, soulBin, containerSoulPath, 0o755); err != nil {
