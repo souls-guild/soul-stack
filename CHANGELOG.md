@@ -1136,6 +1136,44 @@ order to act in.
   no attacker-controlled request reflected into the response as there is in the
   HTTP case.
 
+- **A flooded console socket threw away the newest output instead of the oldest.**
+  The queue in front of the writer refused arrivals once it was full, so an
+  operator watching a chatty build sat pinned to a screen minutes old while the
+  output they were waiting for was discarded on arrival — a session that was
+  complete and useless. It now evicts the oldest *chunk* and keeps the arrival.
+  Two things fell out of that. The queue had to stop being a channel: a channel
+  cannot be inspected, and blind head-eviction would have discarded `opened` (a
+  panel stuck on "connecting" forever) or `exit` (a terminal that never ends), so
+  control frames are stepped over and everything else keeps arrival order. And a
+  control frame arriving into a full queue no longer costs the whole socket: it
+  used to close the connection and reap every session behind it, so a flood in
+  one panel killed an operator's entire wall. The socket now closes only when the
+  queue holds nothing but control frames. An evicted frame carries its own
+  `dropped_bytes` back into the accounting, so "every loss is counted" does not
+  quietly leak. Left undone deliberately: the drop marker keeps its place in the
+  queue rather than being given a privileged path past it — the marker sits
+  exactly at the gap, and hurrying it would announce the gap ahead of the output
+  that precedes it.
+
+- **A console socket died without saying why, or to whom.** The write-failure
+  path logged at debug and closed; the operator saw a bare 1006, and the Keeper
+  log did not separate "the peer fell behind and lost its shells" from "someone
+  closed a tab". The level now follows what happened first. A write that fails
+  while a teardown is already running is Keeper reclaiming its own socket and
+  stays at debug — the teardown close is what knocked that write over, so warning
+  there would have fired on every ordinary tab close and buried the real case. A
+  write that fails first is warned with the Archon's identity, because it costs
+  that operator every pty on the socket. The reap line carries the reason and the
+  number of ptys it killed, neither of which the writer can know. The reason
+  became a type rather than a free string: the constant is the Prometheus label
+  (a closed set, [ADR-024](docs/adr/0024-observability.md) §2.2) and its text is
+  what Soul, the recording and the audit trail are told. Found on the way:
+  `Hub.Close` never counted a terminal at all, so `keeper_console_sessions_total`
+  moved only for Soul-side exits and orphan reaps — kill-on-disconnect, the idle
+  sweep and "recording unavailable" decremented the gauge without ever
+  incrementing the counter, and the totals did not reconcile with the gauge that
+  the metric's own contract says they should.
+
 - **Cloud provisioning converges instead of colliding.** A second `create` over
   an incarnation no longer dies on the `souls` rows its own first attempt left
   behind, a re-run reconciles hosts that are already up rather than treating live
