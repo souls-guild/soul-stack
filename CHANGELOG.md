@@ -705,6 +705,35 @@ order to act in.
   reads *before* writing the task — the lint warning only arrives once the
   definition exists.
 
+- **`GET /v1/deprecations` — which incarnations still pass a param that is going
+  away** ([ADR-0076(v)](docs/adr/0076-engine-compat-window.md)). The window above
+  tells an operator that a param has a deadline; this answers the question that
+  turns the warning into a migration plan — *who still passes it, and where*.
+  One row per deprecated param rather than per site, because that is the unit of
+  work somebody schedules, and each row carries the incarnation, the service at
+  its pinned ref, the scenario and the location inside it.
+
+  Sourced from the **definitions**, never from run history. An aggregate over
+  stored runs answers "who passed it in the runs we happened to observe": an
+  incarnation nobody ran this month is missing from it, and one fixed yesterday
+  still appears in it. Reading definitions instead needs a plugin manifest to
+  resolve, which is why this waited for that resolver.
+
+  It reports its own blind spots beside its findings. A definition that fails to
+  load, or a module whose contract is unreadable here, lands in `gaps` with the
+  incarnations it affects — so an empty `items` list can be read as "the estate
+  is clean" only when `gaps` is empty too. The survey also states how many
+  incarnations and definitions it actually walked, and sets `truncated` when the
+  estate is larger than one pass covers; a partial answer says so rather than
+  looking complete. Scope is the caller's own: an undefined scope yields an
+  empty survey, never the whole estate.
+
+- **`soulctl` can read apply runs, and prints the deprecation notices on them**
+  (NIM-269). The run's notices already reached the audit trail, the SSE frame and
+  the stored run, but the CLI could not show a run at all — so an operator
+  working from a terminal had no way to see what a run had warned them about
+  short of querying the API by hand.
+
 - **The `redis` example generates ACL user passwords instead of demanding a
   pre-seed.** `add_user` and `update_users` used to abort at render unless the
   operator had run `vault kv put` for every new user first — a manual step in
@@ -740,6 +769,13 @@ order to act in.
   binaries the Homebrew cask and the winget package carry, so every channel
   lands the same tool set. Carries no files itself. The `keeper` and `soul`
   daemons stay separate packages on purpose: a server installs only what it runs.
+
+- **The apt publisher refuses to publish a partial or dev-built set.** The
+  remote prune deletes whatever staging no longer holds, so a run assembled from
+  an incomplete or locally-built `dist/` did not merely publish the wrong
+  packages — it removed the right ones. Publishing now stops before touching the
+  remote unless the set is complete and release-built, which turns a silent
+  half-publication into a refusal an operator can read.
 
 ### Security
 
