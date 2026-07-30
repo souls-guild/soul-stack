@@ -7,6 +7,7 @@
   "ariaEditPermissions": "редактировать permissions {{name}}",
   "assignRoleTitle": "Назначить роль: {{aid}}",
   "authMethod": "Метод аутентификации",
+  "bindMembersTitle": "Привязать хосты к {{name}}",
   "covenHint": "Стабильные логические метки хоста (кластер / проект / окружение)",
   "createChoirTitle": "Создать Choir → {{name}}",
   "createRoleTitle": "Создать роль",
@@ -37,6 +38,7 @@
   "rolesHint": "Назначаемые роли — определяют права оператора",
   "selectPlaceholder": "Выберите…",
   "tokenTtlHint": "Срок жизни выпускаемого JWT",
+  "unbindMemberTitle": "Отвязать {{sid}}",
   "unlockTitle": "Снять error_locked: {{name}}",
   "upgradeTitle": "Обновить: {{name}}"
 }

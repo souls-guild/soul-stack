@@ -26,6 +26,7 @@
   "grantRoleSubmit": "Привязать: {{n}}",
   "grantRoleTitle": "Привязать роль к {{name}}",
   "members": "Участники",
+  "membersAria": "участники",
   "name": "Имя группы",
   "nameLabel": "Имя группы (только чтение)",
   "namePlaceholder": "ops-team",

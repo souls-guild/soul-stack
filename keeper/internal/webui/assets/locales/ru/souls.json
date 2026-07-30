@@ -81,6 +81,7 @@
   "soulprintSearchHint": "пути: os.* / kernel.* / cpu.* / memory.* / network.* — операторы: = != >= <= ~ ; wildcard *",
   "soulprintSearchLabel": "Поиск по Soulprint",
   "soulprintSearchPlaceholder": "os.family=debian & memory.total_mb>=4096",
+  "soulprintTitle": "Soulprint",
   "soulprintUnrecognized": "Не распознано: {{tokens}}",
   "sshTargetTbdPrefix": "Редактирование SSH-таргета — TBD endpoint ",
   "sshTargetTbdSuffix": " отсутствует в API.",
