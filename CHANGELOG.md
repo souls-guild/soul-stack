@@ -705,6 +705,35 @@ order to act in.
   reads *before* writing the task — the lint warning only arrives once the
   definition exists.
 
+- **`GET /v1/deprecations` — which incarnations still pass a param that is going
+  away** ([ADR-0076(v)](docs/adr/0076-engine-compat-window.md)). The window above
+  tells an operator that a param has a deadline; this answers the question that
+  turns the warning into a migration plan — *who still passes it, and where*.
+  One row per deprecated param rather than per site, because that is the unit of
+  work somebody schedules, and each row carries the incarnation, the service at
+  its pinned ref, the scenario and the location inside it.
+
+  Sourced from the **definitions**, never from run history. An aggregate over
+  stored runs answers "who passed it in the runs we happened to observe": an
+  incarnation nobody ran this month is missing from it, and one fixed yesterday
+  still appears in it. Reading definitions instead needs a plugin manifest to
+  resolve, which is why this waited for that resolver.
+
+  It reports its own blind spots beside its findings. A definition that fails to
+  load, or a module whose contract is unreadable here, lands in `gaps` with the
+  incarnations it affects — so an empty `items` list can be read as "the estate
+  is clean" only when `gaps` is empty too. The survey also states how many
+  incarnations and definitions it actually walked, and sets `truncated` when the
+  estate is larger than one pass covers; a partial answer says so rather than
+  looking complete. Scope is the caller's own: an undefined scope yields an
+  empty survey, never the whole estate.
+
+- **`soulctl` can read apply runs, and prints the deprecation notices on them**
+  (NIM-269). The run's notices already reached the audit trail, the SSE frame and
+  the stored run, but the CLI could not show a run at all — so an operator
+  working from a terminal had no way to see what a run had warned them about
+  short of querying the API by hand.
+
 - **The `redis` example generates ACL user passwords instead of demanding a
   pre-seed.** `add_user` and `update_users` used to abort at render unless the
   operator had run `vault kv put` for every new user first — a manual step in
@@ -740,6 +769,13 @@ order to act in.
   binaries the Homebrew cask and the winget package carry, so every channel
   lands the same tool set. Carries no files itself. The `keeper` and `soul`
   daemons stay separate packages on purpose: a server installs only what it runs.
+
+- **The apt publisher refuses to publish a partial or dev-built set.** The
+  remote prune deletes whatever staging no longer holds, so a run assembled from
+  an incomplete or locally-built `dist/` did not merely publish the wrong
+  packages — it removed the right ones. Publishing now stops before touching the
+  remote unless the set is complete and release-built, which turns a silent
+  half-publication into a refusal an operator can read.
 
 ### Security
 
@@ -995,21 +1031,27 @@ order to act in.
   a package set rather than narrowing it, so `make test-integration` was handing
   the whole untagged unit corpus (~155 packages) to a command carrying `-race`,
   inside the one job that also starts ~40 container sets. Unit tests written
-  against uninstrumented timing failed there on instrumentation speed:
-  `TestRun_CancelDuringTask` polled `Cancel` every 5 ms from the moment `Run`
-  registered the apply-id — which happens well before task 0 is dispatched — and
-  lost ~1 % of runs under `-race` while staying green in `make test` on the same
-  commit. Two attempts on one sha failed in two different packages with `DATA
-  RACE` in neither. A job failing on a coin toss is untrustworthy in both
-  directions, and once people learn to rerun it, red stops meaning anything at
-  all. L1 now runs the packages that actually carry `integration`-tagged tests (43
-  today), derived from the tree on every invocation by
-  `scripts/integration-packages.sh` rather than kept as a list that would rot. The
-  excluded packages lost no coverage — they run in `make test`, now under the
-  detector in `make test-race`, and `make vet-tags` still compiles the whole tree
-  under the tag. `TestRun_CancelDuringTask` synchronises on the module's `Apply`
-  being entered instead of on a wall-clock interval; that is a synchronisation
-  fix, not a longer wait, and the invariant it asserts is unchanged.
+  against uninstrumented timing then failed there on instrumentation speed, and
+  three consecutive runs failed on a **different** test each time — the signature
+  of chance, where a real regression would have kept failing on the same one. The
+  three participants are fixed to measure behaviour instead of the machine: the
+  Redis cluster fixture waits for `cluster_state:ok` from every master rather than
+  for the first successful dial, `TestRun_CancelDuringTask` waits for the module's
+  `Apply` to announce it is running rather than polling `Cancel` every 5 ms from
+  the moment `Run` registers the apply-id (which happens well before task 0 is
+  dispatched — a poll landing in that window cancelled a run whose task had not
+  started, losing ~1 % of runs under `-race` while staying green in `make test` on
+  the same commit), and `TestConsole_ThrottledSessionStillTearsDownFast` no longer
+  asserts on elapsed wall-clock. Those are synchronisation fixes, not longer
+  waits: a raised timeout would only make the wrong outcome rarer while still
+  asserting nothing.
+
+  Fixing the three does not fix the class, so the set was corrected too. L1 now
+  runs the packages that actually carry `integration`-tagged tests (43 today),
+  derived from the tree on every invocation by `scripts/integration-packages.sh`
+  rather than kept as a list that would rot. The excluded packages lost no
+  coverage — they run in `make test`, now under the detector in `make test-race`,
+  and `make vet-tags` still compiles the whole tree under the tag.
 
   **Nothing ran the detector where the concurrency actually is.** Every concurrent
   subsystem lives in untagged packages — the async runner and its barriers
@@ -1028,6 +1070,22 @@ order to act in.
   sweep means "no race was observed this run" — a per-run claim. Cached, `go test`
   replays one historical observation for ever; two consecutive sweeps finished in
   8 s reporting `(cached) ok` for all 140 packages.
+
+  **An infrastructure failure was indistinguishable from a caught regression.**
+  `CLUSTERDOWN`, `connection refused` against a mapped port and "wait until ready:
+  context deadline exceeded" all arrive in the same `--- FAIL` shape as an
+  assertion, and the two have opposite answers: rerun that package, versus fix the
+  code. Told apart by eye, every red L1 run cost a person an hour of reading
+  container logs — and the cheap way out of that hour, "L1 is flaky, rerun it", is
+  precisely how a real regression gets waved through. On failure the target now
+  labels each failing package **REGRESSION** / **INFRA** / **UNCLEAR** and prints
+  the `PKG=` line to rerun a suspect one alone. `UNCLEAR` exists rather than being
+  folded into `INFRA` because a false `INFRA` label is the failure mode that
+  matters — it is the one that makes a finding disappear — so a signature either
+  layer can print stays a finding until a solitary rerun says otherwise. Nothing is
+  downgraded: L1 still fails and the target still exits non-zero. No readiness wait
+  was loosened to make any of this quieter; that would trade a loud infra failure
+  for a silent one.
 
   Narrowing what L1 runs introduced a failure mode the old `./...` could not have,
   so it is guarded rather than trusted: if the derivation ever returns nothing,
@@ -1049,6 +1107,46 @@ order to act in.
   reader can still pick the wrong row — so `make check-ci` answers "has CI verified
   THIS commit?" about a sha it derives from git, and prints `cancelled`, `skipped`
   and "no run exists" as their own outcomes instead of folding them into a verdict.
+- **The spec said a group construct's requisite skips the whole group when its
+  condition is not met. That is only true for descendants with no requisite of
+  their own** ([ADR-009](docs/adr/0009-scenario-dsl.md) amendment 2026-07-30,
+  [destiny/tasks.md §6.5](docs/destiny/tasks.md), [scenario/orchestration.md
+  §2.1.2](docs/scenario/orchestration.md)). `block:` and `apply:` pass their own
+  `onchanges:`/`onfail:`/`require:` into every task of the group, merged with the
+  task's own as a **union of names** — and a union of `onchanges:` composes as
+  **OR**. So a group-level requisite **widens** the gating of a descendant that
+  already had one, rather than narrowing it:
+
+  ```yaml
+  # the destiny task, gated on its own source
+  - name: Restart DragonFly because the binary or unit changed
+    module: core.service.restarted
+    onchanges: [dragonfly_bin, dragonfly_unit]
+
+  # the applier over that destiny
+  - name: Apply the dragonfly destiny
+    onchanges: [df_config]      # reads as "only when the config changed"
+    apply: { destiny: dragonfly, input: { … } }
+  ```
+
+  The restart ends up gated on `[df_config, dragonfly_bin, dragonfly_unit]` and
+  fires on a binary change even when `df_config` never moved. Behaviour is
+  unchanged — this is what both constructs have always done (`block:` since the
+  C1 pilot, `apply:` since the applier stopped dropping its own keys); what was
+  wrong was the documentation, which stated the opposite in one place and said
+  nothing about the composition in the others. Note that `when:` on the same
+  construct merges by AND and narrows, so the two axes deliberately compose in
+  opposite directions.
+
+  **There is no way to spell "outer AND inner" today**, and no workaround
+  reproduces it — `when:` on an applier must be static, `where:` selects hosts
+  rather than reacting to an outcome. Keep the requisite off the group when a
+  descendant's own must stay authoritative. Introducing AND needs a grouped
+  requisite on the wire plus a rule for a bracket whose sources are all filtered
+  out on a host; it is deferred to NIM-351 and will be a breaking change to the
+  behaviour fixed here. Guard tests now pin the semantics on both sides
+  (`keeper/internal/render`, `soul/internal/runtime`) so it cannot drift in
+  silence.
 
 - **Only an unrestricted role could create an incarnation whose name comes from a
   `name_template`.** The create gate scopes from the request body before the handler

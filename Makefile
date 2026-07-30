@@ -305,17 +305,39 @@ PKG ?= ./...
 # detector in `test-race`, and `vet-tags` still compiles the whole tree under the
 # tag. So this narrows what L1 RUNS without narrowing what is CHECKED — which is
 # the only reason it is allowed, given NIM-238.
+# On failure the output goes through scripts/classify-l1-failure.py, which says of
+# each failing package whether it died at the container layer or on an assertion.
+# `CLUSTERDOWN`, `connection refused` against a mapped port and "wait until ready:
+# context deadline exceeded" arrive formatted exactly like a caught regression, and
+# the two have opposite answers — rerun that package, versus fix the code. Read by
+# eye, every red run costs an hour deciding which happened, and the cheap way out of
+# that hour ("L1 is flaky, rerun it") is how a real regression gets dismissed.
+# Nothing is downgraded: the classification is a label, the exit code is still 1,
+# and a failure that survives a solitary rerun is a finding whatever its label says.
+#
+# The loop no longer stops at the first failing module. It used to `exit 1` there,
+# which hid whether the other modules were also red — and the classifier is worth
+# more with the whole picture than with the first fragment of it. bash + pipefail
+# so `| tee` cannot swallow a non-zero status.
+test-integration: SHELL := /bin/bash
 test-integration: $(if $(filter ./...,$(PKG)),check-integration-set,)
-	@for m in $(MODULES); do \
+	@set -o pipefail; \
+	log="$$(mktemp -t soul-stack-l1-XXXXXX.log)"; rc=0; \
+	trap 'rm -f "$$log"' EXIT; \
+	for m in $(MODULES); do \
 		pkgs="$$(cd $$m && $(CURDIR)/scripts/integration-packages.sh $(PKG))"; \
 		if [ -z "$$pkgs" ]; then \
 			echo "skip $$m (no package under $(PKG) carries integration-tagged tests)"; \
 			continue; \
 		fi; \
 		echo "go test -tags=integration -race -count=1 -p $(INTEGRATION_PARALLEL) in $$m ($$(echo $$pkgs | wc -w) tagged pkg; untagged ones run in make test / test-race)"; \
-		(cd $$m && SOUL_STACK_INTEGRATION_REQUIRE_DOCKER=$(SOUL_STACK_INTEGRATION_REQUIRE_DOCKER) \
-			go test -tags=integration -race -count=1 -p $(INTEGRATION_PARALLEL) $$pkgs) || exit 1; \
-	done
+		if ! (cd $$m && SOUL_STACK_INTEGRATION_REQUIRE_DOCKER=$(SOUL_STACK_INTEGRATION_REQUIRE_DOCKER) \
+			go test -tags=integration -race -count=1 -p $(INTEGRATION_PARALLEL) $$pkgs 2>&1 | tee -a "$$log"); then \
+			rc=1; \
+		fi; \
+	done; \
+	if [ "$$rc" -ne 0 ]; then $(CURDIR)/scripts/classify-l1-failure.py "$$log" || true; fi; \
+	exit "$$rc"
 
 # L3a fast-loop E2E (ADR-039): the working harness - testcontainers (PG+Redis+Vault) +
 # a real Keeper process + a soul-stub with live gRPC-mTLS. A separate go module
@@ -1049,6 +1071,10 @@ check: check-fmt vet vet-tags build test test-plugins check-integration-set chec
 # believing it. Only a failure that survives the rerun is a finding. Do not
 # "fix" it by loosening a readiness wait: that trades a loud infra flake for a
 # quiet one.
+#
+# Which of the two you got is no longer left to the reader: on failure
+# `test-integration` labels every failing package REGRESSION / INFRA / UNCLEAR
+# and prints the `PKG=` line to rerun the suspect one alone (NIM-349).
 # check-ci — "has CI verified THIS commit?", asked about a sha derived from git
 # rather than read off a branch listing (NIM-339). REF= to ask about another ref.
 #

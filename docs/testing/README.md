@@ -106,6 +106,30 @@ One-time flake at container start (testcontainers infra — for example a timeou
 bringing Vault up) is not a code regression: rerun the affected package in
 isolation rather than rolling the change back.
 
+**You no longer have to work out which one you got.** When L1 fails, the target
+runs [`scripts/classify-l1-failure.py`](../../scripts/classify-l1-failure.py) over
+the output and labels every failing package:
+
+- **REGRESSION** — an assertion failed. A finding; rerunning changes nothing.
+- **INFRA** — a signature only the container/daemon layer can produce (`wait until
+  ready: context deadline exceeded`, `Error response from daemon`,
+  `docker-credential-…`). Nothing was asserted, so there is nothing to conclude
+  about the code. It prints the `PKG=` line to rerun that package alone.
+- **UNCLEAR** — a signature either layer can produce (`connection refused`,
+  `CLUSTERDOWN`, `i/o timeout`). Deliberately **not** folded into INFRA: a false
+  INFRA label is the failure mode that matters, because that is the one that makes
+  a regression disappear. Treat UNCLEAR as a finding until a solitary rerun says
+  otherwise.
+
+Why label rather than fix: `CLUSTERDOWN` and a failed assertion arrive in the same
+`--- FAIL` shape and have opposite answers, so telling them apart by eye cost a
+person an hour per red run — and the cheap way out of that hour ("L1 is flaky,
+rerun it") is exactly how a real regression gets waved through. The labelling
+downgrades nothing: L1 still fails, the target still exits non-zero, and a failure
+that survives a solitary rerun is a finding whatever its label said. In particular
+no readiness wait was loosened to make this quieter — that would trade a loud infra
+failure for a silent one, which is the trade the `check-all` target argues against.
+
 **Rerun it through the target, not around it:**
 
 ```

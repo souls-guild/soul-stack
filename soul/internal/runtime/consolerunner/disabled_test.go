@@ -83,10 +83,31 @@ func TestConsole_ThrottledSessionStillTearsDownFast(t *testing.T) {
 	r.CloseAll(keeperv1.ConsoleExitReason_CONSOLE_EXIT_REASON_SOUL_SHUTDOWN)
 	elapsed := time.Since(start)
 
-	// The full escalation budget is 3*KillGrace + 1s ≈ 1.9s here; pacing must not
-	// add to it.
-	if elapsed > 2*time.Second {
-		t.Errorf("CloseAll took %s on a throttled session — teardown is waiting out the rate limit", elapsed)
+	// Two regimes, an order of magnitude apart, and the threshold belongs between
+	// them rather than hugging one of them:
+	//
+	//   correct teardown — bounded by escalation, 3*KillGrace + 1s ≈ 1.9s here;
+	//   the bug — teardown waits out the token bucket. `yes` fills the queue
+	//   (DefaultQueueChunks=32 chunks of up to DefaultReadBufferBytes=32 KiB) and
+	//   at RateBytesPerSec=1024 even ONE chunk owes ~32 s of pacing, a full queue
+	//   ~1000 s.
+	//
+	// The threshold used to be 2s — a 5% margin over the legitimate budget, so on
+	// a loaded machine or under -race it measured the machine rather than the
+	// behaviour, and this test became one of the victims that made the whole
+	// integration job look flaky (NIM-349). 10s is ~5x the escalation budget and
+	// still ~3x below the cheapest possible bug signature, so it separates the two
+	// regimes with margin on both sides.
+	//
+	// This is not the "widen the window until it passes" move that
+	// docs/testing/README.md warns against: that one lets a broken thing through,
+	// whereas the bug this guards against overshoots the new threshold by more
+	// than 3x and still fails.
+	const teardownBudget = 10 * time.Second
+	if elapsed > teardownBudget {
+		t.Errorf("CloseAll took %s on a throttled session (budget %s) — teardown is waiting out the rate limit;"+
+			" correct teardown is bounded by escalation at ~%s, pacing out one queued chunk would take ~%s",
+			elapsed, teardownBudget, 3*300*time.Millisecond+time.Second, 32*time.Second)
 	}
 	if r.ActiveCount() != 0 {
 		t.Errorf("ActiveCount = %d after CloseAll, want 0", r.ActiveCount())

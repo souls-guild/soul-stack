@@ -135,7 +135,18 @@ Both replacements work today and cover the cases in practice:
   apply: { destiny: redis, input: { action: apply } }
 ```
 
-★ The requisites merge as a **union**, as they do on a `block:`: an applier naming a source and a destiny task naming its own end up naming both. For `onchanges:`/`onfail:` that composes as OR - the task runs if **any** named source changed/failed - so an applier-level `onchanges:` widens, rather than narrows, the gating of a destiny task that already had one.
+★ The requisites merge as a **union**, as they do on a `block:`: an applier naming a source and a destiny task naming its own end up naming both. For `onchanges:`/`onfail:` that composes as OR - the task runs if **any** named source changed/failed - so an applier-level `onchanges:` **widens, rather than narrows**, the gating of a destiny task that already had one. This is the normative behaviour of both group constructs, stated in full in [destiny/tasks.md §6.5](../destiny/tasks.md#65-block---inline-task-group); note that `when:` on the same applier composes the other way (AND, narrowing), and the two axes are deliberately different.
+
+Concretely, with a destiny task written as
+
+```yaml
+# examples/destiny/dragonfly/tasks/install.yml
+- name: Restart DragonFly because the binary or unit changed
+  module: core.service.restarted
+  onchanges: [dragonfly_bin, dragonfly_unit]
+```
+
+an applier that adds `onchanges: [df_config]` over that destiny does **not** confine the restart to a config change - the task ends up gated on `[df_config, dragonfly_bin, dragonfly_unit]` and restarts on a binary change even when `df_config` never moved. A destiny task carrying no requisite of its own is unaffected: for it the applier's `onchanges:` is a pure narrowing, which is the case shown above. Expressing "applier AND destiny task" needs a wire change and is deferred to NIM-351; until then, if the inner requisite must stay authoritative, gate the applier with `where:` instead, or leave the requisite off the applier.
 
 **Module-specific keys on an applier are refused** (family `<key>_on_apply_invalid`, the apply-side mirror of `<key>_on_block_invalid`, NIM-286). The membership rule is that the key **works on a module task and is lost on an applier**: an applier invokes no module, and render hands its children only the three requisites, so nothing else it carries reaches a rendered task. A key that turns out to be answerable on the caller's side leaves the family rather than staying refused - `vars:` did, see below.
 
